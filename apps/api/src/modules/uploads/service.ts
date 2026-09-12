@@ -8,19 +8,29 @@ import {
   type UploadPresignRequest,
   type UploadPresignResponse,
 } from '@fish/contracts/listings/schema'
+import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import type { MediaStorage } from './storage'
 
 export class UploadServiceError extends Error {
+  /**
+   * `details` 不是只有 `VALIDATION_FAILED` 才有：契约 §3 的 422 校验类失败都会带字段信息
+   * （`IMAGE_REFERENCE_INVALID` / `UPLOAD_OBJECT_MISSING` 指向 `objectKey`），
+   * 否则前端拿不到"是哪个输入出错"。已在契约 §7.6 记录这条口径。
+   */
   constructor(
     readonly status: 422,
     readonly code: ListingErrorCode,
     message: string,
+    readonly details?: ApiErrorDetail[],
   ) {
     super(message)
     this.name = 'UploadServiceError'
   }
 }
+
+/** 上传域的所有失败都指向同一个字段，避免每个 throw 各写一遍。 */
+const objectKeyDetail = (message: string): ApiErrorDetail[] => [{ field: 'objectKey', message }]
 
 export interface UploadService {
   presign(userId: string, input: UploadPresignRequest): Promise<UploadPresignResponse>
@@ -54,18 +64,33 @@ export function createUploadService(deps: { storage: MediaStorage }): UploadServ
 
     async confirm(userId, input) {
       if (!input.objectKey.startsWith(listingObjectKeyPrefix(userId))) {
-        throw new UploadServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片不属于当前用户')
+        throw new UploadServiceError(
+          422,
+          'IMAGE_REFERENCE_INVALID',
+          '图片不属于当前用户',
+          objectKeyDetail('图片不属于当前用户'),
+        )
       }
 
       const stat = await storage.stat(input.objectKey)
       if (!stat) {
-        throw new UploadServiceError(422, 'UPLOAD_OBJECT_MISSING', '图片尚未上传完成')
+        throw new UploadServiceError(
+          422,
+          'UPLOAD_OBJECT_MISSING',
+          '图片尚未上传完成',
+          objectKeyDetail('图片尚未上传完成'),
+        )
       }
 
       // presign 的签名只覆盖 host，mime 不受约束（契约 §7.7）：真实大小与类型只能在这里查。
       // 拦在这里，前端能在预览前就拿到明确失败，而不是等 create 才 422。
       if (stat.size > MAX_IMAGE_BYTES || !isAllowedMime(stat.contentType)) {
-        throw new UploadServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片格式或大小不符合要求')
+        throw new UploadServiceError(
+          422,
+          'IMAGE_REFERENCE_INVALID',
+          '图片格式或大小不符合要求',
+          objectKeyDetail('图片格式或大小不符合要求'),
+        )
       }
 
       return { objectKey: input.objectKey, url: storage.publicUrl(input.objectKey) }

@@ -18,7 +18,7 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import type { MediaStorage } from '../uploads/storage'
-import { CURSOR_TIMESTAMP_PATTERN, decodeCursor, encodeCursor } from './cursor'
+import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
 import type {
   FeedCursorKey,
   FeedEntry,
@@ -369,9 +369,9 @@ function decodeFeedCursor(
   if (!decoded) throw invalidCursor()
 
   if (sort === 'newest') {
-    // 只接受我们自己生成的"微秒精度 UTC ISO"形态：先按正则挡掉所有会被 PG 拒绝的字符串
-    // （否则 `::timestamptz` 转换失败又会变成 500），再原样传给 SQL 以保住微秒。
-    if (typeof decoded.sortKey !== 'string' || !CURSOR_TIMESTAMP_PATTERN.test(decoded.sortKey)) {
+    // 只接受我们自己生成的"微秒精度 UTC ISO"形态，且**值域**必须合法：
+    // 否则 `::timestamptz` 转换失败又会变成 500（契约要求 422）。校验通过后原样传给 SQL 以保住微秒。
+    if (typeof decoded.sortKey !== 'string' || !isCursorTimestamp(decoded.sortKey)) {
       throw invalidCursor()
     }
     return { kind: 'newest', createdAt: decoded.sortKey, id: decoded.id }

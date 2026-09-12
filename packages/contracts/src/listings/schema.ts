@@ -82,6 +82,20 @@ export const listingObjectKeyPrefix = (userId: string) => `listings/${userId}/`
 // ---------------------------------------------------------------------------
 
 /**
+ * feed 游标里时间戳的形态：**带微秒**的 UTC ISO 时间。
+ *
+ * 放在契约包是因为 zod 只在契约包（API 没有直接依赖 zod），而**生成方**
+ * （`store.listFeed` 的 `to_char(..., 'US')`）与**校验方**（API 的 `decodeCursor`）
+ * 必须共用同一份定义，各写一份必然漂移。
+ *
+ * 用 zod 而不是手写正则：正则只能约束形状，`2026-13-45T99:99:99.999999Z`、`2026-02-31T…`
+ * 照样通过，随后被 PG 的 `::timestamptz` 拒绝 → 500（实测），而契约 §2.1 要求 422。
+ *
+ * 游标对前端不透明（§2.1），前端不应 import 这个 schema。
+ */
+export const ListingCursorTimestampSchema = z.iso.datetime({ precision: 6 })
+
+/**
  * 商品 id 的形状。具名导出是因为它有三个使用点：读模型的 `id`、路由参数 `:id` 的校验、
  * 游标里 `id` 的校验（前两者拼错会变成 uuid 列的 SQL 类型错误 → 500，而不是 404/422）。
  */
@@ -277,9 +291,11 @@ export const UploadPresignResponseSchema = z.object({
   /** 服务端生成 `listings/{userId}/{uuid}.{ext}`，前端视为不透明字符串。 */
   objectKey: z.string().min(1),
   /**
-   * 直传 `PUT` 时必须**原样带上**这些头（SigV4 把 Content-Type 签进签名），
-   * 少带一个就是 403 SignatureDoesNotMatch。放进契约后，后端无论手写 SigV4
-   * 还是用 SDK 的 presigner，前端都不用改。
+   * 服务端要求客户端在直传 `PUT` 时原样附带的头。
+   *
+   * 当前实现（Bun 原生 `S3Client.presign`）的签名只覆盖 `host`，因此这里是**空对象**
+   * （实测：PUT 带不带 `Content-Type` 都是 200）。字段保留是为了换实现时前端不用改——
+   * 注意**没有**"少带一个头就 403"这种保证（早期草案的错误说法，已在契约 §7.7 更正）。
    */
   headers: z.record(z.string(), z.string()),
   expiresAt: z.iso.datetime(),

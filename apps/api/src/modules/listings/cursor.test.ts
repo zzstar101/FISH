@@ -33,6 +33,19 @@ describe('cursor', () => {
     expect(decodeCursor(encodeCursor({ sortKey: Number.POSITIVE_INFINITY, id: ID }))).toBeNull()
   })
 
+  // 手写正则只能约束形状：`2026-13-45T99:99:99.999999Z` 与 `2026-02-31T…` 都能通过正则，
+  // 却会被 PG 的 ::timestamptz 拒绝 → 500（实测）。契约 §2.1 要求 422，所以必须校验值域。
+  test('rejects out-of-range timestamps that a shape-only check would let through', () => {
+    expect(
+      decodeCursor(encodeCursor({ sortKey: '2026-13-45T99:99:99.999999Z', id: ID })),
+    ).toBeNull()
+    expect(
+      decodeCursor(encodeCursor({ sortKey: '2026-02-31T10:00:00.000000Z', id: ID })),
+    ).toBeNull()
+    expect(decodeCursor(encodeCursor({ sortKey: '2026-09-12T03:40:10.123Z', id: ID }))).toBeNull()
+    expect(decodeCursor(encodeCursor({ sortKey: '2026-09-12T03:40:10Z', id: ID }))).toBeNull()
+  })
+
   // 非 UUID 的 id 会被绑到 listings.id（uuid 列）→ PostgreSQL 报类型错误 → 500；
   // 契约要求这种情况是 422（§2.1「非法 cursor → 422」），所以必须在解码阶段拒掉。
   test('rejects a non-UUID id before it can reach the uuid column', () => {

@@ -26,7 +26,7 @@ async function readJson(c: Context): Promise<unknown> {
 
 function toErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof UploadServiceError) {
-    return c.json(errorBody(error.code, error.message), error.status)
+    return c.json(errorBody(error.code, error.message, error.details), error.status)
   }
   throw error
 }

@@ -97,9 +97,10 @@ describe('uploads router', () => {
     )
 
     expect(res.status).toBe(422)
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
-      'UPLOAD_OBJECT_MISSING',
-    )
+    const body = (await res.json()) as { error: { code: string; details?: { field: string }[] } }
+    expect(body.error.code).toBe('UPLOAD_OBJECT_MISSING')
+    // 契约 §3 的 422 校验类失败都带字段信息（口径见契约评论 §7.6）
+    expect(body.error.details?.[0]?.field).toBe('objectKey')
   })
 
   test('returns the public url on a successful confirm', async () => {
