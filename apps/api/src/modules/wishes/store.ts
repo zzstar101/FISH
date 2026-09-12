@@ -15,6 +15,8 @@ export interface WishRow {
   status: string
   created_at: Date | string
   updated_at: Date | string
+  /** 匹配数（来自 matches 表）。仅 findById / listByUser 填充，缺省视为 0。 */
+  match_count?: number
 }
 
 export interface PoolRow {
@@ -80,6 +82,7 @@ function toWishRow(row: Record<string, unknown>): WishRow {
     status: String(row.status),
     created_at: row.created_at as Date | string,
     updated_at: row.updated_at as Date | string,
+    match_count: row.match_count === undefined ? undefined : Number(row.match_count),
   }
 }
 
@@ -96,10 +99,11 @@ export function createSqlWishStore(db: Db): WishStore {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${row.user_id}))`)
         const duplicate = firstWishRow(
           await tx.execute(sql`
-          SELECT * FROM wishes
-          WHERE user_id = ${row.user_id} AND keyword = ${row.keyword} AND category = ${row.category}
-            AND status = 'ACTIVE' AND created_at > ${createdAfter}
-          ORDER BY created_at DESC
+          SELECT w.*, (SELECT count(*)::int FROM matches m WHERE m.wish_id = w.id) AS match_count
+          FROM wishes w
+          WHERE w.user_id = ${row.user_id} AND w.keyword = ${row.keyword} AND w.category = ${row.category}
+            AND w.status = 'ACTIVE' AND w.created_at > ${createdAfter}
+          ORDER BY w.created_at DESC
           LIMIT 1
         `),
         )
@@ -113,14 +117,24 @@ export function createSqlWishStore(db: Db): WishStore {
           return { kind: 'active-limit' } as const
         }
 
+        // 愿望与 MATCH_WISH job 用同一条语句写入（数据修改型 CTE，PG 保证必执行）：
+        // 任一步失败整体回滚，不产生"愿望已落库但没有 job"的孤儿行。
         const created = firstWishRow(
           await tx.execute(sql`
-          INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
-                              description, accept_similar, status, created_at, updated_at)
-          VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
-                  ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
-                  ${row.created_at}, ${row.updated_at})
-          RETURNING *
+          WITH inserted AS (
+            INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
+                                description, accept_similar, status, created_at, updated_at)
+            VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
+                    ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
+                    ${row.created_at}, ${row.updated_at})
+            RETURNING *
+          ), match_job AS (
+            INSERT INTO jobs (id, type, payload)
+            SELECT ${crypto.randomUUID()}, 'MATCH_WISH', jsonb_build_object('wishId', inserted.id::text)
+            FROM inserted
+            RETURNING id
+          )
+          SELECT * FROM inserted
         `),
         )
         if (!created) throw new Error('创建愿望后未返回记录')
@@ -129,19 +143,27 @@ export function createSqlWishStore(db: Db): WishStore {
     },
 
     async findById(id) {
-      return firstWishRow(await db.execute(sql`SELECT * FROM wishes WHERE id = ${id} LIMIT 1`))
+      return firstWishRow(
+        await db.execute(sql`
+        SELECT w.*, (SELECT count(*)::int FROM matches m WHERE m.wish_id = w.id) AS match_count
+        FROM wishes w WHERE w.id = ${id} LIMIT 1
+      `),
+      )
     },
 
     async listByUser(userId, { status, limit, offset }) {
       const where = status
-        ? sql`WHERE user_id = ${userId} AND status = ${status}`
-        : sql`WHERE user_id = ${userId}`
+        ? sql`WHERE w.user_id = ${userId} AND w.status = ${status}`
+        : sql`WHERE w.user_id = ${userId}`
       const rows = await db.execute(sql`
-        SELECT * FROM wishes ${where}
-        ORDER BY created_at DESC, id DESC
+        SELECT w.*, (SELECT count(*)::int FROM matches m WHERE m.wish_id = w.id) AS match_count
+        FROM wishes w ${where}
+        ORDER BY w.created_at DESC, w.id DESC
         LIMIT ${limit} OFFSET ${offset}
       `)
-      const totalResult = await db.execute(sql`SELECT count(*)::int AS total FROM wishes ${where}`)
+      const totalResult = await db.execute(
+        sql`SELECT count(*)::int AS total FROM wishes w ${where}`,
+      )
       return {
         rows: toRows(rows).map(toWishRow),
         total: Number(toRows(totalResult)[0]?.total ?? 0),
@@ -171,7 +193,7 @@ export function createSqlWishStore(db: Db): WishStore {
           sql`, `,
         )}
         WHERE id = ${id} AND status = 'ACTIVE'
-        RETURNING *
+        RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
       `),
       )
     },
@@ -181,7 +203,7 @@ export function createSqlWishStore(db: Db): WishStore {
         await db.execute(sql`
         UPDATE wishes SET status = ${status}, updated_at = ${updatedAt}
         WHERE id = ${id} AND status = 'ACTIVE'
-        RETURNING *
+        RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
       `),
       )
     },
@@ -191,9 +213,12 @@ export function createSqlWishStore(db: Db): WishStore {
         SELECT keyword, category, count(*)::int AS want_count,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY budget_max_cents)::float8 AS median_budget_cents
         FROM wishes
-        WHERE status = 'ACTIVE'
+        -- category / budget_max_cents 在 #2 的 schema 里可空（为 #8 的「不限分类」预留）；
+        -- 需求池输出契约要求二者非空，这里显式过滤，避免 NULL 经 String(null) 变成 "null" 后让整个 /pool 400。
+        WHERE status = 'ACTIVE' AND category IS NOT NULL AND budget_max_cents IS NOT NULL
         GROUP BY keyword, category
-        HAVING count(*) >= ${minCount}
+        -- 隐私门槛按「去重用户数」而非行数：同一用户刷多条不得把小组抬进需求池。
+        HAVING count(DISTINCT user_id) >= ${minCount}
         ORDER BY want_count DESC, keyword ASC
         LIMIT ${limit}
       `)

@@ -13,6 +13,8 @@ import { createListingService } from './modules/listings/service'
 import { createSqlListingStore } from './modules/listings/store'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
+import { createDbWishMatchQueue } from './modules/wishes/match-queue'
+import { createWishesRouterFromDb } from './modules/wishes/router'
 import { API_VERSION } from './version'
 import { upgradeWebSocket } from './ws'
 
@@ -82,6 +84,17 @@ export function createApp(env: ServerEnv) {
     }),
   )
   app.route('/uploads', createUploadsRouter({ storage, requireAuth: auth.requireAuth }))
+
+  // 愿望模块（#7）：先过认证守卫，再进 router；router 的 getUserId 只读守卫写入的可信 context，
+  // 不读请求头。创建/重放愿望时用真实 DB 队列写 MATCH_WISH job（消费方归 #8/#13，与本 Issue 解耦）。
+  app.use('/api/wishes/*', auth.requireAuth)
+  app.route(
+    '/api/wishes',
+    createWishesRouterFromDb(db, {
+      getUserId: (c) => c.get('userId'),
+      matchQueue: createDbWishMatchQueue(db),
+    }),
+  )
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。

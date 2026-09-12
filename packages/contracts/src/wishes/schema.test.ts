@@ -9,7 +9,7 @@ import {
 
 const validCreate = {
   keyword: '机械键盘',
-  category: 'electronics',
+  category: 'DIGITAL',
   budgetMinCents: 10000,
   budgetMaxCents: 20000,
 } as const
@@ -81,7 +81,7 @@ describe('wishDtoSchema', () => {
       id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
       userId: '9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d',
       keyword: '机械键盘',
-      category: 'electronics',
+      category: 'DIGITAL',
       budgetMinCents: 10000,
       budgetMaxCents: 20000,
       description: null,
@@ -98,9 +98,7 @@ describe('wishDtoSchema', () => {
 describe('wishPoolResponseSchema', () => {
   test('parses aggregated pool items', () => {
     const body = {
-      items: [
-        { keyword: '机械键盘', category: 'electronics', wantCount: 7, medianBudgetCents: 20000 },
-      ],
+      items: [{ keyword: '机械键盘', category: 'DIGITAL', wantCount: 7, medianBudgetCents: 20000 }],
     }
     expect(wishPoolResponseSchema.parse(body).items[0]?.wantCount).toBe(7)
   })

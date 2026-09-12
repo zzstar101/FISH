@@ -29,8 +29,10 @@ const databaseUrlFor = (name: string) => {
 }
 const scratchUrl = databaseUrlFor(scratchDatabase)
 
-const migrationsFolder = new URL('../../../../../packages/db/src/migrations', import.meta.url)
-  .pathname
+// 必须用 Bun.fileURLToPath：URL.pathname 在 Windows 上是 /C:/... 形式，migrator 读不到。
+const migrationsFolder = Bun.fileURLToPath(
+  new URL('../../../../../packages/db/src/migrations', import.meta.url),
+)
 
 const admin = createDb(databaseUrl)
 let scratch: Db
