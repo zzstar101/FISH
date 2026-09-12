@@ -10,33 +10,245 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as MatchRouteImport } from './routes/match'
+import { Route as MessageRouteImport } from './routes/message'
+import { Route as MylistRouteImport } from './routes/mylist'
+import { Route as OrdersRouteImport } from './routes/orders'
+import { Route as ProfileRouteImport } from './routes/profile'
+import { Route as PublishRouteImport } from './routes/publish'
+import { Route as RegisterRouteImport } from './routes/register'
+import { Route as SearchRouteImport } from './routes/search'
+import { Route as WishRouteImport } from './routes/wish'
+import { Route as CategoryIndexRouteImport } from './routes/category.index'
+import { Route as CategoryCategoryIdRouteImport } from './routes/category.$categoryId'
+import { Route as ChatConversationIdRouteImport } from './routes/chat.$conversationId'
+import { Route as DetailListingIdRouteImport } from './routes/detail.$listingId'
+import { Route as UserUserIdRouteImport } from './routes/user.$userId'
+import { Route as WatchersListingIdRouteImport } from './routes/watchers.$listingId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MatchRoute = MatchRouteImport.update({
+  id: '/match',
+  path: '/match',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MessageRoute = MessageRouteImport.update({
+  id: '/message',
+  path: '/message',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MylistRoute = MylistRouteImport.update({
+  id: '/mylist',
+  path: '/mylist',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrdersRoute = OrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileRoute = ProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PublishRoute = PublishRouteImport.update({
+  id: '/publish',
+  path: '/publish',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RegisterRoute = RegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SearchRoute = SearchRouteImport.update({
+  id: '/search',
+  path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WishRoute = WishRouteImport.update({
+  id: '/wish',
+  path: '/wish',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CategoryIndexRoute = CategoryIndexRouteImport.update({
+  id: '/category/',
+  path: '/category/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CategoryCategoryIdRoute = CategoryCategoryIdRouteImport.update({
+  id: '/category/$categoryId',
+  path: '/category/$categoryId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ChatConversationIdRoute = ChatConversationIdRouteImport.update({
+  id: '/chat/$conversationId',
+  path: '/chat/$conversationId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DetailListingIdRoute = DetailListingIdRouteImport.update({
+  id: '/detail/$listingId',
+  path: '/detail/$listingId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UserUserIdRoute = UserUserIdRouteImport.update({
+  id: '/user/$userId',
+  path: '/user/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WatchersListingIdRoute = WatchersListingIdRouteImport.update({
+  id: '/watchers/$listingId',
+  path: '/watchers/$listingId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/match': typeof MatchRoute
+  '/message': typeof MessageRoute
+  '/mylist': typeof MylistRoute
+  '/orders': typeof OrdersRoute
+  '/profile': typeof ProfileRoute
+  '/publish': typeof PublishRoute
+  '/register': typeof RegisterRoute
+  '/search': typeof SearchRoute
+  '/wish': typeof WishRoute
+  '/category/$categoryId': typeof CategoryCategoryIdRoute
+  '/chat/$conversationId': typeof ChatConversationIdRoute
+  '/detail/$listingId': typeof DetailListingIdRoute
+  '/user/$userId': typeof UserUserIdRoute
+  '/watchers/$listingId': typeof WatchersListingIdRoute
+  '/category/': typeof CategoryIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/match': typeof MatchRoute
+  '/message': typeof MessageRoute
+  '/mylist': typeof MylistRoute
+  '/orders': typeof OrdersRoute
+  '/profile': typeof ProfileRoute
+  '/publish': typeof PublishRoute
+  '/register': typeof RegisterRoute
+  '/search': typeof SearchRoute
+  '/wish': typeof WishRoute
+  '/category/$categoryId': typeof CategoryCategoryIdRoute
+  '/chat/$conversationId': typeof ChatConversationIdRoute
+  '/detail/$listingId': typeof DetailListingIdRoute
+  '/user/$userId': typeof UserUserIdRoute
+  '/watchers/$listingId': typeof WatchersListingIdRoute
+  '/category': typeof CategoryIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/login': typeof LoginRoute
+  '/match': typeof MatchRoute
+  '/message': typeof MessageRoute
+  '/mylist': typeof MylistRoute
+  '/orders': typeof OrdersRoute
+  '/profile': typeof ProfileRoute
+  '/publish': typeof PublishRoute
+  '/register': typeof RegisterRoute
+  '/search': typeof SearchRoute
+  '/wish': typeof WishRoute
+  '/category/$categoryId': typeof CategoryCategoryIdRoute
+  '/chat/$conversationId': typeof ChatConversationIdRoute
+  '/detail/$listingId': typeof DetailListingIdRoute
+  '/user/$userId': typeof UserUserIdRoute
+  '/watchers/$listingId': typeof WatchersListingIdRoute
+  '/category/': typeof CategoryIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/match'
+    | '/message'
+    | '/mylist'
+    | '/orders'
+    | '/profile'
+    | '/publish'
+    | '/register'
+    | '/search'
+    | '/wish'
+    | '/category/$categoryId'
+    | '/chat/$conversationId'
+    | '/detail/$listingId'
+    | '/user/$userId'
+    | '/watchers/$listingId'
+    | '/category/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/login'
+    | '/match'
+    | '/message'
+    | '/mylist'
+    | '/orders'
+    | '/profile'
+    | '/publish'
+    | '/register'
+    | '/search'
+    | '/wish'
+    | '/category/$categoryId'
+    | '/chat/$conversationId'
+    | '/detail/$listingId'
+    | '/user/$userId'
+    | '/watchers/$listingId'
+    | '/category'
+  id:
+    | '__root__'
+    | '/'
+    | '/login'
+    | '/match'
+    | '/message'
+    | '/mylist'
+    | '/orders'
+    | '/profile'
+    | '/publish'
+    | '/register'
+    | '/search'
+    | '/wish'
+    | '/category/$categoryId'
+    | '/chat/$conversationId'
+    | '/detail/$listingId'
+    | '/user/$userId'
+    | '/watchers/$listingId'
+    | '/category/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  LoginRoute: typeof LoginRoute
+  MatchRoute: typeof MatchRoute
+  MessageRoute: typeof MessageRoute
+  MylistRoute: typeof MylistRoute
+  OrdersRoute: typeof OrdersRoute
+  ProfileRoute: typeof ProfileRoute
+  PublishRoute: typeof PublishRoute
+  RegisterRoute: typeof RegisterRoute
+  SearchRoute: typeof SearchRoute
+  WishRoute: typeof WishRoute
+  CategoryCategoryIdRoute: typeof CategoryCategoryIdRoute
+  ChatConversationIdRoute: typeof ChatConversationIdRoute
+  DetailListingIdRoute: typeof DetailListingIdRoute
+  UserUserIdRoute: typeof UserUserIdRoute
+  WatchersListingIdRoute: typeof WatchersListingIdRoute
+  CategoryIndexRoute: typeof CategoryIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +260,139 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/match': {
+      id: '/match'
+      path: '/match'
+      fullPath: '/match'
+      preLoaderRoute: typeof MatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/message': {
+      id: '/message'
+      path: '/message'
+      fullPath: '/message'
+      preLoaderRoute: typeof MessageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mylist': {
+      id: '/mylist'
+      path: '/mylist'
+      fullPath: '/mylist'
+      preLoaderRoute: typeof MylistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orders': {
+      id: '/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof OrdersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile': {
+      id: '/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/publish': {
+      id: '/publish'
+      path: '/publish'
+      fullPath: '/publish'
+      preLoaderRoute: typeof PublishRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/register': {
+      id: '/register'
+      path: '/register'
+      fullPath: '/register'
+      preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/search': {
+      id: '/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/wish': {
+      id: '/wish'
+      path: '/wish'
+      fullPath: '/wish'
+      preLoaderRoute: typeof WishRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/category/': {
+      id: '/category/'
+      path: '/category'
+      fullPath: '/category/'
+      preLoaderRoute: typeof CategoryIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/category/$categoryId': {
+      id: '/category/$categoryId'
+      path: '/category/$categoryId'
+      fullPath: '/category/$categoryId'
+      preLoaderRoute: typeof CategoryCategoryIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/chat/$conversationId': {
+      id: '/chat/$conversationId'
+      path: '/chat/$conversationId'
+      fullPath: '/chat/$conversationId'
+      preLoaderRoute: typeof ChatConversationIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/detail/$listingId': {
+      id: '/detail/$listingId'
+      path: '/detail/$listingId'
+      fullPath: '/detail/$listingId'
+      preLoaderRoute: typeof DetailListingIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/user/$userId': {
+      id: '/user/$userId'
+      path: '/user/$userId'
+      fullPath: '/user/$userId'
+      preLoaderRoute: typeof UserUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/watchers/$listingId': {
+      id: '/watchers/$listingId'
+      path: '/watchers/$listingId'
+      fullPath: '/watchers/$listingId'
+      preLoaderRoute: typeof WatchersListingIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  LoginRoute: LoginRoute,
+  MatchRoute: MatchRoute,
+  MessageRoute: MessageRoute,
+  MylistRoute: MylistRoute,
+  OrdersRoute: OrdersRoute,
+  ProfileRoute: ProfileRoute,
+  PublishRoute: PublishRoute,
+  RegisterRoute: RegisterRoute,
+  SearchRoute: SearchRoute,
+  WishRoute: WishRoute,
+  CategoryCategoryIdRoute: CategoryCategoryIdRoute,
+  ChatConversationIdRoute: ChatConversationIdRoute,
+  DetailListingIdRoute: DetailListingIdRoute,
+  UserUserIdRoute: UserUserIdRoute,
+  WatchersListingIdRoute: WatchersListingIdRoute,
+  CategoryIndexRoute: CategoryIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
