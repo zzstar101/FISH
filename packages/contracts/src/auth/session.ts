@@ -41,7 +41,7 @@ export const AuthResponseSchema = z.object({ user: MeSchema })
 
 export type AuthResponse = z.infer<typeof AuthResponseSchema>
 
-/** 认证域错误码，与 `@fish/contracts/system/error` 的 `SystemErrorCodeSchema` 共同构成全部可能值。 */
+/** 认证域错误码。跨 domain 的通用码在 `@fish/contracts/system/error`；商品域另有自己的取值（`ListingErrorCodeSchema`）。 */
 export const AuthErrorCodeSchema = z.enum([
   'INVALID_CREDENTIALS',
   'STUDENT_NO_TAKEN',

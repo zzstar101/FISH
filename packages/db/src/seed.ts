@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
+import { jsonParam } from './json'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
@@ -275,18 +276,18 @@ export async function seed(tx: SeedTx): Promise<void> {
     id: ids.notificationMatch,
     userId: ids.buyerB,
     type: 'MATCH',
-    payload: {
+    payload: jsonParam({
       matchId: ids.matchK380,
       listingId: ids.listingK380,
       wishId: ids.wishKeyboard,
-    },
+    }),
     createdAt: yesterday,
   })
 
   await tx.insert(jobs).values({
     id: ids.jobMatchListing,
     type: 'MATCH_LISTING',
-    payload: { listingId: ids.listingK380 },
+    payload: jsonParam({ listingId: ids.listingK380 }),
     status: 'DONE',
     attempts: 1,
     runAt: yesterday,

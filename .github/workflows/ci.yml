@@ -51,6 +51,41 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # 对象存储。三个必须注意的点（都踩过）：
+      # 1. **不能用 `services:`**：minio 镜像的默认 CMD 是 `minio`（只打印 usage），而 Actions 的
+      #    service 块不支持传 command，健康检查会耗尽重试让整个 job 起不来；
+      # 2. **用 quay.io 而不是 Docker Hub**：hosted runner 的匿名拉取会被 Docker Hub 拒
+      #    （`pull access denied for minio/minio`），实测 Quay 的官方镜像可拉；
+      # 3. `--entrypoint /bin/sh`：mc 镜像的 ENTRYPOINT 是 `mc`，不覆盖的话 `sh -c` 会被当成 mc 参数。
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=fish -e MINIO_ROOT_PASSWORD=fish-secret \
+            quay.io/minio/minio:latest server /data --console-address ":9001"
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+              echo "minio is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "minio 未在 30s 内就绪" >&2
+          docker logs minio
+          exit 1
+
+      # 桶与匿名读策略必须与 docker-compose.yml 的 minio-init 保持一致：
+      # 读接口返回的图片 URL 是 `S3_PUBLIC_URL + '/' + objectKey`（#6 契约 §1 的 ListingImageSchema），
+      # 少了匿名读策略，集成测试里的公开 URL 会 403。
+      # `--entrypoint /bin/sh`：minio/mc 镜像的 ENTRYPOINT 是 `mc`，不覆盖的话 `sh -c` 会被当成 mc 的参数。
+      - name: Init MinIO bucket
+        run: |
+          docker run --rm --network host --entrypoint /bin/sh \
+            -e MC_HOST_local=http://fish:fish-secret@localhost:9000 \
+            quay.io/minio/mc:latest -c "
+              mc mb --ignore-existing local/fish &&
+              mc anonymous set download local/fish
+            "
+
       # 证据：#2 验收要求 migration 可在空库执行（走 README 记录的同一条命令）
       - name: Migrate
         run: bun run db:migrate

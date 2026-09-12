@@ -8,6 +8,11 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { createMockCampusVerificationProvider } from './modules/auth/provider'
 import { createAuthModule } from './modules/auth/router'
+import { createListingsRouter } from './modules/listings/router'
+import { createListingService } from './modules/listings/service'
+import { createSqlListingStore } from './modules/listings/store'
+import { createUploadsRouter } from './modules/uploads/router'
+import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { API_VERSION } from './version'
 import { upgradeWebSocket } from './ws'
 
@@ -53,6 +58,30 @@ export function createApp(env: ServerEnv) {
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)
+
+  // 对象存储实例在接线层创建一次，注入给 uploads（签发直传）与 listings（读响应拼 URL）：
+  // 「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。
+  const storage = createBunS3MediaStorage({
+    client: new Bun.S3Client({
+      accessKeyId: env.S3_ACCESS_KEY_ID,
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      bucket: env.S3_BUCKET,
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+    }),
+    publicUrlBase: env.S3_PUBLIC_URL,
+  })
+
+  // #6：`GET /listings*` 匿名可用，写接口在 router 内逐路由挂 requireAuth（读路径不能整体 401）。
+  app.route(
+    '/listings',
+    createListingsRouter({
+      service: createListingService({ store: createSqlListingStore(db), storage }),
+      requireAuth: auth.requireAuth,
+      resolveViewerId: auth.resolveViewerId,
+    }),
+  )
+  app.route('/uploads', createUploadsRouter({ storage, requireAuth: auth.requireAuth }))
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。

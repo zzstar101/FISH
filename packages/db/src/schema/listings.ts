@@ -52,6 +52,12 @@ export const listings = pgTable(
   },
   (table) => [
     check('listings_price_cents_non_negative', sql`${table.priceCents} >= 0`),
+    /**
+     * 契约 §1 的 `free ⟹ priceCents = 0` 在这里兜底：service 已经会按"合并后的最终状态"
+     * 判定（§7.1），但它读一次状态再写，同一卖家的两个并发 PATCH 各自通过校验就会留下
+     * `free = true, price_cents > 0` 这种契约禁止的状态。约束对**所有**写入方生效。
+     */
+    check('listings_free_price_cents_zero', sql`NOT ${table.free} OR ${table.priceCents} = 0`),
     // 复合外键目标：让 conversations / transactions 能在 DB 层断言"卖家 = 商品所有者"。
     // 必须是表级 UNIQUE 约束而非 uniqueIndex —— drizzle-kit 把唯一索引排在
     // `ALTER TABLE ... ADD CONSTRAINT FK` 之后，PG 会在建外键时报

@@ -168,6 +168,39 @@ test('TEXT 消息必须有发送者，SYSTEM 消息可以没有', async () => {
   })
 })
 
+test('free 商品的价格必须是 0（DB CHECK 兜底并发写入）', async () => {
+  await withFixture(async ({ seller }) => {
+    // 必须是 async 函数：Bun 的 `expect(...).rejects` 不认 Drizzle 的 thenable query builder
+    // （见本文件上方 helper 的同类说明）。
+    const insertFree = async (priceCents: number) =>
+      db
+        .insert(listings)
+        .values({
+          sellerId: seller.id,
+          title: `free 商品 ${priceCents}`,
+          description: '集成测试',
+          priceCents,
+          category: 'OTHER',
+          condition: 'GOOD',
+          free: true,
+        })
+        .returning({ id: listings.id })
+
+    let createdId: string | undefined
+    try {
+      // 违规组合必须被数据库拒绝：契约 §1 的 free ⟹ priceCents = 0 由此约束对所有写入方生效
+      await expect(insertFree(5000)).rejects.toThrow()
+
+      const rows = await insertFree(0)
+      createdId = rows[0]?.id
+      expect(rows).toHaveLength(1)
+    } finally {
+      // withFixture 只清理它自己创建的那一条：本用例多插的行要自己删掉，否则 FK 会让清理失败
+      if (createdId) await db.delete(listings).where(eq(listings.id, createdId))
+    }
+  })
+})
+
 test('不存在 Offer 表', async () => {
   const rows = await db.execute<{ table_name: string }>(
     sql`select table_name from information_schema.tables where table_schema = 'public' and table_name ilike '%offer%'`,
