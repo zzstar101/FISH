@@ -39,6 +39,18 @@ export function errorBody(code: string, message: string, details?: ApiErrorDetai
   return details ? { error: { code, message, details } } : { error: { code, message } }
 }
 
+/**
+ * Zod issues → `details[]`。
+ *
+ * 放在信封旁边而不是各 domain 里：`field` 的点号路径格式（数组下标也用点号，`objectKeys.1`）
+ * 一旦在两个 router 里各写一遍就会漂移，而前端是按这个格式定位输入框的。
+ */
+export function validationDetails(
+  issues: readonly { path: readonly PropertyKey[]; message: string }[],
+): ApiErrorDetail[] {
+  return issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message }))
+}
+
 /** 跨 domain 的通用错误码。 */
 export const SystemErrorCodeSchema = z.enum(['VALIDATION_FAILED', 'INTERNAL_ERROR'])
 

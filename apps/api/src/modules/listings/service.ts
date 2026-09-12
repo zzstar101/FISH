@@ -18,9 +18,10 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import type { MediaStorage } from '../uploads/storage'
-import { decodeCursor, encodeCursor } from './cursor'
+import { CURSOR_TIMESTAMP_PATTERN, decodeCursor, encodeCursor } from './cursor'
 import type {
   FeedCursorKey,
+  FeedEntry,
   ListingImageRow,
   ListingRow,
   ListingState,
@@ -245,7 +246,7 @@ export function createListingService(deps: {
       const last = page.at(-1)
       const nextCursor =
         hasMore && last
-          ? encodeCursor({ sortKey: cursorKeyOf(last.listing, query.sort), id: last.listing.id })
+          ? encodeCursor({ sortKey: cursorKeyOf(last, query.sort), id: last.listing.id })
           : null
 
       return ListingFeedResponseSchema.parse({ items, nextCursor })
@@ -333,10 +334,6 @@ export function createListingService(deps: {
   }
 }
 
-/**
- * 只在这里引用 `z.url()` 语义：与 `MeSchema` 的 `avatarUrl` 保持同一条规则
- * （值域外的历史值降级为 `null`，而不是让整条详情解析失败）。
- */
 function isAllowedMime(contentType: string): boolean {
   return (ALLOWED_IMAGE_MIME as readonly string[]).includes(contentType)
 }
@@ -372,10 +369,12 @@ function decodeFeedCursor(
   if (!decoded) throw invalidCursor()
 
   if (sort === 'newest') {
-    if (typeof decoded.sortKey !== 'string') throw invalidCursor()
-    const createdAt = new Date(decoded.sortKey)
-    if (Number.isNaN(createdAt.getTime())) throw invalidCursor()
-    return { kind: 'newest', createdAt, id: decoded.id }
+    // 只接受我们自己生成的"微秒精度 UTC ISO"形态：先按正则挡掉所有会被 PG 拒绝的字符串
+    // （否则 `::timestamptz` 转换失败又会变成 500），再原样传给 SQL 以保住微秒。
+    if (typeof decoded.sortKey !== 'string' || !CURSOR_TIMESTAMP_PATTERN.test(decoded.sortKey)) {
+      throw invalidCursor()
+    }
+    return { kind: 'newest', createdAt: decoded.sortKey, id: decoded.id }
   }
 
   if (typeof decoded.sortKey !== 'number') throw invalidCursor()
@@ -388,6 +387,7 @@ function invalidCursor(): ListingServiceError {
   ])
 }
 
-function cursorKeyOf(listing: ListingRow, sort: ListingFeedQuery['sort']): string | number {
-  return sort === 'newest' ? listing.createdAt.toISOString() : listing.priceCents
+function cursorKeyOf(entry: FeedEntry, sort: ListingFeedQuery['sort']): string | number {
+  // newest 用 store 给的微秒文本；priceAsc/priceDesc 用整数分（本来就无损）。
+  return sort === 'newest' ? entry.createdAtCursor : entry.listing.priceCents
 }

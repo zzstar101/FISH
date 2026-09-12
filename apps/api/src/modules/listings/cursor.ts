@@ -11,7 +11,18 @@
  * 解码失败一律返回 `null`（路由层报 422），不做"宽容解析"：一个伪造或截断的游标如果被
  * 当成合法起点，用户会看到静默错乱的列表，比直接报错难查得多。
  */
+import { ListingIdSchema } from '@fish/contracts/listings/schema'
+
 export type FeedCursor = { sortKey: string | number; id: string }
+
+/**
+ * `newest` 排序的 sortKey 形态：**带微秒**的 UTC ISO 时间。
+ *
+ * 不能用 `Date.toISOString()`：JS `Date` 只有毫秒，而 `created_at` 是 timestamptz（微秒）。
+ * 截断后再比较会让同一毫秒内排在边界行之后的商品**两个分支都不成立**，从而在翻页里永久消失
+ * （实测：`.123700` 与 `.123300` 同毫秒，第二页为空）。契约 §2.1 明确承诺"同毫秒不重不漏"。
+ */
+export const CURSOR_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
 
 export function encodeCursor(cursor: FeedCursor): string {
   return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
@@ -28,7 +39,9 @@ export function decodeCursor(raw: string): FeedCursor | null {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
 
   const { sortKey, id } = parsed as Record<string, unknown>
-  if (typeof id !== 'string' || id.length === 0) return null
+  // id 会被绑到 `listings.id`（uuid 列）：非 UUID 会变成 SQL 类型错误 → 500，
+  // 而契约要求这种情况是 422（§2.1"非法 cursor → 422"）。
+  if (typeof id !== 'string' || !ListingIdSchema.safeParse(id).success) return null
   if (typeof sortKey !== 'string' && typeof sortKey !== 'number') return null
   // NaN / Infinity 无法与 SQL 参数比较，必须在入口挡掉
   if (typeof sortKey === 'number' && !Number.isFinite(sortKey)) return null

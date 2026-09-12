@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { ApiErrorDetailSchema, ApiErrorSchema, errorBody } from './error'
+import { ApiErrorDetailSchema, ApiErrorSchema, errorBody, validationDetails } from './error'
 
 describe('ApiErrorSchema', () => {
   test('still accepts the envelope used by auth and wishes (no details)', () => {
@@ -34,6 +34,26 @@ describe('errorBody', () => {
     ])
     expect(body.error.details?.[0]?.field).toBe('title')
     expect(ApiErrorSchema.safeParse(body).success).toBe(true)
+  })
+})
+
+describe('validationDetails', () => {
+  test('joins Zod issue paths with dots, including array indices', () => {
+    const details = validationDetails([
+      { path: ['title'], message: '标题至少 2 个字' },
+      { path: ['objectKeys', 1], message: '同一张图片不能重复' },
+    ])
+
+    expect(details).toEqual([
+      { field: 'title', message: '标题至少 2 个字' },
+      { field: 'objectKeys.1', message: '同一张图片不能重复' },
+    ])
+  })
+
+  test('maps issues with an empty path (object-level refine) to an empty field', () => {
+    expect(validationDetails([{ path: [], message: '至少提供一个要修改的字段' }])).toEqual([
+      { field: '', message: '至少提供一个要修改的字段' },
+    ])
   })
 })
 

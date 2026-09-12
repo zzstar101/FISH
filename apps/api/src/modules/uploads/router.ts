@@ -2,7 +2,7 @@ import {
   UploadConfirmRequestSchema,
   UploadPresignRequestSchema,
 } from '@fish/contracts/listings/schema'
-import { errorBody } from '@fish/contracts/system/error'
+import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -38,7 +38,12 @@ export function createUploadsRouter(options: UploadsRouterOptions) {
   router.post('/presign', options.requireAuth, async (c) => {
     const parsed = UploadPresignRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) {
-      return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+      // 契约 §3：VALIDATION_FAILED 必须带 details，前端据此把错误定位到输入框
+      // （例如 contentType = image/heic 要能指出问题出在 contentType 字段）。
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
     }
 
     try {
@@ -51,7 +56,12 @@ export function createUploadsRouter(options: UploadsRouterOptions) {
   router.post('/confirm', options.requireAuth, async (c) => {
     const parsed = UploadConfirmRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) {
-      return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+      // 契约 §3：VALIDATION_FAILED 必须带 details，前端据此把错误定位到输入框
+      // （例如 contentType = image/heic 要能指出问题出在 contentType 字段）。
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
     }
 
     try {

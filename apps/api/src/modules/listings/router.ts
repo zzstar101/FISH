@@ -1,9 +1,10 @@
 import {
   ListingCreateInputSchema,
   ListingFeedQuerySchema,
+  ListingIdSchema,
   ListingUpdateInputSchema,
 } from '@fish/contracts/listings/schema'
-import { type ApiErrorDetail, errorBody } from '@fish/contracts/system/error'
+import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -31,16 +32,26 @@ async function readJson(c: Context): Promise<unknown> {
   }
 }
 
-/**
- * Zod 的 issue path → 契约 §3 的 `details[].field`（点号路径，数组下标也用点号：
- * `objectKeys.1`）。前端据此把错误定位到具体输入框。
- */
-function zodDetails(issues: { path: PropertyKey[]; message: string }[]): ApiErrorDetail[] {
-  return issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message }))
+function zodValidationFailure(
+  c: Context,
+  issues: readonly { path: readonly PropertyKey[]; message: string }[],
+) {
+  return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(issues)), 422)
 }
 
-function zodValidationFailure(c: Context, issues: { path: PropertyKey[]; message: string }[]) {
-  return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法', zodDetails(issues)), 422)
+/**
+ * 路径参数 `:id` 必须是合法 UUID。
+ *
+ * 不校验的话，非 UUID 会被绑到 `listings.id`（uuid 列）上，PostgreSQL 直接报
+ * `invalid input syntax for type uuid` → 500；而契约 §3 要求"id 不存在"是 404。
+ * 这条路径**任何匿名请求都能稳定触发**，所以必须显式校验，不能靠 SQL 兜底。
+ */
+function requireListingId(c: Context): string {
+  const parsed = ListingIdSchema.safeParse(c.req.param('id'))
+  if (!parsed.success) {
+    throw new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
+  }
+  return parsed.data
 }
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`。 */
@@ -71,8 +82,9 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
   router.get('/:id', async (c) => {
     try {
+      const id = requireListingId(c)
       const viewerId = await options.resolveViewerId(c)
-      return c.json(await service.getDetail(viewerId, c.req.param('id')), 200)
+      return c.json(await service.getDetail(viewerId, id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -98,10 +110,8 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
     try {
-      return c.json(
-        await service.updateListing(c.get('userId'), c.req.param('id'), parsed.data),
-        200,
-      )
+      const id = requireListingId(c)
+      return c.json(await service.updateListing(c.get('userId'), id, parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -109,7 +119,8 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
   router.post('/:id/offline', options.requireAuth, async (c) => {
     try {
-      return c.json(await service.transition(c.get('userId'), c.req.param('id'), 'OFFLINE'), 200)
+      const id = requireListingId(c)
+      return c.json(await service.transition(c.get('userId'), id, 'OFFLINE'), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -117,7 +128,8 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
   router.post('/:id/online', options.requireAuth, async (c) => {
     try {
-      return c.json(await service.transition(c.get('userId'), c.req.param('id'), 'ACTIVE'), 200)
+      const id = requireListingId(c)
+      return c.json(await service.transition(c.get('userId'), id, 'ACTIVE'), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

@@ -121,6 +121,47 @@ describe('listings router — 读接口匿名可用', () => {
     expect(viewer).toBe(SELLER_ID)
   })
 
+  // 非 UUID 的 :id 曾经直达 uuid 列 → PostgreSQL 类型错误 → 500；契约 §3 要求 404。
+  // 这条路径任何匿名请求都能稳定触发，所以四个带 :id 的端点都要覆盖。
+  test('returns 404 (not 500) for a non-UUID listing id', async () => {
+    const app = buildApp({ service: fakeService(), authed: true })
+
+    const responses = await Promise.all([
+      app.request('/listings/not-a-uuid'),
+      // body 必须是**合法**的，否则会先被请求体校验拦住（422），测不到 id 校验这条路径
+      app.request('/listings/not-a-uuid', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priceCents: 100 }),
+      }),
+      app.request('/listings/not-a-uuid/offline', { method: 'POST' }),
+      app.request('/listings/not-a-uuid/online', { method: 'POST' }),
+    ])
+
+    for (const res of responses) {
+      expect(res.status).toBe(404)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'LISTING_NOT_FOUND',
+      )
+    }
+  })
+
+  test('never reaches the service when the listing id is malformed', async () => {
+    let calls = 0
+    const app = buildApp({
+      authed: true,
+      service: fakeService({
+        getDetail: async () => {
+          calls += 1
+          return detail
+        },
+      }),
+    })
+
+    await app.request('/listings/123')
+    expect(calls).toBe(0)
+  })
+
   test('rejects an invalid query with field-level details', async () => {
     const app = buildApp({ service: fakeService(), authed: false })
     const res = await app.request('/listings?status=SOLD')

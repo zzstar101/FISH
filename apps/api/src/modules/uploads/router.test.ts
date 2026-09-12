@@ -66,21 +66,27 @@ describe('uploads router', () => {
   })
 
   // iOS 相册的 HEIC 不在允许列表里：契约 §1 的前端约束要求先转码，服务端必须明确拒绝。
-  test('rejects a disallowed mime type and an oversize payload', async () => {
+  test('rejects a disallowed mime type and an oversize payload with field-level details', async () => {
     const app = buildApp({ storage: fakeStorage() })
 
-    expect(
-      (await app.request('/uploads/presign', post({ contentType: 'image/heic', sizeBytes: 1024 })))
-        .status,
-    ).toBe(422)
-    expect(
-      (
-        await app.request(
-          '/uploads/presign',
-          post({ contentType: 'image/jpeg', sizeBytes: 5 * 1024 * 1024 + 1 }),
-        )
-      ).status,
-    ).toBe(422)
+    const heic = await app.request(
+      '/uploads/presign',
+      post({ contentType: 'image/heic', sizeBytes: 1024 }),
+    )
+    expect(heic.status).toBe(422)
+    const heicBody = (await heic.json()) as {
+      error: { code: string; details?: { field: string }[] }
+    }
+    expect(heicBody.error.code).toBe('VALIDATION_FAILED')
+    expect(heicBody.error.details?.[0]?.field).toBe('contentType')
+
+    const oversize = await app.request(
+      '/uploads/presign',
+      post({ contentType: 'image/jpeg', sizeBytes: 5 * 1024 * 1024 + 1 }),
+    )
+    expect(oversize.status).toBe(422)
+    const oversizeBody = (await oversize.json()) as { error: { details?: { field: string }[] } }
+    expect(oversizeBody.error.details?.[0]?.field).toBe('sizeBytes')
   })
 
   test('maps confirm failures onto the frozen error codes', async () => {

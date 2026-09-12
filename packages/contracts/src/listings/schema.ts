@@ -82,6 +82,12 @@ export const listingObjectKeyPrefix = (userId: string) => `listings/${userId}/`
 // ---------------------------------------------------------------------------
 
 /**
+ * 商品 id 的形状。具名导出是因为它有三个使用点：读模型的 `id`、路由参数 `:id` 的校验、
+ * 游标里 `id` 的校验（前两者拼错会变成 uuid 列的 SQL 类型错误 → 500，而不是 404/422）。
+ */
+export const ListingIdSchema = z.uuid()
+
+/**
  * 读响应只给拼好的 `url`，不给 `objectKey`：后者是存储实现细节，
  * 放进读契约等于把 S3 布局钉进协议，换 CDN 或换布局都成了破坏性变更。
  */
@@ -109,7 +115,7 @@ export const ListingSellerSchema = MeSchema.pick({
 export type ListingSeller = z.infer<typeof ListingSellerSchema>
 
 export const ListingCardSchema = z.object({
-  id: z.uuid(),
+  id: ListingIdSchema,
   title: ListingTitleSchema,
   priceCents: PriceCentsSchema,
   category: ListingCategorySchema,

@@ -56,6 +56,13 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
   }
 }
 
+const CREATED_AT_CURSOR = '2026-09-12T03:40:10.000000Z'
+
+/** store 的 feed 行现在多带一个微秒精度的 `createdAtCursor`（游标用）。 */
+function feedEntry(listing: ListingRow, coverObjectKey: string | null) {
+  return { listing, createdAtCursor: CREATED_AT_CURSOR, coverObjectKey }
+}
+
 function imageRow(sortOrder: number, objectKey: string): ListingImageRow {
   return {
     id: `01930000-0000-7000-8000-0000000001${sortOrder.toString().padStart(2, '0')}`,
@@ -137,14 +144,14 @@ describe('listFeed', () => {
           seen.push(criteria)
           // limit + 1 行：store 约定多取一行用于判断"还有没有下一页"
           return [
-            { listing: listingRow(), coverObjectKey: `listings/${SELLER_ID}/cover.jpg` },
-            {
-              listing: listingRow({
+            feedEntry(listingRow(), `listings/${SELLER_ID}/cover.jpg`),
+            feedEntry(
+              listingRow({
                 id: '01930000-0000-7000-8000-000000000012',
                 createdAt: new Date('2026-09-12T03:40:09.000Z'),
               }),
-              coverObjectKey: null,
-            },
+              null,
+            ),
           ]
         },
       }),
@@ -163,7 +170,7 @@ describe('listFeed', () => {
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        listFeed: async () => [{ listing: listingRow(), coverObjectKey: null }],
+        listFeed: async () => [feedEntry(listingRow(), null)],
       }),
     })
 
@@ -178,11 +185,8 @@ describe('listFeed', () => {
       storage: fakeStorage(),
       store: fakeStore({
         listFeed: async () => [
-          { listing: listingRow({ priceCents: 999_999_999 }), coverObjectKey: null },
-          {
-            listing: listingRow({ id: '01930000-0000-7000-8000-000000000012' }),
-            coverObjectKey: null,
-          },
+          feedEntry(listingRow({ priceCents: 999_999_999 }), null),
+          feedEntry(listingRow({ id: '01930000-0000-7000-8000-000000000012' }), null),
         ],
       }),
     })

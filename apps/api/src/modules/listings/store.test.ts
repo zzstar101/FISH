@@ -205,7 +205,7 @@ test('feed 只返回请求的状态，并按 (createdAt, id) 翻页且不重不�
       const pageRows = rows.slice(0, 2)
       const boundary = pageRows[1]
       cursor = boundary
-        ? { kind: 'newest', createdAt: boundary.listing.createdAt, id: boundary.listing.id }
+        ? { kind: 'newest', createdAt: boundary.createdAtCursor, id: boundary.listing.id }
         : null
 
       collected.push(...pageRows.map((row) => row.listing.id))
@@ -218,6 +218,68 @@ test('feed 只返回请求的状态，并按 (createdAt, id) 翻页且不重不�
     expect(collected).toHaveLength(4)
     expect(new Set(collected).size).toBe(4)
     expect(collected).not.toContain(offlineId)
+  })
+})
+
+// 回归：游标过去携带毫秒精度的 ISO 时间（Date.toISOString()），而 created_at 是微秒精度的
+// timestamptz。截断后，同一毫秒内排在边界行之后的商品两个比较分支都不成立 → 翻页时永久消失。
+// 契约 §2.1 明确承诺"同毫秒不重复、不漏项"。
+test('同一毫秒内不同微秒的商品在翻页中不会漏项', async () => {
+  await withSeller(async (sellerId) => {
+    const newer = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:00:00.123Z'),
+      priceCents: 100,
+    })
+    const older = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:00:00.123Z'),
+      priceCents: 100,
+    })
+
+    // 用 SQL 精确指定微秒：同一毫秒（.123）内的 700µs 与 300µs
+    await db.execute(
+      sql`update listings set created_at = '2026-09-12T03:00:00.123700Z'::timestamptz where id = ${newer}`,
+    )
+    await db.execute(
+      sql`update listings set created_at = '2026-09-12T03:00:00.123300Z'::timestamptz where id = ${older}`,
+    )
+
+    const first = await store.listFeed({
+      limit: 1,
+      cursor: null,
+      sort: 'newest',
+      status: 'ACTIVE',
+      sellerId,
+    })
+    const boundary = first[0]
+    expect(boundary?.listing.id).toBe(newer)
+
+    const second = await store.listFeed({
+      limit: 1,
+      cursor: boundary
+        ? { kind: 'newest', createdAt: boundary.createdAtCursor, id: boundary.listing.id }
+        : null,
+      sort: 'newest',
+      status: 'ACTIVE',
+      sellerId,
+    })
+
+    expect(second.map((row) => row.listing.id)).toEqual([older])
+  })
+})
+
+test('feed 返回的游标时间是微秒精度的 UTC ISO 文本', async () => {
+  await withSeller(async (sellerId) => {
+    const id = await insertListingWithTime(sellerId, { createdAt: new Date(), priceCents: 100 })
+    const rows = await store.listFeed({
+      limit: 1,
+      cursor: null,
+      sort: 'newest',
+      status: 'ACTIVE',
+      sellerId,
+    })
+
+    expect(rows[0]?.listing.id).toBe(id)
+    expect(rows[0]?.createdAtCursor).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
   })
 })
 

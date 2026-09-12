@@ -189,7 +189,7 @@ To connect to Postgres database - please install either of 'pg', 'postgres', ...
 
 - `postgres`：`postgres:16-alpine`，带 `pg_isready` healthcheck
 - `minio`：带 `/minio/health/live` healthcheck
-- `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish` 并退出
+- `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`、并把桶设为**匿名可读**（`mc anonymous set download`，供 #6 的图片直链，见 `packages/contracts` 的 Listing 契约 §7.8），然后退出
 
 ## 7. 所有权与 Contract 流程
 

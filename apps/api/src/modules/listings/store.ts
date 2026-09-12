@@ -32,7 +32,8 @@ export type SellerRow = typeof users.$inferSelect
  * 才走到这里，SQL 层不再做"宽容解析"（契约 §2.1：非法 cursor 报 422）。
  */
 export type FeedCursorKey =
-  | { kind: 'newest'; createdAt: Date; id: string }
+  /** `createdAt` 是**数据库精度（微秒）**的文本，不是 JS Date —— 见 cursor.ts 的说明。 */
+  | { kind: 'newest'; createdAt: string; id: string }
   | { kind: 'priceAsc'; priceCents: number; id: string }
   | { kind: 'priceDesc'; priceCents: number; id: string }
 
@@ -48,7 +49,16 @@ export type FeedCriteria = {
   sellerId?: string | undefined
 }
 
-export type FeedEntry = { listing: ListingRow; coverObjectKey: string | null }
+export type FeedEntry = {
+  listing: ListingRow
+  /**
+   * 供游标使用的、**微秒精度**的 `created_at` 文本。
+   * 单独取一份而不是由 `listing.createdAt.toISOString()` 推导：后者只有毫秒，
+   * 会让同一毫秒内的行在翻页时被跳过。
+   */
+  createdAtCursor: string
+  coverObjectKey: string | null
+}
 
 export type CreateListingRecord = {
   id: string
@@ -244,7 +254,10 @@ export function createSqlListingStore(db: Db): ListingStore {
 
       // 多取一行用于判断"还有没有下一页"，返回前丢掉（契约 §2.1：不另给 hasMore）。
       const rows = await db
-        .select()
+        .select({
+          listing: listings,
+          createdAtCursor: sql<string>`to_char(${listings.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+        })
         .from(listings)
         .where(and(...conditions))
         .orderBy(...orderBySql(criteria.sort))
@@ -254,7 +267,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
       // 封面单独查一次而不是 join：一页最多 50 条、封面最多 50 张，
       // 比让每行都带出 9 张图的行放大便宜得多。
-      const pageIds = rows.map((row) => row.id)
+      const pageIds = rows.map((row) => row.listing.id)
       const covers = await db
         .select({ listingId: listingImages.listingId, objectKey: listingImages.objectKey })
         .from(listingImages)
@@ -262,9 +275,10 @@ export function createSqlListingStore(db: Db): ListingStore {
 
       const coverByListing = new Map(covers.map((cover) => [cover.listingId, cover.objectKey]))
 
-      return rows.map((listing) => ({
-        listing,
-        coverObjectKey: coverByListing.get(listing.id) ?? null,
+      return rows.map((row) => ({
+        listing: row.listing,
+        createdAtCursor: row.createdAtCursor,
+        coverObjectKey: coverByListing.get(row.listing.id) ?? null,
       }))
     },
 
@@ -328,9 +342,14 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 
   switch (cursor.kind) {
     case 'newest':
+      // 用文本 + `::timestamptz` 而不是 JS Date：文本保留微秒，且比较仍然落在
+      // `listings_status_created_at_idx` 上（date_trunc 会失去索引可用性）。
       return or(
-        lt(listings.createdAt, cursor.createdAt),
-        and(eq(listings.createdAt, cursor.createdAt), lt(listings.id, cursor.id)),
+        sql`${listings.createdAt} < ${cursor.createdAt}::timestamptz`,
+        and(
+          sql`${listings.createdAt} = ${cursor.createdAt}::timestamptz`,
+          lt(listings.id, cursor.id),
+        ),
       )
     case 'priceAsc':
       return or(
