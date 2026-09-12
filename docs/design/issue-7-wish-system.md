@@ -346,6 +346,3 @@ zzstar101 在 `app.ts` 中挂载 `app.route('/api/wishes', wishesRouter)`。合�
 ```
 
 阶段 1、2 完全不依赖任何人；阶段 3、4 只差 zzstar101 的两小步；阶段 5 可与验收主链解耦。
-
-
-
