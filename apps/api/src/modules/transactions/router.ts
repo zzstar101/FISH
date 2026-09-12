@@ -8,12 +8,17 @@ import {
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
-import { type TransactionService, TransactionServiceError } from './service'
+import { isTransactionId, type TransactionService, TransactionServiceError } from './service'
 
 export type TransactionsRouterOptions = {
   service: TransactionService
   /** 交易没有匿名路径（一切操作都以参与者身份为前提），整条路由挂 requireAuth。 */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+}
+
+/** 畸形 :id 不进 store（uuid 列会 500）：与 listings 的 router 级 id 校验同一惯例。 */
+function txNotFound(c: Context) {
+  return c.json(errorBody('TRANSACTION_NOT_FOUND', '交易不存在'), 404)
 }
 
 function toErrorResponse(c: Context, error: unknown): Response {
@@ -78,6 +83,7 @@ export function createTransactionsRouter({ service, requireAuth }: TransactionsR
   // 注意顺序：/proposals、/proposals/reject 已在上面注册，:id 不会吞掉它们；
   // 但 :id 段必须放在它们之后（Hono 按注册顺序匹配）。
   app.get('/:id', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
     try {
       return c.json(await service.getTransaction(c.get('userId'), c.req.param('id')), 200)
     } catch (error) {
@@ -102,6 +108,7 @@ export function createTransactionsRouter({ service, requireAuth }: TransactionsR
   })
 
   app.post('/:id/confirm', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
     try {
       return c.json(await service.confirm(c.get('userId'), c.req.param('id')), 200)
     } catch (error) {
@@ -110,6 +117,7 @@ export function createTransactionsRouter({ service, requireAuth }: TransactionsR
   })
 
   app.post('/:id/cancel', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
     try {
       return c.json(await service.cancel(c.get('userId'), c.req.param('id')), 200)
     } catch (error) {

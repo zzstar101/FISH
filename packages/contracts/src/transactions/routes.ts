@@ -20,6 +20,6 @@ export const TRANSACTION_ROUTES = {
   accept: '/transactions',
   /** POST 双方确认面交（200 TransactionDto，幂等；第二侧确认触发 COMPLETED + listing SOLD）。 */
   confirm: (id: string) => `/transactions/${id}/confirm`,
-  /** POST 取消（200 TransactionDto；COMPLETED 上 409 TRANSACTION_NOT_CANCELLABLE）。 */
+  /** POST 取消（200 TransactionDto；COMPLETED 上 409 TRANSACTION_NOT_IN_PENDING）。 */
   cancel: (id: string) => `/transactions/${id}/cancel`,
 } as const

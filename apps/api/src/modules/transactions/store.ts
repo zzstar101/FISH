@@ -130,11 +130,25 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         `)
         if (rowsOf(lock).length === 0) return { kind: 'listing-not-active' }
 
-        const insert = await tx.execute(sql`
+        const insert = await tx
+          .execute(sql`
           INSERT INTO transactions (id, listing_id, buyer_id, seller_id, amount_cents)
           VALUES (${newId()}, ${brief.listingId}, ${brief.buyerId}, ${brief.sellerId}, ${amountCents})
           RETURNING ${TX_COLUMNS}
         `)
+          .catch((error: unknown) => {
+            // ② 部分唯一索引兜底（接口注释承诺的 listing-not-active 语义）：
+            // listing 状态漂移出不变量（如被第三方改回 ACTIVE）时，同一 listing 的
+            // 第二笔 live 交易在这里被 23505 拦下，映射成与条件更新相同的失败语义。
+            if (
+              typeof error === 'object' &&
+              error !== null &&
+              (error as { code?: string }).code === '23505'
+            ) {
+              return { rows: [] as Record<string, unknown>[] }
+            }
+            throw error
+          })
         const row = rowsOf(insert)[0]
         if (!row) return { kind: 'listing-not-active' }
         return { kind: 'created', row: toRow(row) }

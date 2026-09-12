@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import type { MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Hono } from 'hono'
-import type { MessageRow } from '../messages/store'
 import { createTransactionsRouter } from './router'
 import { type TransactionService, TransactionServiceError } from './service'
 
@@ -21,14 +21,15 @@ const dto: TransactionDto = {
   updatedAt: '2026-09-12T10:00:00.000Z',
 }
 
-const systemMessage = {
+const systemMessage: MessageDto = {
   id: '00000000-0000-4000-8000-0000000000d1',
-  conversation_id: '00000000-0000-4000-8000-0000000000c1',
-  sender_id: null,
+  conversationId: '00000000-0000-4000-8000-0000000000c1',
+  senderId: null,
+  sender: null,
   type: 'SYSTEM',
   content: '{"type":"tx.proposal","amountCents":16000}',
-  created_at: new Date('2026-09-12T10:00:00.000Z'),
-} as unknown as MessageRow
+  createdAt: '2026-09-12T10:00:00.000Z',
+}
 
 function buildApp(overrides: Partial<TransactionService> = {}) {
   const service: TransactionService = {
@@ -117,7 +118,10 @@ describe('transactions router', () => {
   })
 
   test('POST /:id/confirm returns the completed dto', async () => {
-    const response = await buildApp().request('/transactions/tx-1/confirm', { method: 'POST' })
+    const response = await buildApp().request(
+      '/transactions/00000000-0000-4000-8000-0000000000e1/confirm',
+      { method: 'POST' },
+    )
     expect(response.status).toBe(200)
     const body = (await response.json()) as TransactionDto
     expect(body.status).toBe('COMPLETED')
@@ -129,8 +133,55 @@ describe('transactions router', () => {
         throw new TransactionServiceError(404, 'TRANSACTION_NOT_FOUND', '交易不存在')
       },
     })
-    const response = await app.request('/transactions/tx-1')
+    const response = await app.request('/transactions/00000000-0000-4000-8000-0000000000e1')
     expect(response.status).toBe(404)
+  })
+
+  test('POST /proposals/reject returns 200 with the SYSTEM message', async () => {
+    const response = await buildApp().request('/transactions/proposals/reject', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ conversationId: '00000000-0000-4000-8000-0000000000c1' }),
+    })
+    expect(response.status).toBe(200)
+  })
+
+  test('POST /:id/cancel returns the cancelled dto; service 409 mapping works', async () => {
+    const ok = await buildApp().request(
+      '/transactions/00000000-0000-4000-8000-0000000000e1/cancel',
+      { method: 'POST' },
+    )
+    expect(ok.status).toBe(200)
+    const body = (await ok.json()) as TransactionDto
+    expect(body.status).toBe('CANCELLED')
+
+    const app = buildApp({
+      cancel: async () => {
+        throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '已完成的交易不可取消')
+      },
+    })
+    const conflict = await app.request(
+      '/transactions/00000000-0000-4000-8000-0000000000e1/cancel',
+      { method: 'POST' },
+    )
+    expect(conflict.status).toBe(409)
+    const conflictBody = (await conflict.json()) as { error: { code: string; message: string } }
+    expect(conflictBody.error).toEqual({
+      code: 'TRANSACTION_NOT_IN_PENDING',
+      message: '已完成的交易不可取消',
+    })
+  })
+
+  test('malformed :id does not reach the store (404, not 500)', async () => {
+    const app = buildApp({
+      getTransaction: async () => {
+        throw new Error('store must not be reached with a non-uuid id')
+      },
+    })
+    const response = await app.request('/transactions/not-a-uuid')
+    expect(response.status).toBe(404)
+    const notFoundBody = (await response.json()) as { error: { code: string; message: string } }
+    expect(notFoundBody.error).toEqual({ code: 'TRANSACTION_NOT_FOUND', message: '交易不存在' })
   })
 
   test('GET / rejects an unknown status filter with 422', async () => {

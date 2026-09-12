@@ -11,11 +11,19 @@ const conversationA = '00000000-0000-4000-8000-0000000000c1'
 const listingA = '00000000-0000-4000-8000-0000000000b1'
 
 /** 模拟 SQL store 的 to_char 微秒游标键（JS Date 只有毫秒，毫秒段补零到 6 位）。 */
+function microIso(value: Date | string): string {
+  return new Date(value).toISOString().replace('Z', '000Z')
+}
+
 function withCursor(row: TransactionRow): TransactionRow & { created_at_cursor: string } {
-  return {
-    ...row,
-    created_at_cursor: new Date(row.created_at).toISOString().replace('Z', '000Z'),
-  }
+  return { ...row, created_at_cursor: microIso(row.created_at) }
+}
+
+/** 行值元组 (created_at, id) 是否严格小于游标（DESC 翻页的入选条件）。 */
+function tupleLess(row: TransactionRow, cursor: { sortKey: string; id: string }): boolean {
+  const key = microIso(row.created_at)
+  if (key !== cursor.sortKey) return key < cursor.sortKey
+  return row.id < cursor.id
 }
 
 class MemoryTxStore implements TransactionStore {
@@ -87,15 +95,16 @@ class MemoryTxStore implements TransactionStore {
     const all = this.rows
       .filter((row) => row.buyer_id === viewerId || row.seller_id === viewerId)
       .filter((row) => !filter.status || row.status === filter.status)
-      .sort(
-        (a, b) =>
-          String(b.created_at).localeCompare(String(a.created_at)) || b.id.localeCompare(a.id),
-      )
+      // 与 SQL 同一排序键：(created_at DESC, id DESC)，用微秒 ISO 文本而不是 Date.toString
+      .sort((a, b) => {
+        const key = (r: TransactionRow) => microIso(r.created_at)
+        return key(b).localeCompare(key(a)) || b.id.localeCompare(a.id)
+      })
     if (filter.cursor) {
-      const cursorId = filter.cursor.id
-      const index = all.findIndex((row) => row.id === cursorId)
-      const slice = index === -1 ? [] : all.slice(index + 1)
-      return slice.map(withCursor)
+      // 与 SQL 同一语义：行值元组 (created_at, id) 严格小于游标才入选（而非按 id 找下标）
+      const cursor = filter.cursor
+      const older = all.filter((row) => tupleLess(row, cursor))
+      return older.slice(0, filter.limit + 1).map(withCursor)
     }
     return all.slice(0, filter.limit + 1).map(withCursor)
   }

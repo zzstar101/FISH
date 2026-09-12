@@ -1,3 +1,4 @@
+import type { MessageDto } from '@fish/contracts/chat/schema'
 import {
   type TransactionAcceptInput,
   type TransactionDto,
@@ -10,6 +11,7 @@ import {
   transactionSystemEventSchema,
 } from '@fish/contracts/transactions/schema'
 import { decodeCursor, encodeCursor } from '../conversations/cursor'
+import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
 import type { TransactionRow, TransactionStore } from './store'
 
@@ -27,6 +29,12 @@ export class TransactionServiceError extends Error {
 const notFound = () => new TransactionServiceError(404, 'TRANSACTION_NOT_FOUND', '交易不存在')
 const conversationNotFound = () =>
   new TransactionServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
+
+/** 交易 id 的形状校验（DB 列是 uuid）：畸形 id 必须报 404 而不是让 PG 报 500。 */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export function isTransactionId(id: string): boolean {
+  return UUID_RE.test(id)
+}
 
 /** SYSTEM 消息 content 的唯一出口：先经契约 parse 保证形状，再序列化进 messages.content。 */
 function systemEventContent(event: Parameters<typeof transactionSystemEventSchema.parse>[0]) {
@@ -61,8 +69,9 @@ export type TxSideEffect = (
 ) => void
 
 export interface TransactionService {
-  propose(userId: string, input: TransactionProposalInput): Promise<MessageRow>
-  reject(userId: string, input: TransactionRejectInput): Promise<MessageRow>
+  /** 响应是写入的 SYSTEM 消息（契约 MessageDto，camelCase）。 */
+  propose(userId: string, input: TransactionProposalInput): Promise<MessageDto>
+  reject(userId: string, input: TransactionRejectInput): Promise<MessageDto>
   accept(userId: string, input: TransactionAcceptInput): Promise<TransactionDto>
   listTransactions(userId: string, query: TransactionListQuery): Promise<TransactionListResponse>
   getTransaction(userId: string, id: string): Promise<TransactionDto>
@@ -101,10 +110,12 @@ export function createTransactionService({
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
-      return writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
-        type: 'tx.proposal',
-        amountCents: input.amountCents,
-      })
+      return toMessageDto(
+        await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+          type: 'tx.proposal',
+          amountCents: input.amountCents,
+        }),
+      )
     },
 
     async reject(userId, input) {
@@ -118,9 +129,11 @@ export function createTransactionService({
           '只有卖家可以拒绝交易确认',
         )
       }
-      return writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
-        type: 'tx.rejected',
-      })
+      return toMessageDto(
+        await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+          type: 'tx.rejected',
+        }),
+      )
     },
 
     async accept(userId, input) {
@@ -174,12 +187,14 @@ export function createTransactionService({
     },
 
     async getTransaction(userId, id) {
+      if (!isTransactionId(id)) throw notFound() // 畸形 id：404 而不是 PG 的 500
       const row = await store.findById(id)
       if (!row || (row.buyer_id !== userId && row.seller_id !== userId)) throw notFound()
       return toTransactionDto(row, userId)
     },
 
     async confirm(userId, id) {
+      if (!isTransactionId(id)) throw notFound()
       const existing = await store.findById(id)
       if (!existing || (existing.buyer_id !== userId && existing.seller_id !== userId)) {
         throw notFound()
@@ -193,6 +208,7 @@ export function createTransactionService({
     },
 
     async cancel(userId, id) {
+      if (!isTransactionId(id)) throw notFound()
       const existing = await store.findById(id)
       if (!existing || (existing.buyer_id !== userId && existing.seller_id !== userId)) {
         throw notFound()

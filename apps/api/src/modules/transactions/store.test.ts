@@ -3,7 +3,7 @@ import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlMessageStore } from '../messages/store'
-import { createSqlTransactionStore } from './store'
+import { createSqlTransactionStore, type TransactionRow } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -169,6 +169,37 @@ describe('transactions store (integration)', () => {
     )[0] as { id: string }
     const result = await store.cancel(completed.id, buyer1)
     expect(result.kind).toBe('not-cancellable')
+  })
+
+  test('listForUser pages by (created_at, id) DESC with no gap or repeat on ties', async () => {
+    // 把该买家的全部交易改成同一 created_at：排序只能靠 id tie-break 决出
+    await db.execute(sql`
+      UPDATE transactions SET created_at = '2026-09-12 10:00:00.123456+00'
+      WHERE buyer_id = ${buyer1}
+    `)
+
+    const all = rows(
+      await db.execute(sql`SELECT id FROM transactions WHERE buyer_id = ${buyer1} ORDER BY id`),
+    ).map((row) => row.id as string)
+
+    const collected: string[] = []
+    let cursor: { sortKey: string; id: string } | null = null
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await store.listForUser(buyer1, { limit: 1, cursor })
+      if (page.length === 0) break
+      // store 返回 limit+1 行，service 保留前 limit 行、用其最后一行生成游标
+      const kept = page.slice(0, 1)
+      const last = kept.at(-1)
+      if (!last) break
+      const lastCursor = (last as TransactionRow & { created_at_cursor?: string }).created_at_cursor
+      if (!lastCursor) throw new Error('created_at_cursor missing')
+      collected.push(last.id)
+      if (page.length <= 1) break // 没有判底行 = 已到末页
+      cursor = { sortKey: lastCursor, id: last.id }
+    }
+
+    // 翻页不重不漏：恰好覆盖全部交易各一次
+    expect(collected.sort()).toEqual([...all].sort())
   })
 
   test('insertSystem writes a SYSTEM message without sender and bumps last_message_at', async () => {
