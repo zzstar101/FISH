@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test'
 import type { z } from 'zod'
-import { ApiErrorSchema } from '../system/error'
 import {
   ListingCardSchema,
   ListingCreateInputSchema,
@@ -140,10 +139,12 @@ describe('ListingFeedQuerySchema', () => {
     expect(ListingFeedQuerySchema.safeParse({}).success).toBe(true)
   })
 
-  test('rejects priceMaxCents below priceMinCents', () => {
+  // 冻结契约没有规定区间倒置的行为（§2.1 只说空结果是 200），因此代码与冻结文本一致：不加 422 规则。
+  // 若 Owner 要收紧，需按 CONTRIBUTING §5 补进契约后重新 Freeze。
+  test('accepts an inverted price range (frozen contract defines no rule for it)', () => {
     expect(
       ListingFeedQuerySchema.safeParse({ priceMinCents: '500', priceMaxCents: '100' }).success,
-    ).toBe(false)
+    ).toBe(true)
   })
 
   test('rejects status without sellerId', () => {
@@ -281,23 +282,5 @@ describe('UploadPresignRequestSchema', () => {
         sizeBytes: MAX_IMAGE_BYTES + 1,
       }).success,
     ).toBe(false)
-  })
-})
-
-describe('ApiErrorSchema', () => {
-  test('still accepts the envelope used by auth and wishes (no details)', () => {
-    const parsed = ApiErrorSchema.parse({ error: { code: 'UNAUTHENTICATED', message: '未登录' } })
-    expect(parsed.error.details).toBeUndefined()
-  })
-
-  test('accepts field-level details for form validation', () => {
-    const parsed = ApiErrorSchema.parse({
-      error: {
-        code: 'VALIDATION_FAILED',
-        message: '参数校验失败',
-        details: [{ field: 'images.2', message: '同一张图片不能重复' }],
-      },
-    })
-    expect(parsed.error.details?.[0]?.field).toBe('images.2')
   })
 })

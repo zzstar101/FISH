@@ -195,8 +195,10 @@ export const ListingUpdateInputSchema = z
     objectKeys: ObjectKeyListSchema.optional(),
   })
   .refine((value) => Object.keys(value).length > 0, { error: '至少提供一个要修改的字段' })
-  // 部分更新下无法只凭请求体判定 free ⟹ priceCents === 0：只在两者同时出现时校验，
-  // 只给 `free` 的情形由 service 与库中既有行合并后再校验（契约 §2.4 的语义是"最终状态成立"）。
+  // 部分更新下无法只凭请求体判定 free ⟹ priceCents === 0：只在两者同时出现时校验。
+  // 只给 `free` 的情形必须由 service 与库中既有行合并后校验（违者 422 VALIDATION_FAILED）——
+  // 冻结契约 §1 的 update schema 只是 create 字段集的 optional 版，
+  // 而"最终状态成立"这件事在 schema 层无法单独判定；该落差已在 Issue #6 报告，待补进契约文本。
   .refine((value) => !value.free || value.priceCents === undefined || value.priceCents === 0, {
     path: ['priceCents'],
     error: '0 元送时价格必须为 0',
@@ -236,13 +238,6 @@ export const ListingFeedQuerySchema = z
     /** 只在同时给 `sellerId` 时才接受，否则任何人都能 `?status=SOLD` 拉全站已售商品。 */
     status: ListingStatusSchema.optional(),
   })
-  .refine(
-    (value) =>
-      value.priceMinCents === undefined ||
-      value.priceMaxCents === undefined ||
-      value.priceMaxCents >= value.priceMinCents,
-    { path: ['priceMaxCents'], error: '最高价不能低于最低价' },
-  )
   .refine((value) => value.status === undefined || value.sellerId !== undefined, {
     path: ['status'],
     error: 'status 必须与 sellerId 一起使用',
