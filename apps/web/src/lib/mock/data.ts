@@ -1,4 +1,13 @@
-import type { CategoryEntry, Conversation, Listing, Notification, Order, User, Wish } from './types'
+import type {
+  CategoryEntry,
+  Conversation,
+  Listing,
+  MatchResult,
+  Notification,
+  Order,
+  User,
+  Wish,
+} from './types'
 
 /** 当前登录用户（Mock）。真实登录态由 #3 的 `GET /me` 提供。 */
 export const ME_ID = 'u-me'
@@ -493,6 +502,25 @@ export const listings: Listing[] = [
     sellerId: 'u7',
     kind: 'listing',
   },
+  {
+    id: 'p21',
+    title: '人体工学椅 宿舍用 九成新',
+    priceCents: 36000,
+    emoji: '🪑',
+    tone: 'mint',
+    category: '生活用品',
+    condition: '9成新',
+    campus: '西校区',
+    tradeMethod: '校内自提',
+    tags: ['可小刀'],
+    description: ['坐垫无塌陷,腰托可调,宿舍用刚好。', '毕业出,西校区自提。'],
+    publishedMinutesAgo: 45,
+    views: 186,
+    wantCount: 12,
+    status: 'ACTIVE',
+    sellerId: 'u2',
+    kind: 'listing',
+  },
 ]
 
 /** 详情页留言（截图里每个商品 3 条）。 */
@@ -720,8 +748,50 @@ export const wishes: Wish[] = [
     budgetCents: 40000,
     minutesAgo: 240,
     helpers: 3,
-    matchedCount: 2,
+    matchedCount: 1,
     mine: true,
+  },
+  // 以下三条为 #8 的匹配结果提供「对得上的愿望」：
+  // 匹配结果里出现的每个人，都必须有一条与之相符的愿望，数据才自洽。
+  {
+    id: 'w5',
+    userId: 'u2',
+    keyword: '考研数学 真题 全套',
+    budgetCents: 10000,
+    minutesAgo: 150,
+    helpers: 4,
+    matchedCount: 3,
+    mine: false,
+  },
+  {
+    id: 'w6',
+    userId: 'u7',
+    keyword: 'iPad 第9代 64G',
+    budgetCents: 160000,
+    minutesAgo: 420,
+    helpers: 5,
+    matchedCount: 2,
+    mine: false,
+  },
+  {
+    id: 'w7',
+    userId: 'u7',
+    keyword: '考研数学 习题册',
+    budgetCents: 8000,
+    minutesAgo: 600,
+    helpers: 2,
+    matchedCount: 1,
+    mine: false,
+  },
+  {
+    id: 'w8',
+    userId: 'u4',
+    keyword: '考研数学 张宇1000题',
+    budgetCents: 6000,
+    minutesAgo: 720,
+    helpers: 1,
+    matchedCount: 1,
+    mine: false,
   },
 ]
 
@@ -879,5 +949,26 @@ export const chatQuickPhrases = [
   '成色怎么样,有明显磕碰吗',
 ]
 
-/** 匹配页：商品 → 想买它的同学（截图里是空态）。 */
-export const matchResults: { userId: string; reason: string; score: number }[] = []
+/**
+ * #8 匹配结果：商品 → 想买它的同学。
+ *
+ * **必须与 `wishes` 自洽**：出现在这里的人都要有一条对得上的愿望（类目 / 关键词 / 预算），
+ * 否则会出现「某人匹配了 iPad、愿望却是自行车」这类矛盾数据。改这里时一并检查 `wishes`。
+ *
+ * `score` 按 #8 的 MVP 公式（类目 0.35 / 关键词 0.35 / 价格 0.30）手写，阈值 70。
+ * 覆盖三种情况：`p4` 四条命中（Top 3 才有意义）、`p1` 一条、`p21` 一条且命中者是当前
+ * 登录用户（供「我的愿望」展示愿望成真）；其余商品无命中，走空态。
+ */
+export const matchResults: Record<string, MatchResult[]> = {
+  // 考研数学全套 张宇1000题+真题（图书教材, ¥45, 卖家 u5）
+  p4: [
+    { userId: 'u6', wishId: 'w3', reason: '关键词完全命中 · 预算充足', score: 96 },
+    { userId: 'u2', wishId: 'w5', reason: '类目一致 · 关键词命中', score: 88 },
+    { userId: 'u7', wishId: 'w7', reason: '类目一致 · 关键词部分命中', score: 82 },
+    { userId: 'u4', wishId: 'w8', reason: '类目一致 · 预算偏紧', score: 74 },
+  ],
+  // iPad 第9代 64G（数码电子, ¥1,580, 卖家 u1）
+  p1: [{ userId: 'u7', wishId: 'w6', reason: '关键词命中 · 预算覆盖', score: 88 }],
+  // 人体工学椅（生活用品, ¥360, 卖家 u2）—— 命中者是「我」，对应 w4
+  p21: [{ userId: ME_ID, wishId: 'w4', reason: '类目一致 · 关键词命中 · 预算覆盖', score: 91 }],
+}
