@@ -135,9 +135,11 @@ export function createWishService({
         throw new WishServiceError(409, `ACTIVE 愿望最多 ${ACTIVE_WISH_LIMIT} 条`)
       }
 
+      // 先失效缓存再投递：投递失败抛错时记录已落库，不能让需求池继续返回旧快照。
+      if (result.kind === 'created') invalidatePoolCache()
+
       // 对重复请求重新投递，避免前一次投递失败后该愿望永久失配；匹配侧需按 wishId 幂等消费。
       await matchQueue.enqueue(result.row.id)
-      if (result.kind === 'created') invalidatePoolCache()
       return toWishDto(result.row)
     },
 

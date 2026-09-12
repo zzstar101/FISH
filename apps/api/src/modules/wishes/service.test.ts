@@ -183,6 +183,20 @@ describe('wish service', () => {
     expect(updated.description).toBeNull()
   })
 
+  test('invalidates the pool cache even when match enqueue fails', async () => {
+    let failEnqueue = false
+    const { service } = setup(async () => {
+      if (failEnqueue) throw new Error('queue unavailable')
+    })
+    for (let i = 0; i < 3; i += 1) await service.createWish(`user-${i}`, createInput)
+    expect((await service.getPool()).items[0]?.wantCount).toBe(3)
+
+    failEnqueue = true
+    await expect(service.createWish('user-4', createInput)).rejects.toThrow('queue unavailable')
+
+    expect((await service.getPool()).items[0]?.wantCount).toBe(4)
+  })
+
   test('returns only k-anonymous active groups and caches the pool', async () => {
     const { store, service } = setup()
     for (let i = 0; i < 3; i += 1) await service.createWish(`user-${i}`, createInput)

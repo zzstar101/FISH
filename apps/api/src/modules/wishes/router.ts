@@ -6,7 +6,7 @@ import {
 import { createDb, type Db } from '@fish/db/client'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
-import type { WishMatchQueue } from './match-queue'
+import { createNoopWishMatchQueue, type WishMatchQueue } from './match-queue'
 import { createWishService, type WishService, WishServiceError } from './service'
 import { createSqlWishStore, type WishStore } from './store'
 
@@ -15,7 +15,8 @@ type WishesContext = Context<{ Variables: WishesVariables }>
 export type WishUserIdResolver = (context: WishesContext) => string | undefined
 export type WishesRouterOptions = {
   store: WishStore
-  matchQueue: WishMatchQueue
+  /** 省略时用 no-op 队列（真实 MATCH_WISH 投递待 Dev A 的 jobs 接口，见 match-queue.ts）。 */
+  matchQueue?: WishMatchQueue
   getUserId: WishUserIdResolver
   service?: WishService
 }
@@ -56,8 +57,8 @@ async function parseJson<T>(c: WishesContext, parse: (input: unknown) => T) {
  * 当前由 Dev A 在 app.ts 接线时提供真实 resolver。
  */
 export function createWishesRouter(options: WishesRouterOptions) {
-  const service =
-    options.service ?? createWishService({ store: options.store, matchQueue: options.matchQueue })
+  const matchQueue = options.matchQueue ?? createNoopWishMatchQueue()
+  const service = options.service ?? createWishService({ store: options.store, matchQueue })
   const app = new Hono<{ Variables: WishesVariables }>()
 
   app.use('*', async (c, next) => {

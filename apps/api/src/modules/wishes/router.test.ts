@@ -3,7 +3,7 @@ import type { WishDto } from '@fish/contracts/wishes/schema'
 import { Hono } from 'hono'
 import { createWishesRouter } from './router'
 import type { WishService } from './service'
-import type { WishStore } from './store'
+import type { WishRow, WishStore } from './store'
 
 const dto: WishDto = {
   id: 'wish-1',
@@ -31,6 +31,9 @@ const service: WishService = {
 }
 
 const emptyStore = {} as WishStore
+const creatingStore = Object.assign({} as WishStore, {
+  createOrGetRecent: async (row: WishRow) => ({ kind: 'created' as const, row }),
+})
 const matchQueue = { enqueue: async () => undefined }
 const root = new Hono<{ Variables: { userId: string } }>()
 root.use('/api/wishes/*', async (c, next) => {
@@ -86,6 +89,31 @@ describe('wishes router', () => {
     expect((await request('/api/wishes/pool')).status).toBe(200)
     expect((await request('/api/wishes/wish-1/close', { method: 'POST' })).status).toBe(200)
     expect((await request('/api/wishes/wish-1/fulfill', { method: 'POST' })).status).toBe(200)
+  })
+
+  test('defaults to the no-op match queue when none is provided', async () => {
+    const app = new Hono<{ Variables: { userId: string } }>()
+    app.use('*', async (c, next) => {
+      c.set('userId', 'user-1')
+      await next()
+    })
+    app.route(
+      '/api/wishes',
+      createWishesRouter({ store: creatingStore, getUserId: (c) => c.get('userId') }),
+    )
+
+    const response = await app.request('/api/wishes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        keyword: '机械键盘',
+        category: 'electronics',
+        budgetMinCents: 10000,
+        budgetMaxCents: 20000,
+      }),
+    })
+
+    expect(response.status).toBe(201)
   })
 
   test('returns 400 for invalid payloads', async () => {
