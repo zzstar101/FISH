@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { fileURLToPath } from 'node:url'
 import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -12,7 +11,7 @@ if (!databaseUrl) {
 }
 
 // 必须用 fileURLToPath：URL.pathname 在 Windows 上是 /C:/... 形式，migrator 读不到。
-const migrationsFolder = fileURLToPath(
+const migrationsFolder = Bun.fileURLToPath(
   new URL('../../../../../packages/db/src/migrations', import.meta.url),
 )
 
@@ -100,6 +99,15 @@ describe('wishes store (integration)', () => {
     expect(job?.type).toBe('MATCH_WISH')
     expect(job?.status).toBe('PENDING')
     expect(job?.payload).toEqual({ wishId })
+
+    // 幂等：重复投递同一 wishId 不再新增 job（重放只补投真正缺失的那条）
+    await matchQueue.enqueue(wishId)
+    const count = rows(
+      await db.execute(
+        sql`SELECT count(*)::int AS c FROM jobs WHERE payload->>'wishId' = ${wishId}`,
+      ),
+    )[0]
+    expect(Number(count?.c)).toBe(1)
   })
 
   test('findById and listByUser report matchCount from the matches table', async () => {
@@ -129,6 +137,16 @@ describe('wishes store (integration)', () => {
     // 编辑/关闭的 UPDATE RETURNING 也要带上真实 matchCount，而不是兜底 0
     const updated = await store.update(wish.id, { keyword: '考研教材' }, new Date())
     expect(updated?.match_count).toBe(2)
+
+    // 软幂等重复创建返回的是同一行，matchCount 同样不能回退成 0
+    const replay = await store.createOrGetRecent(
+      baseRow({ id: crypto.randomUUID(), keyword: '考研教材' }),
+      10,
+      new Date(Date.now() - 5_000),
+    )
+    expect(replay.kind).toBe('duplicate')
+    if (replay.kind === 'duplicate') expect(replay.row.match_count).toBe(2)
+
     const closed = await store.updateStatusIfActive(wish.id, 'CLOSED', new Date())
     expect(closed?.match_count).toBe(2)
   })
@@ -165,10 +183,21 @@ describe('wishes store (integration)', () => {
       )
     }
 
+    // 同一用户刷 3 行、只有 1 个去重用户：不得靠行数把自己抬进需求池
+    for (let i = 0; i < 3; i += 1) {
+      const created = await store.createOrGetRecent(
+        oldRow({ keyword: '单人多条' }),
+        10,
+        new Date(Date.now() - 5_000),
+      )
+      expect(created.kind).toBe('created')
+    }
+
     const pool = await store.aggregatePool(3, 50)
     const bike = pool.find((item) => item.keyword === '自行车')
     expect(bike?.want_count).toBe(4)
     expect(bike?.median_budget_cents).toBe(20_000)
     expect(pool.find((item) => item.keyword === '游戏掌机')).toBeUndefined()
+    expect(pool.find((item) => item.keyword === '单人多条')).toBeUndefined()
   })
 })

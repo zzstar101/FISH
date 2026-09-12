@@ -99,10 +99,11 @@ export function createSqlWishStore(db: Db): WishStore {
         await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${row.user_id}))`)
         const duplicate = firstWishRow(
           await tx.execute(sql`
-          SELECT * FROM wishes
-          WHERE user_id = ${row.user_id} AND keyword = ${row.keyword} AND category = ${row.category}
-            AND status = 'ACTIVE' AND created_at > ${createdAfter}
-          ORDER BY created_at DESC
+          SELECT w.*, (SELECT count(*)::int FROM matches m WHERE m.wish_id = w.id) AS match_count
+          FROM wishes w
+          WHERE w.user_id = ${row.user_id} AND w.keyword = ${row.keyword} AND w.category = ${row.category}
+            AND w.status = 'ACTIVE' AND w.created_at > ${createdAfter}
+          ORDER BY w.created_at DESC
           LIMIT 1
         `),
         )
@@ -116,14 +117,24 @@ export function createSqlWishStore(db: Db): WishStore {
           return { kind: 'active-limit' } as const
         }
 
+        // 愿望与 MATCH_WISH job 用同一条语句写入（数据修改型 CTE，PG 保证必执行）：
+        // 任一步失败整体回滚，不产生"愿望已落库但没有 job"的孤儿行。
         const created = firstWishRow(
           await tx.execute(sql`
-          INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
-                              description, accept_similar, status, created_at, updated_at)
-          VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
-                  ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
-                  ${row.created_at}, ${row.updated_at})
-          RETURNING *
+          WITH inserted AS (
+            INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
+                                description, accept_similar, status, created_at, updated_at)
+            VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
+                    ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
+                    ${row.created_at}, ${row.updated_at})
+            RETURNING *
+          ), match_job AS (
+            INSERT INTO jobs (id, type, payload)
+            SELECT ${crypto.randomUUID()}, 'MATCH_WISH', jsonb_build_object('wishId', inserted.id::text)
+            FROM inserted
+            RETURNING id
+          )
+          SELECT * FROM inserted
         `),
         )
         if (!created) throw new Error('创建愿望后未返回记录')
@@ -204,7 +215,8 @@ export function createSqlWishStore(db: Db): WishStore {
         FROM wishes
         WHERE status = 'ACTIVE'
         GROUP BY keyword, category
-        HAVING count(*) >= ${minCount}
+        -- 隐私门槛按「去重用户数」而非行数：同一用户刷多条不得把小组抬进需求池。
+        HAVING count(DISTINCT user_id) >= ${minCount}
         ORDER BY want_count DESC, keyword ASC
         LIMIT ${limit}
       `)

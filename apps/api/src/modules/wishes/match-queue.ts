@@ -30,9 +30,14 @@ export function createNoopWishMatchQueue(): WishMatchQueue {
 export function createDbWishMatchQueue(db: Db): WishMatchQueue {
   return {
     async enqueue(wishId: string) {
+      // 幂等：该愿望已有 MATCH_WISH job（任何状态）就不再投递，避免重复请求/重放刷出重复任务；
+      // 前一次投递真正失败（插不进去）时这里会补上一条。
       await db.execute(sql`
         INSERT INTO jobs (id, type, payload)
-        VALUES (${crypto.randomUUID()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
+        SELECT ${crypto.randomUUID()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb
+        WHERE NOT EXISTS (
+          SELECT 1 FROM jobs WHERE type = 'MATCH_WISH' AND payload->>'wishId' = ${wishId}
+        )
       `)
     },
   }

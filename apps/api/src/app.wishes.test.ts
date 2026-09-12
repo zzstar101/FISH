@@ -103,6 +103,30 @@ describe('wishes API wiring (#7)', () => {
 
     expect(response.status).toBe(401)
     expect(await response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
+
+    // 身份只认会话：伪造请求头不得被信任
+    const forged = await app.request('/api/wishes', {
+      headers: { 'x-user-id': '00000000-0000-0000-0000-000000000000' },
+    })
+    expect(forged.status).toBe(401)
+  })
+
+  test('pool route is wired and never exposes user identity', async () => {
+    const cookie = await registerUser('04')
+    await createWish(cookie)
+
+    const response = await app.request('/api/wishes/pool', { headers: { cookie } })
+    expect(response.status).toBe(200)
+
+    const body = (await response.json()) as { items: Record<string, unknown>[] }
+    for (const item of body.items) {
+      expect(Object.keys(item).sort()).toEqual([
+        'category',
+        'keyword',
+        'medianBudgetCents',
+        'wantCount',
+      ])
+    }
   })
 
   test('create writes a PENDING MATCH_WISH job for the created wish', async () => {
@@ -130,6 +154,18 @@ describe('wishes API wiring (#7)', () => {
 
     expect(
       (await app.request(`/api/wishes/${wish.id}`, { headers: { cookie: otherCookie } })).status,
+    ).toBe(403)
+    expect(
+      (
+        await app.request(`/api/wishes/${wish.id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json', cookie: otherCookie },
+          body: JSON.stringify({ keyword: '被改写的愿望' }),
+        })
+      ).status,
+    ).toBe(403)
+    expect(
+      (await app.request(`/api/wishes/${wish.id}/fulfill`, post({}, otherCookie))).status,
     ).toBe(403)
 
     const detail = await app.request(`/api/wishes/${wish.id}`, { headers: { cookie: ownerCookie } })
