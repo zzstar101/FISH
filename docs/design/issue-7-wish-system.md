@@ -12,7 +12,7 @@
 - `packages/contracts/src/wishes/schema.ts`、`routes.ts` 及 Zod 边界测试。
 - `apps/api/src/modules/wishes/store.ts`：基于 Bun SQL 的持久化适配层。
 - `apps/api/src/modules/wishes/service.ts`：创建、列表、详情、编辑、关闭、fulfilled、k-匿名需求池、60 秒进程内缓存。
-- `apps/api/src/modules/wishes/router.ts`：相对路由，可由 Dev A 通过 `app.route('/api/wishes', router)` 接入；开发期使用 `x-user-id` 占位身份头。
+- `apps/api/src/modules/wishes/router.ts`：相对路由，可由 Dev A 通过 `app.route('/api/wishes', createWishesRouterFromDb(db, { getUserId }))` 接入；身份只从调用方注入的 `getUserId(context)` resolver 读取（拿不到即 401，不读请求头），`matchQueue` 省略时默认 no-op。
 - `apps/api/src/modules/wishes/*test.ts`：服务与路由测试，匹配队列使用可注入 no-op 实现。
 
 仍需跨 Owner 集成：
@@ -125,9 +125,10 @@ CREATE INDEX wishes_keyword_trgm ON wishes USING gin (keyword gin_trgm_ops);  --
 ```
 packages/contracts/src/wishes/
 ├─ schema.ts      # zod: wishCreateInput / wishUpdateInput / wishDto / wishPoolItem
-├─ routes.ts      # 路径 + 请求/响应类型常量（供前端 typed client 使用）
-└─ index.ts       # subpath export: '@fish/contracts/wishes'
+└─ routes.ts      # 路径 + 请求/响应类型常量（供前端 typed client 使用）
 ```
+
+导入路径走深子路径：`@fish/contracts/wishes/schema`、`@fish/contracts/wishes/routes`（`package.json` 的 exports 是 `./*` → `./src/*.ts`，没有包级入口）。
 
 关键校验规则（zod，前后端共用）：
 - `keyword`: `string` 2–30 字符，trim 后非空，禁纯空白/纯符号
@@ -172,7 +173,7 @@ export interface WishMatchQueue {
 | ③ | zzstar101 (Dev A) | `app.ts` 挂载 wishes router（一行接线） | 不阻塞开发；合并时一行 PR |
 | ④ | ouu2006 (前端) | 按 §4 contracts 实现愿望页；字段需求走 PR/Issue | 不阻塞 API 开发 |
 | ⑤ | zzstar101 | 分类枚举共享常量的归属文件 | 小；可先在 wishes contracts 内临时定义，Dev A 落地 listings 时合并 |
-| ⑥ | zzstar101 (Dev A) | **认证身份来源**：auth 模块（#2）尚未建立。wishes router 需要 `userId`；请确认 middleware 挂载方式与 `c.get()` 的 key（如 `c.get('userId')`）。落地前我先用 router 内部 dev-only 中间件占位（只挂在我的 router 上，不动 `app.ts`） | 不阻塞开发；#2 落地后移除占位 |
+| ⑥ | zzstar101 (Dev A) | **认证身份来源**：auth 模块（#18）尚未合并。router 通过 `getUserId(context)` resolver 取 `userId`（拿不到即 401，不读请求头）；请确认 middleware 的挂载方式与 `c.get()` 的 key（如 `c.get('userId')`），接线时传入对应 resolver | 不阻塞开发；#18 合并后补 resolver 接线 |
 
 除以上 6 点，我不产生任何对他人目录的写入。
 
@@ -287,8 +288,7 @@ PR 描述注明：对应 Issue #7、未修改他人目录、请 ouu2006 确认�
 
 ```ts
 import { Hono } from 'hono'
-// 占位认证：#2 auth 落地后整体删除，由 zzstar101 的 middleware 接管
-wishesRouter.use('*', devAuthMiddleware)   // dev-only，仅挂在本 router 内
+// 身份：只认调用方注入的 getUserId resolver，缺失即 401；不读请求头
 // 路由绑定 → 调 service.ts，zod parse 请求体，响应 Zod schema parse 后返回
 ```
 
@@ -314,7 +314,7 @@ wishesRouter.use('*', devAuthMiddleware)   // dev-only，仅挂在本 router 内
 **2.4 测试**：
 
 - `service.test.ts`：状态机非法迁移、ACTIVE 上限、非本人 403、软幂等（不依赖 DB 的逻辑单测）。
-- `router.test.ts`：`app.request()` 风格走 router + dev 认证占位；DB 依赖用例 `test.skipIf(!process.env.DATABASE_URL)`，测试内 `CREATE TABLE IF NOT EXISTS wishes ...`（标注为临时，Dev A migration 落地后删除）。
+- `router.test.ts`：`app.request()` 风格走 router，测试内自建 middleware 写入 `userId` 以喂给 `getUserId`；DB 依赖用例 `test.skipIf(!process.env.DATABASE_URL)`，测试内 `CREATE TABLE IF NOT EXISTS wishes ...`（标注为临时，Dev A migration 落地后删除）。
 
 **2.5 收尾**：typecheck / lint / test 全绿 → commit `feat(wishes): add wish api module` → Draft PR（勾选 DB CHANGE REQUEST 项，注明"未修改他人目录"）。
 
