@@ -5,7 +5,8 @@ import { jobs } from '@fish/db/schema/jobs'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import type { CreateListingRecord, FeedCursorKey } from './store'
+import { createListingService, ListingServiceError } from './service'
+import type { CreateListingRecord, FeedCursorKey, ListingStore } from './store'
 import { createSqlListingStore } from './store'
 
 // 与 packages/db 的集成测试同一约定：没有 DATABASE_URL 就明确失败，而不是静默跳过。
@@ -431,6 +432,58 @@ test('setStatus 只从指定状态迁移，幂等与并发都由它兜底', asyn
       .from(listings)
       .where(eq(listings.id, created.listingId))
     expect(rows[0]?.status).toBe('OFFLINE')
+  })
+})
+
+// 真库上的端到端：service 的合并校验读的是"写入前"的状态，同一行被并发改成 free=true 后，
+// UPDATE 会撞上 listings_free_price_cents_zero。这里验证 PG 的错误形状确实能走到 service 的
+// 映射分支并给出 422（mock 出来的错误形状不算证据 —— 那条链路只在真库上才成立）。
+test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(
+      record(sellerId, { priceCents: 100, free: false }),
+    )
+
+    // 包一层 store：在 service 读完状态、真正 UPDATE 之前，模拟另一个请求把该行改成 free = true
+    const racingStore: ListingStore = {
+      ...store,
+      async updateListing(input) {
+        await db.update(listings).set({ free: true }).where(eq(listings.id, input.id))
+        return store.updateListing(input)
+      },
+    }
+    const service = createListingService({
+      store: racingStore,
+      storage: {
+        presignPut: () => ({
+          url: 'https://s3.test/put',
+          headers: {},
+          expiresAt: '2026-09-12T04:00:00.000Z',
+        }),
+        stat: async () => ({ size: 1024, contentType: 'image/jpeg' }),
+        publicUrl: (key) => `https://cdn.test/${key}`,
+      },
+    })
+
+    // service 的合并校验此时看到 free=false，所以放行；冲突只能由 DB 拦下
+    try {
+      await service.updateListing(sellerId, created.listingId, { priceCents: 5000 })
+      throw new Error('期望抛出 ListingServiceError，但没有')
+    } catch (error) {
+      expect(error).toBeInstanceOf(ListingServiceError)
+      if (error instanceof ListingServiceError) {
+        expect(error.status).toBe(422)
+        expect(error.code).toBe('VALIDATION_FAILED')
+        expect(error.details?.[0]?.field).toBe('priceCents')
+      }
+    }
+
+    // 事务失败后价格没有被写入
+    const rows = await db
+      .select({ priceCents: listings.priceCents })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    expect(rows[0]?.priceCents).toBe(100)
   })
 })
 

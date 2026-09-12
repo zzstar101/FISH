@@ -496,9 +496,12 @@ describe('updateListing', () => {
   // 并发极端情况：两个 PATCH 各自通过"合并后状态"校验，落库时撞上 DB 的
   // listings_free_price_cents_zero。契约把这种最终状态定为 422，而不是 500。
   test('maps a DB check violation to 422 instead of 500', async () => {
+    // 形状照抄实测到的 Bun PostgresError：SQLSTATE 在 errno 上，约束名在 constraint 上，
+    // 并被 Drizzle 包进 cause。映射按约束名精确匹配（见 isFreePriceConstraintViolation）。
     const pgError = Object.assign(new Error('Failed query: update "listings"'), {
       errno: '23514',
       code: 'ERR_POSTGRES_SERVER_ERROR',
+      constraint: 'listings_free_price_cents_zero',
     })
     const wrapped = new Error('DrizzleQueryError', { cause: pgError })
 
@@ -517,6 +520,26 @@ describe('updateListing', () => {
     expect(error.status).toBe(422)
     expect(error.code).toBe('VALIDATION_FAILED')
     expect(error.details?.[0]?.field).toBe('priceCents')
+  })
+
+  // 反向保证：只有那条约束才映射成 422，别的错误必须照旧上抛（否则等于把所有写入故障
+  // 都伪装成"价格填错了"，比 500 更难查）。
+  test('rethrows unrelated database errors instead of pretending they are validation failures', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        updateListing: async () => {
+          throw Object.assign(new Error('boom'), {
+            errno: '23514',
+            constraint: 'listings_some_other_check',
+          })
+        },
+      }),
+    })
+
+    await expect(
+      service.updateListing(SELLER_ID, LISTING_ID, { priceCents: 5000 }),
+    ).rejects.toThrow('boom')
   })
 
   test('returns 404 when the listing disappears between the check and the update', async () => {

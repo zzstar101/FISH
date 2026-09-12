@@ -65,17 +65,27 @@ export interface ListingService {
   transition(userId: string, id: string, to: 'OFFLINE' | 'ACTIVE'): Promise<ListingDetail>
 }
 
+/** 契约 §1 的 `free ⟹ priceCents = 0` 在库里的约束名（见 `packages/db/src/schema/listings.ts`）。 */
+const FREE_PRICE_CONSTRAINT = 'listings_free_price_cents_zero'
+
 /**
- * PG CHECK 约束冲突（SQLSTATE 23514）。
+ * 判断错误是否为**那一条** CHECK 约束冲突。
  *
- * 与 `apps/api/src/modules/auth/service.ts` 的 `isUniqueViolation` 同一套探测方式：
- * Bun 的 `PostgresError` 把 SQLSTATE 放在 `errno` 上（`code` 恒为 `'ERR_POSTGRES_SERVER_ERROR'`），
- * 而 Drizzle 又会把它包一层（`{ query, params, cause }`），所以要顺着 `cause` 链找。
+ * 探测方式与 `apps/api/src/modules/auth/service.ts` 的 `isUniqueViolation` 同构：Bun 的
+ * `PostgresError` 把 SQLSTATE 放在 `errno` 上（`code` 恒为 `'ERR_POSTGRES_SERVER_ERROR'`），
+ * Drizzle 又会把它包一层（`{ query, params, cause }`），所以要顺着 `cause` 链找。
+ *
+ * 但**不能只看 23514**：`listings` 上还有 `listings_price_cents_non_negative`、
+ * `listing_images_sort_order_non_negative` 等 CHECK，将来还会有新的。逐个比对约束名，
+ * 别的约束冲突照旧上抛（500），不会被错报成"0 元送价格必须为 0"。
+ * 驱动不再暴露 `constraint` 时同样返回 false —— 宁可是 500，也不要给前端一个错误的字段级错误。
  */
-function isCheckViolation(error: unknown): boolean {
+function isFreePriceConstraintViolation(error: unknown): boolean {
   let current: unknown = error
   for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
-    if ('errno' in current && current.errno === '23514') return true
+    if ('errno' in current && current.errno === '23514') {
+      return 'constraint' in current && current.constraint === FREE_PRICE_CONSTRAINT
+    }
     current = current.cause
   }
   return false
@@ -331,7 +341,7 @@ export function createListingService(deps: {
         // 合并校验读的是"写入前"的状态，同一卖家的两个并发 PATCH 可能各自通过校验，
         // 最终撞上 DB 的 listings_free_price_cents_zero。契约把这种最终状态定为
         // 422 VALIDATION_FAILED（§7.1），不是 500。
-        if (isCheckViolation(error)) {
+        if (isFreePriceConstraintViolation(error)) {
           throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
             { field: 'priceCents', message: '0 元送时价格必须为 0' },
           ])
