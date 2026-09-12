@@ -42,6 +42,25 @@ jobs:
         with:
           bun-version: "1.4.0"
 
+      # lockfile 防线（#27）：本机默认 registry 若是镜像源（如 npmmirror），`bun add` 会把已存在的
+      # **每一个**包条目都改写成带镜像 URL 的形式，产生数百行无关 diff；而 `bun install
+      # --frozen-lockfile` 只校验 lockfile 与 package.json 是否一致，**不校验 tarball URL 的来源**，
+      # 拦不住这种污染。所以这里反向断言：bun.lock 里出现的 URL 只能是默认源（默认源不写 URL）
+      # 或 registry.npmjs.org。约定见 CONTRIBUTING.md 第 3.1 节。放在 Install 之前是为了快速失败。
+      - name: Verify lockfile sources
+        run: |
+          # 先确认文件存在：否则 grep 的退出码 2（文件不可读）会被下面的 `|| true` 当成“无匹配”静默吞掉。
+          if [ ! -f bun.lock ]; then
+            echo "::error::找不到 bun.lock" >&2
+            exit 1
+          fi
+          offenders=$(grep -oE 'https?://[^"]+' bun.lock | grep -vE '^https://registry\.npmjs\.org/' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::bun.lock 含非默认源的 tarball URL，请勿提交镜像源污染（见 CONTRIBUTING.md 第 3.1 节）:" >&2
+            echo "$offenders" | sort -u >&2
+            exit 1
+          fi
+
       - name: Install
         run: bun install --frozen-lockfile
 
