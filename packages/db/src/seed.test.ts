@@ -18,7 +18,8 @@ if (!databaseUrl) {
   throw new Error('集成测试需要 DATABASE_URL：先 bun run db:up && bun run db:migrate')
 }
 
-const migrationsFolder = new URL('./migrations', import.meta.url).pathname
+// 必须用 Bun.fileURLToPath：URL.pathname 在 Windows 上是 /C:/... 形式，migrator 读不到。
+const migrationsFolder = Bun.fileURLToPath(new URL('./migrations', import.meta.url))
 
 /**
  * seed 会 TRUNCATE 全部业务表，因此必须跑在**独立数据库**里：

@@ -16,6 +16,8 @@ import { createMatchingService } from './modules/matching/service'
 import { createSqlMatchingStore } from './modules/matching/store'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
+import { createDbWishMatchQueue } from './modules/wishes/match-queue'
+import { createWishesRouterFromDb } from './modules/wishes/router'
 import { API_VERSION } from './version'
 import { upgradeWebSocket } from './ws'
 
@@ -93,6 +95,17 @@ export function createApp(env: ServerEnv) {
     createMatchingRouter({
       service: createMatchingService({ store: createSqlMatchingStore(db), storage }),
       requireAuth: auth.requireAuth,
+    }),
+  )
+
+  // 愿望模块（#7）：先过认证守卫，再进 router；router 的 getUserId 只读守卫写入的可信 context，
+  // 不读请求头。创建/重放愿望时用真实 DB 队列写 MATCH_WISH job（消费方归 #8/#13，与本 Issue 解耦）。
+  app.use('/api/wishes/*', auth.requireAuth)
+  app.route(
+    '/api/wishes',
+    createWishesRouterFromDb(db, {
+      getUserId: (c) => c.get('userId'),
+      matchQueue: createDbWishMatchQueue(db),
     }),
   )
 

@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm'
-import { check, index, integer, jsonb, pgEnum, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
+import {
+  check,
+  index,
+  integer,
+  jsonb,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core'
 import { primaryKey, timestamps } from './common'
 
 export const jobStatusEnum = pgEnum('job_status', ['PENDING', 'RUNNING', 'DONE', 'FAILED'])
@@ -34,5 +44,9 @@ export const jobs = pgTable(
     check('jobs_attempts_non_negative', sql`${table.attempts} >= 0`),
     index('jobs_status_run_at_id_idx').on(table.status, table.runAt, table.id),
     index('jobs_running_locked_at_idx').on(table.lockedAt).where(sql`${table.status} = 'RUNNING'`),
+    // 幂等键：同一个愿望最多一条 MATCH_WISH job（#7 的重复请求/重放不得刷出重复任务）。
+    uniqueIndex('jobs_match_wish_wish_id_uidx')
+      .on(sql`(${table.payload}->>'wishId')`)
+      .where(sql`${table.type} = 'MATCH_WISH'`),
   ],
 )
