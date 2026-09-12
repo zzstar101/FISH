@@ -8,12 +8,18 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { createMockCampusVerificationProvider } from './modules/auth/provider'
 import { createAuthModule } from './modules/auth/router'
+import { createConversationsRouter } from './modules/conversations/router'
+import { createConversationService } from './modules/conversations/service'
+import { createSqlConversationStore } from './modules/conversations/store'
 import { createListingsRouter } from './modules/listings/router'
 import { createListingService } from './modules/listings/service'
 import { createSqlListingStore } from './modules/listings/store'
 import { createMatchingRouter } from './modules/matching/router'
 import { createMatchingService } from './modules/matching/service'
 import { createSqlMatchingStore } from './modules/matching/store'
+import { createMessagesRouter } from './modules/messages/router'
+import { createMessageService } from './modules/messages/service'
+import { createSqlMessageStore } from './modules/messages/store'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
@@ -106,6 +112,26 @@ export function createApp(env: ServerEnv) {
     createWishesRouterFromDb(db, {
       getUserId: (c) => c.get('userId'),
       matchQueue: createDbWishMatchQueue(db),
+    }),
+  )
+
+  // 聊天模块（#9）：会话与消息两条 router 并列挂到 /conversations（messages 只提供
+  // /:id/messages 两个端点）。全部要求登录，整条挂 requireAuth；storage 复用同一实例，
+  // 会话商品卡的封面 URL 与 feed/详情同一套拼法。挂载点用根路径 /conversations，
+  // 与 listings/matching 一致（Web 侧 /api 前缀由 Vite 代理剥离；CHAT_ROUTES 契约注释同源）。
+  const conversationStore = createSqlConversationStore(db)
+  app.route(
+    '/conversations',
+    createConversationsRouter({
+      service: createConversationService({ store: conversationStore, storage }),
+      requireAuth: auth.requireAuth,
+    }),
+  )
+  app.route(
+    '/conversations',
+    createMessagesRouter({
+      service: createMessageService({ store: createSqlMessageStore(db) }),
+      requireAuth: auth.requireAuth,
     }),
   )
 

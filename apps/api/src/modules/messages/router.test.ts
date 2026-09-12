@@ -1,0 +1,94 @@
+import { describe, expect, test } from 'bun:test'
+import type { MessageDto } from '@fish/contracts/chat/schema'
+import { Hono } from 'hono'
+import { createMessagesRouter } from './router'
+import { type MessageService, MessageServiceError } from './service'
+
+const message: MessageDto = {
+  id: '00000000-0000-4000-8000-0000000000d1',
+  conversationId: '00000000-0000-4000-8000-0000000000c1',
+  senderId: 'user-1',
+  sender: { id: 'user-1', nickname: '买家', avatarUrl: null },
+  type: 'TEXT',
+  content: '还在吗',
+  createdAt: '2026-09-12T10:00:00.000Z',
+}
+
+const service: MessageService = {
+  listMessages: async () => ({ items: [message], nextCursor: null }),
+  sendTextMessage: async () => message,
+}
+
+function buildApp(overrides: Partial<MessageService> = {}) {
+  const root = new Hono<{ Variables: { userId: string } }>()
+  root.use('/conversations/*', async (c, next) => {
+    c.set('userId', 'user-1')
+    await next()
+  })
+  root.route(
+    '/conversations',
+    createMessagesRouter({
+      service: { ...service, ...overrides },
+      requireAuth: async (_c, next) => {
+        await next()
+      },
+    }),
+  )
+  return root
+}
+
+describe('messages router', () => {
+  test('GET /:id/messages returns the ascending page', async () => {
+    const response = await buildApp().request('/conversations/abc/messages')
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { items: MessageDto[]; nextCursor: string | null }
+    expect(body.items).toHaveLength(1)
+    expect(body.nextCursor).toBeNull()
+  })
+
+  test('GET /:id/messages maps invalid cursor to 422 envelope', async () => {
+    const app = buildApp({
+      listMessages: async () => {
+        throw new MessageServiceError(422, 'VALIDATION_FAILED', '游标不合法')
+      },
+    })
+    const response = await app.request('/conversations/abc/messages')
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({
+      error: { code: 'VALIDATION_FAILED', message: '游标不合法' },
+    })
+  })
+
+  test('POST /:id/messages returns 201 with the created message', async () => {
+    const response = await buildApp().request('/conversations/abc/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '还在吗' }),
+    })
+    expect(response.status).toBe(201)
+    expect(await response.json()).toEqual(message)
+  })
+
+  test('POST /:id/messages rejects a whitespace-only body with 422', async () => {
+    const response = await buildApp().request('/conversations/abc/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '   ' }),
+    })
+    expect(response.status).toBe(422)
+  })
+
+  test('POST /:id/messages maps 404 CONVERSATION_NOT_FOUND from the service', async () => {
+    const app = buildApp({
+      sendTextMessage: async () => {
+        throw new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
+      },
+    })
+    const response = await app.request('/conversations/abc/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'hi' }),
+    })
+    expect(response.status).toBe(404)
+  })
+})
