@@ -20,6 +20,7 @@ import type {
   Listing,
   ListingCategory,
   ListingStatus,
+  MatchResult,
   Notification,
   NotificationView,
   Order,
@@ -473,7 +474,17 @@ export async function openConversationWith(peerId: string, listingId?: string): 
 }
 
 /** 愿望 + 发起人：页面不直接读 `data.ts`，用户信息一律由 store 装配。 */
-export type WishView = Wish & { owner: User }
+/** 命中某条愿望的在售商品（#8 的「愿望成真」卡片）。 */
+export type WishMatchView = { listing: ListingView; score: number; reason: string }
+
+export type WishView = Wish & {
+  owner: User
+  /**
+   * 这条愿望已匹配到的商品（最多 3 件，按匹配度降序）。
+   * 非空时卡片展示「愿望成真」，而不是只给一个跳搜索的入口。
+   */
+  matched: WishMatchView[]
+}
 
 export async function fetchWishes(): Promise<{
   wall: WishView[]
@@ -481,11 +492,38 @@ export async function fetchWishes(): Promise<{
   matchedListings: number
 }> {
   await delay()
-  const decorateWish = (wish: Wish): WishView => ({ ...wish, owner: userById(wish.userId) })
+
+  /**
+   * 反查 `matchResults`：找那些把这**条**愿望（wishId）列为命中来源的商品。
+   *
+   * 必须按 wishId 而不是 userId 归集：同一位同学可能同时挂着几条愿望，
+   * 按 userId 归集会把它们互相串味——同一样商品在两条愿望下都冒出来。
+   */
+  const matchedFor = (wishId: string): WishMatchView[] =>
+    Object.entries(matchResults)
+      .map(([listingId, hits]) => {
+        const hit = hits.find((entry) => entry.wishId === wishId)
+        const listing = hit ? db.listings.find((item) => item.id === listingId) : undefined
+        // 已下架/已售出的商品不该出现在「愿望成真」里。
+        if (!hit || !listing || !isVisible(listing)) return null
+        return { listing: decorate(listing), reason: hit.reason, score: hit.score }
+      })
+      .filter((item): item is WishMatchView => item !== null)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+
+  const decorateWish = (wish: Wish): WishView => ({
+    ...wish,
+    owner: userById(wish.userId),
+    matched: matchedFor(wish.id),
+  })
+
+  const all = db.wishes.map(decorateWish)
   return {
-    wall: db.wishes.filter((item) => !item.mine).map(decorateWish),
-    mine: db.wishes.filter((item) => item.mine).map(decorateWish),
-    matchedListings: 25,
+    wall: all.filter((item) => !item.mine),
+    mine: all.filter((item) => item.mine),
+    // 「件闲置可能匹配」= 各愿望命中商品的去重数，与逐条展示的口径一致。
+    matchedListings: new Set(all.flatMap((item) => item.matched.map((m) => m.listing.id))).size,
   }
 }
 
@@ -601,12 +639,41 @@ export async function finishOrder(orderId: string): Promise<void> {
   )
 }
 
-export async function fetchMatches(
-  listingId: string,
-): Promise<{ listing: ListingView | null; results: typeof matchResults }> {
+/** 匹配结果 + 命中者信息（页面不直接读 data.ts，用户一律由 store 装配）。 */
+export type MatchResultView = MatchResult & { user: User }
+
+export type MatchView = {
+  listing: ListingView | null
+  /** 按匹配度降序，已过滤掉查不到的用户。 */
+  results: MatchResultView[]
+  /** 命中数 = `results.length`，单独给出供「匹配总数」展示而不用页面自己算。 */
+  total: number
+}
+
+/**
+ * 某件商品 ↔ 想买它的同学（#8）。
+ *
+ * 结果**按商品分组**（`matchResults[listingId]`），此前忽略入参、任何商品都返回同一个
+ * 全局数组，导致所有商品的匹配页长得一模一样。空商品 id 或没有命中时返回空数组，走空态。
+ */
+export async function fetchMatches(listingId: string): Promise<MatchView> {
   await delay()
   const listing = db.listings.find((item) => item.id === listingId)
-  return { listing: listing ? decorate(listing) : null, results: matchResults }
+  const raw = listingId ? (matchResults[listingId] ?? []) : []
+  const results = raw
+    .map((item) => {
+      const user = users.find((entry) => entry.id === item.userId)
+      // 命中者已被删除时跳过，避免页面拿到 undefined 崩在渲染里。
+      return user ? { ...item, user } : null
+    })
+    .filter((item): item is MatchResultView => item !== null)
+    .sort((a, b) => b.score - a.score)
+
+  return {
+    listing: listing ? decorate(listing) : null,
+    results,
+    total: results.length,
+  }
 }
 
 export type ProfileSummary = {

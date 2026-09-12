@@ -4,11 +4,12 @@ import { Input } from '@fish/ui/input'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, LoadingState } from '@fish/ui/states'
 import { Tabs, TabsList, TabsTrigger } from '@fish/ui/tabs'
+import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
-import { ChevronRight, Plus, Search, Sun, X } from 'lucide-react'
+import { ChevronRight, PartyPopper, Plus, Search, Sun, X } from 'lucide-react'
 import { useState } from 'react'
-import { formatRelativeTime, formatYuan } from '../../lib/format'
+import { formatPrice, formatRelativeTime, formatYuan } from '../../lib/format'
 import type { WishView } from '../../lib/mock/store'
 import { AppShell } from '../navigation/app-shell'
 import { useCloseWish, useCreateWish, useWishes } from './queries'
@@ -160,6 +161,48 @@ function WishCard({ wish, mine, onClose }: { wish: WishView; mine: boolean; onCl
           <span className="text-ink-3 text-xs">{wish.helpers} 人想帮 TA</span>
         </div>
       </div>
+
+      {/* #8 愿望成真：这条愿望已经匹配到的在售商品（最多 3 件）。 */}
+      {wish.matched.length > 0 ? (
+        <div className="border-line border-t bg-success-soft/60 px-3 py-2.5">
+          {/*
+            这里刻意不重复写数量：卡片底部「查看匹配的闲置 N」用的是 #7 的 matchedCount
+            （关键词搜索口径），与 #8 匹配引擎的命中数不一定相同，两个数字并排会互相打架。
+          */}
+          <p className="flex items-center gap-1.5 font-medium text-[13px] text-success">
+            <PartyPopper className="size-4" />
+            愿望成真
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {wish.matched.map((match) => (
+              <li key={match.listing.id}>
+                <Link
+                  className="flex items-center gap-2.5 rounded-xl bg-surface p-2"
+                  params={{ listingId: match.listing.id }}
+                  to="/detail/$listingId"
+                >
+                  <Thumb
+                    className="size-10 shrink-0 rounded-lg"
+                    emoji={match.listing.emoji}
+                    emojiClassName="text-lg"
+                    tone={match.listing.tone}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] leading-snug">{match.listing.title}</p>
+                    <p className="mt-0.5 truncate text-ink-3 text-[11px]">{match.reason}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="font-semibold text-[13px]">
+                      {match.listing.free ? '免费送' : formatPrice(match.listing.priceCents)}
+                    </p>
+                    <p className="text-[11px] text-success">{match.score}% 匹配</p>
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-2 border-line border-t px-3 py-2.5">
         <Link

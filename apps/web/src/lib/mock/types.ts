@@ -108,6 +108,28 @@ export type Wish = {
   mine: boolean
 }
 
+/**
+ * #8 匹配结果：一件商品 ↔ 想买它的同学。
+ *
+ * `score` 是 0–100 的匹配度，按 #8 约定的 MVP 公式推导
+ * （类目 0.35 / 关键词 0.35 / 价格 0.30），**阈值 70**：低于阈值不算命中。
+ * `reason` 是命中的依据，简化成一句话直接展示（#8 工作项：「匹配评分/原因展示」）。
+ */
+export type MatchResult = {
+  /** 想买这件商品的同学（愿望所有者）。 */
+  userId: string
+  /**
+   * 命中的是这位同学的**哪一条**愿望。
+   *
+   * 必须带上：同一个同学可能同时挂着几条愿望（如「想要 iPad」和「想要考研数学」），
+   * 只按 userId 归集会把两条愿望的命中互相串到一起，同一个商品在两条愿望里都冒出来。
+   * 这也是 #23 通知 payload 里 `{ matchId, listingId, wishId }` 的那个 wishId。
+   */
+  wishId: string
+  score: number
+  reason: string
+}
+
 /** #11 的交易状态机：请求 → 接受/拒绝 → 待面交 → 完成；买家可取消。 */
 export type OrderStatus = 'REQUESTED' | 'PENDING_MEETUP' | 'COMPLETED' | 'REJECTED' | 'CANCELLED'
 
