@@ -53,7 +53,17 @@ export interface MessageService {
   ): Promise<MessageDto>
 }
 
-export function createMessageService({ store }: { store: MessageStore }): MessageService {
+export function createMessageService({
+  store,
+  /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
+  onMessageCreated,
+}: {
+  store: MessageStore
+  onMessageCreated?: (
+    participants: { buyerId: string; sellerId: string },
+    message: MessageDto,
+  ) => void
+}): MessageService {
   return {
     async listMessages(userId, conversationId, query) {
       const conversation = await store.findConversationForUser(conversationId, userId)
@@ -86,7 +96,10 @@ export function createMessageService({ store }: { store: MessageStore }): Messag
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
       const row = await store.insertText(conversationId, userId, input.content.trim())
-      return toMessageDto(row)
+      const dto = toMessageDto(row)
+      // 先落库（上面已 await）再推送；推送失败由 hub 吞掉，不影响 201 响应。
+      onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
+      return dto
     },
   }
 }

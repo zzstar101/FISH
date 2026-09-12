@@ -1,3 +1,4 @@
+import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
@@ -20,6 +21,8 @@ import { createSqlMatchingStore } from './modules/matching/store'
 import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
+import { createConnectionHub } from './modules/realtime/hub'
+import { createRealtimeRouter } from './modules/realtime/router'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
@@ -120,6 +123,8 @@ export function createApp(env: ServerEnv) {
   // 会话商品卡的封面 URL 与 feed/详情同一套拼法。挂载点用根路径 /conversations，
   // 与 listings/matching 一致（Web 侧 /api 前缀由 Vite 代理剥离；CHAT_ROUTES 契约注释同源）。
   const conversationStore = createSqlConversationStore(db)
+  // 实时推送（#9 契约冻结语义③）：消息服务先落库，再经 hub 推给会话双方的全部在线连接。
+  const hub = createConnectionHub()
   app.route(
     '/conversations',
     createConversationsRouter({
@@ -130,8 +135,28 @@ export function createApp(env: ServerEnv) {
   app.route(
     '/conversations',
     createMessagesRouter({
-      service: createMessageService({ store: createSqlMessageStore(db) }),
+      service: createMessageService({
+        store: createSqlMessageStore(db),
+        onMessageCreated: (participants, message) => {
+          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+            type: 'message.new',
+            conversationId: message.conversationId,
+            message,
+          })
+        },
+      }),
       requireAuth: auth.requireAuth,
+    }),
+  )
+
+  // 业务实时通道：upgrade 鉴权与 HTTP requireAuth 同一套 cookie + session（语义①②）。
+  // 路径常量在 chat 契约（/ws/chat），echo 冒烟入口 /ws 不受影响。
+  app.get(
+    REALTIME_WS_PATH,
+    createRealtimeRouter({
+      hub,
+      resolveUserId: auth.resolveViewerId,
+      upgradeWebSocket,
     }),
   )
 
