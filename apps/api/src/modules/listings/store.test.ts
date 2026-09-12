@@ -491,6 +491,132 @@ test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
   })
 })
 
+/**
+ * #8 的 job payload 契约是 `z.strictObject({ listingId: z.uuid() })` —— `.strictObject` 意味着
+ * 多塞任何字段都会让 worker 判该 job `FAILED`。这里按结构断言（#8 的契约包在另一条分支上，
+ * 本分支不引入跨 Issue 的 import）：键恰好一个、值是本商品的 id。
+ */
+async function matchJobsFor(listingId: string) {
+  const rows = await db.execute<{ listingId: string; keys: number }>(sql`
+    select payload->>'listingId' as "listingId",
+           (select count(*)::int from jsonb_object_keys(payload)) as keys
+    from jobs
+    where type = 'MATCH_LISTING' and payload->>'listingId' = ${listingId}
+  `)
+  return rows
+}
+
+// 回归：编辑改变打分输入（标题/描述/价格/分类），必须重算匹配；否则 matches 里那一对永远是旧分数。
+test('编辑商品后追加一条 MATCH_LISTING job', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    // 创建本身就投了一条
+    expect(await matchJobsFor(created.listingId)).toHaveLength(1)
+
+    await store.updateListing({
+      id: created.listingId,
+      sellerId,
+      fields: { priceCents: 30000 },
+    })
+
+    const jobsAfterEdit = await matchJobsFor(created.listingId)
+    expect(jobsAfterEdit).toHaveLength(2)
+    // payload 必须恰好是 { listingId }（#8 的 strictObject）
+    expect(jobsAfterEdit[0]?.keys).toBe(1)
+    expect(jobsAfterEdit[0]?.listingId).toBe(created.listingId)
+  })
+})
+
+test('下架与重新上架各追加一条 MATCH_LISTING job', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+
+    expect(await store.setStatus({ id: created.listingId, from: 'ACTIVE', to: 'OFFLINE' })).toBe(
+      true,
+    )
+    expect(await matchJobsFor(created.listingId)).toHaveLength(2)
+
+    expect(await store.setStatus({ id: created.listingId, from: 'OFFLINE', to: 'ACTIVE' })).toBe(
+      true,
+    )
+    expect(await matchJobsFor(created.listingId)).toHaveLength(3)
+  })
+})
+
+test('没有真正改到行时不投 job（不存在的、别人的、被锁定的、状态没变的）', async () => {
+  await withSeller(async (sellerId, otherSellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const before = (await matchJobsFor(created.listingId)).length
+
+    // 不存在的商品
+    const missingId = newId()
+    expect(
+      await store.updateListing({ id: missingId, sellerId, fields: { title: '不存在' } }),
+    ).toBeNull()
+    expect(await store.setStatus({ id: missingId, from: 'ACTIVE', to: 'OFFLINE' })).toBe(false)
+    // 别人的商品
+    await store.updateListing({
+      id: created.listingId,
+      sellerId: otherSellerId,
+      fields: { title: '越权' },
+    })
+    // 状态谓词不匹配（当前是 ACTIVE，却要求从 OFFLINE 迁走）
+    expect(await store.setStatus({ id: created.listingId, from: 'OFFLINE', to: 'ACTIVE' })).toBe(
+      false,
+    )
+    // 被锁定（#11 交易流程写的状态）
+    await db.update(listings).set({ status: 'RESERVED' }).where(eq(listings.id, created.listingId))
+    await store.updateListing({ id: created.listingId, sellerId, fields: { title: '锁定后编辑' } })
+    await store.setStatus({ id: created.listingId, from: 'ACTIVE', to: 'OFFLINE' })
+
+    expect(await matchJobsFor(created.listingId)).toHaveLength(before)
+  })
+})
+
+/**
+ * §7.13 要求"投递与写入**同一事务**"，但只断言"job 多了一条"是发现不了违反的：
+ * 把投递挪到事务提交之后，那些用例照样绿。这里真造一次 job 写入失败（触发器按 payload 拦下），
+ * 断言**商品也没有被改** —— 只有同事务才可能。
+ */
+test('job 写入失败时商品改动一起回滚（投递确实在同一事务里）', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId, { priceCents: 16000 }))
+
+    // 只拦这一个商品的 job，不影响并行执行的其它测试文件。
+    // 必须用 sql.raw 内联 id：函数体是 dollar-quoted 字符串，绑定参数在 PG 解析时无法定类型
+    // （`42P18 could not determine data type of parameter $1`）。id 是本用例 newId() 生成的 UUID。
+    await db.execute(
+      sql.raw(`
+      create or replace function fish_test_block_job() returns trigger as $$
+      begin
+        if new.payload->>'listingId' = '${created.listingId}' then
+          raise exception 'job blocked by test';
+        end if;
+        return new;
+      end $$ language plpgsql
+    `),
+    )
+    await db.execute(
+      sql`create trigger fish_test_block_job before insert on jobs for each row execute function fish_test_block_job()`,
+    )
+
+    try {
+      await expect(
+        store.updateListing({ id: created.listingId, sellerId, fields: { priceCents: 30000 } }),
+      ).rejects.toThrow()
+
+      const rows = await db
+        .select({ priceCents: listings.priceCents })
+        .from(listings)
+        .where(eq(listings.id, created.listingId))
+      expect(rows[0]?.priceCents).toBe(16000)
+    } finally {
+      await db.execute(sql`drop trigger if exists fish_test_block_job on jobs`)
+      await db.execute(sql`drop function if exists fish_test_block_job()`)
+    }
+  })
+})
+
 test('重复投递在商品被删除后仍能写入（重投递不依赖商品存在）', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(record(sellerId))
