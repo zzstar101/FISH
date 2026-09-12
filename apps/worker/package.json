@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@fish/contracts": "workspace:*",
     "@fish/db": "workspace:*",
     "@fish/shared": "workspace:*",
     "drizzle-orm": "^0.45.2"
