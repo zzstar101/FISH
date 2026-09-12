@@ -1,4 +1,5 @@
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
+import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
@@ -23,6 +24,9 @@ import { createMessageService } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
+import { createTransactionsRouter } from './modules/transactions/router'
+import { createTransactionService } from './modules/transactions/service'
+import { createSqlTransactionStore } from './modules/transactions/store'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
@@ -157,6 +161,34 @@ export function createApp(env: ServerEnv) {
       hub,
       resolveUserId: auth.resolveViewerId,
       upgradeWebSocket,
+    }),
+  )
+
+  // 交易模块（#11）：提案/接受/拒绝以 SYSTEM 消息进会话（经 messages store 直写），
+  // 写入后经同一 hub 推送（与文本消息同一条 message.new 通道）。整条挂 requireAuth。
+  app.route(
+    '/transactions',
+    createTransactionsRouter({
+      service: createTransactionService({
+        store: createSqlTransactionStore(db),
+        messages: createSqlMessageStore(db),
+        onSystemMessage: (participants, message) => {
+          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+            type: 'message.new',
+            conversationId: message.conversation_id,
+            message: messageDtoSchema.parse({
+              id: message.id,
+              conversationId: message.conversation_id,
+              senderId: message.sender_id,
+              sender: null,
+              type: message.type,
+              content: message.content,
+              createdAt: new Date(message.created_at).toISOString(),
+            }),
+          })
+        },
+      }),
+      requireAuth: auth.requireAuth,
     }),
   )
 
