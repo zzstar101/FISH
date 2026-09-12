@@ -127,6 +127,39 @@ describe('transactionDtoSchema', () => {
     expect(transactionDtoSchema.parse(dto).status).toBe('COMPLETED')
   })
 
+  test('rejects COMPLETED without completedAt and CANCELLED without cancelledAt (DB CHECK 同源)', () => {
+    const timestamps = {
+      buyerConfirmedAt: '2026-09-12T11:00:00.000Z',
+      sellerConfirmedAt: '2026-09-12T11:01:00.000Z',
+      completedAt: null,
+      cancelledAt: null,
+    }
+    expect(
+      transactionDtoSchema.safeParse({ ...base, status: 'COMPLETED', ...timestamps }).success,
+    ).toBe(false)
+    expect(
+      transactionDtoSchema.safeParse({
+        ...base,
+        status: 'CANCELLED',
+        buyerConfirmedAt: null,
+        sellerConfirmedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+      }).success,
+    ).toBe(false)
+    // 反向：非终态携带终态时间戳同样拒绝
+    expect(
+      transactionDtoSchema.safeParse({
+        ...base,
+        status: 'PENDING_MEETUP',
+        buyerConfirmedAt: null,
+        sellerConfirmedAt: null,
+        completedAt: '2026-09-12T11:01:00.000Z',
+        cancelledAt: null,
+      }).success,
+    ).toBe(false)
+  })
+
   test('rejects an unknown status', () => {
     const dto = {
       ...base,

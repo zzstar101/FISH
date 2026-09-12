@@ -11,27 +11,41 @@ import { PriceCentsSchema } from '../listings/schema'
 export const transactionStatusSchema = z.enum(['PENDING_MEETUP', 'COMPLETED', 'CANCELLED'])
 export type TransactionStatus = z.infer<typeof transactionStatusSchema>
 
-/** 查看者在交易中的角色，同一交易对买卖双方输出不同值。 */
+/** 查看者在交易中的角色，同一交易对买卖双方输出不同值。
+ * 刻意不 import chat 的 conversationRoleSchema：交易域不依赖聊天域，
+ * 值集漂移由两侧的契约测试各自冻结（chat 侧同款枚举见 chat/schema.ts）。 */
 export const transactionRoleSchema = z.enum(['buyer', 'seller'])
 export type TransactionRole = z.infer<typeof transactionRoleSchema>
 
-export const transactionDtoSchema = z.object({
-  id: z.string(),
-  listingId: z.string(),
-  buyerId: z.string(),
-  sellerId: z.string(),
-  role: transactionRoleSchema,
-  /** 议价结果，不等于 listings.price_cents；0 元送合法（DB CHECK 同源）。 */
-  amountCents: z.number().int().nonnegative(),
-  status: transactionStatusSchema,
-  /** 「双方确认面交」：两侧各点一次，只点一边时交易仍停在 PENDING_MEETUP。 */
-  buyerConfirmedAt: z.iso.datetime().nullable(),
-  sellerConfirmedAt: z.iso.datetime().nullable(),
-  completedAt: z.iso.datetime().nullable(),
-  cancelledAt: z.iso.datetime().nullable(),
-  createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime(),
-})
+export const transactionDtoSchema = z
+  .object({
+    id: z.string(),
+    listingId: z.string(),
+    buyerId: z.string(),
+    sellerId: z.string(),
+    role: transactionRoleSchema,
+    /** 议价结果，不等于 listings.price_cents；0 元送合法（DB CHECK 同源）。 */
+    amountCents: z.number().int().nonnegative(),
+    status: transactionStatusSchema,
+    /** 「双方确认面交」：两侧各点一次，只点一边时交易仍停在 PENDING_MEETUP。 */
+    buyerConfirmedAt: z.iso.datetime().nullable(),
+    sellerConfirmedAt: z.iso.datetime().nullable(),
+    completedAt: z.iso.datetime().nullable(),
+    cancelledAt: z.iso.datetime().nullable(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  // 镜像 DB 的两条 status↔timestamp 联合完整性 CHECK（transactions_completed_at /
+  // cancelled_at_matches_status）：实现 bug 把违约行发出去时在这里炸掉，
+  // 而不是把自相矛盾的 DTO 交给前端（与 chat 契约对 TEXT⟹sender 的收紧同一先例）。
+  .refine((t) => (t.status === 'COMPLETED') === (t.completedAt !== null), {
+    path: ['completedAt'],
+    error: 'COMPLETED 必须（且只有它）带 completedAt',
+  })
+  .refine((t) => (t.status === 'CANCELLED') === (t.cancelledAt !== null), {
+    path: ['cancelledAt'],
+    error: 'CANCELLED 必须（且只有它）带 cancelledAt',
+  })
 export type TransactionDto = z.infer<typeof transactionDtoSchema>
 
 // ---------------------------------------------------------------------------
@@ -55,6 +69,8 @@ export const transactionSystemEventSchema = z.discriminatedUnion('type', [
   /** 卖家拒绝。 */
   z.object({ type: z.literal('tx.rejected') }),
 ])
+// 刻意只有三元：终态变化（COMPLETED / CANCELLED）不产生 SYSTEM 消息、也没有交易推送
+// ——前端以交易详情/列表为终态来源。这是 Freeze 需向前端显式确认的取舍，不是遗漏。
 export type TransactionSystemEvent = z.infer<typeof transactionSystemEventSchema>
 
 // ---------------------------------------------------------------------------
@@ -78,6 +94,9 @@ export type TransactionProposalInput = z.infer<typeof transactionProposalInputSc
  * `UPDATE listings SET status='RESERVED' WHERE id = ? AND status='ACTIVE'` 条件更新
  * + transactions 的部分唯一索引（一个 listing 至多一笔 live/成交）兜底。
  * 输给并发买家或商品已非 ACTIVE 都是 409 LISTING_NOT_ACTIVE。
+ * 重试恢复口径（刻意不冻结为幂等 200）：响应丢失后重试收到 409 时，交易可能已在
+ * 上一次成功创建——以会话内 `tx.accepted` SYSTEM 消息或 GET /transactions 为准，
+ * 前端不得把 409 直译成"接受失败"。
  */
 export const transactionAcceptInputSchema = z.strictObject({
   conversationId: z.uuid(),
@@ -116,12 +135,14 @@ export type TransactionListResponse = z.infer<typeof transactionListResponseSche
 // ---------------------------------------------------------------------------
 //
 // 提案 ──卖家接受──▶ PENDING_MEETUP ──双方 confirm──▶ COMPLETED（listing → SOLD）
-//                        │  ▲
-//                        └──┴─ 任一方 cancel（COMPLETED 后不可）→ CANCELLED（listing RESERVED → ACTIVE）
+//                        │
+//                        └─ 任一方 cancel → CANCELLED（listing RESERVED → ACTIVE）
 //
-// - confirm 幂等：重复确认返回当前 DTO（200）；第二个确认触发 COMPLETED + listing SOLD。
-// - cancel 幂等边界：CANCELLED 上重复取消返回当前 DTO；COMPLETED / 已 CANCELLED 之外
-//   的状态不存在，因此只有 COMPLETED 拒绝（409 TRANSACTION_NOT_CANCELLABLE）。
+// - confirm 幂等：PENDING_MEETUP 上重复确认返回当前 DTO（200）；第二侧确认触发
+//   COMPLETED + listing SOLD；CANCELLED 上 confirm 拒绝（409 TRANSACTION_NOT_IN_PENDING）。
+// - cancel：PENDING_MEETUP 上取消 → CANCELLED + listing 恢复；CANCELLED 上重复取消
+//   幂等返回当前 DTO（200）；COMPLETED 上取消拒绝（409 TRANSACTION_NOT_IN_PENDING）。
+//   因此拒绝 cancel 的状态只有 COMPLETED，拒绝 confirm 的状态只有 CANCELLED。
 // - cancel 恢复 listing 是无条件 RESERVED → ACTIVE：#6 禁止在 RESERVED 上手动下架，
 //   因此取消那一刻 listing 必仍是 RESERVED，不需要条件更新。
 // - SYSTEM 消息由本模块直写（提案 / tx.accepted / 拒绝三条），先落库再随聊天推送。
@@ -142,7 +163,7 @@ export const TransactionErrorCodeSchema = z.enum([
   'LISTING_NOT_ACTIVE',
   /** 404：交易 id 不存在，或调用者不是交易双方（404 而非 403，不泄漏存在性）。 */
   'TRANSACTION_NOT_FOUND',
-  /** 409：COMPLETED 交易上的取消。 */
-  'TRANSACTION_NOT_CANCELLABLE',
+  /** 409：终态上的非法操作——COMPLETED 上取消、CANCELLED 上确认（一码两用，见状态机注释）。 */
+  'TRANSACTION_NOT_IN_PENDING',
 ])
 export type TransactionErrorCode = z.infer<typeof TransactionErrorCodeSchema>
