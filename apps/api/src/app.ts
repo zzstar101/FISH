@@ -11,6 +11,21 @@ import { createAuthModule } from './modules/auth/router'
 import { API_VERSION } from './version'
 import { upgradeWebSocket } from './ws'
 
+/**
+ * 只取错误链上的名称与 message，**不打印整个对象**：Drizzle 的包装错误带 `{ query, params }`，
+ * 而注册路径的 `params` 里含 `student_no` 与 `password_hash`（#3 要求不公开学号）。
+ * 消息里的 SQL 是占位符（`$1, $2`），不含实参值。
+ */
+function describeError(error: unknown): string {
+  const parts: string[] = []
+  let current: unknown = error
+  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
+    parts.push(`${current.name}: ${current.message.split('\n')[0] ?? ''}`)
+    current = current.cause
+  }
+  return parts.join(' <- ') || String(error)
+}
+
 export function createApp(env: ServerEnv) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -19,6 +34,9 @@ export function createApp(env: ServerEnv) {
 
   // 认证模块的装配在 modules/auth 内，这里只负责接线（#3）。
   // secureCookie 由 WEB_ORIGIN 的 scheme 推导：本地 http 加 Secure 会让 cookie 直接失效。
+  //
+  // ⚠️ 这里接的是 Mock Provider：它对任意未被占用的「12 位、20 开头」学号都返回 VERIFIED。
+  // 因此 **`authStatus` 在接入真实教务校验前不能当作可信标识**，#5 的徽章不要拿它当安全依据。
   const auth = createAuthModule({
     db,
     provider: createMockCampusVerificationProvider(),
@@ -31,7 +49,7 @@ export function createApp(env: ServerEnv) {
   // HTTPException（如 404 / 405）保持 Hono 自身语义。
   app.onError((error, c) => {
     if (error instanceof HTTPException) return error.getResponse()
-    console.error('[api] 未捕获异常', error)
+    console.error('[api] 未捕获异常', describeError(error))
     return c.json(errorBody('INTERNAL_ERROR', '服务器内部错误'), 500)
   })
 

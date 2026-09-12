@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { conversations } from './schema/conversations'
@@ -10,7 +11,7 @@ import { notifications } from './schema/notifications'
 import { transactions } from './schema/transactions'
 import { users } from './schema/users'
 import { wishes } from './schema/wishes'
-import { seed } from './seed'
+import { DEMO_PASSWORD, seed } from './seed'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -34,7 +35,7 @@ const scratchUrl = (() => {
 /** 只是拿它当"建/删库"的执行通道，所有断言都在 scratch 库上。 */
 const admin = createDb(databaseUrl)
 
-test('seed 可生成覆盖全部 10 张表的基础数据', async () => {
+test('seed 可生成覆盖全部业务表的基础数据，且演示账号可用密码登录', async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   const scratch = createDb(scratchUrl)
 
@@ -70,6 +71,17 @@ test('seed 可生成覆盖全部 10 张表的基础数据', async () => {
       notifications: 1,
       jobs: 1,
     })
+
+    // seed 写的是真实 argon2id 哈希（#3 替换了 #2 的占位值），前端要用它登录调试，
+    // 因此这里断言「文档里写的演示密码」确实能校验通过，而不是只断言行数。
+    const demoUsers = await scratch
+      .select({ passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.studentNo, '202101000001'))
+    const demoHash = demoUsers[0]?.passwordHash
+    expect(demoHash).toBeDefined()
+    expect(await Bun.password.verify(DEMO_PASSWORD, demoHash ?? '')).toBe(true)
+    expect(await Bun.password.verify('wrong-password', demoHash ?? '')).toBe(false)
   } finally {
     await scratch.$client.close()
     await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)

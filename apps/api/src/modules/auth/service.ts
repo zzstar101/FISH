@@ -1,5 +1,5 @@
 import type { LoginRequest, RegisterRequest } from '@fish/contracts/auth/session'
-import { CampusSchema, type Me } from '@fish/contracts/auth/user'
+import { CampusSchema, type Me, MeSchema } from '@fish/contracts/auth/user'
 import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { eq } from 'drizzle-orm'
@@ -9,13 +9,17 @@ import type { Sessions } from './session'
 
 type UserRow = typeof users.$inferSelect
 
-/** DB 行 → 对外 DTO。`student_no` 与 `password_hash` 永不经过这里（#3：不公开完整学号）。 */
+/**
+ * DB 行 → 对外 DTO。`student_no` 与 `password_hash` 永不经过这里（#3：不公开完整学号）。
+ *
+ * `campus` / `avatarUrl` 在库里都是无约束 `text`，而契约声明它们是枚举 / `z.url()`；
+ * 值域外的历史值一律降级为 `null`，否则前端按 `MeSchema` 解析 `/me` 会直接抛错、登录态全挂。
+ */
 function toMe(row: UserRow): Me {
   return {
     id: row.id,
     nickname: row.nickname,
-    avatarUrl: row.avatarUrl,
-    // 值域外的历史数据按「未知校区」处理，而不是把非法值透给前端
+    avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
     campus: CampusSchema.safeParse(row.campus).data ?? null,
     authStatus: row.authStatus,
     verifiedAt: row.verifiedAt?.toISOString() ?? null,
@@ -70,6 +74,9 @@ export function createAuthService(deps: {
 
       const verification = await provider.verify({ studentNo: input.studentNo })
       const passwordHash = await Bun.password.hash(input.password)
+      // Provider 是外部系统的边界：Mock 不返回校区，真实 Provider 返回的字符串也可能不在
+      // 值域内，因此这里运行时校验一次，非法值回退到用户注册时填的校区。
+      const verifiedCampus = CampusSchema.safeParse(verification.campus).data
 
       let row: UserRow
       try {
@@ -80,8 +87,7 @@ export function createAuthService(deps: {
               studentNo: input.studentNo,
               passwordHash,
               nickname: input.nickname,
-              // 真实 Provider 可给出权威校区；Mock 不返回，用注册时用户填的
-              campus: verification.campus ?? input.campus,
+              campus: verifiedCampus ?? input.campus,
               authStatus: verification.status,
               verifiedAt: verification.status === 'VERIFIED' ? new Date() : null,
             })
@@ -108,7 +114,8 @@ export function createAuthService(deps: {
 
       const row = rows[0]
       const passwordOk = row ? await verifyPassword(input.password, row.passwordHash) : false
-      // 学号不存在与密码错误共用同一个错误：不泄漏某个学号是否已注册
+      // 错误码不区分「学号不存在」与「密码错误」。注意注册口会显式返回 409，因此
+      // 账号存在性本来就是可探测的；这里不做时序防护，也不做限流（记录为后续 issue）。
       if (!row || !passwordOk) {
         throw new AuthError('INVALID_CREDENTIALS', 401, '学号或密码不正确')
       }

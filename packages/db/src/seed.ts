@@ -41,10 +41,11 @@ const ids = {
 } as const
 
 /**
- * 三个 seed 账号共用的演示密码（#3 起用 `Bun.password` argon2id 真实哈希）。
+ * 三个 seed 账号共用的演示密码，用 `Bun.password`（argon2id）真实哈希写入（#3 替换了 #2 的占位值）。
  * 仅本地演示，禁止用于生产；真实用户密码只能经 `POST /auth/register` 写入。
+ * 导出是给 `seed.test.ts` 断言「演示密码确实能登录」用的。
  */
-const DEMO_PASSWORD = 'fish123456'
+export const DEMO_PASSWORD = 'fish123456'
 
 /**
  * 学号（12 位）与演示密码一起在 issue #3 里冻结，便于前端直接登录调试。

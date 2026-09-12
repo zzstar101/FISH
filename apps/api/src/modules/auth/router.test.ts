@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { AuthResponseSchema } from '@fish/contracts/auth/session'
+import type { Campus } from '@fish/contracts/auth/user'
 import { createDb, type Db } from '@fish/db/client'
 import { sessions } from '@fish/db/schema/sessions'
 import { users } from '@fish/db/schema/users'
@@ -7,6 +8,9 @@ import { loadServerEnv } from '@fish/shared/env'
 import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import type { CampusVerificationProvider } from './provider'
+import { createAuthService } from './service'
+import { createSessions } from './session'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -208,6 +212,22 @@ describe('GET /me', () => {
     expect(text).not.toContain('password_hash')
   })
 
+  test('库里是非法 avatarUrl 时降级为 null，而不是让前端解析 /me 抛错', async () => {
+    const studentNo = '202101000112'
+    await register({ studentNo, nickname: '测试癸' })
+    const cookie = sessionCookie(await login(studentNo))
+
+    // #6 可能把 object key（而非绝对 URL）写进 users.avatar_url，而契约声明是 z.url()
+    await scratch
+      .update(users)
+      .set({ avatarUrl: 'listings/avatar.jpg' })
+      .where(eq(users.studentNo, studentNo))
+
+    const res = await app.request('/me', withCookie(cookie))
+    expect(res.status).toBe(200)
+    expect(AuthResponseSchema.parse(await res.json()).user.avatarUrl).toBeNull()
+  })
+
   test('无 cookie 与伪造令牌都是 401 UNAUTHENTICATED', async () => {
     for (const res of [
       await app.request('/me'),
@@ -238,6 +258,36 @@ describe('GET /me', () => {
 
     const after = await sessionRows(studentNo)
     expect(after).toHaveLength(1)
+  })
+})
+
+describe('Provider 边界', () => {
+  test('真实 Provider 返回的权威校区可用，值域外的脏值回退到用户填写值', async () => {
+    const stub = (campus: string): CampusVerificationProvider => ({
+      // 断言只用于构造非法输入：真实教务系统返回的是外部字符串，落库前必须过运行时校验
+      verify: async () => ({ status: 'VERIFIED', campus: campus as Campus }),
+    })
+
+    for (const [campus, expected] of [
+      ['广州', '广州'],
+      ['四会', '肇庆'], // 不在值域内 → 用注册时填的校区
+    ] as const) {
+      const service = createAuthService({
+        db: scratch,
+        sessions: createSessions(scratch),
+        provider: stub(campus),
+      })
+
+      const { user } = await service.register({
+        studentNo: campus === '广州' ? '202101000113' : '202101000114',
+        password: DEMO_PASSWORD,
+        nickname: '测试校区',
+        campus: '肇庆',
+      })
+
+      expect(user.campus).toBe(expected)
+      expect(user.authStatus).toBe('VERIFIED')
+    }
   })
 })
 

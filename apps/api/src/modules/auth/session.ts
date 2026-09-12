@@ -6,7 +6,6 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 
 /** 固定 30 天，不滑动续期（#3 决策：每请求写库不值得）。 */
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
-
 const COOKIE_NAME = 'fish_session'
 
 const hashToken = (token: string) => new Bun.CryptoHasher('sha256').update(token).digest('hex')
@@ -30,7 +29,10 @@ export function createSessions(db: Db) {
       return { token, expiresAt }
     },
 
-    /** 校验令牌；过期行顺手删掉，因此「过期」不需要额外的清理任务。 */
+    /**
+     * 校验令牌。过期的行在**被访问到时**顺手删掉；长期不再被访问的过期行会残留
+     * （见 schema/sessions.ts 的取舍说明），因此这里不能用「不需要清理任务」来概括。
+     */
     async resolve(token: string): Promise<{ userId: string } | null> {
       const rows = await db
         .select({ id: sessions.id, userId: sessions.userId, expiresAt: sessions.expiresAt })

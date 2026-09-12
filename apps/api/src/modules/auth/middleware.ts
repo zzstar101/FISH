@@ -12,10 +12,11 @@ import type { SessionCookie } from './session'
 export type AuthVariables = { userId: string; me: Me }
 
 /**
- * 认证守卫。按 CONTRIBUTING §2 第 6 条，根路由挂载由 Platform 统一在 `app.ts` 做
- * （例如 `app.use('/wishes/*', requireAuth)`），模块自己不挂，避免漏挂。
+ * 认证守卫。按 CONTRIBUTING §2（Coast-87 段：「根路由由 zzstar101 统一接线」），
+ * 挂载由 Platform 在 `app.ts` 统一做（例如 `app.use('/wishes/*', requireAuth)`），
+ * 模块自己不挂，避免漏挂。
  *
- * 401 + `UNAUTHENTICATED` 是前端唯一的「跳登录」信号（契约第 6 条）。
+ * 401 + `UNAUTHENTICATED` 是前端唯一的「跳登录」信号（见 issue #3 冻结契约第 6 节）。
  */
 export function createRequireAuth(deps: {
   cookie: SessionCookie

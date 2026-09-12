@@ -8,5 +8,4 @@ CREATE TABLE "sessions" (
 --> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "sessions_token_hash_uq" ON "sessions" USING btree ("token_hash");--> statement-breakpoint
-CREATE INDEX "sessions_user_id_idx" ON "sessions" USING btree ("user_id");--> statement-breakpoint
-CREATE INDEX "sessions_expires_at_idx" ON "sessions" USING btree ("expires_at");
+CREATE INDEX "sessions_user_id_idx" ON "sessions" USING btree ("user_id");

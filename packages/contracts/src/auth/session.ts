@@ -10,7 +10,11 @@ export const StudentNoSchema = z
   .trim()
   .regex(/^\d{12}$/, '学号必须是 12 位数字')
 
-/** 不 trim：空格是合法密码字符。上限 32 是为将来换哈希算法留余量。 */
+/**
+ * 不 trim：空格是合法密码字符。
+ * 8–32 位是**契约里的产品规则**（#3 约定），不是哈希算法的限制：argon2id 没有 bcrypt 那样的
+ * 72 字节输入截断问题，因此不要把它当成「为将来换算法留余量」。
+ */
 export const PasswordSchema = z.string().min(8).max(32)
 
 export const NicknameSchema = z.string().trim().min(1).max(20)
