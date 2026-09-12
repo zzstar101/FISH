@@ -310,7 +310,7 @@ test('feed 的 priceAsc 按价格升序并返回封面', async () => {
 
 // 回归：`q` 里的 `%` / `_` 必须当字面量。否则 `?q=%` 会匹配整张表、
 // `?q=a_b` 会把 `_` 当单字符通配 —— 契约 §2.1 写的是"匹配范围"，用户期待字面子串。
-test('feed 的搜索把 % 与 _ 当字面量而不是通配符', async () => {
+test('feed 的搜索把 % / _ / \\ 当字面量而不是通配符', async () => {
   await withSeller(async (sellerId) => {
     const percent = await insertListingWithTime(sellerId, {
       createdAt: new Date(),

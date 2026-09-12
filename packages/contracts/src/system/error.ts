@@ -36,7 +36,7 @@ export type ApiError = z.infer<typeof ApiErrorSchema>
  * 唯一的错误响应构造入口：所有 domain 都用它，信封形状因此不可能各自漂移。
  *
  * `details` 在**商品域的 422 校验类失败**时传（#6 冻结契约 §3 / §7.9）；不传时响应体与本函数
- * 加第三参之前**逐字节相同** —— 既有调用方（auth / health，它们的 422 不带 details）无需改动。
+ * 加第三参之前**逐字节相同** —— 既有调用方无需改动（auth 的 422 不带 details；health 不走本函数）。
  */
 export function errorBody(code: string, message: string, details?: ApiErrorDetail[]): ApiError {
   return details ? { error: { code, message, details } } : { error: { code, message } }

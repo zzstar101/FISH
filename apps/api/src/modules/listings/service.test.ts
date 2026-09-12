@@ -610,34 +610,58 @@ describe('transition', () => {
 
   // 并发：别人先把状态改成了 RESERVED，本次 setStatus 没改到任何行 → 必须 409 而不是报成功。
   test('reports 409 when a concurrent change took the listing somewhere else', async () => {
+    // 与 updateListing 的同名用例同一个道理：fake 必须"有状态"。
+    // 第 1 次 findState 是前置检查（ACTIVE，请求得以继续），第 2 次是 setStatus 没改到行后的
+    // 复读（已被并发改成 RESERVED）。两次都返回 RESERVED 的话，异常在前置检查就抛出，
+    // setStatus 与 !changed 判别都不可达 —— 回退那段代码用例也照样绿。
+    let reads = 0
+    let setStatusCalls = 0
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        setStatus: async () => false,
-        findState: async () => ({
-          sellerId: SELLER_ID,
-          status: 'RESERVED',
-          priceCents: 16000,
-          free: false,
-        }),
+        setStatus: async () => {
+          setStatusCalls += 1
+          return false
+        },
+        findState: async () => {
+          reads += 1
+          return {
+            sellerId: SELLER_ID,
+            status: reads === 1 ? 'ACTIVE' : 'RESERVED',
+            priceCents: 16000,
+            free: false,
+          }
+        },
       }),
     })
-    expect(
-      (await expectServiceError(() => service.transition(SELLER_ID, LISTING_ID, 'OFFLINE'))).status,
-    ).toBe(409)
+
+    const error = await expectServiceError(() =>
+      service.transition(SELLER_ID, LISTING_ID, 'OFFLINE'),
+    )
+    expect(error.status).toBe(409)
+    expect(error.code).toBe('LISTING_NOT_EDITABLE')
+    // 这两条保证用例确实走到了目标分支，而不是在前置检查就结束
+    expect(setStatusCalls).toBe(1)
+    expect(reads).toBe(2)
   })
 
   test('treats a concurrent change to the target status as success', async () => {
+    // 第 1 次 ACTIVE（前置检查通过，不会命中"已是目标态"的早返回），
+    // 第 2 次 OFFLINE（= 目标态）→ 并发下别人已改到目标态，应视为幂等成功。
+    let reads = 0
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
         setStatus: async () => false,
-        findState: async () => ({
-          sellerId: SELLER_ID,
-          status: 'OFFLINE',
-          priceCents: 16000,
-          free: false,
-        }),
+        findState: async () => {
+          reads += 1
+          return {
+            sellerId: SELLER_ID,
+            status: reads === 1 ? 'ACTIVE' : 'OFFLINE',
+            priceCents: 16000,
+            free: false,
+          }
+        },
         findDetail: async () => ({
           listing: listingRow({ status: 'OFFLINE' }),
           seller: sellerRow(),
@@ -646,7 +670,9 @@ describe('transition', () => {
       }),
     })
 
-    await service.transition(SELLER_ID, LISTING_ID, 'OFFLINE')
+    const detail = await service.transition(SELLER_ID, LISTING_ID, 'OFFLINE')
+    expect(detail.status).toBe('OFFLINE')
+    expect(reads).toBe(2)
   })
 
   test('rejects transitions from a stranger without revealing the listing', async () => {
