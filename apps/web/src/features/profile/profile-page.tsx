@@ -98,6 +98,8 @@ export function ProfilePage() {
         <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface">
           <StaticRow description="昵称 / 签名 / 学院 / 校区" emoji="👤" label="编辑个人资料" />
           <StaticRow description="校内面交、先验货后付款" emoji="🛡️" label="交易安全指南" />
+          <StaticRow description="数据只保存在本机,不会上传" emoji="🔒" label="隐私设置" />
+          <StaticRow description="问题反馈与功能建议" emoji="✉️" label="意见反馈" />
           <button
             className="flex w-full items-center gap-3 px-4 py-3 text-left"
             onClick={() => reset.mutate()}
