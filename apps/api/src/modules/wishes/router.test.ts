@@ -140,4 +140,37 @@ describe('wishes router', () => {
     expect(response.status).toBe(400)
     expect(await response.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } })
   })
+
+  test('maps a DB CHECK violation (23514) to 409 instead of 500', async () => {
+    // 并发 PATCH 各改一端预算时，组合结果可能违反 wishes_budget_range_ordered；
+    // 约束兜底保证数据正确，HTTP 语义应是 409 冲突而不是 500。
+    const app = new Hono<{ Variables: { userId: string } }>()
+    app.use('*', async (c, next) => {
+      c.set('userId', 'user-1')
+      await next()
+    })
+    app.route(
+      '/api/wishes',
+      createWishesRouter({
+        store: emptyStore,
+        matchQueue,
+        getUserId: (c) => c.get('userId'),
+        service: {
+          ...service,
+          updateWish: async () => {
+            throw Object.assign(new Error('violates check constraint'), { errno: '23514' })
+          },
+        },
+      }),
+    )
+
+    const response = await app.request('/api/wishes/00000000-0000-0000-0000-000000000001', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ budgetMaxCents: 20000 }),
+    })
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ error: { code: 'CONFLICT' } })
+  })
 })

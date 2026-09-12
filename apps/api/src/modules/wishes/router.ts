@@ -44,12 +44,29 @@ function serviceErrorResponse(c: WishesContext, error: unknown) {
     return c.json(jsonError('请求参数无效', 'VALIDATION_ERROR'), 400)
   }
   if (error instanceof SyntaxError) return c.json(jsonError('请求体不是有效 JSON'), 400)
-  console.error('[wishes] unhandled error', error)
+  // 并发 PATCH 可能让组合后的预算区间违反 DB CHECK（SQLSTATE 23514）：数据由约束兜住，
+  // 语义上是"与当前状态冲突"，应映射 409 而不是 500。
+  if (isCheckViolation(error)) {
+    return c.json(jsonError('愿望已被其他修改更新，请重试', 'CONFLICT'), 409)
+  }
+  console.error('[wishes] unhandled error', describeError(error))
   return c.json(jsonError('服务暂时不可用', 'INTERNAL_ERROR'), 500)
 }
 
 async function parseJson<T>(c: WishesContext, parse: (input: unknown) => T) {
   return parse(await c.req.json())
+}
+
+/** Postgres CHECK 约束违例（bun-sql 把 SQLSTATE 放在 errno 上）。 */
+function isCheckViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('errno' in error)) return false
+  return (error as { errno?: unknown }).errno === '23514'
+}
+
+/** 只取错误首行：Drizzle 的 message 第二行是 SQL 实参（关键词、描述、用户 id），不能原样进日志。 */
+function describeError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  return `${error.name}: ${error.message.split('\n')[0] ?? ''}`
 }
 
 /** 非法 uuid 直接 404，避免打到 PG 后抛驱动错误变成 500。 */
