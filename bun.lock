@@ -46,6 +46,7 @@
       "name": "@fish/worker",
       "version": "0.0.0",
       "dependencies": {
+        "@fish/contracts": "workspace:*",
         "@fish/db": "workspace:*",
         "@fish/shared": "workspace:*",
         "drizzle-orm": "^0.45.2",
