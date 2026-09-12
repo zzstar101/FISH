@@ -1,0 +1,35 @@
+{
+  "name": "fish",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '@fish/*' dev",
+    "dev:web": "bun run --filter '@fish/web' dev",
+    "dev:api": "bun run --filter '@fish/api' dev",
+    "dev:worker": "bun run --filter '@fish/worker' dev",
+    "build": "bun run --filter '@fish/*' build",
+    "typecheck": "bun run --filter '@fish/*' typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "bun test",
+    "ws:smoke": "bun run scripts/ws-smoke.ts",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:generate": "bun run --filter '@fish/db' generate",
+    "db:migrate": "bun run --filter '@fish/db' migrate",
+    "db:studio": "bun run --filter '@fish/db' studio"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.13",
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}
