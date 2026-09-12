@@ -6,9 +6,10 @@ import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { MessageCircle } from 'lucide-react'
+import type { ComponentProps } from 'react'
 import { formatPrice } from '../../lib/format'
 import type { ListingView } from '../../lib/mock/store'
-import type { User } from '../../lib/mock/types'
+import type { ListingStatus, User } from '../../lib/mock/types'
 import { AuthBadge } from '../auth/auth-badge'
 import { useStartConversation } from '../listing-detail/queries'
 import { ListingRow } from '../search/listing-row'
@@ -125,12 +126,31 @@ function MyListBody({ type, label }: { type: MyListType; label: string }) {
   )
 }
 
+/**
+ * 商品状态 → 徽章文案与配色。
+ *
+ * 此前这里只有二元判断（SOLD ? 已售出 : 在售），于是 RESERVED / OFFLINE 会被一律
+ * 标成「在售」——已下架的闲置看上去还在卖（#12 要求「商品/愿望/交易各状态可展示」）。
+ * 四种状态与详情页的 `STATUS_LABEL` 保持同一套说法。
+ */
+const STATUS_BADGE: Record<
+  ListingStatus,
+  { label: string; variant: ComponentProps<typeof Badge>['variant'] }
+> = {
+  ACTIVE: { label: '在售', variant: 'success' },
+  RESERVED: { label: '已预定', variant: 'lavender' },
+  SOLD: { label: '已售出', variant: 'secondary' },
+  OFFLINE: { label: '已下架', variant: 'secondary' },
+}
+
 /** 我发布/我卖出：行内带 编辑 / 标为已售出 / 重新上架 / 下架删除（#6 写操作）。 */
 function MyListingRow({ item }: { item: ListingView }) {
   const navigate = useNavigate()
   const setStatus = useSetListingStatus()
   const remove = useRemoveListing()
-  const sold = item.status === 'SOLD'
+  // 「重新上架」只对已下架/已售出的商品有意义（在售与已预定的不能重复上架）。
+  const relistable = item.status === 'OFFLINE' || item.status === 'SOLD'
+  const badge = STATUS_BADGE[item.status]
 
   return (
     <div className="flex gap-3 px-4 py-3">
@@ -152,7 +172,7 @@ function MyListingRow({ item }: { item: ListingView }) {
         </button>
         <div className="mt-1.5 flex items-center gap-2">
           <span className="font-bold text-lg">{formatPrice(item.priceCents)}</span>
-          <Badge variant={sold ? 'secondary' : 'success'}>{sold ? '已售出' : '在售'}</Badge>
+          <Badge variant={badge.variant}>{badge.label}</Badge>
           <span className="text-ink-3 text-xs">
             {item.views} 浏览 · {item.wantCount} 想要
           </span>
@@ -165,7 +185,7 @@ function MyListingRow({ item }: { item: ListingView }) {
           >
             编辑
           </Button>
-          {sold ? (
+          {relistable ? (
             <Button
               onClick={() => setStatus.mutate({ id: item.id, status: 'ACTIVE' })}
               size="sm"
