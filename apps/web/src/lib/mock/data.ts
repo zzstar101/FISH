@@ -165,7 +165,7 @@ export const listings: Listing[] = [
     publishedMinutesAgo: 60,
     views: 2210,
     wantCount: 96,
-    status: 'ACTIVE',
+    status: 'OFFLINE',
     sellerId: 'u4',
     kind: 'listing',
   },
