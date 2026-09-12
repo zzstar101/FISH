@@ -1,0 +1,4 @@
+# Normalize all text files to LF, regardless of platform.
+# Prevents Windows (core.autocrlf=true) and macOS/Linux (LF) from
+# producing spurious line-ending diffs.
+* text=auto eol=lf
