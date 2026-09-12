@@ -1,6 +1,8 @@
 import { createDb } from '@fish/db/client'
 import { loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
+import { createMatchJobHandlers, InvalidJobPayloadError } from './jobs/matching/handlers'
+import { createJobQueue } from './jobs/queue'
 
 const POLL_INTERVAL_MS = 1000
 
@@ -12,16 +14,25 @@ await db.execute(sql`select 1`)
 console.log('[worker] postgres connection ok')
 
 /**
- * Job 轮询骨架。Job 表由 #2 建立，具体 job（如 #8 的匹配）在各自 Issue 内接入。
- * 本 Issue 不提前定义 Job schema，也不实现任何 job。
+ * job 类型 → handler。目前只有匹配域（#8）；新 domain 在这里加一项
+ * （`jobs.type` 是裸 text，TS 联合只是收窄，见 `packages/db/src/schema/jobs.ts:7-8`）。
  */
-async function pollJobs(): Promise<void> {
-  // 扩展点：后续在此领取并执行 jobs 表中的任务。
-}
+const queue = createJobQueue(db, {
+  handlers: { ...createMatchJobHandlers(db) },
+  isFatalError: (error) => error instanceof InvalidJobPayloadError,
+})
 
 console.log(`[worker] started (poll interval ${POLL_INTERVAL_MS}ms)`)
 
 for (;;) {
-  await pollJobs()
+  const outcome = await queue.runOnce()
+  if (outcome) {
+    const detail = outcome.lastError
+      ? `：${outcome.lastError}`
+      : ` ${JSON.stringify(outcome.result)}`
+    const line = `[worker] ${outcome.type} ${outcome.status}${detail}`
+    if (outcome.status === 'DONE') console.log(line)
+    else console.error(line)
+  }
   await Bun.sleep(POLL_INTERVAL_MS)
 }

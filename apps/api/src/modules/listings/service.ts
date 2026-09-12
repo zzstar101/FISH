@@ -2,7 +2,6 @@ import { CampusSchema, MeSchema } from '@fish/contracts/auth/user'
 import {
   ALLOWED_IMAGE_MIME,
   type ListingCard,
-  ListingCardSchema,
   type ListingCreateInput,
   type ListingDetail,
   ListingDetailSchema,
@@ -18,6 +17,7 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import type { MediaStorage } from '../uploads/storage'
+import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
 import type {
   FeedCursorKey,
@@ -123,29 +123,9 @@ export function createListingService(deps: {
     }
   }
 
+  /** 卡片映射抽到 `card.ts`：#8 的 `/matches` 也要给同一张卡片，两处各写一份必然漂移。 */
   function toCard(listing: ListingRow, coverObjectKey: string | null): ListingCard | null {
-    const card = {
-      id: listing.id,
-      title: listing.title,
-      priceCents: listing.priceCents,
-      category: listing.category,
-      condition: listing.condition,
-      status: listing.status,
-      urgent: listing.urgent,
-      negotiable: listing.negotiable,
-      free: listing.free,
-      coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
-      createdAt: listing.createdAt.toISOString(),
-    }
-
-    // 决策 C（Issue #6）：读响应校验失败**不 500**，记日志后跳过该条 ——
-    // 一条脏数据不该让整个首页打不开。
-    const parsed = ListingCardSchema.safeParse(card)
-    if (!parsed.success) {
-      console.error('[listings] 跳过无法映射为契约的卡片', listing.id, parsed.error.message)
-      return null
-    }
-    return parsed.data
+    return toListingCard(listing, coverObjectKey, storage)
   }
 
   function toDetail(input: {
