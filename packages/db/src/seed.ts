@@ -6,6 +6,7 @@ import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
+import { sessions } from './schema/sessions'
 import { transactions } from './schema/transactions'
 import { users } from './schema/users'
 import { wishes } from './schema/wishes'
@@ -40,32 +41,47 @@ const ids = {
 } as const
 
 /**
- * #3 定义真实哈希算法前，seed 只能写占位值；#3 落地后请替换这里。
+ * 三个 seed 账号共用的演示密码（#3 起用 `Bun.password` argon2id 真实哈希）。
+ * 仅本地演示，禁止用于生产；真实用户密码只能经 `POST /auth/register` 写入。
  */
-const PLACEHOLDER_PASSWORD_HASH = 'seed-placeholder-not-a-valid-hash'
+const DEMO_PASSWORD = 'fish123456'
+
+/**
+ * 学号（12 位）与演示密码一起在 issue #3 里冻结，便于前端直接登录调试。
+ * 阿岚 / 橙子 已认证，小北 保持未认证——#5 的卖家认证徽章需要一个反例。
+ */
+const demoStudentNos = {
+  sellerA: '202101000001',
+  buyerB: '202101000002',
+  buyerC: '202101000003',
+} as const
 
 /**
  * 生成 #2 验收要求的"首页、愿望、聊天、交易基础数据"。
- * 数量刻意保持最小完整（覆盖全部 10 张表），扩容到 #13 的 demo 规模由 #13 负责。
+ * 数量刻意保持最小完整（覆盖全部业务表），扩容到 #13 的 demo 规模由 #13 负责。
  *
  * 注意：`listing_images.object_key` 指向 MinIO 里并不存在的对象，
  * 因此前端渲染这些图会 404。真实图片由 #6 的上传流程产生。
  */
 export async function seed(tx: SeedTx): Promise<void> {
   // 一次性列出全部业务表：单条 TRUNCATE 可以跨外键，但必须把所有被引用的表都列全。
+  // `sessions` 必须在内：它引用 users，漏掉会让 seed 第二次执行直接失败。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
   )
 
   const now = new Date()
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
   const lastWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
 
+  // 同一个明文密码只需哈希一次（argon2id 每次哈希都带随机盐，复用同一串不影响正确性）。
+  const passwordHash = await Bun.password.hash(DEMO_PASSWORD)
+
   await tx.insert(users).values([
     {
       id: ids.sellerA,
-      studentNo: '2021001',
-      passwordHash: PLACEHOLDER_PASSWORD_HASH,
+      studentNo: demoStudentNos.sellerA,
+      passwordHash,
       nickname: '阿岚',
       campus: '肇庆',
       authStatus: 'VERIFIED',
@@ -74,16 +90,16 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
     {
       id: ids.buyerB,
-      studentNo: '2021002',
-      passwordHash: PLACEHOLDER_PASSWORD_HASH,
+      studentNo: demoStudentNos.buyerB,
+      passwordHash,
       nickname: '小北',
       campus: '肇庆',
       createdAt: lastWeek,
     },
     {
       id: ids.buyerC,
-      studentNo: '2021003',
-      passwordHash: PLACEHOLDER_PASSWORD_HASH,
+      studentNo: demoStudentNos.buyerC,
+      passwordHash,
       nickname: '橙子',
       campus: '广州',
       authStatus: 'VERIFIED',
