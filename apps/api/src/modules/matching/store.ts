@@ -1,20 +1,24 @@
 import type { ListingCategory } from '@fish/contracts/listings/schema'
+import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { wishes } from '@fish/db/schema/wishes'
-import { and, desc, eq, ne, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, ne, sql } from 'drizzle-orm'
 import type { ListingCardSource } from '../listings/card'
 
 /**
- * 匹配读路径的 SQL（Issue #8 契约评论 §2）。
+ * 匹配读路径的 SQL（Issue #8 契约评论 §2 / 补记 §9.1、§9.7）。
  *
- * 两个查询都带**读时可见性过滤**，而不是靠 `matches` 行本身干净：
+ * 三个读时过滤，都不靠 `matches` 行本身干净：
  *
- * - wish 侧排除 `OFFLINE` 商品（离线商品对非卖家 `GET /listings/:id` 返 404，
- *   而匹配卡片的自然交互是点进详情——不过滤就是死链。`RESERVED` / `SOLD` 保留，卡片自带状态角标）；
- * - listing 侧排除已关闭 / 已满足的愿望，因为 `WishSummary` 里没有 status 字段，
- *   前端无法区分"还在求购"与"已经不需要了"（契约评论 §5.4）。
+ * 1. **`score >= MATCH_SCORE_THRESHOLD`**：`matches` 行不删（契约 §5.3），而商品被编辑后重算会把
+ *    分数**覆盖**成新值——分数跌出阈值的旧行如果不过滤，页面上就会出现一个"已经不该匹配"的卡片
+ *    （补偿 #6 的"编辑/上架后重投 job"，见 #6 评论）；
+ * 2. wish 侧排除 `OFFLINE` 商品（离线商品对非卖家 `GET /listings/:id` 返 404，而匹配卡片的自然交互
+ *    是点进详情——不过滤就是死链）；`RESERVED` / `SOLD` 保留，卡片自带状态角标；
+ * 3. listing 侧只返回 `ACTIVE` 愿望，因为 `WishSummary` 里没有 status 字段，前端无法区分
+ *    "还在求购"与"已经不需要了"。
  *
  * 幂等与分数覆盖发生在写入侧（`apps/worker/src/jobs/matching/engine.ts`），这里只读。
  */
@@ -87,7 +91,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         .select({ count: sql<number>`count(*)::int` })
         .from(matches)
         .innerJoin(listings, eq(listings.id, matches.listingId))
-        .where(and(eq(matches.wishId, wishId), ne(listings.status, 'OFFLINE')))
+        .where(
+          and(
+            eq(matches.wishId, wishId),
+            gte(matches.score, MATCH_SCORE_THRESHOLD),
+            ne(listings.status, 'OFFLINE'),
+          ),
+        )
       return rows[0]?.count ?? 0
     },
 
@@ -113,7 +123,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         })
         .from(matches)
         .innerJoin(listings, eq(listings.id, matches.listingId))
-        .where(and(eq(matches.wishId, wishId), ne(listings.status, 'OFFLINE')))
+        .where(
+          and(
+            eq(matches.wishId, wishId),
+            gte(matches.score, MATCH_SCORE_THRESHOLD),
+            ne(listings.status, 'OFFLINE'),
+          ),
+        )
         // tie-break 用 id：同分时取 Top N 不能抖动（契约 §2.1）。
         .orderBy(desc(matches.score), desc(matches.id))
         .limit(limit)
@@ -126,7 +142,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         .select({ count: sql<number>`count(*)::int` })
         .from(matches)
         .innerJoin(wishes, eq(wishes.id, matches.wishId))
-        .where(and(eq(matches.listingId, listingId), eq(wishes.status, 'ACTIVE')))
+        .where(
+          and(
+            eq(matches.listingId, listingId),
+            gte(matches.score, MATCH_SCORE_THRESHOLD),
+            eq(wishes.status, 'ACTIVE'),
+          ),
+        )
       return rows[0]?.count ?? 0
     },
 
@@ -146,7 +168,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         })
         .from(matches)
         .innerJoin(wishes, eq(wishes.id, matches.wishId))
-        .where(and(eq(matches.listingId, listingId), eq(wishes.status, 'ACTIVE')))
+        .where(
+          and(
+            eq(matches.listingId, listingId),
+            gte(matches.score, MATCH_SCORE_THRESHOLD),
+            eq(wishes.status, 'ACTIVE'),
+          ),
+        )
         .orderBy(desc(matches.score), desc(matches.id))
         .limit(limit)
     },

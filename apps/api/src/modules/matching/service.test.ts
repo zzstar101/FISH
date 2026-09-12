@@ -167,6 +167,21 @@ test('wish 侧：无法映射为契约的卡片被跳过，但 total 仍计入',
   })
 })
 
+// 商品被编辑后重算会把分数**覆盖**成新值，而 `matches` 行不删（契约 §5.3），
+// 所以读接口必须按阈值过滤，否则页面上会留一个"已经不该匹配"的卡片。
+// 这是 #6 评论里"编辑/上架后重投 job"的配套改动，两半要一起上线。
+test('两个方向都过滤掉分数跌出阈值的旧匹配行（items 与 total 都不算）', async () => {
+  await withOwners(async ({ ownerId, otherId }) => {
+    const wishId = await createWish(ownerId)
+    const listingId = await createListing(otherId)
+    // 65 = 分类不符但关键词与价格满分：重算后的真实结果，已不够 70。
+    await createMatch(listingId, wishId, 65)
+
+    expect(await service.listByWish(ownerId, wishId, 10)).toEqual({ total: 0, items: [] })
+    expect(await service.listByListing(otherId, listingId, 10)).toEqual({ total: 0, items: [] })
+  })
+})
+
 test('listing 侧：只返回 ACTIVE 愿望，可空字段原样带出', async () => {
   await withOwners(async ({ ownerId, otherId }) => {
     const listingId = await createListing(ownerId)
