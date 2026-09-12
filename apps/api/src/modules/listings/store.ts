@@ -5,6 +5,8 @@ import type {
 } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
+import { jobs } from '@fish/db/schema/jobs'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import {
@@ -367,23 +369,14 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 /**
  * 写 `MATCH_LISTING` job。
  *
- * **必须用 `sql` 模板直接传对象，不能用 `insert().values({ payload: {...} })`**：
- * drizzle 0.45.2 + `bun-sql` 的 jsonb 参数映射会把对象 stringify 两次，落库成为
- * 「JSON 字符串套 JSON」（`jsonb_typeof = 'string'`）。那样的行用 drizzle 读回来是正常的，
- * 但 `payload->>'listingId'` 在 SQL 层恒为 NULL —— #8 的 worker 只要用 SQL 取 payload
- * 就永远匹配不到，而这是最自然的写法。
- *
- * 对照实测（同一个库）：
- *   insert().values({payload: obj})            → jsonb_typeof = 'string'，->> NULL
- *   execute(sql`... values (..., ${obj})`)     → jsonb_typeof = 'object'，->> 正常
+ * `payload` 必须经 `jsonParam()` 包装：直接用裸对象会被 drizzle + `bun-sql` stringify 两次，
+ * 落库成为「JSON 字符串套 JSON」，于是 `payload->>'listingId'` 在 SQL 层恒为 NULL，
+ * #8 的 worker 就再也匹配不到这个商品（详见 `@fish/db/json` 的实测说明）。
  */
-async function enqueueMatchJobWith(
-  executor: Pick<Db, 'execute'>,
-  listingId: string,
-): Promise<void> {
-  const payload = { listingId }
-  await executor.execute(sql`
-    INSERT INTO jobs (id, type, payload)
-    VALUES (${newId()}, 'MATCH_LISTING', ${payload})
-  `)
+async function enqueueMatchJobWith(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
+  await executor.insert(jobs).values({
+    id: newId(),
+    type: 'MATCH_LISTING',
+    payload: jsonParam({ listingId }),
+  })
 }
