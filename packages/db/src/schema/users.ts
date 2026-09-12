@@ -8,7 +8,7 @@ export const users = pgTable('users', {
   ...primaryKey(),
   /** 学号即账号（#3：使用学号注册账号）。API 不返回该列。 */
   studentNo: text('student_no').notNull().unique(),
-  /** #3 定义哈希算法前，seed 使用占位值。 */
+  /** #3 已落地：seed 写入真实 `Bun.password`（argon2id）哈希，见 `seed.ts`。 */
   passwordHash: text('password_hash').notNull(),
   nickname: text('nickname').notNull(),
   avatarUrl: text('avatar_url'),
