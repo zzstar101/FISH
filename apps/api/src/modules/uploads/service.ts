@@ -16,7 +16,7 @@ export class UploadServiceError extends Error {
   /**
    * `details` 不是只有 `VALIDATION_FAILED` 才有：契约 §3 的 422 校验类失败都会带字段信息
    * （`IMAGE_REFERENCE_INVALID` / `UPLOAD_OBJECT_MISSING` 指向 `objectKey`），
-   * 否则前端拿不到"是哪个输入出错"。已在契约 §7.6 记录这条口径。
+   * 否则前端拿不到"是哪个输入出错"。已在契约 §7.9 记录这条口径。
    */
   constructor(
     readonly status: 422,

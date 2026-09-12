@@ -344,6 +344,16 @@ test('feed 的搜索把 % 与 _ 当字面量而不是通配符', async () => {
     expect(await search('100%')).toEqual([percent])
     expect(await search('a_b')).toEqual([underscore])
     expect(await search('_')).toEqual([underscore])
+
+    // 反斜杠也必须被转义：否则 `q=\` 会让 pattern 以转义符结尾，PG 直接报
+    // "LIKE pattern must not end with escape character" → 500。
+    const backslash = await insertListingWithTime(sellerId, {
+      createdAt: new Date(),
+      priceCents: 400,
+    })
+    await db.update(listings).set({ title: 'C:\\ 盘符' }).where(eq(listings.id, backslash))
+    expect(await search('C:\\')).toEqual([backslash])
+    expect(await search('\\')).toEqual([backslash])
   })
 })
 

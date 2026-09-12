@@ -19,11 +19,12 @@ export const ApiErrorSchema = z.object({
     code: z.string(),
     message: z.string(),
     /**
-     * 字段级校验错误：**422 的校验类失败**都会带（`VALIDATION_FAILED`、
-     * `IMAGE_REFERENCE_INVALID`、`UPLOAD_OBJECT_MISSING`，见 #6 冻结契约 §3 / §7.9）。
+     * 字段级校验错误。**商品域（listings / uploads）的 422 校验类失败都带它**
+     * （`VALIDATION_FAILED`、`IMAGE_REFERENCE_INVALID`、`UPLOAD_OBJECT_MISSING`，
+     * 见 #6 冻结契约 §3 / §7.9）。
      *
-     * 可选是刻意的：auth / wishes 的响应不带它，加这个字段必须保持纯增量，
-     * 否则就是替它们改协议。
+     * 可选是刻意的：auth 的 422 与 wishes 的既有响应都不带它，加这个字段必须保持纯增量，
+     * 否则就是替它们改协议（§7.4）。
      */
     details: z.array(ApiErrorDetailSchema).optional(),
   }),
@@ -34,8 +35,8 @@ export type ApiError = z.infer<typeof ApiErrorSchema>
 /**
  * 唯一的错误响应构造入口：所有 domain 都用它，信封形状因此不可能各自漂移。
  *
- * `details` 在 422 的校验类失败时传（#6 冻结契约 §3 / §7.9）；不传时响应体与本函数加第三参之前
- * **逐字节相同** —— 既有调用方（auth / health）无需改动。
+ * `details` 在**商品域的 422 校验类失败**时传（#6 冻结契约 §3 / §7.9）；不传时响应体与本函数
+ * 加第三参之前**逐字节相同** —— 既有调用方（auth / health，它们的 422 不带 details）无需改动。
  */
 export function errorBody(code: string, message: string, details?: ApiErrorDetail[]): ApiError {
   return details ? { error: { code, message, details } } : { error: { code, message } }

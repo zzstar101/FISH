@@ -16,6 +16,7 @@ import {
   eq,
   gt,
   gte,
+  ilike,
   inArray,
   lt,
   lte,
@@ -254,12 +255,16 @@ export function createSqlListingStore(db: Db): ListingStore {
         //
         // `q` 里的 `%` / `_` / `\` 必须转义：否则 `?q=%` 会匹配整张表、`?q=a_b` 会把 `_`
         // 当成单字符通配 —— 契约写的是"匹配范围"，用户期待的是字面子串匹配。
-        // ESCAPE 用 PG 的默认反斜杠，显式写出来是为了不依赖 `standard_conforming_strings` 的默认值。
+        //
+        // 不用写 `ESCAPE` 子句：反斜杠本来就是 PostgreSQL 的 LIKE/ILIKE 默认转义符，
+        // 而显式写 `ESCAPE '\'` 反而引入新的依赖 —— 那个字面量只在
+        // `standard_conforming_strings = on` 时合法（PG 默认值），关掉它整条语句就变成语法错误。
+        // 转义后的 pattern 是**参数**，与这个 GUC 无关。
         const escaped = criteria.search.replace(/[\\%_]/g, '\\$&')
         const pattern = `%${escaped}%`
         const searchCondition = or(
-          sql`${listings.title} ILIKE ${pattern} ESCAPE '\\'`,
-          sql`${listings.description} ILIKE ${pattern} ESCAPE '\\'`,
+          ilike(listings.title, pattern),
+          ilike(listings.description, pattern),
         )
         if (searchCondition) conditions.push(searchCondition)
       }

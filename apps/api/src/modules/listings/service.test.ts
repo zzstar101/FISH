@@ -465,16 +465,24 @@ describe('updateListing', () => {
   // 并发：service 读到的还是可编辑状态，但 UPDATE 时它已变成 RESERVED / SOLD（#11 的交易流程），
   // UPDATE 的 status 谓词会命中 0 行 —— 这必须是 409 而不是 404。
   test('reports 409 when the listing became RESERVED between the read and the write', async () => {
+    // fake 必须是**有状态**的：第一次 findState 是前置检查（此时仍可编辑，请求得以继续），
+    // 第二次是 UPDATE 没命中后的复读（此时已被并发改成 RESERVED）。
+    // 若两次都返回 RESERVED，异常会在前置检查就抛出，`updateListing` 根本不会被调用 ——
+    // 那样即使把 service 的 409 分支回退成 404，用例也照样通过（等于没测）。
+    let reads = 0
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
         updateListing: async () => null,
-        findState: async () => ({
-          sellerId: SELLER_ID,
-          status: 'RESERVED',
-          priceCents: 16000,
-          free: false,
-        }),
+        findState: async () => {
+          reads += 1
+          return {
+            sellerId: SELLER_ID,
+            status: reads === 1 ? 'ACTIVE' : 'RESERVED',
+            priceCents: 16000,
+            free: false,
+          }
+        },
       }),
     })
 
@@ -486,9 +494,19 @@ describe('updateListing', () => {
   })
 
   test('returns 404 when the listing disappears between the check and the update', async () => {
+    // 先读到可编辑的行，UPDATE 没命中后再读已经查不到该行（并发删除）
+    let reads = 0
     const service = createListingService({
       storage: fakeStorage(),
-      store: fakeStore({ updateListing: async () => null }),
+      store: fakeStore({
+        updateListing: async () => null,
+        findState: async () => {
+          reads += 1
+          return reads === 1
+            ? { sellerId: SELLER_ID, status: 'ACTIVE' as const, priceCents: 16000, free: false }
+            : null
+        },
+      }),
     })
     expect(
       (
