@@ -21,9 +21,10 @@ import type { ListingCardSource } from '../listings/card'
  *    （补记 §9.8）。必须有这一条：既有 `matches` 行会被重算重新打分，但"分类与关键词满分、价格超 2 倍"
  *    的裸分恰好是 70（`0.35 + 0.35 + 0`），只靠 `score >= 阈值` 挡不住它，会出现"同一对，新建时不匹配、
  *    编辑后却可见"的历史相关行为。
- * 4. listing 侧只返回 `ACTIVE` 愿望，因为 `WishSummary` 里没有 status 字段，前端无法区分
- *    "还在求购"与"已经不需要了"。wish 侧刻意**不**过滤自己愿望的状态：那是本人自己的愿望，
- *    成真/关闭后仍能看到曾经匹配到的商品不算错（商品状态在卡片里可见）。
+ * 4. **两个方向都只返回 `ACTIVE` 愿望的匹配**：listing 侧的理由是 `WishSummary` 里没有 status 字段，
+ *    前端无法区分"还在求购"与"已经不需要了"；wish 侧要求目标愿望本身 `ACTIVE`（成真 / 关闭后
+ *    的愿望不再有"当前有效匹配"，`/matches?wishId=` 返回空列表），这样两个方向的口径一致，
+ *    引擎的可见性计数也只需一套规则。
  *
  * 幂等与分数覆盖发生在写入侧（`apps/worker/src/jobs/matching/engine.ts`），这里只读。
  */
@@ -113,6 +114,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           and(
             eq(matches.wishId, wishId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
+            eq(wishes.status, 'ACTIVE'),
             ne(listings.status, 'OFFLINE'),
             priceWithinBudget,
           ),
@@ -147,6 +149,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           and(
             eq(matches.wishId, wishId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
+            eq(wishes.status, 'ACTIVE'),
             ne(listings.status, 'OFFLINE'),
             priceWithinBudget,
           ),

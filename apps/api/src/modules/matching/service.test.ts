@@ -321,3 +321,16 @@ test('wish 侧保留 RESERVED/SOLD 商品，只隐藏 OFFLINE', async () => {
     expect(response.items.map((item) => item.listing.status)).toEqual(['RESERVED', 'SOLD'])
   })
 })
+
+// 两个方向的可见性口径一致：只展示 ACTIVE 愿望的匹配（wish 侧同样过滤目标愿望的状态）。
+test('wish 侧：愿望成真/关闭后不再返回匹配', async () => {
+  await withOwners(async ({ ownerId, otherId }) => {
+    const closed = await createWish(ownerId, { status: 'CLOSED' })
+    const fulfilled = await createWish(ownerId, { status: 'FULFILLED' })
+    await createMatch(await createListing(otherId), closed, 95)
+    await createMatch(await createListing(otherId), fulfilled, 95)
+
+    expect(await service.listByWish(ownerId, closed, 10)).toEqual({ total: 0, items: [] })
+    expect(await service.listByWish(ownerId, fulfilled, 10)).toEqual({ total: 0, items: [] })
+  })
+})

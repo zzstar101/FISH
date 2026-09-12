@@ -105,9 +105,9 @@ function priceWithinBudget(wish: WishTarget, listing: ListingTarget): boolean {
 
 /**
  * `GET /matches?wishId=` 会不会展示这一对（镜像 wish 侧读谓词）：
- * `OFFLINE` 商品隐藏；`RESERVED` / `SOLD` **保留**（商品状态在卡片里可见）。
+ * 愿望本身必须 `ACTIVE`；`OFFLINE` 商品隐藏，`RESERVED` / `SOLD` **保留**（商品状态在卡片里可见）。
  *
- * ⚠️ 这条策略比"可新建"更宽：新建要求对端 `ACTIVE`（§3.1 收窄），展示不要求。所以
+ * ⚠️ 商品状态这一项比"可新建"更宽：新建要求商品 `ACTIVE`（§3.1 收窄），展示不要求。所以
  * **`RESERVED`/`SOLD` 的商品只对它已经有行的那一对可见**（先建行、后转状态），当时没建过行的
  * 那对永远不会出现。这是刻意接受的取舍（两条规则分别由契约 §3.1 与补记 §9.1 冻结），
  * 要消除它只能二选一：读接口连 `RESERVED`/`SOLD` 一起隐藏，或者允许为 ACTIVE 之外的商品建行。
@@ -115,6 +115,7 @@ function priceWithinBudget(wish: WishTarget, listing: ListingTarget): boolean {
 function visibleToWishOwner(wish: WishTarget, listing: ListingTarget, score: number): boolean {
   return (
     score >= MATCH_SCORE_THRESHOLD &&
+    wish.status === 'ACTIVE' &&
     listing.status !== 'OFFLINE' &&
     priceWithinBudget(wish, listing)
   )
