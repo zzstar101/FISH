@@ -75,7 +75,13 @@ export function createMatchingService(deps: {
     async listByListing(userId, listingId, limit) {
       const listing = await store.findListing(listingId)
       if (!listing) throw notFound()
-      if (listing.ownerId !== userId) throw notOwner()
+      if (listing.ownerId !== userId) {
+        // #6 的取向：`OFFLINE` 商品对非卖家返 404 而不是 403 —— 403 等于确认"这个 id 存在
+        // 且是别人的商品"（`apps/api/src/modules/listings/service.ts:192-193`）。这里保持一致，
+        // 否则 `/matches?listingId=` 就成了"他人离线商品 id"的存在性探测器。
+        if (listing.status === 'OFFLINE') throw notFound()
+        throw notOwner()
+      }
 
       const [total, entries] = await Promise.all([
         store.countListingMatches(listingId),

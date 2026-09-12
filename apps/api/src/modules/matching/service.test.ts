@@ -167,9 +167,9 @@ test('wish 侧：无法映射为契约的卡片被跳过，但 total 仍计入',
   })
 })
 
-// 商品被编辑后重算会把分数**覆盖**成新值，而 `matches` 行不删（契约 §5.3），
-// 所以读接口必须按阈值过滤，否则页面上会留一个"已经不该匹配"的卡片。
-// 这是 #6 评论里"编辑/上架后重投 job"的配套改动，两半要一起上线。
+// 商品被编辑后重算会把分数**覆盖**成新值（引擎侧：`apps/worker/src/jobs/matching/engine.ts`
+// 对已掉出阈值/候选集的既有行也会重新打分；回归用例见那边的「改标题后掉出阈值」）。
+// `matches` 行不删（契约 §5.3），所以读接口必须按阈值过滤，否则页面上会留一个"已经不该匹配"的卡片。
 test('两个方向都过滤掉分数跌出阈值的旧匹配行（items 与 total 都不算）', async () => {
   await withOwners(async ({ ownerId, otherId }) => {
     const wishId = await createWish(ownerId)
@@ -236,5 +236,34 @@ test('不是本人的目标返回 403，不存在的目标返回 404', async () 
       status: 404,
       code: 'MATCH_TARGET_NOT_FOUND',
     })
+
+    // 他人的 OFFLINE 商品按 404（与 #6 的"不泄漏存在性"同一口径）：返 403 就等于确认
+    // "这个 id 存在且是别人的商品"。自己的 OFFLINE 商品仍然可读（下面这行不抛）。
+    const offline = await createListing(otherId, { status: 'OFFLINE' })
+    await expect(service.listByListing(ownerId, offline, 10)).rejects.toMatchObject({
+      status: 404,
+      code: 'MATCH_TARGET_NOT_FOUND',
+    })
+    await expect(service.listByListing(otherId, offline, 10)).resolves.toEqual({
+      total: 0,
+      items: [],
+    })
+  })
+})
+
+// tie-break：同分时按 `id DESC`（契约 §2.1）。UUIDv7 是时间有序的，所以"新的在前"是确定的。
+// 没有这条断言的话，把 `orderBy` 写成非确定性实现也不会被发现。
+test('同分时按 id 降序（稳定 tie-break）', async () => {
+  await withOwners(async ({ ownerId, otherId }) => {
+    const wishId = await createWish(ownerId)
+    const first = await createListing(otherId)
+    const second = await createListing(otherId)
+    await createMatch(first, wishId, 90)
+    await createMatch(second, wishId, 90)
+
+    const response = await service.listByWish(ownerId, wishId, 10)
+
+    const expected = [first, second].sort((a, b) => b.localeCompare(a))
+    expect(response.items.map((item) => item.listing.id)).toEqual(expected)
   })
 })

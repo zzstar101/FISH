@@ -1,4 +1,4 @@
-import type { ListingCategory } from '@fish/contracts/listings/schema'
+import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
 import { listingImages, listings } from '@fish/db/schema/listings'
@@ -25,6 +25,9 @@ import type { ListingCardSource } from '../listings/card'
 
 export type MatchTarget = { id: string; ownerId: string }
 
+/** listing 方向多带一个 `status`：`OFFLINE` 对非卖家要按 404 处理（与 #6 同一口径）。 */
+export type MatchListingTarget = MatchTarget & { status: ListingStatus }
+
 export type WishMatchEntry = {
   matchId: string
   score: number
@@ -49,7 +52,7 @@ export type ListingMatchEntry = {
 export interface MatchingStore {
   /** 目标是否存在与归属（404 与 403 的区分要在 service 层做，所以 owner 也要取回来）。 */
   findWish(id: string): Promise<MatchTarget | null>
-  findListing(id: string): Promise<MatchTarget | null>
+  findListing(id: string): Promise<MatchListingTarget | null>
   countWishMatches(wishId: string): Promise<number>
   listWishMatches(wishId: string, limit: number): Promise<WishMatchEntry[]>
   countListingMatches(listingId: string): Promise<number>
@@ -78,7 +81,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
     async findListing(id) {
       const row = (
         await db
-          .select({ id: listings.id, ownerId: listings.sellerId })
+          .select({ id: listings.id, ownerId: listings.sellerId, status: listings.status })
           .from(listings)
           .where(eq(listings.id, id))
           .limit(1)
