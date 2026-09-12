@@ -101,14 +101,14 @@ CREATE INDEX wishes_keyword_trgm ON wishes USING gin (keyword gin_trgm_ops);  --
 ```json
 {
   "items": [
-    { "keyword": "机械键盘", "category": "electronics",
+    { "keyword": "机械键盘", "category": "DIGITAL",
       "wantCount": 7, "medianBudgetCents": 20000 }
   ]
 }
 ```
 
 - 按 `keyword + category` 归一化后 GROUP BY，取 `wantCount` 降序前 50。
-- **k-匿名**：`wantCount < 3` 的分组不返回，防止小组意愿反推个人。
+- **k-匿名**：准入按**去重用户数** `count(DISTINCT user_id) >= 3`（同一用户刷多条不抬高门槛），`wantCount` 仍是该组的需求条数；不足门槛的分组不返回，防止小组意愿反推个人。
 - 只输出聚合数字，**永不输出 user_id 或任何个人字段**（验收标准第 5 条）。
 - 结果缓存 60s（进程内，P0 不引入 Redis）。
 
@@ -220,7 +220,7 @@ export const wishStatusSchema = z.enum(['ACTIVE', 'CLOSED', 'FULFILLED'])
 
 // 协调点⑤：listings contract 落地后迁移为共享枚举引用
 export const wishCategorySchema = z.enum([
-  'electronics', 'books', 'daily', 'clothing', 'sports', 'beauty', 'other',
+  'DIGITAL', 'BOOKS', 'BEAUTY', 'DAILY', 'SPORTS', 'APPAREL', 'TRANSPORT', 'OTHER',
 ])
 
 const trimmedKeyword = z.string().trim().min(2).max(30)
