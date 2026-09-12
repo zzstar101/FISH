@@ -250,6 +250,52 @@ describe('matchListing', () => {
   })
 
   /**
+   * 掉出**价格**收窄（`price > 2 × budget_max`）：这一对的裸分恰好是 70
+   * （分类 100 + 关键词 100 + 价格 0），所以只按 `score >= 阈值` 判断会把它当成有效匹配——
+   * 而新建这种同时对不会建行（候选 SQL 直接排除），于是"新建时不匹配、编辑后却可见"。
+   * 修法是重评时也带上收窄判据（审查发现的 P1）。
+   */
+  test('改价到 2 倍预算以上：既有行被判为无效（裸分 70 不算匹配）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword, { budgetMaxCents: 20000 })
+      await engine.matchListing(listingId)
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
+
+      // 50000 > 2 × 20000 → 掉出价格收窄。
+      await db.update(listings).set({ priceCents: 50000 }).where(eq(listings.id, listingId))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result).toMatchObject({ matched: 0, downgraded: 1 })
+      const rows = await matchRows(listingId, wishId)
+      // 行保留，分数是**真实裸分** 70；读接口靠价格收窄谓词把它挡掉（见 apps/api 的 service.test.ts）。
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(70)
+      expect(rows[0]?.priceScore).toBe(0)
+      // 已经是既有行，不该再发通知。
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+    })
+  })
+
+  // 计数不变式的边界：在收窄集合内、分数不够、又没有既有行 → 评估了但既不 matched 也不 downgraded。
+  test('候选在收窄集合内但分数不够且没有行：matched 与 downgraded 都是 0', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      // 分类与价格都成立（进得了收窄集合），但关键词一个 token 都不命中 → 65 分，且没有既有行。
+      // 注意不能用含空格的 keyword：那是多 token，命中其中一个就会把分数抬过阈值。
+      const wishId = await createWish(buyerId, `无关需求${uniqueKeyword()}`)
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result).toEqual({ evaluated: 1, matched: 0, created: 0, downgraded: 0, skipped: null })
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+    })
+  })
+
+  /**
    * 掉出**收窄集合**：改分类（DIGITAL → BOOKS）后这对不再被候选 SQL 选中。
    * 只加读接口过滤是不够的——必须把"已有行"也拉进本轮评估，否则旧分数永远留着。
    */

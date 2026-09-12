@@ -267,3 +267,38 @@ test('同分时按 id 降序（稳定 tie-break）', async () => {
     expect(response.items.map((item) => item.listing.id)).toEqual(expected)
   })
 })
+
+// 读路径必须表达与引擎**同一条**价格可匹配性规则（§3.1 / 补记 §9.8）。
+// 只按 `score >= 70` 过滤挡不住这种行：分类与关键词满分、价格超 2 倍时裸分恰好 70。
+test('价格超出 2 倍预算的行在两个方向都不可见（裸分 70 也不行）', async () => {
+  await withOwners(async ({ ownerId, otherId }) => {
+    const wishId = await createWish(ownerId, { budgetMaxCents: 7000 })
+    const tooExpensive = await createListing(otherId, { priceCents: 16000 })
+    const affordable = await createListing(otherId, { priceCents: 6000 })
+    await createMatch(tooExpensive, wishId, 70)
+    await createMatch(affordable, wishId, 90)
+
+    const wishSide = await service.listByWish(ownerId, wishId, 10)
+    expect(wishSide.total).toBe(1)
+    expect(wishSide.items.map((item) => item.listing.id)).toEqual([affordable])
+
+    const listingSide = await service.listByListing(otherId, tooExpensive, 10)
+    expect(listingSide).toEqual({ total: 0, items: [] })
+  })
+})
+
+// listing 方向的 tie-break 与 wish 方向同一处实现，但读的是另一条 SQL，需要独立覆盖。
+test('listing 方向同分时也按 id 降序', async () => {
+  await withOwners(async ({ ownerId, otherId }) => {
+    const listingId = await createListing(ownerId)
+    const first = await createWish(otherId)
+    const second = await createWish(otherId)
+    await createMatch(listingId, first, 90)
+    await createMatch(listingId, second, 90)
+
+    const response = await service.listByListing(ownerId, listingId, 10)
+
+    const expected = [first, second].sort((a, b) => b.localeCompare(a))
+    expect(response.items.map((item) => item.wish.id)).toEqual(expected)
+  })
+})

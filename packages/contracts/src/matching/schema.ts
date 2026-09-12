@@ -127,7 +127,9 @@ export const MatchingErrorCodeSchema = z.enum([
   /** 403：`wishId` / `listingId` 不是当前用户的。 */
   'NOT_TARGET_OWNER',
   /**
-   * 404：目标 id 不存在。
+   * 404：目标 id 不存在，**或**是他人不可见的目标（如他人的 `OFFLINE` 商品——与 #6 的
+   * "不泄漏存在性"同一口径，见补记 §9.8）。
+   *
    * 与 #6 的 `LISTING_NOT_FOUND` / `NOT_LISTING_OWNER` 刻意不共用：本契约的两个码**方向无关**，
    * 否则同一件事（不是我的 / 不存在）在 wish 与 listing 两个方向上是两套码，前端要写两份分支。
    */

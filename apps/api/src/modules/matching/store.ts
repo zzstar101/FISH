@@ -17,8 +17,13 @@ import type { ListingCardSource } from '../listings/card'
  *    （补偿 #6 的"编辑/上架后重投 job"，见 #6 评论）；
  * 2. wish 侧排除 `OFFLINE` 商品（离线商品对非卖家 `GET /listings/:id` 返 404，而匹配卡片的自然交互
  *    是点进详情——不过滤就是死链）；`RESERVED` / `SOLD` 保留，卡片自带状态角标；
- * 3. listing 侧只返回 `ACTIVE` 愿望，因为 `WishSummary` 里没有 status 字段，前端无法区分
- *    "还在求购"与"已经不需要了"。
+ * 3. `price <= 2 × budget_max`（`budget_max` 为 NULL = 不限）——与引擎候选集收窄**同一条产品规则**
+ *    （补记 §9.8）。必须有这一条：既有 `matches` 行会被重算重新打分，但"分类与关键词满分、价格超 2 倍"
+ *    的裸分恰好是 70（`0.35 + 0.35 + 0`），只靠 `score >= 阈值` 挡不住它，会出现"同一对，新建时不匹配、
+ *    编辑后却可见"的历史相关行为。
+ * 4. listing 侧只返回 `ACTIVE` 愿望，因为 `WishSummary` 里没有 status 字段，前端无法区分
+ *    "还在求购"与"已经不需要了"。wish 侧刻意**不**过滤自己愿望的状态：那是本人自己的愿望，
+ *    成真/关闭后仍能看到曾经匹配到的商品不算错（商品状态在卡片里可见）。
  *
  * 幂等与分数覆盖发生在写入侧（`apps/worker/src/jobs/matching/engine.ts`），这里只读。
  */
@@ -59,6 +64,15 @@ export interface MatchingStore {
   listListingMatches(listingId: string, limit: number): Promise<ListingMatchEntry[]>
 }
 
+/**
+ * 价格可匹配性：`price <= 2 × budget_max`（`budget_max IS NULL` = 不限预算）。
+ *
+ * 与 `apps/worker/src/jobs/matching/engine.ts` 的候选集收窄是**同一条规则的两个表达**
+ * （一个在 SQL、一个在 SQL+TS）。改这里必须同时改那边——这是本契约里唯一的规则重复点，
+ * 因为 worker 与 api 是两个 app，没法共享 SQL 片段。
+ */
+const priceWithinBudget = sql`(${wishes.budgetMaxCents} IS NULL OR ${listings.priceCents}::bigint <= 2::bigint * ${wishes.budgetMaxCents})`
+
 /** 封面 = `sort_order = 0`（与 #6 的 feed 同一约定）。 */
 const coverObjectKey = sql<string | null>`(
   SELECT ${listingImages.objectKey} FROM ${listingImages}
@@ -94,11 +108,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         .select({ count: sql<number>`count(*)::int` })
         .from(matches)
         .innerJoin(listings, eq(listings.id, matches.listingId))
+        .innerJoin(wishes, eq(wishes.id, matches.wishId))
         .where(
           and(
             eq(matches.wishId, wishId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             ne(listings.status, 'OFFLINE'),
+            priceWithinBudget,
           ),
         )
       return rows[0]?.count ?? 0
@@ -126,11 +142,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         })
         .from(matches)
         .innerJoin(listings, eq(listings.id, matches.listingId))
+        .innerJoin(wishes, eq(wishes.id, matches.wishId))
         .where(
           and(
             eq(matches.wishId, wishId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             ne(listings.status, 'OFFLINE'),
+            priceWithinBudget,
           ),
         )
         // tie-break 用 id：同分时取 Top N 不能抖动（契约 §2.1）。
@@ -145,11 +163,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         .select({ count: sql<number>`count(*)::int` })
         .from(matches)
         .innerJoin(wishes, eq(wishes.id, matches.wishId))
+        .innerJoin(listings, eq(listings.id, matches.listingId))
         .where(
           and(
             eq(matches.listingId, listingId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
+            priceWithinBudget,
           ),
         )
       return rows[0]?.count ?? 0
@@ -171,11 +191,13 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         })
         .from(matches)
         .innerJoin(wishes, eq(wishes.id, matches.wishId))
+        .innerJoin(listings, eq(listings.id, matches.listingId))
         .where(
           and(
             eq(matches.listingId, listingId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
+            priceWithinBudget,
           ),
         )
         .orderBy(desc(matches.score), desc(matches.id))

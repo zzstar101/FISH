@@ -1,4 +1,4 @@
-import type { ListingCategory } from '@fish/contracts/listings/schema'
+import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
@@ -29,13 +29,21 @@ export type MatchSkipReason = 'target-missing' | 'target-not-active'
 export type MatchRunResult = {
   /** 本轮**重新评估**过的对数：收窄候选 ∪ 已有匹配行，去重后。 */
   evaluated: number
-  /** 达到阈值并被写入的对数（新建 + 覆盖）。 */
+  /**
+   * 真正有效并被写入的对数：裸分达到阈值**且**仍满足收窄规则（§3.1）。
+   *
+   * 不变式：`matched + downgraded <= evaluated`。差额是"本轮评估了但没有写入"的对——
+   * 低于阈值且没有既有行（`skipped`），或者既低于阈值又有既有行（记在 `downgraded` 之外的
+   * 那部分只可能是"超 2 倍预算但裸分 70"这种方式：它不 matched，但会覆盖分数）。
+   */
   matched: number
   /** 其中**首次**创建的条数（= 本轮建了几条通知；契约 §3.4）。 */
   created: number
   /**
-   * 既有行被覆盖成**低于阈值**的分数（商品/愿望被编辑后不再匹配）。
-   * 这些行不删（契约 §5.3），由读接口的 `score >= MATCH_SCORE_THRESHOLD` 过滤隐藏（补记 §9.7）。
+   * 既有行被重新打分成"无效匹配"的条数（商品/愿望被编辑后不再成立）：
+   * 要么分数低于阈值，要么不再满足收窄规则（例如价格超出 2 倍预算，裸分恰好 70）。
+   * 这些行不删（契约 §5.3），由读接口的可匹配性过滤隐藏（补记 §9.7 / §9.8）。
+   * 注意它是"本轮重新打分的条数"，不是"状态发生转变的条数"——已经是 65 分的行再算一次仍会 +1。
    */
   downgraded: number
   skipped: MatchSkipReason | null
@@ -48,11 +56,12 @@ export interface MatchEngine {
   matchWish(wishId: string): Promise<MatchRunResult>
 }
 
-/** 打分只需要这几个字段，所以候选行与"已有匹配行"都投影成同一形状。 */
+/** 打分与收窄只需要这几个字段，所以候选行与"已有匹配行"都投影成同一形状。 */
 type WishTarget = {
   id: string
   userId: string
   keyword: string
+  status: typeof wishes.$inferSelect.status
   category: ListingCategory | null
   budgetMaxCents: number | null
 }
@@ -63,6 +72,23 @@ type ListingTarget = {
   description: string
   priceCents: number
   category: ListingCategory
+  status: ListingStatus
+}
+
+/**
+ * 收窄规则（§3.1）的 **TS 表达**，与两个候选 SQL 一一对应。
+ *
+ * 只在"已有匹配行被拉回重评"时用到：候选行天然满足这些条件。为什么必须重算一遍——
+ * 只按裸分判断是不够的：`分类 100 + 关键词 100 + 价格超 2 倍` 的裸分恰好 **70**，
+ * 会被 `score >= 阈值` 判成有效，于是同一对"新建时不匹配、编辑后却可见"（审查发现的 P1）。
+ */
+function withinNarrowing(wish: WishTarget, listing: ListingTarget): boolean {
+  return (
+    wish.status === 'ACTIVE' &&
+    listing.status === 'ACTIVE' &&
+    (wish.category === null || wish.category === listing.category) &&
+    (wish.budgetMaxCents === null || listing.priceCents <= 2 * wish.budgetMaxCents)
+  )
 }
 
 const ok = (
@@ -96,11 +122,11 @@ export function createMatchEngine(db: Db): MatchEngine {
   /**
    * 写入一对匹配。
    *
-   * - `score >= 阈值`：`ON CONFLICT DO NOTHING RETURNING id` —— 真的返回了行（首次）才建通知（#2 的规则）；
-   *   否则 `UPDATE` 覆盖分数（`matches.ts:9`："#8 重算时 upsert 覆盖分数"）。
-   * - `score < 阈值` **且已有行**：只把分数覆盖为真实值，不建通知。**必须覆盖**——否则整行的旧分数
-   *   仍是 ≥ 阈值，读接口的阈值过滤就再也看不到它（契约 §5.3 的"不删行"靠这条覆盖 + 读接口过滤成立）。
-   * - `score < 阈值` 且**没有行**：什么都不做（不为一个不成立的匹配新建行）。
+   * - `qualifies`（裸分达阈值 **且** 满足收窄规则）：`ON CONFLICT DO NOTHING RETURNING id` —— 真的返回了行
+   *   （首次）才建通知（#2 的规则）；否则 `UPDATE` 覆盖分数（`matches.ts:9`："#8 重算时 upsert 覆盖分数"）。
+   * - **不** `qualifies` 且已有行：只把分数覆盖成真实裸分，不建通知。**必须覆盖**——否则整行的旧分数
+   *   仍是 ≥ 阈值，读接口就再也挡不住它（契约 §5.3 的"不删行"靠这条覆盖 + 读接口过滤成立）。
+   * - **不** `qualifies` 且没有行：什么都不做（不为一个不成立的匹配新建行，也不走一次必然冲突的 INSERT）。
    *
    * 不用 `DO UPDATE ... RETURNING` + `xmax = 0` 那条捷径：它依赖 PG 的实现细节，
    * 而且会让"重算也建通知"变成一个很容易踩中的坑。
@@ -114,12 +140,23 @@ export function createMatchEngine(db: Db): MatchEngine {
       wishOwnerId: string
       /** 该对在**本轮评估之前**是否已有 `matches` 行。 */
       hadRow: boolean
+      /** 裸分达阈值 **且** 满足收窄规则（§3.1）。 */
+      qualifies: boolean
       breakdown: ReturnType<typeof scoreMatch>
     },
   ): Promise<'created' | 'updated' | 'skipped'> {
     const { score, categoryScore, keywordScore, priceScore } = input.breakdown
-    const qualifies = score >= MATCH_SCORE_THRESHOLD
-    if (!qualifies && !input.hadRow) return 'skipped'
+
+    // 不成立又没行可写：直接跳过。注意**不要**走一次必然冲突的 INSERT——那既浪费一条语句，
+    // 又会让 `created` 与"本轮真正建了几条通知"不再等价。
+    if (!input.qualifies) {
+      if (!input.hadRow) return 'skipped'
+      await tx
+        .update(matches)
+        .set({ score, categoryScore, keywordScore, priceScore })
+        .where(and(eq(matches.listingId, input.listingId), eq(matches.wishId, input.wishId)))
+      return 'updated'
+    }
 
     const inserted = await tx
       .insert(matches)
@@ -136,18 +173,16 @@ export function createMatchEngine(db: Db): MatchEngine {
 
     const row = inserted[0]
     if (row) {
-      // 只有真的达到阈值的匹配才通知——不为一个不成立的匹配发通知。
-      if (qualifies) {
-        await tx.insert(notifications).values({
-          userId: input.wishOwnerId,
-          type: 'MATCH',
-          payload: jsonParam({
-            matchId: row.id,
-            listingId: input.listingId,
-            wishId: input.wishId,
-          }),
-        })
-      }
+      // 只有真正成立的匹配（qualifies）才走到这里，所以"插入成功"与"建了通知"是等价的。
+      await tx.insert(notifications).values({
+        userId: input.wishOwnerId,
+        type: 'MATCH',
+        payload: jsonParam({
+          matchId: row.id,
+          listingId: input.listingId,
+          wishId: input.wishId,
+        }),
+      })
       return 'created'
     }
 
@@ -161,7 +196,7 @@ export function createMatchEngine(db: Db): MatchEngine {
   /** 把「本轮评估集合」跑完：打分 → 写入 → 计数。 */
   async function applyTargets(
     targetListing: ListingTarget,
-    targets: Map<string, { wish: WishTarget; hadRow: boolean }>,
+    targets: Map<string, { wish: WishTarget; hadRow: boolean; withinNarrowing: boolean }>,
   ): Promise<MatchRunResult> {
     const listingFacts: MatchListingFacts = {
       title: targetListing.title,
@@ -175,22 +210,24 @@ export function createMatchEngine(db: Db): MatchEngine {
     let downgraded = 0
 
     await db.transaction(async (tx) => {
-      for (const { wish, hadRow } of targets.values()) {
+      for (const { wish, hadRow, withinNarrowing: narrowed } of targets.values()) {
         const breakdown = scoreMatch(listingFacts, {
           keyword: wish.keyword,
           category: wish.category,
           budgetMaxCents: wish.budgetMaxCents,
         })
+        const qualifies = narrowed && breakdown.score >= MATCH_SCORE_THRESHOLD
         const outcome = await persist(tx, {
           listingId: targetListing.id,
           wishId: wish.id,
           wishOwnerId: wish.userId,
           hadRow,
+          qualifies,
           breakdown,
         })
         if (outcome === 'skipped') continue
 
-        if (breakdown.score >= MATCH_SCORE_THRESHOLD) matched += 1
+        if (qualifies) matched += 1
         else downgraded += 1
         if (outcome === 'created') created += 1
       }
@@ -226,6 +263,7 @@ export function createMatchEngine(db: Db): MatchEngine {
             id: wishes.id,
             userId: wishes.userId,
             keyword: wishes.keyword,
+            status: wishes.status,
             category: wishes.category,
             budgetMaxCents: wishes.budgetMaxCents,
           })
@@ -234,26 +272,36 @@ export function createMatchEngine(db: Db): MatchEngine {
           .where(eq(matches.listingId, listing.id)),
       ])
 
-      const existingIds = new Set(existingRows.map((row) => row.id))
-      const targets = new Map<string, { wish: WishTarget; hadRow: boolean }>()
-      for (const wish of candidates) {
-        targets.set(wish.id, { wish, hadRow: existingIds.has(wish.id) })
-      }
-      for (const row of existingRows) {
-        // 已经掉出收窄集合（改分类、超 2 倍预算、愿望已关闭…）但行还在：也要按真实分数重新评估。
-        if (!targets.has(row.id)) targets.set(row.id, { wish: row, hadRow: true })
+      const listingTarget: ListingTarget = {
+        id: listing.id,
+        title: listing.title,
+        description: listing.description,
+        priceCents: listing.priceCents,
+        category: listing.category,
+        status: listing.status,
       }
 
-      return applyTargets(
-        {
-          id: listing.id,
-          title: listing.title,
-          description: listing.description,
-          priceCents: listing.priceCents,
-          category: listing.category,
-        },
-        targets,
-      )
+      const existingIds = new Set(existingRows.map((row) => row.id))
+      const targets = new Map<
+        string,
+        { wish: WishTarget; hadRow: boolean; withinNarrowing: boolean }
+      >()
+      for (const wish of candidates) {
+        targets.set(wish.id, { wish, hadRow: existingIds.has(wish.id), withinNarrowing: true })
+      }
+      for (const row of existingRows) {
+        // 已经掉出收窄集合（改分类、超 2 倍预算、愿望已关闭…）但行还在：也要按真实分数重新评估，
+        // 并带上收窄判据（否则裸分恰好 70 的那种会被误判成有效匹配）。
+        if (!targets.has(row.id)) {
+          targets.set(row.id, {
+            wish: row,
+            hadRow: true,
+            withinNarrowing: withinNarrowing(row, listingTarget),
+          })
+        }
+      }
+
+      return applyTargets(listingTarget, targets)
     },
 
     async matchWish(wishId) {
@@ -289,20 +337,43 @@ export function createMatchEngine(db: Db): MatchEngine {
             description: listings.description,
             priceCents: listings.priceCents,
             category: listings.category,
+            status: listings.status,
           })
           .from(matches)
           .innerJoin(listings, eq(listings.id, matches.listingId))
           .where(eq(matches.wishId, wish.id)),
       ])
 
+      const wishTarget: WishTarget = {
+        id: wish.id,
+        userId: wish.userId,
+        keyword: wish.keyword,
+        status: wish.status,
+        category: wish.category,
+        budgetMaxCents: wish.budgetMaxCents,
+      }
+
       const existingIds = new Set(existingRows.map((row) => row.id))
-      const targets = new Map<string, { listing: ListingTarget; hadRow: boolean }>()
+      const targets = new Map<
+        string,
+        { listing: ListingTarget; hadRow: boolean; withinNarrowing: boolean }
+      >()
       for (const listing of candidates) {
-        targets.set(listing.id, { listing, hadRow: existingIds.has(listing.id) })
+        targets.set(listing.id, {
+          listing,
+          hadRow: existingIds.has(listing.id),
+          withinNarrowing: true,
+        })
       }
       for (const row of existingRows) {
-        // 已下架 / 已售 / 超预算的商品不再参与匹配，但已有行仍要按真实分数覆盖。
-        if (!targets.has(row.id)) targets.set(row.id, { listing: row, hadRow: true })
+        // 已下架 / 已售 / 超预算的商品不再参与匹配，但已有行仍要按真实分数覆盖并带收窄判据。
+        if (!targets.has(row.id)) {
+          targets.set(row.id, {
+            listing: row,
+            hadRow: true,
+            withinNarrowing: withinNarrowing(wishTarget, row),
+          })
+        }
       }
 
       const wishFacts = {
@@ -316,7 +387,7 @@ export function createMatchEngine(db: Db): MatchEngine {
       let downgraded = 0
 
       await db.transaction(async (tx) => {
-        for (const { listing, hadRow } of targets.values()) {
+        for (const { listing, hadRow, withinNarrowing: narrowed } of targets.values()) {
           const breakdown = scoreMatch(
             {
               title: listing.title,
@@ -326,16 +397,18 @@ export function createMatchEngine(db: Db): MatchEngine {
             },
             wishFacts,
           )
+          const qualifies = narrowed && breakdown.score >= MATCH_SCORE_THRESHOLD
           const outcome = await persist(tx, {
             listingId: listing.id,
             wishId: wish.id,
             wishOwnerId: wish.userId,
             hadRow,
+            qualifies,
             breakdown,
           })
           if (outcome === 'skipped') continue
 
-          if (breakdown.score >= MATCH_SCORE_THRESHOLD) matched += 1
+          if (qualifies) matched += 1
           else downgraded += 1
           if (outcome === 'created') created += 1
         }
