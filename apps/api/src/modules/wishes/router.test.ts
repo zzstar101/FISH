@@ -6,10 +6,10 @@ import type { WishService } from './service'
 import type { WishRow, WishStore } from './store'
 
 const dto: WishDto = {
-  id: 'wish-1',
+  id: '00000000-0000-0000-0000-000000000001',
   userId: 'user-1',
   keyword: '机械键盘',
-  category: 'electronics',
+  category: 'DIGITAL',
   budgetMinCents: 10000,
   budgetMaxCents: 20000,
   description: null,
@@ -75,7 +75,7 @@ describe('wishes router', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         keyword: '机械键盘',
-        category: 'electronics',
+        category: 'DIGITAL',
         budgetMinCents: 10000,
         budgetMaxCents: 20000,
       }),
@@ -87,8 +87,23 @@ describe('wishes router', () => {
     expect(await listResponse.json()).toMatchObject({ page: 2, pageSize: 5, total: 1 })
 
     expect((await request('/api/wishes/pool')).status).toBe(200)
-    expect((await request('/api/wishes/wish-1/close', { method: 'POST' })).status).toBe(200)
-    expect((await request('/api/wishes/wish-1/fulfill', { method: 'POST' })).status).toBe(200)
+    expect(
+      (await request('/api/wishes/00000000-0000-0000-0000-000000000001/close', { method: 'POST' }))
+        .status,
+    ).toBe(200)
+    expect(
+      (
+        await request('/api/wishes/00000000-0000-0000-0000-000000000001/fulfill', {
+          method: 'POST',
+        })
+      ).status,
+    ).toBe(200)
+  })
+
+  test('returns 404 instead of 500 for a malformed wish id', async () => {
+    const response = await request('/api/wishes/not-a-uuid')
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } })
   })
 
   test('defaults to the no-op match queue when none is provided', async () => {
@@ -107,7 +122,7 @@ describe('wishes router', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         keyword: '机械键盘',
-        category: 'electronics',
+        category: 'DIGITAL',
         budgetMinCents: 10000,
         budgetMaxCents: 20000,
       }),

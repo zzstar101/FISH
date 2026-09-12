@@ -168,7 +168,9 @@ export function createWishService({
       const patch = wishUpdateInputSchema.parse(input)
       const mergedDescription =
         patch.description === undefined ? wish.description : patch.description
-      const merged = wishCreateInputSchema.parse({
+      // 校验合并后的预算区间等字段仍合法（结果不落库）；实际只写本次提供的字段，
+      // 两个并发 PATCH 各改一个字段时，避免后写方用旧快照覆盖先写方（lost update）。
+      wishCreateInputSchema.parse({
         keyword: patch.keyword ?? wish.keyword,
         category: patch.category ?? wish.category,
         budgetMinCents: patch.budgetMinCents ?? wish.budget_min_cents,
@@ -176,11 +178,7 @@ export function createWishService({
         description: mergedDescription ?? undefined,
         acceptSimilar: patch.acceptSimilar ?? wish.accept_similar,
       })
-      const updated = await store.update(
-        id,
-        toEditableFields({ ...merged, description: mergedDescription }),
-        new Date(),
-      )
+      const updated = await store.update(id, toEditableFields(patch), new Date())
       if (updated) {
         invalidatePoolCache()
         return toWishDto(updated)
@@ -216,7 +214,7 @@ export function toWishDto(row: WishRow): WishDto {
     description: row.description,
     acceptSimilar: row.accept_similar,
     status: rowStatus(row),
-    matchCount: 0,
+    matchCount: row.match_count ?? 0,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
   }

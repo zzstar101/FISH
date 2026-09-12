@@ -5,15 +5,17 @@ import { z } from 'zod'
 export const wishStatusSchema = z.enum(['ACTIVE', 'CLOSED', 'FULFILLED'])
 export type WishStatus = z.infer<typeof wishStatusSchema>
 
-// 协调点⑤：listings contract 落地后迁移为共享分类枚举引用，避免两处维护。
+// 协调点⑤：与 packages/db 的 listing_category 枚举（listings 单一来源）逐值对齐；
+// listings contract 落地后迁移为共享枚举引用，避免两处维护。
 export const wishCategorySchema = z.enum([
-  'electronics',
-  'books',
-  'daily',
-  'clothing',
-  'sports',
-  'beauty',
-  'other',
+  'DIGITAL',
+  'BOOKS',
+  'BEAUTY',
+  'DAILY',
+  'SPORTS',
+  'APPAREL',
+  'TRANSPORT',
+  'OTHER',
 ])
 export type WishCategory = z.infer<typeof wishCategorySchema>
 
@@ -73,7 +75,7 @@ export const wishDtoSchema = z.object({
   description: z.string().nullable(),
   acceptSimilar: z.boolean(),
   status: wishStatusSchema,
-  /** P0 先固定 0，等匹配结果表（Dev A）就绪后接入。 */
+  /** 匹配数，读取 matches 表实时计数（#8 产出匹配结果）。 */
   matchCount: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

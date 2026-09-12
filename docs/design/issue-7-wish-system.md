@@ -1,7 +1,7 @@
 # Issue #7 [P0][WISH] 许愿系统与需求池 — 设计方案
 
 > Owner: Coast-87 (Dev B / Wish Owner)
-> 状态: Contracts + API 模块已实现；待 Dev A 完成 DB migration、认证接线与根路由集成
+> 状态: Contracts + API 已合入 main（PR #19）；DB schema/#18 auth 已就绪（#17/#18），本分支完成集成：真实 MATCH_WISH 投递、matchCount 读 matches、app.ts 挂载接线与 app 级集成测试
 > 原则: 严格遵守 EPIC #15 的文件所有权规则，所有跨 Owner 依赖显式声明为「协调点」，绝不直接修改他人目录。
 
 ---
@@ -9,16 +9,12 @@
 ## 当前实现进度（2026-09-12）
 
 已落地：
-- `packages/contracts/src/wishes/schema.ts`、`routes.ts` 及 Zod 边界测试。
-- `apps/api/src/modules/wishes/store.ts`：基于 Bun SQL 的持久化适配层。
+- `packages/contracts/src/wishes/schema.ts`、`routes.ts` 及 Zod 边界测试。分类枚举已与 `packages/db` 的 `listing_category`（DIGITAL/BOOKS/…）逐值对齐。
+- `apps/api/src/modules/wishes/store.ts`：基于 Bun SQL 的持久化适配层；findById/listByUser/update/状态迁移均带 matches 计数子查询返回 `match_count`。
 - `apps/api/src/modules/wishes/service.ts`：创建、列表、详情、编辑、关闭、fulfilled、k-匿名需求池、60 秒进程内缓存。
-- `apps/api/src/modules/wishes/router.ts`：相对路由，可由 Dev A 通过 `app.route('/api/wishes', createWishesRouterFromDb(db, { getUserId }))` 接入；身份只从调用方注入的 `getUserId(context)` resolver 读取（拿不到即 401，不读请求头），`matchQueue` 省略时默认 no-op。
-- `apps/api/src/modules/wishes/*test.ts`：服务与路由测试，匹配队列使用可注入 no-op 实现。
-
-仍需跨 Owner 集成：
-- Dev A 落地 `wishes` schema/migration，并接入真实认证身份。
-- Dev A 在根 `app.ts` 挂载 router，并替换真实匹配 job 投递实现。
-- 前端按本目录 Contract 接入愿望页面。
+- `apps/api/src/modules/wishes/match-queue.ts`：新增 `createDbWishMatchQueue(db)`，向 jobs 表插入 `MATCH_WISH`/PENDING job（#2 的 jobs schema 已预留该类型）；router 默认仍为 no-op，接线时注入真实实现。
+- `apps/api/src/modules/wishes/router.ts`：相对路由；已由 app.ts 以 `app.use('/api/wishes/*', auth.requireAuth)` + `createWishesRouterFromDb(db, { getUserId })` 挂载（见 `apps/api/src/app.ts`）。
+- 集成测试：`store.test.ts` 与 `app.wishes.test.ts` 均以 per-pid scratch 库跑真实 migration（Windows 下必须用 `fileURLToPath`，勿用 `URL.pathname`）。
 ## 1. 目标与范围
 
 把"求购"做成持续存在的**愿望订阅**（ACTIVE 状态长期存在），并基于全部 ACTIVE 愿望形成匿名聚合的**需求池**。

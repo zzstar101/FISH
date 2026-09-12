@@ -90,7 +90,7 @@ class MemoryWishStore implements WishStore {
 
 const createInput: WishCreateInput = {
   keyword: '机械键盘',
-  category: 'electronics',
+  category: 'DIGITAL',
   budgetMinCents: 10000,
   budgetMaxCents: 20000,
   acceptSimilar: true,

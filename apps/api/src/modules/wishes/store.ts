@@ -15,6 +15,8 @@ export interface WishRow {
   status: string
   created_at: Date | string
   updated_at: Date | string
+  /** 匹配数（来自 matches 表）。仅 findById / listByUser 填充，缺省视为 0。 */
+  match_count?: number
 }
 
 export interface PoolRow {
@@ -80,6 +82,7 @@ function toWishRow(row: Record<string, unknown>): WishRow {
     status: String(row.status),
     created_at: row.created_at as Date | string,
     updated_at: row.updated_at as Date | string,
+    match_count: row.match_count === undefined ? undefined : Number(row.match_count),
   }
 }
 
@@ -129,19 +132,27 @@ export function createSqlWishStore(db: Db): WishStore {
     },
 
     async findById(id) {
-      return firstWishRow(await db.execute(sql`SELECT * FROM wishes WHERE id = ${id} LIMIT 1`))
+      return firstWishRow(
+        await db.execute(sql`
+        SELECT w.*, (SELECT count(*)::int FROM matches m WHERE m.wish_id = w.id) AS match_count
+        FROM wishes w WHERE w.id = ${id} LIMIT 1
+      `),
+      )
     },
 
     async listByUser(userId, { status, limit, offset }) {
       const where = status
-        ? sql`WHERE user_id = ${userId} AND status = ${status}`
-        : sql`WHERE user_id = ${userId}`
+        ? sql`WHERE w.user_id = ${userId} AND w.status = ${status}`
+        : sql`WHERE w.user_id = ${userId}`
       const rows = await db.execute(sql`
-        SELECT * FROM wishes ${where}
-        ORDER BY created_at DESC, id DESC
+        SELECT w.*, (SELECT count(*)::int FROM matches m WHERE m.wish_id = w.id) AS match_count
+        FROM wishes w ${where}
+        ORDER BY w.created_at DESC, w.id DESC
         LIMIT ${limit} OFFSET ${offset}
       `)
-      const totalResult = await db.execute(sql`SELECT count(*)::int AS total FROM wishes ${where}`)
+      const totalResult = await db.execute(
+        sql`SELECT count(*)::int AS total FROM wishes w ${where}`,
+      )
       return {
         rows: toRows(rows).map(toWishRow),
         total: Number(toRows(totalResult)[0]?.total ?? 0),
@@ -171,7 +182,7 @@ export function createSqlWishStore(db: Db): WishStore {
           sql`, `,
         )}
         WHERE id = ${id} AND status = 'ACTIVE'
-        RETURNING *
+        RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
       `),
       )
     },
@@ -181,7 +192,7 @@ export function createSqlWishStore(db: Db): WishStore {
         await db.execute(sql`
         UPDATE wishes SET status = ${status}, updated_at = ${updatedAt}
         WHERE id = ${id} AND status = 'ACTIVE'
-        RETURNING *
+        RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
       `),
       )
     },
