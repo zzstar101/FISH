@@ -1,0 +1,1 @@
+ALTER TABLE "listings" ADD CONSTRAINT "listings_free_price_cents_zero" CHECK (NOT "listings"."free" OR "listings"."price_cents" = 0);

@@ -493,6 +493,32 @@ describe('updateListing', () => {
     expect(error.code).toBe('LISTING_NOT_EDITABLE')
   })
 
+  // 并发极端情况：两个 PATCH 各自通过"合并后状态"校验，落库时撞上 DB 的
+  // listings_free_price_cents_zero。契约把这种最终状态定为 422，而不是 500。
+  test('maps a DB check violation to 422 instead of 500', async () => {
+    const pgError = Object.assign(new Error('Failed query: update "listings"'), {
+      errno: '23514',
+      code: 'ERR_POSTGRES_SERVER_ERROR',
+    })
+    const wrapped = new Error('DrizzleQueryError', { cause: pgError })
+
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        updateListing: async () => {
+          throw wrapped
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { priceCents: 5000 }),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('VALIDATION_FAILED')
+    expect(error.details?.[0]?.field).toBe('priceCents')
+  })
+
   test('returns 404 when the listing disappears between the check and the update', async () => {
     // 先读到可编辑的行，UPDATE 没命中后再读已经查不到该行（并发删除）
     let reads = 0

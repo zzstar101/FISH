@@ -65,6 +65,22 @@ export interface ListingService {
   transition(userId: string, id: string, to: 'OFFLINE' | 'ACTIVE'): Promise<ListingDetail>
 }
 
+/**
+ * PG CHECK 约束冲突（SQLSTATE 23514）。
+ *
+ * 与 `apps/api/src/modules/auth/service.ts` 的 `isUniqueViolation` 同一套探测方式：
+ * Bun 的 `PostgresError` 把 SQLSTATE 放在 `errno` 上（`code` 恒为 `'ERR_POSTGRES_SERVER_ERROR'`），
+ * 而 Drizzle 又会把它包一层（`{ query, params, cause }`），所以要顺着 `cause` 链找。
+ */
+function isCheckViolation(error: unknown): boolean {
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
+    if ('errno' in current && current.errno === '23514') return true
+    current = current.cause
+  }
+  return false
+}
+
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
@@ -303,12 +319,25 @@ export function createListingService(deps: {
       // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
       const { objectKeys, ...fields } = input
 
-      const updated = await store.updateListing({
-        id,
-        sellerId: userId,
-        fields,
-        ...(objectKeys ? { objectKeys } : {}),
-      })
+      let updated: ListingRow | null
+      try {
+        updated = await store.updateListing({
+          id,
+          sellerId: userId,
+          fields,
+          ...(objectKeys ? { objectKeys } : {}),
+        })
+      } catch (error) {
+        // 合并校验读的是"写入前"的状态，同一卖家的两个并发 PATCH 可能各自通过校验，
+        // 最终撞上 DB 的 listings_free_price_cents_zero。契约把这种最终状态定为
+        // 422 VALIDATION_FAILED（§7.1），不是 500。
+        if (isCheckViolation(error)) {
+          throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
+            { field: 'priceCents', message: '0 元送时价格必须为 0' },
+          ])
+        }
+        throw error
+      }
 
       // UPDATE 带 status 谓词，所以"没改到行"有两种可能：并发下商品已被删/易主（404），
       // 或在这两步之间被 #11 变成了 RESERVED / SOLD（409）。再读一次状态以区分。
