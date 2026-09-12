@@ -9,14 +9,19 @@
  */
 export const CHAT_ROUTES = {
   /**
-   * POST 创建/复用会话：同一 (listingId, 买家) 复用既有会话——
-   * 新建 201，复用 200（复用即幂等，不另设返回字段）。
-   * GET 拉当前用户的会话列表（买卖两种角色合并，按 lastMessageAt 降序）。
+   * POST 创建/复用会话：同一 (listingId, 买家) 复用既有会话——新建 201、复用 200
+   * （复用即幂等，不另设返回字段），响应体均为 ConversationDto。
+   * 对任意已存在的商品都可建会话（不限制 ACTIVE）：商品 OFFLINE/SOLD 后买卖双方
+   * 仍可能需要沟通；「我想要」入口只在 ACTIVE 详情页出现，属于前端的事。
+   * GET 拉当前用户的会话列表（买卖两种角色合并，按 lastMessageAt 降序，游标分页）。
    */
   base: '/conversations',
-  /** GET 历史消息（游标分页，升序）；POST 发送 TEXT 消息（201）。 */
+  /** GET 历史消息（游标分页，升序）；POST 发送 TEXT 消息（201，响应体 MessageDto）。 */
   messages: (id: string) => `/conversations/${id}/messages`,
-  /** 标记会话已读：把查看者的 last_read_at 推进到当前时刻，返回未读归零后的会话 DTO。 */
+  /**
+   * 标记会话已读：把查看者的 last_read_at 推进到当前时刻，
+   * 返回未读归零后的 ConversationDto（200）。
+   */
   read: (id: string) => `/conversations/${id}/read`,
 } as const
 

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   ChatErrorCodeSchema,
   conversationCreateInputSchema,
+  conversationDtoSchema,
   conversationListQuerySchema,
   messageDtoSchema,
   messageListQuerySchema,
@@ -45,16 +46,18 @@ describe('messageSendInputSchema', () => {
 })
 
 describe('conversationListQuerySchema', () => {
-  test('applies page/pageSize defaults and coerces query strings', () => {
-    expect(conversationListQuerySchema.parse({})).toEqual({ page: 1, pageSize: 20 })
-    expect(conversationListQuerySchema.parse({ page: '2', pageSize: '5' })).toEqual({
-      page: 2,
-      pageSize: 5,
-    })
+  test('applies limit default and coerces query strings', () => {
+    expect(conversationListQuerySchema.parse({})).toEqual({ limit: 20 })
+    expect(conversationListQuerySchema.parse({ limit: '5' })).toEqual({ limit: 5 })
   })
 
-  test('rejects pageSize over 50', () => {
-    expect(conversationListQuerySchema.safeParse({ pageSize: 51 }).success).toBe(false)
+  test('rejects limit over 50 and a blank cursor', () => {
+    expect(conversationListQuerySchema.safeParse({ limit: 51 }).success).toBe(false)
+    expect(conversationListQuerySchema.safeParse({ cursor: '' }).success).toBe(false)
+  })
+
+  test('rejects offset-style params (strict)', () => {
+    expect(conversationListQuerySchema.safeParse({ page: 2 }).success).toBe(false)
   })
 })
 
@@ -86,15 +89,76 @@ describe('messageDtoSchema', () => {
     const dto = {
       ...base,
       senderId: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-      sender: { id: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f', nickname: 'A' },
+      sender: { id: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f', nickname: 'A', avatarUrl: null },
       type: 'TEXT',
     }
     expect(messageDtoSchema.parse(dto).type).toBe('TEXT')
   })
 
+  test('rejects a TEXT message without a sender (DB CHECK 同源)', () => {
+    const dto = { ...base, senderId: null, sender: null, type: 'TEXT' }
+    expect(messageDtoSchema.safeParse(dto).success).toBe(false)
+  })
+
   test('parses a SYSTEM message with null sender', () => {
     const dto = { ...base, senderId: null, sender: null, type: 'SYSTEM' }
     expect(messageDtoSchema.parse(dto).senderId).toBeNull()
+  })
+})
+
+describe('conversationDtoSchema', () => {
+  test('parses a full dto with nullable avatar/cover and iso dates', () => {
+    const dto = {
+      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      listingId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      role: 'seller',
+      listing: {
+        id: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        title: 'K380 键盘',
+        priceCents: 16000,
+        status: 'ACTIVE',
+        coverUrl: null,
+      },
+      counterpart: {
+        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        nickname: '买家小明',
+        avatarUrl: 'https://cdn.example.com/a.png',
+      },
+      unreadCount: 2,
+      lastMessageAt: '2026-09-12T10:00:00.000Z',
+      createdAt: '2026-09-12T09:00:00.000Z',
+    }
+    const parsed = conversationDtoSchema.parse(dto)
+    expect(parsed.role).toBe('seller')
+    expect(parsed.listing.status).toBe('ACTIVE')
+    expect(parsed.counterpart.avatarUrl).toBe('https://cdn.example.com/a.png')
+  })
+
+  test('rejects an unknown role or listing status', () => {
+    const base = {
+      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      listingId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      listing: {
+        id: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        title: 'K380 键盘',
+        priceCents: 16000,
+        status: 'ACTIVE',
+        coverUrl: null,
+      },
+      counterpart: {
+        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        nickname: '买家小明',
+        avatarUrl: null,
+      },
+      unreadCount: 0,
+      lastMessageAt: '2026-09-12T10:00:00.000Z',
+      createdAt: '2026-09-12T09:00:00.000Z',
+    }
+    expect(conversationDtoSchema.safeParse({ ...base, role: 'admin' }).success).toBe(false)
+    expect(
+      conversationDtoSchema.safeParse({ ...base, listing: { ...base.listing, status: 'GONE' } })
+        .success,
+    ).toBe(false)
   })
 })
 

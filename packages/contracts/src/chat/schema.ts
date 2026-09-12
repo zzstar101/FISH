@@ -20,7 +20,12 @@ export const conversationListingSchema = z.object({
 })
 export type ConversationListing = z.infer<typeof conversationListingSchema>
 
-export const conversationUserSchema = z.object({ id: z.string(), nickname: z.string() })
+export const conversationUserSchema = z.object({
+  id: z.string(),
+  nickname: z.string(),
+  /** users.avatar_url 可空（DB 同款）；聊天列表/详情的头像位需要它，冻结前与前端确认。 */
+  avatarUrl: z.url().nullable(),
+})
 export type ConversationUser = z.infer<typeof conversationUserSchema>
 
 export const conversationDtoSchema = z.object({
@@ -38,16 +43,23 @@ export const conversationDtoSchema = z.object({
 })
 export type ConversationDto = z.infer<typeof conversationDtoSchema>
 
-export const messageDtoSchema = z.object({
-  id: z.string(),
-  conversationId: z.string(),
-  /** SYSTEM 消息可为 null（DB CHECK 只约束 TEXT 必有 sender）。 */
-  senderId: z.string().nullable(),
-  sender: conversationUserSchema.nullable(),
-  type: messageTypeSchema,
-  content: z.string(),
-  createdAt: z.iso.datetime(),
-})
+export const messageDtoSchema = z
+  .object({
+    id: z.string(),
+    conversationId: z.string(),
+    /** SYSTEM 消息可为 null；TEXT 必有（DB CHECK messages_text_requires_sender 同源收紧）。 */
+    senderId: z.string().nullable(),
+    sender: conversationUserSchema.nullable(),
+    type: messageTypeSchema,
+    content: z.string(),
+    createdAt: z.iso.datetime(),
+  })
+  // DB 的 CHECK 只保证「TEXT ⟹ sender_id 非空」；这里同步收紧到联合完整性，
+  // 实现 bug 把违约行发出去时在此炸掉，而不是把残缺 DTO 交给前端。
+  .refine((m) => m.type === 'SYSTEM' || (m.senderId !== null && m.sender !== null), {
+    path: ['senderId'],
+    error: 'TEXT 消息必须有发送者',
+  })
 export type MessageDto = z.infer<typeof messageDtoSchema>
 
 // ---------------------------------------------------------------------------
@@ -64,18 +76,25 @@ export const messageSendInputSchema = z.strictObject({
 })
 export type MessageSendInput = z.infer<typeof messageSendInputSchema>
 
-export const conversationListQuerySchema = z.object({
-  page: z.coerce.number().int().positive().default(1),
-  pageSize: z.coerce.number().int().positive().max(50).default(20),
+export const conversationListQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  /**
+   * 不透明字符串：服务端对 `(lastMessageAt, id)` 编码，前端禁止解析或构造，只能原样回传。
+   * 用 cursor 而不是 offset：每条新消息都会 bump lastMessageAt（conversations 表的排序键），
+   * offset 翻页必然重复/漏项——与 #6 冻结契约对商品 feed 的同一结论一致。
+   */
+  cursor: z.string().min(1).optional(),
 })
 export type ConversationListQuery = z.infer<typeof conversationListQuerySchema>
 
+/**
+ * 不另给 `hasMore` / `total`：与 #6 商品 feed 的冻结契约同一结论——
+ * `nextCursor !== null` 已表达"还有下一页"，`total` 需要额外一次 COUNT 且无限滚动用不到。
+ */
 export const conversationListResponseSchema = z.object({
   /** 按 lastMessageAt 降序，DB 两个 (role, lastMessageAt) 索引支撑。 */
   items: z.array(conversationDtoSchema),
-  total: z.number().int().nonnegative(),
-  page: z.number().int().positive(),
-  pageSize: z.number().int().positive(),
+  nextCursor: z.string().nullable(),
 })
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>
 
@@ -89,8 +108,7 @@ export type MessageListQuery = z.infer<typeof messageListQuerySchema>
 export const messageListResponseSchema = z.object({
   /** 按 (createdAt, id) 升序返回，与 DB 索引 messages_conversation_id_created_at_id_idx 一致。 */
   items: z.array(messageDtoSchema),
-  hasMore: z.boolean(),
-  /** 仅 hasMore 为 true 时非空：把它作为下一次请求的 before。 */
+  /** null = 已到最早一页；否则作为下一次请求的 before 原样回传。 */
   nextCursor: z.string().nullable(),
 })
 export type MessageListResponse = z.infer<typeof messageListResponseSchema>
@@ -98,6 +116,13 @@ export type MessageListResponse = z.infer<typeof messageListResponseSchema>
 // ---------------------------------------------------------------------------
 // WebSocket 实时协议（apps/api/src/modules/realtime）
 // ---------------------------------------------------------------------------
+//
+// 冻结的三条连接语义（前端据此实现连接/重连）：
+// ① 鉴权：upgrade 握手用 session cookie（浏览器同源 WS 自动携带），与 HTTP 同一身份。
+// ② 失败：未认证时服务端在 upgrade 前拒绝（HTTP 401，连接不会建立），
+//    客户端处理 onerror/onclose 即可，不存在「连上后再收错误帧」的状态。
+// ③ 推送范围：服务端把「当前用户参与的全部会话」的新消息推给该连接，
+//    没有 subscribe 帧——客户端不需要（也无法）选择订阅某个会话。
 
 /** 服务端 → 客户端。消息先落库再推送；离线端重连后用历史端点补齐，推送不保证不重不漏。 */
 export const realtimeServerEventSchema = z.discriminatedUnion('type', [
