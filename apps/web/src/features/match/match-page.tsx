@@ -57,21 +57,29 @@ export function MatchPage({ listingId }: { listingId: string }) {
         </section>
       ) : null}
 
-      <h2 className="flex items-baseline justify-between px-4 py-2 font-semibold text-[15px]">
-        {total > 0 ? 'Top 3 最想买的同学' : '想买 TA 的同学'}
-        <span className="font-normal text-ink-3 text-xs">
-          {total > 0 ? `共 ${total} 人命中 · 按匹配度排序` : '暂无命中'}
-        </span>
-      </h2>
+      {/*
+        加载失败时下面的标题与空态整块不渲染：否则 ErrorState 在说「加载失败」，
+        紧跟着的标题却在说「暂无命中」，两句话互相矛盾。
+      */}
+      {matches.isPending || matches.isError ? null : (
+        <>
+          <h2 className="flex items-baseline justify-between px-4 py-2 font-semibold text-[15px]">
+            {total > 0 ? 'Top 3 最想买的同学' : '想买 TA 的同学'}
+            <span className="font-normal text-ink-3 text-xs">
+              {total > 0 ? `共 ${total} 人命中 · 按匹配度排序` : '暂无命中'}
+            </span>
+          </h2>
 
-      {total === 0 && !matches.isPending && !matches.isError ? (
-        <EmptyState description="暂时没有足够匹配的对象,发布的内容越多匹配越准" emoji="🧩" />
-      ) : null}
+          {total === 0 ? (
+            <EmptyState description="暂时没有足够匹配的对象,发布的内容越多匹配越准" emoji="🧩" />
+          ) : null}
+        </>
+      )}
 
       {top.length > 0 ? (
         <ul className="divide-y divide-line bg-surface">
           {top.map((item) => (
-            <li key={item.userId}>
+            <li key={`${item.userId}-${item.wishId}`}>
               <MatchRow item={item} rank={results.indexOf(item) + 1} />
             </li>
           ))}
@@ -83,7 +91,7 @@ export function MatchPage({ listingId }: { listingId: string }) {
           <h2 className="px-4 pt-4 pb-2 font-semibold text-[15px]">其余命中</h2>
           <ul className="divide-y divide-line bg-surface">
             {rest.map((item) => (
-              <li key={item.userId}>
+              <li key={`${item.userId}-${item.wishId}`}>
                 <MatchRow item={item} />
               </li>
             ))}

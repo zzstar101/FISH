@@ -8,8 +8,20 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronLeft, Send, User } from 'lucide-react'
 import { useState } from 'react'
 import { formatClock, formatMessageDay, formatPrice } from '../../lib/format'
+import type { ListingStatus } from '../../lib/mock/types'
 import { useRequestOrder } from '../transaction/queries'
 import { meta, useConversation, useSendMessage } from './queries'
+
+/**
+ * 商品状态文案。聊天页只区分「能否交易」，所以这里只需一句可读的状态说明；
+ * 完整的状态标签映射在商品详情页（`listing-detail/detail-page.tsx`）。
+ */
+const LISTING_STATUS_LABEL: Record<ListingStatus, string> = {
+  ACTIVE: '',
+  RESERVED: '已预定',
+  SOLD: '已售出',
+  OFFLINE: '已下架',
+}
 
 /** 聊天详情（#9）：TEXT 气泡 + 系统会话 + 商品卡 + 快捷短语。 */
 export function ChatPage({ conversationId }: { conversationId: string }) {
@@ -41,6 +53,13 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
 
   const item = conversation.data
   const isSystem = item.kind === 'system'
+  /**
+   * 只有 ACTIVE 商品能发起交易。
+   *
+   * 详情页对非 ACTIVE 已禁用 CTA，但聊天页是另一条入口——不在这里挡住，
+   * 用户就能从会话里绕过详情页、对已下架/已售出的商品下单（实测确认过）。
+   */
+  const canTrade = item.listing?.status === 'ACTIVE'
 
   const submit = (text: string) => {
     const value = text.trim()
@@ -97,14 +116,17 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
               />
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-1 text-sm">{item.listing.title}</p>
-                <p className="mt-0.5 font-semibold text-sm">
+                <p className="mt-0.5 flex items-center gap-1.5 font-semibold text-sm">
                   {formatPrice(item.listing.priceCents)}
+                  {canTrade ? null : (
+                    <Badge variant="secondary">{LISTING_STATUS_LABEL[item.listing.status]}</Badge>
+                  )}
                 </p>
               </div>
             </Link>
             <Button
               className="shrink-0"
-              disabled={requestOrder.isPending}
+              disabled={requestOrder.isPending || !canTrade}
               onClick={() =>
                 requestOrder.mutate(item.listing?.id ?? '', {
                   onSuccess: () => void navigate({ to: '/orders' }),
@@ -112,7 +134,7 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
               }
               size="sm"
             >
-              发起交易
+              {canTrade ? '发起交易' : '不可交易'}
             </Button>
           </div>
         ) : null}
