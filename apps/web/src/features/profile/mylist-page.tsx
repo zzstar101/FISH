@@ -131,7 +131,9 @@ function MyListBody({ type, label }: { type: MyListType; label: string }) {
  *
  * 此前这里只有二元判断（SOLD ? 已售出 : 在售），于是 RESERVED / OFFLINE 会被一律
  * 标成「在售」——已下架的闲置看上去还在卖（#12 要求「商品/愿望/交易各状态可展示」）。
- * 四种状态与详情页的 `STATUS_LABEL` 保持同一套说法。
+ *
+ * 措辞与详情页 `STATUS_LABEL` 的**非 ACTIVE** 三种一致；ACTIVE 这里必须给出「在售」
+ * 徽章，而详情页那边是空字符串（那里由 CTA 文案承担状态表达，不需要徽章）。
  */
 const STATUS_BADGE: Record<
   ListingStatus,

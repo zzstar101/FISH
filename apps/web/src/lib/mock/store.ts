@@ -589,10 +589,17 @@ export async function rejectOrder(orderId: string): Promise<void> {
 }
 
 /** 买家发起交易确认：创建一条 REQUESTED 订单（#11 的第一步写操作）。 */
+/**
+ * 买家发起交易确认：创建一条 REQUESTED 订单（#11 的第一步写操作）。
+ *
+ * 这里**再挡一次**非 ACTIVE 商品：调用方（聊天页）已经禁用了按钮，但发起交易有多条
+ * 入口（详情页、聊天页、将来的复制链接），只在 UI 上挡会漏。adapter 是唯一收口。
+ */
 export async function requestOrder(listingId: string): Promise<string> {
   await delay(200)
   const listing = db.listings.find((item) => item.id === listingId)
   if (!listing) throw new Error('listing not found')
+  if (listing.status !== 'ACTIVE') throw new Error('这件闲置当前不可交易')
   const existing = db.orders.find(
     (item) =>
       item.listingId === listingId &&
