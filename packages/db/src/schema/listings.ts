@@ -7,6 +7,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  unique,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core'
@@ -51,6 +52,11 @@ export const listings = pgTable(
   },
   (table) => [
     check('listings_price_cents_non_negative', sql`${table.priceCents} >= 0`),
+    // 复合外键目标：让 conversations / transactions 能在 DB 层断言"卖家 = 商品所有者"。
+    // 必须是表级 UNIQUE 约束而非 uniqueIndex —— drizzle-kit 把唯一索引排在
+    // `ALTER TABLE ... ADD CONSTRAINT FK` 之后，PG 会在建外键时报
+    // "there is no unique constraint matching given keys"。
+    unique('listings_id_seller_id_uq').on(table.id, table.sellerId),
     index('listings_status_created_at_idx').on(table.status, table.createdAt),
     index('listings_category_price_cents_idx').on(table.category, table.priceCents),
     index('listings_seller_id_status_idx').on(table.sellerId, table.status),

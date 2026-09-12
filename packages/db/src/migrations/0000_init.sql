@@ -56,6 +56,7 @@ CREATE TABLE "listings" (
 	"free" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "listings_id_seller_id_uq" UNIQUE("id","seller_id"),
 	CONSTRAINT "listings_price_cents_non_negative" CHECK ("listings"."price_cents" >= 0)
 );
 --> statement-breakpoint
@@ -81,7 +82,8 @@ CREATE TABLE "messages" (
 	"sender_id" uuid,
 	"type" "message_type" NOT NULL,
 	"content" text NOT NULL,
-	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "messages_text_requires_sender" CHECK ("messages"."type" <> 'TEXT' OR "messages"."sender_id" IS NOT NULL)
 );
 --> statement-breakpoint
 CREATE TABLE "notifications" (
@@ -144,9 +146,8 @@ CREATE TABLE "wishes" (
 	CONSTRAINT "wishes_budget_range_ordered" CHECK ("wishes"."budget_min_cents" IS NULL OR "wishes"."budget_max_cents" IS NULL OR "wishes"."budget_min_cents" <= "wishes"."budget_max_cents")
 );
 --> statement-breakpoint
-ALTER TABLE "conversations" ADD CONSTRAINT "conversations_listing_id_listings_id_fk" FOREIGN KEY ("listing_id") REFERENCES "public"."listings"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "conversations" ADD CONSTRAINT "conversations_buyer_id_users_id_fk" FOREIGN KEY ("buyer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "conversations" ADD CONSTRAINT "conversations_seller_id_users_id_fk" FOREIGN KEY ("seller_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_listing_id_seller_id_fk" FOREIGN KEY ("listing_id","seller_id") REFERENCES "public"."listings"("id","seller_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "listing_images" ADD CONSTRAINT "listing_images_listing_id_listings_id_fk" FOREIGN KEY ("listing_id") REFERENCES "public"."listings"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "listings" ADD CONSTRAINT "listings_seller_id_users_id_fk" FOREIGN KEY ("seller_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "matches" ADD CONSTRAINT "matches_listing_id_listings_id_fk" FOREIGN KEY ("listing_id") REFERENCES "public"."listings"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -154,9 +155,8 @@ ALTER TABLE "matches" ADD CONSTRAINT "matches_wish_id_wishes_id_fk" FOREIGN KEY 
 ALTER TABLE "messages" ADD CONSTRAINT "messages_conversation_id_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."conversations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "messages" ADD CONSTRAINT "messages_sender_id_users_id_fk" FOREIGN KEY ("sender_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "transactions" ADD CONSTRAINT "transactions_listing_id_listings_id_fk" FOREIGN KEY ("listing_id") REFERENCES "public"."listings"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_buyer_id_users_id_fk" FOREIGN KEY ("buyer_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "transactions" ADD CONSTRAINT "transactions_seller_id_users_id_fk" FOREIGN KEY ("seller_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "transactions" ADD CONSTRAINT "transactions_listing_id_seller_id_fk" FOREIGN KEY ("listing_id","seller_id") REFERENCES "public"."listings"("id","seller_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "wishes" ADD CONSTRAINT "wishes_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "conversations_listing_id_buyer_id_uq" ON "conversations" USING btree ("listing_id","buyer_id");--> statement-breakpoint
 CREATE INDEX "conversations_buyer_id_last_message_at_idx" ON "conversations" USING btree ("buyer_id","last_message_at");--> statement-breakpoint

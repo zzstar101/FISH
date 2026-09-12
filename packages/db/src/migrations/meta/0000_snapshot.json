@@ -1,5 +1,5 @@
 {
-  "id": "7bb637fd-ab36-42c9-92cd-cc683dfd8b95",
+  "id": "e872db5c-ff94-4645-b587-a0172ddce2f8",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -132,19 +132,6 @@
         }
       },
       "foreignKeys": {
-        "conversations_listing_id_listings_id_fk": {
-          "name": "conversations_listing_id_listings_id_fk",
-          "tableFrom": "conversations",
-          "tableTo": "listings",
-          "columnsFrom": [
-            "listing_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "conversations_buyer_id_users_id_fk": {
           "name": "conversations_buyer_id_users_id_fk",
           "tableFrom": "conversations",
@@ -158,15 +145,17 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "conversations_seller_id_users_id_fk": {
-          "name": "conversations_seller_id_users_id_fk",
+        "conversations_listing_id_seller_id_fk": {
+          "name": "conversations_listing_id_seller_id_fk",
           "tableFrom": "conversations",
-          "tableTo": "users",
+          "tableTo": "listings",
           "columnsFrom": [
+            "listing_id",
             "seller_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "seller_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -570,7 +559,16 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "listings_id_seller_id_uq": {
+          "name": "listings_id_seller_id_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "id",
+            "seller_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {
         "listings_price_cents_non_negative": {
@@ -839,7 +837,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "messages_text_requires_sender": {
+          "name": "messages_text_requires_sender",
+          "value": "\"messages\".\"type\" <> 'TEXT' OR \"messages\".\"sender_id\" IS NOT NULL"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.notifications": {
@@ -1052,19 +1055,6 @@
         }
       },
       "foreignKeys": {
-        "transactions_listing_id_listings_id_fk": {
-          "name": "transactions_listing_id_listings_id_fk",
-          "tableFrom": "transactions",
-          "tableTo": "listings",
-          "columnsFrom": [
-            "listing_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
         "transactions_buyer_id_users_id_fk": {
           "name": "transactions_buyer_id_users_id_fk",
           "tableFrom": "transactions",
@@ -1078,15 +1068,17 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "transactions_seller_id_users_id_fk": {
-          "name": "transactions_seller_id_users_id_fk",
+        "transactions_listing_id_seller_id_fk": {
+          "name": "transactions_listing_id_seller_id_fk",
           "tableFrom": "transactions",
-          "tableTo": "users",
+          "tableTo": "listings",
           "columnsFrom": [
+            "listing_id",
             "seller_id"
           ],
           "columnsTo": [
-            "id"
+            "id",
+            "seller_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
