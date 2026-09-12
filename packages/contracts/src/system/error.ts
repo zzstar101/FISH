@@ -10,6 +10,14 @@ export const ApiErrorSchema = z.object({
   error: z.object({
     code: z.string(),
     message: z.string(),
+    /**
+     * 字段级校验错误，只在 `VALIDATION_FAILED` 时出现（#6 冻结契约 §3）；`field` 是点号路径
+     * （`title`、`images.2`），前端据此把错误定位到输入框。
+     *
+     * 可选是刻意的：auth / wishes 的响应不带它，加这个字段必须保持纯增量，
+     * 否则就是替它们改协议。
+     */
+    details: z.array(z.object({ field: z.string(), message: z.string() })).optional(),
   }),
 })
 
