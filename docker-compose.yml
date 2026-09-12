@@ -42,10 +42,14 @@ services:
     depends_on:
       minio:
         condition: service_healthy
+    # 设匿名读策略：读接口返回的图片 URL 是 `S3_PUBLIC_URL + '/' + objectKey`
+    # （packages/db/src/schema/listings.ts 的注释、#6 契约 §1 的 ListingImageSchema），
+    # 没有这一步时匿名 GET 会 403，前端 <img> 全部打不开。
     entrypoint: >
       /bin/sh -c "
       mc alias set local http://minio:9000 fish fish-secret &&
-      mc mb --ignore-existing local/fish
+      mc mb --ignore-existing local/fish &&
+      mc anonymous set download local/fish
       "
 
 volumes:
