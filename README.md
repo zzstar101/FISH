@@ -55,12 +55,16 @@ cp .env.example .env
 # 3. 启动本地依赖：Postgres + MinIO（含 healthcheck 与 bucket 初始化）
 bun run db:up
 
-# 4. 分三个终端分别启动应用
+# 4. 建立数据库 schema；可选：灌入基础演示数据（会清空业务表）
+bun run db:migrate
+bun run db:seed
+
+# 5. 分三个终端分别启动应用
 bun run dev:api      # API   → http://localhost:3000
 bun run dev:worker   # Worker（常驻，不监听端口）
 bun run dev:web      # Web   → http://localhost:5173
 
-# 5. 验收
+# 6. 验收
 open http://localhost:5173      # 页面应显示 status: ok / db: up
 bun run ws:smoke                # 应输出 [ws-smoke] ok
 ```
@@ -73,11 +77,12 @@ bun run ws:smoke                # 应输出 [ws-smoke] ok
 | `bun run dev` | 一次并行启动三者（同样可用） |
 | `bun run typecheck` | 全仓 TypeScript 7 类型检查 |
 | `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
-| `bun test` | 全仓测试（需 Postgres 的用例在无 `DATABASE_URL` 时自动跳过） |
+| `bun test` | 全仓测试（`packages/db` 的集成测试需要 Postgres 已启动并完成 `db:migrate`） |
 | `bun run build` | 构建 |
 | `bun run ws:smoke` | WebSocket 连通性冒烟 |
 | `bun run db:up` / `db:down` | 启动 / 停止本地依赖 |
 | `bun run db:generate` / `db:migrate` / `db:studio` | Drizzle 迁移与调试 |
+| `bun run db:seed` | 写入基础演示数据（**会先清空业务表**，仅允许本地数据库） |
 
 ### 端口
 
