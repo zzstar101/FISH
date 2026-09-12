@@ -20,7 +20,8 @@ import type {
   Listing,
   ListingCategory,
   ListingStatus,
-  NotificationEntry,
+  Notification,
+  NotificationView,
   Order,
   TradeMethod,
   User,
@@ -40,7 +41,6 @@ export type ListingView = Listing & {
   /** 卖家在售件数（详情页卖家卡展示「在售 N 件」）。 */
   sellerActiveCount: number
 }
-
 export type CommentView = Comment & { user: User }
 
 export type ConversationView = Conversation & {
@@ -54,6 +54,22 @@ export type OrderView = Order & { listing: Listing; counterpart: User }
 
 export type WatcherView = { user: User; followedMinutesAgo: number }
 
+/**
+ * 把种子商品里的标签归一成布尔字段。
+ *
+ * 种子里 `tags` 是唯一的事实来源（文案取自参考截图），但展示层要按开关判断
+ * （角标只看「急出」、标签行只看「可小刀」），两边各读各的就会漂移。
+ * 这里在装载时推导一次，之后全站只认 `urgent` / `negotiable`；发布时反向由
+ * `draftTags` 写回 `tags`，形成闭环。
+ */
+function withDerivedFlags(item: Listing): Listing {
+  return {
+    ...item,
+    negotiable: item.tags.includes('可小刀'),
+    urgent: item.tags.includes('急出'),
+  }
+}
+
 type Db = {
   listings: Listing[]
   comments: Record<string, Comment[]>
@@ -63,12 +79,12 @@ type Db = {
   favorites: string[]
   history: string[]
   followedUserIds: string[]
-  notificationsRead: boolean
+  notifications: Notification[]
 }
 
 function buildDb(): Db {
   return {
-    listings: listings.map((item) => ({ ...item })),
+    listings: listings.map((item) => withDerivedFlags({ ...item })),
     comments: Object.fromEntries(
       Object.entries(comments).map(([listingId, list]) => [
         listingId,
@@ -89,7 +105,8 @@ function buildDb(): Db {
     favorites: ['p1', 'p5', 'p6'],
     history: ['p1', 'p5', 'p10', 'p4', 'p6'],
     followedUserIds: ['u1', 'u5'],
-    notificationsRead: false,
+    // 通知是逐条可读可写的，深拷一层（含 payload），否则「标记已读」会改到 data.ts 的常量。
+    notifications: notifications.map((item) => ({ ...item, payload: { ...item.payload } })),
   }
 }
 
@@ -128,7 +145,6 @@ export const meta = {
   searchHistory,
   searchSuggestions,
   chatQuickPhrases,
-  notifications,
 }
 
 /** 只展示在售商品：已售出/已下架不进 Feed、分类、搜索与同类推荐。 */
@@ -287,6 +303,26 @@ export type ListingDraft = {
   originalPriceCents?: number
   emoji: string
   free: boolean
+  /** 急出：卡片角标 + 详情标签，同时写进 `tags` 让搜索能命中。 */
+  urgent: boolean
+  /** 可刀：写进 `tags`，列表里作为标签展示。 */
+  negotiable: boolean
+}
+
+/**
+ * 标签由 draft 的开关推导，而不是让调用方直接传数组：
+ * `tags` 同时被搜索（`searchListings` 会匹配 tag）与列表标签渲染消费，
+ * 两种展示（角标走 `urgent` 字段、标签走 `tags`）必须只有一个来源。
+ *
+ * 「免费送」与「急出」可以并存（0 元的东西也可能急着出手），所以免费时只跳过「可小刀」
+ * （都已经免费了谈不上还价）。这里**不能**因为 free 就整体提前返回：那样会连独立的
+ * 急出标记一起丢掉，而 `withDerivedFlags` 会据 tags 把它还原成 `urgent: false`。
+ */
+function draftTags(draft: ListingDraft): string[] {
+  const tags: string[] = draft.free ? ['免费送'] : []
+  if (draft.urgent) tags.push('急出')
+  if (!draft.free && draft.negotiable) tags.push('可小刀')
+  return tags
 }
 
 /** 描述按行存储；同一行只保留一次，详情页才能安全地拿文本当 key。 */
@@ -303,7 +339,8 @@ function toDescriptionLines(description: string): string[] {
 
 export async function createListing(draft: ListingDraft): Promise<ListingView> {
   await delay(300)
-  const listing: Listing = {
+  // 布尔标志不在这里写死：`withDerivedFlags` 会从 tags 推导，保持单一来源。
+  const listing = withDerivedFlags({
     id: `p-${Date.now()}`,
     title: draft.title,
     priceCents: draft.priceCents,
@@ -314,7 +351,7 @@ export async function createListing(draft: ListingDraft): Promise<ListingView> {
     condition: draft.condition,
     campus: draft.campus,
     tradeMethod: draft.tradeMethod,
-    tags: draft.free ? ['免费送'] : [],
+    tags: draftTags(draft),
     description: toDescriptionLines(draft.description),
     publishedMinutesAgo: 0,
     views: 0,
@@ -323,7 +360,7 @@ export async function createListing(draft: ListingDraft): Promise<ListingView> {
     sellerId: ME_ID,
     kind: 'listing',
     free: draft.free,
-  }
+  } satisfies Listing)
   db.listings = [listing, ...db.listings]
   return decorate(listing)
 }
@@ -338,7 +375,7 @@ export async function updateListing(listingId: string, draft: ListingDraft): Pro
   await delay(300)
   db.listings = db.listings.map((item) =>
     item.id === listingId
-      ? {
+      ? withDerivedFlags({
           ...item,
           title: draft.title,
           description: toDescriptionLines(draft.description),
@@ -346,10 +383,11 @@ export async function updateListing(listingId: string, draft: ListingDraft): Pro
           condition: draft.condition,
           campus: draft.campus,
           tradeMethod: draft.tradeMethod,
+          tags: draftTags(draft),
           priceCents: draft.priceCents,
           originalPriceCents: draft.originalPriceCents,
           free: draft.free,
-        }
+        })
       : item,
   )
 }
@@ -408,12 +446,6 @@ export async function sendMessage(conversationId: string, text: string): Promise
     { id: `m-${Date.now()}`, from: 'me', text, sentAtMinutesAgo: 0, kind: 'TEXT' },
   ]
   conversation.updatedMinutesAgo = 0
-}
-
-export async function markAllNotificationsRead(): Promise<void> {
-  await delay(60)
-  db.notificationsRead = true
-  db.conversations = db.conversations.map((item) => ({ ...item, unread: 0 }))
 }
 
 /** 复用/创建会话：「我想要」「聊一聊」统一走这里。 */
@@ -607,19 +639,89 @@ export async function fetchProfileSummary(): Promise<ProfileSummary> {
   }
 }
 
-export type NotificationView = NotificationEntry & { read: boolean }
+export type { NotificationView }
+
+/**
+ * 通知文案由前端按 `type` + `payload` 组装（表里只存 type/payload，见 #23 决定记录）。
+ * 放在 store 的 adapter 里而不是组件里：换文案不用碰 UI，将来接真实接口时
+ * 只需把 `title` 从服务端取的值替进来。
+ */
+function decorateNotification(item: Notification): NotificationView {
+  if (item.type === 'SYSTEM') {
+    return {
+      ...item,
+      description: '建议在校内公共区域当面交易,注意核验物品',
+      emoji: '🔔',
+      target: null,
+      title: '校园小助手',
+      tone: 'warn',
+    }
+  }
+
+  // MATCH：愿望 ↔ 商品首次命中。文案用「目标商品」表述，跳转前确认它还在。
+  const listingId = item.payload.listingId
+  const listing = listingId ? db.listings.find((entry) => entry.id === listingId) : undefined
+  return {
+    ...item,
+    description: listing
+      ? `${listing.title} · ${formatYuanText(listing.priceCents)}`
+      : '这条匹配对应的商品已经被下架了',
+    emoji: '🎉',
+    // 目标不存在就退回愿望页（愿望详情在那边），而不是给一个点不动的死入口。
+    target: listing ? { listingId: listing.id, to: '/detail/$listingId' } : { to: '/wish' },
+    title: listing ? '你要的闲置出现了' : '有新的匹配',
+    tone: 'mint',
+  }
+}
+
+/** 通知描述里的价格：与 `lib/format` 同口径，但 store 不依赖 UI 层的 format。 */
+function formatYuanText(cents: number): string {
+  if (cents === 0) return '免费送'
+  const yuan = cents / 100
+  return `¥${yuan % 1 === 0 ? yuan.toLocaleString('zh-CN') : yuan.toFixed(2)}`
+}
 
 export async function fetchNotifications(): Promise<{
   items: NotificationView[]
   allRead: boolean
 }> {
   await delay()
-  const items = notifications.map((item) => ({ ...item, read: db.notificationsRead }))
-  return { items, allRead: db.notificationsRead }
+  // 新的在前（与真实接口的 `created_at DESC, id DESC` 对齐）。
+  const sorted = [...db.notifications].sort((a, b) => a.minutesAgo - b.minutesAgo)
+  const items = sorted.map(decorateNotification)
+  return { allRead: items.every((item) => item.read), items }
 }
 
+/**
+ * 消息 tab 的总未读角标 = 会话未读 + 通知未读。
+ *
+ * 与 `fetchUnreadNotificationCount` 是两个数：#23 的 `GET /notifications/unread-count`
+ * 只算通知（置顶行的红点用它），而底部导航的「消息」角标要连聊天一起算，
+ * 否则有未读聊天时角标不亮。
+ */
 export async function fetchNotificationBadge(): Promise<number> {
   await delay(0)
   const unreadChats = db.conversations.reduce((sum, item) => sum + item.unread, 0)
-  return db.notificationsRead ? unreadChats : unreadChats + notifications.length
+  return unreadChats + db.notifications.filter((item) => !item.read).length
+}
+
+/** #23 的 `GET /notifications/unread-count`：只算通知，供置顶行红点使用。 */
+export async function fetchUnreadNotificationCount(): Promise<number> {
+  await delay(0)
+  return db.notifications.filter((item) => !item.read).length
+}
+
+/** 点开单条通知即已读（幂等：已读再点仍是原值）。 */
+export async function markNotificationRead(id: string): Promise<void> {
+  await delay(60)
+  db.notifications = db.notifications.map((item) =>
+    item.id === id ? { ...item, read: true } : item,
+  )
+}
+
+/** 「全部已读」：通知与会话未读一起清（消息页右上角那个勾）。 */
+export async function markAllNotificationsRead(): Promise<void> {
+  await delay(60)
+  db.notifications = db.notifications.map((item) => ({ ...item, read: true }))
+  db.conversations = db.conversations.map((item) => ({ ...item, unread: 0 }))
 }

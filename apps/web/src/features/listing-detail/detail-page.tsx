@@ -130,6 +130,14 @@ export function DetailPage({ listingId }: { listingId: string }) {
 
         <h1 className="mt-2.5 font-semibold text-xl leading-snug">{item.title}</h1>
 
+        {/* #5 的「标签」：#6 的急出 / 可刀在这里露出；没有标签时整行不占位。 */}
+        {item.urgent || item.negotiable ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {item.urgent ? <Badge variant="destructive">急出</Badge> : null}
+            {item.negotiable ? <Badge variant="warn">可小刀</Badge> : null}
+          </div>
+        ) : null}
+
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-3 text-xs">
           <span className="inline-flex items-center gap-1">
             <Clock className="size-3.5" />
@@ -175,7 +183,8 @@ export function DetailPage({ listingId }: { listingId: string }) {
               <span className="shrink-0 text-ink-3 text-xs">信用 {item.seller.credit}</span>
             </p>
             <p className="mt-0.5 truncate text-ink-3 text-xs">
-              {item.seller.college} · {item.seller.campus} · 在售 {item.sellerActiveCount} 件
+              {item.seller.college} · {item.seller.campus} · 在售 {item.sellerActiveCount} 件 · 成交{' '}
+              {item.seller.soldCount} 笔
             </p>
           </div>
         </Link>

@@ -1,3 +1,4 @@
+import { Alert, AlertDescription } from '@fish/ui/alert'
 import { Button } from '@fish/ui/button'
 import { Field, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
@@ -5,7 +6,7 @@ import { FormRow, NavBar } from '@fish/ui/nav-bar'
 import { LoadingState } from '@fish/ui/states'
 import { Textarea } from '@fish/ui/textarea'
 import { useNavigate } from '@tanstack/react-router'
-import { Camera, Sparkles, X } from 'lucide-react'
+import { Camera, CircleCheck, Sparkles, X } from 'lucide-react'
 import { useId, useState } from 'react'
 import type { ListingView } from '../../lib/mock/store'
 import type { Campus, ListingCategory, TradeMethod } from '../../lib/mock/types'
@@ -69,10 +70,21 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
   )
   const [picker, setPicker] = useState<PickerKey | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
+  const [urgent, setUrgent] = useState(initial?.urgent ?? false)
+  const [negotiable, setNegotiable] = useState(initial?.negotiable ?? false)
+  /** 提交失败的行内提示；重试成功或再次提交时清掉。 */
+  const [submitError, setSubmitError] = useState('')
+  /**
+   * 发布成功后的落地态：不立刻跳走，先给一次明确反馈。
+   * 直接 `navigate` 的话用户只看到页面跳了，不确定到底发出去没有。
+   */
+  const [created, setCreated] = useState<ListingView | null>(null)
   const titleId = useId()
   const descriptionId = useId()
 
   const pending = createListing.isPending || updateListing.isPending
+  /** 「0 元送」由价格推导：填了 0 才算，空字符串不算。 */
+  const free = Number(price) === 0 && price.trim() !== ''
 
   const addImage = () => {
     if (images.length >= 9) {
@@ -91,8 +103,9 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
     if (description.trim().length === 0) next.description = '写点描述,买家更愿意问'
     if (description.length > 500) next.description = '描述最多 500 字'
     if (!category) next.category = '请选择分类'
-    if (!PRICE_PATTERN.test(price.trim()) || Number(price) <= 0) {
-      next.price = '填一个大于 0 的数字,最多两位小数'
+    // 0 元合法 = 免费送（#6 工作项）；这里只挡空值、非数字与负数。
+    if (price.trim() === '' || !PRICE_PATTERN.test(price.trim())) {
+      next.price = '填一个数字,0 元即免费送,最多两位小数'
     }
     if (originalPrice.trim() && !PRICE_PATTERN.test(originalPrice.trim())) {
       next.originalPrice = '原价最多两位小数'
@@ -103,6 +116,7 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
 
   const submit = () => {
     if (!validate()) return
+    setSubmitError('')
     const draft = {
       title: title.trim(),
       description: description.trim(),
@@ -113,12 +127,19 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
       priceCents: Math.round(Number(price) * 100),
       originalPriceCents: originalPrice ? Math.round(Number(originalPrice) * 100) : undefined,
       emoji: images[0]?.emoji ?? '📦',
-      free: Number(price) === 0,
+      free,
+      // 免费送与「可小刀」语义冲突（都已经 0 元了），勾了送就不带刀。
+      urgent,
+      negotiable: free ? false : negotiable,
+    }
+    const fail = (error: unknown) => {
+      setSubmitError(error instanceof Error ? error.message : '发布失败,请检查网络后重试')
     }
     if (editId) {
       updateListing.mutate(
         { id: editId, draft },
         {
+          onError: fail,
           onSuccess: () =>
             void navigate({ to: '/detail/$listingId', params: { listingId: editId } }),
         },
@@ -126,10 +147,16 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
       return
     }
     createListing.mutate(draft, {
+      onError: fail,
       onSuccess: (created) => {
-        void navigate({ to: '/detail/$listingId', params: { listingId: created.id } })
+        setCreated(created)
       },
     })
+  }
+
+  // 发布成功：停在成功态，让用户确认发出去了，再决定看详情还是继续发。
+  if (created) {
+    return <PublishSuccess listing={created} />
   }
 
   return (
@@ -284,11 +311,53 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
         <FormRow label="所在校区" onClick={() => setPicker('campus')} value={campus} />
       </section>
 
+      {/*
+        #6 的「急出 / 可刀 / 0 元送」：前两个是开关，直接写在商品上；
+        「0 元送」不单独给开关——它由价格推导（填 0 就是），两个入口会让同一件事有两种真相。
+      */}
+      <section className="mt-2 divide-y divide-line bg-surface">
+        <FlagRow
+          description="商品卡左上角打「急出」角标,排在前面更容易被看到"
+          label="急出"
+          onChange={setUrgent}
+          value={urgent}
+        />
+        <FlagRow
+          description={
+            free ? '已填 0 元(免费送),不再叠「可小刀」' : '买家可以还价,商品上会显示「可小刀」'
+          }
+          disabled={free}
+          label="可小刀"
+          onChange={setNegotiable}
+          value={free ? false : negotiable}
+        />
+        {free ? (
+          <p className="px-4 py-2.5 text-brand text-xs">价格填的是 0 元,会作为「免费送」发布</p>
+        ) : null}
+      </section>
+
       <p className="px-4 py-3 text-ink-3 text-xs leading-relaxed">
         发布即表示你同意《校园二手交易公约》:如实描述物品情况,不发布违规物品,建议在校内公共区域当面交易。
       </p>
 
+      {submitError ? (
+        <div className="px-4 pb-3">
+          <Alert className="rounded-lg border-0 bg-danger-soft px-3 py-2" variant="destructive">
+            <AlertDescription className="text-danger">{submitError}</AlertDescription>
+          </Alert>
+        </div>
+      ) : null}
+
       <div className="pb-safe fixed bottom-0 left-1/2 z-30 w-full max-w-[430px] -translate-x-1/2 bg-bg px-4 py-3">
+        {submitError ? (
+          <button
+            className="mb-2 w-full text-center text-brand text-xs"
+            onClick={submit}
+            type="button"
+          >
+            重试一次
+          </button>
+        ) : null}
         <Button className="w-full" disabled={pending} onClick={submit} size="lg">
           {pending ? '提交中…' : editing ? '保存修改' : '发布闲置'}
         </Button>
@@ -334,6 +403,108 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
         />
       ) : null}
     </div>
+  )
+}
+
+/**
+ * 发布成功页。
+ *
+ * 刻意**不自动跳转**：跳走之后用户不确定到底成功没有。
+ * 这里给明确反馈 + 三个出口（看详情 / 再发一件 / 回首页），把选择权交回用户。
+ */
+function PublishSuccess({ listing }: { listing: ListingView }) {
+  const navigate = useNavigate()
+
+  return (
+    <div className="flex min-h-dvh flex-col bg-bg">
+      <div className="sticky top-0 z-20 bg-surface">
+        <NavBar title="发布结果" />
+      </div>
+
+      <div className="flex flex-1 flex-col items-center px-6 pt-16 text-center">
+        <span className="flex size-16 items-center justify-center rounded-full bg-success-soft">
+          <CircleCheck className="size-8 text-success" />
+        </span>
+        <h1 className="mt-4 font-semibold text-lg">发布成功</h1>
+        <p className="mt-1.5 text-ink-2 text-sm">同学们已经能搜到这件闲置了</p>
+
+        <div className="mt-6 flex w-full items-center gap-3 rounded-2xl bg-surface p-3 text-left">
+          <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-2xl">
+            {listing.emoji}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="line-clamp-2 font-medium text-[15px] leading-snug">{listing.title}</p>
+            <p className="mt-1 font-semibold text-brand text-sm">
+              {listing.free ? '免费送' : `¥${(listing.priceCents / 100).toLocaleString('zh-CN')}`}
+              {listing.urgent ? ' · 急出' : ''}
+              {listing.negotiable ? ' · 可小刀' : ''}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2 px-6 pb-8">
+        <Button
+          className="w-full"
+          onClick={() =>
+            void navigate({ to: '/detail/$listingId', params: { listingId: listing.id } })
+          }
+          size="lg"
+        >
+          看看发布效果
+        </Button>
+        <Button
+          className="w-full"
+          onClick={() => void navigate({ to: '/publish' })}
+          variant="outline"
+        >
+          再发一件
+        </Button>
+        <Button className="w-full" onClick={() => void navigate({ to: '/' })} variant="ghost">
+          返回首页
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** 「急出 / 可小刀」这类开关行，与上下的 `FormRow` 共用同一套高度与字号。 */
+function FlagRow({
+  label,
+  description,
+  value,
+  onChange,
+  disabled = false,
+}: {
+  label: string
+  description: string
+  value: boolean
+  onChange: (next: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      aria-checked={value}
+      className="flex h-13 w-full items-center gap-3 px-4 text-left disabled:opacity-50"
+      disabled={disabled}
+      onClick={() => onChange(!value)}
+      role="switch"
+      type="button"
+    >
+      <span className="shrink-0 text-[15px]">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-ink-3 text-xs">{description}</span>
+      <span
+        className={`relative h-6 w-10 shrink-0 rounded-full transition-colors ${
+          value ? 'bg-brand' : 'bg-line'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-transform ${
+            value ? 'translate-x-[18px]' : 'translate-x-0.5'
+          }`}
+        />
+      </span>
+    </button>
   )
 }
 
