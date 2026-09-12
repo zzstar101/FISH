@@ -197,8 +197,7 @@ export const ListingUpdateInputSchema = z
   .refine((value) => Object.keys(value).length > 0, { error: '至少提供一个要修改的字段' })
   // 部分更新下无法只凭请求体判定 free ⟹ priceCents === 0：只在两者同时出现时校验。
   // 只给 `free` 的情形必须由 service 与库中既有行合并后校验（违者 422 VALIDATION_FAILED）——
-  // 冻结契约 §1 的 update schema 只是 create 字段集的 optional 版，
-  // 而"最终状态成立"这件事在 schema 层无法单独判定；该落差已在 Issue #6 报告，待补进契约文本。
+  // 判定标准是"最终状态成立"，不是"请求体单独成立"，详见 Issue #6 契约评论 §7.1。
   .refine((value) => !value.free || value.priceCents === undefined || value.priceCents === 0, {
     path: ['priceCents'],
     error: '0 元送时价格必须为 0',
@@ -305,7 +304,7 @@ export const ListingErrorCodeSchema = z.enum([
   'LISTING_NOT_FOUND',
   /** 409：RESERVED / SOLD 上的编辑、下架、上架。 */
   'LISTING_NOT_EDITABLE',
-  /** 422：objectKey 前缀不属于本人，或同一 key 重复。 */
+  /** 422：objectKey 前缀不属于本人。（同一 key 重复由 schema 的 refine 先掳下，报 VALIDATION_FAILED。） */
   'IMAGE_REFERENCE_INVALID',
   /** 422：confirm 时对象存储里找不到该对象。 */
   'UPLOAD_OBJECT_MISSING',
