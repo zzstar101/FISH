@@ -1,30 +1,13 @@
 import type { Me } from '@fish/contracts/auth/user'
-import type { ListingCard } from '@fish/contracts/listings/schema'
 import { type ProfileResponse, profileResponseSchema } from '@fish/contracts/profile/schema'
+import { wishDtoSchema } from '@fish/contracts/wishes/schema'
+import { toListingCard } from '../listings/card'
 import type { MediaStorage } from '../uploads/storage'
 import { toWishDto } from '../wishes/service'
-import type { WishRow } from '../wishes/store'
-import type { ProfileListingRow, ProfileStore, ProfileTransactionRow } from './store'
+import type { ProfileStore, ProfileTransactionRow } from './store'
 
 /** 各列表的服务端封顶（契约注释冻结：P0 不分页，超出再扩游标端点）。 */
 export const PROFILE_LIST_LIMIT = 100
-
-/** listings 表行 → #6 的商品卡（本人视角）。枚举/形状由外层 profileResponseSchema.parse 收窄。 */
-function toListingCard(row: ProfileListingRow, storage: MediaStorage): ListingCard {
-  return {
-    id: row.id,
-    title: row.title,
-    priceCents: row.priceCents,
-    category: row.category as ListingCard['category'],
-    condition: row.condition as ListingCard['condition'],
-    status: row.status as ListingCard['status'],
-    urgent: row.urgent,
-    negotiable: row.negotiable,
-    free: row.free,
-    coverUrl: row.coverObjectKey ? storage.publicUrl(row.coverObjectKey) : null,
-    createdAt: new Date(row.createdAt).toISOString(),
-  }
-}
 
 function toProfileTransaction(row: ProfileTransactionRow, viewerId: string) {
   return {
@@ -61,8 +44,18 @@ export function createProfileService({
       return profileResponseSchema.parse({
         user: me,
         stats,
-        listings: listingRows.map((row) => toListingCard(row, storage)),
-        wishes: wishRows.map((row) => toWishDto(row as WishRow)),
+        // 决策 C（#6 冻结口径）：单行脏数据记日志跳过，不让整个 /profile 打不开。
+        listings: listingRows
+          .map((row) => toListingCard(row, row.coverObjectKey, storage))
+          .filter((card) => card !== null),
+        wishes: wishRows.flatMap((row) => {
+          const parsed = wishDtoSchema.safeParse(toWishDto(row))
+          if (!parsed.success) {
+            console.error('[profile] 跳过无法映射为契约的愿望', row.id, parsed.error.message)
+            return []
+          }
+          return [parsed.data]
+        }),
         transactions: txRows.map((row) => toProfileTransaction(row, me.id)),
       })
     },

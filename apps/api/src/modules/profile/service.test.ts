@@ -35,7 +35,7 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   urgent: false,
   negotiable: true,
   free: false,
-  createdAt: '2026-09-12T01:00:00.000Z',
+  createdAt: new Date('2026-09-12T01:00:00.000Z'),
   coverObjectKey: 'covers/a.jpg',
   ...overrides,
 })

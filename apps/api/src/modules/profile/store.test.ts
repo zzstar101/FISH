@@ -102,6 +102,17 @@ describe('profile store (integration)', () => {
     expect(rows[0]?.match_count).toBe(0)
   })
 
+  test('a NULL-budget wish (seed 形状) is excluded rather than crashing the aggregate', async () => {
+    // 与 seed 的 wishKeyboard 同形状：category 非空、budget 为 NULL（#2 为 #8 预留）
+    await db.execute(sql`
+      INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents, status)
+      VALUES ('01990000-0000-7000-8000-0000000000d2', ${me}, '键盘', 'DIGITAL', NULL, NULL, 'ACTIVE')
+    `)
+    const rows = await store.ownWishes(me, 100)
+    // NULL budget 行被过滤（契约 WishDto 三字段皆非空），其余愿望照常返回
+    expect(rows.map((row) => row.id)).toEqual([wishA])
+  })
+
   test('ownTransactions merges buying and selling; buyer_id distinguishes the role', async () => {
     const rows = await store.ownTransactions(me, 100)
     expect(rows).toHaveLength(2)
