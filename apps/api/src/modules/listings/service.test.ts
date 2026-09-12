@@ -462,6 +462,29 @@ describe('updateListing', () => {
     expect(received.objectKeys).toEqual([`listings/${SELLER_ID}/new.jpg`])
   })
 
+  // 并发：service 读到的还是可编辑状态，但 UPDATE 时它已变成 RESERVED / SOLD（#11 的交易流程），
+  // UPDATE 的 status 谓词会命中 0 行 —— 这必须是 409 而不是 404。
+  test('reports 409 when the listing became RESERVED between the read and the write', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        updateListing: async () => null,
+        findState: async () => ({
+          sellerId: SELLER_ID,
+          status: 'RESERVED',
+          priceCents: 16000,
+          free: false,
+        }),
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { title: '新标题' }),
+    )
+    expect(error.status).toBe(409)
+    expect(error.code).toBe('LISTING_NOT_EDITABLE')
+  })
+
   test('returns 404 when the listing disappears between the check and the update', async () => {
     const service = createListingService({
       storage: fakeStorage(),

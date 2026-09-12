@@ -16,10 +16,10 @@ import {
   eq,
   gt,
   gte,
-  ilike,
   inArray,
   lt,
   lte,
+  notInArray,
   or,
   type SQL,
   sql,
@@ -134,6 +134,14 @@ export interface ListingStore {
 /** 新商品默认落 `ACTIVE`。 */
 const NEW_LISTING_STATUS: ListingStatus = 'ACTIVE'
 
+/**
+ * 交易域（#11）写的状态：卖家不能编辑、不能下架、不能上架。
+ *
+ * 定义在这里并导出，是因为它有两个使用点且必须完全一致：SQL 的 UPDATE 谓词（本文件）
+ * 与 service 的 409 判定。两处各写一份就会出现"service 拒绝、SQL 放行"的裂缝。
+ */
+export const LOCKED_LISTING_STATUSES: ListingStatus[] = ['RESERVED', 'SOLD']
+
 export function createSqlListingStore(db: Db): ListingStore {
   return {
     async createListingAtomic(record) {
@@ -243,10 +251,15 @@ export function createSqlListingStore(db: Db): ListingStore {
       if (criteria.search) {
         // 搜索范围 = title + description（契约 §2.1）；用 ILIKE 而非 FTS 是实现选择，
         // 契约只声明范围，不承诺匹配算法。
-        const pattern = `%${criteria.search}%`
+        //
+        // `q` 里的 `%` / `_` / `\` 必须转义：否则 `?q=%` 会匹配整张表、`?q=a_b` 会把 `_`
+        // 当成单字符通配 —— 契约写的是"匹配范围"，用户期待的是字面子串匹配。
+        // ESCAPE 用 PG 的默认反斜杠，显式写出来是为了不依赖 `standard_conforming_strings` 的默认值。
+        const escaped = criteria.search.replace(/[\\%_]/g, '\\$&')
+        const pattern = `%${escaped}%`
         const searchCondition = or(
-          ilike(listings.title, pattern),
-          ilike(listings.description, pattern),
+          sql`${listings.title} ILIKE ${pattern} ESCAPE '\\'`,
+          sql`${listings.description} ILIKE ${pattern} ESCAPE '\\'`,
         )
         if (searchCondition) conditions.push(searchCondition)
       }
@@ -289,7 +302,15 @@ export function createSqlListingStore(db: Db): ListingStore {
         const rows = await tx
           .update(listings)
           .set({ ...input.fields, updatedAt: new Date() })
-          .where(and(eq(listings.id, input.id), eq(listings.sellerId, input.sellerId)))
+          // 状态谓词必须写进 UPDATE 而不是只在 service 里读一次：读取与写入之间商品可能被
+          // #11 的交易流程改成 RESERVED / SOLD，check-then-act 会让那种行仍被编辑（契约 §2.4）。
+          .where(
+            and(
+              eq(listings.id, input.id),
+              eq(listings.sellerId, input.sellerId),
+              notInArray(listings.status, LOCKED_LISTING_STATUSES),
+            ),
+          )
           .returning()
 
         const updated = rows[0]

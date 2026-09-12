@@ -116,8 +116,4 @@ describe('Bun S3 存储适配', () => {
 
     expect(await media.stat(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
   })
-
-  test.skipIf(reachable)('未配置/不可达对象存储时跳过（本地未启动 MinIO 的场合）', () => {
-    expect(reachable).toBe(false)
-  })
 })

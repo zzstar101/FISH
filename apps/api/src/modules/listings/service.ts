@@ -27,6 +27,7 @@ import type {
   ListingState,
   ListingStore,
 } from './store'
+import { LOCKED_LISTING_STATUSES } from './store'
 
 /**
  * 业务规则失败 → 契约 §3 的错误码表。带上 `details` 是为了让路由层直接落成
@@ -49,8 +50,6 @@ const DUPLICATE_WINDOW_MS = 5_000
 
 const OFFLINE: ListingStatusValue = 'OFFLINE'
 const ACTIVE: ListingStatusValue = 'ACTIVE'
-/** 交易域（#11）写的状态：卖家不能编辑、不能下架、不能上架。 */
-const LOCKED_STATUSES: readonly ListingStatusValue[] = ['RESERVED', 'SOLD']
 
 type ListingStatusValue = ListingRow['status']
 
@@ -310,7 +309,20 @@ export function createListingService(deps: {
         fields,
         ...(objectKeys ? { objectKeys } : {}),
       })
-      if (!updated) throw notFound()
+
+      // UPDATE 带 status 谓词，所以"没改到行"有两种可能：并发下商品已被删/易主（404），
+      // 或在这两步之间被 #11 变成了 RESERVED / SOLD（409）。再读一次状态以区分。
+      if (!updated) {
+        const latest = await store.findState(id)
+        if (latest && LOCKED_LISTING_STATUSES.includes(latest.status)) {
+          throw new ListingServiceError(
+            409,
+            'LISTING_NOT_EDITABLE',
+            '商品处于交易中或已售出，无法修改',
+          )
+        }
+        throw notFound()
+      }
 
       return loadDetail(userId, id)
     },
@@ -352,7 +364,7 @@ async function requireOwnEditable(
   if (state.sellerId !== userId) {
     throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
   }
-  if (LOCKED_STATUSES.includes(state.status)) {
+  if (LOCKED_LISTING_STATUSES.includes(state.status)) {
     throw new ListingServiceError(409, 'LISTING_NOT_EDITABLE', '商品处于交易中或已售出，无法修改')
   }
   return state

@@ -308,6 +308,62 @@ test('feed 的 priceAsc 按价格升序并返回封面', async () => {
   })
 })
 
+// 回归：`q` 里的 `%` / `_` 必须当字面量。否则 `?q=%` 会匹配整张表、
+// `?q=a_b` 会把 `_` 当单字符通配 —— 契约 §2.1 写的是"匹配范围"，用户期待字面子串。
+test('feed 的搜索把 % 与 _ 当字面量而不是通配符', async () => {
+  await withSeller(async (sellerId) => {
+    const percent = await insertListingWithTime(sellerId, {
+      createdAt: new Date(),
+      priceCents: 100,
+    })
+    await db.update(listings).set({ title: '折扣 100% 出' }).where(eq(listings.id, percent))
+    const underscore = await insertListingWithTime(sellerId, {
+      createdAt: new Date(),
+      priceCents: 200,
+    })
+    await db.update(listings).set({ title: 'a_b 商品' }).where(eq(listings.id, underscore))
+    const wildcardMatch = await insertListingWithTime(sellerId, {
+      createdAt: new Date(),
+      priceCents: 300,
+    })
+    await db.update(listings).set({ title: 'axb 商品' }).where(eq(listings.id, wildcardMatch))
+
+    const search = async (q: string) =>
+      (
+        await store.listFeed({
+          limit: 10,
+          cursor: null,
+          sort: 'newest',
+          status: 'ACTIVE',
+          sellerId,
+          search: q,
+        })
+      ).map((row) => row.listing.id)
+
+    expect(await search('%')).toEqual([percent])
+    expect(await search('100%')).toEqual([percent])
+    expect(await search('a_b')).toEqual([underscore])
+    expect(await search('_')).toEqual([underscore])
+  })
+})
+
+// 回归：编辑的"状态机"不能只靠 service 读一次（check-then-act）——
+// UPDATE 必须自带 status 谓词，否则并发变成 RESERVED 的行仍会被改掉。
+test('编辑在 SQL 层拒绝 RESERVED / SOLD 状态的行', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    await db.update(listings).set({ status: 'RESERVED' }).where(eq(listings.id, created.listingId))
+
+    const updated = await store.updateListing({
+      id: created.listingId,
+      sellerId,
+      fields: { title: '不该生效' },
+    })
+
+    expect(updated).toBeNull()
+  })
+})
+
 test('编辑图片是全量替换：旧行被删掉而不是追加', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(
