@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { conversations } from './schema/conversations'
@@ -83,6 +83,21 @@ test('seed 可生成覆盖全部业务表的基础数据，且演示账号可用
     expect(demoHash).toBeDefined()
     expect(await Bun.password.verify(DEMO_PASSWORD, demoHash ?? '')).toBe(true)
     expect(await Bun.password.verify('wrong-password', demoHash ?? '')).toBe(false)
+
+    // 回归：jsonb 列必须落成真正的 JSON object。
+    // 用 `insert().values({ payload: {...} })` 写时 drizzle + bun-sql 会 stringify 两次，
+    // 落库成为「JSON 字符串套 JSON」：drizzle 读回正常，但 `payload->>'x'` 在 SQL 层恒为 NULL，
+    // #8 的 worker 只要按 payload 查就永远匹配不到。修复方式是 `jsonParam()`（见 src/json.ts）。
+    const payloadRows = await scratch.execute<{ kind: string; ref: string | null }>(
+      sql`select jsonb_typeof(payload) as kind, payload->>'listingId' as ref from jobs
+          union all
+          select jsonb_typeof(payload), payload->>'matchId' from notifications`,
+    )
+    expect([...payloadRows]).toHaveLength(2)
+    for (const row of payloadRows) {
+      expect(row.kind).toBe('object')
+      expect(typeof row.ref).toBe('string')
+    }
   } finally {
     await scratch.$client.close()
     await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)

@@ -79,5 +79,18 @@ export function createAuthModule(options: {
 
   const meHandler: Handler<{ Variables: AuthVariables }> = (c) => c.json({ user: c.get('me') })
 
-  return { router, requireAuth, meHandler }
+  /**
+   * 可选身份：匿名返回 `null`。读接口（如 `GET /listings`）用它算 `isOwner`、做 `sellerId`
+   * 过滤与 OFFLINE 可见性，而不必把整个读路径变成 401。
+   *
+   * 与 `requireAuth` 共用同一套 cookie + session 解析，因此不存在"第二个认证入口"被绕过的问题。
+   */
+  async function resolveViewerId(c: Context): Promise<string | null> {
+    const token = cookie.read(c)
+    if (!token) return null
+    const me = await service.loadMe(token)
+    return me?.id ?? null
+  }
+
+  return { router, requireAuth, meHandler, resolveViewerId }
 }
