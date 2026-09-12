@@ -333,18 +333,35 @@ export function createSqlListingStore(db: Db): ListingStore {
           )
         }
 
+        // 编辑会改变打分输入（标题/描述 → keyword，价格、分类直接参与打分），所以必须重算匹配，
+        // 否则 `matches` 里那一对会一直是旧分数（#8 契约 §3.3 的"matches 行 = 当前有效匹配"就不成立）。
+        // 投递与写入同一事务：编辑成功而 job 丢失会让该商品永久停在旧分数。
+        // 即使只改了图片也照投：规则简单（一条 PATCH = 一条 job），重算本身幂等且不会重复建通知。
+        await enqueueMatchJobWith(tx, input.id)
+
         return updated
       })
     },
 
     async setStatus(input) {
-      const rows = await db
-        .update(listings)
-        .set({ status: input.to, updatedAt: new Date() })
-        .where(and(eq(listings.id, input.id), eq(listings.status, input.from)))
-        .returning({ id: listings.id })
+      return db.transaction(async (tx) => {
+        const rows = await tx
+          .update(listings)
+          .set({ status: input.to, updatedAt: new Date() })
+          .where(and(eq(listings.id, input.id), eq(listings.status, input.from)))
+          .returning({ id: listings.id })
 
-      return rows.length > 0
+        // 没改到行（并发下别人先改了，或已经不在 from 状态）就不投：没有状态变化就没有重算的必要。
+        if (rows.length === 0) return false
+
+        // 两个方向都投：
+        // - `ACTIVE`（重新上架）：下架期间新建的愿望必须能匹配上，否则商品永远等不到新的"愿望成真"；
+        // - `OFFLINE`（下架）：引擎对非 ACTIVE 是 `target-not-active` no-op，投了无害，
+        //   而"凡是可能改变匹配结果的写操作都投一条"这条规则不必再记例外。
+        await enqueueMatchJobWith(tx, input.id)
+
+        return true
+      })
     },
   }
 }
