@@ -43,3 +43,4 @@ DB CHANGE REQUEST
 - [ ] **未提交任何真实密钥**、Token 或生产连接串
 - [ ] 未手改生成文件（`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`）
 - [ ] 未引入 Issue 范围外的新依赖或无关重构
+- [ ] 若本次改动过依赖：`bun.lock` 未被镜像源污染（`grep -oE 'https?://[^"]+' bun.lock | grep -vE '^https://registry\.npmjs\.org/' && echo '被污染了' || echo '干净'` 应输出「干净」；加依赖时已带 `--registry https://registry.npmjs.org`，见 CONTRIBUTING.md 第 3.1 节）

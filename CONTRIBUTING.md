@@ -51,6 +51,27 @@ apps/web/**     packages/ui/**
 - 推送后尽早开 **Draft PR**，完成验收清单后转 Ready。
 - 使用 **squash merge**，保持 `main` 线性。
 
+### 3.1 加依赖必须显式指定默认源
+
+**每次 `bun add` / `bun remove` / `bun update` 都必须带 `--registry`**：
+
+```bash
+bun add --registry https://registry.npmjs.org <pkg>
+bun add --registry https://registry.npmjs.org -d <pkg>
+bun remove --registry https://registry.npmjs.org <pkg>
+bun update --registry https://registry.npmjs.org <pkg>
+```
+
+`bun.lock` 里 tarball URL 的约定：**默认源一律是空字符串**。CI 的 `Verify lockfile sources` 是**白名单**：只接受默认源的空 URL 与 `https://registry.npmjs.org/`。确需其它源（私有 registry、git / tarball 依赖）时，必须在同一个 PR 里同时更新那一步的白名单，并在 PR 说明理由（`.github/**` 属 Platform Owner，需 zzstar101 落地）。
+
+**原因**：如果本机默认 registry 是镜像源（如 npmmirror），`bun add` 会把 lockfile 里**每一个**已存在的包条目都改写成带镜像 URL 的形式 —— 不只是你新增的那几个包，而是数百行无关 diff（`ogl` 那次 551 行、PR #26 那次 361 个包）。这种 diff 在 review 时极难发现，当机器上不可达那个镜像源时会直接让 `bun install` 失败。
+
+**为什么不能只靠 review 和 CI 的 install 拦**：`bun install --frozen-lockfile` 只校验 lockfile 与 `package.json` 是否一致，**不校验 tarball URL 的来源**，污染后照样通过。因此 CI 额外加了 `Verify lockfile sources` 一步（见 `.github/workflows/ci.yml`）：反向断言 `bun.lock` 中只出现 `registry.npmjs.org` 或默认源的空 URL。本地可以先自查：
+
+```bash
+grep -oE 'https?://[^"]+' bun.lock | grep -vE '^https://registry\.npmjs\.org/' && echo '被污染了' || echo '干净'
+```
+
 ## 4. PR 要求
 
 使用仓库的 PR 模板，必须明确：
