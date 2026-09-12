@@ -97,6 +97,19 @@ function toRow(row: Record<string, unknown>): TransactionRow {
 const TX_COLUMNS = sql`id, listing_id, buyer_id, seller_id, amount_cents, status::text,
   buyer_confirmed_at, seller_confirmed_at, completed_at, cancelled_at, created_at, updated_at`
 
+/**
+ * 唯一索引冲突（SQLSTATE 23505）的形状探测：drizzle 0.45 把驱动错误包进
+ * DrizzleQueryError（.code 为 undefined），真正的 Bun PostgresError 在 .cause 上，
+ * 且 SQLSTATE 放在 .errno（.code 是 ERR_POSTGRES_SERVER_ERROR）——所以沿 cause 链
+ * 递归找 errno/code。（形状实测于真库；依赖升级后若形状变化，集成测试会先红。）
+ */
+function isUniqueViolation(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const err = error as { code?: string; errno?: string; cause?: unknown }
+  if (err.code === '23505' || err.errno === '23505') return true
+  return isUniqueViolation(err.cause)
+}
+
 export function createSqlTransactionStore(db: Db): TransactionStore {
   return {
     async findConversation(conversationId, viewerId) {
@@ -140,13 +153,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             // ② 部分唯一索引兜底（接口注释承诺的 listing-not-active 语义）：
             // listing 状态漂移出不变量（如被第三方改回 ACTIVE）时，同一 listing 的
             // 第二笔 live 交易在这里被 23505 拦下，映射成与条件更新相同的失败语义。
-            if (
-              typeof error === 'object' &&
-              error !== null &&
-              (error as { code?: string }).code === '23505'
-            ) {
-              return { rows: [] as Record<string, unknown>[] }
-            }
+            if (isUniqueViolation(error)) return { rows: [] as Record<string, unknown>[] }
             throw error
           })
         const row = rowsOf(insert)[0]

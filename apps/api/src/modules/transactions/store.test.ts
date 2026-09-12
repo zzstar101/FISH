@@ -202,6 +202,27 @@ describe('transactions store (integration)', () => {
     expect(collected.sort()).toEqual([...all].sort())
   })
 
+  test('unique-index fallback maps to listing-not-active when listing drifts back to ACTIVE', async () => {
+    // 构造不变量漂移：listingA 已有 live 交易（前面的测试留下的 PENDING），
+    // 把 listing 强行改回 ACTIVE 后再次 accept——条件更新放行，唯一索引必须拦下。
+    const pending = rows(
+      await db.execute(
+        sql`SELECT id FROM transactions WHERE listing_id = ${listingA} AND status = 'PENDING_MEETUP' LIMIT 1`,
+      ),
+    )[0]
+    if (!pending) throw new Error('需要一笔 listingA 的 PENDING 交易作为前置')
+    await db.execute(sql`UPDATE listings SET status = 'ACTIVE' WHERE id = ${listingA}`)
+
+    const brief = await store.findConversation(conversationA, buyer1)
+    if (brief.kind !== 'ok') throw new Error('unreachable')
+    // 修复前：这里会原样抛 DrizzleQueryError → 500；修复后：映射为 listing-not-active
+    const result = await store.accept(brief.brief, 1)
+    expect(result.kind).toBe('listing-not-active')
+
+    // 现场还原：listing 回 RESERVED，测试相互独立
+    await db.execute(sql`UPDATE listings SET status = 'RESERVED' WHERE id = ${listingA}`)
+  })
+
   test('insertSystem writes a SYSTEM message without sender and bumps last_message_at', async () => {
     const row = await messages.insertSystem(conversationA, '{"type":"tx.proposal"}')
     expect(row.type).toBe('SYSTEM')
