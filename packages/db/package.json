@@ -1,0 +1,22 @@
+{
+  "name": "@fish/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "generate": "bun --env-file=../../.env drizzle-kit generate",
+    "migrate": "bun --env-file=../../.env drizzle-kit migrate",
+    "studio": "bun --env-file=../../.env drizzle-kit studio"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10",
+    "postgres": "^3.4.9"
+  }
+}
