@@ -1,0 +1,393 @@
+import { CampusSchema, MeSchema } from '@fish/contracts/auth/user'
+import {
+  ALLOWED_IMAGE_MIME,
+  type ListingCard,
+  ListingCardSchema,
+  type ListingCreateInput,
+  type ListingDetail,
+  ListingDetailSchema,
+  type ListingErrorCode,
+  type ListingFeedQuery,
+  type ListingFeedResponse,
+  ListingFeedResponseSchema,
+  type ListingSeller,
+  type ListingUpdateInput,
+  listingObjectKeyPrefix,
+  MAX_IMAGE_BYTES,
+} from '@fish/contracts/listings/schema'
+import type { ApiErrorDetail } from '@fish/contracts/system/error'
+import { newId } from '@fish/db/ids'
+import type { MediaStorage } from '../uploads/storage'
+import { decodeCursor, encodeCursor } from './cursor'
+import type {
+  FeedCursorKey,
+  ListingImageRow,
+  ListingRow,
+  ListingState,
+  ListingStore,
+} from './store'
+
+/**
+ * 业务规则失败 → 契约 §3 的错误码表。带上 `details` 是为了让路由层直接落成
+ * `VALIDATION_FAILED` 的字段级错误，而不是让调用方自己猜是哪个字段。
+ */
+export class ListingServiceError extends Error {
+  constructor(
+    readonly status: 403 | 404 | 409 | 422,
+    readonly code: ListingErrorCode | 'VALIDATION_FAILED',
+    message: string,
+    readonly details?: ApiErrorDetail[],
+  ) {
+    super(message)
+    this.name = 'ListingServiceError'
+  }
+}
+
+/** 与 #7 已合并的实现同一个窗口（apps/api/src/modules/wishes/service.ts）。 */
+const DUPLICATE_WINDOW_MS = 5_000
+
+const OFFLINE: ListingStatusValue = 'OFFLINE'
+const ACTIVE: ListingStatusValue = 'ACTIVE'
+/** 交易域（#11）写的状态：卖家不能编辑、不能下架、不能上架。 */
+const LOCKED_STATUSES: readonly ListingStatusValue[] = ['RESERVED', 'SOLD']
+
+type ListingStatusValue = ListingRow['status']
+
+export interface ListingService {
+  listFeed(viewerId: string | null, query: ListingFeedQuery): Promise<ListingFeedResponse>
+  getDetail(viewerId: string | null, id: string): Promise<ListingDetail>
+  createListing(
+    userId: string,
+    input: ListingCreateInput,
+  ): Promise<{ created: boolean; detail: ListingDetail }>
+  updateListing(userId: string, id: string, input: ListingUpdateInput): Promise<ListingDetail>
+  /** 下架（ACTIVE → OFFLINE）与重新上架（OFFLINE → ACTIVE），幂等。 */
+  transition(userId: string, id: string, to: 'OFFLINE' | 'ACTIVE'): Promise<ListingDetail>
+}
+
+export function createListingService(deps: {
+  store: ListingStore
+  storage: MediaStorage
+  /** 可注入时钟：去重窗口的边界断言不需要 sleep。 */
+  now?: () => Date
+}): ListingService {
+  const { store, storage } = deps
+  const now = deps.now ?? (() => new Date())
+
+  function notFound(): ListingServiceError {
+    return new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
+  }
+
+  /**
+   * 卖家资料的对外投影。`campus` / `avatarUrl` 在库里是无约束 `text`，契约声明它们是
+   * 枚举 / `z.url()`：值域外的历史值降级为 `null`，否则整条详情会因为一个脏字段解析失败
+   * 而 500（与 `apps/api/src/modules/auth/service.ts` 的 `toMe` 同一取舍）。
+   */
+  function toSeller(row: {
+    id: string
+    nickname: string
+    avatarUrl: string | null
+    campus: string | null
+  }): ListingSeller {
+    return {
+      id: row.id,
+      nickname: row.nickname,
+      avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
+      campus: CampusSchema.safeParse(row.campus).data ?? null,
+    }
+  }
+
+  function toCard(listing: ListingRow, coverObjectKey: string | null): ListingCard | null {
+    const card = {
+      id: listing.id,
+      title: listing.title,
+      priceCents: listing.priceCents,
+      category: listing.category,
+      condition: listing.condition,
+      status: listing.status,
+      urgent: listing.urgent,
+      negotiable: listing.negotiable,
+      free: listing.free,
+      coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
+      createdAt: listing.createdAt.toISOString(),
+    }
+
+    // 决策 C（Issue #6）：读响应校验失败**不 500**，记日志后跳过该条 ——
+    // 一条脏数据不该让整个首页打不开。
+    const parsed = ListingCardSchema.safeParse(card)
+    if (!parsed.success) {
+      console.error('[listings] 跳过无法映射为契约的卡片', listing.id, parsed.error.message)
+      return null
+    }
+    return parsed.data
+  }
+
+  function toDetail(input: {
+    listing: ListingRow
+    seller: { id: string; nickname: string; avatarUrl: string | null; campus: string | null }
+    images: ListingImageRow[]
+    viewerId: string | null
+  }): ListingDetail {
+    const detail = {
+      id: input.listing.id,
+      title: input.listing.title,
+      priceCents: input.listing.priceCents,
+      category: input.listing.category,
+      condition: input.listing.condition,
+      status: input.listing.status,
+      urgent: input.listing.urgent,
+      negotiable: input.listing.negotiable,
+      free: input.listing.free,
+      coverUrl: input.images[0] ? storage.publicUrl(input.images[0].objectKey) : null,
+      createdAt: input.listing.createdAt.toISOString(),
+      description: input.listing.description,
+      images: input.images.map((image) => ({
+        url: storage.publicUrl(image.objectKey),
+        sortOrder: image.sortOrder,
+      })),
+      seller: toSeller(input.seller),
+      isOwner: input.viewerId === input.listing.sellerId,
+      updatedAt: input.listing.updatedAt.toISOString(),
+    }
+
+    // 详情没有"跳过"这个选项：解析不过说明这一行与契约不符，宁可 500 也不要静默返回
+    // 一个缺字段的详情（前端会按契约直接取字段）。
+    const parsed = ListingDetailSchema.safeParse(detail)
+    if (!parsed.success) {
+      console.error('[listings] 详情无法映射为契约', input.listing.id, parsed.error.message)
+      throw new Error('商品数据与契约不符')
+    }
+    return parsed.data
+  }
+
+  async function loadDetail(viewerId: string | null, id: string): Promise<ListingDetail> {
+    const found = await store.findDetail(id)
+    if (!found) throw notFound()
+    // OFFLINE 对非卖家 404（不是 403）：403 等于确认"这个 id 存在且是别人的商品"。
+    if (found.listing.status === OFFLINE && found.listing.sellerId !== viewerId) throw notFound()
+
+    return toDetail({
+      listing: found.listing,
+      seller: found.seller,
+      images: found.images,
+      viewerId,
+    })
+  }
+
+  /**
+   * 写入前的图片校验。分两类错误码：
+   * - 对象不存在 → `UPLOAD_OBJECT_MISSING`（多半是前端没传完就提交）；
+   * - 前缀不属于本人 / 超出大小或 mime → `IMAGE_REFERENCE_INVALID`（引用了不该引用的对象）。
+   *
+   * 归属只靠前缀，不需要新表（契约 §2.3）；大小与 mime 必须在这里查真实对象，
+   * 因为 presign 的签名只覆盖 `host`、mime 不受约束（契约 §7.7）。
+   */
+  async function assertUsableObjectKeys(userId: string, objectKeys: string[]): Promise<void> {
+    const prefix = listingObjectKeyPrefix(userId)
+
+    for (const objectKey of objectKeys) {
+      if (!objectKey.startsWith(prefix)) {
+        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
+          { field: 'objectKeys', message: '图片不属于当前用户' },
+        ])
+      }
+    }
+
+    // 逐张校验：≤9 次 HEAD，换掉"客户端可以拿 presign 传任意类型"的洞（契约 §7.7）。
+    for (const objectKey of objectKeys) {
+      const stat = await storage.stat(objectKey)
+      if (!stat) {
+        throw new ListingServiceError(422, 'UPLOAD_OBJECT_MISSING', '图片尚未上传完成', [
+          { field: 'objectKeys', message: '图片尚未上传完成' },
+        ])
+      }
+      if (stat.size > MAX_IMAGE_BYTES || !isAllowedMime(stat.contentType)) {
+        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片格式或大小不符合要求', [
+          { field: 'objectKeys', message: '图片格式或大小不符合要求' },
+        ])
+      }
+    }
+  }
+
+  return {
+    async listFeed(viewerId, query) {
+      // `status` 只在同时给 `sellerId` 时被 schema 接受；到这里还要确认查的是**自己**，
+      // 否则任何人都能 `?status=SOLD` 拉全站已售商品（契约 §2.1）。
+      if (query.sellerId !== undefined && query.sellerId !== viewerId) {
+        throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能查看自己指定状态的商品')
+      }
+
+      const cursor = decodeFeedCursor(query.cursor, query.sort)
+      const status = query.status ?? ACTIVE
+
+      const rows = await store.listFeed({
+        limit: query.limit,
+        cursor,
+        sort: query.sort,
+        status,
+        search: query.q,
+        category: query.category,
+        priceMinCents: query.priceMinCents,
+        priceMaxCents: query.priceMaxCents,
+        sellerId: query.sellerId,
+      })
+
+      const hasMore = rows.length > query.limit
+      const page = hasMore ? rows.slice(0, query.limit) : rows
+
+      const items: ListingCard[] = []
+      for (const entry of page) {
+        const card = toCard(entry.listing, entry.coverObjectKey)
+        if (card) items.push(card)
+      }
+
+      // 游标基于**最后一条已返回**的行，而不是 limit+1 那一条：否则会漏掉一个商品。
+      const last = page.at(-1)
+      const nextCursor =
+        hasMore && last
+          ? encodeCursor({ sortKey: cursorKeyOf(last.listing, query.sort), id: last.listing.id })
+          : null
+
+      return ListingFeedResponseSchema.parse({ items, nextCursor })
+    },
+
+    getDetail(viewerId, id) {
+      return loadDetail(viewerId, id)
+    },
+
+    async createListing(userId, input) {
+      await assertUsableObjectKeys(userId, input.objectKeys)
+
+      const listingId = newId()
+      const result = await store.createListingAtomic({
+        id: listingId,
+        sellerId: userId,
+        title: input.title,
+        description: input.description,
+        priceCents: input.priceCents,
+        condition: input.condition,
+        category: input.category,
+        urgent: input.urgent,
+        negotiable: input.negotiable,
+        free: input.free,
+        objectKeys: input.objectKeys,
+        duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
+      })
+
+      // 命中 5 秒内容窗口：返回已有商品（200 而不是 201），并**重新投递**匹配 job ——
+      // 前一次投递失败不能让该商品永久失配，消费侧按 listingId 幂等（契约 §2.3）。
+      if (result.kind === 'duplicate') await store.enqueueMatchJob(result.listingId)
+
+      return {
+        created: result.kind === 'created',
+        detail: await loadDetail(userId, result.listingId),
+      }
+    },
+
+    async updateListing(userId, id, input) {
+      const state = await requireOwnEditable(userId, id, store)
+
+      // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
+      // 只给 priceCents 时也要看库里当前的 free。
+      const finalFree = input.free ?? state.free
+      const finalPrice = input.priceCents ?? state.priceCents
+      if (finalFree && finalPrice !== 0) {
+        throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
+          { field: 'priceCents', message: '0 元送时价格必须为 0' },
+        ])
+      }
+
+      if (input.objectKeys) await assertUsableObjectKeys(userId, input.objectKeys)
+
+      // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
+      // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
+      const { objectKeys, ...fields } = input
+
+      const updated = await store.updateListing({
+        id,
+        sellerId: userId,
+        fields,
+        ...(objectKeys ? { objectKeys } : {}),
+      })
+      if (!updated) throw notFound()
+
+      return loadDetail(userId, id)
+    },
+
+    async transition(userId, id, to) {
+      const state = await requireOwnEditable(userId, id, store)
+
+      // 目标态已经是当前态 → 幂等成功（契约 §2.5 / §2.6 的状态表）。
+      if (state.status === to) return loadDetail(userId, id)
+
+      const changed = await store.setStatus({ id, from: state.status, to })
+      if (!changed) {
+        // 并发下别人先改了：只有改成目标态才算幂等成功，否则是状态机拒绝。
+        const latest = await store.findState(id)
+        if (latest?.status === to) return loadDetail(userId, id)
+        throw new ListingServiceError(409, 'LISTING_NOT_EDITABLE', '当前状态不允许该操作')
+      }
+
+      return loadDetail(userId, id)
+    },
+  }
+}
+
+/**
+ * 只在这里引用 `z.url()` 语义：与 `MeSchema` 的 `avatarUrl` 保持同一条规则
+ * （值域外的历史值降级为 `null`，而不是让整条详情解析失败）。
+ */
+function isAllowedMime(contentType: string): boolean {
+  return (ALLOWED_IMAGE_MIME as readonly string[]).includes(contentType)
+}
+
+/**
+ * 编辑 / 下架 / 上架共用的前置校验：存在性 → 归属 → 状态机。
+ * 顺序不能换：先判归属会把"别人的商品是否存在"泄漏给调用方。
+ */
+async function requireOwnEditable(
+  userId: string,
+  id: string,
+  store: ListingStore,
+): Promise<ListingState> {
+  const state = await store.findState(id)
+  if (!state) throw new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在')
+  if (state.sellerId !== userId) {
+    throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
+  }
+  if (LOCKED_STATUSES.includes(state.status)) {
+    throw new ListingServiceError(409, 'LISTING_NOT_EDITABLE', '商品处于交易中或已售出，无法修改')
+  }
+  return state
+}
+
+/** 游标解码 + 与排序键类型对齐；不合法一律 422（契约 §2.1）。 */
+function decodeFeedCursor(
+  raw: string | undefined,
+  sort: ListingFeedQuery['sort'],
+): FeedCursorKey | null {
+  if (raw === undefined) return null
+
+  const decoded = decodeCursor(raw)
+  if (!decoded) throw invalidCursor()
+
+  if (sort === 'newest') {
+    if (typeof decoded.sortKey !== 'string') throw invalidCursor()
+    const createdAt = new Date(decoded.sortKey)
+    if (Number.isNaN(createdAt.getTime())) throw invalidCursor()
+    return { kind: 'newest', createdAt, id: decoded.id }
+  }
+
+  if (typeof decoded.sortKey !== 'number') throw invalidCursor()
+  return { kind: sort, priceCents: decoded.sortKey, id: decoded.id }
+}
+
+function invalidCursor(): ListingServiceError {
+  return new ListingServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
+    { field: 'cursor', message: 'cursor 无效' },
+  ])
+}
+
+function cursorKeyOf(listing: ListingRow, sort: ListingFeedQuery['sort']): string | number {
+  return sort === 'newest' ? listing.createdAt.toISOString() : listing.priceCents
+}
