@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "generate": "bun --env-file=../../.env drizzle-kit generate",
     "migrate": "bun --env-file=../../.env drizzle-kit migrate",
-    "studio": "bun --env-file=../../.env drizzle-kit studio"
+    "studio": "bun --env-file=../../.env drizzle-kit studio",
+    "seed": "bun --env-file=../../.env src/seed.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2"
