@@ -111,24 +111,6 @@ describe('wishes API wiring (#7)', () => {
     expect(forged.status).toBe(401)
   })
 
-  test('pool route is wired and never exposes user identity', async () => {
-    const cookie = await registerUser('04')
-    await createWish(cookie)
-
-    const response = await app.request('/api/wishes/pool', { headers: { cookie } })
-    expect(response.status).toBe(200)
-
-    const body = (await response.json()) as { items: Record<string, unknown>[] }
-    for (const item of body.items) {
-      expect(Object.keys(item).sort()).toEqual([
-        'category',
-        'keyword',
-        'medianBudgetCents',
-        'wantCount',
-      ])
-    }
-  })
-
   test('create writes a PENDING MATCH_WISH job for the created wish', async () => {
     const cookie = await registerUser('01')
     const wish = await createWish(cookie)
@@ -187,5 +169,31 @@ describe('wishes API wiring (#7)', () => {
     const list = await app.request('/api/wishes', { headers: { cookie: ownerCookie } })
     expect(list.status).toBe(200)
     expect(await list.json()).toMatchObject({ total: 1 })
+  })
+
+  // 放在最后：需求池服务内有 60s 缓存，必须是本文件第一次、且数据已就绪时调用
+  test('pool returns k-anonymous aggregates over HTTP without any user identity', async () => {
+    for (const serial of ['05', '06', '07', '08']) {
+      const cookie = await registerUser(serial)
+      await createWish(cookie)
+    }
+    const cookie = await registerUser('09')
+
+    const response = await app.request('/api/wishes/pool', { headers: { cookie } })
+    expect(response.status).toBe(200)
+
+    const raw = await response.text()
+    expect(raw).not.toContain('userId')
+    expect(raw).not.toContain('wishId')
+
+    const body = JSON.parse(raw) as { items: Record<string, unknown>[] }
+    const item = body.items.find((entry) => entry.keyword === '机械键盘')
+    expect(item).toBeDefined()
+    expect(Object.keys(item ?? {}).sort()).toEqual([
+      'category',
+      'keyword',
+      'medianBudgetCents',
+      'wantCount',
+    ])
   })
 })

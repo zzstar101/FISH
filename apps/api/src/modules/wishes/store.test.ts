@@ -110,6 +110,22 @@ describe('wishes store (integration)', () => {
     expect(Number(count?.c)).toBe(1)
   })
 
+  test('rolls back the wish when the MATCH_WISH job insert fails', async () => {
+    // 反向用例：愿望与 job 是同一语句，job 失败必须整体回滚，不能留下没有 job 的愿望。
+    await db.execute(
+      sql`ALTER TABLE jobs ADD CONSTRAINT tmp_reject_match_wish CHECK (type <> 'MATCH_WISH') NOT VALID`,
+    )
+    try {
+      const wish = baseRow({ keyword: '原子性验证' })
+      await expect(
+        store.createOrGetRecent(wish, 10, new Date(Date.now() - 5_000)),
+      ).rejects.toThrow()
+      expect(await store.findById(wish.id)).toBeNull()
+    } finally {
+      await db.execute(sql`ALTER TABLE jobs DROP CONSTRAINT IF EXISTS tmp_reject_match_wish`)
+    }
+  })
+
   test('findById and listByUser report matchCount from the matches table', async () => {
     const wish = baseRow({ keyword: '二手教材' })
     const created = await store.createOrGetRecent(wish, 10, new Date(Date.now() - 5_000))

@@ -213,7 +213,9 @@ export function createSqlWishStore(db: Db): WishStore {
         SELECT keyword, category, count(*)::int AS want_count,
                percentile_cont(0.5) WITHIN GROUP (ORDER BY budget_max_cents)::float8 AS median_budget_cents
         FROM wishes
-        WHERE status = 'ACTIVE'
+        -- category / budget_max_cents 在 #2 的 schema 里可空（为 #8 的「不限分类」预留）；
+        -- 需求池输出契约要求二者非空，这里显式过滤，避免 NULL 经 String(null) 变成 "null" 后让整个 /pool 400。
+        WHERE status = 'ACTIVE' AND category IS NOT NULL AND budget_max_cents IS NOT NULL
         GROUP BY keyword, category
         -- 隐私门槛按「去重用户数」而非行数：同一用户刷多条不得把小组抬进需求池。
         HAVING count(DISTINCT user_id) >= ${minCount}
