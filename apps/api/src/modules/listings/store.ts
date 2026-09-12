@@ -120,6 +120,10 @@ export interface ListingStore {
 
   listFeed(criteria: FeedCriteria): Promise<FeedEntry[]>
 
+  /**
+   * 编辑商品。改到行时**在同一事务内**投一条 `MATCH_LISTING`（契约 §7.13：标题/描述 → keyword、
+   * 价格、分类都是打分输入，不重算就会停在旧分数）。返回 `null` 表示没改到行，此时不投。
+   */
   updateListing(input: {
     id: string
     sellerId: string
@@ -128,7 +132,13 @@ export interface ListingStore {
     objectKeys?: string[]
   }): Promise<ListingRow | null>
 
-  /** 只从 `from` 迁到 `to`；返回是否真的改了行（并发下可能已被别人改走）。 */
+  /**
+   * 只从 `from` 迁到 `to`；返回是否真的改了行（并发下可能已被别人改走）。
+   *
+   * 改到行时**在同一事务内**投一条 `MATCH_LISTING`，`offline` / `online` **两个方向都投**
+   * （契约 §7.13：引擎对非 ACTIVE 是 `target-not-active` no-op；重新上架则必须重算，
+   * 否则下架期间新建的愿望永远匹配不到它）。没改到行就不投。
+   */
   setStatus(input: { id: string; from: ListingStatus; to: ListingStatus }): Promise<boolean>
 }
 
