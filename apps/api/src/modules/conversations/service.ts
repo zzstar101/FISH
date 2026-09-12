@@ -80,8 +80,11 @@ export function createConversationService({
       const inserted = await store.insertIfAbsent(input.listingId, userId, listing.sellerId)
       const conversationId =
         inserted?.id ?? (await store.findIdByListingAndBuyer(input.listingId, userId))
-      if (!conversationId)
-        throw new ConversationServiceError(404, 'LISTING_NOT_FOUND', '商品不存在')
+      if (!conversationId) {
+        // 防御分支：商品刚查过必然存在，走到这里只能是会话行在竞态窗口里消失了
+        // （P0 无删除路径，实际不可达）。语义是"会话不在"，不是"商品不在"。
+        throw notFound()
+      }
 
       const detail = await store.findDetail(conversationId, userId)
       if (!detail) throw notFound()

@@ -185,7 +185,8 @@ export function createSqlConversationStore(db: Db): ConversationStore {
     },
 
     async coverObjectKeys(listingIds) {
-      const map = new Map<string, string | null>()
+      // 无图商品也显式置 null（而不是缺失键）：调用方语义是"查过、没有"，不是"没查"。
+      const map = new Map<string, string | null>(listingIds.map((id) => [id, null]))
       if (listingIds.length === 0) return map
       const result = await db.execute(sql`
         SELECT DISTINCT ON (li.listing_id) li.listing_id, li.object_key

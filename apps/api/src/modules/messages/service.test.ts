@@ -27,7 +27,11 @@ class MemoryMessageStore implements MessageStore {
   ) {
     const all = this.messages
       .filter((row) => row.conversation_id === conversationId)
-      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
+      // 与 SQL 同一排序键：(created_at DESC, id DESC)——同 created_at 的行也要有稳定顺序
+      .sort(
+        (a, b) =>
+          String(b.created_at).localeCompare(String(a.created_at)) || b.id.localeCompare(a.id),
+      )
     if (filter.before) {
       const index = all.findIndex((row) => row.id === filter.before)
       if (index === -1) return { kind: 'invalid-cursor' as const }

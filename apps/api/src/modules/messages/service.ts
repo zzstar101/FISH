@@ -5,7 +5,6 @@ import {
   type MessageSendInput,
   messageDtoSchema,
   messageListResponseSchema,
-  messageSendInputSchema,
 } from '@fish/contracts/chat/schema'
 import type { MessageRow, MessageStore } from './store'
 
@@ -82,10 +81,11 @@ export function createMessageService({ store }: { store: MessageStore }): Messag
     },
 
     async sendTextMessage(userId, conversationId, input) {
-      const content = messageSendInputSchema.parse(input)
+      // router 已用契约 schema safeParse 过（422 走校验信封）；这里只保留 trim 不变量，
+      // 不重复 parse——内部误用时 ZodError 落 app.onError 而不是 422，反而更难查。
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
-      const row = await store.insertText(conversationId, userId, content.content)
+      const row = await store.insertText(conversationId, userId, input.content.trim())
       return toMessageDto(row)
     },
   }
