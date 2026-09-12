@@ -1,9 +1,6 @@
 import { z } from 'zod'
 
-/**
- * Wish Domain Contract（Issue #7）。
- * 由 Wish Owner（Coast-87）维护；前端对接只依赖本目录，字段变更走 PR 反馈。
- */
+/** Wish Domain Contract（Issue #7）。前端和 API 只依赖本目录的字段定义。 */
 
 export const wishStatusSchema = z.enum(['ACTIVE', 'CLOSED', 'FULFILLED'])
 export type WishStatus = z.infer<typeof wishStatusSchema>
@@ -20,39 +17,49 @@ export const wishCategorySchema = z.enum([
 ])
 export type WishCategory = z.infer<typeof wishCategorySchema>
 
-const trimmedKeyword = z
+const keywordSchema = z
   .string()
   .trim()
-  .min(2)
-  .max(30)
-  .refine((k) => /[^\s\p{P}]/u.test(k), '关键词不能只有空白或标点')
+  .min(2, '关键词至少 2 个字符')
+  .max(30, '关键词最多 30 个字符')
+  .refine((keyword) => /[^\s\p{P}]/u.test(keyword), '关键词不能只有空白或标点')
+  .transform((keyword) => keyword.toLowerCase())
 
-const wishCreateInputObject = z.object({
-  keyword: trimmedKeyword,
-  category: wishCategorySchema,
-  budgetMinCents: z.number().int().nonnegative(),
-  budgetMaxCents: z.number().int().positive(),
-  description: z.string().max(500).optional(),
-  acceptSimilar: z.boolean().default(true),
-})
+const budgetMinSchema = z.number().int().nonnegative()
+const budgetMaxSchema = z.number().int().positive()
 
-export const wishCreateInputSchema = wishCreateInputObject.refine(
-  (w) => w.budgetMaxCents >= w.budgetMinCents,
-  { message: 'budgetMaxCents 必须 ≥ budgetMinCents' },
-)
+export const wishCreateInputSchema = z
+  .object({
+    keyword: keywordSchema,
+    category: wishCategorySchema,
+    budgetMinCents: budgetMinSchema,
+    budgetMaxCents: budgetMaxSchema,
+    description: z.string().max(500).optional(),
+    acceptSimilar: z.boolean().default(true),
+  })
+  .strict()
+  .refine((wish) => wish.budgetMaxCents >= wish.budgetMinCents, {
+    message: 'budgetMaxCents 必须 ≥ budgetMinCents',
+    path: ['budgetMaxCents'],
+  })
 export type WishCreateInput = z.infer<typeof wishCreateInputSchema>
 
-// 编辑全字段可选；strict 拒绝 status 等未声明字段，状态迁移只走 close/fulfill 端点。
-export const wishUpdateInputSchema = wishCreateInputObject
-  .extend({ acceptSimilar: z.boolean().optional() })
-  .partial()
+export const wishUpdateInputSchema = z
+  .object({
+    keyword: keywordSchema.optional(),
+    category: wishCategorySchema.optional(),
+    budgetMinCents: budgetMinSchema.optional(),
+    budgetMaxCents: budgetMaxSchema.optional(),
+    description: z.string().max(500).nullable().optional(),
+    acceptSimilar: z.boolean().optional(),
+  })
   .strict()
   .refine(
-    (w) =>
-      w.budgetMinCents === undefined ||
-      w.budgetMaxCents === undefined ||
-      w.budgetMaxCents >= w.budgetMinCents,
-    { message: 'budgetMaxCents 必须 ≥ budgetMinCents' },
+    (wish) =>
+      wish.budgetMinCents === undefined ||
+      wish.budgetMaxCents === undefined ||
+      wish.budgetMaxCents >= wish.budgetMinCents,
+    { message: 'budgetMaxCents 必须 ≥ budgetMinCents', path: ['budgetMaxCents'] },
   )
 export type WishUpdateInput = z.infer<typeof wishUpdateInputSchema>
 
@@ -66,7 +73,7 @@ export const wishDtoSchema = z.object({
   description: z.string().nullable(),
   acceptSimilar: z.boolean(),
   status: wishStatusSchema,
-  /** P0 先固定 0，等匹配结果表（Dev A）就绪后接入，见 Issue #7 设计方案阶段 5。 */
+  /** P0 先固定 0，等匹配结果表（Dev A）就绪后接入。 */
   matchCount: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -96,7 +103,5 @@ export const wishPoolItemSchema = z.object({
 })
 export type WishPoolItem = z.infer<typeof wishPoolItemSchema>
 
-export const wishPoolResponseSchema = z.object({
-  items: z.array(wishPoolItemSchema),
-})
+export const wishPoolResponseSchema = z.object({ items: z.array(wishPoolItemSchema) })
 export type WishPoolResponse = z.infer<typeof wishPoolResponseSchema>
