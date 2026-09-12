@@ -16,13 +16,10 @@ if (!databaseUrl) {
 }
 
 const db = createDb(databaseUrl)
-
-// 每个测试文件都会建自己的连接池。不关掉的话，`bun test` 并行跑全量测试会把本地 PG 的
-// max_connections（默认 100）顶爆，表现为 53300 `too many clients already`——那时失败的是
-// 恰好抢不到连接的那个文件，看上去像随机的 flaky。
 afterAll(async () => {
   await db.$client.close()
 })
+
 const engine = createMatchEngine(db)
 
 /**
@@ -168,6 +165,8 @@ describe('matchListing', () => {
       const second = await engine.matchListing(listingId)
 
       expect(second.created).toBe(0)
+      expect(second.matched).toBe(1)
+      expect(second.downgraded).toBe(0)
       const rows = await matchRows(listingId, wishId)
       expect(rows).toHaveLength(1)
       expect(rows[0]?.score).toBe(85)
@@ -186,6 +185,8 @@ describe('matchListing', () => {
       const result = await engine.matchListing(listingId)
 
       expect(result.skipped).toBeNull()
+      expect(result.matched).toBe(0)
+      expect(result.created).toBe(0)
       expect(await matchRows(listingId, wishId)).toHaveLength(0)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(0)
     })
@@ -215,6 +216,60 @@ describe('matchListing', () => {
 
       expect(await engine.matchListing(offlineId)).toMatchObject({ skipped: 'target-not-active' })
       expect(await engine.matchListing(newId())).toMatchObject({ skipped: 'target-missing' })
+    })
+  })
+
+  /**
+   * 掉出阈值：改标题后关键词不再命中（分类与价格仍满分）→ 65 分。
+   * 这一对仍在本轮收窄候选里，所以**必须**被覆盖成真实分数；否则行里还是 100，
+   * 读接口的阈值过滤就永远看不到它（审查发现的 P1）。
+   */
+  test('改标题后掉出阈值：既有行被覆盖成低分，通知不增加', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await engine.matchListing(listingId)
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
+
+      await db
+        .update(listings)
+        .set({ title: `完全无关的标题 ${keyword.replace('qa', 'zz')}` })
+        .where(eq(listings.id, listingId))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result).toMatchObject({ matched: 0, downgraded: 1 })
+      const rows = await matchRows(listingId, wishId)
+      expect(rows).toHaveLength(1)
+      // 65 = 分类 100 + 关键词 0 + 价格 100；低于阈值 → 读接口不会返回它（§9.7）。
+      expect(rows[0]?.score).toBe(65)
+      expect(rows[0]?.keywordScore).toBe(0)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+    })
+  })
+
+  /**
+   * 掉出**收窄集合**：改分类（DIGITAL → BOOKS）后这对不再被候选 SQL 选中。
+   * 只加读接口过滤是不够的——必须把"已有行"也拉进本轮评估，否则旧分数永远留着。
+   */
+  test('改分类后掉出候选集：既有行同样被重新评估并覆盖', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await engine.matchListing(listingId)
+
+      await db.update(listings).set({ category: 'APPAREL' }).where(eq(listings.id, listingId))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result).toMatchObject({ matched: 0, downgraded: 1 })
+      const rows = await matchRows(listingId, wishId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(65)
+      expect(rows[0]?.categoryScore).toBe(0)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
     })
   })
 })
@@ -267,6 +322,24 @@ describe('matchWish', () => {
       // 分类不参与计分 → 落库的 categoryScore 是 0，总分按剩余两项归一化（契约 §3.2）。
       expect(rows[0]?.categoryScore).toBe(0)
       expect(rows[0]?.score).toBe(100)
+    })
+  })
+
+  // 两个方向写的是同一把唯一键（`(listing_id, wish_id)`），所以先 listing 后 wish
+  // 不能变成两行 / 两条通知——这是"同一对不重复"的跨方向验证。
+  test('两个方向交叉触发同一对：仍只有一行、一条通知', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+
+      const fromListing = await engine.matchListing(listingId)
+      const fromWish = await engine.matchWish(wishId)
+
+      expect(fromListing.created).toBe(1)
+      expect(fromWish.created).toBe(0)
+      expect(await matchRows(listingId, wishId)).toHaveLength(1)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
     })
   })
 })

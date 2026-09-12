@@ -70,9 +70,9 @@ export function keywordScore(listing: MatchListingFacts, keyword: string): numbe
  * 价格分：`budgetMaxCents` 为 NULL（不限预算）或在预算内 → 100；超出预算后线性衰减，
  * 到 **2 倍预算**归零（契约 §3.2）。
  *
- * 2 倍这个界限不是随手定的：`engine.ts` 的候选集收窄用同一条界限
- * （`price_cents <= 2 * budget_max_cents`），于是"候选集 = priceScore 可能 > 0 的集合"，
- * 两处规则不会互相矛盾。
+ * 2 倍这个数与 `engine.ts` 的候选集收窄相同，但两处不是同一件事：收窄直接**排除**
+ * `price > 2 × budget_max` 的候选（产品规则），所以那些对根本不会被打分——即使分类与关键词
+ * 都满分（那会得 70 分，本可以过阈值）。不要把它读成"只排除 priceScore = 0 的候选"。
  */
 export function priceScore(listing: MatchListingFacts, budgetMaxCents: number | null): number {
   if (budgetMaxCents === null) return 100
@@ -115,13 +115,4 @@ export function scoreMatch(listing: MatchListingFacts, wish: MatchWishFacts): Ma
     keywordScore: keyword,
     priceScore: price,
   }
-}
-
-/**
- * 候选集收窄的 SQL 与打分用的同一条界限（契约 §3.1）。
- * 目标是"只排除 priceScore 恒为 0 的候选"，不是"精确预算过滤"——超预算一点点的商品
- * 仍然应该出现在结果里，由 priceScore 扣分。
- */
-export function priceCandidateBound(budgetMaxCents: number | null): number | null {
-  return budgetMaxCents === null ? null : 2 * budgetMaxCents
 }

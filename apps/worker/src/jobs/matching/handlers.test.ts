@@ -23,18 +23,15 @@ const handlers = createMatchJobHandlers(db)
  */
 describe('createMatchJobHandlers', () => {
   test('两个方向都能被独立调用，目标不存在时是 no-op', async () => {
-    expect(await handlers.MATCH_LISTING({ listingId: newId() })).toEqual({
-      candidates: 0,
+    const expected = {
+      evaluated: 0,
       matched: 0,
       created: 0,
-      skipped: 'target-missing',
-    })
-    expect(await handlers.MATCH_WISH({ wishId: newId() })).toEqual({
-      candidates: 0,
-      matched: 0,
-      created: 0,
-      skipped: 'target-missing',
-    })
+      downgraded: 0,
+      skipped: 'target-missing' as const,
+    }
+    expect(await handlers.MATCH_LISTING({ listingId: newId() })).toEqual(expected)
+    expect(await handlers.MATCH_WISH({ wishId: newId() })).toEqual(expected)
   })
 
   // 契约 §3.5：坏 payload 要让 job 直接 FAILED，而不是静默跳过或按"另一个字段"理解。
