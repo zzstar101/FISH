@@ -436,12 +436,15 @@ test('setStatus 只从指定状态迁移，幂等与并发都由它兜底', asyn
 })
 
 // 真库上的端到端：service 的合并校验读的是"写入前"的状态，同一行被并发改成 free=true 后，
-// UPDATE 会撞上 listings_free_price_cents_zero。这里验证 PG 的错误形状确实能走到 service 的
-// 映射分支并给出 422（mock 出来的错误形状不算证据 —— 那条链路只在真库上才成立）。
+// service 自己的 UPDATE 会撞上 listings_free_price_cents_zero（在 `db.transaction` 里）。
+// 这里验证 PG 的错误形状确实能走到 service 的映射分支并给出 422（mock 出来的错误形状不算证据）。
+//
+// 价格必须初始为 0：否则"模拟并发"的那条 `set({ free: true })` **自己**就先违反同一条 CHECK，
+// 异常会在事务外（autocommit 语句）抛出，用例看着绿、其实从没走到 service 的写入路径。
 test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(
-      record(sellerId, { priceCents: 100, free: false }),
+      record(sellerId, { priceCents: 0, free: false }),
     )
 
     // 包一层 store：在 service 读完状态、真正 UPDATE 之前，模拟另一个请求把该行改成 free = true
@@ -478,12 +481,13 @@ test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
       }
     }
 
-    // 事务失败后价格没有被写入
+    // 事务失败后价格没有被写入（并发那句 set 已提交，所以 free 是 true、价格仍是 0）
     const rows = await db
-      .select({ priceCents: listings.priceCents })
+      .select({ priceCents: listings.priceCents, free: listings.free })
       .from(listings)
       .where(eq(listings.id, created.listingId))
-    expect(rows[0]?.priceCents).toBe(100)
+    expect(rows[0]?.priceCents).toBe(0)
+    expect(rows[0]?.free).toBe(true)
   })
 })
 
