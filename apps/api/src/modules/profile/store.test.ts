@@ -1,0 +1,117 @@
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { createDb } from '@fish/db/client'
+import { sql } from 'drizzle-orm'
+import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { createSqlProfileStore } from './store'
+
+const databaseUrl = process.env.DATABASE_URL
+if (!databaseUrl) {
+  throw new Error('集成测试需要 DATABASE_URL：先 bun run db:up && bun run db:migrate')
+}
+
+const migrationsFolder = Bun.fileURLToPath(
+  new URL('../../../../../packages/db/src/migrations', import.meta.url),
+)
+
+/** 与 wishes store.test.ts 相同的 scratch 库模式：互不污染开发库。 */
+const scratchDatabase = `fish_profile_store_test_${process.pid}`
+const scratchUrl = (() => {
+  const url = new URL(databaseUrl)
+  url.pathname = `/${scratchDatabase}`
+  return url.toString()
+})()
+
+const admin = createDb(databaseUrl)
+const db = createDb(scratchUrl)
+const store = createSqlProfileStore(db)
+
+const me = '01990000-0000-7000-8000-0000000000a1'
+const other = '01990000-0000-7000-8000-0000000000a2'
+const listingA = '01990000-0000-7000-8000-0000000000b1'
+const listingB = '01990000-0000-7000-8000-0000000000b2'
+const wishA = '01990000-0000-7000-8000-0000000000d1'
+const txA = '01990000-0000-7000-8000-0000000000e1' // 我是买家
+const txB = '01990000-0000-7000-8000-0000000000e2' // 我是卖家
+
+beforeAll(async () => {
+  await admin.$client.unsafe(`create database "${scratchDatabase}"`)
+  await migrate(db, { migrationsFolder })
+  for (const [i, uid] of [me, other].entries()) {
+    await db.execute(sql`
+      INSERT INTO users (id, student_no, password_hash, nickname)
+      VALUES (${uid}, ${`prof${process.pid}_${i}`}, 'test-hash', '个人中心测试')
+    `)
+  }
+  for (const [listingId, status] of [
+    [listingA, 'ACTIVE'],
+    [listingB, 'OFFLINE'], // 本人可见，但不算在售统计
+  ] as const) {
+    await db.execute(sql`
+      INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
+      VALUES (${listingId}, ${me}, '商品', '描述', 16000, 'DIGITAL', 'GOOD', ${status})
+    `)
+  }
+  await db.execute(sql`
+    INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents, status)
+    VALUES (${wishA}, ${me}, '机械键盘', 'DIGITAL', 10000, 20000, 'ACTIVE')
+  `)
+  // other 的商品，供"我的交易"用：txA 我买，txB 我卖
+  await db.execute(sql`
+    INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
+    VALUES ('01990000-0000-7000-8000-0000000000b3', ${other}, '对方商品', '描述', 10000, 'DAILY', 'GOOD', 'SOLD')
+  `)
+  await db.execute(sql`
+    INSERT INTO transactions (id, listing_id, buyer_id, seller_id, amount_cents, status, completed_at)
+    VALUES
+      (${txA}, '01990000-0000-7000-8000-0000000000b3', ${me}, ${other}, 10000, 'COMPLETED', now()),
+      (${txB}, ${listingA}, ${other}, ${me}, 16000, 'PENDING_MEETUP', NULL)
+  `)
+})
+
+afterAll(async () => {
+  await db.$client.close()
+  await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
+  await admin.$client.close()
+})
+
+describe('profile store (integration)', () => {
+  test('stats counts only ACTIVE listings/wishes and COMPLETED transactions (两角色合并)', async () => {
+    const stats = await store.stats(me)
+    expect(stats).toEqual({
+      activeListings: 1, // listingA ACTIVE；listingB OFFLINE 不计
+      activeWishes: 1,
+      completedTransactions: 1, // txA COMPLETED；txB PENDING 不计
+    })
+  })
+
+  test('ownListings returns own listings in any status, newest first, with cover', async () => {
+    const rows = await store.ownListings(me, 100)
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.status).toBe('OFFLINE') // listingB 后插 → 时间倒序在前
+    expect(rows[1]?.coverObjectKey).toBeNull()
+  })
+
+  test('ownListings does not include other users listings (只返回本人可见数据)', async () => {
+    const rows = await store.ownListings(other, 100)
+    expect(rows.map((row) => row.id)).toEqual(['01990000-0000-7000-8000-0000000000b3'])
+  })
+
+  test('ownWishes returns own wishes with matchCount', async () => {
+    const rows = await store.ownWishes(me, 100)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.match_count).toBe(0)
+  })
+
+  test('ownTransactions merges buying and selling; buyer_id distinguishes the role', async () => {
+    const rows = await store.ownTransactions(me, 100)
+    expect(rows).toHaveLength(2)
+    const byId = new Map(rows.map((row) => [row.id, row]))
+    expect(byId.get(txA)?.buyerId).toBe(me) // 我买
+    expect(byId.get(txB)?.buyerId).toBe(other) // 我卖
+  })
+
+  test('limit caps each list', async () => {
+    expect(await store.ownListings(me, 1)).toHaveLength(1)
+    expect(await store.ownTransactions(me, 1)).toHaveLength(1)
+  })
+})
