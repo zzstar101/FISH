@@ -249,6 +249,33 @@ describe('matchListing', () => {
     })
   })
 
+  /*
+   * 可见性与计数必须与读接口的策略一致（方向相关）：
+   * wish 侧隐藏 OFFLINE 商品、保留 RESERVED/SOLD（卡片带状态角标）。
+   * 这条区分是审查抓到的 P1——引擎曾把"对端 ACTIVE"当成"有效"，于是接口照旧展示
+   * RESERVED 的匹配而计数说它无效。
+   */
+  test('商品转 RESERVED/SOLD 后仍然算"可见"（wish 侧策略），转 OFFLINE 才算不可见', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await engine.matchListing(listingId)
+
+      await db.update(listings).set({ status: 'RESERVED' }).where(eq(listings.id, listingId))
+      expect(await engine.matchWish(wishId)).toMatchObject({ matched: 1, downgraded: 0 })
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
+
+      await db.update(listings).set({ status: 'SOLD' }).where(eq(listings.id, listingId))
+      expect(await engine.matchWish(wishId)).toMatchObject({ matched: 1, downgraded: 0 })
+
+      await db.update(listings).set({ status: 'OFFLINE' }).where(eq(listings.id, listingId))
+      expect(await engine.matchWish(wishId)).toMatchObject({ matched: 0, downgraded: 1 })
+      // 行仍在、分数仍是真实裸分——可见性由读接口的谓词决定，引擎不删行。
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
+    })
+  })
+
   /**
    * 掉出**价格**收窄（`price > 2 × budget_max`）：这一对的裸分恰好是 70
    * （分类 100 + 关键词 100 + 价格 0），所以只按 `score >= 阈值` 判断会把它当成有效匹配——
@@ -368,6 +395,22 @@ describe('matchWish', () => {
       // 分类不参与计分 → 落库的 categoryScore 是 0，总分按剩余两项归一化（契约 §3.2）。
       expect(rows[0]?.categoryScore).toBe(0)
       expect(rows[0]?.score).toBe(100)
+    })
+  })
+
+  // listing 侧策略与 wish 侧不同：只展示仍 ACTIVE 的（他人的）愿望。
+  test('愿望转 CLOSED 后不再"可见"（listing 侧策略）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await engine.matchListing(listingId)
+      expect(await engine.matchListing(listingId)).toMatchObject({ matched: 1, downgraded: 0 })
+
+      await db.update(wishes).set({ status: 'CLOSED' }).where(eq(wishes.id, wishId))
+
+      expect(await engine.matchListing(listingId)).toMatchObject({ matched: 0, downgraded: 1 })
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
     })
   })
 

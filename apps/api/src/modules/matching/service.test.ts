@@ -302,3 +302,22 @@ test('listing 方向同分时也按 id 降序', async () => {
     expect(response.items.map((item) => item.wish.id)).toEqual(expected)
   })
 })
+
+// 把 wish 侧的可见性策略钉住：RESERVED / SOLD 保留（卡片自带状态角标），只有 OFFLINE 隐藏。
+// 这条策略与引擎计数同源（见 apps/worker 的 engine.test.ts 同名用例）。
+test('wish 侧保留 RESERVED/SOLD 商品，只隐藏 OFFLINE', async () => {
+  await withOwners(async ({ ownerId, otherId }) => {
+    const wishId = await createWish(ownerId)
+    const reserved = await createListing(otherId, { status: 'RESERVED' })
+    const sold = await createListing(otherId, { status: 'SOLD' })
+    const offline = await createListing(otherId, { status: 'OFFLINE' })
+    await createMatch(reserved, wishId, 90)
+    await createMatch(sold, wishId, 85)
+    await createMatch(offline, wishId, 95)
+
+    const response = await service.listByWish(ownerId, wishId, 10)
+
+    expect(response.total).toBe(2)
+    expect(response.items.map((item) => item.listing.status)).toEqual(['RESERVED', 'SOLD'])
+  })
+})

@@ -29,25 +29,28 @@ export type MatchSkipReason = 'target-missing' | 'target-not-active'
 export type MatchRunResult = {
   /** 本轮**重新评估**过的对数：收窄候选 ∪ 已有匹配行，去重后。 */
   evaluated: number
-  /**
-   * 真正有效并被写入的对数：裸分达到阈值**且**仍满足收窄规则（§3.1）。
-   *
-   * 不变式：`matched + downgraded <= evaluated`。差额是"本轮评估了但没有写入"的对——
-   * 低于阈值且没有既有行（`skipped`），或者既低于阈值又有既有行（记在 `downgraded` 之外的
-   * 那部分只可能是"超 2 倍预算但裸分 70"这种方式：它不 matched，但会覆盖分数）。
-   */
+  /** 本轮写入且**读接口会展示**的对数（新建 + 覆盖）。 */
   matched: number
-  /** 其中**首次**创建的条数（= 本轮建了几条通知；契约 §3.4）。 */
+  /** 其中**首次**创建的条数（= 本轮真正建的通知条数；契约 §3.4）。 */
   created: number
   /**
-   * 既有行被重新打分成"无效匹配"的条数（商品/愿望被编辑后不再成立）：
-   * 要么分数低于阈值，要么不再满足收窄规则（例如价格超出 2 倍预算，裸分恰好 70）。
-   * 这些行不删（契约 §5.3），由读接口的可匹配性过滤隐藏（补记 §9.7 / §9.8）。
-   * 注意它是"本轮重新打分的条数"，不是"状态发生转变的条数"——已经是 65 分的行再算一次仍会 +1。
+   * 本轮写入但读接口**不会展示**的既有行条数：分数不够，或不满足读谓词（对端状态、价格收窄）。
+   * 是"本轮被重新打分的条数"，不是"状态发生转变的条数"——已经不可见的行再算一次仍会 +1。
    */
   downgraded: number
+  /** 目标不存在 / 不再是可匹配状态时的原因；正常跑完为 `null`。 */
   skipped: MatchSkipReason | null
 }
+
+/*
+ * 不变式：`matched + downgraded <= evaluated`，差额 = "评估了但没有写入"的对
+ * （不可新建且没有既有行 → `persist` 返回 `skipped`）。另有 `created <= matched`。
+ *
+ * 计数按**本轮方向的读接口可见性**分类（`matchListing` → `/matches?listingId=`；
+ * `matchWish` → `/matches?wishId=`），而不是按引擎内部的 `qualifies`：可见性策略是方向相关的
+ * （wish 侧保留 RESERVED/SOLD、listing 侧只显示 ACTIVE 愿望），拿内部判据计数就会得出
+ * "引擎说无效、接口却在展示"的矛盾读数——审查抓过两次。
+ */
 
 export interface MatchEngine {
   /** `MATCH_LISTING`：商品刚发布 / 被编辑 / 重新上架时，重算"想要它"的愿望。 */
@@ -68,6 +71,7 @@ type WishTarget = {
 
 type ListingTarget = {
   id: string
+  sellerId: string
   title: string
   description: string
   priceCents: number
@@ -76,18 +80,47 @@ type ListingTarget = {
 }
 
 /**
- * 收窄规则（§3.1）的 **TS 表达**，与两个候选 SQL 一一对应。
+ * 能否**新建**这一对：候选集收窄规则（§3.1）的 TS 镜像，与两个候选 SQL 逐条对应。
  *
- * 只在"已有匹配行被拉回重评"时用到：候选行天然满足这些条件。为什么必须重算一遍——
- * 只按裸分判断是不够的：`分类 100 + 关键词 100 + 价格超 2 倍` 的裸分恰好 **70**，
- * 会被 `score >= 阈值` 判成有效，于是同一对"新建时不匹配、编辑后却可见"（审查发现的 P1）。
+ * 它只决定"要不要 INSERT、要不要发通知"（`qualifies`）。**不要**拿它去判断"读接口会不会展示"——
+ * 可见性是方向相关的（见下面两个函数），两者不是同一件事，混用会让同一对事实出现
+ * "新建时不可见、先建行后编辑却可见"的历史相关行为（审查抓过两次）。
  */
-function withinNarrowing(wish: WishTarget, listing: ListingTarget): boolean {
+function creatable(wish: WishTarget, listing: ListingTarget): boolean {
   return (
     wish.status === 'ACTIVE' &&
     listing.status === 'ACTIVE' &&
+    wish.userId !== listing.sellerId &&
     (wish.category === null || wish.category === listing.category) &&
     (wish.budgetMaxCents === null || listing.priceCents <= 2 * wish.budgetMaxCents)
+  )
+}
+
+/** 与 `apps/api/src/modules/matching/store.ts` 的读谓词同一条：`price <= 2 × budget_max`。 */
+function priceWithinBudget(wish: WishTarget, listing: ListingTarget): boolean {
+  return wish.budgetMaxCents === null || listing.priceCents <= 2 * wish.budgetMaxCents
+}
+
+/**
+ * `GET /matches?wishId=` 会不会展示这一对（镜像 wish 侧读谓词）：
+ * `OFFLINE` 商品隐藏；`RESERVED` / `SOLD` **保留**（商品状态在卡片里可见）。
+ */
+function visibleToWishOwner(wish: WishTarget, listing: ListingTarget, score: number): boolean {
+  return (
+    score >= MATCH_SCORE_THRESHOLD &&
+    listing.status !== 'OFFLINE' &&
+    priceWithinBudget(wish, listing)
+  )
+}
+
+/**
+ * `GET /matches?listingId=` 会不会展示这一对（镜像 listing 侧读谓词）：
+ * 只展示仍 `ACTIVE` 的（他人的）愿望——`WishSummary` 里没有 status 字段，前端无法区分
+ * "还在求购"与"已经不需要了"。
+ */
+function visibleToListingOwner(wish: WishTarget, listing: ListingTarget, score: number): boolean {
+  return (
+    score >= MATCH_SCORE_THRESHOLD && wish.status === 'ACTIVE' && priceWithinBudget(wish, listing)
   )
 }
 
@@ -147,8 +180,7 @@ export function createMatchEngine(db: Db): MatchEngine {
   ): Promise<'created' | 'updated' | 'skipped'> {
     const { score, categoryScore, keywordScore, priceScore } = input.breakdown
 
-    // 不成立又没行可写：直接跳过。注意**不要**走一次必然冲突的 INSERT——那既浪费一条语句，
-    // 又会让 `created` 与"本轮真正建了几条通知"不再等价。
+    // 不成立又没行可写：直接跳过——否则会为一个不成立的匹配新建行**并发出通知**。
     if (!input.qualifies) {
       if (!input.hadRow) return 'skipped'
       await tx
@@ -196,7 +228,7 @@ export function createMatchEngine(db: Db): MatchEngine {
   /** 把「本轮评估集合」跑完：打分 → 写入 → 计数。 */
   async function applyTargets(
     targetListing: ListingTarget,
-    targets: Map<string, { wish: WishTarget; hadRow: boolean; withinNarrowing: boolean }>,
+    targets: Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>,
   ): Promise<MatchRunResult> {
     const listingFacts: MatchListingFacts = {
       title: targetListing.title,
@@ -210,13 +242,14 @@ export function createMatchEngine(db: Db): MatchEngine {
     let downgraded = 0
 
     await db.transaction(async (tx) => {
-      for (const { wish, hadRow, withinNarrowing: narrowed } of targets.values()) {
+      for (const { wish, hadRow, creatable: canCreate } of targets.values()) {
         const breakdown = scoreMatch(listingFacts, {
           keyword: wish.keyword,
           category: wish.category,
           budgetMaxCents: wish.budgetMaxCents,
         })
-        const qualifies = narrowed && breakdown.score >= MATCH_SCORE_THRESHOLD
+        // `qualifies` 只决定"能不能新建这一对"；计数按**读接口会不会展示**（可见性）来分。
+        const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD
         const outcome = await persist(tx, {
           listingId: targetListing.id,
           wishId: wish.id,
@@ -227,7 +260,9 @@ export function createMatchEngine(db: Db): MatchEngine {
         })
         if (outcome === 'skipped') continue
 
-        if (qualifies) matched += 1
+        // 计数用**本轮方向**的读接口可见性：applyTargets 由 `matchListing` 调用 →
+        // 对应 `GET /matches?listingId=`（只展示 ACTIVE 愿望）。
+        if (visibleToListingOwner(wish, targetListing, breakdown.score)) matched += 1
         else downgraded += 1
         if (outcome === 'created') created += 1
       }
@@ -274,6 +309,7 @@ export function createMatchEngine(db: Db): MatchEngine {
 
       const listingTarget: ListingTarget = {
         id: listing.id,
+        sellerId: listing.sellerId,
         title: listing.title,
         description: listing.description,
         priceCents: listing.priceCents,
@@ -282,12 +318,9 @@ export function createMatchEngine(db: Db): MatchEngine {
       }
 
       const existingIds = new Set(existingRows.map((row) => row.id))
-      const targets = new Map<
-        string,
-        { wish: WishTarget; hadRow: boolean; withinNarrowing: boolean }
-      >()
+      const targets = new Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>()
       for (const wish of candidates) {
-        targets.set(wish.id, { wish, hadRow: existingIds.has(wish.id), withinNarrowing: true })
+        targets.set(wish.id, { wish, hadRow: existingIds.has(wish.id), creatable: true })
       }
       for (const row of existingRows) {
         // 已经掉出收窄集合（改分类、超 2 倍预算、愿望已关闭…）但行还在：也要按真实分数重新评估，
@@ -296,7 +329,7 @@ export function createMatchEngine(db: Db): MatchEngine {
           targets.set(row.id, {
             wish: row,
             hadRow: true,
-            withinNarrowing: withinNarrowing(row, listingTarget),
+            creatable: creatable(row, listingTarget),
           })
         }
       }
@@ -333,6 +366,7 @@ export function createMatchEngine(db: Db): MatchEngine {
         db
           .select({
             id: listings.id,
+            sellerId: listings.sellerId,
             title: listings.title,
             description: listings.description,
             priceCents: listings.priceCents,
@@ -356,13 +390,13 @@ export function createMatchEngine(db: Db): MatchEngine {
       const existingIds = new Set(existingRows.map((row) => row.id))
       const targets = new Map<
         string,
-        { listing: ListingTarget; hadRow: boolean; withinNarrowing: boolean }
+        { listing: ListingTarget; hadRow: boolean; creatable: boolean }
       >()
       for (const listing of candidates) {
         targets.set(listing.id, {
           listing,
           hadRow: existingIds.has(listing.id),
-          withinNarrowing: true,
+          creatable: true,
         })
       }
       for (const row of existingRows) {
@@ -371,7 +405,7 @@ export function createMatchEngine(db: Db): MatchEngine {
           targets.set(row.id, {
             listing: row,
             hadRow: true,
-            withinNarrowing: withinNarrowing(wishTarget, row),
+            creatable: creatable(wishTarget, row),
           })
         }
       }
@@ -387,7 +421,7 @@ export function createMatchEngine(db: Db): MatchEngine {
       let downgraded = 0
 
       await db.transaction(async (tx) => {
-        for (const { listing, hadRow, withinNarrowing: narrowed } of targets.values()) {
+        for (const { listing, hadRow, creatable: canCreate } of targets.values()) {
           const breakdown = scoreMatch(
             {
               title: listing.title,
@@ -397,7 +431,8 @@ export function createMatchEngine(db: Db): MatchEngine {
             },
             wishFacts,
           )
-          const qualifies = narrowed && breakdown.score >= MATCH_SCORE_THRESHOLD
+          // 同 listing 方向：`qualifies` 管新建，计数按"读接口会不会展示"（listing 侧镜像）。
+          const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD
           const outcome = await persist(tx, {
             listingId: listing.id,
             wishId: wish.id,
@@ -408,7 +443,8 @@ export function createMatchEngine(db: Db): MatchEngine {
           })
           if (outcome === 'skipped') continue
 
-          if (qualifies) matched += 1
+          // `matchWish` → 对应 `GET /matches?wishId=`（隐藏 OFFLINE 商品，保留 RESERVED/SOLD）。
+          if (visibleToWishOwner(wishTarget, listing, breakdown.score)) matched += 1
           else downgraded += 1
           if (outcome === 'created') created += 1
         }
