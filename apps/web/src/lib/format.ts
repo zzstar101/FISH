@@ -11,8 +11,14 @@ export function formatYuan(cents: number): string {
   return yuan % 1 === 0 ? yuan.toLocaleString('zh-CN') : yuan.toFixed(2)
 }
 
-/** 折扣：`6.3折`；没有原价或原价不高于现价时为 null。 */
+/**
+ * 折扣：`6.3折`；没有原价、原价不高于现价、或本身就是免费送时为 null。
+ *
+ * 免费送必须在这里短路：`priceCents === 0` 时按公式算出来是没意义的 `0.0折`
+ * （0 元的东西谈不上几折），详情页会把它渲染在「免费送」大字的旁边。
+ */
 export function formatDiscount(priceCents: number, originalCents?: number): string | null {
+  if (priceCents === 0) return null
   if (!originalCents || originalCents <= priceCents) return null
   const ratio = (priceCents / originalCents) * 10
   return `${ratio.toFixed(1)}折`

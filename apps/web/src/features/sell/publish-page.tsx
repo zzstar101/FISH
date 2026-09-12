@@ -103,8 +103,9 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
     if (description.trim().length === 0) next.description = '写点描述,买家更愿意问'
     if (description.length > 500) next.description = '描述最多 500 字'
     if (!category) next.category = '请选择分类'
-    if (!PRICE_PATTERN.test(price.trim()) || Number(price) <= 0) {
-      next.price = '填一个大于 0 的数字,最多两位小数'
+    // 0 元合法 = 免费送（#6 工作项）；这里只挡空值、非数字与负数。
+    if (price.trim() === '' || !PRICE_PATTERN.test(price.trim())) {
+      next.price = '填一个数字,0 元即免费送,最多两位小数'
     }
     if (originalPrice.trim() && !PRICE_PATTERN.test(originalPrice.trim())) {
       next.originalPrice = '原价最多两位小数'
@@ -409,7 +410,7 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
  * 发布成功页。
  *
  * 刻意**不自动跳转**：跳走之后用户不确定到底成功没有。
- * 这里给明确反馈 + 两个出口（看详情 / 再发一件），把选择权交回用户。
+ * 这里给明确反馈 + 三个出口（看详情 / 再发一件 / 回首页），把选择权交回用户。
  */
 function PublishSuccess({ listing }: { listing: ListingView }) {
   const navigate = useNavigate()

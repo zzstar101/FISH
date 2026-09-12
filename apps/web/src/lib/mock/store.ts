@@ -313,12 +313,15 @@ export type ListingDraft = {
  * 标签由 draft 的开关推导，而不是让调用方直接传数组：
  * `tags` 同时被搜索（`searchListings` 会匹配 tag）与列表标签渲染消费，
  * 两种展示（角标走 `urgent` 字段、标签走 `tags`）必须只有一个来源。
+ *
+ * 「免费送」与「急出」可以并存（0 元的东西也可能急着出手），所以免费时只跳过「可小刀」
+ * （都已经免费了谈不上还价）。这里**不能**因为 free 就整体提前返回：那样会连独立的
+ * 急出标记一起丢掉，而 `withDerivedFlags` 会据 tags 把它还原成 `urgent: false`。
  */
 function draftTags(draft: ListingDraft): string[] {
-  if (draft.free) return ['免费送']
-  const tags: string[] = []
+  const tags: string[] = draft.free ? ['免费送'] : []
   if (draft.urgent) tags.push('急出')
-  if (draft.negotiable) tags.push('可小刀')
+  if (!draft.free && draft.negotiable) tags.push('可小刀')
   return tags
 }
 
