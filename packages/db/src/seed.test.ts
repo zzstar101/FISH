@@ -73,7 +73,7 @@ test('seed 可生成覆盖全部业务表的基础数据，且演示账号可用
     })
 
     // seed 写的是真实 argon2id 哈希（#3 替换了 #2 的占位值），前端要用它登录调试，
-    // 因此这里断言「文档里写的演示密码」确实能校验通过，而不是只断言行数。
+    // 因此这里断言文档里的演示密码（README「演示账号」）确实能校验通过，而不只断言行数。
     const demoUsers = await scratch
       .select({ passwordHash: users.passwordHash })
       .from(users)

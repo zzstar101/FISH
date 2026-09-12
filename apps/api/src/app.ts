@@ -12,9 +12,11 @@ import { API_VERSION } from './version'
 import { upgradeWebSocket } from './ws'
 
 /**
- * 只取错误链上的名称与 message，**不打印整个对象**：Drizzle 的包装错误带 `{ query, params }`，
- * 而注册路径的 `params` 里含 `student_no` 与 `password_hash`（#3 要求不公开学号）。
- * 消息里的 SQL 是占位符（`$1, $2`），不含实参值。
+ * 只输出**脱敏**的错误描述，不打印整个错误对象。
+ *
+ * Drizzle 的包装错误 message 是两行：第一行 `Failed query: <占位符 SQL>`，第二行 `params: [...]`
+ * 才是实参值（注册路径的 params 里含 `student_no` 与 `password_hash`）——所以只取第一行；
+ * 栈的首行同样是 `name: message`，因此只保留 `at ` 开头的调用帧。
  */
 function describeError(error: unknown): string {
   const parts: string[] = []
@@ -23,7 +25,14 @@ function describeError(error: unknown): string {
     parts.push(`${current.name}: ${current.message.split('\n')[0] ?? ''}`)
     current = current.cause
   }
-  return parts.join(' <- ') || String(error)
+
+  const frames = (error instanceof Error ? error.stack : '')
+    ?.split('\n')
+    .filter((line) => line.trim().startsWith('at '))
+    .slice(0, 10)
+    .join('\n')
+
+  return [parts.join(' <- ') || String(error), frames].filter(Boolean).join('\n')
 }
 
 export function createApp(env: ServerEnv) {

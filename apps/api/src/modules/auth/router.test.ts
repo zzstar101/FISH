@@ -22,11 +22,12 @@ if (!databaseUrl) {
  * 因此与 seed.test.ts 一样自建 scratch 库，顺带再验一次"migration 可在空库执行"。
  */
 const scratchDatabase = `fish_auth_test_${process.pid}`
-const scratchUrl = (() => {
+const databaseUrlFor = (name: string) => {
   const url = new URL(databaseUrl)
-  url.pathname = `/${scratchDatabase}`
+  url.pathname = `/${name}`
   return url.toString()
-})()
+}
+const scratchUrl = databaseUrlFor(scratchDatabase)
 
 const migrationsFolder = new URL('../../../../../packages/db/src/migrations', import.meta.url)
   .pathname
@@ -287,6 +288,43 @@ describe('Provider 边界', () => {
 
       expect(user.campus).toBe(expected)
       expect(user.authStatus).toBe('VERIFIED')
+    }
+  })
+})
+
+describe('未捕获异常', () => {
+  test('走同一个错误信封，且日志不泄漏请求里的密码与学号', async () => {
+    // 指向一个没有任何表的空库：注册必然抛未捕获异常，从而走到 app.onError
+    const brokenDatabase = `${scratchDatabase}_broken`
+    await admin.$client.unsafe(`create database "${brokenDatabase}"`)
+
+    const logged: string[] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => logged.push(args.map(String).join(' '))
+
+    try {
+      const brokenApp = createApp({
+        ...loadServerEnv(),
+        DATABASE_URL: databaseUrlFor(brokenDatabase),
+      })
+      const res = await brokenApp.request(
+        '/auth/register',
+        post(registerBody({ studentNo: '202101000115', password: 'probe-secret-pw' })),
+      )
+
+      expect(res.status).toBe(500)
+      expect(await res.json()).toMatchObject({ error: { code: 'INTERNAL_ERROR' } })
+
+      // Drizzle 的包装错误 message 第二行是 `params: [...]`（含 password_hash），
+      // 日志只允许取第一行；这条断言就是防止后人去掉那个 split
+      const text = logged.join('\n')
+      expect(text).not.toContain('probe-secret-pw')
+      expect(text).not.toContain('202101000115')
+      expect(text).not.toContain('params:')
+      expect(text).toContain('at ') // 仍然保留调用帧，否则 500 无法定位
+    } finally {
+      console.error = originalError
+      await admin.$client.unsafe(`drop database if exists "${brokenDatabase}" with (force)`)
     }
   })
 })
