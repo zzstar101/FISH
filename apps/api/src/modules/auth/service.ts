@@ -78,21 +78,26 @@ export function createAuthService(deps: {
       // 值域内，因此这里运行时校验一次，非法值回退到用户注册时填的校区。
       const verifiedCampus = CampusSchema.safeParse(verification.campus).data
 
-      let row: UserRow
+      let created: { row: UserRow; token: string; expiresAt: Date }
       try {
-        row = requireRow(
-          await db
-            .insert(users)
-            .values({
-              studentNo: input.studentNo,
-              passwordHash,
-              nickname: input.nickname,
-              campus: verifiedCampus ?? input.campus,
-              authStatus: verification.status,
-              verifiedAt: verification.status === 'VERIFIED' ? new Date() : null,
-            })
-            .returning(),
-        )
+        // 写用户与写会话必须同一个事务：否则会话写入失败会留下一个
+        // 「学号已占用但登不进去」的账号，重试注册只会得到 409。
+        created = await db.transaction(async (tx) => {
+          const row = requireRow(
+            await tx
+              .insert(users)
+              .values({
+                studentNo: input.studentNo,
+                passwordHash,
+                nickname: input.nickname,
+                campus: verifiedCampus ?? input.campus,
+                authStatus: verification.status,
+                verifiedAt: verification.status === 'VERIFIED' ? new Date() : null,
+              })
+              .returning(),
+          )
+          return { row, ...(await sessions.createWith(tx, row.id)) }
+        })
       } catch (error) {
         // 并发下两个请求可能同时通过上面的快速路径，靠唯一约束兜底
         if (isUniqueViolation(error)) {
@@ -101,8 +106,7 @@ export function createAuthService(deps: {
         throw error
       }
 
-      const { token, expiresAt } = await sessions.create(row.id)
-      return { user: toMe(row), token, expiresAt }
+      return { user: toMe(created.row), token: created.token, expiresAt: created.expiresAt }
     },
 
     async login(input: LoginRequest): Promise<{ user: Me; token: string; expiresAt: Date }> {

@@ -5,7 +5,7 @@ import { createDb, type Db } from '@fish/db/client'
 import { sessions } from '@fish/db/schema/sessions'
 import { users } from '@fish/db/schema/users'
 import { loadServerEnv } from '@fish/shared/env'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 import type { CampusVerificationProvider } from './provider'
@@ -288,6 +288,39 @@ describe('Provider 边界', () => {
 
       expect(user.campus).toBe(expected)
       expect(user.authStatus).toBe('VERIFIED')
+    }
+  })
+})
+
+describe('注册原子性', () => {
+  test('会话写入失败时回滚已创建的用户，不留下无法登录的账号', async () => {
+    // 造一个「有 users 表、没有 sessions 表」的库，逼会话插入失败
+    const partialDatabase = `${scratchDatabase}_partial`
+    await admin.$client.unsafe(`create database "${partialDatabase}"`)
+    const partial = createDb(databaseUrlFor(partialDatabase))
+
+    try {
+      await migrate(partial, { migrationsFolder })
+      await partial.execute(sql`drop table "sessions"`)
+
+      const partialApp = createApp({
+        ...loadServerEnv(),
+        DATABASE_URL: databaseUrlFor(partialDatabase),
+      })
+      const studentNo = '202101000116'
+      const res = await partialApp.request(
+        '/auth/register',
+        post(registerBody({ studentNo, nickname: '原子性' })),
+      )
+      expect(res.status).toBe(500)
+
+      // 用户插入与会话插入必须同属一个事务：否则会留下一个已占用学号、但登不进去的账号
+      expect(await partial.select().from(users).where(eq(users.studentNo, studentNo))).toHaveLength(
+        0,
+      )
+    } finally {
+      await partial.$client.close()
+      await admin.$client.unsafe(`drop database if exists "${partialDatabase}" with (force)`)
     }
   })
 })

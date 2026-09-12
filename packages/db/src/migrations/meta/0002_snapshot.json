@@ -1,6 +1,6 @@
 {
-  "id": "a229f1bb-4d7d-4f8e-a347-cbbe9e59dece",
-  "prevId": "e872db5c-ff94-4645-b587-a0172ddce2f8",
+  "id": "ded7cd76-a28e-44d4-9f44-496d73d37852",
+  "prevId": "a229f1bb-4d7d-4f8e-a347-cbbe9e59dece",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1012,21 +1012,6 @@
           "columns": [
             {
               "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "sessions_expires_at_idx": {
-          "name": "sessions_expires_at_idx",
-          "columns": [
-            {
-              "expression": "expires_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

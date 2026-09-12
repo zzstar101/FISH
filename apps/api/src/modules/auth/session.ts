@@ -17,17 +17,32 @@ function generateToken(): string {
 }
 
 /**
+ * 会话写入可用的句柄：普通连接，或事务句柄（注册要在同一事务里写 users + sessions）。
+ * Drizzle 的 `PgTransaction` 与 `PgDatabase` 共享 `insert` / `delete`。
+ */
+type SessionExecutor = Db | Parameters<Parameters<Db['transaction']>[0]>[0]
+
+async function insertSession(
+  executor: SessionExecutor,
+  userId: string,
+): Promise<{ token: string; expiresAt: Date }> {
+  const token = generateToken()
+  const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
+  await executor.insert(sessions).values({ userId, tokenHash: hashToken(token), expiresAt })
+  return { token, expiresAt }
+}
+
+/**
  * 会话存储。选它而不是无状态签名令牌，是为了让 `logout` 能**真正吊销**会话，
  * 同时不引入 `SESSION_SECRET` 这类新配置。多设备 / 多标签各占一行，互不影响。
  */
 export function createSessions(db: Db) {
   return {
-    async create(userId: string): Promise<{ token: string; expiresAt: Date }> {
-      const token = generateToken()
-      const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
-      await db.insert(sessions).values({ userId, tokenHash: hashToken(token), expiresAt })
-      return { token, expiresAt }
-    },
+    create: (userId: string) => insertSession(db, userId),
+
+    /** 在给定事务里创建会话（注册路径用它保证与用户插入同生共死）。 */
+    createWith: (executor: Parameters<Parameters<Db['transaction']>[0]>[0], userId: string) =>
+      insertSession(executor, userId),
 
     /**
      * 校验令牌。过期的行在**被访问到时**顺手删掉；长期不再被访问的过期行会残留
