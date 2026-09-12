@@ -14,6 +14,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as MatchRouteImport } from './routes/match'
 import { Route as MessageRouteImport } from './routes/message'
 import { Route as MylistRouteImport } from './routes/mylist'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
@@ -50,6 +51,11 @@ const MessageRoute = MessageRouteImport.update({
 const MylistRoute = MylistRouteImport.update({
   id: '/mylist',
   path: '/mylist',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OrdersRoute = OrdersRouteImport.update({
@@ -119,6 +125,7 @@ export interface FileRoutesByFullPath {
   '/match': typeof MatchRoute
   '/message': typeof MessageRoute
   '/mylist': typeof MylistRoute
+  '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
@@ -138,6 +145,7 @@ export interface FileRoutesByTo {
   '/match': typeof MatchRoute
   '/message': typeof MessageRoute
   '/mylist': typeof MylistRoute
+  '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
@@ -158,6 +166,7 @@ export interface FileRoutesById {
   '/match': typeof MatchRoute
   '/message': typeof MessageRoute
   '/mylist': typeof MylistRoute
+  '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
@@ -179,6 +188,7 @@ export interface FileRouteTypes {
     | '/match'
     | '/message'
     | '/mylist'
+    | '/notifications'
     | '/orders'
     | '/profile'
     | '/publish'
@@ -198,6 +208,7 @@ export interface FileRouteTypes {
     | '/match'
     | '/message'
     | '/mylist'
+    | '/notifications'
     | '/orders'
     | '/profile'
     | '/publish'
@@ -217,6 +228,7 @@ export interface FileRouteTypes {
     | '/match'
     | '/message'
     | '/mylist'
+    | '/notifications'
     | '/orders'
     | '/profile'
     | '/publish'
@@ -237,6 +249,7 @@ export interface RootRouteChildren {
   MatchRoute: typeof MatchRoute
   MessageRoute: typeof MessageRoute
   MylistRoute: typeof MylistRoute
+  NotificationsRoute: typeof NotificationsRoute
   OrdersRoute: typeof OrdersRoute
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
@@ -286,6 +299,13 @@ declare module '@tanstack/react-router' {
       path: '/mylist'
       fullPath: '/mylist'
       preLoaderRoute: typeof MylistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/orders': {
@@ -381,6 +401,7 @@ const rootRouteChildren: RootRouteChildren = {
   MatchRoute: MatchRoute,
   MessageRoute: MessageRoute,
   MylistRoute: MylistRoute,
+  NotificationsRoute: NotificationsRoute,
   OrdersRoute: OrdersRoute,
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,

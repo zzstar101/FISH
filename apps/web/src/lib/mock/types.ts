@@ -32,6 +32,8 @@ export type User = {
   joinedAt: string
   credit: number
   verified: boolean
+  /** #5 详情页卖家卡展示「成交 N 笔」。 */
+  soldCount: number
   bio?: string
 }
 
@@ -60,6 +62,10 @@ export type Listing = {
   sellerId: string
   kind: 'listing' | 'wish'
   free?: boolean
+  /** #6 发布时勾的「急出」：卡片左上角角标 + 详情标签，同时进 `tags` 供搜索命中。 */
+  urgent?: boolean
+  /** #6 发布时勾的「可刀」：进 `tags`，列表里作为标签展示。 */
+  negotiable?: boolean
 }
 
 export type Comment = {
@@ -114,14 +120,37 @@ export type Order = {
   minutesAgo: number
 }
 
-export type NotificationEntry = {
+/**
+ * #23 通知。
+ *
+ * 服务端**只存 `type` + `payload`，不存文案**（`packages/db/src/schema/notifications.ts`
+ * 的注释就是这个约定）：文案由客户端按 `type` 组装，改文案不用动数据。
+ *
+ * P0 只有 `MATCH`（#8 的匹配引擎在「愿望 ↔ 商品」首次命中时写入，收件人是愿望所有者）；
+ * `SYSTEM` 是种子里的公告类通知，没有匹配对象。
+ */
+export type NotificationType = 'MATCH' | 'SYSTEM'
+
+export type Notification = {
   id: string
+  type: NotificationType
+  /**
+   * `MATCH` 的形状是 `{ matchId, listingId, wishId }`。
+   * 两个 id 都可能指向**已被删除**的对象，跳转前要各自确认，确认不了就退回列表。
+   */
+  payload: { matchId?: string; listingId?: string; wishId?: string }
+  minutesAgo: number
+  read: boolean
+}
+
+/** 客户端按 `type` + `payload` 组装出来的可渲染文案（组装在 store 的 adapter 里）。 */
+export type NotificationView = Notification & {
   title: string
   description: string
   emoji: string
   tone: Tone
-  /** 点进去落在哪个会话（通知区不自己拼 id）。 */
-  conversationId: string
+  /** 点这条通知该去哪；为 `null` 表示没有可跳转目标（只标记已读）。 */
+  target: { to: '/detail/$listingId'; listingId: string } | { to: '/wish' } | null
 }
 
 export type CategoryEntry = {

@@ -3,16 +3,29 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
-import { Check, ChevronRight } from 'lucide-react'
+import { Bell, Check, ChevronRight } from 'lucide-react'
 import { formatChatTime, formatPrice } from '../../lib/format'
 import { AppShell } from '../navigation/app-shell'
-import { useConversations, useMarkAllRead, useNotifications } from './queries'
+import {
+  useConversations,
+  useMarkAllRead,
+  useNotificationBadge,
+  useUnreadNotificationCount,
+} from './queries'
 
-/** 消息页（#9）：通知 + 聊天列表。 */
+/**
+ * 消息页（#9）：置顶的「系统通知」入口 + 聊天列表。
+ *
+ * #23 把通知的形态定成「消息 tab 顶部置顶一行」：通知**不再**平铺在这里，
+ * 而是点进独立的通知列表页（`/notifications`）。这样会话列表的滚动区域完整，
+ * 置顶行也不会随列表滚走。
+ */
 export function MessagePage() {
   const conversations = useConversations()
-  const notifications = useNotifications()
+  const badge = useNotificationBadge()
+  const unreadNotifications = useUnreadNotificationCount()
   const markAllRead = useMarkAllRead()
+  const unreadChats = conversations.data?.reduce((sum, item) => sum + item.unread, 0) ?? 0
 
   return (
     <AppShell>
@@ -22,7 +35,7 @@ export function MessagePage() {
             <button
               aria-label="全部已读"
               className="flex size-9 items-center justify-center text-ink disabled:opacity-40"
-              disabled={notifications.data?.allRead !== false}
+              disabled={badge.data === 0}
               onClick={() => markAllRead.mutate()}
               type="button"
             >
@@ -33,44 +46,31 @@ export function MessagePage() {
         />
       </div>
 
+      {/* #23 的置顶行：固定在会话列表上方，右侧红点取自未读总数。 */}
       <section className="bg-surface">
-        <h2 className="flex items-center justify-between px-4 pt-3 pb-2 font-semibold text-[15px]">
-          通知
-          <span className="font-normal text-ink-3 text-xs">
-            {notifications.data?.allRead ? '已全部读完' : '全部已读'}
+        <Link className="flex items-center gap-3 px-4 py-3" to="/notifications">
+          <span className="relative flex size-11 shrink-0 items-center justify-center rounded-full bg-brand-soft">
+            <Bell className="size-5 text-brand" />
+            {unreadNotifications.data ? (
+              <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] text-white">
+                {unreadNotifications.data > 99 ? '99+' : unreadNotifications.data}
+              </span>
+            ) : null}
           </span>
-        </h2>
-        <ul>
-          {notifications.data?.items.map((item) => (
-            <li key={item.id}>
-              <Link
-                className="flex items-center gap-3 px-4 py-3"
-                params={{ conversationId: item.conversationId }}
-                to="/chat/$conversationId"
-              >
-                <Thumb
-                  className="size-11 rounded-full"
-                  emoji={item.emoji}
-                  emojiClassName="text-xl"
-                  tone={item.tone}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium text-[15px]">{item.title}</p>
-                  <p className="mt-0.5 truncate text-ink-3 text-xs">{item.description}</p>
-                </div>
-                <ChevronRight className="size-[18px] shrink-0 text-ink-3" />
-              </Link>
-            </li>
-          ))}
-        </ul>
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-[15px]">系统通知</p>
+            <p className="mt-0.5 truncate text-ink-3 text-xs">
+              {unreadNotifications.data ? `${unreadNotifications.data} 条未读` : '暂无未读通知'}
+            </p>
+          </div>
+          <ChevronRight className="size-[18px] shrink-0 text-ink-3" />
+        </Link>
       </section>
 
       <section className="mt-2 bg-surface pb-2">
         <h2 className="flex items-center justify-between px-4 pt-3 pb-1 font-semibold text-[15px]">
           聊天
-          <span className="font-normal text-ink-3 text-xs">
-            {conversations.data?.reduce((sum, item) => sum + item.unread, 0) ?? 0} 条未读
-          </span>
+          <span className="font-normal text-ink-3 text-xs">{unreadChats} 条未读</span>
         </h2>
 
         {conversations.isPending ? <LoadingState /> : null}

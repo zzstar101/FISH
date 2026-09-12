@@ -1,12 +1,4 @@
-import type {
-  CategoryEntry,
-  Conversation,
-  Listing,
-  NotificationEntry,
-  Order,
-  User,
-  Wish,
-} from './types'
+import type { CategoryEntry, Conversation, Listing, Notification, Order, User, Wish } from './types'
 
 /** 当前登录用户（Mock）。真实登录态由 #3 的 `GET /me` 提供。 */
 export const ME_ID = 'u-me'
@@ -22,6 +14,7 @@ export const users: User[] = [
     joinedAt: '2023-09',
     credit: 100,
     verified: true,
+    soldCount: 6,
   },
   {
     id: 'u1',
@@ -33,6 +26,7 @@ export const users: User[] = [
     joinedAt: '2023-09',
     credit: 98,
     verified: true,
+    soldCount: 12,
   },
   {
     id: 'u2',
@@ -44,6 +38,7 @@ export const users: User[] = [
     joinedAt: '2022-09',
     credit: 95,
     verified: true,
+    soldCount: 9,
   },
   {
     id: 'u3',
@@ -55,6 +50,7 @@ export const users: User[] = [
     joinedAt: '2023-09',
     credit: 96,
     verified: true,
+    soldCount: 4,
   },
   {
     id: 'u4',
@@ -66,6 +62,7 @@ export const users: User[] = [
     joinedAt: '2021-09',
     credit: 92,
     verified: false,
+    soldCount: 15,
   },
   {
     id: 'u5',
@@ -77,6 +74,7 @@ export const users: User[] = [
     joinedAt: '2022-09',
     credit: 97,
     verified: true,
+    soldCount: 7,
   },
   {
     id: 'u6',
@@ -88,6 +86,7 @@ export const users: User[] = [
     joinedAt: '2023-09',
     credit: 94,
     verified: true,
+    soldCount: 3,
   },
   {
     id: 'u7',
@@ -99,6 +98,7 @@ export const users: User[] = [
     joinedAt: '2024-09',
     credit: 93,
     verified: false,
+    soldCount: 1,
   },
 ]
 
@@ -641,22 +641,44 @@ export const conversations: Conversation[] = [
   },
 ]
 
-export const notifications: NotificationEntry[] = [
+/**
+ * #23 通知种子。
+ *
+ * 形状对齐真实表（`packages/db/src/schema/notifications.ts`）：只有 `type` + `payload`，
+ * **没有文案**——title / description / emoji 都由 store 的 adapter 按 `type` 组装。
+ *
+ * `n1` 指向 `p4`（考研数学，在售）、`n2` 指向 `p5`（索尼耳机，在售），用来验证
+ * `MATCH` 通知能正确跳到商品详情；`n3` 指向一个**不存在**的 listingId，
+ * 专门覆盖「目标已被删除时容错」这条；`n4` 是无跳转目标的系统公告。
+ */
+export const notifications: Notification[] = [
   {
     id: 'n1',
-    title: '校园小助手',
-    description: '发布、许愿、交易的消息都会出现在这里',
-    emoji: '🔔',
-    tone: 'warn',
-    conversationId: 'sys',
+    type: 'MATCH',
+    payload: { matchId: 'm1', listingId: 'p4', wishId: 'w3' },
+    minutesAgo: 35,
+    read: false,
   },
   {
     id: 'n2',
-    title: '交易与安全',
-    description: '建议在校内公共区域当面交易,注意核验物品',
-    emoji: '🛡️',
-    tone: 'sky',
-    conversationId: 'sys',
+    type: 'MATCH',
+    payload: { matchId: 'm2', listingId: 'p5', wishId: 'w1' },
+    minutesAgo: 180,
+    read: false,
+  },
+  {
+    id: 'n3',
+    type: 'MATCH',
+    payload: { matchId: 'm3', listingId: 'p-gone', wishId: 'w-gone' },
+    minutesAgo: 1500,
+    read: true,
+  },
+  {
+    id: 'n4',
+    type: 'SYSTEM',
+    payload: {},
+    minutesAgo: 2880,
+    read: true,
   },
 ]
 
