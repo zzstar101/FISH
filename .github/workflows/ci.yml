@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fish
+          POSTGRES_PASSWORD: fish
+          POSTGRES_DB: fish
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fish -d fish"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://fish:fish@localhost:5432/fish
+      API_PORT: "3000"
+      WEB_ORIGIN: http://localhost:5173
+      S3_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY_ID: fish
+      S3_SECRET_ACCESS_KEY: fish-secret
+      S3_BUCKET: fish
+      S3_PUBLIC_URL: http://localhost:9000/fish
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Lint & format
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
