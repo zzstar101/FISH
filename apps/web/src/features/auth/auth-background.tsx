@@ -16,9 +16,9 @@ import { tokenWhiteMix } from '../../lib/theme'
 export function AuthBackground() {
   const colors = useMemo(
     () => ({
-      crestColor: tokenWhiteMix('--color-lavender', '#4f46e5'),
-      horizonColor: tokenWhiteMix('--color-brand-soft', '#e9e8ff'),
-      waveColor: tokenWhiteMix('--color-brand', '#0005ff'),
+      crestColor: tokenWhiteMix('--color-lavender', '#46628f'),
+      horizonColor: tokenWhiteMix('--color-brand-soft', '#e6ecf7'),
+      waveColor: tokenWhiteMix('--color-brand', '#5177ba'),
     }),
     [],
   )

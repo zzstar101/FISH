@@ -9,30 +9,36 @@
  * 设计令牌（design tokens）——取自参考截图逐像素采样（见 _screenshots/DESIGN-SPEC.md）。
  * 前端全站只使用这里的语义令牌，不在组件里写死颜色。
  *
+ * 主色换成「鱼小应」品牌海报（D:\Downloads\…\b41d5402….png）采样出来的蓝：
+ * 海报是单一蓝色族，从深到浅 #5177ba（logo 描边最深像素）→ #a9c0e2（浪）→ #dce4ec（浅蓝圈），
+ * 中性色也全部偏冷（标题 #1e2731），页面底色海报本身就是 #f5f5f5，所以保持不变。
+ * 功能色（成功 / 警告 / 危险）不参与换色。
+ *
  * `static` 是必须的：Tailwind v4 默认只输出被工具类引用到的令牌变量，而 shadcn/ui
  * 组件会通过 `var(--color-*)` 间接消费这些变量（例如 sonner 的 --normal-bg），
  * 不强制输出就会出现「变量不存在」的静默降级。
  */
 @theme static {
-  --color-brand: #0005ff;
-  --color-brand-soft: #e9e8ff;
+  --color-brand: #5177ba;
+  --color-brand-soft: #e6ecf7;
 
   --color-bg: #f5f5f5;
   --color-surface: #ffffff;
-  --color-surface-2: #f2f3f5;
+  --color-surface-2: #eff1f6;
   /* 分类页左侧竖排栏的底色（比页面底色略深） */
-  --color-rail: #f3f4f5;
+  --color-rail: #f0f2f6;
 
-  --color-ink: #101114;
-  --color-ink-2: #5b6069;
-  --color-ink-3: #9aa0a8;
+  --color-ink: #1e2731;
+  --color-ink-2: #5a6472;
+  --color-ink-3: #949ba7;
 
-  --color-line: #ececef;
+  --color-line: #e4e8ef;
 
   --color-success: #16a34a;
   --color-success-soft: #d9f2e4;
-  --color-lavender: #4f46e5;
-  --color-lavender-soft: #e9e7ff;
+  /* 次级强调：海报的中蓝 #a9c0e2 压深，保证在白底/浅底上当文字用仍有对比度 */
+  --color-lavender: #46628f;
+  --color-lavender-soft: #dfe7f2;
   --color-warn: #f59e0b;
   --color-warn-soft: #fdf0d5;
   --color-danger: #ef4444;
@@ -89,7 +95,7 @@
    * shadcn 里 `--background` 的语义是「内容所落在的那层表面」——它的 Tabs 选中块、
    * 描边按钮底色都用 `bg-background`，在默认主题里就是白色。FISH 的页面灰底由
    * `body { background-color: var(--color-bg) }` 直接给，不经过这个令牌。
-   * 若把它指向页面灰，Tabs 的选中块（#f5f5f5）会压在灰轨道（#f2f3f5）上看不出来。
+   * 若把它指向页面灰，Tabs 的选中块（#f5f5f5）会压在灰轨道（#eff1f6）上看不出来。
    */
   --background: var(--color-surface);
   --foreground: var(--color-ink);
@@ -152,8 +158,8 @@
 }
 
 /*
- * 一级页内容的底部留白：导航本身占 10px + 62px，中间「出物」球再往上凸出约 21px，
- * 加起来约 93px，这里留到 116px 让最后一条内容不贴着按钮。
+ * 一级页内容的底部留白：导航本身占 10px + 62px，这里留到 116px，
+ * 让最后一条内容不贴着悬浮导航。
  */
 @utility pb-tabbar {
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 116px);

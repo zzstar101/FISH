@@ -29,7 +29,7 @@ export function AuthPageShell({
         因此内容直接替换反而是最稳的。
       */}
       <div className="flex w-full flex-col items-center">
-        <span className="flex size-16 items-center justify-center rounded-2xl bg-brand text-3xl shadow-[0_10px_24px_rgba(0,5,255,0.35)]">
+        <span className="flex size-16 items-center justify-center rounded-2xl bg-brand text-3xl shadow-[0_10px_24px_rgba(81,119,186,0.35)]">
           🔄
         </span>
         <h1 className="mt-4 font-bold text-2xl">{title}</h1>
