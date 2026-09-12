@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* packages/ui 的组件源码也参与扫描 */
+@source "../../../packages/ui/src";
+
+/* 设计令牌占位；完整令牌体系由 ouu2006 在 #4 建立 */
+@theme {
+  --color-brand: oklch(0.55 0.16 250);
+}

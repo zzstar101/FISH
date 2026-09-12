@@ -1,0 +1,48 @@
+# 文件所有权 —— 与 CONTRIBUTING.md 第 2 节保持一致。
+# 规则自上而下匹配，越靠后优先级越高。
+
+# 默认：Platform Owner
+*                                   @zzstar101
+
+# 根配置与基础设施
+/package.json                       @zzstar101
+/bun.lock                           @zzstar101
+/tsconfig.base.json                 @zzstar101
+/biome.json                         @zzstar101
+/docker-compose.yml                 @zzstar101
+/infra/                             @zzstar101
+
+# 数据库
+/packages/db/                       @zzstar101
+
+# API / Worker 根入口
+/apps/api/src/app.ts                @zzstar101
+/apps/api/src/index.ts              @zzstar101
+/apps/api/src/ws.ts                 @zzstar101
+/apps/worker/src/index.ts           @zzstar101
+
+# Contract —— 按 domain 归属
+/packages/contracts/src/auth/       @zzstar101
+/packages/contracts/src/listings/   @zzstar101
+/packages/contracts/src/matching/   @zzstar101
+/packages/contracts/src/wishes/     @Coast-87
+/packages/contracts/src/chat/       @Coast-87
+/packages/contracts/src/transactions/ @Coast-87
+/packages/contracts/src/profile/    @Coast-87
+
+# API —— 按 domain 归属
+/apps/api/src/modules/auth/         @zzstar101
+/apps/api/src/modules/listings/     @zzstar101
+/apps/api/src/modules/uploads/      @zzstar101
+/apps/api/src/modules/matching/     @zzstar101
+/apps/worker/src/jobs/matching/     @zzstar101
+/apps/api/src/modules/wishes/       @Coast-87
+/apps/api/src/modules/conversations/ @Coast-87
+/apps/api/src/modules/messages/     @Coast-87
+/apps/api/src/modules/realtime/     @Coast-87
+/apps/api/src/modules/transactions/ @Coast-87
+/apps/api/src/modules/profile/      @Coast-87
+
+# 前端
+/apps/web/                          @ouu2006
+/packages/ui/                       @ouu2006
