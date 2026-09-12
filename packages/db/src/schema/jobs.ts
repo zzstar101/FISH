@@ -1,0 +1,38 @@
+import { sql } from 'drizzle-orm'
+import { check, index, integer, jsonb, pgEnum, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
+import { primaryKey, timestamps } from './common'
+
+export const jobStatusEnum = pgEnum('job_status', ['PENDING', 'RUNNING', 'DONE', 'FAILED'])
+
+/** job 类型跨 Owner 增长，用 text + TS 收窄，避免每加一类都要改 migration。 */
+export type JobType = 'MATCH_LISTING' | 'MATCH_WISH'
+
+const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
+
+/**
+ * 异步任务队列（PostgreSQL 表 + Worker 轮询）。
+ *
+ * 领取：`WHERE status='PENDING' AND run_at <= now() ORDER BY run_at, id FOR UPDATE SKIP LOCKED`
+ * 之后置 `status='RUNNING', locked_at=now(), attempts=attempts+1`。
+ * worker 崩溃后那行会停在 RUNNING，靠 `locked_at` 判僵死并回 PENDING（#13 的"重启后可继续"）。
+ */
+export const jobs = pgTable(
+  'jobs',
+  {
+    ...primaryKey(),
+    type: text('type').$type<JobType>().notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+    status: jobStatusEnum('status').notNull().default('PENDING'),
+    attempts: integer('attempts').notNull().default(0),
+    /** 支持退避重试：到点之前不领取。 */
+    runAt: timestamptz('run_at').notNull().defaultNow(),
+    lockedAt: timestamptz('locked_at'),
+    lastError: text('last_error'),
+    ...timestamps(),
+  },
+  (table) => [
+    check('jobs_attempts_non_negative', sql`${table.attempts} >= 0`),
+    index('jobs_status_run_at_id_idx').on(table.status, table.runAt, table.id),
+    index('jobs_running_locked_at_idx').on(table.lockedAt).where(sql`${table.status} = 'RUNNING'`),
+  ],
+)

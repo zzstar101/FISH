@@ -3,7 +3,7 @@ name: fish
 # 只托管本地依赖；应用（web / api / worker）由宿主机 bun 直接运行。
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: fish
