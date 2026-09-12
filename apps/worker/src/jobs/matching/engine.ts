@@ -45,6 +45,8 @@ export type MatchRunResult = {
 /*
  * 不变式：`matched + downgraded <= evaluated`，差额 = "评估了但没有写入"的对
  * （不可新建且没有既有行 → `persist` 返回 `skipped`）。另有 `created <= matched`。
+ * **这些计数只在同一方向的运行之间可比**：非 ACTIVE 的愿望永远不会有一轮 `matchWish`
+ * （直接 `skipped`），它在 wish 侧读接口仍在展示，却只会被 `matchListing` 那轮计成 `downgraded`。
  *
  * 计数按**本轮方向的读接口可见性**分类（`matchListing` → `/matches?listingId=`；
  * `matchWish` → `/matches?wishId=`），而不是按引擎内部的 `qualifies`：可见性策略是方向相关的
@@ -104,6 +106,11 @@ function priceWithinBudget(wish: WishTarget, listing: ListingTarget): boolean {
 /**
  * `GET /matches?wishId=` 会不会展示这一对（镜像 wish 侧读谓词）：
  * `OFFLINE` 商品隐藏；`RESERVED` / `SOLD` **保留**（商品状态在卡片里可见）。
+ *
+ * ⚠️ 这条策略比"可新建"更宽：新建要求对端 `ACTIVE`（§3.1 收窄），展示不要求。所以
+ * **`RESERVED`/`SOLD` 的商品只对它已经有行的那一对可见**（先建行、后转状态），当时没建过行的
+ * 那对永远不会出现。这是刻意接受的取舍（两条规则分别由契约 §3.1 与补记 §9.1 冻结），
+ * 要消除它只能二选一：读接口连 `RESERVED`/`SOLD` 一起隐藏，或者允许为 ACTIVE 之外的商品建行。
  */
 function visibleToWishOwner(wish: WishTarget, listing: ListingTarget, score: number): boolean {
   return (
@@ -320,7 +327,13 @@ export function createMatchEngine(db: Db): MatchEngine {
       const existingIds = new Set(existingRows.map((row) => row.id))
       const targets = new Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>()
       for (const wish of candidates) {
-        targets.set(wish.id, { wish, hadRow: existingIds.has(wish.id), creatable: true })
+        // 用纯函数而不是硬编码 `true`：`created <= matched` 这条不变式应当由 `creatable()` 保证，
+        // 而不是"假定候选 SQL 永远与它逐条等价"（SQL 一旦放宽就会悄悄破坏它）。
+        targets.set(wish.id, {
+          wish,
+          hadRow: existingIds.has(wish.id),
+          creatable: creatable(wish, listingTarget),
+        })
       }
       for (const row of existingRows) {
         // 已经掉出收窄集合（改分类、超 2 倍预算、愿望已关闭…）但行还在：也要按真实分数重新评估，
@@ -396,7 +409,7 @@ export function createMatchEngine(db: Db): MatchEngine {
         targets.set(listing.id, {
           listing,
           hadRow: existingIds.has(listing.id),
-          creatable: true,
+          creatable: creatable(wishTarget, listing),
         })
       }
       for (const row of existingRows) {
@@ -431,7 +444,7 @@ export function createMatchEngine(db: Db): MatchEngine {
             },
             wishFacts,
           )
-          // 同 listing 方向：`qualifies` 管新建，计数按"读接口会不会展示"（listing 侧镜像）。
+          // `qualifies` 管新建；计数按 `matchWish` 对应的读接口（`/matches?wishId=`，wish 侧镜像）。
           const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD
           const outcome = await persist(tx, {
             listingId: listing.id,

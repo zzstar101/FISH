@@ -317,7 +317,11 @@ describe('matchListing', () => {
 
       const result = await engine.matchListing(listingId)
 
-      expect(result).toEqual({ evaluated: 1, matched: 0, created: 0, downgraded: 0, skipped: null })
+      // 不用 `toEqual` 断言 `evaluated` 的精确值：候选集是**全库**的，并行跑的其它测试文件
+      // （如 apps/api 的 service.test.ts）会临时造出 `category: null ∧ budgetMaxCents: null` 的
+      // ACTIVE 愿望，它同样是本 listing 的候选（分数不到阈值，所以不影响其余三个计数）。
+      expect(result).toMatchObject({ matched: 0, created: 0, downgraded: 0, skipped: null })
+      expect(result.evaluated).toBeGreaterThanOrEqual(1)
       expect(await matchRows(listingId, wishId)).toHaveLength(0)
     })
   })
