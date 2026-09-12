@@ -92,9 +92,16 @@ describe('WishMatchListResponseSchema', () => {
   })
 
   // 拆解分项刻意不在读模型里：多回三个数会让"分数含义"变成线上协议的一部分。
+  // 用集合断言而不是 `toEqual([...])`：字段顺序不属于 HTTP 契约，重排不该让测试变红。
   test('exposes only the total score, not the per-component scores', () => {
-    expect(Object.keys(WishMatchItemSchema.shape)).toEqual(['id', 'score', 'createdAt', 'listing'])
-    expect(Object.keys(ListingMatchItemSchema.shape)).toEqual(['id', 'score', 'createdAt', 'wish'])
+    const wishItemFields = Object.keys(WishMatchItemSchema.shape).sort()
+    const listingItemFields = Object.keys(ListingMatchItemSchema.shape).sort()
+    expect(wishItemFields).toEqual(['createdAt', 'id', 'listing', 'score'])
+    expect(listingItemFields).toEqual(['createdAt', 'id', 'score', 'wish'])
+    for (const field of ['categoryScore', 'keywordScore', 'priceScore']) {
+      expect(wishItemFields).not.toContain(field)
+      expect(listingItemFields).not.toContain(field)
+    }
   })
 })
 
