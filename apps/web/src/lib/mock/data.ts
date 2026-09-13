@@ -576,6 +576,22 @@ export const conversations: Conversation[] = [
         sentAtMinutesAgo: 18,
         kind: 'TEXT',
       },
+      // #9 要求 SYSTEM 消息可渲染,内容对齐 #11 的 tx.* 协议(JSON 字符串,feat/11-tx)。
+      // 这里演示「提案 → 接受」:渲染层解析失败会降级为原文,见 chat/system-event.ts。
+      {
+        id: 'm6',
+        from: 'me',
+        text: '{"type":"tx.proposal","amountCents":158000}',
+        sentAtMinutesAgo: 14,
+        kind: 'SYSTEM',
+      },
+      {
+        id: 'm7',
+        from: 'peer',
+        text: '{"type":"tx.accepted","transactionId":"t-seed-1","amountCents":158000}',
+        sentAtMinutesAgo: 12,
+        kind: 'SYSTEM',
+      },
     ],
   },
   {
@@ -600,6 +616,21 @@ export const conversations: Conversation[] = [
         text: '我发了,你看下这个价格可以吗',
         sentAtMinutesAgo: 1440,
         kind: 'TEXT',
+      },
+      // 演示「提案 → 拒绝」路径,覆盖 tx.rejected 的渲染。
+      {
+        id: 'm3',
+        from: 'me',
+        text: '{"type":"tx.proposal","amountCents":45000}',
+        sentAtMinutesAgo: 1435,
+        kind: 'SYSTEM',
+      },
+      {
+        id: 'm4',
+        from: 'peer',
+        text: '{"type":"tx.rejected"}',
+        sentAtMinutesAgo: 1430,
+        kind: 'SYSTEM',
       },
     ],
   },
