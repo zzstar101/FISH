@@ -11,6 +11,7 @@ import { formatClock, formatMessageDay, formatPrice } from '../../lib/format'
 import type { ListingStatus } from '../../lib/mock/types'
 import { useRequestOrder } from '../transaction/queries'
 import { meta, useConversation, useSendMessage } from './queries'
+import { formatMessageBody } from './system-event'
 
 /**
  * 商品状态文案。聊天页只区分「能否交易」，所以这里只需一句可读的状态说明；
@@ -160,6 +161,17 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
 
         <ul className="space-y-3 px-3">
           {item.messages.map((message) => {
+            // SYSTEM 消息（#9 工作项）：没有发送者，渲染为居中的灰色系统条；
+            // 内容按 #11 的 tx.* 协议解析（见 system-event.ts），失败降级为原文。
+            if (message.kind === 'SYSTEM') {
+              return (
+                <li className="flex justify-center" key={message.id}>
+                  <p className="max-w-[86%] rounded-full bg-surface-2 px-3.5 py-1.5 text-center text-ink-3 text-xs leading-relaxed">
+                    {formatMessageBody(message)}
+                  </p>
+                </li>
+              )
+            }
             const mine = message.from === 'me'
             return (
               <li className={`flex gap-2 ${mine ? 'justify-end' : ''}`} key={message.id}>
