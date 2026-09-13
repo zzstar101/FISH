@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
-import { MemoryMessageStore } from '../messages/memory-store.fixture'
+import { MemoryMessageStore } from '../messages/service.test'
 import { createTransactionService, TransactionServiceError } from './service'
 import type { ConversationLookup, TransactionRow, TransactionStore } from './store'
 
@@ -73,21 +73,7 @@ class MemoryTxStore implements TransactionStore {
     return lookup
   }
 
-  /**
-   * 内存替身也模拟生产语义：`tx.accepted` 与交易行**同一事务**写入（#40-3），
-   * 因此消息写失败时要把已推入的交易行撤回。
-   */
-  messages: MemoryMessageStore
-
-  constructor(messages: MemoryMessageStore) {
-    this.messages = messages
-  }
-
-  async accept(
-    brief: Extract<ConversationLookup, { kind: 'ok' }>['brief'],
-    amountCents: number,
-    buildSystemContent: (transactionId: string) => string,
-  ) {
+  async accept(brief: Extract<ConversationLookup, { kind: 'ok' }>['brief'], amountCents: number) {
     if (brief.listingStatus !== 'ACTIVE') return { kind: 'listing-not-active' as const }
     if (
       this.rows.some((row) => row.listing_id === brief.listingId && row.status === 'PENDING_MEETUP')
@@ -109,13 +95,7 @@ class MemoryTxStore implements TransactionStore {
       updated_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
     }
     this.rows.push(row)
-    try {
-      const message = await this.messages.insertSystem(brief.id, buildSystemContent(row.id))
-      return { kind: 'created' as const, row, message }
-    } catch (error) {
-      this.rows.pop() // 同一事务：消息写失败 → 交易行一并回滚
-      throw error
-    }
+    return { kind: 'created' as const, row }
   }
 
   async findById(id: string) {
@@ -185,8 +165,8 @@ class MemoryTxStore implements TransactionStore {
 }
 
 async function build() {
+  const store = new MemoryTxStore()
   const messages = new MemoryMessageStore()
-  const store = new MemoryTxStore(messages)
   const storage = {
     presignPut: () => ({ url: '', headers: {}, expiresAt: '' }),
     stat: async () => null,

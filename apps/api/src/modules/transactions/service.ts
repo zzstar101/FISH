@@ -192,18 +192,17 @@ export function createTransactionService({
         )
       }
 
-      // content 由本层序列化（契约的唯一出口 systemEventContent），但 transactionId 只有
-      // 插入后才存在，因此以回调交给 store，在**同一个事务**里连同交易行一起写入（#40-3）。
-      const result = await store.accept(brief, input.amountCents, (transactionId) =>
-        systemEventContent({ type: 'tx.accepted', transactionId, amountCents: input.amountCents }),
-      )
+      const result = await store.accept(brief, input.amountCents)
       if (result.kind === 'listing-not-active') {
         // 契约冻结语义：并发输给另一买家 / 商品已非 ACTIVE。重试恢复口径见 routes 注释。
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
 
-      // 消息已随交易落库，这里只负责推给在线端（落库失败则根本走不到这一步）。
-      onSystemMessage?.({ buyerId: brief.buyerId, sellerId: brief.sellerId }, result.message)
+      await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+        type: 'tx.accepted',
+        transactionId: result.row.id,
+        amountCents: input.amountCents,
+      })
       // 刚建的行 FK 必然齐备；拿不到摘要属于不可达防御分支。此刻交易已创建且
       // listing 已锁定、SYSTEM 消息已推送——不能复用 409 业务码（会诱导客户端把
       // "实际已成功"当失败重试），交给 onError 统一成 500 INTERNAL_ERROR。

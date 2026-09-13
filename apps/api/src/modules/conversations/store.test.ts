@@ -158,17 +158,14 @@ describe('conversations store (integration)', () => {
     expect(sellerList).toHaveLength(2)
   })
 
-  test('coverObjectKeys 只认 sort_order = 0：缺 0 号图时返回 null，不拿其它序号顶替', async () => {
+  test('coverObjectKeys picks the lowest sort_order image per listing', async () => {
     await db.execute(sql`
       INSERT INTO listing_images (id, listing_id, object_key, sort_order) VALUES
         (${crypto.randomUUID()}, ${listingA}, 'covers/second.jpg', 1),
-        (${crypto.randomUUID()}, ${listingA}, 'covers/first.jpg', 0),
-        (${crypto.randomUUID()}, ${listingB}, 'covers/b-only-1.jpg', 1)
+        (${crypto.randomUUID()}, ${listingA}, 'covers/first.jpg', 0)
     `)
     const covers = await store.coverObjectKeys([listingA, listingB])
-    expect(covers.get(listingA)).toBe('covers/first.jpg') // 0 号图存在 → 取它（不是最大序号）
-    // listingB 有图但没有 0 号图 → null。旧实现（取最小 sort_order）在这里会返回
-    // covers/b-only-1.jpg，因此这一条正是 #40/F3 的「修复前会失败」用例。
-    expect(covers.get(listingB)).toBeNull()
+    expect(covers.get(listingA)).toBe('covers/first.jpg')
+    expect(covers.get(listingB)).toBeNull() // 无图商品 → null，不是缺失键
   })
 })

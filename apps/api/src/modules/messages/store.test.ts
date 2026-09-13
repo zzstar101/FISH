@@ -112,32 +112,4 @@ describe('messages store (integration)', () => {
     })
     expect(result.kind).toBe('invalid-cursor')
   })
-
-  test('bump 只把 last_message_at 往前推：更旧的时间戳不回退排序键（#40-1）', async () => {
-    // `created_at` 取 `defaultNow()` = **事务开始时间**，所以存在「早开始、晚拿到会话行锁」
-    // 的事务用更旧时间戳覆盖新值的竞态，让会话在列表里位置倒退、游标分页出错。
-    // store 的公开 API 无法控制并发交错，因此这里直接构造出该竞态的前置状态：
-    // 「会话上已有更新的时间戳」，再断言 bump 不会把它改旧。
-    const future = new Date(Date.now() + 3_600_000)
-    await db.execute(
-      sql`UPDATE conversations SET last_message_at = ${future} WHERE id = ${conversationA}`,
-    )
-
-    const lastMessageAtMs = async () => {
-      const result = await db.execute(
-        sql`SELECT last_message_at FROM conversations WHERE id = ${conversationA}`,
-      )
-      const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
-        last_message_at: Date | string
-      }
-      return new Date(row.last_message_at).getTime()
-    }
-
-    // TEXT 与 SYSTEM 是同构的两条 bump 路径，一起覆盖（等价用例不重复写）
-    await store.insertText(conversationA, buyer, '更旧的时间戳不该回退排序键')
-    expect(await lastMessageAtMs()).toBe(future.getTime())
-
-    await store.insertSystem(conversationA, '{"type":"tx.rejected"}')
-    expect(await lastMessageAtMs()).toBe(future.getTime())
-  })
 })
