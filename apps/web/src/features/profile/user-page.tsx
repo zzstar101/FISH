@@ -2,20 +2,20 @@ import { Button } from '@fish/ui/button'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
-import { useNavigate } from '@tanstack/react-router'
-import { MessageCircle, Shield } from 'lucide-react'
+import { Shield } from 'lucide-react'
 import { useState } from 'react'
+import { toListingCard } from '../../lib/mock/store'
 import { AuthBadge } from '../auth/auth-badge'
-import { useStartConversation } from '../listing-detail/queries'
 import { ListingRow } from '../search/listing-row'
 import { useIsFollowing, useToggleFollow, useUser, useUserListings } from './queries'
 
-/** 用户主页（截图 07）。卖家侧信息与详情页共用同一份 Mock 用户数据。 */
+/**
+ * 用户主页（fixture）：真实契约没有公开用户资料端点（P1）。
+ * 主体数据仍来自 fixture store；对真实 uuid 会走「用户不存在」空态。
+ */
 export function UserPage({ userId }: { userId: string }) {
-  const navigate = useNavigate()
   const user = useUser(userId)
   const listings = useUserListings(userId)
-  const startConversation = useStartConversation()
   const following = useIsFollowing(userId)
   const follow = useToggleFollow(userId)
   const [reported, setReported] = useState(false)
@@ -43,16 +43,6 @@ export function UserPage({ userId }: { userId: string }) {
   const person = user.data
   const active = listings.data?.filter((item) => item.status === 'ACTIVE') ?? []
   const sold = listings.data?.filter((item) => item.status === 'SOLD') ?? []
-
-  const openChat = () => {
-    startConversation.mutate(
-      { peerId: person.id },
-      {
-        onSuccess: (conversationId) =>
-          void navigate({ to: '/chat/$conversationId', params: { conversationId } }),
-      },
-    )
-  }
 
   return (
     <div className="min-h-dvh bg-bg pb-8">
@@ -99,10 +89,8 @@ export function UserPage({ userId }: { userId: string }) {
       </section>
 
       <section className="mt-2 flex gap-3 bg-surface px-4 py-3">
-        <Button className="flex-1" onClick={openChat} size="lg">
-          <MessageCircle />
-          聊一聊
-        </Button>
+        {/* 不设「聊一聊」：真实会话必须挂在具体商品上（POST /conversations 只收 listingId），
+            用户主页没有商品上下文，会话入口在商品详情页。 */}
         <Button
           className="flex-1"
           disabled={reported}
@@ -133,7 +121,7 @@ export function UserPage({ userId }: { userId: string }) {
         {active.length > 0 ? (
           <div className="divide-y divide-line bg-surface">
             {active.map((item) => (
-              <ListingRow item={item} key={item.id} />
+              <ListingRow item={toListingCard(item)} key={item.id} />
             ))}
           </div>
         ) : null}

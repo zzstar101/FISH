@@ -76,3 +76,44 @@ export function formatFollowTime(minutesAgo: number): string {
   }
   return `${formatRelativeTime(minutesAgo)}关注`
 }
+
+// ---------------------------------------------------------------------------
+// ISO 时间戳版本：真实 API（#6/#9/#11）返回 `z.iso.datetime()`，Mock 的
+// 「距今多少分钟」不再适用。以下四个与上面的分钟版一一对应，语义一致。
+// ---------------------------------------------------------------------------
+
+/** 距今的分钟数；时钟偏移导致未来时间时按 0 处理（显示「刚刚」）。 */
+function minutesSince(iso: string): number {
+  const elapsed = (Date.now() - new Date(iso).getTime()) / 60_000
+  return Number.isFinite(elapsed) ? Math.max(elapsed, 0) : 0
+}
+
+function clockOf(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+export function formatRelativeTimeAt(iso: string): string {
+  return formatRelativeTime(minutesSince(iso))
+}
+
+/** 会话列表 / 气泡时间：今天给 HH:mm，昨天、前天，更早给星期。 */
+export function formatChatTimeAt(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const days = Math.floor((startOfToday.getTime() - date.getTime()) / 86_400_000)
+  if (days <= 0) return clockOf(date)
+  if (days === 1) return '昨天'
+  if (days === 2) return '前天'
+  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()] as string
+}
+
+export function formatClockAt(iso: string): string {
+  return formatChatTimeAt(iso)
+}
+
+/** 消息分组的日期标题：近一天统一显示「今天」。 */
+export function formatMessageDayAt(iso: string): string {
+  return formatRelativeTimeAt(iso)
+}

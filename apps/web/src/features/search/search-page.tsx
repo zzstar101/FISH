@@ -1,28 +1,36 @@
+import type { ListingSort } from '@fish/contracts/listings/schema'
 import { Input } from '@fish/ui/input'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Tabs, TabsList, TabsTrigger } from '@fish/ui/tabs'
 import { useNavigate } from '@tanstack/react-router'
 import { Camera, ChevronLeft, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import type { SearchSort } from '../../lib/mock/store'
-import { meta, useSearch } from '../home/queries'
+import { meta, useFreeListings, useSearch } from '../home/queries'
 import { ListingRow } from './listing-row'
 
+/** 排序口径与 #6 冻结契约一致（ListingSortSchema：newest / priceAsc / priceDesc）。 */
 const SORTS = [
-  { value: 'general', label: '综合' },
-  { value: 'latest', label: '最新' },
-  { value: 'price', label: '价格' },
-  { value: 'hot', label: '最热' },
+  { value: 'newest', label: '最新' },
+  { value: 'priceAsc', label: '价格从低' },
+  { value: 'priceDesc', label: '价格从高' },
 ] as const
 
-/** 搜索页（#4）：空态是历史搜索 + 猜你想找，有 kw 时是结果列表。 */
-export function SearchPage({ keyword }: { keyword: string }) {
+/** 搜索页（#4）：空态是历史搜索 + 猜你想找；`free` 时是 0 元商品（免费送入口），有 kw 时是结果列表。 */
+export function SearchPage({ keyword, free = false }: { keyword: string; free?: boolean }) {
   const navigate = useNavigate()
   const [draft, setDraft] = useState(keyword)
-  const [sort, setSort] = useState<SearchSort>('general')
+  const [sort, setSort] = useState<ListingSort>('newest')
   const [history, setHistory] = useState<string[]>(meta.searchHistory)
   const [suggestions, setSuggestions] = useState<string[]>(meta.searchSuggestions)
-  const results = useSearch(keyword, sort)
+  const results = useSearch(free ? '' : keyword, sort)
+  const freeResults = useFreeListings(sort)
+  const items = free ? (freeResults.data ?? []) : (results.data ?? [])
+  const pending = free ? freeResults.isPending : results.isPending
+  const error = free ? freeResults.error : results.error
+  const retry = () => void (free ? freeResults.refetch() : results.refetch())
+  const isEmpty = free
+    ? freeResults.isSuccess && items.length === 0
+    : results.isSuccess && items.length === 0
 
   const submit = (value: string) => {
     const next = value.trim()
@@ -65,7 +73,7 @@ export function SearchPage({ keyword }: { keyword: string }) {
         </button>
       </header>
 
-      {keyword.trim() === '' ? (
+      {!free && keyword.trim() === '' ? (
         <div className="space-y-3 pt-3">
           <section className="bg-surface px-4 py-3">
             <div className="flex items-center justify-between">
@@ -124,12 +132,12 @@ export function SearchPage({ keyword }: { keyword: string }) {
         <>
           <div className="flex items-center justify-between gap-2 bg-surface px-4 py-2.5">
             <span className="truncate text-sm">
-              <span className="font-semibold">“{keyword}”</span>{' '}
-              {results.data ? <span className="text-ink-3">{results.data.length} 件</span> : null}
+              <span className="font-semibold">“{free ? '免费送' : keyword}”</span>{' '}
+              {items.length > 0 ? <span className="text-ink-3">{items.length} 件</span> : null}
             </span>
             <Tabs
               className="shrink-0"
-              onValueChange={(next) => setSort(next as SearchSort)}
+              onValueChange={(next) => setSort(next as ListingSort)}
               value={sort}
             >
               <TabsList>
@@ -143,16 +151,17 @@ export function SearchPage({ keyword }: { keyword: string }) {
           </div>
 
           <div className="mt-2 px-3 pb-6">
-            {results.isPending ? <LoadingState /> : null}
-            {results.isError ? (
-              <ErrorState message="搜索失败,请稍后重试" onRetry={() => void results.refetch()} />
+            {pending ? <LoadingState /> : null}
+            {error ? <ErrorState message="搜索失败,请稍后重试" onRetry={retry} /> : null}
+            {isEmpty ? (
+              <EmptyState
+                description={`没有找到与「${free ? '免费送' : keyword}」相关的闲置`}
+                emoji="🔍"
+              />
             ) : null}
-            {results.data?.length === 0 ? (
-              <EmptyState description={`没有找到与「${keyword}」相关的闲置`} emoji="🔍" />
-            ) : null}
-            {results.data && results.data.length > 0 ? (
+            {items.length > 0 ? (
               <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface">
-                {results.data.map((item) => (
+                {items.map((item) => (
                   <ListingRow item={item} key={item.id} />
                 ))}
               </div>

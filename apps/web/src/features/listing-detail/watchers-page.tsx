@@ -1,23 +1,20 @@
-import { Button } from '@fish/ui/button'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, LoadingState } from '@fish/ui/states'
-import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronRight, MessageCircle } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
+import { ListingThumb } from '../../components/listing-thumb'
 import { formatFollowTime, formatPrice } from '../../lib/format'
 import { AuthBadge } from '../auth/auth-badge'
-import { useListing, useStartConversation, useWatchers } from './queries'
+import { useListing, useWatchers } from './queries'
 
 /** 「谁在关注」页：#5 详情页的次级页，展示商品的想要者名单。 */
 export function WatchersPage({ listingId }: { listingId: string }) {
   const navigate = useNavigate()
   const listing = useListing(listingId)
   const watchers = useWatchers(listingId)
-  const startConversation = useStartConversation()
 
   const item = listing.data
-  const remaining = Math.max((item?.wantCount ?? 0) - (watchers.data?.length ?? 0), 0)
 
   return (
     <div className="min-h-dvh bg-bg pb-8">
@@ -35,11 +32,12 @@ export function WatchersPage({ listingId }: { listingId: string }) {
             onClick={() => void navigate({ to: '/detail/$listingId', params: { listingId } })}
             type="button"
           >
-            <Thumb
+            <ListingThumb
+              alt={item.title}
               className="size-14 rounded-xl"
-              emoji={item.emoji}
+              coverUrl={item.coverUrl}
+              listingId={item.id}
               emojiClassName="text-[1.8rem]"
-              tone={item.tone}
             />
             <div className="min-w-0 flex-1">
               <p className="line-clamp-1 text-[15px]">{item.title}</p>
@@ -53,12 +51,10 @@ export function WatchersPage({ listingId }: { listingId: string }) {
 
           <section className="bg-surface px-4 py-4">
             <p className="flex items-baseline gap-1.5">
-              <span className="font-bold text-2xl">{item.wantCount}</span>
-              <span className="text-[15px]">人想要这件闲置</span>
+              <span className="font-bold text-2xl">{watchers.data?.length ?? 0}</span>
+              <span className="text-[15px]">位同学想要这件闲置</span>
             </p>
-            <p className="mt-1.5 text-ink-3 text-xs">
-              按关注时间排序,以下是最近 {watchers.data?.length ?? 0} 位同学,可直接找 TA 聊一聊
-            </p>
+            <p className="mt-1.5 text-ink-3 text-xs">按关注时间排序,以下是最近关注的同学</p>
           </section>
 
           <section>
@@ -81,36 +77,10 @@ export function WatchersPage({ listingId }: { listingId: string }) {
                       {user.college} · {user.campus} · {formatFollowTime(followedMinutesAgo)}
                     </p>
                   </div>
-                  <Button
-                    className="shrink-0"
-                    onClick={() =>
-                      startConversation.mutate(
-                        { peerId: user.id, listingId },
-                        {
-                          onSuccess: (conversationId) =>
-                            void navigate({
-                              to: '/chat/$conversationId',
-                              params: { conversationId },
-                            }),
-                        },
-                      )
-                    }
-                    size="sm"
-                    variant="secondary"
-                  >
-                    <MessageCircle className="size-3" />
-                    聊一聊
-                  </Button>
                 </li>
               ))}
             </ul>
           </section>
-
-          {remaining > 0 ? (
-            <p className="py-4 text-center text-ink-3 text-xs">
-              还有 {remaining} 位同学关注了这件商品
-            </p>
-          ) : null}
 
           <div className="px-4 pb-4">
             <Link

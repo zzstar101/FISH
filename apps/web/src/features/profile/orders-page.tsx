@@ -1,19 +1,20 @@
+import type { TransactionRole } from '@fish/contracts/transactions/schema'
 import { NavBar } from '@fish/ui/nav-bar'
-import { EmptyState, LoadingState } from '@fish/ui/states'
+import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Tabs, TabsList, TabsTrigger } from '@fish/ui/tabs'
 import { useState } from 'react'
 import { OrderCard } from '../transaction/order-card'
-import { useOrders } from '../transaction/queries'
+import { useTransactions } from '../transaction/queries'
 
-const ROLES = [
-  { value: 'buy', label: '我买入的' },
-  { value: 'sell', label: '我卖出的' },
-] as const
+const ROLES: { value: TransactionRole; label: string }[] = [
+  { value: 'buyer', label: '我买入的' },
+  { value: 'seller', label: '我卖出的' },
+]
 
-/** 我的订单（#12 聚合 + #11 交易状态机）。 */
+/** 我的订单（#11 真实交易列表 + #12 聚合入口）。 */
 export function OrdersPage() {
-  const [role, setRole] = useState<'buy' | 'sell'>('buy')
-  const orders = useOrders(role)
+  const [role, setRole] = useState<TransactionRole>('buyer')
+  const orders = useTransactions(role)
 
   /** Radix 只回传 string：拿它反查 ROLES 收窄成买入/卖出，避免写类型断言。 */
   const changeRole = (next: string) => {
@@ -40,6 +41,9 @@ export function OrdersPage() {
 
       <div className="space-y-2.5 px-3 pt-3">
         {orders.isPending ? <LoadingState /> : null}
+        {orders.isError ? (
+          <ErrorState message="交易加载失败" onRetry={() => void orders.refetch()} />
+        ) : null}
         {orders.data?.length === 0 ? (
           <EmptyState description="还没有交易,去和同学聊聊吧" emoji="📄" />
         ) : null}

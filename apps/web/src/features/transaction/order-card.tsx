@@ -1,48 +1,39 @@
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
-import { Thumb } from '@fish/ui/thumb'
 import { useNavigate } from '@tanstack/react-router'
 import { MessageCircle } from 'lucide-react'
 import type * as React from 'react'
-import { formatPrice, formatRelativeTime } from '../../lib/format'
-import type { OrderView } from '../../lib/mock/store'
-import type { OrderStatus } from '../../lib/mock/types'
-import {
-  useAcceptOrder,
-  useCancelOrder,
-  useContactCounterpart,
-  useFinishOrder,
-  useRejectOrder,
-} from './queries'
+import { ListingThumb } from '../../components/listing-thumb'
+import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
+import { createConversation } from '../chat/api'
+import { useCancelTransaction, useConfirmTransaction } from './queries'
 
 type ChipTone = NonNullable<React.ComponentProps<typeof Badge>['variant']>
 
-const STATUS: Record<OrderStatus, { label: string; tone: ChipTone }> = {
-  REQUESTED: { label: '待确认', tone: 'lavender' },
+const STATUS: Record<TransactionDto['status'], { label: string; tone: ChipTone }> = {
   PENDING_MEETUP: { label: '待面交', tone: 'lavender' },
   COMPLETED: { label: '已完成', tone: 'success' },
-  REJECTED: { label: '已拒绝', tone: 'secondary' },
   CANCELLED: { label: '已取消', tone: 'secondary' },
 }
 
-/** 交易卡（#11）：状态、权限按钮与状态机动作都收敛在这里。 */
-export function OrderCard({ order }: { order: OrderView }) {
+/**
+ * 交易卡（#11，#41 接真实）：数据来自 `GET /transactions` 的 TransactionDto。
+ * 提案 / 接受 / 拒绝不产生交易行（以会话里的 SYSTEM 消息承载），动作入口在聊天页；
+ * 这里是已创建交易的状态机动作：确认面交（双方各一次）与取消。
+ */
+export function OrderCard({ order }: { order: TransactionDto }) {
   const navigate = useNavigate()
-  const accept = useAcceptOrder()
-  const cancel = useCancelOrder()
-  const finish = useFinishOrder()
-  const reject = useRejectOrder()
-  const contact = useContactCounterpart()
+  const confirm = useConfirmTransaction()
+  const cancel = useCancelTransaction()
   const status = STATUS[order.status]
-  const isBuyer = order.role === 'buy'
+  const isBuyer = order.role === 'buyer'
+  const inProgress = order.status === 'PENDING_MEETUP'
 
   const openChat = () => {
-    contact.mutate(
-      { peerId: order.counterpartId, listingId: order.listingId },
-      {
-        onSuccess: (conversationId) =>
-          void navigate({ to: '/chat/$conversationId', params: { conversationId } }),
-      },
+    // 交易必有对应会话（conversationId 即定位商品 + 买卖双方），直接创建/复用。
+    void createConversation({ listingId: order.listingId }).then((conversationId) =>
+      navigate({ to: '/chat/$conversationId', params: { conversationId } }),
     )
   }
 
@@ -50,7 +41,7 @@ export function OrderCard({ order }: { order: OrderView }) {
     <article className="rounded-2xl bg-surface p-3">
       <div className="flex items-center gap-2">
         <Badge variant={isBuyer ? 'lavender' : 'brand'}>{isBuyer ? '买入' : '卖出'}</Badge>
-        <span className="text-ink-3 text-xs">{formatRelativeTime(order.minutesAgo)}</span>
+        <span className="text-ink-3 text-xs">{formatRelativeTimeAt(order.createdAt)}</span>
         <Badge className="ml-auto" variant={status.tone}>
           {status.label}
         </Badge>
@@ -66,70 +57,46 @@ export function OrderCard({ order }: { order: OrderView }) {
         }
         type="button"
       >
-        <Thumb
+        <ListingThumb
+          alt={order.listing.title}
           className="size-20 rounded-xl"
-          emoji={order.listing.emoji}
+          coverUrl={order.listing.coverUrl}
+          listingId={order.listing.id}
           emojiClassName="text-[2rem]"
-          tone={order.listing.tone}
         />
         <div className="min-w-0 flex-1">
           <p className="line-clamp-2 font-medium text-[15px] leading-snug">{order.listing.title}</p>
           <p className="mt-1 truncate text-ink-3 text-xs">
-            {order.listing.tradeMethod} · {order.listing.campus}
-          </p>
-          <p className="mt-0.5 truncate text-ink-3 text-xs">
             {isBuyer ? '卖家' : '买家'}:{order.counterpart.nickname}
           </p>
         </div>
-        <span className="shrink-0 font-semibold text-lg">
-          {formatPrice(order.listing.priceCents)}
-        </span>
+        {/* 议价结果 amountCents 是成交金额，与挂价各自独立（#11 契约）。 */}
+        <span className="shrink-0 font-semibold text-lg">{formatPrice(order.amountCents)}</span>
       </button>
 
-      {order.status === 'COMPLETED' ||
-      order.status === 'CANCELLED' ||
-      order.status === 'REJECTED' ? null : (
+      {inProgress ? (
         <div className="mt-3 flex justify-end gap-2">
           <Button onClick={openChat} size="sm" variant="outline">
             <MessageCircle className="size-3" />
             联系 TA
           </Button>
 
-          {isBuyer && order.status === 'PENDING_MEETUP' ? (
+          {isBuyer ? (
             <>
               <Button onClick={() => cancel.mutate(order.id)} size="sm" variant="destructive">
                 取消交易
               </Button>
-              <Button onClick={() => finish.mutate(order.id)} size="sm">
+              <Button onClick={() => confirm.mutate(order.id)} size="sm">
                 确认面交,完成交易
               </Button>
             </>
-          ) : null}
-
-          {isBuyer && order.status === 'REQUESTED' ? (
-            <Button onClick={() => cancel.mutate(order.id)} size="sm" variant="destructive">
-              撤销请求
-            </Button>
-          ) : null}
-
-          {!isBuyer && order.status === 'REQUESTED' ? (
-            <>
-              <Button onClick={() => reject.mutate(order.id)} size="sm" variant="destructive">
-                拒绝
-              </Button>
-              <Button onClick={() => accept.mutate(order.id)} size="sm">
-                接受交易
-              </Button>
-            </>
-          ) : null}
-
-          {!isBuyer && order.status === 'PENDING_MEETUP' ? (
-            <Button onClick={() => finish.mutate(order.id)} size="sm">
+          ) : (
+            <Button onClick={() => confirm.mutate(order.id)} size="sm">
               确认已交付
             </Button>
-          ) : null}
+          )}
         </div>
-      )}
+      ) : null}
     </article>
   )
 }

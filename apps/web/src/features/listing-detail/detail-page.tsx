@@ -1,22 +1,23 @@
+import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
 import { cn } from '@fish/ui/lib/utils'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
-import { Thumb, type Tone } from '@fish/ui/thumb'
+import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronLeft, Clock, Eye, Heart, MapPin, MessageCircle, Share2 } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { ChevronLeft, Clock, Heart, MapPin, MessageCircle, Share2 } from 'lucide-react'
 import { useState } from 'react'
-import { formatDiscount, formatRelativeTime, formatYuan } from '../../lib/format'
-import type { ListingStatus } from '../../lib/mock/types'
-import { AuthBadge } from '../auth/auth-badge'
+import { formatRelativeTime, formatRelativeTimeAt, formatYuan } from '../../lib/format'
+import { categoryLabel, conditionLabel } from '../../lib/labels'
 import { ListingList } from '../home/listing-card'
 import { useIsFollowing, useToggleFollow } from '../profile/queries'
 import {
   useAddComment,
   useComments,
+  useIsFavorite,
   useListing,
   useSimilarListings,
   useStartConversation,
@@ -29,8 +30,6 @@ const STATUS_LABEL: Record<ListingStatus, string> = {
   SOLD: '已售出',
   OFFLINE: '已下架',
 }
-
-const GALLERY_TONES: Tone[] = ['violet', 'sky', 'mint', 'rose']
 
 /** 「成色 99新」这类「标签 + 值」组合（原自研 `ChipPair`，现由 Badge 组合而成）。 */
 function AttrPair({ label, value }: { label: string; value: string }) {
@@ -45,16 +44,19 @@ function AttrPair({ label, value }: { label: string; value: string }) {
 export function DetailPage({ listingId }: { listingId: string }) {
   const navigate = useNavigate()
   const listing = useListing(listingId)
-  const similar = useSimilarListings(listingId)
   const comments = useComments(listingId)
   const addComment = useAddComment(listingId)
   const favorite = useToggleFavorite(listingId)
+  const favorited = useIsFavorite(listingId)
   const startConversation = useStartConversation()
   const [draft, setDraft] = useState('')
   // 卖家 id 只在拿到数据后才知道，这里按 data 取值（hook 必须无条件调用）。
-  const sellerId = listing.data?.sellerId ?? ''
+  const sellerId = listing.data?.seller.id ?? ''
   const following = useIsFollowing(sellerId)
   const follow = useToggleFollow(sellerId)
+  // 同类好物依赖当前商品的分类，拿到详情后再请求。
+  const category = listing.data?.category ?? null
+  const similar = useSimilarListings(category, listingId)
 
   if (listing.isPending) return <LoadingState />
   if (listing.isError) {
@@ -71,18 +73,19 @@ export function DetailPage({ listingId }: { listingId: string }) {
 
   const item = listing.data
   const disabled = item.status !== 'ACTIVE'
-  const ctaLabel = disabled ? STATUS_LABEL[item.status] || '不可交易' : '我想要'
-  const discount = formatDiscount(item.priceCents, item.originalPriceCents)
+  const ctaLabel = disabled
+    ? STATUS_LABEL[item.status] || '不可交易'
+    : item.isOwner
+      ? '这是你发布的'
+      : '我想要'
+  const canChat = !disabled && !item.isOwner
 
   const openChat = () => {
-    startConversation.mutate(
-      { peerId: item.sellerId, listingId: item.id },
-      {
-        onSuccess: (conversationId) => {
-          void navigate({ to: '/chat/$conversationId', params: { conversationId } })
-        },
+    startConversation.mutate(item.id, {
+      onSuccess: (conversationId) => {
+        void navigate({ to: '/chat/$conversationId', params: { conversationId } })
       },
-    )
+    })
   }
 
   return (
@@ -106,31 +109,18 @@ export function DetailPage({ listingId }: { listingId: string }) {
         </button>
       </div>
 
-      <DetailGallery emoji={item.emoji} tone={item.tone} />
+      <DetailGallery images={item.images} title={item.title} />
 
       <section className="bg-surface px-4 py-3">
         <div className="flex items-end gap-2">
           <span className="font-bold text-[28px] leading-none">
             {item.free ? '免费送' : `¥${formatYuan(item.priceCents)}`}
           </span>
-          {item.originalPriceCents ? (
-            <span className="text-ink-3 text-sm line-through">
-              ¥{formatYuan(item.originalPriceCents)}
-            </span>
-          ) : null}
-          {discount ? <Badge variant="secondary">{discount}</Badge> : null}
-          <Link
-            className="ml-auto text-ink-3 text-sm"
-            params={{ listingId }}
-            to="/watchers/$listingId"
-          >
-            {item.wantCount} 人想要
-          </Link>
         </div>
 
         <h1 className="mt-2.5 font-semibold text-xl leading-snug">{item.title}</h1>
 
-        {/* #5 的「标签」：#6 的急出 / 可刀在这里露出；没有标签时整行不占位。 */}
+        {/* #6 的「标签」：急出 / 可刀在这里露出；没有标签时整行不占位。 */}
         {item.urgent || item.negotiable ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {item.urgent ? <Badge variant="destructive">急出</Badge> : null}
@@ -141,53 +131,48 @@ export function DetailPage({ listingId }: { listingId: string }) {
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-ink-3 text-xs">
           <span className="inline-flex items-center gap-1">
             <Clock className="size-3.5" />
-            {formatRelativeTime(item.publishedMinutesAgo)}发布
+            {formatRelativeTimeAt(item.createdAt)}发布
           </span>
-          <span className="inline-flex items-center gap-1">
-            <Eye className="size-3.5" />
-            {item.views} 人看过
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <MapPin className="size-3.5" />
-            {item.campus}
-          </span>
+          {item.seller.campus ? (
+            <span className="inline-flex items-center gap-1">
+              <MapPin className="size-3.5" />
+              {item.seller.campus}
+            </span>
+          ) : null}
         </div>
       </section>
 
       <section className="mt-2 bg-surface px-4 py-4">
         <h2 className="font-semibold text-[15px]">宝贝描述</h2>
         <div className="mt-2 space-y-1 text-[15px] text-ink-2 leading-relaxed">
-          {item.description.map((line) => (
+          {item.description.split('\n').map((line) => (
             <p key={line}>{line}</p>
           ))}
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <AttrPair label="成色" value={item.condition} />
-          <AttrPair label="分类" value={item.category} />
-          <AttrPair label="交易" value={item.tradeMethod} />
-          <AttrPair label="校区" value={item.campus} />
+          <AttrPair label="成色" value={conditionLabel(item.condition)} />
+          <AttrPair label="分类" value={categoryLabel(item.category)} />
+          {item.seller.campus ? <AttrPair label="校区" value={item.seller.campus} /> : null}
         </div>
       </section>
 
       <section className="mt-2 flex items-center gap-3 bg-surface px-4 py-3">
-        <Link
-          className="flex min-w-0 flex-1 items-center gap-3"
-          params={{ userId: item.seller.id }}
-          to="/user/$userId"
-        >
-          <UserAvatar emoji={item.seller.emoji} size="lg" tone={item.seller.tone} />
+        {/* 卖家卡不做跳转：真实契约没有公开用户主页端点（P1），跳 fixture 页只会看到空态。 */}
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <UserAvatar
+            avatarUrl={item.seller.avatarUrl}
+            emoji={item.seller.nickname.slice(0, 1)}
+            size="lg"
+          />
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-2">
               <span className="truncate font-semibold text-[15px]">{item.seller.nickname}</span>
-              <AuthBadge status={item.seller.verified ? 'VERIFIED' : 'UNVERIFIED'} />
-              <span className="shrink-0 text-ink-3 text-xs">信用 {item.seller.credit}</span>
             </p>
-            <p className="mt-0.5 truncate text-ink-3 text-xs">
-              {item.seller.college} · {item.seller.campus} · 在售 {item.sellerActiveCount} 件 · 成交{' '}
-              {item.seller.soldCount} 笔
-            </p>
+            {item.seller.campus ? (
+              <p className="mt-0.5 truncate text-ink-3 text-xs">{item.seller.campus}</p>
+            ) : null}
           </div>
-        </Link>
+        </div>
         <Button
           className="shrink-0"
           onClick={() => follow.mutate()}
@@ -261,19 +246,23 @@ export function DetailPage({ listingId }: { listingId: string }) {
             onClick={() => favorite.mutate()}
             type="button"
           >
-            <Heart className={cn('size-5', item.favorited && 'text-brand')} />
-            {item.favorited ? '已收藏' : '收藏'}
+            <Heart className={cn('size-5', favorited.data && 'text-brand')} />
+            {favorited.data ? '已收藏' : '收藏'}
           </button>
           <Button
             className="flex-1"
-            disabled={disabled || startConversation.isPending}
+            disabled={!canChat || startConversation.isPending}
             onClick={openChat}
             variant="outline"
           >
             <MessageCircle className="size-3.5" />
             聊一聊
           </Button>
-          <Button className="flex-1" disabled={disabled} onClick={openChat}>
+          <Button
+            className="flex-1"
+            disabled={!canChat || startConversation.isPending}
+            onClick={openChat}
+          >
             {ctaLabel}
           </Button>
         </div>
@@ -282,10 +271,32 @@ export function DetailPage({ listingId }: { listingId: string }) {
   )
 }
 
-/** 图片轮播：Mock 阶段没有真实图片，用同一个 emoji 在 4 个底色间切换。 */
-function DetailGallery({ emoji, tone }: { emoji: string; tone: Tone }) {
+/**
+ * 图片轮播：#6 读契约返回拼好的图片 URL；无图商品回落到渐变占位（契约注释明确
+ * seed 里有 3 条无图商品，前端必须有占位处理）。
+ */
+function DetailGallery({
+  images,
+  title,
+}: {
+  images: { url: string; sortOrder: number }[]
+  title: string
+}) {
   const [index, setIndex] = useState(0)
-  const tones = [tone, ...GALLERY_TONES.filter((item) => item !== tone)].slice(0, 4)
+  const sorted = [...images].sort((a, b) => a.sortOrder - b.sortOrder)
+
+  if (sorted.length === 0) {
+    return (
+      <div className="relative">
+        <Thumb
+          className="aspect-square w-full rounded-none"
+          emoji="📦"
+          emojiClassName="text-[6rem]"
+        />
+        <span className="sr-only">{title}</span>
+      </div>
+    )
+  }
 
   return (
     <div className="relative">
@@ -296,18 +307,17 @@ function DetailGallery({ emoji, tone }: { emoji: string; tone: Tone }) {
           setIndex(Math.round(target.scrollLeft / Math.max(target.clientWidth, 1)))
         }}
       >
-        {tones.map((item) => (
-          <Thumb
-            className="aspect-square w-full shrink-0 snap-center rounded-none"
-            emoji={emoji}
-            emojiClassName="text-[6rem]"
-            key={item}
-            tone={item}
+        {sorted.map((image) => (
+          <img
+            alt={title}
+            className="aspect-square w-full shrink-0 snap-center object-cover"
+            key={image.sortOrder}
+            src={image.url}
           />
         ))}
       </div>
       <span className="absolute right-3 bottom-3 rounded-full bg-black/35 px-2 py-0.5 text-white text-xs">
-        {index + 1}/{tones.length}
+        {index + 1}/{sorted.length}
       </span>
     </div>
   )

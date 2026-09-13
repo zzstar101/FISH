@@ -1,15 +1,13 @@
+import type { ListingCard } from '@fish/contracts/listings/schema'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
-import { Thumb } from '@fish/ui/thumb'
-import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import { Clock } from 'lucide-react'
 import { MotionConfig, motion, useAnimate } from 'motion/react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
-import { formatRelativeTime } from '../../lib/format'
-import type { ListingView } from '../../lib/mock/store'
-import { VerifiedText } from '../auth/auth-badge'
+import { formatRelativeTimeAt } from '../../lib/format'
 
 /**
  * 瀑布流里同一个卡片的三种图高（px），按索引轮流取。
@@ -18,12 +16,12 @@ import { VerifiedText } from '../auth/auth-badge'
 const THUMB_HEIGHTS = [150, 185, 220]
 
 /** 纵向卡片（首页瀑布流）：图上、信息下。高度由瀑布流算好后传进来。 */
-export function ListingCard({
+export function ListingCardView({
   item,
   index = 0,
   height,
 }: {
-  item: ListingView
+  item: ListingCard
   index?: number
   height?: number
 }) {
@@ -38,8 +36,14 @@ export function ListingCard({
     >
       <Card className="gap-0 p-0">
         <div className="relative shrink-0">
-          <Thumb className="w-full" style={{ height: thumbHeight }} tone={item.tone} />
-          {item.tags.includes('急出') ? (
+          <ListingThumb
+            alt={item.title}
+            className="w-full"
+            coverUrl={item.coverUrl}
+            listingId={item.id}
+            style={{ height: thumbHeight }}
+          />
+          {item.urgent ? (
             <Badge
               className="absolute top-2 left-2 h-auto px-1.5 py-0.5 text-[10px]"
               variant="destructive"
@@ -48,36 +52,18 @@ export function ListingCard({
             </Badge>
           ) : null}
         </div>
-        <div className="flex min-h-[148px] flex-1 flex-col p-2.5">
+        <div className="flex min-h-[112px] flex-1 flex-col p-2.5">
           <p className="line-clamp-2 min-h-9 text-[13px] text-ink leading-snug">{item.title}</p>
           <p className="mt-1.5 flex items-center gap-1 text-[11px] text-ink-3">
             <Clock className="size-3" />
-            {formatRelativeTime(item.publishedMinutesAgo)}发布
+            {formatRelativeTimeAt(item.createdAt)}发布
           </p>
-          <p className="mt-1.5 flex items-baseline gap-1.5">
+          <p className="mt-auto pt-1.5">
             <PriceText
               cents={item.priceCents}
               className="font-bold text-[17px]"
               symbolClassName="text-[12px]"
             />
-            {item.free ? null : (
-              <span className="text-[11px] text-ink-3">{item.wantCount}人想要</span>
-            )}
-          </p>
-          <p className="mt-auto flex items-center gap-1.5 pt-1.5">
-            <UserAvatar
-              className="size-4"
-              emoji={item.seller.emoji}
-              fallbackClassName="text-[10px]"
-              size="sm"
-              tone={item.seller.tone}
-            />
-            <span className="truncate text-[11px] text-ink-2">{item.seller.nickname}</span>
-            {item.seller.verified ? (
-              <VerifiedText />
-            ) : (
-              <span className="shrink-0 text-[11px] text-warn">信用 {item.seller.credit}</span>
-            )}
           </p>
         </div>
       </Card>
@@ -91,8 +77,8 @@ const SLIDE_FROM = 40
 /** 两列间距。 */
 const GUTTER = 10
 
-/** 信息区固定高度（实测 148px）：卡片总高 = 图高 + 它。 */
-const INFO_HEIGHT = 148
+/** 信息区固定高度：卡片总高 = 图高 + 它（文字块去掉了 Mock 时代的卖家行，等比收紧）。 */
+const INFO_HEIGHT = 112
 
 /** 卡片总高：只由图高决定，所以布局可以在渲染前算准。 */
 function cardHeight(index: number): number {
@@ -102,7 +88,7 @@ function cardHeight(index: number): number {
 type Placement = {
   id: string
   index: number
-  item: ListingView
+  item: ListingCard
   w: number
   h: number
   left: number
@@ -114,7 +100,7 @@ type Placement = {
  * 并拿到自己的最终 x/y —— 这就是 React Bits Masonry 的算法，
  * 和「按奇偶分列」的区别是它按真实高度平衡两列。
  */
-function buildGrid(items: ListingView[], containerWidth: number, columns: number): Placement[] {
+function buildGrid(items: ListingCard[], containerWidth: number, columns: number): Placement[] {
   if (containerWidth <= 0) return []
 
   const columnWidth = (containerWidth - GUTTER * (columns - 1)) / columns
@@ -144,7 +130,7 @@ function buildGrid(items: ListingView[], containerWidth: number, columns: number
 }
 
 /** 两列瀑布流：按高度平衡摆放，卡片从屏幕下方滑入 + 从模糊到清晰。 */
-export function ListingList({ items }: { items: ListingView[] }) {
+export function ListingList({ items }: { items: ListingCard[] }) {
   const columns = 2
   const [scope, animate] = useAnimate<HTMLDivElement>()
   const [width, setWidth] = useState(0)
@@ -202,7 +188,7 @@ export function ListingList({ items }: { items: ListingView[] }) {
           >
             {/* 入场动画只碰 opacity / blur / y，缩放交给外层，两者不争同一个 transform */}
             <motion.div className="h-full">
-              <ListingCard height={cell.h} index={cell.index} item={cell.item} />
+              <ListingCardView height={cell.h} index={cell.index} item={cell.item} />
             </motion.div>
           </div>
         ))}

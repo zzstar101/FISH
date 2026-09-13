@@ -1,3 +1,4 @@
+import type { ListingCard } from '@fish/contracts/listings/schema'
 import {
   categories,
   chatQuickPhrases,
@@ -41,6 +42,27 @@ export type ListingView = Listing & {
   favorited: boolean
   /** 卖家在售件数（详情页卖家卡展示「在售 N 件」）。 */
   sellerActiveCount: number
+}
+
+/**
+ * fixture 商品 → #6 契约卡形状：收藏 / 浏览历史等 fixture 列表要复用
+ * 只认契约形状的行渲染（ListingRow）时的唯一适配点。分类/成色没有 fixture
+ * 之外的枚举信息，按「其他闲置 / 9成新」展示；标签从 tags 还原布尔位。
+ */
+export function toListingCard(item: Listing): ListingCard {
+  return {
+    category: 'OTHER',
+    condition: 'GOOD',
+    createdAt: new Date(Date.now() - item.publishedMinutesAgo * 60_000).toISOString(),
+    coverUrl: null,
+    free: item.tags.includes('免费送'),
+    id: item.id,
+    negotiable: item.tags.includes('可小刀'),
+    priceCents: item.priceCents,
+    status: item.status,
+    title: item.title,
+    urgent: item.tags.includes('急出'),
+  }
 }
 export type CommentView = Comment & { user: User }
 
@@ -249,6 +271,14 @@ export async function toggleFavorite(listingId: string): Promise<boolean> {
   const has = db.favorites.includes(listingId)
   db.favorites = has ? db.favorites.filter((id) => id !== listingId) : [...db.favorites, listingId]
   return !has
+}
+
+/**
+ * 收藏状态的同步读取（#13/#41）：真实契约没有收藏端点（#14 P1），
+ * 详情页收藏按钮仍是 fixture——商品 id 已是真实 uuid，收藏列表照常工作。
+ */
+export function isFavorite(listingId: string): boolean {
+  return db.favorites.includes(listingId)
 }
 
 export async function fetchFavoriteListings(): Promise<ListingView[]> {

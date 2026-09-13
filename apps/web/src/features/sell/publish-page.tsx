@@ -1,3 +1,9 @@
+import type {
+  ListingCategory,
+  ListingCondition,
+  ListingDetail,
+} from '@fish/contracts/listings/schema'
+import { MAX_LISTING_IMAGES } from '@fish/contracts/listings/schema'
 import { Alert, AlertDescription } from '@fish/ui/alert'
 import { Button } from '@fish/ui/button'
 import { Field, FieldLabel } from '@fish/ui/field'
@@ -6,34 +12,38 @@ import { FormRow, NavBar } from '@fish/ui/nav-bar'
 import { LoadingState } from '@fish/ui/states'
 import { Textarea } from '@fish/ui/textarea'
 import { useNavigate } from '@tanstack/react-router'
-import { Camera, CircleCheck, Sparkles, X } from 'lucide-react'
-import { useId, useState } from 'react'
-import type { ListingView } from '../../lib/mock/store'
-import type { Campus, ListingCategory, TradeMethod } from '../../lib/mock/types'
+import { Camera, CircleCheck, X } from 'lucide-react'
+import { useId, useRef, useState } from 'react'
+import { ListingThumb } from '../../components/listing-thumb'
+import { formatPrice } from '../../lib/format'
+import { CONDITION_LABEL, categoryLabel } from '../../lib/labels'
+import { toUploadableFile, uploadImage, validateImageFile } from './api'
 import { useCreateListing, useListingForEdit, useUpdateListing } from './queries'
 
-const CATEGORIES: ListingCategory[] = [
-  '数码电子',
-  '图书教材',
-  '生活用品',
-  '服饰鞋包',
-  '运动健身',
-  '代步工具',
-  '美妆个护',
-  '其他闲置',
-]
-const CONDITIONS = ['全新', '99新', '95新', '9成新', '8成新']
-const TRADE_METHODS: TradeMethod[] = ['校内自提', '校内面交']
-const CAMPUSES: Campus[] = ['东校区', '西校区', '南校区', '北校区']
-/** Mock 没有真实图片，从相册选与演示占位都插一个 emoji 占位图。 */
-const PLACEHOLDER_EMOJI = ['📦', '🎧', '📚', '🖱️', '👟', '💡', '🚲', '🎮', '📱']
+const CATEGORY_OPTIONS = (
+  [
+    'DIGITAL',
+    'BOOKS',
+    'DAILY',
+    'APPAREL',
+    'SPORTS',
+    'TRANSPORT',
+    'BEAUTY',
+    'OTHER',
+  ] as ListingCategory[]
+).map((value) => ({ value, label: categoryLabel(value) }))
+
+const CONDITION_OPTIONS = (['NEW', 'LIKE_NEW', 'GOOD', 'FAIR'] as ListingCondition[]).map(
+  (value) => ({ value, label: CONDITION_LABEL[value] }),
+)
+
 /** 整数或最多两位小数，避免 `Number('abc')` 变成 NaN 后渲染出 `¥NaN`。 */
 const PRICE_PATTERN = /^\d+(\.\d{1,2})?$/
 
-type PickerKey = 'category' | 'condition' | 'tradeMethod' | 'campus'
+type PickerKey = 'category' | 'condition'
 
-/** 已选图片：Mock 阶段只有 emoji，`id` 仅用于列表 key 与移除。 */
-type PickedImage = { id: string; emoji: string }
+/** 已选图片：真实文件 + 本地预览 URL；`id` 仅用于列表 key 与移除。 */
+type PickedImage = { id: string; file: File; previewUrl: string }
 
 /** 发布 / 编辑共用同一张表单；编辑模式先取回原商品再挂载表单。 */
 export function PublishPage({ editId }: { editId?: string }) {
@@ -50,24 +60,18 @@ export function PublishPage({ editId }: { editId?: string }) {
   return <PublishForm editId={editId} initial={existing.data ?? null} />
 }
 
-function PublishForm({ editId, initial }: { editId?: string; initial: ListingView | null }) {
+function PublishForm({ editId, initial }: { editId?: string; initial: ListingDetail | null }) {
   const navigate = useNavigate()
   const createListing = useCreateListing()
   const updateListing = useUpdateListing()
   const editing = Boolean(editId)
-  const [images, setImages] = useState<PickedImage[]>(
-    initial ? [{ id: 'cover', emoji: initial.emoji }] : [],
-  )
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [images, setImages] = useState<PickedImage[]>([])
   const [title, setTitle] = useState(initial?.title ?? '')
-  const [description, setDescription] = useState(initial?.description.join('\n') ?? '')
+  const [description, setDescription] = useState(initial?.description ?? '')
   const [category, setCategory] = useState<ListingCategory | null>(initial?.category ?? null)
-  const [condition, setCondition] = useState<string>(initial?.condition ?? CONDITIONS[3] ?? '9成新')
-  const [tradeMethod, setTradeMethod] = useState<TradeMethod>(initial?.tradeMethod ?? '校内自提')
-  const [campus, setCampus] = useState<Campus>(initial?.campus ?? '东校区')
+  const [condition, setCondition] = useState<ListingCondition>(initial?.condition ?? 'GOOD')
   const [price, setPrice] = useState(initial ? (initial.priceCents / 100).toString() : '')
-  const [originalPrice, setOriginalPrice] = useState(
-    initial?.originalPriceCents ? (initial.originalPriceCents / 100).toString() : '',
-  )
   const [picker, setPicker] = useState<PickerKey | null>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [urgent, setUrgent] = useState(initial?.urgent ?? false)
@@ -78,27 +82,46 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
    * 发布成功后的落地态：不立刻跳走，先给一次明确反馈。
    * 直接 `navigate` 的话用户只看到页面跳了，不确定到底发出去没有。
    */
-  const [created, setCreated] = useState<ListingView | null>(null)
+  const [created, setCreated] = useState<ListingDetail | null>(null)
+  const [uploadedCount, setUploadedCount] = useState(0)
   const titleId = useId()
   const descriptionId = useId()
 
-  const pending = createListing.isPending || updateListing.isPending
+  const pending = createListing.isPending || updateListing.isPending || uploadedCount > 0
   /** 「0 元送」由价格推导：填了 0 才算，空字符串不算。 */
   const free = Number(price) === 0 && price.trim() !== ''
 
-  const addImage = () => {
-    if (images.length >= 9) {
-      setErrors((prev) => ({ ...prev, images: '最多 9 张图片' }))
-      return
+  const addFiles = (files: FileList | null) => {
+    if (!files) return
+    const next: PickedImage[] = []
+    let error = ''
+    for (const file of files) {
+      if (images.length + next.length >= MAX_LISTING_IMAGES) {
+        error = `最多 ${MAX_LISTING_IMAGES} 张图片`
+        break
+      }
+      // HEIC 选择时不校验（提交时 canvas 转码成 JPG 再过规格）；其它格式立即校验。
+      const isHeic = file.type === 'image/heic' || /\.heic$/i.test(file.name)
+      if (!isHeic) {
+        const invalid = validateImageFile(file)
+        if (invalid) {
+          error = invalid
+          continue
+        }
+      }
+      next.push({
+        file,
+        id: `img-${Date.now()}-${next.length}`,
+        previewUrl: URL.createObjectURL(file),
+      })
     }
-    const next = PLACEHOLDER_EMOJI[images.length % PLACEHOLDER_EMOJI.length] ?? '📦'
-    setImages((prev) => [...prev, { id: `img-${Date.now()}-${prev.length}`, emoji: next }])
-    setErrors((prev) => ({ ...prev, images: '' }))
+    if (next.length > 0) setImages((prev) => [...prev, ...next])
+    setErrors((prev) => ({ ...prev, images: error }))
   }
 
   const validate = () => {
     const next: Record<string, string> = {}
-    if (images.length === 0) next.images = '至少 1 张图片'
+    if (!editing && images.length === 0) next.images = '至少 1 张图片'
     if (title.trim().length < 2 || title.trim().length > 40) next.title = '标题需要 2–40 个字符'
     if (description.trim().length === 0) next.description = '写点描述,买家更愿意问'
     if (description.length > 500) next.description = '描述最多 500 字'
@@ -107,37 +130,34 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
     if (price.trim() === '' || !PRICE_PATTERN.test(price.trim())) {
       next.price = '填一个数字,0 元即免费送,最多两位小数'
     }
-    if (originalPrice.trim() && !PRICE_PATTERN.test(originalPrice.trim())) {
-      next.originalPrice = '原价最多两位小数'
-    }
     setErrors(next)
     return Object.keys(next).length === 0
   }
 
-  const submit = () => {
-    if (!validate()) return
+  const submit = async () => {
+    if (!validate() || pending) return
     setSubmitError('')
-    const draft = {
-      title: title.trim(),
-      description: description.trim(),
-      category: category ?? '其他闲置',
-      condition,
-      campus,
-      tradeMethod,
-      priceCents: Math.round(Number(price) * 100),
-      originalPriceCents: originalPrice ? Math.round(Number(originalPrice) * 100) : undefined,
-      emoji: images[0]?.emoji ?? '📦',
-      free,
-      // 免费送与「可小刀」语义冲突（都已经 0 元了），勾了送就不带刀。
-      urgent,
-      negotiable: free ? false : negotiable,
-    }
     const fail = (error: unknown) => {
       setSubmitError(error instanceof Error ? error.message : '发布失败,请检查网络后重试')
     }
+
     if (editId) {
+      // 编辑：契约没有「换图」入口（详情响应不给 objectKey，无法全量替换），
+      // objectKeys 整个省略 = 图片保持不变，只改文本字段。
       updateListing.mutate(
-        { id: editId, draft },
+        {
+          id: editId,
+          input: {
+            title: title.trim(),
+            description: description.trim(),
+            priceCents: Math.round(Number(price) * 100),
+            category: category ?? 'OTHER',
+            condition,
+            urgent,
+            negotiable: free ? false : negotiable,
+            free,
+          },
+        },
         {
           onError: fail,
           onSuccess: () =>
@@ -146,12 +166,36 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
       )
       return
     }
-    createListing.mutate(draft, {
-      onError: fail,
-      onSuccess: (created) => {
-        setCreated(created)
-      },
-    })
+
+    try {
+      // 逐张上传（presign → PUT → confirm），先转码 HEIC 再校验规格。
+      const objectKeys: string[] = []
+      setUploadedCount(0)
+      for (const image of images) {
+        const target = (await toUploadableFile(image.file)) ?? image.file
+        const invalid = validateImageFile(target)
+        if (invalid) throw new Error(invalid)
+        objectKeys.push(await uploadImage(target))
+        setUploadedCount(objectKeys.length)
+      }
+
+      const detail = await createListing.mutateAsync({
+        title: title.trim(),
+        description: description.trim(),
+        priceCents: Math.round(Number(price) * 100),
+        category: category ?? 'OTHER',
+        condition,
+        urgent,
+        negotiable: free ? false : negotiable,
+        free,
+        objectKeys,
+      })
+      setCreated(detail)
+    } catch (error) {
+      fail(error)
+    } finally {
+      setUploadedCount(0)
+    }
   }
 
   // 发布成功：停在成功态，让用户确认发出去了，再决定看详情还是继续发。
@@ -168,7 +212,7 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
             <button
               className="text-brand text-sm disabled:opacity-50"
               disabled={pending}
-              onClick={submit}
+              onClick={() => void submit()}
               type="button"
             >
               {editing ? '保存' : '发布'}
@@ -182,52 +226,83 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
         <p className="mb-3 text-[15px]">
           宝贝图片 <span className="text-danger">*</span>
         </p>
-        <div className="flex flex-wrap gap-3">
-          {images.map((image, index) => (
-            <div
-              className="relative flex size-24 items-center justify-center rounded-xl bg-surface-2 text-3xl"
-              key={image.id}
-            >
-              {image.emoji}
-              {index === 0 ? (
-                <span className="absolute bottom-1 left-1 rounded bg-black/45 px-1 text-[10px] text-white">
-                  封面
-                </span>
-              ) : null}
+
+        {editing ? (
+          <>
+            {/*
+              编辑模式图片只读：详情响应刻意不给 objectKey（存储布局不进读协议），
+              全量替换 objectKeys 无从谈起——省略该字段即保持原图，只改文本字段。
+            */}
+            <div className="flex flex-wrap gap-3">
+              {initial?.images
+                .slice()
+                .sort((a, b) => a.sortOrder - b.sortOrder)
+                .map((image) => (
+                  <ListingThumb
+                    alt={initial.title}
+                    className="size-24 rounded-xl"
+                    coverUrl={image.url}
+                    key={image.sortOrder}
+                    listingId={initial.id}
+                  />
+                ))}
+            </div>
+            <p className="mt-2 text-ink-3 text-xs">图片暂不支持修改；需要换图请下架后重新发布</p>
+          </>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-3">
+              {images.map((image, index) => (
+                <div
+                  className="relative size-24 overflow-hidden rounded-xl bg-surface-2"
+                  key={image.id}
+                >
+                  <img
+                    alt={`已选图片 ${index + 1}`}
+                    className="size-full object-cover"
+                    src={image.previewUrl}
+                  />
+                  {index === 0 ? (
+                    <span className="absolute bottom-1 left-1 rounded bg-black/45 px-1 text-[10px] text-white">
+                      封面
+                    </span>
+                  ) : null}
+                  <button
+                    aria-label="移除图片"
+                    className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-ink text-white"
+                    onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
+                    type="button"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </div>
+              ))}
               <button
-                aria-label="移除图片"
-                className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-ink text-white"
-                onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
+                className="flex size-24 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-ink-3 text-ink-2"
+                onClick={() => fileInputRef.current?.click()}
                 type="button"
               >
-                <X className="size-3" />
+                <Camera className="size-6" />
+                <span className="text-xs">从相册选</span>
               </button>
+              <input
+                accept="image/jpeg,image/png,image/webp,image/heic"
+                hidden
+                multiple
+                onChange={(event) => {
+                  addFiles(event.target.files)
+                  event.target.value = ''
+                }}
+                ref={fileInputRef}
+                type="file"
+              />
             </div>
-          ))}
-          <button
-            className="flex size-24 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-ink-3 text-ink-2"
-            onClick={addImage}
-            type="button"
-          >
-            <Camera className="size-6" />
-            <span className="text-xs">从相册选</span>
-          </button>
-          <button
-            className="flex size-24 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-ink-3 text-ink-2"
-            onClick={addImage}
-            type="button"
-          >
-            <Sparkles className="size-6" />
-            <span className="text-xs">演示占位</span>
-          </button>
-        </div>
-        <p className="mt-2 text-ink-3 text-xs">
-          第一张作为封面,最多 9 张;没有合适图片也可用演示占位
-        </p>
-        {errors.images ? <p className="mt-1 text-danger text-xs">{errors.images}</p> : null}
-        <p className="mt-1 text-ink-3 text-xs">
-          当前 {images.length}/9 · 支持 JPG / PNG / WebP,iPhone 的 HEIC 会先转码
-        </p>
+            {errors.images ? <p className="mt-1 text-danger text-xs">{errors.images}</p> : null}
+            <p className="mt-1 text-ink-3 text-xs">
+              第一张作为封面,最多 9 张;支持 JPG / PNG / WebP,iPhone 的 HEIC 会先转码
+            </p>
+          </>
+        )}
       </section>
 
       <section className="mt-2 space-y-4 bg-surface px-4 py-4">
@@ -240,7 +315,7 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
               id={titleId}
               maxLength={40}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="一句话说清是什么,如:捷安特山地车 9成新"
+              placeholder="一句话说清是什么,如:捷安特山地车 99新"
               value={title}
             />
           </Field>
@@ -273,7 +348,7 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
           }
           onClick={() => setPicker('category')}
           placeholder="选择分类"
-          value={category ?? undefined}
+          value={category ? categoryLabel(category) : undefined}
         />
         {errors.category ? (
           <p className="px-4 py-1 text-danger text-xs">{errors.category}</p>
@@ -292,28 +367,17 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
           />
         </div>
         {errors.price ? <p className="px-4 py-1 text-danger text-xs">{errors.price}</p> : null}
-        <div className="flex h-13 items-center gap-3 px-4">
-          <span className="shrink-0 text-[15px]">原价</span>
-          <span className="text-ink-3">¥</span>
-          <Input
-            className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-right text-[15px] shadow-none focus-visible:bg-transparent"
-            inputMode="decimal"
-            onChange={(event) => setOriginalPrice(event.target.value)}
-            placeholder="选填,帮你显示折扣"
-            value={originalPrice}
-          />
-        </div>
-        {errors.originalPrice ? (
-          <p className="px-4 py-1 text-danger text-xs">{errors.originalPrice}</p>
-        ) : null}
-        <FormRow label="成色" onClick={() => setPicker('condition')} value={condition} />
-        <FormRow label="交易方式" onClick={() => setPicker('tradeMethod')} value={tradeMethod} />
-        <FormRow label="所在校区" onClick={() => setPicker('campus')} value={campus} />
+        <FormRow
+          label="成色"
+          onClick={() => setPicker('condition')}
+          value={CONDITION_LABEL[condition]}
+        />
       </section>
 
       {/*
         #6 的「急出 / 可刀 / 0 元送」：前两个是开关，直接写在商品上；
         「0 元送」不单独给开关——它由价格推导（填 0 就是），两个入口会让同一件事有两种真相。
+        交易方式 / 校区 / 原价不在 #6 冻结契约的写模型里，切真实后从表单移除。
       */}
       <section className="mt-2 divide-y divide-line bg-surface">
         <FlagRow
@@ -352,14 +416,20 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
         {submitError ? (
           <button
             className="mb-2 w-full text-center text-brand text-xs"
-            onClick={submit}
+            onClick={() => void submit()}
             type="button"
           >
             重试一次
           </button>
         ) : null}
-        <Button className="w-full" disabled={pending} onClick={submit} size="lg">
-          {pending ? '提交中…' : editing ? '保存修改' : '发布闲置'}
+        <Button className="w-full" disabled={pending} onClick={() => void submit()} size="lg">
+          {uploadedCount > 0
+            ? `上传图片 ${uploadedCount}/${images.length}…`
+            : pending
+              ? '提交中…'
+              : editing
+                ? '保存修改'
+                : '发布闲置'}
         </Button>
       </div>
 
@@ -368,38 +438,12 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
           onClose={() => setPicker(null)}
           onPick={(value) => {
             if (picker === 'category') setCategory(value as ListingCategory)
-            if (picker === 'condition') setCondition(value)
-            if (picker === 'tradeMethod') setTradeMethod(value as TradeMethod)
-            if (picker === 'campus') setCampus(value as Campus)
+            if (picker === 'condition') setCondition(value as ListingCondition)
             setPicker(null)
           }}
-          options={
-            picker === 'category'
-              ? CATEGORIES
-              : picker === 'condition'
-                ? CONDITIONS
-                : picker === 'tradeMethod'
-                  ? TRADE_METHODS
-                  : CAMPUSES
-          }
-          title={
-            picker === 'category'
-              ? '选择分类'
-              : picker === 'condition'
-                ? '选择成色'
-                : picker === 'tradeMethod'
-                  ? '选择交易方式'
-                  : '选择所在校区'
-          }
-          value={
-            picker === 'category'
-              ? category
-              : picker === 'condition'
-                ? condition
-                : picker === 'tradeMethod'
-                  ? tradeMethod
-                  : campus
-          }
+          options={picker === 'category' ? CATEGORY_OPTIONS : CONDITION_OPTIONS}
+          title={picker === 'category' ? '选择分类' : '选择成色'}
+          value={picker === 'category' ? category : condition}
         />
       ) : null}
     </div>
@@ -412,7 +456,7 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingVie
  * 刻意**不自动跳转**：跳走之后用户不确定到底成功没有。
  * 这里给明确反馈 + 三个出口（看详情 / 再发一件 / 回首页），把选择权交回用户。
  */
-function PublishSuccess({ listing }: { listing: ListingView }) {
+function PublishSuccess({ listing }: { listing: ListingDetail }) {
   const navigate = useNavigate()
 
   return (
@@ -429,13 +473,16 @@ function PublishSuccess({ listing }: { listing: ListingView }) {
         <p className="mt-1.5 text-ink-2 text-sm">同学们已经能搜到这件闲置了</p>
 
         <div className="mt-6 flex w-full items-center gap-3 rounded-2xl bg-surface p-3 text-left">
-          <span className="flex size-14 shrink-0 items-center justify-center rounded-xl bg-surface-2 text-2xl">
-            {listing.emoji}
-          </span>
+          <ListingThumb
+            alt={listing.title}
+            className="size-14 shrink-0 rounded-xl"
+            coverUrl={listing.coverUrl}
+            listingId={listing.id}
+          />
           <div className="min-w-0 flex-1">
             <p className="line-clamp-2 font-medium text-[15px] leading-snug">{listing.title}</p>
             <p className="mt-1 font-semibold text-brand text-sm">
-              {listing.free ? '免费送' : `¥${(listing.priceCents / 100).toLocaleString('zh-CN')}`}
+              {formatPrice(listing.priceCents)}
               {listing.urgent ? ' · 急出' : ''}
               {listing.negotiable ? ' · 可小刀' : ''}
             </p>
@@ -517,7 +564,7 @@ function PickerSheet({
   onClose,
 }: {
   title: string
-  options: readonly string[]
+  options: { value: string; label: string }[]
   value: string | null
   onPick: (value: string) => void
   onClose: () => void
@@ -534,15 +581,15 @@ function PickerSheet({
         <p className="py-3 text-center font-medium text-[15px]">{title}</p>
         <ul className="max-h-[50vh] overflow-y-auto pb-2">
           {options.map((option) => (
-            <li key={option}>
+            <li key={option.value}>
               <button
                 className={`flex h-12 w-full items-center justify-center text-[15px] ${
-                  option === value ? 'font-semibold text-brand' : 'text-ink'
+                  option.value === value ? 'font-semibold text-brand' : 'text-ink'
                 }`}
-                onClick={() => onPick(option)}
+                onClick={() => onPick(option.value)}
                 type="button"
               >
-                {option}
+                {option.label}
               </button>
             </li>
           ))}

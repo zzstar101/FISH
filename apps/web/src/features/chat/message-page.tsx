@@ -1,10 +1,11 @@
+import type { ConversationDto } from '@fish/contracts/chat/schema'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
-import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import { Bell, Check, ChevronRight } from 'lucide-react'
-import { formatChatTime, formatPrice } from '../../lib/format'
+import { ListingThumb } from '../../components/listing-thumb'
+import { formatChatTimeAt, formatPrice } from '../../lib/format'
 import { AppShell } from '../navigation/app-shell'
 import {
   useConversations,
@@ -17,16 +18,15 @@ import { formatMessageBody } from './system-event'
 /**
  * 消息页（#9）：置顶的「系统通知」入口 + 聊天列表。
  *
- * #23 把通知的形态定成「消息 tab 顶部置顶一行」：通知**不再**平铺在这里，
- * 而是点进独立的通知列表页（`/notifications`）。这样会话列表的滚动区域完整，
- * 置顶行也不会随列表滚走。
+ * 会话数据走真实 `GET /conversations`（#41）：买卖角色合并、按 lastMessageAt 降序，
+ * 行内直接渲染服务端组装好的 lastMessage 摘要（TEXT 原文 / tx.* SYSTEM 先解析）。
  */
 export function MessagePage() {
   const conversations = useConversations()
   const badge = useNotificationBadge()
   const unreadNotifications = useUnreadNotificationCount()
   const markAllRead = useMarkAllRead()
-  const unreadChats = conversations.data?.reduce((sum, item) => sum + item.unread, 0) ?? 0
+  const unreadChats = conversations.data?.reduce((sum, item) => sum + item.unreadCount, 0) ?? 0
 
   return (
     <AppShell>
@@ -78,67 +78,67 @@ export function MessagePage() {
         {conversations.isError ? (
           <ErrorState message="会话加载失败" onRetry={() => void conversations.refetch()} />
         ) : null}
-        {conversations.data?.filter((item) => item.kind === 'peer').length === 0 ? (
+        {conversations.data?.length === 0 ? (
           <EmptyState description="还没有会话,去详情页找同学聊聊吧" emoji="💬" />
         ) : null}
 
         <ul className="divide-y divide-line">
-          {conversations.data
-            ?.filter((item) => item.kind === 'peer')
-            .map((item) => {
-              const last = item.messages.at(-1)
-              return (
-                <li key={item.id}>
-                  <Link
-                    className="flex gap-3 px-4 py-3"
-                    params={{ conversationId: item.id }}
-                    to="/chat/$conversationId"
-                  >
-                    <div className="relative shrink-0">
-                      <UserAvatar
-                        emoji={item.peer?.emoji ?? '🔔'}
-                        size="lg"
-                        tone={item.peer?.tone ?? 'warn'}
-                      />
-                      {item.unread > 0 ? (
-                        <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] text-white">
-                          {item.unread}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="truncate font-semibold text-[15px]">{item.title}</span>
-                        <span className="shrink-0 text-ink-3 text-xs">
-                          {formatChatTime(item.updatedMinutesAgo)}
-                        </span>
-                      </div>
-                      {item.listing ? (
-                        <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">
-                          <Thumb
-                            className="size-8 rounded-md"
-                            emoji={item.listing.emoji}
-                            emojiClassName="text-base"
-                            tone={item.listing.tone}
-                          />
-                          <span className="min-w-0 flex-1 truncate text-ink-2 text-xs">
-                            {item.listing.title}
-                          </span>
-                          <span className="shrink-0 font-medium text-xs">
-                            {formatPrice(item.listing.priceCents)}
-                          </span>
-                        </div>
-                      ) : null}
-                      <p className="mt-1.5 truncate text-ink-3 text-sm">
-                        {last ? formatMessageBody(last) : '打个招呼吧'}
-                      </p>
-                    </div>
-                  </Link>
-                </li>
-              )
-            })}
+          {conversations.data?.map((item) => (
+            <li key={item.id}>
+              <ConversationRow item={item} />
+            </li>
+          ))}
         </ul>
       </section>
     </AppShell>
+  )
+}
+
+function ConversationRow({ item }: { item: ConversationDto }) {
+  const last = item.lastMessage
+
+  return (
+    <Link
+      className="flex gap-3 px-4 py-3"
+      params={{ conversationId: item.id }}
+      to="/chat/$conversationId"
+    >
+      <div className="relative shrink-0">
+        <UserAvatar
+          avatarUrl={item.counterpart.avatarUrl}
+          emoji={item.counterpart.nickname.slice(0, 1)}
+          size="lg"
+        />
+        {item.unreadCount > 0 ? (
+          <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] text-white">
+            {item.unreadCount}
+          </span>
+        ) : null}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="truncate font-semibold text-[15px]">{item.counterpart.nickname}</span>
+          <span className="shrink-0 text-ink-3 text-xs">
+            {last ? formatChatTimeAt(last.createdAt) : formatChatTimeAt(item.createdAt)}
+          </span>
+        </div>
+        <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">
+          <ListingThumb
+            alt={item.listing.title}
+            className="size-8 rounded-md"
+            coverUrl={item.listing.coverUrl}
+            listingId={item.listing.id}
+            emojiClassName="text-base"
+          />
+          <span className="min-w-0 flex-1 truncate text-ink-2 text-xs">{item.listing.title}</span>
+          <span className="shrink-0 font-medium text-xs">
+            {formatPrice(item.listing.priceCents)}
+          </span>
+        </div>
+        <p className="mt-1.5 truncate text-ink-3 text-sm">
+          {last ? formatMessageBody(last) : '打个招呼吧'}
+        </p>
+      </div>
+    </Link>
   )
 }
