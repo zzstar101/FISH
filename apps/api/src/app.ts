@@ -22,6 +22,9 @@ import { createSqlMatchingStore } from './modules/matching/store'
 import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
+import { createNotificationsRouter } from './modules/notifications/router'
+import { createNotificationService } from './modules/notifications/service'
+import { createSqlNotificationStore } from './modules/notifications/store'
 import { createProfileRouter } from './modules/profile/router'
 import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
@@ -209,6 +212,18 @@ export function createApp(env: ServerEnv) {
         },
       }),
       requireAuth: auth.requireAuth,
+    }),
+  )
+
+  // 通知（#23）：三个端点全是本人数据，没有匿名路径，与 /wishes 同一挂法——先挂认证守卫，
+  // 再进 router；router 的 getUserId 只读守卫写入的可信 context，不读请求头。
+  // 挂载点是根级 `/notifications`（`NOTIFICATION_ROUTES.base`），与 listings/wishes/matches 一致。
+  app.use('/notifications/*', auth.requireAuth)
+  app.route(
+    '/notifications',
+    createNotificationsRouter({
+      service: createNotificationService({ store: createSqlNotificationStore(db) }),
+      getUserId: (c) => c.get('userId'),
     }),
   )
 
