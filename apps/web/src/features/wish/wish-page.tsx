@@ -2,16 +2,19 @@ import type { WishCategory, WishDto, WishPoolItem, WishStatus } from '@fish/cont
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
+import { cn } from '@fish/ui/lib/utils'
+import { GlassSurface } from '@fish/ui/liquid-glass'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, LoadingState } from '@fish/ui/states'
 import { Tabs, TabsList, TabsTrigger } from '@fish/ui/tabs'
 import { Link } from '@tanstack/react-router'
-import { PartyPopper, Plus, Search, Sun, X } from 'lucide-react'
+import { ChevronDown, PartyPopper, Plus, Search, Sun, X } from 'lucide-react'
 import { useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
 import { CATEGORY_LABEL, categoryLabel } from '../../lib/labels'
 import { AppShell } from '../navigation/app-shell'
+import { HOT_WISH_TAGS } from './hot-tags'
 import { useCloseWish, useCreateWish, useMyWishes, useWishMatches, useWishPool } from './queries'
 
 const TABS = [
@@ -24,6 +27,10 @@ const WISH_STATUS_BADGE: Record<WishStatus, { label: string; variant: 'success' 
   FULFILLED: { label: '已达成', variant: 'success' },
   CLOSED: { label: '已关闭', variant: 'secondary' },
 }
+
+/** 热门标签榜：折叠态露出 4 行 × 2 列 = 8 个，其余由「展示全部」展开。 */
+const VISIBLE_TAG_ROWS = 4
+const TAG_COLUMNS = 2
 
 /** 许愿墙（#7）：Banner + 我的愿望 / 愿望池。数据全部来自真实 `/api/wishes`。 */
 
@@ -39,58 +46,81 @@ export function WishPage() {
   const closeWish = useCloseWish()
   const [tab, setTab] = useState<'mine' | 'pool'>('mine')
   const [creating, setCreating] = useState(false)
+  const [tagsExpanded, setTagsExpanded] = useState(false)
 
   const mine = wishes.data ?? []
   const poolItems = pool.data ?? []
-  // 「件闲置可能匹配」：我的愿望的真实命中数之和（#8 matches 实时计数）。
-  const matchedListings = mine.reduce((sum, wish) => sum + wish.matchCount, 0)
+  // 折叠态只露前 4 行（2 列），展开态铺全部。
+  const visibleTags = tagsExpanded
+    ? HOT_WISH_TAGS
+    : HOT_WISH_TAGS.slice(0, VISIBLE_TAG_ROWS * TAG_COLUMNS)
 
   return (
     <AppShell>
       <div className="sticky top-0 z-20 bg-surface">
-        <NavBar
-          right={
-            <button
-              aria-label="许愿"
-              className="flex size-9 items-center justify-center text-ink"
-              onClick={() => setCreating(true)}
-              type="button"
-            >
-              <Plus className="size-5" />
-            </button>
-          }
-          title="许愿墙"
-        />
+        {/* 右上角原来有个「许愿」加号钮，与 Banner 里的「我要许愿」重复；后者已搬到 h2 行，
+            这里去掉，入口只留一个。 */}
+        <NavBar title="许愿墙" />
       </div>
 
       <section className="px-3 pt-3">
-        <div className="rounded-2xl bg-brand px-4 py-4 text-white">
+        {/*
+          红→白自上而下。`from-40%` 把纯红撑到 40% 处，是刻意的：线性渐变直接过渡的话，
+          标题区（卡片顶部 ~25%）已经淡成粉色，白字就压不住底了。
+        */}
+        <div className="rounded-2xl bg-gradient-to-b from-coral from-40% to-surface px-4 py-4">
           <div className="flex items-start gap-3">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/15">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/15 text-white">
               <Sun className="size-6" />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="font-semibold text-lg">想找什么?先许个愿</p>
+              <p className="font-semibold text-lg text-white">想找什么?先许个愿</p>
               <p className="mt-1 text-white/80 text-xs">同学看到你的需求,有闲置就会来找你</p>
             </div>
           </div>
 
-          <div className="mt-3 flex items-center rounded-xl bg-white/15 py-2.5">
-            <div className="flex flex-1 flex-col items-center">
-              <span className="font-bold text-xl">{poolItems.length}</span>
-              <span className="text-white/80 text-xs">种心愿在被寻找</span>
-            </div>
-            <span className="h-8 w-px bg-white/25" />
-            <div className="flex flex-1 flex-col items-center">
-              <span className="font-bold text-xl">{matchedListings}</span>
-              <span className="text-white/80 text-xs">件闲置可能匹配</span>
-            </div>
-          </div>
+          {/*
+            热门求购标签榜：顶替原来的双格统计条（「N 种心愿在被寻找 / N 件闲置可能匹配」）。
+            磨砂玻璃材质复用 packages/ui 的 GlassSurface，这里只覆盖圆角（xl）与白底透明度
+            （/20 = 原来的 /15 再加 5 个百分点）。榜单数据是纯前端常量，见 `hot-tags.ts`。
 
-          <Button className="mt-3 w-full" onClick={() => setCreating(true)} variant="onBrand">
-            <Plus />
-            我要许愿
-          </Button>
+            榜单文字一律 `text-ink`：面板浮在卡片红→白的渐变上，实测底色是
+            rgb(255,125,109) → rgb(255,207,198)，只有近黑能过 4.5:1
+            （ink-3 只有 1.28、warn 1.16、白色 1.4–2.5）。层级靠字重和字号拉开。
+          */}
+          <GlassSurface className="mt-3 overflow-hidden rounded-xl bg-white/20">
+            <ol className="grid grid-cols-2 gap-x-2 p-2">
+              {visibleTags.map((tag, index) => (
+                <li key={tag.label}>
+                  <Link
+                    className="flex items-center gap-1.5 px-1.5 py-1.5"
+                    search={{ kw: tag.label }}
+                    to="/search"
+                  >
+                    <RankNumber index={index} />
+                    <span className="min-w-0 flex-1 truncate font-medium text-[13px] text-ink">
+                      {tag.label}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-ink">{tag.wanters} 人想要</span>
+                  </Link>
+                </li>
+              ))}
+            </ol>
+
+            {HOT_WISH_TAGS.length > VISIBLE_TAG_ROWS * TAG_COLUMNS ? (
+              <button
+                aria-expanded={tagsExpanded}
+                className="flex w-full items-center justify-center gap-1 border-white/25 border-t py-2 font-medium text-[13px] text-ink"
+                onClick={() => setTagsExpanded((prev) => !prev)}
+                type="button"
+              >
+                {tagsExpanded ? '收起' : `展示全部 ${HOT_WISH_TAGS.length} 个标签`}
+                <ChevronDown
+                  className={cn('size-4 transition-transform', tagsExpanded && 'rotate-180')}
+                />
+              </button>
+            ) : null}
+          </GlassSurface>
         </div>
       </section>
 
@@ -106,11 +136,17 @@ export function WishPage() {
         </Tabs>
       </div>
 
-      <h2 className="flex items-baseline justify-between px-4 py-3 font-semibold text-[15px]">
+      {/*
+        右侧原来是「共 N 条」计数，按需求换成许愿入口——按钮从 Banner 里搬到这里。
+        `items-baseline` 顺带改成 `items-center`：让 28px 的胶囊在标题行里垂直居中，
+        而不是跟着标题文字按基线对齐。
+      */}
+      <h2 className="flex items-center justify-between px-4 py-3 font-semibold text-[15px]">
         {tab === 'mine' ? '我的愿望' : '大家在找'}
-        <span className="font-normal text-ink-3 text-xs">
-          共 {tab === 'mine' ? mine.length : poolItems.length} 条
-        </span>
+        <Button onClick={() => setCreating(true)} size="sm">
+          <Plus />
+          我要许愿
+        </Button>
       </h2>
 
       {tab === 'mine' && wishes.isPending ? <LoadingState /> : null}
@@ -148,6 +184,18 @@ export function WishPage() {
         />
       ) : null}
     </AppShell>
+  )
+}
+
+/**
+ * 榜单名次：固定占宽，让不同名次的标签左边缘对齐。
+ *
+ * 名次刻意不着色：面板浮在卡片红→白渐变上，实测底色偏红（rgb(255,125,109) 起），
+ * 除近黑外都到不了 4.5:1（装饰红 1.48、警示橙 1.16），颜色区分等于不可读。
+ */
+function RankNumber({ index }: { index: number }) {
+  return (
+    <span className="w-3 shrink-0 text-center font-bold text-[13px] text-ink">{index + 1}</span>
   )
 }
 

@@ -22,12 +22,16 @@
 @theme static {
   --color-brand: #5f82c5;
   --color-brand-soft: #e7edf6;
+  /*
+   * 许愿墙 Banner 的装饰红（自上而下红→白渐变）。
+   * 刻意不复用 `--color-danger`：那是功能色，语义是「出错 / 危险」，而这里的红只做装饰，
+   * 借用会让「红色 = 危险」的约定失效。
+   */
+  --color-coral: #e5544a;
 
   --color-bg: #f3f4f6;
   --color-surface: #ffffff;
   --color-surface-2: #f0f3f8;
-  /* 分类页左侧竖排栏的底色（比页面底色深一档的淡云蓝） */
-  --color-rail: #e7edf6;
 
   --color-ink: #2d3138;
   --color-ink-2: #5a5f6a;
