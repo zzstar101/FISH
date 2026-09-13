@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  fetchActiveListings,
   fetchBoughtListings,
   fetchFavoriteListings,
   fetchFollowedUsers,
@@ -53,6 +54,10 @@ export function useUserListings(id: string) {
 
 export function useMyListings() {
   return useQuery({ queryKey: ['mylist', 'post'], queryFn: fetchMyListings })
+}
+
+export function useActiveListings() {
+  return useQuery({ queryKey: ['mylist', 'active'], queryFn: fetchActiveListings })
 }
 
 export function useFavoriteListings() {

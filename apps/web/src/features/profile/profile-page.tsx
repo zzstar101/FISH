@@ -68,7 +68,7 @@ export function ProfilePage() {
 
       <section className="relative mx-3 -mt-8 grid grid-cols-4 rounded-2xl bg-surface py-3 shadow-sm">
         {/* #12 工作项的四格统计：在售/愿望/买入/卖出（收藏是 #14 P1，契约无来源，不占格）。 */}
-        <StatCell label="在售" type="post" value={stats.active} />
+        <StatCell label="在售" type="active" value={stats.active} />
         <StatCell label="愿望" to="/wish" value={stats.wishes} />
         <StatCell label="买入" type="bought" value={stats.bought} />
         <StatCell label="卖出" type="sold" value={stats.sold} />

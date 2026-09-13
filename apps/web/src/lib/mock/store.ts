@@ -277,6 +277,14 @@ export async function fetchMyListings(): Promise<ListingView[]> {
   return db.listings.filter((item) => item.sellerId === ME_ID).map(decorate)
 }
 
+/** 「在售」分页：与个人中心统计格同口径，只看 ACTIVE。 */
+export async function fetchActiveListings(): Promise<ListingView[]> {
+  await delay()
+  return db.listings
+    .filter((item) => item.sellerId === ME_ID && item.status === 'ACTIVE')
+    .map(decorate)
+}
+
 export async function fetchSoldListings(): Promise<ListingView[]> {
   await delay()
   return db.listings
