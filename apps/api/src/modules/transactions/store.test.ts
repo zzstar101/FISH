@@ -141,13 +141,19 @@ describe('transactions store (integration)', () => {
   })
 
   test('cancel restores the listing to ACTIVE; confirm after cancel → 409 语义', async () => {
-    // listingA 的 live 交易先取消：listing 应回 ACTIVE
+    // listingA 的 live 交易是**上一个用例那次并发 accept** 的产物，而胜者 buyer1 / buyer2 皆有可能
+    // （上一个用例断言的正是「恰好一个成功」，并没有说谁成功）。所以这里必须回读该笔交易**自己的**
+    // buyer_id 当 viewer：硬编码 buyer1 会在 buyer2 胜出时走进 store.cancel 的 not-found 分支
+    // （viewerId 不属于买卖双方），表现为随机出现的 `unreachable`（#56）。
     const live = rows(
-      await db.execute(sql`SELECT id FROM transactions WHERE listing_id = ${listingA} LIMIT 1`),
-    )[0] as { id: string }
-    const cancelled = await store.cancel(live.id, buyer1)
+      await db.execute(
+        sql`SELECT id, buyer_id FROM transactions WHERE listing_id = ${listingA} LIMIT 1`,
+      ),
+    )[0] as { id: string; buyer_id: string }
+    const cancelled = await store.cancel(live.id, live.buyer_id)
     if (cancelled.kind !== 'ok') throw new Error('unreachable')
     expect(cancelled.row.status).toBe('CANCELLED')
+    expect(cancelled.row.buyer_id).toBe(live.buyer_id)
 
     const listing = rows(
       await db.execute(sql`SELECT status::text AS status FROM listings WHERE id = ${listingA}`),
@@ -155,7 +161,7 @@ describe('transactions store (integration)', () => {
     expect(listing.status).toBe('ACTIVE')
 
     // CANCELLED 上 confirm → cancelled；重复 cancel 幂等
-    expect((await store.confirm(live.id, buyer1, 'buyer')).kind).toBe('cancelled')
+    expect((await store.confirm(live.id, live.buyer_id, 'buyer')).kind).toBe('cancelled')
     const repeat = await store.cancel(live.id, seller)
     if (repeat.kind !== 'ok') throw new Error('unreachable')
     expect(repeat.row.status).toBe('CANCELLED')
