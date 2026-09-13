@@ -81,7 +81,7 @@ function jobsRows(result: unknown): Record<string, unknown>[] {
 
 async function createWish(cookie: string): Promise<WishDto> {
   const response = await app.request(
-    '/api/wishes',
+    '/wishes',
     post(
       {
         keyword: '机械键盘',
@@ -99,13 +99,13 @@ async function createWish(cookie: string): Promise<WishDto> {
 
 describe('wishes API wiring (#7)', () => {
   test('unauthenticated requests are rejected instead of reaching the router', async () => {
-    const response = await app.request('/api/wishes')
+    const response = await app.request('/wishes')
 
     expect(response.status).toBe(401)
     expect(await response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
 
     // 身份只认会话：伪造请求头不得被信任
-    const forged = await app.request('/api/wishes', {
+    const forged = await app.request('/wishes', {
       headers: { 'x-user-id': '00000000-0000-0000-0000-000000000000' },
     })
     expect(forged.status).toBe(401)
@@ -135,26 +135,26 @@ describe('wishes API wiring (#7)', () => {
     const wish = await createWish(ownerCookie)
 
     expect(
-      (await app.request(`/api/wishes/${wish.id}`, { headers: { cookie: otherCookie } })).status,
+      (await app.request(`/wishes/${wish.id}`, { headers: { cookie: otherCookie } })).status,
     ).toBe(403)
     expect(
       (
-        await app.request(`/api/wishes/${wish.id}`, {
+        await app.request(`/wishes/${wish.id}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json', cookie: otherCookie },
           body: JSON.stringify({ keyword: '被改写的愿望' }),
         })
       ).status,
     ).toBe(403)
-    expect(
-      (await app.request(`/api/wishes/${wish.id}/fulfill`, post({}, otherCookie))).status,
-    ).toBe(403)
+    expect((await app.request(`/wishes/${wish.id}/fulfill`, post({}, otherCookie))).status).toBe(
+      403,
+    )
 
-    const detail = await app.request(`/api/wishes/${wish.id}`, { headers: { cookie: ownerCookie } })
+    const detail = await app.request(`/wishes/${wish.id}`, { headers: { cookie: ownerCookie } })
     expect(detail.status).toBe(200)
     expect(((await detail.json()) as WishDto).userId).toBe(wish.userId)
 
-    const patch = await app.request(`/api/wishes/${wish.id}`, {
+    const patch = await app.request(`/wishes/${wish.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', cookie: ownerCookie },
       body: JSON.stringify({ budgetMaxCents: 30000 }),
@@ -162,11 +162,11 @@ describe('wishes API wiring (#7)', () => {
     expect(patch.status).toBe(200)
     expect(((await patch.json()) as WishDto).budgetMaxCents).toBe(30000)
 
-    const close = await app.request(`/api/wishes/${wish.id}/close`, post({}, ownerCookie))
+    const close = await app.request(`/wishes/${wish.id}/close`, post({}, ownerCookie))
     expect(close.status).toBe(200)
     expect(((await close.json()) as WishDto).status).toBe('CLOSED')
 
-    const list = await app.request('/api/wishes', { headers: { cookie: ownerCookie } })
+    const list = await app.request('/wishes', { headers: { cookie: ownerCookie } })
     expect(list.status).toBe(200)
     expect(await list.json()).toMatchObject({ total: 1 })
   })
@@ -179,7 +179,7 @@ describe('wishes API wiring (#7)', () => {
     }
     const cookie = await registerUser('09')
 
-    const response = await app.request('/api/wishes/pool', { headers: { cookie } })
+    const response = await app.request('/wishes/pool', { headers: { cookie } })
     expect(response.status).toBe(200)
 
     const raw = await response.text()
