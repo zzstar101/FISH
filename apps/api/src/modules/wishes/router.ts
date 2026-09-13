@@ -162,7 +162,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
   return app
 }
 
-/** 供 Dev A 在 app.ts 中通过 app.route('/wishes', router) 接线（根级路径，不带 /api 前缀）。 */
+/** 供 Dev A 在 app.ts 中通过 app.route('/api/wishes', router) 接线。 */
 export function createWishesRouterFromDb(db: Db, dependencies: Omit<WishesRouterOptions, 'store'>) {
   return createWishesRouter({ ...dependencies, store: createSqlWishStore(db) })
 }

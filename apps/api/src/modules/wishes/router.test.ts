@@ -36,12 +36,12 @@ const creatingStore = Object.assign({} as WishStore, {
 })
 const matchQueue = { enqueue: async () => undefined }
 const root = new Hono<{ Variables: { userId: string } }>()
-root.use('/wishes/*', async (c, next) => {
+root.use('/api/wishes/*', async (c, next) => {
   c.set('userId', 'user-1')
   await next()
 })
 root.route(
-  '/wishes',
+  '/api/wishes',
   createWishesRouter({
     store: emptyStore,
     matchQueue,
@@ -58,7 +58,7 @@ function request(path: string, init: RequestInit = {}) {
 describe('wishes router', () => {
   test('requires a trusted identity context', async () => {
     const unauthedRoot = new Hono().route(
-      '/wishes',
+      '/api/wishes',
       createWishesRouter({
         store: emptyStore,
         matchQueue,
@@ -66,11 +66,11 @@ describe('wishes router', () => {
         service,
       }),
     )
-    expect((await unauthedRoot.request('/wishes')).status).toBe(401)
+    expect((await unauthedRoot.request('/api/wishes')).status).toBe(401)
   })
 
   test('maps create, list, pool and transition routes', async () => {
-    const createResponse = await request('/wishes', {
+    const createResponse = await request('/api/wishes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -82,18 +82,18 @@ describe('wishes router', () => {
     })
     expect(createResponse.status).toBe(201)
 
-    const listResponse = await request('/wishes?page=2&pageSize=5')
+    const listResponse = await request('/api/wishes?page=2&pageSize=5')
     expect(listResponse.status).toBe(200)
     expect(await listResponse.json()).toMatchObject({ page: 2, pageSize: 5, total: 1 })
 
-    expect((await request('/wishes/pool')).status).toBe(200)
+    expect((await request('/api/wishes/pool')).status).toBe(200)
     expect(
-      (await request('/wishes/00000000-0000-0000-0000-000000000001/close', { method: 'POST' }))
+      (await request('/api/wishes/00000000-0000-0000-0000-000000000001/close', { method: 'POST' }))
         .status,
     ).toBe(200)
     expect(
       (
-        await request('/wishes/00000000-0000-0000-0000-000000000001/fulfill', {
+        await request('/api/wishes/00000000-0000-0000-0000-000000000001/fulfill', {
           method: 'POST',
         })
       ).status,
@@ -101,7 +101,7 @@ describe('wishes router', () => {
   })
 
   test('returns 404 instead of 500 for a malformed wish id', async () => {
-    const response = await request('/wishes/not-a-uuid')
+    const response = await request('/api/wishes/not-a-uuid')
     expect(response.status).toBe(404)
     expect(await response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } })
   })
@@ -113,11 +113,11 @@ describe('wishes router', () => {
       await next()
     })
     app.route(
-      '/wishes',
+      '/api/wishes',
       createWishesRouter({ store: creatingStore, getUserId: (c) => c.get('userId') }),
     )
 
-    const response = await app.request('/wishes', {
+    const response = await app.request('/api/wishes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -132,7 +132,7 @@ describe('wishes router', () => {
   })
 
   test('returns 400 for invalid payloads', async () => {
-    const response = await request('/wishes', {
+    const response = await request('/api/wishes', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ keyword: '!', category: 'unknown' }),
@@ -150,7 +150,7 @@ describe('wishes router', () => {
       await next()
     })
     app.route(
-      '/wishes',
+      '/api/wishes',
       createWishesRouter({
         store: emptyStore,
         matchQueue,
@@ -164,7 +164,7 @@ describe('wishes router', () => {
       }),
     )
 
-    const response = await app.request('/wishes/00000000-0000-0000-0000-000000000001', {
+    const response = await app.request('/api/wishes/00000000-0000-0000-0000-000000000001', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ budgetMaxCents: 20000 }),
