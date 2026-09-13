@@ -82,28 +82,47 @@ export function TabBar() {
                 className={`flex flex-1 justify-center ${center ? 'relative' : 'items-center'}`}
                 key={key}
               >
-                {/* 球体整体收在胶囊内：52px 居中，上下各留 5px，不再向上凸出 */}
+                {/* 球体整体收在胶囊内：52px 居中，上下各留 5px，不再向上凸出。
+                    单色处理：纯品牌蓝实心 + 白色图标文字，去玻璃光斑与内阴影，投影也用新品牌蓝 */}
                 {center ? (
                   <Link
                     aria-label={label}
-                    className="absolute top-1/2 left-1/2 flex size-[52px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full bg-brand text-white shadow-[0_6px_16px_rgba(81,119,186,0.42),inset_0_1px_0_rgba(255,255,255,0.5),inset_0_-8px_16px_rgba(0,0,0,0.22)] ring-[3px] ring-white/60 transition-transform duration-200 active:scale-95"
+                    className="absolute top-1/2 left-1/2 flex size-[52px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full bg-brand text-white shadow-[0_6px_16px_rgba(95,130,197,0.45)] ring-[3px] ring-white/60 transition-transform duration-200 active:scale-95"
                     to={to}
                   >
-                    {/* 球面高光：让实心球也是「玻璃球」而不是一个纯色圆片 */}
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute inset-x-3 top-1 h-3 rounded-full bg-white/35 blur-[2px]"
-                    />
-                    <Icon className="size-[22px]" />
+                    <Icon className="size-[22px]" strokeWidth={2} />
                     <span className="text-[10px] leading-none">{label}</span>
                   </Link>
                 ) : (
                   <Link className="flex flex-col items-center gap-1" to={to}>
                     <span className="relative">
-                      <Icon className={`size-5 ${isActive ? 'text-brand' : 'text-ink-3'}`} />
+                      {/*
+                       * 选中态不把图标染成品牌蓝，而是保持墨黑，把品牌蓝收成图标
+                       * 右下方一个独立小圆点，垫在图标下层当点缀（四个常规 tab 统一）。
+                       */}
+                      {isActive ? (
+                        /*
+                         * 边缘用径向渐变羽化，而不是实心圆：中心保持品牌蓝本体，
+                         * 向外一圈渐变到透明，得到没有硬边的柔和斑点。右下角外移 4px，
+                         * 让圆心落到图标约 78% 处、圆斑有半个探出图标外。
+                         * 颜色走 --color-brand，和全站换肤令牌保持一致。
+                         */
+                        <span
+                          aria-hidden
+                          className="absolute right-[-4px] bottom-[-4px] z-0 size-[13px] rounded-full"
+                          style={{
+                            background:
+                              'radial-gradient(circle closest-side, var(--color-brand) 0%, var(--color-brand) 55%, color-mix(in srgb, var(--color-brand) 35%, transparent) 82%, transparent 100%)',
+                          }}
+                        />
+                      ) : null}
+                      <Icon
+                        className={`relative z-10 size-5 ${isActive ? 'text-ink' : 'text-ink-3'}`}
+                        strokeWidth={isActive ? 2.2 : 1.7}
+                      />
                       {key === 'message' && badge.data ? (
                         <Badge
-                          className="absolute -top-1 -right-2 h-4 min-w-4 justify-center px-1 text-[10px] leading-none"
+                          className="absolute -top-1 -right-2 z-20 h-4 min-w-4 justify-center px-1 text-[10px] leading-none"
                           shape="pill"
                           variant="destructive"
                         >
@@ -113,7 +132,7 @@ export function TabBar() {
                     </span>
                     <span
                       className={`text-[10px] leading-none ${
-                        isActive ? 'font-semibold text-brand' : 'text-ink-2'
+                        isActive ? 'font-semibold text-ink' : 'text-ink-2'
                       }`}
                     >
                       {label}

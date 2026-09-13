@@ -229,7 +229,7 @@ export function LiquidGlassHighlight({ index, count, className, ref }: LiquidGla
       style={{ transform: `translateX(${index * 100}%)`, width: `${100 / count}%` }}
     >
       <span
-        className="absolute inset-x-1.5 inset-y-[9px] overflow-hidden rounded-full border border-white/50"
+        className="absolute inset-0 overflow-hidden rounded-full border border-white/50"
         style={{
           background: [
             // 跟指针的镜面光斑（无指针时停在左上，当固定光源）
