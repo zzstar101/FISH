@@ -67,10 +67,11 @@ export function ProfilePage() {
       </header>
 
       <section className="relative mx-3 -mt-8 grid grid-cols-4 rounded-2xl bg-surface py-3 shadow-sm">
-        <StatCell label="发布" type="post" value={stats.published} />
+        {/* #12 工作项的四格统计：在售/愿望/买入/卖出（收藏是 #14 P1，契约无来源，不占格）。 */}
+        <StatCell label="在售" type="active" value={stats.active} />
+        <StatCell label="愿望" to="/wish" value={stats.wishes} />
+        <StatCell label="买入" type="bought" value={stats.bought} />
         <StatCell label="卖出" type="sold" value={stats.sold} />
-        <StatCell label="买到" type="bought" value={stats.bought} />
-        <StatCell label="收藏" type="fav" value={stats.favorites} />
       </section>
 
       <section className="mt-4 px-3">
@@ -151,16 +152,30 @@ function RowIcon({ emoji }: { emoji: string }) {
   )
 }
 
-/** 顶部四个统计格；除第一格外都带左分隔线，各自跳到对应的「我的列表」分页。 */
-function StatCell({ label, value, type }: { label: string; value: number; type: MyListType }) {
+const cellClass = 'flex flex-col items-center gap-1 border-line border-l first:border-l-0'
+
+/** 顶部四个统计格；除第一格外都带左分隔线。「愿望」没有对应的 mylist 分页，跳许愿池。 */
+function StatCell(
+  props:
+    | { label: string; value: number; type: MyListType }
+    | { label: string; value: number; to: '/wish' },
+) {
+  const content = (
+    <>
+      <span className="font-bold text-xl">{props.value}</span>
+      <span className="text-ink-3 text-xs">{props.label}</span>
+    </>
+  )
+  if ('to' in props) {
+    return (
+      <Link className={cellClass} to={props.to}>
+        {content}
+      </Link>
+    )
+  }
   return (
-    <Link
-      className="flex flex-col items-center gap-1 border-line border-l first:border-l-0"
-      search={{ type }}
-      to="/mylist"
-    >
-      <span className="font-bold text-xl">{value}</span>
-      <span className="text-ink-3 text-xs">{label}</span>
+    <Link className={cellClass} search={{ type: props.type }} to="/mylist">
+      {content}
     </Link>
   )
 }
