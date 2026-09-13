@@ -685,7 +685,8 @@ export async function fetchMatches(listingId: string): Promise<MatchView> {
 
 export type ProfileSummary = {
   me: User
-  stats: { published: number; sold: number; bought: number; favorites: number }
+  /** #12 工作项口径「在售/愿望/买入/卖出」；对齐 Profile 契约的 stats（favorites 无契约来源，移除）。 */
+  stats: { active: number; wishes: number; sold: number; bought: number }
   orderInProgress: number
   wishCount: number
   historyCount: number
@@ -697,11 +698,14 @@ export async function fetchProfileSummary(): Promise<ProfileSummary> {
   return {
     me: getMe(),
     stats: {
-      published: db.listings.filter((item) => item.sellerId === ME_ID).length,
+      // 在售 = 仍为 ACTIVE 的自己的商品（契约 activeListings 同义）。
+      active: db.listings.filter((item) => item.sellerId === ME_ID && item.status === 'ACTIVE')
+        .length,
+      // 愿望 = 我的活跃愿望（契约 activeWishes；Mock 的愿望无状态字段，mine 即活跃）。
+      wishes: db.wishes.filter((item) => item.mine).length,
       sold: db.listings.filter((item) => item.sellerId === ME_ID && item.status === 'SOLD').length,
       // 「买到」= 已完成的买入交易。
       bought: db.orders.filter((item) => item.role === 'buy' && item.status === 'COMPLETED').length,
-      favorites: db.favorites.length,
     },
     // 进行中 = 请求中 + 待面交，买卖两侧都算。
     orderInProgress: db.orders.filter(
