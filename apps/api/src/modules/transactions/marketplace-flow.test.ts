@@ -83,10 +83,17 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  server.stop(true)
-  await db.$client.close()
-  await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
-  await admin.$client.close()
+  // teardown 绝不能掩盖真正的失败原因：beforeAll 中途失败时 server / db 可能尚未赋值，
+  // 裸写 `server.stop(true)` 会抛 `TypeError: undefined is not an object`，把上面真正的
+  // 错误（例如 migrate 失败）盖掉，排查时只看得到 TypeError。
+  try {
+    server?.stop(true)
+    if (db) await db.$client.close()
+    await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
+    await admin.$client.close()
+  } catch (error) {
+    console.error('[marketplace-flow] teardown 失败（不影响验收结论）', error)
+  }
 })
 
 function rows(result: unknown): Record<string, unknown>[] {
