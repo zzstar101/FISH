@@ -178,6 +178,8 @@ export type NotificationView = Notification & {
 export type CategoryEntry = {
   id: string
   label: string
+  /** 分类圆底插画（`public/categories/*.png`）：首页快捷入口与分类页横滑条都用它。 */
+  image: string
   emoji: string
   children: { id: string; label: string; emoji: string }[]
 }

@@ -867,6 +867,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'digital',
     label: '数码电子',
+    image: '/categories/digital.png',
     emoji: '📱',
     children: [
       { id: 'phone', label: '手机', emoji: '📱' },
@@ -882,6 +883,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'books',
     label: '图书教材',
+    image: '/categories/books.png',
     emoji: '📚',
     children: [
       { id: 'major', label: '专业教材', emoji: '📚' },
@@ -895,6 +897,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'daily',
     label: '生活用品',
+    image: '/categories/daily.png',
     emoji: '🧺',
     children: [
       { id: 'bedding', label: '床品', emoji: '🛏️' },
@@ -908,6 +911,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'apparel',
     label: '服饰鞋包',
+    image: '/categories/apparel.png',
     emoji: '👕',
     children: [
       { id: 'top', label: '上衣', emoji: '👕' },
@@ -920,6 +924,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'sports',
     label: '运动健身',
+    image: '/categories/sports.png',
     emoji: '🏀',
     children: [
       { id: 'ball', label: '球类', emoji: '🏀' },
@@ -931,6 +936,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'transport',
     label: '代步工具',
+    image: '/categories/transport.png',
     emoji: '🚲',
     children: [
       { id: 'bike', label: '自行车', emoji: '🚲' },
@@ -942,6 +948,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'beauty',
     label: '美妆个护',
+    image: '/categories/beauty.png',
     emoji: '💄',
     children: [
       { id: 'skin', label: '护肤', emoji: '🧴' },
@@ -953,6 +960,7 @@ export const categories: CategoryEntry[] = [
   {
     id: 'other',
     label: '其他闲置',
+    image: '/categories/other.png',
     emoji: '🎁',
     children: [
       { id: 'ticket', label: '票券', emoji: '🎫' },
