@@ -36,6 +36,11 @@ export interface MessageStore {
   ): Promise<{ kind: 'ok'; rows: MessageRow[] } | { kind: 'invalid-cursor' }>
   /** 插入 TEXT 消息并 bump 会话的 last_message_at（同一事务，两写必须原子）。 */
   insertText(conversationId: string, senderId: string, content: string): Promise<MessageRow>
+  /**
+   * 服务端写入 SYSTEM 消息（#11 的交易提案/接受/拒绝）：无发送者，事务内 bump
+   * last_message_at。不对客户端暴露——只有同属服务端的 domain 模块调用。
+   */
+  insertSystem(conversationId: string, content: string): Promise<MessageRow>
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -122,6 +127,26 @@ export function createSqlMessageStore(db: Db): MessageStore {
         `)
         const row = rowsOf(result)[0]
         if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
+        return toRow(row)
+      })
+    },
+
+    async insertSystem(conversationId, content) {
+      // 与 insertText 同构，仅 sender 为 NULL（DB CHECK 只约束 TEXT 必须有发送者）。
+      return db.transaction(async (tx) => {
+        const result = await tx.execute(sql`
+          WITH msg AS (
+            INSERT INTO messages (id, conversation_id, sender_id, type, content)
+            VALUES (${newId()}, ${conversationId}::uuid, NULL, 'SYSTEM', ${content})
+            RETURNING id, conversation_id, sender_id, type::text, content, created_at
+          ), bump AS (
+            UPDATE conversations c SET last_message_at = (SELECT created_at FROM msg), updated_at = now()
+            FROM msg WHERE c.id = msg.conversation_id
+          )
+          SELECT msg.* FROM msg
+        `)
+        const row = rowsOf(result)[0]
+        if (!row) throw new Error('SYSTEM 消息插入失败：会话可能已被并发删除')
         return toRow(row)
       })
     },

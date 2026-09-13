@@ -21,7 +21,7 @@ export class MessageServiceError extends Error {
 
 const notFound = () => new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
 
-function toMessageDto(row: MessageRow): MessageDto {
+export function toMessageDto(row: MessageRow): MessageDto {
   return messageDtoSchema.parse({
     id: row.id,
     conversationId: row.conversation_id,

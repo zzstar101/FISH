@@ -7,7 +7,7 @@ const seller = '00000000-0000-4000-8000-0000000000a2'
 const outsider = '00000000-0000-4000-8000-0000000000a3'
 const conversationA = '00000000-0000-4000-8000-0000000000c1'
 
-class MemoryMessageStore implements MessageStore {
+export class MemoryMessageStore implements MessageStore {
   conversations = new Map<string, ConversationParticipant>([
     [conversationA, { id: conversationA, buyerId: buyer, sellerId: seller }],
   ])
@@ -50,6 +50,21 @@ class MemoryMessageStore implements MessageStore {
       content,
       created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
       sender_nickname: senderId === buyer ? '买家' : '卖家',
+      sender_avatar_url: null,
+    }
+    this.messages.push(row)
+    return row
+  }
+
+  async insertSystem(conversationId: string, content: string) {
+    const row: MessageRow = {
+      id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
+      conversation_id: conversationId,
+      sender_id: null,
+      type: 'SYSTEM',
+      content,
+      created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
+      sender_nickname: null,
       sender_avatar_url: null,
     }
     this.messages.push(row)
