@@ -142,6 +142,14 @@ sequenceDiagram
 
 **Job 表由 #2 建立。** #1 只提供 Worker 的启动入口与轮询骨架：启动时 `select 1` 自检连接，连不上立即失败而不是空转。
 
+领取、重试与重启恢复（`apps/worker/src/jobs/queue.ts`）：
+
+- **领取**：`UPDATE jobs SET status='RUNNING', locked_at=now(), attempts=attempts+1 WHERE id = (SELECT id FROM jobs WHERE status='PENDING' AND run_at <= now() ORDER BY run_at, id FOR UPDATE SKIP LOCKED LIMIT 1)`。领取与置 `RUNNING` 在同一条语句里，多 worker 安全。
+- **重试**：失败且 `attempts < maxAttempts`（3）回到 `PENDING`（不退避，下一轮立即再试）；达到上限置 `FAILED`。坏 payload 是致命错误，直接 `FAILED`。
+- **重启恢复**：进程在 handler 执行期间被 `kill -9` 时，那行会停在 `RUNNING`。Worker **启动时**执行一次回收——`attempts` 未达上限的 `RUNNING` 回 `PENDING`，已达上限的直接 `FAILED`（`last_error` 写明是重启导致）。回收不判 `locked_at` 时限，因此要求**同一数据库同时只跑一个 worker 进程**（含另一个终端的 `dev:worker` 与集成测试）：启动时看到的 `RUNNING` 必然属于已死进程。上多副本前必须换成 `locked_at` + 续租的 lease 语义。
+
+端到端证据：`bun run core:smoke`（含停机积压、崩溃遗留 `RUNNING` 的回收与幂等重放；**崩溃态是构造出来的**——`claimNext` 与 handler 返回之间的窗口是毫秒级、无可注入点，见脚本注释）。
+
 ## 6. 本地环境
 
 ### 端口

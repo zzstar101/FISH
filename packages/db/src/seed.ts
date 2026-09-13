@@ -31,13 +31,11 @@ const ids = {
   listingSneakers: '01930000-0000-7000-8000-000000000016',
   wishKeyboard: '01930000-0000-7000-8000-000000000021',
   wishTextbook: '01930000-0000-7000-8000-000000000022',
-  matchK380: '01930000-0000-7000-8000-000000000031',
   conversationK380: '01930000-0000-7000-8000-000000000041',
   messageText: '01930000-0000-7000-8000-000000000042',
   messageSystem: '01930000-0000-7000-8000-000000000043',
   transactionLamp: '01930000-0000-7000-8000-000000000051',
   transactionBasketball: '01930000-0000-7000-8000-000000000052',
-  notificationMatch: '01930000-0000-7000-8000-000000000061',
   jobMatchListing: '01930000-0000-7000-8000-000000000071',
 } as const
 
@@ -60,7 +58,11 @@ const demoStudentNos = {
 
 /**
  * 生成 #2 验收要求的"首页、愿望、聊天、交易基础数据"。
- * 数量刻意保持最小完整（覆盖全部业务表），扩容到 #13 的 demo 规模由 #13 负责。
+ * 数量刻意保持最小完整，扩容到 #13 的 demo 规模由 #13 负责。
+ *
+ * 注意：`matches` / `notifications` 刻意**不写**——demo 那一对匹配由 worker 用真实打分产出
+ * （#43），seed 只投一条 `PENDING` 的 `MATCH_LISTING`，否则 seed 会成为引擎之外的第二份真相。
+ * 因此 seed 单独跑完时这两张表是空的（见 `seed.test.ts` 的 counts）。
  *
  * 注意：`listing_images.object_key` 指向 MinIO 里并不存在的对象，
  * 因此前端渲染这些图会 404。真实图片由 #6 的上传流程产生。
@@ -207,18 +209,6 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
   ])
 
-  // 主 Demo 的"愿望成真"样例：score = 100*0.35 + 85*0.35 + 90*0.30 = 91.75 → 92
-  await tx.insert(matches).values({
-    id: ids.matchK380,
-    listingId: ids.listingK380,
-    wishId: ids.wishKeyboard,
-    score: 92,
-    categoryScore: 100,
-    keywordScore: 85,
-    priceScore: 90,
-    createdAt: yesterday,
-  })
-
   await tx.insert(conversations).values({
     id: ids.conversationK380,
     listingId: ids.listingK380,
@@ -272,28 +262,21 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
   ])
 
-  await tx.insert(notifications).values({
-    id: ids.notificationMatch,
-    userId: ids.buyerB,
-    type: 'MATCH',
-    payload: jsonParam({
-      matchId: ids.matchK380,
-      listingId: ids.listingK380,
-      wishId: ids.wishKeyboard,
-    }),
-    createdAt: yesterday,
-  })
-
+  // 主 Demo 的"愿望成真"样例**不预写结果**：只投一条 PENDING 的 MATCH_LISTING，
+  // 由 worker 用真实打分产出那对 match（K380 + "机械键盘 ≤¥200" → 100 分）与首条通知。
+  //
+  // #43 之前这里硬编码了 score=92 / keyword=85 / price=90，而引擎对同样两行的真实结果是 100；
+  // seed 因此成了引擎之外的"第二份真相"，权重或分词一改就静默漂移，且那条 job 已 DONE，
+  // 永远不会被纠正。代价是：只跑 seed、不起 worker 时愿望页暂时没有匹配——
+  // 而 README 的启动顺序本来就包含 dev:worker。
   await tx.insert(jobs).values({
     id: ids.jobMatchListing,
     type: 'MATCH_LISTING',
     payload: jsonParam({ listingId: ids.listingK380 }),
-    status: 'DONE',
-    attempts: 1,
-    runAt: yesterday,
-    lockedAt: yesterday,
-    lastError: null,
-    createdAt: yesterday,
+    status: 'PENDING',
+    attempts: 0,
+    runAt: now,
+    createdAt: now,
   })
 }
 

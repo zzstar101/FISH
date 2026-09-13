@@ -24,7 +24,9 @@ const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode
  *
  * 领取：`WHERE status='PENDING' AND run_at <= now() ORDER BY run_at, id FOR UPDATE SKIP LOCKED`
  * 之后置 `status='RUNNING', locked_at=now(), attempts=attempts+1`。
- * worker 崩溃后那行会停在 RUNNING，靠 `locked_at` 判僵死并回 PENDING（#13 的"重启后可继续"）。
+ * worker 崩溃后那行会停在 RUNNING，由 worker 启动时的回收处理：`status='RUNNING'` 且未达重试上限的
+ * 回 `PENDING`，已达上限的直接 `FAILED`（不判 `locked_at` 时限——当前是单 worker 拓扑，
+ * 启动时看到的 RUNNING 必属于已死进程；见 `apps/worker/src/jobs/queue.ts` 的 `recoverStaleClaims`）。
  */
 export const jobs = pgTable(
   'jobs',
