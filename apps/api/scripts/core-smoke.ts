@@ -596,15 +596,12 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     if (!wishJobRows[0]) throw new Error('没有投出 MATCH_WISH')
     const wishJob = wishJobRows[0]
 
-    // 过渡别名：`WISH_ROUTES.base` 目前仍是 `/api/wishes`（浏览器路径语义），而本仓约定是 API 根级。
-    // app.ts 两个挂载点并存，两边都打一次，防止别名悄悄坏掉（正典是 `/wishes`，见 app.ts 注释）。
-    // 只断 status 不够：这里把响应结构也钉住，否则别名可以“200 但返回空壳”而静默通过。
-    const aliasResponse = await get(base, '/api/wishes', buyer)
-    assertEqual(aliasResponse.status, 200, '过渡别名 /api/wishes 可用')
-    assert(
-      Array.isArray((await readJson(aliasResponse)).items),
-      '过渡别名返回与主路径一致的列表结构',
-    )
+    // 愿望域挂载在根级 `/wishes`（与 listings / matches 同口径）。#52 的 `/api/wishes` 过渡别名
+    // 已随 `WISH_ROUTES` 收敛（#53）删除，这里只打正典路径，并把响应结构钉住
+    //（只断 status 会放过“200 但返回空壳”）。
+    const listResponse = await get(base, '/wishes', buyer)
+    assertEqual(listResponse.status, 200, 'GET /wishes → 200')
+    assert(Array.isArray((await readJson(listResponse)).items), 'GET /wishes 返回列表结构')
 
     startWorker()
     ok('Worker 已启动')
