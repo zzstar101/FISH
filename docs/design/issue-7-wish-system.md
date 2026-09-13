@@ -13,7 +13,7 @@
 - `apps/api/src/modules/wishes/store.ts`：基于 Bun SQL 的持久化适配层；findById/listByUser/update/状态迁移均带 matches 计数子查询返回 `match_count`。
 - `apps/api/src/modules/wishes/service.ts`：创建、列表、详情、编辑、关闭、fulfilled、k-匿名需求池、60 秒进程内缓存。
 - `apps/api/src/modules/wishes/match-queue.ts`：新增 `createDbWishMatchQueue(db)`，向 jobs 表插入 `MATCH_WISH`/PENDING job（#2 的 jobs schema 已预留该类型）；router 默认仍为 no-op，接线时注入真实实现。
-- `apps/api/src/modules/wishes/router.ts`：相对路由；已由 app.ts 以 `app.use('/api/wishes/*', auth.requireAuth)` + `createWishesRouterFromDb(db, { getUserId })` 挂载（见 `apps/api/src/app.ts`）。
+- `apps/api/src/modules/wishes/router.ts`：相对路由；已由 app.ts 以 `app.use('/wishes/*', auth.requireAuth)` + `createWishesRouterFromDb(db, { getUserId })` 挂载（见 `apps/api/src/app.ts`）。
 - 集成测试：`store.test.ts` 与 `app.wishes.test.ts` 均以 per-pid scratch 库跑真实 migration（Windows 下必须用 `fileURLToPath`，勿用 `URL.pathname`）。
 ## 1. 目标与范围
 
@@ -79,13 +79,13 @@ CREATE INDEX wishes_keyword_trgm ON wishes USING gin (keyword gin_trgm_ops);  --
 
 | Method | Path | 说明 | 鉴权 |
 |---|---|---|---|
-| POST | `/api/wishes` | 创建愿望（成功后投递匹配 job） | 登录 |
-| GET | `/api/wishes` | 我的愿望列表，`?status=ACTIVE\|CLOSED\|FULFILLED`，分页 | 登录 |
-| GET | `/api/wishes/:id` | 愿望详情（含 `matchCount`） | 登录（仅本人） |
-| PATCH | `/api/wishes/:id` | 编辑（keyword/category/budget/description/acceptSimilar） | 登录（仅本人） |
-| POST | `/api/wishes/:id/close` | 关闭：`ACTIVE → CLOSED` | 登录（仅本人） |
-| POST | `/api/wishes/:id/fulfill` | 标记愿望成真：`ACTIVE → FULFILLED` | 登录（仅本人） |
-| GET | `/api/wishes/pool` | 大家想要（匿名聚合需求池） | 登录（全站可用） |
+| POST | `/wishes` | 创建愿望（成功后投递匹配 job） | 登录 |
+| GET | `/wishes` | 我的愿望列表，`?status=ACTIVE\|CLOSED\|FULFILLED`，分页 | 登录 |
+| GET | `/wishes/:id` | 愿望详情（含 `matchCount`） | 登录（仅本人） |
+| PATCH | `/wishes/:id` | 编辑（keyword/category/budget/description/acceptSimilar） | 登录（仅本人） |
+| POST | `/wishes/:id/close` | 关闭：`ACTIVE → CLOSED` | 登录（仅本人） |
+| POST | `/wishes/:id/fulfill` | 标记愿望成真：`ACTIVE → FULFILLED` | 登录（仅本人） |
+| GET | `/wishes/pool` | 大家想要（匿名聚合需求池） | 登录（全站可用） |
 
 设计要点：
 - **Router 自包含**：`apps/api/src/modules/wishes/router.ts` 导出独立 Hono router，由 Dev A 在 `app.ts` 统一挂载（EPIC 规则 6），我不改根入口。
@@ -94,7 +94,7 @@ CREATE INDEX wishes_keyword_trgm ON wishes USING gin (keyword gin_trgm_ops);  --
 - **幂等**：POST /wishes 前端防重复提交 + 服务端对同用户同 keyword+category 的 5 秒窗口去重（软幂等）；close/fulfill 为状态幂等（重复调用返回当前状态而非报错）。
 - **`matchCount`**：从匹配侧读取。P0 先按 §6.2 的约定读 job 结果表/匹配表，Dev A 提供查询接口前先返回 `0`，不阻塞愿望链路。
 
-### `GET /api/wishes/pool`（需求池，隐私安全）
+### `GET /wishes/pool`（需求池，隐私安全）
 
 对全站 `ACTIVE` 愿望聚合：
 
@@ -262,7 +262,7 @@ export const wishPoolResponseSchema = z.object({ items: z.array(wishPoolItemSche
 // + 各 z.infer 类型导出
 ```
 
-**1.2 `packages/contracts/src/wishes/routes.ts`**：路径常量（`/api/wishes`、`/api/wishes/:id`、`/api/wishes/:id/close`、`/api/wishes/:id/fulfill`、`/api/wishes/pool`）。
+**1.2 `packages/contracts/src/wishes/routes.ts`**：路径常量（`/wishes`、`/wishes/:id`、`/wishes/:id/close`、`/wishes/:id/fulfill`、`/wishes/pool`）。
 
 **1.3 `packages/contracts/src/wishes/schema.test.ts`**：纯 zod 测试（无需 DB）——keyword 长度边界、budget min>max 拒绝、trim 行为、status 枚举。
 
@@ -321,7 +321,7 @@ import { Hono } from 'hono'
 
 ### 阶段 4：根路由接线（协调 zzstar101，1 行）
 
-zzstar101 在 `app.ts` 中挂载 `app.route('/api/wishes', wishesRouter)`。合并顺序：contracts PR #A → API PR #B → 接线改动（可由 zzstar101 在其集成 PR 中带上）。
+zzstar101 在 `app.ts` 中挂载 `app.route('/wishes', wishesRouter)`。合并顺序：contracts PR #A → API PR #B → 接线改动（可由 zzstar101 在其集成 PR 中带上）。
 
 ### 阶段 5：匹配触发接线（等 #2 jobs 表 + Dev A 接口）
 
