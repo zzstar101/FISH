@@ -2,13 +2,13 @@ import type { SVGProps } from 'react'
 
 /**
  * 底部导航图标：从品牌图标规范 SVG（VTracer 矢量稿）裁切的填充式路径。
- * 颜色走 currentColor（高亮 #5F82C5 / 初始 #8B909B 由 text-* 类控制），
+ * 颜色走 currentColor，由 tab-bar 用 text-ink（选中）/ text-ink-3（未选中）控制；
  * 亮度过高的抗锯齿光晕层已丢弃，只保留主体色带。
  */
 
 function Svg({ children, ...props }: SVGProps<SVGSVGElement>) {
   return (
-    <svg aria-hidden fill="currentColor" xmlns="http://www.w3.org/2000/svg" {...props}>
+    <svg fill="currentColor" xmlns="http://www.w3.org/2000/svg" {...props} aria-hidden>
       {children}
     </svg>
   )

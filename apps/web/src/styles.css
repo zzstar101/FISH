@@ -92,11 +92,11 @@
   --radius: 0.75rem;
 
   /*
-   * `--background` 故意指向 `--color-surface`（白）而不是 `--color-bg`（页面灰 #f5f5f5）。
+   * `--background` 故意指向 `--color-surface`（白）而不是 `--color-bg`（页面灰 #f3f4f6）。
    * shadcn 里 `--background` 的语义是「内容所落在的那层表面」——它的 Tabs 选中块、
    * 描边按钮底色都用 `bg-background`，在默认主题里就是白色。FISH 的页面灰底由
    * `body { background-color: var(--color-bg) }` 直接给，不经过这个令牌。
-   * 若把它指向页面灰，Tabs 的选中块（#f5f5f5）会压在灰轨道（#eff1f6）上看不出来。
+   * 若把它指向页面灰，Tabs 的选中块（#f3f4f6）会压在灰轨道（#f0f3f8）上看不出来。
    */
   --background: var(--color-surface);
   --foreground: var(--color-ink);

@@ -90,7 +90,7 @@ export function TabBar() {
                     className="absolute top-1/2 left-1/2 flex size-[52px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full bg-brand text-white shadow-[0_6px_16px_rgba(95,130,197,0.45)] ring-[3px] ring-white/60 transition-transform duration-200 active:scale-95"
                     to={to}
                   >
-                    <Icon className="size-[22px]" strokeWidth={2} />
+                    <Icon className="size-[22px]" />
                     <span className="text-[10px] leading-none">{label}</span>
                   </Link>
                 ) : (
@@ -118,7 +118,6 @@ export function TabBar() {
                       ) : null}
                       <Icon
                         className={`relative z-10 size-5 ${isActive ? 'text-ink' : 'text-ink-3'}`}
-                        strokeWidth={isActive ? 2.2 : 1.7}
                       />
                       {key === 'message' && badge.data ? (
                         <Badge

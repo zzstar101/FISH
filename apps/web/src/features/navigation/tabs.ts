@@ -7,8 +7,8 @@ export type TabKey = 'home' | 'wish' | 'sell' | 'message' | 'profile'
  * 统一信息架构（architecture.md §1 / #4）：首页 / 许愿 / 卖闲置 / 消息 / 我的。
  * 中间「出物」是视觉中心的大圆按钮，点击进入发布页。
  *
- * 图标是自绘的「开口一笔画圆角线条」SVG（tab-icons.tsx，按品牌图标组件规范），
- * 线宽与颜色由 tab-bar 按高亮/初始状态传入。
+ * 图标是从品牌规范矢量稿裁切的**填充式**路径（tab-icons.tsx），不是描边线条；
+ * 填充色由 tab-bar 用 `text-*` 传入（选中 text-ink / 未选中 text-ink-3）。
  */
 export const TABS: {
   key: TabKey
@@ -20,7 +20,7 @@ export const TABS: {
   { key: 'home', label: '首页', to: '/', Icon: TabHomeIcon },
   { key: 'wish', label: '许愿', to: '/wish', Icon: TabWishIcon },
   { key: 'sell', label: '出物', to: '/publish', Icon: TabSellIcon, center: true },
-  { key: 'message', label: '信息', to: '/message', Icon: TabMessageIcon },
+  { key: 'message', label: '消息', to: '/message', Icon: TabMessageIcon },
   { key: 'profile', label: '我的', to: '/profile', Icon: TabProfileIcon },
 ]
 
