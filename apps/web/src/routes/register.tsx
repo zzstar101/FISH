@@ -5,7 +5,6 @@ import { type FormEvent, useState } from 'react'
 import { describeAuthFailure } from '../features/auth/error-messages'
 import {
   AuthPageShell,
-  AuthTabs,
   FormAlert,
   SelectField,
   SubmitButton,
@@ -48,8 +47,13 @@ function RegisterPage() {
   }
 
   return (
-    <AuthPageShell description="注册后即完成登录,认证状态由学号自动判定" title="校园二手">
-      <AuthTabs active="register" />
+    <AuthPageShell
+      description="注册后即完成登录,认证状态由学号自动判定"
+      iconSrc="/brand-fish.png"
+      title={
+        <img alt="鱼小应 YUXIAOYING" className="mx-auto h-10 w-auto" src="/brand-wordmark.png" />
+      }
+    >
       <form className="space-y-4" noValidate onSubmit={handleSubmit}>
         {formError !== null && <FormAlert message={formError} />}
 

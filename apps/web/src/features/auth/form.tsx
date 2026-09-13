@@ -5,19 +5,20 @@ import { Field, FieldDescription, FieldError, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@fish/ui/select'
 import { Spinner } from '@fish/ui/spinner'
-import { Tabs, TabsList, TabsTrigger } from '@fish/ui/tabs'
-import { useNavigate } from '@tanstack/react-router'
 import { type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, useId } from 'react'
 
 /** 认证页外壳（截图 19-login）：波浪背景 + Logo + 标题 + 副标题 + 磨砂玻璃卡片。 */
 export function AuthPageShell({
   title,
   description,
+  iconSrc,
   children,
   footer,
 }: {
-  title: string
+  title: ReactNode
   description: string
+  /** 传入时替换默认的 🔄 emoji 方块，直接展示品牌图标。 */
+  iconSrc?: string
   children: ReactNode
   footer?: ReactNode
 }) {
@@ -29,9 +30,13 @@ export function AuthPageShell({
         因此内容直接替换反而是最稳的。
       */}
       <div className="flex w-full flex-col items-center">
-        <span className="flex size-16 items-center justify-center rounded-2xl bg-brand text-3xl shadow-[0_10px_24px_rgba(81,119,186,0.35)]">
-          🔄
-        </span>
+        {iconSrc ? (
+          <img alt="" className="size-32" src={iconSrc} />
+        ) : (
+          <span className="flex size-16 items-center justify-center rounded-2xl bg-brand text-3xl shadow-[0_10px_24px_rgba(81,119,186,0.35)]">
+            🔄
+          </span>
+        )}
         <h1 className="mt-4 font-bold text-2xl">{title}</h1>
         <p className="mt-1.5 text-ink-3 text-sm">{description}</p>
         <Card className="mt-6 w-full gap-0 rounded-2xl border border-white/50 bg-surface/55 p-4 shadow-sm backdrop-blur-xl">
@@ -40,37 +45,6 @@ export function AuthPageShell({
         {footer}
       </div>
     </main>
-  )
-}
-
-/**
- * 登录 / 注册切换（截图里是「验证码登录 / 密码登录」，这里对应契约的两条流程）。
- *
- * 用 shadcn Tabs 承载：登录与注册是两个独立路由，因此 `value` 由当前路由给出，
- * `onValueChange` 只负责跳转——Tabs 不维护自己的一份选中态，避免两个来源打架。
- * 替换前的自研版本靠 motion 做白色胶囊的位移，换成 Tabs 后选中态由组件自身的
- * `data-[state=active]` 样式给出，少了一层手写的位移动画。
- */
-export function AuthTabs({ active }: { active: 'login' | 'register' }) {
-  const navigate = useNavigate()
-
-  return (
-    <Tabs
-      className="mb-4"
-      onValueChange={(value) => {
-        void navigate({ to: value === 'login' ? '/login' : '/register' })
-      }}
-      value={active}
-    >
-      <TabsList className="h-10 rounded-full">
-        <TabsTrigger className="rounded-full" value="login">
-          登录
-        </TabsTrigger>
-        <TabsTrigger className="rounded-full" value="register">
-          注册
-        </TabsTrigger>
-      </TabsList>
-    </Tabs>
   )
 }
 
