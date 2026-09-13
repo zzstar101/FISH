@@ -1,6 +1,7 @@
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
+import { insertSystemWithin, type MessageRow } from '../messages/store'
 
 /** transactions 表的行（snake_case 与 DB 列名一致）。 */
 export interface TransactionRow {
@@ -31,7 +32,9 @@ export interface TxBrief {
 export type ConversationLookup = { kind: 'not-found' } | { kind: 'ok'; brief: TxBrief }
 
 /** 接受的结果细分：条件更新失败 = 商品已非 ACTIVE（并发输掉或状态漂移）。 */
-export type AcceptResult = { kind: 'created'; row: TransactionRow } | { kind: 'listing-not-active' }
+export type AcceptResult =
+  | { kind: 'created'; row: TransactionRow; message: MessageRow }
+  | { kind: 'listing-not-active' }
 
 /** DTO 内嵌商品摘要的 DB 投影；cover 只给 objectKey，URL 由 service 经 MediaStorage 拼。 */
 export interface TxListingBrief {
@@ -51,7 +54,7 @@ export interface TxUserBrief {
 
 export interface TransactionStore {
   findConversation(conversationId: string, viewerId: string): Promise<ConversationLookup>
-  /** 一批交易的 listing 摘要（每个商品取最小 sort_order 一张封面）；查过但无图显式 null。 */
+  /** 一批交易的 listing 摘要（每个商品取 sort_order = 0 的封面）；查过但无图显式 null。 */
   listingBriefs(listingIds: string[]): Promise<Map<string, TxListingBrief>>
   /** 一批交易对方用户的摘要（uuid 主键查询，结果必在；缺失键 = 查过但不存在）。 */
   userBriefs(userIds: string[]): Promise<Map<string, TxUserBrief>>
@@ -60,8 +63,16 @@ export interface TransactionStore {
    * 条件更新 `UPDATE listings SET status='RESERVED' WHERE id = ? AND status='ACTIVE'`
    * （0 行 → listing-not-active）+ transactions 部分唯一索引兜底（重复 live 交易会
    * 让事务整体失败，调用方同样收到 listing-not-active 语义）。
+   *
+   * `tx.accepted` 的 SYSTEM 消息在**同一个事务**里写入（#40-3），因此不会出现
+   * 「交易已创建、确认消息却永久缺失」的部分成功。交易 id 只有插入后才存在，
+   * 所以 content 由调用方以回调形式给出（序列化仍是 service 的职责）。
    */
-  accept(brief: TxBrief, amountCents: number): Promise<AcceptResult>
+  accept(
+    brief: TxBrief,
+    amountCents: number,
+    buildSystemContent: (transactionId: string) => string,
+  ): Promise<AcceptResult>
   findById(id: string): Promise<TransactionRow | null>
   /** 我的交易页（DESC + limit+1 判底行；lastCreatedAtCursor 仅本查询填充）。 */
   listForUser(
@@ -160,9 +171,11 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
                li.object_key AS cover_object_key
         FROM listings l
         LEFT JOIN LATERAL (
+          -- 只认 0 号图（#6 契约 §1「下标即 sortOrder，0 = 封面」）。取"最小 sort_order"会在
+          -- 缺少 0 号图的脏数据下把非封面图当封面，与 profile 侧对同一张订单卡的口径分叉
+          -- （#40/F3）；profile 与 listings feed 都用 sort_order = 0。
           SELECT object_key FROM listing_images
-          WHERE listing_id = l.id
-          ORDER BY sort_order ASC
+          WHERE listing_id = l.id AND sort_order = 0
           LIMIT 1
         ) li ON TRUE
         WHERE l.id IN (${sql.join(
@@ -202,7 +215,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
       return map
     },
 
-    async accept(brief, amountCents) {
+    async accept(brief, amountCents, buildSystemContent) {
       return db.transaction(async (tx) => {
         // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架。
         // ② 部分唯一索引 transactions_listing_id_live_uq 兜底同一 listing 的第二笔 live 交易。
@@ -228,7 +241,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           })
         const row = rowsOf(insert)[0]
         if (!row) return { kind: 'listing-not-active' }
-        return { kind: 'created', row: toRow(row) }
+
+        // ③ `tx.accepted` 与交易行同一事务（#40-3）：消息写失败则整笔回滚，
+        //    不会留下「交易已创建、确认消息永久缺失」的部分成功。
+        const transactionId = row.id as string
+        const message = await insertSystemWithin(tx, brief.id, buildSystemContent(transactionId))
+        return { kind: 'created', row: toRow(row), message }
       })
     },
 
@@ -301,8 +319,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               WHERE id = ${id} AND status = 'PENDING_MEETUP'
               RETURNING ${TX_COLUMNS}
             ), listing AS (
+              -- 刻意不筛 l.status = 'RESERVED'：契约冻结的是「完成后 Listing -> SOLD」。
+              -- 带谓词时，若商品状态漂移出 RESERVED，这一步影响 0 行、而交易照样被标
+              -- COMPLETED → 「交易已完成但商品未售出」的自相矛盾（#40-4）。
+              -- 去掉谓词后，交易完成必然连带把商品置为 SOLD，不变量由构造保证。
               UPDATE listings l SET status = 'SOLD', updated_at = now()
-              FROM txn WHERE l.id = txn.listing_id AND l.status = 'RESERVED'
+              FROM txn WHERE l.id = txn.listing_id
             )
             SELECT ${TX_COLUMNS} FROM txn
           `)
@@ -321,8 +343,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             WHERE id = ${id} AND ${viewerId} IN (buyer_id, seller_id) AND status = 'PENDING_MEETUP'
             RETURNING ${TX_COLUMNS}
           ), listing AS (
+            -- 契约冻结（packages/contracts/src/transactions/schema.ts:168-169）：cancel 恢复
+            -- listing 是**无条件** RESERVED → ACTIVE（#6 禁止在 RESERVED 上手动下架，因此
+            -- 取消那一刻商品必仍是 RESERVED，不需要条件更新）。带谓词时状态一旦漂移就退化成
+            -- 「交易已 CANCELLED、商品却停在 OFFLINE」——与 confirm 侧同一论证（#40-4）。
             UPDATE listings l SET status = 'ACTIVE', updated_at = now()
-            FROM txn WHERE l.id = txn.listing_id AND l.status = 'RESERVED'
+            FROM txn WHERE l.id = txn.listing_id
           )
           SELECT ${TX_COLUMNS} FROM txn
         `)

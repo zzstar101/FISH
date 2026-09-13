@@ -1,76 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import {
+  MEMORY_BUYER_ID as buyer,
+  MEMORY_CONVERSATION_ID as conversationA,
+  MemoryMessageStore,
+  MEMORY_OUTSIDER_ID as outsider,
+  MEMORY_SELLER_ID as seller,
+} from './memory-store.fixture'
 import { createMessageService, MessageServiceError } from './service'
-import type { ConversationParticipant, MessageRow, MessageStore } from './store'
-
-const buyer = '00000000-0000-4000-8000-0000000000a1'
-const seller = '00000000-0000-4000-8000-0000000000a2'
-const outsider = '00000000-0000-4000-8000-0000000000a3'
-const conversationA = '00000000-0000-4000-8000-0000000000c1'
-
-export class MemoryMessageStore implements MessageStore {
-  conversations = new Map<string, ConversationParticipant>([
-    [conversationA, { id: conversationA, buyerId: buyer, sellerId: seller }],
-  ])
-  messages: MessageRow[] = []
-  private seq = 0
-
-  async findConversationForUser(conversationId: string, userId: string) {
-    const conversation = this.conversations.get(conversationId)
-    if (!conversation) return null
-    if (userId !== conversation.buyerId && userId !== conversation.sellerId) return null
-    return conversation
-  }
-
-  async listByConversation(
-    conversationId: string,
-    filter: { limit: number; before: string | null },
-  ) {
-    const all = this.messages
-      .filter((row) => row.conversation_id === conversationId)
-      // 与 SQL 同一排序键：(created_at DESC, id DESC)——同 created_at 的行也要有稳定顺序
-      .sort(
-        (a, b) =>
-          String(b.created_at).localeCompare(String(a.created_at)) || b.id.localeCompare(a.id),
-      )
-    if (filter.before) {
-      const index = all.findIndex((row) => row.id === filter.before)
-      if (index === -1) return { kind: 'invalid-cursor' as const }
-      // 与 SQL store 同一契约：返回**升序**的一页（含 limit+1 判底行）
-      return { kind: 'ok' as const, rows: all.slice(index + 1, index + 2 + filter.limit).reverse() }
-    }
-    return { kind: 'ok' as const, rows: all.slice(0, filter.limit + 1).reverse() }
-  }
-
-  async insertText(conversationId: string, senderId: string, content: string) {
-    const row: MessageRow = {
-      id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
-      conversation_id: conversationId,
-      sender_id: senderId,
-      type: 'TEXT',
-      content,
-      created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
-      sender_nickname: senderId === buyer ? '买家' : '卖家',
-      sender_avatar_url: null,
-    }
-    this.messages.push(row)
-    return row
-  }
-
-  async insertSystem(conversationId: string, content: string) {
-    const row: MessageRow = {
-      id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
-      conversation_id: conversationId,
-      sender_id: null,
-      type: 'SYSTEM',
-      content,
-      created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
-      sender_nickname: null,
-      sender_avatar_url: null,
-    }
-    this.messages.push(row)
-    return row
-  }
-}
 
 describe('message service: listMessages', () => {
   test('returns ascending messages with sender info', async () => {
