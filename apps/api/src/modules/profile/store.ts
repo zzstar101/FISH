@@ -105,8 +105,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
 
     async ownListings(userId, limit) {
       // 本人视角：不筛 status（OFFLINE/RESERVED/SOLD 都是自己可见的）。
-      // 封面只认 `sort_order = 0`（#6 契约 §1：下标即 sortOrder，0 才是封面），与 listings
-      // feed / matching / 本文件其它查询同一口径（#40/F3）。
+      // 封面用相关子查询取最小 sort_order 的一张，与 listings 模块的读模型同一规则。
       const result = await db.execute(sql`
         SELECT l.id, l.title, l.price_cents, l.category::text AS category,
                l.condition::text AS condition, l.status::text AS status,

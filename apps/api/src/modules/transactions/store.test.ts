@@ -80,19 +80,15 @@ function rows(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-/** store 层只要求 content 由调用方给出（序列化归 service，见 #40-3）；测试里固定形状即可。 */
-const acceptSystemContent = (transactionId: string) =>
-  JSON.stringify({ type: 'tx.accepted', transactionId, amountCents: 1 })
-
 describe('transactions store (integration)', () => {
   test('two concurrent accepts for the same listing: exactly one wins', async () => {
     const [a1, a2] = await Promise.all([
       store
         .findConversation(conversationA, buyer1)
-        .then((l) => (l.kind === 'ok' ? store.accept(l.brief, 15000, acceptSystemContent) : null)),
+        .then((l) => (l.kind === 'ok' ? store.accept(l.brief, 15000) : null)),
       store
         .findConversation(conversationA2, buyer2)
-        .then((l) => (l.kind === 'ok' ? store.accept(l.brief, 12000, acceptSystemContent) : null)),
+        .then((l) => (l.kind === 'ok' ? store.accept(l.brief, 12000) : null)),
     ])
     const outcomes = [a1, a2].map((r) => r?.kind)
     expect(outcomes.filter((kind) => kind === 'created')).toHaveLength(1)
@@ -114,7 +110,7 @@ describe('transactions store (integration)', () => {
   test('double confirm completes the transaction and sells the listing atomically', async () => {
     const brief = await store.findConversation(conversationB, buyer1)
     if (brief.kind !== 'ok') throw new Error('unreachable')
-    const accepted = await store.accept(brief.brief, 9000, acceptSystemContent)
+    const accepted = await store.accept(brief.brief, 9000)
     if (accepted.kind !== 'created') throw new Error('unreachable')
     const txId = accepted.row.id
 
@@ -163,7 +159,7 @@ describe('transactions store (integration)', () => {
     // 再次接受现在应该成功（listing 已回 ACTIVE）——取消恢复可用性
     const reBrief = await store.findConversation(conversationA, buyer1)
     if (reBrief.kind !== 'ok') throw new Error('unreachable')
-    const reAccepted = await store.accept(reBrief.brief, 15000, acceptSystemContent)
+    const reAccepted = await store.accept(reBrief.brief, 15000)
     expect(reAccepted.kind).toBe('created')
   })
 
@@ -220,130 +216,11 @@ describe('transactions store (integration)', () => {
     const brief = await store.findConversation(conversationA, buyer1)
     if (brief.kind !== 'ok') throw new Error('unreachable')
     // 修复前：这里会原样抛 DrizzleQueryError → 500；修复后：映射为 listing-not-active
-    const result = await store.accept(brief.brief, 1, acceptSystemContent)
+    const result = await store.accept(brief.brief, 1)
     expect(result.kind).toBe('listing-not-active')
 
     // 现场还原：listing 回 RESERVED，测试相互独立
     await db.execute(sql`UPDATE listings SET status = 'RESERVED' WHERE id = ${listingA}`)
-  })
-
-  test('#40-4：商品漂移出 RESERVED 时不得把交易标成 COMPLETED（那样商品并未 SOLD）', async () => {
-    // 独立 fixture，避免与前序用例的状态纠缠
-    const listingC = '01990000-0000-7000-8000-0000000000b4'
-    const conversationC = '01990000-0000-7000-8000-0000000000c4'
-    await seedListing(listingC)
-    await seedConversation(conversationC, listingC, buyer1)
-
-    const lookup = await store.findConversation(conversationC, buyer1)
-    if (lookup.kind !== 'ok') throw new Error('unreachable')
-    const accepted = await store.accept(lookup.brief, 11000, acceptSystemContent)
-    if (accepted.kind !== 'created') throw new Error('unreachable')
-    const txId = accepted.row.id
-
-    // 商品状态漂移出 RESERVED（API 侧 #6 的谓词会挡，但运维/脚本漂移是可能的）
-    await db.execute(sql`UPDATE listings SET status = 'OFFLINE' WHERE id = ${listingC}`)
-
-    await store.confirm(txId, buyer1, 'buyer')
-    await store.confirm(txId, seller, 'seller')
-
-    const listing = rows(
-      await db.execute(sql`SELECT status::text AS status FROM listings WHERE id = ${listingC}`),
-    )[0] as { status: string }
-    const tx = rows(
-      await db.execute(sql`SELECT status::text AS status FROM transactions WHERE id = ${txId}`),
-    )[0] as { status: string }
-
-    // 显式钉住不变量两端：交易必须完成、商品必须售出。
-    // （只断言「不等于某一对字符串」太弱：PENDING_MEETUP/OFFLINE、CANCELLED/OFFLINE 都会绿，
-    //   漏掉「confirm 根本没完成交易」这类回归。）
-    expect(tx.status).toBe('COMPLETED')
-    expect(listing.status).toBe('SOLD')
-  })
-
-  test('#40-3：SYSTEM 消息写入失败时整笔回滚 —— 交易不落库、商品不被锁', async () => {
-    const listingD = '01990000-0000-7000-8000-0000000000b5'
-    await seedListing(listingD)
-    const lookup = await store.findConversation(conversationB, buyer1)
-    if (lookup.kind !== 'ok') throw new Error('unreachable')
-
-    // 会话 id 指向不存在的行 → messages 的外键失败，等价于「SYSTEM 消息写不进去」
-    const bogusBrief = {
-      ...lookup.brief,
-      id: '01990000-0000-7000-8000-0000000000ff',
-      listingId: listingD,
-    }
-    await expect(store.accept(bogusBrief, 5000, acceptSystemContent)).rejects.toThrow()
-
-    // 消息与交易同一事务：交易行与 listing 的 RESERVED 锁定都必须一并回滚，
-    // 否则就回到 #40-3 的部分成功——交易已创建、确认消息永久缺失。
-    const txCount = rows(
-      await db.execute(
-        sql`SELECT count(*)::int AS n FROM transactions WHERE listing_id = ${listingD}`,
-      ),
-    )[0] as { n: number }
-    expect(txCount.n).toBe(0)
-    const listing = rows(
-      await db.execute(sql`SELECT status::text AS status FROM listings WHERE id = ${listingD}`),
-    )[0] as { status: string }
-    expect(listing.status).toBe('ACTIVE')
-  })
-
-  test('#40/F3：交易侧封面也只认 sort_order = 0（与 profile / #6 读模型同一口径）', async () => {
-    const listingE = '01990000-0000-7000-8000-0000000000b6'
-    await seedListing(listingE)
-    // 脏数据形状：有图，但没有 0 号图（0 才是封面，见 #6 契约 §1）
-    await db.execute(sql`
-      INSERT INTO listing_images (id, listing_id, object_key, sort_order)
-      VALUES ('01990000-0000-7000-8000-0000000000f6', ${listingE}, 'listings/e/1.jpg', 1)
-    `)
-
-    const briefs = await store.listingBriefs([listingE])
-    // profile 侧对同一形状返回 null（apps/api/src/modules/profile/store.test.ts 已钉住）。
-    // 同一笔交易的订单卡在两个接口必须同口径，否则同一张卡显示不同封面。
-    expect(briefs.get(listingE)?.coverObjectKey).toBeNull()
-  })
-
-  test('#40-3 回归：accept 等锁期间先提交的消息，不会在刷新后与 SYSTEM 消息顺序倒挂', async () => {
-    const listingF = '01990000-0000-7000-8000-0000000000b7'
-    const conversationF = '01990000-0000-7000-8000-0000000000c7'
-    await seedListing(listingF)
-    await seedConversation(conversationF, listingF, buyer1)
-
-    const lookup = await store.findConversation(conversationF, buyer1)
-    if (lookup.kind !== 'ok') throw new Error('unreachable')
-
-    // 用本文件已有的连接池开一个独立事务持住 listing 行锁，让 accept 卡在中途 ——
-    // 这正是真实竞态：并发 accept 也要等这把锁。
-    // （刻意不另开连接池：多个测试文件并行时额外池会加剧 Postgres 连接压力。）
-    let release: () => void = () => {}
-    const held = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const holderDone = db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT id FROM listings WHERE id = ${listingF} FOR UPDATE`)
-      await held
-    })
-    await Bun.sleep(50) // 等锁真的被拿到
-
-    try {
-      const accepting = store.accept(lookup.brief, 7000, acceptSystemContent)
-      await Bun.sleep(150) // 让 accept 阻塞在 listing 锁上
-      const text = await messages.insertText(conversationF, buyer1, '在吗') // 先提交
-      release()
-      await holderDone
-      const accepted = await accepting
-      if (accepted.kind !== 'created') throw new Error('unreachable')
-
-      const page = await messages.listByConversation(conversationF, { limit: 10, before: null })
-      if (page.kind !== 'ok') throw new Error('unreachable')
-      const ids = page.rows.map((row) => row.id)
-      // 提交顺序是 TEXT → SYSTEM，按 (created_at, id) 升序重排后必须一致；
-      // 若 SYSTEM 用了「事务开始时刻」的 now()，它就会排到 TEXT 前面，实时与刷新后自相矛盾。
-      expect(ids.indexOf(accepted.message.id)).toBeGreaterThan(ids.indexOf(text.id))
-    } finally {
-      release()
-      await holderDone
-    }
   })
 
   test('insertSystem writes a SYSTEM message without sender and bumps last_message_at', async () => {

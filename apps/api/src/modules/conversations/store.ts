@@ -60,7 +60,7 @@ export interface ConversationStore {
     viewerId: string,
     filter: { limit: number; cursor: { sortKey: string; id: string } | null },
   ): Promise<ConversationDetailRow[]>
-  /** 一页会话的封面 objectKey（每个 listing 取 sort_order = 0 的一张）。 */
+  /** 一页会话的封面 objectKey（每个 listing 取最小 sort_order 的一张）。 */
   coverObjectKeys(listingIds: string[]): Promise<Map<string, string | null>>
   /** 把查看者一侧的 last_read_at 推进到 now；非参与者返回 null。 */
   markRead(conversationId: string, viewerId: string): Promise<ConversationDetailRow | null>
@@ -213,17 +213,13 @@ export function createSqlConversationStore(db: Db): ConversationStore {
       const map = new Map<string, string | null>(listingIds.map((id) => [id, null]))
       if (listingIds.length === 0) return map
       const result = await db.execute(sql`
-        SELECT li.listing_id, li.object_key
+        SELECT DISTINCT ON (li.listing_id) li.listing_id, li.object_key
         FROM listing_images li
         WHERE li.listing_id IN (${sql.join(
           listingIds.map((id) => sql`${id}::uuid`),
           sql`, `,
         )})
-          -- 只认 0 号图（#6 契约 §1「下标即 sortOrder，0 = 封面」）。取"最小 sort_order"
-          -- 会在缺少 0 号图的脏数据下把非封面图当封面，与 listings feed / profile 分叉
-          -- （#40/F3）。(listing_id, sort_order) 有唯一索引，因此每个商品至多一行，
-          -- 这里不再需要 DISTINCT ON / ORDER BY。
-          AND li.sort_order = 0
+        ORDER BY li.listing_id, li.sort_order ASC
       `)
       for (const row of rowsOf(result)) map.set(row.listing_id as string, row.object_key as string)
       return map
