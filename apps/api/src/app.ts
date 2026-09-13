@@ -22,6 +22,9 @@ import { createSqlMatchingStore } from './modules/matching/store'
 import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
+import { createProfileRouter } from './modules/profile/router'
+import { createProfileService } from './modules/profile/service'
+import { createSqlProfileStore } from './modules/profile/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createTransactionsRouter } from './modules/transactions/router'
@@ -100,6 +103,17 @@ export function createApp(env: ServerEnv) {
     }),
   )
   app.route('/uploads', createUploadsRouter({ storage, requireAuth: auth.requireAuth }))
+
+  // 个人中心（#12）：单个只读聚合接口，直接查已合并的 listings/wishes/transactions 表，
+  // 不调用其他 Domain API、不承担写操作（Issue 的并行原则）。user 块取 requireAuth
+  // 写入的 Me（campus 脏值回退在 auth 内完成），storage 复用同一实例拼封面 URL。
+  app.route(
+    '/profile',
+    createProfileRouter({
+      service: createProfileService({ store: createSqlProfileStore(db), storage }),
+      requireAuth: auth.requireAuth,
+    }),
+  )
 
   // #8：匹配读接口全部要求登录且目标必须是本人的（契约 §0.2），所以整条路由挂 requireAuth。
   // `storage` 复用同一个实例：匹配结果里的商品卡片与 feed / 详情必须是同一套 URL 拼法。
