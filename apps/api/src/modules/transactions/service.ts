@@ -203,10 +203,12 @@ export function createTransactionService({
         transactionId: result.row.id,
         amountCents: input.amountCents,
       })
-      // 刚建的行 FK 必然齐备；拿不到摘要属于不可达防御分支，按并发失败口径拒绝。
+      // 刚建的行 FK 必然齐备；拿不到摘要属于不可达防御分支。此刻交易已创建且
+      // listing 已锁定、SYSTEM 消息已推送——不能复用 409 业务码（会诱导客户端把
+      // "实际已成功"当失败重试），交给 onError 统一成 500 INTERNAL_ERROR。
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) {
-        throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
+        throw new Error(`accept 后组装 DTO 失败：transaction=${result.row.id} 摘要缺失（不可达）`)
       }
       return dto
     },

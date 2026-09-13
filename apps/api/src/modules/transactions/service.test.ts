@@ -43,14 +43,18 @@ class MemoryTxStore implements TransactionStore {
     ],
   ])
   rows: TransactionRow[] = []
+  /** 模拟 SQL store 的脏数据：被隐藏的 listing 查不到摘要（FK下不可达，防御分支用）。 */
+  hiddenListings = new Set<string>()
   private seq = 0
 
   async listingBriefs(listingIds: string[]) {
     return new Map(
-      listingIds.map((id) => [
-        id,
-        { id, title: 'K380 键盘', priceCents: 16000, status: 'RESERVED', coverObjectKey: null },
-      ]),
+      listingIds
+        .filter((id) => !this.hiddenListings.has(id))
+        .map((id) => [
+          id,
+          { id, title: 'K380 键盘', priceCents: 16000, status: 'RESERVED', coverObjectKey: null },
+        ]),
     )
   }
 
@@ -323,6 +327,19 @@ describe('transaction service: state machine', () => {
     expect(cancelled.status).toBe('CANCELLED')
     const repeat = await service.cancel(seller, pending.id)
     expect(repeat.status).toBe('CANCELLED')
+  })
+
+  test('rows with missing embedded summary are skipped, not 500 (决策 C)', async () => {
+    const { store, service } = await build()
+    const dto = await service.accept(seller, {
+      conversationId: conversationA,
+      amountCents: 15000,
+    })
+    // 摘要查询"查不到"该商品：列表里这一行被丢弃，详情 404（不泄漏存在性）
+    store.hiddenListings.add(listingA)
+    const list = await service.listTransactions(buyer, { limit: 20 })
+    expect(list.items).toHaveLength(0)
+    await expect(service.getTransaction(buyer, dto.id)).rejects.toMatchObject({ status: 404 })
   })
 
   test('listTransactions filters by role and pages with cursor', async () => {
