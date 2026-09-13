@@ -5,6 +5,12 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    # 默认 max_connections=100 不够：`bun test` 的 47 个文件在 import 期各自 createDb()，
+    # 实测峰值 96 条连接（与 dev 进程是否在跑无关，`--max-concurrency` 也压不下来）。
+    # 只剩 4 个槽位时，只要再有任何客户端（如 dev:api / dev:worker 的池）就会打满，
+    # 表现为与被测代码无关的 53300「sorry, too many clients already」假失败
+    # （实测：auth/router.test.ts 的注册原子性用例在 migrate 阶段撞 53300）。
+    command: postgres -c max_connections=200
     environment:
       POSTGRES_USER: fish
       POSTGRES_PASSWORD: fish

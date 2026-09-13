@@ -105,6 +105,36 @@ jobs:
               mc anonymous set download local/fish
             "
 
+      # max_connections：官方镜像默认 100 不够。`bun test` 的 47 个文件在 **import 期**各自
+      # 调 createDb()（drizzle(url)，从不 close），本机实测峰值 **96** 条连接，与 dev 进程是否
+      # 在跑无关，`--max-concurrency` 也压不下来（限到 4 仍是 96）。只剩 4 个槽位时，任何额外
+      # 客户端都会打满，表现为与被测代码无关的 53300 假失败（本机实测：auth/router.test.ts 的
+      # 「注册原子性」用例在 migrate 的 CREATE SCHEMA 上撞 53300；同文件单跑 16 pass / 0 fail）。
+      # 与 docker-compose.yml 的 `command: postgres -c max_connections=200` 保持同一口径。
+      #
+      # 为什么不写进 `services:`：service 只接受 docker create 选项，没有追加 postgres 命令行
+      # 参数的位置（`command` 键不被支持），故在服务起来之后用 ALTER SYSTEM + 重启落地。
+      - name: Raise Postgres max_connections
+        run: |
+          cid="${{ job.services.postgres.id }}"
+          if [ -z "$cid" ]; then
+            echo "::error::拿不到 postgres 服务容器 id（job.services.postgres.id 未解析）" >&2
+            exit 1
+          fi
+          docker exec "$cid" psql -U fish -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET max_connections = 200"
+          docker restart "$cid"
+          for i in $(seq 1 30); do
+            if docker exec "$cid" pg_isready -U fish -d fish >/dev/null 2>&1; then
+              echo "postgres is up (max_connections=200)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "postgres 重启后 30s 内未就绪" >&2
+          docker logs "$cid"
+          exit 1
+
       # 证据：#2 验收要求 migration 可在空库执行（走 README 记录的同一条命令）
       - name: Migrate
         run: bun run db:migrate
