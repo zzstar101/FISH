@@ -112,24 +112,29 @@ describe('profile store (integration)', () => {
     expect(rows[0]?.match_count).toBe(0)
   })
 
-  test('a NULL-budget wish (seed 形状) is excluded rather than crashing the aggregate', async () => {
-    // 与 seed 的 wishKeyboard 同形状：category 非空、budget 为 NULL（#2 为 #8 预留）
+  test('预算为 NULL 的愿望（seed 形状）仍然可见，预算按 #7 同口径归一为 0', async () => {
+    // 与 seed 的 wishKeyboard 完全同形：category 有值、budget_min_cents 为 NULL、budget_max 有值。
+    // 该 shape 在 DB 层合法（#2 为 #8 预留「不限预算」），#7 的 /wishes 也看得见它
+    // （wishes/store.ts 用 Number(null) → 0 归一），所以 profile 不能把它藏起来：
+    // 否则同一个用户的「我的愿望」在两个接口里给出相反的条数。
     await db.execute(sql`
       INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents, status)
-      VALUES ('01990000-0000-7000-8000-0000000000d2', ${me}, '键盘', 'DIGITAL', NULL, NULL, 'ACTIVE')
+      VALUES ('01990000-0000-7000-8000-0000000000d2', ${me}, '键盘', 'DIGITAL', NULL, 20000, 'ACTIVE')
     `)
     const rows = await store.ownWishes(me, 100)
-    // NULL budget 行被过滤（契约 WishDto 三字段皆非空），其余愿望照常返回
-    expect(rows.map((row) => row.id)).toEqual([wishA])
+    expect(rows.map((row) => row.id)).toEqual(['01990000-0000-7000-8000-0000000000d2', wishA])
+    const seedShape = rows.find((row) => row.id === '01990000-0000-7000-8000-0000000000d2')
+    expect(seedShape?.budget_min_cents).toBe(0) // Number(null) → 0，与 #7 读模型逐字一致
+    expect(seedShape?.budget_max_cents).toBe(20000)
   })
 
-  test('stats().activeWishes 与 ownWishes 可见列表口径一致（NULL 预算愿望不计入统计）', async () => {
-    // 上一条用例插入了 ACTIVE 但 budget 全 NULL 的愿望：它进不了列表（契约 WishDto 要求非空），
-    // 也就不能进统计——否则个人中心会显示「愿望 2」而列表只有 1 条。
+  test('stats().activeWishes 与可见愿望列表口径一致（含预算为 NULL 的愿望）', async () => {
+    // 上一条用例插入了 seed 形状的 ACTIVE 愿望：它既然在列表里，就必须也进统计，
+    // 否则个人中心会显示「愿望 N」而列表条数对不上。断言的是不变量本身。
     const stats = await store.stats(me)
     const rows = await store.ownWishes(me, 100)
-    expect(stats.activeWishes).toBe(rows.length)
-    expect(stats.activeWishes).toBe(1)
+    expect(rows.filter((row) => row.status === 'ACTIVE')).toHaveLength(stats.activeWishes)
+    expect(stats.activeWishes).toBe(2)
   })
 
   test('ownTransactions merges buying and selling; buyer_id distinguishes the role', async () => {

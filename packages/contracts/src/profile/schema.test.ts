@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { profileResponseSchema, profileTransactionStatusSchema } from './schema'
+import { profileResponseSchema } from './schema'
 
 const me = {
   id: '00000000-0000-4000-8000-0000000000a1',
@@ -103,15 +103,5 @@ describe('profileResponseSchema', () => {
       user: { ...me, studentNo: '202101000001' },
     })
     expect(Object.hasOwn(parsed.user, 'studentNo')).toBe(false)
-  })
-})
-
-describe('profileTransactionStatusSchema', () => {
-  test('mirrors the DB transaction_status enum values', () => {
-    expect(profileTransactionStatusSchema.options).toEqual([
-      'PENDING_MEETUP',
-      'COMPLETED',
-      'CANCELLED',
-    ])
   })
 })

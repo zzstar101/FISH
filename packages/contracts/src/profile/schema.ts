@@ -55,7 +55,7 @@ export type ProfileTransaction = z.infer<typeof profileTransactionSchema>
 export const profileStatsSchema = z.object({
   /** 在售商品数（listings.status = ACTIVE 且 seller 是我）。 */
   activeListings: z.number().int().nonnegative(),
-  /** 活跃愿望数（wishes.status = ACTIVE 且 user 是我）。 */
+  /** 活跃愿望数（wishes.status = 'ACTIVE' 且 user 是我；预算为 NULL 的同样计入，与列表同口径）。 */
   activeWishes: z.number().int().nonnegative(),
   /** 完成交易数（买卖两个角色合并计）。 */
   completedTransactions: z.number().int().nonnegative(),

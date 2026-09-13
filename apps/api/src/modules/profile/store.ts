@@ -79,17 +79,17 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
 export function createSqlProfileStore(db: Db): ProfileStore {
   return {
     async stats(userId) {
-      // 统计口径必须与列表口径一致，否则个人中心会出现「统计 N 条、列表 M 条」的自相矛盾：
-      // active_wishes 因此复用 ownWishes 的三项非空过滤（契约 WishDto 三者皆非空）。
+      // 统计口径必须与列表口径一致，否则个人中心会出现「统计 N 条、列表 M 条」的自相矛盾。
+      // 只跟着 ownWishes 的**可表示性**过滤（category 非空）走：预算为 NULL 的愿望是真实
+      // 存在的 shape（seed 的 wishKeyboard 就是），把它一并排除会让演示账号「小北」的愿望
+      // 在统计与列表里双双消失，而 #7 的 /wishes 明明看得见它。
       const result = await db.execute(sql`
         SELECT
           (SELECT count(*)::int FROM listings
             WHERE seller_id = ${userId} AND status = 'ACTIVE') AS active_listings,
           (SELECT count(*)::int FROM wishes
             WHERE user_id = ${userId} AND status = 'ACTIVE'
-              AND category IS NOT NULL
-              AND budget_min_cents IS NOT NULL
-              AND budget_max_cents IS NOT NULL) AS active_wishes,
+              AND category IS NOT NULL) AS active_wishes,
           (SELECT count(*)::int FROM transactions
             WHERE (buyer_id = ${userId} OR seller_id = ${userId}) AND status = 'COMPLETED')
             AS completed_transactions
@@ -135,8 +135,13 @@ export function createSqlProfileStore(db: Db): ProfileStore {
     },
 
     async ownWishes(userId, limit) {
-      // category / budget 两端都可空（#2 为 #8 预留「不限分类/不限预算」），而契约的
-      // WishDto 三者皆非空：过滤口径与 wishes 模块需求池聚合一致（category AND budget）。
+      // 与 #7 的「我的愿望」读模型（wishes/store.ts 的 listForUser）同口径：category / budget
+      // 在 DB 里可空（#2 为 #8 预留「不限分类 / 不限预算」），而契约的 WishDto 三者皆非空。
+      // 预算为 NULL 是**真实存在**的 shape —— seed 的 wishKeyboard 就只给了 budget_max，
+      // 因此把 NULL 归一为 0（与 #7 的 `Number(row.budget_min_cents)` 完全一致），
+      // 而不是把用户自己的愿望整行藏起来（那会让同一个用户在 /wishes 看得到、在 /profile
+      // 看不到）。只有 category 为 NULL 的行无法表示成 WishDto 的枚举才继续过滤，
+      // 而创建接口里 category 必填，该 shape 经 API 不可达。
       const result = await db.execute(sql`
         SELECT w.id, w.user_id, w.keyword, w.category::text AS category,
                w.budget_min_cents, w.budget_max_cents, w.description,
@@ -145,8 +150,6 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         FROM wishes w
         WHERE w.user_id = ${userId}
           AND w.category IS NOT NULL
-          AND w.budget_min_cents IS NOT NULL
-          AND w.budget_max_cents IS NOT NULL
         ORDER BY w.created_at DESC, w.id DESC
         LIMIT ${limit}
       `)
@@ -155,8 +158,9 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         user_id: row.user_id as string,
         keyword: row.keyword as string,
         category: row.category as string,
-        budget_min_cents: row.budget_min_cents as number,
-        budget_max_cents: row.budget_max_cents as number,
+        // Number(null) === 0：与 #7 读模型的归一方式逐字一致，两接口给出同一个数。
+        budget_min_cents: Number(row.budget_min_cents),
+        budget_max_cents: Number(row.budget_max_cents),
         description: (row.description as string | null) ?? null,
         accept_similar: Boolean(row.accept_similar),
         status: row.status as string,
