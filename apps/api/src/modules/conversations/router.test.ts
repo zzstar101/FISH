@@ -22,6 +22,12 @@ const dto: ConversationDto = {
     avatarUrl: null,
   },
   unreadCount: 0,
+  lastMessage: {
+    type: 'TEXT',
+    content: '在吗',
+    senderId: '00000000-0000-4000-8000-0000000000a2',
+    createdAt: '2026-09-12T10:00:00.000Z',
+  },
   lastMessageAt: '2026-09-12T10:00:00.000Z',
   createdAt: '2026-09-12T09:00:00.000Z',
 }

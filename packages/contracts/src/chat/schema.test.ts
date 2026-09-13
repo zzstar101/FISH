@@ -125,6 +125,12 @@ describe('conversationDtoSchema', () => {
         avatarUrl: 'https://cdn.example.com/a.png',
       },
       unreadCount: 2,
+      lastMessage: {
+        type: 'TEXT',
+        content: '在吗，可以刀一点吗',
+        senderId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        createdAt: '2026-09-12T10:00:00.000Z',
+      },
       lastMessageAt: '2026-09-12T10:00:00.000Z',
       createdAt: '2026-09-12T09:00:00.000Z',
     }
@@ -132,6 +138,32 @@ describe('conversationDtoSchema', () => {
     expect(parsed.role).toBe('seller')
     expect(parsed.listing.status).toBe('ACTIVE')
     expect(parsed.counterpart.avatarUrl).toBe('https://cdn.example.com/a.png')
+    expect(parsed.lastMessage?.type).toBe('TEXT')
+  })
+
+  test('parses a conversation with no messages yet (lastMessage null)', () => {
+    const dto = {
+      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      listingId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      role: 'seller',
+      listing: {
+        id: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        title: 'K380 键盘',
+        priceCents: 16000,
+        status: 'ACTIVE',
+        coverUrl: null,
+      },
+      counterpart: {
+        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        nickname: '买家小明',
+        avatarUrl: null,
+      },
+      unreadCount: 0,
+      lastMessage: null,
+      lastMessageAt: '2026-09-12T10:00:00.000Z',
+      createdAt: '2026-09-12T09:00:00.000Z',
+    }
+    expect(conversationDtoSchema.parse(dto).lastMessage).toBeNull()
   })
 
   test('rejects an unknown role or listing status', () => {
@@ -151,6 +183,7 @@ describe('conversationDtoSchema', () => {
         avatarUrl: null,
       },
       unreadCount: 0,
+      lastMessage: null,
       lastMessageAt: '2026-09-12T10:00:00.000Z',
       createdAt: '2026-09-12T09:00:00.000Z',
     }
@@ -158,6 +191,17 @@ describe('conversationDtoSchema', () => {
     expect(
       conversationDtoSchema.safeParse({ ...base, listing: { ...base.listing, status: 'GONE' } })
         .success,
+    ).toBe(false)
+    expect(
+      conversationDtoSchema.safeParse({
+        ...base,
+        lastMessage: {
+          type: 'EMAIL',
+          content: 'hi',
+          senderId: null,
+          createdAt: '2026-09-12T10:00:00.000Z',
+        },
+      }).success,
     ).toBe(false)
   })
 })

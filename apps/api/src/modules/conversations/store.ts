@@ -26,6 +26,13 @@ export interface ConversationDetailRow {
   /** 查看者视角的未读数（对方或系统消息晚于我的 last_read_at）。 */
   unreadCount: number
   coverObjectKey: string | null
+  /** 会话内最新一条消息（列表行摘要用）；尚无任何消息时为 null。 */
+  lastMessage: {
+    type: string
+    content: string
+    senderId: string | null
+    createdAt: Date | string
+  } | null
   /**
    * DB 侧生成的微秒精度 ISO 文本（游标排序键）。JS Date 只有毫秒，毫秒截断会让
    * 同毫秒边界行在翻页时消失（listings/cursor.ts 注释同源）；仅 listForUser 填充。
@@ -99,6 +106,14 @@ function toDetailRow(row: Record<string, unknown>): ConversationDetailRow {
     },
     unreadCount: Number(row.unread_count),
     coverObjectKey: (row.cover_object_key as string | null) ?? null,
+    lastMessage: row.last_message_created_at
+      ? {
+          type: row.last_message_type as string,
+          content: row.last_message_content as string,
+          senderId: (row.last_message_sender_id as string | null) ?? null,
+          createdAt: asDate(row.last_message_created_at) as Date | string,
+        }
+      : null,
     lastMessageAtCursor: (row.last_message_at_cursor as string | undefined) ?? undefined,
   }
 }
@@ -117,6 +132,8 @@ const detailSelect = (viewerId: string) => sql`
          cu.avatar_url AS counterpart_avatar_url,
          to_char(c.last_message_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
            AS last_message_at_cursor,
+         lm.type::text AS last_message_type, lm.content AS last_message_content,
+         lm.sender_id AS last_message_sender_id, lm.created_at AS last_message_created_at,
          (SELECT count(*) FROM messages m
           WHERE m.conversation_id = c.id
             AND (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
@@ -126,6 +143,13 @@ const detailSelect = (viewerId: string) => sql`
   FROM conversations c
   JOIN listings l ON l.id = c.listing_id
   JOIN users cu ON cu.id = (CASE WHEN c.buyer_id = ${viewerId} THEN c.seller_id ELSE c.buyer_id END)
+  LEFT JOIN LATERAL (
+    SELECT m.type, m.content, m.sender_id, m.created_at
+    FROM messages m
+    WHERE m.conversation_id = c.id
+    ORDER BY m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) lm ON TRUE
 `
 
 export function createSqlConversationStore(db: Db): ConversationStore {

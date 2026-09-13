@@ -82,6 +82,7 @@ describe('conversations store (integration)', () => {
     expect(buyerView?.listing.title).toBe('K380 键盘')
     expect(buyerView?.counterpart.id).toBe(seller)
     expect(buyerView?.unreadCount).toBe(0)
+    expect(buyerView?.lastMessage).toBeNull() // 还没有任何消息
 
     expect(await store.findDetail(conversationId, outsider)).toBeNull()
   })
@@ -99,6 +100,12 @@ describe('conversations store (integration)', () => {
 
     const beforeRead = await store.findDetail(conversationId, buyer)
     expect(beforeRead?.unreadCount).toBe(2) // 对方 + SYSTEM；自己发的不算
+    // lastMessage 摘要 = created_at 最晚的一条（这里是买家刚发的那条 TEXT）
+    expect(beforeRead?.lastMessage).toMatchObject({
+      type: 'TEXT',
+      content: '我自己发的',
+      senderId: buyer,
+    })
     const sellerView = await store.findDetail(conversationId, seller)
     expect(sellerView?.unreadCount).toBe(2) // 买家的一条 + SYSTEM（SYSTEM 对双方都计未读）
 

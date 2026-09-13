@@ -28,6 +28,20 @@ export const conversationUserSchema = z.object({
 })
 export type ConversationUser = z.infer<typeof conversationUserSchema>
 
+/**
+ * 会话行内直接可渲染的「最后一条消息」摘要，由服务端组装——前端拿它渲染列表行，
+ * 不必对每个会话再拉一次消息页（N+1）。content 是原文：TEXT 即文本，
+ * SYSTEM 为 `tx.*` JSON 原文，由前端按既有解析规则处理。
+ */
+export const conversationLastMessageSchema = z.object({
+  type: messageTypeSchema,
+  content: z.string(),
+  /** SYSTEM 消息没有发送者；与 MessageDto.senderId 同口径。 */
+  senderId: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+})
+export type ConversationLastMessage = z.infer<typeof conversationLastMessageSchema>
+
 export const conversationDtoSchema = z.object({
   id: z.string(),
   listingId: z.string(),
@@ -38,6 +52,8 @@ export const conversationDtoSchema = z.object({
   counterpart: conversationUserSchema,
   /** 查看者的未读数；调用 read 端点后归 0。 */
   unreadCount: z.number().int().nonnegative(),
+  /** 最新一条消息；会话刚建立还没有任何消息时为 null（此时行内渲染占位文案）。 */
+  lastMessage: conversationLastMessageSchema.nullable(),
   lastMessageAt: z.iso.datetime(),
   createdAt: z.iso.datetime(),
 })

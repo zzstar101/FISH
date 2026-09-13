@@ -32,6 +32,12 @@ function detailRow(overrides: Partial<ConversationDetailRow> = {}): Conversation
     counterpart: { id: seller, nickname: '卖家', avatarUrl: null },
     unreadCount: 2,
     coverObjectKey: null,
+    lastMessage: {
+      type: 'TEXT',
+      content: '在吗',
+      senderId: seller,
+      createdAt: '2026-09-12T10:00:00.123456Z',
+    },
     lastMessageAtCursor: '2026-09-12T10:00:00.123456Z',
     ...overrides,
   }

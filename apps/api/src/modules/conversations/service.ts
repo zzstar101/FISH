@@ -43,6 +43,14 @@ function toConversationDto(
     },
     counterpart: row.counterpart,
     unreadCount: row.unreadCount,
+    lastMessage: row.lastMessage
+      ? {
+          type: row.lastMessage.type as 'TEXT' | 'SYSTEM',
+          content: row.lastMessage.content,
+          senderId: row.lastMessage.senderId,
+          createdAt: new Date(row.lastMessage.createdAt).toISOString(),
+        }
+      : null,
     lastMessageAt: new Date(row.conversation.last_message_at).toISOString(),
     createdAt: new Date(row.conversation.created_at).toISOString(),
   })
