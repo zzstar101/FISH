@@ -79,12 +79,17 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
 export function createSqlProfileStore(db: Db): ProfileStore {
   return {
     async stats(userId) {
+      // 统计口径必须与列表口径一致，否则个人中心会出现「统计 N 条、列表 M 条」的自相矛盾：
+      // active_wishes 因此复用 ownWishes 的三项非空过滤（契约 WishDto 三者皆非空）。
       const result = await db.execute(sql`
         SELECT
           (SELECT count(*)::int FROM listings
             WHERE seller_id = ${userId} AND status = 'ACTIVE') AS active_listings,
           (SELECT count(*)::int FROM wishes
-            WHERE user_id = ${userId} AND status = 'ACTIVE') AS active_wishes,
+            WHERE user_id = ${userId} AND status = 'ACTIVE'
+              AND category IS NOT NULL
+              AND budget_min_cents IS NOT NULL
+              AND budget_max_cents IS NOT NULL) AS active_wishes,
           (SELECT count(*)::int FROM transactions
             WHERE (buyer_id = ${userId} OR seller_id = ${userId}) AND status = 'COMPLETED')
             AS completed_transactions
@@ -164,21 +169,20 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       // 买入 + 卖出合并；role 与 counterpart 都由查看者（profile owner）视角判定
       // （buyer_id = me 即买入，对方是 seller，反之亦然——会话/交易的严格双人不变量）。
       // 内嵌摘要直接 join 已冻结的 listings/users 表（本域只读，不调用其他 Domain API）。
+      // 封面口径与 ownListings / #6 契约 §1 一致：只有 `sort_order = 0` 才是封面；
+      // 取不到 0 号图就返回 null，不能用序号更大的图片顶替。
       const result = await db.execute(sql`
         SELECT t.id, t.listing_id, t.buyer_id, t.amount_cents, t.status::text AS status,
                t.created_at,
                l.title AS listing_title, l.price_cents AS listing_price_cents,
-               l.status::text AS listing_status, li.object_key AS listing_cover_key,
+               l.status::text AS listing_status,
+               (SELECT li.object_key FROM listing_images li
+                 WHERE li.listing_id = t.listing_id AND li.sort_order = 0 LIMIT 1)
+                 AS listing_cover_key,
                u.id AS counterpart_id, u.nickname AS counterpart_nickname,
                u.avatar_url AS counterpart_avatar_url
         FROM transactions t
         JOIN listings l ON l.id = t.listing_id
-        LEFT JOIN LATERAL (
-          SELECT object_key FROM listing_images
-          WHERE listing_id = t.listing_id
-          ORDER BY sort_order ASC
-          LIMIT 1
-        ) li ON TRUE
         LEFT JOIN users u ON u.id = (CASE WHEN t.buyer_id = ${userId} THEN t.seller_id ELSE t.buyer_id END)
         WHERE t.buyer_id = ${userId} OR t.seller_id = ${userId}
         ORDER BY t.created_at DESC, t.id DESC

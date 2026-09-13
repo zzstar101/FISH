@@ -113,6 +113,15 @@ describe('profile store (integration)', () => {
     expect(rows.map((row) => row.id)).toEqual([wishA])
   })
 
+  test('stats().activeWishes 与 ownWishes 可见列表口径一致（NULL 预算愿望不计入统计）', async () => {
+    // 上一条用例插入了 ACTIVE 但 budget 全 NULL 的愿望：它进不了列表（契约 WishDto 要求非空），
+    // 也就不能进统计——否则个人中心会显示「愿望 2」而列表只有 1 条。
+    const stats = await store.stats(me)
+    const rows = await store.ownWishes(me, 100)
+    expect(stats.activeWishes).toBe(rows.length)
+    expect(stats.activeWishes).toBe(1)
+  })
+
   test('ownTransactions merges buying and selling; buyer_id distinguishes the role', async () => {
     const rows = await store.ownTransactions(me, 100)
     expect(rows).toHaveLength(2)
@@ -129,5 +138,26 @@ describe('profile store (integration)', () => {
   test('limit caps each list', async () => {
     expect(await store.ownListings(me, 1)).toHaveLength(1)
     expect(await store.ownTransactions(me, 1)).toHaveLength(1)
+  })
+
+  test('交易摘要的封面只认 sort_order = 0，缺 0 号图时返回 null 而不顶替', async () => {
+    // 脏数据形状：商品只有 sort_order = 1 的图片、没有 0 号（#6 契约 §1：0 才是封面）。
+    // 放在最后一个用例：它的插入不干扰前面那些列表/统计条数的断言。
+    await db.execute(sql`
+      INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
+      VALUES ('01990000-0000-7000-8000-0000000000b4', ${other}, '无封面商品', '描述', 10000, 'DAILY', 'GOOD', 'SOLD')
+    `)
+    await db.execute(sql`
+      INSERT INTO listing_images (id, listing_id, object_key, sort_order)
+      VALUES ('01990000-0000-7000-8000-0000000000f1', '01990000-0000-7000-8000-0000000000b4', 'listings/b4/1.jpg', 1)
+    `)
+    await db.execute(sql`
+      INSERT INTO transactions (id, listing_id, buyer_id, seller_id, amount_cents, status, completed_at)
+      VALUES ('01990000-0000-7000-8000-0000000000e3', '01990000-0000-7000-8000-0000000000b4', ${me}, ${other}, 10000, 'COMPLETED', now())
+    `)
+
+    const rows = await store.ownTransactions(me, 100)
+    const row = rows.find((item) => item.id === '01990000-0000-7000-8000-0000000000e3')
+    expect(row?.listing?.coverObjectKey).toBeNull()
   })
 })
