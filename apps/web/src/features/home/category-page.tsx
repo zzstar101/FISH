@@ -3,6 +3,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { Heart, Search } from 'lucide-react'
 import { useState } from 'react'
+import { CATEGORY_IDS } from '../../lib/labels'
 import { meta, useCategoryListings } from '../home/queries'
 import { ListingRow } from '../search/listing-row'
 
@@ -10,15 +11,15 @@ import { ListingRow } from '../search/listing-row'
 export function CategoryPage({ categoryId }: { categoryId?: string }) {
   const activeId = categoryId ?? meta.categories[0]?.id ?? 'digital'
   const active = meta.categories.find((item) => item.id === activeId) ?? meta.categories[0]
-  const list = useCategoryListings(active?.label ?? null)
+  // 路由参数是导航 id（digital 等），请求要用 #6 契约的枚举（DIGITAL 等）。
+  const categoryEnum = CATEGORY_IDS[activeId] ?? null
+  const list = useCategoryListings(categoryEnum)
   // 二级分类是页面内的过滤（点同一个再点一次取消）；不跳转，避免原地导航。
   const [childId, setChildId] = useState<string | null>(null)
   const activeChild = active?.children.find((item) => item.id === childId) ?? null
+  // 契约卡片没有子分类字段，二级过滤退化为标题关键词匹配。
   const visible = activeChild
-    ? (list.data ?? []).filter(
-        (item) =>
-          item.title.includes(activeChild.label) || item.category.includes(activeChild.label),
-      )
+    ? (list.data ?? []).filter((item) => item.title.includes(activeChild.label))
     : (list.data ?? [])
 
   return (

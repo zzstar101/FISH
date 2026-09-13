@@ -22,7 +22,7 @@ export function ProfilePage() {
   }
   if (!summary.data) return <ErrorState message="没有取到个人数据" />
 
-  const { me, stats, orderInProgress, wishCount, historyCount, followCount } = summary.data
+  const { me, stats, orderInProgress, wishCount } = summary.data
 
   const signOut = () => {
     logout.mutate(undefined, {
@@ -35,18 +35,18 @@ export function ProfilePage() {
       <header className="bg-brand px-4 pt-6 pb-12 text-white">
         <div className="flex items-start gap-3">
           <UserAvatar
+            avatarUrl={me.avatarUrl}
             className="shadow-[0_0_0_2px_rgba(255,255,255,0.45)]"
-            emoji={me.emoji}
+            emoji={me.nickname.slice(0, 1)}
             size="xl"
-            tone={me.tone}
           />
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-2">
               <span className="truncate font-semibold text-xl">{me.nickname}</span>
-              <AuthBadge status={me.verified ? 'VERIFIED' : 'UNVERIFIED'} />
+              <AuthBadge status={me.authStatus} />
             </p>
             <p className="mt-1 truncate text-white/80 text-xs">
-              {me.college} · {me.campus} · {me.joinedAt} 加入
+              {me.campus ? `${me.campus}校区` : '校区未填写'}
             </p>
             <button
               className="mt-2 rounded-md border border-dashed border-white/50 px-2 py-1 text-white/80 text-xs"
@@ -60,14 +60,17 @@ export function ProfilePage() {
           </button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">信用分 {me.credit}</span>
-          <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">已实名</span>
+          {/* authStatus 来自 Mock 教务 Provider（见 apps/api/src/app.ts 注释），
+              只作为展示口径，不当作可信标识 —— 与 #5 的结论一致。 */}
+          <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">
+            {me.authStatus === 'VERIFIED' ? '已实名' : '未实名'}
+          </span>
           <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">校内面交</span>
         </div>
       </header>
 
       <section className="relative mx-3 -mt-8 grid grid-cols-4 rounded-2xl bg-surface py-3 shadow-sm">
-        {/* #12 工作项的四格统计：在售/愿望/买入/卖出（收藏是 #14 P1，契约无来源，不占格）。 */}
+        {/* #12 工作项的四格统计：在售/愿望/买入/卖出。 */}
         <StatCell label="在售" type="active" value={stats.active} />
         <StatCell label="愿望" to="/wish" value={stats.wishes} />
         <StatCell label="买入" type="bought" value={stats.bought} />
@@ -84,13 +87,8 @@ export function ProfilePage() {
             value={orderInProgress > 0 ? `${orderInProgress} 笔进行中` : undefined}
           />
           <NavRow emoji="☀️" label="我的愿望" to="/wish" value={`${wishCount} 条`} />
-          <MylistRow emoji="🕐" label="浏览历史" type="history" value={String(historyCount)} />
-          <MylistRow
-            emoji="⭐"
-            label="我的关注"
-            type="follow"
-            value={followCount > 0 ? String(followCount) : undefined}
-          />
+          <MylistRow emoji="🕐" label="浏览历史" type="history" />
+          <MylistRow emoji="⭐" label="我的关注" type="follow" />
         </div>
       </section>
 
@@ -109,7 +107,7 @@ export function ProfilePage() {
             <RowIcon emoji="🧹" />
             <span className="min-w-0 flex-1">
               <span className="block text-[15px]">清除演示数据</span>
-              <span className="mt-0.5 block text-ink-3 text-xs">清空本地收藏、发布、浏览记录</span>
+              <span className="mt-0.5 block text-ink-3 text-xs">清空本地收藏、浏览记录</span>
             </span>
             <ChevronRight className="size-[18px] shrink-0 text-ink-3" />
           </button>
@@ -136,8 +134,6 @@ export function ProfilePage() {
 
         <p className="py-5 text-center text-ink-3 text-xs leading-relaxed">
           校园二手 · 让闲置在校园里流动起来
-          <br />
-          本页数据保存在浏览器本地,不会上传
         </p>
       </section>
     </AppShell>

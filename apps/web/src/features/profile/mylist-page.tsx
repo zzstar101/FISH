@@ -1,28 +1,24 @@
+import type { ListingCard, ListingStatus } from '@fish/contracts/listings/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
-import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { MessageCircle } from 'lucide-react'
 import type { ComponentProps } from 'react'
+import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice } from '../../lib/format'
-import type { ListingView } from '../../lib/mock/store'
-import type { ListingStatus, User } from '../../lib/mock/types'
-import { AuthBadge } from '../auth/auth-badge'
-import { useStartConversation } from '../listing-detail/queries'
+import { toListingCard } from '../../lib/mock/store'
+import type { User } from '../../lib/mock/types'
 import { ListingRow } from '../search/listing-row'
+import { OrderCard } from '../transaction/order-card'
+import { useTransactions } from '../transaction/queries'
 import {
-  useActiveListings,
-  useBoughtListings,
   useFavoriteListings,
   useFollowedUsers,
   useHistoryListings,
-  useMyListings,
-  useRemoveListing,
+  useMyListingLists,
   useSetListingStatus,
-  useSoldListings,
 } from './queries'
 
 export type MyListType = 'post' | 'active' | 'fav' | 'sold' | 'bought' | 'history' | 'follow'
@@ -62,34 +58,18 @@ export function MyListPage({ type }: { type: MyListType }) {
         </div>
       </div>
 
-      <MyListBody type={type} label={label} />
+      <MyListBody label={label} type={type} />
     </div>
   )
 }
 
 function MyListBody({ type, label }: { type: MyListType; label: string }) {
-  const post = useMyListings()
-  const active = useActiveListings()
+  // post / active / sold 共用一次 sellerId 读路径（fetchMyListingLists 一次拉三份）。
+  const mine = useMyListingLists()
   const fav = useFavoriteListings()
-  const sold = useSoldListings()
-  const bought = useBoughtListings()
   const history = useHistoryListings()
   const follow = useFollowedUsers()
-
-  const source =
-    type === 'post'
-      ? post
-      : type === 'active'
-        ? active
-        : type === 'fav'
-          ? fav
-          : type === 'sold'
-            ? sold
-            : type === 'bought'
-              ? bought
-              : type === 'history'
-                ? history
-                : null
+  const bought = useTransactions('buyer')
 
   if (type === 'follow') {
     if (follow.isPending) return <LoadingState />
@@ -99,48 +79,93 @@ function MyListBody({ type, label }: { type: MyListType; label: string }) {
     return <FollowList users={follow.data ?? []} />
   }
 
-  if (!source) return null
-  if (source.isPending) return <LoadingState />
-  if (source.isError) {
-    return <ErrorState message="列表加载失败" onRetry={() => void source.refetch()} />
+  if (type === 'bought') {
+    if (bought.isPending) return <LoadingState />
+    if (bought.isError) {
+      return <ErrorState message="交易加载失败" onRetry={() => void bought.refetch()} />
+    }
+    const orders = bought.data ?? []
+    return (
+      <>
+        <ListHeader count={orders.length} label={label} />
+        {orders.length === 0 ? (
+          <EmptyState description={`${label}还是空的`} emoji="🐟" />
+        ) : (
+          <div className="space-y-2.5 px-3">
+            {orders.map((order) => (
+              <OrderCard key={order.id} order={order} />
+            ))}
+          </div>
+        )}
+      </>
+    )
   }
 
-  const items = source.data ?? []
-  // 「在售」是「我发布的」的 ACTIVE 子集，同样的行内写操作都适用。
-  const editable = type === 'post' || type === 'active' || type === 'sold'
+  // 「我发布的 / 在售 / 我卖出的」：真实 sellerId 读路径，行内带契约允许的写操作。
+  if (type === 'post' || type === 'active' || type === 'sold') {
+    if (mine.isPending) return <LoadingState />
+    if (mine.isError) {
+      return <ErrorState message="列表加载失败" onRetry={() => void mine.refetch()} />
+    }
+    const items =
+      type === 'post'
+        ? (mine.data?.all ?? [])
+        : type === 'active'
+          ? (mine.data?.active ?? [])
+          : (mine.data?.sold ?? [])
+
+    return (
+      <>
+        <ListHeader count={items.length} label={label} />
+        {items.length === 0 ? (
+          <EmptyState description={`${label}还是空的`} emoji="🐟" />
+        ) : (
+          <div className="divide-y divide-line bg-surface">
+            {items.map((item) => (
+              <MyListingRow item={item} key={item.id} />
+            ))}
+          </div>
+        )}
+      </>
+    )
+  }
+
+  // 收藏 / 浏览历史：fixture 数据（ListingView），转成契约卡形状复用同一套行渲染。
+  const fixtureQuery = type === 'fav' ? fav : history
+  if (fixtureQuery.isPending) return <LoadingState />
+  if (fixtureQuery.isError) {
+    return <ErrorState message="列表加载失败" onRetry={() => void fixtureQuery.refetch()} />
+  }
+  const rows = (fixtureQuery.data ?? []).map(toListingCard)
 
   return (
     <>
-      <h2 className="flex items-baseline justify-between px-4 py-3 font-semibold text-[15px]">
-        {label}
-        <span className="font-normal text-ink-3 text-xs">{items.length} 件</span>
-      </h2>
-
-      {items.length === 0 ? (
+      <ListHeader count={rows.length} label={label} />
+      {rows.length === 0 ? (
         <EmptyState description={`${label}还是空的`} emoji="🐟" />
       ) : (
         <div className="divide-y divide-line bg-surface">
-          {items.map((item) =>
-            editable ? (
-              <MyListingRow item={item} key={item.id} />
-            ) : (
-              <ListingRow item={item} key={item.id} />
-            ),
-          )}
+          {rows.map((item) => (
+            <ListingRow item={item} key={item.id} />
+          ))}
         </div>
       )}
     </>
   )
 }
 
+function ListHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <h2 className="flex items-baseline justify-between px-4 py-3 font-semibold text-[15px]">
+      {label}
+      <span className="font-normal text-ink-3 text-xs">{count} 件</span>
+    </h2>
+  )
+}
+
 /**
- * 商品状态 → 徽章文案与配色。
- *
- * 此前这里只有二元判断（SOLD ? 已售出 : 在售），于是 RESERVED / OFFLINE 会被一律
- * 标成「在售」——已下架的闲置看上去还在卖（#12 要求「商品/愿望/交易各状态可展示」）。
- *
- * 措辞与详情页 `STATUS_LABEL` 的**非 ACTIVE** 三种一致；ACTIVE 这里必须给出「在售」
- * 徽章，而详情页那边是空字符串（那里由 CTA 文案承担状态表达，不需要徽章）。
+ * 商品状态 → 徽章文案与配色。措辞与详情页 `STATUS_LABEL` 的**非 ACTIVE** 三种一致；
+ * ACTIVE 这里必须给出「在售」徽章（详情页由 CTA 文案承担状态表达）。
  */
 const STATUS_BADGE: Record<
   ListingStatus,
@@ -152,22 +177,25 @@ const STATUS_BADGE: Record<
   OFFLINE: { label: '已下架', variant: 'secondary' },
 }
 
-/** 我发布/我卖出：行内带 编辑 / 标为已售出 / 重新上架 / 下架删除（#6 写操作）。 */
-function MyListingRow({ item }: { item: ListingView }) {
+/**
+ * 我发布/在售/卖出的行：编辑 / 重新上架 / 下架。
+ * #6 契约的写模型没有「标为已售出」（SOLD 由交易流程写）也没有删除端点，
+ * 所以行内操作只有这三个：编辑仅 ACTIVE/OFFLINE 可用，上下架走 offline/online 端点。
+ */
+function MyListingRow({ item }: { item: ListingCard }) {
   const navigate = useNavigate()
   const setStatus = useSetListingStatus()
-  const remove = useRemoveListing()
-  // 「重新上架」只对已下架/已售出的商品有意义（在售与已预定的不能重复上架）。
-  const relistable = item.status === 'OFFLINE' || item.status === 'SOLD'
   const badge = STATUS_BADGE[item.status]
+  const editable = item.status === 'ACTIVE' || item.status === 'OFFLINE'
 
   return (
     <div className="flex gap-3 px-4 py-3">
-      <Thumb
+      <ListingThumb
+        alt={item.title}
         className="size-24 rounded-xl"
-        emoji={item.emoji}
+        coverUrl={item.coverUrl}
+        listingId={item.id}
         emojiClassName="text-[2.4rem]"
-        tone={item.tone}
       />
       <div className="flex min-w-0 flex-1 flex-col">
         <button
@@ -182,44 +210,43 @@ function MyListingRow({ item }: { item: ListingView }) {
         <div className="mt-1.5 flex items-center gap-2">
           <span className="font-bold text-lg">{formatPrice(item.priceCents)}</span>
           <Badge variant={badge.variant}>{badge.label}</Badge>
-          <span className="text-ink-3 text-xs">
-            {item.views} 浏览 · {item.wantCount} 想要
-          </span>
         </div>
         <div className="mt-auto flex flex-wrap gap-2 pt-2">
-          <Button
-            onClick={() => void navigate({ to: '/publish', search: { edit: item.id } })}
-            size="sm"
-            variant="outline"
-          >
-            编辑
-          </Button>
-          {relistable ? (
-            <Button
-              onClick={() => setStatus.mutate({ id: item.id, status: 'ACTIVE' })}
-              size="sm"
-              variant="outline"
-            >
-              重新上架
-            </Button>
-          ) : (
-            <Button
-              onClick={() => setStatus.mutate({ id: item.id, status: 'SOLD' })}
-              size="sm"
-              variant="outline"
-            >
-              标为已售出
-            </Button>
-          )}
-          <Button onClick={() => remove.mutate(item.id)} size="sm" variant="destructive">
-            下架删除
-          </Button>
+          {editable ? (
+            <>
+              <Button
+                onClick={() => void navigate({ to: '/publish', search: { edit: item.id } })}
+                size="sm"
+                variant="outline"
+              >
+                编辑
+              </Button>
+              {item.status === 'OFFLINE' ? (
+                <Button
+                  onClick={() => setStatus.mutate({ id: item.id, status: 'ACTIVE' })}
+                  size="sm"
+                  variant="outline"
+                >
+                  重新上架
+                </Button>
+              ) : (
+                <Button
+                  onClick={() => setStatus.mutate({ id: item.id, status: 'OFFLINE' })}
+                  size="sm"
+                  variant="outline"
+                >
+                  下架
+                </Button>
+              )}
+            </>
+          ) : null}
         </div>
       </div>
     </div>
   )
 }
 
+/** 我的关注（fixture）：真实契约没有关注关系端点。 */
 function FollowList({ users }: { users: User[] }) {
   return (
     <ul className="divide-y divide-line bg-surface">
@@ -229,39 +256,14 @@ function FollowList({ users }: { users: User[] }) {
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-2">
               <span className="truncate font-medium text-[15px]">{user.nickname}</span>
-              {user.verified ? <AuthBadge status="VERIFIED" /> : null}
+              {user.verified ? <Badge variant="success">已认证</Badge> : null}
             </p>
             <p className="mt-0.5 truncate text-ink-3 text-xs">
               {user.college} · {user.campus}
             </p>
           </div>
-          <FollowChatButton peerId={user.id} />
         </li>
       ))}
     </ul>
-  )
-}
-
-function FollowChatButton({ peerId }: { peerId: string }) {
-  const navigate = useNavigate()
-  const startConversation = useStartConversation()
-  return (
-    <Button
-      className="shrink-0"
-      onClick={() =>
-        startConversation.mutate(
-          { peerId },
-          {
-            onSuccess: (conversationId) =>
-              void navigate({ to: '/chat/$conversationId', params: { conversationId } }),
-          },
-        )
-      }
-      size="sm"
-      variant="secondary"
-    >
-      <MessageCircle className="size-3" />
-      聊一聊
-    </Button>
   )
 }

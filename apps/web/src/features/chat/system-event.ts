@@ -1,19 +1,20 @@
+import {
+  type TransactionSystemEvent,
+  transactionSystemEventSchema,
+} from '@fish/contracts/transactions/schema'
 import { formatPrice } from '../../lib/format'
-import type { Message } from '../../lib/mock/types'
 
 /**
- * #11 的 SYSTEM 消息内容协议:提案/接受/拒绝以 SYSTEM 消息进会话,content 是 JSON
- * 判别联合(`packages/contracts/src/transactions/schema.ts` 的
- * `transactionSystemEventSchema`,分支 feat/11-tx)。契约分支未合并,这里手写同形状的
- * 收窄,合并后可换成 @fish/contracts 的 schema。
+ * #11 的 SYSTEM 消息内容协议：提案/接受/拒绝以 SYSTEM 消息进会话，content 是 JSON
+ * 判别联合。解析直接用 `@fish/contracts/transactions/schema` 的
+ * `transactionSystemEventSchema`（#41 前手工镜像已随契约合并退役）。
  *
- * 解析失败必须返回 null、调用方降级为普通文本渲染——这是契约里冻结的「优雅降级」,
- * 协议演化不破坏聊天,残缺/异构的 SYSTEM 消息不能把页面炸掉。
+ * 解析失败必须返回 null、调用方降级为普通文本渲染——这是契约里冻结的「优雅降级」，
+ * 协议演化不破坏聊天，残缺/异构的 SYSTEM 消息不能把页面炸掉。
  */
-export type SystemEvent =
-  | { type: 'tx.proposal'; amountCents: number }
-  | { type: 'tx.accepted'; transactionId: string; amountCents: number }
-  | { type: 'tx.rejected' }
+type SystemEvent = TransactionSystemEvent
+
+export type { SystemEvent }
 
 export function parseSystemEvent(content: string): SystemEvent | null {
   let value: unknown
@@ -22,30 +23,8 @@ export function parseSystemEvent(content: string): SystemEvent | null {
   } catch {
     return null
   }
-  if (typeof value !== 'object' || value === null) return null
-  const event = value as Record<string, unknown>
-  if (event.type === 'tx.proposal' || event.type === 'tx.accepted') {
-    // 金额范围对齐 #6 的 PriceCentsSchema（0–¥100,000）：负数或天文数字都按
-    // 解析失败处理，降级为原文，而不是渲染出「¥-450.00」这类可信的假价格。
-    if (
-      typeof event.amountCents !== 'number' ||
-      !Number.isInteger(event.amountCents) ||
-      event.amountCents < 0 ||
-      event.amountCents > 10_000_000
-    )
-      return null
-    if (event.type === 'tx.accepted') {
-      if (typeof event.transactionId !== 'string') return null
-      return {
-        type: 'tx.accepted',
-        transactionId: event.transactionId,
-        amountCents: event.amountCents,
-      }
-    }
-    return { type: 'tx.proposal', amountCents: event.amountCents }
-  }
-  if (event.type === 'tx.rejected') return { type: 'tx.rejected' }
-  return null
+  const result = transactionSystemEventSchema.safeParse(value)
+  return result.success ? result.data : null
 }
 
 /** SYSTEM 消息的气泡文案。文案刻意不区分查看者是买方还是卖方(SENDER 为空)。 */
@@ -60,9 +39,30 @@ function systemEventText(event: SystemEvent): string {
   }
 }
 
-/** 聊天气泡与会话列表预览共用的渲染文案:SYSTEM 先解析协议,失败降级原文。 */
-export function formatMessageBody(message: Message): string {
-  if (message.kind !== 'SYSTEM') return message.text
-  const event = parseSystemEvent(message.text)
-  return event ? systemEventText(event) : message.text
+/** SYSTEM 消息（契约 MessageDto）的渲染文案：先解析协议，失败降级原文。 */
+export function formatSystemMessageBody(content: string): string {
+  const event = parseSystemEvent(content)
+  return event ? systemEventText(event) : content
+}
+
+/** 会话列表预览与气泡共用：TEXT 直出，SYSTEM 先解析。 */
+export function formatMessageBody(message: { type: 'TEXT' | 'SYSTEM'; content: string }): string {
+  return message.type === 'SYSTEM' ? formatSystemMessageBody(message.content) : message.content
+}
+
+/**
+ * 会话里「最后一条交易事件」：从尾部往前找第一条能解析的 SYSTEM 消息。
+ * 卖家的 接受/拒绝 按钮只对「最后事件是 proposal」的会话出现——
+ * 契约没有「提案」实体（不落库），消息流就是它的唯一事实来源。
+ */
+export function lastTransactionEvent(
+  messages: { type: 'TEXT' | 'SYSTEM'; content: string }[],
+): SystemEvent | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i] as { type: 'TEXT' | 'SYSTEM'; content: string }
+    if (message.type !== 'SYSTEM') continue
+    const event = parseSystemEvent(message.content)
+    if (event) return event
+  }
+  return null
 }

@@ -70,7 +70,7 @@ export function HomePage() {
           </Button>
           <span className="text-ink-2 text-xs">数码电子</span>
         </Link>
-        <Link className="flex flex-col items-center gap-1.5" search={{ kw: '免费送' }} to="/search">
+        <Link className="flex flex-col items-center gap-1.5" search={{ free: true }} to="/search">
           <Button
             className="size-14 rounded-full bg-surface text-[26px] shadow-sm hover:bg-surface"
             size="icon-lg"
