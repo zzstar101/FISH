@@ -25,7 +25,15 @@ export function parseSystemEvent(content: string): SystemEvent | null {
   if (typeof value !== 'object' || value === null) return null
   const event = value as Record<string, unknown>
   if (event.type === 'tx.proposal' || event.type === 'tx.accepted') {
-    if (typeof event.amountCents !== 'number' || !Number.isInteger(event.amountCents)) return null
+    // 金额范围对齐 #6 的 PriceCentsSchema（0–¥100,000）：负数或天文数字都按
+    // 解析失败处理，降级为原文，而不是渲染出「¥-450.00」这类可信的假价格。
+    if (
+      typeof event.amountCents !== 'number' ||
+      !Number.isInteger(event.amountCents) ||
+      event.amountCents < 0 ||
+      event.amountCents > 10_000_000
+    )
+      return null
     if (event.type === 'tx.accepted') {
       if (typeof event.transactionId !== 'string') return null
       return { type: 'tx.accepted', transactionId: event.transactionId, amountCents: event.amountCents }

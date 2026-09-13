@@ -545,7 +545,8 @@ export const conversations: Conversation[] = [
     userId: 'u1',
     listingId: 'p1',
     unread: 2,
-    updatedMinutesAgo: 18,
+    // 与最后一条种子消息（m7, 12 分钟前）对齐，否则列表时间戳会比最新消息旧。
+    updatedMinutesAgo: 12,
     messages: [
       { id: 'm1', from: 'peer', text: '同学你好,iPad还在的~', sentAtMinutesAgo: 42, kind: 'TEXT' },
       {
@@ -601,7 +602,8 @@ export const conversations: Conversation[] = [
     userId: 'u5',
     listingId: 'p4',
     unread: 1,
-    updatedMinutesAgo: 1440,
+    // 与最后一条种子消息（m4, 1430 分钟前）对齐。
+    updatedMinutesAgo: 1430,
     messages: [
       {
         id: 'm1',
