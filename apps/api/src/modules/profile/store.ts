@@ -128,7 +128,8 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         urgent: Boolean(row.urgent),
         negotiable: Boolean(row.negotiable),
         free: Boolean(row.free),
-        createdAt: row.created_at as Date,
+        // 裸 SQL 的时间戳按仓库统一口径写成 `Date | string` 再归一：不靠驱动的返回类型假设。
+        createdAt: new Date(row.created_at as string | Date),
         coverObjectKey: (row.cover_object_key as string | null) ?? null,
       }))
     },
@@ -195,21 +196,23 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         amountCents: row.amount_cents as number,
         status: row.status as string,
         createdAt: row.created_at as Date | string,
-        listing: row.listing_title
-          ? {
-              title: row.listing_title as string,
-              priceCents: row.listing_price_cents as number,
-              status: row.listing_status as string,
-              coverObjectKey: (row.listing_cover_key as string | null) ?? null,
-            }
-          : null,
-        counterpart: row.counterpart_id
-          ? {
-              id: row.counterpart_id as string,
-              nickname: row.counterpart_nickname as string,
-              avatarUrl: (row.counterpart_avatar_url as string | null) ?? null,
-            }
-          : null,
+        listing:
+          row.listing_title != null
+            ? {
+                title: row.listing_title as string,
+                priceCents: row.listing_price_cents as number,
+                status: row.listing_status as string,
+                coverObjectKey: (row.listing_cover_key as string | null) ?? null,
+              }
+            : null,
+        counterpart:
+          row.counterpart_id != null
+            ? {
+                id: row.counterpart_id as string,
+                nickname: row.counterpart_nickname as string,
+                avatarUrl: (row.counterpart_avatar_url as string | null) ?? null,
+              }
+            : null,
       }))
     },
   }

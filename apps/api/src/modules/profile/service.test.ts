@@ -148,6 +148,39 @@ describe('profile service: getProfile', () => {
     expect(profile.listings).toHaveLength(PROFILE_LIST_LIMIT)
   })
 
+  test('counterpart.avatarUrl 的脏值降级为 null，合法 URL 原样保留', async () => {
+    const dirty = new MemoryProfileStore()
+    dirty.transactions = [
+      txRow({
+        counterpart: {
+          id: '00000000-0000-4000-8000-0000000000a2',
+          nickname: '卖家小王',
+          // #2 的 users.avatar_url 是无约束 text：object key 这类历史值不符合契约的 z.url()
+          avatarUrl: 'listings/avatar.jpg',
+        },
+      }),
+    ]
+    // 修复前：z.url() 解析失败 → 整个聚合抛 ZodError（一个脏字段让 /profile 全打不开）
+    const dirtyProfile = await createProfileService({ store: dirty, storage }).getProfile(me)
+    expect(dirtyProfile.transactions).toHaveLength(1)
+    expect(dirtyProfile.transactions[0]?.counterpart.avatarUrl).toBeNull()
+
+    const clean = new MemoryProfileStore()
+    clean.transactions = [
+      txRow({
+        counterpart: {
+          id: '00000000-0000-4000-8000-0000000000a2',
+          nickname: '卖家小王',
+          avatarUrl: 'https://cdn.test/avatars/a2.jpg',
+        },
+      }),
+    ]
+    const cleanProfile = await createProfileService({ store: clean, storage }).getProfile(me)
+    expect(cleanProfile.transactions[0]?.counterpart.avatarUrl).toBe(
+      'https://cdn.test/avatars/a2.jpg',
+    )
+  })
+
   test('null cover renders as null URL', async () => {
     const store = new MemoryProfileStore()
     store.listings = [listingRow({ coverObjectKey: null })]

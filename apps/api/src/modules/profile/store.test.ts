@@ -55,6 +55,14 @@ beforeAll(async () => {
     INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents, status)
     VALUES (${wishA}, ${me}, '机械键盘', 'DIGITAL', 10000, 20000, 'ACTIVE')
   `)
+  // 封面只认 sort_order = 0（#6 契约 §1）：listingA 有 0 号图（并额外给一张 9 号图，
+  // 证明取的是 0 而不是"序号最大的"），listingB 只有 2 号图 → 只能判 null，不能顶替。
+  await db.execute(sql`
+    INSERT INTO listing_images (id, listing_id, object_key, sort_order) VALUES
+      ('01990000-0000-7000-8000-0000000000c1', ${listingA}, 'listings/a/0.jpg', 0),
+      ('01990000-0000-7000-8000-0000000000c2', ${listingA}, 'listings/a/9.jpg', 9),
+      ('01990000-0000-7000-8000-0000000000c3', ${listingB}, 'listings/b/2.jpg', 2)
+  `)
   // other 的商品，供"我的交易"用：txA 我买，txB 我卖
   await db.execute(sql`
     INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
@@ -88,7 +96,9 @@ describe('profile store (integration)', () => {
     const rows = await store.ownListings(me, 100)
     expect(rows).toHaveLength(2)
     expect(rows[0]?.status).toBe('OFFLINE') // listingB 后插 → 时间倒序在前
-    expect(rows[1]?.coverObjectKey).toBeNull()
+    // listingB 只有 2 号图 → 封面判 null；listingA 有 0 号图 → 取 0 号（不是序号最大的那张）
+    expect(rows[0]?.coverObjectKey).toBeNull()
+    expect(rows[1]?.coverObjectKey).toBe('listings/a/0.jpg')
   })
 
   test('ownListings does not include other users listings (只返回本人可见数据)', async () => {

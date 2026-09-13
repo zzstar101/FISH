@@ -1,4 +1,4 @@
-import type { Me } from '@fish/contracts/auth/user'
+import { type Me, MeSchema } from '@fish/contracts/auth/user'
 import { type ProfileResponse, profileResponseSchema } from '@fish/contracts/profile/schema'
 import { wishDtoSchema } from '@fish/contracts/wishes/schema'
 import { toListingCard } from '../listings/card'
@@ -22,7 +22,13 @@ function toProfileTransaction(row: ProfileTransactionRow, viewerId: string, stor
       status: row.listing.status as 'ACTIVE' | 'RESERVED' | 'SOLD' | 'OFFLINE',
       coverUrl: row.listing.coverObjectKey ? storage.publicUrl(row.listing.coverObjectKey) : null,
     },
-    counterpart: row.counterpart,
+    counterpart: {
+      ...row.counterpart,
+      // `users.avatar_url` 是无约束 text，而契约声明 `z.url().nullable()`：值域外的历史值
+      // 降级为 null，否则一个脏字段就让整个 /profile 500（与 auth 的 `toMe`、
+      // listings 的 `toSeller` 同一取舍，见 auth/router.test.ts 的同款回归用例）。
+      avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.counterpart.avatarUrl).data ?? null,
+    },
     amountCents: row.amountCents,
     status: row.status as 'PENDING_MEETUP' | 'COMPLETED' | 'CANCELLED',
     createdAt: new Date(row.createdAt).toISOString(),

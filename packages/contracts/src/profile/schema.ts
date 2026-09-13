@@ -1,5 +1,14 @@
 import { MeSchema } from '@fish/contracts/auth/user'
 import { ListingCardSchema } from '@fish/contracts/listings/schema'
+import {
+  type TransactionListing,
+  type TransactionStatus,
+  type TransactionUser,
+  transactionListingSchema,
+  transactionRoleSchema,
+  transactionStatusSchema,
+  transactionUserSchema,
+} from '@fish/contracts/transactions/schema'
 import { wishDtoSchema } from '@fish/contracts/wishes/schema'
 import { z } from 'zod'
 
@@ -8,37 +17,31 @@ import { z } from 'zod'
  *
  * 复用而非重写：user 块是认证域的 `Me`（requireAuth 已写入 context，campus 的脏值
  * 回退逻辑不复制第二份）；商品卡是 #6 的 `ListingCardSchema`（本人视角可见全部状态）；
- * 愿望是 #7 的 `wishDtoSchema`。交易摘要是本域投影，形状与 #11 冻结版 TransactionDto
- * 的内嵌 `listing` / `counterpart` 逐字段对齐（订单卡渲染所需的最小集）——待
- * `@fish/contracts/transactions` 合并后迁移为对官方 schema 的 `.pick()`。
+ * 愿望是 #7 的 `wishDtoSchema`；交易摘要的 status / role / listing / counterpart
+ * 四个组件**直接复用 #11 的官方契约**，不再本地投影（#11 已合入 main，#12 的注释
+ * 曾承诺「合并后迁移」）。
+ *
+ * 为什么不是对 `transactionDtoSchema` 做 `.pick()` / `.omit()`：官方 DTO 末尾链了
+ * 两条 `.refine()`（status ↔ completedAt / cancelledAt 的联合完整性），已经不是
+ * `ZodObject`，取不到 `.pick()`；所以这里复用它的**组件 schema**。本域投影刻意不带
+ * buyerId / sellerId 与各确认时间戳——订单卡和「我买 / 我卖」分组只需要 role 与 counterpart。
  */
 
-export const profileTransactionStatusSchema = z.enum(['PENDING_MEETUP', 'COMPLETED', 'CANCELLED'])
-export type ProfileTransactionStatus = z.infer<typeof profileTransactionStatusSchema>
+/** 别名指向官方枚举：值集改动时两侧一起变，不再有两份事实源。 */
+export const profileTransactionStatusSchema = transactionStatusSchema
+export type ProfileTransactionStatus = TransactionStatus
 
-/** 与 #11 transactionListingSchema 同形；本地投影，合并后迁移 `.pick()`。 */
-export const profileTransactionListingSchema = z.object({
-  id: z.string(),
-  title: z.string(),
-  priceCents: z.number().int(),
-  status: z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE']),
-  coverUrl: z.url().nullable(),
-})
-export type ProfileTransactionListing = z.infer<typeof profileTransactionListingSchema>
+export const profileTransactionListingSchema = transactionListingSchema
+export type ProfileTransactionListing = TransactionListing
 
-/** 与 #11 transactionUserSchema 同形（查看者视角的对方用户）；本地投影，合并后迁移 `.pick()`。 */
-export const profileTransactionUserSchema = z.object({
-  id: z.string(),
-  nickname: z.string(),
-  avatarUrl: z.url().nullable(),
-})
-export type ProfileTransactionUser = z.infer<typeof profileTransactionUserSchema>
+export const profileTransactionUserSchema = transactionUserSchema
+export type ProfileTransactionUser = TransactionUser
 
 export const profileTransactionSchema = z.object({
   id: z.string(),
   listingId: z.string(),
   /** 查看者在交易中的角色（买入 / 卖出列表合并返回，前端据此分组）。 */
-  role: z.enum(['buyer', 'seller']),
+  role: transactionRoleSchema,
   /** 订单卡渲染用（服务端组装，前端不逐行回查）；amountCents 是议价结果，与挂价独立。 */
   listing: profileTransactionListingSchema,
   /** 交易对方（查看者视角解析）。 */
