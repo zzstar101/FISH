@@ -111,6 +111,14 @@ export function createSqlMessageStore(db: Db): MessageStore {
       return { kind: 'ok', rows: rowsOf(result).map(toRow).reverse() }
     },
 
+    /**
+     * 插入 TEXT 消息并 bump 会话的 `last_message_at`（同一事务，两写必须原子）。
+     *
+     * `GREATEST(...)` 不是多余的防御：`created_at` 取 `defaultNow()` = **事务开始时间**，
+     * 因此「早开始、晚拿到会话行锁」的事务会用更旧的时间戳覆盖新值，让会话在列表里
+     * 位置倒退、游标分页出错。READ COMMITTED 下被阻塞的 UPDATE 会基于最新已提交版本
+     * 重算表达式，所以 GREATEST 足以保证 `last_message_at` 只前进、不回退。
+     */
     async insertText(conversationId, senderId, content) {
       return db.transaction(async (tx) => {
         const result = await tx.execute(sql`
@@ -119,7 +127,9 @@ export function createSqlMessageStore(db: Db): MessageStore {
             VALUES (${newId()}, ${conversationId}::uuid, ${senderId}::uuid, 'TEXT', ${content})
             RETURNING id, conversation_id, sender_id, type::text, content, created_at
           ), bump AS (
-            UPDATE conversations c SET last_message_at = (SELECT created_at FROM msg), updated_at = now()
+            UPDATE conversations c SET
+              last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),
+              updated_at = now()
             FROM msg WHERE c.id = msg.conversation_id
           )
           SELECT msg.*, u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
@@ -133,22 +143,42 @@ export function createSqlMessageStore(db: Db): MessageStore {
 
     async insertSystem(conversationId, content) {
       // 与 insertText 同构，仅 sender 为 NULL（DB CHECK 只约束 TEXT 必须有发送者）。
-      return db.transaction(async (tx) => {
-        const result = await tx.execute(sql`
-          WITH msg AS (
-            INSERT INTO messages (id, conversation_id, sender_id, type, content)
-            VALUES (${newId()}, ${conversationId}::uuid, NULL, 'SYSTEM', ${content})
-            RETURNING id, conversation_id, sender_id, type::text, content, created_at
-          ), bump AS (
-            UPDATE conversations c SET last_message_at = (SELECT created_at FROM msg), updated_at = now()
-            FROM msg WHERE c.id = msg.conversation_id
-          )
-          SELECT msg.* FROM msg
-        `)
-        const row = rowsOf(result)[0]
-        if (!row) throw new Error('SYSTEM 消息插入失败：会话可能已被并发删除')
-        return toRow(row)
-      })
+      return db.transaction((tx) => insertSystemWithin(tx, conversationId, content))
     },
   }
+}
+
+/**
+ * 在**调用方给定的事务内**插入 SYSTEM 消息并 bump 会话的 `last_message_at`。
+ *
+ * 抽出来是为了让 #11 的 `accept` 能把「创建交易」与「写 `tx.accepted` 消息」放进同一个
+ * 数据库事务（#40-3）：分两次提交时，消息写失败会留下「交易已创建、确认消息永久缺失」的
+ * 部分成功，而重试只会拿到 409，客户端还会把「其实已经成功」当成失败。
+ *
+ * 事务句柄类型从 `Db` 推导（与 `packages/db/src/seed.ts` 的 `SeedTx` 同法），不硬编码
+ * 驱动的内部类型。
+ */
+export type MessageTx = Parameters<Parameters<Db['transaction']>[0]>[0]
+
+export async function insertSystemWithin(
+  tx: MessageTx,
+  conversationId: string,
+  content: string,
+): Promise<MessageRow> {
+  const result = await tx.execute(sql`
+    WITH msg AS (
+      INSERT INTO messages (id, conversation_id, sender_id, type, content)
+      VALUES (${newId()}, ${conversationId}::uuid, NULL, 'SYSTEM', ${content})
+      RETURNING id, conversation_id, sender_id, type::text, content, created_at
+    ), bump AS (
+      UPDATE conversations c SET
+        last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),
+        updated_at = now()
+      FROM msg WHERE c.id = msg.conversation_id
+    )
+    SELECT msg.* FROM msg
+  `)
+  const row = rowsOf(result)[0]
+  if (!row) throw new Error('SYSTEM 消息插入失败：会话可能已被并发删除')
+  return toRow(row)
 }
