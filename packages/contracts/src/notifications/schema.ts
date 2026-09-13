@@ -28,14 +28,15 @@ export type NotificationType = z.infer<typeof notificationTypeSchema>
 /**
  * 读侧口径（冻结，与 `apps/api/src/modules/notifications/{store,service}.ts` 的注释一致）：
  *
- * - 列表、未读数、标记已读**共用同一个「type 能被我表示」的谓词**，且该谓词由
- *   `notificationTypeSchema.options` 派生 —— 单一真相源是本枚举，SQL 里没有第二份 type 列表。
- *   因此库里出现契约外的 `type` 时（列是裸 `text`、无 CHECK），它既不在列表里（也不占用
- *   `limit` 名额、不会让 `?limit=1` 返回空页），也不计进 `unreadCount`，标记已读返回 404 且
- *   **不改库**。P1 加降价通知只要扩本枚举，三处自动同步；反过来说，**契约与 worker 必须一起改**，
- *   否则新 type 的通知对用户不可见。
- * - `payload` 形状与时间戳另有 JS 侧的最后一道闸门（投影不成契约就跳过整行，不让整页 500）：
- *   这些脏值经本仓写入路径不可达（worker 只写 `type: 'MATCH'` 与合法 payload）。
+ * - 列表、未读数、标记已读**共用同一个「契约能表示这一行」的 SQL 谓词**（store 的 `projectable`），
+ *   判据的值域全部从本域契约派生：`type` 取自本枚举，`payload` 的键名取自
+ *   `notificationPayloadSchema`（SQL 里没有第二份 type/键名列表）。库里出现契约表示不了的行时
+ *   （`type` 不在枚举、`payload` 不是对象、键值不是字符串、时间戳非有限），它既不在列表里
+ *   （也不占用 `limit` 名额、不会让 `?limit=1` 返回空页），也不计进 `unreadCount`，
+ *   标记已读返回 404 且**不改库** —— 三处口径由 SQL 保证一致。P1 加降价通知只要扩本枚举，
+ *   三处自动同步；反过来说，**契约与 worker 必须一起改**，否则新 type 的通知对用户不可见。
+ * - 服务端另有一层 zod 投影校验，语义与上面一致，作为纵深防御：SQL 判据与 zod 契约是两套语言
+ *   描述同一件事，万一将来加字段时两边没对齐，记日志跳过而不是把整页打成 500。
  */
 
 /**

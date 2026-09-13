@@ -70,13 +70,11 @@ export function createNotificationService({
     async listNotifications(userId, query) {
       const rows = await store.listByUser(userId, query.limit)
       return {
-        // 列表里的行一定已经通过 SQL 的 type 谓词（store 的 projectableType），角标用的是**同一个**
-        // 谓词，所以「列表能展示的未读条数」与 unreadCount 恒相等，脏 type 的行也不会占掉 LIMIT 名额。
-        // 这里再投影一次是最后一道闸门：payload 形状 / 时间戳这两类脏值只可能在 JS 侧判掉
-        // （SQL 表达不了契约的 jsonb 校验），记日志跳过，不让整个列表打不开——与 #12 profile 的
-        // 决策 C 同一取舍。这类值经本仓写入路径不可达（worker 只写 `type: 'MATCH'` + 合法 payload，
-        // 时间戳只有 now() 与本模块的 Date）；将来若出现**可达**的脏值维度，按 type 的先例
-        // 在 SQL 层加谓词，而不是继续在 JS 里丢行（那会重新引入「脏行吃 LIMIT」）。
+        // store 的 projectable 谓词（SQL 层）已经把契约表示不了的行全部挡在 SELECT 之外，
+        // 角标用的是**同一个**谓词，所以「列表能展示的未读条数」与 unreadCount 恒相等，
+        // 脏行也不会占掉 LIMIT 名额。这里的投影校验保留为**纵深防御**：谓词与契约由两套语言
+        // 描述（SQL 判据 vs zod），万一将来加字段时两边没对齐，这里记日志跳过而不是把整页打成 500
+        // （与 #12 profile 的决策 C 同一取舍）。
         items: rows.flatMap((row) => {
           const dto = toNotificationDto(row)
           if (!dto) {
@@ -100,9 +98,9 @@ export function createNotificationService({
 
       const dto = toNotificationDto(row)
       if (!dto) {
-        // type 不在契约里的行已经被 store 的谓词挡在 UPDATE 之外（404 且**零写入**）。
-        // 走到这里只剩 payload 形状 / 时间戳两类脏值：`row` 存在、UPDATE 已执行，记日志并 404
-        // （不 500）。这两类值经写入路径不可达，故不为它再加一层「先校验再写」。
+        // 契约表示不了的行已经被 store 的 projectable 谓词挡在 UPDATE 之外：404 且**零写入**。
+        // 走到这里只可能是「SQL 谓词与 zod 契约、两套语言描述同一件事时没对齐」——保留为
+        // 纵深防御：记日志并 404，不 500。
         console.error('[notifications] 标记已读后无法映射为契约的通知', row.id)
         throw notFound()
       }

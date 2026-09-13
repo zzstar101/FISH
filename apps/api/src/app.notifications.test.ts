@@ -5,6 +5,7 @@ import type {
   NotificationUnreadCount,
 } from '@fish/contracts/notifications/schema'
 import { createDb, type Db } from '@fish/db/client'
+import { jsonParam } from '@fish/db/json'
 import { notifications } from '@fish/db/schema/notifications'
 import { loadServerEnv } from '@fish/shared/env'
 import { eq, sql } from 'drizzle-orm'
@@ -92,16 +93,22 @@ async function registerUser(serial: string): Promise<{ cookie: string; userId: s
 /**
  * 直接插 fixture 行，#23 只消费已存在的通知，不依赖 worker（#8 的匹配引擎才是生产者）。
  * 三行都显式给 created_at：排序断言不能建立在「插入顺序 ≈ 时间顺序」的巧合上。
+ *
+ * `payload` 必须走 `jsonParam()`（与 worker / listings 同一个写法）：直接传
+ * `${JSON.stringify(obj)}` 会被 drizzle + bun-sql **再 stringify 一次**，落库成
+ * 「JSON 字符串套 JSON」（`jsonb_typeof = 'string'`，`payload->>'matchId'` 恒为 NULL），
+ * 那是**另一种 shape**、不是真实生产者写出的行——详见 `packages/db/src/json.ts` 的实测说明。
+ * 这里踩过一次：用错写法时 SQL 谓词（要求 jsonb object）会把 fixture 全部滤掉。
  */
 async function seedNotifications(userId: string, ids: ReturnType<typeof fixtureIds>) {
   await db.execute(sql`
     INSERT INTO notifications (id, user_id, type, payload, read_at, created_at) VALUES
-      (${ids.n1}, ${userId}, 'MATCH', ${JSON.stringify({ matchId: ids.n1 })}::jsonb,
+      (${ids.n1}, ${userId}, 'MATCH', ${jsonParam({ matchId: ids.n1 })},
        NULL, ${new Date(SAME_MOMENT)}),
       (${ids.n2}, ${userId}, 'MATCH',
-       ${JSON.stringify({ matchId: ids.n2, listingId: ids.n3, wishId: ids.nOther })}::jsonb,
+       ${jsonParam({ matchId: ids.n2, listingId: ids.n3, wishId: ids.nOther })},
        NULL, ${new Date(SAME_MOMENT)}),
-      (${ids.n3}, ${userId}, 'MATCH', ${JSON.stringify({})}::jsonb,
+      (${ids.n3}, ${userId}, 'MATCH', ${jsonParam({})},
        ${new Date('2026-09-12T09:30:00Z')}, ${new Date('2026-09-12T09:00:00Z')})
   `)
 }
@@ -291,6 +298,67 @@ describe('notifications API wiring (#23)', () => {
       .where(eq(notifications.id, ids.n2))
     expect(dirtyTypeRow?.readAt).toBeNull()
     expect(await unreadCount(me.cookie)).toBe(1)
+  })
+
+  test('payload 形状 / 非有限时间戳同样不占 LIMIT，且角标等于列表里未读条数', async () => {
+    const me = await registerUser('10')
+    // 逐个写死 id（不走 fixtureIds）：这个用例要摆 8 种形状，逐行可读比模板重要。
+    const v1 = '01990007-0000-7000-8000-0000000000b1' // 正常，未读
+    const v2 = '01990007-0000-7000-8000-0000000000b2' // 正常（payload 为空对象），未读
+    const dJsonbString = '01990007-0000-7000-8000-0000000000c1' // payload 是 jsonb 字符串
+    const dNumber = '01990007-0000-7000-8000-0000000000c2' // matchId 是数字
+    const dExplicitNull = '01990007-0000-7000-8000-0000000000c3' // matchId 显式 null
+    const dReadInfinity = '01990007-0000-7000-8000-0000000000c4' // read_at 非有限
+    const dCreatedInfinity = '01990007-0000-7000-8000-0000000000c5' // created_at 非有限
+    const vExtraKeys = '01990007-0000-7000-8000-0000000000b3' // 合法但带未知键，未读
+
+    // 脏行的 created_at **都比 v2 新**：如果只在 JS 侧丢行，它们会先占满 LIMIT 名额，
+    // 于是 `?limit=1` 返回空页、角标比列表可展示的未读多几个 —— 这正是要钉住的形状。
+    await db.execute(sql`
+      INSERT INTO notifications (id, user_id, type, payload, read_at, created_at) VALUES
+        (${v1}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 'a' })}, NULL,
+         ${new Date('2026-09-12T12:00:00Z')}),
+        (${v2}, ${me.userId}, 'MATCH', ${jsonParam({})}, NULL,
+         ${new Date('2026-09-12T11:00:00Z')}),
+        (${dJsonbString}, ${me.userId}, 'MATCH', ${jsonParam('jsonb-string')}, NULL,
+         ${new Date('2026-09-12T10:05:00Z')}),
+        (${dNumber}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 5 })}, NULL,
+         ${new Date('2026-09-12T10:04:00Z')}),
+        (${dExplicitNull}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: null })}, NULL,
+         ${new Date('2026-09-12T10:03:00Z')}),
+        (${dReadInfinity}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 'x' })},
+         'infinity'::timestamptz, ${new Date('2026-09-12T10:02:00Z')}),
+        (${dCreatedInfinity}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 'x' })},
+         NULL, 'infinity'::timestamptz),
+        (${vExtraKeys}, ${me.userId}, 'MATCH',
+         ${jsonParam({ matchId: 'z', extra: true, nested: { a: 1 } })}, NULL,
+         ${new Date('2026-09-12T13:00:00Z')})
+    `)
+
+    // 谓词在 SQL 层，LIMIT 只数可展示的行：`?limit=1` 给出最新的**可展示**通知，
+    // 而不是被五行脏数据顶掉的空页。vExtraKeys 的 payload 带未知键，属合法（zod 会 strip），
+    // 所以谓词不该比契约更严、必须把它算进来。
+    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([vExtraKeys])
+    expect((await list(me.cookie, '?limit=2')).items.map((item) => item.id)).toEqual([
+      vExtraKeys,
+      v1,
+    ])
+
+    // 角标 == 列表里 `readAt === null` 的条数（同一个谓词、同一套未读定义）。
+    const items = (await list(me.cookie)).items
+    expect(items.map((item) => item.id)).toEqual([vExtraKeys, v1, v2])
+    expect(items[0]?.payload).toEqual({ matchId: 'z' }) // 未知键被 strip，已知键原样
+    expect(await unreadCount(me.cookie)).toBe(items.filter((item) => item.readAt === null).length)
+    expect(await unreadCount(me.cookie)).toBe(3) // 5 行脏数据一行都不计
+
+    // payload 形状不可表示的行：标记已读 404 且**零写入**。
+    expect((await markRead(dJsonbString, me.cookie)).status).toBe(404)
+    const [dirtyPayloadRow] = await db
+      .select({ readAt: notifications.readAt })
+      .from(notifications)
+      .where(eq(notifications.id, dJsonbString))
+    expect(dirtyPayloadRow?.readAt).toBeNull()
+    expect(await unreadCount(me.cookie)).toBe(3)
   })
 
   test('非法 uuid 与不存在的 id 都是 404，不打到 PG 变 500', async () => {
