@@ -5,8 +5,8 @@ import { WISH_ROUTES } from './routes'
  * 契约里的路径必须是**根级**、不带 `/api` 前缀。
  *
  * 依据 docs/architecture.md：「Web 一律写相对路径 `/api/...`；Vite 在开发时代理到 API 并
- * **去掉 `/api` 前缀**，因此 API 自身路由保持根级（`/health`）」。前端 `apiRequest` 也只接受
- * 不含 `/api` 的路径并自行拼前缀（apps/web/src/lib/api-client.ts）。
+ * **去掉 `/api` 前缀**，因此 API 自身路由保持根级（`/health`）」。Web 侧由 `apiRequest`
+ * 负责拼 `/api` 前缀（apps/web/src/lib/api-client.ts）——那是调用方约定，它本身不做校验。
  *
  * 回归来源：原值写成 `/api/wishes` 时，浏览器按约定请求 `/api/wishes`，经代理被改写成
  * `/wishes`，而 API 只服务 `/api/wishes` → 404，前端永远拿不到真实数据（#41 / #42）。

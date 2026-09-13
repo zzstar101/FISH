@@ -75,7 +75,11 @@ CREATE INDEX wishes_keyword_trgm ON wishes USING gin (keyword gin_trgm_ops);  --
 
 ---
 
-## 3. API 设计（v1，全部走 `/api` 前缀）
+## 3. API 设计（v1）
+
+> 下表是 **API 侧路径（根级）**。Web 侧写相对路径 `/api` + 该路径，由 Vite 代理去掉 `/api`
+> 前缀后转发（`docs/architecture.md`；契约常量见 `packages/contracts/src/wishes/routes.ts`）。
+> 例：`apiRequest(WISH_ROUTES.base)` → 浏览器 `/api/wishes` → API `/wishes`。
 
 | Method | Path | 说明 | 鉴权 |
 |---|---|---|---|
@@ -88,7 +92,8 @@ CREATE INDEX wishes_keyword_trgm ON wishes USING gin (keyword gin_trgm_ops);  --
 | GET | `/wishes/pool` | 大家想要（匿名聚合需求池） | 登录（全站可用） |
 
 设计要点：
-- **Router 自包含**：`apps/api/src/modules/wishes/router.ts` 导出独立 Hono router，由 Dev A 在 `app.ts` 统一挂载（EPIC 规则 6），我不改根入口。
+- **Router 自包含**：`apps/api/src/modules/wishes/router.ts` 导出独立 Hono router，由 Dev A 在 `app.ts` 统一挂载（EPIC 规则 6）。
+  > 例外（2026-09-13）：挂载点原写成 `/api/wishes`，与上述根级约定冲突（经代理后 404，见 #41）。修正它必须动 `app.ts` 的那一行，已按 CONTRIBUTING §4 在 **PR #44** 声明并请 @zzstar101 落地 —— 即本条「我不改根入口」在本次路径修正上是有意打破的例外。
 - **状态机**：只有 `ACTIVE → CLOSED`、`ACTIVE → FULFILLED` 两条边；对非 ACTIVE 愿望做编辑/再关闭返回 409。CLOSED/FULFILLED 为终态（P0 不做重新激活）。
 - **鉴权**：所有写操作在 service 层二次校验 `wish.user_id === ctx.userId`，不信任路由参数。
 - **幂等**：POST /wishes 前端防重复提交 + 服务端对同用户同 keyword+category 的 5 秒窗口去重（软幂等）；close/fulfill 为状态幂等（重复调用返回当前状态而非报错）。
