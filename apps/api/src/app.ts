@@ -127,11 +127,9 @@ export function createApp(env: ServerEnv) {
 
   // 愿望模块（#7）：先过认证守卫，再进 router；router 的 getUserId 只读守卫写入的可信 context，
   // 不读请求头。创建/重放愿望时用真实 DB 队列写 MATCH_WISH job（消费方归 #8/#13，与本 Issue 解耦）。
-  // 挂载点保持**根级**（与 listings / matching / chat 一致）：Web 侧写 `/api/...`，
-  // Vite 代理去掉前缀后才落到这里；写成 `/api/wishes` 会让请求经代理后变成 `/wishes` 而 404。
-  app.use('/wishes/*', auth.requireAuth)
+  app.use('/api/wishes/*', auth.requireAuth)
   app.route(
-    '/wishes',
+    '/api/wishes',
     createWishesRouterFromDb(db, {
       getUserId: (c) => c.get('userId'),
       matchQueue: createDbWishMatchQueue(db),
