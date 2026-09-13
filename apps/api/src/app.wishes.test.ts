@@ -81,7 +81,7 @@ function jobsRows(result: unknown): Record<string, unknown>[] {
 
 async function createWish(cookie: string): Promise<WishDto> {
   const response = await app.request(
-    '/api/wishes',
+    '/wishes',
     post(
       {
         keyword: '机械键盘',
@@ -99,13 +99,13 @@ async function createWish(cookie: string): Promise<WishDto> {
 
 describe('wishes API wiring (#7)', () => {
   test('unauthenticated requests are rejected instead of reaching the router', async () => {
-    const response = await app.request('/api/wishes')
+    const response = await app.request('/wishes')
 
     expect(response.status).toBe(401)
     expect(await response.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
 
     // 身份只认会话：伪造请求头不得被信任
-    const forged = await app.request('/api/wishes', {
+    const forged = await app.request('/wishes', {
       headers: { 'x-user-id': '00000000-0000-0000-0000-000000000000' },
     })
     expect(forged.status).toBe(401)
@@ -135,26 +135,26 @@ describe('wishes API wiring (#7)', () => {
     const wish = await createWish(ownerCookie)
 
     expect(
-      (await app.request(`/api/wishes/${wish.id}`, { headers: { cookie: otherCookie } })).status,
+      (await app.request(`/wishes/${wish.id}`, { headers: { cookie: otherCookie } })).status,
     ).toBe(403)
     expect(
       (
-        await app.request(`/api/wishes/${wish.id}`, {
+        await app.request(`/wishes/${wish.id}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json', cookie: otherCookie },
           body: JSON.stringify({ keyword: '被改写的愿望' }),
         })
       ).status,
     ).toBe(403)
-    expect(
-      (await app.request(`/api/wishes/${wish.id}/fulfill`, post({}, otherCookie))).status,
-    ).toBe(403)
+    expect((await app.request(`/wishes/${wish.id}/fulfill`, post({}, otherCookie))).status).toBe(
+      403,
+    )
 
-    const detail = await app.request(`/api/wishes/${wish.id}`, { headers: { cookie: ownerCookie } })
+    const detail = await app.request(`/wishes/${wish.id}`, { headers: { cookie: ownerCookie } })
     expect(detail.status).toBe(200)
     expect(((await detail.json()) as WishDto).userId).toBe(wish.userId)
 
-    const patch = await app.request(`/api/wishes/${wish.id}`, {
+    const patch = await app.request(`/wishes/${wish.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', cookie: ownerCookie },
       body: JSON.stringify({ budgetMaxCents: 30000 }),
@@ -162,18 +162,20 @@ describe('wishes API wiring (#7)', () => {
     expect(patch.status).toBe(200)
     expect(((await patch.json()) as WishDto).budgetMaxCents).toBe(30000)
 
-    const close = await app.request(`/api/wishes/${wish.id}/close`, post({}, ownerCookie))
+    const close = await app.request(`/wishes/${wish.id}/close`, post({}, ownerCookie))
     expect(close.status).toBe(200)
     expect(((await close.json()) as WishDto).status).toBe('CLOSED')
 
-    const list = await app.request('/api/wishes', { headers: { cookie: ownerCookie } })
+    const list = await app.request('/wishes', { headers: { cookie: ownerCookie } })
     expect(list.status).toBe(200)
     expect(await list.json()).toMatchObject({ total: 1 })
   })
 
-  // #43：`/wishes` 与 `/api/wishes` 是同一个 router 的两个挂载点。这里给新路径补 router 级覆盖——
-  // 否则它只有需要 Docker 的 core-smoke 盖到，CI 拦不住。
-  test('root-level /wishes and the /api/wishes alias reach the same router', async () => {
+  // #43：`/wishes` 是本域唯一的挂载点（与 listings / matches 同为根级）。
+  // #52 曾并存一个 `/api/wishes` 过渡别名（当时 `WISH_ROUTES.base` 还是浏览器路径语义），
+  // 随 `WISH_ROUTES` 收敛到根级（#53）已删除。给正典路径留 router 级覆盖：
+  // 否则它只有需要 Docker 的 core-smoke 盖得到，CI 拦不住。
+  test('wishes router is mounted at the root-level /wishes path', async () => {
     const cookie = await registerUser('04')
 
     const created = await app.request(
@@ -193,15 +195,16 @@ describe('wishes API wiring (#7)', () => {
     const wish = (await created.json()) as WishDto
     expect(wish.keyword).toBe('网络摄像头')
 
-    // 别名读到同一份数据：同一个 store / service（而不是两份各自缓存的需求池）。
-    const viaAlias = await app.request(`/api/wishes/${wish.id}`, { headers: { cookie } })
-    expect(viaAlias.status).toBe(200)
-    expect(((await viaAlias.json()) as WishDto).id).toBe(wish.id)
+    // 读路径也在同一个 router 上（同一个 store / service，而不是两份各自缓存的需求池）。
+    const detail = await app.request(`/wishes/${wish.id}`, { headers: { cookie } })
+    expect(detail.status).toBe(200)
+    expect(((await detail.json()) as WishDto).id).toBe(wish.id)
 
-    // 两个路径都真的挂上了（未挂载会是 404，而不是认证失败）。
-    for (const path of ['/wishes', '/api/wishes']) {
-      expect((await app.request(path)).status).toBe(401)
-    }
+    // 未挂载会是 404，而不是认证失败。
+    expect((await app.request('/wishes')).status).toBe(401)
+
+    // 过渡别名已删除：重新引入会立刻撞上这条断言（它当初只为 #53 的迁移期存在）。
+    expect((await app.request('/api/wishes')).status).toBe(404)
   })
 
   // 放在最后：需求池服务内有 60s 缓存，必须是本文件第一次、且数据已就绪时调用
@@ -212,7 +215,7 @@ describe('wishes API wiring (#7)', () => {
     }
     const cookie = await registerUser('09')
 
-    const response = await app.request('/api/wishes/pool', { headers: { cookie } })
+    const response = await app.request('/wishes/pool', { headers: { cookie } })
     expect(response.status).toBe(200)
 
     const raw = await response.text()
