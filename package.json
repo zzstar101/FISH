@@ -21,6 +21,7 @@
     "format": "biome format --write .",
     "test": "bun test",
     "ws:smoke": "bun run scripts/ws-smoke.ts",
+    "core:smoke": "bun run apps/api/scripts/core-smoke.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:generate": "bun run --filter '@fish/db' generate",

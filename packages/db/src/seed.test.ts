@@ -36,7 +36,7 @@ const scratchUrl = (() => {
 /** 只是拿它当"建/删库"的执行通道，所有断言都在 scratch 库上。 */
 const admin = createDb(databaseUrl)
 
-test('seed 可生成覆盖全部业务表的基础数据，且演示账号可用密码登录', async () => {
+test('seed 可生成基础数据（matches/notifications 留空，由 worker 产出），且演示账号可登录', async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   const scratch = createDb(scratchUrl)
 
@@ -65,11 +65,13 @@ test('seed 可生成覆盖全部业务表的基础数据，且演示账号可用
       listings: 6,
       listingImages: 4,
       wishes: 2,
-      matches: 1,
+      // `matches` / `notifications` 由 worker 用真实打分产出（#43）：seed 只投一条
+      // PENDING 的 MATCH_LISTING，不再预写结果，否则 seed 会成为引擎之外的第二份真相。
+      matches: 0,
       conversations: 1,
       messages: 2,
       transactions: 2,
-      notifications: 1,
+      notifications: 0,
       jobs: 1,
     })
 
@@ -88,16 +90,23 @@ test('seed 可生成覆盖全部业务表的基础数据，且演示账号可用
     // 用 `insert().values({ payload: {...} })` 写时 drizzle + bun-sql 会 stringify 两次，
     // 落库成为「JSON 字符串套 JSON」：drizzle 读回正常，但 `payload->>'x'` 在 SQL 层恒为 NULL，
     // #8 的 worker 只要按 payload 查就永远匹配不到。修复方式是 `jsonParam()`（见 src/json.ts）。
+    //
+    // 这里现在只剩 jobs 一条（match / notification 改由 worker 产出），但断言方法不变：
+    // 只要能按 `payload->>'listingId'` 读到字符串，就说明种子里那条 job 是可被消费的。
     const payloadRows = await scratch.execute<{ kind: string; ref: string | null }>(
-      sql`select jsonb_typeof(payload) as kind, payload->>'listingId' as ref from jobs
-          union all
-          select jsonb_typeof(payload), payload->>'matchId' from notifications`,
+      sql`select jsonb_typeof(payload) as kind, payload->>'listingId' as ref from jobs`,
     )
-    expect([...payloadRows]).toHaveLength(2)
+    expect([...payloadRows]).toHaveLength(1)
     for (const row of payloadRows) {
       expect(row.kind).toBe('object')
       expect(typeof row.ref).toBe('string')
     }
+
+    // 种子的 job 必须是 PENDING：demo 的"愿望成真"由 worker 真实算出来（#43）。
+    const seededJobs = await scratch
+      .select({ status: jobs.status, attempts: jobs.attempts })
+      .from(jobs)
+    expect(seededJobs).toEqual([{ status: 'PENDING', attempts: 0 }])
   } finally {
     await scratch.$client.close()
     await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)

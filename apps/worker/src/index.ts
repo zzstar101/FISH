@@ -22,6 +22,15 @@ const queue = createJobQueue(db, {
   isFatalError: (error) => error instanceof InvalidJobPayloadError,
 })
 
+// 启动时回收上一次进程留下的僵死领取（`status = 'RUNNING'`）：`kill -9` 会让正在执行的 job
+// 永远停在 RUNNING，没有这一步它不会再有第二次机会。
+const recovered = await queue.recoverStaleClaims()
+if (recovered.requeued > 0 || recovered.failed > 0) {
+  console.log(
+    `[worker] 回收僵死 job：${recovered.requeued} 条重新入队，${recovered.failed} 条超上限置 FAILED`,
+  )
+}
+
 console.log(`[worker] started (poll interval ${POLL_INTERVAL_MS}ms)`)
 
 for (;;) {

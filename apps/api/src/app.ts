@@ -127,14 +127,23 @@ export function createApp(env: ServerEnv) {
 
   // 愿望模块（#7）：先过认证守卫，再进 router；router 的 getUserId 只读守卫写入的可信 context，
   // 不读请求头。创建/重放愿望时用真实 DB 队列写 MATCH_WISH job（消费方归 #8/#13，与本 Issue 解耦）。
+  //
+  // 路径（#43）：本仓的**约定**是“API 路由保持根级，Web 写 `/api` 前缀、Vite 代理掉前缀”
+  // （`docs/architecture.md` §5.1，listings / matches 都这麽做），而愿望域把前缀写进了
+  // `WISH_ROUTES.base`，所以这里两个挂载点并存：
+  // - `/wishes` 按仓约定（`apps/api/src/app.wishes.test.ts` 两个路径都有用例）；
+  // - `/api/wishes` 是 `WISH_ROUTES.base` 的现值，必须保留——契约由愿望域 Owner（Coast-87）
+  //   冻结，在对方把 base 改为 `/wishes` 之前不能单方面当它不存在。
+  // 同一个 router 实例挂两次，不能各建一份：service 里有一个愿望池缓存，两份会各缓一份。
+  // 待 `WISH_ROUTES.base` 改为 `/wishes` 后删掉别名（已作为 finding 提给 Coast-87）。
+  const wishes = createWishesRouterFromDb(db, {
+    getUserId: (c) => c.get('userId'),
+    matchQueue: createDbWishMatchQueue(db),
+  })
+  app.use('/wishes/*', auth.requireAuth)
+  app.route('/wishes', wishes)
   app.use('/api/wishes/*', auth.requireAuth)
-  app.route(
-    '/api/wishes',
-    createWishesRouterFromDb(db, {
-      getUserId: (c) => c.get('userId'),
-      matchQueue: createDbWishMatchQueue(db),
-    }),
-  )
+  app.route('/api/wishes', wishes)
 
   // 聊天模块（#9）：会话与消息两条 router 并列挂到 /conversations（messages 只提供
   // /:id/messages 两个端点）。全部要求登录，整条挂 requireAuth；storage 复用同一实例，

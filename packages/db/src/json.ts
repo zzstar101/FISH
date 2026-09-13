@@ -17,7 +17,8 @@ import { type SQL, sql } from 'drizzle-orm'
  * values({ payload: jsonParam(obj) })   → jsonb_typeof = 'object'，payload->>'listingId' = '...'
  * ```
  *
- * 回归用例：`seed.test.ts` 断言 seed 写出的 jobs / notifications payload 是 object 且可按 key 取值。
+ * 回归用例：按 `payload->>'...'` 在 SQL 层过滤的路径都守着它——`apps/worker/.../engine.test.ts`
+ * 用 `payload->>'wishId'` 断言通知；`seed.test.ts` 断言 seed 写出的 jobs payload 是 object。
  */
 export function jsonParam(value: unknown): SQL {
   return sql`${value}::jsonb`

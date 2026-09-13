@@ -67,6 +67,7 @@ bun run dev:web      # Web   → http://localhost:5173
 # 6. 验收
 open http://localhost:5173      # 页面应显示 status: ok / db: up
 bun run ws:smoke                # 应输出 [ws-smoke] ok
+bun run core:smoke              # 核心主链端到端冒烟：应输出 [core-smoke] ok
 ```
 
 ## 演示账号（仅本地）
@@ -81,6 +82,13 @@ bun run ws:smoke                # 应输出 [ws-smoke] ok
 
 登录接口与契约见 [issue #3](https://github.com/zzstar101/FISH/issues/3)（`POST /auth/login`，学号即账号）。
 
+seed 会为 demo 商品 `罗技 K380 机械键盘` 投一条 `PENDING` 的 `MATCH_LISTING`，但**不预写匹配结果**：
+“愿望成真”由 Worker 用真实打分产出（K380 ¥160 ↔ `机械键盘 ≤ ¥200` → 100 分）。因此要看到 **API 层**
+`/matches` 的匹配，必须先启动 `bun run dev:worker`。（前端页面目前仍走 Mock——`apps/web/src/features/wish/queries.ts`。）
+
+seed 里 `listing_images.object_key` 是占位键（MinIO 中不存在），商品图会 404；真实图片上传链路
+（presign → PUT → 公开读）由 `bun run core:smoke` 验证。
+
 ## 常用命令
 
 | 命令 | 说明 |
@@ -92,6 +100,7 @@ bun run ws:smoke                # 应输出 [ws-smoke] ok
 | `bun test` | 全仓测试（`packages/db` 的集成测试需要 Postgres 已启动并完成 `db:migrate`） |
 | `bun run build` | 构建 |
 | `bun run ws:smoke` | WebSocket 连通性冒烟 |
+| `bun run core:smoke` | 核心主链端到端冒烟（自建 scratch 库 + 真实 API/Worker/MinIO；`-- --runs=5` 连跑 5 轮） |
 | `bun run db:up` / `db:down` | 启动 / 停止本地依赖 |
 | `bun run db:generate` / `db:migrate` / `db:studio` | Drizzle 迁移与调试 |
 | `bun run db:seed` | 写入基础演示数据（**会先清空业务表**，仅允许本地数据库） |
