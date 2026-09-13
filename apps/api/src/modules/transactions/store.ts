@@ -33,8 +33,28 @@ export type ConversationLookup = { kind: 'not-found' } | { kind: 'ok'; brief: Tx
 /** 接受的结果细分：条件更新失败 = 商品已非 ACTIVE（并发输掉或状态漂移）。 */
 export type AcceptResult = { kind: 'created'; row: TransactionRow } | { kind: 'listing-not-active' }
 
+/** DTO 内嵌商品摘要的 DB 投影；cover 只给 objectKey，URL 由 service 经 MediaStorage 拼。 */
+export interface TxListingBrief {
+  id: string
+  title: string
+  priceCents: number
+  status: string
+  coverObjectKey: string | null
+}
+
+/** DTO 内嵌对方用户摘要的 DB 投影。 */
+export interface TxUserBrief {
+  id: string
+  nickname: string
+  avatarUrl: string | null
+}
+
 export interface TransactionStore {
   findConversation(conversationId: string, viewerId: string): Promise<ConversationLookup>
+  /** 一批交易的 listing 摘要（每个商品取最小 sort_order 一张封面）；查过但无图显式 null。 */
+  listingBriefs(listingIds: string[]): Promise<Map<string, TxListingBrief>>
+  /** 一批交易对方用户的摘要（uuid 主键查询，结果必在；缺失键 = 查过但不存在）。 */
+  userBriefs(userIds: string[]): Promise<Map<string, TxUserBrief>>
   /**
    * 卖家接受并创建交易（契约：唯一建行端点）。原子性 =
    * 条件更新 `UPDATE listings SET status='RESERVED' WHERE id = ? AND status='ACTIVE'`
@@ -130,6 +150,56 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           listingStatus: row.listing_status as string,
         },
       }
+    },
+
+    async listingBriefs(listingIds) {
+      const map = new Map<string, TxListingBrief>()
+      if (listingIds.length === 0) return map
+      const result = await db.execute(sql`
+        SELECT l.id, l.title, l.price_cents, l.status::text AS status,
+               li.object_key AS cover_object_key
+        FROM listings l
+        LEFT JOIN LATERAL (
+          SELECT object_key FROM listing_images
+          WHERE listing_id = l.id
+          ORDER BY sort_order ASC
+          LIMIT 1
+        ) li ON TRUE
+        WHERE l.id IN (${sql.join(
+          listingIds.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      `)
+      for (const row of rowsOf(result)) {
+        map.set(row.id as string, {
+          id: row.id as string,
+          title: row.title as string,
+          priceCents: row.price_cents as number,
+          status: row.status as string,
+          coverObjectKey: (row.cover_object_key as string | null) ?? null,
+        })
+      }
+      return map
+    },
+
+    async userBriefs(userIds) {
+      const map = new Map<string, TxUserBrief>()
+      if (userIds.length === 0) return map
+      const result = await db.execute(sql`
+        SELECT id, nickname, avatar_url FROM users
+        WHERE id IN (${sql.join(
+          userIds.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      `)
+      for (const row of rowsOf(result)) {
+        map.set(row.id as string, {
+          id: row.id as string,
+          nickname: row.nickname as string,
+          avatarUrl: (row.avatar_url as string | null) ?? null,
+        })
+      }
+      return map
     },
 
     async accept(brief, amountCents) {

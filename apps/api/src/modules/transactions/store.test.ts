@@ -234,4 +234,22 @@ describe('transactions store (integration)', () => {
       new Date(row.created_at).getTime(),
     )
   })
+
+  test('listingBriefs returns title/price/status and cover key; userBriefs returns nickname/avatar', async () => {
+    // 无图商品封面显式 null（"查过、没有"，不是"没查"）
+    const listings = await store.listingBriefs([listingA, listingB])
+    expect(listings.get(listingA)).toMatchObject({
+      id: listingA,
+      title: '测试商品',
+      priceCents: 16000,
+      coverObjectKey: null,
+    })
+    const users = await store.userBriefs([buyer1, seller])
+    expect(users.get(buyer1)?.nickname).toBe('交易测试')
+    expect(users.get(seller)?.avatarUrl).toBeNull()
+    // 空入参与缺失键
+    expect((await store.listingBriefs([])).size).toBe(0)
+    expect((await store.userBriefs([])).size).toBe(0)
+    expect(users.has('01990000-0000-7000-8000-0000000000ff')).toBe(false)
+  })
 })

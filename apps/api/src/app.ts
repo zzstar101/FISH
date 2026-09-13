@@ -172,6 +172,7 @@ export function createApp(env: ServerEnv) {
       service: createTransactionService({
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
+        storage,
         onSystemMessage: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',

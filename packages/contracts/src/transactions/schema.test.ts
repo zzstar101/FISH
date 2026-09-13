@@ -96,6 +96,18 @@ describe('transactionDtoSchema', () => {
     buyerId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
     sellerId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
     role: 'buyer',
+    listing: {
+      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      title: 'K380 键盘',
+      priceCents: 16000,
+      status: 'RESERVED',
+      coverUrl: null,
+    },
+    counterpart: {
+      id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      nickname: '卖家小王',
+      avatarUrl: null,
+    },
     amountCents: 16000,
     createdAt: '2026-09-12T10:00:00.000Z',
     updatedAt: '2026-09-12T10:00:00.000Z',
@@ -113,6 +125,8 @@ describe('transactionDtoSchema', () => {
     const parsed = transactionDtoSchema.parse(dto)
     expect(parsed.status).toBe('PENDING_MEETUP')
     expect(parsed.completedAt).toBeNull()
+    expect(parsed.listing.title).toBe('K380 键盘')
+    expect(parsed.counterpart.nickname).toBe('卖家小王')
   })
 
   test('parses a completed transaction with all timestamps', () => {
@@ -170,6 +184,21 @@ describe('transactionDtoSchema', () => {
       cancelledAt: null,
     }
     expect(transactionDtoSchema.safeParse(dto).success).toBe(false)
+  })
+
+  test('rejects an invalid embedded listing status', () => {
+    const dto = {
+      ...base,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: null,
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+    }
+    expect(
+      transactionDtoSchema.safeParse({ ...dto, listing: { ...dto.listing, status: 'GONE' } })
+        .success,
+    ).toBe(false)
   })
 })
 

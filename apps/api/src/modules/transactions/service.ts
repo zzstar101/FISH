@@ -13,7 +13,8 @@ import {
 import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
-import type { TransactionRow, TransactionStore } from './store'
+import type { MediaStorage } from '../uploads/storage'
+import type { TransactionRow, TransactionStore, TxListingBrief, TxUserBrief } from './store'
 
 export class TransactionServiceError extends Error {
   constructor(
@@ -41,13 +42,27 @@ function systemEventContent(event: Parameters<typeof transactionSystemEventSchem
   return JSON.stringify(transactionSystemEventSchema.parse(event))
 }
 
-function toTransactionDto(row: TransactionRow, viewerId: string): TransactionDto {
+function toTransactionDto(
+  row: TransactionRow,
+  viewerId: string,
+  listing: TxListingBrief,
+  counterpart: TxUserBrief,
+  storage: MediaStorage,
+): TransactionDto {
   return transactionDtoSchema.parse({
     id: row.id,
     listingId: row.listing_id,
     buyerId: row.buyer_id,
     sellerId: row.seller_id,
     role: row.buyer_id === viewerId ? 'buyer' : 'seller',
+    listing: {
+      id: listing.id,
+      title: listing.title,
+      priceCents: listing.priceCents,
+      status: listing.status,
+      coverUrl: listing.coverObjectKey ? storage.publicUrl(listing.coverObjectKey) : null,
+    },
+    counterpart,
     amountCents: row.amount_cents,
     status: row.status,
     buyerConfirmedAt: toIso(row.buyer_confirmed_at),
@@ -57,6 +72,33 @@ function toTransactionDto(row: TransactionRow, viewerId: string): TransactionDto
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   })
+}
+
+/**
+ * 批量组装：两次 IN 查询取全部 listing / 对方用户摘要（coverObjectKeys 先例），
+ * 列表页不做逐行回查。会话严格双人，counterpart 由查看者角色二选一。
+ * FK 保证行必然存在；摘要缺失的行按脏数据跳过（#6 决策 C 同口径），不 500。
+ */
+async function toDtos(
+  store: TransactionStore,
+  storage: MediaStorage,
+  rows: TransactionRow[],
+  viewerId: string,
+): Promise<TransactionDto[]> {
+  const counterpartOf = (row: TransactionRow) =>
+    row.buyer_id === viewerId ? row.seller_id : row.buyer_id
+  const [listings, users] = await Promise.all([
+    store.listingBriefs([...new Set(rows.map((row) => row.listing_id))]),
+    store.userBriefs([...new Set(rows.map(counterpartOf))]),
+  ])
+  const dtos: TransactionDto[] = []
+  for (const row of rows) {
+    const listing = listings.get(row.listing_id)
+    const counterpart = users.get(counterpartOf(row))
+    if (!listing || !counterpart) continue
+    dtos.push(toTransactionDto(row, viewerId, listing, counterpart, storage))
+  }
+  return dtos
 }
 
 function toIso(value: Date | string | null): string | null {
@@ -82,11 +124,13 @@ export interface TransactionService {
 export function createTransactionService({
   store,
   messages,
+  storage,
   /** SYSTEM 消息写入后回调（实时推送）；推送失败不得影响响应。 */
   onSystemMessage,
 }: {
   store: TransactionStore
   messages: MessageStore
+  storage: MediaStorage
   onSystemMessage?: TxSideEffect
 }): TransactionService {
   async function writeSystem(
@@ -159,7 +203,12 @@ export function createTransactionService({
         transactionId: result.row.id,
         amountCents: input.amountCents,
       })
-      return toTransactionDto(result.row, userId)
+      // 刚建的行 FK 必然齐备；拿不到摘要属于不可达防御分支，按并发失败口径拒绝。
+      const [dto] = await toDtos(store, storage, [result.row], userId)
+      if (!dto) {
+        throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
+      }
+      return dto
     },
 
     async listTransactions(userId, query) {
@@ -178,7 +227,7 @@ export function createTransactionService({
       const page = hasMore ? rows.slice(0, query.limit) : rows
       const last = page.at(-1) as (TransactionRow & { created_at_cursor?: string }) | undefined
       return transactionListResponseSchema.parse({
-        items: page.map((row) => toTransactionDto(row, userId)),
+        items: await toDtos(store, storage, page, userId),
         nextCursor:
           hasMore && last?.created_at_cursor
             ? encodeCursor({ sortKey: last.created_at_cursor, id: last.id })
@@ -190,7 +239,9 @@ export function createTransactionService({
       if (!isTransactionId(id)) throw notFound() // 畸形 id：404 而不是 PG 的 500
       const row = await store.findById(id)
       if (!row || (row.buyer_id !== userId && row.seller_id !== userId)) throw notFound()
-      return toTransactionDto(row, userId)
+      const [dto] = await toDtos(store, storage, [row], userId)
+      if (!dto) throw notFound()
+      return dto
     },
 
     async confirm(userId, id) {
@@ -204,7 +255,9 @@ export function createTransactionService({
       if (result.kind === 'cancelled') {
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '交易已取消，无法确认')
       }
-      return toTransactionDto(result.row, userId)
+      const [dto] = await toDtos(store, storage, [result.row], userId)
+      if (!dto) throw notFound()
+      return dto
     },
 
     async cancel(userId, id) {
@@ -218,7 +271,9 @@ export function createTransactionService({
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '已完成的交易不可取消')
       }
       if (result.kind !== 'ok') throw notFound()
-      return toTransactionDto(result.row, userId)
+      const [dto] = await toDtos(store, storage, [result.row], userId)
+      if (!dto) throw notFound()
+      return dto
     },
   }
 }

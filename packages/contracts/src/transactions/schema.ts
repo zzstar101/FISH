@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { PriceCentsSchema } from '../listings/schema'
+import { ListingStatusSchema, PriceCentsSchema } from '../listings/schema'
 
 /** Transaction Domain Contract（Issue #11）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -17,6 +17,24 @@ export type TransactionStatus = z.infer<typeof transactionStatusSchema>
 export const transactionRoleSchema = z.enum(['buyer', 'seller'])
 export type TransactionRole = z.infer<typeof transactionRoleSchema>
 
+/** 订单卡内嵌的商品摘要，服务端组装——前端渲染订单列表不必逐行回查商品详情（N+1）。 */
+export const transactionListingSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  priceCents: z.number().int(),
+  status: ListingStatusSchema,
+  coverUrl: z.url().nullable(),
+})
+export type TransactionListing = z.infer<typeof transactionListingSchema>
+
+/** 订单卡内嵌的对方用户摘要，按查看者视角解析：buyer 看到 seller，反之亦然。 */
+export const transactionUserSchema = z.object({
+  id: z.string(),
+  nickname: z.string(),
+  avatarUrl: z.url().nullable(),
+})
+export type TransactionUser = z.infer<typeof transactionUserSchema>
+
 export const transactionDtoSchema = z
   .object({
     id: z.string(),
@@ -24,6 +42,10 @@ export const transactionDtoSchema = z
     buyerId: z.string(),
     sellerId: z.string(),
     role: transactionRoleSchema,
+    /** 订单卡渲染用；amountCents 是议价结果，与挂价 priceCents 各自独立。 */
+    listing: transactionListingSchema,
+    /** 交易对方的用户摘要（查看者视角）。 */
+    counterpart: transactionUserSchema,
     /** 议价结果，不等于 listings.price_cents；0 元送合法（DB CHECK 同源）。 */
     amountCents: z.number().int().nonnegative(),
     status: transactionStatusSchema,

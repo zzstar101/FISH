@@ -45,6 +45,21 @@ class MemoryTxStore implements TransactionStore {
   rows: TransactionRow[] = []
   private seq = 0
 
+  async listingBriefs(listingIds: string[]) {
+    return new Map(
+      listingIds.map((id) => [
+        id,
+        { id, title: 'K380 键盘', priceCents: 16000, status: 'RESERVED', coverObjectKey: null },
+      ]),
+    )
+  }
+
+  async userBriefs(userIds: string[]) {
+    return new Map(
+      userIds.map((id) => [id, { id, nickname: `用户${id.slice(-2)}`, avatarUrl: null }]),
+    )
+  }
+
   async findConversation(conversationId: string, viewerId: string): Promise<ConversationLookup> {
     const lookup = this.conversations.get(conversationId)
     if (lookup?.kind !== 'ok') return { kind: 'not-found' }
@@ -148,10 +163,16 @@ class MemoryTxStore implements TransactionStore {
 async function build() {
   const store = new MemoryTxStore()
   const messages = new MemoryMessageStore()
+  const storage = {
+    presignPut: () => ({ url: '', headers: {}, expiresAt: '' }),
+    stat: async () => null,
+    publicUrl: (key: string) => `https://cdn.test/${key}`,
+  }
   const systemEvents: string[] = []
   const service = createTransactionService({
     store,
     messages,
+    storage,
     onSystemMessage: (_p, message) => systemEvents.push(message.content),
   })
   return { store, service, messages, systemEvents }
@@ -207,6 +228,9 @@ describe('transaction service: propose / reject / accept', () => {
     expect(dto.status).toBe('PENDING_MEETUP')
     expect(dto.role).toBe('seller')
     expect(dto.amountCents).toBe(15000)
+    // DTO 内嵌商品摘要与查看者视角的对方用户（前端订单卡直接渲染，N+1 由服务端消掉）
+    expect(dto.listing).toMatchObject({ id: listingA, title: 'K380 键盘', priceCents: 16000 })
+    expect(dto.counterpart).toMatchObject({ id: buyer })
     const event = JSON.parse(messages.messages[0]?.content ?? '{}')
     expect(event).toEqual({
       type: 'tx.accepted',
