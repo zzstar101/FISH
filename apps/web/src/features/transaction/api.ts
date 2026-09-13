@@ -1,14 +1,9 @@
+import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
-import type {
-  TransactionDto,
-  TransactionRejectInput,
-  TransactionRole,
-  TransactionSystemEvent,
-} from '@fish/contracts/transactions/schema'
+import type { TransactionDto, TransactionRole } from '@fish/contracts/transactions/schema'
 import {
   transactionDtoSchema,
   transactionListResponseSchema,
-  transactionSystemEventSchema,
 } from '@fish/contracts/transactions/schema'
 import { apiRequest } from '../../lib/api-client'
 
@@ -16,8 +11,12 @@ function readTransaction(payload: unknown): TransactionDto {
   return transactionDtoSchema.parse(payload)
 }
 
-function readSystemEvent(payload: unknown): TransactionSystemEvent {
-  return transactionSystemEventSchema.parse(payload)
+/**
+ * 提案/拒绝的响应是**写入会话的 SYSTEM MessageDto**（#11 契约 §路由表），
+ * 不是 tx.* 事件本身——事件编码在 message.content 的 JSON 里。按 MessageDto 校验。
+ */
+function readSystemMessage(payload: unknown) {
+  return messageDtoSchema.parse(payload)
 }
 
 /** 交易列表（买卖合并或按 role 过滤）。取第一页，游标由契约保留。 */
@@ -36,15 +35,12 @@ export async function fetchTransaction(id: string): Promise<TransactionDto> {
  * 买家发起交易确认（第一步，不建交易行）：会话里写入 tx.proposal SYSTEM 消息。
  * 金额随提案带上，P0 用商品挂价（无议价 UI）。
  */
-export async function proposeTransaction(
-  conversationId: string,
-  amountCents: number,
-): Promise<TransactionSystemEvent> {
+export async function proposeTransaction(conversationId: string, amountCents: number) {
   const payload = await apiRequest(TRANSACTION_ROUTES.proposals, {
     method: 'POST',
     body: JSON.stringify({ conversationId, amountCents }),
   })
-  return readSystemEvent(payload)
+  return readSystemMessage(payload)
 }
 
 /**
@@ -63,15 +59,13 @@ export async function acceptTransaction(
   return readTransaction(payload)
 }
 
-/** 卖家拒绝提案：会话里写入 tx.rejected SYSTEM 消息。 */
-export async function rejectTransaction(
-  input: TransactionRejectInput,
-): Promise<TransactionSystemEvent> {
+/** 卖家拒绝提案：会话里写入 tx.rejected SYSTEM 消息（200 MessageDto）。 */
+export async function rejectTransaction(conversationId: string) {
   const payload = await apiRequest(TRANSACTION_ROUTES.reject, {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify({ conversationId }),
   })
-  return readSystemEvent(payload)
+  return readSystemMessage(payload)
 }
 
 /** 双方确认面交（幂等；第二侧确认触发 COMPLETED + listing SOLD）。 */

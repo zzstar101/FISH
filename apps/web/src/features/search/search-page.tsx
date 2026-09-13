@@ -55,6 +55,7 @@ export function SearchPage({ keyword, free = false }: { keyword: string; free?: 
           <Search className="size-[18px] shrink-0 text-ink-3" />
           <Input
             className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-[15px] shadow-none focus-visible:bg-transparent"
+            maxLength={50}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') submit(draft)

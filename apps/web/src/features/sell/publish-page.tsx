@@ -9,7 +9,7 @@ import { Button } from '@fish/ui/button'
 import { Field, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
 import { FormRow, NavBar } from '@fish/ui/nav-bar'
-import { LoadingState } from '@fish/ui/states'
+import { EmptyState, LoadingState } from '@fish/ui/states'
 import { Textarea } from '@fish/ui/textarea'
 import { useNavigate } from '@tanstack/react-router'
 import { Camera, CircleCheck, X } from 'lucide-react'
@@ -57,6 +57,26 @@ export function PublishPage({ editId }: { editId?: string }) {
     )
   }
 
+  // 404（不存在 / 非本人 / 已下架）必须显式给出空态，不能静默降级成一张空表单，
+  // 否则用户填完保存时才发现商品根本编不了。
+  if (editId && existing.isSuccess && existing.data === null) {
+    return (
+      <div className="min-h-dvh bg-bg pt-2">
+        <NavBar onBack={() => window.history.back()} title="编辑闲置" />
+        <EmptyState description="找不到这件闲置,可能已被下架或删除" emoji="🫥" title="无法编辑" />
+      </div>
+    )
+  }
+
+  if (editId && existing.isError) {
+    return (
+      <div className="min-h-dvh bg-bg pt-2">
+        <NavBar onBack={() => window.history.back()} title="编辑闲置" />
+        <EmptyState description="商品加载失败,请返回重试" emoji="🫥" title="无法编辑" />
+      </div>
+    )
+  }
+
   return <PublishForm editId={editId} initial={existing.data ?? null} />
 }
 
@@ -66,6 +86,8 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingDet
   const updateListing = useUpdateListing()
   const editing = Boolean(editId)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  /** 同步提交守卫：上传期间（第一张图传完前）pending 还是 false，按钮挡不住双击。 */
+  const submittingRef = useRef(false)
   const [images, setImages] = useState<PickedImage[]>([])
   const [title, setTitle] = useState(initial?.title ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
@@ -135,12 +157,20 @@ function PublishForm({ editId, initial }: { editId?: string; initial: ListingDet
   }
 
   const submit = async () => {
-    if (!validate() || pending) return
+    if (!validate() || submittingRef.current) return
+    submittingRef.current = true
     setSubmitError('')
     const fail = (error: unknown) => {
       setSubmitError(error instanceof Error ? error.message : '发布失败,请检查网络后重试')
     }
+    try {
+      await doSubmit(fail)
+    } finally {
+      submittingRef.current = false
+    }
+  }
 
+  const doSubmit = async (fail: (error: unknown) => void) => {
     if (editId) {
       // 编辑：契约没有「换图」入口（详情响应不给 objectKey，无法全量替换），
       // objectKeys 整个省略 = 图片保持不变，只改文本字段。

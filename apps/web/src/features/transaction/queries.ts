@@ -45,7 +45,7 @@ export function useAcceptTransaction() {
 }
 
 export function useRejectTransaction() {
-  return useInvalidatingMutation((conversationId: string) => rejectTransaction({ conversationId }))
+  return useInvalidatingMutation((conversationId: string) => rejectTransaction(conversationId))
 }
 
 export function useConfirmTransaction() {

@@ -22,9 +22,17 @@ type RealtimeState = {
   retry: number
   timer: ReturnType<typeof setTimeout> | null
   pingTimer: ReturnType<typeof setInterval> | null
+  /** 主动关闭（登出 / 未登录）时置位：onclose 不得再排程重连。 */
+  intentionallyClosed: boolean
 }
 
-const state: RealtimeState = { socket: null, retry: 0, timer: null, pingTimer: null }
+const state: RealtimeState = {
+  socket: null,
+  retry: 0,
+  timer: null,
+  pingTimer: null,
+  intentionallyClosed: true,
+}
 
 const REALTIME_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${
   window.location.host
@@ -61,7 +69,7 @@ function handleEvent(event: RealtimeServerEvent): void {
 }
 
 function scheduleReconnect(): void {
-  if (state.timer) return
+  if (state.intentionallyClosed || state.timer) return
   const delay = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** state.retry)
   state.retry += 1
   state.timer = setTimeout(() => {
@@ -75,6 +83,7 @@ function connect(): void {
 
   const socket = new WebSocket(REALTIME_URL)
   state.socket = socket
+  state.intentionallyClosed = false
 
   socket.onopen = () => {
     state.retry = 0
@@ -103,6 +112,7 @@ function connect(): void {
 }
 
 function disconnect(): void {
+  state.intentionallyClosed = true
   if (state.timer) clearTimeout(state.timer)
   state.timer = null
   state.retry = 0

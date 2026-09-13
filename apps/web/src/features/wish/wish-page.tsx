@@ -212,7 +212,7 @@ function MyWishCard({ wish, onClose }: { wish: WishDto; onClose: () => void }) {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13px] leading-snug">{match.listing.title}</p>
                     <p className="mt-0.5 truncate text-ink-3 text-[11px]">
-                      {formatRelativeTimeAt(match.createdAt)}发布
+                      {formatRelativeTimeAt(match.listing.createdAt)}发布
                     </p>
                   </div>
                   <div className="shrink-0 text-right">

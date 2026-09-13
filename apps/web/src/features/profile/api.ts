@@ -1,10 +1,9 @@
 import type { Me } from '@fish/contracts/auth/user'
+import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import { ListingFeedResponseSchema } from '@fish/contracts/listings/schema'
 import { PROFILE_ROUTES } from '@fish/contracts/profile/routes'
 import { type ProfileResponse, profileResponseSchema } from '@fish/contracts/profile/schema'
-import type { TransactionDto } from '@fish/contracts/transactions/schema'
-import { transactionListResponseSchema } from '@fish/contracts/transactions/schema'
 import { apiRequest } from '../../lib/api-client'
 
 /** 当前登录用户的聚合视图（#12 契约：user + stats + listings/wishes/transactions）。 */
@@ -40,23 +39,15 @@ export async function fetchProfileSummary(): Promise<ProfileSummary> {
   }
 }
 
-/** 我的交易（/orders 页）。 */
-export async function fetchMyTransactions(role?: 'buyer' | 'seller'): Promise<TransactionDto[]> {
-  const query = new URLSearchParams({ limit: '50' })
-  if (role) query.set('role', role)
-  const payload = await apiRequest(`/transactions?${query.toString()}`)
-  return transactionListResponseSchema.parse(payload).items
-}
-
 export type MyListingLists = { all: ListingCard[]; active: ListingCard[]; sold: ListingCard[] }
 
 /** 「我发布的 / 在售 / 我卖出的」分页数据：走 #6 的 sellerId 读路径（本人视角含非 ACTIVE）。 */
 export async function fetchMyListingLists(meId: string): Promise<MyListingLists> {
   const query = new URLSearchParams({ sellerId: meId, limit: '50' })
   const [all, active, sold] = await Promise.all([
-    apiRequest(`/listings?${query.toString()}`),
-    apiRequest(`/listings?${query.toString()}&status=ACTIVE`),
-    apiRequest(`/listings?${query.toString()}&status=SOLD`),
+    apiRequest(`${LISTING_ROUTES.base}?${query.toString()}`),
+    apiRequest(`${LISTING_ROUTES.base}?${query.toString()}&status=ACTIVE`),
+    apiRequest(`${LISTING_ROUTES.base}?${query.toString()}&status=SOLD`),
   ])
   return {
     all: ListingFeedResponseSchema.parse(all).items,

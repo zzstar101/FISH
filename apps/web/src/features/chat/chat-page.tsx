@@ -1,12 +1,13 @@
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
-import { EmptyState, LoadingState } from '@fish/ui/states'
+import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import { ChevronLeft, Send, User } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
+import { ApiError } from '../../lib/api-client'
 import { formatClockAt, formatMessageDayAt, formatPrice } from '../../lib/format'
 import { useAuth } from '../auth/auth-provider'
 import {
@@ -37,6 +38,8 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
   const accept = useAcceptTransaction()
   const reject = useRejectTransaction()
   const [draft, setDraft] = useState('')
+  /** 交易动作的行内错误（409 LISTING_NOT_ACTIVE 等），渲染在商品卡下。 */
+  const [actionError, setActionError] = useState('')
 
   // 打开会话即标记已读（服务端推进 last_read_at，未读角标随之归零）。
   // mutate 引用稳定，effect 只在进入会话时执行一次。
@@ -54,6 +57,16 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
   }
 
   const item = conversations.data?.find((conversation) => conversation.id === conversationId)
+  // 新建会话后立即跳转时列表缓存还没有这条会话：正在拉取就先给 loading，
+  // 拉完仍没有才是真的「不存在」（会话列表是分页首屏，深链旧会话同理）。
+  if (!item && conversations.isFetching) {
+    return (
+      <div className="min-h-dvh bg-bg">
+        <ChatHeader title="会话" />
+        <LoadingState />
+      </div>
+    )
+  }
   if (conversations.isError || !item) {
     return (
       <div className="min-h-dvh bg-bg">
@@ -66,12 +79,24 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
     )
   }
 
+  // 历史消息拉取失败不能伪装成「还没有消息」：明确给错误与重试。
+  if (messages.isError) {
+    return (
+      <div className="min-h-dvh bg-bg">
+        <ChatHeader title="会话" />
+        <ErrorState message="消息加载失败" onRetry={() => void messages.refetch()} />
+      </div>
+    )
+  }
+
   const list = messages.data ?? []
   const isSeller = item.role === 'seller'
   const canTrade = item.listing.status === 'ACTIVE'
-  // 交易动作（#11）：买家发起提案；卖家只对「最后事件是 proposal」的会话给出接受/拒绝。
+  // 交易动作（#11）：买家发起提案——最后事件已是提案时不再重复发起
+  // （提案不落库，消息流就是唯一事实来源，#11 把防抖责任交给前端）；
+  // 卖家只对「最后事件是 proposal」的会话给出接受/拒绝。
   const lastTxEvent = lastTransactionEvent(list)
-  const canPropose = canTrade && !isSeller && propose.isIdle
+  const canPropose = canTrade && !isSeller && lastTxEvent?.type !== 'tx.proposal'
   const canRespond = canTrade && isSeller && lastTxEvent?.type === 'tx.proposal'
   const proposalAmount =
     lastTxEvent?.type === 'tx.proposal' ? lastTxEvent.amountCents : item.listing.priceCents
@@ -113,6 +138,11 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
           只有 ACTIVE 商品能发起交易：详情页对非 ACTIVE 已禁用 CTA，
           聊天页是另一条入口，这里再挡一次（实测确认过能绕过）。
         */}
+        {actionError ? (
+          <p className="mx-3 mt-2 rounded-xl bg-danger-soft px-3 py-2 text-danger text-xs">
+            {actionError}
+          </p>
+        ) : null}
         <div className="mx-3 mt-2 flex items-center gap-2.5 rounded-xl bg-surface p-2.5">
           <Link
             className="flex min-w-0 flex-1 items-center gap-2.5"
@@ -138,12 +168,13 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
             <Button
               className="shrink-0"
               disabled={propose.isPending}
-              onClick={() =>
-                propose.mutate({
-                  amountCents: item.listing.priceCents,
-                  conversationId: item.id,
-                })
-              }
+              onClick={() => {
+                setActionError('')
+                propose.mutate(
+                  { amountCents: item.listing.priceCents, conversationId: item.id },
+                  { onError: (error) => setActionError(error.message) },
+                )
+              }}
               size="sm"
             >
               发起交易
@@ -153,16 +184,31 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
             <div className="flex shrink-0 gap-1.5">
               <Button
                 disabled={accept.isPending || reject.isPending}
-                onClick={() =>
-                  accept.mutate({ amountCents: proposalAmount, conversationId: item.id })
-                }
+                onClick={() => {
+                  setActionError('')
+                  // 409 LISTING_NOT_ACTIVE 可能是「上次接受已成功」：提示以会话/订单为准。
+                  accept.mutate(
+                    { amountCents: proposalAmount, conversationId: item.id },
+                    {
+                      onError: (error) =>
+                        setActionError(
+                          error instanceof ApiError && error.code === 'LISTING_NOT_ACTIVE'
+                            ? '商品当前不可交易；若你刚点过接受，请以聊天记录或订单页为准'
+                            : error.message,
+                        ),
+                    },
+                  )
+                }}
                 size="sm"
               >
                 接受
               </Button>
               <Button
                 disabled={accept.isPending || reject.isPending}
-                onClick={() => reject.mutate(item.id)}
+                onClick={() => {
+                  setActionError('')
+                  reject.mutate(item.id, { onError: (error) => setActionError(error.message) })
+                }}
                 size="sm"
                 variant="destructive"
               >
