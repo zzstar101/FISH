@@ -307,6 +307,53 @@ describe('getDetail', () => {
     const detail = await service.getDetail(null, LISTING_ID)
     expect('authStatus' in detail.seller).toBe(false)
   })
+
+  // #47：封面只认 0 号图，不能退化成「最小 sort_order」。store 按 `ORDER BY sort_order ASC`
+  // 返回（store.ts:231），所以只有 1 号图时 `images[0]` 会是一张非封面图，而 feed / profile /
+  // matching / conversations / transactions 五处同口径都返回 null —— 同一份数据两个结论。
+  // 触发形状（有图但没有 sort_order = 0）DB 拦不住：只约束 `sort_order >= 0` 与
+  // `(listing_id, sort_order)` 唯一，migration / 脚本 / 直连写入即可造成。
+  test('covers only the sort_order = 0 image, and keeps every image in the gallery', async () => {
+    const withoutCoverImage = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        findDetail: async () => ({
+          listing: listingRow(),
+          seller: sellerRow(),
+          images: [
+            imageRow(1, `listings/${SELLER_ID}/b.jpg`),
+            imageRow(2, `listings/${SELLER_ID}/c.jpg`),
+          ],
+        }),
+      }),
+    })
+
+    const detail = await withoutCoverImage.getDetail(null, LISTING_ID)
+    expect(detail.coverUrl).toBeNull()
+    // 画廊不受封面口径影响：详情页读的是 images[]（detail-page.tsx 按 sortOrder 渲染）。
+    expect(detail.images.map((image) => image.url)).toEqual([
+      `https://cdn.test/listings/${SELLER_ID}/b.jpg`,
+      `https://cdn.test/listings/${SELLER_ID}/c.jpg`,
+    ])
+
+    // 对照组：0 号图存在时封面就是它 —— 否则「一律返回 null」也能让上面那条通过。
+    const withCoverImage = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        findDetail: async () => ({
+          listing: listingRow(),
+          seller: sellerRow(),
+          images: [
+            imageRow(0, `listings/${SELLER_ID}/cover.jpg`),
+            imageRow(1, `listings/${SELLER_ID}/b.jpg`),
+          ],
+        }),
+      }),
+    })
+
+    const withCover = await withCoverImage.getDetail(null, LISTING_ID)
+    expect(withCover.coverUrl).toBe(`https://cdn.test/listings/${SELLER_ID}/cover.jpg`)
+  })
 })
 
 describe('createListing', () => {

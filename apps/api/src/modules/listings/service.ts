@@ -134,6 +134,13 @@ export function createListingService(deps: {
     images: ListingImageRow[]
     viewerId: string | null
   }): ListingDetail {
+    // 封面只认 0 号图（#6 契约 §1「下标即 sortOrder（0 = 封面）」），与 feed / profile /
+    // matching / conversations / transactions 五处读模型同口径：缺 0 号图 → null。
+    // 不能退化成「最小 sort_order」——store 按 `ORDER BY sort_order ASC` 返回，
+    // `images[0]` 恰好就是最小那张；那条口径分叉会让同一份数据在详情与 feed 上
+    // 给出两个不同结论（#47）。注意 `images[]` 仍返回全部图：详情页画廊读的是它
+    // （detail-page.tsx 按 sortOrder 排序渲染），不受封面口径影响。
+    const cover = input.images.find((image) => image.sortOrder === 0)
     const detail = {
       id: input.listing.id,
       title: input.listing.title,
@@ -144,7 +151,7 @@ export function createListingService(deps: {
       urgent: input.listing.urgent,
       negotiable: input.listing.negotiable,
       free: input.listing.free,
-      coverUrl: input.images[0] ? storage.publicUrl(input.images[0].objectKey) : null,
+      coverUrl: cover ? storage.publicUrl(cover.objectKey) : null,
       createdAt: input.listing.createdAt.toISOString(),
       description: input.listing.description,
       images: input.images.map((image) => ({
