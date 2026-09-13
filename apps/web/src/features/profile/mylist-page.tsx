@@ -14,6 +14,7 @@ import { AuthBadge } from '../auth/auth-badge'
 import { useStartConversation } from '../listing-detail/queries'
 import { ListingRow } from '../search/listing-row'
 import {
+  useActiveListings,
   useBoughtListings,
   useFavoriteListings,
   useFollowedUsers,
@@ -24,10 +25,12 @@ import {
   useSoldListings,
 } from './queries'
 
-export type MyListType = 'post' | 'fav' | 'sold' | 'bought' | 'history' | 'follow'
+export type MyListType = 'post' | 'active' | 'fav' | 'sold' | 'bought' | 'history' | 'follow'
 
 const TABS: { value: MyListType; label: string }[] = [
   { value: 'post', label: '我发布的' },
+  // 「在售」：个人中心统计格的落地分页，只看 ACTIVE（与统计口径一致，Sourcery #35）。
+  { value: 'active', label: '在售' },
   { value: 'fav', label: '我的收藏' },
   { value: 'sold', label: '我卖出的' },
   { value: 'bought', label: '我买到的' },
@@ -66,6 +69,7 @@ export function MyListPage({ type }: { type: MyListType }) {
 
 function MyListBody({ type, label }: { type: MyListType; label: string }) {
   const post = useMyListings()
+  const active = useActiveListings()
   const fav = useFavoriteListings()
   const sold = useSoldListings()
   const bought = useBoughtListings()
@@ -75,15 +79,17 @@ function MyListBody({ type, label }: { type: MyListType; label: string }) {
   const source =
     type === 'post'
       ? post
-      : type === 'fav'
-        ? fav
-        : type === 'sold'
-          ? sold
-          : type === 'bought'
-            ? bought
-            : type === 'history'
-              ? history
-              : null
+      : type === 'active'
+        ? active
+        : type === 'fav'
+          ? fav
+          : type === 'sold'
+            ? sold
+            : type === 'bought'
+              ? bought
+              : type === 'history'
+                ? history
+                : null
 
   if (type === 'follow') {
     if (follow.isPending) return <LoadingState />
@@ -100,7 +106,8 @@ function MyListBody({ type, label }: { type: MyListType; label: string }) {
   }
 
   const items = source.data ?? []
-  const editable = type === 'post' || type === 'sold'
+  // 「在售」是「我发布的」的 ACTIVE 子集，同样的行内写操作都适用。
+  const editable = type === 'post' || type === 'active' || type === 'sold'
 
   return (
     <>
@@ -131,7 +138,9 @@ function MyListBody({ type, label }: { type: MyListType; label: string }) {
  *
  * 此前这里只有二元判断（SOLD ? 已售出 : 在售），于是 RESERVED / OFFLINE 会被一律
  * 标成「在售」——已下架的闲置看上去还在卖（#12 要求「商品/愿望/交易各状态可展示」）。
- * 四种状态与详情页的 `STATUS_LABEL` 保持同一套说法。
+ *
+ * 措辞与详情页 `STATUS_LABEL` 的**非 ACTIVE** 三种一致；ACTIVE 这里必须给出「在售」
+ * 徽章，而详情页那边是空字符串（那里由 CTA 文案承担状态表达，不需要徽章）。
  */
 const STATUS_BADGE: Record<
   ListingStatus,

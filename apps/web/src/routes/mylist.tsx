@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { MyListPage, type MyListType } from '../features/profile/mylist-page'
 
-const TYPES: MyListType[] = ['post', 'fav', 'sold', 'bought', 'history', 'follow']
+const TYPES: MyListType[] = ['post', 'active', 'fav', 'sold', 'bought', 'history', 'follow']
 
 export const Route = createFileRoute('/mylist')({
   validateSearch: (search: Record<string, unknown>) => ({

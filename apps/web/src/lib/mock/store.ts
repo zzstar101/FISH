@@ -277,6 +277,14 @@ export async function fetchMyListings(): Promise<ListingView[]> {
   return db.listings.filter((item) => item.sellerId === ME_ID).map(decorate)
 }
 
+/** 「在售」分页：与个人中心统计格同口径，只看 ACTIVE。 */
+export async function fetchActiveListings(): Promise<ListingView[]> {
+  await delay()
+  return db.listings
+    .filter((item) => item.sellerId === ME_ID && item.status === 'ACTIVE')
+    .map(decorate)
+}
+
 export async function fetchSoldListings(): Promise<ListingView[]> {
   await delay()
   return db.listings
@@ -589,10 +597,17 @@ export async function rejectOrder(orderId: string): Promise<void> {
 }
 
 /** 买家发起交易确认：创建一条 REQUESTED 订单（#11 的第一步写操作）。 */
+/**
+ * 买家发起交易确认：创建一条 REQUESTED 订单（#11 的第一步写操作）。
+ *
+ * 这里**再挡一次**非 ACTIVE 商品：调用方（聊天页）已经禁用了按钮，但发起交易有多条
+ * 入口（详情页、聊天页、将来的复制链接），只在 UI 上挡会漏。adapter 是唯一收口。
+ */
 export async function requestOrder(listingId: string): Promise<string> {
   await delay(200)
   const listing = db.listings.find((item) => item.id === listingId)
   if (!listing) throw new Error('listing not found')
+  if (listing.status !== 'ACTIVE') throw new Error('这件闲置当前不可交易')
   const existing = db.orders.find(
     (item) =>
       item.listingId === listingId &&
@@ -678,7 +693,8 @@ export async function fetchMatches(listingId: string): Promise<MatchView> {
 
 export type ProfileSummary = {
   me: User
-  stats: { published: number; sold: number; bought: number; favorites: number }
+  /** #12 工作项口径「在售/愿望/买入/卖出」；对齐 Profile 契约的 stats（favorites 无契约来源，移除）。 */
+  stats: { active: number; wishes: number; sold: number; bought: number }
   orderInProgress: number
   wishCount: number
   historyCount: number
@@ -690,11 +706,14 @@ export async function fetchProfileSummary(): Promise<ProfileSummary> {
   return {
     me: getMe(),
     stats: {
-      published: db.listings.filter((item) => item.sellerId === ME_ID).length,
+      // 在售 = 仍为 ACTIVE 的自己的商品（契约 activeListings 同义）。
+      active: db.listings.filter((item) => item.sellerId === ME_ID && item.status === 'ACTIVE')
+        .length,
+      // 愿望 = 我的活跃愿望（契约 activeWishes；Mock 的愿望无状态字段，mine 即活跃）。
+      wishes: db.wishes.filter((item) => item.mine).length,
       sold: db.listings.filter((item) => item.sellerId === ME_ID && item.status === 'SOLD').length,
       // 「买到」= 已完成的买入交易。
       bought: db.orders.filter((item) => item.role === 'buy' && item.status === 'COMPLETED').length,
-      favorites: db.favorites.length,
     },
     // 进行中 = 请求中 + 待面交，买卖两侧都算。
     orderInProgress: db.orders.filter(

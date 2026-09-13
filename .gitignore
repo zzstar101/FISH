@@ -6,3 +6,7 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# @tanstack/router-plugin 的 vite 缓存目录。
+# 注意：apps/web/src/routeTree.gen.ts 是故意跟踪的生成文件，不要移到这里。
+.tanstack/

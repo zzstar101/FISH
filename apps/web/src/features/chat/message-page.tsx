@@ -12,6 +12,7 @@ import {
   useNotificationBadge,
   useUnreadNotificationCount,
 } from './queries'
+import { formatMessageBody } from './system-event'
 
 /**
  * 消息页（#9）：置顶的「系统通知」入口 + 聊天列表。
@@ -129,7 +130,7 @@ export function MessagePage() {
                         </div>
                       ) : null}
                       <p className="mt-1.5 truncate text-ink-3 text-sm">
-                        {last?.text ?? '打个招呼吧'}
+                        {last ? formatMessageBody(last) : '打个招呼吧'}
                       </p>
                     </div>
                   </Link>

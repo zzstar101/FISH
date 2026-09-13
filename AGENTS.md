@@ -83,6 +83,7 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 
 - 不改他人拥有的目录（见 CONTRIBUTING 第 2 节）。
 - **不提交任何真实密钥**；只维护 `.env.example`。
+- **不污染 `bun.lock`**：加/删依赖必须带 `--registry https://registry.npmjs.org`（本机默认源若是镜像源，会重写 lockfile 里全部已存在条目的 tarball URL）；详见 CONTRIBUTING.md 第 3.1 节。
 - **不手改生成文件**：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`。
 - 不调整 `migration` 历史；需要 schema 变更走 DB CHANGE REQUEST。
 - 不执行破坏性 git 操作（`reset --hard`、`push --force`）到共享分支。
