@@ -81,30 +81,30 @@ export function ProfilePage() {
         <h2 className="mb-2 font-semibold text-[15px]">我的足迹</h2>
         <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface">
           <NavRow
-            emoji="📄"
+            icon={0}
             label="我的订单"
             to="/orders"
             value={orderInProgress > 0 ? `${orderInProgress} 笔进行中` : undefined}
           />
-          <NavRow emoji="☀️" label="我的愿望" to="/wish" value={`${wishCount} 条`} />
-          <MylistRow emoji="🕐" label="浏览历史" type="history" />
-          <MylistRow emoji="⭐" label="我的关注" type="follow" />
+          <NavRow icon={1} label="我的愿望" to="/wish" value={`${wishCount} 条`} />
+          <MylistRow icon={2} label="浏览历史" type="history" />
+          <MylistRow icon={3} label="我的关注" type="follow" />
         </div>
       </section>
 
       <section className="mt-4 px-3 pb-6">
         <h2 className="mb-2 font-semibold text-[15px]">帮助与设置</h2>
         <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface">
-          <StaticRow description="昵称 / 签名 / 学院 / 校区" emoji="👤" label="编辑个人资料" />
-          <StaticRow description="校内面交、先验货后付款" emoji="🛡️" label="交易安全指南" />
-          <StaticRow description="数据只保存在本机,不会上传" emoji="🔒" label="隐私设置" />
-          <StaticRow description="问题反馈与功能建议" emoji="✉️" label="意见反馈" />
+          <StaticRow description="昵称 / 签名 / 学院 / 校区" icon={4} label="编辑个人资料" />
+          <StaticRow description="校内面交、先验货后付款" icon={5} label="交易安全指南" />
+          <StaticRow description="数据只保存在本机,不会上传" icon={6} label="隐私设置" />
+          <StaticRow description="问题反馈与功能建议" icon={7} label="意见反馈" />
           <button
             className="flex w-full items-center gap-3 px-4 py-3 text-left"
             onClick={() => reset.mutate()}
             type="button"
           >
-            <RowIcon emoji="🧹" />
+            <RowIcon icon={8} />
             <span className="min-w-0 flex-1">
               <span className="block text-[15px]">清除演示数据</span>
               <span className="mt-0.5 block text-ink-3 text-xs">清空本地收藏、浏览记录</span>
@@ -116,7 +116,7 @@ export function ProfilePage() {
             onClick={signOut}
             type="button"
           >
-            <RowIcon emoji="🚪" />
+            <RowIcon icon={9} />
             <span className="min-w-0 flex-1">
               <span className="block text-[15px] text-danger">退出登录</span>
               <span className="mt-0.5 block text-ink-3 text-xs">
@@ -126,26 +126,25 @@ export function ProfilePage() {
             <ChevronRight className="size-[18px] shrink-0 text-ink-3" />
           </button>
           <div className="flex items-center gap-3 px-4 py-3">
-            <RowIcon emoji="ℹ️" />
+            <RowIcon icon={10} />
             <span className="flex-1 text-[15px]">版本</span>
             <span className="text-ink-3 text-sm">{VERSION}</span>
           </div>
         </div>
 
-        <p className="py-5 text-center text-ink-3 text-xs leading-relaxed">
-          校园二手 · 让闲置在校园里流动起来
-        </p>
+        {/* 页脚品牌 logo（原「校园二手 · 让闲置…」文案位） */}
+        <div className="flex flex-col items-center gap-2 py-6">
+          <img alt="鱼小应 YUXIAOYING" className="h-9 w-auto opacity-90" src="/logo.png" />
+          <p className="text-ink-3 text-xs">©2026 鱼小应，版权所有</p>
+        </div>
       </section>
     </AppShell>
   )
 }
 
-function RowIcon({ emoji }: { emoji: string }) {
-  return (
-    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-lavender-soft text-lg">
-      {emoji}
-    </span>
-  )
+/** 行首图标：品牌渐变图标集（`public/notify-icons`，25 个循环取用），与通知页头像同源。 */
+function RowIcon({ icon }: { icon: number }) {
+  return <img alt="" className="size-9 shrink-0" src={`/notify-icons/${icon}.svg`} />
 }
 
 const cellClass = 'flex flex-col items-center gap-1 border-line border-l first:border-l-0'
@@ -177,16 +176,16 @@ function StatCell(
 }
 
 type RowContent = {
-  emoji: string
+  icon: number
   label: string
   description?: string
   value?: string
 }
 
-function RowBody({ emoji, label, description, value }: RowContent) {
+function RowBody({ icon, label, description, value }: RowContent) {
   return (
     <>
-      <RowIcon emoji={emoji} />
+      <RowIcon icon={icon} />
       <span className="min-w-0 flex-1">
         <span className="block text-[15px]">{label}</span>
         {description ? (

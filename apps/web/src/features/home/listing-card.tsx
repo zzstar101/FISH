@@ -58,11 +58,28 @@ export function ListingCardView({
             <Clock className="size-3" />
             {formatRelativeTimeAt(item.createdAt)}发布
           </p>
-          <p className="mt-auto pt-1.5">
+          {/* 价格行右侧空位放认证徽章：整行 `items-center`，徽章 20px 不改变信息区高度。 */}
+          <p className="mt-auto flex items-center justify-between gap-2 pt-1.5">
             <PriceText
               cents={item.priceCents}
               className="font-bold text-[17px]"
               symbolClassName="text-[12px]"
+            />
+            {/*
+              认证徽章：图片**常驻**展示、不读任何字段。
+              契约里 `ListingCard` 连 `seller` 都没有，`ListingSellerSchema` 也刻意不含
+              `authStatus` / `verifiedAt`（未接真实教务校验前不作为信任依据，见
+              `packages/contracts/src/listings/schema.ts`）——所以这里没有任何数据可挂。
+              它是**装饰性的品牌标记**，不是「这位卖家已通过认证」的事实声明；
+              `alt=""` 正是这个意思：恒常出现且不携带信息的图，不该让读屏软件每张卡都念一遍。
+              图片是不透明白底（最外圈 1px 半透明），只能放在白底卡片上。
+            */}
+            <img
+              alt=""
+              className="h-5 w-auto shrink-0"
+              height={66}
+              src="/verified-badge.png"
+              width={161}
             />
           </p>
         </div>

@@ -1,5 +1,5 @@
-import type { LucideIcon } from 'lucide-react'
-import { Camera, House, MessageCircle, Star, User } from 'lucide-react'
+import type { ComponentType, SVGProps } from 'react'
+import { TabHomeIcon, TabMessageIcon, TabProfileIcon, TabSellIcon, TabWishIcon } from './tab-icons'
 
 export type TabKey = 'home' | 'wish' | 'sell' | 'message' | 'profile'
 
@@ -7,20 +7,21 @@ export type TabKey = 'home' | 'wish' | 'sell' | 'message' | 'profile'
  * 统一信息架构（architecture.md §1 / #4）：首页 / 许愿 / 卖闲置 / 消息 / 我的。
  * 中间「出物」是视觉中心的大圆按钮，点击进入发布页。
  *
- * 图标来自 shadcn/ui 指定的 `lucide-react`（替换掉原来的自研 SVG 图标集）。
+ * 图标是从品牌规范矢量稿裁切的**填充式**路径（tab-icons.tsx），不是描边线条；
+ * 填充色由 tab-bar 用 `text-*` 传入（选中 text-ink / 未选中 text-ink-3）。
  */
 export const TABS: {
   key: TabKey
   label: string
   to: '/' | '/wish' | '/publish' | '/message' | '/profile'
-  Icon: LucideIcon
+  Icon: ComponentType<SVGProps<SVGSVGElement>>
   center?: boolean
 }[] = [
-  { key: 'home', label: '首页', to: '/', Icon: House },
-  { key: 'wish', label: '许愿', to: '/wish', Icon: Star },
-  { key: 'sell', label: '出物', to: '/publish', Icon: Camera, center: true },
-  { key: 'message', label: '消息', to: '/message', Icon: MessageCircle },
-  { key: 'profile', label: '我的', to: '/profile', Icon: User },
+  { key: 'home', label: '首页', to: '/', Icon: TabHomeIcon },
+  { key: 'wish', label: '许愿', to: '/wish', Icon: TabWishIcon },
+  { key: 'sell', label: '出物', to: '/publish', Icon: TabSellIcon, center: true },
+  { key: 'message', label: '消息', to: '/message', Icon: TabMessageIcon },
+  { key: 'profile', label: '我的', to: '/profile', Icon: TabProfileIcon },
 ]
 
 /**

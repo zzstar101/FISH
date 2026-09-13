@@ -8,7 +8,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { useNavigate } from '@tanstack/react-router'
-import { ChevronLeft, Clock, Heart, MapPin, MessageCircle, Share2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, Clock, Heart, MapPin, MessageCircle, Share2 } from 'lucide-react'
 import { useState } from 'react'
 import { formatRelativeTime, formatRelativeTimeAt, formatYuan } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
@@ -31,6 +31,9 @@ const STATUS_LABEL: Record<ListingStatus, string> = {
   OFFLINE: '已下架',
 }
 
+/** 留言卡片窗口里固定展示的条数，其余点「展开」查看。 */
+const PINNED_COMMENTS = 3
+
 /** 「成色 99新」这类「标签 + 值」组合（原自研 `ChipPair`，现由 Badge 组合而成）。 */
 function AttrPair({ label, value }: { label: string; value: string }) {
   return (
@@ -50,6 +53,9 @@ export function DetailPage({ listingId }: { listingId: string }) {
   const favorited = useIsFavorite(listingId)
   const startConversation = useStartConversation()
   const [draft, setDraft] = useState('')
+  // 留言卡片：默认只固定前 3 条，点「展开」看全部。
+  const [expanded, setExpanded] = useState(false)
+  const commentCount = comments.data?.length ?? 0
   // 卖家 id 只在拿到数据后才知道，这里按 data 取值（hook 必须无条件调用）。
   const sellerId = listing.data?.seller.id ?? ''
   const following = useIsFollowing(sellerId)
@@ -90,8 +96,8 @@ export function DetailPage({ listingId }: { listingId: string }) {
 
   return (
     <div className="relative min-h-dvh bg-bg pb-20">
-      {/* 浮动按钮（截图：返回 / 分享） */}
-      <div className="absolute top-3 left-3 z-30 flex flex-col gap-3">
+      {/* 浮动按钮：返回吸顶常驻左上；分享不吸顶，随内容滚动停在画廊右上角 */}
+      <div className="fixed top-3 left-3 z-30">
         <button
           aria-label="返回"
           className="flex size-9 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur"
@@ -100,6 +106,8 @@ export function DetailPage({ listingId }: { listingId: string }) {
         >
           <ChevronLeft className="size-5" />
         </button>
+      </div>
+      <div className="absolute top-3 right-3 z-30">
         <button
           aria-label="分享"
           className="flex size-9 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur"
@@ -111,9 +119,10 @@ export function DetailPage({ listingId }: { listingId: string }) {
 
       <DetailGallery images={item.images} title={item.title} />
 
-      <section className="bg-surface px-4 py-3">
+      {/* 价格卡片向上叠压在画廊图上，露出顶部圆角 */}
+      <section className="relative z-10 -mt-5 rounded-t-2xl bg-surface px-4 py-3">
         <div className="flex items-end gap-2">
-          <span className="font-bold text-[28px] leading-none">
+          <span className="font-bold text-[28px] text-danger leading-none">
             {item.free ? '免费送' : `¥${formatYuan(item.priceCents)}`}
           </span>
         </div>
@@ -183,13 +192,14 @@ export function DetailPage({ listingId }: { listingId: string }) {
         </Button>
       </section>
 
-      <section className="mt-2 bg-surface px-4 py-4">
+      {/* 留言：卡片窗口——四周留缝、底部弯度拉满、底部投阴影；前 3 条固定，其余点击展开 */}
+      <section className="mt-3 rounded-b-[40px] bg-surface px-4 py-4 shadow-[0_14px_32px_-12px_rgba(16,17,20,0.28)]">
         <div className="flex items-baseline justify-between">
           <h2 className="font-semibold text-[15px]">留言</h2>
-          <span className="text-ink-3 text-xs">{comments.data?.length ?? 0} 条</span>
+          <span className="text-ink-3 text-xs">{commentCount} 条</span>
         </div>
         <ul className="mt-3 space-y-3.5">
-          {comments.data?.map((comment) => (
+          {(expanded ? comments.data : comments.data?.slice(0, PINNED_COMMENTS))?.map((comment) => (
             <li className="flex gap-2.5" key={comment.id}>
               <UserAvatar emoji={comment.user.emoji} size="sm" tone={comment.user.tone} />
               <div className="min-w-0 flex-1">
@@ -208,6 +218,17 @@ export function DetailPage({ listingId }: { listingId: string }) {
             <li className="text-ink-3 text-sm">还没有留言,来问第一个问题吧</li>
           ) : null}
         </ul>
+
+        {commentCount > PINNED_COMMENTS ? (
+          <button
+            className="mt-3 flex w-full items-center justify-center gap-1 rounded-full bg-surface-2 py-2 text-brand text-sm"
+            onClick={() => setExpanded((value) => !value)}
+            type="button"
+          >
+            {expanded ? '收起留言' : `展开其余 ${commentCount - PINNED_COMMENTS} 条`}
+            <ChevronDown className={cn('size-4 transition-transform', expanded && 'rotate-180')} />
+          </button>
+        ) : null}
 
         <form
           className="mt-4 flex items-center gap-2"
@@ -316,7 +337,7 @@ function DetailGallery({
           />
         ))}
       </div>
-      <span className="absolute right-3 bottom-3 rounded-full bg-black/35 px-2 py-0.5 text-white text-xs">
+      <span className="absolute right-3 bottom-9 rounded-full bg-black/35 px-2 py-0.5 text-white text-xs">
         {index + 1}/{sorted.length}
       </span>
     </div>

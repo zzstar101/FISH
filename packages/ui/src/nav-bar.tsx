@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { Button } from './button'
 
 /**
- * 顶部导航条：44px 高，标题绝对居中，左右各留一个 44px 操作位。
+ * 顶部导航条：56px 高，标题绝对居中，左右各留一个 44px 操作位。
  *
  * shadcn/ui 里没有导航条组件，这里是 FISH 自己的组合：返回键用 shadcn `Button`
  * （ghost + icon 尺寸），箭头统一用 shadcn 指定的图标库 `lucide-react`。
@@ -21,7 +21,7 @@ export type NavBarProps = {
 export function NavBar({ title, onBack, right, floating = false, className = '' }: NavBarProps) {
   return (
     <header
-      className={`relative z-20 flex h-11 items-center ${
+      className={`relative z-20 flex h-14 items-center ${
         floating ? '' : 'border-line border-b bg-surface'
       } ${className}`}
     >

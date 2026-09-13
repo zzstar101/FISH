@@ -1,4 +1,5 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import { Badge } from '@fish/ui/badge'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
@@ -13,7 +14,7 @@ import {
   useNotificationBadge,
   useUnreadNotificationCount,
 } from './queries'
-import { formatMessageBody } from './system-event'
+import { formatMessageBody, parseSystemEvent, TX_EVENT_BADGE } from './system-event'
 
 /**
  * 消息页（#9）：置顶的「系统通知」入口 + 聊天列表。
@@ -96,6 +97,9 @@ export function MessagePage() {
 
 function ConversationRow({ item }: { item: ConversationDto }) {
   const last = item.lastMessage
+  // 最后一条是 tx.* SYSTEM 消息时，在时间旁边补一个交易状态胶囊。
+  const txEvent = last?.type === 'SYSTEM' ? parseSystemEvent(last.content) : null
+  const txBadge = txEvent ? TX_EVENT_BADGE[txEvent.type] : null
 
   return (
     <Link
@@ -116,10 +120,22 @@ function ConversationRow({ item }: { item: ConversationDto }) {
         ) : null}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
+        {/* 昵称与右侧「状态胶囊 + 时间」垂直居中；带胶囊时不再按文字基线对齐。 */}
+        <div className="flex items-center justify-between gap-2">
           <span className="truncate font-semibold text-[15px]">{item.counterpart.nickname}</span>
-          <span className="shrink-0 text-ink-3 text-xs">
-            {last ? formatChatTimeAt(last.createdAt) : formatChatTimeAt(item.createdAt)}
+          <span className="flex shrink-0 items-center gap-1.5">
+            {txBadge ? (
+              <Badge
+                className="h-4 border-current border-dashed px-1.5 text-[10px] text-ink"
+                shape="pill"
+                variant={txBadge.tone}
+              >
+                {txBadge.label}
+              </Badge>
+            ) : null}
+            <span className="text-ink-3 text-xs">
+              {last ? formatChatTimeAt(last.createdAt) : formatChatTimeAt(item.createdAt)}
+            </span>
           </span>
         </div>
         <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">

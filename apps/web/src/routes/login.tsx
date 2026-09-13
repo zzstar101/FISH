@@ -4,7 +4,7 @@ import { Label } from '@fish/ui/label'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { type FormEvent, useState } from 'react'
 import { describeAuthFailure } from '../features/auth/error-messages'
-import { AuthPageShell, AuthTabs, FormAlert, SubmitButton, TextField } from '../features/auth/form'
+import { AuthPageShell, FormAlert, SubmitButton, TextField } from '../features/auth/form'
 import { useLogin } from '../features/auth/queries'
 import { type FieldErrors, issuesToFieldErrors } from '../lib/form-errors'
 import { sanitizeRedirect } from '../lib/redirect'
@@ -66,9 +66,11 @@ function LoginPage() {
           登录接口来自 #3 冻结契约（学号 + 密码,httpOnly cookie）
         </p>
       }
-      title="校园二手"
+      iconSrc="/brand-fish.png"
+      title={
+        <img alt="鱼小应 YUXIAOYING" className="mx-auto h-10 w-auto" src="/brand-wordmark.png" />
+      }
     >
-      <AuthTabs active="login" />
       <form className="space-y-4" noValidate onSubmit={handleSubmit}>
         {formError !== null && <FormAlert message={formError} />}
 

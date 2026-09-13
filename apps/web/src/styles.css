@@ -6,12 +6,13 @@
 @source "../../../packages/ui/src";
 
 /*
- * 设计令牌（design tokens）——取自参考截图逐像素采样（见 _screenshots/DESIGN-SPEC.md）。
+ * 设计令牌（design tokens）——按「鱼小应」品牌主视觉配色方案整体换肤
+ * （配色分析：60% 云灰白 + 25% 雾蓝层次 + 10% 深灰文字 + 5% 品牌蓝点缀）。
  * 前端全站只使用这里的语义令牌，不在组件里写死颜色。
  *
- * 主色换成「鱼小应」品牌海报（D:\Downloads\…\b41d5402….png）采样出来的蓝：
- * 海报是单一蓝色族，从深到浅 #5177ba（logo 描边最深像素）→ #a9c0e2（浪）→ #dce4ec（浅蓝圈），
- * 中性色也全部偏冷（标题 #1e2731），页面底色海报本身就是 #f5f5f5，所以保持不变。
+ * 品牌蓝 #5f82c5（Logo 鱼/强调唯一主色），蓝色明度梯度：
+ * #4a6bae(100%) → #5f82c5(80%) → #8aa8d6(60%) → #a9bee2(40%) → #dce5f2(20%) → #f0f3f8(10%)。
+ * 中性色：墨灰 #2d3138 标题 / #5a5f6a 次级 / 中灰 #8b909b 弱化，背景云灰白 #f3f4f6。
  * 功能色（成功 / 警告 / 危险）不参与换色。
  *
  * `static` 是必须的：Tailwind v4 默认只输出被工具类引用到的令牌变量，而 shadcn/ui
@@ -19,26 +20,30 @@
  * 不强制输出就会出现「变量不存在」的静默降级。
  */
 @theme static {
-  --color-brand: #5177ba;
-  --color-brand-soft: #e6ecf7;
+  --color-brand: #5f82c5;
+  --color-brand-soft: #e7edf6;
+  /*
+   * 许愿墙 Banner 的装饰红（自上而下红→白渐变）。
+   * 刻意不复用 `--color-danger`：那是功能色，语义是「出错 / 危险」，而这里的红只做装饰，
+   * 借用会让「红色 = 危险」的约定失效。
+   */
+  --color-coral: #e5544a;
 
-  --color-bg: #f5f5f5;
+  --color-bg: #f3f4f6;
   --color-surface: #ffffff;
-  --color-surface-2: #eff1f6;
-  /* 分类页左侧竖排栏的底色（比页面底色略深） */
-  --color-rail: #f0f2f6;
+  --color-surface-2: #f0f3f8;
 
-  --color-ink: #1e2731;
-  --color-ink-2: #5a6472;
-  --color-ink-3: #949ba7;
+  --color-ink: #2d3138;
+  --color-ink-2: #5a5f6a;
+  --color-ink-3: #8b909b;
 
-  --color-line: #e4e8ef;
+  --color-line: #dce5f2;
 
   --color-success: #16a34a;
   --color-success-soft: #d9f2e4;
-  /* 次级强调：海报的中蓝 #a9c0e2 压深，保证在白底/浅底上当文字用仍有对比度 */
-  --color-lavender: #46628f;
-  --color-lavender-soft: #dfe7f2;
+  /* 次级强调：蓝色明度梯度最深档，保证在白底/浅底上当文字用仍有对比度 */
+  --color-lavender: #4a6bae;
+  --color-lavender-soft: #dce5f2;
   --color-warn: #f59e0b;
   --color-warn-soft: #fdf0d5;
   --color-danger: #ef4444;
@@ -91,11 +96,11 @@
   --radius: 0.75rem;
 
   /*
-   * `--background` 故意指向 `--color-surface`（白）而不是 `--color-bg`（页面灰 #f5f5f5）。
+   * `--background` 故意指向 `--color-surface`（白）而不是 `--color-bg`（页面灰 #f3f4f6）。
    * shadcn 里 `--background` 的语义是「内容所落在的那层表面」——它的 Tabs 选中块、
    * 描边按钮底色都用 `bg-background`，在默认主题里就是白色。FISH 的页面灰底由
    * `body { background-color: var(--color-bg) }` 直接给，不经过这个令牌。
-   * 若把它指向页面灰，Tabs 的选中块（#f5f5f5）会压在灰轨道（#eff1f6）上看不出来。
+   * 若把它指向页面灰，Tabs 的选中块（#f3f4f6）会压在灰轨道（#f0f3f8）上看不出来。
    */
   --background: var(--color-surface);
   --foreground: var(--color-ink);

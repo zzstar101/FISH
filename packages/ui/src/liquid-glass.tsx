@@ -229,13 +229,13 @@ export function LiquidGlassHighlight({ index, count, className, ref }: LiquidGla
       style={{ transform: `translateX(${index * 100}%)`, width: `${100 / count}%` }}
     >
       <span
-        className="absolute inset-x-1.5 inset-y-[9px] overflow-hidden rounded-full border border-white/50"
+        className="absolute inset-0 overflow-hidden rounded-full border border-white/50"
         style={{
           background: [
             // 跟指针的镜面光斑（无指针时停在左上，当固定光源）
             'radial-gradient(110px circle at var(--mx,32%) var(--my,4%), rgba(255,255,255,0.5), transparent 60%)',
-            // 玻璃本体：品牌紫 → 品牌蓝微调 → 品牌紫
-            'linear-gradient(180deg, rgba(230,236,247,0.92) 0%, rgba(81,119,186,0.16) 58%, rgba(230,236,247,0.8) 100%)',
+            // 玻璃本体：浅雾蓝 → 品牌蓝微调 → 浅雾蓝（与 --color-brand-soft / --color-brand 同步）
+            'linear-gradient(180deg, rgba(231,237,246,0.92) 0%, rgba(95,130,197,0.16) 58%, rgba(231,237,246,0.8) 100%)',
           ].join(', '),
           backdropFilter: 'blur(4px) saturate(160%)',
           WebkitBackdropFilter: 'blur(4px) saturate(160%)',

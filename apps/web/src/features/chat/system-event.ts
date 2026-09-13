@@ -2,6 +2,8 @@ import {
   type TransactionSystemEvent,
   transactionSystemEventSchema,
 } from '@fish/contracts/transactions/schema'
+import type { Badge } from '@fish/ui/badge'
+import type { ComponentProps } from 'react'
 import { formatPrice } from '../../lib/format'
 
 /**
@@ -43,6 +45,24 @@ function systemEventText(event: SystemEvent): string {
 export function formatSystemMessageBody(content: string): string {
   const event = parseSystemEvent(content)
   return event ? systemEventText(event) : content
+}
+
+/** 胶囊色调取 `Badge` 的 variant 名，避免在这里另造一套颜色名（`import type` 不引入运行时依赖）。 */
+type BadgeTone = NonNullable<ComponentProps<typeof Badge>['variant']>
+
+/**
+ * 会话行上的交易状态胶囊：事件 → 短文案 + 色调。与 `systemEventText` 同一套词汇，故放在一起。
+ *
+ * **数据源就是消息流**：契约把交易进展定义成 SYSTEM 消息，会话行的 `lastMessage` 即可解析，
+ * 不需要再查订单（契约没有「提案」实体，`lastTransactionEvent` 的注释同此）。
+ *
+ * 字色由调用方统一压成 `text-ink`：tone 当字色时 `lavender` 只有 4.13:1，10px 小字过不了
+ * 4.5；近黑配柔和底是 10.28:1 起。状态区分靠**底色**。
+ */
+export const TX_EVENT_BADGE: Record<SystemEvent['type'], { label: string; tone: BadgeTone }> = {
+  'tx.proposal': { label: '待确认', tone: 'lavender' },
+  'tx.accepted': { label: '待面交', tone: 'lavender' },
+  'tx.rejected': { label: '已拒绝', tone: 'secondary' },
 }
 
 /** 会话列表预览与气泡共用：TEXT 直出，SYSTEM 先解析。 */
