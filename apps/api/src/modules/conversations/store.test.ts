@@ -91,11 +91,13 @@ describe('conversations store (integration)', () => {
     const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
     if (!conversationId) throw new Error('unreachable')
 
+    // 显式递增 created_at：同语句 now() 三行相同会让 (created_at, id) 决胜落到
+    // 随机的 uuidv4 上，"最新一条"（及 unread 的边界）就不确定了。
     await db.execute(sql`
-      INSERT INTO messages (id, conversation_id, sender_id, type, content) VALUES
-        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'TEXT', '在吗'),
-        (${crypto.randomUUID()}, ${conversationId}, NULL, 'SYSTEM', '系统提示'),
-        (${crypto.randomUUID()}, ${conversationId}, ${buyer}, 'TEXT', '我自己发的')
+      INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
+        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'TEXT', '在吗', now() - interval '2 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, NULL, 'SYSTEM', '系统提示', now() - interval '1 second'),
+        (${crypto.randomUUID()}, ${conversationId}, ${buyer}, 'TEXT', '我自己发的', now())
     `)
 
     const beforeRead = await store.findDetail(conversationId, buyer)
