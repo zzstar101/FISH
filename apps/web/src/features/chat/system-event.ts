@@ -1,5 +1,5 @@
-import type { Message } from '../../lib/mock/types'
 import { formatPrice } from '../../lib/format'
+import type { Message } from '../../lib/mock/types'
 
 /**
  * #11 的 SYSTEM 消息内容协议:提案/接受/拒绝以 SYSTEM 消息进会话,content 是 JSON
@@ -36,7 +36,11 @@ export function parseSystemEvent(content: string): SystemEvent | null {
       return null
     if (event.type === 'tx.accepted') {
       if (typeof event.transactionId !== 'string') return null
-      return { type: 'tx.accepted', transactionId: event.transactionId, amountCents: event.amountCents }
+      return {
+        type: 'tx.accepted',
+        transactionId: event.transactionId,
+        amountCents: event.amountCents,
+      }
     }
     return { type: 'tx.proposal', amountCents: event.amountCents }
   }
