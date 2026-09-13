@@ -343,8 +343,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             WHERE id = ${id} AND ${viewerId} IN (buyer_id, seller_id) AND status = 'PENDING_MEETUP'
             RETURNING ${TX_COLUMNS}
           ), listing AS (
+            -- 契约冻结（packages/contracts/src/transactions/schema.ts:168-169）：cancel 恢复
+            -- listing 是**无条件** RESERVED → ACTIVE（#6 禁止在 RESERVED 上手动下架，因此
+            -- 取消那一刻商品必仍是 RESERVED，不需要条件更新）。带谓词时状态一旦漂移就退化成
+            -- 「交易已 CANCELLED、商品却停在 OFFLINE」——与 confirm 侧同一论证（#40-4）。
             UPDATE listings l SET status = 'ACTIVE', updated_at = now()
-            FROM txn WHERE l.id = txn.listing_id AND l.status = 'RESERVED'
+            FROM txn WHERE l.id = txn.listing_id
           )
           SELECT ${TX_COLUMNS} FROM txn
         `)

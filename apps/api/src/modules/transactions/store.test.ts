@@ -253,8 +253,11 @@ describe('transactions store (integration)', () => {
       await db.execute(sql`SELECT status::text AS status FROM transactions WHERE id = ${txId}`),
     )[0] as { status: string }
 
-    // 不允许出现「交易 COMPLETED 而商品没 SOLD」的自相矛盾
-    expect(`${tx.status}/${listing.status}`).not.toBe('COMPLETED/OFFLINE')
+    // 显式钉住不变量两端：交易必须完成、商品必须售出。
+    // （只断言「不等于某一对字符串」太弱：PENDING_MEETUP/OFFLINE、CANCELLED/OFFLINE 都会绿，
+    //   漏掉「confirm 根本没完成交易」这类回归。）
+    expect(tx.status).toBe('COMPLETED')
+    expect(listing.status).toBe('SOLD')
   })
 
   test('#40-3：SYSTEM 消息写入失败时整笔回滚 —— 交易不落库、商品不被锁', async () => {
@@ -298,6 +301,49 @@ describe('transactions store (integration)', () => {
     // profile 侧对同一形状返回 null（apps/api/src/modules/profile/store.test.ts 已钉住）。
     // 同一笔交易的订单卡在两个接口必须同口径，否则同一张卡显示不同封面。
     expect(briefs.get(listingE)?.coverObjectKey).toBeNull()
+  })
+
+  test('#40-3 回归：accept 等锁期间先提交的消息，不会在刷新后与 SYSTEM 消息顺序倒挂', async () => {
+    const listingF = '01990000-0000-7000-8000-0000000000b7'
+    const conversationF = '01990000-0000-7000-8000-0000000000c7'
+    await seedListing(listingF)
+    await seedConversation(conversationF, listingF, buyer1)
+
+    const lookup = await store.findConversation(conversationF, buyer1)
+    if (lookup.kind !== 'ok') throw new Error('unreachable')
+
+    // 用本文件已有的连接池开一个独立事务持住 listing 行锁，让 accept 卡在中途 ——
+    // 这正是真实竞态：并发 accept 也要等这把锁。
+    // （刻意不另开连接池：多个测试文件并行时额外池会加剧 Postgres 连接压力。）
+    let release: () => void = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const holderDone = db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT id FROM listings WHERE id = ${listingF} FOR UPDATE`)
+      await held
+    })
+    await Bun.sleep(50) // 等锁真的被拿到
+
+    try {
+      const accepting = store.accept(lookup.brief, 7000, acceptSystemContent)
+      await Bun.sleep(150) // 让 accept 阻塞在 listing 锁上
+      const text = await messages.insertText(conversationF, buyer1, '在吗') // 先提交
+      release()
+      await holderDone
+      const accepted = await accepting
+      if (accepted.kind !== 'created') throw new Error('unreachable')
+
+      const page = await messages.listByConversation(conversationF, { limit: 10, before: null })
+      if (page.kind !== 'ok') throw new Error('unreachable')
+      const ids = page.rows.map((row) => row.id)
+      // 提交顺序是 TEXT → SYSTEM，按 (created_at, id) 升序重排后必须一致；
+      // 若 SYSTEM 用了「事务开始时刻」的 now()，它就会排到 TEXT 前面，实时与刷新后自相矛盾。
+      expect(ids.indexOf(accepted.message.id)).toBeGreaterThan(ids.indexOf(text.id))
+    } finally {
+      release()
+      await holderDone
+    }
   })
 
   test('insertSystem writes a SYSTEM message without sender and bumps last_message_at', async () => {

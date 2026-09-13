@@ -157,6 +157,13 @@ export function createSqlMessageStore(db: Db): MessageStore {
  *
  * 事务句柄类型从 `Db` 推导（与 `packages/db/src/seed.ts` 的 `SeedTx` 同法），不硬编码
  * 驱动的内部类型。
+ *
+ * `created_at` 显式用 `clock_timestamp()`，而不是列默认的 `now()`（= `transaction_timestamp()`，
+ * 在 BEGIN 时刻就固定）：本函数跑在**调用方的事务**里，而该事务在插入之前可能长时间等锁
+ * （accept 要先拿 listing 行锁）。用 `now()` 会让这条消息拿到「事务开始时刻」这个更旧的时间戳，
+ * 于是先提交的 TEXT 消息在按 `(created_at, id)` 升序重排后反而排到它后面 —— 实时推送顺序与
+ * 刷新后的历史顺序自相矛盾，且未读口径（`m.created_at > last_read_at`）会永久漏掉它。
+ * 独立事务里的 `insertText` 不需要这样改：它是事务的第一条语句，`now()` 即插入时刻。
  */
 export type MessageTx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
@@ -167,8 +174,8 @@ export async function insertSystemWithin(
 ): Promise<MessageRow> {
   const result = await tx.execute(sql`
     WITH msg AS (
-      INSERT INTO messages (id, conversation_id, sender_id, type, content)
-      VALUES (${newId()}, ${conversationId}::uuid, NULL, 'SYSTEM', ${content})
+      INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at)
+      VALUES (${newId()}, ${conversationId}::uuid, NULL, 'SYSTEM', ${content}, clock_timestamp())
       RETURNING id, conversation_id, sender_id, type::text, content, created_at
     ), bump AS (
       UPDATE conversations c SET
