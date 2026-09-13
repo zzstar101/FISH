@@ -6,7 +6,8 @@ services:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     # 官方镜像默认 max_connections=100 不够：`bun test` 跑 47 个测试文件，其中 15 个各自建
-    # 一个连接池（13 个在 afterAll 关，但只在自己的文件跑完时才关），本机实测这一套下来
+    # 一个连接池（12 个在 afterAll 关、1 个在用例的 finally 里关，但都只在自己的文件跑完时
+    # 才关），本机实测这一套下来
     # pg_stat_activity 的 client backend 峰值 ≥91（0.1s 采样；同期空闲基线 21）。
     # 只剩个位数槽位时任何额外客户端都会打满，表现为与被测代码无关的 53300
     # 「sorry, too many clients already」假失败 —— 实测：auth/router.test.ts 的
