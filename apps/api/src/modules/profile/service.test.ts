@@ -63,6 +63,17 @@ const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransacti
   amountCents: 15000,
   status: 'COMPLETED',
   createdAt: '2026-09-12T03:00:00.000Z',
+  listing: {
+    title: 'K380 键盘',
+    priceCents: 16000,
+    status: 'SOLD',
+    coverObjectKey: 'covers/tx.jpg',
+  },
+  counterpart: {
+    id: '00000000-0000-4000-8000-0000000000a2',
+    nickname: '卖家小王',
+    avatarUrl: null,
+  },
   ...overrides,
 })
 
@@ -99,8 +110,24 @@ describe('profile service: getProfile', () => {
     // 愿望：snake_case 行经 wishes 模块同一映射函数转 DTO
     expect(profile.wishes[0]?.matchCount).toBe(2)
     expect(profile.wishes[0]?.keyword).toBe('机械键盘')
-    // 交易：我是 buyer → role=buyer
+    // 交易：我是 buyer → role=buyer；订单卡摘要内嵌商品与对方（coverUrl 由 storage 拼）
     expect(profile.transactions[0]?.role).toBe('buyer')
+    expect(profile.transactions[0]?.listing).toEqual({
+      id: listingRow().id,
+      title: 'K380 键盘',
+      priceCents: 16000,
+      status: 'SOLD',
+      coverUrl: 'https://cdn.test/covers/tx.jpg',
+    })
+    expect(profile.transactions[0]?.counterpart).toMatchObject({ nickname: '卖家小王' })
+  })
+
+  test('transaction row missing embedded summary is skipped (决策 C)', async () => {
+    const store = new MemoryProfileStore()
+    store.transactions = [txRow({ listing: null, counterpart: null })]
+    const service = createProfileService({ store, storage })
+    const profile = await service.getProfile(me)
+    expect(profile.transactions).toHaveLength(0)
   })
 
   test('transaction role is seller when I am not the buyer', async () => {

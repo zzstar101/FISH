@@ -40,6 +40,19 @@ export interface ProfileTransactionRow {
   amountCents: number
   status: string
   createdAt: Date | string
+  /** 订单卡内嵌的商品摘要（join listings + 封面子查询）；脏数据行为 null 时由 service 跳过。 */
+  listing: {
+    title: string
+    priceCents: number
+    status: string
+    coverObjectKey: string | null
+  } | null
+  /** 交易对方（查看者视角解析）；users 行缺失视为脏数据，由 service 跳过。 */
+  counterpart: {
+    id: string
+    nickname: string
+    avatarUrl: string | null
+  } | null
 }
 
 export interface ProfileStatsRow {
@@ -148,12 +161,25 @@ export function createSqlProfileStore(db: Db): ProfileStore {
     },
 
     async ownTransactions(userId, limit) {
-      // 买入 + 卖出合并；role 由 service 按 buyerId 判定（transaction 的 seller 由
-      // listing 决定，buyer_id = me 即买入，否则卖出——会话/交易的严格双人不变量）。
+      // 买入 + 卖出合并；role 与 counterpart 都由查看者（profile owner）视角判定
+      // （buyer_id = me 即买入，对方是 seller，反之亦然——会话/交易的严格双人不变量）。
+      // 内嵌摘要直接 join 已冻结的 listings/users 表（本域只读，不调用其他 Domain API）。
       const result = await db.execute(sql`
         SELECT t.id, t.listing_id, t.buyer_id, t.amount_cents, t.status::text AS status,
-               t.created_at
+               t.created_at,
+               l.title AS listing_title, l.price_cents AS listing_price_cents,
+               l.status::text AS listing_status, li.object_key AS listing_cover_key,
+               u.id AS counterpart_id, u.nickname AS counterpart_nickname,
+               u.avatar_url AS counterpart_avatar_url
         FROM transactions t
+        JOIN listings l ON l.id = t.listing_id
+        LEFT JOIN LATERAL (
+          SELECT object_key FROM listing_images
+          WHERE listing_id = t.listing_id
+          ORDER BY sort_order ASC
+          LIMIT 1
+        ) li ON TRUE
+        LEFT JOIN users u ON u.id = (CASE WHEN t.buyer_id = ${userId} THEN t.seller_id ELSE t.buyer_id END)
         WHERE t.buyer_id = ${userId} OR t.seller_id = ${userId}
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ${limit}
@@ -165,6 +191,21 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         amountCents: row.amount_cents as number,
         status: row.status as string,
         createdAt: row.created_at as Date | string,
+        listing: row.listing_title
+          ? {
+              title: row.listing_title as string,
+              priceCents: row.listing_price_cents as number,
+              status: row.listing_status as string,
+              coverObjectKey: (row.listing_cover_key as string | null) ?? null,
+            }
+          : null,
+        counterpart: row.counterpart_id
+          ? {
+              id: row.counterpart_id as string,
+              nickname: row.counterpart_nickname as string,
+              avatarUrl: (row.counterpart_avatar_url as string | null) ?? null,
+            }
+          : null,
       }))
     },
   }

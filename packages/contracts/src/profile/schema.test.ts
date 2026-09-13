@@ -43,6 +43,18 @@ const transaction = {
   id: '00000000-0000-4000-8000-0000000000e1',
   listingId: listingCard.id,
   role: 'buyer',
+  listing: {
+    id: listingCard.id,
+    title: 'K380 键盘',
+    priceCents: 16000,
+    status: 'SOLD',
+    coverUrl: null,
+  },
+  counterpart: {
+    id: '00000000-0000-4000-8000-0000000000a2',
+    nickname: '卖家小王',
+    avatarUrl: null,
+  },
   amountCents: 15000,
   status: 'COMPLETED',
   createdAt: '2026-09-12T03:00:00.000Z',
@@ -65,6 +77,9 @@ describe('profileResponseSchema', () => {
     expect(parsed.listings[0]?.status).toBe('OFFLINE')
     expect(parsed.wishes[0]?.matchCount).toBe(2)
     expect(parsed.transactions[0]?.role).toBe('buyer')
+    // 订单卡摘要：内嵌商品与对方用户（与 #11 冻结版同形）
+    expect(parsed.transactions[0]?.listing.title).toBe('K380 键盘')
+    expect(parsed.transactions[0]?.counterpart.nickname).toBe('卖家小王')
   })
 
   test('rejects an unknown transaction status or role', () => {

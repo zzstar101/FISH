@@ -119,6 +119,11 @@ describe('profile store (integration)', () => {
     const byId = new Map(rows.map((row) => [row.id, row]))
     expect(byId.get(txA)?.buyerId).toBe(me) // 我买
     expect(byId.get(txB)?.buyerId).toBe(other) // 我卖
+    // 内嵌摘要：商品 join 必中（FK）；counterpart 按查看者视角解析
+    const txARow = byId.get(txA)
+    expect(txARow?.listing).toMatchObject({ title: expect.any(String) })
+    expect(txARow?.counterpart?.id).toBe(other) // 我买 → 对方是卖家 other
+    expect(byId.get(txB)?.counterpart?.id).toBe(other) // 我卖 → 对方是买家 other
   })
 
   test('limit caps each list', async () => {

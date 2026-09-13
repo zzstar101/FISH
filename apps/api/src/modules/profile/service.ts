@@ -9,11 +9,20 @@ import type { ProfileStore, ProfileTransactionRow } from './store'
 /** 各列表的服务端封顶（契约注释冻结：P0 不分页，超出再扩游标端点）。 */
 export const PROFILE_LIST_LIMIT = 100
 
-function toProfileTransaction(row: ProfileTransactionRow, viewerId: string) {
+function toProfileTransaction(row: ProfileTransactionRow, viewerId: string, storage: MediaStorage) {
+  if (!row.listing || !row.counterpart) return null // 脏数据行：决策 C，跳过不 500
   return {
     id: row.id,
     listingId: row.listingId,
     role: row.buyerId === viewerId ? ('buyer' as const) : ('seller' as const),
+    listing: {
+      id: row.listingId,
+      title: row.listing.title,
+      priceCents: row.listing.priceCents,
+      status: row.listing.status as 'ACTIVE' | 'RESERVED' | 'SOLD' | 'OFFLINE',
+      coverUrl: row.listing.coverObjectKey ? storage.publicUrl(row.listing.coverObjectKey) : null,
+    },
+    counterpart: row.counterpart,
     amountCents: row.amountCents,
     status: row.status as 'PENDING_MEETUP' | 'COMPLETED' | 'CANCELLED',
     createdAt: new Date(row.createdAt).toISOString(),
@@ -56,7 +65,14 @@ export function createProfileService({
           }
           return [parsed.data]
         }),
-        transactions: txRows.map((row) => toProfileTransaction(row, me.id)),
+        transactions: txRows.flatMap((row) => {
+          const tx = toProfileTransaction(row, me.id, storage)
+          if (!tx) {
+            console.error('[profile] 跳过无法组装摘要的交易', row.id)
+            return []
+          }
+          return [tx]
+        }),
       })
     },
   }
