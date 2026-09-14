@@ -1,0 +1,5 @@
+# Taro 构建产物与中间缓存（apps/miniapp 专属，根 .gitignore 只覆盖 dist/ 与 node_modules/）
+.temp/
+.swc/
+.rn_temp/
+deploy_versions/

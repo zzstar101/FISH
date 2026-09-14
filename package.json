@@ -15,7 +15,9 @@
     "dev:web": "bun run --filter '@fish/web' dev",
     "dev:api": "bun run --filter '@fish/api' dev",
     "dev:worker": "bun run --filter '@fish/worker' dev",
+    "dev:miniapp": "bun run --filter '@fish/miniapp' dev:weapp",
     "build": "bun run --filter '@fish/*' build",
+    "build:miniapp": "bun run --filter '@fish/miniapp' build:weapp",
     "typecheck": "bun run --filter '@fish/*' typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
@@ -32,6 +34,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
     "@types/bun": "^1.4.2",
+    "@types/react": "^19.3.0",
     "typescript": "^7.0.2"
   }
 }
