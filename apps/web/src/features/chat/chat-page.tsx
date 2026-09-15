@@ -22,6 +22,7 @@ import {
   useMessages,
   useSendMessage,
 } from './queries'
+import { conversationRoleCopy } from './role-copy'
 import { formatMessageBody, lastTransactionEvent } from './system-event'
 
 /**
@@ -119,8 +120,18 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
           >
             <ChevronLeft className="size-6" />
           </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate font-semibold text-[17px]">{item.counterpart.nickname}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate font-semibold text-[17px]">
+                {item.counterpart.nickname}
+              </span>
+              <Badge className="h-5 px-2 text-[10px]" shape="pill" variant="secondary">
+                {conversationRoleCopy[item.role].counterpartLabel}
+              </Badge>
+            </div>
+            <p className="truncate text-ink-3 text-xs">
+              {conversationRoleCopy[item.role].selfLabel}
+            </p>
           </div>
           <Link
             aria-label="TA 的主页"
@@ -158,7 +169,11 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
             />
             <div className="min-w-0 flex-1">
               <p className="line-clamp-1 text-sm">{item.listing.title}</p>
-              <p className="mt-0.5 flex items-center gap-1.5 font-semibold text-sm">
+              <p className="mt-0.5 text-ink-3 text-xs">
+                {conversationRoleCopy[item.role].selfLabel} ·{' '}
+                {conversationRoleCopy[item.role].counterpartLabel}
+              </p>
+              <p className="flex items-center gap-1.5 font-semibold text-sm">
                 {formatPrice(item.listing.priceCents)}
                 {canTrade ? null : <Badge variant="secondary">不可交易</Badge>}
               </p>
