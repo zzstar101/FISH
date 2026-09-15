@@ -9,6 +9,7 @@ import {
 } from '../../lib/mock/store'
 import {
   createConversation,
+  fetchConversation,
   fetchConversations,
   fetchMessages,
   markConversationRead,
@@ -23,6 +24,13 @@ export { meta }
 
 export function useConversations() {
   return useQuery({ queryKey: ['chat', 'conversations'], queryFn: fetchConversations })
+}
+
+export function useConversation(conversationId: string) {
+  return useQuery({
+    queryKey: ['chat', 'conversation', conversationId],
+    queryFn: () => fetchConversation(conversationId),
+  })
 }
 
 export function useMessages(conversationId: string) {

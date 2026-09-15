@@ -62,6 +62,14 @@ export function createConversationsRouter({ service, requireAuth }: Conversation
     }
   })
 
+  app.get('/:id', requireAuth, async (c) => {
+    try {
+      return c.json(await service.getConversation(c.get('userId'), c.req.param('id')), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
   app.post('/:id/read', requireAuth, async (c) => {
     try {
       return c.json(await service.markRead(c.get('userId'), c.req.param('id')), 200)

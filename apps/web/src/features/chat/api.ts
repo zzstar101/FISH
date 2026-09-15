@@ -38,6 +38,10 @@ export async function fetchConversations(): Promise<ConversationDto[]> {
   return conversationListResponseSchema.parse(payload).items
 }
 
+export async function fetchConversation(conversationId: string): Promise<ConversationDto> {
+  return readConversation(await apiRequest(CHAT_ROUTES.detail(conversationId)))
+}
+
 /** 历史消息（升序）。`before` 缺省从最新一页开始；重连恢复也走本端点。 */
 export async function fetchMessages(conversationId: string): Promise<MessageDto[]> {
   const payload = await apiRequest(`${CHAT_ROUTES.messages(conversationId)}?limit=100`)

@@ -17,7 +17,7 @@ import {
 } from '../transaction/queries'
 import {
   meta,
-  useConversations,
+  useConversation,
   useMarkConversationRead,
   useMessages,
   useSendMessage,
@@ -30,7 +30,7 @@ import { formatMessageBody, lastTransactionEvent } from './system-event'
  */
 export function ChatPage({ conversationId }: { conversationId: string }) {
   const { me } = useAuth()
-  const conversations = useConversations()
+  const conversation = useConversation(conversationId)
   const messages = useMessages(conversationId)
   const send = useSendMessage(conversationId)
   const markRead = useMarkConversationRead(conversationId)
@@ -47,7 +47,7 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
     markRead.mutate()
   }, [markRead.mutate])
 
-  if (conversations.isPending || messages.isPending) {
+  if (conversation.isPending || messages.isPending) {
     return (
       <div className="min-h-dvh bg-bg">
         <ChatHeader title="会话" />
@@ -56,10 +56,10 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
     )
   }
 
-  const item = conversations.data?.find((conversation) => conversation.id === conversationId)
+  const item = conversation.data
   // 新建会话后立即跳转时列表缓存还没有这条会话：正在拉取就先给 loading，
   // 拉完仍没有才是真的「不存在」（会话列表是分页首屏，深链旧会话同理）。
-  if (!item && conversations.isFetching) {
+  if (!item && conversation.isFetching) {
     return (
       <div className="min-h-dvh bg-bg">
         <ChatHeader title="会话" />
@@ -67,12 +67,12 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
       </div>
     )
   }
-  if (conversations.isError || !item) {
+  if (conversation.isError || !item) {
     return (
       <div className="min-h-dvh bg-bg">
         <ChatHeader title="会话" />
         <EmptyState
-          description={conversations.isError ? '会话加载失败,请返回重试' : '会话不存在'}
+          description={conversation.isError ? '会话加载失败,请返回重试' : '会话不存在'}
           emoji="💬"
         />
       </div>

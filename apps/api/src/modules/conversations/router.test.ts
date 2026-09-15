@@ -56,6 +56,7 @@ describe('conversations router', () => {
     const service: ConversationService = {
       createOrGetConversation: async () => ({ conversation: dto, created }),
       listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => dto,
       markRead: async () => dto,
     }
     const app = buildApp(service)
@@ -83,6 +84,7 @@ describe('conversations router', () => {
         throw new ConversationServiceError(409, 'CANNOT_CHAT_WITH_SELF', '不能和自己的商品建立会话')
       },
       listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => dto,
       markRead: async () => dto,
     }
     const app = buildApp(service)
@@ -101,6 +103,7 @@ describe('conversations router', () => {
         throw new ConversationServiceError(409, 'CANNOT_CHAT_WITH_SELF', '不能和自己的商品建立会话')
       },
       listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => dto,
       markRead: async () => dto,
     }
     const app = buildApp(service)
@@ -115,10 +118,41 @@ describe('conversations router', () => {
     })
   })
 
+  test('GET /:id returns the conversation dto', async () => {
+    const service: ConversationService = {
+      createOrGetConversation: async () => ({ conversation: dto, created: true }),
+      listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => dto,
+      markRead: async () => dto,
+    }
+    const app = buildApp(service)
+    const response = await app.request('/conversations/conversation-1')
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(dto)
+  })
+
+  test('GET /:id hides an unauthorized conversation as 404', async () => {
+    const service: ConversationService = {
+      createOrGetConversation: async () => ({ conversation: dto, created: true }),
+      listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => {
+        throw new ConversationServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
+      },
+      markRead: async () => dto,
+    }
+    const app = buildApp(service)
+    const response = await app.request('/conversations/secret')
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: { code: 'CONVERSATION_NOT_FOUND', message: '会话不存在' },
+    })
+  })
+
   test('POST /:id/read returns the updated conversation dto', async () => {
     const service: ConversationService = {
       createOrGetConversation: async () => ({ conversation: dto, created: true }),
       listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => dto,
       markRead: async () => ({ ...dto, unreadCount: 0 }),
     }
     const app = buildApp(service)

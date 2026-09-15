@@ -6,6 +6,7 @@ import { insertSystemWithin, type MessageRow } from '../messages/store'
 /** transactions 表的行（snake_case 与 DB 列名一致）。 */
 export interface TransactionRow {
   id: string
+  conversation_id: string
   listing_id: string
   buyer_id: string
   seller_id: string
@@ -111,6 +112,7 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
 function toRow(row: Record<string, unknown>): TransactionRow {
   return {
     id: row.id as string,
+    conversation_id: row.conversation_id as string,
     listing_id: row.listing_id as string,
     buyer_id: row.buyer_id as string,
     seller_id: row.seller_id as string,
@@ -245,13 +247,26 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         // ③ `tx.accepted` 与交易行同一事务（#40-3）：消息写失败则整笔回滚，
         //    不会留下「交易已创建、确认消息永久缺失」的部分成功。
         const transactionId = row.id as string
+        const linked = await tx.execute(sql`
+          SELECT t.*, c.id AS conversation_id
+          FROM transactions t
+          JOIN conversations c ON c.listing_id = t.listing_id AND c.buyer_id = t.buyer_id
+          WHERE t.id = ${transactionId}
+        `)
+        const linkedRow = rowsOf(linked)[0]
+        if (!linkedRow) throw new Error(`交易缺少对应会话：transaction=${transactionId}`)
         const message = await insertSystemWithin(tx, brief.id, buildSystemContent(transactionId))
-        return { kind: 'created', row: toRow(row), message }
+        return { kind: 'created', row: toRow(linkedRow), message }
       })
     },
 
     async findById(id) {
-      const result = await db.execute(sql`SELECT ${TX_COLUMNS} FROM transactions WHERE id = ${id}`)
+      const result = await db.execute(sql`
+        SELECT t.*, c.id AS conversation_id
+        FROM transactions t
+        JOIN conversations c ON c.listing_id = t.listing_id AND c.buyer_id = t.buyer_id
+        WHERE t.id = ${id}
+      `)
       const row = rowsOf(result)[0]
       return row ? toRow(row) : null
     },
@@ -269,9 +284,11 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
       }
 
       const result = await db.execute(sql`
-        SELECT t.*, to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+        SELECT t.*, c.id AS conversation_id,
+               to_char(t.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
                  AS created_at_cursor
         FROM transactions t
+        JOIN conversations c ON c.listing_id = t.listing_id AND c.buyer_id = t.buyer_id
         WHERE ${sql.join(conditions, sql` AND `)}
         ORDER BY t.created_at DESC, t.id DESC
         LIMIT ${limit + 1}
@@ -307,11 +324,28 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           const current = rowsOf(existing)[0]
           if (!current) return { kind: 'cancelled' } // 不可达：participant 校验在 service 已做
           if (current.status === 'CANCELLED') return { kind: 'cancelled' }
-          return { kind: 'ok', row: toRow(current) } // COMPLETED：幂等
+          const linked = await tx.execute(sql`
+            SELECT t.*, c.id AS conversation_id
+            FROM transactions t
+            JOIN conversations c ON c.listing_id = t.listing_id AND c.buyer_id = t.buyer_id
+            WHERE t.id = ${id}
+          `)
+          const linkedRow = rowsOf(linked)[0]
+          if (!linkedRow) return { kind: 'cancelled' }
+          return { kind: 'ok', row: toRow(linkedRow) } // COMPLETED：幂等
         }
 
+        const linked = await tx.execute(sql`
+          SELECT t.*, c.id AS conversation_id
+          FROM transactions t
+          JOIN conversations c ON c.listing_id = t.listing_id AND c.buyer_id = t.buyer_id
+          WHERE t.id = ${id}
+        `)
+        const linkedRow = rowsOf(linked)[0]
+        if (!linkedRow) return { kind: 'cancelled' }
+
         // 双侧确认齐 → 同事务完成交易并 SOLD 商品；CHECK 约束保证 completed_at 与 status 一致。
-        const merged = toRow(row)
+        const merged = toRow(linkedRow)
         if (merged.buyer_confirmed_at && merged.seller_confirmed_at) {
           const done = await tx.execute(sql`
             WITH txn AS (
@@ -326,7 +360,9 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               UPDATE listings l SET status = 'SOLD', updated_at = now()
               FROM txn WHERE l.id = txn.listing_id
             )
-            SELECT ${TX_COLUMNS} FROM txn
+            SELECT txn.*, c.id AS conversation_id
+            FROM txn JOIN conversations c
+              ON c.listing_id = txn.listing_id AND c.buyer_id = txn.buyer_id
           `)
           const doneRow = rowsOf(done)[0]
           if (doneRow) return { kind: 'ok', row: toRow(doneRow) }
@@ -350,15 +386,20 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             UPDATE listings l SET status = 'ACTIVE', updated_at = now()
             FROM txn WHERE l.id = txn.listing_id
           )
-          SELECT ${TX_COLUMNS} FROM txn
+          SELECT txn.*, c.id AS conversation_id
+          FROM txn JOIN conversations c
+            ON c.listing_id = txn.listing_id AND c.buyer_id = txn.buyer_id
         `)
         const row = rowsOf(cancelled)[0]
         if (row) return { kind: 'ok', row: toRow(row) }
 
         // 没取消成功：区分 COMPLETED（拒绝）与 CANCELLED（幂等）
-        const existing = await tx.execute(
-          sql`SELECT ${TX_COLUMNS} FROM transactions WHERE id = ${id} AND ${viewerId} IN (buyer_id, seller_id)`,
-        )
+        const existing = await tx.execute(sql`
+          SELECT t.*, c.id AS conversation_id
+          FROM transactions t
+          JOIN conversations c ON c.listing_id = t.listing_id AND c.buyer_id = t.buyer_id
+          WHERE t.id = ${id} AND ${viewerId} IN (t.buyer_id, t.seller_id)
+        `)
         const current = rowsOf(existing)[0]
         if (!current) return { kind: 'not-found' }
         if (current.status === 'COMPLETED') return { kind: 'not-cancellable' }
