@@ -146,7 +146,7 @@ const detailSelect = (viewerId: string) => sql`
   LEFT JOIN LATERAL (
     SELECT m.type, m.content, m.sender_id, m.created_at
     FROM messages m
-    WHERE m.conversation_id = c.id
+    WHERE m.conversation_id = c.id AND m.type <> 'MEDIA'
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
   ) lm ON TRUE

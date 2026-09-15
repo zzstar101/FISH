@@ -29,6 +29,9 @@ export interface MediaStorage {
   /** 对象不存在返回 `null`（不抛），由调用方决定 404 / 422 语义。 */
   stat(key: string): Promise<MediaObjectStat | null>
 
+  /** 读取私有对象；媒体接口在通过会话鉴权后使用。 */
+  getObject?(key: string): { stream: ReadableStream<Uint8Array>; contentType: string }
+
   /** 读响应里的公开 URL，依赖桶的匿名读策略（契约 §7.8）。 */
   publicUrl(key: string): string
 }
@@ -68,6 +71,11 @@ export function createBunS3MediaStorage(options: {
         // 不是"为什么没拿到"，让 404 变成 500 才是真的错。
         return null
       }
+    },
+
+    getObject(key) {
+      const file = client.file(key)
+      return { stream: file.stream(), contentType: file.type || 'application/octet-stream' }
     },
 
     publicUrl(key) {

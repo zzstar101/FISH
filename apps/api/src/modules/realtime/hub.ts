@@ -1,4 +1,9 @@
-import { type RealtimeServerEvent, realtimeServerEventSchema } from '@fish/contracts/chat/schema'
+import {
+  type MediaRealtimeEvent,
+  mediaRealtimeEventSchema,
+  type RealtimeServerEvent,
+  realtimeServerEventSchema,
+} from '@fish/contracts/chat/schema'
 
 /**
  * 连接上的最小发送面。真实 WS 连接（hono/bun 的 WsContext）都满足；
@@ -18,8 +23,10 @@ export interface WsSender {
 export interface ConnectionHub {
   /** 登记连接，返回注销函数（onClose 时调用）。 */
   attach(userId: string, sender: WsSender): () => void
-  /** 把事件推给这些用户的全部在线连接。 */
+  /** 把旧版事件推给这些用户的全部在线连接。 */
   pushToUsers(userIds: readonly string[], event: RealtimeServerEvent): void
+  /** #67 媒体事件独立出口，避免让未接入媒体的旧客户端解析失败。 */
+  pushMediaToUsers(userIds: readonly string[], event: MediaRealtimeEvent): void
   /** 当前在线连接总数（测试 / 观测用）。 */
   connectionCount(): number
 }
@@ -43,18 +50,11 @@ export function createConnectionHub(): ConnectionHub {
     },
 
     pushToUsers(userIds, event) {
-      // 服务端出口的唯一形状保证点：契约事件在此 parse，违规即 500（app.onError），
-      // 与 DTO 读模型的 zod parse 同一取向。
-      const payload = JSON.stringify(realtimeServerEventSchema.parse(event))
-      for (const userId of userIds) {
-        for (const sender of connections.get(userId) ?? []) {
-          try {
-            void sender.send(payload)
-          } catch {
-            // 对端已断开等发送失败：忽略，等 onClose 清理。
-          }
-        }
-      }
+      push(userIds, JSON.stringify(realtimeServerEventSchema.parse(event)))
+    },
+
+    pushMediaToUsers(userIds, event) {
+      push(userIds, JSON.stringify(mediaRealtimeEventSchema.parse(event)))
     },
 
     connectionCount() {
@@ -62,5 +62,17 @@ export function createConnectionHub(): ConnectionHub {
       for (const set of connections.values()) count += set.size
       return count
     },
+  }
+
+  function push(userIds: readonly string[], payload: string): void {
+    for (const userId of userIds) {
+      for (const sender of connections.get(userId) ?? []) {
+        try {
+          void sender.send(payload)
+        } catch {
+          // 对端已断开等发送失败：忽略，等 onClose 清理。
+        }
+      }
+    }
   }
 }
