@@ -153,6 +153,37 @@ export const transactionListResponseSchema = z.object({
 export type TransactionListResponse = z.infer<typeof transactionListResponseSchema>
 
 // ---------------------------------------------------------------------------
+// 面交交易码（Issue #70）
+// ---------------------------------------------------------------------------
+
+export const meetupCodeSchema = z.string().regex(/^\d{6}$/, '交易码必须是 6 位数字')
+export type MeetupCode = z.infer<typeof meetupCodeSchema>
+
+/** 手动输入与扫码结果二选一；扫码结果保持 opaque，不在前端解析业务字段。 */
+export const meetupCodeVerifyInputSchema = z.xor([
+  z.strictObject({ code: meetupCodeSchema }),
+  z.strictObject({ qrPayload: z.string().trim().min(1).max(500) }),
+])
+export type MeetupCodeVerifyInput = z.infer<typeof meetupCodeVerifyInputSchema>
+
+/** 交易码只在生成响应中返回明文；服务端后续只接受 code 或 opaque QR payload。 */
+export const meetupCodeResponseSchema = z.object({
+  challengeId: z.uuid(),
+  code: meetupCodeSchema,
+  qrPayload: z.string().min(1).max(500),
+  expiresAt: z.iso.datetime(),
+})
+export type MeetupCodeResponse = z.infer<typeof meetupCodeResponseSchema>
+
+export const meetupCodeVerifyResponseSchema = z.object({
+  transaction: transactionDtoSchema,
+  /** 本次验证确认了哪一侧；双方确认后 transaction.status 为 COMPLETED。 */
+  verifiedRole: transactionRoleSchema,
+  completed: z.boolean(),
+})
+export type MeetupCodeVerifyResponse = z.infer<typeof meetupCodeVerifyResponseSchema>
+
+// ---------------------------------------------------------------------------
 // 状态机与幂等（router/service 实现的验收口径）
 // ---------------------------------------------------------------------------
 //
@@ -187,5 +218,19 @@ export const TransactionErrorCodeSchema = z.enum([
   'TRANSACTION_NOT_FOUND',
   /** 409：终态上的非法操作——COMPLETED 上取消、CANCELLED 上确认（一码两用，见状态机注释）。 */
   'TRANSACTION_NOT_IN_PENDING',
+  /** 404：交易码 challenge 不存在，或不属于当前交易。 */
+  'MEETUP_CODE_NOT_FOUND',
+  /** 422：交易码与二维码载荷均无法通过校验。 */
+  'MEETUP_CODE_INVALID',
+  /** 422：交易码已过期。 */
+  'MEETUP_CODE_EXPIRED',
+  /** 422：交易码已成功消费，不可重放。 */
+  'MEETUP_CODE_USED',
+  /** 429：当前 challenge 错误尝试次数已达上限。 */
+  'MEETUP_CODE_ATTEMPTS_EXCEEDED',
+  /** 429：生成或验证请求触发频率限制。 */
+  'MEETUP_CODE_RATE_LIMITED',
+  /** 409：交易不在 PENDING_MEETUP，不能生成或验证面交码。 */
+  'TRANSACTION_NOT_IN_MEETUP',
 ])
 export type TransactionErrorCode = z.infer<typeof TransactionErrorCodeSchema>

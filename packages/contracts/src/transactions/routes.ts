@@ -18,7 +18,11 @@ export const TRANSACTION_ROUTES = {
   detail: (id: string) => `/transactions/${id}`,
   /** POST 卖家接受提案并创建交易（201 TransactionDto）；幂等保护由 LISTING_NOT_ACTIVE 兜底。 */
   accept: '/transactions',
-  /** POST 双方确认面交（200 TransactionDto，幂等；第二侧确认触发 COMPLETED + listing SOLD）。 */
+  /** POST 生成/刷新当前参与者的面交码（200 MeetupCodeResponse）。 */
+  meetupCode: (id: string) => `/transactions/${id}/meetup-code`,
+  /** POST 验证对方的面交码（200 MeetupCodeVerifyResponse）。 */
+  verifyMeetupCode: (id: string) => `/transactions/${id}/meetup-code/verify`,
+  /** POST 双方确认面交（200 TransactionDto，幂等；#70 后由交易码验证替代）。 */
   confirm: (id: string) => `/transactions/${id}/confirm`,
   /** POST 取消（200 TransactionDto；COMPLETED 上 409 TRANSACTION_NOT_IN_PENDING）。 */
   cancel: (id: string) => `/transactions/${id}/cancel`,

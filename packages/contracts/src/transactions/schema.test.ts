@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  meetupCodeResponseSchema,
+  meetupCodeVerifyInputSchema,
+  meetupCodeVerifyResponseSchema,
   TransactionErrorCodeSchema,
   transactionAcceptInputSchema,
   transactionDtoSchema,
@@ -11,6 +14,72 @@ import {
 } from './schema'
 
 const conversationId = '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+
+describe('meetupCodeVerifyInputSchema', () => {
+  test('accepts either a six-digit code or an opaque QR payload', () => {
+    expect(meetupCodeVerifyInputSchema.parse({ code: '482913' })).toEqual({ code: '482913' })
+    expect(
+      meetupCodeVerifyInputSchema.parse({ qrPayload: 'fish://meetup/v1/opaque-token' }),
+    ).toEqual({ qrPayload: 'fish://meetup/v1/opaque-token' })
+  })
+
+  test('rejects malformed, empty, or ambiguous verification input', () => {
+    expect(meetupCodeVerifyInputSchema.safeParse({ code: '12345' }).success).toBe(false)
+    expect(
+      meetupCodeVerifyInputSchema.safeParse({ code: '123456', qrPayload: 'extra' }).success,
+    ).toBe(false)
+    expect(meetupCodeVerifyInputSchema.safeParse({ qrPayload: '   ' }).success).toBe(false)
+  })
+})
+
+describe('meetupCodeResponseSchema', () => {
+  test('requires a six-digit code and an expiry timestamp', () => {
+    const parsed = meetupCodeResponseSchema.parse({
+      challengeId: conversationId,
+      code: '482913',
+      qrPayload: 'fish://meetup/v1/opaque-token',
+      expiresAt: '2026-09-15T12:10:00.000Z',
+    })
+    expect(parsed.code).toBe('482913')
+  })
+})
+
+describe('meetupCodeVerifyResponseSchema', () => {
+  test('contains the updated transaction and verification side', () => {
+    const transaction = {
+      id: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      conversationId,
+      listingId: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      buyerId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      sellerId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      role: 'buyer',
+      listing: {
+        id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        title: 'K380 键盘',
+        priceCents: 16000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+      counterpart: {
+        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        nickname: '卖家',
+        avatarUrl: null,
+      },
+      amountCents: 16000,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: '2026-09-15T12:00:00.000Z',
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      createdAt: '2026-09-15T11:00:00.000Z',
+      updatedAt: '2026-09-15T12:00:00.000Z',
+    }
+    expect(
+      meetupCodeVerifyResponseSchema.parse({ transaction, verifiedRole: 'buyer', completed: false })
+        .completed,
+    ).toBe(false)
+  })
+})
 
 describe('transactionProposalInputSchema', () => {
   test('accepts a valid proposal', () => {
