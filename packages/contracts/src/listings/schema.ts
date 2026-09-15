@@ -330,6 +330,10 @@ export const ListingErrorCodeSchema = z.enum([
   'IMAGE_REFERENCE_INVALID',
   /** 422：confirm 时对象存储里找不到该对象。 */
   'UPLOAD_OBJECT_MISSING',
+  /** 422：标题或描述命中服务端阻断规则。 */
+  'LISTING_CONTENT_BLOCKED',
+  /** 202：内容需要人工复核，商品不会进入公开列表。 */
+  'LISTING_CONTENT_REVIEW',
 ])
 
 export type ListingErrorCode = z.infer<typeof ListingErrorCodeSchema>

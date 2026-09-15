@@ -16,6 +16,7 @@ import {
 } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
+import { createModerationService, type ModerationService } from '../moderation/service'
 import type { MediaStorage } from '../uploads/storage'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
@@ -94,10 +95,12 @@ function isFreePriceConstraintViolation(error: unknown): boolean {
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
+  moderation?: ModerationService
   /** 可注入时钟：去重窗口的边界断言不需要 sleep。 */
   now?: () => Date
 }): ListingService {
   const { store, storage } = deps
+  const moderation = deps.moderation ?? createModerationService()
   const now = deps.now ?? (() => new Date())
 
   function notFound(): ListingServiceError {
@@ -177,7 +180,11 @@ export function createListingService(deps: {
     const found = await store.findDetail(id)
     if (!found) throw notFound()
     // OFFLINE 对非卖家 404（不是 403）：403 等于确认"这个 id 存在且是别人的商品"。
-    if (found.listing.status === OFFLINE && found.listing.sellerId !== viewerId) throw notFound()
+    if (
+      (found.listing.status === OFFLINE || found.listing.moderationStatus !== 'APPROVED') &&
+      found.listing.sellerId !== viewerId
+    )
+      throw notFound()
 
     return toDetail({
       listing: found.listing,
@@ -269,6 +276,21 @@ export function createListingService(deps: {
     },
 
     async createListing(userId, input) {
+      const moderationResult = moderation.moderate({
+        title: input.title,
+        description: input.description,
+      })
+      if (moderationResult.decision === 'BLOCK') {
+        await recordModeration(store, {
+          sellerId: userId,
+          action: 'CREATE',
+          title: input.title,
+          description: input.description,
+          result: moderationResult,
+        })
+        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
+      }
+
       await assertUsableObjectKeys(userId, input.objectKeys)
 
       const listingId = newId()
@@ -285,6 +307,15 @@ export function createListingService(deps: {
         free: input.free,
         objectKeys: input.objectKeys,
         duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
+        moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+        moderationReason: moderationResult.reasonCode,
+        moderationRuleVersion: moderationResult.ruleVersion,
+        moderation: {
+          decision: moderationResult.decision,
+          matchedRules: moderationResult.matches.map((match) => match.ruleCode),
+          matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
+          ruleVersion: moderationResult.ruleVersion,
+        },
       })
 
       // 命中 5 秒内容窗口：返回已有商品（200 而不是 201），并**重新投递**匹配 job ——
@@ -312,6 +343,24 @@ export function createListingService(deps: {
 
       if (input.objectKeys) await assertUsableObjectKeys(userId, input.objectKeys)
 
+      const finalTitle = input.title ?? state.title ?? ''
+      const finalDescription = input.description ?? state.description ?? ''
+      const moderationResult = moderation.moderate({
+        title: finalTitle,
+        description: finalDescription,
+      })
+      if (moderationResult.decision === 'BLOCK') {
+        await recordModeration(store, {
+          listingId: id,
+          sellerId: userId,
+          action: 'UPDATE',
+          title: finalTitle,
+          description: finalDescription,
+          result: moderationResult,
+        })
+        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
+      }
+
       // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
       // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
       const { objectKeys, ...fields } = input
@@ -321,7 +370,22 @@ export function createListingService(deps: {
         updated = await store.updateListing({
           id,
           sellerId: userId,
-          fields,
+          fields: {
+            ...fields,
+            moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+            moderationReason: moderationResult.reasonCode,
+            moderationRuleVersion: moderationResult.ruleVersion,
+            moderatedAt: new Date(),
+            ...(moderationResult.decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
+          },
+          moderation: {
+            title: finalTitle,
+            description: finalDescription,
+            decision: moderationResult.decision,
+            matchedRules: moderationResult.matches.map((match) => match.ruleCode),
+            matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
+            ruleVersion: moderationResult.ruleVersion,
+          },
           ...(objectKeys ? { objectKeys } : {}),
         })
       } catch (error) {
@@ -370,6 +434,30 @@ export function createListingService(deps: {
       return loadDetail(userId, id)
     },
   }
+}
+
+async function recordModeration(
+  store: ListingStore,
+  input: {
+    listingId?: string
+    sellerId: string
+    action: 'CREATE' | 'UPDATE'
+    title: string
+    description: string
+    result: import('../moderation/types').ModerationResult
+  },
+): Promise<void> {
+  await store.recordModeration?.({
+    listingId: input.listingId,
+    sellerId: input.sellerId,
+    action: input.action,
+    title: input.title,
+    description: input.description,
+    decision: input.result.decision,
+    matchedRules: input.result.matches.map((match) => match.ruleCode),
+    matchedTermsMasked: input.result.matches.map((match) => match.maskedTerm),
+    ruleVersion: input.result.ruleVersion,
+  })
 }
 
 function isAllowedMime(contentType: string): boolean {
