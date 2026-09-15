@@ -176,6 +176,45 @@ export type TransactionListResponse = z.infer<typeof transactionListResponseSche
 // 与 `system` 的 `VALIDATION_FAILED` / `INTERNAL_ERROR`。
 // ---------------------------------------------------------------------------
 
+export const meetupTokenStatusSchema = z.enum(['NONE', 'ISSUED', 'EXPIRED', 'CONSUMED'])
+export type MeetupTokenStatus = z.infer<typeof meetupTokenStatusSchema>
+
+export const meetupTokenResponseSchema = z.strictObject({
+  transactionId: z.uuid(),
+  code: z.string().regex(/^\d{6}$/),
+  qrPayload: z.string().min(1),
+  expiresAt: z.iso.datetime(),
+})
+export type MeetupTokenResponse = z.infer<typeof meetupTokenResponseSchema>
+
+export const meetupTokenStatusResponseSchema = z.strictObject({
+  transactionId: z.uuid(),
+  status: meetupTokenStatusSchema,
+  expiresAt: z.iso.datetime().nullable(),
+  consumedAt: z.iso.datetime().nullable(),
+  consumedBy: z.uuid().nullable(),
+})
+export type MeetupTokenStatusResponse = z.infer<typeof meetupTokenStatusResponseSchema>
+
+export const meetupTokenRedeemInputSchema = z.strictObject({
+  qrToken: z.string().min(1),
+})
+export type MeetupTokenRedeemInput = z.infer<typeof meetupTokenRedeemInputSchema>
+
+export const meetupTokenVerifyCodeInputSchema = z.strictObject({
+  code: z.string().regex(/^\d{6}$/, '面交码必须是 6 位数字'),
+})
+export type MeetupTokenVerifyCodeInput = z.infer<typeof meetupTokenVerifyCodeInputSchema>
+
+export const meetupVerificationResponseSchema = z.strictObject({
+  transactionId: z.uuid(),
+  verified: z.literal(true),
+  verifiedBy: z.uuid(),
+  verifiedAt: z.iso.datetime(),
+  nextAction: z.literal('CONFIRM_DELIVERY'),
+})
+export type MeetupVerificationResponse = z.infer<typeof meetupVerificationResponseSchema>
+
 export const TransactionErrorCodeSchema = z.enum([
   /** 404：conversationId 不存在，或调用者不是会话双方（不泄漏存在性）。 */
   'CONVERSATION_NOT_FOUND',
@@ -189,5 +228,16 @@ export const TransactionErrorCodeSchema = z.enum([
   'TRANSACTION_NOT_FOUND',
   /** 409：终态上的非法操作——COMPLETED 上取消、CANCELLED 上确认（一码两用，见状态机注释）。 */
   'TRANSACTION_NOT_IN_PENDING',
+  /** 404：交易当前没有可消费的面交凭证。 */
+  'MEETUP_TOKEN_NOT_FOUND',
+  /** 409：面交凭证已过期或已消费。 */
+  'MEETUP_TOKEN_EXPIRED',
+  'MEETUP_TOKEN_CONSUMED',
+  /** 422：二维码或 6 位码无效。 */
+  'MEETUP_TOKEN_INVALID',
+  /** 429：短时间内输入错误次数过多。 */
+  'MEETUP_TOKEN_LOCKED',
+  /** 403：仅交易另一方可以消费凭证。 */
+  'MEETUP_TOKEN_NOT_ALLOWED',
 ])
 export type TransactionErrorCode = z.infer<typeof TransactionErrorCodeSchema>

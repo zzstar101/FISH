@@ -22,4 +22,12 @@ export const TRANSACTION_ROUTES = {
   confirm: (id: string) => `/transactions/${id}/confirm`,
   /** POST 取消（200 TransactionDto；COMPLETED 上 409 TRANSACTION_NOT_IN_PENDING）。 */
   cancel: (id: string) => `/transactions/${id}/cancel`,
+  /** POST 卖家签发一次性面交码（201；明文仅在此响应返回）。 */
+  issueMeetupToken: (id: string) => `/transactions/${id}/meetup-token`,
+  /** GET 当前面交凭证状态（不返回明文码）。 */
+  meetupTokenStatus: (id: string) => `/transactions/${id}/meetup-token`,
+  /** POST 使用二维码凭证。 */
+  redeemMeetupToken: (id: string) => `/transactions/${id}/meetup-token/redeem`,
+  /** POST 使用 6 位手动码。 */
+  verifyMeetupCode: (id: string) => `/transactions/${id}/meetup-token/verify-code`,
 } as const
