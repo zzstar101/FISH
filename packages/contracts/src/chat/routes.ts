@@ -25,6 +25,13 @@ export const CHAT_ROUTES = {
    * 返回未读归零后的 ConversationDto（200）。
    */
   read: (id: string) => `/conversations/${id}/read`,
+  /** #67 媒体预签名上传。 */
+  mediaPresign: (id: string) => `/conversations/${id}/media/presign`,
+  /** #67 创建媒体消息，返回独立 MediaMessageDto。 */
+  media: (id: string) => `/conversations/${id}/media`,
+  /** #67 受会话权限保护的媒体读取代理。 */
+  mediaObject: (conversationId: string, mediaId: string) =>
+    `/conversations/${conversationId}/media/${mediaId}`,
 } as const
 
 /** 业务实时推送端点（`apps/api/src/modules/realtime`）；root 层接线由 Platform Owner 完成。 */

@@ -5,6 +5,7 @@ import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
+import { messageMedia } from './schema/message-media'
 import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
 import { sessions } from './schema/sessions'
@@ -71,7 +72,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 一次性列出全部业务表：单条 TRUNCATE 可以跨外键，但必须把所有被引用的表都列全。
   // `sessions` 必须在内：它引用 users，漏掉会让 seed 第二次执行直接失败。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${transactions}, ${notifications}, ${jobs}`,
   )
 
   const now = new Date()
