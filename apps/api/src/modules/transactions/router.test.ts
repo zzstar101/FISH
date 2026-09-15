@@ -7,6 +7,7 @@ import { type TransactionService, TransactionServiceError } from './service'
 
 const dto: TransactionDto = {
   id: '00000000-0000-4000-8000-0000000000e1',
+  conversationId: '00000000-0000-4000-8000-0000000000c1',
   listingId: '00000000-0000-4000-8000-0000000000b1',
   buyerId: 'user-1',
   sellerId: 'user-2',

@@ -51,6 +51,7 @@ function toTransactionDto(
 ): TransactionDto {
   return transactionDtoSchema.parse({
     id: row.id,
+    conversationId: row.conversation_id,
     listingId: row.listing_id,
     buyerId: row.buyer_id,
     sellerId: row.seller_id,
