@@ -6,6 +6,86 @@ import { ListingStatusSchema } from '../listings/schema'
 export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM'])
 export type MessageType = z.infer<typeof messageTypeSchema>
 
+/** #67 媒体消息不扩展旧 MessageDto，避免破坏现有文本/交易消息链路。 */
+export const mediaKindSchema = z.enum(['IMAGE', 'VOICE'])
+export const MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+export const MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
+export const MEDIA_MAX_VOICE_DURATION_MS = 60_000
+export const MEDIA_MAX_IMAGE_DIMENSION = 4096
+export const MEDIA_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const
+export const MEDIA_VOICE_MIME = ['audio/webm', 'audio/mp4', 'audio/mpeg'] as const
+export type MediaKind = z.infer<typeof mediaKindSchema>
+
+export const mediaPresignInputSchema = z.strictObject({
+  kind: mediaKindSchema,
+  contentType: z.string().min(1),
+  sizeBytes: z.number().int().positive(),
+})
+export type MediaPresignInput = z.infer<typeof mediaPresignInputSchema>
+
+export const mediaPresignResponseSchema = z.strictObject({
+  uploadUrl: z.url(),
+  objectKey: z.string().min(1),
+  headers: z.record(z.string(), z.string()),
+  expiresAt: z.iso.datetime(),
+})
+export type MediaPresignResponse = z.infer<typeof mediaPresignResponseSchema>
+
+export const imageMediaMessageInputSchema = z.strictObject({
+  kind: z.literal('IMAGE'),
+  objectKey: z.string().min(1),
+  contentType: z.string().min(1),
+  sizeBytes: z.number().int().positive(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+})
+export type ImageMediaMessageInput = z.infer<typeof imageMediaMessageInputSchema>
+
+export const voiceMediaMessageInputSchema = z.strictObject({
+  kind: z.literal('VOICE'),
+  objectKey: z.string().min(1),
+  contentType: z.string().min(1),
+  sizeBytes: z.number().int().positive(),
+  durationMs: z.number().int().positive(),
+})
+export type VoiceMediaMessageInput = z.infer<typeof voiceMediaMessageInputSchema>
+
+export const mediaMessageInputSchema = z.discriminatedUnion('kind', [
+  imageMediaMessageInputSchema,
+  voiceMediaMessageInputSchema,
+])
+export type MediaMessageInput = z.infer<typeof mediaMessageInputSchema>
+
+export const mediaMessageDtoSchema = z.strictObject({
+  id: z.uuid(),
+  conversationId: z.uuid(),
+  senderId: z.uuid(),
+  kind: mediaKindSchema,
+  mediaId: z.uuid(),
+  url: z.string().min(1),
+  mimeType: z.string().min(1),
+  sizeBytes: z.number().int().positive(),
+  width: z.number().int().positive().nullable(),
+  height: z.number().int().positive().nullable(),
+  durationMs: z.number().int().positive().nullable(),
+  createdAt: z.iso.datetime(),
+})
+export type MediaMessageDto = z.infer<typeof mediaMessageDtoSchema>
+
+export const mediaListResponseSchema = z.strictObject({
+  items: z.array(mediaMessageDtoSchema),
+  nextCursor: z.string().nullable(),
+})
+export type MediaListResponse = z.infer<typeof mediaListResponseSchema>
+
+/** #67 独立媒体实时事件；不并入旧 realtimeServerEventSchema，兼容未接入媒体的客户端。 */
+export const mediaRealtimeEventSchema = z.strictObject({
+  type: z.literal('media.new'),
+  conversationId: z.uuid(),
+  media: mediaMessageDtoSchema,
+})
+export type MediaRealtimeEvent = z.infer<typeof mediaRealtimeEventSchema>
+
 /** 查看者在会话中的角色。会话严格双人（买家 + 卖家），角色决定未读列与可见性判定。 */
 export const conversationRoleSchema = z.enum(['buyer', 'seller'])
 export type ConversationRole = z.infer<typeof conversationRoleSchema>
@@ -169,5 +249,10 @@ export const ChatErrorCodeSchema = z.enum([
   'LISTING_NOT_FOUND',
   /** 409：买家 = 卖家（与 DB CHECK conversations_buyer_id_differs_from_seller_id 同源）。 */
   'CANNOT_CHAT_WITH_SELF',
+  'MEDIA_OBJECT_NOT_FOUND',
+  'MEDIA_OBJECT_INVALID',
+  'MEDIA_DURATION_EXCEEDED',
+  'MEDIA_DIMENSION_EXCEEDED',
+  'MEDIA_NOT_FOUND',
 ])
 export type ChatErrorCode = z.infer<typeof ChatErrorCodeSchema>

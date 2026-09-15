@@ -104,7 +104,9 @@ export function createSqlMessageStore(db: Db): MessageStore {
                u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
         FROM messages m
         LEFT JOIN users u ON u.id = m.sender_id
-        WHERE m.conversation_id = ${conversationId}::uuid ${condition}
+        WHERE m.conversation_id = ${conversationId}::uuid
+          AND m.type <> 'MEDIA'
+          ${condition}
         ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${limit + 1}
       `)

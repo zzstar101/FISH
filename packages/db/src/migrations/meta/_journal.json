@@ -36,6 +36,20 @@
       "when": 1789209704138,
       "tag": "0004_orange_lilandra",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789464875601,
+      "tag": "0005_free_silver_centurion",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789466591378,
+      "tag": "0006_hesitant_nova",
+      "breakpoints": true
     }
   ]
 }
