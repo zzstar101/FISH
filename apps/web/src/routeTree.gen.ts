@@ -19,6 +19,7 @@ import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as ScanRouteImport } from './routes/scan'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as CategoryIndexRouteImport } from './routes/category.index'
@@ -78,6 +79,11 @@ const RegisterRoute = RegisterRouteImport.update({
   path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ScanRoute = ScanRouteImport.update({
+  id: '/scan',
+  path: '/scan',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
@@ -130,6 +136,7 @@ export interface FileRoutesByFullPath {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/scan': typeof ScanRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/category/$categoryId': typeof CategoryCategoryIdRoute
@@ -150,6 +157,7 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/scan': typeof ScanRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/category/$categoryId': typeof CategoryCategoryIdRoute
@@ -171,6 +179,7 @@ export interface FileRoutesById {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/scan': typeof ScanRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/category/$categoryId': typeof CategoryCategoryIdRoute
@@ -193,6 +202,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/scan'
     | '/search'
     | '/wish'
     | '/category/$categoryId'
@@ -213,6 +223,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/scan'
     | '/search'
     | '/wish'
     | '/category/$categoryId'
@@ -233,6 +244,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/scan'
     | '/search'
     | '/wish'
     | '/category/$categoryId'
@@ -254,6 +266,7 @@ export interface RootRouteChildren {
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
   RegisterRoute: typeof RegisterRoute
+  ScanRoute: typeof ScanRoute
   SearchRoute: typeof SearchRoute
   WishRoute: typeof WishRoute
   CategoryCategoryIdRoute: typeof CategoryCategoryIdRoute
@@ -336,6 +349,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/scan': {
+      id: '/scan'
+      path: '/scan'
+      fullPath: '/scan'
+      preLoaderRoute: typeof ScanRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/search': {
       id: '/search'
       path: '/search'
@@ -406,6 +426,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,
   RegisterRoute: RegisterRoute,
+  ScanRoute: ScanRoute,
   SearchRoute: SearchRoute,
   WishRoute: WishRoute,
   CategoryCategoryIdRoute: CategoryCategoryIdRoute,
