@@ -8,6 +8,7 @@ import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import {
   and,
@@ -50,6 +51,7 @@ export type FeedCriteria = {
   priceMinCents?: number | undefined
   priceMaxCents?: number | undefined
   sellerId?: string | undefined
+  includeUnapproved?: boolean | undefined
 }
 
 export type FeedEntry = {
@@ -77,6 +79,15 @@ export type CreateListingRecord = {
   objectKeys: string[]
   /** 去重窗口起点：`now - 5s`（契约 §2.3）。 */
   duplicateWindowStart: Date
+  moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  moderationReason?: string | null
+  moderationRuleVersion?: string | null
+  moderation?: {
+    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+    matchedRules: string[]
+    matchedTermsMasked: string[]
+    ruleVersion: string
+  }
 }
 
 export type UpdateListingFields = {
@@ -88,12 +99,19 @@ export type UpdateListingFields = {
   urgent?: boolean
   negotiable?: boolean
   free?: boolean
+  moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  moderationReason?: string | null
+  moderationRuleVersion?: string | null
+  moderatedAt?: Date
+  status?: ListingStatus
 }
 
 /** 编辑/下架/上架前需要的当前行状态（权限、状态机、free⟹price 的合并校验都要用）。 */
 export type ListingState = {
   sellerId: string
   status: ListingStatus
+  title?: string
+  description?: string
   priceCents: number
   free: boolean
 }
@@ -130,6 +148,14 @@ export interface ListingStore {
     fields: UpdateListingFields
     /** 出现即**全量替换**图片（契约 §2.4）。 */
     objectKeys?: string[]
+    moderation?: {
+      title: string
+      description: string
+      decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+      matchedRules: string[]
+      matchedTermsMasked: string[]
+      ruleVersion: string
+    }
   }): Promise<ListingRow | null>
 
   /**
@@ -140,6 +166,17 @@ export interface ListingStore {
    * 否则下架期间新建的愿望永远匹配不到它）。没改到行就不投。
    */
   setStatus(input: { id: string; from: ListingStatus; to: ListingStatus }): Promise<boolean>
+  recordModeration?(input: {
+    listingId?: string
+    sellerId: string
+    action: 'CREATE' | 'UPDATE'
+    title: string
+    description: string
+    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+    matchedRules: string[]
+    matchedTermsMasked: string[]
+    ruleVersion: string
+  }): Promise<void>
 }
 
 /** 新商品默认落 `ACTIVE`。 */
@@ -187,11 +224,29 @@ export function createSqlListingStore(db: Db): ListingStore {
           priceCents: record.priceCents,
           category: record.category,
           condition: record.condition,
-          status: NEW_LISTING_STATUS,
+          status: record.moderationStatus === 'REVIEW' ? 'OFFLINE' : NEW_LISTING_STATUS,
+          moderationStatus: record.moderationStatus ?? 'APPROVED',
+          moderationReason: record.moderationReason ?? null,
+          moderationRuleVersion: record.moderationRuleVersion ?? null,
+          moderatedAt: new Date(),
           urgent: record.urgent,
           negotiable: record.negotiable,
           free: record.free,
         })
+
+        if (record.moderation) {
+          await tx.insert(listingModerationRecords).values({
+            listingId: record.id,
+            sellerId: record.sellerId,
+            action: 'CREATE',
+            titleSnapshot: record.title,
+            descriptionSnapshot: record.description,
+            decision: record.moderation.decision,
+            matchedRules: record.moderation.matchedRules,
+            matchedTermsMasked: record.moderation.matchedTermsMasked,
+            ruleVersion: record.moderation.ruleVersion,
+          })
+        }
 
         // 下标即 sortOrder（0 = 封面），与 #6 契约 §1 和 DB 的
         // listing_images_listing_id_sort_order_uq 唯一索引一致。
@@ -203,7 +258,9 @@ export function createSqlListingStore(db: Db): ListingStore {
           })),
         )
 
-        await enqueueMatchJobWith(tx, record.id)
+        if ((record.moderationStatus ?? 'APPROVED') === 'APPROVED') {
+          await enqueueMatchJobWith(tx, record.id)
+        }
 
         return { kind: 'created' as const, listingId: record.id }
       })
@@ -238,6 +295,8 @@ export function createSqlListingStore(db: Db): ListingStore {
         .select({
           sellerId: listings.sellerId,
           status: listings.status,
+          title: listings.title,
+          description: listings.description,
           priceCents: listings.priceCents,
           free: listings.free,
         })
@@ -249,7 +308,10 @@ export function createSqlListingStore(db: Db): ListingStore {
     },
 
     async listFeed(criteria) {
-      const conditions: SQL[] = [eq(listings.status, criteria.status)]
+      const conditions: SQL[] = [
+        eq(listings.status, criteria.status),
+        ...(criteria.includeUnapproved ? [] : [eq(listings.moderationStatus, 'APPROVED')]),
+      ]
 
       if (criteria.sellerId) conditions.push(eq(listings.sellerId, criteria.sellerId))
       if (criteria.category) conditions.push(eq(listings.category, criteria.category))
@@ -316,7 +378,7 @@ export function createSqlListingStore(db: Db): ListingStore {
       return db.transaction(async (tx) => {
         const rows = await tx
           .update(listings)
-          .set({ ...input.fields, updatedAt: new Date() })
+          .set({ ...input.fields, updatedAt: new Date(), moderatedAt: new Date() })
           // 状态谓词必须写进 UPDATE 而不是只在 service 里读一次：读取与写入之间商品可能被
           // #11 的交易流程改成 RESERVED / SOLD，check-then-act 会让那种行仍被编辑（契约 §2.4）。
           .where(
@@ -343,6 +405,23 @@ export function createSqlListingStore(db: Db): ListingStore {
           )
         }
 
+        if (input.moderation) {
+          await tx.insert(listingModerationRecords).values({
+            listingId: input.id,
+            sellerId: input.sellerId,
+            action: 'UPDATE',
+            titleSnapshot: input.moderation.title,
+            descriptionSnapshot: input.moderation.description,
+            decision: input.moderation.decision,
+            matchedRules: input.moderation.matchedRules,
+            matchedTermsMasked: input.moderation.matchedTermsMasked,
+            ruleVersion: input.moderation.ruleVersion,
+          })
+        }
+
+        // 审核中的商品不可进入匹配链路；只有通过审核的编辑才需要重算匹配。
+        if ((input.fields.moderationStatus ?? 'APPROVED') !== 'APPROVED') return updated
+
         // 编辑会改变打分输入（标题/描述 → keyword，价格、分类直接参与打分），所以必须重算匹配，
         // 否则 `matches` 里那一对会一直是旧分数（#8 契约 §3.3 的"matches 行 = 当前有效匹配"就不成立）。
         // 投递与写入同一事务：编辑成功而 job 丢失会让该商品永久停在旧分数。
@@ -353,12 +432,32 @@ export function createSqlListingStore(db: Db): ListingStore {
       })
     },
 
+    async recordModeration(input) {
+      await db.insert(listingModerationRecords).values({
+        listingId: input.listingId,
+        sellerId: input.sellerId,
+        action: input.action,
+        titleSnapshot: input.title,
+        descriptionSnapshot: input.description,
+        decision: input.decision,
+        matchedRules: input.matchedRules,
+        matchedTermsMasked: input.matchedTermsMasked,
+        ruleVersion: input.ruleVersion,
+      })
+    },
+
     async setStatus(input) {
       return db.transaction(async (tx) => {
         const rows = await tx
           .update(listings)
           .set({ status: input.to, updatedAt: new Date() })
-          .where(and(eq(listings.id, input.id), eq(listings.status, input.from)))
+          .where(
+            and(
+              eq(listings.id, input.id),
+              eq(listings.status, input.from),
+              ...(input.to === 'ACTIVE' ? [eq(listings.moderationStatus, 'APPROVED')] : []),
+            ),
+          )
           .returning({ id: listings.id })
 
         // 没改到行（并发下别人先改了，或已经不在 from 状态）就不投：没有状态变化就没有重算的必要。

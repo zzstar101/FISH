@@ -7,6 +7,7 @@ import {
   pgEnum,
   pgTable,
   text,
+  timestamp,
   unique,
   uniqueIndex,
   uuid,
@@ -29,6 +30,11 @@ export const listingCategoryEnum = pgEnum('listing_category', [
 export const listingConditionEnum = pgEnum('listing_condition', ['NEW', 'LIKE_NEW', 'GOOD', 'FAIR'])
 
 export const listingStatusEnum = pgEnum('listing_status', ['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE'])
+export const listingModerationStatusEnum = pgEnum('listing_moderation_status', [
+  'APPROVED',
+  'BLOCKED',
+  'REVIEW',
+])
 
 export const listings = pgTable(
   'listings',
@@ -44,6 +50,12 @@ export const listings = pgTable(
     category: listingCategoryEnum('category').notNull(),
     condition: listingConditionEnum('condition').notNull(),
     status: listingStatusEnum('status').notNull().default('ACTIVE'),
+    moderationStatus: listingModerationStatusEnum('moderation_status')
+      .notNull()
+      .default('APPROVED'),
+    moderationReason: text('moderation_reason'),
+    moderationRuleVersion: text('moderation_rule_version'),
+    moderatedAt: timestamp('moderated_at', { withTimezone: true, mode: 'date' }),
     /** #6 的 P0 工作项；#14 只消费这三列做标签与加权。 */
     urgent: boolean('urgent').notNull().default(false),
     negotiable: boolean('negotiable').notNull().default(false),
