@@ -34,6 +34,10 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     urgent: false,
     negotiable: true,
     free: false,
+    moderationStatus: 'APPROVED',
+    moderationReason: null,
+    moderationRuleVersion: null,
+    moderatedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     ...overrides,
@@ -400,6 +404,50 @@ describe('createListing', () => {
     ).toBe('IMAGE_REFERENCE_INVALID')
   })
 
+  test('blocks prohibited content before upload validation and records the decision', async () => {
+    const records: string[] = []
+    const service = createListingService({
+      storage: fakeStorage({
+        stat: async () => {
+          throw new Error('should not inspect uploads')
+        },
+      }),
+      store: fakeStore({
+        recordModeration: async (input) => {
+          records.push(`${input.action}:${input.decision}`)
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, title: '毒品交易' }),
+    )
+
+    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    expect(records).toEqual(['CREATE:BLOCK'])
+  })
+
+  test('creates review listings offline and does not expose them in the public feed', async () => {
+    let received: CreateListingRecord | undefined
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        createListingAtomic: async (record) => {
+          received = record
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    const result = await service.createListing(SELLER_ID, {
+      ...validCreate,
+      description: '加微信联系',
+    })
+
+    expect(received?.moderationStatus).toBe('REVIEW')
+    expect(result.detail.id).toBe(LISTING_ID)
+  })
+
   test('reports created=true and returns the detail', async () => {
     const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
     const result = await service.createListing(SELLER_ID, validCreate)
@@ -505,7 +553,7 @@ describe('updateListing', () => {
       objectKeys: [`listings/${SELLER_ID}/new.jpg`],
     })
 
-    expect(received.fields).toEqual({ title: '新标题' })
+    expect(received.fields).toMatchObject({ title: '新标题', moderationStatus: 'APPROVED' })
     expect(received.objectKeys).toEqual([`listings/${SELLER_ID}/new.jpg`])
   })
 

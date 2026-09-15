@@ -79,6 +79,7 @@ type ListingTarget = {
   priceCents: number
   category: ListingCategory
   status: ListingStatus
+  moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
 }
 
 /**
@@ -92,6 +93,7 @@ function creatable(wish: WishTarget, listing: ListingTarget): boolean {
   return (
     wish.status === 'ACTIVE' &&
     listing.status === 'ACTIVE' &&
+    listing.moderationStatus === 'APPROVED' &&
     wish.userId !== listing.sellerId &&
     (wish.category === null || wish.category === listing.category) &&
     (wish.budgetMaxCents === null || listing.priceCents <= 2 * wish.budgetMaxCents)
@@ -117,6 +119,7 @@ function visibleToWishOwner(wish: WishTarget, listing: ListingTarget, score: num
     score >= MATCH_SCORE_THRESHOLD &&
     wish.status === 'ACTIVE' &&
     listing.status !== 'OFFLINE' &&
+    listing.moderationStatus === 'APPROVED' &&
     priceWithinBudget(wish, listing)
   )
 }
@@ -128,7 +131,10 @@ function visibleToWishOwner(wish: WishTarget, listing: ListingTarget, score: num
  */
 function visibleToListingOwner(wish: WishTarget, listing: ListingTarget, score: number): boolean {
   return (
-    score >= MATCH_SCORE_THRESHOLD && wish.status === 'ACTIVE' && priceWithinBudget(wish, listing)
+    score >= MATCH_SCORE_THRESHOLD &&
+    wish.status === 'ACTIVE' &&
+    listing.moderationStatus === 'APPROVED' &&
+    priceWithinBudget(wish, listing)
   )
 }
 
@@ -286,7 +292,9 @@ export function createMatchEngine(db: Db): MatchEngine {
       )[0]
       if (!listing) return skipped('target-missing')
       // 下架 / 已被锁定 / 已售的商品不该再产生新匹配（契约 §3.1）。
-      if (listing.status !== 'ACTIVE') return skipped('target-not-active')
+      if (listing.status !== 'ACTIVE' || listing.moderationStatus !== 'APPROVED') {
+        return skipped('target-not-active')
+      }
 
       const [candidates, existingRows] = await Promise.all([
         db
@@ -323,6 +331,7 @@ export function createMatchEngine(db: Db): MatchEngine {
         priceCents: listing.priceCents,
         category: listing.category,
         status: listing.status,
+        moderationStatus: listing.moderationStatus,
       }
 
       const existingIds = new Set(existingRows.map((row) => row.id))
@@ -364,6 +373,7 @@ export function createMatchEngine(db: Db): MatchEngine {
           .where(
             and(
               eq(listings.status, 'ACTIVE'),
+              eq(listings.moderationStatus, 'APPROVED'),
               ne(listings.sellerId, wish.userId),
               /*
                * 不限分类 → 不生成条件。
@@ -386,6 +396,7 @@ export function createMatchEngine(db: Db): MatchEngine {
             priceCents: listings.priceCents,
             category: listings.category,
             status: listings.status,
+            moderationStatus: listings.moderationStatus,
           })
           .from(matches)
           .innerJoin(listings, eq(listings.id, matches.listingId))
