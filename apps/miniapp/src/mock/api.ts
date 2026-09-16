@@ -11,8 +11,8 @@ import {
   APP_BUILD,
   APP_VERSION,
   isEduEmail,
-  meetupCodeOf,
   MY_LISTINGS,
+  meetupCodeOf,
   myListingCounts,
   rotateMeetupCode,
   SETTINGS,
@@ -20,14 +20,14 @@ import {
   TRANSACTION_BY_ID,
   TRANSACTIONS,
   transactionCounts,
-  transactionsOf,
   transactionOverview,
+  transactionsOf,
   userProfile,
-  WATCHERS,
+  VERIFY,
   WATCHER_LISTING_ID,
+  WATCHERS,
   watcherCount,
   watcherStats,
-  VERIFY,
 } from './account'
 import {
   CATEGORY_ORDER,
@@ -35,16 +35,10 @@ import {
   getListing,
   LISTING_BY_ID,
   LISTINGS,
-  similarListings,
   SUB_CATEGORIES,
+  similarListings,
 } from './catalog'
-import {
-  CHAT_SUMMARY,
-  CONVERSATIONS,
-  conversationsOf,
-  mediaMessagesOf,
-  messagesOf,
-} from './chat'
+import { CHAT_SUMMARY, CONVERSATIONS, conversationsOf, mediaMessagesOf, messagesOf } from './chat'
 import {
   COMMENTS,
   commentsOf,
@@ -582,10 +576,10 @@ export const allComments: MockComment[] = COMMENTS
 
 export {
   findViolations,
-  moderate,
-  polishCandidates,
   type ModerationResult,
+  moderate,
   type PolishCandidate,
+  polishCandidates,
 } from './sell'
 
 /** 该商品分类的「同款全新约 ¥X」参考价与建议定价区间（设计稿的 pnote） */

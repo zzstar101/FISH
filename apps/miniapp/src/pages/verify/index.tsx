@@ -108,9 +108,7 @@ export default function Verify() {
               <Image className="verify__okic" src={ICONS.checkCircleWhite} mode="aspectFit" />
             </View>
             <Text className="verify__oktitle">校园认证已通过</Text>
-            <Text className="verify__oktext">
-              你现在可以发布闲置、接受交易，并获得认证徽章。
-            </Text>
+            <Text className="verify__oktext">你现在可以发布闲置、接受交易，并获得认证徽章。</Text>
           </View>
 
           <View className="verify__card">
@@ -152,12 +150,14 @@ export default function Verify() {
 
           <View
             className="verify__btn-line"
-            onClick={() => void Taro.showModal({
-              title: '解除校园认证？',
-              content: '解除后需要重新认证才能发布闲置与发起交易。',
-              confirmText: '解除认证',
-              cancelText: '再想想',
-            })}
+            onClick={() =>
+              void Taro.showModal({
+                title: '解除校园认证？',
+                content: '解除后需要重新认证才能发布闲置与发起交易。',
+                confirmText: '解除认证',
+                cancelText: '再想想',
+              })
+            }
           >
             <Text>解除认证</Text>
           </View>
@@ -177,18 +177,14 @@ export default function Verify() {
         <Text className="verify__title">
           校园<Text className="verify__title-hl">认证</Text>
         </Text>
-        <Text className="verify__meta num">
-          认证后解锁发布 / 交易 · 当前 UNVERIFIED
-        </Text>
+        <Text className="verify__meta num">认证后解锁发布 / 交易 · 当前 UNVERIFIED</Text>
       </View>
 
       <View className="verify__content">
         {/* ---- 未认证说明 ---- */}
         <View className="verify__status">
           <Text className="verify__status-tag">未认证</Text>
-          <Text className="verify__status-tx">
-            用学校邮箱验证在校身份，公开页面只展示徽章。
-          </Text>
+          <Text className="verify__status-tx">用学校邮箱验证在校身份，公开页面只展示徽章。</Text>
         </View>
 
         {/* ---- 邮箱（发码后变成只读行 + 修改） ---- */}
@@ -215,9 +211,7 @@ export default function Verify() {
             {emailError ? (
               <Text className="verify__ferr">{emailError}</Text>
             ) : (
-              <Text className="verify__fhelp">
-                仅支持校园教育邮箱，验证码 10 分钟内有效。
-              </Text>
+              <Text className="verify__fhelp">仅支持校园教育邮箱，验证码 10 分钟内有效。</Text>
             )}
 
             <View className={`verify__btn-main${sending ? ' is-off' : ''}`} onClick={send}>

@@ -313,7 +313,9 @@ export default function Register() {
             className="reg__alt-link"
             onClick={() => {
               if (submitting) return
-              void Taro.navigateBack().catch(() => void Taro.navigateTo({ url: '/pages/login/index' }))
+              void Taro.navigateBack().catch(
+                () => void Taro.navigateTo({ url: '/pages/login/index' }),
+              )
             }}
           >
             去登录

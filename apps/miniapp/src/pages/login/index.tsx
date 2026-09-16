@@ -141,10 +141,7 @@ export default function Login() {
           {errors.password ? <Text className="login__ferr">{errors.password}</Text> : null}
         </View>
 
-        <View
-          className={`login__submit${canSubmit ? '' : ' is-off'}`}
-          onClick={submit}
-        >
+        <View className={`login__submit${canSubmit ? '' : ' is-off'}`} onClick={submit}>
           {submitting ? <View className="login__spin" /> : null}
           <Text>{submitting ? '登录中…' : '登录'}</Text>
         </View>

@@ -4,13 +4,13 @@ import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import {
+  type ConversationRole,
   fetchOrders,
   formatAmount,
   type MockTransaction,
-  type ConversationRole,
+  type OrderView,
   orderCounts,
   orderOverview,
-  type OrderView,
 } from '@/mock/api'
 import './index.scss'
 
@@ -36,14 +36,12 @@ const STATUS_TABS: { key: StatusKey; label: string }[] = [
 ]
 
 /** 状态胶囊的文案与配色（设计稿：待面交品牌蓝 / 已完成灰 / 已取消灰底描边） */
-const STATUS_META: Record<
-  MockTransaction['status'],
-  { label: string; cls: string; note: string }
-> = {
-  PENDING_MEETUP: { label: '待面交', cls: 'is-pending', note: '' },
-  COMPLETED: { label: '已完成', cls: 'is-done', note: '已完成面交' },
-  CANCELLED: { label: '已取消', cls: 'is-cancel', note: '已取消交易' },
-}
+const STATUS_META: Record<MockTransaction['status'], { label: string; cls: string; note: string }> =
+  {
+    PENDING_MEETUP: { label: '待面交', cls: 'is-pending', note: '' },
+    COMPLETED: { label: '已完成', cls: 'is-done', note: '已完成面交' },
+    CANCELLED: { label: '已取消', cls: 'is-cancel', note: '已取消交易' },
+  }
 
 const ROLE_TABS: { key: ConversationRole; label: string }[] = [
   { key: 'buyer', label: '我买到的' },
@@ -223,9 +221,7 @@ export default function Orders() {
                 <View key={item.transaction.id} className="orders__card">
                   <View className="orders__top">
                     <View className="orders__av">
-                      <Text className="orders__av-tx">
-                        {item.counterpart.nickname.slice(0, 1)}
-                      </Text>
+                      <Text className="orders__av-tx">{item.counterpart.nickname.slice(0, 1)}</Text>
                       {item.counterpart.authStatus === 'VERIFIED' ? (
                         <View className="orders__av-badge" />
                       ) : null}
@@ -247,9 +243,7 @@ export default function Orders() {
                     </View>
                     <View className="orders__info">
                       <Text className="orders__otitle">{item.listing.title}</Text>
-                      <Text className="orders__otime num">
-                        创建于 {item.transaction.timeLabel}
-                      </Text>
+                      <Text className="orders__otime num">创建于 {item.transaction.timeLabel}</Text>
                       <View className="orders__price">
                         <Text className="orders__olabel">议价成交</Text>
                         <Text className="orders__amount num">
@@ -274,7 +268,10 @@ export default function Orders() {
                     </View>
 
                     {pending ? (
-                      <View className="orders__btn orders__btn--pri" onClick={() => openMeetup(item)}>
+                      <View
+                        className="orders__btn orders__btn--pri"
+                        onClick={() => openMeetup(item)}
+                      >
                         <Image className="orders__btn-ic" src={ICONS.qr} mode="aspectFit" />
                         <Text>查看交易码</Text>
                       </View>

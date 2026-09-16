@@ -3,6 +3,7 @@ import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import {
+  CATEGORY_ORDER,
   categoryCount,
   categoryTitle,
   fetchCategoryListings,
@@ -10,9 +11,8 @@ import {
   getUser,
   type ListingCategory,
   type MockListing,
-  subCategoryCount,
   SUB_CATEGORIES,
-  CATEGORY_ORDER,
+  subCategoryCount,
 } from '@/mock/api'
 import './index.scss'
 
@@ -97,7 +97,12 @@ export default function Category() {
     if (sort === '最新') list = [...list].sort((a, b) => a.createdHoursAgo - b.createdHoursAgo)
     else if (sort === '价格') list = [...list].sort((a, b) => a.priceCents - b.priceCents)
     else if (sort === '成色') {
-      const rank: Record<MockListing['condition'], number> = { NEW: 0, LIKE_NEW: 1, GOOD: 2, FAIR: 3 }
+      const rank: Record<MockListing['condition'], number> = {
+        NEW: 0,
+        LIKE_NEW: 1,
+        GOOD: 2,
+        FAIR: 3,
+      }
       list = [...list].sort((a, b) => rank[a.condition] - rank[b.condition])
     } else {
       list = [...list].sort((a, b) => b.wants * 3 + b.views - (a.wants * 3 + a.views))

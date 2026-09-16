@@ -150,7 +150,11 @@ export default function Match() {
                     })
                   }
                 >
-                  <Image className="match__thumb-img" src={view.listing.coverUrl} mode="aspectFill" />
+                  <Image
+                    className="match__thumb-img"
+                    src={view.listing.coverUrl}
+                    mode="aspectFill"
+                  />
                 </View>
 
                 <View className="match__main">
@@ -172,14 +176,13 @@ export default function Match() {
                       />
                     </View>
                     <Text className="match__pct num">{`${view.match.score}%`}</Text>
-                    <Text className="match__lvl">{scoreLabel(view.match.score, wish ?? undefined)}</Text>
+                    <Text className="match__lvl">
+                      {scoreLabel(view.match.score, wish ?? undefined)}
+                    </Text>
                   </View>
                 </View>
 
-                <View
-                  className={`match__chat${on ? ' is-on' : ''}`}
-                  onClick={() => chat(view)}
-                >
+                <View className={`match__chat${on ? ' is-on' : ''}`} onClick={() => chat(view)}>
                   <Text>{on ? '去会话' : '聊一聊'}</Text>
                 </View>
               </View>

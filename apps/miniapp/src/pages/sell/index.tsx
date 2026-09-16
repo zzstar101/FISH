@@ -142,7 +142,10 @@ export default function Sell() {
   const highlight = (text: string, words: string[]) => {
     const clean = text.replace(/[。.！!？?，,、；;：:]+$/, '')
     if (words.length === 0) return [{ text: clean, hit: false }]
-    const pattern = new RegExp(`(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'g')
+    const pattern = new RegExp(
+      `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+      'g',
+    )
     return clean
       .split(pattern)
       .filter((part) => part !== '')
@@ -305,7 +308,9 @@ export default function Sell() {
               />
             </View>
             {free ? (
-              <Text className="sell__pnote num">0 元送商品不能设置价格，领取时仍需对方扫码确认</Text>
+              <Text className="sell__pnote num">
+                0 元送商品不能设置价格，领取时仍需对方扫码确认
+              </Text>
             ) : null}
           </View>
 
@@ -335,7 +340,10 @@ export default function Sell() {
               <Text className="sell__swlab">急出</Text>
               <Text className="sell__swdesc">卡片左上角展示「急出」角标，会优先进入需求匹配</Text>
             </View>
-            <View className={`sell__sw${urgent ? ' is-on' : ''}`} onClick={() => setUrgent((p) => !p)}>
+            <View
+              className={`sell__sw${urgent ? ' is-on' : ''}`}
+              onClick={() => setUrgent((p) => !p)}
+            >
               <View className="sell__sw-knob" />
             </View>
           </View>
@@ -452,7 +460,10 @@ export default function Sell() {
                 <View className="sell__sheet-acts">
                   <View className="sell__dots">
                     {polish.candidates.map((_, i) => (
-                      <View key={`dot-${i}`} className={`sell__dot${i === polish.index ? ' is-on' : ''}`} />
+                      <View
+                        key={`dot-${i}`}
+                        className={`sell__dot${i === polish.index ? ' is-on' : ''}`}
+                      />
                     ))}
                   </View>
                   <View className="sell__btn-ghost sell__btn-ghost--pill" onClick={nextCandidate}>

@@ -251,7 +251,10 @@ export default function MyList() {
                       <Text className="ml__rstat num">{`浏览 ${item.listing.views}`}</Text>
                       <View className="ml__dot" />
                       {/* 「N 人想要」是 C5 的入口，这行本身就是唯一的跳转点 */}
-                      <Text className="ml__rstat ml__rstat--want num" onClick={() => openWatchers(item)}>
+                      <Text
+                        className="ml__rstat ml__rstat--want num"
+                        onClick={() => openWatchers(item)}
+                      >
                         {`想要 ${item.wants}`}
                       </Text>
                     </View>
@@ -286,10 +289,7 @@ export default function MyList() {
                       <Text>上架</Text>
                     </View>
                   ) : (
-                    <View
-                      className="ml__act ml__act--danger"
-                      onClick={() => toggleOffline(item)}
-                    >
+                    <View className="ml__act ml__act--danger" onClick={() => toggleOffline(item)}>
                       <Text>下架</Text>
                     </View>
                   )}
@@ -355,7 +355,9 @@ export default function MyList() {
                 onClick={confirmOffline}
               >
                 {submit === 'busy' ? <View className="ml__spin" /> : null}
-                <Text>{submit === 'busy' ? '下架中' : submit === 'failed' ? '重试' : '确认下架'}</Text>
+                <Text>
+                  {submit === 'busy' ? '下架中' : submit === 'failed' ? '重试' : '确认下架'}
+                </Text>
               </View>
             </View>
           </View>

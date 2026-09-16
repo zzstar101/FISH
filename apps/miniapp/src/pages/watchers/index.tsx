@@ -245,10 +245,10 @@ export default function Watchers() {
 
                       {/* 已聊过：次数不同给不同标签（3 条以上用中性灰，1 次用成功色） */}
                       {busy ? (
-                        <Text className={`wt__tag ${item.chattedCount > 1 ? 'wt__tag--chat' : 'wt__tag--ok'}`}>
-                          {item.chattedCount > 1
-                            ? `已聊 ${item.chattedCount} 条`
-                            : '已聊过 1 次'}
+                        <Text
+                          className={`wt__tag ${item.chattedCount > 1 ? 'wt__tag--chat' : 'wt__tag--ok'}`}
+                        >
+                          {item.chattedCount > 1 ? `已聊 ${item.chattedCount} 条` : '已聊过 1 次'}
                         </Text>
                       ) : null}
                     </View>

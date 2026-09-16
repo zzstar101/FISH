@@ -244,7 +244,12 @@ const SPECS: ConversationSpec[] = [
     online: false,
     lastMessageAt: isoAgo(5 * HOUR),
     messages: [
-      { senderId: 'u-alan', type: 'TEXT', content: '你好，高数上册含习题册那本还在吗', agoMs: 7 * HOUR },
+      {
+        senderId: 'u-alan',
+        type: 'TEXT',
+        content: '你好，高数上册含习题册那本还在吗',
+        agoMs: 7 * HOUR,
+      },
       { senderId: 'u-zhangyu', type: 'TEXT', content: '在的，可以面交', agoMs: 6.4 * HOUR },
       {
         senderId: 'u-alan',
@@ -258,7 +263,12 @@ const SPECS: ConversationSpec[] = [
         content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-101', amountCents: 1800 }),
         agoMs: 5.4 * HOUR,
       },
-      { senderId: 'u-zhangyu', type: 'TEXT', content: '今晚在图书馆一楼碰面可以吗', agoMs: 5 * HOUR },
+      {
+        senderId: 'u-zhangyu',
+        type: 'TEXT',
+        content: '今晚在图书馆一楼碰面可以吗',
+        agoMs: 5 * HOUR,
+      },
     ],
   },
   {
@@ -281,7 +291,12 @@ const SPECS: ConversationSpec[] = [
         content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-102', amountCents: 8500 }),
         agoMs: 21 * HOUR,
       },
-      { senderId: 'u-lin', type: 'TEXT', content: '明天下午在宿舍楼下给你送过去', agoMs: 20 * HOUR },
+      {
+        senderId: 'u-lin',
+        type: 'TEXT',
+        content: '明天下午在宿舍楼下给你送过去',
+        agoMs: 20 * HOUR,
+      },
     ],
   },
   {
@@ -296,15 +311,34 @@ const SPECS: ConversationSpec[] = [
     online: false,
     lastMessageAt: isoAgo(30 * 24 * HOUR),
     messages: [
-      { senderId: 'u-alan', type: 'TEXT', content: '单反快门数多少？镜头有霉吗', agoMs: 31 * 24 * HOUR },
-      { senderId: 'u-suyiran', type: 'TEXT', content: '快门 8000 出头，无霉无雾，可以当面验机', agoMs: 30.6 * 24 * HOUR },
+      {
+        senderId: 'u-alan',
+        type: 'TEXT',
+        content: '单反快门数多少？镜头有霉吗',
+        agoMs: 31 * 24 * HOUR,
+      },
+      {
+        senderId: 'u-suyiran',
+        type: 'TEXT',
+        content: '快门 8000 出头，无霉无雾，可以当面验机',
+        agoMs: 30.6 * 24 * HOUR,
+      },
       {
         senderId: 'u-alan',
         type: 'SYSTEM',
-        content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-103', amountCents: 105000 }),
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: 't-103',
+          amountCents: 105000,
+        }),
         agoMs: 30.2 * 24 * HOUR,
       },
-      { senderId: 'u-suyiran', type: 'TEXT', content: '这周末我都在学校，你定时间', agoMs: 30 * 24 * HOUR },
+      {
+        senderId: 'u-suyiran',
+        type: 'TEXT',
+        content: '这周末我都在学校，你定时间',
+        agoMs: 30 * 24 * HOUR,
+      },
     ],
   },
   {
@@ -319,7 +353,12 @@ const SPECS: ConversationSpec[] = [
     online: false,
     lastMessageAt: isoAgo(27 * 24 * HOUR),
     messages: [
-      { senderId: 'u-zhouyan', type: 'TEXT', content: '台灯我要了，可调色温那款对吧', agoMs: 28 * 24 * HOUR },
+      {
+        senderId: 'u-zhouyan',
+        type: 'TEXT',
+        content: '台灯我要了，可调色温那款对吧',
+        agoMs: 28 * 24 * HOUR,
+      },
       {
         senderId: 'u-alan',
         type: 'SYSTEM',
@@ -372,7 +411,11 @@ const SPECS: ConversationSpec[] = [
       {
         senderId: 'u-alan',
         type: 'SYSTEM',
-        content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-106', amountCents: 16000 }),
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: 't-106',
+          amountCents: 16000,
+        }),
         agoMs: 34.5 * 24 * HOUR,
       },
       { senderId: 'u-xuche', type: 'TEXT', content: '拍子很好用，谢谢学长', agoMs: 34 * 24 * HOUR },
@@ -396,7 +439,12 @@ const SPECS: ConversationSpec[] = [
     online: true,
     lastMessageAt: isoAgo(2 * HOUR),
     messages: [
-      { senderId: 'u-suyiran', type: 'TEXT', content: '键盘我挂出来了，你要是还想要就直接拍，别砍太狠就行。', agoMs: 4 * HOUR },
+      {
+        senderId: 'u-suyiran',
+        type: 'TEXT',
+        content: '键盘我挂出来了，你要是还想要就直接拍，别砍太狠就行。',
+        agoMs: 4 * HOUR,
+      },
       { senderId: 'u-alan', type: 'TEXT', content: '好，我先看看成色。', agoMs: 3.9 * HOUR },
       {
         senderId: 'u-suyiran',
@@ -432,7 +480,12 @@ const SPECS: ConversationSpec[] = [
         agoMs: 3.3 * HOUR,
         media: { kind: 'IMAGE', imageSlug: 'digital-mxkeys' },
       },
-      { senderId: 'u-suyiran', type: 'TEXT', content: '收到，今晚 7 点在图书馆一楼大厅可以吗？我带充电线和包装盒。', agoMs: 3.2 * HOUR },
+      {
+        senderId: 'u-suyiran',
+        type: 'TEXT',
+        content: '收到，今晚 7 点在图书馆一楼大厅可以吗？我带充电线和包装盒。',
+        agoMs: 3.2 * HOUR,
+      },
       {
         senderId: 'u-alan',
         type: 'TEXT',
@@ -447,7 +500,12 @@ const SPECS: ConversationSpec[] = [
         agoMs: 2.4 * HOUR,
         media: { kind: 'IMAGE', imageSlug: 'digital-mxkeys', state: 'FAILED' },
       },
-      { senderId: 'u-alan', type: 'TEXT', content: '那我把打包盒也一起带过去，省得你找箱子。', agoMs: 2.2 * HOUR, },
+      {
+        senderId: 'u-alan',
+        type: 'TEXT',
+        content: '那我把打包盒也一起带过去，省得你找箱子。',
+        agoMs: 2.2 * HOUR,
+      },
       {
         senderId: 'u-suyiran',
         type: 'TEXT',

@@ -253,10 +253,7 @@ export default function Scan() {
               </View>
             ) : null}
 
-            <View
-              className={`scan__btn-main${ready ? '' : ' is-off'}`}
-              onClick={submitCode}
-            >
+            <View className={`scan__btn-main${ready ? '' : ' is-off'}`} onClick={submitCode}>
               <Text>确认</Text>
             </View>
 
@@ -277,8 +274,7 @@ export default function Scan() {
             </View>
             <Text className="scan__cdialog-title">没有相机权限</Text>
             <Text className="scan__cdialog-text">
-              去「设置」允许使用相机后即可扫码。不想开权限也可以直接手动输入对方的 6
-              位交易码。
+              去「设置」允许使用相机后即可扫码。不想开权限也可以直接手动输入对方的 6 位交易码。
             </Text>
             <View className="scan__cacts">
               <View className="scan__btn-main scan__btn-main--flat" onClick={openSetting}>

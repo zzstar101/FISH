@@ -138,7 +138,11 @@ export default function UserHome() {
                   {/* 徽章只在 VERIFIED 时渲染：未认证不占位、不留白 */}
                   {verified ? (
                     <View className="uhome__badge">
-                      <Image className="uhome__badge-ic" src={ICONS.verifiedAccent} mode="aspectFit" />
+                      <Image
+                        className="uhome__badge-ic"
+                        src={ICONS.verifiedAccent}
+                        mode="aspectFit"
+                      />
                       <Text>已认证</Text>
                     </View>
                   ) : null}
@@ -208,9 +212,7 @@ export default function UserHome() {
           {/* ---- 吸底动作条：关注（次）+ 聊一聊（主） ---- */}
           <View className="uhome__bar">
             <View
-              className={`uhome__follow${following ? ' is-on' : ''}${
-                followBusy ? ' is-busy' : ''
-              }`}
+              className={`uhome__follow${following ? ' is-on' : ''}${followBusy ? ' is-busy' : ''}`}
               onClick={toggleFollow}
             >
               <Text>{followBusy ? '提交中…' : following ? '已关注' : '关注'}</Text>

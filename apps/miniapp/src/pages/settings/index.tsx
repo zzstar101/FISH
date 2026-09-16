@@ -87,7 +87,10 @@ export default function Settings() {
             <View className="st__arrow" />
           </View>
 
-          <View className="st__row" onClick={() => void Taro.navigateTo({ url: '/pages/verify/index' })}>
+          <View
+            className="st__row"
+            onClick={() => void Taro.navigateTo({ url: '/pages/verify/index' })}
+          >
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.safeAccent} mode="aspectFit" />
             </View>
@@ -154,10 +157,34 @@ export default function Settings() {
         <View className="st__grouplabel">通知设置</View>
         <View className="st__group">
           {[
-            { key: 'chat', label: '新消息', value: notifyChat, set: setNotifyChat, icon: ICONS.chatInk },
-            { key: 'wish', label: '许愿命中', value: notifyWish, set: setNotifyWish, icon: ICONS.heartOn },
-            { key: 'deal', label: '交易提醒', value: notifyDeal, set: setNotifyDeal, icon: ICONS.orderMuted },
-            { key: 'news', label: '活动与公告', value: notifyNews, set: setNotifyNews, icon: ICONS.feedback },
+            {
+              key: 'chat',
+              label: '新消息',
+              value: notifyChat,
+              set: setNotifyChat,
+              icon: ICONS.chatInk,
+            },
+            {
+              key: 'wish',
+              label: '许愿命中',
+              value: notifyWish,
+              set: setNotifyWish,
+              icon: ICONS.heartOn,
+            },
+            {
+              key: 'deal',
+              label: '交易提醒',
+              value: notifyDeal,
+              set: setNotifyDeal,
+              icon: ICONS.orderMuted,
+            },
+            {
+              key: 'news',
+              label: '活动与公告',
+              value: notifyNews,
+              set: setNotifyNews,
+              icon: ICONS.feedback,
+            },
           ].map((item) => (
             <View key={item.key} className="st__row">
               <View className="st__ric">
@@ -265,9 +292,7 @@ export default function Settings() {
             <Text>退出登录</Text>
           </View>
         </View>
-        <Text className="st__danger-note">
-          退出后需重新登录，本地草稿与收藏记录不会丢失。
-        </Text>
+        <Text className="st__danger-note">退出后需重新登录，本地草稿与收藏记录不会丢失。</Text>
         <Text className="st__version num">{`鱼小应 v${APP_VERSION} · build ${APP_BUILD}`}</Text>
       </View>
 
@@ -287,10 +312,7 @@ export default function Settings() {
               <View className="st__sheet-cancel" onClick={() => setLogoutOpen(false)}>
                 <Text>再想想</Text>
               </View>
-              <View
-                className={`st__sheet-ok${loggingOut ? ' is-off' : ''}`}
-                onClick={onLogout}
-              >
+              <View className={`st__sheet-ok${loggingOut ? ' is-off' : ''}`} onClick={onLogout}>
                 {loggingOut ? <View className="st__spin" /> : null}
                 <Text>{loggingOut ? '退出中…' : '退出登录'}</Text>
               </View>

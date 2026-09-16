@@ -254,9 +254,7 @@ export default function Conversation() {
   /** 失败重试：上传失败的图重新跑一遍进度 */
   const retryMedia = (id: string) => {
     setMedia((prev) =>
-      prev.map((item) =>
-        item.id === id ? { ...item, state: 'UPLOADING', progress: 8 } : item,
-      ),
+      prev.map((item) => (item.id === id ? { ...item, state: 'UPLOADING', progress: 8 } : item)),
     )
   }
 
@@ -361,7 +359,9 @@ export default function Conversation() {
                 />
               ))}
             </View>
-            <Text className={`conv__dur num${mine ? ' is-mine' : ''}`}>{`${item.durationSec}"`}</Text>
+            <Text
+              className={`conv__dur num${mine ? ' is-mine' : ''}`}
+            >{`${item.durationSec}"`}</Text>
           </View>
           <Text className="conv__time num">
             {playing
@@ -491,7 +491,6 @@ export default function Conversation() {
               </View>
             )
           })}
-
         </View>
       </ScrollView>
 
