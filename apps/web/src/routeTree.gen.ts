@@ -25,15 +25,15 @@ import { Route as SearchRouteImport } from './routes/search'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminAuditLogsRouteImport } from './routes/admin.audit-logs'
-import { Route as AdminListingsRouteImport } from './routes/admin.listings'
-import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as CategoryIndexRouteImport } from './routes/category.index'
 import { Route as CategoryCategoryIdRouteImport } from './routes/category.$categoryId'
 import { Route as ChatConversationIdRouteImport } from './routes/chat.$conversationId'
 import { Route as DetailListingIdRouteImport } from './routes/detail.$listingId'
 import { Route as UserUserIdRouteImport } from './routes/user.$userId'
 import { Route as WatchersListingIdRouteImport } from './routes/watchers.$listingId'
+import { Route as AdminListingsIndexRouteImport } from './routes/admin.listings.index'
 import { Route as AdminListingsListingIdRouteImport } from './routes/admin.listings.$listingId'
+import { Route as AdminUsersIndexRouteImport } from './routes/admin.users.index'
 import { Route as AdminUsersUserIdRouteImport } from './routes/admin.users.$userId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -116,16 +116,6 @@ const AdminAuditLogsRoute = AdminAuditLogsRouteImport.update({
   path: '/audit-logs',
   getParentRoute: () => AdminRoute,
 } as any)
-const AdminListingsRoute = AdminListingsRouteImport.update({
-  id: '/listings',
-  path: '/listings',
-  getParentRoute: () => AdminRoute,
-} as any)
-const AdminUsersRoute = AdminUsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => AdminRoute,
-} as any)
 const CategoryIndexRoute = CategoryIndexRouteImport.update({
   id: '/category/',
   path: '/category/',
@@ -156,15 +146,25 @@ const WatchersListingIdRoute = WatchersListingIdRouteImport.update({
   path: '/watchers/$listingId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminListingsIndexRoute = AdminListingsIndexRouteImport.update({
+  id: '/listings/',
+  path: '/listings/',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminListingsListingIdRoute = AdminListingsListingIdRouteImport.update({
-  id: '/$listingId',
-  path: '/$listingId',
-  getParentRoute: () => AdminListingsRoute,
+  id: '/listings/$listingId',
+  path: '/listings/$listingId',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
-  id: '/$userId',
-  path: '/$userId',
-  getParentRoute: () => AdminUsersRoute,
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => AdminRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -183,8 +183,6 @@ export interface FileRoutesByFullPath {
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/admin/audit-logs': typeof AdminAuditLogsRoute
-  '/admin/listings': typeof AdminListingsRouteWithChildren
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/category/$categoryId': typeof CategoryCategoryIdRoute
   '/chat/$conversationId': typeof ChatConversationIdRoute
   '/detail/$listingId': typeof DetailListingIdRoute
@@ -194,6 +192,8 @@ export interface FileRoutesByFullPath {
   '/category/': typeof CategoryIndexRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/admin/listings/': typeof AdminListingsIndexRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -210,8 +210,6 @@ export interface FileRoutesByTo {
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/admin/audit-logs': typeof AdminAuditLogsRoute
-  '/admin/listings': typeof AdminListingsRouteWithChildren
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/category/$categoryId': typeof CategoryCategoryIdRoute
   '/chat/$conversationId': typeof ChatConversationIdRoute
   '/detail/$listingId': typeof DetailListingIdRoute
@@ -221,6 +219,8 @@ export interface FileRoutesByTo {
   '/category': typeof CategoryIndexRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/admin/listings': typeof AdminListingsIndexRoute
+  '/admin/users': typeof AdminUsersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -239,8 +239,6 @@ export interface FileRoutesById {
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/admin/audit-logs': typeof AdminAuditLogsRoute
-  '/admin/listings': typeof AdminListingsRouteWithChildren
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/category/$categoryId': typeof CategoryCategoryIdRoute
   '/chat/$conversationId': typeof ChatConversationIdRoute
   '/detail/$listingId': typeof DetailListingIdRoute
@@ -250,6 +248,8 @@ export interface FileRoutesById {
   '/category/': typeof CategoryIndexRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/admin/listings/': typeof AdminListingsIndexRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -269,8 +269,6 @@ export interface FileRouteTypes {
     | '/search'
     | '/wish'
     | '/admin/audit-logs'
-    | '/admin/listings'
-    | '/admin/users'
     | '/category/$categoryId'
     | '/chat/$conversationId'
     | '/detail/$listingId'
@@ -280,6 +278,8 @@ export interface FileRouteTypes {
     | '/category/'
     | '/admin/listings/$listingId'
     | '/admin/users/$userId'
+    | '/admin/listings/'
+    | '/admin/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -296,8 +296,6 @@ export interface FileRouteTypes {
     | '/search'
     | '/wish'
     | '/admin/audit-logs'
-    | '/admin/listings'
-    | '/admin/users'
     | '/category/$categoryId'
     | '/chat/$conversationId'
     | '/detail/$listingId'
@@ -307,6 +305,8 @@ export interface FileRouteTypes {
     | '/category'
     | '/admin/listings/$listingId'
     | '/admin/users/$userId'
+    | '/admin/listings'
+    | '/admin/users'
   id:
     | '__root__'
     | '/'
@@ -324,8 +324,6 @@ export interface FileRouteTypes {
     | '/search'
     | '/wish'
     | '/admin/audit-logs'
-    | '/admin/listings'
-    | '/admin/users'
     | '/category/$categoryId'
     | '/chat/$conversationId'
     | '/detail/$listingId'
@@ -335,6 +333,8 @@ export interface FileRouteTypes {
     | '/category/'
     | '/admin/listings/$listingId'
     | '/admin/users/$userId'
+    | '/admin/listings/'
+    | '/admin/users/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -474,20 +474,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditLogsRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/admin/listings': {
-      id: '/admin/listings'
-      path: '/listings'
-      fullPath: '/admin/listings'
-      preLoaderRoute: typeof AdminListingsRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/admin/users': {
-      id: '/admin/users'
-      path: '/users'
-      fullPath: '/admin/users'
-      preLoaderRoute: typeof AdminUsersRouteImport
-      parentRoute: typeof AdminRoute
-    }
     '/category/': {
       id: '/category/'
       path: '/category'
@@ -530,59 +516,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WatchersListingIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/listings/': {
+      id: '/admin/listings/'
+      path: '/listings'
+      fullPath: '/admin/listings/'
+      preLoaderRoute: typeof AdminListingsIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/listings/$listingId': {
       id: '/admin/listings/$listingId'
-      path: '/$listingId'
+      path: '/listings/$listingId'
       fullPath: '/admin/listings/$listingId'
       preLoaderRoute: typeof AdminListingsListingIdRouteImport
-      parentRoute: typeof AdminListingsRoute
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/users/': {
+      id: '/admin/users/'
+      path: '/users'
+      fullPath: '/admin/users/'
+      preLoaderRoute: typeof AdminUsersIndexRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/admin/users/$userId': {
       id: '/admin/users/$userId'
-      path: '/$userId'
+      path: '/users/$userId'
       fullPath: '/admin/users/$userId'
       preLoaderRoute: typeof AdminUsersUserIdRouteImport
-      parentRoute: typeof AdminUsersRoute
+      parentRoute: typeof AdminRoute
     }
   }
 }
 
-interface AdminListingsRouteChildren {
-  AdminListingsListingIdRoute: typeof AdminListingsListingIdRoute
-}
-
-const AdminListingsRouteChildren: AdminListingsRouteChildren = {
-  AdminListingsListingIdRoute: AdminListingsListingIdRoute,
-}
-
-const AdminListingsRouteWithChildren = AdminListingsRoute._addFileChildren(
-  AdminListingsRouteChildren,
-)
-
-interface AdminUsersRouteChildren {
-  AdminUsersUserIdRoute: typeof AdminUsersUserIdRoute
-}
-
-const AdminUsersRouteChildren: AdminUsersRouteChildren = {
-  AdminUsersUserIdRoute: AdminUsersUserIdRoute,
-}
-
-const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
-  AdminUsersRouteChildren,
-)
-
 interface AdminRouteChildren {
   AdminAuditLogsRoute: typeof AdminAuditLogsRoute
-  AdminListingsRoute: typeof AdminListingsRouteWithChildren
-  AdminUsersRoute: typeof AdminUsersRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminListingsListingIdRoute: typeof AdminListingsListingIdRoute
+  AdminUsersUserIdRoute: typeof AdminUsersUserIdRoute
+  AdminListingsIndexRoute: typeof AdminListingsIndexRoute
+  AdminUsersIndexRoute: typeof AdminUsersIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditLogsRoute: AdminAuditLogsRoute,
-  AdminListingsRoute: AdminListingsRouteWithChildren,
-  AdminUsersRoute: AdminUsersRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
+  AdminListingsListingIdRoute: AdminListingsListingIdRoute,
+  AdminUsersUserIdRoute: AdminUsersUserIdRoute,
+  AdminListingsIndexRoute: AdminListingsIndexRoute,
+  AdminUsersIndexRoute: AdminUsersIndexRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
