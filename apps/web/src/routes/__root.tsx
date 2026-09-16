@@ -12,6 +12,11 @@ export const Route = createRootRoute({ component: RootLayout })
 /** 需要波浪背景的路由。 */
 const AUTH_PATHS = new Set(['/login', '/register'])
 
+/** 管理后台（#73）：放宽 430px 移动端视口限制，后台以桌面宽度为主（设计 §7）。 */
+function isAdminPath(pathname: string): boolean {
+  return pathname === '/admin' || pathname.startsWith('/admin/')
+}
+
 /** 登录后维持 `/ws/chat` 实时连接；登出（或未登录）时断开。 */
 function RealtimeGate() {
   const { me } = useAuth()
@@ -30,7 +35,11 @@ function RootLayout() {
         背景若跟着重建，WebGL 上下文要重编译、波浪相位归零，肉眼就是跳一下。
         放在这一层，只有离开认证页时才会卸载。
       */}
-      <div className="relative isolate mx-auto min-h-dvh w-full max-w-[430px] bg-bg">
+      <div
+        className={`relative isolate mx-auto min-h-dvh w-full bg-bg ${
+          isAdminPath(pathname) ? 'max-w-6xl' : 'max-w-[430px]'
+        }`}
+      >
         {AUTH_PATHS.has(pathname) && <AuthBackground />}
         <Outlet />
       </div>
