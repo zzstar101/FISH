@@ -6,7 +6,6 @@ import { MessageCircle } from 'lucide-react'
 import type * as React from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
-import { createConversation } from '../chat/api'
 import { useCancelTransaction, useConfirmTransaction } from './queries'
 
 type ChipTone = NonNullable<React.ComponentProps<typeof Badge>['variant']>
@@ -31,10 +30,10 @@ export function OrderCard({ order }: { order: TransactionDto }) {
   const inProgress = order.status === 'PENDING_MEETUP'
 
   const openChat = () => {
-    // 交易必有对应会话（conversationId 即定位商品 + 买卖双方），直接创建/复用。
-    void createConversation({ listingId: order.listingId }).then((conversationId) =>
-      navigate({ to: '/chat/$conversationId', params: { conversationId } }),
-    )
+    void navigate({
+      to: '/chat/$conversationId',
+      params: { conversationId: order.conversationId },
+    })
   }
 
   return (
@@ -74,14 +73,14 @@ export function OrderCard({ order }: { order: TransactionDto }) {
         <span className="shrink-0 font-semibold text-lg">{formatPrice(order.amountCents)}</span>
       </button>
 
-      {inProgress ? (
-        <div className="mt-3 flex justify-end gap-2">
-          <Button onClick={openChat} size="sm" variant="outline">
-            <MessageCircle className="size-3" />
-            联系 TA
-          </Button>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button onClick={openChat} size="sm" variant="outline">
+          <MessageCircle className="size-3" />
+          查看会话
+        </Button>
 
-          {isBuyer ? (
+        {inProgress ? (
+          isBuyer ? (
             <>
               <Button onClick={() => cancel.mutate(order.id)} size="sm" variant="destructive">
                 取消交易
@@ -94,9 +93,9 @@ export function OrderCard({ order }: { order: TransactionDto }) {
             <Button onClick={() => confirm.mutate(order.id)} size="sm">
               确认已交付
             </Button>
-          )}
-        </div>
-      ) : null}
+          )
+        ) : null}
+      </div>
     </article>
   )
 }

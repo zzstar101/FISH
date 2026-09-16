@@ -16,6 +16,8 @@ export const CHAT_ROUTES = {
    * GET 拉当前用户的会话列表（买卖两种角色合并，按 lastMessageAt 降序，游标分页）。
    */
   base: '/conversations',
+  /** GET 单个会话详情；服务端按当前用户校验参与者权限。 */
+  detail: (id: string) => `/conversations/${id}`,
   /** GET 历史消息（游标分页，升序）；POST 发送 TEXT 消息（201，响应体 MessageDto）。 */
   messages: (id: string) => `/conversations/${id}/messages`,
   /**

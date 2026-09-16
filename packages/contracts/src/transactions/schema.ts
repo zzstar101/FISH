@@ -38,6 +38,8 @@ export type TransactionUser = z.infer<typeof transactionUserSchema>
 export const transactionDtoSchema = z
   .object({
     id: z.string(),
+    /** 该交易对应的唯一会话；买卖双方读取同一交易时值相同。 */
+    conversationId: z.string(),
     listingId: z.string(),
     buyerId: z.string(),
     sellerId: z.string(),

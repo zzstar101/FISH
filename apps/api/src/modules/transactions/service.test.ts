@@ -96,6 +96,7 @@ class MemoryTxStore implements TransactionStore {
     }
     const row: TransactionRow = {
       id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
+      conversation_id: brief.id,
       listing_id: brief.listingId,
       buyer_id: brief.buyerId,
       seller_id: brief.sellerId,

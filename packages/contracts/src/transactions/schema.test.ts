@@ -92,6 +92,7 @@ describe('transactionStatusSchema', () => {
 describe('transactionDtoSchema', () => {
   const base = {
     id: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+    conversationId,
     listingId: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
     buyerId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
     sellerId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
