@@ -33,9 +33,16 @@ const CONDITIONS: { key: 'NEW' | 'LIKE_NEW' | 'GOOD' | 'FAIR'; label: string }[]
   { key: 'FAIR', label: '七成新' },
 ]
 
-/** 演示用的「已选图片」：真实上传接好后换成用户选择的本地路径 */
-const DEMO_PHOTOS = ['digital-laptop', 'digital-phone', 'daily-desklamp'].map((slug) =>
-  productImage(slug, 0),
+/**
+ * 演示用的「已选图片」。真实上传接好后换成用户选择的本地路径。
+ *
+ * 每张带自己的 `id`：两个 DIGITAL 分类的商品色块**是同一个 data URI**，
+ * 拿 `url` 当 key / 当删除判据会撞 key 并一次删掉两张（实测过），所以身份用 id。
+ */
+type SelectedPhoto = { id: string; url: string }
+
+const DEMO_PHOTOS: SelectedPhoto[] = ['digital-laptop', 'digital-phone', 'daily-desklamp'].map(
+  (slug, index) => ({ id: `demo-photo-${index + 1}`, url: productImage(slug, 0) }),
 )
 
 /** AI 润色的三条候选（页面只保存索引与候选本身，不保存状态机之外的中间态） */
@@ -52,7 +59,7 @@ export default function Sell() {
   const [free, setFree] = useState(false)
   const [urgent, setUrgent] = useState(false)
   const [negotiable, setNegotiable] = useState(true)
-  const [photos, setPhotos] = useState<string[]>(DEMO_PHOTOS)
+  const [photos, setPhotos] = useState<SelectedPhoto[]>(DEMO_PHOTOS)
   const [polish, setPolish] = useState<PolishState>({ phase: 'idle' })
   /** 审核结果：null = 还没提交过（不显示任何错误块，包括空表单时） */
   const [review, setReview] = useState<ReturnType<typeof moderate> | null>(null)
@@ -201,13 +208,13 @@ export default function Sell() {
               <Text className="sell__fhint num">{`${photos.length} / 9 · 长按拖动可换封面`}</Text>
             </View>
             <View className="sell__photos">
-              {photos.map((src, index) => (
-                <View key={src} className="sell__photo">
-                  <Image className="sell__photo-img" src={src} mode="aspectFill" />
+              {photos.map((photo, index) => (
+                <View key={photo.id} className="sell__photo">
+                  <Image className="sell__photo-img" src={photo.url} mode="aspectFill" />
                   {index === 0 ? <Text className="sell__photo-cover">封面</Text> : null}
                   <View
                     className="sell__photo-del"
-                    onClick={() => setPhotos((prev) => prev.filter((item) => item !== src))}
+                    onClick={() => setPhotos((prev) => prev.filter((item) => item.id !== photo.id))}
                   >
                     <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
                   </View>
@@ -393,7 +400,7 @@ export default function Sell() {
               <View className="sell__badge-thumb">
                 <Image
                   className="sell__badge-thumb-img"
-                  src={photos[0] ?? productImage('digital-laptop', 0)}
+                  src={photos[0]?.url ?? productImage('digital-laptop', 0)}
                   mode="aspectFill"
                 />
                 {/* 两个角标同时存在时上下堆叠（稿子明确要求），用一列 flex 自然实现 */}

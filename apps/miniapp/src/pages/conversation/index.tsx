@@ -144,8 +144,11 @@ export default function Conversation() {
    * 首屏与每次发消息后都滚到底部。
    *
    * 主路径是小程序 ScrollView 的 `scrollTop` 属性（先置 0 再置一个超大值，保证
-   * 连续发两条消息也会重新触发）；DOM 那一次是预览兜底：预览桩把 scrollTop
+   * 连续发两条消息也会重新触发）；DOM 那一次**只给预览（h5）用**：预览桩把 scrollTop
    * 透传给普通属性、不会真的滚动，而截图验收要在「已滚到底」的状态下看最后一屏。
+   *
+   * ⚠️ 小程序运行时没有 `HTMLElement`（#64 Done 第 3 条：不依赖 Web DOM / Browser-only API），
+   * 所以这一支必须按环境整段跳过 —— 否则每次进页面都会抛一次 ReferenceError。
    */
   useEffect(() => {
     // 显式读一下触发器：既满足 lint 的依赖一致性，也让「第几次滚动」可观测
@@ -153,6 +156,8 @@ export default function Conversation() {
     setScrollTop(0)
     const raf = requestAnimationFrame(() => {
       setScrollTop(99999)
+      if (process.env.TARO_ENV !== 'h5') return
+      if (typeof document === 'undefined' || typeof HTMLElement === 'undefined') return
       const node = document.querySelector('.conv__scroll')
       if (node instanceof HTMLElement) {
         node.scrollTop = node.scrollHeight

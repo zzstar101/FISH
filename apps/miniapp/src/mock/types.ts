@@ -12,13 +12,31 @@
  *   详情页留言区因此只能 mock——这里显式标注，不假装它有契约。
  */
 
+/**
+ * **枚举一律复用契约，不在这里重抄。**
+ *
+ * `packages/contracts/src/listings/schema.ts` 头部写得很明确：「本目录是商品域协议的
+ * 唯一来源：API 与 Web（含 Mock adapter）都从这里 import，**禁止在别处重复定义枚举或值域**」。
+ * 重抄一份的代价是两边各自演化，漂移只会在接真接口或 INSERT 时才炸。
+ *
+ * 为什么是 `import type` 而不是值导入：值导入会把 zod 一起打进小程序产物
+ * （实测 vendors.js 8KB → 99KB，见 `src/lib/contracts.ts` 的注释与 `config/index.ts`
+ * 里 `mini.compile.include` 的说明）；type-only 不产生任何运行时代码。
+ */
+import type { AuthStatus, Campus } from '@fish/contracts/auth/user'
+import type { ConversationRole, MessageType } from '@fish/contracts/chat/schema'
+import type {
+  ListingCategory,
+  ListingCondition,
+  ListingStatus,
+} from '@fish/contracts/listings/schema'
+import type { TransactionStatus } from '@fish/contracts/transactions/schema'
+import type { WishStatus } from '@fish/contracts/wishes/schema'
+
 /* ---------------------------------------------------------------- 用户 */
 
-/** 对应 `auth/user.ts` 的 `Campus` */
-export type Campus = '肇庆' | '广州'
-
-/** 对应 `auth/user.ts` 的 `AuthStatus` */
-export type AuthStatus = 'UNVERIFIED' | 'VERIFIED'
+/** 复用 `auth/user.ts` 的 `Campus` / `AuthStatus`（契约是唯一真源） */
+export type { AuthStatus, Campus }
 
 export type MockUser = {
   id: string
@@ -33,22 +51,8 @@ export type MockUser = {
 
 /* ---------------------------------------------------------------- 商品 */
 
-/** 对应 `listings/schema.ts` 的 `ListingCategory` */
-export type ListingCategory =
-  | 'DIGITAL'
-  | 'BOOKS'
-  | 'BEAUTY'
-  | 'DAILY'
-  | 'SPORTS'
-  | 'APPAREL'
-  | 'TRANSPORT'
-  | 'OTHER'
-
-/** 对应 `listings/schema.ts` 的 `ListingCondition` */
-export type ListingCondition = 'NEW' | 'LIKE_NEW' | 'GOOD' | 'FAIR'
-
-/** 对应 `listings/schema.ts` 的 `ListingStatus` */
-export type ListingStatus = 'ACTIVE' | 'RESERVED' | 'SOLD' | 'OFFLINE'
+/** 复用 `listings/schema.ts` 的 `ListingCategory` / `ListingCondition` / `ListingStatus` */
+export type { ListingCategory, ListingCondition, ListingStatus }
 
 /** 图片比例：设计稿的瀑布流是手工错落的，比例随商品走 */
 export type ImageRatio = '1x1' | '4x5' | '5x6' | '3x4' | '4x3'
@@ -103,8 +107,8 @@ export type MockComment = {
 
 /* ---------------------------------------------------------------- 愿望 */
 
-/** 对应 `wishes/schema.ts` 的 `WishStatus` */
-export type WishStatus = 'ACTIVE' | 'CLOSED' | 'FULFILLED'
+/** 复用 `wishes/schema.ts` 的 `WishStatus` */
+export type { WishStatus }
 
 /** 对应 `wishes/schema.ts` 的 `WishDto` */
 export type MockWish = {
@@ -143,11 +147,8 @@ export type MockMatch = {
 
 /* ---------------------------------------------------------------- 聊天 */
 
-/** 对应 `chat/schema.ts` 的 `MessageType` */
-export type MessageType = 'TEXT' | 'SYSTEM'
-
-/** 对应 `chat/schema.ts` 的 `ConversationRole` */
-export type ConversationRole = 'buyer' | 'seller'
+/** 复用 `chat/schema.ts` 的 `MessageType` / `ConversationRole` */
+export type { ConversationRole, MessageType }
 
 export type MockConversation = {
   id: string
@@ -226,7 +227,8 @@ export type ConversationEntry =
 
 /* ---------------------------------------------------------------- 交易 */
 
-export type TransactionStatus = 'PENDING_MEETUP' | 'COMPLETED' | 'CANCELLED'
+/** 复用 `transactions/schema.ts` 的 `TransactionStatus` */
+export type { TransactionStatus }
 
 export type MockTransaction = {
   id: string
