@@ -42,7 +42,8 @@ const ROUTES = [
  */
 const ALLOW = /^(?:https?:\/\/127\.0\.0\.1:[0-9]+|data:|blob:|file:)/
 /** 业务数据请求的特征：这些一律视为「接了真接口」 */
-const DATA_HINT = /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/listings|:\d+\/conversations/i
+const DATA_HINT =
+  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/listings|:\d+\/conversations/i
 
 const profile = `${process.env.TEMP ?? '.'}/fish-mockonly-${Date.now()}`
 const child = spawn(

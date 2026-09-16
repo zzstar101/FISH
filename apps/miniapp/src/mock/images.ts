@@ -1,136 +1,70 @@
 /**
- * 本地图片资源表（自动生成，勿手改）。
+ * 演示用图片资源表（单色图块版）。
  *
- * 为什么用 import 而不是写 `assets/mock/...` 字符串：Taro/webpack 对图片走
- * `type: 'asset'`，大于 10KB 的文件会带 hash 落到 dist 下，路径不是源码路径。
- * 走 import 才能拿到**真实产物路径**，避免真机裂图。
+ * 历史：这里曾 import 80 张 JPEG（合计 2.45MB），导致 miniapp 主包 2.93MB、
+ * 超过微信主包 2MB 上限而无法上传。现改为**单色图块**：
+ * 全部用 1×1 纯色 PNG 的 data URI（见 `./blocks.ts`），磁盘上零图片文件。
  *
- * 生成器：D:\FISH\miniprogram\tools\gen-images.mjs
+ * 为什么 data URI 而不是「生成 80 张小 PNG」：
+ *   `<Image src>` 支持 base64 data URI，配 `mode="aspectFill"` 即纯色块；
+ *   好处是不产生任何图片文件、不依赖打包器处理、不占包体。
+ *   颜色取自 `src/styles/_tokens.scss` 品牌色系，未新增色值（DESIGN.md 硬约束）。
+ *
+ * 与真实数据的边界：这些只是**演示占位**。接真实 API 后
+ * `coverUrl` / `avatarUrl` 会来自服务端，本文件随之退役。
+ *
+ * 生成器：`D:\FISH\miniprogram\tools\build-color-blocks.mjs`
  */
+import { AVATAR_BLOCKS, LISTING_BLOCKS } from './blocks'
 
-import avatar01 from '@/assets/mock/avatars/avatar-01.jpg'
-import avatar02 from '@/assets/mock/avatars/avatar-02.jpg'
-import avatar03 from '@/assets/mock/avatars/avatar-03.jpg'
-import avatar04 from '@/assets/mock/avatars/avatar-04.jpg'
-import avatar05 from '@/assets/mock/avatars/avatar-05.jpg'
-import avatar06 from '@/assets/mock/avatars/avatar-06.jpg'
-import avatar07 from '@/assets/mock/avatars/avatar-07.jpg'
-import avatar08 from '@/assets/mock/avatars/avatar-08.jpg'
-import apparelHandbag1 from '@/assets/mock/listings/apparel/apparel-handbag-1.jpg'
-import apparelHandbag2 from '@/assets/mock/listings/apparel/apparel-handbag-2.jpg'
-import apparelHandbag3 from '@/assets/mock/listings/apparel/apparel-handbag-3.jpg'
-import apparelJacket1 from '@/assets/mock/listings/apparel/apparel-jacket-1.jpg'
-import apparelJacket2 from '@/assets/mock/listings/apparel/apparel-jacket-2.jpg'
-import apparelJacket3 from '@/assets/mock/listings/apparel/apparel-jacket-3.jpg'
-import apparelSneaker1 from '@/assets/mock/listings/apparel/apparel-sneaker-1.jpg'
-import apparelSneaker2 from '@/assets/mock/listings/apparel/apparel-sneaker-2.jpg'
-import apparelSneaker3 from '@/assets/mock/listings/apparel/apparel-sneaker-3.jpg'
-import beautyCosmetic1 from '@/assets/mock/listings/beauty/beauty-cosmetic-1.jpg'
-import beautyCosmetic2 from '@/assets/mock/listings/beauty/beauty-cosmetic-2.jpg'
-import beautyCosmetic3 from '@/assets/mock/listings/beauty/beauty-cosmetic-3.jpg'
-import beautyPerfume1 from '@/assets/mock/listings/beauty/beauty-perfume-1.jpg'
-import beautyPerfume2 from '@/assets/mock/listings/beauty/beauty-perfume-2.jpg'
-import beautyPerfume3 from '@/assets/mock/listings/beauty/beauty-perfume-3.jpg'
-import beautySkincare1 from '@/assets/mock/listings/beauty/beauty-skincare-1.jpg'
-import beautySkincare2 from '@/assets/mock/listings/beauty/beauty-skincare-2.jpg'
-import beautySkincare3 from '@/assets/mock/listings/beauty/beauty-skincare-3.jpg'
-import booksComic1 from '@/assets/mock/listings/books/books-comic-1.jpg'
-import booksComic2 from '@/assets/mock/listings/books/books-comic-2.jpg'
-import booksComic3 from '@/assets/mock/listings/books/books-comic-3.jpg'
-import booksNovel1 from '@/assets/mock/listings/books/books-novel-1.jpg'
-import booksNovel2 from '@/assets/mock/listings/books/books-novel-2.jpg'
-import booksNovel3 from '@/assets/mock/listings/books/books-novel-3.jpg'
-import booksTextbook1 from '@/assets/mock/listings/books/books-textbook-1.jpg'
-import booksTextbook2 from '@/assets/mock/listings/books/books-textbook-2.jpg'
-import booksTextbook3 from '@/assets/mock/listings/books/books-textbook-3.jpg'
-import dailyBackpack1 from '@/assets/mock/listings/daily/daily-backpack-1.jpg'
-import dailyBackpack2 from '@/assets/mock/listings/daily/daily-backpack-2.jpg'
-import dailyBackpack3 from '@/assets/mock/listings/daily/daily-backpack-3.jpg'
-import dailyDesklamp1 from '@/assets/mock/listings/daily/daily-desklamp-1.jpg'
-import dailyDesklamp2 from '@/assets/mock/listings/daily/daily-desklamp-2.jpg'
-import dailyDesklamp3 from '@/assets/mock/listings/daily/daily-desklamp-3.jpg'
-import dailyKettle1 from '@/assets/mock/listings/daily/daily-kettle-1.jpg'
-import dailyKettle2 from '@/assets/mock/listings/daily/daily-kettle-2.jpg'
-import dailyKettle3 from '@/assets/mock/listings/daily/daily-kettle-3.jpg'
-import digitalHeadphone1 from '@/assets/mock/listings/digital/digital-headphone-1.jpg'
-import digitalHeadphone2 from '@/assets/mock/listings/digital/digital-headphone-2.jpg'
-import digitalHeadphone3 from '@/assets/mock/listings/digital/digital-headphone-3.jpg'
-import digitalLaptop1 from '@/assets/mock/listings/digital/digital-laptop-1.jpg'
-import digitalLaptop2 from '@/assets/mock/listings/digital/digital-laptop-2.jpg'
-import digitalLaptop3 from '@/assets/mock/listings/digital/digital-laptop-3.jpg'
-import digitalPhone1 from '@/assets/mock/listings/digital/digital-phone-1.jpg'
-import digitalPhone2 from '@/assets/mock/listings/digital/digital-phone-2.jpg'
-import digitalPhone3 from '@/assets/mock/listings/digital/digital-phone-3.jpg'
-import otherBoardgame1 from '@/assets/mock/listings/other/other-boardgame-1.jpg'
-import otherBoardgame2 from '@/assets/mock/listings/other/other-boardgame-2.jpg'
-import otherBoardgame3 from '@/assets/mock/listings/other/other-boardgame-3.jpg'
-import otherGuitar1 from '@/assets/mock/listings/other/other-guitar-1.jpg'
-import otherGuitar2 from '@/assets/mock/listings/other/other-guitar-2.jpg'
-import otherGuitar3 from '@/assets/mock/listings/other/other-guitar-3.jpg'
-import otherPlush1 from '@/assets/mock/listings/other/other-plush-1.jpg'
-import otherPlush2 from '@/assets/mock/listings/other/other-plush-2.jpg'
-import otherPlush3 from '@/assets/mock/listings/other/other-plush-3.jpg'
-import sportsBasketball1 from '@/assets/mock/listings/sports/sports-basketball-1.jpg'
-import sportsBasketball2 from '@/assets/mock/listings/sports/sports-basketball-2.jpg'
-import sportsBasketball3 from '@/assets/mock/listings/sports/sports-basketball-3.jpg'
-import sportsDumbbell1 from '@/assets/mock/listings/sports/sports-dumbbell-1.jpg'
-import sportsDumbbell2 from '@/assets/mock/listings/sports/sports-dumbbell-2.jpg'
-import sportsDumbbell3 from '@/assets/mock/listings/sports/sports-dumbbell-3.jpg'
-import sportsYogamat1 from '@/assets/mock/listings/sports/sports-yogamat-1.jpg'
-import sportsYogamat2 from '@/assets/mock/listings/sports/sports-yogamat-2.jpg'
-import sportsYogamat3 from '@/assets/mock/listings/sports/sports-yogamat-3.jpg'
-import transportBicycle1 from '@/assets/mock/listings/transport/transport-bicycle-1.jpg'
-import transportBicycle2 from '@/assets/mock/listings/transport/transport-bicycle-2.jpg'
-import transportBicycle3 from '@/assets/mock/listings/transport/transport-bicycle-3.jpg'
-import transportHelmet1 from '@/assets/mock/listings/transport/transport-helmet-1.jpg'
-import transportHelmet2 from '@/assets/mock/listings/transport/transport-helmet-2.jpg'
-import transportHelmet3 from '@/assets/mock/listings/transport/transport-helmet-3.jpg'
-import transportScooter1 from '@/assets/mock/listings/transport/transport-scooter-1.jpg'
-import transportScooter2 from '@/assets/mock/listings/transport/transport-scooter-2.jpg'
-import transportScooter3 from '@/assets/mock/listings/transport/transport-scooter-3.jpg'
-
-/** 商品图：slug → 3 张（下标 0 = 封面） */
-export const PRODUCT_IMAGES: Record<string, [string, string, string]> = {
-  'apparel-handbag': [apparelHandbag1, apparelHandbag2, apparelHandbag3],
-  'apparel-jacket': [apparelJacket1, apparelJacket2, apparelJacket3],
-  'apparel-sneaker': [apparelSneaker1, apparelSneaker2, apparelSneaker3],
-  'beauty-cosmetic': [beautyCosmetic1, beautyCosmetic2, beautyCosmetic3],
-  'beauty-perfume': [beautyPerfume1, beautyPerfume2, beautyPerfume3],
-  'beauty-skincare': [beautySkincare1, beautySkincare2, beautySkincare3],
-  'books-comic': [booksComic1, booksComic2, booksComic3],
-  'books-novel': [booksNovel1, booksNovel2, booksNovel3],
-  'books-textbook': [booksTextbook1, booksTextbook2, booksTextbook3],
-  'daily-backpack': [dailyBackpack1, dailyBackpack2, dailyBackpack3],
-  'daily-desklamp': [dailyDesklamp1, dailyDesklamp2, dailyDesklamp3],
-  'daily-kettle': [dailyKettle1, dailyKettle2, dailyKettle3],
-  'digital-headphone': [digitalHeadphone1, digitalHeadphone2, digitalHeadphone3],
-  'digital-laptop': [digitalLaptop1, digitalLaptop2, digitalLaptop3],
-  'digital-phone': [digitalPhone1, digitalPhone2, digitalPhone3],
-  'other-boardgame': [otherBoardgame1, otherBoardgame2, otherBoardgame3],
-  'other-guitar': [otherGuitar1, otherGuitar2, otherGuitar3],
-  'other-plush': [otherPlush1, otherPlush2, otherPlush3],
-  'sports-basketball': [sportsBasketball1, sportsBasketball2, sportsBasketball3],
-  'sports-dumbbell': [sportsDumbbell1, sportsDumbbell2, sportsDumbbell3],
-  'sports-yogamat': [sportsYogamat1, sportsYogamat2, sportsYogamat3],
-  'transport-bicycle': [transportBicycle1, transportBicycle2, transportBicycle3],
-  'transport-helmet': [transportHelmet1, transportHelmet2, transportHelmet3],
-  'transport-scooter': [transportScooter1, transportScooter2, transportScooter3],
+/**
+ * 商品 slug -> 分类。用于把 fixture 里的商品映射到对应分类的色块，
+ * 而不是「所有商品一个色」——保住瀑布流的视觉层次。
+ */
+const SLUG_CATEGORY: Record<string, string> = {
+  'apparel-handbag': 'APPAREL',
+  'apparel-jacket': 'APPAREL',
+  'apparel-sneaker': 'APPAREL',
+  'beauty-cosmetic': 'BEAUTY',
+  'beauty-perfume': 'BEAUTY',
+  'beauty-skincare': 'BEAUTY',
+  'books-comic': 'BOOKS',
+  'books-novel': 'BOOKS',
+  'books-textbook': 'BOOKS',
+  'daily-backpack': 'DAILY',
+  'daily-desklamp': 'DAILY',
+  'daily-kettle': 'DAILY',
+  'digital-headphone': 'DIGITAL',
+  'digital-laptop': 'DIGITAL',
+  'digital-phone': 'DIGITAL',
+  'other-boardgame': 'OTHER',
+  'other-guitar': 'OTHER',
+  'other-plush': 'OTHER',
+  'sports-basketball': 'SPORTS',
+  'sports-dumbbell': 'SPORTS',
+  'sports-yogamat': 'SPORTS',
+  'transport-bicycle': 'TRANSPORT',
+  'transport-helmet': 'TRANSPORT',
+  'transport-scooter': 'TRANSPORT',
 }
 
-/** 头像 8 张，按用户顺序分配 */
-export const AVATARS: string[] = [
-  avatar01,
-  avatar02,
-  avatar03,
-  avatar04,
-  avatar05,
-  avatar06,
-  avatar07,
-  avatar08,
-]
+/** 兜底色块（slug 未登记时用）；用非空断言是因为 blocks.ts 由生成器保证有 OTHER 键 */
+const FALLBACK = LISTING_BLOCKS.OTHER as [string, string, string]
 
+/** 商品图：slug -> 3 张（下标 0 = 封面，同一商品用 3 档明度） */
+export const PRODUCT_IMAGES: Record<string, [string, string, string]> = Object.fromEntries(
+  Object.keys(SLUG_CATEGORY).map((slug) => {
+    const cat = SLUG_CATEGORY[slug] as string
+    return [slug, (LISTING_BLOCKS[cat] ?? FALLBACK) as [string, string, string]]
+  }),
+)
+
+/** 头像 8 张，按用户顺序分配 */
+export const AVATARS: string[] = AVATAR_BLOCKS
+
+/** 取某商品第 index 张图（缺省封面；越界回落到封面） */
 export function productImage(slug: string, index = 0): string {
   const set = PRODUCT_IMAGES[slug]
-  if (!set) return ''
+  if (!set) return FALLBACK[0]
   return set[index] ?? set[0]
 }
