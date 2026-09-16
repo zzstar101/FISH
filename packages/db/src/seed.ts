@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
 import { jsonParam } from './json'
+import { adminAuditLogs } from './schema/admin'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
@@ -70,8 +71,9 @@ const demoStudentNos = {
 export async function seed(tx: SeedTx): Promise<void> {
   // 一次性列出全部业务表：单条 TRUNCATE 可以跨外键，但必须把所有被引用的表都列全。
   // `sessions` 必须在内：它引用 users，漏掉会让 seed 第二次执行直接失败。
+  // #73：admin_audit_logs 引用 users（ON DELETE RESTRICT），必须也在一句 TRUNCATE 里列全。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}, ${adminAuditLogs}`,
   )
 
   const now = new Date()

@@ -52,6 +52,8 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
     verifiedAt: CREATED_AT,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
+    // #73：users.role 新增 NOT NULL DEFAULT 'USER'，oldest fixture 也带默认值。
+    role: 'USER',
     ...overrides,
   }
 }
