@@ -134,6 +134,9 @@ export function createAdminRouter(options: AdminRouterOptions) {
   // 不用 `router.notFound(...)`：子应用的 notFound 不会经 `app.route('/admin', router)` 生效
   // （实测 unmatched 路径仍是 text/plain），所以用注册在最后、匹配任意方法任意路径的 catch-all。
   // 守卫在 `use('*')` 里先执行，因此该兜底只对「已过 requireAuth + requireAdmin」的请求生效。
+  //
+  // 代价：路径存在但方法不匹配（如 `POST /admin/users`）也落到这里拿 404。Hono 在本项目里本来
+  // 也不会返回 405（改动前实测 `POST /admin/me` 同样是 404），因此这是既有语义，不是本次引入的回归。
   router.all('*', (c) => c.json(errorBody('ADMIN_NOT_FOUND', '目标不存在'), 404))
 
   return router

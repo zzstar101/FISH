@@ -35,7 +35,9 @@ export const AdminTargetIdSchema = z.uuid()
 /**
  * 脱敏学号：保留首尾、中段以 `*` 掩蔽（12 位学号 → `2021****0001`）。
  *
- * 不变量：保留位数首尾各**不超过 4 位**，且 4 位以上一律**至少掩蔽 4 位**。
+ * 两条规则：
+ * - 8 位及以下只留首位各 1 位，中间全部掩蔽（过短则整体掩蔽）；
+ * - 9 位及以上按长度收缩保留位数，保证首尾各不超过 4 位且掩蔽位数不少于 4（12 位仍是首 4 + 尾 4）。
  */
 export function maskStudentNo(studentNo: string): string {
   if (studentNo.length <= 8) {
