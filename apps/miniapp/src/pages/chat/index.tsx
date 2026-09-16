@@ -10,6 +10,7 @@ import {
   filterConversations,
   formatAmount,
   type MockConversation,
+  unreadNotificationCount,
 } from '@/mock/api'
 import './index.scss'
 
@@ -83,6 +84,13 @@ export default function Chat() {
   })
 
   const summary = chatSummary()
+
+  /** #23：置顶「系统通知」行的未读数（独立端点 `GET /notifications/unread-count` 的语义） */
+  const unreadNotifications = unreadNotificationCount()
+
+  const openNotifications = () => {
+    void Taro.navigateTo({ url: '/pages/notifications/index' })
+  }
 
   /** 已读处理后的会话：计数、筛选、角标都只看这一份，避免三处各算一遍 */
   const shown = useMemo(
@@ -177,6 +185,41 @@ export default function Chat() {
       <View className="chat__sec">
         <Text className="chat__sec-title">最近联系</Text>
         <Text className="chat__sec-note">按时间排序</Text>
+      </View>
+
+      {/*
+        #23 的入口形态（2026-09-12 决定）：「消息」tab 顶部置顶一行「系统通知」+ 未读红点，
+        点击进入通知列表页。与 web 端 `features/chat/message-page.tsx` 同一形态，
+        不复刻一份会话列表 —— 它只是本页列表区最上面的一行。
+      */}
+      <View className="chat__conv chat__conv--pin" onClick={openNotifications}>
+        <View className="chat__ava-wrap">
+          <View className="chat__ava chat__ava--sys">
+            <Image
+              className="chat__ava-ic chat__ic-white"
+              src={ICONS.safeAccent}
+              mode="aspectFit"
+            />
+          </View>
+          {unreadNotifications > 0 ? (
+            <Text className="chat__bdg num">{unreadNotifications}</Text>
+          ) : null}
+        </View>
+
+        <View className="chat__corp">
+          <View className="chat__corp-top">
+            <View className="chat__nm">
+              <Text className="chat__nm-tx">系统通知</Text>
+            </View>
+            <Text className="chat__tm num">全部</Text>
+          </View>
+          <View className="chat__corp-sub">
+            <Text className="chat__msg">
+              {unreadNotifications > 0 ? `${unreadNotifications} 条未读` : '暂无未读通知'}
+            </Text>
+            <Text className="chat__tag">通知</Text>
+          </View>
+        </View>
       </View>
 
       <View className="chat__list">

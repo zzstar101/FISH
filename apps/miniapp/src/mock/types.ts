@@ -35,6 +35,7 @@ import type {
   ListingCondition,
   ListingStatus,
 } from '@fish/contracts/listings/schema'
+import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import type { TransactionStatus, TransactionUser } from '@fish/contracts/transactions/schema'
 import type { WishStatus } from '@fish/contracts/wishes/schema'
 
@@ -369,16 +370,25 @@ export type MockSettings = {
 
 /* ---------------------------------------------------------------- 通知 */
 
-export type MockNotification = {
-  id: string
-  /** `payload` 决定跳转目标，与 `notifications` 契约的语义一致 */
-  kind: 'wish_match' | 'listing_comment' | 'transaction' | 'system'
+/** 复用 `notifications/schema.ts` 的 `NotificationDto` */
+export type { NotificationDto }
+
+/**
+ * 通知的**展示视图** = 契约 `NotificationDto` + 前端按 `type` / `payload` 组装出来的文案与目标。
+ *
+ * 依据 #23：「服务端不存也不返回文案——标题/描述/图标由客户端按 `type`（必要时结合 `payload`
+ * 回查商品名）渲染」，所以 `title` / `description` / `target` 都是**客户端产物**，不进契约。
+ * 与 web 端 `apps/web/src/lib/mock/store.ts` 的 `decorateNotification` 同一口径。
+ *
+ * `readAt`（契约字段）是唯一的已读来源：`null` = 未读，不额外造布尔字段。
+ */
+export type MockNotification = NotificationDto & {
   title: string
-  body: string
-  listingId: string | null
-  wishId: string | null
-  read: boolean
-  createdAt: string
+  description: string
+  /** 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读） */
+  target: { kind: 'listing'; listingId: string } | { kind: 'wish'; wishId: string } | null
+  /** 视觉语气：命中成功 / 需要留意 */
+  tone: 'mint' | 'warn'
 }
 
 /* ---------------------------------------------------------------- 搜索 */

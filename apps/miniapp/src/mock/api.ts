@@ -7,6 +7,8 @@
  * 与真实契约的边界：商品/愿望/会话/消息/通知的字段都对齐 `packages/contracts`；
  * 留言（comments）在契约里不存在，是本文件内的纯展示 mock（`discover.ts` 有标注）。
  */
+
+import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import {
   APP_BUILD,
   APP_VERSION,
@@ -371,12 +373,43 @@ export function chatSummary() {
   return CHAT_SUMMARY
 }
 
-export function notifications(): MockNotification[] {
-  return NOTIFICATIONS
+/**
+ * 通知文案 / 跳转目标由前端按 `type` + `payload` 组装（#23：服务端不存文案）。
+ *
+ * 放在数据层而不是页面里 —— 与 web 端 `apps/web/src/lib/mock/store.ts` 的
+ * `decorateNotification` 同一口径：改文案不用碰 UI；换真实接口时把 title/description
+ * 从服务端替进来即可。目标商品已删除/下架时退回愿望页，而不是给一个点不动的死入口。
+ */
+function decorateNotification(item: NotificationDto): MockNotification {
+  if (item.type === 'MATCH') {
+    const listingId = item.payload.listingId
+    const listing = listingId ? findListing(listingId) : undefined
+    const wishId = item.payload.wishId
+    return {
+      ...item,
+      title: listing ? '你要的闲置出现了' : '有新的匹配',
+      description: listing
+        ? `${listing.title} · ¥${formatAmount(listing.priceCents)}`
+        : '这条匹配对应的商品已经被下架了',
+      tone: listing ? 'mint' : 'warn',
+      target: listing
+        ? { kind: 'listing', listingId: listing.id }
+        : wishId
+          ? { kind: 'wish', wishId }
+          : null,
+    }
+  }
+  // 契约 P0 只有 MATCH；#14 扩 type 时在这里加分支，页面不用动。
+  return { ...item, title: '新通知', description: '', tone: 'warn', target: null }
 }
 
+export function notifications(): MockNotification[] {
+  return NOTIFICATIONS.map(decorateNotification)
+}
+
+/** 未读数：契约字段 `readAt === null` 即未读（不额外造布尔字段） */
 export function unreadNotificationCount(): number {
-  return NOTIFICATIONS.filter((item) => !item.read).length
+  return NOTIFICATIONS.filter((item) => item.readAt === null).length
 }
 
 export type ConversationFilter = 'all' | 'unread' | 'deal' | 'wish' | 'system'

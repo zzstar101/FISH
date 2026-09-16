@@ -1,5 +1,6 @@
+import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import { LISTING_BY_ID } from './catalog'
-import type { HotSearchItem, MockComment, MockNotification, SearchFilter } from './types'
+import type { HotSearchItem, MockComment, SearchFilter } from './types'
 import { WISHES } from './wishes'
 
 const HOUR = 3600 * 1000
@@ -81,45 +82,44 @@ export function commentsOf(listingId: string): MockComment[] {
 
 /* ------------------------------------------------------------------ 通知 */
 
-export const NOTIFICATIONS: MockNotification[] = [
+/**
+ * 通知 fixture：**契约形状**（`NotificationDto`）。
+ *
+ * 契约里没有文案字段（#23：「服务端不存也不返回文案」），也没有 `kind` / `read`；
+ * 文案与跳转目标由 `mock/api.ts` 的 `decorateNotification()` 按 `type` + `payload` 组装，
+ * 所以这里只放 `type` / `payload` / `readAt` / `createdAt`。
+ *
+ * P0 契约的 `type` 只有 `MATCH`（`notifications/schema.ts`）。四条 fixture 用不同的
+ * `payload` 覆盖三种页面分支：命中在售商品 / 目标已下架 / 没有可跳目标。
+ */
+export const NOTIFICATIONS: NotificationDto[] = [
   {
     id: 'n-001',
-    kind: 'wish_match',
-    title: '你的心愿有回应了',
-    body: '你许愿的《数据结构（C语言版）》匹配到 3 件同校闲置，最低 ¥38。',
-    listingId: 'l-004',
-    wishId: 'w-001',
-    read: false,
+    type: 'MATCH',
+    payload: { listingId: 'l-004', wishId: 'w-001' },
+    readAt: null,
     createdAt: iso(1),
   },
   {
     id: 'n-002',
-    kind: 'listing_comment',
-    title: '有同学给你的商品留言',
-    body: '林一：键盘还在吗？我在三教上课，下课就能过去拿。',
-    listingId: 'l-001',
-    wishId: null,
-    read: false,
+    type: 'MATCH',
+    payload: { listingId: 'l-001', wishId: 'w-003' },
+    readAt: null,
     createdAt: iso(1.2),
   },
   {
     id: 'n-003',
-    kind: 'transaction',
-    title: '买家已确认面交时间',
-    body: 'ThinkPad X280 的交易已进入待面交，记得在图书馆一楼按时交接。',
-    listingId: 'l-002',
-    wishId: null,
-    read: true,
+    type: 'MATCH',
+    payload: { listingId: 'l-002', wishId: 'w-002' },
+    readAt: iso(20),
     createdAt: iso(20),
   },
   {
+    // 目标商品已被删除 / 下架：跳转要退回愿望页（与 web 端 decorateNotification 同口径）
     id: 'n-004',
-    kind: 'system',
-    title: '校园认证已通过',
-    body: '你的学号认证已通过，信用分提升至 96，现在可以发布闲置了。',
-    listingId: null,
-    wishId: null,
-    read: true,
+    type: 'MATCH',
+    payload: { wishId: 'w-004' },
+    readAt: iso(30),
     createdAt: iso(30),
   },
 ]
@@ -159,8 +159,10 @@ export function assertFixtures(): string[] {
       problems.push(`COMMENTS ${comment.id} → ${comment.listingId}`)
   }
   for (const notification of NOTIFICATIONS) {
-    if (notification.listingId && !LISTING_BY_ID[notification.listingId]) {
-      problems.push(`NOTIFICATIONS ${notification.id} → ${notification.listingId}`)
+    // `listingId` 在契约里是 `payload` 的嵌套键；缺省（如 n-004 的容错演示）不算问题
+    const id = notification.payload.listingId
+    if (id && !LISTING_BY_ID[id]) {
+      problems.push(`NOTIFICATIONS ${notification.id} → ${id}`)
     }
   }
   for (const wish of WISHES) {

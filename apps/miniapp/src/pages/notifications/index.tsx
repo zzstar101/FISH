@@ -4,18 +4,20 @@ import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
-import { findListing, type MockNotification, notifications } from '@/mock/api'
+import { type MockNotification, notifications } from '@/mock/api'
 import './index.scss'
 
 /** 「全部已读」动作钮的图标（导航栏右侧） */
 const MARK_ALL_ICON = ICONS.checkMuted
 
-/** 按 kind 取图标：许愿命中 / 商品留言 / 交易进度 / 系统通知 */
-const KIND_ICON: Record<MockNotification['kind'], string> = {
-  wish_match: ICONS.heartOn,
-  listing_comment: ICONS.commentMuted,
-  transaction: ICONS.orderMuted,
-  system: ICONS.safeAccent,
+/**
+ * 语气 → 图标。文案与跳转目标**不在页面里拼**：契约只存 `type` + `payload`，
+ * 组装在数据层（`mock/api.ts` 的 `decorateNotification`，与 web 端同口径）。
+ * 所以这里只负责「把 tone 映射成一张图」这种纯展示的事。
+ */
+const TONE_ICON: Record<MockNotification['tone'], string> = {
+  mint: ICONS.heartOn,
+  warn: ICONS.safeAccent,
 }
 
 /**
@@ -40,31 +42,39 @@ export default function Notifications() {
     setItems(notifications())
   })
 
-  const unread = items.filter((item) => !item.read).length
+  /** 未读的唯一判据是契约字段 `readAt === null` */
+  const isUnread = (item: MockNotification) => item.readAt === null
+  const unread = items.filter(isUnread).length
 
   const markAllRead = () => {
     if (unread === 0) {
       void Taro.showToast({ title: '没有未读通知', icon: 'none' })
       return
     }
-    setItems((prev) => prev.map((item) => ({ ...item, read: true })))
+    // 真实实现是 `POST /notifications/:id/read`（幂等）；这里按契约语义写本地 readAt
+    setItems((prev) =>
+      prev.map((item) => ({ ...item, readAt: item.readAt ?? new Date().toISOString() })),
+    )
     void Taro.showToast({ title: '已全部标为已读', icon: 'none' })
   }
 
-  /** 点条目：先本地置读，再按 payload 跳转；既没有 listingId 也没有 wishId 时只标记已读 */
+  /** 点条目：先本地置读，再按 `target` 跳转（目标缺失时只标记已读） */
   const open = (item: MockNotification) => {
-    setItems((prev) => prev.map((one) => (one.id === item.id ? { ...one, read: true } : one)))
+    setItems((prev) =>
+      prev.map((one) =>
+        one.id === item.id ? { ...one, readAt: one.readAt ?? new Date().toISOString() } : one,
+      ),
+    )
 
-    const listing = item.listingId ? findListing(item.listingId) : undefined
-    if (listing) {
-      void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })
+    if (item.target?.kind === 'listing') {
+      void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.target.listingId}` })
       return
     }
-    if (item.wishId) {
+    if (item.target?.kind === 'wish') {
       void Taro.switchTab({ url: '/pages/wish/index' })
       return
     }
-    if (!item.read) void Taro.showToast({ title: '已标为已读', icon: 'none' })
+    if (isUnread(item)) void Taro.showToast({ title: '已标为已读', icon: 'none' })
   }
 
   return (
@@ -94,20 +104,20 @@ export default function Notifications() {
         {items.map((item) => (
           <View
             key={item.id}
-            className={`notif__item${item.read ? '' : ' is-unread'}`}
+            className={`notif__item${isUnread(item) ? ' is-unread' : ''}`}
             onClick={() => open(item)}
           >
             <View className="notif__ic">
-              <Image className="notif__ic-img" src={KIND_ICON[item.kind]} mode="aspectFit" />
+              <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
             </View>
 
             <View className="notif__body">
               <Text className="notif__body-title">{item.title}</Text>
               <View className="notif__meta">
-                {item.read ? null : <View className="notif__dot" />}
+                {isUnread(item) ? null : <View className="notif__dot" />}
                 <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
               </View>
-              <Text className="notif__text">{item.body}</Text>
+              <Text className="notif__text">{item.description}</Text>
             </View>
           </View>
         ))}
@@ -115,7 +125,7 @@ export default function Notifications() {
         {items.length === 0 ? (
           <EmptyState
             title="还没有通知"
-            text="许愿命中、商品留言与交易进度都会送到这里"
+            text="愿望匹配上闲置、交易有进展时会出现在这里"
             icon={ICONS.bellInk}
           />
         ) : null}
