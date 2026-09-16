@@ -8,6 +8,7 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
+import { createAdminModule } from './modules/admin/module'
 import { createMockCampusVerificationProvider } from './modules/auth/provider'
 import { createAuthModule } from './modules/auth/router'
 import { createConversationsRouter } from './modules/conversations/router'
@@ -226,6 +227,12 @@ export function createApp(env: ServerEnv) {
       getUserId: (c) => c.get('userId'),
     }),
   )
+
+  // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离（设计 §2）。
+  // 挂载点为根级 `/admin`；requireAuth（401）与 requireAdmin（403）两道守卫在 admin
+  // router 内部 `use('*')` 应用，覆盖全部 `/admin/*` 入口，普通用户无法靠改前端状态绕过。
+  const admin = createAdminModule({ db, storage, requireAuth: auth.requireAuth })
+  app.route('/admin', admin.router)
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。
