@@ -1,0 +1,288 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 会话详情页。设计稿没有这一屏，沿用「冰蓝荧光 + 玻璃」的同一套语言自绘：
+ * 漂浮返回导航（含对方昵称 + 在线状态）→ 商品小卡 → 消息气泡（SYSTEM 居中胶囊）
+ * → 底部输入栏。尺寸仍是设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 页面根节点是 100vh 的纵向 flex：让消息区滚动、输入栏 sticky 吸底。
+ */
+.conv {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 顶部冰蓝渐变（比首页矮一些，消息区要留出阅读空间） */
+.conv__bg {
+  @include page-hero(340px, 48px);
+}
+
+/* ---------------------------------------------------------------- 页头 */
+
+/* 顶部状态栏 + 漂浮返回钮的高度（navfloat 是 absolute，不占文档流）。
+   这里刻意压得比首页紧：消息区要尽可能多占纵向空间。 */
+.conv__head {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  padding: 126px 32px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.conv__name {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.conv__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.conv__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.conv__dot.is-on {
+  background: var(--mint);
+  box-shadow: 0 0 0 6px rgba(84, 245, 208, 0.3);
+}
+
+.conv__status-tx {
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 商品小卡 */
+
+.conv__card {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin: 14px 32px 0;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-radius: 30px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.conv__card-img {
+  width: 84px;
+  height: 84px;
+  border-radius: 18px;
+  flex: 0 0 auto;
+  background: var(--grad-ph);
+}
+
+.conv__card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__card-title {
+  display: block;
+  font-size: 25px;
+  font-weight: 600;
+  @include ellipsis;
+}
+
+.conv__card-price {
+  margin-top: 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.conv__card-cur {
+  font-size: 20px;
+  color: var(--price);
+}
+
+.conv__card-amt {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--price);
+}
+
+.conv__card-go {
+  /* 价格是 ¥ + 数字两个节点，这里必须留出间距，否则会挤成「760查看」 */
+  margin-left: auto;
+  padding-left: 18px;
+  flex: 0 0 auto;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 消息列表 */
+
+/* SYSTEM 胶囊 + 气泡都按内容收窄：列表左对齐，自己的行整行右对齐 */
+
+.conv__scroll {
+  flex: 1;
+  /* 兜底：窄屏/小屏上也要留住能看两三条消息的高度，不被上方板块挤成一条缝 */
+  min-height: 260px;
+  margin-top: 16px;
+}
+
+/* 消息列表：左右与商品卡同一 32px 栅格 */
+.conv__list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 22px;
+  padding: 8px 32px 28px;
+}
+
+/* 空态（会话不存在）：让 EmptyState 避开漂浮返回钮 */
+.conv__emptypad {
+  position: relative;
+  z-index: 1;
+  padding-top: 148px;
+}
+
+/* SYSTEM：居中灰色小胶囊。
+   外层整行 + text-align: center，胶囊本体用 inline-block —— 在「纵向 flex」里
+   这是唯一能稳定「按内容收窄」的写法（fit-content / display:table 都会被撑满整行）。
+   文案控制在 13 个汉字以内（超长会在小程序里折行），所以这里不设 nowrap。 */
+.conv__sys {
+  align-self: stretch;
+  text-align: center;
+}
+
+.conv__sys-tx {
+  display: inline-block;
+  max-width: 100%;
+  padding: 10px 22px;
+  border-radius: var(--r-pill);
+  background: var(--ink-weak);
+  font-size: 20px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 对方气泡：在 flex-start 的列表里靠左，收窄到内容宽度 */
+.conv__row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  gap: 8px;
+}
+
+/* 自己的气泡：整行右对齐 */
+.conv__row.is-mine {
+  align-self: stretch;
+  align-items: flex-end;
+  width: auto;
+}
+
+.conv__bubble {
+  max-width: 520px;
+  padding: 20px 26px;
+  border-radius: 40px;
+  border-bottom-left-radius: 12px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-soft);
+}
+
+.conv__bubble.is-mine {
+  border-radius: 40px;
+  border-bottom-right-radius: 12px;
+  background: var(--grad-brand);
+  border-color: transparent;
+  box-shadow: var(--shadow-btn);
+}
+
+.conv__bubble-tx {
+  font-size: 28px;
+  line-height: 1.5;
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.conv__bubble.is-mine .conv__bubble-tx {
+  color: #fff;
+}
+
+.conv__time {
+  font-size: 20px;
+  color: var(--muted);
+  padding: 0 12px;
+}
+
+/* ---------------------------------------------------------------- 底部输入栏 */
+
+/* 圆角胶囊输入 + 品牌渐变圆形发送钮（图标只用 ICONS.send）。
+   用 sticky 吸附在 flex 列末尾：100vh 容器下等价于吸底，长内容时也不会被顶走。 */
+.conv__bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 24px calc(14px + env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.86);
+  border-top: 2px solid var(--border);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+}
+
+.conv__input {
+  flex: 1;
+  min-width: 0;
+  height: 80px;
+  padding: 0 30px;
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  border: 2px solid var(--border);
+  font-size: 26px;
+  color: var(--fg);
+}
+
+.conv__send {
+  flex: 0 0 auto;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 未输入（禁用）态：品牌蓝压淡的实色，保证白色发送图标仍有对比 */
+  background: rgba(66, 133, 255, 0.42);
+}
+
+.conv__send.is-on {
+  background: var(--grad-brand);
+  box-shadow: var(--shadow-btn);
+}
+
+.conv__send-ic {
+  width: 38px;
+  height: 38px;
+  /* 发送图标资源本身是深色，两种状态下都要白：统一用滤镜转白，避免再引一份白色图标 */
+  filter: brightness(0) invert(1);
+}

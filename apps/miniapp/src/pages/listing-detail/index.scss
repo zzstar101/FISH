@@ -1,0 +1,664 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 商品详情。尺寸 = 设计稿 pt × 2（见 apps/miniapp/DESIGN.md）。
+ *
+ * 结构：漂浮导航 → 图集 → 价格区 → 描述 → 卖家 → 留言 → 同校相似闲置 → 底部操作栏。
+ * 设计稿的白卡是「连续一张」：区块之间只靠 padding 分隔，只有留言区底部收圆角 + 投影。
+ */
+.detail {
+  /* 纵向 flex + 底部栏是最后一个子项 → 用 sticky 吸底（与 tab-bar 同一套做法） */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+/* 漂浮导航右侧的两个玻璃钮（返回钮由 components/nav-bar 提供） */
+.detail__glassbtn {
+  width: 72px;
+  height: 72px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.82);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 16px -8px rgba(65, 70, 78, 0.4);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+
+  &:active {
+    transform: scale(0.94);
+    background: #fff;
+  }
+}
+
+.detail__glassbtn-img {
+  width: 38px;
+  height: 38px;
+}
+
+/* 白色内容区（区块自带 padding，彼此之间不留缝） */
+.detail__sections {
+  background: var(--surface);
+  padding-bottom: 40px;
+}
+
+/* ------------------------------------------------------------ 图集 378pt */
+
+.detail__gallery {
+  position: relative;
+  width: 100%;
+  height: 756px;
+  background: var(--grad-ph);
+}
+
+.detail__swiper,
+.detail__slide,
+.detail__slide-ph {
+  width: 100%;
+  height: 756px;
+}
+
+.detail__slide-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.detail__slide-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-ph);
+}
+
+.detail__slide-ph-text {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* 圆点指示器：右下 20pt；选中态拉成 16pt 胶囊并用青色 + 发光 */
+.detail__dots {
+  position: absolute;
+  right: 40px;
+  bottom: 40px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.detail__dot {
+  width: 32px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &::before {
+    content: '';
+    display: block;
+    width: 12px;
+    height: 12px;
+    border-radius: var(--r-pill);
+    background: var(--accent-dot);
+    transition: width 0.2s ease, background 0.2s ease;
+  }
+
+  &.is-on::before {
+    width: 32px;
+    background: var(--cyan);
+    box-shadow: 0 0 16px rgba(25, 230, 255, 0.7);
+  }
+}
+
+/* ------------------------------------------------------------ 区块通用 */
+
+.detail__meta,
+.detail__desc,
+.detail__seller-section,
+.detail__comments {
+  padding: 36px 40px;
+}
+
+.detail__meta {
+  padding-bottom: 72px;
+}
+
+.detail__desc,
+.detail__seller-section {
+  padding-top: 72px;
+  padding-bottom: 72px;
+}
+
+/* 留言卡底部满圆角 + 投影，把白卡收在留言区之后 */
+.detail__comments {
+  padding-top: 72px;
+  padding-bottom: 36px;
+  border-radius: 0 0 40px 40px;
+  box-shadow: 0 40px 76px -44px rgba(66, 133, 255, 0.45);
+}
+
+/* ------------------------------------------------------------ 价格区 */
+
+/* 设计稿这一行是「价格 + 原价 + 成色」挤在一行；
+   真机上系统字比设计稿字体宽，写 nowrap 会把「九成新」顶出屏幕 —— 允许换行兜底 */
+.detail__priceline {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.detail__price {
+  display: flex;
+  align-items: baseline;
+  color: var(--price-hot);
+}
+
+.detail__price-cur {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 34px;
+  font-weight: 700;
+  margin-right: 2px;
+}
+
+.detail__price-amt {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 68px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.detail__was {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 24px;
+  color: var(--muted-2);
+  text-decoration: line-through;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+
+.detail__cond {
+  margin-left: auto;
+  margin-bottom: 6px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--cond-fg);
+  font-size: 24px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.detail__title {
+  display: block;
+  margin-top: 24px;
+  font-size: 42px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  color: var(--fg);
+}
+
+.detail__spec {
+  display: block;
+  margin-top: 14px;
+  font-size: 26px;
+  line-height: 1.45;
+  letter-spacing: 0.012em;
+  color: var(--muted-2);
+}
+
+.detail__stats {
+  display: flex;
+  align-items: baseline;
+  /* 同样兜底：真机字体更宽时让「218 浏览 / 34 想要」整块换到下一行，而不是压字 */
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin-top: 22px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 25px;
+  color: var(--muted-2);
+}
+
+.detail__posted {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.detail__metrics {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+  white-space: nowrap;
+}
+
+.detail__metric {
+  font-size: 25px;
+  white-space: nowrap;
+}
+
+.detail__metric-num {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------ 描述 */
+
+.detail__para {
+  display: block;
+  font-size: 29px;
+  line-height: 1.72;
+  color: var(--body-soft);
+
+  & + & {
+    margin-top: 8px;
+  }
+}
+
+/* ------------------------------------------------------------ 卖家卡 */
+
+.detail__seller {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  overflow: hidden;
+}
+
+.detail__avatar {
+  width: 68px;
+  height: 68px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--grad-ph);
+}
+
+/* 允许收缩的弹性列：不加 min-width: 0 会撑到 max-content，把「进TA主页」挤出行外 */
+.detail__sinfo {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.detail__sname {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 27px;
+  font-weight: 600;
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.detail__snick {
+  color: var(--fg);
+  white-space: nowrap;
+  flex: 0 0 auto;
+  @include ellipsis;
+}
+
+.detail__stick {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.detail__sloc {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 23px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--muted-2);
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+  @include ellipsis;
+}
+
+.detail__ssub {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 24px;
+  line-height: 1.3;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detail__go {
+  margin-left: auto;
+  min-height: 72px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: 0;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 排版预算：147.5pt 的行宽要装下 头像 34 + 昵称/校区 ~44 + 本钮 ~41 */
+  flex: 0 1 auto;
+  min-width: 0;
+
+  &:active {
+    transform: scale(0.96);
+    background: var(--accent-weak);
+    border-color: var(--line);
+  }
+}
+
+.detail__go-img {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------ 留言 */
+
+.detail__cmts {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail__cmt {
+  display: flex;
+  gap: 20px;
+  padding: 22px 0;
+  /* 留言之间：设计稿是品牌色 24% 与描边混合出的分割线 */
+  & + & {
+    border-top: 2px solid var(--divide);
+    padding-top: 28px;
+  }
+
+  &:first-child {
+    padding-top: 6px;
+  }
+
+  &:last-child {
+    padding-bottom: 6px;
+  }
+}
+
+.detail__cav {
+  width: 60px;
+  height: 60px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--grad-ph);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.detail__cav-text {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--cond-fg);
+}
+
+.detail__cbody {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail__chd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.detail__cn {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+.detail__ctag {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  background: var(--tag-cyan-bg);
+  border: 2px solid rgba(25, 230, 255, 0.46);
+  color: var(--fg);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.detail__ct {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 23px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
+.detail__cx {
+  display: block;
+  margin-top: 6px;
+  font-size: 28px;
+  line-height: 1.6;
+  color: var(--body-soft);
+}
+
+.detail__cmt-empty {
+  display: block;
+  padding: 12px 0;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.detail__cmt-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 24px auto 0;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--more-fg);
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+.detail__cmt-more-img {
+  width: 28px;
+  height: 28px;
+  transition: transform 0.22s ease;
+
+  &.is-open {
+    transform: rotate(180deg);
+  }
+}
+
+/* ------------------------------------------------------------ 同校相似闲置 */
+
+.detail__similar {
+  /* 底部留出固定操作栏的高度（含它自身的内外边距），否则最后一张卡会被盖住 */
+  padding: 40px 40px 220px;
+  background: var(--bg);
+}
+
+.detail__seclabel {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 25px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.detail__seclabel-img {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+.detail__waterfall {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.detail__wf-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* 相似卡沿用搜索卡：去掉详情页不需要的成色胶囊，标题按设计稿压到 22pt */
+.detail__similar .pcard__cond-pill {
+  display: none;
+}
+
+.detail__similar .pcard__title {
+  font-size: 26px;
+  line-height: 1.4;
+  min-height: 72px;
+}
+
+/* ------------------------------------------------------------ 底部操作栏 */
+
+.detail__bar {
+  position: fixed;
+  z-index: 100;
+  left: 24px;
+  right: 24px;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px 24px;
+  border-radius: 48px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 2px solid rgba(255, 255, 255, 0.62);
+  backdrop-filter: blur(48px) saturate(180%);
+  -webkit-backdrop-filter: blur(48px) saturate(180%);
+  box-shadow: 0 32px 68px -32px rgba(23, 35, 61, 0.5), 0 4px 16px -6px rgba(23, 35, 61, 0.14);
+}
+
+.detail__fav {
+  width: 96px;
+  height: 96px;
+  flex: 0 0 auto;
+  border-radius: 28px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:active {
+    transform: scale(0.94);
+  }
+
+  &.is-on {
+    background: var(--accent-weak);
+    border-color: transparent;
+  }
+}
+
+.detail__fav-img {
+  width: 44px;
+  height: 44px;
+}
+
+.detail__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 96px;
+  padding: 0 36px;
+  border-radius: 28px;
+  font-size: 30px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &:active {
+    transform: scale(0.97);
+  }
+}
+
+.detail__btn--ghost {
+  flex: 1;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.detail__btn--solid {
+  flex: 1.35;
+  background: var(--grad-brand);
+  color: #fff;
+  box-shadow: 0 24px 48px -28px rgba(66, 133, 255, 0.7);
+}
+
+/* ------------------------------------------------------------ 加载骨架 */
+
+.detail__skeleton {
+  padding: 0 40px 40px;
+  background: var(--surface);
+}
+
+.detail__sk-gallery {
+  height: 756px;
+  margin: 0 -40px 36px;
+  background: var(--grad-ph);
+}
+
+.detail__sk-line {
+  height: 32px;
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  margin-bottom: 20px;
+}
+
+.detail__sk-line--lg {
+  width: 60%;
+  height: 56px;
+}
+
+.detail__sk-line--sm {
+  width: 40%;
+}
+
+.detail__sk-block {
+  height: 240px;
+  border-radius: var(--r-card);
+  background: var(--bg);
+}

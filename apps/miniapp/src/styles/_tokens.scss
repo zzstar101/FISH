@@ -1,0 +1,115 @@
+/**
+ * 设计令牌（唯一真源）。
+ *
+ * 来源：5 张「冰蓝荧光」设计稿的 :root 变量。设计稿用了 color-mix()/oklch()，
+ * 小程序 WXSS 不支持，因此这里把用到的派生色**全部预计算成 hex**。
+ *
+ * 单位约定见 apps/miniapp/DESIGN.md：本目录 SCSS 里的 px 会被 Taro 转成 rpx，
+ * 数值 = 设计稿数值 × 2（设计稿画在 390pt 画布，designWidth 750）。
+ *
+ * 放在 `page` 上而不是 `:root`：小程序没有 :root，页面根节点是 page。
+ */
+page {
+  /* ---- 品牌色 ---- */
+  --brand: #4285ff;
+  --electric: #19a7ff;
+  --cyan: #19e6ff;
+  --mint: #54f5d0;
+
+  /* ---- 中性 ---- */
+  --bg: #f7faff;
+  --ice: #eef6ff;
+  --surface: #ffffff;
+  --fg: #17233d;
+  --muted: #71809c;
+  --muted-2: #3e4b66;
+  --border: #dce7f5;
+  --line: #a8c5fa;
+
+  /* ---- 语义色 ---- */
+  --ok: #54f5d0;
+  --warn: #ffb84d;
+  --danger: #ff5f6d;
+  --price: #4375e8;
+  --ink: #17233d;
+  --accent: var(--brand);
+
+  /* ---- 派生底色 ---- */
+  --accent-weak: #eff5ff;
+  --accent-mid: #c6dcff;
+  /* 消息页 bento 浅色卡与其分隔线的描边：
+     设计稿 color-mix(in oklab, var(--brand) 14%, var(--surface))，预计算成 hex */
+  --accent-faint: #e4edff;
+  --accent-soft: rgba(66, 133, 255, 0.14);
+  --cyan-soft: rgba(25, 230, 255, 0.14);
+  --ink-weak: rgba(23, 35, 61, 0.06);
+  --ink-weak-2: rgba(23, 35, 61, 0.1);
+  /* 搜索页清空钮按下态：设计稿 color-mix(in oklch, --fg 18%, transparent)，预计算成 rgba */
+  --ink-weak-3: rgba(23, 35, 61, 0.18);
+  /* 搜索页「搜索」按钮按下态：设计稿 color-mix(in oklch, --ink 82%, #fff) */
+  --ink-press: #45506a;
+  /* 搜索页输入胶囊描边：设计稿 color-mix(in oklch, --brand 16%, #fff) */
+  --field-line: #e8efff;
+  /* 详情页派生色：listing.html 的 color-mix/oklch 预计算值（WXSS 不支持，页面里别现调） */
+  /* oklch(0.60 0.205 28.5)：设计稿详情页 --price，¥160 大号价格 */
+  --price-hot: #e0392f;
+  /* color-mix(in oklab, var(--brand) 55%, transparent)：轮播未选中圆点 */
+  --accent-dot: rgba(66, 133, 255, 0.55);
+  /* color-mix(in oklab, var(--accent) 72%, var(--fg))：「九成新」胶囊与留言头像首字 */
+  --cond-fg: #3b63c2;
+  /* color-mix(in oklab, var(--brand) 24%, var(--border))：留言之间的品牌色分割线 */
+  --divide: #c3d8f9;
+  /* color-mix(in srgb, var(--cyan) 22%, var(--surface))：「卖家」标签底 */
+  --tag-cyan-bg: #dcfcff;
+  /* color-mix(in oklab, var(--fg) 92%, var(--muted))：描述正文与留言正文 */
+  --body-soft: #1c2841;
+  /* color-mix(in oklab, var(--accent) 44%, var(--muted))：「查看全部 N 条留言」 */
+  --more-fg: #5876ba;
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --glass-line: rgba(255, 255, 255, 0.78);
+
+  /* ---- 渐变 ---- */
+  --grad-brand: linear-gradient(135deg, #4285ff 0%, #19a7ff 55%, #19e6ff 100%);
+  --grad-icon: linear-gradient(145deg, #eaf1ff 0%, #e6f6ff 52%, #e8fdf7 100%);
+  --grad-page: linear-gradient(165deg, #dcebff 0%, #eaf4ff 46%, #f7faff 100%);
+  --grad-ph: linear-gradient(150deg, #eaf3ff 0%, #dcecff 58%, #cfe3ff 100%);
+  --grad-wave: linear-gradient(180deg, #dbe9ff 0%, #f0f6ff 100%);
+
+  /* ---- 阴影 ---- */
+  --shadow-card: 0 2px 4px rgba(23, 35, 61, 0.05), 0 24px 56px -36px rgba(66, 133, 255, 0.45);
+  /* 搜索页输入胶囊投影：设计稿 0 12px 26px -20px rgba(65,70,78,.6)（换算后的 rpx 数值同源） */
+  --shadow-field: 0 24px 52px -40px rgba(65, 70, 78, 0.6);
+  --shadow-float: 0 36px 84px -36px rgba(23, 35, 61, 0.52), 0 4px 12px -4px rgba(23, 35, 61, 0.16);
+  --shadow-btn: 0 24px 48px -28px rgba(66, 133, 255, 0.7);
+  --shadow-soft: 0 12px 28px -18px rgba(66, 133, 255, 0.45);
+
+  /* ---- 圆角 ---- */
+  --r-pill: 999px;
+  --r-sm: 16px;
+  --r-card: 36px;
+  --r-card-lg: 40px;
+  --r-hero: 64px;
+
+  /* ---- 字号（设计稿 pt × 2）---- */
+  --fs-h1: 54px;
+  --fs-h2: 42px;
+  --fs-h3: 36px;
+  --fs-title: 30px;
+  --fs-body: 28px;
+  --fs-sm: 25px;
+  --fs-xs: 23px;
+  --fs-2xs: 21px;
+
+  background-color: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei',
+    sans-serif;
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 等宽数字（价格、计数、时间） */
+.num {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}

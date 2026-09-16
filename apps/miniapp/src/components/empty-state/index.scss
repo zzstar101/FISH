@@ -1,0 +1,64 @@
+@use '@/styles/mixins' as *;
+
+/** 空态（搜索无结果、分类无商品、消息无会话） */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 96px 48px 32px;
+  color: var(--muted);
+}
+
+.empty__icon {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-weak);
+  margin-bottom: 24px;
+}
+
+.empty__icon-img {
+  width: 52px;
+  height: 52px;
+}
+
+.empty__title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.empty__text {
+  margin-top: 12px;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  max-width: 460px;
+}
+
+.empty__action {
+  margin-top: 28px;
+  height: 84px;
+  padding: 0 40px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 26px;
+  font-weight: 600;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.empty__action-img {
+  width: 28px;
+  height: 28px;
+}

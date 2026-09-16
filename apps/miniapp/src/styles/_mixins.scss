@@ -1,0 +1,108 @@
+/**
+ * 复用样式组合。页面与组件通过 `@use '@/styles/mixins' as *;` 引入。
+ *
+ * 只放「反复出现且容易写歪」的组合：卡片、胶囊、玻璃、截断。
+ * 具体尺寸一律由调用方给，避免这里长成一个万能样式表。
+ */
+
+/* 白色卡片 + 描边 + 柔和投影（首页/搜索商品卡、bento 卡） */
+@mixin card($radius: var(--r-card)) {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: $radius;
+  box-shadow: var(--shadow-card);
+}
+
+/* 筛选胶囊 / 标签：默认浅玻璃白，按下态是深墨底白字 */
+@mixin chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 68px;
+  padding: 0 30px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--fg);
+  font-size: 26px;
+
+  &.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    font-weight: 500;
+  }
+}
+
+/* 品牌渐变主按钮 */
+@mixin btn-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 96px;
+  border-radius: 28px;
+  background: var(--grad-brand);
+  color: #fff;
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+}
+
+/* 描边次按钮 */
+@mixin btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 96px;
+  border-radius: 28px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 30px;
+}
+
+/* 玻璃层：必须自带不透明兜底底，Android 不支持 backdrop-filter 时不至于透明穿帮 */
+@mixin glass($radius: var(--r-pill)) {
+  border-radius: $radius;
+  background: var(--glass-bg);
+  border: 2px solid var(--glass-line);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+}
+
+/* 多行截断 */
+@mixin clamp($lines: 2) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: $lines;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+/* 单行截断 */
+@mixin ellipsis {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 页头冰蓝背景：顶部渐变，底部圆角 */
+@mixin page-hero($height: 504px, $radius: 64px) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: $height;
+  background: var(--grad-page);
+  border-radius: 0 0 $radius $radius;
+  pointer-events: none;
+}
+
+/* 按下反馈（小程序没有 :active 的可靠表现，用 class 由 JS 切换） */
+@mixin pressable {
+  transition: transform 0.16s ease, opacity 0.16s ease;
+}

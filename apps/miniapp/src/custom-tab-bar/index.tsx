@@ -1,0 +1,153 @@
+/**
+ * 自定义 TabBar（设计稿的「居中悬浮玻璃胶囊 + 中间凸起发布钮」）。
+ *
+ * 目录名 `custom-tab-bar/` 是**微信/小程序的固定约定**：`app.json` 里 `tabBar.custom: true`
+ * 时，框架不再渲染原生底栏，而是渲染这个目录下的组件（Taro 4 会识别并编译它，
+ * 见 `@tarojs/webpack5-runner` 的 `MiniPlugin.js`「自定义 tabBar」）。
+ *
+ * 为什么用这套而不是「保留原生栏 + 页面里 hideTabBar()」：
+ * 1. 原生栏彻底不渲染，不会出现「两套底栏叠加」；
+ * 2. 本组件由框架渲染成真正的固定浮层，不依赖页面里的 `position: sticky`，
+ *    因此页面根节点写不写 `overflow` 都不会让它失效（踩过这个坑）。
+ *
+ * 当前选中项从 `Taro.getCurrentPages()` 最后一项的 route 推断 —— 页面组件不需要再传
+ * `active`，切页由 `switchTab` 驱动。浏览器预览（TARO_ENV=h5）里没有页面栈，
+ * 改从 hash 路由读，保证预览与真机同一套组件。
+ */
+import { Image, Text, View } from '@tarojs/components'
+import Taro from '@tarojs/taro'
+import { useEffect, useState } from 'react'
+import { ICONS } from '@/assets/lib-icons'
+import { conversations, unreadNotificationCount } from '@/mock/api'
+import './index.scss'
+
+type TabKey = 'home' | 'wish' | 'sell' | 'chat' | 'profile'
+
+type TabItem = {
+  key: TabKey
+  label: string
+  /** switchTab 用的绝对路径 */
+  path: string
+  /** 用于与页面 route / hash 匹配 */
+  route: string
+  icon: string
+  iconOn: string
+}
+
+/** 顺序必须与 `app.config.ts` 的 `tabBar.list` 完全一致 */
+const TAB_ITEMS: TabItem[] = [
+  {
+    key: 'home',
+    label: '首页',
+    path: '/pages/home/index',
+    route: 'pages/home/index',
+    icon: ICONS.tabHome,
+    iconOn: ICONS.tabHomeOn,
+  },
+  {
+    key: 'wish',
+    label: '许愿',
+    path: '/pages/wish/index',
+    route: 'pages/wish/index',
+    icon: ICONS.tabWish,
+    iconOn: ICONS.tabWishOn,
+  },
+  // 中间「出物」是凸起钮，没有图标资源
+  {
+    key: 'sell',
+    label: '出物',
+    path: '/pages/sell/index',
+    route: 'pages/sell/index',
+    icon: '',
+    iconOn: '',
+  },
+  {
+    key: 'chat',
+    label: '消息',
+    path: '/pages/chat/index',
+    route: 'pages/chat/index',
+    icon: ICONS.tabMessage,
+    iconOn: ICONS.tabMessageOn,
+  },
+  {
+    key: 'profile',
+    label: '我的',
+    path: '/pages/profile/index',
+    route: 'pages/profile/index',
+    icon: ICONS.tabProfile,
+    iconOn: ICONS.tabProfileOn,
+  },
+]
+
+function currentRoute(): string {
+  // 预览态（h5）没有页面栈，从 hash 路由取
+  if (process.env.TARO_ENV === 'h5' && typeof window !== 'undefined') {
+    return window.location.hash.replace(/^#/, '')
+  }
+  try {
+    const pages = Taro.getCurrentPages()
+    const last = pages[pages.length - 1] as { route?: string } | undefined
+    return last?.route ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function currentTabKey(): TabKey {
+  const route = currentRoute()
+  const hit = TAB_ITEMS.find((item) => route.includes(item.route))
+  return hit?.key ?? 'home'
+}
+
+export default function CustomTabBar() {
+  const [active, setActive] = useState<TabKey>(() => currentTabKey())
+  const [dot, setDot] = useState(false)
+
+  useEffect(() => {
+    // 未读消息 + 未读通知的合计，决定消息 tab 的小红点
+    const unreadChat = conversations().reduce((sum, item) => sum + item.unreadCount, 0)
+    setDot(unreadChat + unreadNotificationCount() > 0)
+  }, [])
+
+  // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
+  useEffect(() => {
+    setActive(currentTabKey())
+  }, [])
+
+  const go = (item: TabItem) => {
+    if (item.key === active) return
+    setActive(item.key)
+    void Taro.switchTab({ url: item.path }).catch(() => undefined)
+  }
+
+  return (
+    <View className="tabbar">
+      {TAB_ITEMS.map((item) => {
+        const on = item.key === active
+        if (item.key === 'sell') {
+          return (
+            <View key={item.key} className="tabbar__tab tabbar__tab--pub" onClick={() => go(item)}>
+              <View className="tabbar__pub">
+                <View className="tabbar__plus" />
+              </View>
+              <Text className="tabbar__label">{item.label}</Text>
+            </View>
+          )
+        }
+        return (
+          <View
+            key={item.key}
+            className={`tabbar__tab${on ? ' is-on' : ''}`}
+            onClick={() => go(item)}
+          >
+            <View className="tabbar__icon">
+              <Image className="tabbar__img" src={on ? item.iconOn : item.icon} mode="aspectFit" />
+              {item.key === 'chat' && dot ? <View className="tabbar__dot" /> : null}
+            </View>
+            <Text className="tabbar__label">{item.label}</Text>
+          </View>
+        )
+      })}
+    </View>
+  )
+}
