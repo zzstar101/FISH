@@ -29,7 +29,11 @@ export function HomePage() {
               <span className="min-w-0 flex-1 truncate text-left">
                 搜校园好物,如 自行车 / 考研资料
               </span>
-              <Camera className="size-[22px] shrink-0" />
+            </Link>
+          </Button>
+          <Button aria-label="扫码" asChild className="size-10 shrink-0 rounded-full" size="icon">
+            <Link to="/scan">
+              <Camera className="size-[22px]" />
             </Link>
           </Button>
           <Button aria-label="搜索" asChild className="size-10 shrink-0 rounded-full" size="icon">
