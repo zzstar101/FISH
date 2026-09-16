@@ -160,6 +160,20 @@ const SPECS: WishSpec[] = [
     timeLabel: '6 天前',
     hoursAgo: 150,
   },
+  /* C3 匹配结果稿里的愿望：命中「显示器」，预算 ¥200–¥400，已匹配 3 位同学 */
+  {
+    id: 'w-011',
+    userId: 'u-alan',
+    keyword: '显示器',
+    category: 'DIGITAL',
+    min: 200,
+    max: 400,
+    description: '想收一台 23~24 寸的 IPS 屏，无坏点即可',
+    matchCount: 3,
+    campus: '肇庆',
+    timeLabel: '4 天前',
+    hoursAgo: 96,
+  },
 ]
 
 export const WISHES: MockWish[] = SPECS.map((spec) => ({
@@ -211,6 +225,10 @@ export const WISH_POOL: MockWishPoolItem[] = (() => {
  * `score` 是匹配度（设计稿「匹配度 100 / 92」）。
  */
 export const MATCHES: MockMatch[] = [
+  /* C3 稿子：显示器 3 条命中 */
+  { id: 'm-006', wishId: 'w-011', listingId: 'l-032', score: 92 },
+  { id: 'm-007', wishId: 'w-011', listingId: 'l-033', score: 78 },
+  { id: 'm-008', wishId: 'w-011', listingId: 'l-045', score: 64 },
   { id: 'm-001', wishId: 'w-001', listingId: 'l-004', score: 100 },
   { id: 'm-002', wishId: 'w-001', listingId: 'l-005', score: 92 },
   { id: 'm-003', wishId: 'w-001', listingId: 'l-017', score: 88 },

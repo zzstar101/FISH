@@ -7,8 +7,8 @@
  *   Button → div
  *
  * 已知差异（截图时心里有数）：
- * - 小程序用 rpx 等比缩放，浏览器没有 rpx；帧宽固定 390，所以 `Npx`（= 2N rpx）
- *   在 390 下会被解释成 2N*0.52 CSS 像素（后处理脚本里统一替换）。
+ * - 小程序用 rpx 等比缩放，浏览器没有 rpx；预览帧写成 750 CSS 像素宽（= 750rpx），
+ *   所以 `Npx`（= Nrpx）在预览里就是 N 个 CSS 像素，与真机等比。
  * - backdrop-filter / 字体回退与真机不完全一致。
  */
 
@@ -38,8 +38,8 @@ function toStyle(style: StyleLike): CSSProperties | undefined {
 /**
  * 预览里的尺寸换算。
  *
- * 约定：**预览帧宽固定 375px，等价于小程序的 750rpx**，也就是 CSS 里的
- * 1 个数值 = 1 个 CSS 像素 = 2rpx（Taro 的 designWidth 750 + pxtransform 就是这个语义）。
+ * 约定：**预览帧宽固定 750 CSS 像素，等价于小程序的 750rpx**，也就是 CSS 里的
+ * 1 个数值 = 1 个 CSS 像素 = 1rpx（Taro designWidth 750 + pxtransform 就是这个语义）。
  *
  * 所以这里只需要把 `rpx` 单位**去掉**（浏览器不认识 rpx），不做任何缩放：
  * 任何额外的缩放都会让宽度被折两次，最后表现为「尺寸属性整片失效」。

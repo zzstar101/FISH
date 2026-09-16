@@ -13,7 +13,7 @@ import { useRouterState } from './taro-web-stub'
 // 全局壳样式（令牌 + .page/.pad/.sec）：与小程序端同一份 app.scss，避免两边样式漂移
 import '../src/app.scss'
 
-/** 与 src/app.config.ts 的 pages 一一对应 */
+/** 与 src/app.config.ts 的 pages 一一对应（顺序、数量都必须一致） */
 const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/home/index': () => import('@/pages/home/index'),
   '/pages/wish/index': () => import('@/pages/wish/index'),
@@ -24,6 +24,18 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/listing-detail/index': () => import('@/pages/listing-detail/index'),
   '/pages/conversation/index': () => import('@/pages/conversation/index'),
   '/pages/notifications/index': () => import('@/pages/notifications/index'),
+  '/pages/orders/index': () => import('@/pages/orders/index'),
+  '/pages/transaction-meetup/index': () => import('@/pages/transaction-meetup/index'),
+  '/pages/register/index': () => import('@/pages/register/index'),
+  '/pages/login/index': () => import('@/pages/login/index'),
+  '/pages/settings/index': () => import('@/pages/settings/index'),
+  '/pages/category/index': () => import('@/pages/category/index'),
+  '/pages/verify/index': () => import('@/pages/verify/index'),
+  '/pages/user/index': () => import('@/pages/user/index'),
+  '/pages/match/index': () => import('@/pages/match/index'),
+  '/pages/mylist/index': () => import('@/pages/mylist/index'),
+  '/pages/watchers/index': () => import('@/pages/watchers/index'),
+  '/pages/scan/index': () => import('@/pages/scan/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */

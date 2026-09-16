@@ -125,8 +125,17 @@ export default function CustomTabBar() {
       {TAB_ITEMS.map((item) => {
         const on = item.key === active
         if (item.key === 'sell') {
+          /**
+           * 中间的凸起钮也要给 `is-on`：设计稿（D1 第 04 帧）里当前 Tab 的**文字**是品牌色，
+           * 凸起钮本身恒为品牌渐变。少了这个 class，用户在「出物」页时整条底栏没有任何
+           * 选中反馈——按钮「看起来一样」但点了有反应，是最容易让人以为坏了的状态。
+           */
           return (
-            <View key={item.key} className="tabbar__tab tabbar__tab--pub" onClick={() => go(item)}>
+            <View
+              key={item.key}
+              className={`tabbar__tab tabbar__tab--pub${on ? ' is-on' : ''}`}
+              onClick={() => go(item)}
+            >
               <View className="tabbar__pub">
                 <View className="tabbar__plus" />
               </View>

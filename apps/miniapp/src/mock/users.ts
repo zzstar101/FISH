@@ -84,6 +84,65 @@ export const USERS: MockUser[] = [
     soldCount: 4,
     goodRate: 96,
   },
+
+  /* ---- A/B/C/D 组 14 张设计稿里反复出现的人物 ----
+     设计稿自述「示例数据为占位，非真实账号」，这些是稿件的占位人物；
+     登记成 fixture 是为了让新页面上的头像首字 / 昵称 / 校区与稿子一致。
+     AVATARS 只有 8 张，超出的取模复用。 */
+  {
+    id: 'u-lin',
+    nickname: '林知遥',
+    avatarUrl: AVATARS[8 % AVATARS.length] ?? '',
+    campus: '广州',
+    authStatus: 'VERIFIED',
+    soldCount: 27,
+    goodRate: 98,
+  },
+  {
+    id: 'u-zhouyan',
+    nickname: '周予安',
+    avatarUrl: AVATARS[9 % AVATARS.length] ?? '',
+    campus: '广州',
+    authStatus: 'VERIFIED',
+    soldCount: 15,
+    goodRate: 99,
+  },
+  {
+    id: 'u-zhangyu',
+    nickname: '张屿',
+    avatarUrl: AVATARS[10 % AVATARS.length] ?? '',
+    campus: '肇庆',
+    authStatus: 'VERIFIED',
+    soldCount: 8,
+    goodRate: 100,
+  },
+  {
+    id: 'u-suyiran',
+    nickname: '苏亦然',
+    avatarUrl: AVATARS[11 % AVATARS.length] ?? '',
+    campus: '广州',
+    authStatus: 'VERIFIED',
+    soldCount: 12,
+    goodRate: 97,
+  },
+  {
+    id: 'u-xuche',
+    nickname: '许澈',
+    avatarUrl: AVATARS[12 % AVATARS.length] ?? '',
+    campus: '肇庆',
+    authStatus: 'UNVERIFIED',
+    soldCount: 2,
+    goodRate: 100,
+  },
+  {
+    id: 'u-hexu',
+    nickname: '何叙',
+    avatarUrl: AVATARS[13 % AVATARS.length] ?? '',
+    campus: '广州',
+    authStatus: 'VERIFIED',
+    soldCount: 6,
+    goodRate: 98,
+  },
 ]
 
 export const USER_BY_ID: Record<string, MockUser> = Object.fromEntries(

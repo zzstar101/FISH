@@ -41,6 +41,15 @@
   }
 }
 
+/**
+ * 中间「出物」：凸起钮恒定是品牌渐变，选中反馈只能落在**文字**上。
+ * 未选中时文字跟随其它 tab 的灰，选中时转品牌色 + 加粗（与设计稿一致）。
+ */
+.tabbar__tab--pub.is-on .tabbar__label {
+  color: var(--brand);
+  font-weight: 600;
+}
+
 .tabbar__icon {
   position: relative;
   height: 64px;

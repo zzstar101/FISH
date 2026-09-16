@@ -126,8 +126,10 @@ function shellHtml() {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FISH miniapp · 预览</title>
     <style>
-      /* 预览帧：固定 375×812（= 小程序 750rpx 宽），与设计稿画布等比。
-         换算约定：CSS 里的 1 个数值 = 1 CSS 像素 = 2rpx。 */
+      /* 预览帧：750×1624 CSS 像素 = 小程序的 750rpx 宽。
+         换算约定（DESIGN.md §1）：SCSS 里的 1 个数值 = 1rpx，
+         而 1rpx 在 375pt 屏上 = 0.5 CSS 像素 → 帧宽必须写成 750 才能与真机等比。
+         写成 375 会让所有尺寸、字号、间距显示成真机的 2 倍。 */
       * { box-sizing: border-box; }
       html, body {
         margin: 0; padding: 0; background: #e9eef7;
@@ -135,7 +137,7 @@ function shellHtml() {
       }
       body { display: flex; justify-content: center; }
       .page-frame {
-        position: relative; width: 375px; height: 812px;
+        position: relative; width: 750px; height: 1624px;
         overflow-x: hidden; overflow-y: auto;
         background: var(--bg, #f7faff); isolation: isolate;
       }

@@ -100,14 +100,31 @@
   flex: 0 0 auto;
 }
 
-.profile__campus {
-  display: block;
+/* 校区 + 认证状态行：整行是入口（点进校园认证页），所以给右箭头与热区 */
+.profile__campus-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 14px;
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+.profile__campus {
   font-size: 22px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.profile__campus-arrow {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  opacity: 0.7;
 }
 
 .profile__edit-text {
@@ -131,6 +148,11 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
+
+  /* 数据行四项都是入口，按下给一点反馈，否则看起来只是数字 */
+  &:active {
+    opacity: 0.65;
+  }
 }
 
 .profile__stat-num {

@@ -106,3 +106,270 @@
 @mixin pressable {
   transition: transform 0.16s ease, opacity 0.16s ease;
 }
+
+/* ==================== A/B/C/D 组 14 张稿新增的复用组合 ====================
+   这些来自 14 张稿里反复出现、且容易写歪的结构：表单字段、设置行、
+   底部弹层、卡片标题行、骨架屏、状态胶囊。尺寸一律由调用方给。 */
+
+/* 表单字段：标签 + 输入盒 + 可选错误小字（B1/B2/B3/D1） */
+@mixin field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 输入盒：48pt 高、--ice 底、12pt 圆角；聚焦转 --line 描边，错误转 --danger */
+@mixin input-box {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 96px;
+  padding: 0 26px;
+  border-radius: 24px;
+  background: var(--ice);
+  border: 2px solid transparent;
+  font-size: var(--fs-body);
+
+  &.is-focus {
+    background: var(--surface);
+    border-color: var(--line);
+    box-shadow: 0 0 0 6px var(--accent-weak);
+  }
+
+  &.is-error {
+    background: var(--danger-weak);
+    border-color: var(--danger-line);
+  }
+
+  &.is-off {
+    opacity: 0.55;
+  }
+}
+
+/* 字段标签：14pt/600，右侧可挂「选填」等说明 */
+@mixin field-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* 错误小字：贴字段下方（B1/B2/B3/D1） */
+@mixin field-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  color: var(--danger-ink);
+  line-height: 1.45;
+}
+
+/* 设置/列表分组卡（B4 设置、C4 我的发布、个人页入口） */
+@mixin group-card {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* 设置行：左图标盘 + 标签 + 右侧当前值/箭头；行间用极淡分割线 */
+@mixin group-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  min-height: 100px;
+  padding: 0 28px;
+  text-align: left;
+  box-sizing: border-box;
+
+  & + & {
+    border-top: 2px solid var(--accent-faint);
+  }
+}
+
+/* 行左图标盘：30pt 冰蓝渐变方块（设计稿 .ric） */
+@mixin row-icon {
+  flex: 0 0 auto;
+  width: 60px;
+  height: 60px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--accent-faint);
+}
+
+/* 分组小标题（设计稿 .grouplabel） */
+@mixin group-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted-2);
+  letter-spacing: 0.02em;
+  padding: 32px 4px 16px;
+}
+
+/* 底部弹层（B4 退出确认 / C4 下架确认 / D1 润色卡 / D2 面板 / C6 手动输入） */
+@mixin sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  background: var(--surface);
+  border-radius: var(--r-hero) var(--r-hero) 0 0;
+  box-shadow: var(--shadow-sheet);
+  padding-bottom: calc(48px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+/* 弹层遮罩（点击关闭） */
+@mixin scrim($color: var(--scrim)) {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: $color;
+}
+
+/* 卡片区块标题行：左标题 + 右等宽小字说明 */
+@mixin section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* 状态胶囊：三种语义色（待面交 / 已完成 / 已取消） */
+@mixin status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+
+  &.is-pending {
+    background: var(--brand-deep);
+    color: #fff;
+  }
+
+  &.is-done {
+    background: var(--muted-2);
+    color: #fff;
+  }
+
+  &.is-cancel {
+    background: var(--ice);
+    color: var(--muted-2);
+    border: 2px solid var(--border);
+  }
+}
+
+/* 小尺寸胶囊按钮（订单卡动作、列表行动作） */
+@mixin btn-sm($bg: var(--surface), $fg: var(--fg)) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 72px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  background: $bg;
+  color: $fg;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+/* 骨架屏条（A1/C2/C3/C4/C5 的加载态） */
+@mixin skeleton($h: 56px, $w: 100%) {
+  height: $h;
+  width: $w;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--ice) 0%, var(--accent-faint) 50%, var(--ice) 100%);
+}
+
+/* 头像占位：品牌渐变 + 首字（C2/C5/A1 的对方头像） */
+@mixin avatar($size: 80px) {
+  flex: 0 0 auto;
+  width: $size;
+  height: $size;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--accent-faint);
+  color: var(--brand-deep);
+  font-size: $size * 0.42;
+  font-weight: 600;
+  overflow: hidden;
+}
+
+/* 悬浮圆形玻璃钮（返回/刷新/扫码等，设计稿 36pt） */
+@mixin float-btn($size: 72px) {
+  width: $size;
+  height: $size;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-strong);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 8px 32px -16px rgba(65, 70, 78, 0.4);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* 开关（B4 通知/隐私开关） */
+@mixin switch {
+  flex: 0 0 auto;
+  width: 92px;
+  height: 52px;
+  border-radius: var(--r-pill);
+  background: var(--border);
+  padding: 4px;
+  box-sizing: border-box;
+  transition: background 0.18s ease;
+
+  &.is-on {
+    background: var(--brand);
+  }
+}
+
+/* 商品角标「急出 / 0 元送」（D1 稿第 04 帧的规格卡）：
+   高 18pt、圆角 6pt、内边距 0 7pt、字号 10pt/600。商品缩略图与发布页共用，
+   所以放在这里而不是任一页面里——两处抄一遍必然漂移。 */
+@mixin badge-corner($tone: hot) {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 12px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+
+  @if $tone == hot {
+    background: var(--warn-weak);
+    border: 2px solid var(--warn);
+    color: var(--warn-ink);
+  } @else {
+    background: var(--ok-weak);
+    border: 2px solid var(--ok);
+    color: var(--ok-ink);
+  }
+}
+

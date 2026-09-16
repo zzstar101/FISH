@@ -7,8 +7,44 @@
  * 与真实契约的边界：商品/愿望/会话/消息/通知的字段都对齐 `packages/contracts`；
  * 留言（comments）在契约里不存在，是本文件内的纯展示 mock（`discover.ts` 有标注）。
  */
-import { getListing, LISTING_BY_ID, LISTINGS, similarListings } from './catalog'
-import { CHAT_SUMMARY, CONVERSATIONS, conversationsOf, messagesOf } from './chat'
+import {
+  APP_BUILD,
+  APP_VERSION,
+  isEduEmail,
+  meetupCodeOf,
+  MY_LISTINGS,
+  myListingCounts,
+  rotateMeetupCode,
+  SETTINGS,
+  THEME_OPTIONS,
+  TRANSACTION_BY_ID,
+  TRANSACTIONS,
+  transactionCounts,
+  transactionsOf,
+  transactionOverview,
+  userProfile,
+  WATCHERS,
+  WATCHER_LISTING_ID,
+  watcherCount,
+  watcherStats,
+  VERIFY,
+} from './account'
+import {
+  CATEGORY_ORDER,
+  CATEGORY_TITLE,
+  getListing,
+  LISTING_BY_ID,
+  LISTINGS,
+  similarListings,
+  SUB_CATEGORIES,
+} from './catalog'
+import {
+  CHAT_SUMMARY,
+  CONVERSATIONS,
+  conversationsOf,
+  mediaMessagesOf,
+  messagesOf,
+} from './chat'
 import {
   COMMENTS,
   commentsOf,
@@ -19,16 +55,26 @@ import {
   SEARCH_PLACEHOLDER,
 } from './discover'
 import type {
+  ConversationRole,
   HotSearchItem,
   ListingCategory,
   MockComment,
   MockConversation,
   MockListing,
+  MockMatch,
+  MockMediaMessage,
+  MockMeetupCode,
   MockMessage,
+  MockMyListing,
   MockNotification,
+  MockSettings,
+  MockTransaction,
   MockUser,
+  MockUserProfile,
+  MockWatcher,
   MockWish,
   MockWishPoolItem,
+  MyListingStatusKey,
   SearchFilter,
 } from './types'
 import { getUser, ME, USERS } from './users'
@@ -43,16 +89,26 @@ import {
 } from './wishes'
 
 export type {
+  ConversationRole,
   HotSearchItem,
   ListingCategory,
   MockComment,
   MockConversation,
   MockListing,
+  MockMatch,
+  MockMediaMessage,
+  MockMeetupCode,
   MockMessage,
+  MockMyListing,
   MockNotification,
+  MockSettings,
+  MockTransaction,
   MockUser,
+  MockUserProfile,
+  MockWatcher,
   MockWish,
   MockWishPoolItem,
+  MyListingStatusKey,
   SearchFilter,
 }
 
@@ -311,6 +367,11 @@ export function messages(conversationId: string): MockMessage[] {
   return messagesOf(conversationId)
 }
 
+/** D2 媒体消息（契约外，见 `MockMediaMessage`） */
+export function mediaMessages(conversationId: string): MockMediaMessage[] {
+  return mediaMessagesOf(conversationId)
+}
+
 export function chatSummary() {
   return CHAT_SUMMARY
 }
@@ -362,9 +423,152 @@ export function profileStats() {
   return {
     activeListings: listings.filter((item) => item.status === 'ACTIVE').length,
     activeWishes: myWishes().filter((item) => item.status === 'ACTIVE').length,
-    completedTransactions: 1,
+    completedTransactions: TRANSACTIONS.filter((tx) => tx.status === 'COMPLETED').length,
   }
 }
+
+/* ------------------------------------------ A/B/C 组 14 张新稿新增的域 ------- */
+
+/** 订单：按视角（我买到的 / 我卖出的）取，附商品与对方用户 */
+export type OrderView = {
+  transaction: MockTransaction
+  listing: MockListing
+  counterpart: MockUser
+}
+
+export async function fetchOrders(role: ConversationRole): Promise<OrderView[]> {
+  const views = transactionsOf(role).flatMap((transaction) => {
+    const listing = findListing(transaction.listingId)
+    if (!listing) return []
+    return [{ transaction, listing, counterpart: getUser(transaction.counterpartId) }]
+  })
+  return delay(views)
+}
+
+export function orderCounts(role: ConversationRole) {
+  return transactionCounts(role)
+}
+
+export function orderOverview() {
+  return transactionOverview()
+}
+
+export function findTransaction(id: string): MockTransaction | undefined {
+  return TRANSACTION_BY_ID[id]
+}
+
+/* ---- 交易码（A2） ---- */
+
+export function meetupCode(transactionId: string): MockMeetupCode {
+  return meetupCodeOf(transactionId)
+}
+
+/** 「刷新」出新码（演示用） */
+export function newMeetupCode(seed: number): string {
+  return rotateMeetupCode(seed)
+}
+
+/* ---- 匹配结果（C3） ---- */
+
+/** 低于这个分数视为「可能不相关」，不再展示（`matching/schema.ts` 的 MATCH_SCORE_THRESHOLD 语义） */
+export const MATCH_SCORE_THRESHOLD = 60
+
+export type MatchView = {
+  match: MockMatch
+  listing: MockListing
+  seller: MockUser
+}
+
+/** 匹配到的愿望（C3 页头那张吊牌） */
+export function findWish(id: string): MockWish | undefined {
+  return WISHES.find((wish) => wish.id === id)
+}
+
+/** C3 的默认愿望：稿子里那条「显示器」 */
+export const MATCH_DEFAULT_WISH = 'w-011'
+
+export async function fetchMatches(wishId: string): Promise<MatchView[]> {
+  // 复用已有的 wishMatches（它已经把 match 与 listing 配好），这里只补卖家与阈值过滤
+  const views = wishMatches(wishId)
+    .filter(({ match }) => match.score >= MATCH_SCORE_THRESHOLD)
+    .map(({ match, listing }) => ({ match, listing, seller: getUser(listing.sellerId) }))
+  return delay(views)
+}
+
+/* ---- 分类页（C1） ---- */
+
+export { CATEGORY_ORDER, SUB_CATEGORIES }
+
+export function categoryTitle(category: ListingCategory): string {
+  return CATEGORY_TITLE[category]
+}
+
+/** 一级分类的在售件数（C1 左栏「128 件」） */
+export function categoryCount(category: ListingCategory): number {
+  return LISTINGS.filter((l) => l.category === category && l.status === 'ACTIVE').length
+}
+
+/** 二级分类在售件数（C1 排序行右下角「32 件」） */
+export function subCategoryCount(category: ListingCategory, sub: string): number {
+  return LISTINGS.filter((l) => l.category === category && l.sub === sub && l.status === 'ACTIVE')
+    .length
+}
+
+/* ---- 他人主页（C2，契约无公开资料端点） ---- */
+
+export function fetchUserProfile(userId: string): Promise<MockUserProfile> {
+  return delay(userProfile(userId))
+}
+
+export function fetchUserListings(userId: string): Promise<MockListing[]> {
+  return delay(userListings(userId).filter((item) => item.status === 'ACTIVE'))
+}
+
+/* ---- 我的发布（C4） ---- */
+
+export function fetchMyListings(): Promise<MockMyListing[]> {
+  return delay(MY_LISTINGS)
+}
+
+export function myListingStats() {
+  return myListingCounts()
+}
+
+/* ---- 想要的人（C5，契约无端点） ---- */
+
+/** 「想要的人」页的默认商品（C5 稿子里那件：罗技 MX Keys 键盘） */
+export const WATCHER_DEFAULT_LISTING = WATCHER_LISTING_ID
+
+export function fetchWatchers(listingId?: string): Promise<MockWatcher[]> {
+  const id = listingId ?? WATCHER_LISTING_ID
+  return delay(WATCHERS.filter((item) => item.listingId === id))
+}
+
+export function watchersSummary(listingId?: string) {
+  return watcherStats(listingId)
+}
+
+/** 某件商品有多少人想要（商品卡 / 我的发布行共用） */
+export function wantsOf(listingId: string): number {
+  return watcherCount(listingId)
+}
+
+/* ---- 认证 / 设置（B3 / B4） ---- */
+
+export function verifyState() {
+  return VERIFY
+}
+
+export function eduEmailOk(email: string): boolean {
+  return isEduEmail(email)
+}
+
+export function settings(): MockSettings {
+  return SETTINGS
+}
+
+export const themeOptions = THEME_OPTIONS
+export { APP_BUILD, APP_VERSION }
 
 export const allUsers: MockUser[] = USERS
 
@@ -373,3 +577,24 @@ export { getUser, ME }
 
 /** 留言是纯展示数据（契约无 comments 域），单独导出方便调试 */
 export const allComments: MockComment[] = COMMENTS
+
+/* ---- D1 发布页增补（AI 润色 / 审核失败） ---- */
+
+export {
+  findViolations,
+  moderate,
+  polishCandidates,
+  type ModerationResult,
+  type PolishCandidate,
+} from './sell'
+
+/** 该商品分类的「同款全新约 ¥X」参考价与建议定价区间（设计稿的 pnote） */
+export function priceHint(listingId: string): string | null {
+  const listing = findListing(listingId)
+  if (!listing) return null
+  const was = listing.originalPriceCents
+  if (!was) return null
+  const lo = Math.round((listing.priceCents * 0.85) / 100) * 100
+  const hi = Math.round((listing.priceCents * 1.2) / 100) * 100
+  return `同款全新约 ¥${formatAmount(was)} · 建议定价区间 ¥${formatAmount(lo)} ~ ¥${formatAmount(hi)}`
+}

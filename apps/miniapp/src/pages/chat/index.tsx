@@ -49,6 +49,8 @@ function chipCount(key: ConversationFilter, counts: { all: number; unread: numbe
 function previewText(conversation: MockConversation): string {
   const last = conversation.lastMessage
   if (!last) return ''
+  // 最后一条是媒体消息（D2）：lastMessage 只承载契约内的文本，媒体走 mediaPreview
+  if (conversation.mediaPreview) return conversation.mediaPreview
   if (last.type !== 'SYSTEM') return last.content
 
   try {
