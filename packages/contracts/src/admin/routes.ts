@@ -5,9 +5,10 @@
  * 前缀（`apps/web/vite.config.ts`、`docs/architecture.md` §5.1）；生产同源部署行为一致。
  * 前端 typed client 与 API router 共用本文件，禁止在别处硬编码这些路径。
  *
- * 挂载：`apps/api/src/app.ts` 先把 `auth.requireAuth` 挂到 `/admin/*`，再把本 router 挂到
- * `/admin`；每个 handler 内部再额外执行 `requireAdmin`（设计 §3.2）。口径与 listings / wishes
- * 等域一致：**API 路径不含浏览器前缀**。
+ * 挂载：`apps/api/src/app.ts` 只把本 router 挂到 `/admin`（`app.route`），认证与授权两道守卫都在
+ * `apps/api/src/modules/admin/router.ts` 内用 `router.use('*')` 应用（先 `requireAuth` 401，
+ * 再 `requireAdmin` 403）——这样新增端点不会漏挂。口径与 listings / wishes 等域一致：
+ * **API 路径不含浏览器前缀**。
  */
 export const ADMIN_ROUTES = {
   base: '/admin',

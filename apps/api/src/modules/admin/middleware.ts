@@ -11,9 +11,9 @@ import type { AdminStore } from './store'
  * - 已登录但非 Admin → 稳定的 `FORBIDDEN` / 403（普通用户访问任何 `/admin/*` 都返回它，
  *   不能靠修改前端状态绕过——前端路由守卫只负责体验）。
  *
- * 挂载方式与 /wishes 一致：根路由由 `apps/api/src/app.ts` 统一接线——
- * `app.use('/admin/*', auth.requireAuth)` 先过认证，进入本 router 后 `router.use('*',
- * requireAdmin)` 覆盖全部 `/admin/*`（设计 §3.2："每个 Admin API 入口额外执行 requireAdmin"）。
+ * 挂载方式：`apps/api/src/app.ts` 只把 admin router 挂到 `/admin`，两道守卫都在
+ * `router.ts` 内用 `router.use('*')` 应用（先 `requireAuth`，再本中间件），覆盖全部
+ * `/admin/*`（设计 §3.2：“每个 Admin API 入口额外执行 requireAdmin”）。
  */
 export function createRequireAdmin(options: {
   store: Pick<AdminStore, 'isAdmin'>

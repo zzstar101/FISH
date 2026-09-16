@@ -136,6 +136,5 @@ export function createAdminRouter(options: AdminRouterOptions) {
   // 守卫在 `use('*')` 里先执行，因此该兜底只对「已过 requireAuth + requireAdmin」的请求生效。
   router.all('*', (c) => c.json(errorBody('ADMIN_NOT_FOUND', '目标不存在'), 404))
 
-  /** 供测试/未来写操作的 body 读取与错误翻译复用导出。 */
   return router
 }

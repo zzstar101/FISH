@@ -27,5 +27,5 @@ export function createAdminModule(options: {
     requireAuth: options.requireAuth,
     requireAdmin,
   })
-  return { router, requireAdmin }
+  return { router }
 }
