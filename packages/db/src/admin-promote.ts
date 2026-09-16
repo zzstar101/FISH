@@ -33,6 +33,7 @@ function usage(code: number): never {
       '用法：bun run db:promote -- <学号> [--actor <学号>] [--reason <原因>]',
       '  <学号>     被提升为 ADMIN 的学号（必填）',
       '  --actor    执行提升操作的 Admin 学号（缺省 = 被提升者本人；首次引导即它自己）',
+      '             指定时必须已经是 ADMIN，否则拒绝（避免审计指向无管理权限者）',
       '  --reason   审计原因（缺省：“管理后台初始化”）',
     ].join('\n'),
   )
@@ -87,6 +88,12 @@ if (actor && actor !== target) {
   const actorUser = await roleByStudentNo(actor)
   if (!actorUser) {
     console.error(`[db:promote] --actor 学号不存在：${actor}`)
+    process.exit(1)
+  }
+  // 审计里的操作者必须真的是管理员，否则可以把提升记到一个从未有过管理权限的账号头上。
+  // `actor === target` 的自举路径（首次引导）不需要这条校验。
+  if (actorUser.role !== 'ADMIN') {
+    console.error(`[db:promote] --actor 必须是现有 ADMIN（首次引导请省略 --actor）：${actor}`)
     process.exit(1)
   }
   actorId = actorUser.id
