@@ -89,6 +89,14 @@ test('--actor 不是 ADMIN 时拒绝提升，且不留下审计记录', async ()
   expect(await scratch.$count(adminAuditLogs)).toBe(0)
 })
 
+test('--reason 缺值时按用法错误退出，不静默回落默认原因', async () => {
+  const result = await promote([TARGET_NO, '--reason'])
+
+  expect(result.exitCode).toBe(1)
+  expect(await roleOf(TARGET_NO)).toBe('USER')
+  expect(await scratch.$count(adminAuditLogs)).toBe(0)
+})
+
 test('--actor 是现有 ADMIN 时以其为操作者写入审计', async () => {
   const result = await promote([ACTOR_TARGET_NO, '--actor', ADMIN_NO])
 

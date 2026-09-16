@@ -32,8 +32,8 @@ function usage(code: number): never {
     [
       '用法：bun run db:promote -- <学号> [--actor <学号>] [--reason <原因>]',
       '  <学号>     被提升为 ADMIN 的学号（必填）',
-      '  --actor    执行提升操作的 Admin 学号（缺省 = 被提升者本人；首次引导即它自己）',
-      '             指定时必须已经是 ADMIN，否则拒绝（避免审计指向无管理权限者）',
+      '  --actor    执行提升操作的 Admin 学号（缺省或等于被提升者 = 首次引导自举，不做角色校验）',
+      '             指定为他人时必须已经是 ADMIN，否则拒绝（避免审计指向无管理权限者）',
       '  --reason   审计原因（缺省：“管理后台初始化”）',
     ].join('\n'),
   )
@@ -53,7 +53,11 @@ for (let i = 1; i < args.length; i += 1) {
     actor = value
     i += 1
   } else if (args[i] === '--reason') {
-    reason = args[i + 1] ?? reason
+    const value = args[i + 1]
+    // 与 `--actor` 同口径：缺值属用法错误。静默回落默认原因会让「忘了写原因」变成
+    // 一条看起来正常的审计记录。
+    if (!value) usage(1)
+    reason = value
     i += 1
   } else {
     usage(1)
