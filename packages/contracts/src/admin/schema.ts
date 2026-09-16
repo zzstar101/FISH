@@ -167,7 +167,7 @@ export const AdminListingDetailSchema = z.object({
   negotiable: z.boolean(),
   free: z.boolean(),
   createdAt: z.iso.datetime(),
-  updatedAt: z.iso.datetime().nullable(),
+  updatedAt: z.iso.datetime(),
   images: z.array(z.object({ url: z.url(), sortOrder: z.number().int().nonnegative() })),
   seller: AdminSellerSummarySchema,
   /** 最近 10 条针对该商品的 Admin 操作（时间倒序；空数组 = 无操作记录）。 */
@@ -276,7 +276,10 @@ export const AdminListingsQuerySchema = z.strictObject({
   q: z.string().trim().min(1).max(50).optional(),
   status: ListingStatusSchema.optional(),
   sellerId: z.uuid().optional(),
-  /** 时间段（含边界）；ISO datetime。 */
+  /**
+   * 时间段（**左闭右开**：`>= createdFrom` 且 `< createdTo`，与 `store.ts` 的条件一致）；
+   * ISO datetime。取「含边界」的客户端会丢掉恰好等于 `createdTo` 的那条记录。
+   */
   createdFrom: z.iso.datetime().optional(),
   createdTo: z.iso.datetime().optional(),
   cursor: z.string().min(1).optional(),
@@ -288,6 +291,7 @@ export const AdminAuditLogsQuerySchema = z.strictObject({
   action: AdminAuditActionSchema.optional(),
   targetType: AdminAuditTargetTypeSchema.optional(),
   targetId: z.uuid().optional(),
+  /** 同 `AdminListingsQuerySchema`：左闭右开。 */
   createdFrom: z.iso.datetime().optional(),
   createdTo: z.iso.datetime().optional(),
   cursor: z.string().min(1).optional(),

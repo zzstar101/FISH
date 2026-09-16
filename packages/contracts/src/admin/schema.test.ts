@@ -187,4 +187,25 @@ describe('AdminListingDetailSchema', () => {
     expect(parsed.images).toHaveLength(1)
     expect(parsed.recentAuditLogs).toEqual([])
   })
+
+  test('requires updatedAt, since listings.updated_at is NOT NULL', () => {
+    const body = {
+      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      title: '罗技 K380 机械键盘',
+      description: '自用一年。',
+      priceCents: 16000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: 'ACTIVE',
+      urgent: false,
+      negotiable: true,
+      free: false,
+      createdAt: '2026-09-12T03:40:10.000Z',
+      updatedAt: null,
+      images: [],
+      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚', campus: '肇庆' },
+      recentAuditLogs: [],
+    }
+    expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)
+  })
 })
