@@ -128,6 +128,14 @@ export function createAdminRouter(options: AdminRouterOptions) {
     }
   })
 
+  // 未匹配的 `/admin/*` 也走契约错误信封（设计 §8）：Hono 默认返回 `text/plain` 的
+  // `404 Not Found`，web 的 api-client 会把它归一成 `INTERNAL_ERROR`，客户端拿不到稳定错误码。
+  //
+  // 不用 `router.notFound(...)`：子应用的 notFound 不会经 `app.route('/admin', router)` 生效
+  // （实测 unmatched 路径仍是 text/plain），所以用注册在最后、匹配任意方法任意路径的 catch-all。
+  // 守卫在 `use('*')` 里先执行，因此该兜底只对「已过 requireAuth + requireAdmin」的请求生效。
+  router.all('*', (c) => c.json(errorBody('ADMIN_NOT_FOUND', '目标不存在'), 404))
+
   /** 供测试/未来写操作的 body 读取与错误翻译复用导出。 */
   return router
 }

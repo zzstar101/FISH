@@ -295,6 +295,17 @@ describe('Admin 查询端到端', () => {
     expect(badId.status).toBe(404)
   })
 
+  test('unmatched /admin/* path returns the contract error envelope, after the guards', async () => {
+    const missing = await app.request('/admin/nope', { headers: { cookie: adminCookie } })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toMatchObject({ error: { code: 'ADMIN_NOT_FOUND' } })
+
+    // 守卫先于 404：未登录访问不存在的 admin 路径同样是 401，不泄漏路径是否存在（设计 §3.2）。
+    const anonymous = await app.request('/admin/nope')
+    expect(anonymous.status).toBe(401)
+    expect(await anonymous.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
+  })
+
   test('invalid query params return 422 VALIDATION_FAILED', async () => {
     const badLimit = await app.request(`${ADMIN_ROUTES.users}?limit=0`, {
       headers: { cookie: adminCookie },
