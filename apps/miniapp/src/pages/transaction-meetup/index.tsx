@@ -4,17 +4,16 @@ import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import {
-  findListing,
-  findTransaction,
   formatAmount,
-  getUser,
   type MockListing,
   type MockMeetupCode,
   type MockTransaction,
-  type MockUser,
   meetupCode,
   newMeetupCode,
+  openConversation as openConversationOf,
+  transactionView,
 } from '@/mock/api'
+import type { MockTransactionCounterpart } from '@/mock/types'
 import './index.scss'
 
 /**
@@ -54,7 +53,7 @@ export default function TransactionMeetup() {
 
   const [transaction, setTransaction] = useState<MockTransaction | null>(null)
   const [listing, setListing] = useState<MockListing | null>(null)
-  const [counterpart, setCounterpart] = useState<MockUser | null>(null)
+  const [counterpart, setCounterpart] = useState<MockTransactionCounterpart | null>(null)
   const [code, setCode] = useState<MockMeetupCode | null>(null)
 
   /** 码的有效期倒计时（秒），由 mock 的 expiresInSec 起算 */
@@ -70,14 +69,15 @@ export default function TransactionMeetup() {
   const rotateSeed = useRef(0)
 
   useLoad(() => {
-    const tx = findTransaction(txId)
-    setTransaction(tx ?? null)
-    const found = tx ? meetupCode(tx.id) : null
+    const view = transactionView(txId)
+    setTransaction(view?.transaction ?? null)
+    const found = view ? meetupCode(view.transaction.id) : null
     setCode(found)
     setLeft(found?.expiresInSec ?? 0)
-    if (tx) {
-      setListing(findListing(tx.listingId) ?? null)
-      setCounterpart(getUser(tx.counterpartId))
+    if (view) {
+      // 契约 DTO 的 listing / counterpart 由数据层组装，本页不再自己查表
+      setListing(view.listing)
+      setCounterpart(view.counterpart)
     }
   })
 
@@ -98,9 +98,15 @@ export default function TransactionMeetup() {
   const expired = code?.state === 'EXPIRED'
   const done = transaction?.status === 'COMPLETED'
 
+  /** 「查看会话」：会话由 (listingId, 对方) 解析（契约无 conversationId，口径同 #72 / PR #82） */
   const openConversation = () => {
-    if (!transaction) return
-    void Taro.navigateTo({ url: `/pages/conversation/index?id=${transaction.conversationId}` })
+    if (!transaction || !counterpart) return
+    const id = openConversationOf(transaction.listingId, counterpart.id)
+    if (!id) {
+      void Taro.showToast({ title: '这笔交易的会话已失效', icon: 'none' })
+      return
+    }
+    void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
   }
 
   const goOrders = () => {

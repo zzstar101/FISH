@@ -1,7 +1,7 @@
 import { getListing, LISTINGS } from './catalog'
 import { productImage } from './images'
 import type { MediaKind, MockConversation, MockMediaMessage, MockMessage } from './types'
-import { CURRENT_USER_ID } from './users'
+import { CURRENT_USER_ID, getUser } from './users'
 
 /**
  * 会话与消息 fixture。字段对齐 `chat/schema.ts` 的 `conversationDtoSchema` /
@@ -535,9 +535,30 @@ export const CONVERSATIONS: MockConversation[] = SPECS.map((spec) => {
     : null
   return {
     id: spec.id,
-    listingId: spec.listingId,
     role: isSeller ? 'seller' : 'buyer',
-    counterpartId: spec.counterpartId,
+    /**
+     * 契约 `ConversationDto` 是**服务端组装**好的读模型（商品摘要 + 对方摘要内嵌），
+     * 所以这里也在数据层一次组装完，页面不再拿 id 自己查表。
+     */
+    listing: {
+      // 契约对这张卡片的取值口径是「与 #6 的商品卡片一致（脏数据不 500）」，
+      // 所以商品缺失时降级成占位值，而不是让整条会话渲染不出来。
+      id: listing?.id ?? spec.listingId,
+      title: listing?.title ?? '商品已下架',
+      priceCents: listing?.priceCents ?? 0,
+      status: listing?.status ?? 'OFFLINE',
+      coverUrl: listing?.coverUrl ?? null,
+    },
+    counterpart: (() => {
+      const user = getUser(spec.counterpartId)
+      return {
+        id: user.id,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl,
+        // mock 专属：契约的 ConversationUser 没有 authStatus，列表行徽章要用
+        authStatus: user.authStatus,
+      }
+    })(),
     unreadCount: spec.unreadCount,
     lastMessage: last
       ? {

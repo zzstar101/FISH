@@ -9,7 +9,6 @@ import {
   countByFilter,
   filterConversations,
   formatAmount,
-  getUser,
   type MockConversation,
 } from '@/mock/api'
 import './index.scss'
@@ -183,7 +182,8 @@ export default function Chat() {
       <View className="chat__list">
         {visible.map((item) => {
           const isSystem = item.kind === 'system'
-          const user = getUser(item.counterpartId)
+          /** 直接消费契约 `ConversationDto.counterpart`，不再拿 id 自己查表 */
+          const user = item.counterpart
           const name = isSystem ? SYSTEM_NAME : user.nickname
           const tick = !isSystem && user.authStatus === 'VERIFIED'
           const unread = item.unreadCount
@@ -204,7 +204,8 @@ export default function Chat() {
                       mode="aspectFit"
                     />
                   ) : (
-                    <Image className="chat__ava-img" src={user.avatarUrl} mode="aspectFill" />
+                    // 契约允许 avatarUrl 为 null（users.avatar_url 可空）；空串即不渲染图
+                    <Image className="chat__ava-img" src={user.avatarUrl ?? ''} mode="aspectFill" />
                   )}
                 </View>
                 {item.online && !isSystem ? <View className="chat__on" /> : null}

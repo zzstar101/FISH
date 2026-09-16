@@ -1,3 +1,4 @@
+import type { ConversationListing, ConversationUser } from '@fish/contracts/chat/schema'
 import { Image, Input, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -6,15 +7,11 @@ import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
 import {
   conversation as findConversation,
-  findListing,
   formatAmount,
-  getUser,
   ME,
   type MockConversation,
-  type MockListing,
   type MockMediaMessage,
   type MockMessage,
-  type MockUser,
   mediaMessages as mediaOf,
   messages as messagesOf,
 } from '@/mock/api'
@@ -103,8 +100,10 @@ export default function Conversation() {
   const conversationId = router.params.id || FALLBACK_ID
 
   const [conversation, setConversation] = useState<MockConversation | null>(null)
-  const [listing, setListing] = useState<MockListing | null>(null)
-  const [counterpart, setCounterpart] = useState<MockUser | null>(null)
+  /** 契约 `ConversationDto.listing`（数据层已组装，本页不再查表） */
+  const [listing, setListing] = useState<ConversationListing | null>(null)
+  /** 契约 `ConversationDto.counterpart` */
+  const [counterpart, setCounterpart] = useState<ConversationUser | null>(null)
   const [items, setItems] = useState<MockMessage[]>([])
   const [media, setMedia] = useState<MockMediaMessage[]>([])
   const [inputValue, setInputValue] = useState('')
@@ -135,8 +134,8 @@ export default function Conversation() {
     setMedia(mediaOf(conversationId))
     setScrollTick((n) => n + 1)
     if (found) {
-      setListing(findListing(found.listingId) ?? null)
-      setCounterpart(getUser(found.counterpartId))
+      setListing(found.listing)
+      setCounterpart(found.counterpart)
     }
   })
 
@@ -443,7 +442,8 @@ export default function Conversation() {
 
       {listing ? (
         <View className="conv__card" onClick={openListing}>
-          <Image className="conv__card-img" src={listing.coverUrl} mode="aspectFill" />
+          {/* 契约允许 coverUrl 为 null（脏数据 / 已下架）；空串即不渲染图 */}
+          <Image className="conv__card-img" src={listing.coverUrl ?? ''} mode="aspectFill" />
           <View className="conv__card-body">
             <Text className="conv__card-title">{listing.title}</Text>
             <View className="conv__card-price">

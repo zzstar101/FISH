@@ -9,6 +9,7 @@ import {
   formatAmount,
   type MockTransaction,
   type OrderView,
+  openConversation as openConversationOf,
   orderCounts,
   orderOverview,
 } from '@/mock/api'
@@ -85,8 +86,17 @@ export default function Orders() {
     void load(next)
   }
 
+  /**
+   * 「查看会话」：契约的 `TransactionDto` 没有 `conversationId`，会话由
+   * (listingId, 对方) 解析 —— 口径同 #72 / PR #82。解析不到按「目标已失效」提示。
+   */
   const openConversation = (item: OrderView) => {
-    void Taro.navigateTo({ url: `/pages/conversation/index?id=${item.transaction.conversationId}` })
+    const id = openConversationOf(item.transaction.listingId, item.counterpart.id)
+    if (!id) {
+      void Taro.showToast({ title: '这笔交易的会话已失效', icon: 'none' })
+      return
+    }
+    void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
   }
 
   const openMeetup = (item: OrderView) => {

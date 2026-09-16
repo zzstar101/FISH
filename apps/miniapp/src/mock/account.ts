@@ -1,4 +1,4 @@
-/**
+﻿/**
  * A/B/C 组 14 张设计稿新增域的 fixture：订单 / 交易码 / 想要的人 / 他人主页 /
  * 我的发布 / 认证 / 设置。
  *
@@ -43,7 +43,6 @@ type TxSpec = {
   status: TransactionStatus
   agoMs: number
   timeLabel: string
-  conversationId: string
 }
 
 /**
@@ -54,8 +53,9 @@ type TxSpec = {
  * 1. `counterpartId` 一律取自商品 fixture 的 `sellerId`，而不是照抄稿子里的占位昵称——
  *    否则头像首字 / 昵称 / 商品归属会对不上（例如稿子里「高数」写张屿，而 fixture 里
  *    这本书属于苏苏，且会话 c-003 也一直是苏苏在聊）。
- * 2. `conversationId` 指向**这一笔**专属的会话（c-007 ~ c-012），不是同商品的其他买家
- *    会话——这是 A1 的验收要点。
+ * 2. **交易不带 `conversationId`**：契约的 `TransactionDto` 没有这个字段，会话由
+ *    (listingId, 对方) 定位（`openConversation()`，口径同 #72 / PR #82）。原来这里
+ *    挂 c-007 ~ c-012 是为了「跳这一笔的会话」，现在由 (listing, 对方) 唯一确定。
  */
 const TX_SPECS: TxSpec[] = [
   /* —— 我买到的 —— */
@@ -68,7 +68,6 @@ const TX_SPECS: TxSpec[] = [
     status: 'PENDING_MEETUP',
     agoMs: 5 * HOUR,
     timeLabel: '今天 14:20',
-    conversationId: 'c-007',
   },
   {
     id: 't-102',
@@ -79,7 +78,6 @@ const TX_SPECS: TxSpec[] = [
     status: 'PENDING_MEETUP',
     agoMs: 20 * HOUR,
     timeLabel: '昨天 19:05',
-    conversationId: 'c-008',
   },
   {
     id: 't-103',
@@ -90,7 +88,6 @@ const TX_SPECS: TxSpec[] = [
     status: 'PENDING_MEETUP',
     agoMs: 30 * 24 * HOUR,
     timeLabel: '5 月 11 日 11:32',
-    conversationId: 'c-009',
   },
   /* —— 我卖出的 —— */
   {
@@ -102,7 +99,6 @@ const TX_SPECS: TxSpec[] = [
     status: 'COMPLETED',
     agoMs: 27 * 24 * HOUR,
     timeLabel: '5 月 12 日 18:24',
-    conversationId: 'c-010',
   },
   {
     id: 't-105',
@@ -113,7 +109,6 @@ const TX_SPECS: TxSpec[] = [
     status: 'CANCELLED',
     agoMs: 31 * 24 * HOUR,
     timeLabel: '5 月 9 日 15:02',
-    conversationId: 'c-011',
   },
   {
     id: 't-106',
@@ -124,7 +119,6 @@ const TX_SPECS: TxSpec[] = [
     status: 'COMPLETED',
     agoMs: 34 * 24 * HOUR,
     timeLabel: '5 月 6 日 09:48',
-    conversationId: 'c-012',
   },
 ]
 
@@ -137,7 +131,6 @@ export const TRANSACTIONS: MockTransaction[] = TX_SPECS.map((spec) => ({
   status: spec.status,
   createdAt: isoAgo(spec.agoMs),
   timeLabel: spec.timeLabel,
-  conversationId: spec.conversationId,
 }))
 
 export const TRANSACTION_BY_ID: Record<string, MockTransaction> = Object.fromEntries(

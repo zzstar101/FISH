@@ -63,6 +63,7 @@ import type {
   MockNotification,
   MockSettings,
   MockTransaction,
+  MockTransactionCounterpart,
   MockUser,
   MockUserProfile,
   MockWatcher,
@@ -423,11 +424,25 @@ export function profileStats() {
 
 /* ------------------------------------------ A/B/C 组 14 张新稿新增的域 ------- */
 
-/** 订单：按视角（我买到的 / 我卖出的）取，附商品与对方用户 */
+/** 订单 / 交易视图：契约 `TransactionDto` 的 embedding 口径（商品与对方由数据层组装） */
 export type OrderView = {
   transaction: MockTransaction
   listing: MockListing
-  counterpart: MockUser
+  counterpart: MockTransactionCounterpart
+}
+
+/**
+ * 「打开这一笔交易的会话」——对应 #72 / PR #82 的解析口径。
+ *
+ * 契约的 `TransactionDto` **没有** `conversationId`：会话由 (listingId, 对方) 唯一确定
+ * （`POST /conversations { listingId }` 复用同一 (listing, 买家) 的会话）。
+ * 所以页面不应该自己编一个会话 id，而是走这里解析；解析不到时页面按「目标已失效」处理。
+ */
+export function openConversation(listingId: string, counterpartId: string): string | null {
+  const hit = conversations().find(
+    (item) => item.listing.id === listingId && item.counterpart.id === counterpartId,
+  )
+  return hit?.id ?? null
 }
 
 export async function fetchOrders(role: ConversationRole): Promise<OrderView[]> {
@@ -447,8 +462,13 @@ export function orderOverview() {
   return transactionOverview()
 }
 
-export function findTransaction(id: string): MockTransaction | undefined {
-  return TRANSACTION_BY_ID[id]
+/** 单笔交易视图（A2 面交页用）：找不到交易或商品时返回 null，页面走「目标已失效」态 */
+export function transactionView(id: string): OrderView | null {
+  const transaction = TRANSACTION_BY_ID[id]
+  if (!transaction) return null
+  const listing = findListing(transaction.listingId)
+  if (!listing) return null
+  return { transaction, listing, counterpart: getUser(transaction.counterpartId) }
 }
 
 /* ---- 交易码（A2） ---- */

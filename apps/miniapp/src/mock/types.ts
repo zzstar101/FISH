@@ -24,13 +24,18 @@
  * 里 `mini.compile.include` 的说明）；type-only 不产生任何运行时代码。
  */
 import type { AuthStatus, Campus } from '@fish/contracts/auth/user'
-import type { ConversationRole, MessageType } from '@fish/contracts/chat/schema'
+import type {
+  ConversationListing,
+  ConversationRole,
+  ConversationUser,
+  MessageType,
+} from '@fish/contracts/chat/schema'
 import type {
   ListingCategory,
   ListingCondition,
   ListingStatus,
 } from '@fish/contracts/listings/schema'
-import type { TransactionStatus } from '@fish/contracts/transactions/schema'
+import type { TransactionStatus, TransactionUser } from '@fish/contracts/transactions/schema'
 import type { WishStatus } from '@fish/contracts/wishes/schema'
 
 /* ---------------------------------------------------------------- 用户 */
@@ -150,11 +155,24 @@ export type MockMatch = {
 /** 复用 `chat/schema.ts` 的 `MessageType` / `ConversationRole` */
 export type { ConversationRole, MessageType }
 
+/**
+ * 会话里的对方：契约 `ConversationUser`（id / nickname / avatarUrl）
+ * **+ mock 专属** `authStatus`——列表行要显示认证徽章，而契约里没有这个字段。
+ * 结构上仍可赋给 `ConversationUser`，所以接真接口时只需删掉多出来的这一项。
+ */
+export type MockConversationCounterpart = ConversationUser & { authStatus: AuthStatus }
+
 export type MockConversation = {
   id: string
-  listingId: string
+  /** 契约 `ConversationDto.role`：我在这条会话里是买家还是卖家 */
   role: ConversationRole
-  counterpartId: string
+  /**
+   * 契约 `ConversationDto.listing`：**服务端组装**好的商品摘要。
+   * 页面因此不必再拿 `listingId` 自己去查表（避免「生成的键通不过自己的校验」那类漂移）。
+   */
+  listing: ConversationListing
+  /** 契约 `ConversationDto.counterpart`：会话对面的用户摘要 */
+  counterpart: MockConversationCounterpart
   unreadCount: number
   lastMessage: {
     type: MessageType
@@ -230,18 +248,31 @@ export type ConversationEntry =
 /** 复用 `transactions/schema.ts` 的 `TransactionStatus` */
 export type { TransactionStatus }
 
+/**
+ * 交易里的对方：契约 `TransactionUser`（id / nickname / avatarUrl）
+ * **+ mock 专属** `authStatus`（订单卡上的认证徽章）。
+ */
+export type MockTransactionCounterpart = TransactionUser & { authStatus: AuthStatus }
+
 export type MockTransaction = {
   id: string
+  /** 契约 `TransactionDto.listingId`；商品摘要由 `OrderView` 组装（同契约的 embedding 口径） */
   listingId: string
+  /** 契约 `TransactionDto.role` */
   role: ConversationRole
+  /** mock 内部的引用键；契约 DTO 对外给的是组装好的 `counterpart` */
   counterpartId: string
   amountCents: number
   status: TransactionStatus
   createdAt: string
-  /** mock 专属：设计稿订单卡上的相对时间与「我是买家 / 我是卖家」 */
+  /**
+   * mock 专属：设计稿订单卡上的相对时间。
+   *
+   * **刻意没有 `conversationId`**：契约的 `TransactionDto` 里没有这个字段，
+   * 会话由 (listingId, 对方) 定位（契约保证「同一 (listing, 买家) 只有一个会话」）。
+   * 页面的「查看会话」走 `openConversation()`，与 #72 / PR #82 的口径一致。
+   */
   timeLabel: string
-  /** mock 专属：订单卡「查看会话」要跳进**这一笔**的会话，而不是同商品的其他买家会话 */
-  conversationId: string
 }
 
 /**
