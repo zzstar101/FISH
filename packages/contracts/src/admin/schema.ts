@@ -1,5 +1,9 @@
 import { AuthStatusSchema, CampusSchema, MeSchema } from '@fish/contracts/auth/user'
-import { ListingStatusSchema } from '@fish/contracts/listings/schema'
+import {
+  ListingCategorySchema,
+  ListingConditionSchema,
+  ListingStatusSchema,
+} from '@fish/contracts/listings/schema'
 import { z } from 'zod'
 
 /**
@@ -146,9 +150,11 @@ export const AdminListingSummarySchema = z.object({
   id: z.uuid(),
   title: z.string(),
   priceCents: z.number().int().nonnegative(),
-  category: z.string(),
-  condition: z.string(),
-  status: z.string(),
+  // 直接复用商品域枚举：这三个字段的数据来源就是 `listings` 表的同名列，
+  // 写成 `z.string()` 会让 Web 拿到 `string`（被迫 `as never`），契约也挡不住非法值。
+  category: ListingCategorySchema,
+  condition: ListingConditionSchema,
+  status: ListingStatusSchema,
   createdAt: z.iso.datetime(),
   /** 无图商品为 `null`（与 #6 `ListingCardSchema.coverUrl` 同口径）。 */
   coverUrl: z.url().nullable(),
@@ -167,9 +173,9 @@ export const AdminListingDetailSchema = z.object({
   title: z.string(),
   description: z.string(),
   priceCents: z.number().int().nonnegative(),
-  category: z.string(),
-  condition: z.string(),
-  status: z.string(),
+  category: ListingCategorySchema,
+  condition: ListingConditionSchema,
+  status: ListingStatusSchema,
   urgent: z.boolean(),
   negotiable: z.boolean(),
   free: z.boolean(),
