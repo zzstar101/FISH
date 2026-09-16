@@ -22,6 +22,8 @@ function toErrorResponse(c: Context, error: unknown): Response {
   throw error
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export function createConversationsRouter({ service, requireAuth }: ConversationsRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -57,6 +59,19 @@ export function createConversationsRouter({ service, requireAuth }: Conversation
     try {
       // 游标合法性与解码在 service（decodeCursor null → 422），路由只透传原始串。
       return c.json(await service.listConversations(c.get('userId'), parsed.data), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  app.get('/:id', requireAuth, async (c) => {
+    const id = c.req.param('id')
+    if (!UUID_PATTERN.test(id)) {
+      return c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
+    }
+
+    try {
+      return c.json(await service.getConversation(c.get('userId'), id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

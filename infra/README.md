@@ -8,7 +8,7 @@
 
 ## 归属
 
-`infra/**` 由 **zzstar101（Platform Owner）** 独占修改。
+不设按人的文件所有权：`infra/**` 的改动随对应 Issue 的 PR 落地，所有 PR 由 **zzstar101** 审核后合入。
 
 ## 预期演进
 

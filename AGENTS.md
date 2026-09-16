@@ -36,11 +36,12 @@ bun run ws:smoke            # WebSocket 连通性冒烟
 
 ## 3. 范围纪律：只在指定 Issue 内开发
 
+- **一个 Issue 就是一个模块**：认领人负责该模块**全部**验收标准，包括其**前端与后端代码**——不按前后端拆开让多人分别实现。
 - **只实现当前被指派 Issue 的验收标准**。Issue 没要求的，不做。
 - 需求外发现的问题（bug、坏味道、可优化点）**只报告，不顺手修**；确有必要时新开 Issue。
 - 不提前实现后续 Issue 的内容。例：`packages/db` 的业务表属于 #2，`packages/contracts` 的 domain 协议属于各自业务 Issue。
 - 不引入 Issue 明确排除的组件（Redis / Kafka / OpenSearch / K8s / 微服务）。
-- 新增依赖、修改根配置、改动他人目录 → 必须先获得 Platform Owner 同意（见 CONTRIBUTING 第 2、8 节）。
+- 全仓不设按人的文件所有权（已去除 CODEOWNERS），改动任何文件**无需事先取得同意**；但改跨模块公共文件要做最小改动，别破坏其它模块。**每个 PR 必须由 zzstar101 审核**（见 CONTRIBUTING 第 2、7、8 节）。
 
 ## 4. 实现纪律：第一性原则 + 最小改动
 
@@ -81,7 +82,7 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 
 ## 8. 危险清单
 
-- 不改他人拥有的目录（见 CONTRIBUTING 第 2 节）。
+- **不自行合入 PR**：每个 PR 必须由 zzstar101 审核后合入（见 CONTRIBUTING 第 7 节）。
 - **不提交任何真实密钥**；只维护 `.env.example`。
 - **不污染 `bun.lock`**：加/删依赖必须带 `--registry https://registry.npmjs.org`（本机默认源若是镜像源，会重写 lockfile 里全部已存在条目的 tarball URL）；详见 CONTRIBUTING.md 第 3.1 节。
 - **不手改生成文件**：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`。
@@ -99,6 +100,6 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 
 | 文档 | 内容 |
 | --- | --- |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 文件所有权、分支/提交/PR、Contract 流程、DB CHANGE REQUEST |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Issue 认领、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明 |
 | [docs/architecture.md](docs/architecture.md) | 系统形态、运行时拓扑、链路、端口 |
 | [README.md](README.md) | 最小启动路径与常用命令 |

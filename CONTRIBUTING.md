@@ -1,46 +1,25 @@
 # 协作规则（CONTRIBUTING）
 
-本项目由 3 人在同一 monorepo 并行开发。**并行的前提是文件所有权清晰**，否则会产生长期 unresolved merge conflict。
+本项目由团队成员在同一 monorepo 上**长线开发**。任务通过 **Issue 认领**完成：**一个 Issue 就是一个模块**，由认领人从头到尾做完（前端、后端、Contract 都在其中），**不按前端/后端拆分给多人**。
 
-## 1. 成员与职责
+- 不设按人固定的文件所有权，也不再使用 CODEOWNERS。
+- 改动任何文件（包括他人写过的代码）**无需事先征得同意**；并行靠 Issue 切分互不重叠，冲突在合入时解决。
+- **所有 PR 最终由 zzstar101 审核。**
 
-| 成员 | 角色 | 负责范围 |
-| --- | --- | --- |
-| **zzstar101** | Backend A / Platform & Core | 平台骨架、数据库、认证、商品、上传、匹配、Worker、最终集成 |
-| **Coast-87** | Backend B / Marketplace Flow | 愿望、聊天、实时消息、交易、Profile API |
-| **ouu2006** | Frontend Owner | 全部用户界面、移动端适配、视觉统一 |
+## 1. 认领任务（Issue 即模块）
 
-## 2. 文件所有权（硬规则）
+- 每个 Issue 对应一个模块：认领人把 Issue 指派给自己，并对其验收标准负责。
+- 模块的**前端（`apps/web`）、后端（`apps/api`）、Contract（`packages/contracts`）都由认领人一个人完成**，不按前后端分包。
+- 认领前先确认与别人正在做的模块互不重叠，避免并行冲突。
+- 认领后按第 3 节开分支：一个 Issue 一个 `feat/<issue>-<slug>`。
 
-**谁拥有目录，谁修改。** 需要改动他人目录时，先在该 Issue/PR 说明，由**文件 Owner 落地**。
+## 2. 文件与并行
 
-### zzstar101 独占
-
-```text
-package.json          bun.lock              .env.example
-tsconfig.base.json    biome.json            docker-compose.yml
-.github/**            infra/**
-packages/db/**        packages/contracts/src/{auth,listings,matching}/**
-apps/api/src/app.ts   apps/api/src/index.ts  apps/api/src/ws.ts
-apps/api/src/modules/{auth,listings,uploads,matching}/**
-apps/worker/src/index.ts       apps/worker/src/jobs/matching/**
-migration 文件
-```
-
-### Coast-87 独占
-
-```text
-apps/api/src/modules/{wishes,conversations,messages,realtime,transactions,profile}/**
-packages/contracts/src/{wishes,chat,transactions,profile}/**
-```
-
-Coast-87 **只导出独立的 router / service**，根路由由 zzstar101 统一接线。
-
-### ouu2006 独占
-
-```text
-apps/web/**     packages/ui/**
-```
+- 不设文件所有权，也不需要"Owner 同意"流程。
+- 并行安全靠 **Issue 互不重叠**；需要触碰他人正在进行的模块时，注意合并冲突风险，并在 PR 里说明大致影响。
+- 跨模块公共文件（根配置、`.github/**`、`infra/**`、`packages/db` 的 schema/migration、API/Worker 根入口等）人人可改，但要做**最小改动**，并保证不破坏其它模块。
+- 全仓级约束仍有效：加/删依赖必须带 `--registry`（第 3.1 节）、不手改生成文件、不污染 `bun.lock`。
+- **每个 PR 合并前必须由 zzstar101 审核。**
 
 ## 3. 分支与提交
 
@@ -62,7 +41,7 @@ bun remove --registry https://registry.npmjs.org <pkg>
 bun update --registry https://registry.npmjs.org <pkg>
 ```
 
-`bun.lock` 里 tarball URL 的约定：**默认源一律是空字符串**。CI 的 `Verify lockfile sources` 是**白名单**：只接受默认源的空 URL 与 `https://registry.npmjs.org/`。确需其它源（私有 registry、git / tarball 依赖）时，必须在同一个 PR 里同时更新那一步的白名单，并在 PR 说明理由（`.github/**` 属 Platform Owner，需 zzstar101 落地）。
+`bun.lock` 里 tarball URL 的约定：**默认源一律是空字符串**。CI 的 `Verify lockfile sources` 是**白名单**：只接受默认源的空 URL 与 `https://registry.npmjs.org/`。确需其它源（私有 registry、git / tarball 依赖）时，必须在同一个 PR 里同时更新那一步的白名单，并在 PR 说明理由。
 
 **原因**：如果本机默认 registry 是镜像源（如 npmmirror），`bun add` 会把 lockfile 里**每一个**已存在的包条目都改写成带镜像 URL 的形式 —— 不只是你新增的那几个包，而是数百行无关 diff（`ogl` 那次 551 行、PR #26 那次 361 个包）。这种 diff 在 review 时极难发现，当机器上不可达那个镜像源时会直接让 `bun install` 失败。
 
@@ -77,59 +56,40 @@ grep -oE 'https?://[^"]+' bun.lock | grep -vE '^https://registry\.npmjs\.org/' &
 使用仓库的 PR 模板，必须明确：
 
 - 对应 Issue 编号（用 `closed #N` / `closes #N` 关联）。
-- **是否修改了他人拥有的目录**（若有，说明已获得 Owner 同意）。
 - 验收标准逐条勾选 + 可复现的验证命令。
-- 是否涉及 **DB CHANGE REQUEST**（见下）。
+- 是否改动跨模块公共文件或涉及 DB schema（若有，说明大致影响，供审核参考）。
 - 是否提交了任何真实密钥（**禁止**）。
 
-## 5. Contract 流程
+## 5. Contract
 
-`packages/contracts` 只是业务协议的存放位置，**不提前定义完整业务 Contract**：
-
-```text
-Issue 确认需求
-→ 对应后端 Owner 定义该 Domain Contract
-→ ouu2006 确认前端需要
-→ Contract Freeze（本 Issue/PR 内冻结）
-→ 前后端并行实现
-→ Integration
-```
-
-规则：
-
-- Contract 按 **Domain 分目录**，禁止把 DTO 堆进共享 `types.ts`。
+- Contract **不设统一的定义 / 冻结流程**：由各模块认领人**在实现时自行定义**所用到的域协议。
+- 按 **Domain 分目录**，禁止把 DTO 堆进共享 `types.ts`。
 - 禁止大型 barrel `index.ts`；优先 **direct import / package subpath exports**。
-- 前端不直接修改后端 Contract；需要字段时在对应 Issue/PR 提出。
+- 跨模块需要复用对方 Domain 的字段时，直接引用其 exports，或在对应 Issue/PR 里说明。
 
-## 6. DB CHANGE REQUEST
+## 6. DB schema 变更
 
-`packages/db/**` 与 migration 仅 zzstar101 修改。
-
-其他成员需要字段变更时，在 Issue/PR 中写出：
+- schema 与 migration 就是普通代码，随模块 PR 一起落地：改 schema 必须用 `drizzle-kit` 生成 migration，**不手改 migration 历史**与生成文件。
+- 改动 schema 时，在 PR 里填写变更说明（供 zzstar101 审核把关）：
 
 ```text
-DB CHANGE REQUEST
+DB 变更说明
 - 表/实体：
-- 需要的字段与类型：
+- 新增/修改的字段与类型：
 - 使用场景（对应 Issue）：
 - 是否影响已有数据：
 ```
 
-由 zzstar101 统一修改 schema 并生成 migration。
+## 7. 合入与审核
 
-## 7. 每周期的接线窗口
-
-每 3–4 小时一次 integration window：
-
-- zzstar101：统一接 API/Worker 根路由、migration。
-- Coast-87：只处理自己 Domain 的接口问题。
-- ouu2006：只处理前端接口接入与 UI 问题。
+- 完成验收清单后把 Draft PR 转 Ready，**所有 PR 由 zzstar101 审核**后合入。
+- 集成问题由各模块认领人自己跟进（前端、后端、Contract）。
 
 ## 8. 禁止事项
 
-1. 不修改他人拥有的目录（见第 2 节）。
-2. 不提交任何真实密钥、Token、连接串；只维护 `.env.example`。
-3. 不手改生成文件：`apps/web/src/routeTree.gen.ts`、`src/migrations/**`。
-4. 不引入新依赖或修改根配置而不经 zzstar101 同意。
-5. 不在业务 Issue 中顺手做无关重构；发现问题先报告。
-6. 不引入 V1 明确排除的组件（Redis / Kafka / OpenSearch / K8s 等）。
+1. 不提交任何真实密钥、Token、连接串；只维护 `.env.example`。
+2. 不手改生成文件：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`。
+3. 加/删依赖必须带 `--registry`（见第 3.1 节），不污染 `bun.lock`。
+4. 不在业务 Issue 中顺手做无关重构；发现问题先报告，确有必要时新开 Issue。
+5. 不引入 V1 明确排除的组件（Redis / Kafka / OpenSearch / K8s 等）。
+6. 不自行合入 PR —— 每个 PR 必须先经 **zzstar101 审核**。

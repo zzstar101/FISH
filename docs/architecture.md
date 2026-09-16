@@ -123,7 +123,7 @@ sequenceDiagram
   A-->>S: ping-TIMESTAMP（回显）
 ```
 
-业务实时能力（会话消息、匹配推送）由 #9 / #8 在 `apps/api/src/modules/realtime` 下建立，届时根路由由 Platform Owner 接线。
+业务实时能力（会话消息、匹配推送）由 #9 / #8 在 `apps/api/src/modules/realtime` 下建立，届时根路由随对应模块的 PR 一并接线。
 
 ### 5.3 异步任务
 
@@ -199,16 +199,15 @@ To connect to Postgres database - please install either of 'pg', 'postgres', ...
 - `minio`：带 `/minio/health/live` healthcheck
 - `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`、并把桶设为**匿名可读**（`mc anonymous set download`，供 #6 的图片直链，见 Issue #6 的 Listing 契约 §7.8），然后退出
 
-## 7. 所有权与 Contract 流程
+## 7. 协作方式与 Contract
 
-文件所有权见 [CONTRIBUTING.md](../CONTRIBUTING.md)，并由 [`CODEOWNERS`](../CODEOWNERS) 在 GitHub 层强制。
+协作方式见 [CONTRIBUTING.md](../CONTRIBUTING.md)：Issue 认领 + 所有 PR 由 zzstar101 审核（不再使用 CODEOWNERS / 文件所有权）。
 
 ```text
 Issue 确认需求
-→ 对应后端 Owner 定义该 Domain Contract
-→ 前端确认满足页面需要
-→ Contract Freeze
-→ 前后端并行实现
+→ 认领人定义该模块所用到的 Domain Contract
+→ 认领人实现该模块的前端 + 后端
+→ PR 由 zzstar101 审核后合入
 ```
 
 **`packages/contracts` 在骨架阶段只包含 `system/` 下的非业务协议。** 业务协议随业务 Issue 产生：Listing → #6，Wish → #7，Chat → #9，Transaction → #11。

@@ -14,6 +14,7 @@ import {
   useNotificationBadge,
   useUnreadNotificationCount,
 } from './queries'
+import { conversationRoleCopy } from './role-copy'
 import { formatMessageBody, parseSystemEvent, TX_EVENT_BADGE } from './system-event'
 
 /**
@@ -122,7 +123,12 @@ function ConversationRow({ item }: { item: ConversationDto }) {
       <div className="min-w-0 flex-1">
         {/* 昵称与右侧「状态胶囊 + 时间」垂直居中；带胶囊时不再按文字基线对齐。 */}
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate font-semibold text-[15px]">{item.counterpart.nickname}</span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate font-semibold text-[15px]">{item.counterpart.nickname}</span>
+            <Badge className="h-5 px-2 text-[10px]" shape="pill" variant="secondary">
+              {conversationRoleCopy[item.role].selfLabel}
+            </Badge>
+          </div>
           <span className="flex shrink-0 items-center gap-1.5">
             {txBadge ? (
               <Badge
@@ -146,7 +152,9 @@ function ConversationRow({ item }: { item: ConversationDto }) {
             listingId={item.listing.id}
             emojiClassName="text-base"
           />
-          <span className="min-w-0 flex-1 truncate text-ink-2 text-xs">{item.listing.title}</span>
+          <span className="min-w-0 flex-1 truncate text-ink-2 text-xs">
+            {conversationRoleCopy[item.role].counterpartLabel} · {item.listing.title}
+          </span>
           <span className="shrink-0 font-medium text-xs">
             {formatPrice(item.listing.priceCents)}
           </span>

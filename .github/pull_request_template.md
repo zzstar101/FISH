@@ -6,10 +6,9 @@ closed #
 
 <!-- 简述做了什么，以及为什么这样做 -->
 
-## 文件所有权
+## 改动范围
 
-- [ ] 本次改动**未**修改他人拥有的目录（所有权见 CONTRIBUTING.md 第 2 节）
-- [ ] 若修改了他人目录，已在该 Issue/PR 说明并取得 Owner 同意（Owner：）
+- [ ] 本次改动是否触碰**跨模块公共文件**或他人正在进行的模块代码（若是，请在下方说明大致影响；改动他人文件无需事先取得同意）
 
 ## 验收标准
 
@@ -26,14 +25,14 @@ bun run lint
 bun test
 ```
 
-## DB CHANGE REQUEST
+## DB 变更说明
 
-<!-- 需要 zzstar101 修改 schema/migration 时填写；无则删除本节 -->
+<!-- 改动 database schema 时填写；必须用 drizzle-kit 生成 migration、禁止手改 migration 历史。无 schema 改动则删除本节 -->
 
 ```text
-DB CHANGE REQUEST
+DB 变更说明
 - 表/实体：
-- 需要的字段与类型：
+- 新增/修改的字段与类型：
 - 使用场景（对应 Issue）：
 - 是否影响已有数据：
 ```

@@ -17,11 +17,12 @@ import {
 } from '../transaction/queries'
 import {
   meta,
-  useConversations,
+  useConversation,
   useMarkConversationRead,
   useMessages,
   useSendMessage,
 } from './queries'
+import { conversationRoleCopy } from './role-copy'
 import { formatMessageBody, lastTransactionEvent } from './system-event'
 
 /**
@@ -30,7 +31,7 @@ import { formatMessageBody, lastTransactionEvent } from './system-event'
  */
 export function ChatPage({ conversationId }: { conversationId: string }) {
   const { me } = useAuth()
-  const conversations = useConversations()
+  const conversation = useConversation(conversationId)
   const messages = useMessages(conversationId)
   const send = useSendMessage(conversationId)
   const markRead = useMarkConversationRead(conversationId)
@@ -47,7 +48,7 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
     markRead.mutate()
   }, [markRead.mutate])
 
-  if (conversations.isPending || messages.isPending) {
+  if (conversation.isPending || messages.isPending) {
     return (
       <div className="min-h-dvh bg-bg">
         <ChatHeader title="会话" />
@@ -56,10 +57,10 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
     )
   }
 
-  const item = conversations.data?.find((conversation) => conversation.id === conversationId)
+  const item = conversation.data
   // 新建会话后立即跳转时列表缓存还没有这条会话：正在拉取就先给 loading，
   // 拉完仍没有才是真的「不存在」（会话列表是分页首屏，深链旧会话同理）。
-  if (!item && conversations.isFetching) {
+  if (!item && conversation.isFetching) {
     return (
       <div className="min-h-dvh bg-bg">
         <ChatHeader title="会话" />
@@ -67,12 +68,12 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
       </div>
     )
   }
-  if (conversations.isError || !item) {
+  if (conversation.isError || !item) {
     return (
       <div className="min-h-dvh bg-bg">
         <ChatHeader title="会话" />
         <EmptyState
-          description={conversations.isError ? '会话加载失败,请返回重试' : '会话不存在'}
+          description={conversation.isError ? '会话加载失败,请返回重试' : '会话不存在'}
           emoji="💬"
         />
       </div>
@@ -119,8 +120,18 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
           >
             <ChevronLeft className="size-6" />
           </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate font-semibold text-[17px]">{item.counterpart.nickname}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate font-semibold text-[17px]">
+                {item.counterpart.nickname}
+              </span>
+              <Badge className="h-5 px-2 text-[10px]" shape="pill" variant="secondary">
+                {conversationRoleCopy[item.role].counterpartLabel}
+              </Badge>
+            </div>
+            <p className="truncate text-ink-3 text-xs">
+              {conversationRoleCopy[item.role].selfLabel}
+            </p>
           </div>
           <Link
             aria-label="TA 的主页"
@@ -158,7 +169,11 @@ export function ChatPage({ conversationId }: { conversationId: string }) {
             />
             <div className="min-w-0 flex-1">
               <p className="line-clamp-1 text-sm">{item.listing.title}</p>
-              <p className="mt-0.5 flex items-center gap-1.5 font-semibold text-sm">
+              <p className="mt-0.5 text-ink-3 text-xs">
+                {conversationRoleCopy[item.role].selfLabel} ·{' '}
+                {conversationRoleCopy[item.role].counterpartLabel}
+              </p>
+              <p className="flex items-center gap-1.5 font-semibold text-sm">
                 {formatPrice(item.listing.priceCents)}
                 {canTrade ? null : <Badge variant="secondary">不可交易</Badge>}
               </p>

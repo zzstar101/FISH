@@ -63,6 +63,7 @@ export interface ConversationService {
     input: ConversationCreateInput,
   ): Promise<{ conversation: ConversationDto; created: boolean }>
   listConversations(userId: string, query: ConversationListQuery): Promise<ConversationListResponse>
+  getConversation(userId: string, conversationId: string): Promise<ConversationDto>
   markRead(userId: string, conversationId: string): Promise<ConversationDto>
 }
 
@@ -132,6 +133,14 @@ export function createConversationService({
             ? encodeCursor({ sortKey: last.lastMessageAtCursor, id: last.conversation.id })
             : null,
       })
+    },
+
+    async getConversation(userId, conversationId) {
+      const detail = await store.findDetail(conversationId, userId)
+      if (!detail) throw notFound()
+      const covers = await store.coverObjectKeys([detail.listing.id])
+      detail.coverObjectKey = covers.get(detail.listing.id) ?? detail.coverObjectKey
+      return toConversationDto(detail, userId, storage)
     },
 
     async markRead(userId, conversationId) {
