@@ -18,8 +18,9 @@
 3. **迁移编号冲突**：#74 与本分支的两个 `0005` 迁移（`_journal` 同为 `idx: 5`）需要在合并窗口统一处置（第 4 节）。
 4. **Issue Done「可查询交易」**：设计 §4 未定义 `/admin/transactions`，补端点属超出已评审设计，请裁决是否补（第 4 节）。
 
-**验证证据**（全仓）：`bun run typecheck` 8/8 包通过；`bun run lint` 374 files 无问题；`bun test` **476 pass / 0 fail**；
+**验证证据**（全仓）：`bun run typecheck` 8/8 包通过；`bun run lint` 374 files 无问题；`bun test` **477 pass / 0 fail**；
 `bun run --filter '@fish/web' build` 通过；真服务（`dev:api` + `dev:web`）冒烟见第 3 节。
+已做过**两轮**独立对抗性审查（第二轮针对修复重发，4 条 low 全部处置，无 blocker / major）。
 
 **已知未做的验证**：F1（详情页可达）没有真实浏览器点击证据，只有结构 / 构建 / 类型证据（第 4 节末行）。
 
@@ -79,6 +80,24 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 - `Me` DTO 不含 `role`；`/admin/users` 返回脱敏学号（`2021****0002`）。
 - 普通用户 `/me`、`/health` 无回归。
 
+### 第二轮独立审查（修复后重发，AGENTS §7）
+
+修复改变了实现（路由结构、catch-all、契约收紧、Web 类型收敛），因此对修复提交（`417c242..HEAD`）重发了一次全新会话的审查。
+结论：**无 blocker / major，4 条 low，均已处置**。
+
+| 编号 | 发现 | 处置 |
+| --- | --- | --- |
+| R1 | catch-all 把「路径存在但方法不匹配」（如 `POST /admin/users`）也返回 404 而非 405 | 已确认：改动前 Hono 同样返 404（实测 `POST /admin/me` → 404 text/plain），非本次引入；已在 `router.ts` catch-all 处把该代价与理由写成注释 |
+| R2 | `--reason` 缺值时静默回落默认原因，与 `--actor` 的用法校验不同口径 | 已修：改为 `usage(1)`；新增用例（修复前 exit 0、修复后 exit 1） |
+| R3 | 用法文案与实现不符：`--actor` 等于被提升者时跳过角色校验 | 已修：文案明确「缺省或等于被提升者 = 首次引导自举，不做角色校验」 |
+| R4 | `maskStudentNo` 注释声称「4 位以上一律至少掩蔽 4 位」，但 5–7 位实际只掩蔽 3–5 位 | 已修：注释改为分档描述（≤8 位只留首位各 1 位；≥9 位按长度收缩） |
+
+审查者明确写「未发现问题」的方向包括：权限边界、`Me` DTO 不泄漏字段、审计同事务与脱敏快照、游标校验、9–11 位脱敏、
+契约枚举与 DB `pgEnum` 一致、Web 路由结构、Web 契约类型收敛。
+
+> 过程说明：第一、二次调用审查子代理时输出跑成了思考流而被截断，换模型（`deepseek-v4-pro`）并限定输出格式后才拿到结构化报告；
+> 另外子代理留下了两个临时脚本（`apps/api/.tmp-*.ts`），已确认无引用后删除。
+
 ## 4. 未完成 / 阻塞项（需组长裁决）
 
 | 项 | 状态 | 说明 |
@@ -91,9 +110,12 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 | 合并窗口的 seed 协调 | **待处置** | 本地库被其它分支迁移污染（`message_media`(#67)、`listing_moderation_records`(#74)）时 `db:seed` 会因外键失败。`seed.ts` 的 TRUNCATE 列表按分支维护，#67 合并时需同步加入 `message_media` |
 | 浏览器端到端验证 | **未做** | 本机无 playwright/puppeteer，按规则不新增依赖；F1 的修复目前只有结构、构建与类型证据，没有真实浏览器点击证据 |
 
-## 5. 提交清单（`main..HEAD`，共 13 个提交）
+## 5. 提交清单（`main..HEAD`，共 15 个提交）
 
 ```text
+0831217 docs(api): correct two comments flagged by review (#73)              ← R1 / R4
+be313dc fix(db): reject --reason without a value (#73)                        ← R2 / R3
+2c61d27 docs(admin): record contract change requests and fix report (#73)
 3747ba0 fix(web): use admin contract types instead of unknown (#73)
 3c3687d fix(contracts): type admin listing enums from listings domain (#73)   ← CCR-1
 f6a5cb3 docs(api): fix stale admin mount comments, drop dead export (#73)
