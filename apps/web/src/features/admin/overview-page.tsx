@@ -17,12 +17,7 @@ export function OverviewPage() {
     return <ErrorState message="概览加载失败" onRetry={() => void overview.refetch()} />
   }
 
-  const data = overview.data as {
-    totalUsers: number
-    newUsersLast24h: number
-    activeListings: number
-    completedTransactions: number
-  }
+  const data = overview.data
 
   const stats = [
     { icon: Users, label: '用户总数', value: data.totalUsers, to: '/admin/users' as const },

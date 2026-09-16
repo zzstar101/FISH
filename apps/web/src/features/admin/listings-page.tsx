@@ -27,7 +27,7 @@ export function ListingsPage({ search }: { search?: AdminListingsSearch }) {
   const [page, setPage] = useState<PageState>({ cursor: null, stack: [] })
 
   const query = useAdminListings({ q, status, cursor: page.cursor ?? undefined, limit: 20 })
-  const body = query.data as { items: AdminListingItem[]; nextCursor: string | null } | undefined
+  const body = query.data
 
   const apply = (patch: Partial<AdminListingsSearch>) => {
     setPage({ cursor: null, stack: [] })
@@ -128,7 +128,7 @@ export function ListingsPage({ search }: { search?: AdminListingsSearch }) {
                     </div>
                   </td>
                   <td className="hidden px-3 py-2.5 text-ink-2 sm:table-cell">
-                    {categoryLabel(item.category as never)}
+                    {categoryLabel(item.category)}
                   </td>
                   <td className="hidden px-3 py-2.5 text-ink-2 md:table-cell">
                     {item.seller.nickname}
@@ -178,15 +178,4 @@ export function ListingsPage({ search }: { search?: AdminListingsSearch }) {
       </div>
     </div>
   )
-}
-
-type AdminListingItem = {
-  id: string
-  title: string
-  priceCents: number
-  category: string
-  status: string
-  coverUrl: string | null
-  createdAt: string
-  seller: { id: string; nickname: string }
 }

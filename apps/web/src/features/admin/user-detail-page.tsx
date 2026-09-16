@@ -25,27 +25,7 @@ export function UserDetailPage() {
     return <ErrorState message="用户详情加载失败" onRetry={() => void detail.refetch()} />
   }
 
-  const data = detail.data as {
-    user: {
-      id: string
-      studentNoMasked: string
-      nickname: string
-      campus: string | null
-      authStatus: string
-      role: string
-      createdAt: string
-      listingCount: number
-      lastActivityAt: string | null
-    }
-    listingStats: { ACTIVE: number; RESERVED: number; SOLD: number; OFFLINE: number }
-    recentAuditLogs: {
-      id: string
-      action: string
-      targetType: string
-      reason: string | null
-      createdAt: string
-    }[]
-  }
+  const data = detail.data
 
   const { user, listingStats, recentAuditLogs } = data
 

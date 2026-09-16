@@ -28,7 +28,7 @@ export function UsersPage({ search }: { search: AdminUsersSearch }) {
     cursor: page.cursor ?? undefined,
     limit: 20,
   })
-  const body = query.data as { items: AdminUserItem[]; nextCursor: string | null } | undefined
+  const body = query.data
 
   const applySearch = (patch: Partial<AdminUsersSearch>) => {
     setPage({ cursor: null, stack: [] })
@@ -164,15 +164,4 @@ export function UsersPage({ search }: { search: AdminUsersSearch }) {
       </div>
     </div>
   )
-}
-
-type AdminUserItem = {
-  id: string
-  studentNoMasked: string
-  nickname: string
-  campus: string | null
-  authStatus: string
-  role: string
-  listingCount: number
-  lastActivityAt: string | null
 }

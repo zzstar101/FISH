@@ -21,31 +21,7 @@ export function ListingDetailPage() {
     return <ErrorState message="商品详情加载失败" onRetry={() => void detail.refetch()} />
   }
 
-  const data = detail.data as {
-    id: string
-    title: string
-    description: string
-    priceCents: number
-    category: string
-    condition: string
-    status: string
-    urgent: boolean
-    negotiable: boolean
-    free: boolean
-    createdAt: string
-    updatedAt: string | null
-    images: { url: string; sortOrder: number }[]
-    seller: { id: string; nickname: string; campus: string | null }
-    recentAuditLogs: {
-      id: string
-      action: string
-      targetType: string
-      reason: string | null
-      createdAt: string
-    }[]
-  }
-
-  const listing = data
+  const listing = detail.data
 
   return (
     <div className="space-y-4">
@@ -66,8 +42,8 @@ export function ListingDetailPage() {
               </Badge>
             </p>
             <p className="mt-1 text-sm text-ink-3">
-              {categoryLabel(listing.category as never)} ·{' '}
-              {conditionLabel(listing.condition as never)} · {listing.urgent ? '急出 ' : ''}
+              {categoryLabel(listing.category)} · {conditionLabel(listing.condition)} ·{' '}
+              {listing.urgent ? '急出 ' : ''}
               {listing.negotiable ? '可刀 ' : ''}
               {listing.free ? '免费送' : ''} · 发布 {formatDateTime(listing.createdAt)} · 更新{' '}
               {formatDateTime(listing.updatedAt)}

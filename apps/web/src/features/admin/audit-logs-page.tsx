@@ -29,7 +29,7 @@ export function AuditLogsPage() {
     cursor: page.cursor ?? undefined,
     limit: 20,
   })
-  const body = query.data as { items: AuditEntry[]; nextCursor: string | null } | undefined
+  const body = query.data
 
   const resetPage = () => setPage({ cursor: null, stack: [] })
 
@@ -149,17 +149,4 @@ export function AuditLogsPage() {
       </div>
     </div>
   )
-}
-
-type AuditEntry = {
-  id: string
-  actor: { id: string; nickname: string } | null
-  action: string
-  targetType: string
-  targetId: string
-  before: Record<string, unknown> | null
-  after: Record<string, unknown> | null
-  reason: string | null
-  requestId: string | null
-  createdAt: string
 }
