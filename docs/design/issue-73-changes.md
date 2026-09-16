@@ -18,7 +18,7 @@
 3. **迁移编号冲突**：#74 与本分支的两个 `0005` 迁移（`_journal` 同为 `idx: 5`）需要在合并窗口统一处置（第 4 节）。
 4. **Issue Done「可查询交易」**：设计 §4 未定义 `/admin/transactions`，补端点属超出已评审设计，请裁决是否补（第 4 节）。
 
-**验证证据**（全仓）：`bun run typecheck` 8/8 包通过；`bun run lint` 374 files 无问题；`bun test` **477 pass / 0 fail**；
+**验证证据**（全仓，已并入 origin/main 后重跑）：`bun run typecheck` 8/8 包通过；`bun run lint` 376 files 无问题；`bun test` **482 pass / 0 fail**；
 `bun run --filter '@fish/web' build` 通过；真服务（`dev:api` + `dev:web`）冒烟见第 3 节。
 已做过**两轮**独立对抗性审查（第二轮针对修复重发，4 条 low 全部处置，无 blocker / major）。
 
@@ -34,7 +34,7 @@
 | 变更内容 | `category` / `condition` / `status` 由 `z.string()` 改为 `ListingCategorySchema` / `ListingConditionSchema` / `ListingStatusSchema`（来自 `packages/contracts/src/listings/schema.ts`） |
 | 为什么改 | 数据来源就是 `listings` 表的同名列，DB 层已是枚举，管理契约写 `z.string()` 属于「契约弱于现实」；过宽的契约让 Web 端拿不到类型约束，`apps/web/src/features/admin/listings-page.tsx` 被迫写 `categoryLabel(item.category as never)` |
 | 兼容性 | 不改变任何合法数据的形状，仅拒绝此前会被静默接受的非法枚举值；现有测试 fixture（`DIGITAL` / `GOOD` / `ACTIVE`）均在枚举内 |
-| 需要谁点头 | 按 CONTRIBUTING §5 Contract 流程，属对已冻结 Admin 契约的字段收紧，需 Owner / 组长确认 |
+| 需要谁点头 | 契约按 CONTRIBUTING §5 由模块认领人自行定义、无统一冻结流程；但这是对已实现契约的字段收紧，已在 PR 中说明供 zzstar101 审核 |
 | 备选方案（未采纳） | 保留 `z.string()`，Web 侧保留 `as never` 强转，放弃类型约束 |
 
 ### CCR-2：`AdminListingDetail.updatedAt` 去掉 `nullable`（已实现，一并备案）
@@ -110,9 +110,13 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 | 合并窗口的 seed 协调 | **待处置** | 本地库被其它分支迁移污染（`message_media`(#67)、`listing_moderation_records`(#74)）时 `db:seed` 会因外键失败。`seed.ts` 的 TRUNCATE 列表按分支维护，#67 合并时需同步加入 `message_media` |
 | 浏览器端到端验证 | **未做** | 本机无 playwright/puppeteer，按规则不新增依赖；F1 的修复目前只有结构、构建与类型证据，没有真实浏览器点击证据 |
 
-## 5. 提交清单（`main..HEAD`，共 15 个提交）
+## 5. 提交清单（`main..HEAD`，共 19 个：16 个 #73 提交 + 1 个 merge + 2 个前序提交）
+
+> `527b7c7`（#69 扫码）是本分支的基点，其内容已由 PR #84 squash 合入 `main`；`main` 上后合入的 #81/#82/#84
+> 已通过下面的 merge 提交并入，因此本 PR 不会回退任何已合并工作。
 
 ```text
+4716e00 Merge remote-tracking branch 'origin/main' into feat/73-admin         ← 并入 main 已合入的 #81/#82/#84 + 治理文档改动
 0831217 docs(api): correct two comments flagged by review (#73)              ← R1 / R4
 be313dc fix(db): reject --reason without a value (#73)                        ← R2 / R3
 2c61d27 docs(admin): record contract change requests and fix report (#73)
@@ -135,8 +139,11 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
 
 ## 6. 遗留风险（提请组长注意）
 
-1. **跨目录所有权**：本分支同时改了 `packages/db/**`、`apps/api/src/app.ts`、`apps/web/**`，
-   分别属 zzstar101 / ouu2006 独占（CONTRIBUTING §2），且本机提交作者是 Coast-87。合入前需 Owners 确认由其落地或明确豁免。
+1. **跨模块公共文件**：本 PR 同时改了 `packages/db/**`（schema + migration）、`apps/api/src/app.ts`（API 根入口）
+   与 `apps/web/**`，都属 CONTRIBUTING §2 的跨模块公共文件。按新规则（已去除 CODEOWNERS）此类文件人人可改、
+   无需事先同意，但要做最小改动并在 PR 说明影响——本 PR 只新增 admin 模块与一个用户角色字段，
+   对现有模块的侵入为：`app.ts` 加一行挂载、`users` 加一个带默认值的列、`seed.ts` 加一张表进 TRUNCATE 列表。
+   **每个 PR 必须由 zzstar101 审核后才可合入，本分支未自行合入。**
 2. **契约收紧的向后兼容**：CCR-1 只拒绝此前会被静默接受的非法枚举值，但若有其它消费者依赖「任意字符串」，需同步。
 3. **审计原子性尚未被代码保证**：F3 记录的 `insertAuditLog` 无事务句柄问题在 S6 落地前一直存在；当前零写操作，暂无实际影响。
 4. **`db:seed` 的跨分支耦合**：`seed.ts` 的 TRUNCATE 列表按分支维护，任何新增带外键的表都要同步，否则本地 seed 直接失败。
