@@ -87,6 +87,12 @@ function clockTime(iso: string): string {
  */
 const WAVE = [14, 24, 36, 20, 40, 28, 16, 32, 22, 12, 26, 18]
 
+/**
+ * 波形条的稳定 id：12 根条「位置即身份」，所以在模块级生成一次，
+ * key 用 id 而不是渲染下标（`noArrayIndexKey`）。
+ */
+const WAVE_BARS = WAVE.map((height, index) => ({ id: `wave-${index}`, height }))
+
 /** 会话流里的一行（文本 / SYSTEM / 媒体按时间合并） */
 type Entry =
   | { kind: 'message'; createdAt: string; message: MockMessage }
@@ -351,11 +357,11 @@ export default function Conversation() {
               <View className="conv__play-glyph" />
             </View>
             <View className="conv__wave">
-              {WAVE.map((height, i) => (
+              {WAVE_BARS.map((bar, i) => (
                 <View
-                  key={`${item.id}-w${i}`}
+                  key={bar.id}
                   className={`conv__wave-bar${mine ? ' is-mine' : ''}${i < lit ? ' is-on' : ''}`}
-                  style={{ height: `${height}rpx` }}
+                  style={{ height: `${bar.height}rpx` }}
                 />
               ))}
             </View>

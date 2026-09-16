@@ -188,7 +188,7 @@ export default function Register() {
               maxlength={STUDENT_NO_LEN}
               value={studentNo}
               disabled={submitting}
-              placeholder={String(STUDENT_NO_LEN) + ' 位学号'}
+              placeholder={`${STUDENT_NO_LEN} 位学号`}
               placeholderClass="reg__ph"
               onInput={(event) => {
                 setStudentNo(event.detail.value)

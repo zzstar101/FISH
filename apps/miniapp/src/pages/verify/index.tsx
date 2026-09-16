@@ -25,13 +25,22 @@ import './index.scss'
 const RESEND_SECONDS = 60
 const CODE_LEN = 6
 
+/**
+ * 6 个码位的稳定 id：这里「位置即身份」，所以在模块级生成一次，
+ * 而不是拿渲染下标当 key（`noArrayIndexKey`）。
+ */
+const CODE_SLOTS = Array.from({ length: CODE_LEN }, (_, index) => ({
+  id: `verify-cell-${index}`,
+  index,
+}))
+
 type Stage = 'email' | 'code'
 
 export default function Verify() {
   const state = verifyState()
 
   /** 已认证用户进来：整页替换为认证状态卡（设计稿第 04 帧的状态边界） */
-  const [verified, setVerified] = useState(state.state === 'VERIFIED')
+  const verified = state.state === 'VERIFIED'
   const [stage, setStage] = useState<Stage>('email')
 
   const [email, setEmail] = useState('')
@@ -249,14 +258,14 @@ export default function Verify() {
             </View>
 
             <View className="verify__cells">
-              {Array.from({ length: CODE_LEN }).map((_, i) => {
-                const ch = code[i] ?? ''
+              {CODE_SLOTS.map((slot) => {
+                const ch = code[slot.index] ?? ''
                 return (
                   <View
-                    key={`vc-${i}`}
+                    key={slot.id}
                     className={`verify__cell${ch ? ' is-filled' : ''}${
                       codeError ? ' is-bad' : ''
-                    }${i === code.length && !codeError ? ' is-focus' : ''}`}
+                    }${slot.index === code.length && !codeError ? ' is-focus' : ''}`}
                   >
                     <Text className="verify__cell-tx num">{ch}</Text>
                   </View>

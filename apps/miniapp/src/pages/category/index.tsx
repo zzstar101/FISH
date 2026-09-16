@@ -114,7 +114,10 @@ export default function Category() {
   const [left, right] = useMemo(() => {
     const l: MockListing[] = []
     const r: MockListing[] = []
-    shown.forEach((item, i) => (i % 2 === 0 ? l : r).push(item))
+    shown.forEach((item, i) => {
+      if (i % 2 === 0) l.push(item)
+      else r.push(item)
+    })
     return [l, r]
   }, [shown])
 

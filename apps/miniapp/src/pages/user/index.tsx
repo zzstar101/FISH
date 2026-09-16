@@ -50,7 +50,10 @@ export default function UserHome() {
   const [left, right] = useMemo(() => {
     const l: MockListing[] = []
     const r: MockListing[] = []
-    items.forEach((item, i) => (i % 2 === 0 ? l : r).push(item))
+    items.forEach((item, i) => {
+      if (i % 2 === 0) l.push(item)
+      else r.push(item)
+    })
     return [l, r]
   }, [items])
 

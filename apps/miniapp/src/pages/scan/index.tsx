@@ -66,6 +66,12 @@ const REASONS = [
 
 type Mode = 'viewfinder' | 'manual' | 'denied' | 'errors'
 
+/**
+ * 6 个码位的稳定 id：这里「位置即身份」，模块级生成一次，
+ * key 用 id 而不是渲染下标（`noArrayIndexKey`）。
+ */
+const CODE_SLOTS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `scan-cell-${index}`, index }))
+
 export default function Scan() {
   const [mode, setMode] = useState<Mode>('viewfinder')
   /** 手动输入的 6 位码（字符串数组，空位是空串） */
@@ -223,17 +229,20 @@ export default function Scan() {
             <Text className="scan__sheet-sub">输入对方手机上显示的 6 位数字</Text>
 
             <View className="scan__cells">
-              {digits.map((digit, index) => (
-                <View
-                  key={`cell-${index}`}
-                  className={`scan__cell${index === focus ? ' is-focus' : ''}${
-                    codeError ? ' is-err' : ''
-                  }${digit ? '' : ' is-dim'}`}
-                  onClick={() => setFocus(index)}
-                >
-                  <Text className="scan__cell-tx">{digit || '–'}</Text>
-                </View>
-              ))}
+              {CODE_SLOTS.map((slot) => {
+                const digit = digits[slot.index] ?? ''
+                return (
+                  <View
+                    key={slot.id}
+                    className={`scan__cell${slot.index === focus ? ' is-focus' : ''}${
+                      codeError ? ' is-err' : ''
+                    }${digit ? '' : ' is-dim'}`}
+                    onClick={() => setFocus(slot.index)}
+                  >
+                    <Text className="scan__cell-tx">{digit || '–'}</Text>
+                  </View>
+                )
+              })}
             </View>
 
             {/* 视觉上是 6 格，真实输入靠这一个透明 Input（小程序没有 6 格原生输入框） */}

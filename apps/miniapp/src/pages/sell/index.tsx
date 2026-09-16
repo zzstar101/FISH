@@ -3,7 +3,7 @@ import Taro from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
-import { moderate, polishCandidates } from '@/mock/api'
+import { moderate, type PolishCandidate, polishCandidates } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import './index.scss'
 
@@ -38,11 +38,11 @@ const DEMO_PHOTOS = ['digital-laptop', 'digital-phone', 'daily-desklamp'].map((s
   productImage(slug, 0),
 )
 
-/** AI 润色的三条候选（页面只保存索引与文案，不保存状态机之外的中间态） */
+/** AI 润色的三条候选（页面只保存索引与候选本身，不保存状态机之外的中间态） */
 type PolishState =
   | { phase: 'idle' }
   | { phase: 'loading' }
-  | { phase: 'ready'; candidates: string[]; index: number }
+  | { phase: 'ready'; candidates: PolishCandidate[]; index: number }
 
 export default function Sell() {
   const [title, setTitle] = useState('')
@@ -108,7 +108,7 @@ export default function Sell() {
     setTimeout(() => {
       setPolish({
         phase: 'ready',
-        candidates: polishCandidates(origin).map((item) => item.text),
+        candidates: polishCandidates(origin),
         index: 0,
       })
     }, 800)
@@ -124,14 +124,14 @@ export default function Sell() {
   /** 采用：**这一步才**写进描述框（采用前原文一直原样保留） */
   const adopt = () => {
     if (polish.phase !== 'ready') return
-    const text = polish.candidates[polish.index]
+    const text = polish.candidates[polish.index]?.text
     if (text) setDescription(text)
     setPolish({ phase: 'idle' })
     setReview(null)
     void Taro.showToast({ title: '已采用润色文案', icon: 'none' })
   }
 
-  const candidate = polish.phase === 'ready' ? (polish.candidates[polish.index] ?? '') : ''
+  const candidate = polish.phase === 'ready' ? (polish.candidates[polish.index]?.text ?? '') : ''
 
   /**
    * 标题里把命中词高亮（错误块复用）：按命中词切分原文。
@@ -141,15 +141,24 @@ export default function Sell() {
    */
   const highlight = (text: string, words: string[]) => {
     const clean = text.replace(/[。.！!？?，,、；;：:]+$/, '')
-    if (words.length === 0) return [{ text: clean, hit: false }]
+    if (words.length === 0) return [{ key: 'p0', text: clean, hit: false }]
     const pattern = new RegExp(
       `(${words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
       'g',
     )
+    /**
+     * 用「片段在原文中的起始偏移」当稳定 key：既不依赖渲染下标（`noArrayIndexKey`），
+     * 也不会像「拿文案当 key」那样在两个违规词相同时撞 key。
+     */
+    let offset = 0
     return clean
       .split(pattern)
-      .filter((part) => part !== '')
-      .map((part) => ({ text: part, hit: words.includes(part) }))
+      .map((part) => {
+        const item = { key: `p${offset}`, text: part, hit: words.includes(part) }
+        offset += part.length
+        return item
+      })
+      .filter((item) => item.text !== '')
   }
 
   return (
@@ -232,13 +241,13 @@ export default function Sell() {
                 <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
                 <Text className="sell__err-tx">
                   标题包含违规词：
-                  {highlight(title, review.title).map((part, i) =>
+                  {highlight(title, review.title).map((part) =>
                     part.hit ? (
-                      <Text key={`th-${i}`} className="sell__bad-word">
+                      <Text key={part.key} className="sell__bad-word">
                         {part.text}
                       </Text>
                     ) : (
-                      <Text key={`th-${i}`}>{part.text}</Text>
+                      <Text key={part.key}>{part.text}</Text>
                     ),
                   )}
                   ，请修改后再发布。校园二手仅允许发布实物闲置。
@@ -274,13 +283,13 @@ export default function Sell() {
                 <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
                 <Text className="sell__err-tx">
                   描述包含违规词：
-                  {highlight(description, review.description).map((part, i) =>
+                  {highlight(description, review.description).map((part) =>
                     part.hit ? (
-                      <Text key={`dh-${i}`} className="sell__bad-word">
+                      <Text key={part.key} className="sell__bad-word">
                         {part.text}
                       </Text>
                     ) : (
-                      <Text key={`dh-${i}`}>{part.text}</Text>
+                      <Text key={part.key}>{part.text}</Text>
                     ),
                   )}
                   ，请修改后再发布。{'\n'}
@@ -459,9 +468,9 @@ export default function Sell() {
 
                 <View className="sell__sheet-acts">
                   <View className="sell__dots">
-                    {polish.candidates.map((_, i) => (
+                    {polish.candidates.map((item, i) => (
                       <View
-                        key={`dot-${i}`}
+                        key={item.id}
                         className={`sell__dot${i === polish.index ? ' is-on' : ''}`}
                       />
                     ))}

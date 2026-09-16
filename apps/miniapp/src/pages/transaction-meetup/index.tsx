@@ -41,6 +41,13 @@ function clockText(total: number): string {
   return `${pad(Math.floor(safe / 60))}:${pad(safe % 60)}`
 }
 
+/**
+ * 6 位码的显示槽位 / 输入格子：两处都是「位置即身份」，
+ * 在模块级生成一次稳定 id，避免拿渲染下标当 key（`noArrayIndexKey`）。
+ */
+const CODE_SLOTS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-digit-${index}`, index }))
+const INPUT_CELLS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-cell-${index}`, index }))
+
 export default function TransactionMeetup() {
   const router = useRouter<{ id?: string }>()
   const txId = router.params.id ?? ''
@@ -76,7 +83,7 @@ export default function TransactionMeetup() {
 
   /* 倒计时：只在 ACTIVE 且有剩余秒数时走，归零即转「已过期」 */
   useEffect(() => {
-    if (!code || code.state !== 'ACTIVE' || left <= 0) return
+    if (code?.state !== 'ACTIVE' || left <= 0) return
     const timer = setTimeout(() => setLeft((n) => n - 1), 1000)
     return () => clearTimeout(timer)
   }, [code, left])
@@ -279,9 +286,9 @@ export default function TransactionMeetup() {
             <>
               <View className="meetup__codecard">
                 <View className="meetup__digits">
-                  {(code?.code ?? '------').split('').map((ch, i) => (
-                    <Text key={`d-${i}`} className="meetup__digit num">
-                      {ch}
+                  {CODE_SLOTS.map((slot) => (
+                    <Text key={slot.id} className="meetup__digit num">
+                      {(code?.code ?? '------')[slot.index] ?? ''}
                     </Text>
                   ))}
                 </View>
@@ -324,16 +331,19 @@ export default function TransactionMeetup() {
             这里用一个覆盖整行、字号透明的 Input 承接输入与粘贴，下面画格子。
           */}
           <View className="meetup__cells">
-            {digits.map((ch, i) => (
-              <View
-                key={`c-${i}`}
-                className={`meetup__cell${ch ? ' is-filled' : ''}${
-                  inputError ? ' is-bad' : ''
-                }${i === joined.length && !inputError ? ' is-focus' : ''}`}
-              >
-                <Text className="meetup__cell-tx num">{ch}</Text>
-              </View>
-            ))}
+            {INPUT_CELLS.map((cell) => {
+              const ch = digits[cell.index] ?? ''
+              return (
+                <View
+                  key={cell.id}
+                  className={`meetup__cell${ch ? ' is-filled' : ''}${
+                    inputError ? ' is-bad' : ''
+                  }${cell.index === joined.length && !inputError ? ' is-focus' : ''}`}
+                >
+                  <Text className="meetup__cell-tx num">{ch}</Text>
+                </View>
+              )
+            })}
             <Input
               className="meetup__cells-input"
               type="number"
