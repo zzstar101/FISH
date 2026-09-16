@@ -32,6 +32,13 @@ describe('maskStudentNo', () => {
   test('masks short numbers fully', () => {
     expect(maskStudentNo('123')).toBe('1*3')
   })
+
+  test('masks at least four digits for 9-11 digit numbers', () => {
+    // 固定「首 4 + 尾 4」在这几个长度上会露出 8 位（9 位学号几乎等于没脱敏）。
+    expect(maskStudentNo('123456789')).toBe('12*****89')
+    expect(maskStudentNo('1234567890')).toBe('123****890')
+    expect(maskStudentNo('12345678901')).toBe('123*****901')
+  })
 })
 
 describe('AdminMeResponseSchema', () => {

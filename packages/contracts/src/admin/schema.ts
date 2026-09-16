@@ -28,14 +28,21 @@ export type UserRole = z.infer<typeof UserRoleSchema>
 /** 管理查询 / 路由路径参数的目标 id 形状（用户 / 商品 / 审计目标通用）。非 UUID 直接 404/422，不打到 SQL。 */
 export const AdminTargetIdSchema = z.uuid()
 
-/** 脱敏学号：只保留首尾，中段以 `*` 掩蔽（12 位学号 → `2021****0001`）。 */
+/**
+ * 脱敏学号：保留首尾、中段以 `*` 掩蔽（12 位学号 → `2021****0001`）。
+ *
+ * 不变量：保留位数首尾各**不超过 4 位**，且 4 位以上一律**至少掩蔽 4 位**。
+ */
 export function maskStudentNo(studentNo: string): string {
   if (studentNo.length <= 8) {
     // 短学号退化为「首 + 掩蔽 + 尾」；过短（≤2）无法保留首尾则整体掩蔽。
     if (studentNo.length <= 2) return '*'.repeat(studentNo.length)
     return `${studentNo[0]}${'*'.repeat(studentNo.length - 2)}${studentNo.at(-1)}`
   }
-  return `${studentNo.slice(0, 4)}${'*'.repeat(Math.max(4, studentNo.length - 8))}${studentNo.slice(-4)}`
+  // 9 位以上：固定「首 4 + 尾 4」在 9–11 位上会露出 8 位（9 位学号几乎等于没脱敏，
+  // 输出还比原串长），所以按长度收缩保留位数；12 位仍得到 keep = 4。
+  const keep = Math.min(4, Math.floor((studentNo.length - 4) / 2))
+  return `${studentNo.slice(0, keep)}${'*'.repeat(studentNo.length - keep * 2)}${studentNo.slice(-keep)}`
 }
 
 // ---------------------------------------------------------------------------
