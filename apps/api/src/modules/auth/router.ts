@@ -1,12 +1,18 @@
 import { LoginRequestSchema, RegisterRequestSchema } from '@fish/contracts/auth/session'
+import {
+  SendCodeRequestSchema,
+  SendCodeResponseSchema,
+  VerifyCodeRequestSchema,
+} from '@fish/contracts/auth/verification'
 import { errorBody } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
 import { type Context, type Handler, Hono } from 'hono'
 import { AuthError } from './errors'
 import { type AuthVariables, createRequireAuth } from './middleware'
-import type { CampusVerificationProvider } from './provider'
 import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
+import type { VerificationService } from './verification-service'
+import { VerificationError } from './verification-store'
 
 /** JSON 解析失败（空体 / 非 JSON）也按参数不合法处理，而不是让 Hono 抛 500。 */
 async function readJson(c: Context): Promise<unknown> {
@@ -20,25 +26,25 @@ async function readJson(c: Context): Promise<unknown> {
 /** 认证域异常 → 契约里冻结的错误信封；非认证域异常继续上抛给 `app.onError`。 */
 function toErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof AuthError) return c.json(errorBody(error.code, error.message), error.status)
+  if (error instanceof VerificationError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
   throw error
 }
 
 /**
- * 认证模块的唯一装配入口：把会话存储、cookie、Provider、service、守卫装配在一起，
- * `app.ts` 只负责挂载（`/auth/*` 与 `/me`）。
+ * 认证模块的唯一装配入口：把会话存储、cookie、验证服务、service、守卫装配在一起，
+ * `app.ts` 只负责挂载（`/auth/*` 与 `/me`）。#68 后不再有 Campus Provider：
+ * 校园认证改为「验证码 Provider + verification service」的独立子域。
  */
 export function createAuthModule(options: {
   db: Db
-  provider: CampusVerificationProvider
+  verification: VerificationService
   /** 由 `WEB_ORIGIN` 的 scheme 推导，见 `session.ts`。 */
   secureCookie: boolean
 }) {
   const cookie = createSessionCookie(options.secureCookie)
-  const service = createAuthService({
-    db: options.db,
-    sessions: createSessions(options.db),
-    provider: options.provider,
-  })
+  const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
   const requireAuth = createRequireAuth({ cookie, service })
 
   const router = new Hono<{ Variables: AuthVariables }>()
@@ -76,6 +82,38 @@ export function createAuthModule(options: {
     cookie.clear(c)
     return c.body(null, 204)
   })
+
+  // ---- 校园认证（#68）：三个端点都是本人数据，整段挂 requireAuth ----
+  const verification = options.verification
+
+  router.post('/verification/code', requireAuth, async (c) => {
+    const parsed = SendCodeRequestSchema.safeParse(await readJson(c))
+    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+
+    try {
+      await verification.sendCode(c.get('userId'), parsed.data)
+      // 出于防探测不给「发送成功」以外的信息；出箱内容见 dev transport（.dev/mail-outbox.jsonl）。
+      return c.json(SendCodeResponseSchema.parse({ sent: true }))
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.post('/verification/verify', requireAuth, async (c) => {
+    const parsed = VerifyCodeRequestSchema.safeParse(await readJson(c))
+    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+
+    try {
+      const status = await verification.verify(c.get('userId'), parsed.data)
+      return c.json(status)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.get('/verification/status', requireAuth, async (c) =>
+    c.json(await verification.status(c.get('userId'))),
+  )
 
   const meHandler: Handler<{ Variables: AuthVariables }> = (c) => c.json({ user: c.get('me') })
 

@@ -50,6 +50,7 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
     campus: '肇庆',
     authStatus: 'VERIFIED',
     verifiedAt: CREATED_AT,
+    campusEmail: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     ...overrides,
@@ -271,6 +272,7 @@ describe('getDetail', () => {
       nickname: '阿岚',
       avatarUrl: null,
       campus: '肇庆',
+      authStatus: 'VERIFIED',
     })
   })
 
@@ -302,10 +304,13 @@ describe('getDetail', () => {
     expect(ownerView.status).toBe('OFFLINE')
   })
 
-  test('does not leak authStatus through the seller projection', async () => {
+  test('公开卖家信息包含 authStatus 但不包含 verifiedAt / campusEmail 等敏感字段（#68）', async () => {
     const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
     const detail = await service.getDetail(null, LISTING_ID)
-    expect('authStatus' in detail.seller).toBe(false)
+    expect(detail.seller.authStatus).toBe('VERIFIED')
+    expect('verifiedAt' in detail.seller).toBe(false)
+    expect('campusEmail' in detail.seller).toBe(false)
+    expect('studentNo' in detail.seller).toBe(false)
   })
 
   // #47：封面只认 0 号图，不能退化成「最小 sort_order」。store 按 `ORDER BY sort_order ASC`

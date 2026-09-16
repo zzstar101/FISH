@@ -2,7 +2,8 @@ import { z } from 'zod'
 
 /**
  * 校园认证状态。值域与 `users.auth_status`（#2 冻结）一致，这里只是对外镜像，
- * 因此**没有第三个「审核中」态**：Mock 与真实 Provider 都在注册时同步给出结论。
+ * 因此**没有第三个「审核中」态**。#68 后 VERIFIED 只能由校园邮箱验证产生
+ * （见 `auth/verification.ts`），注册不再给出结论。
  */
 export const AuthStatusSchema = z.enum(['UNVERIFIED', 'VERIFIED'])
 

@@ -36,6 +36,13 @@
       "when": 1789209704138,
       "tag": "0004_orange_lilandra",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789573183722,
+      "tag": "0005_good_bullseye",
+      "breakpoints": true
     }
   ]
 }

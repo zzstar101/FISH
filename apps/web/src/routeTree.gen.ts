@@ -26,6 +26,7 @@ import { Route as CategoryIndexRouteImport } from './routes/category.index'
 import { Route as CategoryCategoryIdRouteImport } from './routes/category.$categoryId'
 import { Route as ChatConversationIdRouteImport } from './routes/chat.$conversationId'
 import { Route as DetailListingIdRouteImport } from './routes/detail.$listingId'
+import { Route as ProfileVerificationRouteImport } from './routes/profile.verification'
 import { Route as UserUserIdRouteImport } from './routes/user.$userId'
 import { Route as WatchersListingIdRouteImport } from './routes/watchers.$listingId'
 
@@ -114,6 +115,11 @@ const DetailListingIdRoute = DetailListingIdRouteImport.update({
   path: '/detail/$listingId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProfileVerificationRoute = ProfileVerificationRouteImport.update({
+  id: '/verification',
+  path: '/verification',
+  getParentRoute: () => ProfileRoute,
+} as any)
 const UserUserIdRoute = UserUserIdRouteImport.update({
   id: '/user/$userId',
   path: '/user/$userId',
@@ -133,7 +139,7 @@ export interface FileRoutesByFullPath {
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
-  '/profile': typeof ProfileRoute
+  '/profile': typeof ProfileRouteWithChildren
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/scan': typeof ScanRoute
@@ -142,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/category/$categoryId': typeof CategoryCategoryIdRoute
   '/chat/$conversationId': typeof ChatConversationIdRoute
   '/detail/$listingId': typeof DetailListingIdRoute
+  '/profile/verification': typeof ProfileVerificationRoute
   '/user/$userId': typeof UserUserIdRoute
   '/watchers/$listingId': typeof WatchersListingIdRoute
   '/category/': typeof CategoryIndexRoute
@@ -154,7 +161,7 @@ export interface FileRoutesByTo {
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
-  '/profile': typeof ProfileRoute
+  '/profile': typeof ProfileRouteWithChildren
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/scan': typeof ScanRoute
@@ -163,6 +170,7 @@ export interface FileRoutesByTo {
   '/category/$categoryId': typeof CategoryCategoryIdRoute
   '/chat/$conversationId': typeof ChatConversationIdRoute
   '/detail/$listingId': typeof DetailListingIdRoute
+  '/profile/verification': typeof ProfileVerificationRoute
   '/user/$userId': typeof UserUserIdRoute
   '/watchers/$listingId': typeof WatchersListingIdRoute
   '/category': typeof CategoryIndexRoute
@@ -176,7 +184,7 @@ export interface FileRoutesById {
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
-  '/profile': typeof ProfileRoute
+  '/profile': typeof ProfileRouteWithChildren
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/scan': typeof ScanRoute
@@ -185,6 +193,7 @@ export interface FileRoutesById {
   '/category/$categoryId': typeof CategoryCategoryIdRoute
   '/chat/$conversationId': typeof ChatConversationIdRoute
   '/detail/$listingId': typeof DetailListingIdRoute
+  '/profile/verification': typeof ProfileVerificationRoute
   '/user/$userId': typeof UserUserIdRoute
   '/watchers/$listingId': typeof WatchersListingIdRoute
   '/category/': typeof CategoryIndexRoute
@@ -208,6 +217,7 @@ export interface FileRouteTypes {
     | '/category/$categoryId'
     | '/chat/$conversationId'
     | '/detail/$listingId'
+    | '/profile/verification'
     | '/user/$userId'
     | '/watchers/$listingId'
     | '/category/'
@@ -229,6 +239,7 @@ export interface FileRouteTypes {
     | '/category/$categoryId'
     | '/chat/$conversationId'
     | '/detail/$listingId'
+    | '/profile/verification'
     | '/user/$userId'
     | '/watchers/$listingId'
     | '/category'
@@ -250,6 +261,7 @@ export interface FileRouteTypes {
     | '/category/$categoryId'
     | '/chat/$conversationId'
     | '/detail/$listingId'
+    | '/profile/verification'
     | '/user/$userId'
     | '/watchers/$listingId'
     | '/category/'
@@ -263,7 +275,7 @@ export interface RootRouteChildren {
   MylistRoute: typeof MylistRoute
   NotificationsRoute: typeof NotificationsRoute
   OrdersRoute: typeof OrdersRoute
-  ProfileRoute: typeof ProfileRoute
+  ProfileRoute: typeof ProfileRouteWithChildren
   PublishRoute: typeof PublishRoute
   RegisterRoute: typeof RegisterRoute
   ScanRoute: typeof ScanRoute
@@ -398,6 +410,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DetailListingIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/profile/verification': {
+      id: '/profile/verification'
+      path: '/verification'
+      fullPath: '/profile/verification'
+      preLoaderRoute: typeof ProfileVerificationRouteImport
+      parentRoute: typeof ProfileRoute
+    }
     '/user/$userId': {
       id: '/user/$userId'
       path: '/user/$userId'
@@ -415,6 +434,17 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ProfileRouteChildren {
+  ProfileVerificationRoute: typeof ProfileVerificationRoute
+}
+
+const ProfileRouteChildren: ProfileRouteChildren = {
+  ProfileVerificationRoute: ProfileVerificationRoute,
+}
+
+const ProfileRouteWithChildren =
+  ProfileRoute._addFileChildren(ProfileRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
@@ -423,7 +453,7 @@ const rootRouteChildren: RootRouteChildren = {
   MylistRoute: MylistRoute,
   NotificationsRoute: NotificationsRoute,
   OrdersRoute: OrdersRoute,
-  ProfileRoute: ProfileRoute,
+  ProfileRoute: ProfileRouteWithChildren,
   PublishRoute: PublishRoute,
   RegisterRoute: RegisterRoute,
   ScanRoute: ScanRoute,

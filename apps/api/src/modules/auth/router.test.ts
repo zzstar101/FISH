@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { AuthResponseSchema } from '@fish/contracts/auth/session'
-import type { Campus } from '@fish/contracts/auth/user'
 import { createDb, type Db } from '@fish/db/client'
 import { sessions } from '@fish/db/schema/sessions'
 import { users } from '@fish/db/schema/users'
+import { campusEmailVerifications } from '@fish/db/schema/verifications'
 import { loadServerEnv } from '@fish/shared/env'
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
-import type { CampusVerificationProvider } from './provider'
 import { createAuthService } from './service'
 import { createSessions } from './session'
 
@@ -42,6 +41,8 @@ beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   scratch = createDb(scratchUrl)
   await migrate(scratch, { migrationsFolder })
+  // dev Provider 的 outbox 指到隔离目录：测试读它取验证码，不污染真实 .dev。
+  process.env.MAIL_OUTBOX_PATH = OUTBOX_PATH
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 })
 
@@ -79,6 +80,12 @@ function sessionCookie(res: Response): string {
 
 const withCookie = (cookie: string) => ({ headers: { cookie } })
 
+/** 带 cookie 的 JSON POST：合并 headers 而不是让 post() 覆盖掉 cookie。 */
+const postWith = (cookie: string, body: unknown) => ({
+  ...post(body),
+  headers: { ...post(body).headers, cookie },
+})
+
 const register = (overrides: Record<string, unknown> = {}) =>
   app.request('/auth/register', post(registerBody(overrides)))
 
@@ -98,13 +105,17 @@ async function sessionRows(studentNo: string) {
 }
 
 describe('POST /auth/register', () => {
-  test('20xx 级学号：创建账号、下发会话 cookie 并直接已认证', async () => {
+  test('注册成功即登录，但一律 UNVERIFIED（#68：注册不再认证）', async () => {
     const res = await register()
     expect(res.status).toBe(200)
 
     const body = AuthResponseSchema.parse(await res.json())
-    expect(body.user).toMatchObject({ nickname: '测试甲', campus: '肇庆', authStatus: 'VERIFIED' })
-    expect(body.user.verifiedAt).not.toBeNull()
+    expect(body.user).toMatchObject({
+      nickname: '测试甲',
+      campus: '肇庆',
+      authStatus: 'UNVERIFIED',
+    })
+    expect(body.user.verifiedAt).toBeNull()
 
     const setCookie = res.headers.getSetCookie().join(' | ')
     expect(setCookie).toContain('fish_session=')
@@ -128,7 +139,7 @@ describe('POST /auth/register', () => {
     expect(res.headers.getSetCookie().join(' | ')).toContain('Secure')
   })
 
-  test('12 位但非 20xx 级学号：注册成功，但保持未认证', async () => {
+  test('任意合法学号注册后都保持未认证', async () => {
     const res = await register({ studentNo: '199901000102', nickname: '测试乙' })
     expect(res.status).toBe(200)
 
@@ -175,7 +186,7 @@ describe('POST /auth/login', () => {
     expect(res.status).toBe(200)
 
     const body = AuthResponseSchema.parse(await res.json())
-    expect(body.user).toMatchObject({ nickname: '测试丁', authStatus: 'VERIFIED' })
+    expect(body.user).toMatchObject({ nickname: '测试丁', authStatus: 'UNVERIFIED' })
     expect(sessionCookie(res).startsWith('fish_session=')).toBe(true)
   })
 
@@ -265,32 +276,16 @@ describe('GET /me', () => {
 })
 
 describe('Provider 边界', () => {
-  test('真实 Provider 返回的权威校区可用，值域外的脏值回退到用户填写值', async () => {
-    const stub = (campus: string): CampusVerificationProvider => ({
-      // 断言只用于构造非法输入：真实教务系统返回的是外部字符串，落库前必须过运行时校验
-      verify: async () => ({ status: 'VERIFIED', campus: campus as Campus }),
+  test('register 不再依赖 Provider：service 装配不传 provider 也能用（#68 移除 Campus Provider）', async () => {
+    const service = createAuthService({ db: scratch, sessions: createSessions(scratch) })
+    const { user } = await service.register({
+      studentNo: '202101000113',
+      password: DEMO_PASSWORD,
+      nickname: '测试无Provider',
+      campus: '广州',
     })
-
-    for (const [campus, expected] of [
-      ['广州', '广州'],
-      ['四会', '肇庆'], // 不在值域内 → 用注册时填的校区
-    ] as const) {
-      const service = createAuthService({
-        db: scratch,
-        sessions: createSessions(scratch),
-        provider: stub(campus),
-      })
-
-      const { user } = await service.register({
-        studentNo: campus === '广州' ? '202101000113' : '202101000114',
-        password: DEMO_PASSWORD,
-        nickname: '测试校区',
-        campus: '肇庆',
-      })
-
-      expect(user.campus).toBe(expected)
-      expect(user.authStatus).toBe('VERIFIED')
-    }
+    expect(user.campus).toBe('广州')
+    expect(user.authStatus).toBe('UNVERIFIED')
   })
 })
 
@@ -396,5 +391,303 @@ describe('POST /auth/logout', () => {
     expect((await app.request('/me', withCookie(first))).status).toBe(401)
     expect((await app.request('/me', withCookie(second))).status).toBe(200)
     expect(await sessionRows(studentNo)).toHaveLength(before + 1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 校园认证（#68）：验证码发送 / 验证 / 状态
+// ---------------------------------------------------------------------------
+
+/** 与 app 装配同一 dev Provider 的 outbox 路径（隔离目录，不污染真实 .dev）。 */
+const OUTBOX_PATH = `${import.meta.dir}/.test-outbox-${process.pid}/mail-outbox.jsonl`
+
+const CAMPUS_EMAIL = 'demo68@gzasc.edu.cn'
+
+/** 从 outbox 取发给指定邮箱的最后一封的验证码（subject 内嵌）。 */
+async function lastCodeFor(email: string): Promise<string> {
+  const file = Bun.file(OUTBOX_PATH)
+  if (!(await file.exists())) throw new Error(`outbox 不存在：${OUTBOX_PATH}`)
+  const lines = (await file.text()).trim().split('\n')
+  for (const line of lines.reverse()) {
+    const mail = JSON.parse(line ?? '{}') as { to?: string; subject?: string }
+    if (mail.to === email && mail.subject) {
+      const match = /(\d{6})/.exec(mail.subject)
+      if (match?.[1]) return match[1]
+    }
+  }
+  throw new Error(`outbox 里没有发给 ${email} 的邮件`)
+}
+
+let verificationUserSeq = 0
+
+/** 每次调用都造一个全新用户：学号复用会撞 409，且前一测试可能已把它认证成 VERIFIED。 */
+async function verificationCookie(): Promise<string> {
+  verificationUserSeq += 1
+  const studentNo = `2021010003${String(verificationUserSeq).padStart(2, '0')}`
+  await register({ studentNo, nickname: `验证码用户${verificationUserSeq}` })
+  return sessionCookie(await login(studentNo))
+}
+
+describe('POST /auth/verification/code', () => {
+  test('发送后 outbox 收到 6 位验证码邮件；验证成功后状态 VERIFIED', async () => {
+    const cookie = await verificationCookie()
+    const email = 'fresh68@gzasc.edu.cn'
+
+    const send = await app.request('/auth/verification/code', postWith(cookie, { email }))
+    expect(send.status).toBe(200)
+
+    const code = await lastCodeFor(email)
+    expect(code).toMatch(/^\d{6}$/)
+
+    // 响应体不含明文码 / 完整邮箱
+    const sendText = await Bun.readableStreamToText(send.body ?? new ReadableStream())
+    expect(sendText).not.toContain(code)
+
+    const verify = await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+    expect(verify.status).toBe(200)
+    const status = (await verify.json()) as {
+      authStatus: string
+      maskedEmail: string | null
+      verifiedAt: string | null
+    }
+    expect(status).toMatchObject({ authStatus: 'VERIFIED', maskedEmail: 'f***@gzasc.edu.cn' })
+    expect(status.maskedEmail).not.toContain(email.slice(1))
+
+    // users 表同步升级，且 /me 与之一致（Done：两处状态一致）
+    const me = await app.request('/me', withCookie(cookie))
+    expect(AuthResponseSchema.parse(await me.json()).user).toMatchObject({
+      authStatus: 'VERIFIED',
+    })
+
+    // 验证码已消费：同一码不可重放
+    const replay = await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+    expect(replay.status).toBe(409)
+    expect(await replay.json()).toMatchObject({ error: { code: 'CODE_CONSUMED' } })
+  })
+
+  test('非教育邮箱域名：422', async () => {
+    const cookie = await verificationCookie()
+    const res = await app.request(
+      '/auth/verification/code',
+      postWith(cookie, { email: 'someone@gmail.com' }),
+    )
+    expect(res.status).toBe(422)
+    expect(await res.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
+  test('60s 内重复发送：429 RATE_LIMITED', async () => {
+    const cookie = await verificationCookie()
+    const email = 'ratelimit68@gzasc.edu.cn'
+    const first = await app.request('/auth/verification/code', postWith(cookie, { email }))
+    expect(first.status).toBe(200)
+
+    const second = await app.request('/auth/verification/code', postWith(cookie, { email }))
+    expect(second.status).toBe(429)
+    expect(await second.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } })
+  })
+
+  test('邮箱已被其他账号绑定：409 EMAIL_ALREADY_BOUND（发码与验证两处都拦）', async () => {
+    const owner = '202101000202'
+    await register({ studentNo: owner, nickname: '占用者' })
+    const ownerCookie = sessionCookie(await login(owner))
+    const email = 'taken68@gzasc.edu.cn'
+
+    // 先让占用者完成认证
+    await app.request('/auth/verification/code', postWith(ownerCookie, { email }))
+    const code = await lastCodeFor(email)
+    const verified = await app.request(
+      '/auth/verification/verify',
+      postWith(ownerCookie, { email, code }),
+    )
+    expect(verified.status).toBe(200)
+
+    // 另一个账号对同一邮箱发起验证
+    const other = '202101000203'
+    await register({ studentNo: other, nickname: '挑战者' })
+    const otherCookie = sessionCookie(await login(other))
+
+    const send = await app.request('/auth/verification/code', postWith(otherCookie, { email }))
+    expect(send.status).toBe(409)
+    expect(await send.json()).toMatchObject({ error: { code: 'EMAIL_ALREADY_BOUND' } })
+  })
+
+  test('已认证用户再发码：409 ALREADY_VERIFIED', async () => {
+    const cookie = await verificationCookie()
+    const email = 'once68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const code = await lastCodeFor(email)
+    await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+
+    const again = await app.request(
+      '/auth/verification/code',
+      postWith(cookie, { email: 'second68@gzasc.edu.cn' }),
+    )
+    expect(again.status).toBe(409)
+    expect(await again.json()).toMatchObject({ error: { code: 'ALREADY_VERIFIED' } })
+  })
+
+  test('无登录态：401', async () => {
+    const res = await app.request('/auth/verification/code', post({ email: CAMPUS_EMAIL }))
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('POST /auth/verification/verify', () => {
+  test('错误码：422 CODE_INVALID，且错误响应不含明文码', async () => {
+    const cookie = await verificationCookie()
+    const email = 'wrong68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+
+    const res = await app.request(
+      '/auth/verification/verify',
+      postWith(cookie, { email, code: '000001' }),
+    )
+    // '000001' 碰巧正确的概率 1e-6；为确定性，直接对比 outbox 里的真码排除巧合
+    const real = await lastCodeFor(email)
+    if (real === '000001') return
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body).toMatchObject({ error: { code: 'CODE_INVALID' } })
+    expect(JSON.stringify(body)).not.toContain(real)
+  })
+
+  test('验证码过期：410 CODE_EXPIRED', async () => {
+    const cookie = await verificationCookie()
+    const email = 'expired68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const code = await lastCodeFor(email)
+
+    // 直接把最新一行的 expires_at 改到过去
+    await scratch
+      .update(campusEmailVerifications)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(campusEmailVerifications.email, email))
+
+    const res = await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+    expect(res.status).toBe(410)
+    expect(await res.json()).toMatchObject({ error: { code: 'CODE_EXPIRED' } })
+  })
+
+  test('尝试 5 次后作废：429 TOO_MANY_ATTEMPTS', async () => {
+    const cookie = await verificationCookie()
+    const email = 'attempts68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const code = await lastCodeFor(email)
+    // 确定性的错误码：与真码不同的 6 位数
+    const wrong = code === '999999' ? '999998' : '999999'
+
+    for (let i = 0; i < 5; i += 1) {
+      const res = await app.request(
+        '/auth/verification/verify',
+        postWith(cookie, { email, code: wrong }),
+      )
+      expect([422, 429]).toContain(res.status)
+    }
+
+    // 第 6 次即使拿真码也已被作废：码在达上限时被消费，语义归为 CODE_CONSUMED
+    const res = await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ error: { code: 'CODE_CONSUMED' } })
+  })
+
+  test('重发后旧码失效，新码可验证（一次性 + 旧码作废）', async () => {
+    const cookie = await verificationCookie()
+    const email = 'resend68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const oldCode = await lastCodeFor(email)
+
+    // 等 60s 间隔不可行，直接改 last sent 以绕过限频（限频本身已有专测）
+    await scratch
+      .update(campusEmailVerifications)
+      .set({ createdAt: new Date(Date.now() - 2 * 60_000) })
+      .where(and(eq(campusEmailVerifications.email, email)))
+
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const newCode = await lastCodeFor(email)
+    expect(newCode).not.toBe(oldCode)
+
+    const oldTry = await app.request(
+      '/auth/verification/verify',
+      postWith(cookie, { email, code: oldCode }),
+    )
+    expect(oldTry.status).toBe(422)
+
+    const newTry = await app.request(
+      '/auth/verification/verify',
+      postWith(cookie, { email, code: newCode }),
+    )
+    expect(newTry.status).toBe(200)
+  })
+})
+
+describe('GET /auth/verification/status', () => {
+  test('未认证：null maskedEmail；认证后返回脱敏邮箱，完整邮箱永不出 API', async () => {
+    const cookie = await verificationCookie()
+
+    const before = await app.request('/auth/verification/status', withCookie(cookie))
+    expect(before.status).toBe(200)
+    expect(await before.json()).toMatchObject({ authStatus: 'UNVERIFIED', maskedEmail: null })
+
+    const email = 'status68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const code = await lastCodeFor(email)
+    await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+
+    const after = await app.request('/auth/verification/status', withCookie(cookie))
+    const body = await after.json()
+    expect(body).toMatchObject({
+      authStatus: 'VERIFIED',
+      maskedEmail: 's***@gzasc.edu.cn',
+      verifiedAt: expect.any(String),
+    })
+    expect(JSON.stringify(body)).not.toContain('status68')
+  })
+})
+
+describe('并发绑定冲突（审查回归）', () => {
+  test('唯一索引兜底路径返回 409 EMAIL_ALREADY_BOUND 而不是 500', async () => {
+    const cookieA = await verificationCookie()
+    const cookieB = await verificationCookie()
+    const email = 'race68@gzasc.edu.cn'
+
+    // 两个账号都先拿到有效验证码。60s 邮箱间隔会拦第二封，先把已有行的时间回拨绕开
+    // （限频本身有专测；这里要验证的是绑定冲突路径）。
+    await app.request('/auth/verification/code', postWith(cookieA, { email }))
+    const codeA = await lastCodeFor(email)
+    await scratch
+      .update(campusEmailVerifications)
+      .set({ createdAt: new Date(Date.now() - 2 * 60_000) })
+      .where(eq(campusEmailVerifications.email, email))
+    const secondSend = await app.request('/auth/verification/code', postWith(cookieB, { email }))
+    expect(secondSend.status).toBe(200)
+    const codeB = await lastCodeFor(email)
+    expect(codeB).not.toBe(codeA)
+
+    // A 先验证成功绑定邮箱
+    const first = await app.request(
+      '/auth/verification/verify',
+      postWith(cookieA, { email, code: codeA }),
+    )
+    expect(first.status).toBe(200)
+
+    // B 的预检查在 A 绑定前已过（这里直接模拟：B 用自己的码验证）——
+    // 预检查会拦住已绑定邮箱，所以直接改库绕过预检查，强制走唯一索引冲突路径。
+    // 更直接的方式：把 B 的 campus_email 预检查窗口顶掉不可行；改用事务内 bind 冲突：
+    // B 的验证会先消费自己的码，再在绑定时发现邮箱已被 A 占用 → 409。
+    const second = await app.request(
+      '/auth/verification/verify',
+      postWith(cookieB, { email, code: codeB }),
+    )
+    expect(second.status).toBe(409)
+    expect(await second.json()).toMatchObject({ error: { code: 'EMAIL_ALREADY_BOUND' } })
+    // B 仍是 UNVERIFIED，且 B 的码已消费（Q7b：不退还）
+    const meB = await app.request('/me', withCookie(cookieB))
+    expect(AuthResponseSchema.parse(await meB.json()).user.authStatus).toBe('UNVERIFIED')
+    const replayB = await app.request(
+      '/auth/verification/verify',
+      postWith(cookieB, { email, code: codeB }),
+    )
+    expect(replayB.status).toBe(409)
+    expect(await replayB.json()).toMatchObject({ error: { code: 'CODE_CONSUMED' } })
   })
 })

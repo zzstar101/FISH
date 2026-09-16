@@ -10,6 +10,7 @@ import { notifications } from './schema/notifications'
 import { sessions } from './schema/sessions'
 import { transactions } from './schema/transactions'
 import { users } from './schema/users'
+import { campusEmailVerifications } from './schema/verifications'
 import { wishes } from './schema/wishes'
 
 /** 事务内的写入句柄；seed 既能在 CLI 里跑，也能被测试包在事务里回滚。 */
@@ -48,7 +49,8 @@ export const DEMO_PASSWORD = 'fish123456'
 
 /**
  * 学号（12 位）与演示密码一起在 issue #3 里冻结，便于前端直接登录调试。
- * 阿岚 / 橙子 已认证，小北 保持未认证——#5 的卖家认证徽章需要一个反例。
+ * #68 后 VERIFIED 只能由真实校园邮箱验证产生（不能在 seed 里伪造），三个演示账号
+ * 统一 UNVERIFIED；认证后的徽章演示改由真实验证流程（dev outbox）给出。
  */
 const demoStudentNos = {
   sellerA: '202101000001',
@@ -69,9 +71,10 @@ const demoStudentNos = {
  */
 export async function seed(tx: SeedTx): Promise<void> {
   // 一次性列出全部业务表：单条 TRUNCATE 可以跨外键，但必须把所有被引用的表都列全。
-  // `sessions` 必须在内：它引用 users，漏掉会让 seed 第二次执行直接失败。
+  // `sessions` / `campus_email_verifications`（#68）必须在内：它们引用 users，
+  // 漏掉会让 seed 第二次执行直接失败。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
   )
 
   const now = new Date()
@@ -88,8 +91,6 @@ export async function seed(tx: SeedTx): Promise<void> {
       passwordHash,
       nickname: '阿岚',
       campus: '肇庆',
-      authStatus: 'VERIFIED',
-      verifiedAt: lastWeek,
       createdAt: lastWeek,
     },
     {
@@ -106,8 +107,6 @@ export async function seed(tx: SeedTx): Promise<void> {
       passwordHash,
       nickname: '橙子',
       campus: '广州',
-      authStatus: 'VERIFIED',
-      verifiedAt: lastWeek,
       createdAt: lastWeek,
     },
   ])
