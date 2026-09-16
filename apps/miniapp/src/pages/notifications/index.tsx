@@ -114,7 +114,7 @@ export default function Notifications() {
             <View className="notif__body">
               <Text className="notif__body-title">{item.title}</Text>
               <View className="notif__meta">
-                {isUnread(item) ? null : <View className="notif__dot" />}
+                {isUnread(item) ? <View className="notif__dot" /> : null}
                 <Text className="notif__tm num">{relativeTime(item.createdAt)}</Text>
               </View>
               <Text className="notif__text">{item.description}</Text>
