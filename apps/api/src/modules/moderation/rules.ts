@@ -1,6 +1,6 @@
 import type { ModerationField, ModerationMatch, ModerationResult } from './types'
 
-export const MODERATION_RULE_VERSION = '2026-09-15-v1'
+export const MODERATION_RULE_VERSION = '2026-09-15-v2'
 
 type Rule = { code: string; decision: 'BLOCK' | 'REVIEW'; terms: readonly string[] }
 
@@ -19,11 +19,18 @@ const RULES: readonly Rule[] = [
 ]
 
 function normalize(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLocaleLowerCase('zh-CN')
-    .replace(/[\u200b-\u200f\u202a-\u202e]/g, '')
-    .replace(/[\s\u3000]+/g, '')
+  return (
+    value
+      .normalize('NFKC')
+      .toLocaleLowerCase('zh-CN')
+      .replace(/[\u200b-\u200f\u202a-\u202e]/g, '')
+      // 先去掉分隔字符再匹配：`毒-品` / `加/微信` / `v.x` / `加·微信` 这类插入式规避
+      // 不改词表就能穿过基础匹配（评审 major 3）。
+      // 标点用 Unicode 属性类而不是手枚举：`\p{P}` 覆盖中英文标点，`\p{S}` 覆盖 `+`、`·`、`•`、
+      // `©` 这类符号；再加上它们之间的空白/零宽字符与下划线/连字符（下划线是 `\p{Pc}`，本就在 `\p{P}`）。
+      // 注意：不能顺手把数字/字母也去掉 —— 那会把 `vx`、`v.x` 全归一成同一个短串，误伤正常文案。
+      .replace(/[\p{P}\p{S}\s\u3000]+/gu, '')
+  )
 }
 
 function maskTerm(term: string): string {

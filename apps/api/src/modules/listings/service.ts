@@ -27,6 +27,7 @@ import type {
   ListingRow,
   ListingState,
   ListingStore,
+  ListingUpdateResult,
 } from './store'
 import { LOCKED_LISTING_STATUSES } from './store'
 
@@ -332,69 +333,65 @@ export function createListingService(deps: {
     },
 
     async updateListing(userId, id, input) {
-      const state = await requireOwnEditable(userId, id, store)
-
-      // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
-      // 只给 priceCents 时也要看库里当前的 free。
-      const finalFree = input.free ?? state.free
-      const finalPrice = input.priceCents ?? state.priceCents
-      if (finalFree && finalPrice !== 0) {
-        throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
-          { field: 'priceCents', message: '0 元送时价格必须为 0' },
-        ])
-      }
-
       if (input.objectKeys) await assertUsableObjectKeys(userId, input.objectKeys)
 
-      const finalTitle = input.title ?? state.title ?? ''
-      const finalDescription = input.description ?? state.description ?? ''
-      const moderationResult = moderation.moderate({
-        title: finalTitle,
-        description: finalDescription,
-      })
-      if (moderationResult.decision === 'BLOCK') {
-        await recordModeration(store, {
-          listingId: id,
-          sellerId: userId,
-          action: 'UPDATE',
-          title: finalTitle,
-          description: finalDescription,
-          result: moderationResult,
-        })
-        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
-      }
-
-      // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
-      // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
-      const { objectKeys, ...fields } = input
-
-      let updated: ListingRow | null
+      // "读当前行 → 合并最终内容 → 审核 → UPDATE + moderation record" 全部在同一个事务内，
+      // 且当前行由 `SELECT ... FOR UPDATE` 锁住（store.updateListingAtomic）。把审核放在事务外
+      // 会留下并发窗口：两个 PATCH 各自基于旧快照算结论，后提交的把 moderation_status 写回
+      // APPROVED，最终出现"待审内容 + APPROVED"。
+      let result: ListingUpdateResult
       try {
-        updated = await store.updateListing({
+        result = await store.updateListingAtomic({
           id,
           sellerId: userId,
-          fields: {
-            ...fields,
-            moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
-            moderationReason: moderationResult.reasonCode,
-            moderationRuleVersion: moderationResult.ruleVersion,
-            moderatedAt: new Date(),
-            ...(moderationResult.decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
+          ...(input.objectKeys ? { objectKeys: input.objectKeys } : {}),
+          apply: (_input, current) => {
+            // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
+            // 只给 priceCents 时也要看库里当前的 free。
+            const finalFree = input.free ?? current.free
+            const finalPrice = input.priceCents ?? current.priceCents
+            if (finalFree && finalPrice !== 0) {
+              throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
+                { field: 'priceCents', message: '0 元送时价格必须为 0' },
+              ])
+            }
+
+            const finalTitle = input.title ?? current.title
+            const finalDescription = input.description ?? current.description
+            const moderationResult = moderation.moderate({
+              title: finalTitle,
+              description: finalDescription,
+            })
+            // 阻断命中时不抛：`null` 让 store 在**锁内**以 `rejected` 结束事务（无任何写入），
+            // 也不需要在这里额外写一条审计记录 —— 事务回滚会把它一起丢掉。
+            if (moderationResult.decision === 'BLOCK') return null
+
+            // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
+            // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
+            const { objectKeys: _objectKeys, ...fields } = input
+            return {
+              fields: {
+                ...fields,
+                moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+                moderationReason: moderationResult.reasonCode,
+                moderationRuleVersion: moderationResult.ruleVersion,
+                moderatedAt: new Date(),
+                ...(moderationResult.decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
+              },
+              moderation: {
+                title: finalTitle,
+                description: finalDescription,
+                decision: moderationResult.decision,
+                matchedRules: moderationResult.matches.map((match) => match.ruleCode),
+                matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
+                ruleVersion: moderationResult.ruleVersion,
+              },
+            }
           },
-          moderation: {
-            title: finalTitle,
-            description: finalDescription,
-            decision: moderationResult.decision,
-            matchedRules: moderationResult.matches.map((match) => match.ruleCode),
-            matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
-            ruleVersion: moderationResult.ruleVersion,
-          },
-          ...(objectKeys ? { objectKeys } : {}),
         })
       } catch (error) {
-        // 合并校验读的是"写入前"的状态，同一卖家的两个并发 PATCH 可能各自通过校验，
-        // 最终撞上 DB 的 listings_free_price_cents_zero。契约把这种最终状态定为
-        // 422 VALIDATION_FAILED（§7.1），不是 500。
+        // 最终状态仍由 DB 的 `listings_free_price_cents_zero` 兜底（契约 §7.1）：锁内校验已经
+        // 排除了并发 PATCH 竞态，但如果将来出现绕过 service 的写入方，仍然要报 422 而不是 500。
         if (isFreePriceConstraintViolation(error)) {
           throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
             { field: 'priceCents', message: '0 元送时价格必须为 0' },
@@ -403,19 +400,34 @@ export function createListingService(deps: {
         throw error
       }
 
-      // UPDATE 带 status 谓词，所以"没改到行"有两种可能：并发下商品已被删/易主（404），
-      // 或在这两步之间被 #11 变成了 RESERVED / SOLD（409）。再读一次状态以区分。
-      if (!updated) {
-        const latest = await store.findState(id)
-        if (latest && LOCKED_LISTING_STATUSES.includes(latest.status)) {
-          throw new ListingServiceError(
-            409,
-            'LISTING_NOT_EDITABLE',
-            '商品处于交易中或已售出，无法修改',
-          )
-        }
-        throw notFound()
+      if (result.kind === 'rejected') {
+        // 阻断内容要留审计记录。store 的事务已回滚（`apply` 返回 null 时没有写入），
+        // 所以这里单独再落一条。没有锁了，因此审的是 store 交回的同一个最终内容。
+        const finalTitle = input.title ?? result.current.title
+        const finalDescription = input.description ?? result.current.description
+        await recordModeration(store, {
+          listingId: id,
+          sellerId: userId,
+          action: 'UPDATE',
+          title: finalTitle,
+          description: finalDescription,
+          result: moderation.moderate({ title: finalTitle, description: finalDescription }),
+        })
+        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
       }
+
+      // `'locked'` / `'not-owner'` / `'not-found'` 都来自锁内读到的行，不再是 check-then-act 的第二次读。
+      if (result.kind === 'locked') {
+        throw new ListingServiceError(
+          409,
+          'LISTING_NOT_EDITABLE',
+          '商品处于交易中或已售出，无法修改',
+        )
+      }
+      if (result.kind === 'not-owner') {
+        throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
+      }
+      if (result.kind === 'not-found') throw notFound()
 
       return loadDetail(userId, id)
     },

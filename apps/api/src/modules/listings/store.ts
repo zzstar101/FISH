@@ -21,7 +21,6 @@ import {
   inArray,
   lt,
   lte,
-  notInArray,
   or,
   type SQL,
   sql,
@@ -116,6 +115,50 @@ export type ListingState = {
   free: boolean
 }
 
+/**
+ * 编辑事务内 `SELECT ... FOR UPDATE` 锁住并读到的当前行。
+ * 字段比 `ListingState` 多，因为合并与审核要用到标题/描述等**所有**被部分更新覆盖的列。
+ */
+export type ListingUpdateTarget = {
+  sellerId: string
+  status: ListingStatus
+  title: string
+  description: string
+  priceCents: number
+  category: ListingCategory
+  condition: ListingCondition
+  urgent: boolean
+  negotiable: boolean
+  free: boolean
+  moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+}
+
+/** service 在锁内合并出的最终写入计划（审核已在此前完成）。 */
+export type ListingUpdatePlan = {
+  fields: UpdateListingFields
+  moderation?: {
+    title: string
+    description: string
+    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+    matchedRules: string[]
+    matchedTermsMasked: string[]
+    ruleVersion: string
+  }
+}
+
+/**
+ * `updateListingAtomic` 的结果。`'not-found'` 与 `'locked'` 分开，是为了让 service 不必
+ * 再读一次状态就能给出 404 / 409（那是 check-then-act 的回归）。
+ */
+export type ListingUpdateResult =
+  | { kind: 'updated' }
+  | { kind: 'not-found' }
+  /** 行存在但归别人：契约 §3 要求 403，与 404 分开（不泄漏存在性的只有 "不存在" 那一支）。 */
+  | { kind: 'not-owner' }
+  | { kind: 'locked' }
+  /** `apply` 返回 null（内容被阻断）：事务回滚，`current` 是锁内读到的行，供调用方补写审计记录。 */
+  | { kind: 'rejected'; current: ListingUpdateTarget }
+
 export interface ListingStore {
   /**
    * 事务内完成：按卖家串行化 → 5 秒内容窗口查重 → 写入商品 + 图片 + `MATCH_LISTING` job。
@@ -141,22 +184,28 @@ export interface ListingStore {
   /**
    * 编辑商品。改到行时**在同一事务内**投一条 `MATCH_LISTING`（契约 §7.13：标题/描述 → keyword、
    * 价格、分类都是打分输入，不重算就会停在旧分数）。返回 `null` 表示没改到行，此时不投。
+   *
+   * 交付给调用方的是**事务内 `SELECT ... FOR UPDATE` 读到的**当前行（`ListingUpdateTarget`）：
+   * "读当前行 → 合并最终内容 → 审核 → UPDATE" 必须针对同一个快照。只在事务外先读一次、
+   * 随后不带版本条件地 UPDATE，两个并发 PATCH 就会各自基于旧快照算审核结论，后提交的那个
+   * 把 `moderation_status` 写回 `APPROVED`，留下"待审内容 + APPROVED"（评审 blocker 1）。
+   *
+   * `apply(input, current)` 由 service 提供，负责合并、审核、产出最终字段；返回 `null` 表示
+   * 本次编辑按业务规则拒绝（此时事务回滚，不产生任何写入）。抛异常同样回滚。
    */
-  updateListing(input: {
+  updateListingAtomic(input: {
     id: string
     sellerId: string
-    fields: UpdateListingFields
-    /** 出现即**全量替换**图片（契约 §2.4）。 */
     objectKeys?: string[]
-    moderation?: {
-      title: string
-      description: string
-      decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
-      matchedRules: string[]
-      matchedTermsMasked: string[]
-      ruleVersion: string
-    }
-  }): Promise<ListingRow | null>
+    apply: (
+      input: {
+        id: string
+        sellerId: string
+        objectKeys?: string[]
+      },
+      current: ListingUpdateTarget,
+    ) => ListingUpdatePlan | null | Promise<ListingUpdatePlan | null>
+  }): Promise<ListingUpdateResult>
 
   /**
    * 只从 `from` 迁到 `to`；返回是否真的改了行（并发下可能已被别人改走）。
@@ -189,6 +238,21 @@ const NEW_LISTING_STATUS: ListingStatus = 'ACTIVE'
  * 与 service 的 409 判定。两处各写一份就会出现"service 拒绝、SQL 放行"的裂缝。
  */
 export const LOCKED_LISTING_STATUSES: ListingStatus[] = ['RESERVED', 'SOLD']
+
+/** 编辑事务内被锁定的列：合并审核要用到的全部可变列。 */
+const EDITABLE_COLUMNS = {
+  sellerId: listings.sellerId,
+  status: listings.status,
+  title: listings.title,
+  description: listings.description,
+  priceCents: listings.priceCents,
+  category: listings.category,
+  condition: listings.condition,
+  urgent: listings.urgent,
+  negotiable: listings.negotiable,
+  free: listings.free,
+  moderationStatus: listings.moderationStatus,
+} as const
 
 export function createSqlListingStore(db: Db): ListingStore {
   return {
@@ -374,24 +438,32 @@ export function createSqlListingStore(db: Db): ListingStore {
       }))
     },
 
-    async updateListing(input) {
+    async updateListingAtomic(input) {
       return db.transaction(async (tx) => {
+        // 先锁行再读："读当前行 → 合并 → 审核 → UPDATE" 必须落在同一快照上。
+        // 没有这个锁时，两个并发 PATCH 会各自读到旧行、各自算审核结论，后提交的那个把
+        // `moderation_status` 写回 APPROVED，留下"待审内容 + APPROVED"（评审 blocker 1）。
+        const current = await tx
+          .select(EDITABLE_COLUMNS)
+          .from(listings)
+          .where(eq(listings.id, input.id))
+          .for('update')
+          .limit(1)
+
+        const row = current[0]
+        if (!row) return { kind: 'not-found' as const }
+        if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
+        if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
+
+        const plan = await input.apply(input, row)
+        if (!plan) return { kind: 'rejected' as const, current: row }
+
         const rows = await tx
           .update(listings)
-          .set({ ...input.fields, updatedAt: new Date(), moderatedAt: new Date() })
-          // 状态谓词必须写进 UPDATE 而不是只在 service 里读一次：读取与写入之间商品可能被
-          // #11 的交易流程改成 RESERVED / SOLD，check-then-act 会让那种行仍被编辑（契约 §2.4）。
-          .where(
-            and(
-              eq(listings.id, input.id),
-              eq(listings.sellerId, input.sellerId),
-              notInArray(listings.status, LOCKED_LISTING_STATUSES),
-            ),
-          )
-          .returning()
-
-        const updated = rows[0]
-        if (!updated) return null
+          .set({ ...plan.fields, updatedAt: new Date() })
+          .where(eq(listings.id, input.id))
+          .returning({ id: listings.id })
+        if (rows.length === 0) return { kind: 'not-found' as const }
 
         if (input.objectKeys) {
           // 全量替换：先删后插，同一事务内保证不会出现"新图未写入但旧图已删"的中间态。
@@ -405,22 +477,24 @@ export function createSqlListingStore(db: Db): ListingStore {
           )
         }
 
-        if (input.moderation) {
+        if (plan.moderation) {
           await tx.insert(listingModerationRecords).values({
             listingId: input.id,
             sellerId: input.sellerId,
             action: 'UPDATE',
-            titleSnapshot: input.moderation.title,
-            descriptionSnapshot: input.moderation.description,
-            decision: input.moderation.decision,
-            matchedRules: input.moderation.matchedRules,
-            matchedTermsMasked: input.moderation.matchedTermsMasked,
-            ruleVersion: input.moderation.ruleVersion,
+            titleSnapshot: plan.moderation.title,
+            descriptionSnapshot: plan.moderation.description,
+            decision: plan.moderation.decision,
+            matchedRules: plan.moderation.matchedRules,
+            matchedTermsMasked: plan.moderation.matchedTermsMasked,
+            ruleVersion: plan.moderation.ruleVersion,
           })
         }
 
         // 审核中的商品不可进入匹配链路；只有通过审核的编辑才需要重算匹配。
-        if ((input.fields.moderationStatus ?? 'APPROVED') !== 'APPROVED') return updated
+        if ((plan.fields.moderationStatus ?? 'APPROVED') !== 'APPROVED') {
+          return { kind: 'updated' as const }
+        }
 
         // 编辑会改变打分输入（标题/描述 → keyword，价格、分类直接参与打分），所以必须重算匹配，
         // 否则 `matches` 里那一对会一直是旧分数（#8 契约 §3.3 的"matches 行 = 当前有效匹配"就不成立）。
@@ -428,7 +502,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         // 即使只改了图片也照投：规则简单（一条 PATCH = 一条 job），重算本身幂等且不会重复建通知。
         await enqueueMatchJobWith(tx, input.id)
 
-        return updated
+        return { kind: 'updated' as const }
       })
     },
 
