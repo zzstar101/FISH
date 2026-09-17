@@ -7,6 +7,9 @@
 
 ## 0. 上报摘要（组长看这里）
 
+**PR #85 的关联方式**：`refs #73`（只读 MVP + 后台壳），不是关闭整个 #73 EPIC 的交付。
+审核结果查看/处理、交易查询与高风险操作确认/审计仍未完成；合并本 PR 不应自动关闭 #73。
+
 **状态**：设计 §10 实施顺序的第 1–4、6 步已完成（契约冻结、Platform/DB、Auth 边界、只读 MVP、Web 后台壳），
 第 5 步「人工审核操作」因 #74 契约未冻结而**阻塞**，第 7 步「验证」已完成可做的部分（含一轮独立对抗性审查）。
 
@@ -15,7 +18,7 @@
 1. **CCR-1**（契约收紧）：管理契约 `category` / `condition` / `status` 由 `z.string()` 改为商品域枚举（第 1 节）。
 2. **#74 契约冻结**：`feat/74-listing-moderation` 目前只有 `moderate({title, description})`，没有队列 / 决定接口，
    也没有 `packages/contracts/src/moderation/**`；不冻结则 #73 的「审核队列 + 人工决定」无法开工（第 4 节）。
-3. **迁移编号冲突**：#74 与本分支的两个 `0005` 迁移（`_journal` 同为 `idx: 5`）需要在合并窗口统一处置（第 4 节）。
+3. **迁移顺序协调**：本 PR 与 #79 / #80 / #87 在同一基线上各自生成了 `0005`；待合入顺序确定后，后合入的分支须 rebase 最新 main，由 Drizzle 重新生成 migration 与 meta snapshot，并在全新独立库验证（第 4 节）。
 4. **Issue Done「可查询交易」**：设计 §4 未定义 `/admin/transactions`，补端点属超出已评审设计，请裁决是否补（第 4 节）。
 
 **验证证据**（全仓，已并入 origin/main 后重跑）：`bun run typecheck` 8/8 包通过；`bun run lint` 376 files 无问题；`bun test` **482 pass / 0 fail**；
@@ -106,9 +109,26 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 | Issue #73 Done「可查看/处理商品审核结果」 | **未达成** | 同上，属有据可依的延后 |
 | Issue #73 Done「可查询用户、商品、**交易**」 | **部分达成** | 用户/商品列表与详情、概览（含已完成交易计数）已实现；**没有** `/admin/transactions` 端点。设计 §4 未定义该端点，补它属于超出已评审设计，需组长决定 |
 | 高风险操作确认 + 审计 | **未达成** | 当前 Admin API 零写操作；审计表、索引、脱敏快照已就绪 |
-| 迁移编号冲突 | **待处置** | #74 分支 `0005_faulty_energizer.sql` 与本分支 `0005_slippery_bruce_banner.sql` 都是 `_journal` `idx: 5`，两分支合并必然冲突。按 AGENTS §8「不调整 migration 历史」，只能由 Platform Owner 在合并窗口决定顺序/改号 |
+| 迁移编号冲突 | **待合入顺序确定** | 按 [PR #85 审查意见](https://github.com/zzstar101/FISH/pull/85#pullrequestreview-5233988976)，#79 / #80 / #85 / #87 各自在同一 main 基线上生成了 `0005`。由 zzstar101 协调合入顺序；后合入的分支 rebase 最新 main，再由 Drizzle 重新生成 migration 与 meta snapshot，不得手改文件名、SQL、journal idx 或 snapshot |
 | 合并窗口的 seed 协调 | **待处置** | 本地库被其它分支迁移污染（`message_media`(#67)、`listing_moderation_records`(#74)）时 `db:seed` 会因外键失败。`seed.ts` 的 TRUNCATE 列表按分支维护，#67 合并时需同步加入 `message_media` |
 | 浏览器端到端验证 | **未做** | 本机无 playwright/puppeteer，按规则不新增依赖；F1 的修复目前只有结构、构建与类型证据，没有真实浏览器点击证据 |
+
+### PR #85 审查后的合入 gate
+
+- 本次核对的 main 为 `5f5f8dc43af99cc54aae35a45cc0b42666caa6dc`，其 migration journal 仍止于 `0004_orange_lilandra`；本分支为 `0005_slippery_bruce_banner`。
+  当前尚无已合入的新 DB migration，因此本次不提前 rebase、不改生成文件，也不把迁移协调标为完成。
+- 合入顺序稳定后，先核对最新 main 的 schema 与 migration 历史；若其它 DB PR 已先合入，本分支 rebase 后须以该历史为基线，使用 `bun run db:generate` 重新生成本分支尚未合入的 Admin 增量及 meta snapshot。
+  只运行 generate 而保留冲突的旧分支 snapshot，或只改文件名/idx，都不能证明已解决冲突；不得改写已合入的迁移历史。
+- 在**全新独立数据库**上执行 `bun run db:migrate` → `bun run db:seed` → `bun run db:promote -- 202101000001`，并重跑 Admin 定向测试、typecheck、lint 与全仓测试。
+  `db:seed` 会清空业务表，不得用共享开发库或生产库做此验证。合入窗口须记录新的 main SHA、生成文件与验证结果；之前的冒烟证据不能替代 rebase 后验证。
+- F3 不在本次只读 MVP 中增加治理写操作。后续接入 moderation/downline 时，业务更新与 audit insert 必须同事务，并补「audit 失败 → 业务回滚」测试。
+
+本次文档修订验证（未 rebase，未重新生成 migration）：
+
+- 在新建独立库 `fish_pr85_review_20260917` 上运行 `bun run db:migrate`、`bun run db:seed`、`bun run db:promote -- 202101000001`，均通过。
+- `bun test apps/api/src/modules/admin/router.test.ts packages/db/src/admin-promote.test.ts packages/contracts/src/admin apps/web/src/features/admin`：36 pass / 0 fail（3 个测试文件）。
+- `bun run typecheck`：8 个包通过；`bun run lint`：371 files，无问题；`bun test`：482 pass / 0 fail（58 个测试文件）。
+- 仅文档改动，不增加行为测试。PR 远端正文的关联词仍需同步为 `refs #73`，迁移协调说明也需同步；本地文档修改不会自动更新 GitHub PR 正文。
 
 ## 5. 提交清单（`main..HEAD`，共 19 个：16 个 #73 提交 + 1 个 merge + 2 个前序提交）
 
