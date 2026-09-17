@@ -3,17 +3,14 @@
 /**
  * 许愿墙（Tab 页）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 区块顺序与设计稿一致：冰蓝页头 → 大标题 + 发布钮 → 筛选胶囊横滑 →
+ * 区块顺序：冰蓝页头 → 固定顶栏「许愿墙」 → 热门排行 → 筛选胶囊横滑 →
  * WISH 吊牌主卡 → bento 两卡 → 愿望成真（匹配商品）→ 最近的心愿 → 悬浮 TabBar。
  *
- * 根节点是「纵向 flex + TabBar 作为最后一个子项」，这样 components/tab-bar 里的
- * `position: sticky` 才能稳定吸底（与首页 index.scss 同一套写法）。
+ * 顶栏由 `components/top-bar` 提供（`fixed` + 自带等高占位块），页面不再自绘标题行。
  */
 .wish {
   position: relative;
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
   /* 底部留白：避免内容被悬浮 TabBar（+ 原生 TabBar）盖住 */
   padding-bottom: 176px;
   /* 注意：**不要**在这里写 overflow-x: hidden。
@@ -22,46 +19,143 @@
      横向溢出由需要裁切的子块各自 overflow: hidden 处理（如 .tagcard__wave）。 */
 }
 
-/* 顶部冰蓝渐变圆角背景（设计稿 .topbg，高 236pt） */
+/* 顶部冰蓝渐变圆角背景（设计稿 .topbg，高 208pt） */
 .wish__topbg {
-  @include page-hero(472px, 64px);
+  @include page-hero(416px, 64px);
 }
 
-/* ─────────────────────────────── 页头 ─────────────────────────────── */
+/* ─────────────────────────── 热门排行 ─────────────────────────── */
 
-.wish__hd {
+/*
+ * 设计稿 `.hot`：白卡 + 顶部 3px 品牌渐变条 + 两列四行。
+ * 这里保留稿里的两列网格（8 条 → 2×4）。
+ */
+.hotrank {
   position: relative;
   z-index: 1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 24px 40px 0;
+  margin: 8px 40px 0;
+  padding: 20px 22px 12px;
+  @include card;
+  overflow: hidden;
 }
 
-.wish__hd-left {
+/* 卡片顶部的品牌渐变细条 */
+.hotrank::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 6px;
+  background: linear-gradient(90deg, var(--brand), var(--accent-mid));
+}
+
+.hotrank__hd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 2px 6px 12px;
+}
+
+/*
+ * 标题必须 `nowrap` + `flex: 0 0 auto`。
+ * 右侧说明是 `nowrap` 的，若标题可收缩，flex 会把它压到最小内容宽度 ——
+ * 中文就会退化成「一列一个字」竖排（实测踩到）。
+ */
+.hotrank__title {
+  flex: 0 0 auto;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/*
+ * 右侧说明：可收缩 + 截断。
+ * 标题是固定宽（nowrap），说明若也强制 nowrap 且不收缩，窄屏上会顶出卡片右边界。
+ */
+.hotrank__note {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  color: var(--muted);
+  @include ellipsis;
+}
+
+/* 设计稿 `.hot-grid{grid-template-columns:1fr 1fr; column-gap:12px}`：两列，8 条 → 4 行 */
+.hotrank__grid {
+  display: flex;
+  flex-wrap: wrap;
+  /* 设计稿 column-gap:12pt → 24px */
+  column-gap: 24px;
+}
+
+/* 设计稿 `.rk{padding:3px 5px}` → 6px 10px */
+.hotrank__row {
+  width: calc(50% - 12px);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+}
+
+/* 设计稿 `.rk{grid-template-columns:16px 1fr}` → 名次列 32px */
+.hotrank__no {
+  flex: 0 0 auto;
+  width: 32px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--muted-2);
+
+  &.is-top {
+    color: var(--brand);
+  }
+}
+
+.hotrank__main {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.wish__title {
-  font-size: 54px;
-  font-weight: 600;
-  line-height: 1.14;
-  letter-spacing: 0.02em;
-}
-
-/* 「墙」用品牌色 */
-.wish__title-em {
-  color: var(--brand);
-}
-
-.wish__subtitle {
+/*
+ * 词条：设计稿 `.rk-t{font-size:12px}` → 24px。
+ *
+ * 两列布局下每格可用宽约 269rpx，四个汉字（4 × 24 = 96）绰绰有余。
+ * 注意别拿浏览器预览的分辨率去调这个值 —— 预览外壳没有做 rpx 换算
+ * （见 `preview/build.mjs` 只替换字面量 `rpx`），390 宽的视口会把 SCSS px 按 1:1 画，
+ * 看起来比真机大约 1.9 倍，会误判成「文字放不下」。
+ */
+.hotrank__kw {
   display: block;
-  margin-top: 12px;
   font-size: 24px;
-  line-height: 1.5;
-  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.3;
+  @include ellipsis;
 }
+
+/* 热度条：填充式数据编码，宽度按榜首归一化 */
+.hotrank__bar {
+  display: block;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: var(--r-pill);
+  background: rgba(66, 133, 255, 0.12);
+  overflow: hidden;
+}
+
+.hotrank__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--brand), var(--electric));
+}
+
+/* ─────────────────────────────── 页头 ─────────────────────────────── */
 
 .wish__newbtn {
   flex: 0 0 auto;

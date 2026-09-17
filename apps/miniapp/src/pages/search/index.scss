@@ -2,7 +2,10 @@
 
 /**
  * 搜索页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
- * 吸顶搜索条 → 建议面板（搜索历史 + 热门搜索）/ 结果区（筛选胶囊 + 计数 + 两列瀑布流 + 空态）。
+ *
+ * 顶栏（返回钮 + 输入框）由 `components/top-bar` 的 glass 变体提供并 fixed 吸顶、
+ * 自带等高占位块，本页只负责内容区：建议面板（搜索历史 + 热门搜索）/
+ * 结果区（筛选胶囊 + 计数 + 两列瀑布流 + 空态）。
  */
 .search {
   position: relative;
@@ -12,60 +15,23 @@
   box-sizing: border-box;
 }
 
-/* 状态栏占位：app.config.ts 是 navigationStyle: custom，导航区由本页自绘 */
-.search__status {
-  width: 100%;
-}
-
-/* ---- 吸顶搜索条 ---- */
-.search__bar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px 40px 24px;
-  /* 玻璃层自带不透明兜底（DESIGN.md 第 4 节），Android 不支持 backdrop-filter 也不穿帮 */
-  background: var(--glass-bg);
-  border-bottom: 2px solid var(--border);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-}
-
-.search__back {
-  flex: 0 0 auto;
-  width: 88px;
-  height: 88px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: transparent;
-
-  &:active {
-    background: var(--surface);
-  }
-}
-
-.search__back-img {
-  width: 42px;
-  height: 42px;
-}
-
-/* 胶囊输入框：h52、圆角 999、白底 + 极淡品牌描边。
-   宽度写死为「搜索条宽度 − 返回钮 88 − 间距 20 + 左右内边距 40」以外的算法值：
-   用 flex:1 会踩坑——本行「最大内容宽度」大于可用宽度（输入框有 UA 默认宽度），
-   flex 收缩会把胶囊压到比可用空间还窄，白字按钮直接盖住输入区。 */
+/*
+ * 胶囊输入框：圆角 999、白底 + 极淡品牌描边。
+ *
+ * 高度 64px = 32 CSS px，与设计稿 `.search-float{height:calc(64 * var(--rpx))}` 一致，
+ * 也正好等于微信胶囊高 —— 顶栏行高按同一枚胶囊反推，所以两者天然对齐。
+ *
+ * 宽度交给顶栏的中槽（`topbar__center` 是 `flex: 1 1 auto`）：这里不再自己算
+ * `calc(100% - …)`，因为右边界还要避让原生胶囊，那是 top-bar 按机型算出来的。
+ */
 .search__field {
-  flex: 0 0 auto;
-  width: calc(100% - 68px);
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 16px;
-  height: 104px;
-  padding: 0 12px 0 24px;
+  gap: 12px;
+  height: 64px;
+  padding: 0 8px 0 20px;
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid var(--field-line);
@@ -92,8 +58,8 @@
 
 .search__clear {
   flex: 0 0 auto;
-  width: 56px;
-  height: 56px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -106,21 +72,21 @@
 }
 
 .search__clear-img {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
 }
 
-/* 深色「搜索」按钮 */
+/* 深色「搜索」按钮：高度收进 64px 的胶囊内 */
 .search__submit {
   flex: 0 0 auto;
-  height: 80px;
-  padding: 0 26px;
+  height: 52px;
+  padding: 0 22px;
   display: flex;
   align-items: center;
   border-radius: var(--r-pill);
   background: var(--ink);
   color: #fff;
-  font-size: 26px;
+  font-size: 24px;
   font-weight: 600;
   /* 行高收紧，避免按钮把整条搜索栏顶高 */
   line-height: 1;

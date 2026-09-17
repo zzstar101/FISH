@@ -1,24 +1,44 @@
 @use '@/styles/mixins' as *;
 
 /**
- * 自定义 TabBar：设计稿是左右各留 16pt、底部 22pt 的胶囊，五等分，
- * 中间「出物」换成凸起的品牌渐变小圆钮。
+ * 自定义 TabBar —— 一级页面共用的底部导航。
  *
- * 定位用 `fixed`：本组件由小程序框架挂在页面之外渲染（`custom-tab-bar/` 约定），
- * 不受页面滚动容器影响，这也是它比「页面内 sticky」更稳的原因。
+ * 它已经是**独立图层**：`app.config.ts` 里 `tabBar.custom: true`，微信不渲染原生底栏，
+ * 改由本目录（`custom-tab-bar/` 是小程序的固定目录名）接管；组件由框架挂载在页面之外，
+ * `position: fixed` 直接生效，页面根节点的 `overflow` / 滚动容器都影响不到它，
+ * 各页面也不需要自己画一条。所以「替换原生 tabBar」靠的就是这个目录 + `custom: true`。
+ *
+ * 尺寸照 1改 稿（`D:\Downloads\1改\小程序1版home.html` 的 `.tabbar`）：左右各留 16pt、
+ * 距底 22pt 的胶囊，五等分；图标行 42pt，中间「出物」是凸起的品牌渐变小圆钮（34pt）。
  * 底部再叠一层 `env(safe-area-inset-bottom)` 适配全面屏。
  */
 .tabbar {
   position: fixed;
   left: 32px;
   right: 32px;
-  bottom: calc(24px + constant(safe-area-inset-bottom));
-  bottom: calc(24px + env(safe-area-inset-bottom));
+  /* 设计稿 bottom:22pt → 44px */
+  bottom: calc(44px + constant(safe-area-inset-bottom));
+  bottom: calc(44px + env(safe-area-inset-bottom));
   z-index: 100;
   display: flex;
   align-items: center;
-  padding: 6px 16px 8px;
-  @include glass;
+  /* 设计稿 padding:5px 8px 7px → 10px 16px 14px */
+  padding: 10px 16px 14px;
+
+  /*
+   * 玻璃配方照设计稿，**不复用 `@include glass`**：共享 mixin 是 72% 白，
+   * 而设计稿这条底栏是 56% 白 + saturate(190%) + 一圈内高光。
+   * 底栏整条浮在内容之上，透一点更像设计稿的「冰蓝玻璃」，所以按稿走。
+   */
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.56);
+  border: 2px solid rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 36px 84px -36px rgba(23, 35, 61, 0.52),
+    0 4px 12px -4px rgba(23, 35, 61, 0.16),
+    inset 0 2px 0 rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
 }
 
 .tabbar__tab {
@@ -52,7 +72,8 @@
 
 .tabbar__icon {
   position: relative;
-  height: 64px;
+  /* 设计稿 `.tbi{height:42px}` → 84px */
+  height: 84px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -89,10 +110,11 @@
   box-shadow: 0 20px 40px -16px rgba(66, 133, 255, 0.62);
 }
 
-/* 用两条横竖条拼「＋」，避免再引一个仅此处使用的图标资源 */
+/* 用两条横竖条拼「＋」，避免再引一个仅此处使用的图标资源。
+   设计稿 `.pub svg{width:20px;height:20px}` → 40px 跨度 */
 .tabbar__plus {
   position: relative;
-  width: 32px;
+  width: 40px;
   height: 4px;
   border-radius: 2px;
   background: #fff;
@@ -100,10 +122,10 @@
   &::before {
     content: '';
     position: absolute;
-    left: 14px;
-    top: -14px;
+    left: 18px;
+    top: -18px;
     width: 4px;
-    height: 32px;
+    height: 40px;
     border-radius: 2px;
     background: #fff;
   }

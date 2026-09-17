@@ -5,6 +5,8 @@ import brandLogo from '@/assets/brand/logo.png'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import ProductCard from '@/components/product-card'
+import TopBar from '@/components/top-bar'
+import { readNavMetrics } from '@/lib/nav-metrics'
 import {
   fetchHomeFeed,
   getUser,
@@ -37,23 +39,22 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 }
 
 export default function Home() {
-  const [category, setCategory] = useState<ListingCategory | 'ALL'>('ALL')
   const [items, setItems] = useState<MockListing[]>([])
   const [loading, setLoading] = useState(true)
 
-  const load = async (next: ListingCategory | 'ALL') => {
+  const load = async () => {
     setLoading(true)
-    const result = await fetchHomeFeed({ category: next, limit: 40 })
+    const result = await fetchHomeFeed({ category: 'ALL', limit: 40 })
     setItems(result.items)
     setLoading(false)
   }
 
   useLoad(() => {
-    void load('ALL')
+    void load()
   })
 
   usePullDownRefresh(() => {
-    void load(category).then(() => Taro.stopPullDownRefresh())
+    void load().then(() => Taro.stopPullDownRefresh())
   })
 
   const [left, right] = useMemo(() => splitColumns(items), [items])
@@ -62,59 +63,75 @@ export default function Home() {
     void Taro.navigateTo({ url: '/pages/search/index' })
   }
 
+  /**
+   * 分类圆盘：**进入对应的分类页**，而不是在原地筛瀑布流。
+   *
+   * 分类页（`pages/category/index.tsx`）本来就读 `?category=` 参数，但此前全仓无人传值，
+   * 是个死参数；这里把它接上。参数只传契约枚举值（`BOOKS` / `DIGITAL` …），
+   * 分类页自己会把「不在枚举内」的值回落到默认分类。
+   *
+   * 「推荐」不是分类，它是「全部」——留在首页把瀑布流恢复成完整列表。
+   */
+  const onCategoryTap = (key: ListingCategory | 'ALL') => {
+    if (key === 'ALL') {
+      void load()
+      return
+    }
+    void Taro.navigateTo({ url: `/pages/category/index?category=${key}` })
+  }
+
+  /**
+   * 分类横滑条的吸顶位置：要落在固定顶栏**下方**，否则会被顶栏盖住。
+   * 顶栏高度是运行时读微信胶囊算出来的（见 `@/lib/nav-metrics`），
+   * 所以这里也用同一个来源，而不是写一个 `top: 0` 或猜一个数字。
+   */
+  const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
+
   return (
     <View className="home">
       <View className="home__hero-bg" />
 
-      <View className="home__hero">
-        <View className="home__brandbar">
+      {/*
+        固定顶栏：品牌 logo 在左、搜索胶囊居中。设计稿里这一行是 40pt
+        （= 胶囊上留白 4 × 2 + 胶囊高 32），行高由组件按真机胶囊反推，不写死。
+      */}
+      <TopBar
+        variant="plain"
+        spacer
+        left={
           <View className="home__logo-wrap">
             <Image className="home__logo" src={brandLogo} mode="aspectFit" />
           </View>
-          <View
-            className="home__iconbtn"
-            onClick={() => void Taro.showToast({ title: '扫码能力待接入', icon: 'none' })}
-          >
-            <Image
-              className="home__iconbtn-img"
-              src={HOME_CATEGORY_ICONS.camera}
-              mode="aspectFit"
-            />
+        }
+        center={
+          <View className="home__search" onClick={goSearch}>
+            <Image className="home__search-cam" src={ICONS.camera} mode="aspectFit" />
+            <Text className="home__search-ph">搜「键盘」「考研教材」</Text>
+            <Image className="home__search-icon" src={ICONS.search} mode="aspectFit" />
           </View>
-        </View>
+        }
+      />
 
-        <View className="home__search" onClick={goSearch}>
-          <Image className="home__search-cam" src={ICONS.camera} mode="aspectFit" />
-          <Text className="home__search-ph">搜「键盘」「考研教材」</Text>
-          <Image className="home__search-icon" src={ICONS.search} mode="aspectFit" />
-        </View>
-      </View>
-
-      <View className="home__cats-wrap">
+      <View className="home__cats-wrap" style={{ top: `${navHeight}px` }}>
         <ScrollView className="home__cats" scrollX enableFlex>
           <View className="home__cats-inner">
-            {HOME_CATEGORIES.map((item) => {
-              const on = item.key === category
-              return (
-                <View
-                  key={item.key}
-                  className={`home__cat${on ? ' is-on' : ''}`}
-                  onClick={() => {
-                    setCategory(item.key)
-                    void load(item.key)
-                  }}
-                >
-                  <View className="home__cat-ic">
-                    <Image
-                      className="home__cat-img"
-                      src={HOME_CATEGORY_ICONS[item.key]}
-                      mode="aspectFit"
-                    />
-                  </View>
-                  <Text className="home__cat-label">{item.label}</Text>
+            {HOME_CATEGORIES.map((item) => (
+              <View
+                key={item.key}
+                // 「推荐」恒为当前项：其余分类点了就跳去分类页，不在本页停留
+                className={`home__cat${item.key === 'ALL' ? ' is-on' : ''}`}
+                onClick={() => onCategoryTap(item.key)}
+              >
+                <View className="home__cat-ic">
+                  <Image
+                    className="home__cat-img"
+                    src={HOME_CATEGORY_ICONS[item.key]}
+                    mode="aspectFit"
+                  />
                 </View>
-              )
-            })}
+                <Text className="home__cat-label">{item.label}</Text>
+              </View>
+            ))}
           </View>
         </ScrollView>
       </View>

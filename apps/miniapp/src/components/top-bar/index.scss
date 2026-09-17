@@ -1,0 +1,106 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 固定顶部栏。
+ *
+ * `position: fixed`：设计稿（`D:\Downloads\1改`）的一级标题要**钉在顶部**，
+ * 内容从它下方滚过。`z-index: 40` —— 高于页面内容与商品卡，低于底部 TabBar(100)
+ * 与弹层(50/60)，这样弹层打开时顶栏被遮罩压住，不会浮在遮罩之上。
+ *
+ * 高度相关的数值（padding-top / height / padding-right）全部由组件内联下发，
+ * 来自运行时读微信胶囊的反推结果（见 `@/lib/nav-metrics`），这里只管
+ * 底色、字重与横向排布。
+ */
+.topbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 40;
+}
+
+.topbar__row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding-left: 40px;
+  box-sizing: border-box;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+/* 一级标题：40px = 设计稿 20pt（`.navtitle{font-size:20px}`） */
+.topbar__title {
+  flex: 0 0 auto;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--fg);
+  white-space: nowrap;
+}
+
+/* 标题尾段的品牌色（设计稿 `.navtitle em{color:var(--accent)}`） */
+.topbar__em {
+  color: var(--brand);
+}
+
+/* 中槽：搜索胶囊、搜索页输入框这类要吃掉剩余宽度的内容 */
+.topbar__center {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.topbar__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* ── 变体：plain（透明，压在页头渐变上） ── */
+.topbar--plain .topbar__row {
+  background: transparent;
+}
+
+/* ── 变体：glass（搜索页：磨砂底 + 底部描边，始终可见） ── */
+.topbar--glass .topbar__row {
+  background: rgba(238, 246, 255, 0.82);
+  backdrop-filter: blur(36px) saturate(180%);
+  -webkit-backdrop-filter: blur(36px) saturate(180%);
+  border-bottom: 2px solid var(--accent-faint);
+}
+
+/*
+ * 返回钮：与 nav-bar 的漂浮钮同形态（白玻璃圆钮），但这里在栏的出流内。
+ * 尺寸 32pt = 64px，与设计稿搜索页 `.back-btn` 的 `64rpx` 一致。
+ */
+.topbar__back {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-strong);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 8px 32px -16px rgba(65, 70, 78, 0.4);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+
+  &:active {
+    transform: scale(0.94);
+    background: #fff;
+  }
+}
+
+.topbar__chevron {
+  width: 18px;
+  height: 18px;
+  border-left: 4px solid var(--fg);
+  border-bottom: 4px solid var(--fg);
+  border-radius: 2px;
+  transform: translateX(3px) rotate(45deg);
+}
