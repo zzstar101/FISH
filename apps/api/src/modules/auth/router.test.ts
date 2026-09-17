@@ -778,3 +778,94 @@ describe('并发回归', () => {
     expect(rows).toHaveLength(1)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Resend transport（生产投递）
+// ---------------------------------------------------------------------------
+
+describe('Resend transport', () => {
+  const originalFetch = globalThis.fetch
+
+  test('2xx：正常受理；请求体含 from/to/subject/html/text', async () => {
+    let captured: RequestInit | undefined
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      captured = init
+      return new Response(JSON.stringify({ id: 'mail-1' }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    try {
+      const { createResendTransport } = await import('./email-providers')
+      const transport = createResendTransport({
+        apiKey: 're_test',
+        from: '鱼小应 <noreply@fish.edu.cn>',
+      })
+      await transport.send({
+        to: 'user@gzasc.edu.cn',
+        subject: 's',
+        html: '<p>h</p>',
+        text: 't',
+      })
+
+      const body = JSON.parse(captured?.body as string)
+      expect(body.from).toBe('鱼小应 <noreply@fish.edu.cn>')
+      expect(body.to).toEqual(['user@gzasc.edu.cn'])
+      expect(body.subject).toBe('s')
+      expect(body.html).toBe('<p>h</p>')
+      expect(body.text).toBe('t')
+      const headers = (captured?.headers ?? {}) as Record<string, string>
+      expect(headers.Authorization).toBe('Bearer re_test')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('429 后重试一次成功：不抛错', async () => {
+    let calls = 0
+    globalThis.fetch = (async (_url?: unknown, _init?: unknown) => {
+      calls += 1
+      return calls === 1
+        ? new Response('{"message":"rate limited"}', { status: 429 })
+        : new Response('{"id":"ok"}', { status: 200 })
+    }) as unknown as typeof fetch
+
+    try {
+      const { createResendTransport } = await import('./email-providers')
+      const transport = createResendTransport({ apiKey: 're_test', from: 'a <b@c>' })
+      await transport.send({ to: 'x@gzasc.edu.cn', subject: 's', html: 'h', text: 't' })
+      expect(calls).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('4xx 配置错误：不重试直接抛错，错误信息含状态码与 Resend message', async () => {
+    let calls = 0
+    globalThis.fetch = (async (_url?: unknown, _init?: unknown) => {
+      calls += 1
+      return new Response(
+        JSON.stringify({
+          statusCode: 422,
+          name: 'validation_error',
+          message: 'domain not verified',
+        }),
+        { status: 422 },
+      )
+    }) as unknown as typeof fetch
+
+    try {
+      const { createResendTransport } = await import('./email-providers')
+      const transport = createResendTransport({ apiKey: 're_test', from: 'a <b@c>' })
+      let thrown: Error | null = null
+      try {
+        await transport.send({ to: 'x@gzasc.edu.cn', subject: 's', html: 'h', text: 't' })
+      } catch (error) {
+        thrown = error as Error
+      }
+      expect(calls).toBe(1)
+      expect(thrown?.message).toContain('422')
+      expect(thrown?.message).toContain('domain not verified')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})

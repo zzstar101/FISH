@@ -10,33 +10,63 @@ import type { EmailVerificationProvider, VerificationMail } from './verification
  */
 export type ResendTransportConfig = {
   apiKey: string
-  /** 已在 Resend 验证的发件人，如 `FISH <noreply@fish.example.edu>`。 */
+  /** 已在 Resend 验证的发件人，如 `鱼小应 <noreply@fish.edu.cn>`。 */
   from: string
+  /** 请求超时毫秒数；Resend 无响应时快速失败，不拖住发码请求。默认 10s。 */
+  timeoutMs?: number
 }
 
+/** Resend 错误响应体：`{ statusCode, name, message }`。 */
+type ResendError = { statusCode?: number; name?: string; message?: string }
+
+const RESEND_ENDPOINT = 'https://api.resend.com/emails'
+
 export function createResendTransport(config: ResendTransportConfig) {
+  const timeoutMs = config.timeoutMs ?? 10_000
+
+  async function postOnce(mail: VerificationMail): Promise<Response> {
+    // 超时控制：Resend 不可达时快速失败（delivery 置 FAILED），不拖住 API 请求。
+    const response = await fetch(RESEND_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: config.from,
+        to: [mail.to],
+        subject: mail.subject,
+        html: mail.html,
+        text: mail.text,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    return response
+  }
+
   return {
     async send(mail: VerificationMail): Promise<void> {
-      const response = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: config.from,
-          to: [mail.to],
-          subject: mail.subject,
-          html: mail.html,
-          text: mail.text,
-        }),
-      })
+      // 单次退避重试：429（Resend 侧限速）或 5xx（其服务故障）时等 1s 再试一次；
+      // 401/403/422（配置或参数错）重试无意义，直接失败。
+      let response: Response
+      try {
+        response = await postOnce(mail)
+        if ((response.status === 429 || response.status >= 500) && response.status !== 501) {
+          await Bun.sleep(1000)
+          response = await postOnce(mail)
+        }
+      } catch (error) {
+        throw new Error(
+          `Resend 请求失败（网络/超时）：${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
 
       // Resend 2xx = 已受理（进入其投递队列）。非 2xx 上抛 → 发码路由 500，
-      // 由调用方决定重试；验证码记录在事务里已提交（见 delivery 状态说明）。
+      // 该行 delivery 置 FAILED（不作废旧码、不占额度），用户可重试。
       if (!response.ok) {
-        const detail = await response.text().catch(() => '')
-        throw new Error(`Resend 发送失败 (${response.status})：${detail.slice(0, 200)}`)
+        const body = (await response.json().catch(() => null)) as ResendError | null
+        const detail = body?.message ?? (await response.text().catch(() => '')).slice(0, 200)
+        throw new Error(`Resend 发送失败 (${response.status} ${body?.name ?? ''}): ${detail}`)
       }
     },
   }
