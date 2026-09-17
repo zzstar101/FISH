@@ -1,10 +1,23 @@
 /**
- * 只读页的数据入口：**先试真实 API，失败退回 mock**。
+ * 只读页的数据入口：**先试真实 API；只有开发 / 预览才允许退回 mock fixture**。
  *
- * 为什么要这一层而不是让 6 个页面各自 try/catch：
- * 1. 回退策略必须**一致**。哪个错误该退、哪个该抛，散在 6 个页面里必然演化出 6 种口径
+ * ## 为什么要有这一层
+ *
+ * 1. 取数口径必须**一致**：哪个错误该退、哪个该报，散在 6 个页面里必然演化出 6 种口径
  *    （有的吞 401，有的吞 404，有的把网络错误也当空态）。
  * 2. 页面只该关心「拿到数据没有」，不该关心「后端在不在」。
+ *
+ * ## 生产口径
+ *
+ * mock 回退是**开发 / 预览**的便利，不是生产数据策略：API 挂掉、域名配错或契约漂移时，
+ * 用户必须看到错误态，而不是一批「看起来正常」的假商品 / 假账号。因此：
+ *
+ * - 只有构建期注入的 `__ALLOW_MOCK_FALLBACK__ === true` 才退 mock（注入点见 `config/index.ts`）；
+ *   **未注入一律当关闭** —— 这类开关必须 fail closed，否则一次构建配置疏漏就会让生产吃上假数据。
+ * - 关闭时失败通过返回值的 `failed` / `status: 'failed'` 如实交给页面，由页面渲染错误态
+ *   （`components/load-error`）并留日志，**不返回任何 fixture 数据**。
+ * - 401 `UNAUTHENTICATED` 不是「错误」而是「未登录」：登录态由 `features/auth` 统一处理，
+ *   受限页的守卫会把人送去登录页。
  *
  * ## 返回值的形状
  *
@@ -12,14 +25,7 @@
  * 由 `features/listing/adapt.ts` 从契约投影过来。这样页面只改「从哪拿数据」，
  * 不动任何渲染逻辑与 CSS —— 设计稿已验收，不该为了接接口重排页面。
  *
- * ## 回退口径（统一在这里）
- *
- * - 未登录（401 `UNAUTHENTICATED`）：正常情况（用户没登录），静默退 mock。
- * - 网络失败 / 后端未起：退 mock。小程序没有后端时也要能跑起来评审与截图。
- * - 其它错误（含 schema 解析失败）：退 mock，但用 `console.warn` 留痕 ——
- *   解析失败说明前端与契约已经漂移，静默吞掉会让这种漂移永远发现不了。
- *
- * **为什么不缓存**：这是演示期的回退，不是离线能力。加缓存就要引入失效策略
+ * **为什么不缓存**：这是取数，不是离线能力。加缓存就要引入失效策略
  * （登录后重拉、发布后失效），而当前页面每次进入都重新加载，够用。
  */
 import type { Me } from '@fish/contracts/auth/user'
@@ -38,6 +44,15 @@ import {
   searchListings,
 } from './listing/api'
 import { fetchProfile } from './profile/api'
+
+/**
+ * 构建期注入（`config/index.ts` 的 `defineConstants.__ALLOW_MOCK_FALLBACK__`）。
+ * 本地演示 / 预览用 `TARO_APP_MOCK=1` 打开，或 H5 预览构建直接注入 `true`。
+ */
+declare const __ALLOW_MOCK_FALLBACK__: boolean | undefined
+
+/** 未注入 = 关闭（fail closed），见文件头「生产口径」 */
+const MOCK_FALLBACK_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
 
 /* ------------------------------------------------------------------ 排序 */
 
@@ -66,29 +81,35 @@ export function toListingSort(label: string): ListingSort {
  */
 export type LoadedList = {
   items: MockListing[]
-  /** `true` = 来自真实接口；`false` = 走了 mock 回退 */
+  /** `true` = 来自真实接口；`false` = 没拿到真实数据（可能走了 mock 回退，也可能失败） */
   fromApi: boolean
+  /**
+   * 真实接口失败且**没有**回退 mock（生产口径）。
+   * 页面据此渲染错误态：这一页是「加载不出来」，不是「恰好没有商品」。
+   */
+  failed: boolean
 }
 
-/** 首页 feed。真实失败退 mock 首页 feed。 */
+/** 首页 feed。真实失败：开发 / 预览退 mock，生产返回 `failed`。 */
 export async function loadHomeFeed(
   category: ListingCategory | 'ALL' = 'ALL',
   now: number = Date.now(),
-): Promise<MockListing[]> {
+): Promise<LoadedList> {
   try {
     // 「推荐」= 全部：契约的 `category` 是可选枚举，没有 ALL 这个值，所以不传
     const cards = category === 'ALL' ? await fetchHomeFeed() : await fetchCategoryListings(category)
-    return toMockListings(cards, now)
+    return { items: toMockListings(cards, now), fromApi: true, failed: false }
   } catch (error) {
-    warnFallback('首页 feed', error)
+    reportFailure('首页 feed', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
     const { fetchHomeFeed: mockFeed } = await import('@/mock/api')
     const result = await mockFeed({ category, limit: 40 })
-    return result.items
+    return { items: result.items, fromApi: false, failed: false }
   }
 }
 
 /**
- * 分类页：真实失败退 mock 分类列表。带 `fromApi`，见 `LoadedList`。
+ * 分类页：同 `loadHomeFeed` 的回退口径。带 `fromApi` / `failed`，见 `LoadedList`。
  *
  * 参数是**具体分类**而不是 `ListingCategory | 'ALL'`：分类页永远有一个选中的一级分类
  * （`pages/category/index.tsx` 的 state 就是 `ListingCategory`），
@@ -101,30 +122,48 @@ export async function loadCategoryListings(
 ): Promise<LoadedList> {
   try {
     const cards = await fetchCategoryListings(category, toListingSort(sortLabel))
-    return { items: toMockListings(cards, now), fromApi: true }
+    return { items: toMockListings(cards, now), fromApi: true, failed: false }
   } catch (error) {
-    warnFallback('分类列表', error)
+    reportFailure('分类列表', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
     const { fetchCategoryListings: mockCategory } = await import('@/mock/api')
-    return { items: await mockCategory(category), fromApi: false }
+    return { items: await mockCategory(category), fromApi: false, failed: false }
   }
 }
 
-/** 搜索页：真实失败退 mock 搜索 */
+/** 搜索页：同 `loadHomeFeed` 的回退口径 */
 export async function loadSearch(
   keyword: string,
   sortLabel: SearchFilter,
   now: number = Date.now(),
-): Promise<MockListing[]> {
+): Promise<LoadedList> {
   try {
-    return toMockListings(await searchListings(keyword, toListingSort(sortLabel)), now)
+    return {
+      items: toMockListings(await searchListings(keyword, toListingSort(sortLabel)), now),
+      fromApi: true,
+      failed: false,
+    }
   } catch (error) {
-    warnFallback('搜索', error)
+    reportFailure('搜索', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
     const { searchListings: mockSearch } = await import('@/mock/api')
     // 参数类型与页面的筛选项同源（`SearchFilter`），不再用 `as never` 掩盖不匹配
     const result = await mockSearch(keyword, sortLabel)
-    return result.items
+    return { items: result.items, fromApi: false, failed: false }
   }
 }
+
+/**
+ * 商品详情的加载结果。
+ *
+ * 三态分开是必须的：`notFound`（后端说这个商品不存在 → 空态）与 `failed`
+ * （根本没问到 → 错误态）是完全不同的两件事，混成 `null` 会让页面把「后端挂了」
+ * 说成「商品已下架」。
+ */
+export type ListingDetailResult =
+  | { status: 'ok'; view: ListingDetailView }
+  | { status: 'notFound' }
+  | { status: 'failed' }
 
 /**
  * 商品详情。
@@ -142,10 +181,10 @@ export async function loadSearch(
 export async function loadListingDetail(
   id: string,
   now: number = Date.now(),
-): Promise<ListingDetailView | null> {
+): Promise<ListingDetailResult> {
   try {
     const detail = await fetchListingDetail(id)
-    if (detail === null) return null
+    if (detail === null) return { status: 'notFound' }
 
     // 相似推荐失败不该拖垮整页：这里降级成「没有相似推荐」，但要留痕 ——
     // 静默吞掉会让契约解析漂移看起来像「这个分类恰好没有同类商品」。
@@ -168,17 +207,22 @@ export async function loadListingDetail(
     }
 
     return {
-      listing,
-      seller,
-      // 契约没有 comments 域：真实数据下没有留言可展示，给空数组而不是编几条
-      comments: [],
-      similar: toMockListings(similar, now),
-      commentTotal: 0,
+      status: 'ok',
+      view: {
+        listing,
+        seller,
+        // 契约没有 comments 域：真实数据下没有留言可展示，给空数组而不是编几条
+        comments: [],
+        similar: toMockListings(similar, now),
+        commentTotal: 0,
+      },
     }
   } catch (error) {
-    warnFallback('商品详情', error)
+    reportFailure('商品详情', error)
+    if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
     const { fetchListingDetail: mockDetail } = await import('@/mock/api')
-    return await mockDetail(id)
+    const view = await mockDetail(id)
+    return view ? { status: 'ok', view } : { status: 'notFound' }
   }
 }
 
@@ -190,25 +234,30 @@ export async function loadListingDetail(
  * 文案与跳转目标由客户端按 `type` + `payload` 组装（#23：服务端不存文案），
  * 所以真实数据也要过一遍 `decorateNotification` —— 与 Web 端同口径，不重写第二份。
  */
-export async function loadNotifications(): Promise<MockNotification[]> {
+/** 通知列表的加载结果：`failed` 时页面显示错误态而不是空态 */
+export type LoadedNotifications = { items: MockNotification[]; failed: boolean }
+
+export async function loadNotifications(): Promise<LoadedNotifications> {
   try {
     const items = await fetchNotifications()
     const { decorateNotifications } = await import('@/mock/api')
     // 传 `null`：真实通知只有 payload 里的 listingId，**没有查标题的能力**
     // （契约不返回文案，也没有按 id 批量查商品的端点）。给个「查不到」就当
     // 「已下架」是错的，所以这里只出通用文案 + 保留跳转目标。
-    return decorateNotifications(items, null)
+    return { items: decorateNotifications(items, null), failed: false }
   } catch (error) {
-    warnFallback('通知列表', error)
+    reportFailure('通知列表', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true }
     const { notifications: mockNotifications } = await import('@/mock/api')
-    return mockNotifications()
+    return { items: mockNotifications(), failed: false }
   }
 }
 
 /* --------------------------------------------------------------- 我的 */
 
 /**
- * 个人中心。真实失败返回 `null`，由页面退回 mock 的同步统计。
+ * 个人中心。**任何失败都返回 `null`，绝不返回 fixture** —— 调用方（`pages/profile`）
+ * 拿不到真实数据时按空值渲染，不拿演示账号顶上（演示身份会让人以为登录成了别人）。
  *
  * 返回值刻意是「页面需要的那几块」而不是整个 `ProfileResponse`：
  * 页面用的是 `stats` + 商品卡 + 愿望行 + 订单计数，契约的 `transactions` 原始数组
@@ -237,7 +286,7 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       orderCount: profile.transactions.length,
     }
   } catch (error) {
-    warnFallback('个人中心', error)
+    reportFailure('个人中心', error)
     return null
   }
 }
@@ -296,18 +345,24 @@ export { toMockListings }
 /* --------------------------------------------------------------- 内部 */
 
 /**
- * 回退时留痕。登录态缺失与网络不可用属于预期情况（是「当前没有后端/没登录」，
+ * 失败留痕。登录态缺失与网络不可用属于预期情况（是「当前没有后端 / 没登录」，
  * 不是缺陷），因此降级为 debug；其余（含契约解析失败）用 warn ——
  * 那意味着前端与契约已经漂移，不该被静默吞掉。
+ *
+ * 日志里必须写明**这次有没有退 mock**：生产口径下没退，看日志的人才知道
+ * 用户看到的是错误态，而不是以为「又是演示数据」。
  */
-function warnFallback(what: string, error: unknown): void {
+function reportFailure(what: string, error: unknown): void {
   const expected =
     isUnauthenticatedError(error) ||
     (error instanceof Error && /request:fail|network|timeout/i.test(error.message))
   const detail = error instanceof Error ? error.message : String(error)
+  const tail = MOCK_FALLBACK_ENABLED
+    ? '，已回退 mock（开发 / 预览口径）'
+    : '，未回退 mock（生产口径）'
   if (expected) {
-    console.debug(`[miniapp] ${what}：真实接口不可用，已回退 mock（${detail}）`)
+    console.debug(`[miniapp] ${what}：真实接口不可用${tail}（${detail}）`)
     return
   }
-  console.warn(`[miniapp] ${what}：真实接口失败，已回退 mock`, error)
+  console.warn(`[miniapp] ${what}：真实接口失败${tail}`, error)
 }
