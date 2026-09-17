@@ -1,7 +1,7 @@
 import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
-import { and, count, desc, eq, gte, isNull, ne } from 'drizzle-orm'
+import { and, count, desc, eq, gte, ne } from 'drizzle-orm'
 import type { VerificationCodeCodec } from './verification-provider'
 
 /**
@@ -53,10 +53,18 @@ export interface VerificationStore {
   ): Promise<{
     retryAfterSeconds?: number
   }>
+  /**
+   * 新验证码行（delivery='PENDING'）。transport 受理成功后 markSent，失败 markFailed。
+   * FAILED 行不参与 latest/限频（评审 P2-5）：发送失败不作废旧码、不耗额度。
+   */
   insertPending(
     executor: VerificationExecutor,
     input: { userId: string; email: string; codeHash: string; expiresAt: Date },
-  ): Promise<void>
+  ): Promise<{ id: string }>
+  /** transport 受理成功：PENDING → SENT，该行此后成为「最新有效码」。 */
+  markSent(rowId: string): Promise<void>
+  /** transport 失败：PENDING → FAILED。该行不参与 latest/限频。 */
+  markFailed(rowId: string): Promise<void>
   /**
    * 原子消费：条件 UPDATE 命中（返回行）后按 `codeHash` 比对；不命中按最新行状态归类失败原因。
    * 失败会推进 `attempt_count`；达上限时同时置 `consumed_at`（作废）。
@@ -91,44 +99,50 @@ export interface VerificationStore {
   }>
 }
 
-export function createVerificationStore(_db: Db): VerificationStore {
+export function createVerificationStore(db: Db): VerificationStore {
+  /** 最近一次**成功受理**（SENT）的发送时刻；FAILED 行不计入 60s 间隔。 */
   async function latestAt(
     executor: VerificationExecutor,
     column: 'email' | 'userId',
     value: string,
   ): Promise<Date | null> {
+    const deliveryEq = eq(campusEmailVerifications.delivery, 'SENT')
     const rows =
       column === 'email'
         ? await executor
             .select({ sentAt: campusEmailVerifications.createdAt })
             .from(campusEmailVerifications)
-            .where(eq(campusEmailVerifications.email, value))
+            .where(and(eq(campusEmailVerifications.email, value), deliveryEq))
             .orderBy(desc(campusEmailVerifications.createdAt))
             .limit(1)
         : await executor
             .select({ sentAt: campusEmailVerifications.createdAt })
             .from(campusEmailVerifications)
-            .where(eq(campusEmailVerifications.userId, value))
+            .where(and(eq(campusEmailVerifications.userId, value), deliveryEq))
             .orderBy(desc(campusEmailVerifications.createdAt))
             .limit(1)
     return rows[0]?.sentAt ?? null
   }
 
+  /** 24h 窗口内**成功受理**（SENT）的发送量；FAILED 行不占额度。 */
   async function countSince(
     executor: VerificationExecutor,
     column: 'email' | 'userId',
     value: string,
     since: Date,
   ): Promise<number> {
+    const deliveryEq = eq(campusEmailVerifications.delivery, 'SENT')
     const predicate =
       column === 'email'
         ? and(
             eq(campusEmailVerifications.email, value),
             gte(campusEmailVerifications.createdAt, since),
+            deliveryEq,
           )
         : and(
             eq(campusEmailVerifications.userId, value),
             gte(campusEmailVerifications.createdAt, since),
+            deliveryEq,
           )
     const rows = await executor
       .select({ count: count() })
@@ -197,16 +211,41 @@ export function createVerificationStore(_db: Db): VerificationStore {
     },
 
     async insertPending(executor, input) {
-      await executor.insert(campusEmailVerifications).values({
-        userId: input.userId,
-        email: input.email,
-        codeHash: input.codeHash,
-        expiresAt: input.expiresAt,
-      })
+      const inserted = await executor
+        .insert(campusEmailVerifications)
+        .values({
+          userId: input.userId,
+          email: input.email,
+          codeHash: input.codeHash,
+          expiresAt: input.expiresAt,
+          delivery: 'PENDING',
+        })
+        .returning({ id: campusEmailVerifications.id })
+      const row = inserted[0]
+      if (!row) throw new Error('INSERT campus_email_verifications 未返回行')
+      return { id: row.id }
+    },
+
+    async markSent(rowId) {
+      await db
+        .update(campusEmailVerifications)
+        .set({ delivery: 'SENT' })
+        .where(eq(campusEmailVerifications.id, rowId))
+    },
+
+    async markFailed(rowId) {
+      await db
+        .update(campusEmailVerifications)
+        .set({ delivery: 'FAILED' })
+        .where(eq(campusEmailVerifications.id, rowId))
     },
 
     async consumeLatest(executor, userId, email, code, codes) {
-      // 只看该用户 + 该邮箱的最新一行：用户拿旧码来验证时，按「无效」处理（重发即作废旧码）。
+      // 并发安全（评审 P1）：对最新行 SELECT ... FOR UPDATE，锁内完成读取→比对→消费。
+      // 锁外并发请求在此阻塞，拿到锁后读到的是已提交的最新状态，不会出现双成功
+      // 或丢失 attempt_count。**必须在调用方事务内使用**。
+      // 只消费**送达过的行**（SENT）：PENDING/FAILED 从未到达用户邮箱，跳过它们，
+      // 用户手里的上一封 SENT 码仍然有效（评审 P2-5）。
       const rows = await executor
         .select({
           id: campusEmailVerifications.id,
@@ -220,10 +259,12 @@ export function createVerificationStore(_db: Db): VerificationStore {
           and(
             eq(campusEmailVerifications.userId, userId),
             eq(campusEmailVerifications.email, email),
+            eq(campusEmailVerifications.delivery, 'SENT'),
           ),
         )
         .orderBy(desc(campusEmailVerifications.createdAt))
         .limit(1)
+        .for('update')
 
       const row = rows[0]
       if (!row) return { outcome: 'FAIL', reason: 'CODE_INVALID' }
@@ -237,38 +278,28 @@ export function createVerificationStore(_db: Db): VerificationStore {
         return { outcome: 'FAIL', reason: 'CODE_EXPIRED' }
       }
 
-      // 条件 UPDATE：只还有尝试余额时推进计数；返回更新行数判断是否还有效。
-      // 并发两次验证同时通过 SELECT 检查时，第二次的 UPDATE 会因 consumed_at IS NULL
-      // 不再命中（第一次已置值），不会出现双成功。
-      const updated = await executor
-        .update(campusEmailVerifications)
-        .set({
-          attemptCount: row.attemptCount + 1,
-          ...(row.attemptCount + 1 >= CODE_MAX_ATTEMPTS ? { consumedAt: new Date() } : {}),
-        })
-        .where(
-          and(eq(campusEmailVerifications.id, row.id), isNull(campusEmailVerifications.consumedAt)),
-        )
-        .returning({ id: campusEmailVerifications.id })
-      if (updated.length === 0) return { outcome: 'FAIL', reason: 'CODE_CONSUMED' }
-      if (row.attemptCount + 1 > CODE_MAX_ATTEMPTS) {
-        return { outcome: 'FAIL', reason: 'TOO_MANY_ATTEMPTS' }
-      }
-
+      // 持锁后比对并一次性写回：失败 attempt_count++（达上限同时置 consumed_at 作废），
+      // 成功直接置 consumed_at。attempt_count 不会因并发丢失。
       const matched = await codes.matches(code, row.codeHash)
-      if (!matched) {
-        // 达到上限的那一次失败已同时置 consumed_at。
-        return {
-          outcome: 'FAIL',
-          reason: row.attemptCount + 1 >= CODE_MAX_ATTEMPTS ? 'TOO_MANY_ATTEMPTS' : 'CODE_INVALID',
-        }
-      }
+      const nextAttempt = row.attemptCount + 1
+      const success = matched && nextAttempt <= CODE_MAX_ATTEMPTS
 
-      // 验证成功：先消费验证码（一次性语义在数据层成立），绑定放在 verify 的外层事务里。
       await executor
         .update(campusEmailVerifications)
-        .set({ consumedAt: new Date() })
+        .set({
+          attemptCount: nextAttempt,
+          consumedAt: success || nextAttempt >= CODE_MAX_ATTEMPTS ? new Date() : null,
+        })
         .where(eq(campusEmailVerifications.id, row.id))
+
+      if (!matched) {
+        return {
+          outcome: 'FAIL',
+          reason: nextAttempt >= CODE_MAX_ATTEMPTS ? 'TOO_MANY_ATTEMPTS' : 'CODE_INVALID',
+        }
+      }
+      if (!success) return { outcome: 'FAIL', reason: 'TOO_MANY_ATTEMPTS' }
+
       return { outcome: 'MATCH' }
     },
 

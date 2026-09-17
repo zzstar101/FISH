@@ -8,7 +8,10 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
-import { createDevEmailVerificationProvider } from './modules/auth/mock-provider'
+import {
+  createDevEmailVerificationProvider,
+  createResendEmailVerificationProvider,
+} from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
 import { createConversationsRouter } from './modules/conversations/router'
@@ -80,10 +83,16 @@ export function createApp(env: ServerEnv) {
     db,
     verification: createVerificationService({
       db,
-      provider: createDevEmailVerificationProvider(undefined, {
-        // 邮件里的图片必须绝对地址；logo 由 Web 站点托管（apps/web/public/logo.png）。
-        logoUrl: `${env.WEB_ORIGIN}/logo.png`,
-      }),
+      // 邮件里的图片必须绝对地址；logo 由 Web 站点托管（apps/web/public/logo.png）。
+      provider:
+        env.NODE_ENV === 'production' && env.RESEND_API_KEY && env.RESEND_FROM
+          ? createResendEmailVerificationProvider(
+              { apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM },
+              { logoUrl: `${env.WEB_ORIGIN}/logo.png` },
+            )
+          : createDevEmailVerificationProvider(undefined, {
+              logoUrl: `${env.WEB_ORIGIN}/logo.png`,
+            }),
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
   })

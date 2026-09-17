@@ -11,13 +11,21 @@ import { AuthStatusSchema } from './user'
 export const CAMPUS_EMAIL_DOMAIN = '@gzasc.edu.cn'
 
 export const CampusEmailSchema = z
-  .string()
+  .email()
   .trim()
   .toLowerCase()
-  .pipe(z.string().min(1).max(64))
-  .refine((value) => value.endsWith(CAMPUS_EMAIL_DOMAIN), {
-    error: `必须是 ${CAMPUS_EMAIL_DOMAIN} 结尾的教育邮箱`,
-  })
+  .max(64)
+  .refine(
+    (value) => {
+      // 标准 email 校验之后再严格比对 domain：拦住 abc@@gzasc.edu.cn、含空格、
+      // 子域 school.gzasc.edu.cn（白名单只认精确域）等异常形态。
+      const domain = value.slice(value.lastIndexOf('@') + 1)
+      return domain === CAMPUS_EMAIL_DOMAIN.slice(1)
+    },
+    {
+      error: `必须是 ${CAMPUS_EMAIL_DOMAIN} 教育邮箱`,
+    },
+  )
 
 export type CampusEmail = z.infer<typeof CampusEmailSchema>
 

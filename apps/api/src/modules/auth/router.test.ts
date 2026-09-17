@@ -5,7 +5,7 @@ import { sessions } from '@fish/db/schema/sessions'
 import { users } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
 import { loadServerEnv } from '@fish/shared/env'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 import { createAuthService } from './service'
@@ -689,5 +689,92 @@ describe('并发绑定冲突（审查回归）', () => {
     )
     expect(replayB.status).toBe(409)
     expect(await replayB.json()).toMatchObject({ error: { code: 'CODE_CONSUMED' } })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 并发回归（评审 P1-1 / P1-2）：原子消费与限频串行化
+// ---------------------------------------------------------------------------
+
+describe('并发回归', () => {
+  test('两个正确码并发验证：只能一个 200，另一个 CODE_CONSUMED', async () => {
+    const cookie = await verificationCookie()
+    const email = 'concurrent-ok68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const code = await lastCodeFor(email)
+
+    const results = await Promise.all([
+      app.request('/auth/verification/verify', postWith(cookie, { email, code })),
+      app.request('/auth/verification/verify', postWith(cookie, { email, code })),
+    ])
+    const statuses = results.map((r) => r.status).sort()
+    expect(statuses).toEqual([200, 409])
+    const bodies = (await Promise.all(results.map((r) => r.json()))) as Array<{
+      error?: { code?: string }
+    }>
+    const codes = bodies.map((b) => b.error?.code).sort()
+    expect(codes).toContain('CODE_CONSUMED')
+    // 状态只能被升级一次
+    const me = await app.request('/me', withCookie(cookie))
+    expect(AuthResponseSchema.parse(await me.json()).user.authStatus).toBe('VERIFIED')
+  })
+
+  test('20 个错误码并发：attemptCount 精确推进，恰好 5 次后触发上限', async () => {
+    const cookie = await verificationCookie()
+    const email = 'concurrent-bad68@gzasc.edu.cn'
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    const code = await lastCodeFor(email)
+    const wrong = code === '999999' ? '999998' : '999999'
+
+    // 20 个并发错误猜测：FOR UPDATE 串行化后恰好 5 次被接受（422/429），其余锁后看到
+    // consumed_at 已置，返回 409 CODE_CONSUMED。绝不允许超过 5 次「实际推进」。
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        app.request('/auth/verification/verify', postWith(cookie, { email, code: wrong })),
+      ),
+    )
+    const statuses = results.map((r) => r.status)
+    // 不应出现 200（错误码不可能成功），也不应出现 500
+    for (const s of statuses) expect([409, 422, 429]).toContain(s)
+
+    // DB 层硬断言：attemptCount 恰好 5，consumed_at 已置
+    const rows = await scratch
+      .select({
+        attemptCount: campusEmailVerifications.attemptCount,
+        consumedAt: campusEmailVerifications.consumedAt,
+      })
+      .from(campusEmailVerifications)
+      .where(eq(campusEmailVerifications.email, email))
+      .orderBy(desc(campusEmailVerifications.createdAt))
+      .limit(1)
+    expect(rows[0]?.attemptCount).toBe(5)
+    expect(rows[0]?.consumedAt).not.toBeNull()
+
+    // 正确码此刻也已被作废
+    const final = await app.request('/auth/verification/verify', postWith(cookie, { email, code }))
+    expect(final.status).toBe(409)
+    expect(await final.json()).toMatchObject({ error: { code: 'CODE_CONSUMED' } })
+  })
+
+  test('并发发码：advisory lock 串行化，60s 内第二个请求必须 429', async () => {
+    const cookie = await verificationCookie()
+    const email = 'concurrent-send68@gzasc.edu.cn'
+
+    // 5 个并发发码：锁串行后最多 1 个 200，其余 429 RATE_LIMITED
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        app.request('/auth/verification/code', postWith(cookie, { email })),
+      ),
+    )
+    const statuses = results.map((r) => r.status).sort()
+    expect(statuses[0]).toBe(200)
+    expect(statuses.slice(1).every((s) => s === 429)).toBe(true)
+
+    // DB 层：最多 1 行（全部 200 才可能多行；429 的请求不应插入）
+    const rows = await scratch
+      .select({ id: campusEmailVerifications.id })
+      .from(campusEmailVerifications)
+      .where(eq(campusEmailVerifications.email, email))
+    expect(rows).toHaveLength(1)
   })
 })

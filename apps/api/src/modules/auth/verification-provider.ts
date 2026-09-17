@@ -29,7 +29,7 @@ export interface VerificationCodeCodec {
 
 /**
  * 验证码 Provider = 生成/比对 + 送达。验证域 service 只依赖这个接口。
- * Mock 实现见 `mock-provider.ts`；`apps/api` 装配层注入。
+ * 实现见 `email-providers.ts`（dev outbox / Resend）；`apps/api` 装配层注入。
  */
 export interface EmailVerificationProvider {
   codes: VerificationCodeCodec
@@ -38,7 +38,7 @@ export interface EmailVerificationProvider {
   render(to: string, code: string, expiresInMinutes: number): VerificationMail
 }
 
-/** 模板可用的品牌资产。`logoUrl` 必须是绝对地址（见 mock-provider 的说明）。 */
+/** 模板可用的品牌资产。`logoUrl` 必须是绝对地址（见 mail-template 的说明）。 */
 export type VerificationBrand = {
   logoUrl?: string
 }

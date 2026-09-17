@@ -5,6 +5,7 @@ import {
   VerificationStatusSchema,
 } from '@fish/contracts/auth/verification'
 import type { Db } from '@fish/db/client'
+import { sql } from 'drizzle-orm'
 import { isUniqueViolation } from './service'
 import type { EmailVerificationProvider } from './verification-provider'
 import {
@@ -30,23 +31,47 @@ export function createVerificationService(deps: {
   const { provider } = deps
 
   return {
-    /** 发码：限频检查 → 生成 → 哈希落库 → 交给 transport 送达。同步执行（决策：不进 jobs）。 */
+    /**
+     * 发码：限频检查（advisory lock 串行化）→ 落 PENDING → transport 送达 → 置 SENT/FAILED。
+     *
+     * delivery 状态语义（评审 P2-5）：transport 失败时该行置 FAILED——不作废旧码、
+     * 不占额度；错误上抛为 500 让用户稍后重试。昂贵的 Argon2 哈希只在通过限频检查后
+     * 计算（评审建议），必然 429 的请求不浪费 CPU。
+     */
     async sendCode(userId: string, input: SendCodeRequest): Promise<void> {
-      const code = await provider.codes.generate()
-      const codeHash = await provider.codes.hash(code)
-      const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000)
-
-      // 限频检查与落库同一个事务：并发两次发码不再可能同时通过 60s 检查（对抗审查 P2）。
-      // 极端竞态仍可能由 PG 默认 READ COMMITTED 漏过，但每日总量限频按行计数兜底，
-      // 发信量有上限；transport 在事务提交后执行，回滚不会留下已发出的邮件。
-      await deps.db.transaction(async (tx) => {
+      // 限频检查与落库同一个事务，且以 advisory lock 串行化（评审 P1）：
+      // READ COMMITTED 下并发事务都会读到旧的 latest/count，仅靠事务无法拦住
+      // 并发突破 60s / 24h 额度。按 (userId, email) 固定顺序取两把事务级 advisory
+      // 锁，同一用户/同一邮箱的发码完全串行；不同用户不同邮箱互不阻塞。
+      const { rowId, code } = await deps.db.transaction(async (tx) => {
+        // 固定顺序（先 user 后 email）取锁，避免交叉等待死锁。
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`u:${userId}`}))`)
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`e:${input.email}`}))`)
         await store.checkSendAllowed(tx, userId, input.email)
-        await store.insertPending(tx, { userId, email: input.email, codeHash, expiresAt })
+
+        // 通过限频检查后才做昂贵的 Argon2 哈希（评审建议）：必然 429 的请求不浪费 CPU。
+        const code = await provider.codes.generate()
+        const codeHash = await provider.codes.hash(code)
+        const expiresAt = new Date(Date.now() + CODE_TTL_MINUTES * 60 * 1000)
+
+        const { id } = await store.insertPending(tx, {
+          userId,
+          email: input.email,
+          codeHash,
+          expiresAt,
+        })
+        return { rowId: id, code }
       })
 
-      // transport 失败不让验证码白白发出去：向上抛 500（onError 兜底）。
-      // 明文码只在这里进过内存，不打日志。
-      await provider.transport.send(provider.render(input.email, code, CODE_TTL_MINUTES))
+      // transport 在事务提交后执行（决策：同步发送，不进 jobs）。失败只影响这一行的
+      // delivery 状态：置 FAILED（不作废旧码、不占额度），错误上抛 500 让用户重试。
+      try {
+        await provider.transport.send(provider.render(input.email, code, CODE_TTL_MINUTES))
+        await store.markSent(rowId)
+      } catch (error) {
+        await store.markFailed(rowId)
+        throw error
+      }
     },
 
     /**
@@ -54,12 +79,12 @@ export function createVerificationService(deps: {
      * 码已消费但绑定冲突（并发）时，码不退还（决策 Q7b）——重新发码即可。
      */
     async verify(userId: string, input: VerifyCodeRequest): Promise<VerificationStatus> {
-      const result = await store.consumeLatest(
-        deps.db,
-        userId,
-        input.email,
-        input.code,
-        provider.codes,
+      // consumeLatest 使用 SELECT ... FOR UPDATE，必须在事务内执行（评审 P1）。
+      // 失败路径抛 VerificationError 会回滚事务——但消费/计数写也在事务内，同样回滚。
+      // 为让失败仍留下尝试计数，把「消费 + 状态推进」与「绑定」拆开：
+      // consume 在**独立事务**里完成并提交（FOR UPDATE 锁保证原子），绑定在成功后另起事务。
+      const result = await deps.db.transaction(async (tx) =>
+        store.consumeLatest(tx, userId, input.email, input.code, provider.codes),
       )
       if (result.outcome === 'FAIL') {
         const messages = {
