@@ -44,7 +44,14 @@ export type FeedCriteria = {
   limit: number
   cursor: FeedCursorKey | null
   sort: 'newest' | 'priceAsc' | 'priceDesc'
-  status: ListingStatus
+  /**
+   * 缺省 = 不按状态过滤。
+   *
+   * 公开 Feed 由 service 显式传 `ACTIVE`；**卖家查自己的商品且未指定 status** 时不传，
+   * 否则 `REVIEW` 店铺（审核中会被写成 `OFFLINE`）就会从「我发布的」里消失 ——
+   * 前端那个请求不带 `status`，只看得到 `ACTIVE` 的旧行为让它永远看不到待审商品。
+   */
+  status?: ListingStatus | undefined
   search?: string | undefined
   category?: ListingCategory | undefined
   priceMinCents?: number | undefined
@@ -133,17 +140,31 @@ export type ListingUpdateTarget = {
   moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
 }
 
-/** service 在锁内合并出的最终写入计划（审核已在此前完成）。 */
-export type ListingUpdatePlan = {
-  fields: UpdateListingFields
-  moderation?: {
-    title: string
-    description: string
-    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
-    matchedRules: string[]
-    matchedTermsMasked: string[]
-    ruleVersion: string
-  }
+/**
+ * service 在锁内合并出的写入计划。
+ *
+ * - `write`：更新商品（+ 可选审核审计 + 可选图片替换）；
+ * - `blocked`：内容被阻断，**不写商品**，但要在同一个锁内写一条审计记录。
+ *
+ * 把"阻断"也放进 plan（而不是让 `apply` 返回 null、由调用方在事务外补写）是为了让审计记录
+ * 与锁内读到的那一行严格对应：调用方补写时锁已释放，并发 PATCH 可以让记录的 titleSnapshot
+ * 与真正被拒的内容不一致，中途失败还会静默丢失审计行。
+ */
+export type ListingUpdatePlan =
+  | {
+      kind: 'write'
+      fields: UpdateListingFields
+      moderation?: ModerationPlan
+    }
+  | { kind: 'blocked'; moderation: ModerationPlan }
+
+type ModerationPlan = {
+  title: string
+  description: string
+  decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+  matchedRules: string[]
+  matchedTermsMasked: string[]
+  ruleVersion: string
 }
 
 /**
@@ -156,8 +177,8 @@ export type ListingUpdateResult =
   /** 行存在但归别人：契约 §3 要求 403，与 404 分开（不泄漏存在性的只有 "不存在" 那一支）。 */
   | { kind: 'not-owner' }
   | { kind: 'locked' }
-  /** `apply` 返回 null（内容被阻断）：事务回滚，`current` 是锁内读到的行，供调用方补写审计记录。 */
-  | { kind: 'rejected'; current: ListingUpdateTarget }
+  /** 内容被阻断：商品未改动，但审计记录已在**同一事务内**落库（见 `ListingUpdatePlan`）。 */
+  | { kind: 'rejected' }
 
 export interface ListingStore {
   /**
@@ -190,8 +211,10 @@ export interface ListingStore {
    * 随后不带版本条件地 UPDATE，两个并发 PATCH 就会各自基于旧快照算审核结论，后提交的那个
    * 把 `moderation_status` 写回 `APPROVED`，留下"待审内容 + APPROVED"（评审 blocker 1）。
    *
-   * `apply(input, current)` 由 service 提供，负责合并、审核、产出最终字段；返回 `null` 表示
-   * 本次编辑按业务规则拒绝（此时事务回滚，不产生任何写入）。抛异常同样回滚。
+   * `apply(input, current)` 由 service 提供，负责在锁内合并、审核并返回一个 `ListingUpdatePlan`：
+   * `write` 写商品（可带审核审计与图片替换），`blocked` 只写审计、不写商品。两种情形都在**同一个
+   * 锁内事务**内落库 —— 这样 `titleSnapshot` 一定对应被拒的那一行，中途失败也不会只剩半条。
+   * 抛异常则整个事务回滚。
    */
   updateListingAtomic(input: {
     id: string
@@ -204,7 +227,7 @@ export interface ListingStore {
         objectKeys?: string[]
       },
       current: ListingUpdateTarget,
-    ) => ListingUpdatePlan | null | Promise<ListingUpdatePlan | null>
+    ) => ListingUpdatePlan | Promise<ListingUpdatePlan>
   }): Promise<ListingUpdateResult>
 
   /**
@@ -306,8 +329,11 @@ export function createSqlListingStore(db: Db): ListingStore {
             titleSnapshot: record.title,
             descriptionSnapshot: record.description,
             decision: record.moderation.decision,
-            matchedRules: record.moderation.matchedRules,
-            matchedTermsMasked: record.moderation.matchedTermsMasked,
+            // `jsonParam` 包一层：裸数组在 drizzle + bun-sql 下会被 stringify 两次，
+            // 落库成 `jsonb_typeof = 'string'`（与 jobs.payload 同一个已踩过的坑）。
+            // 读路径会 parse 两次而“看起来正常”，但 `@>` / `jsonb_array_length` 全都失效。
+            matchedRules: jsonParam(record.moderation.matchedRules),
+            matchedTermsMasked: jsonParam(record.moderation.matchedTermsMasked),
             ruleVersion: record.moderation.ruleVersion,
           })
         }
@@ -373,7 +399,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
     async listFeed(criteria) {
       const conditions: SQL[] = [
-        eq(listings.status, criteria.status),
+        ...(criteria.status ? [eq(listings.status, criteria.status)] : []),
         ...(criteria.includeUnapproved ? [] : [eq(listings.moderationStatus, 'APPROVED')]),
       ]
 
@@ -456,7 +482,21 @@ export function createSqlListingStore(db: Db): ListingStore {
         if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
 
         const plan = await input.apply(input, row)
-        if (!plan) return { kind: 'rejected' as const, current: row }
+        // 阻断：不写商品，但审计记录与锁内读到的那一行同事务落库。
+        if (plan.kind === 'blocked') {
+          await tx.insert(listingModerationRecords).values({
+            listingId: input.id,
+            sellerId: input.sellerId,
+            action: 'UPDATE',
+            titleSnapshot: plan.moderation.title,
+            descriptionSnapshot: plan.moderation.description,
+            decision: plan.moderation.decision,
+            matchedRules: jsonParam(plan.moderation.matchedRules),
+            matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
+            ruleVersion: plan.moderation.ruleVersion,
+          })
+          return { kind: 'rejected' as const }
+        }
 
         const rows = await tx
           .update(listings)
@@ -485,8 +525,9 @@ export function createSqlListingStore(db: Db): ListingStore {
             titleSnapshot: plan.moderation.title,
             descriptionSnapshot: plan.moderation.description,
             decision: plan.moderation.decision,
-            matchedRules: plan.moderation.matchedRules,
-            matchedTermsMasked: plan.moderation.matchedTermsMasked,
+            // 见 createListingAtomic 里的同一条说明：jsonb 数组必须经 `jsonParam`。
+            matchedRules: jsonParam(plan.moderation.matchedRules),
+            matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
             ruleVersion: plan.moderation.ruleVersion,
           })
         }
@@ -514,8 +555,9 @@ export function createSqlListingStore(db: Db): ListingStore {
         titleSnapshot: input.title,
         descriptionSnapshot: input.description,
         decision: input.decision,
-        matchedRules: input.matchedRules,
-        matchedTermsMasked: input.matchedTermsMasked,
+        // 见 createListingAtomic 里的同一条说明：jsonb 数组必须经 `jsonParam`。
+        matchedRules: jsonParam(input.matchedRules),
+        matchedTermsMasked: jsonParam(input.matchedTermsMasked),
         ruleVersion: input.ruleVersion,
       })
     },

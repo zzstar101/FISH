@@ -239,13 +239,18 @@ export function createListingService(deps: {
       }
 
       const cursor = decodeFeedCursor(query.cursor, query.sort)
-      const status = query.status ?? ACTIVE
+      // 卖家查自己且未指定 status ⇒ 不按状态过滤（「我发布的」要包含 OFFLINE / RESERVED / SOLD）。
+      // 公开 Feed 仍固定 ACTIVE（不传 status 时缺省）——不这样做就不能既满足
+      // 「我发布的含 REVIEW」又不把全站 OFFLINE 商品泄露出去。
+      const ownSellerQuery = query.sellerId !== undefined && query.sellerId === viewerId
+      const status = query.status ?? (ownSellerQuery ? undefined : ACTIVE)
 
       const rows = await store.listFeed({
         limit: query.limit,
         cursor,
         sort: query.sort,
-        status,
+        // `exactOptionalPropertyTypes`：字段声明为可选，不能显式传 undefined。
+        ...(status ? { status } : {}),
         search: query.q,
         category: query.category,
         priceMinCents: query.priceMinCents,
@@ -253,7 +258,7 @@ export function createListingService(deps: {
         sellerId: query.sellerId,
         // 本人查询自己的商品时包含未通过审核的（REVIEW / BLOCKED），在前端展示"审核中"等状态；
         // 公开 Feed、匹配、他人详情继续严格过滤。此处 authorize 已达：query.sellerId !== viewerId 抛 403。
-        includeUnapproved: query.sellerId !== undefined && query.sellerId === viewerId,
+        includeUnapproved: ownSellerQuery,
       })
 
       const hasMore = rows.length > query.limit
@@ -362,14 +367,24 @@ export function createListingService(deps: {
               title: finalTitle,
               description: finalDescription,
             })
-            // 阻断命中时不抛：`null` 让 store 在**锁内**以 `rejected` 结束事务（无任何写入），
-            // 也不需要在这里额外写一条审计记录 —— 事务回滚会把它一起丢掉。
-            if (moderationResult.decision === 'BLOCK') return null
+            // 阻断：只写审计（由 store 在**同一锁内事务**完成），不写商品。
+            const moderationPlan = {
+              title: finalTitle,
+              description: finalDescription,
+              decision: moderationResult.decision,
+              matchedRules: moderationResult.matches.map((match) => match.ruleCode),
+              matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
+              ruleVersion: moderationResult.ruleVersion,
+            }
+            if (moderationResult.decision === 'BLOCK') {
+              return { kind: 'blocked' as const, moderation: moderationPlan }
+            }
 
             // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
             // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
             const { objectKeys: _objectKeys, ...fields } = input
             return {
+              kind: 'write' as const,
               fields: {
                 ...fields,
                 moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
@@ -378,14 +393,7 @@ export function createListingService(deps: {
                 moderatedAt: new Date(),
                 ...(moderationResult.decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
               },
-              moderation: {
-                title: finalTitle,
-                description: finalDescription,
-                decision: moderationResult.decision,
-                matchedRules: moderationResult.matches.map((match) => match.ruleCode),
-                matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
-                ruleVersion: moderationResult.ruleVersion,
-              },
+              moderation: moderationPlan,
             }
           },
         })
@@ -401,18 +409,8 @@ export function createListingService(deps: {
       }
 
       if (result.kind === 'rejected') {
-        // 阻断内容要留审计记录。store 的事务已回滚（`apply` 返回 null 时没有写入），
-        // 所以这里单独再落一条。没有锁了，因此审的是 store 交回的同一个最终内容。
-        const finalTitle = input.title ?? result.current.title
-        const finalDescription = input.description ?? result.current.description
-        await recordModeration(store, {
-          listingId: id,
-          sellerId: userId,
-          action: 'UPDATE',
-          title: finalTitle,
-          description: finalDescription,
-          result: moderation.moderate({ title: finalTitle, description: finalDescription }),
-        })
+        // 审计记录已由 store 在**同一锁内事务**里写好（见 `ListingUpdatePlan`）：
+        // 不要在这里再写一遍，也不要无锁重读去猜当时的内容。
         throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
       }
 

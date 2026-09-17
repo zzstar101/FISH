@@ -250,6 +250,47 @@ describe('listFeed', () => {
     expect(seen[0]?.includeUnapproved).toBe(true)
   })
 
+  // 回归（评审 F-A）：F4 的修复必须让**实际请求形状**返回 REVIEW 行，而不只是把 flag 传下去。
+  // 前端「我发布的」是 `?sellerId=me`（不带 status）；旧实现把缺省 status 当成 ACTIVE，
+  // 而 REVIEW 行是 OFFLINE，于是 flag 为 true 也照样被过滤掉（真库实测 0 条）。
+  test('seller own query without status keeps the status filter open so REVIEW rows can surface', async () => {
+    const seen: FeedCriteria[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async (criteria) => {
+          seen.push(criteria)
+          return []
+        },
+      }),
+    })
+
+    await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID }))
+
+    expect(seen[0]?.includeUnapproved).toBe(true)
+    // 关键：不能把缺省值钉成 ACTIVE，否则 OFFLINE 的 REVIEW 行永远拿不到。
+    expect(seen[0]?.status).toBeUndefined()
+  })
+
+  // 反向保证：公开 Feed（没有 sellerId）仍必须显式限定 ACTIVE，不能顺手把过滤打开。
+  test('public feed still pins the status filter to ACTIVE', async () => {
+    const seen: FeedCriteria[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async (criteria) => {
+          seen.push(criteria)
+          return []
+        },
+      }),
+    })
+
+    await service.listFeed(null, feedQuery())
+
+    expect(seen[0]?.status).toBe('ACTIVE')
+    expect(seen[0]?.includeUnapproved).toBe(false)
+  })
+
   test('does not request unapproved listings for the public feed', async () => {
     const seen: FeedCriteria[] = []
     const service = createListingService({
@@ -578,7 +619,7 @@ describe('updateListing', () => {
       store: fakeStore({
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget())
-          if (plan) received.fields = plan.fields
+          if (plan.kind === 'write') received.fields = plan.fields
           if (input.objectKeys) received.objectKeys = input.objectKeys
           return { kind: 'updated' }
         },
@@ -689,7 +730,7 @@ describe('updateListing', () => {
             input,
             updateTarget({ title: '加微信联系', moderationStatus: 'REVIEW', status: 'OFFLINE' }),
           )
-          plans.push(plan?.fields)
+          if (plan.kind === 'write') plans.push(plan.fields)
           return { kind: 'updated' }
         },
       }),
