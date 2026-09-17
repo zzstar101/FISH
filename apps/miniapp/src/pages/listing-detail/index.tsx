@@ -18,6 +18,7 @@ import NavBar from '@/components/nav-bar'
 import ProductCard from '@/components/product-card'
 import { loadListingDetail } from '@/features/fetchers'
 import { conditionLabel, formatAmount, type ListingDetailView, type MockListing } from '@/mock/api'
+import { findUser } from '@/mock/users'
 import './index.scss'
 
 /** 拿不到 id 时的回退商品 */
@@ -83,7 +84,7 @@ export default function ListingDetail() {
   useLoad(() => {
     // 契约 404（商品确实不存在）时 `view` 为 null 且**不退 mock** —— 页面据此走空态，
     // 一条 mock 数据顶上去比空态更误导（见 features/fetchers.ts 的注释）
-    void loadListingDetail(id).then(({ view }) => {
+    void loadListingDetail(id).then((view) => {
       setData(view)
       setLoading(false)
     })
@@ -310,7 +311,14 @@ export default function ListingDetail() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={data.seller}
+                    /*
+                      卖家用**这张卡自己的** sellerId 查，不能用 `data.seller`。
+                      `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
+                      把当前卖家挂上去就是给别人的商品捏造了一个卖家。
+                      真实数据下 `item.sellerId` 是空串哨兵 → `findUser` 给 null → 整行不渲染；
+                      mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
+                    */
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
@@ -321,7 +329,8 @@ export default function ListingDetail() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={data.seller}
+                    /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />

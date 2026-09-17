@@ -27,12 +27,11 @@ import type { ListingCategory, ListingSort } from '@fish/contracts/listings/sche
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { ListingDetailView } from '@/mock/api'
-import type { MockListing, MockNotification, MockUser, MockWish } from '@/mock/types'
+import type { MockListing, MockNotification, MockUser, MockWish, SearchFilter } from '@/mock/types'
 import { fetchNotifications } from './chat/api'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
   fetchCategoryListings,
-  fetchFeed,
   fetchHomeFeed,
   fetchListingDetail,
   fetchSimilarListings,
@@ -88,18 +87,20 @@ export async function loadHomeFeed(
   }
 }
 
-/** 分类页：真实失败退 mock 分类列表。带 `fromApi`，见 `LoadedList`。 */
+/**
+ * 分类页：真实失败退 mock 分类列表。带 `fromApi`，见 `LoadedList`。
+ *
+ * 参数是**具体分类**而不是 `ListingCategory | 'ALL'`：分类页永远有一个选中的一级分类
+ * （`pages/category/index.tsx` 的 state 就是 `ListingCategory`），
+ * 留一个没人传的 `'ALL'` 分支只会变成永远走不到的死代码。「全部」由首页的 `loadHomeFeed` 负责。
+ */
 export async function loadCategoryListings(
-  category: ListingCategory | 'ALL',
+  category: ListingCategory,
   sortLabel: string,
   now: number = Date.now(),
 ): Promise<LoadedList> {
   try {
-    const sort = toListingSort(sortLabel)
-    const cards =
-      category === 'ALL'
-        ? (await fetchFeed({ sort })).items
-        : await fetchCategoryListings(category, sort)
+    const cards = await fetchCategoryListings(category, toListingSort(sortLabel))
     return { items: toMockListings(cards, now), fromApi: true }
   } catch (error) {
     warnFallback('分类列表', error)
@@ -111,7 +112,7 @@ export async function loadCategoryListings(
 /** 搜索页：真实失败退 mock 搜索 */
 export async function loadSearch(
   keyword: string,
-  sortLabel: string,
+  sortLabel: SearchFilter,
   now: number = Date.now(),
 ): Promise<MockListing[]> {
   try {
@@ -119,7 +120,8 @@ export async function loadSearch(
   } catch (error) {
     warnFallback('搜索', error)
     const { searchListings: mockSearch } = await import('@/mock/api')
-    const result = await mockSearch(keyword, sortLabel as never)
+    // 参数类型与页面的筛选项同源（`SearchFilter`），不再用 `as never` 掩盖不匹配
+    const result = await mockSearch(keyword, sortLabel)
     return result.items
   }
 }
@@ -131,18 +133,26 @@ export async function loadSearch(
  * 真实数据下：`comments` 恒为空数组（契约没有 comments 域）、`commentTotal` 为 0、
  * `similar` 走 `GET /listings?category=` 再排掉自己（契约无相似端点，与 Web 端同做法）。
  *
- * 404（商品真的不存在）返回 `{ view: null }` **且不退 mock** ——
+ * 404（商品真的不存在）返回 `null` **且不退 mock** ——
  * 一个已删除的商品显示出一条 mock 数据，比空态更误导。
+ *
+ * 刻意**不**回传「这次是不是 mock」：页面没有地方用这个信息（详情页没有「你在看演示数据」
+ * 这种提示位），留一个没人消费的标志只会让人以为有分支没写。需要时再加。
  */
 export async function loadListingDetail(
   id: string,
   now: number = Date.now(),
-): Promise<{ view: ListingDetailView | null; fromMock: boolean }> {
+): Promise<ListingDetailView | null> {
   try {
     const detail = await fetchListingDetail(id)
-    if (detail === null) return { view: null, fromMock: false }
+    if (detail === null) return null
 
-    const similar = await fetchSimilarListings(detail.category, detail.id).catch(() => [])
+    // 相似推荐失败不该拖垮整页：这里降级成「没有相似推荐」，但要留痕 ——
+    // 静默吞掉会让契约解析漂移看起来像「这个分类恰好没有同类商品」。
+    const similar = await fetchSimilarListings(detail.category, detail.id).catch((error) => {
+      console.warn('[miniapp] 相似推荐获取失败，本次不展示相似商品', error)
+      return []
+    })
     const seller: MockUser = toMockSeller(detail)
     // 先按列表卡投影一次拿到公共字段（角标 / 比例 / 相对时间），再补详情独有的几项。
     // 不用 `[0]!`：空数组断言会掩盖投影层的 bug，这里显式兜底。
@@ -158,20 +168,17 @@ export async function loadListingDetail(
     }
 
     return {
-      view: {
-        listing,
-        seller,
-        // 契约没有 comments 域：真实数据下没有留言可展示，给空数组而不是编几条
-        comments: [],
-        similar: toMockListings(similar, now),
-        commentTotal: 0,
-      },
-      fromMock: false,
+      listing,
+      seller,
+      // 契约没有 comments 域：真实数据下没有留言可展示，给空数组而不是编几条
+      comments: [],
+      similar: toMockListings(similar, now),
+      commentTotal: 0,
     }
   } catch (error) {
     warnFallback('商品详情', error)
     const { fetchListingDetail: mockDetail } = await import('@/mock/api')
-    return { view: await mockDetail(id), fromMock: true }
+    return await mockDetail(id)
   }
 }
 

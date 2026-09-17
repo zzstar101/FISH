@@ -107,9 +107,12 @@ export default function Notifications() {
       <View className="notif__hd">
         <Text className="notif__title">通知</Text>
         <Text className="notif__sub">
-          {unread > 0
-            ? `${unread} 条未读 · 共 ${items.length} 条`
-            : `全部已读 · 共 ${items.length} 条`}
+          {/* 汇总行同样要等结果：否则请求途中会显示「全部已读 · 共 0 条」这种假结论 */}
+          {!ready
+            ? ''
+            : unread > 0
+              ? `${unread} 条未读 · 共 ${items.length} 条`
+              : `全部已读 · 共 ${items.length} 条`}
         </Text>
       </View>
 
