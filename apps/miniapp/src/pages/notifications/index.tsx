@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
-import { type MockNotification, notifications } from '@/mock/api'
+import { loadNotifications } from '@/features/fetchers'
+import type { MockNotification } from '@/mock/api'
 import './index.scss'
 
 /** 「全部已读」动作钮的图标（导航栏右侧） */
@@ -37,9 +38,21 @@ function relativeTime(iso: string): string {
 
 export default function Notifications() {
   const [items, setItems] = useState<MockNotification[]>([])
+  /**
+   * 是否已经拿到一次结果。
+   *
+   * 没有它的话，`items` 初始为空数组会让「还没有通知」这个空态在请求返回前先闪一下 ——
+   * 有通知的用户会看到一句假话。加载完成的判据是「这一次 promise 落了」，
+   * 成功与回退都算（回退也返回一批可用数据）。
+   */
+  const [ready, setReady] = useState(false)
 
   useLoad(() => {
-    setItems(notifications())
+    // 文案与跳转目标由数据层组装（真实接口与 mock 走同一份 decorateNotification），
+    // 页面只拿结果 —— 所以这里只把同步调用换成异步，渲染逻辑不动
+    void loadNotifications()
+      .then(setItems)
+      .finally(() => setReady(true))
   })
 
   /** 未读的唯一判据是契约字段 `readAt === null` */
@@ -122,7 +135,8 @@ export default function Notifications() {
           </View>
         ))}
 
-        {items.length === 0 ? (
+        {/* 空态只在「确实拿到过一次结果」之后才显示，避免请求途中闪过一句「还没有通知」 */}
+        {ready && items.length === 0 ? (
           <EmptyState
             title="还没有通知"
             text="愿望匹配上闲置、交易有进展时会出现在这里"

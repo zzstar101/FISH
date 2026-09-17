@@ -200,6 +200,16 @@ function fingerprint(listing: MockListing): string {
   )
 }
 
+/**
+ * 「综合」排序的热度分：想要数权重是浏览量的 3 倍。
+ *
+ * 契约里没有 `views` / `wants`，真实数据下两者都是 `null`，所以比较时按 0 计，
+ * 保证排序仍然是全序（缺值商品之间不会因为比较返回 0 而顺序不定）。
+ */
+function heat(item: MockListing): number {
+  return (item.wants ?? 0) * 3 + (item.views ?? 0)
+}
+
 function sortListings(items: MockListing[], sort: SearchFilter | undefined): MockListing[] {
   switch (sort) {
     case '价格':
@@ -217,7 +227,7 @@ function sortListings(items: MockListing[], sort: SearchFilter | undefined): Moc
     }
     default:
       // 综合：想要数 + 浏览量加权，热度高的在前
-      return [...items].sort((a, b) => b.wants * 3 + b.views - (a.wants * 3 + a.views))
+      return [...items].sort((a, b) => heat(b) - heat(a))
   }
 }
 
@@ -379,12 +389,35 @@ export function chatSummary() {
  * 放在数据层而不是页面里 —— 与 web 端 `apps/web/src/lib/mock/store.ts` 的
  * `decorateNotification` 同一口径：改文案不用碰 UI；换真实接口时把 title/description
  * 从服务端替进来即可。目标商品已删除/下架时退回愿望页，而不是给一个点不动的死入口。
+ *
+ * `resolve` 是「拿 listingId 查商品标题」的能力。默认查 mock 目录（fixture 场景）；
+ * **真实接口的数据必须显式传 `null`**，原因见 `decorateNotifications` 的注释。
  */
-function decorateNotification(item: NotificationDto): MockNotification {
+function decorateNotification(
+  item: NotificationDto,
+  resolve: ((listingId: string) => MockListing | undefined) | null = findListing,
+): MockNotification {
   if (item.type === 'MATCH') {
     const listingId = item.payload.listingId
-    const listing = listingId ? findListing(listingId) : undefined
+    const listing = listingId && resolve ? resolve(listingId) : undefined
     const wishId = item.payload.wishId
+
+    // 没有查询能力时（真实接口）只能给通用文案 + 原地板的跳转目标。
+    // 不能因为「查不到标题」就说「已被下架」—— 那是把「不知道」说成了「不存在」。
+    if (!resolve) {
+      return {
+        ...item,
+        title: '有新的匹配',
+        description: '',
+        tone: 'mint',
+        target: listingId
+          ? { kind: 'listing', listingId }
+          : wishId
+            ? { kind: 'wish', wishId }
+            : null,
+      }
+    }
+
     return {
       ...item,
       title: listing ? '你要的闲置出现了' : '有新的匹配',
@@ -403,8 +436,24 @@ function decorateNotification(item: NotificationDto): MockNotification {
   return { ...item, title: '新通知', description: '', tone: 'warn', target: null }
 }
 
+/**
+ * 给一批通知补上文案与跳转目标。
+ *
+ * `resolve` 省略时**退回 mock 目录**（演示/回退路径）；传 `null` 表示
+ * 「确实没有查询能力」（真实接口路径）—— 此时只给通用文案并保留由 `payload`
+ * 推出的跳转目标，**不谎称商品已下架**。
+ * 这样「接真接口」与「退 mock」两条路都不会把「查不到」渲染成「不存在」。
+ */
+export function decorateNotifications(
+  items: NotificationDto[],
+  resolve: ((listingId: string) => MockListing | undefined) | null | undefined = undefined,
+): MockNotification[] {
+  const lookup = resolve === undefined ? findListing : resolve
+  return items.map((item) => decorateNotification(item, lookup))
+}
+
 export function notifications(): MockNotification[] {
-  return NOTIFICATIONS.map(decorateNotification)
+  return decorateNotifications(NOTIFICATIONS)
 }
 
 /** 未读数：契约字段 `readAt === null` 即未读（不额外造布尔字段） */

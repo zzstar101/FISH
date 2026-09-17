@@ -99,8 +99,13 @@ export default function UserHome() {
           ) : null}
         </View>
         <View className="uhome__pfoot">
-          <Text className="uhome__pwant num">想要 {item.wants}</Text>
-          <View className="uhome__dot" />
+          {/* 契约没有「想要」计数：真实数据下为 null，连分隔点一起不画，避免出现孤立的分隔符 */}
+          {item.wants === null ? null : (
+            <>
+              <Text className="uhome__pwant num">想要 {item.wants}</Text>
+              <View className="uhome__dot" />
+            </>
+          )}
           <Text className="uhome__ptime">{`${Math.floor(item.createdHoursAgo / 24)} 天前`}</Text>
         </View>
       </View>
@@ -151,9 +156,13 @@ export default function UserHome() {
                   ) : null}
                 </View>
                 <Text className="uhome__pcampus">
+                  {/* 三个分支互不重叠：用户主动隐藏 → 明说未公开；契约没给校区（`MeSchema.campus`
+                      是 nullable）→ 只说加入天数，不拼「null校区」；有校区 → 正常展示 */}
                   {profile.hiddenCampus
                     ? `未公开校区 · 加入 ${profile.joinedDays} 天`
-                    : `${profile.user.campus}校区 · 加入 ${profile.joinedDays} 天`}
+                    : profile.user.campus
+                      ? `${profile.user.campus}校区 · 加入 ${profile.joinedDays} 天`
+                      : `加入 ${profile.joinedDays} 天`}
                 </Text>
               </View>
             </View>

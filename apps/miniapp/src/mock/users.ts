@@ -157,6 +157,21 @@ export function getUser(id: string): MockUser {
   return fallback
 }
 
+/**
+ * 查得到就返回，查不到返回 `null`。
+ *
+ * 与 `getUser` 的区别是**不兜底**。为什么必须另有一个：
+ * `getUser` 对未知 id 会回退到 `USERS[0]`（这是一个真实存在的演示用户，还带认证勾），
+ * 用于 mock 演示没问题；但真实接口的列表卡**没有卖家字段**
+ * （见 `features/listing/adapt.ts` 的铁律 2，那里的 `sellerId` 是空串 `NO_SELLER`），
+ * 一旦把空串喂给 `getUser`，卡片上就会出现一个**完全捏造的卖家**。
+ * 所以凡是要把「卖家可能不存在」这个事实表达出来的调用方，一律用这个函数。
+ */
+export function findUser(id: string): MockUser | null {
+  if (!id) return null
+  return USER_BY_ID[id] ?? null
+}
+
 export const ME = getUser(CURRENT_USER_ID)
 
 export function isMe(userId: string): boolean {
@@ -168,7 +183,14 @@ export function isVerified(userId: string): boolean {
   return getUser(userId).authStatus === 'VERIFIED'
 }
 
-/** 校区显示文案：设计稿详情页写「肇庆校区」 */
+/**
+ * 校区显示文案：设计稿详情页写「肇庆校区」。
+ *
+ * 走 `findUser`（不兜底）而不是 `getUser`：后者对未知 id 会回退到 `USERS[0]`，
+ * 于是「查不到这个人」会被渲染成「肇庆校区」——一个凭空的校区。
+ * 查不到、或该用户没有校区（`MeSchema.campus` 是 nullable）时返回空串。
+ */
 export function campusLabel(userId: string): string {
-  return `${getUser(userId).campus}校区`
+  const campus = findUser(userId)?.campus
+  return campus ? `${campus}校区` : ''
 }

@@ -1,11 +1,19 @@
 /**
- * 证明「数据全部来自 mock」：把预览里所有页面的网络出口全部拦截并计数。
+ * 校验「哪些页面该发请求、哪些不该发」。
  *
  * 做法：CDP 注入一个 hook，把 fetch / XMLHttpRequest / WebSocket / sendBeacon
- * 全部替换成「记录 + 抛错」的版本，然后逐个路由加载，统计是否出现 expect 之外的回调。
- * 任何真实请求都会让脚本以非 0 退出。
+ * 全部替换成「记录」的版本，然后逐个路由加载，统计每次加载产生了哪些请求。
  *
- * 用法：bun preview/verify-mock-only.mjs [--base http://127.0.0.1:4599/index.html]
+ * ## 判定口径（2026-09 起，页面开始接后端）
+ *
+ * 已接真实接口的**只读页**（首页 / 搜索 / 商品详情 / 通知 / 我的）：
+ * 允许请求后端，但**只允许发往 `--api` 指定的地址**（默认 `http://localhost:3000`）。
+ * 发往别处仍算越界。
+ *
+ * 其余页面（许愿 / 出物 / 消息 / 会话 …）：仍必须**零业务请求** ——
+ * 它们的写操作与状态机尚未接接口，一旦偷偷发起请求就说明回退路径被绕过了。
+ *
+ * 用法：bun preview/verify-mock-only.mjs [--base http://127.0.0.1:4599/index.html] [--api http://localhost:3000]
  */
 import { spawn } from 'node:child_process'
 
@@ -29,6 +37,8 @@ const ROUTES = [
   '/pages/profile/index',
   '/pages/search/index',
   '/pages/search/index?q=键盘',
+  '/pages/category/index',
+  '/pages/category/index?category=BOOKS',
   '/pages/listing-detail/index?id=l-001',
   '/pages/listing-detail/index?id=l-014',
   '/pages/conversation/index?id=c-001',
@@ -41,9 +51,29 @@ const ROUTES = [
  * 这些不是业务数据请求。只放行 127.0.0.1 上的静态资源与 data:/blob:。
  */
 const ALLOW = /^(?:https?:\/\/127\.0\.0\.1:[0-9]+|data:|blob:|file:)/
-/** 业务数据请求的特征：这些一律视为「接了真接口」 */
+/** 业务数据请求的特征：静态源里出现这些路径，说明页面绕过了 mock 直连接口 */
 const DATA_HINT =
   /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/listings|:\d+\/conversations/i
+
+/**
+ * 已接真实接口的只读页（本 PR 接通的 6 页，见 `src/features/fetchers.ts`）。
+ * 这 6 个路由**允许**打后端；其余路由必须保持零业务请求。
+ *
+ * 注意：预览 harness 的 `Taro` 桩**没有实现 `request`**，所以这些页在预览里
+ * 实际会走 mock 回退、`打后端` 一列通常是 0。本脚本因此校验的是
+ * 「没有越界请求」，**不能**用来证明真实接口那条路径可用（那要在微信开发者工具里跑）。
+ */
+const WIRED = [
+  '/pages/home/index',
+  '/pages/category/index',
+  '/pages/search/index',
+  '/pages/listing-detail/index',
+  '/pages/notifications/index',
+  '/pages/profile/index',
+]
+
+/** 后端地址：已接接口的页面只允许请求它，发往别处仍算越界 */
+const API_ORIGIN = args.get('api') ?? 'http://localhost:3000'
 
 const profile = `${process.env.TEMP ?? '.'}/fish-mockonly-${Date.now()}`
 const child = spawn(
@@ -150,19 +180,33 @@ for (const route of ROUTES) {
     returnByValue: true,
   })
   const net = JSON.parse(result.result.value ?? '[]')
-  const offenders = net.filter((n) => !ALLOW.test(n.url) || DATA_HINT.test(n.url))
-  rows.push({ route, total: net.length, offenders })
+  // 路由带 query（`?q=…&id=…`）时只按 pathname 判定它属不属于已接接口的那一页
+  const path = route.split('?')[0] ?? route
+  const isWired = WIRED.includes(path)
+  const offenders = net.filter((n) => {
+    // 已接接口的页面打后端是预期行为，但只放行配置的 API 地址
+    if (isWired && n.url.startsWith(API_ORIGIN)) return false
+    // 预览外壳自身的静态资源
+    if (!ALLOW.test(n.url)) return true
+    // 静态源里冒出业务路径 = 绕过 mock 直连接口
+    return DATA_HINT.test(n.url)
+  })
+  const apiCalls = net.filter((n) => n.url.startsWith(API_ORIGIN)).length
+  rows.push({ route, total: net.length, offenders, apiCalls, isWired })
   if (offenders.length > 0) failures += 1
 }
 
-console.log('路由'.padEnd(42), '请求数', '  业务数据请求')
+console.log('路由'.padEnd(42), '请求数', ' 打后端', '  预期外的请求')
 for (const row of rows) {
   console.log(
     row.route.padEnd(42),
     String(row.total).padStart(5),
+    String(row.apiCalls).padStart(6),
     ' ',
     row.offenders.length === 0
-      ? '0 ✓'
+      ? row.isWired
+        ? '0 ✓ (已接接口)'
+        : '0 ✓ (未接接口，应保持)'
       : `${row.offenders.length} ✗  ${row.offenders.map((o) => `${o.kind} ${o.url}`).join(', ')}`,
   )
 }
@@ -171,8 +215,13 @@ socket.close()
 child.kill()
 
 if (failures > 0) {
-  console.log(`\n✗ ${failures} 个路由出现了真实业务请求 —— 数据并非全部来自 mock`)
+  console.log(
+    `\n✗ ${failures} 个路由出现了预期外的请求 —— 未接接口的页面不该发业务请求，` +
+      `已接接口的页面也只允许请求 ${API_ORIGIN}`,
+  )
   process.exit(1)
 }
-console.log('\n✓ 全部路由都没有业务数据请求：数据 100% 来自 src/mock（页面里没有真实 API 调用）')
+console.log(
+  `\n✓ 未接接口的页面零业务请求；已接接口的页面只请求 ${API_ORIGIN}（只读页：${WIRED.length} 个）`,
+)
 process.exit(0)

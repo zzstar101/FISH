@@ -5,16 +5,16 @@ import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
+import { loadSearch } from '@/features/fetchers'
 import {
   defaultSearchHistory,
-  getUser,
   hotSearches,
   type MockListing,
   type SearchFilter,
   searchFilters,
-  searchListings,
   searchPlaceholder,
 } from '@/mock/api'
+import { findUser } from '@/mock/users'
 import './index.scss'
 
 /** 结果瀑布流列宽（设计值 = 2×pt）：750 - 左右各 40 - 列间距 24，再除以 2 */
@@ -67,8 +67,9 @@ export default function Search() {
       return
     }
     setLoading(true)
-    const result = await searchListings(term, nextSort)
-    setResults(result.items)
+    // 「真实接口优先、失败退 mock」由 fetchers 统一负责，页面不自己 try/catch
+    const list = await loadSearch(term, nextSort)
+    setResults(list)
     setSubmitted(term)
     setPanelOpen(false)
     setLoading(false)
@@ -236,7 +237,7 @@ export default function Search() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={getUser(item.sellerId)}
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
@@ -247,7 +248,7 @@ export default function Search() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={getUser(item.sellerId)}
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />

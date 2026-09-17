@@ -662,3 +662,10 @@
   border-radius: var(--r-card);
   background: var(--bg);
 }
+
+/* ------------------------------------------------------------ 空态 */
+
+/* 商品不存在 / 已下架：让 EmptyState 避开漂浮导航条（同 conv__emptypad 的做法） */
+.detail__emptypad {
+  padding-top: 148px;
+}
