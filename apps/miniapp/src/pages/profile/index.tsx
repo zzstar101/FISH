@@ -3,6 +3,7 @@ import Taro from '@tarojs/taro'
 import { useMemo } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { ICONS } from '@/assets/lib-icons'
+import { readNavMetrics } from '@/lib/nav-metrics'
 import {
   APP_VERSION,
   formatAmount,
@@ -47,6 +48,15 @@ export default function Profile() {
   const listings = useMemo(() => myListings(), [])
   const wishes = useMemo(() => myWishes(), [])
   const orders = useMemo(() => orderOverview(), [])
+
+  /**
+   * 顶部留白。
+   *
+   * 设计稿（`小程序1版profile.html`）本页的标题是 `sr-only`（只有屏幕阅读器可见），
+   * 顶栏里**没有任何可视 UI** —— 所以不挂 `top-bar`，只按同一套胶囊栅格把内容顶下去，
+   * 否则个人卡会压到刘海与原生胶囊上。数值来源与 `top-bar` 一致（`@/lib/nav-metrics`）。
+   */
+  const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
 
   const verified = ME.authStatus === 'VERIFIED'
   const pendingMeetup = orders.pending
@@ -121,7 +131,7 @@ export default function Profile() {
     <View className="profile">
       <View className="profile__hero-bg" />
 
-      <View className="profile__body">
+      <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
         <View className="profile__card">
           <View className="profile__identity">
             <Image className="profile__avatar" src={ME.avatarUrl} mode="aspectFill" />

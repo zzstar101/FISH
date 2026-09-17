@@ -2,6 +2,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import TopBar from '@/components/top-bar'
 import {
   type ConversationFilter,
   chatSummary,
@@ -117,21 +118,33 @@ export default function Chat() {
     <View className="chat">
       <View className="chat__bg" />
 
-      <View className="chat__hd">
-        <View className="chat__hd-left">
-          <View className="chat__title">
-            <Text>消</Text>
-            <Text className="chat__title-em">息</Text>
+      {/*
+        固定顶栏：一级标题「消息」钉在顶部，右侧「全部已读」。
+        设计稿里「息」走品牌色（`.mp-title .c-brand`），由 `titleEm` 表达。
+      */}
+      <TopBar
+        variant="plain"
+        spacer
+        title="消"
+        titleEm="息"
+        actions={
+          <View className="chat__act" onClick={markAllRead}>
+            {/* 设计稿是「双勾」；图标库里没有双勾语义，取最接近的单勾 checkMuted */}
+            <Image className="chat__act-ic" src={ICONS.checkMuted} mode="aspectFit" />
+            <Text className="chat__act-tx">全部已读</Text>
           </View>
-          <Text className="chat__sub">
-            {`${summary.pendingReply} 条待回复 · ${summary.pendingMeetup} 笔待确认面交`}
-          </Text>
-        </View>
-        <View className="chat__act" onClick={markAllRead}>
-          {/* 设计稿是「双勾」；图标库里没有双勾语义，取最接近的单勾 checkMuted */}
-          <Image className="chat__act-ic" src={ICONS.checkMuted} mode="aspectFit" />
-          <Text className="chat__act-tx">全部已读</Text>
-        </View>
+        }
+      />
+
+      {/*
+        待回复 / 待确认面交的汇总行。
+        原先是页头里的副标题，标题抬进顶栏后它作为内容留在下面 —— 这是真实数据
+        （`chatSummary()`），不跟着版式一起删。
+      */}
+      <View className="chat__lead">
+        <Text className="chat__lead-tx">
+          {`${summary.pendingReply} 条待回复 · ${summary.pendingMeetup} 笔待确认面交`}
+        </Text>
       </View>
 
       <View className="chat__bento">

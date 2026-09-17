@@ -1,6 +1,12 @@
 @use '@/styles/mixins' as *;
 
-/** 「我的」Tab：设计稿未覆盖，沿用同一套令牌与玻璃语言。数值 = 设计 pt × 2。 */
+/**
+ * 「我的」Tab（设计稿 `小程序1版profile.html`）。数值 = 设计 pt × 2。
+ *
+ * 本页顶栏没有可视 UI（稿里标题是 `sr-only`），所以不挂 `components/top-bar`；
+ * 顶部留白由页面按同一套胶囊栅格内联下发（`padding-top`），
+ * 这里只留横向内边距与横向排布。
+ */
 .profile {
   position: relative;
   min-height: 100vh;
@@ -16,7 +22,9 @@
 .profile__body {
   position: relative;
   z-index: 1;
-  padding: 148px 32px 0;
+  /* padding-top 由页面内联下发（= 顶栏总高 + 8），随机型胶囊位置变化 */
+  padding-right: 32px;
+  padding-left: 32px;
   display: flex;
   flex-direction: column;
 }
