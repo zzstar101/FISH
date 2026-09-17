@@ -6,14 +6,10 @@ import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
+import { loadHomeFeed } from '@/features/fetchers'
 import { readNavMetrics } from '@/lib/nav-metrics'
-import {
-  fetchHomeFeed,
-  getUser,
-  HOME_CATEGORIES,
-  type ListingCategory,
-  type MockListing,
-} from '@/mock/api'
+import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
+import { findUser } from '@/mock/users'
 import './index.scss'
 
 /** 瀑布流列宽（设计值 = 2×pt）：750 - 左右各 28 - 列间距 20，再除以 2 */
@@ -44,8 +40,10 @@ export default function Home() {
 
   const load = async () => {
     setLoading(true)
-    const result = await fetchHomeFeed({ category: 'ALL', limit: 40 })
-    setItems(result.items)
+    // 「真实接口优先、失败退 mock」由 fetchers 统一负责，页面不自己 try/catch。
+    // 只取「推荐」= 全部：其余分类在这里是**跳转**到分类页（见 onCategoryTap），不在本页停留。
+    const list = await loadHomeFeed('ALL')
+    setItems(list)
     setLoading(false)
   }
 
@@ -149,7 +147,7 @@ export default function Home() {
                 <ProductCard
                   key={item.id}
                   listing={item}
-                  seller={getUser(item.sellerId)}
+                  seller={findUser(item.sellerId)}
                   variant="home"
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                 />
@@ -160,7 +158,7 @@ export default function Home() {
                 <ProductCard
                   key={item.id}
                   listing={item}
-                  seller={getUser(item.sellerId)}
+                  seller={findUser(item.sellerId)}
                   variant="home"
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                 />

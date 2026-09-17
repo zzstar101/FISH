@@ -35,9 +35,15 @@ function budgetRange(minCents: number, maxCents: number): string {
   return `¥${formatAmount(minCents)}–${formatAmount(maxCents)}`
 }
 
-/** 校园文案：`MockWish.campus` 只有「肇庆 / 广州」，显示成「肇庆校区」 */
-function campusText(campus: MockWish['campus']): string {
-  return `${campus}校区`
+/**
+ * 校园文案：`MockWish.campus` 只有「肇庆 / 广州」，显示成「肇庆校区」。
+ *
+ * `campus` 可为 `null`（契约 `MeSchema.campus` 是 nullable，见 `mock/types.ts` 的
+ * `MockUser`）—— 缺校区时返回空串，让调用方那一格自然为空，
+ * 而不是拼出「null校区」。
+ */
+function campusText(campus: MockWish['campus'] | null): string {
+  return campus ? `${campus}校区` : ''
 }
 
 /** 匹配到的商品：卖家昵称 + 校区 + 可取货说明（拼设计稿那一行副标题） */
@@ -222,8 +228,13 @@ export default function Wish() {
                   <Text>{categoryLabel(wish.category)}</Text>
                   <View className="wishrow__dot" />
                   <Text>{wish.timeLabel}</Text>
-                  <View className="wishrow__dot" />
-                  <Text>{campusText(wish.campus)}</Text>
+                  {/* 校区契约里可为 null：连分隔点一起不渲染，避免留下一个孤零零的「·」 */}
+                  {wish.campus ? (
+                    <>
+                      <View className="wishrow__dot" />
+                      <Text>{campusText(wish.campus)}</Text>
+                    </>
+                  ) : null}
                 </View>
               </View>
               <View className="wishrow__right">

@@ -5,22 +5,19 @@
  *   漂浮导航（返回/分享/更多）→ 图集轮播（378pt，右下圆点）→ 价格区 → 描述段
  *   → 卖家卡 → 留言区（默认 2 条，可展开）→ 同校相似闲置（两列瀑布流）→ 底部操作栏
  *
- * 数据全部走 `@/mock/api`；尺寸 = 设计稿 pt × 2（见 apps/miniapp/DESIGN.md）。
+ * 数据走 `@/features/fetchers`（先试真实接口，不可用时内部回退 mock）；尺寸 = 设计稿 pt × 2
+ * （见 apps/miniapp/DESIGN.md）。
  */
 import { Image, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 
+import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
 import ProductCard from '@/components/product-card'
-import {
-  conditionLabel,
-  fetchListingDetail,
-  formatAmount,
-  type ListingDetailView,
-  type MockListing,
-} from '@/mock/api'
+import { loadListingDetail } from '@/features/fetchers'
+import { conditionLabel, formatAmount, type ListingDetailView, type MockListing } from '@/mock/api'
 import './index.scss'
 
 /** 拿不到 id 时的回退商品 */
@@ -84,8 +81,10 @@ export default function ListingDetail() {
   const [commentsOpen, setCommentsOpen] = useState(false)
 
   useLoad(() => {
-    void fetchListingDetail(id).then((result) => {
-      setData(result)
+    // 契约 404（商品确实不存在）时 `view` 为 null 且**不退 mock** —— 页面据此走空态，
+    // 一条 mock 数据顶上去比空态更误导（见 features/fetchers.ts 的注释）
+    void loadListingDetail(id).then(({ view }) => {
+      setData(view)
       setLoading(false)
     })
   })
@@ -117,13 +116,21 @@ export default function ListingDetail() {
         }
       />
 
-      {loading || !listing || !data ? (
+      {loading || !data ? (
         <View className="detail__skeleton">
           <View className="detail__sk-gallery" />
           <View className="detail__sk-line detail__sk-line--lg" />
           <View className="detail__sk-line" />
           <View className="detail__sk-line detail__sk-line--sm" />
           <View className="detail__sk-block" />
+        </View>
+      ) : !listing ? (
+        /* 商品不存在 / 已下架：不留无限骨架屏，也不拿 mock 商品顶替 */
+        <View className="detail__emptypad">
+          <EmptyState
+            title="商品不存在或已下架"
+            text="这件闲置可能已被卖家删除或下架了，去看看别的吧"
+          />
         </View>
       ) : (
         <View className="detail__sections">
@@ -180,14 +187,19 @@ export default function ListingDetail() {
             <View className="detail__stats">
               <Text className="detail__posted">{postedLabel(listing.createdHoursAgo)}</Text>
               <View className="detail__metrics">
-                <Text className="detail__metric">
-                  <Text className="detail__metric-num">{listing.views}</Text>
-                  <Text> 浏览</Text>
-                </Text>
-                <Text className="detail__metric">
-                  <Text className="detail__metric-num">{listing.wants}</Text>
-                  <Text> 想要</Text>
-                </Text>
+                {/* 浏览量 / 想要数都不在契约里：真实数据下为 null，该指标整块不画，不显示 0 */}
+                {listing.views === null ? null : (
+                  <Text className="detail__metric">
+                    <Text className="detail__metric-num">{listing.views}</Text>
+                    <Text> 浏览</Text>
+                  </Text>
+                )}
+                {listing.wants === null ? null : (
+                  <Text className="detail__metric">
+                    <Text className="detail__metric-num">{listing.wants}</Text>
+                    <Text> 想要</Text>
+                  </Text>
+                )}
               </View>
             </View>
           </View>
@@ -211,13 +223,28 @@ export default function ListingDetail() {
                   {data.seller.authStatus === 'VERIFIED' ? (
                     <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
                   ) : null}
-                  <Text className="detail__sloc">{`${data.seller.campus}校区`}</Text>
+                  {/* 校区契约里可为 null：缺了就不渲染这一格，不拼「null校区」 */}
+                  {data.seller.campus ? (
+                    <Text className="detail__sloc">{`${data.seller.campus}校区`}</Text>
+                  ) : null}
                 </View>
-                <View className="detail__ssub">
-                  <Text>{`卖出 ${data.seller.soldCount} 件`}</Text>
-                  <Text>·</Text>
-                  <Text>{`好评率 ${data.seller.goodRate}%`}</Text>
-                </View>
+                {/*
+                  卖出件数与好评率契约里没有（见 mock/types.ts 的 MockUser 注释）。
+                  真实数据下两者都是 null，此时整行不渲染 —— 不编「卖出 0 件 · 好评率 0%」。
+                */}
+                {data.seller.soldCount !== null || data.seller.goodRate !== null ? (
+                  <View className="detail__ssub">
+                    {data.seller.soldCount !== null ? (
+                      <Text>{`卖出 ${data.seller.soldCount} 件`}</Text>
+                    ) : null}
+                    {data.seller.soldCount !== null && data.seller.goodRate !== null ? (
+                      <Text>·</Text>
+                    ) : null}
+                    {data.seller.goodRate !== null ? (
+                      <Text>{`好评率 ${data.seller.goodRate}%`}</Text>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
               <View className="detail__go" onClick={() => toast('TA 的主页待接入')}>
                 <Text>进TA主页</Text>

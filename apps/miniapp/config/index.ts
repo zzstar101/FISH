@@ -17,6 +17,23 @@ export default defineConfig<'webpack5'>(async (merge) => {
     alias: {
       '@': resolve(__dirname, '..', 'src'),
     },
+    /**
+     * 构建期注入 API 绝对地址。
+     *
+     * 小程序没有 Vite 那样的同源代理，请求必须写绝对地址（`apps/web` 靠
+     * `vite.config.ts` 的 `/api` 代理，小程序没有这一层）。所以后端域名只能在构建期
+     * 由环境变量给进来：`TARO_APP_API_BASE=https://api.example.com bun run build:miniapp`。
+     *
+     * 未设置时注入空串，`src/lib/api-base.ts` 据此回落到本机 `http://localhost:3000`
+     * —— 保持「不传也能在开发者工具里跑」的现状。
+     *
+     * 注：`defineConstants` 确实在 `@tarojs/service` 的白名单里
+     * （`Config.js#getConfigWithNamed` 的 Object.assign 里列了它），写在顶层有效；
+     * 与 `compile` 不同（那个必须写在 `mini` 层，见 README 第 1 节）。
+     */
+    defineConstants: {
+      __API_BASE__: JSON.stringify(process.env.TARO_APP_API_BASE ?? ''),
+    },
     framework: 'react',
     // 本地开发的依赖预编译（esbuild）会把 workspace 里以 TS 源码形式发布的包当成外部依赖处理，
     // 这里直接关闭，统一交给 webpack + babel-loader 处理，行为与生产构建保持一致。

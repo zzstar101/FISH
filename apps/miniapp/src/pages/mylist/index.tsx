@@ -248,15 +248,22 @@ export default function MyList() {
                     </View>
 
                     <View className="ml__rstats">
-                      <Text className="ml__rstat num">{`浏览 ${item.listing.views}`}</Text>
-                      <View className="ml__dot" />
-                      {/* 「N 人想要」是 C5 的入口，这行本身就是唯一的跳转点 */}
-                      <Text
-                        className="ml__rstat ml__rstat--want num"
-                        onClick={() => openWatchers(item)}
-                      >
-                        {`想要 ${item.wants}`}
-                      </Text>
+                      {/* 契约没有浏览/想要计数：真实数据下为 null，各自整块不画，不留孤立的点 */}
+                      {item.listing.views === null ? null : (
+                        <Text className="ml__rstat num">{`浏览 ${item.listing.views}`}</Text>
+                      )}
+                      {item.listing.views === null || item.wants === null ? null : (
+                        <View className="ml__dot" />
+                      )}
+                      {/* 「N 人想要」是 C5 的入口，这行本身就是唯一的跳转点；没有计数就没有这个入口 */}
+                      {item.wants === null ? null : (
+                        <Text
+                          className="ml__rstat ml__rstat--want num"
+                          onClick={() => openWatchers(item)}
+                        >
+                          {`想要 ${item.wants}`}
+                        </Text>
+                      )}
                     </View>
                   </View>
                 </View>
