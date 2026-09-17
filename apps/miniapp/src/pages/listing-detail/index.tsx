@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 
 import EmptyState from '@/components/empty-state'
+import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import ProductCard from '@/components/product-card'
 import { loadListingDetail } from '@/features/fetchers'
@@ -77,17 +78,25 @@ export default function ListingDetail() {
 
   const [data, setData] = useState<ListingDetailView | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 真实接口失败且没有回退 mock（生产口径）：走错误态，**不能**停在骨架屏上 */
+  const [failed, setFailed] = useState(false)
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
   const [commentsOpen, setCommentsOpen] = useState(false)
 
-  useLoad(() => {
-    // 契约 404（商品确实不存在）时 `view` 为 null 且**不退 mock** —— 页面据此走空态，
-    // 一条 mock 数据顶上去比空态更误导（见 features/fetchers.ts 的注释）
-    void loadListingDetail(id).then((view) => {
-      setData(view)
+  const load = () => {
+    setLoading(true)
+    // 三态分明：`ok` 渲染详情、`notFound` 走空态（商品真不存在）、
+    // `failed` 走错误态 —— 生产口径不退回 mock，拿演示商品顶上比空态更误导
+    void loadListingDetail(id).then((result) => {
+      setData(result.status === 'ok' ? result.view : null)
+      setFailed(result.status === 'failed')
       setLoading(false)
     })
+  }
+
+  useLoad(() => {
+    load()
   })
 
   const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
@@ -117,7 +126,16 @@ export default function ListingDetail() {
         }
       />
 
-      {loading || !data ? (
+      {failed ? (
+        /* 真接口失败：明确错误态 + 重试。不能落到下面的骨架屏分支（`!data` 会一直为真 → 永久骨架屏） */
+        <View className="detail__emptypad">
+          <LoadError
+            title="加载失败"
+            text="没能取到这件商品。检查网络或后端地址后重试"
+            onRetry={load}
+          />
+        </View>
+      ) : loading || !data ? (
         <View className="detail__skeleton">
           <View className="detail__sk-gallery" />
           <View className="detail__sk-line detail__sk-line--lg" />

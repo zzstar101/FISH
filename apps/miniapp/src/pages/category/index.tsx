@@ -2,6 +2,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import LoadError from '@/components/load-error'
 import { loadCategoryListings } from '@/features/fetchers'
 import {
   CATEGORY_ORDER,
@@ -75,6 +76,8 @@ export default function Category() {
    */
   const [fromApi, setFromApi] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 真实接口失败且没有回退 mock（生产口径）：显示错误态而不是空态 */
+  const [failed, setFailed] = useState(false)
   /**
    * 请求序号：连点分类时只认**最后一次**发出的请求结果。
    *
@@ -117,11 +120,16 @@ export default function Category() {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
     // 「真实接口优先、失败退 mock」由 fetchers 统一负责；排序标签原样交过去由它映射成契约排序
-    const { items: list, fromApi: real } = await loadCategoryListings(next, sortLabel)
+    const {
+      items: list,
+      fromApi: real,
+      failed: nextFailed,
+    } = await loadCategoryListings(next, sortLabel)
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
     if (seq !== reqSeq.current) return
     setItems(list)
     setFromApi(real)
+    setFailed(nextFailed)
     // 二级筛选只在有二级信息时才有默认值：mock 沿用「第一个胶囊」的既有观感，
     // 真实数据下必须清空，否则拿 fixture 的胶囊值去筛空串会筛掉全部商品。
     setSub(real ? '' : ((SUB_CATEGORIES[next] ?? [])[0] ?? ''))
@@ -234,8 +242,9 @@ export default function Category() {
           {categoryTitle(category)}
           {/* 件数只在拿到结果后显示：否则首屏会先闪一个 `0 件`，
               切分类时还会显示**上一个分类**的件数（items 要等 await 才换）。
-              真实数据下也没有全站分类统计端点，所以只报本次请求拿到的条数。 */}
-          {fromApi === null ? null : (
+              真实数据下也没有全站分类统计端点，所以只报本次请求拿到的条数。
+              失败时同样不显示 —— 「加载失败」不该被读成「这里没有货」。 */}
+          {fromApi === null || failed ? null : (
             <Text className="cat__cattitle-num num">{`${items.length} 件`}</Text>
           )}
         </Text>
@@ -296,12 +305,14 @@ export default function Category() {
                 <Text>{key}</Text>
               </View>
             ))}
-            {/* 计数与栅格同步：加载途中显示上一个分类的件数会误导 */}
-            {loading ? null : <Text className="cat__rnote num">{`${total} 件`}</Text>}
+            {/* 计数与栅格同步：加载途中显示上一个分类的件数会误导，失败时也不能显示「0 件」 */}
+            {loading || failed ? null : <Text className="cat__rnote num">{`${total} 件`}</Text>}
           </View>
 
           <ScrollView className="cat__scroll" scrollY>
-            {loading ? (
+            {failed ? (
+              <LoadError onRetry={() => void load(category, sort)} />
+            ) : loading ? (
               <View className="cat__grid">
                 {[0, 1, 2, 3].map((i) => (
                   <View key={`sk-${i}`} className="cat__skel">

@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
+import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadHomeFeed } from '@/features/fetchers'
@@ -37,13 +38,16 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 export default function Home() {
   const [items, setItems] = useState<MockListing[]>([])
   const [loading, setLoading] = useState(true)
+  /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
+  const [failed, setFailed] = useState(false)
 
   const load = async () => {
     setLoading(true)
-    // 「真实接口优先、失败退 mock」由 fetchers 统一负责，页面不自己 try/catch。
+    // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // 只取「推荐」= 全部：其余分类在这里是**跳转**到分类页（见 onCategoryTap），不在本页停留。
-    const list = await loadHomeFeed('ALL')
+    const { items: list, failed: nextFailed } = await loadHomeFeed('ALL')
     setItems(list)
+    setFailed(nextFailed)
     setLoading(false)
   }
 
@@ -135,7 +139,9 @@ export default function Home() {
       </View>
 
       <View className="home__grid">
-        {items.length === 0 && !loading ? (
+        {failed ? (
+          <LoadError onRetry={() => void load()} />
+        ) : items.length === 0 && !loading ? (
           <View className="home__empty">
             <Text className="home__empty-title">这个分类还没有闲置</Text>
             <Text className="home__empty-text">换个分类看看，或到许愿墙发一条心愿</Text>
