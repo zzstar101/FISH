@@ -225,6 +225,25 @@ describe('listFeed', () => {
     await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID, status: 'OFFLINE' }))
     expect(seen[0]?.status).toBe('OFFLINE')
     expect(seen[0]?.sellerId).toBe(SELLER_ID)
+    // F4：本人查询自己的商品时，显式包含未通过审核的（REVIEW / BLOCKED），供前端展示"审核中"等状态。
+    expect(seen[0]?.includeUnapproved).toBe(true)
+  })
+
+  test('does not request unapproved listings for the public feed', async () => {
+    const seen: FeedCriteria[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async (criteria) => {
+          seen.push(criteria)
+          return []
+        },
+      }),
+    })
+
+    await service.listFeed(null, feedQuery())
+    // 公开 Feed 不需要未审核商品：includeUnapproved 为 false（store 视为未开启，照样加 APPROVED 过滤）。
+    expect(seen[0]?.includeUnapproved).toBe(false)
   })
 
   test('rejects a cursor that does not match the requested sort', async () => {

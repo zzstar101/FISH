@@ -250,6 +250,9 @@ export function createListingService(deps: {
         priceMinCents: query.priceMinCents,
         priceMaxCents: query.priceMaxCents,
         sellerId: query.sellerId,
+        // 本人查询自己的商品时包含未通过审核的（REVIEW / BLOCKED），在前端展示"审核中"等状态；
+        // 公开 Feed、匹配、他人详情继续严格过滤。此处 authorize 已达：query.sellerId !== viewerId 抛 403。
+        includeUnapproved: query.sellerId !== undefined && query.sellerId === viewerId,
       })
 
       const hasMore = rows.length > query.limit
