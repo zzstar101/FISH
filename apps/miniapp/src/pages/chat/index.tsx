@@ -3,6 +3,7 @@ import Taro, { useLoad } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import TopBar from '@/components/top-bar'
+import { useAuthGuard } from '@/features/auth/guard'
 import {
   type ConversationFilter,
   chatSummary,
@@ -74,6 +75,8 @@ function previewText(conversation: MockConversation): string {
 }
 
 export default function Chat() {
+  // 消息列表需要登录（GET /conversations）；Tab 页只能用 navigateTo 跳登录页
+  const authStatus = useAuthGuard({ tab: true })
   const [items, setItems] = useState<MockConversation[]>([])
   const [filter, setFilter] = useState<ConversationFilter>('all')
   /** 本地已读：「全部已读」后把这些会话的未读角标清零（不写回 mock） */
@@ -112,6 +115,33 @@ export default function Chat() {
 
   const openConversation = (id: string) => {
     void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
+  }
+
+  /**
+   * 未登录 / 登录态还没恢复完之前**不渲染列表**。
+   *
+   * 守卫只负责跳转，跳转可能失败（页面栈、Tab 页限制），而且数据本身来自 mock ——
+   * 不拦渲染的话，未登录用户会看到一串演示会话（`docs` 里的「未登录看到演示数据」）。
+   */
+  if (authStatus !== 'authed') {
+    // `unknown`（冷启动的 `GET /me` 还没回来）不能说「登录后查看消息」——
+    // 已登录用户会先看到一句与自己状态相反的文案（见 `guard.ts` 文件头第 1 条）
+    return (
+      <View className="chat">
+        <View className="chat__bg" />
+        <TopBar variant="plain" spacer title="消" titleEm="息" />
+        {authStatus === 'unknown' ? (
+          <View className="chat__empty">
+            <Text className="chat__empty-title">正在恢复登录状态…</Text>
+          </View>
+        ) : (
+          <View className="chat__empty">
+            <Text className="chat__empty-title">登录后查看消息</Text>
+            <Text className="chat__empty-text">和同学聊一聊、确认面交都在这里</Text>
+          </View>
+        )}
+      </View>
+    )
   }
 
   return (

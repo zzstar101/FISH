@@ -13,7 +13,13 @@ import './zod-jitless'
 import { ApiErrorSchema } from '@fish/contracts/system/error'
 import Taro from '@tarojs/taro'
 import { API_BASE } from './api-base'
-import { clearSession, pickSessionCookie, saveSession, sessionCookieHeader } from './session'
+import {
+  clearSession,
+  pickSessionCookie,
+  saveSession,
+  sessionCookieHeader,
+  sessionEpoch,
+} from './session'
 
 /**
  * 契约里的错误信封（`{ error: { code, message } }`）。所有非 2xx 响应都解析成它，
@@ -64,6 +70,15 @@ type RequestOptions = {
   body?: unknown
 }
 
+/**
+ * 单次请求超时（毫秒）。
+ *
+ * 必须显式设：`Taro.request` 默认不超时，`GET /me` 一旦悬挂，冷启动的登录态就会
+ * 永远停在 `unknown` —— 受限页一直显示「正在恢复登录状态…」，既不跳转也不报错。
+ * 15s 足够覆盖弱网首包，又不至于让用户干等。
+ */
+const REQUEST_TIMEOUT_MS = 15_000
+
 /** 把 query 拼成 `?a=1&b=2`，空对象返回空串 */
 function buildQuery(query: RequestOptions['query']): string {
   if (!query) return ''
@@ -86,16 +101,21 @@ export async function apiRequest(path: string, options: RequestOptions = {}): Pr
   const cookie = sessionCookieHeader()
   if (cookie) header.Cookie = cookie
 
+  // 记下发请求前的会话代次：回来时若已变化，说明用户在这次请求飞行途中退出了登录
+  const epoch = sessionEpoch()
+
   const response = await Taro.request({
     url: `${API_BASE}${path}${buildQuery(options.query)}`,
     method: options.method ?? 'GET',
     header,
     data: options.body === undefined ? undefined : options.body,
+    timeout: REQUEST_TIMEOUT_MS,
   })
 
-  // 登录成功会下发新的会话 cookie，这里接住并持久化
+  // 登录成功会下发新的会话 cookie，这里接住并持久化。
+  // 代次已变（用户已退出）时**丢弃**：迟到的响应不能把已清除的会话写回来。
   const issued = pickSessionCookie(response.cookies)
-  if (issued) saveSession(issued)
+  if (issued && epoch === sessionEpoch()) saveSession(issued)
 
   const { statusCode } = response
 
@@ -107,8 +127,16 @@ export async function apiRequest(path: string, options: RequestOptions = {}): Pr
   if (statusCode < 200 || statusCode >= 300) {
     const parsed = ApiErrorSchema.safeParse(payload)
     if (parsed.success) {
-      // 会话失效就地清掉，避免后续请求一直带着一个已废弃的 cookie
-      if (statusCode === 401 && parsed.data.error.code === 'UNAUTHENTICATED') clearSession()
+      // 会话失效就地清掉，避免后续请求一直带着一个已废弃的 cookie。
+      // 但**只清「本次请求用的那一份」**：这个 401 可能是一次迟到的响应，
+      // 而用户在这期间已经重新登录 —— 那时清掉的就是刚建立的新会话。
+      if (
+        statusCode === 401 &&
+        parsed.data.error.code === 'UNAUTHENTICATED' &&
+        sessionCookieHeader() === cookie
+      ) {
+        clearSession()
+      }
       throw new ApiError(parsed.data.error.code, statusCode, parsed.data.error.message)
     }
     throw new ApiError('INTERNAL_ERROR', statusCode, '请求失败，请稍后重试')

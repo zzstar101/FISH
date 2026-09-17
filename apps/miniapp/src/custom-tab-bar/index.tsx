@@ -18,6 +18,7 @@ import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import { useAuth } from '@/features/auth/store'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
 
@@ -102,12 +103,19 @@ function currentTabKey(): TabKey {
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
   const [dot, setDot] = useState(false)
+  const { status: authStatus } = useAuth()
 
   useEffect(() => {
+    // 未登录不亮红点：未读数目前只能从 mock 的演示会话求得，
+    // 匿名时亮起等于在「我的」登录引导卡上展示别人的未读。
+    if (authStatus !== 'authed') {
+      setDot(false)
+      return
+    }
     // 未读消息 + 未读通知的合计，决定消息 tab 的小红点
     const unreadChat = conversations().reduce((sum, item) => sum + item.unreadCount, 0)
     setDot(unreadChat + unreadNotificationCount() > 0)
-  }, [])
+  }, [authStatus])
 
   // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
   useEffect(() => {
