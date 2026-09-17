@@ -16,7 +16,6 @@ import { Route as MessageRouteImport } from './routes/message'
 import { Route as MylistRouteImport } from './routes/mylist'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as OrdersRouteImport } from './routes/orders'
-import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as ScanRouteImport } from './routes/scan'
@@ -26,6 +25,7 @@ import { Route as CategoryIndexRouteImport } from './routes/category.index'
 import { Route as CategoryCategoryIdRouteImport } from './routes/category.$categoryId'
 import { Route as ChatConversationIdRouteImport } from './routes/chat.$conversationId'
 import { Route as DetailListingIdRouteImport } from './routes/detail.$listingId'
+import { Route as ProfileIndexRouteImport } from './routes/profile.index'
 import { Route as ProfileVerificationRouteImport } from './routes/profile.verification'
 import { Route as UserUserIdRouteImport } from './routes/user.$userId'
 import { Route as WatchersListingIdRouteImport } from './routes/watchers.$listingId'
@@ -63,11 +63,6 @@ const NotificationsRoute = NotificationsRouteImport.update({
 const OrdersRoute = OrdersRouteImport.update({
   id: '/orders',
   path: '/orders',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProfileRoute = ProfileRouteImport.update({
-  id: '/profile',
-  path: '/profile',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PublishRoute = PublishRouteImport.update({
@@ -115,10 +110,15 @@ const DetailListingIdRoute = DetailListingIdRouteImport.update({
   path: '/detail/$listingId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProfileIndexRoute = ProfileIndexRouteImport.update({
+  id: '/profile/',
+  path: '/profile/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProfileVerificationRoute = ProfileVerificationRouteImport.update({
-  id: '/verification',
-  path: '/verification',
-  getParentRoute: () => ProfileRoute,
+  id: '/profile/verification',
+  path: '/profile/verification',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const UserUserIdRoute = UserUserIdRouteImport.update({
   id: '/user/$userId',
@@ -139,7 +139,6 @@ export interface FileRoutesByFullPath {
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
-  '/profile': typeof ProfileRouteWithChildren
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/scan': typeof ScanRoute
@@ -152,6 +151,7 @@ export interface FileRoutesByFullPath {
   '/user/$userId': typeof UserUserIdRoute
   '/watchers/$listingId': typeof WatchersListingIdRoute
   '/category/': typeof CategoryIndexRoute
+  '/profile/': typeof ProfileIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -161,7 +161,6 @@ export interface FileRoutesByTo {
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
-  '/profile': typeof ProfileRouteWithChildren
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/scan': typeof ScanRoute
@@ -174,6 +173,7 @@ export interface FileRoutesByTo {
   '/user/$userId': typeof UserUserIdRoute
   '/watchers/$listingId': typeof WatchersListingIdRoute
   '/category': typeof CategoryIndexRoute
+  '/profile': typeof ProfileIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -184,7 +184,6 @@ export interface FileRoutesById {
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
-  '/profile': typeof ProfileRouteWithChildren
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/scan': typeof ScanRoute
@@ -197,6 +196,7 @@ export interface FileRoutesById {
   '/user/$userId': typeof UserUserIdRoute
   '/watchers/$listingId': typeof WatchersListingIdRoute
   '/category/': typeof CategoryIndexRoute
+  '/profile/': typeof ProfileIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -208,7 +208,6 @@ export interface FileRouteTypes {
     | '/mylist'
     | '/notifications'
     | '/orders'
-    | '/profile'
     | '/publish'
     | '/register'
     | '/scan'
@@ -221,6 +220,7 @@ export interface FileRouteTypes {
     | '/user/$userId'
     | '/watchers/$listingId'
     | '/category/'
+    | '/profile/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -230,7 +230,6 @@ export interface FileRouteTypes {
     | '/mylist'
     | '/notifications'
     | '/orders'
-    | '/profile'
     | '/publish'
     | '/register'
     | '/scan'
@@ -243,6 +242,7 @@ export interface FileRouteTypes {
     | '/user/$userId'
     | '/watchers/$listingId'
     | '/category'
+    | '/profile'
   id:
     | '__root__'
     | '/'
@@ -252,7 +252,6 @@ export interface FileRouteTypes {
     | '/mylist'
     | '/notifications'
     | '/orders'
-    | '/profile'
     | '/publish'
     | '/register'
     | '/scan'
@@ -265,6 +264,7 @@ export interface FileRouteTypes {
     | '/user/$userId'
     | '/watchers/$listingId'
     | '/category/'
+    | '/profile/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -275,7 +275,6 @@ export interface RootRouteChildren {
   MylistRoute: typeof MylistRoute
   NotificationsRoute: typeof NotificationsRoute
   OrdersRoute: typeof OrdersRoute
-  ProfileRoute: typeof ProfileRouteWithChildren
   PublishRoute: typeof PublishRoute
   RegisterRoute: typeof RegisterRoute
   ScanRoute: typeof ScanRoute
@@ -284,9 +283,11 @@ export interface RootRouteChildren {
   CategoryCategoryIdRoute: typeof CategoryCategoryIdRoute
   ChatConversationIdRoute: typeof ChatConversationIdRoute
   DetailListingIdRoute: typeof DetailListingIdRoute
+  ProfileVerificationRoute: typeof ProfileVerificationRoute
   UserUserIdRoute: typeof UserUserIdRoute
   WatchersListingIdRoute: typeof WatchersListingIdRoute
   CategoryIndexRoute: typeof CategoryIndexRoute
+  ProfileIndexRoute: typeof ProfileIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -338,13 +339,6 @@ declare module '@tanstack/react-router' {
       path: '/orders'
       fullPath: '/orders'
       preLoaderRoute: typeof OrdersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/profile': {
-      id: '/profile'
-      path: '/profile'
-      fullPath: '/profile'
-      preLoaderRoute: typeof ProfileRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/publish': {
@@ -410,12 +404,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DetailListingIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/profile/': {
+      id: '/profile/'
+      path: '/profile'
+      fullPath: '/profile/'
+      preLoaderRoute: typeof ProfileIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/profile/verification': {
       id: '/profile/verification'
-      path: '/verification'
+      path: '/profile/verification'
       fullPath: '/profile/verification'
       preLoaderRoute: typeof ProfileVerificationRouteImport
-      parentRoute: typeof ProfileRoute
+      parentRoute: typeof rootRouteImport
     }
     '/user/$userId': {
       id: '/user/$userId'
@@ -434,17 +435,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface ProfileRouteChildren {
-  ProfileVerificationRoute: typeof ProfileVerificationRoute
-}
-
-const ProfileRouteChildren: ProfileRouteChildren = {
-  ProfileVerificationRoute: ProfileVerificationRoute,
-}
-
-const ProfileRouteWithChildren =
-  ProfileRoute._addFileChildren(ProfileRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
@@ -453,7 +443,6 @@ const rootRouteChildren: RootRouteChildren = {
   MylistRoute: MylistRoute,
   NotificationsRoute: NotificationsRoute,
   OrdersRoute: OrdersRoute,
-  ProfileRoute: ProfileRouteWithChildren,
   PublishRoute: PublishRoute,
   RegisterRoute: RegisterRoute,
   ScanRoute: ScanRoute,
@@ -462,9 +451,11 @@ const rootRouteChildren: RootRouteChildren = {
   CategoryCategoryIdRoute: CategoryCategoryIdRoute,
   ChatConversationIdRoute: ChatConversationIdRoute,
   DetailListingIdRoute: DetailListingIdRoute,
+  ProfileVerificationRoute: ProfileVerificationRoute,
   UserUserIdRoute: UserUserIdRoute,
   WatchersListingIdRoute: WatchersListingIdRoute,
   CategoryIndexRoute: CategoryIndexRoute,
+  ProfileIndexRoute: ProfileIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

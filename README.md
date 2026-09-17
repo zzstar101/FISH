@@ -116,7 +116,12 @@ bun run dev:worker   # Worker（常驻，不监听端口）
 bun run dev:web      # Web    → http://localhost:5173
 ```
 
-打开 <http://localhost:5173> 即可。冒烟自检：
+打开 <http://localhost:5173> 即可。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
+本地校园认证邮件（含验证码）写入 `apps/api/.dev/mail-outbox.jsonl`，不会发送真实邮件。
+已有 `.env` 也需补上该变量；生产必须使用 `MAIL_TRANSPORT=resend` 并配置 Resend，
+见 [部署手册 §4](docs/deployment.md#4-代码与环境变量)。
+
+冒烟自检：
 
 ```bash
 bun run ws:smoke     # WebSocket 连通性，期望 [ws-smoke] ok
@@ -129,9 +134,9 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 | 学号 | 昵称 | 校区 | 认证状态 |
 | --- | --- | --- | --- |
-| `202101000001` | 阿岚 | 肇庆 | 已认证 |
-| `202101000002` | 小北 | 肇庆 | 未认证（验证「未认证」展示） |
-| `202101000003` | 橙子 | 广州 | 已认证 |
+| `202101000001` | 阿岚 | 肇庆 | 未认证 |
+| `202101000002` | 小北 | 肇庆 | 未认证 |
+| `202101000003` | 橙子 | 广州 | 未认证 |
 
 关于 seed 数据，有两点要提前知道：
 

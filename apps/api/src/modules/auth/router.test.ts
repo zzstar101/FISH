@@ -8,8 +8,11 @@ import { loadServerEnv } from '@fish/shared/env'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { createDevEmailVerificationProvider } from './email-providers'
+import { createAuthModule } from './router'
 import { createAuthService } from './service'
 import { createSessions } from './session'
+import { createVerificationService } from './verification-service'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -843,14 +846,36 @@ describe('Resend transport', () => {
     }
   })
 
-  test('4xx 配置错误：不重试直接抛错，错误信息含状态码与 Resend message', async () => {
+  test('网络响应丢失后用相同 Idempotency-Key 重试一次', async () => {
+    const keys: Array<string | null> = []
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      keys.push(new Headers(init?.headers).get('Idempotency-Key'))
+      if (keys.length === 1) throw new Error('untrusted network detail')
+      return new Response('{"id":"accepted"}', { status: 200 })
+    }) as typeof fetch
+    try {
+      const { createResendTransport } = await import('./email-providers')
+      await createResendTransport({ apiKey: 're_test', from: 'a <b@c>' }).send({
+        id: 'network-row',
+        to: 'x@gzasc.edu.cn',
+        subject: 's',
+        html: 'h',
+        text: 't',
+      })
+      expect(keys).toEqual(['campus-verification/network-row', 'campus-verification/network-row'])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('4xx 配置错误：不重试，错误响应文本不进入日志', async () => {
     let calls = 0
     globalThis.fetch = (async (_url?: unknown, _init?: unknown) => {
       calls += 1
       return new Response(
         JSON.stringify({
           statusCode: 422,
-          name: 'validation_error',
+          name: 'user@gzasc.edu.cn 123456',
           message: 'domain not verified',
         }),
         { status: 422 },
@@ -867,10 +892,7 @@ describe('Resend transport', () => {
         thrown = error as Error
       }
       expect(calls).toBe(1)
-      // P2-5：provider message（可能回显敏感字段）不进错误信息，只有状态码 + name
-      expect(thrown?.message).toContain('422')
-      expect(thrown?.message).toContain('validation_error')
-      expect(thrown?.message).not.toContain('domain not verified')
+      expect(thrown?.message).toBe('Resend 发送失败 (422)')
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -882,28 +904,50 @@ describe('PENDING 限频预留（评审二轮 P1-1）', () => {
     const cookie = await verificationCookie()
     const email = 'pending-reserve68@gzasc.edu.cn'
 
-    // 第一封发出：SENT
-    await app.request('/auth/verification/code', postWith(cookie, { email }))
-    // 模拟第二封「正在投递」：新 PENDING 行（transport 尚未返回）
-    const owner = (await sessionRows('202101000301'))[0]
-    if (!owner) throw new Error('未找到会话行')
-    await scratch.insert(campusEmailVerifications).values({
-      userId: owner.userId,
-      email,
-      codeHash: 'pending-hash',
-      expiresAt: new Date(Date.now() + 300_000),
-      delivery: 'PENDING',
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const provider = createDevEmailVerificationProvider(OUTBOX_PATH)
+    const verification = createVerificationService({
+      db: scratch,
+      provider: {
+        ...provider,
+        transport: {
+          async send() {
+            entered.resolve()
+            await release.promise
+          },
+        },
+      },
     })
+    const { router } = createAuthModule({ db: scratch, verification, secureCookie: false })
+    const first = router.request('/verification/code', postWith(cookie, { email }))
+    try {
+      await entered.promise
+      const rows = await scratch
+        .select({ delivery: campusEmailVerifications.delivery })
+        .from(campusEmailVerifications)
+        .where(eq(campusEmailVerifications.email, email))
+      expect(rows).toEqual([{ delivery: 'PENDING' }])
 
-    // 此时真实并发请求：PENDING 占额度 → 必须 429（不能因为不是 SENT 就放行）
-    const res = await app.request('/auth/verification/code', postWith(cookie, { email }))
-    expect(res.status).toBe(429)
-    expect(await res.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      // 分别只命中 user/email 维度；不能靠已有 SENT 行偶然通过此回归。
+      const otherCookie = await verificationCookie()
+      for (const [session, target] of [
+        [cookie, 'pending-other68@gzasc.edu.cn'],
+        [otherCookie, email],
+      ] as const) {
+        const res = await router.request('/verification/code', postWith(session, { email: target }))
+        expect(res.status).toBe(429)
+        expect(await res.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      }
+    } finally {
+      release.resolve()
+      expect((await first).status).toBe(200)
+    }
   })
 })
 
 describe('绑定原子性（评审二轮 P2-3）', () => {
-  test('已认证用户再用另一个有效码验证：ALREADY_VERIFIED，campus_email 不被覆盖', async () => {
+  test('同用户两个不同邮箱有效码并发验证：只允许一个绑定成功', async () => {
     const cookie = await verificationCookie()
 
     // 认证前预取 A、B 两个校园邮箱的有效码（回拨时间绕过 60s 间隔，限频有专测）
@@ -922,26 +966,19 @@ describe('绑定原子性（评审二轮 P2-3）', () => {
     expect(sendB.status).toBe(200)
     const codeB = await lastCodeFor(emailB)
 
-    // 先验证 A：正常绑定
-    const first = await app.request(
-      '/auth/verification/verify',
-      postWith(cookie, { email: emailA, code: codeA }),
-    )
-    expect(first.status).toBe(200)
+    const responses = await Promise.all([
+      app.request('/auth/verification/verify', postWith(cookie, { email: emailA, code: codeA })),
+      app.request('/auth/verification/verify', postWith(cookie, { email: emailB, code: codeB })),
+    ])
+    expect(responses.map((r) => r.status).sort()).toEqual([200, 409])
+    const loser = responses.find((r) => r.status === 409)
+    expect(await loser?.json()).toMatchObject({ error: { code: 'ALREADY_VERIFIED' } })
 
-    // 再提交仍有效的 B 码：必须 ALREADY_VERIFIED（原子前置条件 + 预检查）
-    const second = await app.request(
-      '/auth/verification/verify',
-      postWith(cookie, { email: emailB, code: codeB }),
-    )
-    expect(second.status).toBe(409)
-    expect(await second.json()).toMatchObject({ error: { code: 'ALREADY_VERIFIED' } })
-
-    // DB 硬断言：绑定仍是 A，未被 B 覆盖
+    const winnerEmail = responses[0]?.status === 200 ? emailA : emailB
     const rows = await scratch
       .select({ campusEmail: users.campusEmail })
       .from(users)
-      .where(eq(users.campusEmail, emailA))
-    expect(rows).toHaveLength(1)
+      .where(eq(users.campusEmail, winnerEmail))
+    expect(rows).toEqual([{ campusEmail: winnerEmail }])
   })
 })

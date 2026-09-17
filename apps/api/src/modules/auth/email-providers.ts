@@ -20,9 +20,6 @@ export type ResendTransportConfig = {
   timeoutMs?: number
 }
 
-/** Resend 错误响应体：`{ statusCode, name, message }`。 */
-type ResendError = { statusCode?: number; name?: string; message?: string }
-
 const RESEND_ENDPOINT = 'https://api.resend.com/emails'
 
 export function createResendTransport(config: ResendTransportConfig) {
@@ -52,39 +49,33 @@ export function createResendTransport(config: ResendTransportConfig) {
 
   return {
     async send(mail: VerificationMail): Promise<void> {
-      // Idempotency-Key：mail.id 由调用方填（验证码行 id），重试期间保持不变。
-      const idempotencyKey = `campus-verification/${mail.id ?? 'unknown'}`
+      // 每次逻辑发送复用同一个 key，包括响应丢失后的网络重试。
+      const idempotencyKey = `campus-verification/${mail.id ?? crypto.randomUUID()}`
 
-      // 单次退避重试：429（Resend 侧限速，尊重 Retry-After）或 5xx（其服务故障）；
-      // 401/403/422（配置或参数错）重试无意义，直接失败。
-      let response: Response
-      try {
-        response = await postOnce(mail, idempotencyKey)
-        if (response.status === 429 || response.status >= 500) {
-          const retryAfter = Number(response.headers.get('Retry-After'))
-          await Bun.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000)
-          response = await postOnce(mail, idempotencyKey)
-        }
-      } catch {
-        // 网络错误/超时可能服务端已受理：仍上抛置 FAILED（额度已由 PENDING 预留，
-        // 用户重试是新的一行），但错误信息不回显 provider 原文（评审二轮 P2-5）。
-        throw new Error('Resend 请求失败（网络/超时）')
-      }
-
-      // Resend 2xx = 已受理。非 2xx 上抛 → 发码路由 500，该行 delivery 置 FAILED。
-      // **响应体只读一次**，再尝试 JSON.parse（评审二轮 P3）。
-      if (!response.ok) {
-        const raw = await response.text().catch(() => '')
-        let body: ResendError | null = null
+      let response: Response | undefined
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          body = JSON.parse(raw) as ResendError
+          response = await postOnce(mail, idempotencyKey)
         } catch {
-          // 非 JSON 错误体：不用原文（可能回显敏感字段），只保留 name/status。
+          if (attempt === 0) {
+            await Bun.sleep(1000)
+            continue
+          }
+          throw new Error('Resend 请求失败（网络/超时）')
         }
-        // P2-5：provider 的 message 按不可信输入处理，不进日志（describeError 会打
-        // Error.message 首行），只暴露状态码与错误类型。
-        throw new Error(`Resend 发送失败 (${response.status} ${body?.name ?? 'unknown_error'})`)
+        if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+          const retryAfter = Number(response.headers.get('Retry-After'))
+          await response.body?.cancel()
+          await Bun.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000)
+          continue
+        }
+        break
       }
+
+      if (!response) throw new Error('Resend 请求失败（网络/超时）')
+      await response.body?.cancel()
+      // 外部响应的 name/message 都是不可信文本，可能回显邮箱或验证码；日志仅保留状态码。
+      if (!response.ok) throw new Error(`Resend 发送失败 (${response.status})`)
     },
   }
 }
