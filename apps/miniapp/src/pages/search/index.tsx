@@ -217,11 +217,14 @@ export default function Search() {
             ))}
           </View>
 
-          <View className="search__meta">
-            <Text>为你找到</Text>
-            <Text className="search__meta-num num">{results.length}</Text>
-            <Text>{`件「${submitted}」相关闲置`}</Text>
-          </View>
+          {/* 结果计数不能早于结果本身：否则请求途中会先显示「为你找到 0 件」 */}
+          {loading ? null : (
+            <View className="search__meta">
+              <Text>为你找到</Text>
+              <Text className="search__meta-num num">{results.length}</Text>
+              <Text>{`件「${submitted}」相关闲置`}</Text>
+            </View>
+          )}
 
           {!loading && results.length === 0 ? (
             <EmptyState

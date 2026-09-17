@@ -1,6 +1,6 @@
 import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { loadCategoryListings } from '@/features/fetchers'
 import {
@@ -22,9 +22,18 @@ import './index.scss'
  * ⇄ 右侧二级分类横滑胶囊 + 排序 + 两列瀑布流，左右联动。
  *
  * **与契约的边界**：契约的排序只有 `newest / priceAsc / priceDesc`，
- * **没有「综合」和「按成色」**（`listings/schema.ts:237`）。设计稿画了四项，
- * 这里按设计稿保留四个胶囊，但「成色」排序在前端本地做（`condition` 有值），
- * 「综合」用想要数 + 浏览量的加权——两者都不依赖后端新字段，接真实接口时再用服务端排序替换。
+ * **没有「综合」和「按成色」**（`listings/schema.ts:237`）。设计稿画了四项，这里按设计稿
+ * 保留四个胶囊，但两者的语义都要打折，且**真实数据与 mock 回落的表现不同**：
+ *
+ * - **mock 回落**：`items` 带 `wants` / `views` / `condition`，所以「综合」按热度加权、
+ *   「成色」按 `condition` 排序，都是真的。
+ * - **真实数据**：契约既没有热度计数、成色也不是排序键，所以
+ *   `fetchers.toListingSort` 把「综合」映射成 `newest`，「成色」在前端本地按 `condition` 排
+ *   （`condition` 契约里有，这个仍然成立）。因此真实数据下**「综合」与「最新」的排序结果相同**
+ *   —— 两个胶囊一个行为。这是真实能力的边界，不假装支持。
+ *
+ * 另外「价格」只对**已取回的那一页**排序（`limit=50`）：它走的是本地排序 + `priceAsc` 请求，
+ * 商品总数超过一页时「最便宜」不等于全站最便宜。要真正全站排序需要滚动分页，不在本次范围。
  */
 
 type SortKey = '综合' | '最新' | '价格' | '成色'
@@ -53,15 +62,27 @@ export default function Category() {
   const [sort, setSort] = useState<SortKey>('综合')
   const [items, setItems] = useState<MockListing[]>([])
   /**
-   * 本页数据是「真接口来的」还是「回退到 mock 的」。
+   * 数据来源，**三态**：
+   * - `null`：还没有拿到过结果（首屏 / 切分类途中）—— 此时**不能**当作 mock，
+   *   否则真实环境下首屏与每次切分类都会先闪一批 fixture 的计数与二级胶囊，
+   *   并且标题会先显示 `0 件`、切分类时还会显示**上一个分类**的件数。
+   * - `false`：确实走的是 mock 回退，fixture 的计数与二级胶囊是真实的，照常显示。
+   * - `true`：来自真实接口，隐藏契约不支持的件。
    *
-   * 这个标记是必要的，不是可选优化：**二级分类与「N 件」统计在契约里不存在**
-   * （`ListingCardSchema` 没有二级分类字段，也没有分类计数端点），只有 mock fixture 有。
-   * 拿真实数据时若照旧渲染它们，就会出现两种错：二级胶囊按 fixture 的默认值把整页筛空、
-   * 以及「真商品 + 假计数」。所以来源要显式传下来，页面据此隐藏这些件。
+   * 为什么必须有这个三态：**二级分类与「N 件」统计在契约里不存在**
+   * （`ListingCardSchema` 无二级分类字段，也没有分类计数端点），只有 mock fixture 有。
+   * 拿真实数据时若照旧渲染它们，就会出现「二级胶囊把整页筛空」与「真商品 + 假计数」。
    */
-  const [fromApi, setFromApi] = useState(false)
+  const [fromApi, setFromApi] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
+  /**
+   * 请求序号：连点分类时只认**最后一次**发出的请求结果。
+   *
+   * 用 ref 而不是 state：它只在回调里读写、不参与渲染，用 state 反而会因为
+   * 异步更新拿到过期的值。没有它的话，先发的请求后返回就会覆盖后发的结果，
+   * 用户看到的是另一个分类的商品。
+   */
+  const reqSeq = useRef(0)
 
   /**
    * 状态栏高度。分类页的顶部条是**吸顶的实心条**（不是漂浮钮），
@@ -82,18 +103,23 @@ export default function Category() {
   }
 
   /**
-   * 二级分类胶囊**只在 mock 回退时**才出现。
+   * 二级分类胶囊**只在 mock 回退确认之后**才出现。
    *
    * 契约没有二级分类（`ListingCardSchema` 无此字段，`adapt.ts` 因此投影成空串），
    * 真实数据下这些胶囊点了会把整页筛成空 —— 这是一个「看起来能点、实际没有意义」的控件，
-   * 比不显示更糟。所以真实数据时不渲染这一行（左侧一级分类 + 排序仍然可用）。
+   * 比不显示更糟。`fromApi === false` 才说明确实拿到了 fixture 数据；
+   * `null`（还没结果）时同样不显示，避免首屏闪一批点了没用的胶囊。
    */
-  const subs = fromApi ? [] : (SUB_CATEGORIES[category] ?? [])
+  const subs = fromApi === false ? (SUB_CATEGORIES[category] ?? []) : []
 
   const load = async (next: ListingCategory, sortLabel: SortKey) => {
     setLoading(true)
+    const seq = reqSeq.current + 1
+    reqSeq.current = seq
     // 「真实接口优先、失败退 mock」由 fetchers 统一负责；排序标签原样交过去由它映射成契约排序
     const { items: list, fromApi: real } = await loadCategoryListings(next, sortLabel)
+    // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
+    if (seq !== reqSeq.current) return
     setItems(list)
     setFromApi(real)
     // 二级筛选只在有二级信息时才有默认值：mock 沿用「第一个胶囊」的既有观感，
@@ -206,9 +232,12 @@ export default function Category() {
         </View>
         <Text className="cat__cattitle">
           {categoryTitle(category)}
-          {/* 真实数据下只有「当前分类」的条目数（本次请求拿到的），没有全站分类统计端点；
-              这里用 items.length 而不是 fixture 的 categoryCount，避免真商品配假数字 */}
-          <Text className="cat__cattitle-num num">{`${items.length} 件`}</Text>
+          {/* 件数只在拿到结果后显示：否则首屏会先闪一个 `0 件`，
+              切分类时还会显示**上一个分类**的件数（items 要等 await 才换）。
+              真实数据下也没有全站分类统计端点，所以只报本次请求拿到的条数。 */}
+          {fromApi === null ? null : (
+            <Text className="cat__cattitle-num num">{`${items.length} 件`}</Text>
+          )}
         </Text>
         <View
           className="cat__icobtn"
@@ -229,27 +258,33 @@ export default function Category() {
             >
               <Text className="cat__rail-label">{categoryTitle(key)}</Text>
               {/* 每个一级分类的在售件数需要全站统计，契约没有这个端点。
-                  mock 回退时 fixture 里有，照常显示；真实数据下没有就不显示数字 —— 不编一个。 */}
-              {fromApi ? null : <Text className="cat__rail-c num">{categoryCount(key)}</Text>}
+                  只有确认是 mock 回退时才显示 fixture 的计数；真实数据与「还没结果」都不显示 —— 不编一个。 */}
+              {fromApi === false ? (
+                <Text className="cat__rail-c num">{categoryCount(key)}</Text>
+              ) : null}
             </View>
           ))}
         </ScrollView>
 
         {/* ---- 右栏：二级胶囊 + 排序 + 瀑布流 ---- */}
         <View className="cat__pane">
-          <ScrollView className="cat__subtags" scrollX enableFlex>
-            <View className="cat__subtags-inner">
-              {subs.map((item) => (
-                <View
-                  key={item}
-                  className={`cat__subtag${item === sub ? ' is-on' : ''}`}
-                  onClick={() => pickSub(item)}
-                >
-                  <Text>{item}</Text>
-                </View>
-              ))}
-            </View>
-          </ScrollView>
+          {/* 没有二级胶囊时整个容器都不渲染：否则 `.cat__subtags` 的 padding-bottom
+              会在排序行上方留一条 20px 的空白带 */}
+          {subs.length > 0 ? (
+            <ScrollView className="cat__subtags" scrollX enableFlex>
+              <View className="cat__subtags-inner">
+                {subs.map((item) => (
+                  <View
+                    key={item}
+                    className={`cat__subtag${item === sub ? ' is-on' : ''}`}
+                    onClick={() => pickSub(item)}
+                  >
+                    <Text>{item}</Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          ) : null}
 
           <View className="cat__sortrow">
             {SORTS.map((key) => (
@@ -261,7 +296,8 @@ export default function Category() {
                 <Text>{key}</Text>
               </View>
             ))}
-            <Text className="cat__rnote num">{`${total} 件`}</Text>
+            {/* 计数与栅格同步：加载途中显示上一个分类的件数会误导 */}
+            {loading ? null : <Text className="cat__rnote num">{`${total} 件`}</Text>}
           </View>
 
           <ScrollView className="cat__scroll" scrollY>
