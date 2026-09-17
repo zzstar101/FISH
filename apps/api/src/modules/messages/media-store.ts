@@ -102,6 +102,8 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
     },
 
     async list(conversationId, userId, limit) {
+      // 取会话内**最新** limit 条媒体（fix-plan F6）：长会话断线重连要能恢复最新媒体，
+      // 旧实现按 ASC 取最早 limit 条，会在 >100 条后丢掉最新消息。DESC 取最新后反转回时间正序。
       const result = await db.execute(sql`
         SELECT m.id AS message_id, m.conversation_id, m.sender_id,
                mm.id AS media_id, mm.kind::text, mm.object_key, mm.mime_type,
@@ -113,10 +115,10 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
             SELECT buyer_id FROM conversations WHERE id = m.conversation_id
             UNION ALL SELECT seller_id FROM conversations WHERE id = m.conversation_id
           )
-        ORDER BY m.created_at ASC, m.id ASC
+        ORDER BY m.created_at DESC, m.id DESC
         LIMIT ${limit}
       `)
-      return rowsOf(result).map(toRow)
+      return rowsOf(result).map(toRow).reverse()
     },
 
     async find(conversationId, mediaId, userId) {

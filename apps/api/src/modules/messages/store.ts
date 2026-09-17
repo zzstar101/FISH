@@ -85,9 +85,11 @@ export function createSqlMessageStore(db: Db): MessageStore {
       let cursorCreatedAt: string | undefined
       if (before) {
         // 游标消息必须属于本会话：跨会话的合法 uuid 也不能当作分页起点。
+        // 与主查询一致，MEDIA 消息不能作为文本分页锚点（fix-plan F8）。
         const cursorResult = await db.execute(sql`
           SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS ts
           FROM messages WHERE id = ${before}::uuid AND conversation_id = ${conversationId}::uuid
+            AND type <> 'MEDIA'
         `)
         const cursorRow = rowsOf(cursorResult)[0]
         if (!cursorRow) return { kind: 'invalid-cursor' }

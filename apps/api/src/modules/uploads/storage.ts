@@ -32,6 +32,9 @@ export interface MediaStorage {
   /** 读取私有对象；媒体接口在通过会话鉴权后使用。 */
   getObject?(key: string): { stream: ReadableStream<Uint8Array>; contentType: string }
 
+  /** 读取对象开头最多 `maxBytes` 字节，用于服务端解析媒体真实属性；对象不存在/读取失败返回 null。 */
+  readHead?(key: string, maxBytes: number): Promise<Uint8Array | null>
+
   /** 读响应里的公开 URL，依赖桶的匿名读策略（契约 §7.8）。 */
   publicUrl(key: string): string
 }
@@ -76,6 +79,37 @@ export function createBunS3MediaStorage(options: {
     getObject(key) {
       const file = client.file(key)
       return { stream: file.stream(), contentType: file.type || 'application/octet-stream' }
+    },
+
+    async readHead(key, maxBytes) {
+      try {
+        const file = client.file(key)
+        const stream = file.stream()
+        const reader = stream.getReader()
+        const chunks: Uint8Array[] = []
+        let total = 0
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const chunk = value as Uint8Array
+          const take = Math.min(chunk.length, maxBytes - total)
+          if (take <= 0) break
+          chunks.push(chunk.subarray(0, take))
+          total += take
+        }
+        reader.releaseLock()
+        if (total === 0) return null
+        const merged = new Uint8Array(total)
+        let offset = 0
+        for (const chunk of chunks) {
+          merged.set(chunk, offset)
+          offset += chunk.length
+        }
+        return merged
+      } catch {
+        // 对象不存在或读取失败：由调用方按 fail-closed 处理。
+        return null
+      }
     },
 
     publicUrl(key) {

@@ -14,6 +14,7 @@ import {
 } from '@fish/contracts/chat/schema'
 import { newId } from '@fish/db/ids'
 import type { MediaStorage } from '../uploads/storage'
+import { probeImage, probeVoiceDuration } from './media-probe'
 import type { MediaMessageStore, MediaRow } from './media-store'
 
 export class MediaMessageServiceError extends Error {
@@ -29,6 +30,9 @@ export class MediaMessageServiceError extends Error {
 
 const notFound = () => new MediaMessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
 const invalid = (code: string, message: string) => new MediaMessageServiceError(422, code, message)
+
+/** 服务端解析媒体属性读取到的字节上限：图片/音频头部足够解开尺寸与时长。 */
+const MEDIA_HEAD_PROBE_BYTES = 128 * 1024
 
 export interface MediaMessageService {
   presign(
@@ -49,34 +53,6 @@ const imageMime = (value: string): boolean =>
   (MEDIA_IMAGE_MIME as readonly string[]).includes(value)
 const voiceMime = (value: string): boolean =>
   (MEDIA_VOICE_MIME as readonly string[]).includes(value)
-
-function validate(
-  kind: MediaMessageInput['kind'],
-  mime: string,
-  size: number,
-  duration?: number,
-  width?: number,
-  height?: number,
-) {
-  if (kind === 'IMAGE' && (!imageMime(mime) || size > MEDIA_MAX_IMAGE_BYTES)) {
-    throw invalid('MEDIA_OBJECT_INVALID', '图片格式或大小不符合要求')
-  }
-  if (kind === 'VOICE' && (!voiceMime(mime) || size > MEDIA_MAX_VOICE_BYTES)) {
-    throw invalid('MEDIA_OBJECT_INVALID', '语音格式或大小不符合要求')
-  }
-  if (kind === 'VOICE' && (duration === undefined || duration > MEDIA_MAX_VOICE_DURATION_MS)) {
-    throw invalid('MEDIA_DURATION_EXCEEDED', '语音时长超过限制')
-  }
-  if (
-    kind === 'IMAGE' &&
-    (width === undefined ||
-      height === undefined ||
-      width > MEDIA_MAX_IMAGE_DIMENSION ||
-      height > MEDIA_MAX_IMAGE_DIMENSION)
-  ) {
-    throw invalid('MEDIA_DIMENSION_EXCEEDED', '图片尺寸超过限制')
-  }
-}
 
 function dto(row: MediaRow, baseUrl: (id: string) => string): MediaMessageDto {
   return mediaMessageDtoSchema.parse({
@@ -139,25 +115,52 @@ export function createMediaMessageService({
       const prefix = `chat-media/${conversationId}/${userId}/`
       if (!input.objectKey.startsWith(prefix))
         throw invalid('MEDIA_OBJECT_INVALID', '媒体不属于当前用户或会话')
-      validate(
-        input.kind,
-        input.contentType,
-        input.sizeBytes,
-        'durationMs' in input ? input.durationMs : undefined,
-        'width' in input ? input.width : undefined,
-        'height' in input ? input.height : undefined,
-      )
       const stat = await storage.stat(input.objectKey)
       if (!stat) throw invalid('MEDIA_OBJECT_NOT_FOUND', '媒体尚未上传完成')
       if (stat.size !== input.sizeBytes || stat.contentType !== input.contentType) {
         throw invalid('MEDIA_OBJECT_INVALID', '媒体实际属性与声明不一致')
       }
-      const result = dto(await store.create(conversationId, userId, input), (id) =>
-        mediaUrl(conversationId, id),
-      )
-      const participants = await store.participant(conversationId, userId)
-      if (participants) onMediaCreated?.(participants, result)
-      return result
+      // 服务端从对象内容解析真实尺寸 / 时长（fail-closed）：
+      // 不信任客户端声明的 width/height/durationMs，解析失败或超出限制一律拒绝。
+      if (!storage.readHead) {
+        throw invalid('MEDIA_OBJECT_INVALID', '存储未提供内容读取能力，无法完成服务端校验')
+      }
+      const head = await storage.readHead(input.objectKey, MEDIA_HEAD_PROBE_BYTES)
+      if (!head || head.length === 0) {
+        throw invalid('MEDIA_OBJECT_INVALID', '媒体内容为空或不可读取')
+      }
+      // 校验通过后统一落库 + 事件推送。
+      const persist = async (verified: MediaMessageInput) => {
+        const result = dto(await store.create(conversationId, userId, verified), (id) =>
+          mediaUrl(conversationId, id),
+        )
+        const participants = await store.participant(conversationId, userId)
+        if (participants) onMediaCreated?.(participants, result)
+        return result
+      }
+      if (input.kind === 'IMAGE') {
+        const probed = probeImage(head, input.contentType)
+        if (!probed) throw invalid('MEDIA_DIMENSION_EXCEEDED', '图片尺寸解析失败')
+        if (probed.width > MEDIA_MAX_IMAGE_DIMENSION || probed.height > MEDIA_MAX_IMAGE_DIMENSION) {
+          throw invalid('MEDIA_DIMENSION_EXCEEDED', '图片尺寸超过限制')
+        }
+        const declared = 'width' in input ? input.width : undefined
+        if (declared !== undefined && declared !== probed.width) {
+          throw invalid('MEDIA_OBJECT_INVALID', '媒体尺寸与声明不一致')
+        }
+        // 用真实尺寸覆盖声明值，避免后端存的可能与客户端声明不一致。
+        return persist({ ...input, width: probed.width, height: probed.height })
+      }
+      const probed = probeVoiceDuration(head, input.contentType)
+      if (!probed) throw invalid('MEDIA_OBJECT_INVALID', '语音时长解析失败')
+      if (probed.durationMs > MEDIA_MAX_VOICE_DURATION_MS) {
+        throw invalid('MEDIA_DURATION_EXCEEDED', '语音时长超过限制')
+      }
+      const declared = 'durationMs' in input ? input.durationMs : undefined
+      if (declared !== undefined && declared !== probed.durationMs) {
+        throw invalid('MEDIA_OBJECT_INVALID', '语音时长与声明不一致')
+      }
+      return persist({ ...input, durationMs: probed.durationMs })
     },
     async list(userId, conversationId, limit) {
       if (!(await store.participant(conversationId, userId))) throw notFound()
