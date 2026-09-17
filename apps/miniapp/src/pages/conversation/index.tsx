@@ -311,6 +311,14 @@ export default function Conversation() {
     }
   }
 
+  /**
+   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
+   *
+   * 必须放在「会话不存在」分支**之前**：未登录带一个非法 id 进来会先命中空态，
+   * 于是跳转被绕过一帧（守卫的 effect 与渲染在同一轮里，早返回的分支先出图）。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
+
   /* 取不到会话（例如手输了一个不存在的 id）：给空态兜底，不留白屏 */
   if (!conversation) {
     return (
@@ -429,11 +437,6 @@ export default function Conversation() {
     )
   }
 
-  /**
-   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
-   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
-   */
-  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
   return (
     <View className="conv">
       <View className="conv__bg" />
