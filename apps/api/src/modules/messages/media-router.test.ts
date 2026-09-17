@@ -78,4 +78,24 @@ describe('media router', () => {
     expect(response.headers.get('content-type')).toBe('image/webp')
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
   })
+
+  test('passes the pagination query through and returns the cursor envelope', async () => {
+    const calls: { cursor?: string; limit: number }[] = []
+    const app = buildApp({
+      list: async (_userId, _conversationId, query) => {
+        calls.push(query)
+        return { items: [], nextCursor: 'next-page-cursor' }
+      },
+    })
+
+    const response = await app.request(`/conversations/${conversationId}/media?limit=7&cursor=abc`)
+    expect(response.status).toBe(200)
+    expect(calls).toEqual([{ limit: 7, cursor: 'abc' }])
+    expect(await response.json()).toEqual({ items: [], nextCursor: 'next-page-cursor' })
+  })
+
+  test('rejects an out-of-range limit with 422', async () => {
+    const response = await buildApp().request(`/conversations/${conversationId}/media?limit=0`)
+    expect(response.status).toBe(422)
+  })
 })

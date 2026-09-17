@@ -289,18 +289,23 @@ describe('media message service', () => {
   // 攻击路径：用 1MB 声明拿 presign → 实际上传 100MB → 在 create 时声明 100MB 落库。
   // 必须在 create 里基于 `stat.size` 再做一次真实上限校验。
   test('rejects an object whose real size exceeds the kind limit (defense in depth)', async () => {
+    // 关键：宽高与 contentType 都与真实 webpBytes() 一致，所以只有"真实大小超限"这一条
+    // 能拦住它 —— 把 create() 里基于 `stat.size` 的复核去掉，用例就会失败。
     const service = setup(
       {},
       {
-        // 真实对象 100MB，但客户端声明也只有 1KB（两者一致，所以只靠 stat===declared 拦不住）
         stat: async () => ({ size: 100 * 1024 * 1024, contentType: 'image/webp' }),
+        readMediaBytes: async () => webpBytes(),
       },
     )
     await expect(
       service.create(userId, conversationId, {
-        ...image,
+        kind: 'IMAGE',
         objectKey: `chat-media/${conversationId}/${userId}/huge.webp`,
+        contentType: 'image/webp',
         sizeBytes: 100 * 1024 * 1024,
+        width: 800,
+        height: 600,
       }),
     ).rejects.toMatchObject({ code: 'MEDIA_OBJECT_INVALID' })
   })
