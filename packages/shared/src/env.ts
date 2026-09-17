@@ -10,22 +10,12 @@ const ServerEnvSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().min(1),
   S3_BUCKET: z.string().min(1),
   S3_PUBLIC_URL: z.string().min(1),
-  /**
-   * 邮件投递环境（#68）：`production` 必须配齐 Resend 两项，否则启动失败；
-   * 其余值（development/test，默认 development）走本地 dev outbox。
-   */
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  RESEND_API_KEY: z.string().min(1).optional(),
-  RESEND_FROM: z.string().min(1).optional(),
 })
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>
 
 /**
  * 服务端（api / worker）启动时统一校验环境变量，缺项直接失败而不是带病运行。
- *
- * 跨字段校验：`NODE_ENV=production` 时 Resend 配置必须齐全（#68 评审 P1-3：
- * 生产缺配置要启动失败，不允许静默回退 dev outbox）。
  */
 export function loadServerEnv(source: Record<string, string | undefined> = process.env): ServerEnv {
   const result = ServerEnvSchema.safeParse(source)
@@ -35,12 +25,36 @@ export function loadServerEnv(source: Record<string, string | undefined> = proce
       .join('\n')
     throw new Error(`环境变量校验失败（参考 .env.example）：\n${detail}`)
   }
+  return result.data
+}
 
-  const env = result.data
-  if (env.NODE_ENV === 'production' && (!env.RESEND_API_KEY || !env.RESEND_FROM)) {
-    throw new Error(
-      '环境变量校验失败：production 环境必须配置 RESEND_API_KEY 与 RESEND_FROM（邮件投递），不能回退到 dev outbox',
-    )
+/**
+ * API 专属邮件投递配置（#68 评审二轮 P1-2）。
+ *
+ * `MAIL_TRANSPORT` **无默认值**：部署层必须显式声明 `outbox` 或 `resend`，
+ * 忘记注入不会静默降级成 dev 投递。选 `resend` 时 Resend 两项必须齐全。
+ * 只在 API 进程校验（worker 不发邮件），避免 Resend 密钥扩散到 worker。
+ */
+export type MailTransportEnv =
+  | { transport: 'outbox' }
+  | { transport: 'resend'; resendApiKey: string; resendFrom: string }
+
+export function loadMailTransportEnv(
+  source: Record<string, string | undefined> = process.env,
+): MailTransportEnv {
+  const mode = source.MAIL_TRANSPORT
+  if (mode === 'outbox') return { transport: 'outbox' }
+  if (mode === 'resend') {
+    const apiKey = source.RESEND_API_KEY
+    const from = source.RESEND_FROM
+    if (!apiKey || !from) {
+      throw new Error(
+        '环境变量校验失败：MAIL_TRANSPORT=resend 必须同时配置 RESEND_API_KEY 与 RESEND_FROM',
+      )
+    }
+    return { transport: 'resend', resendApiKey: apiKey, resendFrom: from }
   }
-  return env
+  throw new Error(
+    '环境变量校验失败：MAIL_TRANSPORT 必须显式设置为 outbox 或 resend（不允许静默降级投递）',
+  )
 }

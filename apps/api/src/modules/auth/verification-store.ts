@@ -1,7 +1,7 @@
 import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
-import { and, count, desc, eq, gte, ne } from 'drizzle-orm'
+import { and, count, desc, eq, gte, isNull, ne } from 'drizzle-orm'
 import type { VerificationCodeCodec } from './verification-provider'
 
 /**
@@ -82,12 +82,12 @@ export interface VerificationStore {
         reason: 'CODE_EXPIRED' | 'CODE_INVALID' | 'CODE_CONSUMED' | 'TOO_MANY_ATTEMPTS'
       }
   >
-  /** 验证成功事务内调用：绑邮箱 + 升级状态。邮箱被他人占用时返回 false（409）。 */
+  /** 验证成功事务内调用：绑邮箱 + 升级状态（评审二轮 P2-3 的原子前置条件在实现里）。 */
   bindEmailAndVerify(
     executor: VerificationExecutor,
     userId: string,
     email: string,
-  ): Promise<boolean>
+  ): Promise<'BOUND' | 'EMAIL_TAKEN' | 'ALREADY_VERIFIED'>
   /** 状态页：当前用户是否已验证 + 脱敏邮箱（未绑定返回 null email）。 */
   loadStatus(
     executor: VerificationExecutor,
@@ -100,49 +100,53 @@ export interface VerificationStore {
 }
 
 export function createVerificationStore(db: Db): VerificationStore {
-  /** 最近一次**成功受理**（SENT）的发送时刻；FAILED 行不计入 60s 间隔。 */
+  /**
+   * 最近一次「占额度」的发送时刻：PENDING + SENT 都计入（评审二轮 P1-1）。
+   * PENDING 是**限频预留**——transport 还在投递中，若只统计 SENT，第二把锁在
+   * markSent 之前就能通过检查，突破 60s 间隔；FAILED 才释放额度。
+   */
   async function latestAt(
     executor: VerificationExecutor,
     column: 'email' | 'userId',
     value: string,
   ): Promise<Date | null> {
-    const deliveryEq = eq(campusEmailVerifications.delivery, 'SENT')
+    const notFailed = ne(campusEmailVerifications.delivery, 'FAILED')
     const rows =
       column === 'email'
         ? await executor
             .select({ sentAt: campusEmailVerifications.createdAt })
             .from(campusEmailVerifications)
-            .where(and(eq(campusEmailVerifications.email, value), deliveryEq))
+            .where(and(eq(campusEmailVerifications.email, value), notFailed))
             .orderBy(desc(campusEmailVerifications.createdAt))
             .limit(1)
         : await executor
             .select({ sentAt: campusEmailVerifications.createdAt })
             .from(campusEmailVerifications)
-            .where(and(eq(campusEmailVerifications.userId, value), deliveryEq))
+            .where(and(eq(campusEmailVerifications.userId, value), notFailed))
             .orderBy(desc(campusEmailVerifications.createdAt))
             .limit(1)
     return rows[0]?.sentAt ?? null
   }
 
-  /** 24h 窗口内**成功受理**（SENT）的发送量；FAILED 行不占额度。 */
+  /** 24h 窗口内占额度的发送量：PENDING + SENT；FAILED 才释放（评审二轮 P1-1）。 */
   async function countSince(
     executor: VerificationExecutor,
     column: 'email' | 'userId',
     value: string,
     since: Date,
   ): Promise<number> {
-    const deliveryEq = eq(campusEmailVerifications.delivery, 'SENT')
+    const notFailed = ne(campusEmailVerifications.delivery, 'FAILED')
     const predicate =
       column === 'email'
         ? and(
             eq(campusEmailVerifications.email, value),
             gte(campusEmailVerifications.createdAt, since),
-            deliveryEq,
+            notFailed,
           )
         : and(
             eq(campusEmailVerifications.userId, value),
             gte(campusEmailVerifications.createdAt, since),
-            deliveryEq,
+            notFailed,
           )
     const rows = await executor
       .select({ count: count() })
@@ -304,19 +308,23 @@ export function createVerificationStore(db: Db): VerificationStore {
     },
 
     async bindEmailAndVerify(executor, userId, email) {
-      // 唯一索引兜底并发；先查一次给友好 409（isUniqueViolation 见 service.ts）。
+      // 友好预检查：目标邮箱被他人占用。
       const taken = await executor
         .select({ id: users.id })
         .from(users)
         .where(and(eq(users.campusEmail, email), ne(users.id, userId)))
         .limit(1)
-      if (taken.length > 0) return false
+      if (taken.length > 0) return 'EMAIL_TAKEN'
 
-      await executor
+      // 原子绑定（评审二轮 P2-3）：`campus_email IS NULL` 写进 WHERE——已认证用户
+      // 用「认证前预取的另一个邮箱码」覆盖绑定的路径被数据层封死；同一用户两个
+      // 邮箱码并发验证也不会 last-write-wins。0 行更新 = 已绑定。
+      const bound = await executor
         .update(users)
         .set({ campusEmail: email, authStatus: 'VERIFIED', verifiedAt: new Date() })
-        .where(eq(users.id, userId))
-      return true
+        .where(and(eq(users.id, userId), isNull(users.campusEmail)))
+        .returning({ id: users.id })
+      return bound.length > 0 ? 'BOUND' : 'ALREADY_VERIFIED'
     },
 
     async loadStatus(executor, userId) {

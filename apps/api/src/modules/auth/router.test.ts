@@ -43,6 +43,8 @@ beforeAll(async () => {
   await migrate(scratch, { migrationsFolder })
   // dev Provider 的 outbox 指到隔离目录：测试读它取验证码，不污染真实 .dev。
   process.env.MAIL_OUTBOX_PATH = OUTBOX_PATH
+  // 邮件 transport 必须显式声明；测试一律走 outbox。
+  process.env.MAIL_TRANSPORT = 'outbox'
   app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
 })
 
@@ -800,6 +802,7 @@ describe('Resend transport', () => {
         from: '鱼小应 <noreply@fish.edu.cn>',
       })
       await transport.send({
+        id: 'row-123',
         to: 'user@gzasc.edu.cn',
         subject: 's',
         html: '<p>h</p>',
@@ -814,6 +817,8 @@ describe('Resend transport', () => {
       expect(body.text).toBe('t')
       const headers = (captured?.headers ?? {}) as Record<string, string>
       expect(headers.Authorization).toBe('Bearer re_test')
+      // Idempotency-Key：重试不重复投递
+      expect(headers['Idempotency-Key']).toBe('campus-verification/row-123')
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -862,10 +867,81 @@ describe('Resend transport', () => {
         thrown = error as Error
       }
       expect(calls).toBe(1)
+      // P2-5：provider message（可能回显敏感字段）不进错误信息，只有状态码 + name
       expect(thrown?.message).toContain('422')
-      expect(thrown?.message).toContain('domain not verified')
+      expect(thrown?.message).toContain('validation_error')
+      expect(thrown?.message).not.toContain('domain not verified')
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+})
+
+describe('PENDING 限频预留（评审二轮 P1-1）', () => {
+  test('transport 阻塞窗口内（最新行为 PENDING）：第二个请求必须 429', async () => {
+    const cookie = await verificationCookie()
+    const email = 'pending-reserve68@gzasc.edu.cn'
+
+    // 第一封发出：SENT
+    await app.request('/auth/verification/code', postWith(cookie, { email }))
+    // 模拟第二封「正在投递」：新 PENDING 行（transport 尚未返回）
+    const owner = (await sessionRows('202101000301'))[0]
+    if (!owner) throw new Error('未找到会话行')
+    await scratch.insert(campusEmailVerifications).values({
+      userId: owner.userId,
+      email,
+      codeHash: 'pending-hash',
+      expiresAt: new Date(Date.now() + 300_000),
+      delivery: 'PENDING',
+    })
+
+    // 此时真实并发请求：PENDING 占额度 → 必须 429（不能因为不是 SENT 就放行）
+    const res = await app.request('/auth/verification/code', postWith(cookie, { email }))
+    expect(res.status).toBe(429)
+    expect(await res.json()).toMatchObject({ error: { code: 'RATE_LIMITED' } })
+  })
+})
+
+describe('绑定原子性（评审二轮 P2-3）', () => {
+  test('已认证用户再用另一个有效码验证：ALREADY_VERIFIED，campus_email 不被覆盖', async () => {
+    const cookie = await verificationCookie()
+
+    // 认证前预取 A、B 两个校园邮箱的有效码（回拨时间绕过 60s 间隔，限频有专测）
+    const emailA = 'bind-a68@gzasc.edu.cn'
+    const sendA = await app.request('/auth/verification/code', postWith(cookie, { email: emailA }))
+    expect(sendA.status).toBe(200)
+    const codeA = await lastCodeFor(emailA)
+
+    await scratch
+      .update(campusEmailVerifications)
+      .set({ createdAt: new Date(Date.now() - 2 * 60_000) })
+      .where(eq(campusEmailVerifications.email, emailA))
+
+    const emailB = 'bind-b68@gzasc.edu.cn'
+    const sendB = await app.request('/auth/verification/code', postWith(cookie, { email: emailB }))
+    expect(sendB.status).toBe(200)
+    const codeB = await lastCodeFor(emailB)
+
+    // 先验证 A：正常绑定
+    const first = await app.request(
+      '/auth/verification/verify',
+      postWith(cookie, { email: emailA, code: codeA }),
+    )
+    expect(first.status).toBe(200)
+
+    // 再提交仍有效的 B 码：必须 ALREADY_VERIFIED（原子前置条件 + 预检查）
+    const second = await app.request(
+      '/auth/verification/verify',
+      postWith(cookie, { email: emailB, code: codeB }),
+    )
+    expect(second.status).toBe(409)
+    expect(await second.json()).toMatchObject({ error: { code: 'ALREADY_VERIFIED' } })
+
+    // DB 硬断言：绑定仍是 A，未被 B 覆盖
+    const rows = await scratch
+      .select({ campusEmail: users.campusEmail })
+      .from(users)
+      .where(eq(users.campusEmail, emailA))
+    expect(rows).toHaveLength(1)
   })
 })

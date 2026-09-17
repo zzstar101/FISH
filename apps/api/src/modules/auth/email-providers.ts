@@ -8,6 +8,10 @@ import type { EmailVerificationProvider, VerificationMail } from './verification
  * 走 REST 而不是 SMTP：无需额外依赖（Bun 原生 fetch），Resend 免费额度足够校园规模，
  * 域名验证 + SPF/DKIM 由 Resend 控制台托管。文档：https://resend.com/docs/api-reference
  */
+/**
+ * Resend 的 POST /emails 支持 `Idempotency-Key`：网络超时/5xx 重试时同 key 不会重复
+ * 发信（评审二轮 P2-4）。调用方必须传**稳定的逻辑发送 ID**（验证码行 id）。
+ */
 export type ResendTransportConfig = {
   apiKey: string
   /** 已在 Resend 验证的发件人，如 `鱼小应 <noreply@fish.edu.cn>`。 */
@@ -24,13 +28,15 @@ const RESEND_ENDPOINT = 'https://api.resend.com/emails'
 export function createResendTransport(config: ResendTransportConfig) {
   const timeoutMs = config.timeoutMs ?? 10_000
 
-  async function postOnce(mail: VerificationMail): Promise<Response> {
+  async function postOnce(mail: VerificationMail, idempotencyKey: string): Promise<Response> {
     // 超时控制：Resend 不可达时快速失败（delivery 置 FAILED），不拖住 API 请求。
     const response = await fetch(RESEND_ENDPOINT, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         'content-type': 'application/json',
+        // 同一次发送逻辑（含重试）固定同一 key：超时重试不会重复投递。
+        'Idempotency-Key': idempotencyKey,
       },
       body: JSON.stringify({
         from: config.from,
@@ -46,27 +52,38 @@ export function createResendTransport(config: ResendTransportConfig) {
 
   return {
     async send(mail: VerificationMail): Promise<void> {
-      // 单次退避重试：429（Resend 侧限速）或 5xx（其服务故障）时等 1s 再试一次；
+      // Idempotency-Key：mail.id 由调用方填（验证码行 id），重试期间保持不变。
+      const idempotencyKey = `campus-verification/${mail.id ?? 'unknown'}`
+
+      // 单次退避重试：429（Resend 侧限速，尊重 Retry-After）或 5xx（其服务故障）；
       // 401/403/422（配置或参数错）重试无意义，直接失败。
       let response: Response
       try {
-        response = await postOnce(mail)
-        if ((response.status === 429 || response.status >= 500) && response.status !== 501) {
-          await Bun.sleep(1000)
-          response = await postOnce(mail)
+        response = await postOnce(mail, idempotencyKey)
+        if (response.status === 429 || response.status >= 500) {
+          const retryAfter = Number(response.headers.get('Retry-After'))
+          await Bun.sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1000)
+          response = await postOnce(mail, idempotencyKey)
         }
-      } catch (error) {
-        throw new Error(
-          `Resend 请求失败（网络/超时）：${error instanceof Error ? error.message : String(error)}`,
-        )
+      } catch {
+        // 网络错误/超时可能服务端已受理：仍上抛置 FAILED（额度已由 PENDING 预留，
+        // 用户重试是新的一行），但错误信息不回显 provider 原文（评审二轮 P2-5）。
+        throw new Error('Resend 请求失败（网络/超时）')
       }
 
-      // Resend 2xx = 已受理（进入其投递队列）。非 2xx 上抛 → 发码路由 500，
-      // 该行 delivery 置 FAILED（不作废旧码、不占额度），用户可重试。
+      // Resend 2xx = 已受理。非 2xx 上抛 → 发码路由 500，该行 delivery 置 FAILED。
+      // **响应体只读一次**，再尝试 JSON.parse（评审二轮 P3）。
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as ResendError | null
-        const detail = body?.message ?? (await response.text().catch(() => '')).slice(0, 200)
-        throw new Error(`Resend 发送失败 (${response.status} ${body?.name ?? ''}): ${detail}`)
+        const raw = await response.text().catch(() => '')
+        let body: ResendError | null = null
+        try {
+          body = JSON.parse(raw) as ResendError
+        } catch {
+          // 非 JSON 错误体：不用原文（可能回显敏感字段），只保留 name/status。
+        }
+        // P2-5：provider 的 message 按不可信输入处理，不进日志（describeError 会打
+        // Error.message 首行），只暴露状态码与错误类型。
+        throw new Error(`Resend 发送失败 (${response.status} ${body?.name ?? 'unknown_error'})`)
       }
     },
   }

@@ -8,6 +8,8 @@
 
 /** 一封待发送的验证码邮件。`code` 只经过这里，实现方负责「送到」而不是「落日志」。 */
 export type VerificationMail = {
+  /** 逻辑发送 ID（验证码行 id）：Resend Idempotency-Key 用，重试不重复投递。 */
+  id?: string
   to: string
   subject: string
   html: string

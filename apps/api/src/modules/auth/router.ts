@@ -84,6 +84,10 @@ export function createAuthModule(options: {
   })
 
   // ---- 校园认证（#68）：三个端点都是本人数据，整段挂 requireAuth ----
+  // 已知取舍（评审二轮指出）：`/verification/code` 对被占用邮箱返回 409
+  // EMAIL_ALREADY_BOUND，等于承认「某校园邮箱是否已绑定 FISH 账号」的枚举 oracle。
+  // 这是 grilling 决策 Q7c 的明确选择（调用者已登录、提前拦截省 5 分钟等待）；
+  // 若未来要收紧，应在 send 阶段统一返回受理结果、冲突只在 verify 暴露。
   const verification = options.verification
 
   router.post('/verification/code', requireAuth, async (c) => {
@@ -92,7 +96,6 @@ export function createAuthModule(options: {
 
     try {
       await verification.sendCode(c.get('userId'), parsed.data)
-      // 出于防探测不给「发送成功」以外的信息；出箱内容见 dev transport（.dev/mail-outbox.jsonl）。
       return c.json(SendCodeResponseSchema.parse({ sent: true }))
     } catch (error) {
       return toErrorResponse(c, error)

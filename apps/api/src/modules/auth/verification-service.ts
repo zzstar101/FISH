@@ -66,7 +66,9 @@ export function createVerificationService(deps: {
       // transport 在事务提交后执行（决策：同步发送，不进 jobs）。失败只影响这一行的
       // delivery 状态：置 FAILED（不作废旧码、不占额度），错误上抛 500 让用户重试。
       try {
-        await provider.transport.send(provider.render(input.email, code, CODE_TTL_MINUTES))
+        const mail = provider.render(input.email, code, CODE_TTL_MINUTES)
+        // Idempotency-Key 用验证码行 id：重试不会重复投递同一封邮件。
+        await provider.transport.send({ ...mail, id: rowId })
         await store.markSent(rowId)
       } catch (error) {
         await store.markFailed(rowId)
@@ -109,8 +111,11 @@ export function createVerificationService(deps: {
       return deps.db
         .transaction(async (tx) => {
           const bound = await store.bindEmailAndVerify(tx, userId, input.email)
-          if (!bound) {
+          if (bound === 'EMAIL_TAKEN') {
             throw new VerificationError('EMAIL_ALREADY_BOUND', 409, '该校园邮箱已绑定其他账号')
+          }
+          if (bound === 'ALREADY_VERIFIED') {
+            throw new VerificationError('ALREADY_VERIFIED', 409, '已完成校园认证，无需重复验证')
           }
 
           const status = await store.loadStatus(tx, userId)

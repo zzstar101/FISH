@@ -3,7 +3,7 @@ import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
-import type { ServerEnv } from '@fish/shared/env'
+import type { MailTransportEnv, ServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -68,7 +68,11 @@ function describeError(error: unknown): string {
   return [parts.join(' <- ') || String(error), frames].filter(Boolean).join('\n')
 }
 
-export function createApp(env: ServerEnv) {
+export function createApp(
+  env: ServerEnv,
+  /** 邮件 transport（#68）：调用方显式传入（index.ts 用 loadMailTransportEnv 从 env 校验）。 */
+  mailEnv: MailTransportEnv = { transport: 'outbox' },
+) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
 
@@ -84,10 +88,11 @@ export function createApp(env: ServerEnv) {
     verification: createVerificationService({
       db,
       // 邮件里的图片必须绝对地址；logo 由 Web 站点托管（apps/web/public/logo.png）。
+      // transport 由 MAIL_TRANSPORT 显式选择（无默认值，缺配置启动失败，不静默降级）。
       provider:
-        env.NODE_ENV === 'production' && env.RESEND_API_KEY && env.RESEND_FROM
+        mailEnv.transport === 'resend'
           ? createResendEmailVerificationProvider(
-              { apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM },
+              { apiKey: mailEnv.resendApiKey, from: mailEnv.resendFrom },
               { logoUrl: `${env.WEB_ORIGIN}/logo.png` },
             )
           : createDevEmailVerificationProvider(undefined, {
