@@ -1,4 +1,8 @@
-import { mediaMessageInputSchema, mediaPresignInputSchema } from '@fish/contracts/chat/schema'
+import {
+  mediaListQuerySchema,
+  mediaMessageInputSchema,
+  mediaPresignInputSchema,
+} from '@fish/contracts/chat/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
@@ -58,15 +62,12 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
   })
 
   app.get('/:id/media', requireAuth, async (c) => {
-    const limit = Number(c.req.query('limit') ?? 100)
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-      return c.json(errorBody('VALIDATION_FAILED', 'limit 不合法'), 422)
+    const parsed = mediaListQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) {
+      return c.json(errorBody('VALIDATION_FAILED', 'limit 或 cursor 不合法'), 422)
     }
     try {
-      return c.json(
-        { items: await service.list(c.get('userId'), c.req.param('id'), limit), nextCursor: null },
-        200,
-      )
+      return c.json(await service.list(c.get('userId'), c.req.param('id'), parsed.data), 200)
     } catch (error) {
       return errorResponse(c, error)
     }

@@ -6,7 +6,7 @@ function bytes(...values: number[]): Uint8Array {
   return new Uint8Array(values)
 }
 
-/** WebM/EBML vint 编码（受 parser 使用的同一种：marker = 1 << (8 - length)）。 */
+/** EBML **元素 ID / size** 的 VINT 编码（marker = 1 << (8 - length)）。 */
 function vint(value: number, length: 1 | 2 | 3 | 4 = 2): number[] {
   const result: number[] = []
   let remaining = value
@@ -18,6 +18,24 @@ function vint(value: number, length: 1 | 2 | 3 | 4 = 2): number[] {
   const mask = (1 << valueBits) - 1
   result.unshift(((remaining & mask) | ((1 << (8 - length)) as number)) & 0xff)
   return result
+}
+
+/**
+ * EBML **Unsigned Integer Element Data**：普通 big-endian，**不是 VINT**。
+ *
+ * 这是评审 blocker 2 的关键：测试样本过去用 `vint()` 编码 Timecode / TimecodeScale，
+ * 于是把实现的错误一起冻结了。真实 muxer（MediaRecorder、ffmpeg）写的是普通大端整数。
+ */
+function uintBE(value: number, length: number): number[] {
+  const out: number[] = []
+  for (let i = length - 1; i >= 0; i--) out.push((value >>> (8 * i)) & 0xff)
+  return out
+}
+
+/** 按真实 muxer 习惯选最小字节数（但至少 1 字节）。 */
+function uintBEmin(value: number): number[] {
+  const length = value < 0x100 ? 1 : value < 0x10000 ? 2 : value < 0x1000000 ? 3 : 4
+  return uintBE(value, length)
 }
 
 /** 把大数写为 8 字节大端 double。 */
@@ -36,6 +54,9 @@ function u32be(value: number): number[] {
 function u16be(value: number): number[] {
   return [(value >>> 8) & 0xff, value & 0xff]
 }
+
+const EBML_HEADER = [0x1a, 0x45, 0xdf, 0xa3, ...vint(0)]
+const SEGMENT_ID = [0x18, 0x53, 0x80, 0x67]
 
 describe('probeImage', () => {
   test('parses a minimal PNG width/height', () => {
@@ -123,28 +144,110 @@ describe('probeImage', () => {
   })
 })
 
+// ---- WebM 样本构造（贴近真实 muxer 的编码）----
+
+/** `Info[TimecodeScale, Duration]`；Duration 缺省时省略该字段。 */
+function infoElement(durationMs: number | null, timecodeScale = 1_000_000): number[] {
+  // TimecodeScale 是 uint（普通大端），Duration 是 EBML Float64（单位 = scale 的 tick 数）。
+  const scaleBytes = uintBEmin(timecodeScale)
+  const timecodeScaleField = [...vint(0x2ad7b1, 3), ...vint(scaleBytes.length), ...scaleBytes]
+  const durationField =
+    durationMs === null ? [] : [...vint(0x4489, 2), ...vint(8), ...f64be(durationMs)]
+  const payload = [...timecodeScaleField, ...durationField]
+  return [...vint(0x1549a966, 4), ...vint(payload.length), ...payload]
+}
+
+/** `Cluster[Timecode, ...payload]`；Timecode 用普通大端 uint 编码（真实 muxer 的行为）。 */
+function clusterElement(timecode: number, filler = 0): number[] {
+  const timecodeField = [
+    ...vint(0xe7, 1),
+    ...vint(uintBEmin(timecode).length),
+    ...uintBEmin(timecode),
+  ]
+  // 真实 Cluster 里 Timecode 之后还有其他子元素；加一段哑字节让"最后一个 Cluster"断言有意义。
+  const fillerField =
+    filler > 0 ? [...vint(0xa3, 1), ...vint(filler), ...new Array(filler).fill(0)] : []
+  const payload = [...timecodeField, ...fillerField]
+  return [...vint(0x1f43b675, 4), ...vint(payload.length), ...payload]
+}
+
+/** 组装 Segment；`unknownSize` 模拟 MediaRecorder 流式 WebM。
+ *
+ * 真实文件（ffmpeg/MediaRecorder `-live`）的未知长度标记是 **8 字节 VINT 全值位**：
+ * `01 FF FF FF FF FF FF FF`（首字节是标记位 0x01，不是 0xFF）。
+ */
+function webm(chunks: number[][], unknownSize = false): Uint8Array {
+  const segmentPayload = chunks.flat()
+  const segmentSize = unknownSize
+    ? [0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+    : vint(segmentPayload.length)
+  return new Uint8Array([...EBML_HEADER, ...SEGMENT_ID, ...segmentSize, ...segmentPayload])
+}
+
 describe('probeVoiceDuration', () => {
   test('parses WebM Duration from EBML Info', () => {
-    // 构造：EBML Header + Segment(Info[TimecodeScale=1000000, Duration=3500])
-    // Matroska Duration 单位 = TimestampScale(1ms)，3500 tick = 3500ms。
-    // 注意：EBML 元素 ID 是 raw 字节，size 字段 = 数据字节数(vint)，值本身用 vint 编码。
-    const timecodeScale = [...vint(0x2ad7b1, 3), ...vint(3), ...vint(1_000_000, 3)]
-    const duration = [...vint(0x4489, 2), ...vint(8), ...f64be(3500)]
-    const infoPayload = [...timecodeScale, ...duration]
-    const info = [...vint(0x1549a966, 4), ...vint(infoPayload.length), ...infoPayload]
-    const ebmlHeader = [0x1a, 0x45, 0xdf, 0xa3, ...vint(0)]
-    const segmentId = [0x18, 0x53, 0x80, 0x67]
-    const file = [...ebmlHeader, ...segmentId, ...vint(ebmlHeader.length + info.length), ...info]
-    expect(probeVoiceDuration(bytes(...file), 'audio/webm')).toEqual({ durationMs: 3500 })
+    // Info[TimecodeScale=1ms, Duration=3500 tick] → 3500ms
+    expect(probeVoiceDuration(webm([infoElement(3500)]), 'audio/webm')).toEqual({
+      durationMs: 3500,
+    })
+  })
+
+  test('reads TimecodeScale as an unsigned integer, not a VINT', () => {
+    // Duration 的单位是 scale 的 tick 数：`durationMs = ticks * scale / 1e6`。
+    // 默认 scale=1_000_000（1 tick = 1ms）时 2000 tick = 2000ms。
+    expect(probeVoiceDuration(webm([infoElement(2000)]), 'audio/webm')).toEqual({
+      durationMs: 2000,
+    })
+    // scale=1e9（1 tick = 1000ms）时 2 tick = 2000ms。
+    // 1e9 = `0x3B9ACA00`（4 字节 uint）：当 VINT 解会剥掉首字节的标记位（0x10）
+    // 变成 `0x0B9ACA00` = 194_699_776 → 389ms，与真实的 2000ms 差 5 倍。
+    expect(probeVoiceDuration(webm([infoElement(2, 1_000_000_000)]), 'audio/webm')).toEqual({
+      durationMs: 2000,
+    })
+  })
+
+  // 回归（评审 blocker 2）：Timecode 是 uint。使用高字节置位的值（如 89981 = 0x015F7D）时，
+  // 旧的 VINT 解码会剥掉首字节最高位得到 46461，让 59s 录音看起来只有 9.8s 从而绕过 60s 上限。
+  test('decodes Cluster Timecode as an unsigned integer even when the top bit is set', () => {
+    // 89981 是 3 字节 uint，首字节 0x01 —— 走 VINT 会得到 46461。
+    expect(probeVoiceDuration(webm([clusterElement(89_981)]), 'audio/webm')).toEqual({
+      durationMs: 89_981,
+    })
+    // 2 字节 uint 里首字节最高位置位的值（16981 = 0x4255）：VINT 解会得到 597。
+    expect(probeVoiceDuration(webm([clusterElement(16_981)]), 'audio/webm')).toEqual({
+      durationMs: 16_981,
+    })
   })
 
   test('falls back to the last Cluster Timecode when Duration is absent', () => {
-    // Segment 只有 Cluster[Timecode=4800]，无 Info.Duration → 4800 * 1ms = 4800ms
-    const clusterPayload = [...vint(0xe7, 1), ...vint(2), ...vint(4800, 2)]
-    const cluster = [...vint(0x1f43b675, 4), ...vint(clusterPayload.length), ...clusterPayload]
-    const ebmlHeader = [0x1a, 0x45, 0xdf, 0xa3, ...vint(0)]
-    const file = [...ebmlHeader, ...[0x18, 0x53, 0x80, 0x67], ...vint(cluster.length), ...cluster]
-    expect(probeVoiceDuration(bytes(...file), 'audio/webm')).toEqual({ durationMs: 4800 })
+    // 流式 MediaRecorder 的典型形状：无 Duration，多个 Cluster。
+    // 必须是**最后一个** Cluster 的 Timecode（4800），而不是第一个（1000）。
+    expect(
+      probeVoiceDuration(
+        webm([infoElement(null), clusterElement(1000), clusterElement(4800)], true),
+        'audio/webm',
+      ),
+    ).toEqual({ durationMs: 4800 })
+  })
+
+  test('uses the last Cluster even when an earlier cluster is larger', () => {
+    // 反向保证：不是"取最大值"，而是"取最后一个"（时间码单调递增是 muxer 的保证，
+    // 但实现不能依赖它才能算对，否则坏文件会给出任意结果）。
+    expect(
+      probeVoiceDuration(webm([clusterElement(30_000), clusterElement(5000)], true), 'audio/webm'),
+    ).toEqual({ durationMs: 5000 })
+  })
+
+  // 回归：未知长度的 Segment（全 1 size）与 size = 0 的空元素都不能让遍历原地自旋。
+  test('terminates on empty elements and unknown-size segments', () => {
+    // 一个 size = 0 的 Void 元素（id 0xEC）夹在 Cluster 之间：旧实现 `continue` 不推进游标。
+    const emptyVoid = [...vint(0xec, 1), ...vint(0)]
+    expect(
+      probeVoiceDuration(
+        webm([clusterElement(1200), emptyVoid, clusterElement(5900)], true),
+        'audio/webm',
+      ),
+    ).toEqual({ durationMs: 5900 })
   })
 
   test('parses MP4 mvhd duration', () => {

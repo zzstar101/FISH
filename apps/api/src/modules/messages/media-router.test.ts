@@ -37,7 +37,7 @@ function buildApp(overrides: Partial<MediaMessageService> = {}) {
       durationMs: null,
       createdAt: '2026-09-14T12:00:00.000Z',
     }),
-    list: async () => [],
+    list: async () => ({ items: [], nextCursor: null }),
     getObject: async () => ({ key: 'chat-media/key.webp', contentType: 'image/webp' }),
     ...overrides,
   }

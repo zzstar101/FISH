@@ -5,17 +5,21 @@ import {
   MEDIA_MAX_VOICE_BYTES,
   MEDIA_MAX_VOICE_DURATION_MS,
   MEDIA_VOICE_MIME,
+  type MediaKind,
+  type MediaListQuery,
+  type MediaListResponse,
   type MediaMessageDto,
   type MediaMessageInput,
   type MediaPresignInput,
   type MediaPresignResponse,
+  mediaListResponseSchema,
   mediaMessageDtoSchema,
   mediaPresignResponseSchema,
 } from '@fish/contracts/chat/schema'
 import { newId } from '@fish/db/ids'
 import type { MediaStorage } from '../uploads/storage'
 import { probeImage, probeVoiceDuration } from './media-probe'
-import type { MediaMessageStore, MediaRow } from './media-store'
+import type { MediaListCursor, MediaMessageStore, MediaRow } from './media-store'
 
 export class MediaMessageServiceError extends Error {
   constructor(
@@ -31,8 +35,51 @@ export class MediaMessageServiceError extends Error {
 const notFound = () => new MediaMessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
 const invalid = (code: string, message: string) => new MediaMessageServiceError(422, code, message)
 
-/** 服务端解析媒体属性读取到的字节上限：图片/音频头部足够解开尺寸与时长。 */
-const MEDIA_HEAD_PROBE_BYTES = 128 * 1024
+/** 服务端解析媒体属性需要完整对象字节（WebM/MP4 的时长在文件尾，见 media-probe）。 */
+const MAX_PROBE_BYTES = MEDIA_MAX_VOICE_BYTES
+
+/** 按 kind 返回该类型允许的真实字节上限（防御纵深：presign 只校验客户端声明值）。 */
+function maxBytesFor(kind: MediaKind): number {
+  return kind === 'IMAGE' ? MEDIA_MAX_IMAGE_BYTES : MEDIA_MAX_VOICE_BYTES
+}
+
+/** 微秒精度 UTC ISO（DB 是 timestamptz 微秒）；JS Date 只有毫秒，不能用来生成游标。 */
+const CURSOR_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function encodeMediaCursor(cursor: MediaListCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+}
+
+/**
+ * 非法游标一律 422（与 listings / conversations 同一约定：不做宽容解析）。
+ *
+ * 只查形状还不够：手写正则放得过 `2026-13-45T99:99:99.999999Z`，随后被 PG 的
+ * `::timestamptz` 拒绝 → 500。再做一次 Date round-trip（只比对到秒，微秒段交给 PG）。
+ */
+function decodeMediaCursor(raw: string): MediaListCursor {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+  } catch {
+    throw invalid('VALIDATION_FAILED', 'cursor 不合法')
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw invalid('VALIDATION_FAILED', 'cursor 不合法')
+  }
+  const { createdAt, id } = parsed as Record<string, unknown>
+  if (typeof createdAt !== 'string' || !CURSOR_TIMESTAMP_RE.test(createdAt)) {
+    throw invalid('VALIDATION_FAILED', 'cursor 不合法')
+  }
+  const date = new Date(createdAt)
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 19) !== createdAt.slice(0, 19)) {
+    throw invalid('VALIDATION_FAILED', 'cursor 不合法')
+  }
+  if (typeof id !== 'string' || !UUID_RE.test(id)) {
+    throw invalid('VALIDATION_FAILED', 'cursor 不合法')
+  }
+  return { createdAt, id }
+}
 
 export interface MediaMessageService {
   presign(
@@ -41,7 +88,7 @@ export interface MediaMessageService {
     input: MediaPresignInput,
   ): Promise<MediaPresignResponse>
   create(userId: string, conversationId: string, input: MediaMessageInput): Promise<MediaMessageDto>
-  list(userId: string, conversationId: string, limit: number): Promise<MediaMessageDto[]>
+  list(userId: string, conversationId: string, query: MediaListQuery): Promise<MediaListResponse>
   getObject(
     userId: string,
     conversationId: string,
@@ -120,14 +167,25 @@ export function createMediaMessageService({
       if (stat.size !== input.sizeBytes || stat.contentType !== input.contentType) {
         throw invalid('MEDIA_OBJECT_INVALID', '媒体实际属性与声明不一致')
       }
+      // 防御纵深（评审 blocker 1）：presign 只校验客户端声明的 sizeBytes，而签名不约束
+      // Content-Length，所以真实大小必须在这里基于 `stat.size` 再拦一次。否则可以先用
+      // 1MB 声明拿 presign、实际上传 100MB，再在 create 时声明 100MB 落库。
+      if (stat.size > maxBytesFor(input.kind)) {
+        throw invalid('MEDIA_OBJECT_INVALID', '媒体大小超过限制')
+      }
       // 服务端从对象内容解析真实尺寸 / 时长（fail-closed）：
       // 不信任客户端声明的 width/height/durationMs，解析失败或超出限制一律拒绝。
-      if (!storage.readHead) {
+      if (!storage.readMediaBytes) {
         throw invalid('MEDIA_OBJECT_INVALID', '存储未提供内容读取能力，无法完成服务端校验')
       }
-      const head = await storage.readHead(input.objectKey, MEDIA_HEAD_PROBE_BYTES)
-      if (!head || head.length === 0) {
+      // 必须读**完整对象**：WebM 的 Duration 缺失时用文件尾的 Cluster Timecode，
+      // MP4 的 moov 也可能在文件尾；只读头部会低估时长并绕过 60s 上限（评审 blocker 2）。
+      const bytes = await storage.readMediaBytes(input.objectKey)
+      if (!bytes || bytes.length === 0) {
         throw invalid('MEDIA_OBJECT_INVALID', '媒体内容为空或不可读取')
+      }
+      if (bytes.length > MAX_PROBE_BYTES) {
+        throw invalid('MEDIA_OBJECT_INVALID', '媒体大小超过限制')
       }
       // 校验通过后统一落库 + 事件推送。
       const persist = async (verified: MediaMessageInput) => {
@@ -139,7 +197,7 @@ export function createMediaMessageService({
         return result
       }
       if (input.kind === 'IMAGE') {
-        const probed = probeImage(head, input.contentType)
+        const probed = probeImage(bytes, input.contentType)
         if (!probed) throw invalid('MEDIA_DIMENSION_EXCEEDED', '图片尺寸解析失败')
         if (probed.width > MEDIA_MAX_IMAGE_DIMENSION || probed.height > MEDIA_MAX_IMAGE_DIMENSION) {
           throw invalid('MEDIA_DIMENSION_EXCEEDED', '图片尺寸超过限制')
@@ -151,7 +209,7 @@ export function createMediaMessageService({
         // 用真实尺寸覆盖声明值，避免后端存的可能与客户端声明不一致。
         return persist({ ...input, width: probed.width, height: probed.height })
       }
-      const probed = probeVoiceDuration(head, input.contentType)
+      const probed = probeVoiceDuration(bytes, input.contentType)
       if (!probed) throw invalid('MEDIA_OBJECT_INVALID', '语音时长解析失败')
       if (probed.durationMs > MEDIA_MAX_VOICE_DURATION_MS) {
         throw invalid('MEDIA_DURATION_EXCEEDED', '语音时长超过限制')
@@ -162,11 +220,24 @@ export function createMediaMessageService({
       }
       return persist({ ...input, durationMs: probed.durationMs })
     },
-    async list(userId, conversationId, limit) {
+    async list(userId, conversationId, query) {
       if (!(await store.participant(conversationId, userId))) throw notFound()
-      return (await store.list(conversationId, userId, limit)).map((row) =>
-        dto(row, (id) => mediaUrl(conversationId, id)),
-      )
+      const cursor = query.cursor ? decodeMediaCursor(query.cursor) : null
+      // store 返回**最新在前**（DESC）且多一条用于判断 hasMore；这里裁掉多出的一条，
+      // 再把本页反转成时间正序返回（与 `GET /conversations/:id/messages` 同一约定：
+      // 升序给前端，游标指向更早一页）。
+      const rows = await store.list(conversationId, userId, { limit: query.limit, cursor })
+      const hasMore = rows.length > query.limit
+      const page = (hasMore ? rows.slice(0, query.limit) : rows).reverse()
+      // 反转后最早的一条（page[0]）就是下一页游标。
+      const oldest = page[0]
+      return mediaListResponseSchema.parse({
+        items: page.map((row) => dto(row, (id) => mediaUrl(conversationId, id))),
+        nextCursor:
+          hasMore && oldest
+            ? encodeMediaCursor({ createdAt: oldest.created_at_iso, id: oldest.message_id })
+            : null,
+      })
     },
     async getObject(userId, conversationId, mediaId) {
       if (!(await store.participant(conversationId, userId))) throw notFound()

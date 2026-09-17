@@ -32,8 +32,14 @@ export interface MediaStorage {
   /** 读取私有对象；媒体接口在通过会话鉴权后使用。 */
   getObject?(key: string): { stream: ReadableStream<Uint8Array>; contentType: string }
 
-  /** 读取对象开头最多 `maxBytes` 字节，用于服务端解析媒体真实属性；对象不存在/读取失败返回 null。 */
-  readHead?(key: string, maxBytes: number): Promise<Uint8Array | null>
+  /**
+   * 读取对象的**完整字节**，用于服务端解析媒体真实属性（尺寸 / 时长）；失败或对象不存在返回 null。
+   *
+   * 必须是完整对象而不是文件头：WebM 的 `Duration` 缺失时要用最后一个 Cluster 的 Timecode
+   * （在文件尾），MP4 的 `moov` 也可能在文件尾。只喂头部会显著低估时长，
+   * 让超 60s 的录音通过校验（评审 blocker 2）。
+   */
+  readMediaBytes?(key: string): Promise<Uint8Array | null>
 
   /** 读响应里的公开 URL，依赖桶的匿名读策略（契约 §7.8）。 */
   publicUrl(key: string): string
@@ -81,31 +87,11 @@ export function createBunS3MediaStorage(options: {
       return { stream: file.stream(), contentType: file.type || 'application/octet-stream' }
     },
 
-    async readHead(key, maxBytes) {
+    async readMediaBytes(key) {
       try {
-        const file = client.file(key)
-        const stream = file.stream()
-        const reader = stream.getReader()
-        const chunks: Uint8Array[] = []
-        let total = 0
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          const chunk = value as Uint8Array
-          const take = Math.min(chunk.length, maxBytes - total)
-          if (take <= 0) break
-          chunks.push(chunk.subarray(0, take))
-          total += take
-        }
-        reader.releaseLock()
-        if (total === 0) return null
-        const merged = new Uint8Array(total)
-        let offset = 0
-        for (const chunk of chunks) {
-          merged.set(chunk, offset)
-          offset += chunk.length
-        }
-        return merged
+        // `Bun.file()` 直接读全量：媒体上限 10MB，一次性读入内存不会成为瓶颈，
+        // 而流式只读头部会让 WebM/MP4 的时长解析低估（见 MediaStorage.readMediaBytes 注释）。
+        return new Uint8Array(await client.file(key).arrayBuffer())
       } catch {
         // 对象不存在或读取失败：由调用方按 fail-closed 处理。
         return null

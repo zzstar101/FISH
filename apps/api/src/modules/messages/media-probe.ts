@@ -1,12 +1,17 @@
 /**
  * 媒体真实尺寸 / 真实时长的服务端解析（fix-plan F5 / Q3=B1）。
  *
- * 只读文件头/容器结构，不解码整文件，零第三方依赖：
+ * 只读容器结构，不解码媒体数据，零第三方依赖：
  * - 图片尺寸：PNG(IHDR) / JPEG(SOFn) / WebP(VP8/VP8L/VP8X)
- * - 语音时长：WebM(EBML Segment→Info→Duration，退化用最后 Cluster Timecode) / MP4(mvhd)
+ * - 语音时长：WebM(EBML Segment→Info→Duration，缺失时用最后 Cluster 的 Timecode) / MP4(mvhd)
  *
  * 所有解析失败均返回 null，由调用方 fail-closed（拒绝上传），
  * 不信任客户端声明的 width/height/durationMs。
+ *
+ * 关键约定（评审 blocker 2）：EBML 的 `TimecodeScale` / `Timecode` 是 **Unsigned Integer
+ * Element Data**（普通大端整数），不是 VINT。把它们当 VINT 去标记位会在时间码高字节置位时
+ * 算出远小于真实值的数（实测 MediaRecorder `-live` 的 59s 文件被解析成 9.8s），
+ * 从而绕过 60s 上限。VINT 只用于元素 ID 与元素 size。
  */
 
 export type ProbedImage = { width: number; height: number }
@@ -142,6 +147,7 @@ export function probeImage(bytes: Uint8Array, mimeType: string): ProbedImage | n
 // 音频时长
 // ---------------------------------------------------------------------------
 
+const EBML_ID_EBML_HEADER = 0x1a45dfa3
 const EBML_ID_SEGMENT = 0x18538067
 const EBML_ID_INFO = 0x1549a966
 const EBML_ID_TIMECODE_SCALE = 0x2ad7b1
@@ -149,7 +155,10 @@ const EBML_ID_DURATION = 0x4489
 const EBML_ID_CLUSTER = 0x1f43b675
 const EBML_ID_TIMECODE = 0xe7
 
-/** EBML vint（ID / size）长度：首字节从最高位向下数连续 1 的个数。 */
+/** 默认 1ms per unit（Matroska 规范里的 TimestampScale 默认值）。 */
+const DEFAULT_TIMECODE_SCALE = 1_000_000
+
+/** EBML 元素 ID 的 raw 字节长度：首字节从最高位向下数连续 1 的个数。 */
 function ebmlVintLength(firstByte: number): number {
   if (firstByte === 0) return 0
   let length = 1
@@ -168,172 +177,222 @@ function ebmlIdValue(bytes: Uint8Array, offset: number, length: number): number 
   return value
 }
 
-/** EBML size / uint 字段：去标记位（首字节 `0x80 >> (length-1)` 为标记）。 */
-function ebmlVintValue(bytes: Uint8Array, offset: number, length: number): number {
+/** EBML size：去标记位（首字节 `0x80 >> (length-1)` 为标记）。 */
+function ebmlSizeValue(bytes: Uint8Array, offset: number, length: number): number {
   const marker = 0x80 >> (length - 1)
   let value = (bytes[offset] ?? 0) & (marker - 1)
   for (let i = 1; i < length; i++) value = value * 256 + (bytes[offset + i] ?? 0)
   return value
 }
 
-/** 解析 8 字节 IEEE-754 double（DataView 处理大小端与对齐）。 */
-function f64be(bytes: Uint8Array, offset: number): number {
-  const view = new DataView(bytes.buffer, bytes.byteOffset + offset, 8)
-  return view.getFloat64(0, false)
+/**
+ * EBML **Unsigned Integer Element Data**：普通大端无符号整数，**不是** VINT。
+ *
+ * `TimecodeScale` / `Timecode` / `FlagDefault` 等都用它。绝不能走 `ebmlSizeValue()`：
+ * 那里会剥掉首字节的最高位（标记位），而 uint 数据的最高位是**数据位**。
+ * 实测差别：`89981`（3 字节 `0x01 0x5F 0x7D`）被 VINT 解码成 `46461`，
+ * 让 59s 的 MediaRecorder 录音看起来只有 9.8s（评审 blocker 2）。
+ */
+function readUnsignedIntBE(bytes: Uint8Array, offset: number, length: number): number {
+  let value = 0
+  for (let i = 0; i < length; i++) value = value * 256 + (bytes[offset + i] ?? 0)
+  return value
+}
+
+/** EBML Float Element Data：4 或 8 字节 IEEE-754 大端。 */
+function readFloatBE(bytes: Uint8Array, offset: number, length: number): number | null {
+  if (offset + length > bytes.length) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset + offset, length)
+  if (length === 4) return view.getFloat32(0, false)
+  if (length === 8) return view.getFloat64(0, false)
+  return null
+}
+
+/** 解析出的 EBML 子元素：`dataStart`/`dataEnd` 指向 Element Data。 */
+type EbmlElement = { id: number; dataStart: number; dataEnd: number }
+
+/**
+ * 遍历 `[start, end)` 内的 EBML 子元素。
+ *
+ * 与旧实现的关键差别：**每个分支都必须前进**。旧写法在 `size === 0` 时 `continue` 而不推进
+ * `pos`，遇到合法的空元素（size 0）会原地自旋把 API 卡死（攻击者可用它做 DoS）。
+ * 这里的 `cursor = dataEnd` 保证 size 0 也会越过元素头，循环必然收敛。
+ */
+function walkEbmlElements(
+  bytes: Uint8Array,
+  start: number,
+  end: number,
+  visit: (element: EbmlElement) => void,
+): void {
+  let cursor = start
+  while (cursor < end) {
+    const idLength = ebmlVintLength(bytes[cursor] ?? 0)
+    if (idLength === 0) return
+    const id = ebmlIdValue(bytes, cursor, idLength)
+    cursor += idLength
+    if (cursor >= end) return
+
+    const sizeLength = ebmlVintLength(bytes[cursor] ?? 0)
+    if (sizeLength === 0) return
+    const size = ebmlSizeValue(bytes, cursor, sizeLength)
+    cursor += sizeLength
+
+    // size 可能是"未知"（全 1，如流式 WebM 的 Segment）：收敛到块尾。
+    const dataStart = cursor
+    const dataEnd = Math.min(end, dataStart + size)
+    visit({ id, dataStart, dataEnd })
+    cursor = dataEnd
+  }
 }
 
 /**
- * WebM（EBML）：递归不深，直接迭代。
- * 期望 Shape：Segment → Info → (TimecodeScale, Duration)。
- * MediaRecorder 的 WebM 常把 Duration 写 0/未知，退化为扫描最后一个 Cluster 的 Timecode。
+ * 从 `[start, end)` 里找最后一个 Cluster 的 `Timecode`。
+ *
+ * MediaRecorder（Chrome/Firefox）产出的 WebM 是**流式**的：Segment size 未知且不写
+ * `Info.Duration`，此时唯一可用的是最后一个 Cluster 的 Timecode。
+ * 因此调用方必须把**完整对象**（文件尾包含在内）交给它 —— 只喂文件头会在 >128KB 的文件上
+ * 拿到中间某个 Cluster，从而显著低估时长（实测 130s → 11.9s）。
+ */
+function lastClusterTimecode(bytes: Uint8Array, start: number, end: number): number | null {
+  let last: number | null = null
+  walkEbmlElements(bytes, start, end, (element) => {
+    if (element.id !== EBML_ID_CLUSTER) return
+    walkEbmlElements(bytes, element.dataStart, element.dataEnd, (child) => {
+      if (child.id !== EBML_ID_TIMECODE) return
+      const size = child.dataEnd - child.dataStart
+      if (size === 0 || size > 8) return
+      last = readUnsignedIntBE(bytes, child.dataStart, size)
+    })
+  })
+  return last
+}
+
+/**
+ * WebM（EBML）：Segment → Info → (TimecodeScale, Duration)，缺失时退化为最后 Cluster 的 Timecode。
+ *
+ * 必须是完整文件字节；只读头部无法得到正确的 fallback 值（见 `lastClusterTimecode`）。
  */
 function webmDuration(bytes: Uint8Array): ProbedDuration | null {
-  // 1) EBML Header：ID(0x1A45DFA3) + size + payload；随后应紧跟 Segment。
-  let pos = 0
-  const headerIdLen = ebmlVintLength(bytes[0] ?? 0)
-  if (headerIdLen === 0) return null
-  if (ebmlIdValue(bytes, 0, headerIdLen) !== 0x1a45dfa3) return null
-  pos += headerIdLen
-  const headerSizeLen = ebmlVintLength(bytes[pos] ?? 0)
-  if (headerSizeLen === 0) return null
-  const headerSize = ebmlVintValue(bytes, pos, headerSizeLen)
-  pos += headerSizeLen + Math.min(headerSize, bytes.length - pos)
+  // 1) EBML Header：ID + size + payload；随后应紧跟 Segment。
+  let cursor = 0
+  const headerIdLength = ebmlVintLength(bytes[0] ?? 0)
+  if (headerIdLength === 0) return null
+  if (ebmlIdValue(bytes, 0, headerIdLength) !== EBML_ID_EBML_HEADER) return null
+  cursor = headerIdLength
+  if (cursor >= bytes.length) return null
+  const headerSizeLength = ebmlVintLength(bytes[cursor] ?? 0)
+  if (headerSizeLength === 0) return null
+  const headerSize = ebmlSizeValue(bytes, cursor, headerSizeLength)
+  cursor += headerSizeLength + headerSize
 
-  // 2) Segment：ID(0x18538067) + size + 子元素
-  if (pos + 1 >= bytes.length) return null
-  const segmentIdLen = ebmlVintLength(bytes[pos] ?? 0)
-  if (segmentIdLen === 0) return null
-  if (ebmlIdValue(bytes, pos, segmentIdLen) !== EBML_ID_SEGMENT) return null
-  pos += segmentIdLen
-  const segmentSizeLen = ebmlVintLength(bytes[pos] ?? 0)
-  if (segmentSizeLen === 0) return null
-  // Segment size 可能是未知(全 1)，该值很大；Math.min 让它自然收敛到缓冲区末尾即可。
-  const segmentSize = ebmlVintValue(bytes, pos, segmentSizeLen)
-  pos += segmentSizeLen
-  const segmentEnd = Math.min(bytes.length, pos + segmentSize)
+  // 2) Segment
+  if (cursor + 1 >= bytes.length) return null
+  const segmentIdLength = ebmlVintLength(bytes[cursor] ?? 0)
+  if (segmentIdLength === 0) return null
+  if (ebmlIdValue(bytes, cursor, segmentIdLength) !== EBML_ID_SEGMENT) return null
+  cursor += segmentIdLength
+  const segmentSizeLength = ebmlVintLength(bytes[cursor] ?? 0)
+  if (segmentSizeLength === 0) return null
+  const segmentSize = ebmlSizeValue(bytes, cursor, segmentSizeLength)
+  cursor += segmentSizeLength
+  const segmentEnd = Math.min(bytes.length, cursor + segmentSize)
 
-  let timecodeScale = 1_000_000 // 默认 1ms per unit
+  let timecodeScale = DEFAULT_TIMECODE_SCALE
   let durationMs: number | null = null
-  let lastClusterTimecode: number | null = null
 
-  // 3) 遍历 Segment 子元素
-  while (pos + 1 < segmentEnd) {
-    const childIdLen = ebmlVintLength(bytes[pos] ?? 0)
-    if (childIdLen === 0) break
-    const childId = ebmlIdValue(bytes, pos, childIdLen)
-    pos += childIdLen
-    const childSizeLen = ebmlVintLength(bytes[pos] ?? 0)
-    if (childSizeLen === 0) break
-    const childSize = ebmlVintValue(bytes, pos, childSizeLen)
-    pos += childSizeLen
-    if (childSize === 0) continue
-    const dataStart = pos
-    const dataEnd = Math.min(segmentEnd, dataStart + childSize)
-
-    if (childId === EBML_ID_INFO) {
-      let p = dataStart
-      while (p + 1 < dataEnd) {
-        const fieldIdLen = ebmlVintLength(bytes[p] ?? 0)
-        if (fieldIdLen === 0) break
-        const fieldId = ebmlIdValue(bytes, p, fieldIdLen)
-        p += fieldIdLen
-        const fieldSizeLen = ebmlVintLength(bytes[p] ?? 0)
-        if (fieldSizeLen === 0) break
-        const fieldSize = ebmlVintValue(bytes, p, fieldSizeLen)
-        p += fieldSizeLen
-        if (fieldSize === 0) continue
-        if (fieldId === EBML_ID_TIMECODE_SCALE) {
-          timecodeScale = ebmlVintValue(bytes, p, Math.min(fieldSize, 8))
-        } else if (fieldId === EBML_ID_DURATION && fieldSize >= 8) {
-          const value = f64be(bytes, p)
-          if (Number.isFinite(value) && value > 0) {
-            durationMs = (value * timecodeScale) / 1_000_000
-          }
+  // 3) Segment 子元素：Info 里取 TimecodeScale / Duration。
+  walkEbmlElements(bytes, cursor, segmentEnd, (element) => {
+    if (element.id !== EBML_ID_INFO) return
+    walkEbmlElements(bytes, element.dataStart, element.dataEnd, (field) => {
+      const size = field.dataEnd - field.dataStart
+      if (size === 0) return
+      if (field.id === EBML_ID_TIMECODE_SCALE) {
+        timecodeScale = readUnsignedIntBE(bytes, field.dataStart, Math.min(size, 8))
+      } else if (field.id === EBML_ID_DURATION) {
+        // Duration 是 EBML Float（4 或 8 字节），单位是 TimecodeScale 的 tick 数。
+        const value = readFloatBE(bytes, field.dataStart, size)
+        if (value !== null && Number.isFinite(value) && value > 0) {
+          durationMs = (value * timecodeScale) / 1_000_000
         }
-        p += fieldSize
       }
-    } else if (childId === EBML_ID_CLUSTER) {
-      let p = dataStart
-      while (p + 2 < dataEnd) {
-        const fieldIdLen = ebmlVintLength(bytes[p] ?? 0)
-        if (fieldIdLen === 0) break
-        const fieldId = ebmlIdValue(bytes, p, fieldIdLen)
-        p += fieldIdLen
-        const fieldSizeLen = ebmlVintLength(bytes[p] ?? 0)
-        if (fieldSizeLen === 0) break
-        const fieldSize = ebmlVintValue(bytes, p, fieldSizeLen)
-        p += fieldSizeLen
-        if (fieldSize === 0) continue
-        if (fieldId === EBML_ID_TIMECODE) {
-          lastClusterTimecode = ebmlVintValue(bytes, p, Math.min(fieldSize, 8))
-        }
-        p += fieldSize
-      }
-    }
-    pos = dataEnd
-    if (durationMs !== null) break // 拿到明确时长就够了
-  }
+    })
+  })
 
   if (durationMs !== null) return { durationMs: Math.max(0, Math.round(durationMs)) }
-  if (lastClusterTimecode !== null) {
-    // 退化：以最后一个 Cluster 的 Timecode（单位 = TimecodeScale）作为近似的累计时长。
-    return {
-      durationMs: Math.max(0, Math.round((lastClusterTimecode * timecodeScale) / 1_000_000)),
+
+  // 4) 没有 Duration（MediaRecorder 流式 WebM 的常态）：用最后一个 Cluster 的 Timecode。
+  const lastTimecode = lastClusterTimecode(bytes, cursor, segmentEnd)
+  if (lastTimecode === null) return null
+  return {
+    durationMs: Math.max(0, Math.round((lastTimecode * timecodeScale) / 1_000_000)),
+  }
+}
+
+/** MP4 box 头：size(4) + type(4)，size 支持 1（64-bit largesize）与 0（到文件尾）。 */
+function readBox(
+  bytes: Uint8Array,
+  offset: number,
+): { type: string; start: number; end: number } | null {
+  if (offset + 8 > bytes.length) return null
+  let size = u32be(bytes, offset)
+  const type = ascii(bytes, offset + 4, 4)
+  if (size === 0) return { type, start: offset + 8, end: bytes.length }
+  if (size === 1) {
+    if (offset + 16 > bytes.length) return null
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset + 8, 8)
+    size = Number(view.getBigUint64(0, false))
+  }
+  if (size < 8 || offset + size > bytes.length) return null
+  return { type, start: offset + 8, end: offset + size }
+}
+
+/**
+ * MP4：找到 `moov` → `mvhd`，duration / timescale 得到秒。
+ *
+ * `moov` 可以在文件尾（非 faststart 的录制文件常如此），所以同样需要完整文件字节。
+ */
+function mp4Duration(bytes: Uint8Array): ProbedDuration | null {
+  let moov: { start: number; end: number } | null = null
+  for (let offset = 0; offset + 8 <= bytes.length; ) {
+    const box = readBox(bytes, offset)
+    if (!box) return null
+    if (box.type === 'moov') {
+      moov = box
+      break
     }
+    offset = box.end
+  }
+  if (!moov) return null
+
+  for (let pos = moov.start; pos + 8 <= moov.end; ) {
+    const box = readBox(bytes, pos)
+    if (!box) return null
+    if (box.type !== 'mvhd') {
+      pos = box.end
+      continue
+    }
+    const version = bytes[box.start] ?? 0
+    // mvhd data：version+flags(4) | creation | modification | timescale(4) | duration
+    const timescale = u32be(bytes, version === 1 ? box.start + 20 : box.start + 12)
+    if (timescale === 0) return null
+    const duration =
+      version === 1
+        ? Number(
+            new DataView(bytes.buffer, bytes.byteOffset + box.start + 24, 8).getBigUint64(0, false),
+          )
+        : u32be(bytes, box.start + 16)
+    if (duration === 0) return null
+    return { durationMs: Math.max(0, Math.round((duration / timescale) * 1000)) }
   }
   return null
 }
 
-/** MP4：找到 moov → mvhd，duration / timescale 得到秒。 */
-function mp4Duration(bytes: Uint8Array): ProbedDuration | null {
-  // box: size(4) + type(4)；从根层扫描 moov
-  let offset = 0
-  let moovStart = -1
-  while (offset + 8 <= bytes.length) {
-    const size = u32be(bytes, offset)
-    const type = ascii(bytes, offset + 4, 4)
-    if (size === 0) break // 到文件尾
-    if (type === 'moov') {
-      moovStart = offset + 8
-      break
-    }
-    if (size < 8) break
-    offset += size
-  }
-  if (moovStart < 0) return null
-
-  // 在 moov 内找 mvhd
-  let pos = moovStart
-  let mvhdStart = -1
-  while (pos + 8 <= bytes.length) {
-    const size = u32be(bytes, pos)
-    const type = ascii(bytes, pos + 4, 4)
-    if (type === 'mvhd') {
-      mvhdStart = pos
-      break
-    }
-    if (size === 0 || size < 8) break
-    pos += size
-  }
-  if (mvhdStart < 0) return null
-
-  const version = bytes[mvhdStart + 8] ?? 0
-  // mvhd payload (mvhdStart+8 起)：version+flags(4) | creation(4/8) | modification(4/8) |
-  // timescale(4) | duration(4/8)
-  const timescale = u32be(bytes, version === 1 ? mvhdStart + 28 : mvhdStart + 20)
-  if (timescale === 0) return null
-  let duration: number
-  if (version === 1) {
-    // version 1：duration 8 字节在 mvhdStart+32
-    const view = new DataView(bytes.buffer, bytes.byteOffset + mvhdStart + 32, 8)
-    duration = Number(view.getBigUint64(0, false))
-  } else {
-    duration = u32be(bytes, mvhdStart + 24)
-  }
-  if (duration === 0) return null
-  return { durationMs: Math.max(0, Math.round((duration / timescale) * 1000)) }
-}
-
+/**
+ * 语音真实时长。
+ *
+ * `bytes` 必须是**完整对象**：WebM 的 `Duration` 缺失 fallback 与 MP4 的 `moov` 位置
+ * 都要求看到文件末尾，只喂头部会低估时长并绕过 60s 上限（评审 blocker 2）。
+ */
 export function probeVoiceDuration(bytes: Uint8Array, mimeType: string): ProbedDuration | null {
   if (mimeType === 'audio/webm') return webmDuration(bytes)
   if (mimeType === 'audio/mp4') return mp4Duration(bytes)

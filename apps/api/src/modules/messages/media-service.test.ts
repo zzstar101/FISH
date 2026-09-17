@@ -31,6 +31,7 @@ function row(input: MediaMessageInput): MediaRow {
     height: 'height' in input ? input.height : null,
     duration_ms: 'durationMs' in input ? input.durationMs : null,
     created_at: '2026-09-14T12:00:00.000Z',
+    created_at_iso: '2026-09-14T12:00:00.000000Z',
   }
 }
 
@@ -55,7 +56,7 @@ function setup(
       expiresAt: '2026-09-14T12:10:00.000Z',
     }),
     stat: async () => ({ size: 1024, contentType: 'image/webp' }),
-    readHead: async () => webpBytes(),
+    readMediaBytes: async () => webpBytes(),
     publicUrl: (key) => `https://cdn.test/${key}`,
     ...storageOverrides,
   }
@@ -112,9 +113,22 @@ function f64be(value: number): number[] {
   return out
 }
 
-/** WebM：仅 Info[TimecodeScale=1ms, durationTicks=ticks]，时长 = ticks ms。 */
+/** EBML **Unsigned Integer Element Data**（普通大端，非 VINT）。 */
+function uintBE(value: number, length: number): number[] {
+  const out: number[] = []
+  for (let i = length - 1; i >= 0; i--) out.push((value >>> (8 * i)) & 0xff)
+  return out
+}
+
+/**
+ * WebM：`Info[TimecodeScale=1ms, Duration=ticks]`，时长 = ticks ms。
+ *
+ * 两个字段都是 **EBML Unsigned Integer / Float**，不是 VINT：用普通大端 uint 编码
+ * （旧的 `vint()` 写法会把实现的错误一起冻结，见评审 blocker 2）。
+ */
 function webmBytes(durationMs: number): Uint8Array {
-  const timecodeScale = [...vint(0x2ad7b1, 3), ...vint(3), ...vint(1_000_000, 3)]
+  const scaleBytes = uintBE(1_000_000, 3)
+  const timecodeScale = [...vint(0x2ad7b1, 3), ...vint(scaleBytes.length), ...scaleBytes]
   const duration = [...vint(0x4489, 2), ...vint(8), ...f64be(durationMs)]
   const info = [
     ...vint(0x1549a966, 4),
@@ -195,7 +209,7 @@ describe('media message service', () => {
       {},
       {
         stat: async () => ({ size: 2048, contentType: 'image/webp' }),
-        readHead: async () => huge,
+        readMediaBytes: async () => huge,
       },
     )
     const oversized = {
@@ -230,7 +244,7 @@ describe('media message service', () => {
       {},
       {
         stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
-        readHead: async () => webmBytes(3500),
+        readMediaBytes: async () => webmBytes(3500),
       },
     )
     const created = await service.create(userId, conversationId, {
@@ -248,7 +262,7 @@ describe('media message service', () => {
       {},
       {
         stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
-        readHead: async () => webmBytes(61_000),
+        readMediaBytes: async () => webmBytes(61_000),
       },
     )
     await expect(
@@ -265,9 +279,102 @@ describe('media message service', () => {
   })
 
   test('fails closed when the object cannot be read (fix-plan F5)', async () => {
-    const service = setup({}, { readHead: async () => null })
+    const service = setup({}, { readMediaBytes: async () => null })
     await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
       code: 'MEDIA_OBJECT_INVALID',
     })
+  })
+
+  // 回归（评审 blocker 1）：presign 只校验客户端声明的 sizeBytes，而签名不约束 Content-Length。
+  // 攻击路径：用 1MB 声明拿 presign → 实际上传 100MB → 在 create 时声明 100MB 落库。
+  // 必须在 create 里基于 `stat.size` 再做一次真实上限校验。
+  test('rejects an object whose real size exceeds the kind limit (defense in depth)', async () => {
+    const service = setup(
+      {},
+      {
+        // 真实对象 100MB，但客户端声明也只有 1KB（两者一致，所以只靠 stat===declared 拦不住）
+        stat: async () => ({ size: 100 * 1024 * 1024, contentType: 'image/webp' }),
+      },
+    )
+    await expect(
+      service.create(userId, conversationId, {
+        ...image,
+        objectKey: `chat-media/${conversationId}/${userId}/huge.webp`,
+        sizeBytes: 100 * 1024 * 1024,
+      }),
+    ).rejects.toMatchObject({ code: 'MEDIA_OBJECT_INVALID' })
+  })
+
+  // 回归（评审 major）：媒体历史必须真的分页。契约是 `{items, nextCursor}`，
+  // 旧实现固定 `nextCursor: null`，>limit 条后更早的媒体没有可达路径。
+  test('returns a cursor for the next page and pages backwards without gaps', async () => {
+    // 12 条媒体，`limit=5`：第一页 5 条（最新）+ 游标；第二页再 5 条；第三页 2 条 + null。
+    const all = Array.from({ length: 12 }, (_, index) => {
+      const minute = String(59 - index).padStart(2, '0')
+      return {
+        ...row(image),
+        message_id: `01930000-0000-7000-8000-0000000000${String(index).padStart(2, '0')}`,
+        created_at: `2026-09-14T12:${minute}:00.000Z`,
+        created_at_iso: `2026-09-14T12:${minute}:00.000000Z`,
+      }
+    })
+
+    // fake 按 `(created_at, id) < cursor` 做与 SQL 同语义的过滤，并返回 DESC。
+    const store: Partial<MediaMessageStore> = {
+      list: async (_conversationId, _userId, { limit, cursor }) => {
+        const remaining = cursor
+          ? all.filter(
+              (item) =>
+                item.created_at_iso < cursor.createdAt ||
+                (item.created_at_iso === cursor.createdAt && item.message_id < cursor.id),
+            )
+          : all
+        return [...remaining]
+          .sort((a, b) => (a.created_at_iso < b.created_at_iso ? 1 : -1))
+          .slice(0, limit + 1)
+      },
+    }
+    const service = setup(store)
+
+    const first = await service.list(userId, conversationId, { limit: 5 })
+    expect(first.items).toHaveLength(5)
+    expect(first.nextCursor).not.toBeNull()
+
+    const second = await service.list(userId, conversationId, {
+      limit: 5,
+      cursor: first.nextCursor ?? undefined,
+    })
+    expect(second.items).toHaveLength(5)
+    expect(second.nextCursor).not.toBeNull()
+
+    const third = await service.list(userId, conversationId, {
+      limit: 5,
+      cursor: second.nextCursor ?? undefined,
+    })
+    expect(third.items).toHaveLength(2)
+    expect(third.nextCursor).toBeNull()
+
+    // 三页恰好覆盖全部 12 条、不重不漏（对比 id 集合）。
+    const ids = [...first.items, ...second.items, ...third.items].map((item) => item.id)
+    expect(new Set(ids).size).toBe(12)
+    // 每页内部仍是时间正序。
+    const times = first.items.map((item) => item.createdAt)
+    expect(times).toEqual([...times].sort())
+  })
+
+  test('rejects a malformed media cursor with 422', async () => {
+    const service = setup()
+    await expect(
+      service.list(userId, conversationId, { limit: 5, cursor: 'not-base64-json' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', status: 422 })
+    await expect(
+      service.list(userId, conversationId, {
+        limit: 5,
+        // 形状对但日期越界：必须在这里挡成 422，而不是被 PG 拒成 500。
+        cursor: Buffer.from(
+          JSON.stringify({ createdAt: '2026-13-45T99:99:99.999999Z', id: mediaId }),
+        ).toString('base64url'),
+      }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', status: 422 })
   })
 })

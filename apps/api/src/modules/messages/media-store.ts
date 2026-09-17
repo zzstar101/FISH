@@ -16,7 +16,15 @@ export type MediaRow = {
   height: number | null
   duration_ms: number | null
   created_at: Date | string
+  /**
+   * 微秒精度的 `created_at` 文本（DB 直接 `to_char`）。
+   * JS Date 只有毫秒，用它做 `(created_at, id)` 游标会让同一毫秒边界上的行被跳过。
+   */
+  created_at_iso: string
 }
+
+/** 媒体列表游标：`(created_at, id)` 反向翻页（向更早）。 */
+export type MediaListCursor = { createdAt: string; id: string }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
   if (Array.isArray(result)) return result as Record<string, unknown>[]
@@ -40,8 +48,20 @@ function toRow(row: Record<string, unknown>): MediaRow {
     height: (row.height as number | null) ?? null,
     duration_ms: (row.duration_ms as number | null) ?? null,
     created_at: row.created_at as Date | string,
+    created_at_iso: row.created_at_iso as string,
   }
 }
+
+/**
+ * 三处 SELECT 共用的列投影。
+ * `created_at_iso` 用 `to_char(..., 'US')` 保住微秒，与 listings / conversations 的游标口径一致。
+ */
+const MEDIA_SELECT = sql`
+  m.id AS message_id, m.conversation_id, m.sender_id,
+  mm.id AS media_id, mm.kind::text, mm.object_key, mm.mime_type,
+  mm.size_bytes, mm.width, mm.height, mm.duration_ms, m.created_at,
+  to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
+`
 
 export interface MediaMessageStore {
   participant(
@@ -49,7 +69,11 @@ export interface MediaMessageStore {
     userId: string,
   ): Promise<{ buyerId: string; sellerId: string } | null>
   create(conversationId: string, senderId: string, input: MediaMessageInput): Promise<MediaRow>
-  list(conversationId: string, userId: string, limit: number): Promise<MediaRow[]>
+  list(
+    conversationId: string,
+    userId: string,
+    filter: { limit: number; cursor: MediaListCursor | null },
+  ): Promise<MediaRow[]>
   find(conversationId: string, mediaId: string, userId: string): Promise<MediaRow | null>
 }
 
@@ -92,7 +116,8 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
           )
           SELECT msg.id AS message_id, msg.conversation_id, msg.sender_id,
                  media.id AS media_id, media.kind::text, media.object_key, media.mime_type,
-                 media.size_bytes, media.width, media.height, media.duration_ms, msg.created_at
+                 media.size_bytes, media.width, media.height, media.duration_ms, msg.created_at,
+                 to_char(msg.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
           FROM msg CROSS JOIN media
         `)
         const row = rowsOf(result)[0]
@@ -101,13 +126,15 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
       })
     },
 
-    async list(conversationId, userId, limit) {
-      // 取会话内**最新** limit 条媒体（fix-plan F6）：长会话断线重连要能恢复最新媒体，
-      // 旧实现按 ASC 取最早 limit 条，会在 >100 条后丢掉最新消息。DESC 取最新后反转回时间正序。
+    async list(conversationId, userId, { limit, cursor }) {
+      // 取会话内**最新** limit+1 条（fix-plan F6 / 评审 major）：长会话断线重连要能恢复最新媒体。
+      // 游标向更早翻页：`(created_at, id) < (cursor.createdAt, cursor.id)`。
+      // 返回 DESC 顺序，由 service 反转成正序；多出的那条用于判断 `hasMore`。
+      const condition = cursor
+        ? sql`AND (m.created_at, m.id) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`
+        : sql``
       const result = await db.execute(sql`
-        SELECT m.id AS message_id, m.conversation_id, m.sender_id,
-               mm.id AS media_id, mm.kind::text, mm.object_key, mm.mime_type,
-               mm.size_bytes, mm.width, mm.height, mm.duration_ms, m.created_at
+        SELECT ${MEDIA_SELECT}
         FROM messages m
         JOIN message_media mm ON mm.message_id = m.id
         WHERE m.conversation_id = ${conversationId}::uuid
@@ -115,17 +142,16 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
             SELECT buyer_id FROM conversations WHERE id = m.conversation_id
             UNION ALL SELECT seller_id FROM conversations WHERE id = m.conversation_id
           )
+          ${condition}
         ORDER BY m.created_at DESC, m.id DESC
-        LIMIT ${limit}
+        LIMIT ${limit + 1}
       `)
-      return rowsOf(result).map(toRow).reverse()
+      return rowsOf(result).map(toRow)
     },
 
     async find(conversationId, mediaId, userId) {
       const result = await db.execute(sql`
-        SELECT m.id AS message_id, m.conversation_id, m.sender_id,
-               mm.id AS media_id, mm.kind::text, mm.object_key, mm.mime_type,
-               mm.size_bytes, mm.width, mm.height, mm.duration_ms, m.created_at
+        SELECT ${MEDIA_SELECT}
         FROM message_media mm
         JOIN messages m ON m.id = mm.message_id
         JOIN conversations c ON c.id = mm.conversation_id

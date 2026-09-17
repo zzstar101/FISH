@@ -20,7 +20,9 @@ export type MediaKind = z.infer<typeof mediaKindSchema>
 export const mediaPresignInputSchema = z.strictObject({
   kind: mediaKindSchema,
   contentType: z.string().min(1),
-  sizeBytes: z.number().int().positive(),
+  // 上限按 kind 在 service 里再收一次；这里用全局最大（VOICE）做 schema 级硬上限，
+  // 与服务端的 `stat.size` 复核形成 defense in depth（评审 blocker 1）。
+  sizeBytes: z.number().int().positive().max(MEDIA_MAX_VOICE_BYTES),
 })
 export type MediaPresignInput = z.infer<typeof mediaPresignInputSchema>
 
@@ -36,7 +38,7 @@ export const imageMediaMessageInputSchema = z.strictObject({
   kind: z.literal('IMAGE'),
   objectKey: z.string().min(1),
   contentType: z.string().min(1),
-  sizeBytes: z.number().int().positive(),
+  sizeBytes: z.number().int().positive().max(MEDIA_MAX_IMAGE_BYTES),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
 })
@@ -46,7 +48,7 @@ export const voiceMediaMessageInputSchema = z.strictObject({
   kind: z.literal('VOICE'),
   objectKey: z.string().min(1),
   contentType: z.string().min(1),
-  sizeBytes: z.number().int().positive(),
+  sizeBytes: z.number().int().positive().max(MEDIA_MAX_VOICE_BYTES),
   durationMs: z.number().int().positive(),
 })
 export type VoiceMediaMessageInput = z.infer<typeof voiceMediaMessageInputSchema>
@@ -72,6 +74,17 @@ export const mediaMessageDtoSchema = z.strictObject({
   createdAt: z.iso.datetime(),
 })
 export type MediaMessageDto = z.infer<typeof mediaMessageDtoSchema>
+
+/**
+ * 媒体历史查询（`GET /conversations/:id/media`）。
+ * `cursor` 与列表其他接口一致：不透明字符串，前端只原样回传（不得解析或构造）。
+ */
+export const mediaListQuerySchema = z.object({
+  /** 上一页返回的 `nextCursor`；缺省从最新一页开始。 */
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+})
+export type MediaListQuery = z.infer<typeof mediaListQuerySchema>
 
 export const mediaListResponseSchema = z.strictObject({
   items: z.array(mediaMessageDtoSchema),
