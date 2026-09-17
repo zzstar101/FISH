@@ -3,6 +3,7 @@ import Taro, { useLoad } from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
+import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { loadNotifications } from '@/features/fetchers'
 import type { MockNotification } from '@/mock/api'
@@ -46,13 +47,22 @@ export default function Notifications() {
    * 成功与回退都算（回退也返回一批可用数据）。
    */
   const [ready, setReady] = useState(false)
+  /** 真实接口失败且没有回退 mock（生产口径）：显示错误态而不是「还没有通知」 */
+  const [failed, setFailed] = useState(false)
+
+  const load = () => {
+    void loadNotifications()
+      .then(({ items: list, failed: nextFailed }) => {
+        setItems(list)
+        setFailed(nextFailed)
+      })
+      .finally(() => setReady(true))
+  }
 
   useLoad(() => {
     // 文案与跳转目标由数据层组装（真实接口与 mock 走同一份 decorateNotification），
     // 页面只拿结果 —— 所以这里只把同步调用换成异步，渲染逻辑不动
-    void loadNotifications()
-      .then(setItems)
-      .finally(() => setReady(true))
+    load()
   })
 
   /** 未读的唯一判据是契约字段 `readAt === null` */
@@ -107,8 +117,9 @@ export default function Notifications() {
       <View className="notif__hd">
         <Text className="notif__title">通知</Text>
         <Text className="notif__sub">
-          {/* 汇总行同样要等结果：否则请求途中会显示「全部已读 · 共 0 条」这种假结论 */}
-          {!ready
+          {/* 汇总行同样要等结果：否则请求途中会显示「全部已读 · 共 0 条」这种假结论；
+              失败时什么都不说，免得把「没加载出来」说成「一条都没有」 */}
+          {!ready || failed
             ? ''
             : unread > 0
               ? `${unread} 条未读 · 共 ${items.length} 条`
@@ -138,8 +149,11 @@ export default function Notifications() {
           </View>
         ))}
 
-        {/* 空态只在「确实拿到过一次结果」之后才显示，避免请求途中闪过一句「还没有通知」 */}
-        {ready && items.length === 0 ? (
+        {/* 空态只在「确实拿到过一次结果」之后才显示，避免请求途中闪过一句「还没有通知」；
+            失败态优先于空态：没加载出来不等于没有通知 */}
+        {failed ? (
+          <LoadError onRetry={load} />
+        ) : ready && items.length === 0 ? (
           <EmptyState
             title="还没有通知"
             text="愿望匹配上闲置、交易有进展时会出现在这里"

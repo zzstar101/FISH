@@ -33,6 +33,19 @@ export default defineConfig<'webpack5'>(async (merge) => {
      */
     defineConstants: {
       __API_BASE__: JSON.stringify(process.env.TARO_APP_API_BASE ?? ''),
+      /**
+       * 是否允许「真实接口失败 → 退回 mock fixture」（读取处 `src/features/fetchers.ts`）。
+       *
+       * 这是**开发 / 预览**的兜底，不是生产数据策略：生产下后端挂掉、域名配错或契约漂移时，
+       * 用户必须看到错误态，而不是一批「看起来正常」的假商品。所以默认关，
+       * 只在显式给 `TARO_APP_MOCK=1`（本地演示）或 `NODE_ENV=development` 时打开。
+       *
+       * `taro build` 走 production，因此 `bun run build:weapp` 默认**不退 mock**；
+       * 想在开发者工具里看 mock 演示页，用 `TARO_APP_MOCK=1 bun run build:weapp`。
+       */
+      __ALLOW_MOCK_FALLBACK__: JSON.stringify(
+        process.env.TARO_APP_MOCK === '1' || process.env.NODE_ENV === 'development',
+      ),
     },
     framework: 'react',
     // 本地开发的依赖预编译（esbuild）会把 workspace 里以 TS 源码形式发布的包当成外部依赖处理，
