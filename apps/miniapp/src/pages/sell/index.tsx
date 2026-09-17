@@ -2,7 +2,9 @@ import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import { useAuthGuard } from '@/features/auth/guard'
 import { moderate, type PolishCandidate, polishCandidates } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import './index.scss'
@@ -52,6 +54,8 @@ type PolishState =
   | { phase: 'ready'; candidates: PolishCandidate[]; index: number }
 
 export default function Sell() {
+  // 出物是 Tab 页：Tab 页只能用 navigateTo 跳登录页（见 guard.ts 文件头）
+  const authStatus = useAuthGuard({ tab: true })
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [price, setPrice] = useState('')
@@ -168,6 +172,11 @@ export default function Sell() {
       .filter((item) => item.text !== '')
   }
 
+  /**
+   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
+   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
   return (
     <View className="sell">
       <View className="sell__hero-bg" />

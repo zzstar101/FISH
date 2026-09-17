@@ -2,7 +2,9 @@ import { Image, Text, View } from '@tarojs/components'
 import Taro, { useLoad } from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import { useAuthGuard } from '@/features/auth/guard'
 import {
   fetchMyListings,
   formatAmount,
@@ -51,6 +53,7 @@ const PILL_CLASS: Record<MyListingStatusKey, string> = {
 type SubmitState = 'idle' | 'busy' | 'failed'
 
 export default function MyList() {
+  const authStatus = useAuthGuard()
   const [items, setItems] = useState<MockMyListing[]>([])
   const [loading, setLoading] = useState(true)
   const [segment, setSegment] = useState<MyListingStatusKey>('sale')
@@ -164,6 +167,11 @@ export default function MyList() {
         ? '已预订的商品在成交或取消前不能改价改文案'
         : `${SEGMENTS.find((seg) => seg.key === segment)?.label} · ${stats[segment]} 件`
 
+  /**
+   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
+   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
   return (
     <View className="ml">
       <View className="ml__bg" />

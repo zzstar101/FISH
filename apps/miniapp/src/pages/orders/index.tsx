@@ -2,7 +2,9 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad } from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import { useAuthGuard } from '@/features/auth/guard'
 import {
   type ConversationRole,
   fetchOrders,
@@ -50,6 +52,7 @@ const ROLE_TABS: { key: ConversationRole; label: string }[] = [
 ]
 
 export default function Orders() {
+  const authStatus = useAuthGuard()
   const [role, setRole] = useState<ConversationRole>('buyer')
   const [status, setStatus] = useState<StatusKey>('ALL')
   const [views, setViews] = useState<OrderView[]>([])
@@ -127,6 +130,11 @@ export default function Orders() {
 
   const headLabel = role === 'buyer' ? '我买到的' : '我卖出的'
 
+  /**
+   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
+   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
   return (
     <View className="orders">
       <View className="orders__bg" />

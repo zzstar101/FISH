@@ -3,7 +3,9 @@ import Taro from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
-import { APP_BUILD, APP_VERSION, ME, settings, themeOptions } from '@/mock/api'
+import { useAuthGuard } from '@/features/auth/guard'
+import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
+import { APP_BUILD, APP_VERSION, settings, themeOptions } from '@/mock/api'
 import type { ThemeMode } from '@/mock/types'
 import './index.scss'
 
@@ -14,11 +16,25 @@ import './index.scss'
  * ——交付要求「危险操作与普通项视觉上必须分开」，所以它不放进任何分组。
  *
  * 主题模式做成可展开的选项列表（设计稿第 02 帧），其余开关即时切换。
- * 数据落本地（`Taro.setStorageSync`，`BLOCKED: #66`），不写后端；
+ * 偏好项落本地（`Taro.setStorageSync`，`BLOCKED: #66`），不写后端；
  * 也不把各 Domain 的业务逻辑搬进来，这里只管偏好项。
+ *
+ * **账号信息与退出登录是真实登录态**：账号行读 `features/auth/store` 的当前用户，
+ * 退出走 `POST /auth/logout` 并清本地会话（原先两处都是占位）。
  */
 
 export default function Settings() {
+  // 设置页展示的是账号信息，未登录不该停留在这里（守卫只管跳转，页面继续渲染）
+  useAuthGuard()
+  const { user } = useAuth()
+  /**
+   * 账号行只用**真实登录用户**。
+   *
+   * `GET /me` 还没回来时不拿 mock 顶上 —— 那会把演示账号「阿岚」显示给一个真实登录用户。
+   * 此时用占位符，等 store 广播 `authed` 后再渲染真实昵称。
+   */
+  const nickname = user?.nickname ?? '—'
+  const verified = user?.authStatus === 'VERIFIED'
   const initial = settings()
   const [theme, setTheme] = useState<ThemeMode>(initial.theme)
   const [themeOpen, setThemeOpen] = useState(false)
@@ -48,14 +64,25 @@ export default function Settings() {
   const onLogout = () => {
     if (loggingOut) return
     setLoggingOut(true)
-    setTimeout(() => {
+    void (async () => {
+      // 分两步：先注销服务端会话并把必要的告知走完，再本地登出。
+      // 本地登出会广播 `anonymous`，守卫随即把本页跳去登录页 ——
+      // 若把提示写在登出之后，弹窗会落在正在卸载的页面上（弱网下等于不提示）。
+      const serverRevoked = await revokeServerSession()
       setLoggingOut(false)
       setLogoutOpen(false)
-      toast('退出登录待接入')
-    }, 800)
+      if (!serverRevoked) {
+        await Taro.showModal({
+          title: '已在本机退出',
+          content: '服务器没有响应，登录会话可能仍然有效。联网后建议再退出一次。',
+          showCancel: false,
+          confirmText: '知道了',
+        })
+      }
+      // 到这里才真正登出：守卫负责跳登录页，页面自己不再跳
+      clearLocalSession()
+    })()
   }
-
-  const verified = ME.authStatus === 'VERIFIED'
 
   return (
     <View className="st">
@@ -74,13 +101,13 @@ export default function Settings() {
         <View className="st__group">
           <View className="st__acct" onClick={() => toast('编辑资料待接入')}>
             <View className="st__av">
-              <Text className="st__av-tx">{ME.nickname.slice(0, 1)}</Text>
+              <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
               {verified ? (
                 <Image className="st__av-bdg" src={ICONS.verifiedAccent} mode="aspectFit" />
               ) : null}
             </View>
             <View className="st__acct-main">
-              <Text className="st__acct-name">{ME.nickname}</Text>
+              <Text className="st__acct-name">{nickname}</Text>
               <Text className="st__rvalue">{verified ? '已认证' : '未认证'}</Text>
             </View>
             <Text className="st__rvalue">编辑资料</Text>
