@@ -29,10 +29,9 @@
 .sell__body {
   position: relative;
   z-index: 1;
-  /* padding-top 由页面内联下发（= 导航总高 + 14pt，14pt 是设计稿 `.body` 的 padding），
-     随机型状态栏高度变化 —— 写死 rpx 会让刘海机上的返回钮压住 kicker，见 pages/sell/index.tsx */
-  padding-right: 32px;
-  padding-left: 32px;
+  /* 顶部避让交给 `TopBar` 的 spacer（它按运行时读到的状态栏 + 胶囊高度顶出等高留白），
+     这里只留设计稿 `.body` 那 14pt 间距 */
+  padding: 28px 32px 0;
   display: flex;
   flex-direction: column;
   gap: 24px;

@@ -86,6 +86,12 @@ export default function TopBar({
             height: `${metrics.totalHeight}px`,
             // 胶囊是原生绘制、点不到也盖不住，只能把内容让出去
             paddingRight: `${metrics.capsuleInset}px`,
+            /**
+             * 设计栅格把整条栏抬到 44pt 内容行时，多出来的那几 pt 补在**下方**：
+             * 标题仍在 `contentHeight`（胶囊那一段）里居中、与原生胶囊同行，
+             * 不会跟着变高的行一起往下偏。
+             */
+            paddingBottom: `${metrics.totalHeight - metrics.statusBarHeight - metrics.contentHeight}px`,
           }}
         >
           {left ?? (

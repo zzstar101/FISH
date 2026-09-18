@@ -28,10 +28,13 @@
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
-/* 一级标题：40px = 设计稿 20pt（`.navtitle{font-size:20px}`） */
+/* 一级标题：35px = 设计稿 `.mp-title{font-size:calc(34 * .52px)}` ≈ 17.7pt。
+   与 iOS 原生导航标题（17pt）同一档；稿里 home / messages / profile 三页都用这套
+   `mp-nav` + `mp-title`，只有更早的 `wish.html` 写的是 `.navtitle{font-size:20px}`（40px）。
+   这里取前者：三页对一页，且 17.7pt 才是系统导航标题的尺寸。 */
 .topbar__title {
   flex: 0 0 auto;
-  font-size: 40px;
+  font-size: 35px;
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1;

@@ -1,11 +1,10 @@
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
-import NavBar from '@/components/nav-bar'
+import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
-import { readNavMetrics } from '@/lib/nav-metrics'
 import { moderate, type PolishCandidate, polishCandidates } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import './index.scss'
@@ -57,13 +56,6 @@ type PolishState =
 export default function Sell() {
   // 出物是 Tab 页：Tab 页只能用 navigateTo 跳登录页（见 guard.ts 文件头）
   const authStatus = useAuthGuard({ tab: true })
-  /**
-   * 顶部留白必须按导航**实际高度**算：本页的 `NavBar` 是悬浮的，返回钮要占掉
-   * 状态栏 + 一行胶囊的高度，而状态栏高度随机型变（20~54）。写死一个 rpx 值的话，
-   * 刘海机上返回钮会压住下面那行 kicker（实测状态栏 47 时机身高 85.6pt，而原写死的
-   * 152rpx 只有 76pt）。与「我的」页同一套做法（见 `lib/nav-metrics`）。
-   */
-  const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [price, setPrice] = useState('')
@@ -189,9 +181,9 @@ export default function Sell() {
     <View className="sell">
       <View className="sell__hero-bg" />
       {/* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），返回钮是唯一出口 */}
-      <NavBar />
+      <TopBar back variant="glass" spacer />
 
-      <View className="sell__body" style={{ paddingTop: `${navHeight + 14}px` }}>
+      <View className="sell__body">
         <View className="sell__head">
           <Text className="sell__kicker num">闲置出手</Text>
           <Text className="sell__title">发布一件闲置</Text>

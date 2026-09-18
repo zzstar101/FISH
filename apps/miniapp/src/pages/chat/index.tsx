@@ -129,7 +129,7 @@ export default function Chat() {
     return (
       <View className="chat">
         <View className="chat__bg" />
-        <TopBar variant="plain" spacer title="消" titleEm="息" />
+        <TopBar variant="glass" spacer title="消" titleEm="息" />
         {authStatus === 'unknown' ? (
           <View className="chat__empty">
             <Text className="chat__empty-title">正在恢复登录状态…</Text>
@@ -153,7 +153,7 @@ export default function Chat() {
         设计稿里「息」走品牌色（`.mp-title .c-brand`），由 `titleEm` 表达。
       */}
       <TopBar
-        variant="plain"
+        variant="glass"
         spacer
         title="消"
         titleEm="息"

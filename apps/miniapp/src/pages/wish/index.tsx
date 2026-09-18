@@ -78,7 +78,7 @@ export default function Wish() {
         所以放在下方内容区（见下方 `wish__lead`）。
       */}
       <TopBar
-        variant="plain"
+        variant="glass"
         spacer
         title="许愿"
         titleEm="墙"

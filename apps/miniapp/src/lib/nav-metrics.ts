@@ -27,10 +27,18 @@ export type NavMetrics = {
 }
 
 /**
- * 兜底值：取不到胶囊信息时（h5 预览、老基础库）退回「44pt 内容行」，
- * 即设计稿的栅格（设计稿 `.navbar` 就是 44pt 高），至少不会塌成 0 高。
+ * 设计栅格的内容行高：44pt（设计稿 `.navbar{height:44px}`）。
+ *
+ * 两个用途：
+ * 1. 取不到胶囊信息时（h5 预览、老基础库）的**兜底**，至少不会塌成 0 高；
+ * 2. 按胶囊反推出的行高的**下限** —— 反推值在部分机型上比稿矮（本机 40pt：
+ *    胶囊上留白 4 × 2 + 胶囊高 32），而一级标题是 20pt 的字，行太矮会挤。
+ *
+ * 注意：抬高的是**整条栏占用的高度**（`totalHeight`），`contentHeight` 仍是胶囊那一段 ——
+ * 标题继续与原生胶囊同行居中，多出来的高度补在内容行下方（见 `components/top-bar`），
+ * 而不是把标题往下压 2pt。
  */
-const FALLBACK_CONTENT_HEIGHT = 44
+const DESIGN_CONTENT_HEIGHT = 44
 const FALLBACK_CAPSULE_INSET = 106
 const FALLBACK_STATUS_BAR = 20
 
@@ -51,9 +59,9 @@ export function readNavMetrics(): NavMetrics {
     if (!menu) {
       return {
         statusBarHeight,
-        contentHeight: FALLBACK_CONTENT_HEIGHT,
+        contentHeight: DESIGN_CONTENT_HEIGHT,
         capsuleInset: FALLBACK_CAPSULE_INSET,
-        totalHeight: statusBarHeight + FALLBACK_CONTENT_HEIGHT,
+        totalHeight: statusBarHeight + DESIGN_CONTENT_HEIGHT,
       }
     }
 
@@ -67,14 +75,14 @@ export function readNavMetrics(): NavMetrics {
       statusBarHeight,
       contentHeight,
       capsuleInset,
-      totalHeight: statusBarHeight + contentHeight,
+      totalHeight: statusBarHeight + Math.max(contentHeight, DESIGN_CONTENT_HEIGHT),
     }
   } catch {
     return {
       statusBarHeight: FALLBACK_STATUS_BAR,
-      contentHeight: FALLBACK_CONTENT_HEIGHT,
+      contentHeight: DESIGN_CONTENT_HEIGHT,
       capsuleInset: FALLBACK_CAPSULE_INSET,
-      totalHeight: FALLBACK_STATUS_BAR + FALLBACK_CONTENT_HEIGHT,
+      totalHeight: FALLBACK_STATUS_BAR + DESIGN_CONTENT_HEIGHT,
     }
   }
 }
