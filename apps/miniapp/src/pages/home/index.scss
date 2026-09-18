@@ -80,14 +80,13 @@
 }
 
 /*
- * 分类横滑条。
+ * 分类横滑条（图标 + 文字）。
  *
- * `top` 由页面内联下发（= 固定顶栏的总高，运行时读微信胶囊算出来的），
- * 不能写 `0` —— 那会让它在吸顶后钻到顶栏底下被盖住。
+ * **不吸顶**：随内容一起滚走。滚到它完全离开顶栏下沿之后，由下面那条
+ * `.home__catnav`（纯文字）接管分类导航 —— 这样图标条的高度变化不会牵动瀑布流。
+ * （设计稿是「同一个元素吸顶后把图标高度收成 0」，那会让下面的内容跳一下。）
  */
 .home__cats-wrap {
-  position: sticky;
-  z-index: 10;
   margin-top: 8px;
   padding: 0 24px;
 }
@@ -152,6 +151,73 @@
     position: absolute;
     left: 50%;
     bottom: 6px;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: var(--grad-brand);
+  }
+}
+
+/*
+ * 纯文字分类导航：图标条滚出顶栏下沿之后出现，固定在顶栏**下方**（`top` 由页面内联下发）。
+ *
+ * 玻璃配方与 `.topbar--glass` 同一套，让两行读起来是一块连续的顶栏；
+ * 底部分隔线 + 投影来自设计稿的 `.cats.stuck`。
+ */
+.home__catnav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  background: rgba(238, 246, 255, 0.82);
+  backdrop-filter: blur(36px) saturate(180%);
+  -webkit-backdrop-filter: blur(36px) saturate(180%);
+  border-bottom: 2px solid var(--accent-faint);
+  box-shadow: 0 24px 48px -44px rgba(23, 35, 61, 0.6);
+}
+
+.home__catnav-scroll {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.home__catnav-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 32px 20px;
+}
+
+.home__catnav-item {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 0 14px 14px;
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+.home__catnav-label {
+  font-size: 23px;
+  line-height: 1.1;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* 当前分类：文字压深加粗 + 下方短横杠（与图标条 `.home__cat.is-on` 同一套标记） */
+.home__catnav-item.is-on {
+  .home__catnav-label {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 0;
     transform: translateX(-50%);
     width: 36px;
     height: 6px;
