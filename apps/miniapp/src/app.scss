@@ -1,4 +1,39 @@
-page {
+@use './styles/tokens';
+
+/**
+ * 全局壳样式。
+ * 令牌在 styles/_tokens.scss（会自动编译进 app.wxss），这里只放页面级公共壳。
+ */
+
+/* 页面滚动容器：底部留出悬浮 TabBar 的高度，避免内容被盖住 */
+.page {
+  position: relative;
   min-height: 100vh;
-  background-color: #f5f5f7;
+  box-sizing: border-box;
+}
+
+/* 通用内边距：设计稿左右各 20pt */
+.pad {
+  padding-left: 40px;
+  padding-right: 40px;
+}
+
+/* 区块标题行 */
+.sec {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 52px 40px 24px;
+}
+
+.sec__title {
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sec__note {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
 }

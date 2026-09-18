@@ -1,3 +1,5 @@
 export default definePageConfig({
-  navigationBarTitleText: '卖闲置',
+  navigationStyle: 'custom',
+  navigationBarTitleText: '出物',
+  backgroundColor: '#F7FAFF',
 })
