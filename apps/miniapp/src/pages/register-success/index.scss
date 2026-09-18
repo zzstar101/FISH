@@ -1,0 +1,200 @@
+/**
+ * 注册成功提示页（设计稿 `小程序第1版，注册后提示页register-success.html`）。
+ * 尺寸 = 设计稿 pt × 2（见 DESIGN.md §1），配色同样映射到 `_tokens.scss`。
+ *
+ * 与稿子的一处刻意偏差：成功勾的圆底，稿子是「薄荷绿底 + 深绿勾」，
+ * 这里用**品牌渐变圆 + 白勾**（`--grad-brand` + `checkCircleWhite`）—— 仓库的 PNG 图标是
+ * 带色资产、不能染色，而 `ok` 系没有单色勾可用；品牌渐变圆 + 白勾是本仓既有的成功态表达
+ * （旧注册成功屏就是这么做的）。未认证徽章用 `--warn` 系列，与稿子一致。
+ */
+
+.rs {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.rs__bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 784px;
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+}
+
+.rs__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 64px 48px 96px;
+}
+
+/* ---------------------------------------------------------------- 结果区 */
+
+.rs__done {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* 稿：72pt 圆 + 30pt 勾 */
+.rs__check {
+  width: 144px;
+  height: 144px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-brand);
+  box-shadow: var(--shadow-btn);
+}
+
+.rs__check-ic {
+  width: 64px;
+  height: 64px;
+}
+
+.rs__title {
+  margin-top: 36px;
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.rs__desc {
+  margin-top: 20px;
+  max-width: 38em;
+  font-size: 28px;
+  line-height: 1.75;
+  color: var(--muted-2);
+}
+
+/* 稿子的 <b>：加重且用主文字色 */
+.rs__b {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* 徽章：稿是 warn 系（未认证）；已认证时切到 ok 系 */
+.rs__badge {
+  margin-top: 28px;
+  height: 48px;
+  padding: 0 24px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 2px solid var(--warn-line);
+  background: var(--warn-weak);
+  color: var(--warn-ink);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+
+  &.is-ok {
+    border-color: var(--ok-line);
+    background: var(--ok-weak);
+    color: var(--ok-ink);
+  }
+}
+
+/* ---------------------------------------------------------------- 步骤卡 */
+
+.rs__steps {
+  width: 100%;
+  margin-top: 40px;
+  padding: 32px;
+  box-sizing: border-box;
+  border-radius: 32px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+}
+
+.rs__step {
+  display: flex;
+  gap: 20px;
+  font-size: 26px;
+  line-height: 1.65;
+  color: var(--muted-2);
+
+  & + & {
+    margin-top: 24px;
+  }
+}
+
+.rs__n {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  margin-top: 2px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-deep);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.rs__st {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------- 动作 */
+
+.rs__actions {
+  width: 100%;
+  margin-top: 44px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.rs__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--brand-deep);
+  color: #fff;
+  font-size: 32px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    filter: saturate(1.06) brightness(0.95);
+  }
+}
+
+.rs__cta--outline {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+  box-shadow: none;
+
+  &:active {
+    background: var(--accent-weak);
+    filter: none;
+  }
+}
+
+.rs__note {
+  margin-top: 28px;
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--muted);
+}
