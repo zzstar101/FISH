@@ -23,6 +23,9 @@ export default defineAppConfig({
     'pages/watchers/index',
     'pages/scan/index',
     'pages/conversation/index',
+    'pages/search/index',
+    'pages/listing-detail/index',
+    'pages/notifications/index',
   ],
   window: {
     backgroundTextStyle: 'light',
