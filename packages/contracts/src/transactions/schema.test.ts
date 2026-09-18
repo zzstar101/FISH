@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  meetupTokenRedeemInputSchema,
+  meetupTokenResponseSchema,
+  meetupTokenStatusResponseSchema,
+  meetupTokenVerifyCodeInputSchema,
+  meetupVerificationResponseSchema,
   TransactionErrorCodeSchema,
   transactionAcceptInputSchema,
   transactionDtoSchema,
@@ -226,8 +231,66 @@ describe('transactionSystemEventSchema', () => {
   })
 })
 
+describe('meetup token schemas', () => {
+  const transactionId = '6d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+  const expiresAt = '2026-09-12T10:10:00.000Z'
+
+  test('accepts an issued token response without exposing hashes', () => {
+    expect(
+      meetupTokenResponseSchema.parse({
+        transactionId,
+        code: '012345',
+        qrPayload: 'fish://meetup/redeem?t=opaque-token',
+        expiresAt,
+      }),
+    ).toMatchObject({ transactionId, code: '012345', expiresAt })
+    expect(
+      meetupTokenResponseSchema.safeParse({
+        transactionId,
+        code: '01234',
+        qrPayload: 'fish://meetup/redeem?t=opaque-token',
+        expiresAt,
+        codeHash: 'must-not-leak',
+      }).success,
+    ).toBe(false)
+  })
+
+  test('validates code and QR redemption inputs strictly', () => {
+    expect(meetupTokenVerifyCodeInputSchema.safeParse({ code: '012345' }).success).toBe(true)
+    expect(meetupTokenVerifyCodeInputSchema.safeParse({ code: '12345a' }).success).toBe(false)
+    expect(meetupTokenRedeemInputSchema.safeParse({ qrToken: 'opaque-token' }).success).toBe(true)
+    expect(meetupTokenRedeemInputSchema.safeParse({ qrToken: '' }).success).toBe(false)
+    expect(
+      meetupTokenRedeemInputSchema.safeParse({ qrToken: 'opaque-token', transactionId }).success,
+    ).toBe(false)
+  })
+
+  test('parses status and successful verification responses', () => {
+    expect(
+      meetupTokenStatusResponseSchema.parse({
+        transactionId,
+        status: 'ISSUED',
+        expiresAt,
+        consumedAt: null,
+        consumedBy: null,
+      }).status,
+    ).toBe('ISSUED')
+    expect(
+      meetupVerificationResponseSchema.parse({
+        transactionId,
+        verified: true,
+        verifiedBy: '7d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        verifiedAt: expiresAt,
+        nextAction: 'CONFIRM_DELIVERY',
+      }).nextAction,
+    ).toBe('CONFIRM_DELIVERY')
+  })
+})
+
 describe('TransactionErrorCodeSchema', () => {
-  test('rejects an unknown code', () => {
+  test('accepts meetup token errors and rejects an unknown code', () => {
+    expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_EXPIRED').success).toBe(true)
+    expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_LOCKED').success).toBe(true)
     expect(TransactionErrorCodeSchema.safeParse('TX_GONE_WRONG').success).toBe(false)
   })
 })

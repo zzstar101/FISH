@@ -8,6 +8,7 @@ import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import {
   and,
@@ -20,7 +21,6 @@ import {
   inArray,
   lt,
   lte,
-  notInArray,
   or,
   type SQL,
   sql,
@@ -44,12 +44,20 @@ export type FeedCriteria = {
   limit: number
   cursor: FeedCursorKey | null
   sort: 'newest' | 'priceAsc' | 'priceDesc'
-  status: ListingStatus
+  /**
+   * 缺省 = 不按状态过滤。
+   *
+   * 公开 Feed 由 service 显式传 `ACTIVE`；**卖家查自己的商品且未指定 status** 时不传，
+   * 否则 `REVIEW` 店铺（审核中会被写成 `OFFLINE`）就会从「我发布的」里消失 ——
+   * 前端那个请求不带 `status`，只看得到 `ACTIVE` 的旧行为让它永远看不到待审商品。
+   */
+  status?: ListingStatus | undefined
   search?: string | undefined
   category?: ListingCategory | undefined
   priceMinCents?: number | undefined
   priceMaxCents?: number | undefined
   sellerId?: string | undefined
+  includeUnapproved?: boolean | undefined
 }
 
 export type FeedEntry = {
@@ -77,6 +85,15 @@ export type CreateListingRecord = {
   objectKeys: string[]
   /** 去重窗口起点：`now - 5s`（契约 §2.3）。 */
   duplicateWindowStart: Date
+  moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  moderationReason?: string | null
+  moderationRuleVersion?: string | null
+  moderation?: {
+    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+    matchedRules: string[]
+    matchedTermsMasked: string[]
+    ruleVersion: string
+  }
 }
 
 export type UpdateListingFields = {
@@ -88,15 +105,80 @@ export type UpdateListingFields = {
   urgent?: boolean
   negotiable?: boolean
   free?: boolean
+  moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  moderationReason?: string | null
+  moderationRuleVersion?: string | null
+  moderatedAt?: Date
+  status?: ListingStatus
 }
 
 /** 编辑/下架/上架前需要的当前行状态（权限、状态机、free⟹price 的合并校验都要用）。 */
 export type ListingState = {
   sellerId: string
   status: ListingStatus
+  title?: string
+  description?: string
   priceCents: number
   free: boolean
 }
+
+/**
+ * 编辑事务内 `SELECT ... FOR UPDATE` 锁住并读到的当前行。
+ * 字段比 `ListingState` 多，因为合并与审核要用到标题/描述等**所有**被部分更新覆盖的列。
+ */
+export type ListingUpdateTarget = {
+  sellerId: string
+  status: ListingStatus
+  title: string
+  description: string
+  priceCents: number
+  category: ListingCategory
+  condition: ListingCondition
+  urgent: boolean
+  negotiable: boolean
+  free: boolean
+  moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+}
+
+/**
+ * service 在锁内合并出的写入计划。
+ *
+ * - `write`：更新商品（+ 可选审核审计 + 可选图片替换）；
+ * - `blocked`：内容被阻断，**不写商品**，但要在同一个锁内写一条审计记录。
+ *
+ * 把"阻断"也放进 plan（而不是让 `apply` 返回 null、由调用方在事务外补写）是为了让审计记录
+ * 与锁内读到的那一行严格对应：调用方补写时锁已释放，并发 PATCH 可以让记录的 titleSnapshot
+ * 与真正被拒的内容不一致，中途失败还会静默丢失审计行。
+ */
+export type ListingUpdatePlan =
+  | {
+      kind: 'write'
+      fields: UpdateListingFields
+      moderation?: ModerationPlan
+    }
+  | { kind: 'blocked'; moderation: ModerationPlan }
+
+type ModerationPlan = {
+  title: string
+  description: string
+  decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+  matchedRules: string[]
+  matchedTermsMasked: string[]
+  ruleVersion: string
+}
+
+/**
+ * `updateListingAtomic` 的结果。`'not-found'` 与 `'locked'` 分开，是为了让 service 不必
+ * 再读一次状态就能给出 404 / 409（那是 check-then-act 的回归）。
+ */
+export type ListingUpdateResult =
+  | { kind: 'updated' }
+  | { kind: 'not-found' }
+  /** 行存在但归别人：契约 §3 要求 403，与 404 分开（不泄漏存在性的只有 "不存在" 那一支）。 */
+  | { kind: 'not-owner' }
+  | { kind: 'locked' }
+  /** 内容被阻断：商品未改动，但审计记录已在**同一事务内**落库（见 `ListingUpdatePlan`）。 */
+  | { kind: 'rejected' }
 
 export interface ListingStore {
   /**
@@ -123,14 +205,30 @@ export interface ListingStore {
   /**
    * 编辑商品。改到行时**在同一事务内**投一条 `MATCH_LISTING`（契约 §7.13：标题/描述 → keyword、
    * 价格、分类都是打分输入，不重算就会停在旧分数）。返回 `null` 表示没改到行，此时不投。
+   *
+   * 交付给调用方的是**事务内 `SELECT ... FOR UPDATE` 读到的**当前行（`ListingUpdateTarget`）：
+   * "读当前行 → 合并最终内容 → 审核 → UPDATE" 必须针对同一个快照。只在事务外先读一次、
+   * 随后不带版本条件地 UPDATE，两个并发 PATCH 就会各自基于旧快照算审核结论，后提交的那个
+   * 把 `moderation_status` 写回 `APPROVED`，留下"待审内容 + APPROVED"（评审 blocker 1）。
+   *
+   * `apply(input, current)` 由 service 提供，负责在锁内合并、审核并返回一个 `ListingUpdatePlan`：
+   * `write` 写商品（可带审核审计与图片替换），`blocked` 只写审计、不写商品。两种情形都在**同一个
+   * 锁内事务**内落库 —— 这样 `titleSnapshot` 一定对应被拒的那一行，中途失败也不会只剩半条。
+   * 抛异常则整个事务回滚。
    */
-  updateListing(input: {
+  updateListingAtomic(input: {
     id: string
     sellerId: string
-    fields: UpdateListingFields
-    /** 出现即**全量替换**图片（契约 §2.4）。 */
     objectKeys?: string[]
-  }): Promise<ListingRow | null>
+    apply: (
+      input: {
+        id: string
+        sellerId: string
+        objectKeys?: string[]
+      },
+      current: ListingUpdateTarget,
+    ) => ListingUpdatePlan | Promise<ListingUpdatePlan>
+  }): Promise<ListingUpdateResult>
 
   /**
    * 只从 `from` 迁到 `to`；返回是否真的改了行（并发下可能已被别人改走）。
@@ -140,6 +238,17 @@ export interface ListingStore {
    * 否则下架期间新建的愿望永远匹配不到它）。没改到行就不投。
    */
   setStatus(input: { id: string; from: ListingStatus; to: ListingStatus }): Promise<boolean>
+  recordModeration?(input: {
+    listingId?: string
+    sellerId: string
+    action: 'CREATE' | 'UPDATE'
+    title: string
+    description: string
+    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+    matchedRules: string[]
+    matchedTermsMasked: string[]
+    ruleVersion: string
+  }): Promise<void>
 }
 
 /** 新商品默认落 `ACTIVE`。 */
@@ -152,6 +261,21 @@ const NEW_LISTING_STATUS: ListingStatus = 'ACTIVE'
  * 与 service 的 409 判定。两处各写一份就会出现"service 拒绝、SQL 放行"的裂缝。
  */
 export const LOCKED_LISTING_STATUSES: ListingStatus[] = ['RESERVED', 'SOLD']
+
+/** 编辑事务内被锁定的列：合并审核要用到的全部可变列。 */
+const EDITABLE_COLUMNS = {
+  sellerId: listings.sellerId,
+  status: listings.status,
+  title: listings.title,
+  description: listings.description,
+  priceCents: listings.priceCents,
+  category: listings.category,
+  condition: listings.condition,
+  urgent: listings.urgent,
+  negotiable: listings.negotiable,
+  free: listings.free,
+  moderationStatus: listings.moderationStatus,
+} as const
 
 export function createSqlListingStore(db: Db): ListingStore {
   return {
@@ -187,11 +311,32 @@ export function createSqlListingStore(db: Db): ListingStore {
           priceCents: record.priceCents,
           category: record.category,
           condition: record.condition,
-          status: NEW_LISTING_STATUS,
+          status: record.moderationStatus === 'REVIEW' ? 'OFFLINE' : NEW_LISTING_STATUS,
+          moderationStatus: record.moderationStatus ?? 'APPROVED',
+          moderationReason: record.moderationReason ?? null,
+          moderationRuleVersion: record.moderationRuleVersion ?? null,
+          moderatedAt: new Date(),
           urgent: record.urgent,
           negotiable: record.negotiable,
           free: record.free,
         })
+
+        if (record.moderation) {
+          await tx.insert(listingModerationRecords).values({
+            listingId: record.id,
+            sellerId: record.sellerId,
+            action: 'CREATE',
+            titleSnapshot: record.title,
+            descriptionSnapshot: record.description,
+            decision: record.moderation.decision,
+            // `jsonParam` 包一层：裸数组在 drizzle + bun-sql 下会被 stringify 两次，
+            // 落库成 `jsonb_typeof = 'string'`（与 jobs.payload 同一个已踩过的坑）。
+            // 读路径会 parse 两次而“看起来正常”，但 `@>` / `jsonb_array_length` 全都失效。
+            matchedRules: jsonParam(record.moderation.matchedRules),
+            matchedTermsMasked: jsonParam(record.moderation.matchedTermsMasked),
+            ruleVersion: record.moderation.ruleVersion,
+          })
+        }
 
         // 下标即 sortOrder（0 = 封面），与 #6 契约 §1 和 DB 的
         // listing_images_listing_id_sort_order_uq 唯一索引一致。
@@ -203,7 +348,9 @@ export function createSqlListingStore(db: Db): ListingStore {
           })),
         )
 
-        await enqueueMatchJobWith(tx, record.id)
+        if ((record.moderationStatus ?? 'APPROVED') === 'APPROVED') {
+          await enqueueMatchJobWith(tx, record.id)
+        }
 
         return { kind: 'created' as const, listingId: record.id }
       })
@@ -238,6 +385,8 @@ export function createSqlListingStore(db: Db): ListingStore {
         .select({
           sellerId: listings.sellerId,
           status: listings.status,
+          title: listings.title,
+          description: listings.description,
           priceCents: listings.priceCents,
           free: listings.free,
         })
@@ -249,7 +398,10 @@ export function createSqlListingStore(db: Db): ListingStore {
     },
 
     async listFeed(criteria) {
-      const conditions: SQL[] = [eq(listings.status, criteria.status)]
+      const conditions: SQL[] = [
+        ...(criteria.status ? [eq(listings.status, criteria.status)] : []),
+        ...(criteria.includeUnapproved ? [] : [eq(listings.moderationStatus, 'APPROVED')]),
+      ]
 
       if (criteria.sellerId) conditions.push(eq(listings.sellerId, criteria.sellerId))
       if (criteria.category) conditions.push(eq(listings.category, criteria.category))
@@ -312,24 +464,46 @@ export function createSqlListingStore(db: Db): ListingStore {
       }))
     },
 
-    async updateListing(input) {
+    async updateListingAtomic(input) {
       return db.transaction(async (tx) => {
+        // 先锁行再读："读当前行 → 合并 → 审核 → UPDATE" 必须落在同一快照上。
+        // 没有这个锁时，两个并发 PATCH 会各自读到旧行、各自算审核结论，后提交的那个把
+        // `moderation_status` 写回 APPROVED，留下"待审内容 + APPROVED"（评审 blocker 1）。
+        const current = await tx
+          .select(EDITABLE_COLUMNS)
+          .from(listings)
+          .where(eq(listings.id, input.id))
+          .for('update')
+          .limit(1)
+
+        const row = current[0]
+        if (!row) return { kind: 'not-found' as const }
+        if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
+        if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
+
+        const plan = await input.apply(input, row)
+        // 阻断：不写商品，但审计记录与锁内读到的那一行同事务落库。
+        if (plan.kind === 'blocked') {
+          await tx.insert(listingModerationRecords).values({
+            listingId: input.id,
+            sellerId: input.sellerId,
+            action: 'UPDATE',
+            titleSnapshot: plan.moderation.title,
+            descriptionSnapshot: plan.moderation.description,
+            decision: plan.moderation.decision,
+            matchedRules: jsonParam(plan.moderation.matchedRules),
+            matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
+            ruleVersion: plan.moderation.ruleVersion,
+          })
+          return { kind: 'rejected' as const }
+        }
+
         const rows = await tx
           .update(listings)
-          .set({ ...input.fields, updatedAt: new Date() })
-          // 状态谓词必须写进 UPDATE 而不是只在 service 里读一次：读取与写入之间商品可能被
-          // #11 的交易流程改成 RESERVED / SOLD，check-then-act 会让那种行仍被编辑（契约 §2.4）。
-          .where(
-            and(
-              eq(listings.id, input.id),
-              eq(listings.sellerId, input.sellerId),
-              notInArray(listings.status, LOCKED_LISTING_STATUSES),
-            ),
-          )
-          .returning()
-
-        const updated = rows[0]
-        if (!updated) return null
+          .set({ ...plan.fields, updatedAt: new Date() })
+          .where(eq(listings.id, input.id))
+          .returning({ id: listings.id })
+        if (rows.length === 0) return { kind: 'not-found' as const }
 
         if (input.objectKeys) {
           // 全量替换：先删后插，同一事务内保证不会出现"新图未写入但旧图已删"的中间态。
@@ -343,13 +517,48 @@ export function createSqlListingStore(db: Db): ListingStore {
           )
         }
 
+        if (plan.moderation) {
+          await tx.insert(listingModerationRecords).values({
+            listingId: input.id,
+            sellerId: input.sellerId,
+            action: 'UPDATE',
+            titleSnapshot: plan.moderation.title,
+            descriptionSnapshot: plan.moderation.description,
+            decision: plan.moderation.decision,
+            // 见 createListingAtomic 里的同一条说明：jsonb 数组必须经 `jsonParam`。
+            matchedRules: jsonParam(plan.moderation.matchedRules),
+            matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
+            ruleVersion: plan.moderation.ruleVersion,
+          })
+        }
+
+        // 审核中的商品不可进入匹配链路；只有通过审核的编辑才需要重算匹配。
+        if ((plan.fields.moderationStatus ?? 'APPROVED') !== 'APPROVED') {
+          return { kind: 'updated' as const }
+        }
+
         // 编辑会改变打分输入（标题/描述 → keyword，价格、分类直接参与打分），所以必须重算匹配，
         // 否则 `matches` 里那一对会一直是旧分数（#8 契约 §3.3 的"matches 行 = 当前有效匹配"就不成立）。
         // 投递与写入同一事务：编辑成功而 job 丢失会让该商品永久停在旧分数。
         // 即使只改了图片也照投：规则简单（一条 PATCH = 一条 job），重算本身幂等且不会重复建通知。
         await enqueueMatchJobWith(tx, input.id)
 
-        return updated
+        return { kind: 'updated' as const }
+      })
+    },
+
+    async recordModeration(input) {
+      await db.insert(listingModerationRecords).values({
+        listingId: input.listingId,
+        sellerId: input.sellerId,
+        action: input.action,
+        titleSnapshot: input.title,
+        descriptionSnapshot: input.description,
+        decision: input.decision,
+        // 见 createListingAtomic 里的同一条说明：jsonb 数组必须经 `jsonParam`。
+        matchedRules: jsonParam(input.matchedRules),
+        matchedTermsMasked: jsonParam(input.matchedTermsMasked),
+        ruleVersion: input.ruleVersion,
       })
     },
 
@@ -358,7 +567,13 @@ export function createSqlListingStore(db: Db): ListingStore {
         const rows = await tx
           .update(listings)
           .set({ status: input.to, updatedAt: new Date() })
-          .where(and(eq(listings.id, input.id), eq(listings.status, input.from)))
+          .where(
+            and(
+              eq(listings.id, input.id),
+              eq(listings.status, input.from),
+              ...(input.to === 'ACTIVE' ? [eq(listings.moderationStatus, 'APPROVED')] : []),
+            ),
+          )
           .returning({ id: listings.id })
 
         // 没改到行（并发下别人先改了，或已经不在 from 状态）就不投：没有状态变化就没有重算的必要。

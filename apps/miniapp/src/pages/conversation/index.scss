@@ -1,0 +1,621 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 会话详情页（含 D2 增补的媒体消息）。数值 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 结构：漂浮返回导航（对方昵称 + 在线状态）→ 商品小卡 → 消息流
+ * （日期分隔 / SYSTEM 居中胶囊 / 文本气泡 / 图片气泡 / 语音气泡 / 交易卡）
+ * → 底部输入栏（「+」+ 输入 + 发送）→ 展开的媒体面板。
+ *
+ * 媒体气泡的关键尺寸（稿子第 03 帧的规格卡）：
+ * 图片最大宽 200pt（400rpx）、比例 4:3、圆角 12pt（气泡内缩 3pt）；
+ * 语音气泡高 44pt、播放钮 26pt；环形进度 18pt 圆环 + 26pt 深色底盘。
+ *
+ * 页面根节点是 100vh 的纵向 flex：让消息区滚动、输入栏吸底。
+ */
+.conv {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 顶部冰蓝渐变（比首页矮一些，消息区要留出阅读空间） */
+.conv__bg {
+  @include page-hero(340px, 48px);
+}
+
+/* ---------------------------------------------------------------- 页头 */
+
+/* 顶部状态栏 + 漂浮返回钮的高度（navfloat 是 absolute，不占文档流）。
+   这里刻意压得比首页紧：消息区要尽可能多占纵向空间。 */
+.conv__head {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  padding: 126px 32px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.conv__name {
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.conv__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.conv__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.conv__dot.is-on {
+  background: var(--mint);
+  box-shadow: 0 0 0 6px rgba(84, 245, 208, 0.3);
+}
+
+.conv__status-tx {
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 商品小卡 */
+
+.conv__card {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin: 14px 32px 0;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-radius: 30px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.conv__card-img {
+  width: 84px;
+  height: 84px;
+  border-radius: 18px;
+  flex: 0 0 auto;
+  background: var(--grad-ph);
+}
+
+.conv__card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__card-title {
+  display: block;
+  font-size: 25px;
+  font-weight: 600;
+  @include ellipsis;
+}
+
+.conv__card-price {
+  margin-top: 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.conv__card-cur {
+  font-size: 20px;
+  color: var(--price);
+}
+
+.conv__card-amt {
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--price);
+}
+
+.conv__card-go {
+  /* 价格是 ¥ + 数字两个节点，这里必须留出间距，否则会挤成「760查看」 */
+  margin-left: auto;
+  padding-left: 18px;
+  flex: 0 0 auto;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 消息列表 */
+
+/* SYSTEM 胶囊 + 气泡都按内容收窄：列表左对齐，自己的行整行右对齐 */
+
+.conv__scroll {
+  flex: 1;
+  /* 兜底：窄屏/小屏上也要留住能看两三条消息的高度，不被上方板块挤成一条缝 */
+  min-height: 260px;
+  margin-top: 16px;
+}
+
+/* 消息列表：左右与商品卡同一 32px 栅格 */
+.conv__list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 22px;
+  padding: 8px 32px 28px;
+}
+
+/* 空态（会话不存在）：让 EmptyState 避开漂浮返回钮 */
+.conv__emptypad {
+  position: relative;
+  z-index: 1;
+  padding-top: 148px;
+}
+
+/* SYSTEM：居中灰色小胶囊。
+   外层整行 + text-align: center，胶囊本体用 inline-block —— 在「纵向 flex」里
+   这是唯一能稳定「按内容收窄」的写法（fit-content / display:table 都会被撑满整行）。
+   文案控制在 13 个汉字以内（超长会在小程序里折行），所以这里不设 nowrap。 */
+.conv__sys {
+  align-self: stretch;
+  text-align: center;
+}
+
+.conv__sys-tx {
+  display: inline-block;
+  max-width: 100%;
+  padding: 10px 22px;
+  border-radius: var(--r-pill);
+  background: var(--ink-weak);
+  font-size: 20px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 对方气泡：在 flex-start 的列表里靠左，收窄到内容宽度 */
+.conv__row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  gap: 8px;
+}
+
+/* 自己的气泡：整行右对齐 */
+.conv__row.is-mine {
+  align-self: stretch;
+  align-items: flex-end;
+  width: auto;
+}
+
+.conv__bubble {
+  max-width: 520px;
+  padding: 20px 26px;
+  border-radius: 40px;
+  border-bottom-left-radius: 12px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-soft);
+}
+
+.conv__bubble.is-mine {
+  border-radius: 40px;
+  border-bottom-right-radius: 12px;
+  background: var(--grad-brand);
+  border-color: transparent;
+  box-shadow: var(--shadow-btn);
+}
+
+.conv__bubble-tx {
+  font-size: 28px;
+  line-height: 1.5;
+  color: var(--fg);
+  word-break: break-all;
+}
+
+.conv__bubble.is-mine .conv__bubble-tx {
+  color: #fff;
+}
+
+.conv__time {
+  font-size: 20px;
+  color: var(--muted);
+  padding: 0 12px;
+}
+
+/* ---------------------------------------------------------------- 底部输入栏 */
+
+/* 圆角胶囊输入 + 品牌渐变圆形发送钮（图标只用 ICONS.send）。
+   用 sticky 吸附在 flex 列末尾：100vh 容器下等价于吸底，长内容时也不会被顶走。 */
+.conv__bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 24px calc(14px + env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.86);
+  border-top: 2px solid var(--border);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+}
+
+.conv__input {
+  flex: 1;
+  min-width: 0;
+  height: 80px;
+  padding: 0 30px;
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  border: 2px solid var(--border);
+  font-size: 26px;
+  color: var(--fg);
+}
+
+.conv__send {
+  flex: 0 0 auto;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 未输入（禁用）态：品牌蓝压淡的实色，保证白色发送图标仍有对比 */
+  background: rgba(66, 133, 255, 0.42);
+}
+
+.conv__send.is-on {
+  background: var(--grad-brand);
+  box-shadow: var(--shadow-btn);
+}
+
+.conv__send-ic {
+  width: 38px;
+  height: 38px;
+  /* 发送图标资源本身是深色，两种状态下都要白：统一用滤镜转白，避免再引一份白色图标 */
+  filter: brightness(0) invert(1);
+}
+
+/* ==================================================================== D2 增补
+   媒体消息（图片 / 语音）、日期分隔、交易卡、「+」展开面板、上传进度与失败重试。
+   上面的文本与 SYSTEM 渲染是已验收过的部分，这里的规则一律**只做加法**。 */
+
+/* ---------------------------------------------------------------- 日期分隔 */
+
+.conv__daysep {
+  align-self: center;
+}
+
+.conv__daysep-tx {
+  display: inline-block;
+  padding: 8px 22px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 图片气泡 */
+
+.conv__bubble--media {
+  /* 图外只留 6px（3pt）内缩，让图片本体吃到 12pt 圆角 */
+  padding: 6px;
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+.conv__photo {
+  position: relative;
+  width: 392px;
+  height: 294px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+}
+
+/* 我方图片：去描边（气泡本身已是品牌渐变底） */
+.conv__bubble--media.is-mine .conv__photo {
+  border-color: transparent;
+}
+
+.conv__photo-img {
+  width: 100%;
+  height: 100%;
+}
+
+/* 上传中：右下角深色底盘 + conic-gradient 环形进度（进度值由 JS 给 style） */
+.conv__prog {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--scrim-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conv__ring {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+}
+
+/* 上传失败：左上角 `!` 角标（白描边，压在任何图上都看得清） */
+.conv__failmark {
+  position: absolute;
+  left: -8px;
+  top: -8px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 4px solid var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--surface);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+/* 失败重试胶囊：高 24pt，热区补偿到 44pt（靠 padding 撑开点击区） */
+.conv__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 20px;
+  border-radius: var(--r-pill);
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+  color: var(--danger-ink);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.conv__retry-ic {
+  width: 24px;
+  height: 24px;
+}
+
+/* ---------------------------------------------------------------- 语音气泡 */
+
+.conv__bubble--voice {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 22px;
+}
+
+.conv__play {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--brand-deep);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /* 我方：白底 + 品牌色三角（气泡本身是渐变底，实心圆钮会糊在一起） */
+  &.is-mine {
+    background: var(--surface);
+  }
+}
+
+/* 播放三角：纯 CSS 画的 9×6pt 三角形 */
+.conv__play-glyph {
+  width: 0;
+  height: 0;
+  border-left: 16px solid var(--surface);
+  border-top: 11px solid transparent;
+  border-bottom: 11px solid transparent;
+  margin-left: 5px;
+}
+
+.conv__play.is-mine .conv__play-glyph {
+  border-left-color: var(--brand-deep);
+}
+
+/* 暂停态：两根竖条。用 border-left/right 画，避免再引一份图标 */
+.conv__play.is-pause .conv__play-glyph {
+  width: 16px;
+  height: 18px;
+  border: 0;
+  border-left: 5px solid var(--surface);
+  border-right: 5px solid var(--brand-deep);
+  border-top: 0;
+  border-bottom: 0;
+  background: var(--brand-deep);
+  margin-left: 0;
+}
+
+.conv__play.is-pause.is-mine .conv__play-glyph {
+  border-left-color: var(--brand-deep);
+  border-right-color: var(--brand-deep);
+  background: var(--brand-deep);
+}
+
+.conv__wave {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 44px;
+}
+
+.conv__wave-bar {
+  width: 5px;
+  border-radius: 4px;
+  background: var(--accent-mid);
+
+  /* 我方：白 66% 的竖条 */
+  &.is-mine {
+    background: rgba(255, 255, 255, 0.66);
+  }
+
+  /* 已播部分高亮 */
+  &.is-on {
+    background: var(--brand-deep);
+  }
+
+  &.is-mine.is-on {
+    background: var(--surface);
+  }
+}
+
+.conv__dur {
+  flex: 0 0 auto;
+  font-size: 23px;
+  color: var(--muted-2);
+
+  &.is-mine {
+    color: rgba(255, 255, 255, 0.86);
+  }
+}
+
+/* ---------------------------------------------------------------- 交易卡 */
+
+.conv__txcard {
+  align-self: stretch;
+  display: flex;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 36px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.conv__txcard-ic {
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+}
+
+.conv__txcard-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__txcard-t {
+  display: block;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.conv__txcard-d {
+  display: block;
+  margin-top: 8px;
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.conv__txcard-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  padding: 0 30px;
+  margin-top: 18px;
+  border-radius: var(--r-pill);
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: 25px;
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------ 「+」与面板 */
+
+.conv__plus {
+  flex: 0 0 auto;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ice);
+  border: 2px solid var(--border);
+
+  /* 展开态：深墨底 + 图标转白（同一个加号，语义从「更多」变成「收起」） */
+  &.is-open {
+    background: var(--ink);
+    border-color: var(--ink);
+
+    .conv__plus-ic {
+      filter: brightness(0) invert(1);
+      transform: rotate(45deg);
+    }
+  }
+}
+
+.conv__plus-ic {
+  width: 32px;
+  height: 32px;
+  transition: transform 0.18s ease;
+}
+
+/* 面板：吸在输入栏下方，四等分格 */
+.conv__panel {
+  position: sticky;
+  bottom: 0;
+  z-index: 19;
+  flex: 0 0 auto;
+  display: flex;
+  gap: 20px;
+  padding: 24px 24px calc(24px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 2px solid var(--accent-faint);
+}
+
+.conv__ptile {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.conv__ptile-disc {
+  width: 104px;
+  height: 104px;
+  border-radius: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--accent-faint);
+}
+
+.conv__ptile-ic {
+  width: 48px;
+  height: 48px;
+}
+
+.conv__ptile-label {
+  font-size: 22px;
+  color: var(--muted-2);
+}

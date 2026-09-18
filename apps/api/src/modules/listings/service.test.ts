@@ -8,8 +8,8 @@ import type {
   FeedCriteria,
   ListingImageRow,
   ListingRow,
-  ListingState,
   ListingStore,
+  ListingUpdateTarget,
   SellerRow,
   UpdateListingFields,
 } from './store'
@@ -34,6 +34,10 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     urgent: false,
     negotiable: true,
     free: false,
+    moderationStatus: 'APPROVED',
+    moderationReason: null,
+    moderationRuleVersion: null,
+    moderatedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     ...overrides,
@@ -74,6 +78,24 @@ function imageRow(sortOrder: number, objectKey: string): ListingImageRow {
   }
 }
 
+/** `updateListingAtomic` 交给 `apply` 的"锁内当前行"。 */
+function updateTarget(overrides: Partial<ListingUpdateTarget> = {}): ListingUpdateTarget {
+  return {
+    sellerId: SELLER_ID,
+    status: 'ACTIVE',
+    title: '罗技 K380 键盘',
+    description: '宿舍用了一学期，功能正常。',
+    priceCents: 16000,
+    category: 'DIGITAL',
+    condition: 'GOOD',
+    urgent: false,
+    negotiable: true,
+    free: false,
+    moderationStatus: 'APPROVED',
+    ...overrides,
+  }
+}
+
 function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
   return {
     createListingAtomic: async () => ({ kind: 'created', listingId: LISTING_ID }),
@@ -90,7 +112,10 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       free: false,
     }),
     listFeed: async () => [],
-    updateListing: async () => listingRow(),
+    updateListingAtomic: async (input) => {
+      input.apply(input, updateTarget())
+      return { kind: 'updated' }
+    },
     setStatus: async () => true,
     ...overrides,
   }
@@ -222,6 +247,77 @@ describe('listFeed', () => {
     await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID, status: 'OFFLINE' }))
     expect(seen[0]?.status).toBe('OFFLINE')
     expect(seen[0]?.sellerId).toBe(SELLER_ID)
+    // F4：本人查询自己的商品时，显式包含未通过审核的（REVIEW / BLOCKED），供前端展示"审核中"等状态。
+    expect(seen[0]?.includeUnapproved).toBe(true)
+  })
+
+  // 回归（评审 F-A）：F4 的修复必须让**实际请求形状**返回 REVIEW 行，而不只是把 flag 传下去。
+  // 前端「我发布的」是 `?sellerId=me`（不带 status）；旧实现把缺省 status 当成 ACTIVE，
+  // 而 REVIEW 行是 OFFLINE，于是 flag 为 true 也照样被过滤掉（真库实测 0 条）。
+  test('seller own query without status keeps the status filter open so REVIEW rows can surface', async () => {
+    const seen: FeedCriteria[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async (criteria) => {
+          seen.push(criteria)
+          return []
+        },
+      }),
+    })
+
+    await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID }))
+
+    expect(seen[0]?.includeUnapproved).toBe(true)
+    // 关键：不能把缺省值钉成 ACTIVE，否则 OFFLINE 的 REVIEW 行永远拿不到。
+    expect(seen[0]?.status).toBeUndefined()
+  })
+
+  // 反向保证：公开 Feed（没有 sellerId）仍必须显式限定 ACTIVE，不能顺手把过滤打开。
+  test('public feed still pins the status filter to ACTIVE', async () => {
+    const seen: FeedCriteria[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async (criteria) => {
+          seen.push(criteria)
+          return []
+        },
+      }),
+    })
+
+    await service.listFeed(null, feedQuery())
+
+    expect(seen[0]?.status).toBe('ACTIVE')
+    expect(seen[0]?.includeUnapproved).toBe(false)
+  })
+
+  // 回归（评审 D3）：`status` 不带 `sellerId` 时，service 层也要拒绝。
+  // 契约只在 schema refine 里写这条，router 之外绕进本函数就能拿到全站 OFFLINE/SOLD。
+  test('rejects a status filter without sellerId even when bypassing the schema', async () => {
+    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+    const error = await expectServiceError(() =>
+      service.listFeed(null, feedQuery({ status: 'OFFLINE' })),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('VALIDATION_FAILED')
+  })
+
+  test('does not request unapproved listings for the public feed', async () => {
+    const seen: FeedCriteria[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async (criteria) => {
+          seen.push(criteria)
+          return []
+        },
+      }),
+    })
+
+    await service.listFeed(null, feedQuery())
+    // 公开 Feed 不需要未审核商品：includeUnapproved 为 false（store 视为未开启，照样加 APPROVED 过滤）。
+    expect(seen[0]?.includeUnapproved).toBe(false)
   })
 
   test('rejects a cursor that does not match the requested sort', async () => {
@@ -405,6 +501,50 @@ describe('createListing', () => {
     ).toBe('IMAGE_REFERENCE_INVALID')
   })
 
+  test('blocks prohibited content before upload validation and records the decision', async () => {
+    const records: string[] = []
+    const service = createListingService({
+      storage: fakeStorage({
+        stat: async () => {
+          throw new Error('should not inspect uploads')
+        },
+      }),
+      store: fakeStore({
+        recordModeration: async (input) => {
+          records.push(`${input.action}:${input.decision}`)
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, title: '毒品交易' }),
+    )
+
+    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    expect(records).toEqual(['CREATE:BLOCK'])
+  })
+
+  test('creates review listings offline and does not expose them in the public feed', async () => {
+    let received: CreateListingRecord | undefined
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        createListingAtomic: async (record) => {
+          received = record
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    const result = await service.createListing(SELLER_ID, {
+      ...validCreate,
+      description: '加微信联系',
+    })
+
+    expect(received?.moderationStatus).toBe('REVIEW')
+    expect(result.detail.id).toBe(LISTING_ID)
+  })
+
   test('reports created=true and returns the detail', async () => {
     const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
     const result = await service.createListing(SELLER_ID, validCreate)
@@ -441,7 +581,10 @@ describe('createListing', () => {
 
 describe('updateListing', () => {
   test('rejects edits from anyone but the owner', async () => {
-    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({ updateListingAtomic: async () => ({ kind: 'not-owner' }) }),
+    })
     const error = await expectServiceError(() =>
       service.updateListing(OTHER_ID, LISTING_ID, { title: '新标题' }),
     )
@@ -449,18 +592,12 @@ describe('updateListing', () => {
   })
 
   test('rejects edits while RESERVED or SOLD (transaction-owned states)', async () => {
-    for (const status of ['RESERVED', 'SOLD'] as ListingStatus[]) {
-      const service = createListingService({
-        storage: fakeStorage(),
-        store: fakeStore({
-          findState: async (): Promise<ListingState> => ({
-            sellerId: SELLER_ID,
-            status,
-            priceCents: 16000,
-            free: false,
-          }),
-        }),
-      })
+    const service = createListingService({
+      storage: fakeStorage(),
+      // 锁内读到 RESERVED / SOLD → store 直接回 `locked`，service 不再做二次读。
+      store: fakeStore({ updateListingAtomic: async () => ({ kind: 'locked' }) }),
+    })
+    for (const _status of ['RESERVED', 'SOLD'] as ListingStatus[]) {
       expect(
         (
           await expectServiceError(() =>
@@ -476,12 +613,11 @@ describe('updateListing', () => {
     const freeListing = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        findState: async () => ({
-          sellerId: SELLER_ID,
-          status: 'ACTIVE',
-          priceCents: 0,
-          free: true,
-        }),
+        // 合并校验在 `apply` 里抛：store 的回调在真实实现中也会把它带出事务。
+        updateListingAtomic: async (input) => {
+          input.apply(input, updateTarget({ priceCents: 0, free: true }))
+          return { kind: 'updated' }
+        },
       }),
     })
     const error = await expectServiceError(() =>
@@ -497,10 +633,11 @@ describe('updateListing', () => {
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        updateListing: async (input) => {
-          received.fields = input.fields
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget())
+          if (plan.kind === 'write') received.fields = plan.fields
           if (input.objectKeys) received.objectKeys = input.objectKeys
-          return listingRow()
+          return { kind: 'updated' }
         },
       }),
     })
@@ -510,32 +647,19 @@ describe('updateListing', () => {
       objectKeys: [`listings/${SELLER_ID}/new.jpg`],
     })
 
-    expect(received.fields).toEqual({ title: '新标题' })
+    expect(received.fields).toMatchObject({ title: '新标题', moderationStatus: 'APPROVED' })
+    // `objectKeys` 不是 `listings` 的列，绝不能出现在 `fields` 里。
+    expect(received.fields).not.toHaveProperty('objectKeys')
     expect(received.objectKeys).toEqual([`listings/${SELLER_ID}/new.jpg`])
   })
 
-  // 并发：service 读到的还是可编辑状态，但 UPDATE 时它已变成 RESERVED / SOLD（#11 的交易流程），
-  // UPDATE 的 status 谓词会命中 0 行 —— 这必须是 409 而不是 404。
-  test('reports 409 when the listing became RESERVED between the read and the write', async () => {
-    // fake 必须是**有状态**的：第一次 findState 是前置检查（此时仍可编辑，请求得以继续），
-    // 第二次是 UPDATE 没命中后的复读（此时已被并发改成 RESERVED）。
-    // 若两次都返回 RESERVED，异常会在前置检查就抛出，`updateListing` 根本不会被调用 ——
-    // 那样即使把 service 的 409 分支回退成 404，用例也照样通过（等于没测）。
-    let reads = 0
+  // 并发：锁内读到的行已经是 RESERVED / SOLD（#11 的交易流程）——这必须是 409 而不是 404。
+  // 重点在于判定用的就是**锁内那一行**：旧实现是第一次读过之后、UPDATE 没命中再复读，
+  // 两次读之间可以变。
+  test('reports 409 when the row read inside the lock is RESERVED / SOLD', async () => {
     const service = createListingService({
       storage: fakeStorage(),
-      store: fakeStore({
-        updateListing: async () => null,
-        findState: async () => {
-          reads += 1
-          return {
-            sellerId: SELLER_ID,
-            status: reads === 1 ? 'ACTIVE' : 'RESERVED',
-            priceCents: 16000,
-            free: false,
-          }
-        },
-      }),
+      store: fakeStore({ updateListingAtomic: async () => ({ kind: 'locked' }) }),
     })
 
     const error = await expectServiceError(() =>
@@ -560,7 +684,7 @@ describe('updateListing', () => {
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        updateListing: async () => {
+        updateListingAtomic: async () => {
           throw wrapped
         },
       }),
@@ -580,7 +704,7 @@ describe('updateListing', () => {
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        updateListing: async () => {
+        updateListingAtomic: async () => {
           throw Object.assign(new Error('boom'), {
             errno: '23514',
             constraint: 'listings_some_other_check',
@@ -594,20 +718,10 @@ describe('updateListing', () => {
     ).rejects.toThrow('boom')
   })
 
-  test('returns 404 when the listing disappears between the check and the update', async () => {
-    // 先读到可编辑的行，UPDATE 没命中后再读已经查不到该行（并发删除）
-    let reads = 0
+  test('returns 404 when the listing disappears before the transaction reads it', async () => {
     const service = createListingService({
       storage: fakeStorage(),
-      store: fakeStore({
-        updateListing: async () => null,
-        findState: async () => {
-          reads += 1
-          return reads === 1
-            ? { sellerId: SELLER_ID, status: 'ACTIVE' as const, priceCents: 16000, free: false }
-            : null
-        },
-      }),
+      store: fakeStore({ updateListingAtomic: async () => ({ kind: 'not-found' }) }),
     })
     expect(
       (
@@ -616,6 +730,32 @@ describe('updateListing', () => {
         )
       ).status,
     ).toBe(404)
+  })
+
+  // 回归（评审 blocker 1 的 service 一半）：审核必须跑在**锁内读到的那一行**上。
+  // store 把当前行交给 `apply`，service 必须用它的 title/description 去合并 —— 而不是任何
+  // 事务外的预读。这里让锁内的行已经是"待审内容 + REVIEW"，断言只改价格的 PATCH 也会
+  // 重新产出 REVIEW（而不是写回 APPROVED）。真正的行锁行为由 store.test.ts 的真库并发用例覆盖。
+  test('re-moderates against the row handed over by the locked transaction', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(
+            input,
+            updateTarget({ title: '加微信联系', moderationStatus: 'REVIEW', status: 'OFFLINE' }),
+          )
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { priceCents: 17000 })
+
+    // 即使本请求只改价格，也不能把已有审核结论冲成 APPROVED。
+    expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
   })
 })
 

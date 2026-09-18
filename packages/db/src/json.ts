@@ -17,9 +17,26 @@ import { type SQL, sql } from 'drizzle-orm'
  * values({ payload: jsonParam(obj) })   → jsonb_typeof = 'object'，payload->>'listingId' = '...'
  * ```
  *
+ * **数组必须走 `JSON.stringify` 再转型**（不能写 `sql\`${arr}::jsonb\``）：
+ * drizzle 的 `sql` 模板把**数组当作多个绑定参数**展开，于是 `['a','b']` 会变成
+ * `($1, $2)::jsonb`（语法错），空数组更会变成 `()::jsonb`。实测：
+ *
+ * ```text
+ * sql`${['a']}::jsonb`                  → $1 是 'a'（单个字符串）→ jsonb_typeof = 'string'
+ * sql`${[]}::jsonb`                     → ()::jsonb → ERROR 语法错
+ * sql`${JSON.stringify(['a'])}::text::jsonb` → jsonb_typeof = 'array'，@> / jsonb_array_length 可用
+ * ```
+ *
  * 回归用例：按 `payload->>'...'` 在 SQL 层过滤的路径都守着它——`apps/worker/.../engine.test.ts`
- * 用 `payload->>'wishId'` 断言通知；`seed.test.ts` 断言 seed 写出的 jobs payload 是 object。
+ * 用 `payload->>'wishId'` 断言通知；`seed.test.ts` 断言 seed 写出的 jobs payload 是 object；
+ * `apps/api/src/modules/listings/store.test.ts` 断言审核记录的 `matched_rules` 是 jsonb 数组。
  */
 export function jsonParam(value: unknown): SQL {
-  return sql`${value}::jsonb`
+  // `::text::jsonb` 而不是直接 `::jsonb`：先把值作为**单个字符串参数**绑定（`JSON.stringify`
+  // 让数组/对象都不会被模板展开成参数列表），再交给 PG 解析。
+  //
+  // `JSON.stringify(undefined)` 返回的是 JS 的 `undefined`（不是字符串），绑定后模板会变成
+  // `::text::jsonb` 这种缺表达式的语法错（评审 D5）。当前调用点都传具体值，但这是个"应当成立
+  // 却被依赖"的共享 helper，所以在这里就把未定义收敛成 JSON null —— 与 JSON 的语义一致。
+  return sql`${JSON.stringify(value) ?? 'null'}::text::jsonb`
 }
