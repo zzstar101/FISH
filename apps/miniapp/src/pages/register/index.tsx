@@ -23,9 +23,11 @@ import './index.scss'
  * - 校区从两枚胶囊单选改成一行「值 + 下拉箭头」，点开用原生 `showActionSheet`；
  * - 成功态不再是页内替换，而是独立页面。
  *
- * ⚠️ 学号下方那句「20 开头的学号会通过校园认证」照稿保留，但它描述的是**当前 Mock Provider**
- * 的判定（`apps/api/src/app.ts` 注明：任意 20 开头 12 位学号都返回 VERIFIED，不可当安全依据）。
- * #68 的真实 Provider 落地后这句文案要跟着改 —— 它不属于前端可依赖的规则。
+ * 与稿子的**一处文案偏差**（已与 Owner 确认）：稿子的 tagline 是「认证状态由学号自动判定」、
+ * 学号下方是「20 开头的学号会通过校园认证」。这两句描述的其实是**当前 Mock Provider 的判定规则**
+ * （`apps/api/src/app.ts` 注明：任意 20 开头 12 位学号都返回 VERIFIED，不可当安全依据），
+ * 而真实 Provider（#68）走的是**教育邮箱验证码**（见本页之后的注册成功页第 1 步），
+ * 所以照稿展示会给用户一个将来必然错误的承诺。改成不承诺具体机制的说法。
  */
 
 const STUDENT_NO_LEN = 12
@@ -164,7 +166,7 @@ export default function Register() {
         <View className="reg__brand">
           <Image className="reg__mark" src={brandMark} mode="aspectFit" />
           <Image className="reg__wordmark" src={brandWordmark} mode="aspectFit" />
-          <Text className="reg__tagline">注册后即完成登录，认证状态由学号自动判定</Text>
+          <Text className="reg__tagline">注册后即完成登录，认证状态以学校认证结果为准</Text>
         </View>
 
         {/* ---- 表单卡 ---- */}
@@ -197,7 +199,7 @@ export default function Register() {
               {errors.studentNo ? (
                 <Text className="reg__err">{errors.studentNo}</Text>
               ) : (
-                <Text className="reg__help">12 位数字，20 开头的学号会通过校园认证</Text>
+                <Text className="reg__help">12 位数字；认证状态需完成校园认证后更新</Text>
               )}
             </View>
 
