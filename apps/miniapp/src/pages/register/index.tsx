@@ -1,7 +1,9 @@
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import { signUp, useAuth } from '@/features/auth/store'
+import { isApiError } from '@/lib/request'
 import type { Campus } from '@/mock/types'
 import './index.scss'
 
@@ -11,11 +13,16 @@ import './index.scss'
  * 与 B1 同结构，多出「昵称 / 校区单选 / 二次密码」，且注册成功后账号是
  * **UNVERIFIED** —— 成功态要引导去校园认证（B3），这是设计稿第 03 帧的重点。
  *
- * 数据：`POST /auth/register`（后端已就绪，PR #18）。提交停在「待接入」，
- * 但成功态是真实可达的（校验通过即展示），因为它是引导用户去认证的关键一步。
+ * 数据：`POST /auth/register`。契约是**注册即登录**（响应体与 `/me` 同构），
+ * 所以成功态同时意味着已登录：`features/auth/store` 会广播 `authed`，
+ * 会话 cookie 由 `@/lib/request` 落盘。
  */
 
 const STUDENT_NO_LEN = 12
+/** 密码 8~32 位、昵称 1~20 字：直接对齐契约，前端不另定一套 */
+const PASSWORD_MIN = 8
+const PASSWORD_MAX = 32
+const NICKNAME_MAX = 20
 /** 校区值域对齐 `auth/user.ts` 的 Campus */
 const CAMPUSES: Campus[] = ['肇庆', '广州']
 
@@ -34,6 +41,24 @@ export default function Register() {
   /** 注册成功态（设计稿第 03 帧） */
   const [done, setDone] = useState(false)
 
+  const { status } = useAuth()
+
+  /**
+   * 本次注册是否刚刚成功。
+   *
+   * 用 `ref` 而不是 `done` 状态：`signUp()` 内部先 `emit(authed)` 再 resolve，
+   * React 会因此先跑一次 `(authed, false)` 的 effect —— 那时 `setDone(true)` 还没执行，
+   * 用状态判断会把成功态直接抢成跳首页（「去校园认证」入口不可达）。
+   * ref 在 effect 执行时读的是当前值，不受那次提前渲染影响。
+   */
+  const justRegistered = useRef(false)
+
+  /** 已登录用户不该停在注册页（刚注册成功那次除外，要留在成功态引导去认证） */
+  useEffect(() => {
+    if (status !== 'authed' || justRegistered.current) return
+    void Taro.switchTab({ url: '/pages/home/index' })
+  }, [status])
+
   const pwd2Ok = password2.length > 0 && password2 === password
   const filled =
     nickname.trim().length > 0 &&
@@ -44,12 +69,15 @@ export default function Register() {
 
   const validate = () => {
     const next: Partial<Record<FieldKey, string>> = {}
-    if (nickname.trim().length < 2) next.nickname = '昵称至少 2 个字'
+    const nick = nickname.trim()
+    if (!nick) next.nickname = '请输入昵称'
+    else if (nick.length > NICKNAME_MAX) next.nickname = `昵称最多 ${NICKNAME_MAX} 个字`
     const no = studentNo.trim()
     if (!no) next.studentNo = '请输入学号'
     else if (!/^\d+$/.test(no)) next.studentNo = '学号只能是数字'
     else if (no.length !== STUDENT_NO_LEN) next.studentNo = `学号应为 ${STUDENT_NO_LEN} 位数字`
-    if (password.length < 6) next.password = '密码至少 6 位'
+    if (password.length < PASSWORD_MIN) next.password = `密码至少 ${PASSWORD_MIN} 位`
+    else if (password.length > PASSWORD_MAX) next.password = `密码最多 ${PASSWORD_MAX} 位`
     if (password2.length === 0) next.password2 = '请再次输入密码'
     else if (password2 !== password) next.password2 = '两次输入的密码不一致'
     return next
@@ -61,11 +89,35 @@ export default function Register() {
     setErrors(next)
     if (Object.keys(next).length > 0) return
     setSubmitting(true)
-    // 真实实现：POST /auth/register；成功后账号为 UNVERIFIED
-    setTimeout(() => {
-      setSubmitting(false)
-      setDone(true)
-    }, 800)
+    void (async () => {
+      try {
+        // 注册即登录：成功后 store 广播 `authed`，无需再打 `/auth/login`
+        await signUp({
+          studentNo: studentNo.trim(),
+          password,
+          nickname: nickname.trim(),
+          campus,
+        })
+        // **先**置这个 ref 再改状态：`signUp()` 已经 emit 过 `authed`，
+        // 那次提前渲染的 effect 不该把成功态抢走（见上面的说明）
+        justRegistered.current = true
+        setSubmitting(false)
+        setDone(true)
+      } catch (error) {
+        setSubmitting(false)
+        if (isApiError(error) && error.code === 'STUDENT_NO_TAKEN') {
+          setErrors({ studentNo: '这个学号已经注册过了，直接去登录' })
+          return
+        }
+        if (isApiError(error)) {
+          // 其余错误码（422 的后端文案固定是「请求参数不合法」、5xx 等）不是某一个
+          // 字段的问题，挂到「学号」下面只会误导。
+          void Taro.showToast({ title: error.message, icon: 'none' })
+          return
+        }
+        void Taro.showToast({ title: '连不上服务器，请确认后端已启动', icon: 'none' })
+      }
+    })()
   }
 
   const clearError = (key: FieldKey) => {
@@ -154,7 +206,7 @@ export default function Register() {
             <Image className="reg__input-ic" src={ICONS.user} mode="aspectFit" />
             <Input
               className="reg__val"
-              maxlength={16}
+              maxlength={NICKNAME_MAX}
               value={nickname}
               disabled={submitting}
               placeholder="例如：校园小林"
@@ -239,7 +291,7 @@ export default function Register() {
               password={!showPwd}
               value={password}
               disabled={submitting}
-              placeholder="至少 6 位"
+              placeholder="至少 8 位"
               placeholderClass="reg__ph"
               onInput={(event) => {
                 setPassword(event.detail.value)

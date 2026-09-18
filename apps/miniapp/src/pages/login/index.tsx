@@ -1,7 +1,9 @@
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import { signIn, useAuth } from '@/features/auth/store'
+import { isApiError } from '@/lib/request'
 import './index.scss'
 
 /**
@@ -13,12 +15,15 @@ import './index.scss'
  * 状态覆盖（对应设计稿四帧）：默认 / 校验失败（错误小字贴各自输入框下）/
  * 提交中（按钮 loading + 全表禁用，防重复提交）/ 边界（密码明文 + 聚焦环 + 未填完则禁用）。
  *
- * 数据：`POST /auth/login`（后端已就绪，PR #18），本页只做前端的字段校验与交互，
- * 提交动作停在「待接入」，不假装已登录。
+ * 数据：`POST /auth/login`，成功后由 `features/auth/store` 广播登录态、
+ * `@/lib/request` 落盘会话 cookie，本页据此跳到首页。
  */
 
 /** 学号：12 位数字（契约里 studentNo 的形状） */
 const STUDENT_NO_LEN = 12
+/** 密码 8~32 位是**契约里的产品规则**（`auth/session.ts` 的 `PasswordSchema`），不是随手定的 */
+const PASSWORD_MIN = 8
+const PASSWORD_MAX = 32
 
 export default function Login() {
   const [studentNo, setStudentNo] = useState('')
@@ -27,6 +32,22 @@ export default function Login() {
   const [focused, setFocused] = useState<'studentNo' | 'password' | null>(null)
   const [errors, setErrors] = useState<{ studentNo?: string; password?: string }>({})
   const [submitting, setSubmitting] = useState(false)
+
+  const { status } = useAuth()
+
+  /**
+   * 已登录不该停在登录页。
+   * 登录成功那一刻也走这条（store 广播 `authed`），所以 `submit()` 里不再自己跳转
+   * —— 两处都跳会连发两次 `switchTab`。
+   */
+  useEffect(() => {
+    if (status !== 'authed') return
+    void Taro.switchTab({ url: '/pages/home/index' }).catch(() => {
+      // 跳转失败必须给出口：否则按钮会永远停在「登录中…」的禁用态上
+      setSubmitting(false)
+      void Taro.showToast({ title: '已登录，请手动返回首页', icon: 'none' })
+    })
+  }, [status])
 
   const filled = studentNo.trim().length > 0 && password.length > 0
   const canSubmit = filled && !submitting
@@ -38,7 +59,8 @@ export default function Login() {
     else if (!/^\d+$/.test(no)) next.studentNo = '学号只能是数字'
     else if (no.length !== STUDENT_NO_LEN) next.studentNo = `学号应为 ${STUDENT_NO_LEN} 位数字`
     if (!password) next.password = '请输入密码'
-    else if (password.length < 6) next.password = '密码至少 6 位'
+    else if (password.length < PASSWORD_MIN) next.password = `密码至少 ${PASSWORD_MIN} 位`
+    else if (password.length > PASSWORD_MAX) next.password = `密码最多 ${PASSWORD_MAX} 位`
     return next
   }
 
@@ -48,11 +70,29 @@ export default function Login() {
     setErrors(next)
     if (next.studentNo || next.password) return
     setSubmitting(true)
-    // 真实实现：POST /auth/login（成功后会种 httpOnly cookie）
-    setTimeout(() => {
-      setSubmitting(false)
-      void Taro.showToast({ title: '登录接口待接入', icon: 'none' })
-    }, 800)
+    void (async () => {
+      try {
+        await signIn({ studentNo: studentNo.trim(), password })
+        // 成功后**不**复位 submitting：跳转期间按钮停在 loading，防连点重复登录
+        void Taro.showToast({ title: '登录成功', icon: 'success' })
+      } catch (error) {
+        setSubmitting(false)
+        if (isApiError(error) && error.code === 'INVALID_CREDENTIALS') {
+          // 401 有两种：`UNAUTHENTICATED`（没登录）与 `INVALID_CREDENTIALS`（账号密码错）。
+          // 只有后者是登录表单的行内错误。
+          setErrors({ password: '学号或密码不正确' })
+          return
+        }
+        if (isApiError(error)) {
+          // 其余错误码（422 VALIDATION_FAILED 的后端文案固定是「请求参数不合法」、
+          // 5xx 等）都不是某一个字段的问题，挂到「学号」下面只会误导。
+          void Taro.showToast({ title: error.message, icon: 'none' })
+          return
+        }
+        // 非 ApiError = 请求没到后端（域名没配 / 后端没起），这不是字段问题，用 toast
+        void Taro.showToast({ title: '连不上服务器，请确认后端已启动', icon: 'none' })
+      }
+    })()
   }
 
   return (

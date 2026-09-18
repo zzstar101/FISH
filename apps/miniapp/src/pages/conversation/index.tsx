@@ -3,8 +3,10 @@ import { Image, Input, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
+import { useAuthGuard } from '@/features/auth/guard'
 import {
   conversation as findConversation,
   formatAmount,
@@ -96,6 +98,7 @@ type Entry =
   | { kind: 'media'; createdAt: string; media: MockMediaMessage }
 
 export default function Conversation() {
+  const authStatus = useAuthGuard()
   const router = useRouter<{ id?: string }>()
   const conversationId = router.params.id || FALLBACK_ID
 
@@ -307,6 +310,14 @@ export default function Conversation() {
         void Taro.showToast({ title: '文件发送待接入', icon: 'none' })
     }
   }
+
+  /**
+   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
+   *
+   * 必须放在「会话不存在」分支**之前**：未登录带一个非法 id 进来会先命中空态，
+   * 于是跳转被绕过一帧（守卫的 effect 与渲染在同一轮里，早返回的分支先出图）。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
   /* 取不到会话（例如手输了一个不存在的 id）：给空态兜底，不留白屏 */
   if (!conversation) {

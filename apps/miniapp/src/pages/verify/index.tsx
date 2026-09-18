@@ -2,8 +2,11 @@ import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
-import { eduEmailOk, ME, verifyState } from '@/mock/api'
+import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
+import { eduEmailOk } from '@/mock/api'
 import './index.scss'
 
 /**
@@ -37,10 +40,21 @@ const CODE_SLOTS = Array.from({ length: CODE_LEN }, (_, index) => ({
 type Stage = 'email' | 'code'
 
 export default function Verify() {
-  const state = verifyState()
+  const authStatus = useAuthGuard()
+  const { user } = useAuth()
 
-  /** 已认证用户进来：整页替换为认证状态卡（设计稿第 04 帧的状态边界） */
-  const verified = state.state === 'VERIFIED'
+  /**
+   * 「已认证」必须用**真实登录态**（契约的 `Me.authStatus`）判断，不能用 mock 的
+   * `verifyState()`：后者对演示账号返回 VERIFIED，会把一个真实未认证用户渲染成
+   * 「校园认证已通过」。认证流程本身仍无端点（`BLOCKED: #68`），所以邮箱 / 验证码
+   * 分支还是 mock。
+   *
+   * 同理**不再展示教育邮箱与认证时间**：契约的 `Me` 里没有这两个字段，
+   * 唯一来源是 mock 的演示账号（`a***n@stu.edu.cn` / 2026-05-06），
+   * 摆给真实已认证用户就是「真身份 + 假邮箱」。宁可不显示。
+   */
+  const verified = user?.authStatus === 'VERIFIED'
+  const nickname = user?.nickname ?? ''
   const [stage, setStage] = useState<Stage>('email')
 
   const [email, setEmail] = useState('')
@@ -126,27 +140,16 @@ export default function Verify() {
 
             <View className="verify__badgerow">
               <View className="verify__av">
-                <Text className="verify__av-tx">{ME.nickname.slice(0, 1)}</Text>
+                <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
               </View>
               <View className="verify__badgeinfo">
                 <View className="verify__nameRow">
-                  <Text className="verify__name">{ME.nickname}</Text>
+                  <Text className="verify__name">{nickname}</Text>
                   <Image className="verify__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
                 </View>
                 <Text className="verify__badge-sub">我的 · 个人页</Text>
               </View>
               <Text className="verify__badge-tag">已认证</Text>
-            </View>
-          </View>
-
-          <View className="verify__card">
-            <View className="verify__prow">
-              <Text className="verify__pname">教育邮箱</Text>
-              <Text className="verify__ptag num">{state.email ?? '—'}</Text>
-            </View>
-            <View className="verify__prow">
-              <Text className="verify__pname">认证时间</Text>
-              <Text className="verify__ptag num">{state.verifiedAt ?? '—'}</Text>
             </View>
           </View>
 
@@ -177,6 +180,11 @@ export default function Verify() {
 
   /* ---------------------------------------------------- 未认证：填邮箱 / 输码 */
 
+  /**
+   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
+   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
   return (
     <View className="verify">
       <View className="verify__bg" />
