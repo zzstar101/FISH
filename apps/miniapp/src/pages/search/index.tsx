@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import ProductCard from '@/components/product-card'
+import TopBar from '@/components/top-bar'
 import {
   defaultSearchHistory,
   getUser,
@@ -54,14 +55,6 @@ export default function Search() {
   const [history, setHistory] = useState<string[]>(defaultSearchHistory)
   const [loading, setLoading] = useState(false)
   const [panelOpen, setPanelOpen] = useState(initialKeyword.length === 0)
-
-  const statusBarHeight = (() => {
-    try {
-      return Taro.getWindowInfo().statusBarHeight ?? 20
-    } catch {
-      return 20
-    }
-  })()
 
   const hot = useMemo(() => hotSearches(), [])
 
@@ -121,34 +114,39 @@ export default function Search() {
 
   return (
     <View className="search">
-      <View className="search__status" style={{ height: `${statusBarHeight}px` }} />
-
-      <View className="search__bar">
-        <View className="search__back" onClick={() => void Taro.navigateBack()}>
-          <Image className="search__back-img" src={ICONS.backInk} mode="aspectFit" />
-        </View>
-
-        <View className="search__field">
-          <Input
-            className="search__input"
-            value={keyword}
-            type="text"
-            placeholder={searchPlaceholder}
-            placeholderClass="search__input-ph"
-            confirmType="search"
-            onInput={(event) => setKeyword(event.detail.value)}
-            onConfirm={submit}
-          />
-          {keyword.length > 0 ? (
-            <View className="search__clear" onClick={clearInput}>
-              <Image className="search__clear-img" src={ICONS.closeInk} mode="aspectFit" />
+      {/*
+        固定顶栏（glass 变体）：返回钮 + 输入框，标题与微信胶囊同行居中。
+        原先本页自绘「状态栏占位 + sticky 搜索条」，高度 148px（74pt），
+        而设计稿 `.sbar` 是 88px（44pt）—— 现在由 top-bar 统一按胶囊反推，天然对齐。
+      */}
+      <TopBar
+        variant="glass"
+        spacer
+        back
+        onBack={() => void Taro.navigateBack()}
+        center={
+          <View className="search__field">
+            <Input
+              className="search__input"
+              value={keyword}
+              type="text"
+              placeholder={searchPlaceholder}
+              placeholderClass="search__input-ph"
+              confirmType="search"
+              onInput={(event) => setKeyword(event.detail.value)}
+              onConfirm={submit}
+            />
+            {keyword.length > 0 ? (
+              <View className="search__clear" onClick={clearInput}>
+                <Image className="search__clear-img" src={ICONS.closeInk} mode="aspectFit" />
+              </View>
+            ) : null}
+            <View className="search__submit" onClick={submit}>
+              <Text>搜索</Text>
             </View>
-          ) : null}
-          <View className="search__submit" onClick={submit}>
-            <Text>搜索</Text>
           </View>
-        </View>
-      </View>
+        }
+      />
 
       {panelOpen ? (
         <View className="search__panel">

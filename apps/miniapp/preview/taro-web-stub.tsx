@@ -288,19 +288,44 @@ const Taro = {
   hideToast: noop,
   stopPullDownRefresh: noop,
   getCurrentPages: () => [{}, {}],
-  getWindowInfo: () => ({
-    statusBarHeight: 44,
-    windowWidth: 390,
-    windowHeight: 844,
-    screenHeight: 844,
-    safeArea: { top: 44, bottom: 810, height: 766 },
-  }),
+  /**
+   * 窗口信息。`windowWidth` 必须**跟着预览视口**走：
+   * 顶栏的右侧避让 = `windowWidth − 胶囊左边`，写死 390 的话，
+   * 预览视口一旦不是 390（例如按 750 宽取真机比例），算出来的避让就会偏大。
+   */
+  getWindowInfo: () => {
+    const w = window.innerWidth || 390
+    const h = window.innerHeight || 844
+    return {
+      statusBarHeight: 44,
+      windowWidth: w,
+      windowHeight: h,
+      screenHeight: h,
+      safeArea: { top: 44, bottom: h - 34, height: h - 78 },
+    }
+  },
   getSystemInfoSync: () => ({
     statusBarHeight: 44,
     windowWidth: 390,
     windowHeight: 844,
     platform: 'devtools',
   }),
+  /**
+   * 微信胶囊（右上角）的布局信息。
+   *
+   * 真机由微信给出；预览里按 iPhone 14 的比例合成一份：
+   * 胶囊宽 87 / 高 32 / 距右边 7 —— 关键是 `left` 要**跟着视口宽度算**，
+   * 不能写死。写死 278 的话，一旦预览视口不是 390（比如按 750 宽取真实比例），
+   * `readNavMetrics()` 推出的右侧避让就会偏大，顶栏的搜索胶囊会被截短。
+   *
+   * 行高由这些值反推：上留白 (51 − 44) = 7 → 7 × 2 + 32 = 46。
+   */
+  getMenuButtonBoundingClientRect: () => {
+    const width = 87
+    const right = 7
+    const left = (window.innerWidth || 390) - right - width
+    return { top: 51, bottom: 83, left, right: left + width, width, height: 32 }
+  },
   setNavigationBarTitle: noop,
   hideTabBar: noop,
   showTabBar: noop,

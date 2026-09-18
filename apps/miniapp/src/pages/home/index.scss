@@ -2,14 +2,14 @@
 
 /**
  * 首页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
- * 顶部冰蓝渐变圆角背景 + 品牌行 + 悬浮搜索胶囊 + 分类横滑 + 两列瀑布流。
+ * 固定顶栏（品牌 logo + 搜索胶囊）→ 分类横滑条 → 两列瀑布流。
+ *
+ * 顶栏由 `components/top-bar` 提供（`fixed` + 自带等高占位块），
+ * 所以这里不再需要 `padding-top` 去让出状态栏那一段。
  */
 .home {
   position: relative;
   min-height: 100vh;
-  /* 纵向 flex：让悬浮 TabBar 作为最后一个 flex 子项用 sticky 吸底 */
-  display: flex;
-  flex-direction: column;
   padding-bottom: 176px;
 }
 
@@ -17,27 +17,15 @@
   @include page-hero(504px, 64px);
 }
 
-.home__hero {
-  position: relative;
-  z-index: 1;
-  padding: 148px 40px 0;
-  display: flex;
-  flex-direction: column;
-  gap: 32px;
-}
-
-.home__brandbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
-
-/* 品牌 logo：定高，宽度按原图比例由 aspectFit 撑开（不用 heightFix：小程序里定高图容易踩宽高耦合的坑） */
+/*
+ * 品牌 logo：定高、宽度按原图比例由 aspectFit 撑开。
+ * 设计稿 `.brand-logo{height:calc(40 * var(--rpx))}` = 20pt → 40px。
+ */
 .home__logo-wrap {
-  height: 60px;
+  flex: 0 0 auto;
+  height: 48px;
   /* logo 原始比例约 4.2:1，定高后按比例给个足够宽的盒子 */
-  width: 252px;
+  width: 202px;
 }
 
 .home__logo {
@@ -45,40 +33,25 @@
   height: 100%;
 }
 
-.home__iconbtn {
-  width: 92px;
-  height: 92px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.72);
-  border: 2px solid rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-
-  &:active {
-    background: #fff;
-  }
-}
-
-.home__iconbtn-img {
-  width: 48px;
-  height: 48px;
-}
-
-/* 悬浮搜索胶囊：设计稿是 h52、圆角 999、白底 + 极淡品牌描边 */
+/*
+ * 顶栏里的搜索胶囊。
+ *
+ * 高度 64px = 32 CSS px（750rpx 屏下 64rpx = 32 CSS px），与微信原生胶囊等高 ——
+ * 设计稿的 `.search-float{height:var(--cap-h)}` 就是这个意思，顶栏行高也是按
+ * 同一枚胶囊反推出来的，所以两者天然对齐。
+ */
 .home__search {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 18px;
-  height: 104px;
-  padding: 0 28px;
+  gap: 14px;
+  height: 64px;
+  padding: 0 22px;
   border-radius: var(--r-pill);
   background: var(--surface);
   border: 2px solid #e6eefc;
-  box-shadow: 0 32px 60px -52px rgba(23, 35, 61, 0.55);
+  box-shadow: 0 20px 40px -34px rgba(23, 35, 61, 0.55);
 
   &:active {
     border-color: var(--line);
@@ -86,31 +59,35 @@
 }
 
 .home__search-cam {
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   flex: 0 0 auto;
 }
 
 .home__search-ph {
   flex: 1;
   min-width: 0;
-  font-size: 28px;
+  font-size: 24px;
   color: var(--muted);
   @include ellipsis;
 }
 
 .home__search-icon {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
 }
 
-/* 分类横滑：吸顶后压成纯文字（对应设计稿的 .cats.stuck） */
+/*
+ * 分类横滑条。
+ *
+ * `top` 由页面内联下发（= 固定顶栏的总高，运行时读微信胶囊算出来的），
+ * 不能写 `0` —— 那会让它在吸顶后钻到顶栏底下被盖住。
+ */
 .home__cats-wrap {
   position: sticky;
-  top: 0;
   z-index: 10;
-  margin-top: 16px;
+  margin-top: 8px;
   padding: 0 24px;
 }
 

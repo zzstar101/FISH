@@ -3,11 +3,9 @@
 /**
  * 消息（Tab 页）。尺寸 = 设计稿 messages.html 的 pt × 2（见 DESIGN.md）。
  *
- * 区块顺序照设计稿：顶部冰蓝渐变圆角背景 → 页头（大标题 + 副标题 + 全部已读）→
- * bento 两卡 → 筛选胶囊横滑 → 「最近联系」标题行 → 会话列表 → 悬浮 TabBar。
- *
- * 根节点是「纵向 flex + TabBar 作为最后一个子项」，这样 components/tab-bar 里的
- * `position: sticky` 才能稳定吸底（与首页 / 许愿页同一套写法）。
+ * 固定顶栏（标题「消息」+ 全部已读）由 `components/top-bar` 提供并自带等高占位块，
+ * 页面负责：冰蓝背景 → 待回复汇总行 → bento 两卡 → 筛选胶囊横滑 →
+ * 「最近联系」标题行 → 会话列表 → 悬浮 TabBar。
  */
 .chat {
   position: relative;
@@ -20,66 +18,49 @@
 
 /* 顶部冰蓝渐变圆角背景（设计稿 .topbg：高 248pt、底部圆角 32pt） */
 .chat__bg {
-  @include page-hero(496px, 64px);
+  @include page-hero(440px, 64px);
 }
 
-/* ─────────────────────────────── 页头 ─────────────────────────────── */
+/* ───────────────────────────── 顶部汇总行 ───────────────────────────── */
 
-/**
- * 设计稿的页面自带状态栏（47pt）+ content 上边距（4pt）+ hd 上边距（12pt），
- * 大标题距屏幕顶 63pt。app.config.ts 是 navigationStyle:custom，页面顶到屏幕顶，
- * 所以这里把这段让出来（126px = 63pt），标题才不会被状态栏压住。
+/*
+ * 「N 条待回复 · N 笔待确认面交」。
+ * 原先是页头副标题，标题抬进固定顶栏后它作为内容留在下面 —— 数据来自
+ * `chatSummary()`，是真实计数，不跟着版式一起删。
  */
-.chat__hd {
+.chat__lead {
   position: relative;
   z-index: 1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 126px 40px 0;
-}
-
-.chat__hd-left {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.chat__title {
-  font-size: 54px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1.14;
-  white-space: nowrap;
-}
-
-.chat__title-em {
-  color: var(--brand);
+  padding: 8px 40px 0;
 }
 
 /* 设计稿是「主文字 62% 透明」的派生灰，_tokens 里 --muted 最接近（--muted-2 偏深） */
-.chat__sub {
-  display: block;
-  margin-top: 12px;
+.chat__lead-tx {
   font-size: 24px;
   line-height: 1.45;
   color: var(--muted);
 }
 
 /* 全部已读胶囊：半透明白底 + 白描边 + 毛玻璃（设计稿 min-height 44pt） */
+/*
+ * 全部已读：半透明白底 + 白描边 + 毛玻璃。
+ *
+ * 高度收到 60px（30pt）——它现在挂在固定顶栏右槽，而行高是按微信胶囊反推出来的
+ * （典型 44pt 上下），原先的 88px 会把这一行撑高、把标题挤歪。
+ */
 .chat__act {
   align-self: center;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-height: 88px;
-  padding: 0 30px;
+  gap: 10px;
+  height: 60px;
+  padding: 0 22px;
   border-radius: var(--r-pill);
   background: rgba(255, 255, 255, 0.7);
   border: 2px solid rgba(255, 255, 255, 0.7);
   color: var(--muted-2);
-  font-size: 25px;
+  font-size: 24px;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 

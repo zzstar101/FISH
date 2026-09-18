@@ -3,12 +3,14 @@ import Taro, { useLoad } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
+import TopBar from '@/components/top-bar'
 import {
   categoryLabel,
   featuredWish,
   formatAmount,
   formatYuan,
   getUser,
+  hotWishTags,
   type MockListing,
   type MockWish,
   wishFilters,
@@ -63,19 +65,53 @@ export default function Wish() {
     <View className="wish">
       <View className="wish__topbg" />
 
-      <View className="wish__hd">
-        <View className="wish__hd-left">
-          <View className="wish__title">
-            <Text>许愿</Text>
-            <Text className="wish__title-em">墙</Text>
+      {/*
+        固定顶栏：一级标题「许愿墙」钉在顶部，右侧是发布钮。
+        设计稿里「墙」走品牌色（`.navtitle em{color:var(--accent)}`），由 `titleEm` 表达。
+        稿里那一行还有 20pt 副标题，但副标题在真机上会被顶栏行高挤掉，且不属于顶栏语义，
+        所以放在下方内容区（见下方 `wish__lead`）。
+      */}
+      <TopBar
+        variant="plain"
+        spacer
+        title="许愿"
+        titleEm="墙"
+        actions={
+          <View
+            className="wish__newbtn"
+            onClick={() => void Taro.showToast({ title: '发布心愿待接入', icon: 'none' })}
+          >
+            <Image className="wish__newbtn-img" src={ICONS.plusInk} mode="aspectFit" />
           </View>
-          <Text className="wish__subtitle">说出你想要的，让同校的人来接</Text>
+        }
+      />
+
+      {/* 热门排行：设计稿许愿墙顶部的榜单，数据用 hotWishTags（12 条递降） */}
+      <View className="hotrank">
+        <View className="hotrank__hd">
+          <Text className="hotrank__title">热门排行</Text>
+          <Text className="hotrank__note">近 24 小时 · 按热度</Text>
         </View>
-        <View
-          className="wish__newbtn"
-          onClick={() => void Taro.showToast({ title: '发布心愿待接入', icon: 'none' })}
-        >
-          <Image className="wish__newbtn-img" src={ICONS.plusInk} mode="aspectFit" />
+        <View className="hotrank__grid">
+          {hotWishTags.slice(0, 8).map((tag, index) => (
+            <View key={tag.label} className="hotrank__row">
+              <Text className={`hotrank__no num${index < 3 ? ' is-top' : ''}`}>
+                {String(index + 1).padStart(2, '0')}
+              </Text>
+              <View className="hotrank__main">
+                <Text className="hotrank__kw">{tag.label}</Text>
+                <View className="hotrank__bar">
+                  <View
+                    className="hotrank__bar-fill"
+                    // 榜首 100%，其余按比例；分母用榜首值而不是总和，视觉差异才明显
+                    style={{
+                      width: `${Math.round((tag.count / (hotWishTags[0]?.count ?? 1)) * 100)}%`,
+                    }}
+                  />
+                </View>
+              </View>
+            </View>
+          ))}
         </View>
       </View>
 
