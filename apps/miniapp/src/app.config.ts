@@ -12,6 +12,10 @@ export default defineAppConfig({
     'pages/profile/index',
     'pages/orders/index',
     'pages/transaction-meetup/index',
+    'pages/login/index',
+    'pages/register/index',
+    'pages/verify/index',
+    'pages/settings/index',
   ],
   window: {
     backgroundTextStyle: 'light',
