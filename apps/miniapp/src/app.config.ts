@@ -12,6 +12,7 @@ export default defineAppConfig({
     'pages/orders/index',
     'pages/transaction-meetup/index',
     'pages/register/index',
+    'pages/register-success/index',
     'pages/login/index',
     'pages/settings/index',
     'pages/category/index',

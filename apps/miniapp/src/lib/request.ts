@@ -8,6 +8,8 @@
  * 调用方只依赖 `ApiError.code` 做分支，不各自判断 `statusCode`、也不解析不同形状。
  */
 
+// 必须是第一条：本模块值导入契约（zod schema），JIT 必须先关掉，见该模块的说明
+import './zod-jitless'
 import { ApiErrorSchema } from '@fish/contracts/system/error'
 import Taro from '@tarojs/taro'
 import { API_BASE } from './api-base'
@@ -39,7 +41,26 @@ export class ApiError extends Error {
  * 裸 401 不算 —— `/auth/login` 的 401 是 `INVALID_CREDENTIALS`，属于登录表单的行内错误。
  */
 export function isUnauthenticatedError(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 401 && error.code === 'UNAUTHENTICATED'
+  return isApiError(error) && error.status === 401 && error.code === 'UNAUTHENTICATED'
+}
+
+/**
+ * 判断一个异常是不是本模块抛出的 `ApiError`。
+ *
+ * **为什么不只用 `instanceof`**：小程序产物是按页面分 chunk 打包的，`ApiError` 这个类在
+ * 不同 chunk 里可能不是同一个构造函数实例，`error instanceof ApiError` 会静默为 false ——
+ * 于是页面里的错误分支全部走不到（表现为「错误码明明对，但界面上什么也不显示」）。
+ * 所以这里再按**形状**兜一层：`name` + `code` + `status` 三个特征同时成立才算。
+ */
+export function isApiError(error: unknown): error is ApiError {
+  if (error instanceof ApiError) return true
+  if (typeof error !== 'object' || error === null) return false
+  const shaped = error as { name?: unknown; code?: unknown; status?: unknown }
+  return (
+    shaped.name === 'ApiError' &&
+    typeof shaped.code === 'string' &&
+    typeof shaped.status === 'number'
+  )
 }
 
 type RequestOptions = {

@@ -49,6 +49,7 @@ import checkAccent from '@/assets/lib-icons/check-accent@3x.png'
 import checkCircle from '@/assets/lib-icons/check-circle@3x.png'
 import checkCircleWhite from '@/assets/lib-icons/check-circle-white@3x.png'
 import checkMuted from '@/assets/lib-icons/check-muted@3x.png'
+import checkWhite from '@/assets/lib-icons/check-white@3x.png'
 import chevronDownMuted from '@/assets/lib-icons/chevron-down-muted@3x.png'
 import chevronRightMuted from '@/assets/lib-icons/chevron-right-muted-solid@3x.png'
 import chevronUpMuted from '@/assets/lib-icons/chevron-up-muted@3x.png'
@@ -148,6 +149,7 @@ export const ICONS = {
   chevronUpMuted,
   checkMuted,
   checkAccent,
+  checkWhite,
   checkCircle,
   checkCircleWhite,
   delete: deleteIcon,
