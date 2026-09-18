@@ -29,6 +29,7 @@
     "db:generate": "bun run --filter '@fish/db' generate",
     "db:migrate": "bun run --filter '@fish/db' migrate",
     "db:seed": "bun run --filter '@fish/db' seed",
+    "db:promote": "bun run --filter '@fish/db' promote",
     "db:studio": "bun run --filter '@fish/db' studio"
   },
   "devDependencies": {

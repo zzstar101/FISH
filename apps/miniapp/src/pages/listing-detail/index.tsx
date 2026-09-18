@@ -1,24 +1,40 @@
 /**
- * 商品详情页（设计稿：`listing.html`，冰蓝荧光版）。
+ * 商品详情页（设计稿：`小程序1版listing.html`，冰蓝荧光版）。
  *
  * 区块顺序与设计稿一一对应：
- *   漂浮导航（返回/分享/更多）→ 图集轮播（378pt，右下圆点）→ 价格区 → 描述段
- *   → 卖家卡 → 留言区（默认 2 条，可展开）→ 同校相似闲置（两列瀑布流）→ 底部操作栏
+ *   吸顶导航（只有返回钮）→ 图集轮播（378pt，右下圆点）→ 价格区 → 描述段（+ 标签）
+ *   → 卖家卡 → 留言区（输入条 + 顶层留言 + 嵌套回复）→ 同类推荐（首页瀑布流卡）→ 底部操作栏
  *
  * 数据走 `@/features/fetchers`（先试真实接口，不可用时内部回退 mock）；尺寸 = 设计稿 pt × 2
  * （见 apps/miniapp/DESIGN.md）。
+ *
+ * ## 与设计稿的两处**有意偏离**（都不是照抄稿子）
+ *
+ * 1. **顶部栏吸顶 + 滚动后才长玻璃底**：稿子的 `.mp-nav` 是 `relative`（随内容滚走）。
+ *    这里按需求改成 `fixed`：返回钮始终在，栏底色滑过图集后才出现。
+ * 2. **右上角不画东西**：稿子在那里画了一个假胶囊，真机上那个位置由微信原生胶囊占用，
+ *    画了会被盖住 —— 所以分享 / 更多两个钮直接去掉。
  */
-import { Image, Swiper, SwiperItem, Text, View } from '@tarojs/components'
-import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
+import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
+import { useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
-import NavBar from '@/components/nav-bar'
 import ProductCard from '@/components/product-card'
 import { loadListingDetail } from '@/features/fetchers'
-import { conditionLabel, formatAmount, type ListingDetailView, type MockListing } from '@/mock/api'
+import { postComment, postReply } from '@/features/listing/comments'
+import { readNavMetrics } from '@/lib/nav-metrics'
+import { isUnauthenticatedError } from '@/lib/request'
+import {
+  categoryLabel,
+  conditionLabel,
+  formatAmount,
+  type ListingDetailView,
+  type MockComment,
+  type MockListing,
+} from '@/mock/api'
 import { findUser } from '@/mock/users'
 import './index.scss'
 
@@ -31,6 +47,9 @@ const COMMENT_LIMIT = 2
 /** 瀑布流列宽：750 - 左右各 40 - 列间距 24，再除以 2 */
 const COLUMN_WIDTH = 343
 
+/** 图集高度（rpx）：稿子 `.hero` = 378pt = 756rpx，也是玻璃顶栏的触发阈值 */
+const GALLERY_RPX = 756
+
 /** 设计稿 `.mini` 的错落比例 → 图片区高度（rpx） */
 const RATIO_HEIGHT: Record<MockListing['ratio'], number> = {
   '1x1': COLUMN_WIDTH,
@@ -38,6 +57,85 @@ const RATIO_HEIGHT: Record<MockListing['ratio'], number> = {
   '5x6': Math.round((COLUMN_WIDTH * 6) / 5),
   '3x4': Math.round((COLUMN_WIDTH * 4) / 3),
   '4x3': Math.round((COLUMN_WIDTH * 3) / 4),
+}
+
+/**
+ * 页面本地的留言节点。
+ *
+ * 为什么在页面里建树、而不是给 `MockComment` 加 `replies`：契约**没有 comments 域**
+ * （后端接口不存在，见 `features/listing/comments.ts` 文件头），留言区是纯展示 mock，
+ * 层级只服务于本页交互。等后端落地直接消费 `CommentDto.replies`，不必先让 mock 类型
+ * 长出一个假层级。
+ */
+type CommentNode = {
+  id: string
+  authorName: string
+  authorInitial: string
+  isSeller: boolean
+  content: string
+  timeLabel: string
+  replies: CommentNode[]
+}
+
+/**
+ * 本地乐观插入条目的序号，只用来做列表 key。
+ *
+ * 为什么不用 `Date.now()`：连发两条会落在同一毫秒，key 撞了会让列表复用到错的节点。
+ */
+let localSeq = 0
+
+/** 「我」刚发的那一条：**只进本页 state，没有落库**（后端接口不存在，见 comments.ts） */
+function localComment(content: string): CommentNode {
+  localSeq += 1
+  return {
+    id: `local-${localSeq}`,
+    authorName: '我',
+    authorInitial: '我',
+    isSeller: false,
+    content,
+    timeLabel: '刚刚',
+    replies: [],
+  }
+}
+
+/** mock 的扁平留言 → 页面节点（`replies` 先空着，由本页交互往里插） */
+function toCommentNode(comment: MockComment): CommentNode {
+  return {
+    id: comment.id,
+    authorName: comment.authorName,
+    authorInitial: comment.authorInitial,
+    isSeller: comment.isSeller,
+    content: comment.content,
+    timeLabel: comment.timeLabel,
+    replies: [],
+  }
+}
+
+/**
+ * 本地乐观写失败的上报口径。
+ *
+ * 后端还没有这个接口（缺口见 Issue #111），所以「请求根本没发出去」属于**预期**情况，
+ * 降为 debug；其余（后端真的回了 4xx/5xx、或响应解析失败）说明前端与契约已经漂移，
+ * 用 warn 留痕，不该被静默吞掉。
+ *
+ * 判据必须看 `errMsg`：`Taro.request` 失败时 reject 的不是 `Error`（是
+ * `{ errMsg: 'request:fail …' }`），只判 `instanceof Error` 会把网络失败误当成契约漂移。
+ *
+ * 为什么没有直接复用 `features/fetchers.ts` 的 `reportFailure`：它按
+ * `MOCK_FALLBACK_ENABLED` 拼「已回退 mock」，而留言的写路径**任何情况下都不退 mock**，
+ * 套过来会说一句假话。
+ */
+function reportLocalOnly(what: string, error: unknown): void {
+  const errMsg =
+    error instanceof Error
+      ? error.message
+      : String((error as { errMsg?: unknown } | null)?.errMsg ?? '')
+  const expected = isUnauthenticatedError(error) || /request:fail|network|timeout/i.test(errMsg)
+  if (expected) {
+    console.debug(`[miniapp] ${what}接口不可用，这条只存在于本地状态`, error)
+    return
+  }
+  console.warn(`[miniapp] ${what}接口失败，这条只存在于本地状态`, error)
 }
 
 /** 「2 小时前发布」——mock 只给相对小时数 */
@@ -83,13 +181,61 @@ export default function ListingDetail() {
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
   const [commentsOpen, setCommentsOpen] = useState(false)
+  /** 留言树（顶层各带 replies）：初值来自加载结果，之后由本页的本地写操作增长 */
+  const [comments, setComments] = useState<CommentNode[]>([])
+  const [commentInput, setCommentInput] = useState('')
+  /** 正在回复哪条顶层留言（`null` = 没有展开回复行）；稿子同时只开一行 */
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  const [replyInput, setReplyInput] = useState('')
+
+  const metrics = useMemo(() => readNavMetrics(), [])
+
+  /**
+   * 玻璃顶栏的触发阈值（设备 px）。
+   *
+   * `scrollTop` 的单位是 px，而图集高度写在样式表里是 756rpx —— 两者不是同一个量，
+   * 必须按 `1rpx = 屏宽 / 750` 换算，不能直接拿 756 比。
+   */
+  const galleryPx = useMemo(() => {
+    try {
+      return (GALLERY_RPX * Taro.getWindowInfo().windowWidth) / 750
+    } catch {
+      // 取不到窗口宽度（h5 预览等）时按 375pt 屏折算，至少阈值不是 0
+      return GALLERY_RPX / 2
+    }
+  }, [])
+
+  const [navSolid, setNavSolid] = useState(false)
+  /** 上一次的滚动状态：滚动事件每帧都来，只有跨过阈值那一次才需要 setState */
+  const navSolidRef = useRef(false)
+
+  /**
+   * 顶部有没有 756rpx 的图集（骨架屏那块就是图集占位）。
+   *
+   * 错误态（LoadError）与空态都没有图集可滑，页面却仍能滚出 `.detail` 的底部留白，
+   * 此时任何滚动都算「内容开始从栏下经过」—— 否则栏会一直透明、内容直接从它下面滑过去。
+   * scrollTop = 0 两种情况下都不显示。
+   */
+  const hasGalleryBlock = loading || Boolean(data?.listing)
+  /** 玻璃底出现的滚动阈值（设备 px）：见上 */
+  const navSolidThreshold = hasGalleryBlock ? galleryPx : 1
+
+  usePageScroll(({ scrollTop }) => {
+    const solid = scrollTop >= navSolidThreshold
+    if (solid === navSolidRef.current) return
+    navSolidRef.current = solid
+    setNavSolid(solid)
+  })
 
   const load = () => {
     setLoading(true)
     // 三态分明：`ok` 渲染详情、`notFound` 走空态（商品真不存在）、
     // `failed` 走错误态 —— 生产口径不退回 mock，拿演示商品顶上比空态更误导
     void loadListingDetail(id).then((result) => {
-      setData(result.status === 'ok' ? result.view : null)
+      const view = result.status === 'ok' ? result.view : null
+      setData(view)
+      // 留言树跟着这次加载重置：重试不该把上一次数据上的本地插入留在页面上
+      setComments(view ? view.comments.map(toCommentNode) : [])
       setFailed(result.status === 'failed')
       setLoading(false)
     })
@@ -105,26 +251,82 @@ export default function ListingDetail() {
     void Taro.showToast({ title, icon: 'none' })
   }
 
+  /**
+   * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
+   *
+   * 本页不再用那个组件（它的钮是 `absolute`，会随内容滚走，且尺寸/留白与稿子不符），
+   * 但返回语义必须一致，所以在这里就地复刻，而不是去改被 12 个页面共用的组件。
+   */
+  const handleBack = () => {
+    const pages = Taro.getCurrentPages()
+    if (pages.length > 1) {
+      void Taro.navigateBack()
+    } else {
+      void Taro.switchTab({ url: '/pages/home/index' })
+    }
+  }
+
+  /**
+   * 发一条顶层留言。
+   *
+   * **写操作只改本地状态**：先把这条插进 `comments`，再打请求。后端还没有 comments 接口
+   * （见 `features/listing/comments.ts`），所以：
+   * - 请求失败**不回滚**，这条留在本地 —— 比「点了发送却什么都没发生」诚实；
+   * - 也**不弹「发送成功」**：我们并不知道服务端收没收到，弹了就是假装成功。
+   */
+  const sendComment = () => {
+    const content = commentInput.trim()
+    if (!content) return
+    // 先算好再进 updater：updater 必须是纯函数，在里面自增 `localSeq` 会带副作用
+    const comment = localComment(content)
+    setComments((prev) => [comment, ...prev])
+    setCommentInput('')
+    void postComment(id, content).catch((error) => reportLocalOnly('留言', error))
+  }
+
+  /** 回复某条顶层留言：同样只改本地状态，失败不回滚、不假装成功 */
+  const sendReply = (commentId: string) => {
+    const content = replyInput.trim()
+    if (!content) return
+    const reply = localComment(content)
+    setComments((prev) =>
+      prev.map((node) =>
+        node.id === commentId ? { ...node, replies: [...node.replies, reply] } : node,
+      ),
+    )
+    setReplyInput('')
+    setReplyTo(null)
+    void postReply(commentId, content).catch((error) => reportLocalOnly('回复', error))
+  }
+
+  /** 点「回复」：再点同一条收起（稿子行为），换一条则把输入行挪过去并清空 */
+  const toggleReply = (commentId: string) => {
+    setReplyInput('')
+    setReplyTo((prev) => (prev === commentId ? null : commentId))
+  }
+
   const listing = data?.listing
   const images = listing?.images ?? []
-  const comments = data?.comments ?? []
   const visibleComments = commentsOpen ? comments : comments.slice(0, COMMENT_LIMIT)
   const paragraphs = listing ? descriptionLines(listing.description) : []
 
   return (
     <View className="detail">
-      <NavBar
-        actions={
-          <>
-            <View className="detail__glassbtn" onClick={() => toast('分享能力待接入')}>
-              <Image className="detail__glassbtn-img" src={ICONS.share} mode="aspectFit" />
-            </View>
-            <View className="detail__glassbtn" onClick={() => toast('更多操作待接入')}>
-              <Image className="detail__glassbtn-img" src={ICONS.moreInk} mode="aspectFit" />
-            </View>
-          </>
-        }
-      />
+      {/*
+        吸顶导航：只有返回钮是实体。
+        底色分两态 —— 页面在顶部时整条栏透明（返回钮浮在商品图上，与稿子一致），
+        滑过图集后 `.is-solid` 才长出磨砂底 + 底部描边（过渡见 index.scss）。
+      */}
+      <View
+        className={`detail__nav${navSolid ? ' is-solid' : ''}`}
+        style={{ paddingTop: `${metrics.statusBarHeight}px` }}
+      >
+        <View className="detail__navrow">
+          <View className="detail__back" onClick={handleBack}>
+            <View className="detail__chevron" />
+          </View>
+        </View>
+      </View>
 
       {failed ? (
         /* 真接口失败：明确错误态 + 重试。不能落到下面的骨架屏分支（`!data` 会一直为真 → 永久骨架屏） */
@@ -152,173 +354,260 @@ export default function ListingDetail() {
           />
         </View>
       ) : (
-        <View className="detail__sections">
-          {/* ---------------------------------------------------- 图集 */}
-          <View className="detail__gallery">
-            {images.length > 0 ? (
-              <Swiper
-                className="detail__swiper"
-                circular
-                current={slide}
-                onChange={(event) => setSlide(event.detail.current)}
-              >
-                {images.map((url) => (
-                  <SwiperItem key={url} className="detail__slide">
-                    <Image className="detail__slide-img" src={url} mode="aspectFill" />
-                  </SwiperItem>
-                ))}
-              </Swiper>
-            ) : (
-              <View className="detail__slide-ph">
-                <Text className="detail__slide-ph-text">暂无商品图</Text>
-              </View>
-            )}
-
-            <View className="detail__dots">
-              {images.map((url, index) => (
-                <View
-                  key={url}
-                  className={`detail__dot${index === slide ? ' is-on' : ''}`}
-                  onClick={() => setSlide(index)}
-                />
-              ))}
-            </View>
-          </View>
-
-          {/* ---------------------------------------------------- 价格 / 标题 */}
-          <View className="detail__meta">
-            <View className="detail__priceline">
-              <View className="detail__price">
-                <Text className="detail__price-cur">¥</Text>
-                <Text className="detail__price-amt">{formatAmount(listing.priceCents)}</Text>
-              </View>
-              {listing.originalPriceCents ? (
-                <Text className="detail__was">
-                  {`原价 ¥${formatAmount(listing.originalPriceCents)}`}
-                </Text>
-              ) : null}
-              <Text className="detail__cond">{conditionLabel(listing.condition)}</Text>
-            </View>
-
-            <Text className="detail__title">{listing.title}</Text>
-            <Text className="detail__spec">{listing.spec}</Text>
-
-            <View className="detail__stats">
-              <Text className="detail__posted">{postedLabel(listing.createdHoursAgo)}</Text>
-              <View className="detail__metrics">
-                {/* 浏览量 / 想要数都不在契约里：真实数据下为 null，该指标整块不画，不显示 0 */}
-                {listing.views === null ? null : (
-                  <Text className="detail__metric">
-                    <Text className="detail__metric-num">{listing.views}</Text>
-                    <Text> 浏览</Text>
-                  </Text>
-                )}
-                {listing.wants === null ? null : (
-                  <Text className="detail__metric">
-                    <Text className="detail__metric-num">{listing.wants}</Text>
-                    <Text> 想要</Text>
-                  </Text>
-                )}
-              </View>
-            </View>
-          </View>
-
-          {/* ---------------------------------------------------- 描述 */}
-          <View className="detail__desc">
-            {paragraphs.map((line) => (
-              <Text key={line} className="detail__para">
-                {line}
-              </Text>
-            ))}
-          </View>
-
-          {/* ---------------------------------------------------- 卖家 */}
-          <View className="detail__seller-section">
-            <View className="detail__seller">
-              <Image className="detail__avatar" src={data.seller.avatarUrl} mode="aspectFill" />
-              <View className="detail__sinfo">
-                <View className="detail__sname">
-                  <Text className="detail__snick">{data.seller.nickname}</Text>
-                  {data.seller.authStatus === 'VERIFIED' ? (
-                    <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
-                  ) : null}
-                  {/* 校区契约里可为 null：缺了就不渲染这一格，不拼「null校区」 */}
-                  {data.seller.campus ? (
-                    <Text className="detail__sloc">{`${data.seller.campus}校区`}</Text>
-                  ) : null}
+        /*
+          白卡（`.detail__sections`）到留言区就结束 —— 稿子里的圆角与投影挂在这块白卡上，
+          「同类推荐」在卡外，所以它是兄弟节点而不是子节点。放进去的话，白底会把圆角切掉的
+          两个角填白、把投影盖掉（两者都实测不可见）。
+        */
+        <>
+          <View className="detail__sections">
+            {/* ---------------------------------------------------- 图集 */}
+            <View className="detail__gallery">
+              {images.length > 0 ? (
+                <Swiper
+                  className="detail__swiper"
+                  circular
+                  current={slide}
+                  onChange={(event) => setSlide(event.detail.current)}
+                >
+                  {images.map((url) => (
+                    <SwiperItem key={url} className="detail__slide">
+                      <Image className="detail__slide-img" src={url} mode="aspectFill" />
+                    </SwiperItem>
+                  ))}
+                </Swiper>
+              ) : (
+                <View className="detail__slide-ph">
+                  <Text className="detail__slide-ph-text">暂无商品图</Text>
                 </View>
-                {/*
+              )}
+
+              <View className="detail__dots">
+                {images.map((url, index) => (
+                  <View
+                    key={url}
+                    className={`detail__dot${index === slide ? ' is-on' : ''}`}
+                    onClick={() => setSlide(index)}
+                  />
+                ))}
+              </View>
+            </View>
+
+            {/* ---------------------------------------------------- 价格 / 标题 */}
+            <View className="detail__meta">
+              <View className="detail__priceline">
+                <View className="detail__price">
+                  <Text className="detail__price-cur">¥</Text>
+                  <Text className="detail__price-amt">{formatAmount(listing.priceCents)}</Text>
+                </View>
+                {listing.originalPriceCents ? (
+                  <Text className="detail__was">
+                    {`原价 ¥${formatAmount(listing.originalPriceCents)}`}
+                  </Text>
+                ) : null}
+              </View>
+
+              <Text className="detail__title">{listing.title}</Text>
+              <Text className="detail__spec">{listing.spec}</Text>
+
+              <View className="detail__stats">
+                <Text className="detail__posted">{postedLabel(listing.createdHoursAgo)}</Text>
+                <View className="detail__metrics">
+                  {/* 浏览量 / 想要数都不在契约里：真实数据下为 null，该指标整块不画，不显示 0 */}
+                  {listing.views === null ? null : (
+                    <Text className="detail__metric">
+                      <Text className="detail__metric-num">{listing.views}</Text>
+                      <Text> 浏览</Text>
+                    </Text>
+                  )}
+                  {listing.wants === null ? null : (
+                    <Text className="detail__metric">
+                      <Text className="detail__metric-num">{listing.wants}</Text>
+                      <Text> 想要</Text>
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            {/* ---------------------------------------------------- 描述 */}
+            <View className="detail__desc">
+              {paragraphs.map((line) => (
+                <Text key={line} className="detail__para">
+                  {line}
+                </Text>
+              ))}
+              {/*
+              描述标签：三项**全部从既有字段派生**，契约里没有 tags 字段（也不打算加）。
+              可小刀只在卖家开了议价时出现 —— 没有这个字段就说没有，不编一个标签。
+            */}
+              <View className="detail__tags">
+                <Text className="detail__tag">{categoryLabel(listing.category)}</Text>
+                <Text className="detail__tag">{conditionLabel(listing.condition)}</Text>
+                {listing.negotiable ? <Text className="detail__tag">可小刀</Text> : null}
+              </View>
+            </View>
+
+            {/* ---------------------------------------------------- 卖家 */}
+            <View className="detail__seller-section">
+              <View className="detail__seller">
+                <Image className="detail__avatar" src={data.seller.avatarUrl} mode="aspectFill" />
+                <View className="detail__sinfo">
+                  {/* 昵称行只有昵称 + 认证勾（稿子口径）：校区不在这里显示 */}
+                  <View className="detail__sname">
+                    <Text className="detail__snick">{data.seller.nickname}</Text>
+                    {data.seller.authStatus === 'VERIFIED' ? (
+                      <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
+                    ) : null}
+                  </View>
+                  {/*
                   卖出件数与好评率契约里没有（见 mock/types.ts 的 MockUser 注释）。
                   真实数据下两者都是 null，此时整行不渲染 —— 不编「卖出 0 件 · 好评率 0%」。
                 */}
-                {data.seller.soldCount !== null || data.seller.goodRate !== null ? (
-                  <View className="detail__ssub">
-                    {data.seller.soldCount !== null ? (
-                      <Text>{`卖出 ${data.seller.soldCount} 件`}</Text>
-                    ) : null}
-                    {data.seller.soldCount !== null && data.seller.goodRate !== null ? (
-                      <Text>·</Text>
-                    ) : null}
-                    {data.seller.goodRate !== null ? (
-                      <Text>{`好评率 ${data.seller.goodRate}%`}</Text>
-                    ) : null}
+                  {data.seller.soldCount !== null || data.seller.goodRate !== null ? (
+                    <View className="detail__ssub">
+                      {data.seller.soldCount !== null ? (
+                        <Text>{`卖出 ${data.seller.soldCount} 件`}</Text>
+                      ) : null}
+                      {data.seller.soldCount !== null && data.seller.goodRate !== null ? (
+                        <Text>·</Text>
+                      ) : null}
+                      {data.seller.goodRate !== null ? (
+                        <Text>{`好评率 ${data.seller.goodRate}%`}</Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+                </View>
+                <View className="detail__go" onClick={() => toast('TA 的主页待接入')}>
+                  <Text>进TA主页</Text>
+                  <Image
+                    className="detail__go-img"
+                    src={ICONS.chevronRightMuted}
+                    mode="aspectFit"
+                  />
+                </View>
+              </View>
+            </View>
+
+            {/* ---------------------------------------------------- 留言 */}
+            <View className="detail__comments">
+              {/* 输入条：稿子画在留言区顶部，负 margin 抵掉区块左右 padding 铺满整宽 */}
+              <View className="detail__cmt-bar">
+                <View className="detail__cmt-me">
+                  <Text className="detail__cmt-me-text">我</Text>
+                </View>
+                <Input
+                  className="detail__cmt-in"
+                  value={commentInput}
+                  type="text"
+                  placeholder="说点什么…"
+                  placeholderClass="detail__cmt-ph"
+                  confirmType="send"
+                  onInput={(event) => setCommentInput(event.detail.value)}
+                  onConfirm={sendComment}
+                />
+                <View className="detail__cmt-send" onClick={sendComment}>
+                  <Text>发送</Text>
+                </View>
+              </View>
+
+              {comments.length === 0 ? (
+                <Text className="detail__cmt-empty">还没有人留言，来问一句吧</Text>
+              ) : (
+                <>
+                  <View className="detail__cmts">
+                    {visibleComments.map((comment) => (
+                      <View key={comment.id} className="detail__cmt">
+                        <View className="detail__cav">
+                          <Text className="detail__cav-text">{comment.authorInitial}</Text>
+                        </View>
+                        <View className="detail__cbody">
+                          <View className="detail__chd">
+                            <Text className="detail__cn">{comment.authorName}</Text>
+                            {comment.isSeller ? <Text className="detail__ctag">卖家</Text> : null}
+                            <Text className="detail__ct">{comment.timeLabel}</Text>
+                          </View>
+                          <Text className="detail__cx">{comment.content}</Text>
+
+                          <View className="detail__creply" onClick={() => toggleReply(comment.id)}>
+                            <Text>回复</Text>
+                          </View>
+
+                          {/* 行内回复输入行：稿子同时只开一行，插在回复列表之前 */}
+                          {replyTo === comment.id ? (
+                            <View className="detail__creply-row">
+                              <Input
+                                className="detail__cmt-in detail__cmt-in--reply"
+                                value={replyInput}
+                                type="text"
+                                focus
+                                placeholder={`回复 ${comment.authorName}…`}
+                                placeholderClass="detail__cmt-ph"
+                                confirmType="send"
+                                onInput={(event) => setReplyInput(event.detail.value)}
+                                onConfirm={() => sendReply(comment.id)}
+                              />
+                              <View
+                                className="detail__cmt-send detail__cmt-send--reply"
+                                onClick={() => sendReply(comment.id)}
+                              >
+                                <Text>回复</Text>
+                              </View>
+                            </View>
+                          ) : null}
+
+                          {comment.replies.length > 0 ? (
+                            <View className="detail__replies">
+                              {comment.replies.map((reply) => (
+                                <View key={reply.id} className="detail__cmt detail__cmt--reply">
+                                  <View className="detail__cav detail__cav--reply">
+                                    <Text className="detail__cav-text">{reply.authorInitial}</Text>
+                                  </View>
+                                  <View className="detail__cbody">
+                                    <View className="detail__chd">
+                                      <Text className="detail__cn">{reply.authorName}</Text>
+                                      {reply.isSeller ? (
+                                        <Text className="detail__ctag">卖家</Text>
+                                      ) : null}
+                                      <Text className="detail__ct">{reply.timeLabel}</Text>
+                                    </View>
+                                    <Text className="detail__cx">{reply.content}</Text>
+                                  </View>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                ) : null}
-              </View>
-              <View className="detail__go" onClick={() => toast('TA 的主页待接入')}>
-                <Text>进TA主页</Text>
-              </View>
+
+                  {/* 计数按**顶层**留言算（稿子的 topCmts 口径），嵌套回复不计数 */}
+                  {comments.length > COMMENT_LIMIT ? (
+                    <View
+                      className="detail__cmt-more"
+                      onClick={() => setCommentsOpen((prev) => !prev)}
+                    >
+                      <Text className="detail__cmt-more-text">
+                        {commentsOpen ? '收起留言' : `查看全部 ${comments.length} 条留言`}
+                      </Text>
+                      <Image
+                        className={`detail__cmt-more-img${commentsOpen ? ' is-open' : ''}`}
+                        src={ICONS.chevronDownMuted}
+                        mode="aspectFit"
+                      />
+                    </View>
+                  ) : null}
+                </>
+              )}
             </View>
           </View>
 
-          {/* ---------------------------------------------------- 留言 */}
-          <View className="detail__comments">
-            {comments.length === 0 ? (
-              <Text className="detail__cmt-empty">还没有人留言，来问一句吧</Text>
-            ) : (
-              <>
-                <View className="detail__cmts">
-                  {visibleComments.map((comment) => (
-                    <View key={comment.id} className="detail__cmt">
-                      <View className="detail__cav">
-                        <Text className="detail__cav-text">{comment.authorInitial}</Text>
-                      </View>
-                      <View className="detail__cbody">
-                        <View className="detail__chd">
-                          <Text className="detail__cn">{comment.authorName}</Text>
-                          {comment.isSeller ? <Text className="detail__ctag">卖家</Text> : null}
-                          <Text className="detail__ct">{comment.timeLabel}</Text>
-                        </View>
-                        <Text className="detail__cx">{comment.content}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-
-                {comments.length > COMMENT_LIMIT ? (
-                  <View
-                    className="detail__cmt-more"
-                    onClick={() => setCommentsOpen((prev) => !prev)}
-                  >
-                    <Text className="detail__cmt-more-text">
-                      {commentsOpen ? '收起留言' : `查看全部 ${data.commentTotal} 条留言`}
-                    </Text>
-                    <Image
-                      className={`detail__cmt-more-img${commentsOpen ? ' is-open' : ''}`}
-                      src={ICONS.chevronDownMuted}
-                      mode="aspectFit"
-                    />
-                  </View>
-                ) : null}
-              </>
-            )}
-          </View>
-
-          {/* ---------------------------------------------------- 同校相似闲置 */}
+          {/* ---------------------------------------------------- 同类推荐 */}
           <View className="detail__similar">
             <View className="detail__seclabel">
               <Image className="detail__seclabel-img" src={ICONS.category} mode="aspectFit" />
-              <Text>同校相似闲置</Text>
+              <Text>同类推荐</Text>
             </View>
 
             <View className="detail__waterfall">
@@ -337,7 +626,7 @@ export default function ListingDetail() {
                       mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
                     */
                     seller={findUser(item.sellerId)}
-                    variant="search"
+                    variant="home"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
@@ -349,14 +638,14 @@ export default function ListingDetail() {
                     listing={item}
                     /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
                     seller={findUser(item.sellerId)}
-                    variant="search"
+                    variant="home"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
               </View>
             </View>
           </View>
-        </View>
+        </>
       )}
 
       {/* ---------------------------------------------------- 底部操作栏 */}
@@ -372,9 +661,11 @@ export default function ListingDetail() {
           />
         </View>
         <View className="detail__btn detail__btn--ghost" onClick={() => toast('聊天待接入')}>
+          <Image className="detail__btn-img" src={ICONS.chatInk} mode="aspectFit" />
           <Text>聊一聊</Text>
         </View>
         <View className="detail__btn detail__btn--solid" onClick={() => toast('下单待接入')}>
+          <Image className="detail__btn-img" src={ICONS.heartWhite} mode="aspectFit" />
           <Text>我想要</Text>
         </View>
       </View>

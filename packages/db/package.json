@@ -11,7 +11,8 @@
     "generate": "bun --env-file=../../.env drizzle-kit generate",
     "migrate": "bun --env-file=../../.env drizzle-kit migrate",
     "studio": "bun --env-file=../../.env drizzle-kit studio",
-    "seed": "bun --env-file=../../.env src/seed.ts"
+    "seed": "bun --env-file=../../.env src/seed.ts",
+    "promote": "bun --env-file=../../.env src/admin-promote.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2"
