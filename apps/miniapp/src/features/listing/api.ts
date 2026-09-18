@@ -14,7 +14,7 @@ import {
   ListingFeedResponseSchema,
   type ListingSort,
 } from '@fish/contracts/listings/schema'
-import { ApiError, apiRequest } from '@/lib/request'
+import { apiRequest, isApiError } from '@/lib/request'
 
 /**
  * feed 单页上限。契约 `ListingFeedQuerySchema` 的 `limit` 上限是 50，
@@ -81,7 +81,7 @@ export async function fetchListingDetail(id: string): Promise<ListingDetail | nu
     const payload = await apiRequest(LISTING_ROUTES.detail(id))
     return ListingDetailSchema.parse(payload)
   } catch (error) {
-    if (error instanceof ApiError && error.status === 404) return null
+    if (isApiError(error) && error.status === 404) return null
     throw error
   }
 }
