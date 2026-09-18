@@ -260,12 +260,18 @@ export async function fetchCategoryListings(
   return result.items
 }
 
+/**
+ * 详情页视图。
+ *
+ * **没有 `commentTotal`**：它曾是 `comments.length` 的副本（mock 与真实数据都这么填），
+ * 页面改用本地留言树的长度后就没有消费方了。留一个「总数」字段只会让人以为
+ * 列表是分页的 —— 真要分页时再按契约补。
+ */
 export type ListingDetailView = {
   listing: MockListing
   seller: MockUser
   comments: MockComment[]
   similar: MockListing[]
-  commentTotal: number
 }
 
 export async function fetchListingDetail(id: string): Promise<ListingDetailView | null> {
@@ -277,7 +283,6 @@ export async function fetchListingDetail(id: string): Promise<ListingDetailView 
     seller: getUser(listing.sellerId),
     comments,
     similar: similarListings(id, 4),
-    commentTotal: comments.length,
   })
 }
 
