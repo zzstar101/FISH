@@ -52,9 +52,16 @@ export default function Login() {
    * 已登录不该停在登录页。
    * 登录成功那一刻也走这条（store 广播 `authed`），所以 `submit()` 里不再自己跳转
    * —— 两处都跳会连发两次 `switchTab`。
+   *
+   * **必须确认登录页是最上层页面**：从登录页 `navigateTo` 注册页之后，登录页仍在页面栈里
+   * （Taro 的 `onHide` 不卸载组件），store 订阅也还在 —— 注册成功的 `emit(authed)`
+   * 会触发这条 effect，把刚 `redirectTo` 出来的注册成功页顶掉（实测：落到首页）。
    */
   useEffect(() => {
     if (status !== 'authed') return
+    const pages = Taro.getCurrentPages()
+    const top = (pages[pages.length - 1] as { route?: string } | undefined)?.route ?? ''
+    if (top !== 'pages/login/index') return
     void Taro.switchTab({ url: '/pages/home/index' }).catch(() => {
       // 跳转失败必须给出口：否则按钮会永远停在「登录中…」的禁用态上
       setSubmitting(false)
@@ -192,11 +199,27 @@ export default function Login() {
               </View>
               <Text className="login__agree-tx">
                 我已阅读并同意
-                <Text className="login__lk" onClick={() => toast('用户协议待接入')}>
+                {/*
+                  链接必须吃掉冒泡：父级是「勾选框」的 onClick，不拦截的话点协议会顺手
+                  把默认勾选翻成未勾（然后点登录只得到「请先阅读并同意」的提示）。
+                */}
+                <Text
+                  className="login__lk"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    toast('用户协议待接入')
+                  }}
+                >
                   《用户协议》
                 </Text>
                 和
-                <Text className="login__lk" onClick={() => toast('隐私政策待接入')}>
+                <Text
+                  className="login__lk"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    toast('隐私政策待接入')
+                  }}
+                >
                   《隐私政策》
                 </Text>
               </Text>

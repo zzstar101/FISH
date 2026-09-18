@@ -114,8 +114,11 @@ export default function Register() {
           nickname: nickname.trim(),
           campus,
         })
-        // 用 redirectTo 而不是 navigateTo：成功页不该能返回注册表单
-        void Taro.redirectTo({ url: '/pages/register-success/index' })
+        // 用 redirectTo 而不是 navigateTo：成功页不该能返回注册表单。
+        // 跳转失败要有出口：此时账号已建好且已登录，不能把人留在「表单全灰」的注册页上。
+        void Taro.redirectTo({ url: '/pages/register-success/index' }).catch(() => {
+          void Taro.switchTab({ url: '/pages/home/index' })
+        })
       } catch (error) {
         // 失败了要撤回标记，否则用户改完再提交时这条短路会一直生效
         justRegistered.current = false

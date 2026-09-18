@@ -25,12 +25,23 @@
  * 所以本模块必须在任何契约模块（`@fish/contracts/**`）之前被求值。
  * `app.ts` 与 `lib/request.ts` 都把它放在**第一条 import**，覆盖这两条入口。
  *
- * 直接写 `globalThis.__zod_globalConfig`（zod 就是读它）而不是 `import { config } from 'zod'`：
- * 本模块因此**零 import**，不存在「先初始化 zod、再设配置」的顺序问题。
+ * 另外这里**改写的是同一个对象**（`??=` 取到就改，取不到才建），不是替换成新对象：
+ * zod 的 `globalConfig` 是 core 求值时捕获的**引用**（`zod/v4/core/core.js`：
+ * `globalThis.__zod_globalConfig ?? (_a.__zod_globalConfig = {})`）——
+ * 一旦 core 先求值，替换引用就永久失效、静默退回会崩的 JIT，而改写对象两种顺序都成立。
+ *
+ * 本模块**零 import**，因此不存在「先初始化 zod、再设配置」的循环依赖问题；
+ * 但「谁先跑」仍取决于 import 顺序，见上。
  */
 
 const globalWithZod = globalThis as typeof globalThis & {
   __zod_globalConfig?: Record<string, unknown>
 }
 
-globalWithZod.__zod_globalConfig = { ...(globalWithZod.__zod_globalConfig ?? {}), jitless: true }
+// 取到就改（同一对象），取不到才建 —— 不能用 `??=`：biome 禁「表达式里赋值」，也不够直白
+let config = globalWithZod.__zod_globalConfig
+if (!config) {
+  config = {}
+  globalWithZod.__zod_globalConfig = config
+}
+config.jitless = true

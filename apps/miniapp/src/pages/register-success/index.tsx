@@ -27,10 +27,20 @@ export default function RegisterSuccess() {
   /** 未登录 / 登录态未就绪：守卫在跳转，这里同时拦住渲染 */
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
+  /**
+   * 认证状态取**真实登录态**。
+   *
+   * 注册出来的账号按契约恒为 UNVERIFIED，所以正常路径下走的是未认证分支；
+   * 已认证分支是**防御性**的：等校园认证页（`pages/verify`，BLOCKED #68）落地并开始往
+   * store 写状态之后，从历史栈回到这一页就会命中它 —— 那时文案不能再说「未认证」。
+   */
   const verified = user?.authStatus === 'VERIFIED'
 
-  const goVerify = () => void Taro.navigateTo({ url: '/pages/verify/index' })
-  const goBrowse = () => void Taro.switchTab({ url: '/pages/home/index' })
+  const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
+  const goVerify = () =>
+    void Taro.navigateTo({ url: '/pages/verify/index' }).catch(() => toast('打开失败，请重试'))
+  const goBrowse = () =>
+    void Taro.switchTab({ url: '/pages/home/index' }).catch(() => toast('打开失败，请重试'))
 
   return (
     <View className="rs">
