@@ -1,0 +1,110 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 自定义 TabBar：设计稿是左右各留 16pt、底部 22pt 的胶囊，五等分，
+ * 中间「出物」换成凸起的品牌渐变小圆钮。
+ *
+ * 定位用 `fixed`：本组件由小程序框架挂在页面之外渲染（`custom-tab-bar/` 约定），
+ * 不受页面滚动容器影响，这也是它比「页面内 sticky」更稳的原因。
+ * 底部再叠一层 `env(safe-area-inset-bottom)` 适配全面屏。
+ */
+.tabbar {
+  position: fixed;
+  left: 32px;
+  right: 32px;
+  bottom: calc(24px + constant(safe-area-inset-bottom));
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  padding: 6px 16px 8px;
+  @include glass;
+}
+
+.tabbar__tab {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 20px;
+  letter-spacing: 0.02em;
+
+  &.is-on {
+    color: var(--brand);
+  }
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+/**
+ * 中间「出物」：凸起钮恒定是品牌渐变，选中反馈只能落在**文字**上。
+ * 未选中时文字跟随其它 tab 的灰，选中时转品牌色 + 加粗（与设计稿一致）。
+ */
+.tabbar__tab--pub.is-on .tabbar__label {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.tabbar__icon {
+  position: relative;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tabbar__img {
+  width: 48px;
+  height: 48px;
+}
+
+.tabbar__dot {
+  position: absolute;
+  top: 8px;
+  left: 32px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--brand);
+}
+
+.tabbar__label {
+  line-height: 1.05;
+}
+
+/* 中间的凸起发布钮 */
+.tabbar__pub {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: var(--grad-brand);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 20px 40px -16px rgba(66, 133, 255, 0.62);
+}
+
+/* 用两条横竖条拼「＋」，避免再引一个仅此处使用的图标资源 */
+.tabbar__plus {
+  position: relative;
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: #fff;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 14px;
+    top: -14px;
+    width: 4px;
+    height: 32px;
+    border-radius: 2px;
+    background: #fff;
+  }
+}

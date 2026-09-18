@@ -1,0 +1,502 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 消息（Tab 页）。尺寸 = 设计稿 messages.html 的 pt × 2（见 DESIGN.md）。
+ *
+ * 区块顺序照设计稿：顶部冰蓝渐变圆角背景 → 页头（大标题 + 副标题 + 全部已读）→
+ * bento 两卡 → 筛选胶囊横滑 → 「最近联系」标题行 → 会话列表 → 悬浮 TabBar。
+ *
+ * 根节点是「纵向 flex + TabBar 作为最后一个子项」，这样 components/tab-bar 里的
+ * `position: sticky` 才能稳定吸底（与首页 / 许愿页同一套写法）。
+ */
+.chat {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* 底部留白：避免内容被悬浮 TabBar（+ 原生 TabBar）盖住 */
+  padding-bottom: 176px;
+}
+
+/* 顶部冰蓝渐变圆角背景（设计稿 .topbg：高 248pt、底部圆角 32pt） */
+.chat__bg {
+  @include page-hero(496px, 64px);
+}
+
+/* ─────────────────────────────── 页头 ─────────────────────────────── */
+
+/**
+ * 设计稿的页面自带状态栏（47pt）+ content 上边距（4pt）+ hd 上边距（12pt），
+ * 大标题距屏幕顶 63pt。app.config.ts 是 navigationStyle:custom，页面顶到屏幕顶，
+ * 所以这里把这段让出来（126px = 63pt），标题才不会被状态栏压住。
+ */
+.chat__hd {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 126px 40px 0;
+}
+
+.chat__hd-left {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat__title {
+  font-size: 54px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.14;
+  white-space: nowrap;
+}
+
+.chat__title-em {
+  color: var(--brand);
+}
+
+/* 设计稿是「主文字 62% 透明」的派生灰，_tokens 里 --muted 最接近（--muted-2 偏深） */
+.chat__sub {
+  display: block;
+  margin-top: 12px;
+  font-size: 24px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* 全部已读胶囊：半透明白底 + 白描边 + 毛玻璃（设计稿 min-height 44pt） */
+.chat__act {
+  align-self: center;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 88px;
+  padding: 0 30px;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  color: var(--muted-2);
+  font-size: 25px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+
+  &:active {
+    background: #fff;
+    color: var(--fg);
+  }
+}
+
+.chat__act-ic {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.chat__act-tx {
+  white-space: nowrap;
+}
+
+/* ─────────────────────────────── bento 两卡 ─────────────────────────────── */
+
+.chat__bento {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 24px;
+  padding: 36px 40px 0;
+}
+
+.chat__bcard {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 224px;
+  border-radius: 40px;
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 左卡：浅色卡（设计稿 .bcard.tint） */
+.chat__bcard--tint {
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-faint);
+
+  &:active {
+    background: #fff;
+  }
+}
+
+/* 右卡：品牌渐变深卡（设计稿 .bcard.dark） */
+.chat__bcard--dark {
+  background: var(--grad-brand);
+  border: 2px solid transparent;
+  color: #fff;
+
+  /* 右下角的装饰圆环（设计稿 .bcard.dark::after） */
+  &::after {
+    content: '';
+    position: absolute;
+    right: -60px;
+    bottom: -72px;
+    width: 208px;
+    height: 208px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.16);
+    pointer-events: none;
+  }
+
+  &:active {
+    opacity: 0.92;
+  }
+}
+
+.chat__bic {
+  width: 72px;
+  height: 72px;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: auto;
+}
+
+.chat__bcard--tint .chat__bic {
+  background: var(--surface);
+}
+
+.chat__bcard--dark .chat__bic {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.chat__bic-img {
+  width: 38px;
+  height: 38px;
+}
+
+/**
+ * 深卡上的图标要纯白（设计稿 color:#fff 的线稿），而图标库里没有被着成 #fff 的
+ * 交易 / 安全语义（只有 chat-white / heart-white 两个白色图标）。
+ * 这里用 filter 把彩色 PNG 压成白色：PNG 带透明通道，`brightness(0)` 先把非透明像素
+ * 变黑、`invert(1)` 再翻成白，形状不变。
+ */
+.chat__ic-white {
+  filter: brightness(0) invert(1);
+}
+
+.chat__btt {
+  margin-top: 20px;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.chat__bcard--tint .chat__btt {
+  color: var(--brand);
+}
+
+.chat__bcard--dark .chat__btt {
+  color: #fff;
+}
+
+.chat__bsub {
+  font-size: 22px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.chat__bcard--dark .chat__bsub {
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.chat__bfoot {
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 21px;
+  color: var(--brand);
+  border-top: 2px solid var(--accent-faint);
+}
+
+.chat__bcard--dark .chat__bfoot {
+  color: rgba(255, 255, 255, 0.58);
+  border-top: 2px solid rgba(255, 255, 255, 0.14);
+}
+
+.chat__bfoot-b {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.chat__bcard--dark .chat__bfoot-b {
+  color: #fff;
+}
+
+/* ─────────────────────────────── 筛选胶囊 ─────────────────────────────── */
+
+.chat__chips {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  padding: 36px 0 8px;
+  white-space: nowrap;
+}
+
+.chat__chips-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 40px;
+}
+
+.chat__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: 68px;
+  padding: 0 30px;
+  border-radius: var(--r-pill);
+  /* 设计稿描边是 color-mix(--accent 14%, --border)，与 --accent-mid 基本同色 */
+  border: 2px solid var(--accent-mid);
+  background: rgba(255, 255, 255, 0.74);
+  color: var(--fg);
+  font-size: 26px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+
+  &:active {
+    border-color: var(--line);
+  }
+
+  /* 选中态：深墨底白字 */
+  &.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    font-weight: 500;
+  }
+}
+
+.chat__chip-n {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+.chat__chip.is-on .chat__chip-n {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ─────────────────────────────── 区块标题 ─────────────────────────────── */
+
+.chat__sec {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 44px 40px 12px;
+}
+
+.chat__sec-title {
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.chat__sec-note {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+/* ─────────────────────────────── 会话列表 ─────────────────────────────── */
+
+/* 设计稿 .list 左右各 12pt + .conv 内衬 8pt = 头像距屏幕 20pt，与页头对齐 */
+.chat__list {
+  position: relative;
+  z-index: 1;
+  padding: 12px 24px 0;
+}
+
+.chat__conv {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 24px 16px;
+  border-radius: 36px;
+
+  &:active {
+    background: var(--surface);
+  }
+}
+
+/* 头像：设计稿 50pt 圆角方形（圆角 16pt）。
+   角标 / 在线点要浮在头像外侧，所以裁剪只放在 .chat__ava 上，外层 wrap 不裁剪 */
+.chat__ava-wrap {
+  position: relative;
+  flex: 0 0 auto;
+  width: 100px;
+  height: 100px;
+}
+
+.chat__ava {
+  width: 100%;
+  height: 100%;
+  border-radius: 32px;
+  overflow: hidden;
+  background: var(--grad-ph);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brand);
+}
+
+.chat__ava-img {
+  width: 100%;
+  height: 100%;
+}
+
+/* 系统会话：品牌渐变底 + 白盾牌勾（设计稿 inline 覆盖样式） */
+.chat__ava--sys {
+  background: var(--grad-brand);
+  border-color: transparent;
+}
+
+.chat__ava-ic {
+  width: 44px;
+  height: 44px;
+}
+
+.chat__on {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0 6px rgba(84, 245, 208, 0.3);
+  border: 4px solid var(--bg);
+}
+
+.chat__bdg {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  min-width: 38px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--brand);
+  border: 4px solid var(--bg);
+  color: #fff;
+  font-size: 21px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat__corp {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat__corp-top {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.chat__nm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.chat__nm-tx {
+  font-size: 29px;
+  font-weight: 600;
+  @include ellipsis;
+}
+
+.chat__tick {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+}
+
+.chat__tm {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.chat__corp-sub {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.chat__msg {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 25px;
+  color: var(--muted);
+  @include ellipsis;
+}
+
+.chat__conv.is-unread .chat__msg {
+  color: var(--fg);
+}
+
+.chat__tag {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--brand);
+  background: var(--accent-weak);
+  border-radius: var(--r-pill);
+  padding: 4px 16px;
+}
+
+.chat__tag--done {
+  color: var(--muted);
+  background: var(--bg);
+}
+
+/* ─────────────────────────────── 空态 ─────────────────────────────── */
+
+.chat__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 84px 44px 12px;
+  color: var(--muted);
+}
+
+.chat__empty-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.chat__empty-text {
+  font-size: var(--fs-sm);
+}
