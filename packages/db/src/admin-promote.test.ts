@@ -89,6 +89,16 @@ test('--actor 不是 ADMIN 时拒绝提升，且不留下审计记录', async ()
   expect(await scratch.$count(adminAuditLogs)).toBe(0)
 })
 
+test('系统已有 ADMIN 时，省略 --actor 被拒绝（首次自举不可永久重放）', async () => {
+  // 系统里已存在 seed 插入的 ADMIN_NO，此时无 --actor 的提升必须失败。
+  const result = await promote([TARGET_NO])
+
+  expect(result.exitCode).toBe(1)
+  expect(result.stderr).toContain('--actor')
+  expect(await roleOf(TARGET_NO)).toBe('USER')
+  expect(await scratch.$count(adminAuditLogs)).toBe(0)
+})
+
 test('--reason 缺值时按用法错误退出，不静默回落默认原因', async () => {
   const result = await promote([TARGET_NO, '--reason'])
 
@@ -111,7 +121,11 @@ test('--actor 是现有 ADMIN 时以其为操作者写入审计', async () => {
   expect(logs[0]?.action).toBe('ADMIN_PROMOTED')
 })
 
-test('省略 --actor 时以被提升者本人为操作者（首次引导自举）', async () => {
+test('省略 --actor 且系统尚无 ADMIN 时自举成功，审计 actor 为 NULL（system bootstrap）', async () => {
+  // 把库里全部 ADMIN 降级，构造「首次自举」前提（scratch 库仅本测试使用；
+  // 前面用例可能已提升过多名 ADMIN）。
+  await scratch.update(users).set({ role: 'USER' })
+
   const result = await promote([SELF_TARGET_NO])
 
   expect(result.exitCode).toBe(0)
@@ -120,5 +134,13 @@ test('省略 --actor 时以被提升者本人为操作者（首次引导自举�
     .select({ actorUserId: adminAuditLogs.actorUserId })
     .from(adminAuditLogs)
     .where(eq(adminAuditLogs.targetId, ids.selfTarget))
-  expect(logs[0]?.actorUserId).toBe(ids.selfTarget)
+  expect(logs).toHaveLength(1)
+  // 自举审计不伪装成被提升者本人：actor 为 NULL（system bootstrap）。
+  expect(logs[0]?.actorUserId).toBeNull()
+
+  // 自举之后系统再次存在 ADMIN，无 --actor 的重放必须被拒绝。
+  const replay = await promote([TARGET_NO])
+  expect(replay.exitCode).toBe(1)
+  expect(replay.stderr).toContain('--actor')
+  expect(await roleOf(TARGET_NO)).toBe('USER')
 })

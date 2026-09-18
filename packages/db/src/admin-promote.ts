@@ -1,8 +1,14 @@
 /**
  * 受控 Admin 初始化脚本（#73 设计 §3.3 方案 1）。
  *
- * 用途：按**显式学号**把一名用户提升为 `ADMIN`，并把提升写入 `admin_audit_logs`
- * （`ADMIN_PROMOTED`，actor 默认取被提升者本人；用 `--actor <学号>` 可指定执行者）。
+ * 用途：按**显式学号**把一名用户提升为 `ADMIN`，并把提升写入 `admin_audit_logs`。
+ *
+ * 自举规则（评审 P1 修复）：
+ * - 系统**尚无任何 ADMIN** 时才允许省略 `--actor`（首次引导自举），审计 `actor_user_id`
+ *   记 `NULL`（system bootstrap，不伪装成任何真实用户）；
+ * - 系统已有 ADMIN 后必须显式传 `--actor <学号>`，且执行者必须是现有 ADMIN，否则拒绝；
+ * - 「计数检查 → 行锁 → 条件更新 → 审计写入」全部在同一个事务里完成，并发自举
+ *   也只会成功一个（行锁串行化 + `WHERE role = 'USER'` 条件更新）。
  *
  * 这不是公开注册接口：必须在生产 / 部署人员手动执行，且不可被任何 HTTP 路由调用。
  * 把一名用户提升为 ADMIN 之后，管理后台（/admin）才对他开放 —— 用户 / 商品查询、
@@ -10,7 +16,7 @@
  *
  * 用法（仓库根目录）：
  * ```bash
- * bun run db:promote -- 202101000001
+ * bun run db:promote -- 202101000001          # 仅限系统尚无 ADMIN 时（首次引导自举）
  * bun run db:promote -- 202101000001 --actor 202012345678 --reason "运营开通"
  * ```
  *
@@ -20,7 +26,7 @@
  * 注意：不打印任何密码 / 密钥；不把 password_hash / 完整 Cookie 写进审计日志
  * （设计 §8 只写脱敏快照，这里 before/after 仅含 role）。
  */
-import { eq } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/bun-sql'
 import { newId } from './ids'
 import { jsonParam } from './json'
@@ -32,8 +38,8 @@ function usage(code: number): never {
     [
       '用法：bun run db:promote -- <学号> [--actor <学号>] [--reason <原因>]',
       '  <学号>     被提升为 ADMIN 的学号（必填）',
-      '  --actor    执行提升操作的 Admin 学号（缺省或等于被提升者 = 首次引导自举，不做角色校验）',
-      '             指定为他人时必须已经是 ADMIN，否则拒绝（避免审计指向无管理权限者）',
+      '  --actor    执行提升操作的 Admin 学号；系统已存在 ADMIN 时必填，且必须是现有 ADMIN',
+      '             （仅系统尚无任何 ADMIN 时可省略，即首次引导自举）',
       '  --reason   审计原因（缺省：“管理后台初始化”）',
     ].join('\n'),
   )
@@ -87,32 +93,71 @@ if (!targetUser) {
   process.exit(1)
 }
 
-let actorId: string | null = null
-if (actor && actor !== target) {
-  const actorUser = await roleByStudentNo(actor)
-  if (!actorUser) {
-    console.error(`[db:promote] --actor 学号不存在：${actor}`)
-    process.exit(1)
-  }
-  // 审计里的操作者必须真的是管理员，否则可以把提升记到一个从未有过管理权限的账号头上。
-  // `actor === target` 的自举路径（首次引导）不需要这条校验。
-  if (actorUser.role !== 'ADMIN') {
-    console.error(`[db:promote] --actor 必须是现有 ADMIN（首次引导请省略 --actor）：${actor}`)
-    process.exit(1)
-  }
-  actorId = actorUser.id
-}
-
 if (targetUser.role === 'ADMIN') {
   console.log(`[db:promote] 已是 ADMIN，无需重复提升：${target}`)
   process.exit(0)
 }
 
+// 自举门卫（评审 P1-2）：系统已存在 ADMIN 时，省略 --actor 不再是合法路径，
+// 否则「首次引导」就变成永久可用的旁路。事务内还会以行锁 + 计数重查兑底并发。
+const adminCount = await db
+  .select({ n: sql<number>`count(*)::int` })
+  .from(users)
+  .where(eq(users.role, 'ADMIN'))
+const hasExistingAdmin = (adminCount[0]?.n ?? 0) > 0
+
+let actorId: string | null = null
+if (actor) {
+  const actorUser = await roleByStudentNo(actor)
+  if (!actorUser) {
+    console.error(`[db:promote] --actor 学号不存在：${actor}`)
+    process.exit(1)
+  }
+  if (actorUser.role !== 'ADMIN') {
+    console.error(
+      hasExistingAdmin
+        ? `[db:promote] --actor 必须是现有 ADMIN：${actor}`
+        : `[db:promote] 系统尚无 ADMIN，首次引导自举请省略 --actor；非自举提升的 --actor 必须是现有 ADMIN：${actor}`,
+    )
+    process.exit(1)
+  }
+  actorId = actorUser.id
+} else if (hasExistingAdmin) {
+  console.error(
+    `[db:promote] 系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 学号>`,
+  )
+  process.exit(1)
+}
+
 await db.transaction(async (tx) => {
-  await tx.update(users).set({ role: 'ADMIN' }).where(eq(users.id, targetUser.id))
+  // 行锁串行化并发的自举 / 提升事务：两个并发 db:promote 在这里排队，后到的
+  // 会在事务内重新计数（见下）或被条件 UPDATE 挡住，不会写出两条 ADMIN_PROMOTED。
+  await tx.execute(sql`select id from users where id = ${targetUser.id} for update`)
+
+  // 锁内重查 ADMIN 数量，封死并发窗口（两个并发自举都看到 count=0 的情况）。
+  const lockedAdminCount = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(users)
+    .where(ne(users.role, 'USER'))
+  const bootstrap = actorId === null && (lockedAdminCount[0]?.n ?? 0) === 0
+  if (actorId === null && !bootstrap) {
+    throw new Error('系统已存在 ADMIN，拒绝无 actor 提升')
+  }
+
+  // 条件更新：只有仍然是 USER 才提升；并发下另一个事务先提升成功时这里影响 0 行。
+  const updated = await tx
+    .update(users)
+    .set({ role: 'ADMIN' })
+    .where(and(eq(users.id, targetUser.id), eq(users.role, 'USER')))
+    .returning({ id: users.id })
+  if (updated.length === 0) {
+    throw new Error('目标用户已被并发提升为 ADMIN')
+  }
+
   await tx.insert(adminAuditLogs).values({
     id: newId(),
-    actorUserId: actorId ?? targetUser.id,
+    // 首次自举没有真实操作者，记 NULL（system bootstrap）；不伪装成被提升者本人。
+    actorUserId: actorId,
     action: 'ADMIN_PROMOTED',
     targetType: 'USER',
     targetId: targetUser.id,

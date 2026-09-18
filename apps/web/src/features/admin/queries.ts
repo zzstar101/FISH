@@ -1,5 +1,5 @@
 import type { AdminMeResponse } from '@fish/contracts/admin/schema'
-import { queryOptions, useQuery } from '@tanstack/react-query'
+import { type QueryClient, queryOptions, useQuery } from '@tanstack/react-query'
 import { ApiError } from '../../lib/api-client'
 import {
   type AdminAuditLogsQuery,
@@ -20,6 +20,8 @@ import {
  */
 
 export const adminKeys = {
+  /** 所有 admin 查询的公共前缀（供跨账号缓存清理用，见 `clearAdminQueries`）。 */
+  root: ['admin'] as const,
   me: () => ['admin', 'me'] as const,
   overview: () => ['admin', 'overview'] as const,
   users: (query: AdminListQuery) => ['admin', 'users', query] as const,
@@ -27,6 +29,17 @@ export const adminKeys = {
   listings: (query: AdminListingsQuery) => ['admin', 'listings', query] as const,
   listing: (listingId: string) => ['admin', 'listing', listingId] as const,
   auditLogs: (query: AdminAuditLogsQuery) => ['admin', 'audit-logs', query] as const,
+}
+
+/**
+ * 清空全部 Admin 查询缓存（评审 P1 修复）。
+ *
+ * Admin query key 与用户身份无关，而 `useAdminMe()` 有 `staleTime`；若登出 / 换号后
+ * 不清理，下一个账号打开 `/admin` 可能直接命中前一个管理员仍 fresh 的缓存，
+ * 造成跨账号的后台数据泄露窗口。在身份变化时调用本函数即可。
+ */
+export function clearAdminQueries(queryClient: Pick<QueryClient, 'removeQueries'>): void {
+  queryClient.removeQueries({ queryKey: adminKeys.root })
 }
 
 /** 首页守卫数据：非 Admin 会抛 403 `FORBIDDEN`，由 AdminShell 统一转无权限页。 */

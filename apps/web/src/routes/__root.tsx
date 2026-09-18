@@ -1,4 +1,5 @@
 import { createRootRoute, Outlet, useLocation } from '@tanstack/react-router'
+import { AdminCacheGate } from '../features/admin/admin-cache-gate'
 import { AuthBackground } from '../features/auth/auth-background'
 import { AuthProvider, useAuth } from '../features/auth/auth-provider'
 import { useRealtime } from '../features/chat/realtime'
@@ -29,6 +30,7 @@ function RootLayout() {
 
   return (
     <AuthProvider>
+      <AdminCacheGate />
       <RealtimeGate />
       {/*
         背景挂在根布局而不是页面组件里：登录 / 注册是两个路由，互切时页面会重挂载；

@@ -9,6 +9,10 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { createAdminModule } from './modules/admin/module'
+import {
+  createDevEmailVerificationProvider,
+  createResendEmailVerificationProvider,
+} from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
 import { createConversationsRouter } from './modules/conversations/router'
