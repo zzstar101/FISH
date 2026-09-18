@@ -225,6 +225,20 @@ describe('media message service', () => {
     expect(created.height).toBe(600)
   })
 
+  // 回归（评审 F-2）：宽高**都要**与真实值对比。旧代码只比 width，height 谎报也放行。
+  test('rejects an image whose declared height contradicts the probed height', async () => {
+    const service = setup({}, { stat: async () => ({ size: 1024, contentType: 'image/webp' }) })
+    await expect(
+      service.create(userId, conversationId, {
+        ...image,
+        objectKey: `chat-media/${conversationId}/${userId}/real.webp`,
+        // 真实 webpBytes() 是 800x600；width 诚实、height 撒谎。
+        width: 800,
+        height: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'MEDIA_OBJECT_INVALID' })
+  })
+
   test('rejects an image whose probed size exceeds the limit', async () => {
     // 构造 5000x5000 的 VP8X canvas（canvas width-1/height-1 在 chunk data +4/+7 的 24-bit LE）
     const chunk = [...ascii('VP8X'), ...u32be(10), 0x0f, 0, 0, 0, ...u24le(4999), ...u24le(4999)]

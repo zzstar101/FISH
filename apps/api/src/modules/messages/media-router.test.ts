@@ -94,6 +94,30 @@ describe('media router', () => {
     expect(await response.json()).toEqual({ items: [], nextCursor: 'next-page-cursor' })
   })
 
+  // 回归（评审 F-3）：非 UUID 的路径参数必须按"不存在"处理，不能让它走到 SQL 的 ::uuid
+  // 转换而变成 500（PostgresError 22P02）。
+  test('returns 404 for a non-UUID conversation id instead of a 500', async () => {
+    const app = buildApp()
+    for (const path of [
+      '/conversations/not-a-uuid/media',
+      '/conversations/not-a-uuid/media/presign',
+    ]) {
+      const response = await app.request(path, {
+        method: path.endsWith('presign') ? 'POST' : 'GET',
+        ...(path.endsWith('presign')
+          ? {
+              body: JSON.stringify({ kind: 'IMAGE', contentType: 'image/webp', sizeBytes: 1 }),
+              headers: { 'content-type': 'application/json' },
+            }
+          : {}),
+      })
+      expect(response.status).toBe(404)
+    }
+
+    const objectResponse = await app.request(`/conversations/${conversationId}/media/not-a-uuid`)
+    expect(objectResponse.status).toBe(404)
+  })
+
   test('rejects an out-of-range limit with 422', async () => {
     const response = await buildApp().request(`/conversations/${conversationId}/media?limit=0`)
     expect(response.status).toBe(422)

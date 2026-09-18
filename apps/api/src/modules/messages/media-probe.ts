@@ -408,9 +408,10 @@ function readBox(
 }
 
 /**
- * MP4：找到 `moov` → `mvhd`，duration / timescale 得到秒。
+ * MP4：优先用 `moov` 里的**样本表**（`stts`）推出真实时长，并与 `mvhd` 取较大值。
  *
- * `moov` 可以在文件尾（非 faststart 的录制文件常如此），所以同样需要完整文件字节。
+ * 不单独信任 `mvhd.duration`：它只是头部整数，篒改后能把真实 65s 报成 1s 从而捧过 60s 上限
+ * （评审 F-1）。`moov` 可以在文件尾（非 faststart 的录制文件常如此），所以同样需要完整文件字节。
  */
 function mp4Duration(bytes: Uint8Array): ProbedDuration | null {
   let moov: { start: number; end: number } | null = null
@@ -425,16 +426,32 @@ function mp4Duration(bytes: Uint8Array): ProbedDuration | null {
   }
   if (!moov) return null
 
+  const candidates = [
+    readMvhdDurationMs(bytes, moov),
+    mp4SampleTableDurationMs(bytes, moov),
+  ].filter((value): value is number => value !== null)
+  if (candidates.length === 0) return null
+  return { durationMs: Math.max(0, Math.round(Math.max(...candidates))) }
+}
+
+/**
+ * `moov/mvhd` 声明的时长（毫秒）；缺失/不可用返回 null。
+ *
+ * 这只是**头部整数**，可被篡改，所以调用方必须与样本表推出的值取 max。
+ */
+function readMvhdDurationMs(
+  bytes: Uint8Array,
+  moov: { start: number; end: number },
+): number | null {
   for (let pos = moov.start; pos + 8 <= moov.end; ) {
     const box = readBox(bytes, pos)
     if (!box) return null
-    if (box.type !== 'mvhd') {
-      pos = box.end
-      continue
-    }
+    pos = box.end
+    if (box.type !== 'mvhd') continue
+
     const version = bytes[box.start] ?? 0
     // mvhd data：version+flags(4) | creation | modification | timescale(4) | duration
-    const timescale = u32be(bytes, version === 1 ? box.start + 20 : box.start + 12)
+    const timescale = u32be(bytes, box.start + (version === 1 ? 20 : 12))
     if (timescale === 0) return null
     const duration =
       version === 1
@@ -443,7 +460,85 @@ function mp4Duration(bytes: Uint8Array): ProbedDuration | null {
           )
         : u32be(bytes, box.start + 16)
     if (duration === 0) return null
-    return { durationMs: Math.max(0, Math.round((duration / timescale) * 1000)) }
+    return (duration / timescale) * 1000
+  }
+  return null
+}
+
+/**
+ * 从**样本表**推出媒体时长（毫秒）：`trak/mdia/mdhd`(timescale) + `stbl/stts`(每样本 tick 数)。
+ *
+ * 这是评审 F-1 的修复点：真时长在样本表里，而不在 `mvhd.duration` 头部整数里。
+ * 实测：把真实 65s 的 `mvhd.duration` 改成 1s，ffprobe 仍报 65s（它读样本表），但只读 mvhd
+ * 的实现会报 1s 而捧过 60s 上限。
+ *
+ * 取向与 WebM 那侧一致：取所有 trak 的最大值（宁可高估不得低估）；任何一项读不完整
+ * （entryCount 与实际数据不符）就跳过该 trak，不用**不完整的和**参与比较。
+ */
+function mp4SampleTableDurationMs(
+  bytes: Uint8Array,
+  moov: { start: number; end: number },
+): number | null {
+  let maxMs: number | null = null
+
+  for (let pos = moov.start; pos + 8 <= moov.end; ) {
+    const trak = readBox(bytes, pos)
+    if (!trak) break
+    pos = trak.end
+    if (trak.type !== 'trak') continue
+
+    const mdia = findBoxInRange(bytes, trak.start, trak.end, 'mdia')
+    if (!mdia) continue
+
+    const mdhd = findBoxInRange(bytes, mdia.start, mdia.end, 'mdhd')
+    if (!mdhd) continue
+    const version = bytes[mdhd.start] ?? 0
+    // mdhd data：version+flags(4) | creation | modification | timescale(4) | duration
+    const timescale = u32be(bytes, mdhd.start + (version === 1 ? 20 : 12))
+    if (timescale === 0) continue
+
+    const minf = findBoxInRange(bytes, mdia.start, mdia.end, 'minf')
+    if (!minf) continue
+    const stbl = findBoxInRange(bytes, minf.start, minf.end, 'stbl')
+    if (!stbl) continue
+    const stts = findBoxInRange(bytes, stbl.start, stbl.end, 'stts')
+    if (!stts) continue
+
+    // stts data：version+flags(4) | entryCount(4) | (count(4), delta(4))*
+    const entryCount = u32be(bytes, stts.start + 4)
+    let cursor = stts.start + 8
+    let totalTicks = 0
+    let truncated = false
+    for (let i = 0; i < entryCount; i++) {
+      if (cursor + 8 > stts.end) {
+        truncated = true
+        break
+      }
+      totalTicks += u32be(bytes, cursor) * u32be(bytes, cursor + 4)
+      cursor += 8
+    }
+    // 截断时**不要**用不完整的和去参与 max（会低估，正是攻击者想要的方向）。
+    if (truncated) continue
+
+    const ms = (totalTicks / timescale) * 1000
+    if (Number.isFinite(ms) && (maxMs === null || ms > maxMs)) maxMs = ms
+  }
+
+  return maxMs
+}
+
+/** 在 `[start, end)` 内找第一个 `type` 的 box。 */
+function findBoxInRange(
+  bytes: Uint8Array,
+  start: number,
+  end: number,
+  type: string,
+): { start: number; end: number } | null {
+  for (let pos = start; pos + 8 <= end; ) {
+    const box = readBox(bytes, pos)
+    if (!box) return null
+    if (box.type === type) return { start: box.start, end: box.end }
+    pos = box.end
   }
   return null
 }

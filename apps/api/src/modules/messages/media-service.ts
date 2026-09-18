@@ -202,8 +202,8 @@ export function createMediaMessageService({
         if (probed.width > MEDIA_MAX_IMAGE_DIMENSION || probed.height > MEDIA_MAX_IMAGE_DIMENSION) {
           throw invalid('MEDIA_DIMENSION_EXCEEDED', '图片尺寸超过限制')
         }
-        const declared = 'width' in input ? input.width : undefined
-        if (declared !== undefined && declared !== probed.width) {
+        // 宽高**都要**与真实值对比（评审 F-2：旧代码只比 width，height 声明错了也放行）。
+        if (input.width !== probed.width || input.height !== probed.height) {
           throw invalid('MEDIA_OBJECT_INVALID', '媒体尺寸与声明不一致')
         }
         // 用真实尺寸覆盖声明值，避免后端存的可能与客户端声明不一致。

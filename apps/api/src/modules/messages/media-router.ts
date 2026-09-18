@@ -21,6 +21,18 @@ function readJson(c: Context): Promise<unknown> {
   return c.req.json().catch(() => null)
 }
 
+/**
+ * 路径参数必须是 UUID。
+ *
+ * 否则它会被当成绑定参数走到 SQL 的 `::uuid` 转换：非法字串让 PG 报 `22P02` → 500，
+ * 而契约要求"不存在"语义（评审 F-3）。与 media-store 里的 `::uuid` 位置一一对应。
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function conversationNotFound(c: Context) {
+  return c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
+}
+
 function errorResponse(c: Context, error: unknown) {
   if (error instanceof MediaMessageServiceError) {
     return c.json(errorBody(error.code, error.message), error.status)
@@ -32,6 +44,7 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
   const app = new Hono<{ Variables: AuthVariables }>()
 
   app.post('/:id/media/presign', requireAuth, async (c) => {
+    if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = mediaPresignInputSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       return c.json(
@@ -47,6 +60,7 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
   })
 
   app.post('/:id/media', requireAuth, async (c) => {
+    if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = mediaMessageInputSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       return c.json(
@@ -62,6 +76,7 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
   })
 
   app.get('/:id/media', requireAuth, async (c) => {
+    if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = mediaListQuerySchema.safeParse(c.req.query())
     if (!parsed.success) {
       return c.json(errorBody('VALIDATION_FAILED', 'limit 或 cursor 不合法'), 422)
@@ -74,6 +89,9 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
   })
 
   app.get('/:conversationId/media/:mediaId', requireAuth, async (c) => {
+    if (!UUID_RE.test(c.req.param('conversationId')) || !UUID_RE.test(c.req.param('mediaId'))) {
+      return c.json(errorBody('MEDIA_NOT_FOUND', '媒体不存在'), 404)
+    }
     try {
       const object = await service.getObject(
         c.get('userId'),

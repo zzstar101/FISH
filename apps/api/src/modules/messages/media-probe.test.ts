@@ -213,6 +213,91 @@ function webm(chunks: number[][], unknownSize = false): Uint8Array {
   return new Uint8Array([...EBML_HEADER, ...SEGMENT_ID, ...segmentSize, ...segmentPayload])
 }
 
+/** 组装一个最小 MP4：`ftyp` + `moov{mvhd, trak{mdia{mdhd, minf{stbl{stts}}}}}`。 */
+function mp4File(input: {
+  timescale: number
+  mvhdDuration: number
+  /** 省略则只写 mvhd（没有样本表）。 */
+  stts?: { count: number; delta: number }[]
+}): number[] {
+  const mvhdPayload = [
+    0,
+    0,
+    0,
+    0, // version + flags
+    ...u32be(0),
+    ...u32be(0), // creation / modification
+    ...u32be(input.timescale),
+    ...u32be(input.mvhdDuration),
+  ]
+  const mvhd = [
+    ...u32be(8 + mvhdPayload.length),
+    ...'mvhd'.split('').map((c) => c.charCodeAt(0)),
+    ...mvhdPayload,
+  ]
+
+  const trak = input.stts
+    ? (() => {
+        const mdhdPayload = [
+          0,
+          0,
+          0,
+          0, // version + flags
+          ...u32be(0),
+          ...u32be(0),
+          ...u32be(input.timescale),
+          ...u32be(0), // duration（这里不依赖它）
+        ]
+        const mdhd = [
+          ...u32be(8 + mdhdPayload.length),
+          ...'mdhd'.split('').map((c) => c.charCodeAt(0)),
+          ...mdhdPayload,
+        ]
+        const entries = input.stts.flatMap((entry) => [
+          ...u32be(entry.count),
+          ...u32be(entry.delta),
+        ])
+        const sttsPayload = [0, 0, 0, 0, ...u32be(input.stts.length), ...entries]
+        const stts = [
+          ...u32be(8 + sttsPayload.length),
+          ...'stts'.split('').map((c) => c.charCodeAt(0)),
+          ...sttsPayload,
+        ]
+        const stbl = [
+          ...u32be(8 + stts.length),
+          ...'stbl'.split('').map((c) => c.charCodeAt(0)),
+          ...stts,
+        ]
+        const minf = [
+          ...u32be(8 + stbl.length),
+          ...'minf'.split('').map((c) => c.charCodeAt(0)),
+          ...stbl,
+        ]
+        const mdiaPayload = [...mdhd, ...minf]
+        const mdia = [
+          ...u32be(8 + mdiaPayload.length),
+          ...'mdia'.split('').map((c) => c.charCodeAt(0)),
+          ...mdiaPayload,
+        ]
+        return [...u32be(8 + mdia.length), ...'trak'.split('').map((c) => c.charCodeAt(0)), ...mdia]
+      })()
+    : []
+
+  const moovPayload = [...mvhd, ...trak]
+  const moov = [
+    ...u32be(8 + moovPayload.length),
+    ...'moov'.split('').map((c) => c.charCodeAt(0)),
+    ...moovPayload,
+  ]
+  const ftyp = [
+    ...u32be(16),
+    ...'ftyp'.split('').map((c) => c.charCodeAt(0)),
+    ...u32be(0),
+    ...u32be(0),
+  ]
+  return [...ftyp, ...moov]
+}
+
 describe('probeVoiceDuration', () => {
   test('parses WebM Duration from EBML Info', () => {
     // Info[TimecodeScale=1ms, Duration=3500 tick] → 3500ms
@@ -323,36 +408,38 @@ describe('probeVoiceDuration', () => {
     expect(probeVoiceDuration(lying, 'audio/webm')).toEqual({ durationMs: 61_001 })
   })
 
-  test('parses MP4 mvhd duration', () => {
+  test('parses MP4 mvhd duration when there is no sample table', () => {
+    // 只有 mvhd（没有 trak/stbl）：退化为头部声明值。
     // mvhd：version 0, timescale=44100, duration=44100 → 1000ms
-    const mvhdPayload = [
-      0,
-      0,
-      0,
-      0, // version + flags
-      ...u32be(0),
-      ...u32be(0), // creation/modification time
-      ...u32be(44100), // timescale
-      ...u32be(44100), // duration
-    ]
-    const mvhd = [
-      ...u32be(8 + mvhdPayload.length),
-      ...'mvhd'.split('').map((c) => c.charCodeAt(0)),
-      ...mvhdPayload,
-    ]
-    const moov = [
-      ...u32be(8 + mvhd.length),
-      ...'moov'.split('').map((c) => c.charCodeAt(0)),
-      ...mvhd,
-    ]
-    const ftyp = [
-      ...u32be(16),
-      ...'ftyp'.split('').map((c) => c.charCodeAt(0)),
-      ...u32be(0),
-      ...u32be(0),
-    ]
-    const file = [...ftyp, ...moov]
+    const file = mp4File({ timescale: 44100, mvhdDuration: 44100 })
     expect(probeVoiceDuration(bytes(...file), 'audio/mp4')).toEqual({ durationMs: 1000 })
+  })
+
+  // 回归（评审 F-1）：`mvhd.duration` 只是头部整数，可被篡改。
+  // 真实 65s 的 MP4 只要把该字段改成 1s，就能绕过 60s 上限 —— 除非同时读样本表（stts）。
+  test('does not trust an MP4 mvhd duration that contradicts the sample table', () => {
+    // mvhd 声称 1s，但 stts 里 44100 个样本 × 1024 tick / 44100 = 65.023s。
+    const tampered = mp4File({
+      timescale: 44100,
+      mvhdDuration: 44100, // 谎报 1s
+      stts: [
+        { count: 2800, delta: 1024 },
+        { count: 1, delta: 324 },
+      ],
+    })
+    // 取两者较大者：不能用谎报的 1000ms 放行。
+    expect(probeVoiceDuration(bytes(...tampered), 'audio/mp4')).toEqual({ durationMs: 65_023 })
+
+    // 反向：对照组（mvhd 与样本表一致）仍给出样本表的值。
+    const honest = mp4File({
+      timescale: 44100,
+      mvhdDuration: 2_867_524,
+      stts: [
+        { count: 2800, delta: 1024 },
+        { count: 1, delta: 324 },
+      ],
+    })
+    expect(probeVoiceDuration(bytes(...honest), 'audio/mp4')).toEqual({ durationMs: 65_023 })
   })
 
   test('returns null for unsupported mime or malformed payload', () => {
