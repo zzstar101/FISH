@@ -97,7 +97,8 @@ describe('conversations store (integration)', () => {
       INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
         (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'TEXT', '在吗', now() - interval '2 seconds'),
         (${crypto.randomUUID()}, ${conversationId}, NULL, 'SYSTEM', '系统提示', now() - interval '1 second'),
-        (${crypto.randomUUID()}, ${conversationId}, ${buyer}, 'TEXT', '我自己发的', now())
+        (${crypto.randomUUID()}, ${conversationId}, ${buyer}, 'TEXT', '我自己发的', now()),
+        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'MEDIA', '[media]', now())
     `)
 
     const beforeRead = await store.findDetail(conversationId, buyer)

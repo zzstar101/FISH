@@ -23,6 +23,9 @@ import { createSqlListingStore } from './modules/listings/store'
 import { createMatchingRouter } from './modules/matching/router'
 import { createMatchingService } from './modules/matching/service'
 import { createSqlMatchingStore } from './modules/matching/store'
+import { createMediaRouter } from './modules/messages/media-router'
+import { createMediaMessageService } from './modules/messages/media-service'
+import { createSqlMediaMessageStore } from './modules/messages/media-store'
 import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
@@ -176,6 +179,26 @@ export function createApp(
     '/conversations',
     createConversationsRouter({
       service: createConversationService({ store: conversationStore, storage }),
+      requireAuth: auth.requireAuth,
+    }),
+  )
+  app.route(
+    '/conversations',
+    createMediaRouter({
+      service: createMediaMessageService({
+        store: createSqlMediaMessageStore(db),
+        storage,
+        mediaUrl: (conversationId, mediaId) =>
+          `/api/conversations/${conversationId}/media/${mediaId}`,
+        onMediaCreated: (participants, media) => {
+          hub.pushMediaToUsers([participants.buyerId, participants.sellerId], {
+            type: 'media.new',
+            conversationId: media.conversationId,
+            media,
+          })
+        },
+      }),
+      storage,
       requireAuth: auth.requireAuth,
     }),
   )

@@ -197,7 +197,7 @@ To connect to Postgres database - please install either of 'pg', 'postgres', ...
 
 - `postgres`：`postgres:16-alpine`，带 `pg_isready` healthcheck
 - `minio`：带 `/minio/health/live` healthcheck
-- `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`、并把桶设为**匿名可读**（`mc anonymous set download`，供 #6 的图片直链，见 Issue #6 的 Listing 契约 §7.8），然后退出
+- `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`，应用 `infra/minio-public-policy.json`：仅 `listings/*` 匿名可读，聊天媒体必须通过鉴权 API 读取。已有开发环境需重新运行 `docker compose run --rm minio-init` 更新策略。
 
 ## 7. 协作方式与 Contract
 

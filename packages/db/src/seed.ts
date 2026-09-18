@@ -5,6 +5,7 @@ import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
+import { messageMedia } from './schema/message-media'
 import { messages } from './schema/messages'
 import { listingModerationRecords } from './schema/moderation'
 import { notifications } from './schema/notifications'
@@ -75,7 +76,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // `sessions` / `campus_email_verifications`（#68）/ `listing_moderation_records`（#80）
   // 必须在内：它们引用 users / listings，漏掉会让 seed 第二次执行直接失败。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${transactions}, ${notifications}, ${jobs}`,
   )
 
   const now = new Date()

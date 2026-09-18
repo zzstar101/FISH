@@ -135,7 +135,7 @@ const detailSelect = (viewerId: string) => sql`
          lm.type::text AS last_message_type, lm.content AS last_message_content,
          lm.sender_id AS last_message_sender_id, lm.created_at AS last_message_created_at,
          (SELECT count(*) FROM messages m
-          WHERE m.conversation_id = c.id
+          WHERE m.conversation_id = c.id AND m.type <> 'MEDIA'
             AND (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
             AND (CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END IS NULL
                  OR m.created_at > CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END)
@@ -146,7 +146,7 @@ const detailSelect = (viewerId: string) => sql`
   LEFT JOIN LATERAL (
     SELECT m.type, m.content, m.sender_id, m.created_at
     FROM messages m
-    WHERE m.conversation_id = c.id
+    WHERE m.conversation_id = c.id AND m.type <> 'MEDIA'
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
   ) lm ON TRUE

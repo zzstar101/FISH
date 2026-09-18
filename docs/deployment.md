@@ -177,7 +177,7 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 ```
 
-启动并建桶 + 设**匿名可读**：
+启动并建桶 + 仅公开商品图片（聊天媒体必须私有）：
 
 ```bash
 sudo chmod 600 /etc/default/minio
@@ -186,7 +186,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now minio
 # 桶名必须与 .env 的 S3_BUCKET 一致
 export MC_HOST_local="http://fish:REPLACE_ME_MINIO_PASSWORD@127.0.0.1:9000"
 mc mb --ignore-existing local/fish
-mc anonymous set download local/fish   # 读接口拼出的图片 URL 是公开直链，少了这条前端 <img> 全部 403
+# 从本仓库复制 infra/minio-public-policy.json 到 /etc/fish-public-policy.json。
+# 若桶名不是 fish，先替换该 JSON 的 Resource 中的桶名。
+mc anonymous set-json /etc/fish-public-policy.json local/fish
 
 # 应用**不要**直接用 root 凭据：root 能建用户、删桶、改策略。给应用单开一个只作用于该桶的账号。
 cat > /etc/minio-app-policy.json <<'JSON'
@@ -206,6 +208,11 @@ mc admin policy attach local fish-app-rw --user fish-app
 ```
 
 （桶名出现在策略 JSON 的两处 `arn:aws:s3:::fish`，改 `S3_BUCKET` 时要一起改。）
+
+升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
+允许匿名 GetObject；`chat-media/*` 和 `chat-media-final/*` 不能匿名读或列举。
+上线前执行 `bun --env-file=.env apps/api/scripts/media-smoke.ts`，验证聊天直链返回 403、
+鉴权代理仍能读取及 Range 播放。
 
 ## 4. 代码与环境变量
 
