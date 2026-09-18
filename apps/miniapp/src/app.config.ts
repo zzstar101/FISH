@@ -16,6 +16,12 @@ export default defineAppConfig({
     'pages/register/index',
     'pages/verify/index',
     'pages/settings/index',
+    'pages/category/index',
+    'pages/user/index',
+    'pages/match/index',
+    'pages/mylist/index',
+    'pages/watchers/index',
+    'pages/scan/index',
   ],
   window: {
     backgroundTextStyle: 'light',

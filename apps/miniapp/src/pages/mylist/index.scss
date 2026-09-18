@@ -1,0 +1,569 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * C4 我的发布。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 页头（冰蓝渐变：标题 + 副标题 + 4 段状态分段控件）→ 商品行列表（卡内分两块：
+ * 上块「缩略图 + 标题 + 价格 + 浏览/想要」，下块「锁定说明 + 动作」）
+ * → 右下悬浮「+ 发布」圆钮；下架确认是遮罩 + 居中卡。
+ *
+ * 行内动作区与正文之间有一条极淡分割线，是稿子里区分「信息 / 操作」的关键：
+ * 少了它，两个按钮看起来像商品信息的一部分。
+ */
+
+.ml {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 200px;
+}
+
+.ml__bg {
+  @include page-hero(560px, 64px);
+}
+
+/* ---------------------------------------------------------------- 页头 */
+
+.ml__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 168px 40px 0;
+}
+
+.ml__title {
+  font-size: 54px;
+  font-weight: 600;
+  line-height: 1.33;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.ml__sub {
+  margin-top: 16px;
+  font-size: 23px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+/* ---- 状态分段控件：浅冰底胶囊里 4 个等分格，选中格深墨底白字 ---- */
+
+.ml__seg {
+  display: flex;
+  gap: 8px;
+  height: 88px;
+  padding: 6px;
+  margin-top: 32px;
+  border-radius: var(--r-pill);
+  background: var(--ice);
+  border: 2px solid var(--border);
+  box-sizing: border-box;
+}
+
+.ml__seg-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: var(--r-pill);
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &.is-on {
+    background: var(--ink);
+    color: var(--surface);
+  }
+}
+
+.ml__seg-n {
+  font-size: 20px;
+  opacity: 0.9;
+}
+
+/* ---------------------------------------------------------------- 列表 */
+
+.ml__body {
+  position: relative;
+  z-index: 1;
+  padding-top: 28px;
+}
+
+.ml__list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 0 40px;
+}
+
+.ml__item {
+  @include card(48px);
+  overflow: hidden;
+}
+
+.ml__row {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+}
+
+.ml__thumb {
+  flex: 0 0 auto;
+  width: 152px;
+  height: 152px;
+  border-radius: 28px;
+  overflow: hidden;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+}
+
+.ml__thumb-img {
+  width: 100%;
+  height: 100%;
+}
+
+.ml__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ml__rtop {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.ml__rtitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+/* ---- 状态胶囊：四态各一色（在售浅蓝 / 已预订 warn / 已售出 灰 / 已下架 描边） ---- */
+
+.ml__pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &.is-sale {
+    background: var(--accent-weak);
+    border: 2px solid var(--accent-mid);
+    color: var(--brand-deep);
+  }
+
+  &.is-reserved {
+    background: var(--warn-weak);
+    border: 2px solid var(--warn);
+    color: var(--warn-ink);
+  }
+
+  &.is-sold {
+    background: var(--accent-faint);
+    border: 2px solid var(--border);
+    color: var(--muted-2);
+  }
+
+  &.is-off {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    color: var(--muted-2);
+  }
+}
+
+.ml__price {
+  display: flex;
+  align-items: baseline;
+  margin-top: 16px;
+}
+
+.ml__price-amt {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--price);
+}
+
+.ml__rstats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.ml__rstat {
+  font-size: 22px;
+  color: var(--muted-2);
+
+  /* 「N 人想要」可点进 C5：给一点品牌色暗示，否则用户不知道这行能点 */
+  &--want {
+    color: var(--brand-deep);
+  }
+}
+
+.ml__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-mid);
+  flex: 0 0 auto;
+}
+
+/* ------------------------------------------------------------- 行内动作区 */
+
+.ml__acts {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 24px;
+  border-top: 2px solid var(--accent-faint);
+}
+
+/* 锁定说明：靠左顶格，把动作按钮推到右边 */
+.ml__locks {
+  margin-right: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 22px;
+  color: var(--muted-2);
+}
+
+/* 小锁图标：用纯 CSS 画（ICONS 里的 lock 是实体态、比这里大一号） */
+.ml__lock-ic {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 18px;
+  border: 3px solid currentColor;
+  border-radius: 4px;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: -12px;
+    width: 14px;
+    height: 12px;
+    border: 3px solid currentColor;
+    border-bottom: 0;
+    border-radius: 8px 8px 0 0;
+    transform: translateX(-50%);
+  }
+}
+
+.ml__act {
+  @include btn-sm;
+  min-height: 72px;
+  min-width: 132px;
+
+  /* 危险动作（下架）：描边 + 深红字，与「编辑」的中性态区分开 */
+  &--danger {
+    border: 2px solid var(--danger-line);
+    color: var(--danger-ink);
+    background: var(--surface);
+  }
+
+  /* 上架：低风险正向动作，用实底主色 */
+  &--primary {
+    border: 2px solid transparent;
+    background: var(--brand-deep);
+    color: var(--surface);
+  }
+
+  /**
+   * 禁用态：置灰但**保留热区与可点性**（点击给 toast 说明，不是死按钮）。
+   * 稿子明确要求「禁用按钮置灰、不响应点击，但保留 44pt 热区避免误触相邻按钮」，
+   * 小程序没有原生 disabled 热区，所以用视觉置灰 + 仍可点（点击只提示）实现同等效果。
+   */
+  &.is-locked {
+    background: var(--accent-faint);
+    border: 2px solid var(--accent-faint);
+    color: var(--muted);
+  }
+}
+
+/* ---------------------------------------------------------------- 悬浮发布 */
+
+.ml__fab {
+  position: fixed;
+  right: 40px;
+  bottom: 44px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  height: 104px;
+  padding: 0 42px 0 36px;
+  border-radius: var(--r-pill);
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+}
+
+.ml__fab-ic {
+  width: 28px;
+  height: 28px;
+}
+
+/* ---------------------------------------------------------------- 空态 */
+
+.ml__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 60px 80px 0;
+}
+
+.ml__empty-disc {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--accent-faint);
+}
+
+.ml__empty-ic {
+  width: 60px;
+  height: 60px;
+}
+
+.ml__empty-title {
+  margin-top: 28px;
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ml__empty-text {
+  margin-top: 12px;
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.ml__empty-act {
+  margin-top: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 88px;
+  padding: 0 44px;
+  border-radius: 44px;
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: 28px;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- 骨架屏 */
+
+.ml__skel {
+  display: flex;
+  gap: 24px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 48px;
+  padding: 24px;
+  margin: 0 40px 20px;
+}
+
+.ml__skel-sq {
+  @include skeleton(152px, 152px);
+  border-radius: 28px;
+}
+
+.ml__skel-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 8px;
+}
+
+.ml__skel-bar {
+  @include skeleton(24px, 100%);
+
+  &--price {
+    height: 30px;
+  }
+
+  &--meta {
+    height: 22px;
+  }
+}
+
+/* ---------------------------------------------------------- 下架确认弹层 */
+
+.ml__scrim {
+  @include scrim;
+}
+
+.ml__dialog {
+  position: fixed;
+  left: 40px;
+  right: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 60;
+  padding: 40px;
+  border-radius: 48px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-float);
+  box-sizing: border-box;
+}
+
+.ml__dialog-title {
+  display: block;
+  font-size: 32px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--fg);
+}
+
+.ml__dialog-sub {
+  display: block;
+  margin-top: 18px;
+  font-size: 25px;
+  line-height: 1.65;
+  text-align: center;
+  color: var(--muted-2);
+}
+
+.ml__dlg-item {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-top: 28px;
+  padding: 18px;
+  border-radius: 28px;
+  background: var(--ice);
+  border: 2px solid var(--border);
+}
+
+.ml__dlg-thumb {
+  flex: 0 0 auto;
+  width: 88px;
+  height: 88px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+}
+
+.ml__dlg-thumb-img {
+  width: 100%;
+  height: 100%;
+}
+
+.ml__dlg-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ml__dlg-title {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+  @include clamp(1);
+}
+
+.ml__dlg-price {
+  display: block;
+  margin-top: 8px;
+  font-size: 25px;
+  font-weight: 700;
+  color: var(--price);
+}
+
+.ml__dlg-tip {
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: 24px;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn);
+  color: var(--warn-ink);
+  font-size: 23px;
+  line-height: 1.6;
+}
+
+.ml__dlg-acts {
+  display: flex;
+  gap: 20px;
+  margin-top: 32px;
+}
+
+.ml__dlg-cancel,
+.ml__dlg-ok {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 92px;
+  border-radius: 46px;
+  font-size: 29px;
+  font-weight: 600;
+}
+
+.ml__dlg-cancel {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+}
+
+.ml__dlg-ok {
+  background: var(--danger-ink);
+  color: var(--surface);
+
+  &.is-busy {
+    opacity: 0.9;
+  }
+
+  /* 失败态复用取消按钮的样式（描边 + 深红字），语义是「可重试」而不是「危险」 */
+  &.is-failed {
+    background: var(--surface);
+    border: 2px solid var(--danger-line);
+    color: var(--danger-ink);
+  }
+}
+
+.ml__spin {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 4px solid var(--on-dark-track);
+  border-top-color: var(--surface);
+  animation: ml-spin 0.7s linear infinite;
+}
+
+@keyframes ml-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
