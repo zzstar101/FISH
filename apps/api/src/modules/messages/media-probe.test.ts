@@ -301,6 +301,28 @@ describe('probeVoiceDuration', () => {
     ).toEqual({ durationMs: 5000 })
   })
 
+  // 回归（评审 blocker 2 的攻面）：不能只信 `Info.Duration`。
+  //
+  // MediaRecorder 写不写 Duration 都合法，而**篡改**过的文件可以声明一个远小于实际的
+  // Duration。服务端唯一的用途是安全上限，所以取「声明值」与「块时间戳下界」的较大者。
+  test('never trusts an Info.Duration smaller than what the clusters actually span', () => {
+    // Info 声明 1000ms，但 Cluster@32781 + 块偏移 28220 实际到 61001ms。
+    const lying = (() => {
+      const infoPayload = [
+        ...vint(0x2ad7b1, 3),
+        ...vint(3),
+        ...uintBE(1_000_000, 3),
+        ...vint(0x4489, 2),
+        ...vint(8),
+        ...f64be(1000),
+      ]
+      const info = [...vint(0x1549a966, 4), ...vint(infoPayload.length), ...infoPayload]
+      return webm([info, clusterWithBlocks(32_781, [0, 28_220])], true)
+    })()
+
+    expect(probeVoiceDuration(lying, 'audio/webm')).toEqual({ durationMs: 61_001 })
+  })
+
   test('parses MP4 mvhd duration', () => {
     // mvhd：version 0, timescale=44100, duration=44100 → 1000ms
     const mvhdPayload = [

@@ -369,7 +369,17 @@ function webmDuration(bytes: Uint8Array): ProbedDuration | null {
     })
   })
 
-  if (durationMs !== null) return { durationMs: Math.max(0, Math.round(durationMs)) }
+  if (durationMs !== null) {
+    // 服务端唯一的用途是**安全上限**，所以这里的取向是 fail-closed：
+    // MediaRecorder / 流式 WebM 写不写 Duration 都合法，而一个被篡改的文件可以声明一个
+    // 远比实际短的 Duration。因此不能只信 Info.Duration —— 拿块时间戳推出的下界取大值：
+    // 两者不一致（声明值 < 块实际跨度）时以块为准。一个纯 WebM 必然有 Cluster，
+    // 拿不到块时间戳时保持 null，让调用方 fail-closed。
+    const blockEnd = lastClusterEndTimecode(bytes, cursor, segmentEnd)
+    if (blockEnd === null) return { durationMs: Math.max(0, Math.round(durationMs)) }
+    const blockEndMs = (blockEnd * timecodeScale) / 1_000_000
+    return { durationMs: Math.max(0, Math.round(Math.max(durationMs, blockEndMs))) }
+  }
 
   // 4) 没有 Duration（MediaRecorder 流式 WebM 的常态）：用最后一个 Cluster 的**结束**时间戳。
   const endTimecode = lastClusterEndTimecode(bytes, cursor, segmentEnd)
