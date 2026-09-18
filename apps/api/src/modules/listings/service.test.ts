@@ -291,6 +291,17 @@ describe('listFeed', () => {
     expect(seen[0]?.includeUnapproved).toBe(false)
   })
 
+  // 回归（评审 D3）：`status` 不带 `sellerId` 时，service 层也要拒绝。
+  // 契约只在 schema refine 里写这条，router 之外绕进本函数就能拿到全站 OFFLINE/SOLD。
+  test('rejects a status filter without sellerId even when bypassing the schema', async () => {
+    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+    const error = await expectServiceError(() =>
+      service.listFeed(null, feedQuery({ status: 'OFFLINE' })),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('VALIDATION_FAILED')
+  })
+
   test('does not request unapproved listings for the public feed', async () => {
     const seen: FeedCriteria[] = []
     const service = createListingService({

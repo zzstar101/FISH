@@ -142,6 +142,13 @@ test('jsonParam 把对象与数组都编码成对应类型的 jsonb', async () =
              (${jsonParam({ listingId: 'x' })} ->> 'listingId') AS "ref"
     `)
 
+    // `JSON.stringify(undefined)` 返回的是 JS undefined：直接绑进模板会变成缺表达式的
+    // `::text::jsonb` 语法错（评审 D5）。应当收敛成 JSON null。
+    const undef = await scratch.execute<{ t: string }>(
+      sql`SELECT jsonb_typeof(${jsonParam(undefined)}) AS t`,
+    )
+    expect(undef[0]?.t).toBe('null')
+
     expect(rows[0]?.objType).toBe('object')
     expect(rows[0]?.arrType).toBe('array')
     expect(rows[0]?.emptyType).toBe('array')

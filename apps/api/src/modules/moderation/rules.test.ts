@@ -51,6 +51,40 @@ describe('moderateListingContent', () => {
     )
   })
 
+  // 回归（评审 D1）：不可见 / 格式类字符插进关键词里必须仍然命中。
+  // 旧实现只枚举了 10 个零宽码位，下列字符能直接绕过并让阻断内容公开发布（实测）。
+  test('strips format / combining characters so invisible chars cannot split a keyword', () => {
+    // 每一个都插在 `毒品` 中间。
+    const invisibles = [
+      '\u00ad', // soft hyphen
+      '\u115f', // Hangul choseong filler
+      '\u1160', // Hangul jungseong filler
+      '\u2060', // word joiner
+      '\u2061',
+      '\u2062',
+      '\u2063',
+      '\u2064',
+      '\u2066',
+      '\u2067',
+      '\u2069',
+      '\u206a',
+      '\u3164', // Hangul filler
+      '\ufe00',
+      '\ufe0f', // variation selector
+      '\ufff9',
+      '\uffa0',
+    ]
+    for (const invisible of invisibles) {
+      expect(
+        moderateListingContent({ title: `毒${invisible}品`, description: '详情' }).decision,
+      ).toBe('BLOCK')
+      // REVIEW 词同理。
+      expect(
+        moderateListingContent({ title: '键盘', description: `加${invisible}微信` }).decision,
+      ).toBe('REVIEW')
+    }
+  })
+
   // 反向保证：剥离标点不能把不相关的内容也归一成命中词 —— `vx` 只在真的出现时才触发。
   test('does not over-match after separator stripping', () => {
     expect(

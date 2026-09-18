@@ -1,6 +1,6 @@
 import type { ModerationField, ModerationMatch, ModerationResult } from './types'
 
-export const MODERATION_RULE_VERSION = '2026-09-15-v2'
+export const MODERATION_RULE_VERSION = '2026-09-15-v3'
 
 type Rule = { code: string; decision: 'BLOCK' | 'REVIEW'; terms: readonly string[] }
 
@@ -23,11 +23,24 @@ function normalize(value: string): string {
     value
       .normalize('NFKC')
       .toLocaleLowerCase('zh-CN')
-      .replace(/[\u200b-\u200f\u202a-\u202e]/g, '')
-      // 先去掉分隔字符再匹配：`毒-品` / `加/微信` / `v.x` / `加·微信` 这类插入式规避
+      // 先去掉**不可见 / 格式类字符**再匹配。
+      //
+      // 不能手枚举码位（旧写法只列了 `\u200b-\u200f\u202a-\u202e` 十个）：`Cf`（格式字符）与
+      // `Mn`（无宽组合记号）里还有大量可用于打断词组的字符，比如 U+2060 word-joiner、
+      // U+3164 Hangul filler、U+00AD soft hyphen、U+FE00-FE0F variation selector、U+FFF9-FFA0
+      // 等 —— 它们把 `毒品` / `加微信` 拆开就绕过了匹配（评审 D1，实测可发布）。
+      //
+      // `\p{Cf}` 覆盖全部格式字符，`\p{Mn}`/`\p{Me}` 覆盖组合记号；外加 ASCII 控制字符
+      // （`\p{Cc}`，含 TAB/NUL）与零宽空格 U+FEFF。
+      //
+      // 还有一类**不是** `Cf`/`Mn` 但同样不可见、同样能拆开词组的填充字符：Hangul 填充符
+      // （U+115F / U+1160 / U+3164 / U+FFA0）——它们的类别是 `Lo`（字母），所以必须单独列出，
+      // 否则 `毒<U+3164>品` 仍会漏过（实测）。
+      .replace(/[\p{Cf}\p{Mn}\p{Me}\p{Cc}\uFEFF\u115F\u1160\u3164\uFFA0]/gu, '')
+      // 再去掉分隔字符：`毒-品` / `加/微信` / `v.x` / `加·微信` 这类插入式规避
       // 不改词表就能穿过基础匹配（评审 major 3）。
       // 标点用 Unicode 属性类而不是手枚举：`\p{P}` 覆盖中英文标点，`\p{S}` 覆盖 `+`、`·`、`•`、
-      // `©` 这类符号；再加上它们之间的空白/零宽字符与下划线/连字符（下划线是 `\p{Pc}`，本就在 `\p{P}`）。
+      // `©` 这类符号；再加上空白（含 U+3000）。
       // 注意：不能顺手把数字/字母也去掉 —— 那会把 `vx`、`v.x` 全归一成同一个短串，误伤正常文案。
       .replace(/[\p{P}\p{S}\s\u3000]+/gu, '')
   )

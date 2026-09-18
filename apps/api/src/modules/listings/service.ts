@@ -237,6 +237,15 @@ export function createListingService(deps: {
       if (query.sellerId !== undefined && query.sellerId !== viewerId) {
         throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能查看自己指定状态的商品')
       }
+      // 防御纵深（评审 D3）：`status` 必须与 `sellerId` 同时出现。
+      // 契约里这条只由 schema 的 refine 守着，而 router 之外（内部调用 / 将来重构）绕进本函数
+      // 就能拿到全站 OFFLINE / RESERVED / SOLD 列表。这里与 schema 保持**同一个错误码**
+      // （422 VALIDATION_FAILED），免得同一非法输入在两个层给出不同结论。
+      if (query.status !== undefined && query.sellerId === undefined) {
+        throw new ListingServiceError(422, 'VALIDATION_FAILED', 'status 必须与 sellerId 一起使用', [
+          { field: 'status', message: 'status 必须与 sellerId 一起使用' },
+        ])
+      }
 
       const cursor = decodeFeedCursor(query.cursor, query.sort)
       // 卖家查自己且未指定 status ⇒ 不按状态过滤（「我发布的」要包含 OFFLINE / RESERVED / SOLD）。

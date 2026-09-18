@@ -34,5 +34,9 @@ import { type SQL, sql } from 'drizzle-orm'
 export function jsonParam(value: unknown): SQL {
   // `::text::jsonb` 而不是直接 `::jsonb`：先把值作为**单个字符串参数**绑定（`JSON.stringify`
   // 让数组/对象都不会被模板展开成参数列表），再交给 PG 解析。
-  return sql`${JSON.stringify(value)}::text::jsonb`
+  //
+  // `JSON.stringify(undefined)` 返回的是 JS 的 `undefined`（不是字符串），绑定后模板会变成
+  // `::text::jsonb` 这种缺表达式的语法错（评审 D5）。当前调用点都传具体值，但这是个"应当成立
+  // 却被依赖"的共享 helper，所以在这里就把未定义收敛成 JSON null —— 与 JSON 的语义一致。
+  return sql`${JSON.stringify(value) ?? 'null'}::text::jsonb`
 }
