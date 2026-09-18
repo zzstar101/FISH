@@ -1,31 +1,27 @@
 export default defineAppConfig({
-  /**
-   * 路由表。**分批合入**：本 PR 只包含骨架与 5 个 Tab 页，
-   * 其余页面在后续 PR 里逐批追加（见各个拆分 PR 的描述）。
-   * 顺序有讲究：第一个是冷启动首页；tabBar.list 里的 pagePath 必须在这里出现。
-   */
   pages: [
     'pages/home/index',
     'pages/wish/index',
     'pages/sell/index',
     'pages/chat/index',
     'pages/profile/index',
+    'pages/search/index',
+    'pages/listing-detail/index',
+    'pages/conversation/index',
+    'pages/notifications/index',
     'pages/orders/index',
     'pages/transaction-meetup/index',
-    'pages/login/index',
     'pages/register/index',
-    'pages/verify/index',
+    'pages/register-success/index',
+    'pages/login/index',
     'pages/settings/index',
     'pages/category/index',
+    'pages/verify/index',
     'pages/user/index',
     'pages/match/index',
     'pages/mylist/index',
     'pages/watchers/index',
     'pages/scan/index',
-    'pages/conversation/index',
-    'pages/search/index',
-    'pages/listing-detail/index',
-    'pages/notifications/index',
   ],
   window: {
     backgroundTextStyle: 'light',

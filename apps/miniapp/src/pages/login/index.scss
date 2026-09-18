@@ -1,10 +1,13 @@
-@use '@/styles/mixins' as *;
-
 /**
- * B1 登录。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ * 登录（设计稿 `小程序1版login.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
  *
- * 结构：品牌页头（冰蓝渐变 + logo + 字标 + slogan）→ 表单（学号 / 密码 / 主按钮 /
- * 去注册 / 协议小字）。登录页不设返回钮，也没有底部 TabBar。
+ * 与稿子的**刻意偏差**（都落在 DESIGN.md 的硬约束内）：
+ * 1. 颜色：稿子用的是另一套灰蓝（`--brand #5f82c5` / `--lavender #4a6bae` / 底 `#f3f4f6`），
+ *    这里按仓库要求全部映射到 `_tokens.scss` 的冰蓝令牌（主 CTA 用 `--brand-deep` 代替稿子的
+ *    深薰衣草，同样是为了白字对比度）。
+ * 2. 页头背景：稿子是四层 radial-gradient + 颗粒噪点，这里用令牌渐变 `--grad-page`。
+ * 3. 玻璃卡：稿子 `rgba(255,255,255,.55)`，按 DESIGN.md §4「玻璃层必须同时给不透明兜底」
+ *    改成 `rgba(255,255,255,.72)`。
  */
 
 .login {
@@ -13,201 +16,209 @@
   display: flex;
   flex-direction: column;
   background: var(--bg);
-
-  /* 提交中：整表禁用（设计稿第 03 帧），最外层统一压暗，避免逐项写 opacity */
-  &.is-off {
-    .login__submit {
-      background: var(--accent-faint);
-      color: var(--muted);
-      box-shadow: none;
-    }
-  }
 }
 
-/* ---------------------------------------------------------------- 品牌页头 */
-
-.login__brandhead {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  padding: 94px 40px 40px;
+/* 页头渐变（稿子那四层 radial-gradient 的令牌化替身） */
+.login__bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 784px;
   background: var(--grad-page);
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
 }
 
-/* 品牌渐变方块 + 白色「鱼」字（设计稿 76pt 方块 / 36pt 字） */
-.login__logo {
-  width: 152px;
-  height: 152px;
-  margin-top: 80px;
-  border-radius: 44px;
+/* ---------------------------------------------------------------- 主体 */
+
+.login__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: var(--grad-brand);
-  box-shadow: var(--shadow-btn);
+  padding: 64px 48px 96px;
 }
 
-.login__logo-tx {
-  font-size: 72px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.02em;
-  color: #fff;
+/* ---------------------------------------------------------------- 品牌区 */
+
+.login__brand {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* 稿：mark 宽 94pt、wordmark 高 40pt（间距 16pt） */
+.login__mark {
+  width: 188px;
+  height: 116px;
 }
 
 .login__wordmark {
-  margin-top: 36px;
-  font-size: 54px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  line-height: 1.33;
-  color: var(--fg);
+  margin-top: 32px;
+  width: 200px;
+  height: 80px;
 }
 
-.login__slogan {
-  margin-top: 16px;
-  font-size: 25px;
+.login__tagline {
+  margin-top: 22px;
+  font-size: 28px;
   line-height: 1.6;
   color: var(--muted-2);
 }
 
-/* ---------------------------------------------------------------- 表单 */
+/* ---------------------------------------------------------------- 表单卡 */
 
-.login__content {
-  flex: 1 1 auto;
+.login__card {
+  width: 100%;
+  margin-top: 52px;
+  padding: 32px;
+  border-radius: 32px;
+  border: 2px solid var(--border);
+  /* 不透明兜底 + 玻璃：见文件头第 3 条 */
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(48px);
+  box-shadow: var(--shadow-card);
+}
+
+.login__form {
   display: flex;
   flex-direction: column;
-  padding: 52px 40px 48px;
+  gap: 32px;
 }
 
 .login__field {
-  margin-top: 32px;
-
-  &:first-child {
-    margin-top: 0;
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.login__flabel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 25px;
-  font-weight: 600;
+.login__label {
+  font-size: 28px;
+  line-height: 1.5;
   color: var(--muted-2);
 }
 
-/* 输入盒：48pt 高、--ice 底、12pt 圆角；聚焦转 --line + 浅底环，错误转 danger */
+/* 输入盒：稿 44pt 高、圆角 10pt、浅底 + 描边（packages/ui 的 Input） */
 .login__input {
   display: flex;
   align-items: center;
-  gap: 20px;
-  height: 96px;
-  margin-top: 16px;
+  gap: 16px;
+  height: 88px;
   padding: 0 24px;
-  border-radius: 24px;
-  background: var(--ice);
-  border: 2px solid var(--border);
   box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  background: var(--ice);
 
   &.is-focus {
-    border-color: var(--line);
+    border-color: var(--brand);
     background: var(--surface);
-    box-shadow: 0 0 0 6px var(--accent-faint);
   }
 
   &.is-error {
     border-color: var(--danger);
     background: var(--danger-weak);
   }
-
-  &.is-off {
-    background: var(--accent-faint);
-    border-color: var(--accent-faint);
-  }
-}
-
-.login__input-ic {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 auto;
 }
 
 .login__val {
   flex: 1;
   min-width: 0;
-  font-size: 28px;
+  font-size: 30px;
   color: var(--fg);
 }
 
-/* 密码掩码：加大字距，与设计稿的「••••••」观感一致 */
+/* 学号是数字：等宽字体（DESIGN.md §5） */
+.login__val.num {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 密码掩码：稿子是 8 个圆点，给一点字距更接近 */
 .login__val--pwd {
-  letter-spacing: 0.16em;
-  font-size: 30px;
+  letter-spacing: 0.12em;
 }
 
 .login__ph {
-  color: var(--muted-2);
-  font-size: 28px;
+  font-size: 30px;
+  color: var(--muted);
 }
 
-.login__eye {
-  flex: 0 0 auto;
-  width: 64px;
-  height: 64px;
-  margin-right: -8px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  &.is-on {
-    background: var(--accent-weak);
-  }
-}
-
-.login__eye-ic {
-  width: 36px;
-  height: 36px;
-}
-
-/* 错误小字：贴在对应输入框下方 */
-.login__ferr {
+/* 错误小字：贴对应输入框下（契约要求字段级错误） */
+.login__err {
   display: block;
-  margin-top: 14px;
-  font-size: 23px;
+  margin-top: 8px;
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.5;
   color: var(--danger-ink);
 }
 
-.login__fhelp {
-  display: block;
-  margin-top: 14px;
-  font-size: 23px;
-  line-height: 1.5;
+/* ---------------------------------------------------------------- 协议勾选 */
+
+.login__agree {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  font-size: 24px;
+  line-height: 1.6;
   color: var(--muted-2);
 }
 
-/* ---- 主按钮 ---- */
-
-.login__submit {
+.login__checkbox {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  margin-top: 4px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 16px;
-  width: 100%;
+  background: var(--border);
+}
+
+/* 勾上时：品牌色实底 + 白勾（稿子默认就是这个状态） */
+.login__agree.is-on .login__checkbox {
+  background: var(--brand);
+}
+
+.login__checkbox-ic {
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+.login__agree.is-on .login__checkbox-ic {
+  opacity: 1;
+}
+
+.login__agree-tx {
+  flex: 1;
+  min-width: 0;
+}
+
+.login__lk {
+  color: var(--brand);
+}
+
+/* ---------------------------------------------------------------- 主 CTA */
+
+.login__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   height: 96px;
-  margin-top: 48px;
-  border-radius: 48px;
-  background: var(--grad-brand);
+  border-radius: 999px;
+  background: var(--brand-deep);
   color: #fff;
-  font-size: 30px;
+  font-size: 32px;
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 
@@ -215,7 +226,7 @@
     filter: saturate(1.06) brightness(0.95);
   }
 
-  /* 未填完 / 提交中：禁用态 */
+  /* 未填完 / 未勾选协议 / 提交中：禁用态 */
   &.is-off {
     background: var(--ice);
     color: var(--muted);
@@ -224,8 +235,8 @@
 }
 
 .login__spin {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 4px solid rgba(255, 255, 255, 0.45);
   border-top-color: #fff;
@@ -238,7 +249,7 @@
   }
 }
 
-/* ---------------------------------------------------------------- 底部 */
+/* ---------------------------------------------------------------- 去注册 */
 
 .login__alt {
   display: flex;
@@ -246,32 +257,13 @@
   justify-content: center;
   gap: 8px;
   margin-top: 36px;
-  font-size: 25px;
+  font-size: 28px;
+  line-height: 1.6;
   color: var(--muted-2);
 }
 
-.login__alt-link {
-  display: inline-flex;
-  align-items: center;
-  height: 88px;
+.login__alt-lk {
   padding: 0 8px;
-  font-size: 27px;
+  color: var(--brand);
   font-weight: 600;
-  color: var(--brand-deep);
-  text-decoration: underline;
-}
-
-.login__legal {
-  margin-top: auto;
-  padding-top: 44px;
-  text-align: center;
-  font-size: 23px;
-  line-height: 1.75;
-  color: var(--muted-2);
-}
-
-.login__legal-link {
-  color: var(--muted-2);
-  border-bottom: 2px solid var(--border);
-  padding-bottom: 2px;
 }
