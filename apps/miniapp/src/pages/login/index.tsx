@@ -3,7 +3,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { signIn, useAuth } from '@/features/auth/store'
-import { ApiError } from '@/lib/request'
+import { isApiError } from '@/lib/request'
 import './index.scss'
 
 /**
@@ -77,13 +77,13 @@ export default function Login() {
         void Taro.showToast({ title: '登录成功', icon: 'success' })
       } catch (error) {
         setSubmitting(false)
-        if (error instanceof ApiError && error.code === 'INVALID_CREDENTIALS') {
+        if (isApiError(error) && error.code === 'INVALID_CREDENTIALS') {
           // 401 有两种：`UNAUTHENTICATED`（没登录）与 `INVALID_CREDENTIALS`（账号密码错）。
           // 只有后者是登录表单的行内错误。
           setErrors({ password: '学号或密码不正确' })
           return
         }
-        if (error instanceof ApiError) {
+        if (isApiError(error)) {
           // 其余错误码（422 VALIDATION_FAILED 的后端文案固定是「请求参数不合法」、
           // 5xx 等）都不是某一个字段的问题，挂到「学号」下面只会误导。
           void Taro.showToast({ title: error.message, icon: 'none' })

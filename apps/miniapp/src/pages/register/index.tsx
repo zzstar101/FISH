@@ -3,7 +3,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { signUp, useAuth } from '@/features/auth/store'
-import { ApiError } from '@/lib/request'
+import { isApiError } from '@/lib/request'
 import type { Campus } from '@/mock/types'
 import './index.scss'
 
@@ -105,11 +105,11 @@ export default function Register() {
         setDone(true)
       } catch (error) {
         setSubmitting(false)
-        if (error instanceof ApiError && error.code === 'STUDENT_NO_TAKEN') {
+        if (isApiError(error) && error.code === 'STUDENT_NO_TAKEN') {
           setErrors({ studentNo: '这个学号已经注册过了，直接去登录' })
           return
         }
-        if (error instanceof ApiError) {
+        if (isApiError(error)) {
           // 其余错误码（422 的后端文案固定是「请求参数不合法」、5xx 等）不是某一个
           // 字段的问题，挂到「学号」下面只会误导。
           void Taro.showToast({ title: error.message, icon: 'none' })
