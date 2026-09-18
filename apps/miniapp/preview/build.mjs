@@ -60,6 +60,9 @@ const result = await Bun.build({
     // 这个 bundle 不是生产，评审时没有后端也要能看到完整页面。
     // 生产口径见 config/index.ts 的 __ALLOW_MOCK_FALLBACK__。
     __ALLOW_MOCK_FALLBACK__: 'true',
+    // 预览同样打开演示登录：评审要看到的是受限页（出物 / 消息 / 我的…）本身，
+    // 而不是它们未登录时的引导卡。口径见 config/index.ts 的 __DEMO_AUTH__。
+    __DEMO_AUTH__: 'true',
   },
   plugins: [previewPlugin],
   naming: {

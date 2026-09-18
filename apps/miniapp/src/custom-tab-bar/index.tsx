@@ -102,7 +102,8 @@ function currentTabKey(): TabKey {
 
 /**
  * 唯一不渲染底栏的 Tab 页：设计稿该页（`小程序第1版。发布闲置publish-listing.html`）
- * 的 `.tabbar` 索引是 -1 —— 发布表单要占满屏高，底栏浮在上面会压住提交区。
+ * **根本没有画底栏**（全文 grep `tabbar` 零命中）—— 发布表单要占满屏高，
+ * 底栏浮在上面会压住提交区。
  *
  * `TAB_ITEMS` 里**保留** sell 项：`tabBar.list` 与 `switchTab` 仍需要它作为合法路由，
  * 隐藏只发生在本组件的渲染层。代价是该页只剩左上返回钮一个出口，

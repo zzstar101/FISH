@@ -4,20 +4,23 @@
  * 为什么需要它：出物 / 消息等受限页要登录才渲染，而登录走真接口
  * （`features/auth/api.ts` 没有 mock 回退、`mock/api.ts` 里也没有登录函数），
  * 本机没有后端时这些页只能看到登录引导卡 —— 页面本身没法看。
- * 这里在**同一个构建期开关**下（`__ALLOW_MOCK_FALLBACK__`，注入点见 `config/index.ts`）
- * 直接给一个已登录的演示账号，让所有页面可达。
+ * 这里直接给一个已登录的演示账号，让所有页面可达。
  *
- * 生产不受影响：`taro build` 走 production，不显式给 `TARO_APP_MOCK=1` 就注入 false。
+ * 开关是**独立注入**的 `__DEMO_AUTH__`（见 `config/index.ts`），刻意不复用
+ * `__ALLOW_MOCK_FALLBACK__`：后者还包含 `NODE_ENV=development`，会连 `dev:weapp`
+ * 的日常开发一起自动登录，把匿名态 / 登录引导 / 注册流程全顶掉。
+ * H5 预览产物另在 `preview/build.mjs` 里显式打开。
+ *
+ * 生产不受影响：`taro build` 走 production 且不给 `TARO_APP_MOCK=1` 就注入 false。
  *
  * 已知边界：设置页的「退出登录」仍会走真接口并清本地会话 —— 演示模式下点了会回到
  * 登录页且登不回来（需要重启开发者工具）。要长期演示的话得单独处理。
  */
 import type { Me } from '@fish/contracts/auth/user'
 
-declare const __ALLOW_MOCK_FALLBACK__: boolean | undefined
+declare const __DEMO_AUTH__: boolean | undefined
 
-/** 与 `features/fetchers.ts` 的 mock 回退同一个开关，不另立构建变量 */
-export const DEMO_AUTH_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
+export const DEMO_AUTH_ENABLED = __DEMO_AUTH__ === true
 
 /**
  * 形状照 `MeSchema`（`packages/contracts/src/auth/user.ts`）：

@@ -46,6 +46,16 @@ export default defineConfig<'webpack5'>(async (merge) => {
       __ALLOW_MOCK_FALLBACK__: JSON.stringify(
         process.env.TARO_APP_MOCK === '1' || process.env.NODE_ENV === 'development',
       ),
+      /**
+       * 演示登录态（读取处 `src/features/auth/demo.ts`）：是否用一个**内置的演示账号**
+       * 直接进入已登录态，让受限页在本地没有后端时也能打开。
+       *
+       * **刻意不复用 `__ALLOW_MOCK_FALLBACK__`**：那个开关还包含 `NODE_ENV=development`
+       * （`bun run dev:weapp` 的 watch 构建），而「自动登录」会把日常开发要看的匿名态、
+       * 登录引导、注册流程全部顶掉 —— 那是调试路径，不该被演示态盖住。
+       * 所以这里只认显式的 `TARO_APP_MOCK=1`。
+       */
+      __DEMO_AUTH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
     },
     framework: 'react',
     // 本地开发的依赖预编译（esbuild）会把 workspace 里以 TS 源码形式发布的包当成外部依赖处理，

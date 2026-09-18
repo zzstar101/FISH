@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
 import { ICONS } from '@/assets/lib-icons'
+import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { signUp, useAuth } from '@/features/auth/store'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -63,7 +64,8 @@ export default function Register() {
 
   /** 已登录用户不该停在注册页（注册流程自己造成的「已登录」除外，要留在成功页引导去认证） */
   useEffect(() => {
-    if (status !== 'authed' || justRegistered.current) return
+    // 演示构建里同上：不弹走，否则注册页永远看不到（见 `features/auth/demo.ts`）
+    if (DEMO_AUTH_ENABLED || status !== 'authed' || justRegistered.current) return
     void Taro.switchTab({ url: '/pages/home/index' })
   }, [status])
 
