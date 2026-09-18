@@ -19,6 +19,7 @@ import { useSyncExternalStore } from 'react'
 import { ApiError, isUnauthenticatedError } from '@/lib/request'
 import { clearSession, onSessionCleared, readSession } from '@/lib/session'
 import { fetchMe, login, logout, register } from './api'
+import { DEMO_AUTH_ENABLED, DEMO_USER } from './demo'
 
 export type AuthStatus = 'unknown' | 'anonymous' | 'authed'
 
@@ -28,7 +29,13 @@ export type AuthSnapshot = {
   user: Me | null
 }
 
-let snapshot: AuthSnapshot = { status: 'unknown', user: null }
+/**
+ * 演示模式（`TARO_APP_MOCK=1` 的构建）下**初值就是已登录**，不走 `unknown`：
+ * 演示账号没有真会话，先给 `unknown` 会让每个受限页先闪一帧恢复占位。
+ */
+let snapshot: AuthSnapshot = DEMO_AUTH_ENABLED
+  ? { status: 'authed', user: DEMO_USER }
+  : { status: 'unknown', user: null }
 
 const listeners = new Set<() => void>()
 
@@ -52,6 +59,8 @@ function subscribe(listener: () => void): () => void {
  * 页面继续用 `authUser` 渲染身份 —— 用户看到的是一个永远登不出去也退不掉的假登录态。
  */
 onSessionCleared(() => {
+  // 演示账号没有真会话：真接口 401 不能把它踢回未登录，否则受限页立刻被守卫挡回登录页
+  if (DEMO_AUTH_ENABLED) return
   if (snapshot.status !== 'anonymous') emit({ status: 'anonymous', user: null })
 })
 
@@ -81,6 +90,8 @@ let booting: Promise<void> | null = null
  */
 export function bootstrapAuth(): Promise<void> {
   if (booting) return booting
+  // 演示账号：不读本地会话、也不打 `GET /me`（本地没有后端，这一问必然失败）
+  if (DEMO_AUTH_ENABLED) return Promise.resolve()
   if (!readSession()) {
     emit({ status: 'anonymous', user: null })
     return Promise.resolve()
