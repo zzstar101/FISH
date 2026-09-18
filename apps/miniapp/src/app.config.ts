@@ -10,6 +10,8 @@ export default defineAppConfig({
     'pages/sell/index',
     'pages/chat/index',
     'pages/profile/index',
+    'pages/orders/index',
+    'pages/transaction-meetup/index',
   ],
   window: {
     backgroundTextStyle: 'light',
