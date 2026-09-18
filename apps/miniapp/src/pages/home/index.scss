@@ -51,7 +51,7 @@
   padding: 0 22px;
   border-radius: var(--r-pill);
   background: var(--surface);
-  border: 2px solid #e6eefc;
+  border: 2px solid var(--field-line);
   box-shadow: 0 20px 40px -34px rgba(23, 35, 61, 0.55);
 
   &:active {
