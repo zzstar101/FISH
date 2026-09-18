@@ -177,7 +177,7 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 ```
 
-启动并建桶 + 设**匿名可读**：
+启动并建桶 + 仅公开商品图片（聊天媒体必须私有）：
 
 ```bash
 sudo chmod 600 /etc/default/minio
@@ -186,7 +186,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now minio
 # 桶名必须与 .env 的 S3_BUCKET 一致
 export MC_HOST_local="http://fish:REPLACE_ME_MINIO_PASSWORD@127.0.0.1:9000"
 mc mb --ignore-existing local/fish
-mc anonymous set download local/fish   # 读接口拼出的图片 URL 是公开直链，少了这条前端 <img> 全部 403
+# 从本仓库复制 infra/minio-public-policy.json 到 /etc/fish-public-policy.json。
+# 若桶名不是 fish，先替换该 JSON 的 Resource 中的桶名。
+mc anonymous set-json /etc/fish-public-policy.json local/fish
 
 # 应用**不要**直接用 root 凭据：root 能建用户、删桶、改策略。给应用单开一个只作用于该桶的账号。
 cat > /etc/minio-app-policy.json <<'JSON'
@@ -206,6 +208,11 @@ mc admin policy attach local fish-app-rw --user fish-app
 ```
 
 （桶名出现在策略 JSON 的两处 `arn:aws:s3:::fish`，改 `S3_BUCKET` 时要一起改。）
+
+升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
+允许匿名 GetObject；`chat-media/*` 和 `chat-media-final/*` 不能匿名读或列举。
+上线前执行 `bun --env-file=.env apps/api/scripts/media-smoke.ts`，验证聊天直链返回 403、
+鉴权代理仍能读取及 Range 播放。
 
 ## 4. 代码与环境变量
 
@@ -247,6 +254,20 @@ S3_PUBLIC_URL=https://s3.fish.example.com/fish
 `S3_*` 即使 worker 用不到也必须存在；其中 8 项无默认值，`API_PORT` 有默认），
 缺一项进程直接启动失败——这是刻意的 fail-fast。
 
+校园认证邮件配置仅由 API 加载。生产另建 `/etc/fish/api-mail.env`（`root:root`、
+`chmod 600`，由 systemd 读取），不要把 Resend 密钥写入 API/worker 共用的 `.env`：
+
+```bash
+MAIL_TRANSPORT=resend
+RESEND_API_KEY=REPLACE_ME_RESEND_API_KEY
+RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
+```
+
+先在 Resend 验证发件域名（含 SPF/DKIM），再替换以上占位值。`MAIL_TRANSPORT` 必填，
+选择 `resend` 但缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择 transport。
+`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
+移除其中的 `MAIL_TRANSPORT=outbox`，避免与 API 专属配置并存。
+
 ## 5. systemd 托管
 
 ### 5.1 API
@@ -264,9 +285,8 @@ Type=simple
 User=fish
 Group=fish
 WorkingDirectory=/srv/fish/apps/api
-# 等价于 apps/api/package.json 的 `start` 脚本，只是把相对路径换成绝对路径，
-# 避免「cwd 变了就加载不到 .env」。unit 里不要再写同名 Environment=，
-# 让 .env 成为唯一来源，省得纠结两者优先级。
+# 通用配置来自 .env；邮件配置仅注入 API，不传给 worker。
+EnvironmentFile=/etc/fish/api-mail.env
 ExecStart=/usr/local/bin/bun --env-file=/srv/fish/.env /srv/fish/apps/api/src/index.ts
 Restart=always
 RestartSec=5
@@ -617,7 +637,7 @@ mc mirror --overwrite --remove local/fish "${MINIO_BACKUP_TARGET:?请在 backup.
 # 配置与变量：systemd 单元、MinIO 策略、证书存储都要进，否则换机器恢复时要重新推导，
 # 重新签发证书还可能撞上 CA 的速率限制。证书目录不存在时会报警告（--ignore-failed-read）
 tar czf "$TMP/config-$STAMP.tar.gz" --ignore-failed-read \
-  /srv/fish/.env /etc/fish/backup.env /etc/default/minio /etc/minio-app-policy.json \
+  /srv/fish/.env /etc/fish/api-mail.env /etc/fish/backup.env /etc/default/minio /etc/minio-app-policy.json \
   /etc/caddy/Caddyfile /var/lib/caddy/.local/share/caddy \
   /etc/systemd/system/fish-api.service /etc/systemd/system/fish-worker.service \
   /etc/systemd/system/minio.service

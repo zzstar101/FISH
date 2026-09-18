@@ -12,6 +12,8 @@
  */
 export type MediaObjectStat = { size: number; contentType: string }
 
+export const CHAT_MEDIA_PREFIX = 'chat-media-final/'
+
 export interface MediaStorage {
   /**
    * 预签名直传地址。
@@ -29,7 +31,28 @@ export interface MediaStorage {
   /** 对象不存在返回 `null`（不抛），由调用方决定 404 / 422 语义。 */
   stat(key: string): Promise<MediaObjectStat | null>
 
-  /** 读响应里的公开 URL，依赖桶的匿名读策略（契约 §7.8）。 */
+  /** 读取私有对象；媒体接口在通过会话鉴权后使用。 */
+  getObject?(
+    key: string,
+    range?: { start: number; end: number },
+  ): {
+    stream: ReadableStream<Uint8Array>
+    contentType: string
+  }
+
+  /** 仅服务端写入验证过的快照；key 不得用于预签名上传。 */
+  writeMediaBytes?(key: string, bytes: Uint8Array, contentType: string): Promise<void>
+
+  /**
+   * 读取对象的**完整字节**，用于服务端解析媒体真实属性（尺寸 / 时长）；失败或对象不存在返回 null。
+   *
+   * 必须是完整对象而不是文件头：WebM 的 `Duration` 缺失时要用最后一个 Cluster 的 Timecode
+   * （在文件尾），MP4 的 `moov` 也可能在文件尾。只喂头部会显著低估时长，
+   * 让超 60s 的录音通过校验（评审 blocker 2）。
+   */
+  readMediaBytes?(key: string, maxBytes?: number): Promise<Uint8Array | null>
+
+  /** 读响应里的公开 URL，仅适用于 listings 前缀的匿名读策略。 */
   publicUrl(key: string): string
 }
 
@@ -66,6 +89,32 @@ export function createBunS3MediaStorage(options: {
       } catch {
         // 对象不存在时 Bun 抛错，这里统一降级成 null：调用方要区分的是"有没有"，
         // 不是"为什么没拿到"，让 404 变成 500 才是真的错。
+        return null
+      }
+    },
+
+    getObject(key, range) {
+      const file = client.file(key)
+      const body = range ? file.slice(range.start, range.end + 1) : file
+      return { stream: body.stream(), contentType: file.type || 'application/octet-stream' }
+    },
+
+    async writeMediaBytes(key, bytes, contentType) {
+      await client.write(key, bytes, { type: contentType })
+    },
+
+    async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {
+      try {
+        // 有界 GET：stat 与 GET 之间上传方仍可覆盖临时对象，不能依赖旧 stat 限制内存。
+        // 多读一字节，让调用方区分恰好到上限和超限对象。
+        return new Uint8Array(
+          await client
+            .file(key)
+            .slice(0, maxBytes + 1)
+            .arrayBuffer(),
+        )
+      } catch {
+        // 对象不存在或读取失败：由调用方按 fail-closed 处理。
         return null
       }
     },

@@ -25,7 +25,13 @@ const detail = {
   createdAt: '2026-09-12T03:40:10.000Z',
   updatedAt: '2026-09-12T03:40:10.000Z',
   images: [],
-  seller: { id: SELLER_ID, nickname: '阿岚', avatarUrl: null, campus: '肇庆' },
+  seller: {
+    id: SELLER_ID,
+    nickname: '阿岚',
+    avatarUrl: null,
+    campus: '肇庆',
+    authStatus: 'VERIFIED',
+  },
   isOwner: false,
 } satisfies ListingDetail
 

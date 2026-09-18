@@ -1,0 +1,269 @@
+/**
+ * 登录（设计稿 `小程序1版login.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
+ *
+ * 与稿子的**刻意偏差**（都落在 DESIGN.md 的硬约束内）：
+ * 1. 颜色：稿子用的是另一套灰蓝（`--brand #5f82c5` / `--lavender #4a6bae` / 底 `#f3f4f6`），
+ *    这里按仓库要求全部映射到 `_tokens.scss` 的冰蓝令牌（主 CTA 用 `--brand-deep` 代替稿子的
+ *    深薰衣草，同样是为了白字对比度）。
+ * 2. 页头背景：稿子是四层 radial-gradient + 颗粒噪点，这里用令牌渐变 `--grad-page`。
+ * 3. 玻璃卡：稿子 `rgba(255,255,255,.55)`，按 DESIGN.md §4「玻璃层必须同时给不透明兜底」
+ *    改成 `rgba(255,255,255,.72)`。
+ */
+
+.login {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* 页头渐变（稿子那四层 radial-gradient 的令牌化替身） */
+.login__bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 784px;
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+}
+
+/* ---------------------------------------------------------------- 主体 */
+
+.login__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 48px 96px;
+}
+
+/* ---------------------------------------------------------------- 品牌区 */
+
+.login__brand {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* 稿：mark 宽 94pt、wordmark 高 40pt（间距 16pt） */
+.login__mark {
+  width: 188px;
+  height: 116px;
+}
+
+.login__wordmark {
+  margin-top: 32px;
+  width: 200px;
+  height: 80px;
+}
+
+.login__tagline {
+  margin-top: 22px;
+  font-size: 28px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 表单卡 */
+
+.login__card {
+  width: 100%;
+  margin-top: 52px;
+  padding: 32px;
+  border-radius: 32px;
+  border: 2px solid var(--border);
+  /* 不透明兜底 + 玻璃：见文件头第 3 条 */
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(48px);
+  box-shadow: var(--shadow-card);
+}
+
+.login__form {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.login__field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login__label {
+  font-size: 28px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+/* 输入盒：稿 44pt 高、圆角 10pt、浅底 + 描边（packages/ui 的 Input） */
+.login__input {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 88px;
+  padding: 0 24px;
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  background: var(--ice);
+
+  &.is-focus {
+    border-color: var(--brand);
+    background: var(--surface);
+  }
+
+  &.is-error {
+    border-color: var(--danger);
+    background: var(--danger-weak);
+  }
+}
+
+.login__val {
+  flex: 1;
+  min-width: 0;
+  font-size: 30px;
+  color: var(--fg);
+}
+
+/* 学号是数字：等宽字体（DESIGN.md §5） */
+.login__val.num {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 密码掩码：稿子是 8 个圆点，给一点字距更接近 */
+.login__val--pwd {
+  letter-spacing: 0.12em;
+}
+
+.login__ph {
+  font-size: 30px;
+  color: var(--muted);
+}
+
+/* 错误小字：贴对应输入框下（契约要求字段级错误） */
+.login__err {
+  display: block;
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--danger-ink);
+}
+
+/* ---------------------------------------------------------------- 协议勾选 */
+
+.login__agree {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.login__checkbox {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  margin-top: 4px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--border);
+}
+
+/* 勾上时：品牌色实底 + 白勾（稿子默认就是这个状态） */
+.login__agree.is-on .login__checkbox {
+  background: var(--brand);
+}
+
+.login__checkbox-ic {
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+.login__agree.is-on .login__checkbox-ic {
+  opacity: 1;
+}
+
+.login__agree-tx {
+  flex: 1;
+  min-width: 0;
+}
+
+.login__lk {
+  color: var(--brand);
+}
+
+/* ---------------------------------------------------------------- 主 CTA */
+
+.login__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--brand-deep);
+  color: #fff;
+  font-size: 32px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    filter: saturate(1.06) brightness(0.95);
+  }
+
+  /* 未填完 / 未勾选协议 / 提交中：禁用态 */
+  &.is-off {
+    background: var(--ice);
+    color: var(--muted);
+    box-shadow: none;
+  }
+}
+
+.login__spin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  animation: login-spin 0.7s linear infinite;
+}
+
+@keyframes login-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------- 去注册 */
+
+.login__alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 36px;
+  font-size: 28px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.login__alt-lk {
+  padding: 0 8px;
+  color: var(--brand);
+  font-weight: 600;
+}

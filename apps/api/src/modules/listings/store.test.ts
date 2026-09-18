@@ -3,6 +3,7 @@ import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { createListingService, ListingServiceError } from './service'
@@ -72,10 +73,18 @@ async function withSeller(run: (sellerId: string, otherSellerId: string) => Prom
     const listingIds = owned.map((row) => row.id)
 
     if (listingIds.length > 0) {
-      // jobs 与 listings 没有外键关系，只能按 payload 清理
+      // jobs 与 listings 没有外键关系，只能按 payload 清理；
+      // 审核记录引用 users（非级联），必须比 users 先删。
       await db.delete(jobs).where(inArray(sql`${jobs.payload}->>'listingId'`, listingIds))
+      await db
+        .delete(listingModerationRecords)
+        .where(inArray(listingModerationRecords.sellerId, userIds))
       await db.delete(listings).where(inArray(listings.id, listingIds))
     }
+    // 没有商品的用例（如编辑被阻塞）仍可能留下审核记录：sellerId 引用是 RESTRICT。
+    await db
+      .delete(listingModerationRecords)
+      .where(inArray(listingModerationRecords.sellerId, userIds))
     await db.delete(users).where(inArray(users.id, userIds))
   }
 }
@@ -359,19 +368,87 @@ test('feed 的搜索把 % / _ / \\ 当字面量而不是通配符', async () => 
 })
 
 // 回归：编辑的"状态机"不能只靠 service 读一次（check-then-act）——
-// UPDATE 必须自带 status 谓词，否则并发变成 RESERVED 的行仍会被改掉。
+// 锁内读到的行已变成 RESERVED / SOLD 时必须回 `locked`，而不是把它改掉。
+// 关键差异：判定用的是 `SELECT ... FOR UPDATE` 拿到的**那一行**，不是事务外的首次读。
+// 旧实现里首次读与 UPDATE 之间可以变（#11 的交易流程），仍会写入已锁定的行。
 test('编辑在 SQL 层拒绝 RESERVED / SOLD 状态的行', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(record(sellerId))
     await db.update(listings).set({ status: 'RESERVED' }).where(eq(listings.id, created.listingId))
 
-    const updated = await store.updateListing({
+    const result = await store.updateListingAtomic({
       id: created.listingId,
       sellerId,
-      fields: { title: '不该生效' },
+      apply: () => ({ kind: 'write' as const, fields: { title: '不该生效' } }),
     })
 
-    expect(updated).toBeNull()
+    expect(result).toEqual({ kind: 'locked' })
+    // 行确实没被改：只有 `apply` 产出的字段会被写入，而这里根本没走到写入。
+    const rows = await db
+      .select({ title: listings.title })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    expect(rows[0]?.title).toBe('集成测试商品')
+  })
+})
+
+// 回归（评审 blocker 1）：`SELECT ... FOR UPDATE` 让并发审核写入不可能交错。
+//
+// 复现路径就是评审描述的那个：A 发只改价格的 PATCH，基于旧标题（干净）算出 APPROVED；
+// B 同时把标题改成"加微信"算出 REVIEW 并先提交；A 后提交时把 moderation_status
+// 写回 APPROVED —— 最终库里出现"待审内容 + APPROVED"。
+//
+// 旧实现下（无行锁）B 的 UPDATE 会立即完成，然后 A 在 300ms 后盖掉它 → 两个断言都挂。
+// 新实现下 A 持锁期间 B 被真阻塞（第二个断言），B 只能在 A 提交后写入 → 最终一定 REVIEW。
+test('updateListingAtomic 持锁期间并发写入被阻塞，不会留下待审内容 + APPROVED', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const other = createDb(databaseUrl)
+
+    let bSettled = false
+    let aCommitted = false
+
+    // A：只改价格的 PATCH。像 service 一样把审核结论写进去（此处固定为 APPROVED，
+    // 对应"基于旧标题算出来"的那个快照）；锁内停留 300ms，给 B 一个插入窗口。
+    const a = store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      apply: async () => {
+        await Bun.sleep(300)
+        aCommitted = true
+        return {
+          kind: 'write' as const,
+          fields: { priceCents: 30000, moderationStatus: 'APPROVED' },
+        }
+      },
+    })
+
+    // B：把标题改成命中 REVIEW 的词（模拟另一个并发 PATCH 的最终写入）。
+    const b = (async () => {
+      await Bun.sleep(100)
+      const updated = await other
+        .update(listings)
+        .set({ title: '加微信联系', moderationStatus: 'REVIEW', status: 'OFFLINE' })
+        .where(eq(listings.id, created.listingId))
+        .returning({ id: listings.id })
+      bSettled = true
+      return updated
+    })()
+
+    // A 仍在锁内（还没提交）时，B 必须被行锁挡住。
+    await Bun.sleep(200)
+    expect(aCommitted).toBe(false)
+    expect(bSettled).toBe(false)
+
+    expect(await a).toEqual({ kind: 'updated' })
+    await b
+
+    const rows = await db
+      .select({ title: listings.title, moderationStatus: listings.moderationStatus })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    // 关键断言：不存在"标题 = 加微信联系 但 moderation_status = APPROVED"这一组合。
+    expect(rows[0]).toEqual({ title: '加微信联系', moderationStatus: 'REVIEW' })
   })
 })
 
@@ -383,14 +460,19 @@ test('编辑图片是全量替换：旧行被删掉而不是追加', async () =>
       }),
     )
 
-    const updated = await store.updateListing({
+    const result = await store.updateListingAtomic({
       id: created.listingId,
       sellerId,
-      fields: { title: '改过的标题' },
       objectKeys: [`listings/${sellerId}/c.jpg`],
+      apply: () => ({ kind: 'write' as const, fields: { title: '改过的标题' } }),
     })
 
-    expect(updated?.title).toBe('改过的标题')
+    expect(result).toEqual({ kind: 'updated' })
+    const rows = await db
+      .select({ title: listings.title })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    expect(rows[0]?.title).toBe('改过的标题')
     const images = await db
       .select({ objectKey: listingImages.objectKey, sortOrder: listingImages.sortOrder })
       .from(listingImages)
@@ -403,13 +485,13 @@ test('他人不能改自己的商品（SQL 层按 sellerId 约束）', async () 
   await withSeller(async (sellerId, otherSellerId) => {
     const created = await store.createListingAtomic(record(sellerId))
 
-    const updated = await store.updateListing({
+    const result = await store.updateListingAtomic({
       id: created.listingId,
       sellerId: otherSellerId,
-      fields: { title: '越权修改' },
+      apply: () => ({ kind: 'write' as const, fields: { title: '越权修改' } }),
     })
 
-    expect(updated).toBeNull()
+    expect(result).toEqual({ kind: 'not-owner' })
   })
 })
 
@@ -435,24 +517,126 @@ test('setStatus 只从指定状态迁移，幂等与并发都由它兜底', asyn
   })
 })
 
-// 真库上的端到端：service 的合并校验读的是"写入前"的状态，同一行被并发改成 free=true 后，
-// service 自己的 UPDATE 会撞上 listings_free_price_cents_zero（在 `db.transaction` 里）。
-// 这里验证 PG 的错误形状确实能走到 service 的映射分支并给出 422（mock 出来的错误形状不算证据）。
+// 回归（评审 blocker 2）：审核中的商品（REVIEW → OFFLINE）不能被卖家直接重新上架。
+// 前置条件必须写在 SQL 的 UPDATE 谓词里，而不是 service 先查一次 —— 否则服务重启/并发
+// 下就会出现"商品 ACTIVE 但内容是待审"的状态。
+test('REVIEW / BLOCKED 的商品不能迁回 ACTIVE（审核前置条件写在 SQL 谓词里）', async () => {
+  await withSeller(async (sellerId) => {
+    for (const moderationStatus of ['REVIEW', 'BLOCKED'] as const) {
+      const created = await store.createListingAtomic(
+        record(sellerId, { moderationStatus: 'REVIEW' }),
+      )
+      // 构造目标状态：内容待审 + OFFLINE（与 service 的 createListing 一致）。
+      await db
+        .update(listings)
+        .set({ status: 'OFFLINE', moderationStatus })
+        .where(eq(listings.id, created.listingId))
+
+      expect(await store.setStatus({ id: created.listingId, from: 'OFFLINE', to: 'ACTIVE' })).toBe(
+        false,
+      )
+      const rows = await db
+        .select({ status: listings.status })
+        .from(listings)
+        .where(eq(listings.id, created.listingId))
+      expect(rows[0]?.status).toBe('OFFLINE')
+
+      // 对照：人工审核通过（APPROVED）后就能重新上架。
+      await db
+        .update(listings)
+        .set({ moderationStatus: 'APPROVED' })
+        .where(eq(listings.id, created.listingId))
+      expect(await store.setStatus({ id: created.listingId, from: 'OFFLINE', to: 'ACTIVE' })).toBe(
+        true,
+      )
+    }
+  })
+})
+
+// 真库上的端到端：两个并发 PATCH（一个改成 free、一个只改价格）在行锁上被串行化。
 //
-// 价格必须初始为 0：否则"模拟并发"的那条 `set({ free: true })` **自己**就先违反同一条 CHECK，
-// 异常会在事务外（autocommit 语句）抛出，用例看着绿、其实从没走到 service 的写入路径。
+// 旧实现下两边都基于旧快照通过校验，后写的那一方撞上 DB 的 listings_free_price_cents_zero，
+// 只能靠把 PG 错误映射成 422 来兜。新实现把合并校验放在行锁内，所以第二个事务读到的是
+// 第一个已提交的结果，service 自己就拒绝（422），不依赖 DB 报错。
+//
+// 断言与先后顺序无关：无论谁先拿到锁，结果都只能是两种合法终态之一，且绝不能是 500。
+test('并发 free / price PATCH 在行锁内被串行化，最终状态满足契约 §7.1', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(
+      record(sellerId, { priceCents: 0, free: false }),
+    )
+    const service = createListingService({
+      store,
+      storage: {
+        presignPut: () => ({
+          url: 'https://s3.test/put',
+          headers: {},
+          expiresAt: '2026-09-12T04:00:00.000Z',
+        }),
+        stat: async () => ({ size: 1024, contentType: 'image/jpeg' }),
+        publicUrl: (key) => `https://cdn.test/${key}`,
+      },
+    })
+
+    const settled = await Promise.allSettled([
+      service.updateListing(sellerId, created.listingId, { free: true }),
+      service.updateListing(sellerId, created.listingId, { priceCents: 5000 }),
+    ])
+
+    // 恰好一个成功、一个是 422（绝不能是 500：那说明锁内校验没生效、靠 DB 报错兜了底）。
+    const fulfilled = settled.filter((item) => item.status === 'fulfilled')
+    const rejected = settled.filter((item) => item.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    if (rejected[0]?.status === 'rejected') {
+      expect(rejected[0].reason).toBeInstanceOf(ListingServiceError)
+      expect((rejected[0].reason as ListingServiceError).status).toBe(422)
+      expect((rejected[0].reason as ListingServiceError).code).toBe('VALIDATION_FAILED')
+    }
+
+    // 合法终态只有两种：先改 free（则价格必须仍为 0）或先改价格（则 free 仍为 false）。
+    const rows = await db
+      .select({ priceCents: listings.priceCents, free: listings.free })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    const row = rows[0]
+    expect(row).toBeDefined()
+    if (!row) throw new Error('行不存在')
+    // 契约 §7.1 的不变量：`free ⟹ priceCents = 0`。
+    expect(row.free && row.priceCents !== 0).toBe(false)
+    // 合法终态只有两种：先改 free（价格保持 0）或先改价格（free 保持 false）。
+    expect([
+      [true, 0],
+      [false, 5000],
+    ]).toContainEqual([row.free, row.priceCents])
+  })
+})
+
+// 兜底路径：service 的锁内合并校验之外，DB 的 CHECK 报错也必须被映射成 422（而不是 500）。
+// 真实触发方式：包一层的 store 在 `apply` 之后、UPDATE 时额外塞进 `free = true`，
+// 模拟一个绕过 service 的写入方（契约对它的要求与前者相同）。
 test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(
       record(sellerId, { priceCents: 0, free: false }),
     )
 
-    // 包一层 store：在 service 读完状态、真正 UPDATE 之前，模拟另一个请求把该行改成 free = true
     const racingStore: ListingStore = {
       ...store,
-      async updateListing(input) {
-        await db.update(listings).set({ free: true }).where(eq(listings.id, input.id))
-        return store.updateListing(input)
+      async updateListingAtomic(input) {
+        return db.transaction(async (tx) => {
+          const rows = await tx.select().from(listings).where(eq(listings.id, input.id)).limit(1)
+          const current = rows[0]
+          if (!current) return { kind: 'not-found' as const }
+          const plan = await input.apply(input, current)
+          if (plan.kind === 'blocked') return { kind: 'rejected' as const }
+          // 在计划之外偷偷把 free 改成 true —— service 的合并校验看不到这一步。
+          await tx
+            .update(listings)
+            .set({ ...plan.fields, free: true, updatedAt: new Date() })
+            .where(eq(listings.id, input.id))
+          return { kind: 'updated' as const }
+        })
       },
     }
     const service = createListingService({
@@ -468,26 +652,26 @@ test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
       },
     })
 
-    // service 的合并校验此时看到 free=false，所以放行；冲突只能由 DB 拦下
+    let thrown: unknown
     try {
       await service.updateListing(sellerId, created.listingId, { priceCents: 5000 })
       throw new Error('期望抛出 ListingServiceError，但没有')
     } catch (error) {
-      expect(error).toBeInstanceOf(ListingServiceError)
-      if (error instanceof ListingServiceError) {
-        expect(error.status).toBe(422)
-        expect(error.code).toBe('VALIDATION_FAILED')
-        expect(error.details?.[0]?.field).toBe('priceCents')
-      }
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(ListingServiceError)
+    if (thrown instanceof ListingServiceError) {
+      expect(thrown.status).toBe(422)
+      expect(thrown.code).toBe('VALIDATION_FAILED')
+      expect(thrown.details?.[0]?.field).toBe('priceCents')
     }
 
-    // 事务失败后价格没有被写入（并发那句 set 已提交，所以 free 是 true、价格仍是 0）
+    // 事务回滚：价格没有被写入。
     const rows = await db
       .select({ priceCents: listings.priceCents, free: listings.free })
       .from(listings)
       .where(eq(listings.id, created.listingId))
     expect(rows[0]?.priceCents).toBe(0)
-    expect(rows[0]?.free).toBe(true)
   })
 })
 
@@ -513,10 +697,10 @@ test('编辑商品后追加一条 MATCH_LISTING job', async () => {
     // 创建本身就投了一条
     expect(await matchJobsFor(created.listingId)).toHaveLength(1)
 
-    await store.updateListing({
+    await store.updateListingAtomic({
       id: created.listingId,
       sellerId,
-      fields: { priceCents: 30000 },
+      apply: () => ({ kind: 'write' as const, fields: { priceCents: 30000 } }),
     })
 
     const jobsAfterEdit = await matchJobsFor(created.listingId)
@@ -551,14 +735,18 @@ test('没有真正改到行时不投 job（不存在的、别人的、被锁定�
     // 不存在的商品
     const missingId = newId()
     expect(
-      await store.updateListing({ id: missingId, sellerId, fields: { title: '不存在' } }),
-    ).toBeNull()
+      await store.updateListingAtomic({
+        id: missingId,
+        sellerId,
+        apply: () => ({ kind: 'write' as const, fields: { title: '不存在' } }),
+      }),
+    ).toEqual({ kind: 'not-found' })
     expect(await store.setStatus({ id: missingId, from: 'ACTIVE', to: 'OFFLINE' })).toBe(false)
     // 别人的商品
-    await store.updateListing({
+    await store.updateListingAtomic({
       id: created.listingId,
       sellerId: otherSellerId,
-      fields: { title: '越权' },
+      apply: () => ({ kind: 'write' as const, fields: { title: '越权' } }),
     })
     // 状态谓词不匹配（当前是 ACTIVE，却要求从 OFFLINE 迁走）
     expect(await store.setStatus({ id: created.listingId, from: 'OFFLINE', to: 'ACTIVE' })).toBe(
@@ -566,7 +754,11 @@ test('没有真正改到行时不投 job（不存在的、别人的、被锁定�
     )
     // 被锁定（#11 交易流程写的状态）
     await db.update(listings).set({ status: 'RESERVED' }).where(eq(listings.id, created.listingId))
-    await store.updateListing({ id: created.listingId, sellerId, fields: { title: '锁定后编辑' } })
+    await store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      apply: () => ({ kind: 'write' as const, fields: { title: '锁定后编辑' } }),
+    })
     await store.setStatus({ id: created.listingId, from: 'ACTIVE', to: 'OFFLINE' })
 
     expect(await matchJobsFor(created.listingId)).toHaveLength(before)
@@ -602,7 +794,11 @@ test('job 写入失败时商品改动一起回滚（投递确实在同一事务�
 
     try {
       await expect(
-        store.updateListing({ id: created.listingId, sellerId, fields: { priceCents: 30000 } }),
+        store.updateListingAtomic({
+          id: created.listingId,
+          sellerId,
+          apply: () => ({ kind: 'write' as const, fields: { priceCents: 30000 } }),
+        }),
       ).rejects.toThrow()
 
       const rows = await db
@@ -631,5 +827,156 @@ test('重复投递在商品被删除后仍能写入（重投递不依赖商品�
       .from(jobs)
       .where(sql`${jobs.payload}->>'listingId' = ${created.listingId}`)
     expect(queued.length).toBeGreaterThanOrEqual(1)
+  })
+})
+
+/**
+ * 回归（评审 F-B）：审核记录的 jsonb 数组必须是**真数组**，不能是「JSON 字符串套 JSON」。
+ *
+ * 裸数组在 drizzle + bun-sql 下会被 stringify 两次（见 `@fish/db/json`）；读路径会 parse 两次
+ * 而「看起来正常」，所以只有**在 SQL 层做 containment / 长度查询**才能发现。验收标准
+ * 「审核结果持久化，可由 moderation store 查询供 #73 接入」正是要求这一点可用。
+ */
+test('审核记录写入的 matched_rules 是 jsonb 数组，可在 SQL 层做 @> 与长度查询', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(
+      record(sellerId, {
+        moderationStatus: 'REVIEW',
+        moderation: {
+          decision: 'REVIEW',
+          matchedRules: ['EXTERNAL_CONTACT'],
+          matchedTermsMasked: ['加*信'],
+          ruleVersion: 'test-v1',
+        },
+      }),
+    )
+
+    const rows = await db.execute<{
+      typeof: string
+      len: number
+      contains: boolean
+      masked: string
+    }>(sql`
+      SELECT jsonb_typeof(matched_rules) AS "typeof",
+             jsonb_array_length(matched_rules) AS len,
+             (matched_rules @> '["EXTERNAL_CONTACT"]'::jsonb) AS contains,
+             jsonb_array_length(matched_terms_masked) AS masked
+      FROM listing_moderation_records
+      WHERE listing_id = ${created.listingId}
+    `)
+
+    // 旧实现下这里全是 'string' / 报错 / false。
+    expect(rows[0]?.typeof).toBe('array')
+    expect(rows[0]?.len).toBe(1)
+    expect(rows[0]?.contains).toBe(true)
+    expect(rows[0]?.masked).toBe(1)
+  })
+})
+
+/**
+ * 回归（评审 F-B 的对象分支）：job payload 也必须仍是 jsonb **object**。
+ * `jsonParam` 改成 `::text::jsonb` 后容易写坏这一支，而 #8 的 worker 全靠 `payload->>'listingId'`。
+ */
+test('job payload 仍是 jsonb object（jsonParam 改造后的回归）', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const rows = await db.execute<{ typeof: string; listingId: string }>(sql`
+      SELECT jsonb_typeof(payload) AS "typeof", payload->>'listingId' AS "listingId"
+      FROM jobs WHERE payload->>'listingId' = ${created.listingId}
+    `)
+    expect(rows[0]?.typeof).toBe('object')
+    expect(rows[0]?.listingId).toBe(created.listingId)
+  })
+})
+
+/**
+ * 回归（评审 F-C）：`blocked` 计划必须由 store 在**锁内事务**里写审计，且商品不被改动。
+ *
+ * 旧实现让 `apply` 返回 null 回滚事务、再由 service 在事务外补写审计 —— 锁已释放，
+ * 记录的 titleSnapshot 可能与被拒内容不一致，中途失败还会静默丢审计行。
+ * 这里断言：审计行带着**锁内读到并合并后**的内容落库，商品保持原样。
+ */
+test('BLOCK 计划在锁内写审计且不改商品', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId, { title: '原标题' }))
+
+    const result = await store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      apply: () => ({
+        kind: 'blocked' as const,
+        moderation: {
+          title: '原标题 加微信',
+          description: '描述',
+          decision: 'BLOCK',
+          matchedRules: ['EXTERNAL_CONTACT'],
+          matchedTermsMasked: ['加*信'],
+          ruleVersion: 'test-v1',
+        },
+      }),
+    })
+
+    expect(result).toEqual({ kind: 'rejected' })
+
+    // 商品没被改。
+    const rows = await db
+      .select({ title: listings.title })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    expect(rows[0]?.title).toBe('原标题')
+
+    // 审计行落了库，且快照 = 被拒内容。
+    const audit = await db
+      .select({
+        decision: listingModerationRecords.decision,
+        title: listingModerationRecords.titleSnapshot,
+        rules: listingModerationRecords.matchedRules,
+      })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.listingId, created.listingId))
+    expect(audit).toHaveLength(1)
+    expect(audit[0]?.decision).toBe('BLOCK')
+    expect(audit[0]?.title).toBe('原标题 加微信')
+    expect(audit[0]?.rules).toEqual(['EXTERNAL_CONTACT'])
+  })
+})
+
+/**
+ * 回归（评审 F-A）：卖家查自己的商品且**不传 status** 时必须能看到非 ACTIVE 的行。
+ *
+ * REVIEW 会被写成 `status = 'OFFLINE'`，而前端「我发布的」正是 `?sellerId=me`（不带 status）。
+ * 旧实现把缺省 status 硬编码为 ACTIVE，于是「F4：本人查询包含未审核商品」只解除了 moderation
+ * 过滤、行仍被 status 过滤掉 —— 功能等于没生效（真库实测可见条数为 0）。
+ */
+test('本人不传 status 时返回全部状态（含 OFFLINE 的 REVIEW 行）；公开查询仍只看 ACTIVE', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    await db
+      .update(listings)
+      .set({ status: 'OFFLINE', moderationStatus: 'REVIEW' })
+      .where(eq(listings.id, created.listingId))
+
+    // 走 service（而不是直接调 store）：F-A 的缺陷在 service 把缺省 status 钉成 ACTIVE，
+    // 只有经 service 的请求形状才能复现，直接调 store 会因为「不传 status 就不过滤」而假绿。
+    const service = createListingService({
+      store,
+      storage: {
+        presignPut: () => ({
+          url: 'https://s3.test/put',
+          headers: {},
+          expiresAt: '2026-09-12T04:00:00.000Z',
+        }),
+        stat: async () => ({ size: 1024, contentType: 'image/jpeg' }),
+        publicUrl: (key) => `https://cdn.test/${key}`,
+      },
+    })
+
+    // 前端「我发布的」的真实请求形状：带 sellerId、**不带 status**。
+    const own = await service.listFeed(sellerId, { sellerId, sort: 'newest', limit: 20 })
+    expect(own.items.map((item) => item.id)).toContain(created.listingId)
+
+    // 公开 Feed：同样不带 status，但看不见审核中的商品。
+    const publicFeed = await service.listFeed(null, { sort: 'newest', limit: 20 })
+    expect(publicFeed.items.map((item) => item.id)).not.toContain(created.listingId)
   })
 })

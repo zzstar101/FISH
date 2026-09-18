@@ -1,0 +1,208 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 商品卡。尺寸换算见 apps/miniapp/DESIGN.md（SCSS 数值 = 设计稿 pt × 2）。
+ * 图片高度由 JS 按列宽 × 比例算好后以 rpx 传入，所以这里不写死高度。
+ */
+.pcard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  &:active {
+    transform: scale(0.985);
+  }
+  @include pressable;
+
+  &--home {
+    border-radius: var(--r-card);
+  }
+
+  &--search {
+    border-radius: var(--r-card-lg);
+  }
+}
+
+.pcard__ph {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: var(--grad-ph);
+}
+
+.pcard__img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.pcard__badge {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  height: 42px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  background: rgba(233, 247, 255, 0.92);
+  color: var(--price);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 42px;
+}
+
+.pcard__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 14px;
+}
+
+.pcard--home .pcard__body {
+  padding: 18px 22px 22px;
+  gap: 12px;
+}
+
+.pcard--search .pcard__body {
+  padding: 20px 24px 24px;
+  gap: 16px;
+}
+
+.pcard__title {
+  font-size: var(--fs-sm);
+  line-height: 1.38;
+  font-weight: 500;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.pcard--home .pcard__title {
+  min-height: 70px;
+}
+
+.pcard--search .pcard__title {
+  min-height: 74px;
+}
+
+.pcard__title-text {
+  word-break: break-all;
+}
+
+/* 成色印章：设计稿用青色→薄荷渐变垫在字后（这里用纯色近似，避免 background-size 在小程序上的差异） */
+.pcard__cond {
+  display: inline-block;
+  margin-right: 12px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: rgba(25, 230, 255, 0.34);
+  color: var(--fg);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.pcard__foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+}
+
+.pcard__price {
+  display: flex;
+  align-items: baseline;
+}
+
+.pcard--home .pcard__price {
+  color: var(--danger);
+}
+
+.pcard--search .pcard__price {
+  color: var(--fg);
+}
+
+.pcard__cur {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.pcard__amt {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 38px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.pcard__want {
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  white-space: nowrap;
+}
+
+.pcard__cond-pill {
+  padding: 2px 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: 20px;
+  white-space: nowrap;
+}
+
+.pcard__seller {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pcard--home .pcard__seller {
+  font-size: 22px;
+}
+
+.pcard--search .pcard__seller {
+  padding-top: 16px;
+  border-top: 2px solid var(--border);
+  font-size: 22px;
+}
+
+.pcard__avatar {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--grad-ph);
+}
+
+.pcard__who {
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.pcard__tick {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+}
+
+.pcard__credit {
+  color: var(--price);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pcard__loc {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  white-space: nowrap;
+}

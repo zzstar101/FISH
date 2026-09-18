@@ -10,3 +10,7 @@ coverage/
 # @tanstack/router-plugin 的 vite 缓存目录。
 # 注意：apps/web/src/routeTree.gen.ts 是故意跟踪的生成文件，不要移到这里。
 .tanstack/
+
+# #68 dev 邮件 outbox（本地验证码投递目标，非日志）
+.dev/
+apps/api/src/modules/auth/.test-outbox-*/

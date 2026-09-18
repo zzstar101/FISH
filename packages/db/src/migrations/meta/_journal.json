@@ -40,8 +40,29 @@
     {
       "idx": 5,
       "version": "7",
-      "when": 1789533786315,
-      "tag": "0005_slippery_bruce_banner",
+      "when": 1789573183722,
+      "tag": "0005_good_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789605362047,
+      "tag": "0006_open_onslaught",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789615362047,
+      "tag": "0007_faulty_energizer",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789701494195,
+      "tag": "0008_amused_preak",
       "breakpoints": true
     }
   ]

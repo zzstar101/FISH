@@ -1,0 +1,248 @@
+/**
+ * 注册（设计稿 `小程序1版register.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
+ *
+ * 颜色 / 背景 / 玻璃的处理与登录页一致（稿子的灰蓝配色整体映射到 `_tokens.scss` 的冰蓝令牌），
+ * 差异只有：多一个返回钮、字段下方多一行 help 文案、校区是一行可点的「值 + 箭头」。
+ * 四个字段 + 卡片在小屏上会超过一屏，所以这一页**允许纵向滚动**（不做 `height: 100vh` 锁定）。
+ */
+
+.reg {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.reg__bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 784px;
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+}
+
+.reg__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 48px 88px;
+}
+
+/* ---------------------------------------------------------------- 返回钮 */
+
+/* top 由页面按运行时胶囊几何内联下发（设备 px），这里只管水平与命中区 */
+.reg__back {
+  position: absolute;
+  left: 16px;
+  transform: translateY(-50%);
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.reg__back-ic {
+  width: 40px;
+  height: 40px;
+}
+
+/* ---------------------------------------------------------------- 品牌区 */
+
+.reg__brand {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.reg__mark {
+  width: 188px;
+  height: 116px;
+}
+
+.reg__wordmark {
+  margin-top: 32px;
+  width: 200px;
+  height: 80px;
+}
+
+.reg__tagline {
+  margin-top: 22px;
+  font-size: 28px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 表单卡 */
+
+.reg__card {
+  width: 100%;
+  margin-top: 52px;
+  padding: 32px;
+  border-radius: 32px;
+  border: 2px solid var(--border);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(48px);
+  box-shadow: var(--shadow-card);
+}
+
+.reg__form {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.reg__field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.reg__label {
+  font-size: 28px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+.reg__input {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 88px;
+  padding: 0 24px;
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  background: var(--ice);
+
+  &.is-focus {
+    border-color: var(--brand);
+    background: var(--surface);
+  }
+
+  &.is-error {
+    border-color: var(--danger);
+    background: var(--danger-weak);
+  }
+}
+
+/* 校区行：整行可点（原生选择器） */
+.reg__input--tap:active {
+  background: var(--accent-weak);
+}
+
+.reg__val {
+  flex: 1;
+  min-width: 0;
+  font-size: 30px;
+  color: var(--fg);
+}
+
+.reg__val.num {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.reg__val--pwd {
+  letter-spacing: 0.12em;
+}
+
+.reg__ph {
+  font-size: 30px;
+  color: var(--muted);
+}
+
+.reg__chev {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+}
+
+.reg__help {
+  display: block;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+.reg__err {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--danger-ink);
+}
+
+/* ---------------------------------------------------------------- 主 CTA */
+
+.reg__cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--brand-deep);
+  color: #fff;
+  font-size: 32px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    filter: saturate(1.06) brightness(0.95);
+  }
+
+  &.is-off {
+    background: var(--ice);
+    color: var(--muted);
+    box-shadow: none;
+  }
+}
+
+.reg__spin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  animation: reg-spin 0.7s linear infinite;
+}
+
+@keyframes reg-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------- 去登录 */
+
+.reg__alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 36px;
+  font-size: 28px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.reg__alt-lk {
+  padding: 0 8px;
+  color: var(--brand);
+  font-weight: 600;
+}

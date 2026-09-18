@@ -1,0 +1,456 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * C1 分类浏览。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 这一屏与其它页不同：**整页是一行两块**（左侧固定宽度的竖向分类栏 + 右侧内容区），
+ * 右侧再纵向排「二级胶囊 / 排序行 / 瀑布流」，中间那层自己滚。
+ * 因此根节点用 flex 撑满视口高度，而不是靠页面滚动。
+ */
+
+.cat {
+  position: relative;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ---------------------------------------------------------------- 顶部条 */
+
+/* 状态栏占位：分类页的顶栏是实心吸顶条，必须自己顶出状态栏那一条 */
+.cat__status {
+  flex: 0 0 auto;
+  background: var(--glass-strong);
+}
+
+/*
+ * 顶栏：返回 + 标题 + 分类内搜索。
+ * 右侧 padding 让开系统胶囊（87pt 宽 + 7pt 右边距 = 94pt → 188rpx），
+ * 否则搜索钮会被胶囊压住点不到。
+ */
+.cat__cattop {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 92px;
+  padding: 0 188px 0 24px;
+  background: var(--glass-strong);
+  border-bottom: 2px solid var(--border);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/* 返回钮：与漂浮钮同形态，但这里在流内 */
+.cat__back {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 2px solid var(--border);
+
+  &:active {
+    transform: translateY(2px);
+  }
+}
+
+.cat__back-chevron {
+  width: 18px;
+  height: 18px;
+  border-left: 4px solid var(--fg);
+  border-bottom: 4px solid var(--fg);
+  border-radius: 2px;
+  transform: translateX(3px) rotate(45deg);
+}
+
+.cat__cattitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.cat__cattitle-num {
+  margin-left: 14px;
+  font-size: 21px;
+  font-weight: 400;
+  color: var(--muted-2);
+}
+
+.cat__icobtn {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+.cat__icobtn-img {
+  width: 34px;
+  height: 34px;
+}
+
+/* ---------------------------------------------------------------- 双栏 */
+
+.cat__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---- 左栏：一级分类（固定 168rpx = 设计稿 84pt） ---- */
+
+.cat__rail {
+  flex: 0 0 168px;
+  background: var(--ice);
+  border-right: 2px solid var(--border);
+}
+
+.cat__rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 104px;
+  padding: 0 20px 0 26px;
+  font-size: 25px;
+  color: var(--muted-2);
+
+  /* 选中：白底 + 品牌色文字 + 左侧品牌色竖条 */
+  &.is-on {
+    background: var(--surface);
+    color: var(--brand);
+    font-weight: 600;
+  }
+
+  &.is-on::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 44px;
+    border-radius: 0 6px 6px 0;
+    background: var(--brand);
+  }
+}
+
+.cat__rail-label {
+  flex: 1;
+  min-width: 0;
+  @include ellipsis;
+}
+
+.cat__rail-c {
+  margin-left: auto;
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--muted-2);
+}
+
+.cat__rail-item.is-on .cat__rail-c {
+  color: var(--brand);
+}
+
+/* ---- 右栏 ---- */
+
+.cat__pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 0 0;
+}
+
+/* 二级分类横滑胶囊 */
+.cat__subtags {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding-bottom: 20px;
+}
+
+.cat__subtags-inner {
+  display: inline-flex;
+  gap: 16px;
+  padding: 0 28px;
+}
+
+.cat__subtag {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 64px;
+  padding: 0 28px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  font-size: 25px;
+  color: var(--fg);
+
+  &.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    font-weight: 600;
+  }
+}
+
+/* 排序行 */
+.cat__sortrow {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 4px 28px 20px;
+  border-bottom: 2px solid var(--border);
+}
+
+.cat__sort {
+  display: inline-flex;
+  align-items: center;
+  height: 64px;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &.is-on {
+    color: var(--brand);
+  }
+}
+
+.cat__rnote {
+  margin-left: auto;
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+/* 瀑布流滚动区 */
+.cat__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cat__grid {
+  display: flex;
+  gap: 24px;
+  padding: 24px 28px 32px;
+  align-items: flex-start;
+}
+
+.cat__col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ---------------------------------------------------------------- 商品卡 */
+
+.cat__card {
+  @include card(36px);
+  overflow: hidden;
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.cat__img {
+  position: relative;
+  width: 100%;
+  height: 300px;
+  background: var(--grad-ph);
+  border-bottom: 2px solid var(--accent-faint);
+}
+
+.cat__img-real {
+  width: 100%;
+  height: 100%;
+}
+
+/* 角标：急出 / 0 元出（与首页卡片同一套样式） */
+.cat__corner {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  display: inline-flex;
+  align-items: center;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.cat__corner--hot {
+  background: var(--danger-weak);
+  color: var(--tag-hot-ink);
+  border: 2px solid var(--danger-line);
+}
+
+.cat__corner--free {
+  background: var(--brand-deep);
+  color: #fff;
+}
+
+.cat__pbody {
+  padding: 18px 20px 20px;
+}
+
+.cat__title {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.cat__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.cat__price {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--price);
+}
+
+.cat__orig {
+  font-size: 20px;
+  color: var(--muted-2);
+  text-decoration: line-through;
+}
+
+.cat__seller {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.cat__av {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--border);
+}
+
+.cat__av-tx {
+  font-size: 20px;
+  color: var(--muted-2);
+}
+
+.cat__nm {
+  font-size: 23px;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.cat__campus {
+  margin-left: auto;
+  font-size: 20px;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 空态 */
+
+.cat__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 80px 40px 0;
+}
+
+.cat__empty-disc {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--accent-faint);
+}
+
+.cat__empty-ic {
+  width: 60px;
+  height: 60px;
+}
+
+.cat__empty-title {
+  margin-top: 28px;
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.cat__empty-text {
+  margin-top: 12px;
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.cat__empty-act {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 88px;
+  padding: 0 48px;
+  margin-top: 32px;
+  border-radius: 44px;
+  background: var(--grad-brand);
+  color: #fff;
+  font-size: 29px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+}
+
+/* ---------------------------------------------------------------- 骨架屏 */
+
+.cat__skel {
+  @include card(36px);
+  overflow: hidden;
+}
+
+.cat__skel-img {
+  @include skeleton(300px, 100%);
+  border-radius: 0;
+}
+
+.cat__skel-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 20px;
+}
+
+.cat__skel-bar {
+  @include skeleton(24px, 100%);
+}
