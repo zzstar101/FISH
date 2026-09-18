@@ -1,146 +1,17 @@
 /**
- * 设计令牌（唯一真源）。
+ * 设计令牌的**落地位置**：页面根节点。
  *
- * 来源：5 张「冰蓝荧光」设计稿的 :root 变量。设计稿用了 color-mix()/oklch()，
- * 小程序 WXSS 不支持，因此这里把用到的派生色**全部预计算成 hex**。
- *
- * 单位约定见 apps/miniapp/DESIGN.md：本目录 SCSS 里的 px 会被 Taro 转成 rpx，
- * 数值 = 设计稿数值 × 2（设计稿画在 390pt 画布，designWidth 750）。
+ * 令牌值本身在 `_token-vars.scss`（唯一真源），这里只负责把它声明到 `page` 上。
  *
  * 放在 `page` 上而不是 `:root`：小程序没有 :root，页面根节点是 page。
+ *
+ * 注意：`page` 上的自定义属性**只能继承到 page 内部的节点**。挂在 `<page>` 之外的
+ * 节点（如自定义 TabBar）必须自己 `@include vars` —— 见 `_token-vars.scss` 文件头。
  */
+@use './token-vars' as *;
+
 page {
-  /* ---- 品牌色 ---- */
-  --brand: #4285ff;
-  --electric: #19a7ff;
-  --cyan: #19e6ff;
-  --mint: #54f5d0;
-
-  /* ---- 中性 ---- */
-  --bg: #f7faff;
-  --ice: #eef6ff;
-  --surface: #ffffff;
-  --fg: #17233d;
-  --muted: #71809c;
-  --muted-2: #3e4b66;
-  --border: #dce7f5;
-  --line: #a8c5fa;
-
-  /* ---- 语义色 ---- */
-  --ok: #54f5d0;
-  --warn: #ffb84d;
-  --danger: #ff5f6d;
-  --price: #4375e8;
-  --ink: #17233d;
-  --accent: var(--brand);
-
-  /* ---- 派生底色 ---- */
-  --accent-weak: #eff5ff;
-  --accent-mid: #c6dcff;
-  /* 消息页 bento 浅色卡与其分隔线的描边：
-     设计稿 color-mix(in oklab, var(--brand) 14%, var(--surface))，预计算成 hex */
-  --accent-faint: #e4edff;
-  --accent-soft: rgba(66, 133, 255, 0.14);
-  --cyan-soft: rgba(25, 230, 255, 0.14);
-  --ink-weak: rgba(23, 35, 61, 0.06);
-  --ink-weak-2: rgba(23, 35, 61, 0.1);
-  /* 搜索页清空钮按下态：设计稿 color-mix(in oklch, --fg 18%, transparent)，预计算成 rgba */
-  --ink-weak-3: rgba(23, 35, 61, 0.18);
-  /* 搜索页「搜索」按钮按下态：设计稿 color-mix(in oklch, --ink 82%, #fff) */
-  --ink-press: #45506a;
-  /* 搜索页输入胶囊描边：设计稿 color-mix(in oklch, --brand 16%, #fff) */
-  --field-line: #e8efff;
-  /* 详情页派生色：listing.html 的 color-mix/oklch 预计算值（WXSS 不支持，页面里别现调） */
-  /* oklch(0.60 0.205 28.5)：设计稿详情页 --price，¥160 大号价格 */
-  --price-hot: #e0392f;
-  /* color-mix(in oklab, var(--brand) 55%, transparent)：轮播未选中圆点 */
-  --accent-dot: rgba(66, 133, 255, 0.55);
-  /* color-mix(in oklab, var(--accent) 72%, var(--fg))：「九成新」胶囊与留言头像首字 */
-  --cond-fg: #3b63c2;
-  /* color-mix(in oklab, var(--brand) 24%, var(--border))：留言之间的品牌色分割线 */
-  --divide: #c3d8f9;
-  /* color-mix(in srgb, var(--cyan) 22%, var(--surface))：「卖家」标签底 */
-  --tag-cyan-bg: #dcfcff;
-  /* color-mix(in oklab, var(--fg) 92%, var(--muted))：描述正文与留言正文 */
-  --body-soft: #1c2841;
-  /* color-mix(in oklab, var(--accent) 44%, var(--muted))：「查看全部 N 条留言」 */
-  --more-fg: #5876ba;
-  --glass-bg: rgba(255, 255, 255, 0.72);
-  --glass-line: rgba(255, 255, 255, 0.78);
-  /* 设计稿的 --glass（导航圆钮、吸底条）：比 --glass-bg 更实一点 */
-  --glass-strong: rgba(255, 255, 255, 0.82);
-
-  /* ============ A/B/C/D 组 14 张设计稿（D:\Downloads\2改）新增的派生色 ============
-     WXSS 不支持 color-mix()/oklch()，以下均已按算式预计算成 hex。 */
-
-  /* 派生主色 */
-  --brand-deep: #396fd4; /* 78% --brand + 22% --fg */
-  --brand-deep-2: #3260b5; /* 62% --brand + 38% --fg，按下态 */
-  --accent-soft-2: rgba(66, 133, 255, 0.1); /* 10% --brand 浅底（选中行/圆盘） */
-
-  /* 危险：退出登录、错误块、已注销 */
-  --danger-ink: #974457; /* 55% --danger + 45% --fg */
-  --danger-ink-2: #7f3e53; /* 45% --danger + 55% --fg，按下态 */
-  --danger-weak: #ffeced; /* 12% --danger + 88% --surface */
-  --danger-line: #ffd7db; /* 25% --danger + 75% --surface */
-
-  /* 成功：认证通过、交易完成、码校验通过 */
-  --ok-weak: #e0fdf7; /* 20% --ok + 80% --surface */
-  --ok-ink: #296269; /* 62% --ok + 38% --fg */
-  --ok-line: #c3fcef; /* 45% --ok + 55% --surface */
-
-  /* 提醒：倒计时、待面交提示、审核中 */
-  --warn-weak: #fff4e3; /* 20% --warn + 80% --surface */
-  --warn-ink: #685743; /* 58% --warn + 42% --fg */
-  --warn-line: #ffedd3; /* 42% --warn + 58% --surface */
-
-  /* 「急出」角标文字：热门红压深 */
-  --tag-hot-ink: #8a3a44; /* 55% --danger + 45% --fg */
-
-  /* 遮罩：--scrim 是弹层常规压暗；后两档强遮罩分别来自会话页与扫码页 */
-  --scrim: rgba(23, 35, 61, 0.42);
-  --scrim-strong: rgba(23, 35, 61, 0.55); /* D2 相册面板 / 长按菜单 */
-  --scrim-scan: rgba(23, 35, 61, 0.62); /* C6 扫码取景全屏遮罩 */
-
-  /* 深色底上的文字（A2 交易码大卡、深色 bento） */
-  --on-dark: rgba(255, 255, 255, 0.72);
-  --on-dark-track: rgba(255, 255, 255, 0.45);
-  --hairline: rgba(255, 255, 255, 0.28); /* 深色卡内分割线 */
-
-  /* ---- 渐变 ---- */
-  --grad-brand: linear-gradient(135deg, #4285ff 0%, #19a7ff 55%, #19e6ff 100%);
-  --grad-icon: linear-gradient(145deg, #eaf1ff 0%, #e6f6ff 52%, #e8fdf7 100%);
-  --grad-page: linear-gradient(165deg, #dcebff 0%, #eaf4ff 46%, #f7faff 100%);
-  --grad-ph: linear-gradient(150deg, #eaf3ff 0%, #dcecff 58%, #cfe3ff 100%);
-  --grad-wave: linear-gradient(180deg, #dbe9ff 0%, #f0f6ff 100%);
-  --grad-ok: linear-gradient(150deg, #e0fdf7 0%, #ffffff 62%); /* B3 认证通过圆盘 */
-
-  /* ---- 阴影 ---- */
-  --shadow-card: 0 2px 4px rgba(23, 35, 61, 0.05), 0 24px 56px -36px rgba(66, 133, 255, 0.45);
-  /* 搜索页输入胶囊投影：设计稿 0 12px 26px -20px rgba(65,70,78,.6)（换算后的 rpx 数值同源） */
-  --shadow-field: 0 24px 52px -40px rgba(65, 70, 78, 0.6);
-  --shadow-float: 0 36px 84px -36px rgba(23, 35, 61, 0.52), 0 4px 12px -4px rgba(23, 35, 61, 0.16);
-  --shadow-btn: 0 24px 48px -28px rgba(66, 133, 255, 0.7);
-  --shadow-soft: 0 12px 28px -18px rgba(66, 133, 255, 0.45);
-  /* 底部弹层向上投影（B4 退出确认 / C4 下架确认 / D1 润色候选卡 / D2 面板） */
-  --shadow-sheet: 0 -16px 48px -20px rgba(23, 35, 61, 0.28);
-
-  /* ---- 圆角 ---- */
-  --r-pill: 999px;
-  --r-sm: 16px;
-  --r-card: 36px;
-  --r-card-lg: 40px;
-  --r-hero: 64px;
-
-  /* ---- 字号（设计稿 pt × 2）---- */
-  --fs-h1: 54px;
-  --fs-h2: 42px;
-  --fs-h3: 36px;
-  --fs-title: 30px;
-  --fs-body: 28px;
-  --fs-sm: 25px;
-  --fs-xs: 23px;
-  --fs-2xs: 21px;
+  @include vars;
 
   background-color: var(--bg);
   color: var(--fg);
