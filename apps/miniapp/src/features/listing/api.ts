@@ -81,8 +81,6 @@ export async function fetchListingDetail(id: string): Promise<ListingDetail | nu
     const payload = await apiRequest(LISTING_ROUTES.detail(id))
     return ListingDetailSchema.parse(payload)
   } catch (error) {
-    // 用 `isApiError` 而不是 `instanceof ApiError`：产物按 chunk 打包，类身份可能不一致，
-    // `instanceof` 会静默为 false（详见 `lib/request.ts` 的说明）。
     if (isApiError(error) && error.status === 404) return null
     throw error
   }

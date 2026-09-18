@@ -47,10 +47,10 @@ export function isUnauthenticatedError(error: unknown): boolean {
 /**
  * 判断一个异常是不是本模块抛出的 `ApiError`。
  *
- * **为什么不只用 `instanceof`**：小程序产物是按页面分 chunk 打包的，`ApiError` 这个类在
- * 不同 chunk 里可能不是同一个构造函数实例，`error instanceof ApiError` 会静默为 false ——
- * 于是页面里的错误分支全部走不到（表现为「错误码明明对，但界面上什么也不显示」）。
- * 所以这里再按**形状**兜一层：`name` + `code` + `status` 三个特征同时成立才算。
+ * **为什么不只用 `instanceof`**：小程序产物按页面分 chunk 打包，`ApiError` 这个类在不同 chunk
+ * 里可能不是同一个构造函数实例，`error instanceof ApiError` 会静默为 false —— 于是页面里的
+ * 错误分支全部走不到（表现为「错误码明明对，但界面上什么也不显示」）。
+ * 所以再按**形状**兜一层：`name` + `code` + `status` 三个特征同时成立才算。
  */
 export function isApiError(error: unknown): error is ApiError {
   if (error instanceof ApiError) return true
