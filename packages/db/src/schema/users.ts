@@ -4,6 +4,8 @@ import { primaryKey, timestamps } from './common'
 /** 校园认证状态。#68 后 VERIFIED 只能由「教育邮箱验证码验证成功」事务写入。 */
 export const authStatusEnum = pgEnum('auth_status', ['UNVERIFIED', 'VERIFIED'])
 
+export const userRoleEnum = pgEnum('user_role', ['USER', 'ADMIN'])
+
 export const users = pgTable(
   'users',
   {
@@ -23,6 +25,8 @@ export const users = pgTable(
      * #68 后新注册一律 UNVERIFIED。唯一索引保证一个校园邮箱至多绑一个账号。
      */
     campusEmail: text('campus_email'),
+    /** 管理授权依据（#73）；只由 `requireAdmin` 读取，普通用户 `Me` DTO 不暴露它。 */
+    role: userRoleEnum('role').notNull().default('USER'),
     ...timestamps(),
   },
   (table) => [uniqueIndex('users_campus_email_uq').on(table.campusEmail)],
