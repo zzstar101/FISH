@@ -26,6 +26,12 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/register/index': () => import('@/pages/register/index'),
   '/pages/verify/index': () => import('@/pages/verify/index'),
   '/pages/settings/index': () => import('@/pages/settings/index'),
+  '/pages/category/index': () => import('@/pages/category/index'),
+  '/pages/user/index': () => import('@/pages/user/index'),
+  '/pages/match/index': () => import('@/pages/match/index'),
+  '/pages/mylist/index': () => import('@/pages/mylist/index'),
+  '/pages/watchers/index': () => import('@/pages/watchers/index'),
+  '/pages/scan/index': () => import('@/pages/scan/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */
