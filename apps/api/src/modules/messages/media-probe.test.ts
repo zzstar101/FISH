@@ -171,6 +171,35 @@ function clusterElement(timecode: number, filler = 0): number[] {
   return [...vint(0x1f43b675, 4), ...vint(payload.length), ...payload]
 }
 
+/** 一个 `SimpleBlock`：TrackNumber(vint=1) + 相对时间戳(int16 BE) + flags + 1 字节数据。 */
+function simpleBlock(relativeOffset: number): number[] {
+  const payload = [
+    0x81, // TrackNumber = 1
+    (relativeOffset >> 8) & 0xff,
+    relativeOffset & 0xff,
+    0x80, // flags（keyframe）
+    0x00, // 1 字节 frame data（本例不真正解码）
+  ]
+  return [...vint(0xa3, 1), ...vint(payload.length), ...payload]
+}
+
+/**
+ * 一个 Cluster：`Timecode` + 若干 `SimpleBlock` 及其**相对**偏移。
+ *
+ * 这是评审发现的真实形状：Cluster 的 Timecode 只是该 Cluster 的**起始**时刻，
+ * 真正的时长要看最后一个块的时间戳（`timecode + max(相对偏移)`）。
+ */
+function clusterWithBlocks(timecode: number, relativeOffsets: number[]): number[] {
+  const timecodeField = [
+    ...vint(0xe7, 1),
+    ...vint(uintBEmin(timecode).length),
+    ...uintBEmin(timecode),
+  ]
+  const blocks = relativeOffsets.flatMap(simpleBlock)
+  const payload = [...timecodeField, ...blocks]
+  return [...vint(0x1f43b675, 4), ...vint(payload.length), ...payload]
+}
+
 /** 组装 Segment；`unknownSize` 模拟 MediaRecorder 流式 WebM。
  *
  * 真实文件（ffmpeg/MediaRecorder `-live`）的未知长度标记是 **8 字节 VINT 全值位**：
@@ -230,12 +259,12 @@ describe('probeVoiceDuration', () => {
     ).toEqual({ durationMs: 4800 })
   })
 
-  test('uses the last Cluster even when an earlier cluster is larger', () => {
-    // 反向保证：不是"取最大值"，而是"取最后一个"（时间码单调递增是 muxer 的保证，
-    // 但实现不能依赖它才能算对，否则坏文件会给出任意结果）。
+  test('takes the largest cluster end timecode, never under-reporting on out-of-order files', () => {
+    // 时间码单调递增是 muxer 的保证，但这是一个**安全上限**：遇到坏文件宁可高估、不可低估，
+    // 否则超长录音就能靠乱序 timecode 混过 60s 校验。所以取所有 Cluster 结束时刻的最大值。
     expect(
       probeVoiceDuration(webm([clusterElement(30_000), clusterElement(5000)], true), 'audio/webm'),
-    ).toEqual({ durationMs: 5000 })
+    ).toEqual({ durationMs: 30_000 })
   })
 
   // 回归：未知长度的 Segment（全 1 size）与 size = 0 的空元素都不能让遍历原地自旋。
@@ -248,6 +277,28 @@ describe('probeVoiceDuration', () => {
         'audio/webm',
       ),
     ).toEqual({ durationMs: 5900 })
+  })
+
+  // 回归（评审 blocker 2 的第二半）：Cluster 的 Timecode 只是起点，必须加上块的相对偏移。
+  //
+  // 真实单 Cluster 文件（ffmpeg `-cluster_time_limit 1000000`）实测：61s 只被算成 32.8s、
+  // 130s 只被算成 98.3s —— 前者正好绕过 60s 上限。只断言"最后一个 Cluster 的 Timecode"
+  // 的用例抓不到它，所以这里显式构造带块偏移的样本。
+  test('adds the block relative offset to the last cluster timecode', () => {
+    // Cluster @ 32781ms，块偏移最大 +28220 ⇒ 结束在 61001ms（> 60s，必须被拒）。
+    expect(
+      probeVoiceDuration(webm([clusterWithBlocks(32_781, [0, -100, 28_220])], true), 'audio/webm'),
+    ).toEqual({ durationMs: 61_001 })
+
+    // 反向保证：没有块偏移时退化为 Cluster Timecode（不因缺块而变 null）。
+    expect(probeVoiceDuration(webm([clusterElement(4800)], true), 'audio/webm')).toEqual({
+      durationMs: 4800,
+    })
+
+    // 负偏移（B 帧早于 Cluster Timecode）不能让结果倒退。
+    expect(
+      probeVoiceDuration(webm([clusterWithBlocks(5000, [-2000])], true), 'audio/webm'),
+    ).toEqual({ durationMs: 5000 })
   })
 
   test('parses MP4 mvhd duration', () => {

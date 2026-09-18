@@ -154,6 +154,10 @@ const EBML_ID_TIMECODE_SCALE = 0x2ad7b1
 const EBML_ID_DURATION = 0x4489
 const EBML_ID_CLUSTER = 0x1f43b675
 const EBML_ID_TIMECODE = 0xe7
+/** Cluster 里的块：`SimpleBlock` 与 `BlockGroup` 里的 `Block`。 */
+const EBML_ID_SIMPLE_BLOCK = 0xa3
+const EBML_ID_BLOCK_GROUP = 0xa0
+const EBML_ID_BLOCK = 0xa1
 
 /** 默认 1ms per unit（Matroska 规范里的 TimestampScale 默认值）。 */
 const DEFAULT_TIMECODE_SCALE = 1_000_000
@@ -246,25 +250,72 @@ function walkEbmlElements(
 }
 
 /**
- * 从 `[start, end)` 里找最后一个 Cluster 的 `Timecode`。
+ * 估算 WebM 时长：取最后一个 Cluster 里**最晚的块时间戳**。
  *
- * MediaRecorder（Chrome/Firefox）产出的 WebM 是**流式**的：Segment size 未知且不写
- * `Info.Duration`，此时唯一可用的是最后一个 Cluster 的 Timecode。
- * 因此调用方必须把**完整对象**（文件尾包含在内）交给它 —— 只喂文件头会在 >128KB 的文件上
- * 拿到中间某个 Cluster，从而显著低估时长（实测 130s → 11.9s）。
+ * 关键（评审 blocker 2 的第二半）：Cluster 的 `Timecode` 只是**该块开始**的时刻，
+ * 每个 Block 还有一个相对它的有符号 16-bit 偏移（SimpleBlock / Block 尾部的
+ * `TrackNumber(vint) + int16 BE`）。一个 Cluster 可以包含很多块（ffmpeg 的
+ * `-cluster_time_limit 1000000` 会把整段录音塞进一个 Cluster），此时只看 Cluster Timecode
+ * 会**严重低估**时长：实测 61s / 130s 的单 Cluster 文件分别只算出 32.8s / 98.3s，
+ * 其中 61s 那个能直接绕过 60s 上限。
+ *
+ * 因此取 `timecode + max(相对偏移)`。偏移为负数时忽略（时间戳不应倒退），
+ * 取不到任何 Block 时退化为 Cluster Timecode（至少不比自己更差）。
  */
-function lastClusterTimecode(bytes: Uint8Array, start: number, end: number): number | null {
-  let last: number | null = null
+function lastClusterEndTimecode(bytes: Uint8Array, start: number, end: number): number | null {
+  let lastEnd: number | null = null
+
   walkEbmlElements(bytes, start, end, (element) => {
     if (element.id !== EBML_ID_CLUSTER) return
+
+    let clusterTimecode: number | null = null
+    let maxBlockOffset = 0
+
     walkEbmlElements(bytes, element.dataStart, element.dataEnd, (child) => {
-      if (child.id !== EBML_ID_TIMECODE) return
       const size = child.dataEnd - child.dataStart
-      if (size === 0 || size > 8) return
-      last = readUnsignedIntBE(bytes, child.dataStart, size)
+      if (size === 0) return
+      if (child.id === EBML_ID_TIMECODE) {
+        clusterTimecode = readUnsignedIntBE(bytes, child.dataStart, Math.min(size, 8))
+        return
+      }
+      if (child.id === EBML_ID_SIMPLE_BLOCK) {
+        // SimpleBlock：TrackNumber(vint) + int16 BE 相对时间戳 + flags + frame data
+        const offset = readBlockRelativeOffset(bytes, child.dataStart, child.dataEnd)
+        if (offset !== null && offset > maxBlockOffset) maxBlockOffset = offset
+        return
+      }
+      if (child.id === EBML_ID_BLOCK_GROUP) {
+        // BlockGroup → Block：同样的布局。
+        walkEbmlElements(bytes, child.dataStart, child.dataEnd, (grouped) => {
+          if (grouped.id !== EBML_ID_BLOCK) return
+          const offset = readBlockRelativeOffset(bytes, grouped.dataStart, grouped.dataEnd)
+          if (offset !== null && offset > maxBlockOffset) maxBlockOffset = offset
+        })
+      }
     })
+
+    if (clusterTimecode === null) return
+    const endTimecode = clusterTimecode + maxBlockOffset
+    if (lastEnd === null || endTimecode > lastEnd) lastEnd = endTimecode
   })
-  return last
+
+  return lastEnd
+}
+
+/**
+ * 从 `SimpleBlock` / `Block` 的 Element Data 里读相对时间戳（有符号 16-bit BE）。
+ *
+ * 结构：`TrackNumber`(EBML vint) + `int16` 大端（相对 Cluster Timecode，单位 = TimecodeScale）。
+ * 读不到合法值返回 null（调用方退化为只用 Cluster Timecode）。
+ */
+function readBlockRelativeOffset(bytes: Uint8Array, start: number, end: number): number | null {
+  const trackNumberLength = ebmlVintLength(bytes[start] ?? 0)
+  if (trackNumberLength === 0) return null
+  const offsetStart = start + trackNumberLength
+  if (offsetStart + 2 > end) return null
+  // `<< 16 >> 16` 做有符号扩展（时间戳可以是负数：B 帧先于 Cluster Timecode）。
+  const raw = ((bytes[offsetStart] ?? 0) << 8) | (bytes[offsetStart + 1] ?? 0)
+  return (raw << 16) >> 16
 }
 
 /**
@@ -320,11 +371,11 @@ function webmDuration(bytes: Uint8Array): ProbedDuration | null {
 
   if (durationMs !== null) return { durationMs: Math.max(0, Math.round(durationMs)) }
 
-  // 4) 没有 Duration（MediaRecorder 流式 WebM 的常态）：用最后一个 Cluster 的 Timecode。
-  const lastTimecode = lastClusterTimecode(bytes, cursor, segmentEnd)
-  if (lastTimecode === null) return null
+  // 4) 没有 Duration（MediaRecorder 流式 WebM 的常态）：用最后一个 Cluster 的**结束**时间戳。
+  const endTimecode = lastClusterEndTimecode(bytes, cursor, segmentEnd)
+  if (endTimecode === null) return null
   return {
-    durationMs: Math.max(0, Math.round((lastTimecode * timecodeScale) / 1_000_000)),
+    durationMs: Math.max(0, Math.round((endTimecode * timecodeScale) / 1_000_000)),
   }
 }
 

@@ -121,6 +121,35 @@ function uintBE(value: number, length: number): number[] {
 }
 
 /**
+ * WebM（流式，无 `Info.Duration`）：`Cluster[Timecode, SimpleBlock...]`。
+ * 用于回归「Cluster 的 Timecode 只是起点、必须加上块的相对偏移」这一条。
+ */
+function streamingWebm(clusterTimecode: number, blockOffsets: number[]): Uint8Array {
+  const timecodeField = [
+    ...vint(0xe7, 1),
+    ...vint(
+      uintBE(clusterTimecode, clusterTimecode < 0x100 ? 1 : clusterTimecode < 0x10000 ? 2 : 3)
+        .length,
+    ),
+    ...uintBE(clusterTimecode, clusterTimecode < 0x100 ? 1 : clusterTimecode < 0x10000 ? 2 : 3),
+  ]
+  const blocks = blockOffsets.flatMap((offset) => {
+    const payload = [0x81, (offset >> 8) & 0xff, offset & 0xff, 0x80, 0x00]
+    return [...vint(0xa3, 1), ...vint(payload.length), ...payload]
+  })
+  const clusterPayload = [...timecodeField, ...blocks]
+  const cluster = [...vint(0x1f43b675, 4), ...vint(clusterPayload.length), ...clusterPayload]
+  const ebmlHeader = [0x1a, 0x45, 0xdf, 0xa3, ...vint(0)]
+  const segmentId = [0x18, 0x53, 0x80, 0x67]
+  return new Uint8Array([
+    ...ebmlHeader,
+    ...segmentId,
+    ...[0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+    ...cluster,
+  ])
+}
+
+/**
  * WebM：`Info[TimecodeScale=1ms, Duration=ticks]`，时长 = ticks ms。
  *
  * 两个字段都是 **EBML Unsigned Integer / Float**，不是 VINT：用普通大端 uint 编码
@@ -365,6 +394,29 @@ describe('media message service', () => {
     // 每页内部仍是时间正序。
     const times = first.items.map((item) => item.createdAt)
     expect(times).toEqual([...times].sort())
+  })
+
+  // 回归（评审 blocker 2 的第二半 / 真实文件复现）：单 Cluster 的流式 WebM 里，
+  // Cluster Timecode 只是起点。61s 的录音若只按 Timecode 会被算成 32.8s 而绕过 60s 上限。
+  test('rejects a >60s single-cluster WebM whose Cluster Timecode alone would look short', async () => {
+    // Cluster@32781ms + 最大块偏移 +28220ms = 61001ms > 60000ms。
+    const bytes = streamingWebm(32_781, [0, -100, 28_220])
+    const service = setup(
+      {},
+      {
+        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
+        readMediaBytes: async () => bytes,
+      },
+    )
+    await expect(
+      service.create(userId, conversationId, {
+        kind: 'VOICE',
+        objectKey: `chat-media/${conversationId}/${userId}/long.webm`,
+        contentType: 'audio/webm',
+        sizeBytes: 2048,
+        durationMs: 61_001,
+      }),
+    ).rejects.toMatchObject({ code: 'MEDIA_DURATION_EXCEEDED' })
   })
 
   test('rejects a malformed media cursor with 422', async () => {
