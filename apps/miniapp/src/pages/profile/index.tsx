@@ -6,6 +6,7 @@ import brandLogo from '@/assets/brand/logo.png'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import { loadProfile, type ProfileView } from '@/features/fetchers'
+import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { APP_VERSION, formatAmount } from '@/mock/api'
 import './index.scss'
@@ -76,20 +77,30 @@ export default function Profile() {
    * 拿到真实登录态后才打 `GET /profile`。
    *
    * 依赖 `authUser?.id` 而不是只有 `authStatus`：换账号是 `authed → authed`，
-   * 只看状态不会重拉，页面上会短暂留着上一个账号的数据。退出 / 会话失效时
-   * 顺手清空，避免同一类串号窗口。
+   * 只看状态不会重拉，页面上会短暂留着上一个账号的数据。
+   *
+   * **两处防串号，缺一不可**（独立审查的 P1：跨账号 stale write）：
+   * 1. effect 开头先 `setProfile(null)` —— 否则 `authed(A) → authed(B)` 之间，
+   *    渲染用的 `profile?.user ?? authUser` 里还挂着 A 的那份 `profile`；
+   * 2. 取数包成 `cancellable`（cleanup 里取消）—— 换账号 / 退出时，上一轮请求的响应必须丢弃。
+   *    只比对「响应的 user.id === 发请求时的 user.id」**不够**：那只证明响应属于当时的用户，
+   *    不能证明现在登录的还是同一个人 —— A 的响应在 B 登录之后回来时，上面那条同样成立，
+   *    于是 B 会短暂看到 A 的昵称、商品、愿望和统计。
    */
   useEffect(() => {
-    if (authStatus !== 'authed' || !authUser) {
-      setProfile(null)
-      return
-    }
+    setProfile(null)
+    if (authStatus !== 'authed' || !authUser) return
+
     const forUserId = authUser.id
-    void loadProfile().then((next) => {
-      // 换账号 / 退出期间回来的旧响应不能写进当前页面（否则短暂串号）
-      if (next && next.user.id !== forUserId) return
-      setProfile(next)
+    const load = cancellable(
+      () => loadProfile(),
+      (next) => next !== null && next.user.id === forUserId,
+    )
+    void load.promise.then((next) => {
+      if (next) setProfile(next)
     })
+
+    return load.cancel
   }, [authStatus, authUser])
 
   /**
