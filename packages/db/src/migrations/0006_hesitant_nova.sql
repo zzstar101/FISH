@@ -1,1 +1,0 @@
-ALTER TYPE "public"."message_type" ADD VALUE 'MEDIA';

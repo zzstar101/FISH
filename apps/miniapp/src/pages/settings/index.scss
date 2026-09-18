@@ -1,0 +1,406 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * B4 设置中心。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 分组白卡（账号 / 通用 / 隐私 / 关于）+ 展开式主题选项 + 独立危险操作卡
+ * + 退出登录的吸底二次确认。危险操作与普通项**视觉上分开**：单独一张卡 + 红字。
+ */
+
+.st {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 60px;
+}
+
+.st__bg {
+  @include page-hero(440px, 64px);
+}
+
+/* ---------------------------------------------------------------- 页头 */
+
+.st__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 168px 40px 0;
+}
+
+.st__title {
+  font-size: 54px;
+  font-weight: 600;
+  line-height: 1.33;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.st__meta {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 23px;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 分组卡 */
+
+.st__content {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  padding: 0 40px;
+}
+
+.st__grouplabel {
+  display: block;
+  padding: 32px 4px 16px;
+  font-size: 23px;
+  font-weight: 600;
+  color: var(--muted-2);
+  letter-spacing: 0.02em;
+}
+
+.st__group {
+  @include group-card;
+}
+
+/* ---- 账号卡首行（头像 + 昵称 + 认证）---- */
+
+.st__acct {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-height: 128px;
+  padding: 0 28px;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.st__av {
+  position: relative;
+  flex: 0 0 auto;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--line);
+}
+
+.st__av-tx {
+  font-size: 38px;
+  font-weight: 600;
+  color: var(--muted-2);
+}
+
+/* 认证徽章：与个人页 / 卖家卡同一个图标 */
+.st__av-bdg {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 36px;
+  height: 36px;
+}
+
+.st__acct-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.st__acct-name {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+/* ---------------------------------------------------------------- 行 */
+
+.st__row {
+  @include group-row;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.st__ric {
+  @include row-icon;
+}
+
+.st__ric-ic {
+  width: 34px;
+  height: 34px;
+}
+
+.st__rlabel {
+  flex: 1;
+  min-width: 0;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.st__rvalue {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 25px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
+/* 右箭头：CSS 画的直角折线，展开时旋转 90° */
+.st__arrow {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-left: 8px;
+  border-top: 4px solid var(--muted);
+  border-right: 4px solid var(--muted);
+  border-radius: 2px;
+  transform: rotate(45deg);
+  transition: transform 0.18s ease;
+
+  &.is-open {
+    transform: rotate(135deg);
+  }
+}
+
+/* ---- 主题模式展开区 ---- */
+
+.st__opts {
+  border-top: 2px solid var(--accent-faint);
+}
+
+.st__opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 116px;
+  padding: 0 28px;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+
+  &.is-on .st__rlabel {
+    color: var(--brand-deep);
+  }
+}
+
+.st__opt-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.st__odesc {
+  font-size: 22px;
+  color: var(--muted-2);
+}
+
+.st__radio {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 4px solid var(--border);
+  box-sizing: border-box;
+
+  &.is-on {
+    border-color: var(--brand);
+    background: var(--brand);
+    box-shadow: inset 0 0 0 7px var(--surface);
+  }
+}
+
+/* ---- 开关 ---- */
+
+.st__sw {
+  flex: 0 0 auto;
+  width: 92px;
+  height: 52px;
+  border-radius: var(--r-pill);
+  background: var(--border);
+  padding: 4px;
+  box-sizing: border-box;
+  transition: background 0.18s ease;
+
+  &.is-on {
+    background: var(--brand);
+
+    .st__sw-knob {
+      transform: translateX(40px);
+    }
+  }
+}
+
+.st__sw-knob {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(23, 35, 61, 0.2);
+  transition: transform 0.18s ease;
+}
+
+.st__note {
+  display: block;
+  padding: 20px 4px 0;
+  font-size: 22px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------- 危险操作（独立卡） */
+
+.st__danger-card {
+  margin-top: 36px;
+  border-radius: var(--r-card);
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+  overflow: hidden;
+}
+
+.st__danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 108px;
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--danger-ink);
+
+  &:active {
+    background: var(--danger-line);
+  }
+}
+
+.st__danger-ic {
+  width: 38px;
+  height: 38px;
+}
+
+.st__danger-note {
+  display: block;
+  padding: 20px 4px 0;
+  font-size: 22px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.st__version {
+  display: block;
+  padding: 40px 0 24px;
+  text-align: center;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------- 退出确认弹层 */
+
+.st__scrim {
+  @include scrim;
+}
+
+.st__sheet {
+  @include sheet;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px 40px calc(48px + env(safe-area-inset-bottom));
+}
+
+.st__sheet-ic {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+}
+
+.st__sheet-ic-img {
+  width: 56px;
+  height: 56px;
+}
+
+.st__sheet-title {
+  margin-top: 28px;
+  font-size: 38px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.st__sheet-text {
+  margin-top: 14px;
+  font-size: 25px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.st__sheet-acts {
+  display: flex;
+  gap: 20px;
+  width: 100%;
+  margin-top: 40px;
+}
+
+.st__sheet-cancel,
+.st__sheet-ok {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 96px;
+  border-radius: 48px;
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.st__sheet-cancel {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+}
+
+.st__sheet-ok {
+  background: var(--danger);
+  color: #fff;
+
+  &.is-off {
+    opacity: 0.6;
+  }
+}
+
+.st__spin {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  animation: st-spin 0.7s linear infinite;
+}
+
+@keyframes st-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

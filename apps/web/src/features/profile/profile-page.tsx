@@ -60,8 +60,7 @@ export function ProfilePage() {
           </button>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          {/* authStatus 来自 Mock 教务 Provider（见 apps/api/src/app.ts 注释），
-              只作为展示口径，不当作可信标识 —— 与 #5 的结论一致。 */}
+          {/* #68 后 VERIFIED 只能由真实校园邮箱验证产生（见 apps/api/src/app.ts 注释）。 */}
           <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">
             {me.authStatus === 'VERIFIED' ? '已实名' : '未实名'}
           </span>
@@ -81,14 +80,22 @@ export function ProfilePage() {
         <h2 className="mb-2 font-semibold text-[15px]">我的足迹</h2>
         <div className="divide-y divide-line overflow-hidden rounded-2xl bg-surface">
           <NavRow
+            description={
+              me.authStatus === 'VERIFIED' ? '已绑定校园邮箱' : '完成认证后商品带可信徽章'
+            }
             icon={0}
+            label="校园认证"
+            to="/profile/verification"
+          />
+          <NavRow
+            icon={1}
             label="我的订单"
             to="/orders"
             value={orderInProgress > 0 ? `${orderInProgress} 笔进行中` : undefined}
           />
-          <NavRow icon={1} label="我的愿望" to="/wish" value={`${wishCount} 条`} />
-          <MylistRow icon={2} label="浏览历史" type="history" />
-          <MylistRow icon={3} label="我的关注" type="follow" />
+          <NavRow icon={2} label="我的愿望" to="/wish" value={`${wishCount} 条`} />
+          <MylistRow icon={3} label="浏览历史" type="history" />
+          <MylistRow icon={4} label="我的关注" type="follow" />
         </div>
       </section>
 
@@ -199,7 +206,10 @@ function RowBody({ icon, label, description, value }: RowContent) {
 }
 
 /** 跳转到一级/二级页面的设置行。 */
-function NavRow({ to, ...content }: RowContent & { to: '/orders' | '/wish' }) {
+function NavRow({
+  to,
+  ...content
+}: RowContent & { to: '/orders' | '/wish' | '/profile/verification' }) {
   return (
     <Link className="flex items-center gap-3 px-4 py-3" to={to}>
       <RowBody {...content} />

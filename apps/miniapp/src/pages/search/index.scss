@@ -1,0 +1,325 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 搜索页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 顶栏（返回钮 + 输入框）由 `components/top-bar` 的 glass 变体提供并 fixed 吸顶、
+ * 自带等高占位块，本页只负责内容区：建议面板（搜索历史 + 热门搜索）/
+ * 结果区（筛选胶囊 + 计数 + 两列瀑布流 + 空态）。
+ */
+.search {
+  position: relative;
+  min-height: 100vh;
+  background: var(--bg);
+  /* 小程序默认 content-box；本页大量用「定宽 + 内边距」的胶囊，统一 border-box 才不会撑破 */
+  box-sizing: border-box;
+}
+
+/*
+ * 胶囊输入框：圆角 999、白底 + 极淡品牌描边。
+ *
+ * 高度 64px = 32 CSS px，与设计稿 `.search-float{height:calc(64 * var(--rpx))}` 一致，
+ * 也正好等于微信胶囊高 —— 顶栏行高按同一枚胶囊反推，所以两者天然对齐。
+ *
+ * 宽度交给顶栏的中槽（`topbar__center` 是 `flex: 1 1 auto`）：这里不再自己算
+ * `calc(100% - …)`，因为右边界还要避让原生胶囊，那是 top-bar 按机型算出来的。
+ */
+.search__field {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  padding: 0 8px 0 20px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--field-line);
+  box-shadow: var(--shadow-field);
+}
+
+.search__input {
+  flex: 1;
+  /* 小程序 Input 有 UA 默认宽度，必须 width:0 + min-width:0 才能被 flex 正确压缩，
+     否则占位符会把胶囊撑爆、整条搜索栏换行 */
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  font-size: 28px;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.search__input-ph {
+  color: var(--muted);
+}
+
+.search__clear {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--ink-weak-2);
+
+  &:active {
+    background: var(--ink-weak-3);
+  }
+}
+
+.search__clear-img {
+  width: 26px;
+  height: 26px;
+}
+
+/* 深色「搜索」按钮：高度收进 64px 的胶囊内 */
+.search__submit {
+  flex: 0 0 auto;
+  height: 52px;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+  /* 行高收紧，避免按钮把整条搜索栏顶高 */
+  line-height: 1;
+  white-space: nowrap;
+
+  &:active {
+    background: var(--ink-press);
+  }
+}
+
+/* ---- 建议面板 ---- */
+.search__panel {
+  padding: 12px 40px 16px;
+}
+
+.search__block {
+  margin-top: 36px;
+  /* 不让长文案把父级宽度顶开 */
+  min-width: 0;
+}
+
+.search__block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.search__block-title {
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+}
+
+.search__block-note {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+/* 历史清空钮：32pt 透明底，按下给浅品牌底 */
+.search__ghost {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 20px;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.search__ghost-img {
+  width: 38px;
+  height: 38px;
+}
+
+.search__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.search__chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 68px;
+  padding: 0 28px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 26px;
+
+  &:active {
+    border-color: var(--line);
+    background: var(--accent-weak);
+  }
+}
+
+.search__hist-empty {
+  font-size: 25px;
+  color: var(--muted);
+}
+
+/* ---- 热门搜索：两列 8 项 ---- */
+.search__hot {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.search__hot-i {
+  box-sizing: border-box;
+  width: 50%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 0;
+  border-radius: 24px;
+
+  &:nth-child(odd) {
+    padding-right: 24px;
+  }
+
+  &:nth-child(even) {
+    padding-left: 24px;
+  }
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.search__rank {
+  flex: 0 0 auto;
+  width: 26px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--muted);
+
+  /* 序号 1 用品牌色 */
+  &.is-top {
+    color: var(--brand);
+  }
+}
+
+.search__hot-t {
+  /* flex:1 1 0 + min-width:0：让词条占满剩余宽度并在必要时省略，而不是被挤成 0 宽。
+     字号 24（设计 13.5pt × 2 再收一点）：两列布局里词条可用宽度很窄，
+     27 时连一个字都撑不开，只能整条省略。 */
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 24px;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.search__hot-c {
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 18px;
+  line-height: 1.1;
+  color: var(--muted);
+}
+
+/* ---- 结果区 ---- */
+.search__results {
+  padding: 8px 40px 24px;
+}
+
+.search__filters {
+  display: flex;
+  gap: 16px;
+  padding: 8px 0 4px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.search__fchip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 68px;
+  padding: 0 30px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 26px;
+
+  /* 选中态：品牌渐变底白字 */
+  &.is-on {
+    background: var(--grad-brand);
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+  }
+}
+
+.search__sort {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.search__sort-img {
+  width: 20px;
+  height: 20px;
+}
+
+.search__meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 24px 0 28px;
+  font-size: 22px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.search__meta-num {
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* 搜索结果的瀑布流：与首页同一套 .waterfall / .waterfall__col */
+.waterfall {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.waterfall__col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}

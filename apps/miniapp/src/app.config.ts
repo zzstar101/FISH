@@ -1,26 +1,62 @@
 export default defineAppConfig({
+  /**
+   * 路由表。**分批合入**：本 PR 只包含骨架与 5 个 Tab 页，
+   * 其余页面在后续 PR 里逐批追加（见各个拆分 PR 的描述）。
+   * 顺序有讲究：第一个是冷启动首页；tabBar.list 里的 pagePath 必须在这里出现。
+   */
   pages: [
     'pages/home/index',
     'pages/wish/index',
     'pages/sell/index',
     'pages/chat/index',
     'pages/profile/index',
+    'pages/orders/index',
+    'pages/transaction-meetup/index',
+    'pages/login/index',
+    'pages/register/index',
+    'pages/verify/index',
+    'pages/settings/index',
+    'pages/category/index',
+    'pages/user/index',
+    'pages/match/index',
+    'pages/mylist/index',
+    'pages/watchers/index',
+    'pages/scan/index',
+    'pages/conversation/index',
+    'pages/search/index',
+    'pages/listing-detail/index',
+    'pages/notifications/index',
   ],
   window: {
     backgroundTextStyle: 'light',
-    navigationBarBackgroundColor: '#ffffff',
-    navigationBarTitleText: 'FISH',
+    navigationStyle: 'custom',
+    backgroundColor: '#F7FAFF',
+    navigationBarBackgroundColor: '#F7FAFF',
+    navigationBarTitleText: '鱼小应',
     navigationBarTextStyle: 'black',
   },
   tabBar: {
-    color: '#8a8a8e',
-    selectedColor: '#3b6ea5',
-    backgroundColor: '#ffffff',
-    borderStyle: 'black',
+    /**
+     * **自定义 TabBar**：`custom: true` 让微信不再渲染原生底栏，改由
+     * `src/custom-tab-bar/` 这个**固定目录名**里的组件接管（Taro 4 约定，
+     * 见 @tarojs/webpack5-runner 的 MiniPlugin.js「自定义 tabBar」）。
+     *
+     * 为什么这么做：设计稿的底栏是「居中悬浮玻璃胶囊 + 中间凸起发布钮」，
+     * 原生 TabBar 只能整条贴底、不支持圆角悬浮与凸起。自定义之后
+     * `Taro.hideTabBar()` 那套 workaround 也不需要了。
+     *
+     * `list` 仍然必须保留：它是 `Taro.switchTab` 的合法路由表，也是自定义
+     * TabBar 里 `selected` 索引的依据。`text`/图标不再由系统渲染。
+     */
+    custom: true,
+    color: '#71809C',
+    selectedColor: '#4285FF',
+    backgroundColor: '#FFFFFF',
+    borderStyle: 'white',
     list: [
       { pagePath: 'pages/home/index', text: '首页' },
       { pagePath: 'pages/wish/index', text: '许愿' },
-      { pagePath: 'pages/sell/index', text: '卖闲置' },
+      { pagePath: 'pages/sell/index', text: '出物' },
       { pagePath: 'pages/chat/index', text: '消息' },
       { pagePath: 'pages/profile/index', text: '我的' },
     ],

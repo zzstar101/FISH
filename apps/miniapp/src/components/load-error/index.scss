@@ -1,0 +1,48 @@
+/**
+ * 加载失败态（见 `index.tsx`）。
+ *
+ * 与 `auth-required` 同一套视觉语言：安静的居中一屏，不抢眼、不假装是空内容。
+ * 位置通常在列表容器内，所以用 `min-height` 而不是 `100vh`，避免把页面撑得过长。
+ */
+.loaderr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 360px;
+  padding: 60px 60px 40px;
+}
+
+.loaderr-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.loaderr-text {
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-align: center;
+}
+
+.loaderr-btn {
+  margin-top: 12px;
+  min-width: 200px;
+  height: 72px;
+  padding: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 36px;
+  border: 2px solid var(--accent-faint);
+  background: var(--accent-weak);
+  color: var(--brand);
+  font-size: 26px;
+  font-weight: 600;
+
+  &:active {
+    opacity: 0.8;
+  }
+}

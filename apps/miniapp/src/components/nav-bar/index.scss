@@ -1,0 +1,58 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 漂浮导航栏：只有返回钮/动作钮是实体，其余区域透明可穿透（pointer-events: none）。
+ * 设计稿：36pt 圆形，白 82% 玻璃底 + 1px 白描边 + 极轻投影。
+ */
+.navfloat {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 32px 0;
+  pointer-events: none;
+}
+
+.navfloat__spacer {
+  width: 72px;
+  height: 72px;
+}
+
+.navfloat__actions {
+  display: flex;
+  gap: 16px;
+  pointer-events: auto;
+}
+
+.navfloat__btn {
+  pointer-events: auto;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.82);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 16px -8px rgba(65, 70, 78, 0.4);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+
+  &:active {
+    transform: scale(0.94);
+    background: #fff;
+  }
+}
+
+.navfloat__chevron {
+  width: 22px;
+  height: 22px;
+  border-left: 4px solid var(--fg);
+  border-bottom: 4px solid var(--fg);
+  border-radius: 2px;
+  transform: translateX(4px) rotate(45deg);
+}

@@ -16,6 +16,7 @@ import {
 } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
+import { createModerationService, type ModerationService } from '../moderation/service'
 import type { MediaStorage } from '../uploads/storage'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
@@ -26,6 +27,7 @@ import type {
   ListingRow,
   ListingState,
   ListingStore,
+  ListingUpdateResult,
 } from './store'
 import { LOCKED_LISTING_STATUSES } from './store'
 
@@ -94,10 +96,12 @@ function isFreePriceConstraintViolation(error: unknown): boolean {
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
+  moderation?: ModerationService
   /** 可注入时钟：去重窗口的边界断言不需要 sleep。 */
   now?: () => Date
 }): ListingService {
   const { store, storage } = deps
+  const moderation = deps.moderation ?? createModerationService()
   const now = deps.now ?? (() => new Date())
 
   function notFound(): ListingServiceError {
@@ -114,12 +118,14 @@ export function createListingService(deps: {
     nickname: string
     avatarUrl: string | null
     campus: string | null
+    authStatus: 'UNVERIFIED' | 'VERIFIED'
   }): ListingSeller {
     return {
       id: row.id,
       nickname: row.nickname,
       avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
       campus: CampusSchema.safeParse(row.campus).data ?? null,
+      authStatus: row.authStatus,
     }
   }
 
@@ -130,7 +136,13 @@ export function createListingService(deps: {
 
   function toDetail(input: {
     listing: ListingRow
-    seller: { id: string; nickname: string; avatarUrl: string | null; campus: string | null }
+    seller: {
+      id: string
+      nickname: string
+      avatarUrl: string | null
+      campus: string | null
+      authStatus: 'UNVERIFIED' | 'VERIFIED'
+    }
     images: ListingImageRow[]
     viewerId: string | null
   }): ListingDetail {
@@ -177,7 +189,11 @@ export function createListingService(deps: {
     const found = await store.findDetail(id)
     if (!found) throw notFound()
     // OFFLINE 对非卖家 404（不是 403）：403 等于确认"这个 id 存在且是别人的商品"。
-    if (found.listing.status === OFFLINE && found.listing.sellerId !== viewerId) throw notFound()
+    if (
+      (found.listing.status === OFFLINE || found.listing.moderationStatus !== 'APPROVED') &&
+      found.listing.sellerId !== viewerId
+    )
+      throw notFound()
 
     return toDetail({
       listing: found.listing,
@@ -229,20 +245,37 @@ export function createListingService(deps: {
       if (query.sellerId !== undefined && query.sellerId !== viewerId) {
         throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能查看自己指定状态的商品')
       }
+      // 防御纵深（评审 D3）：`status` 必须与 `sellerId` 同时出现。
+      // 契约里这条只由 schema 的 refine 守着，而 router 之外（内部调用 / 将来重构）绕进本函数
+      // 就能拿到全站 OFFLINE / RESERVED / SOLD 列表。这里与 schema 保持**同一个错误码**
+      // （422 VALIDATION_FAILED），免得同一非法输入在两个层给出不同结论。
+      if (query.status !== undefined && query.sellerId === undefined) {
+        throw new ListingServiceError(422, 'VALIDATION_FAILED', 'status 必须与 sellerId 一起使用', [
+          { field: 'status', message: 'status 必须与 sellerId 一起使用' },
+        ])
+      }
 
       const cursor = decodeFeedCursor(query.cursor, query.sort)
-      const status = query.status ?? ACTIVE
+      // 卖家查自己且未指定 status ⇒ 不按状态过滤（「我发布的」要包含 OFFLINE / RESERVED / SOLD）。
+      // 公开 Feed 仍固定 ACTIVE（不传 status 时缺省）——不这样做就不能既满足
+      // 「我发布的含 REVIEW」又不把全站 OFFLINE 商品泄露出去。
+      const ownSellerQuery = query.sellerId !== undefined && query.sellerId === viewerId
+      const status = query.status ?? (ownSellerQuery ? undefined : ACTIVE)
 
       const rows = await store.listFeed({
         limit: query.limit,
         cursor,
         sort: query.sort,
-        status,
+        // `exactOptionalPropertyTypes`：字段声明为可选，不能显式传 undefined。
+        ...(status ? { status } : {}),
         search: query.q,
         category: query.category,
         priceMinCents: query.priceMinCents,
         priceMaxCents: query.priceMaxCents,
         sellerId: query.sellerId,
+        // 本人查询自己的商品时包含未通过审核的（REVIEW / BLOCKED），在前端展示"审核中"等状态；
+        // 公开 Feed、匹配、他人详情继续严格过滤。此处 authorize 已达：query.sellerId !== viewerId 抛 403。
+        includeUnapproved: ownSellerQuery,
       })
 
       const hasMore = rows.length > query.limit
@@ -269,6 +302,21 @@ export function createListingService(deps: {
     },
 
     async createListing(userId, input) {
+      const moderationResult = moderation.moderate({
+        title: input.title,
+        description: input.description,
+      })
+      if (moderationResult.decision === 'BLOCK') {
+        await recordModeration(store, {
+          sellerId: userId,
+          action: 'CREATE',
+          title: input.title,
+          description: input.description,
+          result: moderationResult,
+        })
+        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
+      }
+
       await assertUsableObjectKeys(userId, input.objectKeys)
 
       const listingId = newId()
@@ -285,6 +333,15 @@ export function createListingService(deps: {
         free: input.free,
         objectKeys: input.objectKeys,
         duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
+        moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+        moderationReason: moderationResult.reasonCode,
+        moderationRuleVersion: moderationResult.ruleVersion,
+        moderation: {
+          decision: moderationResult.decision,
+          matchedRules: moderationResult.matches.map((match) => match.ruleCode),
+          matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
+          ruleVersion: moderationResult.ruleVersion,
+        },
       })
 
       // 命中 5 秒内容窗口：返回已有商品（200 而不是 201），并**重新投递**匹配 job ——
@@ -298,36 +355,68 @@ export function createListingService(deps: {
     },
 
     async updateListing(userId, id, input) {
-      const state = await requireOwnEditable(userId, id, store)
-
-      // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
-      // 只给 priceCents 时也要看库里当前的 free。
-      const finalFree = input.free ?? state.free
-      const finalPrice = input.priceCents ?? state.priceCents
-      if (finalFree && finalPrice !== 0) {
-        throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
-          { field: 'priceCents', message: '0 元送时价格必须为 0' },
-        ])
-      }
-
       if (input.objectKeys) await assertUsableObjectKeys(userId, input.objectKeys)
 
-      // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
-      // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
-      const { objectKeys, ...fields } = input
-
-      let updated: ListingRow | null
+      // "读当前行 → 合并最终内容 → 审核 → UPDATE + moderation record" 全部在同一个事务内，
+      // 且当前行由 `SELECT ... FOR UPDATE` 锁住（store.updateListingAtomic）。把审核放在事务外
+      // 会留下并发窗口：两个 PATCH 各自基于旧快照算结论，后提交的把 moderation_status 写回
+      // APPROVED，最终出现"待审内容 + APPROVED"。
+      let result: ListingUpdateResult
       try {
-        updated = await store.updateListing({
+        result = await store.updateListingAtomic({
           id,
           sellerId: userId,
-          fields,
-          ...(objectKeys ? { objectKeys } : {}),
+          ...(input.objectKeys ? { objectKeys: input.objectKeys } : {}),
+          apply: (_input, current) => {
+            // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
+            // 只给 priceCents 时也要看库里当前的 free。
+            const finalFree = input.free ?? current.free
+            const finalPrice = input.priceCents ?? current.priceCents
+            if (finalFree && finalPrice !== 0) {
+              throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
+                { field: 'priceCents', message: '0 元送时价格必须为 0' },
+              ])
+            }
+
+            const finalTitle = input.title ?? current.title
+            const finalDescription = input.description ?? current.description
+            const moderationResult = moderation.moderate({
+              title: finalTitle,
+              description: finalDescription,
+            })
+            // 阻断：只写审计（由 store 在**同一锁内事务**完成），不写商品。
+            const moderationPlan = {
+              title: finalTitle,
+              description: finalDescription,
+              decision: moderationResult.decision,
+              matchedRules: moderationResult.matches.map((match) => match.ruleCode),
+              matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
+              ruleVersion: moderationResult.ruleVersion,
+            }
+            if (moderationResult.decision === 'BLOCK') {
+              return { kind: 'blocked' as const, moderation: moderationPlan }
+            }
+
+            // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
+            // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
+            const { objectKeys: _objectKeys, ...fields } = input
+            return {
+              kind: 'write' as const,
+              fields: {
+                ...fields,
+                moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+                moderationReason: moderationResult.reasonCode,
+                moderationRuleVersion: moderationResult.ruleVersion,
+                moderatedAt: new Date(),
+                ...(moderationResult.decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
+              },
+              moderation: moderationPlan,
+            }
+          },
         })
       } catch (error) {
-        // 合并校验读的是"写入前"的状态，同一卖家的两个并发 PATCH 可能各自通过校验，
-        // 最终撞上 DB 的 listings_free_price_cents_zero。契约把这种最终状态定为
-        // 422 VALIDATION_FAILED（§7.1），不是 500。
+        // 最终状态仍由 DB 的 `listings_free_price_cents_zero` 兜底（契约 §7.1）：锁内校验已经
+        // 排除了并发 PATCH 竞态，但如果将来出现绕过 service 的写入方，仍然要报 422 而不是 500。
         if (isFreePriceConstraintViolation(error)) {
           throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
             { field: 'priceCents', message: '0 元送时价格必须为 0' },
@@ -336,19 +425,24 @@ export function createListingService(deps: {
         throw error
       }
 
-      // UPDATE 带 status 谓词，所以"没改到行"有两种可能：并发下商品已被删/易主（404），
-      // 或在这两步之间被 #11 变成了 RESERVED / SOLD（409）。再读一次状态以区分。
-      if (!updated) {
-        const latest = await store.findState(id)
-        if (latest && LOCKED_LISTING_STATUSES.includes(latest.status)) {
-          throw new ListingServiceError(
-            409,
-            'LISTING_NOT_EDITABLE',
-            '商品处于交易中或已售出，无法修改',
-          )
-        }
-        throw notFound()
+      if (result.kind === 'rejected') {
+        // 审计记录已由 store 在**同一锁内事务**里写好（见 `ListingUpdatePlan`）：
+        // 不要在这里再写一遍，也不要无锁重读去猜当时的内容。
+        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
       }
+
+      // `'locked'` / `'not-owner'` / `'not-found'` 都来自锁内读到的行，不再是 check-then-act 的第二次读。
+      if (result.kind === 'locked') {
+        throw new ListingServiceError(
+          409,
+          'LISTING_NOT_EDITABLE',
+          '商品处于交易中或已售出，无法修改',
+        )
+      }
+      if (result.kind === 'not-owner') {
+        throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
+      }
+      if (result.kind === 'not-found') throw notFound()
 
       return loadDetail(userId, id)
     },
@@ -370,6 +464,30 @@ export function createListingService(deps: {
       return loadDetail(userId, id)
     },
   }
+}
+
+async function recordModeration(
+  store: ListingStore,
+  input: {
+    listingId?: string
+    sellerId: string
+    action: 'CREATE' | 'UPDATE'
+    title: string
+    description: string
+    result: import('../moderation/types').ModerationResult
+  },
+): Promise<void> {
+  await store.recordModeration?.({
+    listingId: input.listingId,
+    sellerId: input.sellerId,
+    action: input.action,
+    title: input.title,
+    description: input.description,
+    decision: input.result.decision,
+    matchedRules: input.result.matches.map((match) => match.ruleCode),
+    matchedTermsMasked: input.result.matches.map((match) => match.maskedTerm),
+    ruleVersion: input.result.ruleVersion,
+  })
 }
 
 function isAllowedMime(contentType: string): boolean {

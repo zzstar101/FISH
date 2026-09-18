@@ -96,7 +96,12 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
     async findListing(id) {
       const row = (
         await db
-          .select({ id: listings.id, ownerId: listings.sellerId, status: listings.status })
+          .select({
+            id: listings.id,
+            ownerId: listings.sellerId,
+            status: listings.status,
+            moderationStatus: listings.moderationStatus,
+          })
           .from(listings)
           .where(eq(listings.id, id))
           .limit(1)
@@ -116,6 +121,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
             ne(listings.status, 'OFFLINE'),
+            eq(listings.moderationStatus, 'APPROVED'),
             priceWithinBudget,
           ),
         )
@@ -151,6 +157,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
             ne(listings.status, 'OFFLINE'),
+            eq(listings.moderationStatus, 'APPROVED'),
             priceWithinBudget,
           ),
         )
@@ -172,6 +179,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             eq(matches.listingId, listingId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
+            eq(listings.moderationStatus, 'APPROVED'),
             priceWithinBudget,
           ),
         )
@@ -200,6 +208,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
             eq(matches.listingId, listingId),
             gte(matches.score, MATCH_SCORE_THRESHOLD),
             eq(wishes.status, 'ACTIVE'),
+            eq(listings.moderationStatus, 'APPROVED'),
             priceWithinBudget,
           ),
         )

@@ -451,7 +451,12 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const port = await freePort()
     const base = `http://127.0.0.1:${port}`
     // `WEB_ORIGIN` 不覆盖：用 `.env` 里的文档值（它决定 CORS 与 cookie 的 Secure 属性）。
-    api = spawnChild('apps/api/src/index.ts', { ...dbEnv, API_PORT: String(port) })
+    // MAIL_TRANSPORT：smoke 是本地环境，走 dev outbox（#68 的显式 transport 配置）。
+    api = spawnChild('apps/api/src/index.ts', {
+      ...dbEnv,
+      API_PORT: String(port),
+      MAIL_TRANSPORT: 'outbox',
+    })
     await waitFor('API /health → 200', async () => {
       try {
         return (await fetch(`${base}/health`)).status === 200

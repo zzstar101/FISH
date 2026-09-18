@@ -3,3 +3,9 @@
 .swc/
 .rn_temp/
 deploy_versions/
+
+# 浏览器预览产物（preview/build.mjs 生成：打包后的 JS/CSS + 图片副本），不入库
+preview/dist/
+
+# 本机开发者工具偏好（appid / 热重载），不入库
+project.private.config.json

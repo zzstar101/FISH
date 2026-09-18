@@ -1,0 +1,1 @@
+ALTER TABLE "campus_email_verifications" ADD COLUMN "delivery" text DEFAULT 'PENDING' NOT NULL;

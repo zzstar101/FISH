@@ -247,6 +247,20 @@ S3_PUBLIC_URL=https://s3.fish.example.com/fish
 `S3_*` 即使 worker 用不到也必须存在；其中 8 项无默认值，`API_PORT` 有默认），
 缺一项进程直接启动失败——这是刻意的 fail-fast。
 
+校园认证邮件配置仅由 API 加载。生产另建 `/etc/fish/api-mail.env`（`root:root`、
+`chmod 600`，由 systemd 读取），不要把 Resend 密钥写入 API/worker 共用的 `.env`：
+
+```bash
+MAIL_TRANSPORT=resend
+RESEND_API_KEY=REPLACE_ME_RESEND_API_KEY
+RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
+```
+
+先在 Resend 验证发件域名（含 SPF/DKIM），再替换以上占位值。`MAIL_TRANSPORT` 必填，
+选择 `resend` 但缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择 transport。
+`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
+移除其中的 `MAIL_TRANSPORT=outbox`，避免与 API 专属配置并存。
+
 ## 5. systemd 托管
 
 ### 5.1 API
@@ -264,9 +278,8 @@ Type=simple
 User=fish
 Group=fish
 WorkingDirectory=/srv/fish/apps/api
-# 等价于 apps/api/package.json 的 `start` 脚本，只是把相对路径换成绝对路径，
-# 避免「cwd 变了就加载不到 .env」。unit 里不要再写同名 Environment=，
-# 让 .env 成为唯一来源，省得纠结两者优先级。
+# 通用配置来自 .env；邮件配置仅注入 API，不传给 worker。
+EnvironmentFile=/etc/fish/api-mail.env
 ExecStart=/usr/local/bin/bun --env-file=/srv/fish/.env /srv/fish/apps/api/src/index.ts
 Restart=always
 RestartSec=5
@@ -617,7 +630,7 @@ mc mirror --overwrite --remove local/fish "${MINIO_BACKUP_TARGET:?请在 backup.
 # 配置与变量：systemd 单元、MinIO 策略、证书存储都要进，否则换机器恢复时要重新推导，
 # 重新签发证书还可能撞上 CA 的速率限制。证书目录不存在时会报警告（--ignore-failed-read）
 tar czf "$TMP/config-$STAMP.tar.gz" --ignore-failed-read \
-  /srv/fish/.env /etc/fish/backup.env /etc/default/minio /etc/minio-app-policy.json \
+  /srv/fish/.env /etc/fish/api-mail.env /etc/fish/backup.env /etc/default/minio /etc/minio-app-policy.json \
   /etc/caddy/Caddyfile /var/lib/caddy/.local/share/caddy \
   /etc/systemd/system/fish-api.service /etc/systemd/system/fish-worker.service \
   /etc/systemd/system/minio.service

@@ -12,6 +12,7 @@ import { ChevronDown, ChevronLeft, Clock, Heart, MapPin, MessageCircle, Share2 }
 import { useState } from 'react'
 import { formatRelativeTime, formatRelativeTimeAt, formatYuan } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
+import { VerifiedText } from '../auth/auth-badge'
 import { ListingList } from '../home/listing-card'
 import { useIsFollowing, useToggleFollow } from '../profile/queries'
 import {
@@ -176,6 +177,8 @@ export function DetailPage({ listingId }: { listingId: string }) {
           <div className="min-w-0 flex-1">
             <p className="flex items-center gap-2">
               <span className="truncate font-semibold text-[15px]">{item.seller.nickname}</span>
+              {/* #68：公开卖家认证徽章（详情页 seller 含 authStatus） */}
+              {item.seller.authStatus === 'VERIFIED' ? <VerifiedText /> : null}
             </p>
             {item.seller.campus ? (
               <p className="mt-0.5 truncate text-ink-3 text-xs">{item.seller.campus}</p>

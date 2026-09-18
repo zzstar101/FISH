@@ -168,8 +168,9 @@ describe('ListingFeedQuerySchema', () => {
 })
 
 describe('ListingSellerSchema', () => {
-  test('exposes exactly id / nickname / avatarUrl / campus', () => {
+  test('exposes exactly id / nickname / avatarUrl / campus / authStatus', () => {
     expect(Object.keys(ListingSellerSchema.shape).sort()).toEqual([
+      'authStatus',
       'avatarUrl',
       'campus',
       'id',
@@ -177,7 +178,7 @@ describe('ListingSellerSchema', () => {
     ])
   })
 
-  test('strips authStatus so the untrusted mock verification cannot leak into listings', () => {
+  test('carries authStatus but strips verifiedAt / campusEmail / studentNo（#68：公开徽章成立，敏感字段仍不外泄）', () => {
     const parsed = ListingSellerSchema.parse({
       id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
       nickname: '阿岚',
@@ -185,8 +186,13 @@ describe('ListingSellerSchema', () => {
       campus: '肇庆',
       authStatus: 'VERIFIED',
       verifiedAt: '2026-09-12T03:40:10.000Z',
+      campusEmail: 'someone@gzasc.edu.cn',
+      studentNo: '202101000001',
     })
-    expect('authStatus' in parsed).toBe(false)
+    expect(parsed.authStatus).toBe('VERIFIED')
+    expect('verifiedAt' in parsed).toBe(false)
+    expect('campusEmail' in parsed).toBe(false)
+    expect('studentNo' in parsed).toBe(false)
   })
 })
 
@@ -212,6 +218,7 @@ describe('ListingDetailSchema', () => {
       nickname: '阿岚',
       avatarUrl: null,
       campus: '肇庆',
+      authStatus: 'VERIFIED',
     },
     isOwner: false,
   }
