@@ -131,15 +131,25 @@ src/
 
 非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`、`pages/notifications/index`。
 
-## 9. 自定义 TabBar 的两个硬约束（改之前先读）
+## 9. 自定义 TabBar 的三个硬约束（改之前先读）
 
 1. **目录名必须是 `src/custom-tab-bar/`**。这是小程序的固定约定，Taro 4 会按它编译
    （`@tarojs/webpack5-runner` 的 `MiniPlugin.js`「自定义 tabBar」）。产物是
    `dist/custom-tab-bar/{index.js,json,wxml,wxss}`，且必须用 `Component()` 注册
    （Taro 会自动这么做）——写成页面会编译通过但运行时白屏。
 2. **不要在任何页面里再手写 TabBar**。自定义 TabBar 由框架渲染成真正的固定浮层，
-   页面里再挂一个就是两套底栏叠加。页面对应的底部留白是 `padding-bottom: 176px`
-   （悬浮胶囊高度 + 安全区 ≈ 88pt）。
+   页面里再挂一个就是两套底栏叠加。仍显示底栏的 4 个 Tab 页底部留白是
+   `padding-bottom: 136px`（= 底栏顶边距屏底 32 + 101 = 133rpx，取整）。底栏自身**不含**安全区：
+   设计稿的 22pt 是从屏幕物理底边量起的（稿内自绘了 home indicator），再叠 `env()` 等于算两遍
+   （见 `custom-tab-bar/index.scss` 文件头）。
+   底栏的高度与距底比 1改 稿收紧过（稿：图标行 42pt / 凸起钮 34pt / 距底 22pt；
+   现值：28 / 28 / 16pt，整条栏 101rpx ≈ 50pt，与原生栏一致），
+   **改这几个值必须同步改这 4 处 `padding-bottom`**。
+   **出物页不渲染底栏**（设计稿该页 `.tabbar` 索引 = -1），该页留白只让出安全区。
+3. **令牌要在组件内自己声明**。令牌靠 CSS 自定义属性继承下发，而自定义 TabBar 由框架
+   挂在 `<page>` 之外，`page` 上的变量继承不到它 —— 组件根节点必须 `@include vars`
+   （`@use '@/styles/token-vars'`）。不这么做的话 `var(--r-pill)`（圆角）、
+   `var(--grad-brand)`（凸起钮渐变）、`var(--brand)` / `var(--muted)`（文字色）会**静默失效**。
 
 > 历史坑：早期方案是「保留原生栏 + 页面里 `Taro.hideTabBar()` + 页面内 `position: sticky` 的胶囊」。
 > 那个方案有两个问题：`hideTabBar()` 对首个 Tab 页不稳定；sticky 会被页面根节点的

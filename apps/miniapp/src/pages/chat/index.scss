@@ -12,8 +12,8 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  /* 底部留白：避免内容被悬浮 TabBar（+ 原生 TabBar）盖住 */
-  padding-bottom: 176px;
+  /* 底部留白：让出悬浮 TabBar 的顶边（32 + 101 = 133rpx，取 136），见 DESIGN.md 第 9 节 */
+  padding-bottom: 136px;
 }
 
 /* 顶部冰蓝渐变圆角背景（设计稿 .topbg：高 248pt、底部圆角 32pt） */
