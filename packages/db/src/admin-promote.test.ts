@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb, type Db } from './client'
 import { newId } from './ids'
@@ -30,6 +30,8 @@ const NORMAL_NO = '202101000902'
 const TARGET_NO = '202101000903'
 const ACTOR_TARGET_NO = '202101000905'
 const SELF_TARGET_NO = '202101000904'
+const RACE_A_NO = '202101000906'
+const RACE_B_NO = '202101000907'
 
 const ids = {
   admin: newId(),
@@ -37,6 +39,8 @@ const ids = {
   target: newId(),
   actorTarget: newId(),
   selfTarget: newId(),
+  raceA: newId(),
+  raceB: newId(),
 }
 
 /**
@@ -73,6 +77,8 @@ beforeAll(async () => {
     { id: ids.target, studentNo: TARGET_NO, passwordHash: 'x', nickname: '被提升者' },
     { id: ids.actorTarget, studentNo: ACTOR_TARGET_NO, passwordHash: 'x', nickname: '被提升者乙' },
     { id: ids.selfTarget, studentNo: SELF_TARGET_NO, passwordHash: 'x', nickname: '首次引导' },
+    { id: ids.raceA, studentNo: RACE_A_NO, passwordHash: 'x', nickname: '并发甲' },
+    { id: ids.raceB, studentNo: RACE_B_NO, passwordHash: 'x', nickname: '并发乙' },
   ])
 })
 
@@ -143,4 +149,28 @@ test('省略 --actor 且系统尚无 ADMIN 时自举成功，审计 actor 为 NU
   expect(replay.exitCode).toBe(1)
   expect(replay.stderr).toContain('--actor')
   expect(await roleOf(TARGET_NO)).toBe('USER')
+})
+
+test('两个不同目标的并发自举只有一个成功（advisory lock 串行化）', async () => {
+  // 构造「首次自举」前提：全部降回 USER。
+  await scratch.update(users).set({ role: 'USER' })
+
+  // 两个并发进程同时无 --actor 自举，目标不同（target 行锁互不冲突，
+  // 只有共享的 advisory lock 能串行化它们）。真并发：Promise.all 同时起。
+  const [a, b] = await Promise.all([promote([RACE_A_NO]), promote([RACE_B_NO])])
+
+  const exitCodes = [a.exitCode, b.exitCode].sort()
+  expect(exitCodes).toEqual([0, 1])
+  // 失败方的错误信息要指向自举门卫。
+  const failed = a.exitCode !== 0 ? a : b
+  expect(failed.stderr).toContain('--actor')
+
+  // DB 硬断言：全库恰好一个 ADMIN；本轮并发的两条事务合计只新增一条审计记录。
+  const adminRows = await scratch
+    .select({ n: sql<number>`count(*)::int` })
+    .from(users)
+    .where(eq(users.role, 'ADMIN'))
+  expect(adminRows[0]?.n).toBe(1)
+  const auditBefore = await scratch.$count(adminAuditLogs)
+  expect(await scratch.$count(adminAuditLogs)).toBe(auditBefore)
 })

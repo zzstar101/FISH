@@ -33,6 +33,9 @@ import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
 import { users } from './schema/users'
 
+/** 事务内可预期的拒绝（并发失败、门卫拦截）：统一走 stderr + exit 1，不当未捕获异常打印。 */
+class PromoteError extends Error {}
+
 function usage(code: number): never {
   console.error(
     [
@@ -129,44 +132,63 @@ if (actor) {
   process.exit(1)
 }
 
-await db.transaction(async (tx) => {
-  // 行锁串行化并发的自举 / 提升事务：两个并发 db:promote 在这里排队，后到的
-  // 会在事务内重新计数（见下）或被条件 UPDATE 挡住，不会写出两条 ADMIN_PROMOTED。
-  await tx.execute(sql`select id from users where id = ${targetUser.id} for update`)
+try {
+  await db.transaction(async (tx) => {
+    // 首次自举的并发串行化（评审二轮 blocker）：target 行锁只能串行化「同一目标」的
+    // 并发，两个不同目标的并发自举互不冲突，都会在 READ COMMITTED 下看到 count=0、
+    // 各自成功提交 —— 变成两个首号 ADMIN。自举路径改用**事务级 advisory lock**
+    //（全系统共享的固定 key）把所有 bootstrap 事务全局串行化，锁内重查 count 后
+    // 才允许继续；一旦已有 ADMIN，后来者在锁内直接被拒绝。
+    if (actorId === null) {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('fish:admin:bootstrap'))`)
+    }
 
-  // 锁内重查 ADMIN 数量，封死并发窗口（两个并发自举都看到 count=0 的情况）。
-  const lockedAdminCount = await tx
-    .select({ n: sql<number>`count(*)::int` })
-    .from(users)
-    .where(ne(users.role, 'USER'))
-  const bootstrap = actorId === null && (lockedAdminCount[0]?.n ?? 0) === 0
-  if (actorId === null && !bootstrap) {
-    throw new Error('系统已存在 ADMIN，拒绝无 actor 提升')
-  }
+    // 行锁串行化同一目标的并发提升；配合下面的条件 UPDATE 防重复 ADMIN_PROMOTED。
+    await tx.execute(sql`select id from users where id = ${targetUser.id} for update`)
 
-  // 条件更新：只有仍然是 USER 才提升；并发下另一个事务先提升成功时这里影响 0 行。
-  const updated = await tx
-    .update(users)
-    .set({ role: 'ADMIN' })
-    .where(and(eq(users.id, targetUser.id), eq(users.role, 'USER')))
-    .returning({ id: users.id })
-  if (updated.length === 0) {
-    throw new Error('目标用户已被并发提升为 ADMIN')
-  }
+    // 锁内重查 ADMIN 数量，封死并发窗口（两个并发自举都看到 count=0 的情况）。
+    const lockedAdminCount = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(users)
+      .where(ne(users.role, 'USER'))
+    const bootstrap = actorId === null && (lockedAdminCount[0]?.n ?? 0) === 0
+    if (actorId === null && !bootstrap) {
+      throw new PromoteError(
+        '系统已存在 ADMIN，拒绝无 actor 提升（首次引导自举仅在系统尚无 ADMIN 时可用）；请传 --actor <现有 Admin 学号>',
+      )
+    }
 
-  await tx.insert(adminAuditLogs).values({
-    id: newId(),
-    // 首次自举没有真实操作者，记 NULL（system bootstrap）；不伪装成被提升者本人。
-    actorUserId: actorId,
-    action: 'ADMIN_PROMOTED',
-    targetType: 'USER',
-    targetId: targetUser.id,
-    // 只写脱敏快照（role），不写任何敏感字段（设计 §8）。
-    before: jsonParam({ role: targetUser.role }),
-    after: jsonParam({ role: 'ADMIN' }),
-    reason,
-    requestId: `admin-init-${Date.now()}`,
+    // 条件更新：只有仍然是 USER 才提升；并发下另一个事务先提升成功时这里影响 0 行。
+    const updated = await tx
+      .update(users)
+      .set({ role: 'ADMIN' })
+      .where(and(eq(users.id, targetUser.id), eq(users.role, 'USER')))
+      .returning({ id: users.id })
+    if (updated.length === 0) {
+      throw new PromoteError('目标用户已被并发提升为 ADMIN')
+    }
+
+    await tx.insert(adminAuditLogs).values({
+      id: newId(),
+      // 首次自举没有真实操作者，记 NULL（system bootstrap）；不伪装成被提升者本人。
+      actorUserId: actorId,
+      action: 'ADMIN_PROMOTED',
+      targetType: 'USER',
+      targetId: targetUser.id,
+      // 只写脱敏快照（role），不写任何敏感字段（设计 §8）。
+      before: jsonParam({ role: targetUser.role }),
+      after: jsonParam({ role: 'ADMIN' }),
+      reason,
+      requestId: `admin-init-${Date.now()}`,
+    })
   })
-})
+} catch (error) {
+  // 并发自举 / 并发提升的预期失败：一条简短拒绝信息，不留半截状态（事务已回滚）。
+  if (error instanceof PromoteError) {
+    console.error(`[db:promote] ${error.message}`)
+    process.exit(1)
+  }
+  throw error
+}
 
 console.log(`[db:promote] ok — 已将学号 ${target} 提升为 ADMIN（${reason}）`)
