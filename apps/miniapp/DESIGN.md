@@ -6,8 +6,15 @@
 ## 0. 这一版在做什么
 
 把 5 张「冰蓝荧光」设计稿（首页 / 商品详情 / 搜索 / 许愿墙 / 消息）实现成 Taro 小程序页面，
-数据全部走本地 Mock，**不接真实 API**。设计稿是原生小程序风格（HTML 盒模型 + CSS 变量），
-这里移植到 Taro 4 + React 18 + SCSS。
+移植到 Taro 4 + React 18 + SCSS。设计稿是原生小程序风格（HTML 盒模型 + CSS 变量）。
+
+数据来源分两类：
+
+- **已接真实 API（只读）**：首页 / 分类 / 搜索 / 商品详情 / 通知 / 我的。
+  统一走 `src/features/fetchers.ts`（先请求后端，失败或未登录退回 mock），
+  由 `src/features/listing/adapt.ts` 把契约类型投影成页面在用的视图类型。
+- **仍是本地 mock**：其余页面（许愿墙、消息、会话、发布、订单、面交、认证、设置等）。
+  它们的写操作与状态机尚未接入，见 `fetchers.ts` 的边界说明。
 
 ## 1. px → rpx：本目录唯一需要记住的换算
 
@@ -89,7 +96,13 @@ src/
   custom-tab-bar/            # 自定义 TabBar（固定目录名，见第 9 节）
   mock/types.ts              # 与 packages/contracts 对齐的 Mock 类型
   mock/*.ts                  # fixtures：listings / users / wishes / conversations / notifications
-  mock/api.ts                # 统一数据访问入口（返回 Promise，模拟延迟）
+  mock/api.ts                # mock 数据访问入口（返回 Promise，模拟延迟）
+  lib/request.ts             # 真实请求入口（统一错误信封 / 会话 cookie）
+  lib/session.ts             # 登录态存储（小程序无 cookie jar，手动携带）
+  lib/api-base.ts            # API 绝对地址（构建期可注入，默认本机 3000）
+  features/listing/adapt.ts  # 契约 → 页面视图的投影（不编契约没有的字段）
+  features/*/api.ts          # 各域的契约请求函数
+  features/fetchers.ts       # 页面取数统一入口：先真接口、失败退 mock
   components/
     product-card/            # 首页/搜索共用的商品卡（两个 variant）
     empty-state/             # 空态
@@ -102,7 +115,12 @@ src/
 - 页面级样式写在各自 `index.scss`，只允许用令牌色与 `_mixins` 里的组合。
 - 组件用目录 + `index.tsx` + `index.scss`。
 - 不新增依赖；图标统一从 `@/assets/lib-icons` 的 `ICONS` 取（真源与生成器在 `D:\FISH\miniprogram`）。
-- 页面数据一律从 `@/mock/api` 取，禁止在页面里内联假数据。
+- 页面数据**不许内联假数据**。取数只有两个合法入口：
+  1. 已接接口的页面走 `@/features/fetchers`（内含「真接口失败 → 退 mock」的统一回退），
+  2. 未接接口的页面走 `@/mock/api`。
+- 契约里没有的字段（`views` / `wants` / `comments` / `spec` / 原价 / 图片比例 …）一律
+  **留 `null` 或空**，页面据此不渲染 —— 不允许为了「看起来对称」编一个数字。
+  真接口数据的投影规则见 `src/features/listing/adapt.ts`。
 - 类型对齐 `packages/contracts`：`ListingCard` / `WishDto` / `ConversationDto` / `MessageDto` 等，
   Mock 层只做「投影」，不改语义（金额一律整数分 `*Cents`）。
 

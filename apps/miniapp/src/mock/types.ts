@@ -48,11 +48,20 @@ export type MockUser = {
   id: string
   nickname: string
   avatarUrl: string
-  campus: Campus
+  /**
+   * 校区：契约 `MeSchema.campus` 是 **nullable** 的（`packages/contracts/src/auth/user.ts`），
+   * 真实数据下可能没有。缺了就留 `null` 让页面不渲染，而不是挑一个校区顶上。
+   */
+  campus: Campus | null
   authStatus: AuthStatus
-  /** mock 专属：设计稿详情页要展示「卖出 9 件 · 好评率 100%」 */
-  soldCount: number
-  goodRate: number
+  /**
+   * mock 专属：设计稿详情页要展示「卖出 9 件 · 好评率 100%」。
+   *
+   * 契约里没有这两个数（`ListingSellerSchema` 只 pick 了 id / nickname / avatarUrl / campus），
+   * 因此真实数据下恒为 `null`，页面据此不渲染 —— 不编好评率。
+   */
+  soldCount: number | null
+  goodRate: number | null
 }
 
 /* ---------------------------------------------------------------- 商品 */
@@ -89,9 +98,16 @@ export type MockListing = {
   /** 规格行，如「白色 · 三模蓝牙 · 全键盘布局」 */
   spec: string
   sellerId: string
-  /** mock 专属：浏览量 / 想要数（契约无此字段） */
-  views: number
-  wants: number
+  /**
+   * mock 专属：浏览量 / 想要数 —— **契约没有这两个计数**（不在 `ListingCardSchema` 里），
+   * 所以真实接口给不出来，只能是 `null`。
+   *
+   * 为什么可空而不是照旧 `number`：留着 `number` 就等于默认真数据必须有值，
+   * 页面会把 `null` 渲染成「0 人想要」——那是编造出来的市场信号。可空强制渲染层
+   * 自己决定「没有就不画」；mock fixture 照旧填真数字，今天的观感不变。
+   */
+  views: number | null
+  wants: number | null
   /** 距今天数，用于「2 小时前发布」这类相对时间 */
   createdHoursAgo: number
   createdAt: string
@@ -129,8 +145,13 @@ export type MockWish = {
   status: WishStatus
   matchCount: number
   createdAt: string
-  /** mock 专属：列表行上的位置与相对时间 */
-  campus: Campus
+  /**
+   * mock 专属：列表行上的校区与相对时间。
+   *
+   * `campus` 可为 `null`：契约的 `WishDto` **没有校区字段**（`wishes/schema.ts`），
+   * 真实数据下取不到，页面据此不渲染校区那一格 —— 不挑一个校区顶上。
+   */
+  campus: Campus | null
   timeLabel: string
 }
 

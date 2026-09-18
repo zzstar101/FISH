@@ -5,22 +5,21 @@
  *   漂浮导航（返回/分享/更多）→ 图集轮播（378pt，右下圆点）→ 价格区 → 描述段
  *   → 卖家卡 → 留言区（默认 2 条，可展开）→ 同校相似闲置（两列瀑布流）→ 底部操作栏
  *
- * 数据全部走 `@/mock/api`；尺寸 = 设计稿 pt × 2（见 apps/miniapp/DESIGN.md）。
+ * 数据走 `@/features/fetchers`（先试真实接口，不可用时内部回退 mock）；尺寸 = 设计稿 pt × 2
+ * （见 apps/miniapp/DESIGN.md）。
  */
 import { Image, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 
+import EmptyState from '@/components/empty-state'
+import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import ProductCard from '@/components/product-card'
-import {
-  conditionLabel,
-  fetchListingDetail,
-  formatAmount,
-  type ListingDetailView,
-  type MockListing,
-} from '@/mock/api'
+import { loadListingDetail } from '@/features/fetchers'
+import { conditionLabel, formatAmount, type ListingDetailView, type MockListing } from '@/mock/api'
+import { findUser } from '@/mock/users'
 import './index.scss'
 
 /** 拿不到 id 时的回退商品 */
@@ -79,15 +78,25 @@ export default function ListingDetail() {
 
   const [data, setData] = useState<ListingDetailView | null>(null)
   const [loading, setLoading] = useState(true)
+  /** 真实接口失败且没有回退 mock（生产口径）：走错误态，**不能**停在骨架屏上 */
+  const [failed, setFailed] = useState(false)
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
   const [commentsOpen, setCommentsOpen] = useState(false)
 
-  useLoad(() => {
-    void fetchListingDetail(id).then((result) => {
-      setData(result)
+  const load = () => {
+    setLoading(true)
+    // 三态分明：`ok` 渲染详情、`notFound` 走空态（商品真不存在）、
+    // `failed` 走错误态 —— 生产口径不退回 mock，拿演示商品顶上比空态更误导
+    void loadListingDetail(id).then((result) => {
+      setData(result.status === 'ok' ? result.view : null)
+      setFailed(result.status === 'failed')
       setLoading(false)
     })
+  }
+
+  useLoad(() => {
+    load()
   })
 
   const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
@@ -117,13 +126,30 @@ export default function ListingDetail() {
         }
       />
 
-      {loading || !listing || !data ? (
+      {failed ? (
+        /* 真接口失败：明确错误态 + 重试。不能落到下面的骨架屏分支（`!data` 会一直为真 → 永久骨架屏） */
+        <View className="detail__emptypad">
+          <LoadError
+            title="加载失败"
+            text="没能取到这件商品。检查网络或后端地址后重试"
+            onRetry={load}
+          />
+        </View>
+      ) : loading || !data ? (
         <View className="detail__skeleton">
           <View className="detail__sk-gallery" />
           <View className="detail__sk-line detail__sk-line--lg" />
           <View className="detail__sk-line" />
           <View className="detail__sk-line detail__sk-line--sm" />
           <View className="detail__sk-block" />
+        </View>
+      ) : !listing ? (
+        /* 商品不存在 / 已下架：不留无限骨架屏，也不拿 mock 商品顶替 */
+        <View className="detail__emptypad">
+          <EmptyState
+            title="商品不存在或已下架"
+            text="这件闲置可能已被卖家删除或下架了，去看看别的吧"
+          />
         </View>
       ) : (
         <View className="detail__sections">
@@ -180,14 +206,19 @@ export default function ListingDetail() {
             <View className="detail__stats">
               <Text className="detail__posted">{postedLabel(listing.createdHoursAgo)}</Text>
               <View className="detail__metrics">
-                <Text className="detail__metric">
-                  <Text className="detail__metric-num">{listing.views}</Text>
-                  <Text> 浏览</Text>
-                </Text>
-                <Text className="detail__metric">
-                  <Text className="detail__metric-num">{listing.wants}</Text>
-                  <Text> 想要</Text>
-                </Text>
+                {/* 浏览量 / 想要数都不在契约里：真实数据下为 null，该指标整块不画，不显示 0 */}
+                {listing.views === null ? null : (
+                  <Text className="detail__metric">
+                    <Text className="detail__metric-num">{listing.views}</Text>
+                    <Text> 浏览</Text>
+                  </Text>
+                )}
+                {listing.wants === null ? null : (
+                  <Text className="detail__metric">
+                    <Text className="detail__metric-num">{listing.wants}</Text>
+                    <Text> 想要</Text>
+                  </Text>
+                )}
               </View>
             </View>
           </View>
@@ -211,13 +242,28 @@ export default function ListingDetail() {
                   {data.seller.authStatus === 'VERIFIED' ? (
                     <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
                   ) : null}
-                  <Text className="detail__sloc">{`${data.seller.campus}校区`}</Text>
+                  {/* 校区契约里可为 null：缺了就不渲染这一格，不拼「null校区」 */}
+                  {data.seller.campus ? (
+                    <Text className="detail__sloc">{`${data.seller.campus}校区`}</Text>
+                  ) : null}
                 </View>
-                <View className="detail__ssub">
-                  <Text>{`卖出 ${data.seller.soldCount} 件`}</Text>
-                  <Text>·</Text>
-                  <Text>{`好评率 ${data.seller.goodRate}%`}</Text>
-                </View>
+                {/*
+                  卖出件数与好评率契约里没有（见 mock/types.ts 的 MockUser 注释）。
+                  真实数据下两者都是 null，此时整行不渲染 —— 不编「卖出 0 件 · 好评率 0%」。
+                */}
+                {data.seller.soldCount !== null || data.seller.goodRate !== null ? (
+                  <View className="detail__ssub">
+                    {data.seller.soldCount !== null ? (
+                      <Text>{`卖出 ${data.seller.soldCount} 件`}</Text>
+                    ) : null}
+                    {data.seller.soldCount !== null && data.seller.goodRate !== null ? (
+                      <Text>·</Text>
+                    ) : null}
+                    {data.seller.goodRate !== null ? (
+                      <Text>{`好评率 ${data.seller.goodRate}%`}</Text>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
               <View className="detail__go" onClick={() => toast('TA 的主页待接入')}>
                 <Text>进TA主页</Text>
@@ -283,7 +329,14 @@ export default function ListingDetail() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={data.seller}
+                    /*
+                      卖家用**这张卡自己的** sellerId 查，不能用 `data.seller`。
+                      `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
+                      把当前卖家挂上去就是给别人的商品捏造了一个卖家。
+                      真实数据下 `item.sellerId` 是空串哨兵 → `findUser` 给 null → 整行不渲染；
+                      mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
+                    */
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
@@ -294,7 +347,8 @@ export default function ListingDetail() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={data.seller}
+                    /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />

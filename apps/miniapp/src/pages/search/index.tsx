@@ -3,18 +3,19 @@ import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
+import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
+import { loadSearch } from '@/features/fetchers'
 import {
   defaultSearchHistory,
-  getUser,
   hotSearches,
   type MockListing,
   type SearchFilter,
   searchFilters,
-  searchListings,
   searchPlaceholder,
 } from '@/mock/api'
+import { findUser } from '@/mock/users'
 import './index.scss'
 
 /** 结果瀑布流列宽（设计值 = 2×pt）：750 - 左右各 40 - 列间距 24，再除以 2 */
@@ -55,6 +56,8 @@ export default function Search() {
   const [history, setHistory] = useState<string[]>(defaultSearchHistory)
   const [loading, setLoading] = useState(false)
   const [panelOpen, setPanelOpen] = useState(initialKeyword.length === 0)
+  /** 真实接口失败且没有回退 mock（生产口径）：显示错误态而不是「没找到」 */
+  const [failed, setFailed] = useState(false)
 
   const hot = useMemo(() => hotSearches(), [])
 
@@ -67,8 +70,10 @@ export default function Search() {
       return
     }
     setLoading(true)
-    const result = await searchListings(term, nextSort)
-    setResults(result.items)
+    // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch
+    const { items: list, failed: nextFailed } = await loadSearch(term, nextSort)
+    setResults(list)
+    setFailed(nextFailed)
     setSubmitted(term)
     setPanelOpen(false)
     setLoading(false)
@@ -216,13 +221,19 @@ export default function Search() {
             ))}
           </View>
 
-          <View className="search__meta">
-            <Text>为你找到</Text>
-            <Text className="search__meta-num num">{results.length}</Text>
-            <Text>{`件「${submitted}」相关闲置`}</Text>
-          </View>
+          {/* 结果计数不能早于结果本身：否则请求途中会先显示「为你找到 0 件」；
+              失败时也不显示，免得把「没加载出来」说成「一件都没有」 */}
+          {loading || failed ? null : (
+            <View className="search__meta">
+              <Text>为你找到</Text>
+              <Text className="search__meta-num num">{results.length}</Text>
+              <Text>{`件「${submitted}」相关闲置`}</Text>
+            </View>
+          )}
 
-          {!loading && results.length === 0 ? (
+          {failed ? (
+            <LoadError onRetry={() => void run(submitted, sort)} />
+          ) : !loading && results.length === 0 ? (
             <EmptyState
               title="没有找到相关闲置"
               text="换个关键词试试，或者到许愿墙发一条心愿，让同校的人来接单。"
@@ -236,7 +247,7 @@ export default function Search() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={getUser(item.sellerId)}
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
@@ -247,7 +258,7 @@ export default function Search() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={getUser(item.sellerId)}
+                    seller={findUser(item.sellerId)}
                     variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />

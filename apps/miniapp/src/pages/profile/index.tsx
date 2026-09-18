@@ -1,8 +1,9 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
-import { useMemo } from 'react'
+import Taro, { useLoad } from '@tarojs/taro'
+import { useMemo, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { ICONS } from '@/assets/lib-icons'
+import { loadProfile, type ProfileView } from '@/features/fetchers'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import {
   APP_VERSION,
@@ -20,7 +21,8 @@ import './index.scss'
  * 个人卡（头像/昵称/认证/校区）→ 数据行（在售/愿望/成交/发布）→ 我的发布 → 我的愿望
  * → 功能入口 → 版权行。
  *
- * 数据来自 mock：`ME` / `myListings()` / `myWishes()` / `profileStats()` / `orderOverview()`，
+ * 数据走 `features/fetchers.ts` 的 `loadProfile()`（真实接口不可用 / 未登录时返回 null，
+ * 页面对应退回 mock 的 `ME` / `myListings()` / `myWishes()` / `profileStats()` / `orderOverview()`），
  * 字段对齐 `profile/schema.ts` 的 `profileResponseSchema`（user / stats / listings / wishes）。
  *
  * **本轮的入口接线**（既有结构不变，只把入口挂到真实页面）：
@@ -44,10 +46,7 @@ type Entry = {
 }
 
 export default function Profile() {
-  const stats = useMemo(() => profileStats(), [])
-  const listings = useMemo(() => myListings(), [])
-  const wishes = useMemo(() => myWishes(), [])
-  const orders = useMemo(() => orderOverview(), [])
+  const [profile, setProfile] = useState<ProfileView | null>(null)
 
   /**
    * 顶部留白。
@@ -58,8 +57,34 @@ export default function Profile() {
    */
   const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
 
-  const verified = ME.authStatus === 'VERIFIED'
-  const pendingMeetup = orders.pending
+  useLoad(() => {
+    void loadProfile().then(setProfile)
+  })
+
+  /**
+   * 真实接口不可用（未登录 / 后端未起）时 `loadProfile` 返回 `null`：
+   * 退回页面原有的一套 mock 同步数据，页面照旧渲染，不空屏也不编数字。
+   */
+  const mock = useMemo(
+    () => ({
+      user: ME,
+      stats: profileStats(),
+      listings: myListings(),
+      wishes: myWishes(),
+      orders: orderOverview(),
+    }),
+    [],
+  )
+
+  const user = profile?.user ?? mock.user
+  const stats = profile?.stats ?? mock.stats
+  const listings = profile?.listings ?? mock.listings
+  const wishes = profile?.wishes ?? mock.wishes
+  /** 待面交笔数：真实数据由 loadProfile 从 transactions 里 PENDING_MEETUP 折算而来 */
+  const pendingMeetup = profile?.pendingMeetup ?? mock.orders.pending
+  const orderCount = profile?.orderCount ?? mock.orders.all
+
+  const verified = user.authStatus === 'VERIFIED'
 
   const toast = (title: string) => {
     void Taro.showToast({ title, icon: 'none' })
@@ -78,8 +103,10 @@ export default function Profile() {
   }
 
   const ENTRIES: Entry[] = [
-    { key: 'favorites', label: '我的收藏', icon: ICONS.heartMuted, note: '12 件' },
-    { key: 'history', label: '浏览足迹', icon: ICONS.historyMuted, note: '本周 36 次' },
+    // 收藏与足迹**没有数据源**（既无页面也无端点），所以 note 留空 ——
+    // 之前写死的「12 件」「本周 36 次」在本页已接真实数据后就是编造的数字。
+    { key: 'favorites', label: '我的收藏', icon: ICONS.heartMuted, note: '' },
+    { key: 'history', label: '浏览足迹', icon: ICONS.historyMuted, note: '' },
     {
       key: 'mylist',
       label: '我的发布',
@@ -91,7 +118,7 @@ export default function Profile() {
       key: 'orders',
       label: '我的买卖',
       icon: ICONS.orderMuted,
-      note: pendingMeetup > 0 ? `待面交 ${pendingMeetup}` : `${orders.all} 笔`,
+      note: pendingMeetup > 0 ? `待面交 ${pendingMeetup}` : `${orderCount} 笔`,
       url: '/pages/orders/index',
     },
     {
@@ -134,10 +161,11 @@ export default function Profile() {
       <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
         <View className="profile__card">
           <View className="profile__identity">
-            <Image className="profile__avatar" src={ME.avatarUrl} mode="aspectFill" />
+            {/* 契约 `MeSchema.avatarUrl` 可为 null：空串即不渲染图，不拿别人的头像顶上 */}
+            <Image className="profile__avatar" src={user.avatarUrl ?? ''} mode="aspectFill" />
             <View className="profile__meta">
               <View className="profile__name-row">
-                <Text className="profile__name">{ME.nickname}</Text>
+                <Text className="profile__name">{user.nickname}</Text>
                 {verified ? (
                   <Image className="profile__tick" src={ICONS.safeAccent} mode="aspectFit" />
                 ) : null}
@@ -152,7 +180,7 @@ export default function Profile() {
           {/* 认证状态本身就是入口：点它进校园认证页 */}
           <View className="profile__campus-row" onClick={openVerify}>
             <Text className="profile__campus">
-              {`${ME.campus ?? '未知'}校区 · ${verified ? '已认证' : '待认证'}`}
+              {`${user.campus ?? '未知'}校区 · ${verified ? '已认证' : '待认证'}`}
             </Text>
             <Image
               className="profile__campus-arrow"
@@ -218,20 +246,27 @@ export default function Profile() {
                 <Text className="profile__row-title">{listing.title}</Text>
                 <View className="profile__row-meta">
                   <Text className="profile__row-price">{`¥${formatAmount(listing.priceCents)}`}</Text>
-                  <Text className="profile__row-dot">·</Text>
-                  <Text className="profile__row-sub">{`${listing.views} 浏览`}</Text>
-                  {/* 「N 人想要」是 C5 的入口，带上是哪件商品 */}
-                  <Text
-                    className="profile__row-state"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void Taro.navigateTo({
-                        url: `/pages/watchers/index?listingId=${listing.id}&title=${encodeURIComponent(listing.title)}`,
-                      })
-                    }}
-                  >
-                    {`${listing.wants} 人想要 ›`}
-                  </Text>
+                  {/* 契约没有浏览/想要计数：真实数据下为 null，连前缀的「·」一起不画，不留孤立分隔符 */}
+                  {listing.views === null ? null : (
+                    <>
+                      <Text className="profile__row-dot">·</Text>
+                      <Text className="profile__row-sub">{`${listing.views} 浏览`}</Text>
+                    </>
+                  )}
+                  {/* 「N 人想要」是 C5 的入口，带上是哪件商品；计数缺失时入口本身也不该存在 */}
+                  {listing.wants === null ? null : (
+                    <Text
+                      className="profile__row-state"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void Taro.navigateTo({
+                          url: `/pages/watchers/index?listingId=${listing.id}&title=${encodeURIComponent(listing.title)}`,
+                        })
+                      }}
+                    >
+                      {`${listing.wants} 人想要 ›`}
+                    </Text>
+                  )}
                 </View>
               </View>
             </View>
@@ -271,7 +306,11 @@ export default function Profile() {
                       {`¥${formatAmount(wish.budgetMinCents)}–${formatAmount(wish.budgetMaxCents)}`}
                     </Text>
                     <Text className="profile__row-dot">·</Text>
-                    <Text className="profile__row-sub">{`${wish.timeLabel} · ${wish.campus}校区`}</Text>
+                    {/* 校区契约里可为 null（WishDto 无校区字段）：缺了就只显示时间，
+                        不拼出「null校区」 */}
+                    <Text className="profile__row-sub">
+                      {wish.campus ? `${wish.timeLabel} · ${wish.campus}校区` : wish.timeLabel}
+                    </Text>
                     <Text className={`profile__row-state${hit ? ' is-hit' : ''}`}>
                       {hit ? `${wish.matchCount} 个匹配 ›` : '等待匹配'}
                     </Text>

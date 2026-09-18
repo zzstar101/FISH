@@ -1,4 +1,4 @@
-﻿/**
+/**
  * A/B/C 组 14 张设计稿新增域的 fixture：订单 / 交易码 / 想要的人 / 他人主页 /
  * 我的发布 / 认证 / 设置。
  *
@@ -361,8 +361,9 @@ export function userProfile(userId: string): MockUserProfile {
     user,
     joinedDays: spec?.joinedDays ?? 100,
     activeCount: active.length,
-    listedCount: listed.length + user.soldCount,
-    goodRate: user.goodRate,
+    listedCount: listed.length + (user.soldCount ?? 0),
+    // mock fixture 一定带这两项；`??` 只是为了「真实数据没有这两项」时类型成立
+    goodRate: user.goodRate ?? 0,
     following: spec?.following ?? false,
     hiddenCampus: spec?.hiddenCampus ?? false,
   }

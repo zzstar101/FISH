@@ -33,6 +33,32 @@ TARO_APP_ID=wx你的appid bun run build:miniapp
 注意：`touristappid` 只在微信开发者工具**未登录**（游客模式）时可用。如果工具已登录真实账号，
 `cli open` / GUI 打开会报 `不存在此 AppID (code 10)`，必须用上面的方式注入一个有效 AppID。
 
+## 接后端：API 地址怎么给
+
+小程序**没有** `apps/web` 那样的同源代理（Web 靠 `vite.config.ts` 的 `/api` 代理转发），
+请求必须写绝对地址。地址在构建期由环境变量注入：
+
+```bash
+TARO_APP_API_BASE=https://api.example.com bun run build:miniapp
+```
+
+不设置时回落到 `http://localhost:3000`（本机 API），方便在开发者工具里直接跑。
+注入点是 `config/index.ts` 的 `defineConstants.__API_BASE__`，读取处是 `src/lib/api-base.ts`。
+
+页面取数一律走 `src/features/fetchers.ts`：**先请求后端；只有开发 / 预览才允许退回本地 mock**。
+生产口径下后端挂掉、域名配错或契约漂移时，页面显示错误态（`components/load-error`）而不是
+fixture 数据 —— 假商品比错误态更糟，这一点在 #91 的评审里被明确要求过。
+
+是否允许回退由构建期常量 `__ALLOW_MOCK_FALLBACK__` 决定（注入点 `config/index.ts`，**未注入即关闭**）：
+
+```bash
+TARO_APP_MOCK=1 bun run build:weapp   # 本地演示：没有后端也看得到 mock 页面（评审 / 截图用）
+bun run build:weapp                   # 默认：不退 mock，失败即错误态
+```
+
+H5 预览产物（`preview/build.mjs`）**显式打开**回退 —— 那份 bundle 只用于本地评审与像素测量，
+不是生产。已接接口的页面见 `DESIGN.md` §0。
+
 ## 三个容易踩回去的坑
 
 这两处都不是「可选的优化」，改动前请先读完。

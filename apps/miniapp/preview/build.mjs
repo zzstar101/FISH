@@ -56,6 +56,10 @@ const result = await Bun.build({
   define: {
     'process.env.TARO_ENV': '"h5"',
     'process.env.NODE_ENV': '"development"',
+    // 预览产物（H5，只给本地评审 / 截图 / 像素测量用）**显式打开** mock 回退：
+    // 这个 bundle 不是生产，评审时没有后端也要能看到完整页面。
+    // 生产口径见 config/index.ts 的 __ALLOW_MOCK_FALLBACK__。
+    __ALLOW_MOCK_FALLBACK__: 'true',
   },
   plugins: [previewPlugin],
   naming: {
