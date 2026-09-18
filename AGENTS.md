@@ -2,6 +2,8 @@
 
 给 AI coding agent 的操作手册。**人看的协作规则在 [CONTRIBUTING.md](CONTRIBUTING.md)，架构在 [docs/architecture.md](docs/architecture.md)** —— 本文件不重复它们，只写 agent 最容易做错的部分。
 
+> **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，必须首先遵守 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) 的强制工作流**：每个页面一个新分支、上一个分支完成才开下一个、动手前先提醒 Owner、必须到微信开发者工具演示并经 Owner 确认可行后才允许提交。它是本文件的最高优先级补充，先读它再动小程序代码。
+
 本项目是 **移动端 Web PWA**（广应科校内二手交易平台 FISH），monorepo + Bun。
 
 ## 1. 命令
@@ -67,6 +69,8 @@ bun run ws:smoke            # WebSocket 连通性冒烟
 4. `bun test`
 5. 涉及运行时行为时，按 README 的最小启动路径实际跑起来验证（不要只靠静态检查下结论）。
 
+> **小程序端（`apps/miniapp`）另有一条更严的验证门禁**：见 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) —— 页面改动必须在微信开发者工具里演示、经 Owner 确认可行后才允许提交，不能被本节的静态检查替代。
+
 CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都不得声称完成。
 
 ## 7. 完成后：派子代理做对抗性审查
@@ -101,5 +105,6 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 | 文档 | 内容 |
 | --- | --- |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Issue 认领、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明 |
+| [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) | **小程序前端强制工作流**：每页一分支、上一个完成再开下一个、改前提醒 Owner、开发者工具演示 + Owner 确认后才提交 |
 | [docs/architecture.md](docs/architecture.md) | 系统形态、运行时拓扑、链路、端口 |
 | [README.md](README.md) | 最小启动路径与常用命令 |
