@@ -28,10 +28,13 @@
   transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
-/* 一级标题：35px = 设计稿 `.mp-title{font-size:calc(34 * .52px)}` ≈ 17.7pt。
-   与 iOS 原生导航标题（17pt）同一档；稿里 home / messages / profile 三页都用这套
-   `mp-nav` + `mp-title`，只有更早的 `wish.html` 写的是 `.navtitle{font-size:20px}`（40px）。
-   这里取前者：三页对一页，且 17.7pt 才是系统导航标题的尺寸。 */
+/* 一级标题：35px ≈ 17.5pt。
+   稿子对这行文字**没有统一规格**：只有 `messages.html` 写了可见标题的尺寸
+   （`.mp-title{font-size:calc(34 * .52px)}` ≈ 17.7pt），`wish.html` 写的是
+   `.navtitle{font-size:20px}`（40px），`home.html` 顶栏放的是品牌 logo，
+   `profile.html` 的标题是 `sr-only`（不可见）。
+   这里取 17.7pt 一档：它与 iOS 原生导航标题（17pt）同级，且 `.mp-title` 是三个
+   `mp-nav` 页面在用的那套写法里的值。要换成许愿稿的 20pt，改这一个数即可。 */
 .topbar__title {
   flex: 0 0 auto;
   font-size: 35px;

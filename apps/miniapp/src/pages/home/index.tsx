@@ -1,6 +1,6 @@
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useLoad, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import Taro, { useLoad, usePageScroll, usePullDownRefresh, useReady } from '@tarojs/taro'
+import { useMemo, useRef, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
@@ -100,7 +100,7 @@ export default function Home() {
   /** 图标条下沿越过顶栏下沿时的滚动位置；挂载后量一次 */
   const pinAt = useRef(Number.POSITIVE_INFINITY)
 
-  useEffect(() => {
+  useReady(() => {
     Taro.createSelectorQuery()
       .select('.home__cats-wrap')
       .boundingClientRect()
@@ -111,10 +111,14 @@ export default function Home() {
           typeof rect?.top === 'number' && typeof rect?.height === 'number'
             ? rect.top + scrollTopRef.current + rect.height - navHeight
             : Number.NaN
-        // 量不到（时序问题）就退一个保守值：图标条本身约 150rpx 高
-        pinAt.current = Number.isFinite(measured) ? Math.max(0, measured) : 150
+        /**
+         * 量不到（节点还没上屏）时的兜底。**单位是设备 px** —— 它要和 `usePageScroll`
+         * 给的 `scrollTop` 比，别照设计稿的 rpx 写：rpx 在 750 宽的 H5 预览里 ≈ 1px，
+         * 在 390pt 真机上 ≈ 0.52px。约 95px 是本机（图标条 ≈ 93px 高、距顶栏 4px）的实测位置。
+         */
+        pinAt.current = Number.isFinite(measured) ? Math.max(0, measured) : 95
       })
-  }, [navHeight])
+  })
 
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop

@@ -13,8 +13,9 @@
  * 胶囊位置反推行高与右侧避让，保证标题与原生胶囊同行居中。
  *
  * `variant`：
- * - `plain`：透明底，靠页面自己的页头渐变（首页 / 许愿 / 消息）；
- * - `glass`：磨砂底 + 底部描边（搜索页，滚动时内容要从底下过）。
+ * - `glass`（**默认**）：磨砂底 + 底部描边，内容从底下滚过时被遮住 —— 一级页都用它；
+ * - `plain`：透明底，靠页面自己的页头渐变。**目前没有调用方**：透明顶栏会让滚动内容
+ *   直接穿过标题（踩过这个坑），保留它只是为了「确实需要全透明」的版式，用时想清楚。
  */
 import { Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
@@ -58,7 +59,7 @@ export default function TopBar({
   left,
   center,
   actions,
-  variant = 'plain',
+  variant = 'glass',
   spacer = false,
 }: TopBarProps) {
   const metrics = useMemo(() => readNavMetrics(), [])
