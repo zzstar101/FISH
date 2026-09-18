@@ -118,12 +118,14 @@ export function createListingService(deps: {
     nickname: string
     avatarUrl: string | null
     campus: string | null
+    authStatus: 'UNVERIFIED' | 'VERIFIED'
   }): ListingSeller {
     return {
       id: row.id,
       nickname: row.nickname,
       avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
       campus: CampusSchema.safeParse(row.campus).data ?? null,
+      authStatus: row.authStatus,
     }
   }
 
@@ -134,7 +136,13 @@ export function createListingService(deps: {
 
   function toDetail(input: {
     listing: ListingRow
-    seller: { id: string; nickname: string; avatarUrl: string | null; campus: string | null }
+    seller: {
+      id: string
+      nickname: string
+      avatarUrl: string | null
+      campus: string | null
+      authStatus: 'UNVERIFIED' | 'VERIFIED'
+    }
     images: ListingImageRow[]
     viewerId: string | null
   }): ListingDetail {

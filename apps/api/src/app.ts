@@ -3,13 +3,17 @@ import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
-import type { ServerEnv } from '@fish/shared/env'
+import type { MailTransportEnv, ServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
-import { createMockCampusVerificationProvider } from './modules/auth/provider'
+import {
+  createDevEmailVerificationProvider,
+  createResendEmailVerificationProvider,
+} from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
+import { createVerificationService } from './modules/auth/verification-service'
 import { createConversationsRouter } from './modules/conversations/router'
 import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
@@ -64,20 +68,37 @@ function describeError(error: unknown): string {
   return [parts.join(' <- ') || String(error), frames].filter(Boolean).join('\n')
 }
 
-export function createApp(env: ServerEnv) {
+export function createApp(
+  env: ServerEnv,
+  /** 邮件 transport（#68）：调用方显式传入（index.ts 用 loadMailTransportEnv 从 env 校验）。 */
+  mailEnv: MailTransportEnv = { transport: 'outbox' },
+) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
 
   app.use('*', cors({ origin: env.WEB_ORIGIN }))
 
-  // 认证模块的装配在 modules/auth 内，这里只负责接线（#3）。
+  // 认证模块的装配在 modules/auth 内，这里只负责接线（#3；#68 改为邮箱验证码子域）。
   // secureCookie 由 WEB_ORIGIN 的 scheme 推导：本地 http 加 Secure 会让 cookie 直接失效。
   //
-  // ⚠️ 这里接的是 Mock Provider：它对任意未被占用的「12 位、20 开头」学号都返回 VERIFIED。
-  // 因此 **`authStatus` 在接入真实教务校验前不能当作可信标识**，#5 的徽章不要拿它当安全依据。
+  // #68：注册一律 UNVERIFIED；认证走校园邮箱验证码（Provider 见 verification-provider.ts，
+  // dev 实现写 .dev/mail-outbox.jsonl，不进日志）。接入真实 SMTP / CAS 时只换 Provider 实现。
   const auth = createAuthModule({
     db,
-    provider: createMockCampusVerificationProvider(),
+    verification: createVerificationService({
+      db,
+      // 邮件里的图片必须绝对地址；logo 由 Web 站点托管（apps/web/public/logo.png）。
+      // transport 由 MAIL_TRANSPORT 显式选择（无默认值，缺配置启动失败，不静默降级）。
+      provider:
+        mailEnv.transport === 'resend'
+          ? createResendEmailVerificationProvider(
+              { apiKey: mailEnv.resendApiKey, from: mailEnv.resendFrom },
+              { logoUrl: `${env.WEB_ORIGIN}/logo.png` },
+            )
+          : createDevEmailVerificationProvider(undefined, {
+              logoUrl: `${env.WEB_ORIGIN}/logo.png`,
+            }),
+    }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
   })
   app.route('/auth', auth.router)

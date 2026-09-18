@@ -1,6 +1,6 @@
 {
-  "id": "8d704c7b-4a4e-4168-8bc0-2d636ec9612a",
-  "prevId": "c3741c9b-95ef-47ca-881d-7c4f1df7c782",
+  "id": "c0ec1c37-638a-455f-a830-cf4e2779c3c1",
+  "prevId": "26d7175e-a970-472e-862d-80ab9d6d0b22",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -492,6 +492,32 @@
           "primaryKey": false,
           "notNull": true,
           "default": "now()"
+        },
+        "moderation_status": {
+          "name": "moderation_status",
+          "type": "listing_moderation_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'APPROVED'"
+        },
+        "moderation_reason": {
+          "name": "moderation_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "moderation_rule_version": {
+          "name": "moderation_rule_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "moderated_at": {
+          "name": "moderated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1363,6 +1389,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "delivery": {
+          "name": "delivery",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
         "attempt_count": {
           "name": "attempt_count",
           "type": "integer",
@@ -1618,6 +1651,114 @@
         }
       },
       "isRLSEnabled": false
+    },
+    "public.listing_moderation_records": {
+      "name": "listing_moderation_records",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "listing_id": {
+          "name": "listing_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "seller_id": {
+          "name": "seller_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title_snapshot": {
+          "name": "title_snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description_snapshot": {
+          "name": "description_snapshot",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "decision": {
+          "name": "decision",
+          "type": "moderation_decision",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "matched_rules": {
+          "name": "matched_rules",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "matched_terms_masked": {
+          "name": "matched_terms_masked",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rule_version": {
+          "name": "rule_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "listing_moderation_records_listing_id_listings_id_fk": {
+          "name": "listing_moderation_records_listing_id_listings_id_fk",
+          "tableFrom": "listing_moderation_records",
+          "tableTo": "listings",
+          "columnsFrom": [
+            "listing_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "listing_moderation_records_seller_id_users_id_fk": {
+          "name": "listing_moderation_records_seller_id_users_id_fk",
+          "tableFrom": "listing_moderation_records",
+          "tableTo": "users",
+          "columnsFrom": [
+            "seller_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -1697,6 +1838,24 @@
         "ACTIVE",
         "FULFILLED",
         "CLOSED"
+      ]
+    },
+    "public.listing_moderation_status": {
+      "name": "listing_moderation_status",
+      "schema": "public",
+      "values": [
+        "APPROVED",
+        "BLOCKED",
+        "REVIEW"
+      ]
+    },
+    "public.moderation_decision": {
+      "name": "moderation_decision",
+      "schema": "public",
+      "values": [
+        "ALLOW",
+        "BLOCK",
+        "REVIEW"
       ]
     }
   },

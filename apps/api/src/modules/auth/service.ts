@@ -4,7 +4,6 @@ import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { eq } from 'drizzle-orm'
 import { AuthError } from './errors'
-import type { CampusVerificationProvider } from './provider'
 import type { Sessions } from './session'
 
 type UserRow = typeof users.$inferSelect
@@ -37,7 +36,7 @@ function requireRow<T>(rows: T[]): T {
  * `'ERR_POSTGRES_SERVER_ERROR'`）；而 Drizzle 会把它包一层（`{ query, params, cause }`），
  * 所以要顺着 `cause` 链找。
  */
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   let current: unknown = error
   for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
     if ('errno' in current && current.errno === '23505') return true
@@ -55,12 +54,8 @@ async function verifyPassword(password: string, hash: string): Promise<boolean> 
   }
 }
 
-export function createAuthService(deps: {
-  db: Db
-  sessions: Sessions
-  provider: CampusVerificationProvider
-}) {
-  const { db, sessions, provider } = deps
+export function createAuthService(deps: { db: Db; sessions: Sessions }) {
+  const { db, sessions } = deps
 
   return {
     async register(input: RegisterRequest): Promise<{ user: Me; token: string; expiresAt: Date }> {
@@ -72,11 +67,7 @@ export function createAuthService(deps: {
         .limit(1)
       if (existing.length > 0) throw new AuthError('STUDENT_NO_TAKEN', 409, '该学号已注册')
 
-      const verification = await provider.verify({ studentNo: input.studentNo })
       const passwordHash = await Bun.password.hash(input.password)
-      // Provider 是外部系统的边界：Mock 不返回校区，真实 Provider 返回的字符串也可能不在
-      // 值域内，因此这里运行时校验一次，非法值回退到用户注册时填的校区。
-      const verifiedCampus = CampusSchema.safeParse(verification.campus).data
 
       let created: { row: UserRow; token: string; expiresAt: Date }
       try {
@@ -90,9 +81,11 @@ export function createAuthService(deps: {
                 studentNo: input.studentNo,
                 passwordHash,
                 nickname: input.nickname,
-                campus: verifiedCampus ?? input.campus,
-                authStatus: verification.status,
-                verifiedAt: verification.status === 'VERIFIED' ? new Date() : null,
+                campus: input.campus,
+                // #68：注册不再认证。VERIFIED 只能由校园邮箱验证码流程（verification-service.ts）
+                // 产生，那里同时写入 campus_email + verifiedAt，保持 VERIFIED ⟺ 已绑定邮箱。
+                authStatus: 'UNVERIFIED',
+                verifiedAt: null,
               })
               .returning(),
           )

@@ -1,6 +1,6 @@
 {
-  "id": "8d704c7b-4a4e-4168-8bc0-2d636ec9612a",
-  "prevId": "c3741c9b-95ef-47ca-881d-7c4f1df7c782",
+  "id": "26d7175e-a970-472e-862d-80ab9d6d0b22",
+  "prevId": "8d704c7b-4a4e-4168-8bc0-2d636ec9612a",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1362,6 +1362,13 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "delivery": {
+          "name": "delivery",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
         },
         "attempt_count": {
           "name": "attempt_count",

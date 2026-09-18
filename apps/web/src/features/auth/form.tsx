@@ -31,7 +31,8 @@ export function AuthPageShell({
       */}
       <div className="flex w-full flex-col items-center">
         {iconSrc ? (
-          <img alt="" className="size-32" src={iconSrc} />
+          /* 品牌图不再强制方形（新版 fish 是 439×256 横比图），高度锁 96px 宽度自适应 */
+          <img alt="" className="h-24 w-auto" src={iconSrc} />
         ) : (
           <span className="flex size-16 items-center justify-center rounded-2xl bg-brand text-3xl shadow-[0_10px_24px_rgba(81,119,186,0.35)]">
             🔄

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { MeSchema } from '../auth/user'
+import { AuthStatusSchema, MeSchema } from '../auth/user'
 
 /**
  * Listing Domain Contract（Issue #6，2026-09-12 Freeze）。
@@ -115,16 +115,16 @@ export type ListingImage = z.infer<typeof ListingImageSchema>
 /**
  * 卖家公开信息用 `.pick()` 派生而不是重写字段，避免与认证域漂移。
  *
- * 刻意不含 `authStatus` / `verifiedAt`：`apps/api/src/app.ts:47-48` 明确当前 `authStatus`
- * 来自 Mock Provider，接入真实教务校验前不可作为信任依据，#5 的徽章不该拿它当安全依据——
- * 也就不该把它放进商品详情供前端误用。
+ * #68 后 `authStatus` 只能由真实校园邮箱验证产生（注册不再认证、Mock 已删），
+ * 可信度成立，公开徽章是认证体系的价值所在；但它只作展示，前端不得当权限判据。
+ * `verifiedAt` / `campusEmail` 仍不公开：验证时间与邮箱属于本人信息。
  */
 export const ListingSellerSchema = MeSchema.pick({
   id: true,
   nickname: true,
   avatarUrl: true,
   campus: true,
-})
+}).extend({ authStatus: AuthStatusSchema })
 
 export type ListingSeller = z.infer<typeof ListingSellerSchema>
 
