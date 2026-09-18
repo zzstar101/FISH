@@ -99,10 +99,11 @@ jobs:
       - name: Init MinIO bucket
         run: |
           docker run --rm --network host --entrypoint /bin/sh \
+            -v "$PWD/infra/minio-public-policy.json:/policies/public.json:ro" \
             -e MC_HOST_local=http://fish:fish-secret@localhost:9000 \
             quay.io/minio/mc:latest -c "
               mc mb --ignore-existing local/fish &&
-              mc anonymous set download local/fish
+              mc anonymous set-json /policies/public.json local/fish
             "
 
       # max_connections：官方镜像默认 100 不够（原因与实测量值见 docker-compose.yml 里
@@ -146,6 +147,9 @@ jobs:
       # 证据：#2 验收要求 migration 可在空库执行（走 README 记录的同一条命令）
       - name: Migrate
         run: bun run db:migrate
+
+      - name: Chat media smoke
+        run: bun apps/api/scripts/media-smoke.ts
 
       - name: Test
         run: bun test

@@ -57,6 +57,7 @@ function setup(
     }),
     stat: async () => ({ size: 1024, contentType: 'image/webp' }),
     readMediaBytes: async () => webpBytes(),
+    writeMediaBytes: async () => {},
     publicUrl: (key) => `https://cdn.test/${key}`,
     ...storageOverrides,
   }
@@ -86,10 +87,19 @@ function ascii(value: string): number[] {
   return value.split('').map((c) => c.charCodeAt(0))
 }
 
+function padded(bytes: Uint8Array, size: number): Uint8Array {
+  const result = new Uint8Array(size)
+  result.set(bytes)
+  return result
+}
+
 /** WebP VP8X 尺寸样本：800x600。 */
 function webpBytes(): Uint8Array {
-  const chunk = [...ascii('VP8X'), ...u32be(10), 0x0f, 0, 0, 0, ...u24le(799), ...u24le(599)]
-  return new Uint8Array([...ascii('RIFF'), ...u32le(8 + chunk.length), ...ascii('WEBP'), ...chunk])
+  const chunk = [...ascii('VP8X'), ...u32le(10), 0x0f, 0, 0, 0, ...u24le(799), ...u24le(599)]
+  return padded(
+    new Uint8Array([...ascii('RIFF'), ...u32le(4 + chunk.length), ...ascii('WEBP'), ...chunk]),
+    1024,
+  )
 }
 
 function vint(value: number, length: 1 | 2 | 3 | 4 = 2): number[] {
@@ -167,12 +177,7 @@ function webmBytes(durationMs: number): Uint8Array {
   ]
   const ebmlHeader = [0x1a, 0x45, 0xdf, 0xa3, ...vint(0)]
   const segmentId = [0x18, 0x53, 0x80, 0x67]
-  return new Uint8Array([
-    ...ebmlHeader,
-    ...segmentId,
-    ...vint(ebmlHeader.length + info.length),
-    ...info,
-  ])
+  return padded(new Uint8Array([...ebmlHeader, ...segmentId, ...vint(info.length), ...info]), 2048)
 }
 
 describe('media message service', () => {
@@ -252,7 +257,7 @@ describe('media message service', () => {
       {},
       {
         stat: async () => ({ size: 2048, contentType: 'image/webp' }),
-        readMediaBytes: async () => huge,
+        readMediaBytes: async () => padded(huge, 2048),
       },
     )
     const oversized = {
@@ -418,7 +423,7 @@ describe('media message service', () => {
     const service = setup(
       {},
       {
-        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
+        stat: async () => ({ size: bytes.length, contentType: 'audio/webm' }),
         readMediaBytes: async () => bytes,
       },
     )
@@ -427,10 +432,72 @@ describe('media message service', () => {
         kind: 'VOICE',
         objectKey: `chat-media/${conversationId}/${userId}/long.webm`,
         contentType: 'audio/webm',
-        sizeBytes: 2048,
+        sizeBytes: bytes.length,
         durationMs: 61_001,
       }),
     ).rejects.toMatchObject({ code: 'MEDIA_DURATION_EXCEEDED' })
+  })
+
+  test('persists server duration despite browser timer drift', async () => {
+    const service = setup(
+      {},
+      {
+        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
+        readMediaBytes: async () => webmBytes(3523),
+      },
+    )
+    const result = await service.create(userId, conversationId, {
+      kind: 'VOICE',
+      objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
+      contentType: 'audio/webm',
+      sizeBytes: 2048,
+      durationMs: 3500,
+    })
+    expect(result.durationMs).toBe(3523)
+  })
+
+  test('persists a separate snapshot that cannot be overwritten by the upload URL', async () => {
+    const objects = new Map<string, Uint8Array>([[image.objectKey, webpBytes()]])
+    let saved: MediaMessageInput | undefined
+    const service = setup(
+      {
+        create: async (_conversation, _sender, input) => {
+          saved = input
+          return row(input)
+        },
+      },
+      {
+        readMediaBytes: async (key) => objects.get(key) ?? null,
+        writeMediaBytes: async (key, bytes) => {
+          objects.set(key, bytes.slice())
+        },
+      },
+    )
+    await service.create(userId, conversationId, { ...image, width: 800, height: 600 })
+    expect(saved?.objectKey).toStartWith('chat-media-final/')
+    objects.set(image.objectKey, new Uint8Array([1, 2, 3]))
+    expect(objects.get(saved?.objectKey ?? '')).toEqual(webpBytes())
+  })
+
+  test('does not persist a message if final storage write fails', async () => {
+    let creates = 0
+    const service = setup(
+      {
+        create: async (_c, _u, input) => {
+          creates++
+          return row(input)
+        },
+      },
+      {
+        writeMediaBytes: async () => {
+          throw new Error('storage unavailable')
+        },
+      },
+    )
+    await expect(
+      service.create(userId, conversationId, { ...image, width: 800, height: 600 }),
+    ).rejects.toThrow('storage unavailable')
+    expect(creates).toBe(0)
   })
 
   test('rejects a malformed media cursor with 422', async () => {

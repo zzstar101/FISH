@@ -12,6 +12,8 @@
  */
 export type MediaObjectStat = { size: number; contentType: string }
 
+export const CHAT_MEDIA_PREFIX = 'chat-media-final/'
+
 export interface MediaStorage {
   /**
    * 预签名直传地址。
@@ -30,7 +32,16 @@ export interface MediaStorage {
   stat(key: string): Promise<MediaObjectStat | null>
 
   /** 读取私有对象；媒体接口在通过会话鉴权后使用。 */
-  getObject?(key: string): { stream: ReadableStream<Uint8Array>; contentType: string }
+  getObject?(
+    key: string,
+    range?: { start: number; end: number },
+  ): {
+    stream: ReadableStream<Uint8Array>
+    contentType: string
+  }
+
+  /** 仅服务端写入验证过的快照；key 不得用于预签名上传。 */
+  writeMediaBytes?(key: string, bytes: Uint8Array, contentType: string): Promise<void>
 
   /**
    * 读取对象的**完整字节**，用于服务端解析媒体真实属性（尺寸 / 时长）；失败或对象不存在返回 null。
@@ -39,9 +50,9 @@ export interface MediaStorage {
    * （在文件尾），MP4 的 `moov` 也可能在文件尾。只喂头部会显著低估时长，
    * 让超 60s 的录音通过校验（评审 blocker 2）。
    */
-  readMediaBytes?(key: string): Promise<Uint8Array | null>
+  readMediaBytes?(key: string, maxBytes?: number): Promise<Uint8Array | null>
 
-  /** 读响应里的公开 URL，依赖桶的匿名读策略（契约 §7.8）。 */
+  /** 读响应里的公开 URL，仅适用于 listings 前缀的匿名读策略。 */
   publicUrl(key: string): string
 }
 
@@ -82,16 +93,26 @@ export function createBunS3MediaStorage(options: {
       }
     },
 
-    getObject(key) {
+    getObject(key, range) {
       const file = client.file(key)
-      return { stream: file.stream(), contentType: file.type || 'application/octet-stream' }
+      const body = range ? file.slice(range.start, range.end + 1) : file
+      return { stream: body.stream(), contentType: file.type || 'application/octet-stream' }
     },
 
-    async readMediaBytes(key) {
+    async writeMediaBytes(key, bytes, contentType) {
+      await client.write(key, bytes, { type: contentType })
+    },
+
+    async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {
       try {
-        // `Bun.file()` 直接读全量：媒体上限 10MB，一次性读入内存不会成为瓶颈，
-        // 而流式只读头部会让 WebM/MP4 的时长解析低估（见 MediaStorage.readMediaBytes 注释）。
-        return new Uint8Array(await client.file(key).arrayBuffer())
+        // 有界 GET：stat 与 GET 之间上传方仍可覆盖临时对象，不能依赖旧 stat 限制内存。
+        // 多读一字节，让调用方区分恰好到上限和超限对象。
+        return new Uint8Array(
+          await client
+            .file(key)
+            .slice(0, maxBytes + 1)
+            .arrayBuffer(),
+        )
       } catch {
         // 对象不存在或读取失败：由调用方按 fail-closed 处理。
         return null

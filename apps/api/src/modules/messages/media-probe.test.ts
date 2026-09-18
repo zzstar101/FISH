@@ -51,6 +51,10 @@ function u32be(value: number): number[] {
   return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff]
 }
 
+function u32le(value: number): number[] {
+  return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]
+}
+
 function u16be(value: number): number[] {
   return [(value >>> 8) & 0xff, value & 0xff]
 }
@@ -78,6 +82,10 @@ describe('probeImage', () => {
       0,
       0,
       0, // bit depth / color type / compression / filter / interlace
+      0,
+      0,
+      0,
+      0, // CRC placeholder
     ]
     expect(probeImage(bytes(...png), 'image/png')).toEqual({ width: 320, height: 240 })
   })
@@ -89,11 +97,14 @@ describe('probeImage', () => {
       0xd8, // SOI
       0xff,
       0xc2,
-      ...u16be(10),
-      8, // SOF2：段长 10（含长度字段）、precision=8
+      ...u16be(11),
+      8, // precision
       ...u16be(1080),
       ...u16be(1920), // height / width
-      3, // components
+      1, // components
+      1,
+      0x11,
+      0, // one component specification
     ]
     expect(probeImage(bytes(...jpeg), 'image/jpeg')).toEqual({ width: 1920, height: 1080 })
   })
@@ -101,7 +112,7 @@ describe('probeImage', () => {
   test('parses WebP VP8X canvas dimensions', () => {
     const chunk = [
       ...'VP8X'.split('').map((c) => c.charCodeAt(0)),
-      ...u32be(10), // chunk size
+      ...u32le(10), // chunk size
       0x0f,
       0,
       0,
@@ -111,7 +122,7 @@ describe('probeImage', () => {
     ]
     const webp = [
       ...'RIFF'.split('').map((c) => c.charCodeAt(0)),
-      ...u32be(8 + chunk.length),
+      ...u32le(4 + chunk.length),
       ...'WEBP'.split('').map((c) => c.charCodeAt(0)),
       ...chunk,
     ]
@@ -125,16 +136,95 @@ describe('probeImage', () => {
     const packed = [0x2f, wh & 0xff, (wh >>> 8) & 0xff, (wh >>> 16) & 0xff, (wh >>> 24) & 0xff]
     const chunk = [
       ...'VP8L'.split('').map((c) => c.charCodeAt(0)),
-      ...u32be(packed.length),
+      ...u32le(packed.length),
       ...packed,
     ]
     const webp = [
       ...'RIFF'.split('').map((c) => c.charCodeAt(0)),
-      ...u32be(8 + chunk.length),
+      ...u32le(4 + chunk.length + 1),
+      ...'WEBP'.split('').map((c) => c.charCodeAt(0)),
+      ...chunk,
+      0,
+    ]
+    expect(probeImage(bytes(...webp), 'image/webp')).toEqual({ width, height })
+  })
+
+  test('rejects WebP chunks outside the RIFF-declared boundary', () => {
+    const bytesOutsideRiff = bytes(
+      0x52,
+      0x49,
+      0x46,
+      0x46,
+      0x04,
+      0x00,
+      0x00,
+      0x00,
+      0x57,
+      0x45,
+      0x42,
+      0x50,
+      0x56,
+      0x50,
+      0x38,
+      0x58,
+      0x0a,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+    )
+    expect(probeImage(bytesOutsideRiff, 'image/webp')).toBeNull()
+  })
+
+  test('rejects a WebP chunk whose odd-byte padding exceeds the RIFF boundary', () => {
+    const chunk = [...'VP8L'.split('').map((c) => c.charCodeAt(0)), ...u32le(5), 0x2f, 0, 0, 0, 0]
+    const webp = [
+      ...'RIFF'.split('').map((c) => c.charCodeAt(0)),
+      ...u32le(4 + chunk.length),
       ...'WEBP'.split('').map((c) => c.charCodeAt(0)),
       ...chunk,
     ]
-    expect(probeImage(bytes(...webp), 'image/webp')).toEqual({ width, height })
+    expect(probeImage(bytes(...webp), 'image/webp')).toBeNull()
+  })
+
+  test('rejects truncated image containers instead of zero-filling dimensions', () => {
+    expect(probeImage(bytes(0xff, 0xd8, 0xff, 0xc0, 0, 8, 8, 1, 0, 1), 'image/jpeg')).toBeNull()
+    const truncatedWebp = bytes(
+      82,
+      73,
+      70,
+      70,
+      0,
+      0,
+      0,
+      0,
+      87,
+      69,
+      66,
+      80,
+      86,
+      80,
+      56,
+      88,
+      0,
+      0,
+      0,
+      10,
+      0,
+      0,
+    )
+    expect(probeImage(truncatedWebp, 'image/webp')).toBeNull()
   })
 
   test('rejects a non-image / truncated input as null', () => {
@@ -292,10 +382,63 @@ function mp4File(input: {
   const ftyp = [
     ...u32be(16),
     ...'ftyp'.split('').map((c) => c.charCodeAt(0)),
-    ...u32be(0),
+    ...Array.from('isom', (c) => c.charCodeAt(0)),
     ...u32be(0),
   ]
   return [...ftyp, ...moov]
+}
+
+function box(type: string, ...payload: number[]): number[] {
+  return [...u32be(8 + payload.length), ...Array.from(type, (c) => c.charCodeAt(0)), ...payload]
+}
+
+function fragmentedMp4(
+  options: {
+    baseTime?: number
+    defaultDuration?: number
+    trexDuration?: number
+    truncate?: boolean
+  } = {},
+): Uint8Array {
+  const tkhd = box('tkhd', ...u32be(0), ...u32be(0), ...u32be(0), ...u32be(1))
+  const mdhd = box('mdhd', ...u32be(0), ...u32be(0), ...u32be(0), ...u32be(1000), ...u32be(0))
+  const stts = box('stts', ...u32be(0), ...u32be(0))
+  const trak = box(
+    'trak',
+    ...tkhd,
+    ...box('mdia', ...mdhd, ...box('minf', ...box('stbl', ...stts))),
+  )
+  const trex = box(
+    'trex',
+    ...u32be(0),
+    ...u32be(1),
+    ...u32be(1),
+    ...u32be(options.trexDuration ?? 0),
+    ...u32be(0),
+    ...u32be(0),
+  )
+  const moov = box('moov', ...trak, ...box('mvex', ...trex))
+  const tfhd = box(
+    'tfhd',
+    ...u32be(options.defaultDuration ? 8 : 0),
+    ...u32be(1),
+    ...(options.defaultDuration ? u32be(options.defaultDuration) : []),
+  )
+  const tfdt = box('tfdt', ...u32be(0), ...u32be(options.baseTime ?? 0))
+  const useDefault = options.defaultDuration || options.trexDuration
+  const trun = box(
+    'trun',
+    ...u32be(useDefault ? 0 : 0x100),
+    ...u32be(4),
+    ...(useDefault
+      ? []
+      : Array.from({ length: options.truncate ? 3 : 4 }, () => u32be(880)).flat()),
+  )
+  return new Uint8Array([
+    ...box('ftyp', ...Array.from('isom', (c) => c.charCodeAt(0)), ...u32be(0)),
+    ...moov,
+    ...box('moof', ...box('traf', ...tfhd, ...tfdt, ...trun)),
+  ])
 }
 
 describe('probeVoiceDuration', () => {
@@ -440,6 +583,272 @@ describe('probeVoiceDuration', () => {
       ],
     })
     expect(probeVoiceDuration(bytes(...honest), 'audio/mp4')).toEqual({ durationMs: 65_023 })
+  })
+
+  test('fails closed for all WebM lacing modes, including BlockGroup with a Duration header', () => {
+    for (const flags of [0x82, 0x84, 0x86]) {
+      const payload = [0x81, 0, 0, flags, 1, 0, 0]
+      for (const block of [
+        [...vint(0xa3, 1), ...vint(payload.length), ...payload],
+        [
+          ...vint(0xa0, 1),
+          ...vint(payload.length + 3),
+          ...vint(0xa1, 1),
+          ...vint(payload.length),
+          ...payload,
+        ],
+      ]) {
+        const clusterPayload = [0xe7, 0x82, ...u16be(59_999), ...block]
+        const cluster = [...vint(0x1f43b675, 4), ...vint(clusterPayload.length), ...clusterPayload]
+        expect(probeVoiceDuration(webm([infoElement(1000), cluster]), 'audio/webm')).toBeNull()
+      }
+    }
+  })
+
+  test('reads fragmented MP4 sample durations and decode times rather than empty moov duration', () => {
+    expect(probeVoiceDuration(fragmentedMp4(), 'audio/mp4')).toEqual({ durationMs: 3520 })
+    expect(probeVoiceDuration(fragmentedMp4({ baseTime: 59_000 }), 'audio/mp4')).toEqual({
+      durationMs: 62_520,
+    })
+    expect(probeVoiceDuration(fragmentedMp4({ defaultDuration: 880 }), 'audio/mp4')).toEqual({
+      durationMs: 3520,
+    })
+    expect(probeVoiceDuration(fragmentedMp4({ trexDuration: 880 }), 'audio/mp4')).toEqual({
+      durationMs: 3520,
+    })
+    expect(probeVoiceDuration(fragmentedMp4({ truncate: true }), 'audio/mp4')).toBeNull()
+  })
+
+  test('parses a real AAC fragmented MP4 with multiple fragments', async () => {
+    const file = Bun.file(new URL('./fixtures/voice-fragmented.mp4', import.meta.url))
+    expect(probeVoiceDuration(new Uint8Array(await file.arrayBuffer()), 'audio/mp4')).toEqual({
+      durationMs: 1021,
+    })
+  })
+
+  test('includes BlockDuration and rejects unknown-size Clusters', () => {
+    const block = [0x81, 0, 0, 0x80, 0]
+    const group = [...vint(0xa1, 1), ...vint(block.length), ...block, 0x9b, 0x81, 100]
+    const payload = [0xe7, 0x82, ...u16be(59_999), 0xa0, ...vint(group.length), ...group]
+    expect(
+      probeVoiceDuration(
+        webm([[...vint(0x1f43b675, 4), ...vint(payload.length), ...payload]]),
+        'audio/webm',
+      ),
+    ).toEqual({ durationMs: 60_099 })
+    expect(
+      probeVoiceDuration(
+        webm([[...vint(0x1f43b675, 4), 0xff, 0xe7, 0x81, 1], clusterWithBlocks(65_000, [0])], true),
+        'audio/webm',
+      ),
+    ).toBeNull()
+  })
+
+  test('rejects MP4 without a supported ftyp and truncated version-1 mvhd', () => {
+    const valid = mp4File({ timescale: 1000, mvhdDuration: 1000 })
+    expect(probeVoiceDuration(new Uint8Array(valid.slice(16)), 'audio/mp4')).toBeNull()
+    const unsupported = [...valid]
+    unsupported.splice(8, 4, ...Array.from('xxxx', (c) => c.charCodeAt(0)))
+    expect(probeVoiceDuration(new Uint8Array(unsupported), 'audio/mp4')).toBeNull()
+    const truncated = [
+      ...valid.slice(0, 16),
+      ...box(
+        'moov',
+        ...box(
+          'mvhd',
+          1,
+          0,
+          0,
+          0,
+          ...u32be(0),
+          ...u32be(0),
+          ...u32be(0),
+          ...u32be(0),
+          ...u32be(1000),
+        ),
+      ),
+    ]
+    expect(probeVoiceDuration(new Uint8Array(truncated), 'audio/mp4')).toBeNull()
+  })
+
+  test('fails closed on oversized WebM uint fields and truncated MP4 sample tables', () => {
+    const oversizedTimecode = clusterElement(1)
+    oversizedTimecode.splice(6, 1, 0x89)
+    oversizedTimecode.splice(7, 1, 1)
+    oversizedTimecode.splice(8, 0, 0, 0, 0, 0, 0, 0, 0)
+    expect(probeVoiceDuration(webm([oversizedTimecode], true), 'audio/webm')).toBeNull()
+
+    const valid = mp4File({
+      timescale: 1000,
+      mvhdDuration: 1000,
+      stts: [{ count: 1, delta: 1000 }],
+    })
+    const sttsType = [115, 116, 116, 115]
+    const sttsTypeOffset = valid.findIndex((_, index) =>
+      sttsType.every((value, offset) => valid[index + offset] === value),
+    )
+    expect(sttsTypeOffset).toBeGreaterThan(0)
+    if (sttsTypeOffset > 0) {
+      // Replace stts entry_count=1 with 2 without adding the second entry.
+      valid[sttsTypeOffset + 8 + 3] = 2
+    }
+    expect(probeVoiceDuration(new Uint8Array(valid), 'audio/mp4')).toBeNull()
+  })
+
+  test('rejects truncated WebM Segments and truncated nested MP4 boxes', () => {
+    const webmBytes = [...webm([infoElement(1000)])]
+    // Segment size is the one-byte VINT at offset 9; claim 127 bytes while the object is shorter.
+    webmBytes.splice(9, 1, 0x40, 0x7f)
+    expect(probeVoiceDuration(new Uint8Array(webmBytes), 'audio/webm')).toBeNull()
+
+    const mp4 = mp4File({ timescale: 1000, mvhdDuration: 1000, stts: [{ count: 1, delta: 1000 }] })
+    const moovSize = new DataView(new Uint8Array(mp4).buffer).getUint32(16, false)
+    const malformedFree = [0, 0, 0, 16, ...Array.from('free', (c) => c.charCodeAt(0)), 0, 0, 0, 0]
+    const expanded = [...mp4]
+    expanded[16] = ((moovSize + malformedFree.length) >>> 24) & 0xff
+    expanded[17] = ((moovSize + malformedFree.length) >>> 16) & 0xff
+    expanded[18] = ((moovSize + malformedFree.length) >>> 8) & 0xff
+    expanded[19] = (moovSize + malformedFree.length) & 0xff
+    expanded.push(...malformedFree)
+    expect(probeVoiceDuration(new Uint8Array(expanded), 'audio/mp4')).toBeNull()
+  })
+
+  test('rejects an oversized TimecodeScale even when a cluster could provide a duration', () => {
+    const oversizedScale = [...vint(0x2ad7b1, 3), ...vint(9), 1, 0, 0, 0, 0, 0, 0, 0, 1]
+    const info = [...vint(0x1549a966, 4), ...vint(oversizedScale.length), ...oversizedScale]
+    expect(probeVoiceDuration(webm([info, clusterElement(1000)], true), 'audio/webm')).toBeNull()
+  })
+
+  test('rejects truncated WebM element headers after valid duration data', () => {
+    const infoThenTruncatedElement = bytes(
+      0x1a,
+      0x45,
+      0xdf,
+      0xa3,
+      0x80,
+      0x18,
+      0x53,
+      0x80,
+      0x67,
+      0xff,
+      0x15,
+      0x49,
+      0xa9,
+      0x66,
+      0x88,
+      0x44,
+      0x89,
+      0x84,
+      0x44,
+      0x7a,
+      0x00,
+      0x00,
+      0xe7,
+    )
+    const clusterThenTruncatedId = bytes(
+      0x1a,
+      0x45,
+      0xdf,
+      0xa3,
+      0x80,
+      0x18,
+      0x53,
+      0x80,
+      0x67,
+      0xff,
+      0x1f,
+      0x43,
+      0xb6,
+      0x75,
+      0x85,
+      0xe7,
+      0x82,
+      0x03,
+      0xe8,
+      0x40,
+    )
+    expect(probeVoiceDuration(infoThenTruncatedElement, 'audio/webm')).toBeNull()
+    expect(probeVoiceDuration(clusterThenTruncatedId, 'audio/webm')).toBeNull()
+  })
+
+  test('rejects malformed MP4 sample tables even when mdhd cannot provide duration', () => {
+    const mvhd = box('mvhd', 0, 0, 0, 0, ...u32be(0), ...u32be(0), ...u32be(1000), ...u32be(1000))
+    const mdhd = box('mdhd', 0, 0, 0, 0, ...u32be(0), ...u32be(0), ...u32be(0), ...u32be(0))
+    const truncatedStts = box('stts', 0, 0, 0, 0, ...u32be(1))
+    const stbl = box('stbl', ...truncatedStts)
+    const minf = box('minf', ...stbl)
+    const mdia = box('mdia', ...mdhd, ...minf)
+    const track = box('trak', ...mdia)
+    const file = [
+      ...mp4File({ timescale: 1000, mvhdDuration: 1000 }).slice(0, 16),
+      ...box('moov', ...mvhd, ...track),
+    ]
+    expect(probeVoiceDuration(new Uint8Array(file), 'audio/mp4')).toBeNull()
+  })
+
+  test('rejects duplicate or invalid Blocks in one BlockGroup', () => {
+    const duplicateBlocks = bytes(
+      0x1a,
+      0x45,
+      0xdf,
+      0xa3,
+      0x80,
+      0x18,
+      0x53,
+      0x80,
+      0x67,
+      0xff,
+      0x1f,
+      0x43,
+      0xb6,
+      0x75,
+      0x94,
+      0xe7,
+      0x82,
+      0x7d,
+      0x00,
+      0xa0,
+      0x8e,
+      0xa1,
+      0x85,
+      0x81,
+      0x75,
+      0x30,
+      0x80,
+      0x00,
+      0xa1,
+      0x85,
+      0x81,
+      0x00,
+      0x00,
+      0x80,
+      0x00,
+    )
+    expect(probeVoiceDuration(duplicateBlocks, 'audio/webm')).toBeNull()
+
+    const invalidThenValid = new Uint8Array(duplicateBlocks)
+    invalidThenValid[26] = 0x82
+    expect(probeVoiceDuration(invalidThenValid, 'audio/webm')).toBeNull()
+  })
+
+  test('rejects duplicate MP4 stts boxes instead of checking only the last one', () => {
+    const makeFile = (firstStts: number[]) => {
+      const mvhd = box('mvhd', 0, 0, 0, 0, ...u32be(0), ...u32be(0), ...u32be(1000), ...u32be(1000))
+      const mdhd = box('mdhd', 0, 0, 0, 0, ...u32be(0), ...u32be(0), ...u32be(1000), ...u32be(0))
+      const validStts = box('stts', 0, 0, 0, 0, ...u32be(1), ...u32be(1), ...u32be(1000))
+      const stbl = box('stbl', ...firstStts, ...validStts)
+      const track = box('trak', ...box('mdia', ...mdhd, ...box('minf', ...stbl)))
+      return [
+        ...mp4File({ timescale: 1000, mvhdDuration: 1000 }).slice(0, 16),
+        ...box('moov', ...mvhd, ...track),
+      ]
+    }
+
+    const longFirst = box('stts', 0, 0, 0, 0, ...u32be(1), ...u32be(1), ...u32be(65_000))
+    expect(probeVoiceDuration(new Uint8Array(makeFile(longFirst)), 'audio/mp4')).toBeNull()
+
+    const truncatedFirst = box('stts', 0, 0, 0, 0, ...u32be(1))
+    expect(probeVoiceDuration(new Uint8Array(makeFile(truncatedFirst)), 'audio/mp4')).toBeNull()
   })
 
   test('returns null for unsupported mime or malformed payload', () => {

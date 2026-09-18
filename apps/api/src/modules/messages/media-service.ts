@@ -17,7 +17,7 @@ import {
   mediaPresignResponseSchema,
 } from '@fish/contracts/chat/schema'
 import { newId } from '@fish/db/ids'
-import type { MediaStorage } from '../uploads/storage'
+import { CHAT_MEDIA_PREFIX, type MediaStorage } from '../uploads/storage'
 import { probeImage, probeVoiceDuration } from './media-probe'
 import type { MediaListCursor, MediaMessageStore, MediaRow } from './media-store'
 
@@ -34,9 +34,6 @@ export class MediaMessageServiceError extends Error {
 
 const notFound = () => new MediaMessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
 const invalid = (code: string, message: string) => new MediaMessageServiceError(422, code, message)
-
-/** 服务端解析媒体属性需要完整对象字节（WebM/MP4 的时长在文件尾，见 media-probe）。 */
-const MAX_PROBE_BYTES = MEDIA_MAX_VOICE_BYTES
 
 /** 按 kind 返回该类型允许的真实字节上限（防御纵深：presign 只校验客户端声明值）。 */
 function maxBytesFor(kind: MediaKind): number {
@@ -93,7 +90,7 @@ export interface MediaMessageService {
     userId: string,
     conversationId: string,
     mediaId: string,
-  ): Promise<{ key: string; contentType: string }>
+  ): Promise<{ key: string; contentType: string; size: number }>
 }
 
 const imageMime = (value: string): boolean =>
@@ -175,22 +172,26 @@ export function createMediaMessageService({
       }
       // 服务端从对象内容解析真实尺寸 / 时长（fail-closed）：
       // 不信任客户端声明的 width/height/durationMs，解析失败或超出限制一律拒绝。
-      if (!storage.readMediaBytes) {
+      if (!storage.readMediaBytes || !storage.writeMediaBytes) {
         throw invalid('MEDIA_OBJECT_INVALID', '存储未提供内容读取能力，无法完成服务端校验')
       }
       // 必须读**完整对象**：WebM 的 Duration 缺失时用文件尾的 Cluster Timecode，
       // MP4 的 moov 也可能在文件尾；只读头部会低估时长并绕过 60s 上限（评审 blocker 2）。
-      const bytes = await storage.readMediaBytes(input.objectKey)
+      const bytes = await storage.readMediaBytes(input.objectKey, maxBytesFor(input.kind))
       if (!bytes || bytes.length === 0) {
         throw invalid('MEDIA_OBJECT_INVALID', '媒体内容为空或不可读取')
       }
-      if (bytes.length > MAX_PROBE_BYTES) {
-        throw invalid('MEDIA_OBJECT_INVALID', '媒体大小超过限制')
+      if (bytes.length > maxBytesFor(input.kind) || bytes.length !== stat.size) {
+        throw invalid('MEDIA_OBJECT_INVALID', '媒体大小超过限制或上传内容已变化')
       }
-      // 校验通过后统一落库 + 事件推送。
+      // 保存已校验的同一份字节，而非重新读取/复制可被 PUT 覆盖的临时 key。
+      const writeSnapshot = storage.writeMediaBytes
       const persist = async (verified: MediaMessageInput) => {
-        const result = dto(await store.create(conversationId, userId, verified), (id) =>
-          mediaUrl(conversationId, id),
+        const key = `${CHAT_MEDIA_PREFIX}${conversationId}/${userId}/${newId()}`
+        await writeSnapshot(key, bytes, verified.contentType)
+        const result = dto(
+          await store.create(conversationId, userId, { ...verified, objectKey: key }),
+          (id) => mediaUrl(conversationId, id),
         )
         const participants = await store.participant(conversationId, userId)
         if (participants) onMediaCreated?.(participants, result)
@@ -210,14 +211,12 @@ export function createMediaMessageService({
         return persist({ ...input, width: probed.width, height: probed.height })
       }
       const probed = probeVoiceDuration(bytes, input.contentType)
-      if (!probed) throw invalid('MEDIA_OBJECT_INVALID', '语音时长解析失败')
+      if (!probed || probed.durationMs <= 0)
+        throw invalid('MEDIA_OBJECT_INVALID', '语音时长解析失败')
       if (probed.durationMs > MEDIA_MAX_VOICE_DURATION_MS) {
         throw invalid('MEDIA_DURATION_EXCEEDED', '语音时长超过限制')
       }
-      const declared = 'durationMs' in input ? input.durationMs : undefined
-      if (declared !== undefined && declared !== probed.durationMs) {
-        throw invalid('MEDIA_OBJECT_INVALID', '语音时长与声明不一致')
-      }
+      // 浏览器计时受启动延迟/packet padding 影响；声明值不参与安全判断或落库。
       return persist({ ...input, durationMs: probed.durationMs })
     },
     async list(userId, conversationId, query) {
@@ -243,7 +242,7 @@ export function createMediaMessageService({
       if (!(await store.participant(conversationId, userId))) throw notFound()
       const row = await store.find(conversationId, mediaId, userId)
       if (!row) throw new MediaMessageServiceError(404, 'MEDIA_NOT_FOUND', '媒体不存在')
-      return { key: row.object_key, contentType: row.mime_type }
+      return { key: row.object_key, contentType: row.mime_type, size: row.size_bytes }
     },
   }
 }

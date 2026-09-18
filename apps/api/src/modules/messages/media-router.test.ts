@@ -38,14 +38,22 @@ function buildApp(overrides: Partial<MediaMessageService> = {}) {
       createdAt: '2026-09-14T12:00:00.000Z',
     }),
     list: async () => ({ items: [], nextCursor: null }),
-    getObject: async () => ({ key: 'chat-media/key.webp', contentType: 'image/webp' }),
+    getObject: async () => ({ key: 'chat-media/key.webp', contentType: 'image/webp', size: 10 }),
     ...overrides,
   }
   const storage: MediaStorage = {
     presignPut: () => ({ url: '', headers: {}, expiresAt: '' }),
     stat: async () => null,
     publicUrl: (key) => key,
-    getObject: () => ({ stream: new ReadableStream(), contentType: 'image/webp' }),
+    getObject: (_key, range) => ({
+      stream: new Blob([
+        new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]).slice(
+          range?.start ?? 0,
+          range ? range.end + 1 : undefined,
+        ),
+      ]).stream(),
+      contentType: 'image/webp',
+    }),
   }
   const app = new Hono()
   app.route('/conversations', createMediaRouter({ service, storage, requireAuth }))
@@ -77,6 +85,45 @@ describe('media router', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toBe('image/webp')
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  test('serves bounded, open-ended and suffix byte ranges', async () => {
+    for (const [range, expected, contentRange] of [
+      ['bytes=2-4', [2, 3, 4], 'bytes 2-4/10'],
+      ['bytes=8-', [8, 9], 'bytes 8-9/10'],
+      ['bytes=-3', [7, 8, 9], 'bytes 7-9/10'],
+      ['bytes=8-99', [8, 9], 'bytes 8-9/10'],
+    ] as const) {
+      const response = await buildApp().request(
+        `/conversations/${conversationId}/media/${mediaId}`,
+        {
+          headers: { Range: range },
+        },
+      )
+      expect(response.status).toBe(206)
+      expect(response.headers.get('content-range')).toBe(contentRange)
+      expect(response.headers.get('content-length')).toBe(String(expected.length))
+      expect(response.headers.get('accept-ranges')).toBe('bytes')
+      expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([...expected])
+    }
+  })
+
+  test('rejects unsatisfiable ranges and ignores unsupported range syntax', async () => {
+    for (const range of ['bytes=10-', 'bytes=-0']) {
+      const response = await buildApp().request(
+        `/conversations/${conversationId}/media/${mediaId}`,
+        {
+          headers: { Range: range },
+        },
+      )
+      expect(response.status).toBe(416)
+      expect(response.headers.get('content-range')).toBe('bytes */10')
+    }
+    const response = await buildApp().request(`/conversations/${conversationId}/media/${mediaId}`, {
+      headers: { Range: 'bytes=0-1,4-5' },
+    })
+    expect(response.status).toBe(200)
+    expect((await response.arrayBuffer()).byteLength).toBe(10)
   })
 
   test('passes the pagination query through and returns the cursor envelope', async () => {
