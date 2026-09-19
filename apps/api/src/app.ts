@@ -3,7 +3,8 @@ import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
-import type { MailTransportEnv, ServerEnv } from '@fish/shared/env'
+import type { MailTransportEnv, MeetupTokenEnv, ServerEnv } from '@fish/shared/env'
+import { loadMeetupTokenEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -79,6 +80,8 @@ export function createApp(
   env: ServerEnv,
   /** 邮件 transport（#68）：调用方显式传入（index.ts 用 loadMailTransportEnv 从 env 校验）。 */
   mailEnv: MailTransportEnv = { transport: 'outbox' },
+  /** 面交码签名密钥（#70）：API-only（worker 不做 HMAC），index.ts 用 loadMeetupTokenEnv 校验。 */
+  meetupEnv: MeetupTokenEnv = loadMeetupTokenEnv(),
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -255,7 +258,7 @@ export function createApp(
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
         storage,
-        meetupSecret: env.MEETUP_TOKEN_SECRET,
+        meetupSecret: meetupEnv.MEETUP_TOKEN_SECRET,
         onSystemMessage: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',

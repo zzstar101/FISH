@@ -411,6 +411,22 @@ describe('meetup token store (integration, #70)', () => {
       listing: '01990000-0000-7000-8000-0000000000c6',
       conversation: '01990000-0000-7000-8000-0000000000de',
     },
+    issueGuardCancel: {
+      listing: '01990000-0000-7000-8000-0000000000c7',
+      conversation: '01990000-0000-7000-8000-0000000000df',
+    },
+    issueGuardComplete: {
+      listing: '01990000-0000-7000-8000-0000000000c8',
+      conversation: '01990000-0000-7000-8000-0000000000e0',
+    },
+    issueRace: {
+      listing: '01990000-0000-7000-8000-0000000000c9',
+      conversation: '01990000-0000-7000-8000-0000000000e1',
+    },
+    generation: {
+      listing: '01990000-0000-7000-8000-0000000000ca',
+      conversation: '01990000-0000-7000-8000-0000000000e2',
+    },
   } as const
 
   const TOKEN_HASH = 'a'.repeat(64)
@@ -464,7 +480,12 @@ describe('meetup token store (integration, #70)', () => {
       ttlSeconds: 300,
     })
     await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
-    await store.recordMeetupTokenFailure(txId, 5, 600)
+    await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      5,
+      600,
+    )
 
     const NEW_TOKEN_HASH = 'c'.repeat(64)
     const NEW_CODE_HASH = 'd'.repeat(64)
@@ -474,6 +495,8 @@ describe('meetup token store (integration, #70)', () => {
       issuedBy: seller,
       ttlSeconds: 300,
     })
+    expect(refreshed).not.toBeNull()
+    if (!refreshed) throw new Error('unreachable')
     expect(refreshed.token_hash).toBe(NEW_TOKEN_HASH)
     expect(refreshed.consumed_at).toBeNull()
     expect(refreshed.failed_attempts).toBe(0)
@@ -503,14 +526,29 @@ describe('meetup token store (integration, #70)', () => {
       hash: 'e'.repeat(64),
     })
     expect(miss.kind).toBe('invalid')
-    const first = await store.recordMeetupTokenFailure(txId, 3, 600)
-    expect(first.failedAttempts).toBe(1)
-    expect(first.lockedUntil).toBeNull()
+    const first = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      3,
+      600,
+    )
+    expect(first?.failedAttempts).toBe(1)
+    expect(first?.lockedUntil).toBeNull()
 
-    await store.recordMeetupTokenFailure(txId, 3, 600)
-    const third = await store.recordMeetupTokenFailure(txId, 3, 600)
-    expect(third.failedAttempts).toBe(3)
-    expect(third.lockedUntil).not.toBeNull()
+    await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      3,
+      600,
+    )
+    const third = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      3,
+      600,
+    )
+    expect(third?.failedAttempts).toBe(3)
+    expect(third?.lockedUntil).not.toBeNull()
 
     // 锁定期间核销被条件更新拦下（诊断出 locked，而不是 invalid）
     const locked = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
@@ -582,5 +620,103 @@ describe('meetup token store (integration, #70)', () => {
     expect(merged.status).toBe('COMPLETED')
     expect(merged.completed_at).not.toBeNull()
     expect(merged.listing_status).toBe('SOLD')
+  })
+
+  test('终态交易不得签发：CANCELLED / COMPLETED 上 upsert 落 0 行返回 null（审查 P1 TOCTOU）', async () => {
+    const cancelledTx = await createPendingTx(scenarios.issueGuardCancel)
+    await store.cancel(cancelledTx, buyer1)
+    expect(
+      await store.upsertMeetupToken(cancelledTx, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+        ttlSeconds: 300,
+      }),
+    ).toBeNull()
+    expect(await store.findMeetupToken(cancelledTx)).toBeNull()
+
+    const completedTx = await createPendingTx(scenarios.issueGuardComplete)
+    await store.confirm(completedTx, buyer1, 'buyer')
+    await store.confirm(completedTx, seller, 'seller')
+    expect(
+      await store.upsertMeetupToken(completedTx, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+        ttlSeconds: 300,
+      }),
+    ).toBeNull()
+    expect(await store.findMeetupToken(completedTx)).toBeNull()
+  })
+
+  test('cancel 与 issue 并发：二者在交易行锁上串行化，201 只发给持锁时仍 PENDING 的交易', async () => {
+    const txId = await createPendingTx(scenarios.issueRace)
+    const [cancelOut, issueOut] = await Promise.all([
+      store.cancel(txId, buyer1),
+      store.upsertMeetupToken(txId, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+        ttlSeconds: 300,
+      }),
+    ])
+    // cancel 在 PENDING 上不受 token 影响，必然成功（#11 冻结语义）
+    if (cancelOut.kind !== 'ok') throw new Error('unreachable')
+    // 可观测不变量：issue 返回 null ⇒ 终态下没有新凭证行；
+    // issue 返回行 ⇒ 它持锁时交易仍 PENDING（签发先于取消，随后取消生效是合法时序）
+    const tokenRow = await store.findMeetupToken(txId)
+    if (issueOut === null) {
+      expect(tokenRow).toBeNull()
+    } else {
+      expect(tokenRow?.token_hash).toBe(TOKEN_HASH)
+    }
+  })
+
+  test('失败计数绑定凭证代际：刷新后旧请求的失败不污染新码（审查 P1）', async () => {
+    const txId = await createPendingTx(scenarios.generation)
+    const V1_TOKEN = 'f'.repeat(64)
+    const V1_CODE = 'e'.repeat(64)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: V1_TOKEN,
+      codeHash: V1_CODE,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    // 旧代凭证上的两次失败
+    const first = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: V1_TOKEN, codeHash: V1_CODE },
+      5,
+      600,
+    )
+    expect(first?.failedAttempts).toBe(1)
+    // 刷新 → 新一代凭证（哈希覆写、计数归零）
+    const V2_TOKEN = '9'.repeat(64)
+    const V2_CODE = '8'.repeat(64)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: V2_TOKEN,
+      codeHash: V2_CODE,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    // 并发中的旧请求此刻才落计数：代际不匹配 → 被丢弃
+    const stale = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: V1_TOKEN, codeHash: V1_CODE },
+      5,
+      600,
+    )
+    expect(stale).toBeNull()
+    const fresh = await store.findMeetupToken(txId)
+    expect(fresh?.failed_attempts).toBe(0)
+    expect(fresh?.locked_until).toBeNull()
+    // 新一代上的失败照常累计
+    const counted = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: V2_TOKEN, codeHash: V2_CODE },
+      5,
+      600,
+    )
+    expect(counted?.failedAttempts).toBe(1)
   })
 })

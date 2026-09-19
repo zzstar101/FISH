@@ -129,12 +129,15 @@ export interface TransactionStore {
   /**
    * 签发 / 刷新面交凭证（#70）：一行对应一笔交易的当前凭证，重复签发整行覆写，
    * 旧码（token_hash / code_hash 被替换）立即作废，消费与失败计数一并归零。
-   * 调用方（service）已校验卖家角色与 PENDING_MEETUP，这里不做状态判断。
+   * **原子性（防 TOCTOU）**：事务内先 `SELECT … FOR UPDATE` 锁定交易行并校验
+   * PENDING_MEETUP + 卖家身份，校验通过才写凭证行——201 的承诺是「持锁那一刻
+   * 交易仍可签发」；cancel/complete 与 issue 并发时在交易行锁上串行化，终态交易
+   * 不会拿到新凭证（返回 null，service 据此给 409）。
    */
   upsertMeetupToken(
     transactionId: string,
     input: { tokenHash: string; codeHash: string; issuedBy: string; ttlSeconds: number },
-  ): Promise<MeetupTokenRow>
+  ): Promise<MeetupTokenRow | null>
   /**
    * 原子核销（#70 的「一次性」）：匹配明文哈希 + 未消费 + 未过期 + 未锁定的条件更新，
    * 并发重复核销只有一者成功（其余按当前行状态诊断，见 MeetupConsumeResult）。
@@ -152,12 +155,19 @@ export interface TransactionStore {
     userId: string,
     presented: MeetupConsumeInput,
   ): Promise<MeetupConsumeResult>
-  /** 核销失败累计；达到阈值置 locked_until（防 6 位码被爆破）。 */
+  /**
+   * 核销失败累计；达到阈值置 locked_until（防 6 位码被爆破）。
+   * `generation` 是诊断「不匹配」那一刻读到的行哈希：计数只在行仍是**同一代凭证**
+   * 时生效——卖家刷新（整行覆写换哈希）后，并发中的旧请求无法把失败记到新码上，
+   * 多个过期请求也不能把刚刷新的码立即锁死。
+   * 锁定到期后计数刻意不归零：再错一次立即重新锁定（持续计数），重签时才清零。
+   */
   recordMeetupTokenFailure(
     transactionId: string,
+    generation: { tokenHash: string; codeHash: string },
     maxAttempts: number,
     lockSeconds: number,
-  ): Promise<{ failedAttempts: number; lockedUntil: Date | string | null }>
+  ): Promise<{ failedAttempts: number; lockedUntil: Date | string | null } | null>
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -546,29 +556,41 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
     },
 
     async upsertMeetupToken(transactionId, input) {
-      // expires_at 用 DB 时钟 now() + interval：与应用时钟的偏移不会触发
-      // expires_after_issued CHECK（同一条语句里 now() 即 issued_at，严格小于过期）。
-      const result = await db.execute(sql`
-        INSERT INTO transaction_meetup_tokens
-          (transaction_id, token_hash, code_hash, issued_by, expires_at)
-        VALUES (${transactionId}, ${input.tokenHash}, ${input.codeHash}, ${input.issuedBy},
-                now() + make_interval(secs => ${input.ttlSeconds}::int))
-        ON CONFLICT (transaction_id) DO UPDATE SET
-          token_hash = EXCLUDED.token_hash,
-          code_hash = EXCLUDED.code_hash,
-          issued_by = EXCLUDED.issued_by,
-          issued_at = now(),
-          expires_at = EXCLUDED.expires_at,
-          consumed_at = NULL,
-          consumed_by = NULL,
-          failed_attempts = 0,
-          locked_until = NULL
-        RETURNING transaction_id, token_hash, code_hash, issued_by,
-                  issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
-      `)
-      const row = rowsOf(result)[0]
-      if (!row) throw new Error(`面交凭证签发失败：transaction=${transactionId}`)
-      return toMeetupTokenRow(row)
+      return db.transaction(async (tx) => {
+        // 先锁交易行并校验状态与卖家（FOR UPDATE）：issue 与 cancel/complete 在交易行
+        // 锁上串行化，杜绝「service 检查 PENDING 之后、写入之前交易进入终态」的窗口。
+        // expires_at 用 DB 时钟 now() + interval：与应用时钟的偏移不会触发
+        // expires_after_issued CHECK（同一条语句里 now() 即 issued_at，严格小于过期）。
+        const locked = await tx.execute(sql`
+          SELECT id FROM transactions
+          WHERE id = ${transactionId}
+            AND status = 'PENDING_MEETUP'
+            AND seller_id = ${input.issuedBy}
+          FOR UPDATE
+        `)
+        if (rowsOf(locked).length === 0) return null
+        const result = await tx.execute(sql`
+          INSERT INTO transaction_meetup_tokens
+            (transaction_id, token_hash, code_hash, issued_by, expires_at)
+          VALUES (${transactionId}, ${input.tokenHash}, ${input.codeHash}, ${input.issuedBy},
+                  now() + make_interval(secs => ${input.ttlSeconds}::int))
+          ON CONFLICT (transaction_id) DO UPDATE SET
+            token_hash = EXCLUDED.token_hash,
+            code_hash = EXCLUDED.code_hash,
+            issued_by = EXCLUDED.issued_by,
+            issued_at = now(),
+            expires_at = EXCLUDED.expires_at,
+            consumed_at = NULL,
+            consumed_by = NULL,
+            failed_attempts = 0,
+            locked_until = NULL
+          RETURNING transaction_id, token_hash, code_hash, issued_by,
+                    issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+        `)
+        const row = rowsOf(result)[0]
+        if (!row) throw new Error(`面交凭证签发失败：transaction=${transactionId}`)
+        return toMeetupTokenRow(row)
+      })
     },
 
     async consumeMeetupToken(transactionId, userId, presented) {
@@ -623,7 +645,9 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
       })
     },
 
-    async recordMeetupTokenFailure(transactionId, maxAttempts, lockSeconds) {
+    async recordMeetupTokenFailure(transactionId, generation, maxAttempts, lockSeconds) {
+      // WHERE 绑定「诊断不匹配那一刻」的行哈希（凭证代际）：刷新换哈希后，
+      // 并发旧请求的失败落 0 行（返回 null 被丢弃），不会累计到新一代凭证上。
       const result = await db.execute(sql`
         UPDATE transaction_meetup_tokens
         SET failed_attempts = failed_attempts + 1,
@@ -633,10 +657,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               ELSE locked_until
             END
         WHERE transaction_id = ${transactionId}
+          AND token_hash = ${generation.tokenHash}
+          AND code_hash = ${generation.codeHash}
         RETURNING failed_attempts, locked_until
       `)
       const row = rowsOf(result)[0]
-      if (!row) throw new Error(`面交凭证失败计数缺少行：transaction=${transactionId}`)
+      if (!row) return null
       return {
         failedAttempts: row.failed_attempts as number,
         lockedUntil: (row.locked_until as Date | string | null) ?? null,

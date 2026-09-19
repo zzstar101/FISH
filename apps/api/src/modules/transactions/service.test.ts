@@ -204,7 +204,10 @@ class MemoryTxStore implements TransactionStore {
   async upsertMeetupToken(
     transactionId: string,
     input: { tokenHash: string; codeHash: string; issuedBy: string; ttlSeconds: number },
-  ): Promise<MeetupTokenRow> {
+  ): Promise<MeetupTokenRow | null> {
+    // 对齐 SQL：事务内 FOR UPDATE 校验 PENDING + 卖家，终态交易签发返回 null
+    const live = this.rows.find((r) => r.id === transactionId)
+    if (live?.status !== 'PENDING_MEETUP' || live.seller_id !== input.issuedBy) return null
     const issuedAt = new Date()
     const row: MeetupTokenRow = {
       transaction_id: transactionId,
@@ -255,11 +258,15 @@ class MemoryTxStore implements TransactionStore {
 
   async recordMeetupTokenFailure(
     transactionId: string,
+    generation: { tokenHash: string; codeHash: string },
     maxAttempts: number,
     lockSeconds: number,
-  ): Promise<{ failedAttempts: number; lockedUntil: Date | string | null }> {
+  ): Promise<{ failedAttempts: number; lockedUntil: Date | string | null } | null> {
     const row = this.meetupTokens.get(transactionId)
-    if (!row) throw new Error(`面交凭证失败计数缺少行：transaction=${transactionId}`)
+    // 对齐 SQL：行缺失或已刷新成新一代凭证（哈希不匹配）→ 计数被丢弃
+    if (!row || row.token_hash !== generation.tokenHash || row.code_hash !== generation.codeHash) {
+      return null
+    }
     row.failed_attempts += 1
     if (row.failed_attempts >= maxAttempts) {
       row.locked_until = new Date(Date.now() + lockSeconds * 1000)
@@ -627,6 +634,23 @@ describe('transaction service: meetup token (#70)', () => {
     await expect(
       service.verifyMeetupCode(seller, txId, { code: token.code }),
     ).rejects.toMatchObject({ status: 403, code: 'MEETUP_TOKEN_NOT_ALLOWED' })
+  })
+
+  test('形状非法的 qrToken（超长/非 base64url）→ 422 且不计失败（审查非阻断项）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    await expect(
+      service.redeemMeetupToken(buyer, txId, { qrToken: `${'x'.repeat(200)}` }),
+    ).rejects.toMatchObject({ status: 422, code: 'MEETUP_TOKEN_INVALID' })
+    await expect(
+      service.redeemMeetupToken(buyer, txId, { qrToken: 'bad token with space' }),
+    ).rejects.toMatchObject({ status: 422, code: 'MEETUP_TOKEN_INVALID' })
+    // 形状拒绝不累计失败：真实码仍可正常核销
+    await expect(
+      service.redeemMeetupToken(buyer, txId, {
+        qrToken: parseMeetupQrPayload(token.qrPayload)?.token ?? '',
+      }),
+    ).resolves.toMatchObject({ verified: true })
   })
 
   test('错误 6 位码计失败，第 5 次起 429 MEETUP_TOKEN_LOCKED', async () => {

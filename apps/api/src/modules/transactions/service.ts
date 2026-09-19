@@ -225,6 +225,15 @@ export function createTransactionService({
     if (!tokenRow) {
       throw new TransactionServiceError(404, 'MEETUP_TOKEN_NOT_FOUND', '这笔交易还没有可用的面交码')
     }
+    // 契约对 qrToken 只约束非空（#88 冻结）；服务端在此收紧形状——超长 / 非
+    // base64url（与签发侧 token 字符集一致）的输入不进入 HMAC，直接按无效处理。
+    // 6 位码已由契约正则约束，无需重复。
+    if (
+      input.kind === 'qr' &&
+      (input.presented.length > 128 || !/^[A-Za-z0-9_-]+$/.test(input.presented))
+    ) {
+      throw new TransactionServiceError(422, 'MEETUP_TOKEN_INVALID', '面交码不正确')
+    }
     if (tokenRow.locked_until != null && new Date(tokenRow.locked_until).getTime() > Date.now()) {
       throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
     }
@@ -255,12 +264,15 @@ export function createTransactionService({
       })
     }
     if (result.kind === 'invalid') {
+      // 失败计数绑定「诊断不匹配时」读到的凭证代际：卖家刷新（换哈希）后，
+      // 并发旧请求的失败被丢弃，不会累计到新一代凭证上（审查 P1）。
       const failure = await store.recordMeetupTokenFailure(
         id,
+        { tokenHash: tokenRow.token_hash, codeHash: tokenRow.code_hash },
         MEETUP_TOKEN_MAX_ATTEMPTS,
         MEETUP_TOKEN_LOCK_SECONDS,
       )
-      if (failure.lockedUntil != null && new Date(failure.lockedUntil).getTime() > Date.now()) {
+      if (failure?.lockedUntil != null && new Date(failure.lockedUntil).getTime() > Date.now()) {
         throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
       }
       throw new TransactionServiceError(422, 'MEETUP_TOKEN_INVALID', '面交码不正确')
@@ -437,6 +449,15 @@ export function createTransactionService({
         issuedBy: row.seller_id,
         ttlSeconds: MEETUP_TOKEN_TTL_SECONDS,
       })
+      if (!tokenRow) {
+        // 前置检查后、持锁写入前，交易被并发 cancel/complete 推入终态（store 内
+        // FOR UPDATE 校验落 0 行）。与 loadPendingTxForMeetup 同一口径给 409。
+        throw new TransactionServiceError(
+          409,
+          'TRANSACTION_NOT_IN_PENDING',
+          '交易已结束，面交码不再可用',
+        )
+      }
       // 刷新 = 整行覆写：旧码立即作废（重放旧 payload / 旧 6 位码都到不了匹配那一步）。
       return meetupTokenResponseSchema.parse({
         transactionId: id,
