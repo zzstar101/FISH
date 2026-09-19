@@ -65,8 +65,10 @@ import deleteIcon from '@/assets/lib-icons/delete@3x.png'
 import doc from '@/assets/lib-icons/doc@3x.png'
 import docInk from '@/assets/lib-icons/doc-ink@3x.png'
 import docMuted from '@/assets/lib-icons/doc-muted@3x.png'
+import editAccent from '@/assets/lib-icons/edit-accent@3x.png'
 import editImage from '@/assets/lib-icons/edit-image@3x.png'
 import feedback from '@/assets/lib-icons/feedback@3x.png'
+import feedbackMuted from '@/assets/lib-icons/feedback-muted@3x.png'
 import file from '@/assets/lib-icons/file@3x.png'
 import gift from '@/assets/lib-icons/gift@3x.png'
 import heartMuted from '@/assets/lib-icons/heart-muted@3x.png'
@@ -78,6 +80,7 @@ import hot from '@/assets/lib-icons/hot@3x.png'
 import image from '@/assets/lib-icons/image@3x.png'
 import imageMuted from '@/assets/lib-icons/image-muted@3x.png'
 import info from '@/assets/lib-icons/info@3x.png'
+import infoMuted from '@/assets/lib-icons/info-muted@3x.png'
 import key from '@/assets/lib-icons/key@3x.png'
 import location from '@/assets/lib-icons/location@3x.png'
 import locationPin from '@/assets/lib-icons/location-pin@3x.png'
@@ -95,6 +98,15 @@ import plus from '@/assets/lib-icons/plus@3x.png'
 import plusInk from '@/assets/lib-icons/plus-ink@3x.png'
 import plusLine from '@/assets/lib-icons/plus-line@3x.png'
 import power from '@/assets/lib-icons/power@3x.png'
+import profileBought from '@/assets/lib-icons/profile-bought@3x.png'
+import profileFollow from '@/assets/lib-icons/profile-follow@3x.png'
+import profileHeart from '@/assets/lib-icons/profile-heart@3x.png'
+import profileHistory from '@/assets/lib-icons/profile-history@3x.png'
+import profileOnsale from '@/assets/lib-icons/profile-onsale@3x.png'
+import profileOrder from '@/assets/lib-icons/profile-order@3x.png'
+import profileReview from '@/assets/lib-icons/profile-review@3x.png'
+import profileSold from '@/assets/lib-icons/profile-sold@3x.png'
+import profileWish from '@/assets/lib-icons/profile-wish@3x.png'
 import qr from '@/assets/lib-icons/qr@3x.png'
 import rank from '@/assets/lib-icons/rank@3x.png'
 import readallAccent from '@/assets/lib-icons/readall-accent@3x.png'
@@ -103,8 +115,10 @@ import refresh from '@/assets/lib-icons/refresh@3x.png'
 import safeAccent from '@/assets/lib-icons/safe-accent@3x.png'
 import safeMuted from '@/assets/lib-icons/safe-muted@3x.png'
 import scan from '@/assets/lib-icons/scan@3x.png'
+import scanAccent from '@/assets/lib-icons/scan-accent@3x.png'
 import search from '@/assets/lib-icons/search@3x.png'
 import send from '@/assets/lib-icons/send@3x.png'
+import serviceMuted from '@/assets/lib-icons/service-muted@3x.png'
 import settingsMuted from '@/assets/lib-icons/settings-muted@3x.png'
 import share from '@/assets/lib-icons/share@3x.png'
 import shieldLine from '@/assets/lib-icons/shield-line@3x.png'
@@ -201,11 +215,13 @@ export const ICONS = {
   hot,
   ai,
   info,
+  infoMuted,
   warn,
   warnInk,
   power,
   moon,
   feedback,
+  feedbackMuted,
   app,
   appMuted,
   doc,
@@ -234,6 +250,20 @@ export const ICONS = {
   walletMuted,
   study,
   editImage,
+
+  /* 「我的」页 3版稿（图标卡片 / 帮助与设置行 / 头部编辑与扫码） */
+  profileHeart,
+  profileHistory,
+  profileFollow,
+  profileWish,
+  profileOrder,
+  profileOnsale,
+  profileSold,
+  profileBought,
+  profileReview,
+  editAccent,
+  scanAccent,
+  serviceMuted,
 
   /* 商品一级分类（首页横滑圆盘） */
   catBooks,
