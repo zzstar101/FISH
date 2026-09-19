@@ -1,49 +1,57 @@
-import { Camera, Image, Input, Text, View } from '@tarojs/components'
+import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
+import { Camera, Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import './index.scss'
 
 /**
- * C6 扫码（设计稿 `设计稿_C6-scan.html`）。
+ * C6 扫码（设计稿 `设计稿_C6-scan.html`）—— #114 真机扫码 × #70 交易码消费。
  *
- * 全屏深色取景页：页面内原生 `<Camera mode="scanCode">` 打底（#114 真机扫码），
+ * 全屏深色取景页：页面内原生 `<Camera mode="scanCode">` 打底，
  * 上面压四块半透明遮罩留出中间的取景方框，方框四角是品牌色的 L 形描边，
- * 顶部漂浮返回钮与标题，下方提示文案，底部「手动输入交易码」入口。
+ * 顶部漂浮返回钮与标题，下方提示文案。
  *
- * **手动输入是必备 fallback**（稿子第 02 帧）：无相机 / 权限被拒 / 二维码损坏 /
- * 用户主动选择时都进这里。6 格输入 + 错误态 + 凑够 6 位才能提交。
+ * **本页只认二维码**（Owner 定版）：6 位码是「已知 transactionId 的订单/面交页」
+ * 里的输入方式，不作为全局扫码页的无上下文入口 —— 面交页（transaction-meetup）
+ * 自带 6 位输入，相机不可用时从本页返回即可。本页消费链路：
+ *
+ * ```text
+ * Camera onScanCode
+ *   → parseMeetupQrPayload(rawValue)          // 形状 gate：只放行鱼小应的交易码
+ *   → navigateTo meetup?code=<rawValue>       // meetup 页解析出 { transactionId, token }
+ *   → POST /transactions/:id/meetup-token/redeem → confirm / 刷新交易
+ * ```
  *
  * **实现约定（#114）**
  * - 相机用**页面内**的原生 Camera 组件（`mode="scanCode"`），不调 `Taro.scanCode`
  *   跳微信系统扫码页，保留自定义取景 UI。进入页面相机即开，对准即扫。
- * - 扫码结果**只输出业务无关的原始字符串**（`ScanResult.rawValue`）。本页不解析
- *   transactionId / token / challengeId / expiry，全部交给 #70 Transaction Domain。
+ * - `invalid` 面板由形状 gate 触发：扫到的不是鱼小应的交易码（外部二维码 / 任意
+ *   文本）就地拦下，不把垃圾转发给下游页。过期 / 已用 / 权限等业务校验归后端与
+ *   meetup 页 —— 本页不解析 transactionId / token / expiry。
  * - `onScanCode` 在对准二维码期间会**连续触发**：用 `processingRef` 做本地锁，
  *   发起导航即上锁，页面重新显示（useDidShow）时解锁。导航失败同样解锁，但会把
  *   失败的码记入冷却期（5s 内同一枚不自动重试），否则连续触发的 onScanCode 会
  *   形成「失败 → 解锁 → 再扫同一枚」的重试风暴。
- * - 相机权限被拒（历史拒绝 / 授权弹窗拒绝）→ 「去设置 / 手动输入」弹窗，从设置页
+ * - 相机权限被拒（历史拒绝 / 授权弹窗拒绝）→ 「去设置 / 返回输入」弹窗，从设置页
  *   恢复后重挂相机；其余相机错误（被占用 / 无相机）→ 「扫码没成功」面板的硬件条目。
  *   拒绝的判据优先取 `getSetting` 的确定性结果，`onError` 的 errMsg 只做兜底。
  * - 从下游页返回时换 key 重挂相机（部分 iOS 机型页面 hide→show 后预览会冻结）。
- * - 交易码是否合法 / 过期 / 可消费归 #70；本页不做码校验。
  * - 相机实例用 `cameraEpoch` 作 key 管理：从下游页返回、收到 `onStop`（非正常
- *   终止，如退后台）都换号重挂，规避回前台后预览黑屏 / 冻结；手动输入期间
- *   有意卸载相机，释放占用。
+ *   终止，如退后台）都换号重挂，规避回前台后预览黑屏 / 冻结。
  */
 
-/** 结果反馈的四种原因（稿子第 04 帧）。本页按当前失败原因只渲染对应条目；
- * `parse` / `invalid` / `expired` 的真实触发在 #70 接入消费接口之后。 */
+/** 结果反馈的三种原因（稿子第 04 帧）。本页按当前失败原因只渲染对应条目；
+ * 过期 / 已被使用等业务态由 meetup 页消费后端错误码时展示，不在本页。 */
 const REASONS = [
   {
     key: 'no-camera',
     pipe: '硬件',
     pipeCls: 'is-warn',
     title: '设备没有可用摄像头',
-    desc: '相机被占用或本机不支持。可以直接手动输入交易码。',
-    action: 'manual',
-    actionLabel: '手动输入',
+    desc: '相机被占用或本机不支持。可以返回上一页手动输入对方的 6 位交易码。',
+    action: 'back',
+    actionLabel: '返回输入',
   },
   {
     key: 'parse',
@@ -63,22 +71,13 @@ const REASONS = [
     action: 'retry',
     actionLabel: '重新扫',
   },
-  {
-    key: 'expired',
-    pipe: '过期',
-    pipeCls: 'is-err',
-    title: '交易码已过期',
-    desc: '交易码一次性且短时有效。请对方在页面上点「刷新」后再扫。',
-    action: 'dismiss',
-    actionLabel: '我知道了',
-  },
 ] as const
 
-type Mode = 'viewfinder' | 'manual' | 'denied' | 'errors'
+type Mode = 'viewfinder' | 'denied' | 'errors'
 
 type ReasonKey = (typeof REASONS)[number]['key']
 
-/** 扫码产物：业务无关的原始值。本页不解释它，直接交给下游（#70 Transaction Domain）。 */
+/** 扫码产物：业务无关的原始值。本页只做形状 gate，交给下游（#70 meetup 页消费）。 */
 type ScanResult = { rawValue: string }
 
 /** 相机错误事件 detail：微信只在 errMsg / errSubMsg 里给字符串 */
@@ -93,12 +92,6 @@ const AUTH_DENY_PATTERN = /auth|deny|permission|权限/i
 /** 导航失败后，同一枚二维码的自动重试冷却时间 */
 const SCAN_RETRY_COOLDOWN_MS = 5000
 
-/**
- * 6 个码位的稳定 id：这里「位置即身份」，模块级生成一次，
- * key 用 id 而不是渲染下标（`noArrayIndexKey`）。
- */
-const CODE_SLOTS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `scan-cell-${index}`, index }))
-
 export default function Scan() {
   const [mode, setMode] = useState<Mode>('viewfinder')
   /** 相机是否挂载：卸载 → 重挂是让报过错相机重启的唯一手段 */
@@ -107,19 +100,11 @@ export default function Scan() {
   const [cameraEpoch, setCameraEpoch] = useState(0)
   /** 「扫码没成功」面板当前展示的原因（进入面板时一定带一个） */
   const [failureKey, setFailureKey] = useState<ReasonKey>('no-camera')
-  /** 手动输入的 6 位码（字符串数组，空位是空串） */
-  const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
-  /** 手动输入的当前焦点格（0~5） */
-  const [focus, setFocus] = useState(0)
-  const [codeError, setCodeError] = useState(false)
 
   /** 防重复消费锁：onScanCode 从发起导航到页面隐藏期间为 true */
   const processingRef = useRef(false)
   /** 上一次导航失败的二维码：冷却期内同一枚码不自动重试 */
   const failedScanRef = useRef<{ value: string; at: number } | null>(null)
-
-  const code = digits.join('')
-  const ready = code.length === 6
 
   const statusBarHeight = (() => {
     try {
@@ -136,7 +121,7 @@ export default function Scan() {
   }
 
   /**
-   * 复核相机权限（页面显示 / 从设置页回来 / 关闭手动输入时走）。
+   * 复核相机权限（页面显示 / 从设置页回来时走）。
    *
    * `getSetting` 只返回**已请求过**的权限：`false` = 明确拒绝 → 无权限弹窗；
    * `true` 或未出现 = 已授权 / 从未询问 → 挂相机（从未询问时微信自己拉授权弹窗）。
@@ -150,12 +135,12 @@ export default function Scan() {
           return
         }
         setCameraOn(true)
-        setMode((prev) => (prev === 'denied' || prev === 'manual' ? 'viewfinder' : prev))
+        setMode((prev) => (prev === 'denied' ? 'viewfinder' : prev))
       })
       .catch(() => {
         // getSetting 失败：仍尝试挂相机，授权结果交给 onError 兜底
         setCameraOn(true)
-        setMode((prev) => (prev === 'denied' || prev === 'manual' ? 'viewfinder' : prev))
+        setMode((prev) => (prev === 'denied' ? 'viewfinder' : prev))
       })
   }
 
@@ -190,8 +175,9 @@ export default function Scan() {
   }
 
   /**
-   * 扫码结果入口：只取原始字符串交给下游页（#70 接入后在这里换消费方式）。
-   * onScanCode 对准期间会连续触发，上锁后同一枚二维码只发起一次导航。
+   * 扫码结果入口：`parseMeetupQrPayload` 做形状 gate —— 只有鱼小应的交易码
+   * （`fish://meetup/redeem?tx=…&t=…`）放行去 meetup 页消费，其余就地落「无效」
+   * 面板。onScanCode 对准期间会连续触发，上锁后同一枚二维码只发起一次导航。
    */
   const handleScanCode = (event: { detail?: ScanCodeDetail }) => {
     const result: ScanResult = { rawValue: event.detail?.result ?? '' }
@@ -204,6 +190,13 @@ export default function Scan() {
     ) {
       return
     }
+    if (parseMeetupQrPayload(result.rawValue) === null) {
+      processingRef.current = true
+      failedScanRef.current = { value: result.rawValue, at: Date.now() }
+      setFailureKey('invalid')
+      setMode('errors')
+      return
+    }
     processingRef.current = true
     void Taro.navigateTo({
       url: `/pages/transaction-meetup/index?code=${encodeURIComponent(result.rawValue)}`,
@@ -213,39 +206,6 @@ export default function Scan() {
       failedScanRef.current = { value: result.rawValue, at: Date.now() }
       void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
     })
-  }
-
-  const setDigit = (index: number, value: string) => {
-    const clean = value.replace(/\D/g, '')
-    setDigits((prev) => {
-      const next = [...prev]
-      if (clean.length > 1) {
-        // 一次粘贴 6 位：从当前格子开始铺开
-        clean
-          .slice(0, 6 - index)
-          .split('')
-          .forEach((ch, offset) => {
-            next[index + offset] = ch
-          })
-      } else {
-        next[index] = clean
-      }
-      return next
-    })
-    setCodeError(false)
-    if (clean) setFocus(Math.min(5, index + 1))
-  }
-
-  /** 提交：真实实现调后端核销；这里只做「码是否可能有效」的展示反馈 */
-  const submitCode = () => {
-    if (!ready) return
-    // 码校验由后端做（一次性 token）；前端不假装能判断对错，
-    // 只在明显不合规（非 6 位纯数字）时给出错误态
-    if (!/^\d{6}$/.test(code)) {
-      setCodeError(true)
-      return
-    }
-    void Taro.showToast({ title: '交易码校验待接入', icon: 'none' })
   }
 
   const openSetting = () => {
@@ -260,17 +220,11 @@ export default function Scan() {
       .catch(() => undefined)
   }
 
-  /** 关闭手动输入弹层：立即离开，落点由权限复核决定（可能仍在「无权限」） */
-  const closeManual = () => {
-    setMode('viewfinder')
-    syncCameraState()
-  }
-
   return (
     <View className="scan">
-      {/* ------- 取景底：原生相机（取景态）/ 有意让位（手输弹层）/ 无相机占位 ------- */}
+      {/* ------- 取景底：原生相机（取景态）/ 无相机占位 ------- */}
       <View className="scan__view">
-        {cameraOn && mode !== 'manual' ? (
+        {cameraOn ? (
           <Camera
             key={cameraEpoch}
             className="scan__camera"
@@ -285,7 +239,7 @@ export default function Scan() {
               setCameraEpoch((n) => n + 1)
             }}
           />
-        ) : mode === 'manual' ? null : (
+        ) : (
           <Text className="scan__view-label num">CAMERA PREVIEW PLACEHOLDER</Text>
         )}
       </View>
@@ -302,7 +256,7 @@ export default function Scan() {
         </>
       )}
 
-      {/* 取景框：仅取景 / 手动输入 / 错误列表时可见 */}
+      {/* 取景框：仅取景 / 错误列表时可见 */}
       {mode === 'denied' ? null : (
         <View className={`scan__window${mode === 'viewfinder' ? '' : ' is-dim'}`}>
           {mode === 'viewfinder' ? <View className="scan__scanline" /> : null}
@@ -330,69 +284,15 @@ export default function Scan() {
         </View>
       ) : null}
 
-      {/* ---------------- 底部：手动输入入口（取景态） ---------------- */}
+      {/* ---------------- 提示：6 位码在面交页输入（取景态底部） ---------------- */}
       {mode === 'viewfinder' ? (
         <View className="scan__manualbar">
-          <View className="scan__btn-manual" onClick={() => setMode('manual')}>
+          <View className="scan__btn-manual" onClick={goBack}>
             <Image className="scan__btn-manual-ic" src={ICONS.key} mode="aspectFit" />
-            <Text>手动输入交易码</Text>
+            <Text>用 6 位数字核销</Text>
           </View>
-          <Text className="scan__manual-note num">对方没有二维码 / 相机不可用时用这里</Text>
+          <Text className="scan__manual-note num">在对应订单的交易码页面手动输入</Text>
         </View>
-      ) : null}
-
-      {/* ---------------- 手动输入底部弹层（稿子第 02 帧） ---------------- */}
-      {mode === 'manual' ? (
-        <>
-          <View className="scan__scrim" onClick={closeManual} />
-          <View className="scan__sheet">
-            <View className="scan__grab" />
-            <Text className="scan__sheet-title">手动输入交易码</Text>
-            <Text className="scan__sheet-sub">输入对方手机上显示的 6 位数字</Text>
-
-            <View className="scan__cells">
-              {CODE_SLOTS.map((slot) => {
-                const digit = digits[slot.index] ?? ''
-                return (
-                  <View
-                    key={slot.id}
-                    className={`scan__cell${slot.index === focus ? ' is-focus' : ''}${
-                      codeError ? ' is-err' : ''
-                    }${digit ? '' : ' is-dim'}`}
-                    onClick={() => setFocus(slot.index)}
-                  >
-                    <Text className="scan__cell-tx">{digit || '–'}</Text>
-                  </View>
-                )
-              })}
-            </View>
-
-            {/* 视觉上是 6 格，真实输入靠这一个透明 Input（小程序没有 6 格原生输入框） */}
-            <Input
-              className="scan__hidden-input"
-              type="number"
-              value={''}
-              focus
-              maxlength={6}
-              onInput={(event) => setDigit(focus, event.detail.value)}
-            />
-
-            {codeError ? (
-              <View className="scan__inline-err">
-                <Image className="scan__inline-err-ic" src={ICONS.warn} mode="aspectFit" />
-                <Text>码错误 · 请核对后重新输入</Text>
-              </View>
-            ) : null}
-
-            <View className={`scan__btn-main${ready ? '' : ' is-off'}`} onClick={submitCode}>
-              <Text>确认</Text>
-            </View>
-
-            <Text className="scan__tip">
-              凑够 6 位才可提交；交易码一次性有效，提交成功即成交，重复提交不会重复成交。
-            </Text>
-          </View>
-        </>
       ) : null}
 
       {/* ---------------- 无相机权限（稿子第 03 帧） ---------------- */}
@@ -405,15 +305,16 @@ export default function Scan() {
             </View>
             <Text className="scan__cdialog-title">没有相机权限</Text>
             <Text className="scan__cdialog-text">
-              去「设置」允许使用相机后即可扫码。不想开权限也可以直接手动输入对方的 6 位交易码。
+              去「设置」允许使用相机后即可扫码。不想开权限也可以返回上一页，在订单的交易码页面手动输入
+              6 位数字。
             </Text>
             <View className="scan__cacts">
               <View className="scan__btn-main scan__btn-main--flat" onClick={openSetting}>
                 <Text>去设置</Text>
               </View>
-              <View className="scan__btn-ghost" onClick={() => setMode('manual')}>
+              <View className="scan__btn-ghost" onClick={goBack}>
                 <Image className="scan__btn-ghost-ic" src={ICONS.key} mode="aspectFit" />
-                <Text>手动输入交易码</Text>
+                <Text>返回手动输入</Text>
               </View>
             </View>
           </View>
@@ -440,10 +341,10 @@ export default function Scan() {
                 <View
                   className="scan__fact"
                   onClick={() => {
-                    if (item.action === 'manual') {
-                      setMode('manual')
+                    if (item.action === 'back') {
+                      goBack()
                     } else {
-                      // retry / dismiss 都回取景：相机若已卸下会重挂（错误过的实例不会自愈）
+                      // retry 回取景：相机若已卸下会重挂（错误过的实例不会自愈）
                       setCameraOn(true)
                       setMode('viewfinder')
                     }
