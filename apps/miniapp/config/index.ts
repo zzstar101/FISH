@@ -62,6 +62,16 @@ export default defineConfig<'webpack5'>(async (merge) => {
        * 所以这里只认显式的 `TARO_APP_MOCK=1`。
        */
       __DEMO_AUTH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
+      /**
+       * 商品留言/回复的**写**开关（读取处 `src/pages/listing-detail`）：后端 comments 域
+       * （#111）落地前，生产构建禁写（点了发送只提示「暂未开放」），只有 `TARO_APP_MOCK=1`
+       * 的演示构建保留「乐观插入 + 失败留本地」的演示。
+       *
+       * 为什么不复用 `__DEMO_AUTH__`（虽然取值相同）：登录演示管「页面能不能看」，
+       * 这里管「写入能不能发生」，两者生命周期不同 —— #111 落地后本开关整体删除，
+       * 登录演示不受影响。
+       */
+      __DEMO_COMMENTS__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
     },
     framework: 'react',
     // 本地开发的依赖预编译（esbuild）会把 workspace 里以 TS 源码形式发布的包当成外部依赖处理，

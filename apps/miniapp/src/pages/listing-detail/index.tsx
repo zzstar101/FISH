@@ -84,6 +84,18 @@ type CommentNode = {
  */
 let localSeq = 0
 
+/**
+ * 留言/回复的**写**开关（编译期注入，见 `config/index.ts` 的 `__DEMO_COMMENTS__`）。
+ *
+ * 后端 comments 域（#111）落地前，生产构建里乐观插入会制造「假成功」：
+ * 用户看到「我 · 刚刚」，刷新后条目消失。所以生产**禁写**——点了发送只提示
+ * 暂未开放，不插本地条目；只有 `TARO_APP_MOCK=1` 的演示构建保留
+ * 「乐观插入 + 失败留本地」的演示（`reportLocalOnly` 那套口径只在演示里有意义）。
+ */
+declare const __DEMO_COMMENTS__: boolean | undefined
+
+const DEMO_COMMENTS_ENABLED = __DEMO_COMMENTS__ === true
+
 /** 「我」刚发的那一条：**只进本页 state，没有落库**（后端接口不存在，见 comments.ts） */
 function localComment(content: string): CommentNode {
   localSeq += 1
@@ -269,14 +281,20 @@ export default function ListingDetail() {
   /**
    * 发一条顶层留言。
    *
-   * **写操作只改本地状态**：先把这条插进 `comments`，再打请求。后端还没有 comments 接口
-   * （见 `features/listing/comments.ts`），所以：
-   * - 请求失败**不回滚**，这条留在本地 —— 比「点了发送却什么都没发生」诚实；
-   * - 也**不弹「发送成功」**：我们并不知道服务端收没收到，弹了就是假装成功。
+   * 后端 comments 接口（#111）落地前只有演示构建（`__DEMO_COMMENTS__`）真正写入：
+   * 乐观插入 + 失败留本地；生产构建禁写，点了发送只提示暂未开放 ——
+   * 否则本地那条「我 · 刚刚」刷新后就会消失，是假成功。
+   *
+   * 演示构建的口径：请求失败**不回滚**，这条留在本地 —— 比「点了发送却什么都没发生」诚实；
+   * 也**不弹「发送成功」**：我们并不知道服务端收没收到，弹了就是假装成功。
    */
   const sendComment = () => {
     const content = commentInput.trim()
     if (!content) return
+    if (!DEMO_COMMENTS_ENABLED) {
+      void Taro.showToast({ title: '留言暂未开放', icon: 'none' })
+      return
+    }
     // 先算好再进 updater：updater 必须是纯函数，在里面自增 `localSeq` 会带副作用
     const comment = localComment(content)
     setComments((prev) => [comment, ...prev])
@@ -284,10 +302,14 @@ export default function ListingDetail() {
     void postComment(id, content).catch((error) => reportLocalOnly('留言', error))
   }
 
-  /** 回复某条顶层留言：同样只改本地状态，失败不回滚、不假装成功 */
+  /** 回复某条顶层留言：写开关与失败口径同 `sendComment` */
   const sendReply = (commentId: string) => {
     const content = replyInput.trim()
     if (!content) return
+    if (!DEMO_COMMENTS_ENABLED) {
+      void Taro.showToast({ title: '回复暂未开放', icon: 'none' })
+      return
+    }
     const reply = localComment(content)
     setComments((prev) =>
       prev.map((node) =>

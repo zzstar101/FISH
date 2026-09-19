@@ -258,7 +258,9 @@ export default function Conversation() {
    * ⚠️ 小程序运行时没有 `HTMLElement`（#64 Done 第 3 条：不依赖 Web DOM / Browser-only API），
    * 所以这一支必须按环境整段跳过 —— 否则每次进页面都会抛一次 ReferenceError。
    */
-  const tail = entries.at(-1)
+  // 不用 `entries.at(-1)`：那是 ES2022 运行时 API，#113 的 ES5 检查只管语法不管
+  // polyfill，旧 JSCore 上会直接 `is not a function`（review #117 第 2 条）
+  const tail = entries.length > 0 ? entries[entries.length - 1] : undefined
   const tailId = tail ? `e-${tail.keyId}` : ''
 
   useEffect(() => {
