@@ -259,8 +259,11 @@ S3_PUBLIC_URL=https://s3.fish.example.com/fish
 下面这几项**只有 API 需要**（worker 只加载 `loadServerEnv`，见 `apps/worker/src/index.ts:2,9`），统一放
 `/etc/fish/api-mail.env`（`root:root`、`chmod 600`，由 §5.1 的 `EnvironmentFile` 注入）。
 文件名里的 `mail` 是历史遗留：自 #70 起它承载**全部** API 专属密钥。不要把它们写进
-api/worker 共用的 `/srv/fish/.env`——运行应用的 `fish` 用户能读那个文件，而这两项的
-泄漏等级等同于数据库泄漏：
+api/worker 共用的 `/srv/fish/.env`：那个文件在应用工作目录里，是 `git add`、镜像同步、
+"随手 cat 给同事"最容易顺手带上的位置。
+（这缩小的是**误提交 / 误扩散**面，不是权限边界：unit 是 `User=fish`，同 uid 的进程能从
+`/proc/<pid>/environ` 读到注入后的值，所以应用代码被攻破时两种放法等价。此为 Linux 语义，
+本机未实测。）
 
 ```bash
 # 校园认证邮件（仅 API 加载）
@@ -272,24 +275,31 @@ RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
 MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
 ```
 
-先在 Resend 验证发件域名（含 SPF/DKIM），再一次性写入该文件。Resend 密钥用 `read -rs` 读进来，
-不要直接粘在命令里——那会永久留在 root 的 shell 历史里：
+先在 Resend 验证发件域名（含 SPF/DKIM）。**只有首次部署**才用下面这段整份写入；两个密钥都从
+`read` 进内存再落盘，不要直接粘在命令里——那会永久留在 root 的 shell 历史里。`RESEND_FROM`
+也必须问进来：`loadMailTransportEnv` 只验它非空，占位域名会照样把服务起起来、直到发信时才失败。
 
 ```bash
 sudo install -d -m 755 /etc/fish
-read -rs -p 'Resend 密钥（不回显，回车结束）: ' RESEND_API_KEY && echo
+read -r  -p '发件地址（已在 Resend 验证过的域名）: ' RESEND_FROM
+read -rs -p 'Resend 密钥（不回显）: ' RESEND_API_KEY && echo
 {
   printf 'MAIL_TRANSPORT=resend\n'
   printf 'RESEND_API_KEY=%s\n' "$RESEND_API_KEY"
-  printf 'RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"\n'
+  printf 'RESEND_FROM="%s"\n' "$RESEND_FROM"
   printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)"
 } | sudo tee /etc/fish/api-mail.env >/dev/null
 sudo chown root:root /etc/fish/api-mail.env && sudo chmod 600 /etc/fish/api-mail.env
-unset RESEND_API_KEY
+unset RESEND_API_KEY RESEND_FROM
 ```
 
-> `sudo` 之后 `read` 仍是普通用户，而 `tee` 用 `sudo` 落盘：文件里是明文密钥，权限立刻收到
-> `root:root 600`——运行应用的 `fish` 用户读不到它，只有 systemd（PID 1，root）能。
+**已经按旧版手册部署过的机器不要重跑上面那一段**：`tee` 是整文件覆写，会顺手换掉
+`MEETUP_TOKEN_SECRET`，所有已签发未核销的面交码立刻失效（§9 第 12 条）。升级只需补那一行：
+
+```bash
+sudo grep -q '^MEETUP_TOKEN_SECRET=' /etc/fish/api-mail.env \
+  || printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" | sudo tee -a /etc/fish/api-mail.env >/dev/null
+```
 
 - 用 `openssl rand -hex 32`（64 个 `[0-9a-f]`）而不是 `base64`：systemd 的 `EnvironmentFile`
   不做 shell 展开，纯 hex 可以免掉 `$`、引号与 `#` 引发的整类解析歧义。
@@ -501,8 +511,16 @@ cd /srv/fish
 #    每 5 秒一次的 crash loop —— 而那时第 3 步已经把服务停了。放在最前面：
 #    预检不过就一行代码都不动、一个服务都不停。
 API_ENV=/etc/fish/api-mail.env
-MEETUP_KEY=$(sed -n 's/^MEETUP_TOKEN_SECRET=//p' "$API_ENV" 2>/dev/null | tail -1 | tr -d '\r')
+# 先单独判可读。少了这一步，文件不存在 / 忘了 sudo 时：sed 非零 → 在 `set -o pipefail`
+# 下整条管道非零 → 赋值那一行直接静默退出，运维看不到任何原因（实测 rc=1 且零输出）。
+if [ ! -r "$API_ENV" ]; then
+  echo "预检失败：读不到 $API_ENV。脚本要 sudo 执行；无 systemd 的容器环境见 §11。" >&2
+  exit 1
+fi
+# 重复行按最后一行取；同文件里出现两行 MEETUP_TOKEN_SECRET 本身就该先清掉。
+MEETUP_KEY=$(sed -n 's/^MEETUP_TOKEN_SECRET=//p' "$API_ENV" | tail -1 | tr -d '\r')
 # 只验长度不够：仓库里那两行占位值本身就 ≥32 字符，照抄过来会带着公开密钥上线。
+bad=0
 case "$MEETUP_KEY" in
   '' | dev-only-* | ci-only-* | REPLACE_*) bad=1 ;;
   ?*) [ "${#MEETUP_KEY}" -ge 32 ] || bad=1 ;;
@@ -599,12 +617,13 @@ curl -s -o /dev/null -w '%{http_code}\n' https://s3.fish.example.com/fish/<objec
 #    任一条失败：网站能开但传图后报「图片尚未上传完成」（§9 第 4 条）
 
 # 6) 面交码签名密钥（#70）到位。缺它时 API **根本不会 listen**，所以第 1 步的 curl 连不上
-#    就是它的信号。这里确认它没有陷在 crash loop 里（缺失/过短/占位值 → 每 5 秒重启一次），
-#    注意要等过一个 RestartSec=5 的周期再判，刚 start 完时 NRestarts 恒为 0：
+#    就是它的信号。这里再确认它没有陷在 crash loop 里（缺失/过短/占位值 → 每 5 秒重启一次），
+#    要等过一个 RestartSec=5 的周期再判。窗口只取本次发布之后：`-b` 覆盖整次开机，
+#    上一次失败的记录会让已经修好的发布假失败。
 sleep 6
-systemctl is-active fish-api                     # 期望 active（不是 activating / failed）
-systemctl show fish-api -p NRestarts             # 期望 NRestarts=0
-journalctl -u fish-api -b --no-pager | grep -c '环境变量校验失败' || true   # 期望 0（grep 无命中时退出码为 1）
+systemctl is-active fish-api        # 期望 active（不是 activating / failed）
+sudo journalctl -u fish-api --since '-5 min' --no-pager | wc -l   # 必须 > 0：0 行是读不到日志，不是通过
+sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校验失败' || echo '无环境变量校验失败 ✓'
 
 # 7) 手动验收一条业务链：注册 → 登录 → 发布商品并传图 → 愿望 → 匹配 → 聊天
 #    → 提案 / 接受（→ PENDING_MEETUP）→ 卖家签发面交码 → 买家核销 → 双方确认齐
@@ -666,11 +685,17 @@ journalctl -u fish-api -b --no-pager | grep -c '环境变量校验失败' || tru
       窗口约束比想象的小：凭证本身 5 分钟就过期（`MEETUP_TOKEN_TTL_SECONDS`，
       `apps/api/src/modules/transactions/service.ts:46`），所以只需避开"正站在原地扫码的那一对"，
       不需要等全站没有 `PENDING_MEETUP` 交易（活跃站上那种窗口几乎不存在）。
-    - 顺带知道两件不影响部署但会被问到的事：6 位码连续错 5 次锁 10 分钟
-      （`MEETUP_TOKEN_MAX_ATTEMPTS` / `MEETUP_TOKEN_LOCK_SECONDS`），卖家重签发会清零。
+    - 顺带知道两件不影响部署但会被问到的事：面交凭证的失败计数是**累计**的，QR 与 6 位码共用
+      同一个计数（`apps/api/src/modules/transactions/service.ts:266-274`）——满 5 次锁 10 分钟，
+      锁定到期后计数**不**归零，再错一次立即重新锁定；只有卖家重签发才清零
+      （`store.ts` 的 `recordMeetupTokenFailure` 与 `upsertMeetupToken`）。所以现场"输对了却还说错误次数过多"
+      的正解是请卖家重新签发，不是等一会儿。
     - 它**会**随 §10 备份脚本那条 `tar` 里已列出的 `/etc/fish/api-mail.env` 一起进
       `config-*.tar.gz`：换机恢复后未核销码仍然可用。也正因如此，**备份包与数据库同等保密**，
       拿到 config 包就等于能离线伪造任意面交码。
+      ⚠️ 这与本节第 7 条"生产密钥不进备份压缩包的明文目录"字面冲突：第 7 条要防的是明文散落，
+      而 §10 的 config 包是唯一的换机恢复手段，两者只能靠"备份目录权限 + 异地介质加密"同时满足。
+      是否要把密钥从备份包里排除（代价：恢复时必须重生成密钥、所有未核销码作废），留给审核定。
     - 回滚到 #70 之前的 ref 时它变成多余项，无害；但 §7.2 的预检会一直要求它在，
       别因为「这次回滚用不到」就删掉文件。
 
@@ -878,10 +903,12 @@ ps -p 1 -o comm= ; ls -d /run/systemd/system 2>/dev/null || echo "无 systemd"
 1. **supervisor**（apt 里有）：为 `fish-api` / `fish-worker` / `caddy` 各写一个 `[program:x]`，
    用 `user=` 降权、`autostart=true` / `autorestart=true`、`stdout_logfile=` 收日志；
    `supervisord -c …` 启动，`supervisorctl status/restart` 控制。这是最接近 systemd 行为的一种。
-   ⚠️ 没有 `EnvironmentFile` 可用时，§4 的 API 专属三项（`MAIL_TRANSPORT` / `RESEND_*` /
-   `MEETUP_TOKEN_SECRET`）必须由 `fish-api` 的 `environment=` 注入；漏掉 `MEETUP_TOKEN_SECRET`
-   的话 API 会带着 `autorestart=true` 反复重启，症状与 §9 第 12 条一致。`supervisord.conf`
-   本身要收到 `root:root 600`，别放世界可读的目录。
+   ⚠️ 没有 `EnvironmentFile` 可用时，§4 的四个 API 专属变量（`MAIL_TRANSPORT` /
+   `RESEND_API_KEY` / `RESEND_FROM` / `MEETUP_TOKEN_SECRET`）必须由 `fish-api` 的
+   `environment=` 注入；漏掉 `MEETUP_TOKEN_SECRET` 的话 API 会带着 `autorestart=true` 反复重启，
+   症状与 §9 第 12 条一致。`environment=` 用逗号分隔且值里带空格（`RESEND_FROM` 就是
+   `鱼小应 <…>`），那一项要按 supervisor 的规则加引号；`supervisord.conf` 本身收到
+   `root:root 600`，别放世界可读的目录。（supervisor 的引号细则本机未实测。）
 2. `cron` + `@reboot`：能开机能拉起来，但没有崩溃自恢复，也没有依赖顺序（worker 会在迁移前先起）。
 
 ⚠️ **两者都需要有人先启动它**：容器重启后，若 entrypoint 不拉起 supervisord/cron，服务不会自己回来。
