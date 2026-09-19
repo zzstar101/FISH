@@ -8,6 +8,13 @@ module.exports = {
         framework: 'react',
         ts: true,
         compiler: 'webpack5',
+        // 微信小程序真机运行时需要比 Web 端 browserslist 更保守的目标。
+        // 依赖也需纳入 mini.compile.include，最终产物由 check:es5 验证。
+        targets: {
+          ios: '9',
+          android: '5',
+        },
+        ignoreBrowserslistConfig: true,
       },
     ],
   ],

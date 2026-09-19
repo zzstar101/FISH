@@ -1,5 +1,11 @@
-import { resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, resolve } from 'node:path'
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
+
+const contractsRoot = resolve(__dirname, '../../../packages/contracts')
+const contractsRequire = createRequire(resolve(contractsRoot, 'package.json'))
+const miniappRequire = createRequire(resolve(__dirname, '../package.json'))
+const runtimeRequire = createRequire(miniappRequire.resolve('@tarojs/runtime'))
 
 // https://docs.taro.zone/docs/config
 export default defineConfig<'webpack5'>(async (merge) => {
@@ -67,7 +73,13 @@ export default defineConfig<'webpack5'>(async (merge) => {
       // 注意：@tarojs/service 只会把白名单字段与 `mini` / 平台（`weapp`）块合并进 runner 配置，
       // `compile` 写在顶层会被静默丢弃（runner 收到的 config.compile 为空），必须放在 mini 这一层。
       compile: {
-        include: [resolve(__dirname, '../../../packages/contracts/src')],
+        include: [
+          resolve(contractsRoot, 'src'),
+          // Zod 的发布产物含 class/const，Taro 默认只转译源码及自身依赖。
+          dirname(contractsRequire.resolve('zod/package.json')),
+          // tslib 的 ESM 默认导出含属性简写，开发构建也必须转译。
+          dirname(runtimeRequire.resolve('tslib/package.json')),
+        ],
       },
       postcss: {
         pxtransform: {
