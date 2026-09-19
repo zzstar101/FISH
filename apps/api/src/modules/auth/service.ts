@@ -4,6 +4,7 @@ import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { eq } from 'drizzle-orm'
 import { AuthError } from './errors'
+import { LOGIN_LOCK_SECONDS, type LoginAttemptStore } from './login-attempts'
 import type { Sessions } from './session'
 
 type UserRow = typeof users.$inferSelect
@@ -54,8 +55,17 @@ async function verifyPassword(password: string, hash: string): Promise<boolean> 
   }
 }
 
-export function createAuthService(deps: { db: Db; sessions: Sessions }) {
-  const { db, sessions } = deps
+/** 分钟数从常量派生：写死"10 分钟"会让文案与阈值各自漂移。 */
+function lockMessage(): string {
+  return `错误次数过多，请 ${Math.round(LOGIN_LOCK_SECONDS / 60)} 分钟后再试`
+}
+
+export function createAuthService(deps: {
+  db: Db
+  sessions: Sessions
+  attempts: LoginAttemptStore
+}) {
+  const { db, sessions, attempts } = deps
 
   return {
     async register(input: RegisterRequest): Promise<{ user: Me; token: string; expiresAt: Date }> {
@@ -103,6 +113,11 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
     },
 
     async login(input: LoginRequest): Promise<{ user: Me; token: string; expiresAt: Date }> {
+      // #132：锁定期内一律拒绝，且**不跑口令校验**。argon2id 每次校验都有真实 CPU 代价
+      // （seed 的哈希即 argon2id），先查锁让"被锁了还继续撞"连校验都省掉。
+      const lockedBefore = await attempts.isLocked(input.studentNo)
+      if (lockedBefore) throw new AuthError('LOGIN_LOCKED', 429, lockMessage())
+
       const rows = await db
         .select()
         .from(users)
@@ -111,12 +126,17 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
 
       const row = rows[0]
       const passwordOk = row ? await verifyPassword(input.password, row.passwordHash) : false
-      // 错误码不区分「学号不存在」与「密码错误」。注意注册口会显式返回 409，因此
-      // 账号存在性本来就是可探测的；这里不做时序防护，也不做限流（记录为后续 issue）。
+      // 错误码不区分「学号不存在」与「密码错误」。注册口会显式返回 409，因此账号存在性本来就
+      // 是可探测的 —— 所以这里刻意不补时序防护（#132 的"明确不做"有理由：只给登录做恒定
+      // 耗时是假的安全）。限流由 attempts 承担；未注册的学号同样计数，探测才有代价。
       if (!row || !passwordOk) {
+        const after = await attempts.recordFailure(input.studentNo)
+        if (after.locked) throw new AuthError('LOGIN_LOCKED', 429, lockMessage())
         throw new AuthError('INVALID_CREDENTIALS', 401, '学号或密码不正确')
       }
 
+      // 清零的是"口令校验失败次数"这个语义，因此校验通过即清，不等会话写入结果。
+      await attempts.clear(input.studentNo)
       const { token, expiresAt } = await sessions.create(row.id)
       return { user: toMe(row), token, expiresAt }
     },
