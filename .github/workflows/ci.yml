@@ -34,6 +34,7 @@ jobs:
       S3_SECRET_ACCESS_KEY: fish-secret
       S3_BUCKET: fish
       S3_PUBLIC_URL: http://localhost:9000/fish
+      MEETUP_TOKEN_SECRET: ci-only-meetup-secret-0123456789abcdef
 
     steps:
       - uses: actions/checkout@v7

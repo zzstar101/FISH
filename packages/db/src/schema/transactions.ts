@@ -5,6 +5,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  text,
   timestamp,
   uniqueIndex,
   uuid,
@@ -75,6 +76,56 @@ export const transactions = pgTable(
     check(
       'transactions_cancelled_at_matches_status',
       sql`(${table.status} = 'CANCELLED') = (${table.cancelledAt} IS NOT NULL)`,
+    ),
+  ],
+)
+
+/**
+ * 面交交易码（#70）。一行对应一笔交易的**当前**凭证：重新签发（刷新）即整行覆写，
+ * 旧码立即作废 —— 「一次性 + 短期」由 consumed_at / expires_at 承载。
+ *
+ * 安全口径：**不存明文**。6 位码与 QR token 都只存 HMAC-SHA256（服务端密钥见
+ * `MEETUP_TOKEN_SECRET`），明文只在签发响应里出现一次；6 位码空间只有 10^6，
+ * 连续失败由 failed_attempts / locked_until 限流（服务层负责）。
+ *
+ * 状态不落列：NONE（无行）/ ISSUED / EXPIRED（expires_at ≤ now 且未消费）/
+ * CONSUMED（consumed_at 非空）全部可派生，避免派生值与真实时间漂移。
+ */
+export const transactionMeetupTokens = pgTable(
+  'transaction_meetup_tokens',
+  {
+    /** 一笔交易至多一个当前凭证（PK 即外键，与 transactions 一对一）。 */
+    transactionId: uuid('transaction_id')
+      .primaryKey()
+      .references(() => transactions.id),
+    /** QR token 的 HMAC-SHA256（hex）。token 本身 16 字节随机，只出现在签发响应。 */
+    tokenHash: text('token_hash').notNull(),
+    /** 6 位面交码的 HMAC-SHA256（hex）。 */
+    codeHash: text('code_hash').notNull(),
+    /** 签发人 = 交易卖家（服务层校验角色，这里只保证是个真实用户）。 */
+    issuedBy: uuid('issued_by')
+      .notNull()
+      .references(() => users.id),
+    issuedAt: timestamptz('issued_at').notNull().defaultNow(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    /** 消费即核销：置非空后任何再次核销都被拒（一次性）。 */
+    consumedAt: timestamptz('consumed_at'),
+    consumedBy: uuid('consumed_by').references(() => users.id),
+    /** 核销失败累计（QR token / 6 位码共用的防爆破计数）；行被消费后计数不再有意义，
+     * 重新签发（覆写）时归零。 */
+    failedAttempts: integer('failed_attempts').notNull().default(0),
+    /** 连续失败达阈值后的禁用期；期间核销一律 429。 */
+    lockedUntil: timestamptz('locked_until'),
+  },
+  (table) => [
+    // 与 transactions 表同款完整性 CHECK：consumed_at 与 consumed_by 必须同生同灭。
+    check(
+      'transaction_meetup_tokens_consumed_by_matches_consumed_at',
+      sql`(${table.consumedAt} IS NULL) = (${table.consumedBy} IS NULL)`,
+    ),
+    check(
+      'transaction_meetup_tokens_expires_after_issued',
+      sql`${table.expiresAt} > ${table.issuedAt}`,
     ),
   ],
 )

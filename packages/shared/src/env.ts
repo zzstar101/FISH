@@ -58,3 +58,24 @@ export function loadMailTransportEnv(
     '环境变量校验失败：MAIL_TRANSPORT 必须显式设置为 outbox 或 resend（不允许静默降级投递）',
   )
 }
+
+/**
+ * API 专属面交码签名密钥（#70）。
+ *
+ * 6 位码与 QR token 在 DB 里只存带此密钥的 HMAC，明文不落库。参照 `MAIL_TRANSPORT`
+ * 的同一拆分原则**不进共享 ServerEnv**：worker 不做 HMAC，高敏感密钥不扩散到
+ * 不需要它的进程。强度下限 32 字符——泄漏等同可离线伪造任意面交码，与数据库同等敏感。
+ */
+export type MeetupTokenEnv = { MEETUP_TOKEN_SECRET: string }
+
+export function loadMeetupTokenEnv(
+  source: Record<string, string | undefined> = process.env,
+): MeetupTokenEnv {
+  const secret = source.MEETUP_TOKEN_SECRET
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      '环境变量校验失败：MEETUP_TOKEN_SECRET 必须配置且不少于 32 字符（泄漏等同可离线伪造任意面交码）',
+    )
+  }
+  return { MEETUP_TOKEN_SECRET: secret }
+}

@@ -3,7 +3,8 @@ import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
-import type { MailTransportEnv, ServerEnv } from '@fish/shared/env'
+import type { MailTransportEnv, MeetupTokenEnv, ServerEnv } from '@fish/shared/env'
+import { loadMeetupTokenEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -79,6 +80,8 @@ export function createApp(
   env: ServerEnv,
   /** 邮件 transport（#68）：调用方显式传入（index.ts 用 loadMailTransportEnv 从 env 校验）。 */
   mailEnv: MailTransportEnv = { transport: 'outbox' },
+  /** 面交码签名密钥（#70）：API-only（worker 不做 HMAC），index.ts 用 loadMeetupTokenEnv 校验。 */
+  meetupEnv: MeetupTokenEnv = loadMeetupTokenEnv(),
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -247,6 +250,7 @@ export function createApp(
 
   // 交易模块（#11）：提案/接受/拒绝以 SYSTEM 消息进会话（经 messages store 直写），
   // 写入后经同一 hub 推送（与文本消息同一条 message.new 通道）。整条挂 requireAuth。
+  // #70：面交交易码四端点同挂这里，meetupSecret 用于凭证的 HMAC 存储（明文不落库）。
   app.route(
     '/transactions',
     createTransactionsRouter({
@@ -254,6 +258,7 @@ export function createApp(
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
         storage,
+        meetupSecret: meetupEnv.MEETUP_TOKEN_SECRET,
         onSystemMessage: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',

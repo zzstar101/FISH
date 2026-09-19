@@ -1,5 +1,7 @@
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import {
+  meetupTokenRedeemInputSchema,
+  meetupTokenVerifyCodeInputSchema,
   transactionAcceptInputSchema,
   transactionListQuerySchema,
   transactionProposalInputSchema,
@@ -120,6 +122,68 @@ export function createTransactionsRouter({ service, requireAuth }: TransactionsR
     if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
     try {
       return c.json(await service.cancel(c.get('userId'), c.req.param('id')), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // ---- 面交交易码（#70；路径常量与响应口径冻结在 TRANSACTION_ROUTES / contracts）----
+
+  // 卖家签发/刷新（201；明文码与 qrPayload 只在此响应出现）。
+  app.post('/:id/meetup-token', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    try {
+      return c.json(await service.issueMeetupToken(c.get('userId'), c.req.param('id')), 201)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // 当前凭证状态（无明文）。
+  app.get('/:id/meetup-token', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    try {
+      return c.json(await service.getMeetupTokenStatus(c.get('userId'), c.req.param('id')), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // 买家核销二维码（200 MeetupVerificationResponse；nextAction 驱动 confirm）。
+  app.post('/:id/meetup-token/redeem', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const parsed = meetupTokenRedeemInputSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) {
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
+    }
+    try {
+      return c.json(
+        await service.redeemMeetupToken(c.get('userId'), c.req.param('id'), parsed.data),
+        200,
+      )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // 买家核销 6 位手动码。
+  app.post('/:id/meetup-token/verify-code', requireAuth, async (c) => {
+    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const parsed = meetupTokenVerifyCodeInputSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) {
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
+    }
+    try {
+      return c.json(
+        await service.verifyMeetupCode(c.get('userId'), c.req.param('id'), parsed.data),
+        200,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }

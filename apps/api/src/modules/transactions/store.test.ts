@@ -3,7 +3,7 @@ import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlMessageStore } from '../messages/store'
-import { createSqlTransactionStore, type TransactionRow } from './store'
+import { createSqlTransactionStore, MeetupConsumeRaceError, type TransactionRow } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -380,5 +380,343 @@ describe('transactions store (integration)', () => {
     expect((await store.listingBriefs([])).size).toBe(0)
     expect((await store.userBriefs([])).size).toBe(0)
     expect(users.has('01990000-0000-7000-8000-0000000000ff')).toBe(false)
+  })
+})
+
+describe('meetup token store (integration, #70)', () => {
+  // 每个场景独立一笔 PENDING 交易（一个 listing 只能有一笔 live 交易），
+  // 互不依赖执行顺序。
+  const scenarios = {
+    happy: {
+      listing: '01990000-0000-7000-8000-0000000000c1',
+      conversation: '01990000-0000-7000-8000-0000000000c9',
+    },
+    upsert: {
+      listing: '01990000-0000-7000-8000-0000000000c2',
+      conversation: '01990000-0000-7000-8000-0000000000da',
+    },
+    invalidLock: {
+      listing: '01990000-0000-7000-8000-0000000000c3',
+      conversation: '01990000-0000-7000-8000-0000000000db',
+    },
+    expired: {
+      listing: '01990000-0000-7000-8000-0000000000c4',
+      conversation: '01990000-0000-7000-8000-0000000000dc',
+    },
+    race: {
+      listing: '01990000-0000-7000-8000-0000000000c5',
+      conversation: '01990000-0000-7000-8000-0000000000dd',
+    },
+    merge: {
+      listing: '01990000-0000-7000-8000-0000000000c6',
+      conversation: '01990000-0000-7000-8000-0000000000de',
+    },
+    issueGuardCancel: {
+      listing: '01990000-0000-7000-8000-0000000000c7',
+      conversation: '01990000-0000-7000-8000-0000000000df',
+    },
+    issueGuardComplete: {
+      listing: '01990000-0000-7000-8000-0000000000c8',
+      conversation: '01990000-0000-7000-8000-0000000000e0',
+    },
+    issueRace: {
+      listing: '01990000-0000-7000-8000-0000000000c9',
+      conversation: '01990000-0000-7000-8000-0000000000e1',
+    },
+    generation: {
+      listing: '01990000-0000-7000-8000-0000000000ca',
+      conversation: '01990000-0000-7000-8000-0000000000e2',
+    },
+  } as const
+
+  const TOKEN_HASH = 'a'.repeat(64)
+  const CODE_HASH = 'b'.repeat(64)
+
+  async function createPendingTx(scenario: (typeof scenarios)[keyof typeof scenarios]) {
+    await seedListing(scenario.listing)
+    await seedConversation(scenario.conversation, scenario.listing, buyer1)
+    const lookup = await store.findConversation(scenario.conversation, buyer1)
+    if (lookup.kind !== 'ok') throw new Error('unreachable')
+    const accepted = await store.accept(lookup.brief, 16000, acceptSystemContent)
+    if (accepted.kind !== 'created') throw new Error('unreachable')
+    return accepted.row.id
+  }
+
+  test('核销成功：条件更新命中并同事务盖卖家确认；重复核销 → consumed', async () => {
+    const txId = await createPendingTx(scenarios.happy)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+
+    const ok = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(ok.kind).toBe('ok')
+    if (ok.kind !== 'ok') throw new Error('unreachable')
+    expect(ok.row.consumed_by).toBe(buyer1)
+    expect(ok.row.consumed_at).not.toBeNull()
+
+    // 卖家确认被同一事务盖上；交易仍 PENDING（等买家侧 confirm）
+    const tx = rows(
+      await db.execute(
+        sql`SELECT seller_confirmed_at, status::text AS status FROM transactions WHERE id = ${txId}`,
+      ),
+    )[0] as { seller_confirmed_at: Date | null; status: string }
+    expect(tx.seller_confirmed_at).not.toBeNull()
+    expect(tx.status).toBe('PENDING_MEETUP')
+
+    // 并发/重放的第二次核销 → consumed（一次性）
+    const again = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(again.kind).toBe('consumed')
+  })
+
+  test('upsert 整行覆写：旧哈希不再匹配，消费/失败状态归零', async () => {
+    const txId = await createPendingTx(scenarios.upsert)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      5,
+      600,
+    )
+
+    const NEW_TOKEN_HASH = 'c'.repeat(64)
+    const NEW_CODE_HASH = 'd'.repeat(64)
+    const refreshed = await store.upsertMeetupToken(txId, {
+      tokenHash: NEW_TOKEN_HASH,
+      codeHash: NEW_CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    expect(refreshed).not.toBeNull()
+    if (!refreshed) throw new Error('unreachable')
+    expect(refreshed.token_hash).toBe(NEW_TOKEN_HASH)
+    expect(refreshed.consumed_at).toBeNull()
+    expect(refreshed.failed_attempts).toBe(0)
+    expect(refreshed.locked_until).toBeNull()
+
+    // 旧哈希被替换 → 不匹配（invalid）；新哈希可核销
+    const old = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(old.kind).toBe('invalid')
+    const fresh = await store.consumeMeetupToken(txId, buyer1, {
+      kind: 'code',
+      hash: NEW_CODE_HASH,
+    })
+    expect(fresh.kind).toBe('ok')
+  })
+
+  test('哈希不匹配 → invalid；失败计数达阈值置 locked_until；锁定期间 → locked', async () => {
+    const txId = await createPendingTx(scenarios.invalidLock)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+
+    const miss = await store.consumeMeetupToken(txId, buyer1, {
+      kind: 'code',
+      hash: 'e'.repeat(64),
+    })
+    expect(miss.kind).toBe('invalid')
+    const first = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      3,
+      600,
+    )
+    expect(first?.failedAttempts).toBe(1)
+    expect(first?.lockedUntil).toBeNull()
+
+    await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      3,
+      600,
+    )
+    const third = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
+      3,
+      600,
+    )
+    expect(third?.failedAttempts).toBe(3)
+    expect(third?.lockedUntil).not.toBeNull()
+
+    // 锁定期间核销被条件更新拦下（诊断出 locked，而不是 invalid）
+    const locked = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(locked.kind).toBe('locked')
+  })
+
+  test('过期 → expired（即便哈希正确）', async () => {
+    const txId = await createPendingTx(scenarios.expired)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    // 平移 issued/expires（保持 expires > issued 的 CHECK）：expires 已成过去
+    await db.execute(sql`
+      UPDATE transaction_meetup_tokens
+      SET issued_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes'
+      WHERE transaction_id = ${txId}
+    `)
+    const result = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(result.kind).toBe('expired')
+  })
+
+  test('交易在窗口期离开 PENDING：核销抛错回滚（token 未被消费）', async () => {
+    const txId = await createPendingTx(scenarios.race)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    await store.cancel(txId, buyer1) // 并发取消的替身
+
+    let threw = false
+    try {
+      await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    } catch (error) {
+      threw = error instanceof MeetupConsumeRaceError
+    }
+    expect(threw).toBe(true)
+    const row = await store.findMeetupToken(txId)
+    expect(row?.consumed_at).toBeNull() // 回滚生效
+  })
+
+  test('买家已单侧确认后核销 → 同事务推进 COMPLETED + listing SOLD（审查 F1）', async () => {
+    const txId = await createPendingTx(scenarios.merge)
+    // 买家先在订单里单侧确认（#11：单侧确认交易停在 PENDING）
+    const stamped = await store.confirm(txId, buyer1, 'buyer')
+    if (stamped.kind !== 'ok') throw new Error('unreachable')
+    expect(stamped.row.status).toBe('PENDING_MEETUP')
+
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    const ok = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(ok.kind).toBe('ok')
+
+    const merged = rows(
+      await db.execute(sql`
+        SELECT t.status::text AS status, t.completed_at, l.status::text AS listing_status
+        FROM transactions t JOIN listings l ON l.id = t.listing_id
+        WHERE t.id = ${txId}
+      `),
+    )[0] as { status: string; completed_at: Date | null; listing_status: string }
+    expect(merged.status).toBe('COMPLETED')
+    expect(merged.completed_at).not.toBeNull()
+    expect(merged.listing_status).toBe('SOLD')
+  })
+
+  test('终态交易不得签发：CANCELLED / COMPLETED 上 upsert 落 0 行返回 null（审查 P1 TOCTOU）', async () => {
+    const cancelledTx = await createPendingTx(scenarios.issueGuardCancel)
+    await store.cancel(cancelledTx, buyer1)
+    expect(
+      await store.upsertMeetupToken(cancelledTx, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+        ttlSeconds: 300,
+      }),
+    ).toBeNull()
+    expect(await store.findMeetupToken(cancelledTx)).toBeNull()
+
+    const completedTx = await createPendingTx(scenarios.issueGuardComplete)
+    await store.confirm(completedTx, buyer1, 'buyer')
+    await store.confirm(completedTx, seller, 'seller')
+    expect(
+      await store.upsertMeetupToken(completedTx, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+        ttlSeconds: 300,
+      }),
+    ).toBeNull()
+    expect(await store.findMeetupToken(completedTx)).toBeNull()
+  })
+
+  test('cancel 与 issue 并发：二者在交易行锁上串行化，201 只发给持锁时仍 PENDING 的交易', async () => {
+    const txId = await createPendingTx(scenarios.issueRace)
+    const [cancelOut, issueOut] = await Promise.all([
+      store.cancel(txId, buyer1),
+      store.upsertMeetupToken(txId, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+        ttlSeconds: 300,
+      }),
+    ])
+    // cancel 在 PENDING 上不受 token 影响，必然成功（#11 冻结语义）
+    if (cancelOut.kind !== 'ok') throw new Error('unreachable')
+    // 可观测不变量：issue 返回 null ⇒ 终态下没有新凭证行；
+    // issue 返回行 ⇒ 它持锁时交易仍 PENDING（签发先于取消，随后取消生效是合法时序）
+    const tokenRow = await store.findMeetupToken(txId)
+    if (issueOut === null) {
+      expect(tokenRow).toBeNull()
+    } else {
+      expect(tokenRow?.token_hash).toBe(TOKEN_HASH)
+    }
+  })
+
+  test('失败计数绑定凭证代际：刷新后旧请求的失败不污染新码（审查 P1）', async () => {
+    const txId = await createPendingTx(scenarios.generation)
+    const V1_TOKEN = 'f'.repeat(64)
+    const V1_CODE = 'e'.repeat(64)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: V1_TOKEN,
+      codeHash: V1_CODE,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    // 旧代凭证上的两次失败
+    const first = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: V1_TOKEN, codeHash: V1_CODE },
+      5,
+      600,
+    )
+    expect(first?.failedAttempts).toBe(1)
+    // 刷新 → 新一代凭证（哈希覆写、计数归零）
+    const V2_TOKEN = '9'.repeat(64)
+    const V2_CODE = '8'.repeat(64)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: V2_TOKEN,
+      codeHash: V2_CODE,
+      issuedBy: seller,
+      ttlSeconds: 300,
+    })
+    // 并发中的旧请求此刻才落计数：代际不匹配 → 被丢弃
+    const stale = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: V1_TOKEN, codeHash: V1_CODE },
+      5,
+      600,
+    )
+    expect(stale).toBeNull()
+    const fresh = await store.findMeetupToken(txId)
+    expect(fresh?.failed_attempts).toBe(0)
+    expect(fresh?.locked_until).toBeNull()
+    // 新一代上的失败照常累计
+    const counted = await store.recordMeetupTokenFailure(
+      txId,
+      { tokenHash: V2_TOKEN, codeHash: V2_CODE },
+      5,
+      600,
+    )
+    expect(counted?.failedAttempts).toBe(1)
   })
 })
