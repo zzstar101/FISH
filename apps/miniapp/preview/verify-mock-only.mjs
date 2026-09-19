@@ -43,7 +43,6 @@ const ROUTES = [
   '/pages/listing-detail/index?id=l-014',
   '/pages/conversation/index?id=c-001',
   '/pages/conversation/index?id=c-006',
-  '/pages/notifications/index',
 ]
 
 /**
@@ -68,7 +67,6 @@ const WIRED = [
   '/pages/category/index',
   '/pages/search/index',
   '/pages/listing-detail/index',
-  '/pages/notifications/index',
   '/pages/profile/index',
 ]
 

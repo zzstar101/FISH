@@ -2,8 +2,8 @@
  * 固定顶部栏（一级页面专用）。
  *
  * **为什么不复用 `@/components/nav-bar`**：那个组件是二级页面用的**漂浮导航**
- * （`position: absolute` + 圆形玻璃返回钮，浮在内容之上），被 12 个页面引用
- * （conversation / match / mylist / notifications / orders / sell / settings /
+ * （`position: absolute` + 圆形玻璃返回钮，浮在内容之上），被 11 个页面引用
+ * （conversation / match / mylist / orders / sell / settings /
  * transaction-meetup / user / verify / watchers / listing-detail）。
  * 一级页面要的是另一种东西：**固定（`fixed`）+ 一级标题**，内容从它下方滚过。
  * 两种职责混进一个组件，任何一边的改动都会牵动另一边 —— 所以这里独立成组件，
