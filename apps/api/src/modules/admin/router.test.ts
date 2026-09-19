@@ -5,7 +5,10 @@ import {
   AdminListingDetailSchema,
   AdminListingSummaryPageSchema,
   AdminMeResponseSchema,
+  AdminModerationDetailSchema,
+  AdminModerationQueueSchema,
   AdminOverviewSchema,
+  AdminTransactionPageSchema,
   AdminUserDetailSchema,
   AdminUserSummaryPageSchema,
 } from '@fish/contracts/admin/schema'
@@ -13,6 +16,7 @@ import { createDb, type Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
 import { listings } from '@fish/db/schema/listings'
+import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { loadServerEnv } from '@fish/shared/env'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -46,6 +50,9 @@ const DEMO_PASSWORD = 'fish123456'
 const ADMIN_TARGET_ID = '01930000-0000-7000-8000-000000000091'
 const USER_ID = '01930000-0000-7000-8000-000000000092'
 const LISTING_ID = '01930000-0000-7000-8000-0000000000a1'
+const REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a2'
+const REVIEW_RECORD_ID = '01930000-0000-7000-8000-0000000000b2'
+const BLOCKED_EDIT_RECORD_ID = '01930000-0000-7000-8000-0000000000b3'
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -90,16 +97,58 @@ beforeAll(async () => {
     requestId: 'req-init-1',
     createdAt: new Date('2026-09-01T01:00:00Z'),
   })
-  await scratch.insert(listings).values({
-    id: LISTING_ID,
+  await scratch.insert(listings).values([
+    {
+      id: LISTING_ID,
+      sellerId: USER_ID,
+      title: '管理后台可见商品',
+      description: '用于管理员查询的测试商品',
+      priceCents: 15900,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: 'ACTIVE',
+      createdAt: new Date('2026-09-02T02:00:00Z'),
+    },
+    {
+      id: REVIEW_LISTING_ID,
+      sellerId: USER_ID,
+      title: '待人工审核商品',
+      description: '含有需要人工复核的描述',
+      priceCents: 1200,
+      category: 'BOOKS',
+      condition: 'GOOD',
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+      moderationReason: '命中规则',
+      moderationRuleVersion: 'test-v1',
+      createdAt: new Date('2026-09-01T02:00:00Z'),
+    },
+  ])
+  await scratch.insert(listingModerationRecords).values({
+    id: REVIEW_RECORD_ID,
+    listingId: REVIEW_LISTING_ID,
     sellerId: USER_ID,
-    title: '管理后台可见商品',
-    description: '用于管理员查询的测试商品',
-    priceCents: 15900,
-    category: 'DIGITAL',
-    condition: 'GOOD',
-    status: 'ACTIVE',
-    createdAt: new Date('2026-09-02T02:00:00Z'),
+    action: 'CREATE',
+    titleSnapshot: '待人工审核商品',
+    descriptionSnapshot: '含有需要人工复核的描述',
+    decision: 'REVIEW',
+    matchedRules: jsonParam(['TEST_RULE']),
+    matchedTermsMasked: jsonParam(['测**']),
+    ruleVersion: 'test-v1',
+    createdAt: new Date('2026-09-03T02:01:00Z'),
+  })
+  await scratch.insert(listingModerationRecords).values({
+    id: BLOCKED_EDIT_RECORD_ID,
+    listingId: REVIEW_LISTING_ID,
+    sellerId: USER_ID,
+    action: 'UPDATE',
+    titleSnapshot: '被拦截的新编辑',
+    descriptionSnapshot: '这次编辑被自动规则拦截',
+    decision: 'BLOCK',
+    matchedRules: jsonParam(['BLOCK_RULE']),
+    matchedTermsMasked: jsonParam(['拦**']),
+    ruleVersion: 'test-v1',
+    createdAt: new Date('2026-09-03T02:02:00Z'),
   })
 })
 
@@ -151,6 +200,9 @@ describe('Admin HTTP 权限边界（设计 §3.2）', () => {
       ADMIN_ROUTES.users,
       ADMIN_ROUTES.overview,
       ADMIN_ROUTES.auditLogs,
+      ADMIN_ROUTES.moderationQueue,
+      ADMIN_ROUTES.transactions,
+      ADMIN_ROUTES.moderationDetail(REVIEW_RECORD_ID),
       ADMIN_ROUTES.userDetail(userCookie ? USER_ID : ''),
     ]) {
       if (!path) continue
@@ -179,7 +231,7 @@ describe('Admin 查询端到端', () => {
     expect(body.items).toHaveLength(2)
     const byId = new Map(body.items.map((item) => [item.id, item]))
     expect(byId.get(USER_ID)?.studentNoMasked).toBe('2021****0902')
-    expect(byId.get(USER_ID)?.listingCount).toBe(1)
+    expect(byId.get(USER_ID)?.listingCount).toBe(2)
   })
 
   test('GET /admin/users supports q (exact student no, nickname prefix) and role filter', async () => {
@@ -254,6 +306,35 @@ describe('Admin 查询端到端', () => {
     expect(body.recentAuditLogs).toEqual([])
   })
 
+  test('GET moderation queue and transactions are queryable by admin', async () => {
+    const moderation = await app.request(ADMIN_ROUTES.moderationQueue, {
+      headers: { cookie: adminCookie },
+    })
+    expect(moderation.status).toBe(200)
+    const moderationBody = AdminModerationQueueSchema.parse(await moderation.json())
+    expect(moderationBody.items).toHaveLength(1)
+    expect(moderationBody.items[0]?.record.id).toBe(REVIEW_RECORD_ID)
+    expect(moderationBody.items[0]?.record.titleSnapshot).toBe('待人工审核商品')
+
+    const transaction = await app.request(ADMIN_ROUTES.transactions, {
+      headers: { cookie: adminCookie },
+    })
+    expect(transaction.status).toBe(200)
+    expect(AdminTransactionPageSchema.parse(await transaction.json()).items).toEqual([])
+  })
+
+  test('moderation decisions require an idempotency key', async () => {
+    const res = await app.request(
+      ADMIN_ROUTES.moderationDecision('01930000-0000-7000-8000-0000000000a1'),
+      {
+        method: 'POST',
+        headers: { cookie: adminCookie, 'content-type': 'application/json' },
+        body: '{}',
+      },
+    )
+    expect(res.status).toBe(422)
+  })
+
   test('GET /admin/overview returns fixed metrics', async () => {
     const res = await app.request(ADMIN_ROUTES.overview, { headers: { cookie: adminCookie } })
     expect(res.status).toBe(200)
@@ -277,6 +358,66 @@ describe('Admin 查询端到端', () => {
       { headers: { cookie: adminCookie } },
     )
     expect(AdminAuditLogPageSchema.parse(await filtered.json()).items).toHaveLength(1)
+  })
+
+  test('moderation detail and decision update the listing and audit atomically', async () => {
+    const detail = await app.request(ADMIN_ROUTES.moderationDetail(REVIEW_RECORD_ID), {
+      headers: { cookie: adminCookie },
+    })
+    expect(detail.status).toBe(200)
+    const detailBody = AdminModerationDetailSchema.parse(await detail.json())
+    expect(detailBody.machineDecision).toBe('REVIEW')
+    expect(detailBody.humanDecision).toBeNull()
+
+    const decided = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'moderation-test-1',
+      },
+      body: JSON.stringify({ decision: 'ALLOW', reason: '人工复核通过' }),
+    })
+    expect(decided.status).toBe(200)
+    const decidedBody = AdminModerationDetailSchema.parse(await decided.json())
+    expect(decidedBody.humanDecision?.decision).toBe('ALLOW')
+    expect(decidedBody.item.listing.moderationStatus).toBe('APPROVED')
+
+    const repeated = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'moderation-test-1',
+      },
+      body: JSON.stringify({ decision: 'ALLOW', reason: '人工复核通过' }),
+    })
+    expect(repeated.status).toBe(200)
+
+    const sameDecisionDifferentReason = await app.request(
+      ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID),
+      {
+        method: 'POST',
+        headers: {
+          cookie: adminCookie,
+          'content-type': 'application/json',
+          'Idempotency-Key': 'moderation-test-1',
+        },
+        body: JSON.stringify({ decision: 'ALLOW', reason: '不同原因' }),
+      },
+    )
+    expect(sameDecisionDifferentReason.status).toBe(409)
+
+    const conflictingKey = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'moderation-test-1',
+      },
+      body: JSON.stringify({ decision: 'BLOCK', reason: '改用拦截' }),
+    })
+    expect(conflictingKey.status).toBe(409)
   })
 
   test('missing user / listing is 404 ADMIN_NOT_FOUND; non-uuid path param is 404, not 500', async () => {

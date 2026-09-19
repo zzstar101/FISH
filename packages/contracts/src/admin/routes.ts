@@ -26,4 +26,12 @@ export const ADMIN_ROUTES = {
   overview: '/admin/overview',
   /** GET 审计日志（只读，默认最新优先）。 */
   auditLogs: '/admin/audit-logs',
+  /** GET 待人工审核队列。 */
+  moderationQueue: '/admin/moderation/queue',
+  /** GET 审核记录详情（含机器结果、历史和人工决定）。 */
+  moderationDetail: (recordId: string) => `/admin/moderation/${recordId}`,
+  /** POST 人工审核决定；Idempotency-Key 由 HTTP header 提供。 */
+  moderationDecision: (recordId: string) => `/admin/moderation/${recordId}/decision`,
+  /** GET 全量交易查询（仅管理员）。 */
+  transactions: '/admin/transactions',
 } as const

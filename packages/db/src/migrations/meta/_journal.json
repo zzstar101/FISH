@@ -85,6 +85,13 @@
       "when": 1789812732126,
       "tag": "0011_rich_winter_soldier",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789823961280,
+      "tag": "0012_brave_spiral",
+      "breakpoints": true
     }
   ]
 }

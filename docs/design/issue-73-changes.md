@@ -167,3 +167,17 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
 2. **契约收紧的向后兼容**：CCR-1 只拒绝此前会被静默接受的非法枚举值，但若有其它消费者依赖「任意字符串」，需同步。
 3. **审计原子性尚未被代码保证**：F3 记录的 `insertAuditLog` 无事务句柄问题在 S6 落地前一直存在；当前零写操作，暂无实际影响。
 4. **`db:seed` 的跨分支耦合**：`seed.ts` 的 TRUNCATE 列表按分支维护，任何新增带外键的表都要同步，否则本地 seed 直接失败。
+
+## 7. #74 Contract 冻结后的 Admin/Moderation 线补充（本次实现）
+
+在 #80 已提供 `listing_moderation_records` 与自动审核结果的基础上，本次补齐了独立的 Admin 治理链路：
+
+- `GET /admin/moderation/queue`：只查询当前 `listings.moderation_status = REVIEW` 的最新审核记录，游标分页。
+- `GET /admin/moderation/:recordId`：返回机器审核结果、脱敏命中信息、记录历史和人工决定。
+- `POST /admin/moderation/:recordId/decision`：要求 `ALLOW/BLOCK`、必填原因和 `Idempotency-Key`；条件更新避免重复处理，商品状态更新、人工审核记录与 `MODERATION_DECISION` 审计在同一事务中完成。
+- `GET /admin/transactions`：管理员只读交易查询，支持关键词、状态、买卖双方、商品、时间范围和游标分页。
+- Admin Web 新增审核队列 / 审核详情人工决定流、交易查询页及导航入口；人工决定带二次确认，不在前端复制敏感词规则。
+
+新增 `packages/db/src/migrations/0012_brave_spiral.sql` 仅扩展 `admin_audit_action` 枚举，审核历史复用 #80 已存在的 moderation record 表，不修改已合入 migration 历史。
+
+验证：`bun test apps/api/src/modules/admin/router.test.ts packages/contracts/src/admin/schema.test.ts`、`bun run --filter '@fish/web' build`。

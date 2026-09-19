@@ -1,15 +1,28 @@
 import type { AdminMeResponse } from '@fish/contracts/admin/schema'
-import { type QueryClient, queryOptions, useQuery } from '@tanstack/react-query'
+import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
+import {
+  type QueryClient,
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { ApiError } from '../../lib/api-client'
 import {
   type AdminAuditLogsQuery,
   type AdminListingsQuery,
   type AdminListQuery,
+  type AdminModerationQueueQuery,
+  type AdminTransactionsQuery,
+  decideAdminModeration,
   fetchAdminAuditLogs,
   fetchAdminListing,
   fetchAdminListings,
   fetchAdminMe,
+  fetchAdminModerationDetail,
+  fetchAdminModerationQueue,
   fetchAdminOverview,
+  fetchAdminTransactions,
   fetchAdminUser,
   fetchAdminUsers,
 } from './api'
@@ -29,6 +42,10 @@ export const adminKeys = {
   listings: (query: AdminListingsQuery) => ['admin', 'listings', query] as const,
   listing: (listingId: string) => ['admin', 'listing', listingId] as const,
   auditLogs: (query: AdminAuditLogsQuery) => ['admin', 'audit-logs', query] as const,
+  moderationQueue: (query: AdminModerationQueueQuery) =>
+    ['admin', 'moderation-queue', query] as const,
+  moderationDetail: (recordId: string) => ['admin', 'moderation', recordId] as const,
+  transactions: (query: AdminTransactionsQuery) => ['admin', 'transactions', query] as const,
 }
 
 /**
@@ -97,6 +114,46 @@ export function useAdminAuditLogs(query: AdminAuditLogsQuery) {
   return useQuery({
     queryKey: adminKeys.auditLogs(query),
     queryFn: () => fetchAdminAuditLogs(query),
+  })
+}
+
+export function useAdminModerationQueue(query: AdminModerationQueueQuery) {
+  return useQuery({
+    queryKey: adminKeys.moderationQueue(query),
+    queryFn: () => fetchAdminModerationQueue(query),
+  })
+}
+
+export function useAdminModerationDetail(recordId: string) {
+  return useQuery({
+    queryKey: adminKeys.moderationDetail(recordId),
+    queryFn: () => fetchAdminModerationDetail(recordId),
+    enabled: Boolean(recordId),
+  })
+}
+
+export function useAdminTransactions(query: AdminTransactionsQuery) {
+  return useQuery({
+    queryKey: adminKeys.transactions(query),
+    queryFn: () => fetchAdminTransactions(query),
+  })
+}
+
+export function useDecideAdminModeration(recordId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ input, requestId }: { input: ModerationDecisionInput; requestId: string }) =>
+      decideAdminModeration(recordId, input, requestId),
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: adminKeys.moderationDetail(recordId) })
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'moderation-queue'] })
+    },
+    onSuccess: (detail) => {
+      queryClient.setQueryData(adminKeys.moderationDetail(recordId), detail)
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'moderation-queue'] })
+      void queryClient.invalidateQueries({ queryKey: adminKeys.listing(detail.item.listing.id) })
+      void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+    },
   })
 }
 

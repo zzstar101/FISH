@@ -17,6 +17,8 @@ const NAV_ITEMS = [
   { to: '/admin' as const, label: '概览' },
   { to: '/admin/users' as const, label: '用户' },
   { to: '/admin/listings' as const, label: '商品' },
+  { to: '/admin/moderation' as const, label: '审核队列' },
+  { to: '/admin/transactions' as const, label: '交易查询' },
   { to: '/admin/audit-logs' as const, label: '审计日志' },
 ]
 
