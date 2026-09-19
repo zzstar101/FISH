@@ -12,6 +12,7 @@ import {
   AdminUserDetailSchema,
   AdminUserSummaryPageSchema,
 } from '@fish/contracts/admin/schema'
+import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
@@ -19,6 +20,7 @@ import { listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { loadServerEnv } from '@fish/shared/env'
+import { desc, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 
@@ -53,6 +55,7 @@ const LISTING_ID = '01930000-0000-7000-8000-0000000000a1'
 const REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a2'
 const REVIEW_RECORD_ID = '01930000-0000-7000-8000-0000000000b2'
 const BLOCKED_EDIT_RECORD_ID = '01930000-0000-7000-8000-0000000000b3'
+const OFFLINE_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a3'
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -418,6 +421,55 @@ describe('Admin 查询端到端', () => {
       body: JSON.stringify({ decision: 'BLOCK', reason: '改用拦截' }),
     })
     expect(conflictingKey.status).toBe(409)
+  })
+
+  test('ALLOW restores an offline listing after an UPDATE review', async () => {
+    await scratch.insert(listings).values({
+      id: OFFLINE_REVIEW_LISTING_ID,
+      sellerId: USER_ID,
+      title: '主动下架商品',
+      description: '原始描述',
+      priceCents: 2500,
+      category: 'BOOKS',
+      condition: 'GOOD',
+      status: 'OFFLINE',
+      moderationStatus: 'APPROVED',
+      createdAt: new Date('2026-09-04T02:00:00Z'),
+    })
+
+    const edited = await app.request(LISTING_ROUTES.detail(OFFLINE_REVIEW_LISTING_ID), {
+      method: 'PATCH',
+      headers: { cookie: userCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ description: '加微信联系' }),
+    })
+    expect(edited.status).toBe(200)
+
+    const reviewRows = await scratch
+      .select({ id: listingModerationRecords.id })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.listingId, OFFLINE_REVIEW_LISTING_ID))
+      .orderBy(desc(listingModerationRecords.createdAt), desc(listingModerationRecords.id))
+      .limit(1)
+    const reviewRecordId = reviewRows[0]?.id
+    expect(reviewRecordId).toBeDefined()
+
+    const allowed = await app.request(ADMIN_ROUTES.moderationDecision(reviewRecordId ?? ''), {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'offline-update-review-allow',
+      },
+      body: JSON.stringify({ decision: 'ALLOW', reason: '批准编辑内容，保持原下架状态' }),
+    })
+    expect(allowed.status).toBe(200)
+
+    const [listing] = await scratch
+      .select({ status: listings.status, moderationStatus: listings.moderationStatus })
+      .from(listings)
+      .where(eq(listings.id, OFFLINE_REVIEW_LISTING_ID))
+      .limit(1)
+    expect(listing).toEqual({ status: 'OFFLINE', moderationStatus: 'APPROVED' })
   })
 
   test('missing user / listing is 404 ADMIN_NOT_FOUND; non-uuid path param is 404, not 500', async () => {
