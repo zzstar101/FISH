@@ -458,7 +458,7 @@ export default function ListingDetail() {
     } catch (error) {
       // 未成功翻完就保持原游标（此时一条也没追加）；收起留言行，
       // 让下一次点击重新进“展开并继续拉取”，而不是先关一次再展开。
-      reportLocalOnly('更多留言', error)
+      logCommentFailure('更多留言', error)
       if (mountedRef.current) setCommentsOpen(false)
     } finally {
       loadingMoreRef.current = false

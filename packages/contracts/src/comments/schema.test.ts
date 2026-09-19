@@ -4,6 +4,7 @@ import {
   CommentCreateInputSchema,
   CommentDtoSchema,
   CommentListQuerySchema,
+  CommentReplySchema,
 } from './schema'
 
 const AUTHOR = { id: '01930000-0000-7000-8000-00000000000a', nickname: '阿岚', avatarUrl: null }
@@ -84,5 +85,31 @@ describe('CommentDtoSchema', () => {
 
   test('rejects a non-uuid id before it can reach the uuid column', () => {
     expect(CommentDtoSchema.safeParse(comment({ id: 'cm-001' })).success).toBe(false)
+  })
+})
+
+// 契约只允许一层回复；这是防「服务端漂移出二级回复」的回归用例（评审阻断项 1）。
+describe('CommentReplySchema — 回复的 replies 必须为空', () => {
+  test('accepts a reply with an empty replies array', () => {
+    const reply = comment({ id: '01930000-0000-7000-8000-000000000022' })
+    expect(CommentReplySchema.safeParse(reply).success).toBe(true)
+  })
+
+  test('rejects a reply that itself carries replies', () => {
+    const nested = comment({ id: '01930000-0000-7000-8000-000000000023' })
+    const reply = comment({
+      id: '01930000-0000-7000-8000-000000000022',
+      replies: [nested],
+    })
+    expect(CommentReplySchema.safeParse(reply).success).toBe(false)
+  })
+
+  test('rejects a top-level comment whose reply nests another reply', () => {
+    const nested = comment({ id: '01930000-0000-7000-8000-000000000023' })
+    const reply = comment({
+      id: '01930000-0000-7000-8000-000000000022',
+      replies: [nested],
+    })
+    expect(CommentDtoSchema.safeParse(comment({ replies: [reply] })).success).toBe(false)
   })
 })

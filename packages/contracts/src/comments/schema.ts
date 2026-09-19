@@ -44,12 +44,13 @@ export const CommentAuthorSchema = z.object({
 export type CommentAuthor = z.infer<typeof CommentAuthorSchema>
 
 /**
- * 留言读模型。`replies` 只嵌套一层（见文件头决定 2）。
+ * 回复读模型：与顶层留言字段相同，但 `replies` **必须是空数组**。
  *
- * 用 `z.lazy` 表达自引用而不是再声明一个 `CommentReplySchema`：两层的字段集合一旦
- * 各写一份就会漂移，而契约明确要求回复与顶层留言形状相同。
+ * 契约只允许嵌套一层（见文件头决定 2），所以这里不能用自引用 schema 宽松接受任意深度：
+ * 一个「回复的回复」或更深层的漂移响应必须在本层 parse 失败，而不是被渲染成
+ * 页面不支持的评论树。`z.tuple([])` 只接受 `[]`。
  */
-export type CommentDto = {
+export type CommentReply = {
   id: string
   listingId: string
   author: CommentAuthor
@@ -57,23 +58,38 @@ export type CommentDto = {
   createdAt: string
   /** 作者是否 = 该商品的卖家（页面「卖家」标签）。服务端判定，客户端不参与。 */
   isSeller: boolean
-  replies: CommentDto[]
+  replies: []
 }
 
-export const CommentDtoSchema: z.ZodType<CommentDto> = z.lazy(() =>
-  z.object({
-    id: z.uuid(),
-    listingId: z.uuid(),
-    author: CommentAuthorSchema,
-    content: CommentContentSchema,
-    createdAt: z.iso.datetime(),
-    isSeller: z.boolean(),
-    /**
-     * 顶层留言带回复；回复自身恒为空数组（服务端保证只嵌套一层，见决定 2）。
-     */
-    replies: z.array(CommentDtoSchema),
-  }),
-)
+export const CommentReplySchema: z.ZodType<CommentReply> = z.object({
+  id: z.uuid(),
+  listingId: z.uuid(),
+  author: CommentAuthorSchema,
+  content: CommentContentSchema,
+  createdAt: z.iso.datetime(),
+  isSeller: z.boolean(),
+  replies: z.tuple([]),
+})
+
+/**
+ * 顶层留言读模型。`replies` 只嵌套一层，元素是**回复** schema（其 `replies` 恒为空）。
+ *
+ * 顶层与回复的字段集合保持一份定义（`CommentReplySchema` 的形状），避免两处漂移；
+ * 差异只在 `replies` 的值域上。
+ */
+export type CommentDto = Omit<CommentReply, 'replies'> & {
+  replies: CommentReply[]
+}
+
+export const CommentDtoSchema: z.ZodType<CommentDto> = z.object({
+  id: z.uuid(),
+  listingId: z.uuid(),
+  author: CommentAuthorSchema,
+  content: CommentContentSchema,
+  createdAt: z.iso.datetime(),
+  isSeller: z.boolean(),
+  replies: z.array(CommentReplySchema),
+})
 
 /**
  * 留言游标里时间戳的形态：**带微秒**的 UTC ISO 时间，与 listings feed（契约 §2.1）同口径。

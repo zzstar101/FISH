@@ -7,6 +7,8 @@ import {
   type CommentErrorCode,
   type CommentListQuery,
   type CommentListResponse,
+  type CommentReply,
+  CommentReplySchema,
 } from '@fish/contracts/comments/schema'
 import type { ApiErrorDetail, SystemErrorCode } from '@fish/contracts/system/error'
 import { createModerationService, type ModerationService } from '../moderation/service'
@@ -54,9 +56,9 @@ function toAuthor(row: CommentRow): CommentAuthor {
   }
 }
 
-/** 回复 DTO：`replies` 恒为空数组（契约只嵌套一层）。 */
-function toReplyDto(row: CommentRow, sellerId: string): CommentDto | null {
-  const parsed = CommentDtoSchema.safeParse({
+/** 回复 DTO：`replies` 恒为空数组（契约只嵌套一层，`CommentReplySchema` 强制）。 */
+function toReplyDto(row: CommentRow, sellerId: string): CommentReply | null {
+  const parsed = CommentReplySchema.safeParse({
     id: row.id,
     listingId: row.listingId,
     author: toAuthor(row),
@@ -74,7 +76,7 @@ function toReplyDto(row: CommentRow, sellerId: string): CommentDto | null {
 function toTopLevelDto(
   row: CommentRow,
   sellerId: string,
-  replies: CommentDto[],
+  replies: CommentReply[],
 ): CommentDto | null {
   const parsed = CommentDtoSchema.safeParse({
     id: row.id,
@@ -138,7 +140,7 @@ export function createCommentService(deps: {
       const hasMore = rows.length > query.limit
       const page = hasMore ? rows.slice(0, query.limit) : rows
 
-      const repliesByParent = new Map<string, CommentDto[]>()
+      const repliesByParent = new Map<string, CommentReply[]>()
       if (page.length > 0) {
         const replies = await store.listReplies(page.map((row) => row.id))
         for (const reply of replies) {
