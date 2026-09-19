@@ -93,6 +93,7 @@ export type CreateListingRecord = {
     matchedRules: string[]
     matchedTermsMasked: string[]
     ruleVersion: string
+    priorListingStatus?: ListingStatus | null
   }
 }
 
@@ -165,6 +166,7 @@ type ModerationPlan = {
   matchedRules: string[]
   matchedTermsMasked: string[]
   ruleVersion: string
+  priorListingStatus?: ListingStatus | null
 }
 
 /**
@@ -248,6 +250,7 @@ export interface ListingStore {
     matchedRules: string[]
     matchedTermsMasked: string[]
     ruleVersion: string
+    priorListingStatus?: ListingStatus | null
   }): Promise<void>
 }
 
@@ -335,6 +338,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             matchedRules: jsonParam(record.moderation.matchedRules),
             matchedTermsMasked: jsonParam(record.moderation.matchedTermsMasked),
             ruleVersion: record.moderation.ruleVersion,
+            priorListingStatus: record.moderation.priorListingStatus ?? null,
           })
         }
 
@@ -494,6 +498,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             matchedRules: jsonParam(plan.moderation.matchedRules),
             matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
             ruleVersion: plan.moderation.ruleVersion,
+            priorListingStatus: plan.moderation.priorListingStatus ?? null,
           })
           return { kind: 'rejected' as const }
         }
@@ -529,6 +534,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             matchedRules: jsonParam(plan.moderation.matchedRules),
             matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
             ruleVersion: plan.moderation.ruleVersion,
+            priorListingStatus: plan.moderation.priorListingStatus ?? null,
           })
         }
 
@@ -559,6 +565,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         matchedRules: jsonParam(input.matchedRules),
         matchedTermsMasked: jsonParam(input.matchedTermsMasked),
         ruleVersion: input.ruleVersion,
+        priorListingStatus: input.priorListingStatus ?? null,
       })
     },
 

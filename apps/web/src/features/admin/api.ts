@@ -3,7 +3,10 @@ import type {
   AdminListingDetail,
   AdminListingSummaryPage,
   AdminMeResponse,
+  AdminModerationDetail,
+  AdminModerationQueue,
   AdminOverview,
+  AdminTransactionPage,
   AdminUserDetail,
   AdminUserSummaryPage,
 } from '@fish/contracts/admin/schema'
@@ -12,10 +15,14 @@ import {
   AdminListingDetailSchema,
   AdminListingSummaryPageSchema,
   AdminMeResponseSchema,
+  AdminModerationDetailSchema,
+  AdminModerationQueueSchema,
   AdminOverviewSchema,
+  AdminTransactionPageSchema,
   AdminUserDetailSchema,
   AdminUserSummaryPageSchema,
 } from '@fish/contracts/admin/schema'
+import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
 import { apiRequest } from '../../lib/api-client'
 
 /**
@@ -50,6 +57,19 @@ export type AdminAuditLogsQuery = {
   action?: string
   targetType?: string
   targetId?: string
+  createdFrom?: string
+  createdTo?: string
+  cursor?: string
+  limit?: number
+}
+
+export type AdminModerationQueueQuery = { cursor?: string; limit?: number }
+export type AdminTransactionsQuery = {
+  q?: string
+  status?: string
+  buyerId?: string
+  sellerId?: string
+  listingId?: string
   createdFrom?: string
   createdTo?: string
   cursor?: string
@@ -95,4 +115,38 @@ export async function fetchAdminListing(listingId: string): Promise<AdminListing
 
 export async function fetchAdminAuditLogs(query: AdminAuditLogsQuery): Promise<AdminAuditLogPage> {
   return AdminAuditLogPageSchema.parse(await apiRequest(`/admin/audit-logs${queryString(query)}`))
+}
+
+export async function fetchAdminModerationQueue(
+  query: AdminModerationQueueQuery,
+): Promise<AdminModerationQueue> {
+  return AdminModerationQueueSchema.parse(
+    await apiRequest(`/admin/moderation/queue${queryString(query)}`),
+  )
+}
+
+export async function fetchAdminModerationDetail(recordId: string): Promise<AdminModerationDetail> {
+  return AdminModerationDetailSchema.parse(await apiRequest(`/admin/moderation/${recordId}`))
+}
+
+export async function decideAdminModeration(
+  recordId: string,
+  input: ModerationDecisionInput,
+  requestId: string,
+): Promise<AdminModerationDetail> {
+  return AdminModerationDetailSchema.parse(
+    await apiRequest(`/admin/moderation/${recordId}/decision`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': requestId },
+      body: JSON.stringify(input),
+    }),
+  )
+}
+
+export async function fetchAdminTransactions(
+  query: AdminTransactionsQuery,
+): Promise<AdminTransactionPage> {
+  return AdminTransactionPageSchema.parse(
+    await apiRequest(`/admin/transactions${queryString(query)}`),
+  )
 }

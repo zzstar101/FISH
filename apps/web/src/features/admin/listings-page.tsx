@@ -16,8 +16,7 @@ export type AdminListingsSearch = { q?: string; status?: string }
 type PageState = { cursor: string | null; stack: (string | null)[] }
 
 /**
- * 商品 / 审核队列（#73 设计 §4.3）：关键词 + 商品状态筛选写入 URL，游标分页。
- * 最新 Moderation 状态与人工复核入口待 #74 Contract 冻结后在本页补充。
+ * 商品查询（#73）：关键词 + 商品状态筛选写入 URL，游标分页；人工审核队列位于独立的「审核队列」页面。
  */
 export function ListingsPage({ search }: { search?: AdminListingsSearch }) {
   const navigate = useNavigate()

@@ -63,6 +63,7 @@ export function AuditLogsPage() {
             <SelectContent>
               <SelectItem value="all">全部动作</SelectItem>
               <SelectItem value="ADMIN_PROMOTED">提升管理员</SelectItem>
+              <SelectItem value="MODERATION_DECISION">人工审核决定</SelectItem>
             </SelectContent>
           </Select>
           <Select
