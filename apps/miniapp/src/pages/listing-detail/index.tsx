@@ -237,14 +237,22 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
   return [left, right]
 }
 
+/**
+ * 详情页的加载状态机。
+ *
+ * 不能用 `data === null` 同时表达「尚未加载」和「notFound」：那样骨架屏分支
+ * 永远先命中，「商品不存在或已下架」的空态不可达 —— 已删除 / 不存在的商品
+ * （从相似推荐、通知、旧分享链接进来）全部表现为无限加载（#121）。
+ * `notFound`（商品真不存在 → 空态）与 `failed`（根本没问到 → 错误态）必须分开。
+ */
+type LoadState = 'loading' | 'ok' | 'notFound' | 'failed'
+
 export default function ListingDetail() {
   const router = useRouter()
   const id = router.params.id ?? FALLBACK_ID
 
   const [data, setData] = useState<ListingDetailView | null>(null)
-  const [loading, setLoading] = useState(true)
-  /** 真实接口失败且没有回退 mock（生产口径）：走错误态，**不能**停在骨架屏上 */
-  const [failed, setFailed] = useState(false)
+  const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
   const [commentsOpen, setCommentsOpen] = useState(false)
@@ -295,7 +303,7 @@ export default function ListingDetail() {
    * 此时任何滚动都算「内容开始从栏下经过」—— 否则栏会一直透明、内容直接从它下面滑过去。
    * scrollTop = 0 两种情况下都不显示。
    */
-  const hasGalleryBlock = loading || Boolean(data?.listing)
+  const hasGalleryBlock = loadState === 'loading' || Boolean(data?.listing)
   /** 玻璃底出现的滚动阈值（设备 px）：见上 */
   const navSolidThreshold = hasGalleryBlock ? galleryPx : 1
 
@@ -307,16 +315,17 @@ export default function ListingDetail() {
   })
 
   const load = () => {
-    setLoading(true)
+    // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载（#121）
+    setData(null)
+    setLoadState('loading')
     // 三态分明：`ok` 渲染详情、`notFound` 走空态（商品真不存在）、
     // `failed` 走错误态 —— 生产口径不退回 mock，拿演示商品顶上比空态更误导
     void loadListingDetail(id).then(async (result) => {
       const view = result.status === 'ok' ? result.view : null
       setData(view)
-      setFailed(result.status === 'failed')
+      setLoadState(result.status === 'ok' ? 'ok' : result.status)
       // 详情一到就收骨架屏：留言是独立端点（#111），不能让它把商品本身的展示拖住。
-      setLoading(false)
-      // 留言异步加载（不 await 到 loading）：失败不拖垮整页，也不丢掉已拿到的商品信息。
+      // 留言异步加载（不等详情的终态）：失败不拖垮整页，也不丢掉已拿到的商品信息。
       if (view) {
         const loaded = await loadComments(id, view.comments)
         setComments(loaded.comments)
@@ -488,8 +497,8 @@ export default function ListingDetail() {
         </View>
       </View>
 
-      {failed ? (
-        /* 真接口失败：明确错误态 + 重试。不能落到下面的骨架屏分支（`!data` 会一直为真 → 永久骨架屏） */
+      {loadState === 'failed' ? (
+        /* 真接口失败：明确错误态 + 重试。按 loadState 分支，不会再被骨架屏分支吞掉（#121） */
         <View className="detail__emptypad">
           <LoadError
             title="加载失败"
@@ -497,23 +506,16 @@ export default function ListingDetail() {
             onRetry={load}
           />
         </View>
-      ) : loading || !data ? (
-        <View className="detail__skeleton">
-          <View className="detail__sk-gallery" />
-          <View className="detail__sk-line detail__sk-line--lg" />
-          <View className="detail__sk-line" />
-          <View className="detail__sk-line detail__sk-line--sm" />
-          <View className="detail__sk-block" />
-        </View>
-      ) : !listing ? (
-        /* 商品不存在 / 已下架：不留无限骨架屏，也不拿 mock 商品顶替 */
+      ) : loadState === 'notFound' ? (
+        /* 商品不存在 / 已下架（相似推荐、通知、旧分享链接都可能指过来）：按状态走空态，
+           不留无限骨架屏，也不拿 mock 商品顶替（#121） */
         <View className="detail__emptypad">
           <EmptyState
             title="商品不存在或已下架"
             text="这件闲置可能已被卖家删除或下架了，去看看别的吧"
           />
         </View>
-      ) : (
+      ) : loadState === 'ok' && data && listing ? (
         /*
           白卡（`.detail__sections`）到留言区就结束 —— 稿子里的圆角与投影挂在这块白卡上，
           「同类推荐」在卡外，所以它是兄弟节点而不是子节点。放进去的话，白底会把圆角切掉的
@@ -807,6 +809,16 @@ export default function ListingDetail() {
             </View>
           </View>
         </>
+      ) : (
+        /* 仍在加载：骨架屏。这个分支只应在 loadState === 'loading' 时到达 ——
+           `ok` 时 data / listing 必已就位（在 load() 里一起置位） */
+        <View className="detail__skeleton">
+          <View className="detail__sk-gallery" />
+          <View className="detail__sk-line detail__sk-line--lg" />
+          <View className="detail__sk-line" />
+          <View className="detail__sk-line detail__sk-line--sm" />
+          <View className="detail__sk-block" />
+        </View>
       )}
 
       {/* ---------------------------------------------------- 底部操作栏 */}
