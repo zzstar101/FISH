@@ -97,6 +97,8 @@ import plusLine from '@/assets/lib-icons/plus-line@3x.png'
 import power from '@/assets/lib-icons/power@3x.png'
 import qr from '@/assets/lib-icons/qr@3x.png'
 import rank from '@/assets/lib-icons/rank@3x.png'
+import readallAccent from '@/assets/lib-icons/readall-accent@3x.png'
+import readallMuted from '@/assets/lib-icons/readall-muted@3x.png'
 import refresh from '@/assets/lib-icons/refresh@3x.png'
 import safeAccent from '@/assets/lib-icons/safe-accent@3x.png'
 import safeMuted from '@/assets/lib-icons/safe-muted@3x.png'
@@ -212,6 +214,8 @@ export const ICONS = {
   file,
   image,
   imageMuted,
+  readallAccent,
+  readallMuted,
   box,
   browse,
   browseMuted,

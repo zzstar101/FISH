@@ -468,7 +468,7 @@ export function unreadNotificationCount(): number {
 
 export type ConversationFilter = 'all' | 'unread' | 'deal' | 'wish' | 'system'
 
-/** 消息页筛选：全部 / 未读 / 交易 / 许愿 / 系统 */
+/** 消息页筛选 Tab：全部 / 通知（= system）/ 交易 / 许愿；`unread` 仍留在类型里（UI 未提供） */
 export function filterConversations(
   items: MockConversation[],
   filter: ConversationFilter,

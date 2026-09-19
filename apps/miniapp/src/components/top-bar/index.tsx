@@ -14,6 +14,7 @@
  *
  * `variant`：
  * - `glass`（**默认**）：磨砂底 + 底部描边，内容从底下滚过时被遮住 —— 一级页都用它；
+ *   配 `below` 可把第二行（如消息页的筛选 Tab 行）并进同一块吸顶玻璃；
  * - `plain`：透明底，靠页面自己的页头渐变。**目前没有调用方**：透明顶栏会让滚动内容
  *   直接穿过标题（踩过这个坑），保留它只是为了「确实需要全透明」的版式，用时想清楚。
  */
@@ -40,6 +41,12 @@ type TopBarProps = {
   center?: ReactNode
   /** 右槽：动作区，排在胶囊避让区的左侧 */
   actions?: ReactNode
+  /**
+   * 副行：渲染在主行下方、与主行**同一块**玻璃之内（如消息页的筛选 Tab 行）。
+   * 玻璃变体的底与描边画在整块容器上，副行因此自然连成一体、描边落在整块底边。
+   * 组件不知道副行多高，`spacer` 只含主行 —— 副行的占位由调用方自行补足。
+   */
+  below?: ReactNode
   variant?: TopBarVariant
   /**
    * 是否在栏下方留出等高占位块。
@@ -59,6 +66,7 @@ export default function TopBar({
   left,
   center,
   actions,
+  below,
   variant = 'glass',
   spacer = false,
 }: TopBarProps) {
@@ -113,6 +121,7 @@ export default function TopBar({
           {center ? <View className="topbar__center">{center}</View> : null}
           {actions ? <View className="topbar__actions">{actions}</View> : null}
         </View>
+        {below ? <View className="topbar__below">{below}</View> : null}
       </View>
       {/*
         占位块与栏本身是**兄弟**：栏是 `fixed` 脱离文档流，占位块留在流里顶出等高留白。

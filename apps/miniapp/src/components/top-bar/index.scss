@@ -25,7 +25,6 @@
   gap: 24px;
   padding-left: 40px;
   box-sizing: border-box;
-  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 /* 一级标题：35px ≈ 17.5pt。
@@ -70,12 +69,16 @@
   background: transparent;
 }
 
-/* ── 变体：glass（搜索页：磨砂底 + 底部描边，始终可见） ── */
-.topbar--glass .topbar__row {
+/* ── 变体：glass（磨砂底 + 底部描边，始终可见） ──
+   底与描边画在**容器**上而不是主行上：`below` 副行（消息页筛选 Tab 行）
+   才能与主行连成同一块玻璃、描边落在整块底边。单行页面（搜索页）下两者等价。
+   描边用 inset box-shadow 而非 border：不占盒模型高度，栏总高与占位块严格相等
+   （旧实现 border 在行的 border-box 内，同样不外扩）。 */
+.topbar--glass {
   background: rgba(238, 246, 255, 0.82);
   backdrop-filter: blur(36px) saturate(180%);
   -webkit-backdrop-filter: blur(36px) saturate(180%);
-  border-bottom: 2px solid var(--accent-faint);
+  box-shadow: inset 0 -2px 0 var(--accent-faint);
 }
 
 /*

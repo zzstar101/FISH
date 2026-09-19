@@ -1,12 +1,11 @@
-import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useLoad } from '@tarojs/taro'
+import { Image, Text, View } from '@tarojs/components'
+import Taro, { useLoad, usePageScroll } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import {
   type ConversationFilter,
-  chatSummary,
   conversations,
   countByFilter,
   filterConversations,
@@ -16,13 +15,12 @@ import {
 } from '@/mock/api'
 import './index.scss'
 
-/** 筛选胶囊（设计稿顺序：全部 / 未读 / 交易 / 许愿 / 系统） */
+/** 1版稿筛选纯文字 Tab（顺序：全部 / 通知 / 交易 / 许愿；「通知」= 系统会话） */
 const FILTERS: { key: ConversationFilter; label: string }[] = [
   { key: 'all', label: '全部' },
-  { key: 'unread', label: '未读' },
+  { key: 'system', label: '通知' },
   { key: 'deal', label: '交易' },
   { key: 'wish', label: '许愿' },
-  { key: 'system', label: '系统' },
 ]
 
 /**
@@ -33,12 +31,11 @@ const FILTERS: { key: ConversationFilter; label: string }[] = [
  */
 const SYSTEM_NAME = '鱼小应小助手'
 
-/** 胶囊上的计数：设计稿只有「全部 / 未读」带数字，其余三个不带 */
-function chipCount(key: ConversationFilter, counts: { all: number; unread: number }): string {
-  if (key === 'all') return String(counts.all)
-  if (key === 'unread') return String(counts.unread)
-  return ''
-}
+/**
+ * 回到顶部钮的出现阈值：1版稿 .totop 滚过 380pt 后出现。
+ * `usePageScroll` 的单位是逻辑 px（= 稿的 pt），**不是** scss 里的 rpx，不 ×2。
+ */
+const TOTOP_THRESHOLD = 380
 
 /**
  * 会话列表的消息预览。
@@ -74,6 +71,16 @@ function previewText(conversation: MockConversation): string {
   return last.content
 }
 
+/**
+ * 1版稿名字右侧的状态胶囊配色：待面交=橙，已完成/已取消=灰，其余品牌色。
+ * 系统会话在列表里不显示胶囊（1版稿「鱼小应小助手」行只有名字）。
+ */
+function statusVariant(item: MockConversation): 'warn' | 'done' | null {
+  if (item.tag === '待面交') return 'warn'
+  if (item.tagDone) return 'done'
+  return null
+}
+
 export default function Chat() {
   // 消息列表需要登录（GET /conversations）；Tab 页只能用 navigateTo 跳登录页
   const authStatus = useAuthGuard({ tab: true })
@@ -81,20 +88,18 @@ export default function Chat() {
   const [filter, setFilter] = useState<ConversationFilter>('all')
   /** 本地已读：「全部已读」后把这些会话的未读角标清零（不写回 mock） */
   const [readIds, setReadIds] = useState<string[]>([])
+  const [showTop, setShowTop] = useState(false)
 
   useLoad(() => {
     // 数据是本地 mock（同步），保留 state 是为了将来换成真接口时页面结构不用改
     setItems(conversations())
   })
 
-  const summary = chatSummary()
+  /** 1版稿 .totop：滚过一屏半后浮现 */
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
 
-  /** #23：置顶「系统通知」行的未读数（独立端点 `GET /notifications/unread-count` 的语义） */
+  /** #23：通知页的未读数（独立端点 `GET /notifications/unread-count` 的语义） */
   const unreadNotifications = unreadNotificationCount()
-
-  const openNotifications = () => {
-    void Taro.navigateTo({ url: '/pages/notifications/index' })
-  }
 
   /** 已读处理后的会话：计数、筛选、角标都只看这一份，避免三处各算一遍 */
   const shown = useMemo(
@@ -115,6 +120,18 @@ export default function Chat() {
 
   const openConversation = (id: string) => {
     void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
+  }
+
+  /**
+   * 1版稿删掉了置顶「系统通知」行，通知页（#23）的入口由列表里的
+   * 系统会话行（「鱼小应小助手」）兼作 —— 两者都是「平台发给你的消息」。
+   */
+  const openNotifications = () => {
+    void Taro.navigateTo({ url: '/pages/notifications/index' })
+  }
+
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
   }
 
   /**
@@ -149,122 +166,55 @@ export default function Chat() {
       <View className="chat__bg" />
 
       {/*
-        固定顶栏：一级标题「消息」钉在顶部，右侧「全部已读」。
-        设计稿里「息」走品牌色（`.mp-title .c-brand`），由 `titleEm` 表达。
+        吸顶玻璃栏：主行「消息」+ 副行筛选 Tab（1版稿 .filterbar）在同一块玻璃里，
+        会话列表从底下滚过。「全部已读」小圆钮在副行右端 —— 食盒图标有两版：
+        有未读走主题色，全部已读转灰。
       */}
       <TopBar
         variant="glass"
         spacer
         title="消"
         titleEm="息"
-        actions={
-          <View className="chat__act" onClick={markAllRead}>
-            {/* 设计稿是「双勾」；图标库里没有双勾语义，取最接近的单勾 checkMuted */}
-            <Image className="chat__act-ic" src={ICONS.checkMuted} mode="aspectFit" />
-            <Text className="chat__act-tx">全部已读</Text>
+        below={
+          <View className="chat__filters">
+            <View className="chat__tabs">
+              {FILTERS.map((item) => {
+                const on = item.key === filter
+                return (
+                  <View
+                    key={item.key}
+                    // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child）
+                    className={`chat__tab chat__tab--${item.key}${on ? ' is-on' : ''}`}
+                    onClick={() => setFilter(item.key)}
+                  >
+                    <Text>{item.label}</Text>
+                    {/* 1版稿只有「全部」带计数 */}
+                    {item.key === 'all' && counts.all > 0 ? (
+                      <Text className="chat__tab-n num">{counts.all}</Text>
+                    ) : null}
+                  </View>
+                )
+              })}
+            </View>
+
+            <View className="chat__readall" onClick={markAllRead}>
+              <Image
+                className="chat__readall-ic"
+                src={counts.unread === 0 ? ICONS.readallMuted : ICONS.readallAccent}
+                mode="aspectFit"
+              />
+            </View>
           </View>
         }
       />
+      {/* 副行占位：筛选行高 28（上衬）+ 68（Tab 高）= 96px，组件的 spacer 只含主行 */}
+      <View className="chat__header-gap" />
 
       {/*
-        待回复 / 待确认面交的汇总行。
-        原先是页头里的副标题，标题抬进顶栏后它作为内容留在下面 —— 这是真实数据
-        （`chatSummary()`），不跟着版式一起删。
+        会话列表（1版稿 .list）。
+        系统会话行即通知页入口（见 `openNotifications`）；它的角标挂的是
+        通知未读数（#23），普通会话行挂自己的未读数。
       */}
-      <View className="chat__lead">
-        <Text className="chat__lead-tx">
-          {`${summary.pendingReply} 条待回复 · ${summary.pendingMeetup} 笔待确认面交`}
-        </Text>
-      </View>
-
-      <View className="chat__bento">
-        <View
-          className="chat__bcard chat__bcard--tint"
-          onClick={() => void Taro.switchTab({ url: '/pages/wish/index' })}
-        >
-          <View className="chat__bic">
-            <Image className="chat__bic-img" src={ICONS.starLine} mode="aspectFit" />
-          </View>
-          <Text className="chat__btt">许愿命中</Text>
-          <Text className="chat__bsub">{`${summary.wishHit} 条心愿有了回应`}</Text>
-          <View className="chat__bfoot">
-            <Text>去查看</Text>
-            <Text className="chat__bfoot-b">→</Text>
-          </View>
-        </View>
-
-        <View className="chat__bcard chat__bcard--dark" onClick={() => setFilter('deal')}>
-          <View className="chat__bic">
-            <Image className="chat__bic-img chat__ic-white" src={ICONS.order} mode="aspectFit" />
-          </View>
-          <Text className="chat__btt">交易助手</Text>
-          <Text className="chat__bsub">订单进度与面交提醒</Text>
-          <View className="chat__bfoot">
-            <Text>待确认</Text>
-            <Text className="chat__bfoot-b">{summary.pendingMeetup}</Text>
-          </View>
-        </View>
-      </View>
-
-      <ScrollView className="chat__chips" scrollX enableFlex>
-        <View className="chat__chips-inner">
-          {FILTERS.map((item) => {
-            const on = item.key === filter
-            const count = chipCount(item.key, counts)
-            return (
-              <View
-                key={item.key}
-                className={`chat__chip${on ? ' is-on' : ''}`}
-                onClick={() => setFilter(item.key)}
-              >
-                <Text>{item.label}</Text>
-                {count ? <Text className="chat__chip-n">{count}</Text> : null}
-              </View>
-            )
-          })}
-        </View>
-      </ScrollView>
-
-      <View className="chat__sec">
-        <Text className="chat__sec-title">最近联系</Text>
-        <Text className="chat__sec-note">按时间排序</Text>
-      </View>
-
-      {/*
-        #23 的入口形态（2026-09-12 决定）：「消息」tab 顶部置顶一行「系统通知」+ 未读红点，
-        点击进入通知列表页。与 web 端 `features/chat/message-page.tsx` 同一形态，
-        不复刻一份会话列表 —— 它只是本页列表区最上面的一行。
-      */}
-      <View className="chat__conv chat__conv--pin" onClick={openNotifications}>
-        <View className="chat__ava-wrap">
-          <View className="chat__ava chat__ava--sys">
-            <Image
-              className="chat__ava-ic chat__ic-white"
-              src={ICONS.safeAccent}
-              mode="aspectFit"
-            />
-          </View>
-          {unreadNotifications > 0 ? (
-            <Text className="chat__bdg num">{unreadNotifications}</Text>
-          ) : null}
-        </View>
-
-        <View className="chat__corp">
-          <View className="chat__corp-top">
-            <View className="chat__nm">
-              <Text className="chat__nm-tx">系统通知</Text>
-            </View>
-            <Text className="chat__tm num">全部</Text>
-          </View>
-          <View className="chat__corp-sub">
-            <Text className="chat__msg">
-              {unreadNotifications > 0 ? `${unreadNotifications} 条未读` : '暂无未读通知'}
-            </Text>
-            <Text className="chat__tag">通知</Text>
-          </View>
-        </View>
-      </View>
-
       <View className="chat__list">
         {visible.map((item) => {
           const isSystem = item.kind === 'system'
@@ -273,48 +223,60 @@ export default function Chat() {
           const name = isSystem ? SYSTEM_NAME : user.nickname
           const tick = !isSystem && user.authStatus === 'VERIFIED'
           const unread = item.unreadCount
+          const variant = statusVariant(item)
+          const badge = isSystem ? unreadNotifications : unread
 
           return (
             <View
               key={item.id}
               className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
-              onClick={() => openConversation(item.id)}
+              onClick={() => (isSystem ? openNotifications() : openConversation(item.id))}
             >
-              {/* 头像 + 在线绿点 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
+              {/* 头像 + 认证章 + 未读角标：要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
               <View className="chat__ava-wrap">
                 <View className={`chat__ava${isSystem ? ' chat__ava--sys' : ''}`}>
                   {isSystem ? (
-                    <Image
-                      className="chat__ava-ic chat__ic-white"
-                      src={ICONS.safeAccent}
-                      mode="aspectFit"
-                    />
+                    <Image className="chat__ava-ic" src={ICONS.shieldWhite} mode="aspectFit" />
                   ) : (
                     // 契约允许 avatarUrl 为 null（users.avatar_url 可空）；空串即不渲染图
                     <Image className="chat__ava-img" src={user.avatarUrl ?? ''} mode="aspectFill" />
                   )}
                 </View>
-                {item.online && !isSystem ? <View className="chat__on" /> : null}
-                {unread > 0 ? <Text className="chat__bdg num">{unread}</Text> : null}
+                {tick ? (
+                  <View className="chat__cert">
+                    <Image className="chat__cert-ic" src={ICONS.checkWhite} mode="aspectFit" />
+                  </View>
+                ) : null}
+                {badge > 0 ? <Text className="chat__bdg num">{badge}</Text> : null}
               </View>
 
               <View className="chat__corp">
                 <View className="chat__corp-top">
-                  <View className="chat__nm">
-                    <Text className="chat__nm-tx">{name}</Text>
-                    {tick ? (
-                      <Image className="chat__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
-                    ) : null}
-                  </View>
-                  <Text className="chat__tm num">{item.timeLabel}</Text>
+                  <Text className="chat__nm-tx">{name}</Text>
+                  {item.tag && !isSystem ? (
+                    <Text className={`chat__st${variant ? ` chat__st--${variant}` : ''}`}>
+                      {item.tag}
+                    </Text>
+                  ) : null}
                 </View>
+                <Text className="chat__msg">{previewText(item)}</Text>
+                {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
+                <Text className="chat__tm num">{item.timeLabel}</Text>
+              </View>
 
-                <View className="chat__corp-sub">
-                  <Text className="chat__msg">{previewText(item)}</Text>
-                  <Text className={`chat__tag${item.tagDone ? ' chat__tag--done' : ''}`}>
-                    {item.tag}
-                  </Text>
-                </View>
+              {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl`，系统行走品牌渐变底 */}
+              <View className={`chat__thumb${isSystem ? ' chat__thumb--brand' : ''}`}>
+                {isSystem ? (
+                  <Image className="chat__thumb-ic" src={ICONS.shieldWhite} mode="aspectFit" />
+                ) : item.listing.coverUrl ? (
+                  <Image
+                    className="chat__thumb-img"
+                    src={item.listing.coverUrl}
+                    mode="aspectFill"
+                  />
+                ) : (
+                  <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
+                )}
               </View>
             </View>
           )
@@ -326,6 +288,11 @@ export default function Chat() {
             <Text className="chat__empty-text">换个筛选看看其他消息</Text>
           </View>
         ) : null}
+      </View>
+
+      {/* 1版稿 .totop：滚过一屏半浮现，品牌色上箭头 */}
+      <View className={`chat__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
+        <View className="chat__totop-arrow" />
       </View>
     </View>
   )

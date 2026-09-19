@@ -207,8 +207,9 @@ export type MockConversation = {
   kind: 'deal' | 'wish' | 'system'
   /** mock 专属：设计稿列表上的时间文案 */
   timeLabel: string
-  /** mock 专属：交易状态标签（交易 / 已完成 / 许愿 / 系统） */
+  /** mock 专属：1版稿名字右侧的状态胶囊（待面交 / 待确认 / 待回复 / 已完成 / 已取消 / 许愿 / 系统） */
   tag: string
+  /** mock 专属：胶囊走「已完成」灰态（已完成 / 已取消 / 系统） */
   tagDone: boolean
   /** mock 专属：对方是否在线（绿点） */
   online: boolean
