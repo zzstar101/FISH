@@ -1,0 +1,1 @@
+ALTER TABLE "listing_moderation_records" ADD COLUMN "prior_listing_status" "listing_status";

@@ -53,7 +53,8 @@ export function createSqlModerationStore(db: Db): ModerationStore {
 
     async decideWithin(tx, input) {
       const recordRows = await tx.execute(sql`
-        SELECT id, listing_id, seller_id, title_snapshot, description_snapshot, rule_version
+        SELECT id, listing_id, seller_id, action, title_snapshot, description_snapshot,
+               rule_version, prior_listing_status::text AS prior_listing_status
         FROM listing_moderation_records
         WHERE id = ${input.recordId}
         FOR UPDATE
@@ -82,7 +83,12 @@ export function createSqlModerationStore(db: Db): ModerationStore {
       }
 
       const moderationStatus = input.decision === 'ALLOW' ? 'APPROVED' : 'BLOCKED'
-      const listingStatus = input.decision === 'ALLOW' ? 'ACTIVE' : 'OFFLINE'
+      const listingStatus =
+        input.decision === 'BLOCK'
+          ? 'OFFLINE'
+          : record.action === 'CREATE'
+            ? 'ACTIVE'
+            : String(record.prior_listing_status ?? 'OFFLINE')
       await tx.execute(sql`
         UPDATE listings
         SET moderation_status = ${moderationStatus}::listing_moderation_status,
