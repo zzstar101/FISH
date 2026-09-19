@@ -123,16 +123,39 @@ describe('登录口令防爆破（#132）', () => {
     expect((await login(studentNo, PASSWORD)).status).toBe(200)
   })
 
-  test('并发失败不会把阈值放大（SELECT … FOR UPDATE 的意义）', async () => {
+  test('并发失败不会把阈值放大，也不会打出 5xx', async () => {
     const studentNo = '202101900004'
     await register(studentNo)
 
-    await Promise.all(Array.from({ length: 10 }, () => login(studentNo, WRONG)))
+    const statuses = await Promise.all(
+      Array.from({ length: 10 }, async () => (await login(studentNo, WRONG)).status),
+    )
 
-    // 计数恰好停在阈值：锁定期内不再推进。若失败计数是"跨事务先读后写"，
-    // 10 个并发会把 failed_attempts 写成远小于 5 的值，攻击者实际能撞远超 5 次。
+    // 三条都要断言，缺一条就抓不到对应的 bug：
+    // - 无 5xx：并发建行若不幂等（行不存在时 FOR UPDATE 锁不住任何东西），
+    //   多余请求会撞 23505 → 非 AuthError → 500。
+    // - 401 不超过 4 次：达到阈值那次起就是 429，"实际被校验的次数"才是防爆破的真指标。
+    // - 计数恰好 5：锁定期内不推进。若计数是"先读后写"，并发会把它塌成 1，
+    //   攻击者实际能撞远超 5 次。
+    expect(statuses.filter((status) => status >= 500)).toEqual([])
+    expect(statuses.filter((status) => status === 401).length).toBeLessThanOrEqual(4)
     expect((await attemptRow(studentNo))?.failedAttempts).toBe(5)
     expect((await login(studentNo, PASSWORD)).status).toBe(429)
+  })
+
+  test('锁定到期后自动恢复（无需任何清理任务或重启）', async () => {
+    const studentNo = '202101900007'
+    await register(studentNo)
+    await failNTimes(studentNo, 5)
+    expect((await login(studentNo, PASSWORD)).status).toBe(429)
+
+    // 把锁推到过去 = 模拟"等了 10 分钟"；行的其余状态保持不动。
+    await scratch.execute(
+      sql`update auth_login_attempts set locked_until = now() - interval '1 second' where principal = ${studentNo}`,
+    )
+
+    expect((await login(studentNo, PASSWORD)).status).toBe(200)
+    expect(await attemptRow(studentNo)).toBeNull()
   })
 
   test('未注册学号同样计数：探测账号存在性有代价', async () => {

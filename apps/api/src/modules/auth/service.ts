@@ -109,6 +109,10 @@ export function createAuthService(deps: {
         throw error
       }
 
+      // 新账号不该继承"别人替它攒的"失败计数：注册前这个学号可以被任意探测，
+      // 探测者能把计数推到阈值，真主人注册完第一次登录就被锁 10 分钟。
+      await attempts.clear(input.studentNo)
+
       return { user: toMe(created.row), token: created.token, expiresAt: created.expiresAt }
     },
 
