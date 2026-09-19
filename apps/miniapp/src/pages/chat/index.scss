@@ -6,7 +6,7 @@
  * 结构：冰蓝背景 → 吸顶玻璃栏（主行标题 + below 副行筛选 Tab，见 top-bar）→
  * 会话列表（圆头像 / 名字旁状态胶囊 / 时间第三行 / 右侧商品缩略图）→ 回到顶部钮。
  * 1版稿删掉了旧版的汇总行 / bento 两卡 / 「最近联系」标题 / 置顶通知行；
- * 通知页入口由系统会话行兼作（见 index.tsx 的 `openNotifications`）。
+ * 通知在「通知」tab 页内直显（原 pages/notifications 已并入本页，见 index.tsx 的 `notifs*`）。
  */
 .chat {
   position: relative;
@@ -83,7 +83,7 @@
   }
 }
 
-/* 计数：等宽字体品牌色，1版稿只有「全部」带 */
+/* 计数：等宽字体品牌色（「全部」挂会话总数；「交易 / 许愿」挂分类未读和；「通知」挂通知未读数） */
 .chat__tab-n {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 22px;
@@ -415,4 +415,85 @@
 
 .chat__empty-text {
   font-size: var(--fs-sm);
+}
+
+/* ------------------------------------------------------ 通知列表（「通知」tab 直显） */
+
+/**
+ * 原 `pages/notifications` 的列表样式随页面并入这里（页面已删除）。页外壳 / 页头 /
+ * 「全部已读」钮不再需要；「切进 tab 即全部置读」（见 chat/index.tsx 的 `notifsViewed`），
+ * 未读加粗、未读圆点与 is-unread 冷底也不再出现，一并删去。
+ * 类名保持 `notif__` 前缀：weapp 页面样式按页隔离，与 chat 自身的类不冲突。
+ * 尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ */
+.notif__list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  /* 横向留白与顶部间隙由 `.chat__list` 提供，这里不再叠一层 */
+}
+
+.notif__item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 24px 16px 24px 20px;
+  border-radius: 36px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.notif__ic {
+  flex: 0 0 auto;
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-icon);
+  border: 2px solid var(--border);
+}
+
+.notif__ic-img {
+  width: 38px;
+  height: 38px;
+}
+
+.notif__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 标题独占一行（相对时间放到下面一行），否则 750rpx 宽里标题会被截到只剩四五个字 */
+.notif__body-title {
+  font-size: 25px;
+  font-weight: 400;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+/* 时间：等宽小字 */
+.notif__tm {
+  font-size: 19px;
+  color: var(--muted);
+  @include ellipsis;
+}
+
+/* 正文最多 2 行（超出省略号） */
+.notif__text {
+  display: block;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--muted);
+  @include clamp(2);
 }

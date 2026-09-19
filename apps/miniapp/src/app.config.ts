@@ -8,7 +8,6 @@ export default defineAppConfig({
     'pages/search/index',
     'pages/listing-detail/index',
     'pages/conversation/index',
-    'pages/notifications/index',
     'pages/orders/index',
     'pages/transaction-meetup/index',
     'pages/register/index',
