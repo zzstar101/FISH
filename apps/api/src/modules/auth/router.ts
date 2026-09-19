@@ -8,6 +8,7 @@ import { errorBody } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
 import { type Context, type Handler, Hono } from 'hono'
 import { AuthError } from './errors'
+import { createLoginAttemptStore } from './login-attempts'
 import { type AuthVariables, createRequireAuth } from './middleware'
 import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
@@ -44,7 +45,11 @@ export function createAuthModule(options: {
   secureCookie: boolean
 }) {
   const cookie = createSessionCookie(options.secureCookie)
-  const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
+  const service = createAuthService({
+    db: options.db,
+    sessions: createSessions(options.db),
+    attempts: createLoginAttemptStore(options.db),
+  })
   const requireAuth = createRequireAuth({ cookie, service })
 
   const router = new Hono<{ Variables: AuthVariables }>()

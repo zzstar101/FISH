@@ -9,6 +9,7 @@ import { and, desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 import { createDevEmailVerificationProvider } from './email-providers'
+import { createLoginAttemptStore } from './login-attempts'
 import { createAuthModule } from './router'
 import { createAuthService } from './service'
 import { createSessions } from './session'
@@ -282,7 +283,11 @@ describe('GET /me', () => {
 
 describe('Provider 边界', () => {
   test('register 不再依赖 Provider：service 装配不传 provider 也能用（#68 移除 Campus Provider）', async () => {
-    const service = createAuthService({ db: scratch, sessions: createSessions(scratch) })
+    const service = createAuthService({
+      db: scratch,
+      sessions: createSessions(scratch),
+      attempts: createLoginAttemptStore(scratch),
+    })
     const { user } = await service.register({
       studentNo: '202101000113',
       password: DEMO_PASSWORD,

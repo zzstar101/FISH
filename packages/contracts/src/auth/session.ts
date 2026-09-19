@@ -46,6 +46,14 @@ export const AuthErrorCodeSchema = z.enum([
   'INVALID_CREDENTIALS',
   'STUDENT_NO_TAKEN',
   'UNAUTHENTICATED',
+  /**
+   * 口令失败次数达阈值后的临时锁定（#132）。
+   *
+   * 刻意不复用 `verification.ts` 已有的 `RATE_LIMITED`：那个的语义是"今日发送次数已达上限，
+   * 请明天再试"（按自然日计），而本码是 10 分钟后自动解锁。共用一个码就等于让界面把
+   * "过一会儿再试"写成"明天再来"。
+   */
+  'LOGIN_LOCKED',
 ])
 
 export type AuthErrorCode = z.infer<typeof AuthErrorCodeSchema>

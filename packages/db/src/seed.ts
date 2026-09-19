@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
 import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
+import { authLoginAttempts } from './schema/auth-attempts'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
@@ -79,8 +80,10 @@ export async function seed(tx: SeedTx): Promise<void> {
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
   // users 与 transactions）必须在内：漏掉会让 seed 第二次执行直接失败。
+  // `auth_login_attempts`（#132）没有外键、漏了也不会报错，但必须列进来：否则 seed 之后
+  // 演示账号仍带着上一轮的失败计数， Owner 拿到"已锁定"的演示号会以为是 seed 坏了。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${authLoginAttempts}`,
   )
 
   const now = new Date()
