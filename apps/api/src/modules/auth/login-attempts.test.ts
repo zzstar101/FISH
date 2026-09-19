@@ -84,9 +84,12 @@ describe('登录口令防爆破（#132）', () => {
     const studentNo = '202101900001'
     await register(studentNo)
 
-    for (let i = 0; i < 5; i += 1) {
+    // 前 4 次仍是 401；**把计数推到阈值的那第 5 次就直接 429** —— 与 #70 面交码的
+    // `MEETUP_TOKEN_LOCKED` 同一形状（同一次失败既记账又告知已被锁，不再回 401 误导）。
+    for (let i = 0; i < 4; i += 1) {
       expect((await login(studentNo, WRONG)).status).toBe(401)
     }
+    expect((await login(studentNo, WRONG)).status).toBe(429)
 
     const locked = await login(studentNo, PASSWORD)
     expect(locked.status).toBe(429)
@@ -135,7 +138,7 @@ describe('登录口令防爆破（#132）', () => {
   test('未注册学号同样计数：探测账号存在性有代价', async () => {
     const studentNo = '202101900005'
 
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       expect((await login(studentNo, WRONG)).status).toBe(401)
     }
     expect((await login(studentNo, WRONG)).status).toBe(429)
