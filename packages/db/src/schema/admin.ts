@@ -2,10 +2,13 @@ import { index, jsonb, pgEnum, pgTable, text, uuid } from 'drizzle-orm/pg-core'
 import { createdAt, primaryKey } from './common'
 import { users } from './users'
 
-/** 高风险管理操作的类型（设计 §5 DB CHANGE REQUEST B）。#74 落地后追加 `MODERATION_DECISION`。 */
-export const adminAuditActionEnum = pgEnum('admin_audit_action', ['ADMIN_PROMOTED'])
+/** 高风险管理操作的类型（设计 §5 DB CHANGE REQUEST B）。 */
+export const adminAuditActionEnum = pgEnum('admin_audit_action', [
+  'ADMIN_PROMOTED',
+  'MODERATION_DECISION',
+])
 
-/** 审计目标类型。值集随动作扩展，`MODERATION_RECORD` 预留给 #74。 */
+/** 审计目标类型。审核决定以 moderation record 为审计目标。 */
 export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'USER',
   'LISTING',

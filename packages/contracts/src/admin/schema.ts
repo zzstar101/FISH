@@ -4,6 +4,8 @@ import {
   ListingConditionSchema,
   ListingStatusSchema,
 } from '@fish/contracts/listings/schema'
+import { ModerationDecisionSchema, ModerationStatusSchema } from '@fish/contracts/moderation/schema'
+import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
 
 /**
@@ -17,8 +19,8 @@ import { z } from 'zod'
  * - 所有列表统一游标分页（`{ items, nextCursor }`），`limit` 服务端封顶 50。
  * - 审计日志的 `before` / `after` 只允许存**脱敏快照**；禁止密码 / Cookie / 完整学号。
  *
- * 依赖 #74（Moderation Domain）：#74 尚未冻结 Contract，本文件**暂不定义**审核相关 DTO
- * （`reviewing`、审核时间线、人工决定端点）。#74 冻结后在此增量补充，只读查询与后台壳不受影响。
+ * Moderation DTO 复用 `@fish/contracts/moderation` 的结果值域；审核规则与敏感词内容仍由
+ * Moderation Domain 负责，Admin 只消费脱敏结果并承载人工决定。
  */
 
 // ---------------------------------------------------------------------------
@@ -64,6 +66,9 @@ export const AdminCapabilitySchema = z.enum([
   'LISTINGS_READ',
   'OVERVIEW_READ',
   'AUDIT_LOGS_READ',
+  'MODERATION_READ',
+  'MODERATION_WRITE',
+  'TRANSACTIONS_READ',
 ])
 export type AdminCapability = z.infer<typeof AdminCapabilitySchema>
 
@@ -222,8 +227,8 @@ export type AdminOverview = z.infer<typeof AdminOverviewSchema>
 // 审计日志
 // ---------------------------------------------------------------------------
 
-/** Admin 动作枚举。#74 落地人工审核后在此追加 `MODERATION_DECISION`。 */
-export const AdminAuditActionSchema = z.enum(['ADMIN_PROMOTED'])
+/** Admin 动作枚举。高风险人工审核决定必须写入不可变审计日志。 */
+export const AdminAuditActionSchema = z.enum(['ADMIN_PROMOTED', 'MODERATION_DECISION'])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 
 export const AdminAuditTargetTypeSchema = z.enum(['USER', 'LISTING', 'MODERATION_RECORD'])
@@ -257,6 +262,84 @@ export const AdminAuditLogPageSchema = z.object({
 export type AdminAuditLogPage = z.infer<typeof AdminAuditLogPageSchema>
 
 // ---------------------------------------------------------------------------
+// Moderation / transaction 查询
+// ---------------------------------------------------------------------------
+
+export const AdminModerationRecordSchema = z.object({
+  id: z.uuid(),
+  listingId: z.uuid().nullable(),
+  sellerId: z.uuid(),
+  action: z.string().min(1),
+  titleSnapshot: z.string(),
+  descriptionSnapshot: z.string(),
+  decision: ModerationDecisionSchema,
+  matchedRules: z.array(z.string()),
+  matchedTermsMasked: z.array(z.string()),
+  ruleVersion: z.string().min(1),
+  createdAt: z.iso.datetime(),
+})
+export type AdminModerationRecord = z.infer<typeof AdminModerationRecordSchema>
+
+export const AdminModerationQueueItemSchema = z.object({
+  record: AdminModerationRecordSchema,
+  listing: z.object({
+    id: z.uuid(),
+    title: z.string(),
+    description: z.string(),
+    status: ListingStatusSchema,
+    moderationStatus: ModerationStatusSchema,
+    moderationReason: z.string().nullable(),
+    createdAt: z.iso.datetime(),
+  }),
+  seller: z.object({ id: z.uuid(), nickname: z.string() }),
+})
+export type AdminModerationQueueItem = z.infer<typeof AdminModerationQueueItemSchema>
+
+export const AdminModerationQueueSchema = z.object({
+  items: z.array(AdminModerationQueueItemSchema),
+  nextCursor: z.string().nullable(),
+})
+export type AdminModerationQueue = z.infer<typeof AdminModerationQueueSchema>
+
+export const AdminModerationDetailSchema = z.object({
+  item: AdminModerationQueueItemSchema,
+  history: z.array(AdminModerationRecordSchema),
+  machineDecision: ModerationDecisionSchema.nullable(),
+  humanDecision: z
+    .object({
+      decision: z.enum(['ALLOW', 'BLOCK']),
+      reason: z.string(),
+      actor: z.object({ id: z.uuid(), nickname: z.string() }).nullable(),
+      decidedAt: z.iso.datetime(),
+    })
+    .nullable(),
+})
+export type AdminModerationDetail = z.infer<typeof AdminModerationDetailSchema>
+
+export const AdminTransactionSchema = z.object({
+  id: z.uuid(),
+  listingId: z.uuid(),
+  listingTitle: z.string(),
+  buyer: z.object({ id: z.uuid(), nickname: z.string() }),
+  seller: z.object({ id: z.uuid(), nickname: z.string() }),
+  amountCents: z.number().int().nonnegative(),
+  status: transactionStatusSchema,
+  buyerConfirmedAt: z.iso.datetime().nullable(),
+  sellerConfirmedAt: z.iso.datetime().nullable(),
+  completedAt: z.iso.datetime().nullable(),
+  cancelledAt: z.iso.datetime().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+})
+export type AdminTransaction = z.infer<typeof AdminTransactionSchema>
+
+export const AdminTransactionPageSchema = z.object({
+  items: z.array(AdminTransactionSchema),
+  nextCursor: z.string().nullable(),
+})
+export type AdminTransactionPage = z.infer<typeof AdminTransactionPageSchema>
+
+// ---------------------------------------------------------------------------
 // 错误码
 // ---------------------------------------------------------------------------
 
@@ -268,6 +351,8 @@ export const AdminErrorCodeSchema = z.enum([
   'FORBIDDEN',
   /** 404：管理查询的目标（用户 / 商品）不存在。管理后台内部工具，不做存在性隐藏。 */
   'ADMIN_NOT_FOUND',
+  /** 409：审核记录已被其它管理员处理，避免覆盖最终决定。 */
+  'MODERATION_CONFLICT',
 ])
 export type AdminErrorCode = z.infer<typeof AdminErrorCodeSchema>
 
@@ -307,6 +392,23 @@ export const AdminAuditLogsQuerySchema = z.strictObject({
   targetType: AdminAuditTargetTypeSchema.optional(),
   targetId: z.uuid().optional(),
   /** 同 `AdminListingsQuerySchema`：左闭右开。 */
+  createdFrom: z.iso.datetime().optional(),
+  createdTo: z.iso.datetime().optional(),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+})
+
+export const AdminModerationQueueQuerySchema = z.strictObject({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+})
+
+export const AdminTransactionQuerySchema = z.strictObject({
+  q: z.string().trim().min(1).max(50).optional(),
+  status: transactionStatusSchema.optional(),
+  buyerId: z.uuid().optional(),
+  sellerId: z.uuid().optional(),
+  listingId: z.uuid().optional(),
   createdFrom: z.iso.datetime().optional(),
   createdTo: z.iso.datetime().optional(),
   cursor: z.string().min(1).optional(),

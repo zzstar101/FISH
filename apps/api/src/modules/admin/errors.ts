@@ -12,7 +12,7 @@ import type { AdminErrorCode } from '@fish/contracts/admin/schema'
 export class AdminError extends Error {
   constructor(
     readonly code: AdminErrorCode | 'VALIDATION_FAILED',
-    readonly status: 403 | 404 | 422,
+    readonly status: 403 | 404 | 409 | 422,
     message: string,
   ) {
     super(message)

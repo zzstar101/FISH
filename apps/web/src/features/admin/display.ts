@@ -22,6 +22,7 @@ export const USER_ROLE_LABEL: Record<string, string> = {
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
   ADMIN_PROMOTED: '提升管理员',
+  MODERATION_DECISION: '人工审核决定',
 }
 
 export const AUDIT_TARGET_LABEL: Record<string, string> = {
