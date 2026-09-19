@@ -33,7 +33,8 @@ export class MeetupTokenCrypto {
   /** 6 位数字码（000000–999999），首尾可 0 —— 与输入框的 6 格语义一致。 */
   generateCode(): string {
     const value = crypto.getRandomValues(new Uint32Array(1))[0] ?? 0
-    // 2^32 对 10^6 有取整偏差，但只影响各位数字的分布（<1e-6 量级），码空间不变。
+    // 2^32 对 10^6 有取整偏差（相对偏差 ~1e-5 量级）：只影响各位数字的分布，
+    // 码空间仍为 10^6，防爆破依赖失败锁定而非分布均匀性。
     return String(value % 1_000_000).padStart(6, '0')
   }
 
