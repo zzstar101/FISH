@@ -8,7 +8,7 @@ import {
   type CommentListQuery,
   type CommentListResponse,
 } from '@fish/contracts/comments/schema'
-import type { ApiErrorDetail } from '@fish/contracts/system/error'
+import type { ApiErrorDetail, SystemErrorCode } from '@fish/contracts/system/error'
 import { createModerationService, type ModerationService } from '../moderation/service'
 import { decodeCommentCursor, encodeCommentCursor } from './cursor'
 import type { CommentRow, CommentStore } from './store'
@@ -16,14 +16,14 @@ import type { CommentRow, CommentStore } from './store'
 /**
  * 留言业务失败 → HTTP 语义。
  *
- * `code` 取值域由契约的 `CommentErrorCodeSchema` 收窄（`CommentErrorCode`），
- * `VALIDATION_FAILED` 是本域借用 system 通用码的场景（非法 cursor / 回复一条回复）。
- * `details` 让 422 能定位到输入框（与 listings 的 422 同一口径）。
+ * `code` 取值域由契约的 `CommentErrorCodeSchema` 收窄（`CommentErrorCode`）；`VALIDATION_FAILED`
+ * 直接取 system 的 `SystemErrorCode` 成员（不是重写字面量），重命名会在这里编译失败。
+ * `details` 让 422 能定位到具体字段（与 listings 的 422 同一口径）。
  */
 export class CommentServiceError extends Error {
   constructor(
     readonly status: 404 | 422,
-    readonly code: CommentErrorCode | 'VALIDATION_FAILED',
+    readonly code: CommentErrorCode | Extract<SystemErrorCode, 'VALIDATION_FAILED'>,
     message: string,
     readonly details?: ApiErrorDetail[],
   ) {

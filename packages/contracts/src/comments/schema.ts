@@ -119,8 +119,11 @@ export const CommentCreateInputSchema = z.strictObject({
 export type CommentCreateInput = z.infer<typeof CommentCreateInputSchema>
 
 /**
- * 本 domain 新增的错误码。其余复用 system 的 `VALIDATION_FAILED`（422）与
- * auth 的 `UNAUTHENTICATED`（401）。
+ * 本 domain 新增的错误码。其余复用 system 的 `VALIDATION_FAILED`（422，非法游标 /
+ * 回复一条回复 / 正文未过审核）与 auth 的 `UNAUTHENTICATED`（401）。
+ *
+ * 422 响应携带字段级 `details`（与 listings 的 422 同口径）：非法游标报 `cursor`，
+ * 回复一条回复报 `commentId`（没有同名输入框，前端按 code 提示即可）。
  */
 export const CommentErrorCodeSchema = z.enum([
   /** 404：留言所属商品不存在（含非法 uuid 的路径参数，直接 404 不打到 PG）。 */

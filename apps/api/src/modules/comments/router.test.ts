@@ -98,6 +98,28 @@ describe('comments router — 读接口匿名可用', () => {
     expect(called).toBe(false)
   })
 
+  test('maps a service VALIDATION_FAILED with details onto the envelope', async () => {
+    const app = buildApp({
+      authed: false,
+      service: fakeService({
+        listComments: async () => {
+          throw new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
+            { field: 'cursor', message: 'cursor 无效' },
+          ])
+        },
+      }),
+    })
+
+    const res = await app.request(`/listings/${LISTING_ID}/comments?cursor=forged`)
+    expect(res.status).toBe(422)
+    expect(await res.json()).toMatchObject({
+      error: {
+        code: 'VALIDATION_FAILED',
+        details: [{ field: 'cursor', message: 'cursor 无效' }],
+      },
+    })
+  })
+
   test('404s a non-uuid listing id before it can reach SQL', async () => {
     const app = buildApp({ service: fakeService(), authed: false })
     const res = await app.request('/listings/not-a-uuid/comments')

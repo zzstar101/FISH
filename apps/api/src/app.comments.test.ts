@@ -29,6 +29,9 @@ let db: Db
 let app: ReturnType<typeof createApp>
 
 beforeAll(async () => {
+  // 上一次崩溃的运行可能留下同名库（名称带 pid，正常不会撞），先清再建，
+  // 让重跑不会在 beforeAll 直接失败。
+  await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   db = createDb(scratchUrl)
   await migrate(db, { migrationsFolder })
@@ -101,6 +104,11 @@ describe('comments API wiring (#111)', () => {
     )
     expect(anonCreate.status).toBe(401)
     expect(await anonCreate.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
+
+    // 回复路由的 requireAuth 也要杆住：漏挂时上面那条读接口仍然 200，单靠它拦不住。
+    const anonReply = await app.request(`/comments/${newId()}/replies`, post({ content: '还在吗' }))
+    expect(anonReply.status).toBe(401)
+    expect(await anonReply.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
   })
 
   test('non-uuid listing id is 404, not a 500 from the uuid column', async () => {

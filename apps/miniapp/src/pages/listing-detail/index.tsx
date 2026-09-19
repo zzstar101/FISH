@@ -19,7 +19,7 @@
 import type { CommentDto } from '@fish/contracts/comments/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
@@ -254,6 +254,14 @@ export default function ListingDetail() {
   const [commentsCursor, setCommentsCursor] = useState<string | null>(null)
   /** 展开时拉取下一页的重入守卫（ref：state 更新是异步的，连点两次会都读到 false）。 */
   const loadingMoreRef = useRef(false)
+  /** 组件是否还挂着；卸载后不再 setState（翻页是多次 await，中途离开页面很常见）。 */
+  const mountedRef = useRef(true)
+  useEffect(
+    () => () => {
+      mountedRef.current = false
+    },
+    [],
+  )
   const [commentInput, setCommentInput] = useState('')
   /** 正在回复哪条顶层留言（`null` = 没有展开回复行）；稿子同时只开一行 */
   const [replyTo, setReplyTo] = useState<string | null>(null)
@@ -437,16 +445,21 @@ export default function ListingDetail() {
     // 会把上一次已追加的页再追加一遍（重复留言）。
     const more: CommentNode[] = []
     try {
-      while (cursor) {
+      // 上游页码上限兜底：游标是服务端给的不透明串，服务端 bug 不能让这里转死循环。
+      // 上限 20 页 × 单页 50 = 1000 条，远超设计稿需求。
+      for (let pageCount = 0; cursor && pageCount < 20; pageCount += 1) {
         const page = await fetchComments(id, cursor)
         more.push(...page.items.map(dtoToNode))
         cursor = page.nextCursor
       }
+      if (!mountedRef.current) return
       setComments((prev) => [...prev, ...more])
-      setCommentsCursor(null)
+      setCommentsCursor(cursor)
     } catch (error) {
-      // 未成功翻完就保持原游标，下次展开从同一处重试（此时一条也没追加）。
+      // 未成功翻完就保持原游标（此时一条也没追加）；收起留言行，
+      // 让下一次点击重新进“展开并继续拉取”，而不是先关一次再展开。
       reportLocalOnly('更多留言', error)
+      if (mountedRef.current) setCommentsOpen(false)
     } finally {
       loadingMoreRef.current = false
     }
@@ -729,11 +742,15 @@ export default function ListingDetail() {
                     ))}
                   </View>
 
-                  {/* 计数按**顶层**留言算（稿子的 topCmts 口径），嵌套回复不计数 */}
-                  {comments.length > COMMENT_LIMIT ? (
+                  {/* 计数按**顶层**留言算（稿子的 topCmts 口径），嵌套回复不计数。
+                      `commentsCursor` 非空 = 还有下一页未拉，此时加 `+` 不把“已知条数”
+                      说成“全部条数”（否则 51 条会显示“查看全部 50 条”）。 */}
+                  {comments.length > COMMENT_LIMIT || commentsCursor ? (
                     <View className="detail__cmt-more" onClick={() => void toggleComments()}>
                       <Text className="detail__cmt-more-text">
-                        {commentsOpen ? '收起留言' : `查看全部 ${comments.length} 条留言`}
+                        {commentsOpen
+                          ? '收起留言'
+                          : `查看全部 ${comments.length}${commentsCursor ? '+' : ''} 条留言`}
                       </Text>
                       <Image
                         className={`detail__cmt-more-img${commentsOpen ? ' is-open' : ''}`}
