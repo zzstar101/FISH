@@ -10,6 +10,7 @@ import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import {
   confirmTransaction,
+  fetchMeetupTokenStatus,
   fetchTransaction,
   issueMeetupToken,
   redeemMeetupToken,
@@ -35,10 +36,11 @@ import './index.scss'
  * 响应 `nextAction: 'CONFIRM_DELIVERY'` —— 本页随后调 confirm；双侧确认齐 →
  * COMPLETED + 商品 SOLD（幂等，重复提交不会重复成交）。
  *
- * 恢复口径（审查 P1-2）：confirm 网络失败后杀进程/离开再进，服务端停在
- * 「sellerConfirmedAt 已盖、buyerConfirmedAt 未盖、token CONSUMED」——
- * 加载时从 DTO 派生该状态（买家 + PENDING + 卖家已确认 + 本人未确认），
- * 直接给确认入口，不要求重新消费一次性 token。
+ * 恢复口径（审查 P1-2 / 第三轮）：confirm 网络失败后杀进程/离开再进，服务端停在
+ * 「sellerConfirmedAt 已盖、buyerConfirmedAt 未盖、token CONSUMED」。注意
+ * sellerConfirmedAt 不能单独作为核销证明（Web 端普通 confirm 也会盖它）——
+ * 必须再查 GET meetup-token 的 status === CONSUMED 才恢复确认入口；
+ * 非 CONSUMED 一律仍要求扫码 / 手输核销。
  *
  * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ EXPIRED（过期，请对方刷新）/
  * CONSUMED（已被使用）/ LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
@@ -75,11 +77,14 @@ function relativeLabel(iso: string, now: number = Date.now()): string {
 const CODE_SLOTS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-digit-${index}`, index }))
 const INPUT_CELLS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-cell-${index}`, index }))
 
-/** 卖家视角下凭证的三种渲染态（NONE/CONSUMED 不落在本页：进页即签发） */
+/** 卖家视角下凭证的渲染态（NONE/CONSUMED 不落在本页：进页即签发） */
 type TokenView =
   | { state: 'issuing' }
   | { state: 'ready'; token: MeetupTokenResponse }
   | { state: 'expired' }
+  /** 凭证不可在本页重复展示（如卖家误扫自己的码收到 NOT_ALLOWED）：
+   * 明文只存在于签发响应，本页无法重放；是否重签交用户手动决定。 */
+  | { state: 'unavailable' }
 
 export default function TransactionMeetup() {
   const authStatus = useAuthGuard()
@@ -136,12 +141,18 @@ export default function TransactionMeetup() {
       const dto = await fetchTransaction(targetId)
       setTx(dto)
       if (dto.status !== 'PENDING_MEETUP') return // 终态直接渲染对应状态卡
-      // 恢复口径（审查 P1-2）：买家侧的凭证已核销（sellerConfirmedAt 已盖）而本人
-      // 确认未落库 —— 可能是上次会话 confirm 网络失败。跳过二次消费（token 已
-      // CONSUMED，再核销只会得到 CONSUMED），直接给出可重试的确认入口。
-      if (dto.role === 'buyer' && dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
-        setConfirmPending(true)
-        return
+      if (dto.role === 'buyer') {
+        // 恢复口径（审查第三轮 P1）：sellerConfirmedAt **不能**等同「凭证已核销」
+        // ——卖家可能从 Web 订单页走了普通 confirm。必须查凭证真实状态：
+        // 仅 status === CONSUMED（确经本页凭证核销、上次会话 confirm 失败）才恢复
+        // 确认入口；NONE/ISSUED/EXPIRED 一律仍要求扫码 / 手输核销。
+        if (dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
+          const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
+          if (tokenStatus?.status === 'CONSUMED') {
+            setConfirmPending(true)
+            return
+          }
+        }
       }
       // 扫码路由优先（审查 P1-1 补充）：带 ?code= 进入时按扫码语义让后端裁决
       // （卖家扫自己的码会如实收到 403 NOT_ALLOWED，而不是被静默刷新出码）；
@@ -240,10 +251,10 @@ export default function TransactionMeetup() {
           return
         }
         if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
-          // 只有签发人（卖家）会拿到 403：扫码语义已如实到达后端（不静默刷新出码），
-          // 这里说明原因并恢复正常出示流程（此时才签发）。
-          void Taro.showToast({ title: '这是你出示的交易码，不能由你本人核销', icon: 'none' })
-          void issue(targetId)
+          // 只有签发人（卖家）会拿到 403：扫码语义已如实到达后端。
+          // 不顺手 rotate（审查 P2）——自动重签会立即作废对方手里的旧码；
+          // 落到「不可展示」态，是否刷新由卖家在展示态手动决定。
+          setToken({ state: 'unavailable' })
           return
         }
         const message = map[error.code]
@@ -324,6 +335,7 @@ export default function TransactionMeetup() {
   const done = tx?.status === 'COMPLETED'
   const cancelled = tx?.status === 'CANCELLED'
   const expired = token?.state === 'expired'
+  const unavailable = token?.state === 'unavailable'
   const readyToken = token?.state === 'ready' ? token.token : null
   const qrImage = readyToken ? qrDataUrl(readyToken.qrPayload) : ''
 
@@ -481,7 +493,26 @@ export default function TransactionMeetup() {
               </View>
             </View>
 
-            {expired ? (
+            {unavailable ? (
+              <View className="meetup__varcard">
+                <View className="meetup__vdisc meetup__vdisc--warn">
+                  <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+                </View>
+                <Text className="meetup__varcard-title">这是你出示的交易码</Text>
+                <Text className="meetup__varcard-text">
+                  交易码不能由你本人核销。出于安全，本页不重复展示已签发的码；
+                  如需重新出示给对方，点「刷新」生成新的 6 位码（旧码作废）。
+                </Text>
+                <View className="meetup__varcard-acts">
+                  <View
+                    className="meetup__btn meetup__btn--pri"
+                    onClick={() => tx && void issue(tx.id)}
+                  >
+                    <Text>刷新交易码</Text>
+                  </View>
+                </View>
+              </View>
+            ) : expired ? (
               <View className="meetup__varcard">
                 <View className="meetup__vdisc meetup__vdisc--warn">
                   <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
