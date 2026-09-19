@@ -4,6 +4,7 @@ import {
   type CommentCreateInput,
   type CommentDto,
   CommentDtoSchema,
+  type CommentErrorCode,
   type CommentListQuery,
   type CommentListResponse,
 } from '@fish/contracts/comments/schema'
@@ -15,18 +16,14 @@ import type { CommentRow, CommentStore } from './store'
 /**
  * 留言业务失败 → HTTP 语义。
  *
- * `code` 取值域由契约的 `CommentErrorCodeSchema` 收窄；`VALIDATION_FAILED` 是本域
- * 借用 system 通用码的场景（非法 cursor / 回复一条回复），因此类型上单列。
+ * `code` 取值域由契约的 `CommentErrorCodeSchema` 收窄（`CommentErrorCode`），
+ * `VALIDATION_FAILED` 是本域借用 system 通用码的场景（非法 cursor / 回复一条回复）。
  * `details` 让 422 能定位到输入框（与 listings 的 422 同一口径）。
  */
 export class CommentServiceError extends Error {
   constructor(
     readonly status: 404 | 422,
-    readonly code:
-      | 'LISTING_NOT_FOUND'
-      | 'COMMENT_NOT_FOUND'
-      | 'COMMENT_CONTENT_BLOCKED'
-      | 'VALIDATION_FAILED',
+    readonly code: CommentErrorCode | 'VALIDATION_FAILED',
     message: string,
     readonly details?: ApiErrorDetail[],
   ) {
@@ -131,7 +128,9 @@ export function createCommentService(deps: {
       // 非法 / 伪造的游标一律 422，不宽容解析（与 listings feed §2.1 同口径）。
       const cursor = query.cursor ? decodeCommentCursor(query.cursor) : null
       if (query.cursor && !cursor) {
-        throw new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效')
+        throw new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
+          { field: 'cursor', message: 'cursor 无效' },
+        ])
       }
 
       // 多取一行判断还有没有下一页（契约不另给 hasMore）。
@@ -197,7 +196,9 @@ export function createCommentService(deps: {
 
       // 契约只允许嵌套一层：回复一条回复会被拒，而不是静默压平成顶层回复。
       if (parent.parentId !== null) {
-        throw new CommentServiceError(422, 'VALIDATION_FAILED', '只能回复顶层留言')
+        throw new CommentServiceError(422, 'VALIDATION_FAILED', '只能回复顶层留言', [
+          { field: 'commentId', message: '只能回复顶层留言' },
+        ])
       }
 
       const sellerId = await requireSellerId(parent.listingId)

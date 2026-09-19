@@ -142,17 +142,20 @@ function mockCommentToNode(comment: MockComment): CommentNode {
  * 加载留言列表。
  *
  * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（开发 / 预览）或空列表
- * （生产），商品详情本身照常渲染。返回是否拿到了真实数据由调用方判断。
+ * （生产），商品详情本身照常渲染。
  */
-async function loadComments(id: string, mockFallback: MockComment[]): Promise<CommentNode[]> {
+async function loadComments(
+  id: string,
+  mockFallback: MockComment[],
+): Promise<{ comments: CommentNode[]; nextCursor: string | null }> {
   try {
     const page = await fetchComments(id)
-    return page.items.map(dtoToNode)
+    return { comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }
   } catch (error) {
     logCommentFailure('留言列表', error)
     // 开发 / 预览口径下 `loadListingDetail` 已经回退 fixture，这里跟着用同一批 mock 留言；
     // 生产口径拿不到就是空列表（不编数据）。
-    return mockFallback.map(mockCommentToNode)
+    return { comments: mockFallback.map(mockCommentToNode), nextCursor: null }
   }
 }
 
@@ -247,6 +250,10 @@ export default function ListingDetail() {
   const [commentsOpen, setCommentsOpen] = useState(false)
   /** 留言树（顶层各带 replies）：初值来自加载结果，之后由本页的本地写操作增长 */
   const [comments, setComments] = useState<CommentNode[]>([])
+  /** 留言列表的下一页游标；`null` = 没有更多（或还没加载完 / 退了 mock）。 */
+  const [commentsCursor, setCommentsCursor] = useState<string | null>(null)
+  /** 展开留言时若还有下一页，则在拉取中；避免重复触发。 */
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false)
   const [commentInput, setCommentInput] = useState('')
   /** 正在回复哪条顶层留言（`null` = 没有展开回复行）；稿子同时只开一行 */
   const [replyTo, setReplyTo] = useState<string | null>(null)
@@ -299,10 +306,17 @@ export default function ListingDetail() {
       const view = result.status === 'ok' ? result.view : null
       setData(view)
       setFailed(result.status === 'failed')
-      // 留言走独立端点（#111）：失败不拖垮整页，也不把已拿到的商品信息丢掉：
-      // 拿不到时退到 fixture（开发 / 预览）或空列表（生产）。
-      setComments(view ? await loadComments(id, view.comments) : [])
+      // 详情一到就收骨架屏：留言是独立端点（#111），不能让它把商品本身的展示拖住。
       setLoading(false)
+      // 留言异步加载（不 await 到 loading）：失败不拖垮整页，也不丢掉已拿到的商品信息。
+      if (view) {
+        const loaded = await loadComments(id, view.comments)
+        setComments(loaded.comments)
+        setCommentsCursor(loaded.nextCursor)
+      } else {
+        setComments([])
+        setCommentsCursor(null)
+      }
     })
   }
 
@@ -400,6 +414,36 @@ export default function ListingDetail() {
   const toggleReply = (commentId: string) => {
     setReplyInput('')
     setReplyTo((prev) => (prev === commentId ? null : commentId))
+  }
+
+  /**
+   * 展开 / 收起留言。
+   *
+   * 展开时若还有下一页（`commentsCursor`），把剩余页全部拉完再展示：稿子写的是
+   * 「查看全部 N 条」，只展示第一页却说「全部」就是在编计数。
+   */
+  const toggleComments = async () => {
+    if (commentsOpen) {
+      setCommentsOpen(false)
+      return
+    }
+    setCommentsOpen(true)
+    let cursor = commentsCursor
+    if (!cursor || loadingMoreComments) return
+
+    setLoadingMoreComments(true)
+    try {
+      while (cursor) {
+        const page = await fetchComments(id, cursor)
+        setComments((prev) => [...prev, ...page.items.map(dtoToNode)])
+        cursor = page.nextCursor
+      }
+      setCommentsCursor(null)
+    } catch (error) {
+      reportLocalOnly('更多留言', error)
+    } finally {
+      setLoadingMoreComments(false)
+    }
   }
 
   const listing = data?.listing
@@ -681,10 +725,7 @@ export default function ListingDetail() {
 
                   {/* 计数按**顶层**留言算（稿子的 topCmts 口径），嵌套回复不计数 */}
                   {comments.length > COMMENT_LIMIT ? (
-                    <View
-                      className="detail__cmt-more"
-                      onClick={() => setCommentsOpen((prev) => !prev)}
-                    >
+                    <View className="detail__cmt-more" onClick={() => void toggleComments()}>
                       <Text className="detail__cmt-more-text">
                         {commentsOpen ? '收起留言' : `查看全部 ${comments.length} 条留言`}
                       </Text>

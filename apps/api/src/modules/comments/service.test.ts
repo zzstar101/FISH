@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodeCommentCursor } from './cursor'
 import { CommentServiceError, createCommentService } from './service'
 import type { CommentCursor, CommentRow, CommentStore } from './store'
 
@@ -34,17 +35,19 @@ function fakeStore(
     replies?: CommentRow[]
     byId?: Record<string, CommentRow | undefined>
   } = {},
-): CommentStore & { inserts: unknown[] } {
+): CommentStore & { inserts: unknown[]; listCursors: (CommentCursor | null)[] } {
   const rows = [...(options.topLevel ?? [])]
   const inserts: unknown[] = []
+  const listCursors: (CommentCursor | null)[] = []
   return {
     inserts,
+    listCursors,
     async findListingSellerId() {
       return options.sellerId === undefined ? SELLER_ID : options.sellerId
     },
     async listTopLevel(_listingId, limit, cursor: CommentCursor | null) {
       // 缩到 limit 行，由 service 自己判断 hasMore（store 约定取 limit 行即可）
-      void cursor
+      listCursors.push(cursor)
       return rows.slice(0, limit)
     },
     async listReplies(parentIds) {
@@ -120,6 +123,22 @@ describe('comment service — list', () => {
     await expect(
       service.listComments(LISTING_ID, { limit: 20, cursor: 'forged' }),
     ).rejects.toMatchObject({ status: 422, code: 'VALIDATION_FAILED' })
+  })
+
+  // 只钉「非法游标被拒」不够：合法的游标还必须被解出来后原样转发给 store，
+  // 否则分页会静默从头开始。
+  test('forwards a valid decoded cursor to the store', async () => {
+    const store = fakeStore()
+    const service = createCommentService({ store })
+    const cursor = encodeCommentCursor({
+      createdAt: '2026-09-12T03:40:10.123456Z',
+      id: COMMENT_ID,
+    })
+
+    await service.listComments(LISTING_ID, { limit: 20, cursor })
+    expect(store.listCursors).toEqual([
+      { createdAt: '2026-09-12T03:40:10.123456Z', id: COMMENT_ID },
+    ])
   })
 })
 
