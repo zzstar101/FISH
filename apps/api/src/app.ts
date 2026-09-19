@@ -15,6 +15,9 @@ import {
 } from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
+import { createCommentsRouter } from './modules/comments/router'
+import { createCommentService } from './modules/comments/service'
+import { createSqlCommentStore } from './modules/comments/store'
 import { createConversationsRouter } from './modules/conversations/router'
 import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
@@ -131,6 +134,17 @@ export function createApp(
     }),
   )
   app.route('/uploads', createUploadsRouter({ storage, requireAuth: auth.requireAuth }))
+
+  // 留言 / 评论（#111）：挂根路径，因为三个端点跨 `/listings/:id/comments` 与
+  // `/comments/:id/replies`（路径常量在 `@fish/contracts/comments/routes`）。
+  // 读接口匿名可用、写接口逐路由挂 requireAuth（与 listings 同一分界）。
+  app.route(
+    '/',
+    createCommentsRouter({
+      service: createCommentService({ store: createSqlCommentStore(db) }),
+      requireAuth: auth.requireAuth,
+    }),
+  )
 
   // 个人中心（#12）：单个只读聚合接口，直接查已合并的 listings/wishes/transactions 表，
   // 不调用其他 Domain API、不承担写操作（Issue 的并行原则）。user 块取 requireAuth
