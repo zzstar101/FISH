@@ -35,6 +35,11 @@ import './index.scss'
  * 响应 `nextAction: 'CONFIRM_DELIVERY'` —— 本页随后调 confirm；双侧确认齐 →
  * COMPLETED + 商品 SOLD（幂等，重复提交不会重复成交）。
  *
+ * 恢复口径（审查 P1-2）：confirm 网络失败后杀进程/离开再进，服务端停在
+ * 「sellerConfirmedAt 已盖、buyerConfirmedAt 未盖、token CONSUMED」——
+ * 加载时从 DTO 派生该状态（买家 + PENDING + 卖家已确认 + 本人未确认），
+ * 直接给确认入口，不要求重新消费一次性 token。
+ *
  * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ EXPIRED（过期，请对方刷新）/
  * CONSUMED（已被使用）/ LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
  * NOT_ALLOWED（不能核销自己出示的码）。
@@ -130,12 +135,21 @@ export default function TransactionMeetup() {
     try {
       const dto = await fetchTransaction(targetId)
       setTx(dto)
-      if (dto.status !== 'PENDING_MEETUP') return // 完成态直接渲染成功卡
-      if (dto.role === 'seller') {
-        void issue()
-      } else if (scanRef.current) {
-        // 扫码进入的买家：自动核销扫到的这枚凭证
+      if (dto.status !== 'PENDING_MEETUP') return // 终态直接渲染对应状态卡
+      // 恢复口径（审查 P1-2）：买家侧的凭证已核销（sellerConfirmedAt 已盖）而本人
+      // 确认未落库 —— 可能是上次会话 confirm 网络失败。跳过二次消费（token 已
+      // CONSUMED，再核销只会得到 CONSUMED），直接给出可重试的确认入口。
+      if (dto.role === 'buyer' && dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
+        setConfirmPending(true)
+        return
+      }
+      // 扫码路由优先（审查 P1-1 补充）：带 ?code= 进入时按扫码语义让后端裁决
+      // （卖家扫自己的码会如实收到 403 NOT_ALLOWED，而不是被静默刷新出码）；
+      // 无扫码产物时，卖家进页才自动签发。
+      if (scanRef.current) {
         void consumeQr(scanRef.current.transactionId, scanRef.current.token)
+      } else if (dto.role === 'seller') {
+        void issue(dto.id)
       }
     } catch (error) {
       setLoadError(isApiError(error) && error.status === 404 ? 'notFound' : 'failed')
@@ -144,12 +158,13 @@ export default function TransactionMeetup() {
 
   /* ------------------------------------------------- 卖家：签发 / 刷新 */
 
-  const issue = async () => {
-    if (!tx) return
+  const issue = async (txId: string) => {
+    // 参数化 transactionId（审查 P1-1）：bootstrap 里 setTx 后闭包的 tx 仍是 null，
+    // 自动签发绝不能读 React state，否则首次进入直接 no-op、页面卡在「生成中…」。
     setToken({ state: 'issuing' })
     setInputError('')
     try {
-      const next = await issueMeetupToken(tx.id)
+      const next = await issueMeetupToken(txId)
       setToken({ state: 'ready', token: next })
       setLeft(Math.max(1, Math.round((Date.parse(next.expiresAt) - Date.now()) / 1000)))
     } catch (error) {
@@ -157,7 +172,7 @@ export default function TransactionMeetup() {
       if (isApiError(error)) {
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
           // 终态（已取消/已完成）：刷新交易视图让页面落到对应状态卡
-          const dto = await fetchTransaction(tx.id).catch(() => null)
+          const dto = await fetchTransaction(txId).catch(() => null)
           if (dto) setTx(dto)
           return
         }
@@ -197,7 +212,7 @@ export default function TransactionMeetup() {
    * 「确认完成」重试按钮，不假装已完成。
    */
   const verify = async (targetId: string, consume: () => Promise<unknown>) => {
-    if (!tx || submitting) return
+    if (submitting) return
     setSubmitting(true)
     setInputError('')
     try {
@@ -217,13 +232,18 @@ export default function TransactionMeetup() {
           MEETUP_TOKEN_CONSUMED: '这个交易码已被使用，不能重复核销。',
           MEETUP_TOKEN_LOCKED: '错误次数过多，已临时锁定，请稍后再试。',
           MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
-          MEETUP_TOKEN_NOT_ALLOWED: '不能核销自己出示的交易码。',
-          TRANSACTION_NOT_IN_PENDING: '',
         }
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
           // 已取消 / 已完成：刷新交易视图落到对应状态卡
           const dto = await fetchTransaction(targetId).catch(() => null)
           if (dto) setTx(dto)
+          return
+        }
+        if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
+          // 只有签发人（卖家）会拿到 403：扫码语义已如实到达后端（不静默刷新出码），
+          // 这里说明原因并恢复正常出示流程（此时才签发）。
+          void Taro.showToast({ title: '这是你出示的交易码，不能由你本人核销', icon: 'none' })
+          void issue(targetId)
           return
         }
         const message = map[error.code]
@@ -246,7 +266,14 @@ export default function TransactionMeetup() {
       const dto = await confirmTransaction(tx.id)
       setTx(dto)
       setConfirmPending(dto.status !== 'COMPLETED')
-    } catch {
+    } catch (error) {
+      if (isApiError(error) && error.code === 'TRANSACTION_NOT_IN_PENDING') {
+        // 等待期间交易被取消/完成：落到对应状态卡，确认入口随之消失
+        const dto = await fetchTransaction(tx.id).catch(() => null)
+        if (dto) setTx(dto)
+        setConfirmPending(false)
+        return
+      }
       void Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })
     } finally {
       setSubmitting(false)
@@ -448,7 +475,7 @@ export default function TransactionMeetup() {
           <>
             <View className="meetup__sec">
               <Text className="meetup__sec-title">我的交易码</Text>
-              <View className="meetup__refresh" onClick={() => void issue()}>
+              <View className="meetup__refresh" onClick={() => tx && void issue(tx.id)}>
                 <Image className="meetup__refresh-ic" src={ICONS.refresh} mode="aspectFit" />
                 <Text>刷新</Text>
               </View>
@@ -464,7 +491,10 @@ export default function TransactionMeetup() {
                   为保障安全，交易码 5 分钟内有效。点「刷新」生成新的 6 位码，旧码同时作废。
                 </Text>
                 <View className="meetup__varcard-acts">
-                  <View className="meetup__btn meetup__btn--pri" onClick={() => void issue()}>
+                  <View
+                    className="meetup__btn meetup__btn--pri"
+                    onClick={() => tx && void issue(tx.id)}
+                  >
                     <Text>刷新交易码</Text>
                   </View>
                 </View>
@@ -513,6 +543,24 @@ export default function TransactionMeetup() {
                 <Text className="meetup__code-ttl num">交易码生成中…</Text>
               </View>
             )}
+          </>
+        ) : confirmPending ? (
+          <>
+            {/* 凭证已核销（含跨页面/重启后从服务端状态恢复，审查 P1-2）：
+                一次性 token 已 CONSUMED，再输入只会得到 CONSUMED —— 只给确认出口。 */}
+            <Text className="meetup__hint">
+              交易码已核销成功，面交确认还差最后一步：确认完成本次面交。
+            </Text>
+            <Text className="meetup__flash">等待你确认完成面交。</Text>
+            <View className="meetup__bar">
+              <View
+                className={`meetup__bar-btn meetup__btn--main${submitting ? ' is-off' : ''}`}
+                onClick={() => void retryConfirm()}
+              >
+                {submitting ? <View className="meetup__spin" /> : null}
+                <Text>{submitting ? '确认中…' : '确认完成面交'}</Text>
+              </View>
+            </View>
           </>
         ) : (
           <>
@@ -564,20 +612,6 @@ export default function TransactionMeetup() {
                 <Image className="meetup__err-ic" src={ICONS.warn} mode="aspectFit" />
                 <Text className="meetup__err-tx">{inputError}</Text>
               </View>
-            ) : null}
-
-            {confirmPending ? (
-              <>
-                <Text className="meetup__flash">交易码已核销，等待最终确认。</Text>
-                <View className="meetup__bar">
-                  <View
-                    className={`meetup__bar-btn meetup__btn--main${submitting ? ' is-off' : ''}`}
-                    onClick={() => void retryConfirm()}
-                  >
-                    <Text>{submitting ? '确认中…' : '确认完成面交'}</Text>
-                  </View>
-                </View>
-              </>
             ) : null}
 
             <View className="meetup__bar">
