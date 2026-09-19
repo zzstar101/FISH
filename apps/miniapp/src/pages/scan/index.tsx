@@ -28,6 +28,9 @@ import './index.scss'
  *   拒绝的判据优先取 `getSetting` 的确定性结果，`onError` 的 errMsg 只做兜底。
  * - 从下游页返回时换 key 重挂相机（部分 iOS 机型页面 hide→show 后预览会冻结）。
  * - 交易码是否合法 / 过期 / 可消费归 #70；本页不做码校验。
+ * - 相机实例用 `cameraEpoch` 作 key 管理：从下游页返回、收到 `onStop`（非正常
+ *   终止，如退后台）都换号重挂，规避回前台后预览黑屏 / 冻结；手动输入期间
+ *   有意卸载相机，释放占用。
  */
 
 /** 结果反馈的四种原因（稿子第 04 帧）。本页按当前失败原因只渲染对应条目；
@@ -265,9 +268,9 @@ export default function Scan() {
 
   return (
     <View className="scan">
-      {/* ---------------- 取景底：原生相机（mode=scanCode）或无相机占位 ---------------- */}
+      {/* ------- 取景底：原生相机（取景态）/ 有意让位（手输弹层）/ 无相机占位 ------- */}
       <View className="scan__view">
-        {cameraOn ? (
+        {cameraOn && mode !== 'manual' ? (
           <Camera
             key={cameraEpoch}
             className="scan__camera"
@@ -277,8 +280,12 @@ export default function Scan() {
             resolution="high"
             onScanCode={handleScanCode}
             onError={handleCameraError}
+            onStop={() => {
+              // 非正常终止（如退后台）：换 key 重挂，回前台后由微信重新初始化
+              setCameraEpoch((n) => n + 1)
+            }}
           />
-        ) : (
+        ) : mode === 'manual' ? null : (
           <Text className="scan__view-label num">CAMERA PREVIEW PLACEHOLDER</Text>
         )}
       </View>
