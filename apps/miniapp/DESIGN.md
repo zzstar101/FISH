@@ -129,7 +129,7 @@ src/
 **自定义 TabBar**（`app.config.ts` 里 `tabBar.custom: true`）：
 `首页 pages/home/index` → `许愿 pages/wish/index` → `出物 pages/sell/index` → `消息 pages/chat/index` → `我的 pages/profile/index`
 
-非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`、`pages/notifications/index`。
+非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`。
 
 ## 9. 自定义 TabBar 的三个硬约束（改之前先读）
 
