@@ -6,11 +6,18 @@ FISH 的微信小程序客户端（Taro 4 + React 18 + TypeScript）。第一阶
 
 ```bash
 bun run dev:miniapp      # 等价于 taro build --type weapp --watch
-bun run build:miniapp    # 等价于 taro build --type weapp
+bun run build:miniapp    # Taro 构建后检查所有 JS 产物的 ES5 语法
 bun run --filter '@fish/miniapp' typecheck
 ```
 
 产物在 `dist/`（已 gitignore）。
+
+小程序 Babel 使用独立的 iOS 9 / Android 5 目标；`mini.compile.include` 同时包含
+contracts 源码、Zod 及 Taro 使用的 tslib，避免依赖中的现代语法直接进入 `vendors.js`。
+生产构建会自动运行 Acorn ES5 解析检查，发现不兼容语法时退出失败。
+开发 watch 编译完成后也可运行 `bun run --filter '@fish/miniapp' check:es5` 检查当前产物。
+这只验证语法兼容；首次启动、登录、首页与自定义 TabBar 仍需真机冒烟验证。
+微信开发者工具保持 `es6: false` 和 `enhance: false`，重新编译前清除旧缓存。
 
 ## 用微信开发者工具打开
 
