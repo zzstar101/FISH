@@ -64,6 +64,8 @@ function previewText(conversation: MockConversation): string {
       }
       if (type === 'tx.accepted') return '交易已确认 · 约定面交中'
       if (type === 'tx.rejected') return '卖家已拒绝本次议价'
+      // 1版稿会话页的契约外演示事件（mock/chat.ts）：不映射的话 JSON 会漏进预览
+      if (type === 'tx.completed') return '交易已完成'
     }
   } catch {
     // 不是 JSON：按普通文本渲染

@@ -40,7 +40,14 @@ import {
   SUB_CATEGORIES,
   similarListings,
 } from './catalog'
-import { CHAT_SUMMARY, CONVERSATIONS, conversationsOf, mediaMessagesOf, messagesOf } from './chat'
+import {
+  CHAT_SUMMARY,
+  CONVERSATIONS,
+  conversationsOf,
+  FAILED_TEXT_IDS,
+  mediaMessagesOf,
+  messagesOf,
+} from './chat'
 import {
   COMMENTS,
   commentsOf,
@@ -382,6 +389,11 @@ export function messages(conversationId: string): MockMessage[] {
 /** D2 媒体消息（契约外，见 `MockMediaMessage`） */
 export function mediaMessages(conversationId: string): MockMediaMessage[] {
   return mediaMessagesOf(conversationId)
+}
+
+/** 1版稿：文本「发送失败」演示态的消息 id（契约外，见 `mock/chat.ts`） */
+export function failedTextIds(): string[] {
+  return FAILED_TEXT_IDS
 }
 
 export function chatSummary() {
