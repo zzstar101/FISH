@@ -10,6 +10,13 @@ const ServerEnvSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().min(1),
   S3_BUCKET: z.string().min(1),
   S3_PUBLIC_URL: z.string().min(1),
+  /**
+   * 面交交易码（#70）的 HMAC 签名密钥：6 位码与 QR token 只存 HMAC，明文不落库。
+   * 泄漏 = 可离线伪造任意面交码，与数据库同等敏感；无默认值，缺配置启动失败。
+   * 与 S3 密钥同属共享 ServerEnv：api / worker 都会加载它（worker 不做 HMAC，
+   * 但部署层需统一注入）。
+   */
+  MEETUP_TOKEN_SECRET: z.string().min(1),
 })
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>

@@ -53,6 +53,32 @@ export interface TxUserBrief {
   avatarUrl: string | null
 }
 
+/** transaction_meetup_tokens 的行（#70）。状态不落列，由 service 按 expires/consumed 派生。 */
+export interface MeetupTokenRow {
+  transaction_id: string
+  token_hash: string
+  code_hash: string
+  issued_by: string
+  issued_at: Date | string
+  expires_at: Date | string
+  consumed_at: Date | string | null
+  consumed_by: string | null
+  failed_attempts: number
+  locked_until: Date | string | null
+}
+
+/** 核销时出示的凭证（QR token 或 6 位码）——service 已哈希，store 只比对列。 */
+export type MeetupConsumeInput = { kind: 'qr'; hash: string } | { kind: 'code'; hash: string }
+
+/** 原子核销的结果细分：'ok' 之外的分支都由条件更新 0 行后的**当前行状态**诊断得出。 */
+export type MeetupConsumeResult =
+  | { kind: 'ok'; row: MeetupTokenRow }
+  | { kind: 'not-found' }
+  | { kind: 'consumed' }
+  | { kind: 'expired' }
+  | { kind: 'locked' }
+  | { kind: 'invalid' }
+
 export interface TransactionStore {
   findConversation(conversationId: string, viewerId: string): Promise<ConversationLookup>
   /** 一批交易的 listing 摘要（每个商品取 sort_order = 0 的封面）；查过但无图显式 null。 */
@@ -99,6 +125,39 @@ export interface TransactionStore {
     id: string,
     viewerId: string,
   ): Promise<{ kind: 'ok'; row: TransactionRow } | { kind: 'not-cancellable' | 'not-found' }>
+  findMeetupToken(transactionId: string): Promise<MeetupTokenRow | null>
+  /**
+   * 签发 / 刷新面交凭证（#70）：一行对应一笔交易的当前凭证，重复签发整行覆写，
+   * 旧码（token_hash / code_hash 被替换）立即作废，消费与失败计数一并归零。
+   * 调用方（service）已校验卖家角色与 PENDING_MEETUP，这里不做状态判断。
+   */
+  upsertMeetupToken(
+    transactionId: string,
+    input: { tokenHash: string; codeHash: string; issuedBy: string; ttlSeconds: number },
+  ): Promise<MeetupTokenRow>
+  /**
+   * 原子核销（#70 的「一次性」）：匹配明文哈希 + 未消费 + 未过期 + 未锁定的条件更新，
+   * 并发重复核销只有一者成功（其余按当前行状态诊断，见 MeetupConsumeResult）。
+   * 成功核销在**同一事务**里给卖家盖面交确认（seller_confirmed_at 保持已值）——
+   * 展示码即卖家对面交的同意；买家侧确认由客户端按 nextAction 再调 confirm。
+   * 若买家侧已先行单侧确认（#11 允许停在 PENDING），核销就是**第二侧确认事件**：
+   * 同事务镜像 confirm 的合并语义，把交易推进 COMPLETED + listing SOLD（无条件，
+   * 与 confirm 同一论证：交易完成必然连带商品售出）。
+   * 与 cancel 的并发窗口（无法在不偏离 #11 cancel 冻结语义的前提下消除）：
+   * cancel 先提交 → 本事务 stamp 落 0 行、整体回滚（service 409）；
+   * cancel 后提交 → 取消生效、凭证保持已消费 —— 终态以 transactions 为准。
+   */
+  consumeMeetupToken(
+    transactionId: string,
+    userId: string,
+    presented: MeetupConsumeInput,
+  ): Promise<MeetupConsumeResult>
+  /** 核销失败累计；达到阈值置 locked_until（防 6 位码被爆破）。 */
+  recordMeetupTokenFailure(
+    transactionId: string,
+    maxAttempts: number,
+    lockSeconds: number,
+  ): Promise<{ failedAttempts: number; lockedUntil: Date | string | null }>
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -107,6 +166,52 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
     return (result as { rows: Record<string, unknown>[] }).rows
   }
   return []
+}
+
+const MEETUP_TOKEN_COLUMNS = sql`transaction_id, token_hash, code_hash, issued_by,
+  issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until`
+
+function toMeetupTokenRow(row: Record<string, unknown>): MeetupTokenRow {
+  return {
+    transaction_id: row.transaction_id as string,
+    token_hash: row.token_hash as string,
+    code_hash: row.code_hash as string,
+    issued_by: row.issued_by as string,
+    issued_at: row.issued_at as Date,
+    expires_at: row.expires_at as Date,
+    consumed_at: (row.consumed_at as Date | null) ?? null,
+    consumed_by: (row.consumed_by as string | null) ?? null,
+    failed_attempts: row.failed_attempts as number,
+    locked_until: (row.locked_until as Date | null) ?? null,
+  }
+}
+
+/** 核销事务内发现交易已离开 PENDING_MEETUP：抛出以回滚消费，service 重读后给出 409。 */
+export class MeetupConsumeRaceError extends Error {
+  constructor(readonly transactionId: string) {
+    super(`核销时交易已离开 PENDING_MEETUP：transaction=${transactionId}`)
+    this.name = 'MeetupConsumeRaceError'
+  }
+}
+
+/** 条件更新 0 行后的诊断：按当前行状态区分消费/过期/锁定/不匹配。 */
+async function diagnoseMeetupToken(
+  tx: Parameters<Parameters<Db['transaction']>[0]>[0],
+  transactionId: string,
+): Promise<Exclude<MeetupConsumeResult, { kind: 'ok' }>['kind']> {
+  const result = await tx.execute(sql`
+    SELECT ${MEETUP_TOKEN_COLUMNS},
+           (locked_until IS NOT NULL AND locked_until > now()) AS is_locked,
+           (expires_at <= now()) AS is_expired
+    FROM transaction_meetup_tokens
+    WHERE transaction_id = ${transactionId}
+  `)
+  const row = rowsOf(result)[0]
+  if (!row) return 'not-found'
+  if (row.consumed_at != null) return 'consumed'
+  if (row.is_expired === true) return 'expired'
+  if (row.is_locked === true) return 'locked'
+  return 'invalid'
 }
 
 function toRow(row: Record<string, unknown>): TransactionRow {
@@ -427,6 +532,115 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         if (current.status === 'COMPLETED') return { kind: 'not-cancellable' }
         return { kind: 'ok', row: toRow(current) } // 已 CANCELLED：幂等返回现状
       })
+    },
+
+    async findMeetupToken(transactionId) {
+      const result = await db.execute(sql`
+        SELECT transaction_id, token_hash, code_hash, issued_by,
+               issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+        FROM transaction_meetup_tokens
+        WHERE transaction_id = ${transactionId}
+      `)
+      const row = rowsOf(result)[0]
+      return row ? toMeetupTokenRow(row) : null
+    },
+
+    async upsertMeetupToken(transactionId, input) {
+      // expires_at 用 DB 时钟 now() + interval：与应用时钟的偏移不会触发
+      // expires_after_issued CHECK（同一条语句里 now() 即 issued_at，严格小于过期）。
+      const result = await db.execute(sql`
+        INSERT INTO transaction_meetup_tokens
+          (transaction_id, token_hash, code_hash, issued_by, expires_at)
+        VALUES (${transactionId}, ${input.tokenHash}, ${input.codeHash}, ${input.issuedBy},
+                now() + make_interval(secs => ${input.ttlSeconds}::int))
+        ON CONFLICT (transaction_id) DO UPDATE SET
+          token_hash = EXCLUDED.token_hash,
+          code_hash = EXCLUDED.code_hash,
+          issued_by = EXCLUDED.issued_by,
+          issued_at = now(),
+          expires_at = EXCLUDED.expires_at,
+          consumed_at = NULL,
+          consumed_by = NULL,
+          failed_attempts = 0,
+          locked_until = NULL
+        RETURNING transaction_id, token_hash, code_hash, issued_by,
+                  issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+      `)
+      const row = rowsOf(result)[0]
+      if (!row) throw new Error(`面交凭证签发失败：transaction=${transactionId}`)
+      return toMeetupTokenRow(row)
+    },
+
+    async consumeMeetupToken(transactionId, userId, presented) {
+      return db.transaction(async (tx) => {
+        // 条件更新承担全部竞态：明文哈希匹配 + 未消费 + 未过期 + 未锁定，
+        // 并发重复核销时只有一者拿到行，其余落到下方按行状态诊断。
+        const column = presented.kind === 'qr' ? sql`token_hash` : sql`code_hash`
+        const consumed = await tx.execute(sql`
+          UPDATE transaction_meetup_tokens
+          SET consumed_at = now(), consumed_by = ${userId}
+          WHERE transaction_id = ${transactionId}
+            AND ${column} = ${presented.hash}
+            AND consumed_at IS NULL
+            AND expires_at > now()
+            AND (locked_until IS NULL OR locked_until <= now())
+          RETURNING transaction_id, token_hash, code_hash, issued_by,
+                    issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+        `)
+        const okRow = rowsOf(consumed)[0]
+        if (okRow) {
+          // 展示码 = 卖家对面交的同意：同一事务里盖卖家确认（已值保持，COALESCE 幂等）。
+          // 0 行 = 交易在窗口期离开 PENDING_MEETUP —— 抛错回滚核销，交 service 重读定论。
+          const stamped = await tx.execute(sql`
+            UPDATE transactions
+            SET seller_confirmed_at = COALESCE(seller_confirmed_at, now()), updated_at = now()
+            WHERE id = ${transactionId} AND status = 'PENDING_MEETUP'
+            RETURNING id
+          `)
+          if (rowsOf(stamped).length === 0) {
+            throw new MeetupConsumeRaceError(transactionId)
+          }
+          // 买家侧已先行单侧确认（#11）时，本次核销就是第二侧确认事件：
+          // 镜像 confirm 的合并语义（packages/contracts/src/transactions/schema.ts 状态机注释）
+          // 在同一事务推进 COMPLETED + listing SOLD。listing 不带状态谓词——交易完成
+          // 必然连带商品售出，否则会留下「交易已完成、商品未售出」的自相矛盾（#40-4 同款）。
+          // 0 行 = 买家尚未确认，交易停在 PENDING 等客户端的 confirm（幂等）。
+          await tx.execute(sql`
+            WITH txn AS (
+              UPDATE transactions SET status = 'COMPLETED', completed_at = now(), updated_at = now()
+              WHERE id = ${transactionId} AND status = 'PENDING_MEETUP'
+                AND buyer_confirmed_at IS NOT NULL AND seller_confirmed_at IS NOT NULL
+              RETURNING id, listing_id
+            ), listing AS (
+              UPDATE listings l SET status = 'SOLD', updated_at = now()
+              FROM txn WHERE l.id = txn.listing_id
+            )
+            SELECT id FROM txn
+          `)
+          return { kind: 'ok', row: toMeetupTokenRow(okRow) }
+        }
+        return { kind: await diagnoseMeetupToken(tx, transactionId) }
+      })
+    },
+
+    async recordMeetupTokenFailure(transactionId, maxAttempts, lockSeconds) {
+      const result = await db.execute(sql`
+        UPDATE transaction_meetup_tokens
+        SET failed_attempts = failed_attempts + 1,
+            locked_until = CASE
+              WHEN failed_attempts + 1 >= ${maxAttempts}
+                THEN now() + make_interval(secs => ${lockSeconds})
+              ELSE locked_until
+            END
+        WHERE transaction_id = ${transactionId}
+        RETURNING failed_attempts, locked_until
+      `)
+      const row = rowsOf(result)[0]
+      if (!row) throw new Error(`面交凭证失败计数缺少行：transaction=${transactionId}`)
+      return {
+        failedAttempts: row.failed_attempts as number,
+        lockedUntil: (row.locked_until as Date | string | null) ?? null,
+      }
     },
   }
 }

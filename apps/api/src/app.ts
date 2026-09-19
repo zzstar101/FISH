@@ -247,6 +247,7 @@ export function createApp(
 
   // 交易模块（#11）：提案/接受/拒绝以 SYSTEM 消息进会话（经 messages store 直写），
   // 写入后经同一 hub 推送（与文本消息同一条 message.new 通道）。整条挂 requireAuth。
+  // #70：面交交易码四端点同挂这里，meetupSecret 用于凭证的 HMAC 存储（明文不落库）。
   app.route(
     '/transactions',
     createTransactionsRouter({
@@ -254,6 +255,7 @@ export function createApp(
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
         storage,
+        meetupSecret: env.MEETUP_TOKEN_SECRET,
         onSystemMessage: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',

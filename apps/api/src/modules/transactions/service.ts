@@ -1,5 +1,13 @@
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import {
+  type MeetupTokenRedeemInput,
+  type MeetupTokenResponse,
+  type MeetupTokenStatusResponse,
+  type MeetupTokenVerifyCodeInput,
+  type MeetupVerificationResponse,
+  meetupTokenResponseSchema,
+  meetupTokenStatusResponseSchema,
+  meetupVerificationResponseSchema,
   type TransactionAcceptInput,
   type TransactionDto,
   type TransactionListQuery,
@@ -14,11 +22,18 @@ import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
 import type { MediaStorage } from '../uploads/storage'
-import type { TransactionRow, TransactionStore, TxListingBrief, TxUserBrief } from './store'
+import { MeetupTokenCrypto } from './meetup-token'
+import {
+  MeetupConsumeRaceError,
+  type TransactionRow,
+  type TransactionStore,
+  type TxListingBrief,
+  type TxUserBrief,
+} from './store'
 
 export class TransactionServiceError extends Error {
   constructor(
-    readonly status: 403 | 404 | 409 | 422,
+    readonly status: 403 | 404 | 409 | 422 | 429,
     readonly code: string,
     message: string,
   ) {
@@ -26,6 +41,12 @@ export class TransactionServiceError extends Error {
     this.name = 'TransactionServiceError'
   }
 }
+
+/** 面交码有效期（#70 设计稿口径：「交易码 5 分钟内有效」），刷新即重签。 */
+export const MEETUP_TOKEN_TTL_SECONDS = 5 * 60
+/** 6 位码爆破防护：累计 5 次失败锁 10 分钟（QR token 高熵，计数共用同一防线）。 */
+export const MEETUP_TOKEN_MAX_ATTEMPTS = 5
+export const MEETUP_TOKEN_LOCK_SECONDS = 10 * 60
 
 const notFound = () => new TransactionServiceError(404, 'TRANSACTION_NOT_FOUND', '交易不存在')
 const conversationNotFound = () =>
@@ -120,20 +141,62 @@ export interface TransactionService {
   getTransaction(userId: string, id: string): Promise<TransactionDto>
   confirm(userId: string, id: string): Promise<TransactionDto>
   cancel(userId: string, id: string): Promise<TransactionDto>
+  /** 卖家签发/刷新面交码（明文只出现在本次响应）。 */
+  issueMeetupToken(userId: string, id: string): Promise<MeetupTokenResponse>
+  /** 当前面交凭证状态（无明文；非参与者 404 不泄漏存在性）。 */
+  getMeetupTokenStatus(userId: string, id: string): Promise<MeetupTokenStatusResponse>
+  /** 买家出示二维码核销（qrToken 是 payload `t` 参数的原始 token）。 */
+  redeemMeetupToken(
+    userId: string,
+    id: string,
+    input: MeetupTokenRedeemInput,
+  ): Promise<MeetupVerificationResponse>
+  /** 买家手动输入 6 位码核销。 */
+  verifyMeetupCode(
+    userId: string,
+    id: string,
+    input: MeetupTokenVerifyCodeInput,
+  ): Promise<MeetupVerificationResponse>
+}
+
+/**
+ * 面交核销共用的前置校验：参与者（404 不泄漏）→ 交易仍在 PENDING_MEETUP（409）。
+ * 角色检查刻意放在这之后：终态交易对任何人都是「已结束」409，先于「能不能消费」403。
+ */
+async function loadPendingTxForMeetup(
+  store: TransactionStore,
+  userId: string,
+  id: string,
+): Promise<TransactionRow> {
+  if (!isTransactionId(id)) throw notFound()
+  const row = await store.findById(id)
+  if (!row || (row.buyer_id !== userId && row.seller_id !== userId)) throw notFound()
+  if (row.status !== 'PENDING_MEETUP') {
+    throw new TransactionServiceError(
+      409,
+      'TRANSACTION_NOT_IN_PENDING',
+      '交易已结束，面交码不再可用',
+    )
+  }
+  return row
 }
 
 export function createTransactionService({
   store,
   messages,
   storage,
+  /** 面交码 HMAC 密钥（#70，MEETUP_TOKEN_SECRET；明文不落库的前提）。 */
+  meetupSecret,
   /** SYSTEM 消息写入后回调（实时推送）；推送失败不得影响响应。 */
   onSystemMessage,
 }: {
   store: TransactionStore
   messages: MessageStore
   storage: MediaStorage
+  meetupSecret: string
   onSystemMessage?: TxSideEffect
 }): TransactionService {
+  const meetupCrypto = new MeetupTokenCrypto(meetupSecret)
   async function writeSystem(
     participants: { buyerId: string; sellerId: string },
     conversationId: string,
@@ -142,6 +205,85 @@ export function createTransactionService({
     const row = await messages.insertSystem(conversationId, systemEventContent(event))
     onSystemMessage?.(participants, row)
     return row
+  }
+
+  /**
+   * QR 核销与 6 位码核销共用：除出示的凭证串与比对列不同外，校验顺序与错误码一致。
+   * 顺序 = 参与者(404) → 终态(409) → 非消费方(403) → 无凭证(404) → 锁定(429) →
+   * 原子核销（ok / consumed / expired / locked / invalid）。
+   */
+  async function consumeMeetup(
+    userId: string,
+    id: string,
+    input: { kind: 'qr' | 'code'; presented: string },
+  ): Promise<MeetupVerificationResponse> {
+    const row = await loadPendingTxForMeetup(store, userId, id)
+    if (row.seller_id === userId) {
+      throw new TransactionServiceError(403, 'MEETUP_TOKEN_NOT_ALLOWED', '不能核销自己出示的面交码')
+    }
+    const tokenRow = await store.findMeetupToken(id)
+    if (!tokenRow) {
+      throw new TransactionServiceError(404, 'MEETUP_TOKEN_NOT_FOUND', '这笔交易还没有可用的面交码')
+    }
+    if (tokenRow.locked_until != null && new Date(tokenRow.locked_until).getTime() > Date.now()) {
+      throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
+    }
+    let result: Awaited<ReturnType<TransactionStore['consumeMeetupToken']>>
+    try {
+      result = await store.consumeMeetupToken(id, userId, {
+        kind: input.kind,
+        hash: meetupCrypto.hash(input.presented),
+      })
+    } catch (error) {
+      // 窗口期（前置检查之后）交易被取消/完成：核销已随事务回滚，按终态给 409
+      if (error instanceof MeetupConsumeRaceError) {
+        throw new TransactionServiceError(
+          409,
+          'TRANSACTION_NOT_IN_PENDING',
+          '交易已结束，面交码不再可用',
+        )
+      }
+      throw error
+    }
+    if (result.kind === 'ok') {
+      return meetupVerificationResponseSchema.parse({
+        transactionId: id,
+        verified: true,
+        verifiedBy: userId,
+        verifiedAt: toIso(result.row.consumed_at),
+        nextAction: 'CONFIRM_DELIVERY',
+      })
+    }
+    if (result.kind === 'invalid') {
+      const failure = await store.recordMeetupTokenFailure(
+        id,
+        MEETUP_TOKEN_MAX_ATTEMPTS,
+        MEETUP_TOKEN_LOCK_SECONDS,
+      )
+      if (failure.lockedUntil != null && new Date(failure.lockedUntil).getTime() > Date.now()) {
+        throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
+      }
+      throw new TransactionServiceError(422, 'MEETUP_TOKEN_INVALID', '面交码不正确')
+    }
+    if (result.kind === 'consumed') {
+      throw new TransactionServiceError(
+        409,
+        'MEETUP_TOKEN_CONSUMED',
+        '面交码已被使用，不能重复核销',
+      )
+    }
+    if (result.kind === 'expired') {
+      throw new TransactionServiceError(
+        409,
+        'MEETUP_TOKEN_EXPIRED',
+        '面交码已过期，请对方刷新后重试',
+      )
+    }
+    if (result.kind === 'locked') {
+      throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
+    }
+    // not-found：前置检查后凭证被删（本域没有删除路径，不可达），防御性归 NOT_FOUND
+    throw new TransactionServiceError(404, 'MEETUP_TOKEN_NOT_FOUND', '这笔交易还没有可用的面交码')
   }
 
   return {
@@ -278,6 +420,63 @@ export function createTransactionService({
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
       return dto
+    },
+
+    async issueMeetupToken(userId, id) {
+      const row = await loadPendingTxForMeetup(store, userId, id)
+      // 签发人是卖家（契约冻结：routes.ts「卖家签发一次性面交码」）；买家是参与者，
+      // 但他的页面只负责扫码/输码 —— 403 MEETUP_TOKEN_NOT_ALLOWED（与消费方约束同码）。
+      if (row.seller_id !== userId) {
+        throw new TransactionServiceError(403, 'MEETUP_TOKEN_NOT_ALLOWED', '只有卖家可以出示面交码')
+      }
+      const token = meetupCrypto.generateToken()
+      const code = meetupCrypto.generateCode()
+      const tokenRow = await store.upsertMeetupToken(id, {
+        tokenHash: meetupCrypto.hash(token),
+        codeHash: meetupCrypto.hash(code),
+        issuedBy: row.seller_id,
+        ttlSeconds: MEETUP_TOKEN_TTL_SECONDS,
+      })
+      // 刷新 = 整行覆写：旧码立即作废（重放旧 payload / 旧 6 位码都到不了匹配那一步）。
+      return meetupTokenResponseSchema.parse({
+        transactionId: id,
+        code,
+        qrPayload: meetupCrypto.qrPayload(id, token),
+        expiresAt: toIso(tokenRow.expires_at),
+      })
+    },
+
+    async getMeetupTokenStatus(userId, id) {
+      if (!isTransactionId(id)) throw notFound()
+      const row = await store.findById(id)
+      if (!row || (row.buyer_id !== userId && row.seller_id !== userId)) throw notFound()
+      const tokenRow = await store.findMeetupToken(id)
+      if (!tokenRow) {
+        return meetupTokenStatusResponseSchema.parse({
+          transactionId: id,
+          status: 'NONE',
+          expiresAt: null,
+          consumedAt: null,
+          consumedBy: null,
+        })
+      }
+      // 状态全部派生，不落列：CONSUMED > EXPIRED > ISSUED。
+      const expired = new Date(tokenRow.expires_at).getTime() <= Date.now()
+      return meetupTokenStatusResponseSchema.parse({
+        transactionId: id,
+        status: tokenRow.consumed_at != null ? 'CONSUMED' : expired ? 'EXPIRED' : 'ISSUED',
+        expiresAt: toIso(tokenRow.expires_at),
+        consumedAt: toIso(tokenRow.consumed_at),
+        consumedBy: tokenRow.consumed_by,
+      })
+    },
+
+    async redeemMeetupToken(userId, id, input) {
+      return consumeMeetup(userId, id, { kind: 'qr', presented: input.qrToken })
+    },
+
+    async verifyMeetupCode(userId, id, input) {
+      return consumeMeetup(userId, id, { kind: 'code', presented: input.code })
     },
   }
 }

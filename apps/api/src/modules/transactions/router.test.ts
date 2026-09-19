@@ -49,6 +49,33 @@ function buildApp(overrides: Partial<TransactionService> = {}) {
     getTransaction: async () => dto,
     confirm: async () => ({ ...dto, status: 'COMPLETED', completedAt: '2026-09-12T11:00:00.000Z' }),
     cancel: async () => ({ ...dto, status: 'CANCELLED', cancelledAt: '2026-09-12T11:00:00.000Z' }),
+    issueMeetupToken: async () => ({
+      transactionId: dto.id,
+      code: '482913',
+      qrPayload: `fish://meetup/redeem?tx=${dto.id}&t=abc_DEF-123`,
+      expiresAt: '2026-09-12T10:05:00.000Z',
+    }),
+    getMeetupTokenStatus: async () => ({
+      transactionId: dto.id,
+      status: 'ISSUED' as const,
+      expiresAt: '2026-09-12T10:05:00.000Z',
+      consumedAt: null,
+      consumedBy: null,
+    }),
+    redeemMeetupToken: async () => ({
+      transactionId: dto.id,
+      verified: true as const,
+      verifiedBy: 'user-1',
+      verifiedAt: '2026-09-12T10:01:00.000Z',
+      nextAction: 'CONFIRM_DELIVERY' as const,
+    }),
+    verifyMeetupCode: async () => ({
+      transactionId: dto.id,
+      verified: true as const,
+      verifiedBy: 'user-1',
+      verifiedAt: '2026-09-12T10:01:00.000Z',
+      nextAction: 'CONFIRM_DELIVERY' as const,
+    }),
     ...overrides,
   }
   const root = new Hono<{ Variables: { userId: string } }>()
@@ -196,5 +223,87 @@ describe('transactions router', () => {
   test('GET / rejects an unknown status filter with 422', async () => {
     const response = await buildApp().request('/transactions?status=REQUESTED')
     expect(response.status).toBe(422)
+  })
+})
+
+describe('meetup token router (#70)', () => {
+  const txId = dto.id
+
+  test('POST /:id/meetup-token → 201 with plaintext code + qrPayload', async () => {
+    const response = await buildApp().request(`/transactions/${txId}/meetup-token`, {
+      method: 'POST',
+    })
+    expect(response.status).toBe(201)
+    const body = (await response.json()) as { code: string; qrPayload: string }
+    expect(body.code).toMatch(/^\d{6}$/)
+    expect(body.qrPayload).toContain('fish://meetup/redeem')
+  })
+
+  test('GET /:id/meetup-token → 200 status（无明文）', async () => {
+    const response = await buildApp().request(`/transactions/${txId}/meetup-token`)
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { status: string }
+    expect(body.status).toBe('ISSUED')
+    expect((body as unknown as { code?: string }).code).toBeUndefined()
+  })
+
+  test('POST /:id/meetup-token/redeem → 200 verification; 空 body → 422', async () => {
+    const ok = await buildApp().request(`/transactions/${txId}/meetup-token/redeem`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ qrToken: 'abc_DEF-123' }),
+    })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toMatchObject({ verified: true, nextAction: 'CONFIRM_DELIVERY' })
+
+    const bad = await buildApp().request(`/transactions/${txId}/meetup-token/redeem`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(bad.status).toBe(422)
+  })
+
+  test('POST /:id/meetup-token/verify-code → 200；非 6 位码 → 422', async () => {
+    const ok = await buildApp().request(`/transactions/${txId}/meetup-token/verify-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: '482913' }),
+    })
+    expect(ok.status).toBe(200)
+
+    const bad = await buildApp().request(`/transactions/${txId}/meetup-token/verify-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: '48291a' }),
+    })
+    expect(bad.status).toBe(422)
+  })
+
+  test('service 的 429 / 409 信封原样透传', async () => {
+    const locked = buildApp({
+      verifyMeetupCode: () => {
+        throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
+      },
+    })
+    const response = await locked.request(`/transactions/${txId}/meetup-token/verify-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: '482913' }),
+    })
+    expect(response.status).toBe(429)
+    expect(await response.json()).toEqual({
+      error: { code: 'MEETUP_TOKEN_LOCKED', message: '错误次数过多，请稍后再试' },
+    })
+  })
+
+  test('畸形 :id 不进 service（404）', async () => {
+    const response = await buildApp().request('/transactions/not-a-uuid/meetup-token', {
+      method: 'POST',
+    })
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: { code: 'TRANSACTION_NOT_FOUND', message: '交易不存在' },
+    })
   })
 })

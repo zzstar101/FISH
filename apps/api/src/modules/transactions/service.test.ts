@@ -1,8 +1,17 @@
 import { describe, expect, test } from 'bun:test'
+import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { MemoryMessageStore } from '../messages/memory-store.fixture'
 import { createTransactionService, TransactionServiceError } from './service'
-import type { ConversationLookup, TransactionRow, TransactionStore } from './store'
+import type {
+  ConversationLookup,
+  MeetupConsumeInput,
+  MeetupConsumeResult,
+  MeetupTokenRow,
+  TransactionRow,
+  TransactionStore,
+} from './store'
+import { MeetupConsumeRaceError } from './store'
 
 const buyer = '00000000-0000-4000-8000-0000000000a1'
 const seller = '00000000-0000-4000-8000-0000000000a2'
@@ -183,6 +192,80 @@ class MemoryTxStore implements TransactionStore {
     row.cancelled_at = new Date()
     return { kind: 'ok', row }
   }
+
+  // ---- 面交凭证（#70）：镜像 SQL store 的语义（含核销盖卖家确认的事务性） ----
+
+  meetupTokens = new Map<string, MeetupTokenRow>()
+
+  async findMeetupToken(transactionId: string): Promise<MeetupTokenRow | null> {
+    return this.meetupTokens.get(transactionId) ?? null
+  }
+
+  async upsertMeetupToken(
+    transactionId: string,
+    input: { tokenHash: string; codeHash: string; issuedBy: string; ttlSeconds: number },
+  ): Promise<MeetupTokenRow> {
+    const issuedAt = new Date()
+    const row: MeetupTokenRow = {
+      transaction_id: transactionId,
+      token_hash: input.tokenHash,
+      code_hash: input.codeHash,
+      issued_by: input.issuedBy,
+      issued_at: issuedAt,
+      expires_at: new Date(issuedAt.getTime() + input.ttlSeconds * 1000),
+      consumed_at: null,
+      consumed_by: null,
+      failed_attempts: 0,
+      locked_until: null,
+    }
+    this.meetupTokens.set(transactionId, row)
+    return row
+  }
+
+  async consumeMeetupToken(
+    transactionId: string,
+    userId: string,
+    presented: MeetupConsumeInput,
+  ): Promise<MeetupConsumeResult> {
+    const row = this.meetupTokens.get(transactionId)
+    if (!row) return { kind: 'not-found' }
+    if (row.consumed_at != null) return { kind: 'consumed' }
+    // MeetupTokenRow 的时间戳是 Date | string（对齐 SQL 行），统一经 Date 规整
+    if (new Date(row.expires_at).getTime() <= Date.now()) return { kind: 'expired' }
+    if (row.locked_until != null && new Date(row.locked_until).getTime() > Date.now()) {
+      return { kind: 'locked' }
+    }
+    const expected = presented.kind === 'qr' ? row.token_hash : row.code_hash
+    if (presented.hash !== expected) return { kind: 'invalid' }
+    // 对齐 SQL：哈希命中后（stamp 落 0 行）才因交易离开 PENDING 抛错回滚
+    const tx = this.rows.find((r) => r.id === transactionId)
+    if (tx?.status !== 'PENDING_MEETUP') throw new MeetupConsumeRaceError(transactionId)
+    row.consumed_at = new Date()
+    row.consumed_by = userId
+    // 与 SQL 同一事务语义：核销成功即盖卖家确认（已值保持）；买家已先行确认时
+    // 本次核销是第二侧确认事件 → 同一事务推进 COMPLETED（镜像 confirm 的合并）
+    if (tx.seller_confirmed_at == null) tx.seller_confirmed_at = new Date()
+    if (tx.buyer_confirmed_at != null) {
+      tx.status = 'COMPLETED'
+      tx.completed_at = new Date()
+    }
+    tx.updated_at = new Date()
+    return { kind: 'ok', row }
+  }
+
+  async recordMeetupTokenFailure(
+    transactionId: string,
+    maxAttempts: number,
+    lockSeconds: number,
+  ): Promise<{ failedAttempts: number; lockedUntil: Date | string | null }> {
+    const row = this.meetupTokens.get(transactionId)
+    if (!row) throw new Error(`面交凭证失败计数缺少行：transaction=${transactionId}`)
+    row.failed_attempts += 1
+    if (row.failed_attempts >= maxAttempts) {
+      row.locked_until = new Date(Date.now() + lockSeconds * 1000)
+    }
+    return { failedAttempts: row.failed_attempts, lockedUntil: row.locked_until }
+  }
 }
 
 async function build() {
@@ -198,6 +281,7 @@ async function build() {
     store,
     messages,
     storage,
+    meetupSecret: 'test-meetup-secret',
     onSystemMessage: (_p, message) => systemEvents.push(message.content),
   })
   return { store, service, messages, systemEvents }
@@ -404,5 +488,223 @@ describe('TransactionServiceError', () => {
     const error = new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', 'x')
     expect(error.status).toBe(409)
     expect(error.code).toBe('LISTING_NOT_ACTIVE')
+  })
+})
+
+describe('transaction service: meetup token (#70)', () => {
+  /** 建一笔 PENDING_MEETUP 交易（买家 buyer × 卖家 seller），作为面交码用例的底座。 */
+  async function buildWithPendingTx() {
+    const ctx = await build()
+    const tx = await ctx.service.accept(seller, {
+      conversationId: conversationA,
+      amountCents: 16000,
+    })
+    return { ...ctx, txId: tx.id }
+  }
+
+  test('卖家签发：6 位码 + 可解析 qrPayload；DB 只有哈希，状态派生为 ISSUED', async () => {
+    const { service, store, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    expect(token.code).toMatch(/^\d{6}$/)
+    expect(token.transactionId).toBe(txId)
+    expect(parseMeetupQrPayload(token.qrPayload)).toEqual({
+      transactionId: txId,
+      token: expect.any(String),
+    })
+    const row = await store.findMeetupToken(txId)
+    expect(row).not.toBeNull()
+    // 明文不落库：DB 存的是 HMAC，与响应里的明文不同
+    expect(row?.code_hash).not.toBe(token.code)
+    expect(row?.token_hash).not.toContain(parseMeetupQrPayload(token.qrPayload)?.token)
+    const status = await service.getMeetupTokenStatus(seller, txId)
+    expect(status.status).toBe('ISSUED')
+    expect(status.consumedAt).toBeNull()
+  })
+
+  test('签发权限：买家 403、外人 404、畸形 id 404', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    await expect(service.issueMeetupToken(buyer, txId)).rejects.toMatchObject({
+      status: 403,
+      code: 'MEETUP_TOKEN_NOT_ALLOWED',
+    })
+    await expect(service.issueMeetupToken(outsider, txId)).rejects.toMatchObject({
+      status: 404,
+      code: 'TRANSACTION_NOT_FOUND',
+    })
+    await expect(service.issueMeetupToken(seller, 'not-a-uuid')).rejects.toMatchObject({
+      status: 404,
+      code: 'TRANSACTION_NOT_FOUND',
+    })
+  })
+
+  test('终态不可签发：CANCELLED 上 409；签发时无凭证 → status NONE', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    expect(await service.getMeetupTokenStatus(buyer, txId)).toMatchObject({ status: 'NONE' })
+    await service.cancel(seller, txId)
+    await expect(service.issueMeetupToken(seller, txId)).rejects.toMatchObject({
+      status: 409,
+      code: 'TRANSACTION_NOT_IN_PENDING',
+    })
+  })
+
+  test('刷新换码：旧 6 位码与旧 qrToken 立即失效（重放旧码 → INVALID）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const first = await service.issueMeetupToken(seller, txId)
+    const second = await service.issueMeetupToken(seller, txId)
+    expect(second.code).not.toBe(first.code)
+    expect(second.qrPayload).not.toBe(first.qrPayload)
+    // 旧码核销：不匹配当前行 → 计失败 → INVALID
+    await expect(
+      service.redeemMeetupToken(buyer, txId, {
+        qrToken: parseMeetupQrPayload(first.qrPayload)?.token ?? '',
+      }),
+    ).rejects.toMatchObject({ status: 422, code: 'MEETUP_TOKEN_INVALID' })
+    await expect(service.verifyMeetupCode(buyer, txId, { code: first.code })).rejects.toMatchObject(
+      { status: 422, code: 'MEETUP_TOKEN_INVALID' },
+    )
+    // 新码可用
+    const status = await service.getMeetupTokenStatus(buyer, txId)
+    expect(status.status).toBe('ISSUED')
+  })
+
+  test('买家 redeem 成功 → verified + CONFIRM_DELIVERY；卖家确认被盖上；买家 confirm → COMPLETED', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    const verification = await service.redeemMeetupToken(buyer, txId, {
+      qrToken: parseMeetupQrPayload(token.qrPayload)?.token ?? '',
+    })
+    expect(verification).toMatchObject({
+      transactionId: txId,
+      verified: true,
+      verifiedBy: buyer,
+      nextAction: 'CONFIRM_DELIVERY',
+    })
+    // 核销即盖卖家确认（展示码 = 卖家同意），交易仍在 PENDING 等买家侧 confirm
+    const afterRedeem = await service.getTransaction(buyer, txId)
+    expect(afterRedeem.sellerConfirmedAt).not.toBeNull()
+    expect(afterRedeem.buyerConfirmedAt).toBeNull()
+    const dto = await service.confirm(buyer, txId)
+    expect(dto.status).toBe('COMPLETED')
+    expect(dto.completedAt).not.toBeNull()
+  })
+
+  test('6 位码核销成功，且重放旧码 → MEETUP_TOKEN_CONSUMED；完成后 → TRANSACTION_NOT_IN_PENDING', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    await service.verifyMeetupCode(buyer, txId, { code: token.code })
+    await expect(service.verifyMeetupCode(buyer, txId, { code: token.code })).rejects.toMatchObject(
+      { status: 409, code: 'MEETUP_TOKEN_CONSUMED' },
+    )
+    await expect(
+      service.redeemMeetupToken(buyer, txId, {
+        qrToken: parseMeetupQrPayload(token.qrPayload)?.token ?? '',
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'MEETUP_TOKEN_CONSUMED' })
+    // 买家 confirm 完成交易后，重放同一枚码 → 终态 409（不是 CONSUMED，别掩盖真实状态）
+    await service.confirm(buyer, txId)
+    await expect(service.verifyMeetupCode(buyer, txId, { code: token.code })).rejects.toMatchObject(
+      { status: 409, code: 'TRANSACTION_NOT_IN_PENDING' },
+    )
+  })
+
+  test('过期凭证 → MEETUP_TOKEN_EXPIRED；状态派生 EXPIRED；刷新后恢复 ISSUED', async () => {
+    const { service, store, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    const row = store.meetupTokens.get(txId)
+    expect(row).toBeDefined()
+    if (row) row.expires_at = new Date(Date.now() - 1000)
+    await expect(service.verifyMeetupCode(buyer, txId, { code: token.code })).rejects.toMatchObject(
+      { status: 409, code: 'MEETUP_TOKEN_EXPIRED' },
+    )
+    expect((await service.getMeetupTokenStatus(buyer, txId)).status).toBe('EXPIRED')
+    await service.issueMeetupToken(seller, txId)
+    expect((await service.getMeetupTokenStatus(buyer, txId)).status).toBe('ISSUED')
+  })
+
+  test('卖家不能核销自己出示的码 → 403 MEETUP_TOKEN_NOT_ALLOWED', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    await expect(
+      service.verifyMeetupCode(seller, txId, { code: token.code }),
+    ).rejects.toMatchObject({ status: 403, code: 'MEETUP_TOKEN_NOT_ALLOWED' })
+  })
+
+  test('错误 6 位码计失败，第 5 次起 429 MEETUP_TOKEN_LOCKED', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    await service.issueMeetupToken(seller, txId)
+    for (let i = 0; i < 4; i++) {
+      await expect(service.verifyMeetupCode(buyer, txId, { code: '000000' })).rejects.toMatchObject(
+        { status: 422, code: 'MEETUP_TOKEN_INVALID' },
+      )
+    }
+    await expect(service.verifyMeetupCode(buyer, txId, { code: '000001' })).rejects.toMatchObject({
+      status: 429,
+      code: 'MEETUP_TOKEN_LOCKED',
+    })
+    // 锁定期间即使出示正确码也拒绝
+    const token = await service.issueMeetupToken(seller, txId) // 刷新同时清零失败计数
+    await expect(
+      service.verifyMeetupCode(buyer, txId, { code: token.code }),
+    ).resolves.toMatchObject({ verified: true })
+  })
+
+  test('无凭证核销 → 404 MEETUP_TOKEN_NOT_FOUND', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    await expect(service.verifyMeetupCode(buyer, txId, { code: '123456' })).rejects.toMatchObject({
+      status: 404,
+      code: 'MEETUP_TOKEN_NOT_FOUND',
+    })
+  })
+
+  test('非参与者核销 → 404（Done：非参与者不能完成交易）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    await service.issueMeetupToken(seller, txId)
+    await expect(
+      service.redeemMeetupToken(outsider, txId, { qrToken: 'x'.repeat(22) }),
+    ).rejects.toMatchObject({ status: 404, code: 'TRANSACTION_NOT_FOUND' })
+    await expect(
+      service.verifyMeetupCode(outsider, txId, { code: '123456' }),
+    ).rejects.toMatchObject({ status: 404, code: 'TRANSACTION_NOT_FOUND' })
+  })
+
+  test('QR 路径错误同样计失败并锁定 → 429', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    await service.issueMeetupToken(seller, txId)
+    for (let i = 0; i < 4; i++) {
+      await expect(
+        service.redeemMeetupToken(buyer, txId, { qrToken: 'wrong' }),
+      ).rejects.toMatchObject({ status: 422, code: 'MEETUP_TOKEN_INVALID' })
+    }
+    await expect(
+      service.redeemMeetupToken(buyer, txId, { qrToken: 'wrong-again' }),
+    ).rejects.toMatchObject({ status: 429, code: 'MEETUP_TOKEN_LOCKED' })
+  })
+
+  test('买家先单侧 confirm，核销即第二侧确认事件 → 交易直接 COMPLETED（审查 F1）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    // 买家在订单里先点了单侧确认：交易仍停 PENDING_MEETUP
+    await service.confirm(buyer, txId)
+    expect((await service.getTransaction(buyer, txId)).status).toBe('PENDING_MEETUP')
+    const token = await service.issueMeetupToken(seller, txId)
+    await service.redeemMeetupToken(buyer, txId, {
+      qrToken: parseMeetupQrPayload(token.qrPayload)?.token ?? '',
+    })
+    // 核销盖了卖家确认 + 与买家既有确认合并 → COMPLETED；客户端随后的 confirm 幂等
+    const dto = await service.getTransaction(buyer, txId)
+    expect(dto.status).toBe('COMPLETED')
+    expect(dto.completedAt).not.toBeNull()
+  })
+
+  test('status 响应含消费人与时间（CONSUMED 派生）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    await service.verifyMeetupCode(buyer, txId, { code: token.code })
+    const status = await service.getMeetupTokenStatus(seller, txId)
+    expect(status).toMatchObject({
+      status: 'CONSUMED',
+      consumedBy: buyer,
+    })
+    expect(status.consumedAt).not.toBeNull()
+    expect(status.expiresAt).not.toBeNull()
   })
 })
