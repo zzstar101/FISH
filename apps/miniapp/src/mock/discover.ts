@@ -13,8 +13,8 @@ function iso(hoursAgo: number): string {
 /* ------------------------------------------------------------------ 留言 */
 
 /**
- * 商品详情页留言。**契约里没有 comments 域**（`packages/contracts/src` 无此模块），
- * 所以这块是纯展示 mock，不做「假装有接口」的包装。
+ * 商品详情页留言 fixture。真实读路径是 #111 的 `GET /listings/:id/comments`
+ * （契约 `@fish/contracts/comments/schema`）；这份 mock 只在开发 / 预览退回时用。
  */
 export const COMMENTS: MockComment[] = [
   {

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
 import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
+import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
@@ -76,9 +77,9 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 一次性列出全部业务表：单条 TRUNCATE 可以跨外键，但必须把所有被引用的表都列全。
   // `sessions` / `campus_email_verifications`（#68）/ `listing_moderation_records`（#80）
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
-  // 必须在内：漏掉会让 seed 第二次执行直接失败。
+  // / `comments`（#111，引用 users 与 listings）必须在内：漏掉会让 seed 第二次执行直接失败。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactions}, ${notifications}, ${jobs}`,
   )
 
   const now = new Date()
