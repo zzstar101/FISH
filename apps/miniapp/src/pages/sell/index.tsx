@@ -1,4 +1,4 @@
-import { Image, Input, Text, View } from '@tarojs/components'
+import { Image, Input, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
@@ -181,7 +181,8 @@ export default function Sell() {
     <View className="sell">
       <View className="sell__hero-bg" />
       {/* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），返回钮是唯一出口 */}
-      <TopBar back variant="glass" spacer />
+      {/* 页名大字跟其它页面顶栏同款：前段黑 + 尾段品牌蓝，跟在返回钮右边不居中 */}
+      <TopBar back variant="glass" spacer title="发" titleEm="闲置" />
 
       <View className="sell__body">
         <View className="sell__head">
@@ -280,10 +281,12 @@ export default function Sell() {
               <Text className="sell__fhint num">{`${description.length} / 500`}</Text>
             </View>
             <View className="sell__desc-wrap">
-              <Input
+              {/* Textarea（不是 Input）：多行输入贴左上排，超框自动换行；Input 是单行、居中且横向滚 */}
+              <Textarea
                 className={`sell__input sell__input--area${showDescError ? ' is-err' : ''}`}
                 value={description}
                 maxlength={500}
+                disableDefaultPadding
                 placeholder="买入时间、使用情况、有无磕碰、能否自提…"
                 onInput={(event) => setDescription(event.detail.value)}
               />
