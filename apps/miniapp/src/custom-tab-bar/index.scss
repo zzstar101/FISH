@@ -1,4 +1,5 @@
 @use '@/styles/mixins' as *;
+@use '@/styles/token-vars' as *;
 
 /**
  * 自定义 TabBar —— 一级页面共用的底部导航。
@@ -8,22 +9,40 @@
  * `position: fixed` 直接生效，页面根节点的 `overflow` / 滚动容器都影响不到它，
  * 各页面也不需要自己画一条。所以「替换原生 tabBar」靠的就是这个目录 + `custom: true`。
  *
- * 尺寸照 1改 稿（`D:\Downloads\1改\小程序1版home.html` 的 `.tabbar`）：左右各留 16pt、
- * 距底 22pt 的胶囊，五等分；图标行 42pt，中间「出物」是凸起的品牌渐变小圆钮（34pt）。
- * 底部再叠一层 `env(safe-area-inset-bottom)` 适配全面屏。
+ * 尺寸基线是 1改 稿（`D:\Downloads\1改\小程序1版home.html` 的 `.tabbar`：左右各留 16pt、
+ * 距底 22pt、图标行 42pt、凸起钮 34pt），但**高度与距底都比稿子收紧过**（Owner 反馈
+ * 「高度占比太大、还要再往下」）：图标行 42 → 28pt、凸起钮 34 → 28pt、距底 22 → 16pt。
+ * 整条栏现在高 101rpx（50.5pt，原生栏是 50pt）。
+ * 改这几个值时必须同步改 4 个 Tab 页的 `padding-bottom`（见 DESIGN.md 第 9 节）。
+ *
+ * **距底不叠 `env(safe-area-inset-bottom)`**：稿里的 `bottom:22px` 是从屏幕**物理底边**
+ * 量起的，而且稿内自绘了 iOS 底部横条（`.home-indicator::after{bottom:8px; height:5px}`，
+ * 只占距底 8~13px）—— 安全区那条边已经让出来了。
+ * 再叠一层 `env()` 等于按 **34pt** 的安全区去避让，是稿子留白（8~13px）的两倍多：
+ * 刘海机上整条栏被顶高 34pt（顶边距屏底 122.5pt，而原生栏只有 84pt），
+ * 看起来就是「位置太高」。现在的 32px（16pt）比稿的 22pt 更低，是按 Owner 反馈压下来的，
+ * 底栏下沿仍在 home indicator（8~13px）之上。
+ *
+ * 注意：底栏下沿落在系统手势区内（<34pt）是**稿子本来的选择**，不是这里算错。
+ *
+ * **令牌必须在组件内自己声明**：本组件由框架挂在 `<page>` 之外，`page` 上的自定义属性
+ * 继承不到这里（实测：凸起钮的 `var(--grad-brand)` 失效 → 按钮透明，`var(--r-pill)`
+ * 失效 → 没有圆角）。所以在自己的根节点上 `@include vars`，值仍只有一处真源。
  */
 .tabbar {
+  @include vars;
+
   position: fixed;
   left: 32px;
   right: 32px;
-  /* 设计稿 bottom:22pt → 44px */
-  bottom: calc(44px + constant(safe-area-inset-bottom));
-  bottom: calc(44px + env(safe-area-inset-bottom));
+  /* 距底 16pt（稿是 22pt，按 Owner 反馈再往下）。整条栏顶边距屏底 = 32 + 101(自身高)
+     = 133rpx，各 Tab 页的 padding-bottom 按这个值让位（见 DESIGN.md 第 9 节） */
+  bottom: 32px;
   z-index: 100;
   display: flex;
   align-items: center;
-  /* 设计稿 padding:5px 8px 7px → 10px 16px 14px */
-  padding: 10px 16px 14px;
+  /* 稿 padding:5px 8px 7px → 10px 16px 14px；上下各收紧 2/4px 压高度 */
+  padding: 8px 16px 10px;
 
   /*
    * 玻璃配方照设计稿，**不复用 `@include glass`**：共享 mixin 是 72% 白，
@@ -72,8 +91,8 @@
 
 .tabbar__icon {
   position: relative;
-  /* 设计稿 `.tbi{height:42px}` → 84px */
-  height: 84px;
+  /* 稿 `.tbi{height:42px}` → 84px；按 Owner 反馈收紧到 28pt（图标本身 24pt） */
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -100,8 +119,9 @@
 
 /* 中间的凸起发布钮 */
 .tabbar__pub {
-  width: 68px;
-  height: 68px;
+  /* 稿 `.pub{34px}` → 68px；按 Owner 反馈收紧到 28pt */
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   background: var(--grad-brand);
   display: flex;

@@ -3,7 +3,7 @@
 /**
  * 商品详情。尺寸 = 设计稿 pt × 2（见 apps/miniapp/DESIGN.md）。
  *
- * 结构：漂浮导航 → 图集 → 价格区 → 描述 → 卖家 → 留言 → 同校相似闲置 → 底部操作栏。
+ * 结构：吸顶导航 → 图集 → 价格区 → 描述（+标签）→ 卖家 → 留言 → 同类推荐 → 底部操作栏。
  * 设计稿的白卡是「连续一张」：区块之间只靠 padding 分隔，只有留言区底部收圆角 + 投影。
  */
 .detail {
@@ -12,22 +12,67 @@
   flex-direction: column;
   min-height: 100vh;
   background: var(--bg);
+  /* 稿子 `.content{padding-bottom:112px}` = 224rpx：整页给固定操作栏留白，
+     不留的话骨架屏 / 错误态 / 空态的最后一块会被操作栏盖住（相似推荐曾自己补过一份） */
+  padding-bottom: 224px;
 }
 
-/* 漂浮导航右侧的两个玻璃钮（返回钮由 components/nav-bar 提供） */
-.detail__glassbtn {
-  width: 72px;
-  height: 72px;
+/* ------------------------------------------------------------ 吸顶导航 */
+
+/**
+ * 只有返回钮是实体，整条栏的底色分两态：
+ * - 默认透明：页面在顶部时返回钮浮在商品图上（与稿子一致）；
+ * - `.is-solid`：滑过图集后长出磨砂底 + 底部描边（同 `topbar--glass` 那套值）。
+ *
+ * `pointer-events: none` 是必须的（稿子 `.mp-nav` 与 `components/nav-bar` 都这么做）：
+ * 栏是整屏宽、盖在图集上，不吃掉这层就会挡住轮播的拖动与点击，只剩返回钮能点。
+ *
+ * `padding-top` 由组件内联下发（`statusBarHeight`，设备 px，不参与 rpx 缩放），
+ * 行高 88rpx 写在下面 —— 稿子 `.mp-nav` 就是 88rpx，即原生导航栏的 44pt。
+ */
+.detail__nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 20;
+  background-color: transparent;
+  border-bottom: 2px solid transparent;
+  pointer-events: none;
+  transition: background-color 0.22s ease, border-color 0.22s ease;
+
+  &.is-solid {
+    background-color: rgba(238, 246, 255, 0.82);
+    backdrop-filter: blur(36px) saturate(180%);
+    -webkit-backdrop-filter: blur(36px) saturate(180%);
+    border-bottom-color: var(--accent-faint);
+  }
+}
+
+.detail__navrow {
+  display: flex;
+  align-items: center;
+  /* 稿子 `.mp-nav{height:calc(88 * var(--rpx));padding-inline:calc(20 * var(--rpx))}` */
+  height: 88px;
+  padding: 0 20px;
+}
+
+/* 返回钮：稿子 `.glass` = 64rpx 圆形，白玻璃底 + 白描边 + 极轻投影 */
+.detail__back {
+  width: 64px;
+  height: 64px;
   flex: 0 0 auto;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.82);
-  border: 2px solid rgba(255, 255, 255, 0.6);
+  border-radius: 50%;
+  background: var(--glass-strong);
+  border: 2px solid rgba(255, 255, 255, 0.7);
   box-shadow: 0 4px 16px -8px rgba(65, 70, 78, 0.4);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
+  /* 栏整体穿透，只有这个钮接事件（与 `components/nav-bar` 的 `.navfloat__btn` 同做法） */
+  pointer-events: auto;
 
   &:active {
     transform: scale(0.94);
@@ -35,15 +80,29 @@
   }
 }
 
-.detail__glassbtn-img {
-  width: 38px;
-  height: 38px;
+/* 箭头用两条边框拼（与 `components/nav-bar` 同一形态），随钮一起缩到 20rpx */
+.detail__chevron {
+  width: 20px;
+  height: 20px;
+  border-left: 4px solid var(--fg);
+  border-bottom: 4px solid var(--fg);
+  border-radius: 2px;
+  transform: translateX(3px) rotate(45deg);
 }
 
-/* 白色内容区（区块自带 padding，彼此之间不留缝） */
+/*
+ * 白色内容区（区块自带 padding，彼此之间不留缝）。
+ *
+ * 底部圆角 + 投影挂**在这一层**，不挂到 `.detail__comments` 上：白卡到留言区就结束
+ * （「同类推荐」是它的兄弟节点，见 index.tsx）。挂在子节点上会有两个后果，都实测过：
+ * 这层的白底会把圆角切掉的两个角填白（圆角看不出来），后面的兄弟节点也会把投影盖掉。
+ * 稿子 `.blk[data-od-id="comments"]` 的 `border-radius:0 0 20px 20px` 与
+ * `box-shadow:0 20px 38px -22px rgba(66,133,255,.45)` 就是白卡的最后一块，等价于这层。
+ */
 .detail__sections {
   background: var(--surface);
-  padding-bottom: 40px;
+  border-radius: 0 0 40px 40px;
+  box-shadow: 0 40px 76px -44px rgba(66, 133, 255, 0.45);
 }
 
 /* ------------------------------------------------------------ 图集 378pt */
@@ -116,35 +175,28 @@
 
 /* ------------------------------------------------------------ 区块通用 */
 
+/* 稿子 `.blk{padding:12px 20px}` = 24rpx 40rpx；卖家区 `.blk[seller]{padding:16px 20px}` = 32rpx 40rpx */
 .detail__meta,
-.detail__desc,
-.detail__seller-section,
-.detail__comments {
-  padding: 36px 40px;
+.detail__desc {
+  padding: 24px 40px;
 }
 
-.detail__meta {
-  padding-bottom: 72px;
-}
-
-.detail__desc,
 .detail__seller-section {
-  padding-top: 72px;
-  padding-bottom: 72px;
+  padding: 32px 40px;
 }
 
-/* 留言卡底部满圆角 + 投影，把白卡收在留言区之后 */
+/*
+ * 留言区：顶部留 0（输入条自带内边距与顶部分隔线，稿子 `.blk[comments]{padding-top:0}`）。
+ * 底部圆角与投影不在这里 —— 白卡的收口由 `.detail__sections` 负责，见上面的说明。
+ */
 .detail__comments {
-  padding-top: 72px;
-  padding-bottom: 36px;
-  border-radius: 0 0 40px 40px;
-  box-shadow: 0 40px 76px -44px rgba(66, 133, 255, 0.45);
+  padding: 0 40px 24px;
 }
 
 /* ------------------------------------------------------------ 价格区 */
 
-/* 设计稿这一行是「价格 + 原价 + 成色」挤在一行；
-   真机上系统字比设计稿字体宽，写 nowrap 会把「九成新」顶出屏幕 —— 允许换行兜底 */
+/* 设计稿这一行是「价格 + 原价」；真机上系统字比设计稿字体宽，写 nowrap 会把「原价」顶出屏幕
+   —— 允许换行兜底 */
 .detail__priceline {
   display: flex;
   align-items: flex-end;
@@ -179,21 +231,6 @@
   color: var(--muted-2);
   text-decoration: line-through;
   margin-bottom: 6px;
-  white-space: nowrap;
-}
-
-.detail__cond {
-  margin-left: auto;
-  margin-bottom: 6px;
-  height: 48px;
-  display: flex;
-  align-items: center;
-  padding: 0 20px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  color: var(--cond-fg);
-  font-size: 24px;
-  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -264,6 +301,28 @@
   }
 }
 
+/* 描述标签：稿子 `.desc-tags` / `.desc-tag` */
+.detail__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.detail__tag {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--cond-fg);
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
 /* ------------------------------------------------------------ 卖家卡 */
 
 .detail__seller {
@@ -313,18 +372,6 @@
   flex: 0 0 auto;
 }
 
-.detail__sloc {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 23px;
-  font-weight: 400;
-  letter-spacing: 0;
-  color: var(--muted-2);
-  white-space: nowrap;
-  flex: 0 1 auto;
-  min-width: 0;
-  @include ellipsis;
-}
-
 .detail__ssub {
   display: flex;
   align-items: center;
@@ -339,21 +386,23 @@
   text-overflow: ellipsis;
 }
 
+/* 稿子 `.seller .go`：min-height 72rpx、padding 0 24rpx、字号 25rpx，右侧带 24rpx 箭头 */
 .detail__go {
   margin-left: auto;
   min-height: 72px;
-  padding: 0 12px;
+  padding: 0 24px;
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
   color: var(--fg);
-  font-size: 21px;
+  font-size: 25px;
   font-weight: 500;
   letter-spacing: 0;
   white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   /* 排版预算：147.5pt 的行宽要装下 头像 34 + 昵称/校区 ~44 + 本钮 ~41 */
   flex: 0 1 auto;
   min-width: 0;
@@ -366,35 +415,100 @@
 }
 
 .detail__go-img {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
 }
 
 /* ------------------------------------------------------------ 留言 */
+
+/* 输入条：负 margin 抵掉区块左右 40rpx 铺满整宽，顶部一条分隔线把卖家区与留言区分开 */
+.detail__cmt-bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 -40px;
+  padding: 24px 40px 28px;
+  border-top: 2px solid var(--border);
+}
+
+.detail__cmt-me {
+  width: 60px;
+  height: 60px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--grad-brand);
+}
+
+.detail__cmt-me-text {
+  color: #fff;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.detail__cmt-in {
+  flex: 1;
+  /* 小程序 Input 有 UA 默认宽度，必须 width:0 + min-width:0 才能被 flex 正确压缩，
+     否则占位符会把胶囊撑爆、整行换行（与 search 页同一处坑） */
+  width: 0;
+  min-width: 0;
+  height: 76px;
+  padding: 0 28px;
+  border: 2px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 27px;
+}
+
+.detail__cmt-ph {
+  color: var(--muted);
+}
+
+.detail__cmt-send {
+  flex: 0 0 auto;
+  height: 76px;
+  padding: 0 32px;
+  border-radius: var(--r-pill);
+  background: var(--grad-brand);
+  color: #fff;
+  font-size: 27px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:active {
+    transform: scale(0.96);
+  }
+}
 
 .detail__cmts {
   display: flex;
   flex-direction: column;
 }
 
+/*
+ * 留言之间**没有分隔线**（稿子口径）：只靠 padding 分开。
+ * 首末两条各收 3pt，免得区块上下沿留出双份留白。
+ * 用子选择器限定在顶层列表 —— 嵌套回复有自己的 padding，不该被这条改掉。
+ */
+.detail__cmts > .detail__cmt:first-child {
+  padding-top: 6px;
+}
+
+.detail__cmts > .detail__cmt:last-child {
+  padding-bottom: 6px;
+}
+
 .detail__cmt {
   display: flex;
   gap: 20px;
   padding: 22px 0;
-  /* 留言之间：设计稿是品牌色 24% 与描边混合出的分割线 */
-  & + & {
-    border-top: 2px solid var(--divide);
-    padding-top: 28px;
-  }
-
-  &:first-child {
-    padding-top: 6px;
-  }
-
-  &:last-child {
-    padding-bottom: 6px;
-  }
 }
 
 .detail__cav {
@@ -467,6 +581,57 @@
   color: var(--body-soft);
 }
 
+/* 「回复」按钮：稿子 `.creply` */
+.detail__creply {
+  margin-top: 12px;
+  font-size: 23px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+/* 行内回复输入行：稿子 `.creply-row` */
+.detail__creply-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.detail__cmt-in--reply {
+  height: 68px;
+  font-size: 26px;
+}
+
+.detail__cmt-send--reply {
+  height: 68px;
+  padding: 0 26px;
+  font-size: 26px;
+}
+
+/* 嵌套回复：稿子 `.cmt.reply`（左缩进 36rpx、头像 52rpx、上下 16rpx） */
+.detail__replies {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail__cmt--reply {
+  margin-left: 36px;
+  padding: 16px 0;
+}
+
+.detail__cav--reply {
+  width: 52px;
+  height: 52px;
+}
+
+.detail__cav--reply .detail__cav-text {
+  font-size: 22px;
+}
+
 .detail__cmt-empty {
   display: block;
   padding: 12px 0;
@@ -499,12 +664,15 @@
   }
 }
 
-/* ------------------------------------------------------------ 同校相似闲置 */
+/* ------------------------------------------------------------ 同类推荐 */
 
+/*
+ * 稿子 `.similar{padding:20px 20px 4px}`；底部留白由 .detail 统一给（见文件头）。
+ * 它在白卡**之外**，所以不写底色（用 `.detail` 的 `--bg`）—— 写了不透明底色会把白卡的
+ * 投影盖掉，那正是之前看不见投影的原因。
+ */
 .detail__similar {
-  /* 底部留出固定操作栏的高度（含它自身的内外边距），否则最后一张卡会被盖住 */
-  padding: 40px 40px 220px;
-  background: var(--bg);
+  padding: 40px 40px 8px;
 }
 
 .detail__seclabel {
@@ -539,25 +707,17 @@
   gap: 24px;
 }
 
-/* 相似卡沿用搜索卡：去掉详情页不需要的成色胶囊，标题按设计稿压到 22pt */
-.detail__similar .pcard__cond-pill {
-  display: none;
-}
-
-.detail__similar .pcard__title {
-  font-size: 26px;
-  line-height: 1.4;
-  min-height: 72px;
-}
-
 /* ------------------------------------------------------------ 底部操作栏 */
 
+/* 稿子 `.bottombar{bottom:24px}` = 48rpx，从屏幕物理底边量起。
+   不再叠 `env(safe-area-inset-bottom)`：稿子已经把 home indicator 让在下面了，
+   再加一次安全区就是把同一段距离算两遍（与底栏那个坑同源）。 */
 .detail__bar {
   position: fixed;
   z-index: 100;
   left: 24px;
   right: 24px;
-  bottom: calc(8px + env(safe-area-inset-bottom));
+  bottom: 48px;
   display: flex;
   align-items: center;
   gap: 20px;
@@ -613,6 +773,13 @@
   }
 }
 
+/* 稿子 `.btn svg{width:19px;height:19px}` = 38rpx */
+.detail__btn-img {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+}
+
 .detail__btn--ghost {
   flex: 1;
   background: var(--surface);
@@ -665,7 +832,7 @@
 
 /* ------------------------------------------------------------ 空态 */
 
-/* 商品不存在 / 已下架：让 EmptyState 避开漂浮导航条（同 conv__emptypad 的做法） */
+/* 商品不存在 / 已下架：让 EmptyState 避开吸顶导航条（同 conv__emptypad 的做法） */
 .detail__emptypad {
   padding-top: 148px;
 }

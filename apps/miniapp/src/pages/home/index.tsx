@@ -1,6 +1,6 @@
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useLoad, usePullDownRefresh } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import Taro, { useLoad, usePageScroll, usePullDownRefresh, useReady } from '@tarojs/taro'
+import { useMemo, useRef, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
@@ -83,11 +83,49 @@ export default function Home() {
   }
 
   /**
-   * 分类横滑条的吸顶位置：要落在固定顶栏**下方**，否则会被顶栏盖住。
-   * 顶栏高度是运行时读微信胶囊算出来的（见 `@/lib/nav-metrics`），
-   * 所以这里也用同一个来源，而不是写一个 `top: 0` 或猜一个数字。
+   * 顶栏高度：运行时读微信胶囊算出来的（见 `@/lib/nav-metrics`）。
+   * 下面那条固定分类导航要落在它**下方**，所以用同一个来源，而不是写死一个数字。
    */
   const navHeight = useMemo(() => readNavMetrics().totalHeight, [])
+
+  /**
+   * 纯文字分类导航（`home__catnav`）的显隐。
+   *
+   * 图标条**不吸顶**，随内容滚走；滚到它完全离开顶栏下沿之后，才在顶栏下方固定出这条
+   * 文字导航。设计稿是「同一个元素吸顶后把图标高度收成 0」，但元素高度突变会把下面的
+   * 瀑布流整体拽上去一截 —— 所以这里拆成两条：图标条正常滚走，文字条固定在流外。
+   */
+  const [catsPinned, setCatsPinned] = useState(false)
+  const scrollTopRef = useRef(0)
+  /** 图标条下沿越过顶栏下沿时的滚动位置；挂载后量一次 */
+  const pinAt = useRef(Number.POSITIVE_INFINITY)
+
+  useReady(() => {
+    Taro.createSelectorQuery()
+      .select('.home__cats-wrap')
+      .boundingClientRect()
+      .exec((res) => {
+        const rect = res?.[0] as { top?: number; height?: number } | undefined
+        // `boundingClientRect` 给的是视口坐标，加上当时的滚动量才是它在页面里的位置
+        const measured =
+          typeof rect?.top === 'number' && typeof rect?.height === 'number'
+            ? rect.top + scrollTopRef.current + rect.height - navHeight
+            : Number.NaN
+        /**
+         * 量不到（节点还没上屏）时的兜底。**单位是设备 px** —— 它要和 `usePageScroll`
+         * 给的 `scrollTop` 比，别照设计稿的 rpx 写：rpx 在 750 宽的 H5 预览里 ≈ 1px，
+         * 在 390pt 真机上 ≈ 0.52px。约 95px 是本机（图标条 ≈ 93px 高、距顶栏 4px）的实测位置。
+         */
+        pinAt.current = Number.isFinite(measured) ? Math.max(0, measured) : 95
+      })
+  })
+
+  usePageScroll(({ scrollTop }) => {
+    scrollTopRef.current = scrollTop
+    const next = scrollTop >= pinAt.current
+    // 滚动事件很密：值没变就把同一个值还回去，React 会跳过这轮渲染
+    setCatsPinned((prev) => (prev === next ? prev : next))
+  })
 
   return (
     <View className="home">
@@ -98,7 +136,7 @@ export default function Home() {
         （= 胶囊上留白 4 × 2 + 胶囊高 32），行高由组件按真机胶囊反推，不写死。
       */}
       <TopBar
-        variant="plain"
+        variant="glass"
         spacer
         left={
           <View className="home__logo-wrap">
@@ -114,7 +152,7 @@ export default function Home() {
         }
       />
 
-      <View className="home__cats-wrap" style={{ top: `${navHeight}px` }}>
+      <View className="home__cats-wrap">
         <ScrollView className="home__cats" scrollX enableFlex>
           <View className="home__cats-inner">
             {HOME_CATEGORIES.map((item) => (
@@ -137,6 +175,26 @@ export default function Home() {
           </View>
         </ScrollView>
       </View>
+
+      {/* 图标条滚出顶栏下沿之后，接管分类导航：纯文字 + 当前项下横杠 */}
+      {catsPinned ? (
+        <View className="home__catnav" style={{ top: `${navHeight}px` }}>
+          <ScrollView className="home__catnav-scroll" scrollX enableFlex>
+            <View className="home__catnav-inner">
+              {HOME_CATEGORIES.map((item) => (
+                <View
+                  key={item.key}
+                  // 同图标条：「推荐」恒为当前项，其余分类点了跳分类页
+                  className={`home__catnav-item${item.key === 'ALL' ? ' is-on' : ''}`}
+                  onClick={() => onCategoryTap(item.key)}
+                >
+                  <Text className="home__catnav-label">{item.label}</Text>
+                </View>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      ) : null}
 
       <View className="home__grid">
         {failed ? (

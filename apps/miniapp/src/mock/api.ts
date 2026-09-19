@@ -40,7 +40,14 @@ import {
   SUB_CATEGORIES,
   similarListings,
 } from './catalog'
-import { CHAT_SUMMARY, CONVERSATIONS, conversationsOf, mediaMessagesOf, messagesOf } from './chat'
+import {
+  CHAT_SUMMARY,
+  CONVERSATIONS,
+  conversationsOf,
+  FAILED_TEXT_IDS,
+  mediaMessagesOf,
+  messagesOf,
+} from './chat'
 import {
   COMMENTS,
   commentsOf,
@@ -260,12 +267,18 @@ export async function fetchCategoryListings(
   return result.items
 }
 
+/**
+ * 详情页视图。
+ *
+ * **没有 `commentTotal`**：它曾是 `comments.length` 的副本（mock 与真实数据都这么填），
+ * 页面改用本地留言树的长度后就没有消费方了。留一个「总数」字段只会让人以为
+ * 列表是分页的 —— 真要分页时再按契约补。
+ */
 export type ListingDetailView = {
   listing: MockListing
   seller: MockUser
   comments: MockComment[]
   similar: MockListing[]
-  commentTotal: number
 }
 
 export async function fetchListingDetail(id: string): Promise<ListingDetailView | null> {
@@ -277,7 +290,6 @@ export async function fetchListingDetail(id: string): Promise<ListingDetailView 
     seller: getUser(listing.sellerId),
     comments,
     similar: similarListings(id, 4),
-    commentTotal: comments.length,
   })
 }
 
@@ -379,6 +391,11 @@ export function mediaMessages(conversationId: string): MockMediaMessage[] {
   return mediaMessagesOf(conversationId)
 }
 
+/** 1版稿：文本「发送失败」演示态的消息 id（契约外，见 `mock/chat.ts`） */
+export function failedTextIds(): string[] {
+  return FAILED_TEXT_IDS
+}
+
 export function chatSummary() {
   return CHAT_SUMMARY
 }
@@ -463,7 +480,7 @@ export function unreadNotificationCount(): number {
 
 export type ConversationFilter = 'all' | 'unread' | 'deal' | 'wish' | 'system'
 
-/** 消息页筛选：全部 / 未读 / 交易 / 许愿 / 系统 */
+/** 消息页筛选 Tab：全部 / 通知（= system）/ 交易 / 许愿；`unread` 仍留在类型里（UI 未提供） */
 export function filterConversations(
   items: MockConversation[],
   filter: ConversationFilter,

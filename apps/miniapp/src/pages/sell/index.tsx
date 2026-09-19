@@ -3,7 +3,7 @@ import Taro from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
-import NavBar from '@/components/nav-bar'
+import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { moderate, type PolishCandidate, polishCandidates } from '@/mock/api'
 import { productImage } from '@/mock/images'
@@ -180,7 +180,8 @@ export default function Sell() {
   return (
     <View className="sell">
       <View className="sell__hero-bg" />
-      <NavBar back={false} />
+      {/* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），返回钮是唯一出口 */}
+      <TopBar back variant="glass" spacer />
 
       <View className="sell__body">
         <View className="sell__head">

@@ -329,6 +329,37 @@ const Taro = {
   setNavigationBarTitle: noop,
   hideTabBar: noop,
   showTabBar: noop,
+  /**
+   * 节点查询。预览是 H5，用 `document.querySelector` + `getBoundingClientRect` 桩出
+   * 小程序那套链式 API —— 只实现页面在用的 `select(...).boundingClientRect().exec()`。
+   * 少一个方法，用到它的页面在预览里会直接抛 `TypeError`（不是白屏但整页废掉）。
+   */
+  createSelectorQuery: () => {
+    let selector = ''
+    let rect: { top: number; left: number; width: number; height: number } | null = null
+    const query = {
+      select: (sel: string) => {
+        selector = sel
+        return query
+      },
+      boundingClientRect: (cb?: (res: typeof rect) => void) => {
+        const el = selector ? document.querySelector(selector) : null
+        if (el) {
+          const box = el.getBoundingClientRect()
+          rect = { top: box.top, left: box.left, width: box.width, height: box.height }
+        } else {
+          rect = null
+        }
+        if (cb) cb(rect)
+        return query
+      },
+      exec: (cb?: (res: (typeof rect)[]) => void) => {
+        if (cb) cb([rect])
+        return query
+      },
+    }
+    return query
+  },
 }
 
 export default Taro
@@ -368,4 +399,20 @@ export function useUnload(callback: () => void) {
 
 export function useShareAppMessage() {
   return noop
+}
+
+/**
+ * 页面滚动。预览是 H5，页面滚动就是窗口滚动，所以直接监听 `window`；
+ * 回调签名与小程序一致（`{ scrollTop }`）。挂载时先主动报一次当前滚动位置，
+ * 免得「进来时页面已经滚过一段」的路径漏掉。
+ */
+export function usePageScroll(callback: (res: { scrollTop: number }) => void) {
+  const latest = useRef(callback)
+  latest.current = callback
+  useEffect(() => {
+    const onScroll = () => latest.current({ scrollTop: window.scrollY || 0 })
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 }

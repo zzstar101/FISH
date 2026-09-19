@@ -9,6 +9,8 @@ import { CURRENT_USER_ID, getUser } from './users'
  *
  * 交易类 SYSTEM 消息的 content 是 `transactions/schema.ts` 的 JSON 原文
  * （`tx.proposal` / `tx.accepted` / `tx.rejected`），前端按该协议解析后渲染成中文。
+ * `tx.completed` 是 1版稿的**契约外演示事件**（交易域没有「已完成」事件），
+ * 只有会话页认识它。
  *
  * **媒体消息（D2）**：契约的 `MessageType` 只有 `TEXT | SYSTEM`，媒体是本地展示扩展
  * （见 `types.ts` 的 `MockMediaMessage`）：spec 里带 `media` 的那几条会进 `MEDIA`，
@@ -37,6 +39,12 @@ type MessageSpec = {
     state?: MockMediaMessage['state']
     progress?: number
   }
+  /**
+   * 1版稿：文本「发送失败」演示态（契约外的本地乐观状态，同 media 的先例）。
+   * 带这个字段的消息照常进 MESSAGES，会话页按 `FAILED_TEXT_IDS` 渲染失败气泡，
+   * 重试后由页面本地清除（不写回 fixture）。
+   */
+  sendFail?: boolean
 }
 
 type ConversationSpec = {
@@ -63,7 +71,7 @@ const SPECS: ConversationSpec[] = [
     unreadCount: 2,
     kind: 'deal',
     timeLabel: '刚刚',
-    tag: '交易',
+    tag: '待确认',
     tagDone: false,
     online: true,
     lastMessageAt: isoAgo(2 * MIN),
@@ -169,7 +177,7 @@ const SPECS: ConversationSpec[] = [
     unreadCount: 0,
     kind: 'deal',
     timeLabel: '周三',
-    tag: '交易',
+    tag: '待回复',
     tagDone: false,
     online: false,
     lastMessageAt: isoAgo(3 * 24 * HOUR),
@@ -421,12 +429,12 @@ const SPECS: ConversationSpec[] = [
       { senderId: 'u-xuche', type: 'TEXT', content: '拍子很好用，谢谢学长', agoMs: 34 * 24 * HOUR },
     ],
   },
-  /* ---- D2 会话页的媒体消息会话 ----
-     为什么单独建一条：D2 稿子的对象是「苏亦然 + 罗技 MX Keys 键盘 + 我卖出的商品」，
-     而 fixture 里 MX Keys（l-044）此前没有任何会话。媒体消息要能连同「对方已认证、
-     商品在售、交易已接受」的上下文一起复现，所以按稿子建这一条，而不是把媒体
-     硬塞进别的会话里（那会让原本已验收的会话串味）。
-     末几条故意留着 UPLOADING / FAILED：稿子第 03 帧画的正是这两种状态。 */
+  /* ---- 1版稿会话页的演示会话（原 D2 媒体消息会话，按 1版稿时间线重排）----
+     为什么单独建一条：1版稿的对象仍是「苏亦然 + 罗技 MX Keys 键盘」，且把四种
+     状态帧合并进一屏——交易从「待对方同意」走到「已接受 · 待面交」再到
+     「已完成 + 评价卡」，中段留着 上传中 / 上传失败 / 发送失败 三个演示态。
+     `tx.completed` 与 `sendFail` 都是**契约外的本地演示扩展**（同 media 的先例）：
+     交易域没有「已完成」事件，文本发送失败也是本地乐观状态的投影。 */
   {
     id: 'c-013',
     listingId: 'l-044',
@@ -434,11 +442,17 @@ const SPECS: ConversationSpec[] = [
     unreadCount: 0,
     kind: 'deal',
     timeLabel: '今天',
-    tag: '交易',
+    tag: '待面交',
     tagDone: false,
     online: true,
-    lastMessageAt: isoAgo(2 * HOUR),
+    lastMessageAt: isoAgo(2.7 * HOUR),
     messages: [
+      {
+        senderId: 'u-alan',
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.proposal', amountCents: 32000 }),
+        agoMs: 4.05 * HOUR,
+      },
       {
         senderId: 'u-suyiran',
         type: 'TEXT',
@@ -449,28 +463,22 @@ const SPECS: ConversationSpec[] = [
       {
         senderId: 'u-suyiran',
         type: 'TEXT',
-        content: JSON.stringify({ type: 'tx.accepted', amountCents: 32000 }),
-        agoMs: 3.8 * HOUR,
-      },
-      {
-        senderId: 'u-suyiran',
-        type: 'TEXT',
         content: '',
-        agoMs: 3.6 * HOUR,
+        agoMs: 3.8 * HOUR,
         media: { kind: 'IMAGE', imageSlug: 'digital-mxkeys' },
       },
       {
         senderId: 'u-alan',
         type: 'TEXT',
         content: '',
-        agoMs: 3.5 * HOUR,
+        agoMs: 3.7 * HOUR,
         media: { kind: 'VOICE', durationSec: 7 },
       },
       {
         senderId: 'u-suyiran',
         type: 'TEXT',
         content: '',
-        agoMs: 3.4 * HOUR,
+        agoMs: 3.6 * HOUR,
         media: { kind: 'VOICE', durationSec: 12 },
       },
       {
@@ -478,40 +486,37 @@ const SPECS: ConversationSpec[] = [
         type: 'TEXT',
         content: '',
         agoMs: 3.3 * HOUR,
-        media: { kind: 'IMAGE', imageSlug: 'digital-mxkeys' },
-      },
-      {
-        senderId: 'u-suyiran',
-        type: 'TEXT',
-        content: '收到，今晚 7 点在图书馆一楼大厅可以吗？我带充电线和包装盒。',
-        agoMs: 3.2 * HOUR,
-      },
-      {
-        senderId: 'u-alan',
-        type: 'TEXT',
-        content: '',
-        agoMs: 3 * HOUR,
         media: { kind: 'IMAGE', imageSlug: 'digital-mxkeys', state: 'UPLOADING', progress: 62 },
       },
       {
         senderId: 'u-alan',
         type: 'TEXT',
         content: '',
-        agoMs: 2.4 * HOUR,
+        agoMs: 3 * HOUR,
         media: { kind: 'IMAGE', imageSlug: 'digital-mxkeys', state: 'FAILED' },
       },
       {
         senderId: 'u-alan',
         type: 'TEXT',
         content: '那我把打包盒也一起带过去，省得你找箱子。',
-        agoMs: 2.2 * HOUR,
+        agoMs: 2.9 * HOUR,
+        sendFail: true,
       },
       {
         senderId: 'u-suyiran',
-        type: 'TEXT',
-        content: '',
-        agoMs: 2 * HOUR,
-        media: { kind: 'VOICE', durationSec: 3 },
+        type: 'SYSTEM',
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: 't-105',
+          amountCents: 32000,
+        }),
+        agoMs: 2.8 * HOUR,
+      },
+      {
+        senderId: null,
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.completed' }),
+        agoMs: 2.7 * HOUR,
       },
     ],
   },
@@ -620,6 +625,16 @@ export function messagesOf(conversationId: string): MockMessage[] {
     (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
   )
 }
+
+/**
+ * 1版稿：处于「发送失败」态的文本消息 id（fixture 里 `sendFail: true` 的那几条）。
+ * 会话页据此渲染失败气泡与重试条；重试成功后在页面本地把它移出，不写回 fixture。
+ */
+export const FAILED_TEXT_IDS: string[] = SPECS.flatMap((spec) =>
+  spec.messages.flatMap((message, index) =>
+    message.sendFail && !message.media ? [`${spec.id}-m${String(index + 1).padStart(2, '0')}`] : [],
+  ),
+)
 
 export function mediaMessagesOf(conversationId: string): MockMediaMessage[] {
   return MEDIA.filter((item) => item.conversationId === conversationId).sort(

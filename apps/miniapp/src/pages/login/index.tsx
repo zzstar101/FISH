@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
 import { ICONS } from '@/assets/lib-icons'
+import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { signIn, useAuth } from '@/features/auth/store'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -58,6 +59,9 @@ export default function Login() {
    * 会触发这条 effect，把刚 `redirectTo` 出来的注册成功页顶掉（实测：落到首页）。
    */
   useEffect(() => {
+    // 演示构建（`TARO_APP_MOCK=1`）里不弹走：那套构建的目的就是每一页都能直接打开，
+    // 而演示账号初值即已登录，弹走等于登录页永远看不到（见 `features/auth/demo.ts`）
+    if (DEMO_AUTH_ENABLED) return
     if (status !== 'authed') return
     const pages = Taro.getCurrentPages()
     const top = (pages[pages.length - 1] as { route?: string } | undefined)?.route ?? ''

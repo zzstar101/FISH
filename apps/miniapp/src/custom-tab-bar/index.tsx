@@ -100,6 +100,17 @@ function currentTabKey(): TabKey {
   return hit?.key ?? 'home'
 }
 
+/**
+ * 唯一不渲染底栏的 Tab 页：设计稿该页（`小程序第1版。发布闲置publish-listing.html`）
+ * **根本没有画底栏**（全文 grep `tabbar` 零命中）—— 发布表单要占满屏高，
+ * 底栏浮在上面会压住提交区。
+ *
+ * `TAB_ITEMS` 里**保留** sell 项：`tabBar.list` 与 `switchTab` 仍需要它作为合法路由，
+ * 隐藏只发生在本组件的渲染层。代价是该页只剩左上返回钮一个出口，
+ * 所以 `pages/sell/index.tsx` 必须显示返回钮。
+ */
+const HIDDEN_ROUTE = 'pages/sell/index'
+
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
   const [dot, setDot] = useState(false)
@@ -127,6 +138,9 @@ export default function CustomTabBar() {
     setActive(item.key)
     void Taro.switchTab({ url: item.path }).catch(() => undefined)
   }
+
+  // 早退必须写在所有 hook 之后：hook 数量不能随路由变化
+  if (currentRoute().includes(HIDDEN_ROUTE)) return null
 
   return (
     <View className="tabbar">

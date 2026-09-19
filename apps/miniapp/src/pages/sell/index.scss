@@ -18,7 +18,8 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 176px;
+  /* 本页不渲染底栏（见 custom-tab-bar 的 HIDDEN_ROUTE），底部只需让出安全区 */
+  padding-bottom: calc(48px + env(safe-area-inset-bottom));
 }
 
 .sell__hero-bg {
@@ -28,7 +29,9 @@
 .sell__body {
   position: relative;
   z-index: 1;
-  padding: 152px 32px 0;
+  /* 顶部避让交给 `TopBar` 的 spacer（它按运行时读到的状态栏 + 胶囊高度顶出等高留白），
+     这里只留设计稿 `.body` 那 14pt 间距 */
+  padding: 28px 32px 0;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -618,15 +621,15 @@
 }
 
 /**
- * 「出物」是 Tab 页，底部有**悬浮的**自定义 TabBar（高约 88pt，即 176rpx）。
- * 稿子把候选卡画在 bottom: 12pt 处，但真机上那个位置会被 TabBar 盖住按钮，
- * 所以这里把卡片抬到 TabBar 之上（176rpx 留白 + 20rpx 间距）。
+ * 本页**不渲染底栏**（见 `custom-tab-bar/index.tsx` 的 `HIDDEN_ROUTE`），所以候选卡
+ * 直接贴底、只让出安全区即可。原先写成 `calc(176px + 20px)` 是为了把卡片抬到底栏之上，
+ * 那个底栏在本页已经不存在了 —— 留着会让卡片悬在屏幕下半部、下方一片空。
  */
 .sell__sheet {
   position: fixed;
   left: 24px;
   right: 24px;
-  bottom: calc(176px + 20px);
+  bottom: calc(20px + env(safe-area-inset-bottom));
   z-index: 60;
   padding: 30px 28px 28px;
   border-radius: 48px;
