@@ -15,18 +15,19 @@
  * 2. **右上角不画东西**：稿子在那里画了一个假胶囊，真机上那个位置由微信原生胶囊占用，
  *    画了会被盖住 —— 所以分享 / 更多两个钮直接去掉。
  */
+
+import type { CommentDto } from '@fish/contracts/comments/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
-
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import { loadListingDetail } from '@/features/fetchers'
-import { postComment, postReply } from '@/features/listing/comments'
+import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { readNavMetrics } from '@/lib/nav-metrics'
-import { isUnauthenticatedError } from '@/lib/request'
+import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
   categoryLabel,
   conditionLabel,
@@ -62,10 +63,8 @@ const RATIO_HEIGHT: Record<MockListing['ratio'], number> = {
 /**
  * 页面本地的留言节点。
  *
- * 为什么在页面里建树、而不是给 `MockComment` 加 `replies`：契约**没有 comments 域**
- * （后端接口不存在，见 `features/listing/comments.ts` 文件头），留言区是纯展示 mock，
- * 层级只服务于本页交互。等后端落地直接消费 `CommentDto.replies`，不必先让 mock 类型
- * 长出一个假层级。
+ * 真实数据下直接消费契约的 `CommentDto.replies`（#111 后不再需要 mock 层级）；
+ * `timeLabel` 由契约的 `createdAt` 现算，与 `features/fetchers.ts` 的相对时间同口径。
  */
 type CommentNode = {
   id: string
@@ -85,18 +84,10 @@ type CommentNode = {
 let localSeq = 0
 
 /**
- * 留言/回复的**写**开关（编译期注入，见 `config/index.ts` 的 `__DEMO_COMMENTS__`）。
- *
- * 后端 comments 域（#111）落地前，生产构建里乐观插入会制造「假成功」：
- * 用户看到「我 · 刚刚」，刷新后条目消失。所以生产**禁写**——点了发送只提示
- * 暂未开放，不插本地条目；只有 `TARO_APP_MOCK=1` 的演示构建保留
- * 「乐观插入 + 失败留本地」的演示（`reportLocalOnly` 那套口径只在演示里有意义）。
+/**
+ * 「我」刚发的那一条：先乐观插入本页 state，服务端确认后由 `sendComment` / `sendReply`
+ * 换成真实 DTO（拿到真实 id，才能对它回复）；**明确失败时回滚**并给用户可见反馈。
  */
-declare const __DEMO_COMMENTS__: boolean | undefined
-
-const DEMO_COMMENTS_ENABLED = __DEMO_COMMENTS__ === true
-
-/** 「我」刚发的那一条：**只进本页 state，没有落库**（后端接口不存在，见 comments.ts） */
 function localComment(content: string): CommentNode {
   localSeq += 1
   return {
@@ -110,8 +101,32 @@ function localComment(content: string): CommentNode {
   }
 }
 
-/** mock 的扁平留言 → 页面节点（`replies` 先空着，由本页交互往里插） */
-function toCommentNode(comment: MockComment): CommentNode {
+/** 相对时间文案（与 `features/fetchers.ts` 的 relativeLabel 同口径） */
+function relativeTime(iso: string, now: number = Date.now()): string {
+  const at = Date.parse(iso)
+  if (!Number.isFinite(at)) return ''
+  const hours = Math.max(0, (now - at) / 3600000)
+  if (hours < 1) return `${Math.max(1, Math.floor(hours * 60))} 分钟前`
+  if (hours < 24) return `${Math.floor(hours)} 小时前`
+  return `${Math.floor(hours / 24)} 天前`
+}
+
+/** 契约 `CommentDto` → 页面节点（含一层回复）。 */
+function dtoToNode(comment: CommentDto): CommentNode {
+  return {
+    id: comment.id,
+    authorName: comment.author.nickname,
+    // 头像契约里可为 null；昵称首字兜底，与 mock 的 authorInitial 同语义
+    authorInitial: comment.author.nickname.trim().charAt(0) || '鱼',
+    isSeller: comment.isSeller,
+    content: comment.content,
+    timeLabel: relativeTime(comment.createdAt),
+    replies: comment.replies.map(dtoToNode),
+  }
+}
+
+/** 开发 / 预览回退用的 mock 留言 → 页面节点。 */
+function mockCommentToNode(comment: MockComment): CommentNode {
   return {
     id: comment.id,
     authorName: comment.authorName,
@@ -124,30 +139,67 @@ function toCommentNode(comment: MockComment): CommentNode {
 }
 
 /**
- * 本地乐观写失败的上报口径。
+ * 加载留言列表。
  *
- * 后端还没有这个接口（缺口见 Issue #111），所以「请求根本没发出去」属于**预期**情况，
- * 降为 debug；其余（后端真的回了 4xx/5xx、或响应解析失败）说明前端与契约已经漂移，
- * 用 warn 留痕，不该被静默吞掉。
+ * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（开发 / 预览）或空列表
+ * （生产），商品详情本身照常渲染。返回是否拿到了真实数据由调用方判断。
+ */
+async function loadComments(id: string, mockFallback: MockComment[]): Promise<CommentNode[]> {
+  try {
+    const page = await fetchComments(id)
+    return page.items.map(dtoToNode)
+  } catch (error) {
+    logCommentFailure('留言列表', error)
+    // 开发 / 预览口径下 `loadListingDetail` 已经回退 fixture，这里跟着用同一批 mock 留言；
+    // 生产口径拿不到就是空列表（不编数据）。
+    return mockFallback.map(mockCommentToNode)
+  }
+}
+
+/**
+ * 留言读写失败的上报口径（只负责留痕，不管界面）。
+ *
+ * 网络不可用 / 未登录属于**预期**情况（是「当前没连上 / 没登录」，不是缺陷），降为 debug；
+ * 其余（后端回了 4xx/5xx、或响应解析失败）说明前端与契约已经漂移，用 warn 留痕。
  *
  * 判据必须看 `errMsg`：`Taro.request` 失败时 reject 的不是 `Error`（是
  * `{ errMsg: 'request:fail …' }`），只判 `instanceof Error` 会把网络失败误当成契约漂移。
  *
- * 为什么没有直接复用 `features/fetchers.ts` 的 `reportFailure`：它按
- * `MOCK_FALLBACK_ENABLED` 拼「已回退 mock」，而留言的写路径**任何情况下都不退 mock**，
- * 套过来会说一句假话。
+ * 为什么不直接复用 `features/fetchers.ts` 的 `reportFailure`：它按 `MOCK_FALLBACK_ENABLED`
+ * 拼「已回退 mock / 未回退 mock」，而留言读写与那个开关无关，套过来会说一句假话。
  */
-function reportLocalOnly(what: string, error: unknown): void {
+function logCommentFailure(what: string, error: unknown): void {
   const errMsg =
     error instanceof Error
       ? error.message
       : String((error as { errMsg?: unknown } | null)?.errMsg ?? '')
   const expected = isUnauthenticatedError(error) || /request:fail|network|timeout/i.test(errMsg)
   if (expected) {
-    console.debug(`[miniapp] ${what}接口不可用，这条只存在于本地状态`, error)
+    console.debug(`[miniapp] ${what}：接口不可用`, error)
     return
   }
-  console.warn(`[miniapp] ${what}接口失败，这条只存在于本地状态`, error)
+  console.warn(`[miniapp] ${what}：接口失败`, error)
+}
+
+/**
+ * 把写失败翻译成可操作的提示文案。
+ *
+ * 回滚了本地占位还不够：用户点了发送却什么都没看到，会以为没点上。
+ * 422 直接展示服务端文案（「留言内容未通过审核」这类）；404 / 401 给更具体的引导。
+ */
+function commentFailureMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (error.status === 422) return error.message || '内容未通过审核'
+    if (error.status === 404) return '商品或留言已不存在'
+    if (error.status === 401) return '请先登录后再操作'
+  }
+  return '发送失败，请重试'
+}
+
+/** 写失败的**可见**反馈：留痕 + 弹提示（调用方负责先回滚本地占位）。 */
+function notifyCommentFailure(what: string, error: unknown): void {
+  logCommentFailure(what, error)
+  void Taro.showToast({ title: commentFailureMessage(error), icon: 'none' })
 }
 
 /** 「2 小时前发布」——mock 只给相对小时数 */
@@ -243,12 +295,13 @@ export default function ListingDetail() {
     setLoading(true)
     // 三态分明：`ok` 渲染详情、`notFound` 走空态（商品真不存在）、
     // `failed` 走错误态 —— 生产口径不退回 mock，拿演示商品顶上比空态更误导
-    void loadListingDetail(id).then((result) => {
+    void loadListingDetail(id).then(async (result) => {
       const view = result.status === 'ok' ? result.view : null
       setData(view)
-      // 留言树跟着这次加载重置：重试不该把上一次数据上的本地插入留在页面上
-      setComments(view ? view.comments.map(toCommentNode) : [])
       setFailed(result.status === 'failed')
+      // 留言走独立端点（#111）：失败不拖垮整页，也不把已拿到的商品信息丢掉：
+      // 拿不到时退到 fixture（开发 / 预览）或空列表（生产）。
+      setComments(view ? await loadComments(id, view.comments) : [])
       setLoading(false)
     })
   }
@@ -279,46 +332,68 @@ export default function ListingDetail() {
   }
 
   /**
-   * 发一条顶层留言。
+   * 发一条顶层留言：先乐观插入本页 state，再用服务端返回值替换掉本地占位。
    *
-   * 后端 comments 接口（#111）落地前只有演示构建（`__DEMO_COMMENTS__`）真正写入：
-   * 乐观插入 + 失败留本地；生产构建禁写，点了发送只提示暂未开放 ——
-   * 否则本地那条「我 · 刚刚」刷新后就会消失，是假成功。
-   *
-   * 演示构建的口径：请求失败**不回滚**，这条留在本地 —— 比「点了发送却什么都没发生」诚实；
-   * 也**不弹「发送成功」**：我们并不知道服务端收没收到，弹了就是假装成功。
+   * 失败口径（#111 后端已落地）：**明确失败必须回滚**并弹提示 ——
+   * 尤其 422 审核拒绝不能让违规文本继续以正常留言样式留在页面上。
    */
   const sendComment = () => {
     const content = commentInput.trim()
     if (!content) return
-    if (!DEMO_COMMENTS_ENABLED) {
-      void Taro.showToast({ title: '留言暂未开放', icon: 'none' })
-      return
-    }
     // 先算好再进 updater：updater 必须是纯函数，在里面自增 `localSeq` 会带副作用
-    const comment = localComment(content)
-    setComments((prev) => [comment, ...prev])
+    const pending = localComment(content)
+    setComments((prev) => [pending, ...prev])
     setCommentInput('')
-    void postComment(id, content).catch((error) => reportLocalOnly('留言', error))
+    void postComment(id, content)
+      .then((created) => {
+        // 用真实 DTO 换掉占位：拿到真实 id 后才能对它发起回复。
+        setComments((prev) =>
+          prev.map((node) => (node.id === pending.id ? dtoToNode(created) : node)),
+        )
+      })
+      .catch((error) => {
+        // 回滚本地占位 + 可见反馈；不回滚就会把失败说成成功。
+        setComments((prev) => prev.filter((node) => node.id !== pending.id))
+        notifyCommentFailure('留言', error)
+      })
   }
 
-  /** 回复某条顶层留言：写开关与失败口径同 `sendComment` */
+  /** 回复某条顶层留言：同样先乐观插入，服务端确认后替换，失败回滚并提示 */
   const sendReply = (commentId: string) => {
     const content = replyInput.trim()
     if (!content) return
-    if (!DEMO_COMMENTS_ENABLED) {
-      void Taro.showToast({ title: '回复暂未开放', icon: 'none' })
-      return
-    }
-    const reply = localComment(content)
+    const pending = localComment(content)
     setComments((prev) =>
       prev.map((node) =>
-        node.id === commentId ? { ...node, replies: [...node.replies, reply] } : node,
+        node.id === commentId ? { ...node, replies: [...node.replies, pending] } : node,
       ),
     )
     setReplyInput('')
     setReplyTo(null)
-    void postReply(commentId, content).catch((error) => reportLocalOnly('回复', error))
+    void postReply(commentId, content)
+      .then((created) => {
+        const reply = dtoToNode(created)
+        setComments((prev) =>
+          prev.map((node) =>
+            node.id === commentId
+              ? {
+                  ...node,
+                  replies: node.replies.map((entry) => (entry.id === pending.id ? reply : entry)),
+                }
+              : node,
+          ),
+        )
+      })
+      .catch((error) => {
+        setComments((prev) =>
+          prev.map((node) =>
+            node.id === commentId
+              ? { ...node, replies: node.replies.filter((entry) => entry.id !== pending.id) }
+              : node,
+          ),
+        )
+        notifyCommentFailure('回复', error)
+      })
   }
 
   /** 点「回复」：再点同一条收起（稿子行为），换一条则把输入行挪过去并清空 */

@@ -169,7 +169,8 @@ export type ListingDetailResult =
  * 商品详情。
  *
  * 返回页面已有的 `ListingDetailView`（`listing` / `seller` / `comments` / `similar`）。
- * 真实数据下：`comments` 恒为空数组（契约没有 comments 域）、
+ * 真实数据下：`comments` 恒为空数组 —— 留言走独立端点
+ * （`features/listing/comments.ts` 的 `fetchComments`，Issue #111），由详情页并行加载；
  * `similar` 走 `GET /listings?category=` 再排掉自己（契约无相似端点，与 Web 端同做法）。
  *
  * 404（商品真的不存在）返回 `null` **且不退 mock** ——
@@ -211,7 +212,8 @@ export async function loadListingDetail(
       view: {
         listing,
         seller,
-        // 契约没有 comments 域：真实数据下没有留言可展示，给空数组而不是编几条
+        // 留言不在这里取（#111 的 GET /listings/:id/comments 由详情页调用）：
+        // 真实数据下给空数组，只有退 mock 时才带上 fixture。
         comments: [],
         similar: toMockListings(similar, now),
       },

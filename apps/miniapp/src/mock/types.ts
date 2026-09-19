@@ -8,8 +8,8 @@
  * 与契约的刻意差异（都已在上游记录）：
  * - `ListingDetail` 多一个 `views` / `wants`：设计稿详情页要显示「218 浏览 · 34 想要」，
  *   而契约里没有这两个计数（上游无此字段）。属于 mock 才有的展示数据。
- * - `Comment` 在本仓契约里根本不存在（`packages/contracts/src` 没有 comments），
- *   详情页留言区因此只能 mock——这里显式标注，不假装它有契约。
+ * - `Comment`（`MockComment`）是页面展示形状：真实数据由 #111 的 `CommentDto`
+ *   投影而来，`authorInitial` / `timeLabel` 是页面排版量，契约里没有。
  */
 
 /**
@@ -113,9 +113,9 @@ export type MockListing = {
   createdAt: string
 }
 
-/* ---------------------------------------------------------------- 留言（无契约） */
+/* ---------------------------------------------------------------- 留言 */
 
-/** 契约里没有 comments 域，详情页留言区是纯 mock 展示数据。 */
+/** 详情页留言的页面形状；真实数据由 #111 的 `CommentDto` 投影而来。 */
 export type MockComment = {
   id: string
   listingId: string
