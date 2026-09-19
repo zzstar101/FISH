@@ -89,6 +89,9 @@ export default defineConfig<'webpack5'>(async (merge) => {
           dirname(contractsRequire.resolve('zod/package.json')),
           // tslib 的 ESM 默认导出含属性简写，开发构建也必须转译。
           dirname(runtimeRequire.resolve('tslib/package.json')),
+          // qrcode-generator（#114 面交二维码）的 ESM 产物含 const/let，必须转译。
+          // 其 exports 不暴露 package.json，只能解析主入口再取目录。
+          dirname(miniappRequire.resolve('qrcode-generator')),
         ],
       },
       postcss: {
