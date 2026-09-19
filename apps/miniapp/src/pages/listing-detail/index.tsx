@@ -252,8 +252,8 @@ export default function ListingDetail() {
   const [comments, setComments] = useState<CommentNode[]>([])
   /** 留言列表的下一页游标；`null` = 没有更多（或还没加载完 / 退了 mock）。 */
   const [commentsCursor, setCommentsCursor] = useState<string | null>(null)
-  /** 展开留言时若还有下一页，则在拉取中；避免重复触发。 */
-  const [loadingMoreComments, setLoadingMoreComments] = useState(false)
+  /** 展开时拉取下一页的重入守卫（ref：state 更新是异步的，连点两次会都读到 false）。 */
+  const loadingMoreRef = useRef(false)
   const [commentInput, setCommentInput] = useState('')
   /** 正在回复哪条顶层留言（`null` = 没有展开回复行）；稿子同时只开一行 */
   const [replyTo, setReplyTo] = useState<string | null>(null)
@@ -429,20 +429,26 @@ export default function ListingDetail() {
     }
     setCommentsOpen(true)
     let cursor = commentsCursor
-    if (!cursor || loadingMoreComments) return
+    // 用 ref 而非 state 做重入守卫：state 更新是异步的，连点两次时两次都会读到 `false`。
+    if (!cursor || loadingMoreRef.current) return
 
-    setLoadingMoreComments(true)
+    loadingMoreRef.current = true
+    // 先在局部累积、成功后一次性 setComments：中途失败重试若逐页 append，
+    // 会把上一次已追加的页再追加一遍（重复留言）。
+    const more: CommentNode[] = []
     try {
       while (cursor) {
         const page = await fetchComments(id, cursor)
-        setComments((prev) => [...prev, ...page.items.map(dtoToNode)])
+        more.push(...page.items.map(dtoToNode))
         cursor = page.nextCursor
       }
+      setComments((prev) => [...prev, ...more])
       setCommentsCursor(null)
     } catch (error) {
+      // 未成功翻完就保持原游标，下次展开从同一处重试（此时一条也没追加）。
       reportLocalOnly('更多留言', error)
     } finally {
-      setLoadingMoreComments(false)
+      loadingMoreRef.current = false
     }
   }
 
