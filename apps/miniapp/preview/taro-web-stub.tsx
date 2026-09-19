@@ -209,6 +209,15 @@ export const Input = (props: BaseProps) => {
   })
 }
 
+/**
+ * Camera：预览里没有相机硬件，渲染一个带标记的空容器（透明），
+ * 页面取景底自己的占位渐变会透出来；onScanCode / onError 不会触发。
+ */
+export const Camera = (props: BaseProps) => {
+  const { className, style } = props
+  return createElement('div', { className, 'data-camera': '', style: normalizeStyle(style) })
+}
+
 /* --------------------------------------------------------------- Taro API */
 
 type Router = { path: string; params: Record<string, string> }
@@ -360,6 +369,9 @@ const Taro = {
     }
     return query
   },
+  /** 扫码页（#114）用的授权接口：预览没有真机权限体系，返回「已授权」的空结果 */
+  getSetting: () => Promise.resolve({ authSetting: {} }),
+  openSetting: () => Promise.resolve({ authSetting: {} }),
 }
 
 export default Taro
