@@ -263,3 +263,31 @@
   font-size: var(--fs-sm);
   line-height: 1.6;
 }
+
+/*
+ * 分类切换中的骨架屏（#137 review P1）。
+ *
+ * 形状照着 `product-card` 的 home 变体来（同圆角、同底色、同边框），
+ * 这样骨架 → 真实卡片的替换不会跳一下布局。
+ */
+.home__skel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 24px;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  overflow: hidden;
+}
+
+.home__skel-img {
+  /* 首页瀑布流的图片区高度由 JS 按比例算（3:4 与 4:3 混排），骨架取中间值即可 */
+  @include skeleton(420px, 100%);
+  border-radius: 0;
+}
+
+.home__skel-bar {
+  @include skeleton(28px, 100%);
+  margin: 0 24px;
+}

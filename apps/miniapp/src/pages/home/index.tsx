@@ -37,7 +37,17 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 
 export default function Home() {
   const [items, setItems] = useState<MockListing[]>([])
-  const [loading, setLoading] = useState(true)
+  /**
+   * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过）。
+   *
+   * 与 `category`（用户刚点的那个）分开记：切分类时 `category` 立刻变，但屏幕上还是
+   * 上一个分类的商品，两者不一致的这段时间必须显示加载态 —— 否则选中态已经跳到
+   * 「教材书籍」、下面仍是推荐流的商品，用户会把旧数据当成新分类的结果
+   * （#137 review P1）。`reqSeq` 只防旧响应覆盖新响应，防不了这一层错认。
+   *
+   * 下拉刷新重拉的是**当前分类**，两者相等 → 不闪骨架屏，列表原地留着。
+   */
+  const [loadedFor, setLoadedFor] = useState<ListingCategory | 'ALL' | null>(null)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
   const [failed, setFailed] = useState(false)
 
@@ -50,6 +60,14 @@ export default function Home() {
   const [category, setCategory] = useState<ListingCategory | 'ALL'>('ALL')
 
   /**
+   * 当前屏幕上的列表是否还没对上用户选的分类。
+   *
+   * 首次进页 `loadedFor === null` 也算未对上：`items` 初始为空，若直接走空态判断，
+   * 会先闪一下「这个分类还没有闲置」再出现商品。
+   */
+  const pending = loadedFor !== category
+
+  /**
    * 请求序号：连点分类时只认**最后一次**发出的结果。
    *
    * 用 ref 而不是 state：它只在回调里读写、不参与渲染。没有它的话，先发的请求后返回
@@ -59,9 +77,11 @@ export default function Home() {
   const reqSeq = useRef(0)
 
   const load = async (next: ListingCategory | 'ALL') => {
-    setLoading(true)
     const seq = reqSeq.current + 1
     reqSeq.current = seq
+    // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
+    // 不摘的话切分类时会先闪一下「加载失败」再变骨架屏。
+    setFailed(false)
     // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
     const { items: list, failed: nextFailed } =
@@ -70,7 +90,8 @@ export default function Home() {
     if (seq !== reqSeq.current) return
     setItems(list)
     setFailed(nextFailed)
-    setLoading(false)
+    // 这一批商品属于 `next`：`pending` 随之关掉，骨架屏换成真实列表
+    setLoadedFor(next)
   }
 
   useLoad(() => {
@@ -225,7 +246,32 @@ export default function Home() {
       <View className="home__grid">
         {failed ? (
           <LoadError onRetry={() => void load(category)} />
-        ) : items.length === 0 && !loading ? (
+        ) : pending ? (
+          /*
+            分类切换中 / 首次进页：列表还没对上当前分类，给骨架屏而不是继续展示
+            上一个分类的商品（#137 review P1），也不是空态（那会被读成「这个分类没货」）。
+          */
+          <View className="waterfall">
+            <View className="waterfall__col">
+              {[0, 1].map((i) => (
+                <View key={`sk-l-${i}`} className="home__skel">
+                  <View className="home__skel-img" />
+                  <View className="home__skel-bar" style={{ width: '76%' }} />
+                  <View className="home__skel-bar" style={{ width: '42%' }} />
+                </View>
+              ))}
+            </View>
+            <View className="waterfall__col">
+              {[0, 1].map((i) => (
+                <View key={`sk-r-${i}`} className="home__skel">
+                  <View className="home__skel-img" />
+                  <View className="home__skel-bar" style={{ width: '68%' }} />
+                  <View className="home__skel-bar" style={{ width: '36%' }} />
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : items.length === 0 ? (
           <View className="home__empty">
             <Text className="home__empty-title">这个分类还没有闲置</Text>
             <Text className="home__empty-text">换个分类看看，或到许愿墙发一条心愿</Text>
