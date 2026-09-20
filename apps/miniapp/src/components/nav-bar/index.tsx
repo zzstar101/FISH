@@ -14,7 +14,7 @@ import './index.scss'
 type NavBarProps = {
   /** 是否显示返回钮（非 Tab 页默认 true） */
   back?: boolean
-  /** 返回钮右侧的页面标题（二级页需要时传） */
+  /** 返回钮右侧的页面标题（二级页用；不给就保持原样，只有返回钮） */
   title?: string
   /** 返回钮右侧的自定义动作区 */
   actions?: ReactNode

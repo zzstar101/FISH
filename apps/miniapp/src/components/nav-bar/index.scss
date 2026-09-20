@@ -3,9 +3,6 @@
 /**
  * 漂浮导航栏：只有返回钮/动作钮是实体，其余区域透明可穿透（pointer-events: none）。
  * 设计稿：36pt 圆形，白 82% 玻璃底 + 1px 白描边 + 极轻投影。
- *
- * 标题（`title`）左对齐贴在返回钮右侧，与稿子的 `.navbar.has-back .navtitle`
- * 一致（56pt = 32 内距 + 72 返回钮 + 8 间距）；动作区靠 `margin-left: auto` 留在最右。
  */
 .navfloat {
   position: absolute;
@@ -15,7 +12,7 @@
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
   padding: 12px 32px 0;
   pointer-events: none;
 }
@@ -25,12 +22,17 @@
   height: 72px;
 }
 
+/*
+ * 二级页标题：紧贴返回钮右侧（设计稿 `.navbar.has-back .navtitle{left:56px}`，
+ * 即 32（左内边距）+ 72（返回钮）= 104px 起，这里再留 8px 间距）。
+ * 字号 17pt → 34px，与稿一致；`--font-display` 是外部字体，按仓库约定用系统字体。
+ */
 .navfloat__title {
   flex: 1 1 auto;
   min-width: 0;
+  margin-left: 8px;
   font-size: 34px;
   font-weight: 600;
-  line-height: 1;
   letter-spacing: 0.02em;
   color: var(--fg);
   @include ellipsis;
@@ -39,7 +41,6 @@
 .navfloat__actions {
   display: flex;
   gap: 16px;
-  margin-left: auto;
   pointer-events: auto;
 }
 
