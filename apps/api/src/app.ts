@@ -47,6 +47,9 @@ import { createTransactionService } from './modules/transactions/service'
 import { createSqlTransactionStore } from './modules/transactions/store'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
+import { createUsersRouter } from './modules/users/router'
+import { createPublicUserService } from './modules/users/service'
+import { createSqlPublicUserStore } from './modules/users/store'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
 import { createWishesRouterFromDb } from './modules/wishes/router'
 import { API_VERSION } from './version'
@@ -146,6 +149,18 @@ export function createApp(
     createCommentsRouter({
       service: createCommentService({ store: createSqlCommentStore(db) }),
       requireAuth: auth.requireAuth,
+    }),
+  )
+
+  // 公开用户主页（#122）：两个端点都是**匿名可读**的公开读模型，所以整条不挂 requireAuth
+  // （他人主页对未登录访客也要能看，与 listings 的「读公开、写必须登录」同一条分界；
+  // 本域没有写接口）。只读已合并的 users / listings / transactions 表，不调用其他 Domain API
+  // （与 profile 同一取舍），storage 复用同一实例：在售卡片的封面 URL 与 feed / 详情必须同一套拼法。
+  // 挂根路径，因为两个端点都在 `/users/:userId/...` 之下（路径常量见 `@fish/contracts/users/routes`）。
+  app.route(
+    '/',
+    createUsersRouter({
+      service: createPublicUserService({ store: createSqlPublicUserStore(db), storage }),
     }),
   )
 
