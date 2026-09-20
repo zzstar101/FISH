@@ -10,7 +10,7 @@
 
 数据来源分两类：
 
-- **已接真实 API**：首页 / 分类 / 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 +
+- **已接真实 API**：首页（含分类筛选）/ 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 +
   逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`）。
   统一走 `src/features/fetchers.ts`（先请求后端，失败或未登录退回 mock），
   由 `src/features/listing/adapt.ts` 把契约类型投影成页面在用的视图类型。

@@ -7,7 +7,7 @@ import { ICONS } from '@/assets/lib-icons'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
-import { loadHomeFeed } from '@/features/fetchers'
+import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
 import { findUser } from '@/mock/users'
@@ -41,22 +41,46 @@ export default function Home() {
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
   const [failed, setFailed] = useState(false)
 
-  const load = async () => {
+  /**
+   * 当前分类。`ALL` = 首页的「推荐」，不是契约里的枚举值。
+   *
+   * 分类**不是另一个页面**：它与「推荐」同级，在首页原地切换（顶栏与悬浮底栏都保持不变），
+   * 与消息页把通知并进「通知」tab 是同一套做法。
+   */
+  const [category, setCategory] = useState<ListingCategory | 'ALL'>('ALL')
+
+  /**
+   * 请求序号：连点分类时只认**最后一次**发出的结果。
+   *
+   * 用 ref 而不是 state：它只在回调里读写、不参与渲染。没有它的话，先发的请求后返回
+   * 就会覆盖后发的结果 —— 连点「推荐 → 数码 → 教材书籍」时，用户看到的是数码的商品，
+   * 而选中态在教材书籍上。
+   */
+  const reqSeq = useRef(0)
+
+  const load = async (next: ListingCategory | 'ALL') => {
     setLoading(true)
+    const seq = reqSeq.current + 1
+    reqSeq.current = seq
     // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
-    // 只取「推荐」= 全部：其余分类在这里是**跳转**到分类页（见 onCategoryTap），不在本页停留。
-    const { items: list, failed: nextFailed } = await loadHomeFeed('ALL')
+    // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
+    const { items: list, failed: nextFailed } =
+      next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')
+    // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
+    if (seq !== reqSeq.current) return
     setItems(list)
     setFailed(nextFailed)
     setLoading(false)
   }
 
   useLoad(() => {
-    void load()
+    void load('ALL')
   })
 
+  // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
+  // 等于把用户刚选好的分类弄丢了。
   usePullDownRefresh(() => {
-    void load().then(() => Taro.stopPullDownRefresh())
+    void load(category).then(() => Taro.stopPullDownRefresh())
   })
 
   const [left, right] = useMemo(() => splitColumns(items), [items])
@@ -66,20 +90,19 @@ export default function Home() {
   }
 
   /**
-   * 分类圆盘：**进入对应的分类页**，而不是在原地筛瀑布流。
+   * 分类切换：**在原地换一批商品**，不跳页。
    *
-   * 分类页（`pages/category/index.tsx`）本来就读 `?category=` 参数，但此前全仓无人传值，
-   * 是个死参数；这里把它接上。参数只传契约枚举值（`BOOKS` / `DIGITAL` …），
-   * 分类页自己会把「不在枚举内」的值回落到默认分类。
+   * 顶栏与悬浮底栏由首页自己持有，所以分类视图与「推荐」共用它们；
+   * 商品列表按分类重新取数，卡片仍是首页那套瀑布流（`ProductCard`），不换成分类页的自绘卡。
    *
-   * 「推荐」不是分类，它是「全部」——留在首页把瀑布流恢复成完整列表。
+   * 切完回到顶部：用户多半是在吸顶的纯文字条上点的分类（此时页面已滚过一屏），
+   * 不回顶的话新商品从半截开始显示，看不出「换过一批」。
    */
   const onCategoryTap = (key: ListingCategory | 'ALL') => {
-    if (key === 'ALL') {
-      void load()
-      return
-    }
-    void Taro.navigateTo({ url: `/pages/category/index?category=${key}` })
+    if (key === category) return
+    setCategory(key)
+    void load(key)
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
   }
 
   /**
@@ -158,8 +181,10 @@ export default function Home() {
             {HOME_CATEGORIES.map((item) => (
               <View
                 key={item.key}
-                // 「推荐」恒为当前项：其余分类点了就跳去分类页，不在本页停留
-                className={`home__cat${item.key === 'ALL' ? ' is-on' : ''}`}
+                // 选中态跟随真实当前分类（此前硬编码「推荐」恒选中）
+                // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child），
+                // 与消息页 tab 的 `chat__tab--${key}` 同一做法
+                className={`home__cat home__cat--${item.key}${item.key === category ? ' is-on' : ''}`}
                 onClick={() => onCategoryTap(item.key)}
               >
                 <View className="home__cat-ic">
@@ -184,8 +209,9 @@ export default function Home() {
               {HOME_CATEGORIES.map((item) => (
                 <View
                   key={item.key}
-                  // 同图标条：「推荐」恒为当前项，其余分类点了跳分类页
-                  className={`home__catnav-item${item.key === 'ALL' ? ' is-on' : ''}`}
+                  // 与图标条同一份选中态来源，两条导航不会各说各话
+                  // `--${key}` 修饰类同样是为了端上自动化能定位到具体一项
+                  className={`home__catnav-item home__catnav-item--${item.key}${item.key === category ? ' is-on' : ''}`}
                   onClick={() => onCategoryTap(item.key)}
                 >
                   <Text className="home__catnav-label">{item.label}</Text>
@@ -198,7 +224,7 @@ export default function Home() {
 
       <View className="home__grid">
         {failed ? (
-          <LoadError onRetry={() => void load()} />
+          <LoadError onRetry={() => void load(category)} />
         ) : items.length === 0 && !loading ? (
           <View className="home__empty">
             <Text className="home__empty-title">这个分类还没有闲置</Text>

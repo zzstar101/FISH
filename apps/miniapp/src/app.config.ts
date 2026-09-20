@@ -14,7 +14,6 @@ export default defineAppConfig({
     'pages/register-success/index',
     'pages/login/index',
     'pages/settings/index',
-    'pages/category/index',
     'pages/verify/index',
     'pages/user/index',
     'pages/match/index',

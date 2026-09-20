@@ -119,11 +119,12 @@ export async function loadHomeFeed(
 }
 
 /**
- * 分类页：同 `loadHomeFeed` 的回退口径。带 `fromApi` / `failed`，见 `LoadedList`。
+ * 分类列表：同 `loadHomeFeed` 的回退口径。带 `fromApi` / `failed`，见 `LoadedList`。
  *
- * 参数是**具体分类**而不是 `ListingCategory | 'ALL'`：分类页永远有一个选中的一级分类
- * （`pages/category/index.tsx` 的 state 就是 `ListingCategory`），
- * 留一个没人传的 `'ALL'` 分支只会变成永远走不到的死代码。「全部」由首页的 `loadHomeFeed` 负责。
+ * 调用方是**首页的分类筛选**（`pages/home` 的 `category` 状态）：选中某个具体分类就地取数，
+ * 与「推荐」共用首页顶栏与底栏。参数是**具体分类**而不是 `ListingCategory | 'ALL'`：
+ * 选中项一定是一个具体分类，「推荐」（= 全部）由 `loadHomeFeed` 负责，
+ * 留一个没人传的 `'ALL'` 分支只会变成永远走不到的死代码。
  */
 export async function loadCategoryListings(
   category: ListingCategory,

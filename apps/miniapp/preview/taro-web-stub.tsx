@@ -332,6 +332,24 @@ const Taro = {
   },
   hideToast: noop,
   stopPullDownRefresh: noop,
+  /**
+   * 页面滚动到指定位置。`scrollTop` 是**逻辑 px**（不参与 rpx 缩放），原样交给滚动容器。
+   *
+   * 滚动容器是外层 `.page-frame`（定高 + `overflow-y: auto`），不是窗口：
+   * 页面内容都在它里面，窗口那条滚动条动的是整个帧的位置，不是页面内容的位置。
+   * 只有帧自己滚不动时（内容比帧矮）才退到窗口。
+   *
+   * ⚠️ 与 `usePageScroll` **不同源**：那个桩监听的是 `window`，所以滚「帧」时
+   * 回调用 `catsPinned` 这类靠滚动位置的分支在预览里不会变（首页吸顶文字条因此看不到）。
+   * 真机上两者都是页面级、口径一致，这个偏差只影响预览。桩里缺本方法的话，
+   * 用到它的页面（首页切分类回顶、消息页回顶）在预览里会直接抛 `TypeError`。
+   */
+  pageScrollTo: ({ scrollTop = 0 }: { scrollTop?: number; duration?: number }) => {
+    const frame = document.querySelector('.page-frame')
+    if (frame && frame.scrollHeight > frame.clientHeight) frame.scrollTo({ top: scrollTop })
+    else window.scrollTo(0, scrollTop)
+    return Promise.resolve()
+  },
   getCurrentPages: () => [{}, {}],
   /**
    * 窗口信息。`windowWidth` 必须**跟着预览视口**走：
