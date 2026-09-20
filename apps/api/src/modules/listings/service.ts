@@ -341,6 +341,7 @@ export function createListingService(deps: {
           matchedRules: moderationResult.matches.map((match) => match.ruleCode),
           matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
           ruleVersion: moderationResult.ruleVersion,
+          priorListingStatus: moderationResult.decision === 'REVIEW' ? 'ACTIVE' : null,
         },
       })
 
@@ -392,7 +393,12 @@ export function createListingService(deps: {
               matchedRules: moderationResult.matches.map((match) => match.ruleCode),
               matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
               ruleVersion: moderationResult.ruleVersion,
-              priorListingStatus: moderationResult.decision === 'REVIEW' ? current.status : null,
+              priorListingStatus:
+                moderationResult.decision === 'REVIEW'
+                  ? current.pendingReviewAction === 'CREATE'
+                    ? 'ACTIVE'
+                    : (current.pendingReviewPriorStatus ?? current.status)
+                  : null,
             }
             if (moderationResult.decision === 'BLOCK') {
               return { kind: 'blocked' as const, moderation: moderationPlan }

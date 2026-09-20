@@ -30,6 +30,14 @@ export type ListingRow = typeof listings.$inferSelect
 export type ListingImageRow = typeof listingImages.$inferSelect
 export type SellerRow = typeof users.$inferSelect
 
+function rowsOf(result: unknown): Record<string, unknown>[] {
+  if (Array.isArray(result)) return result as Record<string, unknown>[]
+  if (result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows)) {
+    return (result as { rows: Record<string, unknown>[] }).rows
+  }
+  return []
+}
+
 /**
  * 游标在 store 层是**已解码且与排序键类型匹配**的结构：类型由 service 按 sort 校验后
  * 才走到这里，SQL 层不再做"宽容解析"（契约 §2.1：非法 cursor 报 422）。
@@ -139,6 +147,8 @@ export type ListingUpdateTarget = {
   negotiable: boolean
   free: boolean
   moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  pendingReviewAction?: 'CREATE' | 'UPDATE'
+  pendingReviewPriorStatus?: ListingStatus | null
 }
 
 /**
@@ -485,7 +495,35 @@ export function createSqlListingStore(db: Db): ListingStore {
         if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
         if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
 
-        const plan = await input.apply(input, row)
+        let updateTarget: ListingUpdateTarget = row
+        if (row.moderationStatus === 'REVIEW') {
+          const pendingRoot = await tx.execute(sql`
+            SELECT action, prior_listing_status::text AS prior_listing_status
+            FROM listing_moderation_records
+            WHERE listing_id = ${input.id}
+              AND decision = 'REVIEW'
+              AND created_at > COALESCE(
+                (
+                  SELECT MAX(created_at)
+                  FROM listing_moderation_records
+                  WHERE listing_id = ${input.id}
+                    AND action = 'MANUAL_DECISION'
+                ),
+                '-infinity'::timestamptz
+              )
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+          `)
+          const root = rowsOf(pendingRoot)[0]
+          updateTarget = {
+            ...row,
+            pendingReviewAction:
+              root?.action === 'CREATE' || root?.action === 'UPDATE' ? root.action : undefined,
+            pendingReviewPriorStatus: (root?.prior_listing_status as ListingStatus | null) ?? null,
+          }
+        }
+
+        const plan = await input.apply(input, updateTarget)
         // 阻断：不写商品，但审计记录与锁内读到的那一行同事务落库。
         if (plan.kind === 'blocked') {
           await tx.insert(listingModerationRecords).values({

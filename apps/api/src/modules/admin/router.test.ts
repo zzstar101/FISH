@@ -56,6 +56,9 @@ const REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a2'
 const REVIEW_RECORD_ID = '01930000-0000-7000-8000-0000000000b2'
 const BLOCKED_EDIT_RECORD_ID = '01930000-0000-7000-8000-0000000000b3'
 const OFFLINE_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a3'
+const REPEATED_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a4'
+const CREATE_REVIEW_CHAIN_LISTING_ID = '01930000-0000-7000-8000-0000000000a5'
+const CREATE_REVIEW_CHAIN_RECORD_ID = '01930000-0000-7000-8000-0000000000b4'
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -470,6 +473,113 @@ describe('Admin 查询端到端', () => {
       .where(eq(listings.id, OFFLINE_REVIEW_LISTING_ID))
       .limit(1)
     expect(listing).toEqual({ status: 'OFFLINE', moderationStatus: 'APPROVED' })
+  })
+
+  test('repeated REVIEW attempts preserve the original status restoration target', async () => {
+    await scratch.insert(listings).values([
+      {
+        id: REPEATED_REVIEW_LISTING_ID,
+        sellerId: USER_ID,
+        title: '重复审核商品',
+        description: '原始描述',
+        priceCents: 2500,
+        category: 'BOOKS',
+        condition: 'GOOD',
+        status: 'ACTIVE',
+        moderationStatus: 'APPROVED',
+        createdAt: new Date('2026-09-05T02:00:00Z'),
+      },
+      {
+        id: CREATE_REVIEW_CHAIN_LISTING_ID,
+        sellerId: USER_ID,
+        title: '新建审核商品',
+        description: '原始描述',
+        priceCents: 2500,
+        category: 'BOOKS',
+        condition: 'GOOD',
+        status: 'OFFLINE',
+        moderationStatus: 'REVIEW',
+        createdAt: new Date('2026-09-05T03:00:00Z'),
+      },
+    ])
+    await scratch.insert(listingModerationRecords).values({
+      id: CREATE_REVIEW_CHAIN_RECORD_ID,
+      listingId: CREATE_REVIEW_CHAIN_LISTING_ID,
+      sellerId: USER_ID,
+      action: 'CREATE',
+      titleSnapshot: '新建审核商品',
+      descriptionSnapshot: '原始描述',
+      decision: 'REVIEW',
+      matchedRules: jsonParam(['TEST_RULE']),
+      matchedTermsMasked: jsonParam(['测**']),
+      ruleVersion: 'test-v1',
+      priorListingStatus: 'ACTIVE',
+      createdAt: new Date('2026-09-05T03:01:00Z'),
+    })
+
+    for (const [listingId, description] of [
+      [REPEATED_REVIEW_LISTING_ID, '第一次加微信联系'],
+      [CREATE_REVIEW_CHAIN_LISTING_ID, '新建后编辑加微信联系'],
+    ] as const) {
+      const edited = await app.request(LISTING_ROUTES.detail(listingId), {
+        method: 'PATCH',
+        headers: { cookie: userCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ description }),
+      })
+      expect(edited.status).toBe(200)
+    }
+
+    const repeatedEdit = await app.request(LISTING_ROUTES.detail(REPEATED_REVIEW_LISTING_ID), {
+      method: 'PATCH',
+      headers: { cookie: userCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ description: '第二次加微信联系' }),
+    })
+    expect(repeatedEdit.status).toBe(200)
+
+    const reviewIds = await scratch
+      .select({ id: listingModerationRecords.id, listingId: listingModerationRecords.listingId })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.decision, 'REVIEW'))
+      .orderBy(desc(listingModerationRecords.createdAt), desc(listingModerationRecords.id))
+    const latestFor = (listingId: string) =>
+      reviewIds.find((row) => row.listingId === listingId)?.id
+    for (const [listingId, requestId] of [
+      [REPEATED_REVIEW_LISTING_ID, 'repeated-review-allow'],
+      [CREATE_REVIEW_CHAIN_LISTING_ID, 'create-review-chain-allow'],
+    ] as const) {
+      const allowed = await app.request(
+        ADMIN_ROUTES.moderationDecision(latestFor(listingId) ?? ''),
+        {
+          method: 'POST',
+          headers: {
+            cookie: adminCookie,
+            'content-type': 'application/json',
+            'Idempotency-Key': requestId,
+          },
+          body: JSON.stringify({ decision: 'ALLOW', reason: '保留原始上架状态' }),
+        },
+      )
+      expect(allowed.status).toBe(200)
+    }
+
+    const restored = await scratch
+      .select({
+        id: listings.id,
+        status: listings.status,
+        moderationStatus: listings.moderationStatus,
+      })
+      .from(listings)
+      .where(eq(listings.id, REPEATED_REVIEW_LISTING_ID))
+    const createdRestored = await scratch
+      .select({
+        id: listings.id,
+        status: listings.status,
+        moderationStatus: listings.moderationStatus,
+      })
+      .from(listings)
+      .where(eq(listings.id, CREATE_REVIEW_CHAIN_LISTING_ID))
+    expect(restored[0]).toMatchObject({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
+    expect(createdRestored[0]).toMatchObject({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
   })
 
   test('missing user / listing is 404 ADMIN_NOT_FOUND; non-uuid path param is 404, not 500', async () => {
