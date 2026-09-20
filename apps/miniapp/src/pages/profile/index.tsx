@@ -5,6 +5,8 @@ import brandLockup from '@/assets/brand/brand-lockup.png'
 import { ICONS } from '@/assets/lib-icons'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { loadProfile, type ProfileView } from '@/features/fetchers'
+import { readSignature, saveSignature } from '@/features/profile/signature'
+import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
@@ -22,12 +24,13 @@ import './index.scss'
  *   图标栏改为**右上角红色小圆点、圆点内显数量**（纯 --danger，不要压棕的红）。
  *
  * 数据走 `features/fetchers.ts` 的 `loadProfile()`。数字栏与圆点只在拿到
- * `GET /profile` 后按真实值渲染，拿不到就显示 0 / 无圆点，不回退 mock
- * （演示构建的回退口径见 fetchers `loadProfile` 的 catch）。
+ * `GET /profile` 后按真实值渲染，拿不到就显示占位（收藏 / 足迹 / 关注显示 `—`、
+ * 圆点不显示），不回退 mock（演示构建的回退口径见 fetchers `loadProfile` 的 catch）。
  *
  * **已经 Owner 确认的取舍**：
- * - 签名行**默认出现**：契约的 `Me` 还没有个性签字段，先按稿渲染默认文案，
- *   等接口补了字段再换成真实签名；
+ * - 签名行**可编辑**（2026-09-20 拍板）：点击弹输入框、真实输入并保存到本机
+ *   （契约暂无签字段，见 `features/profile/signature.ts`）；只展示**首行**，过长由
+ *   省略号收尾，未设置过时显示「设置个性签名」占位；
  * - 「编辑个人资料」「隐私」两行不渲染：头像昵称跟随微信、隐私入口在设置页里；
  * - 稿里的「清除演示数据」行不渲染：本地没有任何演示数据存储可清。
  *
@@ -36,13 +39,19 @@ import './index.scss'
  * 广播 `anonymous`，本页随之切到未登录形态。
  */
 
-/** 数字栏格子（3版稿 4 格栏改纯数字）。`count` 由 profile 提供，未拿到时按 0 显示 */
+/**
+ * 数字栏格子（3版稿 4 格栏改纯数字）。
+ *
+ * `count` 为 `null` = **系统不知道**（未登录 / 还没拿到 profile / 契约没有该端点），
+ * 页面显示 `—`；只有真实拿到数字才显示数字。收藏 / 足迹 / 关注当前没有数据源，
+ * 真实构建恒为 `null`（见 `fetchers.ts` 的 `ProfileView`）。
+ */
 type StatCell = {
   key: string
   label: string
   url?: string
   tab?: boolean
-  count: number
+  count: number | null
 }
 
 /** 图标栏格子（5 格）。`count` > 0 时在右上角显示红色数量圆点（纯 --danger） */
@@ -53,6 +62,25 @@ type IconCell = {
   url?: string
   tab?: boolean
   count?: number
+}
+
+/**
+ * 带输入框的弹窗（微信基础库 2.17.1+ 的 `editable`）。
+ *
+ * Taro 4 的 `showModal` 类型还没收这两个字段
+ * （`@tarojs/taro/types/api/ui/interaction.d.ts` 的 `Option` 只有 `content`，
+ * `SuccessCallbackResult` 也不回传 `content`），所以这里补一层**窄**类型桥接 ——
+ * 只声明缺的那两个字段，其余仍走 Taro 的类型检查，不放松类型、也不用 `any`。
+ */
+type EditableModalOption = Taro.showModal.Option & {
+  /** 弹窗内是否带输入框；`true` 时 `content` 是输入框初值 */
+  editable: boolean
+  placeholderText?: string
+}
+type EditableModalResult = Taro.showModal.SuccessCallbackResult & { content?: string }
+
+function showEditableModal(option: EditableModalOption): Promise<EditableModalResult> {
+  return Taro.showModal(option) as Promise<EditableModalResult>
 }
 
 /** 「帮助与设置」列表行。`url` 缺省 = 页面未落地，点击按 toast 处理 */
@@ -127,6 +155,61 @@ export default function Profile() {
 
   const verified = user?.authStatus === 'VERIFIED'
 
+  /**
+   * 个性签名（本机存储，见 `features/profile/signature.ts`）。
+   *
+   * **渲染期同步读**（`readSignature` 是同步的本地读，很便宜）：放 effect 里读会让
+   * 已设置签名的用户每次进本页先看到一帧「设置个性签名」占位、再跳成真实签名。
+   * 身份（`user?.id`）一变就地重读 —— 换账号不能把上一个账号的签名继续显示在新账号
+   * 名下（与 `loadProfile` 的 cancellable 防串号同一个理由）。
+   */
+  const [sig, setSig] = useState<{ forUser: string | null; text: string | null }>(() => ({
+    forUser: user?.id ?? null,
+    text: user?.id ? readSignature(user.id) : null,
+  }))
+  const userId = user?.id ?? null
+  if (sig.forUser !== userId) {
+    setSig({ forUser: userId, text: userId ? readSignature(userId) : null })
+  }
+  const signature = sig.text
+
+  /** 编辑签名：弹输入框 → 存本机 → 重读展示；空输入 = 清除，回到「设置个性签名」 */
+  const editSignature = () => {
+    if (!userId) return
+    void (async () => {
+      let res: EditableModalResult
+      try {
+        res = await showEditableModal({
+          title: '个性签名',
+          editable: true,
+          placeholderText: '设置个性签名',
+          content: signature ?? '',
+          confirmText: '保存',
+          cancelText: '取消',
+        })
+      } catch (error) {
+        // 老 Android 上「点取消 / 点蒙层」走的是 fail 回调（Taro 把 showModal 包成
+        // reject），不是 cancel 分支；页面卸载 / 重复点击同理。一律按「没保存」处理，
+        // 只留痕不打扰用户（真机上 showModal 一定存在，这里不会是「功能不可用」）。
+        console.debug('[miniapp] 个性签名弹窗未完成，按未保存处理', error)
+        return
+      }
+      if (!res.confirm) return
+      // 不支持 `editable` 的基础库会忽略该参数：弹窗没有输入框，也**不回传 content**。
+      // 不能把「平台没给内容」当成「用户清空了」（那会静默删掉已设置的签名）
+      if (typeof res.content !== 'string') {
+        toast('当前微信版本不支持编辑个性签名')
+        return
+      }
+      if (!saveSignature(userId, res.content)) {
+        toast('保存失败，请重试')
+        return
+      }
+      setSig({ forUser: userId, text: readSignature(userId) })
+      toast('已保存')
+    })()
+  }
+
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
 
   const backToTop = () => {
@@ -183,13 +266,14 @@ export default function Profile() {
   }
 
   /**
-   * 数字栏（Owner 修订：只摆数字不摆图标）。收藏 / 足迹 / 关注功能未上线恒 0，
-   * 愿望是真实计数；四格都在拿到 profile 前按 0 显示，到手后换真实 / 演示数字。
+   * 数字栏（Owner 修订：只摆数字不摆图标）。收藏 / 足迹 / 关注**没有数据源**
+   * （契约无端点），真实构建是 `null` → 显示 `—`；演示构建给演示数字。
+   * 愿望是真实计数（`stats.activeWishes`），拿不到 profile 时按 0 显示。
    */
   const STAT_CELLS: StatCell[] = [
-    { key: 'favorites', label: '我的收藏', count: profile?.favoritesCount ?? 0 },
-    { key: 'history', label: '历史浏览', count: profile?.historyCount ?? 0 },
-    { key: 'follow', label: '我的关注', count: profile?.followCount ?? 0 },
+    { key: 'favorites', label: '我的收藏', count: profile?.favoritesCount ?? null },
+    { key: 'history', label: '历史浏览', count: profile?.historyCount ?? null },
+    { key: 'follow', label: '我的关注', count: profile?.followCount ?? null },
     {
       key: 'wish',
       label: '我的愿望',
@@ -342,13 +426,17 @@ export default function Profile() {
   // `authUser` 必然存在；这里只把类型收窄，并给「已登录但 /me 抖动」兜个底。
   if (!user) return null
 
+  /** 签名展示文本：只取首行；空 = 没设置过（或已清空），渲染占位文案 */
+  const sigText = signature ? signatureFirstLine(signature) : ''
+
   const renderStatCell = (cell: StatCell) => (
     <View
       key={cell.key}
       className="profile__cell"
       onClick={() => go(cell.label, cell.url, cell.tab)}
     >
-      <Text className="profile__cell-num num">{cell.count}</Text>
+      {/* `null` = 系统不知道（没有端点 / 还没拿到），显示 `—` 而不是 0 */}
+      <Text className="profile__cell-num num">{cell.count ?? '—'}</Text>
       <Text className="profile__cell-label">{cell.label}</Text>
     </View>
   )
@@ -399,11 +487,16 @@ export default function Profile() {
                 />
               </View>
             </View>
-            {/* 签名行（3版稿 .psig）：展示行，没写也默认出现（契约暂无签字段，见文件头）。
-                稿里 data-route 是 action:setSignature，编辑入口未落地先按 toast 占位 */}
-            <View className="profile__sig" onClick={() => toast('个性签名待接入')}>
+            {/* 签名行（3版稿 .psig）：**点击可编辑**，值存本机（契约暂无签字段）。
+                只展示**首行** —— 多行输入的其余行不显示，过长由 CSS 省略号收尾；
+                没设置过渲染占位文案（`.is-ph`）。
+                ⚠️ 他人视角的用户主页（页面尚未落地）要按同一口径只显首行，并额外给一个
+                「点击展开全部」的入口；该页后续再改，这里先留提示 —— 本页**不加**展开 */}
+            <View className="profile__sig" onClick={editSignature}>
               <Image className="profile__sig-ic" src={ICONS.editAccent} mode="aspectFit" />
-              <Text className="profile__sig-txt">诚信面交，先验货后付款</Text>
+              <Text className={`profile__sig-txt${sigText ? '' : ' is-ph'}`}>
+                {sigText || '设置个性签名'}
+              </Text>
             </View>
           </View>
           {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}

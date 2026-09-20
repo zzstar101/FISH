@@ -273,7 +273,8 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
 
 /**
  * 个人中心。**真实构建任何失败都返回 `null`，绝不返回 fixture** —— 调用方
- * （`pages/profile`）拿不到真实数据时按空值渲染（格子无角标），不拿演示账号顶上。
+ * （`pages/profile`）拿不到真实数据时按空值渲染（数字栏显示 `—`、圆点不显示），
+ * 不拿演示账号顶上。
  * 唯一例外是演示构建（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，见下方
  * `loadProfile` 的 catch）：那时登录身份本身就是演示账号，回退的是「当前用户」自己的数据。
  *
@@ -291,12 +292,13 @@ export type ProfileView = {
   /** 全部买卖笔数 */
   orderCount: number
   /**
-   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。**契约没有这三个端点**，功能未上线，
-   * 真实构建恒为 0；演示构建给演示数字（「我的」页 4 格栏按稿只摆数字不摆图标）。
+   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。**契约没有这三个端点**，功能未上线 ——
+   * 真实构建给 `null`（页面显示 `—`，不把「系统不知道」画成 0）；演示构建给演示数字
+   * （「我的」页 4 格栏按稿只摆数字不摆图标）。
    */
-  favoritesCount: number
-  historyCount: number
-  followCount: number
+  favoritesCount: number | null
+  historyCount: number | null
+  followCount: number | null
 }
 
 export async function loadProfile(now: number = Date.now()): Promise<ProfileView | null> {
@@ -309,10 +311,11 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       wishes: profile.wishes.map(toMockWish),
       pendingMeetup: profile.transactions.filter((tx) => tx.status === 'PENDING_MEETUP').length,
       orderCount: profile.transactions.length,
-      // 收藏 / 足迹 / 关注没有端点：真实构建恒 0（功能未上线），不是编造的市场信号
-      favoritesCount: 0,
-      historyCount: 0,
-      followCount: 0,
+      // 收藏 / 足迹 / 关注没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
+      // 「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
+      favoritesCount: null,
+      historyCount: null,
+      followCount: null,
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
@@ -335,6 +338,9 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * （我的发布 / 愿望 / 买卖直接取该账号的既有 fixture），
  * 保证「我的」页的角标数字与 mylist / orders 页看到的计数一致。
  * 收藏 / 足迹 / 关注没有 fixture 来源，按稿给演示数字（8 / 24 / 5）。
+ *
+ * ⚠️ 只走**失败回退**这条路：`TARO_APP_MOCK=1` 但本机真起了后端时，走的是成功路径，
+ * 这三格是 `null` → 页面显示 `—`（演示数字不覆盖真实结果）。
  */
 function demoProfile(): ProfileView {
   const wishes = myWishes()
