@@ -293,45 +293,67 @@ export const WISHES: MockWish[] = [
 ]
 
 /**
+ * 归一化后的关键词 —— 与服务端同口径的分组依据。
+ *
+ * `keywordSchema`（`packages/contracts/src/wishes/schema.ts`）入库前就 `.trim().toLowerCase()`，
+ * 所以服务端 `GROUP BY keyword, category` 里的 keyword 已经是小写。mock 的 fixture 是手写的
+ * （`iPad` 带大写），本地发布又走的是页面输入 —— 不归一就会出现 `iPad` / `ipad` 两个池子项，
+ * 而真实接口只会有一个（#138 review P1）。
+ */
+function poolKeyword(keyword: string): string {
+  return keyword.trim().toLowerCase()
+}
+
+/**
  * 需求池：对应 `wishPoolResponseSchema` 的 `items`。
  * 由愿望列表按关键词聚合得到（真实实现里是服务端聚合，见
  * `apps/api/src/modules/wishes/store.ts` 的 `aggregatePool`），这里在 mock 层算。
  *
- * 口径按**页面的需求**（k-匿名是硬约束），与后端那条 SQL 有三处**有意不同**：
+ * 聚合 key = **归一化 keyword + category**，与后端 `GROUP BY keyword, category` 一致：
+ * 发布页（`pages/wish-publish`）允许同一关键词选不同分类，所以「同关键词分类唯一」这个
+ * 假设不成立 —— 只按 keyword 分组会把不同分类的人并成一条，且分类取决于谁先进 Map
+ * （#138 review P1）。
+ *
+ * 口径按**页面的需求**（k-匿名是硬约束），与后端那条 SQL 有两处**有意不同**：
  * 1. `wantCount` 数的是 **不同用户**（`Set`）—— 后端 `want_count` 是 `count(*)`（行数），
  *    两者在真接口下是两个数（k-匿名门槛 `HAVING count(DISTINCT user_id)` 数的是前者）。
  *    这里取前者，是为了让池子卡上的「N 人想要」与筛选门槛口径一致。
- * 2. 只按 `keyword` 分组：后端是 `GROUP BY keyword, category`，同一关键词在不同分类下
- *    会返回多行；mock 的关键词在 fixture 里分类唯一，所以不会出现这种分裂。
- * 3. `medianBudgetCents` 取的是每条愿望**预算中值**（(min+max)/2）的上中位数，
+ * 2. `medianBudgetCents` 取的是每条愿望**预算中值**（(min+max)/2）的上中位数，
  *    后端是 `percentile_cont(0.5)` on `budget_max_cents`；且后端有 `LIMIT`，
  *    mock 全量返回（页面的「展示全部 N 个标签」要能数到全部）。
+ *
+ * 展示用的 keyword 取该组**第一个出现**的写法：归一化只用于分组，不改变展示
+ * （设计稿的 `iPad` 不该被渲染成 `ipad`）。
  *
  * 是函数而不是常量：本地写（发布 / 关闭愿望）之后池子要跟着变。
  */
 export function wishPoolItems(): MockWishPoolItem[] {
   const map = new Map<
     string,
-    { users: Set<string>; budgets: number[]; category: MockWish['category'] }
+    { keyword: string; users: Set<string>; budgets: number[]; category: MockWish['category'] }
   >()
   for (const wish of WISHES) {
     if (wish.status !== 'ACTIVE') continue
-    const entry = map.get(wish.keyword) ?? {
+    const category = wish.category
+    // `\0` 分隔：关键词里不会出现它，category 是枚举，两者拼不出歧义
+    const key = `${poolKeyword(wish.keyword)}\0${category}`
+    const entry = map.get(key) ?? {
+      keyword: wish.keyword,
       users: new Set<string>(),
       budgets: [],
-      category: wish.category,
+      category,
     }
     entry.users.add(wish.userId)
     entry.budgets.push(Math.round((wish.budgetMinCents + wish.budgetMaxCents) / 2))
-    map.set(wish.keyword, entry)
+    map.set(key, entry)
   }
-  return [...map.entries()]
-    .filter(([, entry]) => entry.users.size >= POOL_MIN_COUNT)
-    .map(([keyword, entry]) => {
+  return [...map.values()]
+    .filter((entry) => entry.users.size >= POOL_MIN_COUNT)
+    .map((entry) => {
       const sorted = [...entry.budgets].sort((a, b) => a - b)
       const mid = sorted[Math.floor(sorted.length / 2)] ?? 0
       return {
-        keyword,
+        keyword: entry.keyword,
         category: entry.category,
         wantCount: entry.users.size,
         medianBudgetCents: mid,

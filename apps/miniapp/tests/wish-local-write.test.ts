@@ -6,6 +6,7 @@ import {
   POOL_MIN_COUNT,
   wishPool,
 } from '../src/mock/api'
+import type { MockWish } from '../src/mock/types'
 import { WISHES } from '../src/mock/wishes'
 
 /**
@@ -94,5 +95,49 @@ describe('愿望池聚合口径', () => {
   test('常见预算是该关键词预算中位数（分）', () => {
     // fixture 里「考研数学」的预算是 40–60 元 → 中位 50 元 = 5000 分
     expect(wishPool().find((item) => item.keyword === '考研数学')?.medianBudgetCents).toBe(5000)
+  })
+
+  test('同一关键词的不同分类各自成组，不互相借人数', () => {
+    // 「考研数学」在原 fixture 里是 6 人 / BOOKS；这里再补 1 人 / DIGITAL。
+    // 只按 keyword 聚合的话两组会并成 7 人一条，且分类取决于谁先进 Map。
+    WISHES.push({
+      ...(WISHES[0] as MockWish),
+      id: 'w-same-kw-other-cat',
+      userId: 'u-same-kw-other-cat',
+      keyword: '考研数学',
+      category: 'DIGITAL',
+      status: 'ACTIVE',
+    })
+
+    const pool = wishPool()
+    const books = pool.find((item) => item.keyword === '考研数学' && item.category === 'BOOKS')
+    const digital = pool.find((item) => item.keyword === '考研数学' && item.category === 'DIGITAL')
+
+    // BOOKS 那条仍是自己的 6 人，没有被 DIGITAL 的人头撑大
+    expect(books?.wantCount).toBe(6)
+    // DIGITAL 只有 1 人 → k-匿名不达标，不出现；更不该借 BOOKS 的人数露出来
+    expect(digital).toBeUndefined()
+  })
+
+  test('iPad / ipad 归一化后归入同一组（与服务端 keywordSchema 同口径）', () => {
+    const before = wishPool().find((item) => item.keyword === 'iPad')
+    expect(before?.wantCount).toBe(6)
+
+    // 发布页入库前 `.trim().toLowerCase()`（契约 keywordSchema 同口径），所以小写输入
+    // 必须落进已有的大写那组，而不是新开一条
+    createWishLocal({
+      keyword: 'ipad',
+      category: before?.category ?? 'DIGITAL',
+      budgetMinCents: 150000,
+      budgetMaxCents: 170000,
+      description: undefined,
+      acceptSimilar: true,
+    })
+
+    const after = wishPool().filter((item) => item.keyword.toLowerCase() === 'ipad')
+    // 仍只有一条（没有因大小写分裂成两条）
+    expect(after).toHaveLength(1)
+    // 原来 6 人 + 新 1 人 = 7 人（新用户是 `ME`，不在原池子里）
+    expect(after[0]?.wantCount).toBe(7)
   })
 })

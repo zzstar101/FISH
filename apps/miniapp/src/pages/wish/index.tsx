@@ -205,7 +205,9 @@ export default function Wish() {
           <View className="hot__grid">
             {hotList.map((item, index) => (
               <View
-                key={item.keyword}
+                // 同一关键词可以在两个分类下各成一条（后端就是 `GROUP BY keyword, category`），
+                // 只用 keyword 当 key 会撞车
+                key={`${item.keyword}\0${item.category}`}
                 className={`hot__row${index < 3 ? ' is-top' : ''}`}
                 onClick={() => goSearch(item.keyword)}
               >
@@ -413,7 +415,7 @@ export default function Wish() {
         ) : (
           <View className="wish__list">
             {poolList.map((item) => (
-              <View key={item.keyword} className="pool">
+              <View key={`${item.keyword}\0${item.category}`} className="pool">
                 <View className="pool__top">
                   <View className="pool__main">
                     <Text className="pool__kw">{item.keyword}</Text>
