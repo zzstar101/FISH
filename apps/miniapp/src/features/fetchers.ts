@@ -31,6 +31,7 @@
 import type { Me } from '@fish/contracts/auth/user'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
+import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { ListingDetailView } from '@/mock/api'
 import type { MockListing, MockNotification, MockUser, MockWish, SearchFilter } from '@/mock/types'
@@ -44,6 +45,7 @@ import {
   searchListings,
 } from './listing/api'
 import { fetchProfile } from './profile/api'
+import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
 
 /**
  * 构建期注入（`config/index.ts` 的 `defineConstants.__ALLOW_MOCK_FALLBACK__`）。
@@ -187,13 +189,24 @@ export async function loadListingDetail(
     const detail = await fetchListingDetail(id)
     if (detail === null) return { status: 'notFound' }
 
-    // 相似推荐失败不该拖垮整页：这里降级成「没有相似推荐」，但要留痕 ——
-    // 静默吞掉会让契约解析漂移看起来像「这个分类恰好没有同类商品」。
-    const similar = await fetchSimilarListings(detail.category, detail.id).catch((error) => {
-      console.warn('[miniapp] 相似推荐获取失败，本次不展示相似商品', error)
-      return []
-    })
-    const seller: MockUser = toMockSeller(detail)
+    // 相似推荐与卖家公开资料**并行**取，两件都不该拖垮整页：
+    // 失败降级成「没有相似推荐 / 不展示卖出件数」，但要留痕 —— 静默吞掉会让契约解析漂移
+    // 看起来像「这个分类恰好没有同类商品」或「这个卖家恰好没卖过东西」。
+    //
+    // 卖家公开资料只为了「卖出 N 件」这一个数：详情契约的 `ListingSellerSchema` 里没有它
+    // （只有 id / nickname / avatarUrl / campus / authStatus），所以走 #122 的公开端点。
+    // 认证状态**不**从这里取：详情响应本身就带真值，不必多一次请求去问同一件事。
+    const [similar, sellerProfile] = await Promise.all([
+      fetchSimilarListings(detail.category, detail.id).catch((error) => {
+        console.warn('[miniapp] 相似推荐获取失败，本次不展示相似商品', error)
+        return []
+      }),
+      fetchPublicUserProfile(detail.seller.id).catch((error) => {
+        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数', error)
+        return null
+      }),
+    ])
+    const seller: MockUser = toMockSeller(detail, sellerProfile?.soldCount ?? null)
     // 先按列表卡投影一次拿到公共字段（角标 / 比例 / 相对时间），再补详情独有的几项。
     // 不用 `[0]!`：空数组断言会掩盖投影层的 bug，这里显式兜底。
     const [base] = toMockListings([detail], now)
@@ -340,6 +353,56 @@ function relativeLabel(iso: string, now: number = Date.now()): string {
   return `${Math.floor(hours / 24)} 天前`
 }
 
+/* --------------------------------------------------------- 他人主页（公开资料） */
+
+/**
+ * 公开用户主页的加载结果。
+ *
+ * 四态与商品详情同款（#124 的结论）：`notFound`（后端说这个人不存在 → 空态）与
+ * `failed`（根本没问到 → 错误态）必须分开；混成一个 `null` 会让页面把「后端挂了」
+ * 说成「用户不存在」。
+ */
+export type PublicUserResult =
+  | { status: 'ok'; profile: PublicUserProfile; listings: MockListing[] }
+  | { status: 'notFound' }
+  | { status: 'failed' }
+
+/**
+ * 他人主页：公开资料 + TA 的在售（Issue #122）。
+ *
+ * **刻意没有 mock 回退**（与 `loadListingDetail` 的 404 分支同一取舍）：mock fixture 是按
+ * mock 世界的 id（`u-lin` / `u-suyiran` …）组织的，而本页只接受真实 uuid。给一个真实 uuid
+ * 退 mock 等于凭空造出一个用户和一批商品 —— `features/listing/adapt.ts` 的铁律 2 记的正是
+ * 这个坑（`getUser` 对未知 id 会回退到 `USERS[0]`）。所以生产与演示构建口径一致：
+ * 拿不到真实数据就是 `failed`，由页面显示错误态与重试入口。
+ *
+ * 两个请求并行：资料与在售互相独立，缺失任一个都无法渲染完整页面。
+ */
+export async function loadPublicUserHome(
+  userId: string,
+  now: number = Date.now(),
+): Promise<PublicUserResult> {
+  try {
+    const [profile, page] = await Promise.all([
+      fetchPublicUserProfile(userId),
+      fetchPublicUserListings(userId),
+    ])
+
+    // 后端对「非法 uuid」与「不存在的用户」给同一个 404（契约刻意不区分）。
+    if (profile === null && page === null) return { status: 'notFound' }
+    // 只有一个 null：两个端点的存在性判断漂移了。按 failed 报，不猜哪一个是真相。
+    if (profile === null || page === null) {
+      console.warn('[miniapp] 他人主页：资料与在售列表的存在性判断不一致，按失败处理')
+      return { status: 'failed' }
+    }
+
+    return { status: 'ok', profile, listings: toMockListings(page.items, now) }
+  } catch (error) {
+    reportFailure('他人主页', error, false)
+    return { status: 'failed' }
+  }
+}
+
 /** 供页面把契约 `ListingCard[]` 直接转成卡片视图（详情页相似推荐等） */
 export { toMockListings }
 
@@ -351,16 +414,20 @@ export { toMockListings }
  * 那意味着前端与契约已经漂移，不该被静默吞掉。
  *
  * 日志里必须写明**这次有没有退 mock**：生产口径下没退，看日志的人才知道
- * 用户看到的是错误态，而不是以为「又是演示数据」。
+ * 用户看到的是错误态，而不是以为「又是演示数据」。`fellBack` 默认取当前构建口径，
+ * 页面若**刻意不回退**（如他人主页，见 `loadPublicUserHome`）必须显式传 `false`，
+ * 否则日志会声称一件没发生的事。
  */
-function reportFailure(what: string, error: unknown): void {
+function reportFailure(
+  what: string,
+  error: unknown,
+  fellBack: boolean = MOCK_FALLBACK_ENABLED,
+): void {
   const expected =
     isUnauthenticatedError(error) ||
     (error instanceof Error && /request:fail|network|timeout/i.test(error.message))
   const detail = error instanceof Error ? error.message : String(error)
-  const tail = MOCK_FALLBACK_ENABLED
-    ? '，已回退 mock（开发 / 预览口径）'
-    : '，未回退 mock（生产口径）'
+  const tail = fellBack ? '，已回退 mock（开发 / 预览口径）' : '，未回退 mock（生产口径）'
   if (expected) {
     console.debug(`[miniapp] ${what}：真实接口不可用${tail}（${detail}）`)
     return
