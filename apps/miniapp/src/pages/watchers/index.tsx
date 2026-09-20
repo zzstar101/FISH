@@ -42,8 +42,12 @@ import './index.scss'
  *
  * **统计与列表同源**：`count` / `medianCents` 都从**这一份已加载的 `items`** 现算，
  * 不旁路读 `watchersSummary()` —— 否则失败时会出现「共 7 人想要 + 列表加载失败」，
- * 或「列表 8 行 / 共 7 人想要」（#139 review P1）。已注销的人仍计入人数，
- * 与商品卡上的 `wantsOf()` 说同一个数；注销只影响该行的动作与视觉。
+ * 或「列表 8 行 / 共 7 人想要」（#139 review P1）。已注销的人仍计入人数（口径见
+ * `@/features/watchers/stats`）；注销只影响该行的动作与视觉。
+ *
+ * ⚠️ **跨页面的「N 人想要」目前仍不同源**：商品详情 / 我的发布行走的是 catalog 的
+ * `listing.wants`，本页数是 fixture 的 watcher 行数，两者在 mock 下可以不等
+ * （如 l-041：前者 31、本页 0 行）。要真正同源得等 #123 的后端端点，本页不假装一致。
  *
  * **与后端的边界**：契约没有「谁想要我的商品」端点（P1），整页 mock，标 `BLOCKED: 需新 Issue`。
  */
@@ -215,7 +219,12 @@ export default function Watchers() {
       </View>
 
       {/* 加载失败：给出口，不让用户卡在空白页（稿子第 04 帧的对照 A） */}
-      {failed ? (
+      {/*
+        失败卡与骨架屏必须互斥：`retry()` 会把 `loading` 置真而 `failed` 要到响应回来
+        才清，两者同时为真时失败卡与骨架屏会一起渲染。Taro 端页面根不是 concurrent root，
+        setState 不保证自动批处理，所以不能指望「同一 tick 里两次 setState 只画一帧」。
+      */}
+      {failed && !loading ? (
         <View className="wt__fail">
           <View className="wt__fail-ic">
             <Image className="wt__fail-img" src={ICONS.warnInk} mode="aspectFit" />
