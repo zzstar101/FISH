@@ -1,12 +1,14 @@
 @use '@/styles/mixins' as *;
 
 /**
- * 许愿墙（Tab 页）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ * 许愿（一级 Tab 页）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 区块顺序：冰蓝页头 → 固定顶栏「许愿墙」 → 热门排行 → 筛选胶囊横滑 →
- * WISH 吊牌主卡 → bento 两卡 → 愿望成真（匹配商品）→ 最近的心愿 → 悬浮 TabBar。
+ * 区块顺序：冰蓝页头 → 玻璃顶栏（两段式标题 + 副行一级 tab）→ 热门求购卡 →
+ * 区块标题行（+「我要许愿」）→ 二级筛选横滑胶囊 → `.mw` / `.pool` 卡片列表 →
+ * k-匿名说明 → 悬浮 TabBar。
  *
- * 顶栏由 `components/top-bar` 提供（`fixed` + 自带等高占位块），页面不再自绘标题行。
+ * 顶栏由 `components/top-bar` 提供（`fixed` + 自带等高占位块），页面不再自绘标题行；
+ * 副行（tab）的占位由 `.wish__header-gap` 补 —— 组件的 `spacer` 只含主行。
  */
 .wish {
   position: relative;
@@ -16,7 +18,7 @@
   /* 注意：**不要**在这里写 overflow-x: hidden。
      只要根节点带 overflow（非 visible），页面自身就成了滚动容器，
      里面 position: sticky 的悬浮 TabBar 会退化成普通元素（实测跑到文档末尾 y=4813）。
-     横向溢出由需要裁切的子块各自 overflow: hidden 处理（如 .tagcard__wave）。 */
+     横向溢出由需要裁切的子块各自 overflow: hidden 处理（如 `.mw` 的命中行）。 */
 }
 
 /* 顶部冰蓝渐变圆角背景（设计稿 .topbg，高 208pt） */
@@ -24,23 +26,84 @@
   @include page-hero(416px, 64px);
 }
 
-/* ─────────────────────────── 热门排行 ─────────────────────────── */
+/* ───────────────────── 顶栏副行：一级 tab（照消息页） ───────────────────── */
 
-/*
- * 设计稿 `.hot`：白卡 + 顶部 3px 品牌渐变条 + 两列四行。
- * 这里保留稿里的两列网格（8 条 → 2×4）。
- */
-.hotrank {
+/* 与 `pages/chat/index.scss` 的 `.chat__filters` 同款：上 20 / 下 8，与 tab 高 68 相加 = 96，
+   正好等于下方 `.wish__header-gap` 的占位高 */
+.wish__tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 40px 8px;
+}
+
+/* 纯文字 tab，选中加粗 + 品牌渐变下划线（消息页 `.chat__tab` 同款） */
+.wish__tab {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 68px;
+  padding: 0 24px;
+  color: var(--muted);
+  font-size: 28px;
+  transition: color 0.18s;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 8px;
+    height: 4px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 0.18s;
+  }
+
+  &.is-on {
+    color: var(--fg);
+    font-weight: 600;
+
+    &::after {
+      background: var(--grad-brand);
+    }
+  }
+}
+
+/* 计数：等宽字体品牌色 */
+.wish__tab-n {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+/* 副行占位：20（上衬）+ 68（tab 高）+ 8（下衬）= 96px */
+.wish__header-gap {
+  height: 96px;
+}
+
+/* ─────────────────────────── 热门求购 ─────────────────────────── */
+
+/* 内容区左右留白：设计稿全页左右各 20pt。这里是**唯一**一层横向内边距。 */
+.wish__body {
   position: relative;
   z-index: 1;
-  margin: 8px 40px 0;
+  padding: 0 40px;
+}
+
+/* 设计稿 `.hot`：白卡 + 顶部 3px 品牌渐变条 + 两列 + 热度条 */
+.hot {
+  position: relative;
+  margin-top: 28px;
   padding: 20px 22px 12px;
   @include card;
   overflow: hidden;
 }
 
-/* 卡片顶部的品牌渐变细条 */
-.hotrank::before {
+.hot::before {
   content: '';
   position: absolute;
   left: 0;
@@ -50,7 +113,7 @@
   background: linear-gradient(90deg, var(--brand), var(--accent-mid));
 }
 
-.hotrank__hd {
+.hot__hd {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -58,12 +121,9 @@
   padding: 2px 6px 12px;
 }
 
-/*
- * 标题必须 `nowrap` + `flex: 0 0 auto`。
- * 右侧说明是 `nowrap` 的，若标题可收缩，flex 会把它压到最小内容宽度 ——
- * 中文就会退化成「一列一个字」竖排（实测踩到）。
- */
-.hotrank__title {
+/* 标题必须 `nowrap` + `flex: 0 0 auto`：右侧说明是 nowrap 的，若标题可收缩，
+   flex 会把它压到最小内容宽度 —— 中文会退化成「一列一个字」竖排（实测踩到） */
+.hot__title {
   flex: 0 0 auto;
   font-size: 28px;
   font-weight: 600;
@@ -71,11 +131,7 @@
   white-space: nowrap;
 }
 
-/*
- * 右侧说明：可收缩 + 截断。
- * 标题是固定宽（nowrap），说明若也强制 nowrap 且不收缩，窄屏上会顶出卡片右边界。
- */
-.hotrank__note {
+.hot__note {
   flex: 1 1 auto;
   min-width: 0;
   text-align: right;
@@ -86,51 +142,54 @@
 }
 
 /* 设计稿 `.hot-grid{grid-template-columns:1fr 1fr; column-gap:12px}`：两列，8 条 → 4 行 */
-.hotrank__grid {
+.hot__grid {
   display: flex;
   flex-wrap: wrap;
-  /* 设计稿 column-gap:12pt → 24px */
   column-gap: 24px;
+  row-gap: 4px;
 }
 
 /* 设计稿 `.rk{padding:3px 5px}` → 6px 10px */
-.hotrank__row {
+.hot__row {
   width: calc(50% - 12px);
   box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 6px 10px;
-}
+  border-radius: 16px;
 
-/* 设计稿 `.rk{grid-template-columns:16px 1fr}` → 名次列 32px */
-.hotrank__no {
-  flex: 0 0 auto;
-  width: 32px;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--muted-2);
-
-  &.is-top {
-    color: var(--brand);
+  &:active {
+    background: var(--accent-weak);
   }
 }
 
-.hotrank__main {
+/* 设计稿 `.rk-n{font-size:10px}` → 20px；前三名走品牌色 */
+.hot__no {
+  flex: 0 0 auto;
+  width: 32px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--muted-2);
+}
+
+.hot__row.is-top .hot__no {
+  color: var(--brand);
+}
+
+.hot__main {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-/*
- * 词条：设计稿 `.rk-t{font-size:12px}` → 24px。
- *
- * 两列布局下每格可用宽约 269rpx，四个汉字（4 × 24 = 96）绰绰有余。
- * 注意别拿浏览器预览的分辨率去调这个值 —— 预览外壳没有做 rpx 换算
- * （见 `preview/build.mjs` 只替换字面量 `rpx`），390 宽的视口会把 SCSS px 按 1:1 画，
- * 看起来比真机大约 1.9 倍，会误判成「文字放不下」。
- */
-.hotrank__kw {
+/* 词条：设计稿 `.rk-t{font-size:12px}` → 24px。
+   两列布局下每格可用宽约 269rpx，四个汉字（4 × 24 = 96）绰绰有余。
+   注意别拿浏览器预览的分辨率去调这个值 —— 预览外壳没有做 rpx 换算
+   （见 `preview/build.mjs` 只替换字面量 `rpx`），390 宽的视口会把 SCSS px 按 1:1 画，
+   看起来比真机大约 1.9 倍，会误判成「文字放不下」。 */
+.hot__kw {
   display: block;
   font-size: 24px;
   font-weight: 500;
@@ -139,7 +198,7 @@
 }
 
 /* 热度条：填充式数据编码，宽度按榜首归一化 */
-.hotrank__bar {
+.hot__bar {
   display: block;
   height: 4px;
   margin-top: 6px;
@@ -148,309 +207,39 @@
   overflow: hidden;
 }
 
-.hotrank__bar-fill {
+.hot__bar-fill {
   display: block;
   height: 100%;
   border-radius: var(--r-pill);
   background: linear-gradient(90deg, var(--brand), var(--electric));
 }
 
-/* ─────────────────────────────── 页头 ─────────────────────────────── */
-
-.wish__newbtn {
-  flex: 0 0 auto;
-  width: 80px;
-  height: 80px;
-  border-radius: 50%;
+/* 展开 / 收起：通栏一行，顶部一条极淡分割线 */
+.hot__more {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.72);
-  border: 2px solid rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-
-  &:active {
-    background: #fff;
-  }
-}
-
-.wish__newbtn-img {
-  width: 38px;
-  height: 38px;
-}
-
-/* ───────────────────────── 筛选胶囊（横滑） ───────────────────────── */
-
-.wish__chips {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  margin-top: 36px;
-  padding: 0 40px;
-  white-space: nowrap;
-}
-
-.wish__chips-inner {
-  display: inline-flex;
-  align-items: center;
-  gap: 16px;
-  /* 胶囊按下外扩 6pt 的点击热区，靠 padding 让左右两端不被裁掉 */
-  padding: 8px 0;
-}
-
-.wish__chip {
-  @include chip;
-
-  &:active {
-    opacity: 0.8;
-  }
-}
-
-.wish__chip-hash {
-  margin-right: 6px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-weight: 600;
-  color: var(--line);
-}
-
-.wish__chip.is-on .wish__chip-hash {
-  color: rgba(255, 255, 255, 0.62);
-}
-
-/* ─────────────────────── WISH 吊牌（全局唯一母题） ─────────────────────── */
-
-/* 内容区左右留白：设计稿全页左右各 20pt。
-   注意这里是**唯一**一层横向内边距——吊牌、bento、商品卡、心愿行都直接挂在这里，
-   再嵌一层 .pad 会把 295 的可用宽挤成 255，卡片内的长文案就会横向溢出。 */
-.wish__body {
-  position: relative;
-  z-index: 1;
-  padding: 0 40px;
-}
-
-.tagcard {
-  position: relative;
-  margin-top: 36px;
-  padding: 44px 40px 0;
-  overflow: hidden;
-  @include card(48px);
-}
-
-/* 顶部 5pt 品牌渐变条 */
-.tagcard__bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 10px;
-  background: linear-gradient(90deg, var(--brand) 0%, var(--accent-mid) 100%);
-}
-
-/* 右上角星形线稿 */
-.tagcard__star {
-  position: absolute;
-  top: 44px;
-  right: 40px;
-  width: 30px;
-  height: 30px;
-  opacity: 0.72;
-}
-
-/* 顶部中央圆孔（描边圆圈，吊牌的穿孔） */
-.tagcard__hole {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 3px solid var(--line);
-  margin: 4px auto 32px;
-}
-
-.tagcard__wish {
-  display: block;
-  font-size: 42px;
-  font-weight: 600;
-  line-height: 1.42;
-  letter-spacing: 0.01em;
-}
-
-.tagcard__desc {
-  display: block;
-  margin-top: 16px;
-  font-size: 25px;
-  line-height: 1.6;
-  color: var(--muted);
-}
-
-.tagcard__meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 24px;
-  margin-top: 32px;
-}
-
-.tagcard__budget {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  height: 60px;
-  padding: 0 26px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  font-size: 25px;
-  font-weight: 600;
-}
-
-.tagcard__budget-key {
-  margin-right: 4px;
-  color: var(--muted);
-}
-
-.tagcard__budget-val {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  color: var(--fg);
-}
-
-.tagcard__cnt {
-  display: inline-flex;
-  align-items: center;
   gap: 8px;
-  font-size: 24px;
-  color: var(--muted);
-}
-
-.tagcard__cnt-num {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 24px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-/*
- * 底部波浪：设计稿是手绘 SVG 路径（卡片全宽，白色在上、冰蓝在下，波峰在中间）。
- * 这里不引 SVG，改用「整块冰蓝渐变带 + 顶部压一个更宽的白色椭圆」堆出来：
- * 椭圆两侧被裁掉，只剩中间一段白色下凸的弧，正好就是那条手绘波浪。
- * `overflow: hidden` 是必须的：椭圆比卡片宽，不裁会给整页加一条横向滚动。
- */
-.tagcard__wave {
-  position: relative;
-  height: 132px;
-  margin-top: 32px;
-  overflow: hidden;
-  background: var(--grad-wave);
-}
-
-/* 白色椭圆：压在渐变带上沿，咬出中间下凸的波峰 */
-.tagcard__wave-dip {
-  position: absolute;
-  left: 50%;
-  top: -104px;
-  width: 320px;
-  height: 122px;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: var(--surface);
-}
-
-.tagcard__wave-word {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  color: var(--line);
-}
-
-/* ─────────────────────────── bento 两卡 ─────────────────────────── */
-
-.bento {
-  display: flex;
-  gap: 24px;
-  margin-top: 36px;
-}
-
-.bcard {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 236px;
-  border-radius: 44px;
-  padding: 32px;
-  display: flex;
-  flex-direction: column;
-}
-
-.bcard__k {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 22px;
-  letter-spacing: 0.08em;
-}
-
-.bcard__v {
-  width: 100%;
-  margin-top: auto;
-  font-size: 56px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-
-.bcard__s {
-  margin-top: 14px;
+  margin-top: 8px;
+  padding: 14px 0 10px;
+  border-top: 2px solid var(--border);
   font-size: 23px;
-  line-height: 1.4;
-}
+  font-weight: 500;
+  color: var(--brand);
 
-/* 深色卡：品牌渐变 + 右下角同心圆弧装饰 */
-.bcard--dark {
-  position: relative;
-  overflow: hidden;
-  background: var(--grad-brand);
-  color: #fff;
-
-  .bcard__k {
-    color: rgba(255, 255, 255, 0.62);
-  }
-
-  .bcard__s {
-    color: rgba(255, 255, 255, 0.66);
-  }
-
-  &::after {
-    content: '';
-    position: absolute;
-    right: -60px;
-    bottom: -72px;
-    width: 208px;
-    height: 208px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.16);
+  &:active {
+    opacity: 0.72;
   }
 }
 
-/* 浅色卡：浅蓝底 + 品牌色数字 */
-.bcard--tint {
-  background: var(--accent-weak);
-  border: 2px solid #e2ecff;
-
-  .bcard__k {
-    color: var(--muted);
-  }
-
-  .bcard__v {
-    color: var(--brand);
-  }
-
-  .bcard__s {
-    color: var(--muted-2);
-  }
+.hot__more-ic {
+  width: 28px;
+  height: 28px;
 }
 
-/* ─────────────────────────── 区块标题行 ─────────────────────────── */
+/* ──────────────────────── 区块标题行（+ 发布入口） ──────────────────────── */
 
-/* 区块标题行：自己带 40px 内边距（与 .wish__body 同值），所以用负外边距抵消父级内边距，
+/* 自己带 40px 内边距（与 `.wish__body` 同值），所以用负外边距抵消父级内边距，
    否则标题会比卡片再往里缩 20pt */
 .wish__sec {
   display: flex;
@@ -458,211 +247,499 @@
   justify-content: space-between;
   gap: 16px;
   margin: 0 -40px;
-  padding: 52px 40px 24px;
+  padding: 36px 40px 24px;
 }
 
 .wish__sec-title {
+  flex: 0 0 auto;
   font-size: 36px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .wish__sec-note {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
   font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  color: var(--muted);
+  @include ellipsis;
+}
+
+/* 「我要许愿」：设计稿 `.btn.primary`（深墨底 + 白字 + 白加号） */
+.wish__new {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 60px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  color: #fff;
+  font-size: 23px;
+  font-weight: 500;
+
+  &:active {
+    opacity: 0.86;
+  }
+}
+
+/* `ICONS.plusLine` 是品牌蓝线稿加号：压在深墨底上要转白（与出物页删图钮同一招） */
+.wish__new-ic {
+  width: 26px;
+  height: 26px;
+  filter: brightness(0) invert(1);
+}
+
+/* ────────────────────── 二级筛选：横滑胶囊（状态 / 分类） ────────────────────── */
+
+/* 横滑必须落在**子元素**上（页面根节点不能 overflow），所以 ScrollView 拉满整宽、
+   内层用 inline-flex 排布 */
+.wish__subs {
+  width: 100%;
+  margin: 0 -40px;
+  padding: 28px 40px 4px;
+  box-sizing: content-box;
+  white-space: nowrap;
+}
+
+.wish__subs-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  /* 胶囊按下外扩的点击热区，靠 padding 让左右两端不被裁掉 */
+  padding: 8px 0;
+}
+
+/* 设计稿 `.stab`：白底胶囊 + 计数；选中转深墨（与订单页 `.orders__pill` 同一套写法） */
+.wish__sub {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 12px;
+  height: 62px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  font-size: 24px;
+  color: var(--muted-2);
+  white-space: nowrap;
+
+  &.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+/* 分类图标（PNG）：压在深墨底上会看不见，用滤镜转白 —— 与出物页删图钮同一招 */
+.wish__sub-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.wish__sub.is-on .wish__sub-ic {
+  filter: brightness(0) invert(1);
+}
+
+.wish__sub-n {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  opacity: 0.68;
+}
+
+.wish__sub.is-on .wish__sub-n {
+  opacity: 0.88;
+}
+
+/* ──────────────────────────── 卡片列表 ──────────────────────────── */
+
+.wish__list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── 我的愿望卡（设计稿 `.mw`） ── */
+
+.mw {
+  padding: 28px;
+  @include card;
+}
+
+.mw__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.mw__main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mw__time {
+  display: block;
   font-size: 22px;
   color: var(--muted);
 }
 
-/* ─────────────────────── 愿望成真：匹配商品卡 ─────────────────────── */
+.mw__kw {
+  display: block;
+  margin-top: 8px;
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.35;
+  @include clamp(2);
+}
 
-/*
- * 版式约束：卡片内宽 251，三列 = 缩略图 64 + 间距 12×2 + 标题列 + 价格列。
- * 「匹配度 100」那一列最宽 ~72，标题列因此只能拿到 ~91（设计稿按 350 宽画，这里按 295 落地）。
- * 这是全页最紧的一块，别再往这两列加字号或图标，否则标题会被压成竖排。
- */
-.mcard {
+.mw__cat {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 22px 20px;
-  @include card(36px);
+  margin-top: 6px;
+  font-size: 23px;
+  color: var(--muted);
+}
 
-  & + & {
-    margin-top: 20px;
+.mw__cat-ic {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+}
+
+/* 状态胶囊：复用仓库的 `status-pill` 三档色调 */
+.mw__pill {
+  @include status-pill;
+}
+
+.mw__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.mw__budget {
+  font-size: 26px;
+  color: var(--muted-2);
+}
+
+.mw__budget-val {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+/* 命中数：可点进匹配结果页（只有真的命中过才高亮 + 带箭头） */
+.mw__hits {
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+
+  &.is-hit {
+    color: var(--brand);
+    font-weight: 600;
   }
+}
+
+/* 命中商品区：卡片内的一条分割线 + 标题行 + 若干命中行 */
+.mw__truth {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 2px solid var(--border);
+}
+
+.mw__truth-hd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 24px;
+  font-weight: 600;
+  /* 设计稿是 `color-mix(ok 44%, fg)`；`--ok-ink` 是同色系里最接近的令牌 */
+  color: var(--ok-ink);
+}
+
+.mw__truth-ic {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+/* 命中行（设计稿 `.truth .it`）：浅蓝底 + 淡描边，整行可点进商品详情 */
+.wishhit {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: 28px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-faint);
 
   &:active {
     border-color: var(--line);
   }
 }
 
-.mcard__thumb {
+.wishhit__thumb {
   flex: 0 0 auto;
-  width: 64px;
-  height: 64px;
-  border-radius: 20px;
+  width: 72px;
+  height: 72px;
+  border-radius: 24px;
   overflow: hidden;
   background: var(--grad-ph);
 }
 
-.mcard__img {
+.wishhit__img {
   width: 100%;
   height: 100%;
 }
 
-/* 标题列吃掉剩余宽度；min-width 是硬下限，宁可整行变高也不要标题被压成 0 宽 */
-.mcard__main {
-  flex: 1 1 auto;
-  min-width: 88px;
-}
-
-.mcard__name {
-  display: block;
-  font-size: 26px;
-  font-weight: 600;
-  line-height: 1.32;
-  @include clamp(2);
-}
-
-.mcard__sub {
-  display: block;
-  margin-top: 6px;
-  font-size: 20px;
-  color: var(--muted);
-  @include ellipsis;
-}
-
-/* 价格区按内容定宽、不收缩（收缩会把「匹配度 100」压成竖排） */
-.mcard__right {
-  flex: 0 0 auto;
-  max-width: 72px;
-  text-align: right;
-}
-
-.mcard__price {
-  display: block;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 26px;
-  font-weight: 700;
-  line-height: 1.25;
-  white-space: nowrap;
-}
-
-/* 「匹配度 100」18px 是这一列放得下的上限，塞勾图标或更大字号都会换行 */
-.mcard__score {
-  display: block;
-  margin-top: 6px;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 18px;
-  white-space: nowrap;
-  color: var(--brand);
-}
-
-/* ─────────────────────── 最近的心愿：行列表 ─────────────────────── */
-
-/*
- * 心愿行（设计稿 40pt 图标 + 文案 + 右侧预算/状态）。
- * 预览帧按 1:1 渲染，比小程序真机宽一倍，所以这里 3 段元信息会折行；
- * 真机 750rpx 下标题列有 ~420rpx，同一行放得下。
- */
-.wishrow {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 28px 0;
-  border-bottom: 2px solid var(--border);
-
-  &:last-child {
-    border-bottom: 0;
-  }
-
-  &:active {
-    opacity: 0.75;
-  }
-}
-
-.wishrow__mk {
-  flex: 0 0 auto;
-  width: 76px;
-  height: 76px;
-  border-radius: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent-weak);
-}
-
-.wishrow__mk-img {
-  width: 36px;
-  height: 36px;
-}
-
-.wishrow__main {
+.wishhit__main {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.wishrow__title {
+.wishhit__title {
   display: block;
-  font-size: 28px;
+  font-size: 25px;
   font-weight: 500;
+  @include ellipsis;
+}
+
+.wishhit__time {
+  display: block;
+  margin-top: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+/* 价格区按内容定宽、不收缩（收缩会把「¥1,580」压成竖排） */
+.wishhit__right {
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.wishhit__price {
+  display: block;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 26px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.wishhit__score {
+  display: block;
+  margin-top: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  color: var(--brand);
+  white-space: nowrap;
+}
+
+/* 动作行：左「按关键词搜索」（带命中数胶囊），右「关闭愿望」 */
+.mw__act {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 2px solid var(--border);
+}
+
+.mw__act-lk {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--brand);
+
+  &:active {
+    opacity: 0.72;
+  }
+}
+
+.mw__act-ic {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+.mw__act-cnt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+}
+
+.mw__act-off {
+  flex: 0 0 auto;
+  font-size: 23px;
+  font-weight: 500;
+  color: var(--danger);
+
+  &.is-off {
+    color: var(--muted);
+  }
+}
+
+/* ── 愿望池卡（设计稿 `.pool`） ── */
+
+.pool {
+  padding: 28px;
+  @include card;
+}
+
+.pool__top {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.pool__main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pool__kw {
+  display: block;
+  font-size: 34px;
+  font-weight: 600;
   line-height: 1.35;
   @include ellipsis;
 }
 
-.wishrow__meta {
+.pool__cat {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 12px;
-  margin-top: 8px;
+  margin-top: 6px;
   font-size: 23px;
   color: var(--muted);
 }
 
-.wishrow__dot {
+.pool__cat-ic {
   flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--border);
+  width: 26px;
+  height: 26px;
 }
 
-.wishrow__right {
+/* 「求购」徽章：设计稿用一组独立紫（见 `_token-vars.scss` 的 --lav / --lav-weak） */
+.pool__badge {
   flex: 0 0 auto;
-  max-width: 172px;
-  text-align: right;
-}
-
-.wishrow__budget {
-  display: block;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 24px;
+  display: inline-flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: var(--r-pill);
+  background: var(--lav-weak);
+  color: var(--lav);
+  font-size: 21px;
   font-weight: 600;
-  white-space: nowrap;
 }
 
-.wishrow__st {
-  display: block;
-  margin-top: 8px;
-  font-size: 22px;
-  white-space: nowrap;
-  color: var(--muted);
-
-  &.is-hit {
-    color: var(--brand);
-  }
-}
-
-/* ─────────────────────────── 空态 ─────────────────────────── */
-
-.wish__empty {
+.pool__meta {
   display: flex;
-  justify-content: center;
-  padding: 64px 0 24px;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 22px;
 }
 
-.wish__empty-text {
+.pool__budget {
   font-size: 26px;
+  color: var(--muted-2);
+}
+
+.pool__budget-val {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.pool__want {
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* k-匿名说明条（设计稿 `.knote`）：虚线描边的等宽小字 */
+.knote {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 24px;
+  padding: 20px 24px;
+  border-radius: 28px;
+  background: var(--accent-weak);
+  border: 2px dashed var(--accent-mid);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.knote__line {
+  display: block;
+}
+
+/* ─────────────────────────── 空态（两分支共用） ─────────────────────────── */
+
+.wishempty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 72px 44px;
+  text-align: center;
+}
+
+.wishempty__mk {
+  width: 108px;
+  height: 108px;
+  margin-bottom: 24px;
+  border-radius: 36px;
+  background: var(--accent-weak);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wishempty__ic {
+  width: 52px;
+  height: 52px;
+}
+
+.wishempty__title {
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.wishempty__text {
+  margin-top: 12px;
+  font-size: 23px;
+  line-height: 1.65;
   color: var(--muted);
 }
