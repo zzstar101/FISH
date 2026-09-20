@@ -210,6 +210,42 @@ export const Input = (props: BaseProps) => {
 }
 
 /**
+ * Textarea：多行输入（会话页输入栏用它）。
+ *
+ * 小程序专有的 `autoHeight` / `disableDefaultPadding` / `placeholderClass` 在浏览器里
+ * 没有对应物（高度与 placeholder 配色由 CSS 管），显式丢掉以免 React 报未知属性；
+ * `maxlength`（小程序写法，全小写）映射成 DOM 的 `maxLength`。事件映射与 `Input` 同款。
+ */
+export const Textarea = (props: BaseProps) => {
+  const {
+    value,
+    placeholder,
+    maxlength,
+    className,
+    style,
+    onInput,
+    autoHeight,
+    disableDefaultPadding,
+    placeholderClass,
+    ...rest
+  } = props
+  void autoHeight
+  void disableDefaultPadding
+  void placeholderClass
+  return createElement('textarea', {
+    ...mapEvents(rest as Record<string, unknown>),
+    value: typeof value === 'string' ? value : '',
+    placeholder: typeof placeholder === 'string' ? placeholder : '',
+    maxLength: typeof maxlength === 'number' ? maxlength : undefined,
+    className,
+    style: normalizeStyle(style),
+    onChange: (event: { target: { value: string } }) => {
+      if (typeof onInput === 'function') onInput({ detail: { value: event.target.value } })
+    },
+  })
+}
+
+/**
  * Camera：预览里没有相机硬件，渲染一个带标记的空容器（透明），
  * 页面取景底自己的占位渐变会透出来；onScanCode / onError 不会触发。
  */
