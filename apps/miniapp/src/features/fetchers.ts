@@ -56,8 +56,13 @@ import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
  */
 declare const __ALLOW_MOCK_FALLBACK__: boolean | undefined
 
-/** 未注入 = 关闭（fail closed），见文件头「生产口径」 */
-const MOCK_FALLBACK_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
+/**
+ * 未注入 = 关闭（fail closed），见文件头「生产口径」。
+ *
+ * 导出给「不走 fetchers 取数、但需要同一套演示兜底判据」的调用方
+ * （当前是底栏的冷启动未读补数：真实构建不得拿 fixture 顶替真实未读数）。
+ */
+export const MOCK_FALLBACK_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
 
 /* ------------------------------------------------------------------ 排序 */
 

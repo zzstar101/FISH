@@ -16,10 +16,11 @@
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
-import { useUnreadSnapshot } from '@/features/chat/unread'
+import { hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
+import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
 
@@ -119,31 +120,71 @@ export default function CustomTabBar() {
   /** 消息页发布的未读快照（见 `features/chat/unread.ts`）；没进过消息页时为 null */
   const unread = useUnreadSnapshot()
 
+  /** 当前账号 id（已登录时非空），effect 依赖它而不是整个 user 对象 */
+  const userId = user?.id ?? null
+
+  /**
+   * 会话未读的本地现算口径（排除系统会话 —— 它的未读由「通知」承载）。
+   *
+   * 会话列表还没接真实后端（#89 的既有债），所以这一项无论哪条路径都来自 fixture；
+   * 本轮修的是**通知**那一项不再被 fixture 顶替。
+   */
+  const fixtureConversations = useMemo(
+    () =>
+      conversations()
+        .filter((item) => item.kind !== 'system')
+        .reduce((sum, item) => sum + item.unreadCount, 0),
+    [],
+  )
+
+  /**
+   * 冷启动补快照（#129 review P1）。
+   *
+   * 底栏在每个 Tab 页都渲染，用户可能一次都不进消息页 —— 那时没有任何人发布快照，
+   * 旧实现就退回「mock 会话 + mock 通知计数」，于是真实未读通知与 fixture 不一致时，
+   * 要么不亮、要么亮一颗点进去什么都没有的幽灵红点。
+   *
+   * 这里在「已登录 + 本次账号还没有快照」时补一次**真实** `GET /notifications/unread-count`
+   * （`hydrateUnread` 内部按账号去重，多 Tab 实例只打一次）。真实构建下接口失败就是
+   * 「不知道」；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，本地没有后端）才把
+   * fixture 计数作为兜底传进去，否则演示环境里那颗红点会整个消失。
+   */
   useEffect(() => {
-    // 未登录不亮红点：未读数目前只能从 mock 的演示会话求得，
-    // 匿名时亮起等于在「我的」登录引导卡上展示别人的未读。
-    if (authStatus !== 'authed') {
+    if (authStatus !== 'authed' || !userId) return
+    hydrateUnread(
+      userId,
+      fixtureConversations,
+      MOCK_FALLBACK_ENABLED ? () => unreadNotificationCount() : undefined,
+    )
+  }, [authStatus, userId, fixtureConversations])
+
+  useEffect(() => {
+    // 未登录不亮红点：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上
+    // 展示别人的未读。
+    if (authStatus !== 'authed' || !userId) {
       setDot(false)
       return
     }
     // 未读消息 + 未读通知的合计，决定消息 tab 的小红点。
-    // 优先用消息页发布的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除；
-    // 但**只认属于当前账号的快照**：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时
-    // 没人清快照，不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
-    // 通知那一项为 null（列表未就绪 / 加载失败，「不知道」）时按**无已知未读**算，
-    // 不拿 fixture 顶替 —— 页内角标在失败态也是 0，两边必须同一口径，否则会亮一颗
-    // 点进「通知」tab 只有错误态、清不掉的幽灵红点。会话那一项与通知接口无关，照常采信。
-    if (unread && user && unread.ownerId === user.id) {
+    // 优先用本次账号的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除。
+    // 快照按账号校验：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时没人清快照，
+    // 不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
+    // 通知那一项为 null（列表未就绪 / 加载失败 / 真实接口不可达，「不知道」）时按
+    // **无已知未读**算，不拿 fixture 顶替 —— 页内角标在失败态也是 0，两边必须同一口径，
+    // 否则会亮一颗点进「通知」tab 只有错误态、清不掉的幽灵红点。
+    if (unread && unread.ownerId === userId) {
       setDot(unread.conversations + (unread.notifications ?? 0) > 0)
       return
     }
-    // 快照不存在（本次会话还没进过消息页）：维持接入前的 fixture 现算口径，
-    // 同样排除系统会话 —— 它的未读由「通知」承载。
-    const unreadChat = conversations()
-      .filter((item) => item.kind !== 'system')
-      .reduce((sum, item) => sum + item.unreadCount, 0)
-    setDot(unreadChat + unreadNotificationCount() > 0)
-  }, [authStatus, user, unread])
+    // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持接入前的
+    // fixture 现算口径，真实构建按「无已知未读」算 —— 等 `hydrateUnread` 的真实结果
+    // 落地再决定亮不亮，不能用 fixture 先亮一颗再说。
+    if (!MOCK_FALLBACK_ENABLED) {
+      setDot(false)
+      return
+    }
+    setDot(fixtureConversations + unreadNotificationCount() > 0)
+  }, [authStatus, userId, unread, fixtureConversations])
 
   // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
   useEffect(() => {
