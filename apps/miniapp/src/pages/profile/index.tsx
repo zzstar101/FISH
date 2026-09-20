@@ -5,6 +5,7 @@ import brandLockup from '@/assets/brand/brand-lockup.png'
 import { ICONS } from '@/assets/lib-icons'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { loadProfile, type ProfileView } from '@/features/fetchers'
+import { realCounts } from '@/features/profile/counts'
 import { readSignature, saveSignature } from '@/features/profile/signature'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
@@ -151,7 +152,11 @@ export default function Profile() {
    * `useDidShow` 重拉，属于后续改动）。
    */
   const user = profile?.user ?? authUser
-  const orderCount = profile?.orderCount ?? 0
+  /**
+   * 三个来自真接口的计数（`null` = 还没拿到 / 请求失败）。折叠成 0 就等于把
+   * 「未知」说成「你有 0 条」，见 `@/features/profile/counts` 的口径说明。
+   */
+  const counts = realCounts(profile)
 
   const verified = user?.authStatus === 'VERIFIED'
 
@@ -266,9 +271,11 @@ export default function Profile() {
   }
 
   /**
-   * 数字栏（Owner 修订：只摆数字不摆图标）。收藏 / 足迹 / 关注**没有数据源**
-   * （契约无端点），真实构建是 `null` → 显示 `—`；演示构建给演示数字。
-   * 愿望是真实计数（`stats.activeWishes`），拿不到 profile 时按 0 显示。
+   * 数字栏（Owner 修订：只摆数字不摆图标）。
+   *
+   * **`null` = 系统不知道 → 显示 `—`**，四格一律同口径：收藏 / 足迹 / 关注没有数据源
+   * （契约无端点），真实构建恒为 `null`；愿望数来自 `stats.activeWishes`，但
+   * **没拿到 profile 时也是 `null` 而不是 0**（`realCounts` 的未知态口径）。
    */
   const STAT_CELLS: StatCell[] = [
     { key: 'favorites', label: '我的收藏', count: profile?.favoritesCount ?? null },
@@ -279,7 +286,7 @@ export default function Profile() {
       label: '我的愿望',
       url: '/pages/wish/index',
       tab: true,
-      count: profile?.stats.activeWishes ?? 0,
+      count: counts.activeWishes,
     },
   ]
 
@@ -287,6 +294,10 @@ export default function Profile() {
    * 图标栏（Owner 修订：右上角红色小圆点内显数量，纯 --danger）。
    * 圆点等价于原数字角标的「有内容」信号：全部订单 = orderCount、
    * 在售 = activeListings，> 0 才显示；卖出 / 买入 / 评价没有数据源，不出点。
+   *
+   * `count` 为 `undefined` = **不知道** → 不出点：点表示「这里有东西」，
+   * 未知时既不该凭空出点（假消息），也不该显示 0（那是「确实没有」，同样是假话）。
+   * 只有成功拿到 profile 才把真实数字交给圆点去判断。
    */
   const TRADE_CELLS: IconCell[] = [
     {
@@ -294,14 +305,14 @@ export default function Profile() {
       label: '全部订单',
       icon: ICONS.profileOrder,
       url: '/pages/orders/index',
-      count: profile === null ? 0 : orderCount,
+      count: counts.orderCount ?? undefined,
     },
     {
       key: 'onsale',
       label: '在售',
       icon: ICONS.profileOnsale,
       url: '/pages/mylist/index',
-      count: profile?.stats.activeListings ?? 0,
+      count: counts.activeListings ?? undefined,
     },
     // 卖出 / 买入与全部订单同页（orders 已分视角），先落默认的「我买到的」
     { key: 'sold', label: '卖出', icon: ICONS.profileSold, url: '/pages/orders/index' },
