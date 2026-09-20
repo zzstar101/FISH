@@ -47,9 +47,21 @@ function subscribe(listener: () => void): () => void {
 }
 
 /**
+ * 「当前活跃账号」—— 用来判断一份迟到的补数结果是否已经过时。
+ *
+ * 两个入口都会更新它：`publishUnread`（消息页发布权威快照）与 `hydrateUnread`
+ * （冷启动补数），因为两者都代表「现在轮到谁」。判据不能用「快照属于别人就不发布」：
+ * Chat 页实例不存在时没人 `clearUnread()`，上一个账号的快照会一直留着，那条判据会把
+ * 新账号自己的结果一并丢掉 → 新账号整场不亮红点。
+ */
+let latestOwner: string | null = null
+
+/**
  * Chat 页发布最新未读快照。值没变就不广播，避免列表重渲染触发无谓的红点重算。
  */
 export function publishUnread(next: UnreadSnapshot): void {
+  // 先记活跃账号：即使下面因值没变而提前返回，这份快照也说明「现在是 next.ownerId」
+  latestOwner = next.ownerId
   if (
     snapshot &&
     snapshot.ownerId === next.ownerId &&
@@ -75,6 +87,8 @@ export function unreadSnapshot(): UnreadSnapshot | null {
  * 清空后订阅方回退到快照前的本地现算口径。
  */
 export function clearUnread(): void {
+  // 登出即「没有活跃账号」：在途的补数结果回来后会被判为过时而丢弃
+  latestOwner = null
   if (snapshot === null) return
   snapshot = null
   for (const listener of listeners) listener()
@@ -119,6 +133,8 @@ export function hydrateUnread(
   conversations: number,
   demoFallback?: () => number,
 ): void {
+  // 记录「当前该为谁补数」：即使下面因为已有同账号快照而提前返回，也说明这个账号是当前的
+  latestOwner = ownerId
   // 本次账号已经有快照（比如刚进过消息页）：那是含会话未读的权威值，不用补
   if (snapshot && snapshot.ownerId === ownerId) return
   if (hydrating.has(ownerId)) return
@@ -130,8 +146,8 @@ export function hydrateUnread(
       hydrating.delete(ownerId)
       // 期间消息页可能已经发布了权威快照（含会话未读），别用只含通知的这份盖回去
       if (snapshot && snapshot.ownerId === ownerId) return
-      // 期间换过账号（快照已属于别人）：让位给新账号自己的补请求，不覆盖
-      if (snapshot && snapshot.ownerId !== ownerId) return
+      // 期间又为别的账号补过数：这份结果属于旧账号，丢掉（否则会把新账号的红点写回旧账号）
+      if (latestOwner !== ownerId) return
       publishUnread({ ownerId, conversations, notifications })
     })
     .catch(() => {

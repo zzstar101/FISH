@@ -19,11 +19,6 @@ mock.module('@/features/chat/api', () => ({
   fetchUnreadNotificationCount: () => fetchResult(),
 }))
 
-mock.module('@/mock/api', () => ({
-  // fixture 通知未读：只要它被读到，就说明真实构建退回了 mock（本测试要禁止的行为）
-  unreadNotificationCount: () => 99,
-}))
-
 const { clearUnread, hydrateUnread, publishUnread, unreadSnapshot } = await import(
   '../src/features/chat/unread'
 )
@@ -34,8 +29,8 @@ beforeEach(() => {
 })
 
 /**
- * 等 hydrateUnread 的整条 promise 链跑完。catch 分支里有**动态 import**（fixture 兜底），
- * 那是真正的模块加载，只让微任务队列空转不够 —— 要放行几轮宏任务。
+ * 等 hydrateUnread 的整条 promise 链跑完（含调用方注入的兜底函数）。
+ * 放行几轮宏任务，而不是只让微任务队列空转。
  */
 async function flush(): Promise<void> {
   for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setTimeout(resolve, 0))
@@ -106,5 +101,25 @@ describe('未读快照 · 冷启动补数', () => {
     // 快照仍是 B 的，A 的结果被丢弃
     expect(unreadSnapshot()?.ownerId).toBe('u-b')
     expect(unreadSnapshot()?.notifications).toBe(1)
+  })
+
+  test('上一个账号的残留快照不影响新账号：B 自己的结果必须落地', async () => {
+    fetchResult = () => Promise.resolve(5)
+
+    /*
+      真实场景：A 冷启动补过数（快照 ownerId=u-a），A 登出时**没人清快照**
+      （Chat 页实例本次从未挂载，`clearUnread` 不会被调用），随后 B 登录。
+      若判陈旧的条件写成「快照属于别人就不发布」，B 的结果会被一并丢掉 →
+      B 整场都不亮红点（正是要消除的「真实有未读却不亮」）。
+    */
+    publishUnread({ ownerId: 'u-a', conversations: 3, notifications: 0 })
+
+    hydrateUnread('u-b', 2)
+    await flush()
+
+    // B 的真实结果覆盖了 A 的残留快照
+    expect(unreadSnapshot()?.ownerId).toBe('u-b')
+    expect(unreadSnapshot()?.notifications).toBe(5)
+    expect(unreadSnapshot()?.conversations).toBe(2)
   })
 })
