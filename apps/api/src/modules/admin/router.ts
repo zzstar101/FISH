@@ -1,9 +1,12 @@
 import {
   AdminAuditLogsQuerySchema,
   AdminListingsQuerySchema,
+  AdminModerationQueueQuerySchema,
   AdminTargetIdSchema,
+  AdminTransactionQuerySchema,
   AdminUsersQuerySchema,
 } from '@fish/contracts/admin/schema'
+import { ModerationDecisionInputSchema } from '@fish/contracts/moderation/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
@@ -112,6 +115,57 @@ export function createAdminRouter(options: AdminRouterOptions) {
   router.get('/overview', async (c) => {
     try {
       return c.json(await service.getOverview(), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.get('/moderation/queue', async (c) => {
+    const parsed = AdminModerationQueueQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+    try {
+      return c.json(await service.listModerationQueue(parsed.data), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.get('/moderation/:recordId', async (c) => {
+    try {
+      return c.json(await service.getModerationDetail(requireTargetId(c, 'recordId')), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.post('/moderation/:recordId/decision', async (c) => {
+    const input = ModerationDecisionInputSchema.safeParse(await c.req.json().catch(() => null))
+    if (!input.success) return zodValidationFailure(c, input.error.issues)
+    const requestId = c.req.header('Idempotency-Key')?.trim()
+    if (!requestId || requestId.length > 128) {
+      return c.json(errorBody('VALIDATION_FAILED', '缺少有效的 Idempotency-Key'), 422)
+    }
+    try {
+      return c.json(
+        await service.decideModeration({
+          recordId: requireTargetId(c, 'recordId'),
+          actorUserId: c.get('userId'),
+          decision: input.data.decision,
+          reason: input.data.reason,
+          requestId,
+        }),
+        200,
+      )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.get('/transactions', async (c) => {
+    const parsed = AdminTransactionQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+    try {
+      return c.json(await service.listAdminTransactions(parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

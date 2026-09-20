@@ -37,7 +37,7 @@ export function OverviewPage() {
       icon: CheckCircle2,
       label: '已完成交易',
       value: data.completedTransactions,
-      to: '/admin/listings' as const,
+      to: '/admin/transactions' as const,
     },
   ]
 
@@ -69,9 +69,7 @@ export function OverviewPage() {
         <ul className="space-y-1 text-sm text-ink-2">
           <li>· 用户总数含全部注册用户；近 24 小时按注册时间统计。</li>
           <li>· 在售商品 = 商品状态为「在售」的总数；完成交易 = 交易状态为「已完成」。</li>
-          <li>
-            · 审核相关指标（待人工审核、近 7 日审核通过·拦截）待 #74 Moderation 契约冻结后补充。
-          </li>
+          <li>· 审核队列、人工决定与审核时间线见「审核队列」；审核决定会写入审计日志。</li>
         </ul>
       </section>
 

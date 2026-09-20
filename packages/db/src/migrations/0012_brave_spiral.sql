@@ -1,0 +1,1 @@
+ALTER TYPE "public"."admin_audit_action" ADD VALUE 'MODERATION_DECISION';

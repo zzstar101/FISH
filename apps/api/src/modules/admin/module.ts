@@ -1,6 +1,7 @@
 import type { Db } from '@fish/db/client'
 import type { MiddlewareHandler } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import { createSqlModerationStore } from '../moderation/store'
 import type { MediaStorage } from '../uploads/storage'
 import { createRequireAdmin } from './middleware'
 import { createAdminRouter } from './router'
@@ -20,7 +21,8 @@ export function createAdminModule(options: {
   storage: MediaStorage
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
 }) {
-  const store = createSqlAdminStore(options.db)
+  const moderation = createSqlModerationStore(options.db)
+  const store = createSqlAdminStore(options.db, moderation)
   const requireAdmin = createRequireAdmin({ store })
   const router = createAdminRouter({
     service: createAdminService({ store, storage: options.storage }),

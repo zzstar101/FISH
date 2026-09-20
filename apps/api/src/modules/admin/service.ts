@@ -13,8 +13,15 @@ import {
   AdminListingSummaryPageSchema,
   type AdminMe,
   AdminMeResponseSchema,
+  type AdminModerationDetail,
+  AdminModerationDetailSchema,
+  type AdminModerationQueue,
+  AdminModerationQueueSchema,
+  AdminModerationRecordSchema,
   type AdminOverview,
   AdminOverviewSchema,
+  type AdminTransactionPage,
+  AdminTransactionPageSchema,
   type AdminUserDetail,
   AdminUserDetailSchema,
   type AdminUserSummaryPage,
@@ -29,9 +36,12 @@ import { decodeCursor, encodeCursor } from './cursor'
 import { AdminError } from './errors'
 import type {
   AdminStore,
+  AdminTransactionRow,
   AuditLogRow,
   AuditLogSummaryRow,
   ListingSummaryRow,
+  ModerationDetailRow,
+  ModerationQueueRow,
   UserSummaryRow,
 } from './store'
 
@@ -44,12 +54,15 @@ import type {
  * - 审计日志的 `before` / `after` 只透传**已脱敏**的快照；本服务不写入任何敏感字段。
  */
 
-/** `GET /admin/me` 返回的当前可用能力。moderation 写入能力等 #74 落地后再加。 */
+/** `/admin/me` 返回的当前可用能力。 */
 const ADMIN_CAPABILITIES: AdminCapability[] = [
   'USERS_READ',
   'LISTINGS_READ',
   'OVERVIEW_READ',
   'AUDIT_LOGS_READ',
+  'MODERATION_READ',
+  'MODERATION_WRITE',
+  'TRANSACTIONS_READ',
 ]
 
 export type AdminUserListQuery = {
@@ -81,6 +94,19 @@ export type AdminAuditLogListQuery = {
   limit: number
 }
 
+export type AdminModerationQueueListQuery = { cursor?: string; limit: number }
+export type AdminTransactionListQuery = {
+  q?: string
+  status?: string
+  buyerId?: string
+  sellerId?: string
+  listingId?: string
+  createdFrom?: string
+  createdTo?: string
+  cursor?: string
+  limit: number
+}
+
 export interface AdminService {
   getMe(me: Me): Promise<{ admin: AdminMe; capabilities: AdminCapability[] }>
   listUsers(query: AdminUserListQuery): Promise<AdminUserSummaryPage>
@@ -89,6 +115,16 @@ export interface AdminService {
   getListingDetail(listingId: string): Promise<AdminListingDetail>
   getOverview(): Promise<AdminOverview>
   listAuditLogs(query: AdminAuditLogListQuery): Promise<AdminAuditLogPage>
+  listModerationQueue(query: AdminModerationQueueListQuery): Promise<AdminModerationQueue>
+  getModerationDetail(recordId: string): Promise<AdminModerationDetail>
+  decideModeration(input: {
+    recordId: string
+    actorUserId: string
+    decision: 'ALLOW' | 'BLOCK'
+    reason: string
+    requestId: string
+  }): Promise<AdminModerationDetail>
+  listAdminTransactions(query: AdminTransactionListQuery): Promise<AdminTransactionPage>
 }
 
 function adminMeOf(me: Me): { admin: AdminMe; capabilities: AdminCapability[] } {
@@ -170,6 +206,79 @@ function pageOf<T extends { createdAtCursor: string; id: string }>(
   return {
     items: items.map((row) => pick(row)).filter((item) => item !== null),
     nextCursor: hasMore && last ? encodeCursor(last.createdAtCursor, last.id) : null,
+  }
+}
+
+function toModerationRecord(row: ModerationDetailRow['record']) {
+  return AdminModerationRecordSchema.parse({
+    id: row.id,
+    listingId: row.listingId,
+    sellerId: row.sellerId,
+    action: row.action,
+    titleSnapshot: row.titleSnapshot,
+    descriptionSnapshot: row.descriptionSnapshot,
+    decision: row.decision,
+    matchedRules: row.matchedRules,
+    matchedTermsMasked: row.matchedTermsMasked,
+    ruleVersion: row.ruleVersion,
+    createdAt: row.createdAt.toISOString(),
+  })
+}
+
+function toModerationItem(row: ModerationQueueRow | ModerationDetailRow) {
+  const item = {
+    record: toModerationRecord(row.record),
+    listing: {
+      id: row.listing.id,
+      title: row.listing.title,
+      description: row.listing.description,
+      status: row.listing.status,
+      moderationStatus: row.listing.moderationStatus,
+      moderationReason: row.listing.moderationReason,
+      createdAt: row.listing.createdAt.toISOString(),
+    },
+    seller: row.seller,
+  }
+  return item
+}
+
+function moderationDetailOf(row: ModerationDetailRow) {
+  const machine = row.record.action !== 'MANUAL_DECISION' ? row.record : null
+  return AdminModerationDetailSchema.parse({
+    item: toModerationItem(row),
+    history: row.history.map(toModerationRecord),
+    machineDecision: machine?.decision ?? null,
+    humanDecision: row.humanDecision
+      ? {
+          decision: row.humanDecision.decision,
+          reason: row.humanDecision.reason,
+          actor: row.humanDecision.actorId
+            ? {
+                id: row.humanDecision.actorId,
+                nickname: row.humanDecision.actorNickname ?? '未知管理员',
+              }
+            : null,
+          decidedAt: row.humanDecision.decidedAt.toISOString(),
+        }
+      : null,
+  })
+}
+
+function toAdminTransaction(row: AdminTransactionRow) {
+  return {
+    id: row.id,
+    listingId: row.listingId,
+    listingTitle: row.listingTitle,
+    buyer: { id: row.buyerId, nickname: row.buyerNickname },
+    seller: { id: row.sellerId, nickname: row.sellerNickname },
+    amountCents: row.amountCents,
+    status: row.status,
+    buyerConfirmedAt: row.buyerConfirmedAt?.toISOString() ?? null,
+    sellerConfirmedAt: row.sellerConfirmedAt?.toISOString() ?? null,
+    completedAt: row.completedAt?.toISOString() ?? null,
+    cancelledAt: row.cancelledAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   }
 }
 
@@ -294,6 +403,54 @@ export function createAdminService({
 
       const page = pageOf(rows, query.limit, (row) => toAuditLogEntry(row).data ?? null)
       return AdminAuditLogPageSchema.parse(page)
+    },
+
+    async listModerationQueue(query) {
+      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      if (query.cursor && !cursor) throw invalidCursor()
+      const rows = await store.listModerationQueue({ cursor, limit: query.limit })
+      const page = pageOf(rows, query.limit, (row) => {
+        const item = toModerationItem(row)
+        return AdminModerationQueueSchema.shape.items.element.parse(item)
+      })
+      return AdminModerationQueueSchema.parse(page)
+    },
+
+    async getModerationDetail(recordId) {
+      const row = await store.getModerationDetail(recordId)
+      if (!row) throw new AdminError('ADMIN_NOT_FOUND', 404, '审核记录不存在')
+      return moderationDetailOf(row)
+    },
+
+    async decideModeration(input) {
+      const result = await store.decideModeration(input)
+      if (result === 'not-found') throw new AdminError('ADMIN_NOT_FOUND', 404, '审核记录不存在')
+      if (result === 'conflict')
+        throw new AdminError('MODERATION_CONFLICT', 409, '审核记录已处理或已过期')
+      if (result === 'idempotency-conflict') {
+        throw new AdminError('MODERATION_CONFLICT', 409, 'Idempotency-Key 已用于其它审核决定')
+      }
+      const row = await store.getModerationDetail(input.recordId)
+      if (!row) throw new AdminError('ADMIN_NOT_FOUND', 404, '审核记录不存在')
+      return moderationDetailOf(row)
+    },
+
+    async listAdminTransactions(query) {
+      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      if (query.cursor && !cursor) throw invalidCursor()
+      const rows = await store.listAdminTransactions({
+        q: query.q,
+        status: query.status,
+        buyerId: query.buyerId,
+        sellerId: query.sellerId,
+        listingId: query.listingId,
+        createdFrom: query.createdFrom ? new Date(query.createdFrom) : undefined,
+        createdTo: query.createdTo ? new Date(query.createdTo) : undefined,
+        cursor,
+        limit: query.limit,
+      })
+      const page = pageOf(rows, query.limit, (row) => toAdminTransaction(row))
+      return AdminTransactionPageSchema.parse(page)
     },
   }
 }
