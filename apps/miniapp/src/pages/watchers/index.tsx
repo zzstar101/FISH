@@ -6,13 +6,13 @@ import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
+import { watcherStatsOf } from '@/features/watchers/stats'
 import {
   fetchWatchers,
   findListing,
   formatAmount,
   type MockWatcher,
   WATCHER_DEFAULT_LISTING,
-  watchersSummary,
 } from '@/mock/api'
 import './index.scss'
 
@@ -35,9 +35,15 @@ import './index.scss'
  * 2. 超长昵称 → 单行截断，不换行、不挤压徽章（`.wt__name` 有 `min-width: 0`）；
  * 3. 已注销 → 整行降级为冰底灰字 + 动作不可用 + 「对方已注销，无法再发起会话」。
  *
- * **加载失败**：`load()` 出错时渲染 `.wt__fail`，并收起列表槽位。`@/mock/api` 的
- * `fetchWatchers` 永不 reject，所以演示构建（`__DEMO_AUTH__`）下另认一个 `?fail=1`
- * 参数把失败态走一遍，重试一次即恢复；真实构建里这个参数不生效。
+ * **加载失败**：`load()` 出错时渲染 `.wt__fail`，并收起列表槽位、统计显示 `—`（「没读到」
+ * 不能显示成「0 人想要」）。`@/mock/api` 的 `fetchWatchers` 永不 reject，所以演示构建
+ * （`__DEMO_AUTH__`）下另认一个 `?fail=1` 参数把失败态走一遍，重试一次即恢复；
+ * 真实构建里这个参数不生效。
+ *
+ * **统计与列表同源**：`count` / `medianCents` 都从**这一份已加载的 `items`** 现算，
+ * 不旁路读 `watchersSummary()` —— 否则失败时会出现「共 7 人想要 + 列表加载失败」，
+ * 或「列表 8 行 / 共 7 人想要」（#139 review P1）。已注销的人仍计入人数，
+ * 与商品卡上的 `wantsOf()` 说同一个数；注销只影响该行的动作与视觉。
  *
  * **与后端的边界**：契约没有「谁想要我的商品」端点（P1），整页 mock，标 `BLOCKED: 需新 Issue`。
  */
@@ -58,7 +64,6 @@ export default function Watchers() {
    */
   const [demoFail, setDemoFail] = useState(DEMO_AUTH_ENABLED && router.params.fail === '1')
 
-  const summary = watchersSummary(listingId)
   const listing = findListing(listingId)
 
   const load = async (forceFail = demoFail) => {
@@ -85,19 +90,41 @@ export default function Watchers() {
   })
 
   /**
+   * 统计口径：**从这一份已加载的 `items` 现算**，不再旁路读 `watchersSummary()`。
+   *
+   * 旁路读会造出两个自相矛盾的界面（#139 review 两条 P1）：
+   * 1. 列表加载失败时 `items` 空了、而旁路 summary 仍是 fixture 的成功值 →
+   *    页面同屏显示「共 7 人想要」和「列表加载失败」；
+   * 2. summary 由 mock 侧独立算，与列表渲染的行数不一致 →
+   *    「列表 8 行 / 共 7 人想要 / 已显示全部 7 人」三者互相打脸。
+   *
+   * 现在所有数字都从**当前真的渲染出来的行**现算（算法在 `@/features/watchers/stats`，
+   * 与 mock 侧同一份实现），三者永远同源。
+   */
+  const summary = useMemo(() => watcherStatsOf(items), [items])
+
+  /**
+   * 统计是否「不可知」。失败时 `items` 被清空，`summary` 会算成 0 / 暂缺 ——
+   * 但 0 是「真的没人想要」这个业务事实，不是「没读到」。两者必须分开表达，
+   * 否则接口抖动会把「未知」显示成「没人想要」（#139 review P1）。
+   */
+  const statsUnknown = failed
+
+  /**
    * 统计口径的说明文案。
    *
    * 三种情况分开写，是因为它们对用户的含义不同：没有预算中位不是「加载失败」，
    * 而「有人填了预算」与「一个人都没填」要给出不同的解释。
    */
   const statNote = useMemo(() => {
+    if (statsUnknown) return '暂时无法读取统计'
     if (summary.count === 0) return '还没有人填预算，暂时算不出中位数'
     if (summary.medianCents === null) return '想要的人都未填预算，暂时算不出中位数'
     const missing = summary.count - summary.budgetFilled
     return missing > 0
       ? `中位数按已填预算的 ${summary.budgetFilled} 人计算 · ${missing} 人未填预算不计入`
       : `中位数按已填预算的 ${summary.budgetFilled} 人计算`
-  }, [summary])
+  }, [summary, statsUnknown])
 
   const chat = (item: MockWatcher) => {
     if (item.deactivated) return
@@ -166,14 +193,16 @@ export default function Watchers() {
         <View className="wt__stats">
           <View className="wt__stat">
             <Text className="wt__stat-num num">
-              {loading ? '—' : summary.count}
-              {loading ? null : <Text className="wt__stat-unit">人</Text>}
+              {loading || statsUnknown ? '—' : summary.count}
+              {loading || statsUnknown ? null : <Text className="wt__stat-unit">人</Text>}
             </Text>
             <Text className="wt__stat-label">共有人想要</Text>
           </View>
-          <View className={`wt__stat${summary.medianCents === null ? ' is-na' : ''}`}>
+          <View
+            className={`wt__stat${summary.medianCents === null || statsUnknown ? ' is-na' : ''}`}
+          >
             <Text className="wt__stat-num num">
-              {loading
+              {loading || statsUnknown
                 ? '—'
                 : summary.medianCents === null
                   ? '暂缺'
@@ -204,7 +233,7 @@ export default function Watchers() {
       <View className="wt__sec">
         <Text className="wt__sec-title">全部想要的人</Text>
         <Text className="wt__sec-cnt num">
-          {loading ? '加载中' : `${summary.count} 人 · 按想要时间倒序`}
+          {loading ? '加载中' : statsUnknown ? '—' : `${summary.count} 人 · 按想要时间倒序`}
         </Text>
       </View>
 
