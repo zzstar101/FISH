@@ -6,7 +6,7 @@
  *
  * 高度用 `Taro.getWindowInfo().statusBarHeight` 顶出状态栏，避免刘海遮挡。
  */
-import { View } from '@tarojs/components'
+import { Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import type { ReactNode } from 'react'
 import './index.scss'
@@ -14,13 +14,15 @@ import './index.scss'
 type NavBarProps = {
   /** 是否显示返回钮（非 Tab 页默认 true） */
   back?: boolean
+  /** 返回钮右侧的页面标题（二级页需要时传） */
+  title?: string
   /** 返回钮右侧的自定义动作区 */
   actions?: ReactNode
   /** 覆盖返回行为（默认 navigateBack，无上一页时 reLaunch 到首页） */
   onBack?: () => void
 }
 
-export default function NavBar({ back = true, actions, onBack }: NavBarProps) {
+export default function NavBar({ back = true, title, actions, onBack }: NavBarProps) {
   const statusBarHeight = (() => {
     try {
       return Taro.getWindowInfo().statusBarHeight ?? 20
@@ -51,6 +53,7 @@ export default function NavBar({ back = true, actions, onBack }: NavBarProps) {
       ) : (
         <View className="navfloat__spacer" />
       )}
+      {title ? <Text className="navfloat__title">{title}</Text> : null}
       {actions ? <View className="navfloat__actions">{actions}</View> : null}
     </View>
   )

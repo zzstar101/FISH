@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
+import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import {
   fetchWatchers,
@@ -19,25 +20,31 @@ import './index.scss'
  * C5 想要的人（设计稿 `设计稿_C5-watchers.html`）。
  *
  * 页头：商品摘要条（「这是谁的想要的人」）+ 双格统计（共 N 人想要 / 预算中位）
- * + 中位数口径说明；列表：头像 + 昵称 + 认证徽章 + 院系 + 预算 + 想要时间 + 动作；
+ * + 中位数口径说明；列表：头像 + 昵称 + 认证徽章 + 预算 + 想要时间 + 动作；
  * 末尾是隐私说明条。
+ *
+ * **不展示校区/院系**：Owner 2026-09-20 拍板去掉地址类描述，与 Issue #123
+ * 「公开字段不泄漏私有校园身份」一致。mock fixture 里仍有 `department`，页面不读它。
  *
  * **预算中位数的口径**（稿子原文：「中位数按已填预算的 12 人计算 · 6 人未填预算不计入」）：
  * 只对**填了预算**的人求中位数，未填的人不计入分母也不参与排序。
  * 一个人都没填时中位数返回 null，页面显示「暂缺」——这不是错误态，是正常结果。
  *
- * **四种行状态**（稿子第 02 帧，本页四种各有一条 fixture）：
+ * **三种行状态**（稿子第 02 帧；稿里第 3 种「未公开院系」随地址信息一起去掉）：
  * 1. 已聊过 → 动作换成「继续聊」（`chattedCount > 0`）；
  * 2. 超长昵称 → 单行截断，不换行、不挤压徽章（`.wt__name` 有 `min-width: 0`）；
- * 3. 未公开院系 → 显示「未公开校区」（`department === null`）；
- * 4. 已注销 → 整行降级为冰底灰字 + 动作不可用 + 「对方已注销，无法再发起会话」。
+ * 3. 已注销 → 整行降级为冰底灰字 + 动作不可用 + 「对方已注销，无法再发起会话」。
+ *
+ * **加载失败**：`load()` 出错时渲染 `.wt__fail`，并收起列表槽位。`@/mock/api` 的
+ * `fetchWatchers` 永不 reject，所以演示构建（`__DEMO_AUTH__`）下另认一个 `?fail=1`
+ * 参数把失败态走一遍，重试一次即恢复；真实构建里这个参数不生效。
  *
  * **与后端的边界**：契约没有「谁想要我的商品」端点（P1），整页 mock，标 `BLOCKED: 需新 Issue`。
  */
 
 export default function Watchers() {
   const authStatus = useAuthGuard()
-  const router = useRouter<{ listingId?: string; title?: string }>()
+  const router = useRouter<{ listingId?: string; title?: string; fail?: string }>()
   const listingId = router.params.listingId ?? WATCHER_DEFAULT_LISTING
 
   const [items, setItems] = useState<MockWatcher[]>([])
@@ -45,15 +52,32 @@ export default function Watchers() {
   const [failed, setFailed] = useState(false)
   /** 已发起过会话的人 → 动作换成「继续聊」（按 watcher.id 记） */
   const [started, setStarted] = useState<Record<string, boolean>>({})
+  /**
+   * 演示开关：`@/mock/api` 的 `fetchWatchers` 永不 reject，没有它失败态在开发者工具里
+   * 走不到。只在演示构建（`__DEMO_AUTH__`）下认这个参数，真实构建里进不去。
+   */
+  const [demoFail, setDemoFail] = useState(DEMO_AUTH_ENABLED && router.params.fail === '1')
 
   const summary = watchersSummary(listingId)
   const listing = findListing(listingId)
 
-  const load = async () => {
+  const load = async (forceFail = demoFail) => {
     setLoading(true)
     setFailed(false)
-    setItems(await fetchWatchers(listingId))
+    try {
+      if (forceFail) throw new Error('演示开关：强制加载失败')
+      setItems(await fetchWatchers(listingId))
+    } catch {
+      setItems([])
+      setFailed(true)
+    }
     setLoading(false)
+  }
+
+  /** 重新加载：先摘掉演示开关，否则重试会立刻再抛一次，按钮看起来没反应 */
+  const retry = () => {
+    setDemoFail(false)
+    void load(false)
   }
 
   useLoad(() => {
@@ -118,7 +142,7 @@ export default function Watchers() {
     <View className="wt">
       <View className="wt__bg" />
 
-      <NavBar />
+      <NavBar title="想要的人" />
 
       <View className="wt__head">
         <Text className="wt__kicker num">我的发布 · 想要的人</Text>
@@ -133,6 +157,7 @@ export default function Watchers() {
               <Text className="wt__ltitle">{listing.title}</Text>
               <Text className="wt__lmeta num">{listingMeta}</Text>
             </View>
+            <Text className="wt__lgo">查看 ›</Text>
           </View>
         ) : (
           <Text className="wt__lmeta num">{router.params.title ?? '商品已下架'}</Text>
@@ -169,7 +194,7 @@ export default function Watchers() {
           <View className="wt__fail-main">
             <Text className="wt__fail-title">想要的人列表加载失败，请检查网络后重试</Text>
             <Text className="wt__fail-code num">ERR_NETWORK</Text>
-            <View className="wt__fail-act" onClick={() => void load()}>
+            <View className="wt__fail-act" onClick={retry}>
               <Text>重新加载</Text>
             </View>
           </View>
@@ -196,7 +221,7 @@ export default function Watchers() {
             </View>
           ))}
         </View>
-      ) : summary.count === 0 ? (
+      ) : failed ? null : summary.count === 0 ? (
         <View className="wt__empty">
           <View className="wt__empty-disc">
             <Image className="wt__empty-ic" src={ICONS.starAccent} mode="aspectFit" />
@@ -224,10 +249,10 @@ export default function Watchers() {
               return (
                 <View key={item.id} className={`wt__row${dead ? ' is-dead' : ''}`}>
                   <View className="wt__av">
-                    {dead || !item.avatarUrl ? (
-                      <Text className="wt__av-tx">—</Text>
+                    {dead ? (
+                      <Image className="wt__av-ic" src={ICONS.user} mode="aspectFit" />
                     ) : (
-                      <Image className="wt__av-img" src={item.avatarUrl} mode="aspectFill" />
+                      <Text className="wt__av-tx">{item.nickname.slice(0, 1)}</Text>
                     )}
                   </View>
 
@@ -264,7 +289,7 @@ export default function Watchers() {
                     <Text className="wt__meta num">
                       {dead
                         ? `账号已注销 · 预算 ¥${formatAmount(item.budgetCents ?? 0)} · ${item.timeLabel}`
-                        : `${item.department ?? '未公开校区'} · ${
+                        : `${
                             item.budgetCents === null
                               ? '未填预算'
                               : `预算 ¥${formatAmount(item.budgetCents)}`
@@ -288,10 +313,11 @@ export default function Watchers() {
           </View>
 
           <View className="wt__banner">
-            <Image className="wt__banner-ic" src={ICONS.info} mode="aspectFit" />
+            <View className="wt__banner-ic">
+              <Image className="wt__banner-ic-img" src={ICONS.info} mode="aspectFit" />
+            </View>
             <Text className="wt__banner-tx">
-              只展示对方愿意公开的信息：昵称、认证徽章、校区与预算。对方隐藏校区或未填预算时按「未公开
-              / 未填」显示。
+              只展示对方愿意公开的信息：昵称、认证徽章与预算。对方未填预算时按「未填预算」显示。
             </Text>
           </View>
 
