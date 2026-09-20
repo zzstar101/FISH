@@ -90,8 +90,14 @@ export default function Home() {
     if (seq !== reqSeq.current) return
     setItems(list)
     setFailed(nextFailed)
-    // 这一批商品属于 `next`：`pending` 随之关掉，骨架屏换成真实列表
-    setLoadedFor(next)
+    /*
+      只在**成功**时记下「这批商品属于哪个分类」。
+      失败时 `items` 是空的，若把 `loadedFor` 也置成 `next`，`pending` 会立刻变 false，
+      于是点「重试」（或下拉刷新）期间 `failed` 已被清掉、`items` 仍为空 → 渲染空态
+      「这个分类还没有闲置」—— 把「没读到」说成「这个分类没货」。保持旧值（首次进页
+      则是 `null`），`pending` 就还是 true，重试期间由骨架屏接管。
+    */
+    if (!nextFailed) setLoadedFor(next)
   }
 
   useLoad(() => {
