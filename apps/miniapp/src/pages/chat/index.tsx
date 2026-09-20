@@ -1,12 +1,14 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useLoad, usePageScroll } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
-import { loadNotifications } from '@/features/fetchers'
+import { useAuth } from '@/features/auth/store'
+import { clearUnread, publishUnread } from '@/features/chat/unread'
+import { loadNotifications, markNotificationsRead } from '@/features/fetchers'
 import {
   type ConversationFilter,
   conversations,
@@ -15,7 +17,6 @@ import {
   formatAmount,
   type MockConversation,
   type MockNotification,
-  unreadNotificationCount,
 } from '@/mock/api'
 import './index.scss'
 
@@ -115,6 +116,8 @@ function statusVariant(item: MockConversation): 'warn' | 'done' | null {
 export default function Chat() {
   // 消息列表需要登录（GET /conversations）；Tab 页只能用 navigateTo 跳登录页
   const authStatus = useAuthGuard({ tab: true })
+  /** 当前账号身份：Tab 页实例跨登录态存活，跨账号重置本地已读状态要用它（见下） */
+  const { user: authedUser } = useAuth()
   const [items, setItems] = useState<MockConversation[]>([])
   const [filter, setFilter] = useState<ConversationFilter>('all')
   /** 本地已读：「全部已读」后把这些会话的未读角标清零（不写回 mock） */
@@ -127,39 +130,99 @@ export default function Chat() {
   /** 真实接口失败且没有回退 mock（生产口径）：「通知」tab 显示错误态而不是空态 */
   const [notifsFailed, setNotifsFailed] = useState(false)
   /**
-   * 通知的已读口径：**切进「通知」tab 即视为看过**，未读角标随之清零（本地态；
-   * 真实的逐条已读是幂等的 `POST /notifications/:id/read`，接后端时在这里补调用）。
+   * 通知的已读口径：**切进「通知」tab 即视为看过**（Owner 拍板），未读角标随之清零，
+   * 同时把当前已加载的未读条目逐条真实标记已读（声明式 effect，见下方「已读回写」）——
+   * 服务端与本地同源后，重进页面 / 重启未读不再复活。
    * 原「全部已读」按钮因此没有存在的必要（后端本就没有 mark-all-read 端点）。
    */
   const [notifsViewed, setNotifsViewed] = useState(false)
 
-  /** 通知列表加载：与原独立通知页同一份数据层（真接口失败回退 mock），重试也走这里 */
-  const loadNotifs = () => {
-    void loadNotifications().then(({ items: list, failed: nextFailed }) => {
-      setNotifs(list)
-      setNotifsFailed(nextFailed)
-      setNotifsReady(true)
-    })
+  /** 加载代次：并发加载（快速换账号 / 连点重试）时只有最后一次的响应落地 */
+  const loadEpoch = useRef(0)
+
+  /**
+   * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
+   * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `notifs` /
+   * `readIds` / `notifsViewed` 都是上一个账号的视角，必须在**同一个 commit 内**
+   * 换成空值。写成 effect 里 setState 不行 —— 那要到下一帧才生效，兄弟 effect
+   * （发布快照 / 已读回写）在本帧仍读到旧值：轻则把上个账号的已读视角发进全局
+   * 快照（新账号的红点被误熄），重则拿新账号的 cookie 去 POST 上个账号的通知 id。
+   */
+  const identity = authedUser?.id ?? null
+  const [prevIdentity, setPrevIdentity] = useState<string | null>(identity)
+  if (prevIdentity !== identity) {
+    setPrevIdentity(identity)
+    // 在途响应（列表 / 已读回写）随身份一起作废：自增放在这里（渲染期，同步），
+    // 不能放进 effect —— 那之间夹着微任务窗口，上一个账号的响应会写进刚清空的 state
+    loadEpoch.current += 1
+    setFilter('all')
+    setNotifs([])
+    setNotifsReady(false)
+    setNotifsFailed(false)
+    setReadIds([])
+    setNotifsViewed(false)
   }
 
-  useLoad(() => {
-    // 数据是本地 mock（同步），保留 state 是为了将来换成真接口时页面结构不用改
-    setItems(conversations())
+  /** 通知列表加载：与原独立通知页同一份数据层（真接口失败回退 mock），重试也走这里 */
+  const loadNotifs = useCallback(() => {
+    const epoch = ++loadEpoch.current
+    void loadNotifications()
+      .then(({ items: list, failed: nextFailed }) => {
+        // 并发加载（快速换账号 / 连点重试）时旧响应后到，不能覆盖新账号的列表
+        if (epoch !== loadEpoch.current) return
+        setNotifs(list)
+        setNotifsFailed(nextFailed)
+        setNotifsReady(true)
+      })
+      .catch((error) => {
+        // 取数层自己吞了接口失败，这里兜的是「回退 mock 的动态 import 也失败」：
+        // 少了这个 catch，notifsReady 会永远为 false —— 通知 tab 既没有错误态、
+        // 也没有重试钮，看起来像「一直没加载完」
+        console.warn('[miniapp] 通知列表加载异常', error)
+        if (epoch !== loadEpoch.current) return
+        setNotifsFailed(true)
+        setNotifsReady(true)
+      })
+  }, [])
+
+  /**
+   * 登录态变化的取数：登录 / 换账号后重拉通知列表，并**先丢弃共享未读快照**。
+   *
+   * 丢弃放在每次变化的最前面（不只是未登录）：`authed(A) → authed(B)`（登录页
+   * 兜底失败后直接换账号）也走得到，那时若不丢，上个账号的已读视角会一直替新账号
+   * 熄底栏红点；丢弃后由新账号的列表加载重新发布。
+   *
+   * 状态重置**不在这里**（见上方渲染期重置）：effect 里 setState 下一帧才生效，
+   * 兄弟 effect 会先读到旧值。
+   */
+  useEffect(() => {
+    clearUnread()
+    if (authStatus !== 'authed' || !authedUser) return
     loadNotifs()
+  }, [authStatus, authedUser, loadNotifs])
+
+  useLoad(() => {
+    // 会话数据是本地 mock（同步），保留 state 是为了将来换成真接口时页面结构不用改；
+    // 通知列表由上面的登录态 / 身份 effect 拉取 —— 未登录时不打必然 401 的请求
+    setItems(conversations())
   })
 
   /** 1版稿 .totop：滚过一屏半后浮现 */
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
 
   /**
-   * 通知未读数（#23 `GET /notifications/unread-count` 的语义）：列表拿到结果前用
-   * mock 计数兜底，拿到后按契约字段 `readAt === null` 统计；看过「通知」tab 即清零。
+   * 通知未读数（#23 `GET /notifications/unread-count` 的语义）：切进「通知」tab 即清零。
+   *
+   * 列表**未就绪 / 加载失败**时是「不知道」——记 0（不显示通知侧的未读），不拿 mock
+   * fixture 计数顶替：那会与底栏的快照口径分叉（底栏对这些状态按「无已知未读」算），
+   * 也会把「不知道」画成一个具体的数字。
    */
-  const unreadNotifications = notifsReady
-    ? notifsViewed
-      ? 0
-      : notifs.filter((item) => item.readAt === null).length
-    : unreadNotificationCount()
+  const unreadNotifications =
+    notifsReady && !notifsFailed
+      ? notifsViewed
+        ? 0
+        : notifs.filter((item) => item.readAt === null).length
+      : 0
 
   /** 已读处理后的会话：计数、筛选、角标都只看这一份，避免三处各算一遍 */
   const shown = useMemo(
@@ -183,6 +246,68 @@ export default function Chat() {
     [shown],
   )
 
+  /**
+   * 会话未读条数和：底栏「消息」红点的会话部分，与「交易 / 许愿」tab 数字同口径。
+   * **不含系统会话**：它的未读由「通知」承载（行角标见 `effectiveUnread`），
+   * 自己的 `unreadCount` 没有任何展示件，也不该在底栏亮一个用户清不掉的幽灵红点。
+   */
+  const conversationUnread = useMemo(
+    () => shown.reduce((sum, item) => sum + (item.kind === 'system' ? 0 : item.unreadCount), 0),
+    [shown],
+  )
+
+  /**
+   * 未读快照发布：底栏「消息」红点与页内角标同源（见 `features/chat/unread.ts`）。
+   * 此前底栏自己从 mock fixture 现算、只看登录态，页内清掉的未读它一概不知道 ——
+   * 现在切进「通知」tab / 点进会话，各 Tab 页的底栏实例随之重算红点。
+   *
+   * 两个字段的可信度不同，分开对待：`conversations` 来自本地会话列表，与通知接口
+   * 成败无关，**恒发**；`notifications` 在列表未就绪 / 加载失败时发 `null`（「不知道」），
+   * 底栏对该字段按「无已知未读」算 —— 与页内角标同口径（那时页内也是 0）。
+   * 未登录不发（登出 / 换账号的清空在身份 effect，不能把 mock 派生值再发回去）。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || !identity) return
+    publishUnread({
+      ownerId: identity,
+      conversations: conversationUnread,
+      notifications: notifsReady && !notifsFailed ? unreadNotifications : null,
+    })
+  }, [authStatus, identity, notifsReady, notifsFailed, conversationUnread, unreadNotifications])
+
+  /**
+   * 已读回写是**声明式**的：只要「通知」tab 被看过（`notifsViewed`，粘性状态）
+   * 且列表已就绪，就把当前已加载的未读条目逐条真实标记已读
+   * （幂等 `POST /notifications/:id/read`）。门禁用 `notifsViewed` 而**不是**
+   * `filter === 'system'`：弱网下「点进 tab → 列表还没到就切回其它 tab」的列表
+   * 到达时已不在通知 tab，用当前 tab 当门禁就会一条都不标，而角标已按已读清零 ——
+   * 页内与服务端分叉，重进页面未读"复活"。
+   *
+   * 只标已加载的条目（契约无 mark-all-read）。门禁必须含 `authed`：登出后才
+   * resolve 的迟到列表不能以匿名身份发 N 个必然 401 的 POST。回写结果同样要过
+   * 代次守卫：换账号 / 列表重载之后迟到的响应不得写进当前列表（mock / 演示构建里
+   * 各账号的 fixture id 相同，串号会确定性地发生）。成功的条目把本地 `readAt`
+   * 补上；失败的保持未读 —— 本批只要有一条成功，列表变化会立刻再跑一轮
+   * （待标条数单调递减，有界），整批失败则等列表下次变化（错误态的重试钮成功 /
+   * 页面实例重建）再试。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || !notifsViewed || !notifsReady) return
+    const pending = notifs.filter((item) => item.readAt === null)
+    if (pending.length === 0) return
+    const epoch = loadEpoch.current
+    void markNotificationsRead(pending).then((markedIds) => {
+      if (epoch !== loadEpoch.current || markedIds.size === 0) return
+      setNotifs((prev) =>
+        prev.map((item) =>
+          item.readAt === null && markedIds.has(item.id)
+            ? { ...item, readAt: new Date().toISOString() }
+            : item,
+        ),
+      )
+    })
+  }, [authStatus, notifsViewed, notifs, notifsReady])
+
   const markAllRead = () => {
     if (counts.unread === 0) {
       void Taro.showToast({ title: '没有未读会话', icon: 'none' })
@@ -198,7 +323,7 @@ export default function Chat() {
     void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
   }
 
-  /** tab 切换：进「通知」tab 即视为已读（未读角标清零，见 `notifsViewed`） */
+  /** tab 切换：进「通知」tab 即视为已读（角标清零；真实 mark-read 由上方 effect 声明式补标） */
   const chooseFilter = (key: ConversationFilter) => {
     setFilter(key)
     if (key === 'system') setNotifsViewed(true)
@@ -347,12 +472,13 @@ export default function Chat() {
               const tick = !isSystem && user.authStatus === 'VERIFIED'
               const unread = item.unreadCount
               const variant = statusVariant(item)
-              const badge = isSystem ? unreadNotifications : unread
+              /** 系统行挂通知未读数（#23），普通行挂自己的未读数；角标与未读高亮同源 */
+              const effectiveUnread = isSystem ? unreadNotifications : unread
 
               return (
                 <View
                   key={item.id}
-                  className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
+                  className={`chat__conv${effectiveUnread > 0 ? ' is-unread' : ''}`}
                   onClick={() => (isSystem ? chooseFilter('system') : openConversation(item.id))}
                 >
                   {/* 头像 + 认证章 + 未读角标：要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
@@ -374,7 +500,9 @@ export default function Chat() {
                         <Image className="chat__cert-ic" src={ICONS.checkWhite} mode="aspectFit" />
                       </View>
                     ) : null}
-                    {badge > 0 ? <Text className="chat__bdg num">{badge}</Text> : null}
+                    {effectiveUnread > 0 ? (
+                      <Text className="chat__bdg num">{effectiveUnread}</Text>
+                    ) : null}
                   </View>
 
                   <View className="chat__corp">

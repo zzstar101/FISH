@@ -6,11 +6,12 @@
  *
  * ## 判定口径（2026-09 起，页面开始接后端）
  *
- * 已接真实接口的**只读页**（首页 / 搜索 / 商品详情 / 通知 / 我的）：
+ * 已接真实接口的页面（首页 / 分类 / 搜索 / 商品详情 / 消息 / 我的）：
  * 允许请求后端，但**只允许发往 `--api` 指定的地址**（默认 `http://localhost:3000`）。
- * 发往别处仍算越界。
+ * 发往别处仍算越界。消息页是「读 + 写」：通知列表（GET /notifications）与
+ * 切进「通知」tab 的逐条已读回写（POST /notifications/:id/read）。
  *
- * 其余页面（许愿 / 出物 / 消息 / 会话 …）：仍必须**零业务请求** ——
+ * 其余页面（许愿 / 出物 / 会话 …）：仍必须**零业务请求** ——
  * 它们的写操作与状态机尚未接接口，一旦偷偷发起请求就说明回退路径被绕过了。
  *
  * 用法：bun preview/verify-mock-only.mjs [--base http://127.0.0.1:4599/index.html] [--api http://localhost:3000]
@@ -52,11 +53,11 @@ const ROUTES = [
 const ALLOW = /^(?:https?:\/\/127\.0\.0\.1:[0-9]+|data:|blob:|file:)/
 /** 业务数据请求的特征：静态源里出现这些路径，说明页面绕过了 mock 直连接口 */
 const DATA_HINT =
-  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/listings|:\d+\/conversations/i
+  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/listings|:\d+\/conversations|:\d+\/notifications/i
 
 /**
- * 已接真实接口的只读页（本 PR 接通的 6 页，见 `src/features/fetchers.ts`）。
- * 这 6 个路由**允许**打后端；其余路由必须保持零业务请求。
+ * 已接真实接口的页面（见 `src/features/fetchers.ts`；消息页经 `features/chat/api.ts`
+ * 接了通知列表与逐条已读回写）。这些路由**允许**打后端；其余路由必须保持零业务请求。
  *
  * 注意：预览 harness 的 `Taro` 桩**没有实现 `request`**，所以这些页在预览里
  * 实际会走 mock 回退、`打后端` 一列通常是 0。本脚本因此校验的是
@@ -67,6 +68,7 @@ const WIRED = [
   '/pages/category/index',
   '/pages/search/index',
   '/pages/listing-detail/index',
+  '/pages/chat/index',
   '/pages/profile/index',
 ]
 
@@ -220,6 +222,6 @@ if (failures > 0) {
   process.exit(1)
 }
 console.log(
-  `\n✓ 未接接口的页面零业务请求；已接接口的页面只请求 ${API_ORIGIN}（只读页：${WIRED.length} 个）`,
+  `\n✓ 未接接口的页面零业务请求；已接接口的页面只请求 ${API_ORIGIN}（已接接口页：${WIRED.length} 个，含消息页的通知已读回写）`,
 )
 process.exit(0)

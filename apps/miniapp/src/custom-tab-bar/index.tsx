@@ -19,6 +19,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
+import { useUnreadSnapshot } from '@/features/chat/unread'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
 
@@ -114,7 +115,9 @@ const HIDDEN_ROUTE = 'pages/sell/index'
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
   const [dot, setDot] = useState(false)
-  const { status: authStatus } = useAuth()
+  const { status: authStatus, user } = useAuth()
+  /** 消息页发布的未读快照（见 `features/chat/unread.ts`）；没进过消息页时为 null */
+  const unread = useUnreadSnapshot()
 
   useEffect(() => {
     // 未登录不亮红点：未读数目前只能从 mock 的演示会话求得，
@@ -123,10 +126,24 @@ export default function CustomTabBar() {
       setDot(false)
       return
     }
-    // 未读消息 + 未读通知的合计，决定消息 tab 的小红点
-    const unreadChat = conversations().reduce((sum, item) => sum + item.unreadCount, 0)
+    // 未读消息 + 未读通知的合计，决定消息 tab 的小红点。
+    // 优先用消息页发布的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除；
+    // 但**只认属于当前账号的快照**：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时
+    // 没人清快照，不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
+    // 通知那一项为 null（列表未就绪 / 加载失败，「不知道」）时按**无已知未读**算，
+    // 不拿 fixture 顶替 —— 页内角标在失败态也是 0，两边必须同一口径，否则会亮一颗
+    // 点进「通知」tab 只有错误态、清不掉的幽灵红点。会话那一项与通知接口无关，照常采信。
+    if (unread && user && unread.ownerId === user.id) {
+      setDot(unread.conversations + (unread.notifications ?? 0) > 0)
+      return
+    }
+    // 快照不存在（本次会话还没进过消息页）：维持接入前的 fixture 现算口径，
+    // 同样排除系统会话 —— 它的未读由「通知」承载。
+    const unreadChat = conversations()
+      .filter((item) => item.kind !== 'system')
+      .reduce((sum, item) => sum + item.unreadCount, 0)
     setDot(unreadChat + unreadNotificationCount() > 0)
-  }, [authStatus])
+  }, [authStatus, user, unread])
 
   // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
   useEffect(() => {
