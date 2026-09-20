@@ -314,23 +314,33 @@ function poolKeyword(keyword: string): string {
  * 假设不成立 —— 只按 keyword 分组会把不同分类的人并成一条，且分类取决于谁先进 Map
  * （#138 review P1）。
  *
- * 口径按**页面的需求**（k-匿名是硬约束），与后端那条 SQL 有两处**有意不同**：
+ * 口径按**页面的需求**（k-匿名是硬约束），与后端那条 SQL 有三处**有意不同**：
  * 1. `wantCount` 数的是 **不同用户**（`Set`）—— 后端 `want_count` 是 `count(*)`（行数），
  *    两者在真接口下是两个数（k-匿名门槛 `HAVING count(DISTINCT user_id)` 数的是前者）。
  *    这里取前者，是为了让池子卡上的「N 人想要」与筛选门槛口径一致。
  * 2. `medianBudgetCents` 取的是每条愿望**预算中值**（(min+max)/2）的上中位数，
  *    后端是 `percentile_cont(0.5)` on `budget_max_cents`；且后端有 `LIMIT`，
  *    mock 全量返回（页面的「展示全部 N 个标签」要能数到全部）。
+ * 3. 平手时没有后端的次级排序 `keyword ASC`，按 `wantCount` 降序后就结束 ——
+ *    热门榜平手项的相对顺序与真实接口可能不同（`ORDER BY want_count DESC, keyword ASC`）。
  *
- * 展示用的 keyword 取该组**第一个出现**的写法：归一化只用于分组，不改变展示
- * （设计稿的 `iPad` 不该被渲染成 `ipad`）。
+ * 展示用的 keyword 取该组里**最早创建**那条的写法：归一化只用于分组，不改变展示
+ * （设计稿的 `iPad` 不该被渲染成 `ipad`）。按 `createdAt` 而不是「谁先进 Map」，
+ * 是因为本地发布走 `WISHES.unshift()`（新愿望在数组头部），用插入顺序的话
+ * 用户发一条小写 `ipad` 就会把整组的展示词改写成小写。
  *
  * 是函数而不是常量：本地写（发布 / 关闭愿望）之后池子要跟着变。
  */
 export function wishPoolItems(): MockWishPoolItem[] {
   const map = new Map<
     string,
-    { keyword: string; users: Set<string>; budgets: number[]; category: MockWish['category'] }
+    {
+      keyword: string
+      createdAt: string
+      users: Set<string>
+      budgets: number[]
+      category: MockWish['category']
+    }
   >()
   for (const wish of WISHES) {
     if (wish.status !== 'ACTIVE') continue
@@ -339,10 +349,13 @@ export function wishPoolItems(): MockWishPoolItem[] {
     const key = `${poolKeyword(wish.keyword)}\0${category}`
     const entry = map.get(key) ?? {
       keyword: wish.keyword,
+      createdAt: wish.createdAt,
       users: new Set<string>(),
       budgets: [],
       category,
     }
+    // 更早的那条决定展示写法（ISO 字符串可直接字典序比较）
+    if (wish.createdAt < entry.createdAt) entry.keyword = wish.keyword
     entry.users.add(wish.userId)
     entry.budgets.push(Math.round((wish.budgetMinCents + wish.budgetMaxCents) / 2))
     map.set(key, entry)

@@ -139,5 +139,11 @@ describe('愿望池聚合口径', () => {
     expect(after).toHaveLength(1)
     // 原来 6 人 + 新 1 人 = 7 人（新用户是 `ME`，不在原池子里）
     expect(after[0]?.wantCount).toBe(7)
+    /*
+      展示写法必须仍是 fixture 的 `iPad`：本地发布走 `WISHES.unshift()`（新愿望在数组
+      头部），展示词若取「谁先进 Map」就会被刚发的小写 `ipad` 改写。这里断言大小写，
+      而不是只比 `.toLowerCase()` —— 后者会把这个问题遮住。
+    */
+    expect(after[0]?.keyword).toBe('iPad')
   })
 })
