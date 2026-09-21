@@ -149,6 +149,25 @@ describe('POST /ai/polish-candidates 接线验收', () => {
     expect(serialized).not.toContain('13812345678')
   })
 
+  test('长描述（494~500 字）在 stub 下仍返回候选：第一条候选不会因拼后缀越过 500', async () => {
+    // 另两条候选（'长'*501、带 88888 的那条）必被丢，所以这条守住的是"干净候选不能自己超长"。
+    const user = await registerUser()
+    const description = '啊'.repeat(495)
+
+    const response = await app.request(
+      '/ai/polish-candidates',
+      post({ ...BODY, description }, user.cookie),
+    )
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { candidates: { text: string }[] }
+    expect(body.candidates).toHaveLength(1)
+    expect(body.candidates[0]?.text).toBe(description)
+
+    const rows = await rowsOf(user.id)
+    expect(rows[0]?.filteredCount).toBe(2)
+  })
+
   test('参数不合法一律 422：空描述、超 500、多余字段、非法分类', async () => {
     const user = await registerUser()
     const cases = [

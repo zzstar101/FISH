@@ -22,19 +22,41 @@ describe('脱敏', () => {
   })
 
   test('零宽字符插在号码里也照样脱敏（不能靠一个不可见字符绕过）', () => {
-    // 从网页 / Word 复制号码时带进 U+200B 是现实场景；匹配前不剥掉，手机号就原样送上游了。
-    expect(createRedactor().redact('联系 138\u200b12345678 详聊').text).toBe(
-      '联系 [fish-phone-1] 详聊',
-    )
+    // 从网页 / Word / PDF 复制号码时带进不可见字符是现实场景；匹配前不剥掉，手机号就原样送上游。
+    // 只枚举 U+200B 那一小撮不够：软连字符、LRM、CGJ、Hangul 填充符都能拆开号码（#141 三次审查）。
+    const invisible = [
+      '\u200b',
+      '\ufeff',
+      '\u00ad',
+      '\u200e',
+      '\u2066',
+      '\u034f',
+      '\u3164',
+      '\ufe0f',
+    ]
+    for (const ch of invisible) {
+      expect(createRedactor().redact(`联系 138${ch}12345678 详聊`).text).toBe(
+        '联系 [fish-phone-1] 详聊',
+      )
+    }
     expect(createRedactor().redact('联系 138\u200b1234\u200b5678 详聊').text).toBe(
       '联系 [fish-phone-1] 详聊',
     )
     expect(createRedactor().redact('邮箱 abc\u200b@qq.com').text).toBe('邮箱 [fish-mail-1]')
   })
 
+  test('描述里的换行与制表符保留（剥的是不可见格式字符，不是控制字符）', () => {
+    // 送上游的是用户原文的格式：把 `\p{Cc}` 一起剥掉会把换行吃掉，正文粘成一行。
+    expect(createRedactor().redact('九成新\n功能正常\t配件齐').text).toBe(
+      '九成新\n功能正常\t配件齐',
+    )
+  })
+
   test('联系方式与链接的常见写法都命中', () => {
     expect(createRedactor().redact('QQ 1234567').text).toBe('[fish-contact-1]')
     expect(createRedactor().redact('+v: hello123').text).toBe('[fish-contact-1]')
+    // 大写 `V:` 与同组的 `微信` / `vx` 一样要命中（该规则此前漏了 `i`，口径自相矛盾）。
+    expect(createRedactor().redact('V: hello123').text).toBe('[fish-contact-1]')
     expect(createRedactor().redact('看 www.example.com').text).toBe('看 [fish-url-1]')
     expect(createRedactor().redact('看 taobao.com/abc').text).toBe('看 [fish-url-1]')
   })
@@ -123,6 +145,18 @@ describe('回填', () => {
     expect(redactor.restore('电话 [fish-phone-１] 也可以', description)).toEqual({
       text: '电话 （你的联系方式已被移除） 也可以',
       lost: true,
+    })
+  })
+
+  test('标记里插了不可见字符 → 归一后仍算"找回"并还原原文（不是半成品降级）', () => {
+    const redactor = createRedactor()
+    const description = redactor.redact('电话 13812345678')
+
+    // 与"插入空格 / 全角数字"不同：不可见字符在比对前就被剥掉，标记恢复成标准形态，按原样还原
+    // 用户自己的号码——这比换成提示语更符合用户预期（设计 §5.7 已按此口径改写）。
+    expect(redactor.restore('电话 [fish-pho\u200bne-1] 也可以', description)).toEqual({
+      text: '电话 13812345678 也可以',
+      lost: false,
     })
   })
 

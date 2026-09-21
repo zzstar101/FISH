@@ -202,10 +202,11 @@ describe('八步流水线', () => {
   })
 
   test('字段名硬校验挡住 Markdown / 全角括号修饰的写法', async () => {
-    // 模型加粗是最常见的输出形态；只认裸 `描述：` 等于把这道硬校验让给 prompt（#141 二次审查）。
+    // 模型加粗与标题都是最常见的输出形态；只认裸 `描述：` 等于把这道硬校验让给 prompt（#141 审查）。
     const harness = createHarness({
       segments: [
         '**描述：**九成新键盘',
+        '### 描述：九成新键盘',
         '【标题】：出键盘',
         '> 描述：九成新键盘',
         '九成新键盘，功能正常',
@@ -216,7 +217,7 @@ describe('八步流水线', () => {
 
     expect(response.candidates).toHaveLength(1)
     expect(response.candidates[0]?.text).toBe('九成新键盘，功能正常')
-    expect(harness.finishes[0]?.filteredCount).toBe(3)
+    expect(harness.finishes[0]?.filteredCount).toBe(4)
   })
 
   test('候选引用标题里的型号数字不算新增事实（真实上游踩过这条）', async () => {

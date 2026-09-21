@@ -55,7 +55,7 @@ const RULES: readonly { kind: RedactKind; pattern: RegExp }[] = [
     pattern: /(?:微信|weixin|wechat|vx|v信|威信|微信同号)\s*(?:号)?\s*[:：]?\s*[A-Za-z0-9_-]{4,}/gi,
   },
   { kind: 'contact', pattern: /(?:qq|Qq|QQ)\s*(?:号)?\s*[:：]?\s*\d{5,11}/g },
-  { kind: 'contact', pattern: /\+?\s?v\s*[:：]\s*[A-Za-z0-9_-]{4,}/g },
+  { kind: 'contact', pattern: /\+?\s?v\s*[:：]\s*[A-Za-z0-9_-]{4,}/gi },
   { kind: 'addr', pattern: /\d{1,4}\s*(?:栋|幢|号楼|单元|宿舍)/g },
   { kind: 'url', pattern: /https?:\/\/[^\s"'，。；、）)】]+/gi },
   { kind: 'url', pattern: /www\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:\/[^\s]*)?/gi },
@@ -68,10 +68,11 @@ const RULES: readonly { kind: RedactKind; pattern: RegExp }[] = [
 const MARKER_PATTERN = /\[fish-([a-z]+)-(\d+)\]/g
 
 /**
- * 形状像标记、但严格匹配不上的（模型把 `[fish-phone-1]` 写成 `[fish-phone- 1]`、全角数字或
- * 插了零宽字符）。检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），也不能原样
- * 留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见分隔符
- * （`INVISIBLE_SEPARATORS`）。
+ * 形状像标记、但严格匹配不上的（模型把 `[fish-phone-1]` 写成 `[fish-phone- 1]`、全角数字，或
+ * 漏了括号写成 `fish-phone-1`）。检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），
+ * 也不能原样留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见字符
+ * （`INVISIBLE_SEPARATORS`）——所以**插了零宽/软连字符的标记会先归一成标准形态，仍算"找回"**
+ * 并按原样还原，而不是被当成半成品降级（那才是用户想要的：拿回自己的内容）。
  *
  * 种类必须是**闭集**（`LOST_PROMPTS` 的键，即我们真正会发出的那几个），不能写成任意 `[a-z]+`：
  * `facts.ts` 的基线是用户原文，把正文里的 `Fish K380` 当成标记摘掉会让引用该型号的候选被判
@@ -90,11 +91,20 @@ const LOOSE_MARKER_PATTERN = new RegExp(
 )
 
 /**
- * 模型可能把标记拆开（零宽空格/零宽连接符/BOM 插在中间）：比对与清理前先剥掉它们。
- * 写成 alternation 而不是字符类——biome 的 `noMisleadingCharacterClass` 会拦含 ZWJ 的字符类
- * （ZWJ 用于拼 emoji，放进类里容易被误读）。
+ * 模型可能把标记拆开、用户可能把号码拆开：不可见 / 格式类字符一律在比对与匹配前剥掉。
+ *
+ * 字符集：
+ * - `\p{Cf}` 覆盖全部格式字符（U+200B–U+200F、U+2060–U+2066、**U+00AD 软连字符**、U+FEFF…）；
+ * - `\p{Mn}` / `\p{Me}` 覆盖组合记号（**U+034F CGJ**、**U+FE0F 变体选择符**…）；
+ * - Hangul 填充符（U+115F / U+1160 / U+3164 / U+FFA0）类别是 `Lo`，必须单独列。
+ *
+ * 不要再手枚举码位（旧写法只列了 5 个）：`138<U+00AD>12345678`、`138<U+200E>12345678`、
+ * `138<U+3164>12345678` 都能整段绕过手机号规则把号码原样送上游（#141 三次审查发现）。
+ * 这组是 `moderation/rules.ts` 那份归一化集合去掉 `\p{Cc}` 后的结果：**刻意不含 `\p{Cc}`**，
+ * 因为控制字符里有 `\n` / `\t`——moderation 后续会剥掉全部空白所以无所谓，脱敏却必须保留用户
+ * 描述里的换行（送上游的是原文的格式）。
  */
-const INVISIBLE_SEPARATORS = /\u200b|\u200c|\u200d|\u2060|\ufeff/g
+const INVISIBLE_SEPARATORS = /[\p{Cf}\p{Mn}\p{Me}\u115F\u1160\u3164\uFFA0]/gu
 
 /**
  * 摘掉标准形态与**被改写过的**标记字面。事实校验（`facts.ts`）用它在抽取数字前做归一化：

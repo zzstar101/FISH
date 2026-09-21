@@ -24,6 +24,20 @@ const LONG_CANDIDATE = '长'.repeat(501)
 /** 原文没有的数字：事实校验必须丢掉它。 */
 const INVENTED_NUMBER = '88888'
 
+/** 第一条候选是唯一"干净"的那条，加个后缀让客户端看得出这是模型改写过的文本。 */
+const CLEAN_SUFFIX = '，校内自提优先'
+
+/**
+ * 第一条候选拼后缀后必须仍 ≤500，否则描述 494~500 字时三条候选全被丢（另两条分别命中长度层与
+ * 事实层），stub 下合法长描述恒返回 `AI_RESULT_EMPTY`，看起来像线上 bug（#141 三次审查发现）。
+ * 拼不下就退回原文——stub 的第一条只要"干净"即可，不必非要与原文不同。
+ */
+function cleanCandidate(description: string): string {
+  return description.length + CLEAN_SUFFIX.length <= 500
+    ? `${description}${CLEAN_SUFFIX}`
+    : description
+}
+
 export type StubChatRequest = { messages?: { role: string; content: string }[] }
 
 export type AiPolishStub = {
@@ -46,7 +60,7 @@ export function createAiPolishStub(): AiPolishStub {
       const description = user.split('原始描述：').at(-1)?.trim() ?? user
 
       const content = [
-        `${description}，校内自提优先`,
+        cleanCandidate(description),
         LONG_CANDIDATE,
         `${description}，原价 ${INVENTED_NUMBER} 元`,
       ].join('\n===\n')
