@@ -3,7 +3,7 @@ import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import type { MeetupTokenResponse, TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
@@ -21,20 +21,28 @@ import { isApiError } from '@/lib/request'
 import './index.scss'
 
 /**
- * A2 交易码 / 面交确认（设计稿 `设计稿_A2-transaction-meetup.html`）—— #70 × #114 真实接线。
+ * A2 交易码 / 面交确认（设计稿 `小程序1版transaction-meetup.html`）—— #70 × #114 真实接线。
  *
  * 入口参数（两种，可同时出现）：
- * - `?id=<transactionId>`：从「我的订单」进入。卖家 = 出示方：进页即签发/刷新面交码，
- *   展示 6 位码 + 二维码，点「刷新」重签（旧码立即作废）；
- *   买家 = 核销方：在本页手动输入对方的 6 位码（6 位码只在已知 transactionId 的
- *   本页输入，全局扫码页不提供无上下文输入），或点「扫码验证」进扫码页。
+ * - `?id=<transactionId>`：从「我的订单」进入。卖家 = 出示方：进页即签发面交码，
+ *   展示 6 位码 + 二维码；买家 = 核销方：在本页手动输入对方的 6 位码（6 位码只在
+ *   已知 transactionId 的本页输入，全局扫码页不提供无上下文输入），或点「扫码验证」
+ *   进扫码页。
  * - `?code=<QR 原文>`：扫码页交付的鱼小应交易码原文，自带 transactionId
  *   （契约 `meetup-qr`），可独立定位交易。扫码页已做形状 gate，此处再解析一次，
  *   解析失败（不该发生）按「无效码」展示。
  *
+ * 两个视角（稿 ①）：买家页只有 6 位输入格；卖家页只有 6 位码 + 二维码 + 「请对方用
+ * 微信扫码」，没有输入。商品摘要卡两个视角都有，只把对方称谓按视角对调；顶栏标题也
+ * 按视角给「输入交易码」/「交易码」。
+ *
  * 消费语义（后端 #70 冻结契约）：核销成功 = 买家侧凭证消费 + 卖家面交确认被盖上，
  * 响应 `nextAction: 'CONFIRM_DELIVERY'` —— 本页随后调 confirm；双侧确认齐 →
  * COMPLETED + 商品 SOLD（幂等，重复提交不会重复成交）。
+ *
+ * 核验态（稿 ③）：点确认后页面进入**只有一个转圈**的核验态，圈里不放任何字。
+ * **不照抄稿的 `VERIFY_MS = 1800` 定时器**：真实核验时长 = 网络请求时长。这里由
+ * 「请求在飞」驱动，另配一个最短展示时长（`VERIFY_MIN_MS`）避免秒回时闪一下。
  *
  * 恢复口径（审查 P1-2 / 第三轮）：confirm 网络失败后杀进程/离开再进，服务端停在
  * 「sellerConfirmedAt 已盖、buyerConfirmedAt 未盖、token CONSUMED」。注意
@@ -42,12 +50,13 @@ import './index.scss'
  * 必须再查 GET meetup-token 的 status === CONSUMED 才恢复确认入口；
  * 非 CONSUMED 一律仍要求扫码 / 手输核销。
  *
- * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ CONSUMED（已被使用）/
- * LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
+ * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ EXPIRED（过期，请对方刷新）/
+ * CONSUMED（已被使用）/ LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
  * NOT_ALLOWED（不能核销自己出示的码）。
- * #147 长期凭证：凭证在本单 PENDING_MEETUP 生命周期内有效（终态后端同事务销毁），
- * 没有过期路径与倒计时。
  */
+
+/** 核验态最短展示时长：秒回时不闪一下（见文件头「核验态」） */
+const VERIFY_MIN_MS = 420
 
 function formatAmount(cents: number): string {
   const yuan = cents / 100
@@ -72,6 +81,9 @@ function relativeLabel(iso: string, now: number = Date.now()): string {
 const CODE_SLOTS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-digit-${index}`, index }))
 const INPUT_CELLS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-cell-${index}`, index }))
 
+/** 完成动效的 26 颗粒子：几何全在 SCSS 的 `@for` 里，这里只要稳定 key 与顺序 */
+const FX_PARTICLES = Array.from({ length: 26 }, (_, index) => `meetup-fx-p-${index}`)
+
 /** 卖家视角下凭证的渲染态（NONE/CONSUMED 不落在本页：进页即签发） */
 type TokenView =
   | { state: 'issuing' }
@@ -79,6 +91,9 @@ type TokenView =
   /** 凭证不可在本页重复展示（如卖家误扫自己的码收到 NOT_ALLOWED）：
    * 明文只存在于签发响应，本页无法重放；是否重签交用户手动决定。 */
   | { state: 'unavailable' }
+
+/** 完成动效的挂载开关：只在「刚完成」那一刻播一次，静态进入终态不重播 */
+type FxPhase = 'off' | 'on'
 
 export default function TransactionMeetup() {
   const authStatus = useAuthGuard()
@@ -93,12 +108,20 @@ export default function TransactionMeetup() {
   const [scannedInvalid, setScannedInvalid] = useState(false)
   /** 手动输入：6 位数字的字符数组，索引即格子位置 */
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
-  /** 手动输入的错误提示（码错误 / 已被使用 / 次数过多 / 对方未出码），空串表示无错误 */
+  /** 手动输入的错误提示（码错误 / 过期 / 已被使用 / 次数过多），空串表示无错误 */
   const [inputError, setInputError] = useState('')
   /** 提交中锁：防重复核销 */
   const [submitting, setSubmitting] = useState(false)
+  /**
+   * 核验态（稿 ③）：买家提交交易码后的「只有一个转圈」阶段。
+   * **只覆盖核销那一段**，不覆盖 `confirmPending` 的「确认完成面交」重试 ——
+   * 后者有自己的按钮与文案（审查 P1-2 的分支），不该被转圈顶掉。
+   */
+  const [verifying, setVerifying] = useState(false)
   /** 核销成功但 confirm 尚未落定（可重试确认） */
   const [confirmPending, setConfirmPending] = useState(false)
+  /** 完成动效只播一次（本会话内刚完成），见 FxPhase */
+  const [fxPhase, setFxPhase] = useState<FxPhase>('off')
   /** 扫到的 QR 凭证在 useLoad 里解释一次，命令式流程经 scanRef 读取 */
   const scanRef = useRef<MeetupQrPayload | null>(null)
 
@@ -137,7 +160,7 @@ export default function TransactionMeetup() {
         // 恢复口径（审查第三轮 P1）：sellerConfirmedAt **不能**等同「凭证已核销」
         // ——卖家可能从 Web 订单页走了普通 confirm。必须查凭证真实状态：
         // 仅 status === CONSUMED（确经本页凭证核销、上次会话 confirm 失败）才恢复
-        // 确认入口；NONE/ISSUED 一律仍要求扫码 / 手输核销。
+        // 确认入口；NONE/ISSUED/EXPIRED 一律仍要求扫码 / 手输核销。
         if (dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
           const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
           if (tokenStatus?.status === 'CONSUMED') {
@@ -159,7 +182,7 @@ export default function TransactionMeetup() {
     }
   }
 
-  /* ------------------------------------------------- 卖家：签发 / 刷新 */
+  /* ------------------------------------------------- 卖家：签发 */
 
   const issue = async (txId: string) => {
     // 参数化 transactionId（审查 P1-1）：bootstrap 里 setTx 后闭包的 tx 仍是 null，
@@ -168,8 +191,6 @@ export default function TransactionMeetup() {
     setInputError('')
     try {
       const next = await issueMeetupToken(txId)
-      // #147 长期凭证：响应只有 code + qrPayload，凭证在本单 PENDING_MEETUP
-      // 生命周期内有效（终态后端同事务销毁），没有倒计时。
       setToken({ state: 'ready', token: next })
     } catch (error) {
       setToken(null)
@@ -203,24 +224,40 @@ export default function TransactionMeetup() {
    * 核销统一入口：先消费凭证，成功后按 nextAction 调 confirm（幂等）。
    * 双侧确认齐时交易直接 COMPLETED + listing SOLD；confirm 网络失败时保留
    * 「确认完成」重试按钮，不假装已完成。
+   *
+   * 核验态的时长 = 请求在飞（`submitting`），另配最短展示 `VERIFY_MIN_MS`：
+   * 请求秒回时也把转圈留够一瞬，避免闪一下。
    */
   const verify = async (targetId: string, consume: () => Promise<unknown>) => {
     if (submitting) return
     setSubmitting(true)
     setInputError('')
+    // 核验态：核销请求在飞期间页面只显示一个转圈（稿 ③）
+    setVerifying(true)
+    const startedAt = Date.now()
+    /** 请求结束后补齐最短展示时长；只在「还没完成」时等，避免拖慢完成页 */
+    const settle = async () => {
+      const rest = VERIFY_MIN_MS - (Date.now() - startedAt)
+      if (rest > 0) await new Promise((resolve) => setTimeout(resolve, rest))
+    }
     try {
       await consume()
       try {
         const dto = await confirmTransaction(targetId)
+        await settle()
         setTx(dto)
         setConfirmPending(dto.status !== 'COMPLETED')
+        if (dto.status === 'COMPLETED') setFxPhase('on')
       } catch {
+        await settle()
         setConfirmPending(true)
       }
     } catch (error) {
+      await settle()
       if (isApiError(error)) {
         const map: Record<string, string> = {
           MEETUP_TOKEN_INVALID: '交易码错误，请核对后重新输入。请确认对方展示的是本单的交易码。',
+          MEETUP_TOKEN_EXPIRED: '交易码已过期，请对方重新出示本单的交易码。',
           MEETUP_TOKEN_CONSUMED: '这个交易码已被使用，不能重复核销。',
           MEETUP_TOKEN_LOCKED: '错误次数过多，已临时锁定，请稍后再试。',
           MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
@@ -246,6 +283,7 @@ export default function TransactionMeetup() {
       }
       setInputError('核销失败，请检查网络后重试。')
     } finally {
+      setVerifying(false)
       setSubmitting(false)
     }
   }
@@ -258,6 +296,7 @@ export default function TransactionMeetup() {
       const dto = await confirmTransaction(tx.id)
       setTx(dto)
       setConfirmPending(dto.status !== 'COMPLETED')
+      if (dto.status === 'COMPLETED') setFxPhase('on')
     } catch (error) {
       if (isApiError(error) && error.code === 'TRANSACTION_NOT_IN_PENDING') {
         // 等待期间交易被取消/完成：落到对应状态卡，确认入口随之消失
@@ -272,10 +311,8 @@ export default function TransactionMeetup() {
     }
   }
 
-  const openConversation = () => {
-    if (!tx) return
-    // 契约 TransactionDto 自带 conversationId（#11 冻结字段），直接跳本单会话
-    void Taro.navigateTo({ url: `/pages/conversation/index?id=${tx.conversationId}` })
+  const goHome = () => {
+    void Taro.switchTab({ url: '/pages/home/index' })
   }
 
   /**
@@ -324,11 +361,84 @@ export default function TransactionMeetup() {
   const readyToken = token?.state === 'ready' ? token.token : null
   const qrImage = readyToken ? qrDataUrl(readyToken.qrPayload) : ''
 
+  /** 核验态只在买家侧出现（卖家不提交交易码） */
+  const showVerify = verifying && !isSeller && !done && !cancelled
+
   const statusPill = done
-    ? { label: '已完成', cls: 'is-done' }
+    ? { label: '已完成', cls: 'is-done', note: '本单已归档 · 交易码已失效' }
     : cancelled
-      ? { label: '已取消', cls: 'is-cancel' }
-      : { label: '待面交', cls: 'is-pending' }
+      ? { label: '已取消', cls: 'is-cancel', note: '本单已取消 · 交易码已失效' }
+      : {
+          label: '待面交',
+          cls: 'is-pending',
+          // 稿的 mono 备注行：买家「扫码进入本单」/ 卖家「本单一次性凭证 · 面交后失效」
+          note: isSeller ? '本单一次性凭证 · 面交后失效' : '扫码进入本单',
+        }
+
+  /** 完成页文案按视角分（稿 ⑤：双方同构，只有文字不同） */
+  const doneText = isSeller
+    ? '本次面交已确认，对方已确认收到本单商品，本单已归档。感谢你在鱼小应完成当面交易。'
+    : '本次面交已确认，你已收到本单商品，本单已归档。感谢你在鱼小应完成当面交易。'
+
+  /**
+   * 完成动效的光爆原点：必须量 `.meetup__suc-stage`（不带动画的定位盒），
+   * 不能量徽章本身 —— 徽章正在跑 `meetup-burst-flip`（0% 就是 rotateY(-720deg)
+   * scale(.12)），量它等于量一个正在缩放的盒子。
+   *
+   * **量到之前不挂特效层**（渲染处判 `fxTop > 0`）：这个 effect 与「首次挂载
+   * `.meetup__suc-stage`」是同一次提交，而 Taro 的 `setData` 是异步刷的
+   * （`@tarojs/runtime` 的 `scheduleTask` 走 `setTimeout`）。若照常挂层，原点在
+   * 量到之前是 0，闪光与冲击环会先从**屏幕顶边**炸开再瞬移到徽章。
+   */
+  const [fxTop, setFxTop] = useState(0)
+
+  useEffect(() => {
+    if (fxPhase !== 'on') return
+    let cancelled = false
+
+    const measure = () => {
+      Taro.nextTick(() => {
+        Taro.createSelectorQuery()
+          .select('.meetup__suc-stage')
+          .boundingClientRect()
+          .exec((res) => {
+            if (cancelled) return
+            const rect = res?.[0] as { top?: number; height?: number } | undefined
+            if (typeof rect?.top === 'number' && typeof rect.height === 'number') {
+              // 光爆层是 `position: fixed` 铺满视口，原点直接用视口坐标即可
+              setFxTop(Math.round(rect.top + rect.height / 2))
+              return
+            }
+            // 量不到（节点还没上屏）：按布局算一遍兜底 —— 完成后徽章中心 =
+            // 168(页头) + 24 + 46(状态行) + 252(成功区上留白) + 82(徽章半径) = 572rpx，
+            // rpx → px 用 windowWidth / 750 换算（不能用 statusBarHeight 相加，
+            // 那 168rpx 里已经含了状态栏）。绝不把原点留在 0。
+            try {
+              const info = Taro.getWindowInfo()
+              const width = info.windowWidth || 390
+              setFxTop(Math.round((572 * width) / 750))
+            } catch {
+              setFxTop(280)
+            }
+          })
+      })
+    }
+
+    // 先在页首（稿也是先回页首再播）。pageScrollTo 是异步的，必须等它落定再量，
+    // 否则读到的可能是滚动前的坐标。失败也要继续量，不能把动效卡掉。
+    Taro.pageScrollTo({ scrollTop: 0, duration: 0 }).then(
+      () => {
+        if (!cancelled) measure()
+      },
+      () => {
+        if (!cancelled) measure()
+      },
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [fxPhase])
 
   /**
    * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
@@ -355,14 +465,41 @@ export default function TransactionMeetup() {
     <View className="meetup">
       <View className="meetup__bg" />
 
-      <NavBar />
+      {/* 顶栏标题按视角不同（稿 ①）：买家「输入交易码」/ 卖家「交易码」。
+          交易还没读回来时**不给标题** —— 按 `isSeller` 猜会把卖家的页面临时显示成
+          「输入交易码」（isSeller 在 tx 为 null 时是 false）；报错态也不该有标题。 */}
+      <NavBar
+        title={tx ? (isSeller ? '交易码' : '输入交易码') : undefined}
+        titleAlign="center"
+        glass
+      />
+
+      {/* 完成动效的全屏特效层：铺满视口、按屏缘裁切（稿 `.fx` 挂在 `.screen` 直下）。
+          必须等原点量到再挂（`fxTop > 0`），否则闪光/冲击环会先从屏幕顶边炸开再瞬移。 */}
+      {fxPhase === 'on' && done && fxTop > 0 ? (
+        <View className="meetup__fx">
+          <View className="meetup__fx-flash" />
+          <View className="meetup__fx-origin" style={{ top: `${fxTop}px` }}>
+            <View className="meetup__fx-glow" />
+            <View className="meetup__fx-wave" />
+            <View className="meetup__fx-wave meetup__fx-wave--2" />
+            <View className="meetup__fx-wave meetup__fx-wave--3" />
+            <View className="meetup__fx-particles">
+              {FX_PARTICLES.map((id) => (
+                <View key={id} className="meetup__fx-p" />
+              ))}
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       <View className="meetup__head">
-        <View className="meetup__headline">
-          <Text className="meetup__title">交易码</Text>
+        <View className="meetup__statusrow">
           {tx ? <Text className={`meetup__st ${statusPill.cls}`}>{statusPill.label}</Text> : null}
+          {tx ? <Text className="meetup__statusnote num">{statusPill.note}</Text> : null}
         </View>
-        {dealCard}
+        {/* 完成页由摘要卡承担商品信息，其余状态都挂商品卡（稿：完成态摘掉页头商品卡） */}
+        {done ? null : dealCard}
       </View>
 
       {/* ---------- 交易不存在 / 非参与者：404 不泄漏存在性 ---------- */}
@@ -407,44 +544,76 @@ export default function TransactionMeetup() {
         </View>
       ) : null}
 
+      {/* ---------- 核验态（稿 ③）：只有一个转圈，圈里不放任何字 ---------- */}
+      {showVerify ? (
+        <View className="meetup__verify">
+          <View className="meetup__vspin">
+            <View className="meetup__vspin-ring" />
+          </View>
+        </View>
+      ) : null}
+
       {/* ---------- 已完成 / 已取消：终态卡 ---------- */}
       {tx && (done || cancelled) ? (
         done ? (
           <>
-            <View className="meetup__success">
-              <View className="meetup__suc-disc">
-                <Image className="meetup__suc-ic" src={ICONS.checkCircleWhite} mode="aspectFit" />
+            {/*
+              震屏只包内容，**不能包吸底操作栏**：`.meetup__hit` 的
+              `animation: meetup-hit … both` 会永久保留末帧的 `transform`，
+              而「保留的 transform（哪怕单位矩阵）会让该元素成为 position:fixed
+              后代的包含块」—— 包住的话吸底栏就不再相对视口定位，会跟着内容滚走。
+              稿里 `is-hit` 也只挂在 `.content` 上、`.actionbar` 是兄弟节点。
+            */}
+            <View className={fxPhase === 'on' ? 'meetup__hit' : undefined}>
+              <View className="meetup__success">
+                <View className="meetup__suc-stage">
+                  <View className="meetup__suc-halo" />
+                  <View className="meetup__suc-ring" />
+                  <View className="meetup__suc-ring meetup__suc-ring--2" />
+                  <View className="meetup__suc-ring meetup__suc-ring--3" />
+                  <View className="meetup__suc-disc">
+                    {/* 对勾自绘：`<View>` + 两条边框（稿要求内联 path 才能做 dash，
+                        小程序无内联 SVG，改用量出尺寸的 CSS 勾，见 index.scss） */}
+                    <View className="meetup__suc-check" />
+                  </View>
+                </View>
+                <Text className="meetup__suc-title">交易已完成</Text>
+                <Text className="meetup__suc-text">{doneText}</Text>
               </View>
-              <Text className="meetup__suc-title">交易已完成</Text>
-              <Text className="meetup__suc-text">
-                本次面交已确认，本单已归档。感谢你在校园里完成当面交易。
+
+              <View className="meetup__sumcard">
+                <View className="meetup__sum-thumb">
+                  <Image
+                    className="meetup__sum-img"
+                    src={tx.listing.coverUrl ?? ''}
+                    mode="aspectFill"
+                  />
+                </View>
+                <View className="meetup__sum-info">
+                  <Text className="meetup__sum-title">{tx.listing.title}</Text>
+                  {/* 完成页摘要卡的称谓按视角对调（稿 ⑤） */}
+                  <Text className="meetup__sum-sub num">
+                    {`与 ${tx.role === 'buyer' ? '卖家' : '买家'} ${tx.counterpart.nickname} · 已完成面交`}
+                  </Text>
+                </View>
+                <Text className="meetup__sum-amount num">¥{formatAmount(tx.amountCents)}</Text>
+              </View>
+
+              {/* 明文只在签发响应出现一次，买卖两侧都无法回显数字（见文件头口径） */}
+              <Text className="meetup__dead num">
+                本单交易码 <Text className="meetup__dead-code">已失效</Text>
               </Text>
             </View>
 
-            <View className="meetup__sumcard">
-              <View className="meetup__sum-thumb">
-                <Image
-                  className="meetup__sum-img"
-                  src={tx.listing.coverUrl ?? ''}
-                  mode="aspectFill"
-                />
+            {/* 吸底栏在震屏包裹层**之外**：见上面关于 `position: fixed` 包含块的说明 */}
+            <View className={`meetup__bar${fxPhase === 'on' ? ' is-enter' : ''}`}>
+              <View className="meetup__bar-btn meetup__btn--sec" onClick={goHome}>
+                <Image className="meetup__bar-ic" src={ICONS.tabHome} mode="aspectFit" />
+                <Text>返回主页</Text>
               </View>
-              <View className="meetup__sum-info">
-                <Text className="meetup__sum-title">{tx.listing.title}</Text>
-                <Text className="meetup__sum-sub num">{`与 ${tx.counterpart.nickname} · 已完成面交`}</Text>
-              </View>
-              <Text className="meetup__sum-amount num">¥{formatAmount(tx.amountCents)}</Text>
-            </View>
-
-            <Text className="meetup__dead num">
-              本单交易码 <Text className="meetup__dead-code">已失效</Text>
-            </Text>
-
-            <View className="meetup__bar">
-              <View className="meetup__bar-btn meetup__btn--sec" onClick={openConversation}>
-                <Image className="meetup__bar-ic" src={ICONS.chatInk} mode="aspectFit" />
-                <Text>查看会话</Text>
-              </View>
+              {/* 主按钮（品牌渐变底 + 白字）不带图标：图标库是固定色 PNG，
+                  没有白色的首页/订单图标，灰色图标压在蓝底上是缺陷（稿里的 SVG
+                  继承 currentColor 才有白图标）。 */}
               <View className="meetup__bar-btn meetup__btn--main" onClick={goOrders}>
                 <Text>查看订单</Text>
               </View>
@@ -467,15 +636,12 @@ export default function TransactionMeetup() {
       ) : null}
 
       {/* ---------- 待面交：卖家出示 / 买家核销 ---------- */}
-      {tx && !done && !cancelled ? (
+      {tx && !done && !cancelled && !showVerify ? (
         isSeller ? (
           <>
             <View className="meetup__sec">
               <Text className="meetup__sec-title">我的交易码</Text>
-              <View className="meetup__refresh" onClick={() => tx && void issue(tx.id)}>
-                <Image className="meetup__refresh-ic" src={ICONS.refresh} mode="aspectFit" />
-                <Text>刷新</Text>
-              </View>
+              <Text className="meetup__sec-note num">6 位数字</Text>
             </View>
 
             {unavailable ? (
@@ -486,16 +652,8 @@ export default function TransactionMeetup() {
                 <Text className="meetup__varcard-title">这是你出示的交易码</Text>
                 <Text className="meetup__varcard-text">
                   交易码不能由你本人核销。出于安全，本页不重复展示已签发的码；
-                  如需重新出示给对方，点「刷新」生成新的 6 位码（旧码作废）。
+                  如需重新出示给对方，请退出后重新进入本页生成新的 6 位码（旧码作废）。
                 </Text>
-                <View className="meetup__varcard-acts">
-                  <View
-                    className="meetup__btn meetup__btn--pri"
-                    onClick={() => tx && void issue(tx.id)}
-                  >
-                    <Text>刷新交易码</Text>
-                  </View>
-                </View>
               </View>
             ) : readyToken ? (
               <>
@@ -522,8 +680,14 @@ export default function TransactionMeetup() {
                 <View className="meetup__notice">
                   <Image className="meetup__notice-ic" src={ICONS.lock} mode="aspectFit" />
                   <Text className="meetup__notice-tx">
-                    交易码在本单面交完成前一直有效、一次性使用；请勿截图或转发，仅当面出示。
+                    交易码一次性有效，面交完成后自动失效；请勿截图或转发，仅当面出示。
                   </Text>
+                </View>
+
+                {/* 卖家等待条：稿 ④ 的双机联动在小程序里无数据来源，改成如实语义 */}
+                <View className="meetup__waitline">
+                  <View className="meetup__wait-dot" />
+                  <Text>等待对方扫码或输入交易码</Text>
                 </View>
               </>
             ) : (
@@ -567,13 +731,6 @@ export default function TransactionMeetup() {
               请对方在 TA 的「交易码」页面出示二维码或 6 位数字，扫码或输入后即可完成核销。
             </Text>
 
-            <View className="meetup__bar">
-              <View className="meetup__bar-btn meetup__btn--sec" onClick={openScanner}>
-                <Image className="meetup__bar-ic" src={ICONS.qr} mode="aspectFit" />
-                <Text>扫码验证</Text>
-              </View>
-            </View>
-
             {/*
                 六个格子视觉上是独立的，但只挂一个透明输入框：
                 六个真实 Input 在小程序里会各自弹键盘、光标乱跳，且整串粘贴无法分配。
@@ -586,7 +743,7 @@ export default function TransactionMeetup() {
                   <View
                     key={cell.id}
                     className={`meetup__cell${ch ? ' is-filled' : ''}${
-                      inputError ? ' is-bad' : ''
+                      inputError && ch ? ' is-bad' : ''
                     }${cell.index === joined.length && !inputError ? ' is-focus' : ''}`}
                   >
                     <Text className="meetup__cell-tx num">{ch}</Text>
@@ -610,12 +767,15 @@ export default function TransactionMeetup() {
             ) : null}
 
             <View className="meetup__bar">
+              <View className="meetup__bar-btn meetup__btn--sec" onClick={openScanner}>
+                <Image className="meetup__bar-ic" src={ICONS.qr} mode="aspectFit" />
+                <Text>扫码验证</Text>
+              </View>
               <View
                 className={`meetup__bar-btn meetup__btn--main${canSubmit ? '' : ' is-off'}`}
                 onClick={submit}
               >
-                {submitting ? <View className="meetup__spin" /> : null}
-                <Text>{submitting ? '核销中…' : '确认'}</Text>
+                <Text>确认</Text>
               </View>
             </View>
 
