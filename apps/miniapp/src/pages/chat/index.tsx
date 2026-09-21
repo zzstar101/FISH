@@ -12,7 +12,7 @@ import { markConversationRead } from '@/features/chat/api'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
 import type { MockNotification } from '@/mock/types'
-import { chatListState, conversationTimeLabel, previewOf } from './list-view'
+import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
 import './index.scss'
 
 /**
@@ -469,7 +469,9 @@ export default function Chat() {
                     onClick={() => chooseFilter(item.key)}
                   >
                     <Text>{item.label}</Text>
-                    {tabBadge > 0 ? <Text className="chat__tab-n num">{tabBadge}</Text> : null}
+                    {tabBadge > 0 ? (
+                      <Text className="chat__tab-n num">{badgeText(tabBadge)}</Text>
+                    ) : null}
                   </View>
                 )
               })}
@@ -555,7 +557,7 @@ export default function Chat() {
                         mode="aspectFill"
                       />
                     </View>
-                    {unread > 0 ? <Text className="chat__bdg num">{unread}</Text> : null}
+                    {unread > 0 ? <Text className="chat__bdg num">{badgeText(unread)}</Text> : null}
                   </View>
 
                   <View className="chat__corp">

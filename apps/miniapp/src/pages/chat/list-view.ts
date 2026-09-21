@@ -37,6 +37,18 @@ export function chatListState(input: {
 export const EMPTY_PREVIEW = '还没有消息，打个招呼吧'
 
 /**
+ * 角标数字的显示上限：超过 99 一律显示 `99+`。
+ *
+ * 1版稿的角标是窄胶囊，三四位数字会把行高与宽度撑变形；而且未读本来就是「有多少」
+ * 的提示而非精确账目。注意这只是**显示**口径 —— 求和本身是多少仍然照算。
+ */
+const BADGE_MAX = 99
+
+export function badgeText(count: number): string {
+  return count > BADGE_MAX ? '99+' : String(count)
+}
+
+/**
  * 会话行的消息预览。
  *
  * 交易类 SYSTEM 消息的 `content` 是契约里的 JSON 原文
