@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createDb } from '@fish/db/client'
+import { createDb, type Db } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlConversationStore } from './store'
@@ -171,5 +171,78 @@ describe('conversations store (integration)', () => {
     // listingB 有图但没有 0 号图 → null。旧实现（取最小 sort_order）在这里会返回
     // covers/b-only-1.jpg，因此这一条正是 #40/F3 的「修复前会失败」用例。
     expect(covers.get(listingB)).toBeNull()
+  })
+
+  test('markRead 读位单调：后开始的事务先提交后，先开始的事务不把读位写回更早', async () => {
+    // 专用买卖双方 + 独立会话：不占用 buyer/seller 的会话列表，本用例与其它用例的执行顺序无关。
+    const buyerC = '01990000-0000-7000-8000-0000000000a4'
+    const sellerC = '01990000-0000-7000-8000-0000000000a5'
+    const listingC = '01990000-0000-7000-8000-0000000000b3'
+    await db.execute(sql`
+      INSERT INTO users (id, student_no, password_hash, nickname) VALUES
+        (${buyerC}, ${`conv${process.pid}_c0`}, 'test-hash', '会话测试'),
+        (${sellerC}, ${`conv${process.pid}_c1`}, 'test-hash', '会话测试')
+    `)
+    await seedListing(listingC, sellerC, '降噪耳机')
+    const inserted = await store.insertIfAbsent(listingC, buyerC, sellerC)
+    if (!inserted) throw new Error('unreachable')
+    const conversationId = inserted.id
+
+    const rowsOf = (result: unknown): Record<string, unknown>[] => {
+      if (Array.isArray(result)) return result as Record<string, unknown>[]
+      return ((result as { rows?: Record<string, unknown>[] }).rows ?? []) as Record<
+        string,
+        unknown
+      >[]
+    }
+
+    // 事务开始时刻的毫秒值（now() 在事务内被固定，用它做「谁更早」的判据）。
+    const txStartedAt = async (tx: Db) => {
+      const rows = rowsOf(await tx.execute(sql`SELECT now() AS started_at`))
+      return new Date(rows[0]?.started_at as Date | string).getTime()
+    }
+
+    // 在事务里跑 store.markRead，返回写后的读位毫秒值。
+    const markReadInTx = async (tx: Db) => {
+      const detail = await createSqlConversationStore(tx).markRead(conversationId, buyerC)
+      const readAt = detail?.conversation.buyer_last_read_at
+      if (readAt == null) throw new Error('unreachable')
+      return new Date(readAt).getTime()
+    }
+
+    let signalT1Started: () => void = () => {}
+    const t1Started = new Promise<void>((resolve) => {
+      signalT1Started = resolve
+    })
+    let signalT2Committed: () => void = () => {}
+    const t2Committed = new Promise<void>((resolve) => {
+      signalT2Committed = resolve
+    })
+
+    // 竞态构造：T1 先 BEGIN（now() 更早）但要等 T2 提交后才 UPDATE；
+    // T2 后 BEGIN（now() 更晚）却先拿行锁、先提交。
+    const t1 = db.transaction(async (tx) => {
+      const startedAt = await txStartedAt(tx as unknown as Db)
+      signalT1Started()
+      await t2Committed
+      return { startedAt, readAt: await markReadInTx(tx as unknown as Db) }
+    })
+    await t1Started
+    await Bun.sleep(30) // 保证 T2 的 now() 严格晚于 T1
+    const t2 = db
+      .transaction(async (tx) => markReadInTx(tx as unknown as Db))
+      .then((readAt) => {
+        signalT2Committed()
+        return readAt
+      })
+
+    const [t1Result, t2ReadAt] = await Promise.all([t1, t2])
+    // 前提校验：T1 的事务确实更早，否则这个用例没有验证力。
+    expect(t1Result.startedAt).toBeLessThan(t2ReadAt)
+
+    const final = await store.findDetail(conversationId, buyerC)
+    const finalReadAt = new Date(final?.conversation.buyer_last_read_at as Date).getTime()
+    // 更晚的读位（T2）必须先提交，且不被后提交的 T1 回写覆盖。
+    expect(finalReadAt).toBe(t2ReadAt)
   })
 })
