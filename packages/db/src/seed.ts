@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
 import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
+import { aiPolishRequests } from './schema/ai-polish-requests'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
@@ -78,9 +79,10 @@ export async function seed(tx: SeedTx): Promise<void> {
   // `sessions` / `campus_email_verifications`（#68）/ `listing_moderation_records`（#80）
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
-  // users 与 transactions）必须在内：漏掉会让 seed 第二次执行直接失败。
+  // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）必须在内：漏掉会让
+  // seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}`,
+    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}`,
   )
 
   const now = new Date()
