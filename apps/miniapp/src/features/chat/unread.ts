@@ -17,7 +17,7 @@
  * 会造成「真实有未读却不亮」或「没有未读却亮着幽灵红点」两种错）。
  */
 import { useSyncExternalStore } from 'react'
-import { fetchUnreadNotificationCount } from '@/features/chat/api'
+import { fetchConversationUnreadCount, fetchUnreadNotificationCount } from '@/features/chat/api'
 
 export type UnreadSnapshot = {
   /**
@@ -26,7 +26,11 @@ export type UnreadSnapshot = {
    * 不带归属的残留快照会拿上一个账号的已读视角替新账号熄底栏红点。
    */
   ownerId: string
-  /** 会话未读**条数和**（Chat 页 `shown` 的口径，含本地已读清零的效果） */
+  /**
+   * 会话未读**条数和**（Chat 页会话列表的口径）。两个来源同源：Chat 页发布自己
+   * 那份真实列表的求和，冷启动由 `hydrateUnread` 拉 `GET /conversations` 求和；
+   * 拿不到时记 0（「不知道」，与页内失败态同口径），不拿 fixture 顶替。
+   */
   conversations: number
   /**
    * 通知未读数（Chat 页「通知」tab 角标同源：切进 tab 即 0）；
@@ -112,17 +116,16 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 现算 —— 而 fixture 的未读与真实账号毫无关系，于是「真实有未读却不亮」与
  * 「没有未读却亮着幽灵红点」都会发生。
  *
- * 通知数走**真实** `GET /notifications/unread-count`。失败时：
+ * 通知数走**真实** `GET /notifications/unread-count`；会话数走**真实**
+ * `GET /conversations` 求和（`fetchConversationUnreadCount`，实现它是因为 #89 明写
+ * 「接 `GET /conversations` 时必须一并收口会话未读这一分量」）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
- * - 没给（真实构建）→ 发 `null`（「不知道」，底栏按无已知未读算），
+ * - 没给（真实构建）→ 会话未读记 0、通知未读记 `null`（「不知道」，底栏按无已知未读算），
  *   **不回退 fixture** —— 拿 fixture 顶替真实值正是幽灵红点 / 漏亮红点的成因。
  *
  * 兜底由调用方注入而不是本模块内判断构建开关：store 不该知道 mock fixture 的存在，
  * 这样它也不必 import `@/mock/api`（避免真实构建把整包 fixture 拖进底栏的依赖图）。
- *
- * 会话数由调用方传入（底栏从 fixture 现算）—— 会话未读的真实化是 #89 的既有债，
- * 不在本 PR 范围；这里只保证**通知**这一项不再用 fixture 顶替真实值。
  *
  * 并发去重：底栏实例每个 Tab 页各一份，多个实例会同时触发；同账号只发一次请求。
  */
@@ -130,8 +133,7 @@ const hydrating = new Set<string>()
 
 export function hydrateUnread(
   ownerId: string,
-  conversations: number,
-  demoFallback?: () => number,
+  demoFallback?: () => { conversations: number; notifications: number },
 ): void {
   // 记录「当前该为谁补数」：即使下面因为已有同账号快照而提前返回，也说明这个账号是当前的
   latestOwner = ownerId
@@ -139,16 +141,25 @@ export function hydrateUnread(
   if (snapshot && snapshot.ownerId === ownerId) return
   if (hydrating.has(ownerId)) return
   hydrating.add(ownerId)
-  void fetchUnreadNotificationCount()
-    .then((count) => count)
-    .catch(() => (demoFallback ? demoFallback() : null))
-    .then((notifications) => {
+  void Promise.all([
+    fetchUnreadNotificationCount().catch(() => null),
+    fetchConversationUnreadCount().catch(() => null),
+  ])
+    .then(([notifications, conversations]) => {
       hydrating.delete(ownerId)
-      // 期间消息页可能已经发布了权威快照（含会话未读），别用只含通知的这份盖回去
+      // 期间消息页可能已经发布了权威快照（含会话未读），别用这份补数盖回去
       if (snapshot && snapshot.ownerId === ownerId) return
       // 期间又为别的账号补过数：这份结果属于旧账号，丢掉（否则会把新账号的红点写回旧账号）
       if (latestOwner !== ownerId) return
-      publishUnread({ ownerId, conversations, notifications })
+      // 两项只要有一项没拿到，就走演示兜底；真实构建下兜底是 undefined
+      const fallback =
+        notifications === null || conversations === null ? demoFallback?.() : undefined
+      publishUnread({
+        ownerId,
+        // 会话未读拿不到 = 「不知道」：真实构建按 0 算，与页内失败态口径一致
+        conversations: conversations ?? fallback?.conversations ?? 0,
+        notifications: notifications ?? fallback?.notifications ?? null,
+      })
     })
     .catch(() => {
       hydrating.delete(ownerId)

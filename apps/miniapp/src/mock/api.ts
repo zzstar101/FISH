@@ -11,6 +11,7 @@
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import type { WishCategory, WishCreateInput } from '@fish/contracts/wishes/schema'
+import { formatAmount, formatYuan } from '@/lib/money'
 import {
   APP_BUILD,
   APP_VERSION,
@@ -156,19 +157,12 @@ export function conditionLabel(condition: MockListing['condition']): string {
   }
 }
 
-/** 金额（整数分）→ 展示用「¥160」/「¥1,580」 */
-export function formatYuan(cents: number): string {
-  const yuan = cents / 100
-  const text = Number.isInteger(yuan) ? String(yuan) : yuan.toFixed(2)
-  return `¥${text.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
-}
-
-/** 只要数字部分（设计稿里 ¥ 和数字是分开排版的） */
-export function formatAmount(cents: number): string {
-  const yuan = cents / 100
-  const text = Number.isInteger(yuan) ? String(yuan) : yuan.toFixed(2)
-  return text.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-}
+/**
+ * 金额格式化：实现已挪到 `@/lib/money`（真实页面不该为了一个纯函数静态 import
+ * 整包 fixture，见该文件说明）。这里 re-export，既有 `@/mock/api` 的 import 路径
+ * 与文件内部的调用都不受影响。
+ */
+export { formatAmount, formatYuan }
 
 /* ------------------------------------------------------------------ 商品 */
 

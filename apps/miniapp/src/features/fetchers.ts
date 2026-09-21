@@ -29,6 +29,7 @@
  * （登录后重拉、发布后失效），而当前页面每次进入都重新加载，够用。
  */
 import type { Me } from '@fish/contracts/auth/user'
+import type { ConversationDto } from '@fish/contracts/chat/schema'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
@@ -36,8 +37,15 @@ import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
 import { isUnauthenticatedError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
 import { type ListingDetailView, myWishes } from '@/mock/api'
-import type { MockListing, MockNotification, MockUser, MockWish, SearchFilter } from '@/mock/types'
-import { fetchNotifications, markNotificationRead } from './chat/api'
+import type {
+  MockConversation,
+  MockListing,
+  MockNotification,
+  MockUser,
+  MockWish,
+  SearchFilter,
+} from '@/mock/types'
+import { fetchConversations, fetchNotifications, markNotificationRead } from './chat/api'
 import { failureText, isNetworkFailure, mergeMarkReadResults } from './chat/notif-read'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
@@ -299,6 +307,55 @@ export async function markNotificationsRead(items: MockNotification[]): Promise<
   )
   if (firstError !== null) reportFailure('通知标记已读', firstError, demoFallbackApplied)
   return ok
+}
+
+/* --------------------------------------------------------------- 会话 */
+
+/** 会话列表的加载结果：`failed` 时页面显示错误态而不是空态 */
+export type LoadedConversations = { items: ConversationDto[]; failed: boolean }
+
+/**
+ * 会话列表（#89：Chat 页不再从 fixture 读会话）。
+ *
+ * 与通知列表同一口径：真实接口优先；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，
+ * 本地没有后端）才退回 fixture，生产失败如实返回 `failed: true` 由页面显示错误态 +
+ * 重试，**不拿 fixture 顶替** —— 假会话比错误态更糟。
+ */
+export async function loadConversations(): Promise<LoadedConversations> {
+  try {
+    return { items: await fetchConversations(), failed: false }
+  } catch (error) {
+    reportFailure('会话列表', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true }
+    const { conversations: mockConversations } = await import('@/mock/api')
+    return { items: mockConversations().map(toConversationDto), failed: false }
+  }
+}
+
+/**
+ * 演示构建的 fixture 形状 → 契约 DTO。
+ *
+ * `MockConversation` 是「契约字段 + mock 专属展示字段」（`kind` / `tag` / `timeLabel` /
+ * `mediaPreview`…），但**缺** `listingId` / `createdAt` / `counterpartLastReadAt` 三项，
+ * 所以要显式补齐而不是直接断言成 `ConversationDto`（断言的失败方式是运行期拿到
+ * `undefined`，而不是编译期报错）。
+ */
+function toConversationDto(item: MockConversation): ConversationDto {
+  return {
+    id: item.id,
+    listingId: item.listing.id,
+    role: item.role,
+    listing: item.listing,
+    // 多出来的 mock 专属 authStatus 结构上可赋给 ConversationUser，不需要逐字段重建
+    counterpart: item.counterpart,
+    unreadCount: item.unreadCount,
+    // fixture 没有「对方读到哪」这个概念（每个会话只有一条本地读位），给 null：
+    // 逐条「已读」的渲染在 Step 3 接 `conversation.read` 时才用得上
+    counterpartLastReadAt: null,
+    lastMessage: item.lastMessage,
+    lastMessageAt: item.lastMessageAt,
+    createdAt: item.lastMessageAt,
+  }
 }
 
 /* --------------------------------------------------------------- 我的 */
