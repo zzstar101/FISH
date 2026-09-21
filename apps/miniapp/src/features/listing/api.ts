@@ -24,6 +24,9 @@ import { apiRequest, isApiError } from '@/lib/request'
  */
 const PAGE_SIZE = 50
 
+/**「我的发布」最多翻的页数（5 × 50 = 250 件）；防 cursor 异常时无限循环。 */
+const MY_LISTINGS_MAX_PAGES = 5
+
 type FeedArgs = {
   category?: ListingCategory
   keyword?: string
@@ -119,5 +122,42 @@ export async function createListing(input: ListingCreateInput): Promise<ListingD
  */
 export async function updateListing(id: string, input: ListingUpdateInput): Promise<ListingDetail> {
   const payload = await apiRequest(LISTING_ROUTES.detail(id), { method: 'PATCH', body: input })
+  return ListingDetailSchema.parse(payload)
+}
+
+/**
+ * 「我的发布」：本人视角的**全部状态**商品（含审核中的），按最新排序翻页拉齐。
+ *
+ * 必须传 `sellerId` 本人：契约只有在 `sellerId === viewerId` 时才把 `status` 过滤打开、
+ * 并返回真实的 `moderationStatus`（服务端 `listFeed` 的 `includeUnapproved`）。
+ * 单页上限 50（契约 `limit` 上限），翻页靠不透明 cursor；封顶 5 页（250 件）防异常死循环。
+ */
+export async function fetchMyListings(sellerId: string): Promise<ListingCard[]> {
+  const items: ListingCard[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < MY_LISTINGS_MAX_PAGES; page += 1) {
+    const payload = await apiRequest(LISTING_ROUTES.base, {
+      query: { sellerId, sort: 'newest', limit: PAGE_SIZE, cursor },
+    })
+    const parsed = ListingFeedResponseSchema.parse(payload)
+    items.push(...parsed.items)
+    if (parsed.nextCursor === null) break
+    cursor = parsed.nextCursor
+  }
+  return items
+}
+
+/**
+ * 下架：`ACTIVE → OFFLINE`；对已 OFFLINE 幂等（契约 §2.5），返回最新详情。
+ * 审核中的商品不在本页给这个入口（它是 REVIEW，不是「在售」）。
+ */
+export async function offlineListing(id: string): Promise<ListingDetail> {
+  const payload = await apiRequest(LISTING_ROUTES.offline(id), { method: 'POST' })
+  return ListingDetailSchema.parse(payload)
+}
+
+/** 重新上架：`OFFLINE → ACTIVE`；对已 ACTIVE 幂等。REVIEW / BLOCKED 会被服务端拒绝（409）。 */
+export async function onlineListing(id: string): Promise<ListingDetail> {
+  const payload = await apiRequest(LISTING_ROUTES.online(id), { method: 'POST' })
   return ListingDetailSchema.parse(payload)
 }
