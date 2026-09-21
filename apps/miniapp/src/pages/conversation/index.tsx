@@ -29,7 +29,8 @@ import './index.scss'
  * 页头与气泡布局沿用 1版稿（见 `index.scss`），本页改的是**数据来源与状态机**：
  *
  * 1. 会话详情 `GET /conversations/:id`、历史 `GET /conversations/:id/messages`、
- *    发送 `POST /conversations/:id/messages`、已读 `POST /conversations/:id/read`；
+ *    发送 `POST /conversations/:id/messages`、已读 `POST /conversations/:id/read`
+ *    （**只在详情与首屏历史都成功之后才发**，见 `load` 内的说明）；
  * 2. 历史按契约的 `before` 游标「加载更早的消息」，不再假设一次能拿全；
  * 3. 发送是**真实落库**：本地乐观气泡在成功后被服务端返回的那条替换（按 id 去重，
  *    实时推送送来的同一条不会重复），失败留在原地给重试 —— 不再有「假装成功」的态；
@@ -112,6 +113,19 @@ export default function Conversation() {
         setMessages(page.items)
         setNextCursor(page.nextCursor)
         setMsgState(page.failed ? 'failed' : 'ok')
+
+        /**
+         * 已读放在**详情与首屏历史都真的拿到了**之后，而不是一进页面就发。
+         *
+         * 否则「消息没加载出来」（还没 loading 完、或详情成功而历史失败）也会把服务端
+         * 读位推掉：用户屏幕上一条消息都没看到，未读却已经清零，返回列表红点不亮 ——
+         * 等于把消息吞了。幂等：重试成功后再发一次，读位只前进，无害。
+         */
+        if (detail.status === 'ok' && !page.failed) {
+          void markConversationRead(conversationId).catch((error) =>
+            console.warn('[miniapp] 标记会话已读失败', error),
+          )
+        }
       })
       .catch((error) => {
         // 两个 loader 自己都吞了接口失败，这里兜的是更外层（例如动态 import fixture 也失败）
@@ -126,17 +140,6 @@ export default function Conversation() {
     if (authStatus !== 'authed') return
     load()
   }, [authStatus, load])
-
-  /**
-   * 进会话即已读：真实推进服务端读位（幂等）。失败只记日志 —— 本地没有「已读视角」
-   * 可以回滚，返回列表时那边 `useDidShow` 会重拉，如实显示服务端还记着的未读。
-   */
-  useEffect(() => {
-    if (authStatus !== 'authed' || !conversationId) return
-    void markConversationRead(conversationId).catch((error) =>
-      console.warn('[miniapp] 标记会话已读失败', error),
-    )
-  }, [authStatus, conversationId])
 
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
   const loadEarlier = () => {
