@@ -16,9 +16,7 @@ import {
   APP_BUILD,
   APP_VERSION,
   isEduEmail,
-  MY_LISTINGS,
   meetupCodeOf,
-  myListingCounts,
   rotateMeetupCode,
   SETTINGS,
   THEME_OPTIONS,
@@ -653,16 +651,6 @@ export function fetchUserProfile(userId: string): Promise<MockUserProfile> {
 
 export function fetchUserListings(userId: string): Promise<MockListing[]> {
   return delay(userListings(userId).filter((item) => item.status === 'ACTIVE'))
-}
-
-/* ---- 我的发布（C4） ---- */
-
-export function fetchMyListings(): Promise<MockMyListing[]> {
-  return delay(MY_LISTINGS)
-}
-
-export function myListingStats() {
-  return myListingCounts()
 }
 
 /* ---- 想要的人（C5，契约无端点） ---- */

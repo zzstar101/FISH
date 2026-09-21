@@ -173,6 +173,13 @@
     color: var(--warn-ink);
   }
 
+  /* 审核中 / 未通过审核：与「已预订」同一套 warn 色，文案区分状态 */
+  &.is-review {
+    background: var(--warn-weak);
+    border: 2px solid var(--warn);
+    color: var(--warn-ink);
+  }
+
   &.is-sold {
     background: var(--accent-faint);
     border: 2px solid var(--border);
