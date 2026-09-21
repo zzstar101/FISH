@@ -8,6 +8,7 @@
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import {
   type ConversationDto,
+  type ConversationListResponse,
   conversationDtoSchema,
   conversationListResponseSchema,
   type MessageDto,
@@ -29,21 +30,30 @@ const CONVERSATION_LIMIT = 50
 /** 契约里消息 limit 上限 100：一次拉到上限，再往前靠 `before` 游标翻页 */
 const MESSAGE_PAGE_LIMIT = 100
 
-export async function fetchConversations(): Promise<ConversationDto[]> {
+/**
+ * 一页会话列表。`cursor` 传上一页的 `nextCursor`（不透明字符串，只能原样回传）。
+ * 返回整个响应：Chat 页要「加载更多」就必须拿到游标。
+ */
+export async function fetchConversationPage(cursor?: string): Promise<ConversationListResponse> {
   const payload = await apiRequest(CHAT_ROUTES.base, {
-    query: { limit: CONVERSATION_LIMIT },
+    query: { limit: CONVERSATION_LIMIT, cursor },
   })
-  return conversationListResponseSchema.parse(payload).items
+  return conversationListResponseSchema.parse(payload)
+}
+
+/** 会话列表首屏（只要 items 的调用方用这个） */
+export async function fetchConversations(): Promise<ConversationDto[]> {
+  return (await fetchConversationPage()).items
 }
 
 /**
  * 会话未读条数和（底栏「消息」红点用）。
  *
- * 契约没有「会话未读总数」端点，只能拉一页 `GET /conversations` 自己求和，取的是
- * 契约上限 50 条。与 Chat 页首屏用同一页数据 —— 先保证「页内角标」与「底栏红点」
- * 同源、不互相打架；会话多于 50 且更早那批里还有未读时会漏计，要根治得让后端补一个
- * unread-count 端点。此前底栏这一项是从 fixture 现算的（#89 的既有债），
- * 于是真实未读与红点毫无关系。
+ * 契约没有「会话未读总数」端点，只能对**第一页**（契约上限 50 条）求和。为什么
+ * 不循环游标取全：冷启动为了点一颗红点把用户的全部会话都拉一遍，代价与收益不成
+ * 比例。已知边界：会话多于 50 且更早那批里还有未读时会漏计 —— 根治要后端补一个
+ * unread-count 端点（与 #23 通知的 `GET /notifications/unread-count` 对齐）。
+ * 至少它和 Chat 页首屏用的是同一页数据，「页内角标」与「底栏红点」不会互相打架。
  */
 export async function fetchConversationUnreadCount(): Promise<number> {
   const items = await fetchConversations()

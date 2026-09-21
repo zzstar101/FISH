@@ -70,10 +70,27 @@ export type PendingMessage = {
 
 /**
  * 发送失败后是否还能重试同一个临时条目。
- * 单独抽出来是为了让「失败 → 重试 → 仍失败」这条链有测试可锁。
+ * 组件用它当重试门禁（而不是在组件里再写一遍等价判断）：这样「失败才可重试」
+ * 这条规则有测试直接锁在真实调用点上。
  */
 export function canRetry(message: PendingMessage): boolean {
   return message.status === 'failed'
+}
+
+/**
+ * 按契约的 `(createdAt, id)` 升序排。
+ *
+ * 为什么需要：发送成功是按**响应到达顺序**追加的，连发两条时响应可能乱序回来，
+ * 界面上的先后就会与服务端落库顺序（契约的排序键）相反。
+ */
+export function sortMessages(items: MessageDto[]): MessageDto[] {
+  return [...items].sort((a, b) => {
+    const at = Date.parse(a.createdAt)
+    const bt = Date.parse(b.createdAt)
+    if (at !== bt) return at - bt
+    if (a.id === b.id) return 0
+    return a.id < b.id ? -1 : 1
+  })
 }
 
 /**

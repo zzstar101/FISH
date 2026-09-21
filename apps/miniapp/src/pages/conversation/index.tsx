@@ -13,7 +13,14 @@ import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { clockTime, dayLabelOf } from '@/lib/time'
-import { listingStatusText, type PendingMessage, parseTxEvent, systemPillText } from './view'
+import {
+  canRetry,
+  listingStatusText,
+  type PendingMessage,
+  parseTxEvent,
+  sortMessages,
+  systemPillText,
+} from './view'
 import './index.scss'
 
 /**
@@ -144,7 +151,7 @@ export default function Conversation() {
           setEarlierFailed(true)
           return
         }
-        setMessages((prev) => [...page.items, ...prev])
+        setMessages((prev) => sortMessages([...page.items, ...prev]))
         setNextCursor(page.nextCursor)
       })
       .finally(() => setLoadingEarlier(false))
@@ -168,9 +175,10 @@ export default function Conversation() {
     void sendMessage(conversationId, text)
       .then((message) => {
         setPending((prev) => prev.filter((item) => item.id !== id))
-        // 服务端「先落库、再推送、再回 HTTP」：实时推送可能先到，这里按 id 去重
+        // 服务端「先落库、再推送、再回 HTTP」：实时推送可能先到，这里按 id 去重；
+        // 再按 `(createdAt, id)` 重排 —— 连发两条时响应可能乱序回来
         setMessages((prev) =>
-          prev.some((item) => item.id === message.id) ? prev : [...prev, message],
+          sortMessages(prev.some((item) => item.id === message.id) ? prev : [...prev, message]),
         )
       })
       .catch((error) => {
@@ -181,15 +189,23 @@ export default function Conversation() {
       })
   }
 
+  /**
+   * 能不能发送：详情与历史**都**就绪才行。
+   *
+   * 历史没加载出来时那个分支整屏是错误卡，乐观气泡与「重试」都渲染不出来 ——
+   * 此时允许发送会变成「POST 真的落库了、界面上却什么都不出现」，用户等不到任何反馈。
+   */
+  const canSend = convState === 'ok' && msgState === 'ok'
+
   const send = () => {
     const text = inputValue.trim()
-    if (!text || convState !== 'ok') return
+    if (!text || !canSend) return
     setInputValue('')
     doSend(text)
   }
 
   const retry = (item: PendingMessage) => {
-    if (item.status !== 'failed') return
+    if (!canRetry(item)) return
     doSend(item.content, item.id)
   }
 
@@ -215,9 +231,13 @@ export default function Conversation() {
     void Taro.navigateTo({ url: '/pages/transaction-meetup/index' })
   }
 
-  const panelAction = () => {
+  /** 「+」面板的三格：图片 / 拍照属于 #67；商品卡片是另一件事，文案不能混为一谈 */
+  const panelAction = (key: (typeof PANEL_TILES)[number]['key']) => {
     setPanelOpen(false)
-    void Taro.showToast({ title: MEDIA_PENDING_TIP, icon: 'none' })
+    void Taro.showToast({
+      title: key === 'product' ? '商品卡片待接入' : MEDIA_PENDING_TIP,
+      icon: 'none',
+    })
   }
 
   /**
@@ -537,7 +557,11 @@ export default function Conversation() {
             <Image className="conv__plus-ic" src={ICONS.plusLine} mode="aspectFit" />
           </View>
 
-          <View className={`conv__send${inputValue.trim() ? '' : ' is-off'}`} onClick={send}>
+          {/* 历史没读出来时也置灰：那时乐观气泡渲染不出来，发了也看不到反馈 */}
+          <View
+            className={`conv__send${inputValue.trim() && canSend ? '' : ' is-off'}`}
+            onClick={send}
+          >
             <Text className="conv__send-tx">发送</Text>
           </View>
         </View>
@@ -546,7 +570,7 @@ export default function Conversation() {
         {panelOpen ? (
           <View className="conv__panel">
             {PANEL_TILES.map((tile) => (
-              <View key={tile.key} className="conv__ptile" onClick={panelAction}>
+              <View key={tile.key} className="conv__ptile" onClick={() => panelAction(tile.key)}>
                 <View className="conv__ptile-disc">
                   <Image className="conv__ptile-ic" src={tile.icon} mode="aspectFit" />
                 </View>

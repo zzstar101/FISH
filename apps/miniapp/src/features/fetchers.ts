@@ -48,7 +48,7 @@ import type {
 } from '@/mock/types'
 import {
   fetchConversation,
-  fetchConversations,
+  fetchConversationPage,
   fetchMessagePage,
   fetchNotifications,
   markNotificationRead,
@@ -318,24 +318,43 @@ export async function markNotificationsRead(items: MockNotification[]): Promise<
 
 /* --------------------------------------------------------------- 会话 */
 
-/** 会话列表的加载结果：`failed` 时页面显示错误态而不是空态 */
-export type LoadedConversations = { items: ConversationDto[]; failed: boolean }
+/** 会话列表一页的加载结果：`failed` 时页面显示错误态而不是空态 */
+export type LoadedConversations = {
+  items: ConversationDto[]
+  /** null = 已到最后一页 */
+  nextCursor: string | null
+  failed: boolean
+}
 
 /**
- * 会话列表（#89：Chat 页不再从 fixture 读会话）。
+ * 会话列表（#89：Chat 页不再从 fixture 读会话）。`cursor` 传上一页的 `nextCursor`。
  *
  * 与通知列表同一口径：真实接口优先；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，
  * 本地没有后端）才退回 fixture，生产失败如实返回 `failed: true` 由页面显示错误态 +
  * 重试，**不拿 fixture 顶替** —— 假会话比错误态更糟。
  */
-export async function loadConversations(): Promise<LoadedConversations> {
+export async function loadConversations(cursor?: string): Promise<LoadedConversations> {
   try {
-    return { items: await fetchConversations(), failed: false }
+    const page = await fetchConversationPage(cursor)
+    return { items: page.items, nextCursor: page.nextCursor, failed: false }
   } catch (error) {
     reportFailure('会话列表', error)
-    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true }
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
     const { conversations: mockConversations } = await import('@/mock/api')
-    return { items: mockConversations().map(toConversationDto), failed: false }
+    return {
+      /**
+       * fixture 里的「系统会话」（`kind === 'system'`）是契约外的展示扩展：它不是
+       * (商品, 买家×卖家) 的会话，`counterpart` 就是当前用户自己。本轮已按 Owner
+       * 决策删掉系统会话行 —— 兜底里不滤掉它，就会在演示构建里以「和自己聊天的
+       * 会话行」复活，而且与底栏兜底的口径分叉。
+       */
+      items: mockConversations()
+        .filter((item) => item.kind !== 'system')
+        .map(toConversationDto),
+      // fixture 没有分页
+      nextCursor: null,
+      failed: false,
+    }
   }
 }
 
@@ -402,7 +421,11 @@ export async function loadMessagePage(
   } catch (error) {
     reportFailure('消息历史', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
-    // 演示构建：fixture 没有分页，只有首屏能回落（更早一页如实返回空，不伪造）
+    /**
+     * 演示构建：fixture 没有分页。走到 `before` 这一支说明用户在演示里点了
+     * 「加载更早的消息」—— fixture 本身就是全部历史，所以「已到最早」是准确的
+     * （首屏的 `nextCursor` 恒为 null，正常演示根本看不到这个入口）。
+     */
     if (before) return { items: [], nextCursor: null, failed: false }
     const {
       conversation: mockConversation,
@@ -411,36 +434,52 @@ export async function loadMessagePage(
     } = await import('@/mock/api')
     const found = mockConversation(conversationId)
     if (!found) return { items: [], nextCursor: null, failed: false }
+    /**
+     * fixture 的「我」是 mock 的 `ME`（u-alan），而演示构建里当前登录身份是
+     * `DEMO_USER`。契约的 `senderId` 决定气泡画在左边还是右边，所以要把非对方的
+     * 发送者对齐到当前身份，否则 fixture 里「我」发的消息会画到对方那一侧。
+     */
+    const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : mockMe
     return {
-      items: mockMessages(conversationId).map((item) => toMessageDto(item, found, mockMe)),
+      items: mockMessages(conversationId).map((item) => toMessageDto(item, found, viewer)),
       nextCursor: null,
       failed: false,
     }
   }
 }
 
+/** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
+type ViewerLike = { id: string; nickname: string; avatarUrl: string | null }
+
 /**
  * 演示构建的 fixture 消息 → 契约 `MessageDto`。
  *
  * 契约对 TEXT 有联合完整性约束（`senderId` 与 `sender` 都必须非空，
  * `messageDtoSchema` 的 refine 同源），而 fixture 只存 `senderId`，
- * 所以要按「这条是不是对方发的」补出 `sender`。
+ * 所以要按「这条是不是对方发的」补出 `sender`。`senderId` 也要一起对齐到
+ * `viewer`（见调用点的说明）。
  */
-function toMessageDto(item: MockMessage, conversation: MockConversation, me: MockUser): MessageDto {
+function toMessageDto(
+  item: MockMessage,
+  conversation: MockConversation,
+  viewer: ViewerLike,
+): MessageDto {
+  const fromCounterpart = item.senderId !== null && item.senderId === conversation.counterpart.id
+  const senderId = item.senderId === null ? null : fromCounterpart ? item.senderId : viewer.id
   const sender =
-    item.senderId === null
+    senderId === null
       ? null
-      : item.senderId === conversation.counterpart.id
+      : fromCounterpart
         ? {
             id: conversation.counterpart.id,
             nickname: conversation.counterpart.nickname,
             avatarUrl: conversation.counterpart.avatarUrl,
           }
-        : { id: me.id, nickname: me.nickname, avatarUrl: me.avatarUrl }
+        : { id: viewer.id, nickname: viewer.nickname, avatarUrl: viewer.avatarUrl }
   return {
     id: item.id,
     conversationId: item.conversationId,
-    senderId: item.senderId,
+    senderId,
     sender,
     type: item.type,
     content: item.content,

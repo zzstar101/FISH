@@ -172,11 +172,13 @@ export default function CustomTabBar() {
     // 优先用本次账号的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除。
     // 快照按账号校验：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时没人清快照，
     // 不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
-    // 任何一个分量为 null（「不知道」）时按**无已知未读**算，不拿 fixture 顶替 ——
-    // 页内角标在失败态也是 0，两边必须同一口径，否则会亮一颗点进去只有错误态、
-    // 清不掉的幽灵红点。
+    // 任何一个分量为 `null`（「不知道」：列表未就绪 / 加载失败 / 真实接口不可达）时
+    // 按**无已知未读**算，不拿 fixture 顶替 —— 页内角标在这些状态也是「不显示」，
+    // 两边必须同一口径，否则会亮一颗点进去只有错误态、清不掉的幽灵红点。
+    // 注意 `conversations` 也不能用 `?? 0` 之外的兜底：`null` 是「不知道」，
+    // 不是「确定没有未读」。
     if (unread && unread.ownerId === userId) {
-      setDot(unread.conversations + (unread.notifications ?? 0) > 0)
+      setDot((unread.conversations ?? 0) + (unread.notifications ?? 0) > 0)
       return
     }
     // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持 fixture 现算

@@ -54,17 +54,19 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.conversations).toBe(4)
   })
 
-  test('真实构建：两个接口都失败 → 通知记 null（不知道）、会话记 0，都不拿 fixture 顶替', async () => {
+  test('真实构建：两个接口都失败 → 两项都记「不知道」（null），不拿 fixture 顶替', async () => {
     notifResult = () => Promise.reject(new Error('network down'))
     convResult = () => Promise.reject(new Error('network down'))
 
     hydrateUnread('u-alan')
     await flush()
 
-    // 关键：不是 fixture 的数字。`null` = 不知道 → 底栏按「无已知未读」算，
-    // 不会亮幽灵红点，也不会把 fixture 的数字冒充成真实未读
+    // 关键：不是 fixture 的数字，也不是 0。两者都是「不知道」→ 底栏按「无已知未读」算，
+    // 不会亮幽灵红点，也不会把 fixture 的数字冒充成真实未读。
+    // 会话那一项尤其不能用 0：0 是「确定没有未读」这个具体结论，会把上一份正确的
+    // 快照覆盖掉，用户明明还有未读、红点却熄了。
     expect(unreadSnapshot()?.notifications).toBeNull()
-    expect(unreadSnapshot()?.conversations).toBe(0)
+    expect(unreadSnapshot()?.conversations).toBeNull()
   })
 
   test('演示 / 开发构建：失败的那一项用调用方注入的兜底，成功的那一项仍用真值', async () => {

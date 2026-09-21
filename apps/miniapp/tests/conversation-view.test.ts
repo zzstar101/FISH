@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import type { MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   canRetry,
   listingStatusText,
   type PendingMessage,
   parseTxEvent,
+  sortMessages,
   systemPillText,
 } from '../src/pages/conversation/view'
 
@@ -62,6 +64,33 @@ describe('canRetry —— 发送失败才可重试', () => {
     const sending: PendingMessage = { id: 'local-2', content: 'hi', status: 'sending' }
     expect(canRetry(failed)).toBe(true)
     expect(canRetry(sending)).toBe(false)
+  })
+})
+
+describe('sortMessages —— 回到契约的 (createdAt, id) 升序', () => {
+  const msg = (id: string, createdAt: string): MessageDto => ({
+    id,
+    conversationId: 'c-1',
+    senderId: 'u-1',
+    sender: { id: 'u-1', nickname: '我', avatarUrl: null },
+    type: 'TEXT',
+    content: id,
+    createdAt,
+  })
+
+  test('响应乱序到达时按时间重排（服务端的顺序才是事实）', () => {
+    // 连发两条：B 的响应先回来、A 的后回来 —— 追加顺序是 B, A
+    const sorted = sortMessages([
+      msg('b', '2026-09-21T10:00:01.000Z'),
+      msg('a', '2026-09-21T10:00:00.000Z'),
+    ])
+    expect(sorted.map((item) => item.id)).toEqual(['a', 'b'])
+  })
+
+  test('同一毫秒用 id 决出稳定顺序，且不改动入参数组', () => {
+    const input = [msg('b', '2026-09-21T10:00:00.000Z'), msg('a', '2026-09-21T10:00:00.000Z')]
+    expect(sortMessages(input).map((item) => item.id)).toEqual(['a', 'b'])
+    expect(input.map((item) => item.id)).toEqual(['b', 'a'])
   })
 })
 

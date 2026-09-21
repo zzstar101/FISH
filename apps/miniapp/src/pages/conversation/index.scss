@@ -122,31 +122,6 @@
   letter-spacing: 0.01em;
 }
 
-/* 认证徽章（稿子 .cert）：缩不掉，长昵称的省略号让给它 */
-.conv__cert {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 14px 0 10px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-}
-
-.conv__cert-ic {
-  width: 28px;
-  height: 28px;
-}
-
-.conv__cert-tx {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--brand-deep-2);
-  white-space: nowrap;
-}
-
 /* ---------------------------------------------------------------- 商品摘要条 */
 
 /* 稿子 .pcard：本页唯一的吸顶锚点，点它进商品详情 */
@@ -460,6 +435,12 @@
 
 /* ---------------------------------------------------------------- 图片气泡 */
 
+/*
+ * ⚠️ 本段（图片气泡 / 语音气泡）当前**没有 JSX 使用**：媒体消息属于 #67，
+ * 本轮只把「发图 / 发语音」的入口改成明确提示，没有伪造本地媒体消息。
+ * 样式按设计稿保留在原处，等 #67 落地时直接接上，不必再从 git 历史里捞。
+ */
+
 /* 稿子 .bubble.is-media：图满铺气泡，不留内衬也不描边，圆角由气泡裁 */
 .conv__bubble--media {
   padding: 0;
@@ -670,87 +651,8 @@
   font-weight: 600;
 }
 
-/* ---------------------------------------------------------------- 评价卡 */
-
-/* 稿子 .ratecard：星图标 + 标题/星行 + 说明 + 右侧 CTA（「已完成」后出现） */
-.conv__rate {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px 22px;
-  border-radius: 36px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  box-shadow: var(--shadow-card);
-}
-
-.conv__rate-ic {
-  flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
-}
-
-.conv__rate-main {
-  flex: 1;
-  min-width: 0;
-}
-
-/* 标题与星同排一行；两行文字都 nowrap，省略号只作兜底 */
-.conv__rate-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
-
-.conv__rate-t {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 25px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.conv__rate-stars {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.conv__rate-star {
-  width: 32px;
-  height: 32px;
-}
-
-.conv__rate-d {
-  display: block;
-  margin-top: 8px;
-  font-size: 22px;
-  line-height: 1.5;
-  color: var(--muted-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conv__rate-act {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 68px;
-  padding: 0 30px;
-  border-radius: var(--r-pill);
-  background: var(--brand-deep);
-  color: var(--surface);
-  font-size: 26px;
-  font-weight: 600;
-}
+/* 「已完成」评价卡（稿子 .ratecard / tx.completed）已整块删除：
+   交易域没有「已完成」事件，这张卡是契约外的演示扩展，JSX 与样式一起下掉。 */
 
 /* ---------------------------------------------------------------- 输入栏 */
 
