@@ -29,17 +29,55 @@ export type OrderListData = {
   reload: (options?: { keepList?: boolean }) => Promise<void>
 }
 
-export function useOrderList(role: OrderCardView['role']): OrderListData {
+/**
+ * 「当前该不该有列表」的**纯函数**判定（供 `tests/order-list-state.ts` 锁行为）。
+ *
+ * - `userId === null`：登录态未就绪或未登录 —— 不加载（页面此时根本不渲染列表）。
+ * - `identity === userId`：列表已属于当前账号 —— 不用动。
+ * - 其余（首次拿到身份 / 换账号 / 退出重登）：把列表整片作废，等页面触发加载。
+ */
+export function nextIdentityState(
+  identity: string | null,
+  userId: string | null,
+): 'idle' | 'reset' | 'keep' {
+  if (userId === null) return 'idle'
+  if (identity !== userId) return 'reset'
+  return 'keep'
+}
+
+export function useOrderList(role: OrderCardView['role'], userId: string | null): OrderListData {
   const [items, setItems] = useState<OrderCardView[]>([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [truncated, setTruncated] = useState(false)
 
   /**
-   * 请求代次。本页只有下拉刷新会重发请求，但迟到的响应同样会盖掉新结果
-   * （连点两次下拉 / 刷新途中切页），所以守卫照留。
+   * 请求代次。本页的加载入口有：首次加载（页面在 `authed` 后触发）、下拉刷新、
+   * 错误态重试、从面交页返回（`useDidShow`）—— 它们可能并发（连点两次下拉 /
+   * 刷新途中切页）。只有最后一次发出的请求可以落地，其余按过期丢弃。
    */
   const requestId = useRef(0)
+
+  /**
+   * 身份切换的**渲染期重置**（adjust-state-during-render，React 官方推荐的
+   * 「存上一帧信息」写法，消息页同款）：订单页实例会被压在页面栈里、跨登录态存活，
+   * 换账号回来时 `items` / `failed` / `truncated` 还是上一个账号的视角，必须在
+   * **同一个 commit 内**清成「未加载」—— 写成 effect 里 setState 不行，那要到下一帧
+   * 才生效。自增代次也放在这里（同步），上一个账号的迟到响应在微任务窗口里
+   * 就已经被判过期，写不进刚清空的 state。
+   *
+   * `userId === null`（未登录 / 未就绪）同样走清空：退出登录回到这页不能残留旧账号订单。
+   */
+  const [identity, setIdentity] = useState<string | null>(null)
+  const identityState = nextIdentityState(identity, userId)
+  if (identityState === 'reset') {
+    setIdentity(userId)
+    requestId.current += 1
+    setItems([])
+    setLoading(true)
+    setFailed(false)
+    setTruncated(false)
+  }
 
   const reload = useCallback(
     (options?: { keepList?: boolean }): Promise<void> => {

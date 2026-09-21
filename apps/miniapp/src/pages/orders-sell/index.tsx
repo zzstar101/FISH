@@ -1,8 +1,9 @@
-import Taro, { useLoad, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
-import { useState } from 'react'
+import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
+import { useEffect, useRef, useState } from 'react'
 import AuthRequired from '@/components/auth-required'
 import OrderList, { TOTOP_THRESHOLD } from '@/components/order-list'
 import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
 import { useOrderList } from '@/features/transaction/useOrderList'
 
 /**
@@ -10,14 +11,32 @@ import { useOrderList } from '@/features/transaction/useOrderList'
  *
  * 与「我买到的」唯一的结构差异就是视角：卡尾主按钮的文案由 `role` 决定
  * （卖家「打开交易码」，买家「打开二维码」），在 `components/order-list` 里按 `item.role` 分。
+ *
+ * 加载触发的口径（#89 审查收口）见 `pages/orders-buy`：请求由登录态与身份驱动、
+ * `unknown → authed` 自动补首载、从面交页返回 `useDidShow` 重拉。
  */
 export default function OrdersSell() {
   const authStatus = useAuthGuard()
-  const { items, loading, failed, truncated, reload } = useOrderList('seller')
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+  const { items, loading, failed, truncated, reload } = useOrderList('seller', userId)
   const [showTop, setShowTop] = useState(false)
 
-  useLoad(() => {
+  /** 登录态与身份驱动加载；依赖里带 `userId`，换账号自动重拉自己视角的订单 */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null) return
     void reload()
+  }, [authStatus, userId, reload])
+
+  /**
+   * 从面交页（或其它子页）返回时重拉。`authStatus` 走 ref 读最新值：
+   * `useDidShow` 的回调注册一次，直接闭包会读到旧状态。
+   */
+  const authedRef = useRef(false)
+  authedRef.current = authStatus === 'authed'
+  useDidShow(() => {
+    if (!authedRef.current) return
+    void reload({ keepList: true })
   })
 
   usePullDownRefresh(() => {
