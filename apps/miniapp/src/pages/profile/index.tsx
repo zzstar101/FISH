@@ -304,7 +304,8 @@ export default function Profile() {
       key: 'orders',
       label: '全部订单',
       icon: ICONS.profileOrder,
-      url: '/pages/orders/index',
+      // 订单页按视角拆成两页后没有「全部」那一页了，落默认的「我买到的」
+      url: '/pages/orders-buy/index',
       count: counts.orderCount ?? undefined,
     },
     {
@@ -314,9 +315,9 @@ export default function Profile() {
       url: '/pages/mylist/index',
       count: counts.activeListings ?? undefined,
     },
-    // 卖出 / 买入与全部订单同页（orders 已分视角），先落默认的「我买到的」
-    { key: 'sold', label: '卖出', icon: ICONS.profileSold, url: '/pages/orders/index' },
-    { key: 'bought', label: '买入', icon: ICONS.profileBought, url: '/pages/orders/index' },
+    // 订单页已按视角拆成两页：卖出 / 买入 各落对应那页
+    { key: 'sold', label: '卖出', icon: ICONS.profileSold, url: '/pages/orders-sell/index' },
+    { key: 'bought', label: '买入', icon: ICONS.profileBought, url: '/pages/orders-buy/index' },
     { key: 'review', label: '评价', icon: ICONS.profileReview },
   ]
 
