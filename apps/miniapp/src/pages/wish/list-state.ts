@@ -1,4 +1,4 @@
-import type { WishHitList } from '@/features/fetchers'
+import type { WishHitList } from '@/features/wish/load'
 import type { MockWish } from '@/mock/types'
 
 /**

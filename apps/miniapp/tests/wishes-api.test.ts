@@ -18,7 +18,9 @@ import type { WishCreateInput, WishDto, WishPoolItem } from '@fish/contracts/wis
  *
  * 替换的是 `@/lib/request` 的 `apiRequest`（只此一处），**不**替换 `features/wish/api`
  * 与 `features/match/api` —— 这样用例同时覆盖真实模块的**请求构造**
- * （路径、query、method、body）与契约解析，而不只是上层编排。
+ * （路径、query、method、body）与契约解析，而不只是上层编排。被测入口是
+ * `features/wish/load.ts`（不是 `features/fetchers.ts`）：那个模块不 import 会话域，
+ * 测试因此不必跟着顶替 `chat/api`。
  * 手法与 `unread-hydrate.test.ts` 一致：`mock.module` 后再动态 import 被测模块。
  */
 
@@ -110,20 +112,19 @@ mock.module('@/lib/request', () => ({
   },
 }))
 
-// 构建期注入的两个开关（`config/index.ts` 的 defineConstants）。必须在动态 import
-// 之前定义，否则 `features/auth/demo.ts` 与 `features/fetchers.ts` 在模块求值阶段就会
-// ReferenceError。
+// 构建期注入的开关（`config/index.ts` 的 defineConstants）。必须在动态 import 之前定义，
+// 否则 `features/load-failure.ts` 在模块求值阶段就会 ReferenceError。
 //
 // `__ALLOW_MOCK_FALLBACK__` **故意置 true**（模拟开发 / 预览构建）：本文件的用例要证明
 // 许愿系的 fail-closed 与这个开关**无关** —— 取数层根本没有 mock 回退分支，重新引入一条
-// `MOCK_FALLBACK_ENABLED` 兜底就会让下面的 `failed` 断言失败。`__DEMO_AUTH__` 关掉：
-// 不演示登录（演示账号的数据只影响演示回退路径）。
+// `MOCK_FALLBACK_ENABLED` 兜底就会让下面的 `failed` 断言失败。`__DEMO_AUTH__` 一并给出，
+// 避免被间接引用时炸（本文件不触发演示登录）。
 Object.assign(globalThis, { __DEMO_AUTH__: false, __ALLOW_MOCK_FALLBACK__: true })
 
 // 商品详情不在本文件覆盖范围（`loadWishMatches` 只用它补卖家），单独替换以便控制
-// 「补不到」两种路径。`chat/api`、`profile/api`、`user/api` 加载真模块（它们经被替换的
-// `@/lib/request` 拿传输层），避免把 `chat/api` 的 module mock 泄漏给别的测试文件
-// （`unread-hydrate.test.ts` 也 mock 了它）。
+// 「补不到」两种路径。`features/wish/load.ts` 刻意不静态 import 会话域（`chat/api`），
+// 所以这里既不需要、也不应该 mock `chat/api` —— 那是 `unread-hydrate.test.ts` 的
+// 部分 mock，跨文件顶替会让本文件在别的执行顺序下链接失败。
 mock.module('@/features/listing/api', () => ({
   fetchCategoryListings: () => Promise.resolve([]),
   fetchHomeFeed: () => Promise.resolve([]),
@@ -135,7 +136,7 @@ mock.module('@/features/listing/api', () => ({
   searchListings: () => Promise.resolve([]),
 }))
 
-const { loadWishes, loadWishMatches } = await import('../src/features/fetchers')
+const { loadWishes, loadWishMatches } = await import('../src/features/wish/load')
 const { createWish, closeWish } = await import('../src/features/wish/api')
 const { toMockWish, toMockWishPoolItem } = await import('../src/features/wish/adapt')
 
@@ -169,6 +170,8 @@ function card(id: string): ListingCard {
     free: false,
     coverUrl: null,
     createdAt: '2026-09-01T00:00:00.000Z',
+    // 卡片契约要求这个字段（`.nullable()`，不是 optional）：公开视角恒 null
+    moderationStatus: null,
   }
 }
 
