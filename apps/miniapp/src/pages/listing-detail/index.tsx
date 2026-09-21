@@ -640,7 +640,14 @@ export default function ListingDetail() {
                     </View>
                   ) : null}
                 </View>
-                <View className="detail__go" onClick={() => toast('TA 的主页待接入')}>
+                {/* #122：他人主页已接真实公开资料，这里不再是 toast 占位。
+                    跳转带 `seller.id`（契约 `ListingDetail.seller.id`），与页面顶部卖家行同一来源。 */}
+                <View
+                  className="detail__go"
+                  onClick={() =>
+                    void Taro.navigateTo({ url: `/pages/user/index?id=${data.seller.id}` })
+                  }
+                >
                   <Text>进TA主页</Text>
                   <Image
                     className="detail__go-img"

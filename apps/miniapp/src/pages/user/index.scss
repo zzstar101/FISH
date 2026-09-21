@@ -58,6 +58,14 @@
   box-shadow: var(--shadow-soft);
 }
 
+/* 真实头像：铺满圆形槽位。父级已带 border + border-radius，
+   这里再收一次 50% 以免方图四角越过边框出现直角。 */
+.uhome__avatar-img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
 .uhome__avatar-tx {
   font-size: 62px;
   font-weight: 600;
