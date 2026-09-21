@@ -709,15 +709,9 @@ export { getUser, ME }
 /** 留言 fixture：开发 / 预览退 mock 时用（真实读路径是 #111 的 `GET /listings/:id/comments`） */
 export const allComments: MockComment[] = COMMENTS
 
-/* ---- D1 发布页增补（AI 润色 / 审核失败） ---- */
+/* ---- D1 发布页增补（AI 润色；审核判定已由服务端接管，见 #74） ---- */
 
-export {
-  findViolations,
-  type ModerationResult,
-  moderate,
-  type PolishCandidate,
-  polishCandidates,
-} from './sell'
+export { type PolishCandidate, polishCandidates } from './sell'
 
 /** 该商品分类的「同款全新约 ¥X」参考价与建议定价区间（设计稿的 pnote） */
 export function priceHint(listingId: string): string | null {
