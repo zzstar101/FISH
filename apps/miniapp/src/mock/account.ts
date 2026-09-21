@@ -10,6 +10,7 @@
  *
  * 金额一律**整数分**，时间一律 ISO 字符串（与既有 fixture 同源：NOW = 2026-09-14 12:00Z）。
  */
+import { watcherStatsOf } from '@/features/watchers/stats'
 import { getListing, LISTINGS } from './catalog'
 import { AVATARS } from './images'
 import type {
@@ -308,24 +309,15 @@ export const WATCHERS: MockWatcher[] = WATCHER_SPECS.map((spec) => ({
 }))
 
 /**
- * 统计：共 N 人想要 + **预算中位**。
+ * 统计：共 N 人想要 + **预算中位**。算法与页面共用 `watcherStatsOf()`
+ * （见 `@/features/watchers/stats` 的口径说明），避免两处各算一套。
  *
- * 中位数只按「已填预算」的人算（C5 稿子原文：「中位数按已填预算的 12 人计算 ·
- * 6 人未填预算不计入」）。没有人填预算时返回 null，页面显示「暂缺」。
+ * ⚠️ 页面**不再调用**它（改为对已加载的列表现算）：mock 侧这份数永远成功，
+ * 列表失败时页面拿它会出现「共 7 人想要 + 列表加载失败」（#139 review P1）。
+ * 保留给「不经过加载流程」的调用方（如商品卡只要一个总数时用 `watcherCount`）。
  */
 export function watcherStats(listingId: string = WATCHER_LISTING_ID) {
-  const list = WATCHERS.filter((w) => w.listingId === listingId && !w.deactivated)
-  const budgets = list
-    .map((w) => w.budgetCents)
-    .filter((value): value is number => value !== null)
-    .sort((a, b) => a - b)
-  if (budgets.length === 0) return { count: list.length, medianCents: null, budgetFilled: 0 }
-  const mid = Math.floor(budgets.length / 2)
-  const median =
-    budgets.length % 2 === 0
-      ? Math.round(((budgets[mid - 1] ?? 0) + (budgets[mid] ?? 0)) / 2)
-      : (budgets[mid] ?? 0)
-  return { count: list.length, medianCents: median, budgetFilled: budgets.length }
+  return watcherStatsOf(WATCHERS.filter((w) => w.listingId === listingId))
 }
 
 /** 某商品有多少人想要（C4 列表行、商品详情「N 人想要」共用） */

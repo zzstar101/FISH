@@ -22,6 +22,22 @@
   height: 72px;
 }
 
+/*
+ * 二级页标题：紧贴返回钮右侧（设计稿 `.navbar.has-back .navtitle{left:56px}`，
+ * 即 32（左内边距）+ 72（返回钮）= 104px 起，这里再留 8px 间距）。
+ * 字号 17pt → 34px，与稿一致；`--font-display` 是外部字体，按仓库约定用系统字体。
+ */
+.navfloat__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  @include ellipsis;
+}
+
 .navfloat__actions {
   display: flex;
   gap: 16px;
