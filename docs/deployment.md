@@ -273,6 +273,13 @@ RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
 
 # #70 面交码的 HMAC 签名密钥（仅 API 加载；必填且不少于 32 字符）
 MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
+
+# #141 商品描述 AI 润色的上游（仅 API 加载；transport 必填，无默认值）
+# 换服务商只改 BASE_URL 与 MODEL 两行；API_KEY 从服务商控制台取。
+AI_POLISH_TRANSPORT=live
+AI_POLISH_BASE_URL=https://api.deepseek.com
+AI_POLISH_API_KEY=REPLACE_ME_UPSTREAM_KEY
+AI_POLISH_MODEL=deepseek-flash
 ```
 
 先在 Resend 验证发件域名（含 SPF/DKIM）。**只有首次部署**才用下面这段整份写入；两个密钥都从
@@ -283,14 +290,19 @@ MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
 sudo install -d -m 755 /etc/fish
 read -r  -p '发件地址（已在 Resend 验证过的域名）: ' RESEND_FROM
 read -rs -p 'Resend 密钥（不回显）: ' RESEND_API_KEY && echo
+read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
 {
   printf 'MAIL_TRANSPORT=resend\n'
   printf 'RESEND_API_KEY=%s\n' "$RESEND_API_KEY"
   printf 'RESEND_FROM="%s"\n' "$RESEND_FROM"
   printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)"
+  printf 'AI_POLISH_TRANSPORT=live\n'
+  printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
+  printf 'AI_POLISH_API_KEY=%s\n' "$AI_POLISH_API_KEY"
+  printf 'AI_POLISH_MODEL=deepseek-flash\n'
 } | sudo tee /etc/fish/api-mail.env >/dev/null
 sudo chown root:root /etc/fish/api-mail.env && sudo chmod 600 /etc/fish/api-mail.env
-unset RESEND_API_KEY RESEND_FROM
+unset RESEND_API_KEY RESEND_FROM AI_POLISH_API_KEY
 ```
 
 **已经按旧版手册部署过的机器不要重跑上面那一段**：`tee` 是整文件覆写，会顺手换掉
@@ -300,6 +312,35 @@ unset RESEND_API_KEY RESEND_FROM
 sudo grep -q '^MEETUP_TOKEN_SECRET=' /etc/fish/api-mail.env \
   || printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" | sudo tee -a /etc/fish/api-mail.env >/dev/null
 ```
+
+**#141 起 API 还需要四个 AI 变量，且 `AI_POLISH_TRANSPORT` 无默认值**：升级后不补它，API 会**直接
+启动失败**（`环境变量校验失败：AI_POLISH_TRANSPORT 必须显式设置为 stub 或 live`），配合
+`Restart=always` 就是反复重启。老机器用下面这段追加（`tee -a` 不覆写已有行，不会动面交码密钥）：
+
+```bash
+read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
+{
+  printf 'AI_POLISH_TRANSPORT=live\n'
+  printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
+  printf 'AI_POLISH_API_KEY=%s\n' "$AI_POLISH_API_KEY"
+  printf 'AI_POLISH_MODEL=deepseek-flash\n'
+} | sudo tee -a /etc/fish/api-mail.env >/dev/null
+unset AI_POLISH_API_KEY
+```
+
+暂时不开通这个功能也要写这四行（否则 API 起不来）：把 `AI_POLISH_TRANSPORT` 写成 `stub`、
+`AI_POLISH_BASE_URL` 指向本地假服务（`apps/api/scripts/ai-polish-stub.ts`）即可，但**生产不要用
+stub**——它返回的是演示文案，客户端会带"演示文案·非真实模型"角标。
+
+- `AI_POLISH_TRANSPORT` 必填且无默认值，取值非法同样启动失败；选 `live` 时
+  `AI_POLISH_BASE_URL` / `AI_POLISH_API_KEY` / `AI_POLISH_MODEL` 三项缺一即失败——与
+  `MAIL_TRANSPORT` 同一 fail-fast 口径，不静默回退。选 `stub` 也要求 `AI_POLISH_BASE_URL`
+  （它是真 HTTP 服务，"stub" 指模型是假的，不是指进程内有个假实现）。
+- 上游密钥轮换不影响存量数据——这与 `MEETUP_TOKEN_SECRET` 不同（换后者会让未核销的面交码立刻
+  失效）。但它同样会随 §10 备份的 `config-*.tar.gz` 进备份，泄漏处置按同一口径。
+- 本期**不设成本上限与告警**（设计 §11-R1）：用量落在 `ai_polish_requests`
+  （`outcome` / `prompt_tokens` / `completion_tokens` / `latency_ms`），事后查表；配额是每用户
+  最小间隔 5s + 滚动 24h 30 次。
 
 - 用 `openssl rand -hex 32`（64 个 `[0-9a-f]`）而不是 `base64`：systemd 的 `EnvironmentFile`
   不做 shell 展开，纯 hex 可以免掉 `$`、引号与 `#` 引发的整类解析歧义。
