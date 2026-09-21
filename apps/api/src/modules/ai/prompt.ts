@@ -8,7 +8,7 @@ import { ListingCategorySchema } from '@fish/contracts/listings/schema'
  * 运行时改 prompt 属独立迭代：**改本文件即升版本**（与 `MODERATION_RULE_VERSION`、
  * `REDACT_RULE_VERSION` 同一惯例），版本号随用量一起落 `ai_polish_requests.prompt_version`。
  */
-export const PROMPT_VERSION = '2026-09-21-v1'
+export const PROMPT_VERSION = '2026-09-21-v2'
 
 /**
  * 分类的中文标签由**服务端**解析：请求只收枚举值，不接受客户端传标签文本，堵住
@@ -38,7 +38,7 @@ const SYSTEM_PROMPT = `你是校内二手交易平台的文案助手，负责把
 2. 一共输出 ${AI_POLISH_CANDIDATE_MAX} 条候选，每条之间用单独一行的 === 分隔；正文里不要再出现 ===。
 3. 每条候选不超过 500 字。
 4. 不得新增或改动原文没有的事实：数字、价格、成色、容量、型号、品牌、数量都保持原样；也不要添加"包邮""正品""可退换"这类承诺。
-5. 不要添加原文没有的联系方式、二维码、链接或地址。
+5. 不要写出"加微信""微信号""vx""v信""二维码""外链"这类字样（平台审核会拦下整条候选），也不要添加原文没有的联系方式、链接或地址；需要表达可以联系时，写"有意者私聊"就够了。
 6. 原文中形如 [fish-phone-1]、[fish-card-2] 的占位符是敏感信息占位，必须原样保留（含序号），不得改写、翻译、删除或补充。
 7. 语言自然简洁，突出对校内买家有用的信息。`
 

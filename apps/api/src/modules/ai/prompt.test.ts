@@ -16,6 +16,10 @@ describe('润色 prompt', () => {
     expect(system).toContain('500 字')
     expect(system).toContain('不得新增或改动原文没有的事实')
     expect(system).toContain('必须原样保留')
+    // 实测：原文带"加微信"而模型照抄时，每条候选都会命中 EXTERNAL_CONTACT → REVIEW → 整条丢弃，
+    // 用户在发布页只会拿到"没有可用文案"。这条约束把这种情况压下去（服务端过滤仍然照常兜底）。
+    expect(system).toContain('加微信')
+    expect(system).toContain('有意者私聊')
   })
 
   test('八个分类都有中文标签，且提示词里不出现英文枚举值', () => {
