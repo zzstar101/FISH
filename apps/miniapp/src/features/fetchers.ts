@@ -1,5 +1,5 @@
 /**
- * 只读页的数据入口：**先试真实 API；只有开发 / 预览才允许退回 mock fixture**。
+ * 页面数据入口（含通知的逐条已读**回写**）：**先试真实 API；只有开发 / 预览才允许退回 mock fixture**。
  *
  * ## 为什么要有这一层
  *
@@ -37,7 +37,8 @@ import { isUnauthenticatedError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
 import { type ListingDetailView, myWishes } from '@/mock/api'
 import type { MockListing, MockNotification, MockUser, MockWish, SearchFilter } from '@/mock/types'
-import { fetchNotifications } from './chat/api'
+import { fetchNotifications, markNotificationRead } from './chat/api'
+import { failureText, isNetworkFailure, mergeMarkReadResults } from './chat/notif-read'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
   fetchCategoryListings,
@@ -55,8 +56,13 @@ import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
  */
 declare const __ALLOW_MOCK_FALLBACK__: boolean | undefined
 
-/** 未注入 = 关闭（fail closed），见文件头「生产口径」 */
-const MOCK_FALLBACK_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
+/**
+ * 未注入 = 关闭（fail closed），见文件头「生产口径」。
+ *
+ * 导出给「不走 fetchers 取数、但需要同一套演示兜底判据」的调用方
+ * （当前是底栏的冷启动未读补数：真实构建不得拿 fixture 顶替真实未读数）。
+ */
+export const MOCK_FALLBACK_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
 
 /* ------------------------------------------------------------------ 排序 */
 
@@ -269,6 +275,31 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
   }
 }
 
+/**
+ * 把**当前已加载**的未读通知逐条真实标记已读（Owner 拍板口径：切进「通知」tab
+ * 即视为已读，tab 红点随之消除）。
+ *
+ * 只对调用方给出的条目逐条调幂等 `POST /notifications/:id/read` —— 契约没有
+ * mark-all-read 端点，客户端不假设有。返回**标记成功**的 id 集合，页面只把
+ * 成功条目的本地 `readAt` 补上；失败的条目保持未读，等列表下次变化
+ * （错误态的重试钮成功 / 页面实例重建）再试。
+ *
+ * 演示 / 开发构建（`MOCK_FALLBACK_ENABLED`）的兜底口径见 `mergeMarkReadResults`：
+ * 只有**整批都因后端不可达而失败**才按演示口径视为全部已读，真实的接口错误
+ * （401 / 404 / 5xx）一律如实返回。
+ */
+export async function markNotificationsRead(items: MockNotification[]): Promise<Set<string>> {
+  if (items.length === 0) return new Set()
+  const results = await Promise.allSettled(items.map((item) => markNotificationRead(item.id)))
+  const { ok, firstError, demoFallbackApplied } = mergeMarkReadResults(
+    items.map((item) => item.id),
+    results,
+    MOCK_FALLBACK_ENABLED,
+  )
+  if (firstError !== null) reportFailure('通知标记已读', firstError, demoFallbackApplied)
+  return ok
+}
+
 /* --------------------------------------------------------------- 我的 */
 
 /**
@@ -469,21 +500,26 @@ export { toMockListings }
  * 不是缺陷），因此降级为 debug；其余（含契约解析失败）用 warn ——
  * 那意味着前端与契约已经漂移，不该被静默吞掉。
  *
- * 日志里必须写明**这次有没有退 mock**：生产口径下没退，看日志的人才知道
- * 用户看到的是错误态，而不是以为「又是演示数据」。`fellBack` 默认取当前构建口径，
- * 页面若**刻意不回退**（如他人主页，见 `loadPublicUserHome`）必须显式传 `false`，
- * 否则日志会声称一件没发生的事。
+ * 日志里必须写明**这次有没有按演示口径兜底**：生产口径下没兜，看日志的人才知道
+ * 用户看到的是错误态，而不是以为「又是演示数据」。
+ *
+ * `fellBack` 是**这次操作实际有没有按演示口径兜底**：调用方知道就传（逐条已读只在
+ * 整批后端不可达时才兜底；个人中心只在 `MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`
+ * 时才兜），不知道就沿用构建开关的口径。页面若**刻意不回退**（如他人主页，见
+ * `loadPublicUserHome`）必须显式传 `false`，否则日志会声称一件没发生的事。
  */
 function reportFailure(
   what: string,
   error: unknown,
   fellBack: boolean = MOCK_FALLBACK_ENABLED,
 ): void {
-  const expected =
-    isUnauthenticatedError(error) ||
-    (error instanceof Error && /request:fail|network|timeout/i.test(error.message))
-  const detail = error instanceof Error ? error.message : String(error)
-  const tail = fellBack ? '，已回退 mock（开发 / 预览口径）' : '，未回退 mock（生产口径）'
+  const expected = isUnauthenticatedError(error) || isNetworkFailure(error)
+  const detail = failureText(error)
+  const tail = fellBack
+    ? '，已按演示口径处理（开发 / 预览构建）'
+    : MOCK_FALLBACK_ENABLED
+      ? '，未按演示口径处理'
+      : '，未回退 mock（生产口径）'
   if (expected) {
     console.debug(`[miniapp] ${what}：真实接口不可用${tail}（${detail}）`)
     return

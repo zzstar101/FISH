@@ -10,11 +10,12 @@
 
 数据来源分两类：
 
-- **已接真实 API（只读）**：首页 / 分类 / 搜索 / 商品详情 / 通知 / 我的。
+- **已接真实 API**：首页 / 分类 / 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 +
+  逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`）。
   统一走 `src/features/fetchers.ts`（先请求后端，失败或未登录退回 mock），
   由 `src/features/listing/adapt.ts` 把契约类型投影成页面在用的视图类型。
-- **仍是本地 mock**：其余页面（许愿墙、消息、会话、发布、订单、面交、认证、设置等）。
-  它们的写操作与状态机尚未接入，见 `fetchers.ts` 的边界说明。
+- **仍是本地 mock**：其余页面（许愿墙、消息页的**会话列表**、会话详情、发布、订单、面交、
+  认证、设置等）。它们的写操作与状态机尚未接入，见 `fetchers.ts` 的边界说明。
 
 ## 1. px → rpx：本目录唯一需要记住的换算
 
@@ -129,7 +130,7 @@ src/
 **自定义 TabBar**（`app.config.ts` 里 `tabBar.custom: true`）：
 `首页 pages/home/index` → `许愿 pages/wish/index` → `出物 pages/sell/index` → `消息 pages/chat/index` → `我的 pages/profile/index`
 
-非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`、`pages/notifications/index`。
+非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`。
 
 ## 9. 自定义 TabBar 的三个硬约束（改之前先读）
 

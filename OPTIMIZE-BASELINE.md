@@ -29,15 +29,15 @@
 
 ## 5. 取数策略速览（来自 DESIGN.md / config/index.ts）
 - 数据库源分两类：
-  - **已接真实 API（只读）**：首页 / 分类 / 搜索 / 商品详情 / 通知 / 我的 —— 走 `src/features/fetchers.ts`（真接口失败 → 退 mock）
-  - **仍本地 mock**：许愿 / 消息 / 会话 / 发布 / 订单 / 面交 / 认证 / 设置 等（写操作与状态机尚未接入）
+  - **已接真实 API**：首页 / 分类 / 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 + 逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`）—— 走 `src/features/fetchers.ts`（真接口失败 → 退 mock）
+  - **仍本地 mock**：许愿 / 消息页的**会话列表** / 会话详情 / 发布 / 订单 / 面交 / 认证 / 设置 等（写操作与状态机尚未接入）
 - `__ALLOW_MOCK_FALLBACK__` 默认关；`TARO_APP_MOCK=1` 或 `NODE_ENV=development` 才开。
 - 生产语义：后端挂掉应显示错误态，而非假数据。
 
 ## 6. 已知工程约定（DESIGN.md，优化须遵守）
 - `SCSS 数值 = 设计稿数值 × 2`（designWidth 750，px=rpx）
 - 颜色只用 `src/styles/_tokens.scss` 令牌，禁 `color-mix()`/`oklch()`
-- 只读页数据入口：`fetchers.ts`；未接页入口：`@/mock/api`；**不允许页面内联假数据**
+- 已接接口页数据入口：`fetchers.ts`；未接页入口：`@/mock/api`；**不允许页面内联假数据**
 - 图标统一 `@/assets/lib-icons` 的 `ICONS`
 - 自绘导航栏（`navigationStyle: custom`）、自定义 TabBar（`custom-tab-bar/`）
 - 底栏只在 5 个 Tab 页出现；其他页底部不留 TabBar 空白、用吸底操作栏

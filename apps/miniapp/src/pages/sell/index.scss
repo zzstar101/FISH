@@ -266,7 +266,9 @@
 
 .sell__input--area {
   height: 224px;
+  /* Textarea 多行文本：贴左上排、超宽自动换行（组件默认行为），行高照稿子 .ta 的 1.62 */
   padding: 20px 24px 84px;
+  line-height: 1.62;
 }
 
 /* ---- 描述框 + 右下角「润色」按钮 ---- */

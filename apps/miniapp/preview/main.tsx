@@ -23,7 +23,6 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/search/index': () => import('@/pages/search/index'),
   '/pages/listing-detail/index': () => import('@/pages/listing-detail/index'),
   '/pages/conversation/index': () => import('@/pages/conversation/index'),
-  '/pages/notifications/index': () => import('@/pages/notifications/index'),
   '/pages/orders/index': () => import('@/pages/orders/index'),
   '/pages/transaction-meetup/index': () => import('@/pages/transaction-meetup/index'),
   '/pages/register/index': () => import('@/pages/register/index'),

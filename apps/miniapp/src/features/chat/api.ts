@@ -64,3 +64,8 @@ export async function fetchUnreadNotificationCount(): Promise<number> {
   const payload = await apiRequest(NOTIFICATION_ROUTES.unreadCount)
   return notificationUnreadCountSchema.parse(payload).unreadCount
 }
+
+/** 标记单条通知已读（幂等：已读再点仍是 200，且不改写首次已读时间） */
+export async function markNotificationRead(id: string): Promise<void> {
+  await apiRequest(NOTIFICATION_ROUTES.markRead(id), { method: 'POST' })
+}
