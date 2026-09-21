@@ -29,23 +29,30 @@
  * （登录后重拉、发布后失效），而当前页面每次进入都重新加载，够用。
  */
 import type { Me } from '@fish/contracts/auth/user'
-import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
-import { isUnauthenticatedError } from '@/lib/request'
+import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
 import { type ListingDetailView, myWishes } from '@/mock/api'
 import type {
   MockConversation,
   MockListing,
+  MockMessage,
   MockNotification,
   MockUser,
   MockWish,
   SearchFilter,
 } from '@/mock/types'
-import { fetchConversations, fetchNotifications, markNotificationRead } from './chat/api'
+import {
+  fetchConversation,
+  fetchConversations,
+  fetchMessagePage,
+  fetchNotifications,
+  markNotificationRead,
+} from './chat/api'
 import { failureText, isNetworkFailure, mergeMarkReadResults } from './chat/notif-read'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
@@ -355,6 +362,89 @@ function toConversationDto(item: MockConversation): ConversationDto {
     lastMessage: item.lastMessage,
     lastMessageAt: item.lastMessageAt,
     createdAt: item.lastMessageAt,
+  }
+}
+
+/** 会话详情：`missing`（真的没这条会话）与 `failed`（没读到）必须分开 */
+export type LoadedConversation =
+  | { status: 'ok'; conversation: ConversationDto }
+  | { status: 'missing' }
+  | { status: 'failed' }
+
+export async function loadConversation(conversationId: string): Promise<LoadedConversation> {
+  try {
+    return { status: 'ok', conversation: await fetchConversation(conversationId) }
+  } catch (error) {
+    // 404 CONVERSATION_NOT_FOUND：不存在，或查看者不是参与者（服务端刻意不区分，不泄漏存在性）
+    if (isApiError(error) && error.code === 'CONVERSATION_NOT_FOUND') return { status: 'missing' }
+    reportFailure('会话详情', error)
+    if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
+    const { conversation: mockConversation } = await import('@/mock/api')
+    const found = mockConversation(conversationId)
+    return found ? { status: 'ok', conversation: toConversationDto(found) } : { status: 'missing' }
+  }
+}
+
+/** 一页历史消息的加载结果：`nextCursor === null` 表示已到最早一页 */
+export type LoadedMessagePage = {
+  items: MessageDto[]
+  nextCursor: string | null
+  failed: boolean
+}
+
+export async function loadMessagePage(
+  conversationId: string,
+  before?: string,
+): Promise<LoadedMessagePage> {
+  try {
+    const page = await fetchMessagePage(conversationId, before)
+    return { items: page.items, nextCursor: page.nextCursor, failed: false }
+  } catch (error) {
+    reportFailure('消息历史', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
+    // 演示构建：fixture 没有分页，只有首屏能回落（更早一页如实返回空，不伪造）
+    if (before) return { items: [], nextCursor: null, failed: false }
+    const {
+      conversation: mockConversation,
+      messages: mockMessages,
+      ME: mockMe,
+    } = await import('@/mock/api')
+    const found = mockConversation(conversationId)
+    if (!found) return { items: [], nextCursor: null, failed: false }
+    return {
+      items: mockMessages(conversationId).map((item) => toMessageDto(item, found, mockMe)),
+      nextCursor: null,
+      failed: false,
+    }
+  }
+}
+
+/**
+ * 演示构建的 fixture 消息 → 契约 `MessageDto`。
+ *
+ * 契约对 TEXT 有联合完整性约束（`senderId` 与 `sender` 都必须非空，
+ * `messageDtoSchema` 的 refine 同源），而 fixture 只存 `senderId`，
+ * 所以要按「这条是不是对方发的」补出 `sender`。
+ */
+function toMessageDto(item: MockMessage, conversation: MockConversation, me: MockUser): MessageDto {
+  const sender =
+    item.senderId === null
+      ? null
+      : item.senderId === conversation.counterpart.id
+        ? {
+            id: conversation.counterpart.id,
+            nickname: conversation.counterpart.nickname,
+            avatarUrl: conversation.counterpart.avatarUrl,
+          }
+        : { id: me.id, nickname: me.nickname, avatarUrl: me.avatarUrl }
+  return {
+    id: item.id,
+    conversationId: item.conversationId,
+    senderId: item.senderId,
+    sender,
+    type: item.type,
+    content: item.content,
+    createdAt: item.createdAt,
   }
 }
 

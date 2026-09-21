@@ -8,8 +8,11 @@
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import {
   type ConversationDto,
+  conversationDtoSchema,
   conversationListResponseSchema,
   type MessageDto,
+  type MessageListResponse,
+  messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
 import { NOTIFICATION_ROUTES } from '@fish/contracts/notifications/routes'
@@ -22,6 +25,9 @@ import { apiRequest } from '@/lib/request'
 
 /** 契约里 limit 上限 50 */
 const CONVERSATION_LIMIT = 50
+
+/** 契约里消息 limit 上限 100：一次拉到上限，再往前靠 `before` 游标翻页 */
+const MESSAGE_PAGE_LIMIT = 100
 
 export async function fetchConversations(): Promise<ConversationDto[]> {
   const payload = await apiRequest(CHAT_ROUTES.base, {
@@ -44,27 +50,41 @@ export async function fetchConversationUnreadCount(): Promise<number> {
   return items.reduce((sum, item) => sum + item.unreadCount, 0)
 }
 
-/** 某个会话的历史消息（契约按 `(createdAt, id)` 升序返回） */
-export async function fetchMessages(conversationId: string): Promise<MessageDto[]> {
-  const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
-    query: { limit: 100 },
-  })
-  return messageListResponseSchema.parse(payload).items
+/** 单个会话详情（深链进来时拿对方摘要与商品卡；404 由调用方按「会话不存在」处理） */
+export async function fetchConversation(conversationId: string): Promise<ConversationDto> {
+  const payload = await apiRequest(CHAT_ROUTES.detail(conversationId))
+  return conversationDtoSchema.parse(payload)
 }
 
-/** 发一条文本消息 */
+/**
+ * 一页历史消息。契约按 `(createdAt, id)` **升序**返回，`nextCursor` 为 null 表示已到最早。
+ *
+ * 返回整个响应而不是只返回 items：会话页要「加载更早的消息」就必须拿到游标
+ * （契约明确要求前端把 cursor 原样回传，不许解析或构造）。
+ */
+export async function fetchMessagePage(
+  conversationId: string,
+  before?: string,
+): Promise<MessageListResponse> {
+  const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
+    query: { limit: MESSAGE_PAGE_LIMIT, before },
+  })
+  return messageListResponseSchema.parse(payload)
+}
+
+/** 发一条文本消息（201，响应体 MessageDto） */
 export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
     body: { content },
   })
-  return payload as MessageDto
+  return messageDtoSchema.parse(payload)
 }
 
 /** 标记会话已读（把查看者的 last_read_at 推进到当前时刻） */
 export async function markConversationRead(conversationId: string): Promise<ConversationDto> {
   const payload = await apiRequest(CHAT_ROUTES.read(conversationId), { method: 'POST' })
-  return payload as ConversationDto
+  return conversationDtoSchema.parse(payload)
 }
 
 /* ------------------------------------------------------------ 通知 */

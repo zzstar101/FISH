@@ -1,5 +1,6 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import { formatAmount } from '@/lib/money'
+import { localDayIndex, WEEKDAY } from '@/lib/time'
 
 /**
  * 会话列表的取数与渲染逻辑（#89：Chat 页从 fixture 改为真实 `GET /conversations`）。
@@ -65,20 +66,6 @@ export function previewOf(item: ConversationDto): string {
     // 不是 JSON：按普通文本渲染
   }
   return last.content
-}
-
-/** 星期几的中文单字，下标与 `Date.getDay()` 对齐（0 = 周日） */
-const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
-
-/**
- * 本地日历日序号。
- *
- * 必须按**本地日历日**算，不能用「距今多少小时 / 24」：否则 23:00 的消息在次日
- * 01:00 只差 2 小时，会被算成「今天」，而用户认知里已经是昨天。
- */
-function localDayIndex(ms: number): number {
-  const date = new Date(ms)
-  return Math.floor((ms - date.getTimezoneOffset() * 60_000) / 86_400_000)
 }
 
 /**

@@ -269,6 +269,41 @@
   color: var(--muted-2);
 }
 
+/* 更早一页（契约的 `before` 游标）：分页入口与失败重试都居中放在消息流顶端 */
+.conv__earlier {
+  align-self: center;
+}
+
+.conv__earlier-btn {
+  padding: 10px 28px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+/* 加载中 / 还没有消息：居中提示。不能借用「会话不存在」那套空态 ——
+   没读到和没有消息是两件事。 */
+.conv__empty {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 44px 12px;
+  color: var(--muted);
+}
+
+.conv__empty-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.conv__empty-text {
+  font-size: var(--fs-sm);
+}
+
 /* SYSTEM：居中灰色小胶囊。
    外层整行 + text-align: center，胶囊本体用 inline-block —— 在「纵向 flex」里
    这是唯一能稳定「按内容收窄」的写法（fit-content / display:table 都会被撑满整行）。 */
