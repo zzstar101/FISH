@@ -141,6 +141,24 @@ describe('八步流水线', () => {
     expect(harness.finishes[0]?.outcome).toBe('TOKEN_LOST')
   })
 
+  test('标记被模型改写（全角数字）→ 整条降级记 TOKEN_LOST，而不是被事实校验丢弃成 EMPTY', async () => {
+    // 摘标记若只认标准形态，改写后的标记会把序号 `1` 泄漏成"模型新增的数字"，候选在事实过滤层
+    // 就被丢掉，restore 的整条降级永远走不到（#141 审查发现）。
+    const harness = createHarness({
+      segments: ['九成新，联系 [fish-phone-１] 详聊'],
+      decision: 'ALLOW',
+    })
+
+    const response = await harness.service.polishCandidates({
+      ...INPUT,
+      description: '九成新，联系 13812345678 详聊',
+    })
+
+    expect(response.candidates[0]?.text).toBe('九成新，联系 （你的联系方式已被移除） 详聊')
+    expect(harness.finishes[0]?.outcome).toBe('TOKEN_LOST')
+    expect(harness.finishes[0]?.filteredCount).toBe(0)
+  })
+
   test('标题里也有敏感内容时，描述候选照样还原用户自己的联系方式（不误记 TOKEN_LOST）', async () => {
     // 真实上游踩过：标题含可脱敏内容时，若把标题的标记也算"必须找回"，用户自己的号码会被换成提示语。
     const harness = createHarness({ segments: ['九成新，联系 [fish-phone-1] 详聊'] })

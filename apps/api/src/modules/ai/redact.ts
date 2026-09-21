@@ -68,12 +68,8 @@ const MARKER_PATTERN = /\[fish-([a-z]+)-(\d+)\]/g
 /**
  * 形状像标记、但严格匹配不上的（模型把 `[fish-phone-1]` 写成 `[fish-phone- 1]`、全角数字或
  * 插了零宽字符）。检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），也不能原样
- * 留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。
- */
-/**
- * 形状像标记、但严格匹配不上的（模型把 `[fish-phone-1]` 写成 `[fish-phone- 1]` 或全角数字）。
- * 检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），也不能原样留在候选里被用户
- * 采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见分隔符（`INVISIBLE_SEPARATORS`）。
+ * 留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见分隔符
+ * （`INVISIBLE_SEPARATORS`）。
  */
 const LOOSE_MARKER_PATTERN = /\[?\s*fish[-_\s]*([a-z]+)[-_\s]*[0-9０-９]+\s*\]?/gi
 
@@ -83,6 +79,20 @@ const LOOSE_MARKER_PATTERN = /\[?\s*fish[-_\s]*([a-z]+)[-_\s]*[0-9０-９]+\s*\]
  * （ZWJ 用于拼 emoji，放进类里容易被误读）。
  */
 const INVISIBLE_SEPARATORS = /\u200b|\u200c|\u200d|\u2060|\ufeff/g
+
+/**
+ * 摘掉标准形态与**被改写过的**标记字面。事实校验（`facts.ts`）用它在抽取数字前做归一化：
+ * 标记里的序号是我们自己的计数，不是模型新增的数字；只摘标准形态会让改写后的标记把序号泄漏
+ * 成"新增事实"，候选在过滤层就被丢弃，永远走不到 `restore` 的整条降级（#141 审查发现）。
+ *
+ * 与 `restore` 共用同一套模式——"标记长什么样"只有这一处定义（设计 §6.3）。
+ */
+export function stripMarkerLiterals(text: string): string {
+  return text
+    .replace(INVISIBLE_SEPARATORS, '')
+    .replace(MARKER_PATTERN, '')
+    .replace(LOOSE_MARKER_PATTERN, '')
+}
 
 function hasMangledMarker(text: string): boolean {
   const strictCount = (text.match(MARKER_PATTERN) ?? []).length

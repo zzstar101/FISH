@@ -1,3 +1,5 @@
+import { stripMarkerLiterals } from './redact'
+
 /**
  * "AI 不得新增事实"的**唯一可验证**形式（设计 §5.6c）：原文与候选各自归一化后取
  * "数字 + 紧邻单位"的集合，候选里出现原文没有的 → 该条候选丢弃。
@@ -45,8 +47,6 @@ const CN_SCALE: Record<string, number> = { 十: 10, 拾: 10, 百: 100, 佰: 100,
 const CN_SECTION: Record<string, number> = { 万: 10_000, 亿: 100_000_000 }
 
 const UNIT_CHARS = new Set(['%', '元', '块', '折', '成', '新'])
-
-const MARKER_PATTERN = /\[fish-[a-z]+-\d+\]/g
 
 function isAsciiDigit(ch: string): boolean {
   return ch >= '0' && ch <= '9'
@@ -102,10 +102,13 @@ function unitAt(text: string, index: number): string {
   return UNIT_CHARS.has(ch) ? ch : ''
 }
 
-/** 归一化：NFKC（全角数字/括号归一）、剥空白与千分位逗号；标记先摘掉，避免计数被当成新增数字。 */
+/**
+ * 归一化：**先**摘标记（标准与被改写的形态都摘，见 `redact.ts` 的 `stripMarkerLiterals`）——
+ * 标记里的序号是我们的计数，不是模型新增的数字，漏摘会让候选在过滤层被误丢；再 NFKC
+ * （全角数字/括号归一）、剥空白与千分位逗号。
+ */
 function normalize(text: string): string {
-  return text
-    .replace(MARKER_PATTERN, '')
+  return stripMarkerLiterals(text)
     .normalize('NFKC')
     .replace(/[\s\u3000]+/g, '')
     .replace(/[,，]/g, '')

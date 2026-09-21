@@ -52,6 +52,15 @@ describe('候选是否新增事实', () => {
     )
   })
 
+  test('被改写过的标记（全角数字 / 插入空格 / 零宽字符）同样不算新增事实', () => {
+    // 标记里的序号是我们的计数。只摘标准形态时它会被当成"模型新增的数字"，候选在事实层就被
+    // 丢弃，永远走不到 restore 的整条降级（#141 审查发现）。
+    const original = '九成新，联系 13812345678 详聊'
+    expect(addsUnknownFacts(original, '九成新，联系 [fish-phone-１] 详聊')).toBe(false)
+    expect(addsUnknownFacts(original, '九成新，联系 [fish-phone- 1] 详聊')).toBe(false)
+    expect(addsUnknownFacts(original, '九成新，联系 [fish-pho\u200bne-1] 详聊')).toBe(false)
+  })
+
   test('同义单位改写（元 ↔ 块）会被判为新增：设计 §11-R4 已接受该误杀，待 filtered_count 观察', () => {
     expect(addsUnknownFacts('原价 500元', '原价 500块')).toBe(true)
   })
