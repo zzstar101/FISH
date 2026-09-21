@@ -331,20 +331,14 @@ export default function Chat() {
   }
 
   /**
-   * 进会话即视为已读：真实落后端（幂等 `POST /conversations/:id/read`）。
+   * 点进会话：**只负责跳转，不在这里发 `POST /conversations/:id/read`**。
    *
-   * 失败**不假装已读** —— 返回列表时 `useDidShow` 会重拉，如实显示服务端还记着的未读。
+   * 已读由会话页进页时落地 —— 那一页才是「用户真的看到了消息」的地方。列表页提前
+   * 推读位，会在用户只是路过、甚至会话页还没加载出来时就把未读清掉；未读是服务端
+   * 权威派生量，不该由一次跳转冒充已读。从会话页返回时 `useDidShow` 会重拉，
+   * 角标随服务端的真实未读更新。
    */
   const openConversation = (id: string) => {
-    const epoch = listEpoch.current
-    void markConversationRead(id)
-      .then(() => {
-        if (epoch !== listEpoch.current) return
-        setItems((prev) =>
-          prev.map((item) => (item.id === id ? { ...item, unreadCount: 0 } : item)),
-        )
-      })
-      .catch((error) => console.warn('[miniapp] 标记会话已读失败', error))
     void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
   }
 
