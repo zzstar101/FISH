@@ -19,7 +19,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
-import { hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
+import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
 import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
@@ -172,25 +172,27 @@ export default function CustomTabBar() {
     // 优先用本次账号的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除。
     // 快照按账号校验：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时没人清快照，
     // 不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
-    // 任何一个分量为 `null`（「不知道」：列表未就绪 / 加载失败 / 真实接口不可达）时
-    // 按**无已知未读**算，不拿 fixture 顶替 —— 页内角标在这些状态也是「不显示」，
-    // 两边必须同一口径，否则会亮一颗点进去只有错误态、清不掉的幽灵红点。
-    // 注意 `conversations` 也不能用 `?? 0` 之外的兜底：`null` 是「不知道」，
-    // 不是「确定没有未读」。
+    //
+    // 判定走 `badgeShouldLight`（纯函数、有用例）：任何一项为 `null`（「不知道」：
+    // 列表未就绪 / 加载失败 / 真实接口不可达）时**不下「没有未读」的结论、保持上一帧** ——
+    // 否则一颗本来亮着的点会莫名熄灭，而用户其实还有未读。
     if (unread && unread.ownerId === userId) {
-      setDot((unread.conversations ?? 0) + (unread.notifications ?? 0) > 0)
+      setDot(
+        badgeShouldLight({
+          conversations: unread.conversations,
+          notifications: unread.notifications,
+          previous: dot,
+        }),
+      )
       return
     }
     // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持 fixture 现算
-    // 口径，真实构建按「无已知未读」算 —— 等 `hydrateUnread` 的真实结果落地再决定
-    // 亮不亮，不能用 fixture 先亮一颗再说。
-    if (!demoUnread) {
-      setDot(false)
-      return
-    }
+    // 口径，真实构建保持上一帧 —— 等 `hydrateUnread` 的真实结果落地再决定，
+    // 不能用 fixture 先亮一颗再说，也不能因为「还没到」就把已知的红点熄掉。
+    if (!demoUnread) return
     const fallback = demoUnread()
     setDot(fallback.conversations + fallback.notifications > 0)
-  }, [authStatus, userId, unread, demoUnread])
+  }, [authStatus, userId, unread, demoUnread, dot])
 
   // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
   useEffect(() => {

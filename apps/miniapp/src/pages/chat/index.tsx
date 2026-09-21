@@ -144,6 +144,10 @@ export default function Chat() {
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
     setLoadingMore(false)
+    // 整页重载必须把「加载更多」的失败标记一起清掉：否则一次失败之后，任何一次
+    // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
+    // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
+    setLoadMoreFailed(false)
     void loadConversations()
       .then(({ items: list, nextCursor: cursor, failed: nextFailed }) => {
         if (epoch !== listEpoch.current) return
@@ -182,12 +186,22 @@ export default function Chat() {
           setLoadMoreFailed(true)
           return
         }
-        // 按 id 去重：翻页期间若有新消息把会话顶到后一页，同一条会被返回两次
+        /**
+         * 按 id 去重：翻页期间消息会把会话重新排序，被顶到后一页的会话可能已经
+         * 在列表里（服务端用的是严格 `<` 键集比较，跨页本身不会重复返回同一条）。
+         */
         setItems((prev) => {
           const seen = new Set(prev.map((item) => item.id))
           return [...prev, ...page.items.filter((item) => !seen.has(item.id))]
         })
         setListNextCursor(page.nextCursor)
+      })
+      .catch((error) => {
+        // 与 reloadConversations / loadNotifs 同一兜法：取数层的动态 import 失败
+        // 会让 promise 真的 reject，这里必须接住并置失败态，不能留 unhandled rejection
+        console.warn('[miniapp] 加载更多会话异常', error)
+        if (epoch !== listEpoch.current) return
+        setLoadMoreFailed(true)
       })
       .finally(() => setLoadingMore(false))
   }

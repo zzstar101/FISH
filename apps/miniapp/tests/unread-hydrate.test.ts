@@ -23,9 +23,8 @@ mock.module('@/features/chat/api', () => ({
   fetchConversationUnreadCount: () => convResult(),
 }))
 
-const { clearUnread, hydrateUnread, publishUnread, unreadSnapshot } = await import(
-  '../src/features/chat/unread'
-)
+const { badgeShouldLight, clearUnread, hydrateUnread, publishUnread, unreadSnapshot } =
+  await import('../src/features/chat/unread')
 
 /** store 是模块级单例：每个用例前把内部快照清掉，避免互相污染 */
 beforeEach(() => {
@@ -151,5 +150,30 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.ownerId).toBe('u-b')
     expect(unreadSnapshot()?.notifications).toBe(5)
     expect(unreadSnapshot()?.conversations).toBe(2)
+  })
+})
+
+describe('未读快照 · 底栏红点判定', () => {
+  test('任何一项已知未读 > 0 → 亮', () => {
+    expect(badgeShouldLight({ conversations: 1, notifications: 0, previous: false })).toBe(true)
+    expect(badgeShouldLight({ conversations: 0, notifications: 3, previous: false })).toBe(true)
+    expect(badgeShouldLight({ conversations: null, notifications: 2, previous: false })).toBe(true)
+  })
+
+  test('两项都已知且都是 0 → 熄', () => {
+    expect(badgeShouldLight({ conversations: 0, notifications: 0, previous: true })).toBe(false)
+  })
+
+  test('有分量「不知道」且没有已知未读 → 保持上一帧，不熄掉已知的红点', () => {
+    // 这是 `null` 存在的意义：接口失败时按 0 算，会把用户真实存在的未读红点熄掉
+    expect(badgeShouldLight({ conversations: null, notifications: 0, previous: true })).toBe(true)
+    expect(badgeShouldLight({ conversations: 0, notifications: null, previous: true })).toBe(true)
+    expect(badgeShouldLight({ conversations: null, notifications: null, previous: true })).toBe(
+      true,
+    )
+    // 上一帧本来就是熄的，也不该因为「不知道」而无中生有
+    expect(badgeShouldLight({ conversations: null, notifications: null, previous: false })).toBe(
+      false,
+    )
   })
 })

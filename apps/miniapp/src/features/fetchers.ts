@@ -421,12 +421,17 @@ export async function loadMessagePage(
   } catch (error) {
     reportFailure('消息历史', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
-    /**
-     * 演示构建：fixture 没有分页。走到 `before` 这一支说明用户在演示里点了
-     * 「加载更早的消息」—— fixture 本身就是全部历史，所以「已到最早」是准确的
-     * （首屏的 `nextCursor` 恒为 null，正常演示根本看不到这个入口）。
-     */
-    if (before) return { items: [], nextCursor: null, failed: false }
+    if (before) {
+      /**
+       * 演示构建回落时 fixture 里**没有分页**，所以「更早一页」无从给出。
+       *
+       * 这里必须报 `failed: true` 而不是 `failed: false, nextCursor: null` ——
+       * 后者是在断言「已经到最早一页了」，而事实是「这一页没读到」；混装场景
+       * （首屏走真实接口拿到游标、更早一页请求失败落到这里）下会静默抽掉翻页入口，
+       * 用户既看不到更早的消息、也看不到任何错误。
+       */
+      return { items: [], nextCursor: null, failed: true }
+    }
     const {
       conversation: mockConversation,
       messages: mockMessages,

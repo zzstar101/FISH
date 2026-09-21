@@ -46,6 +46,29 @@ export type UnreadSnapshot = {
 let snapshot: UnreadSnapshot | null = null
 const listeners = new Set<() => void>()
 
+/**
+ * 底栏「消息」红点该不该亮。
+ *
+ * 规则（也是「不知道」这个态存在的意义）：
+ * 1. 只要有任何一项**已知**未读 > 0 → 亮；
+ * 2. 两项都已知且都是 0 → 熄；
+ * 3. 有分量「不知道」且没有已知未读 → **保持上一帧**，不下「没有未读」这个结论。
+ *
+ * 第 3 条是关键：接口失败 / 列表还没到手时如果按 0 算，一颗本来亮着的点会莫名其妙
+ * 熄掉，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
+ * 抽成纯函数是为了它能被单测锁住（底栏组件本身没有渲染测试基建）。
+ */
+export function badgeShouldLight(input: {
+  conversations: number | null
+  notifications: number | null
+  /** 上一帧的红点状态 */
+  previous: boolean
+}): boolean {
+  if ((input.conversations ?? 0) > 0 || (input.notifications ?? 0) > 0) return true
+  const unknown = input.conversations === null || input.notifications === null
+  return unknown ? input.previous : false
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   return () => {
@@ -124,7 +147,7 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 「接 `GET /conversations` 时必须一并收口会话未读这一分量」）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
- * - 没给（真实构建）→ 会话未读记 0、通知未读记 `null`（「不知道」，底栏按无已知未读算），
+ * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
  *   **不回退 fixture** —— 拿 fixture 顶替真实值正是幽灵红点 / 漏亮红点的成因。
  *
  * 兜底由调用方注入而不是本模块内判断构建开关：store 不该知道 mock fixture 的存在，
