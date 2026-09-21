@@ -170,8 +170,10 @@ export function createAiPolishService(deps: AiPolishServiceDeps): AiPolishServic
           filteredCount += 1
           continue
         }
-        // c 数字/单位必须先脱敏再抽取：标记里的计数不是模型新增的数字（见 facts.ts）。
-        if (addsUnknownFacts(input.description, segment)) {
+        // c 事实基线是**模型看到过的全部用户内容**（标题 + 描述）：只拿描述当基线，会在真实上游下
+        // 把"引用标题里的型号"误判成新增事实（实测三条候选全丢 → EMPTY）。
+        // 数字/单位比较前先摘掉标记：标记里的计数不是模型新增的数字（见 facts.ts）。
+        if (addsUnknownFacts([input.title, input.description], segment)) {
           filteredCount += 1
           continue
         }

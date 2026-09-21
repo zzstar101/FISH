@@ -163,12 +163,24 @@ export function extractFacts(text: string): Set<FactToken> {
 }
 
 /**
- * 候选是否引入了原文没有的数字/单位事实。`true` → 调用方丢弃该候选（设计 §5.6c）。
+ * 候选是否引入了用户**没提供过**的数字/单位事实。`true` → 调用方丢弃该候选（设计 §5.6c）。
+ *
+ * 基线必须传**模型看到过的全部用户内容**（标题 + 描述）：标题也进了 prompt，模型在候选里引用
+ * 标题中的型号（"罗技 K380" → `380`）是合理行为。实测只拿描述当基线会让真实上游三条候选全被
+ * 判为"新增事实"、接口返回 `AI_RESULT_EMPTY`。传数组即取并集。
+ *
  * 用集合（按字面去重）而不是多重集：候选把同一个数字重复一次不算新增事实，
  * 但数字本身变了（`500元` → `600元`）一定算。
  */
-export function addsUnknownFacts(originalText: string, candidateText: string): boolean {
-  const known = extractFacts(originalText)
+export function addsUnknownFacts(
+  original: string | readonly string[],
+  candidateText: string,
+): boolean {
+  const known = new Set<FactToken>()
+  for (const source of typeof original === 'string' ? [original] : original) {
+    for (const token of extractFacts(source)) known.add(token)
+  }
+
   for (const token of extractFacts(candidateText)) {
     if (!known.has(token)) return true
   }

@@ -102,17 +102,15 @@ describe('八步流水线', () => {
       'candidate-2',
       'candidate-3',
     ])
-    expect(harness.finishes).toEqual([
-      {
-        requestId: 'req-1',
-        outcome: 'OK',
-        candidateCount: 3,
-        filteredCount: 0,
-        latencyMs: harness.finishes[0]?.latencyMs,
-        promptTokens: 120,
-        completionTokens: 258,
-      },
-    ])
+    const [finish] = harness.finishes
+    expect(harness.finishes).toHaveLength(1)
+    expect(finish?.requestId).toBe('req-1')
+    expect(finish?.outcome).toBe('OK')
+    expect(finish?.candidateCount).toBe(3)
+    expect(finish?.filteredCount).toBe(0)
+    expect(finish?.promptTokens).toBe(120)
+    expect(finish?.completionTokens).toBe(258)
+    expect(typeof finish?.latencyMs).toBe('number')
   })
 
   test('脱敏发生在送上游之前，回填把原文还给用户', async () => {
@@ -165,6 +163,16 @@ describe('八步流水线', () => {
     expect(response.candidates).toHaveLength(1)
     expect(response.candidates[0]?.text).toBe('九成新键盘，功能正常')
     expect(harness.finishes[0]?.filteredCount).toBe(2)
+  })
+
+  test('候选引用标题里的型号数字不算新增事实（真实上游踩过这条）', async () => {
+    // 只拿描述当基线时，"罗技 K380 键盘" 里的 380 会被判为新增事实 → 三条候选全丢 → EMPTY。
+    const harness = createHarness({ segments: ['罗技 K380 键盘，九成新，自用一年'] })
+
+    const response = await harness.service.polishCandidates(INPUT)
+
+    expect(response.candidates[0]?.text).toBe('罗技 K380 键盘，九成新，自用一年')
+    expect(harness.finishes[0]?.outcome).toBe('OK')
   })
 
   test('moderation 判 BLOCK 或 REVIEW 都丢，且跑在回填前的标记版上', async () => {

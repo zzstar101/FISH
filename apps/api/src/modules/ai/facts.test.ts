@@ -56,6 +56,14 @@ describe('候选是否新增事实', () => {
     expect(addsUnknownFacts('原价 500元', '原价 500块')).toBe(true)
   })
 
+  test('基线可传多项（标题 + 描述）：引用标题里的型号数字不算新增', () => {
+    // 真实上游踩过：只拿描述当基线时，候选写了标题里的 "罗技 K380" 就带出令牌 380 → 三条全丢。
+    expect(
+      addsUnknownFacts(['罗技 K380 键盘', '九成新，功能正常'], '罗技 K380 键盘，九成新，功能正常'),
+    ).toBe(false)
+    expect(addsUnknownFacts('九成新，功能正常', '罗技 K380 键盘，九成新，功能正常')).toBe(true)
+  })
+
   test('原文没有数字时，候选出现任何数字都算新增', () => {
     expect(addsUnknownFacts('几乎全新', '九成新')).toBe(true)
     expect(addsUnknownFacts('几乎全新', '几乎全新，用了1个月')).toBe(true)
