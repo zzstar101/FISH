@@ -22,6 +22,7 @@ import {
   POOL_MIN_COUNT,
   WISH_CATEGORIES,
 } from '@/mock/api'
+import { wishHitLink } from './list-state'
 import './index.scss'
 
 /**
@@ -227,8 +228,10 @@ export default function Wish() {
           <View className="wish__tabs">
             {(
               [
-                { key: 'mine', label: '我的愿望', count: mine.length },
-                { key: 'pool', label: '愿望池', count: pool.length },
+                // 未加载出来 / 加载失败时计数是**不知道**，不是 0：显示「—」
+                // （与个人中心数字栏同一口径），不把「没读到」画成一个事实数字。
+                { key: 'mine', label: '我的愿望', count: state === 'ready' ? mine.length : null },
+                { key: 'pool', label: '愿望池', count: state === 'ready' ? pool.length : null },
               ] as const
             ).map((item) => {
               const on = item.key === tab
@@ -239,7 +242,7 @@ export default function Wish() {
                   onClick={() => setTab(item.key)}
                 >
                   <Text>{item.label}</Text>
-                  <Text className="wish__tab-n">{item.count}</Text>
+                  <Text className="wish__tab-n">{item.count ?? '—'}</Text>
                 </View>
               )
             })}
@@ -267,9 +270,9 @@ export default function Wish() {
               `status = ACTIVE`、没有时间窗（`apps/api/src/modules/wishes/store.ts`
               的 `aggregatePool`），契约响应里也没有 `createdAt` 可让前端自己筛。
               接了真接口之后池子里会出现任意时间的愿望，继续写「近 7 天」就是假话，
-              所以这里改成不带时间窗的说法（与愿望池 tab 的「按想要人数排序」同口径）。
+              所以这里改成不带时间窗的说法（与愿望池 tab 的「按求购条数排序」同口径）。
             */}
-                <Text className="hot__note">按想要人数</Text>
+                <Text className="hot__note">按求购条数</Text>
               </View>
               <View className="hot__grid">
                 {hotList.map((item, index) => (
@@ -330,7 +333,7 @@ export default function Wish() {
                   <Text>我要许愿</Text>
                 </View>
               ) : (
-                <Text className="wish__sec-note">按想要人数排序</Text>
+                <Text className="wish__sec-note">按求购条数排序</Text>
               )}
             </View>
 
@@ -394,15 +397,9 @@ export default function Wish() {
                      * 另有阈值与商品状态过滤，且**终态愿望的 /matches 恒为空**。
                      */
                     const hitCount = hitList?.total ?? wish.matchCount
-                    /**
-                     * 只有「许愿中 + 命中列表确实取到了」才给可点的入口：
-                     * - 终态愿望的 `/matches` 恒为空（服务端只返回 ACTIVE 愿望的匹配），
-                     *   点进去会看到「已结束 / 0 件」，与卡片的数字对不上 —— 不给死链接；
-                     * - `/matches` 取失败时 `hitCount` 退回了未过滤的 `matchCount`，
-                     *   同样不该把人送到一个数字可能不同的页面。
-                     */
-                    const hitLinkable = wish.status === 'ACTIVE' && hitList !== undefined
-                    const hitChevron = hitLinkable && hitCount > 0
+                    // 门禁抽成纯函数（`list-state.ts`）：终态不给死链接、失败不静默、
+                    // 0 命中仍给提示。判定与测试都在那里。
+                    const hitLink = wishHitLink(wish, hitList)
                     return (
                       <View key={wish.id} className="mw">
                         <View className="mw__top">
@@ -438,20 +435,20 @@ export default function Wish() {
                         `matchCount` —— 那是「历史上命中过多少条」的计数，不给跳转入口。
                       */}
                           <Text
-                            className={`mw__hits${hitChevron ? ' is-hit' : ''}`}
+                            className={`mw__hits${hitLink === 'linked' ? ' is-hit' : ''}`}
                             onClick={() => {
-                              if (!hitLinkable) return
-                              if (hitCount === 0) {
+                              if (hitLink === 'empty') {
                                 void Taro.showToast({
                                   title: '还没命中：先调整预算或关键词',
                                   icon: 'none',
                                 })
                                 return
                               }
+                              if (hitLink !== 'linked') return
                               void Taro.navigateTo({ url: `/pages/match/index?wishId=${wish.id}` })
                             }}
                           >
-                            {`${hitCount} 件闲置命中${hitChevron ? ' ›' : ''}`}
+                            {`${hitCount} 件闲置命中${hitLink === 'linked' ? ' ›' : ''}`}
                           </Text>
                         </View>
 
@@ -528,7 +525,12 @@ export default function Wish() {
                           {formatYuan(item.medianBudgetCents)}
                         </Text>
                       </Text>
-                      <Text className="pool__want">{`${item.wantCount} 人想要`}</Text>
+                      {/*
+                        `wantCount` 是**需求条数**（`count(*)`，见 `docs/design/issue-7-wish-system.md`
+                        「k-匿名」那段：准入按去重用户数，`wantCount` 是该组的条数）——
+                        不是人数。同一用户重复许同一个关键词会各算一条，所以文案用「条」。
+                      */}
+                      <Text className="pool__want">{`${item.wantCount} 条求购`}</Text>
                     </View>
                   </View>
                 ))}

@@ -14,7 +14,7 @@ import type { WishCreateInput, WishDto, WishPoolItem } from '@fish/contracts/wis
  * 2. **命中的来源**：只对 `ACTIVE && matchCount > 0` 的愿望逐条拉
  *    `/matches?wishId=`，且单条失败不拖垮整页（卡片保留契约计数、不编排行）；
  * 3. **卖家**：`/matches` 不返回卖家，逐条拉详情补；补不到是 `null`，
- *    403 / 404 是「不是我的 / 已经没了」（notFound），网络失败才是 failed。
+ *    404 是「不存在」（notFound）、403 是「不是你的愿望」（forbidden），网络失败才是 failed。
  *
  * 替换的是 `@/lib/request` 的 `apiRequest`（只此一处），**不**替换 `features/wish/api`
  * 与 `features/match/api` —— 这样用例同时覆盖真实模块的**请求构造**
@@ -340,18 +340,20 @@ describe('loadWishMatches —— 匹配结果 + 逐条补卖家', () => {
     expect(result.items[1]?.seller?.nickname).toBe('买家乙')
   })
 
-  test('403 / 404 = 不是我的 / 已经没了：notFound，而不是 failed', async () => {
-    failWith = {
-      when: (call) => call.path === WISH_ROUTES.detail(WISH_ID),
-      error: new FakeApiError(403, 'FORBIDDEN', '无权查看该愿望'),
-    }
-    expect((await loadWishMatches(WISH_ID)).status).toBe('notFound')
-
+  test('404 = 愿望不存在：notFound', async () => {
     failWith = {
       when: (call) => call.path === WISH_ROUTES.detail(WISH_ID),
       error: new FakeApiError(404, 'NOT_FOUND', '愿望不存在'),
     }
     expect((await loadWishMatches(WISH_ID)).status).toBe('notFound')
+  })
+
+  test('403 = 不是当前账号的愿望：forbidden，不能说成「已结束」', async () => {
+    failWith = {
+      when: (call) => call.path === WISH_ROUTES.detail(WISH_ID),
+      error: new FakeApiError(403, 'FORBIDDEN', '无权查看该愿望'),
+    }
+    expect((await loadWishMatches(WISH_ID)).status).toBe('forbidden')
   })
 
   test('网络 / 契约失败：failed（页面给重试），不冒充「已结束」', async () => {

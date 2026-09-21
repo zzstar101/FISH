@@ -46,7 +46,9 @@ export default function Match() {
   const [items, setItems] = useState<MatchView[]>([])
   /** `/matches` 的 `total`：与许愿页卡片同源，计数不用 `items.length`（可能被 limit 截断） */
   const [total, setTotal] = useState(0)
-  const [state, setState] = useState<'loading' | 'ready' | 'notFound' | 'failed'>('loading')
+  const [state, setState] = useState<'loading' | 'ready' | 'notFound' | 'forbidden' | 'failed'>(
+    'loading',
+  )
   /** 逐条的「聊一聊」状态：已发起会话的换成「去会话」 */
   const [started, setStarted] = useState<Record<string, boolean>>({})
 
@@ -88,8 +90,10 @@ export default function Match() {
   }
 
   const wishClosed = wish?.status === 'CLOSED' || wish?.status === 'FULFILLED'
-  /** 「愿望已结束」：后端说不是我的 / 已经没了，或这条愿望本身就是终态 */
+  /** 「愿望已结束」：后端说这条愿望没了（404），或它本身就是终态 */
   const gone = state === 'notFound' || wishClosed
+  /** 403：愿望存在但不是当前账号的 —— 不能说成「已结束」 */
+  const forbidden = state === 'forbidden'
 
   /**
    * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
@@ -138,13 +142,15 @@ export default function Match() {
             ? '加载中'
             : state === 'failed'
               ? '加载失败'
-              : gone
-                ? // 终态 / 目标不存在：`/matches` 对非 ACTIVE 愿望恒为空，别报「0 件」
-                  '已结束'
-                : items.length < total
-                  ? // `limit` 上限 50：超过时 `items` 是子集，如实说明而不是假装这是全部
-                    `${total} 件 · 显示前 ${items.length} 件`
-                  : `${total} 件 · 按匹配度排序`}
+              : forbidden
+                ? '无权查看'
+                : gone
+                  ? // 终态 / 目标不存在：`/matches` 对非 ACTIVE 愿望恒为空，别报「0 件」
+                    '已结束'
+                  : items.length < total
+                    ? // `limit` 上限 50：超过时 `items` 是子集，如实说明而不是假装这是全部
+                      `${total} 件 · 显示前 ${items.length} 件`
+                    : `${total} 件 · 按匹配度排序`}
         </Text>
       </View>
 
@@ -168,17 +174,21 @@ export default function Match() {
           <View className="match__empty-disc">
             <Image className="match__empty-ic" src={ICONS.bellInk} mode="aspectFit" />
           </View>
-          <Text className="match__empty-title">{gone ? '这条愿望已结束' : '还没有匹配到'}</Text>
+          <Text className="match__empty-title">
+            {forbidden ? '无权查看这条愿望' : gone ? '这条愿望已结束' : '还没有匹配到'}
+          </Text>
           <Text className="match__empty-text">
-            {gone
-              ? '已成交或已过有效期，列表不再更新；重新发一条愿望才能继续匹配。'
-              : '命中后会通知你，不用一直盯着这页看'}
+            {forbidden
+              ? '这条愿望不属于当前账号，看不到它的匹配列表。'
+              : gone
+                ? '已成交或已过有效期，列表不再更新；重新发一条愿望才能继续匹配。'
+                : '命中后会通知你，不用一直盯着这页看'}
           </Text>
           <View
             className="match__empty-act"
             onClick={() => void Taro.switchTab({ url: '/pages/wish/index' })}
           >
-            <Text>{gone ? '重新许愿' : '调整预算 / 关键词'}</Text>
+            <Text>{forbidden ? '返回我的愿望' : gone ? '重新许愿' : '调整预算 / 关键词'}</Text>
           </View>
         </View>
       ) : (

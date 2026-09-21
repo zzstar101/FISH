@@ -666,15 +666,18 @@ export type WishMatchResult =
       total: number
       items: MatchView[]
     }
+  /** 404：愿望不存在（或客户端给了非法 id） */
   | { status: 'notFound' }
+  /** 403：愿望不属于当前账号 */
+  | { status: 'forbidden' }
   | { status: 'failed' }
 
 /**
  * 匹配结果页：愿望本身 + 它的命中商品（含卖家）。
  *
- * `notFound` 与 `failed` 分开的理由与商品详情同款：403 / 404 是后端确切的答复
- * （不是我的愿望 / 已经没了），而网络或契约失败是「没问到」，页面该显示重试而不是
- * 「这条愿望已结束」。
+ * 404 / 403 / 其它三分开：404 是「不存在」，403 是「不是你的愿望」（`FORBIDDEN` /
+ * `NOT_TARGET_OWNER`），两者都不该被说成「已成交或已过期」；网络或契约失败是「没问到」，
+ * 页面该显示重试。
  *
  * `total` 与 `items.length` 都回传：页面计数用 `total`（契约明确两者不该互相推导，
  * 见 `matching/schema.ts` 的 `WishMatchListResponseSchema`）。
@@ -699,9 +702,8 @@ export async function loadWishMatches(wishId: string): Promise<WishMatchResult> 
       items: hits.map((hit, index) => ({ ...hit, seller: sellers[index] ?? null })),
     }
   } catch (error) {
-    if (isApiError(error) && (error.status === 403 || error.status === 404)) {
-      return { status: 'notFound' }
-    }
+    if (isApiError(error) && error.status === 403) return { status: 'forbidden' }
+    if (isApiError(error) && error.status === 404) return { status: 'notFound' }
     reportFailure('匹配结果', error, false)
     return { status: 'failed' }
   }
