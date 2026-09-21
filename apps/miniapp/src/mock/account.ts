@@ -42,21 +42,28 @@ type TxSpec = {
   /** 单位：元，×100 成整数分 */
   amount: number
   status: TransactionStatus
+  /** 创建时间距今多少毫秒 */
   agoMs: number
-  timeLabel: string
+  /**
+   * 到达终态（完成 / 取消）距今多少毫秒。**必须小于 `agoMs`**（结果晚于创建）。
+   * 只有 COMPLETED / CANCELLED 需要给；不给则该行的 `completedAt` / `cancelledAt` 为 `null`。
+   */
+  settledAgoMs?: number
 }
 
 /**
- * 6 笔交易，与 A1 设计稿的计数一致（共 6 · 待面交 3 · 已完成 2 · 已取消 1）：
- * 买入 3 笔全为待面交，卖出 1 取消 + 2 已完成。
+ * 11 笔交易，**买卖两个视角各自都能看到三种状态**（Owner 定版：演示时要一次看全
+ * 「待面交 / 已完成 / 已取消」三种卡，所以两侧都补了数据）：
+ * - 我买到的 6 笔：待面交 3 · 已完成 2 · 已取消 1
+ * - 我卖出的 5 笔：待面交 2 · 已完成 2 · 已取消 1
  *
  * 两处刻意的取舍，都为了让**页面内部自洽**（设计稿自述「示例数据为占位」）：
- * 1. `counterpartId` 一律取自商品 fixture 的 `sellerId`，而不是照抄稿子里的占位昵称——
- *    否则头像首字 / 昵称 / 商品归属会对不上（例如稿子里「高数」写张屿，而 fixture 里
- *    这本书属于苏苏，且会话 c-003 也一直是苏苏在聊）。
+ * 1. 买入侧的 `counterpartId` 一律取自商品 fixture 的 `sellerId`，而不是照抄稿子里的
+ *    占位昵称——否则头像首字 / 昵称 / 商品归属会对不上（例如稿子里「高数」写张屿，
+ *    而 fixture 里这本书属于苏苏，且会话 c-003 也一直是苏苏在聊）。
+ *    卖出侧的对方是买家，商品里没有这个字段，按 fixture 里既有的用户 id 写。
  * 2. **交易不带 `conversationId`**：契约的 `TransactionDto` 没有这个字段，会话由
- *    (listingId, 对方) 定位（`openConversation()`，口径同 #72 / PR #82）。原来这里
- *    挂 c-007 ~ c-012 是为了「跳这一笔的会话」，现在由 (listing, 对方) 唯一确定。
+ *    (listingId, 对方) 定位（`openConversation()`，口径同 #72 / PR #82）。
  */
 const TX_SPECS: TxSpec[] = [
   /* —— 我买到的 —— */
@@ -68,7 +75,6 @@ const TX_SPECS: TxSpec[] = [
     amount: 18,
     status: 'PENDING_MEETUP',
     agoMs: 5 * HOUR,
-    timeLabel: '今天 14:20',
   },
   {
     id: 't-102',
@@ -78,7 +84,6 @@ const TX_SPECS: TxSpec[] = [
     amount: 85,
     status: 'PENDING_MEETUP',
     agoMs: 20 * HOUR,
-    timeLabel: '昨天 19:05',
   },
   {
     id: 't-103',
@@ -88,7 +93,37 @@ const TX_SPECS: TxSpec[] = [
     amount: 1050,
     status: 'PENDING_MEETUP',
     agoMs: 30 * 24 * HOUR,
-    timeLabel: '5 月 11 日 11:32',
+  },
+  /* —— 我买到的（已完成 / 已取消，让买入视角也能看全三种状态）—— */
+  {
+    id: 't-107',
+    listingId: 'l-001', // 索尼 WH-1000XM4 头戴降噪耳机（卖家：橙子）
+    role: 'buyer',
+    counterpartId: 'u-chengzi',
+    amount: 720,
+    status: 'COMPLETED',
+    agoMs: 12 * 24 * HOUR,
+    settledAgoMs: 11 * 24 * HOUR,
+  },
+  {
+    id: 't-108',
+    listingId: 'l-004', // 高等数学 同济第七版 上下册（卖家：苏苏）
+    role: 'buyer',
+    counterpartId: 'u-susu',
+    amount: 40,
+    status: 'COMPLETED',
+    agoMs: 18 * 24 * HOUR,
+    settledAgoMs: 17 * 24 * HOUR,
+  },
+  {
+    id: 't-109',
+    listingId: 'l-013', // 斯伯丁篮球 7 号 室内外通用（卖家：周舟）
+    role: 'buyer',
+    counterpartId: 'u-zhou',
+    amount: 80,
+    status: 'CANCELLED',
+    agoMs: 22 * 24 * HOUR,
+    settledAgoMs: 22 * 24 * HOUR - 8 * HOUR,
   },
   /* —— 我卖出的 —— */
   {
@@ -99,7 +134,7 @@ const TX_SPECS: TxSpec[] = [
     amount: 45,
     status: 'COMPLETED',
     agoMs: 27 * 24 * HOUR,
-    timeLabel: '5 月 12 日 18:24',
+    settledAgoMs: 26 * 24 * HOUR, // 创建后一天完成面交
   },
   {
     id: 't-105',
@@ -109,7 +144,7 @@ const TX_SPECS: TxSpec[] = [
     amount: 120,
     status: 'CANCELLED',
     agoMs: 31 * 24 * HOUR,
-    timeLabel: '5 月 9 日 15:02',
+    settledAgoMs: 31 * 24 * HOUR - 6 * HOUR, // 创建后六小时取消
   },
   {
     id: 't-106',
@@ -119,20 +154,45 @@ const TX_SPECS: TxSpec[] = [
     amount: 160,
     status: 'COMPLETED',
     agoMs: 34 * 24 * HOUR,
-    timeLabel: '5 月 6 日 09:48',
+    settledAgoMs: 33 * 24 * HOUR,
+  },
+  /* —— 我卖出的（待面交，让卖出视角也能看全三种状态）—— */
+  {
+    id: 't-110',
+    listingId: 'l-002', // 联想 ThinkPad X280 轻薄本（我卖的）
+    role: 'seller',
+    counterpartId: 'u-lin',
+    amount: 1500,
+    status: 'PENDING_MEETUP',
+    agoMs: 3 * 24 * HOUR,
+  },
+  {
+    id: 't-111',
+    listingId: 'l-012', // 电动车头盔 3C 认证（我卖的）
+    role: 'seller',
+    counterpartId: 'u-qiqi',
+    amount: 40,
+    status: 'PENDING_MEETUP',
+    agoMs: 9 * 24 * HOUR,
   },
 ]
 
-export const TRANSACTIONS: MockTransaction[] = TX_SPECS.map((spec) => ({
-  id: spec.id,
-  listingId: spec.listingId,
-  role: spec.role,
-  counterpartId: spec.counterpartId,
-  amountCents: Math.round(spec.amount * 100),
-  status: spec.status,
-  createdAt: isoAgo(spec.agoMs),
-  timeLabel: spec.timeLabel,
-}))
+export const TRANSACTIONS: MockTransaction[] = TX_SPECS.map((spec) => {
+  // 结果时间：只有终态才有，且与 status 一一对应（镜像契约 `transactionDtoSchema`
+  // 的两条 refine：COMPLETED ⟺ completedAt、CANCELLED ⟺ cancelledAt）
+  const settledAt = spec.settledAgoMs === undefined ? null : isoAgo(spec.settledAgoMs)
+  return {
+    id: spec.id,
+    listingId: spec.listingId,
+    role: spec.role,
+    counterpartId: spec.counterpartId,
+    amountCents: Math.round(spec.amount * 100),
+    status: spec.status,
+    createdAt: isoAgo(spec.agoMs),
+    completedAt: spec.status === 'COMPLETED' ? settledAt : null,
+    cancelledAt: spec.status === 'CANCELLED' ? settledAt : null,
+  }
+})
 
 export const TRANSACTION_BY_ID: Record<string, MockTransaction> = Object.fromEntries(
   TRANSACTIONS.map((tx) => [tx.id, tx]),
@@ -142,24 +202,6 @@ export function transactionsOf(role: 'buyer' | 'seller'): MockTransaction[] {
   return TRANSACTIONS.filter((tx) => tx.role === role).sort(
     (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
   )
-}
-
-export function transactionCounts(role: 'buyer' | 'seller') {
-  const list = transactionsOf(role)
-  return {
-    all: list.length,
-    pending: list.filter((tx) => tx.status === 'PENDING_MEETUP').length,
-    done: list.filter((tx) => tx.status === 'COMPLETED').length,
-    cancelled: list.filter((tx) => tx.status === 'CANCELLED').length,
-  }
-}
-
-/** 全部视角的合计（A1 页头「共 6 笔交易 · 3 笔待面交」） */
-export function transactionOverview() {
-  return {
-    all: TRANSACTIONS.length,
-    pending: TRANSACTIONS.filter((tx) => tx.status === 'PENDING_MEETUP').length,
-  }
 }
 
 /* ---------------------------------------------------------------- 交易码 */

@@ -278,8 +278,13 @@ export default function TransactionMeetup() {
     void Taro.navigateTo({ url: `/pages/conversation/index?id=${tx.conversationId}` })
   }
 
+  /**
+   * 「返回我的订单」：订单页拆成了「我买到的 / 我卖出的」两页，按**本单里我的角色**
+   * 回到对应那页。`tx` 还没加载出来时退到「我买到的」—— 那页至少有「去首页看看」的出口。
+   */
   const goOrders = () => {
-    void Taro.navigateTo({ url: '/pages/orders/index' })
+    const url = tx?.role === 'seller' ? '/pages/orders-sell/index' : '/pages/orders-buy/index'
+    void Taro.navigateTo({ url })
   }
 
   const openScanner = () => {

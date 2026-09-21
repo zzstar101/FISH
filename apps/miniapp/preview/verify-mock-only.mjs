@@ -7,11 +7,11 @@
  * ## 判定口径（2026-09 起，页面开始接后端）
  *
  * 已接真实接口的页面（首页（含分类筛选）/ 搜索 / 商品详情 / 消息 / 我的 /
- * 许愿（含发布页与匹配结果页））：允许请求后端，但**只允许发往 `--api` 指定的地址**
- * （默认 `http://localhost:3000`）。发往别处仍算越界。消息页是「读 + 写」：
- * 通知列表（GET /notifications）与切进「通知」tab 的逐条已读回写
- * （POST /notifications/:id/read）。许愿页是「读 + 写」：GET /wishes、GET /wishes/pool、
- * GET /matches?wishId=、POST /wishes/:id/close；发布页 POST /wishes。
+ * 许愿（含发布页与匹配结果页）/ 我买到的 / 我卖出的）：允许请求后端，但
+ * **只允许发往 `--api` 指定的地址**（默认 `http://localhost:3000`）。发往别处仍算越界。
+ * 消息页是「读 + 写」：通知列表（GET /notifications）与切进「通知」tab 的逐条已读
+ * 回写（POST /notifications/:id/read）。许愿页是「读 + 写」：GET /wishes、
+ * GET /wishes/pool、GET /matches?wishId=、POST /wishes/:id/close；发布页 POST /wishes。
  *
  * 其余页面（出物 / 会话 …）：仍必须**零业务请求** ——
  * 它们的写操作与状态机尚未接接口，一旦偷偷发起请求就说明回退路径被绕过了。
@@ -47,6 +47,8 @@ const ROUTES = [
   '/pages/conversation/index?id=c-001',
   '/pages/conversation/index?id=c-006',
   '/pages/watchers/index',
+  '/pages/orders-buy/index',
+  '/pages/orders-sell/index',
 ]
 
 /**
@@ -56,7 +58,7 @@ const ROUTES = [
 const ALLOW = /^(?:https?:\/\/127\.0\.0\.1:[0-9]+|data:|blob:|file:)/
 /** 业务数据请求的特征：静态源里出现这些路径，说明页面绕过了 mock 直连接口 */
 const DATA_HINT =
-  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/matches|:\d+\/listings|:\d+\/conversations|:\d+\/notifications/i
+  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/matches|:\d+\/listings|:\d+\/conversations|:\d+\/notifications|:\d+\/transactions/i
 
 /**
  * 已接真实接口的页面（见 `src/features/fetchers.ts`；消息页经 `features/chat/api.ts`
@@ -80,6 +82,8 @@ const WIRED = [
   '/pages/wish/index',
   '/pages/wish-publish/index',
   '/pages/match/index',
+  '/pages/orders-buy/index',
+  '/pages/orders-sell/index',
 ]
 
 /** 后端地址：已接接口的页面只允许请求它，发往别处仍算越界 */

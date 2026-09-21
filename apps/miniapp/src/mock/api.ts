@@ -22,8 +22,6 @@ import {
   THEME_OPTIONS,
   TRANSACTION_BY_ID,
   TRANSACTIONS,
-  transactionCounts,
-  transactionOverview,
   transactionsOf,
   userProfile,
   VERIFY,
@@ -510,14 +508,6 @@ export async function fetchOrders(role: ConversationRole): Promise<OrderView[]> 
     return [{ transaction, listing, counterpart: getUser(transaction.counterpartId) }]
   })
   return delay(views)
-}
-
-export function orderCounts(role: ConversationRole) {
-  return transactionCounts(role)
-}
-
-export function orderOverview() {
-  return transactionOverview()
 }
 
 /** 单笔交易视图（A2 面交页用）：找不到交易或商品时返回 null，页面走「目标已失效」态 */
