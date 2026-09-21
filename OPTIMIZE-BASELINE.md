@@ -24,12 +24,12 @@
 
 ## 4. 编译产物（dist/）
 - `miniprogramRoot` = `apps/miniapp/dist`（`project.config.json` 指向）
-- dist 内容：`app.js/wxss/json`、`base.wxml`、22 个页面目录、`custom-tab-bar/`、`assets/`、`common/vendors/taro/runtime` 等。
+- dist 内容：`app.js/wxss/json`、`base.wxml`、20 个页面目录、`custom-tab-bar/`、`assets/`、`common/vendors/taro/runtime` 等。
 - 开发者工具打开 `dist/` 即可预览。
 
 ## 5. 取数策略速览（来自 DESIGN.md / config/index.ts）
 - 数据库源分两类：
-  - **已接真实 API**：首页 / 分类 / 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 + 逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`）—— 走 `src/features/fetchers.ts`（真接口失败 → 退 mock）
+  - **已接真实 API**：首页（含分类筛选）/ 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 + 逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`）—— 走 `src/features/fetchers.ts`（真接口失败 → 退 mock）
   - **仍本地 mock**：许愿 / 消息页的**会话列表** / 会话详情 / 发布 / 订单 / 面交 / 认证 / 设置 等（写操作与状态机尚未接入）
 - `__ALLOW_MOCK_FALLBACK__` 默认关；`TARO_APP_MOCK=1` 或 `NODE_ENV=development` 才开。
 - 生产语义：后端挂掉应显示错误态，而非假数据。

@@ -55,7 +55,7 @@ export async function fetchHomeFeed(): Promise<ListingCard[]> {
   return page.items
 }
 
-/** 分类页：按分类取商品，可指定排序（契约只支持 newest / priceAsc / priceDesc） */
+/** 按分类取商品（首页的分类筛选），可指定排序（契约只支持 newest / priceAsc / priceDesc） */
 export async function fetchCategoryListings(
   category: ListingCategory,
   sort: ListingSort = 'newest',

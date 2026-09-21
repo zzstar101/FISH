@@ -6,7 +6,7 @@
  *
  * ## 判定口径（2026-09 起，页面开始接后端）
  *
- * 已接真实接口的页面（首页 / 分类 / 搜索 / 商品详情 / 消息 / 我的）：
+ * 已接真实接口的页面（首页（含分类筛选）/ 搜索 / 商品详情 / 消息 / 我的）：
  * 允许请求后端，但**只允许发往 `--api` 指定的地址**（默认 `http://localhost:3000`）。
  * 发往别处仍算越界。消息页是「读 + 写」：通知列表（GET /notifications）与
  * 切进「通知」tab 的逐条已读回写（POST /notifications/:id/read）。
@@ -39,8 +39,6 @@ const ROUTES = [
   '/pages/profile/index',
   '/pages/search/index',
   '/pages/search/index?q=键盘',
-  '/pages/category/index',
-  '/pages/category/index?category=BOOKS',
   '/pages/listing-detail/index?id=l-001',
   '/pages/listing-detail/index?id=l-014',
   '/pages/conversation/index?id=c-001',
@@ -67,7 +65,6 @@ const DATA_HINT =
  */
 const WIRED = [
   '/pages/home/index',
-  '/pages/category/index',
   '/pages/search/index',
   '/pages/listing-detail/index',
   '/pages/chat/index',

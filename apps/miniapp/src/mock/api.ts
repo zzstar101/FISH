@@ -33,15 +33,7 @@ import {
   watcherCount,
   watcherStats,
 } from './account'
-import {
-  CATEGORY_ORDER,
-  CATEGORY_TITLE,
-  getListing,
-  LISTING_BY_ID,
-  LISTINGS,
-  SUB_CATEGORIES,
-  similarListings,
-} from './catalog'
+import { getListing, LISTING_BY_ID, LISTINGS, similarListings } from './catalog'
 import {
   CHAT_SUMMARY,
   CONVERSATIONS,
@@ -657,25 +649,6 @@ export function matchedListings(wishId: string): MatchView[] {
 
 export async function fetchMatches(wishId: string): Promise<MatchView[]> {
   return delay(matchedListings(wishId))
-}
-
-/* ---- 分类页（C1） ---- */
-
-export { CATEGORY_ORDER, SUB_CATEGORIES }
-
-export function categoryTitle(category: ListingCategory): string {
-  return CATEGORY_TITLE[category]
-}
-
-/** 一级分类的在售件数（C1 左栏「128 件」） */
-export function categoryCount(category: ListingCategory): number {
-  return LISTINGS.filter((l) => l.category === category && l.status === 'ACTIVE').length
-}
-
-/** 二级分类在售件数（C1 排序行右下角「32 件」） */
-export function subCategoryCount(category: ListingCategory, sub: string): number {
-  return LISTINGS.filter((l) => l.category === category && l.sub === sub && l.status === 'ACTIVE')
-    .length
 }
 
 /* ---- 他人主页（C2，契约无公开资料端点） ---- */

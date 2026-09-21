@@ -7,10 +7,11 @@ import { ICONS } from '@/assets/lib-icons'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
-import { loadHomeFeed } from '@/features/fetchers'
+import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
 import { findUser } from '@/mock/users'
+import { applyLoadResult, homeListState } from './list-state'
 import './index.scss'
 
 /** 瀑布流列宽（设计值 = 2×pt）：750 - 左右各 28 - 列间距 20，再除以 2 */
@@ -37,49 +38,117 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 
 export default function Home() {
   const [items, setItems] = useState<MockListing[]>([])
-  const [loading, setLoading] = useState(true)
+  /**
+   * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过，或上一次加载失败已作废）。
+   *
+   * 与 `category`（用户刚点的那个）分开记：切分类时 `category` 立刻变，但屏幕上还是
+   * 上一个分类的商品，两者不一致的这段时间必须显示加载态 —— 否则选中态已经跳到
+   * 「教材书籍」、下面仍是推荐流的商品，用户会把旧数据当成新分类的结果
+   * （#137 review P1）。`reqSeq` 只防旧响应覆盖新响应，防不了这一层错认。
+   *
+   * 失败时一并作废（置 `null`）：失败后 `items` 已被清空，屏幕上没有属于任何分类的
+   * 有效数据；不置空的话，重试一个「上次成功过」的分类时会闪假空态（见 `resolveLoadedFor`）。
+   *
+   * 下拉刷新重拉的是**当前分类**，两者相等 → 不闪骨架屏，列表原地留着。
+   */
+  const [loadedFor, setLoadedFor] = useState<ListingCategory | 'ALL' | null>(null)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
   const [failed, setFailed] = useState(false)
 
-  const load = async () => {
-    setLoading(true)
+  /**
+   * 当前分类。`ALL` = 首页的「推荐」，不是契约里的枚举值。
+   *
+   * 分类**不是另一个页面**：它与「推荐」同级，在首页原地切换（顶栏与悬浮底栏都保持不变），
+   * 与消息页把通知并进「通知」tab 是同一套做法。
+   */
+  const [category, setCategory] = useState<ListingCategory | 'ALL'>('ALL')
+
+  /**
+   * 请求序号：连点分类时只认**最后一次**发出的结果。
+   *
+   * 用 ref 而不是 state：它只在回调里读写、不参与渲染。没有它的话，先发的请求后返回
+   * 就会覆盖后发的结果 —— 连点「推荐 → 数码 → 教材书籍」时，用户看到的是数码的商品，
+   * 而选中态在教材书籍上。
+   */
+  const reqSeq = useRef(0)
+
+  const load = async (next: ListingCategory | 'ALL') => {
+    const seq = reqSeq.current + 1
+    reqSeq.current = seq
+    // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
+    // 不摘的话切分类时会先闪一下「加载失败」再变骨架屏。
+    setFailed(false)
     // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
-    // 只取「推荐」= 全部：其余分类在这里是**跳转**到分类页（见 onCategoryTap），不在本页停留。
-    const { items: list, failed: nextFailed } = await loadHomeFeed('ALL')
-    setItems(list)
-    setFailed(nextFailed)
-    setLoading(false)
+    // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
+    const { items: list, failed: nextFailed } =
+      next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')
+    // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
+    if (seq !== reqSeq.current) return
+    /*
+      三件套一次结转（纯函数，`./list-state.ts`）。`loadedFor` 的口径：
+      成功 → 置为 `next`；**失败 → 作废为 `null`**（失败时 `items` 已被清成空数组，
+      屏幕上没有属于任何分类的有效数据）。若失败时保留旧值，当失败的目标分类恰是
+      上次成功过的那个时（失败后点「重试」、下拉刷新失败后重试、失败后切回该分类），
+      `loadedFor === category` 成立，请求在途期间 `failed` 已清、`items` 仍为空 →
+      渲染空态「这个分类还没有闲置」，把「没读到」说成「这个分类没货」。作废后
+      `loadedFor !== category` 全程成立，重试期间由骨架屏接管；空态只在**真的成功
+      拿到空列表**时出现。判定逻辑与用例见 `./list-state.ts`。
+    */
+    const applied = applyLoadResult({ requested: next, items: list, failed: nextFailed })
+    setItems(applied.items)
+    setFailed(applied.failed)
+    setLoadedFor(applied.loadedFor)
   }
 
   useLoad(() => {
-    void load()
+    void load('ALL')
   })
 
+  // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
+  // 等于把用户刚选好的分类弄丢了。
   usePullDownRefresh(() => {
-    void load().then(() => Taro.stopPullDownRefresh())
+    void load(category).then(() => Taro.stopPullDownRefresh())
   })
 
   const [left, right] = useMemo(() => splitColumns(items), [items])
+
+  /**
+   * 商品区渲染形态：error / skeleton / empty / list。
+   *
+   * 判定是纯函数（`./list-state.ts`，带用例）：`loadedFor !== category` 时屏幕上的
+   * 列表还没对上用户选的分类 —— 含首次进页（`loadedFor` 为 `null`，`items` 也为空，
+   * 直接走空态判断会先闪一下「这个分类还没有闲置」再出商品）、切分类在途、
+   * 以及加载失败作废后的重试在途。这几种情况都给骨架屏：既不能继续展示上一个
+   * 分类的商品（旧数据冒充新分类），也不能显示空态（「没货」是成功后的结论）。
+   */
+  const listState = homeListState({ loadedFor, category, failed, itemCount: items.length })
 
   const goSearch = () => {
     void Taro.navigateTo({ url: '/pages/search/index' })
   }
 
   /**
-   * 分类圆盘：**进入对应的分类页**，而不是在原地筛瀑布流。
+   * 分类切换：**在原地换一批商品**，不跳页。
    *
-   * 分类页（`pages/category/index.tsx`）本来就读 `?category=` 参数，但此前全仓无人传值，
-   * 是个死参数；这里把它接上。参数只传契约枚举值（`BOOKS` / `DIGITAL` …），
-   * 分类页自己会把「不在枚举内」的值回落到默认分类。
+   * 顶栏与悬浮底栏由首页自己持有，所以分类视图与「推荐」共用它们；
+   * 商品列表按分类重新取数，卡片仍是首页那套瀑布流（`ProductCard`），不换成分类页的自绘卡。
    *
-   * 「推荐」不是分类，它是「全部」——留在首页把瀑布流恢复成完整列表。
+   * 切完回到顶部：用户多半是在吸顶的纯文字条上点的分类（此时页面已滚过一屏），
+   * 不回顶的话新商品从半截开始显示，看不出「换过一批」。
+   *
+   * 重复点**当前**分类不重新取数（没有新信息可拿），但也不是完全 no-op：
+   * 失败态下当作「重试」（否则用户点了没反应，只能去找错误块里的重试按钮），
+   * 成功态下只回顶。两条分支都回顶 —— 与切分类同口径，重试成功后列表从顶部开始。
    */
   const onCategoryTap = (key: ListingCategory | 'ALL') => {
-    if (key === 'ALL') {
-      void load()
+    if (key === category) {
+      if (failed) void load(key)
+      void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
       return
     }
-    void Taro.navigateTo({ url: `/pages/category/index?category=${key}` })
+    setCategory(key)
+    void load(key)
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
   }
 
   /**
@@ -158,8 +227,10 @@ export default function Home() {
             {HOME_CATEGORIES.map((item) => (
               <View
                 key={item.key}
-                // 「推荐」恒为当前项：其余分类点了就跳去分类页，不在本页停留
-                className={`home__cat${item.key === 'ALL' ? ' is-on' : ''}`}
+                // 选中态跟随真实当前分类（此前硬编码「推荐」恒选中）
+                // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child），
+                // 与消息页 tab 的 `chat__tab--${key}` 同一做法
+                className={`home__cat home__cat--${item.key}${item.key === category ? ' is-on' : ''}`}
                 onClick={() => onCategoryTap(item.key)}
               >
                 <View className="home__cat-ic">
@@ -184,8 +255,9 @@ export default function Home() {
               {HOME_CATEGORIES.map((item) => (
                 <View
                   key={item.key}
-                  // 同图标条：「推荐」恒为当前项，其余分类点了跳分类页
-                  className={`home__catnav-item${item.key === 'ALL' ? ' is-on' : ''}`}
+                  // 与图标条同一份选中态来源，两条导航不会各说各话
+                  // `--${key}` 修饰类同样是为了端上自动化能定位到具体一项
+                  className={`home__catnav-item home__catnav-item--${item.key}${item.key === category ? ' is-on' : ''}`}
                   onClick={() => onCategoryTap(item.key)}
                 >
                   <Text className="home__catnav-label">{item.label}</Text>
@@ -197,9 +269,34 @@ export default function Home() {
       ) : null}
 
       <View className="home__grid">
-        {failed ? (
-          <LoadError onRetry={() => void load()} />
-        ) : items.length === 0 && !loading ? (
+        {listState === 'error' ? (
+          <LoadError onRetry={() => void load(category)} />
+        ) : listState === 'skeleton' ? (
+          /*
+            分类切换中 / 首次进页 / 失败后重试在途：列表还没对上当前分类，给骨架屏而不是
+            继续展示上一个分类的商品（#137 review P1），也不是空态（那会被读成「这个分类没货」）。
+          */
+          <View className="waterfall">
+            <View className="waterfall__col">
+              {[0, 1].map((i) => (
+                <View key={`sk-l-${i}`} className="home__skel">
+                  <View className="home__skel-img" />
+                  <View className="home__skel-bar" style={{ width: '76%' }} />
+                  <View className="home__skel-bar" style={{ width: '42%' }} />
+                </View>
+              ))}
+            </View>
+            <View className="waterfall__col">
+              {[0, 1].map((i) => (
+                <View key={`sk-r-${i}`} className="home__skel">
+                  <View className="home__skel-img" />
+                  <View className="home__skel-bar" style={{ width: '68%' }} />
+                  <View className="home__skel-bar" style={{ width: '36%' }} />
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : listState === 'empty' ? (
           <View className="home__empty">
             <Text className="home__empty-title">这个分类还没有闲置</Text>
             <Text className="home__empty-text">换个分类看看，或到许愿墙发一条心愿</Text>

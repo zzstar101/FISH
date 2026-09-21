@@ -2,8 +2,8 @@
  * 契约 `ListingCard` / `ListingDetail` → 页面在用的 `MockListing` 的**投影**。
  *
  * 为什么需要这一层，而不是把页面改成直接消费契约类型：
- * 页面（`product-card`、`home`、`search`、`category`、`listing-detail`）读的是
- * `MockListing` 的字段集合，其中若干项**契约里根本没有**。要改就得同时改 5 个页面
+ * 页面（`product-card`、`home`、`search`、`listing-detail`）读的是
+ * `MockListing` 的字段集合，其中若干项**契约里根本没有**。要改就得同时改 4 个页面
  * 的渲染逻辑与 CSS 依赖，风险大且与设计稿已验收的观感无关。
  * 所以这里做一次显式投影：**契约给得了的用真的，给不了的显式留 `null`**。
  *
