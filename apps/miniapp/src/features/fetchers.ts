@@ -336,9 +336,9 @@ export async function loadConversations(): Promise<LoadedConversations> {
  * 演示构建的 fixture 形状 → 契约 DTO。
  *
  * `MockConversation` 是「契约字段 + mock 专属展示字段」（`kind` / `tag` / `timeLabel` /
- * `mediaPreview`…），但**缺** `listingId` / `createdAt` 两项（`counterpartLastReadAt`
- * 由 #149 加进契约，本分支基线还没有），所以要显式补齐而不是直接断言成
- * `ConversationDto`（断言的失败方式是运行期拿到 `undefined`，而不是编译期报错）。
+ * `mediaPreview`…），但**缺** `listingId` / `createdAt` / `counterpartLastReadAt` 三项，
+ * 所以要显式补齐而不是直接断言成 `ConversationDto`（断言的失败方式是运行期拿到
+ * `undefined`，而不是编译期报错）。
  */
 function toConversationDto(item: MockConversation): ConversationDto {
   return {
@@ -349,6 +349,9 @@ function toConversationDto(item: MockConversation): ConversationDto {
     // 多出来的 mock 专属 authStatus 结构上可赋给 ConversationUser，不需要逐字段重建
     counterpart: item.counterpart,
     unreadCount: item.unreadCount,
+    // fixture 没有「对方读到哪」这个概念（每个会话只有一条本地读位），给 null：
+    // 逐条「已读」的渲染在 Step 3 接 `conversation.read` 时才用得上
+    counterpartLastReadAt: null,
     lastMessage: item.lastMessage,
     lastMessageAt: item.lastMessageAt,
     createdAt: item.lastMessageAt,
