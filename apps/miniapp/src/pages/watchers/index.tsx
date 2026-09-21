@@ -6,6 +6,7 @@ import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
+import { watcherBudgetLabel } from '@/features/watchers/budget'
 import { watcherStatsOf } from '@/features/watchers/stats'
 import {
   fetchWatchers,
@@ -29,6 +30,9 @@ import './index.scss'
  * **预算中位数的口径**（稿子原文：「中位数按已填预算的 12 人计算 · 6 人未填预算不计入」）：
  * 只对**填了预算**的人求中位数，未填的人不计入分母也不参与排序。
  * 一个人都没填时中位数返回 null，页面显示「暂缺」——这不是错误态，是正常结果。
+ *
+ * **行上的预算文案**（`@/features/watchers/budget`）：没填预算（`null`）显示「未填预算」，
+ * 真的填了 0 元显示「预算 ¥0」——两者不是一回事，已注销的行也一样，不再把 `null` 当 0。
  *
  * **三种行状态**（稿子第 02 帧；稿里第 3 种「未公开院系」随地址信息一起去掉）：
  * 1. 已聊过 → 动作换成「继续聊」（`chattedCount > 0`）；
@@ -324,14 +328,14 @@ export default function Watchers() {
                       ) : null}
                     </View>
 
+                    {/*
+                      两种行状态共用 `watcherBudgetLabel()`：`null`（没填）与 `0`（真的填了 0 元）
+                      必须分开。此前已注销行写的是 `budgetCents ?? 0`，会把「没填」显示成「预算 ¥0」。
+                    */}
                     <Text className="wt__meta num">
                       {dead
-                        ? `账号已注销 · 预算 ¥${formatAmount(item.budgetCents ?? 0)} · ${item.timeLabel}`
-                        : `${
-                            item.budgetCents === null
-                              ? '未填预算'
-                              : `预算 ¥${formatAmount(item.budgetCents)}`
-                          } · ${item.timeLabel}`}
+                        ? `账号已注销 · ${watcherBudgetLabel(item.budgetCents)} · ${item.timeLabel}`
+                        : `${watcherBudgetLabel(item.budgetCents)} · ${item.timeLabel}`}
                     </Text>
 
                     {dead ? (
