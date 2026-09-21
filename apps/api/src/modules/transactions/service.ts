@@ -212,7 +212,7 @@ export function createTransactionService({
   /**
    * QR 核销与 6 位码核销共用：除出示的凭证串与比对列不同外，校验顺序与错误码一致。
    * 顺序 = 参与者(404) → 终态(409) → 非消费方(403) → 无凭证(404) → 锁定(429) →
-   * 原子核销（ok / consumed / expired / locked / invalid）。
+   * 原子核销（ok / consumed / locked / invalid；#147 无 expired）。
    */
   async function consumeMeetup(
     userId: string,
@@ -464,6 +464,17 @@ export function createTransactionService({
       if (!isTransactionId(id)) throw notFound()
       const row = await store.findById(id)
       if (!row || (row.buyer_id !== userId && row.seller_id !== userId)) throw notFound()
+      // #147：终态以**交易**为唯一真相。终态时凭证行必已同事务删除，这里再显式判一次
+      // 交易状态，保证「凭证行仍在」（迁移前遗留的旧行 / 任何未来漂移）也不会让卖家
+      // 页面显示「有效」而后端实际已失效——即不出现「页面显示有效、后端已过期」。
+      if (row.status !== 'PENDING_MEETUP') {
+        return meetupTokenStatusResponseSchema.parse({
+          transactionId: id,
+          status: 'NONE',
+          consumedAt: null,
+          consumedBy: null,
+        })
+      }
       const tokenRow = await store.findMeetupToken(id)
       if (!tokenRow) {
         return meetupTokenStatusResponseSchema.parse({

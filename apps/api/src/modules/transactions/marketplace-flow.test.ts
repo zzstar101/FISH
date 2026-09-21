@@ -852,6 +852,31 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(await json<{ error: { code: string } }>(afterRedeem)).toMatchObject({
       error: { code: 'TRANSACTION_NOT_IN_PENDING' },
     })
+
+    // #147 终态守卫：迁移前遗留的凭证行（终态交易上仍存在）不能让卖家页面显示「有效」。
+    // 直接 INSERT 一行模拟旧数据（migration 生成文件不可手改，故用守卫兜住遗留行）。
+    await db.execute(sql`
+      INSERT INTO transaction_meetup_tokens (transaction_id, token_hash, code_hash, issued_by)
+      VALUES (${transactionId}, ${'legacy'.repeat(10)}, ${'stale'.repeat(10)}, ${await userIdOf(SELLER_NO)})
+    `)
+    const legacyStatus = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
+    )
+    expect(legacyStatus.status).toBe('NONE')
+    // 遗留行也救不活核销：终态仍是 409
+    const legacyRedeem = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(legacyRedeem.status).toBe(409)
+    expect(await json<{ error: { code: string } }>(legacyRedeem)).toMatchObject({
+      error: { code: 'TRANSACTION_NOT_IN_PENDING' },
+    })
+    // 清理遗留行，避免影响后续用例对凭证表行数的断言
+    await db.execute(
+      sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+    )
   })
 
   test('非法终态转换：COMPLETED 上 cancel 被拒，商品不被回退', async () => {

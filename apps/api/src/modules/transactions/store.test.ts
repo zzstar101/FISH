@@ -3,7 +3,7 @@ import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlMessageStore } from '../messages/store'
-import { createSqlTransactionStore, type TransactionRow } from './store'
+import { createSqlTransactionStore, MeetupConsumeRaceError, type TransactionRow } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -427,6 +427,19 @@ describe('meetup token store (integration, #70)', () => {
       listing: '01990000-0000-7000-8000-0000000000ca',
       conversation: '01990000-0000-7000-8000-0000000000e2',
     },
+    // #147 核销 × 取消并发（锁序回归）：三组独立场景，重复并发以降低偶然性
+    redeemRaceA: {
+      listing: '01990000-0000-7000-8000-0000000000cb',
+      conversation: '01990000-0000-7000-8000-0000000000e3',
+    },
+    redeemRaceB: {
+      listing: '01990000-0000-7000-8000-0000000000cc',
+      conversation: '01990000-0000-7000-8000-0000000000e4',
+    },
+    redeemRaceC: {
+      listing: '01990000-0000-7000-8000-0000000000cd',
+      conversation: '01990000-0000-7000-8000-0000000000e5',
+    },
   } as const
 
   const TOKEN_HASH = 'a'.repeat(64)
@@ -568,7 +581,7 @@ describe('meetup token store (integration, #70)', () => {
     expect(result.kind).toBe('ok')
   })
 
-  test('#147 终态销毁：cancel 同事务删凭证行；旧码核销 → not-found（不再是 expired/consumed）', async () => {
+  test('#147 终态销毁：cancel 同事务删凭证行；旧码核销 → 竞态错误（service 映射 409）', async () => {
     const txId = await createPendingTx(scenarios.race)
     await store.upsertMeetupToken(txId, {
       tokenHash: TOKEN_HASH,
@@ -578,8 +591,11 @@ describe('meetup token store (integration, #70)', () => {
     expect(await store.findMeetupToken(txId)).not.toBeNull()
     await store.cancel(txId, buyer1)
     expect(await store.findMeetupToken(txId)).toBeNull() // 行已随 cancel 删除
-    const result = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
-    expect(result.kind).toBe('not-found')
+    // 终态核销：锁内状态守卫抛竞态错误（不是 not-found），service 据此给
+    // 409 TRANSACTION_NOT_IN_PENDING —— 与终态语义一致，不退化成「没有凭证」。
+    await expect(
+      store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH }),
+    ).rejects.toBeInstanceOf(MeetupConsumeRaceError)
   })
 
   test('买家已单侧确认后核销 → 同事务推进 COMPLETED + listing SOLD（审查 F1）', async () => {
@@ -653,6 +669,48 @@ describe('meetup token store (integration, #70)', () => {
       expect(tokenRow).toBeNull()
     } else {
       expect(tokenRow?.token_hash).toBe(TOKEN_HASH)
+    }
+  })
+
+  test('#147 核销 × 取消并发：统一锁序（先交易行后凭证行）不死锁，终态必销毁凭证', async () => {
+    // 修复前：核销先锁凭证行、再锁交易行，而 cancel / confirm 先锁交易行、再 DELETE
+    // 凭证行 → AB-BA 死锁（40P01），客户端拿 500。修复后两者都先锁交易行。
+    // 死锁是否触发取决于具体交错，因此这里重复 3 组独立场景提高检出率。
+    const settle = async <T>(promise: Promise<T>) => {
+      try {
+        return { ok: true as const, value: await promise }
+      } catch (error) {
+        return { ok: false as const, error }
+      }
+    }
+
+    for (const scenario of [scenarios.redeemRaceA, scenarios.redeemRaceB, scenarios.redeemRaceC]) {
+      const txId = await createPendingTx(scenario)
+      await store.upsertMeetupToken(txId, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+      })
+
+      const [redeem, cancelOut] = await Promise.all([
+        settle(store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })),
+        settle(store.cancel(txId, seller)),
+      ])
+
+      // 不变量 1：没有一方因死锁（或任何非预期错误）失败。
+      // 核销唯一可接受的失败是「持锁时交易已离开 PENDING」的竞态错误。
+      if (!redeem.ok) expect(redeem.error).toBeInstanceOf(MeetupConsumeRaceError)
+      // 不变量 2：PENDING 上的 cancel 不受凭证影响，必然成功（#11 冻结语义）
+      expect(cancelOut.ok).toBe(true)
+      if (!cancelOut.ok) throw new Error('unreachable')
+      expect(cancelOut.value.kind).toBe('ok')
+
+      // 不变量 3：无论谁先拿到交易行锁，终态迁移都必然销毁凭证行
+      expect(await store.findMeetupToken(txId)).toBeNull()
+      const tx = rows(
+        await db.execute(sql`SELECT status::text AS status FROM transactions WHERE id = ${txId}`),
+      )[0] as { status: string }
+      expect(tx.status).toBe('CANCELLED')
     }
   })
 

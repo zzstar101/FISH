@@ -598,6 +598,23 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
 
     async consumeMeetupToken(transactionId, userId, presented) {
       return db.transaction(async (tx) => {
+        // #147 锁序：**先交易行、后凭证行**，与 cancel / confirm / upsert 完全一致。
+        // cancel / confirm 现在会在同一事务里 DELETE 凭证行（它们先锁交易行），若核销
+        // 反向先锁凭证行再锁交易行，redeem × cancel 并发就是 AB-BA 死锁（40P01 →
+        // 客户端 500）。统一锁序后，核销与终态迁移在交易行锁上串行化，既消除死锁，
+        // 也让下面「stamp 落 0 行」的窗口不再可达（保留为防御性兜底）。
+        const locked = await tx.execute(sql`
+          SELECT id, status::text AS status FROM transactions
+          WHERE id = ${transactionId} FOR UPDATE
+        `)
+        const lockedRow = rowsOf(locked)[0]
+        if (!lockedRow) return { kind: 'not-found' }
+        // 终态核销与 service 的 409 口径一致：拿到交易行锁后交易已离开 PENDING_MEETUP
+        // （service 前置检查之后、取锁之前被 cancel/complete 抢先）时抛同一错误，
+        // 由 service 映射成 409 TRANSACTION_NOT_IN_PENDING，而不是退化成 404。
+        if (lockedRow.status !== 'PENDING_MEETUP') {
+          throw new MeetupConsumeRaceError(transactionId)
+        }
         // 条件更新承担全部竞态：明文哈希匹配 + 未消费 + 未锁定（#147：无过期路径，
         // 凭证在 PENDING_MEETUP 生命周期内有效），并发重复核销时只有一者拿到行，
         // 其余落到下方按行状态诊断。
@@ -615,7 +632,8 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         const okRow = rowsOf(consumed)[0]
         if (okRow) {
           // 展示码 = 卖家对面交的同意：同一事务里盖卖家确认（已值保持，COALESCE 幂等）。
-          // 0 行 = 交易在窗口期离开 PENDING_MEETUP —— 抛错回滚核销，交 service 重读定论。
+          // 交易行锁自事务开头持有，状态在锁内已校验为 PENDING_MEETUP，故这里必然命中；
+          // 0 行仅作防御（不可达），仍抛同一错误交 service 定论。
           const stamped = await tx.execute(sql`
             UPDATE transactions
             SET seller_confirmed_at = COALESCE(seller_confirmed_at, now()), updated_at = now()
