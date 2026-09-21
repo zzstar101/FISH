@@ -8,6 +8,7 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
 import {
   confirmTransaction,
   fetchMeetupTokenStatus,
@@ -97,6 +98,9 @@ type FxPhase = 'off' | 'on'
 
 export default function TransactionMeetup() {
   const authStatus = useAuthGuard()
+  const { user } = useAuth()
+  /** 身份驱动 bootstrap（#89 审查收口）：冷启动 `unknown` 时绝不发请求 */
+  const userId = user?.id ?? null
   const router = useRouter<{ id?: string; code?: string }>()
   const routeTxId = router.params.id ?? ''
   const routeCode = router.params.code ?? ''
@@ -124,6 +128,8 @@ export default function TransactionMeetup() {
   const [fxPhase, setFxPhase] = useState<FxPhase>('off')
   /** 扫到的 QR 凭证在 useLoad 里解释一次，命令式流程经 scanRef 读取 */
   const scanRef = useRef<MeetupQrPayload | null>(null)
+  /** bootstrap 代次：身份切换 / 重试后，旧账号或旧一轮的迟到响应一律作废 */
+  const bootEpoch = useRef(0)
 
   /* ------------------------------------------------------------------ 加载 */
 
@@ -137,15 +143,19 @@ export default function TransactionMeetup() {
         setScannedInvalid(true)
       }
     }
-    void bootstrap()
   })
 
   /**
    * 定位交易：扫码 QR 自带的 transactionId **优先**于 URL id —— 凭证是当面出示的
    * 那一枚；买家从订单 A 进入却扫了订单 B 的码时，核销必须落在 B（且 participant
    * 校验会拦下与本单无关的人）。再按角色进入出示/核销分支。
+   *
+   * 由**登录态与身份驱动**（下方 effect），不在 `useLoad` 里抢跑：冷启动
+   * `authStatus` 还是 `unknown` 时就发 `fetchTransaction`，会先以未登录身份失败
+   * （401），随后恢复 `authed` 也不会自动重试 —— 页面停在「加载失败」且没有出口。
+   * `authed` 后才发，`unknown → authed` 自然触发首次定位。
    */
-  const bootstrap = async () => {
+  const bootstrap = async (epoch: number) => {
     const qrTxId = scanRef.current?.transactionId ?? ''
     const targetId = qrTxId || routeTxId
     if (!targetId) {
@@ -154,7 +164,10 @@ export default function TransactionMeetup() {
     }
     try {
       const dto = await fetchTransaction(targetId)
+      // 迟到的响应（重试期间又换了账号 / 又点了一次）不能写回页面
+      if (epoch !== bootEpoch.current) return
       setTx(dto)
+      setLoadError(null)
       if (dto.status !== 'PENDING_MEETUP') return // 终态直接渲染对应状态卡
       if (dto.role === 'buyer') {
         // 恢复口径（审查第三轮 P1）：sellerConfirmedAt **不能**等同「凭证已核销」
@@ -163,6 +176,7 @@ export default function TransactionMeetup() {
         // 确认入口；NONE/ISSUED/EXPIRED 一律仍要求扫码 / 手输核销。
         if (dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
           const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
+          if (epoch !== bootEpoch.current) return
           if (tokenStatus?.status === 'CONSUMED') {
             setConfirmPending(true)
             return
@@ -178,9 +192,40 @@ export default function TransactionMeetup() {
         void issue(dto.id)
       }
     } catch (error) {
+      if (epoch !== bootEpoch.current) return
       setLoadError(isApiError(error) && error.status === 404 ? 'notFound' : 'failed')
     }
   }
+
+  /** bootstrap 的触发与身份切换清场（#89 审查收口）： */
+  const identityRef = useRef<string | null>(null)
+  if (identityRef.current !== userId) {
+    identityRef.current = userId
+    // 渲染期同步自增代次：上一个账号在飞的响应在微任务窗口里就被判过期
+    bootEpoch.current += 1
+    // 换账号回到这页时，上一账号的交易、凭证、输入与错误全部作废
+    setTx(null)
+    setToken(null)
+    setLoadError(null)
+    setConfirmPending(false)
+    setDigits(['', '', '', '', '', ''])
+    setInputError('')
+  }
+
+  /**
+   * `authed` 且身份已知才定位交易；`unknown → authed` 自动补跑，失败后重试也走这里。
+   *
+   * `bootstrap` 不进依赖表：它是每次渲染重建的普通函数，读的只有路由参数（页面参数
+   * 不会在存活期变化）与 ref，把它加进依赖等于每次渲染都重跑 effect —— 这不是触发
+   * 口径想要的（触发只由登录态与身份决定），stale closure 在这里并不成立。
+   */
+  const bootstrapRef = useRef(bootstrap)
+  bootstrapRef.current = bootstrap
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null) return
+    const epoch = bootEpoch.current
+    void bootstrapRef.current(epoch)
+  }, [authStatus, userId])
 
   /* ------------------------------------------------- 卖家：签发 */
 
@@ -528,6 +573,16 @@ export default function TransactionMeetup() {
           </View>
           <Text className="meetup__varcard-title">加载失败</Text>
           <Text className="meetup__varcard-text">网络不给力，请稍后重试。</Text>
+          <View className="meetup__varcard-acts">
+            {/* 冷启动认证恢复后的那次定位也可能撞上网络失败 —— 没有「重试」的话
+                页面就停在死局（#168 审查阻塞点 2）。重试与首次定位同走 bootstrap。 */}
+            <View
+              className="meetup__btn meetup__btn--sec"
+              onClick={() => void bootstrap(bootEpoch.current)}
+            >
+              <Text>重试</Text>
+            </View>
+          </View>
         </View>
       ) : null}
 
