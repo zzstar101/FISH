@@ -353,6 +353,21 @@
   font-size: var(--fs-sm);
 }
 
+/* 「加载更多会话」/ 更早一页失败重试：列表尾部居中一颗胶囊 */
+.chat__more {
+  display: flex;
+  justify-content: center;
+  padding: 20px 0 8px;
+}
+
+.chat__more-btn {
+  padding: 12px 32px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
+  font-size: 23px;
+  color: var(--muted-2);
+}
+
 /* ------------------------------------------------------ 通知列表（「通知」tab 直显） */
 
 /**

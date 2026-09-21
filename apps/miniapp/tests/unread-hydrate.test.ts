@@ -23,9 +23,8 @@ mock.module('@/features/chat/api', () => ({
   fetchConversationUnreadCount: () => convResult(),
 }))
 
-const { clearUnread, hydrateUnread, publishUnread, unreadSnapshot } = await import(
-  '../src/features/chat/unread'
-)
+const { badgeShouldLight, clearUnread, hydrateUnread, publishUnread, unreadSnapshot } =
+  await import('../src/features/chat/unread')
 
 /** store 是模块级单例：每个用例前把内部快照清掉，避免互相污染 */
 beforeEach(() => {
@@ -54,17 +53,19 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.conversations).toBe(4)
   })
 
-  test('真实构建：两个接口都失败 → 通知记 null（不知道）、会话记 0，都不拿 fixture 顶替', async () => {
+  test('真实构建：两个接口都失败 → 两项都记「不知道」（null），不拿 fixture 顶替', async () => {
     notifResult = () => Promise.reject(new Error('network down'))
     convResult = () => Promise.reject(new Error('network down'))
 
     hydrateUnread('u-alan')
     await flush()
 
-    // 关键：不是 fixture 的数字。`null` = 不知道 → 底栏按「无已知未读」算，
-    // 不会亮幽灵红点，也不会把 fixture 的数字冒充成真实未读
+    // 关键：不是 fixture 的数字，也不是 0。两者都是「不知道」→ 底栏按「无已知未读」算，
+    // 不会亮幽灵红点，也不会把 fixture 的数字冒充成真实未读。
+    // 会话那一项尤其不能用 0：0 是「确定没有未读」这个具体结论，会把上一份正确的
+    // 快照覆盖掉，用户明明还有未读、红点却熄了。
     expect(unreadSnapshot()?.notifications).toBeNull()
-    expect(unreadSnapshot()?.conversations).toBe(0)
+    expect(unreadSnapshot()?.conversations).toBeNull()
   })
 
   test('演示 / 开发构建：失败的那一项用调用方注入的兜底，成功的那一项仍用真值', async () => {
@@ -149,5 +150,30 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.ownerId).toBe('u-b')
     expect(unreadSnapshot()?.notifications).toBe(5)
     expect(unreadSnapshot()?.conversations).toBe(2)
+  })
+})
+
+describe('未读快照 · 底栏红点判定', () => {
+  test('任何一项已知未读 > 0 → 亮', () => {
+    expect(badgeShouldLight({ conversations: 1, notifications: 0, previous: false })).toBe(true)
+    expect(badgeShouldLight({ conversations: 0, notifications: 3, previous: false })).toBe(true)
+    expect(badgeShouldLight({ conversations: null, notifications: 2, previous: false })).toBe(true)
+  })
+
+  test('两项都已知且都是 0 → 熄', () => {
+    expect(badgeShouldLight({ conversations: 0, notifications: 0, previous: true })).toBe(false)
+  })
+
+  test('有分量「不知道」且没有已知未读 → 保持上一帧，不熄掉已知的红点', () => {
+    // 这是 `null` 存在的意义：接口失败时按 0 算，会把用户真实存在的未读红点熄掉
+    expect(badgeShouldLight({ conversations: null, notifications: 0, previous: true })).toBe(true)
+    expect(badgeShouldLight({ conversations: 0, notifications: null, previous: true })).toBe(true)
+    expect(badgeShouldLight({ conversations: null, notifications: null, previous: true })).toBe(
+      true,
+    )
+    // 上一帧本来就是熄的，也不该因为「不知道」而无中生有
+    expect(badgeShouldLight({ conversations: null, notifications: null, previous: false })).toBe(
+      false,
+    )
   })
 })

@@ -29,23 +29,30 @@
  * （登录后重拉、发布后失效），而当前页面每次进入都重新加载，够用。
  */
 import type { Me } from '@fish/contracts/auth/user'
-import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
-import { isUnauthenticatedError } from '@/lib/request'
+import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
 import { type ListingDetailView, myWishes } from '@/mock/api'
 import type {
   MockConversation,
   MockListing,
+  MockMessage,
   MockNotification,
   MockUser,
   MockWish,
   SearchFilter,
 } from '@/mock/types'
-import { fetchConversations, fetchNotifications, markNotificationRead } from './chat/api'
+import {
+  fetchConversation,
+  fetchConversationPage,
+  fetchMessagePage,
+  fetchNotifications,
+  markNotificationRead,
+} from './chat/api'
 import { failureText, isNetworkFailure, mergeMarkReadResults } from './chat/notif-read'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
@@ -311,24 +318,43 @@ export async function markNotificationsRead(items: MockNotification[]): Promise<
 
 /* --------------------------------------------------------------- 会话 */
 
-/** 会话列表的加载结果：`failed` 时页面显示错误态而不是空态 */
-export type LoadedConversations = { items: ConversationDto[]; failed: boolean }
+/** 会话列表一页的加载结果：`failed` 时页面显示错误态而不是空态 */
+export type LoadedConversations = {
+  items: ConversationDto[]
+  /** null = 已到最后一页 */
+  nextCursor: string | null
+  failed: boolean
+}
 
 /**
- * 会话列表（#89：Chat 页不再从 fixture 读会话）。
+ * 会话列表（#89：Chat 页不再从 fixture 读会话）。`cursor` 传上一页的 `nextCursor`。
  *
  * 与通知列表同一口径：真实接口优先；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，
  * 本地没有后端）才退回 fixture，生产失败如实返回 `failed: true` 由页面显示错误态 +
  * 重试，**不拿 fixture 顶替** —— 假会话比错误态更糟。
  */
-export async function loadConversations(): Promise<LoadedConversations> {
+export async function loadConversations(cursor?: string): Promise<LoadedConversations> {
   try {
-    return { items: await fetchConversations(), failed: false }
+    const page = await fetchConversationPage(cursor)
+    return { items: page.items, nextCursor: page.nextCursor, failed: false }
   } catch (error) {
     reportFailure('会话列表', error)
-    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true }
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
     const { conversations: mockConversations } = await import('@/mock/api')
-    return { items: mockConversations().map(toConversationDto), failed: false }
+    return {
+      /**
+       * fixture 里的「系统会话」（`kind === 'system'`）是契约外的展示扩展：它不是
+       * (商品, 买家×卖家) 的会话，`counterpart` 就是当前用户自己。本轮已按 Owner
+       * 决策删掉系统会话行 —— 兜底里不滤掉它，就会在演示构建里以「和自己聊天的
+       * 会话行」复活，而且与底栏兜底的口径分叉。
+       */
+      items: mockConversations()
+        .filter((item) => item.kind !== 'system')
+        .map(toConversationDto),
+      // fixture 没有分页
+      nextCursor: null,
+      failed: false,
+    }
   }
 }
 
@@ -355,6 +381,114 @@ function toConversationDto(item: MockConversation): ConversationDto {
     lastMessage: item.lastMessage,
     lastMessageAt: item.lastMessageAt,
     createdAt: item.lastMessageAt,
+  }
+}
+
+/** 会话详情：`missing`（真的没这条会话）与 `failed`（没读到）必须分开 */
+export type LoadedConversation =
+  | { status: 'ok'; conversation: ConversationDto }
+  | { status: 'missing' }
+  | { status: 'failed' }
+
+export async function loadConversation(conversationId: string): Promise<LoadedConversation> {
+  try {
+    return { status: 'ok', conversation: await fetchConversation(conversationId) }
+  } catch (error) {
+    // 404 CONVERSATION_NOT_FOUND：不存在，或查看者不是参与者（服务端刻意不区分，不泄漏存在性）
+    if (isApiError(error) && error.code === 'CONVERSATION_NOT_FOUND') return { status: 'missing' }
+    reportFailure('会话详情', error)
+    if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
+    const { conversation: mockConversation } = await import('@/mock/api')
+    const found = mockConversation(conversationId)
+    return found ? { status: 'ok', conversation: toConversationDto(found) } : { status: 'missing' }
+  }
+}
+
+/** 一页历史消息的加载结果：`nextCursor === null` 表示已到最早一页 */
+export type LoadedMessagePage = {
+  items: MessageDto[]
+  nextCursor: string | null
+  failed: boolean
+}
+
+export async function loadMessagePage(
+  conversationId: string,
+  before?: string,
+): Promise<LoadedMessagePage> {
+  try {
+    const page = await fetchMessagePage(conversationId, before)
+    return { items: page.items, nextCursor: page.nextCursor, failed: false }
+  } catch (error) {
+    reportFailure('消息历史', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
+    if (before) {
+      /**
+       * 演示构建回落时 fixture 里**没有分页**，所以「更早一页」无从给出。
+       *
+       * 这里必须报 `failed: true` 而不是 `failed: false, nextCursor: null` ——
+       * 后者是在断言「已经到最早一页了」，而事实是「这一页没读到」；混装场景
+       * （首屏走真实接口拿到游标、更早一页请求失败落到这里）下会静默抽掉翻页入口，
+       * 用户既看不到更早的消息、也看不到任何错误。
+       */
+      return { items: [], nextCursor: null, failed: true }
+    }
+    const {
+      conversation: mockConversation,
+      messages: mockMessages,
+      ME: mockMe,
+    } = await import('@/mock/api')
+    const found = mockConversation(conversationId)
+    if (!found) return { items: [], nextCursor: null, failed: false }
+    /**
+     * fixture 的「我」是 mock 的 `ME`（u-alan），而演示构建里当前登录身份是
+     * `DEMO_USER`。契约的 `senderId` 决定气泡画在左边还是右边，所以要把非对方的
+     * 发送者对齐到当前身份，否则 fixture 里「我」发的消息会画到对方那一侧。
+     */
+    const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : mockMe
+    return {
+      items: mockMessages(conversationId).map((item) => toMessageDto(item, found, viewer)),
+      nextCursor: null,
+      failed: false,
+    }
+  }
+}
+
+/** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
+type ViewerLike = { id: string; nickname: string; avatarUrl: string | null }
+
+/**
+ * 演示构建的 fixture 消息 → 契约 `MessageDto`。
+ *
+ * 契约对 TEXT 有联合完整性约束（`senderId` 与 `sender` 都必须非空，
+ * `messageDtoSchema` 的 refine 同源），而 fixture 只存 `senderId`，
+ * 所以要按「这条是不是对方发的」补出 `sender`。`senderId` 也要一起对齐到
+ * `viewer`（见调用点的说明）。
+ */
+function toMessageDto(
+  item: MockMessage,
+  conversation: MockConversation,
+  viewer: ViewerLike,
+): MessageDto {
+  const fromCounterpart = item.senderId !== null && item.senderId === conversation.counterpart.id
+  const senderId = item.senderId === null ? null : fromCounterpart ? item.senderId : viewer.id
+  const sender =
+    senderId === null
+      ? null
+      : fromCounterpart
+        ? {
+            id: conversation.counterpart.id,
+            nickname: conversation.counterpart.nickname,
+            avatarUrl: conversation.counterpart.avatarUrl,
+          }
+        : { id: viewer.id, nickname: viewer.nickname, avatarUrl: viewer.avatarUrl }
+  return {
+    id: item.id,
+    conversationId: item.conversationId,
+    senderId,
+    sender,
+    type: item.type,
+    content: item.content,
+    createdAt: item.createdAt,
   }
 }
 

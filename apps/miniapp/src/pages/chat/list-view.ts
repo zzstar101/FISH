@@ -1,5 +1,6 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import { formatAmount } from '@/lib/money'
+import { localDayIndex, WEEKDAY } from '@/lib/time'
 
 /**
  * 会话列表的取数与渲染逻辑（#89：Chat 页从 fixture 改为真实 `GET /conversations`）。
@@ -36,6 +37,18 @@ export function chatListState(input: {
 export const EMPTY_PREVIEW = '还没有消息，打个招呼吧'
 
 /**
+ * 角标数字的显示上限：超过 99 一律显示 `99+`。
+ *
+ * 1版稿的角标是窄胶囊，三四位数字会把行高与宽度撑变形；而且未读本来就是「有多少」
+ * 的提示而非精确账目。注意这只是**显示**口径 —— 求和本身是多少仍然照算。
+ */
+const BADGE_MAX = 99
+
+export function badgeText(count: number): string {
+  return count > BADGE_MAX ? '99+' : String(count)
+}
+
+/**
  * 会话行的消息预览。
  *
  * 交易类 SYSTEM 消息的 `content` 是契约里的 JSON 原文
@@ -65,20 +78,6 @@ export function previewOf(item: ConversationDto): string {
     // 不是 JSON：按普通文本渲染
   }
   return last.content
-}
-
-/** 星期几的中文单字，下标与 `Date.getDay()` 对齐（0 = 周日） */
-const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
-
-/**
- * 本地日历日序号。
- *
- * 必须按**本地日历日**算，不能用「距今多少小时 / 24」：否则 23:00 的消息在次日
- * 01:00 只差 2 小时，会被算成「今天」，而用户认知里已经是昨天。
- */
-function localDayIndex(ms: number): number {
-  const date = new Date(ms)
-  return Math.floor((ms - date.getTimezoneOffset() * 60_000) / 86_400_000)
 }
 
 /**

@@ -28,10 +28,13 @@ export type UnreadSnapshot = {
   ownerId: string
   /**
    * 会话未读**条数和**（Chat 页会话列表的口径）。两个来源同源：Chat 页发布自己
-   * 那份真实列表的求和，冷启动由 `hydrateUnread` 拉 `GET /conversations` 求和；
-   * 拿不到时记 0（「不知道」，与页内失败态同口径），不拿 fixture 顶替。
+   * 那份真实列表的求和，冷启动由 `hydrateUnread` 拉 `GET /conversations` 求和。
+   *
+   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算。
+   * 不能用 0 表达「不知道」：那会把上一份正确的快照覆盖成「没有未读」，用户明明
+   * 还有未读、底栏那颗点却熄了。两个字段的「不知道」必须同一种表达。
    */
-  conversations: number
+  conversations: number | null
   /**
    * 通知未读数（Chat 页「通知」tab 角标同源：切进 tab 即 0）；
    * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算
@@ -42,6 +45,29 @@ export type UnreadSnapshot = {
 
 let snapshot: UnreadSnapshot | null = null
 const listeners = new Set<() => void>()
+
+/**
+ * 底栏「消息」红点该不该亮。
+ *
+ * 规则（也是「不知道」这个态存在的意义）：
+ * 1. 只要有任何一项**已知**未读 > 0 → 亮；
+ * 2. 两项都已知且都是 0 → 熄；
+ * 3. 有分量「不知道」且没有已知未读 → **保持上一帧**，不下「没有未读」这个结论。
+ *
+ * 第 3 条是关键：接口失败 / 列表还没到手时如果按 0 算，一颗本来亮着的点会莫名其妙
+ * 熄掉，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
+ * 抽成纯函数是为了它能被单测锁住（底栏组件本身没有渲染测试基建）。
+ */
+export function badgeShouldLight(input: {
+  conversations: number | null
+  notifications: number | null
+  /** 上一帧的红点状态 */
+  previous: boolean
+}): boolean {
+  if ((input.conversations ?? 0) > 0 || (input.notifications ?? 0) > 0) return true
+  const unknown = input.conversations === null || input.notifications === null
+  return unknown ? input.previous : false
+}
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener)
@@ -121,7 +147,7 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 「接 `GET /conversations` 时必须一并收口会话未读这一分量」）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
- * - 没给（真实构建）→ 会话未读记 0、通知未读记 `null`（「不知道」，底栏按无已知未读算），
+ * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
  *   **不回退 fixture** —— 拿 fixture 顶替真实值正是幽灵红点 / 漏亮红点的成因。
  *
  * 兜底由调用方注入而不是本模块内判断构建开关：store 不该知道 mock fixture 的存在，
@@ -156,8 +182,9 @@ export function hydrateUnread(
         notifications === null || conversations === null ? demoFallback?.() : undefined
       publishUnread({
         ownerId,
-        // 会话未读拿不到 = 「不知道」：真实构建按 0 算，与页内失败态口径一致
-        conversations: conversations ?? fallback?.conversations ?? 0,
+        // 会话未读拿不到 = 「不知道」：真实构建发 null（底栏按无已知未读算），
+        // 演示构建用兜底值。**不发 0** —— 0 是「确定没有未读」这个具体结论。
+        conversations: conversations ?? fallback?.conversations ?? null,
         notifications: notifications ?? fallback?.notifications ?? null,
       })
     })

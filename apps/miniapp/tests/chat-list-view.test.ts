@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import {
+  badgeText,
   chatListState,
   conversationTimeLabel,
   EMPTY_PREVIEW,
@@ -36,6 +37,17 @@ function dto(overrides: Partial<ConversationDto> = {}): ConversationDto {
     ...overrides,
   }
 }
+
+describe('badgeText —— 角标数字上限', () => {
+  test('99 及以下原样显示，超过显示 99+', () => {
+    expect(badgeText(0)).toBe('0')
+    expect(badgeText(1)).toBe('1')
+    expect(badgeText(99)).toBe('99')
+    // 1版稿的窄角标装不下三位以上数字
+    expect(badgeText(100)).toBe('99+')
+    expect(badgeText(1234)).toBe('99+')
+  })
+})
 
 describe('chatListState —— 列表形态判定', () => {
   test('失败 → 错误态，且优先于加载态与空态', () => {

@@ -3,13 +3,14 @@
 /**
  * 会话详情页（1版稿）。数值 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 结构：渐变圆角头（单行导航：返回 + 居中标题 + 认证徽章；商品摘要条）
- * → 消息流（日期分隔 / SYSTEM 灰胶囊 / 头像气泡：文本 / 图片 / 语音 / 交易卡 / 评价卡）
- * → 底部输入栏（语音切换 + 自动长高输入框 + 「+」+ 发送）→ 展开的媒体面板。
+ * 结构：渐变圆角头（单行导航：返回 + 居中标题；商品摘要条）
+ * → 消息流（日期分隔 / SYSTEM 灰胶囊 / 带头像的文本气泡 / 交易码卡）
+ * → 底部输入栏（语音切换 + 自动长高输入框 + 「+」+ 发送）→ 展开的面板。
  *
- * 与 D2 版的关键差异：页头不再是大标题 + 漂浮导航，气泡带头像、图片满铺、
- * 交易码卡 CTA 移到右侧、新增评价卡；尺寸口径见 1版稿
- * （`D:\Downloads\1改\小程序1版conversation.html`）。
+ * 与 1版稿的差异（#89 接真实接口时删掉的契约外展示件）：认证徽章（契约无
+ * `authStatus`）、每条消息的「已读」标记（实时契约无已读回执）、`tx.completed`
+ * 评价卡（交易域无该事件）。媒体气泡样式保留给 #67，见文件中部的标注。
+ * 尺寸口径见 1版稿（`D:\Downloads\1改\小程序1版conversation.html`）。
  *
  * 页面根节点是 100vh 的纵向 flex：页头固定、消息区滚动、输入栏吸底。
  */
@@ -120,31 +121,6 @@
   font-size: 34px;
   font-weight: 600;
   letter-spacing: 0.01em;
-}
-
-/* 认证徽章（稿子 .cert）：缩不掉，长昵称的省略号让给它 */
-.conv__cert {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 14px 0 10px;
-  border-radius: var(--r-pill);
-  background: var(--accent-weak);
-  border: 2px solid var(--accent-mid);
-}
-
-.conv__cert-ic {
-  width: 28px;
-  height: 28px;
-}
-
-.conv__cert-tx {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--brand-deep-2);
-  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------- 商品摘要条 */
@@ -267,6 +243,41 @@
   background: var(--accent-faint);
   font-size: 21px;
   color: var(--muted-2);
+}
+
+/* 更早一页（契约的 `before` 游标）：分页入口与失败重试都居中放在消息流顶端 */
+.conv__earlier {
+  align-self: center;
+}
+
+.conv__earlier-btn {
+  padding: 10px 28px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+/* 加载中 / 还没有消息：居中提示。不能借用「会话不存在」那套空态 ——
+   没读到和没有消息是两件事。 */
+.conv__empty {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 44px 12px;
+  color: var(--muted);
+}
+
+.conv__empty-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.conv__empty-text {
+  font-size: var(--fs-sm);
 }
 
 /* SYSTEM：居中灰色小胶囊。
@@ -424,6 +435,12 @@
 }
 
 /* ---------------------------------------------------------------- 图片气泡 */
+
+/*
+ * ⚠️ 本段（图片气泡 / 语音气泡）当前**没有 JSX 使用**：媒体消息属于 #67，
+ * 本轮只把「发图 / 发语音」的入口改成明确提示，没有伪造本地媒体消息。
+ * 样式按设计稿保留在原处，等 #67 落地时直接接上，不必再从 git 历史里捞。
+ */
 
 /* 稿子 .bubble.is-media：图满铺气泡，不留内衬也不描边，圆角由气泡裁 */
 .conv__bubble--media {
@@ -635,87 +652,8 @@
   font-weight: 600;
 }
 
-/* ---------------------------------------------------------------- 评价卡 */
-
-/* 稿子 .ratecard：星图标 + 标题/星行 + 说明 + 右侧 CTA（「已完成」后出现） */
-.conv__rate {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px 22px;
-  border-radius: 36px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  box-shadow: var(--shadow-card);
-}
-
-.conv__rate-ic {
-  flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
-}
-
-.conv__rate-main {
-  flex: 1;
-  min-width: 0;
-}
-
-/* 标题与星同排一行；两行文字都 nowrap，省略号只作兜底 */
-.conv__rate-row {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
-
-.conv__rate-t {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 25px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.conv__rate-stars {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.conv__rate-star {
-  width: 32px;
-  height: 32px;
-}
-
-.conv__rate-d {
-  display: block;
-  margin-top: 8px;
-  font-size: 22px;
-  line-height: 1.5;
-  color: var(--muted-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conv__rate-act {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 68px;
-  padding: 0 30px;
-  border-radius: var(--r-pill);
-  background: var(--brand-deep);
-  color: var(--surface);
-  font-size: 26px;
-  font-weight: 600;
-}
+/* 「已完成」评价卡（稿子 .ratecard / tx.completed）已整块删除：
+   交易域没有「已完成」事件，这张卡是契约外的演示扩展，JSX 与样式一起下掉。 */
 
 /* ---------------------------------------------------------------- 输入栏 */
 

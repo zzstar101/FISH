@@ -12,7 +12,7 @@ import { markConversationRead } from '@/features/chat/api'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
 import type { MockNotification } from '@/mock/types'
-import { chatListState, conversationTimeLabel, previewOf } from './list-view'
+import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
 import './index.scss'
 
 /**
@@ -76,6 +76,11 @@ export default function Chat() {
   const [ready, setReady] = useState(false)
   /** 真实接口失败且没有回退 mock（生产口径）→ 错误态 + 重试，而不是空态 */
   const [failed, setFailed] = useState(false)
+  /** 更早一页会话的游标；null = 已到最后一页 */
+  const [listNextCursor, setListNextCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  /** 加载更多失败：只在尾部提示重试，不推翻已经看到的列表 */
+  const [loadMoreFailed, setLoadMoreFailed] = useState(false)
   const [filter, setFilter] = useState<ChatFilter>('all')
   const [showTop, setShowTop] = useState(false)
 
@@ -121,6 +126,9 @@ export default function Chat() {
     setItems([])
     setReady(false)
     setFailed(false)
+    setListNextCursor(null)
+    setLoadingMore(false)
+    setLoadMoreFailed(false)
     setNotifs([])
     setNotifsReady(false)
     setNotifsFailed(false)
@@ -135,10 +143,16 @@ export default function Chat() {
    */
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
+    setLoadingMore(false)
+    // 整页重载必须把「加载更多」的失败标记一起清掉：否则一次失败之后，任何一次
+    // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
+    // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
+    setLoadMoreFailed(false)
     void loadConversations()
-      .then(({ items: list, failed: nextFailed }) => {
+      .then(({ items: list, nextCursor: cursor, failed: nextFailed }) => {
         if (epoch !== listEpoch.current) return
         setItems(list)
+        setListNextCursor(cursor)
         setFailed(nextFailed)
         setReady(true)
       })
@@ -148,10 +162,49 @@ export default function Chat() {
         console.warn('[miniapp] 会话列表加载异常', error)
         if (epoch !== listEpoch.current) return
         setItems([])
+        setListNextCursor(null)
         setFailed(true)
         setReady(true)
       })
   }, [])
+
+  /**
+   * 「加载更多会话」：契约按 `lastMessageAt` 降序 + 游标分页，游标原样回传。
+   *
+   * 不做就只是「最近 50 条」静默截断 —— 用户没有任何办法翻到更早的会话。
+   * 失败只把这一页标成失败（`loadMoreFailed`），**不动**已经看到的列表。
+   */
+  const loadMoreConversations = () => {
+    if (!listNextCursor || loadingMore) return
+    setLoadingMore(true)
+    setLoadMoreFailed(false)
+    const epoch = listEpoch.current
+    void loadConversations(listNextCursor)
+      .then((page) => {
+        if (epoch !== listEpoch.current) return
+        if (page.failed) {
+          setLoadMoreFailed(true)
+          return
+        }
+        /**
+         * 按 id 去重：翻页期间消息会把会话重新排序，被顶到后一页的会话可能已经
+         * 在列表里（服务端用的是严格 `<` 键集比较，跨页本身不会重复返回同一条）。
+         */
+        setItems((prev) => {
+          const seen = new Set(prev.map((item) => item.id))
+          return [...prev, ...page.items.filter((item) => !seen.has(item.id))]
+        })
+        setListNextCursor(page.nextCursor)
+      })
+      .catch((error) => {
+        // 与 reloadConversations / loadNotifs 同一兜法：取数层的动态 import 失败
+        // 会让 promise 真的 reject，这里必须接住并置失败态，不能留 unhandled rejection
+        console.warn('[miniapp] 加载更多会话异常', error)
+        if (epoch !== listEpoch.current) return
+        setLoadMoreFailed(true)
+      })
+      .finally(() => setLoadingMore(false))
+  }
 
   /** 通知列表加载：与原独立通知页同一份数据层（真接口失败回退 mock），重试也走这里 */
   const loadNotifs = useCallback(() => {
@@ -250,18 +303,28 @@ export default function Chat() {
   /**
    * 未读快照发布：底栏「消息」红点与页内角标同源（见 `features/chat/unread.ts`）。
    *
-   * `conversations` 是本页真实列表的求和；`notifications` 在列表未就绪 / 加载失败时
-   * 发 `null`（「不知道」），底栏对该字段按「无已知未读」算 —— 与页内角标同口径。
+   * `conversations` 与 `notifications` 在「不知道」（列表未就绪 / 加载失败）时都发
+   * `null`，底栏按「无已知未读」算 —— 与页内同口径。会话这一项尤其不要发 0：
+   * 没读到却发 0 会把上一份正确的快照覆盖掉，用户明明还有未读，那颗点却熄了。
    * 未登录不发（登出 / 换账号的清空在身份 effect）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || !identity) return
     publishUnread({
       ownerId: identity,
-      conversations: conversationUnread,
+      conversations: ready && !failed ? conversationUnread : null,
       notifications: notifsReady && !notifsFailed ? unreadNotifications : null,
     })
-  }, [authStatus, identity, notifsReady, notifsFailed, conversationUnread, unreadNotifications])
+  }, [
+    authStatus,
+    identity,
+    ready,
+    failed,
+    notifsReady,
+    notifsFailed,
+    conversationUnread,
+    unreadNotifications,
+  ])
 
   /**
    * 已读回写是**声明式**的：只要「通知」tab 被看过（`notifsViewed`，粘性状态）
@@ -420,7 +483,9 @@ export default function Chat() {
                     onClick={() => chooseFilter(item.key)}
                   >
                     <Text>{item.label}</Text>
-                    {tabBadge > 0 ? <Text className="chat__tab-n num">{tabBadge}</Text> : null}
+                    {tabBadge > 0 ? (
+                      <Text className="chat__tab-n num">{badgeText(tabBadge)}</Text>
+                    ) : null}
                   </View>
                 )
               })}
@@ -484,52 +549,77 @@ export default function Chat() {
             <Text className="chat__empty-text">在商品详情点「我想要」就能开聊</Text>
           </View>
         ) : (
-          items.map((item) => {
-            /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
-            const user = item.counterpart
-            const unread = item.unreadCount
+          <>
+            {items.map((item) => {
+              /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
+              const user = item.counterpart
+              const unread = item.unreadCount
 
-            return (
-              <View
-                key={item.id}
-                className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
-                onClick={() => openConversation(item.id)}
-              >
-                {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
-                <View className="chat__ava-wrap">
-                  <View className="chat__ava">
-                    {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）；空串即不渲染图 */}
-                    <Image className="chat__ava-img" src={user.avatarUrl ?? ''} mode="aspectFill" />
+              return (
+                <View
+                  key={item.id}
+                  className={`chat__conv${unread > 0 ? ' is-unread' : ''}`}
+                  onClick={() => openConversation(item.id)}
+                >
+                  {/* 头像 + 未读角标：角标要浮到头像外，所以裁剪只落在 .chat__ava 上 */}
+                  <View className="chat__ava-wrap">
+                    <View className="chat__ava">
+                      {/* 契约允许 avatarUrl 为 null（users.avatar_url 可空）；空串即不渲染图 */}
+                      <Image
+                        className="chat__ava-img"
+                        src={user.avatarUrl ?? ''}
+                        mode="aspectFill"
+                      />
+                    </View>
+                    {unread > 0 ? <Text className="chat__bdg num">{badgeText(unread)}</Text> : null}
                   </View>
-                  {unread > 0 ? <Text className="chat__bdg num">{unread}</Text> : null}
-                </View>
 
-                <View className="chat__corp">
-                  <View className="chat__corp-top">
-                    <Text className="chat__nm-tx">{user.nickname}</Text>
+                  <View className="chat__corp">
+                    <View className="chat__corp-top">
+                      <Text className="chat__nm-tx">{user.nickname}</Text>
+                    </View>
+                    <Text className="chat__msg">{previewOf(item)}</Text>
+                    {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
+                    <Text className="chat__tm num">
+                      {conversationTimeLabel(item.lastMessageAt, now)}
+                    </Text>
                   </View>
-                  <Text className="chat__msg">{previewOf(item)}</Text>
-                  {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}
-                  <Text className="chat__tm num">
-                    {conversationTimeLabel(item.lastMessageAt, now)}
-                  </Text>
-                </View>
 
-                {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl` */}
-                <View className="chat__thumb">
-                  {item.listing.coverUrl ? (
-                    <Image
-                      className="chat__thumb-img"
-                      src={item.listing.coverUrl}
-                      mode="aspectFill"
-                    />
-                  ) : (
-                    <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
-                  )}
+                  {/* 右侧商品缩略图（1版稿 .thumb）：契约 `listing.coverUrl` */}
+                  <View className="chat__thumb">
+                    {item.listing.coverUrl ? (
+                      <Image
+                        className="chat__thumb-img"
+                        src={item.listing.coverUrl}
+                        mode="aspectFill"
+                      />
+                    ) : (
+                      <Image className="chat__thumb-ic" src={ICONS.imageMuted} mode="aspectFit" />
+                    )}
+                  </View>
                 </View>
+              )
+            })}
+
+            {/*
+              更早的会话：契约按 `lastMessageAt` 降序 + 游标分页。没有这个入口，
+              会话多于 50 条的用户就只能看到最近 50 条，且没有任何翻页办法。
+              失败只在尾部提示重试，不推翻已经看到的列表。
+            */}
+            {listNextCursor || loadMoreFailed ? (
+              <View className="chat__more">
+                {loadMoreFailed ? (
+                  <View className="chat__more-btn" onClick={loadMoreConversations}>
+                    <Text>更早的会话没加载出来 · 重试</Text>
+                  </View>
+                ) : (
+                  <View className="chat__more-btn" onClick={loadMoreConversations}>
+                    <Text>{loadingMore ? '正在加载…' : '加载更多会话'}</Text>
+                  </View>
+                )}
               </View>
-            )
-          })
+            ) : null}
+          </>
         )}
       </View>
 
