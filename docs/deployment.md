@@ -548,10 +548,10 @@ hostname（`packages/db/src/seed.ts:284-291`）——生产库正好是 `127.0.0
 set -euo pipefail
 cd /srv/fish
 
-# 0) 预检 API 专属密钥（§4）。脚本以 root 执行，所以直接读那个 600 的文件。
-#    自 #70 起缺 MEETUP_TOKEN_SECRET 会让 API 拒绝启动，配合 Restart=always 就是
-#    每 5 秒一次的 crash loop —— 而那时第 3 步已经把服务停了。放在最前面：
-#    预检不过就一行代码都不动、一个服务都不停。
+# 0) 预检 API 专属配置（§4）。脚本以 root 执行，所以直接读那个 600 的文件。
+#    缺 MEETUP_TOKEN_SECRET（#70）或缺 AI 润色变量（#141）都会让 API 拒绝启动，
+#    配合 Restart=always 就是每 5 秒一次的 crash loop —— 而那时第 3 步已经把服务
+#    停了。放在最前面：预检不过就一行代码都不动、一个服务都不停。
 API_ENV=/etc/fish/api-mail.env
 # 先单独判可读。少了这一步，文件不存在 / 忘了 sudo 时：sed 非零 → 在 `set -o pipefail`
 # 下整条管道非零 → 赋值那一行直接静默退出，运维看不到任何原因（实测 rc=1 且零输出）。
@@ -573,6 +573,28 @@ if [ "${bad:-0}" -eq 1 ]; then
   exit 1
 fi
 unset MEETUP_KEY
+
+# 同一理由：#141 起 AI_POLISH_TRANSPORT 也是必填且无默认值，缺了同样在第 6 步进 crash loop。
+AI_TRANSPORT=$(sed -n 's/^AI_POLISH_TRANSPORT=//p' "$API_ENV" | tail -1 | tr -d '\r')
+AI_BASE_URL=$(sed -n 's/^AI_POLISH_BASE_URL=//p' "$API_ENV" | tail -1 | tr -d '\r')
+AI_API_KEY=$(sed -n 's/^AI_POLISH_API_KEY=//p' "$API_ENV" | tail -1 | tr -d '\r')
+AI_MODEL=$(sed -n 's/^AI_POLISH_MODEL=//p' "$API_ENV" | tail -1 | tr -d '\r')
+ai_bad=0
+case "$AI_TRANSPORT" in
+  stub)
+    # stub 也是真 HTTP 服务（apps/api/scripts/ai-polish-stub.ts），base_url 同样必填。
+    [ -n "$AI_BASE_URL" ] || ai_bad=1 ;;
+  live)
+    { [ -n "$AI_BASE_URL" ] && [ -n "$AI_MODEL" ]; } || ai_bad=1
+    case "$AI_API_KEY" in '' | REPLACE_*) ai_bad=1 ;; esac ;;
+  *) ai_bad=1 ;;
+esac
+if [ "${ai_bad:-0}" -eq 1 ]; then
+  echo "预检失败：$API_ENV 里的 AI_POLISH_* 不完整。transport 必须显式 stub 或 live；live 还要求 BASE_URL / API_KEY / MODEL 齐全，且 API_KEY 不是占位值。" >&2
+  echo "按 §4 补齐后重试；本次未改动代码，也未停任何服务。" >&2
+  exit 1
+fi
+unset AI_TRANSPORT AI_BASE_URL AI_API_KEY AI_MODEL
 
 # 发布的就是这个 ref：默认 origin/main，回滚时传 tag 或 sha（§7.3）。
 # 刻意不用 `git pull`：回滚后 HEAD 可能是 detached，裸 pull 会以
