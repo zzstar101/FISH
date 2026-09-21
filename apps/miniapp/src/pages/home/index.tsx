@@ -11,6 +11,7 @@ import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
 import { findUser } from '@/mock/users'
+import { applyLoadResult, homeListState } from './list-state'
 import './index.scss'
 
 /** 瀑布流列宽（设计值 = 2×pt）：750 - 左右各 28 - 列间距 20，再除以 2 */
@@ -38,12 +39,15 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 export default function Home() {
   const [items, setItems] = useState<MockListing[]>([])
   /**
-   * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过）。
+   * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过，或上一次加载失败已作废）。
    *
    * 与 `category`（用户刚点的那个）分开记：切分类时 `category` 立刻变，但屏幕上还是
    * 上一个分类的商品，两者不一致的这段时间必须显示加载态 —— 否则选中态已经跳到
    * 「教材书籍」、下面仍是推荐流的商品，用户会把旧数据当成新分类的结果
    * （#137 review P1）。`reqSeq` 只防旧响应覆盖新响应，防不了这一层错认。
+   *
+   * 失败时一并作废（置 `null`）：失败后 `items` 已被清空，屏幕上没有属于任何分类的
+   * 有效数据；不置空的话，重试一个「上次成功过」的分类时会闪假空态（见 `resolveLoadedFor`）。
    *
    * 下拉刷新重拉的是**当前分类**，两者相等 → 不闪骨架屏，列表原地留着。
    */
@@ -58,14 +62,6 @@ export default function Home() {
    * 与消息页把通知并进「通知」tab 是同一套做法。
    */
   const [category, setCategory] = useState<ListingCategory | 'ALL'>('ALL')
-
-  /**
-   * 当前屏幕上的列表是否还没对上用户选的分类。
-   *
-   * 首次进页 `loadedFor === null` 也算未对上：`items` 初始为空，若直接走空态判断，
-   * 会先闪一下「这个分类还没有闲置」再出现商品。
-   */
-  const pending = loadedFor !== category
 
   /**
    * 请求序号：连点分类时只认**最后一次**发出的结果。
@@ -88,16 +84,20 @@ export default function Home() {
       next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
     if (seq !== reqSeq.current) return
-    setItems(list)
-    setFailed(nextFailed)
     /*
-      只在**成功**时记下「这批商品属于哪个分类」。
-      失败时 `items` 是空的，若把 `loadedFor` 也置成 `next`，`pending` 会立刻变 false，
-      于是点「重试」（或下拉刷新）期间 `failed` 已被清掉、`items` 仍为空 → 渲染空态
-      「这个分类还没有闲置」—— 把「没读到」说成「这个分类没货」。保持旧值（首次进页
-      则是 `null`），`pending` 就还是 true，重试期间由骨架屏接管。
+      三件套一次结转（纯函数，`./list-state.ts`）。`loadedFor` 的口径：
+      成功 → 置为 `next`；**失败 → 作废为 `null`**（失败时 `items` 已被清成空数组，
+      屏幕上没有属于任何分类的有效数据）。若失败时保留旧值，当失败的目标分类恰是
+      上次成功过的那个时（失败后点「重试」、下拉刷新失败后重试、失败后切回该分类），
+      `loadedFor === category` 成立，请求在途期间 `failed` 已清、`items` 仍为空 →
+      渲染空态「这个分类还没有闲置」，把「没读到」说成「这个分类没货」。作废后
+      `loadedFor !== category` 全程成立，重试期间由骨架屏接管；空态只在**真的成功
+      拿到空列表**时出现。判定逻辑与用例见 `./list-state.ts`。
     */
-    if (!nextFailed) setLoadedFor(next)
+    const applied = applyLoadResult({ requested: next, items: list, failed: nextFailed })
+    setItems(applied.items)
+    setFailed(applied.failed)
+    setLoadedFor(applied.loadedFor)
   }
 
   useLoad(() => {
@@ -112,6 +112,17 @@ export default function Home() {
 
   const [left, right] = useMemo(() => splitColumns(items), [items])
 
+  /**
+   * 商品区渲染形态：error / skeleton / empty / list。
+   *
+   * 判定是纯函数（`./list-state.ts`，带用例）：`loadedFor !== category` 时屏幕上的
+   * 列表还没对上用户选的分类 —— 含首次进页（`loadedFor` 为 `null`，`items` 也为空，
+   * 直接走空态判断会先闪一下「这个分类还没有闲置」再出商品）、切分类在途、
+   * 以及加载失败作废后的重试在途。这几种情况都给骨架屏：既不能继续展示上一个
+   * 分类的商品（旧数据冒充新分类），也不能显示空态（「没货」是成功后的结论）。
+   */
+  const listState = homeListState({ loadedFor, category, failed, itemCount: items.length })
+
   const goSearch = () => {
     void Taro.navigateTo({ url: '/pages/search/index' })
   }
@@ -124,9 +135,17 @@ export default function Home() {
    *
    * 切完回到顶部：用户多半是在吸顶的纯文字条上点的分类（此时页面已滚过一屏），
    * 不回顶的话新商品从半截开始显示，看不出「换过一批」。
+   *
+   * 重复点**当前**分类不重新取数（没有新信息可拿），但也不是完全 no-op：
+   * 失败态下当作「重试」（否则用户点了没反应，只能去找错误块里的重试按钮），
+   * 成功态下只回顶。两条分支都回顶 —— 与切分类同口径，重试成功后列表从顶部开始。
    */
   const onCategoryTap = (key: ListingCategory | 'ALL') => {
-    if (key === category) return
+    if (key === category) {
+      if (failed) void load(key)
+      void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
+      return
+    }
     setCategory(key)
     void load(key)
     void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
@@ -250,12 +269,12 @@ export default function Home() {
       ) : null}
 
       <View className="home__grid">
-        {failed ? (
+        {listState === 'error' ? (
           <LoadError onRetry={() => void load(category)} />
-        ) : pending ? (
+        ) : listState === 'skeleton' ? (
           /*
-            分类切换中 / 首次进页：列表还没对上当前分类，给骨架屏而不是继续展示
-            上一个分类的商品（#137 review P1），也不是空态（那会被读成「这个分类没货」）。
+            分类切换中 / 首次进页 / 失败后重试在途：列表还没对上当前分类，给骨架屏而不是
+            继续展示上一个分类的商品（#137 review P1），也不是空态（那会被读成「这个分类没货」）。
           */
           <View className="waterfall">
             <View className="waterfall__col">
@@ -277,7 +296,7 @@ export default function Home() {
               ))}
             </View>
           </View>
-        ) : items.length === 0 ? (
+        ) : listState === 'empty' ? (
           <View className="home__empty">
             <Text className="home__empty-title">这个分类还没有闲置</Text>
             <Text className="home__empty-text">换个分类看看，或到许愿墙发一条心愿</Text>

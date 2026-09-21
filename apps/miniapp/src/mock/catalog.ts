@@ -869,48 +869,6 @@ export const LISTING_BY_ID: Record<string, MockListing> = Object.fromEntries(
   LISTINGS.map((listing) => [listing.id, listing]),
 )
 
-/**
- * 一级分类 → 二级分类清单（C1 分类页：左栏点一级，右侧横滑胶囊切二级）。
- *
- * 名称取自图标库「03-商品细类图标」的命名（待设计页面.md §5），
- * 但顺序与是否展示**以本 fixture 实际有的商品为准**——没有商品的二级分类
- * 在这里就不列，否则点进去只有空态，看起来像功能坏了。
- */
-export const SUB_CATEGORIES: Record<ListingCategory, string[]> = {
-  DIGITAL: ['电脑', '手机', '键盘', '鼠标', '显示器', '相机', '耳机'],
-  BOOKS: ['教材', '课本', '考研资料', '小说', '杂志'],
-  DAILY: ['台灯', '水杯', '收纳盒'],
-  APPAREL: ['外套', '运动鞋', '双肩包'],
-  SPORTS: ['篮球', '哑铃', '瑜伽垫'],
-  TRANSPORT: ['自行车', '电动车', '头盔'],
-  BEAUTY: ['口红', '香水', '洗面奶'],
-  OTHER: ['乐器', '小摆件'],
-}
-
-/** 一级分类的中文名（C1 左栏用，与 mock/api 的 CATEGORY_LABEL 同源） */
-export const CATEGORY_TITLE: Record<ListingCategory, string> = {
-  DIGITAL: '数码电子',
-  BOOKS: '教材书籍',
-  DAILY: '生活用品',
-  APPAREL: '服装鞋包',
-  SPORTS: '运动健身',
-  TRANSPORT: '代步工具',
-  BEAUTY: '美妆个护',
-  OTHER: '其他闲置',
-}
-
-/** 左栏显示顺序：与设计稿 C1 的竖排一致 */
-export const CATEGORY_ORDER: ListingCategory[] = [
-  'BOOKS',
-  'DIGITAL',
-  'DAILY',
-  'APPAREL',
-  'SPORTS',
-  'TRANSPORT',
-  'BEAUTY',
-  'OTHER',
-]
-
 export function getListing(id: string): MockListing | undefined {
   return LISTING_BY_ID[id]
 }
