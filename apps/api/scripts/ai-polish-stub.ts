@@ -24,6 +24,13 @@ const LONG_CANDIDATE = '长'.repeat(501)
 /** 原文没有的数字：事实校验必须丢掉它。 */
 const INVENTED_NUMBER = '88888'
 
+/**
+ * 第三条候选是**定长**的脏串，不拼描述：早先是 `${description}，原价 88888 元`，描述 ≥490 字时
+ * 它会先被长度层丢掉，事实层在长描述下根本不执行——doc §8.1 声称的"三层过滤都在 CI 里跑"就缺了
+ * 一层（#141 三次审查发现）。定长后任何描述长度都必然走到事实层。
+ */
+const INVENTED_NUMBER_CANDIDATE = `全新未拆，原价 ${INVENTED_NUMBER} 元，校内自提`
+
 /** 第一条候选是唯一"干净"的那条，加个后缀让客户端看得出这是模型改写过的文本。 */
 const CLEAN_SUFFIX = '，校内自提优先'
 
@@ -59,11 +66,9 @@ export function createAiPolishStub(): AiPolishStub {
       const user = body?.messages?.find((message) => message.role === 'user')?.content ?? ''
       const description = user.split('原始描述：').at(-1)?.trim() ?? user
 
-      const content = [
-        cleanCandidate(description),
-        LONG_CANDIDATE,
-        `${description}，原价 ${INVENTED_NUMBER} 元`,
-      ].join('\n===\n')
+      const content = [cleanCandidate(description), LONG_CANDIDATE, INVENTED_NUMBER_CANDIDATE].join(
+        '\n===\n',
+      )
 
       return Response.json({
         choices: [{ message: { content }, finish_reason: 'stop' }],

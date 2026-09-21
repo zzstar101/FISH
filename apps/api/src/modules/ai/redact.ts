@@ -55,7 +55,14 @@ const RULES: readonly { kind: RedactKind; pattern: RegExp }[] = [
     pattern: /(?:微信|weixin|wechat|vx|v信|威信|微信同号)\s*(?:号)?\s*[:：]?\s*[A-Za-z0-9_-]{4,}/gi,
   },
   { kind: 'contact', pattern: /(?:qq|Qq|QQ)\s*(?:号)?\s*[:：]?\s*\d{5,11}/g },
-  { kind: 'contact', pattern: /\+?\s?v\s*[:：]\s*[A-Za-z0-9_-]{4,}/gi },
+  {
+    kind: 'contact',
+    // `+v:xxx` / `v:xxx` / `V:xxx`：微信 ID 必须以**字母或下划线开头**（官方规则），借这条把
+    // 规格行排除掉——`输入电压 V: 100-240V`、`型号 V: 2200KV` 的值以数字开头，不是微信号，
+    // 早先只靠 `i` 放开大小写会把这类 DIGITAL 主类目的规格行整段脱敏（#141 三次审查发现）。
+    // 左边界排除 `kv:` 这种粘在前一个词后面的写法；QQ 号是纯数字，另有上面的规则。
+    pattern: /(?<![A-Za-z0-9_])\+?\s*[vV]\s*[:：]\s*[A-Za-z_][A-Za-z0-9_-]{3,}/g,
+  },
   { kind: 'addr', pattern: /\d{1,4}\s*(?:栋|幢|号楼|单元|宿舍)/g },
   { kind: 'url', pattern: /https?:\/\/[^\s"'，。；、）)】]+/gi },
   { kind: 'url', pattern: /www\.[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:\/[^\s]*)?/gi },
@@ -71,7 +78,7 @@ const MARKER_PATTERN = /\[fish-([a-z]+)-(\d+)\]/g
  * 形状像标记、但严格匹配不上的（模型把 `[fish-phone-1]` 写成 `[fish-phone- 1]`、全角数字，或
  * 漏了括号写成 `fish-phone-1`）。检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），
  * 也不能原样留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见字符
- * （`INVISIBLE_SEPARATORS`）——所以**插了零宽/软连字符的标记会先归一成标准形态，仍算"找回"**
+ * （`stripInvisible`）——所以**插了零宽/软连字符的标记会先归一成标准形态，仍算"找回"**
  * 并按原样还原，而不是被当成半成品降级（那才是用户想要的：拿回自己的内容）。
  *
  * 种类必须是**闭集**（`LOST_PROMPTS` 的键，即我们真正会发出的那几个），不能写成任意 `[a-z]+`：
@@ -91,20 +98,56 @@ const LOOSE_MARKER_PATTERN = new RegExp(
 )
 
 /**
- * 模型可能把标记拆开、用户可能把号码拆开：不可见 / 格式类字符一律在比对与匹配前剥掉。
+ * "看不见"的字符。分两类剥，理由不同：
  *
- * 字符集：
- * - `\p{Cf}` 覆盖全部格式字符（U+200B–U+200F、U+2060–U+2066、**U+00AD 软连字符**、U+FEFF…）；
- * - `\p{Mn}` / `\p{Me}` 覆盖组合记号（**U+034F CGJ**、**U+FE0F 变体选择符**…）；
- * - Hangul 填充符（U+115F / U+1160 / U+3164 / U+FFA0）类别是 `Lo`，必须单独列。
+ * 1. **格式字符与填充符**（`\p{Cf}`、Hangul 填充符、CGJ）走这个正则：`\p{Cf}` 覆盖零宽字符
+ *    （U+200B–U+200F）、**U+00AD 软连字符**（从 Word/PDF 复制号码最常见的一个）、U+2060–U+2066、
+ *    U+FEFF、ALM、Mongolian VS 等；U+115F/U+1160/U+3164/U+FFA0 的类别是 `Lo`，必须单独列；
+ *    U+034F CGJ 不可见且正是用来拆词组的。
+ *    写成 **alternation 而不是字符类**：`\u034F` 是组合记号，和普通字符同处一个类会被 biome 的
+ *    `noMisleadingCharacterClass` 拦下（组合记号会与前一个字符合成新字符）。
  *
- * 不要再手枚举码位（旧写法只列了 5 个）：`138<U+00AD>12345678`、`138<U+200E>12345678`、
- * `138<U+3164>12345678` 都能整段绕过手机号规则把号码原样送上游（#141 三次审查发现）。
- * 这组是 `moderation/rules.ts` 那份归一化集合去掉 `\p{Cc}` 后的结果：**刻意不含 `\p{Cc}`**，
- * 因为控制字符里有 `\n` / `\t`——moderation 后续会剥掉全部空白所以无所谓，脱敏却必须保留用户
- * 描述里的换行（送上游的是原文的格式）。
+ * 2. **非空白控制字符**（NUL / SOH / DEL…）走 `stripInvisible` 的码位判定：biome 的
+ *    `noControlCharactersInRegex` 禁止正则字面量出现控制字符。
+ *
+ * 刻意**不收** `\p{Mn}` / `\p{Me}` 的其余部分与空白控制字符：前者是**用户可见**内容（emoji 变体
+ * 选择符 `❤️`、keycap `1️⃣`、泰文/天城文/阿拉伯文的声调与元音符号），后者（`\t\n\v\f\r` 与
+ * U+0085 NEL）是用户描述的排版。全剥会静默篡改用户文案——而往号码中间插组合记号需要刻意构造，
+ * 不是本功能的威胁模型（脱敏防的是"用户自己的 PII 意外进第三方"，不是用户自己绕过）。
+ * moderation 那份用的是更宽的 `\p{Cf}\p{Mn}\p{Me}\p{Cc}`：它做匹配前会再剥掉全部空白，不受此限。
+ *
+ * 别再退回手枚举几个码位：`138<U+00AD>12345678`、`138<U+200E>12345678`、`138<U+3164>12345678`
+ * 都能整段绕过手机号规则、把号码原样送上游（#141 三次审查发现）。已知残留：emoji ZWJ 序列
+ * （U+200D 属 `\p{Cf}`）会被拆开——本文件改动前就是这样，登记在设计 §11-R10。
  */
-const INVISIBLE_SEPARATORS = /[\p{Cf}\p{Mn}\p{Me}\u115F\u1160\u3164\uFFA0]/gu
+const INVISIBLE_CHARS = /\p{Cf}|\u034F|\u115F|\u1160|\u3164|\uFFA0/gu
+
+/** `stripInvisible` 用：非空白控制字符（保留 `\t\n\v\f\r` 与 NEL U+0085——它们是排版）。 */
+function isNonWhitespaceControl(code: number): boolean {
+  const isControl = code < 0x20 || (code >= 0x7f && code <= 0x9f)
+  if (!isControl) return false
+  return !(
+    code === 0x09 ||
+    code === 0x0a ||
+    code === 0x0b ||
+    code === 0x0c ||
+    code === 0x0d ||
+    code === 0x85
+  )
+}
+
+/**
+ * 剥掉所有"看不见"的字符（见 `INVISIBLE_CHARS` 的两类）。脱敏匹配、标记比对、事实基线统一走它，
+ * 免得三处各写一遍再漂移。
+ */
+function stripInvisible(text: string): string {
+  let visible = ''
+  for (const ch of text) {
+    if (isNonWhitespaceControl(ch.codePointAt(0) ?? 0)) continue
+    visible += ch
+  }
+  return visible.replace(INVISIBLE_CHARS, '')
+}
 
 /**
  * 摘掉标准形态与**被改写过的**标记字面。事实校验（`facts.ts`）用它在抽取数字前做归一化：
@@ -114,10 +157,7 @@ const INVISIBLE_SEPARATORS = /[\p{Cf}\p{Mn}\p{Me}\u115F\u1160\u3164\uFFA0]/gu
  * 与 `restore` 共用同一套模式——"标记长什么样"只有这一处定义（设计 §6.3）。
  */
 export function stripMarkerLiterals(text: string): string {
-  return text
-    .replace(INVISIBLE_SEPARATORS, '')
-    .replace(MARKER_PATTERN, '')
-    .replace(LOOSE_MARKER_PATTERN, '')
+  return stripInvisible(text).replace(MARKER_PATTERN, '').replace(LOOSE_MARKER_PATTERN, '')
 }
 
 function hasMangledMarker(text: string): boolean {
@@ -165,7 +205,7 @@ export function createRedactor(): Redactor {
       // 用户从网页/Word 复制号码时带进零宽字符是现实场景，不能让一个不可见字符变成绕过脱敏的
       // 手段（同仓 moderation 已按同一口径剥 format 字符，两侧不该有差）。返回的文本同样不含
       // 它们，回填还原的是 `mapping` 里存的那份。
-      let result = text.replace(INVISIBLE_SEPARATORS, '')
+      let result = stripInvisible(text)
       for (const rule of RULES) {
         result = result.replace(rule.pattern, (match) => {
           const next = (counters.get(rule.kind) ?? 0) + 1
@@ -183,7 +223,7 @@ export function createRedactor(): Redactor {
     restore(text, redaction) {
       // 统一在"剥掉不可见分隔符"的形式上比对与清理：模型把标记拆开时也能识别，且不会把
       // 不可见字符留在用户拿到的候选里。
-      const source = text.replace(INVISIBLE_SEPARATORS, '')
+      const source = stripInvisible(text)
       const present = new Set(source.match(MARKER_PATTERN) ?? [])
       const foreign =
         [...present].some((marker) => !mapping.has(marker)) || hasMangledMarker(source)

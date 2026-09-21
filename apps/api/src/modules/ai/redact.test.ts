@@ -23,7 +23,7 @@ describe('脱敏', () => {
 
   test('零宽字符插在号码里也照样脱敏（不能靠一个不可见字符绕过）', () => {
     // 从网页 / Word / PDF 复制号码时带进不可见字符是现实场景；匹配前不剥掉，手机号就原样送上游。
-    // 只枚举 U+200B 那一小撮不够：软连字符、LRM、CGJ、Hangul 填充符都能拆开号码（#141 三次审查）。
+    // 只枚举 U+200B 那一小撮不够：软连字符、LRM、CGJ、Hangul 填充符、非空白控制字符都能拆开号码。
     const invisible = [
       '\u200b',
       '\ufeff',
@@ -32,7 +32,9 @@ describe('脱敏', () => {
       '\u2066',
       '\u034f',
       '\u3164',
-      '\ufe0f',
+      '\u0000',
+      '\u001f',
+      '\u007f',
     ]
     for (const ch of invisible) {
       expect(createRedactor().redact(`联系 138${ch}12345678 详聊`).text).toBe(
@@ -45,18 +47,34 @@ describe('脱敏', () => {
     expect(createRedactor().redact('邮箱 abc\u200b@qq.com').text).toBe('邮箱 [fish-mail-1]')
   })
 
-  test('描述里的换行与制表符保留（剥的是不可见格式字符，不是控制字符）', () => {
-    // 送上游的是用户原文的格式：把 `\p{Cc}` 一起剥掉会把换行吃掉，正文粘成一行。
-    expect(createRedactor().redact('九成新\n功能正常\t配件齐').text).toBe(
+  test('用户可见的组合记号与排版不被改动（只剥不可见字符）', () => {
+    // `\p{Mn}` 里除了 CGJ 还有变体选择符、keycap、各语言的声调/元音符号——它们是可见内容，
+    // 全局剥掉等于静默改字（`❤️`→`❤`、分解式 `cafe\u0301`→`cafe`），所以不收（#141 三次审查）。
+    const redactor = createRedactor()
+    for (const text of [
+      '全新 ❤️ 出',
+      '1️⃣ 号色',
+      'cafe\u0301 咖啡机',
+      'สินค้า 咖啡机',
       '九成新\n功能正常\t配件齐',
-    )
+    ]) {
+      expect(redactor.redact(text).text).toBe(text)
+    }
+    expect(redactor.redacted).toBe(false)
+  })
+
+  test('规格行里的 `V:` 不算联系方式，真微信号仍然命中', () => {
+    // 微信 ID 必须以字母/下划线开头：借这条把 `输入电压 V: 100-240V` 这类 DIGITAL 规格行排除，
+    // 同时保留 `V: hello123`（早先只放开大小写会把规格行整段脱敏）。
+    expect(createRedactor().redact('输入电压 V: 100-240V').text).toBe('输入电压 V: 100-240V')
+    expect(createRedactor().redact('型号 V: 2200KV 电机').text).toBe('型号 V: 2200KV 电机')
+    expect(createRedactor().redact('V: hello123').text).toBe('[fish-contact-1]')
+    expect(createRedactor().redact('+v：abc_12345').text).toBe('[fish-contact-1]')
   })
 
   test('联系方式与链接的常见写法都命中', () => {
     expect(createRedactor().redact('QQ 1234567').text).toBe('[fish-contact-1]')
     expect(createRedactor().redact('+v: hello123').text).toBe('[fish-contact-1]')
-    // 大写 `V:` 与同组的 `微信` / `vx` 一样要命中（该规则此前漏了 `i`，口径自相矛盾）。
-    expect(createRedactor().redact('V: hello123').text).toBe('[fish-contact-1]')
     expect(createRedactor().redact('看 www.example.com').text).toBe('看 [fish-url-1]')
     expect(createRedactor().redact('看 taobao.com/abc').text).toBe('看 [fish-url-1]')
   })
