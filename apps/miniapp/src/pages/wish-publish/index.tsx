@@ -1,16 +1,15 @@
 import { Image, Input, ScrollView, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
+import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
-import {
-  categoryLabel,
-  createWishLocal,
-  type MockWish,
-  myWishes,
-  WISH_CATEGORIES,
-} from '@/mock/api'
+import { useAuthGuard } from '@/features/auth/guard'
+import { createWish } from '@/features/wish/api'
+import { markWishesDirty } from '@/features/wish/refresh'
+import { isApiError } from '@/lib/request'
+import { categoryLabel, type MockWish, WISH_CATEGORIES } from '@/mock/api'
 import './index.scss'
 
 /**
@@ -23,8 +22,9 @@ import './index.scss'
  * - `budgetMinCents` 非负整数、`budgetMaxCents` 正整数且 ≥ 最低（界面收**元**，提交时 ×100）；
  * - `description` 选填 ≤ 500 字；`acceptSimilar` 默认 true。
  *
- * 提交**不调接口**：小程序端还没有 wish 客户端（属 #89），这里只写本地 mock
- * （`createWishLocal`）然后返回许愿页。真实端点是 `POST /wishes`。
+ * 提交走真实接口 `POST /wishes`（`features/wish/api.ts`）：**不回退 mock**，
+ * 服务端错误（409 上限 / 400 校验）按服务端给的中文原样提示。
+ * 页面上的本地校验只为更快反馈，真实判定仍在服务端。
  */
 
 /** 契约约束文案里的两个后端常量：契约未导出，真源是
@@ -38,6 +38,8 @@ type FieldErrors = {
 }
 
 export default function WishPublish() {
+  // 发布是登录态写操作（POST /wishes 挂 requireAuth）；二级页由守卫 redirectTo 登录页
+  const authStatus = useAuthGuard()
   const [keyword, setKeyword] = useState('')
   const [category, setCategory] = useState<MockWish['category']>(WISH_CATEGORIES[0] ?? 'DIGITAL')
   /** 预算两个输入框收的都是「元」的字符串，提交时才转分 */
@@ -46,6 +48,8 @@ export default function WishPublish() {
   const [description, setDescription] = useState('')
   const [acceptSimilar, setAcceptSimilar] = useState(true)
   const [errors, setErrors] = useState<FieldErrors>({})
+  /** 防连点重复提交（页面没有「发布中」的展示位，用 ref 不必触发重渲染） */
+  const submittingRef = useRef(false)
 
   const back = () => {
     const pages = Taro.getCurrentPages()
@@ -57,7 +61,8 @@ export default function WishPublish() {
     }
   }
 
-  const submit = () => {
+  const submit = async () => {
+    if (submittingRef.current) return
     const next: FieldErrors = {}
 
     const trimmed = keyword.trim()
@@ -89,29 +94,33 @@ export default function WishPublish() {
     setErrors(next)
     if (next.keyword || next.budget) return
 
-    // 服务端还有一条「同时 ACTIVE 最多 10 条」的业务规则（不在输入 schema 里）。
-    // 本地预检只为给出更快的反馈，真实判定仍在服务端。
-    if (myWishes().filter((wish) => wish.status === 'ACTIVE').length >= ACTIVE_WISH_LIMIT) {
+    submittingRef.current = true
+    try {
+      await createWish({
+        // 契约的 `keywordSchema` 会 trim + 转小写；这里先做一遍，与真实入库一致
+        keyword: trimmed.toLowerCase(),
+        category,
+        budgetMinCents: minYuan * 100,
+        budgetMaxCents: maxYuan * 100,
+        description: description.trim() === '' ? undefined : description.trim(),
+        acceptSimilar,
+      })
+      void Taro.showToast({ title: '已发布愿望，等卖家来找你', icon: 'none' })
+      // 让许愿页回来时重拉：Tab 页返回不会重新挂载，不置位就看不到刚发的愿望
+      markWishesDirty()
+      back()
+    } catch (error) {
+      // 「同时 ACTIVE 最多 10 条」由服务端判定（409）；本地不再预检，避免两套口径
       void Taro.showToast({
-        title: `409 · ACTIVE 愿望已达上限 ${ACTIVE_WISH_LIMIT} 条`,
+        title: isApiError(error) ? error.message : '发布失败，请重试',
         icon: 'none',
       })
-      return
+    } finally {
+      submittingRef.current = false
     }
-
-    createWishLocal({
-      // 契约的 `keywordSchema` 会 trim + 转小写，这里先做一遍，mock 里的数据才与真实入库一致
-      keyword: trimmed.toLowerCase(),
-      category,
-      budgetMinCents: minYuan * 100,
-      budgetMaxCents: maxYuan * 100,
-      description: description.trim() === '' ? undefined : description.trim(),
-      acceptSimilar,
-    })
-
-    void Taro.showToast({ title: '已发布愿望，等卖家来找你', icon: 'none' })
-    back()
   }
+
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
   return (
     <View className="wp">

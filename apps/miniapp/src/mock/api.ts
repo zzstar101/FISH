@@ -10,7 +10,7 @@
 
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
-import type { WishCategory, WishCreateInput } from '@fish/contracts/wishes/schema'
+import type { WishCategory } from '@fish/contracts/wishes/schema'
 import { formatAmount, formatYuan } from '@/lib/money'
 import {
   APP_BUILD,
@@ -57,7 +57,6 @@ import type {
   MockComment,
   MockConversation,
   MockListing,
-  MockMatch,
   MockMediaMessage,
   MockMeetupCode,
   MockMessage,
@@ -75,7 +74,7 @@ import type {
   SearchFilter,
 } from './types'
 import { getUser, ME, USERS } from './users'
-import { matchesForWish, WISHES, wishPoolItems } from './wishes'
+import { WISHES } from './wishes'
 
 export type {
   ConversationRole,
@@ -84,7 +83,6 @@ export type {
   MockComment,
   MockConversation,
   MockListing,
-  MockMatch,
   MockMediaMessage,
   MockMeetupCode,
   MockMessage,
@@ -325,74 +323,13 @@ export function myWishes(): MockWish[] {
   return WISHES.filter((wish) => wish.userId === ME.id)
 }
 
-/** k-匿名门槛（镜像 `apps/api/src/modules/wishes/service.ts` 的 `POOL_MIN_COUNT`，契约未导出） */
+/**
+ * k-匿名门槛（镜像 `apps/api/src/modules/wishes/service.ts` 的 `POOL_MIN_COUNT`，契约未导出）。
+ *
+ * 只给页面文案用（「同一个关键词有 N 位以上同学在求」）；愿望池数据本身走真接口
+ * （`features/wish/api.ts` 的 `fetchWishPool`）。
+ */
 export { POOL_MIN_COUNT } from './wishes'
-
-/**
- * 愿望池（`GET /wishes/pool` 的聚合）。
- *
- * 聚合口径（按关键词聚合、`wantCount` 数不同用户、`>= POOL_MIN_COUNT` 才输出）见
- * `mock/wishes.ts` 的 `wishPoolItems`，那里列了与后端 SQL 的三处有意差异。
- */
-export function wishPool(): MockWishPoolItem[] {
-  return wishPoolItems()
-}
-
-export function wishMatches(wishId: string) {
-  return matchesForWish(wishId)
-    .map((match) => ({ match, listing: getListing(match.listingId) }))
-    .filter((item): item is { match: typeof item.match; listing: MockListing } =>
-      Boolean(item.listing),
-    )
-}
-
-/**
- * 本地写：关闭愿望（`ACTIVE` → `CLOSED`）。
- *
- * 小程序端还没有 wish 客户端（属 #89），所以这里只改内存里的 fixture —— 真实端点是
- * `POST /wishes/:id/close`。返回「是否真的改了」，页面据此决定提示与列表刷新。
- *
- * ⚠️ 纯内存：**重进小程序（或刷新预览）就回到初始 fixture**，不做任何持久化。
- */
-export function closeWishLocal(id: string): boolean {
-  const wish = WISHES.find((item) => item.id === id)
-  if (wish?.status !== 'ACTIVE') return false
-  wish.status = 'CLOSED'
-  return true
-}
-
-/** 本地发布愿望的 id 序号：用自增计数器而不是 `WISHES.length`，不依赖「数组只增不减」 */
-let localWishSeq = 0
-
-/**
- * 本地写：发布愿望。
- *
- * 入参由页面按 `wishCreateInputSchema` 校验并归一化（keyword 已 trim + 转小写、
- * 预算已由元转分）。真实端点是 `POST /wishes`；这里只往 fixture 头部插一条，
- * 让「发布成功 → 返回许愿页」能看到它，也让状态计数跟着变。
- *
- * ⚠️ 同样纯内存，重进即丢失。
- */
-export function createWishLocal(input: WishCreateInput): MockWish {
-  localWishSeq += 1
-  const wish: MockWish = {
-    id: `w-local-${localWishSeq}`,
-    userId: ME.id,
-    keyword: input.keyword,
-    category: input.category,
-    budgetMinCents: input.budgetMinCents,
-    budgetMaxCents: input.budgetMaxCents,
-    description: input.description ?? null,
-    acceptSimilar: input.acceptSimilar,
-    status: 'ACTIVE',
-    matchCount: 0,
-    createdAt: new Date().toISOString(),
-    campus: ME.campus,
-    timeLabel: '刚刚',
-  }
-  WISHES.unshift(wish)
-  return wish
-}
 
 /* ------------------------------------------------------------------ 消息 */
 
@@ -610,38 +547,11 @@ export function newMeetupCode(seed: number): string {
  *
  * 直接引用**契约**的值（`packages/contracts/src/matching/schema.ts`）：阈值是产品语义，
  * 不是 mock 数据 —— 小程序里曾写死 60，与后端口径不一致。
+ *
+ * 匹配列表本身已走真接口（`features/match/api.ts`；服务端按这个阈值过滤），
+ * 这里只留常量给页面文案用（「低于 N% 的结果不展示」）。
  */
 export { MATCH_SCORE_THRESHOLD }
-
-export type MatchView = {
-  match: MockMatch
-  listing: MockListing
-  seller: MockUser
-}
-
-/** 匹配到的愿望（C3 页头那张吊牌） */
-export function findWish(id: string): MockWish | undefined {
-  return WISHES.find((wish) => wish.id === id)
-}
-
-/** C3 的默认愿望：稿子里那条「显示器」 */
-export const MATCH_DEFAULT_WISH = 'w-011'
-
-/**
- * 命中商品（同步版）。
- *
- * 与 `fetchMatches` 同一口径（阈值过滤 + 补卖家），区别只是不套 `delay`：
- * 许愿页的愿望卡要在渲染期同步取「命中了几件、是哪几件」。
- */
-export function matchedListings(wishId: string): MatchView[] {
-  return wishMatches(wishId)
-    .filter(({ match }) => match.score >= MATCH_SCORE_THRESHOLD)
-    .map(({ match, listing }) => ({ match, listing, seller: getUser(listing.sellerId) }))
-}
-
-export async function fetchMatches(wishId: string): Promise<MatchView[]> {
-  return delay(matchedListings(wishId))
-}
 
 /* ---- 他人主页（C2，契约无公开资料端点） ---- */
 
