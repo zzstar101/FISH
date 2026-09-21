@@ -8,11 +8,13 @@ import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import {
   type ListingCard,
   type ListingCategory,
+  type ListingCreateInput,
   type ListingDetail,
   ListingDetailSchema,
   type ListingFeedResponse,
   ListingFeedResponseSchema,
   type ListingSort,
+  type ListingUpdateInput,
 } from '@fish/contracts/listings/schema'
 import { apiRequest, isApiError } from '@/lib/request'
 
@@ -94,4 +96,28 @@ export async function fetchSimilarListings(
 ): Promise<ListingCard[]> {
   const page = await fetchFeed({ category })
   return page.items.filter((item) => item.id !== excludeId).slice(0, limit)
+}
+
+/**
+ * 发布商品（写路径）。
+ *
+ * 非 2xx 一律抛 `ApiError`，调用方据 `code` 分支：`LISTING_CONTENT_BLOCKED` 的
+ * `details[{field,message}]` 指明是标题还是描述该改（#74）。
+ *
+ * 成功响应仍用契约 schema 收口。`REVIEW` 时商品是 `OFFLINE` 且不公开，但
+ * `isOwner` 为 true、`moderationStatus === 'REVIEW'` —— 发布页据此显示「已提交审核」
+ * 而不是「已公开」。
+ */
+export async function createListing(input: ListingCreateInput): Promise<ListingDetail> {
+  const payload = await apiRequest(LISTING_ROUTES.base, { method: 'POST', body: input })
+  return ListingDetailSchema.parse(payload)
+}
+
+/**
+ * 编辑商品。`objectKeys` 省略 = **保持原图**：详情响应刻意不给 `objectKey`（存储布局不进
+ * 读协议），前端没有全量替换所需的输入，所以编辑态图片只读（与 Web 端同一取舍）。
+ */
+export async function updateListing(id: string, input: ListingUpdateInput): Promise<ListingDetail> {
+  const payload = await apiRequest(LISTING_ROUTES.detail(id), { method: 'PATCH', body: input })
+  return ListingDetailSchema.parse(payload)
 }

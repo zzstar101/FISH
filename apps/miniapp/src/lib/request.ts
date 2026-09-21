@@ -10,7 +10,7 @@
 
 // 必须是第一条：本模块值导入契约（zod schema），JIT 必须先关掉，见该模块的说明
 import './zod-jitless'
-import { ApiErrorSchema } from '@fish/contracts/system/error'
+import { type ApiErrorDetail, ApiErrorSchema } from '@fish/contracts/system/error'
 import Taro from '@tarojs/taro'
 import { API_BASE } from './api-base'
 import {
@@ -22,14 +22,18 @@ import {
 } from './session'
 
 /**
- * 契约里的错误信封（`{ error: { code, message } }`）。所有非 2xx 响应都解析成它，
+ * 契约里的错误信封（`{ error: { code, message, details? } }`）。所有非 2xx 响应都解析成它，
  * 调用方只依赖 `code` 做分支，不再各自判断 `res.ok` 或解析不同形状。
+ *
+ * `details` 是**可选**的字段级错误（#6 契约：商品域 / 上传域的 422 校验类失败都带它）：
+ * 发布页据此把 BLOCK 原因贴到对应输入框，而不是只给一句页面级通用错误。
  */
 export class ApiError extends Error {
   constructor(
     readonly code: string,
     readonly status: number,
     message: string,
+    readonly details?: ApiErrorDetail[],
   ) {
     super(message)
     this.name = 'ApiError'
@@ -137,7 +141,12 @@ export async function apiRequest(path: string, options: RequestOptions = {}): Pr
       ) {
         clearSession()
       }
-      throw new ApiError(parsed.data.error.code, statusCode, parsed.data.error.message)
+      throw new ApiError(
+        parsed.data.error.code,
+        statusCode,
+        parsed.data.error.message,
+        parsed.data.error.details,
+      )
     }
     throw new ApiError('INTERNAL_ERROR', statusCode, '请求失败，请稍后重试')
   }

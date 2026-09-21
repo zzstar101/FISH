@@ -172,6 +172,27 @@
   letter-spacing: 0.04em;
 }
 
+/* 单张图的上传状态角标：上传中 / 重传（失败时可点）。成功的图不挂角标 */
+.sell__photo-flag {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  z-index: 2;
+  padding: 0 10px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+  background: rgba(23, 35, 61, 0.62);
+  color: var(--surface);
+  font-size: 17px;
+
+  &.is-err {
+    background: var(--danger);
+    color: var(--surface);
+  }
+}
+
 /* 删除钮：贴在缩略图**内部**右上角。骑在边框外会被卡片的 overflow 裁掉 */
 .sell__photo-del {
   position: absolute;
@@ -329,15 +350,6 @@
   min-width: 0;
   font-size: 23px;
   line-height: 1.65;
-}
-
-/* 命中词：底纹块 + 加粗，让「哪个词」一眼可见 */
-.sell__bad-word {
-  background: var(--danger-line);
-  color: var(--danger-ink);
-  border-radius: 6px;
-  padding: 0 6px;
-  font-weight: 600;
 }
 
 /* ---- 价格 ---- */
@@ -794,4 +806,84 @@
   color: var(--surface);
   font-size: 28px;
   font-weight: 600;
+}
+
+/* ---- 审核中结果视图（REVIEW：商品已受理但不在公开列表） ---- */
+
+.sell__result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  margin-top: 48px;
+  padding: 48px 32px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+
+.sell__result-badge {
+  width: 112px;
+  height: 112px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-weak);
+}
+
+.sell__result-ic {
+  width: 56px;
+  height: 56px;
+}
+
+.sell__result-title {
+  font-size: 38px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.sell__result-text {
+  font-size: 26px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.sell__result .sell__submit,
+.sell__result .sell__btn-line {
+  width: 100%;
+}
+
+/* ---- 提交中遮罩：飞行途中禁止交互（避免「所见」与「已提交」不一致） ---- */
+
+.sell__busy {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* 高于润色候选卡（60）与提交按钮，低于任何系统级弹层 */
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(23, 35, 61, 0.35);
+}
+
+.sell__busy-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 40px 48px;
+  border-radius: 32px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+
+.sell__busy-text {
+  font-size: 26px;
+  color: var(--ink);
 }
