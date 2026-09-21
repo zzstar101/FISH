@@ -58,6 +58,8 @@ export function toListingCard(item: Listing): ListingCard {
     free: item.tags.includes('免费送'),
     id: item.id,
     negotiable: item.tags.includes('可小刀'),
+    // mock fixture 没有审核态：按「公开可见」的语义给 null（不编造 REVIEW / BLOCKED）。
+    moderationStatus: null,
     priceCents: item.priceCents,
     status: item.status,
     title: item.title,

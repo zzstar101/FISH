@@ -1,4 +1,8 @@
-import { type ListingCard, ListingCardSchema } from '@fish/contracts/listings/schema'
+import {
+  type ListingCard,
+  ListingCardSchema,
+  type ListingModerationStatus,
+} from '@fish/contracts/listings/schema'
 import type { MediaStorage } from '../uploads/storage'
 
 /**
@@ -26,11 +30,15 @@ export type ListingCardSource = {
  * 返回 `null` 的调用方负责跳过（feed 少一条、匹配少一条）。
  *
  * `storage` 只取 `publicUrl`：「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。
+ *
+ * `moderationStatus` 由调用方按**视角**决定：只有卖家本人视角才传真实值，公开 Feed / 匹配 /
+ * 他人主页一律省略（→ `null`）。审核态不是买家该看到的信息（#74）。
  */
 export function toListingCard(
   listing: ListingCardSource,
   coverObjectKey: string | null,
   storage: Pick<MediaStorage, 'publicUrl'>,
+  moderationStatus: ListingModerationStatus | null = null,
 ): ListingCard | null {
   const card = {
     id: listing.id,
@@ -44,6 +52,7 @@ export function toListingCard(
     free: listing.free,
     coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
     createdAt: listing.createdAt.toISOString(),
+    moderationStatus,
   }
 
   const parsed = ListingCardSchema.safeParse(card)

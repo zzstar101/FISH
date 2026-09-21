@@ -9,6 +9,7 @@ import {
   type ListingFeedQuery,
   type ListingFeedResponse,
   ListingFeedResponseSchema,
+  type ListingModerationStatus,
   type ListingSeller,
   type ListingUpdateInput,
   listingObjectKeyPrefix,
@@ -17,6 +18,7 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import { createModerationService, type ModerationService } from '../moderation/service'
+import type { ModerationField, ModerationResult } from '../moderation/types'
 import type { MediaStorage } from '../uploads/storage'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
@@ -130,8 +132,12 @@ export function createListingService(deps: {
   }
 
   /** 卡片映射抽到 `card.ts`：#8 的 `/matches` 也要给同一张卡片，两处各写一份必然漂移。 */
-  function toCard(listing: ListingRow, coverObjectKey: string | null): ListingCard | null {
-    return toListingCard(listing, coverObjectKey, storage)
+  function toCard(
+    listing: ListingRow,
+    coverObjectKey: string | null,
+    moderationStatus: ListingModerationStatus | null = null,
+  ): ListingCard | null {
+    return toListingCard(listing, coverObjectKey, storage, moderationStatus)
   }
 
   function toDetail(input: {
@@ -153,6 +159,7 @@ export function createListingService(deps: {
     // 给出两个不同结论（#47）。注意 `images[]` 仍返回全部图：详情页画廊读的是它
     // （detail-page.tsx 按 sortOrder 排序渲染），不受封面口径影响。
     const cover = input.images.find((image) => image.sortOrder === 0)
+    const isOwner = input.viewerId === input.listing.sellerId
     const detail = {
       id: input.listing.id,
       title: input.listing.title,
@@ -171,7 +178,10 @@ export function createListingService(deps: {
         sortOrder: image.sortOrder,
       })),
       seller: toSeller(input.seller),
-      isOwner: input.viewerId === input.listing.sellerId,
+      isOwner,
+      // 审核态只给卖家本人：买家看到的商品本来就只可能是 APPROVED，
+      // 返回真实值等于白送一个内部状态字段（见契约 `ListingModerationStatusSchema`）。
+      moderationStatus: isOwner ? input.listing.moderationStatus : null,
       updatedAt: input.listing.updatedAt.toISOString(),
     }
 
@@ -283,7 +293,12 @@ export function createListingService(deps: {
 
       const items: ListingCard[] = []
       for (const entry of page) {
-        const card = toCard(entry.listing, entry.coverObjectKey)
+        // 只有「查自己」的列表带审核态；公开 Feed 与查他人都是 null（见 `toListingCard`）。
+        const card = toCard(
+          entry.listing,
+          entry.coverObjectKey,
+          ownSellerQuery ? entry.listing.moderationStatus : null,
+        )
         if (card) items.push(card)
       }
 
@@ -314,7 +329,12 @@ export function createListingService(deps: {
           description: input.description,
           result: moderationResult,
         })
-        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
+        throw new ListingServiceError(
+          422,
+          'LISTING_CONTENT_BLOCKED',
+          '商品内容未通过审核',
+          moderationBlockDetails(moderationResult),
+        )
       }
 
       await assertUsableObjectKeys(userId, input.objectKeys)
@@ -363,6 +383,9 @@ export function createListingService(deps: {
       // 会留下并发窗口：两个 PATCH 各自基于旧快照算结论，后提交的把 moderation_status 写回
       // APPROVED，最终出现"待审内容 + APPROVED"。
       let result: ListingUpdateResult
+      // `apply` 在锁内算出的字段级原因要等事务返回后才能抛；`rejected` 只带一个 kind，
+      // 所以在这里接一下（不落库：命中词本身不进任何持久化或响应）。
+      let blockedDetails: ApiErrorDetail[] | undefined
       try {
         result = await store.updateListingAtomic({
           id,
@@ -401,6 +424,7 @@ export function createListingService(deps: {
                   : null,
             }
             if (moderationResult.decision === 'BLOCK') {
+              blockedDetails = moderationBlockDetails(moderationResult)
               return { kind: 'blocked' as const, moderation: moderationPlan }
             }
 
@@ -435,7 +459,12 @@ export function createListingService(deps: {
       if (result.kind === 'rejected') {
         // 审计记录已由 store 在**同一锁内事务**里写好（见 `ListingUpdatePlan`）：
         // 不要在这里再写一遍，也不要无锁重读去猜当时的内容。
-        throw new ListingServiceError(422, 'LISTING_CONTENT_BLOCKED', '商品内容未通过审核')
+        throw new ListingServiceError(
+          422,
+          'LISTING_CONTENT_BLOCKED',
+          '商品内容未通过审核',
+          blockedDetails,
+        )
       }
 
       // `'locked'` / `'not-owner'` / `'not-found'` 都来自锁内读到的行，不再是 check-then-act 的第二次读。
@@ -481,7 +510,7 @@ async function recordModeration(
     action: 'CREATE' | 'UPDATE'
     title: string
     description: string
-    result: import('../moderation/types').ModerationResult
+    result: ModerationResult
   },
 ): Promise<void> {
   await store.recordModeration?.({
@@ -495,6 +524,42 @@ async function recordModeration(
     matchedTermsMasked: input.result.matches.map((match) => match.maskedTerm),
     ruleVersion: input.result.ruleVersion,
   })
+}
+
+/**
+ * BLOCK → 可安全展示的字段级错误（`error.details`，`field` 与契约字段名一致，
+ * 客户端据此把错误贴到对应输入框，而不是只给一句页面级通用错误）。
+ *
+ * **只给字段名与固定文案，绝不下发命中词或脱敏片段**：`rules.maskTerm()` 对两字词会露出
+ * 首尾两字（`毒品` → `毒*品`），等于把词库交给绕过者，而词库本身还会继续演化（#74 口径）。
+ *
+ * 只取 `decision === 'BLOCK'` 的命中：同一次提交可能同时命中 BLOCK 与 REVIEW 规则，
+ * 把只触发 REVIEW 的字段报成「禁止发布的内容」会指错方向。
+ *
+ * 返回 `undefined`（而不是空数组）当没有任何 BLOCK 命中时——那种情况下响应体与
+ * 加 `details` 之前逐字节一致，调用方不必分辨 `[]` 与缺失。
+ */
+/**
+ * 字段名 → 可展示的中文名。写成 `Record<ModerationField, string>` 而不是三元表达式：
+ * 将来 `ModerationField` 多一个成员时，这里会在**类型检查**阶段逼着补文案，
+ * 而不是把新字段静默说成「描述」（那会把用户指到错的输入框）。
+ */
+const MODERATION_FIELD_LABEL: Record<ModerationField, string> = {
+  title: '标题',
+  description: '描述',
+}
+
+function moderationBlockDetails(result: ModerationResult): ApiErrorDetail[] | undefined {
+  const fields = [
+    ...new Set(
+      result.matches.filter((match) => match.decision === 'BLOCK').map((match) => match.field),
+    ),
+  ]
+  if (fields.length === 0) return undefined
+  return fields.map((field) => ({
+    field,
+    message: `${MODERATION_FIELD_LABEL[field]}包含平台禁止发布的内容`,
+  }))
 }
 
 function isAllowedMime(contentType: string): boolean {

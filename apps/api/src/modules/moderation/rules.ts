@@ -61,7 +61,12 @@ export function moderateListingContent(input: {
     for (const rule of RULES) {
       for (const term of rule.terms) {
         if (normalized.includes(normalize(term)))
-          matches.push({ field, ruleCode: rule.code, maskedTerm: maskTerm(term) })
+          matches.push({
+            field,
+            ruleCode: rule.code,
+            decision: rule.decision,
+            maskedTerm: maskTerm(term),
+          })
       }
     }
   }

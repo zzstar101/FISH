@@ -35,6 +35,20 @@ export const ListingStatusSchema = z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLIN
 
 export type ListingStatus = z.infer<typeof ListingStatusSchema>
 
+/**
+ * 审核状态（读模型）。
+ *
+ * `REVIEW` 的商品在库里同时是 `status = OFFLINE`，所以客户端**只看 `status` 分不出**
+ * 「等你改内容」和「你自己下架的」。本字段就是那条判据：卖家自己的列表/详情据此显示
+ * 「审核中」，而不是把它当成已下架（#74）。
+ *
+ * 只在**卖家本人视角**返回真实值（`GET /listings?sellerId=自己`、自己的商品详情）；
+ * 公开 Feed 与他人视角一律 `null` —— 平台内部审核态不是买家该看到的信息。
+ */
+export const ListingModerationStatusSchema = z.enum(['APPROVED', 'BLOCKED', 'REVIEW'])
+
+export type ListingModerationStatus = z.infer<typeof ListingModerationStatusSchema>
+
 // ---------------------------------------------------------------------------
 // 值域
 // ---------------------------------------------------------------------------
@@ -141,6 +155,11 @@ export const ListingCardSchema = z.object({
   /** 无图商品为 `null`（seed 6 条商品里有 3 条无图），前端必须有占位处理。 */
   coverUrl: z.url().nullable(),
   createdAt: z.iso.datetime(),
+  /**
+   * 仅**卖家本人**视角非 `null`（公开 Feed / 他人视角恒 `null`，见 `ListingModerationStatusSchema`）。
+   * 客户端据此把审核中的商品显示成「审核中」，而不是 `OFFLINE`（已下架）。
+   */
+  moderationStatus: ListingModerationStatusSchema.nullable(),
 })
 
 export type ListingCard = z.infer<typeof ListingCardSchema>

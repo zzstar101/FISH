@@ -33,6 +33,7 @@ const detail = {
     authStatus: 'VERIFIED',
   },
   isOwner: false,
+  moderationStatus: null,
 } satisfies ListingDetail
 
 function fakeService(overrides: Partial<ListingService> = {}): ListingService {

@@ -221,6 +221,7 @@ describe('ListingDetailSchema', () => {
       authStatus: 'VERIFIED',
     },
     isOwner: false,
+    moderationStatus: null,
   }
 
   test('accepts a listing without images and a null cover', () => {
@@ -243,22 +244,32 @@ describe('ListingDetailSchema', () => {
 })
 
 describe('ListingCardSchema', () => {
+  const card = {
+    id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+    title: '键盘',
+    priceCents: 0,
+    category: 'DIGITAL',
+    condition: 'GOOD',
+    status: 'ACTIVE',
+    urgent: false,
+    negotiable: false,
+    free: true,
+    coverUrl: null,
+    createdAt: '2026-09-12T03:40:10.000Z',
+    moderationStatus: null,
+  }
+
   test('rejects an unknown status (DRAFT does not exist in the state machine)', () => {
-    expect(
-      ListingCardSchema.safeParse({
-        id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
-        title: '键盘',
-        priceCents: 0,
-        category: 'DIGITAL',
-        condition: 'GOOD',
-        status: 'DRAFT',
-        urgent: false,
-        negotiable: false,
-        free: true,
-        coverUrl: null,
-        createdAt: '2026-09-12T03:40:10.000Z',
-      }).success,
-    ).toBe(false)
+    expect(ListingCardSchema.safeParse({ ...card, status: 'DRAFT' }).success).toBe(false)
+  })
+
+  test('携带审核态：null（非本人视角）与三档枚举合法，其余值拒收', () => {
+    for (const moderationStatus of [null, 'APPROVED', 'REVIEW', 'BLOCKED']) {
+      expect(ListingCardSchema.safeParse({ ...card, moderationStatus }).success).toBe(true)
+    }
+    expect(ListingCardSchema.safeParse({ ...card, moderationStatus: 'PENDING' }).success).toBe(
+      false,
+    )
   })
 })
 
