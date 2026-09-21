@@ -30,6 +30,11 @@ import './index.scss'
  * **本页范围内不做的事**：关注关系没有 follows 表、Chat 建会话的维度是
  * `(listingId, 买家)`（主页没有 listingId），两者都不是「换个数据源」能解决的，
  * 所以吸底两个按钮都**不再伪造本地状态**：点击只如实说明当前能力边界。
+ *
+ * **待落地（#143）**：加个性签名行 —— 展示口径与「我的」页一致，只显**首行**
+ * （`features/profile/signature-text.ts`），并额外给一个**可点击「展开全部」**的入口
+ * 看完整签名。数据源不能照搬「我的」页：`features/profile/signature.ts` 存的是
+ * **当前登录用户**自己的签名（键按本人 id 分），他人签名要等 #143 落地的公开读出口径。
  */
 export default function UserHome() {
   const router = useRouter<{ id?: string }>()

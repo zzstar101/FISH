@@ -1,23 +1,26 @@
 @use '@/styles/mixins' as *;
 
 /**
- * 「我的」Tab（设计稿 `小程序1版profile.html`）。数值 = 设计 pt × 2。
+ * 「我的」页（设计稿 `小程序3版profile.html`）。数值 = 设计 pt × 2。
  *
- * 本页顶栏没有可视 UI（稿里标题是 `sr-only`），所以不挂 `components/top-bar`；
- * 顶部留白由页面按同一套胶囊栅格内联下发（`padding-top`），
- * 这里只留横向内边距与横向排布。
+ * 结构：冰蓝页头背景 → 个人头部（头像 / 昵称 + 认证胶囊 / 编辑 + 扫码）→
+ * 连体卡（图标格子 4 格排 + 5 格排 + 帮助与设置 + 账户操作，发丝线相连）→ 版权行。
+ *
+ * **本页没有任何吸顶元素**：不挂 `top-bar`，顶部留白由页面内联下发（padding-top），
+ * 内容随页面滚动正常滚走；回到顶部钮是悬浮钮（`.profile__totop`），不钉在顶栏。
  */
 .profile {
   position: relative;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  /* 底部留白：让出悬浮 TabBar 的顶边（32 + 101 = 133rpx，取 136），见 DESIGN.md 第 9 节 */
+  /* 底部留白：让出悬浮 TabBar 的顶边，见 DESIGN.md 第 9 节 */
   padding-bottom: 136px;
 }
 
 .profile__hero-bg {
-  @include page-hero(392px, 64px);
+  /* 3版稿 .topbg：250pt 高、下缘 32pt 圆角 */
+  @include page-hero(500px, 64px);
 }
 
 .profile__body {
@@ -30,98 +33,323 @@
   flex-direction: column;
 }
 
-/* ---- 个人卡 ---- */
-.profile__card {
-  @include card;
-  position: relative;
-  padding: 30px 28px 6px;
-}
-
-.profile__identity {
+/* ---- 个人头部（3版稿 .prof）---- */
+.profile__head {
   display: flex;
-  align-items: center;
-  gap: 22px;
-  /* 给右上角圆形编辑钮留位（钮 64 + 右边距 20 + 12 安全间距） */
-  padding-right: 96px;
-}
-
-/* 「编辑」是圆形图标钮，绝对定位在卡片右上角：文字版在 375pt 下放不下
-   （卡片内宽 251 = 头像 96 + 间距 22 + 昵称 72 + 勾 28 + 让位 33） */
-.profile__edit {
-  position: absolute;
-  right: 20px;
-  top: 34px;
-  width: 64px;
-  height: 64px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  border: 2px solid var(--border);
-  background: var(--surface);
-
-  &:active {
-    background: var(--accent-weak);
-  }
-}
-
-.profile__edit-img {
-  width: 32px;
-  height: 32px;
+  align-items: flex-start;
+  gap: 26px;
+  /* 稿里头部内缩 20pt（比卡片区多 4pt），补回 body 让掉的那 8px */
+  padding: 20px 8px 0;
 }
 
 .profile__avatar {
-  width: 96px;
-  height: 96px;
   flex: 0 0 auto;
-  border-radius: 50%;
-  border: 2px solid var(--border);
+  width: 120px;
+  height: 120px;
+  border-radius: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: var(--grad-ph);
+  border: 2px solid #d9e6ff; /* 稿 .pav：brand 20% + #fff，预计算 */
+  overflow: hidden;
 }
 
-.profile__meta {
-  flex: 1;
+.profile__avatar-img {
+  width: 100%;
+  height: 100%;
+}
+
+.profile__avatar-ph {
+  width: 56px;
+  height: 56px;
+}
+
+.profile__info {
+  flex: 1 1 auto;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
 }
 
 .profile__name-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
+  min-width: 0;
 }
 
 .profile__name {
-  font-size: 36px;
+  font-size: 40px;
   font-weight: 600;
   color: var(--fg);
-  /* CJK 的 min-content 宽度只有一个字：flex-shrink:0 + nowrap 才不会被压成 0 宽 */
+  /* 昵称可截断，认证胶囊完整显示（CJK 不给 nowrap 会被压成竖排） */
+  flex: 0 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页） */
+.profile__auth {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: var(--r-pill);
+  background: var(--glass-bg);
+  border: 2px solid #aec9f8; /* 稿 .pbadge：brand 30% + --border，预计算 */
+
+  &:active {
+    background: var(--surface);
+  }
+}
+
+.profile__auth-txt {
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--brand-deep);
   white-space: nowrap;
 }
 
-.profile__tick {
-  width: 28px;
-  height: 28px;
+.profile__auth-arrow {
+  width: 22px;
+  height: 22px;
   flex: 0 0 auto;
 }
 
-/* 校区 + 认证状态行：整行是入口（点进校园认证页），所以给右箭头与热区 */
-.profile__campus-row {
+/* 签名行（稿 .psig）：纯文字一排，无胶囊无描边。
+   契约暂无签字段，默认文案与入口说明见 index.tsx */
+.profile__sig {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 14px;
+  gap: 12px;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 6px 0;
+  min-height: 48px;
+  box-sizing: border-box;
 
   &:active {
     opacity: 0.7;
   }
 }
 
-.profile__campus {
+.profile__sig-ic {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.profile__sig-txt {
+  font-size: 23px;
+  color: #36435d; /* 稿 .psig：muted 34% + --fg，预计算 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 没设置过签名：渲染「设置个性签名」占位。刻意用比其它页面 placeholder 惯例
+   （`--muted-2`）更浅一档的 `--muted` —— `--muted-2`(#3e4b66) 与真实签名色
+   (#36435d) 几乎同色，占位会被看成用户自己写的签名 */
+.profile__sig-txt.is-ph {
+  color: var(--muted);
+}
+
+/* 右侧动作：编辑钮已去掉（头像昵称跟随微信，本页可编辑的只有个性签名）。
+   扫码与头像同一行对齐：高度撑满头像（120px），图标与头像同心；无边框透明钮 */
+.profile__scanbtn {
+  flex: 0 0 auto;
+  width: 80px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24px;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.profile__scanbtn-ic {
+  width: 56px;
+  height: 56px;
+}
+
+/* ---- 三张独立卡（Owner 修订）：圆角 8pt、无边框描边；只有帮助与设置卡带底部阴影 ---- */
+.profile__panel {
+  background: var(--surface);
+  border-radius: var(--r-sm); /* 8pt → 16px */
+}
+
+.profile__panel--stats,
+.profile__panel--trade {
+  padding: 32px 8px 28px;
+}
+
+.profile__panel--stats {
+  margin-top: 28px;
+}
+
+.profile__panel--trade {
+  margin-top: 24px;
+}
+
+.profile__panel--settings {
+  margin-top: 24px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.profile__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+
+  &--5 {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+.profile__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  border-radius: 28px;
+
+  &:active {
+    opacity: 0.65;
+  }
+}
+
+/* 数字格：数字代替图标（Owner 修订），排布比图标格紧凑 */
+.profile__grid--4 .profile__cell {
+  gap: 12px;
+}
+
+.profile__cell-num {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--brand-deep);
+}
+
+.profile__cell-tile {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile__cell-ic {
+  width: 60px;
+  height: 60px;
+}
+
+/* 右上角数量圆点（Owner 修订）：红底白字的小圆点，纯 --danger 不压棕，
+   白环让它压在蓝色图标上也读得清；超过 99 显示 99+（见 index.tsx） */
+.profile__cell-dot {
+  position: absolute;
+  top: -10px;
+  right: -12px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  background: var(--danger);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 4px var(--surface);
+}
+
+.profile__cell-label {
+  font-size: 23px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
+/* 分组小标题：连体卡内的浅色分隔带（3版稿 .rowlabel） */
+.profile__sec-label {
+  display: block;
+  padding: 22px 40px 20px;
+  background: rgba(23, 35, 61, 0.03); /* 稿 .rowlabel：fg 3% + surface，比 --ink-weak 淡一半 */
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted-2);
+}
+
+/* ---- 列表行（3版稿 .mrow）：图标盘 + 主副文案 + 箭头 ---- */
+.profile__list {
+  display: block;
+}
+
+.profile__row-item {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  min-height: 112px;
+  padding: 0 30px;
+  box-sizing: border-box;
+
+  & + & {
+    border-top: 2px solid var(--border);
+  }
+
+  &:active {
+    background: var(--accent-weak);
+  }
+
+  &.is-danger .profile__row-title {
+    color: var(--danger-ink);
+  }
+}
+
+.profile__row-disc {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+  border-radius: 24px;
+  background: rgba(23, 35, 61, 0.05); /* 稿 .mic：fg 5% + surface，预计算 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &.is-danger {
+    background: #fff0f2; /* 稿 .mrow.danger .mic：danger 9% + surface，预计算 */
+  }
+}
+
+.profile__row-ic {
+  width: 36px;
+  height: 36px;
+}
+
+.profile__row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.profile__row-title {
+  font-size: 28px;
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.profile__row-sub {
   font-size: 22px;
   color: var(--muted);
   white-space: nowrap;
@@ -129,249 +357,80 @@
   text-overflow: ellipsis;
 }
 
-.profile__campus-arrow {
-  width: 24px;
-  height: 24px;
+.profile__row-chev {
+  width: 34px;
+  height: 34px;
   flex: 0 0 auto;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
-.profile__edit-text {
-  font-size: 24px;
-  color: var(--fg);
-}
-
-.profile__stats {
-  margin-top: 28px;
-  padding: 24px 0 28px;
-  border-top: 2px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.profile__stat {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-
-  /* 数据行四项都是入口，按下给一点反馈，否则看起来只是数字 */
-  &:active {
-    opacity: 0.65;
-  }
-}
-
-.profile__stat-num {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 36px;
-  font-weight: 700;
-  color: var(--brand);
-}
-
-.profile__stat-label {
-  font-size: 21px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-/* ---- 区块标题 ---- */
-.profile__sec {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 44px 8px 18px;
-}
-
-.profile__sec-title {
-  font-size: 30px;
-  font-weight: 600;
-  color: var(--fg);
-  letter-spacing: 0.01em;
-}
-
-.profile__sec-note {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
-  color: var(--muted);
-}
-
-/* ---- 列表行 ---- */
-.profile__list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.profile__row {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px;
-  border-radius: 24px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-
-  &:active {
-    background: var(--accent-weak);
-  }
-}
-
-.profile__row-thumb {
+/* ---- 回到顶部（3版稿 .totop）：悬浮玻璃圆钮，滚过一屏浮现 ----
+   稿的 bottom 84pt 是无 TabBar 画布，真机抬到悬浮底栏上方（与消息页同值） */
+.profile__totop {
+  position: fixed;
+  right: 36px;
+  bottom: 200px;
+  z-index: 5;
   width: 88px;
   height: 88px;
-  flex: 0 0 auto;
-  border-radius: 18px;
-  background: var(--grad-ph);
-}
-
-.profile__row-mark {
-  width: 88px;
-  height: 88px;
-  flex: 0 0 auto;
-  border-radius: 18px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--accent-weak);
-}
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(44px) saturate(180%);
+  -webkit-backdrop-filter: blur(44px) saturate(180%);
+  box-shadow: var(--shadow-float);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(24px) scale(0.9);
+  transition:
+    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    visibility 0s linear 0.26s;
 
-.profile__row-mark-img {
-  width: 40px;
-  height: 40px;
-}
-
-.profile__row-main {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-/* 元信息行：价格 · 浏览 · 状态 全部并排一行，标题因此能独占整行宽度 */
-.profile__row-meta {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  width: 100%;
-  min-width: 0;
-}
-
-.profile__row-dot {
-  color: var(--border);
-  font-size: 21px;
-}
-
-.profile__row-title {
-  font-size: 27px;
-  font-weight: 500;
-  color: var(--fg);
-  width: 100%;
-  /* CJK 的最短内容宽度只有一个字：必须显式给宽度 + 单行截断，否则会被压成竖排 */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.profile__row-sub {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
-  color: var(--muted);
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.profile__row-price {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 26px;
-  font-weight: 700;
-  color: var(--fg);
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.profile__row-state {
-  flex: 0 0 auto;
-  font-size: 21px;
-  color: var(--muted);
-  white-space: nowrap;
-
-  &.is-hit {
-    color: var(--brand);
-  }
-}
-
-/* ---- 功能入口 ---- */
-.profile__entries {
-  @include card;
-  margin-top: 44px;
-  padding: 8px 24px;
-}
-
-.profile__entry {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  height: 108px;
-  border-bottom: 2px solid var(--border);
-
-  &:last-child {
-    border-bottom: 0;
+  &.is-show {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      visibility 0s;
   }
 
   &:active {
-    opacity: 0.7;
+    transform: translateY(2px) scale(0.96);
   }
 }
 
-.profile__entry-icon {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 auto;
+.profile__totop-arrow {
+  width: 22px;
+  height: 22px;
+  border-left: 4px solid var(--brand);
+  border-top: 4px solid var(--brand);
+  border-radius: 2px;
+  transform: translateY(4px) rotate(45deg);
 }
 
-.profile__entry-label {
-  font-size: 28px;
-  color: var(--fg);
-}
-
-.profile__entry-note {
-  margin-left: auto;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
-  color: var(--muted);
-}
-
-.profile__entry-arrow {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-}
-
-/* ---- 页脚 ---- */
+/* ---- 页脚：组合 logo（brand-lockup：鱼形标 + 鱼小应 YUXIAOYING）+ 版权行 ---- */
 .profile__footer {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
-  padding: 60px 0 8px;
+  padding: 44px 40px 12px;
 }
 
+/* 源图 683×160（4.266:1），按高 48px 等比 → 205px */
 .profile__footer-logo {
-  width: 200px;
+  width: 205px;
   height: 48px;
-  opacity: 0.55;
 }
 
 .profile__footer-copy {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 20px;
+  margin-top: 12px;
+  font-size: 21px;
   color: var(--muted);
 }
 
@@ -379,6 +438,10 @@
    登录态接上后这一屏才有「未登录」形态：不再摆 mock 的演示账号数据，
    改为一张引导卡把用户送去登录页。样式复用个人卡容器（`.profile__card`），
    只覆盖内边距与排列方式。 */
+.profile__card {
+  @include card;
+}
+
 .profile__guest {
   display: flex;
   flex-direction: column;

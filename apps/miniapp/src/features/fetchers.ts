@@ -32,8 +32,10 @@ import type { Me } from '@fish/contracts/auth/user'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
+import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
 import { isUnauthenticatedError } from '@/lib/request'
-import type { ListingDetailView } from '@/mock/api'
+import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
+import { type ListingDetailView, myWishes } from '@/mock/api'
 import type { MockListing, MockNotification, MockUser, MockWish, SearchFilter } from '@/mock/types'
 import { fetchNotifications } from './chat/api'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
@@ -270,8 +272,11 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
 /* --------------------------------------------------------------- 我的 */
 
 /**
- * 个人中心。**任何失败都返回 `null`，绝不返回 fixture** —— 调用方（`pages/profile`）
- * 拿不到真实数据时按空值渲染，不拿演示账号顶上（演示身份会让人以为登录成了别人）。
+ * 个人中心。**真实构建任何失败都返回 `null`，绝不返回 fixture** —— 调用方
+ * （`pages/profile`）拿不到真实数据时按空值渲染（数字栏显示 `—`、圆点不显示），
+ * 不拿演示账号顶上。
+ * 唯一例外是演示构建（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，见下方
+ * `loadProfile` 的 catch）：那时登录身份本身就是演示账号，回退的是「当前用户」自己的数据。
  *
  * 返回值刻意是「页面需要的那几块」而不是整个 `ProfileResponse`：
  * 页面用的是 `stats` + 商品卡 + 愿望行 + 订单计数，契约的 `transactions` 原始数组
@@ -286,6 +291,14 @@ export type ProfileView = {
   pendingMeetup: number
   /** 全部买卖笔数 */
   orderCount: number
+  /**
+   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。**契约没有这三个端点**，功能未上线 ——
+   * 真实构建给 `null`（页面显示 `—`，不把「系统不知道」画成 0）；演示构建给演示数字
+   * （「我的」页 4 格栏按稿只摆数字不摆图标）。
+   */
+  favoritesCount: number | null
+  historyCount: number | null
+  followCount: number | null
 }
 
 export async function loadProfile(now: number = Date.now()): Promise<ProfileView | null> {
@@ -298,10 +311,53 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       wishes: profile.wishes.map(toMockWish),
       pendingMeetup: profile.transactions.filter((tx) => tx.status === 'PENDING_MEETUP').length,
       orderCount: profile.transactions.length,
+      // 收藏 / 足迹 / 关注没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
+      // 「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
+      favoritesCount: null,
+      historyCount: null,
+      followCount: null,
     }
   } catch (error) {
-    reportFailure('个人中心', error)
-    return null
+    // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
+    // （`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）。照默认值打日志会在
+    // `dev:weapp` 这类「mock 开、演示登录态关」的构建里声称"已回退 mock"，
+    // 而实际返回的是 `null` —— 正是 #140 给 `reportFailure` 加这个参数要根除的那种
+    // 「日志声称一件没发生的事」。
+    reportFailure('个人中心', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)
+    // 演示构建（`TARO_APP_MOCK=1` 且演示登录态开启）才回退演示数据：此时页面的
+    // 登录身份本身就是演示账号，摆的是「当前用户」自己的演示数据，不存在
+    // 「把演示账号的数据挂在真实用户名下」；真实构建一律 fail-closed 返回 null。
+    // 页面侧还有一道保险：`profile.user.id` 不等于当前登录 id 时会被 cancellable 校验丢弃。
+    if (!MOCK_FALLBACK_ENABLED || !DEMO_AUTH_ENABLED) return null
+    return demoProfile()
+  }
+}
+
+/**
+ * 演示构建的个人中心 fixture：与 `mock/account.ts` 的演示账号同一套数据
+ * （我的发布 / 愿望 / 买卖直接取该账号的既有 fixture），
+ * 保证「我的」页的角标数字与 mylist / orders 页看到的计数一致。
+ * 收藏 / 足迹 / 关注没有 fixture 来源，按稿给演示数字（8 / 24 / 5）。
+ *
+ * ⚠️ 只走**失败回退**这条路：`TARO_APP_MOCK=1` 但本机真起了后端时，走的是成功路径，
+ * 这三格是 `null` → 页面显示 `—`（演示数字不覆盖真实结果）。
+ */
+function demoProfile(): ProfileView {
+  const wishes = myWishes()
+  return {
+    user: DEMO_USER,
+    stats: {
+      activeListings: myListingCounts().sale,
+      activeWishes: wishes.length,
+      completedTransactions: TRANSACTIONS.filter((tx) => tx.status === 'COMPLETED').length,
+    },
+    listings: MY_LISTINGS.map((item) => item.listing),
+    wishes,
+    pendingMeetup: TRANSACTIONS.filter((tx) => tx.status === 'PENDING_MEETUP').length,
+    orderCount: TRANSACTIONS.length,
+    favoritesCount: 8,
+    historyCount: 24,
+    followCount: 5,
   }
 }
 
