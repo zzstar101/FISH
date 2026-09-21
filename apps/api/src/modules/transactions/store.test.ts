@@ -3,7 +3,7 @@ import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlMessageStore } from '../messages/store'
-import { createSqlTransactionStore, MeetupConsumeRaceError, type TransactionRow } from './store'
+import { createSqlTransactionStore, type TransactionRow } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -448,7 +448,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
 
     const ok = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
@@ -477,7 +476,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
     await store.recordMeetupTokenFailure(
@@ -493,7 +491,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: NEW_TOKEN_HASH,
       codeHash: NEW_CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     expect(refreshed).not.toBeNull()
     if (!refreshed) throw new Error('unreachable')
@@ -518,7 +515,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
 
     const miss = await store.consumeMeetupToken(txId, buyer1, {
@@ -555,43 +551,35 @@ describe('meetup token store (integration, #70)', () => {
     expect(locked.kind).toBe('locked')
   })
 
-  test('过期 → expired（即便哈希正确）', async () => {
+  test('#147 长期凭证：issued_at 早已过去（原 TTL 语义的时间点）核销仍 ok', async () => {
     const txId = await createPendingTx(scenarios.expired)
     await store.upsertMeetupToken(txId, {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
-    // 平移 issued/expires（保持 expires > issued 的 CHECK）：expires 已成过去
+    // 平移 issued_at：模拟「签发很久之后」（原 5 分钟 TTL 早已过去）
     await db.execute(sql`
       UPDATE transaction_meetup_tokens
-      SET issued_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes'
+      SET issued_at = now() - interval '10 minutes'
       WHERE transaction_id = ${txId}
     `)
     const result = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
-    expect(result.kind).toBe('expired')
+    expect(result.kind).toBe('ok')
   })
 
-  test('交易在窗口期离开 PENDING：核销抛错回滚（token 未被消费）', async () => {
+  test('#147 终态销毁：cancel 同事务删凭证行；旧码核销 → not-found（不再是 expired/consumed）', async () => {
     const txId = await createPendingTx(scenarios.race)
     await store.upsertMeetupToken(txId, {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
-    await store.cancel(txId, buyer1) // 并发取消的替身
-
-    let threw = false
-    try {
-      await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
-    } catch (error) {
-      threw = error instanceof MeetupConsumeRaceError
-    }
-    expect(threw).toBe(true)
-    const row = await store.findMeetupToken(txId)
-    expect(row?.consumed_at).toBeNull() // 回滚生效
+    expect(await store.findMeetupToken(txId)).not.toBeNull()
+    await store.cancel(txId, buyer1)
+    expect(await store.findMeetupToken(txId)).toBeNull() // 行已随 cancel 删除
+    const result = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(result.kind).toBe('not-found')
   })
 
   test('买家已单侧确认后核销 → 同事务推进 COMPLETED + listing SOLD（审查 F1）', async () => {
@@ -605,7 +593,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     const ok = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
     expect(ok.kind).toBe('ok')
@@ -630,7 +617,6 @@ describe('meetup token store (integration, #70)', () => {
         tokenHash: TOKEN_HASH,
         codeHash: CODE_HASH,
         issuedBy: seller,
-        ttlSeconds: 300,
       }),
     ).toBeNull()
     expect(await store.findMeetupToken(cancelledTx)).toBeNull()
@@ -643,7 +629,6 @@ describe('meetup token store (integration, #70)', () => {
         tokenHash: TOKEN_HASH,
         codeHash: CODE_HASH,
         issuedBy: seller,
-        ttlSeconds: 300,
       }),
     ).toBeNull()
     expect(await store.findMeetupToken(completedTx)).toBeNull()
@@ -657,7 +642,6 @@ describe('meetup token store (integration, #70)', () => {
         tokenHash: TOKEN_HASH,
         codeHash: CODE_HASH,
         issuedBy: seller,
-        ttlSeconds: 300,
       }),
     ])
     // cancel 在 PENDING 上不受 token 影响，必然成功（#11 冻结语义）
@@ -680,7 +664,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: V1_TOKEN,
       codeHash: V1_CODE,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     // 旧代凭证上的两次失败
     const first = await store.recordMeetupTokenFailure(
@@ -697,7 +680,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: V2_TOKEN,
       codeHash: V2_CODE,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     // 并发中的旧请求此刻才落计数：代际不匹配 → 被丢弃
     const stale = await store.recordMeetupTokenFailure(

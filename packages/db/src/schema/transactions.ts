@@ -81,15 +81,16 @@ export const transactions = pgTable(
 )
 
 /**
- * 面交交易码（#70）。一行对应一笔交易的**当前**凭证：重新签发（刷新）即整行覆写，
- * 旧码立即作废 —— 「一次性 + 短期」由 consumed_at / expires_at 承载。
+ * 面交交易码（#70，#147 改为长期凭证）。一行对应一笔交易的**当前**凭证：重新签发
+ * （刷新）即整行覆写，旧码立即作废 —— 「一次性」由 consumed_at 承载；有效期即
+ * PENDING_MEETUP 的生命周期，交易进终态（COMPLETED / CANCELLED）时同事务删行。
  *
  * 安全口径：**不存明文**。6 位码与 QR token 都只存 HMAC-SHA256（服务端密钥见
  * `MEETUP_TOKEN_SECRET`），明文只在签发响应里出现一次；6 位码空间只有 10^6，
  * 连续失败由 failed_attempts / locked_until 限流（服务层负责）。
  *
- * 状态不落列：NONE（无行）/ ISSUED / EXPIRED（expires_at ≤ now 且未消费）/
- * CONSUMED（consumed_at 非空）全部可派生，避免派生值与真实时间漂移。
+ * 状态不落列：NONE（无行）/ ISSUED / CONSUMED（consumed_at 非空）全部可派生，
+ * 避免派生值与真实时间漂移。
  */
 export const transactionMeetupTokens = pgTable(
   'transaction_meetup_tokens',
@@ -107,7 +108,6 @@ export const transactionMeetupTokens = pgTable(
       .notNull()
       .references(() => users.id),
     issuedAt: timestamptz('issued_at').notNull().defaultNow(),
-    expiresAt: timestamptz('expires_at').notNull(),
     /** 消费即核销：置非空后任何再次核销都被拒（一次性）。 */
     consumedAt: timestamptz('consumed_at'),
     consumedBy: uuid('consumed_by').references(() => users.id),
@@ -122,10 +122,6 @@ export const transactionMeetupTokens = pgTable(
     check(
       'transaction_meetup_tokens_consumed_by_matches_consumed_at',
       sql`(${table.consumedAt} IS NULL) = (${table.consumedBy} IS NULL)`,
-    ),
-    check(
-      'transaction_meetup_tokens_expires_after_issued',
-      sql`${table.expiresAt} > ${table.issuedAt}`,
     ),
   ],
 )

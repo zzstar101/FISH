@@ -176,21 +176,23 @@ export type TransactionListResponse = z.infer<typeof transactionListResponseSche
 // 与 `system` 的 `VALIDATION_FAILED` / `INTERNAL_ERROR`。
 // ---------------------------------------------------------------------------
 
-export const meetupTokenStatusSchema = z.enum(['NONE', 'ISSUED', 'EXPIRED', 'CONSUMED'])
+/**
+ * #147：凭证随交易生命周期——PENDING_MEETUP 内长期有效，交易进终态时同事务销毁。
+ * 因此状态只有 NONE（无行）/ ISSUED / CONSUMED；EXPIRED 不再是可达路径。
+ */
+export const meetupTokenStatusSchema = z.enum(['NONE', 'ISSUED', 'CONSUMED'])
 export type MeetupTokenStatus = z.infer<typeof meetupTokenStatusSchema>
 
 export const meetupTokenResponseSchema = z.strictObject({
   transactionId: z.uuid(),
   code: z.string().regex(/^\d{6}$/),
   qrPayload: z.string().min(1),
-  expiresAt: z.iso.datetime(),
 })
 export type MeetupTokenResponse = z.infer<typeof meetupTokenResponseSchema>
 
 export const meetupTokenStatusResponseSchema = z.strictObject({
   transactionId: z.uuid(),
   status: meetupTokenStatusSchema,
-  expiresAt: z.iso.datetime().nullable(),
   consumedAt: z.iso.datetime().nullable(),
   consumedBy: z.uuid().nullable(),
 })
@@ -230,8 +232,7 @@ export const TransactionErrorCodeSchema = z.enum([
   'TRANSACTION_NOT_IN_PENDING',
   /** 404：交易当前没有可消费的面交凭证。 */
   'MEETUP_TOKEN_NOT_FOUND',
-  /** 409：面交凭证已过期或已消费。 */
-  'MEETUP_TOKEN_EXPIRED',
+  /** 409：面交凭证已消费（重复核销）。#147：凭证随交易生命周期，过期不再是可达路径。 */
   'MEETUP_TOKEN_CONSUMED',
   /** 422：二维码或 6 位码无效。 */
   'MEETUP_TOKEN_INVALID',

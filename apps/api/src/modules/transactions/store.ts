@@ -53,14 +53,13 @@ export interface TxUserBrief {
   avatarUrl: string | null
 }
 
-/** transaction_meetup_tokens 的行（#70）。状态不落列，由 service 按 expires/consumed 派生。 */
+/** transaction_meetup_tokens 的行（#70）。状态不落列，由 service 按 consumed 派生。 */
 export interface MeetupTokenRow {
   transaction_id: string
   token_hash: string
   code_hash: string
   issued_by: string
   issued_at: Date | string
-  expires_at: Date | string
   consumed_at: Date | string | null
   consumed_by: string | null
   failed_attempts: number
@@ -75,7 +74,6 @@ export type MeetupConsumeResult =
   | { kind: 'ok'; row: MeetupTokenRow }
   | { kind: 'not-found' }
   | { kind: 'consumed' }
-  | { kind: 'expired' }
   | { kind: 'locked' }
   | { kind: 'invalid' }
 
@@ -127,8 +125,8 @@ export interface TransactionStore {
   ): Promise<{ kind: 'ok'; row: TransactionRow } | { kind: 'not-cancellable' | 'not-found' }>
   findMeetupToken(transactionId: string): Promise<MeetupTokenRow | null>
   /**
-   * 签发 / 刷新面交凭证（#70）：一行对应一笔交易的当前凭证，重复签发整行覆写，
-   * 旧码（token_hash / code_hash 被替换）立即作废，消费与失败计数一并归零。
+   * 签发 / 刷新面交凭证（#70，#147 长期凭证）：一行对应一笔交易的当前凭证，重复签发
+   * 整行覆写，旧码（token_hash / code_hash 被替换）立即作废，消费与失败计数一并归零。
    * **原子性（防 TOCTOU）**：事务内先 `SELECT … FOR UPDATE` 锁定交易行并校验
    * PENDING_MEETUP + 卖家身份，校验通过才写凭证行——201 的承诺是「持锁那一刻
    * 交易仍可签发」；cancel/complete 与 issue 并发时在交易行锁上串行化，终态交易
@@ -136,19 +134,21 @@ export interface TransactionStore {
    */
   upsertMeetupToken(
     transactionId: string,
-    input: { tokenHash: string; codeHash: string; issuedBy: string; ttlSeconds: number },
+    input: { tokenHash: string; codeHash: string; issuedBy: string },
   ): Promise<MeetupTokenRow | null>
   /**
-   * 原子核销（#70 的「一次性」）：匹配明文哈希 + 未消费 + 未过期 + 未锁定的条件更新，
-   * 并发重复核销只有一者成功（其余按当前行状态诊断，见 MeetupConsumeResult）。
+   * 原子核销（#70 的「一次性」）：匹配明文哈希 + 未消费 + 未锁定的条件更新
+   * （#147：无过期路径，凭证在 PENDING_MEETUP 生命周期内有效），并发重复核销
+   * 只有一者成功（其余按当前行状态诊断，见 MeetupConsumeResult）。
    * 成功核销在**同一事务**里给卖家盖面交确认（seller_confirmed_at 保持已值）——
    * 展示码即卖家对面交的同意；买家侧确认由客户端按 nextAction 再调 confirm。
    * 若买家侧已先行单侧确认（#11 允许停在 PENDING），核销就是**第二侧确认事件**：
    * 同事务镜像 confirm 的合并语义，把交易推进 COMPLETED + listing SOLD（无条件，
-   * 与 confirm 同一论证：交易完成必然连带商品售出）。
+   * 与 confirm 同一论证：交易完成必然连带商品售出），并**同事务删除凭证行**
+   * （#147 终态销毁）。
    * 与 cancel 的并发窗口（无法在不偏离 #11 cancel 冻结语义的前提下消除）：
    * cancel 先提交 → 本事务 stamp 落 0 行、整体回滚（service 409）；
-   * cancel 后提交 → 取消生效、凭证保持已消费 —— 终态以 transactions 为准。
+   * cancel 后提交 → 取消生效、凭证已随 cancel 删除 —— 终态以 transactions 为准。
    */
   consumeMeetupToken(
     transactionId: string,
@@ -179,7 +179,7 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
 }
 
 const MEETUP_TOKEN_COLUMNS = sql`transaction_id, token_hash, code_hash, issued_by,
-  issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until`
+  issued_at, consumed_at, consumed_by, failed_attempts, locked_until`
 
 function toMeetupTokenRow(row: Record<string, unknown>): MeetupTokenRow {
   return {
@@ -188,7 +188,6 @@ function toMeetupTokenRow(row: Record<string, unknown>): MeetupTokenRow {
     code_hash: row.code_hash as string,
     issued_by: row.issued_by as string,
     issued_at: row.issued_at as Date,
-    expires_at: row.expires_at as Date,
     consumed_at: (row.consumed_at as Date | null) ?? null,
     consumed_by: (row.consumed_by as string | null) ?? null,
     failed_attempts: row.failed_attempts as number,
@@ -196,7 +195,7 @@ function toMeetupTokenRow(row: Record<string, unknown>): MeetupTokenRow {
   }
 }
 
-/** 核销事务内发现交易已离开 PENDING_MEETUP：抛出以回滚消费，service 重读后给出 409。 */
+/** 交易核销事务内发现交易已离开 PENDING_MEETUP：抛出以回滚消费，service 重读后给出 409。 */
 export class MeetupConsumeRaceError extends Error {
   constructor(readonly transactionId: string) {
     super(`核销时交易已离开 PENDING_MEETUP：transaction=${transactionId}`)
@@ -204,22 +203,20 @@ export class MeetupConsumeRaceError extends Error {
   }
 }
 
-/** 条件更新 0 行后的诊断：按当前行状态区分消费/过期/锁定/不匹配。 */
+/** 条件更新 0 行后的诊断：按当前行状态区分消费/锁定/不匹配。 */
 async function diagnoseMeetupToken(
   tx: Parameters<Parameters<Db['transaction']>[0]>[0],
   transactionId: string,
 ): Promise<Exclude<MeetupConsumeResult, { kind: 'ok' }>['kind']> {
   const result = await tx.execute(sql`
     SELECT ${MEETUP_TOKEN_COLUMNS},
-           (locked_until IS NOT NULL AND locked_until > now()) AS is_locked,
-           (expires_at <= now()) AS is_expired
+           (locked_until IS NOT NULL AND locked_until > now()) AS is_locked
     FROM transaction_meetup_tokens
     WHERE transaction_id = ${transactionId}
   `)
   const row = rowsOf(result)[0]
   if (!row) return 'not-found'
   if (row.consumed_at != null) return 'consumed'
-  if (row.is_expired === true) return 'expired'
   if (row.is_locked === true) return 'locked'
   return 'invalid'
 }
@@ -489,6 +486,11 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               -- 去掉谓词后，交易完成必然连带把商品置为 SOLD，不变量由构造保证。
               UPDATE listings l SET status = 'SOLD', updated_at = now()
               FROM txn WHERE l.id = txn.listing_id
+            ), token AS (
+              -- #147 终态销毁：凭证随交易同事务删除，COMPLETED 后旧码不可再用。
+              -- DELETE 引用 txn：交易未推进（txn 0 行）时凭证保留。
+              DELETE FROM transaction_meetup_tokens t
+              USING txn WHERE t.transaction_id = ${id}
             )
             SELECT txn.*, c.id AS conversation_id
             FROM txn JOIN conversations c
@@ -517,6 +519,11 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             -- 「交易已 CANCELLED、商品却停在 OFFLINE」——与 confirm 侧同一论证（#40-4）。
             UPDATE listings l SET status = 'ACTIVE', updated_at = now()
             FROM txn WHERE l.id = txn.listing_id
+          ), token AS (
+            -- #147 终态销毁：凭证随交易同事务删除，CANCELLED 后旧码不可再用。
+            -- DELETE 引用 txn：只在真正取消（txn 有行）时删，幂等重入时凭证已删、0 行无害。
+            DELETE FROM transaction_meetup_tokens t
+            USING txn WHERE t.transaction_id = ${id}
           )
           SELECT txn.*, c.id AS conversation_id
           FROM txn JOIN conversations c
@@ -547,7 +554,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
     async findMeetupToken(transactionId) {
       const result = await db.execute(sql`
         SELECT transaction_id, token_hash, code_hash, issued_by,
-               issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+               issued_at, consumed_at, consumed_by, failed_attempts, locked_until
         FROM transaction_meetup_tokens
         WHERE transaction_id = ${transactionId}
       `)
@@ -559,8 +566,6 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
       return db.transaction(async (tx) => {
         // 先锁交易行并校验状态与卖家（FOR UPDATE）：issue 与 cancel/complete 在交易行
         // 锁上串行化，杜绝「service 检查 PENDING 之后、写入之前交易进入终态」的窗口。
-        // expires_at 用 DB 时钟 now() + interval：与应用时钟的偏移不会触发
-        // expires_after_issued CHECK（同一条语句里 now() 即 issued_at，严格小于过期）。
         const locked = await tx.execute(sql`
           SELECT id FROM transactions
           WHERE id = ${transactionId}
@@ -571,21 +576,19 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         if (rowsOf(locked).length === 0) return null
         const result = await tx.execute(sql`
           INSERT INTO transaction_meetup_tokens
-            (transaction_id, token_hash, code_hash, issued_by, expires_at)
-          VALUES (${transactionId}, ${input.tokenHash}, ${input.codeHash}, ${input.issuedBy},
-                  now() + make_interval(secs => ${input.ttlSeconds}::int))
+            (transaction_id, token_hash, code_hash, issued_by)
+          VALUES (${transactionId}, ${input.tokenHash}, ${input.codeHash}, ${input.issuedBy})
           ON CONFLICT (transaction_id) DO UPDATE SET
             token_hash = EXCLUDED.token_hash,
             code_hash = EXCLUDED.code_hash,
             issued_by = EXCLUDED.issued_by,
             issued_at = now(),
-            expires_at = EXCLUDED.expires_at,
             consumed_at = NULL,
             consumed_by = NULL,
             failed_attempts = 0,
             locked_until = NULL
           RETURNING transaction_id, token_hash, code_hash, issued_by,
-                    issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+                    issued_at, consumed_at, consumed_by, failed_attempts, locked_until
         `)
         const row = rowsOf(result)[0]
         if (!row) throw new Error(`面交凭证签发失败：transaction=${transactionId}`)
@@ -595,8 +598,9 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
 
     async consumeMeetupToken(transactionId, userId, presented) {
       return db.transaction(async (tx) => {
-        // 条件更新承担全部竞态：明文哈希匹配 + 未消费 + 未过期 + 未锁定，
-        // 并发重复核销时只有一者拿到行，其余落到下方按行状态诊断。
+        // 条件更新承担全部竞态：明文哈希匹配 + 未消费 + 未锁定（#147：无过期路径，
+        // 凭证在 PENDING_MEETUP 生命周期内有效），并发重复核销时只有一者拿到行，
+        // 其余落到下方按行状态诊断。
         const column = presented.kind === 'qr' ? sql`token_hash` : sql`code_hash`
         const consumed = await tx.execute(sql`
           UPDATE transaction_meetup_tokens
@@ -604,10 +608,9 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           WHERE transaction_id = ${transactionId}
             AND ${column} = ${presented.hash}
             AND consumed_at IS NULL
-            AND expires_at > now()
             AND (locked_until IS NULL OR locked_until <= now())
           RETURNING transaction_id, token_hash, code_hash, issued_by,
-                    issued_at, expires_at, consumed_at, consumed_by, failed_attempts, locked_until
+                    issued_at, consumed_at, consumed_by, failed_attempts, locked_until
         `)
         const okRow = rowsOf(consumed)[0]
         if (okRow) {
@@ -627,6 +630,8 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           // 在同一事务推进 COMPLETED + listing SOLD。listing 不带状态谓词——交易完成
           // 必然连带商品售出，否则会留下「交易已完成、商品未售出」的自相矛盾（#40-4 同款）。
           // 0 行 = 买家尚未确认，交易停在 PENDING 等客户端的 confirm（幂等）。
+          // #147 终态销毁：推进 COMPLETED 的同事务删除凭证行——DELETE 的 WHERE
+          // 引用 txn，交易未推进（txn 0 行）时凭证保留（仍是当前有效凭证）。
           await tx.execute(sql`
             WITH txn AS (
               UPDATE transactions SET status = 'COMPLETED', completed_at = now(), updated_at = now()
@@ -636,6 +641,9 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             ), listing AS (
               UPDATE listings l SET status = 'SOLD', updated_at = now()
               FROM txn WHERE l.id = txn.listing_id
+            ), token AS (
+              DELETE FROM transaction_meetup_tokens t
+              USING txn WHERE t.transaction_id = ${transactionId}
             )
             SELECT id FROM txn
           `)
