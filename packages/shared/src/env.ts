@@ -79,3 +79,46 @@ export function loadMeetupTokenEnv(
   }
   return { MEETUP_TOKEN_SECRET: secret }
 }
+
+/**
+ * API 专属 AI 润色上游配置（#141）。
+ *
+ * `AI_POLISH_TRANSPORT` **无默认值**：必须显式声明 `stub` 或 `live`。默认 stub 会让生产静默
+ * 返回假文案，默认 live 会让"没配"看起来像"配错了"，所以缺失即启动失败。参照
+ * `MAIL_TRANSPORT` / `MEETUP_TOKEN_SECRET` 的同一拆分原则**不进共享 ServerEnv**：
+ * worker 不调上游，上游密钥不扩散到不需要它的进程。
+ *
+ * `AI_POLISH_BASE_URL` 两种 transport 都必填：stub 也是真 HTTP 服务
+ * （`apps/api/scripts/ai-polish-stub.ts`），没有"进程内假实现"这种回退路径。
+ */
+export type AiPolishEnv =
+  | { transport: 'stub'; baseUrl: string }
+  | { transport: 'live'; baseUrl: string; apiKey: string; model: string }
+
+export function loadAiPolishEnv(
+  source: Record<string, string | undefined> = process.env,
+): AiPolishEnv {
+  const transport = source.AI_POLISH_TRANSPORT
+  const baseUrl = source.AI_POLISH_BASE_URL
+  if (transport === 'stub') {
+    if (!baseUrl) {
+      throw new Error(
+        '环境变量校验失败：AI_POLISH_TRANSPORT=stub 必须配置 AI_POLISH_BASE_URL（指向 apps/api/scripts/ai-polish-stub.ts）',
+      )
+    }
+    return { transport: 'stub', baseUrl }
+  }
+  if (transport === 'live') {
+    const apiKey = source.AI_POLISH_API_KEY
+    const model = source.AI_POLISH_MODEL
+    if (!baseUrl || !apiKey || !model) {
+      throw new Error(
+        '环境变量校验失败：AI_POLISH_TRANSPORT=live 必须同时配置 AI_POLISH_BASE_URL / AI_POLISH_API_KEY / AI_POLISH_MODEL',
+      )
+    }
+    return { transport: 'live', baseUrl, apiKey, model }
+  }
+  throw new Error(
+    '环境变量校验失败：AI_POLISH_TRANSPORT 必须显式设置为 stub 或 live（无默认值，不允许静默回退）',
+  )
+}
