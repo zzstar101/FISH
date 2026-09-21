@@ -30,6 +30,7 @@ function dto(overrides: Partial<ConversationDto> = {}): ConversationDto {
     },
     counterpart: { id: 'u-2', nickname: '卖家', avatarUrl: null },
     unreadCount: 0,
+    counterpartLastReadAt: null,
     lastMessage: null,
     lastMessageAt: '2026-09-21T04:00:00.000Z',
     createdAt: '2026-09-21T03:00:00.000Z',
