@@ -3,7 +3,7 @@
 > 状态：**方案已确认，不含实现代码**，待评审后开工。
 > 关联：需求载体 [#75](https://github.com/zzstar101/FISH/issues/75) ｜ 后端子单 [#141](https://github.com/zzstar101/FISH/issues/141) ｜ 客户端子单 [#142](https://github.com/zzstar101/FISH/issues/142)
 > 记录人：Coast-87（本机） ｜ 日期：2026-09-21 ｜ 实现分支：`feat/75-ai-polish-backend`
-> **行号基线**：`origin/main = e3e909a`（PR #130 合入后）。本文引用的他人代码行号以此为准。
+> **行号基线**：`origin/main = ed561cd`（本分支 rebase 后的基线；原稿写于 `e3e909a`，行号已按新基线逐条复核）。本文引用的他人代码行号以此为准。
 > 决策来源：Owner 于 2026-09-21 分四轮逐条确认（完整取舍见 §12）。
 
 ---
@@ -38,7 +38,7 @@
 | 后台可配（模型 / prompt / 配额 / 调用量看板） | 属 #73 写操作，而 #73 写操作范围在 #76 仍标注"待冻结" |
 | 成本上限、预算告警、自动止血 | Owner 本期决定不控成本；仅把 token 用量落表供事后查（§11-R1） |
 | 运行时改 prompt | 与 `MODERATION_RULE_VERSION`（`apps/api/src/modules/moderation/rules.ts:3`）同惯例：改文件即升版本 |
-| 流式 / SSE / 异步 job + 推送 | miniapp **无任何 WebSocket 客户端**，且实时事件契约只允许 `message.new \| pong`（`packages/contracts/src/chat/schema.ts:238-245`），异步结果今天送不回去 |
+| 流式 / SSE / 异步 job + 推送 | miniapp **无任何 WebSocket 客户端**（`apps/miniapp/src` grep `WebSocket` 零命中），且实时事件契约只允许 `message.new \| conversation.read \| pong`（`packages/contracts/src/chat/schema.ts:247-269`），异步结果今天送不回去 |
 | 新增"断言类"词表（发票 / 验机 / 包邮…） | 那是 moderation 词表的职责，两处各养一份必然漂移（§6.3） |
 | web 端润色入口 | `apps/web` 发布页当前无任何润色 UI（全 `apps/web/src` grep `polish\|润色` 零命中），Issue 未要求 |
 | 自动发布 / 代填结构化字段 | Issue 明写"候选只是草稿" |
@@ -84,7 +84,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 
 ### 3.4 新增变量必须同步的三处
 
-`.env.example`、**`.github/workflows/ci.yml:26-37`（CI 硬编码 env 列表，不读 `.env.example`）**、`docs/deployment.md` §4。
+`.env.example`、**`.github/workflows/ci.yml:27-40`（CI 硬编码 env 列表，不读 `.env.example`）**、`docs/deployment.md` §4。
 
 > 破例授权：本 PR 顺带补 `docs/deployment.md` 的**环境变量清单**，同时补上一直欠着的 `MEETUP_TOKEN_SECRET`（main 上该文件对它 0 次提及；它自 #125 起是必填，缺失即 `Restart=always` crash loop）。做法是**复用分支 `feat/70-deploy-meetup-token-secret` 已写好的 120 行，不重写**——按序 cherry-pick `be0cd96` → `da315d1`（顺序敏感：`da315d1` 单独不适用）。除此之外不碰该文件其它章节——§7.1"起服务后无健康检查"那条仍按"只报告不修"处理。这是 Owner 明确批准的、对 AGENTS §3 范围纪律的一次破例。
 
@@ -105,7 +105,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
         candidates: { id: string, text: string }[] }   // 1~3 条
 ```
 
-- `title` / `description` 复用 listings 契约：`ListingDescriptionSchema = z.string().trim().min(1).max(500)`（`packages/contracts/src/listings/schema.ts:51-55`）。
+- `title` / `description` 复用 listings 契约：`ListingDescriptionSchema = z.string().trim().min(1).max(500)`（`packages/contracts/src/listings/schema.ts:65-69`）。
   - 实现口径：`title` 直接复用 `ListingTitleSchema`（trim、2~40 字），即**标题没写完时润色也会拿到 422**（字段级 `details` 指到 `title`）。Owner 2026-09-21 确认保持——与发布路径同一套字段级错误文案，客户端守卫可复用（§12-18 之前的决策）。
 - `category` 只收枚举值，**中文标签由服务端解析**：不接受客户端传标签文本，堵住"伪造上下文诱导模型"的口子。
 - `candidates[].id` 是**每次响应内**的稳定 id（非数据库主键，不落库）。
@@ -116,7 +116,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 | HTTP | code | 语义 |
 | --- | --- | --- |
 | 401 | `UNAUTHENTICATED` | 未登录 |
-| 422 | `VALIDATION_FAILED` | 描述为空 / 超 500 / 字段非法（字段级 details 复用 `validationDetails()` 的 `field` / `message` 形状，`packages/contracts/src/system/error.ts:51`；该文件已有跨 domain 的 `SystemErrorCodeSchema = ['VALIDATION_FAILED','INTERNAL_ERROR']`，本模块的错误码应放 `contracts/src/ai/`，不要塞进 system） |
+| 422 | `VALIDATION_FAILED` | 描述为空 / 超 500 / 字段非法（字段级 details 复用 `validationDetails()` 的 `field` / `message` 形状，`packages/contracts/src/system/error.ts:67`；该文件已有跨 domain 的 `SystemErrorCodeSchema = ['VALIDATION_FAILED','INTERNAL_ERROR']`，本模块的错误码应放 `contracts/src/ai/`，不要塞进 system） |
 | 429 | `AI_POLISH_QUOTA` | 触发间隔或日配额，带 `retryAfterSeconds` |
 | 503 | `AI_NOT_CONFIGURED` | `transport=live` 但配置不全（运行期兜底，正常应在启动即失败） |
 | 504 | `AI_TIMEOUT` | 上游超过 8s |
@@ -174,7 +174,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 | a | `text.trim().length > 500` → 丢 | **不截断**：截断造出半句话，买家会当事实读。长度上限只在契约定义（§4.1） |
 | b | 出现 `标题：` / `分类：` / `描述：` 前缀 → 丢 | 服务端硬校验，不能只靠 prompt：§9 探针 2 实测模型确实照抄过字段名，脏候选会直接污染描述框 |
 | c | **数字 / 单位 ⊆ 校验**：原文与候选各自归一化后取"数字 + 紧邻单位"有序集合，候选 ⊄ 原文 → 丢 | 这是"AI 不得新增事实"唯一可验证的形式。归一化＝NFKC + 剥空白 + 中文数字→阿拉伯；**不做单位换算表**（第二个会漂移的真相源）。**基线是模型看到过的全部用户内容（标题 + 描述）**，见下方口径 |
-| d | moderation：`BLOCK` → 丢；`REVIEW` → **也丢** | REVIEW 会把商品硬推 `OFFLINE`：PATCH 路径 `apps/api/src/modules/listings/service.ts:418`、CREATE 路径 `apps/api/src/modules/listings/store.ts:327`。用户在发布页看不出掉线原因，比少一条候选糟得多。规则本体：`EXTERNAL_CONTACT → REVIEW`（`apps/api/src/modules/moderation/rules.ts:15`，判定在 `:68-72`、返回 `reasonCode` 在 `:73-83`） |
+| d | moderation：`BLOCK` → 丢；`REVIEW` → **也丢** | REVIEW 会把商品硬推 `OFFLINE`：PATCH 路径 `apps/api/src/modules/listings/service.ts:442`、CREATE 路径 `apps/api/src/modules/listings/store.ts:327`。用户在发布页看不出掉线原因，比少一条候选糟得多。规则本体：`EXTERNAL_CONTACT → REVIEW`（`apps/api/src/modules/moderation/rules.ts:15`，判定在 `:73-77`、返回 `reasonCode` 在 `:81-86`） |
 
 **d 的口径（已定）**：本步跑在**回填前的标记版**文本上。若改跑回填后的全文，则凡用户原文自带联系方式者，每条候选都会命中 `EXTERNAL_CONTACT → REVIEW`，润色对这批用户**永久返回空**。该过滤的边界是"模型新增内容"；用户原文的风险由 `PATCH /listings/:id` 的真实审核承担（#74 既有语义，非本单引入）。
 
@@ -184,10 +184,14 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 
 ### 5.7 回填
 按**整条候选**降级：该条任一标记未能原样找回 → 此条全部标记位统一替换为类型化提示语（如"（你的地址已被移除）"），`outcome = TOKEN_LOST`。
-不做逐标记混合回填、不按顺序猜（错回填 = 把 A 的电话接到 B 的位置）。回填后仍是 ≤500 字（提示语比标记长，需再测一次长度，超限则同样丢弃）。
+不做逐标记混合回填、不按顺序猜（错回填 = 把 A 的电话接到 B 的位置）。回填后仍需 ≤500 字——**还原的是用户原文，它可能比标记长**（39 字邮箱换掉 13 字 `[fish-mail-1]`），标记版不超限不代表回填后不超限，所以要再测一次长度，超限则同样丢弃。
 
 **"任一标记"的边界（2026-09-21 定稿，真实上游实测后修正）**：只要求**被改写那段文本（描述）自己那次脱敏**发出的标记齐全。标题的标记是上下文：候选是描述的改写，标题里的标记天然不出现在候选里，把它也算"丢失"会在标题含可脱敏内容（如"出 12号楼 的键盘"）时把用户自己的联系方式换成提示语、并错记 `TOKEN_LOST`——正是 §12-5 否掉"只做不可逆替换"要避免的困惑。标题的标记若真被模型带进候选，仍会照常还原。
 标记**被改写过的半成品**（`[fish-phone- 1]`、全角数字、插零宽字符）既不算"找回"，也不允许原样留在候选里：整条降级时一并换成同类型提示语。
+
+标记被**整段删掉**（候选里根本没有该标记）时没有可替换的位置，候选照原样返回，只记 `outcome = TOKEN_LOST`——"全部标记位换成提示语"只对**还在的**标记位成立；§12-5 否掉的是"不可逆替换"（模型根本没见过原文），不是模型自己选择不写。
+
+识别标记前先剥零宽字符（`INVISIBLE_SEPARATORS`），**脱敏规则匹配前也剥**：`138\u200b12345678` 不剥就会整段绕过手机号规则、把 PII 原样送上游（#141 二次审查发现）。
 
 ### 5.8 收口
 候选为 0 → `AI_RESULT_EMPTY`；否则返回 1~3 条 + `provider` + `redacted`。无论走哪条出口，都必须回写 `outcome` 行。
@@ -208,7 +212,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 | `card` | `[fish-card-<n>]` | 银行卡号样式 |
 | `url` | `[fish-url-<n>]` | http(s) / 常见外链样式 |
 
-规则文件 `apps/api/src/modules/ai/redact.ts` + `REDACT_RULE_VERSION` 常量（与 `MODERATION_RULE_VERSION` 同惯例，改文件即升版本）。
+规则文件 `apps/api/src/modules/ai/redact.ts`（**改文件即生效，但脱敏规则版本本期不落库**：`ai_polish_requests` 没有该列，事后无法判断某行是哪版规则产生的。原稿曾按 `MODERATION_RULE_VERSION` 的惯例留了一个 `REDACT_RULE_VERSION` 常量，因没有任何可观测出口属死常量，已删；需要可追溯时走 DB CHANGE REQUEST 另开单）。
 三条边界：
 
 1. **中文姓名不做**——正则不可靠，误伤正文的收益为负。
@@ -303,10 +307,10 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 
 完整清单见 #142，此处只记与后端契约耦合的点：
 
-- 状态机 `PolishState = idle | loading | ready{candidates,index}` 需补 `failed{code}`（`apps/miniapp/src/pages/sell/index.tsx:51-54`）——六个错误码各有文案，失败时原描述一字不动。
-- **润色入口当前在非 idle 态仍可点**（`:289-296` 只有 `is-busy` 样式类，`openPolish()` 从不检查 `polish.phase`）。接真接口后每次点击吃 5s 配额，连点必 429 → 必须加守卫；429 时按 `retryAfterSeconds` 变灰倒计时，文案只说"操作太频繁，N 秒后再试"，**不透露日配额数字**。
-- "换一条"保持纯前端轮播（`:128-133`），不重新请求。
-- `adopt()` 现在会 `setReview(null)` 清掉审核结果（`:135-143`）；真实语义是采用后由 `PATCH /listings/:id` 服务端重跑 moderation，客户端**不自行推断审核结论**。
+- 状态机 `PolishState = idle | loading | ready{candidates,index}` 需补 `failed{code}`（`apps/miniapp/src/pages/sell/index.tsx:93-96`）——六个错误码各有文案，失败时原描述一字不动。
+- **润色入口当前在非 idle 态仍可点**（`:667-668` 只有 `is-busy` 样式类，`openPolish()`（`:403-409`）只检查描述非空、从不检查 `polish.phase`）。接真接口后每次点击吃 5s 配额，连点必 429 → 必须加守卫；429 时按 `retryAfterSeconds` 变灰倒计时，文案只说"操作太频繁，N 秒后再试"，**不透露日配额数字**。
+- "换一条"保持纯前端轮播（`:419-424`），不重新请求。
+- `adopt()` 只把候选写进描述框并把状态机复位（`:427-434`），不再触碰审核结果（#155 重写发布页时 `setReview(null)` 那行已随既有 mock 流程一起移除）；真实语义是采用后由 `PATCH /listings/:id` 服务端重跑 moderation，客户端**不自行推断审核结论**。
 - `polishCandidates()` mock 保留但受 `TARO_APP_MOCK=1` 门禁；生产失败绝不静默退 mock（#89 的 fail-closed 原则）。
 
 ---
@@ -315,7 +319,7 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 
 | 编号 | 内容 | 处置 |
 | --- | --- | --- |
-| R1 | **不设成本上限、不告警**：脚本化滥用被每用户配额挡住，但单账号 30 次/日的成本无人止血 | Owner 本期决定；`prompt_tokens`/`completion_tokens` 已落表可事后查 |
+| R1 | **不设成本上限、不告警**：⚠️ **"脚本化滥用被每用户配额挡住"这条论证不成立**——`EMPTY` 出口按 §5.2 口径同时被两条配额检查排除（`apps/api/src/modules/ai/store.ts:67`、`:78`），凡是能稳定让候选全被过滤的输入（原文含会被 moderation `BLOCK` 的违禁词、或命中 §11-R4 的归一化误杀）都能零配额、无 5s 间隔地打上游；成本与 `ai_polish_requests` 行数因此都没有上界（二次审查实测：同一账号间隔 0s 连打 3 次，全部 `502 AI_RESULT_EMPTY`、无一次 429，落表 3 行 EMPTY、消耗 360 prompt tokens）。止血要给 `EMPTY` 单列一个更宽松的日桶、或让它计入间隔检查，两者都会改 Issue 已冻结的配额口径 → **需 Owner 决策另开单**；在那之前"唯一屏障是每用户配额"只对非 `EMPTY` 出口成立 | Owner 本期决定；`prompt_tokens`/`completion_tokens` 已落表可事后查 |
 | R2 | **无后台可配**：换模型 / 改 prompt / 调配额都要发版 | 归 #73 写操作范围，待其冻结 |
 | R3 | **标记被改写的真实比率未知** | 只有 `live` 批量调用能测；`outcome=TOKEN_LOST` 已为其预留指标 |
 | R4 | **数字 ⊆ 校验的真实误杀率未知** → 候选经常 1 条还是 3 条不知道 | 同 R3。20 条验收里三层过滤零误杀；**已识别但未触发的一类**：归一化会剥掉空白，`iPhone 13 128G` 被拼成令牌 `13128g`，若模型改写数字顺序（如 `128G 的 iPhone 13`）会拆成 `128g` + `13` 而被判"新增事实"——Owner 2026-09-21 决定先观察不修（修它要动 §5.6c 的核心）。继续靠 `filtered_count` 观察 |
@@ -323,7 +327,7 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | R6 | **`live` 从未批量验证**，首次真实调用验收责任在 Owner | 本文与 #141 均不声称"AI 已可用" |
 | R7 | 开发期 key 进过会话上下文 | 按"贴出即泄露"处理，PR 合并后轮换 |
 | R8 | #142 依赖 #129 合入，若 #129 长期挂起则客户端无法收口 | 已在 PR #129 登记依赖 |
-| R9 | 部署手册 §11.6 与 §10 的交叉引用仍写"**四个** API 专属变量"（`docs/deployment.md:947`、`:840`），未覆盖 §4 新增的 AI 变量 | 走 §11（无 `EnvironmentFile`）的运维会漏配 → API 启动失败 + `Restart=always` 反复重启。**只报告不修**：§3.4 的破例只授权改 §4；Owner 2026-09-21 决定先不动，后续单开 Issue 或并入下一个文档 PR |
+| R9 | ~~部署手册 §11.6 / §10 的交叉引用漏掉 §4 新增的 AI 变量~~ | **已在本分支修复**：§11.6 改成"§4 列出的全部 API 专属变量（邮件三项、#70 的 `MEETUP_TOKEN_SECRET`、#141 的四个 `AI_POLISH_*`）"（`docs/deployment.md:970-971`），§10 的备份清单本就含整个 `/etc/fish/api-mail.env`（`:807`）。编号保留以免其它地方的引用悬空；原稿"只报告不修"的结论作废 |
 
 ---
 

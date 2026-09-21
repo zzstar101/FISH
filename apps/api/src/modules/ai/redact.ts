@@ -8,11 +8,13 @@
  * 标记字面为什么是 ASCII：中文方括号标签会被模型改写或删掉（"（联系方式）"），删掉就回填不上；
  * `[fish-phone-1]` 短、非自然语言，且标记内只有数字与短横，不会被本文件任何规则二次命中。
  */
-export const REDACT_RULE_VERSION = '2026-09-21-v1'
-
 export type RedactKind = 'id' | 'card' | 'phone' | 'mail' | 'contact' | 'addr' | 'url'
 
-/** 回填失败时的类型化提示语。比标记长，所以回填后要重新测一次长度（设计 §5.7）。 */
+/**
+ * 回填失败时的类型化提示语。**注意它并不比标记长**（`phone` 标记 `[fish-phone-1]` 14 字、
+ * 提示语 12 字），所以"回填后文本变长"不是提示语造成的——真正的来源是**还原出的原文比标记长**
+ * （如 39 字邮箱换掉 13 字 `[fish-mail-1]`）。这就是回填后仍要再测一次长度的原因（设计 §5.7）。
+ */
 const LOST_PROMPTS: Record<RedactKind, string> = {
   id: '（你的证件号已被移除）',
   card: '（你的银行卡号已被移除）',
@@ -74,9 +76,16 @@ const MARKER_PATTERN = /\[fish-([a-z]+)-(\d+)\]/g
  * 种类必须是**闭集**（`LOST_PROMPTS` 的键，即我们真正会发出的那几个），不能写成任意 `[a-z]+`：
  * `facts.ts` 的基线是用户原文，把正文里的 `Fish K380` 当成标记摘掉会让引用该型号的候选被判
  * "新增事实"而误丢（#141 审查发现）。写成捕获组是因为 `restore` 要靠它取类型化提示语。
+ *
+ * 两种形态只允许一种"省略"：
+ * - 带左括号时，中间的分隔符可以全是空白（`[fish phone 1]`）；
+ * - 不带左括号时，`fish` 与种类之间**必须有 `-` 或 `_`**（`fish-phone-1` / `fish_phone_1`）。
+ *
+ * 这条约束是 #141 二次审查补的：早先两种省略都允许，于是正文里的 `fish mail 3 个`（`mail` 在
+ * 闭集里、后面跟着数字）会被当成半成品标记，用户拿到的候选里凭空出现"（你的邮箱已被移除）"。
  */
 const LOOSE_MARKER_PATTERN = new RegExp(
-  `\\[?\\s*fish[-_\\s]*(${Object.keys(LOST_PROMPTS).join('|')})[-_\\s]*[0-9０-９]+\\s*\\]?`,
+  `(?:\\[\\s*fish[-_\\s]*|fish[-_]+)(${Object.keys(LOST_PROMPTS).join('|')})[-_\\s]*[0-9０-９]+\\s*\\]?`,
   'gi',
 )
 
@@ -142,7 +151,11 @@ export function createRedactor(): Redactor {
   return {
     redact(text) {
       const markers: string[] = []
-      let result = text
+      // 匹配前先剥不可见分隔符：`138\u200b12345678` 若原样送上游，手机号就整段漏给第三方——
+      // 用户从网页/Word 复制号码时带进零宽字符是现实场景，不能让一个不可见字符变成绕过脱敏的
+      // 手段（同仓 moderation 已按同一口径剥 format 字符，两侧不该有差）。返回的文本同样不含
+      // 它们，回填还原的是 `mapping` 里存的那份。
+      let result = text.replace(INVISIBLE_SEPARATORS, '')
       for (const rule of RULES) {
         result = result.replace(rule.pattern, (match) => {
           const next = (counters.get(rule.kind) ?? 0) + 1

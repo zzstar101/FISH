@@ -11,6 +11,10 @@
  * JSONL 每行 `{"title":"...","description":"...","category":"DIGITAL"}`；不给文件则跑内置样例。
  * 注意：每次调用都是真实计费请求，且受接口 5s/30 次日配额约束（这里绕过 HTTP 直连 provider，
  * 不占配额、不落表）。
+ *
+ * ⚠️ 本脚本会把**原文事实与上游返回的候选正文**打到 stdout，是 §11-R4/R5 观测丢弃原因的唯一手段。
+ * 因此**只喂构造样例**（默认 SAMPLES 就是），不要把真实用户描述当输入——服务端的红线是"日志里
+ * 不出现用户文本"，这里靠使用者自律，脚本本身不脱敏输出。
  */
 
 import type { ListingCategory } from '@fish/contracts/listings/schema'
@@ -20,13 +24,10 @@ import { extractFacts } from '../src/modules/ai/facts'
 import { buildPolishPrompt } from '../src/modules/ai/prompt'
 import { createPolishProvider } from '../src/modules/ai/provider'
 import { createRedactor } from '../src/modules/ai/redact'
+import { hasFieldNamePrefix } from '../src/modules/ai/service'
 import { moderateListingContent } from '../src/modules/moderation/rules'
 
 type Sample = { title: string; description: string; category: ListingCategory }
-
-/** 字段名泄露判定与服务端同一口径（service.ts 里的规则不导出，这里保持字面一致）。 */
-const FIELD_NAME_PREFIX =
-  /^[\s\u3000]*(?:[-•*·]|\d{1,2}[.、)])?[\s\u3000]*(?:标题|分类|描述)[\s\u3000]*[:：]/
 
 const SAMPLES: Sample[] = [
   {
@@ -54,6 +55,7 @@ const provider = createPolishProvider(env)
 const samples = await loadSamples()
 
 console.log(`[probe] transport=${env.transport} 样例数=${samples.length}`)
+console.warn('[probe] 本脚本会把原文事实与候选正文打到终端：只喂构造样例，不要用真实用户描述')
 
 for (const [index, input] of samples.entries()) {
   const redactor = createRedactor()
@@ -85,7 +87,7 @@ for (const [index, input] of samples.entries()) {
   let kept = 0
   for (const [candidateIndex, segment] of completion.segments.entries()) {
     const tooLong = !ListingDescriptionSchema.safeParse(segment).success
-    const fieldName = segment.split('\n').some((line) => FIELD_NAME_PREFIX.test(line))
+    const fieldName = hasFieldNamePrefix(segment)
     const newFacts = [...extractFacts(segment)].filter((token) => !knownFacts.includes(token))
     const moderation = moderateListingContent({ title: markedTitle, description: segment })
     const dropped = tooLong || fieldName || newFacts.length > 0 || moderation.decision !== 'ALLOW'

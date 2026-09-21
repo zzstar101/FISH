@@ -63,12 +63,17 @@ function isConfigured(env: AiPolishEnv): boolean {
 /**
  * 字段名泄露（设计 §5.6b）：服务端硬校验，不能只靠 prompt——实测模型确实照抄过
  * "标题：/分类：/描述："（设计 §9 探针 2），脏候选会直接污染描述框。
- * 只看行首（允许前导空白与 `-` / `1.` 这类列表符号），避免误伤正文里正常提到"描述"二字。
+ * 只看行首（允许前导空白、列表符号与 Markdown / 全角括号修饰），避免误伤正文里正常提到
+ * "描述"二字。修饰符是 #141 二次审查补的：模型加粗（`**描述：**`）几乎是最常见的输出形态，
+ * 只认裸写法等于把这道硬校验让给 prompt。
+ *
+ * 导出是为了让 `scripts/ai-polish-live-probe.ts` 复用同一份定义，而不是再抄一遍字面量
+ * （抄一份就会漂移，探针量到的丢弃原因就不再是线上的原因）。
  */
 const FIELD_NAME_PREFIX =
-  /^[\s\u3000]*(?:[-•*·]|\d{1,2}[.、)])?[\s\u3000]*(?:标题|分类|描述)[\s\u3000]*[:：]/
+  /^[\s\u3000>]*?(?:[-•*·]|\d{1,2}[.、)])?[\s\u3000]*?[*_~`【「『[（(]*?(?:标题|分类|描述)[\s\u3000]*?[*_~`】」』\]）)]*?[:：]/
 
-function hasFieldNamePrefix(text: string): boolean {
+export function hasFieldNamePrefix(text: string): boolean {
   return text.split('\n').some((line) => FIELD_NAME_PREFIX.test(line))
 }
 
@@ -192,9 +197,13 @@ export function createAiPolishService(deps: AiPolishServiceDeps): AiPolishServic
 
         // 回填只要求**描述那次脱敏**的标记齐全：候选是描述的改写，标题里的标记天然不会出现在
         // 这里（把它也算"丢失"会在标题含可脱敏内容时把用户自己的联系方式换成提示语）。
+        // 标记被模型**整段删掉**时没有可替换的位置，候选里就是没有这段内容——§5.7 的"全部标记位
+        // 换成提示语"只对**还在的**标记位成立；§12-5 否掉的是"不可逆替换"（模型根本没见过原文），
+        // 不是模型自己选择不写。此时候选照常返回，只记 `outcome=TOKEN_LOST`。
         const restored = redactor.restore(segment, descriptionRedaction)
         if (restored.lost) tokenLost = true
-        // 提示语比标记长，回填后要再测一次长度（设计 §5.7）。
+        // 回填后要再测一次长度（设计 §5.7）：还原的是**用户原文**，它可能比标记长得多
+        // （39 字邮箱换掉 13 字 `[fish-mail-1]`）——标记版 ≤500 不代表回填后 ≤500。
         if (!ListingDescriptionSchema.safeParse(restored.text).success) {
           filteredCount += 1
           continue

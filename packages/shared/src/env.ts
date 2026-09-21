@@ -99,7 +99,10 @@ export function loadAiPolishEnv(
   source: Record<string, string | undefined> = process.env,
 ): AiPolishEnv {
   const transport = source.AI_POLISH_TRANSPORT
-  const baseUrl = source.AI_POLISH_BASE_URL
+  // 三个值都 trim 后判空并原样返回：只判真值会让 `AI_POLISH_BASE_URL='   '` 这种"看着配了、
+  // 其实是空白"的配置通过启动，然后每个请求都 503——正是本加载器要避免的"配错和没配一样"。
+  // transport 刻意不 trim：多一个空格仍应显式失败。
+  const baseUrl = source.AI_POLISH_BASE_URL?.trim()
   if (transport === 'stub') {
     if (!baseUrl) {
       throw new Error(
@@ -109,8 +112,8 @@ export function loadAiPolishEnv(
     return { transport: 'stub', baseUrl }
   }
   if (transport === 'live') {
-    const apiKey = source.AI_POLISH_API_KEY
-    const model = source.AI_POLISH_MODEL
+    const apiKey = source.AI_POLISH_API_KEY?.trim()
+    const model = source.AI_POLISH_MODEL?.trim()
     if (!baseUrl || !apiKey || !model) {
       throw new Error(
         '环境变量校验失败：AI_POLISH_TRANSPORT=live 必须同时配置 AI_POLISH_BASE_URL / AI_POLISH_API_KEY / AI_POLISH_MODEL',

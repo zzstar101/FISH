@@ -21,6 +21,17 @@ describe('脱敏', () => {
     expect(createRedactor().redact('１３８１２３４５６７８').text).toBe('[fish-phone-1]')
   })
 
+  test('零宽字符插在号码里也照样脱敏（不能靠一个不可见字符绕过）', () => {
+    // 从网页 / Word 复制号码时带进 U+200B 是现实场景；匹配前不剥掉，手机号就原样送上游了。
+    expect(createRedactor().redact('联系 138\u200b12345678 详聊').text).toBe(
+      '联系 [fish-phone-1] 详聊',
+    )
+    expect(createRedactor().redact('联系 138\u200b1234\u200b5678 详聊').text).toBe(
+      '联系 [fish-phone-1] 详聊',
+    )
+    expect(createRedactor().redact('邮箱 abc\u200b@qq.com').text).toBe('邮箱 [fish-mail-1]')
+  })
+
   test('联系方式与链接的常见写法都命中', () => {
     expect(createRedactor().redact('QQ 1234567').text).toBe('[fish-contact-1]')
     expect(createRedactor().redact('+v: hello123').text).toBe('[fish-contact-1]')
@@ -124,6 +135,17 @@ describe('回填', () => {
     expect(redactor.restore(`${description.text} fish oil 3 瓶`, description)).toEqual({
       text: '电话 13812345678 fish oil 3 瓶',
       lost: false,
+    })
+    // 种类在闭集里（`mail`）、后面又跟着数字：不带左括号时必须真的有 `-` / `_` 才可能是半成品
+    // 标记，否则正文 `fish mail 3 个` 会被替换成"（你的邮箱已被移除）"（#141 二次审查发现）。
+    expect(redactor.restore(`${description.text} fish mail 3 个`, description)).toEqual({
+      text: '电话 13812345678 fish mail 3 个',
+      lost: false,
+    })
+    // 真·半成品标记（无括号、带连字符）仍要识别并整条降级：原本的标记位与半成品都换提示语。
+    expect(redactor.restore(`${description.text} fish-phone-1`, description)).toEqual({
+      text: '电话 （你的联系方式已被移除） （你的联系方式已被移除）',
+      lost: true,
     })
   })
 

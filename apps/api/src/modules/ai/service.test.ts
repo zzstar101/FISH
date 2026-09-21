@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { ListingDescriptionSchema } from '@fish/contracts/listings/schema'
 import type { AiPolishEnv } from '@fish/shared/env'
 import type { ModerationResult } from '../moderation/types'
 import { AiUpstreamError, type PolishProvider } from './provider'
@@ -129,7 +130,10 @@ describe('八步流水线', () => {
     expect(response.candidates[0]?.text).toBe('九成新，联系 13812345678 详聊')
   })
 
-  test('标记丢失 → 整条降级为类型化提示语，outcome 记 TOKEN_LOST', async () => {
+  test('标记被整段删掉 → 无处可插提示语，候选原样返回但 outcome 记 TOKEN_LOST', async () => {
+    // §5.7 的"全部标记位换成提示语"只对**还在的**标记位成立：模型整段没写标记时，候选里没有
+    // 可替换的位置，用户拿到的就是"没有联系方式"的那版草稿。§12-5 否掉的是"不可逆替换"
+    // （模型根本没见过原文），不是模型自己选择不写。
     const harness = createHarness({ segments: ['九成新，看上的话私我'] })
 
     const response = await harness.service.polishCandidates({
@@ -195,6 +199,24 @@ describe('八步流水线', () => {
     expect(response.candidates).toHaveLength(1)
     expect(response.candidates[0]?.text).toBe('九成新键盘，功能正常')
     expect(harness.finishes[0]?.filteredCount).toBe(2)
+  })
+
+  test('字段名硬校验挡住 Markdown / 全角括号修饰的写法', async () => {
+    // 模型加粗是最常见的输出形态；只认裸 `描述：` 等于把这道硬校验让给 prompt（#141 二次审查）。
+    const harness = createHarness({
+      segments: [
+        '**描述：**九成新键盘',
+        '【标题】：出键盘',
+        '> 描述：九成新键盘',
+        '九成新键盘，功能正常',
+      ],
+    })
+
+    const response = await harness.service.polishCandidates(INPUT)
+
+    expect(response.candidates).toHaveLength(1)
+    expect(response.candidates[0]?.text).toBe('九成新键盘，功能正常')
+    expect(harness.finishes[0]?.filteredCount).toBe(3)
   })
 
   test('候选引用标题里的型号数字不算新增事实（真实上游踩过这条）', async () => {
@@ -276,16 +298,24 @@ describe('八步流水线', () => {
     expect(harness.prompts).toHaveLength(0)
   })
 
-  test('回填后仍超长（提示语比标记长）的候选被丢', async () => {
-    // 标记换成 9 字提示语后越过 500 字：先前的长度检查在回填前通过，回填后必须再测一次。
-    const filler = '啊'.repeat(495)
-    const harness = createHarness({ segments: [`${filler}[fish-phone-1]`] })
+  test('回填后仍超长（还原出的原文比标记长）的候选被丢', async () => {
+    // 标记版 ≤500 **不代表**回填后 ≤500：回填塞回去的是用户原文，39 字邮箱换掉 13 字
+    // `[fish-mail-1]`。早先这条用例拿 495 字 + 14 字标记（509）来测，段落早在回填**前**就被
+    // 长度层丢了，断言其实没走到这里（#141 二次审查发现）。
+    const email = 'verylongemailaddressforfish@example.com'
+    const filler = '啊'.repeat(480)
+    const marked = `${filler}[fish-mail-1]`
+    expect(ListingDescriptionSchema.safeParse(marked).success).toBe(true)
+
+    const harness = createHarness({ segments: [marked] })
 
     const error = await captureError(() =>
-      harness.service.polishCandidates({ ...INPUT, description: `13812345678${filler}` }),
+      harness.service.polishCandidates({ ...INPUT, description: `${filler}${email}` }),
     )
 
+    expect(ListingDescriptionSchema.safeParse(`${filler}${email}`).success).toBe(false)
     expect(error.code).toBe('AI_RESULT_EMPTY')
     expect(harness.finishes[0]?.filteredCount).toBe(1)
+    expect(harness.finishes[0]?.outcome).toBe('EMPTY')
   })
 })

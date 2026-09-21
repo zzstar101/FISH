@@ -66,4 +66,44 @@ describe('loadAiPolishEnv', () => {
     expect(() => loadAiPolishEnv({ AI_POLISH_TRANSPORT: '' })).toThrow(/必须显式设置/)
     expect(() => loadAiPolishEnv({ AI_POLISH_TRANSPORT: 'dev' })).toThrow(/必须显式设置/)
   })
+
+  test('全空白的值等于没配：三个值都 trim 后判空', () => {
+    // 只判真值会让 `AI_POLISH_BASE_URL='   '` 通过启动，然后每个请求都 503（设计决策 #8 要避免的
+    // "配错和没配看起来一样"）。
+    expect(() =>
+      loadAiPolishEnv({
+        AI_POLISH_TRANSPORT: 'live',
+        AI_POLISH_BASE_URL: '   ',
+        AI_POLISH_API_KEY: 'sk-not-a-real-key',
+        AI_POLISH_MODEL: 'deepseek-flash',
+      }),
+    ).toThrow(/AI_POLISH_BASE_URL/)
+    expect(() =>
+      loadAiPolishEnv({
+        AI_POLISH_TRANSPORT: 'live',
+        AI_POLISH_BASE_URL: 'https://api.example.com',
+        AI_POLISH_API_KEY: '  ',
+        AI_POLISH_MODEL: 'deepseek-flash',
+      }),
+    ).toThrow(/AI_POLISH_API_KEY/)
+    expect(() => loadAiPolishEnv({ AI_POLISH_TRANSPORT: 'stub', AI_POLISH_BASE_URL: ' ' })).toThrow(
+      /AI_POLISH_BASE_URL/,
+    )
+  })
+
+  test('值两侧的空白被 trim 后再返回（key 里带空格会让鉴权永远失败）', () => {
+    expect(
+      loadAiPolishEnv({
+        AI_POLISH_TRANSPORT: 'live',
+        AI_POLISH_BASE_URL: ' https://api.example.com/ ',
+        AI_POLISH_API_KEY: ' sk-not-a-real-key ',
+        AI_POLISH_MODEL: ' deepseek-flash ',
+      }),
+    ).toEqual({
+      transport: 'live',
+      baseUrl: 'https://api.example.com/',
+      apiKey: 'sk-not-a-real-key',
+      model: 'deepseek-flash',
+    })
+  })
 })

@@ -5,8 +5,9 @@ import { ListingCategorySchema } from '@fish/contracts/listings/schema'
 /**
  * 上游 prompt 与版本号（#141 设计 §3.3 / §9）。
  *
- * 运行时改 prompt 属独立迭代：**改本文件即升版本**（与 `MODERATION_RULE_VERSION`、
- * `REDACT_RULE_VERSION` 同一惯例），版本号随用量一起落 `ai_polish_requests.prompt_version`。
+ * 运行时改 prompt 属独立迭代：**改本文件即升版本**（与 `MODERATION_RULE_VERSION` 同一惯例），
+ * 版本号随用量一起落 `ai_polish_requests.prompt_version`。脱敏规则没有对应的落库版本（见
+ * `redact.ts` 文件头），别把这两者的可追溯性混为一谈。
  */
 export const PROMPT_VERSION = '2026-09-21-v2'
 
