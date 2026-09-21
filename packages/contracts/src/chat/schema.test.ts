@@ -125,6 +125,7 @@ describe('conversationDtoSchema', () => {
         avatarUrl: 'https://cdn.example.com/a.png',
       },
       unreadCount: 2,
+      counterpartLastReadAt: '2026-09-12T09:30:00.000Z',
       lastMessage: {
         type: 'TEXT',
         content: '在吗，可以刀一点吗',
@@ -138,6 +139,7 @@ describe('conversationDtoSchema', () => {
     expect(parsed.role).toBe('seller')
     expect(parsed.listing.status).toBe('ACTIVE')
     expect(parsed.counterpart.avatarUrl).toBe('https://cdn.example.com/a.png')
+    expect(parsed.counterpartLastReadAt).toBe('2026-09-12T09:30:00.000Z')
     expect(parsed.lastMessage?.type).toBe('TEXT')
   })
 
@@ -159,10 +161,13 @@ describe('conversationDtoSchema', () => {
         avatarUrl: null,
       },
       unreadCount: 0,
+      counterpartLastReadAt: null,
       lastMessage: null,
       lastMessageAt: '2026-09-12T10:00:00.000Z',
       createdAt: '2026-09-12T09:00:00.000Z',
     }
+    // 对方从未读过：null 是合法值（不是「字段缺失」），页面据此不渲染任何「已读」
+    expect(conversationDtoSchema.parse(dto).counterpartLastReadAt).toBeNull()
     expect(conversationDtoSchema.parse(dto).lastMessage).toBeNull()
   })
 
@@ -183,6 +188,7 @@ describe('conversationDtoSchema', () => {
         avatarUrl: null,
       },
       unreadCount: 0,
+      counterpartLastReadAt: null,
       lastMessage: null,
       lastMessageAt: '2026-09-12T10:00:00.000Z',
       createdAt: '2026-09-12T09:00:00.000Z',
@@ -202,6 +208,11 @@ describe('conversationDtoSchema', () => {
           createdAt: '2026-09-12T10:00:00.000Z',
         },
       }).success,
+    ).toBe(false)
+    // `counterpartLastReadAt` 可空但**不可缺**：老服务端漏字段时在此炸掉，而不是让
+    // 前端把「对方没读过」与「服务端没说」当成同一件事。
+    expect(
+      conversationDtoSchema.safeParse({ ...base, counterpartLastReadAt: undefined }).success,
     ).toBe(false)
   })
 })
@@ -229,6 +240,23 @@ describe('realtime events', () => {
     expect(realtimeServerEventSchema.parse({ type: 'pong' }).type).toBe('pong')
     expect(realtimeServerEventSchema.safeParse({ type: 'typing' }).success).toBe(false)
     expect(realtimeClientEventSchema.safeParse({ type: 'pong' }).success).toBe(false)
+  })
+
+  test('discriminates conversation.read with server-authoritative readAt', () => {
+    const parsed = realtimeServerEventSchema.parse({
+      type: 'conversation.read',
+      conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      readerId: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      readAt: '2026-09-12T10:05:00.000Z',
+    })
+    expect(parsed.type).toBe('conversation.read')
+    // readAt / readerId 都是必填：少了就分不清「谁读的、读到哪」，客户端无法安全翻转已读
+    expect(
+      realtimeServerEventSchema.safeParse({
+        type: 'conversation.read',
+        conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      }).success,
+    ).toBe(false)
   })
 })
 

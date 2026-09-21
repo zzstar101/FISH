@@ -119,6 +119,11 @@ class MemoryConversationStore implements ConversationStore {
     const row = await this.findDetail(conversationId, viewerId)
     if (!row) return null
     row.unreadCount = 0
+    // 与 SQL store 同语义（`UPDATE ... SET <viewer 侧> = now()`）：推进查看者一侧的
+    // last_read_at。service 的 readAt 取的就是这个值，不推进的话推送断言无从谈起。
+    const at = new Date().toISOString()
+    if (row.conversation.buyer_id === viewerId) row.conversation.buyer_last_read_at = at
+    else row.conversation.seller_last_read_at = at
     return row
   }
 }
@@ -195,15 +200,67 @@ describe('conversation service: markRead', () => {
     expect(dto.unreadCount).toBe(0)
   })
 
-  test('404 for a non-participant', async () => {
+  test('pushes conversation.read with the reader id and the read time actually persisted', async () => {
+    const store = new MemoryConversationStore()
+    type ReadPush = {
+      participants: { buyerId: string; sellerId: string }
+      event: { conversationId: string; readerId: string; readAt: string }
+    }
+    const pushed: ReadPush[] = []
+    const service = createConversationService({
+      store,
+      storage,
+      onRead: (participants, event) => pushed.push({ participants, event }),
+    })
+    const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
+    const dto = await service.markRead(buyer, conversation.id)
+
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0]?.participants).toEqual({ buyerId: buyer, sellerId: seller })
+    expect(pushed[0]?.event.conversationId).toBe(conversation.id)
+    expect(pushed[0]?.event.readerId).toBe(buyer)
+    // readAt 必须与落库那一侧完全一致：客户端按它比对「哪些消息已读」，
+    // 服务端自己再取一次 now() 会漂在落库值之后，最近一条会被误判成未读。
+    const persisted = store.details.get(conversation.id)?.conversation.buyer_last_read_at
+    if (typeof persisted !== 'string') throw new Error('buyer_last_read_at 应以 ISO 文本落库')
+    expect(pushed[0]?.event.readAt).toBe(persisted)
+    // 自己读的会话不会污染 DTO 里的「对方读位」
+    expect(dto.counterpartLastReadAt).toBeNull()
+  })
+
+  test('counterpartLastReadAt is the other side, depending on who is viewing', async () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({ store, storage })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
+    const row = store.details.get(conversation.id)
+    if (!row) throw new Error('unreachable')
+    row.conversation.buyer_last_read_at = '2026-09-12T10:00:00.000Z'
+    row.conversation.seller_last_read_at = '2026-09-12T11:00:00.000Z'
+
+    expect((await service.getConversation(buyer, conversation.id)).counterpartLastReadAt).toBe(
+      '2026-09-12T11:00:00.000Z',
+    )
+    expect((await service.getConversation(seller, conversation.id)).counterpartLastReadAt).toBe(
+      '2026-09-12T10:00:00.000Z',
+    )
+  })
+
+  test('404 for a non-participant, without broadcasting a read event', async () => {
+    const store = new MemoryConversationStore()
+    const pushed: unknown[] = []
+    const service = createConversationService({
+      store,
+      storage,
+      onRead: (_participants, event) => pushed.push(event),
+    })
+    const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
     const outsider = '00000000-0000-4000-8000-0000000000a3'
-    expect(service.markRead(outsider, conversation.id)).rejects.toMatchObject({
+    await expect(service.markRead(outsider, conversation.id)).rejects.toMatchObject({
       status: 404,
       code: 'CONVERSATION_NOT_FOUND',
     })
+    // 非参与者不得推送：否则任何人都能靠猜会话 id 触发一次「已读」广播
+    expect(pushed).toHaveLength(0)
   })
 })
 

@@ -54,7 +54,10 @@ function startPing(socket: WebSocket): void {
 
 /** 消息进缓存：先落 query 缓存再由 UI 渲染，与「服务端先落库再推送」同构。 */
 function handleEvent(event: RealtimeServerEvent): void {
-  if (event.type === 'pong') return
+  // `conversation.read`（#149 已读回执）Web 端当前不渲染逐条「已读」，显式忽略。
+  // 必须在这里按 type 收窄：否则下面的 `event.message` 会把它误当 message.new，
+  // 把一条读事件当成消息插进缓存。
+  if (event.type === 'pong' || event.type === 'conversation.read') return
 
   const message: MessageDto = event.message
   queryClient.setQueryData<MessageDto[]>(['chat', 'messages', event.conversationId], (old) => {

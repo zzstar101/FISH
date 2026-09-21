@@ -24,6 +24,23 @@ export class ConversationServiceError extends Error {
 
 const notFound = () => new ConversationServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
 
+/**
+ * 会话其中一侧的读位（ISO，从未读过为 null）。
+ *
+ * 会话严格双人（买家 + 卖家），所以「对方那一侧」只需按 `viewerId` 取反，不必再查参与表；
+ * 两个读位列都由 store 的 JOIN 带回来了（`ConversationDetailRow.conversation`）。
+ */
+function readAtIso(
+  row: ConversationDetailRow,
+  viewerId: string,
+  side: 'viewer' | 'counterpart',
+): string | null {
+  const viewerIsBuyer = row.conversation.buyer_id === viewerId
+  const isBuyer = side === 'viewer' ? viewerIsBuyer : !viewerIsBuyer
+  const raw = isBuyer ? row.conversation.buyer_last_read_at : row.conversation.seller_last_read_at
+  return raw == null ? null : new Date(raw).toISOString()
+}
+
 /** joined 行 → 契约 DTO。coverUrl 在这里拼（存储布局不进读模型，与 #6 同一规则）。 */
 function toConversationDto(
   row: ConversationDetailRow,
@@ -43,6 +60,7 @@ function toConversationDto(
     },
     counterpart: row.counterpart,
     unreadCount: row.unreadCount,
+    counterpartLastReadAt: readAtIso(row, viewerId, 'counterpart'),
     lastMessage: row.lastMessage
       ? {
           type: row.lastMessage.type as 'TEXT' | 'SYSTEM',
@@ -70,9 +88,18 @@ export interface ConversationService {
 export function createConversationService({
   store,
   storage,
+  onRead,
 }: {
   store: ConversationStore
   storage: MediaStorage
+  /**
+   * 读位推进成功后调用（先落库再推送，与 messages 的 `onMessageCreated` 同语义）；
+   * 推送失败不得影响 200 响应。
+   */
+  onRead?: (
+    participants: { buyerId: string; sellerId: string },
+    event: { conversationId: string; readerId: string; readAt: string },
+  ) => void
 }): ConversationService {
   return {
     async createOrGetConversation(userId, input) {
@@ -146,6 +173,16 @@ export function createConversationService({
     async markRead(userId, conversationId) {
       const detail = await store.markRead(conversationId, userId)
       if (!detail) throw notFound()
+      // store.markRead 的 UPDATE 用 SQL now() 推进查看者那一侧，返回的 detail 行里
+      // 已带回推进后的读位——本次 readAt 就是「查看者侧」那个值，不需要再取一次时间
+      // （自己取 now() 会与库里落的值有偏差，客户端按它比对已读会漏掉最近一条）。
+      const readAt = readAtIso(detail, userId, 'viewer')
+      if (readAt) {
+        onRead?.(
+          { buyerId: detail.conversation.buyer_id, sellerId: detail.conversation.seller_id },
+          { conversationId, readerId: userId, readAt },
+        )
+      }
       return toConversationDto(detail, userId, storage)
     },
   }

@@ -211,7 +211,20 @@ export function createApp(
   app.route(
     '/conversations',
     createConversationsRouter({
-      service: createConversationService({ store: conversationStore, storage }),
+      service: createConversationService({
+        store: conversationStore,
+        storage,
+        // 读位推进后推给会话双方的全部在线连接（#149）：与 message.new 同一通道，
+        // 客户端按 readerId 区分「自己读的」与「对方读的」。
+        onRead: (participants, event) => {
+          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+            type: 'conversation.read',
+            conversationId: event.conversationId,
+            readerId: event.readerId,
+            readAt: event.readAt,
+          })
+        },
+      }),
       requireAuth: auth.requireAuth,
     }),
   )

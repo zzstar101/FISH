@@ -22,6 +22,7 @@ const dto: ConversationDto = {
     avatarUrl: null,
   },
   unreadCount: 0,
+  counterpartLastReadAt: null,
   lastMessage: {
     type: 'TEXT',
     content: '在吗',
