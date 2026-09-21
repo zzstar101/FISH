@@ -35,6 +35,9 @@ jobs:
       S3_BUCKET: fish
       S3_PUBLIC_URL: http://localhost:9000/fish
       MEETUP_TOKEN_SECRET: ci-only-meetup-secret-0123456789abcdef
+      # #141：CI 不出网、不持有上游密钥，AI 润色一律走 stub（用例内用临时端口的 stub 服务覆盖 base_url）。
+      AI_POLISH_TRANSPORT: stub
+      AI_POLISH_BASE_URL: http://127.0.0.1:8787
 
     steps:
       - uses: actions/checkout@v7

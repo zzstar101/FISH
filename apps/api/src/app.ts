@@ -3,13 +3,14 @@ import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
-import type { MailTransportEnv, MeetupTokenEnv, ServerEnv } from '@fish/shared/env'
-import { loadMeetupTokenEnv } from '@fish/shared/env'
+import type { AiPolishEnv, MailTransportEnv, MeetupTokenEnv, ServerEnv } from '@fish/shared/env'
+import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { createAdminModule } from './modules/admin/module'
+import { createAiPolishModule } from './modules/ai/module'
 import {
   createDevEmailVerificationProvider,
   createResendEmailVerificationProvider,
@@ -85,6 +86,8 @@ export function createApp(
   mailEnv: MailTransportEnv = { transport: 'outbox' },
   /** 面交码签名密钥（#70）：API-only（worker 不做 HMAC），index.ts 用 loadMeetupTokenEnv 校验。 */
   meetupEnv: MeetupTokenEnv = loadMeetupTokenEnv(),
+  /** AI 润色上游配置（#141）：API-only，index.ts 用 loadAiPolishEnv 校验（transport 无默认值）。 */
+  aiEnv: AiPolishEnv = loadAiPolishEnv(),
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -318,6 +321,12 @@ export function createApp(
       getUserId: (c) => c.get('userId'),
     }),
   )
+
+  // 商品描述 AI 润色（#141）：单个端点 `POST /ai/polish-candidates`，整体要求登录
+  // （未登录 401，不给匿名者烧配额）。装配在 modules/ai 内，这里只接线；AI 的上游密钥
+  // 只经 aiEnv 注入本进程，worker 拿不到。
+  const ai = createAiPolishModule({ db, requireAuth: auth.requireAuth, env: aiEnv })
+  app.route('/', ai.router)
 
   // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离（设计 §2）。
   // 挂载点为根级 `/admin`；requireAuth（401）与 requireAdmin（403）两道守卫在 admin

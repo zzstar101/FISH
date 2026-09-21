@@ -211,8 +211,11 @@ mc admin policy attach local fish-app-rw --user fish-app
 
 升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
 允许匿名 GetObject；`chat-media/*` 和 `chat-media-final/*` 不能匿名读或列举。
-上线前执行 `bun --env-file=.env apps/api/scripts/media-smoke.ts`，验证聊天直链返回 403、
-鉴权代理仍能读取及 Range 播放。
+上线前执行 `MEETUP_TOKEN_SECRET=$(openssl rand -hex 32) bun --env-file=.env apps/api/scripts/media-smoke.ts`，
+验证聊天直链返回 403、鉴权代理仍能读取及 Range 播放。那个变量是因为脚本会**自己拉起一个 API 进程**
+（`apps/api/scripts/media-smoke.ts:52`），而 API 启动时会校验面交码密钥（§4）；这里给的是只活在这条
+命令里的一次性值，**不要**写进 `.env`——生产的密钥归 §4 的 `/etc/fish/api-mail.env`。#141 起 API 还
+强制要求 AI 润色配置，脚本会自己注入 stub 的两个变量（不会出网），不必再手工传。
 
 ## 4. 代码与环境变量
 
@@ -254,19 +257,99 @@ S3_PUBLIC_URL=https://s3.fish.example.com/fish
 `S3_*` 即使 worker 用不到也必须存在；其中 8 项无默认值，`API_PORT` 有默认），
 缺一项进程直接启动失败——这是刻意的 fail-fast。
 
-校园认证邮件配置仅由 API 加载。生产另建 `/etc/fish/api-mail.env`（`root:root`、
-`chmod 600`，由 systemd 读取），不要把 Resend 密钥写入 API/worker 共用的 `.env`：
+下面这几项**只有 API 需要**（worker 只加载 `loadServerEnv`，见 `apps/worker/src/index.ts:2,9`），统一放
+`/etc/fish/api-mail.env`（`root:root`、`chmod 600`，由 §5.1 的 `EnvironmentFile` 注入）。
+文件名里的 `mail` 是历史遗留：自 #70 起它承载**全部** API 专属密钥。不要把它们写进
+api/worker 共用的 `/srv/fish/.env`：那个文件在应用工作目录里，是 `git add`、镜像同步、
+"随手 cat 给同事"最容易顺手带上的位置。
+（这缩小的是**误提交 / 误扩散**面，不是权限边界：unit 是 `User=fish`，同 uid 的进程能从
+`/proc/<pid>/environ` 读到注入后的值，所以应用代码被攻破时两种放法等价。此为 Linux 语义，
+本机未实测。）
 
 ```bash
+# 校园认证邮件（仅 API 加载）
 MAIL_TRANSPORT=resend
 RESEND_API_KEY=REPLACE_ME_RESEND_API_KEY
 RESEND_FROM="鱼小应 <noreply@YOUR_VERIFIED_DOMAIN>"
+
+# #70 面交码的 HMAC 签名密钥（仅 API 加载；必填且不少于 32 字符）
+MEETUP_TOKEN_SECRET=REPLACE_ME_64_HEX
+
+# #141 商品描述 AI 润色的上游（仅 API 加载；transport 必填，无默认值）
+# 换服务商只改 BASE_URL 与 MODEL 两行；API_KEY 从服务商控制台取。
+AI_POLISH_TRANSPORT=live
+AI_POLISH_BASE_URL=https://api.deepseek.com
+AI_POLISH_API_KEY=REPLACE_ME_UPSTREAM_KEY
+AI_POLISH_MODEL=deepseek-flash
 ```
 
-先在 Resend 验证发件域名（含 SPF/DKIM），再替换以上占位值。`MAIL_TRANSPORT` 必填，
-选择 `resend` 但缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择 transport。
-`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
-移除其中的 `MAIL_TRANSPORT=outbox`，避免与 API 专属配置并存。
+先在 Resend 验证发件域名（含 SPF/DKIM）。**只有首次部署**才用下面这段整份写入；两个密钥都从
+`read` 进内存再落盘，不要直接粘在命令里——那会永久留在 root 的 shell 历史里。`RESEND_FROM`
+也必须问进来：`loadMailTransportEnv` 只验它非空，占位域名会照样把服务起起来、直到发信时才失败。
+
+```bash
+sudo install -d -m 755 /etc/fish
+read -r  -p '发件地址（已在 Resend 验证过的域名）: ' RESEND_FROM
+read -rs -p 'Resend 密钥（不回显）: ' RESEND_API_KEY && echo
+read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
+{
+  printf 'MAIL_TRANSPORT=resend\n'
+  printf 'RESEND_API_KEY=%s\n' "$RESEND_API_KEY"
+  printf 'RESEND_FROM="%s"\n' "$RESEND_FROM"
+  printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)"
+  printf 'AI_POLISH_TRANSPORT=live\n'
+  printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
+  printf 'AI_POLISH_API_KEY=%s\n' "$AI_POLISH_API_KEY"
+  printf 'AI_POLISH_MODEL=deepseek-flash\n'
+} | sudo tee /etc/fish/api-mail.env >/dev/null
+sudo chown root:root /etc/fish/api-mail.env && sudo chmod 600 /etc/fish/api-mail.env
+unset RESEND_API_KEY RESEND_FROM AI_POLISH_API_KEY
+```
+
+**已经按旧版手册部署过的机器不要重跑上面那一段**：`tee` 是整文件覆写，会顺手换掉
+`MEETUP_TOKEN_SECRET`，所有已签发未核销的面交码立刻失效（§9 第 12 条）。升级只需补那一行：
+
+```bash
+sudo grep -q '^MEETUP_TOKEN_SECRET=' /etc/fish/api-mail.env \
+  || printf 'MEETUP_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" | sudo tee -a /etc/fish/api-mail.env >/dev/null
+```
+
+**#141 起 API 还需要四个 AI 变量，且 `AI_POLISH_TRANSPORT` 无默认值**：升级后不补它，API 会**直接
+启动失败**（`环境变量校验失败：AI_POLISH_TRANSPORT 必须显式设置为 stub 或 live`），配合
+`Restart=always` 就是反复重启。老机器用下面这段追加（`tee -a` 不覆写已有行，不会动面交码密钥）：
+
+```bash
+read -rs -p 'AI 润色上游密钥（不回显）: ' AI_POLISH_API_KEY && echo
+{
+  printf 'AI_POLISH_TRANSPORT=live\n'
+  printf 'AI_POLISH_BASE_URL=https://api.deepseek.com\n'
+  printf 'AI_POLISH_API_KEY=%s\n' "$AI_POLISH_API_KEY"
+  printf 'AI_POLISH_MODEL=deepseek-flash\n'
+} | sudo tee -a /etc/fish/api-mail.env >/dev/null
+unset AI_POLISH_API_KEY
+```
+
+暂时不开通这个功能也要写这四行（否则 API 起不来）：把 `AI_POLISH_TRANSPORT` 写成 `stub`、
+`AI_POLISH_BASE_URL` 指向本地假服务（`apps/api/scripts/ai-polish-stub.ts`）即可，但**生产不要用
+stub**——它返回的是演示文案，客户端会带"演示文案·非真实模型"角标。
+
+- `AI_POLISH_TRANSPORT` 必填且无默认值，取值非法同样启动失败；选 `live` 时
+  `AI_POLISH_BASE_URL` / `AI_POLISH_API_KEY` / `AI_POLISH_MODEL` 三项缺一即失败——与
+  `MAIL_TRANSPORT` 同一 fail-fast 口径，不静默回退。选 `stub` 也要求 `AI_POLISH_BASE_URL`
+  （它是真 HTTP 服务，"stub" 指模型是假的，不是指进程内有个假实现）。
+- 上游密钥轮换不影响存量数据——这与 `MEETUP_TOKEN_SECRET` 不同（换后者会让未核销的面交码立刻
+  失效）。但它同样会随 §10 备份的 `config-*.tar.gz` 进备份，泄漏处置按同一口径。
+- 本期**不设成本上限与告警**（设计 §11-R1）：用量落在 `ai_polish_requests`
+  （`outcome` / `prompt_tokens` / `completion_tokens` / `latency_ms`），事后查表；配额是每用户
+  最小间隔 5s + 滚动 24h 30 次。
+
+- 用 `openssl rand -hex 32`（64 个 `[0-9a-f]`）而不是 `base64`：systemd 的 `EnvironmentFile`
+  不做 shell 展开，纯 hex 可以免掉 `$`、引号与 `#` 引发的整类解析歧义。
+- **不要把 `.env.example` 里那行 `dev-only-meetup-secret-…` 抄到生产**。它在公开仓库里，
+  照抄等于公开签名密钥，任何人可离线伪造任意面交码。
+- `MAIL_TRANSPORT` 必填，选择 `resend` 但缺少密钥或发件人时 API 启动失败；`NODE_ENV` 不选择
+  transport。`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
+  移除其中的 `MAIL_TRANSPORT=outbox` 与 `MEETUP_TOKEN_SECRET=dev-only-…`，避免与 API 专属配置并存。
 
 ## 5. systemd 托管
 
@@ -285,7 +368,7 @@ Type=simple
 User=fish
 Group=fish
 WorkingDirectory=/srv/fish/apps/api
-# 通用配置来自 .env；邮件配置仅注入 API，不传给 worker。
+# 通用配置来自 .env；邮件与面交码密钥（§4）仅注入 API，不传给 worker。
 EnvironmentFile=/etc/fish/api-mail.env
 ExecStart=/usr/local/bin/bun --env-file=/srv/fish/.env /srv/fish/apps/api/src/index.ts
 Restart=always
@@ -465,6 +548,54 @@ hostname（`packages/db/src/seed.ts:284-291`）——生产库正好是 `127.0.0
 set -euo pipefail
 cd /srv/fish
 
+# 0) 预检 API 专属配置（§4）。脚本以 root 执行，所以直接读那个 600 的文件。
+#    缺 MEETUP_TOKEN_SECRET（#70）或缺 AI 润色变量（#141）都会让 API 拒绝启动，
+#    配合 Restart=always 就是每 5 秒一次的 crash loop —— 而那时第 3 步已经把服务
+#    停了。放在最前面：预检不过就一行代码都不动、一个服务都不停。
+API_ENV=/etc/fish/api-mail.env
+# 先单独判可读。少了这一步，文件不存在 / 忘了 sudo 时：sed 非零 → 在 `set -o pipefail`
+# 下整条管道非零 → 赋值那一行直接静默退出，运维看不到任何原因（实测 rc=1 且零输出）。
+if [ ! -r "$API_ENV" ]; then
+  echo "预检失败：读不到 $API_ENV。脚本要 sudo 执行；无 systemd 的容器环境见 §11。" >&2
+  exit 1
+fi
+# 重复行按最后一行取；同文件里出现两行 MEETUP_TOKEN_SECRET 本身就该先清掉。
+MEETUP_KEY=$(sed -n 's/^MEETUP_TOKEN_SECRET=//p' "$API_ENV" | tail -1 | tr -d '\r')
+# 只验长度不够：仓库里那两行占位值本身就 ≥32 字符，照抄过来会带着公开密钥上线。
+bad=0
+case "$MEETUP_KEY" in
+  '' | dev-only-* | ci-only-* | REPLACE_*) bad=1 ;;
+  ?*) [ "${#MEETUP_KEY}" -ge 32 ] || bad=1 ;;
+esac
+if [ "${bad:-0}" -eq 1 ]; then
+  echo "预检失败：$API_ENV 里的 MEETUP_TOKEN_SECRET 缺失、少于 32 字符，或还是 .env.example / CI 的占位值。" >&2
+  echo "按 §4 现生成一个再发布；本次未改动代码，也未停任何服务。" >&2
+  exit 1
+fi
+unset MEETUP_KEY
+
+# 同一理由：#141 起 AI_POLISH_TRANSPORT 也是必填且无默认值，缺了同样在第 6 步进 crash loop。
+AI_TRANSPORT=$(sed -n 's/^AI_POLISH_TRANSPORT=//p' "$API_ENV" | tail -1 | tr -d '\r')
+AI_BASE_URL=$(sed -n 's/^AI_POLISH_BASE_URL=//p' "$API_ENV" | tail -1 | tr -d '\r')
+AI_API_KEY=$(sed -n 's/^AI_POLISH_API_KEY=//p' "$API_ENV" | tail -1 | tr -d '\r')
+AI_MODEL=$(sed -n 's/^AI_POLISH_MODEL=//p' "$API_ENV" | tail -1 | tr -d '\r')
+ai_bad=0
+case "$AI_TRANSPORT" in
+  stub)
+    # stub 也是真 HTTP 服务（apps/api/scripts/ai-polish-stub.ts），base_url 同样必填。
+    [ -n "$AI_BASE_URL" ] || ai_bad=1 ;;
+  live)
+    { [ -n "$AI_BASE_URL" ] && [ -n "$AI_MODEL" ]; } || ai_bad=1
+    case "$AI_API_KEY" in '' | REPLACE_*) ai_bad=1 ;; esac ;;
+  *) ai_bad=1 ;;
+esac
+if [ "${ai_bad:-0}" -eq 1 ]; then
+  echo "预检失败：$API_ENV 里的 AI_POLISH_* 不完整。transport 必须显式 stub 或 live；live 还要求 BASE_URL / API_KEY / MODEL 齐全，且 API_KEY 不是占位值。" >&2
+  echo "按 §4 补齐后重试；本次未改动代码，也未停任何服务。" >&2
+  exit 1
+fi
+unset AI_TRANSPORT AI_BASE_URL AI_API_KEY AI_MODEL
+
 # 发布的就是这个 ref：默认 origin/main，回滚时传 tag 或 sha（§7.3）。
 # 刻意不用 `git pull`：回滚后 HEAD 可能是 detached，裸 pull 会以
 # "You are not currently on a branch" 直接失败——而那时服务已经被停掉了。
@@ -549,7 +680,20 @@ curl -s -o /dev/null -w '%{http_code}\n' https://s3.fish.example.com/fish/<objec
 #    ② 浏览器可达（图片直链）——在你自己电脑上执行同一条命令
 #    任一条失败：网站能开但传图后报「图片尚未上传完成」（§9 第 4 条）
 
-# 6) 手动验收一条业务链：注册 → 登录 → 发布商品并传图 → 愿望 → 匹配 → 聊天
+# 6) 面交码签名密钥（#70）到位。缺它时 API **根本不会 listen**，所以第 1 步的 curl 连不上
+#    就是它的信号。这里再确认它没有陷在 crash loop 里（缺失/过短/占位值 → 每 5 秒重启一次），
+#    要等过一个 RestartSec=5 的周期再判。窗口只取本次发布之后：`-b` 覆盖整次开机，
+#    上一次失败的记录会让已经修好的发布假失败。
+sleep 6
+systemctl is-active fish-api        # 期望 active（不是 activating / failed）
+sudo journalctl -u fish-api --since '-5 min' --no-pager | wc -l   # 必须 > 0：0 行是读不到日志，不是通过
+sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校验失败' || echo '无环境变量校验失败 ✓'
+
+# 7) 手动验收一条业务链：注册 → 登录 → 发布商品并传图 → 愿望 → 匹配 → 聊天
+#    → 提案 / 接受（→ PENDING_MEETUP）→ 卖家签发面交码 → 买家核销 → 双方确认齐
+#      → COMPLETED + 商品 SOLD。核销只在同一事务里盖**卖家**确认（展示码即卖家同意，
+#      apps/api/src/modules/transactions/store.ts 的 consumeMeetupToken）；若买家此前没单侧
+#      confirm 过，核销后仍需买家调一次 confirm 才会 COMPLETED——按响应里的 nextAction 走。
 ```
 
 `bun run core:smoke` **只在开发/预发机跑**：它会自建 scratch 库、并 spawn 自己的 API 与 Worker
@@ -595,6 +739,29 @@ curl -s -o /dev/null -w '%{http_code}\n' https://s3.fish.example.com/fish/<objec
 11. **`/ws` 是无鉴权的 echo 入口**：`apps/api/src/app.ts` 的 `app.get('/ws', upgradeWebSocket(...))`
     只回显文本帧，不做任何认证，仅供链路冒烟。反代不要暴露它（§6 只放 `/ws/*`），验收时打回环
     地址（§8 第 3 步）。业务通道是 `/ws/chat`（`packages/contracts/src/chat/routes.ts`）。
+
+12. **`MEETUP_TOKEN_SECRET` 是签名密钥，不是普通配置项**（#70，见 §4）：
+    - 缺失或短于 32 字符 → API 启动即抛 `环境变量校验失败：MEETUP_TOKEN_SECRET …`
+      （`packages/shared/src/env.ts` 的 `loadMeetupTokenEnv`），配合 `Restart=always`
+      表现为每 5 秒一次的 crash loop，`/health` 根本连不上。这就是 §7.2 第 0 步预检的理由。
+    - **换值 = 已签发未核销的面交码立刻全部失效**：库里只存带密钥的 HMAC，比对随密钥变，
+      买家拿到 422 `MEETUP_TOKEN_INVALID`，卖家重新签发即恢复。方向是 fail closed（不会误放行）。
+      窗口约束比想象的小：凭证本身 5 分钟就过期（`MEETUP_TOKEN_TTL_SECONDS`，
+      `apps/api/src/modules/transactions/service.ts:46`），所以只需避开"正站在原地扫码的那一对"，
+      不需要等全站没有 `PENDING_MEETUP` 交易（活跃站上那种窗口几乎不存在）。
+    - 顺带知道两件不影响部署但会被问到的事：面交凭证的失败计数是**累计**的，QR 与 6 位码共用
+      同一个计数（`apps/api/src/modules/transactions/service.ts:266-274`）——满 5 次锁 10 分钟，
+      锁定到期后计数**不**归零，再错一次立即重新锁定；只有卖家重签发才清零
+      （`store.ts` 的 `recordMeetupTokenFailure` 与 `upsertMeetupToken`）。所以现场"输对了却还说错误次数过多"
+      的正解是请卖家重新签发，不是等一会儿。
+    - 它**会**随 §10 备份脚本那条 `tar` 里已列出的 `/etc/fish/api-mail.env` 一起进
+      `config-*.tar.gz`：换机恢复后未核销码仍然可用。也正因如此，**备份包与数据库同等保密**，
+      拿到 config 包就等于能离线伪造任意面交码。
+      ⚠️ 这与本节第 7 条"生产密钥不进备份压缩包的明文目录"字面冲突：第 7 条要防的是明文散落，
+      而 §10 的 config 包是唯一的换机恢复手段，两者只能靠"备份目录权限 + 异地介质加密"同时满足。
+      是否要把密钥从备份包里排除（代价：恢复时必须重生成密钥、所有未核销码作废），留给审核定。
+    - 回滚到 #70 之前的 ref 时它变成多余项，无害；但 §7.2 的预检会一直要求它在，
+      别因为「这次回滚用不到」就删掉文件。
 
 ## 10. 运维
 
@@ -693,7 +860,7 @@ journalctl -u fish-api -p err
 
 | 现象 | 先看哪里 |
 | --- | --- |
-| api 起不来，日志 `环境变量校验失败` | `/srv/fish/.env` 少项；worker 也需要 `S3_*` 与 `WEB_ORIGIN` |
+| api 起不来，日志 `环境变量校验失败` | 看冒号后半句判断是哪一份配置：`…（参考 .env.example）` = `/srv/fish/.env` 少项（worker 也需要 `S3_*` 与 `WEB_ORIGIN`）；`… MAIL_TRANSPORT …` / `… MEETUP_TOKEN_SECRET …` / `… AI_POLISH_TRANSPORT …` = `/etc/fish/api-mail.env` 少项或还是占位值（§4） |
 | 页面能开但接口 404 | 反代没剥 `/api` 前缀（§9 第 2 条） |
 | 图片 403 | bucket 没设匿名读（§3 的 `mc anonymous set download`） |
 | 图片地址不可达 / 上传失败 | `S3_ENDPOINT` / `S3_PUBLIC_URL` 写成了**只有服务器**能访问的地址（`127.0.0.1` / 容器名），见 §9 第 4 条 |
@@ -800,6 +967,13 @@ ps -p 1 -o comm= ; ls -d /run/systemd/system 2>/dev/null || echo "无 systemd"
 1. **supervisor**（apt 里有）：为 `fish-api` / `fish-worker` / `caddy` 各写一个 `[program:x]`，
    用 `user=` 降权、`autostart=true` / `autorestart=true`、`stdout_logfile=` 收日志；
    `supervisord -c …` 启动，`supervisorctl status/restart` 控制。这是最接近 systemd 行为的一种。
+   ⚠️ 没有 `EnvironmentFile` 可用时，**§4 列出的全部 API 专属变量**（邮件三项、#70 的
+   `MEETUP_TOKEN_SECRET`、#141 的四个 `AI_POLISH_*`）必须由 `fish-api` 的 `environment=`
+   注入——少任意一项 API 都起不来，带着 `autorestart=true` 反复重启，症状与 §9 第 12 条一致。
+   清单以 §4 为准（这里不再逐个列，避免像本节原先那样漏掉后加的变量）。
+   `environment=` 用逗号分隔且值里带空格（`RESEND_FROM` 就是 `鱼小应 <…>`），那一项要按
+   supervisor 的规则加引号；`supervisord.conf` 本身收到 `root:root 600`，别放世界可读的目录。
+   （supervisor 的引号细则本机未实测。）
 2. `cron` + `@reboot`：能开机能拉起来，但没有崩溃自恢复，也没有依赖顺序（worker 会在迁移前先起）。
 
 ⚠️ **两者都需要有人先启动它**：容器重启后，若 entrypoint 不拉起 supervisord/cron，服务不会自己回来。
