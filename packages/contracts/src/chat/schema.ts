@@ -146,6 +146,15 @@ export const conversationDtoSchema = z.object({
   counterpart: conversationUserSchema,
   /** 查看者的未读数；调用 read 端点后归 0。 */
   unreadCount: z.number().int().nonnegative(),
+  /**
+   * **对方那一侧**的 `last_read_at`（ISO；对方从未读过为 null）。
+   *
+   * 不复用 `unreadCount`：它只表达「我」的未读，推不出对方读到了哪一条。
+   * 查看者据此渲染自己消息的「已读」：`message.createdAt <= counterpartLastReadAt`
+   * 即对方已读到该条（服务端 read 端点推进的是**读写者自己**那一侧，两者的
+   * `last_read_at` 是 conversations 表的两个独立列）。
+   */
+  counterpartLastReadAt: z.iso.datetime().nullable(),
   /** 最新一条消息；会话刚建立还没有任何消息时为 null（此时行内渲染占位文案）。 */
   lastMessage: conversationLastMessageSchema.nullable(),
   lastMessageAt: z.iso.datetime(),
@@ -240,6 +249,22 @@ export const realtimeServerEventSchema = z.discriminatedUnion('type', [
     type: z.literal('message.new'),
     conversationId: z.string(),
     message: messageDtoSchema,
+  }),
+  /**
+   * 会话读位被推进：`POST /conversations/:id/read` 落库成功后推送（与 message.new
+   * 同一「先落库再推送」语义）。
+   *
+   * 推给会话双方而不是只推给对方：同一个人可能有多个连接 / 多台设备，其它连接也要
+   * 同步读位。客户端按 `readerId` 与自己比对 —— 只有 `readerId !== me` 才把自己发的
+   * 消息翻成「已读」，否则本人这次读操作会被误当成「对方已读」。
+   */
+  z.object({
+    type: z.literal('conversation.read'),
+    conversationId: z.string(),
+    /** 读位被推进的那一方（即调用 read 端点的用户）。 */
+    readerId: z.string(),
+    /** 推进到的时刻（ISO，服务端权威）；`createdAt <= readAt` 的消息算已读。 */
+    readAt: z.iso.datetime(),
   }),
   z.object({ type: z.literal('pong') }),
 ])

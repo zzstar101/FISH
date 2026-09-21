@@ -212,7 +212,14 @@ async function waitFor(condition: () => boolean, what: string, timeoutMs = 3000)
   throw new Error(`等待超时：${what}`)
 }
 
-type RealtimeFrame = { type: string; conversationId?: string; message?: MessageDto }
+type RealtimeFrame = {
+  type: string
+  conversationId?: string
+  message?: MessageDto
+  /** `conversation.read`：谁的读位被推进、推进到哪一刻 */
+  readerId?: string
+  readAt?: string
+}
 
 /**
  * 连上真实 `/ws/chat`（cookie 鉴权与 HTTP 同一套 session），返回收集到的帧。
@@ -388,6 +395,56 @@ describe('marketplace flow 双账号验收（#42）', () => {
       )
       expect(outsider.frames.filter((frame) => frame.type === 'message.new')).toHaveLength(0)
       // 屏障本身要有效：路人连接是活的（否则 toHaveLength(0) 只是"没连上"的同义反复）
+      expect(outsider.socket.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      seller.socket.close()
+      buyer.socket.close()
+      outsider.socket.close()
+    }
+  })
+
+  test('WS：read 后双方都收到 conversation.read，且不泄漏给非参与者', async () => {
+    const seller = await connectRealtime(sellerCookie)
+    const buyer = await connectRealtime(buyerCookie)
+    const outsider = await connectRealtime(outsiderCookie)
+    try {
+      const read = await api(CHAT_ROUTES.read(conversationId), {
+        method: 'POST',
+        cookie: buyerCookie,
+      })
+      expect(read.status).toBe(200)
+
+      // 读位推进方自己的连接也要收到：同一用户可能有多个连接 / 多设备，读位得一起同步
+      await waitFor(
+        () => seller.frames.some((frame) => frame.type === 'conversation.read'),
+        '卖家连接收到 conversation.read',
+      )
+      await waitFor(
+        () => buyer.frames.some((frame) => frame.type === 'conversation.read'),
+        '买家连接收到 conversation.read',
+      )
+      const pushed = seller.frames.find((frame) => frame.type === 'conversation.read')
+      if (!pushed?.readAt) throw new Error('conversation.read 帧缺少 readAt')
+      expect(pushed.conversationId).toBe(conversationId)
+      expect(pushed.readerId).toBe(await userIdOf(BUYER_NO))
+
+      // 推出去的 readAt 必须是**落库那一侧**的值：卖家视角回查会话，对方（买家）读位应与之相等。
+      // 若 service 里另取一次 now()，本机 host 时钟比 DB 快约 48ms，会漂到落库值之后，
+      // 客户端按它比对时最近一条会被误判成未读——这条断言钉的就是「用库里回读的那个值」。
+      expect((await conversationRow(sellerCookie)).counterpartLastReadAt).toBe(pushed.readAt)
+
+      // 非参与者一条都不该收到。屏障而非 sleep：再让卖家 read 一次并等它到达买卖双方，
+      // 此时任何本应越界的帧都已经到达（与上一条 message.new 同一手法，避免时基断言 fail-open）。
+      await api(CHAT_ROUTES.read(conversationId), { method: 'POST', cookie: sellerCookie })
+      await waitFor(
+        () => seller.frames.filter((frame) => frame.type === 'conversation.read').length >= 2,
+        '卖家连接收到第二条 conversation.read',
+      )
+      await waitFor(
+        () => buyer.frames.filter((frame) => frame.type === 'conversation.read').length >= 2,
+        '买家连接收到第二条 conversation.read',
+      )
+      expect(outsider.frames.filter((frame) => frame.type === 'conversation.read')).toHaveLength(0)
       expect(outsider.socket.readyState).toBe(WebSocket.OPEN)
     } finally {
       seller.socket.close()
