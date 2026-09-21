@@ -31,6 +31,8 @@ let db: Db
 let app: ReturnType<typeof createApp>
 /** 上游指向一个没人监听的端口：用来验证 502 而不是 500。 */
 let deadUpstreamApp: ReturnType<typeof createApp>
+/** 起在本套件里的 stub 服务，`afterAll` 必须停掉（同 realtime / marketplace-flow 的约定）。 */
+let stubServer: ReturnType<typeof Bun.serve> | undefined
 
 beforeAll(async () => {
   await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
@@ -39,6 +41,7 @@ beforeAll(async () => {
   await migrate(db, { migrationsFolder })
 
   const server = Bun.serve({ port: 0, fetch: stub.fetch })
+  stubServer = server
   const env = { ...loadServerEnv(), DATABASE_URL: scratchUrl }
 
   app = createApp(env, undefined, undefined, {
@@ -52,6 +55,12 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  // `?.` 兜住"beforeAll 中途失败、还没赋值"的情况——裸写 `stop` 会抛 TypeError 把真因盖掉。
+  try {
+    stubServer?.stop(true)
+  } catch (error) {
+    console.error('[ai-polish] 关闭 stub 服务失败', error)
+  }
   await db.$client.close()
   await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
   await admin.$client.close()

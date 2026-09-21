@@ -860,7 +860,7 @@ journalctl -u fish-api -p err
 
 | 现象 | 先看哪里 |
 | --- | --- |
-| api 起不来，日志 `环境变量校验失败` | 看冒号后半句判断是哪一份配置：`…（参考 .env.example）` = `/srv/fish/.env` 少项（worker 也需要 `S3_*` 与 `WEB_ORIGIN`）；`… MAIL_TRANSPORT …` / `… MEETUP_TOKEN_SECRET …` = `/etc/fish/api-mail.env` 少项或还是占位值（§4） |
+| api 起不来，日志 `环境变量校验失败` | 看冒号后半句判断是哪一份配置：`…（参考 .env.example）` = `/srv/fish/.env` 少项（worker 也需要 `S3_*` 与 `WEB_ORIGIN`）；`… MAIL_TRANSPORT …` / `… MEETUP_TOKEN_SECRET …` / `… AI_POLISH_TRANSPORT …` = `/etc/fish/api-mail.env` 少项或还是占位值（§4） |
 | 页面能开但接口 404 | 反代没剥 `/api` 前缀（§9 第 2 条） |
 | 图片 403 | bucket 没设匿名读（§3 的 `mc anonymous set download`） |
 | 图片地址不可达 / 上传失败 | `S3_ENDPOINT` / `S3_PUBLIC_URL` 写成了**只有服务器**能访问的地址（`127.0.0.1` / 容器名），见 §9 第 4 条 |
@@ -967,12 +967,13 @@ ps -p 1 -o comm= ; ls -d /run/systemd/system 2>/dev/null || echo "无 systemd"
 1. **supervisor**（apt 里有）：为 `fish-api` / `fish-worker` / `caddy` 各写一个 `[program:x]`，
    用 `user=` 降权、`autostart=true` / `autorestart=true`、`stdout_logfile=` 收日志；
    `supervisord -c …` 启动，`supervisorctl status/restart` 控制。这是最接近 systemd 行为的一种。
-   ⚠️ 没有 `EnvironmentFile` 可用时，§4 的四个 API 专属变量（`MAIL_TRANSPORT` /
-   `RESEND_API_KEY` / `RESEND_FROM` / `MEETUP_TOKEN_SECRET`）必须由 `fish-api` 的
-   `environment=` 注入；漏掉 `MEETUP_TOKEN_SECRET` 的话 API 会带着 `autorestart=true` 反复重启，
-   症状与 §9 第 12 条一致。`environment=` 用逗号分隔且值里带空格（`RESEND_FROM` 就是
-   `鱼小应 <…>`），那一项要按 supervisor 的规则加引号；`supervisord.conf` 本身收到
-   `root:root 600`，别放世界可读的目录。（supervisor 的引号细则本机未实测。）
+   ⚠️ 没有 `EnvironmentFile` 可用时，**§4 列出的全部 API 专属变量**（邮件三项、#70 的
+   `MEETUP_TOKEN_SECRET`、#141 的四个 `AI_POLISH_*`）必须由 `fish-api` 的 `environment=`
+   注入——少任意一项 API 都起不来，带着 `autorestart=true` 反复重启，症状与 §9 第 12 条一致。
+   清单以 §4 为准（这里不再逐个列，避免像本节原先那样漏掉后加的变量）。
+   `environment=` 用逗号分隔且值里带空格（`RESEND_FROM` 就是 `鱼小应 <…>`），那一项要按
+   supervisor 的规则加引号；`supervisord.conf` 本身收到 `root:root 600`，别放世界可读的目录。
+   （supervisor 的引号细则本机未实测。）
 2. `cron` + `@reboot`：能开机能拉起来，但没有崩溃自恢复，也没有依赖顺序（worker 会在迁移前先起）。
 
 ⚠️ **两者都需要有人先启动它**：容器重启后，若 entrypoint 不拉起 supervisord/cron，服务不会自己回来。
