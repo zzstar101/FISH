@@ -34,7 +34,7 @@ import type { ListingCategory, ListingSort } from '@fish/contracts/listings/sche
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
-import { isApiError, isUnauthenticatedError } from '@/lib/request'
+import { isApiError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
 import { type ListingDetailView, myWishes } from '@/mock/api'
 import type {
@@ -53,7 +53,7 @@ import {
   fetchNotifications,
   markNotificationRead,
 } from './chat/api'
-import { failureText, isNetworkFailure, mergeMarkReadResults } from './chat/notif-read'
+import { mergeMarkReadResults } from './chat/notif-read'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
   fetchCategoryListings,
@@ -62,22 +62,16 @@ import {
   fetchSimilarListings,
   searchListings,
 } from './listing/api'
+import { MOCK_FALLBACK_ENABLED, reportFailure } from './load-failure'
 import { fetchProfile } from './profile/api'
 import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
+import { toMockWish } from './wish/adapt'
 
 /**
- * 构建期注入（`config/index.ts` 的 `defineConstants.__ALLOW_MOCK_FALLBACK__`）。
- * 本地演示 / 预览用 `TARO_APP_MOCK=1` 打开，或 H5 预览构建直接注入 `true`。
+ * 演示兜底开关与失败留痕已挪到 `features/load-failure.ts`（愿望/匹配的取数模块也要用，
+ * 但不该跟着静态 import 会话域）。这里原样 re-export，`@/features/fetchers` 的既有调用方不变。
  */
-declare const __ALLOW_MOCK_FALLBACK__: boolean | undefined
-
-/**
- * 未注入 = 关闭（fail closed），见文件头「生产口径」。
- *
- * 导出给「不走 fetchers 取数、但需要同一套演示兜底判据」的调用方
- * （当前是底栏的冷启动未读补数：真实构建不得拿 fixture 顶替真实未读数）。
- */
-export const MOCK_FALLBACK_ENABLED = __ALLOW_MOCK_FALLBACK__ === true
+export { MOCK_FALLBACK_ENABLED }
 
 /* ------------------------------------------------------------------ 排序 */
 
@@ -584,53 +578,20 @@ function demoProfile(): ProfileView {
   }
 }
 
-/**
- * `WishDto` → `MockWish`。
- *
- * 契约没有 `campus` / `timeLabel`（那是 mock 的展示字段），因此：
- * `campus` 置 `null`、`timeLabel` 由契约的 `createdAt` 相对时间算出来。
- * 页面已做 null 守卫，不会显示「null校区」。
- */
-function toMockWish(wish: {
-  id: string
-  keyword: string
-  category: MockWish['category']
-  budgetMinCents: number
-  budgetMaxCents: number
-  description: string | null
-  acceptSimilar: boolean
-  status: MockWish['status']
-  matchCount: number
-  createdAt: string
-}): MockWish {
-  return {
-    id: wish.id,
-    userId: '',
-    keyword: wish.keyword,
-    category: wish.category,
-    budgetMinCents: wish.budgetMinCents,
-    budgetMaxCents: wish.budgetMaxCents,
-    description: wish.description,
-    acceptSimilar: wish.acceptSimilar,
-    status: wish.status,
-    matchCount: wish.matchCount,
-    createdAt: wish.createdAt,
-    // 契约无校区：不编一个
-    campus: null,
-    // 相对时间由契约的 createdAt 现算
-    timeLabel: relativeLabel(wish.createdAt),
-  }
-}
+/* --------------------------------------------------------------- 愿望 / 匹配 */
 
-/** 相对时间文案（与 `lib/format.ts` 同口径，但这里的「刚刚/N 天前」是列表行文案） */
-function relativeLabel(iso: string, now: number = Date.now()): string {
-  const at = Date.parse(iso)
-  if (!Number.isFinite(at)) return ''
-  const hours = Math.max(0, (now - at) / 3600000)
-  if (hours < 1) return `${Math.max(1, Math.floor(hours * 60))} 分钟前`
-  if (hours < 24) return `${Math.floor(hours)} 小时前`
-  return `${Math.floor(hours / 24)} 天前`
-}
+/**
+ * 许愿页 / 匹配结果页的取数在 `features/wish/load.ts`（真接口，fail-closed）。
+ * 这里 re-export 保持页面既有的 `@/features/fetchers` 导入路径不变。
+ */
+export {
+  loadWishes,
+  loadWishMatches,
+  WISH_HIT_ROWS,
+  type WishesResult,
+  type WishHitList,
+  type WishMatchResult,
+} from './wish/load'
 
 /* --------------------------------------------------------- 他人主页（公开资料） */
 
@@ -684,37 +645,3 @@ export async function loadPublicUserHome(
 
 /** 供页面把契约 `ListingCard[]` 直接转成卡片视图（详情页相似推荐等） */
 export { toMockListings }
-
-/* --------------------------------------------------------------- 内部 */
-
-/**
- * 失败留痕。登录态缺失与网络不可用属于预期情况（是「当前没有后端 / 没登录」，
- * 不是缺陷），因此降级为 debug；其余（含契约解析失败）用 warn ——
- * 那意味着前端与契约已经漂移，不该被静默吞掉。
- *
- * 日志里必须写明**这次有没有按演示口径兜底**：生产口径下没兜，看日志的人才知道
- * 用户看到的是错误态，而不是以为「又是演示数据」。
- *
- * `fellBack` 是**这次操作实际有没有按演示口径兜底**：调用方知道就传（逐条已读只在
- * 整批后端不可达时才兜底；个人中心只在 `MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`
- * 时才兜），不知道就沿用构建开关的口径。页面若**刻意不回退**（如他人主页，见
- * `loadPublicUserHome`）必须显式传 `false`，否则日志会声称一件没发生的事。
- */
-function reportFailure(
-  what: string,
-  error: unknown,
-  fellBack: boolean = MOCK_FALLBACK_ENABLED,
-): void {
-  const expected = isUnauthenticatedError(error) || isNetworkFailure(error)
-  const detail = failureText(error)
-  const tail = fellBack
-    ? '，已按演示口径处理（开发 / 预览构建）'
-    : MOCK_FALLBACK_ENABLED
-      ? '，未按演示口径处理'
-      : '，未回退 mock（生产口径）'
-  if (expected) {
-    console.debug(`[miniapp] ${what}：真实接口不可用${tail}（${detail}）`)
-    return
-  }
-  console.warn(`[miniapp] ${what}：真实接口失败${tail}`, error)
-}

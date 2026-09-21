@@ -101,7 +101,7 @@ function localComment(content: string): CommentNode {
   }
 }
 
-/** 相对时间文案（与 `features/fetchers.ts` 的 relativeLabel 同口径） */
+/** 相对时间文案（与 `features/wish/adapt.ts` 的 relativeLabel 同口径） */
 function relativeTime(iso: string, now: number = Date.now()): string {
   const at = Date.parse(iso)
   if (!Number.isFinite(at)) return ''

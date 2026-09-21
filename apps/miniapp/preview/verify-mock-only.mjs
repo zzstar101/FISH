@@ -6,12 +6,14 @@
  *
  * ## 判定口径（2026-09 起，页面开始接后端）
  *
- * 已接真实接口的页面（首页（含分类筛选）/ 搜索 / 商品详情 / 消息 / 我的）：
- * 允许请求后端，但**只允许发往 `--api` 指定的地址**（默认 `http://localhost:3000`）。
- * 发往别处仍算越界。消息页是「读 + 写」：通知列表（GET /notifications）与
- * 切进「通知」tab 的逐条已读回写（POST /notifications/:id/read）。
+ * 已接真实接口的页面（首页（含分类筛选）/ 搜索 / 商品详情 / 消息 / 我的 /
+ * 许愿（含发布页与匹配结果页））：允许请求后端，但**只允许发往 `--api` 指定的地址**
+ * （默认 `http://localhost:3000`）。发往别处仍算越界。消息页是「读 + 写」：
+ * 通知列表（GET /notifications）与切进「通知」tab 的逐条已读回写
+ * （POST /notifications/:id/read）。许愿页是「读 + 写」：GET /wishes、GET /wishes/pool、
+ * GET /matches?wishId=、POST /wishes/:id/close；发布页 POST /wishes。
  *
- * 其余页面（许愿 / 出物 / 会话 …）：仍必须**零业务请求** ——
+ * 其余页面（出物 / 会话 …）：仍必须**零业务请求** ——
  * 它们的写操作与状态机尚未接接口，一旦偷偷发起请求就说明回退路径被绕过了。
  *
  * 用法：bun preview/verify-mock-only.mjs [--base http://127.0.0.1:4599/index.html] [--api http://localhost:3000]
@@ -34,6 +36,7 @@ const ROUTES = [
   '/pages/home/index',
   '/pages/wish/index',
   '/pages/wish-publish/index',
+  '/pages/match/index',
   '/pages/sell/index',
   '/pages/chat/index',
   '/pages/profile/index',
@@ -53,15 +56,20 @@ const ROUTES = [
 const ALLOW = /^(?:https?:\/\/127\.0\.0\.1:[0-9]+|data:|blob:|file:)/
 /** 业务数据请求的特征：静态源里出现这些路径，说明页面绕过了 mock 直连接口 */
 const DATA_HINT =
-  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/listings|:\d+\/conversations|:\d+\/notifications/i
+  /\/(api|v1|v2|graphql)\b|localhost:3000|:\d+\/wishes|:\d+\/matches|:\d+\/listings|:\d+\/conversations|:\d+\/notifications/i
 
 /**
  * 已接真实接口的页面（见 `src/features/fetchers.ts`；消息页经 `features/chat/api.ts`
- * 接了通知列表与逐条已读回写）。这些路由**允许**打后端；其余路由必须保持零业务请求。
+ * 接了通知列表与逐条已读回写；许愿 / 发布 / 匹配结果页经 `features/wish/api.ts` 与
+ * `features/match/api.ts` 接了愿望读写与匹配列表）。这些路由**允许**打后端；
+ * 其余路由必须保持零业务请求。
  *
  * 注意：预览 harness 的 `Taro` 桩**没有实现 `request`**，所以这些页在预览里
- * 实际会走 mock 回退、`打后端` 一列通常是 0。本脚本因此校验的是
- * 「没有越界请求」，**不能**用来证明真实接口那条路径可用（那要在微信开发者工具里跑）。
+ * 会因请求失败走到错误态（许愿系页面刻意不回退 mock），`打后端` 一列通常是 0。
+ * 其中发布页只在点「发布愿望」时才请求、匹配结果页不带 `wishId` 时直接走
+ * 「已结束」分支 —— 本脚本只加载路由、不做交互，所以这两页的数据路径在这里
+ * 覆盖不到。本脚本因此校验的是「没有越界请求」，**不能**用来证明真实接口那条
+ * 路径可用（那要在微信开发者工具里跑）。
  */
 const WIRED = [
   '/pages/home/index',
@@ -69,6 +77,9 @@ const WIRED = [
   '/pages/listing-detail/index',
   '/pages/chat/index',
   '/pages/profile/index',
+  '/pages/wish/index',
+  '/pages/wish-publish/index',
+  '/pages/match/index',
 ]
 
 /** 后端地址：已接接口的页面只允许请求它，发往别处仍算越界 */
