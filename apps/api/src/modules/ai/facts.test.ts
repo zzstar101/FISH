@@ -61,6 +61,13 @@ describe('候选是否新增事实', () => {
     expect(addsUnknownFacts(original, '九成新，联系 [fish-pho\u200bne-1] 详聊')).toBe(false)
   })
 
+  test('正文里形如 `fish+字母+数字` 的普通文字不算标记（基线不被过度摘除）', () => {
+    // 摘标记的规则若宽松到任意字母，基线里的 `Fish K380` 会被摘掉，引用该型号的候选就被误判
+    // "新增事实"而丢弃 —— 与设计 §5.6c 记录过的"罗技 K380"失败模式同源（#141 审查发现）。
+    expect([...extractFacts('Fish K380 键盘')]).toEqual(['380'])
+    expect(addsUnknownFacts('Fish K380 键盘', '罗技 K380 键盘')).toBe(false)
+  })
+
   test('同义单位改写（元 ↔ 块）会被判为新增：设计 §11-R4 已接受该误杀，待 filtered_count 观察', () => {
     expect(addsUnknownFacts('原价 500元', '原价 500块')).toBe(true)
   })

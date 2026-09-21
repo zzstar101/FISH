@@ -115,6 +115,18 @@ describe('回填', () => {
     })
   })
 
+  test('正文里形如 `fish+字母+数字` 的普通文字不算标记，不误降级', () => {
+    // 识别半成品标记的种类是闭集；宽松到任意字母会把 `fish oil 3` 这类正文当成标记，
+    // 把提示语塞进用户拿到的候选里（#141 审查发现）。
+    const redactor = createRedactor()
+    const description = redactor.redact('电话 13812345678')
+
+    expect(redactor.restore(`${description.text} fish oil 3 瓶`, description)).toEqual({
+      text: '电话 13812345678 fish oil 3 瓶',
+      lost: false,
+    })
+  })
+
   test('没有标记时原样返回且不降级', () => {
     const redactor = createRedactor()
     const empty = redactor.redact('无标记的普通描述')

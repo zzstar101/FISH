@@ -70,8 +70,15 @@ const MARKER_PATTERN = /\[fish-([a-z]+)-(\d+)\]/g
  * 插了零宽字符）。检测与清理共用它：这类半成品既不能当"找回"（内容可能被改过），也不能原样
  * 留在候选里被用户采用（设计 §5.7 要求标记位必须换成提示语）。比对前先剥掉不可见分隔符
  * （`INVISIBLE_SEPARATORS`）。
+ *
+ * 种类必须是**闭集**（`LOST_PROMPTS` 的键，即我们真正会发出的那几个），不能写成任意 `[a-z]+`：
+ * `facts.ts` 的基线是用户原文，把正文里的 `Fish K380` 当成标记摘掉会让引用该型号的候选被判
+ * "新增事实"而误丢（#141 审查发现）。写成捕获组是因为 `restore` 要靠它取类型化提示语。
  */
-const LOOSE_MARKER_PATTERN = /\[?\s*fish[-_\s]*([a-z]+)[-_\s]*[0-9０-９]+\s*\]?/gi
+const LOOSE_MARKER_PATTERN = new RegExp(
+  `\\[?\\s*fish[-_\\s]*(${Object.keys(LOST_PROMPTS).join('|')})[-_\\s]*[0-9０-９]+\\s*\\]?`,
+  'gi',
+)
 
 /**
  * 模型可能把标记拆开（零宽空格/零宽连接符/BOM 插在中间）：比对与清理前先剥掉它们。
