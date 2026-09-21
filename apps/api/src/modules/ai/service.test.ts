@@ -141,6 +141,20 @@ describe('八步流水线', () => {
     expect(harness.finishes[0]?.outcome).toBe('TOKEN_LOST')
   })
 
+  test('标题里也有敏感内容时，描述候选照样还原用户自己的联系方式（不误记 TOKEN_LOST）', async () => {
+    // 真实上游踩过：标题含可脱敏内容时，若把标题的标记也算"必须找回"，用户自己的号码会被换成提示语。
+    const harness = createHarness({ segments: ['九成新，联系 [fish-phone-1] 详聊'] })
+
+    const response = await harness.service.polishCandidates({
+      ...INPUT,
+      title: '出 12号楼 的键盘',
+      description: '九成新，联系 13812345678 详聊',
+    })
+
+    expect(response.candidates[0]?.text).toBe('九成新，联系 13812345678 详聊')
+    expect(harness.finishes[0]?.outcome).toBe('OK')
+  })
+
   test('超长候选被丢（不截断）；全被丢 → 502 AI_RESULT_EMPTY 且 outcome 记 EMPTY', async () => {
     const harness = createHarness({ segments: ['啊'.repeat(501)] })
 

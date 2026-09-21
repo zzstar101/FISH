@@ -142,8 +142,9 @@ export function createPolishProvider(env: AiPolishEnv): PolishProvider {
         throw new AiUpstreamError('http_status', response.status)
       }
 
-      const payload: unknown = await response.json().catch(() => {
-        throw new AiUpstreamError('bad_payload', response.status)
+      const payload: unknown = await response.json().catch((error: unknown) => {
+        // 8s 的 `AbortSignal.timeout` 也会中止 body 读取：超时必须仍然报 504，不能混成"上游违约"。
+        throw new AiUpstreamError(isAbortError(error) ? 'timeout' : 'bad_payload', response.status)
       })
 
       return {

@@ -193,6 +193,26 @@ describe('上游调用', () => {
     )
   })
 
+  test('body 读取被 8s signal 中止也算超时，不混成上游违约', async () => {
+    const aborted = new Error('The operation was aborted due to timeout')
+    aborted.name = 'TimeoutError'
+
+    await runWithFetch(
+      () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw aborted
+          },
+        }) as unknown as Response,
+      async () => {
+        const error = await captureError(() => createPolishProvider(STUB_ENV).complete(PROMPT))
+        expect(error.reason).toBe('timeout')
+      },
+    )
+  })
+
   test('只有分隔线没有正文时算上游违约，不是 EMPTY', async () => {
     await runWithFetch(
       () => jsonResponse(completion('===\n===\n')),

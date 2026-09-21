@@ -5,37 +5,37 @@ describe('脱敏', () => {
   test('七类标识符各替换为对应标记，同一类内计数递增', () => {
     const redactor = createRedactor()
 
-    expect(redactor.redact('电话 13812345678')).toBe('电话 [fish-phone-1]')
-    expect(redactor.redact('另一个 13912345678')).toBe('另一个 [fish-phone-2]')
-    expect(redactor.redact('证件 11010119900307123X')).toBe('证件 [fish-id-1]')
-    expect(redactor.redact('卡号 6222021234567890123')).toBe('卡号 [fish-card-1]')
-    expect(redactor.redact('邮箱 abc@gzasc.edu.cn')).toBe('邮箱 [fish-mail-1]')
-    expect(redactor.redact('加微信 abc_12345')).toBe('加[fish-contact-1]')
-    expect(redactor.redact('住 12号楼')).toBe('住 [fish-addr-1]')
-    expect(redactor.redact('看 https://example.com/x')).toBe('看 [fish-url-1]')
+    expect(redactor.redact('电话 13812345678').text).toBe('电话 [fish-phone-1]')
+    expect(redactor.redact('另一个 13912345678').text).toBe('另一个 [fish-phone-2]')
+    expect(redactor.redact('证件 11010119900307123X').text).toBe('证件 [fish-id-1]')
+    expect(redactor.redact('卡号 6222021234567890123').text).toBe('卡号 [fish-card-1]')
+    expect(redactor.redact('邮箱 abc@gzasc.edu.cn').text).toBe('邮箱 [fish-mail-1]')
+    expect(redactor.redact('加微信 abc_12345').text).toBe('加[fish-contact-1]')
+    expect(redactor.redact('住 12号楼').text).toBe('住 [fish-addr-1]')
+    expect(redactor.redact('看 https://example.com/x').text).toBe('看 [fish-url-1]')
   })
 
   test('手机号的分隔与全角变体同样命中', () => {
-    expect(createRedactor().redact('138-1234-5678')).toBe('[fish-phone-1]')
-    expect(createRedactor().redact('138 1234 5678')).toBe('[fish-phone-1]')
-    expect(createRedactor().redact('１３８１２３４５６７８')).toBe('[fish-phone-1]')
+    expect(createRedactor().redact('138-1234-5678').text).toBe('[fish-phone-1]')
+    expect(createRedactor().redact('138 1234 5678').text).toBe('[fish-phone-1]')
+    expect(createRedactor().redact('１３８１２３４５６７８').text).toBe('[fish-phone-1]')
   })
 
   test('联系方式与链接的常见写法都命中', () => {
-    expect(createRedactor().redact('QQ 1234567')).toBe('[fish-contact-1]')
-    expect(createRedactor().redact('+v: hello123')).toBe('[fish-contact-1]')
-    expect(createRedactor().redact('看 www.example.com')).toBe('看 [fish-url-1]')
-    expect(createRedactor().redact('看 taobao.com/abc')).toBe('看 [fish-url-1]')
+    expect(createRedactor().redact('QQ 1234567').text).toBe('[fish-contact-1]')
+    expect(createRedactor().redact('+v: hello123').text).toBe('[fish-contact-1]')
+    expect(createRedactor().redact('看 www.example.com').text).toBe('看 [fish-url-1]')
+    expect(createRedactor().redact('看 taobao.com/abc').text).toBe('看 [fish-url-1]')
   })
 
   test('身份证优先于手机号：18 位里那截 1[3-9] 开头的片段不会被手机号规则切走', () => {
     // 若 phone 规则排在 id 之前，这里会变成 [fish-phone-1] + 残留数字，两者都还原不回来。
-    expect(createRedactor().redact('11010119900307123X')).toBe('[fish-id-1]')
+    expect(createRedactor().redact('11010119900307123X').text).toBe('[fish-id-1]')
   })
 
   test('不误伤正文里的数字与单位', () => {
     const redactor = createRedactor()
-    expect(redactor.redact('九成新 128G 500元 2室1厅 1.5米 K380')).toBe(
+    expect(redactor.redact('九成新 128G 500元 2室1厅 1.5米 K380').text).toBe(
       '九成新 128G 500元 2室1厅 1.5米 K380',
     )
     expect(redactor.redacted).toBe(false)
@@ -45,21 +45,46 @@ describe('脱敏', () => {
 describe('回填', () => {
   test('标记原样找回时还原为用户原文', () => {
     const redactor = createRedactor()
-    const marked = redactor.redact('电话 138-1234-5678，微信 abc_12345')
-    expect(marked).toBe('电话 [fish-phone-1]，[fish-contact-1]')
+    const description = redactor.redact('电话 138-1234-5678，微信 abc_12345')
+    expect(description.text).toBe('电话 [fish-phone-1]，[fish-contact-1]')
 
-    expect(redactor.restore(`${marked} 全新未拆`)).toEqual({
+    expect(redactor.restore(`${description.text} 全新未拆`, description)).toEqual({
       text: '电话 138-1234-5678，微信 abc_12345 全新未拆',
       lost: false,
     })
   })
 
-  test('丢一个标记就整条降级为类型化提示语（不按顺序猜）', () => {
+  test('只要求"这段文本"的标记齐全：标题里的标记不出现在描述候选里不算丢失', () => {
+    // 真实上游踩过：标题含可脱敏内容时，若把标题的标记也算"必须找回"，用户自己的联系方式会被
+    // 换成提示语、outcome 错记 TOKEN_LOST。
     const redactor = createRedactor()
-    const marked = redactor.redact('电话 13812345678，微信 abc_12345')
-    const damaged = marked.replace('[fish-contact-1]', '')
+    const title = redactor.redact('出 12号楼 的键盘')
+    const description = redactor.redact('九成新，联系 13812345678 详聊')
+    expect(title.text).toBe('出 [fish-addr-1] 的键盘')
 
-    expect(redactor.restore(damaged)).toEqual({
+    expect(redactor.restore('九成新，联系 [fish-phone-1] 详聊', description)).toEqual({
+      text: '九成新，联系 13812345678 详聊',
+      lost: false,
+    })
+  })
+
+  test('模型真把标题的标记带进候选时照样能还原（同一实例的映射共享）', () => {
+    const redactor = createRedactor()
+    redactor.redact('出 12号楼 的键盘')
+    const description = redactor.redact('九成新，联系 13812345678 详聊')
+
+    expect(redactor.restore('12号楼 的键盘，联系 [fish-phone-1]', description)).toEqual({
+      text: '12号楼 的键盘，联系 13812345678',
+      lost: false,
+    })
+  })
+
+  test('描述这次的标记丢一个就整条降级为类型化提示语（不按顺序猜）', () => {
+    const redactor = createRedactor()
+    const description = redactor.redact('电话 13812345678，微信 abc_12345')
+    const damaged = description.text.replace('[fish-contact-1]', '')
+
+    expect(redactor.restore(damaged, description)).toEqual({
       text: '电话 （你的联系方式已被移除），',
       lost: true,
     })
@@ -67,16 +92,34 @@ describe('回填', () => {
 
   test('模型自造的标记（不是本实例发出的）同样整条降级', () => {
     const redactor = createRedactor()
-    const marked = redactor.redact('电话 13812345678')
+    const description = redactor.redact('电话 13812345678')
 
-    expect(redactor.restore(`${marked} 也可以加 [fish-phone-9]`)).toEqual({
+    expect(redactor.restore(`${description.text} 也可以加 [fish-phone-9]`, description)).toEqual({
       text: '电话 （你的联系方式已被移除） 也可以加 （你的联系方式已被移除）',
       lost: true,
     })
   })
 
+  test('标记被改写（插入空格/全角）也整条降级，标记位换成提示语而不是留下字面', () => {
+    const redactor = createRedactor()
+    const description = redactor.redact('电话 13812345678')
+
+    // 半成品标记既不能当"找回"（内容可能被改过），也不能原样留给用户：换成同类型提示语。
+    expect(redactor.restore('电话 [fish-phone- 1] 也可以', description)).toEqual({
+      text: '电话 （你的联系方式已被移除） 也可以',
+      lost: true,
+    })
+    expect(redactor.restore('电话 [fish-phone-１] 也可以', description)).toEqual({
+      text: '电话 （你的联系方式已被移除） 也可以',
+      lost: true,
+    })
+  })
+
   test('没有标记时原样返回且不降级', () => {
-    expect(createRedactor().restore('无标记的普通描述')).toEqual({
+    const redactor = createRedactor()
+    const empty = redactor.redact('无标记的普通描述')
+
+    expect(redactor.restore('无标记的普通描述', empty)).toEqual({
       text: '无标记的普通描述',
       lost: false,
     })

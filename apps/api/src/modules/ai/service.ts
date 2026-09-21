@@ -1,4 +1,4 @@
-import type { AiPolishCandidatesResponse } from '@fish/contracts/ai/schema'
+import type { AiPolishCandidatesResponse, AiPolishErrorCode } from '@fish/contracts/ai/schema'
 import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { ListingDescriptionSchema } from '@fish/contracts/listings/schema'
 import type { AiPolishEnv } from '@fish/shared/env'
@@ -18,7 +18,8 @@ import type { AiPolishStore } from './store'
 export class AiPolishServiceError extends Error {
   constructor(
     readonly status: 429 | 502 | 503 | 504,
-    readonly code: string,
+    /** 类型取自契约的错误码枚举，避免抛出的字面量与契约漂移（§13 的"错误码全落地"）。 */
+    readonly code: AiPolishErrorCode,
     message: string,
     readonly retryAfterSeconds?: number,
   ) {
@@ -75,7 +76,7 @@ function hasFieldNamePrefix(text: string): boolean {
 function describeUpstreamFailure(error: unknown): {
   outcome: 'TIMEOUT' | 'UPSTREAM_ERROR'
   status: 502 | 504
-  code: string
+  code: AiPolishErrorCode
   message: string
 } {
   if (error instanceof AiUpstreamError && error.reason === 'timeout') {
@@ -128,8 +129,10 @@ export function createAiPolishService(deps: AiPolishServiceDeps): AiPolishServic
 
       // 3 脱敏：只作用于送往上游的文本，映射只活在这个 Redactor 实例里。
       const redactor = createRedactor()
-      const markedTitle = redactor.redact(input.title)
-      const markedDescription = redactor.redact(input.description)
+      const titleRedaction = redactor.redact(input.title)
+      const descriptionRedaction = redactor.redact(input.description)
+      const markedTitle = titleRedaction.text
+      const markedDescription = descriptionRedaction.text
 
       if (!isConfigured(deps.env)) {
         await finish(requestId, 'NOT_CONFIGURED', 0, 0, 0)
@@ -187,7 +190,9 @@ export function createAiPolishService(deps: AiPolishServiceDeps): AiPolishServic
           continue
         }
 
-        const restored = redactor.restore(segment)
+        // 回填只要求**描述那次脱敏**的标记齐全：候选是描述的改写，标题里的标记天然不会出现在
+        // 这里（把它也算"丢失"会在标题含可脱敏内容时把用户自己的联系方式换成提示语）。
+        const restored = redactor.restore(segment, descriptionRedaction)
         if (restored.lost) tokenLost = true
         // 提示语比标记长，回填后要再测一次长度（设计 §5.7）。
         if (!ListingDescriptionSchema.safeParse(restored.text).success) {

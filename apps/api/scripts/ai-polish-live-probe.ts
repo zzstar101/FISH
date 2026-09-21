@@ -16,7 +16,7 @@
 import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { ListingDescriptionSchema } from '@fish/contracts/listings/schema'
 import { loadAiPolishEnv } from '@fish/shared/env'
-import { addsUnknownFacts, extractFacts } from '../src/modules/ai/facts'
+import { extractFacts } from '../src/modules/ai/facts'
 import { buildPolishPrompt } from '../src/modules/ai/prompt'
 import { createPolishProvider } from '../src/modules/ai/provider'
 import { createRedactor } from '../src/modules/ai/redact'
@@ -57,8 +57,8 @@ console.log(`[probe] transport=${env.transport} 样例数=${samples.length}`)
 
 for (const [index, input] of samples.entries()) {
   const redactor = createRedactor()
-  const markedTitle = redactor.redact(input.title)
-  const markedDescription = redactor.redact(input.description)
+  const markedTitle = redactor.redact(input.title).text
+  const markedDescription = redactor.redact(input.description).text
   // 事实基线 = 模型看到过的全部用户内容（标题 + 描述），与 service 的口径一致。
   const baseline = [input.title, input.description]
   const knownFacts = [...new Set(baseline.flatMap((source) => [...extractFacts(source)]))]
