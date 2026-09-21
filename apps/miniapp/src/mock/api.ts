@@ -8,7 +8,9 @@
  * 留言（comments）在契约里不存在，是本文件内的纯展示 mock（`discover.ts` 有标注）。
  */
 
+import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
+import type { WishCategory, WishCreateInput } from '@fish/contracts/wishes/schema'
 import {
   APP_BUILD,
   APP_VERSION,
@@ -82,15 +84,7 @@ import type {
   SearchFilter,
 } from './types'
 import { getUser, ME, USERS } from './users'
-import {
-  FEATURED_WISH_ID,
-  HOT_WISH_TAGS,
-  matchesForWish,
-  WISH_FILTERS,
-  WISH_POOL,
-  WISH_STATS,
-  WISHES,
-} from './wishes'
+import { matchesForWish, WISHES, wishPoolItems } from './wishes'
 
 export type {
   ConversationRole,
@@ -325,39 +319,39 @@ export function suggestTerms(keyword: string): string[] {
 
 /* ------------------------------------------------------------------ 愿望 */
 
+/**
+ * 愿望分类的展示顺序：照契约 `wishCategorySchema` 的枚举顺序。
+ * 许愿页的池子筛选与发布页的分类 chip 共用（中文名走 `categoryLabel`）。
+ *
+ * 类型取契约的 `WishCategory` 而不是 `ListingCategory`：两者当前逐值相同，
+ * 但语义上「许愿的分类」以 `wishes/schema.ts` 为准（那边注释也说以后会合并成共享枚举）。
+ */
+export const WISH_CATEGORIES: WishCategory[] = [
+  'DIGITAL',
+  'BOOKS',
+  'BEAUTY',
+  'DAILY',
+  'SPORTS',
+  'APPAREL',
+  'TRANSPORT',
+  'OTHER',
+]
+
 export function myWishes(): MockWish[] {
   return WISHES.filter((wish) => wish.userId === ME.id)
 }
 
-const WISH_CATEGORY_BY_FILTER: Record<string, ListingCategory> = {
-  教材书籍: 'BOOKS',
-  数码电子: 'DIGITAL',
-  代步出行: 'TRANSPORT',
-  宿舍好物: 'DAILY',
-  运动户外: 'SPORTS',
-  服饰鞋包: 'APPAREL',
-  美妆洗护: 'BEAUTY',
-}
+/** k-匿名门槛（镜像 `apps/api/src/modules/wishes/service.ts` 的 `POOL_MIN_COUNT`，契约未导出） */
+export { POOL_MIN_COUNT } from './wishes'
 
-export function wishWall(filter: string): MockWish[] {
-  const active = WISHES.filter((wish) => wish.status === 'ACTIVE')
-  if (filter === '已匹配') return active.filter((wish) => wish.matchCount > 0)
-  if (filter === '全部') return active
-  const category = WISH_CATEGORY_BY_FILTER[filter]
-  if (!category) return active
-  return active.filter((wish) => wish.category === category)
-}
-
-export function featuredWish(): MockWish {
-  const found = WISHES.find((wish) => wish.id === FEATURED_WISH_ID)
-  if (found) return found
-  const fallback = WISHES[0]
-  if (!fallback) throw new Error('WISHES 为空：mock 数据未初始化')
-  return fallback
-}
-
+/**
+ * 愿望池（`GET /wishes/pool` 的聚合）。
+ *
+ * 聚合口径（按关键词聚合、`wantCount` 数不同用户、`>= POOL_MIN_COUNT` 才输出）见
+ * `mock/wishes.ts` 的 `wishPoolItems`，那里列了与后端 SQL 的三处有意差异。
+ */
 export function wishPool(): MockWishPoolItem[] {
-  return WISH_POOL
+  return wishPoolItems()
 }
 
 export function wishMatches(wishId: string) {
@@ -368,9 +362,53 @@ export function wishMatches(wishId: string) {
     )
 }
 
-export const wishFilters = WISH_FILTERS
-export const hotWishTags = HOT_WISH_TAGS
-export const wishStats = WISH_STATS
+/**
+ * 本地写：关闭愿望（`ACTIVE` → `CLOSED`）。
+ *
+ * 小程序端还没有 wish 客户端（属 #89），所以这里只改内存里的 fixture —— 真实端点是
+ * `POST /wishes/:id/close`。返回「是否真的改了」，页面据此决定提示与列表刷新。
+ *
+ * ⚠️ 纯内存：**重进小程序（或刷新预览）就回到初始 fixture**，不做任何持久化。
+ */
+export function closeWishLocal(id: string): boolean {
+  const wish = WISHES.find((item) => item.id === id)
+  if (wish?.status !== 'ACTIVE') return false
+  wish.status = 'CLOSED'
+  return true
+}
+
+/** 本地发布愿望的 id 序号：用自增计数器而不是 `WISHES.length`，不依赖「数组只增不减」 */
+let localWishSeq = 0
+
+/**
+ * 本地写：发布愿望。
+ *
+ * 入参由页面按 `wishCreateInputSchema` 校验并归一化（keyword 已 trim + 转小写、
+ * 预算已由元转分）。真实端点是 `POST /wishes`；这里只往 fixture 头部插一条，
+ * 让「发布成功 → 返回许愿页」能看到它，也让状态计数跟着变。
+ *
+ * ⚠️ 同样纯内存，重进即丢失。
+ */
+export function createWishLocal(input: WishCreateInput): MockWish {
+  localWishSeq += 1
+  const wish: MockWish = {
+    id: `w-local-${localWishSeq}`,
+    userId: ME.id,
+    keyword: input.keyword,
+    category: input.category,
+    budgetMinCents: input.budgetMinCents,
+    budgetMaxCents: input.budgetMaxCents,
+    description: input.description ?? null,
+    acceptSimilar: input.acceptSimilar,
+    status: 'ACTIVE',
+    matchCount: 0,
+    createdAt: new Date().toISOString(),
+    campus: ME.campus,
+    timeLabel: '刚刚',
+  }
+  WISHES.unshift(wish)
+  return wish
+}
 
 /* ------------------------------------------------------------------ 消息 */
 
@@ -583,8 +621,13 @@ export function newMeetupCode(seed: number): string {
 
 /* ---- 匹配结果（C3） ---- */
 
-/** 低于这个分数视为「可能不相关」，不再展示（`matching/schema.ts` 的 MATCH_SCORE_THRESHOLD 语义） */
-export const MATCH_SCORE_THRESHOLD = 60
+/**
+ * 低于这个分数视为「可能不相关」，不再展示。
+ *
+ * 直接引用**契约**的值（`packages/contracts/src/matching/schema.ts`）：阈值是产品语义，
+ * 不是 mock 数据 —— 小程序里曾写死 60，与后端口径不一致。
+ */
+export { MATCH_SCORE_THRESHOLD }
 
 export type MatchView = {
   match: MockMatch
@@ -600,12 +643,20 @@ export function findWish(id: string): MockWish | undefined {
 /** C3 的默认愿望：稿子里那条「显示器」 */
 export const MATCH_DEFAULT_WISH = 'w-011'
 
-export async function fetchMatches(wishId: string): Promise<MatchView[]> {
-  // 复用已有的 wishMatches（它已经把 match 与 listing 配好），这里只补卖家与阈值过滤
-  const views = wishMatches(wishId)
+/**
+ * 命中商品（同步版）。
+ *
+ * 与 `fetchMatches` 同一口径（阈值过滤 + 补卖家），区别只是不套 `delay`：
+ * 许愿页的愿望卡要在渲染期同步取「命中了几件、是哪几件」。
+ */
+export function matchedListings(wishId: string): MatchView[] {
+  return wishMatches(wishId)
     .filter(({ match }) => match.score >= MATCH_SCORE_THRESHOLD)
     .map(({ match, listing }) => ({ match, listing, seller: getUser(listing.sellerId) }))
-  return delay(views)
+}
+
+export async function fetchMatches(wishId: string): Promise<MatchView[]> {
+  return delay(matchedListings(wishId))
 }
 
 /* ---- 分类页（C1） ---- */

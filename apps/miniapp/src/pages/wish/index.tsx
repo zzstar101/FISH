@@ -1,253 +1,453 @@
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useLoad } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import Taro, { useDidShow } from '@tarojs/taro'
+import { useState } from 'react'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import TopBar from '@/components/top-bar'
 import {
   categoryLabel,
-  featuredWish,
+  closeWishLocal,
   formatAmount,
   formatYuan,
-  getUser,
-  hotWishTags,
-  type MockListing,
+  type MatchView,
   type MockWish,
-  wishFilters,
-  wishMatches,
-  wishStats,
-  wishWall,
+  type MockWishPoolItem,
+  matchedListings,
+  myWishes,
+  POOL_MIN_COUNT,
+  WISH_CATEGORIES,
+  wishPool,
 } from '@/mock/api'
 import './index.scss'
 
 /**
- * 最近心愿行的分类图标。
+ * 许愿（一级 Tab 页）。设计稿 `许愿墙-改版设计-按契约.html` 的屏①「我的愿望」
+ * 与屏②「愿望池」**合并成同一页的两个页内 tab**（Owner 指示：愿望池不是独立页面）。
  *
- * 为什么按分类取图标：mock 的 `MockWish` 没有图标字段（契约里也没有），
- * 设计稿那四个线稿图标（书 / 平板 / 吉他 / 冰箱）在 `@/assets/icons` 里不存在，
- * 而 DESIGN.md 禁止手画 SVG。这里复用首页那套分类线稿（同一份设计稿生成，
- * 视觉语言一致），既不内联假数据，也不引入新资源。
+ * 版式：顶栏玻璃（两段式标题「许愿墙」+ 副行一级 tab，照消息页 `pages/chat` 的做法）
+ * → 热门求购卡 → 区块标题行（+「我要许愿」）→ 二级筛选横滑胶囊 → 卡片列表。
+ *
+ * 与上一版（吊牌 / bento 两卡 / 愿望成真 / 最近的心愿）相比，稿把那些区块全部删掉了，
+ * 换成了 `.mw`（我的愿望卡）与 `.pool`（愿望池卡）两种卡。
+ *
+ * 数据仍全部来自 `@/mock/api`（本页**零业务请求**，见 `preview/verify-mock-only.mjs`）。
  */
-const WISH_CATEGORY_ICON: Record<MockWish['category'], string> = HOME_CATEGORY_ICONS
+
+/** 一级 tab：我的愿望 / 愿望池 */
+type TabKey = 'mine' | 'pool'
+
+/** 我的愿望的二级筛选：对应契约 `wishStatusSchema`，「全部」= 不筛 */
+const MINE_FILTERS: { key: 'ALL' | MockWish['status']; label: string }[] = [
+  { key: 'ALL', label: '全部' },
+  { key: 'ACTIVE', label: '许愿中' },
+  { key: 'FULFILLED', label: '已完成' },
+  { key: 'CLOSED', label: '已关闭' },
+]
+
+/**
+ * 状态胶囊的色调与文案。
+ *
+ * 稿里三种状态是三档浅底，这里复用仓库既有的 `@include status-pill` 色调语言
+ * （is-pending / is-done / is-cancel），避免为一张卡新造一套色。
+ */
+const STATUS_PILL: Record<MockWish['status'], string> = {
+  ACTIVE: 'is-pending',
+  FULFILLED: 'is-done',
+  CLOSED: 'is-cancel',
+}
+
+const STATUS_TEXT: Record<MockWish['status'], string> = {
+  ACTIVE: '许愿中',
+  FULFILLED: '已完成',
+  CLOSED: '已关闭',
+}
+
+/** 热门求购折叠时展示的条数（稿是两列四行 = 8 条） */
+const HOT_ROWS = 8
+
+/** 卡片内嵌的命中行最多展示几条（稿是 3 条） */
+const HIT_ROWS = 3
 
 /** 预算区间文案：设计稿是「¥30–50」（中间用 en dash，不是 hyphen） */
 function budgetRange(minCents: number, maxCents: number): string {
   return `¥${formatAmount(minCents)}–${formatAmount(maxCents)}`
 }
 
-/**
- * 校园文案：`MockWish.campus` 只有「肇庆 / 广州」，显示成「肇庆校区」。
- *
- * `campus` 可为 `null`（契约 `MeSchema.campus` 是 nullable，见 `mock/types.ts` 的
- * `MockUser`）—— 缺校区时返回空串，让调用方那一格自然为空，
- * 而不是拼出「null校区」。
- */
-function campusText(campus: MockWish['campus'] | null): string {
-  return campus ? `${campus}校区` : ''
+/** 命中行的发布时间：稿是「2 小时前发布」，mock 只给相对小时数 */
+function timeAgo(hoursAgo: number): string {
+  if (hoursAgo < 1) return '刚刚'
+  if (hoursAgo < 24) return `${Math.round(hoursAgo)} 小时前`
+  const days = Math.round(hoursAgo / 24)
+  return days <= 1 ? '昨天' : `${days} 天前`
 }
 
-/** 匹配到的商品：卖家昵称 + 校区 + 可取货说明（拼设计稿那一行副标题） */
-function matchSubtitle(listing: MockListing): string {
-  const seller = getUser(listing.sellerId)
-  const note = seller.campus === '肇庆' ? '可当面试书' : '可代取'
-  return `${seller.nickname} · ${campusText(seller.campus)} · ${note}`
+/** 命中商品行（`.mw` 卡内嵌的「愿望成真」列表） */
+function HitRow({ view }: { view: MatchView }) {
+  const { match, listing } = view
+  return (
+    <View
+      className="wishhit"
+      onClick={() => void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })}
+    >
+      <View className="wishhit__thumb">
+        <Image className="wishhit__img" src={listing.coverUrl} mode="aspectFill" />
+      </View>
+      <View className="wishhit__main">
+        <Text className="wishhit__title">{listing.title}</Text>
+        <Text className="wishhit__time">{timeAgo(listing.createdHoursAgo)}发布</Text>
+      </View>
+      <View className="wishhit__right">
+        <Text className="wishhit__price">{formatYuan(listing.priceCents)}</Text>
+        <Text className="wishhit__score">{match.score}% 匹配</Text>
+      </View>
+    </View>
+  )
 }
 
 export default function Wish() {
-  const [filter, setFilter] = useState<string>(wishFilters[0])
-  const [ready, setReady] = useState(false)
+  const [tab, setTab] = useState<TabKey>('mine')
+  const [mineFilter, setMineFilter] = useState<'ALL' | MockWish['status']>('ALL')
+  const [poolFilter, setPoolFilter] = useState<'ALL' | MockWishPoolItem['category']>('ALL')
+  const [hotOpen, setHotOpen] = useState(false)
+  /**
+   * 本地写（关闭愿望 / 发布愿望）改的是 mock fixture，React 不会知道，
+   * 所以用这个计数器强制重算；`useDidShow` 覆盖「从发布页返回」这条路径 ——
+   * Tab 页被返回时不会重新挂载，只会重新显示。
+   */
+  const [revision, setRevision] = useState(0)
+  useDidShow(() => setRevision((value) => value + 1))
+  // `revision` 只用来让下面的取值在本地写之后重跑一遍（值本身不参与计算），
+  // 所以这里刻意不用 `useMemo` —— 直接每次渲染现算，避免「多声明一个依赖」的误读
+  void revision
 
-  useLoad(() => {
-    // 数据是本地 mock（同步），这里保留 loading 位是为了将来换成真接口时页面结构不用改
-    setReady(true)
-  })
+  const pool = wishPool()
+  const mine = [...myWishes()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
-  const featured = featuredWish()
-  const matches = wishMatches(featured.id)
-  const list = useMemo(() => wishWall(filter), [filter])
-  const stats = wishStats
+  const mineList = mineFilter === 'ALL' ? mine : mine.filter((wish) => wish.status === mineFilter)
+  const poolList = poolFilter === 'ALL' ? pool : pool.filter((item) => item.category === poolFilter)
+
+  /** 每个二级筛选上的计数：前端从 items 现算（契约没有计数端点） */
+  const mineCount = (key: 'ALL' | MockWish['status']) =>
+    key === 'ALL' ? mine.length : mine.filter((wish) => wish.status === key).length
+  const poolCount = (key: 'ALL' | MockWishPoolItem['category']) =>
+    key === 'ALL' ? pool.length : pool.filter((item) => item.category === key).length
+
+  /** 分类筛选的选项：8 个枚举值按契约顺序（与首页横滑分类同一套中文名） */
+  const poolCategories = WISH_CATEGORIES
+
+  const hotTop = pool[0]?.wantCount ?? 1
+  const hotList = hotOpen ? pool : pool.slice(0, HOT_ROWS)
+
+  const goSearch = (keyword: string) => {
+    // 搜索页读的是 `q`（`pages/search/index.tsx`），不是稿里的 `kw`
+    void Taro.navigateTo({ url: `/pages/search/index?q=${encodeURIComponent(keyword)}` })
+  }
+
+  const closeWish = (wish: MockWish) => {
+    if (!closeWishLocal(wish.id)) return
+    setRevision((value) => value + 1)
+    void Taro.showToast({ title: '已关闭这条愿望', icon: 'none' })
+  }
 
   return (
     <View className="wish">
       <View className="wish__topbg" />
 
       {/*
-        固定顶栏：一级标题「许愿墙」钉在顶部，右侧是发布钮。
-        设计稿里「墙」走品牌色（`.navtitle em{color:var(--accent)}`），由 `titleEm` 表达。
-        稿里那一行还有 20pt 副标题，但副标题在真机上会被顶栏行高挤掉，且不属于顶栏语义，
-        所以放在下方内容区（见下方 `wish__lead`）。
+        顶栏：主行是两段式标题「许愿墙」，副行是页内一级 tab（与消息页同一套做法）。
+        副行的占位由下方 `wish__header-gap` 补 —— 组件的 `spacer` 只含主行。
       */}
       <TopBar
         variant="glass"
         spacer
         title="许愿"
         titleEm="墙"
-        actions={
-          <View
-            className="wish__newbtn"
-            onClick={() => void Taro.showToast({ title: '发布心愿待接入', icon: 'none' })}
-          >
-            <Image className="wish__newbtn-img" src={ICONS.plusInk} mode="aspectFit" />
+        below={
+          <View className="wish__tabs">
+            {(
+              [
+                { key: 'mine', label: '我的愿望', count: mine.length },
+                { key: 'pool', label: '愿望池', count: pool.length },
+              ] as const
+            ).map((item) => {
+              const on = item.key === tab
+              return (
+                <View
+                  key={item.key}
+                  className={`wish__tab wish__tab--${item.key}${on ? ' is-on' : ''}`}
+                  onClick={() => setTab(item.key)}
+                >
+                  <Text>{item.label}</Text>
+                  <Text className="wish__tab-n">{item.count}</Text>
+                </View>
+              )
+            })}
           </View>
         }
       />
-
-      {/* 热门排行：设计稿许愿墙顶部的榜单，数据用 hotWishTags（12 条递降） */}
-      <View className="hotrank">
-        <View className="hotrank__hd">
-          <Text className="hotrank__title">热门排行</Text>
-          <Text className="hotrank__note">近 24 小时 · 按热度</Text>
-        </View>
-        <View className="hotrank__grid">
-          {hotWishTags.slice(0, 8).map((tag, index) => (
-            <View key={tag.label} className="hotrank__row">
-              <Text className={`hotrank__no num${index < 3 ? ' is-top' : ''}`}>
-                {String(index + 1).padStart(2, '0')}
-              </Text>
-              <View className="hotrank__main">
-                <Text className="hotrank__kw">{tag.label}</Text>
-                <View className="hotrank__bar">
-                  <View
-                    className="hotrank__bar-fill"
-                    // 榜首 100%，其余按比例；分母用榜首值而不是总和，视觉差异才明显
-                    style={{
-                      width: `${Math.round((tag.count / (hotWishTags[0]?.count ?? 1)) * 100)}%`,
-                    }}
-                  />
-                </View>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      <ScrollView className="wish__chips" scrollX enableFlex>
-        <View className="wish__chips-inner">
-          {wishFilters.map((item) => (
-            <View
-              key={item}
-              className={`wish__chip${item === filter ? ' is-on' : ''}`}
-              onClick={() => setFilter(item)}
-            >
-              <Text className="wish__chip-hash">#</Text>
-              <Text className="wish__chip-text">{item}</Text>
-            </View>
-          ))}
-        </View>
-      </ScrollView>
+      <View className="wish__header-gap" />
 
       <View className="wish__body">
-        {/* WISH 吊牌：设计稿全局唯一的手绘母题，白卡 + 顶部渐变条 + 圆孔 + 星形线稿 + 波浪底 */}
-        <View className="tagcard">
-          <View className="tagcard__bar" />
-          <Image className="tagcard__star" src={ICONS.starLine} mode="aspectFit" />
-          <View className="tagcard__hole" />
-          <Text className="tagcard__wish">想要一本《{featured.keyword}》</Text>
-          {featured.description ? (
-            <Text className="tagcard__desc">{featured.description}</Text>
-          ) : null}
-          <View className="tagcard__meta">
-            <View className="tagcard__budget">
-              <Text className="tagcard__budget-key">预算</Text>
-              <Text className="tagcard__budget-val">
-                {budgetRange(featured.budgetMinCents, featured.budgetMaxCents)}
-              </Text>
-            </View>
-            <View className="tagcard__cnt">
-              <Text>已匹配</Text>
-              <Text className="tagcard__cnt-num">{featured.matchCount}</Text>
-              <Text>位同学</Text>
-            </View>
+        {/* ---- 热门求购：白卡 + 顶部渐变条 + 两列 + 热度条 ---- */}
+        <View className="hot">
+          <View className="hot__hd">
+            <Text className="hot__title">热门求购</Text>
+            {/*
+              「近 7 天」是设计稿的产品口径，**不是**过滤条件：`/wishes/pool` 的聚合
+              （后端 `aggregatePool` 与 mock 的 `wishPoolItems`）都只看 `status = ACTIVE`，
+              没有时间窗。当前 fixture 全部落在 7 天内（6~66 小时），所以这句话成立；
+              真接了接口、池子里出现更早的愿望之后，要么改这句文案、要么给聚合加时间窗。
+              稿在愿望池 tab 会把这里换成 `GET /wishes/pool · k-匿名聚合`（开发向文案），
+              本页两个 tab 统一用这句用户可读的。
+            */}
+            <Text className="hot__note">近 7 天 · 按想要人数</Text>
           </View>
-          {/* 设计稿这里是手绘波浪；小程序侧不引 SVG，用一条柔和渐变带 + 白椭圆咬出波峰近似 */}
-          <View className="tagcard__wave">
-            <View className="tagcard__wave-dip" />
-            <Text className="tagcard__wave-word">WISH</Text>
-          </View>
-        </View>
-
-        <View className="bento">
-          <View className="bcard bcard--dark">
-            <Text className="bcard__k">命中提醒</Text>
-            <Text className="bcard__v num">{featured.matchCount}</Text>
-            <Text className="bcard__s">位同校同学愿意接这单</Text>
-          </View>
-          <View className="bcard bcard--tint">
-            <Text className="bcard__k">累计成真</Text>
-            <Text className="bcard__v num">{stats.fulfilledTotal}</Text>
-            <Text className="bcard__s">条心愿在鱼小应达成</Text>
-          </View>
-        </View>
-
-        <View className="wish__sec">
-          <Text className="wish__sec-title">愿望成真</Text>
-          <Text className="wish__sec-note">异步匹配 · 命中即通知</Text>
-        </View>
-
-        <View>
-          {matches.map(({ match, listing }) => (
-            <View key={match.id} className="mcard">
-              <View className="mcard__thumb">
-                <Image className="mcard__img" src={listing.coverUrl} mode="aspectFill" />
-              </View>
-              <View className="mcard__main">
-                <Text className="mcard__name">{listing.title}</Text>
-                <Text className="mcard__sub">{matchSubtitle(listing)}</Text>
-              </View>
-              <View className="mcard__right">
-                <Text className="mcard__price">{formatYuan(listing.priceCents)}</Text>
-                <Text className="mcard__score">匹配度 {match.score}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-
-        <View className="wish__sec">
-          <Text className="wish__sec-title">最近的心愿</Text>
-          <Text className="wish__sec-note">共 {stats.activeTotal} 条 · 按热度</Text>
-        </View>
-
-        <View>
-          {ready && list.length === 0 ? (
-            <View className="wish__empty">
-              <Text className="wish__empty-text">这个筛选下还没有心愿</Text>
-            </View>
-          ) : null}
-          {list.map((wish) => (
-            <View key={wish.id} className="wishrow">
-              <View className="wishrow__mk">
-                <Image
-                  className="wishrow__mk-img"
-                  src={WISH_CATEGORY_ICON[wish.category]}
-                  mode="aspectFit"
-                />
-              </View>
-              <View className="wishrow__main">
-                <Text className="wishrow__title">{wish.keyword}</Text>
-                <View className="wishrow__meta">
-                  <Text>{categoryLabel(wish.category)}</Text>
-                  <View className="wishrow__dot" />
-                  <Text>{wish.timeLabel}</Text>
-                  {/* 校区契约里可为 null：连分隔点一起不渲染，避免留下一个孤零零的「·」 */}
-                  {wish.campus ? (
-                    <>
-                      <View className="wishrow__dot" />
-                      <Text>{campusText(wish.campus)}</Text>
-                    </>
-                  ) : null}
+          <View className="hot__grid">
+            {hotList.map((item, index) => (
+              <View
+                // 同一关键词可以在两个分类下各成一条（后端就是 `GROUP BY keyword, category`），
+                // 只用 keyword 当 key 会撞车
+                key={`${item.keyword}\0${item.category}`}
+                className={`hot__row${index < 3 ? ' is-top' : ''}`}
+                onClick={() => goSearch(item.keyword)}
+              >
+                <Text className="hot__no">{String(index + 1).padStart(2, '0')}</Text>
+                <View className="hot__main">
+                  <Text className="hot__kw">{item.keyword}</Text>
+                  <View className="hot__bar">
+                    <View
+                      className="hot__bar-fill"
+                      // 榜首 100%，其余按比例；分母用榜首值而不是总和，视觉差异才明显
+                      style={{ width: `${Math.round((item.wantCount / hotTop) * 100)}%` }}
+                    />
+                  </View>
                 </View>
               </View>
-              <View className="wishrow__right">
-                <Text className="wishrow__budget">
-                  {budgetRange(wish.budgetMinCents, wish.budgetMaxCents)}
-                </Text>
-                <Text className={`wishrow__st${wish.matchCount > 0 ? ' is-hit' : ''}`}>
-                  {wish.matchCount > 0 ? `${wish.matchCount} 个匹配` : '等待匹配'}
-                </Text>
-              </View>
+            ))}
+          </View>
+          {pool.length > HOT_ROWS ? (
+            <View
+              className={`hot__more${hotOpen ? ' is-open' : ''}`}
+              onClick={() => setHotOpen((value) => !value)}
+            >
+              <Text>{hotOpen ? '收起' : `展示全部 ${pool.length} 个标签`}</Text>
+              <Image
+                className="hot__more-ic"
+                src={hotOpen ? ICONS.chevronUpMuted : ICONS.chevronDownMuted}
+                mode="aspectFit"
+              />
             </View>
-          ))}
+          ) : null}
         </View>
+
+        {/* ---- 区块标题行：我的愿望挂发布入口，愿望池挂排序说明（同稿） ---- */}
+        <View className="wish__sec">
+          <Text className="wish__sec-title">{tab === 'mine' ? '我的愿望' : '大家在找'}</Text>
+          {tab === 'mine' ? (
+            <View
+              className="wish__new"
+              onClick={() => void Taro.navigateTo({ url: '/pages/wish-publish/index' })}
+            >
+              {/*
+                加号用 `plusLine`（本地补画的那枚线稿加号），不要用 `plus` ——
+                后者在图标库里其实是一枚盾形图标，不是加号。
+              */}
+              <Image className="wish__new-ic" src={ICONS.plusLine} mode="aspectFit" />
+              <Text>我要许愿</Text>
+            </View>
+          ) : (
+            <Text className="wish__sec-note">按想要人数排序</Text>
+          )}
+        </View>
+
+        {/* ---- 二级筛选：我的愿望 = 状态，愿望池 = 8 大分类 ---- */}
+        <ScrollView className="wish__subs" scrollX enableFlex>
+          <View className="wish__subs-inner">
+            {tab === 'mine'
+              ? MINE_FILTERS.map((item) => (
+                  <View
+                    key={item.key}
+                    className={`wish__sub${item.key === mineFilter ? ' is-on' : ''}`}
+                    onClick={() => setMineFilter(item.key)}
+                  >
+                    <Text>{item.label}</Text>
+                    <Text className="wish__sub-n">{mineCount(item.key)}</Text>
+                  </View>
+                ))
+              : [
+                  { key: 'ALL' as const, label: '全部' },
+                  ...poolCategories.map((key) => ({ key, label: categoryLabel(key) })),
+                ].map((item) => (
+                  <View
+                    key={item.key}
+                    className={`wish__sub${item.key === poolFilter ? ' is-on' : ''}`}
+                    onClick={() => setPoolFilter(item.key)}
+                  >
+                    {item.key === 'ALL' ? null : (
+                      <Image
+                        className="wish__sub-ic"
+                        src={HOME_CATEGORY_ICONS[item.key]}
+                        mode="aspectFit"
+                      />
+                    )}
+                    <Text>{item.label}</Text>
+                    <Text className="wish__sub-n">{poolCount(item.key)}</Text>
+                  </View>
+                ))}
+          </View>
+        </ScrollView>
+
+        {/* ---- 列表 ---- */}
+        {tab === 'mine' ? (
+          mineList.length === 0 ? (
+            <View className="wishempty">
+              <View className="wishempty__mk">
+                <Image className="wishempty__ic" src={ICONS.starAccent} mode="aspectFit" />
+              </View>
+              <Text className="wishempty__title">这个筛选下还没有愿望</Text>
+              <Text className="wishempty__text">
+                换个状态看看，或者直接许一个愿 —— 卖家看到你的需求就会来找你
+              </Text>
+            </View>
+          ) : (
+            <View className="wish__list">
+              {mineList.map((wish) => {
+                const hits = matchedListings(wish.id)
+                const clickable = hits.length > 0
+                return (
+                  <View key={wish.id} className="mw">
+                    <View className="mw__top">
+                      <View className="mw__main">
+                        <Text className="mw__time">{wish.timeLabel}许下</Text>
+                        <Text className="mw__kw">{wish.keyword}</Text>
+                        <View className="mw__cat">
+                          <Image
+                            className="mw__cat-ic"
+                            src={HOME_CATEGORY_ICONS[wish.category]}
+                            mode="aspectFit"
+                          />
+                          <Text>{`想要「${categoryLabel(wish.category)}」类闲置`}</Text>
+                        </View>
+                      </View>
+                      <Text className={`mw__pill ${STATUS_PILL[wish.status]}`}>
+                        {STATUS_TEXT[wish.status]}
+                      </Text>
+                    </View>
+
+                    <View className="mw__meta">
+                      <Text className="mw__budget">
+                        预算{' '}
+                        <Text className="mw__budget-val">
+                          {budgetRange(wish.budgetMinCents, wish.budgetMaxCents)}
+                        </Text>
+                      </Text>
+                      {/*
+                        命中数用**实际命中条数**而不是契约的 `matchCount`：
+                        mock 的 matchCount 是 fixture 里手写的，与 MATCHES 经阈值过滤后的
+                        条数可能对不上（w-011 写 3、阈值 70 下只有 2）。用同一个来源，
+                        卡片、命中行、匹配结果页三处的数字才一致。
+                      */}
+                      <Text
+                        className={`mw__hits${clickable ? ' is-hit' : ''}`}
+                        onClick={() => {
+                          if (!clickable) {
+                            void Taro.showToast({
+                              title: '还没命中：先调整预算或关键词',
+                              icon: 'none',
+                            })
+                            return
+                          }
+                          void Taro.navigateTo({ url: `/pages/match/index?wishId=${wish.id}` })
+                        }}
+                      >
+                        {`${hits.length} 件闲置命中${clickable ? ' ›' : ''}`}
+                      </Text>
+                    </View>
+
+                    {/* 命中商品行：只有还在许愿中、且确实有命中的愿望才展示 */}
+                    {wish.status === 'ACTIVE' && hits.length > 0 ? (
+                      <View className="mw__truth">
+                        <View className="mw__truth-hd">
+                          <Image
+                            className="mw__truth-ic"
+                            src={ICONS.checkAccent}
+                            mode="aspectFit"
+                          />
+                          <Text>{`愿望成真 · 命中 ${hits.length} 件`}</Text>
+                        </View>
+                        {hits.slice(0, HIT_ROWS).map((view) => (
+                          <HitRow key={view.match.id} view={view} />
+                        ))}
+                      </View>
+                    ) : null}
+
+                    <View className="mw__act">
+                      <View className="mw__act-lk" onClick={() => goSearch(wish.keyword)}>
+                        <Image className="mw__act-ic" src={ICONS.search} mode="aspectFit" />
+                        <Text>按关键词搜索</Text>
+                        <Text className="mw__act-cnt">{hits.length}</Text>
+                      </View>
+                      <Text
+                        className={`mw__act-off${wish.status === 'ACTIVE' ? '' : ' is-off'}`}
+                        onClick={() => {
+                          if (wish.status !== 'ACTIVE') return
+                          closeWish(wish)
+                        }}
+                      >
+                        {wish.status === 'ACTIVE' ? '关闭愿望' : '已是终态'}
+                      </Text>
+                    </View>
+                  </View>
+                )
+              })}
+            </View>
+          )
+        ) : poolList.length === 0 ? (
+          <View className="wishempty">
+            <View className="wishempty__mk">
+              <Image className="wishempty__ic" src={ICONS.starAccent} mode="aspectFit" />
+            </View>
+            <Text className="wishempty__title">这个分类下还没有人求购</Text>
+            <Text className="wishempty__text">
+              {`同一个关键词有 ${POOL_MIN_COUNT} 位以上同学在求，才会出现在这里`}
+            </Text>
+          </View>
+        ) : (
+          <View className="wish__list">
+            {poolList.map((item) => (
+              <View key={`${item.keyword}\0${item.category}`} className="pool">
+                <View className="pool__top">
+                  <View className="pool__main">
+                    <Text className="pool__kw">{item.keyword}</Text>
+                    <View className="pool__cat">
+                      <Image
+                        className="pool__cat-ic"
+                        src={HOME_CATEGORY_ICONS[item.category]}
+                        mode="aspectFit"
+                      />
+                      <Text>{categoryLabel(item.category)}</Text>
+                    </View>
+                  </View>
+                  <Text className="pool__badge">求购</Text>
+                </View>
+                <View className="pool__meta">
+                  <Text className="pool__budget">
+                    常见预算{' '}
+                    <Text className="pool__budget-val">{formatYuan(item.medianBudgetCents)}</Text>
+                  </Text>
+                  <Text className="pool__want">{`${item.wantCount} 人想要`}</Text>
+                </View>
+              </View>
+            ))}
+            {/* k-匿名说明：池子只输出聚合数字，永不输出 user_id（稿的 .knote） */}
+            <View className="knote">
+              <Text className="knote__line">
+                {`k-匿名 · HAVING count(DISTINCT user_id) >= ${POOL_MIN_COUNT}`}
+              </Text>
+              <Text className="knote__line">只输出聚合数字，永不输出 user_id 或任何个人字段</Text>
+            </View>
+          </View>
+        )}
       </View>
     </View>
   )

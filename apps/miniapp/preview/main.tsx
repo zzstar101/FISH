@@ -17,6 +17,7 @@ import '../src/app.scss'
 const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/home/index': () => import('@/pages/home/index'),
   '/pages/wish/index': () => import('@/pages/wish/index'),
+  '/pages/wish-publish/index': () => import('@/pages/wish-publish/index'),
   '/pages/sell/index': () => import('@/pages/sell/index'),
   '/pages/chat/index': () => import('@/pages/chat/index'),
   '/pages/profile/index': () => import('@/pages/profile/index'),

@@ -53,6 +53,7 @@ Taro 配置 `designWidth: 750` 且 `deviceRatio[750] = 1`，因此 **SCSS 里的
 | `--line` | `#A8C5FA` | hover/强调描边、认证勾 |
 | `--accent-weak` | `#EFF5FF` | 浅色底（图标圆盘、标签底） |
 | `--accent-mid` | `#C6DCFF` | 渐变中段 |
+| `--lav` / `--lav-weak` | `#6B4EE6` / `#EBEBFE` | 许愿页愿望池卡的「求购」徽章（设计稿 `.badge-lav` 的独立紫，与品牌蓝区分） |
 | `--danger` | `#FF5F6D` | 价格、警示 |
 | `--warn` | `#FFB84D` | 提醒 |
 | `--price` | `#4375E8` | 带品牌感的蓝价（首页卡片） |

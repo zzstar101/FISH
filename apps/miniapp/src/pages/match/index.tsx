@@ -19,12 +19,13 @@ import './index.scss'
 /**
  * C3 匹配结果（设计稿 `设计稿_C3-match.html`）。
  *
- * 页头是「被命中的愿望」吊牌（关键词 + 预算区间 + 已匹配 N 位同学），
+ * 页头是「被命中的愿望」吊牌（关键词 + 预算区间 + 已匹配 N 件商品），
  * 下面是按匹配度倒序的商品列表，每条带百分比进度条与「聊一聊」。
  *
- * **阈值**：`score < 60` 的结果不展示（契约 `matching/schema.ts` 的
- * `MATCH_SCORE_THRESHOLD` 语义）——低于阈值的算「可能不相关」，避免打扰。
- * 因此稿子里 64% 那条会正常出现，而更低分的结果不会进列表。
+ * **阈值**：`score < MATCH_SCORE_THRESHOLD` 的结果不展示（契约
+ * `packages/contracts/src/matching/schema.ts`，值为 70）——低于阈值的算「可能不相关」，
+ * 避免打扰。所以 mock 里 `w-011` 的三条命中（92 / 78 / 64）只展示前两条，
+ * 64 分那条被阈值滤掉。
  *
  * 空态分两种：愿望本身已经结束（已成交 / 过期），与「暂时没命中」。
  */
@@ -78,7 +79,7 @@ export default function Match() {
     <View className="match">
       <View className="match__bg" />
 
-      <NavBar />
+      <NavBar title="匹配结果" />
 
       <View className="match__head">
         <Text className="match__title">匹配结果</Text>
@@ -91,7 +92,11 @@ export default function Match() {
           <View className="match__wish-top">
             <Text className="match__wish-tag">WISH</Text>
             <Text className="match__wish-status num">
-              {wishClosed ? '已结束' : `已匹配 ${items.length} 位同学`}
+              {/*
+                稿的文案是「已匹配 N 位同学」，但 `items` 是**商品**（同一卖家可能命中多件），
+                数出来的不是人数 —— 按实际口径写成「件商品」，与下方「匹配到的商品」一致。
+              */}
+              {wishClosed ? '已结束' : `已匹配 ${items.length} 件商品`}
             </Text>
           </View>
           <Text className="match__wish-kw">{wish.keyword}</Text>

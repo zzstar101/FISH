@@ -33,6 +33,7 @@ const HEIGHT = Number(args.get('height') ?? 812)
 const ROUTES = [
   '/pages/home/index',
   '/pages/wish/index',
+  '/pages/wish-publish/index',
   '/pages/sell/index',
   '/pages/chat/index',
   '/pages/profile/index',

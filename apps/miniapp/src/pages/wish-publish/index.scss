@@ -1,0 +1,310 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 我要许愿（二级页）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 结构：冰蓝页头 → 漂浮返回钮 + 标题「许个愿」→ 表单（关键词 / 分类 / 预算 /
+ * 描述 / 匹配偏好 / 契约约束说明）→ 吸底操作条（取消 + 发布愿望）。
+ *
+ * 二级页**不加底栏留白**（非 Tab 页不渲染悬浮 TabBar），底部只让出吸底操作条。
+ */
+
+.wp {
+  position: relative;
+  min-height: 100vh;
+}
+
+/* 顶部冰蓝渐变（设计稿 `topbg` 高 150pt） */
+.wp__topbg {
+  @include page-hero(300px, 64px);
+}
+
+/* 内容区：左右 40px（设计稿全页左右各 20pt）；顶部 168px 让开漂浮导航栏
+   （与 match / mylist / orders 等二级页同值）；底部让出吸底操作条 + 安全区 */
+.wp__body {
+  position: relative;
+  z-index: 1;
+  padding: 168px 40px calc(200px + env(safe-area-inset-bottom));
+}
+
+/* ─────────────────────────── 表单字段 ─────────────────────────── */
+
+.wp__field {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  & + & {
+    margin-top: 32px;
+  }
+}
+
+/* 标签行：左标签 + 右说明（字段名与字数/长度约束） */
+.wp__frow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.wp__label {
+  flex: 0 0 auto;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--muted-2);
+}
+
+.wp__req {
+  color: var(--danger);
+}
+
+.wp__fhint {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.wp__input {
+  width: 100%;
+  height: 96px;
+  padding: 0 24px;
+  box-sizing: border-box;
+  border-radius: 24px;
+  background: var(--ice);
+  border: 2px solid transparent;
+  font-size: 28px;
+  color: var(--fg);
+
+  &::placeholder {
+    color: var(--muted-2);
+  }
+
+  /* 校验失败：浅红底 + 红描边（与错误块同一语义色） */
+  &.is-err {
+    background: var(--danger-weak);
+    border-color: var(--danger);
+  }
+}
+
+/* Textarea 多行文本：贴左上排、超宽自动换行 */
+.wp__input--area {
+  height: 224px;
+  padding: 20px 24px;
+  line-height: 1.62;
+}
+
+/* 预算双输入：等宽两列 */
+.wp__row2 {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.wp__err {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 24px;
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+  color: var(--danger-ink);
+}
+
+.wp__err-ic {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin-top: 2px;
+}
+
+.wp__err-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 23px;
+  line-height: 1.65;
+}
+
+/* ─────────────────────────── 分类 chip ─────────────────────────── */
+
+/* 横滑落在**子元素**上（页面根节点不写 overflow） */
+.wp__cats {
+  width: 100%;
+  white-space: nowrap;
+}
+
+.wp__cats-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0;
+}
+
+/* 设计稿 `.cat-chip`：浅蓝底胶囊，选中转深墨（图标用滤镜转白，与许愿页筛选一致） */
+.wp__cat {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 10px;
+  height: 64px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  border: 2px solid transparent;
+  font-size: 24px;
+  color: var(--muted-2);
+  white-space: nowrap;
+
+  &.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: #fff;
+    font-weight: 600;
+  }
+}
+
+.wp__cat-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.wp__cat.is-on .wp__cat-ic {
+  filter: brightness(0) invert(1);
+}
+
+/* ─────────────────────────── 匹配偏好开关 ─────────────────────────── */
+
+.wp__sw {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 26px;
+  border-radius: 28px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+}
+
+.wp__sw-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wp__sw-title {
+  display: block;
+  font-size: 25px;
+  font-weight: 600;
+}
+
+.wp__sw-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.wp__track {
+  @include switch;
+  position: relative;
+}
+
+.wp__knob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(23, 35, 61, 0.25);
+  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.wp__track.is-on .wp__knob {
+  transform: translateX(40px);
+}
+
+/* ─────────────────────────── 契约约束说明 ─────────────────────────── */
+
+.wp__note {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 32px;
+  padding: 24px 26px;
+  border-radius: 28px;
+  background: var(--accent-weak);
+  border: 2px dashed var(--accent-mid);
+  font-size: 23px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.wp__note-hd {
+  display: block;
+  font-weight: 600;
+  color: var(--brand);
+}
+
+.wp__note-line {
+  display: block;
+}
+
+/* ─────────────────────────── 吸底操作条 ─────────────────────────── */
+
+.wp__bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px 40px calc(20px + env(safe-area-inset-bottom));
+  background: rgba(255, 255, 255, 0.86);
+  border-top: 2px solid var(--border);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+/* 「取消」：设计稿 `.btn.ghost`（浅蓝底 + 品牌色字），固定宽 92pt */
+.wp__cancel {
+  flex: 0 0 auto;
+  width: 184px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  color: var(--brand-deep-2);
+  font-size: 29px;
+  font-weight: 600;
+
+  &:active {
+    opacity: 0.86;
+  }
+}
+
+/* 「发布愿望」：设计稿 `.btn.primary`（深墨底 + 白字） */
+.wp__submit {
+  flex: 1 1 auto;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  background: var(--ink);
+  color: #fff;
+  font-size: 29px;
+  font-weight: 600;
+
+  &:active {
+    opacity: 0.86;
+  }
+}
