@@ -30,6 +30,20 @@ export async function fetchConversations(): Promise<ConversationDto[]> {
   return conversationListResponseSchema.parse(payload).items
 }
 
+/**
+ * 会话未读条数和（底栏「消息」红点用）。
+ *
+ * 契约没有「会话未读总数」端点，只能拉一页 `GET /conversations` 自己求和，取的是
+ * 契约上限 50 条。与 Chat 页首屏用同一页数据 —— 先保证「页内角标」与「底栏红点」
+ * 同源、不互相打架；会话多于 50 且更早那批里还有未读时会漏计，要根治得让后端补一个
+ * unread-count 端点。此前底栏这一项是从 fixture 现算的（#89 的既有债），
+ * 于是真实未读与红点毫无关系。
+ */
+export async function fetchConversationUnreadCount(): Promise<number> {
+  const items = await fetchConversations()
+  return items.reduce((sum, item) => sum + item.unreadCount, 0)
+}
+
 /** 某个会话的历史消息（契约按 `(createdAt, id)` 升序返回） */
 export async function fetchMessages(conversationId: string): Promise<MessageDto[]> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {

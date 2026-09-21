@@ -188,37 +188,6 @@
   height: 100%;
 }
 
-/* 系统会话：品牌渐变底 + 白盾牌勾（1版稿 inline 渐变底） */
-.chat__ava--sys {
-  background: var(--grad-brand);
-  border-color: transparent;
-}
-
-.chat__ava-ic {
-  width: 52px;
-  height: 52px;
-}
-
-/* 认证徽章：头像右下角品牌圆底白勾（1版稿 .ava .cert） */
-.chat__cert {
-  position: absolute;
-  right: -6px;
-  bottom: -6px;
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  background: var(--brand);
-  border: 4px solid var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.chat__cert-ic {
-  width: 22px;
-  height: 22px;
-}
-
 /* 未读角标：设计稿 --badge 红底（#fa5151），1版稿移到圆形头像右上 */
 .chat__bdg {
   position: absolute;
@@ -260,32 +229,8 @@
   @include ellipsis;
 }
 
-/* 状态胶囊（1版稿 .cname .st）：默认品牌浅底；
-   --warn 橙 = 稿 color-mix(warn 24%, transparent) / color-mix(warn 42%, fg) 的预计算值；
-   --done 灰 = 已完成 / 已取消 */
-.chat__st {
-  flex: 0 0 auto;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
-  font-weight: 600;
-  line-height: 1.55;
-  padding: 0 14px;
-  border-radius: var(--r-pill);
-  white-space: nowrap;
-  background: var(--accent-weak);
-  color: var(--brand);
-
-  &--warn {
-    background: rgba(255, 184, 77, 0.24);
-    color: #706050;
-  }
-
-  &--done {
-    background: var(--bg);
-    /* 稿 color-mix(in oklab, var(--muted) 82%, var(--fg)) 的预计算值 */
-    color: #606e8a;
-  }
-}
+/* 状态胶囊（1版稿 .cname .st）已随「契约里没有分类 / 状态字段」一起删掉：
+   `ConversationDto` 只有 `listing.status` 与最后一条消息，推不出「待面交 / 已完成」。 */
 
 .chat__msg {
   font-size: 25px;
@@ -307,7 +252,7 @@
   color: var(--muted);
 }
 
-/* 右侧商品缩略图（1版稿 .thumb：58pt 圆角 16pt）；系统行走品牌渐变底 */
+/* 右侧商品缩略图（1版稿 .thumb：58pt 圆角 16pt） */
 .chat__thumb {
   flex: 0 0 auto;
   width: 116px;
@@ -331,15 +276,6 @@
   width: 48px;
   height: 48px;
   opacity: 0.55;
-}
-
-.chat__thumb--brand {
-  background: var(--grad-brand);
-  border-color: transparent;
-
-  .chat__thumb-ic {
-    opacity: 0.92;
-  }
 }
 
 /* ───────────────────── 回到顶部（1版稿 .totop） ───────────────────── */

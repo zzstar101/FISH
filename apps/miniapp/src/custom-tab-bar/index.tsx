@@ -124,39 +124,42 @@ export default function CustomTabBar() {
   const userId = user?.id ?? null
 
   /**
-   * 会话未读的本地现算口径（排除系统会话 —— 它的未读由「通知」承载）。
+   * 演示 / 开发构建（本地没有后端）的红点兜底。排除系统会话 —— 它的未读由「通知」
+   * 承载，两边都算会重复计。
    *
-   * 会话列表还没接真实后端（#89 的既有债），所以这一项无论哪条路径都来自 fixture；
-   * 本轮修的是**通知**那一项不再被 fixture 顶替。
+   * 真实构建下是 `undefined`：未读数只能来自真实接口，读不到就是「不知道」，
+   * 不能用 fixture 先亮一颗点进去什么都没有的幽灵红点。兜底由这里注入而不是
+   * `features/chat/unread` 内判断构建开关 —— store 不该知道 fixture 的存在。
    */
-  const fixtureConversations = useMemo(
+  const demoUnread = useMemo(
     () =>
-      conversations()
-        .filter((item) => item.kind !== 'system')
-        .reduce((sum, item) => sum + item.unreadCount, 0),
+      MOCK_FALLBACK_ENABLED
+        ? () => ({
+            conversations: conversations()
+              .filter((item) => item.kind !== 'system')
+              .reduce((sum, item) => sum + item.unreadCount, 0),
+            notifications: unreadNotificationCount(),
+          })
+        : undefined,
     [],
   )
 
   /**
-   * 冷启动补快照（#129 review P1）。
+   * 冷启动补快照（#129 review P1；#89 收口会话未读那一分量）。
    *
-   * 底栏在每个 Tab 页都渲染，用户可能一次都不进消息页 —— 那时没有任何人发布快照，
-   * 旧实现就退回「mock 会话 + mock 通知计数」，于是真实未读通知与 fixture 不一致时，
-   * 要么不亮、要么亮一颗点进去什么都没有的幽灵红点。
+   * 底栏在每个 Tab 页都渲染，用户可能一次都不进消息页 —— 那时没有任何人发布快照。
+   * 这里在「已登录 + 本次账号还没有快照」时补一次真实数据：
+   * `GET /notifications/unread-count` 与 `GET /conversations` 求和
+   * （`hydrateUnread` 内部按账号去重，多 Tab 实例只打一次）。
    *
-   * 这里在「已登录 + 本次账号还没有快照」时补一次**真实** `GET /notifications/unread-count`
-   * （`hydrateUnread` 内部按账号去重，多 Tab 实例只打一次）。真实构建下接口失败就是
-   * 「不知道」；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，本地没有后端）才把
-   * fixture 计数作为兜底传进去，否则演示环境里那颗红点会整个消失。
+   * 会话未读此前无论哪条路径都来自 fixture（#89 明写的既有债），于是底栏那颗点
+   * 与「是否真的还有未读」毫无关系：通知未读为 0、接口失败时它照样亮，也从不随已读
+   * 熄灭。现在两项都是真值，真实接口失败即「不知道」。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || !userId) return
-    hydrateUnread(
-      userId,
-      fixtureConversations,
-      MOCK_FALLBACK_ENABLED ? () => unreadNotificationCount() : undefined,
-    )
-  }, [authStatus, userId, fixtureConversations])
+    hydrateUnread(userId, demoUnread)
+  }, [authStatus, userId, demoUnread])
 
   useEffect(() => {
     // 未登录不亮红点：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上
@@ -169,22 +172,23 @@ export default function CustomTabBar() {
     // 优先用本次账号的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除。
     // 快照按账号校验：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时没人清快照，
     // 不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
-    // 通知那一项为 null（列表未就绪 / 加载失败 / 真实接口不可达，「不知道」）时按
-    // **无已知未读**算，不拿 fixture 顶替 —— 页内角标在失败态也是 0，两边必须同一口径，
-    // 否则会亮一颗点进「通知」tab 只有错误态、清不掉的幽灵红点。
+    // 任何一个分量为 null（「不知道」）时按**无已知未读**算，不拿 fixture 顶替 ——
+    // 页内角标在失败态也是 0，两边必须同一口径，否则会亮一颗点进去只有错误态、
+    // 清不掉的幽灵红点。
     if (unread && unread.ownerId === userId) {
       setDot(unread.conversations + (unread.notifications ?? 0) > 0)
       return
     }
-    // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持接入前的
-    // fixture 现算口径，真实构建按「无已知未读」算 —— 等 `hydrateUnread` 的真实结果
-    // 落地再决定亮不亮，不能用 fixture 先亮一颗再说。
-    if (!MOCK_FALLBACK_ENABLED) {
+    // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持 fixture 现算
+    // 口径，真实构建按「无已知未读」算 —— 等 `hydrateUnread` 的真实结果落地再决定
+    // 亮不亮，不能用 fixture 先亮一颗再说。
+    if (!demoUnread) {
       setDot(false)
       return
     }
-    setDot(fixtureConversations + unreadNotificationCount() > 0)
-  }, [authStatus, userId, unread, fixtureConversations])
+    const fallback = demoUnread()
+    setDot(fallback.conversations + fallback.notifications > 0)
+  }, [authStatus, userId, unread, demoUnread])
 
   // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
   useEffect(() => {
