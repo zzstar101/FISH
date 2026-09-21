@@ -27,6 +27,12 @@ export const ApiErrorSchema = z.object({
      * 否则就是替它们改协议（§7.4）。
      */
     details: z.array(ApiErrorDetailSchema).optional(),
+    /**
+     * 429 类拒绝的剩余等待秒数（#141 起）。这类信息此前只写进 `message` 文本（面交码锁定、
+     * 认证验证码限流），客户端要显示倒计时就得解析文案；本字段把它结构化。与 `details` 同样
+     * 保持纯增量：不传即不出现，既有域的响应逐字节不变。
+     */
+    retryAfterSeconds: z.number().int().positive().optional(),
   }),
 })
 
@@ -37,9 +43,19 @@ export type ApiError = z.infer<typeof ApiErrorSchema>
  *
  * `details` 在**商品域的 422 校验类失败**时传（#6 冻结契约 §3 / §7.9）；不传时响应体与本函数
  * 加第三参之前**逐字节相同** —— 既有调用方无需改动（auth 的 422 不带 details；health 不走本函数）。
+ *
+ * `retryAfterSeconds` 只在 429 类拒绝时传（#141）；同样保证不传即不出现该键。
  */
-export function errorBody(code: string, message: string, details?: ApiErrorDetail[]): ApiError {
-  return details ? { error: { code, message, details } } : { error: { code, message } }
+export function errorBody(
+  code: string,
+  message: string,
+  details?: ApiErrorDetail[],
+  retryAfterSeconds?: number,
+): ApiError {
+  const error: ApiError['error'] = { code, message }
+  if (details !== undefined) error.details = details
+  if (retryAfterSeconds !== undefined) error.retryAfterSeconds = retryAfterSeconds
+  return { error }
 }
 
 /**
