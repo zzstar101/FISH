@@ -214,7 +214,8 @@ mc admin policy attach local fish-app-rw --user fish-app
 上线前执行 `MEETUP_TOKEN_SECRET=$(openssl rand -hex 32) bun --env-file=.env apps/api/scripts/media-smoke.ts`，
 验证聊天直链返回 403、鉴权代理仍能读取及 Range 播放。那个变量是因为脚本会**自己拉起一个 API 进程**
 （`apps/api/scripts/media-smoke.ts:52`），而 API 启动时会校验面交码密钥（§4）；这里给的是只活在这条
-命令里的一次性值，**不要**写进 `.env`——生产的密钥归 §4 的 `/etc/fish/api-mail.env`。
+命令里的一次性值，**不要**写进 `.env`——生产的密钥归 §4 的 `/etc/fish/api-mail.env`。#141 起 API 还
+强制要求 AI 润色配置，脚本会自己注入 stub 的两个变量（不会出网），不必再手工传。
 
 ## 4. 代码与环境变量
 

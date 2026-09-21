@@ -55,6 +55,10 @@ try {
       DATABASE_URL: url.toString(),
       API_PORT: String(port),
       MAIL_TRANSPORT: 'outbox',
+      // #141：API 启动即要求 AI 润色配置，缺 AI_POLISH_TRANSPORT 会直接退出。冒烟不调上游，
+      // 固定给 stub（base_url 只校验存在性，不会被访问）；显式覆盖是为了不让生产的 live 配置漏进来。
+      AI_POLISH_TRANSPORT: 'stub',
+      AI_POLISH_BASE_URL: 'http://127.0.0.1:8787',
     },
     stdout: 'inherit',
     stderr: 'inherit',
