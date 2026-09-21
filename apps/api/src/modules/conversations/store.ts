@@ -62,7 +62,7 @@ export interface ConversationStore {
   ): Promise<ConversationDetailRow[]>
   /** 一页会话的封面 objectKey（每个 listing 取 sort_order = 0 的一张）。 */
   coverObjectKeys(listingIds: string[]): Promise<Map<string, string | null>>
-  /** 把查看者一侧的 last_read_at 推进到 now；非参与者返回 null。 */
+  /** 把查看者一侧的 last_read_at 单调推进到 now（只前进不后退）；非参与者返回 null。 */
   markRead(conversationId: string, viewerId: string): Promise<ConversationDetailRow | null>
 }
 
@@ -232,10 +232,18 @@ export function createSqlConversationStore(db: Db): ConversationStore {
     async markRead(conversationId, viewerId) {
       // 只推进查看者一侧的 last_read_at；updated_at 一并 bump（app 侧维护的约定）。
       // RETURNING 用于区分"没这个会话/不是参与者"与"已推进"。
+      // GREATEST 是单调保护：now() 是**事务开始时刻**，两个并发 read 若「事务开始序」与
+      // 「行锁获取序」相反，后拿到锁的那个会写进更早的时间戳，让读位倒退（#151）。
+      // 由此也要求调用方不要把 markRead 包进长事务（读位会停在事务开始那一刻）；
+      // 当前调用链是独立 HTTP 请求，每语句一个隐式事务，不受影响。
       const updated = await db.execute(sql`
         UPDATE conversations SET
-          buyer_last_read_at = CASE WHEN buyer_id = ${viewerId} THEN now() ELSE buyer_last_read_at END,
-          seller_last_read_at = CASE WHEN seller_id = ${viewerId} THEN now() ELSE seller_last_read_at END,
+          buyer_last_read_at = CASE WHEN buyer_id = ${viewerId}
+            THEN GREATEST(COALESCE(buyer_last_read_at, 'epoch'::timestamptz), now())
+            ELSE buyer_last_read_at END,
+          seller_last_read_at = CASE WHEN seller_id = ${viewerId}
+            THEN GREATEST(COALESCE(seller_last_read_at, 'epoch'::timestamptz), now())
+            ELSE seller_last_read_at END,
           updated_at = now()
         WHERE id = ${conversationId} AND ${viewerId} IN (buyer_id, seller_id)
         RETURNING id
