@@ -93,7 +93,7 @@ export default function TransactionMeetup() {
   const [scannedInvalid, setScannedInvalid] = useState(false)
   /** 手动输入：6 位数字的字符数组，索引即格子位置 */
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
-  /** 手动输入的错误提示（码错误 / 过期 / 已被使用 / 次数过多），空串表示无错误 */
+  /** 手动输入的错误提示（码错误 / 已被使用 / 次数过多 / 对方未出码），空串表示无错误 */
   const [inputError, setInputError] = useState('')
   /** 提交中锁：防重复核销 */
   const [submitting, setSubmitting] = useState(false)

@@ -629,12 +629,12 @@ describe('transaction service: meetup token (#70)', () => {
     ).resolves.toMatchObject({ verified: true })
   })
 
-  test('#147 终态销毁：cancel 后凭证行同事务删除 → NOT_FOUND + status NONE', async () => {
+  test('#147 终态销毁：cancel 后凭证行同事务删除 → status NONE，核销仍报终态 409', async () => {
     const { service, store, txId } = await buildWithPendingTx()
     await service.issueMeetupToken(seller, txId)
     expect(await service.getMeetupTokenStatus(buyer, txId)).toMatchObject({ status: 'ISSUED' })
     await service.cancel(seller, txId)
-    // 终态后行已删：核销按「无凭证」给 404（不再报终态 409 之外的语义）
+    // 终态核销报 409：终态先于凭证判定，不因行已删退化成「无凭证」404
     await expect(service.verifyMeetupCode(buyer, txId, { code: '123456' })).rejects.toMatchObject({
       status: 409,
       code: 'TRANSACTION_NOT_IN_PENDING',

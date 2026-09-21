@@ -146,9 +146,11 @@ export interface TransactionStore {
    * 同事务镜像 confirm 的合并语义，把交易推进 COMPLETED + listing SOLD（无条件，
    * 与 confirm 同一论证：交易完成必然连带商品售出），并**同事务删除凭证行**
    * （#147 终态销毁）。
-   * 与 cancel 的并发窗口（无法在不偏离 #11 cancel 冻结语义的前提下消除）：
-   * cancel 先提交 → 本事务 stamp 落 0 行、整体回滚（service 409）；
-   * cancel 后提交 → 取消生效、凭证已随 cancel 删除 —— 终态以 transactions 为准。
+   * 与 cancel / complete 的并发（#147 起不再有窗口）：本方法自事务开头就 `FOR UPDATE`
+   * 锁定交易行，与 cancel / confirm / upsert 的顺序一致（先交易行、后凭证行），二者在
+   * 交易行锁上串行化——因此不会 AB-BA 死锁，也不存在「核销读到 PENDING、随后被取消」
+   * 的中间态。若取锁时交易已是终态，抛 MeetupConsumeRaceError（service 映射 409）；
+   * 终态以 transactions 为唯一真相。
    */
   consumeMeetupToken(
     transactionId: string,
