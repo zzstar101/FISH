@@ -116,6 +116,29 @@ export function bootstrapAuth(): Promise<void> {
 }
 
 /**
+ * 用一次**已经拿到权威结果**的认证响应就地更新 store，不额外打网络。
+ *
+ * 场景：校园认证页校验成功后拿到 `VerificationStatus`，其 `authStatus` / `verifiedAt`
+ * 与 `Me` 同名同型，直接合并即可。这样做的两个理由：
+ * 1. 「我的」页的取数 effect 依赖 `[authStatus, authUser]`（见 `pages/profile`）——
+ *    合并会换出新的 `user` 对象，页面立刻重拉；不更新的话认证成功回去仍是未认证徽章；
+ * 2. 若改成再打一次 `GET /me`，那次请求失败（15s 超时 / 断网）就会把刚认证成功的用户
+ *    继续显示成未认证，而 verify 的 200 本身已经是权威结果，不该被一次多余往返否决。
+ *
+ * `ownerId` 是**发起那次请求的账号**，调用方必须传：认证请求可以飞行十几秒，期间用户
+ * 完全可能退出、换号登录。只判断「当前已登录」会把 A 的认证结果合并进 B 的 `user`
+ * —— 而 store 是全局单例，B 会长期显示一个假 VERIFIED（`GET /profile` 只写页面局部
+ * state，不回写 store，所以不会自我纠正）。账号不是同一个就整个丢弃。
+ */
+export function applyVerification(
+  ownerId: string,
+  next: Pick<Me, 'authStatus' | 'verifiedAt'>,
+): void {
+  if (snapshot.status !== 'authed' || snapshot.user?.id !== ownerId) return
+  emit({ status: 'authed', user: { ...snapshot.user, ...next } })
+}
+
+/**
  * 确认会话真的落到本地了再宣告登录。
  *
  * `apiRequest` 里 `saveSession` 是静默吞异常的（存储写失败不该让请求失败），
