@@ -1,12 +1,21 @@
+import type { VerificationStatus } from '@fish/contracts/auth/verification'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
-import { useAuth } from '@/features/auth/store'
-import { eduEmailOk } from '@/mock/api'
+import { applyVerification, authSnapshot, useAuth } from '@/features/auth/store'
+import {
+  CAMPUS_EMAIL_DOMAIN,
+  fetchVerificationStatus,
+  isCampusEmail,
+  sendVerificationCode,
+  verifyCampusCode,
+} from '@/features/verify/api'
+import { sendErrorMessage, verifyErrorMessage, verifyNeedsResend } from '@/features/verify/messages'
+import { isApiError } from '@/lib/request'
 import './index.scss'
 
 /**
@@ -15,13 +24,14 @@ import './index.scss'
  * 四种状态全覆盖：未认证（填邮箱）→ 已发码（6 格输入 + 60 秒重发倒计时）
  * → 已认证（成功态 + 徽章一致性说明）→ 异常文案（码错误 / 已过期 / 过于频繁 / 域名不符）。
  *
- * **两点与实现的边界**：
- * 1. 后端无此端点（`BLOCKED: #68`），因此数据来自 `mock/api`，认证动作停在本地校验；
- * 2. `apps/api` 的注释明确写过「当前 Mock Provider 对任意 20 开头 12 位学号都返回 VERIFIED，
- *    不可当安全依据」——所以这里**只做前端体验**，不宣称认证结果可信。
+ * **真实接线（#89）**：发码 / 校验 / 状态三个端点都在 `#68` 落地，本页不再有任何
+ * mock 分支 —— 生产构建失败即显式报错，不回退 fixture。域名规则经契约的
+ * `CampusEmailSchema` 校验（`isCampusEmail`），页面不写死教育邮箱域名；错误码到
+ * 文案的映射在 `features/verify/messages.ts`。
  *
- * 域名规则经 `eduEmailOk()` 走 api 层而不是写死在页面里：交付要求
- * 「Verification Provider 要可替换，前端不要写死教育邮箱的域名逻辑」。
+ * 登录态边界：三个端点都挂 `requireAuth`。会话失效时 `lib/request` 对 401
+ * `UNAUTHENTICATED` 就地清会话 → `features/auth/store` 广播 `anonymous` →
+ * 本页在守卫跳转落地前先渲染 `AuthRequired`，不会画一帧假数据。
  */
 
 /** 重发倒计时秒数（设计稿：60 秒） */
@@ -39,21 +49,29 @@ const CODE_SLOTS = Array.from({ length: CODE_LEN }, (_, index) => ({
 
 type Stage = 'email' | 'code'
 
+/** `2026-05-06T…Z` → `2026-05-06`；拿不到就显示 `—`，不编造时间 */
+function formatVerifiedAt(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  // 不用 `padStart`：Babel 目标是 iOS 9 / Android 5，项目未装 core-js（`useBuiltIns`
+  // 为 false），而 `check:es5` 只做 acorn 语法解析、不检查 ES2017 内建是否存在
+  const pad = (n: number) => (n < 10 ? `0${n}` : String(n))
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 export default function Verify() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
+  const userId = user?.id ?? null
 
   /**
-   * 「已认证」必须用**真实登录态**（契约的 `Me.authStatus`）判断，不能用 mock 的
-   * `verifyState()`：后者对演示账号返回 VERIFIED，会把一个真实未认证用户渲染成
-   * 「校园认证已通过」。认证流程本身仍无端点（`BLOCKED: #68`），所以邮箱 / 验证码
-   * 分支还是 mock。
-   *
-   * 同理**不再展示教育邮箱与认证时间**：契约的 `Me` 里没有这两个字段，
-   * 唯一来源是 mock 的演示账号（`a***n@stu.edu.cn` / 2026-05-06），
-   * 摆给真实已认证用户就是「真身份 + 假邮箱」。宁可不显示。
+   * 认证状态的**权威来源**是 `GET /verification/status`（脱敏邮箱 + 认证时间），
+   * 请求未回来之前先用 `GET /me` 的 `authStatus` 顶着 —— 两者都是真实数据，
+   * 不存在「先画一帧演示账号」的问题，也不会让已认证用户看到一帧「未认证」。
    */
-  const verified = user?.authStatus === 'VERIFIED'
+  const [status, setStatus] = useState<VerificationStatus | null>(null)
+
+  const verified = status ? status.authStatus === 'VERIFIED' : user?.authStatus === 'VERIFIED'
   const nickname = user?.nickname ?? ''
   const [stage, setStage] = useState<Stage>('email')
 
@@ -65,57 +83,166 @@ export default function Verify() {
   const [sending, setSending] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
+  /**
+   * 与 state 并行的**同 tick 守卫**：`setSending(true)` 要下一次渲染才可见，
+   * 两次点击落在同一渲染里时 state 守卫会双双放行，于是真的发两次码 ——
+   * 后端每日额度（邮箱 5 / 用户 10）会被白白消耗一次。
+   */
+  const sendingRef = useRef(false)
+  const submittingRef = useRef(false)
+
   useEffect(() => {
     if (left <= 0) return
     const timer = setTimeout(() => setLeft((n) => n - 1), 1000)
     return () => clearTimeout(timer)
   }, [left])
 
-  /** 邮箱打码：z***@stu.edu.cn */
+  /**
+   * 拉一次真实认证状态（成功态的教育邮箱 / 认证时间用它）。
+   *
+   * 依赖 `userId` 而不是整个 `authUser` 对象：换账号必须丢掉上一个账号的状态
+   * （与 `pages/profile` 防串号同一理由），而同一账号的普通广播不该触发重拉。
+   */
+  useEffect(() => {
+    setStatus(null)
+    if (authStatus !== 'authed' || !userId) return
+    let alive = true
+    void fetchVerificationStatus()
+      .then((next) => {
+        // 绝不把已认证降级：本请求可能比用户刚完成的 verify 响应更晚回来
+        if (alive) setStatus((prev) => (prev?.authStatus === 'VERIFIED' ? prev : next))
+      })
+      .catch(() => {
+        // 失败不编造：成功态的教育邮箱 / 认证时间留 `—`，未认证分支照常可用
+      })
+    return () => {
+      alive = false
+    }
+  }, [authStatus, userId])
+
+  /** 邮箱打码：z***@gzasc.edu.cn（仅用于展示刚输入、尚未绑定的地址） */
   const maskEmail = (raw: string): string => {
-    const [name = '', domain = ''] = raw.split('@')
-    if (!domain) return raw
+    const [name = '', domain = ''] = raw.trim().split('@')
+    if (!domain) return raw.trim()
     return `${name.slice(0, 1)}***@${domain}`
   }
 
-  /** 发送验证码：先本地校验域名，再起 60 秒倒计时 */
-  const send = () => {
-    if (sending || left > 0) return
+  /** 发码失败落在当前可见的字段上：填邮箱阶段看邮箱行，输码阶段（重发）看码位下方的错误框 */
+  const showSendError = (message: string) => {
+    if (stage === 'code') setCodeError(message)
+    else setEmailError(message)
+  }
+
+  /**
+   * 认证响应只属于**发起请求的那个账号**。
+   *
+   * 请求可以飞行十几秒（`lib/request` 超时上限 15s），期间用户完全可能退出、换号登录。
+   * 结果回来时若登录的已经不是同一个人，就必须整个丢弃 —— 否则 A 的 `VERIFIED` 会被
+   * 写进 B 的全局 store（`applyVerification` 也按 `ownerId` 再挡一层）。
+   */
+  const ownedByCurrent = (ownerId: string): boolean => authSnapshot().user?.id === ownerId
+
+  /** 后端说「已认证」时，把页面与 store 都收敛到已认证态；状态拿不到则返回 false，由调用方如实报错 */
+  const convergeVerified = async (ownerId: string): Promise<boolean> => {
+    const next = await fetchVerificationStatus().catch(() => null)
+    if (!next || !ownedByCurrent(ownerId)) return false
+    setStatus(next)
+    applyVerification(ownerId, next)
+    return true
+  }
+
+  /** 发送验证码：本地按契约校验域名 → 真调后端 → 起 60 秒倒计时 */
+  const send = async () => {
+    if (sendingRef.current || left > 0) return
     const trimmed = email.trim()
     if (!trimmed) {
-      setEmailError('请输入教育邮箱')
+      showSendError('请输入教育邮箱')
       return
     }
-    if (!eduEmailOk(trimmed)) {
-      setEmailError('请使用校园教育邮箱（如 @stu.edu.cn）')
+    if (!isCampusEmail(trimmed)) {
+      showSendError(`请使用校园教育邮箱（如 ${CAMPUS_EMAIL_DOMAIN}）`)
       return
     }
+    const ownerId = userId
+    if (!ownerId) return
+    sendingRef.current = true
     setEmailError('')
+    setCodeError('')
     setSending(true)
-    setTimeout(() => {
-      setSending(false)
+    try {
+      await sendVerificationCode(trimmed)
       setStage('code')
       setLeft(RESEND_SECONDS)
       setCode('')
-      setCodeError('')
       void Taro.showToast({ title: '验证码已发送', icon: 'none' })
-    }, 700)
+    } catch (error) {
+      if (isApiError(error)) {
+        // 服务端已认证（例如另一端刚认证完）：不是发码失败，收敛到已认证态
+        if (error.code === 'ALREADY_VERIFIED') {
+          if (!(await convergeVerified(ownerId))) {
+            showSendError('该账号已完成认证，但状态还没同步，请稍后重试')
+          }
+          return
+        }
+        showSendError(sendErrorMessage(error.code, error.message))
+        return
+      }
+      showSendError('发送失败，请检查网络后重试')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
   }
 
-  const submit = () => {
-    if (submitting) return
+  /**
+   * 校验验证码。
+   *
+   * 成功后用 verify 的响应**就地**更新 store：该响应已经是权威的认证状态，
+   * 「我的」页取数 effect 依赖 `[authStatus, authUser]`，换出新的 `user` 即会重拉
+   * （见 `features/auth/store.ts` 的 `applyVerification`）。
+   */
+  const submit = async () => {
+    if (submittingRef.current) return
     if (code.length !== CODE_LEN) {
       setCodeError(`请输入 ${CODE_LEN} 位验证码`)
       return
     }
+    const ownerId = userId
+    if (!ownerId) return
+    submittingRef.current = true
     setSubmitting(true)
     setCodeError('')
-    setTimeout(() => {
+    try {
+      const next = await verifyCampusCode(email, code)
+      if (!ownedByCurrent(ownerId)) return
+      setStatus(next)
+      applyVerification(ownerId, next)
+    } catch (error) {
+      if (isApiError(error)) {
+        // 另一端 / 上一次已完成：不是错误，按已认证态收敛
+        if (error.code === 'ALREADY_VERIFIED') {
+          if (!(await convergeVerified(ownerId))) {
+            setCodeError('该账号已完成认证，但状态还没同步，请稍后重试')
+          }
+          return
+        }
+        if (verifyNeedsResend(error.code)) setLeft(0)
+        setCodeError(verifyErrorMessage(error.code, error.message))
+        return
+      }
+      setCodeError('认证失败，请检查网络后重试')
+    } finally {
+      submittingRef.current = false
       setSubmitting(false)
-      // 真实实现要调后端校验；这里只提示，不谎报已通过
-      void Taro.showToast({ title: '认证接口待接入', icon: 'none' })
-    }, 800)
+    }
   }
+
+  /**
+   * 登录门禁**排在所有分支之前**：会话失效（401 清会话 → 广播 anonymous）时，
+   * 即便 `status` 还留着刚拿到的 VERIFIED，也不能先画一帧 `user=null` 的成功页
+   * （头像首字与昵称都会是空的），必须等守卫把页面跳去登录。
+   */
+  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
   /* ---------------------------------------------------- 已认证态 */
 
@@ -153,6 +280,18 @@ export default function Verify() {
             </View>
           </View>
 
+          {/* 认证信息来自 `GET /verification/status`（邮箱只给脱敏形式）；拿不到就显示 `—` */}
+          <View className="verify__card">
+            <View className="verify__prow">
+              <Text className="verify__pname">教育邮箱</Text>
+              <Text className="verify__ptag num">{status?.maskedEmail ?? '—'}</Text>
+            </View>
+            <View className="verify__prow">
+              <Text className="verify__pname">认证时间</Text>
+              <Text className="verify__ptag num">{formatVerifiedAt(status?.verifiedAt)}</Text>
+            </View>
+          </View>
+
           <View className="verify__note">
             <Image className="verify__note-ic" src={ICONS.info} mode="aspectFit" />
             <Text className="verify__note-tx">
@@ -180,11 +319,6 @@ export default function Verify() {
 
   /* ---------------------------------------------------- 未认证：填邮箱 / 输码 */
 
-  /**
-   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
-   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
-   */
-  if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
   return (
     <View className="verify">
       <View className="verify__bg" />
@@ -217,7 +351,7 @@ export default function Verify() {
                 className="verify__val"
                 type="text"
                 value={email}
-                placeholder="yourname@stu.edu.cn"
+                placeholder={`yourname${CAMPUS_EMAIL_DOMAIN}`}
                 placeholderClass="verify__ph"
                 onInput={(event) => {
                   setEmail(event.detail.value)
@@ -228,10 +362,15 @@ export default function Verify() {
             {emailError ? (
               <Text className="verify__ferr">{emailError}</Text>
             ) : (
-              <Text className="verify__fhelp">仅支持校园教育邮箱，验证码 10 分钟内有效。</Text>
+              // 5 分钟与后端 `CODE_TTL_MINUTES`（apps/api/src/modules/auth/verification-store.ts，
+              // 邮件正文同源）一致；该常量未进契约，后端改了要同步这里
+              <Text className="verify__fhelp">仅支持校园教育邮箱，验证码 5 分钟内有效。</Text>
             )}
 
-            <View className={`verify__btn-main${sending ? ' is-off' : ''}`} onClick={send}>
+            <View
+              className={`verify__btn-main${sending ? ' is-off' : ''}`}
+              onClick={() => void send()}
+            >
               {sending ? <View className="verify__spin" /> : null}
               <Text>{sending ? '发送中…' : '发送验证码'}</Text>
             </View>
@@ -249,6 +388,7 @@ export default function Verify() {
                 onClick={() => {
                   setStage('email')
                   setLeft(0)
+                  setCodeError('')
                 }}
               >
                 修改
@@ -303,7 +443,7 @@ export default function Verify() {
               {left > 0 ? (
                 <Text className="verify__resend-wait num">{left}s 后可重新发送</Text>
               ) : (
-                <Text className="verify__resend-act" onClick={send}>
+                <Text className="verify__resend-act" onClick={() => void send()}>
                   重新发送
                 </Text>
               )}
@@ -313,7 +453,7 @@ export default function Verify() {
               className={`verify__btn-main${
                 code.length === CODE_LEN && !submitting ? '' : ' is-off'
               }`}
-              onClick={submit}
+              onClick={() => void submit()}
             >
               {submitting ? <View className="verify__spin" /> : null}
               <Text>{submitting ? '认证中…' : '确认认证'}</Text>

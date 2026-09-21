@@ -1,0 +1,56 @@
+/**
+ * 校园认证页的「后端错误码 → 行内文案」映射（#89 需求「码错误 / 已过期等各有明确状态」）。
+ *
+ * 单独成模块而不是写在页面里：这是本页唯一可纯函数验证的部分，用例见
+ * `apps/miniapp/tests/verify-messages.test.ts`。
+ *
+ * 码的取值与状态码映射见 `@fish/contracts/auth/verification` 的
+ * `VerificationErrorCodeSchema` 与 `apps/api/src/modules/auth/verification-service.ts`。
+ */
+
+/**
+ * 发码失败文案。
+ *
+ * `RATE_LIMITED` 刻意不在表里：后端把「还有几秒 / 今日已用完」写进了 message
+ * （`verification-store.ts`），照抄它比一句笼统的「太频繁」有用。
+ */
+const SEND_MESSAGES: Record<string, string> = {
+  EMAIL_ALREADY_BOUND: '该校园邮箱已绑定其他账号',
+  VALIDATION_FAILED: '请使用校园教育邮箱',
+}
+
+/** 校验失败文案（`RATE_LIMITED` 同上） */
+const VERIFY_MESSAGES: Record<string, string> = {
+  CODE_INVALID: '验证码不正确，请核对后重新输入',
+  CODE_EXPIRED: '验证码已过期，请重新获取',
+  CODE_CONSUMED: '验证码已被使用，请重新获取',
+  TOO_MANY_ATTEMPTS: '尝试次数过多，请重新获取验证码',
+  EMAIL_ALREADY_BOUND: '该校园邮箱已绑定其他账号',
+  VALIDATION_FAILED: '请检查邮箱与验证码后重试',
+}
+
+/** 这几种失败码意味着手上这枚码已不可用，页面必须解锁「重新发送」 */
+const NEEDS_RESEND = new Set(['CODE_EXPIRED', 'CODE_CONSUMED', 'TOO_MANY_ATTEMPTS'])
+
+/**
+ * 发码失败的行内文案。
+ *
+ * 未知码与 `RATE_LIMITED` 一律透传后端 message —— 错误信封里的 message 本来就是
+ * 面向用户的（`apps/api/src/modules/auth/verification-store.ts`），编一句更笼统的
+ * 反而丢掉「还有几秒」这类可操作信息。
+ */
+export function sendErrorMessage(code: string, backendMessage: string): string {
+  if (code === 'RATE_LIMITED') return backendMessage
+  return SEND_MESSAGES[code] ?? backendMessage
+}
+
+/** 校验失败的行内文案（口径同 `sendErrorMessage`） */
+export function verifyErrorMessage(code: string, backendMessage: string): string {
+  if (code === 'RATE_LIMITED') return backendMessage
+  return VERIFY_MESSAGES[code] ?? backendMessage
+}
+
+/** 该失败码是否要解锁重发：否则用户被自己的 60 秒倒计时锁住，只能干等 */
+export function verifyNeedsResend(code: string): boolean {
+  return NEEDS_RESEND.has(code)
+}
