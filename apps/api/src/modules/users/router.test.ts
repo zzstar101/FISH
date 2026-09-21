@@ -30,6 +30,7 @@ const card: ListingCard = {
   free: false,
   coverUrl: null,
   createdAt: '2026-09-10T02:00:00.000Z',
+  moderationStatus: null,
 }
 
 function fakeService(overrides: Partial<PublicUserService> = {}): PublicUserService & {

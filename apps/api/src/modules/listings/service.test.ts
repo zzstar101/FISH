@@ -275,6 +275,20 @@ describe('listFeed', () => {
     expect(seen[0]?.status).toBeUndefined()
   })
 
+  // #74：本人列表里的 REVIEW 行与"自己下架"的行都是 `OFFLINE`，只有审核态能把它们分开。
+  // 本人视角带真实值、公开视角恒 null（不向买家泄漏平台内部状态）。
+  test('carries the moderation status on the seller own cards and keeps it null for everyone else', async () => {
+    const reviewRow = listingRow({ status: 'OFFLINE', moderationStatus: 'REVIEW' })
+    const store = fakeStore({ listFeed: async () => [feedEntry(reviewRow, null)] })
+    const service = createListingService({ storage: fakeStorage(), store })
+
+    const own = await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID }))
+    expect(own.items[0]?.moderationStatus).toBe('REVIEW')
+
+    const anonymous = await service.listFeed(null, feedQuery())
+    expect(anonymous.items[0]?.moderationStatus).toBeNull()
+  })
+
   // 反向保证：公开 Feed（没有 sellerId）仍必须显式限定 ACTIVE，不能顺手把过滤打开。
   test('public feed still pins the status filter to ACTIVE', async () => {
     const seen: FeedCriteria[] = []
@@ -402,6 +416,34 @@ describe('getDetail', () => {
     expect(ownerView.status).toBe('OFFLINE')
   })
 
+  // #74：REVIEW 的详情对本人可见（否则用户无从得知商品在审核中），审核态只给本人。
+  test('shows the moderation status to the owner and null to everyone else', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        findDetail: async () => ({
+          listing: listingRow({ status: 'OFFLINE', moderationStatus: 'REVIEW' }),
+          seller: sellerRow(),
+          images: [],
+        }),
+      }),
+    })
+
+    expect((await service.getDetail(SELLER_ID, LISTING_ID)).moderationStatus).toBe('REVIEW')
+
+    // 公开/他人视角看不到未过审商品（404），也就不会泄漏审核态。
+    expect((await expectServiceError(() => service.getDetail(OTHER_ID, LISTING_ID))).status).toBe(
+      404,
+    )
+    expect((await expectServiceError(() => service.getDetail(null, LISTING_ID))).status).toBe(404)
+  })
+
+  test('keeps the moderation status null for another viewer of an approved listing', async () => {
+    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+    const detail = await service.getDetail(OTHER_ID, LISTING_ID)
+    expect(detail.moderationStatus).toBeNull()
+  })
+
   test('公开卖家信息包含 authStatus 但不包含 verifiedAt / campusEmail 等敏感字段（#68）', async () => {
     const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
     const detail = await service.getDetail(null, LISTING_ID)
@@ -524,6 +566,34 @@ describe('createListing', () => {
 
     expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
     expect(records).toEqual(['CREATE:BLOCK'])
+  })
+
+  // #74：BLOCK 要给可定位到输入框的字段级错误，但**不下发命中词或词库**。
+  // 这里同时命中 BLOCK（毒品）与 REVIEW（加微信）规则，只有前者能出现在 details 里。
+  test('reports the blocked field without leaking the matched terms', async () => {
+    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, {
+        ...validCreate,
+        description: '出售毒品，加微信联系',
+      }),
+    )
+
+    expect(error.details).toEqual([{ field: 'description', message: '描述包含平台禁止发布的内容' }])
+    const serialized = JSON.stringify(error.details)
+    expect(serialized).not.toContain('毒品')
+    expect(serialized).not.toContain('加微信')
+  })
+
+  test('reports both fields when the title and the description are blocked', async () => {
+    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, title: '毒品', description: '枪支' }),
+    )
+
+    expect(error.details?.map((detail) => detail.field).sort()).toEqual(['description', 'title'])
   })
 
   test('creates review listings offline and does not expose them in the public feed', async () => {
@@ -758,6 +828,27 @@ describe('updateListing', () => {
 
     // 即使本请求只改价格，也不能把已有审核结论冲成 APPROVED。
     expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
+  })
+
+  // #74：编辑路径的 BLOCK 原因由锁内 `apply` 算出，`rejected` 结果本身不携带它，
+  // service 必须在回调里接住——断言它确实带到了 422 响应（且不含命中词）。
+  test('reports the blocked field computed inside the locked transaction', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        updateListingAtomic: async (input) => {
+          await input.apply(input, updateTarget())
+          return { kind: 'rejected' }
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { description: '出售毒品' }),
+    )
+
+    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    expect(error.details).toEqual([{ field: 'description', message: '描述包含平台禁止发布的内容' }])
   })
 })
 
