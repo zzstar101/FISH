@@ -167,8 +167,21 @@ export default function UserHome() {
           {profile ? (
             <View className="uhome__head">
               <View className="uhome__profile">
+                {/* 头像：契约的 `PublicUserProfileSchema.avatarUrl` 真实存在（可空），
+                    有图就渲染真图；只有「没有图」才退昵称首字 —— 首字是缺图的降级呈现，
+                    不是这个人的身份。首字降级与 `conversation` 同款
+                    （`watchers` 的缺图降级是 `—`，不是首字，别照抄那一处）。
+                    不做占位色块：本页有首字可退，比通用色块更可辨。 */}
                 <View className="uhome__avatar">
-                  <Text className="uhome__avatar-tx">{profile.nickname.slice(0, 1)}</Text>
+                  {profile.avatarUrl ? (
+                    <Image
+                      className="uhome__avatar-img"
+                      src={profile.avatarUrl}
+                      mode="aspectFill"
+                    />
+                  ) : (
+                    <Text className="uhome__avatar-tx">{profile.nickname.slice(0, 1)}</Text>
+                  )}
                 </View>
                 <View className="uhome__pinfo">
                   <View className="uhome__nameRow">
