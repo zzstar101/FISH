@@ -281,7 +281,14 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | 同上，prompt 加"只输出正文"约束 | 2.4s | ✅ 3 段、6 个标记全保留、无字段名泄露，596 tok |
 | 同上 + `thinking:{type:'disabled'}` | **1.3s** | ✅ 3 段、标记全保留，258 tok |
 
-**端到端真实调用（2026-09-21，经完整链路 router → service → provider → DeepSeek `deepseek-flash`）**：`thinking:{type:'disabled'}` + `max_tokens=2000` + `temperature=0.7`，一次请求 3 段候选**全部通过四层过滤**（`filtered_count=0`、`outcome=OK`），上游耗时 **932ms**（provider 直连探针 991ms），tokens 295/157，手机号标记已回填。样本仍是个位数，**不构成质量结论**（§11-R6）。
+**端到端真实调用（2026-09-21，完整链路 router → service → provider → DeepSeek `deepseek-flash`）**：参数 `thinking:{type:'disabled'}` + `max_tokens=2000` + `temperature=0.7`。
+
+- 单次抽查（prompt v1）：3 段候选全过过滤（`filtered_count=0`、`outcome=OK`），**932ms**，tokens 295/157，手机号标记已回填。
+- **20 条真实描述验收（prompt v2；覆盖全部 8 个分类，含带手机号、带地址、带型号数字、无数字、以及原文写"加微信"的样本）**：候选 **60/60 保留、0 丢弃**；延迟 min 698 / 中位 1095 / max 1889 ms（预算 8000ms，余量充足）；tokens 合计 prompt 6327 + completion 2181（单条 307~337 / 74~160）。
+- prompt v1 跑同一批样本是 57/60——唯一被全丢的是"原文写『加微信详聊』"那条（三条候选都照抄"加微信"→ 命中 `EXTERNAL_CONTACT → REVIEW`），prompt v2 禁止这类字样后该样本 3/3 通过（见 §5.6d 口径）。
+- 复跑方式：`AI_POLISH_TRANSPORT=live AI_POLISH_BASE_URL=https://api.deepseek.com bun --env-file=.env apps/api/scripts/ai-polish-live-probe.ts <samples.jsonl>`（JSONL 每行 `{title,description,category}`，逐条打印四层判定）。
+
+样本量为 20 条级且由单一构造者编写，**不构成质量结论**：`thinking` 开/关与 `temperature` 的最终取值仍需 Owner 用真实描述对比后定（§0-2、§11-R6）。
 
 四条结论：
 
@@ -311,11 +318,12 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | R1 | **不设成本上限、不告警**：脚本化滥用被每用户配额挡住，但单账号 30 次/日的成本无人止血 | Owner 本期决定；`prompt_tokens`/`completion_tokens` 已落表可事后查 |
 | R2 | **无后台可配**：换模型 / 改 prompt / 调配额都要发版 | 归 #73 写操作范围，待其冻结 |
 | R3 | **标记被改写的真实比率未知** | 只有 `live` 批量调用能测；`outcome=TOKEN_LOST` 已为其预留指标 |
-| R4 | **数字 ⊆ 校验的真实误杀率未知** → 候选经常 1 条还是 3 条不知道 | 同上，靠 `filtered_count` 观察 |
+| R4 | **数字 ⊆ 校验的真实误杀率未知** → 候选经常 1 条还是 3 条不知道 | 同 R3。20 条验收里三层过滤零误杀；**已识别但未触发的一类**：归一化会剥掉空白，`iPhone 13 128G` 被拼成令牌 `13128g`，若模型改写数字顺序（如 `128G 的 iPhone 13`）会拆成 `128g` + `13` 而被判"新增事实"——Owner 2026-09-21 决定先观察不修（修它要动 §5.6c 的核心）。继续靠 `filtered_count` 观察 |
 | R5 | **moderation 前置丢弃率未知** | 同上 |
 | R6 | **`live` 从未批量验证**，首次真实调用验收责任在 Owner | 本文与 #141 均不声称"AI 已可用" |
 | R7 | 开发期 key 进过会话上下文 | 按"贴出即泄露"处理，PR 合并后轮换 |
 | R8 | #142 依赖 #129 合入，若 #129 长期挂起则客户端无法收口 | 已在 PR #129 登记依赖 |
+| R9 | 部署手册 §11.6 与 §10 的交叉引用仍写"**四个** API 专属变量"（`docs/deployment.md:947`、`:840`），未覆盖 §4 新增的 AI 变量 | 走 §11（无 `EnvironmentFile`）的运维会漏配 → API 启动失败 + `Restart=always` 反复重启。**只报告不修**：§3.4 的破例只授权改 §4；Owner 2026-09-21 决定先不动，后续单开 Issue 或并入下一个文档 PR |
 
 ---
 
