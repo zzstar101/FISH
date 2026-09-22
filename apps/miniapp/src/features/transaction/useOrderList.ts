@@ -30,17 +30,26 @@ export type OrderListData = {
 }
 
 /**
- * 「当前该不该有列表」的**纯函数**判定（供 `tests/order-list-state.ts` 锁行为）。
+ * 「当前该不该有列表」的**纯函数**判定（供 `tests/order-list-state.test.ts` 锁行为）。
  *
- * - `userId === null`：登录态未就绪或未登录 —— 不加载（页面此时根本不渲染列表）。
- * - `identity === userId`：列表已属于当前账号 —— 不用动。
- * - 其余（首次拿到身份 / 换账号 / 退出重登）：把列表整片作废，等页面触发加载。
+ * - `userId === null` 且手里没有账号数据：`idle` —— 不加载、也没什么可清。
+ * - `userId === null` 但手里还挂着账号数据（退出登录）：`reset` —— 整片作废。
+ * - `identity === userId`：列表已属于当前账号 —— `keep`，不用动。
+ * - 其余（首次拿到身份 / 换账号）：`reset`，把列表整片作废，等页面触发加载。
  */
 export function nextIdentityState(
   identity: string | null,
   userId: string | null,
 ): 'idle' | 'reset' | 'keep' {
-  if (userId === null) return 'idle'
+  if (userId === null) {
+    /*
+     * 这里**必须**区分「本来就没有数据」与「退出登录后还剩着上一个账号的数据」：
+     * 前者返回 `reset` 会让渲染期重置每帧都执行 `setItems([])` —— 新数组引用每次都算
+     * 状态变化，而 `identity` 本来就是 `null`、`setIdentity(null)` 不改变它，于是判定
+     * 永远是 `reset`，直接渲染死循环。
+     */
+    return identity === null ? 'idle' : 'reset'
+  }
   if (identity !== userId) return 'reset'
   return 'keep'
 }
@@ -66,7 +75,9 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
    * 才生效。自增代次也放在这里（同步），上一个账号的迟到响应在微任务窗口里
    * 就已经被判过期，写不进刚清空的 state。
    *
-   * `userId === null`（未登录 / 未就绪）同样走清空：退出登录回到这页不能残留旧账号订单。
+   * `userId === null`（未登录 / 未就绪）时手里还挂着上一个账号的数据（退出登录）同样走清空：
+   * 退出登录回到这页不能残留旧账号订单。冷启动首帧（`identity` 也还是 `null`）不在此列，
+   * 原因见 `nextIdentityState` 的说明。
    */
   const [identity, setIdentity] = useState<string | null>(null)
   const identityState = nextIdentityState(identity, userId)
@@ -79,8 +90,23 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
     setTruncated(false)
   }
 
+  /**
+   * 最新身份。命令式 `reload`（下拉刷新 / 从子页面返回重拉）要按它判断该不该发请求；
+   * 走 ref 读最新值，这样 `reload` 的依赖里不必出现 `userId`（否则它的身份每换一次账号就变，
+   * 页面那个登录态 effect 会跟着多跑一轮）。
+   */
+  const userIdRef = useRef(userId)
+  userIdRef.current = userId
+
   const reload = useCallback(
     (options?: { keepList?: boolean }): Promise<void> => {
+      /*
+       * 登录态未就绪 / 已退出：**不发请求**。`/transactions` 整条挂在 requireAuth 之下，
+       * 这个时点发出去必然 401 —— 开发 / 预览构建还会被那次 401 退成 mock。页面在
+       * `authed` 之后由登录态 effect 补一次，请求不会丢。
+       */
+      if (userIdRef.current === null) return Promise.resolve()
+
       const id = requestId.current + 1
       requestId.current = id
       if (!options?.keepList) setLoading(true)
