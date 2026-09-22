@@ -58,7 +58,8 @@ export function UserPage({ userId }: { userId: string }) {
             <AuthBadge status={person.verified ? 'VERIFIED' : 'UNVERIFIED'} />
           </p>
           <p className="mt-1 truncate text-ink-3 text-xs">
-            {person.college} · {person.campus} · {person.joinedAt} 加入
+            {/* #86 F：产品不采集 / 不公开校区，演示态同步移除 */}
+            {person.college} · {person.joinedAt} 加入
           </p>
         </div>
         <Button

@@ -169,7 +169,7 @@ export function createApp(
 
   // 个人中心（#12）：单个只读聚合接口，直接查已合并的 listings/wishes/transactions 表，
   // 不调用其他 Domain API、不承担写操作（Issue 的并行原则）。user 块取 requireAuth
-  // 写入的 Me（campus 脏值回退在 auth 内完成），storage 复用同一实例拼封面 URL。
+  // 写入的 Me（avatarUrl 脏值回退在 auth 的 toMe 内完成），storage 复用同一实例拼封面 URL。
   app.route(
     '/profile',
     createProfileRouter({

@@ -14,3 +14,7 @@ coverage/
 # #68 dev 邮件 outbox（本地验证码投递目标，非日志）
 .dev/
 apps/api/src/modules/auth/.test-outbox-*/
+
+# 本机 agent 工具的本地目录（不属于仓库内容）
+.workbuddy/
+.zcodeignore

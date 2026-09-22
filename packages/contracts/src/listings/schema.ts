@@ -132,12 +132,14 @@ export type ListingImage = z.infer<typeof ListingImageSchema>
  * #68 后 `authStatus` 只能由真实校园邮箱验证产生（注册不再认证、Mock 已删），
  * 可信度成立，公开徽章是认证体系的价值所在；但它只作展示，前端不得当权限判据。
  * `verifiedAt` / `campusEmail` 仍不公开：验证时间与邮箱属于本人信息。
+ *
+ * #86（2026-09-22 产品冻结）：不采集、不公开校区——这里**没有** `campus` 字段，
+ * 商品详情与公开主页共用同一口径（#86 F 节），不存在「详情页特批公开」的第二事实源。
  */
 export const ListingSellerSchema = MeSchema.pick({
   id: true,
   nickname: true,
   avatarUrl: true,
-  campus: true,
 }).extend({ authStatus: AuthStatusSchema })
 
 export type ListingSeller = z.infer<typeof ListingSellerSchema>

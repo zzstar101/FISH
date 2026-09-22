@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { AuthResponseSchema } from '@fish/contracts/auth/session'
 import { createDb, type Db } from '@fish/db/client'
 import { sessions } from '@fish/db/schema/sessions'
-import { users } from '@fish/db/schema/users'
+import { users, wechatIdentities } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
 import { loadServerEnv } from '@fish/shared/env'
 import { and, desc, eq, sql } from 'drizzle-orm'
@@ -69,7 +69,6 @@ const registerBody = (overrides: Record<string, unknown> = {}) => ({
   studentNo: '202101000101',
   password: DEMO_PASSWORD,
   nickname: '测试甲',
-  campus: '肇庆',
   ...overrides,
 })
 
@@ -117,7 +116,6 @@ describe('POST /auth/register', () => {
     const body = AuthResponseSchema.parse(await res.json())
     expect(body.user).toMatchObject({
       nickname: '测试甲',
-      campus: '肇庆',
       authStatus: 'UNVERIFIED',
     })
     expect(body.user.verifiedAt).toBeNull()
@@ -168,11 +166,13 @@ describe('POST /auth/register', () => {
     expect(concurrent.map((res) => res.status).sort()).toEqual([200, 409])
   })
 
-  test('非法入参：422 VALIDATION_FAILED（密码过短 / 学号含字母 / 多余字段）', async () => {
+  test('非法入参：422 VALIDATION_FAILED（密码过短 / 学号含字母 / 多余字段 / 已删除的 campus）', async () => {
     const bodies = [
       registerBody({ password: 'short' }),
       registerBody({ studentNo: '20210100010a' }),
       { ...registerBody(), extra: 'nope' },
+      // #86 F：campus 字段已随产品决定整体移除，strictObject 必须显式拒绝而不是静默丢弃
+      { ...registerBody(), campus: '肇庆' },
     ]
 
     for (const body of bodies) {
@@ -209,7 +209,7 @@ describe('POST /auth/login', () => {
 })
 
 describe('GET /me', () => {
-  test('返回昵称/头像/校区/认证状态，且响应体不含学号与密码哈希', async () => {
+  test('返回昵称/头像/认证状态/手机派生态，且响应体不含学号与密码哈希', async () => {
     const studentNo = '202101000108'
     await register({ studentNo, nickname: '测试己' })
 
@@ -220,9 +220,10 @@ describe('GET /me', () => {
     expect(Object.keys(AuthResponseSchema.parse(JSON.parse(text)).user).sort()).toEqual([
       'authStatus',
       'avatarUrl',
-      'campus',
       'id',
+      'maskedPhone',
       'nickname',
+      'phoneBound',
       'verifiedAt',
     ])
     // 「不公开完整学号」的硬断言：学号、哈希、列名都不允许出现在响应里
@@ -287,9 +288,7 @@ describe('Provider 边界', () => {
       studentNo: '202101000113',
       password: DEMO_PASSWORD,
       nickname: '测试无Provider',
-      campus: '广州',
     })
-    expect(user.campus).toBe('广州')
     expect(user.authStatus).toBe('UNVERIFIED')
   })
 })
@@ -980,5 +979,132 @@ describe('绑定原子性（评审二轮 P2-3）', () => {
       .from(users)
       .where(eq(users.campusEmail, winnerEmail))
     expect(rows).toEqual([{ campusEmail: winnerEmail }])
+  })
+})
+
+describe('POST /auth/wechat/session（#86 A：微信登录 stub）', () => {
+  test('新 code 自动建号并登录：UNVERIFIED、无学号、无校区，响应不含任何微信凭据', async () => {
+    const res = await app.request('/auth/wechat/session', post({ code: 'wechat-test-code-1' }))
+    expect(res.status).toBe(200)
+
+    const body = AuthResponseSchema.parse(await res.json())
+    expect(body.user.authStatus).toBe('UNVERIFIED')
+    expect(body.user.phoneBound).toBe(false)
+    expect(body.user.maskedPhone).toBeNull()
+    expect(res.headers.getSetCookie().join(' | ')).toContain('fish_session=')
+
+    const text = JSON.stringify(body)
+    expect(text).not.toContain('openid')
+    expect(text).not.toContain('session_key')
+
+    // DB 侧：wechat_identities 有一条映射，users 行 student_no / password_hash 为 NULL
+    const identity = await scratch
+      .select({
+        studentNo: users.studentNo,
+        passwordHash: users.passwordHash,
+        openid: wechatIdentities.openid,
+      })
+      .from(wechatIdentities)
+      .innerJoin(users, eq(users.id, wechatIdentities.userId))
+    const mine = identity.find((row) => row.openid !== null)
+    expect(mine).toBeDefined()
+    expect(mine?.studentNo).toBeNull()
+    expect(mine?.passwordHash).toBeNull()
+  })
+
+  test('同一 code 重复登录：幂等返回同一用户，不重复建号', async () => {
+    const first = await app.request('/auth/wechat/session', post({ code: 'wechat-idem-code' }))
+    expect(first.status).toBe(200)
+    const firstUser = AuthResponseSchema.parse(await first.json()).user
+
+    const second = await app.request('/auth/wechat/session', post({ code: 'wechat-idem-code' }))
+    expect(second.status).toBe(200)
+    const secondUser = AuthResponseSchema.parse(await second.json()).user
+
+    expect(secondUser.id).toBe(firstUser.id)
+
+    const mappings = await scratch
+      .select({ openid: wechatIdentities.openid })
+      .from(wechatIdentities)
+      .where(eq(wechatIdentities.userId, firstUser.id))
+    expect(mappings).toHaveLength(1)
+  })
+
+  test('不同 code 是不同身份：两个用户互不串号', async () => {
+    const resA = await app.request('/auth/wechat/session', post({ code: 'wechat-user-a' }))
+    const resB = await app.request('/auth/wechat/session', post({ code: 'wechat-user-b' }))
+    const userA = AuthResponseSchema.parse(await resA.json()).user
+    const userB = AuthResponseSchema.parse(await resB.json()).user
+    expect(userA.id).not.toBe(userB.id)
+
+    // A 的会话访问 /me 是 A 本人
+    const meRes = await app.request('/me', withCookie(sessionCookie(resA)))
+    expect(meRes.status).toBe(200)
+    const meBody = AuthResponseSchema.parse(await meRes.json())
+    expect(meBody.user.id).toBe(userA.id)
+  })
+
+  test('非法入参（多余字段 / 空 code）：422', async () => {
+    const extra = await app.request(
+      '/auth/wechat/session',
+      post({ code: 'wechat-x', openid: 'fake-openid' }),
+    )
+    expect(extra.status).toBe(422)
+
+    const empty = await app.request('/auth/wechat/session', post({ code: '' }))
+    expect(empty.status).toBe(422)
+  })
+})
+
+describe('POST /auth/phone/bind（#86 C：手机号绑定 stub）', () => {
+  test('登录后绑定：200 返回脱敏号；/me 出 phoneBound + maskedPhone，不出明文', async () => {
+    const studentNo = '202101000201'
+    await register({ studentNo, nickname: '绑手机用户' })
+    const cookie = sessionCookie(await login(studentNo))
+
+    const res = await app.request('/auth/phone/bind', postWith(cookie, { code: '19912345678' }))
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({ phoneBound: true, maskedPhone: '199****5678' })
+
+    const meRes = await app.request('/me', withCookie(cookie))
+    const meText = await meRes.text()
+    const meBody = AuthResponseSchema.parse(JSON.parse(meText))
+    expect(meBody.user.phoneBound).toBe(true)
+    expect(meBody.user.maskedPhone).toBe('199****5678')
+    expect(meText).not.toContain('19912345678')
+  })
+
+  test('同一手机号绑到第二个账号：409 PHONE_ALREADY_BOUND', async () => {
+    const studentNoA = '202101000202'
+    await register({ studentNo: studentNoA, nickname: '手机占用者' })
+    const cookieA = sessionCookie(await login(studentNoA))
+
+    const bindA = await app.request('/auth/phone/bind', postWith(cookieA, { code: '19888887777' }))
+    expect(bindA.status).toBe(200)
+
+    const studentNoB = '202101000203'
+    await register({ studentNo: studentNoB, nickname: '抢号者' })
+    const cookieB = sessionCookie(await login(studentNoB))
+
+    const bindB = await app.request('/auth/phone/bind', postWith(cookieB, { code: '19888887777' }))
+    expect(bindB.status).toBe(409)
+    expect(await bindB.json()).toMatchObject({ error: { code: 'PHONE_ALREADY_BOUND' } })
+
+    // 失败方不得破坏已有会话：仍然能正常访问 /me
+    const meRes = await app.request('/me', withCookie(cookieB))
+    expect(meRes.status).toBe(200)
+  })
+
+  test('未登录调用：401 UNAUTHENTICATED；凭证不是 11 位手机号：422 PHONE_CODE_INVALID', async () => {
+    const anon = await app.request('/auth/phone/bind', post({ code: '19912345678' }))
+    expect(anon.status).toBe(401)
+
+    const studentNo = '202101000204'
+    await register({ studentNo, nickname: '格式校验用户' })
+    const cookie = sessionCookie(await login(studentNo))
+    const bad = await app.request('/auth/phone/bind', postWith(cookie, { code: '12345' }))
+    expect(bad.status).toBe(422)
+    expect(await bad.json()).toMatchObject({ error: { code: 'PHONE_CODE_INVALID' } })
   })
 })

@@ -225,10 +225,6 @@ export default function Match() {
                     {view.seller ? (
                       <Text className="match__rseller">{view.seller.nickname}</Text>
                     ) : null}
-                    {/* 校区契约里可为 null：缺了不渲染，不拼「null校区」 */}
-                    {view.seller?.campus ? (
-                      <Text className="match__rcampus">{`${view.seller.campus}校区`}</Text>
-                    ) : null}
                   </View>
 
                   {/* 匹配度：百分比 + 进度条 */}

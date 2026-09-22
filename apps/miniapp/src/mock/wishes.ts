@@ -26,7 +26,6 @@ type WishSpec = {
   description: string | null
   matchCount: number
   status?: WishStatus
-  campus: MockWish['campus']
   timeLabel: string
   hoursAgo: number
 }
@@ -41,7 +40,6 @@ const SPECS: WishSpec[] = [
     max: 50,
     description: '考研用 · 八成新即可，可接受少量笔记 · 校内自提',
     matchCount: 3,
-    campus: '肇庆',
     timeLabel: '3 小时前',
     hoursAgo: 3,
   },
@@ -54,7 +52,6 @@ const SPECS: WishSpec[] = [
     max: 40,
     description: '只要正版，笔记多也没关系',
     matchCount: 2,
-    campus: '肇庆',
     timeLabel: '3 小时前',
     hoursAgo: 3,
   },
@@ -67,7 +64,6 @@ const SPECS: WishSpec[] = [
     max: 1800,
     description: '网课记笔记用，成色好可以加价',
     matchCount: 3,
-    campus: '广州',
     timeLabel: '昨天',
     hoursAgo: 27,
   },
@@ -80,7 +76,6 @@ const SPECS: WishSpec[] = [
     max: 600,
     description: '宿舍练手用，41 寸最好',
     matchCount: 1,
-    campus: '肇庆',
     timeLabel: '昨天',
     hoursAgo: 30,
   },
@@ -93,7 +88,6 @@ const SPECS: WishSpec[] = [
     max: 300,
     description: '要能放下一层饮料，静音最重要',
     matchCount: 0,
-    campus: '肇庆',
     timeLabel: '2 天前',
     hoursAgo: 52,
   },
@@ -106,7 +100,6 @@ const SPECS: WishSpec[] = [
     max: 250,
     description: '青轴或茶轴都行，要能连笔记本',
     matchCount: 4,
-    campus: '肇庆',
     timeLabel: '2 天前',
     hoursAgo: 55,
   },
@@ -119,7 +112,6 @@ const SPECS: WishSpec[] = [
     max: 60,
     description: '2015 年以后的版本都可以',
     matchCount: 2,
-    campus: '广州',
     timeLabel: '3 天前',
     hoursAgo: 74,
   },
@@ -132,7 +124,6 @@ const SPECS: WishSpec[] = [
     max: 150,
     description: '带拍包更好，周末打球用',
     matchCount: 1,
-    campus: '肇庆',
     timeLabel: '3 天前',
     hoursAgo: 78,
   },
@@ -146,7 +137,6 @@ const SPECS: WishSpec[] = [
     description: '要白色，键帽不能打油',
     matchCount: 1,
     status: 'FULFILLED',
-    campus: '肇庆',
     timeLabel: '5 天前',
     hoursAgo: 120,
   },
@@ -160,7 +150,6 @@ const SPECS: WishSpec[] = [
     description: '三档调光就行',
     matchCount: 2,
     status: 'CLOSED',
-    campus: '肇庆',
     timeLabel: '6 天前',
     hoursAgo: 150,
   },
@@ -174,7 +163,6 @@ const SPECS: WishSpec[] = [
     max: 400,
     description: '想收一台 23~24 寸的 IPS 屏，无坏点即可',
     matchCount: 3,
-    campus: '肇庆',
     timeLabel: '4 天前',
     hoursAgo: 96,
   },
@@ -201,7 +189,6 @@ export const WISHES: MockWish[] = [
     status: spec.status ?? 'ACTIVE',
     matchCount: spec.matchCount,
     createdAt: iso(spec.hoursAgo),
-    campus: spec.campus,
     timeLabel: spec.timeLabel,
   })),
 ]

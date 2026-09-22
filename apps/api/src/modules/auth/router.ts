@@ -1,18 +1,25 @@
+import { PhoneBindRequestSchema, PhoneBindResponseSchema } from '@fish/contracts/auth/phone'
 import { LoginRequestSchema, RegisterRequestSchema } from '@fish/contracts/auth/session'
 import {
   SendCodeRequestSchema,
   SendCodeResponseSchema,
   VerifyCodeRequestSchema,
 } from '@fish/contracts/auth/verification'
+import {
+  WechatSessionRequestSchema,
+  WechatSessionResponseSchema,
+} from '@fish/contracts/auth/wechat'
 import { errorBody } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
 import { type Context, type Handler, Hono } from 'hono'
 import { AuthError } from './errors'
+import { maskPhone } from './me'
 import { type AuthVariables, createRequireAuth } from './middleware'
 import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
 import type { VerificationService } from './verification-service'
 import { VerificationError } from './verification-store'
+import { createStubWechatIdentityProvider, createWechatAuthService } from './wechat-service'
 
 /** JSON 解析失败（空体 / 非 JSON）也按参数不合法处理，而不是让 Hono 抛 500。 */
 async function readJson(c: Context): Promise<unknown> {
@@ -46,8 +53,51 @@ export function createAuthModule(options: {
   const cookie = createSessionCookie(options.secureCookie)
   const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
   const requireAuth = createRequireAuth({ cookie, service })
+  // #86 A：当前仓库没有小程序 AppSecret，真实 Provider（jscode2session）接入前
+  // 只有 stub 实现——「同一 code 同一 openid」的幂等语义与真实接口一致；
+  // 拿到真实凭证时只替换 provider，登录 / 建号 / 会话语义不变。
+  const wechat = createWechatAuthService({
+    db: options.db,
+    sessions: createSessions(options.db),
+    provider: createStubWechatIdentityProvider(),
+  })
 
   const router = new Hono<{ Variables: AuthVariables }>()
+
+  // ---- 微信登录（#86 A）：Miniapp 主身份入口 ----
+  router.post('/wechat/session', async (c) => {
+    const parsed = WechatSessionRequestSchema.safeParse(await readJson(c))
+    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+
+    try {
+      const { user, token, expiresAt } = await wechat.signIn(parsed.data)
+      cookie.attach(c, token, expiresAt)
+      return c.json(WechatSessionResponseSchema.parse({ user }))
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // ---- 手机号绑定（#86 C）：只追加绑定，不动已有会话 ----
+  router.post('/phone/bind', requireAuth, async (c) => {
+    const parsed = PhoneBindRequestSchema.safeParse(await readJson(c))
+    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+
+    try {
+      // stub：phone code 即明文手机号（getPhoneNumber 真实接入需要企业主体 + AppSecret，
+      // 到位后只替换这段解析，绑定语义不变）。11 位手机号在服务端再收口一次。
+      const phone = parsed.data.code.trim()
+      if (!/^1\d{10}$/.test(phone)) {
+        return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效'), 422)
+      }
+      await service.bindPhone(c.get('userId'), phone)
+      return c.json(
+        PhoneBindResponseSchema.parse({ phoneBound: true, maskedPhone: maskPhone(phone) }),
+      )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
 
   // 注册即登录：响应体与 /me 同构，前端不需要再打一次 /auth/login
   router.post('/register', async (c) => {

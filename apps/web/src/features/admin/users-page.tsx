@@ -95,7 +95,6 @@ export function UsersPage({ search }: { search: AdminUsersSearch }) {
             <thead className="bg-surface-2 text-left text-xs text-ink-3">
               <tr>
                 <th className="px-3 py-2 font-medium">昵称 / 学号</th>
-                <th className="hidden px-3 py-2 font-medium sm:table-cell">校区</th>
                 <th className="px-3 py-2 font-medium">认证</th>
                 <th className="px-3 py-2 font-medium">角色</th>
                 <th className="hidden px-3 py-2 font-medium md:table-cell">商品数</th>
@@ -108,10 +107,9 @@ export function UsersPage({ search }: { search: AdminUsersSearch }) {
                 <tr key={item.id} className="hover:bg-surface-2/60">
                   <td className="px-3 py-2.5">
                     <p className="font-medium">{item.nickname}</p>
-                    <p className="mt-0.5 text-xs text-ink-3">{item.studentNoMasked}</p>
-                  </td>
-                  <td className="hidden px-3 py-2.5 text-ink-2 sm:table-cell">
-                    {item.campus ?? '—'}
+                    <p className="mt-0.5 text-xs text-ink-3">
+                      {item.studentNoMasked ?? '未绑定学号'}
+                    </p>
                   </td>
                   <td className="px-3 py-2.5">
                     <Badge

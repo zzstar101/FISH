@@ -83,7 +83,6 @@ import info from '@/assets/lib-icons/info@3x.png'
 import infoMuted from '@/assets/lib-icons/info-muted@3x.png'
 import key from '@/assets/lib-icons/key@3x.png'
 import location from '@/assets/lib-icons/location@3x.png'
-import locationPin from '@/assets/lib-icons/location-pin@3x.png'
 import lock from '@/assets/lib-icons/lock@3x.png'
 import lockWhite from '@/assets/lib-icons/lock-white@3x.png'
 import mail from '@/assets/lib-icons/mail@3x.png'
@@ -242,7 +241,6 @@ export const ICONS = {
   micWhite,
   voiceWave,
   location,
-  locationPin,
   cart,
   coupon,
   credit,

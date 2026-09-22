@@ -25,13 +25,14 @@ export const DEMO_AUTH_ENABLED = __DEMO_AUTH__ === true
 /**
  * 形状照 `MeSchema`（`packages/contracts/src/auth/user.ts`）：
  * `id` 是合法 uuid v4（页面可能拿它当 key 或做契约解析），
- * `campus` / `authStatus` 取真实值域里的值，`avatarUrl` 给 null 让页面走首字母兜底。
+ * `authStatus` 取真实值域里的值，`avatarUrl` 给 null 让页面走首字母兜底。
  */
 export const DEMO_USER: Me = {
   id: '9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f',
   nickname: '演示同学',
   avatarUrl: null,
-  campus: '肇庆',
   authStatus: 'VERIFIED',
   verifiedAt: '2026-01-01T00:00:00.000Z',
+  phoneBound: false,
+  maskedPhone: null,
 }

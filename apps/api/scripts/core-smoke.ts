@@ -179,7 +179,6 @@ async function register(base: string, serial: number): Promise<Cookie> {
     studentNo: `2021000000${String(serial).padStart(2, '0')}`,
     password: PASSWORD,
     nickname: `验收用户${serial}`,
-    campus: '肇庆',
   })
   assertEqual(response.status, 200, `注册账号 #${serial}`)
   return cookieOf(response)

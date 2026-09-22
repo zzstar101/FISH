@@ -184,7 +184,6 @@ function detail(id: string, nickname: string): ListingDetail {
       id: SELLER_ID,
       nickname,
       avatarUrl: null,
-      campus: '肇庆',
       authStatus: 'UNVERIFIED',
     },
     isOwner: false,
@@ -401,12 +400,11 @@ describe('写操作请求构造', () => {
 })
 
 describe('契约 → 页面视图的投影', () => {
-  test('toMockWish：校区契约没有 → null；timeLabel 由 createdAt 现算', () => {
+  test('toMockWish：契约字段透传；timeLabel 由 createdAt 现算', () => {
     const createdAt = new Date(Date.now() - 2 * 3600 * 1000).toISOString()
     const view = toMockWish(wish({ id: 'w-1', createdAt, matchCount: 5 }))
 
     expect(view.id).toBe('w-1')
-    expect(view.campus).toBeNull()
     expect(view.timeLabel).toBe('2 小时前')
     expect(view.matchCount).toBe(5)
     // 契约没有所有者 id 的用途：不编一个

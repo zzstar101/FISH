@@ -140,11 +140,6 @@
   }
 }
 
-/* 校区行：整行可点（原生选择器） */
-.reg__input--tap:active {
-  background: var(--accent-weak);
-}
-
 .reg__val {
   flex: 1;
   min-width: 0;
@@ -164,12 +159,6 @@
 .reg__ph {
   font-size: 30px;
   color: var(--muted);
-}
-
-.reg__chev {
-  flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
 }
 
 .reg__help {

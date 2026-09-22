@@ -7,7 +7,7 @@ export type ProfileRouterOptions = {
   service: ProfileService
   /**
    * 个人中心全是本人数据，没有匿名路径，整条挂 requireAuth。
-   * 认证守卫已把 `Me`（含 campus 脏值回退）写入 context，user 块直接取它，
+   * 认证守卫已把 `Me`（含 avatarUrl 脏值回退）写入 context，user 块直接取它，
    * 不再重复查询 users 表——与 auth 的 toMe 映射不会漂移。
    */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>

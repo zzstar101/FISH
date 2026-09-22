@@ -215,7 +215,7 @@ export async function loadListingDetail(
     // 看起来像「这个分类恰好没有同类商品」或「这个卖家恰好没卖过东西」。
     //
     // 卖家公开资料只为了「卖出 N 件」这一个数：详情契约的 `ListingSellerSchema` 里没有它
-    // （只有 id / nickname / avatarUrl / campus / authStatus），所以走 #122 的公开端点。
+    // （只有 id / nickname / avatarUrl / authStatus），所以走 #122 的公开端点。
     // 认证状态**不**从这里取：详情响应本身就带真值，不必多一次请求去问同一件事。
     const [similar, sellerProfile] = await Promise.all([
       fetchSimilarListings(detail.category, detail.id).catch((error) => {

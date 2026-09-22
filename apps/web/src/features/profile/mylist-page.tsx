@@ -258,9 +258,7 @@ function FollowList({ users }: { users: User[] }) {
               <span className="truncate font-medium text-[15px]">{user.nickname}</span>
               {user.verified ? <Badge variant="success">已认证</Badge> : null}
             </p>
-            <p className="mt-0.5 truncate text-ink-3 text-xs">
-              {user.college} · {user.campus}
-            </p>
+            <p className="mt-0.5 truncate text-ink-3 text-xs">{user.college}</p>
           </div>
         </li>
       ))}

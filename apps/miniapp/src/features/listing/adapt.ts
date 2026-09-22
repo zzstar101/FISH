@@ -113,8 +113,8 @@ export function toMockListings(cards: ListingCard[], now: number = Date.now()): 
 
 /**
  * 详情页的卖家：契约 `ListingDetail.seller` 有
- * `id / nickname / avatarUrl / campus / authStatus`（`ListingSellerSchema` =
- * `MeSchema.pick({id,nickname,avatarUrl,campus}).extend({authStatus})`）。
+ * `id / nickname / avatarUrl / authStatus`（`ListingSellerSchema` =
+ * `MeSchema.pick({id,nickname,avatarUrl}).extend({authStatus})`；#86 F 后无校区字段）。
  *
  * **`authStatus` 用契约真值**（#122 修正）：此前这里硬写 `'UNVERIFIED'`，注释理由是
  * 「当前 authStatus 来自 Mock Provider，不可作为信任依据」——那条理由在 #68 之后已不成立
@@ -122,7 +122,6 @@ export function toMockListings(cards: ListingCard[], now: number = Date.now()): 
  * 置 VERIFIED 后 `GET /listings/:id` 立即返回 VERIFIED）。继续硬写会让小程序详情页的
  * 认证勾**永远不显示**，而 Web 端详情页一直用的是真值（两个端口径不一致）。
  *
- * `campus` 仍然原样透传但不参与渲染（详情稿子口径：昵称行只有昵称 + 认证勾）；
  * `goodRate` 契约里没有、全仓也没有评价数据源 —— 恒 `null`，由页面不渲染。
  * `soldCount` 由调用方从公开资料端点（`GET /users/:id/public`）取来传进来，
  * 取不到就是 `null`（页面已有 `null` 守卫）。
@@ -134,9 +133,6 @@ export function toMockSeller(detail: ListingDetail, soldCount: number | null = n
     // 契约的 `avatarUrl` 可为 null。缺图给一张**通用占位色块**（复用 mock 既有的
     // `AVATAR_BLOCKS`）：占位图是「这张图没有」的呈现，不是编造这个人的身份。
     avatarUrl: detail.seller.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
-    // 契约的 `campus` 也可为 null。校区是**业务数据**，缺了就留 null，
-    // 由页面不渲染 —— 不能拿「肇庆/广州」里随便一个顶上。
-    campus: detail.seller.campus,
     authStatus: detail.seller.authStatus,
     soldCount,
     // 契约无这一项，且没有真实口径（无评价表）：不编百分比

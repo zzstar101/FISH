@@ -6,7 +6,7 @@ import {
 } from '@fish/contracts/auth/verification'
 import type { Db } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
-import { isUniqueViolation } from './service'
+import { isUniqueViolation } from './unique'
 import type { EmailVerificationProvider } from './verification-provider'
 import {
   CODE_TTL_MINUTES,
