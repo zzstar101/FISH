@@ -66,6 +66,12 @@ const result = await Bun.build({
     // 预览同样打开演示登录：评审要看到的是受限页（出物 / 消息 / 我的…）本身，
     // 而不是它们未登录时的引导卡。口径见 config/index.ts 的 __DEMO_AUTH__。
     __DEMO_AUTH__: 'true',
+    // AI 润色的 mock 兜底一并打开。**必须显式列出**：`features/ai/api.ts` 在模块顶层裸读
+    // 这个标识符（`__DEMO_AI_POLISH__ === true`），漏了它预览里一进「出物」页就 ReferenceError
+    // （与 `__API_BASE__` 那边要用 `typeof` 守卫是同一类问题）。预览的 Taro 桩没有 request，
+    // 出物页点润色必然传输层失败 —— 不注入它就永远看不到候选卡与 stub 角标。
+    // 口径见 config/index.ts 的 __DEMO_AI_POLISH__。
+    __DEMO_AI_POLISH__: 'true',
   },
   plugins: [previewPlugin],
   naming: {

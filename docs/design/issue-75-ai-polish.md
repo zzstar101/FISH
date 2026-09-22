@@ -4,7 +4,7 @@
 > 关联：需求载体 [#75](https://github.com/zzstar101/FISH/issues/75) ｜ 后端子单 [#141](https://github.com/zzstar101/FISH/issues/141)（已随 PR #148 合入）｜ 客户端子单 [#142](https://github.com/zzstar101/FISH/issues/142)（**已按 NOT_PLANNED 关闭、并入 [#74](https://github.com/zzstar101/FISH/issues/74) 统一维护**，原正文与验收保留为历史上下文）
 > 记录人：Coast-87（本机） ｜ 日期：2026-09-21 ｜ 实现分支：`feat/75-ai-polish-backend`（squash 合入，远端分支已删）
 > **行号基线**：`origin/main = ed561cd`（本分支 rebase 后的基线；原稿写于 `e3e909a`，行号已按新基线逐条复核）。本文引用的他人代码行号以此为准。
-> **客户端（#142 范围）复核基线**：`origin/main = c0bed1a`（2026-09-22 逐条复核，见 §10）。
+> **客户端（#142 范围）复核基线**：`origin/main = c0bed1a`（2026-09-22 逐条复核，见 §10）；**接线实现**已按 `origin/main = 8609c97` 重核并落地（见 §10.3 / §10.4）。
 > 决策来源：Owner 于 2026-09-21 分四轮逐条确认（完整取舍见 §12）；客户端接线的三项决策于 2026-09-22 确认（见 §10.2）。
 
 ---
@@ -340,6 +340,7 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 
 > **跟踪载体（2026-09-22）**：#142 已按 NOT_PLANNED 关闭并并入 [#74](https://github.com/zzstar101/FISH/issues/74) 维护，原正文与验收作为历史上下文保留、不再更新；**本节是客户端接线的权威版本**。
 > **复核基线**：`origin/main = c0bed1a`，`apps/miniapp/src/pages/sell/index.tsx` 共 929 行，下列行号已按此逐条复核。
+> **行号已过期**：接线实现落在 `feat/miniapp-ai-polish-sell`（基线 `origin/main = 8609c97`），本节开头那段按 c0bed1a 核过的行号仅作历史记录；**当前行号以 §10.3 为准**。
 > **不要拿 `feat/75-ai-polish-backend` 的本地工作副本当基线**：它停在 rebase 前的 `e3e909a`，落后 main 15 个提交（该分支已 squash 合入，远端分支已删）。
 
 完整清单见 #142，此处只记与后端契约耦合的点：
@@ -362,6 +363,41 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | 输入不齐（未选分类 / 标题不合法） | **本地先拦**：先 toast（与既有"先写一句描述再润色"（`:405-408`）对称）；若仍拿到 422，把 `details` 经 `sellFieldErrorsFromDetails` 落到对应输入框标红 | 不新增第二套字段级文案体系；服务端校验照常独立兜底 |
 | 429 长等待文案 | **> 60s 改粗粒度**："今天润色次数用完了，明天再来"；≤ 60s 才用"N 秒后再试" | 命中滚动 24h 配额时 `retryAfterSeconds` 可达数千至上万秒（`apps/api/src/modules/ai/store.ts` 的三个桶之一；`store.test.ts` 的「EMPTY 桶满后被拒」用例断言 `retryAfterSeconds > 3600`），一律"N 秒后再试"不可读 |
 | mock 兜底门禁 | **只认 `TARO_APP_MOCK=1`**（照 `__DEMO_AUTH__` 的严格先例，`apps/miniapp/config/index.ts:64`） | 复用 `__ALLOW_MOCK_FALLBACK__`（`:52-54`）会把 `NODE_ENV=development` 一起放进来：`dev:weapp` 下失败会静默显示本地假候选，而那种候选没有 `provider==='stub'` 角标可区分（§8.2） |
+
+### 10.3 实现落点（2026-09-22，分支 `feat/miniapp-ai-polish-sell`）
+
+> **本条基线**：`origin/main = 8609c97`。`apps/miniapp/src/pages/sell/index.tsx` 共 1118 行。
+
+| 文件 | 落点 |
+| --- | --- |
+| `apps/miniapp/src/pages/sell/polish.ts`（新，190 行） | 纯判定：失败码→文案（`polishFailureView`）、失败分流（`polishFailureRoute`）、429 两档文案与冷却（`polishQuotaMessage` / `polishCooldownFrom` / `tickPolishCooldown`）、按钮文案、轮播索引、本地前置拦截 |
+| `apps/miniapp/src/features/ai/api.ts`（新，62 行） | `POST /ai/polish-candidates` + `AiPolishCandidatesResponseSchema.parse`；传输层失败的 mock 兜底 |
+| `apps/miniapp/src/lib/request.ts:41`、`:154` | `ApiError` 增可选 `retryAfterSeconds` 并从信封透出（§10.1-1） |
+| `apps/miniapp/config/index.ts:76` | `__DEMO_AI_POLISH__`（只认 `TARO_APP_MOCK=1`，§10.2-3） |
+| `apps/miniapp/preview/build.mjs:74` | H5 预览的 `define` 补 `__DEMO_AI_POLISH__: 'true'`（见下） |
+| `apps/miniapp/src/pages/sell/form.ts:70` | `sellFieldErrorsFromDetails` 补 `category` 映射（见下） |
+| `apps/miniapp/src/pages/sell/index.tsx:115`、`:444-611`、`:1043-1118` | 状态机补 `failed`、冷却倒计时、失败分流、请求作废（`lib/cancellable`）、stub 警告条与脱敏说明渲染 |
+| `apps/miniapp/tests/sell-polish.test.ts`（新） | 上述纯判定的用例；`sell-form.test.ts` 另加 `category` 映射的回归用例 |
+
+本轮复核新查出的三条（§10.1 之外）：
+
+1. **`sellFieldErrorsFromDetails` 丢 `category`**：它原只映射 title / description / priceCents / objectKeys，而 AI 润色的 422 字段恰好只有 title / description / category —— §10.2 第 1 行那条「把 `details` 落到对应输入框」若原样执行，**分类这条错误会被静默丢弃**（用户只看到标题标红）。实际触发面比字面小（本次的本地前置拦截会先挡住「未选分类」），但该映射对发布 / PATCH 路径同样成立（`ListingCreateInput` 也带 `category`），且是「不新增第二套字段级文案体系」这条决策的前提。已补映射并加回归用例。
+2. **新构建常量必须同步进 H5 预览的 `define`**：`features/ai/api.ts` 在模块顶层裸读 `__DEMO_AI_POLISH__`，而 `preview/build.mjs` 的 `define` 是逐项列出的（`__ALLOW_MOCK_FALLBACK__` / `__DEMO_AUTH__`）—— 漏加则预览构建里该标识符原样保留，**一进「出物」页就 `ReferenceError`**（已实测：`preview/dist/preview.js` 里出现 `MOCK_FALLBACK_ENABLED2 = __DEMO_AI_POLISH__ === true`）。与 `lib/api-base.ts:16-19` 要给 `__API_BASE__` 加 `typeof` 守卫是同一类问题。修法是补 define（预览的 Taro 桩没有 `request`，不注入它就永远截不到候选卡与 stub 角标）。
+3. **两个错误码在端上不可达**。两条论断本身是事实（不是取舍）：`VALIDATION_FAILED`（422）被本地前置拦截（描述为空 / 标题 <2 字 / 未选分类）挡住、描述长度又被 `maxlength={500}` 限住，正常 UI 走不到服务端 422（服务端校验照常独立成立，只是端上触发不到）；`AI_NOT_CONFIGURED`（503）的 `isConfigured()`（`apps/api/src/modules/ai/service.ts:55-61`）唯一假分支要求 `baseUrl` 为空，而 `loadAiPolishEnv()`（`packages/shared/src/env.ts:105-112`）在那种配置下**启动即失败** —— 与 §4.2 自己写的「运行期兜底，正常应在启动即失败」一致。**据此把验收里的「演示六种错误码」收窄为「演示四个可达码 + 这两条由单测与本文覆盖」是 Owner 2026-09-22 的决定**，记在 §10.4 的「演示范围」一行，不是本节自行改的口径。
+
+### 10.4 接线实现时的补充决策（Owner 2026-09-22 确认）
+
+| 项 | 决策 | 理由 |
+| --- | --- | --- |
+| 失败态落点 | 留在 sheet 内（主文案 + 可选副文案 + 「重试」/「关闭」）；429 **不给重试**，另把入口按钮置灰 | 用户刚点过按钮，失败原因要落在同一个上下文里；429 再点只会再吃一次拒绝 |
+| 副文案 | 只有 `AI_TIMEOUT` / `AI_UPSTREAM_ERROR` / `AI_RESULT_EMPTY` / 枚举外兜底写「你的描述没有改动」 | #75「失败可无损返回」；配额与「未开放」不是「没轮到调用」，说它反而像在解释别的 |
+| >60s 的 429 | 不逐秒倒计时，按钮显示「今日次数已用完」并**在本次页面生命周期内保持置灰**（不写本地存储） | 真实等待可达上万秒；服务端始终是权威，重进页面复位后误点只会再吃一次 429，代价可接受 |
+| 429 没带 `retryAfterSeconds` | **仍置灰**，走 `unknown`（不编秒数，按钮只说「请稍后再试」）。契约里该字段是 `positive().optional()`，只有漂移会出现 | 要防的是「被拒了还能接着点、每点一次再吃一次」的循环；但也不能因此声称「今日次数已用完」—— 服务端三个桶里最可能命中的恰恰是 5s 间隔桶 |
+| 422 且字段级错误一个都认不出 | 留在 sheet 里说「有些内容没填对，请检查后再试」（不给「重试」），**不**关 sheet 去 toast。认得出字段才关 sheet + 标红 + toast | 关掉 sheet 只剩一句指向空的 toast（说你有错，却满屏找不到标红的地方）；同样的入参重试还是 422 |
+| 演示范围 | 端上演示**四个可达码**（429 / 504 / 502 上游 / 502 空结果）+ 正常 / 脱敏 / stub 角标 / 单候选 dot / 两种构建的失败差异；`VALIDATION_FAILED` 与 `AI_NOT_CONFIGURED` 由单测与 §10.3 覆盖 | 后两者在正常 UI 里按构造不可达（见 §10.3-3），为演示它们去改仓库代码不划算 |
+| 401 | 静默关 sheet，反馈交给 `useAuthGuard` 的跳登录。**已知边界**：`TARO_APP_MOCK=1` 构建里 store 刻意忽略会话清除（`features/auth/store.ts:61-66`），守卫不会跳转 —— 该构建若连真实后端（演示账号没有真会话）会表现为「点了没反应」；演示走生产构建 + seed 账号登录即可规避 | `apiRequest` 已清会话，再弹一句失败提示会与跳转打架 |
+| mock 兜底的边界 | 只覆盖**传输层失败**（`!isApiError`，即后端没起 / 断网）；服务端一旦给出信封（429 / 422 / 5xx）一律走真实错误 UI | 否则 429 会一边倒计时、一边在 sheet 里摆着本地假候选 |
+| 迟到响应 | 关 sheet（遮罩 / 放弃 / 采用）即 `cancellable.cancel()`，响应丢弃 | 请求要 1~8 秒（服务端上游超时 8s，客户端 `REQUEST_TIMEOUT_MS = 15s`），足够用户点两下 |
 
 ---
 
@@ -425,4 +461,4 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 - [x] `bun run typecheck` → `bun run lint` → `bun test` 全绿（AGENTS §6 由窄到宽） —— PR #148 的 `ci` check 为 SUCCESS（含 Lint / Typecheck / Test / Migrate / Core smoke）
 - [ ] AGENTS §7：**全新子代理**对抗性审查 —— **无法独立验证**，故不勾：PR #148 评论区只有 sourcery-ai 机器人与作者自述（PR 正文），仓库内无审查产物。§13 记录的是"当时是否做过"，事后补做无法改变这个事实；补偿是 #173 这次改动本身已做**三轮**独立审查
 
-**#142（另单，已并入 #74）**：见 §10（含 §10.1 两处缺口与 §10.2 三项 Owner 决策）——静态检查不能替代微信开发者工具演示 + Owner 确认。
+**#142（另单，已并入 #74）**：见 §10（含 §10.1 两处缺口、§10.2 三项 Owner 决策、§10.3 实现落点与 §10.4 补充决策）——静态检查不能替代微信开发者工具演示 + Owner 确认。实现分支 `feat/miniapp-ai-polish-sell`（基线 `origin/main = 8609c97`）。
