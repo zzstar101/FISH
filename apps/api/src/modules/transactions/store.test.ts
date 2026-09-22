@@ -427,6 +427,19 @@ describe('meetup token store (integration, #70)', () => {
       listing: '01990000-0000-7000-8000-0000000000ca',
       conversation: '01990000-0000-7000-8000-0000000000e2',
     },
+    // #147 核销 × 取消并发（锁序回归）：三组独立场景，重复并发以降低偶然性
+    redeemRaceA: {
+      listing: '01990000-0000-7000-8000-0000000000cb',
+      conversation: '01990000-0000-7000-8000-0000000000e3',
+    },
+    redeemRaceB: {
+      listing: '01990000-0000-7000-8000-0000000000cc',
+      conversation: '01990000-0000-7000-8000-0000000000e4',
+    },
+    redeemRaceC: {
+      listing: '01990000-0000-7000-8000-0000000000cd',
+      conversation: '01990000-0000-7000-8000-0000000000e5',
+    },
   } as const
 
   const TOKEN_HASH = 'a'.repeat(64)
@@ -448,7 +461,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
 
     const ok = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
@@ -477,7 +489,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
     await store.recordMeetupTokenFailure(
@@ -493,7 +504,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: NEW_TOKEN_HASH,
       codeHash: NEW_CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     expect(refreshed).not.toBeNull()
     if (!refreshed) throw new Error('unreachable')
@@ -518,7 +528,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
 
     const miss = await store.consumeMeetupToken(txId, buyer1, {
@@ -555,43 +564,38 @@ describe('meetup token store (integration, #70)', () => {
     expect(locked.kind).toBe('locked')
   })
 
-  test('过期 → expired（即便哈希正确）', async () => {
+  test('#147 长期凭证：issued_at 早已过去（原 TTL 语义的时间点）核销仍 ok', async () => {
     const txId = await createPendingTx(scenarios.expired)
     await store.upsertMeetupToken(txId, {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
-    // 平移 issued/expires（保持 expires > issued 的 CHECK）：expires 已成过去
+    // 平移 issued_at：模拟「签发很久之后」（原 5 分钟 TTL 早已过去）
     await db.execute(sql`
       UPDATE transaction_meetup_tokens
-      SET issued_at = now() - interval '10 minutes', expires_at = now() - interval '5 minutes'
+      SET issued_at = now() - interval '10 minutes'
       WHERE transaction_id = ${txId}
     `)
     const result = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
-    expect(result.kind).toBe('expired')
+    expect(result.kind).toBe('ok')
   })
 
-  test('交易在窗口期离开 PENDING：核销抛错回滚（token 未被消费）', async () => {
+  test('#147 终态销毁：cancel 同事务删凭证行；旧码核销 → 竞态错误（service 映射 409）', async () => {
     const txId = await createPendingTx(scenarios.race)
     await store.upsertMeetupToken(txId, {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
-    await store.cancel(txId, buyer1) // 并发取消的替身
-
-    let threw = false
-    try {
-      await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
-    } catch (error) {
-      threw = error instanceof MeetupConsumeRaceError
-    }
-    expect(threw).toBe(true)
-    const row = await store.findMeetupToken(txId)
-    expect(row?.consumed_at).toBeNull() // 回滚生效
+    expect(await store.findMeetupToken(txId)).not.toBeNull()
+    await store.cancel(txId, buyer1)
+    expect(await store.findMeetupToken(txId)).toBeNull() // 行已随 cancel 删除
+    // 终态核销：锁内状态守卫抛竞态错误（不是 not-found），service 据此给
+    // 409 TRANSACTION_NOT_IN_PENDING —— 与终态语义一致，不退化成「没有凭证」。
+    await expect(
+      store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH }),
+    ).rejects.toBeInstanceOf(MeetupConsumeRaceError)
   })
 
   test('买家已单侧确认后核销 → 同事务推进 COMPLETED + listing SOLD（审查 F1）', async () => {
@@ -605,7 +609,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     const ok = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
     expect(ok.kind).toBe('ok')
@@ -630,7 +633,6 @@ describe('meetup token store (integration, #70)', () => {
         tokenHash: TOKEN_HASH,
         codeHash: CODE_HASH,
         issuedBy: seller,
-        ttlSeconds: 300,
       }),
     ).toBeNull()
     expect(await store.findMeetupToken(cancelledTx)).toBeNull()
@@ -643,7 +645,6 @@ describe('meetup token store (integration, #70)', () => {
         tokenHash: TOKEN_HASH,
         codeHash: CODE_HASH,
         issuedBy: seller,
-        ttlSeconds: 300,
       }),
     ).toBeNull()
     expect(await store.findMeetupToken(completedTx)).toBeNull()
@@ -657,7 +658,6 @@ describe('meetup token store (integration, #70)', () => {
         tokenHash: TOKEN_HASH,
         codeHash: CODE_HASH,
         issuedBy: seller,
-        ttlSeconds: 300,
       }),
     ])
     // cancel 在 PENDING 上不受 token 影响，必然成功（#11 冻结语义）
@@ -672,6 +672,48 @@ describe('meetup token store (integration, #70)', () => {
     }
   })
 
+  test('#147 核销 × 取消并发：统一锁序（先交易行后凭证行）不死锁，终态必销毁凭证', async () => {
+    // 修复前：核销先锁凭证行、再锁交易行，而 cancel / confirm 先锁交易行、再 DELETE
+    // 凭证行 → AB-BA 死锁（40P01），客户端拿 500。修复后两者都先锁交易行。
+    // 死锁是否触发取决于具体交错，因此这里重复 3 组独立场景提高检出率。
+    const settle = async <T>(promise: Promise<T>) => {
+      try {
+        return { ok: true as const, value: await promise }
+      } catch (error) {
+        return { ok: false as const, error }
+      }
+    }
+
+    for (const scenario of [scenarios.redeemRaceA, scenarios.redeemRaceB, scenarios.redeemRaceC]) {
+      const txId = await createPendingTx(scenario)
+      await store.upsertMeetupToken(txId, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+      })
+
+      const [redeem, cancelOut] = await Promise.all([
+        settle(store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })),
+        settle(store.cancel(txId, seller)),
+      ])
+
+      // 不变量 1：没有一方因死锁（或任何非预期错误）失败。
+      // 核销唯一可接受的失败是「持锁时交易已离开 PENDING」的竞态错误。
+      if (!redeem.ok) expect(redeem.error).toBeInstanceOf(MeetupConsumeRaceError)
+      // 不变量 2：PENDING 上的 cancel 不受凭证影响，必然成功（#11 冻结语义）
+      expect(cancelOut.ok).toBe(true)
+      if (!cancelOut.ok) throw new Error('unreachable')
+      expect(cancelOut.value.kind).toBe('ok')
+
+      // 不变量 3：无论谁先拿到交易行锁，终态迁移都必然销毁凭证行
+      expect(await store.findMeetupToken(txId)).toBeNull()
+      const tx = rows(
+        await db.execute(sql`SELECT status::text AS status FROM transactions WHERE id = ${txId}`),
+      )[0] as { status: string }
+      expect(tx.status).toBe('CANCELLED')
+    }
+  })
+
   test('失败计数绑定凭证代际：刷新后旧请求的失败不污染新码（审查 P1）', async () => {
     const txId = await createPendingTx(scenarios.generation)
     const V1_TOKEN = 'f'.repeat(64)
@@ -680,7 +722,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: V1_TOKEN,
       codeHash: V1_CODE,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     // 旧代凭证上的两次失败
     const first = await store.recordMeetupTokenFailure(
@@ -697,7 +738,6 @@ describe('meetup token store (integration, #70)', () => {
       tokenHash: V2_TOKEN,
       codeHash: V2_CODE,
       issuedBy: seller,
-      ttlSeconds: 300,
     })
     // 并发中的旧请求此刻才落计数：代际不匹配 → 被丢弃
     const stale = await store.recordMeetupTokenFailure(

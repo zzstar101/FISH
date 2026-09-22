@@ -53,12 +53,10 @@ function buildApp(overrides: Partial<TransactionService> = {}) {
       transactionId: dto.id,
       code: '482913',
       qrPayload: `fish://meetup/redeem?tx=${dto.id}&t=abc_DEF-123`,
-      expiresAt: '2026-09-12T10:05:00.000Z',
     }),
     getMeetupTokenStatus: async () => ({
       transactionId: dto.id,
       status: 'ISSUED' as const,
-      expiresAt: '2026-09-12T10:05:00.000Z',
       consumedAt: null,
       consumedBy: null,
     }),

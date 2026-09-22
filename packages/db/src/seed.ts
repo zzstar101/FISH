@@ -40,6 +40,10 @@ const ids = {
   conversationK380: '01930000-0000-7000-8000-000000000041',
   messageText: '01930000-0000-7000-8000-000000000042',
   messageSystem: '01930000-0000-7000-8000-000000000043',
+  conversationLamp: '01930000-0000-7000-8000-000000000044',
+  conversationBasketball: '01930000-0000-7000-8000-000000000045',
+  messageLampAccepted: '01930000-0000-7000-8000-000000000046',
+  messageBasketballAccepted: '01930000-0000-7000-8000-000000000047',
   transactionLamp: '01930000-0000-7000-8000-000000000051',
   transactionBasketball: '01930000-0000-7000-8000-000000000052',
   jobMatchListing: '01930000-0000-7000-8000-000000000071',
@@ -216,15 +220,42 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
   ])
 
-  await tx.insert(conversations).values({
-    id: ids.conversationK380,
-    listingId: ids.listingK380,
-    buyerId: ids.buyerB,
-    sellerId: ids.sellerA,
-    buyerLastReadAt: yesterday,
-    lastMessageAt: yesterday,
-    createdAt: yesterday,
-  })
+  // 两笔交易各自的会话（#157 / #147）：transactions 的读写路径（listForUser /
+  // findById）按 (listing_id, buyer_id, seller_id) join conversations 取会话 id，
+  // seed 必须给每笔交易补上三元组一致的会话行，否则订单页在 seed 库上永远空态
+  // （profile 不 join 会话所以计数正常——同一份数据自相矛盾）。
+  // 真实链路里 accept 本身就是 join 会话得到 conversation_id，seed 直接绕过了该不变量。
+  await tx.insert(conversations).values([
+    {
+      id: ids.conversationK380,
+      listingId: ids.listingK380,
+      buyerId: ids.buyerB,
+      sellerId: ids.sellerA,
+      buyerLastReadAt: yesterday,
+      lastMessageAt: yesterday,
+      createdAt: yesterday,
+    },
+    {
+      // 台灯：卖家 buyerB × 买家 sellerA —— transactionLamp 的三元组。
+      id: ids.conversationLamp,
+      listingId: ids.listingLamp,
+      buyerId: ids.sellerA,
+      sellerId: ids.buyerB,
+      buyerLastReadAt: yesterday,
+      lastMessageAt: yesterday,
+      createdAt: yesterday,
+    },
+    {
+      // 篮球：卖家 buyerB × 买家 buyerC —— transactionBasketball 的三元组。
+      id: ids.conversationBasketball,
+      listingId: ids.listingBasketball,
+      buyerId: ids.buyerC,
+      sellerId: ids.buyerB,
+      buyerLastReadAt: lastWeek,
+      lastMessageAt: lastWeek,
+      createdAt: lastWeek,
+    },
+  ])
 
   await tx.insert(messages).values([
     {
@@ -242,6 +273,33 @@ export async function seed(tx: SeedTx): Promise<void> {
       type: 'SYSTEM',
       content: '买家发起了交易确认。',
       createdAt: yesterday,
+    },
+    {
+      // 台灯会话：交易被接受时必有的 tx.accepted SYSTEM 消息（真实链路由 accept 写入，
+      // content 形状与 transactionSystemEventSchema 一致，前端聊天页才能解析出跳转）。
+      id: ids.messageLampAccepted,
+      conversationId: ids.conversationLamp,
+      senderId: null,
+      type: 'SYSTEM',
+      content: JSON.stringify({
+        type: 'tx.accepted',
+        transactionId: ids.transactionLamp,
+        amountCents: 2800,
+      }),
+      createdAt: yesterday,
+    },
+    {
+      // 篮球会话：已 COMPLETED 交易的 tx.accepted 历史消息。
+      id: ids.messageBasketballAccepted,
+      conversationId: ids.conversationBasketball,
+      senderId: null,
+      type: 'SYSTEM',
+      content: JSON.stringify({
+        type: 'tx.accepted',
+        transactionId: ids.transactionBasketball,
+        amountCents: 5000,
+      }),
+      createdAt: lastWeek,
     },
   ])
 

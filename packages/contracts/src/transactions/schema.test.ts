@@ -233,24 +233,31 @@ describe('transactionSystemEventSchema', () => {
 
 describe('meetup token schemas', () => {
   const transactionId = '6d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
-  const expiresAt = '2026-09-12T10:10:00.000Z'
+  const verifiedAt = '2026-09-12T10:10:00.000Z'
 
-  test('accepts an issued token response without exposing hashes', () => {
+  test('accepts an issued token response without exposing hashes or expiry', () => {
+    // #147：凭证随交易生命周期（PENDING_MEETUP 内长期有效），响应不再有 expiresAt。
     expect(
       meetupTokenResponseSchema.parse({
         transactionId,
         code: '012345',
         qrPayload: 'fish://meetup/redeem?t=opaque-token',
-        expiresAt,
       }),
-    ).toMatchObject({ transactionId, code: '012345', expiresAt })
+    ).toMatchObject({ transactionId, code: '012345' })
     expect(
       meetupTokenResponseSchema.safeParse({
         transactionId,
         code: '01234',
         qrPayload: 'fish://meetup/redeem?t=opaque-token',
-        expiresAt,
         codeHash: 'must-not-leak',
+      }).success,
+    ).toBe(false)
+    expect(
+      meetupTokenResponseSchema.safeParse({
+        transactionId,
+        code: '012345',
+        qrPayload: 'fish://meetup/redeem?t=opaque-token',
+        expiresAt: verifiedAt,
       }).success,
     ).toBe(false)
   })
@@ -270,7 +277,6 @@ describe('meetup token schemas', () => {
       meetupTokenStatusResponseSchema.parse({
         transactionId,
         status: 'ISSUED',
-        expiresAt,
         consumedAt: null,
         consumedBy: null,
       }).status,
@@ -280,7 +286,7 @@ describe('meetup token schemas', () => {
         transactionId,
         verified: true,
         verifiedBy: '7d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-        verifiedAt: expiresAt,
+        verifiedAt,
         nextAction: 'CONFIRM_DELIVERY',
       }).nextAction,
     ).toBe('CONFIRM_DELIVERY')
@@ -289,7 +295,8 @@ describe('meetup token schemas', () => {
 
 describe('TransactionErrorCodeSchema', () => {
   test('accepts meetup token errors and rejects an unknown code', () => {
-    expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_EXPIRED').success).toBe(true)
+    // #147：长期凭证下 EXPIRED 不再是可达路径，契约同步删除（不留兼容死枚举）。
+    expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_EXPIRED').success).toBe(false)
     expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_LOCKED').success).toBe(true)
     expect(TransactionErrorCodeSchema.safeParse('TX_GONE_WRONG').success).toBe(false)
   })

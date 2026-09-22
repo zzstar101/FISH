@@ -42,8 +42,10 @@ export class TransactionServiceError extends Error {
   }
 }
 
-/** 面交码有效期（#70 设计稿口径：「交易码 5 分钟内有效」），刷新即重签。 */
-export const MEETUP_TOKEN_TTL_SECONDS = 5 * 60
+/**
+ * #147：凭证随交易生命周期（PENDING_MEETUP 内长期有效，终态同事务销毁），
+ * 不再有 TTL / 过期路径；刷新即重签（旧码立即作废）。
+ */
 /** 6 位码爆破防护：累计 5 次失败锁 10 分钟（QR token 高熵，计数共用同一防线）。 */
 export const MEETUP_TOKEN_MAX_ATTEMPTS = 5
 export const MEETUP_TOKEN_LOCK_SECONDS = 10 * 60
@@ -210,7 +212,7 @@ export function createTransactionService({
   /**
    * QR 核销与 6 位码核销共用：除出示的凭证串与比对列不同外，校验顺序与错误码一致。
    * 顺序 = 参与者(404) → 终态(409) → 非消费方(403) → 无凭证(404) → 锁定(429) →
-   * 原子核销（ok / consumed / expired / locked / invalid）。
+   * 原子核销（ok / consumed / locked / invalid；#147 无 expired）。
    */
   async function consumeMeetup(
     userId: string,
@@ -284,17 +286,10 @@ export function createTransactionService({
         '面交码已被使用，不能重复核销',
       )
     }
-    if (result.kind === 'expired') {
-      throw new TransactionServiceError(
-        409,
-        'MEETUP_TOKEN_EXPIRED',
-        '面交码已过期，请对方刷新后重试',
-      )
-    }
     if (result.kind === 'locked') {
       throw new TransactionServiceError(429, 'MEETUP_TOKEN_LOCKED', '错误次数过多，请稍后再试')
     }
-    // not-found：前置检查后凭证被删（本域没有删除路径，不可达），防御性归 NOT_FOUND
+    // not-found：前置检查后凭证被删（#147 终态销毁），防御性归 NOT_FOUND
     throw new TransactionServiceError(404, 'MEETUP_TOKEN_NOT_FOUND', '这笔交易还没有可用的面交码')
   }
 
@@ -447,7 +442,6 @@ export function createTransactionService({
         tokenHash: meetupCrypto.hash(token),
         codeHash: meetupCrypto.hash(code),
         issuedBy: row.seller_id,
-        ttlSeconds: MEETUP_TOKEN_TTL_SECONDS,
       })
       if (!tokenRow) {
         // 前置检查后、持锁写入前，交易被并发 cancel/complete 推入终态（store 内
@@ -463,7 +457,6 @@ export function createTransactionService({
         transactionId: id,
         code,
         qrPayload: meetupCrypto.qrPayload(id, token),
-        expiresAt: toIso(tokenRow.expires_at),
       })
     },
 
@@ -471,22 +464,30 @@ export function createTransactionService({
       if (!isTransactionId(id)) throw notFound()
       const row = await store.findById(id)
       if (!row || (row.buyer_id !== userId && row.seller_id !== userId)) throw notFound()
+      // #147：终态以**交易**为唯一真相。终态时凭证行必已同事务删除，这里再显式判一次
+      // 交易状态，保证「凭证行仍在」（迁移前遗留的旧行 / 任何未来漂移）也不会让卖家
+      // 页面显示「有效」而后端实际已失效——即不出现「页面显示有效、后端已过期」。
+      if (row.status !== 'PENDING_MEETUP') {
+        return meetupTokenStatusResponseSchema.parse({
+          transactionId: id,
+          status: 'NONE',
+          consumedAt: null,
+          consumedBy: null,
+        })
+      }
       const tokenRow = await store.findMeetupToken(id)
       if (!tokenRow) {
         return meetupTokenStatusResponseSchema.parse({
           transactionId: id,
           status: 'NONE',
-          expiresAt: null,
           consumedAt: null,
           consumedBy: null,
         })
       }
-      // 状态全部派生，不落列：CONSUMED > EXPIRED > ISSUED。
-      const expired = new Date(tokenRow.expires_at).getTime() <= Date.now()
+      // 状态全部派生，不落列：CONSUMED / ISSUED（#147：终态行已删，无 EXPIRED）。
       return meetupTokenStatusResponseSchema.parse({
         transactionId: id,
-        status: tokenRow.consumed_at != null ? 'CONSUMED' : expired ? 'EXPIRED' : 'ISSUED',
-        expiresAt: toIso(tokenRow.expires_at),
+        status: tokenRow.consumed_at != null ? 'CONSUMED' : 'ISSUED',
         consumedAt: toIso(tokenRow.consumed_at),
         consumedBy: tokenRow.consumed_by,
       })

@@ -174,6 +174,8 @@ class MemoryTxStore implements TransactionStore {
     if (row.buyer_confirmed_at && row.seller_confirmed_at) {
       row.status = 'COMPLETED'
       row.completed_at = new Date()
+      // #147：终态同事务销毁凭证（对齐 SQL 的 DELETE）
+      this.meetupTokens.delete(id)
     }
     return { kind: 'ok', row }
   }
@@ -190,6 +192,8 @@ class MemoryTxStore implements TransactionStore {
     if (row.status === 'CANCELLED') return { kind: 'ok', row }
     row.status = 'CANCELLED'
     row.cancelled_at = new Date()
+    // #147：终态同事务销毁凭证（对齐 SQL 的 DELETE）
+    this.meetupTokens.delete(id)
     return { kind: 'ok', row }
   }
 
@@ -203,19 +207,17 @@ class MemoryTxStore implements TransactionStore {
 
   async upsertMeetupToken(
     transactionId: string,
-    input: { tokenHash: string; codeHash: string; issuedBy: string; ttlSeconds: number },
+    input: { tokenHash: string; codeHash: string; issuedBy: string },
   ): Promise<MeetupTokenRow | null> {
     // 对齐 SQL：事务内 FOR UPDATE 校验 PENDING + 卖家，终态交易签发返回 null
     const live = this.rows.find((r) => r.id === transactionId)
     if (live?.status !== 'PENDING_MEETUP' || live.seller_id !== input.issuedBy) return null
-    const issuedAt = new Date()
     const row: MeetupTokenRow = {
       transaction_id: transactionId,
       token_hash: input.tokenHash,
       code_hash: input.codeHash,
       issued_by: input.issuedBy,
-      issued_at: issuedAt,
-      expires_at: new Date(issuedAt.getTime() + input.ttlSeconds * 1000),
+      issued_at: new Date(),
       consumed_at: null,
       consumed_by: null,
       failed_attempts: 0,
@@ -233,8 +235,6 @@ class MemoryTxStore implements TransactionStore {
     const row = this.meetupTokens.get(transactionId)
     if (!row) return { kind: 'not-found' }
     if (row.consumed_at != null) return { kind: 'consumed' }
-    // MeetupTokenRow 的时间戳是 Date | string（对齐 SQL 行），统一经 Date 规整
-    if (new Date(row.expires_at).getTime() <= Date.now()) return { kind: 'expired' }
     if (row.locked_until != null && new Date(row.locked_until).getTime() > Date.now()) {
       return { kind: 'locked' }
     }
@@ -247,10 +247,12 @@ class MemoryTxStore implements TransactionStore {
     row.consumed_by = userId
     // 与 SQL 同一事务语义：核销成功即盖卖家确认（已值保持）；买家已先行确认时
     // 本次核销是第二侧确认事件 → 同一事务推进 COMPLETED（镜像 confirm 的合并）
+    // 并同事务销毁凭证（#147）
     if (tx.seller_confirmed_at == null) tx.seller_confirmed_at = new Date()
     if (tx.buyer_confirmed_at != null) {
       tx.status = 'COMPLETED'
       tx.completed_at = new Date()
+      this.meetupTokens.delete(transactionId)
     }
     tx.updated_at = new Date()
     return { kind: 'ok', row }
@@ -614,18 +616,50 @@ describe('transaction service: meetup token (#70)', () => {
     )
   })
 
-  test('过期凭证 → MEETUP_TOKEN_EXPIRED；状态派生 EXPIRED；刷新后恢复 ISSUED', async () => {
+  test('#147 长期凭证：签发后随 PENDING_MEETUP 一直有效（无 TTL 概念）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    // 契约不再有 expiresAt；状态派生只有 ISSUED（未消费）
+    const status = await service.getMeetupTokenStatus(buyer, txId)
+    expect(status.status).toBe('ISSUED')
+    expect(status.consumedAt).toBeNull()
+    // 长期有效：签发很久之后（无过期路径）核销仍然成功
+    await expect(
+      service.verifyMeetupCode(buyer, txId, { code: token.code }),
+    ).resolves.toMatchObject({ verified: true })
+  })
+
+  test('#147 终态销毁：cancel 后凭证行同事务删除 → status NONE，核销仍报终态 409', async () => {
+    const { service, store, txId } = await buildWithPendingTx()
+    await service.issueMeetupToken(seller, txId)
+    expect(await service.getMeetupTokenStatus(buyer, txId)).toMatchObject({ status: 'ISSUED' })
+    await service.cancel(seller, txId)
+    // 终态核销报 409：终态先于凭证判定，不因行已删退化成「无凭证」404
+    await expect(service.verifyMeetupCode(buyer, txId, { code: '123456' })).rejects.toMatchObject({
+      status: 409,
+      code: 'TRANSACTION_NOT_IN_PENDING',
+    })
+    expect(await service.getMeetupTokenStatus(buyer, txId)).toMatchObject({ status: 'NONE' })
+    expect(store.meetupTokens.has(txId)).toBe(false)
+  })
+
+  test('#147 终态销毁：COMPLETED（双方 confirm）后凭证行同事务删除 → status NONE', async () => {
+    const { service, store, txId } = await buildWithPendingTx()
+    await service.issueMeetupToken(seller, txId)
+    await service.confirm(buyer, txId)
+    await service.confirm(seller, txId)
+    expect(await service.getMeetupTokenStatus(buyer, txId)).toMatchObject({ status: 'NONE' })
+    expect(store.meetupTokens.has(txId)).toBe(false)
+  })
+
+  test('#147 终态销毁：核销即第二侧确认（推 COMPLETED）后凭证行同事务删除', async () => {
     const { service, store, txId } = await buildWithPendingTx()
     const token = await service.issueMeetupToken(seller, txId)
-    const row = store.meetupTokens.get(txId)
-    expect(row).toBeDefined()
-    if (row) row.expires_at = new Date(Date.now() - 1000)
-    await expect(service.verifyMeetupCode(buyer, txId, { code: token.code })).rejects.toMatchObject(
-      { status: 409, code: 'MEETUP_TOKEN_EXPIRED' },
-    )
-    expect((await service.getMeetupTokenStatus(buyer, txId)).status).toBe('EXPIRED')
-    await service.issueMeetupToken(seller, txId)
-    expect((await service.getMeetupTokenStatus(buyer, txId)).status).toBe('ISSUED')
+    await service.confirm(buyer, txId) // 买家先单侧确认
+    await service.verifyMeetupCode(buyer, txId, { code: token.code })
+    expect((await service.getTransaction(buyer, txId)).status).toBe('COMPLETED')
+    expect(await service.getMeetupTokenStatus(buyer, txId)).toMatchObject({ status: 'NONE' })
+    expect(store.meetupTokens.has(txId)).toBe(false)
   })
 
   test('卖家不能核销自己出示的码 → 403 MEETUP_TOKEN_NOT_ALLOWED', async () => {
@@ -729,6 +763,5 @@ describe('transaction service: meetup token (#70)', () => {
       consumedBy: buyer,
     })
     expect(status.consumedAt).not.toBeNull()
-    expect(status.expiresAt).not.toBeNull()
   })
 })

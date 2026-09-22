@@ -69,12 +69,28 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // `matches` / `notifications` 由 worker 用真实打分产出（#43）：seed 只投一条
       // PENDING 的 MATCH_LISTING，不再预写结果，否则 seed 会成为引擎之外的第二份真相。
       matches: 0,
-      conversations: 1,
-      messages: 2,
+      // #157：每笔交易都有三元组一致的会话（K380 + 台灯 + 篮球），订单页在 seed
+      // 库上才有可演示数据；messages 相应多了两条 tx.accepted SYSTEM 消息。
+      conversations: 3,
+      messages: 4,
       transactions: 2,
       notifications: 0,
       jobs: 1,
     })
+
+    // #157 / #147 不变量：每笔交易都能按 (listing_id, buyer_id, seller_id) join 到
+    // 会话——GET /transactions 的 listForUser / findById 就是这个 join，join 不上的
+    // 交易在订单页上静默消失，而 profile 不 join 所以计数正常（自相矛盾）。
+    // 真实链路里 accept 自己就是 join 会话得到 conversation_id，seed 曾绕过它。
+    const orphanTx = await scratch.execute<{ id: string }>(sql`
+      select t.id from transactions t
+      left join conversations c
+        on c.listing_id = t.listing_id
+       and c.buyer_id = t.buyer_id
+       and c.seller_id = t.seller_id
+      where c.id is null
+    `)
+    expect([...orphanTx]).toEqual([])
 
     // seed 写的是真实 argon2id 哈希（#3 替换了 #2 的占位值），前端要用它登录调试，
     // 因此这里断言文档里的演示密码（README「演示账号」）确实能校验通过，而不只断言行数。

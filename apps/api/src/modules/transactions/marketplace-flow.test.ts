@@ -681,6 +681,204 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(afterCancel.status).toBe(409)
   })
 
+  test('#147 面交码链路：长期有效签发 → 核销盖卖家确认 → 终态销毁凭证', async () => {
+    // 面交链路用第三个商品：前面的商品一个 SOLD 一个已取消。
+    const thirdListingId = await insertListing(
+      await userIdOf(SELLER_NO),
+      '01990000-0000-7000-8000-0000000000b5',
+    )
+    const conversation = await api(CHAT_ROUTES.base, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ listingId: thirdListingId }),
+    })
+    const thirdConversationId = (await json<{ id: string }>(conversation)).id
+    await api(TRANSACTION_ROUTES.proposals, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ conversationId: thirdConversationId, amountCents: 12000 }),
+    })
+    const accepted = await api(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      cookie: sellerCookie,
+      body: JSON.stringify({ conversationId: thirdConversationId, amountCents: 12000 }),
+    })
+    expect(accepted.status).toBe(201)
+    const transactionId = (await json<TransactionDto>(accepted)).id
+
+    // 签发前 status NONE
+    const before = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
+    )
+    expect(before.status).toBe('NONE')
+
+    // 卖家签发：长期凭证（#147），响应无 expiresAt
+    const issued = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(issued.status).toBe(201)
+    const token = await json<{ code: string; qrPayload: string }>(issued)
+    expect(token.code).toMatch(/^\d{6}$/)
+    expect(token).not.toHaveProperty('expiresAt')
+
+    // 签发后 status ISSUED
+    const status = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: buyerCookie }),
+    )
+    expect(status.status).toBe('ISSUED')
+
+    // 长期有效：把 issued_at 平移到「原 5 分钟 TTL 早已过去」之后，核销仍然成功
+    await db.execute(sql`
+      UPDATE transaction_meetup_tokens
+      SET issued_at = now() - interval '10 minutes'
+      WHERE transaction_id = ${transactionId}
+    `)
+
+    // 买家核销 6 位码：成功 + 盖卖家确认，交易停在 PENDING_MEETUP 等买家 confirm
+    const redeemed = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(redeemed.status).toBe(200)
+    const verification = await json<{ verified: boolean; nextAction: string }>(redeemed)
+    expect(verification.verified).toBe(true)
+    expect(verification.nextAction).toBe('CONFIRM_DELIVERY')
+
+    // 重复核销被拒（一次性）
+    const replay = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(replay.status).toBe(409)
+    expect(await json<{ error: { code: string } }>(replay)).toMatchObject({
+      error: { code: 'MEETUP_TOKEN_CONSUMED' },
+    })
+
+    // 凭证仍可查（CONSUMED 状态，交易还没终态）
+    const consumedStatus = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
+    )
+    expect(consumedStatus.status).toBe('CONSUMED')
+
+    // 买家 confirm → COMPLETED；同事务销毁凭证 → status NONE，旧码不可再用
+    const confirmed = await api(TRANSACTION_ROUTES.confirm(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+    })
+    expect(confirmed.status).toBe(200)
+    expect((await json<TransactionDto>(confirmed)).status).toBe('COMPLETED')
+    expect(await listingStatus(thirdListingId)).toBe('SOLD')
+
+    const afterStatus = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
+    )
+    expect(afterStatus.status).toBe('NONE')
+
+    // 终态后核销旧码 → 409 TRANSACTION_NOT_IN_PENDING（终态先于凭证判定）
+    const afterRedeem = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(afterRedeem.status).toBe(409)
+    expect(await json<{ error: { code: string } }>(afterRedeem)).toMatchObject({
+      error: { code: 'TRANSACTION_NOT_IN_PENDING' },
+    })
+  })
+
+  test('#147 面交码终态销毁：签发后 cancel，凭证行同事务删除、旧码不可再用', async () => {
+    // 第四个商品：走「签发 → 取消 → 旧码失效」
+    const fourthListingId = await insertListing(
+      await userIdOf(SELLER_NO),
+      '01990000-0000-7000-8000-0000000000b6',
+    )
+    const conversation = await api(CHAT_ROUTES.base, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ listingId: fourthListingId }),
+    })
+    const fourthConversationId = (await json<{ id: string }>(conversation)).id
+    await api(TRANSACTION_ROUTES.proposals, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ conversationId: fourthConversationId, amountCents: 8000 }),
+    })
+    const accepted = await api(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      cookie: sellerCookie,
+      body: JSON.stringify({ conversationId: fourthConversationId, amountCents: 8000 }),
+    })
+    expect(accepted.status).toBe(201)
+    const transactionId = (await json<TransactionDto>(accepted)).id
+
+    const issued = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(issued.status).toBe(201)
+    const token = await json<{ code: string }>(issued)
+
+    // 取消：同事务删除凭证
+    const cancelled = await api(TRANSACTION_ROUTES.cancel(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+    })
+    expect(cancelled.status).toBe(200)
+    expect((await json<TransactionDto>(cancelled)).status).toBe('CANCELLED')
+    expect(await listingStatus(fourthListingId)).toBe('ACTIVE')
+
+    // 凭证行已删：status NONE，DB 无行
+    const status = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
+    )
+    expect(status.status).toBe('NONE')
+    const tokenRow = rows(
+      await db.execute(
+        sql`SELECT count(*)::int AS n FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+      ),
+    )[0] as { n: number }
+    expect(Number(tokenRow.n)).toBe(0)
+
+    // 旧码核销 → 终态 409
+    const afterRedeem = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(afterRedeem.status).toBe(409)
+    expect(await json<{ error: { code: string } }>(afterRedeem)).toMatchObject({
+      error: { code: 'TRANSACTION_NOT_IN_PENDING' },
+    })
+
+    // #147 终态守卫：迁移前遗留的凭证行（终态交易上仍存在）不能让卖家页面显示「有效」。
+    // 直接 INSERT 一行模拟旧数据（migration 生成文件不可手改，故用守卫兜住遗留行）。
+    await db.execute(sql`
+      INSERT INTO transaction_meetup_tokens (transaction_id, token_hash, code_hash, issued_by)
+      VALUES (${transactionId}, ${'legacy'.repeat(10)}, ${'stale'.repeat(10)}, ${await userIdOf(SELLER_NO)})
+    `)
+    const legacyStatus = await json<{ status: string }>(
+      await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
+    )
+    expect(legacyStatus.status).toBe('NONE')
+    // 遗留行也救不活核销：终态仍是 409
+    const legacyRedeem = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(legacyRedeem.status).toBe(409)
+    expect(await json<{ error: { code: string } }>(legacyRedeem)).toMatchObject({
+      error: { code: 'TRANSACTION_NOT_IN_PENDING' },
+    })
+    // 清理遗留行，避免影响后续用例对凭证表行数的断言
+    await db.execute(
+      sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+    )
+  })
+
   test('非法终态转换：COMPLETED 上 cancel 被拒，商品不被回退', async () => {
     const list = await api(`${TRANSACTION_ROUTES.base}?role=seller&status=COMPLETED`, {
       cookie: sellerCookie,

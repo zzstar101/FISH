@@ -3,7 +3,7 @@ import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import type { MeetupTokenResponse, TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
@@ -25,7 +25,7 @@ import './index.scss'
  *
  * 入口参数（两种，可同时出现）：
  * - `?id=<transactionId>`：从「我的订单」进入。卖家 = 出示方：进页即签发/刷新面交码，
- *   展示 6 位码 + 二维码 + 倒计时，点「刷新」重签（旧码立即作废）；
+ *   展示 6 位码 + 二维码，点「刷新」重签（旧码立即作废）；
  *   买家 = 核销方：在本页手动输入对方的 6 位码（6 位码只在已知 transactionId 的
  *   本页输入，全局扫码页不提供无上下文输入），或点「扫码验证」进扫码页。
  * - `?code=<QR 原文>`：扫码页交付的鱼小应交易码原文，自带 transactionId
@@ -42,17 +42,12 @@ import './index.scss'
  * 必须再查 GET meetup-token 的 status === CONSUMED 才恢复确认入口；
  * 非 CONSUMED 一律仍要求扫码 / 手输核销。
  *
- * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ EXPIRED（过期，请对方刷新）/
- * CONSUMED（已被使用）/ LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
+ * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ CONSUMED（已被使用）/
+ * LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
  * NOT_ALLOWED（不能核销自己出示的码）。
+ * #147 长期凭证：凭证在本单 PENDING_MEETUP 生命周期内有效（终态后端同事务销毁），
+ * 没有过期路径与倒计时。
  */
-
-/** 倒计时秒数 → `04:38` */
-function clockText(total: number): string {
-  const safe = Math.max(0, Math.floor(total))
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${pad(Math.floor(safe / 60))}:${pad(safe % 60)}`
-}
 
 function formatAmount(cents: number): string {
   const yuan = cents / 100
@@ -81,7 +76,6 @@ const INPUT_CELLS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-cell-${inde
 type TokenView =
   | { state: 'issuing' }
   | { state: 'ready'; token: MeetupTokenResponse }
-  | { state: 'expired' }
   /** 凭证不可在本页重复展示（如卖家误扫自己的码收到 NOT_ALLOWED）：
    * 明文只存在于签发响应，本页无法重放；是否重签交用户手动决定。 */
   | { state: 'unavailable' }
@@ -96,12 +90,10 @@ export default function TransactionMeetup() {
   /** 交易加载失败：notFound = 不存在或非参与者（404，不泄漏）；failed = 网络/服务器 */
   const [loadError, setLoadError] = useState<'notFound' | 'failed' | null>(null)
   const [token, setToken] = useState<TokenView | null>(null)
-  /** 码的剩余秒数（卖家展示用），归零转 expired */
-  const [left, setLeft] = useState(0)
   const [scannedInvalid, setScannedInvalid] = useState(false)
   /** 手动输入：6 位数字的字符数组，索引即格子位置 */
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
-  /** 手动输入的错误提示（码错误 / 过期 / 已被使用 / 次数过多），空串表示无错误 */
+  /** 手动输入的错误提示（码错误 / 已被使用 / 次数过多 / 对方未出码），空串表示无错误 */
   const [inputError, setInputError] = useState('')
   /** 提交中锁：防重复核销 */
   const [submitting, setSubmitting] = useState(false)
@@ -145,7 +137,7 @@ export default function TransactionMeetup() {
         // 恢复口径（审查第三轮 P1）：sellerConfirmedAt **不能**等同「凭证已核销」
         // ——卖家可能从 Web 订单页走了普通 confirm。必须查凭证真实状态：
         // 仅 status === CONSUMED（确经本页凭证核销、上次会话 confirm 失败）才恢复
-        // 确认入口；NONE/ISSUED/EXPIRED 一律仍要求扫码 / 手输核销。
+        // 确认入口；NONE/ISSUED 一律仍要求扫码 / 手输核销。
         if (dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
           const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
           if (tokenStatus?.status === 'CONSUMED') {
@@ -176,8 +168,9 @@ export default function TransactionMeetup() {
     setInputError('')
     try {
       const next = await issueMeetupToken(txId)
+      // #147 长期凭证：响应只有 code + qrPayload，凭证在本单 PENDING_MEETUP
+      // 生命周期内有效（终态后端同事务销毁），没有倒计时。
       setToken({ state: 'ready', token: next })
-      setLeft(Math.max(1, Math.round((Date.parse(next.expiresAt) - Date.now()) / 1000)))
     } catch (error) {
       setToken(null)
       if (isApiError(error)) {
@@ -195,17 +188,6 @@ export default function TransactionMeetup() {
       void Taro.showToast({ title: '交易码生成失败，请重试', icon: 'none' })
     }
   }
-
-  /* 倒计时：只在 ready 且有剩余秒数时走，归零即转「已过期」 */
-  useEffect(() => {
-    if (token?.state !== 'ready' || left <= 0) return
-    const timer = setTimeout(() => setLeft((n) => n - 1), 1000)
-    return () => clearTimeout(timer)
-  }, [token, left])
-
-  useEffect(() => {
-    if (token?.state === 'ready' && left === 0) setToken({ state: 'expired' })
-  }, [token, left])
 
   /* ------------------------------------------------- 买家：核销 */
 
@@ -239,7 +221,6 @@ export default function TransactionMeetup() {
       if (isApiError(error)) {
         const map: Record<string, string> = {
           MEETUP_TOKEN_INVALID: '交易码错误，请核对后重新输入。请确认对方展示的是本单的交易码。',
-          MEETUP_TOKEN_EXPIRED: '交易码已过期，请对方在页面上点「刷新」后重新出示。',
           MEETUP_TOKEN_CONSUMED: '这个交易码已被使用，不能重复核销。',
           MEETUP_TOKEN_LOCKED: '错误次数过多，已临时锁定，请稍后再试。',
           MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
@@ -334,7 +315,6 @@ export default function TransactionMeetup() {
   const isSeller = tx?.role === 'seller'
   const done = tx?.status === 'COMPLETED'
   const cancelled = tx?.status === 'CANCELLED'
-  const expired = token?.state === 'expired'
   const unavailable = token?.state === 'unavailable'
   const readyToken = token?.state === 'ready' ? token.token : null
   const qrImage = readyToken ? qrDataUrl(readyToken.qrPayload) : ''
@@ -512,24 +492,6 @@ export default function TransactionMeetup() {
                   </View>
                 </View>
               </View>
-            ) : expired ? (
-              <View className="meetup__varcard">
-                <View className="meetup__vdisc meetup__vdisc--warn">
-                  <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
-                </View>
-                <Text className="meetup__varcard-title">交易码已过期</Text>
-                <Text className="meetup__varcard-text">
-                  为保障安全，交易码 5 分钟内有效。点「刷新」生成新的 6 位码，旧码同时作废。
-                </Text>
-                <View className="meetup__varcard-acts">
-                  <View
-                    className="meetup__btn meetup__btn--pri"
-                    onClick={() => tx && void issue(tx.id)}
-                  >
-                    <Text>刷新交易码</Text>
-                  </View>
-                </View>
-              </View>
             ) : readyToken ? (
               <>
                 <View className="meetup__codecard">
@@ -540,10 +502,7 @@ export default function TransactionMeetup() {
                       </Text>
                     ))}
                   </View>
-                  <Text className="meetup__code-ttl num">
-                    有效剩余 <Text className="meetup__code-left">{clockText(left)}</Text> ·
-                    面交完成后自动失效
-                  </Text>
+                  <Text className="meetup__code-ttl num">本单交易码 · 面交完成后自动失效</Text>
 
                   <View className="meetup__hair" />
 
@@ -558,7 +517,7 @@ export default function TransactionMeetup() {
                 <View className="meetup__notice">
                   <Image className="meetup__notice-ic" src={ICONS.lock} mode="aspectFit" />
                   <Text className="meetup__notice-tx">
-                    交易码一次性有效，过期请点「刷新」重新生成；请勿截图或转发，仅当面出示。
+                    交易码在本单面交完成前一直有效、一次性使用；请勿截图或转发，仅当面出示。
                   </Text>
                 </View>
               </>
