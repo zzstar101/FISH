@@ -56,7 +56,11 @@ export type AiPolishCandidatesResponse = z.infer<typeof AiPolishCandidatesRespon
  * 不在这里重复定义（设计 §4.2）。
  */
 export const AiPolishErrorCodeSchema = z.enum([
-  /** 429：触发最小间隔（5s）或滚动 24h 配额（30 次）；带 `retryAfterSeconds`，不复用 `RATE_LIMITED`。 */
+  /**
+   * 429：触发三种配额之一——最小间隔（5s）、滚动 24h 正常额度（30 次）、滚动 24h `EMPTY`
+   * 桶（60 次，设计 §5.2 / #173）。带 `retryAfterSeconds`，不复用 `RATE_LIMITED`。
+   * 命中 `EMPTY` 桶时 `retryAfterSeconds` 可达上万秒（要等窗口滚动），客户端文案见设计 §10.2。
+   */
   'AI_POLISH_QUOTA',
   /** 503：`transport=live` 但配置不全（运行期兜底，正常应在启动即失败）。 */
   'AI_NOT_CONFIGURED',

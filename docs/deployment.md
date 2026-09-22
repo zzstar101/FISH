@@ -341,7 +341,8 @@ stub**——它返回的是演示文案，客户端会带"演示文案·非真�
   失效）。但它同样会随 §10 备份的 `config-*.tar.gz` 进备份，泄漏处置按同一口径。
 - 本期**不设成本上限与告警**（设计 §11-R1）：用量落在 `ai_polish_requests`
   （`outcome` / `prompt_tokens` / `completion_tokens` / `latency_ms`），事后查表；配额是每用户
-  最小间隔 5s + 滚动 24h 30 次。
+  最小间隔 5s + 滚动 24h 30 次正常调用，另有 `EMPTY` 出口的单列 60/日桶（设计 §5.2 / #173）
+  ——每账号 24h 内的调用上界因此是 **89 次**（29 次非 `EMPTY` + 59 次 `EMPTY` + 1 次在飞占位）。
 
 - 用 `openssl rand -hex 32`（64 个 `[0-9a-f]`）而不是 `base64`：systemd 的 `EnvironmentFile`
   不做 shell 展开，纯 hex 可以免掉 `$`、引号与 `#` 引发的整类解析歧义。

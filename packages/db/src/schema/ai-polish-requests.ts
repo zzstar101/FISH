@@ -19,8 +19,9 @@ export type AiPolishOutcome =
  * #141 商品描述 AI 润色的配额与质量指标。
  *
  * 不存任何用户文本、脱敏映射与上游响应体（设计 §6.2）。`outcome` 可空：配额检查通过后先落
- * 占位行（"上游失败也扣配额"由这一步保证），调用结束后才回写出口；因此配额的两条检查必须用
+ * 占位行（"上游失败也扣配额"由这一步保证），调用结束后才回写出口。因此**正常日桶**必须用
  * `IS DISTINCT FROM 'EMPTY'` 而不是 `<> 'EMPTY'`——后者会把尚未回写的 NULL 行排除在计数外。
+ * 三桶口径见设计 §5.2 / #173：间隔检查不区分 outcome，`EMPTY` 另有单列的 60/日桶。
  */
 export const aiPolishRequests = pgTable(
   'ai_polish_requests',
