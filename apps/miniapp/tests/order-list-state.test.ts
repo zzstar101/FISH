@@ -22,9 +22,12 @@ Object.assign(globalThis, { __DEMO_AUTH__: false, __ALLOW_MOCK_FALLBACK__: true 
 const { nextIdentityState } = await import('../src/features/transaction/useOrderList')
 
 describe('nextIdentityState —— 订单列表身份结转规则', () => {
-  test('未登录 / 登录态未就绪：idle —— 不加载也不清（页面此时不渲染列表）', () => {
+  test('冷启动首帧（还没有身份、手里也没有数据）：idle —— 不加载，也没有东西要清', () => {
     expect(nextIdentityState(null, null)).toBe('idle')
-    expect(nextIdentityState('u-1', null)).toBe('idle')
+  })
+
+  test('退出登录（手里还挂着上一个账号的数据）：reset —— 不能残留旧账号订单', () => {
+    expect(nextIdentityState('u-1', null)).toBe('reset')
   })
 
   test('首次拿到身份：reset —— 把初始「空 + loading」当作待加载', () => {

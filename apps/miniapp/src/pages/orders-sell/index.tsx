@@ -29,12 +29,21 @@ export default function OrdersSell() {
   }, [authStatus, userId, reload])
 
   /**
-   * 从面交页（或其它子页）返回时重拉。`authStatus` 走 ref 读最新值：
-   * `useDidShow` 的回调注册一次，直接闭包会读到旧状态。
+   * 从面交页（或其它子页）返回时重拉。
+   *
+   * 首次 show **跳过**（那次由上面的登录态 effect 负责，时点更准），不跳过就会刚进页打两次 ——
+   * 每次 `loadOrders` 都要游标翻页取完整份列表。
+   *
+   * 回调里的 `authStatus` 走 ref 读（与 `pages/chat` 同款写法）。
    */
+  const skipFirstShow = useRef(true)
   const authedRef = useRef(false)
   authedRef.current = authStatus === 'authed'
   useDidShow(() => {
+    if (skipFirstShow.current) {
+      skipFirstShow.current = false
+      return
+    }
     if (!authedRef.current) return
     void reload({ keepList: true })
   })
