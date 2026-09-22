@@ -747,9 +747,19 @@ export default function TransactionMeetup() {
                 </View>
                 <Text className="meetup__varcard-title">这是你出示的交易码</Text>
                 <Text className="meetup__varcard-text">
-                  交易码不能由你本人核销。本页暂不重复展示这枚码；重新进入本页即可取回同一枚码 ——
-                  本单交易码不会变，也不存在「旧码作废」。
+                  交易码不能由你本人核销。点「重新取码」即可取回本单的同一枚码 ——
+                  交易码不会变，也不存在「旧码作废」。
                 </Text>
+                <View className="meetup__varcard-acts">
+                  {/* #176 起取码幂等（确保并读取）：这里重新取到的是**同一枚**码，
+                      既不会换码、也不会作废对方手里的那枚；取码同时清零失败计数与锁定。 */}
+                  <View
+                    className="meetup__btn meetup__btn--sec"
+                    onClick={() => void ensureToken(tx.id, bootEpoch.current)}
+                  >
+                    <Text>重新取码</Text>
+                  </View>
+                </View>
               </View>
             ) : readyToken ? (
               <>
