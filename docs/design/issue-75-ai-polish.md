@@ -1,10 +1,11 @@
 # #75 商品描述 AI 润色 — 设计方案
 
 > 状态：**方案已确认，不含实现代码**，待评审后开工。
-> 关联：需求载体 [#75](https://github.com/zzstar101/FISH/issues/75) ｜ 后端子单 [#141](https://github.com/zzstar101/FISH/issues/141) ｜ 客户端子单 [#142](https://github.com/zzstar101/FISH/issues/142)
-> 记录人：Coast-87（本机） ｜ 日期：2026-09-21 ｜ 实现分支：`feat/75-ai-polish-backend`
+> 关联：需求载体 [#75](https://github.com/zzstar101/FISH/issues/75) ｜ 后端子单 [#141](https://github.com/zzstar101/FISH/issues/141)（已随 PR #148 合入）｜ 客户端子单 [#142](https://github.com/zzstar101/FISH/issues/142)（**已按 NOT_PLANNED 关闭、并入 [#74](https://github.com/zzstar101/FISH/issues/74) 统一维护**，原正文与验收保留为历史上下文）
+> 记录人：Coast-87（本机） ｜ 日期：2026-09-21 ｜ 实现分支：`feat/75-ai-polish-backend`（squash 合入，远端分支已删）
 > **行号基线**：`origin/main = ed561cd`（本分支 rebase 后的基线；原稿写于 `e3e909a`，行号已按新基线逐条复核）。本文引用的他人代码行号以此为准。
-> 决策来源：Owner 于 2026-09-21 分四轮逐条确认（完整取舍见 §12）。
+> **客户端（#142 范围）复核基线**：`origin/main = c0bed1a`（2026-09-22 逐条复核，见 §10）。
+> 决策来源：Owner 于 2026-09-21 分四轮逐条确认（完整取舍见 §12）；客户端接线的三项决策于 2026-09-22 确认（见 §10.2）。
 
 ---
 
@@ -78,7 +79,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 
 ### 3.3 常量（一律不进 env）
 
-`TIMEOUT_MS = 8000` ｜ 重试 **0 次** ｜ 候选数 **3** ｜ `max_tokens = 2000` ｜ `temperature = 0.7` ｜ `thinking = { type: 'disabled' }`（代码保留参数位，§9） ｜ 配额 `最小间隔 5s` + `滚动 24h ≤ 30 次` ｜ `PROMPT_VERSION` 常量。
+`TIMEOUT_MS = 8000` ｜ 重试 **0 次** ｜ 候选数 **3** ｜ `max_tokens = 2000` ｜ `temperature = 0.7` ｜ `thinking = { type: 'disabled' }`（代码保留参数位，§9） ｜ 配额 `最小间隔 5s（不区分 outcome）` + `滚动 24h 正常 ≤ 30 次` + `滚动 24h EMPTY ≤ 60 次` ｜ `PROMPT_VERSION` 常量。
 
 理由：可配的东西越多，`stub` 与 `live` 的行为差异越容易藏起来。
 
@@ -144,19 +145,30 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 `title` / `description` / `category` 走 zod；`description.trim()` 为空 → 422（当前 miniapp 已在本地拦"先写一句描述再润色"，服务端仍要独立成立）。
 
 ### 5.2 配额
-事务内先取 `pg_advisory_xact_lock(hashtext(...))` 串行化"先查后插"（现成写法见 `apps/api/src/modules/auth/verification-service.ts:48-49`，那里按"先 user 后 email"的固定顺序取两把锁），再对 `ai_polish_requests` 做两条检查：`now() - max(created_at) ≥ 5s`、滚动 24h `COUNT ≤ 30`。所有时间比较**用 DB 时钟 `now()`**，不用应用时钟。检查通过后**立即写入占位行**——"上游失败也扣配额"由这一步保证，随后回写 `outcome`。
+事务内先取 `pg_advisory_xact_lock(hashtext(...))` 串行化"先查后插"（现成写法见 `apps/api/src/modules/auth/verification-service.ts:48-49`，那里按"先 user 后 email"的固定顺序取两把锁），再对 `ai_polish_requests` 做**三条**检查：`now() - max(created_at) ≥ 5s`、滚动 24h 正常额度 `COUNT ≤ 30`、滚动 24h `EMPTY` 桶 `COUNT ≤ 60`。所有时间比较**用 DB 时钟 `now()`**，不用应用时钟。检查通过后**立即写入占位行**——"上游失败也扣配额"由这一步保证，随后回写 `outcome`。
 
 配额计数口径（关键，容易被实现随手写错）：
 
-| outcome | 计入配额 | 原因 |
-| --- | --- | --- |
-| `OK` / `UPSTREAM_ERROR` / `TIMEOUT` / `TOKEN_LOST` / `NOT_CONFIGURED` | **计** | 已真实消耗上游或已拒绝；不计入会让脚本免费打上游 |
-| `EMPTY` | **不计** | 上游正常返回但全被过滤 = 对用户无损，不该让他白等一次（#75 Done："失败可无损返回"） |
-| `QUOTA` | **不写行** | 被拒请求若写行，会把 COUNT 撑大，形成"拒一次就少一次额度"的自我收紧 |
+| outcome | 间隔检查 | 正常日桶（30） | `EMPTY` 桶（60） | 原因 |
+| --- | --- | --- | --- | --- |
+| `OK` / `UPSTREAM_ERROR` / `TIMEOUT` / `TOKEN_LOST` / `NOT_CONFIGURED` | 计 | 计 | 不计 | 已真实消耗上游；不计入会让脚本免费打上游 |
+| `EMPTY` | **计** | **不计** | **计** | 上游已被调用并计费（#173）；但候选全被过滤对用户无损，不该白亏正常额度（#75 Done:"失败可无损返回"） |
+| 未回写的占位行（`outcome` 仍为 `NULL`） | 计 | 计 | 不计 | 崩一次不能白送额度；它已被间隔检查挡住，不必在 `EMPTY` 桶重复兜底 |
+| `QUOTA` | **不写行** | — | — | 被拒请求若写行，会把 COUNT 撑大，形成"拒一次就少一次额度"的自我收紧 |
 
-实现方式：`EMPTY` 行照样写（供质量指标用），但两条检查的 COUNT/MAX 加 `outcome IS DISTINCT FROM 'EMPTY'` 过滤。
+实现方式：`EMPTY` 行照样写（供质量指标用）。**正常日桶**的 COUNT/MAX 加 `outcome IS DISTINCT FROM 'EMPTY'` 过滤；**间隔检查不加过滤**；`EMPTY` 桶用 `outcome = 'EMPTY'`（NULL 占位行自然不计入）。
 
 > **实现口径（2026-09-21 定稿）**：必须用 `IS DISTINCT FROM 'EMPTY'` 而不是上面最初写的 `outcome <> 'EMPTY'`——占位行先落库、`outcome` 尚为 `NULL`，而 `NULL <> 'EMPTY'` 求值为 `NULL`（不为真），会把"没来得及回写"的行排除在计数外，等于**崩一次就白送一次额度**。`ai_polish_requests.outcome` 因此是可空列。
+
+> **2026-09-22 口径变更（#173）**：原口径是两条检查、且**两条都排除 `EMPTY`**。那让"能把请求稳定变成 `EMPTY`"的调用方（原文含会被 moderation `BLOCK` 的词、或命中 §5.6c 数字校验误杀）既不占间隔、也不计日配额，可以持续打付费上游——成本与表行数都无上界。改法：间隔检查**不再排除 `EMPTY`**（上游已被调用并计费，不能因为候选被我们过滤掉就免掉间隔），并给 `EMPTY` **单列一个更宽松的 60/日桶**。每账号 24h 的调用上界因此是 **89 次**（29 非 `EMPTY` + 59 `EMPTY` + 1 在飞占位）。
+>
+> 两个被否的改法：并进正常 30 桶——内容触发过滤的用户会白亏正常额度，与 #75"失败可无损返回"冲突；只加进 5s 间隔——间隔的理论上界是每账号约 1.7 万次/日，仍不封顶。
+
+> **"三桶任一命中即全拒"是刻意的（Owner 2026-09-22 定）**：`EMPTY` 桶满后，该账号**连同尚未使用的正常额度一起**被挡到窗口滚动。最长等待不是"约 20h"而是**约 23.9h**——60 条 `EMPTY` 最快能在 295s（59×5s）内打完，此时最旧那条要到 24h 才出窗。成本上界必须在"还不知道 outcome"的时刻生效——要调上游之后才知道会不会 `EMPTY`——所以"只挡 `EMPTY` 请求、不挡正常请求"的桶在结构上不存在。账面口径（`EMPTY` 不占正常额度）与可观察行为（撞满即当天停用）必然分离；写清它，而不是假装一致。
+
+> **观测口径**：桶被拒**不写行、也不记日志**——拒绝路径不出网、**相对上游开销**几乎免费（但仍各付一次事务 + advisory lock + 三个聚合查询），而 `app.ts` 没有全局限流，记日志会把日志变成刷量入口。校准 `EMPTY` 桶的 60 从表里读：`select user_id, count(*) from ai_polish_requests where outcome = 'EMPTY' and created_at > now() - interval '24 hours' group by 1`。
+
+> **已知近似（误差上界比原先写的大）**：`retryAfterSeconds` 取"桶内最旧一行的到期时刻"。但计数可能**超上限**（`EMPTY` 上界 61、正常日桶上界 31），此时要等**两条**最旧的行都出窗才解锁，而提示只按最旧那条算——**误差 = 最旧两行的间隔，上界不是 5s，最坏可达数十小时**（最旧一条即将出窗、第二条还早时）。实际影响被 §10.2 的文案规则挡住大半：> 60s 一律显示粗粒度文案，所以"报 3600s、真实 85800s"这类情况用户看到的都是同一句话；**只有"报 ≤60s 而真实要等很久"这一种组合**会让用户白重试一次。修正要改成"第 `count - limit + 1` 旧的行到期"（相关子查询 + OFFSET），代价与收益不成比例，故接受并记录。
 
 ### 5.3 脱敏（只作用于送往上游的文本）
 见 §6.1。脱敏文本与回填映射**只存活在请求生命周期内**，不落库、不落日志。
@@ -239,7 +251,7 @@ OpenAI 兼容托管端点，**裸 `fetch`，不引入任何 SDK 依赖**（理�
 | 索引 | `(user_id, created_at)` —— 支撑 §5.2 的两条检查 |
 | 枚举 | `outcome ∈ OK \| EMPTY \| QUOTA \| UPSTREAM_ERROR \| TIMEOUT \| NOT_CONFIGURED \| TOKEN_LOST`；**DB 存裸 text、契约用 enum**（理由同 `packages/db/src/schema/jobs.ts:17-18,35` 的 **`type`** 列：text + TS 收窄，避免每加一类都改 migration。注意 `jobs.status` 走的是 `pgEnum('job_status')`，两者别混为一谈） |
 | 不存 | 任何用户文本、脱敏映射、上游响应体 |
-| 清理 | **不设清理任务**，接受长期增长。增长上界可算：每用户 ≤31 行/日（30 次 + 拒绝不写行，故实为 ≤30），配额查询只需滚动 24h 窗口。若日后要加保留期，属独立运维迭代 |
+| 清理 | **不设清理任务**，接受长期增长。增长上界可算：每用户 ≤89 行/24h（29 非 `EMPTY` + 59 `EMPTY` + 1 在飞占位，口径见 §5.2；被拒请求不写行），配额查询只需滚动 24h 窗口。若日后要加保留期，属独立运维迭代 |
 | 兼容性 | 纯新增表，不改任何既有表与列，不影响现有读写路径与既有 migration 历史 |
 | 回滚 | `drop table ai_polish_requests`（新表无被引用方） |
 | 生成方式 | 由 `drizzle-kit` 生成 migration 与 meta snapshot 带入 PR，**不手改** `packages/db/src/migrations/**`（AGENTS §8）；本机无 Postgres，真库验证依赖 CI 与 `core:smoke` |
@@ -274,7 +286,7 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | 字段名泄露：候选含 `描述：` 被丢 | §5.6b | 无 |
 | 解析：`content` 空 / `finish_reason=length` → `AI_UPSTREAM_ERROR`（**不是** EMPTY） | §5.5、§4.2 | 无 |
 | moderation：BLOCK / REVIEW 命中被丢，且跑在标记版上 | §5.6d | 无 |
-| 配额：5s 间隔、24h 30 次、`EMPTY` 不计、`QUOTA` 不写行、并发 10 个请求不放大计数 | §5.2 | **真库**（CI） |
+| 配额：5s 间隔、24h 30 次正常、`EMPTY` 计入间隔但单列 60/日桶、`QUOTA` 不写行、并发不放大计数 | §5.2 | **真库**（CI） |
 | 未登录 401；`transport=live` 缺配置启动失败 | §3.2、§4.1 | 无 |
 | provider 出网：超时、4xx/5xx 不泄露响应体 | §3.1 | `globalThis.fetch` 打桩 + `finally` 还原（照 `apps/api/src/modules/auth/router.test.ts:791` 起的 `Resend transport` 用例组） |
 | stub 端到端一条真链路 | §8.1 | stub 服务 |
@@ -306,17 +318,50 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 3. prompt 必须显式要求"只输出描述正文、禁止复述字段名"——探针 2 的泄露是实测出来的，因此 §5.6b 的服务端硬校验不是臆想。
 4. **样本各仅 1 次**，不构成质量结论 → `temperature=0.7` 与 `thinking` 的最终取值待 Owner 用约 20 条真实描述对比（§0-2）。
 
+### 9.1 live 验收实测（2026-09-22，20 条构造样例）
+
+样例集：`apps/api/src/modules/ai/fixtures/polish-samples.jsonl`（**人工构造、无用户数据**；覆盖 8 个分类 + 手机号 / 地址 / QQ / 邮箱 / 型号数字 / 无数字 / "加微信" / 规格行 / BLOCK 词）。探针直连 provider，不占配额、不落表。
+
+| 参数组 | 上游失败 | 延迟 min / 中位 / max | completion tokens | 保留 |
+| --- | --- | --- | --- | --- |
+| `thinking=disabled`（现状） | **0** | 888 / 1124 / **4169** ms | 71 – 775 | 19/20 条 3/3；#19 为 0/3 |
+| `thinking` 开启 | **1**（#20 撞 8s 超时） | 1181 / 2203 / **7776** ms | 171 – **1435** | 同，但 #20 无结果 |
+
+**结论（Owner 2026-09-22 确认）**：参数**保持现状**——`thinking: { type: 'disabled' }`、`temperature = 0.7`、`max_tokens = 2000`。`thinking` 开启违反"延迟 max < 8000ms"这条硬门槛（448 字描述直接超时），且中位延迟 ×2、completion token ×2–9。`temperature` 未做对照：Owner 判断 0.7 的候选质量可接受，不再消耗调用。
+
+丢弃归因：基线 3 处丢弃**全在 #19、全部 moderation `BLOCK`**（R5）；**数字/单位校验（R4）零误杀**。
+正向确认：#8 / #15（原文写"加微信"）**3/3 保留且 `ALLOW`**，模型改写为"有意者私聊"——§5.6d 的 prompt v2 缓解**实测有效**。
+
+**R3 首测 + 探针盲区**：6 条带标记样例里 **2 条**（#14 QQ、#20 手机）的标记在 **3/3 候选里被整段丢掉**（模型改写成"有意者私聊"）→ 真实 HTTP 路径上会整条降级 `TOKEN_LOST`；#20 更糟：同条**地址标记本已保住，也会被一并换成类型化提示语**。**探针看不见这一步**——四层判定不含回填，所以它对 #20 报的是"保留 3 条 / 丢 0 条"。**`TOKEN_LOST` 率只能走 HTTP 路径或查 `outcome` 列。**
+
 ---
 
 ## 10. 客户端（#142）要点
 
+> **跟踪载体（2026-09-22）**：#142 已按 NOT_PLANNED 关闭并并入 [#74](https://github.com/zzstar101/FISH/issues/74) 维护，原正文与验收作为历史上下文保留、不再更新；**本节是客户端接线的权威版本**。
+> **复核基线**：`origin/main = c0bed1a`，`apps/miniapp/src/pages/sell/index.tsx` 共 929 行，下列行号已按此逐条复核。
+> **不要拿 `feat/75-ai-polish-backend` 的本地工作副本当基线**：它停在 rebase 前的 `e3e909a`，落后 main 15 个提交（该分支已 squash 合入，远端分支已删）。
+
 完整清单见 #142，此处只记与后端契约耦合的点：
 
-- 状态机 `PolishState = idle | loading | ready{candidates,index}` 需补 `failed{code}`（`apps/miniapp/src/pages/sell/index.tsx:93-96`）——六个错误码各有文案，失败时原描述一字不动。
+- 状态机 `PolishState = idle | loading | ready{candidates,index}` 需补 `failed{code}`（`:93-96`）——六个错误码各有文案，失败时原描述一字不动。
 - **润色入口当前在非 idle 态仍可点**（`:667-668` 只有 `is-busy` 样式类，`openPolish()`（`:403-409`）只检查描述非空、从不检查 `polish.phase`）。接真接口后每次点击吃 5s 配额，连点必 429 → 必须加守卫；429 时按 `retryAfterSeconds` 变灰倒计时，文案只说"操作太频繁，N 秒后再试"，**不透露日配额数字**。
 - "换一条"保持纯前端轮播（`:419-424`），不重新请求。
 - `adopt()` 只把候选写进描述框并把状态机复位（`:427-434`），不再触碰审核结果（#155 重写发布页时 `setReview(null)` 那行已随既有 mock 流程一起移除）；真实语义是采用后由 `PATCH /listings/:id` 服务端重跑 moderation，客户端**不自行推断审核结论**。
 - `polishCandidates()` mock 保留但受 `TARO_APP_MOCK=1` 门禁；生产失败绝不静默退 mock（#89 的 fail-closed 原则）。
+
+### 10.1 落笔前复核出的两处缺口（2026-09-22）
+
+1. **`retryAfterSeconds` 客户端没透出**：契约 `packages/contracts/src/system/error.ts:35` 已带该可选字段、服务端 429 也确实回写它（`apps/api/src/modules/ai/router.ts:30-32`），但 `apps/miniapp/src/lib/request.ts` 的 `ApiError`（`:31-40`）只有 `code` / `status` / `message` / `details`，`apiRequest` 里的 4 参构造（`:144-149`）没带 —— 倒计时拿不到秒数。**这是接线时唯一需要改的非页面文件**（纯增量，既有调用方不受影响）。
+2. **入参要 `title` + `category`**：`AiPolishCandidatesRequestSchema`（`packages/contracts/src/ai/schema.ts:24-28`）复用 `ListingTitleSchema`（2~40 字）与 `ListingCategorySchema`，而 `openPolish()`（`:403-409`）目前只把 `description` 喂给 mock。
+
+### 10.2 Owner 决策（2026-09-22）
+
+| 项 | 决策 | 理由 |
+| --- | --- | --- |
+| 输入不齐（未选分类 / 标题不合法） | **本地先拦**：先 toast（与既有"先写一句描述再润色"（`:405-408`）对称）；若仍拿到 422，把 `details` 经 `sellFieldErrorsFromDetails` 落到对应输入框标红 | 不新增第二套字段级文案体系；服务端校验照常独立兜底 |
+| 429 长等待文案 | **> 60s 改粗粒度**："今天润色次数用完了，明天再来"；≤ 60s 才用"N 秒后再试" | 命中滚动 24h 配额时 `retryAfterSeconds` 可达数千至上万秒（`apps/api/src/modules/ai/store.ts` 的三个桶之一；`store.test.ts` 的「EMPTY 桶满后被拒」用例断言 `retryAfterSeconds > 3600`），一律"N 秒后再试"不可读 |
+| mock 兜底门禁 | **只认 `TARO_APP_MOCK=1`**（照 `__DEMO_AUTH__` 的严格先例，`apps/miniapp/config/index.ts:64`） | 复用 `__ALLOW_MOCK_FALLBACK__`（`:52-54`）会把 `NODE_ENV=development` 一起放进来：`dev:weapp` 下失败会静默显示本地假候选，而那种候选没有 `provider==='stub'` 角标可区分（§8.2） |
 
 ---
 
@@ -324,16 +369,17 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 
 | 编号 | 内容 | 处置 |
 | --- | --- | --- |
-| R1 | **不设成本上限、不告警**：⚠️ **"脚本化滥用被每用户配额挡住"这条论证不成立**——`EMPTY` 出口按 §5.2 口径同时被两条配额检查排除（`apps/api/src/modules/ai/store.ts:67`、`:78`），凡是能稳定让候选全被过滤的输入（原文含会被 moderation `BLOCK` 的违禁词、或命中 §11-R4 的归一化误杀）都能零配额、无 5s 间隔地打上游；成本与 `ai_polish_requests` 行数因此都没有上界（二次审查实测：同一账号间隔 0s 连打 3 次，全部 `502 AI_RESULT_EMPTY`、无一次 429，落表 3 行 EMPTY、消耗 360 prompt tokens）。止血要给 `EMPTY` 单列一个更宽松的日桶、或让它计入间隔检查，两者都会改 Issue 已冻结的配额口径 → **需 Owner 决策另开单**；在那之前"唯一屏障是每用户配额"只对非 `EMPTY` 出口成立 | Owner 本期决定；`prompt_tokens`/`completion_tokens` 已落表可事后查 |
+| R1 | **不设成本上限、不告警**：⚠️ **"脚本化滥用被每用户配额挡住"这条论证不成立**——`EMPTY` 出口按 §5.2 口径同时被两条配额检查排除（`apps/api/src/modules/ai/store.ts` 的两条配额子查询（按当时的文件行号）），凡是能稳定让候选全被过滤的输入（原文含会被 moderation `BLOCK` 的违禁词、或命中 §11-R4 的归一化误杀）都能零配额、无 5s 间隔地打上游；成本与 `ai_polish_requests` 行数因此都没有上界（二次审查实测：同一账号间隔 0s 连打 3 次，全部 `502 AI_RESULT_EMPTY`、无一次 429，落表 3 行 EMPTY、消耗 360 prompt tokens）。**已处置（2026-09-22，#173）**：`EMPTY` 单列 60/日桶 + 计入 5s 间隔，成本上界因此是每账号 89 次/24h（§5.2）。原论证不成立的部分已闭合；剩余只有"撞满即当天停用"这一产品语义（Owner 已确认，见 §5.2） | 已修（#173）；`prompt_tokens`/`completion_tokens` 已落表可事后查 |
 | R2 | **无后台可配**：换模型 / 改 prompt / 调配额都要发版 | 归 #73 写操作范围，待其冻结 |
-| R3 | **标记被改写的真实比率未知** | 只有 `live` 批量调用能测；`outcome=TOKEN_LOST` 已为其预留指标 |
+| R3 | **标记被改写的真实比率**——2026-09-22 首测：6 条带标记样例里 **2 条**（#14 QQ、#20 手机）的标记在 3/3 候选里被整段丢掉 | 首测 33%，样本仅 20 条且为构造数据，只作初值。**探针测不到这一步**（四层判定不含回填），`TOKEN_LOST` 率必须走 HTTP 路径或查 `outcome` 列。见 §9.1 |
 | R4 | **数字 ⊆ 校验的真实误杀率未知** → 候选经常 1 条还是 3 条不知道 | 同 R3。20 条验收里三层过滤零误杀；**已识别但未触发的一类**：归一化会剥掉空白，`iPhone 13 128G` 被拼成令牌 `13128g`，若模型改写数字顺序（如 `128G 的 iPhone 13`）会拆成 `128g` + `13` 而被判"新增事实"——Owner 2026-09-21 决定先观察不修（修它要动 §5.6c 的核心）。继续靠 `filtered_count` 观察 |
 | R5 | **moderation 前置丢弃率未知** | 同上 |
-| R6 | **`live` 从未批量验证**，首次真实调用验收责任在 Owner | 本文与 #141 均不声称"AI 已可用" |
+| R6 | ~~**`live` 从未批量验证**~~ **已做（2026-09-22）**：20 条构造样例 + `thinking` 对照，参数经 Owner 确认保持现状（§9.1） | **残留**：样例是构造的、不是真实用户描述（探针会打印原文，不能用真实文本），所以这是"能跑通、参数可用"的判据，不等于"文案质量在真实数据上也成立" |
 | R7 | 开发期 key 进过会话上下文 | 按"贴出即泄露"处理，PR 合并后轮换 |
 | R8 | #142 依赖 #129 合入，若 #129 长期挂起则客户端无法收口 | 已在 PR #129 登记依赖 |
 | R9 | ~~部署手册 §11.6 / §10 的交叉引用漏掉 §4 新增的 AI 变量~~ | **已在本分支修复**：§11.6 改成"§4 列出的全部 API 专属变量（邮件三项、#70 的 `MEETUP_TOKEN_SECRET`、#141 的四个 `AI_POLISH_*`）"（`docs/deployment.md:970-971`），§10 的备份清单本就含整个 `/etc/fish/api-mail.env`（`:807`）。编号保留以免其它地方的引用悬空；原稿"只报告不修"的结论作废 |
 | R10 | **脱敏与字段名硬校验的已知边界**（审查登记，本期不修）：① 脱敏只认 11 位手机号，座机 `0758-1234567`、8 位号码、`138(1234)5678` 这类括号写法都不在规则内（§6.1 只声明"11 位手机及分隔/全角变体"，属已声明边界）；② 字段名硬校验只认 `标题` / `分类` / `描述` 三个前缀，而 prompt 自己发出去的是 `商品标题：` / `商品分类：` / `原始描述：`，模型若照抄这几个标签不会被拦；③ `fish phone 1`（无括号、空格分隔）**不再**算半成品标记——这是修 `fish mail 3 个` 误伤的代价，该字面会留在候选里（整条仍记 `TOKEN_LOST`）；④ emoji ZWJ 序列（U+200D 属 `Cf`）会被拆开成多个 emoji，改动前就是如此 | ① 属设计已声明范围；② 超出 Issue 枚举的 `标题：/分类：/描述：`；③④ 概率极低且只影响字面/排版，不改事实。是否收窄由 Owner 定；①③④ 靠 `outcome` / `filtered_count` 观察。**已闭合的**：不可见字符绕过（含软连字符/非空白控制字符，见 §5.7）、大写 `V:` 漏脱敏（改用"值必须以字母/下划线开头"约束，同时排除 `输入电压 V: 100-240V` 这类规格行） |
+| R11 | **字段名层（§5.6b）没有端到端覆盖**（2026-09-22 核验 §13 时发现）：`ai-polish-stub.ts` 的脏候选只覆盖脱敏回填 / 长度 / 数字三层（§8.1 的原定义），字段名硬校验只有单测（`service.test.ts`）。而且**不能靠"再加一条脏候选"解决**——`splitSegments` 会 `slice(0, AI_POLISH_CANDIDATE_MAX)`，第 4 条会被直接丢掉；要覆盖必须**替换**现有三条之一，那会牺牲另一层的端到端覆盖 | 只报告不修（AGENTS §3 范围纪律）：§8.1 明确列举的三层不含字段名，属原设计口径而非缺陷；且"一条候选同时触发两层"会让 `dropped` 无法区分是哪层丢的，反而削弱 CI 诊断价值。是否收窄由 Owner 定 |
 
 ---
 
@@ -361,19 +407,22 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | 18 | `title` 复用 `ListingTitleSchema`（≥2 字，润色也要求标题合法） | 放宽为只限长度/允许空标题（服务端对标题的不变量就与发布路径不一致了）；Owner 2026-09-21 定 |
 | 19 | 事实基线 = 标题 + 描述 | 只取描述：真实上游实测候选引用标题里的型号（"罗技 K380"→`380`）被判"新增事实"，三条候选全丢、返回 `EMPTY`（见 §5.6c 口径） |
 | 20 | 回填只要求"本字段（描述）"的标记齐全 | 要求全部字段的标记：标题含可脱敏内容时会把用户自己的联系方式换成提示语并误记 `TOKEN_LOST`（见 §5.7 口径，真实上游踩过） |
+| 21 | **`EMPTY` 出口改为单列 60/日桶 + 计入 5s 间隔**（2026-09-22，#173；原地改写原第 13 条会抹掉"当初为什么选 EMPTY 不计数"的记录） | 保持第 13 条的"不计数"：会让"能把请求稳定变成 `EMPTY`"的调用方零配额、无间隔地打付费上游，成本与表行数都无上界（二次审查实测：间隔 0s 连打 3 次全部 `EMPTY`、无一次 429）。改为并进正常 30 桶：内容触发过滤的用户白亏正常额度。只加进间隔不加日桶：5s 的理论上界是 1.7 万次/日，仍不封顶。代价是"三桶任一命中即全拒"，撞满 `EMPTY` 桶当天停用——Owner 2026-09-22 确认接受并写进文案 |
 
 ---
 
 ## 13. 验收门禁
 
-**#141（本方案主体）**
+**#141（本方案主体，已随 PR #148 合入 main）**
 
-- [ ] 契约 / 路由 / requireAuth / 七个错误码全落地，`AI_UPSTREAM_ERROR` 与 `AI_RESULT_EMPTY` 可区分
-- [ ] §5 八步全链路；日志与 `ai_polish_requests` 中**无用户文本**
-- [ ] `ai_polish_requests` 走 `0014`；配额两条检查 + advisory lock + 计入/不计入口径有测试
-- [ ] stub 脏响应形状让三层过滤在 CI 里真被执行
-- [ ] `.env.example` / `ci.yml` / `deployment.md` §4 三处同步（含破例补的 `MEETUP_TOKEN_SECRET`）
-- [ ] `bun run typecheck` → `bun run lint` → `bun test` 全绿（AGENTS §6 由窄到宽）
-- [ ] AGENTS §7：**全新子代理**对抗性审查，只给改动范围与需求；每条可执行发现要么修、要么附文件行号说明为何不成立
+> 2026-09-22 用**全新子代理**逐项核验：可证实才勾，不可证实就标注。证据写在各行末尾。
 
-**#142（另单）**：见 §10 与 #142 正文——静态检查不能替代微信开发者工具演示 + Owner 确认。
+- [x] 契约 / 路由 / requireAuth / 七个错误码全落地，`AI_UPSTREAM_ERROR` 与 `AI_RESULT_EMPTY` 可区分 —— 契约 5 码在 `packages/contracts/src/ai/schema.ts`，`VALIDATION_FAILED` 在 `apps/api/src/modules/ai/router.ts`，`UNAUTHENTICATED` 由 `requireAuth`；`service.ts` 分流两个上游码，`service.test.ts` 断言 `not.toBe`
+- [x] §5 八步全链路；日志与 `ai_polish_requests` 中**无用户文本** —— `service.ts` 逐段标注；表内只有计数列（`input_chars` 是数字，无文本列）；`app.ai-polish.test.ts` 断言行内不含原文片段
+- [x] `ai_polish_requests` 走 `0014`；配额检查 + advisory lock + 计入/不计入口径有测试 —— `0014_strong_lorna_dane.sql`；`pg_advisory_xact_lock(hashtext('ai-polish:'+userId))`；`store.test.ts` 覆盖 NULL 占位 / `EMPTY` / 日桶 / 并发（口径已于 #173 变更，测试同步更新）
+- [x] stub 脏响应形状让三层过滤在 CI 里真被执行 —— **按 §8.1 定义的三层（脱敏回填 / 长度 / 数字）**：`ai-polish-stub.ts` 三条候选各触发一层，`app.ai-polish.test.ts` 断言 `filteredCount === 2` 且标记已回填。⚠️ **字段名层（§5.6b）仍只有单测、无端到端覆盖**，已登记为 §11-R11
+- [x] `.env.example` / `ci.yml` / `deployment.md` §4 三处同步（含破例补的 `MEETUP_TOKEN_SECRET`） —— 三处均已实测命中
+- [x] `bun run typecheck` → `bun run lint` → `bun test` 全绿（AGENTS §6 由窄到宽） —— PR #148 的 `ci` check 为 SUCCESS（含 Lint / Typecheck / Test / Migrate / Core smoke）
+- [ ] AGENTS §7：**全新子代理**对抗性审查 —— **无法独立验证**，故不勾：PR #148 评论区只有 sourcery-ai 机器人与作者自述（PR 正文），仓库内无审查产物。§13 记录的是"当时是否做过"，事后补做无法改变这个事实；补偿是 #173 这次改动本身已做**三轮**独立审查
+
+**#142（另单，已并入 #74）**：见 §10（含 §10.1 两处缺口与 §10.2 三项 Owner 决策）——静态检查不能替代微信开发者工具演示 + Owner 确认。

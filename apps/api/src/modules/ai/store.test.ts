@@ -5,6 +5,7 @@ import { users } from '@fish/db/schema/users'
 import { eq, inArray } from 'drizzle-orm'
 import {
   AI_POLISH_DAILY_LIMIT,
+  AI_POLISH_EMPTY_DAILY_LIMIT,
   AI_POLISH_MIN_INTERVAL_SECONDS,
   createSqlAiPolishStore,
 } from './store'
@@ -80,7 +81,7 @@ test('占位行即使没回写（进程崩了）也计入间隔——`<> EMPTY` 
   })
 })
 
-test('回写 OK 后仍受间隔约束；回写 EMPTY 后立即可再请求', async () => {
+test('回写 OK 后仍受间隔约束', async () => {
   await withUser(async (userId) => {
     const first = await reserve(userId)
     if (!first.allowed) throw new Error('unreachable')
@@ -94,22 +95,109 @@ test('回写 OK 后仍受间隔约束；回写 EMPTY 后立即可再请求', asy
       completionTokens: 200,
     })
 
-    const afterOk = await reserve(userId)
-    expect(afterOk.allowed).toBe(false)
+    expect((await reserve(userId)).allowed).toBe(false)
+    expect(await rowsOf(userId)).toHaveLength(1)
+  })
+})
 
-    // 第二条空结果：上游正常返回但候选全被过滤，对用户无损，不该让他白等一次（设计 §5.2）。
-    const rows = await rowsOf(userId)
-    const emptyRow = rows[0]
-    if (!emptyRow) throw new Error('unreachable')
-    await db
-      .update(aiPolishRequests)
-      .set({ outcome: 'EMPTY', candidateCount: 0, filteredCount: 2 })
-      .where(eq(aiPolishRequests.id, emptyRow.id))
+test('回写 EMPTY 后仍受 5s 间隔约束：上游已计费，不因候选被过滤就免掉间隔（#173）', async () => {
+  await withUser(async (userId) => {
+    await db.insert(aiPolishRequests).values({
+      userId,
+      outcome: 'EMPTY',
+      inputChars: 10,
+      model: 'stub',
+      promptVersion: 'test',
+    })
 
-    const afterEmpty = await reserve(userId)
-    expect(afterEmpty.allowed).toBe(true)
-    // EMPTY 行照写（质量指标要用），只是不计入两条检查。
-    expect(await rowsOf(userId)).toHaveLength(2)
+    const result = await reserve(userId)
+    expect(result.allowed).toBe(false)
+    if (result.allowed) throw new Error('unreachable')
+    expect(result.retryAfterSeconds).toBeLessThanOrEqual(AI_POLISH_MIN_INTERVAL_SECONDS)
+    // 被拒请求不写行：否则会把 COUNT 撑大，形成"拒一次就少一次额度"的自我收紧。
+    expect(await rowsOf(userId)).toHaveLength(1)
+  })
+})
+
+test('EMPTY 不占正常日额度：24h 内满 30 条 EMPTY 之后仍可请求（#75 无损承诺）', async () => {
+  await withUser(async (userId) => {
+    const rows = Array.from({ length: AI_POLISH_DAILY_LIMIT }, () => ({
+      userId,
+      outcome: 'EMPTY' as const,
+      inputChars: 10,
+      model: 'stub',
+      promptVersion: 'test',
+      // 放在 10 分钟前：确保这里测的是日额度，而不是 5s 间隔。
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+    }))
+    await db.insert(aiPolishRequests).values(rows)
+
+    expect((await reserve(userId)).allowed).toBe(true)
+  })
+})
+
+test('EMPTY 桶满后被拒，retryAfterSeconds 指向窗口滚动（不是 5s 间隔）', async () => {
+  await withUser(async (userId) => {
+    const rows = Array.from({ length: AI_POLISH_EMPTY_DAILY_LIMIT }, () => ({
+      userId,
+      outcome: 'EMPTY' as const,
+      inputChars: 10,
+      model: 'stub',
+      promptVersion: 'test',
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+    }))
+    await db.insert(aiPolishRequests).values(rows)
+
+    const result = await reserve(userId)
+    expect(result.allowed).toBe(false)
+    if (result.allowed) throw new Error('unreachable')
+    expect(result.retryAfterSeconds).toBeGreaterThan(3600)
+    expect(await rowsOf(userId)).toHaveLength(AI_POLISH_EMPTY_DAILY_LIMIT)
+  })
+})
+
+test('未回写的 NULL 占位行不计入 EMPTY 桶（59 条 EMPTY + 1 条在飞时仍应放行）', async () => {
+  await withUser(async (userId) => {
+    const rows = Array.from({ length: AI_POLISH_EMPTY_DAILY_LIMIT - 1 }, () => ({
+      userId,
+      outcome: 'EMPTY' as const,
+      inputChars: 10,
+      model: 'stub',
+      promptVersion: 'test',
+      // 10 分钟前：排掉 5s 间隔，被拒只可能来自 EMPTY 桶。
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+    }))
+    await db.insert(aiPolishRequests).values(rows)
+    // 另插一条 outcome 仍为 NULL 的占位行：它计入正常日桶，但不该计入 EMPTY 桶（设计 §5.2 的口径表）。
+    await db.insert(aiPolishRequests).values({
+      userId,
+      inputChars: 10,
+      model: 'stub',
+      promptVersion: 'test',
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+    })
+
+    expect((await reserve(userId)).allowed).toBe(true)
+  })
+})
+
+test('EMPTY 桶满时并发请求全部被拒、不新增行（旧口径下会放行 1 次）', async () => {
+  await withUser(async (userId) => {
+    const rows = Array.from({ length: AI_POLISH_EMPTY_DAILY_LIMIT }, () => ({
+      userId,
+      outcome: 'EMPTY' as const,
+      inputChars: 10,
+      model: 'stub',
+      promptVersion: 'test',
+      // 10 分钟前：排掉 5s 间隔这个混淆项——这里被拒只可能来自 EMPTY 桶。
+      createdAt: new Date(Date.now() - 10 * 60 * 1000),
+    }))
+    await db.insert(aiPolishRequests).values(rows)
+
+    const results = await Promise.all(Array.from({ length: 10 }, () => reserve(userId)))
+
+    expect(results.filter((result) => result.allowed)).toHaveLength(0)
+    expect(await rowsOf(userId)).toHaveLength(AI_POLISH_EMPTY_DAILY_LIMIT)
   })
 })
 
