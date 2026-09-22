@@ -212,6 +212,19 @@ class MemoryTxStore implements TransactionStore {
     // 对齐 SQL：事务内 FOR UPDATE 校验 PENDING + 卖家，终态交易签发返回 null
     const live = this.rows.find((r) => r.id === transactionId)
     if (live?.status !== 'PENDING_MEETUP' || live.seller_id !== input.issuedBy) return null
+    const existing = this.meetupTokens.get(transactionId)
+    if (existing) {
+      // #175 对齐 SQL：未核销才把哈希对齐到传入值（历史行自愈），已核销不复活、不重写；
+      // 计数与锁定每次取码清零；issued_at / consumed_at / consumed_by 不动。
+      if (existing.consumed_at == null) {
+        existing.token_hash = input.tokenHash
+        existing.code_hash = input.codeHash
+      }
+      existing.issued_by = input.issuedBy
+      existing.failed_attempts = 0
+      existing.locked_until = null
+      return existing
+    }
     const row: MeetupTokenRow = {
       transaction_id: transactionId,
       token_hash: input.tokenHash,
@@ -556,24 +569,90 @@ describe('transaction service: meetup token (#70)', () => {
     })
   })
 
-  test('刷新换码：旧 6 位码与旧 qrToken 立即失效（重放旧码 → INVALID）', async () => {
+  test('#175 一单一码：重复取码返回同一枚 6 位码与同一份 qrPayload', async () => {
     const { service, txId } = await buildWithPendingTx()
     const first = await service.issueMeetupToken(seller, txId)
     const second = await service.issueMeetupToken(seller, txId)
-    expect(second.code).not.toBe(first.code)
-    expect(second.qrPayload).not.toBe(first.qrPayload)
-    // 旧码核销：不匹配当前行 → 计失败 → INVALID
+    const third = await service.issueMeetupToken(seller, txId)
+    // 卖家重进页面 / 换端 / 重新登录都是同一枚（派生值只依赖交易 id + 服务端密钥）
+    expect(second).toEqual(first)
+    expect(third).toEqual(first)
+    // 同一枚码就是当前可用凭证（不存在「旧码已作废」）
     await expect(
-      service.redeemMeetupToken(buyer, txId, {
-        qrToken: parseMeetupQrPayload(first.qrPayload)?.token ?? '',
-      }),
-    ).rejects.toMatchObject({ status: 422, code: 'MEETUP_TOKEN_INVALID' })
-    await expect(service.verifyMeetupCode(buyer, txId, { code: first.code })).rejects.toMatchObject(
-      { status: 422, code: 'MEETUP_TOKEN_INVALID' },
+      service.verifyMeetupCode(buyer, txId, { code: first.code }),
+    ).resolves.toMatchObject({ verified: true })
+  })
+
+  test('#175 已核销后卖家再取码：仍是同一枚，且不复活（status 保持 CONSUMED）', async () => {
+    const { service, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    await service.verifyMeetupCode(buyer, txId, { code: token.code })
+
+    const again = await service.issueMeetupToken(seller, txId)
+    expect(again.code).toBe(token.code)
+    expect(again.qrPayload).toBe(token.qrPayload)
+    expect(await service.getMeetupTokenStatus(seller, txId)).toMatchObject({ status: 'CONSUMED' })
+    // 不复活：再核销同一枚码仍报 CONSUMED（不是「核销成功」）
+    await expect(service.verifyMeetupCode(buyer, txId, { code: token.code })).rejects.toMatchObject(
+      {
+        status: 409,
+        code: 'MEETUP_TOKEN_CONSUMED',
+      },
     )
-    // 新码可用
-    const status = await service.getMeetupTokenStatus(buyer, txId)
-    expect(status.status).toBe('ISSUED')
+  })
+
+  test('#175 历史遗留行自愈：取码把哈希对齐到派生值并解锁；派生码可核销、旧随机码作废', async () => {
+    const { service, store, txId } = await buildWithPendingTx()
+    // 模拟改动前签发的随机码：库里只有一对与派生值对不上的哈希，且已进入锁定
+    store.meetupTokens.set(txId, {
+      transaction_id: txId,
+      token_hash: 'legacy-token-hash',
+      code_hash: 'legacy-code-hash',
+      issued_by: seller,
+      issued_at: new Date(),
+      consumed_at: null,
+      consumed_by: null,
+      failed_attempts: 5,
+      locked_until: new Date(Date.now() + 60_000),
+    })
+
+    const token = await service.issueMeetupToken(seller, txId)
+    const row = store.meetupTokens.get(txId)
+    expect(row?.token_hash).not.toBe('legacy-token-hash')
+    expect(row?.failed_attempts).toBe(0)
+    expect(row?.locked_until).toBeNull()
+
+    // 旧随机码对不上当前哈希（明文本来就已无法重放）→ INVALID，且不再被锁定拦下
+    const wrong = token.code === '000000' ? '000001' : '000000'
+    await expect(service.verifyMeetupCode(buyer, txId, { code: wrong })).rejects.toMatchObject({
+      status: 422,
+      code: 'MEETUP_TOKEN_INVALID',
+    })
+    // 派生码就是可用凭证
+    await expect(
+      service.verifyMeetupCode(buyer, txId, { code: token.code }),
+    ).resolves.toMatchObject({ verified: true })
+  })
+
+  test('#175 取码是卖家专有：买家 403 且不会顺手清零锁定（解锁只能由卖家触发）', async () => {
+    const { service, store, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    // 买家连错 5 次 → 锁定
+    const wrong = token.code === '000000' ? '000001' : '000000'
+    for (let i = 0; i < 5; i++) {
+      await service.verifyMeetupCode(buyer, txId, { code: wrong }).catch(() => null)
+    }
+    const locked = store.meetupTokens.get(txId)
+    expect(locked?.failed_attempts).toBe(5)
+    expect(locked?.locked_until).not.toBeNull()
+
+    await expect(service.issueMeetupToken(buyer, txId)).rejects.toMatchObject({
+      status: 403,
+      code: 'MEETUP_TOKEN_NOT_ALLOWED',
+    })
+    // 被拒的取码不产生任何副作用：计数与锁定原样保留
+    expect(store.meetupTokens.get(txId)?.failed_attempts).toBe(5)
+    expect(store.meetupTokens.get(txId)?.locked_until).not.toBeNull()
   })
 
   test('买家 redeem 成功 → verified + CONFIRM_DELIVERY；卖家确认被盖上；买家 confirm → COMPLETED', async () => {
@@ -700,7 +779,7 @@ describe('transaction service: meetup token (#70)', () => {
       code: 'MEETUP_TOKEN_LOCKED',
     })
     // 锁定期间即使出示正确码也拒绝
-    const token = await service.issueMeetupToken(seller, txId) // 刷新同时清零失败计数
+    const token = await service.issueMeetupToken(seller, txId) // #175：卖家重新取码（同一枚码）清零计数与锁定
     await expect(
       service.verifyMeetupCode(buyer, txId, { code: token.code }),
     ).resolves.toMatchObject({ verified: true })

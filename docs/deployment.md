@@ -746,15 +746,16 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
       （`packages/shared/src/env.ts` 的 `loadMeetupTokenEnv`），配合 `Restart=always`
       表现为每 5 秒一次的 crash loop，`/health` 根本连不上。这就是 §7.2 第 0 步预检的理由。
     - **换值 = 已签发未核销的面交码立刻全部失效**：库里只存带密钥的 HMAC，比对随密钥变，
-      买家拿到 422 `MEETUP_TOKEN_INVALID`，卖家重新签发即恢复。方向是 fail closed（不会误放行）。
-      窗口约束比想象的小：凭证本身 5 分钟就过期（`MEETUP_TOKEN_TTL_SECONDS`，
-      `apps/api/src/modules/transactions/service.ts:46`），所以只需避开"正站在原地扫码的那一对"，
+      买家拿到 422 `MEETUP_TOKEN_INVALID`，卖家重新取码即恢复（#175 起码本身也由密钥派生，
+      换值后连卖家看到的码值一起变）。方向是 fail closed（不会误放行）。
+      窗口约束：凭证在 `PENDING_MEETUP` 期间长期有效（#147 起没有 TTL），换值后卖家重新
+      取码会拿到新派生码并同步比对列，所以只需避开"正站在原地扫码的那一对"，
       不需要等全站没有 `PENDING_MEETUP` 交易（活跃站上那种窗口几乎不存在）。
     - 顺带知道两件不影响部署但会被问到的事：面交凭证的失败计数是**累计**的，QR 与 6 位码共用
-      同一个计数（`apps/api/src/modules/transactions/service.ts:266-274`）——满 5 次锁 10 分钟，
-      锁定到期后计数**不**归零，再错一次立即重新锁定；只有卖家重签发才清零
+      同一个计数（`apps/api/src/modules/transactions/service.ts` 的 `consumeMeetup`）——满 5 次锁 10 分钟，
+      锁定到期后计数**不**归零，再错一次立即重新锁定；只有卖家重新取码才清零
       （`store.ts` 的 `recordMeetupTokenFailure` 与 `upsertMeetupToken`）。所以现场"输对了却还说错误次数过多"
-      的正解是请卖家重新签发，不是等一会儿。
+      的正解是请卖家重新出示一次（重新进面交页 / 点刷新；#175 起码值不变、只解锁），不是等一会儿。
     - 它**会**随 §10 备份脚本那条 `tar` 里已列出的 `/etc/fish/api-mail.env` 一起进
       `config-*.tar.gz`：换机恢复后未核销码仍然可用。也正因如此，**备份包与数据库同等保密**，
       拿到 config 包就等于能离线伪造任意面交码。

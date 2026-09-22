@@ -81,12 +81,13 @@ export const transactions = pgTable(
 )
 
 /**
- * 面交交易码（#70，#147 改为长期凭证）。一行对应一笔交易的**当前**凭证：重新签发
- * （刷新）即整行覆写，旧码立即作废 —— 「一次性」由 consumed_at 承载；有效期即
- * PENDING_MEETUP 的生命周期，交易进终态（COMPLETED / CANCELLED）时同事务删行。
+ * 面交交易码（#70，#147 改为长期凭证，#175 改为确定性派生）。一行对应一笔交易的
+ * **唯一**凭证：码由服务端密钥按交易 id 派生（同一笔交易恒定同一枚，没有重签动作），
+ * 行只在首次取码时创建 —— 「一次性」由 consumed_at 承载；有效期即 PENDING_MEETUP
+ * 的生命周期，交易进终态（COMPLETED / CANCELLED）时同事务删行。
  *
  * 安全口径：**不存明文**。6 位码与 QR token 都只存 HMAC-SHA256（服务端密钥见
- * `MEETUP_TOKEN_SECRET`），明文只在签发响应里出现一次；6 位码空间只有 10^6，
+ * `MEETUP_TOKEN_SECRET`），明文只在取码响应里出现；6 位码空间只有 10^6，
  * 连续失败由 failed_attempts / locked_until 限流（服务层负责）。
  *
  * 状态不落列：NONE（无行）/ ISSUED / CONSUMED（consumed_at 非空）全部可派生，
@@ -99,7 +100,7 @@ export const transactionMeetupTokens = pgTable(
     transactionId: uuid('transaction_id')
       .primaryKey()
       .references(() => transactions.id),
-    /** QR token 的 HMAC-SHA256（hex）。token 本身 16 字节随机，只出现在签发响应。 */
+    /** QR token 的 HMAC-SHA256（hex）。token 本身是密钥派生的 128 位串，只在取码响应出现。 */
     tokenHash: text('token_hash').notNull(),
     /** 6 位面交码的 HMAC-SHA256（hex）。 */
     codeHash: text('code_hash').notNull(),
@@ -112,7 +113,7 @@ export const transactionMeetupTokens = pgTable(
     consumedAt: timestamptz('consumed_at'),
     consumedBy: uuid('consumed_by').references(() => users.id),
     /** 核销失败累计（QR token / 6 位码共用的防爆破计数）；行被消费后计数不再有意义，
-     * 重新签发（覆写）时归零。 */
+     * 卖家重新取码时归零（#175）。 */
     failedAttempts: integer('failed_attempts').notNull().default(0),
     /** 连续失败达阈值后的禁用期；期间核销一律 429。 */
     lockedUntil: timestamptz('locked_until'),

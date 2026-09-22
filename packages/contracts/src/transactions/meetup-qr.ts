@@ -10,8 +10,8 @@
  * - 携带 transactionId：扫码端无需页面上下文即可定位交易（redeem 路由的 `:id`
  *   由 payload 提供）；**token 才是凭证**，transactionId 只是地址（#70 设计原则：
  *   不把 transactionId 当作可完成凭证）。
- * - token 是 128 位随机串的 base64url，出现在 `t` 参数里 —— 截图/转发由签发侧的
- *   短过期 + 一次性消费兜底，不靠 URL 保密。
+ * - token 是 128 位**密钥派生**串的 base64url（#175），出现在 `t` 参数里 —— 截图/转发由
+ *   一次性消费 + 交易进终态同事务销毁兜底，不靠 URL 保密。
  */
 
 const PAYLOAD_PREFIX = 'fish://meetup/redeem'

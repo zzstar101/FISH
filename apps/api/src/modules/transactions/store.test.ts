@@ -483,36 +483,43 @@ describe('meetup token store (integration, #70)', () => {
     expect(again.kind).toBe('consumed')
   })
 
-  test('upsert 整行覆写：旧哈希不再匹配，消费/失败状态归零', async () => {
+  test('#175 ensure：同一行、issued_at 不变；未核销时哈希对齐（历史行自愈），已核销不复活；计数与锁定每次清零', async () => {
     const txId = await createPendingTx(scenarios.upsert)
-    await store.upsertMeetupToken(txId, {
+    const first = await store.upsertMeetupToken(txId, {
       tokenHash: TOKEN_HASH,
       codeHash: CODE_HASH,
       issuedBy: seller,
     })
-    await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
+    expect(first).not.toBeNull()
+    if (!first) throw new Error('unreachable')
+
+    // 先制造「已锁定」状态：卖家取码必须能把它清零（#175 冻结的现场解锁路径）
     await store.recordMeetupTokenFailure(
       txId,
       { tokenHash: TOKEN_HASH, codeHash: CODE_HASH },
-      5,
+      1,
       600,
     )
+    expect((await store.findMeetupToken(txId))?.locked_until).not.toBeNull()
 
+    // 未核销时再取码：哈希对齐到传入值（历史遗留随机码 → 派生码的一次性自愈），
+    // 计数与锁定清零，issued_at 不刷新（不是「重签一枚新码」）
     const NEW_TOKEN_HASH = 'c'.repeat(64)
     const NEW_CODE_HASH = 'd'.repeat(64)
-    const refreshed = await store.upsertMeetupToken(txId, {
+    const healed = await store.upsertMeetupToken(txId, {
       tokenHash: NEW_TOKEN_HASH,
       codeHash: NEW_CODE_HASH,
       issuedBy: seller,
     })
-    expect(refreshed).not.toBeNull()
-    if (!refreshed) throw new Error('unreachable')
-    expect(refreshed.token_hash).toBe(NEW_TOKEN_HASH)
-    expect(refreshed.consumed_at).toBeNull()
-    expect(refreshed.failed_attempts).toBe(0)
-    expect(refreshed.locked_until).toBeNull()
+    expect(healed).not.toBeNull()
+    if (!healed) throw new Error('unreachable')
+    expect(healed.token_hash).toBe(NEW_TOKEN_HASH)
+    expect(healed.code_hash).toBe(NEW_CODE_HASH)
+    expect(healed.failed_attempts).toBe(0)
+    expect(healed.locked_until).toBeNull()
+    expect(new Date(healed.issued_at).getTime()).toBe(new Date(first.issued_at).getTime())
 
-    // 旧哈希被替换 → 不匹配（invalid）；新哈希可核销
+    // 旧（历史）哈希不再匹配 → invalid；对齐后的哈希可核销
     const old = await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })
     expect(old.kind).toBe('invalid')
     const fresh = await store.consumeMeetupToken(txId, buyer1, {
@@ -520,6 +527,25 @@ describe('meetup token store (integration, #70)', () => {
       hash: NEW_CODE_HASH,
     })
     expect(fresh.kind).toBe('ok')
+
+    // 已核销后再取码（卖家重进页面）：不复活、不重写哈希，consumed 保持
+    const afterConsume = await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+    })
+    expect(afterConsume).not.toBeNull()
+    if (!afterConsume) throw new Error('unreachable')
+    expect(afterConsume.consumed_at).not.toBeNull()
+    expect(afterConsume.token_hash).toBe(NEW_TOKEN_HASH)
+    expect(afterConsume.code_hash).toBe(NEW_CODE_HASH)
+    expect(afterConsume.failed_attempts).toBe(0)
+    expect(afterConsume.locked_until).toBeNull()
+    const replay = await store.consumeMeetupToken(txId, buyer1, {
+      kind: 'code',
+      hash: NEW_CODE_HASH,
+    })
+    expect(replay.kind).toBe('consumed')
   })
 
   test('哈希不匹配 → invalid；失败计数达阈值置 locked_until；锁定期间 → locked', async () => {
@@ -714,7 +740,7 @@ describe('meetup token store (integration, #70)', () => {
     }
   })
 
-  test('失败计数绑定凭证代际：刷新后旧请求的失败不污染新码（审查 P1）', async () => {
+  test('失败计数绑定凭证代际：哈希换代后旧请求的失败不污染新码（审查 P1）', async () => {
     const txId = await createPendingTx(scenarios.generation)
     const V1_TOKEN = 'f'.repeat(64)
     const V1_CODE = 'e'.repeat(64)
@@ -731,7 +757,7 @@ describe('meetup token store (integration, #70)', () => {
       600,
     )
     expect(first?.failedAttempts).toBe(1)
-    // 刷新 → 新一代凭证（哈希覆写、计数归零）
+    // 哈希换代（历史行自愈）→ 新一代凭证（哈希覆写、计数归零）
     const V2_TOKEN = '9'.repeat(64)
     const V2_CODE = '8'.repeat(64)
     await store.upsertMeetupToken(txId, {

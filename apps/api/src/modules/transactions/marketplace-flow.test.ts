@@ -681,7 +681,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(afterCancel.status).toBe(409)
   })
 
-  test('#147 面交码链路：长期有效签发 → 核销盖卖家确认 → 终态销毁凭证', async () => {
+  test('#175/#147 面交码链路：一单一码（重复取码不变）→ 核销盖卖家确认 → 终态销毁凭证', async () => {
     // 面交链路用第三个商品：前面的商品一个 SOLD 一个已取消。
     const thirdListingId = await insertListing(
       await userIdOf(SELLER_NO),
@@ -721,6 +721,27 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const token = await json<{ code: string; qrPayload: string }>(issued)
     expect(token.code).toMatch(/^\d{6}$/)
     expect(token).not.toHaveProperty('expiresAt')
+    const issuedAt = async () =>
+      (
+        rows(
+          await db.execute(
+            sql`SELECT issued_at FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+          ),
+        )[0] as { issued_at: Date }
+      ).issued_at
+    const firstIssuedAt = await issuedAt()
+
+    // #175 一单一码：卖家再取一次（重进页面 / 换端 / 重新登录）拿到的仍是同一枚码与同一份 payload
+    const reissue = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(reissue.status).toBe(201)
+    const again = await json<{ code: string; qrPayload: string }>(reissue)
+    expect(again.code).toBe(token.code)
+    expect(again.qrPayload).toBe(token.qrPayload)
+    // 同一行：重复取码不刷新 issued_at（不是「重签一枚新码」）
+    expect((await issuedAt()).getTime()).toBe(firstIssuedAt.getTime())
 
     // 签发后 status ISSUED
     const status = await json<{ status: string }>(
@@ -762,6 +783,23 @@ describe('marketplace flow 双账号验收（#42）', () => {
       await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
     )
     expect(consumedStatus.status).toBe('CONSUMED')
+
+    // #175：已核销后卖家再取码 → 仍是同一枚（不换码），且**不复活**（status 仍 CONSUMED）
+    const afterConsume = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(afterConsume.status).toBe(201)
+    expect((await json<{ code: string }>(afterConsume)).code).toBe(token.code)
+    expect(
+      (
+        await json<{ status: string }>(
+          await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), {
+            cookie: sellerCookie,
+          }),
+        )
+      ).status,
+    ).toBe('CONSUMED')
 
     // 买家 confirm → COMPLETED；同事务销毁凭证 → status NONE，旧码不可再用
     const confirmed = await api(TRANSACTION_ROUTES.confirm(transactionId), {
@@ -877,6 +915,133 @@ describe('marketplace flow 双账号验收（#42）', () => {
     await db.execute(
       sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
     )
+  })
+
+  test('#175 历史遗留凭证行自愈：卖家取码把哈希对齐到派生值，派生码可核销、旧随机码作废', async () => {
+    // 第五个商品：一笔 PENDING_MEETUP 交易上直接塞一行「改动前签发的随机码」（哈希与
+    // 派生值对不上），并已进入锁定 —— 模拟升级那一刻库里的存量数据。
+    const fifthListingId = await insertListing(
+      await userIdOf(SELLER_NO),
+      '01990000-0000-7000-8000-0000000000b7',
+    )
+    const conversation = await api(CHAT_ROUTES.base, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ listingId: fifthListingId }),
+    })
+    const fifthConversationId = (await json<{ id: string }>(conversation)).id
+    await api(TRANSACTION_ROUTES.proposals, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ conversationId: fifthConversationId, amountCents: 5000 }),
+    })
+    const accepted = await api(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      cookie: sellerCookie,
+      body: JSON.stringify({ conversationId: fifthConversationId, amountCents: 5000 }),
+    })
+    expect(accepted.status).toBe(201)
+    const transactionId = (await json<TransactionDto>(accepted)).id
+
+    const legacyTokenHash = 'legacy-token'.repeat(4)
+    const legacyCodeHash = 'legacy-code'.repeat(4)
+    await db.execute(sql`
+      INSERT INTO transaction_meetup_tokens
+        (transaction_id, token_hash, code_hash, issued_by, failed_attempts, locked_until)
+      VALUES (${transactionId}, ${legacyTokenHash}, ${legacyCodeHash},
+              ${await userIdOf(SELLER_NO)}, 5, now() + interval '10 minutes')
+    `)
+    // 锁定期间核销：先撞锁定（429），与码对不对无关
+    const locked = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: '000000' }),
+    })
+    expect(locked.status).toBe(429)
+
+    // 卖家取码（重进面交页）：哈希对齐到派生值 + 计数与锁定清零
+    const healed = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(healed.status).toBe(201)
+    const token = await json<{ code: string }>(healed)
+    const row = rows(
+      await db.execute(sql`
+        SELECT token_hash, code_hash, failed_attempts, locked_until
+        FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}
+      `),
+    )[0] as {
+      token_hash: string
+      code_hash: string
+      failed_attempts: number
+      locked_until: Date | null
+    }
+    expect(row.token_hash).not.toBe(legacyTokenHash)
+    expect(row.code_hash).not.toBe(legacyCodeHash)
+    expect(row.failed_attempts).toBe(0)
+    expect(row.locked_until).toBeNull()
+
+    // 对齐后的派生码就是可用凭证（旧随机码的明文本来就再也拿不到）
+    const redeemed = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: token.code }),
+    })
+    expect(redeemed.status).toBe(200)
+  })
+
+  test('#175 大小写 uuid 取码是同一枚码（PG 的 uuid 比较不分大小写，派生按字符串）', async () => {
+    // 第九个商品：同一笔交易分别用大写 / 小写 URL 取码 —— 派生输入必须归一化，
+    // 否则大写 URL 会派生另一枚码并覆写未核销行的哈希，作废卖家刚展示的那一枚。
+    const caseListingId = await insertListing(
+      await userIdOf(SELLER_NO),
+      '01990000-0000-7000-8000-0000000000b9',
+    )
+    const conversation = await api(CHAT_ROUTES.base, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ listingId: caseListingId }),
+    })
+    const caseConversationId = (await json<{ id: string }>(conversation)).id
+    await api(TRANSACTION_ROUTES.proposals, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ conversationId: caseConversationId, amountCents: 6000 }),
+    })
+    const accepted = await api(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      cookie: sellerCookie,
+      body: JSON.stringify({ conversationId: caseConversationId, amountCents: 6000 }),
+    })
+    expect(accepted.status).toBe(201)
+    const transactionId = (await json<TransactionDto>(accepted)).id
+    const upperId = transactionId.toUpperCase()
+    // 生成器给的是小写 uuid；若这里相等，本用例就失去意义（应当显式失败而不是静默通过）
+    expect(upperId).not.toBe(transactionId)
+
+    const lower = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(lower.status).toBe(201)
+    const lowerToken = await json<{ code: string }>(lower)
+
+    const upper = await api(TRANSACTION_ROUTES.issueMeetupToken(upperId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(upper.status).toBe(201)
+    const upperToken = await json<{ code: string }>(upper)
+    expect(upperToken.code).toBe(lowerToken.code)
+
+    // 先展示的那枚码必须仍然可用（它一直是当前码）
+    const redeemed = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: lowerToken.code }),
+    })
+    expect(redeemed.status).toBe(200)
   })
 
   test('非法终态转换：COMPLETED 上 cancel 被拒，商品不被回退', async () => {

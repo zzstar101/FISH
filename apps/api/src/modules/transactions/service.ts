@@ -44,7 +44,9 @@ export class TransactionServiceError extends Error {
 
 /**
  * #147：凭证随交易生命周期（PENDING_MEETUP 内长期有效，终态同事务销毁），
- * 不再有 TTL / 过期路径；刷新即重签（旧码立即作废）。
+ * 不再有 TTL / 过期路径。
+ * #175：**一单一码** —— 码由服务端密钥确定性派生，任何一次读取（重进页面 / 换账号
+ * 重登 / 换端）都得到同一枚，直到交易进终态；不再有「重签」这个动作。
  */
 /** 6 位码爆破防护：累计 5 次失败锁 10 分钟（QR token 高熵，计数共用同一防线）。 */
 export const MEETUP_TOKEN_MAX_ATTEMPTS = 5
@@ -143,7 +145,10 @@ export interface TransactionService {
   getTransaction(userId: string, id: string): Promise<TransactionDto>
   confirm(userId: string, id: string): Promise<TransactionDto>
   cancel(userId: string, id: string): Promise<TransactionDto>
-  /** 卖家签发/刷新面交码（明文只出现在本次响应）。 */
+  /**
+   * 卖家取本单面交码（#175：幂等「确保并读取」）。明文只出现在本响应里；
+   * 同一笔交易无论调用多少次都返回同一枚码。
+   */
   issueMeetupToken(userId: string, id: string): Promise<MeetupTokenResponse>
   /** 当前面交凭证状态（无明文；非参与者 404 不泄漏存在性）。 */
   getMeetupTokenStatus(userId: string, id: string): Promise<MeetupTokenStatusResponse>
@@ -266,7 +271,7 @@ export function createTransactionService({
       })
     }
     if (result.kind === 'invalid') {
-      // 失败计数绑定「诊断不匹配时」读到的凭证代际：卖家刷新（换哈希）后，
+      // 失败计数绑定「诊断不匹配时」读到的凭证代际：凭证哈希换代（历史行自愈）后，
       // 并发旧请求的失败被丢弃，不会累计到新一代凭证上（审查 P1）。
       const failure = await store.recordMeetupTokenFailure(
         id,
@@ -431,14 +436,20 @@ export function createTransactionService({
 
     async issueMeetupToken(userId, id) {
       const row = await loadPendingTxForMeetup(store, userId, id)
-      // 签发人是卖家（契约冻结：routes.ts「卖家签发一次性面交码」）；买家是参与者，
+      // 出示方是卖家（契约冻结：routes.ts「卖家出示面交码」）；买家是参与者，
       // 但他的页面只负责扫码/输码 —— 403 MEETUP_TOKEN_NOT_ALLOWED（与消费方约束同码）。
       if (row.seller_id !== userId) {
         throw new TransactionServiceError(403, 'MEETUP_TOKEN_NOT_ALLOWED', '只有卖家可以出示面交码')
       }
-      const token = meetupCrypto.generateToken()
-      const code = meetupCrypto.generateCode()
-      const tokenRow = await store.upsertMeetupToken(id, {
+      // #175：码是派生的，不随机、不重签 —— 读到什么全凭交易 id + 服务端密钥，
+      // 所以「确保有行」这一步只是让核销能比对；行早已存在时返回的仍是同一枚码。
+      // 派生是**字符串**敏感的，而 PG 的 uuid 比较不分大小写、`isTransactionId` 也接受
+      // 大写（`/i`）：必须先归一化，否则同一笔交易用大写 URL 取码会派生出另一枚码并
+      // 覆写未核销行的哈希，把卖家刚展示的那一枚作废（Codex 审查 P2）。
+      const txId = id.toLowerCase()
+      const token = meetupCrypto.deriveToken(txId)
+      const code = meetupCrypto.deriveCode(txId)
+      const tokenRow = await store.upsertMeetupToken(txId, {
         tokenHash: meetupCrypto.hash(token),
         codeHash: meetupCrypto.hash(code),
         issuedBy: row.seller_id,
@@ -452,11 +463,10 @@ export function createTransactionService({
           '交易已结束，面交码不再可用',
         )
       }
-      // 刷新 = 整行覆写：旧码立即作废（重放旧 payload / 旧 6 位码都到不了匹配那一步）。
       return meetupTokenResponseSchema.parse({
-        transactionId: id,
+        transactionId: txId,
         code,
-        qrPayload: meetupCrypto.qrPayload(id, token),
+        qrPayload: meetupCrypto.qrPayload(txId, token),
       })
     },
 

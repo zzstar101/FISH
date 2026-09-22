@@ -129,7 +129,7 @@ export function createTransactionsRouter({ service, requireAuth }: TransactionsR
 
   // ---- 面交交易码（#70；路径常量与响应口径冻结在 TRANSACTION_ROUTES / contracts）----
 
-  // 卖家签发/刷新（201；明文码与 qrPayload 只在此响应出现）。
+  // 卖家取本单面交码（201；#175 幂等：重复调用返回同一枚；明文码与 qrPayload 只在此响应出现）。
   app.post('/:id/meetup-token', requireAuth, async (c) => {
     if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
     try {
