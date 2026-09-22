@@ -857,6 +857,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       seller,
     )
     assertEqual(cancelledIssue.status, 201, '待取消用例取码 → 201')
+    const cancelledQr = String((await readJson(cancelledIssue)).qrPayload)
     assertEqual(await meetupTokenRowCount(db, cancelledId), 1, '取码后凭证行存在')
 
     const cancelledResponse = await postJson(
@@ -922,8 +923,16 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       postJson(base, TRANSACTION_ROUTES.issueMeetupToken(transactionId), {}, seller)
     const firstIssue = await issue()
     assertEqual(firstIssue.status, 201, '卖家取码 → 201')
-    const meetupCode = String((await readJson(firstIssue)).code)
+    const firstToken = await readJson(firstIssue)
+    const meetupCode = String(firstToken.code)
     assert(/^\d{6}$/.test(meetupCode), '取码返回 6 位数字码')
+    // 跨交易唯一性：派生输入必须是**交易 id**，不是 listing id —— 否则同一商品上先后两笔交易
+    // （上面取消掉的那笔 + 这笔记成交的）会拿到同一枚凭证。这里比 qrPayload 而不是比 6 位码：
+    // 码空间只有 10^6，两枚独立码有 1e-6 的碰撞概率，拿它做断言会变成极低频 flake。
+    assert(
+      String(firstToken.qrPayload) !== cancelledQr,
+      '不同交易派生出不同凭证（派生输入是交易 id，不是商品 id）',
+    )
     const secondIssue = await issue()
     assertEqual(secondIssue.status, 201, '卖家重复取码 → 201')
     assertEqual(
@@ -933,7 +942,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
 
     // 不变量 ③：连错达阈值即锁，卖家重取码解锁且码值不变（#176「重取是现场解锁的唯一路径」）。
-    // 阈值直接取服务端常量：断言的是「达阈值即锁」，不是把 5 这枚魔法数抄第二份。
+    // 循环边界取服务端常量，避免把 5 抄第二份；但常量本身要钉住 —— 否则阈值漂到 6 时
+    // 本步骤会跟着漂、什么都拦不住。「5 次 / 锁 10 分钟」是 #70 冻结的产品口径。
+    assertEqual(MEETUP_TOKEN_MAX_ATTEMPTS, 5, '6 位码失败阈值冻结为 5 次（#70 口径）')
     const wrongCode = meetupCode === '000000' ? '111111' : '000000'
     const verifyCode = (value: string) =>
       postJson(base, TRANSACTION_ROUTES.verifyMeetupCode(transactionId), { code: value }, buyer)
@@ -986,7 +997,10 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       await get(base, TRANSACTION_ROUTES.detail(transactionId), buyer),
     )
     assertEqual(afterRedeem.status, 'PENDING_MEETUP', '核销后交易仍是 PENDING_MEETUP')
-    assert(afterRedeem.sellerConfirmedAt !== null, '核销即盖卖家确认（出示码 = 卖家同意）')
+    assert(
+      typeof afterRedeem.sellerConfirmedAt === 'string',
+      '核销即盖卖家确认（出示码 = 卖家同意）',
+    )
     assertEqual(afterRedeem.buyerConfirmedAt, null, '核销不动买家确认')
 
     const buyerConfirm = await postJson(base, TRANSACTION_ROUTES.confirm(transactionId), {}, buyer)

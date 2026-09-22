@@ -79,13 +79,16 @@
 ### 4.2 四条不变量断言
 
 1. **三元组一致**：提案 → 接受后，买卖双方 `GET /transactions` 各自都能看到该笔；且 `conversationId` 指向 `(listing_id, buyer_id, seller_id)` 完全一致的会话（DB 侧直接断言 join，对应 #157 的失败模式）。
-2. **一单一码幂等**：卖家连续两次 `POST /transactions/:id/meetup-token` → 两次明文码**逐字相同**。
-3. **重取即解锁**：买家连错 4 次 `verify-code` 各返回 422，**第 5 次达阈值即返回 429** `MEETUP_TOKEN_LOCKED`（函数 `recordMeetupTokenFailure` 起于 `apps/api/src/modules/transactions/store.ts:687`，置 `locked_until` 的 UPDATE 在 `:691-701`）；卖家再取码 → 码值不变，且该行 `failed_attempts = 0` / `locked_until = null`。
-4. **终态销毁（两个终态各一条）**：
+2. **一单一码幂等 + 跨交易唯一**：卖家连续两次 `POST /transactions/:id/meetup-token` → 两次明文码**逐字相同**；且与上面那笔已取消交易的 `qrPayload` **不同**（钉住派生输入是**交易 id** 而不是 `listingId` —— 后者会让同一商品上先后两笔交易拿到同一枚码）。跨交易比较用 `qrPayload` 而非 6 位码：码空间只有 10^6，两枚独立码有 1e-6 的碰撞概率，用它做断言会变成极低频 flake。
+3. **阈值口径被独立钉住**：断言 `MEETUP_TOKEN_MAX_ATTEMPTS === 5`（#70 冻结的「5 次 / 锁 10 分钟」），循环边界另取该常量——否则阈值漂到 6 时本步骤会跟着漂、拦不住。
+4. **重取即解锁**：买家连错 4 次 `verify-code` 各返回 422，**第 5 次达阈值即返回 429** `MEETUP_TOKEN_LOCKED`（函数 `recordMeetupTokenFailure` 起于 `apps/api/src/modules/transactions/store.ts:687`，置 `locked_until` 的 UPDATE 在 `:691-701`）；卖家再取码 → 码值不变，且该行 `failed_attempts = 0` / `locked_until = null`。
+5. **终态销毁（两个终态各一条）**：
    - **CANCELLED**：取码 → 买家 `cancel` → DB 断言凭证行已删、再取码 409、且商品恢复 ACTIVE（`store.ts:526-533` 的无条件 RESOLVED→ACTIVE 与同事务 DELETE）；
    - **COMPLETED**：买家以正确码核销（该事务同时盖上卖家确认，交易仍停 `PENDING_MEETUP`）→ 买家 `confirm` → COMPLETED → DB 断言凭证行已删，且再 `POST /meetup-token` 返回 409。
 
-   > **断言能力的边界（审查 S2）**：smoke 只能证明「终态之后凭证行已不在」，无法区分「同事务删除」与「提交后异步删除」；后者需要故障注入（让终态事务内后续步骤失败并断言整体回滚），不在本单范围。因此断言标签写「凭证行已删除」，不写「同事务删除」——原子性本身由 `store.ts:495-499`（COMPLETED）与 `store.ts:528-533`（CANCELLED）的 SQL 结构承担，并由 `store.test.ts` 兜底。
+   > **断言能力的边界（第一轮 S2 + 第二轮 Standards-1）**：smoke 只能证明「终态之后凭证行已不在」，无法区分「同事务删除」与「提交后异步删除」；要真正证明原子性需要故障注入（让终态事务内后续步骤失败并断言整体回滚），不在本单范围。
+   >
+   > **现状必须说清：目前没有任何运行时测试证明这条原子性。** `packages/.../store.test.ts:610-620`（cancel）与 `:734-736`（并发用例）也只断言终态后的最终状态（`findMeetupToken → null`）；若把 DELETE 挪到终态事务提交之后，它们同样会绿。这条不变量**只由 SQL 结构保证**（`store.ts:495-499` COMPLETED / `store.ts:528-533` CANCELLED，DELETE 与状态更新写在同一个 CTE 里）。因此 (a) smoke 的断言标签写「凭证行已删除」，不写「同事务删除」；(b) 若后续要把「同事务」也变成被运行时验证的事实，需另开单做故障注入。
 
 ### 4.3 验证
 
