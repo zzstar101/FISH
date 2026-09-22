@@ -32,6 +32,7 @@ import type { Me } from '@fish/contracts/auth/user'
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
+import type { TransactionRole } from '@fish/contracts/transactions/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
 import { isApiError } from '@/lib/request'
@@ -64,6 +65,8 @@ import {
 } from './listing/api'
 import { MOCK_FALLBACK_ENABLED, reportFailure } from './load-failure'
 import { fetchProfile } from './profile/api'
+import { type OrderCardView, toOrderCard, toOrderCardFromMock } from './transaction/adapt'
+import { fetchAllTransactions } from './transaction/api'
 import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
 import { toMockWish } from './wish/adapt'
 
@@ -483,6 +486,51 @@ function toMessageDto(
     type: item.type,
     content: item.content,
     createdAt: item.createdAt,
+  }
+}
+
+/* --------------------------------------------------------------- 订单 */
+
+/**
+ * 订单列表的加载结果。
+ *
+ * `truncated` 必须显式交给页面：契约没有 `total`，而页面上的统计行、筛选胶囊计数与
+ * 「已经到底了」都建立在「这份列表就是全部」之上。**列表不完整时**（翻页到上限，或
+ * 服务端游标没有前进）页面不显示那些由总数派生的文案 —— 而不是把不完整的数据说成全部。
+ */
+export type LoadedOrders = {
+  items: OrderCardView[]
+  /** 真实接口失败且**没有**回退 mock（生产口径）→ 页面渲染错误态而不是空态 */
+  failed: boolean
+  truncated: boolean
+}
+
+/**
+ * 我的订单（按视角，供 `pages/orders-buy` 与 `pages/orders-sell` 共用）。
+ *
+ * 一次取完该视角下的全部交易（`fetchAllTransactions` 的游标翻页），原因见那里的说明：
+ * 本页的计数与「到底了」是派生值，只有完整集合才诚实。
+ *
+ * 契约的 `TransactionDto` 已经内嵌了商品摘要与对方摘要，所以这里不需要任何回查。
+ */
+export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
+  try {
+    const page = await fetchAllTransactions(role)
+    return {
+      items: page.items.map((dto) => toOrderCard(dto)),
+      failed: false,
+      truncated: page.truncated,
+    }
+  } catch (error) {
+    reportFailure('订单列表', error)
+    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true, truncated: false }
+    const { fetchOrders, openConversation } = await import('@/mock/api')
+    const views = await fetchOrders(role)
+    return {
+      items: views.map((view) => toOrderCardFromMock(view, openConversation)),
+      failed: false,
+      truncated: false,
+    }
   }
 }
 

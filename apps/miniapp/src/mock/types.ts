@@ -289,13 +289,17 @@ export type MockTransaction = {
   status: TransactionStatus
   createdAt: string
   /**
-   * mock 专属：设计稿订单卡上的相对时间。
-   *
+   * 契约 `TransactionDto.completedAt` / `cancelledAt`：结果时间，只有终态才有，
+   * 且与 `status` 一一对应（同契约那两条 refine）。订单卡上的结果日期就取这两个值；
+   * **卡片不显示创建时间**，所以没有 `createdLabel` 之类的展示字段。
+   */
+  completedAt: string | null
+  cancelledAt: string | null
+  /**
    * **刻意没有 `conversationId`**：契约的 `TransactionDto` 里没有这个字段，
    * 会话由 (listingId, 对方) 定位（契约保证「同一 (listing, 买家) 只有一个会话」）。
    * 页面的「查看会话」走 `openConversation()`，与 #72 / PR #82 的口径一致。
    */
-  timeLabel: string
 }
 
 /**

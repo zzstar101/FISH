@@ -11,11 +11,15 @@
 数据来源分两类：
 
 - **已接真实 API**：首页（含分类筛选）/ 搜索 / 商品详情 / 我的（只读），消息页的**通知列表 +
-  逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`）。
+  逐条已读回写**（`GET /notifications`、`POST /notifications/:id/read`），
+  **我买到的 / 我卖出的**（订单页按视角拆成 `pages/orders-buy` 与 `pages/orders-sell`，
+  数据来自 `GET /transactions`）。
   统一走 `src/features/fetchers.ts`（先请求后端，失败或未登录退回 mock），
-  由 `src/features/listing/adapt.ts` 把契约类型投影成页面在用的视图类型。
-- **仍是本地 mock**：其余页面（许愿墙、消息页的**会话列表**、会话详情、发布、订单、面交、
+  由 `src/features/listing/adapt.ts`（商品域）与 `src/features/transaction/adapt.ts`（订单）
+  把契约类型投影成页面在用的视图类型。
+- **仍是本地 mock**：其余页面（许愿墙、消息页的**会话列表**、会话详情、发布、面交、
   认证、设置等）。它们的写操作与状态机尚未接入，见 `fetchers.ts` 的边界说明。
+  （面交页 `/pages/transaction-meetup` 走真实接口，但它是**读写**页面，不在上面的只读清单里。）
 
 ## 1. px → rpx：本目录唯一需要记住的换算
 
@@ -131,7 +135,13 @@ src/
 **自定义 TabBar**（`app.config.ts` 里 `tabBar.custom: true`）：
 `首页 pages/home/index` → `许愿 pages/wish/index` → `出物 pages/sell/index` → `消息 pages/chat/index` → `我的 pages/profile/index`
 
-非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`。
+非 Tab 页面（`navigateTo`）：`pages/search/index`、`pages/listing-detail/index`、`pages/conversation/index`、`pages/orders-buy/index`（我买到的）、`pages/orders-sell/index`（我卖出的）。
+
+**两个订单页是唯一的例外：它们用微信原生导航栏**（各自的 `index.config.ts` 写
+`navigationStyle: 'default'`，覆盖 app 级的 `custom`），标题就是视角本身，页内因此没有
+自绘顶栏、也没有视角切换控件 —— 两个视角是两个页面，入口在「我的」页的图标栏。
+其余 `navigateTo` 进入的二级页一律走 `components/nav-bar` 的自绘漂浮导航栏
+（`pages/search` 与一级页走 `components/top-bar`）。
 
 ## 9. 自定义 TabBar 的三个硬约束（改之前先读）
 
