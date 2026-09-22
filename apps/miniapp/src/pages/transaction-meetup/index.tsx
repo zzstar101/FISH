@@ -249,17 +249,20 @@ export default function TransactionMeetup() {
 
   /* --------------------------------------- 卖家：取码（幂等 ensure/read） */
 
-  const ensureToken = async (txId: string, epoch: number) => {
+  const ensureToken = async (txId: string, epoch: number, notify = false) => {
     // 参数化 transactionId（审查 P1-1）：bootstrap 里 setTx 后闭包的 tx 仍是 null，
     // 自动取码绝不能读 React state，否则首次进入直接 no-op、页面卡在「加载中…」。
     // 语义（#176）：这是「确保并读取」而非签发 —— 同一笔交易恒返回同一枚码，
     // 重复取码不换码、不改 issuedAt，只清零失败计数与锁定（卖家专属解锁路径）。
+    // `notify`：由用户手动点「重新取码」时置 true —— 码不会变，必须给一句回执，
+    // 否则卖家点了以后看不出发生过什么（进页那次自动取码不提示，避免噪音）。
     setToken({ state: 'issuing' })
     setInputError('')
     try {
       const next = await issueMeetupToken(txId)
       if (isStale(epoch)) return
       setToken({ state: 'ready', token: next })
+      if (notify) void Taro.showToast({ title: '已重新取码；交易码不变', icon: 'none' })
     } catch (error) {
       if (isStale(epoch)) return
       setToken(null)
@@ -755,7 +758,7 @@ export default function TransactionMeetup() {
                       既不会换码、也不会作废对方手里的那枚；取码同时清零失败计数与锁定。 */}
                   <View
                     className="meetup__btn meetup__btn--sec"
-                    onClick={() => void ensureToken(tx.id, bootEpoch.current)}
+                    onClick={() => void ensureToken(tx.id, bootEpoch.current, true)}
                   >
                     <Text>重新取码</Text>
                   </View>
@@ -795,6 +798,21 @@ export default function TransactionMeetup() {
                   <View className="meetup__wait-dot" />
                   <Text>等待对方扫码或输入交易码</Text>
                 </View>
+
+                {/* 取码幂等（#176）：重复取回**同一枚**码，同时清零 failed_attempts /
+                    locked_until —— 对方连续输错被锁后，卖家在这里点一下即可解锁，
+                    码值不变、买家手里的码也不会作废。 */}
+                <View className="meetup__codeact">
+                  <View
+                    className="meetup__btn meetup__btn--sec"
+                    onClick={() => void ensureToken(tx.id, bootEpoch.current, true)}
+                  >
+                    <Text>重新取码</Text>
+                  </View>
+                </View>
+                <Text className="meetup__hint">
+                  对方连续输错被锁定后，点「重新取码」即可解锁；交易码不会变。
+                </Text>
               </>
             ) : (
               <View className="meetup__codecard">

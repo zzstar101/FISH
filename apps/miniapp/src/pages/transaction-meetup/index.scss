@@ -277,6 +277,15 @@
   animation: meetup-pulse 1.5s ease-in-out infinite;
 }
 
+/* 卖家「重新取码」动作行（#176：取码幂等 —— 取回同一枚码 + 清零失败计数 / 锁定）。
+   与卡片内的 `.meetup__varcard-acts` 同形，但这一行直接落在页面流里，所以自带左右留白。 */
+.meetup__codeact {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  margin: 24px 40px 0;
+}
+
 /* ---------------------------------------------------- 手动输入 6 格 */
 
 .meetup__hint {
