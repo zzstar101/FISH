@@ -80,10 +80,12 @@
 
 1. **三元组一致**：提案 → 接受后，买卖双方 `GET /transactions` 各自都能看到该笔；且 `conversationId` 指向 `(listing_id, buyer_id, seller_id)` 完全一致的会话（DB 侧直接断言 join，对应 #157 的失败模式）。
 2. **一单一码幂等**：卖家连续两次 `POST /transactions/:id/meetup-token` → 两次明文码**逐字相同**。
-3. **重取即解锁**：买家连错 4 次 `verify-code` 各返回 422，**第 5 次达阈值即返回 429** `MEETUP_TOKEN_LOCKED`（`apps/api/src/modules/transactions/store.ts:684-695` 在同一 UPDATE 里置 `locked_until`）；卖家再取码 → 码值不变，且该行 `failed_attempts = 0` / `locked_until = null`。
+3. **重取即解锁**：买家连错 4 次 `verify-code` 各返回 422，**第 5 次达阈值即返回 429** `MEETUP_TOKEN_LOCKED`（函数 `recordMeetupTokenFailure` 起于 `apps/api/src/modules/transactions/store.ts:687`，置 `locked_until` 的 UPDATE 在 `:691-701`）；卖家再取码 → 码值不变，且该行 `failed_attempts = 0` / `locked_until = null`。
 4. **终态销毁（两个终态各一条）**：
    - **CANCELLED**：取码 → 买家 `cancel` → DB 断言凭证行已删、再取码 409、且商品恢复 ACTIVE（`store.ts:526-533` 的无条件 RESOLVED→ACTIVE 与同事务 DELETE）；
    - **COMPLETED**：买家以正确码核销（该事务同时盖上卖家确认，交易仍停 `PENDING_MEETUP`）→ 买家 `confirm` → COMPLETED → DB 断言凭证行已删，且再 `POST /meetup-token` 返回 409。
+
+   > **断言能力的边界（审查 S2）**：smoke 只能证明「终态之后凭证行已不在」，无法区分「同事务删除」与「提交后异步删除」；后者需要故障注入（让终态事务内后续步骤失败并断言整体回滚），不在本单范围。因此断言标签写「凭证行已删除」，不写「同事务删除」——原子性本身由 `store.ts:495-499`（COMPLETED）与 `store.ts:528-533`（CANCELLED）的 SQL 结构承担，并由 `store.test.ts` 兜底。
 
 ### 4.3 验证
 
