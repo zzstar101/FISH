@@ -1,6 +1,6 @@
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import { Image, ScrollView, Text, Textarea, View } from '@tarojs/components'
-import Taro, { useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -39,6 +39,12 @@ import './index.scss'
  *    （交易域没有这个事件）、以及媒体消息与上传/播放的本地模拟（#67 的范围）。
  *
  * 页头商品卡的状态、SYSTEM 事件的中文化、时间文案都走 `./view` 的纯函数（有用例）。
+ *
+ * **账号作用域（#170）**：`conversation` / `messages` / `pending` / `inputValue` 等
+ * 都是「当前登录用户」视角下的状态。换账号时在**渲染期同步**清场并自增 epoch，
+ * 让上一个账号的在途响应全部判过期（否则 A 的「发消息」可能在 B 的会话里落地）；
+ * 从子页（商品详情 / 交易码页）返回时由 `useDidShow` 重拉详情 + 历史，覆盖那边
+ * 可能发生的写操作。详见 `prevUserId` 与 `useDidShow` 处的注释。
  */
 
 /** 「+」面板（1版稿 3 格）：图片 / 拍照 / 语音都属于 #67，本轮只给明确提示 */
@@ -56,6 +62,8 @@ export default function Conversation() {
   const { user: me } = useAuth()
   const router = useRouter<{ id?: string }>()
   const conversationId = router.params.id ?? ''
+  /** 当前账号身份：账号作用域 state 的清场与加载门禁都要用它（见下） */
+  const userId = me?.id ?? null
 
   const [conversation, setConversation] = useState<ConversationDto | null>(null)
   /** 详情状态：`missing`（真的没这条会话）与 `failed`（没读到）必须分开渲染 */
@@ -75,10 +83,45 @@ export default function Conversation() {
   /** 语音输入态：输入框换成「按住 说话」 */
   const [voiceMode, setVoiceMode] = useState(false)
 
-  /** 加载代次：换会话 / 连点重试时只有最后一次的响应落地 */
+  /** 加载代次：换会话 / 换账号 / 连点重试时只有最后一次的响应落地 */
   const epoch = useRef(0)
   /** 本地乐观消息的自增序号（只用于渲染 key 与重试定位） */
   const localSeq = useRef(0)
+  /**
+   * 「已经发起过一次加载」标记：useDidShow 据此让渡首次触发给登录态 effect，
+   * 不双发。声明在 `load` 之前是因为 `load` 的 useCallback 体内要引用它
+   * （TDZ：const 在声明前访问会抛错）。
+   */
+  const loadedOnceRef = useRef(false)
+
+  /**
+   * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
+   * 把账号作用域状态清干净，不会出现「B 的身份已经渲染、画的却是 A 的会话」。
+   * 换成 `useEffect(() => setMessages([]), [userId])` 不行：effect 在 commit 之后才跑，
+   * 泄漏帧照样存在（详见 chat / mylist / match 页同一写法的注释）。
+   *
+   * 同步 +1 `epoch`：让 A 在途的详情 / 历史 / 发消息响应落地前就被判过期，
+   * 否则会写进刚清空的 state（C 判据）。
+   */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  if (prevUserId !== userId) {
+    setPrevUserId(userId)
+    // 身份清场 +1：作废 A 在途的所有响应。下面登录态 effect 紧接着会再 +1 占位
+    // 本次 load —— 两者语义独立但共用计数器，判过期只看「是否相等」，不区分语义。
+    epoch.current += 1
+    localSeq.current = 0
+    setConversation(null)
+    setConvState('loading')
+    setMessages([])
+    setMsgState('loading')
+    setNextCursor(null)
+    setLoadingEarlier(false)
+    setEarlierFailed(false)
+    setInputValue('')
+    setPending([])
+    setPanelOpen(false)
+    setVoiceMode(false)
+  }
 
   const metrics = useMemo(() => readNavMetrics(), [])
 
@@ -102,6 +145,8 @@ export default function Conversation() {
       return
     }
     const current = ++epoch.current
+    // 标记「已经发起过一次加载」：didShow 据此让渡首次给登录态 effect，不双发
+    loadedOnceRef.current = true
     setConvState('loading')
     setMsgState('loading')
     setEarlierFailed(false)
@@ -120,8 +165,11 @@ export default function Conversation() {
          * 否则「消息没加载出来」（还没 loading 完、或详情成功而历史失败）也会把服务端
          * 读位推掉：用户屏幕上一条消息都没看到，未读却已经清零，返回列表红点不亮 ——
          * 等于把消息吞了。幂等：重试成功后再发一次，读位只前进，无害。
+         *
+         * 必须再过一次 epoch 守卫：本 load 发起后、响应落地前若发生换账号，
+         * 这里不能拿新账号的 cookie 去推旧账号会话的读位（跨账号副作用）。
          */
-        if (detail.status === 'ok' && !page.failed) {
+        if (current === epoch.current && detail.status === 'ok' && !page.failed) {
           void markConversationRead(conversationId).catch((error) =>
             console.warn('[miniapp] 标记会话已读失败', error),
           )
@@ -137,9 +185,49 @@ export default function Conversation() {
   }, [conversationId])
 
   useEffect(() => {
-    if (authStatus !== 'authed') return
+    if (authStatus !== 'authed' || userId === null) return
     load()
-  }, [authStatus, load])
+  }, [authStatus, userId, load])
+
+  /**
+   * 从子页返回（商品详情 / 交易码页）时重拉：那边可能改了商品 / 交易状态，
+   * 本页的会话详情与历史都是账号作用域的快照，回来就过期。
+   *
+   * 首次加载由登录态 effect（上方）负责，不在 didShow 里重复触发。判定「已加载
+   * 过一次」用 `loadedOnceRef`：它在 `load` 把请求真正发出后才置 true（见 `load`
+   * 函数体），早于任何后续 `useDidShow` 的触发时机 —— 这样即使冷启动时
+   * `authStatus === 'unknown'`（首次 didShow 早于 effect 跑），恢复登录后那一次
+   * didShow 也会正确让渡给 effect，**不会**双发。
+   *
+   * `authStatus` / `userId` / `load` / `pending` 都走 ref 读最新值：`useDidShow`
+   * 的回调注册一次，直接闭包会读到旧状态。
+   *
+   * 重拉会重新推一次已读：读位只前进，幂等。
+   *
+   * **有在途发送时跳过**：用户在子页跳转前发了消息、HTTP 响应还没回来，
+   * 此时重载会把 `epoch` +1，在途的 `doSend` 响应被判过期丢弃 —— 乐观气泡永远
+   * 停在「发送中」，已落库的消息要到下次重载才出现。让 pending 先落地，下一次
+   * 返回 / 重试再同步服务端状态。
+   *
+   * `pendingRef` 在每次渲染同步（commit 后、didShow 回调触发前必然已更新），
+   * didShow 每次重进都会重新检查 `pendingRef.current` —— 不存在「一次跳过就
+   * 永久跳过」：pending 要么在 unmount 前落地（then/catch 把 status 改掉），
+   * 要么随组件销毁一起消失（此时 didShow 也不会再触发）。
+   */
+  const authedRef = useRef(false)
+  const userIdRef = useRef<string | null>(null)
+  const loadRef = useRef(load)
+  const pendingRef = useRef<PendingMessage[]>([])
+  authedRef.current = authStatus === 'authed'
+  userIdRef.current = userId
+  loadRef.current = load
+  pendingRef.current = pending
+  useDidShow(() => {
+    if (!loadedOnceRef.current) return
+    if (!authedRef.current || userIdRef.current === null) return
+    if (pendingRef.current.some((item) => item.status === 'sending')) return
+    loadRef.current()
+  })
 
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
   const loadEarlier = () => {
@@ -162,6 +250,10 @@ export default function Conversation() {
 
   /**
    * 发一条文本消息。`pendingId` 存在时是「重试同一颗失败气泡」，不新增气泡。
+   *
+   * 响应落地前要过 epoch 守卫：A 在飞的发送可能在换到 B 之后才 resolve，
+   * 若不判过期，A 的消息会写进 B 的 `messages`（`pending` 已随身份清空，
+   * 但 `setMessages` 会把 A 的气泡追加到 B 的会话流）。
    */
   const doSend = (text: string, pendingId?: string) => {
     // 新气泡才需要新序号；重试沿用原来的临时 id（赋值不能塞进表达式，见 noAssignInExpressions）
@@ -170,6 +262,7 @@ export default function Conversation() {
       localSeq.current += 1
       id = `local-${localSeq.current}`
     }
+    const current = epoch.current
     setPending((prev) =>
       pendingId
         ? prev.map((item) => (item.id === id ? { ...item, status: 'sending' } : item))
@@ -177,6 +270,7 @@ export default function Conversation() {
     )
     void sendMessage(conversationId, text)
       .then((message) => {
+        if (current !== epoch.current) return
         setPending((prev) => prev.filter((item) => item.id !== id))
         // 服务端「先落库、再推送、再回 HTTP」：实时推送可能先到，这里按 id 去重；
         // 再按 `(createdAt, id)` 重排 —— 连发两条时响应可能乱序回来
@@ -185,6 +279,7 @@ export default function Conversation() {
         )
       })
       .catch((error) => {
+        if (current !== epoch.current) return
         console.warn('[miniapp] 发送消息失败', error)
         setPending((prev) =>
           prev.map((item) => (item.id === id ? { ...item, status: 'failed' } : item)),
