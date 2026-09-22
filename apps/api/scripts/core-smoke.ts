@@ -32,6 +32,8 @@
  *   出来的（见“重启恢复 ②”）；
  * - MinIO 不是 scratch 的：脚本结束时删掉本轮上传的对象，否则 `--runs=5` 会在桶里累积垃圾。
  */
+import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
+import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
@@ -42,6 +44,7 @@ import { notifications } from '@fish/db/schema/notifications'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
 import { and, eq, sql } from 'drizzle-orm'
+import { MEETUP_TOKEN_MAX_ATTEMPTS } from '../src/modules/transactions/service'
 
 // ---------------------------------------------------------------------------
 // 常量与断言工具
@@ -790,6 +793,149 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '坏 payload 的 job 写明 last_error',
     )
     assertEqual(await totalMatchCount(db), matchesBefore, '坏 payload 不新增任何 match')
+
+    // 12. 交易与面交（#147）：三元组一致 → 一单一码 → 重取即解锁 → 终态销毁
+    //
+    // 为什么必须放在**最后一步**：本步骤会把主链 listing 推到 SOLD，插在「重启恢复」之前
+    // 会污染那两步对同一 listing 的 PATCH。取舍见
+    // docs/design/issue-147-transaction-invariants.md §4.1。
+    step = '交易与面交'
+    section('交易与面交：三元组一致、一单一码、重取解锁、终态销毁')
+
+    // 不变量 ①：交易 ↔ 会话三元组一致。join 不上的交易在订单页静默消失（#157 的失败模式）。
+    const conversationResponse = await postJson(base, CHAT_ROUTES.base, { listingId }, buyer)
+    assertEqual(conversationResponse.status, 201, 'POST /conversations → 201')
+    const conversationId = String((await readJson(conversationResponse)).id)
+
+    const proposalResponse = await postJson(
+      base,
+      TRANSACTION_ROUTES.proposals,
+      { conversationId, amountCents: 0 },
+      buyer,
+    )
+    assertEqual(proposalResponse.status, 201, '买家提案 → 201（不建交易行）')
+
+    const acceptResponse = await postJson(
+      base,
+      TRANSACTION_ROUTES.accept,
+      { conversationId, amountCents: 0 },
+      seller,
+    )
+    assertEqual(acceptResponse.status, 201, '卖家接受 → 201')
+    const accepted = await readJson(acceptResponse)
+    const transactionId = String(accepted.id)
+    assertEqual(accepted.status, 'PENDING_MEETUP', '接受后交易为 PENDING_MEETUP')
+    assertEqual(accepted.conversationId, conversationId, '交易 DTO 回指同一会话')
+
+    // 与 GET /transactions 的 listForUser / findById 同一个 join：join 不上就是订单页看不见。
+    const joined = await db.execute<{ id: string }>(sql`
+      select c.id from transactions t
+      join conversations c
+        on c.listing_id = t.listing_id
+       and c.buyer_id = t.buyer_id
+       and c.seller_id = t.seller_id
+      where t.id = ${transactionId}
+    `)
+    assertEqual([...joined].length, 1, '交易按三元组恰好 join 到 1 个会话')
+    assertEqual([...joined][0]?.id, conversationId, 'join 到的会话就是本笔交易的会话')
+    for (const [who, cookie] of [
+      ['买家', buyer],
+      ['卖家', seller],
+    ] as const) {
+      const list = await readJson(await get(base, TRANSACTION_ROUTES.base, cookie))
+      const ids = (list.items as { id: string }[]).map((item) => item.id)
+      assert(ids.includes(transactionId), `${who} GET /transactions 能读到本笔交易`)
+    }
+
+    // 不变量 ②：一单一码 —— 码由交易 id + 服务端密钥派生，任何一次读取都是同一枚（#175）。
+    const issue = () =>
+      postJson(base, TRANSACTION_ROUTES.issueMeetupToken(transactionId), {}, seller)
+    const firstIssue = await issue()
+    assertEqual(firstIssue.status, 201, '卖家取码 → 201')
+    const meetupCode = String((await readJson(firstIssue)).code)
+    assert(/^\d{6}$/.test(meetupCode), '取码返回 6 位数字码')
+    const secondIssue = await issue()
+    assertEqual(secondIssue.status, 201, '卖家重复取码 → 201')
+    assertEqual(
+      String((await readJson(secondIssue)).code),
+      meetupCode,
+      '重复取码码值不变（一单一码）',
+    )
+
+    // 不变量 ③：连错达阈值即锁，卖家重取码解锁且码值不变（#176「重取是现场解锁的唯一路径」）。
+    // 阈值直接取服务端常量：断言的是「达阈值即锁」，不是把 5 这枚魔法数抄第二份。
+    const wrongCode = meetupCode === '000000' ? '111111' : '000000'
+    const verifyCode = (value: string) =>
+      postJson(base, TRANSACTION_ROUTES.verifyMeetupCode(transactionId), { code: value }, buyer)
+    for (let attempt = 1; attempt < MEETUP_TOKEN_MAX_ATTEMPTS; attempt += 1) {
+      const failed = await verifyCode(wrongCode)
+      assertEqual(failed.status, 422, `第 ${attempt} 次错误码 → 422`)
+      assertEqual(
+        ((await readJson(failed)).error as { code: string }).code,
+        'MEETUP_TOKEN_INVALID',
+        `第 ${attempt} 次错误码 → MEETUP_TOKEN_INVALID`,
+      )
+    }
+    const threshold = await verifyCode(wrongCode)
+    assertEqual(
+      threshold.status,
+      429,
+      `第 ${MEETUP_TOKEN_MAX_ATTEMPTS} 次错误码 → 429（达阈值即锁）`,
+    )
+    assertEqual(
+      ((await readJson(threshold)).error as { code: string }).code,
+      'MEETUP_TOKEN_LOCKED',
+      '锁定错误码是 MEETUP_TOKEN_LOCKED',
+    )
+
+    const relocked = await issue()
+    assertEqual(relocked.status, 201, '锁定后卖家重取码 → 201')
+    assertEqual(String((await readJson(relocked)).code), meetupCode, '重取解锁不换码')
+    const tokenRows = await db.execute<{ failedAttempts: number; lockedUntil: string | null }>(sql`
+      select failed_attempts as "failedAttempts", locked_until as "lockedUntil"
+      from transaction_meetup_tokens where transaction_id = ${transactionId}
+    `)
+    assertEqual([...tokenRows].length, 1, '重取后凭证行仍在（未核销）')
+    assertEqual([...tokenRows][0]?.failedAttempts, 0, '重取码复位失败计数')
+    assertEqual([...tokenRows][0]?.lockedUntil, null, '重取码清空 locked_until')
+
+    // 不变量 ④：正确码核销 → 买家 confirm → 终态同事务销毁凭证（#147 / #169）。
+    //
+    // 注意核销的语义：**出示码 = 卖家同意面交**，核销那一笔事务里就盖上
+    // seller_confirmed_at（store.ts「展示码 = 卖家对面交的同意」）。所以核销后交易仍是
+    // PENDING_MEETUP + 只有买家未确认 —— 面交页的恢复口径正是靠这两个字段判「还差最后一步」。
+    const verifiedResponse = await verifyCode(meetupCode)
+    assertEqual(verifiedResponse.status, 200, '正确码核销 → 200')
+    assertEqual(
+      (await readJson(verifiedResponse)).nextAction,
+      'CONFIRM_DELIVERY',
+      '核销后 nextAction = CONFIRM_DELIVERY',
+    )
+
+    const afterRedeem = await readJson(
+      await get(base, TRANSACTION_ROUTES.detail(transactionId), buyer),
+    )
+    assertEqual(afterRedeem.status, 'PENDING_MEETUP', '核销后交易仍是 PENDING_MEETUP')
+    assert(afterRedeem.sellerConfirmedAt !== null, '核销即盖卖家确认（出示码 = 卖家同意）')
+    assertEqual(afterRedeem.buyerConfirmedAt, null, '核销不动买家确认')
+
+    const buyerConfirm = await postJson(base, TRANSACTION_ROUTES.confirm(transactionId), {}, buyer)
+    assertEqual(buyerConfirm.status, 200, '买家 confirm → 200')
+    assertEqual((await readJson(buyerConfirm)).status, 'COMPLETED', '买家确认后双侧齐 → COMPLETED')
+
+    const leftover = await db.execute<{ n: number }>(sql`
+      select count(*)::int as n from transaction_meetup_tokens
+      where transaction_id = ${transactionId}
+    `)
+    assertEqual([...leftover][0]?.n, 0, 'COMPLETED 后凭证行已同事务删除')
+
+    const afterTerminal = await issue()
+    assertEqual(afterTerminal.status, 409, '终态后取码 → 409')
+    assertEqual(
+      ((await readJson(afterTerminal)).error as { code: string }).code,
+      'TRANSACTION_NOT_IN_PENDING',
+      '终态后取码错误码是 TRANSACTION_NOT_IN_PENDING',
+    )
   } finally {
     await stopWorker()
     await stop(api)
