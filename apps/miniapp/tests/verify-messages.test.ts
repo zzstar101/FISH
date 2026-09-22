@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
   sendErrorMessage,
+  VERIFY_PRIVACY_EMPHASIS,
+  VERIFY_PRIVACY_LEAD,
+  VERIFY_PRIVACY_TAIL,
   verifyErrorMessage,
   verifyNeedsResend,
 } from '../src/features/verify/messages'
@@ -62,5 +65,30 @@ describe('verifyNeedsResend', () => {
   test('码错误只是输错，不该解锁重发（否则等于鼓励用户放弃这枚码）', () => {
     expect(verifyNeedsResend('CODE_INVALID')).toBe(false)
     expect(verifyNeedsResend('RATE_LIMITED')).toBe(false)
+  })
+})
+
+/**
+ * 已认证态的隐私说明（#177 审查意见 2）。
+ *
+ * 这半句**不许暗示存在自助解绑 / 换绑邮箱的能力**：后端没有解除端点，产品与安全语义仍在
+ * #86 冻结中。设计稿的原文「如需更换邮箱，需先解除当前认证」是有意不采用的稿值 ——
+ * 这条用例就是防后续「照稿对齐」时把它改回去。
+ */
+describe('VERIFY_PRIVACY_*', () => {
+  const note = VERIFY_PRIVACY_LEAD + VERIFY_PRIVACY_EMPHASIS + VERIFY_PRIVACY_TAIL
+
+  test('拼起来的整句是页面渲染的那句，加粗段夹在中间', () => {
+    expect(note).toBe(
+      '公开页面只展示认证徽章，不展示邮箱、学号与班级；当前暂不支持自助更换认证邮箱。',
+    )
+  })
+
+  test('不暗示可自助解除认证 / 更换邮箱', () => {
+    expect(note).not.toContain('解除')
+    expect(note).not.toContain('更换邮箱')
+    expect(note).not.toContain('换绑')
+    expect(note).not.toContain('解绑')
+    expect(note).toContain('暂不支持')
   })
 })

@@ -54,3 +54,18 @@ export function verifyErrorMessage(code: string, backendMessage: string): string
 export function verifyNeedsResend(code: string): boolean {
   return NEEDS_RESEND.has(code)
 }
+
+/**
+ * 已认证态的隐私说明（`pages/verify` 已认证分支的白卡），拆三段。
+ *
+ * 拆段不是为复用，而是稿把中间那段加粗（`<b style="color:var(--ink)">`），小程序里只能靠
+ * 嵌套 `Text`；页面按这三段拼渲染，用例对拼起来的整句断言。
+ *
+ * 提成常量只为一件事：这句话**不许暗示可自助解除认证 / 更换邮箱** —— 后端没有解绑端点，
+ * 产品与安全语义仍在 #86 冻结中（#86：「UI 在能力未落地前不得暗示可以自行解除认证」）。
+ * 设计稿的原文是「如需更换邮箱，需先解除当前认证」，那是**有意不采用**的稿值；
+ * 用例是防止后续「照稿对齐」时把它改回去（见 `tests/verify-messages.test.ts`）。
+ */
+export const VERIFY_PRIVACY_LEAD = '公开页面'
+export const VERIFY_PRIVACY_EMPHASIS = '只展示认证徽章'
+export const VERIFY_PRIVACY_TAIL = '，不展示邮箱、学号与班级；当前暂不支持自助更换认证邮箱。'

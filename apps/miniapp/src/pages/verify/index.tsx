@@ -14,7 +14,14 @@ import {
   sendVerificationCode,
   verifyCampusCode,
 } from '@/features/verify/api'
-import { sendErrorMessage, verifyErrorMessage, verifyNeedsResend } from '@/features/verify/messages'
+import {
+  sendErrorMessage,
+  VERIFY_PRIVACY_EMPHASIS,
+  VERIFY_PRIVACY_LEAD,
+  VERIFY_PRIVACY_TAIL,
+  verifyErrorMessage,
+  verifyNeedsResend,
+} from '@/features/verify/messages'
 import { isApiError } from '@/lib/request'
 import './index.scss'
 
@@ -316,8 +323,9 @@ export default function Verify() {
 
           <View className="verify__privacy">
             <Text className="verify__privacy-tx">
-              公开页面<Text className="verify__privacy-b">只展示认证徽章</Text>
-              ，不展示邮箱、学号与班级；如需更换邮箱，需先解除当前认证。
+              {VERIFY_PRIVACY_LEAD}
+              <Text className="verify__privacy-b">{VERIFY_PRIVACY_EMPHASIS}</Text>
+              {VERIFY_PRIVACY_TAIL}
             </Text>
           </View>
 
