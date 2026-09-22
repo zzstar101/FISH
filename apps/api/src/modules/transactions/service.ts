@@ -443,9 +443,13 @@ export function createTransactionService({
       }
       // #175：码是派生的，不随机、不重签 —— 读到什么全凭交易 id + 服务端密钥，
       // 所以「确保有行」这一步只是让核销能比对；行早已存在时返回的仍是同一枚码。
-      const token = meetupCrypto.deriveToken(id)
-      const code = meetupCrypto.deriveCode(id)
-      const tokenRow = await store.upsertMeetupToken(id, {
+      // 派生是**字符串**敏感的，而 PG 的 uuid 比较不分大小写、`isTransactionId` 也接受
+      // 大写（`/i`）：必须先归一化，否则同一笔交易用大写 URL 取码会派生出另一枚码并
+      // 覆写未核销行的哈希，把卖家刚展示的那一枚作废（Codex 审查 P2）。
+      const txId = id.toLowerCase()
+      const token = meetupCrypto.deriveToken(txId)
+      const code = meetupCrypto.deriveCode(txId)
+      const tokenRow = await store.upsertMeetupToken(txId, {
         tokenHash: meetupCrypto.hash(token),
         codeHash: meetupCrypto.hash(code),
         issuedBy: row.seller_id,
@@ -460,9 +464,9 @@ export function createTransactionService({
         )
       }
       return meetupTokenResponseSchema.parse({
-        transactionId: id,
+        transactionId: txId,
         code,
-        qrPayload: meetupCrypto.qrPayload(id, token),
+        qrPayload: meetupCrypto.qrPayload(txId, token),
       })
     },
 

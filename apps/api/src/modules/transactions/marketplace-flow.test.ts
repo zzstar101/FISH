@@ -991,6 +991,59 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(redeemed.status).toBe(200)
   })
 
+  test('#175 大小写 uuid 取码是同一枚码（PG 的 uuid 比较不分大小写，派生按字符串）', async () => {
+    // 第九个商品：同一笔交易分别用大写 / 小写 URL 取码 —— 派生输入必须归一化，
+    // 否则大写 URL 会派生另一枚码并覆写未核销行的哈希，作废卖家刚展示的那一枚。
+    const caseListingId = await insertListing(
+      await userIdOf(SELLER_NO),
+      '01990000-0000-7000-8000-0000000000b9',
+    )
+    const conversation = await api(CHAT_ROUTES.base, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ listingId: caseListingId }),
+    })
+    const caseConversationId = (await json<{ id: string }>(conversation)).id
+    await api(TRANSACTION_ROUTES.proposals, {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ conversationId: caseConversationId, amountCents: 6000 }),
+    })
+    const accepted = await api(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      cookie: sellerCookie,
+      body: JSON.stringify({ conversationId: caseConversationId, amountCents: 6000 }),
+    })
+    expect(accepted.status).toBe(201)
+    const transactionId = (await json<TransactionDto>(accepted)).id
+    const upperId = transactionId.toUpperCase()
+    // 生成器给的是小写 uuid；若这里相等，本用例就失去意义（应当显式失败而不是静默通过）
+    expect(upperId).not.toBe(transactionId)
+
+    const lower = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(lower.status).toBe(201)
+    const lowerToken = await json<{ code: string }>(lower)
+
+    const upper = await api(TRANSACTION_ROUTES.issueMeetupToken(upperId), {
+      method: 'POST',
+      cookie: sellerCookie,
+    })
+    expect(upper.status).toBe(201)
+    const upperToken = await json<{ code: string }>(upper)
+    expect(upperToken.code).toBe(lowerToken.code)
+
+    // 先展示的那枚码必须仍然可用（它一直是当前码）
+    const redeemed = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
+      method: 'POST',
+      cookie: buyerCookie,
+      body: JSON.stringify({ code: lowerToken.code }),
+    })
+    expect(redeemed.status).toBe(200)
+  })
+
   test('非法终态转换：COMPLETED 上 cancel 被拒，商品不被回退', async () => {
     const list = await api(`${TRANSACTION_ROUTES.base}?role=seller&status=COMPLETED`, {
       cookie: sellerCookie,
