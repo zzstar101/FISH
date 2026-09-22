@@ -51,8 +51,10 @@ export function registerSuccessView(verified: boolean): RegisterSuccessView {
       badge: '已认证 · 校园身份已核验',
       ok: true,
       primaryCta: '查看认证状态',
-      // 与未认证分支同一句法（稿 `#regNote` 的写法）：都在说「去『我的』页的校园认证入口」
-      // —— 那里点认证胶囊进本页，已认证时显示成功态。不写死子菜单路径，避免与另一分支不一致
+      // 这一句是本 PR 自造的（稿的已认证 `#regNote` 是上面被否掉的那句），所以按 app 里
+      // **真实入口**写，且刻意与未认证分支同一句法：未认证那句的「我的 → 校园认证」是稿的
+      // 原话，指的其实是「我的」页的认证胶囊（`pages/profile` 头部那颗，点进本页），
+      // 具名行「校园认证」在「我的 → 设置」下（`pages/settings`）。
       note: '认证信息可在「我的 → 校园认证」查看',
     }
   }

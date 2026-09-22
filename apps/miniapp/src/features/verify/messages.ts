@@ -1,8 +1,8 @@
 /**
- * 校园认证页的「后端错误码 → 行内文案」映射（#89 需求「码错误 / 已过期等各有明确状态」）。
+ * 校园认证页的行内文案：后端错误码 → 文案的映射（#89），加已认证态的隐私说明（#177）。
  *
- * 单独成模块而不是写在页面里：这是本页唯一可纯函数验证的部分，用例见
- * `apps/miniapp/tests/verify-messages.test.ts`。
+ * 单独成模块而不是写在页面里：这些是本页唯一可纯函数 / 常量验证的部分，
+ * 用例见 `apps/miniapp/tests/verify-messages.test.ts`。
  *
  * 码的取值与状态码映射见 `@fish/contracts/auth/verification` 的
  * `VerificationErrorCodeSchema` 与 `apps/api/src/modules/auth/verification-service.ts`。

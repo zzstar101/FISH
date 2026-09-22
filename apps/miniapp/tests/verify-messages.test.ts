@@ -71,9 +71,13 @@ describe('verifyNeedsResend', () => {
 /**
  * 已认证态的隐私说明（#177 审查意见 2）。
  *
- * 这半句**不许暗示存在自助解绑 / 换绑邮箱的能力**：后端没有解除端点，产品与安全语义仍在
- * #86 冻结中。设计稿的原文「如需更换邮箱，需先解除当前认证」是有意不采用的稿值 ——
+ * 这半句**不许暗示存在自助解绑 / 换绑邮箱的能力**：后端没有解除端点（决策 Q7a 就是
+ * 「已绑定 → 不再发码」），产品与安全语义仍在 #86 冻结中。设计稿的原文
+ * 「如需更换邮箱，需先解除当前认证」是有意不采用的稿值 ——
  * 这条用例就是防后续「照稿对齐」时把它改回去。
+ *
+ * 正向断言，不用黑名单：`not.toContain('更换邮箱')` 对「更换认证邮箱」恒真（不是子串），
+ * 挡不住这正是一类改写。
  */
 describe('VERIFY_PRIVACY_*', () => {
   const note = VERIFY_PRIVACY_LEAD + VERIFY_PRIVACY_EMPHASIS + VERIFY_PRIVACY_TAIL
@@ -84,11 +88,17 @@ describe('VERIFY_PRIVACY_*', () => {
     )
   })
 
-  test('不暗示可自助解除认证 / 更换邮箱', () => {
-    expect(note).not.toContain('解除')
-    expect(note).not.toContain('更换邮箱')
-    expect(note).not.toContain('换绑')
-    expect(note).not.toContain('解绑')
+  test('只陈述现状：明说「暂不支持」，且不出现「解除 / 解绑 / 换绑」等动词', () => {
     expect(note).toContain('暂不支持')
+    expect(note).not.toMatch(/解除|解绑|换绑/)
+  })
+
+  test('页面接线：隐私卡取这三段常量，不再有硬编码的整句', async () => {
+    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    expect(code).toContain('{VERIFY_PRIVACY_LEAD}')
+    expect(code).toContain('{VERIFY_PRIVACY_EMPHASIS}')
+    expect(code).toContain('{VERIFY_PRIVACY_TAIL}')
+    // 上一轮审查点名的原句不许回到 JSX 文本里
+    expect(code).not.toContain('需先解除当前认证')
   })
 })
