@@ -1,11 +1,12 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useCallback, useRef, useState } from 'react'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
 import { formatAmount, MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
@@ -26,6 +27,13 @@ import './index.scss'
  * 与「没问到」分开：前者是「已结束」空态，后者是带重试的错误态。
  *
  * 空态分两种：愿望本身已经结束（已成交 / 过期 / 已不存在），与「暂时没命中」。
+ *
+ * **账号作用域（#170）**：`wish` / `items` / `total` / `started` 都属于「当前登录用户」。
+ * 加载挂在 `authStatus === 'authed' && userId` 上（不在 `useLoad` 里抢跑：cold start
+ * 时 `GET /me` 还没回来，那两个端点必然 401）；换账号时在**渲染期同步**清场并自增
+ * epoch，丢掉在途响应；从详情 / 会话子页返回时由 `useDidShow` 重新加载，覆盖期间
+ * 在子页可能发生的写操作（关闭愿望 / 删除商品）。详见 `prevUserId` 与 `useDidShow`
+ * 处的注释。
  */
 
 /** 匹配度的文案分档（稿子：高度匹配 / 关键字全中 / 价钱贴上限） */
@@ -38,9 +46,12 @@ function scoreLabel(score: number, wish: MockWish | undefined): string {
 
 export default function Match() {
   const authStatus = useAuthGuard()
+  const { user: authedUser } = useAuth()
   const router = useRouter<{ wishId?: string }>()
   // 契约的 wishId 是 uuid；本页只能从「我的愿望」卡带参进入，没有 mock 默认愿望可退
   const wishId = router.params.wishId ?? ''
+  /** 当前账号身份：账号作用域 state 的清场与加载门禁都要用它（见下） */
+  const userId = authedUser?.id ?? null
 
   const [wish, setWish] = useState<MockWish | null>(null)
   const [items, setItems] = useState<MatchView[]>([])
@@ -52,8 +63,32 @@ export default function Match() {
   /** 逐条的「聊一聊」状态：已发起会话的换成「去会话」 */
   const [started, setStarted] = useState<Record<string, boolean>>({})
 
-  /** 自增序号丢弃过期响应：连点重试时先发的请求可能后到（与许愿页同一手法） */
+  /**
+   * 自增序号丢弃过期响应：连点重试时先发的请求可能后到；换账号时同步 +1，
+   * 让上一个账号的在途响应落地前就被判过期（与许愿页 / mylist 同一手法）。
+   */
   const loadSeq = useRef(0)
+
+  /**
+   * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
+   * 把账号作用域状态清干净，不会出现「B 的身份已经渲染、画的却是 A 的愿望命中」。
+   * 换成 `useEffect(() => setWish(null), [userId])` 不行：effect 在 commit 之后才跑，
+   * 泄漏帧照样存在（详见 chat 页同一写法的注释）。
+   */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  if (prevUserId !== userId) {
+    setPrevUserId(userId)
+    loadSeq.current += 1
+    setWish(null)
+    setItems([])
+    setTotal(0)
+    setStarted({})
+    // `state` 在这里一并重置为 `loading`：守卫在 `anonymous` 阶段只渲染 AuthRequired，
+    // 不会清 state；B 进来时若 state 仍是 A 留下的 `'ready'`，加载 effect 推回
+    // `'loading'` 之前会闪一帧 A 的列表。同步重置避免那一帧泄漏。
+    setState('loading')
+  }
+
   const load = useCallback(async () => {
     const seq = loadSeq.current + 1
     loadSeq.current = seq
@@ -75,7 +110,38 @@ export default function Match() {
     setState(result.status)
   }, [wishId])
 
-  useLoad(() => {
+  /**
+   * 加载门禁：等到 `authStatus === 'authed' && userId` 才发请求。
+   *
+   * `useLoad` 会在页面创建时同步触发，那时冷启动的 `GET /me` 可能还没回来
+   * （`authStatus === 'unknown'`），两个端点必然 401；挂在 effect 上则天然等到
+   * 登录态就绪（B），未登录被守卫跳走时根本不发（A）。`userId` 进依赖：换账号
+   * 时即便 authStatus 一直是 `authed`，新账号也要重拉（C 的另一半）。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null) return
+    void load()
+  }, [authStatus, userId, load])
+
+  /**
+   * 从子页返回（详情 / 会话）时重拉：那边可能改了愿望 / 商品状态，
+   * 本页数据是账号作用域的快照，回来就过期了。
+   *
+   * 首次 show 跳过 —— 那一次由上面的登录态 effect 负责，不跳过就会一进页
+   * 打两次。`authStatus` / `userId` 走 ref 读最新值：`useDidShow` 的回调注册
+   * 一次，直接闭包会读到旧状态。
+   */
+  const skipFirstShow = useRef(true)
+  const authedRef = useRef(false)
+  const userIdRef = useRef<string | null>(null)
+  authedRef.current = authStatus === 'authed'
+  userIdRef.current = userId
+  useDidShow(() => {
+    if (skipFirstShow.current) {
+      skipFirstShow.current = false
+      return
+    }
+    if (!authedRef.current || userIdRef.current === null) return
     void load()
   })
 
