@@ -25,7 +25,9 @@ import './index.scss'
  * A2 交易码 / 面交确认（设计稿 `小程序1版transaction-meetup.html`）—— #70 × #114 真实接线。
  *
  * 入口参数（两种，可同时出现）：
- * - `?id=<transactionId>`：从「我的订单」进入。卖家 = 出示方：进页即签发面交码，
+ * - `?id=<transactionId>`：从「我的订单」进入。卖家 = 出示方：进页即取码
+ *   （#176 起 `POST /meetup-token` 是幂等「确保并读取」——同一笔交易恒为**同一枚**码，
+ *   重复取码不换码、不改 `issuedAt`，只清零失败计数与锁定），
  *   展示 6 位码 + 二维码；买家 = 核销方：在本页手动输入对方的 6 位码（6 位码只在
  *   已知 transactionId 的本页输入，全局扫码页不提供无上下文输入），或点「扫码验证」
  *   进扫码页。
@@ -85,12 +87,13 @@ const INPUT_CELLS = [0, 1, 2, 3, 4, 5].map((index) => ({ id: `meetup-cell-${inde
 /** 完成动效的 26 颗粒子：几何全在 SCSS 的 `@for` 里，这里只要稳定 key 与顺序 */
 const FX_PARTICLES = Array.from({ length: 26 }, (_, index) => `meetup-fx-p-${index}`)
 
-/** 卖家视角下凭证的渲染态（NONE/CONSUMED 不落在本页：进页即签发） */
+/** 卖家视角下凭证的渲染态（NONE/CONSUMED 不落在本页：进页即取码） */
 type TokenView =
   | { state: 'issuing' }
   | { state: 'ready'; token: MeetupTokenResponse }
-  /** 凭证不可在本页重复展示（如卖家误扫自己的码收到 NOT_ALLOWED）：
-   * 明文只存在于签发响应，本页无法重放；是否重签交用户手动决定。 */
+  /** 凭证暂不在本页展示（如卖家误扫自己的码收到 NOT_ALLOWED）。
+   * #176 起取码幂等、**码值不变**：重新进入本页即可取回同一枚码，
+   * 不存在「旧码被换掉」这回事；本页不自动重取，免得把一次核销失败静默变成展示动作。 */
   | { state: 'unavailable' }
 
 /** 完成动效的挂载开关：只在「刚完成」那一刻播一次，静态进入终态不重播 */
@@ -133,7 +136,7 @@ export default function TransactionMeetup() {
 
   /**
    * 代次守卫（#168 审查 P1）：只有 `bootstrap` 自己判代次还不够 —— 它通过后启动的
-   * 签发 / 核销 / confirm 同样是异步的，换账号后迟到返回会把上一账号的 token、
+   * 取码 / 核销 / confirm 同样是异步的，换账号后迟到返回会把上一账号的 token、
    * 交易、`confirmPending`、完成动效写回新账号页面；`finally` 里的 loading 复位更
    * 隐蔽：旧请求会把新账号正在进行的操作直接「停止转圈」。
    *
@@ -195,12 +198,12 @@ export default function TransactionMeetup() {
         }
       }
       // 扫码路由优先（审查 P1-1 补充）：带 ?code= 进入时按扫码语义让后端裁决
-      // （卖家扫自己的码会如实收到 403 NOT_ALLOWED，而不是被静默刷新出码）；
-      // 无扫码产物时，卖家进页才自动签发。
+      // （卖家扫自己的码会如实收到 403 NOT_ALLOWED，而不是被静默换成一次展示）；
+      // 无扫码产物时，卖家进页才自动取码（#176 幂等：同一笔交易恒为同一枚码）。
       if (scanRef.current) {
         void consumeQr(scanRef.current.transactionId, scanRef.current.token, epoch)
       } else if (dto.role === 'seller') {
-        void issue(dto.id, epoch)
+        void ensureToken(dto.id, epoch)
       }
     } catch (error) {
       if (epoch !== bootEpoch.current) return
@@ -244,11 +247,13 @@ export default function TransactionMeetup() {
     void bootstrapRef.current(epoch)
   }, [authStatus, userId])
 
-  /* ------------------------------------------------- 卖家：签发 */
+  /* --------------------------------------- 卖家：取码（幂等 ensure/read） */
 
-  const issue = async (txId: string, epoch: number) => {
+  const ensureToken = async (txId: string, epoch: number) => {
     // 参数化 transactionId（审查 P1-1）：bootstrap 里 setTx 后闭包的 tx 仍是 null，
-    // 自动签发绝不能读 React state，否则首次进入直接 no-op、页面卡在「生成中…」。
+    // 自动取码绝不能读 React state，否则首次进入直接 no-op、页面卡在「加载中…」。
+    // 语义（#176）：这是「确保并读取」而非签发 —— 同一笔交易恒返回同一枚码，
+    // 重复取码不换码、不改 issuedAt，只清零失败计数与锁定（卖家专属解锁路径）。
     setToken({ state: 'issuing' })
     setInputError('')
     try {
@@ -271,7 +276,7 @@ export default function TransactionMeetup() {
           return
         }
       }
-      void Taro.showToast({ title: '交易码生成失败，请重试', icon: 'none' })
+      void Taro.showToast({ title: '交易码加载失败，请重试', icon: 'none' })
     }
   }
 
@@ -330,7 +335,8 @@ export default function TransactionMeetup() {
         const map: Record<string, string> = {
           MEETUP_TOKEN_INVALID: '交易码错误，请核对后重新输入。请确认对方展示的是本单的交易码。',
           MEETUP_TOKEN_CONSUMED: '这个交易码已被使用，不能重复核销。',
-          MEETUP_TOKEN_LOCKED: '错误次数过多，已临时锁定，请稍后再试。',
+          MEETUP_TOKEN_LOCKED:
+            '错误次数过多，已临时锁定。请让对方重新打开一次「交易码」页面，再试同一枚码。',
           MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
         }
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
@@ -341,9 +347,10 @@ export default function TransactionMeetup() {
           return
         }
         if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
-          // 只有签发人（卖家）会拿到 403：扫码语义已如实到达后端。
-          // 不顺手 rotate（审查 P2）——自动重签会立即作废对方手里的旧码；
-          // 落到「不可展示」态，是否刷新由卖家在展示态手动决定。
+          // 只有出示方（卖家）会拿到 403：扫码语义已如实到达后端。
+          // 不顺手自动重取（#176 取码幂等、码值不变，重取不会作废任何东西）——
+          // 静默把一次核销失败变成展示动作会掩盖失败本身；落到「暂不展示」态，
+          // 卖家重新进入本页即可取回同一枚码。
           setToken({ state: 'unavailable' })
           return
         }
@@ -687,7 +694,8 @@ export default function TransactionMeetup() {
                 <Text className="meetup__sum-amount num">¥{formatAmount(tx.amountCents)}</Text>
               </View>
 
-              {/* 明文只在签发响应出现一次，买卖两侧都无法回显数字（见文件头口径） */}
+              {/* 终态后凭证行已随交易同事务删除（#147），取码接口也只会拿到 409：
+                  这里如实展示「已失效」。明文只由卖家的取码响应给出，买家侧没有任何接口能回显数字。 */}
               <Text className="meetup__dead num">
                 本单交易码 <Text className="meetup__dead-code">已失效</Text>
               </Text>
@@ -739,8 +747,8 @@ export default function TransactionMeetup() {
                 </View>
                 <Text className="meetup__varcard-title">这是你出示的交易码</Text>
                 <Text className="meetup__varcard-text">
-                  交易码不能由你本人核销。出于安全，本页不重复展示已签发的码；
-                  如需重新出示给对方，请退出后重新进入本页生成新的 6 位码（旧码作废）。
+                  交易码不能由你本人核销。本页暂不重复展示这枚码；重新进入本页即可取回同一枚码 ——
+                  本单交易码不会变，也不存在「旧码作废」。
                 </Text>
               </View>
             ) : readyToken ? (
@@ -787,7 +795,7 @@ export default function TransactionMeetup() {
                     </Text>
                   ))}
                 </View>
-                <Text className="meetup__code-ttl num">交易码生成中…</Text>
+                <Text className="meetup__code-ttl num">交易码加载中…</Text>
               </View>
             )}
           </>
