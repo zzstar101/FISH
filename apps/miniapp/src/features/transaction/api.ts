@@ -3,7 +3,9 @@
  *
  * `/transactions` 整条挂在 `requireAuth` 之下，必须登录。面交码（meetup token）
  * 的路径常量与响应形状都冻结在 `@fish/contracts/transactions`：
- * - 签发是**卖家**的端点（明文码与 qrPayload 只在 201 响应出现一次）；
+ * - 取码是**卖家**的端点（#176 起幂等「确保并读取」：同一笔交易恒返回**同一枚**
+ *   明文码与 qrPayload，重复调用不换码、不改 `issuedAt`，只清零失败计数与锁定；
+ *   买家调用 403）；
  * - 核销是**买家**的端点（redeem 出示 QR token / verify-code 出示 6 位码），
  *   成功响应的 `nextAction` 固定为 `CONFIRM_DELIVERY` —— 由客户端接着调 confirm；
  * - 扫码页交付的 QR 原文由契约包 `meetup-qr` 解析（transactionId + token），
@@ -88,13 +90,17 @@ export async function fetchTransaction(id: string): Promise<TransactionDto> {
   return transactionDtoSchema.parse(payload)
 }
 
-/** 卖家签发/刷新面交码（重复调用即刷新：旧码立即作废）。 */
+/**
+ * 卖家取码（#176 起是幂等「确保并读取」）：同一笔交易恒返回同一枚 `code` / `qrPayload`，
+ * 重复调用**不换码**、不改 `issuedAt`；每次调用清零失败计数与锁定（卖家专属的解锁路径，
+ * 码值不变）。买家调用仍 403 `MEETUP_TOKEN_NOT_ALLOWED`。
+ */
 export async function issueMeetupToken(id: string): Promise<MeetupTokenResponse> {
   const payload = await apiRequest(TRANSACTION_ROUTES.issueMeetupToken(id), { method: 'POST' })
   return meetupTokenResponseSchema.parse(payload)
 }
 
-/** 当前面交凭证状态（无明文；NONE 表示还没有签发过）。 */
+/** 当前面交凭证状态（无明文；NONE 表示还没有取过码）。 */
 export async function fetchMeetupTokenStatus(id: string): Promise<MeetupTokenStatusResponse> {
   const payload = await apiRequest(TRANSACTION_ROUTES.meetupTokenStatus(id))
   return meetupTokenStatusResponseSchema.parse(payload)

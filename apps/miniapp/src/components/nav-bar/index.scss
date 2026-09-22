@@ -23,9 +23,9 @@
 }
 
 /*
- * 二级页标题：紧贴返回钮右侧（设计稿 `.navbar.has-back .navtitle{left:56px}`，
+ * 二级页标题，默认紧贴返回钮右侧（稿 `.navbar.has-back .navtitle{left:56px}`，
  * 即 32（左内边距）+ 72（返回钮）= 104px 起，这里再留 8px 间距）。
- * 字号 17pt → 34px，与稿一致；`--font-display` 是外部字体，按仓库约定用系统字体。
+ * 字号 17pt → 34px，与稿一致。
  */
 .navfloat__title {
   flex: 1 1 auto;
@@ -36,6 +36,32 @@
   letter-spacing: 0.02em;
   color: var(--fg);
   @include ellipsis;
+}
+
+/*
+ * 居中标题（稿 `.mp-title`）：整行绝对定位 + flex 居中，与返回钮**同一水平中线**。
+ *
+ * 高度必须写成 rpx（72px → 72rpx，与 `.navfloat__btn` 同高），只有状态栏高度由组件
+ * 行内以 **px** 给。两者单位不能混：`statusBarHeight` 来自 `getWindowInfo()`，是设备
+ * CSS px；而 72rpx 在 390pt 屏上只有约 39px。早先写成行内 `statusBarHeight + 36px`
+ * 是把「72rpx 的一半」当成了「36px」，实测标题中心比返回钮低 16px（返回钮中心 67、
+ * 标题 83）。规则见 `src/lib/nav-metrics.ts`：pxtransform 只处理样式表，内联 px 原样下发。
+ *
+ * 左右留 110px 内边距，避免长标题压到返回钮。
+ */
+.navfloat__title--center {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  padding: 0 110px;
+  flex: 0 1 auto;
+  margin-left: 0;
+  transform: none;
+  text-align: center;
 }
 
 .navfloat__actions {
@@ -71,4 +97,42 @@
   border-bottom: 4px solid var(--fg);
   border-radius: 2px;
   transform: translateX(4px) rotate(45deg);
+}
+
+/*
+ * 变体：吸顶玻璃底（`glass` 显式开启）。
+ *
+ * `position: fixed` 让返回钮与标题在长页面上**钉住**，内容从玻璃底下滚过。
+ * 底与描边铺满整条（`padding-top` 由组件行内给成状态栏高度），所以状态栏那一段
+ * 也是一块完整玻璃，不会露出页头颜色。
+ *
+ * 材质与 `components/top-bar` 的 `.topbar--glass` 取同一组值（同色同模糊同发丝线），
+ * 全站顶部栏看起来才是同一种玻璃。
+ *
+ * 注意：`backdrop-filter` 会让本元素成为 `position: fixed` 后代的包含块 —— 这里没有
+ * fixed 后代（返回钮/标题都是 absolute），不受影响。`pointer-events: none` 继承自
+ * 基类，玻璃底不挡点击。
+ */
+.navfloat--glass {
+  position: fixed;
+  background: rgba(238, 246, 255, 0.82);
+  backdrop-filter: blur(36px) saturate(180%);
+  -webkit-backdrop-filter: blur(36px) saturate(180%);
+  box-shadow: inset 0 -2px 0 var(--accent-faint);
+}
+
+/*
+ * 玻璃底之上，白钮几乎融进底色：实测钮填充 ≈250–255、底 ≈243，只差十余级，
+ * 缩略图里只剩那个箭头看得见。补一道极浅的墨色描边把圆形勾出来。
+ *
+ * `rgba(23, 35, 61, 0.2)` = `--fg`(#17233d) 的 20% 透明度（DESIGN.md §2 要求写明算式）。
+ * 合成到玻璃底上约得 L≈197，与底 L≈243 差约 46 级 —— 这是「正常观看尺寸下能看见」
+ * 的下限附近的取值；**不能再往下调**：先写过 12%（合成 L≈219，只差 24 级），
+ * 在 2rpx 描边加截图降采样的条件下实测仍然读不出圆。
+ *
+ * **只在这个变体里加**：深色底与渐变页头上的白钮本来就够跳，不需要也不能改。
+ * （`components/top-bar` 的白钮在同样的玻璃底上也有这个毛病，属既有形态，本次不动它。）
+ */
+.navfloat--glass .navfloat__btn {
+  border-color: rgba(23, 35, 61, 0.2);
 }
