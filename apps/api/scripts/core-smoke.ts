@@ -3,7 +3,8 @@
  *
  * 用**真实进程**走完整条 P0 主链：自建 scratch 库 → migration + seed → 真实 API + 真实 Worker
  * + 真实 MinIO → 图片 presign/PUT/公开读 → 发布 Listing → MATCH_LISTING → Worker → Match →
- * 创建 Wish → MATCH_WISH → 双方向 `/matches` → 编辑/上下架重算 → 崩溃重启恢复 → 坏 payload 失败。
+ * 创建 Wish → MATCH_WISH → 双方向 `/matches` → 编辑/上下架重算 → 崩溃重启恢复 → 坏 payload 失败 →
+ * 交易与面交（交易↔会话三元组一致 / 取消与成交两个终态销毁凭证 / 一单一码 / 重取即解锁）。
  *
  * **为什么放在 `apps/api/scripts/`**：脚本要直接 import `@fish/db/*` 与 `drizzle-orm`
  * （编程式 migrate / seed，以及直接断言 `jobs` / `matches` / `notifications`），而根
@@ -41,6 +42,7 @@ import { jobs } from '@fish/db/schema/jobs'
 import { listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
+import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
 import { and, eq, sql } from 'drizzle-orm'
@@ -328,7 +330,13 @@ async function totalMatchCount(db: Db): Promise<number> {
   return rows[0]?.n ?? 0
 }
 
-/** 某笔交易当前是否还挂着面交凭证行（#147 终态同事务销毁的断言口径）。 */
+/** 交易行总数：用于钉住「提案不落库、只有卖家接受才建行」（#11）。 */
+async function transactionCount(db: Db): Promise<number> {
+  const rows = await db.select({ n: sql<number>`count(*)::int` }).from(transactions)
+  return rows[0]?.n ?? 0
+}
+
+/** 某笔交易当前是否还挂着面交凭证行（#147 终态销毁的断言口径）。 */
 async function meetupTokenRowCount(db: Db, transactionId: string): Promise<number> {
   const rows = await db.execute<{ n: number }>(sql`
     select count(*)::int as n from transaction_meetup_tokens
@@ -803,7 +811,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     assertEqual(await totalMatchCount(db), matchesBefore, '坏 payload 不新增任何 match')
 
-    // 12. 交易与面交（#147）：三元组一致 → 取消终态销毁 → 一单一码 → 重取即解锁 → 成交终态销毁
+    // 11. 交易与面交（#147）：三元组一致 → 取消终态销毁 → 一单一码 → 重取即解锁 → 成交终态销毁
     //
     // 为什么必须放在**最后一步**：本步骤会把主链 listing 推到 SOLD，插在「重启恢复」之前
     // 会污染那两步对同一 listing 的 PATCH。取舍见
@@ -816,13 +824,19 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(conversationResponse.status, 201, 'POST /conversations → 201')
     const conversationId = String((await readJson(conversationResponse)).id)
 
+    const txRowsBeforeProposal = await transactionCount(db)
     const proposalResponse = await postJson(
       base,
       TRANSACTION_ROUTES.proposals,
       { conversationId, amountCents: 0 },
       buyer,
     )
-    assertEqual(proposalResponse.status, 201, '买家提案 → 201（不建交易行）')
+    assertEqual(proposalResponse.status, 201, '买家提案 → 201')
+    assertEqual(
+      await transactionCount(db),
+      txRowsBeforeProposal,
+      '提案不落交易行（只有卖家接受才建行）',
+    )
 
     // 不变量 ①a：CANCELLED 是「终态同事务销毁」的另一半（#169）。先用一笔取消掉的交易把
     // 这条钉住，再让同一 listing 走完整成交链路 —— cancel 会把 listing 无条件恢复 ACTIVE，
@@ -853,7 +867,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     assertEqual(cancelledResponse.status, 200, '买家取消 → 200')
     assertEqual((await readJson(cancelledResponse)).status, 'CANCELLED', '取消后交易为 CANCELLED')
-    assertEqual(await meetupTokenRowCount(db, cancelledId), 0, 'CANCELLED 后凭证行已同事务删除')
+    assertEqual(await meetupTokenRowCount(db, cancelledId), 0, 'CANCELLED 后凭证行已删除')
 
     const cancelAfterTerminal = await postJson(
       base,
@@ -944,9 +958,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '锁定错误码是 MEETUP_TOKEN_LOCKED',
     )
 
-    const relocked = await issue()
-    assertEqual(relocked.status, 201, '锁定后卖家重取码 → 201')
-    assertEqual(String((await readJson(relocked)).code), meetupCode, '重取解锁不换码')
+    const reissued = await issue()
+    assertEqual(reissued.status, 201, '锁定后卖家重取码 → 201')
+    assertEqual(String((await readJson(reissued)).code), meetupCode, '重取解锁不换码')
     const tokenRows = await db.execute<{ failedAttempts: number; lockedUntil: string | null }>(sql`
       select failed_attempts as "failedAttempts", locked_until as "lockedUntil"
       from transaction_meetup_tokens where transaction_id = ${transactionId}
@@ -979,7 +993,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(buyerConfirm.status, 200, '买家 confirm → 200')
     assertEqual((await readJson(buyerConfirm)).status, 'COMPLETED', '买家确认后双侧齐 → COMPLETED')
 
-    assertEqual(await meetupTokenRowCount(db, transactionId), 0, 'COMPLETED 后凭证行已同事务删除')
+    assertEqual(await meetupTokenRowCount(db, transactionId), 0, 'COMPLETED 后凭证行已删除')
 
     const afterTerminal = await issue()
     assertEqual(afterTerminal.status, 409, '终态后取码 → 409')
