@@ -81,7 +81,9 @@
 1. **三元组一致**：提案 → 接受后，买卖双方 `GET /transactions` 各自都能看到该笔；且 `conversationId` 指向 `(listing_id, buyer_id, seller_id)` 完全一致的会话（DB 侧直接断言 join，对应 #157 的失败模式）。
 2. **一单一码幂等**：卖家连续两次 `POST /transactions/:id/meetup-token` → 两次明文码**逐字相同**。
 3. **重取即解锁**：买家连错 4 次 `verify-code` 各返回 422，**第 5 次达阈值即返回 429** `MEETUP_TOKEN_LOCKED`（`apps/api/src/modules/transactions/store.ts:684-695` 在同一 UPDATE 里置 `locked_until`）；卖家再取码 → 码值不变，且该行 `failed_attempts = 0` / `locked_until = null`。
-4. **终态销毁**：买家以正确码核销（该事务同时盖上卖家确认，交易仍停 `PENDING_MEETUP`）→ 买家 `confirm` → COMPLETED → DB 断言该交易的 `transaction_meetup_tokens` 无行，且再 `POST /meetup-token` 返回 409。
+4. **终态销毁（两个终态各一条）**：
+   - **CANCELLED**：取码 → 买家 `cancel` → DB 断言凭证行已删、再取码 409、且商品恢复 ACTIVE（`store.ts:526-533` 的无条件 RESOLVED→ACTIVE 与同事务 DELETE）；
+   - **COMPLETED**：买家以正确码核销（该事务同时盖上卖家确认，交易仍停 `PENDING_MEETUP`）→ 买家 `confirm` → COMPLETED → DB 断言凭证行已删，且再 `POST /meetup-token` 返回 409。
 
 ### 4.3 验证
 

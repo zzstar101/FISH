@@ -328,6 +328,15 @@ async function totalMatchCount(db: Db): Promise<number> {
   return rows[0]?.n ?? 0
 }
 
+/** 某笔交易当前是否还挂着面交凭证行（#147 终态同事务销毁的断言口径）。 */
+async function meetupTokenRowCount(db: Db, transactionId: string): Promise<number> {
+  const rows = await db.execute<{ n: number }>(sql`
+    select count(*)::int as n from transaction_meetup_tokens
+    where transaction_id = ${transactionId}
+  `)
+  return [...rows][0]?.n ?? 0
+}
+
 async function notificationCount(db: Db, listingId: string, wishId: string): Promise<number> {
   const rows = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -794,13 +803,13 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     assertEqual(await totalMatchCount(db), matchesBefore, '坏 payload 不新增任何 match')
 
-    // 12. 交易与面交（#147）：三元组一致 → 一单一码 → 重取即解锁 → 终态销毁
+    // 12. 交易与面交（#147）：三元组一致 → 取消终态销毁 → 一单一码 → 重取即解锁 → 成交终态销毁
     //
     // 为什么必须放在**最后一步**：本步骤会把主链 listing 推到 SOLD，插在「重启恢复」之前
     // 会污染那两步对同一 listing 的 PATCH。取舍见
     // docs/design/issue-147-transaction-invariants.md §4.1。
     step = '交易与面交'
-    section('交易与面交：三元组一致、一单一码、重取解锁、终态销毁')
+    section('交易与面交：三元组一致、取消/成交终态销毁、一单一码、重取解锁')
 
     // 不变量 ①：交易 ↔ 会话三元组一致。join 不上的交易在订单页静默消失（#157 的失败模式）。
     const conversationResponse = await postJson(base, CHAT_ROUTES.base, { listingId }, buyer)
@@ -814,6 +823,53 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       buyer,
     )
     assertEqual(proposalResponse.status, 201, '买家提案 → 201（不建交易行）')
+
+    // 不变量 ①a：CANCELLED 是「终态同事务销毁」的另一半（#169）。先用一笔取消掉的交易把
+    // 这条钉住，再让同一 listing 走完整成交链路 —— cancel 会把 listing 无条件恢复 ACTIVE，
+    // 所以两笔能顺序落在同一个商品上。
+    const cancelledAccept = await postJson(
+      base,
+      TRANSACTION_ROUTES.accept,
+      { conversationId, amountCents: 0 },
+      seller,
+    )
+    assertEqual(cancelledAccept.status, 201, '卖家接受（待取消用例）→ 201')
+    const cancelledId = String((await readJson(cancelledAccept)).id)
+
+    const cancelledIssue = await postJson(
+      base,
+      TRANSACTION_ROUTES.issueMeetupToken(cancelledId),
+      {},
+      seller,
+    )
+    assertEqual(cancelledIssue.status, 201, '待取消用例取码 → 201')
+    assertEqual(await meetupTokenRowCount(db, cancelledId), 1, '取码后凭证行存在')
+
+    const cancelledResponse = await postJson(
+      base,
+      TRANSACTION_ROUTES.cancel(cancelledId),
+      {},
+      buyer,
+    )
+    assertEqual(cancelledResponse.status, 200, '买家取消 → 200')
+    assertEqual((await readJson(cancelledResponse)).status, 'CANCELLED', '取消后交易为 CANCELLED')
+    assertEqual(await meetupTokenRowCount(db, cancelledId), 0, 'CANCELLED 后凭证行已同事务删除')
+
+    const cancelAfterTerminal = await postJson(
+      base,
+      TRANSACTION_ROUTES.issueMeetupToken(cancelledId),
+      {},
+      seller,
+    )
+    assertEqual(cancelAfterTerminal.status, 409, 'CANCELLED 后取码 → 409')
+    assertEqual(
+      ((await readJson(cancelAfterTerminal)).error as { code: string }).code,
+      'TRANSACTION_NOT_IN_PENDING',
+      'CANCELLED 后取码错误码是 TRANSACTION_NOT_IN_PENDING',
+    )
+
+    const restored = await readJson(await get(base, `/listings/${listingId}`))
+    assertEqual(restored.status, 'ACTIVE', '取消后商品恢复 ACTIVE（可再次成交）')
 
     const acceptResponse = await postJson(
       base,
@@ -923,11 +979,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(buyerConfirm.status, 200, '买家 confirm → 200')
     assertEqual((await readJson(buyerConfirm)).status, 'COMPLETED', '买家确认后双侧齐 → COMPLETED')
 
-    const leftover = await db.execute<{ n: number }>(sql`
-      select count(*)::int as n from transaction_meetup_tokens
-      where transaction_id = ${transactionId}
-    `)
-    assertEqual([...leftover][0]?.n, 0, 'COMPLETED 后凭证行已同事务删除')
+    assertEqual(await meetupTokenRowCount(db, transactionId), 0, 'COMPLETED 后凭证行已同事务删除')
 
     const afterTerminal = await issue()
     assertEqual(afterTerminal.status, 409, '终态后取码 → 409')
