@@ -125,11 +125,15 @@ export interface TransactionStore {
   ): Promise<{ kind: 'ok'; row: TransactionRow } | { kind: 'not-cancellable' | 'not-found' }>
   findMeetupToken(transactionId: string): Promise<MeetupTokenRow | null>
   /**
-   * 签发 / 刷新面交凭证（#70，#147 长期凭证）：一行对应一笔交易的当前凭证，重复签发
-   * 整行覆写，旧码（token_hash / code_hash 被替换）立即作废，消费与失败计数一并归零。
+   * 确保并读取面交凭证（#70；#175 一单一码）：一行对应一笔交易**唯一**的那枚凭证。
+   * 行不存在时按传入哈希创建；已存在时返回同一行——**未核销**才把哈希对齐到传入值
+   * （派生码恒定，正常行等于无操作；对改动前签发的随机码历史行是一次性自愈），
+   * 已核销的行不复活、不重写哈希（#175 没有重签动作，consumed 是终点）。
+   * 每次调用都复位 failed_attempts / locked_until（#175 冻结：卖家重新取码是现场
+   * 解锁的唯一路径），issued_at / consumed_at / consumed_by 一律不动。
    * **原子性（防 TOCTOU）**：事务内先 `SELECT … FOR UPDATE` 锁定交易行并校验
    * PENDING_MEETUP + 卖家身份，校验通过才写凭证行——201 的承诺是「持锁那一刻
-   * 交易仍可签发」；cancel/complete 与 issue 并发时在交易行锁上串行化，终态交易
+   * 交易仍可出示」；cancel/complete 与 issue 并发时在交易行锁上串行化，终态交易
    * 不会拿到新凭证（返回 null，service 据此给 409）。
    */
   upsertMeetupToken(
@@ -160,9 +164,9 @@ export interface TransactionStore {
   /**
    * 核销失败累计；达到阈值置 locked_until（防 6 位码被爆破）。
    * `generation` 是诊断「不匹配」那一刻读到的行哈希：计数只在行仍是**同一代凭证**
-   * 时生效——卖家刷新（整行覆写换哈希）后，并发中的旧请求无法把失败记到新码上，
-   * 多个过期请求也不能把刚刷新的码立即锁死。
-   * 锁定到期后计数刻意不归零：再错一次立即重新锁定（持续计数），重签时才清零。
+   * 时生效——哈希换代（历史行自愈）后，并发中的旧请求无法把失败记到新码上，
+   * 多个过期请求也不能把刚对齐的码立即锁死。
+   * 锁定到期后计数刻意不归零：再错一次立即重新锁定（持续计数），卖家重新取码时才清零。
    */
   recordMeetupTokenFailure(
     transactionId: string,
@@ -581,12 +585,19 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             (transaction_id, token_hash, code_hash, issued_by)
           VALUES (${transactionId}, ${input.tokenHash}, ${input.codeHash}, ${input.issuedBy})
           ON CONFLICT (transaction_id) DO UPDATE SET
-            token_hash = EXCLUDED.token_hash,
-            code_hash = EXCLUDED.code_hash,
+            -- #175：已核销的行**不复活、不重写哈希** —— 没有重签动作，consumed 是终点；
+            -- 未核销时把哈希对齐到传入值（同一枚派生码的哈希是常量，等于无操作；
+            -- 对改动前签发的随机码历史行，这一次对齐就是唯一一次「静默修好」）。
+            token_hash = CASE
+              WHEN transaction_meetup_tokens.consumed_at IS NULL THEN EXCLUDED.token_hash
+              ELSE transaction_meetup_tokens.token_hash
+            END,
+            code_hash = CASE
+              WHEN transaction_meetup_tokens.consumed_at IS NULL THEN EXCLUDED.code_hash
+              ELSE transaction_meetup_tokens.code_hash
+            END,
             issued_by = EXCLUDED.issued_by,
-            issued_at = now(),
-            consumed_at = NULL,
-            consumed_by = NULL,
+            -- 卖家重新取码 = 复位防爆破计数与锁定（#175 冻结：这是现场解锁的唯一路径）。
             failed_attempts = 0,
             locked_until = NULL
           RETURNING transaction_id, token_hash, code_hash, issued_by,
@@ -674,7 +685,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
     },
 
     async recordMeetupTokenFailure(transactionId, generation, maxAttempts, lockSeconds) {
-      // WHERE 绑定「诊断不匹配那一刻」的行哈希（凭证代际）：刷新换哈希后，
+      // WHERE 绑定「诊断不匹配那一刻」的行哈希（凭证代际）：哈希换代（历史行自愈）后，
       // 并发旧请求的失败落 0 行（返回 null 被丢弃），不会累计到新一代凭证上。
       const result = await db.execute(sql`
         UPDATE transaction_meetup_tokens

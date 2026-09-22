@@ -22,7 +22,7 @@ export const TRANSACTION_ROUTES = {
   confirm: (id: string) => `/transactions/${id}/confirm`,
   /** POST 取消（200 TransactionDto；COMPLETED 上 409 TRANSACTION_NOT_IN_PENDING）。 */
   cancel: (id: string) => `/transactions/${id}/cancel`,
-  /** POST 卖家签发一次性面交码（201；明文仅在此响应返回）。 */
+  /** POST 卖家取本单面交码（201；#175 幂等「确保并读取」，同一笔交易恒定同一枚；明文仅在此响应返回）。 */
   issueMeetupToken: (id: string) => `/transactions/${id}/meetup-token`,
   /** GET 当前面交凭证状态（不返回明文码）。 */
   meetupTokenStatus: (id: string) => `/transactions/${id}/meetup-token`,
