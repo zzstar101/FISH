@@ -51,7 +51,7 @@ import './index.scss'
  * 必须再查 GET meetup-token 的 status === CONSUMED 才恢复确认入口；
  * 非 CONSUMED 一律仍要求扫码 / 手输核销。
  *
- * 错误口径逐一对齐后端错误码：INVALID（码不正确）/ EXPIRED（过期，请对方刷新）/
+ * 错误口径逐一对齐后端错误码：INVALID（码不正确）/
  * CONSUMED（已被使用）/ LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
  * NOT_ALLOWED（不能核销自己出示的码）。
  */
@@ -184,7 +184,7 @@ export default function TransactionMeetup() {
         // 恢复口径（审查第三轮 P1）：sellerConfirmedAt **不能**等同「凭证已核销」
         // ——卖家可能从 Web 订单页走了普通 confirm。必须查凭证真实状态：
         // 仅 status === CONSUMED（确经本页凭证核销、上次会话 confirm 失败）才恢复
-        // 确认入口；NONE/ISSUED/EXPIRED 一律仍要求扫码 / 手输核销。
+        // 确认入口；NONE/ISSUED 一律仍要求扫码 / 手输核销。
         if (dto.sellerConfirmedAt !== null && dto.buyerConfirmedAt === null) {
           const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
           if (epoch !== bootEpoch.current) return
@@ -329,7 +329,6 @@ export default function TransactionMeetup() {
       if (isApiError(error)) {
         const map: Record<string, string> = {
           MEETUP_TOKEN_INVALID: '交易码错误，请核对后重新输入。请确认对方展示的是本单的交易码。',
-          MEETUP_TOKEN_EXPIRED: '交易码已过期，请对方重新出示本单的交易码。',
           MEETUP_TOKEN_CONSUMED: '这个交易码已被使用，不能重复核销。',
           MEETUP_TOKEN_LOCKED: '错误次数过多，已临时锁定，请稍后再试。',
           MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
