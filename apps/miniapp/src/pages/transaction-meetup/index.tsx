@@ -131,6 +131,17 @@ export default function TransactionMeetup() {
   /** bootstrap 代次：身份切换 / 重试后，旧账号或旧一轮的迟到响应一律作废 */
   const bootEpoch = useRef(0)
 
+  /**
+   * 代次守卫（#168 审查 P1）：只有 `bootstrap` 自己判代次还不够 —— 它通过后启动的
+   * 签发 / 核销 / confirm 同样是异步的，换账号后迟到返回会把上一账号的 token、
+   * 交易、`confirmPending`、完成动效写回新账号页面；`finally` 里的 loading 复位更
+   * 隐蔽：旧请求会把新账号正在进行的操作直接「停止转圈」。
+   *
+   * 约定：操作链开始时取一次 `epoch = bootEpoch.current` 一路透传，
+   * **每个 await 之后、任何 setState 之前**（含 finally）先过这里。
+   */
+  const isStale = (epoch: number) => epoch !== bootEpoch.current
+
   /* ------------------------------------------------------------------ 加载 */
 
   useLoad(() => {
@@ -187,9 +198,9 @@ export default function TransactionMeetup() {
       // （卖家扫自己的码会如实收到 403 NOT_ALLOWED，而不是被静默刷新出码）；
       // 无扫码产物时，卖家进页才自动签发。
       if (scanRef.current) {
-        void consumeQr(scanRef.current.transactionId, scanRef.current.token)
+        void consumeQr(scanRef.current.transactionId, scanRef.current.token, epoch)
       } else if (dto.role === 'seller') {
-        void issue(dto.id)
+        void issue(dto.id, epoch)
       }
     } catch (error) {
       if (epoch !== bootEpoch.current) return
@@ -210,6 +221,12 @@ export default function TransactionMeetup() {
     setConfirmPending(false)
     setDigits(['', '', '', '', '', ''])
     setInputError('')
+    // 上面自增代次后，上一账号在飞的操作链连 `finally` 都不会再落地 ——
+    // 这些 loading / 动效开关必须在这里一并清掉：否则新账号页面会停在核验态
+    // 的全屏转圈上，或替上一账号重播一次完成动效。
+    setVerifying(false)
+    setSubmitting(false)
+    setFxPhase('off')
   }
 
   /**
@@ -229,20 +246,23 @@ export default function TransactionMeetup() {
 
   /* ------------------------------------------------- 卖家：签发 */
 
-  const issue = async (txId: string) => {
+  const issue = async (txId: string, epoch: number) => {
     // 参数化 transactionId（审查 P1-1）：bootstrap 里 setTx 后闭包的 tx 仍是 null，
     // 自动签发绝不能读 React state，否则首次进入直接 no-op、页面卡在「生成中…」。
     setToken({ state: 'issuing' })
     setInputError('')
     try {
       const next = await issueMeetupToken(txId)
+      if (isStale(epoch)) return
       setToken({ state: 'ready', token: next })
     } catch (error) {
+      if (isStale(epoch)) return
       setToken(null)
       if (isApiError(error)) {
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
           // 终态（已取消/已完成）：刷新交易视图让页面落到对应状态卡
           const dto = await fetchTransaction(txId).catch(() => null)
+          if (isStale(epoch)) return
           if (dto) setTx(dto)
           return
         }
@@ -257,12 +277,12 @@ export default function TransactionMeetup() {
 
   /* ------------------------------------------------- 买家：核销 */
 
-  const consumeQr = async (targetId: string, qrToken: string) => {
-    await verify(targetId, () => redeemMeetupToken(targetId, qrToken))
+  const consumeQr = async (targetId: string, qrToken: string, epoch: number) => {
+    await verify(targetId, () => redeemMeetupToken(targetId, qrToken), epoch)
   }
 
-  const consumeCode = async (targetId: string, code: string) => {
-    await verify(targetId, () => verifyMeetupCode(targetId, code))
+  const consumeCode = async (targetId: string, code: string, epoch: number) => {
+    await verify(targetId, () => verifyMeetupCode(targetId, code), epoch)
   }
 
   /**
@@ -273,7 +293,7 @@ export default function TransactionMeetup() {
    * 核验态的时长 = 请求在飞（`submitting`），另配最短展示 `VERIFY_MIN_MS`：
    * 请求秒回时也把转圈留够一瞬，避免闪一下。
    */
-  const verify = async (targetId: string, consume: () => Promise<unknown>) => {
+  const verify = async (targetId: string, consume: () => Promise<unknown>, epoch: number) => {
     if (submitting) return
     setSubmitting(true)
     setInputError('')
@@ -287,18 +307,25 @@ export default function TransactionMeetup() {
     }
     try {
       await consume()
+      if (isStale(epoch)) return
       try {
         const dto = await confirmTransaction(targetId)
+        if (isStale(epoch)) return
         await settle()
+        if (isStale(epoch)) return
         setTx(dto)
         setConfirmPending(dto.status !== 'COMPLETED')
         if (dto.status === 'COMPLETED') setFxPhase('on')
       } catch {
+        if (isStale(epoch)) return
         await settle()
+        if (isStale(epoch)) return
         setConfirmPending(true)
       }
     } catch (error) {
+      if (isStale(epoch)) return
       await settle()
+      if (isStale(epoch)) return
       if (isApiError(error)) {
         const map: Record<string, string> = {
           MEETUP_TOKEN_INVALID: '交易码错误，请核对后重新输入。请确认对方展示的是本单的交易码。',
@@ -310,6 +337,7 @@ export default function TransactionMeetup() {
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
           // 已取消 / 已完成：刷新交易视图落到对应状态卡
           const dto = await fetchTransaction(targetId).catch(() => null)
+          if (isStale(epoch)) return
           if (dto) setTx(dto)
           return
         }
@@ -328,31 +356,37 @@ export default function TransactionMeetup() {
       }
       setInputError('核销失败，请检查网络后重试。')
     } finally {
-      setVerifying(false)
-      setSubmitting(false)
+      // 换账号后旧链的收尾不能落地：它会把新账号正在进行的核销 loading 关掉
+      if (!isStale(epoch)) {
+        setVerifying(false)
+        setSubmitting(false)
+      }
     }
   }
 
   /** 核销成功但 confirm 尚未落定（网络失败）时的重试入口 */
-  const retryConfirm = async () => {
+  const retryConfirm = async (epoch: number) => {
     if (!tx || submitting) return
     setSubmitting(true)
     try {
       const dto = await confirmTransaction(tx.id)
+      if (isStale(epoch)) return
       setTx(dto)
       setConfirmPending(dto.status !== 'COMPLETED')
       if (dto.status === 'COMPLETED') setFxPhase('on')
     } catch (error) {
+      if (isStale(epoch)) return
       if (isApiError(error) && error.code === 'TRANSACTION_NOT_IN_PENDING') {
         // 等待期间交易被取消/完成：落到对应状态卡，确认入口随之消失
         const dto = await fetchTransaction(tx.id).catch(() => null)
+        if (isStale(epoch)) return
         if (dto) setTx(dto)
         setConfirmPending(false)
         return
       }
       void Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })
     } finally {
-      setSubmitting(false)
+      if (!isStale(epoch)) setSubmitting(false)
     }
   }
 
@@ -394,7 +428,7 @@ export default function TransactionMeetup() {
 
   const submit = () => {
     if (!canSubmit || !tx) return
-    void consumeCode(tx.id, joined)
+    void consumeCode(tx.id, joined, bootEpoch.current)
   }
 
   /* ------------------------------------------------- 派生视图状态 */
@@ -769,7 +803,7 @@ export default function TransactionMeetup() {
             <View className="meetup__bar">
               <View
                 className={`meetup__bar-btn meetup__btn--main${submitting ? ' is-off' : ''}`}
-                onClick={() => void retryConfirm()}
+                onClick={() => void retryConfirm(bootEpoch.current)}
               >
                 {submitting ? <View className="meetup__spin" /> : null}
                 <Text>{submitting ? '确认中…' : '确认完成面交'}</Text>
