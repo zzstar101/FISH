@@ -120,8 +120,8 @@ export default function Settings() {
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.safeAccent} mode="aspectFit" />
             </View>
-            <Text className="st__rlabel">校园认证</Text>
-            <Text className="st__rvalue">{verified ? '已认证' : '去认证'}</Text>
+            <Text className="st__rlabel">教育邮箱</Text>
+            <Text className="st__rvalue">{verified ? '已验证' : '去验证'}</Text>
             <View className="st__arrow" />
           </View>
         </View>
