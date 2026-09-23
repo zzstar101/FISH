@@ -36,6 +36,15 @@ export class WechatExchangeError extends Error {
 }
 
 /**
+ * live `jscode2session` 的超时（毫秒）。
+ *
+ * 没有超时的 `fetch` 在上游挂死时会一直占着这次 HTTP 请求和一条 Bun.serve 连接：
+ * 一个卡住的 `api.weixin.qq.com` 足以把连接池慢慢耗光，而且客户端永远等不到答复。
+ * 超时后按「code 换不出来」处理（401 `WECHAT_CODE_INVALID`），客户端重试即可。
+ */
+export const WECHAT_EXCHANGE_TIMEOUT_MS = 5000
+
+/**
  * stub Provider：`code` 即身份种子。形状与真实 openid 一致（`o` 前缀 + 27 位 base 字符），
  * 同一 code 恒得同一 openid——真实接口里 code 一次性，但「同一微信用户多次登录」
  * 的幂等性由 openid 唯一索引承担，stub 的确定性只是让这一语义在测试里可复现。
@@ -77,7 +86,14 @@ export function createLiveWechatIdentityProvider(deps: {
       url.searchParams.set('secret', deps.appSecret)
       url.searchParams.set('js_code', code)
       url.searchParams.set('grant_type', 'authorization_code')
-      const res = await fetch(url)
+      let res: Response
+      try {
+        res = await fetch(url, { signal: AbortSignal.timeout(WECHAT_EXCHANGE_TIMEOUT_MS) })
+      } catch (error) {
+        // 超时 / DNS / 连接失败：上游不可达。只带错误类型名——异常原文可能含带 secret 的 URL。
+        const kind = error instanceof Error ? error.name : 'unknown'
+        throw new WechatExchangeError(`jscode2session 请求失败（${kind}）`)
+      }
       if (!res.ok) {
         throw new WechatExchangeError(`jscode2session HTTP ${res.status}`)
       }

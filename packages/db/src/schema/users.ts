@@ -46,8 +46,11 @@ export const users = pgTable(
 /**
  * 微信身份映射（#86 A 节）：openid/unionid -> FISH user 的唯一绑定。
  *
- * 刻意独立成表而不塞进 users：一个 user 理论上可有多条微信身份（unionid 合并）、
- * 映射有自己的生命周期（绑定/解绑），且不能把外部身份凭据混进账号主表。
+ * 刻意独立成表而不塞进 users：映射有自己的生命周期（绑定/解绑），
+ * 且不能把外部身份凭据混进账号主表。
+ *
+ * 当前**一个 user 最多一条微信身份**，由 `wechat_identities_user_uq` 强制（换微信账号 =
+ * 换 user，不做合并）；将来若要支持 unionid 合并出的多身份，必须先删掉这个唯一索引。
  * `openid` 全局唯一索引 = 「同一 appid + openid 唯一映射」的并发防线（#86 A）。
  */
 export const wechatIdentities = pgTable(
