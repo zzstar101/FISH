@@ -31,14 +31,19 @@ export interface MediaStorage {
   /** 对象不存在返回 `null`（不抛），由调用方决定 404 / 422 语义。 */
   stat(key: string): Promise<MediaObjectStat | null>
 
-  /** 读取私有对象；媒体接口在通过会话鉴权后使用。 */
+  /**
+   * 读取私有对象；媒体接口在通过会话鉴权后使用。
+   *
+   * 键形状不合法（见 `isSafeObjectKey`）返回 `null`：GET 路径和 HEAD 一样会被 `new URL()`
+   * 归一化，所以读路径不能假定调用方已经校验过键（#86 B 线复评 P2）。
+   */
   getObject?(
     key: string,
     range?: { start: number; end: number },
   ): {
     stream: ReadableStream<Uint8Array>
     contentType: string
-  }
+  } | null
 
   /** 仅服务端写入验证过的快照；key 不得用于预签名上传。 */
   writeMediaBytes?(key: string, bytes: Uint8Array, contentType: string): Promise<void>
@@ -81,8 +86,9 @@ const SAFE_OBJECT_KEY_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/
  * 2. 段名检查：`.` / `..` 段能通过形状白名单，却会被 URL 归一化吃掉，必须单独拒掉。
  *
  * 不做字符串清洗（例如把 `..` 替换掉）：编码变体会不断出现，白名单才是收口的写法。
- * 实测 `%2e%2e`、`..%2f` 会被再编码成 `%252e%252e` 而不生效，当前唯一可利用的是裸 `..`；
- * 这里仍然一律拒绝，避免换实现或换编码层时重新打开。
+ * 实测 `%2e%2e`、`..%2f` 会被再编码成 `%252e%252e` 而不生效；但反斜杠、前导 `/`、空段 `//`
+ * 同样会被 `new URL()` 归一化（只是它们先被字符集白名单挡下），所以这里一律拒绝，
+ * 避免换实现或换编码层时重新打开。
  */
 export function isSafeObjectKey(key: string): boolean {
   if (key.length === 0 || key.length > MAX_OBJECT_KEY_LENGTH) return false
@@ -99,8 +105,15 @@ export function createBunS3MediaStorage(options: {
   const { client, publicUrlBase } = options
   const expiresInSeconds = options.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRES_SECONDS
 
+  /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
+  const assertSafeObjectKey = (key: string): void => {
+    if (!isSafeObjectKey(key)) throw new Error('对象键形状不合法')
+  }
+
   return {
     presignPut({ key, contentType }) {
+      // 键由服务端拼出，形状不合法属编程错误：宁可抛错，也不要签出一个指向别人对象的 URL。
+      assertSafeObjectKey(key)
       return {
         url: client.presign(key, {
           method: 'PUT',
@@ -114,8 +127,9 @@ export function createBunS3MediaStorage(options: {
 
     async stat(key) {
       // 形状不合法的键直接当作"不存在"：绝不能让含 `..` 的键活着走到 URL 拼接那一层。
-      // 这里是三个调用方（uploads / listings / messages 的归属校验）共用的收口点，
-      // 在这一层拦一次比每个调用点各写一遍更不容易漏（#86 B 线评审 P1）。
+      // 这一层是 uploads / listings / messages 写路径共用的入口，但**不是唯一入口**：
+      // getObject / readMediaBytes / writeMediaBytes / presignPut 各自也有一道，
+      // 因为 GET 与 HEAD 一样会被 `new URL()` 归一化（#86 B 线评审 P1 / 复评 P2）。
       if (!isSafeObjectKey(key)) return null
       try {
         // S3Stats 是 getter 属性：Object.keys()/JSON.stringify() 都是空的，必须直接取字段。
@@ -129,16 +143,21 @@ export function createBunS3MediaStorage(options: {
     },
 
     getObject(key, range) {
+      // GET 路径与 HEAD 一样会被 `new URL()` 归一化：脏键（例如修复前落库的行）必须在这里被拒。
+      if (!isSafeObjectKey(key)) return null
       const file = client.file(key)
       const body = range ? file.slice(range.start, range.end + 1) : file
       return { stream: body.stream(), contentType: file.type || 'application/octet-stream' }
     },
 
     async writeMediaBytes(key, bytes, contentType) {
+      assertSafeObjectKey(key)
       await client.write(key, bytes, { type: contentType })
     },
 
     async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {
+      // 守卫在 try 之前：不合法要"不发请求就拒绝"，否则请求已经打到归一化后的对象上了。
+      if (!isSafeObjectKey(key)) return null
       try {
         // 有界 GET：stat 与 GET 之间上传方仍可覆盖临时对象，不能依赖旧 stat 限制内存。
         // 多读一字节，让调用方区分恰好到上限和超限对象。

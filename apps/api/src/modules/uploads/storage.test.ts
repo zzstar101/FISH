@@ -181,3 +181,63 @@ describe('stat 的形状防线（不发请求就拒绝）', () => {
     }
   })
 })
+
+// #86 B 线复评 P2：`stat` 不是唯一入口。GET 路径和 HEAD 一样会被 `new URL()` 归一化，
+// 而 `message_media.object_key` 是从库里读回来的（修复前落库的脏行走的正是这条路），
+// 所以读/写路径各自也要有一道，且必须"不发请求就拒绝"。
+describe('读 / 写路径的形状防线', () => {
+  test('读路径的不合法键返回 null，且一个请求都不会打到存储端点', async () => {
+    const seen: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        seen.push(new URL(request.url).pathname)
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200 })
+      },
+    })
+
+    try {
+      const media = createBunS3MediaStorage({
+        client: new Bun.S3Client({
+          endpoint: `http://127.0.0.1:${server.port}`,
+          region: 'us-east-1',
+          accessKeyId: 'test',
+          secretAccessKey: 'test',
+          bucket: 'fish',
+        }),
+        publicUrlBase: `http://127.0.0.1:${server.port}/fish`,
+      })
+
+      const traversed = `listings/${USER_ID}/../${USER_ID}/x.jpg`
+      expect(media.getObject?.(traversed)).toBeNull()
+      expect(await media.readMediaBytes?.(traversed)).toBeNull()
+      expect(seen).toEqual([])
+
+      // 对照组：形状合法的键真的会打到端点（GET 才是 `readMediaBytes` 的实现路径）
+      expect(await media.readMediaBytes?.(`listings/${USER_ID}/x.jpg`)).not.toBeNull()
+      expect(seen).toHaveLength(1)
+    } finally {
+      await server.stop(true)
+    }
+  })
+
+  test('写路径的不合法键直接抛错（fail-closed，不签名也不写入）', async () => {
+    const media = createBunS3MediaStorage({
+      client: new Bun.S3Client({
+        endpoint: 'http://127.0.0.1:1',
+        region: 'us-east-1',
+        accessKeyId: 'test',
+        secretAccessKey: 'test',
+        bucket: 'fish',
+      }),
+      publicUrlBase: 'http://127.0.0.1:1/fish',
+    })
+
+    // 端点不可达也没关系：形状检查在任何网络调用之前
+    const traversed = `listings/${USER_ID}/../${USER_ID}/x.jpg`
+    expect(() => media.presignPut({ key: traversed, contentType: 'image/jpeg' })).toThrow()
+    await expect(
+      media.writeMediaBytes?.(traversed, new Uint8Array([1]), 'image/jpeg'),
+    ).rejects.toThrow()
+  })
+})
