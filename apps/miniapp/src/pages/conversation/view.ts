@@ -123,32 +123,83 @@ export function shouldReloadOnShow(input: {
 }
 
 /**
- * 「发送中返回」跳过了刷新之后，发送落定那一刻是否该补一次刷新（#170 D 的延后分支）。
+ * 「发送中返回」延后刷新的状态机（#170 D 的延后分支）。
  *
- * 背景：从子页返回时会话页要重新同步详情 / 历史 / 已读；但若有在途发送，
- * 立刻重拉会把 epoch +1、把乐观气泡卡在「发送中」。所以那时只记一个 `deferred`
- * 标记，等发送落定后再补 —— 本函数就是「补不补」的判据：
- * - `!stale`：本次落定的发送必须仍属于**当前** epoch。否则换账号后 A 的 finally
- *   会去刷新 B 的页面（A 的响应本来就被 epoch 守卫丢弃，这里也不能当触发源）；
- * - `inflight === 0`：多个并发发送只补一次刷新，等最后一个落定才补；
- * - `authed` / `hasUserId`：身份有效；
- * - `visible`：页面仍可见才补。不可见时不补也不丢 —— 回到本页时 `useDidShow`
- *   会因为「已无在途发送」正常重拉，那时标记一并清掉。
+ * ## 为什么是一个状态而不是几个独立 ref
+ *
+ * 在途发送计数**必须归属 epoch**。发送是跨账号生命周期的异步操作：A 的发送可能在
+ * 换到 B 之后才落定（最长等到 `REQUEST_TIMEOUT_MS`）。若计数是实例级的，A 那次落定
+ * 会把 B 的计数也减掉 —— B 的补刷新要么被**永久压制**（B 自己的落定先到、计数没归零），
+ * 要么被一次**无来源的陈旧落定**触发（A 的落定恰好是归零的那次），同时 `deferred`
+ * 残留下来，之后被 B 任意一次发送落定消费掉，闪一次无来由的整页加载。
+ *
+ * 把「标记 + 计数 + 计数归属的 epoch」绑成一个状态、迁移只走下面几个函数，
+ * 这条不变式就能被单测直接锁住（`inflight === 0` 一定属于当前 epoch 的最后一个发送）。
+ */
+export type DeferredReload = {
+  /** 欠一次刷新：didShow 遇在途发送时置位 */
+  deferred: boolean
+  /** 当前 epoch 的在途发送数 */
+  inflight: number
+  /** `inflight` 归属的 epoch */
+  epoch: number
+}
+
+export function initialDeferredReload(epoch: number): DeferredReload {
+  return { deferred: false, inflight: 0, epoch }
+}
+
+/** 记下「欠一次刷新」（不立刻发，否则 epoch +1 会把乐观气泡卡在「发送中」） */
+export function deferReload(state: DeferredReload): DeferredReload {
+  return { ...state, deferred: true }
+}
+
+/**
+ * 发起一次发送。传入当前 epoch：与状态里的 epoch 不同（换过账号）时，
+ * 把旧 epoch 的残留计数整个丢掉、从 1 重新计。
+ */
+export function beginSend(state: DeferredReload, epoch: number): DeferredReload {
+  if (state.epoch !== epoch) return { deferred: state.deferred, inflight: 1, epoch }
+  return { ...state, inflight: state.inflight + 1 }
+}
+
+/**
+ * 一次发送落定（成功 / 失败都走这里）。
+ *
+ * 陈旧 epoch 的落定**原样返回**：既不计入当前 epoch 的计数，也不会把当前 epoch 的
+ * 「已无在途」判成真 —— 这正是「A 的 finally 不能触发 B 的刷新」那道闸。
+ */
+export function settleSend(state: DeferredReload, epoch: number): DeferredReload {
+  if (state.epoch !== epoch) return state
+  return { ...state, inflight: Math.max(0, state.inflight - 1) }
+}
+
+/** 是否到了补刷新的时刻：还欠着 + 当前 epoch 已无在途发送（多个并发只会在最后一次落定时为真） */
+export function isFlushDue(state: DeferredReload): boolean {
+  return state.deferred && state.inflight === 0
+}
+
+/** 补刷新已发出（或本次返回已由 didShow 正常重拉）：清标记。计数不动 */
+export function clearDeferredReload(state: DeferredReload): DeferredReload {
+  return { ...state, deferred: false }
+}
+
+/** 身份清场：标记与计数一起归到新 epoch，避免上个账号的标记被新账号的落定消费 */
+export function resetDeferredReload(epoch: number): DeferredReload {
+  return { deferred: false, inflight: 0, epoch }
+}
+
+/**
+ * 到了补刷新的时刻、且补刷新真的能发：身份有效、页面可见且未卸载。
+ *
+ * `visible` 为假时**不补也不丢** —— 标记留着，回到本页时 `useDidShow` 会因为
+ * 「已无在途发送」走正常重拉，那时一并清掉。
  */
 export function shouldFlushDeferredReload(input: {
-  deferred: boolean
-  stale: boolean
-  inflight: number
+  state: DeferredReload
   authed: boolean
   hasUserId: boolean
   visible: boolean
 }): boolean {
-  return (
-    input.deferred &&
-    !input.stale &&
-    input.inflight === 0 &&
-    input.authed &&
-    input.hasUserId &&
-    input.visible
-  )
+  return isFlushDue(input.state) && input.authed && input.hasUserId && input.visible
 }

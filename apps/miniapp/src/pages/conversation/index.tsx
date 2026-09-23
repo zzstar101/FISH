@@ -14,10 +14,17 @@ import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import {
+  beginSend,
   canRetry,
+  clearDeferredReload,
+  type DeferredReload,
+  deferReload,
+  initialDeferredReload,
   listingStatusText,
   type PendingMessage,
   parseTxEvent,
+  resetDeferredReload,
+  settleSend,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
@@ -96,15 +103,13 @@ export default function Conversation() {
    */
   const loadedOnceRef = useRef(false)
   /**
-   * 在途发送数（成功 / 失败落定都减一）。`pending` 里的 `sending` 条数不能直接当判据：
-   * 发送落定的 `.then` 里 `setPending` 之后本帧还没重渲染，`pendingRef` 仍是旧值。
+   * 「发送中返回」延后刷新的状态（标记 + 当前 epoch 的在途发送数）。
+   *
+   * 计数必须**归属 epoch**，不能是裸的实例级计数器：A 的发送可能在换到 B 之后才落定，
+   * 裸计数会让 A 的落定把 B 的计数也减掉（B 的补刷新被永久压制，或留下陈旧标记被
+   * B 后续落定消费）。迁移只走 `./view` 的状态机函数，不变式由单测锁住。
    */
-  const inflightRef = useRef(0)
-  /**
-   * 「发送中返回」被跳过的刷新：置位后等所有发送落定补一次（见 `doSend` 的 finally）。
-   * 身份清场时一并清掉，避免 A 的 finally 触发 B 的刷新。
-   */
-  const deferredRefreshRef = useRef(false)
+  const deferredRef = useRef<DeferredReload>(initialDeferredReload(0))
   /** 页面是否可见：不可见时不补刷新（回到本页时 didShow 会正常重拉） */
   const visibleRef = useRef(true)
   /** 组件是否还活着：卸载后不再补刷新（Taro 的 didHide 不覆盖卸载这一路径） */
@@ -126,8 +131,9 @@ export default function Conversation() {
     // 本次 load —— 两者语义独立但共用计数器，判过期只看「是否相等」，不区分语义。
     epoch.current += 1
     localSeq.current = 0
-    // 待刷新标记属于上一个账号：留着会让 A 的 finally 触发 B 的刷新
-    deferredRefreshRef.current = false
+    // 待刷新标记与在途计数一起归到新 epoch：否则上个账号留下的陈旧标记会被
+    // 新账号后续某次发送落定消费掉，闪一次无来由的整页加载。
+    deferredRef.current = resetDeferredReload(epoch.current)
     setConversation(null)
     setConvState('loading')
     setMessages([])
@@ -155,52 +161,69 @@ export default function Conversation() {
   /**
    * 详情 + 首屏历史一起加载。两者共用一个代次：任何一个重试都作废在途的那一批，
    * 避免「重试后详情是新会话、消息还是上一个会话的」这种半新半旧。
+   *
+   * `silent`：**后台刷新**（「发送中返回」被延后到发送落定后补的那一次）。与用户主动
+   * 进页 / 点重试不同，它发生在用户没有请求刷新的时刻，所以：
+   * - 不把界面推进 `loading`（不闪骨架）；
+   * - 拉取失败时**保留**当前消息流与失败气泡，不整屏换成错误态 —— 否则「发送失败 +
+   *   弱网下补刷新也失败」会把失败气泡和它的「重试」一起盖掉（发送失败本就要留在原地给重试）。
+   * 详情态的失败仍照常反映：会话本身没了 / 读不到是另一回事。
    */
-  const load = useCallback(() => {
-    if (!conversationId) {
-      setConvState('missing')
-      setMsgState('ok')
-      return
-    }
-    const current = ++epoch.current
-    // 标记「已经发起过一次加载」：didShow 据此让渡首次给登录态 effect，不双发
-    loadedOnceRef.current = true
-    setConvState('loading')
-    setMsgState('loading')
-    setEarlierFailed(false)
-    void Promise.all([loadConversation(conversationId), loadMessagePage(conversationId)])
-      .then(([detail, page]) => {
-        if (current !== epoch.current) return
-        if (detail.status === 'ok') setConversation(detail.conversation)
-        setConvState(detail.status)
-        setMessages(page.items)
-        setNextCursor(page.nextCursor)
-        setMsgState(page.failed ? 'failed' : 'ok')
+  const load = useCallback(
+    (options?: { silent?: boolean }) => {
+      if (!conversationId) {
+        setConvState('missing')
+        setMsgState('ok')
+        return
+      }
+      const silent = options?.silent === true
+      const current = ++epoch.current
+      // 标记「已经发起过一次加载」：didShow 据此让渡首次给登录态 effect，不双发
+      loadedOnceRef.current = true
+      if (!silent) {
+        setConvState('loading')
+        setMsgState('loading')
+      }
+      setEarlierFailed(false)
+      void Promise.all([loadConversation(conversationId), loadMessagePage(conversationId)])
+        .then(([detail, page]) => {
+          if (current !== epoch.current) return
+          if (detail.status === 'ok') setConversation(detail.conversation)
+          setConvState(detail.status)
+          if (!(silent && page.failed)) {
+            setMessages(page.items)
+            setNextCursor(page.nextCursor)
+            setMsgState(page.failed ? 'failed' : 'ok')
+          }
 
-        /**
-         * 已读放在**详情与首屏历史都真的拿到了**之后，而不是一进页面就发。
-         *
-         * 否则「消息没加载出来」（还没 loading 完、或详情成功而历史失败）也会把服务端
-         * 读位推掉：用户屏幕上一条消息都没看到，未读却已经清零，返回列表红点不亮 ——
-         * 等于把消息吞了。幂等：重试成功后再发一次，读位只前进，无害。
-         *
-         * 必须再过一次 epoch 守卫：本 load 发起后、响应落地前若发生换账号，
-         * 这里不能拿新账号的 cookie 去推旧账号会话的读位（跨账号副作用）。
-         */
-        if (current === epoch.current && detail.status === 'ok' && !page.failed) {
-          void markConversationRead(conversationId).catch((error) =>
-            console.warn('[miniapp] 标记会话已读失败', error),
-          )
-        }
-      })
-      .catch((error) => {
-        // 两个 loader 自己都吞了接口失败，这里兜的是更外层（例如动态 import fixture 也失败）
-        console.warn('[miniapp] 会话页加载异常', error)
-        if (current !== epoch.current) return
-        setConvState('failed')
-        setMsgState('failed')
-      })
-  }, [conversationId])
+          /**
+           * 已读放在**详情与首屏历史都真的拿到了**之后，而不是一进页面就发。
+           *
+           * 否则「消息没加载出来」（还没 loading 完、或详情成功而历史失败）也会把服务端
+           * 读位推掉：用户屏幕上一条消息都没看到，未读却已经清零，返回列表红点不亮 ——
+           * 等于把消息吞了。幂等：重试成功后再发一次，读位只前进，无害。
+           *
+           * 必须再过一次 epoch 守卫：本 load 发起后、响应落地前若发生换账号，
+           * 这里不能拿新账号的 cookie 去推旧账号会话的读位（跨账号副作用）。
+           */
+          if (current === epoch.current && detail.status === 'ok' && !page.failed) {
+            void markConversationRead(conversationId).catch((error) =>
+              console.warn('[miniapp] 标记会话已读失败', error),
+            )
+          }
+        })
+        .catch((error) => {
+          // 两个 loader 自己都吞了接口失败，这里兜的是更外层（例如动态 import fixture 也失败）
+          console.warn('[miniapp] 会话页加载异常', error)
+          if (current !== epoch.current) return
+          // 后台刷新失败不改动已在屏幕上的消息流（见上）
+          if (silent) return
+          setConvState('failed')
+          setMsgState('failed')
+        })
+    },
+    [conversationId],
+  )
 
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null) return
@@ -224,9 +247,9 @@ export default function Conversation() {
    *
    * **有在途发送时不是「跳过」，是「延后」**：用户在子页跳转前发了消息、HTTP 响应
    * 还没回来，此时重载会把 `epoch` +1，在途的 `doSend` 响应被判过期丢弃 —— 乐观
-   * 气泡永远停在「发送中」。所以这里只置 `deferredRefreshRef`，等所有发送落定后
-   * 由 `doSend` 的 finally 补一次刷新（判据见 `view.ts` 的 `shouldFlushDeferredReload`）。
-   * 不置位而直接丢弃的话，这一次返回的详情 / 历史 / 已读同步就永远不发生了。
+   * 气泡永远停在「发送中」。所以这里只 `deferReload` 记一个标记，等当前 epoch 的所有
+   * 发送落定后由 `doSend` 的 finally 补一次刷新（判据见 `view.ts` 的 `DeferredReload`
+   * 状态机）。不置位而直接丢弃的话，这一次返回的详情 / 历史 / 已读同步就永远不发生了。
    */
   const authedRef = useRef(false)
   const userIdRef = useRef<string | null>(null)
@@ -248,10 +271,10 @@ export default function Conversation() {
       })
     ) {
       // 有在途发送时记下待刷新；其余情况（首次显示 / 未登录）不需要补
-      if (sending) deferredRefreshRef.current = true
+      if (sending) deferredRef.current = deferReload(deferredRef.current)
       return
     }
-    deferredRefreshRef.current = false
+    deferredRef.current = clearDeferredReload(deferredRef.current)
     loadRef.current()
   })
   useDidHide(() => {
@@ -291,8 +314,10 @@ export default function Conversation() {
    * 若不判过期，A 的消息会写进 B 的 `messages`（`pending` 已随身份清空，
    * 但 `setMessages` 会把 A 的气泡追加到 B 的会话流）。
    *
-   * `finally` 里补「发送中返回」被延后的那次刷新（判据见 `shouldFlushDeferredReload`）：
-   * 只有本次发送仍属当前 epoch、当前账号已无在途发送、页面可见且身份有效时才补。
+   * `finally` 里补「发送中返回」被延后的那次刷新（`DeferredReload` 状态机，见 `./view`）：
+   * 落定先过 `settleSend`（陈旧 epoch 的落定原样返回，不会污染当前 epoch 的计数），
+   * 再由 `shouldFlushDeferredReload` 判「是否该补且真的能发」。补的那一次走
+   * `load({ silent: true })`：后台刷新不闪骨架，失败也不盖掉失败气泡与它的重试。
    */
   const doSend = (text: string, pendingId?: string) => {
     // 新气泡才需要新序号；重试沿用原来的临时 id（赋值不能塞进表达式，见 noAssignInExpressions）
@@ -302,7 +327,7 @@ export default function Conversation() {
       id = `local-${localSeq.current}`
     }
     const current = epoch.current
-    inflightRef.current += 1
+    deferredRef.current = beginSend(deferredRef.current, current)
     setPending((prev) =>
       pendingId
         ? prev.map((item) => (item.id === id ? { ...item, status: 'sending' } : item))
@@ -326,12 +351,10 @@ export default function Conversation() {
         )
       })
       .finally(() => {
-        inflightRef.current -= 1
+        deferredRef.current = settleSend(deferredRef.current, current)
         if (
           !shouldFlushDeferredReload({
-            deferred: deferredRefreshRef.current,
-            stale: current !== epoch.current,
-            inflight: inflightRef.current,
+            state: deferredRef.current,
             authed: authedRef.current,
             hasUserId: userIdRef.current !== null,
             visible: visibleRef.current && aliveRef.current,
@@ -339,8 +362,8 @@ export default function Conversation() {
         ) {
           return
         }
-        deferredRefreshRef.current = false
-        loadRef.current()
+        deferredRef.current = clearDeferredReload(deferredRef.current)
+        loadRef.current({ silent: true })
       })
   }
 
@@ -466,7 +489,7 @@ export default function Conversation() {
               <Text className="conv__empty-title">正在加载会话…</Text>
             </View>
           ) : convState === 'failed' ? (
-            <LoadError title="会话加载失败" text="检查网络后重试" onRetry={load} />
+            <LoadError title="会话加载失败" text="检查网络后重试" onRetry={() => load()} />
           ) : (
             <EmptyState
               title="会话不存在或已结束"
@@ -615,7 +638,7 @@ export default function Conversation() {
             </View>
           ) : msgState === 'failed' ? (
             /* 历史没读到：明确给错误与重试，不伪装成「还没有消息」 */
-            <LoadError title="消息加载失败" text="检查网络后重试" onRetry={load} />
+            <LoadError title="消息加载失败" text="检查网络后重试" onRetry={() => load()} />
           ) : (
             <>
               {entries.map((entry) => {
