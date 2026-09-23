@@ -47,7 +47,8 @@ export class ApiError extends Error {
 
 /**
  * 契约冻结的「跳登录」判据：**401 且 code 为 `UNAUTHENTICATED`**。
- * 裸 401 不算 —— `/auth/login` 的 401 是 `INVALID_CREDENTIALS`，属于登录表单的行内错误。
+ * 裸 401 不算 —— 凭证类错误（如 `/auth/login` 的 `INVALID_CREDENTIALS`）是表单的行内错误，
+ * 不代表「当前会话失效」，不该触发清本地会话。
  */
 export function isUnauthenticatedError(error: unknown): boolean {
   return isApiError(error) && error.status === 401 && error.code === 'UNAUTHENTICATED'
