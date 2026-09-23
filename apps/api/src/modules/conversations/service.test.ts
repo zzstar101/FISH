@@ -126,6 +126,14 @@ class MemoryConversationStore implements ConversationStore {
     else row.conversation.seller_last_read_at = at
     return row
   }
+
+  async countUnread(viewerId: string) {
+    return [...this.details.values()]
+      .filter(
+        (row) => row.conversation.buyer_id === viewerId || row.conversation.seller_id === viewerId,
+      )
+      .reduce((sum, row) => sum + row.unreadCount, 0)
+  }
 }
 
 describe('conversation service: createOrGetConversation', () => {
@@ -261,6 +269,23 @@ describe('conversation service: markRead', () => {
     })
     // 非参与者不得推送：否则任何人都能靠猜会话 id 触发一次「已读」广播
     expect(pushed).toHaveLength(0)
+  })
+})
+
+describe('conversation service: getUnreadCount', () => {
+  test('returns the store aggregate for the viewer, not the first page', async () => {
+    const store = new MemoryConversationStore()
+    const service = createConversationService({ store, storage })
+    const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
+    const row = store.details.get(conversation.id)
+    if (!row) throw new Error('unreachable')
+    row.unreadCount = 3
+
+    expect(await service.getUnreadCount(buyer)).toEqual({ unreadCount: 3 })
+    // 非参与者（不是任何会话的双方）不得把别人的未读算进来。
+    expect(await service.getUnreadCount('00000000-0000-4000-8000-0000000000a3')).toEqual({
+      unreadCount: 0,
+    })
   })
 })
 
