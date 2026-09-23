@@ -144,7 +144,7 @@ export const DEMO_MY_COMMENTS: MyComment[] = [
     id: 'C06',
     kind: 'TRADE',
     category: 'SPORTS',
-    title: '尤尼克斯 羽毛球拍 双拍装',
+    title: '尤尼克斯 羽毛球拍 双拍装 含拍包',
     priceCents: 16000,
     text: '验货很仔细，但确认得很爽快，全程没有压价。',
     timeLabel: '8 月 14 日',

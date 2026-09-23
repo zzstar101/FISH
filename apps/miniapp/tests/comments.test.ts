@@ -12,7 +12,10 @@ import {
   starSlots,
   viewTargetOf,
 } from '../src/features/comments/mine'
+import { TRANSACTIONS } from '../src/mock/account'
 import { LISTING_BLOCKS } from '../src/mock/blocks'
+import { getListing } from '../src/mock/catalog'
+import { getUser } from '../src/mock/users'
 
 /**
  * 「我的评论」纯逻辑的回归测试。
@@ -137,6 +140,38 @@ describe('我的评论 · 演示数据自洽', () => {
     const byId = new Map(DEMO_MY_COMMENTS.map((item) => [item.id, item]))
     expect(byId.get('C05')?.timeLabel).toBe('8 月 21 日') // t-104 完成于 2026-08-19
     expect(byId.get('C06')?.timeLabel).toBe('8 月 14 日') // t-106 完成于 2026-08-12
+  })
+
+  /**
+   * 演示行的「对方」与「商品标题」必须与 fixture 里的真实归属对得上。
+   *
+   * 稿子这两列是随手写的占位（C07 写「苏亦然」而《灌篮高手》属于橙子；C06 的标题少了
+   * 「含拍包」），照抄会让本页与订单页 / 商品详情页自相矛盾。这里**从 fixture 反查**，
+   * 而不是回抄本模块的字面量 —— 只回抄的话，fixture 改了名这里照样绿。
+   */
+  test('对方 = 该商品在 fixture 里的卖家；标题 = 该商品在 fixture 里的标题', () => {
+    const titled = (title: string) => DEMO_MY_COMMENTS.find((item) => item.title === title)
+
+    // C07《灌篮高手》的卖家
+    const comic = titled('灌篮高手 完全版 1-24 全集')
+    expect(comic?.to).toBe(getUser('u-chengzi').nickname)
+    // C08 兰蔻的卖家
+    const serum = titled('兰蔻小黑瓶精华 50ml 全新未拆')
+    expect(serum?.to).toBe(getUser('u-soda').nickname)
+
+    // C05 / C06 引用的成交：标题与对方都从 TRANSACTIONS 反查
+    for (const [txId, commentId] of [
+      ['t-104', 'C05'],
+      ['t-106', 'C06'],
+    ] as const) {
+      const tx = TRANSACTIONS.find((row) => row.id === txId)
+      expect(tx).toBeDefined()
+      const listing = tx ? getListing(tx.listingId) : undefined
+      expect(listing).toBeDefined()
+      const item = DEMO_MY_COMMENTS.find((row) => row.id === commentId)
+      expect(item?.title).toBe(listing?.title)
+      expect(item?.to).toBe(tx ? getUser(tx.counterpartId).nickname : undefined)
+    }
   })
 
   test('类型胶囊与「查看…」按钮的文案（字面量，不回抄实现的三元表达式）', () => {
