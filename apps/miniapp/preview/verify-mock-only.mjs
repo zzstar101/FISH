@@ -47,6 +47,7 @@ const ROUTES = [
   '/pages/conversation/index?id=c-001',
   '/pages/conversation/index?id=c-006',
   '/pages/watchers/index',
+  '/pages/favorites/index',
   '/pages/orders-buy/index',
   '/pages/orders-sell/index',
 ]
