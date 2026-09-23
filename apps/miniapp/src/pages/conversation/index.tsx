@@ -1,6 +1,6 @@
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import { Image, ScrollView, Text, Textarea, View } from '@tarojs/components'
-import Taro, { useDidShow, useRouter } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -18,6 +18,8 @@ import {
   listingStatusText,
   type PendingMessage,
   parseTxEvent,
+  shouldFlushDeferredReload,
+  shouldReloadOnShow,
   sortMessages,
   systemPillText,
 } from './view'
@@ -93,6 +95,20 @@ export default function Conversation() {
    * （TDZ：const 在声明前访问会抛错）。
    */
   const loadedOnceRef = useRef(false)
+  /**
+   * 在途发送数（成功 / 失败落定都减一）。`pending` 里的 `sending` 条数不能直接当判据：
+   * 发送落定的 `.then` 里 `setPending` 之后本帧还没重渲染，`pendingRef` 仍是旧值。
+   */
+  const inflightRef = useRef(0)
+  /**
+   * 「发送中返回」被跳过的刷新：置位后等所有发送落定补一次（见 `doSend` 的 finally）。
+   * 身份清场时一并清掉，避免 A 的 finally 触发 B 的刷新。
+   */
+  const deferredRefreshRef = useRef(false)
+  /** 页面是否可见：不可见时不补刷新（回到本页时 didShow 会正常重拉） */
+  const visibleRef = useRef(true)
+  /** 组件是否还活着：卸载后不再补刷新（Taro 的 didHide 不覆盖卸载这一路径） */
+  const aliveRef = useRef(true)
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -110,6 +126,8 @@ export default function Conversation() {
     // 本次 load —— 两者语义独立但共用计数器，判过期只看「是否相等」，不区分语义。
     epoch.current += 1
     localSeq.current = 0
+    // 待刷新标记属于上一个账号：留着会让 A 的 finally 触发 B 的刷新
+    deferredRefreshRef.current = false
     setConversation(null)
     setConvState('loading')
     setMessages([])
@@ -204,15 +222,11 @@ export default function Conversation() {
    *
    * 重拉会重新推一次已读：读位只前进，幂等。
    *
-   * **有在途发送时跳过**：用户在子页跳转前发了消息、HTTP 响应还没回来，
-   * 此时重载会把 `epoch` +1，在途的 `doSend` 响应被判过期丢弃 —— 乐观气泡永远
-   * 停在「发送中」，已落库的消息要到下次重载才出现。让 pending 先落地，下一次
-   * 返回 / 重试再同步服务端状态。
-   *
-   * `pendingRef` 在每次渲染同步（commit 后、didShow 回调触发前必然已更新），
-   * didShow 每次重进都会重新检查 `pendingRef.current` —— 不存在「一次跳过就
-   * 永久跳过」：pending 要么在 unmount 前落地（then/catch 把 status 改掉），
-   * 要么随组件销毁一起消失（此时 didShow 也不会再触发）。
+   * **有在途发送时不是「跳过」，是「延后」**：用户在子页跳转前发了消息、HTTP 响应
+   * 还没回来，此时重载会把 `epoch` +1，在途的 `doSend` 响应被判过期丢弃 —— 乐观
+   * 气泡永远停在「发送中」。所以这里只置 `deferredRefreshRef`，等所有发送落定后
+   * 由 `doSend` 的 finally 补一次刷新（判据见 `view.ts` 的 `shouldFlushDeferredReload`）。
+   * 不置位而直接丢弃的话，这一次返回的详情 / 历史 / 已读同步就永远不发生了。
    */
   const authedRef = useRef(false)
   const userIdRef = useRef<string | null>(null)
@@ -223,11 +237,33 @@ export default function Conversation() {
   loadRef.current = load
   pendingRef.current = pending
   useDidShow(() => {
-    if (!loadedOnceRef.current) return
-    if (!authedRef.current || userIdRef.current === null) return
-    if (pendingRef.current.some((item) => item.status === 'sending')) return
+    visibleRef.current = true
+    const sending = pendingRef.current.some((item) => item.status === 'sending')
+    if (
+      !shouldReloadOnShow({
+        loadedOnce: loadedOnceRef.current,
+        authed: authedRef.current,
+        hasUserId: userIdRef.current !== null,
+        sending,
+      })
+    ) {
+      // 有在途发送时记下待刷新；其余情况（首次显示 / 未登录）不需要补
+      if (sending) deferredRefreshRef.current = true
+      return
+    }
+    deferredRefreshRef.current = false
     loadRef.current()
   })
+  useDidHide(() => {
+    visibleRef.current = false
+  })
+  /** 卸载后不再补刷新：didHide 不覆盖卸载这一路径 */
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
 
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
   const loadEarlier = () => {
@@ -254,6 +290,9 @@ export default function Conversation() {
    * 响应落地前要过 epoch 守卫：A 在飞的发送可能在换到 B 之后才 resolve，
    * 若不判过期，A 的消息会写进 B 的 `messages`（`pending` 已随身份清空，
    * 但 `setMessages` 会把 A 的气泡追加到 B 的会话流）。
+   *
+   * `finally` 里补「发送中返回」被延后的那次刷新（判据见 `shouldFlushDeferredReload`）：
+   * 只有本次发送仍属当前 epoch、当前账号已无在途发送、页面可见且身份有效时才补。
    */
   const doSend = (text: string, pendingId?: string) => {
     // 新气泡才需要新序号；重试沿用原来的临时 id（赋值不能塞进表达式，见 noAssignInExpressions）
@@ -263,6 +302,7 @@ export default function Conversation() {
       id = `local-${localSeq.current}`
     }
     const current = epoch.current
+    inflightRef.current += 1
     setPending((prev) =>
       pendingId
         ? prev.map((item) => (item.id === id ? { ...item, status: 'sending' } : item))
@@ -284,6 +324,23 @@ export default function Conversation() {
         setPending((prev) =>
           prev.map((item) => (item.id === id ? { ...item, status: 'failed' } : item)),
         )
+      })
+      .finally(() => {
+        inflightRef.current -= 1
+        if (
+          !shouldFlushDeferredReload({
+            deferred: deferredRefreshRef.current,
+            stale: current !== epoch.current,
+            inflight: inflightRef.current,
+            authed: authedRef.current,
+            hasUserId: userIdRef.current !== null,
+            visible: visibleRef.current && aliveRef.current,
+          })
+        ) {
+          return
+        }
+        deferredRefreshRef.current = false
+        loadRef.current()
       })
   }
 

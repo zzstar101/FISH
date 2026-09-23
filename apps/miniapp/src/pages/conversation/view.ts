@@ -100,3 +100,55 @@ export function sortMessages(items: MessageDto[]): MessageDto[] {
 export type ChatEntry =
   | { kind: 'message'; keyId: string; message: MessageDto }
   | { kind: 'pending'; keyId: string; pending: PendingMessage }
+
+/**
+ * 页面重新显示（`useDidShow`）时要不要**立刻**重拉（#170 D）。
+ *
+ * 四个条件缺一不可：
+ * - `loadedOnce`：首次显示让渡给登录态 effect，didShow 不重复发（冷启动不双发）；
+ * - `authed` / `hasUserId`：登录态未就绪 / 未登录时不发受限请求；
+ * - `!sending`：有在途发送时重拉会把 epoch +1，在途的发送响应被判过期丢弃，
+ *   乐观气泡永远停在「发送中」——这种情况改走延后刷新（见下）。
+ *
+ * 抽成纯函数是为了它能被单测锁住（页面组件本身没有渲染测试基建）；
+ * **组件接线**（是否调用、传什么参数）仍靠 code review + 端上验收。
+ */
+export function shouldReloadOnShow(input: {
+  loadedOnce: boolean
+  authed: boolean
+  hasUserId: boolean
+  sending: boolean
+}): boolean {
+  return input.loadedOnce && input.authed && input.hasUserId && !input.sending
+}
+
+/**
+ * 「发送中返回」跳过了刷新之后，发送落定那一刻是否该补一次刷新（#170 D 的延后分支）。
+ *
+ * 背景：从子页返回时会话页要重新同步详情 / 历史 / 已读；但若有在途发送，
+ * 立刻重拉会把 epoch +1、把乐观气泡卡在「发送中」。所以那时只记一个 `deferred`
+ * 标记，等发送落定后再补 —— 本函数就是「补不补」的判据：
+ * - `!stale`：本次落定的发送必须仍属于**当前** epoch。否则换账号后 A 的 finally
+ *   会去刷新 B 的页面（A 的响应本来就被 epoch 守卫丢弃，这里也不能当触发源）；
+ * - `inflight === 0`：多个并发发送只补一次刷新，等最后一个落定才补；
+ * - `authed` / `hasUserId`：身份有效；
+ * - `visible`：页面仍可见才补。不可见时不补也不丢 —— 回到本页时 `useDidShow`
+ *   会因为「已无在途发送」正常重拉，那时标记一并清掉。
+ */
+export function shouldFlushDeferredReload(input: {
+  deferred: boolean
+  stale: boolean
+  inflight: number
+  authed: boolean
+  hasUserId: boolean
+  visible: boolean
+}): boolean {
+  return (
+    input.deferred &&
+    !input.stale &&
+    input.inflight === 0 &&
+    input.authed &&
+    input.hasUserId &&
+    input.visible
+  )
+}

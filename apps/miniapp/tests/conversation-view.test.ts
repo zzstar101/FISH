@@ -6,6 +6,8 @@ import {
   listingStatusText,
   type PendingMessage,
   parseTxEvent,
+  shouldFlushDeferredReload,
+  shouldReloadOnShow,
   sortMessages,
   systemPillText,
 } from '../src/pages/conversation/view'
@@ -121,5 +123,72 @@ describe('dayLabelOf —— 日期分隔条', () => {
 
   test('解析不了 → 空串', () => {
     expect(dayLabelOf('not-a-date', NOW)).toBe('')
+  })
+})
+
+/**
+ * #170 D（返回同步）的接线判据。
+ *
+ * 这两条是「组件接线」里唯一能脱离渲染单独锁住的部分 —— 页面组件本身没有渲染
+ * 测试基建（见文件头），所以把「什么时候重拉 / 什么时候补刷新」抽成纯函数锁在这里；
+ * 至于页面是否真的在 didShow 里调用、ref 是否真的同步，仍靠 code review + 端上验收。
+ */
+describe('shouldReloadOnShow —— 返回本页时是否立刻重拉（#170 D）', () => {
+  const base = { loadedOnce: true, authed: true, hasUserId: true, sending: false }
+
+  test('登录态就绪、已加载过、无在途发送 → 重拉', () => {
+    expect(shouldReloadOnShow(base)).toBe(true)
+  })
+
+  test('首次显示（还没加载过）→ 不重拉：让渡给登录态 effect，冷启动不双发', () => {
+    expect(shouldReloadOnShow({ ...base, loadedOnce: false })).toBe(false)
+  })
+
+  test('未登录 / 登录态未就绪 → 不发受限请求', () => {
+    expect(shouldReloadOnShow({ ...base, authed: false })).toBe(false)
+    expect(shouldReloadOnShow({ ...base, hasUserId: false })).toBe(false)
+  })
+
+  test('有在途发送 → 不立刻重拉（否则 epoch+1 把乐观气泡卡在「发送中」）', () => {
+    expect(shouldReloadOnShow({ ...base, sending: true })).toBe(false)
+  })
+})
+
+describe('shouldFlushDeferredReload —— 「发送中返回」延后到发送落定再补刷新（#170 D）', () => {
+  const base = {
+    deferred: true,
+    stale: false,
+    inflight: 0,
+    authed: true,
+    hasUserId: true,
+    visible: true,
+  }
+
+  test('被延后 + 发送已全部落定 + 身份有效且页面可见 → 补刷新', () => {
+    expect(shouldFlushDeferredReload(base)).toBe(true)
+  })
+
+  test('没被延后（正常 didShow 已重拉）→ 不补，避免多打一次', () => {
+    expect(shouldFlushDeferredReload({ ...base, deferred: false })).toBe(false)
+  })
+
+  test('本次发送属于上一个 epoch（换账号）→ 不补：A 的 finally 不能触发 B 的刷新', () => {
+    expect(shouldFlushDeferredReload({ ...base, stale: true })).toBe(false)
+  })
+
+  test('还有在途发送 → 不补：多个并发发送只补一次，等最后一个落定', () => {
+    expect(shouldFlushDeferredReload({ ...base, inflight: 1 })).toBe(false)
+    expect(shouldFlushDeferredReload({ ...base, inflight: 2 })).toBe(false)
+  })
+
+  test('身份失效 / 页面不可见 → 不补（不可见时不丢，回到本页 didShow 会正常重拉）', () => {
+    expect(shouldFlushDeferredReload({ ...base, authed: false })).toBe(false)
+    expect(shouldFlushDeferredReload({ ...base, hasUserId: false })).toBe(false)
+    expect(shouldFlushDeferredReload({ ...base, visible: false })).toBe(false)
+  })
+
+  test('失败落定同样补刷新（发送失败也要把详情 / 历史 / 已读追上）', () => {
+    // 失败后 inflight 归零、stale=false → 与成功同一条判据，不区分结果
+    expect(shouldFlushDeferredReload({ ...base, inflight: 0 })).toBe(true)
   })
 })
