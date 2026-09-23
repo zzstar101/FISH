@@ -59,6 +59,9 @@ try {
       // 固定给 stub（base_url 只校验存在性，不会被访问）；显式覆盖是为了不让生产的 live 配置漏进来。
       AI_POLISH_TRANSPORT: 'stub',
       AI_POLISH_BASE_URL: 'http://127.0.0.1:8787',
+      // #86：微信登录 / 手机号绑定 transport 无默认值（评审 P1）。本冒烟不碰这两个入口，
+      // 显式 off——不依赖调用方环境，也不让本机的 stub 配置漏进子进程。
+      WECHAT_TRANSPORT: 'off',
     },
     stdout: 'inherit',
     stderr: 'inherit',
