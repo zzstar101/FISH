@@ -37,6 +37,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/mylist/index': () => import('@/pages/mylist/index'),
   '/pages/watchers/index': () => import('@/pages/watchers/index'),
   '/pages/scan/index': () => import('@/pages/scan/index'),
+  '/pages/history/index': () => import('@/pages/history/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */
