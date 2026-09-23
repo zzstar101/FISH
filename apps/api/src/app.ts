@@ -47,6 +47,7 @@ import { createTransactionsRouter } from './modules/transactions/router'
 import { createTransactionService } from './modules/transactions/service'
 import { createSqlTransactionStore } from './modules/transactions/store'
 import { createUploadsRouter } from './modules/uploads/router'
+import { createUploadService } from './modules/uploads/service'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createUsersRouter } from './modules/users/router'
 import { createPublicUserService } from './modules/users/service'
@@ -149,7 +150,17 @@ export function createApp(
       resolveViewerId: auth.resolveViewerId,
     }),
   )
-  app.route('/uploads', createUploadsRouter({ storage, requireAuth: auth.requireAuth }))
+  // 上传域实例只建一次：#86 B 的头像写入复用同一个 `confirm`（归属前缀 + 对象已上传 +
+  // 格式/大小），发布商品与改头像的失败码与文案因此不可能漂移。
+  const uploadService = createUploadService({ storage })
+  app.route(
+    '/uploads',
+    createUploadsRouter({
+      storage,
+      requireAuth: auth.requireAuth,
+      service: uploadService,
+    }),
+  )
 
   // 留言 / 评论（#111）：挂根路径，因为三个端点跨 `/listings/:id/comments` 与
   // `/comments/:id/replies`（路径常量在 `@fish/contracts/comments/routes`）。
@@ -174,13 +185,18 @@ export function createApp(
     }),
   )
 
-  // 个人中心（#12）：单个只读聚合接口，直接查已合并的 listings/wishes/transactions 表，
-  // 不调用其他 Domain API、不承担写操作（Issue 的并行原则）。user 块取 requireAuth
-  // 写入的 Me（avatarUrl 脏值回退在 auth 的 toMe 内完成），storage 复用同一实例拼封面 URL。
+  // 个人中心（#12 读 / #86 B 写）：读是一个聚合接口，直接查已合并的 listings/wishes/
+  // transactions 表，不调用其他 Domain API。user 块取 requireAuth 写入的 Me（avatarUrl
+  // 脏值回退在 auth 的 toMe 内完成），storage 复用同一实例拼封面 URL；#86 B 新增的
+  // `PATCH /profile`（改昵称 / 头像）同样只写 users 表，头像校验借用上传域的 confirm。
   app.route(
     '/profile',
     createProfileRouter({
-      service: createProfileService({ store: createSqlProfileStore(db), storage }),
+      service: createProfileService({
+        store: createSqlProfileStore(db),
+        storage,
+        uploads: uploadService,
+      }),
       requireAuth: auth.requireAuth,
     }),
   )

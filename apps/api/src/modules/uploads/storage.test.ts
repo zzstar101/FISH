@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createBunS3MediaStorage, type MediaStorage } from './storage'
+import { createBunS3MediaStorage, isSafeObjectKey, type MediaStorage } from './storage'
 
 /**
  * 真对象存储的集成测试。
@@ -115,5 +115,69 @@ describe('Bun S3 存储适配', () => {
     if (!media) throw new Error('storage 未初始化')
 
     expect(await media.stat(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
+  })
+})
+
+// #86 B 线评审 P1：`Bun.S3Client` 用 `new URL()` 拼地址，pathname 会把 `..` 归一化掉，
+// 于是调用方的 `startsWith(prefix)` 归属校验可以被绕过。防线放在这里。
+describe('isSafeObjectKey（objectKey 形状白名单）', () => {
+  test('放行服务端自己生成的键', () => {
+    expect(isSafeObjectKey(`listings/${USER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`)).toBe(
+      true,
+    )
+    expect(isSafeObjectKey(`chat-media-final/${USER_ID}/${USER_ID}/x.webp`)).toBe(true)
+  })
+
+  test('拒绝会被 URL 归一化、或带路径语义的键', () => {
+    for (const key of [
+      `listings/${USER_ID}/../${USER_ID}/x.jpg`,
+      'listings/a/./x.jpg',
+      'listings/a//x.jpg',
+      'listings/a/../../etc/passwd',
+      '/listings/a/x.jpg',
+      'listings\\a\\x.jpg',
+      'listings/a/..%2fx.jpg',
+      'listings/a/%2e%2e/x.jpg',
+      '',
+      'a'.repeat(257),
+    ]) {
+      expect(isSafeObjectKey(key)).toBe(false)
+    }
+  })
+})
+
+describe('stat 的形状防线（不发请求就拒绝）', () => {
+  test('含 `..` 的键当作不存在，且一个请求都不会打到存储端点', async () => {
+    const seen: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        seen.push(new URL(request.url).pathname)
+        return new Response(null, { status: 404 })
+      },
+    })
+
+    try {
+      const media = createBunS3MediaStorage({
+        client: new Bun.S3Client({
+          endpoint: `http://127.0.0.1:${server.port}`,
+          region: 'us-east-1',
+          accessKeyId: 'test',
+          secretAccessKey: 'test',
+          bucket: 'fish',
+        }),
+        publicUrlBase: `http://127.0.0.1:${server.port}/fish`,
+      })
+
+      const traversed = await media.stat(`listings/${USER_ID}/../${USER_ID}/x.jpg`)
+      expect(traversed).toBeNull()
+      expect(seen).toEqual([])
+
+      // 对照组：形状合法的键会真的打到端点（证明上面的空数组不是因为压根没接上）
+      expect(await media.stat(`listings/${USER_ID}/x.jpg`)).toBeNull()
+      expect(seen).toHaveLength(1)
+    } finally {
+      await server.stop(true)
+    }
   })
 })

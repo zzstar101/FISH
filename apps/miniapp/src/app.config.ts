@@ -6,6 +6,7 @@ export default defineAppConfig({
     'pages/sell/index',
     'pages/chat/index',
     'pages/profile/index',
+    'pages/profile-edit/index',
     'pages/search/index',
     'pages/listing-detail/index',
     'pages/conversation/index',

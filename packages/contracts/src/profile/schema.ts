@@ -1,3 +1,4 @@
+import { NicknameSchema } from '@fish/contracts/auth/session'
 import { MeSchema } from '@fish/contracts/auth/user'
 import { ListingCardSchema } from '@fish/contracts/listings/schema'
 import {
@@ -80,3 +81,35 @@ export const profileResponseSchema = z.object({
   transactions: z.array(profileTransactionSchema),
 })
 export type ProfileResponse = z.infer<typeof profileResponseSchema>
+
+/**
+ * #86 B 节：编辑资料（昵称 / 头像）的写契约，对应 `PATCH /profile`。
+ *
+ * 两个字段都可选，但**至少要给一项**：空对象没有语义，接受它只会让端上把「什么都没改」
+ * 记成一次成功写入（也会让服务端白跑一次 UPDATE）。
+ *
+ * 头像刻意收 **objectKey** 而不是 URL —— URL 由服务端用与 `POST /uploads/confirm`
+ * 完全相同的校验（归属前缀 + 对象确实已上传 + 格式/大小合规）拼出来，端上无法把
+ * 任意外链写进 `users.avatar_url`。
+ *
+ * 昵称复用认证域的 `NicknameSchema`（trim + 1–20 字），注册与改名不会出现两套长度口径。
+ */
+export const profileUpdateRequestSchema = z
+  .strictObject({
+    nickname: NicknameSchema.optional(),
+    /** `POST /uploads/confirm` 返回的 objectKey（`listings/{userId}/{uuid}.{ext}`）。 */
+    avatarObjectKey: z.string().trim().min(1).max(256).optional(),
+  })
+  .refine((value) => value.nickname !== undefined || value.avatarObjectKey !== undefined, {
+    message: 'nickname 与 avatarObjectKey 至少要提供一项',
+  })
+
+export type ProfileUpdateRequest = z.infer<typeof profileUpdateRequestSchema>
+
+/**
+ * 写接口只回更新后的 `Me`，不回整个聚合视图：端上拿到就覆盖全局 store
+ * （头像 / 昵称在「我的」页与商品卡卖家位都要立刻变），页面不必再补一次 `GET /profile`。
+ */
+export const profileUpdateResponseSchema = z.object({ user: MeSchema })
+
+export type ProfileUpdateResponse = z.infer<typeof profileUpdateResponseSchema>

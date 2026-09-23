@@ -10,7 +10,7 @@ import {
 } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
-import type { MediaStorage } from './storage'
+import { isSafeObjectKey, type MediaStorage } from './storage'
 
 export class UploadServiceError extends Error {
   /**
@@ -63,7 +63,14 @@ export function createUploadService(deps: { storage: MediaStorage }): UploadServ
     },
 
     async confirm(userId, input) {
-      if (!input.objectKey.startsWith(listingObjectKeyPrefix(userId))) {
+      // 形状检查必须排在 `startsWith` 之前，且不是冗余：`Bun.S3Client` 拼 URL 时会归一化
+      // pathname，`listings/{我}/../{别人}/x.jpg` 能通过前缀校验却指到别人的对象上
+      // （#86 B 线评审 P1）。storage.stat 里也有一道同样的关，这里是第二道，顺带给出
+      // 比"对象不存在"更准确的错误码。
+      if (
+        !isSafeObjectKey(input.objectKey) ||
+        !input.objectKey.startsWith(listingObjectKeyPrefix(userId))
+      ) {
         throw new UploadServiceError(
           422,
           'IMAGE_REFERENCE_INVALID',
