@@ -3,9 +3,11 @@ import {
   countBySegment,
   DEMO_MY_COMMENTS,
   demoCommentsEnabled,
+  emptyStateOf,
   filterBySegment,
   kindLabel,
   type MyComment,
+  NO_SOURCE_COPY,
   SEGMENTS,
   segmentOf,
   shortCategoryLabel,
@@ -212,6 +214,36 @@ describe('我的评论 · 演示数据自洽', () => {
 
   test('id 唯一（页面拿它当 key）', () => {
     expect(new Set(DEMO_MY_COMMENTS.map((item) => item.id)).size).toBe(DEMO_MY_COMMENTS.length)
+  })
+})
+
+describe('我的评论 · 空态文案', () => {
+  /**
+   * 三支分段空态 + 真实构建那一支。都写字面量期望值（不回抄实现），
+   * 这样「把商品留言与交易评价两支写反」才会失败。
+   *
+   * 备注：这三支在**当前**两种构建里都走不到 —— 演示 fixture 恒为 4+4（没有空段）、
+   * 真实构建恒走 `NO_SOURCE_COPY`。它们是聚合端点落地后真正会用的分支，
+   * 用例在这里先把文案钉住。
+   */
+  test('商品留言段与交易评价段的空态不互换', () => {
+    expect(emptyStateOf('listing').title).toBe('没有发过商品留言')
+    expect(emptyStateOf('listing').action).toBe('看全部评论')
+    expect(emptyStateOf('trade').title).toBe('还没有交易评价')
+    expect(emptyStateOf('trade').action).toBe('看全部评论')
+  })
+
+  test('「全部」段是「去逛逛」（还没有任何评论），不是「看全部评论」', () => {
+    expect(emptyStateOf('all').title).toBe('还没有发过评论')
+    expect(emptyStateOf('all').action).toBe('去逛逛')
+  })
+
+  test('真实构建的空态说的是「读不到」，不是「你没有评论」', () => {
+    // 「系统不知道」不能说成「确实没有」—— 这是本页数据口径的核心一条
+    expect(NO_SOURCE_COPY.title).toBe('暂时看不到你的评论')
+    expect(NO_SOURCE_COPY.text).toContain('还没有后端聚合接口')
+    // 不能出现「你还没有发过」这种把未知说成事实的措辞
+    expect(NO_SOURCE_COPY.text).not.toContain('你还没有')
   })
 })
 
