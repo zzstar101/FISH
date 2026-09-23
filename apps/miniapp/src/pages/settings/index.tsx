@@ -107,7 +107,7 @@ export default function Settings() {
             </View>
             <View className="st__acct-main">
               <Text className="st__acct-name">{nickname}</Text>
-              <Text className="st__rvalue">{verified ? '已认证' : '未认证'}</Text>
+              <Text className="st__rvalue">{verified ? '已验证' : '未验证'}</Text>
             </View>
             <Text className="st__rvalue">编辑资料</Text>
             <View className="st__arrow" />
