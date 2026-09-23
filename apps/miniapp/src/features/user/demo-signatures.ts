@@ -8,8 +8,10 @@
  * - **键是真实 uuid**（seed 三账号）：只对这三个 id 生效，其它任何用户签名行照旧
  *   不渲染 —— 不会把演示签名挂在真实用户名下。
  * - **只在演示构建生效**：调用方必须以 `MOCK_FALLBACK_ENABLED` 为闸（与
- *   `fetchers.ts` 的 mock 回退同一开关）；生产构建连这个表都不会被 import 到执行
- *   路径上（调用点恒返回 `undefined`）。
+ *   `fetchers.ts` 的 mock 回退同一开关），且页面再加一层 seed 用户白名单。生产构建
+ *   闸恒为 false，签名行与关注钮都不渲染（`__ALLOW_MOCK_FALLBACK__` 由 `config/index.ts`
+ *   注入）。⚠️ 这是**渲染层**的边界，不是打包层的：`pages/user` 静态 import 本模块，
+ *   所以这张表在生产包里也存在 —— 被挡住的是「显示出来」，不是「进不进 bundle」。
  * - **不碰本机存储**（`features/profile/signature.ts` 的键按本人 id 分，读出来
  *   是当前登录用户自己的签名，给别人看是隐私错误）。
  *
