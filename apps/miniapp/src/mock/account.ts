@@ -246,7 +246,7 @@ type WatcherSpec = {
 
 /**
  * C5「想要的人」。稿子里的对象是「罗技 MX Keys 无线键盘」，对应 `digital-mxkeys`。
- * 稿子第 02 帧的四种行状态（已聊 / 长昵称 / 未公开校区 / 已注销）都在这里各有一条，
+ * 稿子第 02 帧的四种行状态（已聊 / 长昵称 / 未公开院系 / 已注销）都在这里各有一条，
  * 保证实现侧能逐一对照。
  */
 const WATCHER_SPECS: WatcherSpec[] = [
@@ -305,7 +305,7 @@ const WATCHER_SPECS: WatcherSpec[] = [
     id: 'w-06',
     nickname: '沐橙不是橙子也不吃橙子皮',
     avatarIndex: 5,
-    department: null, // 未公开校区 / 院系
+    department: null, // 未公开院系
     budget: 280,
     verified: true,
     chattedCount: 0,

@@ -2,9 +2,9 @@ import { AVATARS } from './images'
 import type { MockUser } from './types'
 
 /**
- * 用户 fixture。昵称 / 校区沿用仓库 seed 的演示账号：
- * 202101000001 阿岚（肇庆 / VERIFIED）、202101000002 小北（肇庆 / UNVERIFIED）、
- * 202101000003 橙子（广州 / VERIFIED）。
+ * 用户 fixture。昵称沿用仓库 seed 的演示账号：
+ * 202101000001 阿岚（VERIFIED）、202101000002 小北（UNVERIFIED）、
+ * 202101000003 橙子（VERIFIED）。
  *
  * `CURRENT_USER_ID` 是「我」——设计稿视角下我是卖家（详情页有卖家卡片、
  * 消息页有买家来问），因此当前用户取阿岚。
@@ -79,7 +79,7 @@ export const USERS: MockUser[] = [
 
   /* ---- A/B/C/D 组 14 张设计稿里反复出现的人物 ----
      设计稿自述「示例数据为占位，非真实账号」，这些是稿件的占位人物；
-     登记成 fixture 是为了让新页面上的头像首字 / 昵称 / 校区与稿子一致。
+     登记成 fixture 是为了让新页面上的头像首字 / 昵称与稿子一致。
      AVATARS 只有 8 张，超出的取模复用。 */
   {
     id: 'u-lin',
