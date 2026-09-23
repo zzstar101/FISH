@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
   sendErrorMessage,
+  VERIFY_FOOTNOTE,
+  VERIFY_INTRO_DESC,
   VERIFY_PRIVACY_EMPHASIS,
   VERIFY_PRIVACY_LEAD,
   VERIFY_PRIVACY_TAIL,
@@ -100,5 +102,33 @@ describe('VERIFY_PRIVACY_*', () => {
     expect(code).toContain('{VERIFY_PRIVACY_TAIL}')
     // 上一轮审查点名的原句不许回到 JSX 文本里
     expect(code).not.toContain('需先解除当前认证')
+  })
+})
+
+/**
+ * 认证结果文案的**语义边界**（#177 第二轮审查意见）。
+ *
+ * #86 冻结的语义：VERIFIED 只证明「当前用户能控制一个允许域名下的教育邮箱」。
+ * 稿里两处把它写成了更大范围的结论 —— 未认证卡的「用学校邮箱验证**在校身份**」
+ * 与底注的「仅用于**核验身份**」—— 都是有意不采用的稿值：留着一方面与成功态的
+ * 「教育邮箱已验证」在同页里自相矛盾，另一方面等于宣称核验了现实在校身份。
+ *
+ * 两处都锁**整句**（黑名单挡不住同义改写，见本文件上一段的经验）。
+ */
+describe('认证说明的口径 —— 只说教育邮箱', () => {
+  test('未认证卡描述：说明验证的是邮箱归属', () => {
+    expect(VERIFY_INTRO_DESC).toBe('用学校邮箱验证教育邮箱归属，公开页面只展示徽章。')
+  })
+
+  test('底注：核验对象是教育邮箱；隐私承诺照稿保留', () => {
+    expect(VERIFY_FOOTNOTE).toBe('认证信息仅用于核验教育邮箱，不会公开展示邮箱、学号与班级。')
+  })
+
+  test('页面接线：两处说明都取常量，稿的扩大解释不许回到 JSX', async () => {
+    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    expect(code).toContain('{VERIFY_INTRO_DESC}')
+    expect(code).toContain('{VERIFY_FOOTNOTE}')
+    expect(code).not.toContain('验证在校身份')
+    expect(code).not.toContain('仅用于核验身份')
   })
 })

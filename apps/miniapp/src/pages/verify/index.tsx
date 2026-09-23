@@ -16,6 +16,8 @@ import {
 } from '@/features/verify/api'
 import {
   sendErrorMessage,
+  VERIFY_FOOTNOTE,
+  VERIFY_INTRO_DESC,
   VERIFY_PRIVACY_EMPHASIS,
   VERIFY_PRIVACY_LEAD,
   VERIFY_PRIVACY_TAIL,
@@ -359,7 +361,7 @@ export default function Verify() {
           </View>
           <View className="verify__vcard-txt">
             <Text className="verify__vcard-title">未认证</Text>
-            <Text className="verify__vcard-desc">用学校邮箱验证在校身份，公开页面只展示徽章。</Text>
+            <Text className="verify__vcard-desc">{VERIFY_INTRO_DESC}</Text>
           </View>
           <Text className="verify__chip">未认证</Text>
         </View>
@@ -464,15 +466,20 @@ export default function Verify() {
               </View>
             ) : null}
 
+            {/* 稿 02 帧 `.resend` 是**两个都在**：左侧说明 + 右侧胶囊钮，倒计时期间按钮置灰
+                （`.rb.is-off`）而不是把按钮换成一行字 —— 后者会让这一行在倒计时结束时
+                左右跳一次。按钮的点击在 `send()` 里已有 `left > 0` 守卫，置灰只是外观。 */}
             <View className="verify__resend">
-              {left > 0 ? (
-                <Text className="verify__resend-tx num">没收到？{left}s 后可重新发送</Text>
-              ) : (
-                <View className="verify__resend-btn" onClick={() => void send()}>
-                  <Image className="verify__resend-ic" src={ICONS.clock} mode="aspectFit" />
-                  <Text>重新发送</Text>
-                </View>
-              )}
+              <Text className="verify__resend-tx num">
+                {left > 0 ? `没收到？${left}s 后可重新发送` : '没收到？可以重新发送验证码'}
+              </Text>
+              <View
+                className={`verify__resend-btn${left > 0 ? ' is-off' : ''}`}
+                onClick={() => void send()}
+              >
+                <Image className="verify__resend-ic" src={ICONS.clock} mode="aspectFit" />
+                <Text>重新发送</Text>
+              </View>
             </View>
 
             <View
@@ -488,9 +495,7 @@ export default function Verify() {
         ) : null}
 
         {/* 稿 01 帧把这条说明做成了居中脚注（.fnote 居中变体） */}
-        <Text className="verify__fnote">
-          认证信息仅用于核验身份，不会公开展示邮箱、学号与班级。
-        </Text>
+        <Text className="verify__fnote">{VERIFY_FOOTNOTE}</Text>
       </View>
     </View>
   )

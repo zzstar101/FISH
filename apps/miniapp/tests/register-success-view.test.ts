@@ -9,6 +9,10 @@ import { registerSuccessView } from '../src/pages/register-success/view'
  * 这里把该分支的四处文案逐条锁成**正向断言**：黑名单式断言（`not.toContain('去认证')`）
  * 挡不住改写，例如脚注写成「如需修改认证邮箱，请前往校园认证页」就绕得过去。
  *
+ * 结果文案另锁一条**语义边界**（#86）：VERIFIED 只证明教育邮箱控制权，不得表述成
+ * 「学号 / 校区 / 在校身份已核验」。稿的 `regPill` 写的「校园身份已核验」是有意不采用的
+ * 稿值 —— 与隐私句同款处理，用例防止后续「照稿对齐」时把它改回去。
+ *
  * 覆盖分两层：映射函数（下面的 describe）与**页面是否真的用它渲染**（最后一个 describe
  * 直接读 `index.tsx` 源码，同 `apps/web/src/profile-verification.test.ts` 的先例）。
  * 只测映射是不够的 —— 实测把页面改回硬编码 `去校园认证`，纯函数用例全绿。
@@ -35,7 +39,10 @@ describe('registerSuccessView —— 已认证分支（防御性）', () => {
   test('描述、胶囊一律按已认证渲染，加粗词换成「已认证」并切 ok 配色', () => {
     expect(view.desc).toBe('账号已创建并自动登录。当前状态为')
     expect(view.emphasis).toBe('已认证')
-    expect(view.badge).toBe('已认证 · 校园身份已核验')
+    // #86 冻结语义：VERIFIED 的唯一含义是「能控制一个允许域名下的教育邮箱」。
+    // 整句正向断言 —— 稿的 `regPill` 写的是「校园身份已核验」，那是有意不采用的稿值
+    // （黑名单式断言会被同义改写绕过，见文件头）。
+    expect(view.badge).toBe('已认证 · 教育邮箱已验证')
     expect(view.ok).toBe(true)
   })
 
@@ -48,7 +55,9 @@ describe('registerSuccessView —— 已认证分支（防御性）', () => {
   test('脚注只陈述现状：不导向「去认证 / 去完成」，也不暗示可自助解除认证 / 更换邮箱', () => {
     // 未认证分支那句「稍后去完成认证」对已认证用户同样不成立，必须逐字换掉
     expect(view.note).not.toBe(registerSuccessView(false).note)
-    expect(view.note).toBe('认证信息可在「我的 → 校园认证」查看')
+    // 指向的是**真实存在的**入口：具名行「校园认证」在「我的 → 设置」下
+    // （`pages/settings` 的 `st__rlabel`）；「我的」页那颗是认证胶囊，不叫这个名字
+    expect(view.note).toBe('认证信息可在「我的 → 设置 → 校园认证」查看')
   })
 })
 
@@ -58,11 +67,25 @@ describe('registerSuccessView —— 已认证分支（防御性）', () => {
  * 为什么要读源码：本仓 `tests/` 没有 Taro 组件渲染基建，纯函数用例锁不住 JSX。
  * 只断言「源码里出现过 `view.primaryCta`」会被注释里的同名文字骗过，所以再加一条
  * 「JSX 文本节点里不许出现 `去校园认证`」——它正是上一轮审查点名的那个矛盾。
+ *
+ * 断言一律写成**正向**（「必须出现 `{view.badge}`」）。反面断言在这里挡不住回归：
+ * 实测 `/rs__badge.*authStatus/` 对旧写法**永远不匹配** —— 旧代码里
+ * `` `rs__badge${verified ? ' is-ok' : ''}` `` 与 `const verified = user?.authStatus ===
+ * 'VERIFIED'` 相隔十几行，而 `.` 不过换行；写成 `[\s\S]*` 也会被本文件自己的注释命中。
  */
 describe('register-success 页面接线', () => {
   const source = Bun.file(
     new URL('../src/pages/register-success/index.tsx', import.meta.url),
   ).text()
+
+  test('描述、加粗词、胶囊与配色全部取自 view，不是页面自己算的', async () => {
+    const code = await source
+    expect(code).toContain('{view.desc}')
+    expect(code).toContain('{view.emphasis}')
+    expect(code).toContain('{view.badge}')
+    // 配色也由 view.ok 决定：页面不再自己判一次认证状态（旧写法就是这里自相矛盾）
+    expect(code).toContain('view.ok')
+  })
 
   test('主按钮与脚注取自 view，不是硬编码', async () => {
     const code = await source
@@ -75,7 +98,5 @@ describe('register-success 页面接线', () => {
   test('JSX 文本节点里没有「去校园认证」这个字面量（注释里可以有）', async () => {
     const code = await source
     expect(code).not.toMatch(/>\s*去校园认证\s*</)
-    // 页面不再自己判一次认证状态去选配色，改由 view.ok 提供
-    expect(code).not.toMatch(/rs__badge.*authStatus/)
   })
 })

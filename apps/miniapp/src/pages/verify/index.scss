@@ -375,8 +375,14 @@
   font-weight: 600;
   color: var(--fg);
 
-  /* space-between 容器里只剩它一个时贴右，与稿 02 帧一致 */
+  /* space-between 容器里贴右（稿 02 帧：左说明 + 右胶囊钮，倒计时期间也保持这个位置） */
   margin-left: auto;
+
+  /* 倒计时未结束的置灰态（稿 `.rb.is-off`）。`send()` 里另有 `left > 0` 守卫，这里只是外观。 */
+  &.is-off {
+    background: var(--ice);
+    color: var(--muted);
+  }
 
   &:active {
     border-color: var(--accent-mid);
