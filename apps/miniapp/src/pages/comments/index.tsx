@@ -39,9 +39,12 @@ import './index.scss'
  *
  * ## 演示构建（`TARO_APP_MOCK=1`）
  *
- * 照稿摆 8 条演示数据（4 条商品留言 + 4 条交易评价，与「我的」页数字栏对得上），
+ * 照稿摆 8 条演示数据（4 条商品留言 + 4 条交易评价），与稿的数据量一致；
  * 但**界面上必须能看出是演示数据**：分段栏下方有一条「演示数据」说明带。
  * 行上的动作也据此给说明 toast，而不是跳到必然 404 的详情页（演示 id 在库里不存在）。
+ *
+ * ⚠️ 这 8 条**不与「我的」页任何数字对齐**：`demoProfile()` 里没有评论 / 评价计数，
+ * 「我的」页的「评价」格也不带 `count`（不出红点）。别把它当成跨页一致性要求。
  *
  * ## 三段互斥 → 才给计数
  *
@@ -115,7 +118,24 @@ export default function MyComments() {
     void read()
   }, [authStatus, userId, read])
 
+  /**
+   * 下拉刷新也走同一个登录态门禁。
+   *
+   * `usePullDownRefresh` 注册在 `if (authStatus !== 'authed') return ...` **之前**
+   * （Taro 的 hook 不能写在 early return 之后），所以未登录那一帧里用户仍可能下拉。
+   * 这时读一遍会把结果写进一个正在渲染 `AuthRequired` 的页面实例。刷新本身是幂等的、
+   * 值也一样，但「守卫在跳转、页面却在取数」是不该有的状态，所以显式拦掉 ——
+   * 与 `pages/orders-buy` 用 `authedRef` 拦 `useDidShow` 同一手法（回调闭包会过期，
+   * 走 ref 读当前值）。
+   */
+  const authedRef = useRef(false)
+  authedRef.current = authStatus === 'authed'
+
   usePullDownRefresh(() => {
+    if (!authedRef.current) {
+      void Taro.stopPullDownRefresh()
+      return
+    }
     void read(true).then(() => Taro.stopPullDownRefresh())
   })
 

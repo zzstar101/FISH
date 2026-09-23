@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import {
   countBySegment,
   DEMO_MY_COMMENTS,
@@ -12,6 +12,7 @@ import {
   starSlots,
   viewTargetOf,
 } from '../src/features/comments/mine'
+import { LISTING_BLOCKS } from '../src/mock/blocks'
 
 /**
  * 「我的评论」纯逻辑的回归测试。
@@ -120,11 +121,22 @@ describe('我的评论 · 演示数据自洽', () => {
 
   test('每条都能画出来：色块分类、两字品类、标题/正文/时间都有值', () => {
     for (const item of DEMO_MY_COMMENTS) {
+      // 色块：页面的 `blockOf` 拿 `LISTING_BLOCKS[category][0]`，缺键会静默退回 OTHER ——
+      // 那会让这一条显示成「其他」的灰块，而品类小字仍写着真分类，自相矛盾。
+      expect(LISTING_BLOCKS[item.category]?.[0]).toBeString()
       expect(shortCategoryLabel(item.category)).toHaveLength(2)
       expect(item.title.length).toBeGreaterThan(0)
       expect(item.text.length).toBeGreaterThan(0)
       expect(item.timeLabel.length).toBeGreaterThan(0)
     }
+  })
+
+  test('两条真实成交的评价时间晚于成交时间（订单页「已于 …」的日期）', () => {
+    // 交易评价的时间是「面交完成之后」才有的事。稿子这两行写的是 5 月，而它们引用的
+    // 成交在 8 月 —— 照抄会显示成「面交前两个月就评价了」。这里锁住两条真实成交的先后。
+    const byId = new Map(DEMO_MY_COMMENTS.map((item) => [item.id, item]))
+    expect(byId.get('C05')?.timeLabel).toBe('8 月 21 日') // t-104 完成于 2026-08-19
+    expect(byId.get('C06')?.timeLabel).toBe('8 月 14 日') // t-106 完成于 2026-08-12
   })
 
   test('类型胶囊与「查看…」按钮的文案（字面量，不回抄实现的三元表达式）', () => {
@@ -156,5 +168,44 @@ describe('我的评论 · 演示开关', () => {
 
   test('两个都关（生产构建）→ 不给演示数据，页面走 NO_SOURCE_COPY 空态', () => {
     expect(demoCommentsEnabled(false, false)).toBe(false)
+  })
+})
+
+/**
+ * `load.ts` 的**开关接线**（不只是判定体）。
+ *
+ * 上面四例只覆盖纯函数 `demoCommentsEnabled`；把 `load.ts` 里那行喂参写成
+ * `demoCommentsEnabled(MOCK_FALLBACK_ENABLED, MOCK_FALLBACK_ENABLED)`（即只看 mock 回退）
+ * 照样能让它们全绿，而这恰好是 `load.ts` 文件头花两段篇幅要防的那件事：
+ * `dev:weapp` 的 watch 构建 `__ALLOW_MOCK_FALLBACK__` 为 true、`__DEMO_AUTH__` 为 false，
+ * 只认前者就会让演示数据顶掉真实空态。
+ *
+ * 手法与 `tests/order-list-state.test.ts` 一致：先 `mock.module` 顶掉 Taro，再
+ * `Object.assign` 上构建期开关，最后**动态** import（静态 import 会被提升到 mock 之前）。
+ *
+ * **为什么只测一个组合**：两个开关是 `load.ts` 的**依赖模块**在求值期读的
+ * （`features/load-failure`、`features/auth/demo`），而依赖模块在同一个测试进程里只求值
+ * 一次。给 `load.ts` 加查询串能拿到新实例、但它的依赖仍是缓存里那份，于是第二、三、四个
+ * 组合读到的还是第一次的开关值 —— 那种「绿」是缓存给的，不是接线给的（实测第四个组合
+ * 会因此假红）。所以这里只测**唯一真正有判别力的那个组合**：`dev:weapp` 的
+ * （mock 回退 true、演示登录 false），它正是上面那条回归。其余组合由纯函数那四例覆盖。
+ */
+describe('我的评论 · 开关接线（load.ts 真读两个开关）', () => {
+  mock.module('@tarojs/taro', () => ({ default: {} }))
+
+  // `dev:weapp`（`taro build --watch` → NODE_ENV=development）的实际注入值
+  Object.assign(globalThis, { __ALLOW_MOCK_FALLBACK__: true, __DEMO_AUTH__: false })
+
+  test('dev:weapp 组合（mock 回退开、演示登录关）→ 不给演示数据，页面就是真实空态', async () => {
+    const flags = await import('../src/features/load-failure')
+    const demoAuth = await import('../src/features/auth/demo')
+    // 先确认开关本身确实取到了上面注入的值（否则下面的断言会因为别的原因绿）
+    expect(flags.MOCK_FALLBACK_ENABLED).toBe(true)
+    expect(demoAuth.DEMO_AUTH_ENABLED).toBe(false)
+
+    const mod = await import('../src/features/comments/load')
+    // 只认 mock 回退的实现会在这里得到 true —— 这正是本用例要拦的
+    expect(mod.DEMO_COMMENTS_ENABLED).toBe(false)
+    expect(await mod.loadMyComments()).toEqual({ items: [], demo: false })
   })
 })
