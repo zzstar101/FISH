@@ -12,6 +12,7 @@ import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { formatAmount, type MockListing } from '@/mock/api'
+import { userListEnd } from './list-end'
 import './index.scss'
 
 /**
@@ -24,12 +25,16 @@ import './index.scss'
  * **数据来源（#122）**：`GET /users/:userId/public` + `GET /users/:userId/listings`
  * （`@fish/contracts/users/routes`），两个端点匿名可读。页面只渲染契约真有的字段：
  *
- * - **个性签名（稿 `.psign`）按「字段到位才渲染」**：契约 `PublicUserProfileSchema`
- *   没有 signature 字段（原 #143 已 CLOSED/NOT_PLANNED 并入 #86）。**演示态（Owner 拍板
- *   「mock 先行」）**：页内从演示注入表 `features/user/demo-signatures.ts` 取（按真实
- *   uuid 分键、不落契约、不落 DB、不读本机存储）；真实构建或非演示账号下
+ * - **个性签名（稿 `.psign`）：展示样式与演示态已就绪，真实字段接线待 #179**。
+ *   契约 `PublicUserProfileSchema` 没有 signature 字段（原 #143 已 CLOSED/NOT_PLANNED
+ *   并入 #86），后端三层都没有，所以本页**没有** `profile.signature` 可读 —— 下面那个
+ *   `signatureText` 只取演示注入表，后端将来加上字段也不会自动显示，需要一次接线改动。
+ *   **演示态（Owner 拍板「mock 先行」）**：页内从 `features/user/demo-signatures.ts` 取
+ *   （按真实 uuid 分键、不落契约、不落 DB、不读本机存储）；真实构建或非演示账号下
  *   **这一行不渲染、不留白**。⚠️ 不能读本机存储来顶：`features/profile/signature.ts`
  *   的键按**本人 id** 分，本机只有当前登录用户自己的签名，读出来给别人看是错的。
+ * - **在售列表只有一页**（`PAGE_SIZE = 50`），终点提示按「服务端游标 + 真总数」判定，
+ *   不能只看条数就说「已经到底了」（见 `./list-end.ts`）。
  * - **好评率不渲染**：仓库没有 reviews / ratings 表，没有真实口径 —— 恒显 `--`，
  *   不编一个百分比（稿里的 98% / 100% 是演示数据，不照抄）。
  * - **卖出数**用契约的 `soldCount`（已完成交易里 TA 是卖家的条数）。
@@ -46,8 +51,9 @@ import './index.scss'
  *   详见 `followState` 处的注释。
  * - **聊一聊 / 更多钮不做**：发起会话要带 `listingId`（Chat 契约按 `(listingId, 买家)`
  *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（稿的理由是举报 / 分享 /
- *   加入黑名单在真机里走微信胶囊的 ··· 菜单 —— 那是稿的取舍，本页因此**不再有页内
- *   举报入口**，要加回是一句话的事，见稿 ① 括注）。
+ *   加入黑名单在真机里走微信胶囊的 ··· 菜单 —— 那是稿的取舍）。**这不等于已经有了举报
+ *   能力**：仓库没有 Report 契约 / 表 / 接口（#73 的「举报」一节仍全是未勾选项），
+ *   本页只是不再放页内入口，真实举报入口归 #73（用户端提交）与 #89（客户端接线）。
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
@@ -62,12 +68,15 @@ export default function UserHome() {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
   const [items, setItems] = useState<MockListing[]>([])
+  /** 服务端游标说还有下一页（契约 `nextCursor !== null`）；本页不翻页，但这决定终点怎么说 */
+  const [hasMore, setHasMore] = useState(false)
 
   const load = useCallback(async () => {
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
     setLoadState('loading')
     setProfile(null)
     setItems([])
+    setHasMore(false)
     /**
      * 顶栏两态也要跟着复位。失败态会把 `ScrollView` 整块卸载（改渲染 `LoadError`），
      * 重试时它是**新挂载**的、`scrollTop` 回到 0，而 `glassOn` / `titled` 是页面级
@@ -89,6 +98,7 @@ export default function UserHome() {
     }
     setProfile(result.profile)
     setItems(result.listings)
+    setHasMore(result.hasMore)
     setLoadState('ok')
   }, [userId])
 
@@ -115,8 +125,15 @@ export default function UserHome() {
   const GLASS_AT = 40
   const [glassOn, setGlassOn] = useState(false)
   const [titled, setTitled] = useState(false)
-  /** 身份区底边相对**滚动内容顶部**的偏移；数据到位渲染后量一次 */
+  /** 身份区底边相对**滚动内容顶部**的偏移；数据/签名展开态变化后重量 */
   const identityBottomAt = useRef(Number.POSITIVE_INFINITY)
+  /**
+   * 当前滚动量（内容 px）。两个用途：
+   * - 量取时把 `boundingClientRect` 的**视口坐标**换成**内容坐标**（补偿滚动，
+   *   否则「先在骨架屏上滚了一段、数据才到」量出来的偏移会少一截）；
+   * - 重量之后就地重算标题态，不让标题等到下一次滚动事件才纠正。
+   */
+  const scrollTopRef = useRef(0)
   /**
    * 导航条总高（状态栏 + 内容行，**设备 px**，见 `nav-metrics.ts`）：
    * 给 `.uhome__topbg` 行内定高用 —— 定色带必须正好铺到导航条下沿，
@@ -136,6 +153,7 @@ export default function UserHome() {
   /** 滚动事件很密：值没变就还同一个值，React 会跳过这轮渲染（先例：home 的 `setCatsPinned`） */
   const onScroll = useCallback((e: { detail: ScrollViewProps.onScrollDetail }) => {
     const st = e.detail.scrollTop
+    scrollTopRef.current = st
     const nextGlass = st > GLASS_AT
     setGlassOn((prev) => (prev === nextGlass ? prev : nextGlass))
     // 标题要等身份区整行（含签名）滚出上沿才出现；留 6px 提前量与稿一致（稿 `+6`）
@@ -144,9 +162,11 @@ export default function UserHome() {
   }, [])
 
   /**
-   * 数据到位渲染后量一次身份区：`boundingClientRect` 给**视口坐标**，本页初始停在页顶
-   * （`scrollTop = 0`），视口坐标即内容坐标，无需补偿；重试会把状态清回 loading 并回到
-   * 页顶重量，同理成立。量取用 `Taro.nextTick` 排到本轮渲染之后。
+   * 量一次身份区底边，换算成**内容坐标**。
+   *
+   * `boundingClientRect` 给的是**视口坐标**，必须加上当时的滚动量才是它在滚动内容里的
+   * 位置。不补偿就会漏掉「先在骨架屏上滚了一段、数据随后才到」这一档：那时视口坐标比
+   * 内容坐标小一整个 `scrollTop`，算出的阈值偏小，标题会在昵称还看得见时就冒出来。
    *
    * **量的节点是签名行（没有签名时退回头像行）**，与稿 `syncNav` 同一口径
    * （`p = $('psign'); if (!p || !p.offsetHeight) p = $('profile')`）—— 稿的判据是
@@ -157,6 +177,10 @@ export default function UserHome() {
    * 兜底同理 —— 不给兜底会变成「标题永远不出现」，给个偏大的估计值最多让标题晚一点
    * 淡入（页头真实高度 ≈ 导航条 91 + 身份区上边距 152 + 头像行 83 + 签名行 ≈ 40，
    * 按设备 px 约 320+）。
+   *
+   * 量完**就地重算标题态**：长签名展开 / 收起会改变身份区高度（实测折叠 20px → 展开
+   * 40px），阈值跟着变；等下一次滚动事件才纠正的话，用户会看到标题「多留」或「早退」
+   * 一段。这里直接把当前的 `scrollTop` 拿去比对，不依赖后续事件。
    */
   const IDENTITY_FALLBACK = 320
   const measureIdentity = useCallback(() => {
@@ -177,21 +201,14 @@ export default function UserHome() {
           }
           // 签名行缺失（无签名的用户）时退回头像行，与稿一致
           const rect = pick(0) ?? pick(1)
-          identityBottomAt.current = rect ? rect.top + rect.height : IDENTITY_FALLBACK
+          identityBottomAt.current = rect
+            ? rect.top + scrollTopRef.current + rect.height
+            : IDENTITY_FALLBACK
+          const nextTitled = scrollTopRef.current >= identityBottomAt.current - 6
+          setTitled((prev) => (prev === nextTitled ? prev : nextTitled))
         })
     })
   }, [])
-
-  /**
-   * 身份区重新上屏（loading 骨架 ↔ 数据、重试）后重量一次。
-   * `profile` / `loadState` 进 deps 是**刻意的多余依赖**：`measureIdentity` 恒定，
-   * 真正要追的是「身份区重新渲染」这个时机，而它由这两个状态驱动 ——
-   * 只写 `[measureIdentity]` 会漏掉数据到位后的那次重渲染。
-   */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 见上，刻意追 profile/loadState 的重渲染时机
-  useEffect(() => {
-    measureIdentity()
-  }, [measureIdentity, profile, loadState])
 
   useLoad(() => {
     void load()
@@ -234,6 +251,16 @@ export default function UserHome() {
   )
 
   const verified = profile?.authStatus === 'VERIFIED'
+
+  /**
+   * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。
+   *
+   * 「已经到底了」要两个信号同时点头：服务端游标说没有下一页，且这份列表条数不少于
+   * 服务端报的在售真总数 `activeCount`。任一条不成立就改说「仅显示最近 N 件」——
+   * 单看条数会在超过单页上限（50）时把「还有没展示的」说成「TA 就这些」。
+   * `profile` 还没到（加载中）时 `shown` 恒为 0，判定自然是 `none`，不提前下结论。
+   */
+  const end = userListEnd(items.length, profile?.activeCount ?? 0, hasMore)
 
   /**
    * 演示内容的**唯一闸门**：演示构建 + 页主是演示账号（seed 三号之一，见
@@ -327,6 +354,23 @@ export default function UserHome() {
   useEffect(() => {
     syncSignOverflow()
   }, [syncSignOverflow])
+
+  /**
+   * 身份区重新上屏（loading 骨架 ↔ 数据、重试）或长度变化（签名展开 / 收起）后重量一次。
+   *
+   * `profile` / `loadState` 进 deps 是**刻意的多余依赖**：`measureIdentity` 恒定，真正要追的是
+   * 「身份区重新渲染」这个时机，而它由这两个状态驱动 —— 只写 `[measureIdentity]` 会漏掉
+   * 数据到位后的那次重渲染。这样也顺带覆盖了「加载中先滚动、数据后到」：那次测量用的是
+   * 补偿过 `scrollTop` 的内容坐标，量出来的阈值不随滚动量漂移。
+   *
+   * `signOpen` / `signatureText` 同理：展开长签名会把身份区撑高，阈值必须跟着重量
+   * （本 effect 因此必须排在这两个 `const` 之后 —— 依赖数组在渲染期求值，写在前面对
+   * 暂时性死区求值会直接 ReferenceError）。
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 见上，刻意追身份区那次重渲染的时机
+  useEffect(() => {
+    measureIdentity()
+  }, [measureIdentity, profile, loadState, signOpen, signatureText])
 
   /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染） */
   const navTitle = profile ? (
@@ -565,12 +609,20 @@ export default function UserHome() {
               </View>
             )}
 
-            {/* 到底提示（稿 `.list-end`）：不带数字 —— 稿的 N 是列表长度，
-                与服务端 COUNT 的「在售数」口径不同，带上数字会打架 */}
-            {loadState === 'ok' && items.length > 0 ? (
+            {/* 列表终点（稿 `.list-end`）：只有**确认这份列表就是全部**时才说「已经到底了」。
+                在售列表是单页读取（上限 50），超过时 `activeCount > items.length` —— 那种
+                情况改说「仅显示最近 N 件」，不能宣称 TA 就这些（判定见 `./list-end.ts`）。
+                两条都**不带总数**：稿的 N 是列表长度，与服务端 COUNT 口径不同，带上会打架。 */}
+            {end === 'end' ? (
               <View className="uhome__list-end">
                 <View className="uhome__list-end-line" />
                 <Text className="uhome__list-end-txt num">已经到底了</Text>
+                <View className="uhome__list-end-line" />
+              </View>
+            ) : end === 'partial' ? (
+              <View className="uhome__list-end">
+                <View className="uhome__list-end-line" />
+                <Text className="uhome__list-end-txt num">{`仅显示最近 ${items.length} 件`}</Text>
                 <View className="uhome__list-end-line" />
               </View>
             ) : null}
