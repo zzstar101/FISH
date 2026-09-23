@@ -217,6 +217,18 @@ export const conversationListResponseSchema = z.object({
 })
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>
 
+/**
+ * 未读总数（#67）。**独立端点**，与通知域 `GET /notifications/unread-count` 同款：
+ * 底部导航红点只要一个数字，不该为它拉一整页会话。
+ *
+ * 与列表行 `ConversationDto.unreadCount` 共用同一套 SQL 未读判据（store），
+ * 因此它**恒等于**「把全部会话的 unreadCount 相加」，不受 `limit` / 游标分页影响。
+ */
+export const conversationUnreadCountSchema = z.object({
+  unreadCount: z.number().int().nonnegative(),
+})
+export type ConversationUnreadCount = z.infer<typeof conversationUnreadCountSchema>
+
 export const messageListQuerySchema = z.object({
   /** 游标分页：上一页最早一条消息的 id；缺省从最新一页开始。 */
   before: z.uuid().optional(),

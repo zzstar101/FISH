@@ -18,6 +18,15 @@ function toErrorResponse(c: Context, error: unknown): Response {
 }
 
 /**
+ * 路径参数必须是 UUID：否则它作为绑定参数走到 SQL 的 `::uuid` 转换，PG 抛 `22P02` → 500，
+ * 而契约对「会话 id 不存在」的口径是 404 `CONVERSATION_NOT_FOUND`（与 #152 的 read 同款）。
+ */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const conversationNotFound = (c: Context) =>
+  c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
+
+/**
  * 挂载点也是 /conversations（与 conversations router 并列 route 到同一路径前缀，
  * Hono 按注册顺序匹配、互不冲突）：本 router 只提供 `/:id/messages` 两个端点，
  * 对外路径即契约的 `CHAT_ROUTES.messages(id)`。
@@ -26,6 +35,7 @@ export function createMessagesRouter({ service, requireAuth }: MessagesRouterOpt
   const app = new Hono<{ Variables: AuthVariables }>()
 
   app.get('/:id/messages', requireAuth, async (c) => {
+    if (!UUID_PATTERN.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = messageListQuerySchema.safeParse(c.req.query())
     if (!parsed.success) {
       return c.json(
@@ -44,6 +54,7 @@ export function createMessagesRouter({ service, requireAuth }: MessagesRouterOpt
   })
 
   app.post('/:id/messages', requireAuth, async (c) => {
+    if (!UUID_PATTERN.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = messageSendInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {
       return c.json(
