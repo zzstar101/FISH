@@ -1,16 +1,16 @@
 # #147 交易、订单与面交凭证 — 剩余项设计方案
 
-> 状态：**方案已确认（Owner 逐条拍板）**；§4 工程侧已实现（PR #181，含 `core:smoke` 新增步骤与 CI 接入），§5 页面侧仍为待实现方案（等 #177 合入）。
-> 关联：需求载体 [#147](https://github.com/zzstar101/FISH/issues/147) ｜ 前置已落地：[#169](https://github.com/zzstar101/FISH/issues/169)（长期凭证 + 终态同事务销毁）、[#176](https://github.com/zzstar101/FISH/issues/176)（一单一码 + 幂等取码）、[#167](https://github.com/zzstar101/FISH/issues/167)（Orders 真实列表）、[#168](https://github.com/zzstar101/FISH/issues/168)（Meetup UI 与身份守卫）
-> 记录人：Coast-87（本机） ｜ 日期：2026-09-22
-> **行号基线**：`origin/main = ad38862`（2026-09-23，`#183` 合入后）。本文引用的代码行号以此为准；#183 改动过的文件已重新核对。
+> 状态：**方案已确认（Owner 逐条拍板），本文不含实现代码**。工程侧（PR-1）已实现并随 PR #181 提审；页面侧（PR-2）待 #177 合入后启动。
+> 关联：Refs [#147](https://github.com/zzstar101/FISH/issues/147)（需求载体；只引用、不关闭，见 §10） ｜ 前置已落地：[#169](https://github.com/zzstar101/FISH/issues/169)（长期凭证 + 终态同事务销毁）、[#176](https://github.com/zzstar101/FISH/issues/176)（一单一码 + 幂等取码）、[#167](https://github.com/zzstar101/FISH/issues/167)（Orders 真实列表）、[#168](https://github.com/zzstar101/FISH/issues/168)（Meetup UI 与身份守卫） ｜ 基线校准：[#183](https://github.com/zzstar101/FISH/issues/183)（#76 flake 修复：三处终态 DELETE 拆出 CTE、改为同一事务的独立语句，本文 §4.2 的结构描述与行号据此更新）
+> 记录人：Coast-87（本机） ｜ 日期：2026-09-22 ｜ 更新：2026-09-23（#183 合入后校准）
+> **行号基线**：`origin/main = ad38862`（2026-09-23，`#183` 合入后）。本文引用的代码行号以此为准；#183 改写了 `store.ts` 三处终态 DELETE 的形态与行号，本文引用已按新基线逐条核对。
 > 决策来源：Owner 于 2026-09-22 分两轮逐条确认（完整记录见 §9）。
 
 ---
 
 ## 0. Owner 看这里
 
-一句话：#147 原有四类尾巴 —— 两个客户端正确性 bug、一处注释残留、交易/面交链路不变量没进 CI、真机回归没做。方案把它们拆成**一个工程 PR（不变量进 CI，已实现，见 §4）**与**一个页面 PR（两个客户端 bug + 注释残留，等 #177 合入）**；真机回归由 Owner 按 §6 执行。
+一句话：#147 的尾巴分工程侧与页面侧 —— 工程侧（交易/面交流程不变量进 CI）已由 PR #181 实现并提审；页面侧还剩两个客户端正确性 bug、一处注释残留与真机回归没做（真机回归由 Owner 按 §6 执行），按 `docs/miniapp-dev-workflow.md` §2 的串行门禁排成**一个页面 PR（等 #177 合入）**。
 
 需要你本人做的三件事：
 
@@ -88,7 +88,9 @@
 
    > **断言能力的边界（第一轮 S2 + 第二轮 Standards-1）**：smoke 只能证明「终态之后凭证行已不在」，无法区分「同事务删除」与「提交后异步删除」；要真正证明原子性需要故障注入（让终态事务内后续步骤失败并断言整体回滚），不在本单范围。
    >
-   > **现状必须说清：目前没有任何运行时测试证明这条原子性。** `apps/api/src/modules/transactions/store.test.ts:610-620`（cancel）与 `:754`（并发用例）也只断言终态后的最终状态（`findMeetupToken → null`）；若把 DELETE 挪到终态事务提交之后，它们同样会绿。这条不变量**只由事务边界保证**：DELETE 是终态事务内的**独立语句**，不在上面那条 CTE 里（`store.ts:509-511` COMPLETED / `store.ts:542-551` CANCELLED）——`#183` 正是把 DELETE 拆出 CTE 才修掉「并发 issue 的凭证在终态交易上幸存」的 flake（READ COMMITTED 下，同一条 CTE 里的 DELETE 对非目标表用语句开头快照）。因此 (a) smoke 的断言标签写「凭证行已删除」，不写「同事务删除」；(b) 若后续要把「同事务」也变成被运行时验证的事实，需另开单做故障注入。
+   > **现状必须说清：目前没有任何运行时测试证明这条原子性。** `apps/api/src/modules/transactions/store.test.ts:610-620`（cancel）、`:694-716`（cancel × issue 并发）与 `:754`（核销 × 取消 并发的终态断言）也只断言终态后的最终状态（`findMeetupToken → null`）；若把 DELETE 挪到终态事务提交之后，它们同样会绿。这条不变量**只由事务边界保证**：DELETE 是终态事务内的**独立语句**，不在上面那条 CTE 里（`store.ts:509-511` COMPLETED / `store.ts:542-551` CANCELLED）——`#183` 正是把 DELETE 拆出 CTE 才修掉「并发 issue 的凭证在终态交易上幸存」的 flake（READ COMMITTED 下，同一条 CTE 里的 DELETE 对非目标表用语句开头快照）。因此 (a) smoke 的断言标签写「凭证行已删除」，不写「同事务删除」；(b) 若后续要把「同事务」也变成被运行时验证的事实，需另开单做故障注入。
+   >
+   > **为什么不再写「同一个 CTE」**：#183 修复 #76 flake 的根因正是旧写法——CTE 内 DELETE 对非目标表（凭证表）用**语句开头**的快照，锁等待后的 EvalPlanQual 重评估只作用于 UPDATE/DELETE 的目标行本身；并发 `upsertMeetupToken` 先持交易行锁提交了凭证行、cancel 的语句才开始求值时，DELETE 看不见那行 → CANCELLED 交易上凭证幸存（两层最小复刻实测：CTE 内写法 5/10 幸存，独立语句 0/10）。三处 DELETE（`cancel`、`confirm` 完成分支、`consumeMeetupToken` 完成分支）已全部拆为同事务独立语句，"看起来同事务"并不等于原子，这也是上面那条边界必须写清的原因。
 
 ### 4.3 验证
 
