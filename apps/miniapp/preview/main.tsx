@@ -36,6 +36,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/match/index': () => import('@/pages/match/index'),
   '/pages/mylist/index': () => import('@/pages/mylist/index'),
   '/pages/watchers/index': () => import('@/pages/watchers/index'),
+  '/pages/comments/index': () => import('@/pages/comments/index'),
   '/pages/scan/index': () => import('@/pages/scan/index'),
 }
 

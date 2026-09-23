@@ -1,0 +1,501 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 「我的评论」。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 结构与收藏页同属「模板 A」：导航（居中标题）→ 三段带计数的分段胶囊 →
+ * 记录卡（缩略图 + 标题 + 价格 + 右侧竖排动作）→ 卡底信息带（品牌色竖条 + 我写的那句话
+ * + 类型胶囊 / @对方 / 星级 / 时间）→ 到底提示；外加骨架屏、空态、回到顶部。
+ *
+ * **与收藏页有意的差异**：本页卡底挂的是「我写的那句话」而不是卖家信息带；
+ * 分段三段互斥所以摆计数；没有「管理」批量入口（删除长在每一行上）。
+ * 上半张卡与收藏页逐字相同是稿子的要求，但**本轮不做跨分支共用的抽取** ——
+ * 那两条线并行且互不可见，各自在页面内实现（见方案 §4）。
+ *
+ * 无底部 TabBar（非 Tab 页），底部只留安全区。
+ */
+
+.cmt {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* 28pt 常规留白 + 安全区（1版稿 `.content` 的 `--pad-bottom` = 28pt + 14px，
+     真机上那 14px 由 env(safe-area-inset-bottom) 承担） */
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+.cmt__bg {
+  @include page-hero(320px, 64px);
+}
+
+/* ---------------------------------------------------------------- 页头 */
+
+/*
+ * 标题在 `components/nav-bar`（**居中**：导航条右侧没有页面级动作，见页面文件头）。
+ * 这一块**始终渲染**（分段胶囊只在其内部按 `demo` 显隐），因为 `padding-top` 是给
+ * 漂浮导航条留的顶栏高度，拿掉整块空态会钻到返回钮与标题下面。
+ * 168px 与同族的 mylist / settings / verify / match 同值（都是「漂浮导航 + 页内首块内容」）；
+ * `watchers` 那页是 164px，与本页不同族，别拿它当基准。
+ */
+.cmt__head {
+  position: relative;
+  z-index: 1;
+  padding: 168px 40px 0;
+}
+
+/* ---- 分段胶囊：三段互斥（全部 = 商品留言 ∪ 交易评价），所以摆计数 ---- */
+
+.cmt__seg {
+  display: flex;
+  gap: 8px;
+  height: 88px;
+  padding: 8px;
+  margin-top: 20px;
+  border-radius: var(--r-pill);
+  background: var(--ice);
+  border: 2px solid var(--border);
+  box-sizing: border-box;
+}
+
+/*
+ * 等分用 `flex: 1 1 0` 而不是写死列数：分段数由 `SEGMENTS` 决定，宽度就该跟着它走。
+ * 收藏页踩过这个坑 —— 删掉一个分段后网格列数没跟着改，两个胶囊只占 2/3、右边空一格。
+ */
+.cmt__seg-item {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: var(--r-pill);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--muted-2);
+  white-space: nowrap;
+
+  &.is-on {
+    background: var(--ink);
+    color: var(--surface);
+  }
+}
+
+.cmt__seg-n {
+  font-size: 21px;
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+/* ---------------------------------------------------------------- 列表 */
+
+.cmt__body {
+  position: relative;
+  z-index: 1;
+  padding-top: 28px;
+}
+
+/*
+ * 演示数据说明带。这一页没有后端，演示构建摆的是 fixture —— 界面上必须能认出来。
+ * 用与「隐私说明条」同一套中性玻璃材质（`watchers` 的 `.wt__banner`），
+ * 不新造色值；真实构建下不会渲染（那时 `items` 为空）。
+ */
+.cmt__demo {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 0 40px 20px;
+  padding: 20px;
+  border-radius: 28px;
+  background: var(--glass-bg);
+  border: 2px solid var(--border);
+}
+
+.cmt__demo-ic {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  margin-top: 4px;
+}
+
+.cmt__demo-tx {
+  flex: 1;
+  font-size: 21px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.cmt__list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 0 40px;
+}
+
+/* ---------------------------------------------------------------- 记录卡 */
+
+.cmt__item {
+  @include card(40px);
+  overflow: hidden;
+}
+
+.cmt__row {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+}
+
+.cmt__thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 152px;
+  height: 152px;
+  border-radius: 28px;
+  border: 2px solid var(--accent-faint);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 分类色块铺满缩略图（`mode="aspectFill"` 的 1×1 演示色块）。
+   用 left/top/width/height 而不是 `inset: 0` —— 后者是较新的简写，小程序 WXSS 在部分
+   基础库上不认（全仓只有 `_mixins.scss` 的遮罩用过一次，那里是 fixed 全屏、退化也看得见）。 */
+.cmt__thumb-img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* 压在色块上的品类小字（稿 `.thumb span`） */
+.cmt__thumb-tx {
+  position: relative;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 2px rgba(23, 35, 61, 0.18);
+}
+
+.cmt__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.cmt__title {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.cmt__price {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.cmt__cur {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--price);
+}
+
+.cmt__amt {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--price);
+}
+
+/* ---- 右侧竖排动作：查看（商品 / 订单）+ 删除 ---- */
+
+.cmt__acts {
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cmt__abtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 152px;
+  height: 68px;
+  padding: 0 22px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+
+  &--danger {
+    border-color: var(--danger-line);
+    color: var(--danger-ink);
+  }
+}
+
+/* ---- 卡底信息带（本页与收藏页唯一的差异处）---- */
+
+.cmt__foot {
+  display: flex;
+  gap: 18px;
+  padding: 18px 24px 22px;
+  border-top: 2px solid var(--accent-faint);
+}
+
+/* 品牌色竖条：把「这是我写的话」与上面的商品信息分开 */
+.cmt__bar {
+  flex: 0 0 auto;
+  width: 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent-mid);
+}
+
+.cmt__fmain {
+  flex: 1;
+  min-width: 0;
+}
+
+.cmt__ctext {
+  font-size: 25px;
+  line-height: 1.5;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.cmt__cmeta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/*
+ * 两种评论类型各一色：商品留言走品牌蓝、交易评价走薄荷（ok），一眼能分出
+ * 「我在别人商品下问的一句」与「我交易后给的评价」。
+ *
+ * `flex: 0 0 auto`（不收缩）与 `.cmt__to` 的收缩是一对：昵称可以任意长，
+ * 类型胶囊的文案是页面自己写死的两三个字，**该长的是它、该让位的是昵称**。
+ */
+.cmt__kind {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &--trade {
+    background: var(--ok-weak);
+    border-color: var(--ok);
+    color: var(--ok-ink);
+  }
+}
+
+/*
+ * 评价对象（@对方）。
+ *
+ * **必须可收缩**：昵称契约上限是 20 字（`auth/session.ts` 的 `NicknameSchema`
+ * `.max(20)`，`comments/schema.ts` 的 `author.nickname` 是裸 `z.string()` 无上限），
+ * 而这一行是 `kind + to + stars + time` 四个 `nowrap` 子项排在一行里。
+ * 早先写成 `flex: 0 0 auto` 时 `flex-shrink: 0` 让这一格不可能收缩，
+ * `overflow: hidden` 只是按内容宽裁切自己的盒子、`text-overflow` 永远不触发 ——
+ * 实测 20 字昵称（`@周予安不吃香菜并且也不吃葱花皮`）把整行撑到 768px
+ * （容器 666px），**时间文案被挤出卡片 101.8px**（`.cmt__foot` 的 `overflow` 不是
+ * hidden，所以是真的溢出到卡外）。`flex-shrink: 1` 与 `min-width: 0` 二者缺一不可：
+ * 前者允许收缩，后者解除 flex 子项 `min-width: auto` 给出的内容宽度下限。
+ * 不设 `max-width` —— 长昵称时这一格本来就会被挤到最短，`time` 有
+ * `margin-left: auto`，靠右对齐不受影响。
+ */
+.cmt__to {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 21px;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+/* 星级只在交易评价行出现（商品留言在契约里就没有评分字段）。
+   用 ICONS 里的两枚星形 PNG（满格 starAccent / 空格 starLine），不内联字形 —— 仓库铁律。 */
+.cmt__stars {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cmt__star {
+  width: 22px;
+  height: 22px;
+}
+
+/* 时间靠右顶格（等宽字体由元素上的 `.num` 类给，这里不重复声明 font-family） */
+.cmt__time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ 到底提示 */
+
+.cmt__tail {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 40px 12px;
+}
+
+.cmt__tail-line {
+  flex: 1 1 auto;
+  height: 2px;
+  background: var(--border);
+}
+
+.cmt__tail-tx {
+  flex: 0 0 auto;
+  font-size: 21px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- 骨架屏 */
+
+.cmt__skel {
+  @include card(40px);
+  overflow: hidden;
+  margin: 0 40px 20px;
+}
+
+.cmt__skel-row {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+}
+
+.cmt__skel-sq {
+  @include skeleton(152px, 152px);
+  border-radius: 28px;
+  flex: 0 0 auto;
+}
+
+.cmt__skel-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 4px;
+}
+
+.cmt__skel-bar {
+  @include skeleton(24px, 100%);
+}
+
+/* 卡底那条也要占住位置，否则加载完成后卡片高度会跳一下 */
+.cmt__skel-foot {
+  display: flex;
+  padding: 18px 24px 22px;
+  border-top: 2px solid var(--accent-faint);
+}
+
+/* ------------------------------------------------------------ 回到顶部 */
+
+/*
+ * 玻璃圆钮（与订单页 `.orders__totop` 同一套材质）。本页是页面级滚动，所以贴视口定位。
+ *
+ * 距底取稿值：1版稿 `.totop{bottom:calc(28 * var(--pt) + 14px)}` —— 28pt 换算成 56px，
+ * 稿里那 14px 是自绘 home indicator 的高度，真机上由 `env(safe-area-inset-bottom)`
+ * 承担（再叠一次等于算两遍）。口径与订单页一致：订单页稿是 `22pt + 14px`，
+ * `components/order-list/index.scss` 就写 `calc(44px + env(...))`。
+ */
+.cmt__totop {
+  position: fixed;
+  right: 36px;
+  bottom: calc(56px + env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(44px) saturate(180%);
+  -webkit-backdrop-filter: blur(44px) saturate(180%);
+  box-shadow:
+    0 28px 60px -32px rgba(23, 35, 61, 0.46),
+    0 4px 12px -4px rgba(23, 35, 61, 0.14),
+    inset 0 2px 0 rgba(255, 255, 255, 0.94);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(24px) scale(0.9);
+  transition:
+    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    visibility 0s linear 0.26s;
+
+  &.is-show {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+  }
+
+  &:active {
+    transform: translateY(2px) scale(0.96);
+  }
+}
+
+/* 上箭头（1版稿 ic-top：竖杆 + 箭头），库里没有这个几何，用 CSS 画（先例 pages/chat） */
+.cmt__totop-arrow {
+  position: relative;
+  width: 40px;
+  height: 40px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 16px;
+    width: 4px;
+    height: 20px;
+    border-radius: 2px;
+    background: var(--brand-deep);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border-left: 4px solid var(--brand-deep);
+    border-top: 4px solid var(--brand-deep);
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
+}

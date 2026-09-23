@@ -21,6 +21,7 @@ export default defineAppConfig({
     'pages/match/index',
     'pages/mylist/index',
     'pages/watchers/index',
+    'pages/comments/index',
     'pages/scan/index',
   ],
   window: {
