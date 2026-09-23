@@ -34,6 +34,7 @@
  * - MinIO 不是 scratch 的：脚本结束时删掉本轮上传的对象，否则 `--runs=5` 会在桶里累积垃圾。
  */
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
+import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
@@ -927,10 +928,18 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const meetupCode = String(firstToken.code)
     assert(/^\d{6}$/.test(meetupCode), '取码返回 6 位数字码')
     // 跨交易唯一性：派生输入必须是**交易 id**，不是 listing id —— 否则同一商品上先后两笔交易
-    // （上面取消掉的那笔 + 这笔记成交的）会拿到同一枚凭证。这里比 qrPayload 而不是比 6 位码：
-    // 码空间只有 10^6，两枚独立码有 1e-6 的碰撞概率，拿它做断言会变成极低频 flake。
+    // （上面取消掉的那笔 + 这笔记成交的）会拿到同一枚凭证。比的是 payload 里的 `t`（token）：
+    // 整串 payload 含 `tx=<交易 id>`，两笔交易的整串必然不同，比它等于没比。
+    // 也不比 6 位码：码空间只有 10^6，两枚独立码有 1e-6 的碰撞概率，拿它做断言会变成极低频 flake。
+    const firstQr = parseMeetupQrPayload(String(firstToken.qrPayload))
+    const cancelledQrParsed = parseMeetupQrPayload(cancelledQr)
     assert(
-      String(firstToken.qrPayload) !== cancelledQr,
+      firstQr !== null && cancelledQrParsed !== null,
+      '两笔交易的 qrPayload 都能被契约解析器解析',
+    )
+    if (firstQr === null || cancelledQrParsed === null) throw new Error('unreachable')
+    assert(
+      firstQr.token !== cancelledQrParsed.token,
       '不同交易派生出不同凭证（派生输入是交易 id，不是商品 id）',
     )
     const secondIssue = await issue()
