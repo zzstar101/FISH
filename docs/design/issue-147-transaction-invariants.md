@@ -10,7 +10,7 @@
 
 ## 0. Owner 看这里
 
-一句话：#147 只剩四类尾巴 —— 两个客户端正确性 bug、一处注释残留、交易/面交链路不变量没进 CI、真机回归没做。方案把它们拆成**一个工程 PR（已实现，见 §4）**与**一个页面 PR（等 #177 合入）**。
+一句话：#147 原有四类尾巴 —— 两个客户端正确性 bug、一处注释残留、交易/面交链路不变量没进 CI、真机回归没做。方案把它们拆成**一个工程 PR（不变量进 CI，已实现，见 §4）**与**一个页面 PR（两个客户端 bug + 注释残留，等 #177 合入）**；真机回归由 Owner 按 §6 执行。
 
 需要你本人做的三件事：
 
@@ -41,7 +41,7 @@
 
 ---
 
-## 2. 现状（事实）
+## 2. 现状（事实；决策时快照，「smoke 缺口」一行已由 §4 消除）
 
 | 项 | 事实 | 位置 |
 | --- | --- | --- |
@@ -49,7 +49,7 @@
 | P2-2 双击 | 防重复提交只判 React state `submitting`，同一 tick 两次点击都能通过（`is-off` 只是样式） | 同上 `:305`、`:840-844` |
 | P3 | `:118` 注释残留「码错误 / 过期 / 已被使用 / 次数过多」，运行时已无 `MEETUP_TOKEN_EXPIRED` | 同上 `:118` |
 | seed 不变量（已有） | scratch 库跑 seed，断言 3 会话 / 2 交易 + 每笔交易按三元组 join 得到会话 | `packages/db/src/seed.test.ts:74,76,85-93` |
-| smoke 缺口 | `core-smoke` 的 11 个步骤（干净环境 / 启动 / Demo 样例 / 上传发布 / Wish 匹配 / 幂等 / 编辑重算 / 上下架 / 重启恢复 ×2 / 坏 payload）**没有任何交易与面交场景** | `apps/api/scripts/core-smoke.ts:411-776` |
+| smoke 缺口 | `core-smoke` 的 11 个步骤（干净环境 / 启动 / Demo 样例 / 上传发布 / Wish 匹配 / 幂等 / 编辑重算 / 上下架 / 重启恢复 ×2 / 坏 payload）**没有任何交易与面交场景** —— **已由 §4 消除**（PR #181 追加第 12 步「交易与面交」） | `apps/api/scripts/core-smoke.ts:411-792` |
 | 面交语义 | 取码幂等且每次复位 `failed_attempts` / `locked_until`（卖家重取是现场解锁的唯一路径）；连错 5 次锁 10 分钟；终态 409 | `apps/api/src/modules/transactions/store.ts:132-133`、`service.ts:51-53,219-245` |
 | 路由 | `POST /transactions`（卖家接受并创建）、`POST /transactions/:id/meetup-token`（取码）、`POST /transactions/:id/meetup-token/verify-code`（核销）、`POST /transactions/:id/confirm`、`POST /transactions/:id/cancel` | `packages/contracts/src/transactions/routes.ts:14-30` |
 
@@ -59,7 +59,7 @@
 
 | PR | 分支 | 改动范围 | 前置 | 顺序 |
 | --- | --- | --- | --- | --- |
-| PR-1 工程 | `feat/147-tx-smoke-invariants` | `apps/api/scripts/core-smoke.ts` | 无（不碰 `apps/miniapp`，不受小程序串行门禁约束） | 先做 |
+| PR-1 工程 | `feat/147-tx-smoke-invariants` | `apps/api/scripts/core-smoke.ts`、`.github/workflows/ci.yml`、`docs/README.md`、`docs/design/issue-147-transaction-invariants.md` | 无（不碰 `apps/miniapp`，不受小程序串行门禁约束） | 已实现（PR #181） |
 | PR-2 页面 | `feat/miniapp-meetup-confirm-race` | `apps/miniapp/src/pages/transaction-meetup/**`、`apps/miniapp/tests/**` | #177 `feat/miniapp-verify-redesign` 合入 | 后做 |
 
 两个 PR 都指向 #147；均从最新 `main` 切出。
@@ -70,7 +70,7 @@
 
 ### 4.1 落点
 
-在 `apps/api/scripts/core-smoke.ts` 新增 `step = '交易与面交'`，插在**最后一步「坏 payload」之后**（`core-smoke.ts:776` 之后）。
+在 `apps/api/scripts/core-smoke.ts` 新增 `step = '交易与面交'`，追加在**最后一步「坏 payload」之后**（`core-smoke.ts:792` 之后，`try` 块末尾）。
 
 理由：该步骤会把交易推到 COMPLETED，从而把 listing 置为 SOLD；插在「重启恢复」之前会污染那两步对同一 listing 的 `PATCH /listings/:id`。放在末尾则不影响任何既有断言，且 `finally` 里的 scratch 库与对象清理照旧。
 
@@ -79,7 +79,7 @@
 ### 4.2 四条不变量断言
 
 1. **三元组一致**：提案 → 接受后，买卖双方 `GET /transactions` 各自都能看到该笔；且 `conversationId` 指向 `(listing_id, buyer_id, seller_id)` 完全一致的会话（DB 侧直接断言 join，对应 #157 的失败模式）。
-2. **一单一码幂等 + 跨交易唯一**：卖家连续两次 `POST /transactions/:id/meetup-token` → 两次明文码**逐字相同**；且与上面那笔已取消交易的 `qrPayload` **不同**（钉住派生输入是**交易 id** 而不是 `listingId` —— 后者会让同一商品上先后两笔交易拿到同一枚码）。跨交易比较用 `qrPayload` 而非 6 位码：码空间只有 10^6，两枚独立码有 1e-6 的碰撞概率，用它做断言会变成极低频 flake。
+2. **一单一码幂等 + 跨交易唯一**：卖家连续两次 `POST /transactions/:id/meetup-token` → 两次明文码**逐字相同**；且与上面那笔已取消交易的凭证 **不同**（钉住派生输入是**交易 id** 而不是 `listingId` —— 后者会让同一商品上先后两笔交易拿到同一枚码）。跨交易比较取 `qrPayload` 里由契约解析器解出的 `t`（token），不比整串 payload：整串含 `tx=<交易 id>`，两笔交易必然不同、比了等于没比；也不比 6 位码：码空间只有 10^6，两枚独立码有 1e-6 的碰撞概率，用它做断言会变成极低频 flake。
 3. **阈值口径被独立钉住**：断言 `MEETUP_TOKEN_MAX_ATTEMPTS === 5`（#70 冻结的「5 次 / 锁 10 分钟」），循环边界另取该常量——否则阈值漂到 6 时本步骤会跟着漂、拦不住。
 4. **重取即解锁**：买家连错 4 次 `verify-code` 各返回 422，**第 5 次达阈值即返回 429** `MEETUP_TOKEN_LOCKED`（函数 `recordMeetupTokenFailure` 起于 `apps/api/src/modules/transactions/store.ts:704`，置 `locked_until` 的 UPDATE 在 `:707-719`）；卖家再取码 → 码值不变，且该行 `failed_attempts = 0` / `locked_until = null`。
 5. **终态销毁（两个终态各一条）**：
