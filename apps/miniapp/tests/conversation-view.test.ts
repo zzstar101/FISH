@@ -163,14 +163,25 @@ describe('shouldReloadOnShow —— 返回本页时是否立刻重拉（#170 D�
 })
 
 describe('DeferredReload 状态机 —— 「发送中返回」延后到发送落定再补刷新（#170 D）', () => {
-  /** 走一遍：发起 n 次发送、再落定 m 次（都用同一个 epoch） */
+  /**
+   * 走一遍完整回路：发起 n 次发送、再落定 m 次（同一 epoch）。
+   *
+   * 落定时模拟组件的做法：**到点就先 `clearDeferredReload` 再补刷新**
+   * （`index.tsx` 的 finally）。带上这一步，`flushes` 才等于「真的补了几次」，
+   * 而不是「有几次满足到点条件」—— 「多个并发只补一次」靠的是这两半合起来。
+   */
   const run = (epoch: number, sends: number, settles: number) => {
     let state = deferReload(initialDeferredReload(epoch))
     const flushes: boolean[] = []
     for (let i = 0; i < sends; i += 1) state = beginSend(state, epoch)
     for (let i = 0; i < settles; i += 1) {
       state = settleSend(state, epoch)
-      flushes.push(isFlushDue(state))
+      if (isFlushDue(state)) {
+        flushes.push(true)
+        state = clearDeferredReload(state)
+      } else {
+        flushes.push(false)
+      }
     }
     return { state, flushes }
   }
@@ -178,13 +189,28 @@ describe('DeferredReload 状态机 —— 「发送中返回」延后到发送�
   test('单个发送落定后 → 到点补刷新', () => {
     const { state, flushes } = run(1, 1, 1)
     expect(flushes).toEqual([true])
-    expect(state).toEqual({ deferred: true, inflight: 0, epoch: 1 })
+    expect(state).toEqual({ deferred: false, inflight: 0, epoch: 1 })
   })
 
-  test('多个并发发送：只有最后一次落定才到点，flush 恰好一次', () => {
+  test('多个并发发送：只有最后一次落定才补，且只补一次', () => {
     const { state, flushes } = run(1, 2, 2)
     expect(flushes).toEqual([false, true])
     expect(state.inflight).toBe(0)
+  })
+
+  test('补过一次之后，同一轮再落定不再补（「只补一次」的另一半）', () => {
+    let state = deferReload(initialDeferredReload(1))
+    state = beginSend(state, 1)
+    state = beginSend(state, 1)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(false)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(true)
+    state = clearDeferredReload(state)
+    // 补刷新之后又发了一条并落定：没有新的「欠刷新」，不该再补
+    state = beginSend(state, 1)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(false)
   })
 
   test('没被延后（正常 didShow 已重拉）→ 落定后不到点，避免多打一次', () => {
@@ -226,6 +252,22 @@ describe('DeferredReload 状态机 —— 「发送中返回」延后到发送�
     expect(state.inflight).toBe(1)
     state = settleSend(state, 2)
     expect(state.inflight).toBe(0)
+  })
+
+  test('同一 epoch 多减一次也不下溢（0 → 0）', () => {
+    const state = settleSend(initialDeferredReload(1), 1)
+    expect(state.inflight).toBe(0)
+  })
+
+  test('epoch 被 load 抬高（未换账号）时标记故意保留：代价是多一次 silent load', () => {
+    // 钉住 beginSend 跨 epoch 分支里 deferred 的存活语义：不 reset 的 epoch 抬升
+    // （当前只有登录态 effect 会这样）不该把「欠刷新」丢掉，宁可多补一次。
+    let state = deferReload(initialDeferredReload(1))
+    state = beginSend(state, 1)
+    state = beginSend(state, 2)
+    expect(state).toEqual({ deferred: true, inflight: 1, epoch: 2 })
+    state = settleSend(state, 2)
+    expect(isFlushDue(state)).toBe(true)
   })
 
   test('身份清场（reset）丢掉标记与计数：陈旧标记不会被新账号的落定消费', () => {

@@ -165,9 +165,12 @@ export default function Conversation() {
    * `silent`：**后台刷新**（「发送中返回」被延后到发送落定后补的那一次）。与用户主动
    * 进页 / 点重试不同，它发生在用户没有请求刷新的时刻，所以：
    * - 不把界面推进 `loading`（不闪骨架）；
-   * - 拉取失败时**保留**当前消息流与失败气泡，不整屏换成错误态 —— 否则「发送失败 +
-   *   弱网下补刷新也失败」会把失败气泡和它的「重试」一起盖掉（发送失败本就要留在原地给重试）。
-   * 详情态的失败仍照常反映：会话本身没了 / 读不到是另一回事。
+   * - 失败时**只做确认、不做降级**：历史半边失败保留当前消息流与失败气泡，详情半边
+   *   失败也不把已经 `ok` 的 `convState` 打回 `failed` —— 否则「发送失败 + 弱网下补刷新
+   *   也失败」会把失败气泡和它的「重试」一起盖掉（发送失败本就要留在原地给重试）。
+   *
+   * 注意这是**一次性 best-effort**：补刷新的标记在发起前就清掉了，这一次失败不会有
+   * 自动重试，也不会再次补；用户主动进页 / 点重试 / 下一次从子页返回才重新同步。
    */
   const load = useCallback(
     (options?: { silent?: boolean }) => {
@@ -189,7 +192,17 @@ export default function Conversation() {
         .then(([detail, page]) => {
           if (current !== epoch.current) return
           if (detail.status === 'ok') setConversation(detail.conversation)
-          setConvState(detail.status)
+          /**
+           * 后台刷新（silent）**只做确认、不做降级**：详情半边失败时不把已经 `ok` 的
+           * `convState` 打回 `failed`/`missing`。
+           *
+           * 两个请求是各自独立的，弱网下（正是「发送失败」的相关场景）`loadConversation`
+           * 与 `loadMessagePage` 往往一起失败；若这里照常写 `failed`，渲染会因为
+           * `convState !== 'ok'` 短路成整页「会话加载失败」，把刚刚失败的乐观气泡与它的
+           * 「重试」一起盖掉 —— 那正是 silent 要防的事。真的被删掉的会话，下一次用户主动
+           * 进页 / 点重试（非 silent）仍会如实反映。
+           */
+          if (!silent || detail.status === 'ok') setConvState(detail.status)
           if (!(silent && page.failed)) {
             setMessages(page.items)
             setNextCursor(page.nextCursor)
