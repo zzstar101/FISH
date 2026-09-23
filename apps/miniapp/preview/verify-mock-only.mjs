@@ -49,6 +49,7 @@ const ROUTES = [
   '/pages/watchers/index',
   '/pages/orders-buy/index',
   '/pages/orders-sell/index',
+  '/pages/following/index',
 ]
 
 /**

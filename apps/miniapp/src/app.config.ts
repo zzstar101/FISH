@@ -22,6 +22,7 @@ export default defineAppConfig({
     'pages/mylist/index',
     'pages/watchers/index',
     'pages/scan/index',
+    'pages/following/index',
   ],
   window: {
     backgroundTextStyle: 'light',

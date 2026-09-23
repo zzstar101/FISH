@@ -280,7 +280,12 @@ export default function Profile() {
   const STAT_CELLS: StatCell[] = [
     { key: 'favorites', label: '我的收藏', count: profile?.favoritesCount ?? null },
     { key: 'history', label: '历史浏览', count: profile?.historyCount ?? null },
-    { key: 'follow', label: '我的关注', count: profile?.followCount ?? null },
+    {
+      key: 'follow',
+      label: '我的关注',
+      url: '/pages/following/index',
+      count: profile?.followCount ?? null,
+    },
     {
       key: 'wish',
       label: '我的愿望',
