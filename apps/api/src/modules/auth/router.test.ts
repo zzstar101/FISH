@@ -4,7 +4,7 @@ import { createDb, type Db } from '@fish/db/client'
 import { sessions } from '@fish/db/schema/sessions'
 import { users, wechatIdentities } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
-import { loadServerEnv } from '@fish/shared/env'
+import { loadServerEnv, loadWechatEnv } from '@fish/shared/env'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
@@ -48,7 +48,15 @@ beforeAll(async () => {
   process.env.MAIL_OUTBOX_PATH = OUTBOX_PATH
   // 邮件 transport 必须显式声明；测试一律走 outbox。
   process.env.MAIL_TRANSPORT = 'outbox'
-  app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
+  app = createApp(
+    { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+    undefined,
+    undefined,
+    undefined,
+    {
+      transport: 'stub',
+    },
+  )
 })
 
 afterAll(async () => {
@@ -128,11 +136,13 @@ describe('POST /auth/register', () => {
   })
 
   test('WEB_ORIGIN 为 https 时会话 cookie 带 Secure', async () => {
-    const secureApp = createApp({
-      ...loadServerEnv(),
-      DATABASE_URL: scratchUrl,
-      WEB_ORIGIN: 'https://fish.example.com',
-    })
+    const secureApp = createApp(
+      { ...loadServerEnv(), DATABASE_URL: scratchUrl, WEB_ORIGIN: 'https://fish.example.com' },
+      undefined,
+      undefined,
+      undefined,
+      { transport: 'stub' },
+    )
 
     const res = await secureApp.request(
       '/auth/login',
@@ -918,7 +928,12 @@ describe('PENDING 限频预留（评审二轮 P1-1）', () => {
         },
       },
     })
-    const { router } = createAuthModule({ db: scratch, verification, secureCookie: false })
+    const { router } = createAuthModule({
+      db: scratch,
+      verification,
+      secureCookie: false,
+      wechat: { transport: 'off' },
+    })
     const first = router.request('/verification/code', postWith(cookie, { email }))
     try {
       await entered.promise
@@ -1106,5 +1121,68 @@ describe('POST /auth/phone/bind（#86 C：手机号绑定 stub）', () => {
     const bad = await app.request('/auth/phone/bind', postWith(cookie, { code: '12345' }))
     expect(bad.status).toBe(422)
     expect(await bad.json()).toMatchObject({ error: { code: 'PHONE_CODE_INVALID' } })
+  })
+})
+
+describe('WECHAT_TRANSPORT=off（#86 评审 P1：stub 与生产隔离）', () => {
+  // 不传 wechatEnv = 默认 off：登录 / 绑定入口显式 503，不静默降级 stub。
+  const offApp = createApp(
+    { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+    undefined,
+    undefined,
+    undefined,
+    { transport: 'off' },
+  )
+
+  test('微信登录入口关闭：503 WECHAT_DISABLED，不建会话不建映射', async () => {
+    const res = await offApp.request('/auth/wechat/session', post({ code: 'any-code' }))
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ error: { code: 'WECHAT_DISABLED' } })
+    expect(res.headers.getSetCookie()).toHaveLength(0)
+  })
+
+  test('手机号绑定入口关闭：503 WECHAT_DISABLED（已登录也不可绑）', async () => {
+    const studentNo = '202101000205'
+    await register({ studentNo, nickname: '关闭态用户' })
+    const cookie = sessionCookie(await login(studentNo))
+    const res = await offApp.request('/auth/phone/bind', postWith(cookie, { code: '19912345678' }))
+    expect(res.status).toBe(503)
+    expect(await res.json()).toMatchObject({ error: { code: 'WECHAT_DISABLED' } })
+    // 关闭态不改变已有会话：/me 仍然正常
+    const meRes = await offApp.request('/me', withCookie(cookie))
+    expect(meRes.status).toBe(200)
+  })
+
+  test('已有会话在关闭态仍可用：off 只挡新入口，不吊销存量登录', async () => {
+    const studentNo = '202101000206'
+    await register({ studentNo, nickname: '存量会话用户' })
+    const cookie = sessionCookie(await login(studentNo))
+    const meRes = await offApp.request('/me', withCookie(cookie))
+    expect(meRes.status).toBe(200)
+  })
+})
+
+describe('loadWechatEnv（#86 评审 P1：配置校验）', () => {
+  test('缺配置启动失败：不传 WECHAT_TRANSPORT 直接抛错（不允许静默回退 stub）', () => {
+    expect(() => loadWechatEnv({})).toThrow('WECHAT_TRANSPORT')
+  })
+
+  test('生产环境禁止 stub：NODE_ENV=production + stub 直接抛错', () => {
+    expect(() =>
+      loadWechatEnv({ WECHAT_TRANSPORT: 'stub', NODE_ENV: 'production' }, 'production'),
+    ).toThrow('禁止 WECHAT_TRANSPORT=stub')
+  })
+
+  test('live 必须带 appid + appSecret；off 恒可用', () => {
+    expect(() => loadWechatEnv({ WECHAT_TRANSPORT: 'live' })).toThrow('WECHAT_APPID')
+    expect(
+      loadWechatEnv({ WECHAT_TRANSPORT: 'live', WECHAT_APPID: 'wx123', WECHAT_APP_SECRET: 's' }),
+    ).toEqual({
+      transport: 'live',
+      appid: 'wx123',
+      appSecret: 's',
+    })
+    expect(loadWechatEnv({ WECHAT_TRANSPORT: 'off' })).toEqual({ transport: 'off' })
+    expect(loadWechatEnv({ WECHAT_TRANSPORT: 'stub' })).toEqual({ transport: 'stub' })
   })
 })

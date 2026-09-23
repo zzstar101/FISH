@@ -88,6 +88,12 @@ export function createApp(
   meetupEnv: MeetupTokenEnv = loadMeetupTokenEnv(),
   /** AI 润色上游配置（#141）：API-only，index.ts 用 loadAiPolishEnv 校验（transport 无默认值）。 */
   aiEnv: AiPolishEnv = loadAiPolishEnv(),
+  /**
+   * 微信身份配置（#86 评审 P1）：API-only，index.ts 用 loadWechatEnv 校验。
+   * transport 无默认值（off/stub/live），生产禁 stub；`off` 时登录/绑定入口 503 关闭。
+   * 测试传 `{ transport: 'stub' }` 显式开启；不传即 off，不会静默降级。
+   */
+  wechatEnv: import('@fish/shared/env').WechatEnv = { transport: 'off' },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -116,6 +122,7 @@ export function createApp(
             }),
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
+    wechat: wechatEnv,
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)

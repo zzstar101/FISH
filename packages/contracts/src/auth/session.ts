@@ -50,6 +50,12 @@ export const AuthErrorCodeSchema = z.enum([
   'UNAUTHENTICATED',
   /** #86 A：code2Session 换取失败（code 无效 / 过期 / 已用 / 映射损坏）。 */
   'WECHAT_CODE_INVALID',
+  /**
+   * #86 评审 P1：`WECHAT_TRANSPORT=off` 时微信登录 / 手机号绑定入口关闭。
+   * 503——不是客户端错误，也不是服务端故障，是「该能力未开通」的显式状态；
+   * 端上据此引导「微信登录暂不可用」，而不是当作登录失败无限重试。
+   */
+  'WECHAT_DISABLED',
   /** #86 C：phone code 解析失败（stub 下即「不是 11 位手机号」）。422。 */
   'PHONE_CODE_INVALID',
   /** #86 C：手机号已被其他账号绑定（唯一索引兜底并发换绑）。409。 */

@@ -39,6 +39,9 @@ export class WechatExchangeError extends Error {
  * stub Provider：`code` 即身份种子。形状与真实 openid 一致（`o` 前缀 + 27 位 base 字符），
  * 同一 code 恒得同一 openid——真实接口里 code 一次性，但「同一微信用户多次登录」
  * 的幂等性由 openid 唯一索引承担，stub 的确定性只是让这一语义在测试里可复现。
+ *
+ * #86 评审 P1：stub **不验证微信签发的凭证**，只能由 `WECHAT_TRANSPORT=stub` 显式开启
+ * （loader 在 `NODE_ENV=production` 下直接拒绝）；装配层不会无条件注入它。
  */
 export function createStubWechatIdentityProvider(): WechatIdentityProvider {
   const ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'
@@ -52,6 +55,48 @@ export function createStubWechatIdentityProvider(): WechatIdentityProvider {
         suffix += ALPHABET[byte % ALPHABET.length]
       }
       return { openid: `o${suffix}`, unionid: null }
+    },
+  }
+}
+
+/**
+ * live Provider：真实 `jscode2session`（GET api.weixin.qq.com，appid+secret+code）。
+ *
+ * - `errcode` 非 0（code 无效 / 过期 / 已用 / appid-secret 不匹配）→ `WechatExchangeError`，
+ *   router 翻译成 401 `WECHAT_CODE_INVALID`——不建会话、不建映射。
+ * - AppSecret 只存在于服务端进程，绝不进日志（错误信息只带 errcode/errmsg，不带 URL）。
+ */
+export function createLiveWechatIdentityProvider(deps: {
+  appid: string
+  appSecret: string
+}): WechatIdentityProvider {
+  return {
+    async exchange(code: string) {
+      const url = new URL('https://api.weixin.qq.com/sns/jscode2session')
+      url.searchParams.set('appid', deps.appid)
+      url.searchParams.set('secret', deps.appSecret)
+      url.searchParams.set('js_code', code)
+      url.searchParams.set('grant_type', 'authorization_code')
+      const res = await fetch(url)
+      if (!res.ok) {
+        throw new WechatExchangeError(`jscode2session HTTP ${res.status}`)
+      }
+      const body = (await res.json()) as {
+        openid?: string
+        unionid?: string
+        errcode?: number
+        errmsg?: string
+      }
+      // 40029 code 无效 / 40163 code 已用 / 45011 频率限制 / 40013 appid 不匹配……
+      if (body.errcode !== undefined && body.errcode !== 0) {
+        throw new WechatExchangeError(
+          `jscode2session errcode=${body.errcode} errmsg=${body.errmsg ?? ''}`,
+        )
+      }
+      if (!body.openid) {
+        throw new WechatExchangeError('jscode2session 响应缺少 openid')
+      }
+      return { openid: body.openid, unionid: body.unionid ?? null }
     },
   }
 }

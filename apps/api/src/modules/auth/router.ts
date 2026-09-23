@@ -19,7 +19,12 @@ import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
 import type { VerificationService } from './verification-service'
 import { VerificationError } from './verification-store'
-import { createStubWechatIdentityProvider, createWechatAuthService } from './wechat-service'
+import {
+  createLiveWechatIdentityProvider,
+  createStubWechatIdentityProvider,
+  createWechatAuthService,
+  type WechatIdentityProvider,
+} from './wechat-service'
 
 /** JSON 解析失败（空体 / 非 JSON）也按参数不合法处理，而不是让 Hono 抛 500。 */
 async function readJson(c: Context): Promise<unknown> {
@@ -49,23 +54,47 @@ export function createAuthModule(options: {
   verification: VerificationService
   /** 由 `WEB_ORIGIN` 的 scheme 推导，见 `session.ts`。 */
   secureCookie: boolean
+  /**
+   * 微信身份解析的显式配置（#86 评审 P1：stub 必须与生产隔离）。
+   * `off` = 登录 / 绑定入口关闭（503 WECHAT_DISABLED）；`stub` = 只允许非生产显式开启；
+   * `live` = 真实 jscode2session。**没有默认值**，调用方必须从 `loadWechatEnv()` 显式传入。
+   */
+  wechat: import('@fish/shared/env').WechatEnv
 }) {
   const cookie = createSessionCookie(options.secureCookie)
   const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
   const requireAuth = createRequireAuth({ cookie, service })
-  // #86 A：当前仓库没有小程序 AppSecret，真实 Provider（jscode2session）接入前
-  // 只有 stub 实现——「同一 code 同一 openid」的幂等语义与真实接口一致；
-  // 拿到真实凭证时只替换 provider，登录 / 建号 / 会话语义不变。
-  const wechat = createWechatAuthService({
-    db: options.db,
-    sessions: createSessions(options.db),
-    provider: createStubWechatIdentityProvider(),
-  })
+  const wechatSessions = createSessions(options.db)
+  // provider 只在 stub / live 下构造；off 下保持 null，两个入口在 handler 顶部显式 503。
+  const wechatProvider: WechatIdentityProvider | null =
+    options.wechat.transport === 'stub'
+      ? createStubWechatIdentityProvider()
+      : options.wechat.transport === 'live'
+        ? createLiveWechatIdentityProvider({
+            appid: options.wechat.appid,
+            appSecret: options.wechat.appSecret,
+          })
+        : null
+  const wechat =
+    wechatProvider !== null
+      ? createWechatAuthService({
+          db: options.db,
+          sessions: wechatSessions,
+          provider: wechatProvider,
+        })
+      : null
+  // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
+  const phoneResolver: ((code: string) => string) | null =
+    options.wechat.transport === 'stub' ? (code) => code.trim() : null
 
   const router = new Hono<{ Variables: AuthVariables }>()
 
   // ---- 微信登录（#86 A）：Miniapp 主身份入口 ----
   router.post('/wechat/session', async (c) => {
+    if (wechat === null) {
+      // WECHAT_TRANSPORT=off：能力未开通，503 显式状态，不当作登录失败
+      return c.json(errorBody('WECHAT_DISABLED', '微信登录暂未开通'), 503)
+    }
     const parsed = WechatSessionRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
 
@@ -80,13 +109,18 @@ export function createAuthModule(options: {
 
   // ---- 手机号绑定（#86 C）：只追加绑定，不动已有会话 ----
   router.post('/phone/bind', requireAuth, async (c) => {
+    if (phoneResolver === null) {
+      return c.json(errorBody('WECHAT_DISABLED', '手机号绑定暂未开通'), 503)
+    }
     const parsed = PhoneBindRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
 
     try {
       // stub：phone code 即明文手机号（getPhoneNumber 真实接入需要企业主体 + AppSecret，
-      // 到位后只替换这段解析，绑定语义不变）。11 位手机号在服务端再收口一次。
-      const phone = parsed.data.code.trim()
+      // 到位后在 resolver 内调 phonenumber.getPhoneNumber，绑定语义不变）。
+      // off / live 下 phoneResolver 为 null：live 的解析器接入前，绑定入口显式 503，
+      // 绝不把「格式正确的 code」当成已验证的手机号（格式正确 ≠ 持有该号码）。
+      const phone = phoneResolver(parsed.data.code)
       if (!/^1\d{10}$/.test(phone)) {
         return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效'), 422)
       }
