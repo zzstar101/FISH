@@ -944,10 +944,12 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     const secondIssue = await issue()
     assertEqual(secondIssue.status, 201, '卖家重复取码 → 201')
+    const secondToken = await readJson(secondIssue)
+    assertEqual(String(secondToken.code), meetupCode, '重复取码 6 位码不变（一单一码）')
     assertEqual(
-      String((await readJson(secondIssue)).code),
-      meetupCode,
-      '重复取码码值不变（一单一码）',
+      parseMeetupQrPayload(String(secondToken.qrPayload))?.token,
+      firstQr.token,
+      '重复取码二维码凭证不变（一单一码）',
     )
 
     // 不变量 ③：连错达阈值即锁，卖家重取码解锁且码值不变（#176「重取是现场解锁的唯一路径」）。
