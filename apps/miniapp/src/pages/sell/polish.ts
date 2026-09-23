@@ -19,6 +19,17 @@ export const POLISH_QUOTA_COARSE_SECONDS = 60
 export const POLISH_FIELD_ERROR_TOAST = '有字段没填对，改好再润色'
 
 /**
+ * `redacted === true` 时 sheet 里那行灰字。
+ *
+ * 它描述的是**送上游之前**做过脱敏，**不是**「最终候选里没有联系方式」：回填会把用户原文
+ * 原样还原（设计 §5.7），所以候选里照样可能出现他自己写过的号码 —— 本 PR 的真实链路实测就是
+ * `redacted:true` 且候选保留了 `13812345678`。早先写成「已为你的信息安全隐去联系方式」，
+ * 会让用户以为采用后发出去的内容已经不含联系方式（#185 审查 P2）。
+ */
+export const POLISH_REDACT_NOTE =
+  '发送给 AI 前已对联系方式脱敏；生成结果可能保留原文信息，请在发布前检查。'
+
+/**
  * 润色冷却。
  *
  * - `short`：≤60s，逐秒倒计时；

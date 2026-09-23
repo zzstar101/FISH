@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   nextPolishIndex,
   POLISH_QUOTA_COARSE_SECONDS,
+  POLISH_REDACT_NOTE,
   polishButtonText,
   polishCooldownFrom,
   polishFailureRoute,
@@ -198,5 +199,13 @@ describe('polishButtonText —— 入口按钮上的字', () => {
     expect(polishButtonText({ loading: false, cooldown: { kind: 'coarse' } })).toBe(
       '今日次数已用完',
     )
+  })
+})
+
+describe('POLISH_REDACT_NOTE —— 脱敏说明只描述「发送前」的处理', () => {
+  test('不声称最终内容已移除联系方式：回填会把用户原文还原，候选里照样可能有他写过的号码', () => {
+    expect(POLISH_REDACT_NOTE).toContain('发送给 AI 前')
+    expect(POLISH_REDACT_NOTE).toContain('发布前检查')
+    expect(POLISH_REDACT_NOTE).not.toMatch(/已(隐去|移除|删除|清除)/)
   })
 })

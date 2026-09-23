@@ -33,6 +33,7 @@ import {
 import {
   nextPolishIndex,
   POLISH_FIELD_ERROR_TOAST,
+  POLISH_REDACT_NOTE,
   type PolishCooldown,
   polishButtonText,
   polishCooldownFrom,
@@ -1073,9 +1074,10 @@ export default function Sell() {
                   {`第 ${polish.index + 1} / ${polish.candidates.length} 条 · 采用前不会覆盖你写的内容`}
                 </Text>
 
-                {/* 送上游前命中过脱敏规则：解释候选里为什么可能少了他写过的联系方式 */}
+                {/* 送上游前命中过脱敏规则。文案只说「发送前处理过」，不说「最终没有联系方式」——
+                    回填会把用户原文还原，候选里照样可能有他写过的号码 */}
                 {polish.redacted ? (
-                  <Text className="sell__sheet-redact">已为你的信息安全隐去联系方式</Text>
+                  <Text className="sell__sheet-redact">{POLISH_REDACT_NOTE}</Text>
                 ) : null}
 
                 <View className="sell__cand">
