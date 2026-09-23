@@ -12,7 +12,7 @@
  *
  * 两条都不能少：
  * - 只认 `MOCK_FALLBACK_ENABLED` → `dev:weapp` 的日常开发也满足它（`__ALLOW_MOCK_FALLBACK__`
- *   含 `NODE_ENABLED === 'development'`），演示数据会顶掉真实空态；
+ *   含 `NODE_ENV === 'development'`），演示数据会顶掉真实空态；
  * - 只认 `DEMO_AUTH_ENABLED` → 演示登录态开着但真起了后端时，看不出「真实构建长什么样」。
  *
  * ## 演示数据不得覆盖真实结果

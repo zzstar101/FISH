@@ -97,8 +97,13 @@
 
 /*
  * 演示数据说明带。这一页没有后端，演示构建摆的是 fixture —— 界面上必须能认出来。
- * 用与「隐私说明条」同一套中性玻璃材质（`watchers` 的 `.wt__banner`），
- * 不新造色值；真实构建下不会渲染（那时 `items` 为空）。
+ * 材质取仓库既有的中性玻璃令牌（`--glass-bg` + `--border`），不新造色值；
+ * 真实构建下不会渲染（那时 `items` 为空）。
+ *
+ * ⚠️ 与 `watchers` 的 `.wt__banner` **只是同族、不是同一套**：那边多一层
+ * `backdrop-filter: blur(20px)`、圆角 30、留白 24、图标是品牌色圆底。
+ * 这一条是压在列表上方的说明带，不叠模糊（页面里已经有一层 `.cmt__bg` 渐变），
+ * 所以尺寸与图标形态都更轻 —— 别照着 `.wt__banner` 的数值改这里。
  */
 .cmt__demo {
   display: flex;
@@ -169,13 +174,15 @@
   height: 100%;
 }
 
-/* 压在色块上的品类小字（稿 `.thumb span`） */
+/* 压在色块上的品类小字（稿 `.thumb span`）。稿里是白 92% + 墨色阴影；
+   仓库没有 92% 白这个令牌，取 `--surface`（与同模板的收藏页 `.fav__thumb-cat` 同款），
+   阴影用 `--ink-weak-3`（正是稿里那个 rgba(23,35,61,.18)）。 */
 .cmt__thumb-tx {
   position: relative;
   font-size: 19px;
   letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.92);
-  text-shadow: 0 1px 2px rgba(23, 35, 61, 0.18);
+  color: var(--surface);
+  text-shadow: 0 1px 2px var(--ink-weak-3);
 }
 
 .cmt__main {
@@ -334,8 +341,19 @@
   @include ellipsis;
 }
 
-/* 星级只在交易评价行出现（商品留言在契约里就没有评分字段）。
-   用 ICONS 里的两枚星形 PNG（满格 starAccent / 空格 starLine），不内联字形 —— 仓库铁律。 */
+/*
+ * 星级只在交易评价行出现（商品留言在契约里就没有评分字段）。
+ *
+ * ⚠️ **与稿有可见色差，是有意为之**：稿里 `.stars` 是 `color: var(--warn)`（琥珀 #FFB84D）
+ * 的文字字形「★」。仓库铁律要求图标只从 `@/assets/lib-icons` 的 `ICONS` 取（PNG），
+ * 而那里**没有琥珀色的星**：满格只有 `starAccent`（实为 `#4285FF` 品牌蓝）、
+ * 空格只有 `starLine`（`#A8C5FA`）。新增一枚 `star-warn` 资源不在本页的文件白名单里，
+ * 所以本轮先用现成的两枚 —— 结果是星是蓝的、不是稿里的琥珀。
+ * 已作为「已知偏离」写进 PR 正文，等 Owner 定是补资源还是就这样。
+ *
+ * 内联字形（`<Text>★</Text>` 配 `color: var(--warn)`）能完全对上稿，但会绕过铁律、且
+ * 字形随系统字体变，所以没走这条路。
+ */
 .cmt__stars {
   flex: 0 0 auto;
   display: inline-flex;

@@ -151,9 +151,15 @@ export default function MyComments() {
   /**
    * 行上「查看商品 / 查看订单」。
    *
-   * 本页的行**只在演示构建里存在**（`loadMyComments` 的说明），而演示数据里的商品与
-   * 交易在库里不存在 —— 跳过去必然 404。所以这里给**明确的演示说明**，不假装跳成功，
-   * 也不假装「已跳转」。
+   * **跳不了的真实原因不是「演示数据不存在」**：`DEMO_MY_COMMENTS` 里有几条确实指向
+   * fixture 里真实存在的商品与成交（C05 → t-104、C06 → t-106、C01 → 索尼那件）。
+   * 真正的原因是**行模型里没有可跳转的 id** —— `MyComment` 只有评论自己的 `id`，
+   * 没有 `listingId` / `transactionId`（契约也没有「我发过的评论」读模型可参照，
+   * 见 `@/features/comments/mine` 的文件头）。拿不到目标 id 就没法跳，所以给说明 toast，
+   * 不假装跳成功、也不跳到一个猜出来的页面。
+   *
+   * ⚠️ 将来接线时**先给 `MyComment` 补上这两个 id**，再让这里真跳；不要因为看错了
+   * 上面那句老注释（曾写成「演示数据在库里不存在」）而以为只要换成真实数据就能跳。
    */
   const openRow = (item: MyComment) => {
     if (!demo) {
@@ -161,7 +167,7 @@ export default function MyComments() {
       toast(`${viewTargetOf(item.kind)}待接入`)
       return
     }
-    toast(`演示数据：${viewTargetOf(item.kind)}在库里不存在，暂不跳转`)
+    toast(`演示数据：这条没有${viewTargetOf(item.kind)}的 id，暂不跳转`)
   }
 
   /** 删除：没有端点，如实说明，不做本地假删除（与真实数据不一致） */
@@ -250,7 +256,11 @@ export default function MyComments() {
         真实构建下这一页只有一句缺口说明（`NO_SOURCE_COPY`，与 `segment` 无关）、
         计数也不渲染（见文件头），所以三个胶囊点下去只会换选中态、屏幕上一字不变 ——
         那是一个「可点却完全无效」的控件，等于在暗示这里能按类型筛。
-        没有数据源就不摆分段，与同族页面在无数据源时的做法一致。
+
+        ⚠️ 这是**本页自己的**判据，不是「跟同族页面一样」：同一模板下的收藏页在同样
+        没有数据源的情况下是**常驻渲染**分段的（`pages/favorites` 的 `.fav__seg` 没有
+        任何门禁）。两页取舍不同，因为那边的分段切完至少会换一套空态文案、这边不会。
+        别拿这句当先例引用。
 
         `.cmt__head` 本身**始终渲染**：它的 `padding-top: 168px` 是给漂浮导航条留的
         顶栏高度，拿掉整块会让空态钻到返回钮与标题下面。

@@ -222,6 +222,9 @@ const STAR_KEYS = ['s1', 's2', 's3', 's4', 's5'] as const
  * 星级槽位（5 格，`filled` = 满格）。页面把满格映射到 `ICONS.starAccent`、
  * 空格映射到 `ICONS.starLine`（照仓库铁律：**图标只从 `@/assets/lib-icons` 取**）。
  *
+ * ⚠️ `ICONS` 里没有稿子要的琥珀色星（`starAccent` 实为品牌蓝 #4285FF），所以画出来
+ * 是蓝星不是稿里的琥珀星 —— 详见 `pages/comments/index.scss` 的 `.cmt__stars` 注释。
+ *
  * **`null` 返回 `null`** —— 一颗都不画，既不是「0 星」也不是「5 星」：商品留言在契约里
  * 就没有评分字段，画一排星星等于替它编了一个分数（给满分尤其糟）。页面据此整块不渲染。
  *

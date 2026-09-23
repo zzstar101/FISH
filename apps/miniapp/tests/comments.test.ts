@@ -134,12 +134,39 @@ describe('我的评论 · 演示数据自洽', () => {
     }
   })
 
-  test('两条真实成交的评价时间晚于成交时间（订单页「已于 …」的日期）', () => {
-    // 交易评价的时间是「面交完成之后」才有的事。稿子这两行写的是 5 月，而它们引用的
-    // 成交在 8 月 —— 照抄会显示成「面交前两个月就评价了」。这里锁住两条真实成交的先后。
-    const byId = new Map(DEMO_MY_COMMENTS.map((item) => [item.id, item]))
-    expect(byId.get('C05')?.timeLabel).toBe('8 月 21 日') // t-104 完成于 2026-08-19
-    expect(byId.get('C06')?.timeLabel).toBe('8 月 14 日') // t-106 完成于 2026-08-12
+  /**
+   * 交易评价的时间必须是**面交完成之后**才有的事。
+   *
+   * 稿子里这两行写的是 5 月，而它们引用的成交在 8 月 —— 照抄会显示成「面交前两个月
+   * 就评价了」。这里**从 `TRANSACTIONS` 的 `completedAt` 反推**，不写死字符串：
+   * 写死的话，把 t-104 的完成时间挪到 9 月，本用例照样绿、页面上却已经自相矛盾。
+   * 月份数字与 `timeLabel` 里的中文月份同源（都是本地时区，同订单页的日期口径）。
+   */
+  test('两条真实成交的评价时间不早于成交日期（订单页「已于 …」的日期）', () => {
+    const toMonthDay = (iso: string): { month: number; day: number } => {
+      const at = new Date(iso)
+      return { month: at.getMonth() + 1, day: at.getDate() }
+    }
+
+    for (const [txId, commentId] of [
+      ['t-104', 'C05'],
+      ['t-106', 'C06'],
+    ] as const) {
+      const tx = TRANSACTIONS.find((row) => row.id === txId)
+      expect(tx?.status).toBe('COMPLETED')
+      // 契约保证 COMPLETED 必带 completedAt（订单页「已于 …」就是它）
+      expect(tx?.completedAt).toBeString()
+      const settled = toMonthDay(tx?.completedAt as string)
+
+      const item = DEMO_MY_COMMENTS.find((row) => row.id === commentId)
+      const parsed = /^(\d+) 月 (\d+) 日$/.exec(item?.timeLabel ?? '')
+      expect(parsed).not.toBeNull()
+
+      const [, month, day] = parsed as RegExpExecArray
+      // 同月同日也允许（当天面交、当场评价）；早于成交日就是错的
+      expect(Number(month)).toBe(settled.month)
+      expect(Number(day)).toBeGreaterThanOrEqual(settled.day)
+    }
   })
 
   /**
