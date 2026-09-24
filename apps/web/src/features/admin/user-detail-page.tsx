@@ -77,6 +77,26 @@ export function UserDetailPage() {
           <StatCell label="已售出" value={listingStats.SOLD} />
           <StatCell label="已下架" value={listingStats.OFFLINE} />
         </div>
+        {/* 交易查询入口（#73 PR4）：交易页的 buyerId / sellerId 是 URL-only 参数，
+            这里正是它们的来源。买家与卖家分成两个链接——同一个请求里同时带两个 id
+            会被后端 AND 起来，结果恒为空。 */}
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line pt-3 text-sm">
+          <span className="text-ink-3">交易记录</span>
+          <Link
+            className="text-brand hover:underline"
+            search={{ buyerId: user.id }}
+            to="/admin/transactions"
+          >
+            作为买家
+          </Link>
+          <Link
+            className="text-brand hover:underline"
+            search={{ sellerId: user.id }}
+            to="/admin/transactions"
+          >
+            作为卖家
+          </Link>
+        </div>
       </Card>
 
       {/* 治理（#73 PR3）：限制发布 / 封禁 / 解除限制。按钮集合随当前生效中的限制收敛：

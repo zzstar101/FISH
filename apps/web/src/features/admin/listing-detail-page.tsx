@@ -85,6 +85,18 @@ export function ListingDetailPage() {
         </Link>
       </Card>
 
+      {/* 交易查询入口（#73 PR4）：交易页的 listingId 是 URL-only 参数，这里正是来源。 */}
+      <Card className="p-4">
+        <h2 className="mb-2 font-semibold text-[15px]">交易</h2>
+        <Link
+          className="text-sm text-brand hover:underline"
+          search={{ listingId: listing.id }}
+          to="/admin/transactions"
+        >
+          查看该商品的交易
+        </Link>
+      </Card>
+
       {/* 治理（#73 PR3）：下架 / 恢复。按钮集合随当前状态收敛——已下架的商品只给
           「恢复」，避免后端必然 409 的死路；交易中 / 已售出的商品不给动作，
           因为后端的条件更新会拒绝，这里提前收起来。恢复的目标状态由后端从

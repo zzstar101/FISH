@@ -221,6 +221,23 @@ export type ListModerationQueueCriteria = {
   limit: number
 }
 
+/**
+ * 审核记录检索参数（#73 治理半场 PR4）。
+ *
+ * 与队列（`ListModerationQueueCriteria`）的关键区别：这里**没有任何内置收窄**——
+ * 队列强制「只在审商品 + 每条 listing 只留最新 REVIEW 记录」，历史检索不能带这两个条件，
+ * 否则被人工决定过的记录就再也查不到了。筛选全部由调用方显式给出。
+ */
+export type ListModerationRecordsCriteria = {
+  decision: string | undefined
+  listingId: string | undefined
+  q: string | undefined
+  createdFrom: Date | undefined
+  createdTo: Date | undefined
+  cursor: { createdAt: string; id: string } | null
+  limit: number
+}
+
 export type ListAdminTransactionsCriteria = {
   q: string | undefined
   status: string | undefined
@@ -262,6 +279,11 @@ export interface AdminStore {
   getOverview(): Promise<OverviewRow>
   listAuditLogs(criteria: ListAuditLogsCriteria): Promise<AuditLogRow[]>
   listModerationQueue(criteria: ListModerationQueueCriteria): Promise<ModerationQueueRow[]>
+  /**
+   * 审核记录检索（#73 治理半场 PR4）：已在 REVIEW 队列之外的历史记录。
+   * 不内置任何收窄（见 `ListModerationRecordsCriteria`），筛选由 criteria 显式给出。
+   */
+  listModerationRecords(criteria: ListModerationRecordsCriteria): Promise<ModerationQueueRow[]>
   getModerationDetail(recordId: string): Promise<ModerationDetailRow | null>
   decideModeration(input: {
     recordId: string
@@ -656,6 +678,54 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
               AND latest.decision = 'REVIEW'
             ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
           )
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT ${criteria.limit + 1}
+      `)
+
+      return rowsOf(result).map((row) => ({
+        id: String(row.id),
+        createdAtCursor: String(row.created_at_cursor),
+        record: moderationRecordFromRow(row),
+        listing: moderationListingFromRow(row),
+        seller: { id: String(row.seller_id), nickname: String(row.seller_nickname) },
+      }))
+    },
+
+    /**
+     * 审核记录检索（#73 治理半场 PR4）。
+     *
+     * 与队列的差别只在 WHERE：队列写死 `l.moderation_status='REVIEW'` + 「每条 listing 只留
+     * 最新 REVIEW 记录」，这里两个都不要，否则人工决定过的记录会从检索里消失——那正是
+     * 「已经离开 REVIEW 队列的记录要有检索入口」要解决的问题。
+     *
+     * `q` 只搜 `listings.title`，不搜 `title_snapshot`：快照是当时的内容，搜它会得到
+     * 与当前标题不符的结果，管理员按标题找不到对应的行。
+     */
+    async listModerationRecords(criteria) {
+      const conditions: SQL[] = []
+      if (criteria.decision)
+        conditions.push(sql`r.decision = ${criteria.decision}::moderation_decision`)
+      if (criteria.listingId) conditions.push(sql`r.listing_id = ${criteria.listingId}`)
+      if (criteria.q) conditions.push(listingSearchCondition('l', criteria.q))
+      if (criteria.createdFrom) conditions.push(sql`r.created_at >= ${criteria.createdFrom}`)
+      if (criteria.createdTo) conditions.push(sql`r.created_at < ${criteria.createdTo}`)
+      if (criteria.cursor) {
+        conditions.push(cursorCondition(sql`r.created_at`, sql`r.id`, criteria.cursor))
+      }
+
+      const result = await db.execute(sql`
+        SELECT r.id, r.listing_id, r.seller_id, r.action,
+               r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
+               r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
+               l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
+               l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
+               l.moderation_reason, l.created_at AS listing_created_at,
+               u.id AS seller_id, u.nickname AS seller_nickname
+        FROM listing_moderation_records r
+        JOIN listings l ON l.id = r.listing_id
+        JOIN users u ON u.id = r.seller_id
+        ${conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``}
         ORDER BY r.created_at DESC, r.id DESC
         LIMIT ${criteria.limit + 1}
       `)

@@ -37,6 +37,7 @@ import { Route as AdminListingsIndexRouteImport } from './routes/admin.listings.
 import { Route as AdminListingsListingIdRouteImport } from './routes/admin.listings.$listingId'
 import { Route as AdminModerationIndexRouteImport } from './routes/admin.moderation.index'
 import { Route as AdminModerationRecordIdRouteImport } from './routes/admin.moderation.$recordId'
+import { Route as AdminModerationRecordsRouteImport } from './routes/admin.moderation.records'
 import { Route as AdminReportsIndexRouteImport } from './routes/admin.reports.index'
 import { Route as AdminReportsReportIdRouteImport } from './routes/admin.reports.$reportId'
 import { Route as AdminUsersIndexRouteImport } from './routes/admin.users.index'
@@ -182,6 +183,11 @@ const AdminModerationRecordIdRoute = AdminModerationRecordIdRouteImport.update({
   path: '/moderation/$recordId',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminModerationRecordsRoute = AdminModerationRecordsRouteImport.update({
+  id: '/moderation/records',
+  path: '/moderation/records',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminReportsIndexRoute = AdminReportsIndexRouteImport.update({
   id: '/reports/',
   path: '/reports/',
@@ -230,6 +236,7 @@ export interface FileRoutesByFullPath {
   '/profile/': typeof ProfileIndexRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
+  '/admin/moderation/records': typeof AdminModerationRecordsRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
@@ -263,6 +270,7 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileIndexRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
+  '/admin/moderation/records': typeof AdminModerationRecordsRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/listings': typeof AdminListingsIndexRoute
@@ -298,6 +306,7 @@ export interface FileRoutesById {
   '/profile/': typeof ProfileIndexRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
+  '/admin/moderation/records': typeof AdminModerationRecordsRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
@@ -334,6 +343,7 @@ export interface FileRouteTypes {
     | '/profile/'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
+    | '/admin/moderation/records'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/listings/'
@@ -367,6 +377,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
+    | '/admin/moderation/records'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/listings'
@@ -401,6 +412,7 @@ export interface FileRouteTypes {
     | '/profile/'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
+    | '/admin/moderation/records'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/listings/'
@@ -631,6 +643,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminModerationRecordIdRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/moderation/records': {
+      id: '/admin/moderation/records'
+      path: '/moderation/records'
+      fullPath: '/admin/moderation/records'
+      preLoaderRoute: typeof AdminModerationRecordsRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/reports/': {
       id: '/admin/reports/'
       path: '/reports'
@@ -668,6 +687,7 @@ interface AdminRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
   AdminListingsListingIdRoute: typeof AdminListingsListingIdRoute
   AdminModerationRecordIdRoute: typeof AdminModerationRecordIdRoute
+  AdminModerationRecordsRoute: typeof AdminModerationRecordsRoute
   AdminReportsReportIdRoute: typeof AdminReportsReportIdRoute
   AdminUsersUserIdRoute: typeof AdminUsersUserIdRoute
   AdminListingsIndexRoute: typeof AdminListingsIndexRoute
@@ -682,6 +702,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
   AdminListingsListingIdRoute: AdminListingsListingIdRoute,
   AdminModerationRecordIdRoute: AdminModerationRecordIdRoute,
+  AdminModerationRecordsRoute: AdminModerationRecordsRoute,
   AdminReportsReportIdRoute: AdminReportsReportIdRoute,
   AdminUsersUserIdRoute: AdminUsersUserIdRoute,
   AdminListingsIndexRoute: AdminListingsIndexRoute,

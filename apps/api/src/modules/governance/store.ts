@@ -32,9 +32,11 @@ export type RestrictionRow = {
 /**
  * 写入口被限制挡住的范围。
  *
- * - `publish`：发布入口（建商品 / 改商品 / 重新上架）。`PUBLISH_RESTRICT` 与 `BAN` 都挡。
- * - `write`：其它写入口（留言、聊天）。只挡 `BAN`——「限制发布」不扩大解释成禁言，
- *   否则管理员点一下「限制发布」就把用户变成全站哑巴，超出该动作的语义。
+ * - `publish`：发布入口（建商品 / 改商品 / 重新上架 / 自行下架 / 媒体消息 / 发愿望及
+ *   其改、关、成交）。`PUBLISH_RESTRICT` 与 `BAN` 都挡。
+ * - `write`：其余写入口（留言、聊天、上传、资料、交易确认、AI 问答等）。只挡 `BAN`
+ *   ——「限制发布」不扩大解释成禁言，否则管理员点一下「限制发布」就把用户变成全站哑巴，
+ *   超出该动作的语义。挂载清单见 `app.ts`（每个 `guard:` 就是一处）。
  */
 export type RestrictionScope = 'publish' | 'write'
 
@@ -143,11 +145,11 @@ export function createSqlGovernanceStore(_db: Db): GovernanceStore {
         .where(
           and(
             eq(userRestrictions.userId, userId),
-            eq(userRestrictions.status, 'ACTIVE'),
+            // 直接把常量插进 typed `and(...)` 而不是重抄一遍谓词（对抗审查 M1）：
+            // ACTIVE_RESTRICTION_WHERE 是 `sql` 片段，可以作为 and() 的参数展开，
+            // `expires_at` 的边界若在这里漂移，写守卫就会与 Overview / 管理端列表口径不一。
+            ACTIVE_RESTRICTION_WHERE,
             inArray(userRestrictions.type, SCOPE_TYPES[scope]),
-            // 与 `ACTIVE_RESTRICTION_WHERE` 同源的 `expires_at` 判定：必须用 SQL `now()`
-            // 而不是 JS `new Date()`，否则与 service 的判定不是同一个时钟。
-            sql`(${userRestrictions.expiresAt} IS NULL OR ${userRestrictions.expiresAt} > now())`,
           ),
         )
         .limit(1)

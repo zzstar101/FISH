@@ -5,6 +5,7 @@ import type {
   AdminMeResponse,
   AdminModerationDetail,
   AdminModerationQueue,
+  AdminModerationRecords,
   AdminOverview,
   AdminTransactionPage,
   AdminUserDetail,
@@ -17,6 +18,7 @@ import {
   AdminMeResponseSchema,
   AdminModerationDetailSchema,
   AdminModerationQueueSchema,
+  AdminModerationRecordsSchema,
   AdminOverviewSchema,
   AdminTransactionPageSchema,
   AdminUserDetailSchema,
@@ -72,6 +74,16 @@ export type AdminAuditLogsQuery = {
 }
 
 export type AdminModerationQueueQuery = { cursor?: string; limit?: number }
+/** 审核记录检索参数（#73 治理半场 PR4）。 */
+export type AdminModerationRecordsQuery = {
+  decision?: string
+  listingId?: string
+  q?: string
+  createdFrom?: string
+  createdTo?: string
+  cursor?: string
+  limit?: number
+}
 export type AdminReportsQuery = {
   status?: string
   targetType?: string
@@ -137,6 +149,20 @@ export async function fetchAdminModerationQueue(
 ): Promise<AdminModerationQueue> {
   return AdminModerationQueueSchema.parse(
     await apiRequest(`/admin/moderation/queue${queryString(query)}`),
+  )
+}
+
+/**
+ * 审核记录检索（#73 治理半场 PR4）。
+ *
+ * 这里手写 `/admin/moderation/records` 与 `api.ts` 其它函数一致（该文件历史统一硬编码
+ * 相对路径，`ADMIN_ROUTES` 只服务 API 侧与测试）。
+ */
+export async function fetchAdminModerationRecords(
+  query: AdminModerationRecordsQuery,
+): Promise<AdminModerationRecords> {
+  return AdminModerationRecordsSchema.parse(
+    await apiRequest(`/admin/moderation/records${queryString(query)}`),
   )
 }
 

@@ -14,6 +14,7 @@ import {
   type AdminListingsQuery,
   type AdminListQuery,
   type AdminModerationQueueQuery,
+  type AdminModerationRecordsQuery,
   type AdminReportsQuery,
   type AdminTransactionsQuery,
   banAdminUser,
@@ -25,6 +26,7 @@ import {
   fetchAdminMe,
   fetchAdminModerationDetail,
   fetchAdminModerationQueue,
+  fetchAdminModerationRecords,
   fetchAdminOverview,
   fetchAdminReport,
   fetchAdminReports,
@@ -55,6 +57,8 @@ export const adminKeys = {
   auditLogs: (query: AdminAuditLogsQuery) => ['admin', 'audit-logs', query] as const,
   moderationQueue: (query: AdminModerationQueueQuery) =>
     ['admin', 'moderation-queue', query] as const,
+  moderationRecords: (query: AdminModerationRecordsQuery) =>
+    ['admin', 'moderation-records', query] as const,
   moderationDetail: (recordId: string) => ['admin', 'moderation', recordId] as const,
   reports: (query: AdminReportsQuery) => ['admin', 'reports', query] as const,
   report: (reportId: string) => ['admin', 'report', reportId] as const,
@@ -134,6 +138,17 @@ export function useAdminModerationQueue(query: AdminModerationQueueQuery) {
   return useQuery({
     queryKey: adminKeys.moderationQueue(query),
     queryFn: () => fetchAdminModerationQueue(query),
+  })
+}
+
+/**
+ * 审核记录检索（#73 治理半场 PR4）。key 与队列**不同名**：两者的响应内容不重叠
+ * （队列是待审清单，这里是已处理历史），同名会让切 Tab 时命中对方缓存。
+ */
+export function useAdminModerationRecords(query: AdminModerationRecordsQuery) {
+  return useQuery({
+    queryKey: adminKeys.moderationRecords(query),
+    queryFn: () => fetchAdminModerationRecords(query),
   })
 }
 

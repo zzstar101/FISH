@@ -18,6 +18,8 @@ const NAV_ITEMS = [
   { to: '/admin/users' as const, label: '用户' },
   { to: '/admin/listings' as const, label: '商品' },
   { to: '/admin/moderation' as const, label: '审核队列' },
+  // 审核记录检索（#73 PR4）：队列只列待审商品，已处理的历史从这里查。
+  { to: '/admin/moderation/records' as const, label: '审核记录' },
   // 举报（#73）：与审核队列分开——处理举报不等于处罚用户（grill Q9）。
   { to: '/admin/reports' as const, label: '举报处理' },
   { to: '/admin/transactions' as const, label: '交易查询' },

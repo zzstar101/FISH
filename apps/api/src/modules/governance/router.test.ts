@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
-import { AdminOverviewSchema } from '@fish/contracts/admin/schema'
+import { AdminOverviewSchema, AdminUserDetailSchema } from '@fish/contracts/admin/schema'
 import { COMMENT_ROUTES } from '@fish/contracts/comments/routes'
 import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import { createDb, type Db } from '@fish/db/client'
@@ -750,6 +750,31 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     )
     expect(create.status).toBe(403)
     expect(await create.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
+  })
+
+  /**
+   * 用户详情在目标用户**有生效中的限制**时也必须 200（对抗审查 F3）。
+   *
+   * store 返回的是 Date 对象，`AdminUserDetailSchema.activeRestrictions` 要的是 ISO
+   * 字符串。漏掉这层转换时，ZodError 不是 AdminError，会一路逃到 app.onError 变成 500。
+   * 而「契约字段存在的原因」恰恰是这个场景——治理按钮要靠它反映真实状态，
+   * 于是最有用的那条查询正好是崩掉的那条。
+   *
+   * 放在本文件：这里才有真实的限制行（RESTRICTED 已被上面的用例封禁）。
+   */
+  test('有生效限制的用户详情返回 200 且带出 activeRestrictions', async () => {
+    const res = await app.request(ADMIN_ROUTES.userDetail(RESTRICTED), {
+      headers: { cookie: adminACookie },
+    })
+    expect(res.status).toBe(200)
+    const body = AdminUserDetailSchema.parse(await res.json())
+    expect(body.user.id).toBe(RESTRICTED)
+    // 至少一条 BAN：上面的封禁用例刚给这个用户写了生效中的限制。
+    expect(body.activeRestrictions.length).toBeGreaterThan(0)
+    const ban = body.activeRestrictions.find((row) => row.type === 'BAN')
+    expect(ban).toBeDefined()
+    expect(ban?.expiresAt).toBeNull()
+    expect(new Date(ban?.createdAt ?? '').getTime()).toBeGreaterThan(0)
   })
 
   /**

@@ -89,6 +89,18 @@ export const REPORT_STATUS_TONE: Record<string, 'warning' | 'success' | 'neutral
   REJECTED: 'neutral',
 }
 
+/** 审核判定（机器与人工共用同一值域，见 `@fish/contracts/moderation/schema`）。 */
+export const MODERATION_DECISION_LABEL: Record<string, string> = {
+  ALLOW: '通过',
+  BLOCK: '拦截',
+  REVIEW: '待审核',
+}
+
+/** 审核判定的徽标色调：REVIEW 是待处理态，其余是终态。 */
+export const MODERATION_DECISION_VARIANT: Record<string, 'default' | 'secondary'> = {
+  REVIEW: 'secondary',
+}
+
 export function statusLabel(map: Record<string, string>, value: string): string {
   return map[value] ?? value
 }

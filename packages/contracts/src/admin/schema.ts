@@ -264,7 +264,14 @@ export const AdminOverviewSchema = z.object({
   pendingReports: z.number().int().nonnegative(),
   /** 近 7 日新增举报数（含已处理），`reports.created_at >= now() - 7 days`。 */
   reportsLast7d: z.number().int().nonnegative(),
-  /** 生效中的限制数：`user_restrictions.status = 'ACTIVE'` 的全量 count。 */
+  /**
+   * 生效中的限制数：`user_restrictions` 的全量 count，谓词是
+   * `status = 'ACTIVE' AND (expires_at IS NULL OR expires_at > now())`。
+   *
+   * `expires_at` 是惰性判断（没有定时任务，到期行在表里仍是 ACTIVE），所以必须和读时
+   * 同一个谓词。写成裸 `status='ACTIVE'` 会把已过期但仍标 ACTIVE 的行算进来，Overview
+   * 虚高，且与写入口的放行行为不一致。
+   */
   activeRestrictions: z.number().int().nonnegative(),
 })
 export type AdminOverview = z.infer<typeof AdminOverviewSchema>
@@ -383,6 +390,17 @@ export const AdminModerationDetailSchema = z.object({
 })
 export type AdminModerationDetail = z.infer<typeof AdminModerationDetailSchema>
 
+/**
+ * 审核记录检索（#73 治理半场 PR4）：与 `AdminModerationQueueSchema` 同一条目形状，
+ * 但**不带**「只留每条 listing 最新 REVIEW 记录」和「只列待审商品」这两个收窄——
+ * 队列是工作清单，这里是已经离开队列的历史（含 ALLOW / BLOCK / 仍 REVIEW 的）。
+ */
+export const AdminModerationRecordsSchema = z.object({
+  items: z.array(AdminModerationQueueItemSchema),
+  nextCursor: z.string().nullable(),
+})
+export type AdminModerationRecords = z.infer<typeof AdminModerationRecordsSchema>
+
 export const AdminTransactionSchema = z.object({
   id: z.uuid(),
   listingId: z.uuid(),
@@ -466,6 +484,23 @@ export const AdminAuditLogsQuerySchema = z.strictObject({
 })
 
 export const AdminModerationQueueQuerySchema = z.strictObject({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+})
+
+/**
+ * 审核记录检索参数（#73 治理半场 PR4）。与 `AdminModerationQueueQuerySchema` 的区别只有
+ * 筛选维度——分页口径（`limit` 默认 20 封顶 50、cursor 形态）完全一致。
+ */
+export const AdminModerationRecordsQuerySchema = z.strictObject({
+  /** 机器 / 人工判定。`REVIEW` 会同时列出机器判 REVIEW 与已被人工决定的记录。 */
+  decision: ModerationDecisionSchema.optional(),
+  listingId: z.uuid().optional(),
+  /** 商品标题子串搜索（ILIKE，`%_\` 转义）。不搜描述快照：那会搜到已下架内容。 */
+  q: z.string().trim().min(1).max(50).optional(),
+  /** 同 `AdminListingsQuerySchema`：左闭右开。 */
+  createdFrom: z.iso.datetime().optional(),
+  createdTo: z.iso.datetime().optional(),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 })

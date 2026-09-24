@@ -2,6 +2,7 @@ import {
   AdminAuditLogsQuerySchema,
   AdminListingsQuerySchema,
   AdminModerationQueueQuerySchema,
+  AdminModerationRecordsQuerySchema,
   AdminTargetIdSchema,
   AdminTransactionQuerySchema,
   AdminUsersQuerySchema,
@@ -182,6 +183,19 @@ export function createAdminRouter(options: AdminRouterOptions) {
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
     try {
       return c.json(await service.listModerationQueue(parsed.data), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // 审核记录检索（#73 治理半场 PR4）：必须注册在 `/moderation/:recordId` **之前**。
+  // 否则字符串 "records" 会被 `:recordId` 吃掉，`requireTargetId` 判非 UUID → 404，
+  // 检索入口就成了死路（与 `/moderation/queue` 同一约束，见 ADMIN_ROUTES.moderationRecords）。
+  router.get('/moderation/records', async (c) => {
+    const parsed = AdminModerationRecordsQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+    try {
+      return c.json(await service.listModerationRecords(parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

@@ -28,6 +28,14 @@ export const ADMIN_ROUTES = {
   auditLogs: '/admin/audit-logs',
   /** GET 待人工审核队列。 */
   moderationQueue: '/admin/moderation/queue',
+  /**
+   * GET 审核记录检索（#73 治理半场 PR4）：已离开 REVIEW 队列的历史记录，按判定 /
+   * 商品 / 关键词 / 时间段 + 游标分页。队列端点保持纯 REVIEW 不变。
+   *
+   * **注册顺序**：`/moderation/records` 必须早于 `/moderation/:recordId`，否则
+   * "records" 会被当成 recordId 解析，非 UUID → 404。
+   */
+  moderationRecords: '/admin/moderation/records',
   /** GET 审核记录详情（含机器结果、历史和人工决定）。 */
   moderationDetail: (recordId: string) => `/admin/moderation/${recordId}`,
   /** POST 人工审核决定；Idempotency-Key 由 HTTP header 提供。 */

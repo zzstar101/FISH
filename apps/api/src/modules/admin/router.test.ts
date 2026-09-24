@@ -7,6 +7,7 @@ import {
   AdminMeResponseSchema,
   AdminModerationDetailSchema,
   AdminModerationQueueSchema,
+  AdminModerationRecordsSchema,
   AdminOverviewSchema,
   AdminTransactionPageSchema,
   AdminUserDetailSchema,
@@ -836,5 +837,147 @@ describe('Admin 查询端到端', () => {
       .delete(listingModerationRecords)
       .where(eq(listingModerationRecords.listingId, AUDIT_ROLLBACK_LISTING_ID))
     await scratch.delete(listings).where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
+  })
+})
+
+/**
+ * 审核记录检索（#73 治理半场 PR4）。
+ *
+ * 与上面「审核队列」用例行分红：队列是**工作清单**（服务端写死只列 REVIEW 商品、
+ * 每条 listing 只留最新 REVIEW 记录），这里是**历史检索**——被人工决定过的、机器直接
+ * 放行的都能捞出来。两者共用同一条目形状与分页口径，差别只在 WHERE。
+ */
+describe('Admin 审核记录检索', () => {
+  test('setup: 匿名 401 / 普通用户 403，证明守卫先于路由解析', async () => {
+    // 顺带覆盖路由顺序：`/moderation/records` 若被 `/moderation/:recordId` 吃掉，
+    // 管理员拿到的是 404 ADMIN_NOT_FOUND 而不是 200。
+    const anonymous = await app.request(ADMIN_ROUTES.moderationRecords)
+    expect(anonymous.status).toBe(401)
+    expect(await anonymous.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
+
+    const asUser = await app.request(ADMIN_ROUTES.moderationRecords, {
+      headers: { cookie: userCookie },
+    })
+    expect(asUser.status).toBe(403)
+    expect(await asUser.json()).toMatchObject({ error: { code: 'FORBIDDEN' } })
+
+    const asAdmin = await app.request(ADMIN_ROUTES.moderationRecords, {
+      headers: { cookie: adminCookie },
+    })
+    expect(asAdmin.status).toBe(200)
+  })
+
+  test('检索返回已离开队列的记录，队列端点仍只列 REVIEW', async () => {
+    const records = await app.request(ADMIN_ROUTES.moderationRecords, {
+      headers: { cookie: adminCookie },
+    })
+    expect(records.status).toBe(200)
+    const page = AdminModerationRecordsSchema.parse(await records.json())
+    const ids = page.items.map((item) => item.record.id)
+    // fixture 里 REVIEW_LISTING_ID 有两条记录：一条 REVIEW、一条 BLOCK。
+    // 队列按「每条 listing 只留最新 REVIEW 记录」去重，检索两条都要在。
+    expect(ids).toContain(REVIEW_RECORD_ID)
+    expect(ids).toContain(BLOCKED_EDIT_RECORD_ID)
+
+    const queue = await app.request(ADMIN_ROUTES.moderationQueue, {
+      headers: { cookie: adminCookie },
+    })
+    expect(queue.status).toBe(200)
+    const queuePage = AdminModerationQueueSchema.parse(await queue.json())
+    expect(queuePage.items.map((item) => item.record.id)).not.toContain(BLOCKED_EDIT_RECORD_ID)
+    for (const item of queuePage.items) {
+      expect(item.record.decision).toBe('REVIEW')
+      expect(item.listing.moderationStatus).toBe('REVIEW')
+    }
+  })
+
+  test('decision / listingId / q / 时间段四个筛选都生效', async () => {
+    const adminHeaders = { cookie: adminCookie }
+
+    const blocked = await app.request(`${ADMIN_ROUTES.moderationRecords}?decision=BLOCK`, {
+      headers: adminHeaders,
+    })
+    const blockedIds = AdminModerationRecordsSchema.parse(await blocked.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(blockedIds).toContain(BLOCKED_EDIT_RECORD_ID)
+    // BLOCKED_EDIT_RECORD_ID 的判定从头到尾是 BLOCK，任何筛 REVIEW 的结果里都不该有它。
+    expect(blockedIds).not.toContain(CREATE_REVIEW_CHAIN_RECORD_ID)
+
+    const review = await app.request(`${ADMIN_ROUTES.moderationRecords}?decision=REVIEW`, {
+      headers: adminHeaders,
+    })
+    const reviewIds = AdminModerationRecordsSchema.parse(await review.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(reviewIds).not.toContain(BLOCKED_EDIT_RECORD_ID)
+
+    const byListing = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?listingId=${REVIEW_LISTING_ID}`,
+      { headers: adminHeaders },
+    )
+    const byListingIds = AdminModerationRecordsSchema.parse(await byListing.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(byListingIds).toEqual(expect.arrayContaining([REVIEW_RECORD_ID, BLOCKED_EDIT_RECORD_ID]))
+
+    const byTitle = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('待人工审核商品')}`,
+      { headers: adminHeaders },
+    )
+    expect(byTitle.status).toBe(200)
+    for (const item of AdminModerationRecordsSchema.parse(await byTitle.json()).items) {
+      expect(item.listing.title).toContain('待人工审核商品')
+    }
+
+    const noMatch = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('不存在的标题关键词')}`,
+      { headers: adminHeaders },
+    )
+    expect(AdminModerationRecordsSchema.parse(await noMatch.json()).items).toHaveLength(0)
+
+    // 左闭右开：REVIEW_RECORD_ID 在 02:01、BLOCKED_EDIT_RECORD_ID 在 02:02。
+    // 窗口 [02:02, 02:03) 只有后者——正好验证 from 含边界、to 不含边界。
+    const window = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?createdFrom=${encodeURIComponent('2026-09-03T02:02:00.000Z')}&createdTo=${encodeURIComponent('2026-09-03T02:03:00.000Z')}`,
+      { headers: adminHeaders },
+    )
+    expect(window.status).toBe(200)
+    const windowIds = AdminModerationRecordsSchema.parse(await window.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(windowIds).toContain(BLOCKED_EDIT_RECORD_ID)
+    expect(windowIds).not.toContain(REVIEW_RECORD_ID)
+  })
+
+  test('非法 limit / cursor → 422 VALIDATION_FAILED', async () => {
+    const badLimit = await app.request(`${ADMIN_ROUTES.moderationRecords}?limit=999`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(badLimit.status).toBe(422)
+    expect(await badLimit.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+
+    const badCursor = await app.request(`${ADMIN_ROUTES.moderationRecords}?cursor=not-a-cursor`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(badCursor.status).toBe(422)
+    expect(await badCursor.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
+  test('下一页游标接着第一页往下走', async () => {
+    const first = await app.request(`${ADMIN_ROUTES.moderationRecords}?limit=1`, {
+      headers: { cookie: adminCookie },
+    })
+    const firstPage = AdminModerationRecordsSchema.parse(await first.json())
+    expect(firstPage.items).toHaveLength(1)
+    expect(firstPage.nextCursor).not.toBeNull()
+
+    const second = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor ?? '')}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(second.status).toBe(200)
+    const secondPage = AdminModerationRecordsSchema.parse(await second.json())
+    expect(secondPage.items[0]?.record.id).not.toBe(firstPage.items[0]?.record.id)
   })
 })
