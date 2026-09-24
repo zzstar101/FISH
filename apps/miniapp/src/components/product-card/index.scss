@@ -191,18 +191,3 @@
   flex: 0 0 auto;
 }
 
-.pcard__credit {
-  color: var(--price);
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 20px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.pcard__loc {
-  margin-left: auto;
-  color: var(--muted);
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 20px;
-  white-space: nowrap;
-}

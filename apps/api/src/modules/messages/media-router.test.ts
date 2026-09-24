@@ -15,7 +15,10 @@ const requireAuth = async (
   await next()
 }
 
-function buildApp(overrides: Partial<MediaMessageService> = {}) {
+function buildApp(
+  overrides: Partial<MediaMessageService> = {},
+  storageOverrides: Partial<MediaStorage> = {},
+) {
   const service: MediaMessageService = {
     presign: async () => ({
       uploadUrl: 'https://upload.test/file',
@@ -54,6 +57,7 @@ function buildApp(overrides: Partial<MediaMessageService> = {}) {
       ]).stream(),
       contentType: 'image/webp',
     }),
+    ...storageOverrides,
   }
   const app = new Hono()
   app.route('/conversations', createMediaRouter({ service, storage, requireAuth }))
@@ -168,5 +172,13 @@ describe('media router', () => {
   test('rejects an out-of-range limit with 422', async () => {
     const response = await buildApp().request(`/conversations/${conversationId}/media?limit=0`)
     expect(response.status).toBe(422)
+  })
+
+  // #86 B 线复评 P2：`message_media.object_key` 是从库里读回来的，修复前落库的脏行仍会被读到。
+  // 存储层对形状不合法的键返回 null，这里必须按"不存在"处理，不能变成 500 或去归一化路径。
+  test('treats a storage-unsafe object key as not found', async () => {
+    const app = buildApp({}, { getObject: () => null })
+    const response = await app.request(`/conversations/${conversationId}/media/${mediaId}`)
+    expect(response.status).toBe(404)
   })
 })

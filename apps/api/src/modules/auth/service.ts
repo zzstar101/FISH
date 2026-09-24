@@ -1,48 +1,17 @@
 import type { LoginRequest, RegisterRequest } from '@fish/contracts/auth/session'
-import { CampusSchema, type Me, MeSchema } from '@fish/contracts/auth/user'
+import type { Me } from '@fish/contracts/auth/user'
 import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { eq } from 'drizzle-orm'
 import { AuthError } from './errors'
+import { toMe, type UserRow } from './me'
 import type { Sessions } from './session'
-
-type UserRow = typeof users.$inferSelect
-
-/**
- * DB 行 → 对外 DTO。`student_no` 与 `password_hash` 永不经过这里（#3：不公开完整学号）。
- *
- * `campus` / `avatarUrl` 在库里都是无约束 `text`，而契约声明它们是枚举 / `z.url()`；
- * 值域外的历史值一律降级为 `null`，否则前端按 `MeSchema` 解析 `/me` 会直接抛错、登录态全挂。
- */
-function toMe(row: UserRow): Me {
-  return {
-    id: row.id,
-    nickname: row.nickname,
-    avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
-    campus: CampusSchema.safeParse(row.campus).data ?? null,
-    authStatus: row.authStatus,
-    verifiedAt: row.verifiedAt?.toISOString() ?? null,
-  }
-}
+import { isUniqueViolation } from './unique'
 
 function requireRow<T>(rows: T[]): T {
   const row = rows[0]
   if (!row) throw new Error('INSERT users 未返回行')
   return row
-}
-
-/**
- * PG 唯一约束冲突。两个坑：Bun 的 `PostgresError` 把 SQLSTATE 放在 `errno` 上（`code` 恒为
- * `'ERR_POSTGRES_SERVER_ERROR'`）；而 Drizzle 会把它包一层（`{ query, params, cause }`），
- * 所以要顺着 `cause` 链找。
- */
-export function isUniqueViolation(error: unknown): boolean {
-  let current: unknown = error
-  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
-    if ('errno' in current && current.errno === '23505') return true
-    current = current.cause
-  }
-  return false
 }
 
 /** 库里可能存在历史脏哈希（如 #2 seed 的占位值），校验失败一律当密码错误，不要 500。 */
@@ -81,9 +50,9 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
                 studentNo: input.studentNo,
                 passwordHash,
                 nickname: input.nickname,
-                campus: input.campus,
                 // #68：注册不再认证。VERIFIED 只能由校园邮箱验证码流程（verification-service.ts）
                 // 产生，那里同时写入 campus_email + verifiedAt，保持 VERIFIED ⟺ 已绑定邮箱。
+                // #86 F：不再采集校区。
                 authStatus: 'UNVERIFIED',
                 verifiedAt: null,
               })
@@ -110,7 +79,10 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
         .limit(1)
 
       const row = rows[0]
-      const passwordOk = row ? await verifyPassword(input.password, row.passwordHash) : false
+      // #86 后微信注册的用户 student_no / password_hash 都是 NULL，查不到也登不了；
+      // 防御性收窄让 NULL 哈希不进 argon2 比对（verify 对非字符串会抛错变 500）。
+      const passwordOk =
+        row?.passwordHash != null ? await verifyPassword(input.password, row.passwordHash) : false
       // 错误码不区分「学号不存在」与「密码错误」。注意注册口会显式返回 409，因此
       // 账号存在性本来就是可探测的；这里不做时序防护，也不做限流（记录为后续 issue）。
       if (!row || !passwordOk) {
@@ -133,6 +105,24 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
       const rows = await db.select().from(users).where(eq(users.id, session.userId)).limit(1)
       const row = rows[0]
       return row ? toMe(row) : null
+    },
+
+    /**
+     * 绑定手机号（#86 C 节）：phone code（stub 下即明文手机号）→ 写 `users.phone`。
+     * 只追加绑定，不动 session；唯一索引兜底并发，冲突报 409。
+     * 冻结的语义：同一用户重复提交同一号码 = 幂等成功（UPDATE 命中自身行，不撞唯一索引）。
+     * 已知缺口（不在本期）：解绑 / 换绑没有入口——`users.phone` 一旦写入无法清除，
+     * 真实 getPhoneNumber 接入前需单开 Issue 冻结换绑规则。
+     */
+    async bindPhone(userId: string, phone: string): Promise<void> {
+      try {
+        await db.update(users).set({ phone }).where(eq(users.id, userId))
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+          throw new AuthError('PHONE_ALREADY_BOUND', 409, '该手机号已绑定其他账号')
+        }
+        throw error
+      }
     },
   }
 }

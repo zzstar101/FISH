@@ -39,9 +39,9 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
 
 export interface UserSummaryRow {
   id: string
-  studentNo: string
+  /** #86 后微信注册的用户没有学号 → `null`。 */
+  studentNo: string | null
   nickname: string
-  campus: string | null
   authStatus: string
   role: string
   createdAt: Date
@@ -64,7 +64,6 @@ export interface ListingSummaryRow {
   coverObjectKey: string | null
   sellerId: string
   sellerNickname: string
-  sellerCampus: string | null
 }
 
 export interface ListingImageRow {
@@ -237,14 +236,14 @@ export interface AdminStore {
   findListingDetail(listingId: string): Promise<{
     listing: Omit<
       ListingSummaryRow,
-      'coverObjectKey' | 'createdAtCursor' | 'sellerId' | 'sellerNickname' | 'sellerCampus'
+      'coverObjectKey' | 'createdAtCursor' | 'sellerId' | 'sellerNickname'
     > & {
       description: string
       updatedAt: Date
       urgent: boolean
       negotiable: boolean
       free: boolean
-      seller: { id: string; nickname: string; campus: string | null }
+      seller: { id: string; nickname: string }
     }
     images: ListingImageRow[]
   } | null>
@@ -308,7 +307,7 @@ function cursorCondition(
 /** 用户摘要共用的 SQL SELECT 实体（列表 / 详情都取同一套列，避免口径漂移）。 */
 const userSummarySelectSql = sql`
   u.id AS id, u.student_no AS student_no, u.nickname AS nickname,
-  u.campus AS campus, u.auth_status::text AS auth_status, u.role::text AS role,
+  u.auth_status::text AS auth_status, u.role::text AS role,
   u.created_at AS created_at,
   ${createdAtCursorText(sql`u.created_at`)} AS created_at_cursor,
   (SELECT count(*)::int FROM ${listings} l WHERE l.seller_id = u.id) AS listing_count,
@@ -318,9 +317,9 @@ const userSummarySelectSql = sql`
 function rowsToUserSummaries(rows: Record<string, unknown>[]): UserSummaryRow[] {
   return rows.map((row) => ({
     id: String(row.id),
-    studentNo: String(row.student_no),
+    // NULL（微信用户）必须保持 null：String(null) 会得到 "null" 再被脱敏成 "n**l"。
+    studentNo: (row.student_no as string | null) ?? null,
     nickname: String(row.nickname),
-    campus: (row.campus as string | null) ?? null,
     authStatus: String(row.auth_status),
     role: String(row.role),
     createdAt: new Date(row.created_at as string | Date),
@@ -472,7 +471,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
                ${createdAtCursorText(sql`l.created_at`)} AS created_at_cursor,
                (SELECT li.object_key FROM ${listingImages} li
                  WHERE li.listing_id = l.id AND li.sort_order = 0 LIMIT 1) AS cover_object_key,
-               u.id AS seller_id, u.nickname AS seller_nickname, u.campus AS seller_campus
+               u.id AS seller_id, u.nickname AS seller_nickname
         FROM ${listings} l
         JOIN ${users} u ON u.id = l.seller_id
         ${where}
@@ -491,7 +490,6 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         coverObjectKey: (row.cover_object_key as string | null) ?? null,
         sellerId: String(row.seller_id),
         sellerNickname: String(row.seller_nickname),
-        sellerCampus: (row.seller_campus as string | null) ?? null,
       }))
     },
 
@@ -513,7 +511,6 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           seller: {
             id: users.id,
             nickname: users.nickname,
-            campus: users.campus,
           },
         })
         .from(listings)

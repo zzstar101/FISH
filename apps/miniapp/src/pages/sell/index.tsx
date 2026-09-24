@@ -1,3 +1,4 @@
+import type { AiPolishCandidate, AiPolishProvider } from '@fish/contracts/ai/schema'
 import {
   type ListingCategory,
   type ListingDetail,
@@ -5,18 +6,20 @@ import {
 } from '@fish/contracts/listings/schema'
 import { Image, Input, Text, Textarea, View } from '@tarojs/components'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import { fetchPolishCandidates } from '@/features/ai/api'
 import { useAuthGuard } from '@/features/auth/guard'
 import { createListing, fetchListingDetail, updateListing } from '@/features/listing/api'
 import { takeSellEdit } from '@/features/listing/edit-target'
 import { type PickedPhoto, pickPhotos, uploadListingImage } from '@/features/upload/api'
+import { cancellable } from '@/lib/cancellable'
 import { isApiError } from '@/lib/request'
-import { categoryLabel, type PolishCandidate, polishCandidates } from '@/mock/api'
+import { categoryLabel } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import {
   parsePriceToCents,
@@ -27,6 +30,18 @@ import {
   sellSubmitOutcome,
   validateSellForm,
 } from './form'
+import {
+  nextPolishIndex,
+  POLISH_FIELD_ERROR_TOAST,
+  POLISH_REDACT_NOTE,
+  type PolishCooldown,
+  polishButtonText,
+  polishCooldownFrom,
+  polishFailureRoute,
+  polishFailureView,
+  polishPreconditionError,
+  tickPolishCooldown,
+} from './polish'
 import './index.scss'
 
 /**
@@ -49,8 +64,11 @@ import './index.scss'
  *    页头提示条说明有几处要改；**前端不再保留任何敏感词表**，判定只在服务端。
  * 5. REVIEW：商品已受理但 `status = OFFLINE`、不在公开列表 —— 留在本页显示
  *    「已提交，正在审核」，不跳详情、不显示「发布成功」。
+ * 6. AI 润色接真实接口（`POST /ai/polish-candidates`，#142 / 设计 §10）：状态机补失败态、
+ *    非 idle 不可点、429 按 `retryAfterSeconds` 倒计时、`provider='stub'` 显示演示角标、
+ *    `redacted` 说明脱敏。判定全在 `./polish`（可测），页面只做接线。
  *
- * 明确不做（等后续单）：AI 润色仍是 mock（#141 / #142）；编辑态换图。
+ * 明确不做（等后续单）：web 端润色入口；编辑态换图。
  */
 
 const CONDITIONS: { key: 'NEW' | 'LIKE_NEW' | 'GOOD' | 'FAIR'; label: string }[] = [
@@ -89,11 +107,23 @@ type SelectedPhoto = PickedPhoto & {
 /** 编辑态加载结果。`idle` 含「新建」与「编辑内容已就绪」两种正常态。 */
 type EditLoadState = 'idle' | 'loading' | 'notfound' | 'failed'
 
-/** AI 润色的三条候选（页面只保存索引与候选本身，不保存状态机之外的中间态） */
+/**
+ * AI 润色状态机。
+ *
+ * `ready` 带上 `provider` / `redacted`：它们只有响应回来才知道，角标与脱敏说明就靠它们渲染，
+ * 不在页面里另存一份。`failed` 只带 `code`（429 另带秒数），文案由 `./polish` 推出来。
+ */
 type PolishState =
   | { phase: 'idle' }
   | { phase: 'loading' }
-  | { phase: 'ready'; candidates: PolishCandidate[]; index: number }
+  | {
+      phase: 'ready'
+      candidates: AiPolishCandidate[]
+      index: number
+      provider: AiPolishProvider
+      redacted: boolean
+    }
+  | { phase: 'failed'; code: string; retryAfterSeconds?: number }
 
 /** 分 → 价格输入框的字符串（整数不带小数位，避免回填出 160.00）。 */
 function priceToInput(priceCents: number): string {
@@ -128,6 +158,13 @@ export default function Sell() {
   const [existingImages, setExistingImages] = useState<string[]>([])
   const [editState, setEditState] = useState<EditLoadState>(routeId ? 'loading' : 'idle')
   const [polish, setPolish] = useState<PolishState>({ phase: 'idle' })
+  /**
+   * 429 冷却：`short` 逐秒恢复；`coarse`（>60s）与 `unknown`（服务端没给秒数）都不逐秒，
+   * 在本次页面生命周期内保持置灰（见 `./polish`）
+   */
+  const [cooldown, setCooldown] = useState<PolishCooldown | null>(null)
+  /** 飞行中的润色请求：关 sheet = 放弃，迟到响应按 `cancellable` 丢弃 */
+  const polishCancelRef = useRef<(() => void) | null>(null)
   /** 服务端的字段级错误（BLOCK / 422），键与输入区对应；空对象 = 没有 */
   const [fieldErrors, setFieldErrors] = useState<SellFieldErrors>({})
   /** 页头提示条：只在服务端明确拒绝时出现 */
@@ -180,7 +217,9 @@ export default function Sell() {
     setNegotiable(true)
     setPhotos([])
     setExistingImages([])
-    // 润色候选也属于「这一份表单」：不清的话发布成功后回到本页，新表单里还挂着上一件的候选
+    // 润色候选也属于「这一份表单」：不清的话发布成功后回到本页，新表单里还挂着上一件的候选。
+    // 飞行中的请求一并作废 —— 它回来时对应的已经不是这份表单了。
+    dropPolishRequest()
     setPolish({ phase: 'idle' })
     setFieldErrors({})
     setBlockMessage('')
@@ -399,40 +438,180 @@ export default function Sell() {
     })()
   }
 
-  /** 开润色：先给「润色中」态，再出候选（稿子第 02 帧画了这两个态） */
-  const openPolish = () => {
-    const origin = description.trim()
-    if (!origin) {
-      toast('先写一句描述再润色')
+  /**
+   * 冷却倒计时。
+   *
+   * 只在 `short` 上挂定时器：`coarse`（>60s）的真实等待可能上万秒，挂一个长定时器只为把
+   * 按钮从灰变亮并不划算，重进页面即复位（见 `./polish` 的 `tickPolishCooldown`）。
+   * 依赖取 `kind` 而不是整个对象：后者每秒变化会让定时器每秒重建。
+   */
+  const cooldownKind = cooldown?.kind ?? null
+  useEffect(() => {
+    if (cooldownKind !== 'short') return
+    const timer = setInterval(() => {
+      setCooldown((prev) => (prev === null ? null : tickPolishCooldown(prev)))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [cooldownKind])
+
+  /** 作废飞行中的请求：关 sheet（scrim / 放弃 / 采用）都算放弃本次润色 */
+  const dropPolishRequest = () => {
+    polishCancelRef.current?.()
+    polishCancelRef.current = null
+  }
+
+  /**
+   * 失败分流（判据在 `./polish`，页面只负责落地）：
+   * 401 静默交守卫、422 落字段级错误、其余进 sheet 的失败态。
+   * 429 额外把入口按钮置灰倒计时 —— 不置灰的话用户会一直点，每次都吃一次拒绝。
+   */
+  const handlePolishFailure = (error: unknown) => {
+    if (!isApiError(error)) {
+      // 传输层失败 / 契约漂移。演示构建的传输层失败已在 `features/ai/api.ts` 换成 mock 响应，
+      // 所以走到这里的都是「真失败」，必须显式报错。
+      setPolish({ phase: 'failed', code: '' })
       return
     }
+    const route = polishFailureRoute(error)
+    if (route === 'unauthenticated') {
+      // 会话已失效：`apiRequest` 清了本地会话，`useAuthGuard` 会跳登录页。
+      // 这里再弹一句失败提示只会与跳转打架。
+      setPolish({ phase: 'idle' })
+      return
+    }
+    if (route === 'field-errors') {
+      const errors = sellFieldErrorsFromDetails(error.details)
+      if (Object.keys(errors).length === 0) {
+        // 一个字段都认不出来（信封没带 details / 字段名不在映射里）：关掉 sheet 就只剩一句
+        // 指向空的 toast（说你有错，却满屏找不到标红的地方），所以留在 sheet 里说清楚。
+        setPolish({ phase: 'failed', code: error.code })
+        return
+      }
+      setFieldErrors(errors)
+      setPolish({ phase: 'idle' })
+      toast(POLISH_FIELD_ERROR_TOAST)
+      return
+    }
+    if (error.code === 'AI_POLISH_QUOTA') setCooldown(polishCooldownFrom(error.retryAfterSeconds))
+    setPolish({ phase: 'failed', code: error.code, retryAfterSeconds: error.retryAfterSeconds })
+  }
+
+  /** 真正发请求。前置校验与守卫在 `openPolish`，失败态的「重试」直接进这里。 */
+  const requestPolish = (selectedCategory: ListingCategory) => {
+    dropPolishRequest()
     setPolish({ phase: 'loading' })
-    setTimeout(() => {
-      setPolish({
-        phase: 'ready',
-        candidates: polishCandidates(origin),
-        index: 0,
+    // 关 sheet 即 `cancel()`；`accept` 恒真 —— 这次的结果只要没被取消就该用，不按内容过滤
+    const load = cancellable(
+      () =>
+        fetchPolishCandidates({
+          title: title.trim(),
+          description: description.trim(),
+          category: selectedCategory,
+        }),
+      () => true,
+    )
+    polishCancelRef.current = load.cancel
+    void load.promise
+      .then((response) => {
+        // `null` = 已被取消（用户关了 sheet）：迟到的候选不再把弹层拉回来
+        if (!response || load.isCancelled()) return
+        polishCancelRef.current = null
+        setPolish({
+          phase: 'ready',
+          candidates: response.candidates,
+          index: 0,
+          provider: response.provider,
+          redacted: response.redacted,
+        })
       })
-    }, 800)
+      .catch((error: unknown) => {
+        if (load.isCancelled()) return
+        polishCancelRef.current = null
+        handlePolishFailure(error)
+      })
+  }
+
+  /** 关 sheet：作废飞行中的请求并复位状态机（采用 / 放弃 / 点遮罩都走它） */
+  const closeSheet = () => {
+    dropPolishRequest()
+    setPolish({ phase: 'idle' })
+  }
+
+  /**
+   * 开润色。
+   *
+   * 两道前置：**非 idle 不可点**（接真接口后每次点击都吃一次 5s 配额，连点必 429），
+   * 以及本地先拦不齐的入参（标题 / 分类 / 描述都会被服务端独立拒掉，这里只是少打一次
+   * 注定 422 的请求）。冷却中同样不可点。
+   */
+  const openPolish = () => {
+    if (polish.phase !== 'idle' || cooldown !== null) return
+    const localError = polishPreconditionError({ title, description, category })
+    if (localError) {
+      toast(localError)
+      return
+    }
+    if (!category) return
+    requestPolish(category)
+  }
+
+  const retryPolish = () => {
+    if (!category) return
+    requestPolish(category)
   }
 
   const nextCandidate = () => {
     setPolish((prev) => {
       if (prev.phase !== 'ready') return prev
-      return { ...prev, index: (prev.index + 1) % prev.candidates.length }
+      return { ...prev, index: nextPolishIndex(prev.index, prev.candidates.length) }
     })
   }
 
-  /** 采用：**这一步才**写进描述框（采用前原文一直原样保留） */
+  /**
+   * 采用：**这一步才**写进描述框（采用前原文一直原样保留）。
+   *
+   * 不推断审核结论：采用后的真实语义是保存时服务端重跑 moderation（`PATCH /listings/:id`）。
+   * 也不去清上一次提交留下的字段级错误 / 页头提示条 —— 手动改描述框同样不会清，
+   * 那是「改完再提交一次」的既有口径，不是本单引入的。
+   */
   const adopt = () => {
     if (polish.phase !== 'ready') return
     const text = polish.candidates[polish.index]?.text
     if (text) setDescription(text)
-    setPolish({ phase: 'idle' })
+    closeSheet()
     toast('已采用润色文案')
   }
 
   const candidate = polish.phase === 'ready' ? (polish.candidates[polish.index]?.text ?? '') : ''
+
+  /**
+   * 失败态的内容。
+   *
+   * 抽成函数而不是在 JSX 里读一个 `failureView` 变量：变量之间收窄不了，
+   * 而这里要按 `polish.phase === 'failed'` 让 TS 认下 `code` / `retryAfterSeconds`。
+   */
+  const renderPolishFailure = (state: { code: string; retryAfterSeconds?: number }) => {
+    const view = polishFailureView(state.code, state.retryAfterSeconds)
+    return (
+      <>
+        <Text className="sell__sheet-sub">{view.message}</Text>
+        {view.detail ? <Text className="sell__sheet-fail-detail">{view.detail}</Text> : null}
+
+        <View className="sell__sheet-acts">
+          {/* 429 不给「重试」：冷却中再点只会再吃一次拒绝（见 ./polish 的 canRetry） */}
+          {view.canRetry ? (
+            <View className="sell__btn-ghost sell__btn-ghost--pill" onClick={retryPolish}>
+              <Text>重试</Text>
+            </View>
+          ) : null}
+          <View className="sell__btn-ghost sell__btn-ghost--pill" onClick={closeSheet}>
+            <Text>关闭</Text>
+          </View>
+        </View>
+      </>
+    )
+  }
+
   const titleError = fieldErrors.title
   const descriptionError = fieldErrors.description
   const priceError = fieldErrors.price
@@ -664,11 +843,13 @@ export default function Sell() {
                 onInput={(event) => setDescription(event.detail.value)}
               />
               <View
-                className={`sell__polish${polish.phase === 'idle' ? '' : ' is-busy'}`}
+                className={`sell__polish${polish.phase === 'idle' ? '' : ' is-busy'}${
+                  cooldown === null ? '' : ' is-off'
+                }`}
                 onClick={openPolish}
               >
                 <Image className="sell__polish-ic" src={ICONS.ai} mode="aspectFit" />
-                <Text>{polish.phase === 'loading' ? '润色中' : '润色'}</Text>
+                <Text>{polishButtonText({ loading: polish.phase === 'loading', cooldown })}</Text>
               </View>
             </View>
             {descriptionError ? (
@@ -866,23 +1047,38 @@ export default function Sell() {
       {/* ---------------- AI 润色候选卡（稿子第 02 帧） ---------------- */}
       {polish.phase !== 'idle' ? (
         <>
-          <View className="sell__scrim" onClick={() => setPolish({ phase: 'idle' })} />
+          <View className="sell__scrim" onClick={closeSheet} />
           <View className="sell__sheet">
             <View className="sell__sheet-h">
               <Image className="sell__sheet-h-ic" src={ICONS.ai} mode="aspectFit" />
               <Text className="sell__sheet-h-tx">AI 润色建议</Text>
             </View>
 
+            {/* 上游是假模型（stub 传输 / 演示构建的兜底）：不能让候选被当成真实润色结果 */}
+            {polish.phase === 'ready' && polish.provider === 'stub' ? (
+              <View className="sell__sheet-stub">
+                <Text className="sell__sheet-stub-tx">演示文案·非真实模型</Text>
+              </View>
+            ) : null}
+
             {polish.phase === 'loading' ? (
               <View className="sell__sheet-loading">
                 <View className="sell__spin" />
                 <Text className="sell__sheet-sub num">正在生成候选文案…</Text>
               </View>
+            ) : polish.phase === 'failed' ? (
+              renderPolishFailure(polish)
             ) : (
               <>
                 <Text className="sell__sheet-sub num">
                   {`第 ${polish.index + 1} / ${polish.candidates.length} 条 · 采用前不会覆盖你写的内容`}
                 </Text>
+
+                {/* 送上游前命中过脱敏规则。文案只说「发送前处理过」，不说「最终没有联系方式」——
+                    回填会把用户原文还原，候选里照样可能有他写过的号码 */}
+                {polish.redacted ? (
+                  <Text className="sell__sheet-redact">{POLISH_REDACT_NOTE}</Text>
+                ) : null}
 
                 <View className="sell__cand">
                   <Text className="sell__cand-flag num">{`候选 ${polish.index + 1}`}</Text>
@@ -895,6 +1091,7 @@ export default function Sell() {
                 </View>
 
                 <View className="sell__sheet-acts">
+                  {/* dot 按真实条数渲染：服务端会过滤候选，不足 3 条时不为凑数造假 */}
                   <View className="sell__dots">
                     {polish.candidates.map((item, i) => (
                       <View
@@ -912,10 +1109,7 @@ export default function Sell() {
                 </View>
 
                 <View className="sell__sheet-acts">
-                  <View
-                    className="sell__btn-ghost sell__btn-ghost--pill"
-                    onClick={() => setPolish({ phase: 'idle' })}
-                  >
+                  <View className="sell__btn-ghost sell__btn-ghost--pill" onClick={closeSheet}>
                     <Text>放弃润色</Text>
                   </View>
                 </View>

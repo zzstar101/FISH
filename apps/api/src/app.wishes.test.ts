@@ -59,7 +59,6 @@ async function registerUser(serial: string): Promise<string> {
       studentNo: `2021000000${serial}`,
       password: PASSWORD,
       nickname: `验收用户${serial}`,
-      campus: '肇庆',
     }),
   )
   expect(response.status).toBe(200)

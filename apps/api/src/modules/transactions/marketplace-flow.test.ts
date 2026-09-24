@@ -142,7 +142,7 @@ async function json<T>(response: Response): Promise<T> {
 async function register(studentNo: string, nickname: string): Promise<string> {
   const response = await api('/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ studentNo, password: PASSWORD, nickname, campus: '肇庆' }),
+    body: JSON.stringify({ studentNo, password: PASSWORD, nickname }),
   })
   // #146：失败时先打出响应体再断言状态码——此前只报「期望 200 实际 400」，
   // 拿不到 error.code 无法定位（register 的 4xx 出口按契约只有 422 / 409，

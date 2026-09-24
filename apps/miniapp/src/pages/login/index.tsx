@@ -1,46 +1,54 @@
-import { Image, Input, Text, View } from '@tarojs/components'
+import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
 import { ICONS } from '@/assets/lib-icons'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
-import { signIn, useAuth } from '@/features/auth/store'
+import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
+import { signInWithWechat, useAuth } from '@/features/auth/store'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import './index.scss'
 
 /**
- * 登录（设计稿 `小程序1版login.html`）。
+ * 登录（设计稿 `小程序1版login.html`，按 Owner 决定改为**仅微信登录**）。
  *
- * **契约口径**：学号 + 密码 + httpOnly 会话 cookie（`packages/contracts/src/auth/session.ts`），
- * 不是参考实现里的「手机号 + 验证码」。
+ * **契约口径**：只有一条路径 —— 微信 `code` → 会话
+ * （`packages/contracts/src/auth/wechat.ts`，#86 A 节的主身份）。
+ * 学号 + 密码入口已从小程序端移除（#86 E 线提前到端上执行）；
+ * 后端 `POST /auth/login` / `/auth/register` **仍然保留**，因为 web 端还在用，
+ * 等 web 也能用微信授权登录后再一起下线。
  *
- * 与旧版（2改 `设计稿_B1-login.html`）的差异，都按新稿走：
- * - 品牌区 = mark / wordmark 两张图 + 一句 tagline（旧版是渐变方块里一个「鱼」字）；
- * - 表单进一张玻璃卡 `.auth-card`；
- * - 新增「我已阅读并同意」勾选：**未勾选不允许提交**（稿子里默认是勾上的状态）；
- * - 不再有密码可见按钮（新稿没有这只眼睛）。
+ * 与旧版的差异，都按新稿走：
+ * - 品牌区 = mark / wordmark 两张图 + 一句 tagline；
+ * - 表单进一张玻璃卡 `.login__card`；
+ * - 「我已阅读并同意」勾选保留：**未勾选不允许登录**（协议同意仍需要一个落点）；
+ * - 学号 / 密码字段、`.login__or` 分隔行、去注册入口整段删除。
  *
- * 数据：`POST /auth/login`。成功后 `features/auth/store` 广播登录态、`@/lib/request`
- * 落盘会话 cookie，本页据此跳首页。
+ * 数据：`POST /auth/wechat/session`。成功后 `features/auth/store` 广播登录态、
+ * `@/lib/request` 落盘会话 cookie，本页据此跳首页。
  */
 
-/** 学号：12 位数字（契约里 studentNo 的形状） */
-const STUDENT_NO_LEN = 12
-/** 密码 8~32 位是**契约里的产品规则**（`auth/session.ts` 的 `PasswordSchema`） */
-const PASSWORD_MIN = 8
-const PASSWORD_MAX = 32
-
 export default function Login() {
-  const [studentNo, setStudentNo] = useState('')
-  const [password, setPassword] = useState('')
-  const [focused, setFocused] = useState<'studentNo' | 'password' | null>(null)
-  const [errors, setErrors] = useState<{ studentNo?: string; password?: string }>({})
-  const [submitting, setSubmitting] = useState(false)
+  /** 微信登录的忙碌位：防连点（成功跳转期间保持 loading），同时驱动按钮的 loading 态 */
+  const [wechatBusy, setWechatBusy] = useState(false)
   /**
-   * 协议勾选。稿子里默认是勾上的（`.checkbox` 是品牌色实底 + 白勾），
-   * 所以这里默认 `true`，但**允许取消**，且取消后不允许提交 —— 勾选框要真的有意义。
+   * 防连点的**同步**闸门（#198 对抗审查 P3-2）。
+   *
+   * `wechatBusy` 是 state：`setState` 要等下一次渲染才可见，同一帧里的第二次点击读到的仍是
+   * 旧值 `false`，两次点击都会把整个登录流程跑完（两次 `Taro.login()` + 两次换会话）。
+   * ref 是同步写入的，所以**判它**，state 只负责 UI。
+   */
+  const wechatBusyRef = useRef(false)
+  /** busy 的唯一写入口：ref 与 state 必须一起动，否则闸门和按钮会分家。 */
+  const setBusy = useCallback((busy: boolean) => {
+    wechatBusyRef.current = busy
+    setWechatBusy(busy)
+  }, [])
+  /**
+   * 协议勾选。新稿默认是勾上的（`.checkbox` 是品牌色实底 + 白勾），
+   * 所以这里默认 `true`，但**允许取消**，且取消后不允许登录 —— 勾选框要真的有意义。
    */
   const [agreed, setAgreed] = useState(true)
 
@@ -51,12 +59,12 @@ export default function Login() {
 
   /**
    * 已登录不该停在登录页。
-   * 登录成功那一刻也走这条（store 广播 `authed`），所以 `submit()` 里不再自己跳转
+   * 登录成功那一刻也走这条（store 广播 `authed`），所以 `wechatLogin()` 里不自己跳转
    * —— 两处都跳会连发两次 `switchTab`。
    *
-   * **必须确认登录页是最上层页面**：从登录页 `navigateTo` 注册页之后，登录页仍在页面栈里
-   * （Taro 的 `onHide` 不卸载组件），store 订阅也还在 —— 注册成功的 `emit(authed)`
-   * 会触发这条 effect，把刚 `redirectTo` 出来的注册成功页顶掉（实测：落到首页）。
+   * **必须确认登录页是最上层页面**：登录页 `navigateTo` 出去后仍在页面栈里
+   * （Taro 的 `onHide` 不卸载组件），store 订阅也还在 —— 别处成功的 `emit(authed)`
+   * 会触发这条 effect，把刚 `redirectTo` 出来的页面顶掉（实测：落到首页）。
    */
   useEffect(() => {
     // 演示构建（`TARO_APP_MOCK=1`）里不弹走：那套构建的目的就是每一页都能直接打开，
@@ -68,59 +76,47 @@ export default function Login() {
     if (top !== 'pages/login/index') return
     void Taro.switchTab({ url: '/pages/home/index' }).catch(() => {
       // 跳转失败必须给出口：否则按钮会永远停在「登录中…」的禁用态上
-      setSubmitting(false)
+      setBusy(false)
       void Taro.showToast({ title: '已登录，请手动返回首页', icon: 'none' })
     })
-  }, [status])
+  }, [status, setBusy])
 
-  const filled = studentNo.trim().length > 0 && password.length > 0
-  const canSubmit = filled && agreed && !submitting
-
-  const validate = () => {
-    const next: { studentNo?: string; password?: string } = {}
-    const no = studentNo.trim()
-    if (!no) next.studentNo = '请输入学号后再登录'
-    else if (!/^\d+$/.test(no)) next.studentNo = '学号只能是数字'
-    else if (no.length !== STUDENT_NO_LEN) next.studentNo = `学号应为 ${STUDENT_NO_LEN} 位数字`
-    if (!password) next.password = '请输入密码'
-    else if (password.length < PASSWORD_MIN) next.password = `密码至少 ${PASSWORD_MIN} 位`
-    else if (password.length > PASSWORD_MAX) next.password = `密码最多 ${PASSWORD_MAX} 位`
-    return next
-  }
+  const canWechat = agreed && !wechatBusy
 
   const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
 
-  const submit = () => {
-    if (submitting) return
+  /**
+   * 微信一键登录（#86 A 节）。
+   *
+   * `Taro.login()` 拿到的是**一次性** code（微信侧 5 分钟有效、用后即废），
+   * 只上报给后端换 FISH 会话；openid / session_key 既不经过客户端存储，也不在响应里。
+   * 首次登录后端自动建号，同一微信用户重复登录落到同一账号（契约见 `auth/wechat.ts`）。
+   * 微信这个接口是**静默**的：没有授权弹窗，用户点一下即登录 —— 这是微信的产品设计。
+   */
+  const wechatLogin = () => {
+    // 判 ref 而不是 state：见 `wechatBusyRef` 的注释（同一帧的第二次点击）
+    if (wechatBusyRef.current) return
     if (!agreed) {
       toast('请先阅读并同意《用户协议》与《隐私政策》')
       return
     }
-    const next = validate()
-    setErrors(next)
-    if (next.studentNo || next.password) return
-    setSubmitting(true)
+    setBusy(true)
     void (async () => {
       try {
-        await signIn({ studentNo: studentNo.trim(), password })
-        // 成功后**不**复位 submitting：跳转期间按钮停在 loading，防连点重复登录
+        const { code } = await Taro.login()
+        if (!code) throw new Error('wx.login 未返回 code')
+        await signInWithWechat(code)
+        // 成功后**不**复位 busy：跳转期间按钮停在 loading，防连点重复登录
         void Taro.showToast({ title: '登录成功', icon: 'success' })
       } catch (error) {
-        setSubmitting(false)
-        if (isApiError(error) && error.code === 'INVALID_CREDENTIALS') {
-          // 401 有两种：`UNAUTHENTICATED`（没登录）与 `INVALID_CREDENTIALS`（账号密码错）。
-          // 只有后者是登录表单的行内错误。
-          setErrors({ password: '学号或密码不正确' })
-          return
-        }
-        if (isApiError(error)) {
-          // 其余错误码（422 的后端文案固定是「请求参数不合法」、5xx 等）不是某一个字段
-          // 的问题，挂到「学号」下面只会误导。
-          toast(error.message)
-          return
-        }
-        // 非 ApiError = 请求没到后端（域名没配 / 后端没起），这不是字段问题，用 toast
-        toast('连不上服务器，请确认后端已启动')
+        setBusy(false)
+        // 错误码 → 用户提示的映射在 `features/auth/login-messages.ts`（Taro-free，有单测）。
+        // 这里只负责把 `ApiError` 收窄成纯数据。
+        toast(
+          wechatLoginFailureMessage(
+            isApiError(error) ? { code: error.code, message: error.message } : null,
+          ),
+        )
       }
     })()
   }
@@ -140,60 +136,7 @@ export default function Login() {
         {/* ---- 表单卡 ---- */}
         <View className="login__card">
           <View className="login__form">
-            {/* 学号 */}
-            <View className="login__field">
-              <Text className="login__label">学号</Text>
-              <View
-                className={`login__input${focused === 'studentNo' ? ' is-focus' : ''}${
-                  errors.studentNo ? ' is-error' : ''
-                }`}
-              >
-                <Input
-                  className="login__val num"
-                  type="number"
-                  maxlength={STUDENT_NO_LEN}
-                  value={studentNo}
-                  disabled={submitting}
-                  placeholder="请输入 12 位学号"
-                  placeholderClass="login__ph"
-                  onInput={(event) => {
-                    setStudentNo(event.detail.value)
-                    if (errors.studentNo) setErrors((prev) => ({ ...prev, studentNo: undefined }))
-                  }}
-                  onFocus={() => setFocused('studentNo')}
-                  onBlur={() => setFocused(null)}
-                />
-              </View>
-              {errors.studentNo ? <Text className="login__err">{errors.studentNo}</Text> : null}
-            </View>
-
-            {/* 密码 */}
-            <View className="login__field">
-              <Text className="login__label">密码</Text>
-              <View
-                className={`login__input${focused === 'password' ? ' is-focus' : ''}${
-                  errors.password ? ' is-error' : ''
-                }`}
-              >
-                <Input
-                  className="login__val login__val--pwd"
-                  password
-                  value={password}
-                  disabled={submitting}
-                  placeholder="请输入密码"
-                  placeholderClass="login__ph"
-                  onInput={(event) => {
-                    setPassword(event.detail.value)
-                    if (errors.password) setErrors((prev) => ({ ...prev, password: undefined }))
-                  }}
-                  onFocus={() => setFocused('password')}
-                  onBlur={() => setFocused(null)}
-                />
-              </View>
-              {errors.password ? <Text className="login__err">{errors.password}</Text> : null}
-            </View>
-
-            {/* 协议勾选：未勾选不允许提交 */}
+            {/* 协议勾选：未勾选不允许登录 */}
             <View
               className={`login__agree${agreed ? ' is-on' : ''}`}
               onClick={() => setAgreed((prev) => !prev)}
@@ -229,23 +172,15 @@ export default function Login() {
               </Text>
             </View>
 
-            {/* 主 CTA */}
-            <View className={`login__cta${canSubmit ? '' : ' is-off'}`} onClick={submit}>
-              {submitting ? <View className="login__spin" /> : null}
-              <Text>{submitting ? '登录中…' : '登录'}</Text>
+            {/* 唯一 CTA：微信一键登录 */}
+            <View
+              className={`login__cta login__cta--wechat${canWechat ? '' : ' is-off'}`}
+              onClick={wechatLogin}
+            >
+              {wechatBusy ? <View className="login__spin" /> : null}
+              <Text>{wechatBusy ? '微信登录中…' : '微信一键登录'}</Text>
             </View>
           </View>
-        </View>
-
-        {/* ---- 去注册 ---- */}
-        <View className="login__alt">
-          <Text>还没有账号？</Text>
-          <Text
-            className="login__alt-lk"
-            onClick={() => void Taro.navigateTo({ url: '/pages/register/index' })}
-          >
-            注册
-          </Text>
         </View>
       </View>
     </View>

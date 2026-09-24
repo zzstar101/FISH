@@ -77,7 +77,6 @@ async function registerUser(serial: string): Promise<{ cookie: string; userId: s
       studentNo: `2021000000${serial}`,
       password: PASSWORD,
       nickname: `通知用户${serial}`,
-      campus: '肇庆',
     }),
   })
   expect(response.status).toBe(200)

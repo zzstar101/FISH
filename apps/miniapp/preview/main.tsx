@@ -21,14 +21,13 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/sell/index': () => import('@/pages/sell/index'),
   '/pages/chat/index': () => import('@/pages/chat/index'),
   '/pages/profile/index': () => import('@/pages/profile/index'),
+  '/pages/profile-edit/index': () => import('@/pages/profile-edit/index'),
   '/pages/search/index': () => import('@/pages/search/index'),
   '/pages/listing-detail/index': () => import('@/pages/listing-detail/index'),
   '/pages/conversation/index': () => import('@/pages/conversation/index'),
   '/pages/orders-buy/index': () => import('@/pages/orders-buy/index'),
   '/pages/orders-sell/index': () => import('@/pages/orders-sell/index'),
   '/pages/transaction-meetup/index': () => import('@/pages/transaction-meetup/index'),
-  '/pages/register/index': () => import('@/pages/register/index'),
-  '/pages/register-success/index': () => import('@/pages/register-success/index'),
   '/pages/login/index': () => import('@/pages/login/index'),
   '/pages/settings/index': () => import('@/pages/settings/index'),
   '/pages/verify/index': () => import('@/pages/verify/index'),
@@ -36,8 +35,11 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/match/index': () => import('@/pages/match/index'),
   '/pages/mylist/index': () => import('@/pages/mylist/index'),
   '/pages/watchers/index': () => import('@/pages/watchers/index'),
+  '/pages/comments/index': () => import('@/pages/comments/index'),
+  '/pages/favorites/index': () => import('@/pages/favorites/index'),
   '/pages/scan/index': () => import('@/pages/scan/index'),
   '/pages/following/index': () => import('@/pages/following/index'),
+  '/pages/history/index': () => import('@/pages/history/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */

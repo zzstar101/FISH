@@ -175,4 +175,29 @@ describe('profile store (integration)', () => {
     const row = rows.find((item) => item.id === '01990000-0000-7000-8000-0000000000e3')
     expect(row?.listing?.coverObjectKey).toBeNull()
   })
+
+  test('updateUser 只改传入的列并真的落库（#86 B）', async () => {
+    // 本域唯一的写操作，service.test.ts 用的是 fake store —— 真库 SQL 只有这里会执行。
+    const renamed = await store.updateUser(me, { nickname: '改过的昵称' })
+    expect(renamed?.nickname).toBe('改过的昵称')
+    expect(renamed?.avatarUrl).toBeNull() // 没传的列不动
+
+    const objectKey = `listings/${me}/01990000-0000-7000-8000-0000000000f2.jpg`
+    const avatarUrl = `http://localhost:9000/fish/${objectKey}`
+    const withAvatar = await store.updateUser(me, { avatarUrl })
+    expect(withAvatar?.avatarUrl).toBe(avatarUrl)
+    expect(withAvatar?.nickname).toBe('改过的昵称') // 上一次的改动保留（partial patch）
+
+    // 回读：确认是 UPDATE 落库，而不是只改了内存里的行
+    const readBack = await db.execute<{ nickname: string; avatar_url: string | null }>(
+      sql`SELECT nickname, avatar_url FROM users WHERE id = ${me}`,
+    )
+    expect(readBack[0]?.nickname).toBe('改过的昵称')
+    expect(readBack[0]?.avatar_url).toBe(avatarUrl)
+
+    // 行不存在（认证与写入之间账号被删）→ null，由 service 决定怎么报
+    expect(
+      await store.updateUser('01990000-0000-7000-8000-0000000000ff', { nickname: '无此人' }),
+    ).toBeNull()
+  })
 })

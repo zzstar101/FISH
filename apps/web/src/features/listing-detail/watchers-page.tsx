@@ -74,7 +74,7 @@ export function WatchersPage({ listingId }: { listingId: string }) {
                       {user.verified ? <AuthBadge status="VERIFIED" /> : null}
                     </p>
                     <p className="mt-0.5 truncate text-ink-3 text-xs">
-                      {user.college} · {user.campus} · {formatFollowTime(followedMinutesAgo)}
+                      {user.college} · {formatFollowTime(followedMinutesAgo)}
                     </p>
                   </div>
                 </li>

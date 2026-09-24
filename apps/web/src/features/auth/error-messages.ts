@@ -22,9 +22,8 @@ export function describeAuthFailure(error: unknown): AuthFailure {
   }
 }
 
-/** 表单字段 → 中文标签。只列认证表单实际出现的字段。 */
+/** 表单字段 → 中文标签。只列认证表单实际出现的字段（#86 F 后无 campus）。 */
 const FIELD_LABELS: Record<string, string> = {
-  campus: '校区',
   nickname: '昵称',
   password: '密码',
   studentNo: '学号',

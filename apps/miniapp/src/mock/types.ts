@@ -23,7 +23,7 @@
  * （实测 vendors.js 8KB → 99KB，见 `src/lib/contracts.ts` 的注释与 `config/index.ts`
  * 里 `mini.compile.include` 的说明）；type-only 不产生任何运行时代码。
  */
-import type { AuthStatus, Campus } from '@fish/contracts/auth/user'
+import type { AuthStatus } from '@fish/contracts/auth/user'
 import type {
   ConversationListing,
   ConversationRole,
@@ -41,23 +41,18 @@ import type { WishStatus } from '@fish/contracts/wishes/schema'
 
 /* ---------------------------------------------------------------- 用户 */
 
-/** 复用 `auth/user.ts` 的 `Campus` / `AuthStatus`（契约是唯一真源） */
-export type { AuthStatus, Campus }
+/** 复用 `auth/user.ts` 的 `AuthStatus`（契约是唯一真源） */
+export type { AuthStatus }
 
 export type MockUser = {
   id: string
   nickname: string
   avatarUrl: string
-  /**
-   * 校区：契约 `MeSchema.campus` 是 **nullable** 的（`packages/contracts/src/auth/user.ts`），
-   * 真实数据下可能没有。缺了就留 `null` 让页面不渲染，而不是挑一个校区顶上。
-   */
-  campus: Campus | null
   authStatus: AuthStatus
   /**
    * mock 专属：设计稿详情页要展示「卖出 9 件 · 好评率 100%」。
    *
-   * 契约里没有这两个数（`ListingSellerSchema` 只 pick 了 id / nickname / avatarUrl / campus），
+   * 契约里没有这两个数（`ListingSellerSchema` 只 pick 了 id / nickname / avatarUrl），
    * 因此真实数据下恒为 `null`，页面据此不渲染 —— 不编好评率。
    */
   soldCount: number | null
@@ -145,13 +140,7 @@ export type MockWish = {
   status: WishStatus
   matchCount: number
   createdAt: string
-  /**
-   * mock 专属：列表行上的校区与相对时间。
-   *
-   * `campus` 可为 `null`：契约的 `WishDto` **没有校区字段**（`wishes/schema.ts`），
-   * 真实数据下取不到，页面据此不渲染校区那一格 —— 不挑一个校区顶上。
-   */
-  campus: Campus | null
+  /** mock 专属：列表行上的相对时间。 */
   timeLabel: string
 }
 
@@ -352,8 +341,6 @@ export type MockUserProfile = {
   goodRate: number
   /** 已关注过 → 关注按钮第三态 */
   following: boolean
-  /** 对方不公开校区 */
-  hiddenCampus: boolean
 }
 
 /* ---------------------------------------------------- 我的发布（C4） */
@@ -391,7 +378,6 @@ export type MockSettings = {
   notifyDeal: boolean
   notifyNews: boolean
   commentPolicy: '已认证用户' | '所有人' | '仅好友'
-  publicCampus: boolean
 }
 
 /* ---------------------------------------------------------------- 通知 */

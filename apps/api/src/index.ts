@@ -3,6 +3,7 @@ import {
   loadMailTransportEnv,
   loadMeetupTokenEnv,
   loadServerEnv,
+  loadWechatEnv,
 } from '@fish/shared/env'
 import { createApp } from './app'
 import { websocket } from './ws'
@@ -14,13 +15,20 @@ const mailEnv = loadMailTransportEnv()
 const meetupEnv = loadMeetupTokenEnv()
 // AI 润色上游配置（#141）：transport 无默认值，live 缺任一项启动即失败。
 const aiEnv = loadAiPolishEnv()
+// 微信身份配置（#86 评审 P1）：transport 无默认值（off/stub/live），生产禁 stub；
+// off 时登录/绑定入口 503 关闭，不静默降级 stub。
+const wechatEnv = loadWechatEnv()
 
 // 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
 if (aiEnv.transport === 'stub') {
   console.warn('[api] AI_POLISH_TRANSPORT=stub：润色返回的是演示文案，不是真实模型输出')
 }
+// 同款警告：stub 微信身份不验证微信签发的凭证，只用于本地开发/测试。
+if (wechatEnv.transport === 'stub') {
+  console.warn('[api] WECHAT_TRANSPORT=stub：微信登录/手机号绑定走演示凭证，不验证微信签发')
+}
 
-const app = createApp(env, mailEnv, meetupEnv, aiEnv)
+const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv)
 
 const server = Bun.serve({
   port: env.API_PORT,

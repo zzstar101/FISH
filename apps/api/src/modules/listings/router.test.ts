@@ -29,7 +29,6 @@ const detail = {
     id: SELLER_ID,
     nickname: '阿岚',
     avatarUrl: null,
-    campus: '肇庆',
     authStatus: 'VERIFIED',
   },
   isOwner: false,

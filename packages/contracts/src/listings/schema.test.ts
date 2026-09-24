@@ -168,11 +168,10 @@ describe('ListingFeedQuerySchema', () => {
 })
 
 describe('ListingSellerSchema', () => {
-  test('exposes exactly id / nickname / avatarUrl / campus / authStatus', () => {
+  test('exposes exactly id / nickname / avatarUrl / authStatus（#86 F：校区不再公开）', () => {
     expect(Object.keys(ListingSellerSchema.shape).sort()).toEqual([
       'authStatus',
       'avatarUrl',
-      'campus',
       'id',
       'nickname',
     ])
@@ -183,7 +182,6 @@ describe('ListingSellerSchema', () => {
       id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
       nickname: '阿岚',
       avatarUrl: null,
-      campus: '肇庆',
       authStatus: 'VERIFIED',
       verifiedAt: '2026-09-12T03:40:10.000Z',
       campusEmail: 'someone@gzasc.edu.cn',
@@ -217,7 +215,6 @@ describe('ListingDetailSchema', () => {
       id: '9a8b7c6d-5e4f-4a3b-8c1d-0e9f8a7b6c5d',
       nickname: '阿岚',
       avatarUrl: null,
-      campus: '肇庆',
       authStatus: 'VERIFIED',
     },
     isOwner: false,

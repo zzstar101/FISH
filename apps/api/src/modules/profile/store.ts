@@ -1,6 +1,8 @@
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
-import { sql } from 'drizzle-orm'
+import { users } from '@fish/db/schema/users'
+import { eq, sql } from 'drizzle-orm'
+import type { UserRow } from '../auth/me'
 
 /** 我发布的商品行（含封面 objectKey；URL 由共享映射 listings/card 拼）。 */
 export interface ProfileListingRow {
@@ -66,6 +68,17 @@ export interface ProfileStore {
   ownListings(userId: string, limit: number): Promise<ProfileListingRow[]>
   ownWishes(userId: string, limit: number): Promise<ProfileWishRow[]>
   ownTransactions(userId: string, limit: number): Promise<ProfileTransactionRow[]>
+  /**
+   * #86 B：本域**唯一**的写操作——只改传入的列（昵称 / 头像 URL）。
+   *
+   * 回整行而不是只回 `Me`：对外映射统一走认证域的 `toMe`（头像脏值降级、
+   * 手机号只出派生态都在那里），本域不复制第二份。
+   * 行不存在（认证与写入之间账号被删）回 `null`，由 service 决定怎么报。
+   */
+  updateUser(
+    userId: string,
+    patch: { nickname?: string; avatarUrl?: string },
+  ): Promise<UserRow | null>
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -219,6 +232,13 @@ export function createSqlProfileStore(db: Db): ProfileStore {
               }
             : null,
       }))
+    },
+
+    async updateUser(userId, patch) {
+      // `set(patch)` 的列由调用方决定：空 patch（两个字段都没给）在契约层就被 refine 拦掉了，
+      // 走不到这里；drizzle 也不允许 `set({})`。
+      const rows = await db.update(users).set(patch).where(eq(users.id, userId)).returning()
+      return rows[0] ?? null
     },
   }
 }

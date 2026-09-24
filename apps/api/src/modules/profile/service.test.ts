@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
+import type { UserRow } from '../auth/me'
+import type { UploadService } from '../uploads/service'
 import type { MediaStorage } from '../uploads/storage'
 import { createProfileService, PROFILE_LIST_LIMIT } from './service'
 import type {
@@ -14,9 +16,10 @@ const me: Me = {
   id: '00000000-0000-4000-8000-0000000000a1',
   nickname: '小明',
   avatarUrl: null,
-  campus: '肇庆',
   authStatus: 'VERIFIED',
   verifiedAt: '2026-09-12T00:00:00.000Z',
+  phoneBound: false,
+  maskedPhone: null,
 }
 
 const storage: MediaStorage = {
@@ -24,6 +27,39 @@ const storage: MediaStorage = {
   stat: async () => null,
   publicUrl: (key) => `https://cdn.test/${key}`,
 }
+
+/**
+ * #86 B：改头像必须复用上传域的 `confirm`（归属前缀 + 对象已上传 + 格式/大小）。
+ * 读用例不碰它；写用例要断言「服务端拼的是 confirm 给的 URL，而不是端上给的字符串」，
+ * 所以这里给一个能记录调用的假实现（真实现要求 storage.stat 有对象，本文件不搭 S3）。
+ */
+function fakeUploads(): Pick<UploadService, 'confirm'> & { calls: string[] } {
+  const calls: string[] = []
+  return {
+    calls,
+    async confirm(_userId, input) {
+      calls.push(input.objectKey)
+      return { objectKey: input.objectKey, url: `https://cdn.test/${input.objectKey}` }
+    },
+  }
+}
+
+/** `users` 行 fixture：写用例要断言 DB 行 → Me 的映射仍走认证域的 toMe。 */
+const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
+  id: me.id,
+  studentNo: null,
+  passwordHash: null,
+  nickname: '小明',
+  avatarUrl: null,
+  authStatus: 'VERIFIED',
+  verifiedAt: new Date('2026-09-12T00:00:00.000Z'),
+  campusEmail: null,
+  phone: null,
+  role: 'USER',
+  createdAt: new Date('2026-09-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-09-12T00:00:00.000Z'),
+  ...overrides,
+})
 
 const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingRow => ({
   id: '00000000-0000-4000-8000-0000000000b1',
@@ -82,6 +118,10 @@ class MemoryProfileStore implements ProfileStore {
   listings: ProfileListingRow[] = [listingRow()]
   wishes: ProfileWishRow[] = [wishRow()]
   transactions: ProfileTransactionRow[] = [txRow()]
+  /** `updateUser` 收到的最后一次写入（写用例断言「只写了该写的列」）。 */
+  updated: { userId: string; patch: { nickname?: string; avatarUrl?: string } } | null = null
+  /** 覆盖 `updateUser` 的返回行；null 模拟「认证与写入之间账号被删」。 */
+  updateResult: UserRow | null | undefined = undefined
 
   async stats(): Promise<ProfileStatsRow> {
     return this.statsRow
@@ -95,11 +135,22 @@ class MemoryProfileStore implements ProfileStore {
   async ownTransactions(_userId: string, limit: number) {
     return this.transactions.slice(0, limit)
   }
+  async updateUser(userId: string, patch: { nickname?: string; avatarUrl?: string }) {
+    this.updated = { userId, patch }
+    if (this.updateResult !== undefined) return this.updateResult
+    return userRow({ id: userId, ...patch })
+  }
 }
+
+/** 读用例的统一装配（#86 B 起 createProfileService 多一个必填的 uploads 依赖）。 */
+const createService = (
+  store: ProfileStore,
+  uploads: Pick<UploadService, 'confirm'> = fakeUploads(),
+) => createProfileService({ store, storage, uploads })
 
 describe('profile service: getProfile', () => {
   test('aggregates user + stats + three lists in one call', async () => {
-    const service = createProfileService({ store: new MemoryProfileStore(), storage })
+    const service = createService(new MemoryProfileStore())
     const profile = await service.getProfile(me)
 
     expect(profile.user).toEqual(me) // user 块原样来自 requireAuth 的 Me
@@ -125,7 +176,7 @@ describe('profile service: getProfile', () => {
   test('transaction row missing embedded summary is skipped (决策 C)', async () => {
     const store = new MemoryProfileStore()
     store.transactions = [txRow({ listing: null, counterpart: null })]
-    const service = createProfileService({ store, storage })
+    const service = createService(store)
     const profile = await service.getProfile(me)
     expect(profile.transactions).toHaveLength(0)
   })
@@ -133,7 +184,7 @@ describe('profile service: getProfile', () => {
   test('transaction role is seller when I am not the buyer', async () => {
     const store = new MemoryProfileStore()
     store.transactions = [txRow({ buyerId: '00000000-0000-4000-8000-0000000000a2' })]
-    const service = createProfileService({ store, storage })
+    const service = createService(store)
     const profile = await service.getProfile(me)
     expect(profile.transactions[0]?.role).toBe('seller')
   })
@@ -143,7 +194,7 @@ describe('profile service: getProfile', () => {
     store.listings = Array.from({ length: PROFILE_LIST_LIMIT + 10 }, (_, i) =>
       listingRow({ id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}` }),
     )
-    const service = createProfileService({ store, storage })
+    const service = createService(store)
     const profile = await service.getProfile(me)
     expect(profile.listings).toHaveLength(PROFILE_LIST_LIMIT)
   })
@@ -161,7 +212,7 @@ describe('profile service: getProfile', () => {
       }),
     ]
     // 修复前：z.url() 解析失败 → 整个聚合抛 ZodError（一个脏字段让 /profile 全打不开）
-    const dirtyProfile = await createProfileService({ store: dirty, storage }).getProfile(me)
+    const dirtyProfile = await createService(dirty).getProfile(me)
     expect(dirtyProfile.transactions).toHaveLength(1)
     expect(dirtyProfile.transactions[0]?.counterpart.avatarUrl).toBeNull()
 
@@ -175,7 +226,7 @@ describe('profile service: getProfile', () => {
         },
       }),
     ]
-    const cleanProfile = await createProfileService({ store: clean, storage }).getProfile(me)
+    const cleanProfile = await createService(clean).getProfile(me)
     expect(cleanProfile.transactions[0]?.counterpart.avatarUrl).toBe(
       'https://cdn.test/avatars/a2.jpg',
     )
@@ -184,8 +235,74 @@ describe('profile service: getProfile', () => {
   test('null cover renders as null URL', async () => {
     const store = new MemoryProfileStore()
     store.listings = [listingRow({ coverObjectKey: null })]
-    const service = createProfileService({ store, storage })
+    const service = createService(store)
     const profile = await service.getProfile(me)
     expect(profile.listings[0]?.coverUrl).toBeNull()
+  })
+})
+
+describe('profile service: updateProfile（#86 B：编辑资料）', () => {
+  test('只改昵称：只写 nickname 一列，不碰头像、不碰上传域', async () => {
+    const store = new MemoryProfileStore()
+    const uploads = fakeUploads()
+    const user = await createService(store, uploads).updateProfile(me, { nickname: '新名字' })
+
+    expect(store.updated).toEqual({ userId: me.id, patch: { nickname: '新名字' } })
+    expect(uploads.calls).toEqual([])
+    expect(user.nickname).toBe('新名字')
+    expect(user.avatarUrl).toBeNull()
+  })
+
+  test('只改头像：objectKey 交给上传域 confirm，落库的是它给的绝对 URL', async () => {
+    const store = new MemoryProfileStore()
+    const uploads = fakeUploads()
+    const user = await createService(store, uploads).updateProfile(me, {
+      avatarObjectKey: 'listings/u1/a.jpg',
+    })
+
+    expect(uploads.calls).toEqual(['listings/u1/a.jpg'])
+    expect(store.updated?.patch).toEqual({ avatarUrl: 'https://cdn.test/listings/u1/a.jpg' })
+    expect(user.avatarUrl).toBe('https://cdn.test/listings/u1/a.jpg')
+  })
+
+  test('两项一起改：一次 update 同时落 nickname 与 avatarUrl', async () => {
+    const store = new MemoryProfileStore()
+    const user = await createService(store).updateProfile(me, {
+      nickname: '新名字',
+      avatarObjectKey: 'listings/u1/a.jpg',
+    })
+
+    expect(store.updated?.patch).toEqual({
+      nickname: '新名字',
+      avatarUrl: 'https://cdn.test/listings/u1/a.jpg',
+    })
+    expect(user).toMatchObject({
+      id: me.id,
+      nickname: '新名字',
+      avatarUrl: 'https://cdn.test/listings/u1/a.jpg',
+    })
+  })
+
+  test('写入与认证之间账号被删：updateUser 回 null 时抛错，不返回假 Me', async () => {
+    const store = new MemoryProfileStore()
+    store.updateResult = null
+
+    await expect(createService(store).updateProfile(me, { nickname: '新名字' })).rejects.toThrow(
+      '更新资料时账号已不存在',
+    )
+  })
+
+  test('上传域拒绝（不属于本人 / 对象缺失 / 格式大小）原样冒泡，不写库', async () => {
+    const store = new MemoryProfileStore()
+    const rejected: Pick<UploadService, 'confirm'> = {
+      confirm: async () => {
+        throw new Error('IMAGE_REFERENCE_INVALID')
+      },
+    }
+
+    await expect(
+      createService(store, rejected).updateProfile(me, { avatarObjectKey: 'listings/u2/b.jpg' }),
+    ).rejects.toThrow('IMAGE_REFERENCE_INVALID')
+    expect(store.updated).toBeNull()
   })
 })
