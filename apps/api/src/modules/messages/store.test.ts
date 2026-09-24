@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
 import { createSqlMessageStore } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -139,5 +140,40 @@ describe('messages store (integration)', () => {
 
     await store.insertSystem(conversationA, '{"type":"tx.rejected"}')
     expect(await lastMessageAtMs()).toBe(future.getTime())
+  })
+
+  test('insertText 重放同一幂等键：返回既有消息且只落一行（#67 验收①）', async () => {
+    const key = messageSendKey('01990000-0000-7000-8000-0000000000e1', textRequestHash('重试'))
+    if (!key) throw new Error('unreachable')
+    const first = await store.insertText(conversationA, buyer, '重试', key)
+    const retry = await store.insertText(conversationA, buyer, '重试', key)
+    expect(retry.id).toBe(first.id)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND client_request_id = ${key.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('insertText 同一键携带不同内容 → MessageIdempotencyConflictError', async () => {
+    const clientRequestId = '01990000-0000-7000-8000-0000000000e2'
+    await store.insertText(
+      conversationA,
+      seller,
+      'A',
+      messageSendKey(clientRequestId, textRequestHash('A')),
+    )
+    expect(
+      store.insertText(
+        conversationA,
+        seller,
+        'B',
+        messageSendKey(clientRequestId, textRequestHash('B')),
+      ),
+    ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
   })
 })

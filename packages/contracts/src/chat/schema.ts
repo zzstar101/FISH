@@ -41,6 +41,8 @@ export const imageMediaMessageInputSchema = z.strictObject({
   sizeBytes: z.number().int().positive().max(MEDIA_MAX_IMAGE_BYTES),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
+  /** #67 发送幂等键；语义同 `messageSendInputSchema.clientRequestId`。 */
+  clientRequestId: z.uuid().optional(),
 })
 export type ImageMediaMessageInput = z.infer<typeof imageMediaMessageInputSchema>
 
@@ -50,6 +52,8 @@ export const voiceMediaMessageInputSchema = z.strictObject({
   contentType: z.string().min(1),
   sizeBytes: z.number().int().positive().max(MEDIA_MAX_VOICE_BYTES),
   durationMs: z.number().int().positive(),
+  /** #67 发送幂等键；语义同 `messageSendInputSchema.clientRequestId`。 */
+  clientRequestId: z.uuid().optional(),
 })
 export type VoiceMediaMessageInput = z.infer<typeof voiceMediaMessageInputSchema>
 
@@ -192,6 +196,16 @@ export type ConversationCreateInput = z.infer<typeof conversationCreateInputSche
 /** P0 只经 HTTP 发 TEXT；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。 */
 export const messageSendInputSchema = z.strictObject({
   content: z.string().trim().min(1, '消息不能为空').max(2000, '消息最多 2000 个字符'),
+  /**
+   * #67 发送幂等键：客户端为「一次新发送」生成的 UUID，重试同一条消息时**沿用同一个值**。
+   *
+   * 服务端以 `(senderId, conversationId, clientRequestId)` 唯一约束去重：命中同键且内容
+   * 指纹一致 → 返回已创建的消息；同键但内容不同 → 409 `IDEMPOTENCY_KEY_REUSED`。
+   *
+   * 可选是为了不打断尚未升级的旧客户端：缺省时退化为非幂等发送（与升级前行为一致）。
+   * 新客户端必须始终携带。
+   */
+  clientRequestId: z.uuid().optional(),
 })
 export type MessageSendInput = z.infer<typeof messageSendInputSchema>
 
@@ -305,5 +319,10 @@ export const ChatErrorCodeSchema = z.enum([
   'MEDIA_DURATION_EXCEEDED',
   'MEDIA_DIMENSION_EXCEEDED',
   'MEDIA_NOT_FOUND',
+  /**
+   * 409：同一个 `clientRequestId` 被用来发送**内容不同**的消息（幂等键复用）。
+   * 服务端拒绝而不是静默返回旧消息，否则调用方会以为新内容已送达。
+   */
+  'IDEMPOTENCY_KEY_REUSED',
 ])
 export type ChatErrorCode = z.infer<typeof ChatErrorCodeSchema>

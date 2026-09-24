@@ -1,6 +1,11 @@
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
+import {
+  MessageIdempotencyConflictError,
+  type MessageSendKey,
+  sendKeyLockQuery,
+} from './idempotency'
 
 export interface MessageRow {
   id: string
@@ -34,8 +39,19 @@ export interface MessageStore {
     conversationId: string,
     filter: { limit: number; before: string | null },
   ): Promise<{ kind: 'ok'; rows: MessageRow[] } | { kind: 'invalid-cursor' }>
-  /** 插入 TEXT 消息并 bump 会话的 last_message_at（同一事务，两写必须原子）。 */
-  insertText(conversationId: string, senderId: string, content: string): Promise<MessageRow>
+  /**
+   * 插入 TEXT 消息并 bump 会话的 `last_message_at`（同一事务，两写必须原子）。
+   *
+   * 带 `key` 时启用 #67 发送幂等：同键同指纹 → 返回**既有**消息（不新增行）；同键不同
+   * 指纹 → 抛 `MessageIdempotencyConflictError`。查重与插入在同一事务里，串行化见
+   * `sendKeyLockQuery`。
+   */
+  insertText(
+    conversationId: string,
+    senderId: string,
+    content: string,
+    key?: MessageSendKey | null,
+  ): Promise<MessageRow>
   /**
    * 服务端写入 SYSTEM 消息（#11 的交易提案/接受/拒绝）：无发送者，事务内 bump
    * last_message_at。不对客户端暴露——只有同属服务端的 domain 模块调用。
@@ -62,6 +78,32 @@ function toRow(row: Record<string, unknown>): MessageRow {
     sender_nickname: (row.sender_nickname as string | null) ?? null,
     sender_avatar_url: (row.sender_avatar_url as string | null) ?? null,
   }
+}
+
+/**
+ * 幂等键命中查询（只应在持有该键 advisory lock 的事务内调用）。
+ *
+ * `hashMatches=false` 表示「同键不同内容」，由调用方报 409；`null` 表示键未被使用。
+ * 指纹在 SQL 里比较而不是取回 JS，省一次往返也少一个时序窗口。
+ */
+async function findByRequestKey(
+  tx: MessageTx,
+  conversationId: string,
+  senderId: string,
+  key: MessageSendKey,
+): Promise<{ row: Record<string, unknown>; hashMatches: boolean } | null> {
+  const result = await tx.execute(sql`
+    SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
+           u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
+           (m.client_request_hash = ${key.requestHash}) AS hash_matches
+    FROM messages m
+    LEFT JOIN users u ON u.id = m.sender_id
+    WHERE m.conversation_id = ${conversationId}::uuid
+      AND m.sender_id = ${senderId}::uuid
+      AND m.client_request_id = ${key.clientRequestId}
+  `)
+  const row = rowsOf(result)[0]
+  return row ? { row, hashMatches: row.hash_matches === true } : null
 }
 
 export function createSqlMessageStore(db: Db): MessageStore {
@@ -122,13 +164,28 @@ export function createSqlMessageStore(db: Db): MessageStore {
      * 因此「早开始、晚拿到会话行锁」的事务会用更旧的时间戳覆盖新值，让会话在列表里
      * 位置倒退、游标分页出错。READ COMMITTED 下被阻塞的 UPDATE 会基于最新已提交版本
      * 重算表达式，所以 GREATEST 足以保证 `last_message_at` 只前进、不回退。
+     *
+     * 幂等键路径：先拿该键的 advisory lock 再查重，两个并发同键请求因此串行 —— 第二个
+     * 读到第一个已提交的行并直接返回，不会撞唯一索引变成 500。
      */
-    async insertText(conversationId, senderId, content) {
+    async insertText(conversationId, senderId, content, key) {
       return db.transaction(async (tx) => {
+        if (key) {
+          await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
+          const existing = await findByRequestKey(tx, conversationId, senderId, key)
+          if (existing) {
+            if (existing.hashMatches) return toRow(existing.row)
+            throw new MessageIdempotencyConflictError(key.clientRequestId)
+          }
+        }
         const result = await tx.execute(sql`
           WITH msg AS (
-            INSERT INTO messages (id, conversation_id, sender_id, type, content)
-            VALUES (${newId()}, ${conversationId}::uuid, ${senderId}::uuid, 'TEXT', ${content})
+            INSERT INTO messages
+              (id, conversation_id, sender_id, type, content, client_request_id, client_request_hash)
+            VALUES (
+              ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, 'TEXT', ${content},
+              ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null}
+            )
             RETURNING id, conversation_id, sender_id, type::text, content, created_at
           ), bump AS (
             UPDATE conversations c SET

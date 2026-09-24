@@ -6,11 +6,12 @@ import {
   messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
 import type { MessageRow, MessageStore } from './store'
 
 export class MessageServiceError extends Error {
   constructor(
-    readonly status: 404 | 422,
+    readonly status: 404 | 409 | 422,
     readonly code: string,
     message: string,
   ) {
@@ -20,6 +21,10 @@ export class MessageServiceError extends Error {
 }
 
 const notFound = () => new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
+
+/** 同键不同内容：拒绝而不是静默返回旧消息，否则调用方会以为新内容已送达（丢消息）。 */
+const idempotencyConflict = () =>
+  new MessageServiceError(409, 'IDEMPOTENCY_KEY_REUSED', '同一个 clientRequestId 携带了不同内容')
 
 export function toMessageDto(row: MessageRow): MessageDto {
   return messageDtoSchema.parse({
@@ -95,9 +100,20 @@ export function createMessageService({
       // 不重复 parse——内部误用时 ZodError 落 app.onError 而不是 422，反而更难查。
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
-      const row = await store.insertText(conversationId, userId, input.content.trim())
+      const content = input.content.trim()
+      // #67 幂等键：指纹取 trim 后的正文（与落库的 content 同一值）；未携带键时为 null。
+      const key = messageSendKey(input.clientRequestId, textRequestHash(content))
+      let row: MessageRow
+      try {
+        row = await store.insertText(conversationId, userId, content, key)
+      } catch (error) {
+        if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
+        throw error
+      }
       const dto = toMessageDto(row)
       // 先落库（上面已 await）再推送；推送失败由 hub 吞掉，不影响 201 响应。
+      // 重试命中既有消息时也会推一次：契约明确「推送不保证不重不漏」，客户端按服务端
+      // id 去重（#67 第三步），这里不为去重再引入「新建/重放」的返回值分叉。
       onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
       return dto
     },

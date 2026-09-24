@@ -73,4 +73,31 @@ describe('message service: sendTextMessage', () => {
       service.sendTextMessage(outsider, conversationA, { content: 'hello' }),
     ).rejects.toBeInstanceOf(MessageServiceError)
   })
+
+  test('replays the stored message for a retried clientRequestId（同键同内容）', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000f1'
+    const first = await service.sendTextMessage(buyer, conversationA, {
+      content: '还在吗',
+      clientRequestId,
+    })
+    const retry = await service.sendTextMessage(buyer, conversationA, {
+      content: '还在吗',
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(store.messages).toHaveLength(1)
+  })
+
+  test('重试只按 trim 后的内容判重：409 IDEMPOTENCY_KEY_REUSED', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000f2'
+    await service.sendTextMessage(buyer, conversationA, { content: 'A', clientRequestId })
+    expect(
+      service.sendTextMessage(buyer, conversationA, { content: 'B', clientRequestId }),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' })
+    expect(store.messages).toHaveLength(1)
+  })
 })
