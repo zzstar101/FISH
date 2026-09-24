@@ -1,0 +1,580 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 历史浏览。尺寸 = 设计稿 pt × 2（见 DESIGN.md），数值全部取自
+ * `D:\新建文件夹\小程序1版history.html`（390pt 画布 + `--pt`）。
+ *
+ * 结构（**顶栏形态照消息页**，Owner 2026-09-23 定版）：
+ * 冰蓝页头渐变 → `components/top-bar` 的玻璃主行（返回钮 + 两段式标题「历史浏览」
+ * + 右端「清空」）+ **副行**三档下划线 tab（同一个 `below` 槽，与主行共用一块玻璃）
+ * → 内容区（全部浏览＝按天分组 + 三列格；我收藏的＝三列格；我留言的＝整宽行）
+ * → 骨架屏 / 空态 / 底部说明 / 到底提示 → 回到顶部钮。
+ *
+ * **稿的演示外壳全部没有**：状态栏、灵动岛、机身侧键、home indicator、假微信胶囊、
+ * 机身外演示控制条、`--rpx`/`--pt`/`cqw` 自适应、`prefers-reduced-motion` 块、
+ * 390×844 固定 `.screen`。真机顶栏走 `components/top-bar`（胶囊位置由
+ * `lib/nav-metrics` 运行时反推，不复刻假胶囊）。
+ *
+ * **根节点不写 `overflow`**（仓库铁律：页面会变成滚动容器，里面 fixed/sticky 的元素会退化）。
+ * 裁切由子块各自 `overflow: hidden` 处理。
+ *
+ * 顶栏与副行的占位**不由本文件算**：主行由 `top-bar` 按运行时读到的胶囊位置反推、
+ * 并用它自带的 `spacer` 占位；只有副行（tab 行）要页面自己补一块等高的
+ * `.hist__header-gap`。所以这里**没有**任何「吸顶块 top / padding-top 由页面行内下发」
+ * 的东西 —— 那是改用 `top-bar` 之前的写法，已经不存在了。
+ */
+
+.hist {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* 稿 `.content` 的 --pad-bottom（28pt + 14px 安全区） */
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+/* 顶部冰蓝渐变圆角背景（稿 `.pagehead{background:var(--grad-page)}` + 下缘 32pt 圆角）。
+   与同页族（`pages/chat` / `pages/wish` / `pages/home` / `pages/sell`）同一套：
+   高度取 416px（208pt），比顶栏 + 副行高出一截，玻璃栏底下能看到渐变往下淡出。 */
+.hist__bg {
+  @include page-hero(416px, 64px);
+}
+
+/* ------------------------------------------ 顶栏副行：三档 tab（照消息页 / 许愿页） */
+
+/* 副行占位：主行的占位由 top-bar 的 `spacer` 出，tab 行这一截页面自己补。
+   20（上衬）+ 68（tab 高）+ 8（下衬）= 96rpx —— 与 `.hist__tabs` 的 padding 逐项对应，
+   也与 `pages/chat/index.scss` 的 `.chat__header-gap` 同值同理由：
+   改 `.hist__tabs` 的 padding 或 tab 高度，必须同步改这里，否则内容会被副行压住、
+   或顶部空出一截。 */
+.hist__header-gap {
+  height: 96px;
+}
+
+/**
+ * 三档下划线 tab：与 `pages/chat` 的 `.chat__tab` / `pages/wish` 的 `.wish__tab`
+ * 逐字同一套样式（稿决策②：三份**不同**的数据 → tab，不是分段胶囊）。
+ *
+ * 它现在挂在 `components/top-bar` 的 `below` 槽里，与主行**共用同一块玻璃** ——
+ * 所以这里只给内边距与排列，底与描边由 `.topbar--glass` 铺在整块容器上。
+ */
+.hist__tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 40px 8px;
+}
+
+.hist__tab {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 68px;
+  padding: 0 24px;
+  color: var(--muted);
+  font-size: 28px;
+  transition: color 0.18s;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 8px;
+    height: 4px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 0.18s;
+  }
+
+  &.is-on {
+    color: var(--fg);
+    font-weight: 600;
+
+    &::after {
+      background: var(--grad-brand);
+    }
+  }
+}
+
+/**
+ * 顶栏右端「清空」。
+ *
+ * 挂在 `top-bar` 的**中槽**里（不是 `actions` 槽）：中槽是 `flex: 1 1 auto`，
+ * 交给它就能吃到标题之后的全部剩余宽度；这一层再 `justify-content: flex-end`
+ * 把按钮顶到行尾 —— 这才是 Owner 要的「贴近右边」。
+ * `actions` 槽是 `flex: 0 0 auto` 且没有 `margin-left: auto`，页面不传 `center` 时
+ * 标题与动作会并排挤在左边（详见 `index.tsx` 里 `center` 那段的说明）。
+ *
+ * 按钮本体是胶囊：文字按钮做不成 `pages/user` 那种圆形玻璃钮（两字塞不下），
+ * 材质沿用顶栏同一套玻璃值（`.topbar--glass` 的冰白 + 白描边）。
+ * 三档统一是「清空」（Owner 2026-09-23），文案不随档位变。
+ */
+.hist__navacts {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.hist__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 60px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  background: var(--glass-strong);
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 8px 32px -16px rgba(65, 70, 78, 0.4);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  white-space: nowrap;
+
+  &:active {
+    transform: scale(0.96);
+    background: #fff;
+  }
+}
+
+/* ---------------------------------------------------------------- 内容区 */
+
+.hist__body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------- 全部浏览：按天分组 + 三列格 */
+
+.hist__group {
+  padding-top: 28px;
+
+  &:first-child {
+    padding-top: 12px;
+  }
+}
+
+.hist__ghead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 40px 18px;
+}
+
+/* 日期来自**足迹记录**（稿决策⑦），不是商品发布时间 */
+.hist__gdate {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted-2);
+}
+
+.hist__gcount {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* 三列：3 × 213 + 2 × 16 = 671 ≈ 670（750 − 左右各 20pt） */
+.hist__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 0 40px;
+}
+
+.hist__cell {
+  width: calc((100% - 32px) / 3);
+}
+
+/**
+ * 方形色块缩略图。
+ *
+ * 高度写成 **213px**（而不是 `aspect-ratio: 1/1`）：rpx 随屏宽等比缩放，750rpx 恒等于
+ * 屏宽，所以 (670 − 32) / 3 在任何机型上都是 213rpx —— 是个与设备无关的常量。
+ * 仓库里也没有 `aspect-ratio` 的先例（真机 Android 老基础库支持不一），不在这里开这个头。
+ *
+ * 缩略图是**分类单色块**：1×1 PNG 的 data URI（`src/mock/blocks.ts`，由设计令牌派生，
+ * 非新增色值）走 `Image` 的 `mode="aspectFill"`（DESIGN.md §8.4：图片一律 aspectFill）。
+ * 与仓库其它页面（`components/product-card`、`pages/mylist`）同一套用法 —— 不直接把
+ * data URI 写进 `background`，那要额外处理 1×1 图的平铺/拉伸。
+ */
+.hist__thumb {
+  position: relative;
+  width: 100%;
+  height: 213px;
+  /* wxss 没有全局 reset，view 默认 content-box（稿子有 `*{box-sizing:border-box}`）。
+     不补的话这一格实际宽 213 + 4（左右描边）= 217，第三列会顶出 40px 的页边距
+     （先例与理由见 `pages/conversation/index.scss` 顶部那段）。 */
+  box-sizing: border-box;
+  border-radius: 36px;
+  overflow: hidden;
+  border: 2px solid var(--accent-faint);
+  background: var(--grad-ph);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /* 失效：边框降级（与收藏页同一口径） */
+  &.is-gone {
+    border-color: var(--border);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+}
+
+.hist__thumb-img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* 品类小字（稿 `.gcard__ph .tag`）：压在白字上的极浅投影，取稿的 rgba(23,35,61,.18)，
+   值等于令牌 --ink-weak-3（同一算式预计算），不另内联新色值。
+   `position: relative` 是必须的：缩略图是绝对定位的 `Image`，静态流内的文字会被它盖住。 */
+.hist__ttag {
+  position: relative;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  color: var(--surface);
+  text-shadow: 0 2px 4px var(--ink-weak-3);
+}
+
+/* 失效遮罩：已下架 / 已卖掉（稿决策④删掉了「已降价」角标，不要加回来） */
+.hist__tgone {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  color: var(--surface);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.hist__price {
+  display: block;
+  margin-top: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 27px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--price-hot);
+}
+
+.hist__price-cur {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------- 我留言的：整宽行 */
+
+/* 稿决策④：这一档找的是「我当时说了什么」，106pt 的格子塞不下那句话 → 走整宽行，
+   并且**刻意不显示价格**。 */
+.hist__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px 40px 0;
+}
+
+.hist__row {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+  @include card(40px);
+}
+
+.hist__rthumb {
+  position: relative;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 120px;
+  /* 与 `.hist__thumb` 同一理由：带描边的定尺寸块要 border-box，
+     否则稿的 60pt 会变成 62pt（先例与理由见 `pages/conversation/index.scss` 顶部） */
+  box-sizing: border-box;
+  border-radius: 24px;
+  border: 2px solid var(--accent-faint);
+  overflow: hidden;
+  background: var(--grad-ph);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hist__rthumb-img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* 品类小字。`position: relative` 与 `.hist__ttag` 同款、且同样是必须的：
+   缩略图是**绝对定位**的 `Image`，定位元素在绘制顺序里晚于静态流内的文字，
+   少了这一行，这两字会被色块整个盖住（文字在 DOM 里、却看不见）。 */
+.hist__rthumb-tag {
+  position: relative;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 18px;
+  color: var(--surface);
+  text-shadow: 0 2px 4px var(--ink-weak-3);
+}
+
+.hist__rmain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hist__rtop {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  min-width: 0;
+}
+
+.hist__rtitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+/* 类型胶囊：商品留言＝品牌蓝 / 交易评价＝薄荷 --ok-*（稿决策⑤） */
+.hist__rkind {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &.is-trade {
+    background: var(--ok-weak);
+    border-color: var(--ok);
+    color: var(--ok-ink);
+  }
+}
+
+/* 我写的那句话：2 行截断 */
+.hist__rtext {
+  font-size: 25px;
+  line-height: 1.5;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.hist__rtime {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 底部说明 */
+
+/* 稿 `noteOf()`：空串就整行不渲染 —— 否则列表末尾会多出一段说不清来历的空白 */
+.hist__note {
+  display: block;
+  margin: 36px 40px 0;
+  font-size: 21px;
+  line-height: 1.6;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- 到底提示 */
+
+.hist__tail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 36px 40px 12px;
+}
+
+.hist__tail-line {
+  width: 44px;
+  height: 2px;
+  background: var(--accent-mid);
+}
+
+.hist__tail-tx {
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 骨架屏 */
+
+/* 形状按**当前档位**画（格 / 行）：加载态的形状应该预告内容长什么样，不然加载完会「跳」一下 */
+.hist__skel-date {
+  @include skeleton(24px, 128px);
+  margin: 28px 40px 18px;
+}
+
+.hist__skel-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 36px;
+  font-size: 23px;
+  color: var(--muted-2);
+}
+
+.hist__spin {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 4px solid var(--accent-mid);
+  border-top-color: var(--brand-deep);
+  animation: hist-spin 0.8s linear infinite;
+}
+
+@keyframes hist-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hist__skel-cell {
+  width: calc((100% - 32px) / 3);
+}
+
+.hist__skel-sq {
+  @include skeleton(213px, 100%);
+  border-radius: 36px;
+}
+
+.hist__skel-bar {
+  @include skeleton(22px, 100%);
+  margin-top: 12px;
+}
+
+.hist__skel-row {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  padding: 24px;
+  margin: 0 40px 20px;
+  @include card(40px);
+}
+
+.hist__skel-rthumb {
+  @include skeleton(120px, 120px);
+  border-radius: 24px;
+  flex: 0 0 120px;
+}
+
+.hist__skel-lines {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hist__skel-line {
+  @include skeleton(22px, 100%);
+  margin-top: 14px;
+
+  &:first-child {
+    margin-top: 0;
+  }
+}
+
+/* ---------------------------------------------------------------- 回到顶部 */
+
+/* 玻璃圆钮（与 `pages/chat` / `components/order-list` 同一套材质）。页面是页面级滚动，
+   所以贴视口定位；距底取稿的 28pt，安全区交给 env() —— 稿里那段是从**物理底边**量起的
+   （稿内自绘了 home indicator），真机上再叠一次就等于算两遍。 */
+.hist__totop {
+  position: fixed;
+  right: 36px;
+  bottom: calc(56px + env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(44px) saturate(180%);
+  -webkit-backdrop-filter: blur(44px) saturate(180%);
+  box-shadow: 0 28px 60px -32px rgba(23, 35, 61, 0.46);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(24px) scale(0.9);
+  transition:
+    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    visibility 0s linear 0.26s;
+
+  &.is-show {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+  }
+}
+
+/* 上箭头：库里没有这个几何（先例 `components/order-list` 的 `.orders__totop-arrow`），CSS 画 */
+.hist__totop-arrow {
+  position: relative;
+  width: 40px;
+  height: 40px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 16px;
+    width: 4px;
+    height: 20px;
+    border-radius: 2px;
+    background: var(--brand-deep);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border-left: 4px solid var(--brand-deep);
+    border-top: 4px solid var(--brand-deep);
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
+}

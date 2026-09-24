@@ -289,7 +289,12 @@ export default function Profile() {
       url: '/pages/favorites/index',
       count: profile?.favoritesCount ?? null,
     },
-    { key: 'history', label: '历史浏览', count: profile?.historyCount ?? null },
+    {
+      key: 'history',
+      label: '历史浏览',
+      url: '/pages/history/index',
+      count: profile?.historyCount ?? null,
+    },
     { key: 'follow', label: '我的关注', count: profile?.followCount ?? null },
     {
       key: 'wish',
