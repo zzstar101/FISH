@@ -19,7 +19,7 @@ bun run dev:web             # Web   :5173
 bun run typecheck           # TypeScript 7 全仓类型检查
 bun run lint                # Biome 检查
 bun run format              # Biome 格式化
-bun test                    # 全仓测试
+bun test --isolate          # 全仓测试（每个测试文件独立全局/模块注册表）
 bun run build               # 构建
 bun run ws:smoke            # WebSocket 连通性冒烟
 ```
@@ -66,7 +66,7 @@ bun run ws:smoke            # WebSocket 连通性冒烟
 1. 先跑与改动直接相关的测试或冒烟命令。
 2. `bun run typecheck`
 3. `bun run lint`
-4. `bun test`
+4. `bun test --isolate`
 5. 涉及运行时行为时，按 README 的最小启动路径实际跑起来验证（不要只靠静态检查下结论）。
 
 > **小程序端（`apps/miniapp`）另有一条更严的验证门禁**：见 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) —— 页面改动必须在微信开发者工具里演示、经 Owner 确认可行后才允许提交，不能被本节的静态检查替代。

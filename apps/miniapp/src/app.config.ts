@@ -20,6 +20,7 @@ export default defineAppConfig({
     'pages/match/index',
     'pages/mylist/index',
     'pages/watchers/index',
+    'pages/favorites/index',
     'pages/scan/index',
     'pages/history/index',
   ],

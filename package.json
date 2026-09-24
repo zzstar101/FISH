@@ -21,7 +21,7 @@
     "typecheck": "bun run --filter '@fish/*' typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "bun test",
+    "test": "bun test --isolate",
     "ws:smoke": "bun run scripts/ws-smoke.ts",
     "core:smoke": "bun run apps/api/scripts/core-smoke.ts",
     "db:up": "docker compose up -d",

@@ -283,7 +283,12 @@ export default function Profile() {
    * **没拿到 profile 时也是 `null` 而不是 0**（`realCounts` 的未知态口径）。
    */
   const STAT_CELLS: StatCell[] = [
-    { key: 'favorites', label: '我的收藏', count: profile?.favoritesCount ?? null },
+    {
+      key: 'favorites',
+      label: '我的收藏',
+      url: '/pages/favorites/index',
+      count: profile?.favoritesCount ?? null,
+    },
     {
       key: 'history',
       label: '历史浏览',
