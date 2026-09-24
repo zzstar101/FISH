@@ -64,7 +64,8 @@ function toConversationDto(
     counterpartLastReadAt: readAtIso(row, viewerId, 'counterpart'),
     lastMessage: row.lastMessage
       ? {
-          type: row.lastMessage.type as 'TEXT' | 'SYSTEM',
+          // MEDIA 也是合法摘要类型（#67 第四步）：content 由 store 翻成 `[图片]`/`[语音]`。
+          type: row.lastMessage.type as 'TEXT' | 'SYSTEM' | 'MEDIA',
           content: row.lastMessage.content,
           senderId: row.lastMessage.senderId,
           createdAt: new Date(row.lastMessage.createdAt).toISOString(),

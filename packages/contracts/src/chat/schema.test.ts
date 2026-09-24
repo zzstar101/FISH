@@ -3,11 +3,13 @@ import {
   ChatErrorCodeSchema,
   conversationCreateInputSchema,
   conversationDtoSchema,
+  conversationLastMessageSchema,
   conversationListQuerySchema,
   imageMediaMessageInputSchema,
   messageDtoSchema,
   messageListQuerySchema,
   messageSendInputSchema,
+  messageTypeSchema,
   realtimeClientEventSchema,
   realtimeServerEventSchema,
   voiceMediaMessageInputSchema,
@@ -195,6 +197,19 @@ describe('conversationDtoSchema', () => {
     expect(parsed.counterpart.avatarUrl).toBe('https://cdn.example.com/a.png')
     expect(parsed.counterpartLastReadAt).toBe('2026-09-12T09:30:00.000Z')
     expect(parsed.lastMessage?.type).toBe('TEXT')
+  })
+
+  test('lastMessage 允许 MEDIA：媒体摘要不进 MessageDto，但会话行必须能显示（#67 第四步）', () => {
+    const parsed = conversationLastMessageSchema.parse({
+      type: 'MEDIA',
+      content: '[图片]',
+      senderId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      createdAt: '2026-09-12T10:00:00.000Z',
+    })
+    expect(parsed.type).toBe('MEDIA')
+    expect(parsed.content).toBe('[图片]')
+    // 媒体正文依然不进消息流：MessageDto 只认 TEXT/SYSTEM
+    expect(messageTypeSchema.safeParse('MEDIA').success).toBe(false)
   })
 
   test('parses a conversation with no messages yet (lastMessage null)', () => {

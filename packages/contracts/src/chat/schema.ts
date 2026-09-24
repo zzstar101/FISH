@@ -127,12 +127,24 @@ export const conversationUserSchema = z.object({
 export type ConversationUser = z.infer<typeof conversationUserSchema>
 
 /**
+ * 会话列表摘要的消息类型：比 `messageTypeSchema` 多一个 `MEDIA`。
+ *
+ * 媒体消息刻意不进 `MessageDto`（见文件顶部注释），但**必须**能作为会话行摘要出现：
+ * 否则对方只发了图片/语音时，列表既没有预览、红点也不会亮（#67 第四步）。
+ */
+export const conversationLastMessageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'MEDIA'])
+export type ConversationLastMessageType = z.infer<typeof conversationLastMessageTypeSchema>
+
+/**
  * 会话行内直接可渲染的「最后一条消息」摘要，由服务端组装——前端拿它渲染列表行，
  * 不必对每个会话再拉一次消息页（N+1）。content 是原文：TEXT 即文本，
  * SYSTEM 为 `tx.*` JSON 原文，由前端按既有解析规则处理。
+ *
+ * `MEDIA` 是例外：媒体正文不在消息流里（客户端拿不到消息行推断是图还是语音），
+ * 所以服务端直接把 `content` 填成可读文案（`[图片]` / `[语音]`），前端原样渲染。
  */
 export const conversationLastMessageSchema = z.object({
-  type: messageTypeSchema,
+  type: conversationLastMessageTypeSchema,
   content: z.string(),
   /** SYSTEM 消息没有发送者；与 MessageDto.senderId 同口径。 */
   senderId: z.string().nullable(),
