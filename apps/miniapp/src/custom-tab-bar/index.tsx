@@ -19,6 +19,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
+import { subscribeRealtime } from '@/features/chat/realtime'
 import {
   badgeShouldLight,
   hydrateUnread,
@@ -187,6 +188,25 @@ export default function CustomTabBar() {
       Taro.offAppShow(onShow)
     }
   }, [])
+
+  /**
+   * 收到新消息后刷新未读（#67 第三步）。
+   *
+   * 红点此前只在「冷启动」与「返回前台」两个时刻取数，所以用户**停留在小程序里**的时候，
+   * 对方发来的消息不会让红点亮起来 —— 而「停留中收到消息」恰恰是最常见的一种。
+   * 实时通道是那一刻唯一能知道消息到了的来源（服务端先落库、再推送）。
+   *
+   * 只认 `message.new`：`pong` 是心跳；`conversation.read` 是读位推进（未读**减少**的
+   * 方向，由会话页自己的已读同步负责）。取数失败仍是「不知道」，不会熄掉一颗已知亮着的点
+   * （见 `features/chat/unread` 的 `refreshUnread`）。
+   */
+  useEffect(() => {
+    return subscribeRealtime((event) => {
+      if (event.type !== 'message.new') return
+      if (authStatus !== 'authed' || !userId) return
+      refreshUnread(userId, demoUnread)
+    })
+  }, [authStatus, userId, demoUnread])
 
   useEffect(() => {
     // 未登录不亮红点：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上

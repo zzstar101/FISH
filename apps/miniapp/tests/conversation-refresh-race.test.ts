@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
-import { isLatestPageLoad, mergeRefreshedMessages } from '../src/pages/conversation/view'
+import {
+  isLatestPageLoad,
+  mergePushedMessage,
+  mergeRefreshedMessages,
+} from '../src/pages/conversation/view'
 
 /**
  * 会话页两处竞态的回归（#186 审查要求：修复前必须失败、修复后必须通过）。
@@ -129,5 +133,27 @@ describe('isLatestPageLoad —— 旧分页任务不得释放新账号的分页�
     // 旧分页迟到落定被守卫挡住（它自己不会还锁），锁由重拉方收回 —— 仍可再次分页
     if (isLatestPageLoad(ticket, page.epoch)) page.loading = false
     expect(page.loading).toBe(false)
+  })
+})
+
+describe('mergePushedMessage —— 实时推送按服务端 id 去重（#67 第三步）', () => {
+  test('推送顺序与服务端落库顺序不一致时按 (createdAt, id) 排回去', () => {
+    const previous = [msg('m1', '2026-09-24T00:00:00.000Z')]
+    // 后到的推送 createdAt 更早（两个连接 / 乱序到达）
+    const pushed = msg('m0', '2026-09-23T23:59:00.000Z')
+
+    expect(ids(mergePushedMessage(previous, pushed))).toEqual(['m0', 'm1'])
+  })
+
+  test('同一条消息被推第二次时不产生重复气泡（发送响应 + 推送）', () => {
+    const previous = [msg('m1', '2026-09-24T00:00:00.000Z')]
+
+    expect(ids(mergePushedMessage(previous, msg('m1', '2026-09-24T00:00:00.000Z')))).toEqual(['m1'])
+  })
+
+  test('重复时返回原数组本身，避免同一条推送让消息流白重渲染', () => {
+    const previous = [msg('m1', '2026-09-24T00:00:00.000Z')]
+
+    expect(mergePushedMessage(previous, msg('m1', '2026-09-24T00:00:00.000Z'))).toBe(previous)
   })
 })

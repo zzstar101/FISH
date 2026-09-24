@@ -9,6 +9,8 @@ import LoadError from '@/components/load-error'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { markConversationRead, sendMessage } from '@/features/chat/api'
+import { subscribeRealtime, subscribeReconnect } from '@/features/chat/realtime'
+import { backfillMessageGap } from '@/features/chat/realtime-recovery'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -22,6 +24,7 @@ import {
   initialDeferredReload,
   isLatestPageLoad,
   listingStatusText,
+  mergePushedMessage,
   mergeRefreshedMessages,
   type PendingMessage,
   parseTxEvent,
@@ -68,6 +71,12 @@ const PANEL_TILES = [
 
 /** 媒体能力的统一提示（#67 未落地前，任何「发图 / 发语音」入口都只说这一句） */
 const MEDIA_PENDING_TIP = '图片 / 语音消息待接入（#67）'
+
+/**
+ * 空 id 集合常量：`mergeRefreshedMessages` 的 `baseIds` 传它表示「不做额外保留」，
+ * 只按 id 求并集再定序（重连补齐用）。
+ */
+const EMPTY_IDS: ReadonlySet<string> = new Set()
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -332,6 +341,55 @@ export default function Conversation() {
       aliveRef.current = false
     }
   }, [])
+
+  /**
+   * 实时推送（#67 第三步）：只认本会话的 `message.new`，按服务端 id 去重后并入消息流。
+   *
+   * 推送与 HTTP 补拉是两条独立来源，同一条消息可能先由发送响应落到本地、再被推一次
+   * （契约明写「推送不保证不重不漏」），所以去重判据只能是服务端 id。
+   *
+   * `userIdRef` 那道判断不是多余的：换账号时本页在**渲染期**就把消息流清空了，而
+   * effect 的退订要等 commit 之后才跑 —— 这一小段窗口里旧账号的推送仍会打到旧监听器上，
+   * 只按 `conversationId` 过滤会让 A 的消息落进已经属于 B 的空列表。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || !conversationId) return
+    return subscribeRealtime((event) => {
+      if (event.type !== 'message.new') return
+      if (event.conversationId !== conversationId) return
+      if (userIdRef.current !== userId) return
+      setMessages((prev) => mergePushedMessage(prev, event.message))
+    })
+  }, [authStatus, userId, conversationId])
+
+  /**
+   * 重连补齐断档（#67 第三步）：每次连接建立（含重连）都从最新一页往回翻，直到接上
+   * 本地已有的消息为止 —— 断线期间错过的消息可能超过一页，只重取最新一页会留下一段
+   * 永远补不上的空洞（见 `backfillMessageGap`）。
+   *
+   * 补齐结果走 `mergeRefreshedMessages`（`baseIds` 传空集 = 只做按 id 并集 + 定序）：
+   * 本地可能有补齐窗口之外的内容（刚确认落地的发送、更早分页拉下来的历史），
+   * 直接替换会把它们抹掉。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || !conversationId) return
+    return subscribeReconnect(() => {
+      if (userIdRef.current !== userId) return
+      const current = epoch.current
+      const known = new Set(messagesRef.current.map((item) => item.id))
+      void backfillMessageGap((before) => loadMessagePage(conversationId, before), known)
+        .then((recovered) => {
+          // 期间发生过整页重拉（`load` 会自增 epoch）：那份数据比这份新
+          if (current !== epoch.current) return
+          if (userIdRef.current !== userId) return
+          if (recovered.length === 0) return
+          setMessages((prev) => mergeRefreshedMessages(prev, recovered, EMPTY_IDS))
+        })
+        .catch((error) => {
+          console.warn('[miniapp] 重连补齐消息失败', error)
+        })
+    })
+  }, [authStatus, userId, conversationId])
 
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
   const loadEarlier = () => {
