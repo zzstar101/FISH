@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { MediaMessageInput, MediaPresignInput } from '@fish/contracts/chat/schema'
 import type { MediaStorage } from '../uploads/storage'
-import { MessageIdempotencyConflictError, mediaRequestHash } from './idempotency'
+import {
+  MessageIdempotencyConflictError,
+  type MessageSendKey,
+  mediaRequestHash,
+} from './idempotency'
 import { createMediaMessageService, MediaMessageServiceError } from './media-service'
 import type { MediaMessageStore, MediaRow } from './media-store'
 
@@ -588,8 +592,10 @@ describe('media message service: send idempotency (#67)', () => {
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' })
   })
 
-  test('把幂等键（含指纹）透传给 store.create', async () => {
-    let seenKey: unknown
+  test('指纹取客户端**声明**的元数据，而不是服务端探测出的值', async () => {
+    // 用语音做区分：服务端会探测真实时长并覆盖落库值，但指纹必须仍基于客户端声明的
+    // durationMs。IMAGE 区分不开——服务端会直接拒绝「声明尺寸 ≠ 探测尺寸」的图片。
+    let seenKey: MessageSendKey | null | undefined
     const service = setup(
       {
         create: async (_conversation, _sender, input, key) => {
@@ -597,18 +603,23 @@ describe('media message service: send idempotency (#67)', () => {
           return row(input)
         },
       },
-      { stat: async () => ({ size: 1024, contentType: 'image/webp' }) },
+      {
+        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
+        readMediaBytes: async () => webmBytes(5000),
+      },
     )
-    await service.create(userId, conversationId, {
-      ...image,
-      width: 800,
-      height: 600,
+    const voice: MediaMessageInput = {
+      kind: 'VOICE',
+      objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
+      contentType: 'audio/webm',
+      sizeBytes: 2048,
+      durationMs: 1234,
       clientRequestId,
-    })
-    expect(seenKey).toEqual({
-      clientRequestId,
-      // 指纹用客户端**声明的**元数据（含 800x600），而不是服务端探测出的值。
-      requestHash: mediaRequestHash({ ...image, width: 800, height: 600, clientRequestId }),
-    })
+    }
+    await service.create(userId, conversationId, voice)
+
+    expect(seenKey).toEqual({ clientRequestId, requestHash: mediaRequestHash(voice) })
+    // 探测出的 5000 与声明的 1234 必须算出不同指纹，上面的断言才有区分力。
+    expect(mediaRequestHash({ ...voice, durationMs: 5000 })).not.toBe(mediaRequestHash(voice))
   })
 })

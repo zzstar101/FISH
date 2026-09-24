@@ -31,7 +31,12 @@ export type MediaRow = {
 /** 媒体列表游标：`(created_at, id)` 反向翻页（向更早）。 */
 export type MediaListCursor = { createdAt: string; id: string }
 
-/** #67 幂等键命中结果；`matchedHash=false` 表示同键不同内容（调用方报 409）。 */
+/**
+ * #67 幂等键命中结果；`matchedHash=false` 表示同键不同内容（调用方报 409）。
+ *
+ * `matchedHash=false` 时 `row` 可能根本不是 MEDIA 行（同键先落在 TEXT 上，见
+ * `mediaByRequestQuery`），此时其中的 media 字段为 null，调用方**不得**使用 `row`。
+ */
 export type MediaRequestLookup = { row: MediaRow; matchedHash: boolean }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -75,12 +80,18 @@ const MEDIA_SELECT = sql`
  * #67 幂等键命中查询（`db` 与事务 `tx` 共用）。
  *
  * 指纹在 SQL 里比较，省一次往返；`hash_matches` 供调用方区分「重试」与「同键换内容」。
+ *
+ * 这里必须 **LEFT JOIN**：唯一的 `(sender_id, conversation_id, client_request_id)` 索引
+ * 不区分消息类型，所以同一个键可能已经落在一条 **TEXT** 行上（先发文字、再拿同一个键发图）。
+ * 用 INNER JOIN 会让这条 TEXT 行「查不到」→ 判重 miss → INSERT 撞唯一索引 23505 → 500。
+ * 加上 `mm.id IS NOT NULL` 后，非 MEDIA 行一律落进 `matchedHash = false`，由调用方判 409。
  */
 function mediaByRequestQuery(conversationId: string, senderId: string, key: MessageSendKey): SQL {
   return sql`
-    SELECT ${MEDIA_SELECT}, (m.client_request_hash = ${key.requestHash}) AS hash_matches
+    SELECT ${MEDIA_SELECT},
+           (m.client_request_hash = ${key.requestHash} AND mm.id IS NOT NULL) AS hash_matches
     FROM messages m
-    JOIN message_media mm ON mm.message_id = m.id
+    LEFT JOIN message_media mm ON mm.message_id = m.id
     WHERE m.conversation_id = ${conversationId}::uuid
       AND m.sender_id = ${senderId}::uuid
       AND m.client_request_id = ${key.clientRequestId}

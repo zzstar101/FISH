@@ -168,6 +168,11 @@ export function createMediaMessageService({
       const sendKey = messageSendKey(input.clientRequestId, mediaRequestHash(input))
       // 重试快速路径：命中幂等键直接返回既有媒体，跳过 stat / probe / 快照写入。否则每次
       // 重试都会往存储再写一份永远不会被引用的快照（同一个预签名 key 被客户端复用）。
+      //
+      // 已知取舍：指纹只含预签名 key + 声明元数据，不含对象字节，所以「同键、同声明元数据、
+      // 但对象已被重新 PUT 成别的内容」会被当成重试而重放旧消息。要拦住它必须每次重试都
+      // stat/probe/读全量字节 —— 那正是这条快速路径要避免的开销；且已交付的消息引用的是
+      // 不可变快照，覆盖原 key 不会改变它指向的内容。
       if (sendKey) {
         const replay = await store.findByRequestKey(conversationId, userId, sendKey)
         if (replay) {

@@ -90,7 +90,26 @@ describe('message service: sendTextMessage', () => {
     expect(store.messages).toHaveLength(1)
   })
 
-  test('重试只按 trim 后的内容判重：409 IDEMPOTENCY_KEY_REUSED', async () => {
+  test('重试内容仅差首尾空白：判为同一请求并重放（而不是 409）', async () => {
+    // 指纹与落库都用 trim 后的正文，所以 'A ' 与 'A' 是**同一个**请求。若指纹改成对
+    // 未 trim 的内容取哈希，这里会撞成 409 —— 这条用例专门把两种情况区分开。
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000f3'
+    const first = await service.sendTextMessage(buyer, conversationA, {
+      content: 'A ',
+      clientRequestId,
+    })
+    const retry = await service.sendTextMessage(buyer, conversationA, {
+      content: 'A',
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(retry.content).toBe('A')
+    expect(store.messages).toHaveLength(1)
+  })
+
+  test('同一 clientRequestId 携带不同内容 → 409 IDEMPOTENCY_KEY_REUSED', async () => {
     const store = new MemoryMessageStore()
     const service = createMessageService({ store })
     const clientRequestId = '01990000-0000-7000-8000-0000000000f2'
