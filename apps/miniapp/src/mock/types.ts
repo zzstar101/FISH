@@ -341,7 +341,6 @@ export type MockUserProfile = {
   goodRate: number
   /** 已关注过 → 关注按钮第三态 */
   following: boolean
-  /** 对方不公开校区 */
 }
 
 /* ---------------------------------------------------- 我的发布（C4） */
