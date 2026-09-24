@@ -274,7 +274,7 @@ export default function Verify() {
                 <View className="verify__okcheck" />
               </View>
             </View>
-            <Text className="verify__oktitle">校园认证已通过</Text>
+            <Text className="verify__oktitle">教育邮箱已验证</Text>
             <Text className="verify__oktext">你现在可以发布闲置、接受交易，并获得认证徽章。</Text>
           </View>
 
@@ -348,7 +348,7 @@ export default function Verify() {
 
       <View className="verify__head">
         <Text className="verify__title">
-          校园<Text className="verify__title-hl">认证</Text>
+          教育邮箱<Text className="verify__title-hl">验证</Text>
         </Text>
         <Text className="verify__meta num">认证后解锁发布 / 交易 · 当前 UNVERIFIED</Text>
       </View>
