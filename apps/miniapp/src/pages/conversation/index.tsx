@@ -20,10 +20,13 @@ import {
   type DeferredReload,
   deferReload,
   initialDeferredReload,
+  isLatestPageLoad,
   listingStatusText,
+  mergeRefreshedMessages,
   type PendingMessage,
   parseTxEvent,
   resetDeferredReload,
+  resolveConvState,
   settleSend,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
@@ -114,6 +117,12 @@ export default function Conversation() {
   const visibleRef = useRef(true)
   /** 组件是否还活着：卸载后不再补刷新（Taro 的 didHide 不覆盖卸载这一路径） */
   const aliveRef = useRef(true)
+  /**
+   * 当前消息流的 id 快照来源（#186 P2-1）：silent 刷新发起时记下当时的 id 集合，
+   * 落地时据此把「刷新期间才确认落地」的消息补回来。`load` 的 `useCallback` 依赖
+   * 只有 `[conversationId]`，直接闭包读 `messages` 会永远拿到首帧的空数组。
+   */
+  const messagesRef = useRef<MessageDto[]>([])
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -170,7 +179,9 @@ export default function Conversation() {
    *   也失败」会把失败气泡和它的「重试」一起盖掉（发送失败本就要留在原地给重试）。
    *
    * 注意这是**一次性 best-effort**：补刷新的标记在发起前就清掉了，这一次失败不会有
-   * 自动重试，也不会再次补；用户主动进页 / 点重试 / 下一次从子页返回才重新同步。
+   * 自动重试，也不会再次补。silent 失败**不产生可见的错误入口**（`convState`/`msgState`
+   * 都保持原值，页面上不会有 `LoadError`）—— 重新同步只发生在下一次用户主动进页、
+   * 下一次从子页返回，或历史半边失败时消息区那个重试钮。
    */
   const load = useCallback(
     (options?: { silent?: boolean }) => {
@@ -181,30 +192,50 @@ export default function Conversation() {
       }
       const silent = options?.silent === true
       const current = ++epoch.current
+      /**
+       * silent 刷新要先记下**发起时**的消息 id 快照：落地时用它把本次刷新期间才确认
+       * 落地的消息挑出来补回（见 `mergeRefreshedMessages`）。非 silent 是整页重拉，
+       * 以服务端快照为准即可。
+       */
+      const baseIds = silent ? new Set(messagesRef.current.map((item) => item.id)) : null
+      /**
+       * 上面刚把 epoch 推进，任何在途的「更早一页」就此判过期（它的守卫会挡住写入，
+       * `finally` 也不会还锁 —— 见 `isLatestPageLoad`）。锁必须在这里主动收回，
+       * 否则那个游标的分页永久锁死。
+       *
+       * `setEarlierFailed(false)` 仍只在非 silent 时清：silent 不重拉首屏，顺手清掉
+       * 会把用户刚看到的失败提示降级成普通按钮（同 `resolveConvState` 的理由）。
+       */
+      setLoadingEarlier(false)
       // 标记「已经发起过一次加载」：didShow 据此让渡首次给登录态 effect，不双发
       loadedOnceRef.current = true
       if (!silent) {
         setConvState('loading')
         setMsgState('loading')
+        // 「更早一页没加载出来」的重试提示只属于会重拉首屏的那几次；silent 不重拉首屏，
+        // 在这里清掉会把用户刚看到的失败提示降级成普通按钮（见 `resolveConvState` 同理）。
+        setEarlierFailed(false)
       }
-      setEarlierFailed(false)
       void Promise.all([loadConversation(conversationId), loadMessagePage(conversationId)])
         .then(([detail, page]) => {
           if (current !== epoch.current) return
           if (detail.status === 'ok') setConversation(detail.conversation)
           /**
-           * 后台刷新（silent）**只做确认、不做降级**：详情半边失败时不把已经 `ok` 的
-           * `convState` 打回 `failed`/`missing`。
+           * 后台刷新（silent）**只做确认、不做降级**（判据见 `./view` 的 `resolveConvState`）。
            *
-           * 两个请求是各自独立的，弱网下（正是「发送失败」的相关场景）`loadConversation`
-           * 与 `loadMessagePage` 往往一起失败；若这里照常写 `failed`，渲染会因为
-           * `convState !== 'ok'` 短路成整页「会话加载失败」，把刚刚失败的乐观气泡与它的
-           * 「重试」一起盖掉 —— 那正是 silent 要防的事。真的被删掉的会话，下一次用户主动
-           * 进页 / 点重试（非 silent）仍会如实反映。
+           * `prev` 走 `setState` 的函数式更新：`load` 的 `useCallback` 依赖只有
+           * `[conversationId]`，直接读闭包里的 `convState` 会永远拿到首帧的 `loading`。
            */
-          if (!silent || detail.status === 'ok') setConvState(detail.status)
+          setConvState((prev) => resolveConvState(prev, detail.status, silent))
           if (!(silent && page.failed)) {
-            setMessages(page.items)
+            /**
+             * silent 刷新**合并**而不是替换（#186 P2-1）：它带回来的快照可能早于
+             * 本次刷新期间才发送成功的那条消息，无条件 `setMessages(page.items)`
+             * 会把那条刚确认的消息抹掉。非 silent 是整页重拉，直接替换。
+             */
+            setMessages((prev) =>
+              baseIds === null ? page.items : mergeRefreshedMessages(prev, page.items, baseIds),
+            )
             setNextCursor(page.nextCursor)
             setMsgState(page.failed ? 'failed' : 'ok')
           }
@@ -272,6 +303,7 @@ export default function Conversation() {
   userIdRef.current = userId
   loadRef.current = load
   pendingRef.current = pending
+  messagesRef.current = messages
   useDidShow(() => {
     visibleRef.current = true
     const sending = pendingRef.current.some((item) => item.status === 'sending')
@@ -309,7 +341,7 @@ export default function Conversation() {
     const current = epoch.current
     void loadMessagePage(conversationId, nextCursor)
       .then((page) => {
-        if (current !== epoch.current) return
+        if (!isLatestPageLoad(current, epoch.current)) return
         if (page.failed) {
           setEarlierFailed(true)
           return
@@ -317,7 +349,15 @@ export default function Conversation() {
         setMessages((prev) => sortMessages([...page.items, ...prev]))
         setNextCursor(page.nextCursor)
       })
-      .finally(() => setLoadingEarlier(false))
+      .finally(() => {
+        /**
+         * 还锁也要过同一个守卫（#186 P2-2）：这一批已经属于上一代时锁已被 `load`
+         * 收回、甚至已被新账号的分页重新拿起，无条件 `setLoadingEarlier(false)`
+         * 会把新账号在途的那次分页放掉，同一个游标被并发消费两次。
+         */
+        if (!isLatestPageLoad(current, epoch.current)) return
+        setLoadingEarlier(false)
+      })
   }
 
   /**

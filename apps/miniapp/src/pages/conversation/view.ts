@@ -94,6 +94,54 @@ export function sortMessages(items: MessageDto[]): MessageDto[] {
 }
 
 /**
+ * 后台刷新（silent）落地时把新快照合并回已有消息流（#186 P2-1）。
+ *
+ * silent 刷新发起于用户没有请求刷新的时刻，**它带回来的快照可能早于本次刷新期间
+ * 才发送成功的那条消息** —— HTTP 响应顺序无法保证：`POST /messages` 先落库并 resolve，
+ * 补刷新的 `load({ silent: true })` 后到，手里却是发送之前的快照。此时无条件
+ * `setMessages(page.items)` 会把那条已经确认的消息抹掉，用户看到自己刚发出去的话
+ * 消失，下一次刷新又冒出来。
+ *
+ * 合并规则（`baseIds` = 本次刷新**发起时**消息流里的 id 快照）：
+ * - 以服务端快照为准：它可能包含对方刚发来的新消息，也可能修正本地顺序；
+ * - 额外保留 `baseIds` 之外、且不在快照里的消息 —— 那些是刷新发起**之后**才确认
+ *   落地的（本地乐观气泡被服务端返回替换的那一刻）；
+ * - 按 id 去重后交给 `sortMessages` 定序，实时推送送来的同一条不会重复。
+ */
+export function mergeRefreshedMessages(
+  previous: MessageDto[],
+  incoming: MessageDto[],
+  baseIds: ReadonlySet<string>,
+): MessageDto[] {
+  const seen = new Set(incoming.map((item) => item.id))
+  const carried: MessageDto[] = []
+  for (const item of previous) {
+    if (baseIds.has(item.id) || seen.has(item.id)) continue
+    seen.add(item.id)
+    carried.push(item)
+  }
+  return sortMessages([...incoming, ...carried])
+}
+
+/**
+ * 「加载更早一页」的落定守卫（#186 P2-2）。
+ *
+ * 更早一页是**账号 + 会话作用域**的快照：发起后若发生换账号、换会话或整页重拉
+ * （三者都会 `epoch +1`），这批数据与 `loadingEarlier` 这把锁就都已经属于上一代。
+ *
+ * `then` 与 `finally` 必须用同一个守卫：前者决定「要不要写入」，后者决定
+ * 「要不要还锁」。旧实现只在 `then` 里判过期，`finally` 却无条件
+ * `setLoadingEarlier(false)` —— 新账号的分页请求还在飞的时候锁被上一个账号放掉，
+ * 第二次点击就能再发一次，同一个 `before` 游标被并发消费两次。
+ *
+ * 反过来，整页重拉把在途分页判过期后必须**主动**还锁（见页面里 `load` 的
+ * `setLoadingEarlier(false)`）：否则那次分页自己的 `finally` 也不会执行，锁永久拿着。
+ */
+export function isLatestPageLoad(epoch: number, latestEpoch: number): boolean {
+  return epoch === latestEpoch
+}
+
+/**
  * 会话流里真正按顺序渲染的一条。
  * 服务端消息按 `(createdAt, id)` 升序；本地待发消息永远排在最后（它必然最新）。
  */
@@ -120,6 +168,41 @@ export function shouldReloadOnShow(input: {
   sending: boolean
 }): boolean {
   return input.loadedOnce && input.authed && input.hasUserId && !input.sending
+}
+
+/**
+ * 会话详情态。`loading` 是页面自己的在途态；其余三个来自 `loadConversation`
+ * （`features/fetchers.ts`：ok / missing / failed）。
+ */
+export type ConvState = 'loading' | 'ok' | 'missing' | 'failed'
+/** `loadConversation` 能返回的详情态（不含页面自己的 `loading`） */
+export type ConvDetailStatus = Exclude<ConvState, 'loading'>
+
+/**
+ * 后台刷新（silent）如何落详情态：**只做确认、不做降级**。
+ *
+ * 为什么必须单独判：silent 补刷新发生在「发送落定」之后，而 `loadConversation` 与
+ * `loadMessagePage` 是**两个独立请求** —— 弱网下（正是「发送失败」的相关场景）往往
+ * 一起失败。若照常把详情态写成 `failed`，渲染会在 `convState !== 'ok'` 处短路成
+ * 整页「会话加载失败」，把刚失败的乐观气泡与它的「发送失败 · 重试」一起盖掉 ——
+ * 而发送失败本就该留在原地给重试。
+ *
+ * 但也不能无条件保留：页面**还没正常显示过**（`loading` / `failed`）时必须如实落
+ * 详情结果，否则会停在一个没有重试入口的态上（`loading` 分支不渲染重试钮）。
+ * 真被删掉的会话，下一次用户主动进页 / 点重试（非 silent）仍会如实反映。
+ *
+ * 抽成纯函数是因为这条判据是 #170 review 的修复点本身 —— 页面组件没有渲染测试
+ * 基建，不抽出来就没有任何用例能在它被改坏时变红（`prev` 必须由调用方经
+ * `setConvState` 的函数式更新传入：`load` 的 `useCallback` 依赖只有
+ * `[conversationId]`，闭包里的 `convState` 永远停在首帧）。
+ */
+export function resolveConvState(
+  prev: ConvState,
+  detail: ConvDetailStatus,
+  silent: boolean,
+): ConvState {
+  if (!silent || detail === 'ok') return detail
+  return prev === 'ok' ? 'ok' : detail
 }
 
 /**
