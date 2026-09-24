@@ -15,7 +15,7 @@ import TopBar from '@/components/top-bar'
 import { fetchPolishCandidates } from '@/features/ai/api'
 import { useAuthGuard } from '@/features/auth/guard'
 import { createListing, fetchListingDetail, updateListing } from '@/features/listing/api'
-import { takeSellEdit } from '@/features/listing/edit-target'
+import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
 import { type PickedPhoto, pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
 import { isApiError } from '@/lib/request'
@@ -59,6 +59,8 @@ import './index.scss'
  *    `#165`，需要契约先向本人暴露 objectKey 或新增增删端点）。
  *    编辑目标由 `features/listing/edit-target.ts` 一次性交接（Tab 页不能带 query 跳转），
  *    在 `useDidShow` 里消费；也兼容 `?id=`（开发者工具演示 / 带参进入）。
+ *    **同一条交接也承载「再次上架」**（我的发布 · 已售出）：契约没有「照成交记录另起一条在售」的
+ *    端点，所以那是**新建**而不是编辑 —— 交接里带的是 `prefill` 草稿（文案字段），图片必须重选。
  * 3. 分类：契约必填而设计稿原先没有这一栏，按既有 chips 样式补了一行。
  * 4. 审核反馈：BLOCK（422 `LISTING_CONTENT_BLOCKED`）的 `details` 按字段贴到对应输入框，
  *    页头提示条说明有几处要改；**前端不再保留任何敏感词表**，判定只在服务端。
@@ -206,6 +208,26 @@ export default function Sell() {
     )
   }
 
+  /**
+   * 「再次上架」/「重新上架」的预填：只灌**新发布能带过去的字段**，不碰图片。
+   *
+   * 图片不在其中，是契约决定的：详情响应刻意不给 `objectKey`（存储布局不进读协议），
+   * 而 `POST /listings` 只接受 `objectKeys`。所以这条路必须由用户重新选图 ——
+   * 页面靠 `syncEditTarget` 里那句 toast 说明（「图片需要重新选择」），
+   * **不能**指望图片区那行 `.sell__pnote`：它只在**编辑态**渲染（`editing` 为真时），
+   * 而预填走的是新建态，用户看不到它。
+   */
+  const applyDraft = (draft: SellDraft) => {
+    setTitle(draft.title)
+    setDescription(draft.description)
+    setFree(draft.free)
+    setPrice(priceToInput(draft.priceCents))
+    setCategory(draft.category)
+    setCondition(draft.condition)
+    setUrgent(draft.urgent)
+    setNegotiable(draft.negotiable)
+  }
+
   const resetForm = () => {
     setTitle('')
     setDescription('')
@@ -245,16 +267,36 @@ export default function Sell() {
   }
 
   /**
-   * 每次显示本页时决定「新建还是改某一件」。
+   * 每次显示本页时决定「新建还是改某一件 / 复制某一件」。
    *
    * 用 `useDidShow` 而不是 `useLoad`：出物是 Tab 页，实例常驻，`useLoad` 只在首次创建时跑一次，
-   * 之后再从「我的发布」点编辑就进不来了。`takeSellEdit()` 取一次即失效（见该模块说明）。
+   * 之后再从「我的发布」点编辑就进不来了。`takeSellHandoff()` 取一次即失效（见该模块说明）。
    *
    * 没有待取目标时若本页还停在编辑态，必须清空回新建：否则从底栏点「出物」会把上一件商品
-   * 的标题/价格当成新发布的内容。
+   * 的标题/价格当成新发布的内容。`prefill`（「再次上架」/「重新上架」）只是把字段灌进新建表单，
+   * 同一段清空逻辑对它同样成立 —— 它没有自己的持久模式。
+   *
+   * **`prefill` 优先于 `routeId`**：交接是「用户刚刚按下的那一下」，`routeId` 却是本页实例
+   * 创建时抓到的 `?id=`（Tab 页正常进不来，但一旦来了就永远是那个旧值）。
+   * 若先看 `routeId`，从「我的发布」点「再次上架」会掉进**另一件商品的编辑态**，
+   * 而且那份 prefill 草稿被静默丢掉。
    */
   const syncEditTarget = () => {
-    const target = takeSellEdit() ?? routeId
+    const handoff = takeSellHandoff()
+
+    if (handoff?.kind === 'prefill') {
+      // 再次上架 / 重新上架：整表单重来一遍，再灌入原商品的可用字段（图片必须重选）
+      modeRef.current = null
+      resetForm()
+      setEditId(null)
+      setEditState('idle')
+      applyDraft(handoff.draft)
+      // 图片是空的，说一句为什么 —— 否则用户会以为原图没带过来是丢图
+      toast('已带入原商品的文字信息 · 图片需要重新选择')
+      return
+    }
+
+    const target = handoff?.kind === 'edit' ? handoff.listingId : routeId
     if (target === null) {
       if (modeRef.current !== null) {
         modeRef.current = null
@@ -639,8 +681,8 @@ export default function Sell() {
             </View>
             <Text className="sell__result-title">已提交，正在审核</Text>
             <Text className="sell__result-text">
-              这件闲置需要人工复核，通过后才会出现在首页与搜索里。你可以在「我的发布 ·
-              审核中」看到进度。
+              这件闲置需要人工复核，通过后才会出现在首页与搜索里。审核期间它停在「我的发布 ·
+              已下架」里，通过后会自动回到「在售」。
             </Text>
             <View
               className="sell__submit"

@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { requestSellEdit, takeSellEdit } from '../src/features/listing/edit-target'
+import {
+  requestSellEdit,
+  requestSellPrefill,
+  takeSellHandoff,
+} from '../src/features/listing/edit-target'
 import {
   parsePriceToCents,
   sellBlockMessage,
@@ -127,17 +131,42 @@ describe('sellSubmitOutcome —— 提交成功后落地', () => {
   })
 })
 
-describe('edit-target —— Tab 页的编辑交接', () => {
-  test('取一次就失效：之后从底栏进「出物」不会再掉进上一次的编辑态', () => {
-    expect(takeSellEdit()).toBeNull()
+describe('edit-target —— Tab 页的交接（编辑 / 再次上架预填）', () => {
+  const draft = {
+    title: '索尼 WH-1000XM4',
+    description: '用了半年',
+    priceCents: 62000,
+    category: 'DIGITAL',
+    condition: 'LIKE_NEW',
+    urgent: false,
+    negotiable: false,
+    free: false,
+  } as const
+
+  test('取一次就失效：之后从底栏进「出物」不会再掉进上一次的模式', () => {
+    expect(takeSellHandoff()).toBeNull()
     requestSellEdit('listing-1')
-    expect(takeSellEdit()).toBe('listing-1')
-    expect(takeSellEdit()).toBeNull()
+    expect(takeSellHandoff()).toEqual({ kind: 'edit', listingId: 'listing-1' })
+    expect(takeSellHandoff()).toBeNull()
   })
 
   test('后一次请求覆盖前一次（连续点两件商品的编辑）', () => {
     requestSellEdit('listing-1')
     requestSellEdit('listing-2')
-    expect(takeSellEdit()).toBe('listing-2')
+    expect(takeSellHandoff()).toEqual({ kind: 'edit', listingId: 'listing-2' })
+  })
+
+  test('再次上架交接的是草稿而不是 id：它是新建一条，不是改这一条', () => {
+    requestSellPrefill(draft)
+    const handoff = takeSellHandoff()
+    // 关键：`kind` 不是 `edit` —— 出物页据此走 create 而不是 PATCH，商品 id 不会漏进去
+    expect(handoff).toEqual({ kind: 'prefill', draft })
+    expect(takeSellHandoff()).toBeNull()
+  })
+
+  test('编辑与再次上架互相覆盖（两种模式不会同时挂着）', () => {
+    requestSellPrefill(draft)
+    requestSellEdit('listing-3')
+    expect(takeSellHandoff()).toEqual({ kind: 'edit', listingId: 'listing-3' })
   })
 })

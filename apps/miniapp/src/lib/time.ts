@@ -30,6 +30,33 @@ export function clockTime(iso: string): string {
 }
 
 /**
+ * 「多久以前」的相对时间：`刚刚` / `12 分钟前` / `3 小时前` / `昨天` / `2 天前`。
+ *
+ * 与 `conversationTimeLabel` 的分工：那个是**会话列表**的粗粒度文案（一周内只说到「周X」），
+ * 这里是「等了多久」这种需要精确到分钟的场景（我的发布的待确认行）。两者共用同一个
+ * `nowMs` 约定。
+ *
+ * ⚠️ `pages/chat/index.tsx` 里还有一个**私有**的 `relativeTime(iso)`，它自己取
+ * `Date.now()`、且把「不足 1 分钟」的分钟数钳到 1（`Math.max(1, …)`）。两者目前并存，
+ * 没有同源——本函数是给「一屏多行、必须共用同一个现在」的场景用的。
+ *
+ * `nowMs` 由调用方传入：否则没法测，而且同一屏里各取一次「现在」会算出矛盾结果。
+ * 未来时间戳（两端时钟偏差）夹到 0，走「刚刚」，不出现「-3 分钟前」。
+ */
+export function relativeTimeOf(iso: string, nowMs: number): string {
+  const then = Date.parse(iso)
+  if (Number.isNaN(then)) return ''
+  const minutes = Math.max(0, (nowMs - then) / 60_000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${Math.floor(minutes)} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = localDayIndex(nowMs) - localDayIndex(then)
+  if (days <= 1) return '昨天'
+  return `${days} 天前`
+}
+
+/**
  * 日期分隔条文案：`今天 12:00` / `昨天 09:30` / `9 月 14 日 20:15`。
  *
  * `nowMs` 由调用方传入：否则没法测，而且同一屏里各取一次「现在」会算出矛盾结果。
