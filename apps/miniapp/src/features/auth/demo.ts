@@ -8,7 +8,7 @@
  *
  * 开关是**独立注入**的 `__DEMO_AUTH__`（见 `config/index.ts`），刻意不复用
  * `__ALLOW_MOCK_FALLBACK__`：后者还包含 `NODE_ENV=development`，会连 `dev:weapp`
- * 的日常开发一起自动登录，把匿名态 / 登录引导 / 注册流程全顶掉。
+ * 的日常开发一起自动登录，把匿名态 / 登录引导全顶掉。
  * H5 预览产物另在 `preview/build.mjs` 里显式打开。
  *
  * 生产不受影响：`taro build` 走 production 且不给 `TARO_APP_MOCK=1` 就注入 false。

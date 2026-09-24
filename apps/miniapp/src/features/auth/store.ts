@@ -1,8 +1,8 @@
 /**
  * 登录态：一个**模块级单例** + 一个 `useAuth()` 钩子。
  *
- * 为什么不引状态库：需要它的只有「当前用户」这一份数据，读的页面多、写的只有 3 处
- * （登录 / 注册 / 退出）。`useSyncExternalStore` 就能把「Taro 存储里的 cookie」
+ * 为什么不引状态库：需要它的只有「当前用户」这一份数据，读的页面多、写的只有 2 处
+ * （微信登录 / 退出）。`useSyncExternalStore` 就能把「Taro 存储里的 cookie」
  * 与「React 渲染」接起来，引一个 store 库只会多一层概念。
  *
  * 三个状态的区别很关键，页面守卫依赖它：
@@ -13,12 +13,11 @@
  * **守卫只在 `anonymous` 时跳登录页**：把 `unknown` 也当成未登录会让已登录用户
  * 冷启动时先闪一下登录页（`GET /me` 还没回来）。
  */
-import type { LoginRequest, RegisterRequest } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
 import { useSyncExternalStore } from 'react'
 import { ApiError, isUnauthenticatedError } from '@/lib/request'
 import { clearSession, onSessionCleared, readSession } from '@/lib/session'
-import { fetchMe, login, logout, register, wechatSignIn } from './api'
+import { fetchMe, logout, wechatSignIn } from './api'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from './demo'
 
 export type AuthStatus = 'unknown' | 'anonymous' | 'authed'
@@ -103,7 +102,7 @@ export function bootstrapAuth(): Promise<void> {
     .catch((error) => {
       // 只有「后端明确说这个会话无效」才销毁本地凭据。
       // 网络不可达 / 后端没起时**保留** cookie：那只是这次问不到，不代表会话失效，
-      // 删掉会逼用户重新输一次密码（而 401 UNAUTHENTICATED 时 `apiRequest`
+      // 删掉会逼用户重新登录一次（而 401 UNAUTHENTICATED 时 `apiRequest`
       // 已就地清过存储，这里不必重复）。
       if (isUnauthenticatedError(error)) clearSession()
       // 两种情况在 UI 上都按未登录处理：我们无法证明当前会话还有效
@@ -144,28 +143,12 @@ export function applyVerification(
  * `apiRequest` 里 `saveSession` 是静默吞异常的（存储写失败不该让请求失败），
  * 于是存在一种坏结局：store 广播了 `authed`、磁盘上却没有会话 —— 之后每个请求
  * 都按匿名发、被 401 打回登录页，用户看到的是「登录成功又立刻掉线」。
- * 这里把它变成一个明确的失败，由登录 / 注册页如实报错。
+ * 这里把它变成一个明确的失败，由登录页如实报错（注册页已随学号入口删除，#199）。
  */
 function assertSessionStored(): void {
   if (!readSession()) {
     throw new ApiError('SESSION_NOT_STORED', 0, '登录会话没能保存，请重试')
   }
-}
-
-/** 登录：成功后会话 cookie 由 `apiRequest` 落盘，确认落盘后再广播状态 */
-export async function signIn(input: LoginRequest): Promise<Me> {
-  const user = await login(input)
-  assertSessionStored()
-  emit({ status: 'authed', user })
-  return user
-}
-
-/** 注册即登录：契约里注册响应与 `/me` 同构 */
-export async function signUp(input: RegisterRequest): Promise<Me> {
-  const user = await register(input)
-  assertSessionStored()
-  emit({ status: 'authed', user })
-  return user
 }
 
 /**
@@ -174,7 +157,7 @@ export async function signUp(input: RegisterRequest): Promise<Me> {
  *
  * 只有一次性 code 过界：openid / session_key 既不上报也不接收，服务端是唯一与微信
  * 换凭证的一方（契约见 `packages/contracts/src/auth/wechat.ts`）。
- * 与 `signIn()` 同样先确认会话落盘再广播，避免「登录成功又立刻掉线」。
+ * 先确认会话落盘再广播，避免「登录成功又立刻掉线」。
  */
 export async function signInWithWechat(code: string): Promise<Me> {
   const user = await wechatSignIn(code)
