@@ -20,7 +20,7 @@ import { listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { loadServerEnv } from '@fish/shared/env'
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 
@@ -245,8 +245,10 @@ describe('Admin HTTP 权限边界（设计 §3.2）', () => {
   })
 
   test('forged role / identity headers never grant admin access', async () => {
-    // 身份只来自 session cookie（createRequireAuth 读 cookie → loadMe 查库），
-    // 任何自称角色的头都不得被采信。这里把常见伪造头逐一试一遍。
+    // 身份只来自 session cookie（createRequireAuth 读 cookie → loadMe 查库，
+    // session.ts 的 read 只 getCookie，仓库里没有任何 Authorization 之类的头通道），
+    // 任何自称角色的头都不得被采信。下面这份清单是常见的伪造头抽样而非枚举证明，
+    // 真正的结构性保证是「除了 fish_session cookie 没有第二条身份入口」。
     const forgedHeaders: Record<string, string>[] = [
       { 'x-user-role': 'ADMIN' },
       { 'x-role': 'ADMIN' },
@@ -708,7 +710,8 @@ describe('Admin 查询端到端', () => {
   test('audit write failure rolls the moderation business change back (same transaction)', async () => {
     // 设计 §6：业务变更与审计写入必须在同一事务。这里在 admin_audit_logs 上挂一个
     // BEFORE INSERT 触发器，仅在 reason 带注入前缀时抛错（其他用例不受影响），
-    // 从真实 HTTP 入口验证：审计写不进去 → 商品状态 / 审核记录 / 审计行全部回滚。
+    // 从真实 HTTP 入口验证：审计写不进去 → 商品状态 / 人工审核记录 / 入队的匹配
+    // 任务 / 审计行全部回滚，且同一 Idempotency-Key 重放能真正重新应用。
     await scratch.insert(listings).values({
       id: AUDIT_ROLLBACK_LISTING_ID,
       sellerId: USER_ID,
@@ -795,11 +798,43 @@ describe('Admin 查询端到端', () => {
       .from(listingModerationRecords)
       .where(eq(listingModerationRecords.listingId, AUDIT_ROLLBACK_LISTING_ID))
     expect(records).toEqual([{ id: AUDIT_ROLLBACK_RECORD_ID, action: 'CREATE' }])
-    // 审计行不存在：既证明审计与业务同事务，也保证重放同一请求不会被误判成「已处理」。
+    // 同一事务里入队的 MATCH_LISTING 任务也回滚了：若有人把 job 派发挪出事务，
+    // 这个用例必须红——被审计拒绝的决定不该已经把匹配任务派出去。
+    // 只查本商品的 job：本文件前面的用例合法地留下过其它商品的 job 行。
+    const queued = await scratch.execute(
+      sql`SELECT id FROM jobs
+           WHERE type = ${'MATCH_LISTING'} AND payload->>${'listingId'} = ${AUDIT_ROLLBACK_LISTING_ID}`,
+    )
+    expect(queued).toHaveLength(0)
+    // 审计行不存在：失败请求不会留下任何痕迹。
     const audits = await scratch
       .select({ id: adminAuditLogs.id })
       .from(adminAuditLogs)
       .where(eq(adminAuditLogs.requestId, 'audit-failure-rollback'))
     expect(audits).toHaveLength(0)
+
+    // 同 key 重放：失败请求没有留下幂等记录，所以重试会真正重新应用（而不是被
+    // 误判成「已处理」直接返回）。顺带证明事务回滚是干净的，业务还能走下去。
+    const replayed = await app.request(ADMIN_ROUTES.moderationDecision(AUDIT_ROLLBACK_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'audit-failure-rollback',
+      },
+      body: JSON.stringify({ decision: 'ALLOW', reason: '审计恢复后重放同一请求' }),
+    })
+    expect(replayed.status).toBe(200)
+    const [replayedListing] = await scratch
+      .select({ status: listings.status, moderationStatus: listings.moderationStatus })
+      .from(listings)
+      .where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
+    expect(replayedListing).toMatchObject({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
+
+    // 清掉本条 fixture：本文件是共享 scratch 库，新增的计数类断言不该把 a6/b5 算进去。
+    await scratch
+      .delete(listingModerationRecords)
+      .where(eq(listingModerationRecords.listingId, AUDIT_ROLLBACK_LISTING_ID))
+    await scratch.delete(listings).where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
   })
 })

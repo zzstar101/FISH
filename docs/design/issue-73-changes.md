@@ -68,7 +68,7 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 | F6 | Web `api.ts` 返回 `unknown` + 页面本地重复定义契约类型，契约漂移不会编译失败 | minor | 已修：改为契约类型 + 同 schema 运行时 `parse`（对齐 `features/chat/api.ts`），删除 6 处页面本地的契约类型 / 内联断言（3 处具名类型 + 4 处内联 `as`，含 `overview-page`）与全部 `as never`；CCR-1 由此暴露 |
 | F10 | `db:promote --actor` 只校验学号存在，可把提升记到无管理权限者头上 | minor | 已修：非 ADMIN 的 `--actor` 一律拒绝；补 CLI 集成测试（拒绝 / 合法 actor / 自举三条分支） |
 | F11 | 注释与实现不符（`routes.ts`、`middleware.ts` 都写 app.ts 挂 `requireAuth`）；`createAdminModule` 返回死代码；`router.ts` 残留注释 | minor | 已修 |
-| F3 | `insertAuditLog` 无调用方，且签名不接 `tx`，无法满足设计 §6「审计与业务同事务」 | minor | 已修（#73 治理半场 PR1）：删除该死方法而非改签名——此刻只有 `decideModeration` 一个写入方，改签名属为未来抽象（AGENTS §4）；治理端点落地时若出现第二个写入方，再带 `tx` 句柄抽取共享帮助函数。同时补「审计写入失败 → 业务回滚」用例（触发器注入 + HTTP 入口断言） |
+| F3 | `insertAuditLog` 无调用方，且签名不接 `tx`，无法满足设计 §6「审计与业务同事务」 | minor | 已修（#73 治理半场 PR1）：删除该死方法而非改签名——API 请求路径内只有 `decideModeration` 一个写入方，为它改签名属为未来抽象（AGENTS §4）；`db:promote` CLI（`packages/db/src/admin-promote.ts`）是另一条独立写入路径，在自举事务内直写、与 API 无共享需求。治理端点落地后若 API 路径出现第二个写入方，再带 `tx` 句柄抽取共享帮助函数。同时补「审计写入失败 → 业务回滚」用例（触发器注入 + HTTP 入口断言） |
 | F7 | `features/scanner/scanner.tsx` 卸载竞态导致摄像头不释放 | minor | **不在 #73 范围**：该文件来自 #69（提交 `527b7c7`）。建议新开 issue，不在本分支修 |
 | F8 | UI 未暴露 `sellerId` / `authStatus` / 时间范围筛选（API 已支持） | minor | **未修（记录为后续项）**：设计 §7 只要求「筛选条件写入 URL」，未要求这三个控件的具体集合；当前 `q` / `status` / `role` 已写入 URL |
 
@@ -165,7 +165,7 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
    对现有模块的侵入为：`app.ts` 加一行挂载、`users` 加一个带默认值的列、`seed.ts` 加一张表进 TRUNCATE 列表。
    **每个 PR 必须由 zzstar101 审核后才可合入，本分支未自行合入。**
 2. **契约收紧的向后兼容**：CCR-1 只拒绝此前会被静默接受的非法枚举值，但若有其它消费者依赖「任意字符串」，需同步。
-3. **审计原子性已由测试钉住**：F3 的死方法已删（见上表）；「业务变更与审计同一事务」现由 `router.test.ts` 的触发器注入用例守住——审计插入抛错时商品状态、人工审核记录、审计行全部回滚，且重放同一 `Idempotency-Key` 不会被误判成「已处理」。
+3. **moderation 决策路径的审计原子性已由测试钉住**：F3 的死方法已删（见上表）；「业务变更与审计同一事务」现由 `router.test.ts` 的触发器注入用例守住——审计插入抛错时商品状态、人工审核记录、入队的匹配任务、审计行全部回滚，同一 `Idempotency-Key` 重放仍能真正重新应用。**仅覆盖 `decideModeration` 一条路径**；`db:promote` CLI 的同事务审计写入（`packages/db/src/admin-promote.ts`）尚无失败注入覆盖。
 4. **`db:seed` 的跨分支耦合**：`seed.ts` 的 TRUNCATE 列表按分支维护，任何新增带外键的表都要同步，否则本地 seed 直接失败。
 
 ## 7. #74 Contract 冻结后的 Admin/Moderation 线补充（本次实现）
@@ -190,7 +190,7 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
 | --- | --- | --- |
 | PR1 | 既有权限 / 审计回归：删 F3 死方法；补「普通用户调写端点 403」「伪造角色头不升权」「审计写入失败业务回滚」三条自动化用例 | 无 |
 | PR2 | 举报闭环：`reports` 模型与契约；服务端校验目标存在与举报权限；重复举报并发去重；miniapp 举报入口与真实受理结果；Admin 队列 / 详情 / 处理 | `reports` 表 + 3 枚举 + 部分唯一索引 |
-| PR3 | 服务端治理：下架 / 恢复 / 限制发布 / 封禁四个端点，业务与审计同事务、条件更新防并发；限制接入发布 / 留言 / 聊天等真实服务端入口 | `user_restrictions` 表 + `admin_audit_action` 扩 7 值 + `admin_audit_target_type` 扩 2 值 |
+| PR3 | 服务端治理：下架 / 恢复 / 限制发布 / 解除限制 / 封禁**五个**端点，业务与审计同事务、条件更新防并发；限制接入发布 / 留言 / 聊天等真实服务端入口 | `user_restrictions` 表 + `admin_audit_action` 扩 7 值 + `admin_audit_target_type` 扩 2 值 |
 | PR4 | 历史检索与完整筛选：`GET /admin/moderation/records`；交易筛选写进 URL 且改筛选重置游标；Overview 指标改全量 `count(*)` | 无 |
 
 关键取舍：
