@@ -27,6 +27,10 @@ import {
  *
  * `details` 是**可选**的字段级错误（#6 契约：商品域 / 上传域的 422 校验类失败都带它）：
  * 发布页据此把 BLOCK 原因贴到对应输入框，而不是只给一句页面级通用错误。
+ *
+ * `retryAfterSeconds` 是**可选**的 429 剩余等待秒数（契约字段见
+ * `packages/contracts/src/system/error.ts:35`，#141 起结构化返回）：AI 润色的入口按钮靠它
+ * 做倒计时，不必解析 message 文案。全仓此前没有这个字段位，不传即不出现。
  */
 export class ApiError extends Error {
   constructor(
@@ -34,6 +38,7 @@ export class ApiError extends Error {
     readonly status: number,
     message: string,
     readonly details?: ApiErrorDetail[],
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -146,6 +151,7 @@ export async function apiRequest(path: string, options: RequestOptions = {}): Pr
         statusCode,
         parsed.data.error.message,
         parsed.data.error.details,
+        parsed.data.error.retryAfterSeconds,
       )
     }
     throw new ApiError('INTERNAL_ERROR', statusCode, '请求失败，请稍后重试')

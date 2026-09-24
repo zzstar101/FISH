@@ -2,10 +2,19 @@ import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  beginSend,
   canRetry,
+  clearDeferredReload,
+  deferReload,
+  initialDeferredReload,
+  isFlushDue,
   listingStatusText,
   type PendingMessage,
   parseTxEvent,
+  resetDeferredReload,
+  settleSend,
+  shouldFlushDeferredReload,
+  shouldReloadOnShow,
   sortMessages,
   systemPillText,
 } from '../src/pages/conversation/view'
@@ -121,5 +130,182 @@ describe('dayLabelOf —— 日期分隔条', () => {
 
   test('解析不了 → 空串', () => {
     expect(dayLabelOf('not-a-date', NOW)).toBe('')
+  })
+})
+
+/**
+ * #170 D（返回同步）的接线判据。
+ *
+ * 这些是「组件接线」里唯一能脱离渲染单独锁住的部分 —— 页面组件本身没有渲染
+ * 测试基建（见文件头），所以把「什么时候重拉 / 什么时候补刷新」抽成纯函数与
+ * 状态机锁在这里；至于页面是否真的在 didShow 里调用、ref 是否真的同步，
+ * 仍靠 code review + 端上验收。
+ */
+describe('shouldReloadOnShow —— 返回本页时是否立刻重拉（#170 D）', () => {
+  const base = { loadedOnce: true, authed: true, hasUserId: true, sending: false }
+
+  test('登录态就绪、已加载过、无在途发送 → 重拉', () => {
+    expect(shouldReloadOnShow(base)).toBe(true)
+  })
+
+  test('首次显示（还没加载过）→ 不重拉：让渡给登录态 effect，冷启动不双发', () => {
+    expect(shouldReloadOnShow({ ...base, loadedOnce: false })).toBe(false)
+  })
+
+  test('未登录 / 登录态未就绪 → 不发受限请求', () => {
+    expect(shouldReloadOnShow({ ...base, authed: false })).toBe(false)
+    expect(shouldReloadOnShow({ ...base, hasUserId: false })).toBe(false)
+  })
+
+  test('有在途发送 → 不立刻重拉（否则 epoch+1 把乐观气泡卡在「发送中」）', () => {
+    expect(shouldReloadOnShow({ ...base, sending: true })).toBe(false)
+  })
+})
+
+describe('DeferredReload 状态机 —— 「发送中返回」延后到发送落定再补刷新（#170 D）', () => {
+  /**
+   * 走一遍完整回路：发起 n 次发送、再落定 m 次（同一 epoch）。
+   *
+   * 落定时模拟组件的做法：**到点就先 `clearDeferredReload` 再补刷新**
+   * （`index.tsx` 的 finally）。带上这一步，`flushes` 才等于「真的补了几次」，
+   * 而不是「有几次满足到点条件」—— 「多个并发只补一次」靠的是这两半合起来。
+   */
+  const run = (epoch: number, sends: number, settles: number) => {
+    let state = deferReload(initialDeferredReload(epoch))
+    const flushes: boolean[] = []
+    for (let i = 0; i < sends; i += 1) state = beginSend(state, epoch)
+    for (let i = 0; i < settles; i += 1) {
+      state = settleSend(state, epoch)
+      if (isFlushDue(state)) {
+        flushes.push(true)
+        state = clearDeferredReload(state)
+      } else {
+        flushes.push(false)
+      }
+    }
+    return { state, flushes }
+  }
+
+  test('单个发送落定后 → 到点补刷新', () => {
+    const { state, flushes } = run(1, 1, 1)
+    expect(flushes).toEqual([true])
+    expect(state).toEqual({ deferred: false, inflight: 0, epoch: 1 })
+  })
+
+  test('多个并发发送：只有最后一次落定才补，且只补一次', () => {
+    const { state, flushes } = run(1, 2, 2)
+    expect(flushes).toEqual([false, true])
+    expect(state.inflight).toBe(0)
+  })
+
+  test('补过一次之后，同一轮再落定不再补（「只补一次」的另一半）', () => {
+    let state = deferReload(initialDeferredReload(1))
+    state = beginSend(state, 1)
+    state = beginSend(state, 1)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(false)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(true)
+    state = clearDeferredReload(state)
+    // 补刷新之后又发了一条并落定：没有新的「欠刷新」，不该再补
+    state = beginSend(state, 1)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(false)
+  })
+
+  test('没被延后（正常 didShow 已重拉）→ 落定后不到点，避免多打一次', () => {
+    let state = initialDeferredReload(1)
+    state = beginSend(state, 1)
+    state = settleSend(state, 1)
+    expect(isFlushDue(state)).toBe(false)
+  })
+
+  test('陈旧 epoch 的落定原样返回：不污染当前 epoch 的计数、也不触发刷新', () => {
+    // A(epoch 1) 的发送在飞 → 换账号到 epoch 2
+    let state = beginSend(initialDeferredReload(1), 1)
+    // B 发起发送并延后刷新
+    state = beginSend(state, 2)
+    state = deferReload(state)
+    expect(state).toEqual({ deferred: true, inflight: 1, epoch: 2 })
+
+    // A 的迟到落定：完全无副作用
+    const afterStale = settleSend(state, 1)
+    expect(afterStale).toEqual(state)
+    expect(isFlushDue(afterStale)).toBe(false)
+
+    // B 的落定才归零并到点 —— 这是「A 的 finally 不能压制 / 触发 B 的刷新」的回归点
+    const afterB = settleSend(afterStale, 2)
+    expect(afterB.inflight).toBe(0)
+    expect(isFlushDue(afterB)).toBe(true)
+  })
+
+  test('陈旧落定不得把计数减成负数（换账号后计数被 beginSend 重置）', () => {
+    let state = beginSend(initialDeferredReload(1), 1)
+    state = beginSend(state, 1)
+    // 换账号：组件在渲染期 reset，再发起 B 的第一次发送
+    state = resetDeferredReload(2)
+    state = beginSend(state, 2)
+    expect(state.inflight).toBe(1)
+    // 两条陈旧落定 + 一条当前落定
+    state = settleSend(state, 1)
+    state = settleSend(state, 1)
+    expect(state.inflight).toBe(1)
+    state = settleSend(state, 2)
+    expect(state.inflight).toBe(0)
+  })
+
+  test('同一 epoch 多减一次也不下溢（0 → 0）', () => {
+    const state = settleSend(initialDeferredReload(1), 1)
+    expect(state.inflight).toBe(0)
+  })
+
+  test('epoch 被 load 抬高（未换账号）时标记故意保留：代价是多一次 silent load', () => {
+    // 钉住 beginSend 跨 epoch 分支里 deferred 的存活语义：不 reset 的 epoch 抬升
+    // （当前只有登录态 effect 会这样）不该把「欠刷新」丢掉，宁可多补一次。
+    let state = deferReload(initialDeferredReload(1))
+    state = beginSend(state, 1)
+    state = beginSend(state, 2)
+    expect(state).toEqual({ deferred: true, inflight: 1, epoch: 2 })
+    state = settleSend(state, 2)
+    expect(isFlushDue(state)).toBe(true)
+  })
+
+  test('身份清场（reset）丢掉标记与计数：陈旧标记不会被新账号的落定消费', () => {
+    let state = deferReload(beginSend(initialDeferredReload(1), 1))
+    state = resetDeferredReload(2)
+    expect(state).toEqual({ deferred: false, inflight: 0, epoch: 2 })
+    // 新账号发一条并落定：没有欠刷新，不该补
+    state = beginSend(state, 2)
+    state = settleSend(state, 2)
+    expect(isFlushDue(state)).toBe(false)
+  })
+
+  test('clear 只清标记、不动计数', () => {
+    const state = beginSend(deferReload(initialDeferredReload(1)), 1)
+    expect(clearDeferredReload(state)).toEqual({ deferred: false, inflight: 1, epoch: 1 })
+  })
+})
+
+describe('shouldFlushDeferredReload —— 到点之后「真的能发」才补（#170 D）', () => {
+  const due = deferReload(initialDeferredReload(1))
+  const base = { state: due, authed: true, hasUserId: true, visible: true }
+
+  test('到点 + 身份有效 + 页面可见 → 补刷新', () => {
+    expect(shouldFlushDeferredReload(base)).toBe(true)
+  })
+
+  test('没到点（还欠着在途发送）→ 不补：等最后一次落定', () => {
+    const sending = beginSend(due, 1)
+    expect(shouldFlushDeferredReload({ ...base, state: sending })).toBe(false)
+  })
+
+  test('没欠刷新（正常 didShow 已重拉 / 已被清场）→ 不补', () => {
+    expect(shouldFlushDeferredReload({ ...base, state: initialDeferredReload(1) })).toBe(false)
+  })
+
+  test('身份失效 / 页面不可见 → 不补（不可见时不丢，回到本页 didShow 会正常重拉）', () => {
+    expect(shouldFlushDeferredReload({ ...base, authed: false })).toBe(false)
+    expect(shouldFlushDeferredReload({ ...base, hasUserId: false })).toBe(false)
+    expect(shouldFlushDeferredReload({ ...base, visible: false })).toBe(false)
   })
 })
