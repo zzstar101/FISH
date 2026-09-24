@@ -15,17 +15,19 @@
  */
 import { Button, Image, Input, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuthGuard } from '@/features/auth/guard'
 import { applyProfile, useAuth } from '@/features/auth/store'
 import { updateProfile } from '@/features/profile/api'
+import { avatarMime, NICKNAME_MAX } from '@/features/profile/avatar'
 import {
-  avatarMime,
-  NICKNAME_MAX,
-  nicknameError,
-  profileUpdateBody,
-} from '@/features/profile/avatar'
+  advanceSession,
+  isTicketCurrent,
+  runProfileSave,
+  type SaveTicket,
+  type SessionKey,
+} from '@/features/profile/save'
 import { type PickedPhoto, uploadListingImage, validatePickedSize } from '@/features/upload/api'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { ensurePrivacyAuthorized } from '@/lib/privacy'
@@ -93,12 +95,32 @@ export default function ProfileEdit() {
   const ownerId = owner?.id ?? null
   const ownerNickname = owner?.nickname ?? null
 
+  /**
+   * 会话代次（#86 B 线复评 P1）：换号 / 登出 / 卸载都会让它前进，从而作废在途的保存任务。
+   * 必须放 ref —— 在途任务读的是**开任务那一刻**的闭包，只有 ref 能读到最新会话。
+   */
+  const sessionRef = useRef<SessionKey>({ ownerId, epoch: 0 })
+  const ticketSeqRef = useRef(0)
+  // 渲染期身份清场：`ownerId` 一变先作废上一轮任务（同 `pages/conversation` 的做法）
+  if (sessionRef.current.ownerId !== ownerId) {
+    sessionRef.current = advanceSession(sessionRef.current, ownerId)
+  }
+  // 卸载即作废：迟到的任务不得再 PATCH、弹成功或导航
+  useEffect(
+    () => () => {
+      sessionRef.current = { ...sessionRef.current, epoch: sessionRef.current.epoch + 1 }
+    },
+    [],
+  )
+
   // 冷启动时 store 先 `unknown` 再 `authed`：拿到用户后灌初值；换账号同理（清掉上一个账号的草稿）
   useEffect(() => {
     if (ownerId === null || ownerNickname === null) return
     setNickname(ownerNickname)
     setAvatarPath(null)
     setUploaded(null)
+    // 换号时把阶段收回：上一轮任务的进度条属于上一个账号（它自己回来时已是 aborted）
+    setPhase('idle')
   }, [ownerId, ownerNickname])
 
   // `chooseAvatar` 是隐私接口：进页面先把授权问掉，别等用户点头像那一下才失败（#86 B）
@@ -127,60 +149,55 @@ export default function ProfileEdit() {
   const save = async () => {
     if (busy || owner === null) return
 
-    const err = nicknameError(nickname)
-    setNickErr(err)
-    if (err) return
+    // 开任务：把**这一刻**的会话钉进凭据，之后每次发鉴权请求前都会再校验一次
+    const ticket: SaveTicket = { ...sessionRef.current, id: ++ticketSeqRef.current }
+    setNickErr(null)
 
-    // 已传过的头像直接用现成 objectKey（省一次重复上传）；否则需要先传新头像
-    const readyObjectKey = uploaded && uploaded.path === avatarPath ? uploaded.objectKey : null
-    const needsUpload = avatarPath !== null && readyObjectKey === null
+    const result = await runProfileSave(
+      {
+        ticket,
+        ownerId: owner.id,
+        ownerNickname: owner.nickname,
+        draft: { nickname, avatarPath, uploaded },
+      },
+      {
+        readAvatarPhoto,
+        uploadAvatar: uploadListingImage,
+        patchProfile: updateProfile,
+        session: () => sessionRef.current,
+        onPhase: setPhase,
+        onUploaded: (path, objectKey) => setUploaded({ path, objectKey }),
+      },
+    )
 
-    if (
-      profileUpdateBody(owner.nickname, { nickname, avatarObjectKey: readyObjectKey }) === null &&
-      !needsUpload
-    ) {
-      void Taro.showToast({ title: '没有需要保存的修改', icon: 'none' })
-      return
-    }
+    // 会话已变 / 页面已卸载：不弹成功、不广播、不导航；阶段由身份清场 effect 复位
+    if (result.kind === 'aborted') return
 
-    try {
-      let objectKey = readyObjectKey
-      if (needsUpload && avatarPath !== null) {
-        setPhase('uploading')
-        const photo = await readAvatarPhoto(avatarPath)
-        objectKey = await uploadListingImage(photo)
-        setUploaded({ path: avatarPath, objectKey })
-      }
-
-      setPhase('saving')
-      const body = profileUpdateBody(owner.nickname, { nickname, avatarObjectKey: objectKey })
-      if (body === null) {
-        void Taro.showToast({ title: '没有需要保存的修改', icon: 'none' })
-        return
-      }
-
-      const updated = await updateProfile(body)
+    if (result.kind === 'saved') {
       // 会话里的 user 是全局单例（「我的」页也在读），改完立刻广播，返回即是新值
-      applyProfile(owner.id, { nickname: updated.nickname, avatarUrl: updated.avatarUrl })
+      applyProfile(result.ownerId, { nickname: result.nickname, avatarUrl: result.avatarUrl })
       void Taro.showToast({ title: '已保存', icon: 'success' })
       goBack()
-    } catch (error) {
-      if (isApiError(error)) {
-        // 服务端文案已经可读（图片不属于当前用户 / 图片尚未上传完成 / 昵称不合法…）
-        const field = error.details?.find((detail) => detail.field === 'nickname')
-        if (field) {
-          setNickErr(field.message)
-          return
-        }
-        void Taro.showToast({ title: error.message, icon: 'none' })
-        return
+    } else if (result.kind === 'no-change') {
+      void Taro.showToast({ title: '没有需要保存的修改', icon: 'none' })
+    } else if (result.kind === 'nickname-invalid') {
+      setNickErr(result.message)
+    } else if (isApiError(result.error)) {
+      // 服务端文案已经可读（图片不属于当前用户 / 图片尚未上传完成 / 昵称不合法…）
+      const field = result.error.details?.find((detail) => detail.field === 'nickname')
+      if (field) {
+        setNickErr(field.message)
+      } else {
+        void Taro.showToast({ title: result.error.message, icon: 'none' })
       }
+    } else {
       // 本地预检抛的文案（格式不支持 / 超过 5MB / 读文件失败）
-      const message = error instanceof Error ? error.message : '保存失败，请稍后重试'
+      const message = result.error instanceof Error ? result.error.message : '保存失败，请稍后重试'
       void Taro.showToast({ title: message, icon: 'none' })
-    } finally {
-      setPhase('idle')
     }
+
+    // 只有仍属当前会话的任务才收回阶段，免得把更新那一轮的进度顶掉
+    if (isTicketCurrent(ticket, sessionRef.current)) setPhase('idle')
   }
 
   const previewSrc = avatarPath ?? owner?.avatarUrl ?? null
