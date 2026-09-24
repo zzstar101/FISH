@@ -1,0 +1,614 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 我的收藏（稿 `小程序1版favorites.html`，模板 A）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 顶栏（`components/top-bar`：返回 + 两段式标题 + 「管理/退出管理」，副行是分段胶囊）
+ * → 记录卡列表（缩略图 + 标题两行 + 价格 + 右侧竖排动作；卡底一条信息带）
+ * → 到底提示；右下是回到顶部玻璃钮；管理态多一条吸底栏（全选 + 取消收藏）。
+ *
+ * 稿里被丢掉的外壳：状态栏 / 灵动岛 / 机身侧键 / home indicator / **假微信胶囊** /
+ * 机身外演示控制条 / `--rpx`+`--pt`+`cqw` 自适应 / `prefers-reduced-motion` 块 /
+ * 390×844 的固定 `.screen`。真机顶栏只做**避让**（胶囊由 `lib/nav-metrics` 运行时反推，
+ * `components/top-bar` 已按它下发右内边距），不复刻。页面级下拉刷新走微信原生
+ * （`index.config.ts` + `usePullDownRefresh`），所以稿里那套 pointer 事件的假 refresher
+ * 也不需要。
+ *
+ * 根节点刻意**不写 `overflow`**：写了页面自身就成了滚动容器，`pageScrollTo` 与
+ * 页面级下拉刷新都会失真（见 `pages/wish/index.scss` 的同类说明）。
+ * 横滑/裁切由各自子块 `overflow: hidden` 处理。
+ */
+
+.fav {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* 底部留白：让出回到顶部钮与安全区（非 Tab 页，没有底栏要避让） */
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+/* 管理态：底部多一条吸底栏（全选 + 取消收藏），留白要把它整条让出来，
+   否则最后一张卡会被压在栏底下 —— 那正是「选不到最后一行」的来源。 */
+.fav.is-managing {
+  padding-bottom: calc(260px + env(safe-area-inset-bottom));
+}
+
+/* 顶部冰蓝渐变圆角背景（与消息页 / 许愿页同一形态）：玻璃顶栏压在它上面，
+   滚过去的内容从玻璃底下透出，而不是把标题顶掉。 */
+.fav__bg {
+  @include page-hero(496px, 64px);
+}
+
+/*
+ * 「管理」/「退出管理」：顶栏右侧的页面动作。
+ *
+ * 右侧边界由 `components/top-bar` 下发 —— 它按运行时读到的胶囊位置给整行
+ * `padding-right`（见 `@/lib/nav-metrics`），所以动作钮天然排在原生胶囊左边。
+ *
+ * 但**「排在标题之后」不等于「贴在右边」**：`.topbar__row` 是普通 flex、没有
+ * `justify-content`，动作块会紧跟着标题停住，右边留一大片空玻璃（实测 390pt 屏上
+ * 动作钮右边缘 192、可用的右边界 284）。所以页面在中槽补了一块撑满余宽的空位
+ * （`.fav__rowfill`，走 `topbar__center` 的 `flex: 1 1 auto`），动作才落到右侧边界。
+ */
+.fav__rowfill {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fav__manage {
+  display: inline-flex;
+  align-items: center;
+  height: 60px;
+  padding: 0 22px;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--brand-deep);
+
+  &:active {
+    opacity: 0.62;
+  }
+}
+
+/* ------------------------------------------------ 顶栏副行（分段胶囊） */
+
+/*
+ * 副行进 `TopBar` 的 `below` 槽：与主行**同一块玻璃**、描边落在整块底边
+ * （消息页的筛选行 / 许愿页的 tab 行同一形态）。
+ *
+ * 下衬只给 8px：内容整体上提，胶囊不压在玻璃底边的描边上。
+ */
+.fav__segwrap {
+  padding: 20px 40px 8px;
+}
+
+/* 副行占位：20（上衬）+ 88（胶囊高）+ 8（下衬）= 116px。`TopBar` 的 `spacer`
+   只含主行，副行的占位得页面自己补 —— 组件的 props 注释里写明了这一点。 */
+.fav__gap {
+  height: 116px;
+}
+
+/* 两段等分；**不摆计数**（只有两段，件数在列表末尾的「已显示全部 N 件」里）。
+   描边用 `inset box-shadow` 而不是 `border`（与 `components/top-bar` 同一手法）：
+   `border` 要吃掉 2×2px 的盒模型高度，里面的胶囊就只有 34pt 高，而稿里是 36pt
+   （`44pt 外高 − 4pt 上下衬 × 2 = 36pt`）。画成 inset 阴影不占高，内高正好 72px。 */
+.fav__seg {
+  display: flex;
+  gap: 8px;
+  height: 88px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: var(--ice);
+  box-shadow: inset 0 0 0 2px var(--border);
+}
+
+.fav__seg-item {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-pill);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &.is-on {
+    background: var(--ink);
+    color: var(--surface);
+  }
+}
+
+/* ------------------------------------------------------------------ 内容区 */
+
+.fav__body {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------------------ 记录卡（模板 A） */
+
+.fav__list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px 40px 0;
+}
+
+.fav__item {
+  @include card(40px);
+  overflow: hidden;
+}
+
+/* 失效行：冰底 + 去掉投影（稿 `.item.is-gone`），动作区整块不渲染（见页面注释） */
+.fav__item.is-gone {
+  background: var(--ice);
+  box-shadow: none;
+}
+
+/* 勾选中的整卡反馈：描边转品牌色，让「选中了哪几张」在一屏里扫得出来 */
+.fav__item.is-picked {
+  border-color: var(--brand);
+}
+
+/*
+ * 行的横向排布**不用 `gap`**：勾选圈是常驻的 0 宽元素（见下），`gap` 会在它宽度为 0 时
+ * 照样插进 24px 缝，非管理态的卡片就会平白右移。所以改成各块自己给外边距，
+ * 由勾选圈那一个变量的宽窄决定整行是否右移。
+ */
+.fav__row {
+  display: flex;
+  padding: 24px;
+}
+
+/*
+ * 勾选圈的外壳：**常驻渲染**、宽度 0 ↔ 40 收起展开。
+ *
+ * 整块条件渲染的话，「卡片全部右移」是一帧跳变、没有滑动过程；常驻 + 过渡才有。
+ * 非管理态宽 0 且 `overflow: hidden`，所以它既不占位也不可点。
+ */
+.fav__pick {
+  flex: 0 0 auto;
+  width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  transition:
+    width 0.24s cubic-bezier(0.32, 0.72, 0.35, 1),
+    margin-right 0.24s cubic-bezier(0.32, 0.72, 0.35, 1);
+}
+
+.fav__item.is-managing .fav__pick {
+  width: 40px;
+  margin-right: 16px;
+}
+
+/* 圆圈本体：空圈是描边，选中是品牌实底 + 白勾（稿的圆圈） */
+.fav__round {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  background: var(--surface);
+
+  &.is-on {
+    border-color: var(--brand);
+    background: var(--brand);
+  }
+}
+
+.fav__round-ic {
+  width: 24px;
+  height: 24px;
+}
+
+.fav__thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 152px;
+  height: 152px;
+  margin-right: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28px;
+  border: 2px solid var(--accent-faint);
+  overflow: hidden;
+  background: var(--grad-ph);
+}
+
+.fav__item.is-gone .fav__thumb {
+  border-color: var(--border);
+}
+
+.fav__thumb-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* 品类小字：压在白字描边上（单色块底色来自分类基色，是深色方案里的浅色块，故用白字+墨色阴影） */
+.fav__thumb-cat {
+  position: relative;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  color: var(--surface);
+  text-shadow: 0 2px 4px var(--ink-weak-3);
+}
+
+/* 失效遮罩：已下架 / 已卖掉（`--scrim` 是仓库既有的压暗令牌） */
+.fav__thumb-mk {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--scrim);
+  color: var(--surface);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.fav__main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.fav__rtitle {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.fav__item.is-gone .fav__rtitle {
+  color: var(--muted-2);
+}
+
+.fav__rprice {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.fav__cur {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--price);
+}
+
+.fav__amt {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--price);
+}
+
+/* 动作**竖排**：750rpx 帧里两个按钮横排要吃掉 270rpx，标题列会窄到逐字换行 */
+.fav__acts {
+  flex: 0 0 auto;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-left: 24px;
+}
+
+.fav__abtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 152px;
+  height: 68px;
+  padding: 0 22px;
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 25px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 主按钮给「聊一聊」（Owner 2026-09-23 拍板）：收藏页的主要意图是先聊，不是直接下单 */
+.fav__abtn--primary {
+  border-color: transparent;
+  background: var(--brand-deep);
+  color: var(--surface);
+}
+
+/* ---- 卡底信息带：一条极淡分割线与上半张卡分开 ---- */
+
+.fav__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px 22px;
+  border-top: 2px solid var(--accent-faint);
+}
+
+.fav__item.is-gone .fav__foot {
+  border-top-color: var(--border);
+}
+
+.fav__seller {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fav__av {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--accent-faint);
+}
+
+.fav__nm {
+  font-size: 23px;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.fav__tick {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+}
+
+.fav__fmeta {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* -------------------------------------------- 批量管理吸底栏 */
+
+/*
+ * 全选 + 取消收藏。`@include sheet` 给 `fixed` 吸底、上圆角、上投影与安全区下衬；
+ * 这里只补横向内边距与行距（**用长写属性**，别用 `padding: 28px 40px` 简写 ——
+ * 那会把 mixin 的安全区下衬一起覆盖掉）。
+ */
+.fav__sheet {
+  @include sheet;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding-top: 28px;
+  padding-right: 40px;
+  padding-left: 40px;
+}
+
+.fav__all {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.fav__all-tx {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* 取消收藏：整宽品牌胶囊（稿里唯一的主按钮）。**没有「一键清空失效宝贝」** ——
+   失效宝贝在另一段 tab 里，跨段批量删除既看不见对象也不该在有效段里出现。 */
+.fav__remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  border-radius: var(--r-pill);
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    opacity: 0.86;
+  }
+}
+
+/* ------------------------------------------------------ 骨架屏 / 到底提示 */
+
+.fav__skeleton {
+  padding: 20px 0 0;
+}
+
+.fav__skel {
+  @include card(40px);
+  overflow: hidden;
+  margin: 0 40px 20px;
+}
+
+.fav__skel-row {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
+}
+
+.fav__skel-sq {
+  @include skeleton(152px, 152px);
+  border-radius: 28px;
+}
+
+.fav__skel-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 4px;
+}
+
+.fav__skel-bar {
+  @include skeleton(24px, 100%);
+  border-radius: 12px;
+}
+
+.fav__skel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px 22px;
+  border-top: 2px solid var(--accent-faint);
+}
+
+.fav__skel-pill {
+  @include skeleton(22px, 120px);
+  border-radius: var(--r-pill);
+}
+
+.fav__skel-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.fav__skel-hint-tx {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 23px;
+  color: var(--muted-2);
+}
+
+.fav__spin {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 4px solid var(--accent-mid);
+  border-top-color: var(--brand-deep);
+  animation: fav-spin 0.8s linear infinite;
+}
+
+@keyframes fav-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 到底提示：N 是**这一段**的件数 */
+.fav__end {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 40px 12px;
+}
+
+.fav__end-line {
+  flex: 1 1 auto;
+  height: 2px;
+  background: var(--accent-faint);
+}
+
+.fav__end-tx {
+  font-size: 21px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ 回到顶部 */
+
+/* 玻璃圆钮，材质与「我的」页 / 消息页 / 订单页同一套；`pageScrollTo` 作用于页面级滚动 */
+.fav__totop {
+  position: fixed;
+  right: 36px;
+  bottom: calc(44px + env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 描边用令牌（`--glass-strong` 就是 0.82，与三处先例同值）；
+     底色 0.68 没有对应令牌，沿用「我的」页 / 消息页 / 订单页的同一条字面值 ——
+     换成最接近的 `--glass-bg`(0.72) 会让本页玻璃钮与那三处细微不同色。 */
+  border: 2px solid var(--glass-strong);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(44px) saturate(180%);
+  -webkit-backdrop-filter: blur(44px) saturate(180%);
+  box-shadow: var(--shadow-float);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(24px) scale(0.9);
+  transition:
+    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    visibility 0s linear 0.26s;
+
+  &.is-show {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+  }
+
+  &:active {
+    transform: translateY(2px) scale(0.96);
+  }
+}
+
+/* 管理态里不摆它：吸底栏把这块位置占了，圆钮在它下面只会被压住、点不到 */
+.fav.is-managing .fav__totop {
+  display: none;
+}
+
+/* 上箭头（稿 ic-top：竖杆 + 箭头）；库里没有这个几何，用 CSS 画（先例 pages/chat、order-list） */
+.fav__totop-arrow {
+  position: relative;
+  width: 40px;
+  height: 40px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 16px;
+    width: 4px;
+    height: 20px;
+    border-radius: 2px;
+    background: var(--brand-deep);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border-left: 4px solid var(--brand-deep);
+    border-top: 4px solid var(--brand-deep);
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
+}

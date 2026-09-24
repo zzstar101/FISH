@@ -48,9 +48,10 @@ describe('AdminMeResponseSchema', () => {
         id: '01930000-0000-7000-8000-0000000000a1',
         nickname: '阿岚',
         avatarUrl: null,
-        campus: '肇庆',
         authStatus: 'VERIFIED',
         verifiedAt: '2026-09-12T03:40:10.000Z',
+        phoneBound: false,
+        maskedPhone: null,
         role: 'ADMIN',
       },
       capabilities: ['USERS_READ', 'LISTINGS_READ', 'OVERVIEW_READ', 'AUDIT_LOGS_READ'],
@@ -67,7 +68,6 @@ describe('AdminMeResponseSchema', () => {
         id: '01930000-0000-7000-8000-0000000000a1',
         nickname: '阿岚',
         avatarUrl: null,
-        campus: null,
         authStatus: 'UNVERIFIED',
         verifiedAt: null,
         role: 'USER',
@@ -86,7 +86,6 @@ describe('AdminUserSummaryPageSchema', () => {
           id: '01930000-0000-7000-8000-0000000000a1',
           studentNoMasked: '2021****0001',
           nickname: '阿岚',
-          campus: '肇庆',
           authStatus: 'VERIFIED',
           role: 'ADMIN',
           createdAt: '2026-09-12T03:40:10.000Z',
@@ -187,7 +186,7 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: '2026-09-12T03:40:10.000Z',
       images: [{ url: 'http://localhost:9000/fish/listings/a/0.jpg', sortOrder: 0 }],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚', campus: '肇庆' },
+      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
       recentAuditLogs: [],
     }
     const parsed = AdminListingDetailSchema.parse(body)
@@ -210,7 +209,7 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: null,
       images: [],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚', campus: '肇庆' },
+      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
       recentAuditLogs: [],
     }
     expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)
@@ -231,7 +230,7 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: '2026-09-12T03:40:10.000Z',
       images: [],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚', campus: '肇庆' },
+      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
       recentAuditLogs: [],
     }
     expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)

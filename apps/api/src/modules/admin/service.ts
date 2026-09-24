@@ -137,9 +137,9 @@ function adminMeOf(me: Me): { admin: AdminMe; capabilities: AdminCapability[] } 
 function toUserSummary(row: UserSummaryRow) {
   return AdminUserSummaryPageSchema.shape.items.element.safeParse({
     id: row.id,
-    studentNoMasked: maskStudentNo(row.studentNo),
+    // #86：微信用户没有学号 → null（端上显示占位），不能把 null 喂给 maskStudentNo。
+    studentNoMasked: row.studentNo === null ? null : maskStudentNo(row.studentNo),
     nickname: row.nickname,
-    campus: row.campus,
     authStatus: row.authStatus,
     role: row.role,
     createdAt: row.createdAt.toISOString(),
@@ -158,7 +158,7 @@ function toListingSummary(row: ListingSummaryRow, storage: MediaStorage) {
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     coverUrl: row.coverObjectKey ? storage.publicUrl(row.coverObjectKey) : null,
-    seller: { id: row.sellerId, nickname: row.sellerNickname, campus: row.sellerCampus },
+    seller: { id: row.sellerId, nickname: row.sellerNickname },
   })
 }
 

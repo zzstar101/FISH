@@ -2,9 +2,9 @@ import { AVATARS } from './images'
 import type { MockUser } from './types'
 
 /**
- * 用户 fixture。昵称 / 校区沿用仓库 seed 的演示账号：
- * 202101000001 阿岚（肇庆 / VERIFIED）、202101000002 小北（肇庆 / UNVERIFIED）、
- * 202101000003 橙子（广州 / VERIFIED）。
+ * 用户 fixture。昵称沿用仓库 seed 的演示账号：
+ * 202101000001 阿岚（VERIFIED）、202101000002 小北（UNVERIFIED）、
+ * 202101000003 橙子（VERIFIED）。
  *
  * `CURRENT_USER_ID` 是「我」——设计稿视角下我是卖家（详情页有卖家卡片、
  * 消息页有买家来问），因此当前用户取阿岚。
@@ -16,7 +16,6 @@ export const USERS: MockUser[] = [
     id: 'u-alan',
     nickname: '阿岚',
     avatarUrl: AVATARS[0] ?? '',
-    campus: '肇庆',
     authStatus: 'VERIFIED',
     soldCount: 9,
     goodRate: 100,
@@ -25,7 +24,6 @@ export const USERS: MockUser[] = [
     id: 'u-xiaobei',
     nickname: '小北',
     avatarUrl: AVATARS[1] ?? '',
-    campus: '肇庆',
     authStatus: 'UNVERIFIED',
     soldCount: 3,
     goodRate: 98,
@@ -34,7 +32,6 @@ export const USERS: MockUser[] = [
     id: 'u-chengzi',
     nickname: '橙子',
     avatarUrl: AVATARS[2] ?? '',
-    campus: '广州',
     authStatus: 'VERIFIED',
     soldCount: 21,
     goodRate: 99,
@@ -43,7 +40,6 @@ export const USERS: MockUser[] = [
     id: 'u-susu',
     nickname: '苏苏',
     avatarUrl: AVATARS[3] ?? '',
-    campus: '肇庆',
     authStatus: 'VERIFIED',
     soldCount: 5,
     goodRate: 100,
@@ -52,7 +48,6 @@ export const USERS: MockUser[] = [
     id: 'u-linyi',
     nickname: '林一',
     avatarUrl: AVATARS[4] ?? '',
-    campus: '肇庆',
     authStatus: 'UNVERIFIED',
     soldCount: 1,
     goodRate: 100,
@@ -61,7 +56,6 @@ export const USERS: MockUser[] = [
     id: 'u-soda',
     nickname: '苏打水',
     avatarUrl: AVATARS[5] ?? '',
-    campus: '肇庆',
     authStatus: 'VERIFIED',
     soldCount: 7,
     goodRate: 97,
@@ -70,7 +64,6 @@ export const USERS: MockUser[] = [
     id: 'u-qiqi',
     nickname: '琪琪',
     avatarUrl: AVATARS[6] ?? '',
-    campus: '广州',
     authStatus: 'VERIFIED',
     soldCount: 12,
     goodRate: 100,
@@ -79,7 +72,6 @@ export const USERS: MockUser[] = [
     id: 'u-zhou',
     nickname: '老周',
     avatarUrl: AVATARS[7] ?? '',
-    campus: '肇庆',
     authStatus: 'UNVERIFIED',
     soldCount: 4,
     goodRate: 96,
@@ -87,13 +79,12 @@ export const USERS: MockUser[] = [
 
   /* ---- A/B/C/D 组 14 张设计稿里反复出现的人物 ----
      设计稿自述「示例数据为占位，非真实账号」，这些是稿件的占位人物；
-     登记成 fixture 是为了让新页面上的头像首字 / 昵称 / 校区与稿子一致。
+     登记成 fixture 是为了让新页面上的头像首字 / 昵称与稿子一致。
      AVATARS 只有 8 张，超出的取模复用。 */
   {
     id: 'u-lin',
     nickname: '林知遥',
     avatarUrl: AVATARS[8 % AVATARS.length] ?? '',
-    campus: '广州',
     authStatus: 'VERIFIED',
     soldCount: 27,
     goodRate: 98,
@@ -102,7 +93,6 @@ export const USERS: MockUser[] = [
     id: 'u-zhouyan',
     nickname: '周予安',
     avatarUrl: AVATARS[9 % AVATARS.length] ?? '',
-    campus: '广州',
     authStatus: 'VERIFIED',
     soldCount: 15,
     goodRate: 99,
@@ -111,7 +101,6 @@ export const USERS: MockUser[] = [
     id: 'u-zhangyu',
     nickname: '张屿',
     avatarUrl: AVATARS[10 % AVATARS.length] ?? '',
-    campus: '肇庆',
     authStatus: 'VERIFIED',
     soldCount: 8,
     goodRate: 100,
@@ -120,7 +109,6 @@ export const USERS: MockUser[] = [
     id: 'u-suyiran',
     nickname: '苏亦然',
     avatarUrl: AVATARS[11 % AVATARS.length] ?? '',
-    campus: '广州',
     authStatus: 'VERIFIED',
     soldCount: 12,
     goodRate: 97,
@@ -129,7 +117,6 @@ export const USERS: MockUser[] = [
     id: 'u-xuche',
     nickname: '许澈',
     avatarUrl: AVATARS[12 % AVATARS.length] ?? '',
-    campus: '肇庆',
     authStatus: 'UNVERIFIED',
     soldCount: 2,
     goodRate: 100,
@@ -138,7 +125,6 @@ export const USERS: MockUser[] = [
     id: 'u-hexu',
     nickname: '何叙',
     avatarUrl: AVATARS[13 % AVATARS.length] ?? '',
-    campus: '广州',
     authStatus: 'VERIFIED',
     soldCount: 6,
     goodRate: 98,
@@ -181,16 +167,4 @@ export function isMe(userId: string): boolean {
 /** 校园认证徽章：认证徽章只在 VERIFIED 时展示（与契约 authStatus 判据一致） */
 export function isVerified(userId: string): boolean {
   return getUser(userId).authStatus === 'VERIFIED'
-}
-
-/**
- * 校区显示文案：设计稿详情页写「肇庆校区」。
- *
- * 走 `findUser`（不兜底）而不是 `getUser`：后者对未知 id 会回退到 `USERS[0]`，
- * 于是「查不到这个人」会被渲染成「肇庆校区」——一个凭空的校区。
- * 查不到、或该用户没有校区（`MeSchema.campus` 是 nullable）时返回空串。
- */
-export function campusLabel(userId: string): string {
-  const campus = findUser(userId)?.campus
-  return campus ? `${campus}校区` : ''
 }

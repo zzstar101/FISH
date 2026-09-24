@@ -1,13 +1,14 @@
 import { describe, expect, test } from 'bun:test'
-import { profileResponseSchema } from './schema'
+import { profileResponseSchema, profileUpdateRequestSchema } from './schema'
 
 const me = {
   id: '00000000-0000-4000-8000-0000000000a1',
   nickname: '小明',
   avatarUrl: null,
-  campus: '肇庆',
   authStatus: 'VERIFIED',
   verifiedAt: '2026-09-12T00:00:00.000Z',
+  phoneBound: false,
+  maskedPhone: null,
 }
 
 const listingCard = {
@@ -104,5 +105,42 @@ describe('profileResponseSchema', () => {
       user: { ...me, studentNo: '202101000001' },
     })
     expect(Object.hasOwn(parsed.user, 'studentNo')).toBe(false)
+  })
+})
+
+describe('profileUpdateRequestSchema（#86 B：编辑资料）', () => {
+  test('只改昵称 / 只改头像 / 两者同改都接受', () => {
+    expect(profileUpdateRequestSchema.parse({ nickname: '小鱼' })).toEqual({ nickname: '小鱼' })
+    expect(profileUpdateRequestSchema.parse({ avatarObjectKey: 'listings/u/a.jpg' })).toEqual({
+      avatarObjectKey: 'listings/u/a.jpg',
+    })
+    expect(
+      profileUpdateRequestSchema.parse({ nickname: '小鱼', avatarObjectKey: 'listings/u/a.jpg' }),
+    ).toEqual({ nickname: '小鱼', avatarObjectKey: 'listings/u/a.jpg' })
+  })
+
+  test('空对象被拒（没有语义的写入）', () => {
+    const parsed = profileUpdateRequestSchema.safeParse({})
+    expect(parsed.success).toBe(false)
+    expect(parsed.error?.issues[0]?.message).toBe('nickname 与 avatarObjectKey 至少要提供一项')
+  })
+
+  test('未知字段被拒，而不是静默丢弃（strictObject）', () => {
+    expect(profileUpdateRequestSchema.safeParse({ nickname: '小鱼', campus: '肇庆' }).success).toBe(
+      false,
+    )
+  })
+
+  test('昵称沿用认证域口径：trim 后 1–20 字', () => {
+    expect(profileUpdateRequestSchema.parse({ nickname: '  小鱼  ' }).nickname).toBe('小鱼')
+    expect(profileUpdateRequestSchema.safeParse({ nickname: '   ' }).success).toBe(false)
+    expect(profileUpdateRequestSchema.safeParse({ nickname: '鱼'.repeat(21) }).success).toBe(false)
+  })
+
+  test('头像 objectKey 不接受空白串或超长串', () => {
+    expect(profileUpdateRequestSchema.safeParse({ avatarObjectKey: '   ' }).success).toBe(false)
+    expect(profileUpdateRequestSchema.safeParse({ avatarObjectKey: 'a'.repeat(257) }).success).toBe(
+      false,
+    )
   })
 })

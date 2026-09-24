@@ -151,7 +151,7 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 | `bun run dev:web` · `dev:api` · `dev:worker` | 分别启动三个应用 |
 | `bun run typecheck` | 全仓 TypeScript 类型检查 |
 | `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
-| `bun test` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`） |
+| `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |
 | `bun run build` | 构建 |
 | `bun run ws:smoke` | WebSocket 连通性冒烟 |
 | `bun run core:smoke` | 核心主链端到端冒烟（`-- --runs=5` 可连跑 5 轮） |

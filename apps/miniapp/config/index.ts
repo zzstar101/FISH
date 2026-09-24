@@ -62,6 +62,18 @@ export default defineConfig<'webpack5'>(async (merge) => {
        * 所以这里只认显式的 `TARO_APP_MOCK=1`。
        */
       __DEMO_AUTH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
+      /**
+       * AI 润色的 mock 兜底门禁（读取处 `src/features/ai/api.ts`）。
+       *
+       * **只认显式的 `TARO_APP_MOCK=1`**，与 `__DEMO_AUTH__` 同形、同样刻意不复用
+       * `__ALLOW_MOCK_FALLBACK__`：后者还包含 `NODE_ENV=development`，`dev:weapp` 下
+       * 润色失败会静默摆出本地假候选，而那些候选带着 `provider='stub'` 角标、与真实
+       * stub 传输的候选长得一样，现场分不清"接的是后端还是兜底"（#142 设计 §10.2）。
+       *
+       * 且它只覆盖**传输层失败**（后端没起 / 断网）：服务端一旦给出错误信封，一律照常
+       * 走真实错误 UI —— 否则 429 会一边倒计时一边摆假候选。
+       */
+      __DEMO_AI_POLISH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
     },
     framework: 'react',
     // 本地开发的依赖预编译（esbuild）会把 workspace 里以 TS 源码形式发布的包当成外部依赖处理，

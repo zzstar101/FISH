@@ -74,7 +74,6 @@ beforeAll(async () => {
       studentNo: '202101000901',
       passwordHash,
       nickname: '管理员甲',
-      campus: '肇庆',
       authStatus: 'VERIFIED',
       verifiedAt: new Date('2026-09-01T00:00:00Z'),
       createdAt: new Date('2026-09-01T00:00:00Z'),
@@ -85,7 +84,6 @@ beforeAll(async () => {
       studentNo: '202101000902',
       passwordHash,
       nickname: '普通用户乙',
-      campus: '广州',
       createdAt: new Date('2026-09-02T00:00:00Z'),
       role: 'USER',
     },
@@ -240,6 +238,28 @@ describe('Admin 查询端到端', () => {
     expect(byId.get(USER_ID)?.listingCount).toBe(2)
   })
 
+  test('GET /admin/users：微信用户（student_no 为 NULL）的 studentNoMasked 是 null，不是 "n**l"', async () => {
+    // #86 A 的微信注册路径：users 行 student_no/password_hash 都是 NULL。
+    // 用独立的 q 前缀搜索隔离这条数据，测完即删，不影响其他用例的计数断言。
+    await scratch.insert(users).values({
+      id: '01930000-0000-7000-8000-0000000000c1',
+      studentNo: null,
+      passwordHash: null,
+      nickname: '微信用户丙',
+      createdAt: new Date('2026-09-03T00:00:00Z'),
+      role: 'USER',
+    })
+    const res = await app.request(`${ADMIN_ROUTES.users}?q=微信用户丙`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(res.status).toBe(200)
+    const body = AdminUserSummaryPageSchema.parse(await res.json())
+    expect(body.items).toHaveLength(1)
+    expect(body.items[0]?.nickname).toBe('微信用户丙')
+    expect(body.items[0]?.studentNoMasked).toBeNull()
+    await scratch.delete(users).where(eq(users.id, '01930000-0000-7000-8000-0000000000c1'))
+  })
+
   test('GET /admin/users supports q (exact student no, nickname prefix) and role filter', async () => {
     const byNo = await app.request(`${ADMIN_ROUTES.users}?q=202101000902`, {
       headers: { cookie: adminCookie },
@@ -272,7 +292,7 @@ describe('Admin 查询端到端', () => {
     )
     const body2 = AdminUserSummaryPageSchema.parse(await page2.json())
     expect(body2.items).toHaveLength(1)
-    // 两页 id 不重复（游标不重不漏）
+    // 两页 id 不重复（游标不重不漏）；第 3 页应翻完（q 过滤掉微信用户丙 → 共 2 行）
     expect(body2.items[0]?.id).not.toBe(body1.items[0]?.id)
     expect(body2.nextCursor).toBeNull()
   })

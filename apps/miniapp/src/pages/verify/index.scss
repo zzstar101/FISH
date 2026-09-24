@@ -440,8 +440,8 @@
   background: var(--brand-deep);
 }
 
-/* CSS 画白勾（本仓没有白勾线形 PNG；先例：register-success 的 rs__check-ic）。
- * 勾径按内环（104px）比例取值，与注册成功页的勾观感一致 */
+/* CSS 画白勾（本仓没有白勾线形 PNG）。
+ * 勾径按内环（104px）比例取值 */
 .verify__okcheck {
   width: 52px;
   height: 30px;

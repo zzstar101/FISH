@@ -7,8 +7,6 @@ import type { Tone } from '@fish/ui/thumb'
  * 是 #13 接真实 API 之前的前端内部约定（契约冻结后再逐个替换）。
  */
 
-export type Campus = '东校区' | '西校区' | '南校区' | '北校区'
-
 export type TradeMethod = '校内自提' | '校内面交'
 
 export type ListingCategory =
@@ -27,7 +25,6 @@ export type User = {
   emoji: string
   tone: Tone
   college: string
-  campus: Campus
   /** `2023-09` 形式，个人页展示「入学年份」 */
   joinedAt: string
   credit: number
@@ -50,7 +47,6 @@ export type Listing = {
   tone: Tone
   category: ListingCategory
   condition: string
-  campus: Campus
   tradeMethod: TradeMethod
   tags: string[]
   description: string[]

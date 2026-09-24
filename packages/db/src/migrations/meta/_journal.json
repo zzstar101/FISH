@@ -120,6 +120,20 @@
       "when": 1790041886619,
       "tag": "0016_greedy_omega_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790080750675,
+      "tag": "0017_fair_beast",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790080787230,
+      "tag": "0018_lame_sir_ram",
+      "breakpoints": true
     }
   ]
 }

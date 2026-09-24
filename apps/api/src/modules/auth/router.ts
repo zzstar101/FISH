@@ -1,18 +1,30 @@
+import { PhoneBindRequestSchema, PhoneBindResponseSchema } from '@fish/contracts/auth/phone'
 import { LoginRequestSchema, RegisterRequestSchema } from '@fish/contracts/auth/session'
 import {
   SendCodeRequestSchema,
   SendCodeResponseSchema,
   VerifyCodeRequestSchema,
 } from '@fish/contracts/auth/verification'
+import {
+  WechatSessionRequestSchema,
+  WechatSessionResponseSchema,
+} from '@fish/contracts/auth/wechat'
 import { errorBody } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
 import { type Context, type Handler, Hono } from 'hono'
 import { AuthError } from './errors'
+import { maskPhone } from './me'
 import { type AuthVariables, createRequireAuth } from './middleware'
 import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
 import type { VerificationService } from './verification-service'
 import { VerificationError } from './verification-store'
+import {
+  createLiveWechatIdentityProvider,
+  createStubWechatIdentityProvider,
+  createWechatAuthService,
+  type WechatIdentityProvider,
+} from './wechat-service'
 
 /** JSON 解析失败（空体 / 非 JSON）也按参数不合法处理，而不是让 Hono 抛 500。 */
 async function readJson(c: Context): Promise<unknown> {
@@ -42,12 +54,84 @@ export function createAuthModule(options: {
   verification: VerificationService
   /** 由 `WEB_ORIGIN` 的 scheme 推导，见 `session.ts`。 */
   secureCookie: boolean
+  /**
+   * 微信身份解析的显式配置（#86 评审 P1：stub 必须与生产隔离）。
+   * `off` = 登录 / 绑定入口关闭（503 WECHAT_DISABLED）；`stub` = 只允许非生产显式开启；
+   * `live` = 真实 jscode2session。**没有默认值**，调用方必须从 `loadWechatEnv()` 显式传入。
+   */
+  wechat: import('@fish/shared/env').WechatEnv
 }) {
   const cookie = createSessionCookie(options.secureCookie)
   const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
   const requireAuth = createRequireAuth({ cookie, service })
+  const wechatSessions = createSessions(options.db)
+  // provider 只在 stub / live 下构造；off 下保持 null，两个入口在 handler 顶部显式 503。
+  const wechatProvider: WechatIdentityProvider | null =
+    options.wechat.transport === 'stub'
+      ? createStubWechatIdentityProvider()
+      : options.wechat.transport === 'live'
+        ? createLiveWechatIdentityProvider({
+            appid: options.wechat.appid,
+            appSecret: options.wechat.appSecret,
+          })
+        : null
+  const wechat =
+    wechatProvider !== null
+      ? createWechatAuthService({
+          db: options.db,
+          sessions: wechatSessions,
+          provider: wechatProvider,
+        })
+      : null
+  // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
+  const phoneResolver: ((code: string) => string) | null =
+    options.wechat.transport === 'stub' ? (code) => code.trim() : null
 
   const router = new Hono<{ Variables: AuthVariables }>()
+
+  // ---- 微信登录（#86 A）：Miniapp 主身份入口 ----
+  router.post('/wechat/session', async (c) => {
+    if (wechat === null) {
+      // WECHAT_TRANSPORT=off：能力未开通，503 显式状态，不当作登录失败
+      return c.json(errorBody('WECHAT_DISABLED', '微信登录暂未开通'), 503)
+    }
+    const parsed = WechatSessionRequestSchema.safeParse(await readJson(c))
+    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+
+    try {
+      const { user, token, expiresAt } = await wechat.signIn(parsed.data)
+      cookie.attach(c, token, expiresAt)
+      return c.json(WechatSessionResponseSchema.parse({ user }))
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // ---- 手机号绑定（#86 C）：只追加绑定，不动已有会话 ----
+  router.post('/phone/bind', requireAuth, async (c) => {
+    if (phoneResolver === null) {
+      return c.json(errorBody('WECHAT_DISABLED', '手机号绑定暂未开通'), 503)
+    }
+    const parsed = PhoneBindRequestSchema.safeParse(await readJson(c))
+    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+
+    try {
+      // stub：phone code 即明文手机号（getPhoneNumber 真实接入需要企业主体 + AppSecret，
+      // 到位后在 resolver 内调 phonenumber.getPhoneNumber，绑定语义不变）。
+      // off / live 下 phoneResolver 为 null：live 的解析器接入前，绑定入口显式 503，
+      // 绝不把「格式正确的 code」当成已验证的手机号（格式正确 ≠ 持有该号码）。
+      const phone = phoneResolver(parsed.data.code)
+      if (!/^1\d{10}$/.test(phone)) {
+        return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效'), 422)
+      }
+      await service.bindPhone(c.get('userId'), phone)
+      return c.json(
+        PhoneBindResponseSchema.parse({ phoneBound: true, maskedPhone: maskPhone(phone) }),
+      )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
 
   // 注册即登录：响应体与 /me 同构，前端不需要再打一次 /auth/login
   router.post('/register', async (c) => {

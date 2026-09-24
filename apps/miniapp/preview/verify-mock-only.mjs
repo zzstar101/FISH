@@ -48,8 +48,11 @@ const ROUTES = [
   '/pages/conversation/index?id=c-006',
   '/pages/watchers/index',
   '/pages/comments/index',
+  '/pages/favorites/index',
   '/pages/orders-buy/index',
   '/pages/orders-sell/index',
+  // 历史浏览：三类数据都没有端点，本页不发业务请求（因此**不进** WIRED）
+  '/pages/history/index',
 ]
 
 /**

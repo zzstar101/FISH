@@ -49,7 +49,7 @@ function VerificationBody({ status }: { status: VerificationStatus }) {
         )}
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-2 font-semibold text-[15px]">
-            {verified ? '已完成校园认证' : '尚未完成校园认证'}
+            {verified ? '教育邮箱已验证' : '尚未完成教育邮箱验证'}
             <AuthBadge status={status.authStatus} />
           </p>
           <p className="mt-0.5 truncate text-ink-3 text-xs">

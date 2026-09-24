@@ -1,3 +1,3 @@
 export default definePageConfig({
-  navigationBarTitleText: '校园认证',
+  navigationBarTitleText: '教育邮箱验证',
 })
