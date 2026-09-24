@@ -67,6 +67,21 @@ export async function fetchConversation(conversationId: string): Promise<Convers
 }
 
 /**
+ * 创建或复用与商品卖家的会话（`POST /conversations`，响应体 ConversationDto）。
+ *
+ * 服务端对同一 `(listingId, 买家)` **复用**既有会话：新建 201、复用 200，响应体同型，
+ * 所以调用方不必区分、也不必把「已经发起过」记在本地冒充成功 —— 重发本身就是幂等的。
+ * 匹配结果页的「聊一聊」用它换到真实 `conversation.id` 再跳会话页（#67 第二步）。
+ */
+export async function createConversation(listingId: string): Promise<ConversationDto> {
+  const payload = await apiRequest(CHAT_ROUTES.base, {
+    method: 'POST',
+    body: { listingId },
+  })
+  return conversationDtoSchema.parse(payload)
+}
+
+/**
  * 一页历史消息。契约按 `(createdAt, id)` **升序**返回，`nextCursor` 为 null 表示已到最早。
  *
  * 返回整个响应而不是只返回 items：会话页要「加载更早的消息」就必须拿到游标
