@@ -1,3 +1,4 @@
+import type { ReportReason } from '@fish/contracts/reports/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
 import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
@@ -7,8 +8,10 @@ import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
+import ReportSheet from '@/components/report-sheet'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { signatureFirstLine } from '@/features/profile/signature-text'
+import { pickReportReason } from '@/features/report/reasons'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { formatAmount, type MockListing } from '@/mock/api'
@@ -54,9 +57,10 @@ import './index.scss'
  *   详见 `followState` 处的注释。
  * - **聊一聊 / 更多钮不做**：发起会话要带 `listingId`（Chat 契约按 `(listingId, 买家)`
  *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（稿的理由是举报 / 分享 /
- *   加入黑名单在真机里走微信胶囊的 ··· 菜单 —— 那是稿的取舍）。**这不等于已经有了举报
- *   能力**：仓库没有 Report 契约 / 表 / 接口（#73 的「举报」一节仍全是未勾选项），
- *   本页只是不再放页内入口，真实举报入口归 #73（用户端提交）与 #89（客户端接线）。
+ *   加入黑名单在真机里走微信胶囊的 ··· 菜单 —— 那是稿的取舍）。**举报能力 #73 已经补齐**
+ *   （契约 + `POST /reports` + 后台队列），所以本页不再只「删掉入口」，而是在身份块
+ *   底部补一条 `uhome__report` 文字链，用共用的 `components/report-sheet` 提交
+ *   （targetType `USER`）。右上角仍然不画东西 —— 那里是微信原生胶囊，见文件头。
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
@@ -73,6 +77,12 @@ export default function UserHome() {
   const [items, setItems] = useState<MockListing[]>([])
   /** 服务端游标说还有下一页（契约 `nextCursor !== null`）；本页不翻页，但这决定终点怎么说 */
   const [hasMore, setHasMore] = useState(false)
+  /**
+   * 举报浮层开关：**已选的举报原因**（`null` = 不渲染）。
+   * 与商品详情页同口径 —— 原因在点入口的手势里用 `Taro.showActionSheet` 就地弹，
+   * 不放 effect（会在浮层挂载同一帧再弹一次，两层面板叠加）。
+   */
+  const [reportReason, setReportReason] = useState<ReportReason | null>(null)
 
   const load = useCallback(async () => {
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载。
@@ -104,6 +114,17 @@ export default function UserHome() {
     setHasMore(result.hasMore)
     setLoadState('ok')
   }, [userId])
+
+  /**
+   * 打开举报浮层：先弹原生原因列表，选中才开面板（取消什么都不发生）。
+   *
+   * 举报自己服务端返回 422 `REPORT_SELF_TARGET`，那次失败本身就是明确反馈 ——
+   * 不在客户端判断「是不是我」（要拿当前登录用户 id 跟路由参数比，多一条数据依赖，
+   * 且判断藏起来会让「举报不了自己」表现为「没有入口」而不是「不能这么做」）。
+   */
+  const openReport = () => {
+    void pickReportReason('USER').then((reason) => setReportReason(reason))
+  }
 
   const [left, right] = useMemo(() => {
     const l: MockListing[] = []
@@ -535,6 +556,13 @@ export default function UserHome() {
                     <Text className="uhome__stat-label">好评率</Text>
                   </View>
                 </View>
+
+                {/* 举报入口（#73 治理半场）：身份块底部一条右对齐的低调文字链。
+                    右上角是微信原生胶囊（见文件头），所以不放那里。 */}
+                <View className="uhome__report" onClick={openReport}>
+                  <Image className="uhome__report-ic" src={ICONS.feedbackMuted} mode="aspectFit" />
+                  <Text className="uhome__report-tx">举报这个人</Text>
+                </View>
               </View>
             ) : (
               /* 资料没拿到之前先给页头骨架：头像盘 + 昵称条 + 签名条 + 数据行条
@@ -632,6 +660,17 @@ export default function UserHome() {
           </View>
         </ScrollView>
       )}
+
+      {/* 举报浮层（#73 治理半场）：`reason` 为 null 时整块不渲染。
+          挂在页面根下而不是 `ScrollView` 里 —— 遮罩是 `position: fixed`，
+          放进滚动容器里会跟着内容滚走，且层级会被后面的列表区盖住。 */}
+      <ReportSheet
+        targetType="USER"
+        targetId={userId}
+        subject="这个人"
+        reason={reportReason}
+        onReasonChange={setReportReason}
+      />
     </View>
   )
 }

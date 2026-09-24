@@ -206,8 +206,10 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
 
 - PR1 已交付：删 `store.insertAuditLog` 死方法；`apps/api/src/modules/admin/router.test.ts` 补「普通用户调写端点 403」「9 种伪造角色头不升权」「审计写入失败业务状态回滚」。
 - PR2 已交付服务端与 web 侧：`reports` 表 + 3 枚举 + 部分唯一索引（迁移 `0020_huge_rocket_raccoon.sql`）、`admin_audit_*` 枚举扩展（`0021_crazy_archangel.sql`）、`reports` 契约、`apps/api/src/modules/reports/**`、admin 三个端点（队列 / 详情 / 处理，相对路径注册）、`apps/web` 举报队列 + 详情 + 处理表单 + 审计筛选新增「举报处理」。
-- PR2 的 **miniapp 举报入口未随本轮提交**：`docs/miniapp-dev-workflow.md` 要求一页一分支、动代码前通知 Owner、devtools 演示并取得同意后才能提交。等 Owner 排期后单独一段交付（用户端契约 `REPORT_ROUTES` 已就绪，接上即可）。
+- PR2 的 **miniapp 举报入口已交付**（与 PR4 同一分支 `feat/73-admin-governance`，Owner 拍板直接叠在本分支上，不按「一页一分支」另开）：`features/report/{api,reasons}.ts`（`submitReport` 包 `REPORT_ROUTES.create` + `ReportCreateResponseSchema.parse`；原因子集从契约 import 不复制）、两页共用的 `components/report-sheet`（`Taro.showActionSheet` 选原因 + 页内补充说明浮层，抄 sell 的 `scrim`/`sheet`）、商品详情页与他人主页各一条低调文字链（右上角被微信原生胶囊占着，底部栏已排满，故都放正文流里）。重复举报 200 + `created:false` 在客户端按**成功**提示「你已举报过同一个对象，无需重复提交」，不当失败。**「我的举报」列表（`GET /reports/mine`）本期不做**，用户端契约已就绪、留待后续。
+- miniapp 侧由 Owner 在微信开发者工具演示并认可后才随本分支提交（`docs/miniapp-dev-workflow.md` §4）。
 
 - PR3 已交付服务端与 web 侧（提交 `1fa1aad`）：`user_restrictions` 表（迁移 `0022_cuddly_pyro.sql`）+ `listings.governance_delisted_at` 列（迁移 `0023_jittery_hercules.sql`）、`admin_audit_*` 枚举扩 7 + 2 值、五个治理端点（`listingDelist` / `listingRestore` / `userRestrictPublish` / `userLiftRestriction` / `userBan`）、写入口守卫 `RestrictionGuard`（`publish` 挡 `PUBLISH_RESTRICT`+`BAN`，`write` 只挡 `BAN`）接入 listings / uploads / comments / conversations / messages / media / profile / transactions / wishes / ai 的写路由、`AdminUserDetail`/`AdminListingDetail` 契约扩限制与治理状态字段、web 治理按钮 + 「生效中的限制」卡。
 - PR3 的对抗性审查发现并已修三条 major：**过期限制行占唯一索引**（索引谓词写不了 `now()`，到期未解除的行让「生效中」判定分裂成 service/store/listActiveRestrictions=0 而 Overview=1，再施加同类限制时 409 是假的——统一为唯一 SQL 定义 `ACTIVE_RESTRICTION_WHERE`，并在 `applyRestriction` 里先把过期行标 `LIFTED`，`lifted_by=NULL` 不写审计）、**媒体消息写入口漏挂守卫**（封禁只挡文字仍可发图 / 语音）、**restore 能解除审核引擎的人工 BLOCKED**（改为只认 `governance_delisted_at IS NOT NULL`）。
-- PR3 仍待办：治理动作与举报单的回链 `sourceReportId` 已在契约与端点层就绪，但「举报详情页一键治理」不在本期范围；PR4 历史检索与完整筛选未开始。
+- PR3 仍待办：治理动作与举报单的回链 `sourceReportId` 已在契约与端点层就绪，但「举报详情页一键治理」不在本期范围。
+- PR4 已交付：`GET /admin/moderation/records`（decision/listingId/q/时间段 + 游标，队列端点保持纯 REVIEW 语义）、交易筛选 URL 化（改筛选重置游标；从用户/商品详情带进来的 buyerId/sellerId/listingId 在改筛选时保留）、Overview 四项全量 `count(*)` 指标、审核记录 q 口径注释与测试补强、小程序举报入口（商品详情页 + 他人主页）。

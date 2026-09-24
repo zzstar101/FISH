@@ -14,9 +14,15 @@
  *    这里按需求改成 `fixed`：返回钮始终在，栏底色滑过图集后才出现。
  * 2. **右上角不画东西**：稿子在那里画了一个假胶囊，真机上那个位置由微信原生胶囊占用，
  *    画了会被盖住 —— 所以分享 / 更多两个钮直接去掉。
+ * 3. **举报入口不放右上角，也不占底部操作栏**：右上角被原生胶囊占着（同上），底部栏三个
+ *    格子（收藏 / 聊一聊 / 我想要）已经排满，硬塞第四颗会让「聊一聊」「我想要」的文字
+ *    挤出按钮。所以放在描述标签下方的正文流里做一条低调文字链（见 `detail__report`）——
+ *    读完描述就能看到，且不跟两个主转化动作抢视觉。浮层本身是共用的
+ *    `components/report-sheet`，与他人主页同源。
  */
 
 import type { CommentDto } from '@fish/contracts/comments/schema'
+import type { ReportReason } from '@fish/contracts/reports/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -24,8 +30,10 @@ import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import ReportSheet from '@/components/report-sheet'
 import { loadListingDetail } from '@/features/fetchers'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
+import { pickReportReason } from '@/features/report/reasons'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
@@ -255,6 +263,14 @@ export default function ListingDetail() {
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
+  /**
+   * 举报浮层的开关：**已选的举报原因**（`null` = 不渲染）。
+   *
+   * 这里存的是「选中的原因」而不是 boolean —— 原因必须在点入口的那个手势里用
+   * `Taro.showActionSheet` 就地弹出（放进 effect 里会在浮层挂载同一帧再弹一次面板，
+   * 两层面板叠加），所以点进来时原因已经拿到了，浮层直接用。
+   */
+  const [reportReason, setReportReason] = useState<ReportReason | null>(null)
   const [commentsOpen, setCommentsOpen] = useState(false)
   /** 留言树（顶层各带 replies）：初值来自加载结果，之后由本页的本地写操作增长 */
   const [comments, setComments] = useState<CommentNode[]>([])
@@ -360,6 +376,18 @@ export default function ListingDetail() {
     } else {
       void Taro.switchTab({ url: '/pages/home/index' })
     }
+  }
+
+  /**
+   * 打开举报浮层：先弹原生原因列表，选中才开面板（取消什么都不发生）。
+   *
+   * 目标取 `listing.id` —— 契约 `ListingDetail.id`。**不判断是不是自己的商品**：
+   * 举报自己的东西服务端返回 422 `REPORT_SELF_TARGET`，那是一次明确的失败反馈，
+   * 比在客户端提前藏入口更诚实（也避免「我的商品看不到举报」这种可被绕过的判断）。
+   */
+  const openReport = () => {
+    if (!listing) return
+    void pickReportReason('LISTING').then((reason) => setReportReason(reason))
   }
 
   /**
@@ -608,6 +636,13 @@ export default function ListingDetail() {
                 <Text className="detail__tag">{conditionLabel(listing.condition)}</Text>
                 {listing.negotiable ? <Text className="detail__tag">可小刀</Text> : null}
               </View>
+
+              {/* 举报入口（#73 治理半场）：右对齐的文字链，见文件头第 3 条取舍。
+                  跟着描述走，不占底部操作栏的两个主转化位。 */}
+              <View className="detail__report" onClick={openReport}>
+                <Image className="detail__report-ic" src={ICONS.feedbackMuted} mode="aspectFit" />
+                <Text className="detail__report-tx">举报这个商品</Text>
+              </View>
             </View>
 
             {/* ---------------------------------------------------- 卖家 */}
@@ -849,6 +884,17 @@ export default function ListingDetail() {
           <Text>我想要</Text>
         </View>
       </View>
+
+      {/* 举报浮层（#73 治理半场）：`reason` 为 null 时整块不渲染。
+          放在页面根下而不是某个区块里 —— 遮罩要能盖住底部操作栏（z-index 100），
+          挂深了会被栏压住。 */}
+      <ReportSheet
+        targetType="LISTING"
+        targetId={listing?.id ?? ''}
+        subject="这个商品"
+        reason={reportReason}
+        onReasonChange={setReportReason}
+      />
     </View>
   )
 }

@@ -325,6 +325,37 @@
 
 /* ------------------------------------------------------------ 卖家卡 */
 
+/*
+ * 举报入口（#73 治理半场）：描述标签下方一条右对齐的低调文字链。
+ *
+ * **为什么不放右上角 / 底部操作栏**：右上角被微信原生胶囊占着（见文件头取舍 ②），
+ * 底部栏三格已排满，第四颗会让「聊一聊」「我想要」文字挤出按钮。
+ * **为什么不在卖家卡里**：那一行的右端是「进TA主页」，举报商品与举报卖家是两个
+ * 不同目标（契约里 targetType 不同、原因子集也不同），挤在同一行必然被误读。
+ */
+.detail__report {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+  color: var(--muted-2);
+
+  &:active {
+    opacity: 0.6;
+  }
+}
+
+.detail__report-ic {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.detail__report-tx {
+  font-size: var(--fs-xs);
+}
+
 .detail__seller {
   display: flex;
   align-items: center;
