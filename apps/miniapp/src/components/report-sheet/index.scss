@@ -1,3 +1,5 @@
+@use '@/styles/mixins' as *;
+
 /**
  * 举报浮层样式（#73 治理半场）。
  * `scrim` / `sheet` 直接复用共享 mixin —— 弹层与遮罩的结构抄 `pages/sell` 的 AI
@@ -6,8 +8,15 @@
 
 .report {
   /* 【警示意】举报是治理动作，头部用一个暖色小图标先定调：这不是普通表单。 */
+  /*
+   * 【层级警示】`scrim` / `sheet` mixin 自带 z-index 50 / 60，而 `pages/listing-detail`
+   * 的底部操作栏 `.detail__bar` 是 100 —— 浮层若照原值，遮罩压不暗操作栏、
+   * 「提交举报」按钮会被整块盖住（主操作点不到）。这里显式抬到 100 之上，
+   * 挂载本浮层的两个页面（listing-detail / user）都以这个值为准。
+   */
   &__scrim {
     @include scrim;
+    z-index: 105;
   }
 
   &__sheet {
@@ -15,7 +24,12 @@
     display: flex;
     flex-direction: column;
     gap: 28px;
-    padding: 36px 40px 40px;
+    /* 长写：`padding` 简写会连 mixin 的安全区下衬一起覆盖掉（见 `pages/favorites` 的同款注释） */
+    padding-top: 36px;
+    padding-left: 40px;
+    padding-right: 40px;
+    padding-bottom: calc(40px + env(safe-area-inset-bottom));
+    z-index: 110;
   }
 
   &__hd {
@@ -31,7 +45,7 @@
   }
 
   &__hd-tx {
-    font-size: var(--fs-h2, 32px);
+    font-size: var(--fs-h2);
     font-weight: 700;
     color: var(--fg);
   }
@@ -85,7 +99,7 @@
 
   &__fhint {
     flex: 0 0 auto;
-    font-size: 21px;
+    font-size: var(--fs-2xs);
     color: var(--muted-2);
   }
 

@@ -20,6 +20,11 @@
  * 抄 `pages/sell` 的 AI 润色底部浮层（`sell__scrim` + `sell__sheet`）：遮罩点击关闭、
  * 贴底卡片、`scrim` / `sheet` 两个 mixin 直接复用。**不新增路由** —— 浮层不是页面，
  * `app.config.ts` 的页面注册表因此不用改（sell 的润色卡即先例）。
+ *
+ * **【层级约束】** `scrim` / `sheet` mixin 的 z-index 是 50 / 60，低于 `pages/listing-detail`
+ * 底部操作栏 `.detail__bar` 的 100；本组件因此在 `index.scss` 里显式抬到 105 / 110。
+ * 改动那一行之前先确认挂载页有没有更高的 fixed 元素 —— 遮罩压不住时，弹层看起来
+ * 「沉在页面背后」，而底下的按钮照样能点。
  */
 import type { ReportReason, ReportTargetType } from '@fish/contracts/reports/schema'
 import { Image, Text, Textarea, View } from '@tarojs/components'

@@ -245,7 +245,10 @@ describe('pickReportReason —— 原生面板回映', () => {
 
 describe('reportFailureMessage —— 失败文案', () => {
   test('举报自己 → 明确拒绝理由，不是笼统失败', () => {
-    expect(reportFailureMessage(new FakeApiError(422, 'REPORT_SELF_TARGET', '不能举报自己'))).toBe(
+    // 假错误的 message 故意与服务端原文案不同：`REPORT_SELF_TARGET` 走的是
+    // 专属分支（返回固定文案），若它失效掉到 422 兜底，拿到的会是「服务端原文案」而非
+    // 断言值 —— 专属分支被挪走/改错 code 时会红，不会变成等价变异。
+    expect(reportFailureMessage(new FakeApiError(422, 'REPORT_SELF_TARGET', '服务端原文案'))).toBe(
       '不能举报自己',
     )
   })

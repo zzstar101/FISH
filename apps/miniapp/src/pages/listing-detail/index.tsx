@@ -886,8 +886,9 @@ export default function ListingDetail() {
       </View>
 
       {/* 举报浮层（#73 治理半场）：`reason` 为 null 时整块不渲染。
-          放在页面根下而不是某个区块里 —— 遮罩要能盖住底部操作栏（z-index 100），
-          挂深了会被栏压住。 */}
+          放在页面根下而不是某个区块里 —— 浮层与遮罩被 `report-sheet` 显式抬到
+          z-index 110 / 105，必须高于底部操作栏 `.detail__bar` 的 100，否则
+          「提交举报」会被操作栏整块盖住（#73 审查 M1）。 */}
       <ReportSheet
         targetType="LISTING"
         targetId={listing?.id ?? ''}
