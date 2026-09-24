@@ -21,6 +21,7 @@ export default defineAppConfig({
     'pages/mylist/index',
     'pages/watchers/index',
     'pages/scan/index',
+    'pages/history/index',
   ],
   window: {
     backgroundTextStyle: 'light',
