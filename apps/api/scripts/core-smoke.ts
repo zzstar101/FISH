@@ -179,7 +179,6 @@ async function register(base: string, serial: number): Promise<Cookie> {
     studentNo: `2021000000${String(serial).padStart(2, '0')}`,
     password: PASSWORD,
     nickname: `验收用户${serial}`,
-    campus: '肇庆',
   })
   assertEqual(response.status, 200, `注册账号 #${serial}`)
   return cookieOf(response)
@@ -473,10 +472,13 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const base = `http://127.0.0.1:${port}`
     // `WEB_ORIGIN` 不覆盖：用 `.env` 里的文档值（它决定 CORS 与 cookie 的 Secure 属性）。
     // MAIL_TRANSPORT：smoke 是本地环境，走 dev outbox（#68 的显式 transport 配置）。
+    // WECHAT_TRANSPORT：#86 评审 P1 后 transport 无默认值——smoke 不碰微信入口，
+    // 显式 off，不依赖调用方环境（本机 .env 的 stub 不漏进子进程）。
     api = spawnChild('apps/api/src/index.ts', {
       ...dbEnv,
       API_PORT: String(port),
       MAIL_TRANSPORT: 'outbox',
+      WECHAT_TRANSPORT: 'off',
     })
     await waitFor('API /health → 200', async () => {
       try {

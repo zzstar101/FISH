@@ -1,9 +1,13 @@
 import type { AuthStatus } from '@fish/contracts/auth/user'
 import { Badge } from '@fish/ui/badge'
 
-/** 认证徽章的文案只有两态，没有「审核中」（#3 冻结契约）。 */
+/**
+ * 认证徽章的文案只有两态，没有「审核中」（#3 冻结契约）。
+ * #86 D 节：VERIFIED 的语义只能是「教育邮箱已验证」，不得表述成「学生认证」这类
+ * 学号 / 校区暗示。
+ */
 const LABELS: Record<AuthStatus, string> = {
-  VERIFIED: '学生认证',
+  VERIFIED: '已认证',
   UNVERIFIED: '未认证',
 }
 
@@ -26,5 +30,5 @@ export function AuthBadge({ status, className = '' }: { status: AuthStatus; clas
 
 /** 卡片底部的内联认证文案（蓝色小字），用于瀑布流卡片这类紧凑场景。 */
 export function VerifiedText({ className = '' }: { className?: string }) {
-  return <span className={`shrink-0 text-brand text-xs ${className}`}>学生认证</span>
+  return <span className={`shrink-0 text-brand text-xs ${className}`}>已认证</span>
 }

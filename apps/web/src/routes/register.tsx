@@ -1,15 +1,8 @@
 import { RegisterRequestSchema } from '@fish/contracts/auth/session'
-import { type Campus, CampusSchema } from '@fish/contracts/auth/user'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { type FormEvent, useState } from 'react'
 import { describeAuthFailure } from '../features/auth/error-messages'
-import {
-  AuthPageShell,
-  FormAlert,
-  SelectField,
-  SubmitButton,
-  TextField,
-} from '../features/auth/form'
+import { AuthPageShell, FormAlert, SubmitButton, TextField } from '../features/auth/form'
 import { useRegister } from '../features/auth/queries'
 import { type FieldErrors, issuesToFieldErrors } from '../lib/form-errors'
 
@@ -20,7 +13,6 @@ function RegisterPage() {
   const [studentNo, setStudentNo] = useState('')
   const [password, setPassword] = useState('')
   const [nickname, setNickname] = useState('')
-  const [campus, setCampus] = useState<Campus>('肇庆')
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -28,7 +20,7 @@ function RegisterPage() {
     event.preventDefault()
     setFormError(null)
 
-    const parsed = RegisterRequestSchema.safeParse({ studentNo, password, nickname, campus })
+    const parsed = RegisterRequestSchema.safeParse({ studentNo, password, nickname })
     if (!parsed.success) {
       setFieldErrors(issuesToFieldErrors(parsed.error.issues))
       return
@@ -48,7 +40,8 @@ function RegisterPage() {
 
   return (
     <AuthPageShell
-      description="注册后即完成登录,认证状态由学号自动判定"
+      // #86 D 节：VERIFIED 只能由教育邮箱验证产生，注册不承诺认证结论
+      description="注册后即完成登录。校园认证需另行完成教育邮箱验证"
       iconSrc="/brand-fish.png"
       title={
         <img alt="鱼小应 YUXIAOYING" className="mx-auto h-10 w-auto" src="/brand-wordmark.png" />
@@ -60,7 +53,7 @@ function RegisterPage() {
         <TextField
           autoComplete="username"
           error={fieldErrors.studentNo}
-          hint="12 位数字，20 开头的学号会通过校园认证"
+          hint="12 位数字，作为登录账号"
           inputMode="numeric"
           label="学号"
           onChange={(event) => setStudentNo(event.target.value)}
@@ -84,15 +77,6 @@ function RegisterPage() {
           placeholder="1–20 个字符"
           value={nickname}
         />
-        {/* 选项来自契约枚举，避免前端再抄一份值域。 */}
-        <SelectField
-          error={fieldErrors.campus}
-          label="校区"
-          onValueChange={(value) => setCampus(value as Campus)}
-          options={CampusSchema.options.map((option) => ({ label: option, value: option }))}
-          value={campus}
-        />
-
         <SubmitButton pending={register.isPending}>注册并登录</SubmitButton>
       </form>
 

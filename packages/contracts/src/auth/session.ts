@@ -1,9 +1,12 @@
 import { z } from 'zod'
-import { CampusSchema, MeSchema } from './user'
+import { MeSchema } from './user'
 
 /**
  * 学号即账号。整个后端只有这一处定义长度与字符集：
  * Mock Provider 的判定规则也从它派生，避免「注册校验」与「认证判定」各写一份而漂移。
+ *
+ * #86（2026-09-22 产品冻结）后的现状：Miniapp 主身份是微信（`POST /auth/wechat/session`）；
+ * 学号注册 / 登录保留为 Web 端 legacy 入口与存量账号的登录方式，#86 E 节再统一迁移。
  */
 export const StudentNoSchema = z
   .string()
@@ -19,12 +22,11 @@ export const PasswordSchema = z.string().min(8).max(32)
 
 export const NicknameSchema = z.string().trim().min(1).max(20)
 
-/** `.strict()`：多余字段直接 422，而不是静默丢弃。 */
+/** `.strict()`：多余字段直接 422，而不是静默丢弃。#86 F 节：不再采集校区。 */
 export const RegisterRequestSchema = z.strictObject({
   studentNo: StudentNoSchema,
   password: PasswordSchema,
   nickname: NicknameSchema,
-  campus: CampusSchema,
 })
 
 export type RegisterRequest = z.infer<typeof RegisterRequestSchema>
@@ -46,6 +48,18 @@ export const AuthErrorCodeSchema = z.enum([
   'INVALID_CREDENTIALS',
   'STUDENT_NO_TAKEN',
   'UNAUTHENTICATED',
+  /** #86 A：code2Session 换取失败（code 无效 / 过期 / 已用 / 映射损坏）。 */
+  'WECHAT_CODE_INVALID',
+  /**
+   * #86 评审 P1：`WECHAT_TRANSPORT=off` 时微信登录 / 手机号绑定入口关闭。
+   * 503——不是客户端错误，也不是服务端故障，是「该能力未开通」的显式状态；
+   * 端上据此引导「微信登录暂不可用」，而不是当作登录失败无限重试。
+   */
+  'WECHAT_DISABLED',
+  /** #86 C：phone code 解析失败（stub 下即「不是 11 位手机号」）。422。 */
+  'PHONE_CODE_INVALID',
+  /** #86 C：手机号已被其他账号绑定（唯一索引兜底并发换绑）。409。 */
+  'PHONE_ALREADY_BOUND',
 ])
 
 export type AuthErrorCode = z.infer<typeof AuthErrorCodeSchema>

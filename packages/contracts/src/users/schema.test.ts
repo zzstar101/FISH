@@ -50,7 +50,7 @@ describe('PublicUserProfileSchema', () => {
    */
   test('strips private columns instead of passing them through', () => {
     const parsed = PublicUserProfileSchema.parse(
-      profile({ studentNo: '202510014755', campus: '广州', campusEmail: 'a@b.c', role: 'ADMIN' }),
+      profile({ studentNo: '202510014755', campusEmail: 'a@b.c', role: 'ADMIN' }),
     )
     expect(Object.keys(parsed).sort()).toEqual([
       'activeCount',

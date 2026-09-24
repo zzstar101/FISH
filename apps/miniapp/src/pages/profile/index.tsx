@@ -18,7 +18,8 @@ import './index.scss'
  * （数字栏 4 格 → 图标栏 5 格 → 帮助与设置）→ 版权行。
  *
  * - **本页没有任何吸顶元素**：不挂 `top-bar`，顶部只按胶囊栅格留出初始空档；
- * - **头部没有「编辑」钮**：头像与昵称跟随微信直接获取，本页可编辑的只有个性签名；
+ * - **点头像 / 昵称进「编辑资料」页**（#86 B）：微信不开放读取头像与昵称，只能由用户
+ *   在编辑页用 `chooseAvatar` / `type="nickname"` 主动选；本页自己不摆「编辑」行，
  *   扫码钮与头像同一行对齐；
  * - 三张卡圆角 8pt、无边框描边，只有「帮助与设置」卡带底部阴影（Owner 指定）；
  * - 数字栏（收藏 / 历史浏览 / 关注 / 愿望）只摆数字不摆图标；
@@ -32,7 +33,8 @@ import './index.scss'
  * - 签名行**可编辑**（2026-09-20 拍板）：点击弹输入框、真实输入并保存到本机
  *   （契约暂无签字段，见 `features/profile/signature.ts`）；只展示**首行**，过长由
  *   省略号收尾，未设置过时显示「设置个性签名」占位；
- * - 「编辑个人资料」「隐私」两行不渲染：头像昵称跟随微信、隐私入口在设置页里；
+ * - 「编辑个人资料」「隐私」两行不渲染：编辑入口已挂在头像 / 昵称上（见上），
+ *   隐私入口在设置页里；
  * - 稿里的「清除演示数据」行不渲染：本地没有任何演示数据存储可清。
  *
  * **退出登录**与设置页同一套两步走：先 `revokeServerSession()` 把服务端会话注销
@@ -241,6 +243,9 @@ export default function Profile() {
   /** 认证胶囊：进校园认证页（已认证看状态，未认证去认证） */
   const openVerify = () => void Taro.navigateTo({ url: '/pages/verify/index' })
 
+  /** 头像 / 昵称：进编辑资料页（#86 B） */
+  const openEditProfile = () => void Taro.navigateTo({ url: '/pages/profile-edit/index' })
+
   /** 退出登录：确认后先注销服务端会话、再清本地（顺序说明见文件头） */
   const onLogout = () => {
     if (loggingOut) return
@@ -410,7 +415,8 @@ export default function Profile() {
               className="profile__guest-btn"
               onClick={() => void Taro.navigateTo({ url: '/pages/login/index' })}
             >
-              <Text>登录 / 注册</Text>
+              {/* 登录页只剩微信一条路，没有「注册」这个独立动作可点了（#198 审查 P2-2） */}
+              <Text>去登录</Text>
             </View>
           </View>
           {settingsPanel(false)}
@@ -479,9 +485,11 @@ export default function Profile() {
       <View className="profile__hero-bg" />
 
       <View className="profile__body" style={{ paddingTop: `${navHeight + 8}px` }}>
-        {/* 个人头部：头像 / 昵称 + 认证胶囊 / 签名 / 扫码（与头像同行对齐，无编辑钮） */}
+        {/* 个人头部：头像 / 昵称 + 认证胶囊 / 签名 / 扫码（与头像同行对齐）。
+            头像与昵称都是「编辑资料」入口（#86 B）：微信不开放读取头像昵称，
+            只能由用户在编辑页主动选，所以这里既没有单独的「编辑」行也不显示假头像 */}
         <View className="profile__head">
-          <View className="profile__avatar">
+          <View className="profile__avatar" onClick={openEditProfile}>
             {/* 契约 `MeSchema.avatarUrl` 可为 null：空就画人形占位，不拿别人的头像顶上 */}
             {user.avatarUrl ? (
               <Image className="profile__avatar-img" src={user.avatarUrl} mode="aspectFill" />
@@ -491,7 +499,16 @@ export default function Profile() {
           </View>
           <View className="profile__info">
             <View className="profile__name-row">
-              <Text className="profile__name">{user.nickname}</Text>
+              <Text className="profile__name" onClick={openEditProfile}>
+                {user.nickname}
+              </Text>
+              {/* 昵称可点的提示：与头像同一个入口 */}
+              <Image
+                className="profile__name-chev"
+                src={ICONS.chevronRightMuted}
+                mode="aspectFit"
+                onClick={openEditProfile}
+              />
               {/* 认证状态本身就是入口：已认证进认证页看状态，未认证去认证 */}
               <View className="profile__auth" onClick={openVerify}>
                 <Text className="profile__auth-txt">

@@ -1,4 +1,4 @@
-import { CampusSchema, MeSchema } from '@fish/contracts/auth/user'
+import { MeSchema } from '@fish/contracts/auth/user'
 import {
   ALLOWED_IMAGE_MIME,
   type ListingCard,
@@ -111,22 +111,21 @@ export function createListingService(deps: {
   }
 
   /**
-   * 卖家资料的对外投影。`campus` / `avatarUrl` 在库里是无约束 `text`，契约声明它们是
-   * 枚举 / `z.url()`：值域外的历史值降级为 `null`，否则整条详情会因为一个脏字段解析失败
+   * 卖家资料的对外投影。`avatarUrl` 在库里是无约束 `text`，契约声明它是 `z.url()`：
+   * 值域外的历史值降级为 `null`，否则整条详情会因为一个脏字段解析失败
    * 而 500（与 `apps/api/src/modules/auth/service.ts` 的 `toMe` 同一取舍）。
+   * #86 F：校区已从产品与数据模型整体移除，卖家投影不再有任何校区字段。
    */
   function toSeller(row: {
     id: string
     nickname: string
     avatarUrl: string | null
-    campus: string | null
     authStatus: 'UNVERIFIED' | 'VERIFIED'
   }): ListingSeller {
     return {
       id: row.id,
       nickname: row.nickname,
       avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
-      campus: CampusSchema.safeParse(row.campus).data ?? null,
       authStatus: row.authStatus,
     }
   }
@@ -146,7 +145,6 @@ export function createListingService(deps: {
       id: string
       nickname: string
       avatarUrl: string | null
-      campus: string | null
       authStatus: 'UNVERIFIED' | 'VERIFIED'
     }
     images: ListingImageRow[]

@@ -14,3 +14,11 @@ coverage/
 # #68 dev 邮件 outbox（本地验证码投递目标，非日志）
 .dev/
 apps/api/src/modules/auth/.test-outbox-*/
+
+# 本机 agent 工具的本地目录（不属于仓库内容）
+.workbuddy/
+.zcodeignore
+# 本地验收/截图产物与本地经营材料（#86 B 线评审 P2：output/ 有 2.8M 二进制，
+# 不能被 `git add -A` 顺手带进仓库）
+output/
+business-plan/

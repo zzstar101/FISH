@@ -16,7 +16,6 @@
  */
 import { UPLOAD_ROUTES } from '@fish/contracts/listings/routes'
 import {
-  type ALLOWED_IMAGE_MIME,
   MAX_IMAGE_BYTES,
   UploadConfirmResponseSchema,
   UploadPresignResponseSchema,
@@ -24,30 +23,10 @@ import {
 import Taro from '@tarojs/taro'
 import { apiRequest } from '@/lib/request'
 import { isChooseMediaCancel } from './choose-error'
-
-export type AllowedImageMime = (typeof ALLOWED_IMAGE_MIME)[number]
+import { type AllowedImageMime, mimeFromPath } from './mime'
 
 /** 直传超时：5MB 弱网首包可能很慢，比普通请求的 15s 宽。 */
 const UPLOAD_TIMEOUT_MS = 60_000
-
-const EXTENSION_MIME: Record<string, AllowedImageMime> = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-}
-
-/**
- * 从本地临时路径推 mime。
- *
- * 小程序的 `chooseMedia` 只给 `fileType: 'image'`，没有 mime；契约的 presign 只收
- * `ALLOWED_IMAGE_MIME` 三个值，所以必须在这里收敛，否则请求会在 422 才失败。
- * 后缀不在表里（含 `.heic`）返回 `null`，由调用方给出明确文案。
- */
-export function mimeFromPath(path: string): AllowedImageMime | null {
-  const ext = path.split('.').pop()?.toLowerCase() ?? ''
-  return EXTENSION_MIME[ext] ?? null
-}
 
 /** 与契约同源的大小上限：超了直接给文案，不打 API。 */
 export function validatePickedSize(sizeBytes: number): string | null {

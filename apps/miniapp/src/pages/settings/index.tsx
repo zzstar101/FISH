@@ -42,7 +42,6 @@ export default function Settings() {
   const [notifyWish, setNotifyWish] = useState(initial.notifyWish)
   const [notifyDeal, setNotifyDeal] = useState(initial.notifyDeal)
   const [notifyNews, setNotifyNews] = useState(initial.notifyNews)
-  const [publicCampus, setPublicCampus] = useState(initial.publicCampus)
   const [logoutOpen, setLogoutOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -108,7 +107,7 @@ export default function Settings() {
             </View>
             <View className="st__acct-main">
               <Text className="st__acct-name">{nickname}</Text>
-              <Text className="st__rvalue">{verified ? '已认证' : '未认证'}</Text>
+              <Text className="st__rvalue">{verified ? '已验证' : '未验证'}</Text>
             </View>
             <Text className="st__rvalue">编辑资料</Text>
             <View className="st__arrow" />
@@ -121,8 +120,8 @@ export default function Settings() {
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.safeAccent} mode="aspectFit" />
             </View>
-            <Text className="st__rlabel">校园认证</Text>
-            <Text className="st__rvalue">{verified ? '已认证' : '去认证'}</Text>
+            <Text className="st__rlabel">教育邮箱</Text>
+            <Text className="st__rvalue">{verified ? '已验证' : '去验证'}</Text>
             <View className="st__arrow" />
           </View>
         </View>
@@ -256,22 +255,6 @@ export default function Settings() {
             <Text className="st__rlabel">谁可以给我留言</Text>
             <Text className="st__rvalue">{initial.commentPolicy}</Text>
             <View className="st__arrow" />
-          </View>
-
-          <View className="st__row">
-            <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.locationPin} mode="aspectFit" />
-            </View>
-            <Text className="st__rlabel">公开我的校区</Text>
-            <View
-              className={`st__sw${publicCampus ? ' is-on' : ''}`}
-              onClick={() => {
-                setPublicCampus((prev) => !prev)
-                persist({ publicCampus: !publicCampus })
-              }}
-            >
-              <View className="st__sw-knob" />
-            </View>
           </View>
         </View>
 

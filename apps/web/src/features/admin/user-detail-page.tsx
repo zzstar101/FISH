@@ -51,8 +51,7 @@ export function UserDetailPage() {
               </Badge>
             </p>
             <p className="mt-1 text-sm text-ink-3">
-              {user.studentNoMasked} · {user.campus ?? '校区未填'} · 注册于{' '}
-              {formatDateTime(user.createdAt)}
+              {user.studentNoMasked ?? '未绑定学号'} · 注册于 {formatDateTime(user.createdAt)}
             </p>
           </div>
         </div>

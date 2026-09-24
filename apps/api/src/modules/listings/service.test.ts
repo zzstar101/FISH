@@ -51,10 +51,10 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
     passwordHash: 'not-a-real-hash',
     nickname: '阿岚',
     avatarUrl: null,
-    campus: '肇庆',
     authStatus: 'VERIFIED',
     verifiedAt: CREATED_AT,
     campusEmail: null,
+    phone: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     // #73：users.role 新增 NOT NULL DEFAULT 'USER'，oldest fixture 也带默认值。
@@ -383,7 +383,6 @@ describe('getDetail', () => {
       id: SELLER_ID,
       nickname: '阿岚',
       avatarUrl: null,
-      campus: '肇庆',
       authStatus: 'VERIFIED',
     })
   })

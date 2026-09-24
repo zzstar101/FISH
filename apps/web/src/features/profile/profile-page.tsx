@@ -45,9 +45,6 @@ export function ProfilePage() {
               <span className="truncate font-semibold text-xl">{me.nickname}</span>
               <AuthBadge status={me.authStatus} />
             </p>
-            <p className="mt-1 truncate text-white/80 text-xs">
-              {me.campus ? `${me.campus}校区` : '校区未填写'}
-            </p>
             <button
               className="mt-2 rounded-md border border-dashed border-white/50 px-2 py-1 text-white/80 text-xs"
               type="button"

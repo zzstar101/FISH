@@ -1,13 +1,16 @@
 /**
- * 登录（设计稿 `小程序1版login.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
+ * 登录（设计稿 `小程序1版login.html`，按 Owner 决定改为**仅微信登录**）。
+ * 尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
  *
  * 与稿子的**刻意偏差**（都落在 DESIGN.md 的硬约束内）：
  * 1. 颜色：稿子用的是另一套灰蓝（`--brand #5f82c5` / `--lavender #4a6bae` / 底 `#f3f4f6`），
  *    这里按仓库要求全部映射到 `_tokens.scss` 的冰蓝令牌（主 CTA 用 `--brand-deep` 代替稿子的
- *    深薰衣草，同样是为了白字对比度）。
+ *    深薰衣草，同样是为了白字对比度）。微信按钮也**不引微信绿**：多一个第三方品牌色等于绕开
+ *    DESIGN.md 的对比度校验，身份差异由「只有它这一枚 CTA」承担。
  * 2. 页头背景：稿子是四层 radial-gradient + 颗粒噪点，这里用令牌渐变 `--grad-page`。
  * 3. 玻璃卡：稿子 `rgba(255,255,255,.55)`，按 DESIGN.md §4「玻璃层必须同时给不透明兜底」
  *    改成 `rgba(255,255,255,.72)`。
+ * 4. 学号 / 密码输入、分隔行、去注册入口的样式已随入口一起删除（不再有第二种登录方式）。
  */
 
 .login {
@@ -92,74 +95,6 @@
   gap: 32px;
 }
 
-.login__field {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.login__label {
-  font-size: 28px;
-  line-height: 1.5;
-  color: var(--muted-2);
-}
-
-/* 输入盒：稿 44pt 高、圆角 10pt、浅底 + 描边（packages/ui 的 Input） */
-.login__input {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  height: 88px;
-  padding: 0 24px;
-  box-sizing: border-box;
-  border: 2px solid var(--border);
-  border-radius: 20px;
-  background: var(--ice);
-
-  &.is-focus {
-    border-color: var(--brand);
-    background: var(--surface);
-  }
-
-  &.is-error {
-    border-color: var(--danger);
-    background: var(--danger-weak);
-  }
-}
-
-.login__val {
-  flex: 1;
-  min-width: 0;
-  font-size: 30px;
-  color: var(--fg);
-}
-
-/* 学号是数字：等宽字体（DESIGN.md §5） */
-.login__val.num {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-/* 密码掩码：稿子是 8 个圆点，给一点字距更接近 */
-.login__val--pwd {
-  letter-spacing: 0.12em;
-}
-
-.login__ph {
-  font-size: 30px;
-  color: var(--muted);
-}
-
-/* 错误小字：贴对应输入框下（契约要求字段级错误） */
-.login__err {
-  display: block;
-  margin-top: 8px;
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.5;
-  color: var(--danger-ink);
-}
-
 /* ---------------------------------------------------------------- 协议勾选 */
 
 .login__agree {
@@ -226,12 +161,17 @@
     filter: saturate(1.06) brightness(0.95);
   }
 
-  /* 未填完 / 未勾选协议 / 提交中：禁用态 */
+  /* 未勾选协议 / 登录中：禁用态 */
   &.is-off {
     background: var(--ice);
     color: var(--muted);
     box-shadow: none;
   }
+}
+
+/* 微信一键登录（#86 A）：目前唯一入口，只留一处最小识别特征 */
+.login__cta--wechat {
+  letter-spacing: 0.02em;
 }
 
 .login__spin {
@@ -247,23 +187,4 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-/* ---------------------------------------------------------------- 去注册 */
-
-.login__alt {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 36px;
-  font-size: 28px;
-  line-height: 1.6;
-  color: var(--muted-2);
-}
-
-.login__alt-lk {
-  padding: 0 8px;
-  color: var(--brand);
-  font-weight: 600;
 }

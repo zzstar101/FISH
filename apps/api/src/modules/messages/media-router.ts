@@ -137,6 +137,8 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
         })
       }
       const file = storage.getObject(object.key, range ?? undefined)
+      // 键形状不合法（例如修复前落库的脏行）按不存在处理，绝不落到存储层去归一化路径。
+      if (file === null) return c.json(errorBody('MEDIA_NOT_FOUND', '媒体不存在'), 404)
       return new Response(file.stream, {
         status: range ? 206 : 200,
         headers: {
