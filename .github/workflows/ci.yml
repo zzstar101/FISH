@@ -80,14 +80,15 @@ jobs:
       # 对象存储。三个必须注意的点（都踩过）：
       # 1. **不能用 `services:`**：minio 镜像的默认 CMD 是 `minio`（只打印 usage），而 Actions 的
       #    service 块不支持传 command，健康检查会耗尽重试让整个 job 起不来；
-      # 2. **用 quay.io 而不是 Docker Hub**：hosted runner 的匿名拉取会被 Docker Hub 拒
-      #    （`pull access denied for minio/minio`），实测 Quay 的官方镜像可拉；
-      # 3. `--entrypoint /bin/sh`：mc 镜像的 ENTRYPOINT 是 `mc`，不覆盖的话 `sh -c` 会被当成 mc 参数。
+      # 2. **镜像源**：MinIO 官方已撤回免费镜像 —— Docker Hub 的 `minio/minio` 仓库已删除、quay.io
+      #    同名仓库不再公开（匿名拉取 401）、`dl.min.io` 二进制返回 410 Gone。故改用社区重建的
+      #    `pgsty/minio` / `pgsty/mc`：多架构，entrypoint / CMD 与官方镜像兼容，命令无需改动。见 #216。
+      # 3. `--entrypoint /bin/sh`：mc 镜像的 ENTRYPOINT 是 `/usr/bin/mc`，不覆盖的话 `sh -c` 会被当成 mc 参数。
       - name: Start MinIO
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=fish -e MINIO_ROOT_PASSWORD=fish-secret \
-            quay.io/minio/minio:latest server /data --console-address ":9001"
+            pgsty/minio:latest server /data --console-address ":9001"
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
               echo "minio is up"
@@ -102,13 +103,13 @@ jobs:
       # 桶与匿名读策略必须与 docker-compose.yml 的 minio-init 保持一致：
       # 读接口返回的图片 URL 是 `S3_PUBLIC_URL + '/' + objectKey`（#6 契约 §1 的 ListingImageSchema），
       # 少了匿名读策略，集成测试里的公开 URL 会 403。
-      # `--entrypoint /bin/sh`：minio/mc 镜像的 ENTRYPOINT 是 `mc`，不覆盖的话 `sh -c` 会被当成 mc 的参数。
+      # `--entrypoint /bin/sh`：mc 镜像的 ENTRYPOINT 是 `/usr/bin/mc`，不覆盖的话 `sh -c` 会被当成 mc 的参数。
       - name: Init MinIO bucket
         run: |
           docker run --rm --network host --entrypoint /bin/sh \
             -v "$PWD/infra/minio-public-policy.json:/policies/public.json:ro" \
             -e MC_HOST_local=http://fish:fish-secret@localhost:9000 \
-            quay.io/minio/mc:latest -c "
+            pgsty/mc:latest -c "
               mc mb --ignore-existing local/fish &&
               mc anonymous set-json /policies/public.json local/fish
             "

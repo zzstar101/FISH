@@ -30,7 +30,9 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    # 镜像源：MinIO 官方已撤回免费镜像（Docker Hub `minio/minio` 仓库已删除、quay.io 同名仓库
+    # 不再公开），改用社区重建的 `pgsty/minio`。与 `.github/workflows/ci.yml` 保持同一来源。见 #216。
+    image: pgsty/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
@@ -48,7 +50,8 @@ services:
       retries: 10
 
   minio-init:
-    image: minio/mc:latest
+    # 同上：`pgsty/mc`，与 `.github/workflows/ci.yml` 保持同一来源。
+    image: pgsty/mc:latest
     depends_on:
       minio:
         condition: service_healthy

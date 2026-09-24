@@ -106,19 +106,22 @@ PGPASSWORD='REPLACE_ME_DB_PASSWORD' psql -h 127.0.0.1 -U fish -d fish -c 'select
 
 > ⚠️ **MinIO 的开源版已于 2025 年归档，官方不再提供二进制。**
 > `https://dl.min.io/server/minio/release/linux-*/minio` 与对应的 `mc` 现在一律返回
-> **410 Gone**（全平台，不只是 arm64）。实测确认：从容器镜像里取二进制仍然可行——
-> `quay.io/minio/minio:latest` 的多架构清单里仍有 `linux/arm64` 与 `linux/amd64`
-> （正是本仓 CI 用的那个来源，`.github/workflows/ci.yml`）。
+> **410 Gone**（全平台，不只是 arm64）。官方容器镜像也已下架：Docker Hub 的 `minio/minio`
+> 仓库已删除、`quay.io/minio/minio` 匿名拉取返回 401。实测确认：从社区重建的
+> `pgsty/minio` / `pgsty/mc`（Pigsty 作者维护；`mc` 的自称改成了「Silo」，但二进制名仍是
+> `mc`、命令不变）里取二进制仍然可行——两者的多架构清单里都有 `linux/arm64` 与
+> `linux/amd64`（正是本仓 CI 与 `docker-compose.yml` 用的那个来源）。见 #216。
 >
 > 对课程/内部部署这仍然是最省事的路线（契约与 compose 都按 MinIO 写）；但要清楚：
-> **归档版不会再有任何安全修复**。长期跑的部署应考虑换成仍在维护的 S3 实现（SeaweedFS /
-> Garage / 云厂商对象存储），那需要同步验证 `presign` 直传与匿名读这两条链路。
+> **上游已归档、官方不再有安全修复**，`pgsty` 只是社区重建（不保证跟进修补）。长期跑的
+> 部署应考虑换成仍在维护的 S3 实现（SeaweedFS / Garage / 云厂商对象存储），那需要同步验证
+> `presign` 直传与匿名读这两条链路。
 
 也可以换成任何 S3 兼容服务（Cloudflare R2 / 阿里云 OSS）：换掉 `.env` 的 `S3_*` **六**项
 （含 `S3_PUBLIC_URL`，它决定读接口拼出的图片直链）即可，其它步骤不变，并且可以跳过 §6 的
 `s3.<域名>` 反代。
 
-**不要用 `curl` 从 `dl.min.io` 下载**。从官方镜像里取二进制（`skopeo` 不需要 docker 守护进程）：
+**不要用 `curl` 从 `dl.min.io` 下载**。从上面那个社区镜像里取二进制（`skopeo` 不需要 docker 守护进程）：
 
 ```bash
 # 需要 skopeo（以及下方解压用的 tar）
@@ -128,7 +131,7 @@ sudo apt install -y skopeo
 ARCH=arm64   # 或 amd64
 for img in minio mc; do
   rm -rf /tmp/$img-img && skopeo copy --override-os linux --override-arch "$ARCH" \
-    docker://quay.io/minio/$img:latest dir:/tmp/$img-img
+    docker://pgsty/$img:latest dir:/tmp/$img-img
   for layer in /tmp/$img-img/*; do
     tar -tzf "$layer" >/dev/null 2>&1 || continue
     tar -tzf "$layer" | grep -qE "usr/bin/$img\$" || continue
@@ -143,8 +146,10 @@ sudo useradd --system --no-create-home --shell /usr/sbin/nologin minio-user
 sudo mkdir -p /var/lib/minio && sudo chown minio-user:minio-user /var/lib/minio
 ```
 
-（实测环境为 aarch64，取出的 `minio` 为 `RELEASE.2025-09-07T16-13-09Z`、
-`Runtime: go1.24.6 linux/arm64`，可直接执行；`mc` 同理。）
+（实测环境为 aarch64，取出的 `minio` 为 `RELEASE.2026-08-04T00-00-00Z`（commit-id
+`d88f46cc`）、`Runtime: go1.26.5 linux/arm64`；`mc` 为 `RELEASE.2026-09-16T00-00-00Z`
+（commit-id `e952aa78`）、`Runtime: go1.27.1 linux/arm64`，均可直接执行。注意 `pgsty`
+的 tag 用全零时间戳，与上游 `RELEASE.<日期>T<时刻>Z` 的命名习惯不同，不是笔误。）
 
 `/etc/default/minio`（`chmod 600`，含口令）：
 
