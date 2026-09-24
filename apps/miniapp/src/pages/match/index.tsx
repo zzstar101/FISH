@@ -10,6 +10,7 @@ import { useAuth } from '@/features/auth/store'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
 import { formatAmount, MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
+import { canLoad, isLatestLoad, ownerChanged, shouldReloadOnShow } from './view'
 import './index.scss'
 
 /**
@@ -76,7 +77,7 @@ export default function Match() {
    * 泄漏帧照样存在（详见 chat 页同一写法的注释）。
    */
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
-  if (prevUserId !== userId) {
+  if (ownerChanged(prevUserId, userId)) {
     setPrevUserId(userId)
     loadSeq.current += 1
     setWish(null)
@@ -99,7 +100,7 @@ export default function Match() {
     }
     setState('loading')
     const result = await loadWishMatches(wishId)
-    if (loadSeq.current !== seq) return
+    if (!isLatestLoad(seq, loadSeq.current)) return
     if (result.status === 'ok') {
       setWish(result.wish)
       setItems(result.items)
@@ -119,7 +120,7 @@ export default function Match() {
    * 时即便 authStatus 一直是 `authed`，新账号也要重拉（C 的另一半）。
    */
   useEffect(() => {
-    if (authStatus !== 'authed' || userId === null) return
+    if (!canLoad(authStatus === 'authed', userId)) return
     void load()
   }, [authStatus, userId, load])
 
@@ -137,11 +138,17 @@ export default function Match() {
   authedRef.current = authStatus === 'authed'
   userIdRef.current = userId
   useDidShow(() => {
-    if (skipFirstShow.current) {
-      skipFirstShow.current = false
+    const firstShow = skipFirstShow.current
+    skipFirstShow.current = false
+    if (
+      !shouldReloadOnShow({
+        firstShow,
+        authed: authedRef.current,
+        userId: userIdRef.current,
+      })
+    ) {
       return
     }
-    if (!authedRef.current || userIdRef.current === null) return
     void load()
   })
 
