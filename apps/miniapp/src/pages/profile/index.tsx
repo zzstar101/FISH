@@ -295,7 +295,12 @@ export default function Profile() {
       url: '/pages/history/index',
       count: profile?.historyCount ?? null,
     },
-    { key: 'follow', label: '我的关注', count: profile?.followCount ?? null },
+    {
+      key: 'follow',
+      label: '我的关注',
+      url: '/pages/following/index',
+      count: profile?.followCount ?? null,
+    },
     {
       key: 'wish',
       label: '我的愿望',
