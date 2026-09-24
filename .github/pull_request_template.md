@@ -22,7 +22,7 @@ closed #
 ```bash
 bun run typecheck
 bun run lint
-bun test
+bun test --isolate
 ```
 
 ## DB 变更说明
