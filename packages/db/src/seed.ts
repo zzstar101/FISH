@@ -5,6 +5,7 @@ import { adminAuditLogs } from './schema/admin'
 import { aiPolishRequests } from './schema/ai-polish-requests'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
+import { userRestrictions } from './schema/governance'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
@@ -89,7 +90,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 必须在内：漏掉会让 seed 直接失败
   // （实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
   )
 
   const now = new Date()

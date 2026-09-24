@@ -10,6 +10,7 @@ import {
   statusLabel,
   USER_ROLE_LABEL,
 } from './display'
+import { GovernancePanel } from './governance-panel'
 import { useAdminUser } from './queries'
 
 /**
@@ -70,6 +71,31 @@ export function UserDetailPage() {
           <StatCell label="已下架" value={listingStats.OFFLINE} />
         </div>
       </Card>
+
+      {/* 治理（#73 PR3）：限制发布 / 封禁 / 解除限制。三个按钮都在，后端是唯一真相——
+          重复限制、封禁自己都会得到明确的 409 / 422，不在这里提前猜状态。 */}
+      <GovernancePanel
+        actions={[
+          {
+            action: 'restrict-publish',
+            label: '限制发布',
+            tone: 'danger',
+            description: '禁止该用户发布与编辑商品，留言 / 聊天仍可用',
+          },
+          {
+            action: 'ban',
+            label: '封禁用户',
+            tone: 'danger',
+            description: '禁止全部写入口（发布 / 留言 / 聊天 / 交易），浏览仍可用',
+          },
+          {
+            action: 'lift-restriction',
+            label: '解除限制',
+            description: '解除该用户全部生效中的限制（限制发布与封禁一起解）',
+          },
+        ]}
+        targetId={user.id}
+      />
 
       <Card className="p-4">
         <h2 className="mb-3 font-semibold text-[15px]">最近 Admin 操作记录</h2>

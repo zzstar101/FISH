@@ -129,6 +129,8 @@ export type ListingState = {
   description?: string
   priceCents: number
   free: boolean
+  /** 被治理下架的时间（#73 PR3）；null = 没被治理下架。 */
+  governanceDelistedAt: Date | null
 }
 
 /**
@@ -147,6 +149,8 @@ export type ListingUpdateTarget = {
   negotiable: boolean
   free: boolean
   moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  /** 被治理下架的时间（#73 PR3）：非 null 时卖家不能编辑、不能自行上架。 */
+  governanceDelistedAt: Date | null
   pendingReviewAction?: 'CREATE' | 'UPDATE'
   pendingReviewPriorStatus?: ListingStatus | null
 }
@@ -189,6 +193,8 @@ export type ListingUpdateResult =
   /** 行存在但归别人：契约 §3 要求 403，与 404 分开（不泄漏存在性的只有 "不存在" 那一支）。 */
   | { kind: 'not-owner' }
   | { kind: 'locked' }
+  /** 被治理下架的商品：卖家改不了、也上架不了，只能等管理员 restore（#73 PR3）。 */
+  | { kind: 'governance-blocked' }
   /** 内容被阻断：商品未改动，但审计记录已在**同一事务内**落库（见 `ListingUpdatePlan`）。 */
   | { kind: 'rejected' }
 
@@ -288,6 +294,7 @@ const EDITABLE_COLUMNS = {
   negotiable: listings.negotiable,
   free: listings.free,
   moderationStatus: listings.moderationStatus,
+  governanceDelistedAt: listings.governanceDelistedAt,
 } as const
 
 export function createSqlListingStore(db: Db): ListingStore {
@@ -403,6 +410,7 @@ export function createSqlListingStore(db: Db): ListingStore {
           description: listings.description,
           priceCents: listings.priceCents,
           free: listings.free,
+          governanceDelistedAt: listings.governanceDelistedAt,
         })
         .from(listings)
         .where(eq(listings.id, id))
@@ -494,6 +502,10 @@ export function createSqlListingStore(db: Db): ListingStore {
         if (!row) return { kind: 'not-found' as const }
         if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
         if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
+        // 治理下架（#73 PR3）：必须在锁内判定。放在锁外就是 check-then-act——卖家 PATCH
+        // 与管理员 delist 并发时，PATCH 会把 `moderation_status` 按审核结论写回 APPROVED，
+        // 让一个刚被下架的商品重新回到公开列表。
+        if (row.governanceDelistedAt) return { kind: 'governance-blocked' as const }
 
         let updateTarget: ListingUpdateTarget = row
         if (row.moderationStatus === 'REVIEW') {

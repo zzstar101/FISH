@@ -108,12 +108,27 @@ describe('AdminOverviewSchema', () => {
       newUsersLast24h: 3,
       activeListings: 80,
       completedTransactions: 40,
+      // #73 治理半场 PR4：四个新指标同样是全量 count，契约要求非负整数。
+      pendingReviewRecords: 5,
+      pendingReports: 2,
+      reportsLast7d: 9,
+      activeRestrictions: 1,
     }
     expect(AdminOverviewSchema.parse(body).activeListings).toBe(80)
+    expect(AdminOverviewSchema.parse(body).activeRestrictions).toBe(1)
   })
 
   test('rejects negative metrics', () => {
-    const body = { totalUsers: -1, newUsersLast24h: 0, activeListings: 0, completedTransactions: 0 }
+    const body = {
+      totalUsers: -1,
+      newUsersLast24h: 0,
+      activeListings: 0,
+      completedTransactions: 0,
+      pendingReviewRecords: 0,
+      pendingReports: 0,
+      reportsLast7d: 0,
+      activeRestrictions: 0,
+    }
     expect(AdminOverviewSchema.safeParse(body).success).toBe(false)
   })
 })

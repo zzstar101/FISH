@@ -1,0 +1,1 @@
+ALTER TABLE "listings" ADD COLUMN "governance_delisted_at" timestamp with time zone;

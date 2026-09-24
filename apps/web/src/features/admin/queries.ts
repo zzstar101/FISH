@@ -16,7 +16,9 @@ import {
   type AdminModerationQueueQuery,
   type AdminReportsQuery,
   type AdminTransactionsQuery,
+  banAdminUser,
   decideAdminModeration,
+  delistAdminListing,
   fetchAdminAuditLogs,
   fetchAdminListing,
   fetchAdminListings,
@@ -29,7 +31,11 @@ import {
   fetchAdminTransactions,
   fetchAdminUser,
   fetchAdminUsers,
+  type GovernanceActionInput,
   handleAdminReport,
+  liftAdminUserRestriction,
+  restoreAdminListing,
+  restrictAdminUserPublish,
 } from './api'
 
 /**
@@ -199,6 +205,59 @@ export function useDecideAdminModeration(recordId: string) {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'moderation-queue'] })
       void queryClient.invalidateQueries({ queryKey: adminKeys.listing(detail.item.listing.id) })
       void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+    },
+  })
+}
+
+/**
+ * 治理动作（#73 治理半场 PR3）：下架 / 恢复商品，限制发布 / 封禁 / 解除限制。
+ *
+ * 五个端点共用一个 mutation，区别只在 `action` 与目标 id；成功后统一 invalidate
+ * 商品详情、用户详情、审计日志与 Overview——治理结果的落点就是这四处。
+ *
+ * 409 `GOVERNANCE_CONFLICT` 是**预期的正常分支**（另一个管理员刚做过同一动作），
+ * 不是错误提示，调用方据此把按钮换成「已下架」这类真实状态。
+ */
+export type GovernanceAction =
+  | 'delist-listing'
+  | 'restore-listing'
+  | 'restrict-publish'
+  | 'ban'
+  | 'lift-restriction'
+
+export function useGovernanceAction() {
+  const queryClient = useQueryClient()
+  const invalidateTarget = (targetType: 'listing' | 'user', targetId: string) => {
+    if (targetType === 'listing') {
+      void queryClient.invalidateQueries({ queryKey: adminKeys.listing(targetId) })
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'listings'] })
+    } else {
+      void queryClient.invalidateQueries({ queryKey: adminKeys.user(targetId) })
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+    }
+    void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+    void queryClient.invalidateQueries({ queryKey: adminKeys.overview() })
+  }
+  return useMutation({
+    mutationFn: ({
+      action,
+      targetId,
+      input,
+    }: {
+      action: GovernanceAction
+      targetId: string
+      input: GovernanceActionInput
+    }) => {
+      if (action === 'delist-listing') return delistAdminListing(targetId, input)
+      if (action === 'restore-listing') return restoreAdminListing(targetId, input)
+      if (action === 'restrict-publish') return restrictAdminUserPublish(targetId, input)
+      if (action === 'ban') return banAdminUser(targetId, input)
+      return liftAdminUserRestriction(targetId, input)
+    },
+    onSuccess: (result) => {
+      const targetType = result.targetType === 'LISTING' ? 'listing' : 'user'
+      invalidateTarget(targetType, result.targetId)
+      void queryClient.invalidateQueries({ queryKey: adminKeys.overview() })
     },
   })
 }

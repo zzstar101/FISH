@@ -22,6 +22,8 @@ import {
   AdminUserDetailSchema,
   AdminUserSummaryPageSchema,
 } from '@fish/contracts/admin/schema'
+import type { GovernanceResult } from '@fish/contracts/governance/schema'
+import { GovernanceResultSchema } from '@fish/contracts/governance/schema'
 import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
 import type { AdminReportDetail, AdminReportHandleInput } from '@fish/contracts/reports/schema'
 import {
@@ -177,6 +179,69 @@ export async function decideAdminModeration(
       body: JSON.stringify(input),
     }),
   )
+}
+
+/**
+ * 治理动作（#73 治理半场 PR3）。五个端点形状一致：`{ reason, sourceReportId?, expiresAt? }`，
+ * 返回 `GovernanceResult`（动作 + 目标 + 最新状态 / 限制快照）。
+ *
+ * 与处理举报分开（grill Q9）：这里动商品或用户的真实状态，审计与业务同事务写入。
+ * 失败态由 `apiRequest` 抛 `ApiError`，调用方按 `error.code` 分支：
+ * `GOVERNANCE_CONFLICT`（其他管理员刚做过）必须让用户看到而不是静默重试。
+ */
+export type GovernanceActionInput = {
+  reason: string
+  sourceReportId?: string
+  expiresAt?: string
+}
+
+async function postGovernanceAction(
+  path: string,
+  input: GovernanceActionInput,
+): Promise<GovernanceResult> {
+  return GovernanceResultSchema.parse(
+    await apiRequest(path, { method: 'POST', body: JSON.stringify(input) }),
+  )
+}
+
+/** POST /admin/listings/:id/delist —— 商品下架（卖家随后不能 PATCH / 上架）。 */
+export function delistAdminListing(
+  listingId: string,
+  input: GovernanceActionInput,
+): Promise<GovernanceResult> {
+  return postGovernanceAction(`/admin/listings/${listingId}/delist`, input)
+}
+
+/** POST /admin/listings/:id/restore —— 恢复商品到 delist 审计快照里的 prior_listing_status。 */
+export function restoreAdminListing(
+  listingId: string,
+  input: GovernanceActionInput,
+): Promise<GovernanceResult> {
+  return postGovernanceAction(`/admin/listings/${listingId}/restore`, input)
+}
+
+/** POST /admin/users/:id/restrict-publish —— 限制发布（PUBLISH_RESTRICT）。 */
+export function restrictAdminUserPublish(
+  userId: string,
+  input: GovernanceActionInput,
+): Promise<GovernanceResult> {
+  return postGovernanceAction(`/admin/users/${userId}/restrict-publish`, input)
+}
+
+/** POST /admin/users/:id/ban —— 封禁（BAN，只禁写不禁读）。 */
+export function banAdminUser(
+  userId: string,
+  input: GovernanceActionInput,
+): Promise<GovernanceResult> {
+  return postGovernanceAction(`/admin/users/${userId}/ban`, input)
+}
+
+/** POST /admin/users/:id/lift-restriction —— 解除该用户全部生效中的限制。 */
+export function liftAdminUserRestriction(
+  userId: string,
+  input: GovernanceActionInput,
+): Promise<GovernanceResult> {
+  return postGovernanceAction(`/admin/users/${userId}/lift-restriction`, input)
 }
 
 export async function fetchAdminTransactions(

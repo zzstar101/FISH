@@ -221,6 +221,18 @@ export const AdminOverviewSchema = z.object({
   activeListings: z.number().int().nonnegative(),
   /** transactions.status = COMPLETED 的完成交易数。 */
   completedTransactions: z.number().int().nonnegative(),
+  /**
+   * 待人工审核数：`listings.moderation_status = 'REVIEW'` 的商品数（#73 治理半场 PR4）。
+   * 与审核队列条目不是同一个口径——队列按「每条 listing 只显示最新 REVIEW 记录」去重，
+   * 这里数的是商品，用于概览卡片刻意不重申。
+   */
+  pendingReviewRecords: z.number().int().nonnegative(),
+  /** 待处理举报数：`reports.status = 'PENDING'` 的全量 count，不是当前页条数。 */
+  pendingReports: z.number().int().nonnegative(),
+  /** 近 7 日新增举报数（含已处理），`reports.created_at >= now() - 7 days`。 */
+  reportsLast7d: z.number().int().nonnegative(),
+  /** 生效中的限制数：`user_restrictions.status = 'ACTIVE'` 的全量 count。 */
+  activeRestrictions: z.number().int().nonnegative(),
 })
 export type AdminOverview = z.infer<typeof AdminOverviewSchema>
 
@@ -232,8 +244,15 @@ export type AdminOverview = z.infer<typeof AdminOverviewSchema>
 export const AdminAuditActionSchema = z.enum([
   'ADMIN_PROMOTED',
   'MODERATION_DECISION',
-  // #73 治理半场 PR2：处理举报。其余治理动作在 PR3 追加。
+  // #73 治理半场 PR2：处理举报（只写结果，不动商品或用户）。
   'REPORT_DECISION',
+  // #73 治理半场 PR3：五个治理端点各一个 action，审计可按动作单独筛选。
+  'LISTING_DELISTED',
+  'LISTING_RESTORED',
+  'USER_RESTRICTED',
+  'USER_RESTRICTION_LIFTED',
+  'USER_BANNED',
+  'USER_UNBANNED',
 ])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 
@@ -243,6 +262,9 @@ export const AdminAuditTargetTypeSchema = z.enum([
   'MODERATION_RECORD',
   // #73 治理半场 PR2：举报单本身作为审计目标。
   'REPORT',
+  // #73 治理半场 PR3：限制类动作的审计目标是限制记录本身，同一用户被多次限制时
+  // 每条都有独立可查的目标（而不是都挂到 USER 上互相覆盖语义）。
+  'USER_RESTRICTION',
 ])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
 

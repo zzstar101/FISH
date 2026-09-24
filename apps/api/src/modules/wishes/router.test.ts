@@ -1,8 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import type { WishDto } from '@fish/contracts/wishes/schema'
 import { Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import { createWishesRouter } from './router'
 import type { WishService } from './service'
+
+/**
+ * #73 治理守卫测试替身：一律放行。守卫自身用例见 modules/governance/guard.test.ts。
+ */
+const allowGuard: RestrictionGuard = {
+  publish: async (_c, next) => {
+    await next()
+  },
+  write: async (_c, next) => {
+    await next()
+  },
+}
+
 import type { WishRow, WishStore } from './store'
 
 const dto: WishDto = {
@@ -47,6 +61,7 @@ root.route(
     matchQueue,
     getUserId: (c) => c.get('userId'),
     service,
+    guard: allowGuard,
   }),
 )
 
@@ -64,6 +79,7 @@ describe('wishes router', () => {
         matchQueue,
         getUserId: (c) => c.get('userId'),
         service,
+        guard: allowGuard,
       }),
     )
     expect((await unauthedRoot.request('/wishes')).status).toBe(401)
@@ -114,7 +130,11 @@ describe('wishes router', () => {
     })
     app.route(
       '/wishes',
-      createWishesRouter({ store: creatingStore, getUserId: (c) => c.get('userId') }),
+      createWishesRouter({
+        store: creatingStore,
+        getUserId: (c) => c.get('userId'),
+        guard: allowGuard,
+      }),
     )
 
     const response = await app.request('/wishes', {
@@ -155,6 +175,7 @@ describe('wishes router', () => {
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),
+        guard: allowGuard,
         service: {
           ...service,
           updateWish: async () => {

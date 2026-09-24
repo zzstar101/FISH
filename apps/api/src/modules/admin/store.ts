@@ -10,7 +10,9 @@ import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
+import { userRestrictions } from '@fish/db/schema/governance'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { reports } from '@fish/db/schema/reports'
 import { sessions } from '@fish/db/schema/sessions'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
@@ -174,6 +176,10 @@ export interface OverviewRow {
   newUsersLast24h: number
   activeListings: number
   completedTransactions: number
+  pendingReviewRecords: number
+  pendingReports: number
+  reportsLast7d: number
+  activeRestrictions: number
 }
 
 export type ListUsersCriteria = {
@@ -514,7 +520,12 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           (SELECT count(*)::int FROM ${users}
             WHERE created_at >= now() - interval '24 hours')                     AS new_users_24h,
           (SELECT count(*)::int FROM ${listings} WHERE status = 'ACTIVE')        AS active_listings,
-          (SELECT count(*)::int FROM ${transactions} WHERE status = 'COMPLETED') AS completed_transactions
+          (SELECT count(*)::int FROM ${transactions} WHERE status = 'COMPLETED') AS completed_transactions,
+          (SELECT count(*)::int FROM ${listings} WHERE moderation_status = 'REVIEW') AS pending_review_records,
+          (SELECT count(*)::int FROM ${reports} WHERE status = 'PENDING')      AS pending_reports,
+          (SELECT count(*)::int FROM ${reports}
+            WHERE created_at >= now() - interval '7 days')                     AS reports_last_7d,
+          (SELECT count(*)::int FROM ${userRestrictions} WHERE status = 'ACTIVE') AS active_restrictions
       `)
       const row = rowsOf(result)[0]
       if (!row) throw new Error('Admin 概览查询未返回行')
@@ -523,6 +534,10 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         newUsersLast24h: Number(row.new_users_24h),
         activeListings: Number(row.active_listings),
         completedTransactions: Number(row.completed_transactions),
+        pendingReviewRecords: Number(row.pending_review_records),
+        pendingReports: Number(row.pending_reports),
+        reportsLast7d: Number(row.reports_last_7d),
+        activeRestrictions: Number(row.active_restrictions),
       }
     },
 

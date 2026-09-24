@@ -38,6 +38,7 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     moderationReason: null,
     moderationRuleVersion: null,
     moderatedAt: null,
+    governanceDelistedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     ...overrides,
@@ -94,6 +95,7 @@ function updateTarget(overrides: Partial<ListingUpdateTarget> = {}): ListingUpda
     negotiable: true,
     free: false,
     moderationStatus: 'APPROVED',
+    governanceDelistedAt: null,
     ...overrides,
   }
 }
@@ -112,6 +114,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       status: 'ACTIVE',
       priceCents: 16000,
       free: false,
+      governanceDelistedAt: null,
     }),
     listFeed: async () => [],
     updateListingAtomic: async (input) => {
@@ -878,6 +881,7 @@ describe('transition', () => {
           status: 'OFFLINE',
           priceCents: 16000,
           free: false,
+          governanceDelistedAt: null,
         }),
         findDetail: async () => ({
           listing: listingRow({ status: 'OFFLINE' }),
@@ -905,6 +909,7 @@ describe('transition', () => {
           status: 'RESERVED',
           priceCents: 16000,
           free: false,
+          governanceDelistedAt: null,
         }),
       }),
     })
@@ -937,6 +942,7 @@ describe('transition', () => {
             status: reads === 1 ? 'ACTIVE' : 'RESERVED',
             priceCents: 16000,
             free: false,
+            governanceDelistedAt: null,
           }
         },
       }),
@@ -966,6 +972,7 @@ describe('transition', () => {
             sellerId: SELLER_ID,
             status: reads === 1 ? 'ACTIVE' : 'OFFLINE',
             priceCents: 16000,
+            governanceDelistedAt: null,
             free: false,
           }
         },

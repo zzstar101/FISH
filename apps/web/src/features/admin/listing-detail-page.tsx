@@ -6,6 +6,7 @@ import { ChevronLeft } from 'lucide-react'
 import { formatPrice } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
 import { AUDIT_ACTION_LABEL, formatDateTime, LISTING_STATUS_LABEL, statusLabel } from './display'
+import { GovernancePanel } from './governance-panel'
 import { useAdminListing } from './queries'
 
 /**
@@ -83,6 +84,34 @@ export function ListingDetailPage() {
           查看卖家详情
         </Link>
       </Card>
+
+      {/* 治理（#73 PR3）：下架 / 恢复。按钮集合随当前状态收敛——已下架的商品只给
+          「恢复」，避免后端必然 409 的死路；交易中 / 已售出的商品不给动作，
+          因为后端的条件更新会拒绝，这里提前收起来。恢复的目标状态由后端从
+          delist 审计快照取，这里不提供选择器（避免把 RESERVED 恢复成 ACTIVE）。 */}
+      <GovernancePanel
+        actions={
+          listing.status === 'OFFLINE'
+            ? [
+                {
+                  action: 'restore-listing',
+                  label: '恢复上架',
+                  description: '恢复到被下架前的状态（由下架审计快照决定）',
+                },
+              ]
+            : listing.status === 'ACTIVE'
+              ? [
+                  {
+                    action: 'delist-listing',
+                    label: '下架商品',
+                    tone: 'danger',
+                    description: '商品转为已下架，卖家无法自行修改或上架',
+                  },
+                ]
+              : []
+        }
+        targetId={listing.id}
+      />
 
       <Card className="p-4">
         <h2 className="mb-3 font-semibold text-[15px]">关联 Admin 操作日志</h2>

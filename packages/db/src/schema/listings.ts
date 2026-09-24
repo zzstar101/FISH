@@ -56,6 +56,18 @@ export const listings = pgTable(
     moderationReason: text('moderation_reason'),
     moderationRuleVersion: text('moderation_rule_version'),
     moderatedAt: timestamp('moderated_at', { withTimezone: true, mode: 'date' }),
+    /**
+     * 被「治理动作」下架的时间（#73 治理半场 PR3）。null = 没被治理下架。
+     *
+     * 为什么不能只看 `moderation_status = 'BLOCKED'`：审核引擎的人工 BLOCK 也写 BLOCKED，
+     * 而卖家改内容重过审核是那条路径**故意留的逃生口**（范围外，不改）。治理下架不一样，
+     * 恢复只能由管理员走 restore —— 所以两者必须可区分，而这一列就是那个区分位。
+     * 恢复时置回 null。
+     */
+    governanceDelistedAt: timestamp('governance_delisted_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
     /** #6 的 P0 工作项；#14 只消费这三列做标签与加权。 */
     urgent: boolean('urgent').notNull().default(false),
     negotiable: boolean('negotiable').notNull().default(false),

@@ -2,6 +2,7 @@ import type { Db } from '@fish/db/client'
 import type { AiPolishEnv } from '@fish/shared/env'
 import type { MiddlewareHandler } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { createPolishProvider } from './provider'
 import { createAiPolishRouter } from './router'
 import { createAiPolishService } from './service'
@@ -17,6 +18,7 @@ export function createAiPolishModule(options: {
   db: Db
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   env: AiPolishEnv
+  guard: RestrictionGuard
 }) {
   const provider = createPolishProvider(options.env)
   const router = createAiPolishRouter({
@@ -26,6 +28,7 @@ export function createAiPolishModule(options: {
       env: options.env,
     }),
     requireAuth: options.requireAuth,
+    guard: options.guard,
   })
   return { router }
 }

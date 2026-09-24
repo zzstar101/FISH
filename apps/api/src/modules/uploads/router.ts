@@ -6,6 +6,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { createUploadService, type UploadService, UploadServiceError } from './service'
 import type { MediaStorage } from './storage'
 
@@ -13,6 +14,8 @@ export type UploadsRouterOptions = {
   storage: MediaStorage
   /** 两个端点都要登录（契约 §0.2 的写接口表）。 */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：上传确认前检查封禁（上传是写链的第一步，属 `write` 作用域）。 */
+  guard: RestrictionGuard
   service?: UploadService
 }
 
@@ -35,7 +38,7 @@ export function createUploadsRouter(options: UploadsRouterOptions) {
   const service = options.service ?? createUploadService({ storage: options.storage })
   const router = new Hono<{ Variables: AuthVariables }>()
 
-  router.post('/presign', options.requireAuth, async (c) => {
+  router.post('/presign', options.requireAuth, options.guard.write, async (c) => {
     const parsed = UploadPresignRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       // 契约 §3：VALIDATION_FAILED 必须带 details，前端据此把错误定位到输入框
@@ -53,7 +56,7 @@ export function createUploadsRouter(options: UploadsRouterOptions) {
     }
   })
 
-  router.post('/confirm', options.requireAuth, async (c) => {
+  router.post('/confirm', options.requireAuth, options.guard.write, async (c) => {
     const parsed = UploadConfirmRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       // 契约 §3：VALIDATION_FAILED 必须带 details，前端据此把错误定位到输入框

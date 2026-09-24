@@ -24,6 +24,13 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   ADMIN_PROMOTED: '提升管理员',
   MODERATION_DECISION: '人工审核决定',
   REPORT_DECISION: '举报处理',
+  // #73 治理半场 PR3：一个端点一个 action，审计日志页要能单独筛出「谁下架了什么」。
+  LISTING_DELISTED: '下架商品',
+  LISTING_RESTORED: '恢复商品',
+  USER_RESTRICTED: '限制发布',
+  USER_RESTRICTION_LIFTED: '解除限制',
+  USER_BANNED: '封禁用户',
+  USER_UNBANNED: '解除封禁',
 }
 
 export const AUDIT_TARGET_LABEL: Record<string, string> = {
@@ -31,6 +38,27 @@ export const AUDIT_TARGET_LABEL: Record<string, string> = {
   LISTING: '商品',
   MODERATION_RECORD: '审核记录',
   REPORT: '举报',
+  USER_RESTRICTION: '限制记录',
+}
+
+/** 治理动作文案（按钮 / 结果提示）。与 AUDIT_ACTION_LABEL 同口径但不共用映射。 */
+export const GOVERNANCE_ACTION_LABEL: Record<string, string> = {
+  LISTING_DELISTED: '已下架',
+  LISTING_RESTORED: '已恢复',
+  USER_RESTRICTED: '已限制发布',
+  USER_RESTRICTION_LIFTED: '已解除限制',
+  USER_BANNED: '已封禁',
+  USER_UNBANNED: '已解除封禁',
+}
+
+export const RESTRICTION_TYPE_LABEL: Record<string, string> = {
+  PUBLISH_RESTRICT: '限制发布',
+  BAN: '封禁',
+}
+
+export const RESTRICTION_STATUS_LABEL: Record<string, string> = {
+  ACTIVE: '生效中',
+  LIFTED: '已解除',
 }
 
 export const REPORT_STATUS_LABEL: Record<string, string> = {

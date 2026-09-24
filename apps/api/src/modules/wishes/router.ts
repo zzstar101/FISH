@@ -6,6 +6,7 @@ import {
 import { createDb, type Db } from '@fish/db/client'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import { createNoopWishMatchQueue, type WishMatchQueue } from './match-queue'
 import { createWishService, type WishService, WishServiceError } from './service'
 import { createSqlWishStore, type WishStore } from './store'
@@ -19,6 +20,8 @@ export type WishesRouterOptions = {
   matchQueue?: WishMatchQueue
   getUserId: WishUserIdResolver
   service?: WishService
+  /** #73 治理守卫：写愿望前检查封禁 / 限制发布（愿望同样是发布行为）。 */
+  guard: RestrictionGuard
 }
 
 function jsonError(message: string, code = 'BAD_REQUEST') {
@@ -99,7 +102,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/', async (c) => {
+  app.post('/', options.guard.write, async (c) => {
     try {
       const input = await parseJson(c, (body) => wishCreateInputSchema.parse(body))
       return c.json(await service.createWish(c.get('userId'), input), 201)
@@ -128,7 +131,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.patch('/:id', async (c) => {
+  app.patch('/:id', options.guard.write, async (c) => {
     try {
       const id = parseWishId(c.req.param('id'))
       if (!id) return c.json(jsonError('愿望不存在', 'NOT_FOUND'), 404)
@@ -139,7 +142,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/:id/close', async (c) => {
+  app.post('/:id/close', options.guard.write, async (c) => {
     try {
       const id = parseWishId(c.req.param('id'))
       if (!id) return c.json(jsonError('愿望不存在', 'NOT_FOUND'), 404)
@@ -149,7 +152,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/:id/fulfill', async (c) => {
+  app.post('/:id/fulfill', options.guard.write, async (c) => {
     try {
       const id = parseWishId(c.req.param('id'))
       if (!id) return c.json(jsonError('愿望不存在', 'NOT_FOUND'), 404)

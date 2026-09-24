@@ -1,8 +1,24 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import { Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import { createMessagesRouter } from './router'
 import { type MessageService, MessageServiceError } from './service'
+
+/**
+ * #73 治理守卫测试替身：一律放行。
+ *
+ * 治理守卫自身的用例见 modules/governance/guard.test.ts——这里只关心各模块
+ * 「请求能正常打到 handler」，守卫的判定逻辑不该在每个模块的单测里重复。
+ */
+const allowGuard: RestrictionGuard = {
+  publish: async (_c, next) => {
+    await next()
+  },
+  write: async (_c, next) => {
+    await next()
+  },
+}
 
 const message: MessageDto = {
   id: '00000000-0000-4000-8000-0000000000d1',
@@ -32,6 +48,7 @@ function buildApp(overrides: Partial<MessageService> = {}) {
       requireAuth: async (_c, next) => {
         await next()
       },
+      guard: allowGuard,
     }),
   )
   return root

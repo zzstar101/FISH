@@ -40,4 +40,18 @@ export const ADMIN_ROUTES = {
   reportDetail: (reportId: string) => `/admin/reports/${reportId}`,
   /** POST 处理举报（result = HANDLED / REJECTED + reason）。只写处理结果，不触发治理动作。 */
   reportHandle: (reportId: string) => `/admin/reports/${reportId}/handle`,
+  /**
+   * 治理动作（#73 治理半场 PR3）。五个端点各自独立、可选带 `sourceReportId` 回链举报单；
+   * 业务变更与审计写入同事务，并发靠条件更新（先到者成功，后到者 409）。
+   */
+  /** POST 下架商品（`prior_listing_status` 记进审计快照，供 restore 还原）。 */
+  listingDelist: (listingId: string) => `/admin/listings/${listingId}/delist`,
+  /** POST 恢复商品（目标状态取 delist 审计快照里的 prior_listing_status）。 */
+  listingRestore: (listingId: string) => `/admin/listings/${listingId}/restore`,
+  /** POST 限制用户发布（`PUBLISH_RESTRICT`）。 */
+  userRestrictPublish: (userId: string) => `/admin/users/${userId}/restrict-publish`,
+  /** POST 封禁用户（`BAN`，当前只禁写不禁读）。 */
+  userBan: (userId: string) => `/admin/users/${userId}/ban`,
+  /** POST 解除一条生效中的限制（`PUBLISH_RESTRICT` / `BAN` 都能解）。 */
+  userLiftRestriction: (userId: string) => `/admin/users/${userId}/lift-restriction`,
 } as const

@@ -23,6 +23,9 @@ import { createSqlCommentStore } from './modules/comments/store'
 import { createConversationsRouter } from './modules/conversations/router'
 import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
+import { createRestrictionGuard } from './modules/governance/guard'
+import { createGovernanceService } from './modules/governance/service'
+import { createSqlGovernanceStore } from './modules/governance/store'
 import { createListingsRouter } from './modules/listings/router'
 import { createListingService } from './modules/listings/service'
 import { createSqlListingStore } from './modules/listings/store'
@@ -141,6 +144,18 @@ export function createApp(
     publicUrlBase: env.S3_PUBLIC_URL,
   })
 
+  // #73 治理半场 PR3：写入口守卫 + 治理 service 在建库时创建一次。
+  //
+  // 守卫做成中间剂注入而不是各 service 自查，是为了让「哪些写入口受限制保护」可在接线层
+  // 一眼看全（本文件里每个 `guard:` 就是一处）；漏挂一个 router 是显眼的遗漏，
+  // 而藏进 service 内部则要逐个读业务代码才能确认覆盖面。
+  //
+  // `user_restrictions` 每次请求按 (user, type, status) 查一行，靠
+  // `user_restrictions_user_type_status_idx`；两个作用域的差异见 guard.ts。
+  const governanceStore = createSqlGovernanceStore(db)
+  const restrictionGuard = createRestrictionGuard({ store: governanceStore })
+  const governanceService = createGovernanceService({ db, store: governanceStore })
+
   // #6：`GET /listings*` 匿名可用，写接口在 router 内逐路由挂 requireAuth（读路径不能整体 401）。
   app.route(
     '/listings',
@@ -148,6 +163,7 @@ export function createApp(
       service: createListingService({ store: createSqlListingStore(db), storage }),
       requireAuth: auth.requireAuth,
       resolveViewerId: auth.resolveViewerId,
+      guard: restrictionGuard,
     }),
   )
   // 上传域实例只建一次：#86 B 的头像写入复用同一个 `confirm`（归属前缀 + 对象已上传 +
@@ -159,6 +175,7 @@ export function createApp(
       storage,
       requireAuth: auth.requireAuth,
       service: uploadService,
+      guard: restrictionGuard,
     }),
   )
 
@@ -170,6 +187,7 @@ export function createApp(
     createCommentsRouter({
       service: createCommentService({ store: createSqlCommentStore(db) }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -198,6 +216,7 @@ export function createApp(
         uploads: uploadService,
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -223,6 +242,7 @@ export function createApp(
   const wishes = createWishesRouterFromDb(db, {
     getUserId: (c) => c.get('userId'),
     matchQueue: createDbWishMatchQueue(db),
+    guard: restrictionGuard,
   })
   app.use('/wishes/*', auth.requireAuth)
   app.route('/wishes', wishes)
@@ -252,6 +272,7 @@ export function createApp(
         },
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
   app.route(
@@ -288,6 +309,7 @@ export function createApp(
         },
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -330,6 +352,7 @@ export function createApp(
         },
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -348,13 +371,23 @@ export function createApp(
   // 商品描述 AI 润色（#141）：单个端点 `POST /ai/polish-candidates`，整体要求登录
   // （未登录 401，不给匿名者烧配额）。装配在 modules/ai 内，这里只接线；AI 的上游密钥
   // 只经 aiEnv 注入本进程，worker 拿不到。
-  const ai = createAiPolishModule({ db, requireAuth: auth.requireAuth, env: aiEnv })
+  const ai = createAiPolishModule({
+    db,
+    requireAuth: auth.requireAuth,
+    env: aiEnv,
+    guard: restrictionGuard,
+  })
   app.route('/', ai.router)
 
   // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离（设计 §2）。
   // 挂载点为根级 `/admin`；requireAuth（401）与 requireAdmin（403）两道守卫在 admin
   // router 内部 `use('*')` 应用，覆盖全部 `/admin/*` 入口，普通用户无法靠改前端状态绕过。
-  const admin = createAdminModule({ db, storage, requireAuth: auth.requireAuth })
+  const admin = createAdminModule({
+    db,
+    storage,
+    requireAuth: auth.requireAuth,
+    governance: governanceService,
+  })
   app.route('/admin', admin.router)
 
   // 用户端举报（#73）：所有入口都要登录——匿名举报无法追溯，且 reports.reporter_id 非空。

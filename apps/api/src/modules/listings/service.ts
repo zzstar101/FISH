@@ -473,6 +473,13 @@ export function createListingService(deps: {
           '商品处于交易中或已售出，无法修改',
         )
       }
+      if (result.kind === 'governance-blocked') {
+        throw new ListingServiceError(
+          409,
+          'LISTING_GOVERNANCE_BLOCKED',
+          '商品已被平台下架，暂不能修改；如需恢复请联系平台处理',
+        )
+      }
       if (result.kind === 'not-owner') {
         throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
       }
@@ -580,6 +587,15 @@ async function requireOwnEditable(
   }
   if (LOCKED_LISTING_STATUSES.includes(state.status)) {
     throw new ListingServiceError(409, 'LISTING_NOT_EDITABLE', '商品处于交易中或已售出，无法修改')
+  }
+  // 治理下架（#73 PR3）：下架 / 上架都归管理员，卖家不能自行恢复。恢复走 admin restore，
+  // 目标状态取下架审计快照里的 prior_listing_status。
+  if (state.governanceDelistedAt) {
+    throw new ListingServiceError(
+      409,
+      'LISTING_GOVERNANCE_BLOCKED',
+      '商品已被平台下架，暂不能修改；如需恢复请联系平台处理',
+    )
   }
   return state
 }
