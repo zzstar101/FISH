@@ -59,6 +59,7 @@ describe('conversations router', () => {
       listConversations: async () => ({ items: [], nextCursor: null }),
       getConversation: async () => dto,
       markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
 
@@ -87,6 +88,7 @@ describe('conversations router', () => {
       listConversations: async () => ({ items: [], nextCursor: null }),
       getConversation: async () => dto,
       markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
     const response = await app.request('/conversations', {
@@ -106,6 +108,7 @@ describe('conversations router', () => {
       listConversations: async () => ({ items: [], nextCursor: null }),
       getConversation: async () => dto,
       markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
     const response = await app.request('/conversations', {
@@ -125,6 +128,7 @@ describe('conversations router', () => {
       listConversations: async () => ({ items: [], nextCursor: null }),
       getConversation: async () => dto,
       markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
     const response = await app.request('/conversations/00000000-0000-4000-8000-0000000000c1')
@@ -140,6 +144,7 @@ describe('conversations router', () => {
         throw new ConversationServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
       },
       markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
     const response = await app.request('/conversations/00000000-0000-4000-8000-0000000000c1')
@@ -155,6 +160,7 @@ describe('conversations router', () => {
       listConversations: async () => ({ items: [], nextCursor: null }),
       getConversation: async () => dto,
       markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
     const response = await app.request('/conversations/not-a-uuid')
@@ -171,11 +177,52 @@ describe('conversations router', () => {
       listConversations: async () => ({ items: [], nextCursor: null }),
       getConversation: async () => dto,
       markRead: async () => ({ ...dto, unreadCount: 0 }),
+      getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
-    const response = await app.request('/conversations/xxx/read', { method: 'POST' })
+    const response = await app.request(`/conversations/${dto.id}/read`, { method: 'POST' })
     expect(response.status).toBe(200)
     const body = (await response.json()) as ConversationDto
     expect(body.unreadCount).toBe(0)
+  })
+
+  test('POST /:id/read rejects a malformed conversation id before the service', async () => {
+    let markReadCalled = false
+    const service: ConversationService = {
+      createOrGetConversation: async () => ({ conversation: dto, created: true }),
+      listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => dto,
+      markRead: async () => {
+        markReadCalled = true
+        return dto
+      },
+      getUnreadCount: async () => ({ unreadCount: 0 }),
+    }
+    const app = buildApp(service)
+    const response = await app.request('/conversations/not-a-uuid/read', { method: 'POST' })
+
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: { code: 'CONVERSATION_NOT_FOUND', message: '会话不存在' },
+    })
+    expect(markReadCalled).toBe(false)
+  })
+
+  test('GET /unread-count returns the aggregate and is not shadowed by /:id', async () => {
+    // getConversation 一旦被调用就抛：`/unread-count` 若被 `/:id` 吃掉，本用例会直接失败。
+    const service: ConversationService = {
+      createOrGetConversation: async () => ({ conversation: dto, created: true }),
+      listConversations: async () => ({ items: [], nextCursor: null }),
+      getConversation: async () => {
+        throw new Error('GET /unread-count 不应落到 GET /:id')
+      },
+      markRead: async () => dto,
+      getUnreadCount: async () => ({ unreadCount: 7 }),
+    }
+    const app = buildApp(service)
+    const response = await app.request('/conversations/unread-count')
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ unreadCount: 7 })
   })
 })

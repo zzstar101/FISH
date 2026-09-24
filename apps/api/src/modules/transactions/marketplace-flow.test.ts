@@ -144,7 +144,13 @@ async function register(studentNo: string, nickname: string): Promise<string> {
     method: 'POST',
     body: JSON.stringify({ studentNo, password: PASSWORD, nickname, campus: '肇庆' }),
   })
-  expect(response.status).toBe(200)
+  // #146：失败时先打出响应体再断言状态码——此前只报「期望 200 实际 400」，
+  // 拿不到 error.code 无法定位（register 的 4xx 出口按契约只有 422 / 409，
+  // 400 属于异常路径，出现时响应体是唯一线索）。
+  if (response.status !== 200) {
+    const body = await response.text().catch(() => '<unreadable>')
+    throw new Error(`注册失败：${studentNo} → HTTP ${response.status} ${body}`)
+  }
   const cookie = response.headers
     .getSetCookie()
     .find((value) => value.startsWith('fish_session='))

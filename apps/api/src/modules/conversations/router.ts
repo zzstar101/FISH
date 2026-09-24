@@ -64,6 +64,16 @@ export function createConversationsRouter({ service, requireAuth }: Conversation
     }
   })
 
+  // 未读总数是静态路径，必须注册在 `GET /:id` **之前**：Hono 按注册顺序匹配，
+  // 排在后面会被 `/:id` 当成会话 id 吃掉（`unread-count` 不是合法 uuid，直接 404）。
+  app.get('/unread-count', requireAuth, async (c) => {
+    try {
+      return c.json(await service.getUnreadCount(c.get('userId')), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
   app.get('/:id', requireAuth, async (c) => {
     const id = c.req.param('id')
     if (!UUID_PATTERN.test(id)) {
@@ -78,8 +88,14 @@ export function createConversationsRouter({ service, requireAuth }: Conversation
   })
 
   app.post('/:id/read', requireAuth, async (c) => {
+    const id = c.req.param('id')
+    // 与 `GET /:id` 同一套预校验：非 uuid 直接 404，不打到 PG 抛 22P02 变 500（#152）。
+    if (!UUID_PATTERN.test(id)) {
+      return c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
+    }
+
     try {
-      return c.json(await service.markRead(c.get('userId'), c.req.param('id')), 200)
+      return c.json(await service.markRead(c.get('userId'), id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
