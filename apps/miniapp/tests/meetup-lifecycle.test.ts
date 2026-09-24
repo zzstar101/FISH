@@ -1,0 +1,189 @@
+import { describe, expect, test } from 'bun:test'
+import {
+  canAcquire,
+  classifyConfirmFailure,
+  nextConfirmPending,
+  nextPendingSync,
+  pendingAfterTerminalRefetch,
+  releaseLock,
+  type SubmitLock,
+  showSync,
+  snapshotSuperseded,
+} from '../src/pages/transaction-meetup/view'
+
+/**
+ * transaction-meetup 页的时序回归（#147 P2 与 #170 D 的判据层）。
+ *
+ * 锁的是四条「只在时序上出错、单看一帧状态看不出来」的行为：
+ * - 核销成功后自动 confirm 拿到 409 `TRANSACTION_NOT_IN_PENDING`（核销那一瞬对方取消
+ *   或另一侧已确认）—— 旧接线不看错误码，一律 `setConfirmPending(true)`，于是
+ *   CANCELLED 的单子继续显示「还差最后一步确认」；
+ * - 同一个 tick 连点两下确认 —— 旧接线用 `submitting` state 判重入，第二下读到的还是
+ *   上一帧的 `false`，两次请求都发出去；
+ * - A 的操作链在飞时换到 B，B 已持锁，A 迟到的 `finally` 把 B 的锁放掉 —— 于是 B 的
+ *   页面同 tick 又能再发一次；
+ * - 从扫码页返回面交页时本代次有写入在飞 —— 立刻重读会把页面拉回写入前的快照。
+ *
+ * 边界：本文件只跑判据，不跑组件接线（ref 赋值时机、`useDidShow` 注册顺序、渲染期
+ * setState）。那部分必须在微信开发者工具里按双账号时序实测，不拿本文件当端上证明。
+ */
+
+describe('meetup 自动 confirm 的终态分类（#147 P2）', () => {
+  test('409 TRANSACTION_NOT_IN_PENDING 归为终态：重读终态并撤下确认入口', () => {
+    expect(classifyConfirmFailure('TRANSACTION_NOT_IN_PENDING')).toBe('terminal')
+  })
+
+  test('网络等其它失败仍回到可重试的确认入口', () => {
+    expect(classifyConfirmFailure('NETWORK_ERROR')).toBe('retry')
+    expect(classifyConfirmFailure(null)).toBe('retry')
+  })
+
+  test('终态分支不得把页面留在「还差最后一步确认」', () => {
+    // 核销后自动 confirm 拿到 409 → 交易已终态，确认入口必须撤下。
+    // 走真实导出（index.tsx 的两个 catch 都调它），改坏判定这里就红。
+    expect(
+      nextConfirmPending({
+        kind: 'error',
+        failure: classifyConfirmFailure('TRANSACTION_NOT_IN_PENDING'),
+      }),
+    ).toBe(false)
+
+    // COMPLETED：另一侧已确认，同样不得停在待确认
+    expect(nextConfirmPending({ kind: 'ok', status: 'COMPLETED' })).toBe(false)
+
+    // 还差另一侧：入口继续候着
+    expect(nextConfirmPending({ kind: 'ok', status: 'PENDING_MEETUP' })).toBe(true)
+
+    // 网络失败：保留入口供重试，不假装已完成
+    expect(
+      nextConfirmPending({ kind: 'error', failure: classifyConfirmFailure('NETWORK_ERROR') }),
+    ).toBe(true)
+    expect(nextConfirmPending({ kind: 'error', failure: classifyConfirmFailure(null) })).toBe(true)
+
+    // CANCELLED：今天靠渲染门兜住（cancelled 状态卡优先），判据本身也不能说要留
+    expect(nextConfirmPending({ kind: 'ok', status: 'CANCELLED' })).toBe(false)
+  })
+
+  test('409 之后重读：只有读到仍是待面交才保留确认入口', () => {
+    // 读到了终态：撤下入口，落到对应状态卡
+    expect(pendingAfterTerminalRefetch({ status: 'CANCELLED' })).toBe(false)
+    expect(pendingAfterTerminalRefetch({ status: 'COMPLETED' })).toBe(false)
+
+    // 读不到（网络抖动 / 5xx）：同样撤下 —— 409 已确证交易不是待面交，保留入口会让
+    // 已取消的单子继续显示「还差最后一步确认」。调用点会连同旧快照一起丢掉、落到
+    // 「加载失败 + 重试」，而不是照旧快照渲染 6 位码输入态（凭证已 CONSUMED）。
+    expect(pendingAfterTerminalRefetch(null)).toBe(false)
+
+    // 与 409 自相矛盾，但凭证必定已消耗：保留入口至少还能重试确认
+    expect(pendingAfterTerminalRefetch({ status: 'PENDING_MEETUP' })).toBe(true)
+  })
+})
+
+/** 最小「提交锁 + 账号代次」模型：对应 index.tsx 的 submitLock ref 与 bootEpoch */
+function lockbox() {
+  return { holder: null as SubmitLock, epoch: 0 }
+}
+
+/** 换账号：渲染期同步自增代次（index.tsx 的 identityRef 分支） */
+function switchAccount(box: ReturnType<typeof lockbox>) {
+  box.epoch += 1
+  return box.epoch
+}
+
+/** 发起一次提交：取到锁才放行 */
+function tryBegin(box: ReturnType<typeof lockbox>) {
+  if (!canAcquire(box.holder, box.epoch)) return false
+  box.holder = box.epoch
+  return true
+}
+
+/** 操作链收尾：释放锁并返回释放后的持有者 */
+function end(box: ReturnType<typeof lockbox>, epoch: number) {
+  box.holder = releaseLock(box.holder, epoch)
+  return box.holder
+}
+
+describe('meetup 同步提交锁（#147 P2）', () => {
+  test('同一个 tick 连点两下只放行一次', () => {
+    const box = lockbox()
+    expect(tryBegin(box)).toBe(true)
+    expect(tryBegin(box)).toBe(false)
+  })
+
+  test('换账号后旧链的 finally 不得释放新账号手里的锁', () => {
+    const box = lockbox()
+    expect(tryBegin(box)).toBe(true)
+    const epochA = box.epoch
+
+    // A 还在飞时换到 B，B 立刻开始自己的提交
+    const epochB = switchAccount(box)
+    expect(tryBegin(box)).toBe(true)
+
+    // A 的 finally 迟到
+    expect(end(box, epochA)).toBe(epochB)
+    // 锁仍在 B 手里：B 同 tick 再点依旧被挡
+    expect(tryBegin(box)).toBe(false)
+
+    // B 自己收尾才真正释放
+    expect(end(box, epochB)).toBe(null)
+    expect(tryBegin(box)).toBe(true)
+  })
+
+  test('释放后同代次可以再次提交（重试入口不被锁卡死）', () => {
+    const box = lockbox()
+    expect(tryBegin(box)).toBe(true)
+    expect(end(box, box.epoch)).toBe(null)
+    expect(tryBegin(box)).toBe(true)
+  })
+})
+
+describe('meetup 返回刷新（#170 D）', () => {
+  test('首次 show 让渡给登录态 effect（不双发）', () => {
+    expect(
+      showSync({ firstShow: true, authed: true, userId: 'user-a', submitInFlight: false }),
+    ).toBe('skip')
+  })
+
+  test('非首次 show 且身份有效时立刻重同步', () => {
+    expect(
+      showSync({ firstShow: false, authed: true, userId: 'user-a', submitInFlight: false }),
+    ).toBe('sync')
+  })
+
+  test('本代次有写入在飞时挂起，等写链收尾后补一次（不丢刷新）', () => {
+    expect(
+      showSync({ firstShow: false, authed: true, userId: 'user-a', submitInFlight: true }),
+    ).toBe('defer')
+  })
+
+  test('退出登录 / 身份未就绪时返回不发受限请求', () => {
+    expect(showSync({ firstShow: false, authed: false, userId: null, submitInFlight: false })).toBe(
+      'skip',
+    )
+    expect(showSync({ firstShow: false, authed: true, userId: null, submitInFlight: false })).toBe(
+      'skip',
+    )
+  })
+
+  test('挂起标记：旧链收尾不补同步，也不清掉新账号的挂起标记（不丢刷新）', () => {
+    // 旧账号（代次 0）的写链收尾迟到，此时当前代次已是 1：
+    // 既不补同步，也不许把标记清掉 —— 清了新账号那次刷新就永远丢了
+    expect(nextPendingSync(true, 0, 1)).toEqual({ sync: false, pending: true })
+
+    // 新账号自己的写链收尾：补一次并清标记
+    expect(nextPendingSync(true, 1, 1)).toEqual({ sync: true, pending: false })
+
+    // 没有挂起就什么都不做
+    expect(nextPendingSync(false, 1, 1)).toEqual({ sync: false, pending: false })
+    expect(nextPendingSync(false, 0, 1)).toEqual({ sync: false, pending: false })
+  })
+
+  test('同步窗口内发生过写入时丢弃这份旧快照（不把 COMPLETED 倒回待确认）', () => {
+    // 窗口内没有写入：快照就是最新的，可以落地
+    expect(snapshotSuperseded(3, 3)).toBe(false)
+
+    // 窗口内写完了一次并放掉锁：这时「有没有人持锁」是空的，只有序号能看出来。
+    // 落地就会用写入前的快照把刚写成的 COMPLETED 盖回 PENDING_MEETUP。
+    expect(snapshotSuperseded(3, 4)).toBe(true)
+  })
+})
