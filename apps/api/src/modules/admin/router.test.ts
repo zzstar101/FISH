@@ -59,6 +59,8 @@ const OFFLINE_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a3'
 const REPEATED_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a4'
 const CREATE_REVIEW_CHAIN_LISTING_ID = '01930000-0000-7000-8000-0000000000a5'
 const CREATE_REVIEW_CHAIN_RECORD_ID = '01930000-0000-7000-8000-0000000000b4'
+const AUDIT_ROLLBACK_LISTING_ID = '01930000-0000-7000-8000-0000000000a6'
+const AUDIT_ROLLBACK_RECORD_ID = '01930000-0000-7000-8000-0000000000b5'
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -215,6 +217,66 @@ describe('Admin HTTP 权限边界（设计 §3.2）', () => {
       const body = (await res.json()) as { error: { code: string } }
       expect(body.error.code).toBe('FORBIDDEN')
     }
+  })
+
+  test('a regular user is refused on the admin WRITE endpoint even with a well-formed request', async () => {
+    // 上面的循环只覆盖 GET。写端点（POST 决定）必须在守卫层就挡掉：
+    // 普通用户改前端状态调用它，就等于替管理员做审核决定。
+    // 请求体与 Idempotency-Key 都合法，证明拦住它的是守卫而非参数校验。
+    const res = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: userCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'regular-user-write-attempt',
+      },
+      body: JSON.stringify({ decision: 'BLOCK', reason: '普通用户试图代替管理员' }),
+    })
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: 'FORBIDDEN' },
+    })
+    // 守卫先于 handler：没有任何审计落库，业务状态也不被改写。
+    const audits = await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.requestId, 'regular-user-write-attempt'))
+    expect(audits).toHaveLength(0)
+  })
+
+  test('forged role / identity headers never grant admin access', async () => {
+    // 身份只来自 session cookie（createRequireAuth 读 cookie → loadMe 查库），
+    // 任何自称角色的头都不得被采信。这里把常见伪造头逐一试一遍。
+    const forgedHeaders: Record<string, string>[] = [
+      { 'x-user-role': 'ADMIN' },
+      { 'x-role': 'ADMIN' },
+      { 'x-fish-role': 'ADMIN' },
+      { role: 'ADMIN' },
+      { 'x-admin': 'true' },
+      { 'x-is-admin': '1' },
+      { 'x-user-id': ADMIN_TARGET_ID },
+      { 'x-actor-user-id': ADMIN_TARGET_ID },
+      { 'x-user-role': 'ADMIN', 'x-user-id': ADMIN_TARGET_ID, 'x-admin': 'true' },
+    ]
+    for (const headers of forgedHeaders) {
+      // 无 session：伪造头不能替代登录。
+      const anonymous = await app.request(ADMIN_ROUTES.me, { headers })
+      expect(anonymous.status).toBe(401)
+      expect((await anonymous.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: 'UNAUTHENTICATED' },
+      })
+      // 普通用户 session + 伪造头：仍然是 403，不会升权。
+      const asUser = await app.request(ADMIN_ROUTES.me, {
+        headers: { ...headers, cookie: userCookie },
+      })
+      expect(asUser.status).toBe(403)
+      expect((await asUser.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: 'FORBIDDEN' },
+      })
+    }
+    // 反向对照：不带伪造头的管理员 session 仍然畅通，证明上面的 403 不是链路坏了。
+    const asAdmin = await app.request(ADMIN_ROUTES.me, { headers: { cookie: adminCookie } })
+    expect(asAdmin.status).toBe(200)
   })
 
   test('an admin can reach /admin/me and sees role + capabilities', async () => {
@@ -641,5 +703,103 @@ describe('Admin 查询端到端', () => {
     )
     expect(badCursor.status).toBe(422)
     expect(await badCursor.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
+  test('audit write failure rolls the moderation business change back (same transaction)', async () => {
+    // 设计 §6：业务变更与审计写入必须在同一事务。这里在 admin_audit_logs 上挂一个
+    // BEFORE INSERT 触发器，仅在 reason 带注入前缀时抛错（其他用例不受影响），
+    // 从真实 HTTP 入口验证：审计写不进去 → 商品状态 / 审核记录 / 审计行全部回滚。
+    await scratch.insert(listings).values({
+      id: AUDIT_ROLLBACK_LISTING_ID,
+      sellerId: USER_ID,
+      title: '审计回滚商品',
+      description: '审计写入失败时应保持原状',
+      priceCents: 2500,
+      category: 'BOOKS',
+      condition: 'GOOD',
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+      moderationReason: '命中规则',
+      moderationRuleVersion: 'test-v1',
+      createdAt: new Date('2026-09-06T02:00:00Z'),
+    })
+    await scratch.insert(listingModerationRecords).values({
+      id: AUDIT_ROLLBACK_RECORD_ID,
+      listingId: AUDIT_ROLLBACK_LISTING_ID,
+      sellerId: USER_ID,
+      action: 'CREATE',
+      titleSnapshot: '审计回滚商品',
+      descriptionSnapshot: '审计写入失败时应保持原状',
+      decision: 'REVIEW',
+      matchedRules: jsonParam(['TEST_RULE']),
+      matchedTermsMasked: jsonParam(['测**']),
+      ruleVersion: 'test-v1',
+      priorListingStatus: 'ACTIVE',
+      createdAt: new Date('2026-09-06T02:01:00Z'),
+    })
+
+    await scratch.$client.unsafe(`
+      CREATE OR REPLACE FUNCTION fish_test_fail_audit() RETURNS trigger AS $fn$
+      BEGIN
+        IF NEW.reason LIKE 'AUDIT_FAIL_INJECT%' THEN
+          RAISE EXCEPTION 'injected audit failure for rollback test';
+        END IF;
+        RETURN NEW;
+      END;
+      $fn$ LANGUAGE plpgsql
+    `)
+    await scratch.$client.unsafe(`
+      CREATE TRIGGER fish_test_fail_audit_trigger
+      BEFORE INSERT ON admin_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION fish_test_fail_audit()
+    `)
+
+    try {
+      const res = await app.request(ADMIN_ROUTES.moderationDecision(AUDIT_ROLLBACK_RECORD_ID), {
+        method: 'POST',
+        headers: {
+          cookie: adminCookie,
+          'content-type': 'application/json',
+          'Idempotency-Key': 'audit-failure-rollback',
+        },
+        body: JSON.stringify({ decision: 'ALLOW', reason: 'AUDIT_FAIL_INJECT 审计写入失败' }),
+      })
+      expect(res.status).toBe(500)
+      expect((await res.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: 'INTERNAL_ERROR' },
+      })
+    } finally {
+      await scratch.$client.unsafe(
+        'DROP TRIGGER IF EXISTS fish_test_fail_audit_trigger ON admin_audit_logs',
+      )
+      await scratch.$client.unsafe('DROP FUNCTION IF EXISTS fish_test_fail_audit()')
+    }
+
+    // 业务状态回滚：商品仍是 REVIEW / OFFLINE，moderation_reason 没被人工决定覆盖。
+    const [listing] = await scratch
+      .select({
+        status: listings.status,
+        moderationStatus: listings.moderationStatus,
+        moderationReason: listings.moderationReason,
+      })
+      .from(listings)
+      .where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
+    expect(listing).toMatchObject({
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+      moderationReason: '命中规则',
+    })
+    // 审核记录没有追加 MANUAL_DECISION 行（还是插入时那一条 CREATE）。
+    const records = await scratch
+      .select({ id: listingModerationRecords.id, action: listingModerationRecords.action })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.listingId, AUDIT_ROLLBACK_LISTING_ID))
+    expect(records).toEqual([{ id: AUDIT_ROLLBACK_RECORD_ID, action: 'CREATE' }])
+    // 审计行不存在：既证明审计与业务同事务，也保证重放同一请求不会被误判成「已处理」。
+    const audits = await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.requestId, 'audit-failure-rollback'))
+    expect(audits).toHaveLength(0)
   })
 })

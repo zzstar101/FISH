@@ -265,17 +265,6 @@ export interface AdminStore {
     targetId: string,
     limit: number,
   ): Promise<AuditLogSummaryRow[]>
-  /** 追加一条审计记录（写操作与审计在同一 DB 事务内的入口，见设计 §6 末尾）。 */
-  insertAuditLog(input: {
-    actorUserId: string | null
-    action: AdminAuditAction
-    targetType: AdminAuditTargetType
-    targetId: string
-    before: unknown
-    after: unknown
-    reason: string | null
-    requestId: string | null
-  }): Promise<void>
 }
 
 function userSearchCondition(alias: string, q: string): SQL {
@@ -828,21 +817,6 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         )
         .orderBy(desc(adminAuditLogs.createdAt), desc(adminAuditLogs.id))
         .limit(limit)
-    },
-
-    async insertAuditLog(input) {
-      // jsonb 写入必须经 jsonParam()：裸对象会被 bun-sql 双重 stringify，落库成
-      // 「JSON 字符串套 JSON」（jsonb_typeof = 'string'），审计快照就变成了字符串。
-      await db.insert(adminAuditLogs).values({
-        actorUserId: input.actorUserId,
-        action: input.action,
-        targetType: input.targetType,
-        targetId: input.targetId,
-        before: input.before === null ? null : jsonParam(input.before),
-        after: input.after === null ? null : jsonParam(input.after),
-        reason: input.reason,
-        requestId: input.requestId,
-      })
     },
   }
 }
