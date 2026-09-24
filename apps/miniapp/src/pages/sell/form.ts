@@ -53,6 +53,10 @@ export function validateSellForm(input: {
  * 契约的 `field` 是输入 schema 的字段名，与页面的输入区不是一一对应：
  * `objectKeys` 对应图片区、`priceCents` 对应价格。认不出的字段直接丢弃（不猜），
  * 页面另有整块提示条兜底。**同字段只留第一条**：一屏展示多条会互相打架。
+ *
+ * `category` 与页面的分类选择区同名，此前漏在这里。AI 润色的入参恰好只有
+ * title / description / category 三个字段（`packages/contracts/src/ai/schema.ts:24-28`），
+ * 漏掉它会让「没选分类」这条服务端错误在界面上完全不可见（设计 §10.3）。
  */
 export function sellFieldErrorsFromDetails(
   details: readonly { field: string; message: string }[] | undefined,
@@ -63,6 +67,7 @@ export function sellFieldErrorsFromDetails(
     if (detail.field === 'title' || detail.field === 'description') key = detail.field
     else if (detail.field === 'priceCents') key = 'price'
     else if (detail.field === 'objectKeys') key = 'images'
+    else if (detail.field === 'category') key = 'category'
     if (key === null) continue
     if (errors[key] === undefined) errors[key] = detail.message
   }

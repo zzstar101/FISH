@@ -1,12 +1,12 @@
 /**
- * 注册（设计稿 `小程序1版register.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
+ * 编辑资料（#86 B 线）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
  *
- * 颜色 / 背景 / 玻璃的处理与登录页一致（稿子的灰蓝配色整体映射到 `_tokens.scss` 的冰蓝令牌），
- * 差异只有：多一个返回钮、字段下方多一行 help 文案、校区是一行可点的「值 + 箭头」。
- * 四个字段 + 卡片在小屏上会超过一屏，所以这一页**允许纵向滚动**（不做 `height: 100vh` 锁定）。
+ * 与登录 / 注册同一套冰蓝令牌：渐变页头 + 玻璃卡 + `--brand-deep` 主 CTA，
+ * 不引任何第三方品牌色。头像钮是微信 `open-type="chooseAvatar"` 的原生 button，
+ * 必须把 button 的默认外观（内边距、`::after` 描边）清掉才能当成圆形头像用。
  */
 
-.reg {
+.pe {
   position: relative;
   min-height: 100vh;
   display: flex;
@@ -14,18 +14,18 @@
   background: var(--bg);
 }
 
-.reg__bg {
+.pe__bg {
   position: absolute;
   left: 0;
   right: 0;
   top: 0;
-  height: 784px;
+  height: 520px;
   background: var(--grad-page);
   border-bottom-left-radius: 64px;
   border-bottom-right-radius: 64px;
 }
 
-.reg__body {
+.pe__body {
   position: relative;
   z-index: 1;
   flex: 1;
@@ -38,7 +38,7 @@
 /* ---------------------------------------------------------------- 返回钮 */
 
 /* top 由页面按运行时胶囊几何内联下发（设备 px），这里只管水平与命中区 */
-.reg__back {
+.pe__back {
   position: absolute;
   left: 16px;
   transform: translateY(-50%);
@@ -54,71 +54,105 @@
   }
 }
 
-.reg__back-ic {
+.pe__back-ic {
   width: 40px;
   height: 40px;
 }
 
-/* ---------------------------------------------------------------- 品牌区 */
+/* ---------------------------------------------------------------- 头像 */
 
-.reg__brand {
-  width: 100%;
+.pe__avatar-wrap {
+  position: relative;
+  margin-top: 8px;
+  width: 176px;
+  height: 176px;
+}
+
+/* 原生 button 当圆形头像用：清掉默认内边距 / 行高 / 描边 */
+.pe__avatar-btn {
+  width: 176px;
+  height: 176px;
+  padding: 0;
+  margin: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
+  justify-content: center;
+  line-height: 1;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--ice);
+  overflow: hidden;
+
+  &::after {
+    border: none;
+  }
 }
 
-.reg__mark {
-  width: 188px;
-  height: 116px;
+.pe__avatar-img {
+  width: 100%;
+  height: 100%;
 }
 
-.reg__wordmark {
-  margin-top: 32px;
-  width: 200px;
-  height: 80px;
+.pe__avatar-ph {
+  width: 88px;
+  height: 88px;
 }
 
-.reg__tagline {
-  margin-top: 22px;
-  font-size: 28px;
-  line-height: 1.6;
+/* 相机角标：压在头像右下角，提示「这里可以换头像」 */
+.pe__avatar-badge {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 4px solid var(--surface);
+  background: var(--brand-deep);
+}
+
+.pe__avatar-badge-ic {
+  width: 32px;
+  height: 32px;
+}
+
+.pe__avatar-hint {
+  display: block;
+  margin-top: 20px;
+  font-size: 24px;
+  line-height: 1.5;
   color: var(--muted-2);
 }
 
 /* ---------------------------------------------------------------- 表单卡 */
 
-.reg__card {
+.pe__card {
   width: 100%;
-  margin-top: 52px;
+  margin-top: 40px;
   padding: 32px;
   border-radius: 32px;
   border: 2px solid var(--border);
+  /* 不透明兜底 + 玻璃：与登录 / 注册同一口径 */
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(48px);
   box-shadow: var(--shadow-card);
 }
 
-.reg__form {
-  display: flex;
-  flex-direction: column;
-  gap: 32px;
-}
-
-.reg__field {
+.pe__field {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.reg__label {
+.pe__label {
   font-size: 28px;
   line-height: 1.5;
   color: var(--muted-2);
 }
 
-.reg__input {
+.pe__input {
   display: flex;
   align-items: center;
   gap: 16px;
@@ -129,57 +163,32 @@
   border-radius: 20px;
   background: var(--ice);
 
-  &.is-focus {
-    border-color: var(--brand);
-    background: var(--surface);
-  }
-
   &.is-error {
     border-color: var(--danger);
     background: var(--danger-weak);
   }
 }
 
-/* 校区行：整行可点（原生选择器） */
-.reg__input--tap:active {
-  background: var(--accent-weak);
-}
-
-.reg__val {
+.pe__val {
   flex: 1;
   min-width: 0;
   font-size: 30px;
   color: var(--fg);
 }
 
-.reg__val.num {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-.reg__val--pwd {
-  letter-spacing: 0.12em;
-}
-
-.reg__ph {
+.pe__ph {
   font-size: 30px;
   color: var(--muted);
 }
 
-.reg__chev {
-  flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-}
-
-.reg__help {
+.pe__help {
   display: block;
   font-size: 24px;
   line-height: 1.5;
   color: var(--muted-2);
 }
 
-.reg__err {
+.pe__err {
   display: block;
   font-size: 24px;
   font-weight: 600;
@@ -189,7 +198,9 @@
 
 /* ---------------------------------------------------------------- 主 CTA */
 
-.reg__cta {
+.pe__cta {
+  width: 100%;
+  margin-top: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -206,6 +217,7 @@
     filter: saturate(1.06) brightness(0.95);
   }
 
+  /* 未登录 / 保存中：禁用态 */
   &.is-off {
     background: var(--ice);
     color: var(--muted);
@@ -213,36 +225,17 @@
   }
 }
 
-.reg__spin {
+.pe__spin {
   width: 28px;
   height: 28px;
   border-radius: 50%;
   border: 4px solid rgba(255, 255, 255, 0.45);
   border-top-color: #fff;
-  animation: reg-spin 0.7s linear infinite;
+  animation: pe-spin 0.7s linear infinite;
 }
 
-@keyframes reg-spin {
+@keyframes pe-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-/* ---------------------------------------------------------------- 去登录 */
-
-.reg__alt {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 36px;
-  font-size: 28px;
-  line-height: 1.6;
-  color: var(--muted-2);
-}
-
-.reg__alt-lk {
-  padding: 0 8px;
-  color: var(--brand);
-  font-weight: 600;
 }

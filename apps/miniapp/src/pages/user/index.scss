@@ -1,11 +1,15 @@
 @use '@/styles/mixins' as *;
 
 /**
- * C2 他人主页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ * 他人主页。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 页头（冰蓝渐变：头像 + 昵称 + 认证徽章 + 校区 + 数据行）→ TA 的在售瀑布流
- * → 吸底动作条（关注 / 聊一聊）。
- * 徽章只在 VERIFIED 渲染，未认证整块不占位（设计稿的隐私与排版双重要求）。
+ * 页面结构（1版稿取舍 ②）：导航条常驻但初始透明，页头渐变拆两段 ——
+ * `.uhome__topbg` 是钉在滚动区后面的浅蓝定色带（只到导航条下沿），
+ * `.uhome__headblock` 是随内容滚走的渐变块，两者起点同色（`--grad-page` 的 0%），
+ * 接缝看不出来。内容整块进 `ScrollView`：身份区跟着滚走，下滑后导航条变玻璃底、
+ * 昵称滚出视野后淡入居中标题（联动阈值在 `index.tsx`）。
+ *
+ * 徽章只在 VERIFIED 渲染，未认证整块不占位（隐私与排版双重要求）。
  */
 
 .uhome {
@@ -16,27 +20,41 @@
   overflow: hidden;
 }
 
-.uhome__hero-bg {
-  @include page-hero(560px, 64px);
+/* 钉住的浅蓝定色带：只铺到导航条下沿（`--grad-page` 的起点色），
+   身份区滚走后这里仍是页面的「底色」，导航玻璃就压在它上面。
+   高度由组件行内按 `readNavMetrics().totalHeight` 给（设备 px，随机型变化），
+   样式表只兜底；`#dcebff` = `--grad-page` 的 0% 色标（该渐变的纯色起点，
+   令牌表里没有独立纯色变量，按算式同源取值）。 */
+.uhome__topbg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 88px;
+  background: #dcebff;
+  pointer-events: none;
 }
 
-/* 导航右侧的「更多」玻璃钮 */
-.uhome__more {
-  @include float-btn(72px);
-}
+/* ---------------------------------------------------------------- 页头（进滚动区） */
 
-.uhome__more-ic {
-  width: 34px;
-  height: 34px;
-}
-
-/* ---------------------------------------------------------------- 页头 */
-
-.uhome__head {
+.uhome__scroll {
   position: relative;
   z-index: 1;
-  flex: 0 0 auto;
-  padding: 160px 40px 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 随内容滚走的渐变块：底部圆角 + 轻投影（稿 `.headblock`）。
+   只包身份区，列表区在其外（页面底色）；起点色与 `.uhome__topbg` 相同
+   （`--grad-page` 0% #dcebff），滚动时接缝无缝。 */
+.uhome__headblock {
+  background: var(--grad-page);
+  border-radius: 0 0 64px 64px;
+  /* 上内边距 = 稿 `.headblock` 的 6pt → 12px；身份区再往下 8pt（16px，行内给，
+     因为要在导航条高度之上叠加 —— 导航在本页是绝对定位的覆盖层，滚动区从 y=0 起，
+     稿里那 8pt 是接在「在流的导航条」下面的）。 */
+  padding: 12px 40px 36px;
+  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
 }
 
 .uhome__profile {
@@ -75,16 +93,16 @@
 .uhome__pinfo {
   flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
 }
 
 .uhome__nameRow {
   display: flex;
   align-items: center;
   gap: 16px;
-  flex-wrap: wrap;
+  /* 不换行：稿 `.pname .nm` 是 nowrap + 省略号，整行永远一行高。
+     `wrap` 会让长昵称 + 徽章在关注钮（演示构建下常驻约 130px）挤占宽度时折到
+     第二行，头像行高度随昵称长度变化 —— 页头跟着跳。 */
+  flex-wrap: nowrap;
 }
 
 .uhome__pname {
@@ -94,19 +112,31 @@
   @include ellipsis;
 }
 
-/* 认证徽章：与个人页 / 卖家卡同一个图标 */
+/*
+ * 认证徽章（稿 `.badge`）：浅强调底 + 中强调描边 + 品牌深字，与 `watchers` 页的
+ * 认证徽章同一套色值，也正是 `ICONS.verifiedAccent`（品牌蓝 `#4285ff`）的icon 需要的底。
+ * 尺寸按稿 20pt / 10.5pt / 8pt·6pt → 40 / 21 / 16·12px。
+ *
+ * `--nav` 变体只补居中标题里的**左间距**（稿 `.mp-title` 的 `gap: 6pt` = 12px）：
+ * 居中标题是 flex 行，徽章作为整体参与排布，间距给在外侧而不是父级 gap。
+ */
 .uhome__badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 46px;
-  padding: 0 18px;
+  height: 40px;
+  padding: 0 16px 0 12px;
   border-radius: var(--r-pill);
-  background: var(--ok-weak);
-  border: 2px solid var(--ok-line);
-  color: var(--ok-ink);
-  font-size: 22px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+  font-size: 21px;
   font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.uhome__badge--nav {
+  margin-left: 12px;
 }
 
 .uhome__badge-ic {
@@ -114,12 +144,119 @@
   height: 26px;
 }
 
-.uhome__pcampus {
-  font-size: 24px;
-  color: var(--muted-2);
+/*
+ * 关注按钮（稿 `.btn-follow`，头像行第三格 32pt 胶囊）：**纯演示三态**（无后端）。
+ * - 默认：品牌渐变底白字 + plus 图标；
+ * - `--on`：浅强调底 + 品牌深字 + check 图标；
+ * - `--busy`：浅灰底灰字 + 转圈（稿 `.btn-follow .spin-mini`）。
+ * border 常驻透明，三态高度不跳（稿注释同款取舍）。
+ * 生产构建下整颗按钮不渲染（见 index.tsx `showFollowBtn`）。
+ */
+.uhome__follow {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 64px; /* 稿 32pt ×2 */
+  padding: 0 28px;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+  border: 2px solid transparent;
+  background: var(--grad-brand);
+  color: #fff;
+  font-size: 26px; /* 稿 13pt ×2 */
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
 }
 
-/* ---- 数据行 ---- */
+.uhome__follow-ic {
+  width: 28px;
+  height: 28px;
+}
+
+/* 「关注中」的转圈：稿 `.btn-follow .spin-mini`（12pt 圆环、1.6pt 环宽，
+   浅强调环 + 品牌深色起笔）。尺寸与配色照稿，只把设计稿 pt 换算成 ×2。 */
+.uhome__follow-spin {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 3px solid var(--accent-mid);
+  border-top-color: var(--brand-deep);
+  animation: uhome-follow-spin 0.8s linear infinite;
+}
+
+@keyframes uhome-follow-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.uhome__follow--on {
+  background: var(--accent-mid);
+  border-color: var(--accent-mid);
+  color: var(--brand-deep-2);
+  box-shadow: none;
+}
+
+.uhome__follow--busy {
+  background: var(--accent-faint);
+  border-color: var(--accent-faint);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/*
+ * 个性签名（稿 `.psign`）：**头像行的下一行**、独占一行吃全宽，排在数据行之上。
+ * 稿把「校区 · 加入天数」换成签名，就是为了这一行能吃满宽（与关注钮挤同一行
+ * 只剩约 170pt）。默认单行省略号折叠；`.uhome__psign--open` 解除 nowrap 看全文，
+ * 行尾箭头旋转 180° 表示可收起。短签名（长度不到一行）不渲染箭头。
+ */
+.uhome__psign {
+  position: relative;
+  margin-top: 22px;
+  /* 右侧给箭头留位：折叠时文本自身被裁掉的部分在省略号之后，箭头浮在行尾 */
+  padding-right: 42px;
+}
+
+.uhome__psign-txt {
+  display: block;
+  font-size: 25px; /* 稿 12.5pt ×2 */
+  line-height: 1.55;
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uhome__psign--open .uhome__psign-txt {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.uhome__psign-toggle {
+  position: absolute;
+  right: 0;
+  top: 4px;
+  width: 34px;
+  height: 34px;
+  transition: transform 0.22s ease;
+}
+
+.uhome__psign--open .uhome__psign-toggle {
+  transform: rotate(180deg);
+}
+
+/* 导航居中标题里的昵称：跟随 `.navfloat__title--center` 的 34px 字号，
+   只补 min-width 让省略号在徽章之前生效（徽章左间距见 `.uhome__badge--nav`）。 */
+.uhome__navname {
+  min-width: 0;
+  @include ellipsis;
+}
+
+/* ---------------------------------------------------------------- 数据行 */
 
 .uhome__stats {
   display: flex;
@@ -142,7 +279,7 @@
   gap: 8px;
 }
 
-/* 分隔线用伪元素画在中间两项的两侧，避免给每项加边框导致首尾多一条 */
+/* 分隔线画在中间两项的左侧，避免给每项加边框导致首尾多一条 */
 .uhome__stat + .uhome__stat {
   border-left: 2px solid var(--accent-faint);
 }
@@ -163,16 +300,12 @@
 
 .uhome__body {
   position: relative;
-  z-index: 1;
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   padding-top: 32px;
+  /* 吸底栏已删，滚动内容自己让出 Home Indicator（稿 `.content{padding-bottom}`） */
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 .uhome__sect {
-  flex: 0 0 auto;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -191,15 +324,10 @@
   color: var(--muted-2);
 }
 
-.uhome__scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
 .uhome__grid {
   display: flex;
   gap: 24px;
-  padding: 0 40px 32px;
+  padding: 0 40px;
   align-items: flex-start;
 }
 
@@ -315,6 +443,28 @@
   color: var(--muted-2);
 }
 
+/* ---------------------------------------------------------------- 到底提示 */
+
+/* 稿 `.list-end`：两侧细线夹 mono 小字。不带数字（口径见 index.tsx） */
+.uhome__list-end {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 40px 12px;
+}
+
+.uhome__list-end-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+}
+
+.uhome__list-end-txt {
+  font-size: 21px;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------- 空态 */
 
 .uhome__empty {
@@ -357,6 +507,32 @@
 
 /* ---------------------------------------------------------------- 骨架屏 */
 
+/* 页头骨架：头像盘 + 昵称条（稿 04 帧的页头骨架，无关注钮占位） */
+.uhome__skel-disc {
+  width: 152px;
+  height: 152px;
+  border-radius: 50%;
+  background: var(--accent-faint);
+  flex: 0 0 auto;
+}
+
+.uhome__skel-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.uhome__skel-bar {
+  @include skeleton(24px, 100%);
+}
+
+.uhome__skel-bar--sm {
+  height: 20px;
+}
+
+/* 列表骨架卡 */
 .uhome__skel {
   @include card(36px);
   overflow: hidden;
@@ -372,73 +548,4 @@
   flex-direction: column;
   gap: 12px;
   padding: 18px 20px 20px;
-}
-
-.uhome__skel-bar {
-  @include skeleton(24px, 100%);
-}
-
-/* ---------------------------------------------------------------- 吸底动作条 */
-
-.uhome__bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 20px 40px calc(20px + env(safe-area-inset-bottom));
-  background: rgba(255, 255, 255, 0.9);
-  border-top: 2px solid var(--border);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
-  box-sizing: border-box;
-}
-
-/* 关注：次按钮；已关注转浅底 + 强调描边 */
-.uhome__follow {
-  flex: 0 0 240px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 96px;
-  border-radius: 48px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  color: var(--fg);
-  font-size: 30px;
-  font-weight: 600;
-
-  &.is-on {
-    background: var(--accent-weak);
-    border-color: var(--line);
-    color: var(--brand-deep);
-  }
-
-  &.is-busy {
-    opacity: 0.6;
-  }
-}
-
-/* 聊一聊：主按钮 */
-.uhome__chat {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  height: 96px;
-  border-radius: 48px;
-  background: var(--grad-brand);
-  color: #fff;
-  font-size: 31px;
-  font-weight: 600;
-  box-shadow: var(--shadow-btn);
-}
-
-.uhome__chat-ic {
-  width: 38px;
-  height: 38px;
 }

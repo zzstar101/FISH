@@ -89,6 +89,43 @@ describe('confirm', () => {
     expect(statCalled).toBe(false)
   })
 
+  test('rejects a `..` key that only looks like it belongs to the caller（路径穿越）', async () => {
+    let statCalled = false
+    const service = createUploadService({
+      storage: fakeStorage({
+        stat: async () => {
+          statCalled = true
+          return { size: 1, contentType: 'image/jpeg' }
+        },
+      }),
+    })
+
+    const key = `listings/${USER_ID}/../${OTHER_ID}/x.jpg`
+    // 前缀校验单独拦不住：这个键确实以调用方前缀开头，但 Bun.S3Client 拼 URL 时
+    // 会把 `..` 归一化掉，实际请求别人的对象（#86 B 线评审 P1）。
+    expect(key.startsWith(`listings/${USER_ID}/`)).toBe(true)
+
+    const error = await expectUploadError(() => service.confirm(USER_ID, { objectKey: key }))
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(statCalled).toBe(false)
+  })
+
+  test('rejects object keys that carry path syntax（空段 / 反斜杠 / 百分号编码）', async () => {
+    const service = createUploadService({ storage: fakeStorage({ stat: async () => null }) })
+    const keys = [
+      `listings/${USER_ID}//x.jpg`,
+      `listings/${USER_ID}/..\\${OTHER_ID}/x.jpg`,
+      `listings/${USER_ID}/..%2f${OTHER_ID}/x.jpg`,
+      `listings/${USER_ID}/./x.jpg`,
+      `/listings/${USER_ID}/x.jpg`,
+    ]
+
+    for (const objectKey of keys) {
+      const error = await expectUploadError(() => service.confirm(USER_ID, { objectKey }))
+      expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    }
+  })
+
   test('rejects a key that was never uploaded', async () => {
     const service = createUploadService({ storage: fakeStorage({ stat: async () => null }) })
     const error = await expectUploadError(() =>

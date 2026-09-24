@@ -38,6 +38,16 @@ async function seedListing(listingId: string, sellerId: string, title: string) {
   `)
 }
 
+/**
+ * 按 **service 的口径**把一页会话列表汇总成未读数：store 多取 limit+1 行判底，
+ * service 会丢弃多出的那一行（`service.ts` 的 `page.slice(0, limit)`）。
+ * 用它构造「列表行相加」这一侧，与 `countUnread` 对账。
+ */
+async function sumListedUnread(viewerId: string, limit: number) {
+  const rows = await store.listForUser(viewerId, { limit, cursor: null })
+  return rows.slice(0, limit).reduce((sum, row) => sum + row.unreadCount, 0)
+}
+
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   await migrate(db, { migrationsFolder })
@@ -157,6 +167,84 @@ describe('conversations store (integration)', () => {
     // 卖家视角同样能看到两个会话
     const sellerList = await store.listForUser(seller, { limit: 10, cursor: null })
     expect(sellerList).toHaveLength(2)
+  })
+
+  test('countUnread 判据与列表行恒等：MEDIA 不计、SYSTEM 计入、自己发的不计、读位边界生效', async () => {
+    const buyerE = '01990000-0000-7000-8000-0000000000a8'
+    const sellerE = '01990000-0000-7000-8000-0000000000a9'
+    const listingE = '01990000-0000-7000-8000-0000000000b4'
+    await db.execute(sql`
+      INSERT INTO users (id, student_no, password_hash, nickname) VALUES
+        (${buyerE}, ${`conv${process.pid}_e0`}, 'test-hash', '会话测试'),
+        (${sellerE}, ${`conv${process.pid}_e1`}, 'test-hash', '会话测试')
+    `)
+    await seedListing(listingE, sellerE, '判据商品')
+    const inserted = await store.insertIfAbsent(listingE, buyerE, sellerE)
+    if (!inserted) throw new Error('unreachable')
+    const conversationId = inserted.id
+
+    // 显式秒级递减的时间轴（旧 → 新）：读位边界是确定值，不指望 now() 的相对先后。
+    // 未读 = **晚于**读位，所以「该计未读的」必须落在时间轴的新端。
+    //
+    // ② MEDIA 刻意放在**买家读位之后、且由对方发出**：这样它只被 MEDIA 判据排除，
+    // 不会被读位或 sender 分支顺带排除 —— 否则 countUnread 漏掉该判据也测不出来。
+    await db.execute(sql`
+      INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
+        (${crypto.randomUUID()}, ${conversationId}, ${sellerE}, 'TEXT', '①读位之前的旧消息', now() - interval '60 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, ${buyerE}, 'TEXT', '②买家发的 A', now() - interval '50 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, ${buyerE}, 'TEXT', '③买家发的 B', now() - interval '40 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, ${sellerE}, 'TEXT', '④对方未读', now() - interval '30 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, ${sellerE}, 'MEDIA', '{}', now() - interval '20 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, NULL, 'SYSTEM', '⑤系统未读', now() - interval '10 seconds')
+    `)
+    // 买家读位落在 ③ 与 ④ 之间：①②③ 已读，④⑤ 未读。
+    await db.execute(sql`
+      UPDATE conversations SET buyer_last_read_at = now() - interval '35 seconds' WHERE id = ${conversationId}
+    `)
+
+    // 买家：④ 对方 TEXT + ⑤ SYSTEM = 2；① 在读位之前、② 自己发的、③ MEDIA（若漏判据会变 3）。
+    // 卖家：从未读过 → ②③ 买家 TEXT + ⑤ SYSTEM = 3；①④ 自己发的、③ 侧 MEDIA 都排除。
+    const expected = { buyer: 2, seller: 3 }
+
+    expect(await store.countUnread(buyerE)).toBe(expected.buyer)
+    expect(await store.countUnread(sellerE)).toBe(expected.seller)
+    // 需求要求的恒等式：聚合端点必须等于列表行相加。判据任一分支写错，两式就会分叉。
+    expect(await sumListedUnread(buyerE, 20)).toBe(expected.buyer)
+    expect(await sumListedUnread(sellerE, 20)).toBe(expected.seller)
+  })
+
+  test('countUnread 聚合全部会话，不随列表单页上限漏计（#67）', async () => {
+    // 专用买卖双方：不占用 buyer/seller 的会话列表，本用例与其它用例的执行顺序无关。
+    const buyerD = '01990000-0000-7000-8000-0000000000a6'
+    const sellerD = '01990000-0000-7000-8000-0000000000a7'
+    await db.execute(sql`
+      INSERT INTO users (id, student_no, password_hash, nickname) VALUES
+        (${buyerD}, ${`conv${process.pid}_d0`}, 'test-hash', '会话测试'),
+        (${sellerD}, ${`conv${process.pid}_d1`}, 'test-hash', '会话测试')
+    `)
+
+    // 21 个会话 > 列表默认 limit（20）：把「取一页 unreadCount 再相加」的实现钉死，
+    // 那种写法在这里只会数到 20。这正是专用未读端点存在的理由。
+    const total = 21
+    for (let i = 0; i < total; i++) {
+      const listingId = `01990000-0000-7000-8000-0000000001${String(i).padStart(2, '0')}`
+      await seedListing(listingId, sellerD, `批量商品 ${i}`)
+      const inserted = await store.insertIfAbsent(listingId, buyerD, sellerD)
+      if (!inserted) throw new Error('unreachable')
+      await db.execute(sql`
+        INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at)
+        VALUES (${crypto.randomUUID()}, ${inserted.id}, ${sellerD}, 'TEXT', '未读', now() - interval '1 second')
+      `)
+    }
+
+    expect(await store.countUnread(buyerD)).toBe(total)
+    // 「取一页列表再求和」的写法在这里只会数到 20（store 多取的那 1 行是判底用的，
+    // service 会丢掉它）——这就是专用未读端点存在的理由。
+    expect(await sumListedUnread(buyerD, 20)).toBe(total - 1)
+    // 把单页放得足够大一页取全时，列表行相加与聚合端点必须相等（恒等式在跨会话时也成立）。
+    expect(await sumListedUnread(buyerD, 50)).toBe(total)
+    // 卖家一侧没有未读（这些消息都是卖家自己发的）。
+    expect(await store.countUnread(sellerD)).toBe(0)
   })
 
   test('coverObjectKeys 只认 sort_order = 0：缺 0 号图时返回 null，不拿其它序号顶替', async () => {

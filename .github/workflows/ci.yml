@@ -38,6 +38,9 @@ jobs:
       # #141：CI 不出网、不持有上游密钥，AI 润色一律走 stub（用例内用临时端口的 stub 服务覆盖 base_url）。
       AI_POLISH_TRANSPORT: stub
       AI_POLISH_BASE_URL: http://127.0.0.1:8787
+      # #86：微信登录 / 手机号绑定 transport 无默认值（评审 P1：禁止静默回退 stub）。
+      # CI 不验证微信链路，显式 off——`WECHAT_TRANSPORT` 未设置时 API 启动即失败是预期行为。
+      WECHAT_TRANSPORT: off
 
     steps:
       - uses: actions/checkout@v7
@@ -159,7 +162,8 @@ jobs:
         run: bun test
 
       # 核心主链端到端冒烟（#43）：自建 scratch 库 + 真实 API / Worker + 上面起的 MinIO，
-      # 覆盖图片上传、双向匹配、编辑/上下架重算、崩溃重启恢复。
+      # 覆盖图片上传、双向匹配、编辑/上下架重算、崩溃重启恢复，以及交易与面交不变量
+      # （#147：交易↔会话三元组一致、取消/成交两个终态销毁凭证、一单一码、重取即解锁）。
       # 每个 PR 跑 1 轮作为回归门禁；验收要求的“连跑 5 次”是 `bun run core:smoke -- --runs=5`
       # （约 60s，不放进每 PR 的流水线以免拖长 CI）。
       - name: Core smoke

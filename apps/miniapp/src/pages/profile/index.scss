@@ -88,6 +88,13 @@
   text-overflow: ellipsis;
 }
 
+/* 昵称右侧的小箭头：提示「昵称可点，进编辑资料」（#86 B） */
+.profile__name-chev {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+}
+
 /* 认证胶囊：白玻璃底 + 品牌字，整颗是入口（进校园认证页） */
 .profile__auth {
   flex: 0 0 auto;

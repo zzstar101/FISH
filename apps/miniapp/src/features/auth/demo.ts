@@ -8,7 +8,7 @@
  *
  * 开关是**独立注入**的 `__DEMO_AUTH__`（见 `config/index.ts`），刻意不复用
  * `__ALLOW_MOCK_FALLBACK__`：后者还包含 `NODE_ENV=development`，会连 `dev:weapp`
- * 的日常开发一起自动登录，把匿名态 / 登录引导 / 注册流程全顶掉。
+ * 的日常开发一起自动登录，把匿名态 / 登录引导全顶掉。
  * H5 预览产物另在 `preview/build.mjs` 里显式打开。
  *
  * 生产不受影响：`taro build` 走 production 且不给 `TARO_APP_MOCK=1` 就注入 false。
@@ -25,13 +25,14 @@ export const DEMO_AUTH_ENABLED = __DEMO_AUTH__ === true
 /**
  * 形状照 `MeSchema`（`packages/contracts/src/auth/user.ts`）：
  * `id` 是合法 uuid v4（页面可能拿它当 key 或做契约解析），
- * `campus` / `authStatus` 取真实值域里的值，`avatarUrl` 给 null 让页面走首字母兜底。
+ * `authStatus` 取真实值域里的值，`avatarUrl` 给 null 让页面走首字母兜底。
  */
 export const DEMO_USER: Me = {
   id: '9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f',
   nickname: '演示同学',
   avatarUrl: null,
-  campus: '肇庆',
   authStatus: 'VERIFIED',
   verifiedAt: '2026-01-01T00:00:00.000Z',
+  phoneBound: false,
+  maskedPhone: null,
 }

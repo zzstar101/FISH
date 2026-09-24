@@ -62,6 +62,11 @@ export interface ConversationStore {
   ): Promise<ConversationDetailRow[]>
   /** 一页会话的封面 objectKey（每个 listing 取 sort_order = 0 的一张）。 */
   coverObjectKeys(listingIds: string[]): Promise<Map<string, string | null>>
+  /**
+   * 本人未读总数（#67）。聚合**全部**会话，不分页；判据与列表行 `unreadCount` 同源，
+   * 因此恒等于「全部会话 unreadCount 之和」。
+   */
+  countUnread(viewerId: string): Promise<number>
   /** 把查看者一侧的 last_read_at 单调推进到 now（只前进不后退）；非参与者返回 null。 */
   markRead(conversationId: string, viewerId: string): Promise<ConversationDetailRow | null>
 }
@@ -119,9 +124,26 @@ function toDetailRow(row: Record<string, unknown>): ConversationDetailRow {
 }
 
 /**
+ * 「查看者视角下这一行算未读」的 SQL 谓词；依赖外层查询的别名 `c` = conversations、`m` = messages。
+ *
+ * 会话列表行的 `unread_count` 子查询与 `countUnread` 的聚合**共用这一份**：分叉会让
+ * 底栏红点与列表行在「对方还是 SYSTEM 发的」「未读边界」上各说各话。
+ *
+ * 未读 = 非 MEDIA、由对方或 SYSTEM（sender_id IS NULL）发出、且晚于我 last_read_at 的消息；
+ * 我从未读过（last_read_at IS NULL）时全部计未读。会话严格双人，CASE 由 buyer/seller 二选一。
+ */
+const unreadMessagePredicate = (viewerId: string) => sql`
+  m.type <> 'MEDIA'
+  AND (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
+  AND (
+    (CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END) IS NULL
+    OR m.created_at > CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END
+  )
+`
+
+/**
  * 会话的统一投影：join 商品（顶部商品卡）与对方用户，并按查看者角色计算未读数。
- * 未读 = 对方或 SYSTEM（sender_id IS NULL）发出的、晚于我 last_read_at 的消息；
- * 会话严格双人，CASE 由 buyer/seller 二选一，不存在第三种角色。
+ * 未读判据见 `unreadMessagePredicate`（与 `countUnread` 同源）。
  */
 const detailSelect = (viewerId: string) => sql`
   SELECT c.id, c.listing_id, c.buyer_id, c.seller_id,
@@ -135,10 +157,7 @@ const detailSelect = (viewerId: string) => sql`
          lm.type::text AS last_message_type, lm.content AS last_message_content,
          lm.sender_id AS last_message_sender_id, lm.created_at AS last_message_created_at,
          (SELECT count(*) FROM messages m
-          WHERE m.conversation_id = c.id AND m.type <> 'MEDIA'
-            AND (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
-            AND (CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END IS NULL
-                 OR m.created_at > CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END)
+          WHERE m.conversation_id = c.id AND ${unreadMessagePredicate(viewerId)}
          ) AS unread_count
   FROM conversations c
   JOIN listings l ON l.id = c.listing_id
@@ -206,6 +225,19 @@ export function createSqlConversationStore(db: Db): ConversationStore {
         ) page
       `)
       return rowsOf(result).map(toDetailRow)
+    },
+
+    async countUnread(viewerId) {
+      // 不带 LIMIT：这正是本端点存在的理由——列表只取一页，>limit 的会话会漏计。
+      // 与 detailSelect 的 unread_count 子查询共用 unreadMessagePredicate，两者恒等。
+      const result = await db.execute(sql`
+        SELECT count(*)::int AS unread_count
+        FROM conversations c
+        JOIN messages m ON m.conversation_id = c.id
+        WHERE (c.buyer_id = ${viewerId} OR c.seller_id = ${viewerId})
+          AND ${unreadMessagePredicate(viewerId)}
+      `)
+      return Number(rowsOf(result)[0]?.unread_count ?? 0)
     },
 
     async coverObjectKeys(listingIds) {

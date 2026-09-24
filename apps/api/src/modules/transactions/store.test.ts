@@ -649,6 +649,10 @@ describe('meetup token store (integration, #70)', () => {
     expect(merged.status).toBe('COMPLETED')
     expect(merged.completed_at).not.toBeNull()
     expect(merged.listing_status).toBe('SOLD')
+    // #147 终态销毁：核销把交易推入 COMPLETED 的同事务必须删除凭证行
+    // （上面的 upsert 先造了行；不直接断言的话，删掉 store 里 consume 完成分支的
+    // DELETE 整个模块仍全绿——审查 #76 的 mutation 发现）。
+    expect(await store.findMeetupToken(txId)).toBeNull()
   })
 
   test('终态交易不得签发：CANCELLED / COMPLETED 上 upsert 落 0 行返回 null（审查 P1 TOCTOU）', async () => {
@@ -664,8 +668,19 @@ describe('meetup token store (integration, #70)', () => {
     expect(await store.findMeetupToken(cancelledTx)).toBeNull()
 
     const completedTx = await createPendingTx(scenarios.issueGuardComplete)
+    // 双侧 confirm 完成前先签发凭证：完成路径必须把它同事务删掉。
+    // 不先造行的话，下面的 findMeetupToken 断言永远是 null（从未有过行），
+    // 删掉 store 里 confirm 完成分支的 DELETE 整个模块仍全绿（审查 #76 的 mutation 发现）。
+    expect(
+      await store.upsertMeetupToken(completedTx, {
+        tokenHash: TOKEN_HASH,
+        codeHash: CODE_HASH,
+        issuedBy: seller,
+      }),
+    ).not.toBeNull()
     await store.confirm(completedTx, buyer1, 'buyer')
     await store.confirm(completedTx, seller, 'seller')
+    expect(await store.findMeetupToken(completedTx)).toBeNull()
     expect(
       await store.upsertMeetupToken(completedTx, {
         tokenHash: TOKEN_HASH,
@@ -676,9 +691,9 @@ describe('meetup token store (integration, #70)', () => {
     expect(await store.findMeetupToken(completedTx)).toBeNull()
   })
 
-  test('cancel 与 issue 并发：二者在交易行锁上串行化，201 只发给持锁时仍 PENDING 的交易', async () => {
+  test('cancel 与 issue 并发：终态必销毁凭证（CANCELLED ⇒ token 不存在，#76 修复）', async () => {
     const txId = await createPendingTx(scenarios.issueRace)
-    const [cancelOut, issueOut] = await Promise.all([
+    const [cancelOut] = await Promise.all([
       store.cancel(txId, buyer1),
       store.upsertMeetupToken(txId, {
         tokenHash: TOKEN_HASH,
@@ -688,14 +703,18 @@ describe('meetup token store (integration, #70)', () => {
     ])
     // cancel 在 PENDING 上不受 token 影响，必然成功（#11 冻结语义）
     if (cancelOut.kind !== 'ok') throw new Error('unreachable')
-    // 可观测不变量：issue 返回 null ⇒ 终态下没有新凭证行；
-    // issue 返回行 ⇒ 它持锁时交易仍 PENDING（签发先于取消，随后取消生效是合法时序）
+    // 可观测不变量按交易的**最终状态**断言（#76）：两种交错都合法——issue 先持锁签发、
+    // cancel 后到；或 cancel 先持锁、issue 的 FOR UPDATE 重评估后落空（返回 null）。
+    // 但无论哪种，终态 CANCELLED ⇒ 凭证行必须不存在。
+    // 修复前（store.cancel 把 DELETE 塞在与 UPDATE 同一条 CTE 里）红：READ COMMITTED
+    // 下同一条语句对非目标表用语句开头快照，issue 在 cancel 语句求值后提交的凭证行
+    // 对 DELETE 不可见 → CANCELLED 交易上 token 幸存。
     const tokenRow = await store.findMeetupToken(txId)
-    if (issueOut === null) {
-      expect(tokenRow).toBeNull()
-    } else {
-      expect(tokenRow?.token_hash).toBe(TOKEN_HASH)
-    }
+    const finalTx = rows(
+      await db.execute(sql`SELECT status::text AS status FROM transactions WHERE id = ${txId}`),
+    )[0] as { status: string }
+    expect(finalTx.status).toBe('CANCELLED')
+    expect(tokenRow).toBeNull()
   })
 
   test('#147 核销 × 取消并发：统一锁序（先交易行后凭证行）不死锁，终态必销毁凭证', async () => {

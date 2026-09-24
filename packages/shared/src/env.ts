@@ -125,3 +125,48 @@ export function loadAiPolishEnv(
     '环境变量校验失败：AI_POLISH_TRANSPORT 必须显式设置为 stub 或 live（无默认值，不允许静默回退）',
   )
 }
+
+/**
+ * API 专属微信身份配置（#86 评审 P1：stub 必须与生产隔离）。
+ *
+ * `WECHAT_TRANSPORT` **无默认值**：必须显式声明 `off` / `stub` / `live`。
+ * - `off`：微信登录与手机号绑定入口关闭（`POST /auth/wechat/session` 返回 503
+ *   `WECHAT_DISABLED`）——生产在拿到 AppSecret 前的安全态，不静默降级 stub。
+ * - `stub`：只允许显式开发/测试（非 production）使用；`NODE_ENV=production` 下直接启动失败。
+ * - `live`：真实 jscode2session / phonenumber.getPhoneNumber，AppSecret 必填。
+ *
+ * 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
+ */
+export type WechatEnv =
+  | { transport: 'off' }
+  | { transport: 'stub' }
+  | { transport: 'live'; appid: string; appSecret: string }
+
+export function loadWechatEnv(
+  source: Record<string, string | undefined> = process.env,
+  nodeEnv: string | undefined = source.NODE_ENV,
+): WechatEnv {
+  const transport = source.WECHAT_TRANSPORT
+  if (transport === 'off') return { transport: 'off' }
+  if (transport === 'stub') {
+    if (nodeEnv === 'production') {
+      throw new Error(
+        '环境变量校验失败：生产环境（NODE_ENV=production）禁止 WECHAT_TRANSPORT=stub（stub 不验证微信签发的凭证）',
+      )
+    }
+    return { transport: 'stub' }
+  }
+  if (transport === 'live') {
+    const appid = source.WECHAT_APPID?.trim()
+    const appSecret = source.WECHAT_APP_SECRET?.trim()
+    if (!appid || !appSecret) {
+      throw new Error(
+        '环境变量校验失败：WECHAT_TRANSPORT=live 必须同时配置 WECHAT_APPID / WECHAT_APP_SECRET',
+      )
+    }
+    return { transport: 'live', appid, appSecret }
+  }
+  throw new Error(
+    '环境变量校验失败：WECHAT_TRANSPORT 必须显式设置为 off / stub / live（无默认值，不允许静默回退 stub）',
+  )
+}

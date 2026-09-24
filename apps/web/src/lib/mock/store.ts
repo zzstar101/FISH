@@ -15,7 +15,6 @@ import {
   wishes,
 } from './data'
 import type {
-  Campus,
   Comment,
   Conversation,
   Listing,
@@ -338,7 +337,6 @@ export type ListingDraft = {
   description: string
   category: ListingCategory
   condition: string
-  campus: Campus
   tradeMethod: TradeMethod
   priceCents: number
   originalPriceCents?: number
@@ -390,7 +388,6 @@ export async function createListing(draft: ListingDraft): Promise<ListingView> {
     tone: 'violet',
     category: draft.category,
     condition: draft.condition,
-    campus: draft.campus,
     tradeMethod: draft.tradeMethod,
     tags: draftTags(draft),
     description: toDescriptionLines(draft.description),
@@ -422,7 +419,6 @@ export async function updateListing(listingId: string, draft: ListingDraft): Pro
           description: toDescriptionLines(draft.description),
           category: draft.category,
           condition: draft.condition,
-          campus: draft.campus,
           tradeMethod: draft.tradeMethod,
           tags: draftTags(draft),
           priceCents: draft.priceCents,

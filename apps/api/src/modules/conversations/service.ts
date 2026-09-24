@@ -3,6 +3,7 @@ import {
   type ConversationDto,
   type ConversationListQuery,
   type ConversationListResponse,
+  type ConversationUnreadCount,
   conversationDtoSchema,
   conversationListResponseSchema,
 } from '@fish/contracts/chat/schema'
@@ -83,6 +84,8 @@ export interface ConversationService {
   listConversations(userId: string, query: ConversationListQuery): Promise<ConversationListResponse>
   getConversation(userId: string, conversationId: string): Promise<ConversationDto>
   markRead(userId: string, conversationId: string): Promise<ConversationDto>
+  /** 未读总数（#67）：服务端聚合全部会话，判据与列表行 `unreadCount` 同源（store）。 */
+  getUnreadCount(userId: string): Promise<ConversationUnreadCount>
 }
 
 export function createConversationService({
@@ -184,6 +187,10 @@ export function createConversationService({
         )
       }
       return toConversationDto(detail, userId, storage)
+    },
+
+    async getUnreadCount(userId) {
+      return { unreadCount: await store.countUnread(userId) }
     },
   }
 }

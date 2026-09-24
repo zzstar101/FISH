@@ -74,9 +74,7 @@ export function ListingDetailPage() {
 
       <Card className="p-4">
         <h2 className="mb-2 font-semibold text-[15px]">卖家</h2>
-        <p className="text-sm text-ink-2">
-          {listing.seller.nickname} · {listing.seller.campus ?? '校区未填'}
-        </p>
+        <p className="text-sm text-ink-2">{listing.seller.nickname}</p>
         <Link
           className="mt-1 inline-block text-sm text-brand"
           params={{ userId: listing.seller.id }}

@@ -318,6 +318,14 @@
   &.is-busy {
     opacity: 0.7;
   }
+
+  /* 429 冷却中（「今日次数已用完」/「请稍后再试」）：置灰，与可点状态明显区分 */
+  &.is-off {
+    background: var(--ice);
+    border-color: var(--border);
+    color: var(--muted);
+    font-weight: 500;
+  }
 }
 
 .sell__polish-ic {
@@ -669,9 +677,45 @@
   color: var(--fg);
 }
 
+/**
+ * 演示文案角标（`provider === 'stub'`）。
+ *
+ * 做成 sheet 头部的整宽警告条而不是候选卡上的小胶囊：stub 传输与演示构建的兜底都会给出
+ * 「看起来很正常」的候选，角标一旦不显眼，演示现场就会被当成真实润色结果（#142 / 设计 §8.2）。
+ */
+.sell__sheet-stub {
+  margin-top: 18px;
+  padding: 14px 20px;
+  border-radius: 20px;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn);
+}
+
+.sell__sheet-stub-tx {
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--warn-ink);
+}
+
 .sell__sheet-sub {
   display: block;
   margin-top: 12px;
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+/* 脱敏说明（`redacted === true`）：解释候选里为什么可能少了他写过的联系方式 */
+.sell__sheet-redact {
+  display: block;
+  margin-top: 8px;
+  font-size: 20px;
+  color: var(--muted);
+}
+
+/* 失败态的补充说明（「你的描述没有改动」），比主文案轻一档 */
+.sell__sheet-fail-detail {
+  display: block;
+  margin-top: 10px;
   font-size: 21px;
   color: var(--muted-2);
 }

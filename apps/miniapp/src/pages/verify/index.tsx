@@ -14,12 +14,21 @@ import {
   sendVerificationCode,
   verifyCampusCode,
 } from '@/features/verify/api'
-import { sendErrorMessage, verifyErrorMessage, verifyNeedsResend } from '@/features/verify/messages'
+import {
+  sendErrorMessage,
+  VERIFY_FOOTNOTE,
+  VERIFY_INTRO_DESC,
+  VERIFY_PRIVACY_EMPHASIS,
+  VERIFY_PRIVACY_LEAD,
+  VERIFY_PRIVACY_TAIL,
+  verifyErrorMessage,
+  verifyNeedsResend,
+} from '@/features/verify/messages'
 import { isApiError } from '@/lib/request'
 import './index.scss'
 
 /**
- * B3 校园认证（设计稿 `设计稿_B3-verify.html`）。
+ * B3 校园认证（设计稿 `1改/校园认证页面（包括注册跳转页面）.html` 01–03 帧）。
  *
  * 四种状态全覆盖：未认证（填邮箱）→ 已发码（6 格输入 + 60 秒重发倒计时）
  * → 已认证（成功态 + 徽章一致性说明）→ 异常文案（码错误 / 已过期 / 过于频繁 / 域名不符）。
@@ -247,6 +256,12 @@ export default function Verify() {
   /* ---------------------------------------------------- 已认证态 */
 
   if (verified) {
+    /** 「返回我的主页」：`pages/profile` 是 Tab 页，只能用 `switchTab` */
+    const goHome = () =>
+      void Taro.switchTab({ url: '/pages/profile/index' }).catch(
+        () => void Taro.showToast({ title: '打开失败，请重试', icon: 'none' }),
+      )
+
     return (
       <View className="verify">
         <View className="verify__bg" />
@@ -255,9 +270,11 @@ export default function Verify() {
         <View className="verify__content">
           <View className="verify__okwrap">
             <View className="verify__okdisc">
-              <Image className="verify__okic" src={ICONS.checkCircleWhite} mode="aspectFit" />
+              <View className="verify__okring">
+                <View className="verify__okcheck" />
+              </View>
             </View>
-            <Text className="verify__oktitle">校园认证已通过</Text>
+            <Text className="verify__oktitle">教育邮箱已验证</Text>
             <Text className="verify__oktext">你现在可以发布闲置、接受交易，并获得认证徽章。</Text>
           </View>
 
@@ -278,6 +295,20 @@ export default function Verify() {
               </View>
               <Text className="verify__badge-tag">已认证</Text>
             </View>
+
+            <View className="verify__badgerow">
+              <View className="verify__av">
+                <Text className="verify__av-tx">{nickname.slice(0, 1)}</Text>
+              </View>
+              <View className="verify__badgeinfo">
+                <View className="verify__nameRow">
+                  <Text className="verify__name">{nickname}</Text>
+                  <Image className="verify__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
+                </View>
+                <Text className="verify__badge-sub">商品详情 · 卖家页</Text>
+              </View>
+              <Text className="verify__badge-tag">已认证</Text>
+            </View>
           </View>
 
           {/* 认证信息来自 `GET /verification/status`（邮箱只给脱敏形式）；拿不到就显示 `—` */}
@@ -292,25 +323,16 @@ export default function Verify() {
             </View>
           </View>
 
-          <View className="verify__note">
-            <Image className="verify__note-ic" src={ICONS.info} mode="aspectFit" />
-            <Text className="verify__note-tx">
-              公开页面只展示认证徽章，不展示邮箱、学号与班级；如需更换邮箱，需先解除当前认证。
+          <View className="verify__privacy">
+            <Text className="verify__privacy-tx">
+              {VERIFY_PRIVACY_LEAD}
+              <Text className="verify__privacy-b">{VERIFY_PRIVACY_EMPHASIS}</Text>
+              {VERIFY_PRIVACY_TAIL}
             </Text>
           </View>
 
-          <View
-            className="verify__btn-line"
-            onClick={() =>
-              void Taro.showModal({
-                title: '解除校园认证？',
-                content: '解除后需要重新认证才能发布闲置与发起交易。',
-                confirmText: '解除认证',
-                cancelText: '再想想',
-              })
-            }
-          >
-            <Text>解除认证</Text>
+          <View className="verify__btn-main verify__btn-home" onClick={goHome}>
+            <Text>返回我的主页</Text>
           </View>
         </View>
       </View>
@@ -326,16 +348,22 @@ export default function Verify() {
 
       <View className="verify__head">
         <Text className="verify__title">
-          校园<Text className="verify__title-hl">认证</Text>
+          教育邮箱<Text className="verify__title-hl">验证</Text>
         </Text>
         <Text className="verify__meta num">认证后解锁发布 / 交易 · 当前 UNVERIFIED</Text>
       </View>
 
       <View className="verify__content">
-        {/* ---- 未认证说明 ---- */}
-        <View className="verify__status">
-          <Text className="verify__status-tag">未认证</Text>
-          <Text className="verify__status-tx">用学校邮箱验证在校身份，公开页面只展示徽章。</Text>
+        {/* ---- 未认证说明（稿 01 帧：白卡 + 左侧渐变圆盘 + 右侧黄胶囊） ---- */}
+        <View className="verify__vcard">
+          <View className="verify__vcard-disc">
+            <Image className="verify__vcard-ic" src={ICONS.shieldLine} mode="aspectFit" />
+          </View>
+          <View className="verify__vcard-txt">
+            <Text className="verify__vcard-title">未认证</Text>
+            <Text className="verify__vcard-desc">{VERIFY_INTRO_DESC}</Text>
+          </View>
+          <Text className="verify__chip">未认证</Text>
         </View>
 
         {/* ---- 邮箱（发码后变成只读行 + 修改） ---- */}
@@ -438,15 +466,20 @@ export default function Verify() {
               </View>
             ) : null}
 
+            {/* 稿 02 帧 `.resend` 是**两个都在**：左侧说明 + 右侧胶囊钮，倒计时期间按钮置灰
+                （`.rb.is-off`）而不是把按钮换成一行字 —— 后者会让这一行在倒计时结束时
+                左右跳一次。按钮的点击在 `send()` 里已有 `left > 0` 守卫，置灰只是外观。 */}
             <View className="verify__resend">
-              <Text className="verify__resend-tx">没收到？</Text>
-              {left > 0 ? (
-                <Text className="verify__resend-wait num">{left}s 后可重新发送</Text>
-              ) : (
-                <Text className="verify__resend-act" onClick={() => void send()}>
-                  重新发送
-                </Text>
-              )}
+              <Text className="verify__resend-tx num">
+                {left > 0 ? `没收到？${left}s 后可重新发送` : '没收到？可以重新发送验证码'}
+              </Text>
+              <View
+                className={`verify__resend-btn${left > 0 ? ' is-off' : ''}`}
+                onClick={() => void send()}
+              >
+                <Image className="verify__resend-ic" src={ICONS.clock} mode="aspectFit" />
+                <Text>重新发送</Text>
+              </View>
             </View>
 
             <View
@@ -461,12 +494,8 @@ export default function Verify() {
           </View>
         ) : null}
 
-        <View className="verify__note">
-          <Image className="verify__note-ic" src={ICONS.info} mode="aspectFit" />
-          <Text className="verify__note-tx">
-            认证信息仅用于核验身份，不会公开展示邮箱、学号与班级。
-          </Text>
-        </View>
+        {/* 稿 01 帧把这条说明做成了居中脚注（.fnote 居中变体） */}
+        <Text className="verify__fnote">{VERIFY_FOOTNOTE}</Text>
       </View>
     </View>
   )
