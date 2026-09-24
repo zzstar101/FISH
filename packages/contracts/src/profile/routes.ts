@@ -8,6 +8,10 @@
  * 他人主页（P1 信用/浏览记录）不在本 Issue 范围。
  */
 export const PROFILE_ROUTES = {
-  /** GET 当前登录用户的聚合视图（user + stats + listings/wishes/transactions 列表）。 */
+  /**
+   * GET 当前登录用户的聚合视图（user + stats + listings/wishes/transactions 列表）。
+   * #86 B：`PATCH` 同一个路径即「编辑资料」（昵称 / 头像），读写共用一个资源路径，
+   * 因此这里不再单开常量。
+   */
   me: '/profile',
 } as const

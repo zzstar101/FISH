@@ -138,6 +138,21 @@ export function applyVerification(
 }
 
 /**
+ * 用一次**已经拿到权威结果**的编辑资料响应就地更新 store（#86 B：改昵称 / 换头像）。
+ *
+ * 与 `applyVerification` 同一套口径，`ownerId` 必须由调用方传发起请求时的账号：
+ * 只判断「当前已登录」会把 A 的昵称/头像合并进 B 的 `user`（store 是全局单例，
+ * B 会长期显示 A 的头像）。账号不是同一个就整个丢弃。
+ *
+ * 为什么不改成再打一次 `GET /me`：那次请求失败（超时 / 断网）会把刚保存成功的结果
+ * 回滚成旧值，而 PATCH 的 200 本身已经是权威结果。
+ */
+export function applyProfile(ownerId: string, next: Pick<Me, 'nickname' | 'avatarUrl'>): void {
+  if (snapshot.status !== 'authed' || snapshot.user?.id !== ownerId) return
+  emit({ status: 'authed', user: { ...snapshot.user, ...next } })
+}
+
+/**
  * 确认会话真的落到本地了再宣告登录。
  *
  * `apiRequest` 里 `saveSession` 是静默吞异常的（存储写失败不该让请求失败），

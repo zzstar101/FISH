@@ -1,0 +1,241 @@
+/**
+ * 编辑资料（#86 B 线）。尺寸 = 设计稿 pt × 2（见 DESIGN.md §1）。
+ *
+ * 与登录 / 注册同一套冰蓝令牌：渐变页头 + 玻璃卡 + `--brand-deep` 主 CTA，
+ * 不引任何第三方品牌色。头像钮是微信 `open-type="chooseAvatar"` 的原生 button，
+ * 必须把 button 的默认外观（内边距、`::after` 描边）清掉才能当成圆形头像用。
+ */
+
+.pe {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.pe__bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 520px;
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+}
+
+.pe__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 56px 48px 88px;
+}
+
+/* ---------------------------------------------------------------- 返回钮 */
+
+/* top 由页面按运行时胶囊几何内联下发（设备 px），这里只管水平与命中区 */
+.pe__back {
+  position: absolute;
+  left: 16px;
+  transform: translateY(-50%);
+  width: 72px;
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.pe__back-ic {
+  width: 40px;
+  height: 40px;
+}
+
+/* ---------------------------------------------------------------- 头像 */
+
+.pe__avatar-wrap {
+  position: relative;
+  margin-top: 8px;
+  width: 176px;
+  height: 176px;
+}
+
+/* 原生 button 当圆形头像用：清掉默认内边距 / 行高 / 描边 */
+.pe__avatar-btn {
+  width: 176px;
+  height: 176px;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--ice);
+  overflow: hidden;
+
+  &::after {
+    border: none;
+  }
+}
+
+.pe__avatar-img {
+  width: 100%;
+  height: 100%;
+}
+
+.pe__avatar-ph {
+  width: 88px;
+  height: 88px;
+}
+
+/* 相机角标：压在头像右下角，提示「这里可以换头像」 */
+.pe__avatar-badge {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 4px solid var(--surface);
+  background: var(--brand-deep);
+}
+
+.pe__avatar-badge-ic {
+  width: 32px;
+  height: 32px;
+}
+
+.pe__avatar-hint {
+  display: block;
+  margin-top: 20px;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 表单卡 */
+
+.pe__card {
+  width: 100%;
+  margin-top: 40px;
+  padding: 32px;
+  border-radius: 32px;
+  border: 2px solid var(--border);
+  /* 不透明兜底 + 玻璃：与登录 / 注册同一口径 */
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(48px);
+  box-shadow: var(--shadow-card);
+}
+
+.pe__field {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pe__label {
+  font-size: 28px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+.pe__input {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 88px;
+  padding: 0 24px;
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  border-radius: 20px;
+  background: var(--ice);
+
+  &.is-error {
+    border-color: var(--danger);
+    background: var(--danger-weak);
+  }
+}
+
+.pe__val {
+  flex: 1;
+  min-width: 0;
+  font-size: 30px;
+  color: var(--fg);
+}
+
+.pe__ph {
+  font-size: 30px;
+  color: var(--muted);
+}
+
+.pe__help {
+  display: block;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--muted-2);
+}
+
+.pe__err {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--danger-ink);
+}
+
+/* ---------------------------------------------------------------- 主 CTA */
+
+.pe__cta {
+  width: 100%;
+  margin-top: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--brand-deep);
+  color: #fff;
+  font-size: 32px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    filter: saturate(1.06) brightness(0.95);
+  }
+
+  /* 未登录 / 保存中：禁用态 */
+  &.is-off {
+    background: var(--ice);
+    color: var(--muted);
+    box-shadow: none;
+  }
+}
+
+.pe__spin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  animation: pe-spin 0.7s linear infinite;
+}
+
+@keyframes pe-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
