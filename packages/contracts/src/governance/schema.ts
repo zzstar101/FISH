@@ -85,7 +85,7 @@ export const GovernanceRestrictInputSchema = z.strictObject({
 })
 export type GovernanceRestrictInput = z.infer<typeof GovernanceRestrictInputSchema>
 
-/** POST /admin/users/:id/lift-restriction：解除一条生效中的限制。 */
+/** POST /admin/users/:id/lift-restriction：解除该用户全部生效中的限制（一次清空）。 */
 export const GovernanceLiftRestrictionInputSchema = z.strictObject({
   reason: GovernanceReasonSchema,
   sourceReportId: sourceReportIdSchema,

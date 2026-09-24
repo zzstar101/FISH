@@ -293,6 +293,7 @@ export function createApp(
       }),
       storage,
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
   app.route(

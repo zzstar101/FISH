@@ -17,6 +17,7 @@ import { sessions } from '@fish/db/schema/sessions'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { and, asc, desc, eq, type SQL, sql } from 'drizzle-orm'
+import { ACTIVE_RESTRICTION_WHERE } from '../governance/store'
 import type { ModerationStore } from '../moderation/store'
 import { createdAtCursorText, cursorCondition } from './cursor'
 
@@ -247,6 +248,10 @@ export interface AdminStore {
     > & {
       description: string
       updatedAt: Date
+      /** 审核引擎视角的状态；与 `status` 分开，恢复路径不同（#73 PR3 评审 M3）。 */
+      moderationStatus: string
+      /** 治理下架时刻；`null` = 未被治理下架过。 */
+      governanceDelistedAt: Date | null
       urgent: boolean
       negotiable: boolean
       free: boolean
@@ -266,12 +271,28 @@ export interface AdminStore {
     requestId: string
   }): Promise<'applied' | 'idempotent' | 'not-found' | 'conflict' | 'idempotency-conflict'>
   listAdminTransactions(criteria: ListAdminTransactionsCriteria): Promise<AdminTransactionRow[]>
+  /**
+   * 某用户当前**生效中**的限制（#73 PR3，评审 m6）。
+   *
+   * Admin 用户详情要靠它展示用户受限情况，前端要靠它决定「解除限制」按钮是否可用。
+   * 只列生效中的：已过期走惰性判断（与被挡在写入口的行为同源），已解除的在审计里。
+   */
+  listActiveRestrictions(userId: string): Promise<ActiveRestrictionSummaryRow[]>
   /** 某个目标对象最近的 Admin 操作（时间倒序）。 */
   recentAuditLogs(
     targetType: AdminAuditTargetType,
     targetId: string,
     limit: number,
   ): Promise<AuditLogSummaryRow[]>
+}
+
+/** 用户详情里的生效中限制（治理动作的类型用 string 表达，契约层同样放宽）。 */
+export interface ActiveRestrictionSummaryRow {
+  id: string
+  type: string
+  reason: string
+  expiresAt: Date | null
+  createdAt: Date
 }
 
 function userSearchCondition(alias: string, q: string): SQL {
@@ -486,6 +507,10 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           category: sql<string>`${listings.category}::text`,
           condition: sql<string>`${listings.condition}::text`,
           status: sql<string>`${listings.status}::text`,
+          // 治理下架标记（#73 PR3 评审 M3）：Admin 商品详情要能区分「治理下架」与
+          // 「审核引擎屏蔽」，两者恢复路径不同（前者走 restore，后者走人工审核 / 重新送审）。
+          moderationStatus: sql<string>`${listings.moderationStatus}::text`,
+          governanceDelistedAt: listings.governanceDelistedAt,
           createdAt: listings.createdAt,
           updatedAt: listings.updatedAt,
           urgent: listings.urgent,
@@ -513,6 +538,25 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
       return { listing, images: imageRows }
     },
 
+    async listActiveRestrictions(userId) {
+      const result = await db.execute(sql`
+        SELECT id, type::text AS type, reason, expires_at, created_at
+        FROM user_restrictions
+        WHERE user_id = ${userId}
+          AND ${ACTIVE_RESTRICTION_WHERE}
+        ORDER BY created_at DESC, id DESC
+      `)
+      return rowsOf(result).map((row) => ({
+        id: String(row.id),
+        type: String(row.type),
+        reason: String(row.reason),
+        // bun-sql 把 timestamptz 读成 ISO 文本，这里要转成 Date；null 保持 null
+        // （永久限制），不能变成 epoch。
+        expiresAt: row.expires_at ? new Date(row.expires_at as string) : null,
+        createdAt: new Date(row.created_at as string | Date),
+      }))
+    },
+
     async getOverview() {
       const result = await db.execute(sql`
         SELECT
@@ -525,7 +569,8 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           (SELECT count(*)::int FROM ${reports} WHERE status = 'PENDING')      AS pending_reports,
           (SELECT count(*)::int FROM ${reports}
             WHERE created_at >= now() - interval '7 days')                     AS reports_last_7d,
-          (SELECT count(*)::int FROM ${userRestrictions} WHERE status = 'ACTIVE') AS active_restrictions
+          (SELECT count(*)::int FROM ${userRestrictions}
+            WHERE ${ACTIVE_RESTRICTION_WHERE})                                AS active_restrictions
       `)
       const row = rowsOf(result)[0]
       if (!row) throw new Error('Admin 概览查询未返回行')

@@ -88,10 +88,14 @@ export function ListingDetailPage() {
       {/* 治理（#73 PR3）：下架 / 恢复。按钮集合随当前状态收敛——已下架的商品只给
           「恢复」，避免后端必然 409 的死路；交易中 / 已售出的商品不给动作，
           因为后端的条件更新会拒绝，这里提前收起来。恢复的目标状态由后端从
-          delist 审计快照取，这里不提供选择器（避免把 RESERVED 恢复成 ACTIVE）。 */}
+          delist 审计快照取，这里不提供选择器（避免把 RESERVED 恢复成 ACTIVE）。
+
+          「恢复」只看 `governanceDelistedAt`（评审 M3）：OFFLINE + 没有治理下架标记
+          的商品是**审核引擎**屏蔽的，恢复路径是人工审核 / 卖家重新送审，治理端点会
+         拒绝它。这里如果只看 `status === 'OFFLINE'`，按钮点下去就是必然的 409。 */}
       <GovernancePanel
         actions={
-          listing.status === 'OFFLINE'
+          listing.governanceDelistedAt
             ? [
                 {
                   action: 'restore-listing',
@@ -99,7 +103,7 @@ export function ListingDetailPage() {
                   description: '恢复到被下架前的状态（由下架审计快照决定）',
                 },
               ]
-            : listing.status === 'ACTIVE'
+            : listing.status === 'ACTIVE' && listing.moderationStatus !== 'BLOCKED'
               ? [
                   {
                     action: 'delist-listing',
@@ -112,6 +116,12 @@ export function ListingDetailPage() {
         }
         targetId={listing.id}
       />
+
+      {listing.status === 'ACTIVE' && listing.moderationStatus === 'BLOCKED' ? (
+        <Card className="p-4 text-sm text-ink-3">
+          该商品已被审核引擎屏蔽，恢复路径是人工审核或卖家修改后重新送审，不在治理动作范围内。
+        </Card>
+      ) : null}
 
       <Card className="p-4">
         <h2 className="mb-3 font-semibold text-[15px]">关联 Admin 操作日志</h2>

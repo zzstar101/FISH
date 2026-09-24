@@ -1,6 +1,6 @@
 import type { Db } from '@fish/db/client'
 import { userRestrictions } from '@fish/db/schema/governance'
-import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 
 /**
  * Governance store（#73 治理半场 PR3）：`user_restrictions` 的全部 SQL。
@@ -48,6 +48,26 @@ const SCOPE_TYPES: Record<RestrictionScope, RestrictionType[]> = {
 const RESTRICTION_COLUMNS = sql`id, user_id, type::text AS type, status::text AS status, reason,
   actor_user_id, source_report_id, expires_at, lifted_at, lifted_by, created_at`
 
+/**
+ * 「生效中」的**唯一** SQL 定义（#73 PR3 评审 M1）。
+ *
+ * `expires_at` 是惰性判断：到期行在表里仍是 `ACTIVE`，只有读到的这一刻才算失效。
+ * 这带来一个必须统一口径的地方——service 的并发前置判定、写守卫、管理端列表、Overview
+ * 计数、解除动作，五处只要有一处写成裸 `status = 'ACTIVE'`，就会出现「UI 说没有限制、
+ * 接口说有」这种自相矛盾（Overview 虚高、误导性 409）。所以谓词只在这一处定义，
+ * 其它位置一律引用它，不复制这段 SQL。
+ *
+ * 用 `now()` 而不是 JS `new Date()`：判定必须与 DB 同一时钟，否则 API 与 Postgres
+ * 之间的时钟偏差会让 `expires_at` 边界行为不确定。
+ */
+export const ACTIVE_RESTRICTION_WHERE = sql`${userRestrictions.status} = 'ACTIVE'
+  AND (${userRestrictions.expiresAt} IS NULL OR ${userRestrictions.expiresAt} > now())`
+
+/** 「已过期但还挂着 ACTIVE」：占用唯一索引却已经不生效的行，见 `liftExpiredRestrictions`。 */
+const EXPIRED_RESTRICTION_WHERE = sql`${userRestrictions.status} = 'ACTIVE'
+  AND ${userRestrictions.expiresAt} IS NOT NULL
+  AND ${userRestrictions.expiresAt} <= now()`
+
 export interface GovernanceStore {
   /**
    * 该用户在指定范围内是否还有生效中的限制（未过期才算）。
@@ -74,7 +94,10 @@ export interface GovernanceStore {
   ): Promise<RestrictionRow>
 
   /**
-   * 治理事务内把该用户**全部** `ACTIVE` 限制改成 `LIFTED`，返回被解除的行。
+   * 治理事务内把该用户**全部**生效中的限制改成 `LIFTED`，返回被解除的行。
+   *
+   * 只匹配真正生效中的行（`ACTIVE_RESTRICTION_WHERE`）：已过期的行**不**在这里解除，
+   * 否则审计里会出现「解除了一条其实早已失效的限制」，把惰性过期和管理员动作混为一谈。
    *
    * 用「一条 UPDATE ... RETURNING」而不是逐条 UPDATE：两个管理员同时解除时，
    * 数据库只会让其中一个的 UPDATE 匹配到行，另一个拿到空集 → 409，
@@ -84,6 +107,25 @@ export interface GovernanceStore {
     tx: GovernanceDbTransaction,
     input: { userId: string; actorUserId: string; liftedAt: Date },
   ): Promise<RestrictionRow[]>
+
+  /**
+   * 治理事务内把指定 (用户, 类型) 的**已过期但仍为 ACTIVE** 的限制标成 `LIFTED`
+   * （评审 M1 的修复），返回被清理的行数。
+   *
+   * 为什么需要它：部分唯一索引 `user_restrictions_active_user_type_uidx` 的谓词是
+   * `status = 'ACTIVE'`，**无法引用 `now()`**（Postgres 要求索引谓词 immutable，而
+   * `now()` 只是 stable）。于是一条已过期的行会继续占用唯一槽位——service 视角它
+   * 已经不生效、可以加新限制，INSERT 却被索引拒绝，管理员拿到一句假的
+   * 「该用户已有生效中的同类限制」，在 UI 上看到没有限制却点不出结果。
+   *
+   * 所以在插入前先把这些死行清掉：它们本就被读路径视为失效，这里只是把表里的状态
+   * 与读路径的判定对齐。`lifted_by = NULL` 区分「到期自动失效」与「管理员解除」
+   * （管理员解除一定写了 `lifted_by`），因此不需要为它补审计行——没有任何人做了这个动作。
+   */
+  liftExpiredRestrictions(
+    tx: GovernanceDbTransaction,
+    input: { userId: string; type: RestrictionType },
+  ): Promise<number>
 }
 
 export function createSqlGovernanceStore(_db: Db): GovernanceStore {
@@ -92,6 +134,9 @@ export function createSqlGovernanceStore(_db: Db): GovernanceStore {
       // 用 drizzle 的 `inArray` 而不是手写 `= ANY(${array})`：bun-sql 不会把 JS 数组
       // 展开成 PG 数组参数，直接绑会报
       // `op ANY/ALL (array) requires array on right side`（本仓库实测）。
+      //
+      // 走 typed builder 而不是裸 SQL，是为了让「生效中」的谓词与 `ACTIVE_RESTRICTION_WHERE`
+      // 同源——这里曾经手写过 `new Date()` 比较，与 service 的 `now()` 不是同一个时钟。
       const rows = await _db
         .select({ id: userRestrictions.id })
         .from(userRestrictions)
@@ -100,7 +145,9 @@ export function createSqlGovernanceStore(_db: Db): GovernanceStore {
             eq(userRestrictions.userId, userId),
             eq(userRestrictions.status, 'ACTIVE'),
             inArray(userRestrictions.type, SCOPE_TYPES[scope]),
-            or(isNull(userRestrictions.expiresAt), gt(userRestrictions.expiresAt, new Date())),
+            // 与 `ACTIVE_RESTRICTION_WHERE` 同源的 `expires_at` 判定：必须用 SQL `now()`
+            // 而不是 JS `new Date()`，否则与 service 的判定不是同一个时钟。
+            sql`(${userRestrictions.expiresAt} IS NULL OR ${userRestrictions.expiresAt} > now())`,
           ),
         )
         .limit(1)
@@ -112,8 +159,7 @@ export function createSqlGovernanceStore(_db: Db): GovernanceStore {
         SELECT ${RESTRICTION_COLUMNS}
         FROM user_restrictions
         WHERE user_id = ${userId}
-          AND status = 'ACTIVE'
-          AND (expires_at IS NULL OR expires_at > now())
+          AND ${ACTIVE_RESTRICTION_WHERE}
         ORDER BY created_at DESC, id DESC
       `)
       return rowsOf(result).map(restrictionFromRow)
@@ -139,10 +185,23 @@ export function createSqlGovernanceStore(_db: Db): GovernanceStore {
         UPDATE user_restrictions
         SET status = 'LIFTED', lifted_at = ${input.liftedAt}, lifted_by = ${input.actorUserId},
             updated_at = ${input.liftedAt}
-        WHERE user_id = ${input.userId} AND status = 'ACTIVE'
+        WHERE user_id = ${input.userId}
+          AND ${ACTIVE_RESTRICTION_WHERE}
         RETURNING ${RESTRICTION_COLUMNS}
       `)
       return rowsOf(result).map(restrictionFromRow)
+    },
+
+    async liftExpiredRestrictions(tx, input) {
+      const result = await tx.execute(sql`
+        UPDATE user_restrictions
+        SET status = 'LIFTED', lifted_at = now(), lifted_by = NULL, updated_at = now()
+        WHERE user_id = ${input.userId}
+          AND type::text = ${input.type}
+          AND ${EXPIRED_RESTRICTION_WHERE}
+        RETURNING id
+      `)
+      return rowsOf(result).length
     },
   }
 }

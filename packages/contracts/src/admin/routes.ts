@@ -52,6 +52,6 @@ export const ADMIN_ROUTES = {
   userRestrictPublish: (userId: string) => `/admin/users/${userId}/restrict-publish`,
   /** POST 封禁用户（`BAN`，当前只禁写不禁读）。 */
   userBan: (userId: string) => `/admin/users/${userId}/ban`,
-  /** POST 解除一条生效中的限制（`PUBLISH_RESTRICT` / `BAN` 都能解）。 */
+  /** POST 解除该用户**全部**生效中的限制（`PUBLISH_RESTRICT` 与 `BAN` 一起解）。 */
   userLiftRestriction: (userId: string) => `/admin/users/${userId}/lift-restriction`,
 } as const

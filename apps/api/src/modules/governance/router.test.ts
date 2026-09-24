@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import { AdminOverviewSchema } from '@fish/contracts/admin/schema'
+import { COMMENT_ROUTES } from '@fish/contracts/comments/routes'
 import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { adminAuditLogs } from '@fish/db/schema/admin'
@@ -39,9 +40,15 @@ const ADMIN_A = '01940000-0000-7000-8000-0000000000a1'
 const ADMIN_B = '01940000-0000-7000-8000-0000000000a2'
 const SELLER = '01940000-0000-7000-8000-0000000000b1'
 const OTHER = '01940000-0000-7000-8000-0000000000b2'
-const LISTING = '01940000-0000-7000-8000-0000000000c1'
 const ROLLBACK = '01940000-0000-7000-8000-0000000000d1'
+/** 只看媒体写入口的封禁用例用户：与其它用例的用户分开，互不污染限制状态。 */
+const RESTRICTED = '01940000-0000-7000-8000-0000000000b3'
+/** 到期惰性用例专用用户：并发用例给 OTHER 留了一条生效中的 BAN，不能复用。 */
+const EXPIRY = '01940000-0000-7000-8000-0000000000b4'
+const LISTING = '01940000-0000-7000-8000-0000000000c1'
 const RESERVED_LISTING = '01940000-0000-7000-8000-0000000000c2'
+/** 引擎屏蔽用例专用商品：只改 moderationStatus，不碰 LISTING / RESERVED_LISTING 的状态。 */
+const ROLLBACK_LISTING = '01940000-0000-7000-8000-0000000000c3'
 
 /** 让审计写入失败的触发器标记：reason 带这个前缀就抛错（只影响这一条请求）。 */
 const AUDIT_FAIL_MARK = 'AUDIT_FAIL_INJECT%'
@@ -98,6 +105,22 @@ beforeAll(async () => {
       createdAt: new Date('2026-10-01T00:00:00Z'),
       role: 'USER',
     },
+    {
+      id: RESTRICTED,
+      studentNo: '202401000906',
+      passwordHash,
+      nickname: '媒体入口用例用户',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      role: 'USER',
+    },
+    {
+      id: EXPIRY,
+      studentNo: '202401000907',
+      passwordHash,
+      nickname: '到期用例用户',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      role: 'USER',
+    },
   ])
   await scratch.insert(listings).values([
     {
@@ -121,6 +144,18 @@ beforeAll(async () => {
       category: 'BOOKS',
       condition: 'FAIR',
       status: 'RESERVED',
+      moderationStatus: 'APPROVED',
+      createdAt: new Date('2026-10-02T00:00:00Z'),
+    },
+    {
+      id: ROLLBACK_LISTING,
+      sellerId: ROLLBACK,
+      title: '被引擎屏蔽的商品',
+      description: '普通描述',
+      priceCents: 3000,
+      category: 'OTHER',
+      condition: 'FAIR',
+      status: 'ACTIVE',
       moderationStatus: 'APPROVED',
       createdAt: new Date('2026-10-02T00:00:00Z'),
     },
@@ -154,6 +189,9 @@ async function loginAs(studentNo: string): Promise<string> {
 let adminACookie: string
 let adminBCookie: string
 let sellerCookie: string
+let otherCookie: string
+let restrictedCookie: string
+let expiryCookie: string
 
 async function restrictionRows(userId: string) {
   return scratch
@@ -188,12 +226,18 @@ async function setAuditFailure(enabled: boolean): Promise<void> {
 }
 
 describe('服务端治理（#73 治理半场 PR3）', () => {
-  test('setup: login three accounts', async () => {
+  test('setup: login 五个账号', async () => {
     adminACookie = await loginAs('202401000901')
     adminBCookie = await loginAs('202401000902')
     sellerCookie = await loginAs('202401000903')
+    otherCookie = await loginAs('202401000904')
+    restrictedCookie = await loginAs('202401000906')
+    expiryCookie = await loginAs('202401000907')
     expect(adminACookie.length).toBeGreaterThan(0)
     expect(sellerCookie.length).toBeGreaterThan(0)
+    expect(otherCookie.length).toBeGreaterThan(0)
+    expect(restrictedCookie.length).toBeGreaterThan(0)
+    expect(expiryCookie.length).toBeGreaterThan(0)
   })
 
   test('治理端点只对管理员开放：匿名 401，普通用户 403', async () => {
@@ -598,5 +642,175 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(res.status).toBe(200)
     const body = AdminOverviewSchema.parse(await res.json())
     expect(body.activeRestrictions).toBeGreaterThanOrEqual(1)
+  })
+
+  /**
+   * 到期惰性生效的闭环（评审 M1）。
+   *
+   * 部分唯一索引 `user_restrictions_active_user_type_uidx` 的谓词只有
+   * `status = 'ACTIVE'`，写不了 `now()`（Postgres 要求索引谓词 immutable，而 now()
+   * 只是 stable）。于是「已过期但没人碰过」的行会继续占着 (user, type) 槽位，
+   * 出现三个症状：写守卫不认它（还好）、Overview 把它算成生效中（虚高）、
+   * 再施加同类限制撞 23505 变成一句假的 409（管理端看不到任何限制却点不动）。
+   * 这条用例把三件事一起钉住。
+   */
+  test('过期的限制不生效、不占唯一索引、不进 Overview 计数', async () => {
+    const staleReason = '限时封禁，已到期'
+    // 直接插一条「已过期但仍然 ACTIVE」的行：这正是只写 status 的索引留下的形状。
+    await scratch.insert(userRestrictions).values({
+      userId: EXPIRY,
+      type: 'BAN',
+      status: 'ACTIVE',
+      reason: staleReason,
+      actorUserId: ADMIN_A,
+      expiresAt: new Date(Date.now() - 60 * 60 * 1000),
+    })
+
+    // 1) 写守卫不认它：过期后仍能留言。
+    const comment = await app.request(
+      COMMENT_ROUTES.ofListing(LISTING),
+      post({ content: '封禁已经到期了' }, expiryCookie),
+    )
+    expect(comment.status).toBe(201)
+
+    // 2) Overview 的口径必须与写守卫 / service 一致：过期行不计入 active_restrictions。
+    const before = await app.request(ADMIN_ROUTES.overview, {
+      headers: { cookie: adminACookie },
+    })
+    const overviewBefore = AdminOverviewSchema.parse(await before.json())
+
+    // 3) 再施加同类限制：同事务先把过期行标 LIFTED，再正常插入，而不是假的 409。
+    const reban = await app.request(
+      ADMIN_ROUTES.userBan(EXPIRY),
+      post({ reason: '严重违规，再次封禁' }, adminACookie),
+    )
+    expect(reban.status).toBe(200)
+    expect(await reban.json()).toMatchObject({ action: 'USER_BANNED' })
+
+    const after = await app.request(ADMIN_ROUTES.overview, {
+      headers: { cookie: adminACookie },
+    })
+    const overviewAfter = AdminOverviewSchema.parse(await after.json())
+    expect(overviewAfter.activeRestrictions).toBe(overviewBefore.activeRestrictions + 1)
+
+    // 过期行被标成 LIFTED 且 lifted_by 为空（区分「到期自动失效」与「管理员解除」），
+    // 生效中的只剩刚施加的这一条。
+    const rows = await restrictionRows(EXPIRY)
+    const stale = rows.filter((row) => row.reason === staleReason)
+    expect(stale.length).toBe(1)
+    expect(stale[0]?.status).toBe('LIFTED')
+    expect(stale[0]?.liftedBy).toBeNull()
+    expect(rows.filter((row) => row.status === 'ACTIVE').length).toBe(1)
+
+    // 自动失效不写审计（没有任何管理员动作发生）。
+    const audit = await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.reason, staleReason))
+    expect(audit.length).toBe(0)
+
+    // 新的封禁真的生效：同一条留言入口现在被挡。
+    const blocked = await app.request(
+      COMMENT_ROUTES.ofListing(LISTING),
+      post({ content: '刚被封禁还能说话吗' }, expiryCookie),
+    )
+    expect(blocked.status).toBe(403)
+    expect(await blocked.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
+  })
+
+  /**
+   * 媒体写入口也挂封禁守卫（评审 M2）。
+   *
+   * 封禁若只挡文字消息，被封用户仍能 `POST /:id/media/presign` + `POST /:id/media`
+   * 发图 / 语音——「限制在服务端生效」就只在文字上成立。守卫挂在 UUID 校验与
+   * 参数校验之前，所以用一个不存在的会话 id 也能验证到 403。
+   */
+  test('封禁挡住媒体消息写入口（presign 与 create）', async () => {
+    const ban = await app.request(
+      ADMIN_ROUTES.userBan(RESTRICTED),
+      post({ reason: '发违规图片，封禁' }, adminACookie),
+    )
+    expect(ban.status).toBe(200)
+
+    const conversationId = '01940000-0000-7000-8000-0000000000ee'
+
+    const presign = await app.request(
+      `/conversations/${conversationId}/media/presign`,
+      post({ kind: 'IMAGE', contentType: 'image/webp' }, restrictedCookie),
+    )
+    expect(presign.status).toBe(403)
+    expect(await presign.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
+
+    const create = await app.request(
+      `/conversations/${conversationId}/media`,
+      post(
+        { objectKey: 'chat-media/x.webp', mimeType: 'image/webp', sizeBytes: 100 },
+        restrictedCookie,
+      ),
+    )
+    expect(create.status).toBe(403)
+    expect(await create.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
+  })
+
+  /**
+   * 治理 restore 只解治理下架，不解审核引擎的人工 BLOCKED（评审 M3）。
+   *
+   * 引擎屏蔽的商品 `moderation_status='BLOCKED'` 但没有 `governance_delisted_at`。
+   * 如果 restore 认它，管理员就能用治理端点把违规内容放回公开列表，绕开人工审核，
+   * 而且那条 `LISTING_RESTORED` 审计完全看不出它覆盖了引擎结论。
+   */
+  test('恢复被审核引擎屏蔽的商品 → 409 且不解除引擎屏蔽', async () => {
+    await scratch
+      .update(listings)
+      .set({ moderationStatus: 'BLOCKED', moderatedAt: new Date() })
+      .where(eq(listings.id, ROLLBACK_LISTING))
+
+    const res = await app.request(
+      ADMIN_ROUTES.listingRestore(ROLLBACK_LISTING),
+      post({ reason: '这个不能恢复' }, adminACookie),
+    )
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ error: { code: 'GOVERNANCE_CONFLICT' } })
+
+    // 商品保持引擎屏蔽，也没有被恢复回路改回 APPROVED。
+    const [row] = await scratch
+      .select({ status: listings.status, moderationStatus: listings.moderationStatus })
+      .from(listings)
+      .where(eq(listings.id, ROLLBACK_LISTING))
+      .limit(1)
+    expect(row).toEqual({ status: 'ACTIVE', moderationStatus: 'BLOCKED' })
+
+    // 也没有留下一条「恢复了」的审计。
+    const audit = await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.targetId, ROLLBACK_LISTING))
+    expect(audit.length).toBe(0)
+  })
+
+  /** 商品下架是发布写入口：限制发布后卖家连自行下架都做不到（评审 m4）。 */
+  test('限制发布后卖家不能自行下架商品', async () => {
+    const restrict = await app.request(
+      ADMIN_ROUTES.userRestrictPublish(SELLER),
+      post({ reason: '频繁发布违规内容' }, adminBCookie),
+    )
+    expect(restrict.status).toBe(200)
+
+    const offlined = await app.request(LISTING_ROUTES.offline(LISTING), post({}, sellerCookie))
+    expect(offlined.status).toBe(403)
+    expect(await offlined.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
+  })
+
+  /** 解除一个没有生效中限制的用户：409 而不是空手返回 200（另一管理员刚解除过）。 */
+  test('解除没有生效中限制的用户 → 409', async () => {
+    const res = await app.request(
+      ADMIN_ROUTES.userLiftRestriction(ROLLBACK),
+      post({ reason: '试着解除一个没有限制的人' }, adminACookie),
+    )
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ error: { code: 'GOVERNANCE_CONFLICT' } })
+
+    const rows = await restrictionRows(ROLLBACK)
+    expect(rows.length).toBe(0)
   })
 })

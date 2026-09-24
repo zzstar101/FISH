@@ -16,6 +16,7 @@ import { jobs } from '@fish/db/schema/jobs'
 import { sql } from 'drizzle-orm'
 import { isUniqueViolation } from '../auth/unique'
 import type { GovernanceDbTransaction, GovernanceStore, RestrictionRow } from './store'
+import { ACTIVE_RESTRICTION_WHERE } from './store'
 
 /**
  * Governance service（#73 治理半场 PR3）：五个治理动作的业务与事务边界。
@@ -169,8 +170,7 @@ export function createGovernanceService(options: {
         SELECT id FROM user_restrictions
         WHERE user_id = ${userId}
           AND type::text = ${input.type}
-          AND status = 'ACTIVE'
-          AND (expires_at IS NULL OR expires_at > now())
+          AND ${ACTIVE_RESTRICTION_WHERE}
         LIMIT 1
       `)
       if (rowsOf(active).length > 0) {
@@ -180,6 +180,11 @@ export function createGovernanceService(options: {
           '该用户已有生效中的同类限制，请先解除',
         )
       }
+
+      // 清理「已过期但仍占着唯一索引」的死行（评审 M1）。必须在 INSERT 之前：
+      // 部分唯一索引的谓词写不了 `now()`，过期行会继续占住 (user, type) 槽位，
+      // 让这次 INSERT 撞 23505，把一句假的「已有生效中的同类限制」返回给管理员。
+      await store.liftExpiredRestrictions(tx, { userId, type: input.type })
 
       let restriction: RestrictionRow
       try {
@@ -289,14 +294,26 @@ export function createGovernanceService(options: {
       return db.transaction(async (tx) => {
         const sourceReportId = await requireSourceReport(tx, input.sourceReportId)
         const current = await lockListing(tx, listingId)
-        // 治理下架一定同时写了 BLOCKED，但反过来不成立（审核引擎也写 BLOCKED）。
-        // 判「有下架标记」而不是只判 BLOCKED，才不会把「引擎屏蔽后治理又下架」的
-        // 商品留在恢复不了的中间态。
-        if (current.moderationStatus !== 'BLOCKED' && current.governanceDelistedAt === null) {
+        // 只恢复**治理下架**（评审 M3）。
+        //
+        // 判 `governance_delisted_at` 而不是「moderation_status = BLOCKED」：BLOCKED 有
+        // 两个写入方——治理 delist（`governance_delisted_at` 一并写）与审核引擎
+        // （`listing_moderation_records` 里一条 decision='BLOCKED'，没有标记）。
+        // 引擎屏蔽是「内容违规」，它的解除路径是人工审核
+        // （`decideWithin` 处理 moderation_status='REVIEW'）或卖家改完重新送审；
+        // 治理 restore 是「管理员下架下错了」，目标和依据都不同。
+        //
+        // 合在一起会怎样：restore 把引擎屏蔽的商品置成 APPROVED 直接放回公开列表，
+        // 等于用治理端点绕过了审核引擎，而审计里只看得到一条 LISTING_RESTORED。
+        // 这里也不会误伤「引擎屏蔽后又治理下架」：delist 入口拒绝 BLOCKED 的商品，
+        // 所以治理下架时 `moderation_status` 必不是引擎写的那一种。
+        if (current.governanceDelistedAt === null) {
           throw new GovernanceServiceError(
             409,
             'GOVERNANCE_CONFLICT',
-            '商品未被下架或屏蔽，无需恢复',
+            current.moderationStatus === 'BLOCKED'
+              ? '商品被审核引擎屏蔽，请通过人工审核处理'
+              : '商品未被下架，无需恢复',
           )
         }
 
@@ -305,16 +322,11 @@ export function createGovernanceService(options: {
           UPDATE listings
           SET status = ${prior}::listing_status, moderation_status = 'APPROVED',
               governance_delisted_at = NULL, moderated_at = now(), updated_at = now()
-          WHERE id = ${listingId}
-            AND (moderation_status = 'BLOCKED' OR governance_delisted_at IS NOT NULL)
+          WHERE id = ${listingId} AND governance_delisted_at IS NOT NULL
           RETURNING ${LISTING_STATE_COLUMNS}
         `)
         if (rowsOf(updated).length === 0) {
-          throw new GovernanceServiceError(
-            409,
-            'GOVERNANCE_CONFLICT',
-            '商品未被下架或屏蔽，无需恢复',
-          )
+          throw new GovernanceServiceError(409, 'GOVERNANCE_CONFLICT', '商品未被下架，无需恢复')
         }
 
         // 恢复成 ACTIVE 时必须重算匹配：下架期间新建的愿望要靠这条 job 才能匹配上它。
@@ -368,7 +380,11 @@ export function createGovernanceService(options: {
           actorUserId,
           liftedAt,
         })
-        if (lifted.length === 0) {
+        const firstLifted = lifted[0]
+        // 空集 = 没有生效中的限制（另一个管理员刚刚解除过一次）。
+        // 这里同时消除 `lifted.length` 判断与索引访问之间的缝隙：
+        // `noUncheckedIndexedAccess` 下 `lifted[0]` 也是 `undefined`，用一次判空收口。
+        if (!firstLifted) {
           throw new GovernanceServiceError(
             409,
             'GOVERNANCE_CONFLICT',
@@ -399,9 +415,9 @@ export function createGovernanceService(options: {
             ? 'USER_UNBANNED'
             : 'USER_RESTRICTION_LIFTED',
           targetType: 'USER_RESTRICTION',
-          targetId: lifted[0]?.id ?? '',
+          targetId: firstLifted.id,
           listingStatus: null,
-          restriction: lifted[0] ? toContractRestriction(lifted[0]) : null,
+          restriction: toContractRestriction(firstLifted),
         }
       })
     },
@@ -457,6 +473,10 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
  *
  * 取不到（审计被清 / 该商品是被审核引擎而不是治理下架的）时退回 `ACTIVE`：
  * 恢复本身已经是管理员的显式动作，"回到可售"是这个动作的默认含义。
+ *
+ * `ORDER BY ... DESC, id DESC` 的第二排序键必须有：同一次下架的同秒重放（幂等键重放、
+ * 两个管理员几乎同时操作）会让 `created_at` 打平，没有第二键时先后顺序随机，
+ * 「还原到哪个 prior」就不确定了。
  */
 async function priorListingStatus(
   tx: GovernanceDbTransaction,
@@ -468,7 +488,7 @@ async function priorListingStatus(
     WHERE action = 'LISTING_DELISTED'
       AND target_type = 'LISTING'
       AND target_id = ${listingId}
-    ORDER BY created_at DESC
+    ORDER BY created_at DESC, id DESC
     LIMIT 1
   `)
   const prior = rowsOf(result)[0]?.prior

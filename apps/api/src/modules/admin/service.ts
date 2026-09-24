@@ -315,9 +315,10 @@ export function createAdminService({
       const summary = await store.findUserSummary(userId)
       if (!summary) throw new AdminError('ADMIN_NOT_FOUND', 404, '用户不存在')
 
-      const [listingStats, recentAuditLogs] = await Promise.all([
+      const [listingStats, recentAuditLogs, activeRestrictions] = await Promise.all([
         store.listingStatusCounts(userId),
         store.recentAuditLogs('USER', userId, 10),
+        store.listActiveRestrictions(userId),
       ])
 
       const user = toUserSummary(summary)
@@ -329,6 +330,7 @@ export function createAdminService({
       return AdminUserDetailSchema.parse({
         user: user.data,
         listingStats,
+        activeRestrictions,
         recentAuditLogs: recentAuditLogs.map(toAuditLogSummary),
       })
     },
@@ -364,6 +366,10 @@ export function createAdminService({
         category: listing.category,
         condition: listing.condition,
         status: listing.status,
+        moderationStatus: listing.moderationStatus,
+        governanceDelistedAt: listing.governanceDelistedAt
+          ? listing.governanceDelistedAt.toISOString()
+          : null,
         urgent: listing.urgent,
         negotiable: listing.negotiable,
         free: listing.free,

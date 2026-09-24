@@ -123,7 +123,9 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.post('/:id/offline', options.requireAuth, async (c) => {
+  // 下架同样是写入口（评审 m4）：PUBLISH_RESTRICT 与 BAN 都映射到它，
+  // 否则「限制发布」的用户仍能自己把商品下架，限制就不是完整生效的。
+  router.post('/:id/offline', options.requireAuth, options.guard.publish, async (c) => {
     try {
       const id = requireListingId(c)
       return c.json(await service.transition(c.get('userId'), id, 'OFFLINE'), 200)

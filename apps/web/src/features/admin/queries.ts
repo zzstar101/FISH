@@ -227,17 +227,6 @@ export type GovernanceAction =
 
 export function useGovernanceAction() {
   const queryClient = useQueryClient()
-  const invalidateTarget = (targetType: 'listing' | 'user', targetId: string) => {
-    if (targetType === 'listing') {
-      void queryClient.invalidateQueries({ queryKey: adminKeys.listing(targetId) })
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'listings'] })
-    } else {
-      void queryClient.invalidateQueries({ queryKey: adminKeys.user(targetId) })
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
-    }
-    void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
-    void queryClient.invalidateQueries({ queryKey: adminKeys.overview() })
-  }
   return useMutation({
     mutationFn: ({
       action,
@@ -254,9 +243,19 @@ export function useGovernanceAction() {
       if (action === 'ban') return banAdminUser(targetId, input)
       return liftAdminUserRestriction(targetId, input)
     },
-    onSuccess: (result) => {
-      const targetType = result.targetType === 'LISTING' ? 'listing' : 'user'
-      invalidateTarget(targetType, result.targetId)
+    onSuccess: (_result, variables) => {
+      // 用 mutation 参数而不是 `result.targetId`（评审 m5）：限制类动作的
+      // `result.targetId` 是**限制记录 id**（审计目标），拿它 invalidate 用户详情只会
+      // 命中一个永不存在的 key，用户详情一直停在旧状态。
+      // `variables.targetId` 对商品动作是 listingId、对用户动作是 userId。
+      if (variables.action === 'delist-listing' || variables.action === 'restore-listing') {
+        void queryClient.invalidateQueries({ queryKey: adminKeys.listing(variables.targetId) })
+        void queryClient.invalidateQueries({ queryKey: ['admin', 'listings'] })
+      } else {
+        void queryClient.invalidateQueries({ queryKey: adminKeys.user(variables.targetId) })
+        void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      }
+      void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
       void queryClient.invalidateQueries({ queryKey: adminKeys.overview() })
     },
   })

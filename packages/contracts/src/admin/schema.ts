@@ -130,6 +130,24 @@ export type AdminListingStatusCount = z.infer<typeof AdminListingStatusCountSche
 export const AdminUserDetailSchema = z.object({
   user: AdminUserSummarySchema,
   listingStats: AdminListingStatusCountSchema,
+  /**
+   * 该用户当前**生效中**的限制（#73 PR3，评审 m6）。
+   *
+   * Admin 需要它才能让治理按钮反映真实状态：没有这个字段时前端只能把三个按钮
+   * （限制发布 / 封禁 / 解除限制）恒定全显，于是「没有任何生效限制的用户」也会看到一个
+   * 点了必然 409 的解除按钮，无从判断该用户当前到底受什么限制。
+   *
+   * 只列生效中的（不含已过期 / 已解除）——历史限制都在 `recentAuditLogs` 里。
+   */
+  activeRestrictions: z.array(
+    z.object({
+      id: z.uuid(),
+      type: z.string(),
+      reason: z.string(),
+      expiresAt: z.iso.datetime().nullable(),
+      createdAt: z.iso.datetime(),
+    }),
+  ),
   /** 最近 10 条针对该用户的 Admin 操作（时间倒序；空数组 = 无操作记录）。 */
   recentAuditLogs: z.array(
     z.object({
@@ -184,6 +202,21 @@ export const AdminListingDetailSchema = z.object({
   category: ListingCategorySchema,
   condition: ListingConditionSchema,
   status: ListingStatusSchema,
+  /**
+   * 审核引擎视角的状态（#73 PR3，评审 M3）。
+   *
+   * 与 `status` 分开：治理下架会同时写 `status='OFFLINE'` 与 `moderationStatus='BLOCKED'`，
+   * 而审核引擎屏蔽商品时只写后者（`status` 保持卖家放的状态）。Admin 要靠它区分
+   * 「这条该走 restore 还是走人工审核」。
+   */
+  moderationStatus: z.enum(['APPROVED', 'REVIEW', 'BLOCKED']),
+  /**
+   * 治理下架时刻；`null` = 没有被治理下架过（评审 M3）。
+   *
+   * 恢复上架按钮只在这一列非空时可用——否则会把审核引擎屏蔽的商品放回公开列表，
+   * 等于用治理端点绕过审核。
+   */
+  governanceDelistedAt: z.iso.datetime().nullable(),
   urgent: z.boolean(),
   negotiable: z.boolean(),
   free: z.boolean(),

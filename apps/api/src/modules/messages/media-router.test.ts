@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import type { MediaStorage } from '../uploads/storage'
 import { createMediaRouter } from './media-router'
 import type { MediaMessageService } from './media-service'
@@ -60,7 +61,20 @@ function buildApp(
     ...storageOverrides,
   }
   const app = new Hono()
-  app.route('/conversations', createMediaRouter({ service, storage, requireAuth }))
+  // 封禁守卫替身：本文件只测 media 路由自身的契约，不测治理，
+  // 所以一律放行（真实守卫在 apps/api/src/modules/governance/router.test.ts 覆盖）。
+  const allowGuard: RestrictionGuard = {
+    publish: async (_c, next) => {
+      await next()
+    },
+    write: async (_c, next) => {
+      await next()
+    },
+  }
+  app.route(
+    '/conversations',
+    createMediaRouter({ service, storage, requireAuth, guard: allowGuard }),
+  )
   return app
 }
 
