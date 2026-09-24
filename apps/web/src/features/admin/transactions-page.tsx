@@ -78,6 +78,8 @@ export function TransactionsPage({
 
   // 筛选一变就重置游标：带着上一组条件的 cursor 去查新条件，第二页会直接空
   // （cursor 编码的是旧条件里的「起点行」）。users-page / reports 队列同一取舍。
+  // 三个 URL-only 的 id 必须原样带回：validateSearch 从 URL 读它们，navigate 一旦
+  // 漏写，查询就从「按买家/卖家/商品」静默扩大成全平台——管理员不会收到任何提示。
   const applySearch = (patch: Partial<AdminTransactionsSearch>) => {
     setPage({ cursor: null, stack: [] })
     void navigate({
@@ -87,6 +89,9 @@ export function TransactionsPage({
         q: search.q,
         createdFrom: search.createdFrom,
         createdTo: search.createdTo,
+        buyerId,
+        sellerId,
+        listingId,
         ...patch,
       },
     })

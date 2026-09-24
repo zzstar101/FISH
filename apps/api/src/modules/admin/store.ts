@@ -698,8 +698,10 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
      * 最新 REVIEW 记录」，这里两个都不要，否则人工决定过的记录会从检索里消失——那正是
      * 「已经离开 REVIEW 队列的记录要有检索入口」要解决的问题。
      *
-     * `q` 只搜 `listings.title`，不搜 `title_snapshot`：快照是当时的内容，搜它会得到
-     * 与当前标题不符的结果，管理员按标题找不到对应的行。
+     * `q` 走共用的 `listingSearchCondition('l', q)`：搜的是 listings 表的**当前**
+     * title / description（两者之一命中即返回），不是记录上的 `title_snapshot` /
+     * `description_snapshot`——快照是当时的内容，搜它会得到与当前标题不符的结果，
+     * 管理员按标题找不到对应的行。口径与 `AdminListingsQuerySchema.q` 保持一致。
      */
     async listModerationRecords(criteria) {
       const conditions: SQL[] = []

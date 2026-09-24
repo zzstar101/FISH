@@ -926,9 +926,21 @@ describe('Admin 审核记录检索', () => {
       { headers: adminHeaders },
     )
     expect(byTitle.status).toBe(200)
+    // q 命中 title 或 description 任一即返回（listingSearchCondition 口径），所以只能断言
+    // 「两条里的标题或描述含关键词」，不能断言 title——描述命中的 fixture 会让后者假红。
     for (const item of AdminModerationRecordsSchema.parse(await byTitle.json()).items) {
-      expect(item.listing.title).toContain('待人工审核商品')
+      expect(`${item.listing.title}${item.listing.description}`).toContain('待人工审核商品')
     }
+
+    // q 只搜 listings 表，不搜记录快照：BLOCKED_EDIT_RECORD_ID 的 titleSnapshot 是
+    // 「被拦截的新编辑」，而该 listing 当前 title 是「待人工审核商品」——按快照标题搜
+    // 必须搜不到，否则说明 WHERE 碰了 r.title_snapshot。
+    const snapshotOnly = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('被拦截的新编辑')}`,
+      { headers: adminHeaders },
+    )
+    expect(snapshotOnly.status).toBe(200)
+    expect(AdminModerationRecordsSchema.parse(await snapshotOnly.json()).items).toHaveLength(0)
 
     const noMatch = await app.request(
       `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('不存在的标题关键词')}`,

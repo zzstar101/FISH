@@ -496,7 +496,11 @@ export const AdminModerationRecordsQuerySchema = z.strictObject({
   /** 机器 / 人工判定。`REVIEW` 会同时列出机器判 REVIEW 与已被人工决定的记录。 */
   decision: ModerationDecisionSchema.optional(),
   listingId: z.uuid().optional(),
-  /** 商品标题子串搜索（ILIKE，`%_\` 转义）。不搜描述快照：那会搜到已下架内容。 */
+  /**
+   * 商品关键词搜索（ILIKE，`%_\` 转义）。检索的是 listings 表的**当前** title /
+   * description，不是记录上的快照——快照是当时内容，按现标题找不到对应行。同
+   * `AdminListingsQuerySchema.q` 的口径，行为一致。
+   */
   q: z.string().trim().min(1).max(50).optional(),
   /** 同 `AdminListingsQuerySchema`：左闭右开。 */
   createdFrom: z.iso.datetime().optional(),
