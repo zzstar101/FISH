@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlConversationStore } from './store'
@@ -81,6 +82,43 @@ describe('conversations store (integration)', () => {
     ])
     expect(results.every((row) => row === null)).toBe(true)
     expect(await store.findIdByListingAndBuyer(listingA, buyer)).toBe(createdId)
+  })
+
+  test('商品会话买家分页与全量人数同源，空页仍有总数，不混入别的商品', async () => {
+    const listingId = newId()
+    await seedListing(listingId, seller, '卖家的新商品')
+    const extra = newId()
+    await db.execute(sql`INSERT INTO users (id, student_no, password_hash, nickname)
+      VALUES (${extra}, ${`watchers-${process.pid}`}, 'test-hash', '新买家')`)
+    try {
+      for (const userId of [buyer, outsider, extra]) {
+        await store.insertIfAbsent(listingId, userId, seller)
+      }
+      expect(await store.insertIfAbsent(listingId, buyer, seller)).toBeNull()
+      const seen = new Set<string>()
+      let cursor: { sortKey: string; id: string } | null = null
+      for (let i = 0; i < 3; i++) {
+        const page = await store.listChatWatchers(listingId, seller, { limit: 1, cursor })
+        expect(page.total).toBe(3)
+        expect(page.rows).toHaveLength(i === 2 ? 1 : 2)
+        const first = page.rows[0]
+        if (!first) throw new Error('缺少分页行')
+        seen.add(first.userId)
+        cursor = { sortKey: first.startedAtCursor, id: first.conversationId }
+      }
+      expect(seen).toEqual(new Set([buyer, outsider, extra]))
+      const empty = await store.listChatWatchers(listingId, seller, { limit: 1, cursor })
+      expect(empty).toEqual({ rows: [], total: 3 })
+      const otherListing = await store.listChatWatchers(listingB, seller, {
+        limit: 5,
+        cursor: null,
+      })
+      expect(otherListing.total).toBe(0)
+    } finally {
+      await db.execute(sql`DELETE FROM conversations WHERE listing_id = ${listingId}`)
+      await db.execute(sql`DELETE FROM listings WHERE id = ${listingId}`)
+      await db.execute(sql`DELETE FROM users WHERE id = ${extra}`)
+    }
   })
 
   test('findDetail returns role data for participants and null for outsiders', async () => {

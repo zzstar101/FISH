@@ -51,6 +51,10 @@ class MemoryConversationStore implements ConversationStore {
     return this.listings.get(listingId) ?? null
   }
 
+  async listChatWatchers() {
+    return { rows: [], total: 0 }
+  }
+
   async insertIfAbsent(listingId: string, buyerId: string, sellerId: string) {
     const existing = [...this.details.values()].find(
       (row) => row.conversation.listing_id === listingId && row.conversation.buyer_id === buyerId,

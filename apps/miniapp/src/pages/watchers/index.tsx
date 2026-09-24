@@ -1,377 +1,290 @@
+import type { ChatWatchersResponse } from '@fish/contracts/chat/schema'
+import type { ListingDetail } from '@fish/contracts/listings/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
-import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
-import { watcherBudgetLabel } from '@/features/watchers/budget'
-import { watcherStatsOf } from '@/features/watchers/stats'
-import {
-  fetchWatchers,
-  findListing,
-  formatAmount,
-  type MockWatcher,
-  WATCHER_DEFAULT_LISTING,
-} from '@/mock/api'
+import { useAuth } from '@/features/auth/store'
+import { fetchListingDetail } from '@/features/listing/api'
+import { fetchChatWatchers } from '@/features/watchers/api'
+import { formatAmount } from '@/lib/money'
+import { isApiError } from '@/lib/request'
+import { dayLabelOf } from '@/lib/time'
 import './index.scss'
 
-/**
- * C5 想要的人（设计稿 `设计稿_C5-watchers.html`）。
- *
- * 页头：商品摘要条（「这是谁的想要的人」）+ 双格统计（共 N 人想要 / 预算中位）
- * + 中位数口径说明；列表：头像 + 昵称 + 认证徽章 + 预算 + 想要时间 + 动作；
- * 末尾是隐私说明条。
- *
- * **不展示校区/院系**：Owner 2026-09-20 拍板去掉地址类描述，与 Issue #123
- * 「公开字段不泄漏私有校园身份」一致。mock fixture 里仍有 `department`，页面不读它。
- *
- * **预算中位数的口径**（稿子原文：「中位数按已填预算的 12 人计算 · 6 人未填预算不计入」）：
- * 只对**填了预算**的人求中位数，未填的人不计入分母也不参与排序。
- * 一个人都没填时中位数返回 null，页面显示「暂缺」——这不是错误态，是正常结果。
- *
- * **行上的预算文案**（`@/features/watchers/budget`）：没填预算（`null`）显示「未填预算」，
- * 真的填了 0 元显示「预算 ¥0」——两者不是一回事，已注销的行也一样，不再把 `null` 当 0。
- *
- * **三种行状态**（稿子第 02 帧；稿里第 3 种「未公开院系」随地址信息一起去掉）：
- * 1. 已聊过 → 动作换成「继续聊」（`chattedCount > 0`）；
- * 2. 超长昵称 → 单行截断，不换行、不挤压徽章（`.wt__name` 有 `min-width: 0`）；
- * 3. 已注销 → 整行降级为冰底灰字 + 动作不可用 + 「对方已注销，无法再发起会话」。
- *
- * **加载失败**：`load()` 出错时渲染 `.wt__fail`，并收起列表槽位、统计显示 `—`（「没读到」
- * 不能显示成「0 人想要」）。`@/mock/api` 的 `fetchWatchers` 永不 reject，所以演示构建
- * （`__DEMO_AUTH__`）下另认一个 `?fail=1` 参数把失败态走一遍，重试一次即恢复；
- * 真实构建里这个参数不生效。
- *
- * **统计与列表同源**：`count` / `medianCents` 都从**这一份已加载的 `items`** 现算，
- * 不旁路读 `watchersSummary()` —— 否则失败时会出现「共 7 人想要 + 列表加载失败」，
- * 或「列表 8 行 / 共 7 人想要」（#139 review P1）。已注销的人仍计入人数（口径见
- * `@/features/watchers/stats`）；注销只影响该行的动作与视觉。
- *
- * ⚠️ **跨页面的「N 人想要」目前仍不同源**：商品详情 / 我的发布行走的是 catalog 的
- * `listing.wants`，本页数是 fixture 的 watcher 行数，两者在 mock 下可以不等
- * （如 l-041：前者 31、本页 0 行）。要真正同源得等 #123 的后端端点，本页不假装一致。
- *
- * **与后端的边界**：契约没有「谁想要我的商品」端点（P1），整页 mock，标 `BLOCKED: 需新 Issue`。
- */
+type Watcher = ChatWatchersResponse['items'][number]
+type Page = {
+  listing: ListingDetail | null
+  items: Watcher[]
+  total: number | null
+  cursor: string | null
+  phase: 'loading' | 'ready' | 'error' | 'forbidden' | 'not-found'
+}
 
+const initialPage = (): Page => ({
+  listing: null,
+  items: [],
+  total: null,
+  cursor: null,
+  phase: 'loading',
+})
+
+/** C5 想要的人：仅本商品已发起聊天的买家，不含收藏与愿望匹配。 */
 export default function Watchers() {
   const authStatus = useAuthGuard()
-  const router = useRouter<{ listingId?: string; title?: string; fail?: string }>()
-  const listingId = router.params.listingId ?? WATCHER_DEFAULT_LISTING
+  const userId = useAuth().user?.id ?? null
+  const listingId = useRouter<{ listingId?: string }>().params.listingId ?? ''
+  const [page, setPage] = useState<Page>(initialPage)
+  const [showToken, setShowToken] = useState<number | null>(null)
+  const [morePending, setMorePending] = useState(false)
+  const [moreFailed, setMoreFailed] = useState(false)
+  const [scope, setScope] = useState({ userId, listingId })
+  const epoch = useRef(0)
 
-  const [items, setItems] = useState<MockWatcher[]>([])
-  const [loading, setLoading] = useState(true)
-  const [failed, setFailed] = useState(false)
-  /** 已发起过会话的人 → 动作换成「继续聊」（按 watcher.id 记） */
-  const [started, setStarted] = useState<Record<string, boolean>>({})
-  /**
-   * 演示开关：`@/mock/api` 的 `fetchWatchers` 永不 reject，没有它失败态在开发者工具里
-   * 走不到。只在演示构建（`__DEMO_AUTH__`）下认这个参数，真实构建里进不去。
-   */
-  const [demoFail, setDemoFail] = useState(DEMO_AUTH_ENABLED && router.params.fail === '1')
-
-  const listing = findListing(listingId)
-
-  const load = async (forceFail = demoFail) => {
-    setLoading(true)
-    setFailed(false)
-    try {
-      if (forceFail) throw new Error('演示开关：强制加载失败')
-      setItems(await fetchWatchers(listingId))
-    } catch {
-      setItems([])
-      setFailed(true)
-    }
-    setLoading(false)
+  // 商品/账号变化在渲染期就清掉名单；迟到的旧请求也不能回填给新账号。
+  if (scope.userId !== userId || scope.listingId !== listingId) {
+    epoch.current += 1
+    setScope({ userId, listingId })
+    setPage(initialPage())
+    setMorePending(false)
+    setMoreFailed(false)
   }
 
-  /** 重新加载：先摘掉演示开关，否则重试会立刻再抛一次，按钮看起来没反应 */
-  const retry = () => {
-    setDemoFail(false)
-    void load(false)
-  }
+  useDidShow(() => setShowToken((value) => (value ?? 0) + 1))
 
-  useLoad(() => {
-    void load()
-  })
+  useEffect(() => {
+    if (showToken === null || authStatus !== 'authed' || !userId) return
+    const request = ++epoch.current
+    setPage(initialPage())
+    setMorePending(false)
+    setMoreFailed(false)
 
-  /**
-   * 统计口径：**从这一份已加载的 `items` 现算**，不再旁路读 `watchersSummary()`。
-   *
-   * 旁路读会造出两个自相矛盾的界面（#139 review 两条 P1）：
-   * 1. 列表加载失败时 `items` 空了、而旁路 summary 仍是 fixture 的成功值 →
-   *    页面同屏显示「共 7 人想要」和「列表加载失败」；
-   * 2. summary 由 mock 侧独立算，与列表渲染的行数不一致 →
-   *    「列表 8 行 / 共 7 人想要 / 已显示全部 7 人」三者互相打脸。
-   *
-   * 现在所有数字都从**当前真的渲染出来的行**现算（算法在 `@/features/watchers/stats`，
-   * 与 mock 侧同一份实现），三者永远同源。
-   */
-  const summary = useMemo(() => watcherStatsOf(items), [items])
-
-  /**
-   * 统计是否「不可知」。失败时 `items` 被清空，`summary` 会算成 0 / 暂缺 ——
-   * 但 0 是「真的没人想要」这个业务事实，不是「没读到」。两者必须分开表达，
-   * 否则接口抖动会把「未知」显示成「没人想要」（#139 review P1）。
-   */
-  const statsUnknown = failed
-
-  /**
-   * 统计口径的说明文案。
-   *
-   * 三种情况分开写，是因为它们对用户的含义不同：没有预算中位不是「加载失败」，
-   * 而「有人填了预算」与「一个人都没填」要给出不同的解释。
-   */
-  const statNote = useMemo(() => {
-    if (statsUnknown) return '暂时无法读取统计'
-    if (summary.count === 0) return '还没有人填预算，暂时算不出中位数'
-    if (summary.medianCents === null) return '想要的人都未填预算，暂时算不出中位数'
-    const missing = summary.count - summary.budgetFilled
-    return missing > 0
-      ? `中位数按已填预算的 ${summary.budgetFilled} 人计算 · ${missing} 人未填预算不计入`
-      : `中位数按已填预算的 ${summary.budgetFilled} 人计算`
-  }, [summary, statsUnknown])
-
-  const chat = (item: MockWatcher) => {
-    if (item.deactivated) return
-    if (item.chattedCount > 0 && !started[item.id]) {
-      // 已经聊过的：真实实现里直接进那条已有会话
-      void Taro.showToast({ title: '会话待接入', icon: 'none' })
+    if (!listingId) {
+      setPage((prev) => ({ ...prev, phase: 'not-found' }))
       return
     }
-    if (started[item.id]) {
-      void Taro.switchTab({ url: '/pages/chat/index' })
-      return
-    }
-    setStarted((prev) => ({ ...prev, [item.id]: true }))
-    void Taro.showToast({ title: '发起会话待接入', icon: 'none' })
+    void (async () => {
+      try {
+        const listing = await fetchListingDetail(listingId)
+        if (request !== epoch.current) return
+        if (!listing) {
+          setPage((prev) => ({ ...prev, phase: 'not-found' }))
+          return
+        }
+        // 不凭旧列表/路由参数推断归属；与当前登录身份再交叉校验。
+        if (!listing.isOwner || listing.seller.id !== userId) {
+          setPage((prev) => ({ ...prev, phase: 'forbidden' }))
+          return
+        }
+        const result = await fetchChatWatchers(listingId)
+        if (request !== epoch.current) return
+        setPage({
+          listing,
+          items: result.items,
+          total: result.total,
+          cursor: result.nextCursor,
+          phase: 'ready',
+        })
+      } catch (error) {
+        if (request !== epoch.current) return
+        setPage({
+          ...initialPage(),
+          phase: isApiError(error) && error.status === 403 ? 'forbidden' : 'error',
+        })
+      }
+    })()
+  }, [showToken, authStatus, userId, listingId])
+
+  const retry = () => setShowToken((value) => (value ?? 0) + 1)
+  const loadMore = () => {
+    if (page.phase !== 'ready' || !page.cursor || morePending || !userId) return
+    const current = epoch.current
+    const cursor = page.cursor
+    setMorePending(true)
+    setMoreFailed(false)
+    void (async () => {
+      try {
+        const result = await fetchChatWatchers(listingId, cursor)
+        if (current !== epoch.current) return
+        setPage((prev) =>
+          prev.phase === 'ready' && prev.cursor === cursor
+            ? {
+                ...prev,
+                items: [...prev.items, ...result.items],
+                total: result.total,
+                cursor: result.nextCursor,
+              }
+            : prev,
+        )
+      } catch {
+        if (current === epoch.current) setMoreFailed(true)
+      } finally {
+        if (current === epoch.current) setMorePending(false)
+      }
+    })()
   }
 
-  const openListing = () => {
-    if (!listing) return
-    void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })
-  }
-
-  const share = () => {
-    void Taro.showToast({ title: '分享待接入', icon: 'none' })
-  }
-
-  const reprice = () => {
-    if (!listing) return
-    void Taro.navigateTo({ url: `/pages/sell/index?id=${listing.id}` })
-  }
-
-  /** 商品摘要条的副行：价格 · 状态 · 上架天数（稿子第 01 帧的 `¥320 · 在售 · 已上架 6 天`） */
-  const listingMeta = listing
-    ? `¥${formatAmount(listing.priceCents)} · ${listing.status === 'ACTIVE' ? '在售' : '已下架'} · 已上架 ${Math.floor(listing.createdHoursAgo / 24)} 天`
-    : ''
-
-  /**
-   * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
-   * 本页数据源全是 `@/mock/api`（同步可得），不拦的话跳转落地前会先画一帧演示账号的数据。
-   */
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
+  const owned = page.listing?.isOwner && page.listing.seller.id === userId
+  const listing = owned ? page.listing : null
+  const nowMs = Date.now()
+
   return (
     <View className="wt">
       <View className="wt__bg" />
-
       <NavBar title="想要的人" />
-
       <View className="wt__head">
         <Text className="wt__kicker num">我的发布 · 想要的人</Text>
         <Text className="wt__title">想要的人</Text>
-
         {listing ? (
-          <View className="wt__lchip" onClick={openListing}>
+          <View
+            className="wt__lchip"
+            onClick={() =>
+              void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })
+            }
+          >
             <View className="wt__lthumb">
-              <Image className="wt__lthumb-img" src={listing.coverUrl} mode="aspectFill" />
+              {listing.images[0] ? (
+                <Image className="wt__lthumb-img" src={listing.images[0].url} mode="aspectFill" />
+              ) : (
+                <Image className="wt__lthumb-fallback" src={ICONS.starAccent} mode="aspectFit" />
+              )}
             </View>
             <View className="wt__lmain">
               <Text className="wt__ltitle">{listing.title}</Text>
-              <Text className="wt__lmeta num">{listingMeta}</Text>
+              <Text className="wt__lmeta num">
+                ¥{formatAmount(listing.priceCents)} ·{' '}
+                {listing.status === 'ACTIVE' ? '在售' : '非在售'}
+              </Text>
             </View>
             <Text className="wt__lgo">查看 ›</Text>
           </View>
-        ) : (
-          <Text className="wt__lmeta num">{router.params.title ?? '商品已下架'}</Text>
-        )}
-
-        <View className="wt__stats">
-          <View className="wt__stat">
-            <Text className="wt__stat-num num">
-              {loading || statsUnknown ? '—' : summary.count}
-              {loading || statsUnknown ? null : <Text className="wt__stat-unit">人</Text>}
-            </Text>
-            <Text className="wt__stat-label">共有人想要</Text>
+        ) : null}
+        {page.phase === 'loading' || page.phase === 'ready' ? (
+          <View className="wt__stats">
+            <View className="wt__stat">
+              <Text className="wt__stat-num num">
+                {page.total === null ? '—' : page.total}
+                {page.total === null ? null : <Text className="wt__stat-unit">人</Text>}
+              </Text>
+              <Text className="wt__stat-label">共有人想要</Text>
+            </View>
           </View>
-          <View
-            className={`wt__stat${summary.medianCents === null || statsUnknown ? ' is-na' : ''}`}
-          >
-            <Text className="wt__stat-num num">
-              {loading || statsUnknown
-                ? '—'
-                : summary.medianCents === null
-                  ? '暂缺'
-                  : `¥${formatAmount(summary.medianCents)}`}
-            </Text>
-            <Text className="wt__stat-label">预算中位</Text>
-          </View>
-        </View>
-        <Text className="wt__stat-note num">{loading ? '正在读取统计…' : statNote}</Text>
+        ) : null}
+        {page.phase === 'ready' || page.phase === 'loading' ? (
+          <Text className="wt__stat-note">只统计已发起聊天的同学，不含收藏或愿望匹配</Text>
+        ) : null}
       </View>
 
-      {/* 加载失败：给出口，不让用户卡在空白页（稿子第 04 帧的对照 A） */}
-      {/*
-        失败卡与骨架屏必须互斥：`retry()` 会把 `loading` 置真而 `failed` 要到响应回来
-        才清，两者同时为真时失败卡与骨架屏会一起渲染。Taro 端页面根不是 concurrent root，
-        setState 不保证自动批处理，所以不能指望「同一 tick 里两次 setState 只画一帧」。
-      */}
-      {failed && !loading ? (
+      {page.phase === 'error' ? (
         <View className="wt__fail">
-          <View className="wt__fail-ic">
-            <Image className="wt__fail-img" src={ICONS.warnInk} mode="aspectFit" />
-          </View>
+          <Image className="wt__fail-img" src={ICONS.warnInk} mode="aspectFit" />
           <View className="wt__fail-main">
             <Text className="wt__fail-title">想要的人列表加载失败，请检查网络后重试</Text>
-            <Text className="wt__fail-code num">ERR_NETWORK</Text>
             <View className="wt__fail-act" onClick={retry}>
               <Text>重新加载</Text>
             </View>
           </View>
         </View>
       ) : null}
-
-      <View className="wt__sec">
-        <Text className="wt__sec-title">全部想要的人</Text>
-        <Text className="wt__sec-cnt num">
-          {loading ? '加载中' : statsUnknown ? '—' : `${summary.count} 人 · 按想要时间倒序`}
-        </Text>
-      </View>
-
-      {loading ? (
-        <View className="wt__list">
-          {[0, 1, 2].map((i) => (
-            <View key={`sk-${i}`} className="wt__skel">
-              <View className="wt__skel-av" />
-              <View className="wt__skel-col">
-                <View className="wt__skel-bar" style={{ width: '38%' }} />
-                <View className="wt__skel-bar" style={{ width: '62%' }} />
-              </View>
-              <View className="wt__skel-act" />
-            </View>
-          ))}
-        </View>
-      ) : failed ? null : summary.count === 0 ? (
+      {page.phase === 'forbidden' || page.phase === 'not-found' ? (
         <View className="wt__empty">
-          <View className="wt__empty-disc">
-            <Image className="wt__empty-ic" src={ICONS.starAccent} mode="aspectFit" />
-          </View>
-          <Text className="wt__empty-title">还没有人想要</Text>
+          <Image className="wt__empty-ic" src={ICONS.info} mode="aspectFit" />
+          <Text className="wt__empty-title">无法查看</Text>
           <Text className="wt__empty-text">
-            把它分享到许愿墙或班级群，同学点「想要」后就会出现在这里
+            {page.phase === 'forbidden' ? '只有商品卖家可以查看想要的人' : '商品不存在或无法查看'}
           </Text>
-          <View className="wt__empty-acts">
-            <View className="wt__eact wt__eact--primary" onClick={share}>
-              <Text>去分享</Text>
-            </View>
-            <View className="wt__eact" onClick={reprice}>
-              <Text>改价格</Text>
-            </View>
-          </View>
         </View>
-      ) : (
-        <ScrollView className="wt__scroll" scrollY>
-          <View className="wt__list">
-            {items.map((item) => {
-              const dead = item.deactivated
-              const busy = item.chattedCount > 0
-              const on = started[item.id]
-              return (
-                <View key={item.id} className={`wt__row${dead ? ' is-dead' : ''}`}>
-                  <View className="wt__av">
-                    {dead ? (
-                      <Image className="wt__av-ic" src={ICONS.user} mode="aspectFit" />
-                    ) : (
-                      <Text className="wt__av-tx">{item.nickname.slice(0, 1)}</Text>
-                    )}
-                  </View>
+      ) : null}
 
-                  <View className="wt__main">
-                    <View className="wt__top">
-                      <Text className="wt__name">{dead ? '已注销用户' : item.nickname}</Text>
-
-                      {/* 认证徽章：未认证时整块不渲染，改渲染「未认证」小标签 */}
-                      {dead ? (
-                        <Text className="wt__tag wt__tag--unv">不可联系</Text>
-                      ) : item.authStatus === 'VERIFIED' ? (
-                        <View className="wt__badge">
-                          <Image
-                            className="wt__badge-ic"
-                            src={ICONS.verifiedAccent}
-                            mode="aspectFit"
-                          />
-                          <Text>已认证</Text>
-                        </View>
-                      ) : (
-                        <Text className="wt__tag wt__tag--unv">未认证</Text>
-                      )}
-
-                      {/* 已聊过：次数不同给不同标签（3 条以上用中性灰，1 次用成功色） */}
-                      {busy ? (
-                        <Text
-                          className={`wt__tag ${item.chattedCount > 1 ? 'wt__tag--chat' : 'wt__tag--ok'}`}
-                        >
-                          {item.chattedCount > 1 ? `已聊 ${item.chattedCount} 条` : '已聊过 1 次'}
-                        </Text>
-                      ) : null}
-                    </View>
-
-                    {/*
-                      两种行状态共用 `watcherBudgetLabel()`：`null`（没填）与 `0`（真的填了 0 元）
-                      必须分开。此前已注销行写的是 `budgetCents ?? 0`，会把「没填」显示成「预算 ¥0」。
-                    */}
-                    <Text className="wt__meta num">
-                      {dead
-                        ? `账号已注销 · ${watcherBudgetLabel(item.budgetCents)} · ${item.timeLabel}`
-                        : `${watcherBudgetLabel(item.budgetCents)} · ${item.timeLabel}`}
-                    </Text>
-
-                    {dead ? (
-                      <Text className="wt__dead-note">对方已注销，无法再发起会话</Text>
-                    ) : null}
-                  </View>
-
-                  <View
-                    className={`wt__act${dead ? ' is-dead' : busy || on ? ' is-ghost' : ''}`}
-                    onClick={() => chat(item)}
-                  >
-                    <Text>{dead ? '聊一聊' : busy || on ? '继续聊' : '聊一聊'}</Text>
-                  </View>
-                </View>
-              )
-            })}
-          </View>
-
-          <View className="wt__banner">
-            <View className="wt__banner-ic">
-              <Image className="wt__banner-ic-img" src={ICONS.info} mode="aspectFit" />
-            </View>
-            <Text className="wt__banner-tx">
-              只展示对方愿意公开的信息：昵称、认证徽章与预算。对方未填预算时按「未填预算」显示。
+      {page.phase === 'loading' || page.phase === 'ready' ? (
+        <>
+          <View className="wt__sec">
+            <Text className="wt__sec-title">全部想要的人</Text>
+            <Text className="wt__sec-cnt num">
+              {page.phase === 'loading' ? '加载中' : `已显示 ${page.items.length} 人`}
             </Text>
           </View>
-
-          {summary.count > 0 ? (
-            <View className="wt__tail">
-              <View className="wt__tail-line" />
-              <Text className="wt__tail-tx num">{`已显示全部 ${summary.count} 人`}</Text>
-              <View className="wt__tail-line" />
+          {page.phase === 'loading' ? (
+            <View className="wt__list">
+              {[0, 1, 2].map((i) => (
+                <View key={`sk-${i}`} className="wt__skel">
+                  <View className="wt__skel-av" />
+                  <View className="wt__skel-col">
+                    <View className="wt__skel-bar" style={{ width: '38%' }} />
+                    <View className="wt__skel-bar" style={{ width: '62%' }} />
+                  </View>
+                </View>
+              ))}
             </View>
-          ) : null}
-        </ScrollView>
-      )}
+          ) : page.items.length === 0 ? (
+            <View className="wt__empty">
+              <Image className="wt__empty-ic" src={ICONS.starAccent} mode="aspectFit" />
+              <Text className="wt__empty-title">还没有人想要</Text>
+              <Text className="wt__empty-text">还没有同学为这件商品发起聊天</Text>
+            </View>
+          ) : (
+            <ScrollView className="wt__scroll" scrollY>
+              <View className="wt__list">
+                {page.items.map(({ user, startedAt }) => (
+                  <View key={user.id} className="wt__row">
+                    <View className="wt__av">
+                      {user.avatarUrl ? (
+                        <Image className="wt__av-img" src={user.avatarUrl} mode="aspectFill" />
+                      ) : (
+                        <Text className="wt__av-tx">{user.nickname.slice(0, 1) || '同'}</Text>
+                      )}
+                    </View>
+                    <View className="wt__main">
+                      <View className="wt__top">
+                        <Text className="wt__name">{user.nickname}</Text>
+                        {user.authStatus === 'VERIFIED' ? (
+                          <View className="wt__badge">
+                            <Image
+                              className="wt__badge-ic"
+                              src={ICONS.verifiedAccent}
+                              mode="aspectFit"
+                            />
+                            <Text>已认证</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <Text className="wt__meta num">{dayLabelOf(startedAt, nowMs)}发起聊天</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+              <View className="wt__banner">
+                <Image className="wt__banner-ic-img" src={ICONS.info} mode="aspectFit" />
+                <Text className="wt__banner-tx">
+                  只展示对方的昵称、头像、认证状态和发起聊天时间；建立会话不代表已收藏或发布愿望。
+                </Text>
+              </View>
+              {page.cursor ? (
+                <View className="wt__more-wrap">
+                  <View
+                    className={`wt__more${morePending ? ' is-loading' : ''}`}
+                    onClick={loadMore}
+                  >
+                    <Text>
+                      {morePending ? '加载中…' : moreFailed ? '加载失败，点击重试' : '查看更多'}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View className="wt__tail">
+                  <View className="wt__tail-line" />
+                  <Text className="wt__tail-tx num">已显示 {page.items.length} 人</Text>
+                  <View className="wt__tail-line" />
+                </View>
+              )}
+            </ScrollView>
+          )}
+        </>
+      ) : null}
     </View>
   )
 }
