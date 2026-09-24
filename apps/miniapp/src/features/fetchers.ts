@@ -649,9 +649,12 @@ export {
  * 四态与商品详情同款（#124 的结论）：`notFound`（后端说这个人不存在 → 空态）与
  * `failed`（根本没问到 → 错误态）必须分开；混成一个 `null` 会让页面把「后端挂了」
  * 说成「用户不存在」。
+ *
+ * `hasMore` 是读取层对「这份列表是不是全部」的诚实回答（契约 `nextCursor !== null`）：
+ * 本页只取一页（上限 50），服务端游标说还有下一页时，页面不能宣称「已经到底了」。
  */
 export type PublicUserResult =
-  | { status: 'ok'; profile: PublicUserProfile; listings: MockListing[] }
+  | { status: 'ok'; profile: PublicUserProfile; listings: MockListing[]; hasMore: boolean }
   | { status: 'notFound' }
   | { status: 'failed' }
 
@@ -684,7 +687,14 @@ export async function loadPublicUserHome(
       return { status: 'failed' }
     }
 
-    return { status: 'ok', profile, listings: toMockListings(page.items, now) }
+    return {
+      status: 'ok',
+      profile,
+      listings: toMockListings(page.items, now),
+      // 契约的游标语义：`nextCursor !== null` 即还有下一页。本页不翻页，但这个布尔
+      // 是「列表是否完整」的唯一权威信号，必须原样透给页面（不能只看条数猜）。
+      hasMore: page.nextCursor !== null,
+    }
   } catch (error) {
     reportFailure('他人主页', error, false)
     return { status: 'failed' }

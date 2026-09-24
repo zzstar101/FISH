@@ -15,6 +15,13 @@
   justify-content: space-between;
   padding: 12px 32px 0;
   pointer-events: none;
+  /* 稿 `.mp-nav{transition:background .22s,box-shadow .22s,border-color .22s}` —— 玻璃底
+     进出都要过渡，所以写在基类上（只写在 `.navfloat--glass` 里就只有「进入」会动、
+     「退出」是硬切）。对本组件其余页面**是惰性的**：它们的底色/投影从头到尾不变，
+     过渡没有可动的量。 */
+  transition:
+    background 0.22s,
+    box-shadow 0.22s;
 }
 
 .navfloat__spacer {
@@ -48,6 +55,10 @@
  * 标题 83）。规则见 `src/lib/nav-metrics.ts`：pxtransform 只处理样式表，内联 px 原样下发。
  *
  * 左右留 110px 内边距，避免长标题压到返回钮。
+ *
+ * `animation` 是**挂载时的淡入**（稿 `.mp-title` 的 `transition:opacity .24s`）：
+ * 他人主页的标题节点在有数据且滚到位时才创建，所以「创建即从透明到不透明」就等价于
+ * 稿的淡入。面交页的标题一直挂着，这条动画只在进入页面时跑一次，无副作用。
  */
 .navfloat__title--center {
   position: absolute;
@@ -62,6 +73,16 @@
   margin-left: 0;
   transform: none;
   text-align: center;
+  animation: navfloat-title-in 0.24s ease both;
+}
+
+@keyframes navfloat-title-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .navfloat__actions {
@@ -111,7 +132,7 @@
  *
  * 注意：`backdrop-filter` 会让本元素成为 `position: fixed` 后代的包含块 —— 这里没有
  * fixed 后代（返回钮/标题都是 absolute），不受影响。`pointer-events: none` 继承自
- * 基类，玻璃底不挡点击。
+ * 基类，玻璃底不挡点击（从导航条上划过也能滚页面）。
  */
 .navfloat--glass {
   position: fixed;

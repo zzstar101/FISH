@@ -492,11 +492,6 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               -- 去掉谓词后，交易完成必然连带把商品置为 SOLD，不变量由构造保证。
               UPDATE listings l SET status = 'SOLD', updated_at = now()
               FROM txn WHERE l.id = txn.listing_id
-            ), token AS (
-              -- #147 终态销毁：凭证随交易同事务删除，COMPLETED 后旧码不可再用。
-              -- DELETE 引用 txn：交易未推进（txn 0 行）时凭证保留。
-              DELETE FROM transaction_meetup_tokens t
-              USING txn WHERE t.transaction_id = ${id}
             )
             SELECT txn.*, c.id AS conversation_id
             FROM txn JOIN conversations c
@@ -505,7 +500,17 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
              AND c.seller_id = txn.seller_id
           `)
           const doneRow = rowsOf(done)[0]
-          if (doneRow) return { kind: 'ok', row: toRow(doneRow) }
+          if (doneRow) {
+            // #147 终态销毁：凭证随交易同事务删除，COMPLETED 后旧码不可再用。
+            // 必须是独立语句（不能塞进上面 CTE）：本事务自开头就持有交易行锁，
+            // 与 cancel 同款论证见 cancel 内注释——READ COMMITTED 下同一条 CTE 里
+            // DELETE 对非目标表用语句开头快照，并发 issue 在本语句求值后提交的
+            // 凭证行不可见，终态交易上凭证幸存（#76）。
+            await tx.execute(
+              sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${id}`,
+            )
+            return { kind: 'ok', row: toRow(doneRow) }
+          }
         }
         return { kind: 'ok', row: merged }
       })
@@ -525,11 +530,6 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             -- 「交易已 CANCELLED、商品却停在 OFFLINE」——与 confirm 侧同一论证（#40-4）。
             UPDATE listings l SET status = 'ACTIVE', updated_at = now()
             FROM txn WHERE l.id = txn.listing_id
-          ), token AS (
-            -- #147 终态销毁：凭证随交易同事务删除，CANCELLED 后旧码不可再用。
-            -- DELETE 引用 txn：只在真正取消（txn 有行）时删，幂等重入时凭证已删、0 行无害。
-            DELETE FROM transaction_meetup_tokens t
-            USING txn WHERE t.transaction_id = ${id}
           )
           SELECT txn.*, c.id AS conversation_id
           FROM txn JOIN conversations c
@@ -538,7 +538,19 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
            AND c.seller_id = txn.seller_id
         `)
         const row = rowsOf(cancelled)[0]
-        if (row) return { kind: 'ok', row: toRow(row) }
+        if (row) {
+          // #147 终态销毁：凭证随交易同事务删除，CANCELLED 后旧码不可再用。
+          // 必须是独立语句（不能塞进上面 CTE 的 token 分支）：READ COMMITTED 下，
+          // 同一条 CTE 里 DELETE 对非目标表（这里即凭证表）用**语句开头**的快照，
+          // 锁等待后的 EvalPlanQual 重评估只作用于 UPDATE/DELETE 的目标行本身。
+          // 并发 issue（upsertMeetupToken）持交易行锁先提交了凭证行、本语句才开始
+          // 求值时，DELETE 看不见那行 → CANCELLED 交易上凭证幸存（#76 修复的 flake：
+          // 测试按「CANCELLED ⇒ token 必不存在」断言而红）。独立语句持有本事务已拿
+          // 的交易行锁，issue 要么已被挡下（返回 null），要么已提交、这条 DELETE 的
+          // 新快照必然看得到它。幂等重入时凭证已删，0 行无害。
+          await tx.execute(sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${id}`)
+          return { kind: 'ok', row: toRow(row) }
+        }
 
         // 没取消成功：区分 COMPLETED（拒绝）与 CANCELLED（幂等）
         const existing = await tx.execute(sql`
@@ -661,9 +673,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           // 在同一事务推进 COMPLETED + listing SOLD。listing 不带状态谓词——交易完成
           // 必然连带商品售出，否则会留下「交易已完成、商品未售出」的自相矛盾（#40-4 同款）。
           // 0 行 = 买家尚未确认，交易停在 PENDING 等客户端的 confirm（幂等）。
-          // #147 终态销毁：推进 COMPLETED 的同事务删除凭证行——DELETE 的 WHERE
-          // 引用 txn，交易未推进（txn 0 行）时凭证保留（仍是当前有效凭证）。
-          await tx.execute(sql`
+          const finished = await tx.execute(sql`
             WITH txn AS (
               UPDATE transactions SET status = 'COMPLETED', completed_at = now(), updated_at = now()
               WHERE id = ${transactionId} AND status = 'PENDING_MEETUP'
@@ -672,12 +682,19 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             ), listing AS (
               UPDATE listings l SET status = 'SOLD', updated_at = now()
               FROM txn WHERE l.id = txn.listing_id
-            ), token AS (
-              DELETE FROM transaction_meetup_tokens t
-              USING txn WHERE t.transaction_id = ${transactionId}
             )
             SELECT id FROM txn
           `)
+          // #147 终态销毁：推进 COMPLETED 的同事务删除凭证行。独立语句而不是上面的
+          // CTE token 分支，理由与 cancel / confirm 相同（READ COMMITTED 快照论证见
+          // cancel 内注释）；本事务自开头就持有交易行锁，issue 的 FOR UPDATE 拿不到
+          // 交易行锁，不存在「DELETE 之后凭证复活」的一方。交易未推进（0 行）时
+          // 凭证保留（仍是当前有效凭证），所以只在这里删。
+          if (rowsOf(finished).length > 0) {
+            await tx.execute(
+              sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+            )
+          }
           return { kind: 'ok', row: toMeetupTokenRow(okRow) }
         }
         return { kind: await diagnoseMeetupToken(tx, transactionId) }

@@ -16,6 +16,12 @@ export const CHAT_ROUTES = {
    * GET 拉当前用户的会话列表（买卖两种角色合并，按 lastMessageAt 降序，游标分页）。
    */
   base: '/conversations',
+  /**
+   * GET 未读总数 `{ unreadCount }`（#67）。服务端聚合**全部**会话，
+   * 不受列表 `limit` / 游标分页影响——底栏红点只为一个数字，为它拉整页会话
+   * 会在超过单页上限时漏计。
+   */
+  unreadCount: '/conversations/unread-count',
   /** GET 单个会话详情；服务端按当前用户校验参与者权限。 */
   detail: (id: string) => `/conversations/${id}`,
   /** GET 历史消息（游标分页，升序）；POST 发送 TEXT 消息（201，响应体 MessageDto）。 */

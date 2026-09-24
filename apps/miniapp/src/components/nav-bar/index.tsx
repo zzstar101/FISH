@@ -14,8 +14,14 @@ import './index.scss'
 type NavBarProps = {
   /** 是否显示返回钮（非 Tab 页默认 true） */
   back?: boolean
-  /** 页面标题（二级页用；不给就保持原样：只有返回钮） */
-  title?: string
+  /**
+   * 页面标题（二级页用；不给就保持原样：只有返回钮）。
+   *
+   * 字符串渲染进 `Text`（与旧版完全一致，面交页等既有调用方逐像素不变）；
+   * 其它节点渲染进 `View` —— 他人主页的居中标题是「昵称 + 认证徽章」，
+   * 徽章是图标 + 文字，weapp 的 `text` 不能可靠容纳 `image` / `view` 子节点。
+   */
+  title?: ReactNode
   /**
    * 标题位置：
    * - `start`（默认）紧贴返回钮右侧（稿 `.navbar.has-back .navtitle{left:56px}`）；
@@ -28,9 +34,9 @@ type NavBarProps = {
    * 默认（不传）保持原来的**透明漂浮**形态 —— 只有返回钮/动作钮是实体、其余区域可穿透，
    * 压在页头渐变上；另有 10 个页面在用这个形态，不能改。
    *
-   * 面交页内容比一屏长（商品卡 + 交易码 + 安全提示 + 操作栏），透明漂浮的返回钮会随
-   * 页面滚走，所以要这个变体把返回钮与标题**钉住**，并给一条玻璃底，让滚过去的内容
-   * 从底下透出来（数值与 `components/top-bar` 的 `.topbar--glass` 同一套材质）。
+   * 长页面（面交页、他人主页）的内容会从透明返回钮底下滚过去，这个变体把返回钮与
+   * 标题**钉住**，并给一条玻璃底，让滚过去的内容从底下透出来
+   * （数值与 `components/top-bar` 的 `.topbar--glass` 同一套材质）。
    */
   glass?: boolean
   /** 返回钮右侧的自定义动作区 */
@@ -78,6 +84,8 @@ export default function NavBar({
    */
   const centerTitleStyle = titleAlign === 'center' ? { top: `${statusBarHeight}px` } : undefined
 
+  const titleClass = `navfloat__title${titleAlign === 'center' ? ' navfloat__title--center' : ''}`
+
   return (
     <View
       className={`navfloat${glass ? ' navfloat--glass' : ''}`}
@@ -91,12 +99,15 @@ export default function NavBar({
         <View className="navfloat__spacer" />
       )}
       {title ? (
-        <Text
-          className={`navfloat__title${titleAlign === 'center' ? ' navfloat__title--center' : ''}`}
-          style={centerTitleStyle}
-        >
-          {title}
-        </Text>
+        typeof title === 'string' ? (
+          <Text className={titleClass} style={centerTitleStyle}>
+            {title}
+          </Text>
+        ) : (
+          <View className={titleClass} style={centerTitleStyle}>
+            {title}
+          </View>
+        )
       ) : null}
       {actions ? <View className="navfloat__actions">{actions}</View> : null}
     </View>

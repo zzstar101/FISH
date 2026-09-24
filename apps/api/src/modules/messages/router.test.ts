@@ -39,7 +39,9 @@ function buildApp(overrides: Partial<MessageService> = {}) {
 
 describe('messages router', () => {
   test('GET /:id/messages returns the ascending page', async () => {
-    const response = await buildApp().request('/conversations/abc/messages')
+    const response = await buildApp().request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+    )
     expect(response.status).toBe(200)
     const body = (await response.json()) as { items: MessageDto[]; nextCursor: string | null }
     expect(body.items).toHaveLength(1)
@@ -52,7 +54,9 @@ describe('messages router', () => {
         throw new MessageServiceError(422, 'VALIDATION_FAILED', '游标不合法')
       },
     })
-    const response = await app.request('/conversations/abc/messages')
+    const response = await app.request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+    )
     expect(response.status).toBe(422)
     expect(await response.json()).toEqual({
       error: { code: 'VALIDATION_FAILED', message: '游标不合法' },
@@ -60,22 +64,64 @@ describe('messages router', () => {
   })
 
   test('POST /:id/messages returns 201 with the created message', async () => {
-    const response = await buildApp().request('/conversations/abc/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: '还在吗' }),
-    })
+    const response = await buildApp().request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: '还在吗' }),
+      },
+    )
     expect(response.status).toBe(201)
     expect(await response.json()).toEqual(message)
   })
 
   test('POST /:id/messages rejects a whitespace-only body with 422', async () => {
-    const response = await buildApp().request('/conversations/abc/messages', {
+    const response = await buildApp().request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: '   ' }),
+      },
+    )
+    expect(response.status).toBe(422)
+  })
+
+  test('GET /:id/messages rejects a malformed conversation id before the service', async () => {
+    let called = false
+    const app = buildApp({
+      listMessages: async () => {
+        called = true
+        return { items: [], nextCursor: null }
+      },
+    })
+    const response = await app.request('/conversations/not-a-uuid/messages')
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: { code: 'CONVERSATION_NOT_FOUND', message: '会话不存在' },
+    })
+    expect(called).toBe(false)
+  })
+
+  test('POST /:id/messages rejects a malformed conversation id before the service', async () => {
+    let called = false
+    const app = buildApp({
+      sendTextMessage: async () => {
+        called = true
+        return message
+      },
+    })
+    const response = await app.request('/conversations/not-a-uuid/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: '   ' }),
+      body: JSON.stringify({ content: 'hi' }),
     })
-    expect(response.status).toBe(422)
+    expect(response.status).toBe(404)
+    expect(await response.json()).toEqual({
+      error: { code: 'CONVERSATION_NOT_FOUND', message: '会话不存在' },
+    })
+    expect(called).toBe(false)
   })
 
   test('POST /:id/messages maps 404 CONVERSATION_NOT_FOUND from the service', async () => {
@@ -84,11 +130,14 @@ describe('messages router', () => {
         throw new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
       },
     })
-    const response = await app.request('/conversations/abc/messages', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'hi' }),
-    })
+    const response = await app.request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'hi' }),
+      },
+    )
     expect(response.status).toBe(404)
   })
 })
