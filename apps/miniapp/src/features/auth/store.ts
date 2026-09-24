@@ -18,7 +18,7 @@ import type { Me } from '@fish/contracts/auth/user'
 import { useSyncExternalStore } from 'react'
 import { ApiError, isUnauthenticatedError } from '@/lib/request'
 import { clearSession, onSessionCleared, readSession } from '@/lib/session'
-import { fetchMe, login, logout, register } from './api'
+import { fetchMe, login, logout, register, wechatSignIn } from './api'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from './demo'
 
 export type AuthStatus = 'unknown' | 'anonymous' | 'authed'
@@ -163,6 +163,21 @@ export async function signIn(input: LoginRequest): Promise<Me> {
 /** 注册即登录：契约里注册响应与 `/me` 同构 */
 export async function signUp(input: RegisterRequest): Promise<Me> {
   const user = await register(input)
+  assertSessionStored()
+  emit({ status: 'authed', user })
+  return user
+}
+
+/**
+ * 微信一键登录（#86 A 节）：`code` 由调用方用 `Taro.login()` 取（页面持有平台 API，
+ * store 不碰 Taro，保持可在 bun 测试里直接 import）。
+ *
+ * 只有一次性 code 过界：openid / session_key 既不上报也不接收，服务端是唯一与微信
+ * 换凭证的一方（契约见 `packages/contracts/src/auth/wechat.ts`）。
+ * 与 `signIn()` 同样先确认会话落盘再广播，避免「登录成功又立刻掉线」。
+ */
+export async function signInWithWechat(code: string): Promise<Me> {
+  const user = await wechatSignIn(code)
   assertSessionStored()
   emit({ status: 'authed', user })
   return user

@@ -1,7 +1,8 @@
 /**
- * 认证域 API（登录 / 注册 / 当前用户 / 退出）。
+ * 认证域 API（微信登录 / 登录 / 注册 / 当前用户 / 退出）。
  *
- * 契约是「学号 + 密码 + 会话 cookie」（`packages/contracts/src/auth/session.ts`），
+ * 契约是「微信 code → 会话」（`packages/contracts/src/auth/wechat.ts`，主身份）与
+ * 「学号 + 密码 + 会话 cookie」（`packages/contracts/src/auth/session.ts`，过渡期保留），
  * 不是「手机号 + 验证码」。cookie 的存取由 `@/lib/session` 负责，
  * `apiRequest` 已在响应里接住 `Set-Cookie`，调用方不用管。
  *
@@ -14,6 +15,7 @@ import {
   type RegisterRequest,
 } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
+import { WechatSessionResponseSchema } from '@fish/contracts/auth/wechat'
 import { apiRequest } from '@/lib/request'
 
 /** 登录成功返回当前用户；会话 cookie 由 `apiRequest` 落盘 */
@@ -42,4 +44,17 @@ export async function fetchMe(): Promise<Me> {
 /** 退出：后端清会话（204）。本地会话由 `signOut()` 负责清 */
 export async function logout(): Promise<void> {
   await apiRequest('/auth/logout', { method: 'POST' })
+}
+
+/**
+ * 微信一键登录（#86 A 节）：只上报 `wx.login()` 的一次性 code，换 FISH 会话。
+ *
+ * 契约冻结（`packages/contracts/src/auth/wechat.ts`）：客户端**不上报也不接收** openid /
+ * session_key，服务端是唯一与微信换凭证的一方；同一微信用户重复登录映射到同一账号。
+ * 错误码原样透出由页面翻译：503 `WECHAT_DISABLED`（后端未开通）与
+ * 401 `WECHAT_CODE_INVALID`（code 无效/过期）在登录页给不同文案。
+ */
+export async function wechatSignIn(code: string): Promise<Me> {
+  const payload = await apiRequest('/auth/wechat/session', { method: 'POST', body: { code } })
+  return WechatSessionResponseSchema.parse(payload).user
 }

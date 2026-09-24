@@ -405,7 +405,8 @@ export default function Profile() {
               className="profile__guest-btn"
               onClick={() => void Taro.navigateTo({ url: '/pages/login/index' })}
             >
-              <Text>登录 / 注册</Text>
+              {/* 登录页只剩微信一条路，没有「注册」这个独立动作可点了（#198 审查 P2-2） */}
+              <Text>去登录</Text>
             </View>
           </View>
           {settingsPanel(false)}
