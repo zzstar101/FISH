@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
  * 「真实有未读却不亮」或「没有未读却亮着幽灵红点」。
  *
  * 现在冷启动两项都走真实接口：`GET /notifications/unread-count` 与
- * `GET /conversations` 求和（`fetchConversationUnreadCount`，这里被顶替）。
+ * `GET /conversations/unread-count` 聚合（`fetchConversationUnreadCount`，这里被顶替）。
  * **真实构建下接口失败就发「不知道」，绝不回退 fixture**。
  *
  * 用 `mock.module` 顶替 API 层（与 `signature.test.ts` 顶替 Taro 同一手法）。
@@ -23,8 +23,14 @@ mock.module('@/features/chat/api', () => ({
   fetchConversationUnreadCount: () => convResult(),
 }))
 
-const { badgeShouldLight, clearUnread, hydrateUnread, publishUnread, unreadSnapshot } =
-  await import('../src/features/chat/unread')
+const {
+  badgeShouldLight,
+  clearUnread,
+  hydrateUnread,
+  publishUnread,
+  refreshUnread,
+  unreadSnapshot,
+} = await import('../src/features/chat/unread')
 
 /** store 是模块级单例：每个用例前把内部快照清掉，避免互相污染 */
 beforeEach(() => {
@@ -150,6 +156,78 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.ownerId).toBe('u-b')
     expect(unreadSnapshot()?.notifications).toBe(5)
     expect(unreadSnapshot()?.conversations).toBe(2)
+  })
+})
+
+describe('未读快照 · 返回前台强制刷新（#67 第三步）', () => {
+  /*
+    底栏的冷启动补数只在「本次账号还没有快照」时取一次。小程序是长驻进程：退到后台
+    再回来时实例还活着、快照还在，于是底栏会一直停在离开前的数字上 —— 这期间对方
+    发来的消息它一无所知，红点也不亮。`refreshUnread` 就是给 `Taro.onAppShow` 用的
+    「不管有没有快照，都重取一次」。
+  */
+  test('已有本次账号快照时仍然重取（hydrate 会短路，refresh 不会）', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.resolve(4)
+
+    publishUnread({ ownerId: 'u-alan', conversations: 5, notifications: 0 })
+
+    // 冷启动那条路：有快照就短路，页面上的权威值原样保留
+    hydrateUnread('u-alan')
+    await flush()
+    expect(unreadSnapshot()?.conversations).toBe(5)
+    expect(unreadSnapshot()?.notifications).toBe(0)
+
+    // 返回前台：这次必须真的重取，把离开期间新增的未读带回来
+    refreshUnread('u-alan')
+    await flush()
+    expect(unreadSnapshot()?.conversations).toBe(4)
+    expect(unreadSnapshot()?.notifications).toBe(3)
+  })
+
+  test('刷新失败按真实构建口径记「不知道」，不把总数清成 0', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.reject(new Error('network down'))
+
+    publishUnread({ ownerId: 'u-alan', conversations: 5, notifications: 0 })
+
+    refreshUnread('u-alan')
+    await flush()
+
+    // 会话那项变「不知道」（底栏保持上一帧的红点，不会误熄），通知那项仍是真值
+    expect(unreadSnapshot()?.conversations).toBeNull()
+    expect(unreadSnapshot()?.notifications).toBe(3)
+  })
+
+  test('演示 / 开发构建：刷新失败的那一项退回注入的兜底', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.reject(new Error('network down'))
+
+    refreshUnread('u-alan', () => ({ conversations: 9, notifications: 99 }))
+    await flush()
+
+    expect(unreadSnapshot()?.conversations).toBe(9)
+    expect(unreadSnapshot()?.notifications).toBe(3)
+  })
+
+  test('换账号后旧账号的迟到刷新不覆盖新账号快照', async () => {
+    let resolveOld: (value: number) => void = () => {}
+    convResult = () =>
+      new Promise<number>((resolve) => {
+        resolveOld = resolve
+      })
+    notifResult = () => Promise.resolve(3)
+
+    refreshUnread('u-a')
+    await flush()
+
+    publishUnread({ ownerId: 'u-b', conversations: 1, notifications: 1 })
+
+    resolveOld(7)
+    await flush()
+
+    expect(unreadSnapshot()?.ownerId).toBe('u-b')
+    expect(unreadSnapshot()?.conversations).toBe(1)
   })
 })
 

@@ -8,11 +8,17 @@ import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
-import { markConversationRead } from '@/features/chat/api'
+import { fetchConversationUnreadCount, markConversationRead } from '@/features/chat/api'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
 import type { MockNotification } from '@/mock/types'
-import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
+import {
+  badgeText,
+  chatListState,
+  conversationTimeLabel,
+  previewOf,
+  refreshConversationWindow,
+} from './list-view'
 import './index.scss'
 
 /**
@@ -81,6 +87,14 @@ export default function Chat() {
   const [loadingMore, setLoadingMore] = useState(false)
   /** 加载更多失败：只在尾部提示重试，不推翻已经看到的列表 */
   const [loadMoreFailed, setLoadMoreFailed] = useState(false)
+  /**
+   * 服务端聚合的会话未读总数（`GET /conversations/unread-count`，#67）。
+   *
+   * 底栏那颗点要的是**全部**会话的和，而这里只加载了第一页 —— 所以不能对 `items`
+   * 求和（会话超过一页时底栏会比真实值小，验收②就是这个场景）。`null` = 还没拿到 /
+   * 请求失败，发布处退回本页求和（同一屏的真实值，是下界），但绝不发 0。
+   */
+  const [unreadTotal, setUnreadTotal] = useState<number | null>(null)
   const [filter, setFilter] = useState<ChatFilter>('all')
   const [showTop, setShowTop] = useState(false)
 
@@ -105,6 +119,19 @@ export default function Chat() {
    */
   const listEpoch = useRef(0)
   const notifEpoch = useRef(0)
+  /**
+   * 未读总数的代次：与上面两条分开。三条请求会同时飞（整页重载 + 通知列表 +
+   * 未读聚合），共用一个代次的话后发的那次会把先到的响应判成过期丢掉。
+   */
+  const unreadEpoch = useRef(0)
+  /**
+   * 屏幕上已经加载出来的会话条数（渲染期同步）：从会话页返回时按它决定「重取几页」，
+   * 才能既刷新内容、又留住分页深度（见 `refreshConversations`）。
+   *
+   * 走 ref 而不是直接闭包 `items`：`useDidShow` 的回调只注册一次，闭包会读到旧值
+   * （与下方 `authedRef` 同一原因）。
+   */
+  const loadedCountRef = useRef(0)
 
   /**
    * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
@@ -122,6 +149,7 @@ export default function Chat() {
     // 不能放进 effect —— 那之间夹着微任务窗口，上一个账号的响应会写进刚清空的 state
     listEpoch.current += 1
     notifEpoch.current += 1
+    unreadEpoch.current += 1
     setFilter('all')
     setItems([])
     setReady(false)
@@ -129,25 +157,48 @@ export default function Chat() {
     setListNextCursor(null)
     setLoadingMore(false)
     setLoadMoreFailed(false)
+    setUnreadTotal(null)
     setNotifs([])
     setNotifsReady(false)
     setNotifsFailed(false)
     setNotifsViewed(false)
   }
+  // 每帧把已加载条数同步给 ref（见上方注释）：返回刷新按它决定重取几页
+  loadedCountRef.current = items.length
 
   /**
-   * 会话列表加载。重试钮、进页、以及从会话页返回（`useDidShow`）都走这里。
+   * 会话列表加载。进页、换账号与错误态重试都走这里。
    *
    * 失败即清屏并进错误态（与首页 `applyLoadResult` 同一口径）：把上一批会话留在
    * 屏幕上会让人以为「刷新过了，就这几条」。
+   *
+   * 从会话页返回**不走这里**（那会把列表打回第一页）——见 `refreshConversations`。
    */
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
+    const unreadToken = ++unreadEpoch.current
     setLoadingMore(false)
     // 整页重载必须把「加载更多」的失败标记一起清掉：否则一次失败之后，任何一次
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
     // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
     setLoadMoreFailed(false)
+    /**
+     * 未读总数走服务端聚合（#67），与列表**并行**取。
+     *
+     * 与列表同生共死：进页、从会话页返回（`useDidShow`，即「已读变化后」）、错误态
+     * 重试都经由这里，所以放在同一个函数里，不会出现「列表刷新了、底栏还停在旧数」。
+     * 失败只把结果置 `null`（「不知道」），发布处退回本页求和 —— 不能清成 0。
+     */
+    void fetchConversationUnreadCount()
+      .then((total) => {
+        if (unreadToken !== unreadEpoch.current) return
+        setUnreadTotal(total)
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 未读总数加载异常', error)
+        if (unreadToken !== unreadEpoch.current) return
+        setUnreadTotal(null)
+      })
     void loadConversations()
       .then(({ items: list, nextCursor: cursor, failed: nextFailed }) => {
         if (epoch !== listEpoch.current) return
@@ -160,6 +211,64 @@ export default function Chat() {
         // 取数层自己吞了接口失败，这里兜的是「回退 mock 的动态 import 也失败」：
         // 少了这个 catch，ready 会永远为 false —— 页面既没有错误态、也没有重试钮
         console.warn('[miniapp] 会话列表加载异常', error)
+        if (epoch !== listEpoch.current) return
+        setItems([])
+        setListNextCursor(null)
+        setFailed(true)
+        setReady(true)
+      })
+  }, [])
+
+  /**
+   * 从会话页返回时的刷新（#67 第三步）：**重取已经加载过的那几页**，而不是打回第一页。
+   *
+   * `reloadConversations` 是整页重载 —— 它把列表换回第一页，用户刚翻到的位置与滚动
+   * 深度一起丢掉。这里按当前分页深度重取同一个窗口（`refreshConversationWindow`，
+   * 纯函数 + 用例），成功时**原位替换**：刚聊完的那条带着新的 `lastMessage` / 清零的
+   * 角标回到它该在的位置，更早的页面还在原处。
+   *
+   * 未读总数与 `reloadConversations` 同口径、并行取：底栏要的是**全部**会话的和，
+   * 「已读变化后更新」靠它，不靠列表本身。
+   *
+   * 失败口径见 `refreshConversationWindow` 的三种结局：第一页就没拿到 → 清屏进错误态
+   * （沿用「不允许把上一批会话留在屏幕上冒充刷新结果」）；后续页失败 → 保留已经刷新的
+   * 前几页，只把尾部标成「更早的会话没加载出来」，不推翻已经看到的列表。
+   */
+  const refreshConversations = useCallback(() => {
+    const epoch = ++listEpoch.current
+    const unreadToken = ++unreadEpoch.current
+    setLoadingMore(false)
+    setLoadMoreFailed(false)
+    void fetchConversationUnreadCount()
+      .then((total) => {
+        if (unreadToken !== unreadEpoch.current) return
+        setUnreadTotal(total)
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 未读总数加载异常', error)
+        if (unreadToken !== unreadEpoch.current) return
+        setUnreadTotal(null)
+      })
+    void refreshConversationWindow((cursor) => loadConversations(cursor), loadedCountRef.current)
+      .then((refreshed) => {
+        if (epoch !== listEpoch.current) return
+        if (refreshed.kind === 'first-page-failed') {
+          setItems([])
+          setListNextCursor(null)
+          setFailed(true)
+          setReady(true)
+          return
+        }
+        setItems(refreshed.items)
+        setListNextCursor(refreshed.nextCursor)
+        // 前几页已经刷新成功：只把尾部标成失败，不推翻刷到的内容
+        setLoadMoreFailed(refreshed.kind === 'tail-failed')
+        setFailed(false)
+        setReady(true)
+      })
+      .catch((error) => {
+        // 与 reloadConversations 同一兜法：取数层的动态 import 失败会让 promise 真的 reject
+        console.warn('[miniapp] 会话列表刷新异常', error)
         if (epoch !== listEpoch.current) return
         setItems([])
         setListNextCursor(null)
@@ -246,8 +355,12 @@ export default function Chat() {
   }, [authStatus, authedUser, reloadConversations, loadNotifs])
 
   /**
-   * 从会话页返回时重拉：那边进页会把自己的未读清零，列表要跟着更新，
+   * 从会话页返回时刷新：那边进页会把自己的未读清零，列表要跟着更新，
    * 否则刚聊完回来角标还挂在原处。
+   *
+   * 走 `refreshConversations`（重取已加载的那几页）而不是 `reloadConversations`
+   * （整页重载回第一页）：返回是最高频的一次刷新，把用户刚翻到的位置打回第一页
+   * 是明显的体验倒退，而这次刷新的目的只是让内容变新，不是换一批数据。
    *
    * 首次 show 跳过 —— 那次由上面的登录态 effect 负责（冷启动时 `authStatus` 可能
    * 还是 `unknown`，由它负责时点才准确），不跳过就会刚进页打两次。
@@ -262,7 +375,7 @@ export default function Chat() {
       return
     }
     if (!authedRef.current) return
-    reloadConversations()
+    refreshConversations()
   })
 
   /** 1版稿 .totop：滚过一屏半后浮现 */
@@ -292,8 +405,12 @@ export default function Chat() {
   const unreadItems = useMemo(() => items.filter((item) => item.unreadCount > 0), [items])
 
   /**
-   * 会话未读条数和：底栏「消息」红点的会话部分。真实数据里没有「系统会话」
-   * （契约的会话就是买卖双方一对一），所以直接全量求和，不需要排除项。
+   * 本页会话的未读条数和：**只是回退值**。底栏的会话分量以 `unreadTotal`
+   * （服务端聚合，覆盖全部会话）为准。真实数据里没有「系统会话」（契约的会话
+   * 就是买卖双方一对一），所以直接求和，不需要排除项。
+   *
+   * 留着它是因为两种情况下它仍然有用：聚合请求失败（弱网）与演示构建
+   * （本地没有后端，列表来自 fixture）。它是下界，不是「不知道当成 0」。
    */
   const conversationUnread = useMemo(
     () => items.reduce((sum, item) => sum + item.unreadCount, 0),
@@ -307,12 +424,15 @@ export default function Chat() {
    * `null`，底栏按「无已知未读」算 —— 与页内同口径。会话这一项尤其不要发 0：
    * 没读到却发 0 会把上一份正确的快照覆盖掉，用户明明还有未读，那颗点却熄了。
    * 未登录不发（登出 / 换账号的清空在身份 effect）。
+   *
+   * 会话分量优先用服务端聚合（`unreadTotal`，覆盖全部会话），拿不到才退回本页求和
+   * —— 本页只加载了第一页，求和是下界（#67 验收②）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || !identity) return
     publishUnread({
       ownerId: identity,
-      conversations: ready && !failed ? conversationUnread : null,
+      conversations: ready && !failed ? (unreadTotal ?? conversationUnread) : null,
       notifications: notifsReady && !notifsFailed ? unreadNotifications : null,
     })
   }, [
@@ -322,6 +442,7 @@ export default function Chat() {
     failed,
     notifsReady,
     notifsFailed,
+    unreadTotal,
     conversationUnread,
     unreadNotifications,
   ])

@@ -87,6 +87,17 @@ function subscribe(listener: () => void): () => void {
 let latestOwner: string | null = null
 
 /**
+ * 快照的发布代次：`publishUnread` 每真的改动一次快照就自增。
+ *
+ * 取数（`fetchUnread`）在发起时记下代次，回来时代次变了就说明**途中有人发布过更新的
+ * 值**（消息页的权威快照，或另一次刷新）—— 那份比这份新，不能盖回去。
+ *
+ * 判据不能写成「已经有同账号快照就不发布」：那样 `refreshUnread` 永远无效，
+ * 而它要覆盖的恰恰是已经存在的那份旧快照（返回前台时数字可能已经过期）。
+ */
+let publishSeq = 0
+
+/**
  * Chat 页发布最新未读快照。值没变就不广播，避免列表重渲染触发无谓的红点重算。
  */
 export function publishUnread(next: UnreadSnapshot): void {
@@ -101,6 +112,7 @@ export function publishUnread(next: UnreadSnapshot): void {
     return
   }
   snapshot = next
+  publishSeq += 1
   for (const listener of listeners) listener()
 }
 
@@ -135,7 +147,8 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
 }
 
 /**
- * 冷启动补一次未读快照（底栏在「已登录 + 还没有本次账号的快照」时调用）。
+ * 冷启动补一次未读快照（底栏在「已登录 + 还没有本次账号的快照」时调用）；
+ * 返回前台时改用 `refreshUnread` 强制重取，见它的注释。
  *
  * 为什么需要（#129 review 第二条 P1）：底栏在**每个 Tab 页**都渲染，用户完全可能
  * 一次都不进消息页；那时没人 `publishUnread`，快照为 `null`，底栏只能拿 mock fixture
@@ -143,8 +156,8 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 「没有未读却亮着幽灵红点」都会发生。
  *
  * 通知数走**真实** `GET /notifications/unread-count`；会话数走**真实**
- * `GET /conversations` 求和（`fetchConversationUnreadCount`，实现它是因为 #89 明写
- * 「接 `GET /conversations` 时必须一并收口会话未读这一分量」）。失败时：
+ * `GET /conversations/unread-count` 聚合（`fetchConversationUnreadCount`）——
+ * 它不再对第一页会话求和，所以会话数超过一页时底栏也不会漏计（#67）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
  * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
@@ -157,24 +170,23 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  */
 const hydrating = new Set<string>()
 
-export function hydrateUnread(
+/** 真正取一次数并发布。调用方（`hydrateUnread` / `refreshUnread`）决定「要不要取」。 */
+function fetchUnread(
   ownerId: string,
   demoFallback?: () => { conversations: number; notifications: number },
 ): void {
-  // 记录「当前该为谁补数」：即使下面因为已有同账号快照而提前返回，也说明这个账号是当前的
-  latestOwner = ownerId
-  // 本次账号已经有快照（比如刚进过消息页）：那是含会话未读的权威值，不用补
-  if (snapshot && snapshot.ownerId === ownerId) return
   if (hydrating.has(ownerId)) return
   hydrating.add(ownerId)
+  // 发起时的发布代次：回来时若已变，说明途中有更新的值落地（见 `publishSeq`）
+  const seq = publishSeq
   void Promise.all([
     fetchUnreadNotificationCount().catch(() => null),
     fetchConversationUnreadCount().catch(() => null),
   ])
     .then(([notifications, conversations]) => {
       hydrating.delete(ownerId)
-      // 期间消息页可能已经发布了权威快照（含会话未读），别用这份补数盖回去
-      if (snapshot && snapshot.ownerId === ownerId) return
+      // 途中有人发布过快照（消息页的权威值 / 另一次刷新）：那份比这份新，别盖回去
+      if (publishSeq !== seq) return
       // 期间又为别的账号补过数：这份结果属于旧账号，丢掉（否则会把新账号的红点写回旧账号）
       if (latestOwner !== ownerId) return
       // 两项只要有一项没拿到，就走演示兜底；真实构建下兜底是 undefined
@@ -191,4 +203,32 @@ export function hydrateUnread(
     .catch(() => {
       hydrating.delete(ownerId)
     })
+}
+
+export function hydrateUnread(
+  ownerId: string,
+  demoFallback?: () => { conversations: number; notifications: number },
+): void {
+  // 记录「当前该为谁补数」：即使下面因为已有同账号快照而提前返回，也说明这个账号是当前的
+  latestOwner = ownerId
+  // 本次账号已经有快照（比如刚进过消息页）：那是含会话未读的权威值，不用补
+  if (snapshot && snapshot.ownerId === ownerId) return
+  fetchUnread(ownerId, demoFallback)
+}
+
+/**
+ * 强制重取一次（返回前台时由底栏调用）。
+ *
+ * 与 `hydrateUnread` 的唯一区别是**不因为已有同账号快照就短路**：快照在，但它的数值
+ * 可能已经过期 —— 用户离开小程序期间对方发了消息，而冷启动那条路径只在「还没有快照」
+ * 时才取数，不重取的话底栏会一直停在离开前的数字上。
+ *
+ * 「不知道」的语义不变：取不到仍发 `null`，底栏保持上一帧而不是把红点熄灭。
+ */
+export function refreshUnread(
+  ownerId: string,
+  demoFallback?: () => { conversations: number; notifications: number },
+): void {
+  latestOwner = ownerId
+  fetchUnread(ownerId, demoFallback)
 }

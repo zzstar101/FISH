@@ -6,6 +6,7 @@ import {
   conversationTimeLabel,
   EMPTY_PREVIEW,
   previewOf,
+  refreshConversationWindow,
 } from '../src/pages/chat/list-view'
 
 /**
@@ -152,5 +153,103 @@ describe('conversationTimeLabel —— 会话行时间文案', () => {
 
   test('解析不了的 ISO → 空串（不显示 NaN）', () => {
     expect(conversationTimeLabel('not-a-date', NOW)).toBe('')
+  })
+})
+
+/**
+ * 从会话页返回时的刷新窗口（#67 第三步）。
+ *
+ * 锁的是「刷新把用户翻到的位置弄丢」这一类缺陷：只重取第一页（窗口缩水）、
+ * 已到底还继续空转、第一页失败与后续页失败被当成同一回事。
+ */
+describe('refreshConversationWindow', () => {
+  /** 造一页 50 条（真实分页大小）；游标就是页码，便于断言请求序列 */
+  function page(n: number, nextCursor: string | null) {
+    return {
+      items: Array.from({ length: 50 }, (_, i) => dto({ id: `p${n}-${i}` })),
+      nextCursor,
+      failed: false,
+    }
+  }
+
+  test('只加载了第一页：只重取第一页，不多发请求', async () => {
+    const asked: (string | undefined)[] = []
+    const result = await refreshConversationWindow(async (cursor) => {
+      asked.push(cursor)
+      return page(1, 'c1')
+    }, 50)
+    expect(asked).toEqual([undefined])
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') return
+    expect(result.items).toHaveLength(50)
+    expect(result.nextCursor).toBe('c1')
+  })
+
+  test('翻到第 3 页（120 条）：重取 3 页，窗口不缩水，游标接着第 3 页', async () => {
+    const asked: (string | undefined)[] = []
+    const result = await refreshConversationWindow(async (cursor) => {
+      asked.push(cursor)
+      if (!cursor) return page(1, 'c1')
+      if (cursor === 'c1') return page(2, 'c2')
+      return page(3, 'c3')
+    }, 120)
+    expect(asked).toEqual([undefined, 'c1', 'c2'])
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') return
+    expect(result.items).toHaveLength(150)
+    expect(result.items[0]?.id).toBe('p1-0')
+    expect(result.items[149]?.id).toBe('p3-49')
+    expect(result.nextCursor).toBe('c3')
+  })
+
+  test('刚好一页多一点（51 条）也要取第二页，否则返回时少一条', async () => {
+    const asked: (string | undefined)[] = []
+    await refreshConversationWindow(async (cursor) => {
+      asked.push(cursor)
+      return cursor ? page(2, 'c2') : page(1, 'c1')
+    }, 51)
+    expect(asked).toEqual([undefined, 'c1'])
+  })
+
+  test('空列表（0 条）仍要拿到最新的第一页', async () => {
+    const asked: (string | undefined)[] = []
+    const result = await refreshConversationWindow(async (cursor) => {
+      asked.push(cursor)
+      return page(1, 'c1')
+    }, 0)
+    expect(asked).toEqual([undefined])
+    expect(result.kind).toBe('ok')
+  })
+
+  test('服务端已经到底：取完就停，不空转', async () => {
+    const asked: (string | undefined)[] = []
+    const result = await refreshConversationWindow(async (cursor) => {
+      asked.push(cursor)
+      return page(1, null)
+    }, 500)
+    expect(asked).toEqual([undefined])
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') return
+    expect(result.nextCursor).toBeNull()
+  })
+
+  test('第一页失败 → first-page-failed（调用方清屏进错误态）', async () => {
+    const result = await refreshConversationWindow(
+      async () => ({ items: [], nextCursor: null, failed: true }),
+      50,
+    )
+    expect(result).toEqual({ kind: 'first-page-failed' })
+  })
+
+  test('第二页失败 → tail-failed：保留已刷新的第一页，游标停在失败那一页', async () => {
+    const result = await refreshConversationWindow(async (cursor) => {
+      if (!cursor) return page(1, 'c1')
+      return { items: [], nextCursor: null, failed: true }
+    }, 120)
+    expect(result.kind).toBe('tail-failed')
+    if (result.kind !== 'tail-failed') return
+    expect(result.items).toHaveLength(50)
+    expect(result.items[0]?.id).toBe('p1-0')
+    expect(result.nextCursor).toBe('c1')
   })
 })
