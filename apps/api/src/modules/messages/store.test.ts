@@ -159,6 +159,28 @@ describe('messages store (integration)', () => {
     expect(row.count).toBe(1)
   })
 
+  test('并发重放同一幂等键：advisory lock 串行化，只落一行且都拿到同一条消息', async () => {
+    const key = messageSendKey('01990000-0000-7000-8000-0000000000e3', textRequestHash('并发重试'))
+    if (!key) throw new Error('unreachable')
+
+    // 8 个并发请求 = 「同一瞬间重试了 8 次」。没有事务级 advisory lock 时它们会同时
+    // 查不到既有行、各自 INSERT：一个赢，其余撞 (sender, conversation, client_request_id)
+    // 的部分唯一索引 → 23505 → 500。锁把「查重 + 插入」压成串行，全部重放同一条。
+    const rows = await Promise.all(
+      Array.from({ length: 8 }, () => store.insertText(conversationA, buyer, '并发重试', key)),
+    )
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND client_request_id = ${key.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
   test('insertText 同一键携带不同内容 → MessageIdempotencyConflictError', async () => {
     const clientRequestId = '01990000-0000-7000-8000-0000000000e2'
     await store.insertText(

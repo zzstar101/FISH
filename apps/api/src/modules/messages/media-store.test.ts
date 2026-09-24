@@ -55,6 +55,9 @@ const imageFor = (suffix: string): MediaMessageInput => ({
 /**
  * 这里覆盖的是**真实 SQL**（`mediaByRequestQuery` / 媒体侧 advisory lock / 部分唯一索引）：
  * media-service.test.ts 全程用假 store，够不到这一层。
+ *
+ * advisory lock 由下面的两条并发用例真正锁住：把 `media-store.ts` 事务里的
+ * `sendKeyLockQuery` 删掉，它们会因 23505 变红（顺序重放用例对锁没有区分力）。
  */
 async function countByRequestId(clientRequestId: string, table: 'messages' | 'message_media') {
   const result = await db.execute(
@@ -171,6 +174,53 @@ describe('media message store (integration)', () => {
       MessageIdempotencyConflictError,
     )
     expect(await countByRequestId(clientRequestId, 'messages')).toBe(1)
+  })
+
+  test('并发同键同内容：advisory lock 串行化，只落一行且都拿到同一个 message_id', async () => {
+    const clientRequestId = '01991000-0000-7000-8000-0000000000e5'
+    const image = imageFor('e5')
+    const key = messageSendKey(clientRequestId, mediaRequestHash(image))
+    if (!key) throw new Error('unreachable')
+
+    // 8 个并发重试。去掉事务里的 advisory lock 后它们会各自查空、各自 INSERT：
+    // 只有一个赢，其余撞 messages_sender_conversation_client_request_uq(23505)。
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => mediaStore.create(conversationA, buyer, image, key)),
+    )
+
+    expect(new Set(results.map((row) => row.message_id)).size).toBe(1)
+    expect(await countByRequestId(clientRequestId, 'messages')).toBe(1)
+    expect(await countByRequestId(clientRequestId, 'message_media')).toBe(1)
+  })
+
+  test('并发同键不同内容：一组重放、另一组冲突，仍然只落一行', async () => {
+    const clientRequestId = '01991000-0000-7000-8000-0000000000e6'
+    const image = imageFor('e6')
+    const other = imageFor('e6-other')
+    const keyA = messageSendKey(clientRequestId, mediaRequestHash(image))
+    const keyB = messageSendKey(clientRequestId, mediaRequestHash(other))
+    if (!keyA || !keyB) throw new Error('unreachable')
+
+    const settled = await Promise.allSettled([
+      ...Array.from({ length: 4 }, () => mediaStore.create(conversationA, buyer, image, keyA)),
+      ...Array.from({ length: 4 }, () => mediaStore.create(conversationA, buyer, other, keyB)),
+    ])
+
+    // 锁把并发压成串行：先到的那份内容落库，它的 4 次全部重放同一条；
+    // 另一份内容的 4 次全部 409 —— 不会出现「各赢几条」。
+    const fulfilled = settled.filter((item) => item.status === 'fulfilled')
+    const rejected = settled.filter((item) => item.status === 'rejected')
+    expect(fulfilled).toHaveLength(4)
+    expect(rejected).toHaveLength(4)
+    const messageIds = fulfilled.map(
+      (item) => (item as PromiseFulfilledResult<{ message_id: string }>).value.message_id,
+    )
+    expect(new Set(messageIds).size).toBe(1)
+    for (const item of rejected) {
+      expect((item as PromiseRejectedResult).reason).toBeInstanceOf(MessageIdempotencyConflictError)
+    }
+    expect(await countByRequestId(clientRequestId, 'messages')).toBe(1)
+    expect(await countByRequestId(clientRequestId, 'message_media')).toBe(1)
   })
 
   test('反序：先 MEDIA 后 TEXT 的同一 clientRequestId 同样冲突', async () => {
