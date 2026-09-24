@@ -333,7 +333,9 @@ export default function Profile() {
     // 订单页已按视角拆成两页：卖出 / 买入 各落对应那页
     { key: 'sold', label: '卖出', icon: ICONS.profileSold, url: '/pages/orders-sell/index' },
     { key: 'bought', label: '买入', icon: ICONS.profileBought, url: '/pages/orders-buy/index' },
-    { key: 'review', label: '评价', icon: ICONS.profileReview },
+    // 「评价」= 我发过的评论（商品留言 + 交易评价）。该页没有聚合端点：
+    // 真实构建下是空态 + 缺口说明，见 pages/comments 的文件头。
+    { key: 'review', label: '评价', icon: ICONS.profileReview, url: '/pages/comments/index' },
   ]
 
   /**
