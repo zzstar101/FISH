@@ -82,6 +82,12 @@ describe('sellFieldErrorsFromDetails —— 服务端字段级错误落位', () 
     expect(sellFieldErrorsFromDetails([{ field: 'sellerId', message: 'x' }])).toEqual({})
   })
 
+  test('category 与分类选择区同名，必须落位（AI 润色的 422 恰好只有 title / description / category）', () => {
+    expect(sellFieldErrorsFromDetails([{ field: 'category', message: '分类不合法' }])).toEqual({
+      category: '分类不合法',
+    })
+  })
+
   test('同字段只留第一条', () => {
     const errors = sellFieldErrorsFromDetails([
       { field: 'title', message: '第一条' },
