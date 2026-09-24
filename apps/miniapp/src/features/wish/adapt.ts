@@ -5,7 +5,6 @@
  * 读的是 `MockWish` / `MockWishPoolItem` 的字段集合（#138 已验收，不再改版），
  * 所以这里做一次显式投影 —— 契约给得了的用真值，给不了的显式留空：
  *
- * - `campus`：`WishDto` **没有**校区字段 → `null`（页面已做 null 守卫，不会显示「null校区」）；
  * - `timeLabel`：由契约的 `createdAt` 现算相对时间；
  * - `userId`：许愿页 / 发布页拿到的都是本人的愿望，用不到所有者 id → 空串。
  */
@@ -36,8 +35,6 @@ export function toMockWish(wish: WishDto): MockWish {
     status: wish.status,
     matchCount: wish.matchCount,
     createdAt: wish.createdAt,
-    // 契约无校区：不编一个
-    campus: null,
     // 相对时间由契约的 createdAt 现算
     timeLabel: relativeLabel(wish.createdAt),
   }

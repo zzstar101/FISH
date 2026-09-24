@@ -8,21 +8,20 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { signUp, useAuth } from '@/features/auth/store'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
-import type { Campus } from '@/mock/types'
 import './index.scss'
 
 /**
  * 注册（设计稿 `小程序1版register.html`）。
  *
  * **契约口径**（`packages/contracts/src/auth/session.ts`）：
- * `POST /auth/register` 收 `studentNo` + `password` + `nickname` + `campus`，且**注册即登录**
+ * `POST /auth/register` 收 `studentNo` + `password` + `nickname`，且**注册即登录**
  * （响应体与 `/me` 同构）。所以成功后的下一步不是「登录」，而是**注册成功提示页**
  * （`pages/register-success/index`，设计稿 `小程序第1版，注册后提示页register-success.html`）。
  *
  * 与旧版（2改 `设计稿_B2-register.html`）的差异，都按新稿走：
  * - 不再有「二次密码」字段（契约里没有它，稿子也没有）；
- * - 校区从两枚胶囊单选改成一行「值 + 下拉箭头」，点开用原生 `showActionSheet`；
  * - 成功态不再是页内替换，而是独立页面。
+ * - #86 F：契约不再收 `campus`，校区选择行已随产品决定移除。
  *
  * 与稿子的**一处文案偏差**（已与 Owner 确认）：稿子的 tagline 是「认证状态由学号自动判定」、
  * 学号下方是「20 开头的学号会通过校园认证」。这两句描述的其实是**当前 Mock Provider 的判定规则**
@@ -36,8 +35,6 @@ const STUDENT_NO_LEN = 12
 const PASSWORD_MIN = 8
 const PASSWORD_MAX = 32
 const NICKNAME_MAX = 20
-/** 校区值域对齐 `auth/user.ts` 的 Campus */
-const CAMPUSES: Campus[] = ['肇庆', '广州']
 
 type FieldKey = 'studentNo' | 'password' | 'nickname'
 
@@ -45,7 +42,6 @@ export default function Register() {
   const [studentNo, setStudentNo] = useState('')
   const [password, setPassword] = useState('')
   const [nickname, setNickname] = useState('')
-  const [campus, setCampus] = useState<Campus>('肇庆')
   const [focused, setFocused] = useState<FieldKey | null>(null)
   const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({})
   const [submitting, setSubmitting] = useState(false)
@@ -88,19 +84,6 @@ export default function Register() {
 
   const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
 
-  /** 校区：稿子是一行「值 + 下拉箭头」，点开用原生选择器（仓库既有的 showActionSheet 用法） */
-  const pickCampus = () => {
-    if (submitting) return
-    void Taro.showActionSheet({ itemList: CAMPUSES })
-      .then((res) => {
-        const picked = CAMPUSES[res.tapIndex]
-        if (picked) setCampus(picked)
-      })
-      .catch(() => {
-        /* 用户取消：什么都不做 */
-      })
-  }
-
   const submit = () => {
     if (submitting) return
     const next = validate()
@@ -116,7 +99,6 @@ export default function Register() {
           studentNo: studentNo.trim(),
           password,
           nickname: nickname.trim(),
-          campus,
         })
         // 用 redirectTo 而不是 navigateTo：成功页不该能返回注册表单。
         // 跳转失败要有出口：此时账号已建好且已登录，不能把人留在「表单全灰」的注册页上。
@@ -255,15 +237,6 @@ export default function Register() {
                 />
               </View>
               {errors.nickname ? <Text className="reg__err">{errors.nickname}</Text> : null}
-            </View>
-
-            {/* 校区 */}
-            <View className="reg__field">
-              <Text className="reg__label">校区</Text>
-              <View className="reg__input reg__input--tap" onClick={pickCampus}>
-                <Text className="reg__val">{campus}</Text>
-                <Image className="reg__chev" src={ICONS.chevronDownMuted} mode="aspectFit" />
-              </View>
             </View>
 
             {/* 主 CTA */}

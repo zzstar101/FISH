@@ -374,15 +374,14 @@ type ProfileSpec = {
   userId: string
   joinedDays: number
   following: boolean
-  hiddenCampus: boolean
 }
 
 const PROFILE_SPECS: ProfileSpec[] = [
-  { userId: 'u-lin', joinedDays: 128, following: false, hiddenCampus: false },
-  { userId: 'u-suyiran', joinedDays: 12, following: false, hiddenCampus: false },
-  { userId: 'u-hexu', joinedDays: 210, following: false, hiddenCampus: false },
-  { userId: 'u-zhouyan', joinedDays: 96, following: true, hiddenCampus: false },
-  { userId: 'u-zhangyu', joinedDays: 64, following: false, hiddenCampus: true },
+  { userId: 'u-lin', joinedDays: 128, following: false },
+  { userId: 'u-suyiran', joinedDays: 12, following: false },
+  { userId: 'u-hexu', joinedDays: 210, following: false },
+  { userId: 'u-zhouyan', joinedDays: 96, following: true },
+  { userId: 'u-zhangyu', joinedDays: 64, following: false },
 ]
 
 export function userProfile(userId: string): MockUserProfile {
@@ -399,7 +398,6 @@ export function userProfile(userId: string): MockUserProfile {
     // mock fixture 一定带这两项；`??` 只是为了「真实数据没有这两项」时类型成立
     goodRate: user.goodRate ?? 0,
     following: spec?.following ?? false,
-    hiddenCampus: spec?.hiddenCampus ?? false,
   }
 }
 
@@ -491,7 +489,6 @@ export const SETTINGS: MockSettings = {
   notifyDeal: true,
   notifyNews: false,
   commentPolicy: '已认证用户',
-  publicCampus: false,
 }
 
 export const THEME_OPTIONS: { key: MockSettings['theme']; label: string; desc: string }[] = [

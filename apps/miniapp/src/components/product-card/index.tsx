@@ -3,7 +3,7 @@
  *
  * 两个变体：
  * - `home`：设计稿首页的瀑布流卡 —— 成色印章压在标题前、价格走品牌蓝、右下「N人想要」；
- * - `search`：设计稿搜索结果的卡 —— 左上角角标、价格走深色、成色是描边胶囊、右下校区。
+ * - `search`：设计稿搜索结果的卡 —— 左上角角标、价格走深色、成色是描边胶囊。
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
@@ -82,14 +82,6 @@ export default function ProductCard({
             <Text className="pcard__who">{seller.nickname}</Text>
             {verified ? (
               <Image className="pcard__tick" src={ICONS.verifiedAccent} mode="aspectFit" />
-            ) : null}
-            {variant === 'home' ? (
-              verified ? (
-                <Text className="pcard__credit">校园认证</Text>
-              ) : null
-            ) : // 校区契约里可为 null：缺了就不渲染这一格，不显示空白胶囊
-            seller.campus ? (
-              <Text className="pcard__loc">{seller.campus}</Text>
             ) : null}
           </View>
         ) : null}

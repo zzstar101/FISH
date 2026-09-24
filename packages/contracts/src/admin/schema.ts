@@ -1,4 +1,4 @@
-import { AuthStatusSchema, CampusSchema, MeSchema } from '@fish/contracts/auth/user'
+import { AuthStatusSchema, MeSchema } from '@fish/contracts/auth/user'
 import {
   ListingCategorySchema,
   ListingConditionSchema,
@@ -95,10 +95,12 @@ export type AdminMeResponse = z.infer<typeof AdminMeResponseSchema>
 /** 管理员视角的用户摘要（设计 §4.2）。不返回密码哈希、完整学号等敏感凭据。 */
 export const AdminUserSummarySchema = z.object({
   id: z.uuid(),
-  /** 脱敏学号（`2021****0001`），完整学号不进协议。 */
-  studentNoMasked: z.string().min(1),
+  /**
+   * 脱敏学号（`2021****0001`），完整学号不进协议。
+   * #86 后微信注册的用户没有学号 → `null`（不是空串；端上据此显示占位而不是 "n**l"）。
+   */
+  studentNoMasked: z.string().min(1).nullable(),
   nickname: z.string(),
-  campus: CampusSchema.nullable(),
   authStatus: AuthStatusSchema,
   role: UserRoleSchema,
   createdAt: z.iso.datetime(),
@@ -149,7 +151,6 @@ export type AdminUserDetail = z.infer<typeof AdminUserDetailSchema>
 export const AdminSellerSummarySchema = z.object({
   id: z.uuid(),
   nickname: z.string(),
-  campus: CampusSchema.nullable(),
 })
 export type AdminSellerSummary = z.infer<typeof AdminSellerSummarySchema>
 

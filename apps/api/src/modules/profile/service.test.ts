@@ -14,9 +14,10 @@ const me: Me = {
   id: '00000000-0000-4000-8000-0000000000a1',
   nickname: '小明',
   avatarUrl: null,
-  campus: '肇庆',
   authStatus: 'VERIFIED',
   verifiedAt: '2026-09-12T00:00:00.000Z',
+  phoneBound: false,
+  maskedPhone: null,
 }
 
 const storage: MediaStorage = {

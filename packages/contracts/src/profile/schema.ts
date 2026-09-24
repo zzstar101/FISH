@@ -15,7 +15,7 @@ import { z } from 'zod'
 /**
  * Profile Domain Contract（Issue #12）。前端和 API 只依赖本目录的字段定义。
  *
- * 复用而非重写：user 块是认证域的 `Me`（requireAuth 已写入 context，campus 的脏值
+ * 复用而非重写：user 块是认证域的 `Me`（requireAuth 已写入 context，avatarUrl 的脏值
  * 回退逻辑不复制第二份）；商品卡是 #6 的 `ListingCardSchema`（本人视角可见全部状态）；
  * 愿望是 #7 的 `wishDtoSchema`；交易摘要的 status / role / listing / counterpart
  * 四个组件**直接复用 #11 的官方契约**，不再本地投影（#11 已合入 main，#12 的注释

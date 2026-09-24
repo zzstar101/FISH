@@ -14,7 +14,7 @@ import { listingModerationRecords } from './schema/moderation'
 import { notifications } from './schema/notifications'
 import { sessions } from './schema/sessions'
 import { transactionMeetupTokens, transactions } from './schema/transactions'
-import { users } from './schema/users'
+import { users, wechatIdentities } from './schema/users'
 import { campusEmailVerifications } from './schema/verifications'
 import { wishes } from './schema/wishes'
 
@@ -83,10 +83,11 @@ export async function seed(tx: SeedTx): Promise<void> {
   // `sessions` / `campus_email_verifications`（#68）/ `listing_moderation_records`（#80）
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
-  // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）必须在内：漏掉会让
-  // seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
+  // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）/ `wechat_identities`
+  // （#86，引用 users 且 ON DELETE CASCADE）必须在内：漏掉会让 seed 直接失败
+  // （实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}`,
   )
 
   const now = new Date()
@@ -102,7 +103,6 @@ export async function seed(tx: SeedTx): Promise<void> {
       studentNo: demoStudentNos.sellerA,
       passwordHash,
       nickname: '阿岚',
-      campus: '肇庆',
       createdAt: lastWeek,
     },
     {
@@ -110,7 +110,6 @@ export async function seed(tx: SeedTx): Promise<void> {
       studentNo: demoStudentNos.buyerB,
       passwordHash,
       nickname: '小北',
-      campus: '肇庆',
       createdAt: lastWeek,
     },
     {
@@ -118,7 +117,6 @@ export async function seed(tx: SeedTx): Promise<void> {
       studentNo: demoStudentNos.buyerC,
       passwordHash,
       nickname: '橙子',
-      campus: '广州',
       createdAt: lastWeek,
     },
   ])

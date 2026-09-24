@@ -8,7 +8,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { useNavigate } from '@tanstack/react-router'
-import { ChevronDown, ChevronLeft, Clock, Heart, MapPin, MessageCircle, Share2 } from 'lucide-react'
+import { ChevronDown, ChevronLeft, Clock, Heart, MessageCircle, Share2 } from 'lucide-react'
 import { useState } from 'react'
 import { formatRelativeTime, formatRelativeTimeAt, formatYuan } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
@@ -143,12 +143,6 @@ export function DetailPage({ listingId }: { listingId: string }) {
             <Clock className="size-3.5" />
             {formatRelativeTimeAt(item.createdAt)}发布
           </span>
-          {item.seller.campus ? (
-            <span className="inline-flex items-center gap-1">
-              <MapPin className="size-3.5" />
-              {item.seller.campus}
-            </span>
-          ) : null}
         </div>
       </section>
 
@@ -162,7 +156,6 @@ export function DetailPage({ listingId }: { listingId: string }) {
         <div className="mt-3 flex flex-wrap gap-2">
           <AttrPair label="成色" value={conditionLabel(item.condition)} />
           <AttrPair label="分类" value={categoryLabel(item.category)} />
-          {item.seller.campus ? <AttrPair label="校区" value={item.seller.campus} /> : null}
         </div>
       </section>
 
@@ -180,9 +173,6 @@ export function DetailPage({ listingId }: { listingId: string }) {
               {/* #68：公开卖家认证徽章（详情页 seller 含 authStatus） */}
               {item.seller.authStatus === 'VERIFIED' ? <VerifiedText /> : null}
             </p>
-            {item.seller.campus ? (
-              <p className="mt-0.5 truncate text-ink-3 text-xs">{item.seller.campus}</p>
-            ) : null}
           </div>
         </div>
         <Button
