@@ -229,10 +229,21 @@ export type AdminOverview = z.infer<typeof AdminOverviewSchema>
 // ---------------------------------------------------------------------------
 
 /** Admin 动作枚举。高风险人工审核决定必须写入不可变审计日志。 */
-export const AdminAuditActionSchema = z.enum(['ADMIN_PROMOTED', 'MODERATION_DECISION'])
+export const AdminAuditActionSchema = z.enum([
+  'ADMIN_PROMOTED',
+  'MODERATION_DECISION',
+  // #73 治理半场 PR2：处理举报。其余治理动作在 PR3 追加。
+  'REPORT_DECISION',
+])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 
-export const AdminAuditTargetTypeSchema = z.enum(['USER', 'LISTING', 'MODERATION_RECORD'])
+export const AdminAuditTargetTypeSchema = z.enum([
+  'USER',
+  'LISTING',
+  'MODERATION_RECORD',
+  // #73 治理半场 PR2：举报单本身作为审计目标。
+  'REPORT',
+])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
 
 export const AdminAuditLogEntrySchema = z.object({

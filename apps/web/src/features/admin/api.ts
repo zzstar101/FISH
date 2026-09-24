@@ -23,15 +23,21 @@ import {
   AdminUserSummaryPageSchema,
 } from '@fish/contracts/admin/schema'
 import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
+import type { AdminReportDetail, AdminReportHandleInput } from '@fish/contracts/reports/schema'
+import {
+  AdminReportDetailSchema,
+  AdminReportListResponseSchema,
+} from '@fish/contracts/reports/schema'
 import { apiRequest } from '../../lib/api-client'
 
 /**
  * Admin 后台数据入口（#73 设计 §7）：全部走真实 `/admin/*` API，相对路径由
  * `lib/api-client` 拼成 `/api/...`（Vite 代理去前缀）。前端不硬编码敏感词 / 审核规则。
  *
- * 返回类型一律取 `@fish/contracts/admin/schema` 并用同一个 schema 在运行时校验
+ * 返回类型一律取 `@fish/contracts/**` 并用同一个 schema 在运行时校验
  * （与 `features/chat/api.ts` 同口径）：契约改名 / 改字段会让这里直接编译失败或解析报错，
- * 而不是静默漂移。
+ * 而不是静默漂移。举报（#73）的 DTO 单独放在 `@fish/contracts/reports/schema`：
+ * 它既是用户端契约也是 Admin 契约，塞进 admin/schema 会让用户端也依赖 Admin 域。
  */
 
 export type AdminListQuery = {
@@ -64,6 +70,13 @@ export type AdminAuditLogsQuery = {
 }
 
 export type AdminModerationQueueQuery = { cursor?: string; limit?: number }
+export type AdminReportsQuery = {
+  status?: string
+  targetType?: string
+  reason?: string
+  cursor?: string
+  limit?: number
+}
 export type AdminTransactionsQuery = {
   q?: string
   status?: string
@@ -127,6 +140,29 @@ export async function fetchAdminModerationQueue(
 
 export async function fetchAdminModerationDetail(recordId: string): Promise<AdminModerationDetail> {
   return AdminModerationDetailSchema.parse(await apiRequest(`/admin/moderation/${recordId}`))
+}
+
+export async function fetchAdminReports(
+  query: AdminReportsQuery,
+): Promise<ReturnType<typeof AdminReportListResponseSchema.parse>> {
+  return AdminReportListResponseSchema.parse(
+    await apiRequest(`/admin/reports${queryString(query)}`),
+  )
+}
+
+export async function fetchAdminReport(reportId: string): Promise<AdminReportDetail> {
+  return AdminReportDetailSchema.parse(await apiRequest(`/admin/reports/${reportId}`))
+}
+
+/** 处理举报（#73）：只写结果与原因；治理动作另有入口，不在本函数内。 */
+export async function handleAdminReport(
+  reportId: string,
+  input: AdminReportHandleInput,
+): Promise<void> {
+  await apiRequest(`/admin/reports/${reportId}/handle`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export async function decideAdminModeration(

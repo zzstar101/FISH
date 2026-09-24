@@ -202,3 +202,9 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
 - **审核记录检索新开端点**：既有 `queue` 端点保持「只查当前 REVIEW」的纯净语义，历史记录走 `records`。
 - **DB 变更按段各提一次 CHANGE REQUEST**，不手改 `packages/db/src/migrations/**`；`db:seed` 的 TRUNCATE 列表随新表同步（跨分支耦合，见 §6.4）。
 
+落地进度（截至本轮）：
+
+- PR1 已交付：删 `store.insertAuditLog` 死方法；`apps/api/src/modules/admin/router.test.ts` 补「普通用户调写端点 403」「9 种伪造角色头不升权」「审计写入失败业务状态回滚」。
+- PR2 已交付服务端与 web 侧：`reports` 表 + 3 枚举 + 部分唯一索引（迁移 `0020_huge_rocket_raccoon.sql`）、`admin_audit_*` 枚举扩展（`0021_crazy_archangel.sql`）、`reports` 契约、`apps/api/src/modules/reports/**`、admin 三个端点（队列 / 详情 / 处理，相对路径注册）、`apps/web` 举报队列 + 详情 + 处理表单 + 审计筛选新增「举报处理」。
+- PR2 的 **miniapp 举报入口未随本轮提交**：`docs/miniapp-dev-workflow.md` 要求一页一分支、动代码前通知 Owner、devtools 演示并取得同意后才能提交。等 Owner 排期后单独一段交付（用户端契约 `REPORT_ROUTES` 已就绪，接上即可）。
+

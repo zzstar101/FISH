@@ -6,13 +6,17 @@ import { users } from './users'
 export const adminAuditActionEnum = pgEnum('admin_audit_action', [
   'ADMIN_PROMOTED',
   'MODERATION_DECISION',
+  // #73 治理半场 PR2：处理举报（受理 / 驳回）。下架、恢复、限制、封禁等治理动作
+  // 在 PR3 随 `user_restrictions` 一起追加。
+  'REPORT_DECISION',
 ])
 
-/** 审计目标类型。审核决定以 moderation record 为审计目标。 */
+/** 审计目标类型。审核决定以 moderation record 为审计目标；举报以举报单为审计目标。 */
 export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'USER',
   'LISTING',
   'MODERATION_RECORD',
+  'REPORT',
 ])
 
 /**

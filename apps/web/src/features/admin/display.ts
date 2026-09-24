@@ -23,12 +23,42 @@ export const USER_ROLE_LABEL: Record<string, string> = {
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
   ADMIN_PROMOTED: '提升管理员',
   MODERATION_DECISION: '人工审核决定',
+  REPORT_DECISION: '举报处理',
 }
 
 export const AUDIT_TARGET_LABEL: Record<string, string> = {
   USER: '用户',
   LISTING: '商品',
   MODERATION_RECORD: '审核记录',
+  REPORT: '举报',
+}
+
+export const REPORT_STATUS_LABEL: Record<string, string> = {
+  PENDING: '待处理',
+  HANDLED: '已受理',
+  REJECTED: '已驳回',
+}
+
+export const REPORT_TARGET_TYPE_LABEL: Record<string, string> = {
+  LISTING: '商品',
+  USER: '用户',
+}
+
+export const REPORT_REASON_LABEL: Record<string, string> = {
+  MISLEADING: '描述不实',
+  PROHIBITED: '违禁品',
+  FRAUD: '欺诈',
+  SPAM: '垃圾信息',
+  HARASSMENT: '骚扰',
+  IMPERSONATION: '冒充他人',
+  ABUSE: '账号滥用',
+  OTHER: '其他',
+}
+
+export const REPORT_STATUS_TONE: Record<string, 'warning' | 'success' | 'neutral'> = {
+  PENDING: 'warning',
+  HANDLED: 'success',
+  REJECTED: 'neutral',
 }
 
 export function statusLabel(map: Record<string, string>, value: string): string {

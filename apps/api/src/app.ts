@@ -357,6 +357,12 @@ export function createApp(
   const admin = createAdminModule({ db, storage, requireAuth: auth.requireAuth })
   app.route('/admin', admin.router)
 
+  // 用户端举报（#73）：所有入口都要登录——匿名举报无法追溯，且 reports.reporter_id 非空。
+  // 用户端与 Admin 端共用同一个 reports service 实例（见 admin/module.ts）：用户提交后
+  // 立刻能在管理队列里查到。写完要求登录用户：`GET /reports/mine` 同样不暴露给匿名。
+  app.use('/reports/*', auth.requireAuth)
+  app.route('/reports', admin.reportsRouter)
+
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。
   app.onError((error, c) => {

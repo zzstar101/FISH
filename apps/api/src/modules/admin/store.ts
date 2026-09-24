@@ -16,6 +16,7 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { and, asc, desc, eq, type SQL, sql } from 'drizzle-orm'
 import type { ModerationStore } from '../moderation/store'
+import { createdAtCursorText, cursorCondition } from './cursor'
 
 /**
  * Admin store（#73）：管理后台的全部 SQL。
@@ -278,19 +279,6 @@ function userSearchCondition(alias: string, q: string): SQL {
 function listingSearchCondition(alias: string, q: string): SQL {
   const escaped = q.replace(/[\\%_]/g, '\\$&')
   return sql`(${sql.raw(`${alias}.title`)} ILIKE ${`%${escaped}%`} OR ${sql.raw(`${alias}.description`)} ILIKE ${`%${escaped}%`})`
-}
-
-/** `created_at` 的微秒精度 UTC 文本（与 listings/store.ts 同一口径，供游标编码）。 */
-export const createdAtCursorText = (col: SQL) =>
-  sql<string>`to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
-
-/** 游标条件：`(created_at, id) < (cursor.created_at, cursor.id)`（三个列表排序同构）。 */
-function cursorCondition(
-  createdAtCol: SQL,
-  idCol: SQL,
-  cursor: { createdAt: string; id: string },
-): SQL {
-  return sql`(${createdAtCol}, ${idCol}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`
 }
 
 /** 用户摘要共用的 SQL SELECT 实体（列表 / 详情都取同一套列，避免口径漂移）。 */

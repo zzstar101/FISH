@@ -34,4 +34,10 @@ export const ADMIN_ROUTES = {
   moderationDecision: (recordId: string) => `/admin/moderation/${recordId}/decision`,
   /** GET 全量交易查询（仅管理员）。 */
   transactions: '/admin/transactions',
+  /** GET 举报队列（游标分页 + 状态 / 目标类型 / 原因筛选）。 */
+  reports: '/admin/reports',
+  /** GET 举报详情（举报 + 举报人 + 目标摘要 + 同目标其它未决举报）。 */
+  reportDetail: (reportId: string) => `/admin/reports/${reportId}`,
+  /** POST 处理举报（result = HANDLED / REJECTED + reason）。只写处理结果，不触发治理动作。 */
+  reportHandle: (reportId: string) => `/admin/reports/${reportId}/handle`,
 } as const

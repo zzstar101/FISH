@@ -141,6 +141,20 @@
       "when": 1790244241466,
       "tag": "0019_magical_ghost_rider",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790247805086,
+      "tag": "0020_huge_rocket_raccoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790247978506,
+      "tag": "0021_crazy_archangel",
+      "breakpoints": true
     }
   ]
 }

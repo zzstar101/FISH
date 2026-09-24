@@ -1,5 +1,6 @@
 import type { AdminMeResponse } from '@fish/contracts/admin/schema'
 import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
+import type { AdminReportHandleInput } from '@fish/contracts/reports/schema'
 import {
   type QueryClient,
   queryOptions,
@@ -13,6 +14,7 @@ import {
   type AdminListingsQuery,
   type AdminListQuery,
   type AdminModerationQueueQuery,
+  type AdminReportsQuery,
   type AdminTransactionsQuery,
   decideAdminModeration,
   fetchAdminAuditLogs,
@@ -22,9 +24,12 @@ import {
   fetchAdminModerationDetail,
   fetchAdminModerationQueue,
   fetchAdminOverview,
+  fetchAdminReport,
+  fetchAdminReports,
   fetchAdminTransactions,
   fetchAdminUser,
   fetchAdminUsers,
+  handleAdminReport,
 } from './api'
 
 /**
@@ -45,6 +50,8 @@ export const adminKeys = {
   moderationQueue: (query: AdminModerationQueueQuery) =>
     ['admin', 'moderation-queue', query] as const,
   moderationDetail: (recordId: string) => ['admin', 'moderation', recordId] as const,
+  reports: (query: AdminReportsQuery) => ['admin', 'reports', query] as const,
+  report: (reportId: string) => ['admin', 'report', reportId] as const,
   transactions: (query: AdminTransactionsQuery) => ['admin', 'transactions', query] as const,
 }
 
@@ -129,6 +136,45 @@ export function useAdminModerationDetail(recordId: string) {
     queryKey: adminKeys.moderationDetail(recordId),
     queryFn: () => fetchAdminModerationDetail(recordId),
     enabled: Boolean(recordId),
+  })
+}
+
+export function useAdminReports(query: AdminReportsQuery) {
+  return useQuery({
+    queryKey: adminKeys.reports(query),
+    queryFn: () => fetchAdminReports(query),
+  })
+}
+
+export function useAdminReport(reportId: string) {
+  return useQuery({
+    queryKey: adminKeys.report(reportId),
+    queryFn: () => fetchAdminReport(reportId),
+    enabled: Boolean(reportId),
+  })
+}
+
+/**
+ * 处理举报（#73）：成功 / 失败都刷新队列与详情。
+ *
+ * 失败也要刷新是故意的——409 REPORT_CONFLICT 说明另一个管理员刚处理了同一条，
+ * 此时队列和详情的旧缓存都是过期的，让界面立刻显示真实状态，而不是让操作者
+ * 看着一张已失效的表单反复提交。
+ */
+export function useHandleAdminReport(reportId: string) {
+  const queryClient = useQueryClient()
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ['admin', 'reports'] })
+    void queryClient.invalidateQueries({ queryKey: ['admin', 'report'] })
+    void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+  }
+  return useMutation({
+    mutationFn: (input: AdminReportHandleInput) => handleAdminReport(reportId, input),
+    onError: invalidate,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminKeys.report(reportId) })
+      invalidate()
+    },
   })
 }
 

@@ -7,15 +7,26 @@ import {
   AdminUsersQuerySchema,
 } from '@fish/contracts/admin/schema'
 import { ModerationDecisionInputSchema } from '@fish/contracts/moderation/schema'
+import {
+  AdminReportHandleInputSchema,
+  AdminReportQueueQuerySchema,
+} from '@fish/contracts/reports/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { ReportService } from '../reports/service'
+import { ReportServiceError } from '../reports/service'
 import { AdminError } from './errors'
 import type { AdminService } from './service'
 
 export type AdminRouterOptions = {
   service: AdminService
+  /**
+   * 举报服务（#73）：Admin 侧的举报队列 / 详情 / 处理只经过它。
+   * 用户端 POST /reports 走独立的 reports router，不经过本文件的两道守卫。
+   */
+  reportsService: ReportService
   /**
    * 认证守卫（`auth` 模块提供）：所有 `/admin/*` 先过它（401 `UNAUTHENTICATED`）。
    * 在 router 内 `use('*')` 应用，配合 `requireAdmin` 组成设计 §3.2 的双层守卫——
@@ -52,13 +63,29 @@ function toErrorResponse(c: Context, error: unknown): Response {
 }
 
 /**
+ * 举报 service 异常 → 契约错误信封（与 AdminError 同形状：`{ code, message }`）。
+ *
+ * 同时认 `AdminError`：`requireTargetId`（非 UUID → 404）写在 try 内最自然，
+ * 只认 ReportServiceError 会让 AdminError 一路逃到 app.onError 变成 500。
+ */
+function toReportErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof ReportServiceError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
+  if (error instanceof AdminError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
+  throw error
+}
+
+/**
  * Admin router。挂载点在 `apps/api/src/app.ts` 的 `/admin`（根级），router 内部用 `/me` 等。
  *
  * `router.use('*')` 两道守卫覆盖**全部** `/admin/*` 入口（设计 §3.2：“每个 Admin API 入口
  * 额外执行 requireAdmin”），新加端点不会忘挂。
  */
 export function createAdminRouter(options: AdminRouterOptions) {
-  const { service } = options
+  const { service, reportsService } = options
   const router = new Hono<{ Variables: AuthVariables }>()
 
   router.use('*', options.requireAuth)
@@ -179,6 +206,52 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(await service.listAuditLogs(parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
+    }
+  })
+
+  // --- 举报（#73）：队列 / 详情 / 处理 -------------------------------------
+  // 只调 reports service；治理动作（下架 / 恢复 / 限制 / 封禁）是另外的端点，
+  // 由本 router 后续版本注册（grill Q9：处理举报 ≠ 处罚用户）。
+  //
+  // 注意：本文件全部注册「相对路径」（`/reports` 而不是 ADMIN_ROUTES.reports）——app.ts 用
+  // `app.route('/admin', router)` 挂载，绝对路径会变成 /admin/admin/reports。ADMIN_ROUTES
+  // 是客户端契约口径（web 请求用），controller 侧沿用 moderation 先例手写相对路径。
+
+  router.get('/reports', async (c) => {
+    const parsed = AdminReportQueueQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+
+    try {
+      return c.json(await reportsService.listAdminReports(parsed.data), 200)
+    } catch (error) {
+      return toReportErrorResponse(c, error)
+    }
+  })
+
+  // 注册在详情之前：`/reports/:reportId/handle` 比 `/reports/:reportId` 多一段
+  // 静态段，放在前面可以让任何路由实现都优先匹配它，不依赖 Hono 的静态段优先语义。
+  router.post('/reports/:reportId/handle', async (c) => {
+    const input = AdminReportHandleInputSchema.safeParse(await c.req.json().catch(() => null))
+    if (!input.success) return zodValidationFailure(c, input.error.issues)
+
+    try {
+      await reportsService.handleReport({
+        reportId: requireTargetId(c, 'reportId'),
+        actorUserId: c.get('userId'),
+        result: input.data.result,
+        reason: input.data.reason,
+      })
+      return c.body(null, 204)
+    } catch (error) {
+      return toReportErrorResponse(c, error)
+    }
+  })
+
+  router.get('/reports/:reportId', async (c) => {
+    try {
+      return c.json(await reportsService.getAdminReport(requireTargetId(c, 'reportId')), 200)
+    } catch (error) {
+      return toReportErrorResponse(c, error)
     }
   })
 
