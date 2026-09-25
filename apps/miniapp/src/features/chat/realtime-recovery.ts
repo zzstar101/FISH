@@ -90,7 +90,7 @@ export type GapBackfill = {
  *
  * **没接上不是「补齐失败」，但更不能当作接上了**（#67 N5）：预算耗尽或中途取页失败时
  * `complete` 为 `false`，并把 `resumeCursor` 交回调用方 —— 调用方应当带着它再跑一轮，
- * 且要跨重连记住它（见 `pages/conversation/index.tsx` 的 `gapResumeRef`），否则断线
+ * 且要跨重连记住它（见 `pages/conversation/index.tsx` 的 `gapResumeCursorsRef`），否则断线
  * 超过 `maxPages` 页的消息永远补不上。
  */
 export async function backfillMessageGap(
@@ -160,7 +160,7 @@ export async function backfillMessageGap(
  * 单轮 `backfillMessageGap` 的页数预算有限（默认 10 页），断线时间长或中途取页失败时
  * 一轮翻不到本地窗口的前沿。修复前调用方只看单轮结果、把 `resumeCursor` 丢掉，那段
  * 缺口就再也没人补 —— 这里把它接着翻；翻不动的部分原样交回调用方，由调用方跨重连
- * 记住（见 `pages/conversation/index.tsx` 的 `gapResumeRef`）。
+ * 记住（见 `pages/conversation/index.tsx` 的 `gapResumeCursorsRef`）。
  *
  * `maxPasses` 与 `maxPages` 一样是硬上限：服务端游标异常时不能把重连变成无限翻页。
  * 后一轮翻到的消息整体早于前一轮，所以拼装时按轮序反转（与 `backfillMessageGap`
@@ -205,4 +205,80 @@ export async function backfillGapUntilConnected(
   }
 
   return { ...last, items }
+}
+
+/**
+ * 一次重连要补的**两笔账**（#67 复查 #221）。
+ *
+ * `backfillGapUntilConnected` 只认一笔账：从交进来的位置往回翻。历史欠账的游标一旦被
+ * 当成起点，整次重连就只剩「补旧的」——断线期间新增的消息（最新消息 → 本地前沿）反倒
+ * 一条都不取，要等下一次刷新或下一轮补齐才可能冒出来。
+ */
+export type GapRecovery = {
+  /** 新账在前、旧账在后的合并结果（各段内部升序）；顺序无所谓，调用方会重新定序 */
+  items: MessageDto[]
+  /**
+   * 还没补上的位置（新 → 旧）。下次重连要**同时**做两件事：从最新一页取新款，再逐个
+   * 位置接着往回翻。空数组 = 两笔账都清了。
+   */
+  resumeCursors: string[]
+  /** 本次「最新消息 → 本地前沿」是否接上 */
+  freshComplete: boolean
+}
+
+/**
+ * 重连补齐：`最新消息 → 本地前沿` 与 `历史欠账` 各补一遍（#67 复查 #221）。
+ *
+ * 为什么不能拿历史欠账的游标当起点（修复前的做法）：
+ *
+ * ```
+ * 本地原有消息 1
+ * → 第一次恢复拿到 5–8，2–4 读取失败      → 欠账游标停在 2–4 之前
+ * → 再次断线，服务端新增 9–12
+ * → 重连时从欠账游标起跑，补回 2–4 就报「补齐完成」→ 9–12 一条没取
+ * ```
+ *
+ * 所以固定先跑一趟**不带起点**的补齐（永远从最新一页往回翻），拿到本次重连的新缺口；
+ * 再把上一轮交出来的欠账位置逐个接着翻。两笔账各自记账：新缺口没翻完就把它自己的续拉
+ * 位置也记进 `resumeCursors`，历史欠账没翻完就继续留着。
+ *
+ * 为什么欠账是一**串**位置而不是一个：往回翻一碰到本地已有的消息就停，所以一个补不上
+ * 的位置会挡住它下面（更早）的每一页 —— 新缺口与历史欠账各占一段，必须分别记。
+ */
+export async function recoverGapsOnReconnect(
+  loadPage: (before?: string) => Promise<GapPage>,
+  knownIds: ReadonlySet<string>,
+  options?: { maxPages?: number; maxPasses?: number; resumeCursors?: readonly string[] },
+): Promise<GapRecovery> {
+  const budget = { maxPages: options?.maxPages, maxPasses: options?.maxPasses }
+
+  const fresh = await backfillGapUntilConnected(loadPage, knownIds, budget)
+
+  const items = [...fresh.items]
+  // 后面每一段都要认前面刚拉到的消息，否则会在同一段里重复翻页
+  const known = new Set(knownIds)
+  for (const item of items) known.add(item.id)
+
+  const resumeCursors: string[] = []
+  const remember = (cursor: string | null) => {
+    if (cursor === null || resumeCursors.includes(cursor)) return
+    resumeCursors.push(cursor)
+  }
+  // 新缺口自己没翻完（预算耗尽 / 取页失败）：它也是欠账，下一次重连不能只从最新一页重来
+  remember(fresh.complete ? null : fresh.resumeCursor)
+
+  for (const cursor of options?.resumeCursors ?? []) {
+    const debt = await backfillGapUntilConnected(loadPage, known, {
+      ...budget,
+      startBefore: cursor,
+    })
+    for (const item of debt.items) {
+      if (known.has(item.id)) continue
+      known.add(item.id)
+      items.push(item)
+    }
+    remember(debt.complete ? null : debt.resumeCursor)
+  }
+
+  return { items, resumeCursors, freshComplete: fresh.complete }
 }

@@ -7,6 +7,7 @@ import {
   MAX_BACKOFF_MS,
   realtimeUrl,
   reconnectDelayMs,
+  recoverGapsOnReconnect,
 } from '../src/features/chat/realtime-recovery'
 
 /**
@@ -280,5 +281,141 @@ describe('backfillGapUntilConnected —— 一轮翻不完就接着翻（#67 N5�
     expect(calls).toEqual(['c8', 'c7'])
     expect(result.items.map((item) => item.id)).toEqual(['m7', 'm8'])
     expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'connected' })
+  })
+})
+
+/**
+ * 会「长出新消息」的假服务端：`ids` 升序（越靠后越新），游标 `c<i>` = 「给我 `ids[i]`
+ * 之前那一页」。用例可以在两次重连之间往 `ids` 尾部追加消息 —— 这正是「第二次断线又产生
+ * 新消息」。`failing` 每次调用都重新取，所以用例可以中途把某一页改成能读到。
+ */
+function growingServer(pageSize: number, ids: string[], failing: () => ReadonlySet<string>) {
+  const calls: Array<string | undefined> = []
+  const loadPage = async (before?: string): Promise<GapPage> => {
+    calls.push(before)
+    if (failing().has(before ?? 'first')) {
+      return { items: [], nextCursor: before ?? null, failed: true }
+    }
+    const end = before === undefined ? ids.length : Number(before.slice(1))
+    const start = Math.max(0, end - pageSize)
+    return {
+      items: ids.slice(start, end).map((id, index) => message(id, start + index + 1)),
+      nextCursor: start > 0 ? `c${start}` : null,
+      failed: false,
+    }
+  }
+  return { loadPage, calls }
+}
+
+describe('recoverGapsOnReconnect —— 新缺口和历史欠账各记一笔（#67 复查 #221）', () => {
+  const twoPerPage = ['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'm8']
+
+  test('两次断线：第一次补拉没完成，第二次又产生新消息 —— 新消息不能被旧游标顶掉', async () => {
+    const ids = [...twoPerPage]
+    // 第一次重连：m3/m4 那一页读取失败（service 侧持续报错）
+    const failing = new Set(['c4'])
+    const { loadPage, calls } = growingServer(2, ids, () => failing)
+
+    const first = await recoverGapsOnReconnect(loadPage, new Set(['m1']), {
+      maxPages: 1,
+      maxPasses: 3,
+    })
+
+    expect(first.items.map((item) => item.id)).toEqual(['m5', 'm6', 'm7', 'm8'])
+    expect(first.freshComplete).toBe(false)
+    // 欠账停在「m3/m4 之前」：这一段没补上，下一次重连要接着来
+    expect(first.resumeCursors).toEqual(['c4'])
+
+    // 第二次断线：服务端新增 m9–m12，且 m3/m4 现在能读到了
+    ids.push('m9', 'm10', 'm11', 'm12')
+    failing.clear()
+    calls.length = 0
+
+    const second = await recoverGapsOnReconnect(loadPage, new Set(['m1', 'm5', 'm6', 'm7', 'm8']), {
+      maxPages: 1,
+      maxPasses: 3,
+      resumeCursors: first.resumeCursors,
+    })
+
+    // 修复前这里会拿 'c4' 当起点，补回 m3/m4 就报「补齐完成」，本次断线新增的 m9–m12
+    // 一条都不取 —— 先锁「第一趟一定从最新一页起跑」。
+    expect(calls[0]).toBeUndefined()
+    expect(calls).toContain('c4')
+    // 新缺口补上了
+    expect(second.freshComplete).toBe(true)
+    const recovered = second.items.map((item) => item.id)
+    expect(recovered).toContain('m9')
+    expect(recovered).toContain('m12')
+    // 历史欠账也在同一次重连里结清
+    expect(recovered).toContain('m3')
+    expect(recovered).toContain('m4')
+    expect(second.resumeCursors).toEqual([])
+  })
+
+  test('第二次重连没有新消息时，历史欠账照样继续补', async () => {
+    const ids = [...twoPerPage]
+    const failing = new Set(['c4'])
+    const { loadPage } = growingServer(2, ids, () => failing)
+
+    const first = await recoverGapsOnReconnect(loadPage, new Set(['m1']), { maxPages: 1 })
+    expect(first.resumeCursors).toEqual(['c4'])
+
+    failing.clear()
+    const second = await recoverGapsOnReconnect(loadPage, new Set(['m1', 'm5', 'm6', 'm7', 'm8']), {
+      maxPages: 1,
+      resumeCursors: first.resumeCursors,
+    })
+
+    // m2 本地也没有（原本只有 m1，5–8 是上一轮补回来的），所以它同样要落地
+    expect(second.items.map((item) => item.id)).toEqual(['m7', 'm8', 'm2', 'm3', 'm4'])
+    expect(second.resumeCursors).toEqual([])
+  })
+
+  test('新缺口自己没翻完时也记一笔：两段欠账并存，不会被彼此顶掉', async () => {
+    const ids = [...twoPerPage]
+    const { loadPage } = growingServer(2, ids, () => new Set())
+
+    // 本地只有 m1，且预算只够翻一页：最新的 m7/m8 拿到了，往下的还没翻
+    const first = await recoverGapsOnReconnect(loadPage, new Set(['m1']), {
+      maxPages: 1,
+      maxPasses: 1,
+    })
+
+    expect(first.items.map((item) => item.id)).toEqual(['m7', 'm8'])
+    expect(first.freshComplete).toBe(false)
+    expect(first.resumeCursors).toEqual(['c6'])
+
+    // 第二次断线又长了两条：新缺口（m9/m10）与旧欠账（c6 往下）都要记
+    ids.push('m9', 'm10')
+    const second = await recoverGapsOnReconnect(loadPage, new Set(['m1', 'm7', 'm8']), {
+      maxPages: 1,
+      maxPasses: 1,
+      resumeCursors: first.resumeCursors,
+    })
+
+    expect(second.items.map((item) => item.id)).toEqual(['m9', 'm10', 'm5', 'm6'])
+    // 新 → 旧：一个游标装不下两段
+    expect(second.resumeCursors).toEqual(['c8', 'c4'])
+
+    // 第三次重连把两段都结清
+    const third = await recoverGapsOnReconnect(
+      loadPage,
+      new Set(['m1', 'm5', 'm6', 'm7', 'm8', 'm9', 'm10']),
+      { resumeCursors: second.resumeCursors },
+    )
+
+    expect(third.items.map((item) => item.id)).toEqual(['m9', 'm10', 'm2', 'm3', 'm4'])
+    expect(third.resumeCursors).toEqual([])
+  })
+
+  test('没有欠账时就是一趟普通的「从最新一页往回翻」', async () => {
+    const { loadPage, calls } = growingServer(2, twoPerPage, () => new Set())
+
+    const result = await recoverGapsOnReconnect(loadPage, new Set(['m3']), { maxPages: 10 })
+
+    expect(calls).toEqual([undefined, 'c6', 'c4'])
+    // 接到 m3 所在的那一页就停：更早的本地本来就有
+    expect(result.items.map((item) => item.id)).toEqual(['m3', 'm4', 'm5', 'm6', 'm7', 'm8'])
+    expect(result).toMatchObject({ freshComplete: true, resumeCursors: [] })
   })
 })

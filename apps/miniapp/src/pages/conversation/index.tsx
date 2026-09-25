@@ -10,7 +10,7 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { markConversationRead, sendMessage } from '@/features/chat/api'
 import { subscribeRealtime, subscribeReconnect } from '@/features/chat/realtime'
-import { backfillGapUntilConnected } from '@/features/chat/realtime-recovery'
+import { recoverGapsOnReconnect } from '@/features/chat/realtime-recovery'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -83,7 +83,7 @@ const EMPTY_IDS: ReadonlySet<string> = new Set()
  *
  * 一轮最多翻 `backfillMessageGap` 的 `maxPages` 页；多轮是为了「一轮没接上」时继续往下
  * 翻。轮数是硬上限，避免服务端游标异常时把补齐变成无限翻页 —— 没翻完的位置留在
- * `gapResumeRef` 里，下一次重连接着来。
+ * `gapResumeCursorsRef` 里，下一次重连接着来。
  */
 const GAP_MAX_PASSES = 3
 
@@ -143,14 +143,17 @@ export default function Conversation() {
   const messagesRef = useRef<MessageDto[]>([])
 
   /**
-   * 上一轮补齐**没接上**时留下的续拉位置（#67 N5）。
+   * 还没补上的位置（#67 N5 / 复查 #221），新 → 旧。
    *
-   * `backfillMessageGap` 一轮最多翻 `maxPages` 页，中途取页失败或预算耗尽时它会把
-   * `resumeCursor` 交回来。留在这里而不是丢掉：下一次连接建立时从这一段继续往回翻，
-   * 否则断线期间超过预算的消息会在中间留下一段永远补不上的空洞（`null` = 没有欠账，
-   * 下一轮从最新一页开始）。换账号时清空，见下面的身份清场。
+   * `backfillGapUntilConnected` 一轮最多翻 `maxPages` 页，中途取页失败或预算耗尽时会交出
+   * `resumeCursor`。留在这里而不是丢掉：下一次连接建立时从这一段继续往回翻，否则断线期间
+   * 超过预算的消息会在中间留下一段永远补不上的空洞。
+   *
+   * 用数组而不是单个游标：往回翻一碰到本地已有的消息就停，一个补不上的位置会挡住它下面
+   * 更早的每一页；本次重连的新缺口与历史欠账各占一段，必须分别记（见
+   * `recoverGapsOnReconnect`）。空数组 = 没有欠账。换账号时清空，见下面的身份清场。
    */
-  const gapResumeRef = useRef<string | null>(null)
+  const gapResumeCursorsRef = useRef<readonly string[]>([])
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -169,7 +172,7 @@ export default function Conversation() {
     epoch.current += 1
     localSeq.current = 0
     // 上一个账号留下的断档续拉位置对新账号没有意义（游标属于那场会话的历史）
-    gapResumeRef.current = null
+    gapResumeCursorsRef.current = []
     // 待刷新标记与在途计数一起归到新 epoch：否则上个账号留下的陈旧标记会被
     // 新账号后续某次发送落定消费掉，闪一次无来由的整页加载。
     deferredRef.current = resetDeferredReload(epoch.current)
@@ -384,12 +387,11 @@ export default function Conversation() {
   }, [authStatus, userId, conversationId])
 
   /**
-   * 补齐断档（#67 第三步 / N5）：从 `gapResumeRef` 记下的位置（没有就从最新一页）往回翻，
-   * 一轮翻不完就带着交出的续拉位置接着翻（见 `backfillGapUntilConnected`）。
+   * 补齐断档（#67 第三步 / N5 / 复查 #221）：`最新消息 → 本地前沿` 与历史欠账各补一遍。
    *
-   * 为什么不能只看单轮结果：单轮的页数预算有限，断线时间长或中途取页失败时一轮翻不到
-   * 本地窗口的前沿。修复前这里丢掉 `resumeCursor`，那段缺口就再也没人补 —— 现在把位置
-   * 记进 `gapResumeRef`，本轮的后续轮次、以及下一次重连都会从那里接着翻。
+   * 历史欠账的游标**不能**当成本轮的起点 —— 那样只会补上旧缺口，本次断线新增的消息一条
+   * 都不取（详见 `recoverGapsOnReconnect` 的说明）。所以这里交给它去分两笔账：先从最新
+   * 一页往回翻接上本地前沿，再逐个欠账位置接着翻。
    *
    * 落地前过代次与身份守卫：期间可能发生整页重拉或换账号。
    * 补齐结果走 `mergeRefreshedMessages`（`baseIds` 传空集 = 只做按 id 并集 + 定序）：
@@ -398,14 +400,14 @@ export default function Conversation() {
    */
   const recoverGap = useCallback(
     async (current: number, ownerId: string, known: ReadonlySet<string>) => {
-      const result = await backfillGapUntilConnected(
+      const result = await recoverGapsOnReconnect(
         (before) => loadMessagePage(conversationId, before),
         known,
-        { maxPasses: GAP_MAX_PASSES, startBefore: gapResumeRef.current ?? undefined },
+        { maxPasses: GAP_MAX_PASSES, resumeCursors: gapResumeCursorsRef.current },
       )
       if (current !== epoch.current || userIdRef.current !== ownerId) return
-      // 接上了就把欠账清掉；没接上就留着，下一次重连接着翻
-      gapResumeRef.current = result.complete ? null : result.resumeCursor
+      // 两笔账一次结清：还欠着的位置留着，下一次重连接着翻
+      gapResumeCursorsRef.current = result.resumeCursors
       if (result.items.length === 0) return
       setMessages((prev) => mergeRefreshedMessages(prev, result.items, EMPTY_IDS))
     },
