@@ -23,8 +23,14 @@ mock.module('@/features/chat/api', () => ({
   fetchConversationUnreadCount: () => convResult(),
 }))
 
-const { badgeShouldLight, clearUnread, hydrateUnread, publishUnread, unreadSnapshot } =
-  await import('../src/features/chat/unread')
+const {
+  badgeShouldLight,
+  clearUnread,
+  hydrateUnread,
+  publishUnread,
+  refreshUnread,
+  unreadSnapshot,
+} = await import('../src/features/chat/unread')
 
 /** store 是模块级单例：每个用例前把内部快照清掉，避免互相污染 */
 beforeEach(() => {
@@ -175,5 +181,271 @@ describe('未读快照 · 底栏红点判定', () => {
     expect(badgeShouldLight({ conversations: null, notifications: null, previous: false })).toBe(
       false,
     )
+  })
+})
+
+/**
+ * 显示时刷新（#170 D：底栏每次显示都重取一次真实未读）。
+ *
+ * 冷启动补数只在「本账号还没有快照」时发请求；底栏实例跨「切 Tab / 后台回前台」
+ * 存活，别处产生的未读（新消息、另一台设备已读）必须能在重新显示时被取回来。
+ * 同时不能反过来把已有的正确值弄坏：拿不到的分量沿用旧值（不下调成「不知道」），
+ * 期间出现更权威的快照（消息页发布 / 登出清场）则丢弃这份迟到结果。
+ */
+describe('未读快照 · 显示时刷新', () => {
+  test('已有本次账号的快照时，刷新仍会重新取一次并落地新值', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.resolve(4)
+    publishUnread({ ownerId: 'u-alan', conversations: 5, notifications: 0 })
+
+    // 别处产生了新的未读：下一次显示必须能取回来（冷启动补数在这里会直接 return）
+    notifResult = () => Promise.resolve(7)
+    convResult = () => Promise.resolve(8)
+    refreshUnread('u-alan')
+    await flush()
+
+    expect(unreadSnapshot()?.ownerId).toBe('u-alan')
+    expect(unreadSnapshot()?.notifications).toBe(7)
+    expect(unreadSnapshot()?.conversations).toBe(8)
+  })
+
+  test('刷新期间消息页发布了权威快照 → 这份迟到结果被丢弃', async () => {
+    let resolveNotif: (value: number) => void = () => {}
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        resolveNotif = resolve
+      })
+    convResult = () => Promise.resolve(4)
+
+    refreshUnread('u-alan')
+    await flush()
+
+    // 期间消息页算出了更权威的值（含页内已读回写）
+    publishUnread({ ownerId: 'u-alan', conversations: 5, notifications: 0 })
+
+    resolveNotif(7)
+    await flush()
+
+    // 不能被这次刷新的旧值盖回去
+    expect(unreadSnapshot()?.notifications).toBe(0)
+    expect(unreadSnapshot()?.conversations).toBe(5)
+  })
+
+  test('刷新两路都没拿到（真实构建）→ 保留旧快照，不把「知道」写成「不知道」', async () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 2, notifications: 1 })
+
+    notifResult = () => Promise.reject(new Error('network down'))
+    convResult = () => Promise.reject(new Error('network down'))
+    refreshUnread('u-alan')
+    await flush()
+
+    expect(unreadSnapshot()?.notifications).toBe(1)
+    expect(unreadSnapshot()?.conversations).toBe(2)
+  })
+
+  test('刷新只拿到一项 → 已知项更新，没拿到的那项沿用旧值', async () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 2, notifications: 5 })
+
+    notifResult = () => Promise.reject(new Error('network down'))
+    convResult = () => Promise.resolve(9)
+    refreshUnread('u-alan')
+    await flush()
+
+    expect(unreadSnapshot()?.conversations).toBe(9)
+    // 通知那一路失败：沿用旧值 5，而不是变成「不知道」
+    expect(unreadSnapshot()?.notifications).toBe(5)
+  })
+
+  test('换账号后 A 的迟到刷新结果不覆盖 B 的快照', async () => {
+    let resolveNotif: (value: number) => void = () => {}
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        resolveNotif = resolve
+      })
+    convResult = () => Promise.resolve(4)
+
+    refreshUnread('u-a')
+    await flush()
+
+    publishUnread({ ownerId: 'u-b', conversations: 1, notifications: 1 })
+    resolveNotif(7)
+    await flush()
+
+    expect(unreadSnapshot()?.ownerId).toBe('u-b')
+    expect(unreadSnapshot()?.notifications).toBe(1)
+    expect(unreadSnapshot()?.conversations).toBe(1)
+  })
+
+  test('登出清场后同一账号的迟到刷新结果不落地（latestOwner 会变回同一个 id）', async () => {
+    let resolveNotif: (value: number) => void = () => {}
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        resolveNotif = resolve
+      })
+    convResult = () => Promise.resolve(4)
+
+    publishUnread({ ownerId: 'u-a', conversations: 2, notifications: 2 })
+    refreshUnread('u-a')
+    await flush()
+
+    clearUnread()
+    resolveNotif(7)
+    await flush()
+
+    // 登出后不能有任何快照被写回（同一账号再登录时也不该被旧结果顶掉）
+    expect(unreadSnapshot()).toBeNull()
+  })
+
+  test('登出后同一账号马上重新登录：登出前发出的结果不落地，新一轮补数照常生效', async () => {
+    const notifResolvers: Array<(value: number) => void> = []
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        notifResolvers.push(resolve)
+      })
+    convResult = () => Promise.resolve(4)
+
+    publishUnread({ ownerId: 'u-a', conversations: 2, notifications: 2 })
+    refreshUnread('u-a')
+    await flush()
+
+    clearUnread()
+    // 同一账号重新登录：底栏的补数会把这个账号重新记成「当前该为谁取数」，于是光比
+    // latestOwner 已经挡不住登出前发出的那份结果，只能靠登出时推进的版本号
+    hydrateUnread('u-a')
+    await flush()
+
+    // 登出必须把在途去重表一并清掉：否则这一轮补数会被「还在途」的旧请求吞掉，
+    // 而旧请求的结果又已被版本号作废 —— 这一次登录就没人再取数了
+    expect(notifResolvers).toHaveLength(2)
+
+    notifResolvers[0](7)
+    await flush()
+    expect(unreadSnapshot()).toBeNull()
+
+    // 新一轮登录自己的结果照常落地
+    notifResolvers[1](9)
+    await flush()
+    expect(unreadSnapshot()?.ownerId).toBe('u-a')
+    expect(unreadSnapshot()?.notifications).toBe(9)
+    expect(unreadSnapshot()?.conversations).toBe(4)
+  })
+
+  test('换账号（新账号的补数还没回来）后 A 的迟到结果不落地', async () => {
+    const notifResolvers: Array<(value: number) => void> = []
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        notifResolvers.push(resolve)
+      })
+    const convResolvers: Array<(value: number) => void> = []
+    convResult = () =>
+      new Promise<number>((resolve) => {
+        convResolvers.push(resolve)
+      })
+
+    refreshUnread('u-a')
+    await flush()
+    // B 登录：底栏为 B 补数。这一步只把「当前该为谁取数」改成 B，B 的快照还没回来，
+    // 所以此刻没有任何更权威的快照 —— 挡住 A 那份结果的只能是账号比对
+    hydrateUnread('u-b')
+    await flush()
+
+    notifResolvers[0](7)
+    convResolvers[0](7)
+    await flush()
+
+    expect(unreadSnapshot()).toBeNull()
+
+    notifResolvers[1](1)
+    convResolvers[1](1)
+    await flush()
+
+    expect(unreadSnapshot()?.ownerId).toBe('u-b')
+    expect(unreadSnapshot()?.notifications).toBe(1)
+  })
+
+  test('同账号刷新在途时再调只发一次请求（多 Tab 实例并发去重）', async () => {
+    let notifCalls = 0
+    notifResult = () => {
+      notifCalls += 1
+      return Promise.resolve(1)
+    }
+    convResult = () => Promise.resolve(0)
+
+    refreshUnread('u-a')
+    refreshUnread('u-a')
+    await flush()
+
+    expect(notifCalls).toBe(1)
+  })
+
+  test('演示 / 开发构建：刷新两路都失败 → 用注入的兜底，红点不消失', async () => {
+    notifResult = () => Promise.reject(new Error('network down'))
+    convResult = () => Promise.reject(new Error('network down'))
+
+    refreshUnread('u-alan', () => ({ conversations: 9, notifications: 99 }))
+    await flush()
+
+    expect(unreadSnapshot()?.conversations).toBe(9)
+    expect(unreadSnapshot()?.notifications).toBe(99)
+  })
+
+  test('没有旧快照时刷新两路都失败 → 不发布空快照', async () => {
+    notifResult = () => Promise.reject(new Error('network down'))
+    convResult = () => Promise.reject(new Error('network down'))
+
+    refreshUnread('u-alan')
+    await flush()
+
+    // 两项都是「不知道」且没有旧值可沿用：没有新信息，不广播（底栏按上一帧处理）
+    expect(unreadSnapshot()).toBeNull()
+  })
+
+  test('刷新只沿用「本次账号」的旧值：上一个账号的残留快照不算数', async () => {
+    // A 登出时没人清场（用户从没进过消息页），快照还是 A 的
+    publishUnread({ ownerId: 'u-a', conversations: 2, notifications: 5 })
+
+    // B 的刷新两路都失败
+    notifResult = () => Promise.reject(new Error('network down'))
+    convResult = () => Promise.reject(new Error('network down'))
+    refreshUnread('u-b')
+    await flush()
+
+    // 不能把 A 的计数当成 B 的旧值沿用（那会让 B 亮起 A 的未读）
+    expect(unreadSnapshot()?.ownerId).toBe('u-a')
+    expect(unreadSnapshot()?.conversations).toBe(2)
+    expect(unreadSnapshot()?.notifications).toBe(5)
+  })
+
+  test('刷新结果被更权威的快照作废后，下一次刷新仍然真的发请求（在途去重项必须释放）', async () => {
+    const notifResolvers: Array<(value: number) => void> = []
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        notifResolvers.push(resolve)
+      })
+    convResult = () => Promise.resolve(4)
+
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(1)
+
+    // 期间消息页发布了更权威的快照 → 这份在途刷新的结果会被作废（早退路径）
+    publishUnread({ ownerId: 'u-a', conversations: 5, notifications: 0 })
+    notifResolvers[0](7)
+    await flush()
+    expect(unreadSnapshot()?.notifications).toBe(0)
+
+    /*
+      作废的只能是「这份结果」，不能连「这个账号正在取数」这个标记也留下：否则之后
+      每一次显示时刷新都被在途去重吞掉，红点永远停在旧值上 —— 判据 D 静默失效，
+      而且直到下一次登出清场才恢复。
+    */
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(2)
+
+    notifResolvers[1](9)
+    await flush()
+    expect(unreadSnapshot()?.notifications).toBe(9)
+    expect(unreadSnapshot()?.conversations).toBe(4)
   })
 })
