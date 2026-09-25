@@ -626,7 +626,7 @@ describe('probeVoiceDuration', () => {
     })
   })
 
-  test('includes BlockDuration and rejects unknown-size Clusters', () => {
+  test('includes BlockDuration in the cluster end timecode', () => {
     const block = [0x81, 0, 0, 0x80, 0]
     const group = [...vint(0xa1, 1), ...vint(block.length), ...block, 0x9b, 0x81, 100]
     const payload = [0xe7, 0x82, ...u16be(59_999), 0xa0, ...vint(group.length), ...group]
@@ -636,9 +636,53 @@ describe('probeVoiceDuration', () => {
         'audio/webm',
       ),
     ).toEqual({ durationMs: 60_099 })
+  })
+
+  test('accepts the streaming shape: a trailing unknown-size Cluster runs to the Segment end', () => {
+    // 微信开发者工具的录音（Chrome MediaRecorder）就是这段真实形状：Segment 与最后一个
+    // Cluster 都是未知长度，Info 里没有 Duration。修之前这里返回 null，录音一条都发不出去。
+    const cluster = [
+      ...vint(0x1f43b675, 4),
+      0x01,
+      0xff,
+      0xff,
+      0xff,
+      0xff,
+      0xff,
+      0xff,
+      0xff,
+      0xe7,
+      0x81,
+      0x00,
+      ...simpleBlock(779),
+    ]
+    expect(probeVoiceDuration(webm([cluster], true), 'audio/webm')).toEqual({ durationMs: 779 })
+  })
+
+  test('counts the Cluster after an unknown-size Cluster instead of swallowing it', () => {
     expect(
       probeVoiceDuration(
         webm([[...vint(0x1f43b675, 4), 0xff, 0xe7, 0x81, 1], clusterWithBlocks(65_000, [0])], true),
+        'audio/webm',
+      ),
+    ).toEqual({ durationMs: 65_000 })
+  })
+
+  test('stays fail-closed for unknown sizes it cannot bound', () => {
+    // 只有 Cluster 可以未知长度；Info 这样仍判不完整。
+    expect(
+      probeVoiceDuration(
+        webm([[...vint(0x1549a966, 4), 0xff, 0xe7, 0x81, 1], clusterWithBlocks(1_000, [0])], true),
+        'audio/webm',
+      ),
+    ).toBeNull()
+    // Cluster 里嵌一个未知长度的子元素：定不了界，拒绝而不是猜一个边界。
+    expect(
+      probeVoiceDuration(
+        webm(
+          [[...vint(0x1f43b675, 4), 0xff, 0xe7, 0x81, 0x00, ...vint(0xa0, 1), 0xff, 0x00]],
+          true,
+        ),
         'audio/webm',
       ),
     ).toBeNull()

@@ -484,6 +484,24 @@
   border-radius: 50%;
 }
 
+/*
+  上传中的环：直传走 `Taro.request`（presign + PUT），而 `RequestTask` 上没有
+  `onProgressUpdate`（只有 `Taro.uploadFile` 的 `UploadTask` 有，但它的 multipart
+  请求体过不了 MinIO 的 presigned PUT）。所以这里给的是**不定量**的旋转指示，
+  不假装一个百分比。
+*/
+.conv__ring.is-spin {
+  border: 4px solid rgba(255, 255, 255, 0.28);
+  border-top-color: var(--surface);
+  animation: conv-ring-spin 0.9s linear infinite;
+}
+
+@keyframes conv-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* 上传失败：左上角 `!` 角标。图满铺后角标必须在图内（12px），否则被 overflow 裁掉 */
 .conv__failmark {
   position: absolute;
@@ -736,6 +754,15 @@
   font-size: 28px;
   font-weight: 600;
   color: var(--muted-2);
+}
+
+/* 录音中：整条按住区亮起来 —— 手指正压在上面，光换文案看不清 */
+.conv__hold.is-on {
+  background: var(--accent-weak);
+
+  .conv__hold-tx {
+    color: var(--brand-deep);
+  }
 }
 
 /* 「+」：展开态深墨底 + 图标转白 + 转 45°（语义从「更多」变成「收起」） */

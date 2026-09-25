@@ -45,9 +45,9 @@ function message(id: string, second: number): MessageDto {
  * 每页的 `items` 必须**内部升序**、且越晚取的页整体越早 —— 这正是服务端的契约
  * （`messageListResponseSchema` 按 `(createdAt, id)` 升序返回，游标往前翻）。
  */
-function pagedLoader(pages: Record<string, GapPage>) {
+function pagedLoader(pages: Record<string, GapPage<MessageDto>>) {
   const calls: Array<string | undefined> = []
-  const loadPage = async (before?: string): Promise<GapPage> => {
+  const loadPage = async (before?: string): Promise<GapPage<MessageDto>> => {
     calls.push(before)
     const page = pages[before ?? 'first']
     if (!page) throw new Error(`用例没有准备游标 ${String(before)} 对应的页`)
@@ -417,5 +417,85 @@ describe('recoverGapsOnReconnect —— 新缺口和历史欠账各记一笔（#
     // 接到 m3 所在的那一页就停：更早的本地本来就有
     expect(result.items.map((item) => item.id)).toEqual(['m3', 'm4', 'm5', 'm6', 'm7', 'm8'])
     expect(result).toMatchObject({ freshComplete: true, resumeCursors: [] })
+  })
+})
+
+/**
+ * 媒体流走的是**另一套分页**（`loadMediaPage`），但欠账的记法与消息流完全一样
+ * （#67 复查 #222）。这个假的媒体服务端只吐 `{ id, mediaId }`，用来锁两件事：
+ * 泛型化之后媒体项原样带回来，以及「旧游标不能顶掉本次断线新增的媒体」。
+ */
+function growingMediaServer(pageSize: number, ids: string[], failing: () => ReadonlySet<string>) {
+  const calls: Array<string | undefined> = []
+  const loadPage = async (before?: string) => {
+    calls.push(before)
+    if (failing().has(before ?? 'first')) {
+      return { items: [], nextCursor: before ?? null, failed: true }
+    }
+    const end = before === undefined ? ids.length : Number(before.slice(1))
+    const start = Math.max(0, end - pageSize)
+    return {
+      items: ids.slice(start, end).map((id) => ({ id, mediaId: `media-${id}` })),
+      nextCursor: start > 0 ? `c${start}` : null,
+      failed: false,
+    }
+  }
+  return { loadPage, calls }
+}
+
+describe('recoverGapsOnReconnect —— 媒体流走同一套账（#67 复查 #222）', () => {
+  test('两次断线：媒体流同样要「新缺口 + 历史欠账」各补一遍', async () => {
+    const ids = ['v1', 'v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8']
+    const failing = new Set(['c4'])
+    const { loadPage, calls } = growingMediaServer(2, ids, () => failing)
+
+    const first = await recoverGapsOnReconnect(loadPage, new Set(['v1']), {
+      maxPages: 1,
+      maxPasses: 3,
+    })
+
+    expect(first.items.map((item) => item.id)).toEqual(['v5', 'v6', 'v7', 'v8'])
+    expect(first.resumeCursors).toEqual(['c4'])
+
+    // 第二次断线：服务端又新增 v9–v12，且 v3/v4 那一页现在能读到了
+    ids.push('v9', 'v10', 'v11', 'v12')
+    failing.clear()
+    calls.length = 0
+
+    const second = await recoverGapsOnReconnect(loadPage, new Set(['v1', 'v5', 'v6', 'v7', 'v8']), {
+      maxPages: 1,
+      maxPasses: 3,
+      resumeCursors: first.resumeCursors,
+    })
+
+    // 修复前媒体这条会拿 'c4' 当起点，补回 v3/v4 就收工，本次新增的 v9–v12 一条不取
+    expect(calls[0]).toBeUndefined()
+    const recovered = second.items.map((item) => item.id)
+    expect(recovered).toContain('v9')
+    expect(recovered).toContain('v12')
+    expect(recovered).toContain('v3')
+    expect(recovered).toContain('v4')
+    // 泛型化之后媒体项原样带回来，`mediaId` 不能在路上丢掉
+    expect(second.items.find((item) => item.id === 'v9')?.mediaId).toBe('media-v9')
+    expect(second.resumeCursors).toEqual([])
+  })
+
+  test('两条流各记各的账：消息流接上本地前沿，不会顶掉媒体流的欠账', async () => {
+    const messageServer = growingServer(1, ['m1', 'm2', 'm3', 'm4'], () => new Set())
+    const mediaServer = growingMediaServer(1, ['v1', 'v2', 'v3', 'v4'], () => new Set(['c1']))
+
+    const messageResult = await recoverGapsOnReconnect(messageServer.loadPage, new Set(['m1']), {
+      maxPages: 10,
+    })
+    const mediaResult = await recoverGapsOnReconnect(mediaServer.loadPage, new Set(['v1']), {
+      maxPages: 10,
+    })
+
+    expect(messageResult).toMatchObject({ freshComplete: true, resumeCursors: [] })
+    // 本地已有的 m1 也在返回里（按 id 并集交给调用方，这里不做过滤）
+    expect(messageResult.items.map((item) => item.id)).toEqual(['m1', 'm2', 'm3', 'm4'])
+    // 媒体那条在 c1 那一页失败：欠账留在它自己的账本里
+    expect(mediaResult.resumeCursors).toEqual(['c1'])
+    expect(mediaResult.items.map((item) => item.id)).toEqual(['v2', 'v3', 'v4'])
   })
 })

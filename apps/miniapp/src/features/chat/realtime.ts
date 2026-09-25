@@ -18,8 +18,8 @@
  * 2. **「已重连」信号**。`onOpen` 除了重置退避，还会派发一次重连信号，订阅方据此用
  *    历史接口补齐断档（见 `realtime-recovery.ts` 的 `backfillMessageGap`）。
  */
-import type { RealtimeServerEvent } from '@fish/contracts/chat/schema'
-import { realtimeServerEventSchema } from '@fish/contracts/chat/schema'
+import type { MediaRealtimeEvent, RealtimeServerEvent } from '@fish/contracts/chat/schema'
+import { mediaRealtimeEventSchema, realtimeServerEventSchema } from '@fish/contracts/chat/schema'
 import Taro from '@tarojs/taro'
 import { useEffect, useRef } from 'react'
 import { API_BASE } from '@/lib/api-base'
@@ -38,7 +38,10 @@ const PING_INTERVAL_MS = 25_000
  */
 type SocketTask = Awaited<ReturnType<typeof Taro.connectSocket>>
 
-export type RealtimeListener = (event: RealtimeServerEvent) => void
+/** 服务端在 `/ws/chat` 上推的两类事件：通用实时事件 + 独立媒体事件 */
+export type RealtimeEvent = RealtimeServerEvent | MediaRealtimeEvent
+
+export type RealtimeListener = (event: RealtimeEvent) => void
 /** 「连接已建立 / 已重连」——订阅方据此补齐断档，不是「消息」事件 */
 export type ReconnectListener = () => void
 
@@ -106,11 +109,16 @@ function teardownSocket(): void {
   }
 }
 
-function dispatchEvent(event: RealtimeServerEvent): void {
+function dispatchEvent(event: RealtimeEvent): void {
   for (const listener of eventListeners) listener(event)
 }
 
-/** 坏帧静默忽略（与服务端「不因坏帧断连」对称），过期连接的帧一律丢弃 */
+/**
+ * 坏帧静默忽略（与服务端「不因坏帧断连」对称），过期连接的帧一律丢弃。
+ *
+ * 媒体走**独立的** `media.new` 事件（服务端刻意不并进 `realtimeServerEventSchema`，
+ * 以免破坏未接入媒体的客户端），所以这里要依次试两个 schema。
+ */
 function handleMessage(generation: number, raw: unknown): void {
   if (generation !== state.generation) return
   if (typeof raw !== 'string') return
@@ -121,7 +129,12 @@ function handleMessage(generation: number, raw: unknown): void {
     return
   }
   const result = realtimeServerEventSchema.safeParse(parsed)
-  if (result.success) dispatchEvent(result.data)
+  if (result.success) {
+    dispatchEvent(result.data)
+    return
+  }
+  const media = mediaRealtimeEventSchema.safeParse(parsed)
+  if (media.success) dispatchEvent(media.data)
 }
 
 function scheduleReconnect(): void {
