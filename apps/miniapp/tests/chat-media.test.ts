@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  assertMediaActive,
   imageRejectReason,
   MEDIA_IMAGE_MAX_BYTES,
   MEDIA_IMAGE_PICK_LIMIT,
+  MediaAbortedError,
   mediaObjectUrl,
   voiceDurationLabel,
   voiceMimeFromBytes,
@@ -115,6 +117,33 @@ describe('mediaObjectUrl —— 私有媒体的鉴权下载地址', () => {
     expect(mediaObjectUrl('http://localhost:3001///', conversationId, mediaId)).toBe(
       `http://localhost:3001/conversations/${conversationId}/media/${mediaId}`,
     )
+  })
+})
+
+describe('assertMediaActive —— 多步媒体链的在途闸（#67 复查 #222）', () => {
+  test('不传判据时保持旧行为（不关心归属），不抛', () => {
+    expect(() => assertMediaActive()).not.toThrow()
+  })
+
+  test('判据为真时放行', () => {
+    expect(() => assertMediaActive(() => true)).not.toThrow()
+  })
+
+  test('判据为假时抛 MediaAbortedError —— 必须是与普通失败可区分的类型', () => {
+    // 调用方靠 `error instanceof MediaAbortedError` 决定「静默返回」还是「提示 + 置失败态」，
+    // 所以这里既锁抛出也锁类型（换成裸 Error 会让换号后弹一条无来由的「发送失败」）。
+    expect(() => assertMediaActive(() => false)).toThrow(MediaAbortedError)
+    expect(() => assertMediaActive(() => false)).toThrow('媒体操作已中止')
+  })
+
+  test('每次调用都重新问判据（不是为了缓存一次判断结果）', () => {
+    // 上传链是「入口 → 读完文件 → presign → PUT」多步，判据必须在每一步现问：
+    // 中途换号只有重新问才看得见。
+    let active = true
+    const isActive = () => active
+    expect(() => assertMediaActive(isActive)).not.toThrow()
+    active = false
+    expect(() => assertMediaActive(isActive)).toThrow(MediaAbortedError)
   })
 })
 

@@ -32,6 +32,7 @@ import { API_BASE } from '@/lib/api-base'
 import { apiRequest } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import {
+  assertMediaActive,
   type ChatImageMime,
   imageRejectReason,
   mediaObjectUrl,
@@ -171,13 +172,22 @@ async function readImageInfo(
   }
 }
 
-/** 上传单张图片，返回 create 需要的声明值（`sizeBytes` = 真实字节长度）。 */
+/**
+ * 上传单张图片，返回 create 需要的声明值（`sizeBytes` = 真实字节长度）。
+ *
+ * `isActive` 是调用方的在途判据（会话页传 `() => !isStale()`）：**读文件之后**、presign 之前
+ * 与直传 PUT 之前各问一遍，换号 / 卸载后立刻中止，不再发出后续鉴权请求（#67 复查 #222）。
+ */
 export async function uploadChatImage(
   conversationId: string,
   image: PickedChatImage,
+  isActive?: () => boolean,
 ): Promise<UploadedImage> {
+  assertMediaActive(isActive)
   const buffer = await readLocalFile(image.path, '图片读取失败，请重试')
-  const objectKey = await putObject(conversationId, 'IMAGE', image.mime, buffer)
+  // 读文件是异步的：这一步回来时账号可能已经变了，presign / PUT 都不该再发
+  assertMediaActive(isActive)
+  const objectKey = await putObject(conversationId, 'IMAGE', image.mime, buffer, isActive)
   return {
     kind: 'IMAGE',
     objectKey,
@@ -193,15 +203,19 @@ export async function uploadChatImage(
  *
  * 容器由**字节头**判定（不信任录音机声明的格式）：契约只接受可解析时长的 WebM / MP4，
  * 认不出来就明确报错，而不是发一个必然 422 的请求让用户看到「媒体实际属性与声明不一致」。
+ * `isActive` 的语义同 `uploadChatImage`。
  */
 export async function uploadChatVoice(
   conversationId: string,
   voice: RecordedVoice,
+  isActive?: () => boolean,
 ): Promise<UploadedVoice> {
+  assertMediaActive(isActive)
   const buffer = await readLocalFile(voice.path, '语音读取失败，请重试')
+  assertMediaActive(isActive)
   const contentType: VoiceMime | null = voiceMimeFromBytes(buffer)
   if (!contentType) throw new Error('当前录音格式暂不支持发送语音')
-  const objectKey = await putObject(conversationId, 'VOICE', contentType, buffer)
+  const objectKey = await putObject(conversationId, 'VOICE', contentType, buffer, isActive)
   return {
     kind: 'VOICE',
     objectKey,
@@ -216,7 +230,9 @@ async function putObject(
   kind: MediaKind,
   contentType: string,
   buffer: ArrayBuffer,
+  isActive?: () => boolean,
 ): Promise<string> {
+  assertMediaActive(isActive)
   const presign: MediaPresignResponse = mediaPresignResponseSchema.parse(
     await apiRequest(CHAT_ROUTES.mediaPresign(conversationId), {
       method: 'POST',
@@ -224,6 +240,9 @@ async function putObject(
     }),
   )
 
+  // 直传 PUT 不携带会话（只有 presign 的签名），但它会在对象存储里留下真实对象 ——
+  // 换号后这一发同样不该再发。
+  assertMediaActive(isActive)
   const uploaded = await Taro.request({
     url: presign.uploadUrl,
     method: 'PUT',
@@ -271,11 +290,20 @@ export async function loadMediaPage(
  * `<Image src>` 与 `innerAudioContext.src` 都带不了会话 Cookie，直接指向业务 API 会 401；
  * `downloadFile` 能带 header，所以图片预览与语音播放统一走这里。
  * 结果按 mediaId 缓存，避免同一屏反复下载；自己刚发出去的媒体由页面直接写缓存。
+ *
+ * `isActive` 是调用方的在途判据：**写缓存之前**再问一遍（#67 复查 #222）。下载是异步的，
+ * 回来时若已经换号 / 离页，这份字节属于上一个身份 —— 写进模块缓存就会被下一个身份复用
+ * （私有媒体的临时文件不该跨身份），所以宁可丢掉这次下载结果。
  */
-export async function downloadChatMedia(conversationId: string, mediaId: string): Promise<string> {
+export async function downloadChatMedia(
+  conversationId: string,
+  mediaId: string,
+  isActive?: () => boolean,
+): Promise<string> {
   const cached = localMediaPaths.get(mediaId)
   if (cached) return cached
 
+  assertMediaActive(isActive)
   const result = await Taro.downloadFile({
     url: mediaObjectUrl(API_BASE, conversationId, mediaId),
     header: { Cookie: sessionCookieHeader() },
@@ -284,6 +312,7 @@ export async function downloadChatMedia(conversationId: string, mediaId: string)
   if (result.statusCode < 200 || result.statusCode >= 300) {
     throw new Error('媒体加载失败')
   }
+  assertMediaActive(isActive)
   cacheMediaPath(mediaId, result.tempFilePath)
   return result.tempFilePath
 }

@@ -14,7 +14,11 @@ import {
   markConversationRead,
   sendMessage,
 } from '@/features/chat/api'
-import { MEDIA_IMAGE_PICK_LIMIT, voiceDurationLabel } from '@/features/chat/media'
+import {
+  MEDIA_IMAGE_PICK_LIMIT,
+  MediaAbortedError,
+  voiceDurationLabel,
+} from '@/features/chat/media'
 import {
   cachedMediaPath,
   cacheMediaPath,
@@ -46,6 +50,7 @@ import {
   deferReload,
   hasEarlierPage,
   initialDeferredReload,
+  isCurrentPlayRequest,
   isLatestPageLoad,
   isStaleMediaTask,
   listingStatusText,
@@ -59,6 +64,7 @@ import {
   type PendingMediaDraft,
   type PendingMessage,
   parseTxEvent,
+  planMediaLoad,
   resetDeferredReload,
   resolveConvState,
   settleSend,
@@ -164,10 +170,15 @@ export default function Conversation() {
    * 增量写一条 —— 不把模块级 Map 当状态，也不会因为整批下载完而重算全表。
    */
   const [localPaths, setLocalPaths] = useState<ReadonlyMap<string, string>>(() => new Map())
-  /** 记下一条「媒体 id → 本地文件」：同时写模块级缓存（再进这个会话不用重新下载） */
+  /**
+   * 记下一条「媒体 id → 本地文件」：同时写模块级缓存（再进这个会话不用重新下载）。
+   *
+   * 幂等：值没变时返回原 Map，不再造一个新对象。缓存命中回填（下面自动下载 effect）会
+   * 每次 effect 重跑都对同一条调用它，不幂等就会白白重渲染一轮（#67 复查 #222）。
+   */
   const rememberPath = useCallback((id: string, path: string) => {
     cacheMediaPath(id, path)
-    setLocalPaths((prev) => new Map(prev).set(id, path))
+    setLocalPaths((prev) => (prev.get(id) === path ? prev : new Map(prev).set(id, path)))
   }, [])
   /** 正在播放的语音（服务端 mediaId 或本地临时 id） */
   const [playingId, setPlayingId] = useState<string | null>(null)
@@ -212,6 +223,15 @@ export default function Conversation() {
   const audioRef = useRef<ReturnType<typeof Taro.createInnerAudioContext> | null>(null)
   /** 正在下载的 mediaId：避免同一条媒体被并发下载两次 */
   const downloadingRef = useRef<Set<string>>(new Set())
+
+  /**
+   * 语音播放请求序号（#67 复查 #222）。
+   *
+   * 每次点语音 / 换号 / 离页都 +1；下载回调落地前拿自己捕获的 token 与它比对。
+   * 没有这道闸，`openVoice` 的 `.then` 会在换号或离页之后照旧 `rememberPath` +
+   * `playVoice` —— 声音从上一个会话里冒出来，缓存还被跨身份复用。
+   */
+  const playSeqRef = useRef(0)
 
   /**
    * 还没补上的位置（#67 N5 / 复查 #221），新 → 旧。
@@ -280,6 +300,8 @@ export default function Conversation() {
     audioRef.current?.destroy()
     audioRef.current = null
     downloadingRef.current.clear()
+    // 在途的语音下载到此失效：回来时不许再写缓存、更不许出声
+    playSeqRef.current += 1
     clearMediaCache()
     setLocalPaths(new Map())
   }
@@ -499,6 +521,8 @@ export default function Conversation() {
       recordingRef.current = null
       audioRef.current?.destroy()
       audioRef.current = null
+      // 在途的语音下载到此失效（与身份清场同理）：离页后回来不许出声
+      playSeqRef.current += 1
     }
   }, [])
 
@@ -507,23 +531,49 @@ export default function Conversation() {
    * `<Image>` / `innerAudioContext` 也带不了 Cookie，只能走带 header 的 `downloadFile`）。
    *
    * 依赖只有 `media`：下载结果进的是 `localPaths` 与 `media-api` 的模块级缓存，
-   * 而 `rememberPath` 是稳定引用，所以这里不会被「自己写 state」反复触发。
+   * 而 `rememberPath` 是稳定引用且幂等，所以这里不会被「自己写 state」反复触发。
    * `downloadingRef` 兜住同一批里重复的 id（推送与 HTTP 可能同时把一条媒体放进 `media`）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null || !conversationId) return
+    /**
+     * 这一批下载属于**哪个身份**（#67 复查 #222）。`downloadChatMedia` 会在写模块缓存前
+     * 再问一次 —— 下载是异步的，回来时可能已经换号 / 离页，那份字节属于上一个身份，
+     * 写进模块缓存就会被下一个身份复用（私有媒体的临时文件不该跨身份）。
+     */
+    const task: MediaTaskBinding = { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' }
+    const isActive = () =>
+      aliveRef.current &&
+      userIdRef.current === userId &&
+      !isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
     for (const item of media) {
       // N1：媒体的身份是 `mediaId` —— 契约里 `id` 是**消息** id，鉴权代理端点收的也是
       // `mediaId`。缓存键同样用 `mediaId`，否则 `media-api` 的模块级 LRU 永远命不中，
       // 每次进页面都会把同一条媒体重新下载一遍。
-      if (cachedMediaPath(item.mediaId) || downloadingRef.current.has(item.mediaId)) continue
+      const plan = planMediaLoad({
+        cached: cachedMediaPath(item.mediaId),
+        downloading: downloadingRef.current.has(item.mediaId),
+      })
+      if (plan.kind === 'reuse') {
+        /*
+         * 模块级缓存命中也必须回填**本页**的路径映射（#67 复查 #222）。
+         * `localPaths` 是页面级 state，退出会话再进来时它是空的，而渲染只读它 ——
+         * 修复前这里直接 `continue`，于是缓存还在、页面状态没了，图片退化成占位块
+         * 且永远不会重新下载（缓存命中把下载也挡住了）。`rememberPath` 幂等，不会白渲染。
+         */
+        rememberPath(item.mediaId, plan.path)
+        continue
+      }
+      if (plan.kind === 'skip') continue
       downloadingRef.current.add(item.mediaId)
-      void downloadChatMedia(conversationId, item.mediaId)
+      void downloadChatMedia(conversationId, item.mediaId, isActive)
         .then((path) => {
-          if (userIdRef.current !== userId) return
+          if (!isActive()) return
           rememberPath(item.mediaId, path)
         })
         .catch((error) => {
+          // 换号 / 离页导致的中止是预期路径，不当失败打日志
+          if (error instanceof MediaAbortedError) return
           console.warn('[miniapp] 媒体下载失败', error)
         })
         .finally(() => {
@@ -813,19 +863,31 @@ export default function Conversation() {
     void (async () => {
       let uploaded = draft.uploaded
       if (!uploaded) {
+        /**
+         * 把在途判据一路传进上传层（#67 复查 #222）：`isStale()` 只在整条链**返回之后**
+         * 跑，那是写状态的守卫；而链里是「读文件 → presign → 直传 PUT」，后两步会照常发出。
+         * `request.ts` 的 Cookie 是发出那一刻现取的，所以换号后 create 会带着新账号落库、
+         * PUT 还会在对象存储里留下没人引用的对象。上传层每步发请求前都问一次 `isStale()`。
+         */
+        const isActive = () => !isStale()
         uploaded =
           draft.kind === 'IMAGE'
-            ? await uploadChatImage(conversationId, {
-                path: draft.path,
-                mime: draft.image.mime,
-                width: draft.image.width,
-                height: draft.image.height,
-                sizeBytes: draft.image.sizeBytes,
-              })
-            : await uploadChatVoice(conversationId, {
-                path: draft.path,
-                durationMs: draft.durationMs,
-              })
+            ? await uploadChatImage(
+                conversationId,
+                {
+                  path: draft.path,
+                  mime: draft.image.mime,
+                  width: draft.image.width,
+                  height: draft.image.height,
+                  sizeBytes: draft.image.sizeBytes,
+                },
+                isActive,
+              )
+            : await uploadChatVoice(
+                conversationId,
+                { path: draft.path, durationMs: draft.durationMs },
+                isActive,
+              )
         // 上传期间换了账号：这条媒体不能再以新账号的身份创建（N2）
         if (isStale()) return null
         setPendingMedia((prev) =>
@@ -853,7 +915,7 @@ export default function Conversation() {
     })()
       .then((created) => {
         if (created === null) return
-        if (current !== epoch.current) return
+        if (isStale()) return
         // 自己刚发出去的这张图 / 这段音就在本地，直接记下来：不重新下载，也不闪一下空白。
         // 键用 `mediaId`（N1）：渲染查的 `localPaths` 与模块级缓存都按它索引
         rememberPath(created.mediaId, draft.path)
@@ -861,7 +923,12 @@ export default function Conversation() {
         setMedia((prev) => mergePushedMedia(prev, created))
       })
       .catch((error) => {
-        if (current !== epoch.current) return
+        /*
+         * 换号 / 离页导致的上传链中止（`MediaAbortedError`）是**预期路径**：这条媒体已经不
+         * 属于当前身份，既不提示也不置失败态（身份清场已经把气泡清掉了，弹一句
+         * 「发送失败」只会让新账号看到一条无来由的报错）。#67 复查 #222。
+         */
+        if (error instanceof MediaAbortedError || isStale()) return
         console.warn('[miniapp] 发送媒体失败', error)
         void Taro.showToast({
           title: error instanceof Error ? error.message : '发送失败，请重试',
@@ -1014,6 +1081,11 @@ export default function Conversation() {
    *
    * 下载失败**不吞**（与自动下载的 best-effort 不同：这是用户明确点了一下，
    * 没有任何反馈会被当成「点了没反应」）。
+   *
+   * 迟到的下载不许落地（#67 复查 #222）：`playSeqRef` 令牌 + `isCurrentPlayRequest` 一起
+   * 看住「换号 / 离页 / 用户又点了别的」—— 修复前 `.then` 无条件 `rememberPath` +
+   * `playVoice`，早就离页的下载回来照样出声，还把上一个身份的私有媒体写进模块缓存。
+   * 同一个判据也传给 `downloadChatMedia`，守住它写缓存的那一步。
    */
   const openVoice = (item: MediaMessageDto) => {
     // 播放态按**气泡**（消息 id / 本地临时 id）记，与 `entry.keyId` 同一空间；
@@ -1027,12 +1099,25 @@ export default function Conversation() {
       playVoice(item.id, local)
       return
     }
-    void downloadChatMedia(conversationId, item.mediaId)
+    playSeqRef.current += 1
+    const task: MediaTaskBinding = { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' }
+    const request = { token: playSeqRef.current, task }
+    const isCurrent = () =>
+      isCurrentPlayRequest(request, {
+        token: playSeqRef.current,
+        epoch: epoch.current,
+        cookie: sessionCookieHeader() ?? '',
+        alive: aliveRef.current,
+      })
+    void downloadChatMedia(conversationId, item.mediaId, isCurrent)
       .then((path) => {
+        if (!isCurrent()) return
         rememberPath(item.mediaId, path)
         playVoice(item.id, path)
       })
       .catch((error) => {
+        // 换号 / 离页导致的中止是预期路径：不出声、也不提示（用户已经不在这个身份上了）
+        if (error instanceof MediaAbortedError) return
         console.warn('[miniapp] 语音下载失败', error)
         void Taro.showToast({ title: '语音加载失败，请重试', icon: 'none' })
       })

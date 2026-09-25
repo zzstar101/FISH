@@ -192,6 +192,52 @@ export function isStaleMediaTask(
 }
 
 /**
+ * 自动下载该对一条媒体做什么（#67 复查 #222）。
+ *
+ * `reuse` 这一支是修复的核心：`media-api` 的模块级缓存与页面级 `localPaths` 是**两份**
+ * 状态。退出会话再进来时页面状态被重建、模块缓存还在，修复前缓存命中直接 `continue`，
+ * 于是图片只剩占位块、而且因为缓存命中永远不会重新下载。命中时必须把路径回填进本页。
+ */
+export type MediaLoadPlan =
+  | { readonly kind: 'reuse'; readonly path: string }
+  | { readonly kind: 'skip' }
+  | { readonly kind: 'download' }
+
+export function planMediaLoad(input: {
+  readonly cached: string | null
+  readonly downloading: boolean
+}): MediaLoadPlan {
+  if (input.cached !== null) return { kind: 'reuse', path: input.cached }
+  if (input.downloading) return { kind: 'skip' }
+  return { kind: 'download' }
+}
+
+/**
+ * 一次语音播放请求是否还该落地（#67 复查 #222）。
+ *
+ * 三道闸缺一不可：
+ * - `alive` —— 已经离开会话页（卸载）；回来时不该突然出声。
+ * - `token` —— 用户又点了另一条语音 / 又点了一次；旧下载回来不该抢走当前播放。
+ * - `MediaTaskBinding` —— 换了账号（epoch 或 cookie 变了）；私有媒体的字节属于上一个身份。
+ *
+ * 为什么不能只看 `playingId`：下载是异步的，`playingId` 那套只在**点击时**比对，
+ * 迟到的回调回来时 `playingId` 可能已经被别的请求占用，读它得到的是「别人的答案」。
+ */
+export function isCurrentPlayRequest(
+  request: { readonly token: number; readonly task: MediaTaskBinding },
+  current: {
+    readonly token: number
+    readonly epoch: number
+    readonly cookie: string
+    readonly alive: boolean
+  },
+): boolean {
+  return (
+    current.alive && current.token === request.token && !isStaleMediaTask(request.task, current)
+  )
+}
+
+/**
  * 按契约的 `(createdAt, id)` 升序排。
  *
  * 为什么需要：发送成功是按**响应到达顺序**追加的，连发两条时响应可能乱序回来，

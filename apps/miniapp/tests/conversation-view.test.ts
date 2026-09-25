@@ -9,6 +9,7 @@ import {
   deferReload,
   hasEarlierPage,
   initialDeferredReload,
+  isCurrentPlayRequest,
   isFlushDue,
   isStaleMediaTask,
   listingStatusText,
@@ -18,6 +19,7 @@ import {
   type PendingMedia,
   type PendingMessage,
   parseTxEvent,
+  planMediaLoad,
   resetDeferredReload,
   settleSend,
   shouldFlushDeferredReload,
@@ -515,5 +517,104 @@ describe('isStaleMediaTask —— 媒体发送任务绑定发起时的会话（#
 
   test('退出登录（cookie 变空）：判旧', () => {
     expect(isStaleMediaTask(binding, { epoch: 3, cookie: '' })).toBe(true)
+  })
+})
+
+describe('planMediaLoad —— 缓存命中要回填本页路径（#67 复查 #222）', () => {
+  test('第一次进会话：模块缓存还空 → 去下载', () => {
+    expect(planMediaLoad({ cached: null, downloading: false })).toEqual({ kind: 'download' })
+  })
+
+  test('第一次成功显示 → 退出 → 重新进入：命中缓存必须 reuse 并把路径带回来', () => {
+    // 第一次进：走下载，成功后写进模块缓存 + 本页 localPaths
+    expect(planMediaLoad({ cached: null, downloading: false })).toEqual({ kind: 'download' })
+    // 退出会话：页面级 localPaths 随组件一起被重建为空，模块级缓存还在。
+    // 修复前这里直接 `continue`，渲染只读 localPaths → 图片退化成占位块，
+    // 而且缓存命中把下载也挡住了，永远不会自愈。
+    expect(planMediaLoad({ cached: 'wxfile://tmp/a.png', downloading: false })).toEqual({
+      kind: 'reuse',
+      path: 'wxfile://tmp/a.png',
+    })
+  })
+
+  test('同一条媒体正在下载：跳过，不并发重复下载', () => {
+    expect(planMediaLoad({ cached: null, downloading: true })).toEqual({ kind: 'skip' })
+  })
+
+  test('缓存命中优先于「下载中」：已经有路径就不必等那次下载', () => {
+    expect(planMediaLoad({ cached: 'wxfile://tmp/a.png', downloading: true })).toEqual({
+      kind: 'reuse',
+      path: 'wxfile://tmp/a.png',
+    })
+  })
+})
+
+describe('isCurrentPlayRequest —— 迟到的语音下载不许落地（#67 复查 #222）', () => {
+  const task = { epoch: 3, cookie: 'fish_session=aaa' }
+  const request = { token: 7, task }
+
+  test('当前有效：还活着、还是同一次点击、还是同一个身份', () => {
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        epoch: 3,
+        cookie: 'fish_session=aaa',
+        alive: true,
+      }),
+    ).toBe(true)
+  })
+
+  test('点播放 → 下载挂起 → 换了账号：下载回来不许出声、不许回填缓存', () => {
+    // 直接换 storage 会话（代次没动）也要拦住：缓存里是上一个身份的私有媒体临时文件
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        epoch: 3,
+        cookie: 'fish_session=bbb',
+        alive: true,
+      }),
+    ).toBe(false)
+    // 退出登录 / 整页重拉推进代次
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        epoch: 4,
+        cookie: 'fish_session=aaa',
+        alive: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('点播放 → 下载挂起 → 离开会话页：下载回来不许出声', () => {
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        epoch: 3,
+        cookie: 'fish_session=aaa',
+        alive: false,
+      }),
+    ).toBe(false)
+  })
+
+  test('下载期间用户又点了别的语音：旧的那次不再抢当前播放', () => {
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 8,
+        epoch: 3,
+        cookie: 'fish_session=aaa',
+        alive: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('只看 playingId 不够：令牌不同就必须判旧（迟到的回调读到的是别人的答案）', () => {
+    // 这条断言的含义是：即使身份没变（epoch / cookie 都一样），
+    // 只要播放请求序号被后来的点击推进过，旧回调就不能落地。
+    expect(
+      isCurrentPlayRequest(
+        { token: 1, task },
+        { token: 2, epoch: task.epoch, cookie: task.cookie, alive: true },
+      ),
+    ).toBe(false)
   })
 })
