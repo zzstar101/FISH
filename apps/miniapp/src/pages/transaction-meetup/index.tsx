@@ -2,7 +2,7 @@ import type { MeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import type { MeetupTokenResponse, TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Input, Text, View } from '@tarojs/components'
-import Taro, { useLoad, useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useLoad, useRouter } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -19,6 +19,17 @@ import {
 } from '@/features/transaction/api'
 import { qrDataUrl } from '@/features/transaction/qr'
 import { isApiError } from '@/lib/request'
+import {
+  canAcquire,
+  classifyConfirmFailure,
+  nextConfirmPending,
+  nextPendingSync,
+  pendingAfterTerminalRefetch,
+  playsCompletionFx,
+  releaseLock,
+  sequenceSuperseded,
+  showSync,
+} from './view'
 import './index.scss'
 
 /**
@@ -52,6 +63,14 @@ import './index.scss'
  * sellerConfirmedAt 不能单独作为核销证明（Web 端普通 confirm 也会盖它）——
  * 必须再查 GET meetup-token 的 status === CONSUMED 才恢复确认入口；
  * 非 CONSUMED 一律仍要求扫码 / 手输核销。
+ *
+ * 提交与返回（#147 P2 / #170 D）：`verify` 与 `retryConfirm` 共用一个**代次作用域**的
+ * 同步提交锁 —— `submitting` 是 state，同一个 tick 的第二次点击读到的还是上一帧的
+ * `false`；锁按代次比较，当场就挡下，且旧账号迟到的 `finally` 放不掉新账号手里的锁。
+ * 从扫码页返回本页时 `useDidShow` 重读交易与恢复口径（首次 show 让渡给登录态 effect）；
+ * 本代次有写入在飞则挂起，等写链收尾后补一次 —— 不丢刷新，也不打断在途任务。
+ * 核销成功后的自动 confirm 拿到 409 `TRANSACTION_NOT_IN_PENDING` 时按终态处理
+ * （重读交易 + 撤下确认入口），不能停在「还差最后一步确认」。
  *
  * 错误口径逐一对齐后端错误码：INVALID（码不正确）/
  * CONSUMED（已被使用）/ LOCKED（错误次数过多）/ NOT_FOUND（对方还没出码）/
@@ -91,6 +110,9 @@ const FX_PARTICLES = Array.from({ length: 26 }, (_, index) => `meetup-fx-p-${ind
 type TokenView =
   | { state: 'issuing' }
   | { state: 'ready'; token: MeetupTokenResponse }
+  /** 取码失败（网络 / 5xx / 非 404 的 4xx）：必须留下重试入口。旧接线把它落回 `null`，
+   * 与「还没开始取码」共用同一屏「交易码加载中…」，卖家只能在那里干等。 */
+  | { state: 'failed' }
   /** 凭证暂不在本页展示（如卖家误扫自己的码收到 NOT_ALLOWED）。
    * #176 起取码幂等、**码值不变**：重新进入本页即可取回同一枚码，
    * 不存在「旧码被换掉」这回事；本页不自动重取，免得把一次核销失败静默变成展示动作。 */
@@ -115,9 +137,9 @@ export default function TransactionMeetup() {
   const [scannedInvalid, setScannedInvalid] = useState(false)
   /** 手动输入：6 位数字的字符数组，索引即格子位置 */
   const [digits, setDigits] = useState<string[]>(['', '', '', '', '', ''])
-  /** 手动输入的错误提示（码错误 / 过期 / 已被使用 / 次数过多），空串表示无错误 */
+  /** 手动输入的错误提示（码错误 / 已被使用 / 次数过多），空串表示无错误 */
   const [inputError, setInputError] = useState('')
-  /** 提交中锁：防重复核销 */
+  /** 提交中的**渲染态**（按钮文案与 is-off）；真正的防重入在 `submitLock` ref 上 */
   const [submitting, setSubmitting] = useState(false)
   /**
    * 核验态（稿 ③）：买家提交交易码后的「只有一个转圈」阶段。
@@ -133,6 +155,35 @@ export default function TransactionMeetup() {
   const scanRef = useRef<MeetupQrPayload | null>(null)
   /** bootstrap 代次：身份切换 / 重试后，旧账号或旧一轮的迟到响应一律作废 */
   const bootEpoch = useRef(0)
+  /**
+   * 同步提交锁（#147 P2）：存的是「持锁那条操作链所属的账号代次」，`null` = 空闲。
+   * `verify` 与 `retryConfirm` 共用 —— 两条链的按钮在同一个 tick 里都可能被连点，
+   * 只用 `submitting` state 判重入时第二下读到的仍是上一帧的 `false`。
+   * 释放只认持锁代次（`releaseLock`）：换账号后旧链迟到的 `finally` 放不掉新账号的锁。
+   */
+  const submitLock = useRef<number | null>(null)
+  /**
+   * 写入序号（#147 返回刷新 / #170 D）：每取到一次提交锁就自增。
+   *
+   * 返回刷新只用「此刻有没有人持锁」判不安全：一次写入可能在这份快照发出后、响应回来
+   * 前就完成并放掉了锁 —— 那时锁是空的，却会拿写入前的旧快照把刚写成的结果盖回去
+   * （`COMPLETED` 被倒回 `PENDING_MEETUP`）。序号对不上就直接丢弃这份快照。
+   */
+  const writeSeq = useRef(0)
+  /**
+   * 返回刷新（#170 D）的挂起标记：本代次有写入在飞时到达的 `useDidShow` 不立刻重读
+   * （会把页面拉回写入前的快照），挂到这里，由写链的 `finally` 补一次。
+   */
+  const pendingSync = useRef(false)
+  /**
+   * 返回读取的任务序号（审查 R6）：每次 `syncOnShow` 发请求前自增，每个 await 之后对不上
+   * 就整份丢弃。
+   *
+   * 为什么账号代次和写入序号都不够：同一账号内连续两次返回会让两次读取重叠，先发的那次
+   * 可能后到 —— 期间只有**对方**动了这笔交易，本页一次写入都没有。两个守卫都会放行，
+   * 于是「第一次读取时还是 PENDING_MEETUP」的旧快照会把第二次读到的 CANCELLED 盖回去。
+   */
+  const showReadSeq = useRef(0)
 
   /**
    * 代次守卫（#168 审查 P1）：只有 `bootstrap` 自己判代次还不够 —— 它通过后启动的
@@ -230,6 +281,10 @@ export default function TransactionMeetup() {
     setVerifying(false)
     setSubmitting(false)
     setFxPhase('off')
+    // 上一账号挂起的返回刷新随之作废（新账号由自己的 bootstrap 负责首屏）。
+    // 提交锁**不在这里清**：旧链的 `finally` 可能还在飞，靠 `releaseLock` 的代次比较
+    // 保证它放不掉新账号手里的锁（#147 P2）。
+    pendingSync.current = false
   }
 
   /**
@@ -265,7 +320,9 @@ export default function TransactionMeetup() {
       if (notify) void Taro.showToast({ title: '已重新取码；交易码不变', icon: 'none' })
     } catch (error) {
       if (isStale(epoch)) return
-      setToken(null)
+      // 取码失败要有落点：落到 failed 而不是 null，页面才渲染得出「重新取码」入口
+      // （终态那条分支下面会把 tx 刷成终态卡，token 取什么值都已不参与渲染）。
+      setToken({ state: 'failed' })
       if (isApiError(error)) {
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
           // 终态（已取消/已完成）：刷新交易视图让页面落到对应状态卡
@@ -302,7 +359,11 @@ export default function TransactionMeetup() {
    * 请求秒回时也把转圈留够一瞬，避免闪一下。
    */
   const verify = async (targetId: string, consume: () => Promise<unknown>, epoch: number) => {
-    if (submitting) return
+    // 同步取锁（#147 P2）：同一个 tick 的第二次点击在这里当场被挡下 ——
+    // 此刻 `submitting` 那一帧还没刷过来。
+    if (!canAcquire(submitLock.current, epoch)) return
+    submitLock.current = epoch
+    writeSeq.current += 1
     setSubmitting(true)
     setInputError('')
     // 核验态：核销请求在飞期间页面只显示一个转圈（稿 ③）
@@ -322,13 +383,40 @@ export default function TransactionMeetup() {
         await settle()
         if (isStale(epoch)) return
         setTx(dto)
-        setConfirmPending(dto.status !== 'COMPLETED')
-        if (dto.status === 'COMPLETED') setFxPhase('on')
-      } catch {
+        setConfirmPending(nextConfirmPending({ kind: 'ok', status: dto.status }))
+        if (playsCompletionFx(dto.status)) setFxPhase('on')
+      } catch (error) {
         if (isStale(epoch)) return
+        // 自动 confirm 的失败要分类（#147 P2）：409 TRANSACTION_NOT_IN_PENDING 说明
+        // 核销那一瞬交易已到终态（对方取消 / 另一侧确认），必须重读交易并撤下确认入口
+        // —— 一律保留确认入口会让 CANCELLED 的单子继续显示「还差最后一步确认」，
+        // COMPLETED 也会停在待确认。
+        const failure = classifyConfirmFailure(isApiError(error) ? error.code : null)
+        if (failure === 'terminal') {
+          const dto = await fetchTransaction(targetId).catch(() => null)
+          if (isStale(epoch)) return
+          await settle()
+          if (isStale(epoch)) return
+          if (dto) {
+            setTx(dto)
+          } else {
+            // 重读失败：409 已确证交易离开 PENDING_MEETUP，但拿不到是哪一种终态，而本地
+            // 快照还停在 PENDING_MEETUP。留着入口会让已取消的单子继续显示「还差最后一步
+            // 确认」，照旧快照渲染又会把已经 CONSUMED 的凭证丢回 6 位码输入态（再输、再扫
+            // 都只会被拒）—— 两种渲染都不可信。丢掉这份旧快照，落到既有的「加载失败」态：
+            // 「重试」走 bootstrap 重读后落到正确的终态卡（#147 验收 1 / 审查 F1、F2）。
+            setTx(null)
+            setLoadError('failed')
+          }
+          setConfirmPending(pendingAfterTerminalRefetch(dto))
+          // 冲突正是「对方刚确认」：读到的若是 COMPLETED，这笔面交是在用户眼前结束的，
+          // 补一次完成动效（产品口径见 view.ts:playsCompletionFx；静态进页读到终态不播）。
+          if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
+          return
+        }
         await settle()
         if (isStale(epoch)) return
-        setConfirmPending(true)
+        setConfirmPending(nextConfirmPending({ kind: 'error', failure }))
       }
     } catch (error) {
       if (isStale(epoch)) return
@@ -343,10 +431,14 @@ export default function TransactionMeetup() {
           MEETUP_TOKEN_NOT_FOUND: '对方还没有出示本单的交易码。',
         }
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
-          // 已取消 / 已完成：刷新交易视图落到对应状态卡
+          // 已取消 / 已完成：刷新交易视图落到对应状态卡，确认入口同样必须撤下
+          // —— 与自动 confirm 那条终态路径同一口径（#147 P2），终态没有「还差一步」。
           const dto = await fetchTransaction(targetId).catch(() => null)
           if (isStale(epoch)) return
           if (dto) setTx(dto)
+          setConfirmPending(false)
+          // 同一口径：在途核销撞上「已经完成」时也补播一次完成动效（CANCELLED 不播）
+          if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
           return
         }
         if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
@@ -370,34 +462,167 @@ export default function TransactionMeetup() {
         setVerifying(false)
         setSubmitting(false)
       }
+      // 先放锁再补刷新：放锁只认持锁代次，旧链放不掉新账号手里的锁（#147 P2）
+      submitLock.current = releaseLock(submitLock.current, epoch)
+      flushPendingSync(epoch)
     }
   }
 
   /** 核销成功但 confirm 尚未落定（网络失败）时的重试入口 */
   const retryConfirm = async (epoch: number) => {
-    if (!tx || submitting) return
+    // 与 `verify` 共用同一把锁：两个入口的按钮在同一 tick 里都可能被连点
+    if (!tx || !canAcquire(submitLock.current, epoch)) return
+    submitLock.current = epoch
+    writeSeq.current += 1
     setSubmitting(true)
     try {
       const dto = await confirmTransaction(tx.id)
       if (isStale(epoch)) return
       setTx(dto)
-      setConfirmPending(dto.status !== 'COMPLETED')
-      if (dto.status === 'COMPLETED') setFxPhase('on')
+      setConfirmPending(nextConfirmPending({ kind: 'ok', status: dto.status }))
+      if (playsCompletionFx(dto.status)) setFxPhase('on')
     } catch (error) {
       if (isStale(epoch)) return
-      if (isApiError(error) && error.code === 'TRANSACTION_NOT_IN_PENDING') {
+      const failure = classifyConfirmFailure(isApiError(error) ? error.code : null)
+      if (failure === 'terminal') {
         // 等待期间交易被取消/完成：落到对应状态卡，确认入口随之消失
         const dto = await fetchTransaction(tx.id).catch(() => null)
         if (isStale(epoch)) return
-        if (dto) setTx(dto)
-        setConfirmPending(false)
+        if (dto) {
+          setTx(dto)
+        } else {
+          // 同 `verify` 内层：读不到是哪一种终态时，这份旧快照也不能再拿来渲染
+          setTx(null)
+          setLoadError('failed')
+        }
+        setConfirmPending(pendingAfterTerminalRefetch(dto))
+        if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
         return
       }
       void Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })
     } finally {
       if (!isStale(epoch)) setSubmitting(false)
+      submitLock.current = releaseLock(submitLock.current, epoch)
+      flushPendingSync(epoch)
     }
   }
+
+  /* --------------------------------------- 返回本页：与服务端重同步（#170 D） */
+
+  /**
+   * 重读服务端状态（#147 返回刷新 / #170 D）。
+   *
+   * 只做两件事：把交易刷到最新，以及重算买家的恢复口径 —— 与 `bootstrap` 同一判据
+   * （`sellerConfirmedAt` 已盖**且**凭证真为 CONSUMED 才恢复确认入口；前者单独不能
+   * 当核销证明，Web 端普通 confirm 也会盖它）。终态一律撤下确认入口。
+   *
+   * **不自动重取凭证**：卖家侧「重新取码」是显式动作（见 `TokenView` 的 unavailable
+   * 说明），自动重取会把一次核销失败静默变成展示动作。
+   *
+   * 尽力而为：失败不改动页面（不弹错、不打到错误态），旧快照仍可操作，下次返回再补。
+   *
+   * 三道守卫各管一段，缺一不可（审查 R6）：账号代次管换账号、写入序号管本页写入、
+   * 读取序号管同一账号内两次返回的响应反序。交易读取之后的凭证状态读取是**第二个异步
+   * 窗口**，也必须按同一次读取任务校验。
+   */
+  const syncOnShow = async (epoch: number) => {
+    const targetId = scanRef.current?.transactionId ?? routeTxId
+    if (!targetId) return
+    /**
+     * 本次返回读取的任务序号（审查 R6）。发请求**之前**同步取，两段 await 之后各校验
+     * 一次：期间只要又发生了一次返回读取，这份结果就已经旧了，由新的那次负责落地。
+     * 这里**不置** `pendingSync` —— 接手的是另一次真实读取，不是一次写入。
+     */
+    const readId = showReadSeq.current + 1
+    showReadSeq.current = readId
+    /** 本代次有写入在飞：此刻落地会覆盖写入结果，改为挂起，等写链收尾再补 */
+    const writeInFlight = () => submitLock.current === epoch
+    /** 这份快照发出时的写入序号：回来时对不上，说明中途有成过一次的写入 */
+    const seenWrites = writeSeq.current
+    try {
+      const dto = await fetchTransaction(targetId)
+      if (isStale(epoch)) return
+      if (sequenceSuperseded(readId, showReadSeq.current)) return
+      if (writeInFlight()) {
+        pendingSync.current = true
+        return
+      }
+      // 写入已经飞完并落下最新 DTO：这份写入前的快照只会把它盖回去（#147 审查 F2）
+      if (sequenceSuperseded(seenWrites, writeSeq.current)) return
+      setTx(dto)
+      setLoadError(null)
+      if (dto.status !== 'PENDING_MEETUP') {
+        setConfirmPending(false) // 终态：确认入口必须撤下（同 #147 P2 的口径）
+        return
+      }
+      if (dto.role !== 'buyer') {
+        // 非买家没有「还差最后一步确认」这个入口，顺带把不变量收干净
+        setConfirmPending(false)
+        return
+      }
+      if (dto.sellerConfirmedAt === null || dto.buyerConfirmedAt !== null) {
+        setConfirmPending(false)
+        return
+      }
+      const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
+      if (isStale(epoch)) return
+      // 第二个异步窗口同样属于**这一次**读取：交易那段通过之后又返回过一次，这份凭证
+      // 状态就不能再拿去改确认入口
+      if (sequenceSuperseded(readId, showReadSeq.current)) return
+      if (writeInFlight()) {
+        pendingSync.current = true
+        return
+      }
+      // 同上：这一步之前若有写入落定，入口该由写链说了算，别用旧快照覆盖
+      if (sequenceSuperseded(seenWrites, writeSeq.current)) return
+      // 读不到凭证状态就别动这个标记：失败是「不知道」，不是「没核销」。
+      // 当成 false 会把买家从恢复好的确认入口打回 6 位码输入态，而码已 CONSUMED，
+      // 手输只会被后端以「已被使用」拒掉 —— 双方都完不成，只能退出重进。
+      // （`bootstrap` 那边同样是 `.catch(() => null)`，但那里失败只是「不置位」，安全。）
+      if (tokenStatus) setConfirmPending(tokenStatus.status === 'CONSUMED')
+    } catch {
+      // 重同步失败不动页面：不把可操作的页面打到错误态
+    }
+  }
+
+  /**
+   * 写链收尾时补做被挂起的返回刷新。
+   * 旧账号的写链收尾只**原样返回** —— 既不补同步，也不动新账号的挂起标记：
+   * 清了它就等于把新账号那次刷新丢了（与放锁同一条代次规则）。标记只有一个来源，
+   * 就是当前代次的 `useDidShow` 或 `syncOnShow`，所以留着一定有人接手。
+   */
+  const flushPendingSync = (epoch: number) => {
+    const next = nextPendingSync(pendingSync.current, epoch, bootEpoch.current)
+    pendingSync.current = next.pending
+    if (next.sync) void syncOnShow(epoch)
+  }
+
+  /**
+   * 从扫码页返回时重同步。首次 show **跳过**：那一次由登录态 effect 负责
+   * （冷启动时 `authStatus` 可能还是 `unknown`，交给它时点才准），不跳过就会一进页双发。
+   * 回调里读 `authStatus` / `userId` 走 ref（与 `pages/orders-buy`、`pages/match` 同款）。
+   */
+  const skipFirstShow = useRef(true)
+  const authedRef = useRef(false)
+  authedRef.current = authStatus === 'authed'
+  const userIdRef = useRef<string | null>(null)
+  userIdRef.current = userId
+  useDidShow(() => {
+    const decision = showSync({
+      firstShow: skipFirstShow.current,
+      authed: authedRef.current,
+      userId: userIdRef.current,
+      // 在途写入 = 持锁代次就是当前代次；旧代次的锁不算在途（那条链早已被判过期）
+      submitInFlight: submitLock.current === bootEpoch.current,
+    })
+    skipFirstShow.current = false
+    if (decision === 'skip') return
+    if (decision === 'defer') {
+      pendingSync.current = true
+      return
+    }
+    void syncOnShow(bootEpoch.current)
+  })
 
   const goHome = () => {
     void Taro.switchTab({ url: '/pages/home/index' })
@@ -814,7 +1039,7 @@ export default function TransactionMeetup() {
                   对方连续输错被锁定后，点「重新取码」即可解锁；交易码不会变。
                 </Text>
               </>
-            ) : (
+            ) : token === null || token.state === 'issuing' ? (
               <View className="meetup__codecard">
                 <View className="meetup__digits">
                   {CODE_SLOTS.map((slot) => (
@@ -824,6 +1049,31 @@ export default function TransactionMeetup() {
                   ))}
                 </View>
                 <Text className="meetup__code-ttl num">交易码加载中…</Text>
+              </View>
+            ) : (
+              /* 兜底：凡是「不是加载中、不是就绪、也不是暂不展示」的凭证态都落到这张卡，
+                 而这张卡必定带「重新取码」入口。取码失败原本落回 `null`、与「还没开始取码」
+                 共用加载屏，卖家只能干等 —— 把重试入口放在兜底分支，以后新增凭证状态
+                 也不可能再卡在「加载中…」上。 */
+              <View className="meetup__varcard">
+                <View className="meetup__vdisc meetup__vdisc--warn">
+                  <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+                </View>
+                <Text className="meetup__varcard-title">交易码没能取回来</Text>
+                <Text className="meetup__varcard-text">
+                  网络或服务异常，本单交易码暂时取不到。点「重新取码」重试即可 ——
+                  交易码不会变，取回的仍是同一枚。
+                </Text>
+                <View className="meetup__varcard-acts">
+                  {/* 与 unavailable 那条同一枚按钮、同一份幂等语义（#176）：
+                      重试取回的是**同一枚**码，不换码、不作废，同时清零失败计数与锁定。 */}
+                  <View
+                    className="meetup__btn meetup__btn--sec"
+                    onClick={() => void ensureToken(tx.id, bootEpoch.current, true)}
+                  >
+                    <Text>重新取码</Text>
+                  </View>
+                </View>
               </View>
             )}
           </>
