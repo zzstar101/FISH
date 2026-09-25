@@ -5,6 +5,7 @@ import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { inArray } from 'drizzle-orm'
 import { createMatchingService, MatchingServiceError } from './service'
 import { createSqlMatchingStore } from './store'
@@ -50,6 +51,7 @@ async function createListing(
   const id = overrides.id ?? newId()
   await db.insert(listings).values({
     id,
+    listingNo: await reserveTestListingNo(db, id),
     sellerId,
     title: '罗技 K380 键盘',
     description: '读路径测试',
@@ -118,6 +120,9 @@ test('wish 侧：排除 OFFLINE 商品（items 与 total 都不算它），否�
     expect(response.total).toBe(2)
     expect(response.items.map((item) => item.score)).toEqual([95, 80])
     expect(response.items.map((item) => item.listing.id)).toEqual([higher, lower])
+    expect(
+      response.items.every((item) => /^[1-9][0-9]{11}$/.test(item.listing.listingNo ?? '')),
+    ).toBe(true)
     expect(response.items[0]?.listing.coverUrl).toBeNull()
   })
 })

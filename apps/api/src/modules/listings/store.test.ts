@@ -1,10 +1,13 @@
 import { expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { idRekeys } from '@fish/db/schema/id-rekeys'
 import { jobs } from '@fish/db/schema/jobs'
+import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { createListingService, ListingServiceError } from './service'
 import type { CreateListingRecord, FeedCursorKey, ListingStore } from './store'
@@ -96,6 +99,7 @@ async function insertListingWithTime(
   const id = newId()
   await db.insert(listings).values({
     id,
+    listingNo: await reserveTestListingNo(db, id),
     sellerId,
     title: `分页商品 ${input.priceCents}`,
     description: '分页测试',
@@ -107,6 +111,43 @@ async function insertListingWithTime(
   })
   return id
 }
+
+test('真实 ID 重键映射允许原商品继续引用旧对象键，不放行其他用户的键', async () => {
+  await withSeller(async (sellerId, otherSellerId) => {
+    const oldId = crypto.randomUUID()
+    const objectKey = `listings/${oldId}/old.jpg`
+    await db.insert(idRekeys).values({ resourceTable: 'users', oldId, newId: sellerId })
+    try {
+      const input = record(sellerId, { objectKeys: [objectKey] })
+      await store.createListingAtomic(input)
+      const service = createListingService({
+        store,
+        storage: {
+          presignPut: () => ({
+            url: 'https://upload.test',
+            headers: {},
+            expiresAt: new Date().toISOString(),
+          }),
+          stat: async () => ({ size: 100, contentType: 'image/jpeg' }),
+          publicUrl: (key) => `https://cdn.test/${key}`,
+        },
+      })
+      const result = await service.updateListing(sellerId, input.id, {
+        title: '保留历史对象的商品',
+        objectKeys: [objectKey],
+      })
+      expect(result.images[0]?.url).toContain(objectKey)
+      expect(await store.legacyUserIds(sellerId)).toEqual([oldId])
+      await expect(
+        service.updateListing(otherSellerId, input.id, { objectKeys: [objectKey] }),
+      ).rejects.toMatchObject({ code: 'IMAGE_REFERENCE_INVALID' })
+    } finally {
+      await db
+        .delete(idRekeys)
+        .where(and(eq(idRekeys.resourceTable, 'users'), eq(idRekeys.oldId, oldId)))
+    }
+  })
+})
 
 test('发布在世界内写入商品、有序图片与 MATCH_LISTING job', async () => {
   await withSeller(async (sellerId) => {
@@ -134,6 +175,31 @@ test('发布在世界内写入商品、有序图片与 MATCH_LISTING job', async
     expect(queued).toHaveLength(1)
     expect(queued[0]?.type).toBe('MATCH_LISTING')
     expect(queued[0]?.status).toBe('PENDING')
+  })
+})
+
+test('商品物理删除后编号仍占用，不能指派给新商品', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const row = (
+      await db
+        .select({ listingNo: listings.listingNo })
+        .from(listings)
+        .where(eq(listings.id, created.listingId))
+    )[0]
+    expect(row?.listingNo?.toString()).toMatch(/^[1-9][0-9]{11}$/)
+    const listingNo = row?.listingNo
+    if (listingNo === null || listingNo === undefined) throw new Error('未获得商品编号')
+
+    await db.delete(jobs).where(sql`${jobs.payload}->>'listingId' = ${created.listingId}`)
+    await db.delete(listings).where(eq(listings.id, created.listingId))
+    expect(
+      (await db.select().from(listingNumbers).where(eq(listingNumbers.listingNo, listingNo)))[0]
+        ?.listingId,
+    ).toBe(created.listingId)
+    await expect(
+      db.insert(listingNumbers).values({ listingNo, listingId: newId() }).execute(),
+    ).rejects.toThrow()
   })
 })
 

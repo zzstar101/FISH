@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ProfileResponse } from '@fish/contracts/profile/schema'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import { UploadServiceError } from '../uploads/service'
 import { createProfileRouter } from './router'
 import type { ProfileService } from './service'
@@ -54,6 +55,7 @@ function buildRoot(service: ProfileService): TestRoot {
     '/profile',
     createProfileRouter({
       service,
+      guard: allowRestrictionGuard,
       requireAuth: async (_c, next) => {
         await next()
       },

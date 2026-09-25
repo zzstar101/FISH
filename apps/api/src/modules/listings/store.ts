@@ -6,7 +6,9 @@ import type {
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
+import { newListingNo } from '@fish/db/listing-no'
 import { jobs } from '@fish/db/schema/jobs'
+import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
@@ -129,6 +131,7 @@ export type ListingState = {
   description?: string
   priceCents: number
   free: boolean
+  governanceDelistedAt: Date | null
 }
 
 /**
@@ -147,6 +150,7 @@ export type ListingUpdateTarget = {
   negotiable: boolean
   free: boolean
   moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+  governanceDelistedAt: Date | null
   pendingReviewAction?: 'CREATE' | 'UPDATE'
   pendingReviewPriorStatus?: ListingStatus | null
 }
@@ -189,10 +193,14 @@ export type ListingUpdateResult =
   /** 行存在但归别人：契约 §3 要求 403，与 404 分开（不泄漏存在性的只有 "不存在" 那一支）。 */
   | { kind: 'not-owner' }
   | { kind: 'locked' }
+  | { kind: 'governance-blocked' }
   /** 内容被阻断：商品未改动，但审计记录已在**同一事务内**落库（见 `ListingUpdatePlan`）。 */
   | { kind: 'rejected' }
 
 export interface ListingStore {
+  /** 只认迁移时记录的本人旧 ID；旧对象键不得被其它用户冒用。 */
+  legacyUserIds(userId: string): Promise<string[]>
+
   /**
    * 事务内完成：按卖家串行化 → 5 秒内容窗口查重 → 写入商品 + 图片 + `MATCH_LISTING` job。
    *
@@ -288,10 +296,18 @@ const EDITABLE_COLUMNS = {
   negotiable: listings.negotiable,
   free: listings.free,
   moderationStatus: listings.moderationStatus,
+  governanceDelistedAt: listings.governanceDelistedAt,
 } as const
 
 export function createSqlListingStore(db: Db): ListingStore {
   return {
+    async legacyUserIds(userId) {
+      const result = await db.execute(sql`
+        SELECT old_id FROM id_rekeys WHERE resource_table = 'users' AND new_id = ${userId}::uuid
+      `)
+      return rowsOf(result).map((row) => String(row.old_id))
+    },
+
     async createListingAtomic(record) {
       return db.transaction(async (tx) => {
         // 同一卖家的事务串行化：让"查重 → 插入"成为原子操作，并发的双击提交不会各插一行。
@@ -316,8 +332,26 @@ export function createSqlListingStore(db: Db): ListingStore {
         const existing = duplicate[0]
         if (existing) return { kind: 'duplicate' as const, listingId: existing.id }
 
+        // Claim before inserting the listing. A collision is resolved without aborting the
+        // surrounding transaction; all later writes (images/job) roll back with the claim.
+        let listingNo: bigint | undefined
+        for (let attempt = 0; attempt < 16; attempt++) {
+          const candidate = newListingNo()
+          const claimed = await tx
+            .insert(listingNumbers)
+            .values({ listingNo: candidate, listingId: record.id })
+            .onConflictDoNothing({ target: listingNumbers.listingNo })
+            .returning({ listingNo: listingNumbers.listingNo })
+          if (claimed[0]) {
+            listingNo = claimed[0].listingNo
+            break
+          }
+        }
+        if (listingNo === undefined) throw new Error('无法分配唯一的商品编号')
+
         await tx.insert(listings).values({
           id: record.id,
+          listingNo,
           sellerId: record.sellerId,
           title: record.title,
           description: record.description,
@@ -403,6 +437,7 @@ export function createSqlListingStore(db: Db): ListingStore {
           description: listings.description,
           priceCents: listings.priceCents,
           free: listings.free,
+          governanceDelistedAt: listings.governanceDelistedAt,
         })
         .from(listings)
         .where(eq(listings.id, id))
@@ -494,6 +529,8 @@ export function createSqlListingStore(db: Db): ListingStore {
         if (!row) return { kind: 'not-found' as const }
         if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
         if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
+        // 与管理员下架串行：锁内检查，卖家的 PATCH 不能清除治理标记。
+        if (row.governanceDelistedAt) return { kind: 'governance-blocked' as const }
 
         let updateTarget: ListingUpdateTarget = row
         if (row.moderationStatus === 'REVIEW') {

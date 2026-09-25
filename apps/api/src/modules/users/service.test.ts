@@ -31,6 +31,7 @@ function userRow(overrides: Partial<PublicUserRow> = {}): PublicUserRow {
 function listingRow(overrides: Partial<PublicListingRow> = {}): PublicListingRow {
   return {
     id: LISTING_A,
+    listingNo: 123456789012n,
     title: '二手台灯',
     priceCents: 3000,
     category: 'DAILY',
@@ -222,6 +223,7 @@ describe('在售列表', () => {
     const page = await service(store).listActiveListings(USER_ID, { limit: 2 })
 
     expect(page.items).toHaveLength(1)
+    expect(page.items[0]?.listingNo).toBe('123456789012')
     expect(page.nextCursor).toBeNull()
   })
 

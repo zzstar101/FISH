@@ -93,9 +93,11 @@ export function createConversationService({
   store,
   storage,
   onRead,
+  projectContent = async (_type: string, content: string) => content,
 }: {
   store: ConversationStore
   storage: MediaStorage
+  projectContent?: (type: string, content: string) => Promise<string>
   /**
    * 读位推进成功后调用（先落库再推送，与 messages 的 `onMessageCreated` 同语义）；
    * 推送失败不得影响 200 响应。
@@ -105,6 +107,23 @@ export function createConversationService({
     event: { conversationId: string; readerId: string; readAt: string },
   ) => void
 }): ConversationService {
+  async function projectedDto(
+    row: ConversationDetailRow,
+    viewerId: string,
+  ): Promise<ConversationDto> {
+    const lastMessage = row.lastMessage
+    const projected = lastMessage
+      ? {
+          ...row,
+          lastMessage: {
+            ...lastMessage,
+            content: await projectContent(lastMessage.type, lastMessage.content),
+          },
+        }
+      : row
+    return toConversationDto(projected, viewerId, storage)
+  }
+
   return {
     async createOrGetConversation(userId, input) {
       const listing = await store.findListingBrief(input.listingId)
@@ -134,7 +153,7 @@ export function createConversationService({
       detail.coverObjectKey = covers.get(detail.listing.id) ?? detail.coverObjectKey
 
       return {
-        conversation: toConversationDto(detail, userId, storage),
+        conversation: await projectedDto(detail, userId),
         created: inserted !== null,
       }
     },
@@ -158,7 +177,7 @@ export function createConversationService({
 
       const last = page.at(-1)
       return conversationListResponseSchema.parse({
-        items: items.map((row) => toConversationDto(row, userId, storage)),
+        items: await Promise.all(items.map((row) => projectedDto(row, userId))),
         nextCursor:
           hasMore && last?.lastMessageAtCursor
             ? encodeCursor({ sortKey: last.lastMessageAtCursor, id: last.conversation.id })
@@ -171,7 +190,7 @@ export function createConversationService({
       if (!detail) throw notFound()
       const covers = await store.coverObjectKeys([detail.listing.id])
       detail.coverObjectKey = covers.get(detail.listing.id) ?? detail.coverObjectKey
-      return toConversationDto(detail, userId, storage)
+      return projectedDto(detail, userId)
     },
 
     async markRead(userId, conversationId) {
@@ -187,7 +206,7 @@ export function createConversationService({
           { conversationId, readerId: userId, readAt },
         )
       }
-      return toConversationDto(detail, userId, storage)
+      return projectedDto(detail, userId)
     },
 
     async getUnreadCount(userId) {

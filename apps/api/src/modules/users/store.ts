@@ -43,6 +43,7 @@ export interface PublicUserStatsRow {
 /** 一行在售商品：字段恰好够 `toListingCard` 用（`ListingCardSource` 的结构类型）。 */
 export interface PublicListingRow {
   id: string
+  listingNo: bigint
   title: string
   priceCents: number
   category: ListingCard['category']
@@ -147,6 +148,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
       const rows = await db
         .select({
           id: listings.id,
+          listingNo: listings.listingNo,
           title: listings.title,
           priceCents: listings.priceCents,
           category: listings.category,

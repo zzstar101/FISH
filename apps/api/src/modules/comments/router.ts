@@ -8,6 +8,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { type CommentService, CommentServiceError } from './service'
 
 export type CommentsRouterOptions = {
@@ -19,6 +20,8 @@ export type CommentsRouterOptions = {
    * `isSeller` 由服务端拿 listing.sellerId 判定，读路径不需要 viewer，因此 GET 完全不碰身份。
    */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：写留言前检查封禁（留言只有 `write` 一种作用域）。 */
+  guard: RestrictionGuard
 }
 
 /** JSON 解析失败（空体 / 非 JSON）按参数不合法处理，而不是让 Hono 抛 500。 */
@@ -85,7 +88,7 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
   })
 
   // —— 写接口：全部要求登录 ——
-  router.post(LISTING_COMMENTS_PATH, options.requireAuth, async (c) => {
+  router.post(LISTING_COMMENTS_PATH, options.requireAuth, options.guard.write, async (c) => {
     const listingId = requireUuidParam(c, 'listingId')
     if (!listingId) return c.json(errorBody('LISTING_NOT_FOUND', '商品不存在'), 404)
 
@@ -99,7 +102,7 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
     }
   })
 
-  router.post(COMMENT_REPLIES_PATH, options.requireAuth, async (c) => {
+  router.post(COMMENT_REPLIES_PATH, options.requireAuth, options.guard.write, async (c) => {
     const commentId = requireUuidParam(c, 'commentId')
     if (!commentId) return c.json(errorBody('COMMENT_NOT_FOUND', '留言不存在'), 404)
 

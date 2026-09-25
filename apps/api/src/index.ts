@@ -6,6 +6,7 @@ import {
   loadWechatEnv,
 } from '@fish/shared/env'
 import { createApp } from './app'
+import { normalizeIp } from './modules/listings/trusted-ip'
 import { websocket } from './ws'
 
 const env = loadServerEnv()
@@ -28,9 +29,17 @@ if (wechatEnv.transport === 'stub') {
   console.warn('[api] WECHAT_TRANSPORT=stub：微信登录/手机号绑定走演示凭证，不验证微信签发')
 }
 
-const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv)
+const proxyIp = process.env.LISTING_LOOKUP_TRUSTED_PROXY_IP ?? null
+if (proxyIp !== null && normalizeIp(proxyIp) === null) {
+  throw new Error('LISTING_LOOKUP_TRUSTED_PROXY_IP 必须是规范 IPv4/IPv6 地址')
+}
+let server: ReturnType<typeof Bun.serve>
+const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv, {
+  peerIp: (request) => server?.requestIP(request)?.address ?? null,
+  trustedProxyIp: proxyIp,
+})
 
-const server = Bun.serve({
+server = Bun.serve({
   port: env.API_PORT,
   fetch: app.fetch,
   websocket,

@@ -1,6 +1,8 @@
 /** PR #79: scratch DB + real API process + MinIO. Run: bun --env-file=.env apps/api/scripts/media-smoke.ts */
 import assert from 'node:assert/strict'
 import { createDb } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -33,17 +35,18 @@ try {
       new URL('../../../packages/db/src/migrations', import.meta.url),
     ),
   })
-  const buyer = crypto.randomUUID()
-  const seller = crypto.randomUUID()
-  const outsider = crypto.randomUUID()
-  const listing = crypto.randomUUID()
-  const conversation = crypto.randomUUID()
+  const buyer = newId()
+  const seller = newId()
+  const outsider = newId()
+  const listing = newId()
+  const conversation = newId()
   for (const [i, id] of [buyer, seller, outsider].entries()) {
     await db.execute(sql`INSERT INTO users (id, student_no, password_hash, nickname)
       VALUES (${id}, ${`media${process.pid}_${i}`}, 'test-hash', 'media smoke')`)
   }
-  await db.execute(sql`INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-    VALUES (${listing}, ${seller}, 'test', 'test', 100, 'DIGITAL', 'GOOD', 'ACTIVE')`)
+  const listingNo = await reserveTestListingNo(db, listing)
+  await db.execute(sql`INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+    VALUES (${listing}, ${listingNo}, ${seller}, 'test', 'test', 100, 'DIGITAL', 'GOOD', 'ACTIVE')`)
   await db.execute(sql`INSERT INTO conversations (id, listing_id, buyer_id, seller_id)
     VALUES (${conversation}, ${listing}, ${buyer}, ${seller})`)
   const session = createSessions(db)

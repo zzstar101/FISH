@@ -3,6 +3,7 @@ import { errorBody } from '@fish/contracts/system/error'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createUploadsRouter } from './router'
 import type { MediaStorage } from './storage'
 
@@ -30,7 +31,10 @@ function buildApp(options: { storage: MediaStorage; authed?: boolean }) {
   }
 
   const root = new Hono()
-  root.route('/uploads', createUploadsRouter({ storage: options.storage, requireAuth }))
+  root.route(
+    '/uploads',
+    createUploadsRouter({ storage: options.storage, requireAuth, guard: allowRestrictionGuard }),
+  )
   return root
 }
 

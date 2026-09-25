@@ -25,9 +25,14 @@ import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
 import { createChatWatchersRouter } from './modules/conversations/watchers-router'
 import { createChatWatchersService } from './modules/conversations/watchers-service'
+import { createRestrictionGuard } from './modules/governance/guard'
+import { createGovernanceService } from './modules/governance/service'
+import { createSqlGovernanceStore } from './modules/governance/store'
+import { createListingNumberLookup } from './modules/listings/number-lookup'
 import { createListingsRouter } from './modules/listings/router'
 import { createListingService } from './modules/listings/service'
 import { createSqlListingStore } from './modules/listings/store'
+import { trustedClientIp } from './modules/listings/trusted-ip'
 import { createMatchingRouter } from './modules/matching/router'
 import { createMatchingService } from './modules/matching/service'
 import { createSqlMatchingStore } from './modules/matching/store'
@@ -37,6 +42,7 @@ import { createSqlMediaMessageStore } from './modules/messages/media-store'
 import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
+import { createSystemContentProjector } from './modules/messages/system-content'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
@@ -97,11 +103,21 @@ export function createApp(
    * 测试传 `{ transport: 'stub' }` 显式开启；不传即 off，不会静默降级。
    */
   wechatEnv: import('@fish/shared/env').WechatEnv = { transport: 'off' },
+  lookupNetwork: { peerIp: (request: Request) => string | null; trustedProxyIp: string | null } = {
+    peerIp: () => null,
+    trustedProxyIp: null,
+  },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
 
   app.use('*', cors({ origin: env.WEB_ORIGIN }))
+
+  // The auth module also has authenticated write endpoints. Construct the shared guard
+  // before mounting auth, so those writes follow the same restriction rules as domains.
+  const governanceStore = createSqlGovernanceStore(db)
+  const guardDb = createDb(env.DATABASE_URL, { max: 4 })
+  const restrictionGuard = createRestrictionGuard({ store: createSqlGovernanceStore(guardDb) })
 
   // 认证模块的装配在 modules/auth 内，这里只负责接线（#3；#68 改为邮箱验证码子域）。
   // secureCookie 由 WEB_ORIGIN 的 scheme 推导：本地 http 加 Secure 会让 cookie 直接失效。
@@ -126,6 +142,7 @@ export function createApp(
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
+    guard: restrictionGuard,
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)
@@ -143,13 +160,23 @@ export function createApp(
     publicUrlBase: env.S3_PUBLIC_URL,
   })
 
+  // Guard transactions use a separate bounded pool, preserving business-store connections;
+  // both pools coordinate through the same Postgres advisory key.
+  const governanceService = createGovernanceService({ db, store: governanceStore })
+  const projectSystemContent = createSystemContentProjector(db)
+
   // #6：`GET /listings*` 匿名可用，写接口在 router 内逐路由挂 requireAuth（读路径不能整体 401）。
+  const listingService = createListingService({ store: createSqlListingStore(db), storage })
   app.route(
     '/listings',
     createListingsRouter({
-      service: createListingService({ store: createSqlListingStore(db), storage }),
+      service: listingService,
+      numberLookup: createListingNumberLookup(db, listingService, meetupEnv.MEETUP_TOKEN_SECRET),
       requireAuth: auth.requireAuth,
       resolveViewerId: auth.resolveViewerId,
+      resolveClientIp: (c) =>
+        trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
+      guard: restrictionGuard,
     }),
   )
   // 上传域实例只建一次：#86 B 的头像写入复用同一个 `confirm`（归属前缀 + 对象已上传 +
@@ -161,6 +188,7 @@ export function createApp(
       storage,
       requireAuth: auth.requireAuth,
       service: uploadService,
+      guard: restrictionGuard,
     }),
   )
 
@@ -172,6 +200,7 @@ export function createApp(
     createCommentsRouter({
       service: createCommentService({ store: createSqlCommentStore(db) }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -200,6 +229,7 @@ export function createApp(
         uploads: uploadService,
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -225,6 +255,7 @@ export function createApp(
   const wishes = createWishesRouterFromDb(db, {
     getUserId: (c) => c.get('userId'),
     matchQueue: createDbWishMatchQueue(db),
+    guard: restrictionGuard,
   })
   app.use('/wishes/*', auth.requireAuth)
   app.route('/wishes', wishes)
@@ -242,6 +273,7 @@ export function createApp(
       service: createConversationService({
         store: conversationStore,
         storage,
+        projectContent: projectSystemContent,
         // 读位推进后推给会话双方的全部在线连接（#149）：与 message.new 同一通道，
         // 客户端按 readerId 区分「自己读的」与「对方读的」。
         onRead: (participants, event) => {
@@ -254,6 +286,7 @@ export function createApp(
         },
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
   app.route(
@@ -281,6 +314,7 @@ export function createApp(
       }),
       storage,
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
   app.route(
@@ -288,6 +322,7 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        projectContent: projectSystemContent,
         onMessageCreated: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',
@@ -297,6 +332,7 @@ export function createApp(
         },
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -339,6 +375,7 @@ export function createApp(
         },
       }),
       requireAuth: auth.requireAuth,
+      guard: restrictionGuard,
     }),
   )
 
@@ -357,14 +394,29 @@ export function createApp(
   // 商品描述 AI 润色（#141）：单个端点 `POST /ai/polish-candidates`，整体要求登录
   // （未登录 401，不给匿名者烧配额）。装配在 modules/ai 内，这里只接线；AI 的上游密钥
   // 只经 aiEnv 注入本进程，worker 拿不到。
-  const ai = createAiPolishModule({ db, requireAuth: auth.requireAuth, env: aiEnv })
+  const ai = createAiPolishModule({
+    db,
+    requireAuth: auth.requireAuth,
+    env: aiEnv,
+    guard: restrictionGuard,
+  })
   app.route('/', ai.router)
 
   // 管理后台（#73）：与普通用户页面 / 普通用户 API 路由隔离（设计 §2）。
   // 挂载点为根级 `/admin`；requireAuth（401）与 requireAdmin（403）两道守卫在 admin
   // router 内部 `use('*')` 应用，覆盖全部 `/admin/*` 入口，普通用户无法靠改前端状态绕过。
-  const admin = createAdminModule({ db, storage, requireAuth: auth.requireAuth })
+  const admin = createAdminModule({
+    db,
+    storage,
+    requireAuth: auth.requireAuth,
+    governance: governanceService,
+    guard: restrictionGuard,
+  })
   app.route('/admin', admin.router)
+
+  // 举报入口只允许登录用户；与管理端共用同一个持久化 service。
+  app.use('/reports/*', auth.requireAuth)
+  app.route('/reports', admin.reportsRouter)
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。

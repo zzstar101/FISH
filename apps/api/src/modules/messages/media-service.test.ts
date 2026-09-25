@@ -45,6 +45,7 @@ function setup(
   storageOverrides: Partial<MediaStorage> = {},
 ) {
   const store: MediaMessageStore = {
+    legacyIds: async () => [],
     participant: async () => ({
       buyerId: userId,
       sellerId: '55555555-5555-4555-8555-555555555555',
@@ -220,6 +221,39 @@ describe('media message service', () => {
     await expect(service.getObject(userId, conversationId, mediaId)).rejects.toMatchObject({
       code: 'CONVERSATION_NOT_FOUND',
     })
+  })
+
+  test('旧会话与用户的对象键只在双方重键映射匹配时允许再次提交', async () => {
+    const oldConversation = '66666666-6666-4666-8666-666666666666'
+    const oldUser = '77777777-7777-4777-8777-777777777777'
+    let savedKey = ''
+    const service = setup({
+      legacyIds: async (table, current) =>
+        table === 'conversations' && current === conversationId
+          ? [oldConversation]
+          : table === 'users' && current === userId
+            ? [oldUser]
+            : [],
+      create: async (_conversation, _sender, input) => {
+        savedKey = input.objectKey
+        return row(input)
+      },
+    })
+    const oldObject = `chat-media/${oldConversation}/${oldUser}/before-upgrade.webp`
+    const created = await service.create(userId, conversationId, {
+      ...image,
+      objectKey: oldObject,
+      width: 800,
+      height: 600,
+    })
+    expect(created.kind).toBe('IMAGE')
+    expect(savedKey).toStartWith(`chat-media-final/${conversationId}/${userId}/`)
+    await expect(
+      service.create(userId, conversationId, {
+        ...image,
+        objectKey: `chat-media/${oldConversation}/${mediaId}/foreign.webp`,
+      }),
+    ).rejects.toMatchObject({ code: 'MEDIA_OBJECT_INVALID' })
   })
 
   test('parses real image dimensions server-side (fix-plan F5)', async () => {

@@ -6,12 +6,15 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { type ConversationService, ConversationServiceError } from './service'
 
 export type ConversationsRouterOptions = {
   service: ConversationService
   /** 会话没有匿名路径（列表只含本人的会话），整条路由挂 requireAuth（与 matching 同构）。 */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：发起会话前检查封禁（会话属于 `write` 作用域）。 */
+  guard: RestrictionGuard
 }
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 app.onError（与 matching router 同构）。 */
@@ -24,11 +27,15 @@ function toErrorResponse(c: Context, error: unknown): Response {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-export function createConversationsRouter({ service, requireAuth }: ConversationsRouterOptions) {
+export function createConversationsRouter({
+  service,
+  requireAuth,
+  guard,
+}: ConversationsRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
   // 挂载点是 /conversations（app.ts），router 内部用 /。
-  app.post('/', requireAuth, async (c) => {
+  app.post('/', requireAuth, guard.write, async (c) => {
     const parsed = conversationCreateInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {
       return c.json(
@@ -87,7 +94,7 @@ export function createConversationsRouter({ service, requireAuth }: Conversation
     }
   })
 
-  app.post('/:id/read', requireAuth, async (c) => {
+  app.post('/:id/read', requireAuth, guard.write, async (c) => {
     const id = c.req.param('id')
     // 与 `GET /:id` 同一套预校验：非 uuid 直接 404，不打到 PG 抛 22P02 变 500（#152）。
     if (!UUID_PATTERN.test(id)) {

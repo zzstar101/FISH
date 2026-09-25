@@ -117,6 +117,9 @@ describe('wish service', () => {
     const first = await service.createWish(userA, createInput)
     const second = await service.createWish(userA, createInput)
 
+    expect(first.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    )
     expect(second.id).toBe(first.id)
     expect(queued).toEqual([first.id, first.id])
   })

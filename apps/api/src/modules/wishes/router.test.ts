@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { WishDto } from '@fish/contracts/wishes/schema'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createWishesRouter } from './router'
 import type { WishService } from './service'
 import type { WishRow, WishStore } from './store'
@@ -43,6 +44,7 @@ root.use('/wishes/*', async (c, next) => {
 root.route(
   '/wishes',
   createWishesRouter({
+    guard: allowRestrictionGuard,
     store: emptyStore,
     matchQueue,
     getUserId: (c) => c.get('userId'),
@@ -60,6 +62,7 @@ describe('wishes router', () => {
     const unauthedRoot = new Hono().route(
       '/wishes',
       createWishesRouter({
+        guard: allowRestrictionGuard,
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),
@@ -114,7 +117,11 @@ describe('wishes router', () => {
     })
     app.route(
       '/wishes',
-      createWishesRouter({ store: creatingStore, getUserId: (c) => c.get('userId') }),
+      createWishesRouter({
+        store: creatingStore,
+        getUserId: (c) => c.get('userId'),
+        guard: allowRestrictionGuard,
+      }),
     )
 
     const response = await app.request('/wishes', {
@@ -152,6 +159,7 @@ describe('wishes router', () => {
     app.route(
       '/wishes',
       createWishesRouter({
+        guard: allowRestrictionGuard,
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),

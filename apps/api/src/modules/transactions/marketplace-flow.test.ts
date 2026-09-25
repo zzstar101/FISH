@@ -7,6 +7,7 @@ import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { WISH_ROUTES } from '@fish/contracts/wishes/routes'
 import { createDb, type Db } from '@fish/db/client'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -170,11 +171,11 @@ async function insertListing(
   sellerId: string,
   id = '01990000-0000-7000-8000-0000000000b1',
 ): Promise<string> {
-  // id 必须显式给：主键默认值在 Drizzle 层（$defaultFn），DB 侧没有 default。
+  const listingNo = await reserveTestListingNo(db, id)
   const row = rows(
     await db.execute(sql`
-      INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-      VALUES (${id}, ${sellerId}, 'K380 键盘', '验收用商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
+      INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+      VALUES (${id}, ${listingNo}, ${sellerId}, 'K380 键盘', '验收用商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
       RETURNING id
     `),
   )[0] as { id: string }

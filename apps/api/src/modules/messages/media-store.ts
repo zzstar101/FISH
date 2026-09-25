@@ -104,6 +104,8 @@ function toLookup(result: unknown): MediaRequestLookup | null {
 }
 
 export interface MediaMessageStore {
+  /** 已重键主体的旧对象键仅可由其新 ID 所属用户/会话继续提交。 */
+  legacyIds(resourceTable: 'users' | 'conversations', currentId: string): Promise<string[]>
   participant(
     conversationId: string,
     userId: string,
@@ -139,6 +141,14 @@ export interface MediaMessageStore {
 
 export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
   return {
+    async legacyIds(resourceTable, currentId) {
+      const result = await db.execute(sql`
+        SELECT old_id FROM id_rekeys
+        WHERE resource_table = ${resourceTable} AND new_id = ${currentId}::uuid
+      `)
+      return rowsOf(result).map((row) => String(row.old_id))
+    },
+
     async participant(conversationId, userId) {
       const result = await db.execute(sql`
         SELECT buyer_id, seller_id FROM conversations

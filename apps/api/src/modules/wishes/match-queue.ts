@@ -3,6 +3,7 @@
  * matching 模块与 worker 归 Dev A；本模块只投递事件。
  */
 import type { Db } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
 
 export interface WishMatchQueue {
@@ -35,7 +36,7 @@ export function createDbWishMatchQueue(db: Db): WishMatchQueue {
       // 而前一次投递真正失败（没插进去）时这里会补上一条。
       await db.execute(sql`
         INSERT INTO jobs (id, type, payload)
-        VALUES (${crypto.randomUUID()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
+        VALUES (${newId()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
         ON CONFLICT DO NOTHING
       `)
     },

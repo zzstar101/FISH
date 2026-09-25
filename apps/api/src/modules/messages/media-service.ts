@@ -181,8 +181,18 @@ export function createMediaMessageService({
         }
       }
       const prefix = `chat-media/${conversationId}/${userId}/`
-      if (!input.objectKey.startsWith(prefix))
-        throw invalid('MEDIA_OBJECT_INVALID', '媒体不属于当前用户或会话')
+      if (!input.objectKey.startsWith(prefix)) {
+        const [conversations, users] = await Promise.all([
+          store.legacyIds('conversations', conversationId),
+          store.legacyIds('users', userId),
+        ])
+        const owned = [conversationId, ...conversations].some((conversation) =>
+          [userId, ...users].some((user) =>
+            input.objectKey.startsWith(`chat-media/${conversation}/${user}/`),
+          ),
+        )
+        if (!owned) throw invalid('MEDIA_OBJECT_INVALID', '媒体不属于当前用户或会话')
+      }
       const stat = await storage.stat(input.objectKey)
       if (!stat) throw invalid('MEDIA_OBJECT_NOT_FOUND', '媒体尚未上传完成')
       if (stat.size !== input.sizeBytes || stat.contentType !== input.contentType) {

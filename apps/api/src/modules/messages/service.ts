@@ -62,8 +62,10 @@ export function createMessageService({
   store,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
+  projectContent = async (_type: string, content: string) => content,
 }: {
   store: MessageStore
+  projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
     message: MessageDto,
@@ -89,7 +91,11 @@ export function createMessageService({
       const page = hasMore ? result.rows.slice(-query.limit) : result.rows
       const oldest = page[0]
       return messageListResponseSchema.parse({
-        items: page.map(toMessageDto),
+        items: await Promise.all(
+          page.map(async (row) =>
+            toMessageDto({ ...row, content: await projectContent(row.type, row.content) }),
+          ),
+        ),
         // 升序页的最早一条即下一页游标；没有更早的消息时为 null（契约：无 hasMore 字段）。
         nextCursor: hasMore && oldest ? oldest.id : null,
       })

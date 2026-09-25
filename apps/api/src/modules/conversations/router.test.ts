@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createConversationsRouter } from './router'
 import type { ConversationService } from './service'
 import { ConversationServiceError } from './service'
@@ -43,6 +44,7 @@ function buildApp(service: ConversationService) {
     '/conversations',
     createConversationsRouter({
       service,
+      guard: allowRestrictionGuard,
       requireAuth: async (_c, next) => {
         await next()
       },

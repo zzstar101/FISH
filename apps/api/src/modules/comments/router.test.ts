@@ -4,6 +4,7 @@ import { errorBody } from '@fish/contracts/system/error'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createCommentsRouter } from './router'
 import { type CommentService, CommentServiceError } from './service'
 
@@ -44,7 +45,10 @@ function buildApp(options: { service: CommentService; authed?: boolean; userId?:
     await next()
   }
 
-  root.route('/', createCommentsRouter({ service: options.service, requireAuth }))
+  root.route(
+    '/',
+    createCommentsRouter({ service: options.service, requireAuth, guard: allowRestrictionGuard }),
+  )
   return root
 }
 

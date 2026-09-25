@@ -21,7 +21,7 @@
 | UI | Tailwind CSS v4（shadcn/ui 由前端 Owner 接入） |
 | 后端 | Hono on Bun（`Bun.serve`） |
 | 校验 | Zod |
-| 数据库 | PostgreSQL 16 + Drizzle ORM（运行时 `drizzle-orm/bun-sql`，走 Bun 内置 `bun:sql`） |
+| 数据库 | PostgreSQL 18 + pgvector + Drizzle ORM（运行时 `drizzle-orm/bun-sql`，走 Bun 内置 `bun:sql`） |
 | 异步 | PostgreSQL jobs 表 + 独立 Bun Worker 轮询 |
 | 实时 | Hono / Bun 原生 WebSocket |
 | 对象存储 | S3 兼容（本地 MinIO） |
@@ -70,7 +70,7 @@ graph LR
   end
 
   subgraph Docker["Docker Compose（仅依赖）"]
-    PG[("PostgreSQL 16<br/>:5432")]
+    PG[("PostgreSQL 18 + pgvector<br/>:5432")]
     MINIO[("MinIO<br/>:9000 / :9001")]
   end
 
@@ -183,19 +183,19 @@ sequenceDiagram
 
 运行时**只用** Bun 原生 `bun:sql`（`drizzle-orm/bun-sql`），不装 `pg` / `postgres`。
 
-但 **`drizzle-kit` CLI 运行在 Node 上且不支持 `bun:sql`**，它在 `db:generate` / `db:migrate` / `db:studio` 时必须能 `import` 一个 Node Postgres 驱动，否则会报：
+但 **`drizzle-kit` CLI 运行在 Node 上且不支持 `bun:sql`**，它在 `db:generate` / `db:studio` 时必须能 `import` 一个 Node Postgres 驱动，否则会报：
 
 ```text
 To connect to Postgres database - please install either of 'pg', 'postgres', ...
 ```
 
-因此 `packages/db` 把 **`postgres` 声明为 devDependency**，仅服务于 migration CLI，不进入运行时。这是刻意的例外，不要把它当作冗余依赖删除。
+因此 `packages/db` 把 **`postgres` 声明为 devDependency**，仅服务于 drizzle-kit CLI，不进入 API/Worker 运行时。#217 的 `db:migrate` 已改为 Bun + Drizzle ORM migrator 的分阶段入口，以便在两条生成的 schema migration 之间回填旧数据。这是刻意的例外，不要把 CLI 驱动当作冗余依赖删除。
 
 ### Docker Compose
 
 `docker compose up -d` 只启动依赖：
 
-- `postgres`：`postgres:16-alpine`，带 `pg_isready` healthcheck
+- `postgres`：`pgvector/pgvector:pg18`，全新 `postgres18-data` 卷，带 `pg_isready` healthcheck；旧 PG16 卷不可直接复用
 - `minio`：带 `/minio/health/live` healthcheck
 - `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`，应用 `infra/minio-public-policy.json`：仅 `listings/*` 匿名可读，聊天媒体必须通过鉴权 API 读取。已有开发环境需重新运行 `docker compose run --rm minio-init` 更新策略。
 

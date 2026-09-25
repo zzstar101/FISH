@@ -24,6 +24,7 @@ const CREATED_AT = new Date('2026-09-12T03:40:10.000Z')
 function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     id: LISTING_ID,
+    listingNo: 638_294_017_526n,
     sellerId: SELLER_ID,
     title: '罗技 K380 键盘',
     description: '宿舍用了一学期，功能正常。',
@@ -38,6 +39,7 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     moderationReason: null,
     moderationRuleVersion: null,
     moderatedAt: null,
+    governanceDelistedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     ...overrides,
@@ -94,12 +96,14 @@ function updateTarget(overrides: Partial<ListingUpdateTarget> = {}): ListingUpda
     negotiable: true,
     free: false,
     moderationStatus: 'APPROVED',
+    governanceDelistedAt: null,
     ...overrides,
   }
 }
 
 function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
   return {
+    legacyUserIds: async () => [],
     createListingAtomic: async () => ({ kind: 'created', listingId: LISTING_ID }),
     enqueueMatchJob: async () => {},
     findDetail: async () => ({
@@ -112,6 +116,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       status: 'ACTIVE',
       priceCents: 16000,
       free: false,
+      governanceDelistedAt: null,
     }),
     listFeed: async () => [],
     updateListingAtomic: async (input) => {
@@ -374,6 +379,7 @@ describe('getDetail', () => {
     })
 
     const detail = await service.getDetail(SELLER_ID, LISTING_ID)
+    expect(detail.listingNo).toBe('638294017526')
     expect(detail.isOwner).toBe(true)
     expect(detail.images.map((image) => image.url)).toEqual([
       `https://cdn.test/listings/${SELLER_ID}/a.jpg`,
@@ -512,6 +518,25 @@ describe('createListing', () => {
 
     expect(error.status).toBe(422)
     expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+  })
+
+  test('旧用户重键后可保留本人的历史图片键，非本人旧键仍拒绝', async () => {
+    const oldId = '11111111-1111-4111-8111-111111111111'
+    const ownKey = `listings/${oldId}/old.webp`
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        legacyUserIds: async (current) => (current === SELLER_ID ? [oldId] : []),
+      }),
+    })
+    const updated = await service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [ownKey] })
+    expect(updated.images).toHaveLength(1)
+    const invalid = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, {
+        objectKeys: [`listings/${OTHER_ID}/old.webp`],
+      }),
+    )
+    expect(invalid.code).toBe('IMAGE_REFERENCE_INVALID')
   })
 
   test('rejects object keys that were never uploaded', async () => {
@@ -878,6 +903,7 @@ describe('transition', () => {
           status: 'OFFLINE',
           priceCents: 16000,
           free: false,
+          governanceDelistedAt: null,
         }),
         findDetail: async () => ({
           listing: listingRow({ status: 'OFFLINE' }),
@@ -905,6 +931,7 @@ describe('transition', () => {
           status: 'RESERVED',
           priceCents: 16000,
           free: false,
+          governanceDelistedAt: null,
         }),
       }),
     })
@@ -937,6 +964,7 @@ describe('transition', () => {
             status: reads === 1 ? 'ACTIVE' : 'RESERVED',
             priceCents: 16000,
             free: false,
+            governanceDelistedAt: null,
           }
         },
       }),
@@ -967,6 +995,7 @@ describe('transition', () => {
             status: reads === 1 ? 'ACTIVE' : 'OFFLINE',
             priceCents: 16000,
             free: false,
+            governanceDelistedAt: null,
           }
         },
         findDetail: async () => ({

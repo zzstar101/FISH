@@ -137,6 +137,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           coverObjectKey,
           listing: {
             id: listings.id,
+            listingNo: listings.listingNo,
             title: listings.title,
             priceCents: listings.priceCents,
             category: listings.category,
