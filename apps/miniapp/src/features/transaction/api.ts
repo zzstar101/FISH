@@ -12,6 +12,7 @@
  *   meetup 页据此调 redeem；6 位码只在面交页输入，走 verify-code。
  */
 
+import { type MessageDto, messageDtoSchema } from '@fish/contracts/chat/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
   type MeetupTokenResponse,
@@ -133,5 +134,47 @@ export async function verifyMeetupCode(
 /** 双方确认面交（核销成功后的 nextAction；幂等，第二侧确认触发 COMPLETED + 商品 SOLD）。 */
 export async function confirmTransaction(id: string): Promise<TransactionDto> {
   const payload = await apiRequest(TRANSACTION_ROUTES.confirm(id), { method: 'POST' })
+  return transactionDtoSchema.parse(payload)
+}
+
+/*
+ * ---- 卖家对买家提案的回应（「我的发布」的待确认行用；Web 会话页同一对端点） ----
+ *
+ * 这一对端点的**响应形状不同**，必须分别在解析处收口：
+ * 拒绝只往会话写一条 `tx.rejected` SYSTEM 消息，响应体是 `MessageDto`；
+ * 接受是唯一创建交易行的端点，响应体是 `TransactionDto`。
+ *
+ * 两者的响应都**不是**商品状态：商品在提案阶段一直是 `ACTIVE`（`propose` 不落表、不改商品），
+ * 由**接受**这一步把它置 `RESERVED`。所以调用方拿到的结论要按这个顺序读：拒绝之后这件商品
+ * 仍在售；接受之后才进「待面交」。
+ */
+
+/** 卖家拒绝提案（`POST /transactions/proposals/reject`）：会话里写入 `tx.rejected` SYSTEM 消息。 */
+export async function rejectProposal(conversationId: string): Promise<MessageDto> {
+  const payload = await apiRequest(TRANSACTION_ROUTES.reject, {
+    method: 'POST',
+    body: { conversationId },
+  })
+  return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 卖家接受提案并创建交易（`POST /transactions`，201 `TransactionDto`）。
+ *
+ * `amountCents` 必须由调用方把**提案那条消息里的金额**原样带回来：提案不落库，
+ * 服务端无处可读（契约 `transactionAcceptInputSchema` 的注释）。
+ *
+ * 重试口径（契约冻结，别按直觉改成幂等）：响应丢失后重试可能收到 409
+ * `LISTING_NOT_ACTIVE` —— 那是「商品已不是 ACTIVE」（并发买家赢了 / 已接受过），
+ * 不代表这次操作失败，调用方应以会话内 `tx.accepted` 或订单列表为准。
+ */
+export async function acceptTransaction(
+  conversationId: string,
+  amountCents: number,
+): Promise<TransactionDto> {
+  const payload = await apiRequest(TRANSACTION_ROUTES.accept, {
+    method: 'POST',
+    body: { conversationId, amountCents },
+  })
   return transactionDtoSchema.parse(payload)
 }

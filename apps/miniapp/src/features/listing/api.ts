@@ -125,14 +125,32 @@ export async function updateListing(id: string, input: ListingUpdateInput): Prom
   return ListingDetailSchema.parse(payload)
 }
 
+export type MyListingsPage = {
+  items: ListingCard[]
+  /**
+   * 翻到页数上限时后面**还有**（`nextCursor` 不为 null），也就是这份列表不是全部。
+   *
+   * 必须把这件事交给调用方：页面上「已经到底了 · N 件」与分段计数都是对**这份列表**下的
+   * 结论，列表不完整时它们就是错的（`components/order-list` 对同一问题给了 `truncated`
+   * 并据此收口，本页同一口径）。
+   */
+  truncated: boolean
+}
+
 /**
  * 「我的发布」：本人视角的**全部状态**商品（含审核中的），按最新排序翻页拉齐。
  *
  * 必须传 `sellerId` 本人：契约只有在 `sellerId === viewerId` 时才把 `status` 过滤打开、
  * 并返回真实的 `moderationStatus`（服务端 `listFeed` 的 `includeUnapproved`）。
- * 单页上限 50（契约 `limit` 上限），翻页靠不透明 cursor；封顶 5 页（250 件）防异常死循环。
+ * 单页上限 50（契约 `limit` 上限），翻页靠不透明 cursor；封顶 5 页（250 件）防异常死循环 ——
+ * 正是这个封顶会让结果可能不完整，所以一并返回 `truncated`。
+ *
+ * **游标没前进就不收这一页**（与 `features/transaction/api.ts` 的 `fetchAllTransactions`
+ * 同一判据）：服务端若重复给同一个 cursor，收下就等于把同一页叠 5 次 ——
+ * 250 张重复卡片、`key` 重复，而且「仅显示最近 250 件」是句假话（其实只有 50 件不同的）。
+ * 按「列表不完整」返回，调用方就不会拿它的长度当总数。
  */
-export async function fetchMyListings(sellerId: string): Promise<ListingCard[]> {
+export async function fetchMyListings(sellerId: string): Promise<MyListingsPage> {
   const items: ListingCard[] = []
   let cursor: string | undefined
   for (let page = 0; page < MY_LISTINGS_MAX_PAGES; page += 1) {
@@ -140,11 +158,14 @@ export async function fetchMyListings(sellerId: string): Promise<ListingCard[]> 
       query: { sellerId, sort: 'newest', limit: PAGE_SIZE, cursor },
     })
     const parsed = ListingFeedResponseSchema.parse(payload)
+    const next = parsed.nextCursor
+    if (next !== null && next === cursor) return { items, truncated: true }
     items.push(...parsed.items)
-    if (parsed.nextCursor === null) break
-    cursor = parsed.nextCursor
+    if (next === null) return { items, truncated: false }
+    cursor = next
   }
-  return items
+  // 走满页数上限还没见底：后面还有，只是本页不再往下拉
+  return { items, truncated: true }
 }
 
 /**

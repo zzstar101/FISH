@@ -573,3 +573,39 @@ describe('出物页接线（#170 判据 C）', () => {
     }
   })
 })
+
+describe('预填交接（再次上架 / 重新上架）的接线', () => {
+  /*
+   * 这两件事之前只靠注释保护，而它们恰恰是下一次解冲突最容易悄悄改掉的：
+   * ① prefill 掉到 `routeId` 之后解出 target —— 用户点「再次上架」会掉进另一件商品的编辑态，
+   *    那份草稿被静默丢掉；② `applyDraft` 顺手碰图片 —— 但 `POST /listings` 只收
+   *    `objectKeys`，而详情刻意不给 `objectKey`，带了也提交不了。
+   */
+  test('prefill 分支在解出 routeId 目标之前就返回', async () => {
+    const sync = await pageSlice('const syncEditTarget = () => {', 'const goDetail')
+    expect(sync).toContain("if (handoff?.kind === 'prefill') {")
+    expect(sync.indexOf("handoff?.kind === 'prefill'")).toBeLessThan(sync.indexOf(': routeId'))
+    // 分支体内就该 return，走不到下面按 routeId 解 target 的那几行
+    const branch = await pageSlice("if (handoff?.kind === 'prefill') {", 'const target = handoff')
+    expect(branch).toContain('return')
+    expect(branch).not.toContain(': routeId')
+  })
+
+  test('prefill 分支清掉编辑态、走新建表单', async () => {
+    const branch = await pageSlice("if (handoff?.kind === 'prefill') {", 'const target = handoff')
+    expect(branch).toContain('modeRef.current = null')
+    expect(branch).toContain('setEditId(null)')
+    expect(branch).toContain("setEditState('idle')")
+    expect(branch).toContain('resetForm()')
+    // 提交走新建（`editing = editId !== null`），预填草稿不会变成 PATCH
+    expect(branch).toContain('applyDraft(handoff.draft)')
+  })
+
+  test('applyDraft 只灌文字字段：一次 setPhotos 都不能有', async () => {
+    const apply = await pageSlice('const applyDraft = (draft: SellDraft) => {', 'const resetForm')
+    expect(apply).not.toContain('setPhotos')
+    expect(apply).not.toContain('setSelectedPhotos')
+    expect(apply).toContain('setTitle(draft.title)')
+    expect(apply).toContain('setDescription(draft.description)')
+  })
+})

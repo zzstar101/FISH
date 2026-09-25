@@ -1,14 +1,26 @@
 @use '@/styles/mixins' as *;
 
 /**
- * C4 我的发布。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ * C4 我的发布（1版稿 `小程序1版mylist.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 页头（冰蓝渐变：标题 + 副标题 + 4 段状态分段控件）→ 商品行列表（卡内分两块：
- * 上块「缩略图 + 标题 + 价格 + 浏览/想要」，下块「锁定说明 + 动作」）
- * → 右下悬浮「+ 发布」圆钮；下架确认是遮罩 + 居中卡。
+ * 结构：冰蓝页头 → **两级顶栏**（`components/top-bar` 的 glass 变体：返回 + 居中两段式
+ * 标题，副行是四段状态分段控件，内容从玻璃底下滚过）→ 商品行列表（卡内分两块：
+ * 上块「缩略图 + 标题 + 价格」，下块「锁定说明 + 动作」）→ 到底提示；右下是悬浮
+ * 「+ 发布」圆钮，其上方是回到顶部玻璃钮；下架确认是遮罩 + 居中卡。
  *
- * 行内动作区与正文之间有一条极淡分割线，是稿子里区分「信息 / 操作」的关键：
- * 少了它，两个按钮看起来像商品信息的一部分。
+ * 顶栏用 `top-bar` 而不是二级页的漂浮 `nav-bar`：稿 ③ 要求两级栏**一起钉在屏顶、
+ * 都不参与滚动**，而 `nav-bar` 是 `position: absolute`、只有返回钮是实体，钉不住也
+ * 放不下副行。这套写法与同族的收藏 / 历史 / 关注三页一致。
+ *
+ * 稿里被丢掉的外壳：状态栏 / 灵动岛 / 机身侧键 / home indicator / **假微信胶囊** /
+ * 机身外演示控制条 / `--rpx`+`--pt`+`cqw` 自适应 / `prefers-reduced-motion` 块 /
+ * 390×844 的固定 `.screen`。真机顶栏只做**避让**（胶囊由 `lib/nav-metrics` 运行时反推，
+ * `components/top-bar` 已按它下发右内边距与行高），不复刻。页面级下拉刷新走微信原生
+ * （`index.config.ts` + `usePullDownRefresh`），稿里那套 pointer 事件的假 refresher
+ * 也不需要。
+ *
+ * 根节点刻意**不写 `overflow`**：写了页面自身就成了滚动容器，`pageScrollTo` 与页面级
+ * 下拉刷新都会失真（见 `pages/wish/index.scss` 的同类说明）。
  */
 
 .ml {
@@ -16,62 +28,109 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 200px;
+  /* 底部留白：让出悬浮发布钮与安全区（非 Tab 页，没有底栏要避让）。
+     44（fab 距底）+ 104（fab 高）+ 28 = 176px，与 `.fab` / `.ml__fab` 的坐标逐项对应。 */
+  padding-bottom: calc(176px + env(safe-area-inset-bottom));
 }
 
+/* 顶部冰蓝渐变圆角背景（稿 `.pagehead{background:var(--grad-page)}` + 下缘 32pt 圆角） */
 .ml__bg {
   @include page-hero(560px, 64px);
 }
 
-/* ---------------------------------------------------------------- 页头 */
+/* ------------------------------------------------ 顶栏副行：四段状态分段控件 */
 
-.ml__head {
-  position: relative;
-  z-index: 1;
+/**
+ * 顶栏标题（稿 `.mp-title`：屏幕水平居中、「发布」二字走品牌色）。
+ *
+ * 它是 `top-bar` 中槽里的**绝对定位**元素，左右拉满整条栏，再 `justify-content: center`
+ * 居中 —— 中槽本身只占「返回钮右侧 → 胶囊避让区左侧」那一段，直接在其中居中会偏左。
+ * 上下由页面按运行时栅格行内下发（`top` / `height`，见 index.tsx），所以这里不写。
+ *
+ * 左右内边距让出返回钮与胶囊，标题长了也不会压到它们身上（稿的标题是 `nowrap`）。
+ */
+.ml__navtitle {
+  position: absolute;
+  left: 0;
+  right: 0;
   display: flex;
-  flex-direction: column;
-  padding: 168px 40px 0;
-}
-
-.ml__title {
-  font-size: 54px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 110px;
+  font-size: 34px;
   font-weight: 600;
-  line-height: 1.33;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.02em;
+  line-height: 1;
   color: var(--fg);
+  white-space: nowrap;
+  /* 纯展示：点击穿过它落到下层，不挡住中槽以后可能加的东西 */
+  pointer-events: none;
 }
 
-.ml__sub {
-  margin-top: 16px;
-  font-size: 23px;
-  line-height: 1.5;
-  color: var(--muted-2);
+/* 标题尾段的品牌色（稿 `.mp-title .hl{color:var(--brand)}`） */
+.ml__navtitle-em {
+  color: var(--brand);
 }
 
-/* ---- 状态分段控件：浅冰底胶囊里 4 个等分格，选中格深墨底白字 ---- */
+/**
+ * 副行占位：`top-bar` 的 `spacer` 只含主行，分段这一截页面自己补。
+ * 24（上衬）+ 88（分段高）+ 8（下衬）= 120px —— 与 `.ml__segwrap` 的 padding 逐项对应：
+ * 改 `.ml__segwrap` 的 padding 或 `.ml__seg` 的高度，必须同步改这里，否则内容会被副行
+ * 压住、或顶部空出一截。
+ *
+ * 上衬 24px 是稿的值（`.seg{margin-top:calc(12 * var(--pt))}`），不是收藏页的 20px。
+ */
+.ml__header-gap {
+  height: 120px;
+}
 
+/**
+ * 分段控件挂在 `top-bar` 的 `below` 槽里，与主行**共用同一块玻璃** —— 所以底与描边
+ * 由 `.topbar--glass` 铺在整块容器上，本块只给内边距与排列（自带 `border-bottom`
+ * 会在玻璃底边再压一道线）。
+ *
+ * 下衬只给 8px：内容整体上提，分段不压在玻璃底边的描边上。
+ */
+.ml__segwrap {
+  padding: 24px 40px 8px;
+}
+
+/**
+ * 分段控件：白底 + 卡片阴影压在页头渐变上（稿 `.seg` 就是白的，与收藏页那套
+ * `--ice` 底不同，别照抄）。44pt 轨道 / 36pt 胶囊（88px / 72px）。
+ *
+ * 描边用 `inset box-shadow` 而不是 `border`：`border` 要吃掉 2×2px 的盒模型高度，
+ * 里面的胶囊就只有 34pt 高，而稿里是 36pt（44pt 外高 − 4pt 上下衬 × 2 = 36pt）。
+ * 画成 inset 阴影不占高，内高正好 72px。
+ *
+ * 等分用 `flex: 1 1 0` 而不是写死列数：分段数由 `list.ts` 的 `SEGMENTS` 决定，
+ * 宽度就该跟着它走（收藏页踩过「删掉一个分段后列数没跟着改」的坑）。
+ */
 .ml__seg {
   display: flex;
   gap: 8px;
   height: 88px;
-  padding: 6px;
-  margin-top: 32px;
-  border-radius: var(--r-pill);
-  background: var(--ice);
-  border: 2px solid var(--border);
+  padding: 8px;
   box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 2px var(--border),
+    var(--shadow-card);
 }
 
 .ml__seg-item {
-  flex: 1;
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   border-radius: var(--r-pill);
-  font-size: 25px;
+  font-size: 26px;
   font-weight: 600;
   color: var(--muted-2);
+  white-space: nowrap;
 
   &.is-on {
     background: var(--ink);
@@ -79,13 +138,26 @@
   }
 }
 
+/* 计数：等宽字体、比标签弱一档（稿 `.seg button .n`） */
 .ml__seg-n {
-  font-size: 20px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  font-weight: 400;
   opacity: 0.9;
+}
+
+/* 选中段的计数不再压暗（稿 `.seg button[aria-selected="true"] .n{opacity:1}`） */
+.ml__seg-item.is-on .ml__seg-n {
+  opacity: 1;
 }
 
 /* ---------------------------------------------------------------- 列表 */
 
+/*
+ * 顶栏以下的每个内容块都要 `position: relative; z-index: 1`：`.ml__bg` 是绝对定位的
+ * 渐变层，定位元素会画在静态内容之上（同 `pages/chat` 的 `.chat__list`、
+ * `pages/following` 的空态）。
+ */
 .ml__body {
   position: relative;
   z-index: 1;
@@ -148,7 +220,7 @@
   @include clamp(2);
 }
 
-/* ---- 状态胶囊：四态各一色（在售浅蓝 / 已预订 warn / 已售出 灰 / 已下架 描边） ---- */
+/* ---- 状态胶囊：各态一色（在售浅蓝 / 待确认 warn / 已售出 灰 / 已下架 描边） ---- */
 
 .ml__pill {
   flex: 0 0 auto;
@@ -167,14 +239,8 @@
     color: var(--brand-deep);
   }
 
-  &.is-reserved {
-    background: var(--warn-weak);
-    border: 2px solid var(--warn);
-    color: var(--warn-ink);
-  }
-
-  /* 审核中 / 未通过审核：与「已预订」同一套 warn 色，文案区分状态 */
-  &.is-review {
+  /* 待确认：等卖家点头，用 warn 色提示「这一条要你处理」（稿 `.pill-pending`） */
+  &.is-pending {
     background: var(--warn-weak);
     border: 2px solid var(--warn);
     color: var(--warn-ink);
@@ -206,6 +272,14 @@
   color: var(--price);
 }
 
+/**
+ * 商品的市场计数行（稿 `.rstats`）：`浏览 N · 想要 N`，夹一个圆点分隔。
+ *
+ * ⚠️ **两个数字今天恒为 0**：契约 `ListingCardSchema` 与 `listings` 表都没有这两个量
+ * （Issue #192），`adapt.ts` 的投影据此给 `null`，页面按 Owner 2026-09-24 的拍板
+ * 把 `null` 显示成 0 —— 稿要这一行，缺一行比缺数字更容易被当成漏做。
+ * 这**不是**真实数据：0 只表示「系统没有这个数」，不表示「没人看过 / 没人想要」。
+ */
 .ml__rstats {
   display: flex;
   align-items: center;
@@ -216,13 +290,14 @@
 .ml__rstat {
   font-size: 22px;
   color: var(--muted-2);
-
-  /* 「N 人想要」可点进 C5：给一点品牌色暗示，否则用户不知道这行能点 */
-  &--want {
-    color: var(--brand-deep);
-  }
 }
 
+/* 计数比标签再小一档（稿 `.rstats .num{font-size:calc(10.5 * var(--pt))}`） */
+.ml__rstats .num {
+  font-size: 21px;
+}
+
+/* 分隔圆点（稿 `.rstats .dot`）：3pt 实心、accent 中间调，两端各留 6pt 的 gap */
 .ml__dot {
   width: 6px;
   height: 6px;
@@ -231,14 +306,47 @@
   flex: 0 0 auto;
 }
 
+/**
+ * 「待确认」才有的那行：谁在等、等了多久、出价多少（稿 `.rreq`）—— 卖家点
+ * 「同意 / 拒绝」的依据。单行省略：名字长或时间文案长都不该把卡片撑高，
+ * 这一行是辅助信息，压不到正文。
+ */
+.ml__rreq {
+  display: block;
+  margin-top: 12px;
+  font-size: 22px;
+  line-height: 1.4;
+  color: var(--warn-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 买家名字重一档（稿 `.rreq b{font-weight:600}`）：一眼先看到「谁」 */
+.ml__rreq-b {
+  font-weight: 600;
+}
+
 /* ------------------------------------------------------------- 行内动作区 */
 
+/*
+ * 行内动作区与正文之间有一条极淡分割线，是稿子里区分「信息 / 操作」的关键：
+ * 少了它，两个按钮看起来像商品信息的一部分。
+ */
 .ml__acts {
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 18px 24px;
   border-top: 2px solid var(--accent-faint);
+}
+
+/**
+ * 贴右收口（稿 ⑪）：在售（编辑 / 下架）与已下架（编辑 / 重新上架）都只有两个按钮，
+ * 左起排会在那一行里空掉右半条，看着跟上面的缩略图 / 文案脱开。
+ */
+.ml__acts--end {
+  justify-content: flex-end;
 }
 
 /* 锁定说明：靠左顶格，把动作按钮推到右边 */
@@ -274,10 +382,27 @@
   }
 }
 
+/* 动作钮：32pt 高、胶囊形（稿 `.act`）。`btn-sm` 给字号与按下反馈，
+   高度与左右内边距按稿覆盖（64px / 28px，与 mixin 的 72px / 26px 不同值，
+   不是「重复声明同一个值」的漏换算情形）。 */
 .ml__act {
   @include btn-sm;
-  min-height: 72px;
-  min-width: 132px;
+  height: 64px;
+  padding: 0 28px;
+
+  /**
+   * 三按钮的「待确认」：查看会话靠左，拒绝 / 同意靠右（稿 `.act-first{margin-right:auto}`）。
+   * 不用 `justify-content: space-between` —— 那样两个决策按钮会各占一端，
+   * 与「已售出」那一行的收口（说明靠左、按钮成组在右）不一致。
+   */
+  &--first {
+    margin-right: auto;
+  }
+
+  /* 提交中（拒绝 / 同意）：置灰但保留热区，重复点击由 `pendingBusy` 拦下 */
+  &.is-busy {
+    opacity: 0.55;
+  }
 
   /* 危险动作（下架）：描边 + 深红字，与「编辑」的中性态区分开 */
   &--danger {
@@ -292,17 +417,28 @@
     background: var(--brand-deep);
     color: var(--surface);
   }
+}
 
-  /**
-   * 禁用态：置灰但**保留热区与可点性**（点击给 toast 说明，不是死按钮）。
-   * 稿子明确要求「禁用按钮置灰、不响应点击，但保留 44pt 热区避免误触相邻按钮」，
-   * 小程序没有原生 disabled 热区，所以用视觉置灰 + 仍可点（点击只提示）实现同等效果。
-   */
-  &.is-locked {
-    background: var(--accent-faint);
-    border: 2px solid var(--accent-faint);
-    color: var(--muted);
-  }
+/* ---------------------------------------------------------- 到底提示 */
+
+/* 小程序「加载完毕」语义（稿 `.list-end`）：两侧细线夹一行等宽小字 */
+.ml__end {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 32px 40px 12px;
+}
+
+.ml__end-line {
+  flex: 1 1 auto;
+  height: 2px;
+  background: var(--border);
+}
+
+.ml__end-tx {
+  font-size: 21px;
+  color: var(--muted-2);
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------- 悬浮发布 */
@@ -328,6 +464,95 @@
 .ml__fab-ic {
   width: 28px;
   height: 28px;
+}
+
+/* ---------------------------------------------------------- 回到顶部 */
+
+/**
+ * 玻璃圆钮（稿 `.totop`），叠在发布钮之上、留 20pt 缝。两个都是 `fixed`，
+ * 所以它的 `bottom` 由 fab 的坐标推出来：44（fab 距底）+ 104（fab 高）+ 40（20pt 缝）= 188px。
+ *
+ * 那道缝在稿里写作 `calc(var(--fab-b) + var(--fab-h) + 20px)` —— 稿的字面 px 与它自己的
+ * `--pt` 在 366px 画布上等值（`--pt ≈ 0.976px`），也就是设计上的 20pt，按本仓「pt × 2」
+ * 换算过来是 40px。稿里同一处的注释写的是「留 10px 缝」，与它自己的取值不一致，
+ * 这里按**取值**走。（fab 的 44px 是仓库既有坐标，不跟稿的 `--fab-b` 改。）
+ *
+ * 两者都**不加** `env(safe-area-inset-bottom)`：fab 的 44px 是仓库既有坐标，它已经在
+ * Home Indicator 之上；只有回到顶部钮单独加安全区，会让那道缝在带指示条的机型上自己
+ * 变宽，看着像错位。
+ */
+.ml__totop {
+  position: fixed;
+  right: 36px;
+  bottom: 188px;
+  z-index: 5;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(44px) saturate(180%);
+  -webkit-backdrop-filter: blur(44px) saturate(180%);
+  box-shadow:
+    0 28px 60px -32px rgba(23, 35, 61, 0.46),
+    0 4px 12px -4px rgba(23, 35, 61, 0.14),
+    inset 0 2px 0 rgba(255, 255, 255, 0.94);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(24px) scale(0.9);
+  transition:
+    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    visibility 0s linear 0.26s;
+
+  &.is-show {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+  }
+
+  /* 按下反馈：与同族三页（消息 / 我的 / 订单列表）的 totop 同款 */
+  &:active {
+    transform: translateY(2px) scale(0.96);
+  }
+}
+
+/* 上箭头：库里没有这个几何（先例 `components/order-list` 的 `.orders__totop-arrow`），CSS 画 */
+.ml__totop-arrow {
+  position: relative;
+  width: 40px;
+  height: 40px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 18px;
+    top: 16px;
+    width: 4px;
+    height: 20px;
+    border-radius: 2px;
+    background: var(--brand-deep);
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border-left: 4px solid var(--brand-deep);
+    border-top: 4px solid var(--brand-deep);
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
 }
 
 /* ---------------------------------------------------------------- 空态 */
@@ -386,14 +611,19 @@
 
 /* ---------------------------------------------------------------- 骨架屏 */
 
+/* 骨架卡与真卡片同形（稿 `.skel`）：上块「缩略图 + 三条」，下块「两个按钮贴右」 */
 .ml__skel {
-  display: flex;
-  gap: 24px;
   background: var(--surface);
   border: 2px solid var(--border);
   border-radius: 48px;
-  padding: 24px;
   margin: 0 40px 20px;
+  overflow: hidden;
+}
+
+.ml__skel-row {
+  display: flex;
+  gap: 24px;
+  padding: 24px;
 }
 
 .ml__skel-sq {
@@ -406,7 +636,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   padding-top: 8px;
 }
 
@@ -418,12 +648,66 @@
   }
 
   &--meta {
-    height: 22px;
+    height: 20px;
   }
+}
+
+/* 按钮占位行：与 `.ml__acts--end` 同一收口，骨架态先摆出真卡片的版式 */
+.ml__skel-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  padding: 18px 24px;
+  border-top: 2px solid var(--accent-faint);
+}
+
+.ml__skel-btn {
+  @include skeleton(64px, 144px);
+  border-radius: var(--r-pill);
+
+  &--sm {
+    width: 128px;
+  }
+}
+
+/* 读取提示：稿 `.skel-hint`（转圈 + 等宽小字），让骨架屏不至于一动不动 */
+.ml__skel-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 36px;
+  font-size: 23px;
+  color: var(--muted-2);
+}
+
+.ml__skel-spin {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 4px solid var(--accent-mid);
+  border-top-color: var(--brand-deep);
+  animation: ml-spin 0.7s linear infinite;
+}
+
+/* ---------------------------------------------- 列表不完整提示 */
+
+/* 与 `components/order-list` 的 `.orders__partial` 同一位置与口径 */
+.ml__partial {
+  display: block;
+  padding: 24px 40px 0;
+  font-size: 21px;
+  color: var(--muted-2);
 }
 
 /* ---------------------------------------------------------- 下架确认弹层 */
 
+/*
+ * 遮罩 z-index 50 高于顶栏（`components/top-bar` 是 40），所以弹层打开时整条顶栏与
+ * 分段控件一起被压暗 —— 稿 ② 要的就是这个观感（真机上微信胶囊由原生层绘制，
+ * 它本来就在 `wx.showModal` 的遮罩之上，不需要页面做层叠手脚）。
+ */
 .ml__scrim {
   @include scrim;
 }
