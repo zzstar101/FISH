@@ -25,6 +25,7 @@ import {
   nextConfirmPending,
   nextPendingSync,
   pendingAfterTerminalRefetch,
+  playsCompletionFx,
   releaseLock,
   sequenceSuperseded,
   showSync,
@@ -109,6 +110,9 @@ const FX_PARTICLES = Array.from({ length: 26 }, (_, index) => `meetup-fx-p-${ind
 type TokenView =
   | { state: 'issuing' }
   | { state: 'ready'; token: MeetupTokenResponse }
+  /** 取码失败（网络 / 5xx / 非 404 的 4xx）：必须留下重试入口。旧接线把它落回 `null`，
+   * 与「还没开始取码」共用同一屏「交易码加载中…」，卖家只能在那里干等。 */
+  | { state: 'failed' }
   /** 凭证暂不在本页展示（如卖家误扫自己的码收到 NOT_ALLOWED）。
    * #176 起取码幂等、**码值不变**：重新进入本页即可取回同一枚码，
    * 不存在「旧码被换掉」这回事；本页不自动重取，免得把一次核销失败静默变成展示动作。 */
@@ -316,7 +320,9 @@ export default function TransactionMeetup() {
       if (notify) void Taro.showToast({ title: '已重新取码；交易码不变', icon: 'none' })
     } catch (error) {
       if (isStale(epoch)) return
-      setToken(null)
+      // 取码失败要有落点：落到 failed 而不是 null，页面才渲染得出「重新取码」入口
+      // （终态那条分支下面会把 tx 刷成终态卡，token 取什么值都已不参与渲染）。
+      setToken({ state: 'failed' })
       if (isApiError(error)) {
         if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
           // 终态（已取消/已完成）：刷新交易视图让页面落到对应状态卡
@@ -378,7 +384,7 @@ export default function TransactionMeetup() {
         if (isStale(epoch)) return
         setTx(dto)
         setConfirmPending(nextConfirmPending({ kind: 'ok', status: dto.status }))
-        if (dto.status === 'COMPLETED') setFxPhase('on')
+        if (playsCompletionFx(dto.status)) setFxPhase('on')
       } catch (error) {
         if (isStale(epoch)) return
         // 自动 confirm 的失败要分类（#147 P2）：409 TRANSACTION_NOT_IN_PENDING 说明
@@ -403,6 +409,9 @@ export default function TransactionMeetup() {
             setLoadError('failed')
           }
           setConfirmPending(pendingAfterTerminalRefetch(dto))
+          // 冲突正是「对方刚确认」：读到的若是 COMPLETED，这笔面交是在用户眼前结束的，
+          // 补一次完成动效（产品口径见 view.ts:playsCompletionFx；静态进页读到终态不播）。
+          if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
           return
         }
         await settle()
@@ -428,6 +437,8 @@ export default function TransactionMeetup() {
           if (isStale(epoch)) return
           if (dto) setTx(dto)
           setConfirmPending(false)
+          // 同一口径：在途核销撞上「已经完成」时也补播一次完成动效（CANCELLED 不播）
+          if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
           return
         }
         if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
@@ -469,7 +480,7 @@ export default function TransactionMeetup() {
       if (isStale(epoch)) return
       setTx(dto)
       setConfirmPending(nextConfirmPending({ kind: 'ok', status: dto.status }))
-      if (dto.status === 'COMPLETED') setFxPhase('on')
+      if (playsCompletionFx(dto.status)) setFxPhase('on')
     } catch (error) {
       if (isStale(epoch)) return
       const failure = classifyConfirmFailure(isApiError(error) ? error.code : null)
@@ -485,6 +496,7 @@ export default function TransactionMeetup() {
           setLoadError('failed')
         }
         setConfirmPending(pendingAfterTerminalRefetch(dto))
+        if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
         return
       }
       void Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })
@@ -1027,7 +1039,7 @@ export default function TransactionMeetup() {
                   对方连续输错被锁定后，点「重新取码」即可解锁；交易码不会变。
                 </Text>
               </>
-            ) : (
+            ) : token === null || token.state === 'issuing' ? (
               <View className="meetup__codecard">
                 <View className="meetup__digits">
                   {CODE_SLOTS.map((slot) => (
@@ -1037,6 +1049,31 @@ export default function TransactionMeetup() {
                   ))}
                 </View>
                 <Text className="meetup__code-ttl num">交易码加载中…</Text>
+              </View>
+            ) : (
+              /* 兜底：凡是「不是加载中、不是就绪、也不是暂不展示」的凭证态都落到这张卡，
+                 而这张卡必定带「重新取码」入口。取码失败原本落回 `null`、与「还没开始取码」
+                 共用加载屏，卖家只能干等 —— 把重试入口放在兜底分支，以后新增凭证状态
+                 也不可能再卡在「加载中…」上。 */
+              <View className="meetup__varcard">
+                <View className="meetup__vdisc meetup__vdisc--warn">
+                  <Image className="meetup__vdisc-ic" src={ICONS.warn} mode="aspectFit" />
+                </View>
+                <Text className="meetup__varcard-title">交易码没能取回来</Text>
+                <Text className="meetup__varcard-text">
+                  网络或服务异常，本单交易码暂时取不到。点「重新取码」重试即可 ——
+                  交易码不会变，取回的仍是同一枚。
+                </Text>
+                <View className="meetup__varcard-acts">
+                  {/* 与 unavailable 那条同一枚按钮、同一份幂等语义（#176）：
+                      重试取回的是**同一枚**码，不换码、不作废，同时清零失败计数与锁定。 */}
+                  <View
+                    className="meetup__btn meetup__btn--sec"
+                    onClick={() => void ensureToken(tx.id, bootEpoch.current, true)}
+                  >
+                    <Text>重新取码</Text>
+                  </View>
+                </View>
               </View>
             )}
           </>

@@ -5,6 +5,7 @@ import {
   nextConfirmPending,
   nextPendingSync,
   pendingAfterTerminalRefetch,
+  playsCompletionFx,
   releaseLock,
   type SubmitLock,
   sequenceSuperseded,
@@ -79,6 +80,21 @@ describe('meetup 自动 confirm 的终态分类（#147 P2）', () => {
 
     // 与 409 自相矛盾，但凭证必定已消耗：保留入口至少还能重试确认
     expect(pendingAfterTerminalRefetch({ status: 'PENDING_MEETUP' })).toBe(true)
+  })
+})
+
+describe('meetup 完成动效的触发口径（Owner 拍板）', () => {
+  test('在途操作里重读到 COMPLETED 就播 —— 含自动 confirm 撞上「对方已确认」的 409 冲突路径', () => {
+    expect(playsCompletionFx('COMPLETED')).toBe(true)
+  })
+
+  test('CANCELLED 与「还差另一侧」都不播', () => {
+    expect(playsCompletionFx('CANCELLED')).toBe(false)
+    expect(playsCompletionFx('PENDING_MEETUP')).toBe(false)
+  })
+
+  test('重读失败（拿不到状态）不播：不能假装交易已完成', () => {
+    expect(playsCompletionFx(null)).toBe(false)
   })
 })
 

@@ -112,6 +112,19 @@ export function pendingAfterTerminalRefetch(dto: { status: string } | null): boo
 }
 
 /**
+ * 在途操作重读到终态之后，要不要播完成动效（Owner 拍板的产品口径）。
+ *
+ * 口径是「**在途操作**里重读到 `COMPLETED` 就播」：包括核销成功后自动 confirm 撞上
+ * 「对方已经确认」的 409 冲突路径 —— 那一瞬这笔面交在用户眼前结束，给一次动效是合理的。
+ *
+ * 静态进页读到终态**不播**（`bootstrap` 冷启动、返回刷新落到 `COMPLETED`）：那属于
+ * 「进来时就已经完成了」，重播只会让每次返回都闪一次（见 `FxPhase` 的注释）。
+ */
+export function playsCompletionFx(status: string | null): boolean {
+  return status === 'COMPLETED'
+}
+
+/**
  * 单调任务序号是否已被更新的任务超越（#147 返回刷新 / #170 D / 审查 R6）。
  *
  * 两条序号共用这一个比较，因为判据是同一回事：发出时捕获的序号回来时对不上，就说明
