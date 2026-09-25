@@ -87,11 +87,23 @@ function subscribe(listener: () => void): () => void {
 let latestOwner: string | null = null
 
 /**
+ * 权威快照的版本号：`publishUnread`（消息页发布）与 `clearUnread`（登出 / 换账号清场）
+ * 各递增一次。
+ *
+ * 用来作废「在此之前发出的」补数 / 刷新结果（#170 D）：底栏显示时会重取未读，
+ * 若这期间消息页已经发布了更权威的值（含页内已读回写），那份旧结果不能盖回去。
+ * 只比对 `latestOwner` 挡不住这种交错 —— 同一个账号登出再登录时它会变回同一个 id。
+ */
+let snapshotSeq = 0
+
+/**
  * Chat 页发布最新未读快照。值没变就不广播，避免列表重渲染触发无谓的红点重算。
  */
 export function publishUnread(next: UnreadSnapshot): void {
   // 先记活跃账号：即使下面因值没变而提前返回，这份快照也说明「现在是 next.ownerId」
   latestOwner = next.ownerId
+  // 值没变也算「更权威的一次发布」：在它之前发出的补数 / 刷新结果都该作废
+  snapshotSeq += 1
   if (
     snapshot &&
     snapshot.ownerId === next.ownerId &&
@@ -119,6 +131,12 @@ export function unreadSnapshot(): UnreadSnapshot | null {
 export function clearUnread(): void {
   // 登出即「没有活跃账号」：在途的补数结果回来后会被判为过时而丢弃
   latestOwner = null
+  // 同时作废在途结果：同一账号登出再登录时 `latestOwner` 会变回同一个 id，光靠它挡不住
+  snapshotSeq += 1
+  // 去重表也得清：否则同一账号马上重新登录时，这次补数会被「还在途」的旧请求吞掉，
+  // 而旧请求的结果又已被上面的序号作废 —— 这一轮登录就没人再取数了（窗口=一次往返）。
+  // 迟到的旧结果不会因此复活：它落地前仍要过序号与账号两道校验。
+  hydrating.clear()
   if (snapshot === null) return
   snapshot = null
   for (const listener of listeners) listener()
@@ -132,6 +150,82 @@ export function clearUnread(): void {
  */
 export function useUnreadSnapshot(): UnreadSnapshot | null {
   return useSyncExternalStore(subscribe, unreadSnapshot, unreadSnapshot)
+}
+
+/**
+ * 在途的账号：底栏实例每个 Tab 页各一份，多个实例会同时触发；同账号只发一次请求。
+ * 登出（`clearUnread`）会把它一并清掉 —— 理由见那里的注释。
+ */
+const hydrating = new Set<string>()
+
+/** 演示 / 开发构建注入的兜底计数（真实构建不传：读不到就是「不知道」） */
+type UnreadFallback = () => { conversations: number; notifications: number }
+
+/**
+ * 补数 / 刷新的公共实现。两个入口只差两处口径：
+ *
+ * - `fill`（冷启动补数）：本账号**已有快照就不再请求** —— 那是含会话未读的权威值；
+ * - `refresh`（显示时刷新，#170 D）：每次显示都重取，且**不下调已知值** ——
+ *   某一项没拿到（`null` = 不知道）时沿用旧快照，绝不把「知道」写成「不知道」，
+ *   否则一次失败的网络请求会把底栏已知的未读抹掉。两项都没拿到就干脆不发布。
+ *
+ * 两者共用的作废判据是 `snapshotSeq`：请求发出后若出现更权威的快照
+ * （消息页发布 / 登出清场），这份结果直接丢弃 —— 迟到的旧值不许盖回新值。
+ */
+function requestUnread(
+  ownerId: string,
+  demoFallback: UnreadFallback | undefined,
+  mode: 'fill' | 'refresh',
+): void {
+  // 记录「当前该为谁取数」：即使下面因为已有同账号快照而提前返回，也说明这个账号是当前的
+  latestOwner = ownerId
+  // 本次账号已经有快照（比如刚进过消息页）：那是含会话未读的权威值，不用补
+  if (mode === 'fill' && snapshot && snapshot.ownerId === ownerId) return
+  if (hydrating.has(ownerId)) return
+  hydrating.add(ownerId)
+  // 记下发起时刻的版本：期间若有人发布了更权威的快照，这份结果就算过时
+  const startedAt = snapshotSeq
+  void Promise.all([
+    fetchUnreadNotificationCount().catch(() => null),
+    fetchConversationUnreadCount().catch(() => null),
+  ])
+    .then(([notifications, conversations]) => {
+      // 期间出现了更新的权威快照（消息页发布 / 登出清场）：这份结果已经过时，丢掉
+      if (snapshotSeq !== startedAt) return
+      // 期间又为别的账号取过数：这份结果属于旧账号，丢掉（否则会把新账号的红点写回旧账号）
+      if (latestOwner !== ownerId) return
+      // 两项只要有一项没拿到，就走演示兜底；真实构建下兜底是 undefined
+      const fallback =
+        notifications === null || conversations === null ? demoFallback?.() : undefined
+      // 拿不到 = 「不知道」：真实构建发 null（底栏按无已知未读算），演示构建用兜底值。
+      // **不发 0** —— 0 是「确定没有未读」这个具体结论。
+      const next: UnreadSnapshot = {
+        ownerId,
+        conversations: conversations ?? fallback?.conversations ?? null,
+        notifications: notifications ?? fallback?.notifications ?? null,
+      }
+      if (mode === 'fill') {
+        publishUnread(next)
+        return
+      }
+      // 刷新：没拿到的那一项沿用旧快照（同账号才可信），不下调成「不知道」
+      const previous = snapshot && snapshot.ownerId === ownerId ? snapshot : null
+      const merged: UnreadSnapshot = {
+        ownerId,
+        conversations: next.conversations ?? previous?.conversations ?? null,
+        notifications: next.notifications ?? previous?.notifications ?? null,
+      }
+      // 一项已知值都没有（真实构建两路失败、又没有旧快照）：没有新信息可发布，保持现状
+      if (merged.conversations === null && merged.notifications === null) return
+      publishUnread(merged)
+    })
+    .catch(() => {})
+    // 在途去重项的释放在 finally 里做，与走到哪条分支无关：若把它放在 `.then` 开头，
+    // 上面那条「已被更权威快照作废」的早退路径就不会释放，这个账号从此每次显示时刷新
+    // 都被 `hydrating.has(ownerId)` 吞掉 —— D 会静默失效，直到下一次登出清场才恢复。
+    .finally(() => {
+      hydrating.delete(ownerId)
+    })
 }
 
 /**
@@ -155,40 +249,20 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  *
  * 并发去重：底栏实例每个 Tab 页各一份，多个实例会同时触发；同账号只发一次请求。
  */
-const hydrating = new Set<string>()
+export function hydrateUnread(ownerId: string, demoFallback?: UnreadFallback): void {
+  requestUnread(ownerId, demoFallback, 'fill')
+}
 
-export function hydrateUnread(
-  ownerId: string,
-  demoFallback?: () => { conversations: number; notifications: number },
-): void {
-  // 记录「当前该为谁补数」：即使下面因为已有同账号快照而提前返回，也说明这个账号是当前的
-  latestOwner = ownerId
-  // 本次账号已经有快照（比如刚进过消息页）：那是含会话未读的权威值，不用补
-  if (snapshot && snapshot.ownerId === ownerId) return
-  if (hydrating.has(ownerId)) return
-  hydrating.add(ownerId)
-  void Promise.all([
-    fetchUnreadNotificationCount().catch(() => null),
-    fetchConversationUnreadCount().catch(() => null),
-  ])
-    .then(([notifications, conversations]) => {
-      hydrating.delete(ownerId)
-      // 期间消息页可能已经发布了权威快照（含会话未读），别用这份补数盖回去
-      if (snapshot && snapshot.ownerId === ownerId) return
-      // 期间又为别的账号补过数：这份结果属于旧账号，丢掉（否则会把新账号的红点写回旧账号）
-      if (latestOwner !== ownerId) return
-      // 两项只要有一项没拿到，就走演示兜底；真实构建下兜底是 undefined
-      const fallback =
-        notifications === null || conversations === null ? demoFallback?.() : undefined
-      publishUnread({
-        ownerId,
-        // 会话未读拿不到 = 「不知道」：真实构建发 null（底栏按无已知未读算），
-        // 演示构建用兜底值。**不发 0** —— 0 是「确定没有未读」这个具体结论。
-        conversations: conversations ?? fallback?.conversations ?? null,
-        notifications: notifications ?? fallback?.notifications ?? null,
-      })
-    })
-    .catch(() => {
-      hydrating.delete(ownerId)
-    })
+/**
+ * 显示时刷新未读快照（#170 D：底栏每次显示都重取一次真实值）。
+ *
+ * 为什么需要：底栏实例在每个 Tab 页各一份，且**跨「切 Tab / 后台回前台」存活** ——
+ * 只在挂载时补一次的话，别处产生的未读（新消息、另一台设备已读）在底栏上永远不更新。
+ *
+ * 走的是与冷启动补数**同一套**真实接口（`GET /notifications/unread-count` +
+ * `GET /conversations` 求和），不另造求和规则；迟到的结果由 `snapshotSeq` 作废，
+ * 失败不下调已知值，未登录由调用方拦住。
+ */
+export function refreshUnread(ownerId: string, demoFallback?: UnreadFallback): void {
+  requestUnread(ownerId, demoFallback, 'refresh')
 }

@@ -15,14 +15,21 @@
  * 改从 hash 路由读，保证预览与真机同一套组件。
  */
 import { Image, Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
+import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
-import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
+import {
+  badgeShouldLight,
+  clearUnread,
+  hydrateUnread,
+  refreshUnread,
+  useUnreadSnapshot,
+} from '@/features/chat/unread'
 import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
+import { refreshTargetOnShow } from './view'
 
 type TabKey = 'home' | 'wish' | 'sell' | 'chat' | 'profile'
 
@@ -155,17 +162,53 @@ export default function CustomTabBar() {
    * 会话未读此前无论哪条路径都来自 fixture（#89 明写的既有债），于是底栏那颗点
    * 与「是否真的还有未读」毫无关系：通知未读为 0、接口失败时它照样亮，也从不随已读
    * 熄灭。现在两项都是真值，真实接口失败即「不知道」。
+   *
+   * 这里只负责「还没有快照时补一次」；**显示时**的重取见下面那条 `useDidShow`。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || !userId) return
     hydrateUnread(userId, demoUnread)
   }, [authStatus, userId, demoUnread])
 
+  /**
+   * 显示时刷新（#170 D：底栏每次显示都重取一次真实未读）。
+   *
+   * 上面那条 effect 只在「挂载 / 登录态变化」时补一次，而底栏实例跨「切 Tab /
+   * 后台回前台」存活 —— 别处产生的未读（新消息、另一台设备已读）就不会再反映到
+   * 红点上。这里在每次所属页面显示时刷新一次：自定义 tabBar 是框架渲染的独立组件，
+   * 它的 `pageLifetimes.show` 会被 Taro 派发成组件的 `componentDidShow`，所以
+   * `useDidShow` 在这里可用。
+   *
+   * 走 `refreshUnread`（与冷启动补数同一套真实接口，不另造求和规则）：已有快照也会
+   * 重取，拿不到的分量沿用旧值，被更新的权威快照作废 —— 见 `features/chat/unread.ts`。
+   * 「出物」页不渲染底栏，那条路由上不必刷新。
+   *
+   * **不跳过「首次显示」**（与 profile / match 的 D 判据不同）：自定义 tabBar 每个
+   * Tab 页各有一份实例，实例的首次显示就是该页第一次被打开，而挂载期补数在「本账号
+   * 已有快照」时会直接返回 —— 跳过它等于该页第一次打开不刷新。也不会因此双发：
+   * 同账号在途时 store 的去重表让后到的那次直接返回。
+   */
+  useDidShow(() => {
+    // 判据在 `./view`（纯函数、有用例）：未登录 / 身份未就绪 / 「出物」页都不刷新。
+    // 返回的是「该为哪个账号刷新」，空则本次不动。
+    const ownerId = refreshTargetOnShow({
+      authed: authStatus === 'authed',
+      userId,
+      hiddenRoute: currentRoute().includes(HIDDEN_ROUTE),
+    })
+    if (!ownerId) return
+    refreshUnread(ownerId, demoUnread)
+  })
+
   useEffect(() => {
     // 未登录不亮红点：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上
     // 展示别人的未读。
     if (authStatus !== 'authed' || !userId) {
       setDot(false)
+      // 底栏自己也会建快照（挂载期补数），所以登出清场不能只靠消息页：用户从没进过
+      // 消息页时，上一个账号的快照会留到下一个账号登录后被当成自己的未读。
+      // `clearUnread` 在已经清空时不再广播（幂等），与本 effect 不会形成循环。
+      clearUnread()
       return
     }
     // 未读消息 + 未读通知的合计，决定消息 tab 的小红点。
