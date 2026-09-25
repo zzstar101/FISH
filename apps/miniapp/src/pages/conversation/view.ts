@@ -124,6 +124,21 @@ export function mergeRefreshedMessages(
 }
 
 /**
+ * 把一条**实时推送**的消息并入消息流（#67 第三步）。
+ *
+ * 推送不保证不重：HTTP 发送成功的响应已经把同一条落进本地，服务端再推一次就会
+ * 出现两个一样的气泡。按服务端 id 去重，并仍按契约的 `(createdAt, id)` 定序 ——
+ * 推送到达顺序不保证与服务端落库顺序一致（同 `sortMessages` 的理由）。
+ *
+ * 重复时返回原数组本身（不是新数组）：底栏与消息流的订阅方会拿到同一条推送，
+ * 返回新引用会让 React 白重渲染一次。
+ */
+export function mergePushedMessage(previous: MessageDto[], message: MessageDto): MessageDto[] {
+  if (previous.some((item) => item.id === message.id)) return previous
+  return sortMessages([...previous, message])
+}
+
+/**
  * 「加载更早一页」的落定守卫（#186 P2-2）。
  *
  * 更早一页是**账号 + 会话作用域**的快照：发起后若发生换账号、换会话或整页重拉
