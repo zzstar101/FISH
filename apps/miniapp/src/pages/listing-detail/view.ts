@@ -112,6 +112,35 @@ export function mergeRefreshedComments<T extends { id: string; replies: T[] }>(
   return [...carried, ...merged]
 }
 
+/**
+ * 一次留言读取的结果：**失败**与「成功但真的没有留言」必须可区分（#170 复查 N6）。
+ *
+ * 为什么不能只回一个列表：静默刷新的语义是「失败保留已有内容」（判据 D），而
+ * `fetchComments` 失败时旧实现直接回退成空列表、游标置 `null`。刷新拿到失败结果后照样
+ * 走整体合并，等于把已经显示出来的留言与分页游标一起抹掉 —— 一次网络抖动变成
+ * 「留言全没了」（客户端展示丢失，不是服务端删了留言）。
+ *
+ * 失败分支仍带 `comments`（开发 / 预览口径的 fixture 回退，或生产口径的空列表）：
+ * 它只用于**首次加载**的兜底展示，绝不允许进静默刷新的合并。
+ */
+export type CommentsRead<C> =
+  | { status: 'ok'; comments: C[]; nextCursor: string | null }
+  | { status: 'failed'; comments: C[] }
+
+/**
+ * 静默刷新的留言落地决策：**成功**（哪怕真的是空列表）才允许合并，失败一律不落地。
+ *
+ * 返回 `null` = 这次读取不动页面上的留言与游标（保留现有内容，等下一次刷新重试）；
+ * 返回对象 = 拿它去 `mergeRefreshedComments` 并与游标一起提交。区分「失败」与
+ * 「成功空列表」是必须的：前者保留旧快照，后者必须清空，否则会永久停在过期留言上。
+ */
+export function resolveRefreshedComments<C>(
+  read: CommentsRead<C>,
+): { comments: C[]; nextCursor: string | null } | null {
+  if (read.status === 'failed') return null
+  return { comments: read.comments, nextCursor: read.nextCursor }
+}
+
 /** 一次账号作用域的写入任务：`ownerId` 决定「属于谁」，`epoch` 决定「还是不是当前世代」。 */
 export type WriteTask = { ownerId: string | null; epoch: number }
 
