@@ -1,7 +1,7 @@
 import { Badge } from '@fish/ui/badge'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
-import { CheckCircle2, Package, UserPlus, Users } from 'lucide-react'
+import { CheckCircle2, FileWarning, Package, ShieldAlert, UserPlus, Users } from 'lucide-react'
 import { formatDateTime } from './display'
 import { useAdminOverview } from './queries'
 
@@ -39,6 +39,32 @@ export function OverviewPage() {
       value: data.completedTransactions,
       to: '/admin/transactions' as const,
     },
+    // #73 治理半场 PR4：四个新指标。全部是后端全量 count(*)，不拿当前页条数冒充
+    // 总量（Overview 没有任何筛选参数，口径必须稳定）。
+    {
+      icon: FileWarning,
+      label: '待人工审核',
+      value: data.pendingReviewRecords,
+      to: '/admin/moderation' as const,
+    },
+    {
+      icon: FileWarning,
+      label: '待处理举报',
+      value: data.pendingReports,
+      to: '/admin/reports' as const,
+    },
+    {
+      icon: ShieldAlert,
+      label: '近 7 日举报',
+      value: data.reportsLast7d,
+      to: '/admin/reports' as const,
+    },
+    {
+      icon: ShieldAlert,
+      label: '生效中限制',
+      value: data.activeRestrictions,
+      to: '/admin/users' as const,
+    },
   ]
 
   return (
@@ -70,6 +96,10 @@ export function OverviewPage() {
           <li>· 用户总数含全部注册用户；近 24 小时按注册时间统计。</li>
           <li>· 在售商品 = 商品状态为「在售」的总数；完成交易 = 交易状态为「已完成」。</li>
           <li>· 审核队列、人工决定与审核时间线见「审核队列」；审核决定会写入审计日志。</li>
+          <li>
+            · 待处理举报只数 `PENDING`；近 7
+            日举报含已处理；生效中限制按限制记录计，同一用户被限制发布与封禁算两条。
+          </li>
         </ul>
       </section>
 
