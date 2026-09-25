@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import {
+  backfillGapUntilConnected,
   backfillMessageGap,
   type GapPage,
   MAX_BACKOFF_MS,
@@ -94,10 +95,11 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       c2: { items: [message('m1', 1)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set())
+    const result = await backfillMessageGap(loadPage, new Set())
 
     expect(calls).toEqual([undefined])
-    expect(recovered.map((item) => item.id)).toEqual(['m2', 'm3'])
+    expect(result.items.map((item) => item.id)).toEqual(['m2', 'm3'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'empty-local' })
   })
 
   test('断档跨多页时往回翻到接上本地窗口为止（这正是「只取一页」补不上的）', async () => {
@@ -107,10 +109,11 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       c1: { items: [message('m1', 1)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set(['m1']))
+    const result = await backfillMessageGap(loadPage, new Set(['m1']))
 
     expect(calls).toEqual([undefined, 'c2', 'c1'])
-    expect(recovered.map((item) => item.id)).toEqual(['m1', 'm2', 'm3'])
+    expect(result.items.map((item) => item.id)).toEqual(['m1', 'm2', 'm3'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'connected' })
   })
 
   test('一接上就停，不会多翻一页；结果按时间升序（反转页序拼接）', async () => {
@@ -120,10 +123,11 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       c1: { items: [message('m0', 0)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set(['m2']))
+    const result = await backfillMessageGap(loadPage, new Set(['m2']))
 
     expect(calls).toEqual([undefined, 'c2'])
-    expect(recovered.map((item) => item.id)).toEqual(['m1', 'm2', 'm3', 'm4'])
+    expect(result.items.map((item) => item.id)).toEqual(['m1', 'm2', 'm3', 'm4'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'connected' })
   })
 
   test('翻到最早（nextCursor 为 null）就停，即使一直没接上', async () => {
@@ -131,13 +135,14 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       first: { items: [message('m3', 3)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set(['m1']))
+    const result = await backfillMessageGap(loadPage, new Set(['m1']))
 
     expect(calls).toEqual([undefined])
-    expect(recovered.map((item) => item.id)).toEqual(['m3'])
+    expect(result.items.map((item) => item.id)).toEqual(['m3'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'earliest' })
   })
 
-  test('页数上限兜底：游标异常时不会无限翻下去', async () => {
+  test('页数上限兜底：游标异常时不会无限翻下去，并把续拉位置交出来', async () => {
     const { loadPage, calls } = pagedLoader({
       first: { items: [message('m9', 9)], nextCursor: 'c1', failed: false },
       c1: { items: [message('m8', 8)], nextCursor: 'c2', failed: false },
@@ -145,10 +150,12 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       c3: { items: [message('m6', 6)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set(['never']), { maxPages: 3 })
+    const result = await backfillMessageGap(loadPage, new Set(['never']), { maxPages: 3 })
 
     expect(calls).toEqual([undefined, 'c1', 'c2'])
-    expect(recovered.map((item) => item.id)).toEqual(['m7', 'm8', 'm9'])
+    expect(result.items.map((item) => item.id)).toEqual(['m7', 'm8', 'm9'])
+    // 没接上就不能假装接上了：预算耗尽要交出续拉位置，否则这段缺口再也没人补（#67 N5）
+    expect(result).toMatchObject({ complete: false, resumeCursor: 'c3', stoppedBy: 'budget' })
   })
 
   test('这一页没读到就停：不把「没读到」当成「还有更早的」', async () => {
@@ -157,10 +164,40 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       c1: { items: [message('m1', 1)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set(['m0']))
+    const result = await backfillMessageGap(loadPage, new Set(['m0']))
 
     expect(calls).toEqual([undefined])
-    expect(recovered).toEqual([])
+    expect(result.items).toEqual([])
+    // 最新一页就没读到：续拉位置停在「最新」（null = 重取第一页），不能指向 c1
+    expect(result).toMatchObject({ complete: false, resumeCursor: null, stoppedBy: 'failed' })
+  })
+
+  test('中途取页失败：续拉位置停在失败那一页，重试时不会跳过它', async () => {
+    const { loadPage, calls } = pagedLoader({
+      first: { items: [message('m9', 9)], nextCursor: 'c8', failed: false },
+      c8: { items: [], nextCursor: 'c7', failed: true },
+      c7: { items: [message('m7', 7)], nextCursor: null, failed: false },
+    })
+
+    const result = await backfillMessageGap(loadPage, new Set(['m7']))
+
+    expect(calls).toEqual([undefined, 'c8'])
+    expect(result.items.map((item) => item.id)).toEqual(['m9'])
+    expect(result).toMatchObject({ complete: false, resumeCursor: 'c8', stoppedBy: 'failed' })
+  })
+
+  test('从上一轮交出的续拉位置接着翻，不把已翻过的页重取一遍', async () => {
+    const { loadPage, calls } = pagedLoader({
+      first: { items: [message('m9', 9)], nextCursor: 'c8', failed: false },
+      c8: { items: [message('m8', 8)], nextCursor: 'c7', failed: false },
+      c7: { items: [message('m7', 7)], nextCursor: null, failed: false },
+    })
+
+    const result = await backfillMessageGap(loadPage, new Set(['m7']), { startBefore: 'c8' })
+
+    expect(calls).toEqual(['c8', 'c7'])
+    expect(result.items.map((item) => item.id)).toEqual(['m7', 'm8'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'connected' })
   })
 
   test('跨页重复的服务端 id 只保留一条', async () => {
@@ -169,8 +206,79 @@ describe('backfillMessageGap —— 重连后补齐断档', () => {
       c1: { items: [message('m2', 2)], nextCursor: null, failed: false },
     })
 
-    const recovered = await backfillMessageGap(loadPage, new Set(['m9']))
+    const result = await backfillMessageGap(loadPage, new Set(['m9']))
 
-    expect(recovered.map((item) => item.id)).toEqual(['m2', 'm3'])
+    expect(result.items.map((item) => item.id)).toEqual(['m2', 'm3'])
+    expect(result).toMatchObject({ complete: true, stoppedBy: 'earliest' })
+  })
+})
+
+describe('backfillGapUntilConnected —— 一轮翻不完就接着翻（#67 N5）', () => {
+  const threePageGap = () => ({
+    first: { items: [message('m5', 5)], nextCursor: 'c4', failed: false },
+    c4: { items: [message('m3', 3)], nextCursor: 'c2', failed: false },
+    c2: { items: [message('m1', 1)], nextCursor: null, failed: false },
+  })
+
+  test('页数预算不够时自动用交出的续拉位置接着翻，直到接上', async () => {
+    const { loadPage, calls } = pagedLoader(threePageGap())
+
+    const result = await backfillGapUntilConnected(loadPage, new Set(['m1']), {
+      maxPages: 1,
+      maxPasses: 3,
+    })
+
+    expect(calls).toEqual([undefined, 'c4', 'c2'])
+    // 后一轮翻到的整体更早，拼装时按轮序反转，结果仍是升序
+    expect(result.items.map((item) => item.id)).toEqual(['m1', 'm3', 'm5'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'connected' })
+  })
+
+  test('轮数用尽仍没接上：如实报 incomplete 并交出下一轮的续拉位置', async () => {
+    const { loadPage, calls } = pagedLoader(threePageGap())
+
+    const result = await backfillGapUntilConnected(loadPage, new Set(['m1']), {
+      maxPages: 1,
+      maxPasses: 2,
+    })
+
+    expect(calls).toEqual([undefined, 'c4'])
+    expect(result.items.map((item) => item.id)).toEqual(['m3', 'm5'])
+    // 修复前这里只会返回数组、丢掉 c2，这段缺口再也没人补
+    expect(result).toMatchObject({ complete: false, resumeCursor: 'c2', stoppedBy: 'budget' })
+  })
+
+  test('取页失败时停在失败那一页重试，不会跳过它去翻更早的', async () => {
+    const { loadPage, calls } = pagedLoader({
+      first: { items: [message('m9', 9)], nextCursor: 'c8', failed: false },
+      c8: { items: [], nextCursor: 'c7', failed: true },
+      c7: { items: [message('m7', 7)], nextCursor: null, failed: false },
+    })
+
+    const result = await backfillGapUntilConnected(loadPage, new Set(['m7']), {
+      maxPages: 1,
+      maxPasses: 3,
+    })
+
+    expect(calls).toEqual([undefined, 'c8', 'c8'])
+    expect(result.items.map((item) => item.id)).toEqual(['m9'])
+    expect(result).toMatchObject({ complete: false, resumeCursor: 'c8', stoppedBy: 'failed' })
+  })
+
+  test('从传入的续拉位置起跑，不重取最新一页', async () => {
+    const { loadPage, calls } = pagedLoader({
+      c8: { items: [message('m8', 8)], nextCursor: 'c7', failed: false },
+      c7: { items: [message('m7', 7)], nextCursor: null, failed: false },
+    })
+
+    const result = await backfillGapUntilConnected(loadPage, new Set(['m7']), {
+      maxPages: 1,
+      maxPasses: 2,
+      startBefore: 'c8',
+    })
+
+    expect(calls).toEqual(['c8', 'c7'])
+    expect(result.items.map((item) => item.id)).toEqual(['m7', 'm8'])
+    expect(result).toMatchObject({ complete: true, resumeCursor: null, stoppedBy: 'connected' })
   })
 })

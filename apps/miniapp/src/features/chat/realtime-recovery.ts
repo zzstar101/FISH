@@ -35,6 +35,40 @@ export type GapPage = {
 }
 
 /**
+ * 一轮补齐为什么停下来。
+ *
+ * 前三种是**真的接上了**；后两种没接上 —— 必须把续拉位置交还给调用方，否则断线期间
+ * 超过预算的那段消息会在中间留下一段永远补不上的空洞（#67 N5）。
+ */
+export type GapStopReason =
+  /** 与 `knownIds` 有交集：已经接到本地窗口的前沿 */
+  | 'connected'
+  /** `nextCursor === null`：翻到了最早，更早的本地本来就没有 */
+  | 'earliest'
+  /** 本地一条都没有：首屏只加载一页（见下） */
+  | 'empty-local'
+  /** 取页失败：拿不到游标，继续翻只会把「没读到」当成「还有更早的」 */
+  | 'failed'
+  /** 页数预算耗尽，还没接上 */
+  | 'budget'
+
+/** `backfillMessageGap` 的结果 */
+export type GapBackfill = {
+  /** 升序的合并结果（可直接交给 `mergeRefreshedMessages`） */
+  items: MessageDto[]
+  /** 是否已经把断档接上。`false` = 中间可能还有缺口，应带 `resumeCursor` 再来一轮 */
+  complete: boolean
+  /**
+   * 没接上时下一轮的起始游标（即 `loadPage` 的 `before`）。接上了就是 `null`。
+   *
+   * `stoppedBy === 'failed'` 且本来就是从最新一页开始取的时候它也会是 `null` ——
+   * 那表示下一轮重取最新一页（不是「没有续拉位置」）。
+   */
+  resumeCursor: string | null
+  stoppedBy: GapStopReason
+}
+
+/**
  * 重连后把断档补回来。
  *
  * 契约明确「推送不保证不重不漏，离线端重连后用历史端点补齐」，所以**不能只重取最新
@@ -53,27 +87,52 @@ export type GapPage = {
  * 返回**升序**的合并结果（服务端每页内部升序、页与页之间越翻越早，所以反转页序拼起来
  * 就是全局升序）。不在这里排序：排序规则是契约的 `(createdAt, id)`，重复实现一份容易
  * 与 `pages/conversation/view.ts` 的 `sortMessages` 走样。
+ *
+ * **没接上不是「补齐失败」，但更不能当作接上了**（#67 N5）：预算耗尽或中途取页失败时
+ * `complete` 为 `false`，并把 `resumeCursor` 交回调用方 —— 调用方应当带着它再跑一轮，
+ * 且要跨重连记住它（见 `pages/conversation/index.tsx` 的 `gapResumeRef`），否则断线
+ * 超过 `maxPages` 页的消息永远补不上。
  */
 export async function backfillMessageGap(
   loadPage: (before?: string) => Promise<GapPage>,
   knownIds: ReadonlySet<string>,
-  options?: { maxPages?: number },
-): Promise<MessageDto[]> {
+  options?: { maxPages?: number; startBefore?: string },
+): Promise<GapBackfill> {
   const maxPages = options?.maxPages ?? 10
   const pages: MessageDto[][] = []
-  let cursor: string | undefined
+  // 上一轮没接上时从这里继续往回翻；不传就是新的一轮（从最新一页开始）
+  let cursor: string | undefined = options?.startBefore
+  let stoppedBy: GapStopReason = 'budget'
+  let resumeCursor: string | null = null
 
   for (let index = 0; index < maxPages; index += 1) {
     const page = await loadPage(cursor)
+    // 这一页没读到：拿不到游标，继续翻只会把「没读到」当成「还有更早的」。
+    // 续拉位置停在**这一页**，下一轮从同一处重试（`cursor` 为 undefined 即重取最新一页）。
+    if (page.failed) {
+      stoppedBy = 'failed'
+      resumeCursor = cursor ?? null
+      break
+    }
     pages.push(page.items)
-    // 这一页没读到：拿不到游标，继续翻只会把「没读到」当成「还有更早的」
-    if (page.failed) break
     // 接上本地窗口的前沿：更早的历史本地已有，不必再翻
-    if (knownIds.size > 0 && page.items.some((item) => knownIds.has(item.id))) break
-    if (page.nextCursor === null) break
+    if (knownIds.size > 0 && page.items.some((item) => knownIds.has(item.id))) {
+      stoppedBy = 'connected'
+      break
+    }
+    if (page.nextCursor === null) {
+      stoppedBy = 'earliest'
+      break
+    }
     // 本地一条都没有：取最新一页就够（见上方说明）
-    if (knownIds.size === 0) break
+    if (knownIds.size === 0) {
+      stoppedBy = 'empty-local'
+      break
+    }
+    // 还没接上：记下更早一页的游标，预算用完就从这里继续
     cursor = page.nextCursor
+    resumeCursor = page.nextCursor
+    stoppedBy = 'budget'
   }
 
   const out: MessageDto[] = []
@@ -85,5 +144,65 @@ export async function backfillMessageGap(
       out.push(item)
     }
   }
-  return out
+
+  const complete = stoppedBy !== 'failed' && stoppedBy !== 'budget'
+  return {
+    items: out,
+    complete,
+    resumeCursor: complete ? null : resumeCursor,
+    stoppedBy,
+  }
+}
+
+/**
+ * 多轮补齐：一轮翻不完就带着上一轮交出的续拉位置接着翻（#67 N5）。
+ *
+ * 单轮 `backfillMessageGap` 的页数预算有限（默认 10 页），断线时间长或中途取页失败时
+ * 一轮翻不到本地窗口的前沿。修复前调用方只看单轮结果、把 `resumeCursor` 丢掉，那段
+ * 缺口就再也没人补 —— 这里把它接着翻；翻不动的部分原样交回调用方，由调用方跨重连
+ * 记住（见 `pages/conversation/index.tsx` 的 `gapResumeRef`）。
+ *
+ * `maxPasses` 与 `maxPages` 一样是硬上限：服务端游标异常时不能把重连变成无限翻页。
+ * 后一轮翻到的消息整体早于前一轮，所以拼装时按轮序反转（与 `backfillMessageGap`
+ * 处理页序的方式一致），结果仍是升序。
+ */
+export async function backfillGapUntilConnected(
+  loadPage: (before?: string) => Promise<GapPage>,
+  knownIds: ReadonlySet<string>,
+  options?: { maxPages?: number; maxPasses?: number; startBefore?: string },
+): Promise<GapBackfill> {
+  const maxPasses = Math.max(0, options?.maxPasses ?? 3)
+  const startAt = options?.startBefore
+  const chunks: MessageDto[][] = []
+  let last: GapBackfill = {
+    items: [],
+    complete: false,
+    resumeCursor: startAt ?? null,
+    stoppedBy: 'budget',
+  }
+  let startBefore = startAt
+
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    last = await backfillMessageGap(loadPage, knownIds, {
+      maxPages: options?.maxPages,
+      startBefore,
+    })
+    chunks.push(last.items)
+    if (last.complete) break
+    // 续拉位置都拿不到（最新一页就没读到）：再跑一轮也只是重取同一页，等下一次重连
+    if (last.resumeCursor === null) break
+    startBefore = last.resumeCursor
+  }
+
+  const items: MessageDto[] = []
+  const seen = new Set<string>()
+  for (const chunk of chunks.reverse()) {
+    for (const item of chunk) {
+      if (seen.has(item.id)) continue
+      seen.add(item.id)
+      items.push(item)
+    }
+  }
+
+  return { ...last, items }
 }

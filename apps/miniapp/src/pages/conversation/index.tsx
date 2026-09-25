@@ -10,7 +10,7 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { markConversationRead, sendMessage } from '@/features/chat/api'
 import { subscribeRealtime, subscribeReconnect } from '@/features/chat/realtime'
-import { backfillMessageGap } from '@/features/chat/realtime-recovery'
+import { backfillGapUntilConnected } from '@/features/chat/realtime-recovery'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -78,6 +78,15 @@ const MEDIA_PENDING_TIP = '图片 / 语音消息待接入（#67）'
  */
 const EMPTY_IDS: ReadonlySet<string> = new Set()
 
+/**
+ * 一次重连内最多补几轮断档（#67 N5）。
+ *
+ * 一轮最多翻 `backfillMessageGap` 的 `maxPages` 页；多轮是为了「一轮没接上」时继续往下
+ * 翻。轮数是硬上限，避免服务端游标异常时把补齐变成无限翻页 —— 没翻完的位置留在
+ * `gapResumeRef` 里，下一次重连接着来。
+ */
+const GAP_MAX_PASSES = 3
+
 export default function Conversation() {
   const authStatus = useAuthGuard()
   const { user: me } = useAuth()
@@ -134,6 +143,16 @@ export default function Conversation() {
   const messagesRef = useRef<MessageDto[]>([])
 
   /**
+   * 上一轮补齐**没接上**时留下的续拉位置（#67 N5）。
+   *
+   * `backfillMessageGap` 一轮最多翻 `maxPages` 页，中途取页失败或预算耗尽时它会把
+   * `resumeCursor` 交回来。留在这里而不是丢掉：下一次连接建立时从这一段继续往回翻，
+   * 否则断线期间超过预算的消息会在中间留下一段永远补不上的空洞（`null` = 没有欠账，
+   * 下一轮从最新一页开始）。换账号时清空，见下面的身份清场。
+   */
+  const gapResumeRef = useRef<string | null>(null)
+
+  /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
    * 把账号作用域状态清干净，不会出现「B 的身份已经渲染、画的却是 A 的会话」。
    * 换成 `useEffect(() => setMessages([]), [userId])` 不行：effect 在 commit 之后才跑，
@@ -149,6 +168,8 @@ export default function Conversation() {
     // 本次 load —— 两者语义独立但共用计数器，判过期只看「是否相等」，不区分语义。
     epoch.current += 1
     localSeq.current = 0
+    // 上一个账号留下的断档续拉位置对新账号没有意义（游标属于那场会话的历史）
+    gapResumeRef.current = null
     // 待刷新标记与在途计数一起归到新 epoch：否则上个账号留下的陈旧标记会被
     // 新账号后续某次发送落定消费掉，闪一次无来由的整页加载。
     deferredRef.current = resetDeferredReload(epoch.current)
@@ -363,33 +384,49 @@ export default function Conversation() {
   }, [authStatus, userId, conversationId])
 
   /**
-   * 重连补齐断档（#67 第三步）：每次连接建立（含重连）都从最新一页往回翻，直到接上
-   * 本地已有的消息为止 —— 断线期间错过的消息可能超过一页，只重取最新一页会留下一段
-   * 永远补不上的空洞（见 `backfillMessageGap`）。
+   * 补齐断档（#67 第三步 / N5）：从 `gapResumeRef` 记下的位置（没有就从最新一页）往回翻，
+   * 一轮翻不完就带着交出的续拉位置接着翻（见 `backfillGapUntilConnected`）。
    *
+   * 为什么不能只看单轮结果：单轮的页数预算有限，断线时间长或中途取页失败时一轮翻不到
+   * 本地窗口的前沿。修复前这里丢掉 `resumeCursor`，那段缺口就再也没人补 —— 现在把位置
+   * 记进 `gapResumeRef`，本轮的后续轮次、以及下一次重连都会从那里接着翻。
+   *
+   * 落地前过代次与身份守卫：期间可能发生整页重拉或换账号。
    * 补齐结果走 `mergeRefreshedMessages`（`baseIds` 传空集 = 只做按 id 并集 + 定序）：
    * 本地可能有补齐窗口之外的内容（刚确认落地的发送、更早分页拉下来的历史），
    * 直接替换会把它们抹掉。
+   */
+  const recoverGap = useCallback(
+    async (current: number, ownerId: string, known: ReadonlySet<string>) => {
+      const result = await backfillGapUntilConnected(
+        (before) => loadMessagePage(conversationId, before),
+        known,
+        { maxPasses: GAP_MAX_PASSES, startBefore: gapResumeRef.current ?? undefined },
+      )
+      if (current !== epoch.current || userIdRef.current !== ownerId) return
+      // 接上了就把欠账清掉；没接上就留着，下一次重连接着翻
+      gapResumeRef.current = result.complete ? null : result.resumeCursor
+      if (result.items.length === 0) return
+      setMessages((prev) => mergeRefreshedMessages(prev, result.items, EMPTY_IDS))
+    },
+    [conversationId],
+  )
+
+  /**
+   * 重连补齐断档（#67 第三步）：每次连接建立（含重连）都补一次，直到接上本地已有的
+   * 消息为止 —— 断线期间错过的消息可能超过一页，只重取最新一页会留下一段永远补不上的
+   * 空洞（见 `backfillMessageGap`）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null || !conversationId) return
     return subscribeReconnect(() => {
       if (userIdRef.current !== userId) return
-      const current = epoch.current
       const known = new Set(messagesRef.current.map((item) => item.id))
-      void backfillMessageGap((before) => loadMessagePage(conversationId, before), known)
-        .then((recovered) => {
-          // 期间发生过整页重拉（`load` 会自增 epoch）：那份数据比这份新
-          if (current !== epoch.current) return
-          if (userIdRef.current !== userId) return
-          if (recovered.length === 0) return
-          setMessages((prev) => mergeRefreshedMessages(prev, recovered, EMPTY_IDS))
-        })
-        .catch((error) => {
-          console.warn('[miniapp] 重连补齐消息失败', error)
-        })
+      void recoverGap(epoch.current, userId, known).catch((error) => {
+        console.warn('[miniapp] 重连补齐消息失败', error)
+      })
     })
-  }, [authStatus, userId, conversationId])
+  }, [authStatus, userId, conversationId, recoverGap])
 
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
   const loadEarlier = () => {
