@@ -11,7 +11,15 @@ import { createConversation } from '@/features/chat/api'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
 import { formatAmount, MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
-import { canLoad, isLatestLoad, ownerChanged, shouldReloadOnShow } from './view'
+import {
+  type ChatTask,
+  canLoad,
+  isCurrentChatTask,
+  isLatestLoad,
+  ownerChanged,
+  shouldReleaseChatTask,
+  shouldReloadOnShow,
+} from './view'
 import './index.scss'
 
 /**
@@ -81,8 +89,23 @@ export default function Match() {
   /**
    * 在途守卫用 ref 而不是上面的 state：同一帧内的两次点击读到的是同一份旧 state，
    * 会打出两次 POST（服务端幂等不会多建会话，但会往导航栈压两个会话页）。
+   *
+   * 存 `listingId -> 任务令牌`而不是「有没有在途」：A 的迟到收尾会删掉 B 的在途标记，
+   * 让 B 能重复点击；比对令牌才能做到「只释放自己的锁」（#67 R3）。
    */
-  const inFlight = useRef<Set<string>>(new Set())
+  const inFlight = useRef<Map<string, number>>(new Map())
+
+  /** 「聊一聊」任务的唯一序号，只前进。 */
+  const chatTaskSeq = useRef(0)
+
+  /**
+   * 本页归属账号的**代次**，只在换账号与卸载时 +1。
+   *
+   * 不复用下面的 `loadSeq`：那个每次 `load()` 都前进（从会话页返回触发 `useDidShow`
+   * 就一次），拿它守卫建会话会把一次仍然有效的请求误判过期。而 A→B→A 之后 `userId`
+   * 又等于 A，只比 owner 判不出旧任务，所以需要一个只随账号切换前进的代次（#67 R3）。
+   */
+  const chatEpoch = useRef(0)
 
   /**
    * 自增序号丢弃过期响应：连点重试时先发的请求可能后到；换账号时同步 +1，
@@ -100,6 +123,8 @@ export default function Match() {
   if (ownerChanged(prevUserId, userId)) {
     setPrevUserId(userId)
     loadSeq.current += 1
+    // 建会话的任务令牌一并作废：A→B→A 之后 owner 又相等，只有代次能判出旧任务（#67 R3）。
+    chatEpoch.current += 1
     setWish(null)
     setItems([])
     setTotal(0)
@@ -175,6 +200,17 @@ export default function Match() {
   })
 
   /**
+   * 卸载让旧任务失效：`navigateBack` 之后返回的响应不能再写 state、发导航或弹错
+   * （#67 R3）。只推进代次；`inFlight` 随组件一起丢弃，不需要逐个释放。
+   */
+  useEffect(
+    () => () => {
+      chatEpoch.current += 1
+    },
+    [],
+  )
+
+  /**
    * 「聊一聊」：真实建/取会话，拿到 `conversation.id` 再跳会话页（#67 第二步）。
    *
    * 用 `view.match.listingId`（商品 id）而不是 `view.match.id`（命中行 id）—— 建会话
@@ -183,27 +219,59 @@ export default function Match() {
    */
   const chat = async (view: MatchView) => {
     const { listingId } = view.match
-    const known = conversations[listingId]
-    if (known) {
-      void Taro.navigateTo({ url: `/pages/conversation/index?id=${known}` })
-      return
-    }
+    // 缓存命中也过这道闸：连点两次会往导航栈压两个会话页。
     if (inFlight.current.has(listingId)) return
-    inFlight.current.add(listingId)
-    setPending((prev) => ({ ...prev, [listingId]: true }))
-    try {
-      const conversation = await createConversation(listingId)
-      setConversations((prev) => ({ ...prev, [listingId]: conversation.id }))
-      await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
-    } catch {
-      void Taro.showToast({ title: '会话发起失败，请重试', icon: 'none' })
-    } finally {
+
+    // 令牌在**发起前**捕获：owner 与代次都要取此刻的值，响应回来时再比对。
+    chatTaskSeq.current += 1
+    const task: ChatTask = {
+      listingId,
+      ownerId: userId,
+      epoch: chatEpoch.current,
+      token: chatTaskSeq.current,
+    }
+    inFlight.current.set(listingId, task.token)
+    const isCurrentTask = (): boolean =>
+      isCurrentChatTask(task, {
+        ownerId: userIdRef.current,
+        epoch: chatEpoch.current,
+        inFlightToken: inFlight.current.get(listingId),
+      })
+    /** 只释放自己的锁：B 已经重新发起时，A 的收尾不能删掉 B 的标记。 */
+    const release = (): void => {
+      if (!shouldReleaseChatTask(task, inFlight.current.get(listingId))) return
       inFlight.current.delete(listingId)
       setPending((prev) => {
+        if (prev[listingId] !== true) return prev
         const next = { ...prev }
         delete next[listingId]
         return next
       })
+    }
+
+    const known = conversations[listingId]
+    if (known) {
+      try {
+        await Taro.navigateTo({ url: `/pages/conversation/index?id=${known}` })
+      } finally {
+        release()
+      }
+      return
+    }
+
+    setPending((prev) => ({ ...prev, [listingId]: true }))
+    try {
+      const conversation = await createConversation(listingId)
+      // 迟到的成功响应一律丢弃：不写缓存、不导航（A→B→A 时 owner 相同，靠代次判旧）。
+      if (!isCurrentTask()) return
+      setConversations((prev) => ({ ...prev, [listingId]: conversation.id }))
+      await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
+    } catch {
+      // 旧任务的失败不能弹给新账号。
+      if (!isCurrentTask()) return
+      void Taro.showToast({ title: '会话发起失败，请重试', icon: 'none' })
+    } finally {
+      release()
     }
   }
 
