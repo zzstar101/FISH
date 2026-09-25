@@ -71,7 +71,7 @@ Web browser                  API                         Miniapp
 | --- | --- |
 | `ticket_hash` | `ticket` 的 SHA-256，唯一 |
 | `verifier_hash` | `verifier` 的 SHA-256 |
-| `status` | `pending` / `confirmed` / `consumed` 等内部生命周期状态 |
+| 逻辑状态 | 不落列；由 `consumed_at`、`expires_at`、`bound_user_id` 推导 `pending` / `confirmed` / `consumed` |
 | `bound_user_id` | 小程序确认后绑定的 FISH 用户 |
 | `created_at` | 创建时间 |
 | `expires_at` | 过期时间 |
