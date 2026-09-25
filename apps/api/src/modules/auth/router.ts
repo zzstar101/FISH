@@ -1,4 +1,13 @@
 import { PhoneBindRequestSchema, PhoneBindResponseSchema } from '@fish/contracts/auth/phone'
+import {
+  SCAN_CONFIRM_PAGE,
+  SCAN_VERIFIER_HEADER,
+  ScanExchangeResponseSchema,
+  ScanTicketResponseSchema,
+  ScanTicketSchema,
+  ScanTicketStatusResponseSchema,
+  ScanVerifierSchema,
+} from '@fish/contracts/auth/scan'
 import { LoginRequestSchema, RegisterRequestSchema } from '@fish/contracts/auth/session'
 import {
   SendCodeRequestSchema,
@@ -15,10 +24,18 @@ import { type Context, type Handler, Hono } from 'hono'
 import { AuthError } from './errors'
 import { maskPhone } from './me'
 import { type AuthVariables, createRequireAuth } from './middleware'
+import { createScanTicketRateLimiter } from './scan-rate-limit'
+import { createScanTicketService } from './scan-service'
 import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
 import type { VerificationService } from './verification-service'
 import { VerificationError } from './verification-store'
+import {
+  createWechatAccessTokenService,
+  createWechatMiniappCodeClient,
+  type WechatMiniappCodeClient,
+  WechatPlatformError,
+} from './wechat-platform'
 import {
   createLiveWechatIdentityProvider,
   createStubWechatIdentityProvider,
@@ -60,6 +77,12 @@ export function createAuthModule(options: {
    * `live` = 真实 jscode2session。**没有默认值**，调用方必须从 `loadWechatEnv()` 显式传入。
    */
   wechat: import('@fish/shared/env').WechatEnv
+  /**
+   * 客户端 IP 解析（#197 建票限流用）。由 `index.ts` 从 `Bun.serve` 的 `requestIP` 注入——
+   * 不用 `x-forwarded-for` 之类可伪造的请求头，否则限流形同虚设。
+   * 测试里可以注入固定值；拿不到时退化为同一个「未知」桶（宁可少放行，也不放开）。
+   */
+  clientIp?: (request: Request) => string | null
 }) {
   const cookie = createSessionCookie(options.secureCookie)
   const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
@@ -86,6 +109,25 @@ export function createAuthModule(options: {
   // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
   const phoneResolver: ((code: string) => string) | null =
     options.wechat.transport === 'stub' ? (code) => code.trim() : null
+
+  /**
+   * 微信平台侧能力（#197）：**整个进程只在这里创建一份**缓存与刷新循环。
+   * 只有 `live` 才构造——`off` 显式 503、`stub` 生成不了真码（出码为 null，由端上走
+   * 开发者工具），两者都不该去调上游。将来 #204 的手机号换取复用同一个 `tokens` 实例。
+   */
+  const wechatPlatform: { codes: WechatMiniappCodeClient } | null =
+    options.wechat.transport === 'live'
+      ? {
+          codes: createWechatMiniappCodeClient({
+            tokens: createWechatAccessTokenService({
+              appid: options.wechat.appid,
+              appSecret: options.wechat.appSecret,
+            }),
+          }),
+        }
+      : null
+  const scanTickets = createScanTicketService({ db: options.db, sessions: wechatSessions })
+  const scanTicketLimiter = createScanTicketRateLimiter()
 
   const router = new Hono<{ Variables: AuthVariables }>()
 
@@ -128,6 +170,117 @@ export function createAuthModule(options: {
       return c.json(
         PhoneBindResponseSchema.parse({ phoneBound: true, maskedPhone: maskPhone(phone) }),
       )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // ---- 扫码登录（#197）：Web 出码 → 小程序确认 → Web 凭据兑换 ----
+  //
+  // 四个端点一律 `Cache-Control: no-store`：状态接口是带 `X-Scan-Verifier` 的 GET、路径里
+  // 只有公开 ticket，共享缓存若只按 URL 建键，会把 confirmed 连同 user 交给 verifier 不对的
+  // 调用者——那正好绕过「只有持正确 verifier 才看得到细化状态」这条冻结项。
+  //
+  // 用**中间件**而不是在每个 handler 里设：`confirm` 的 `requireAuth` 会在进 handler 之前
+  // 直接返回 401，逐 handler 的写法覆盖不到那条提前返回的分支。
+  router.use('/wechat/scan/*', async (c, next) => {
+    c.header('Cache-Control', 'no-store')
+    await next()
+  })
+
+  /** 票据 / verifier 的形状门禁。形状不对也走**统一 404**：不给匿名调用者任何区分信号。 */
+  const invalidScanTicket = (c: Context) =>
+    c.json(errorBody('SCAN_TICKET_INVALID', '登录二维码无效或已过期'), 404)
+
+  router.post('/wechat/scan/ticket', async (c) => {
+    // off = 能力未开通（与 #86 的其它入口同一语义）；stub 仍然可以建票，只是没有真码。
+    if (options.wechat.transport === 'off') {
+      return c.json(errorBody('WECHAT_DISABLED', '扫码登录暂未开通'), 503)
+    }
+
+    const ip = options.clientIp?.(c.req.raw) ?? null
+    if (!scanTicketLimiter.take(ip ?? 'unknown')) {
+      return c.json(errorBody('RATE_LIMITED', '请求过于频繁，请稍后再试'), 429)
+    }
+
+    const { ticket, verifier, expiresAt } = await scanTickets.create()
+
+    let qrCodeDataUrl: string | null = null
+    if (wechatPlatform !== null) {
+      try {
+        const image = await wechatPlatform.codes.unlimited({
+          scene: ticket,
+          page: SCAN_CONFIRM_PAGE,
+          envVersion: options.wechat.transport === 'live' ? options.wechat.qrEnvVersion : 'release',
+        })
+        qrCodeDataUrl = `data:image/jpeg;base64,${Buffer.from(image).toString('base64')}`
+      } catch (error) {
+        if (error instanceof WechatPlatformError) {
+          // 502：平台侧取码失败。与 503 WECHAT_DISABLED（能力未开通）分开，端上引导不同；
+          // 最常见成因是官方那句「接口只能生成已发布小程序的二维码」。
+          return c.json(errorBody('WECHAT_QR_UNAVAILABLE', '小程序码生成失败，请稍后再试'), 502)
+        }
+        throw error
+      }
+    }
+
+    return c.json(
+      ScanTicketResponseSchema.parse({
+        ticket,
+        verifier,
+        qrCodeDataUrl,
+        expiresAt: expiresAt.toISOString(),
+      }),
+    )
+  })
+
+  router.get('/wechat/scan/ticket/:ticket', async (c) => {
+    const ticket = ScanTicketSchema.safeParse(c.req.param('ticket'))
+    const verifier = ScanVerifierSchema.safeParse(c.req.header(SCAN_VERIFIER_HEADER))
+    if (!ticket.success || !verifier.success) return invalidScanTicket(c)
+
+    try {
+      const status = await scanTickets.status({ ticket: ticket.data, verifier: verifier.data })
+      return c.json(
+        ScanTicketStatusResponseSchema.parse({
+          status: status.status,
+          expiresAt: status.expiresAt.toISOString(),
+          // user 只在 confirmed 分支出现（契约用 discriminatedUnion 钉住了这点）。
+          ...(status.status === 'confirmed' ? { user: status.user } : {}),
+        }),
+      )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.post('/wechat/scan/ticket/:ticket/confirm', requireAuth, async (c) => {
+    const ticket = ScanTicketSchema.safeParse(c.req.param('ticket'))
+    if (!ticket.success) return invalidScanTicket(c)
+
+    try {
+      // 绑定的是**当前小程序会话**的用户；同人幂等、他人 409（service 内保证）。
+      await scanTickets.confirm({ ticket: ticket.data, userId: c.get('userId') })
+      // 刻意没有响应体：确认页要展示的账号来自它自己的会话，回一个恒为真的字段没有信息量。
+      return c.body(null, 204)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.post('/wechat/scan/ticket/:ticket/exchange', async (c) => {
+    const ticket = ScanTicketSchema.safeParse(c.req.param('ticket'))
+    const verifier = ScanVerifierSchema.safeParse(c.req.header(SCAN_VERIFIER_HEADER))
+    if (!ticket.success || !verifier.success) return invalidScanTicket(c)
+
+    try {
+      const { user, token, expiresAt } = await scanTickets.exchange({
+        ticket: ticket.data,
+        verifier: verifier.data,
+      })
+      // 与 /auth/login、/auth/wechat/session 同一套 cookie 会话机制。
+      cookie.attach(c, token, expiresAt)
+      return c.json(ScanExchangeResponseSchema.parse({ user }))
     } catch (error) {
       return toErrorResponse(c, error)
     }

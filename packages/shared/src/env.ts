@@ -126,6 +126,11 @@ export function loadAiPolishEnv(
   )
 }
 
+/** 小程序码要打开的小程序版本（微信官方取值）。 */
+export const WechatQrEnvVersionSchema = z.enum(['release', 'trial', 'develop'])
+
+export type WechatQrEnvVersion = z.infer<typeof WechatQrEnvVersionSchema>
+
 /**
  * API 专属微信身份配置（#86 评审 P1：stub 必须与生产隔离）。
  *
@@ -140,12 +145,33 @@ export function loadAiPolishEnv(
 export type WechatEnv =
   | { transport: 'off' }
   | { transport: 'stub' }
-  | { transport: 'live'; appid: string; appSecret: string }
+  | {
+      transport: 'live'
+      appid: string
+      appSecret: string
+      /**
+       * #197 扫码登录出码的版本：`release`（默认）要求小程序**已发布**——官方明确
+       * 「接口只能生成已发布的小程序的二维码」；`trial` / `develop` 用于发版前联调。
+       */
+      qrEnvVersion: WechatQrEnvVersion
+    }
 
 export function loadWechatEnv(
   source: Record<string, string | undefined> = process.env,
   nodeEnv: string | undefined = source.NODE_ENV,
 ): WechatEnv {
+  // 先校验出码版本：**只要设置了就必须合法**，不因为当前 transport 是 off/stub 就放行。
+  // 否则一个拼错的值会一直潜伏到切 live 的那一刻才炸。
+  const qrEnvVersionRaw = source.WECHAT_QR_ENV_VERSION?.trim()
+  const parsedQrEnvVersion = WechatQrEnvVersionSchema.safeParse(
+    qrEnvVersionRaw === undefined || qrEnvVersionRaw === '' ? 'release' : qrEnvVersionRaw,
+  )
+  if (!parsedQrEnvVersion.success) {
+    throw new Error(
+      '环境变量校验失败：WECHAT_QR_ENV_VERSION 必须是 release / trial / develop（缺省为 release）',
+    )
+  }
+
   const transport = source.WECHAT_TRANSPORT
   if (transport === 'off') return { transport: 'off' }
   if (transport === 'stub') {
@@ -164,7 +190,7 @@ export function loadWechatEnv(
         '环境变量校验失败：WECHAT_TRANSPORT=live 必须同时配置 WECHAT_APPID / WECHAT_APP_SECRET',
       )
     }
-    return { transport: 'live', appid, appSecret }
+    return { transport: 'live', appid, appSecret, qrEnvVersion: parsedQrEnvVersion.data }
   }
   throw new Error(
     '环境变量校验失败：WECHAT_TRANSPORT 必须显式设置为 off / stub / live（无默认值，不允许静默回退 stub）',

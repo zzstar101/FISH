@@ -97,6 +97,12 @@ export function createApp(
    * 测试传 `{ transport: 'stub' }` 显式开启；不传即 off，不会静默降级。
    */
   wechatEnv: import('@fish/shared/env').WechatEnv = { transport: 'off' },
+  /**
+   * 客户端 IP 解析（#197 建票限流）。`index.ts` 从 `Bun.serve` 的 `server.requestIP` 注入；
+   * 不读 `x-forwarded-for` 这类可伪造的请求头，否则限流可被一行 header 绕过。
+   * 不传即视为「拿不到 IP」，同一种请求共用一个额度桶。
+   */
+  clientIp?: (request: Request) => string | null,
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -126,6 +132,7 @@ export function createApp(
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
+    clientIp,
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)
