@@ -4,7 +4,10 @@ import {
   badgeText,
   chatListState,
   conversationTimeLabel,
+  conversationUnreadForBadge,
   EMPTY_PREVIEW,
+  isLatestUnreadFetch,
+  markAllReadOutcome,
   previewOf,
   refreshConversationWindow,
 } from '../src/pages/chat/list-view'
@@ -251,5 +254,108 @@ describe('refreshConversationWindow', () => {
     expect(result.items).toHaveLength(50)
     expect(result.items[0]?.id).toBe('p1-0')
     expect(result.nextCursor).toBe('c1')
+  })
+})
+
+/**
+ * 底栏「会话未读」分量的口径（#67 R5）。
+ *
+ * 修复前是 `unreadTotal ?? conversationUnread`：聚合请求一失败就退回本页求和，而本页
+ * 只加载了第一页 —— 求和恰好是 0 时就会发布 `conversations: 0`，把上一份正确的正数
+ * 覆盖掉、熄灭底栏红点。这里锁的就是「未知不等于恰好没有」。
+ */
+describe('conversationUnreadForBadge', () => {
+  test('聚合有值：直接用聚合（它覆盖全部会话，不受本页分页影响）', () => {
+    expect(conversationUnreadForBadge({ aggregate: 7, windowSum: 0, windowComplete: true })).toBe(7)
+  })
+
+  test('聚合拿不到但本页求和 > 0：下界也足以点亮，照发', () => {
+    expect(
+      conversationUnreadForBadge({ aggregate: null, windowSum: 2, windowComplete: false }),
+    ).toBe(2)
+  })
+
+  test('聚合拿不到、窗口已覆盖到服务端末尾、求和 0：0 是确定结论', () => {
+    expect(
+      conversationUnreadForBadge({ aggregate: null, windowSum: 0, windowComplete: true }),
+    ).toBe(0)
+  })
+
+  test('聚合拿不到、窗口不完整、求和 0：不得发布确定零（修复前这里发的是 0）', () => {
+    expect(
+      conversationUnreadForBadge({ aggregate: null, windowSum: 0, windowComplete: false }),
+    ).toBeNull()
+  })
+
+  test('聚合是 0（服务端确认没有未读）时压过本页求和', () => {
+    expect(conversationUnreadForBadge({ aggregate: 0, windowSum: 0, windowComplete: false })).toBe(
+      0,
+    )
+  })
+})
+
+/**
+ * 「全部已读」的结果归并（#67 R4）。
+ *
+ * `POST /conversations/:id/read` 是逐条的，部分失败时把整批都清零就是谎报已读。
+ */
+describe('markAllReadOutcome', () => {
+  const ok = { status: 'fulfilled', value: undefined } as PromiseSettledResult<void>
+  const bad = {
+    status: 'rejected',
+    reason: new Error('HTTP 500'),
+  } as PromiseSettledResult<void>
+
+  test('全部成功：所有 id 都算已读，missed = 0', () => {
+    const { readIds, missed } = markAllReadOutcome({
+      unreadIds: ['c-1', 'c-2'],
+      results: [ok, ok],
+    })
+    expect([...readIds]).toEqual(['c-1', 'c-2'])
+    expect(missed).toBe(0)
+  })
+
+  test('部分成功：只把成功的算已读，失败的如实计入 missed', () => {
+    const { readIds, missed } = markAllReadOutcome({
+      unreadIds: ['c-1', 'c-2', 'c-3'],
+      results: [ok, bad, ok],
+    })
+    expect([...readIds]).toEqual(['c-1', 'c-3'])
+    expect(missed).toBe(1)
+  })
+
+  test('全部失败：一个都不清零，missed = 全部', () => {
+    const { readIds, missed } = markAllReadOutcome({
+      unreadIds: ['c-1', 'c-2'],
+      results: [bad, bad],
+    })
+    expect(readIds.size).toBe(0)
+    expect(missed).toBe(2)
+  })
+
+  test('响应条数少于请求条数（缺失的按失败计）', () => {
+    const { readIds, missed } = markAllReadOutcome({
+      unreadIds: ['c-1', 'c-2'],
+      results: [ok],
+    })
+    expect([...readIds]).toEqual(['c-1'])
+    expect(missed).toBe(1)
+  })
+})
+
+/**
+ * 聚合取数的代次守卫（#67 R4）。
+ *
+ * 「已读落定后重取」与「一份标记已读之前发出的旧响应迟到」是同一个场景的两面：
+ * 没有代次守卫，旧响应会把刚拿到的 0 盖回旧的正数，底栏红点明明该熄却又亮起来。
+ */
+describe('isLatestUnreadFetch', () => {
+  test('代次相同才允许落地', () => {
+    expect(isLatestUnreadFetch(3, 3)).toBe(true)
+  })
+
+  test('旧响应（代次落后）一律丢弃', () => {
+    expect(isLatestUnreadFetch(3, 4)).toBe(false)
+    expect(isLatestUnreadFetch(0, 1)).toBe(false)
   })
 })

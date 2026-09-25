@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { conversationUnreadForBadge } from '../src/pages/chat/list-view'
 
 /**
  * 未读快照 store 的冷启动行为 —— 锁住 #129 review 的第二条 P1，以及 #89 对
@@ -253,5 +254,63 @@ describe('未读快照 · 底栏红点判定', () => {
     expect(badgeShouldLight({ conversations: null, notifications: null, previous: false })).toBe(
       false,
     )
+  })
+})
+
+/**
+ * 底栏「会话未读」分量的端到端口径（#67 R4 / R5）。
+ *
+ * 上一条 describe 锁的是判定函数本身，这里锁「页面把什么值发布进 store、红点随之怎么变」：
+ * - R4：标记已读后服务端聚合归零 → 红点必须熄灭（修复前页面不重取聚合，红点一直亮着）；
+ * - R5：聚合失败 + 本页窗口不完整 + 求和 0 → 发布的是「不知道」，红点保持上一帧，
+ *   而不是被一个假的 0 熄灭。
+ */
+describe('未读快照 · 会话未读分量与红点（#67 R4 / R5）', () => {
+  test('标记已读后服务端聚合归零：底栏红点随之熄灭', () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 3, notifications: 0 })
+    const lit = badgeShouldLight({ conversations: 3, notifications: 0, previous: false })
+    expect(lit).toBe(true)
+
+    // markAllRead 落定后重取聚合得到的 0
+    publishUnread({ ownerId: 'u-alan', conversations: 0, notifications: 0 })
+    const snap = unreadSnapshot()
+    expect(snap?.conversations).toBe(0)
+    expect(
+      badgeShouldLight({
+        conversations: snap?.conversations ?? null,
+        notifications: snap?.notifications ?? null,
+        previous: lit,
+      }),
+    ).toBe(false)
+  })
+
+  test('聚合失败且本页窗口不完整：不发布确定零，红点保持上一帧', () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 1, notifications: 0 })
+    const lit = badgeShouldLight({ conversations: 1, notifications: 0, previous: false })
+    expect(lit).toBe(true)
+
+    // 下一次聚合失败（null）；本页第一页的会话都已读（求和 0）但服务端还有下一页
+    const conversations = conversationUnreadForBadge({
+      aggregate: null,
+      windowSum: 0,
+      windowComplete: false,
+    })
+    expect(conversations).toBeNull()
+
+    publishUnread({ ownerId: 'u-alan', conversations, notifications: 0 })
+    expect(unreadSnapshot()?.conversations).toBeNull()
+    expect(badgeShouldLight({ conversations, notifications: 0, previous: lit })).toBe(true)
+  })
+
+  test('聚合失败但窗口已到末尾：求和 0 是确定结论，红点熄灭', () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 2, notifications: 0 })
+
+    const conversations = conversationUnreadForBadge({
+      aggregate: null,
+      windowSum: 0,
+      windowComplete: true,
+    })
+    expect(conversations).toBe(0)
+    expect(badgeShouldLight({ conversations, notifications: 0, previous: true })).toBe(false)
   })
 })

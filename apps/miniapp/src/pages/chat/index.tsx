@@ -16,6 +16,9 @@ import {
   badgeText,
   chatListState,
   conversationTimeLabel,
+  conversationUnreadForBadge,
+  isLatestUnreadFetch,
+  markAllReadOutcome,
   previewOf,
   refreshConversationWindow,
 } from './list-view'
@@ -92,7 +95,8 @@ export default function Chat() {
    *
    * 底栏那颗点要的是**全部**会话的和，而这里只加载了第一页 —— 所以不能对 `items`
    * 求和（会话超过一页时底栏会比真实值小，验收②就是这个场景）。`null` = 还没拿到 /
-   * 请求失败，发布处退回本页求和（同一屏的真实值，是下界），但绝不发 0。
+   * 请求失败，发布处退回本页求和（是下界）；求和为 0 而列表还没到底时发「不知道」
+   * 而不是 0（见 `conversationUnreadForBadge`，#67 R5）。
    */
   const [unreadTotal, setUnreadTotal] = useState<number | null>(null)
   const [filter, setFilter] = useState<ChatFilter>('all')
@@ -167,6 +171,31 @@ export default function Chat() {
   loadedCountRef.current = items.length
 
   /**
+   * 重取服务端未读聚合（#67 R4）。
+   *
+   * 底栏的会话分量以这份聚合为准（见下方发布 effect），所以「已读变化后」不能只改本地
+   * 列表角标 —— 不重取就会出现「列表角标清零了、底栏那颗点还亮着」。进页、从会话页返回、
+   * 错误态重试与「全部已读」落定后都走这里，口径只有一份。
+   *
+   * 自增 `unreadEpoch` 同时让这次之前发出的聚合请求作废：否则一份「标记已读之前」发出的
+   * 旧响应迟到，会把刚拿到的 0 盖回旧的正数。失败置 `null`（「不知道」）而不是 0 ——
+   * 拿不到 ≠ 确定没有未读。
+   */
+  const refreshUnreadTotal = useCallback(() => {
+    const token = ++unreadEpoch.current
+    void fetchConversationUnreadCount()
+      .then((total) => {
+        if (!isLatestUnreadFetch(token, unreadEpoch.current)) return
+        setUnreadTotal(total)
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 未读总数加载异常', error)
+        if (!isLatestUnreadFetch(token, unreadEpoch.current)) return
+        setUnreadTotal(null)
+      })
+  }, [])
+
+  /**
    * 会话列表加载。进页、换账号与错误态重试都走这里。
    *
    * 失败即清屏并进错误态（与首页 `applyLoadResult` 同一口径）：把上一批会话留在
@@ -176,29 +205,14 @@ export default function Chat() {
    */
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
-    const unreadToken = ++unreadEpoch.current
+    // 未读总数走服务端聚合（#67），与列表**并行**取：两者同生共死，不会出现
+    // 「列表刷新了、底栏还停在旧数」（进页 / 从会话页返回 / 错误态重试都经由这里）。
+    refreshUnreadTotal()
     setLoadingMore(false)
     // 整页重载必须把「加载更多」的失败标记一起清掉：否则一次失败之后，任何一次
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
     // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
     setLoadMoreFailed(false)
-    /**
-     * 未读总数走服务端聚合（#67），与列表**并行**取。
-     *
-     * 与列表同生共死：进页、从会话页返回（`useDidShow`，即「已读变化后」）、错误态
-     * 重试都经由这里，所以放在同一个函数里，不会出现「列表刷新了、底栏还停在旧数」。
-     * 失败只把结果置 `null`（「不知道」），发布处退回本页求和 —— 不能清成 0。
-     */
-    void fetchConversationUnreadCount()
-      .then((total) => {
-        if (unreadToken !== unreadEpoch.current) return
-        setUnreadTotal(total)
-      })
-      .catch((error) => {
-        console.warn('[miniapp] 未读总数加载异常', error)
-        if (unreadToken !== unreadEpoch.current) return
-        setUnreadTotal(null)
-      })
     void loadConversations()
       .then(({ items: list, nextCursor: cursor, failed: nextFailed }) => {
         if (epoch !== listEpoch.current) return
@@ -217,7 +231,7 @@ export default function Chat() {
         setFailed(true)
         setReady(true)
       })
-  }, [])
+  }, [refreshUnreadTotal])
 
   /**
    * 从会话页返回时的刷新（#67 第三步）：**重取已经加载过的那几页**，而不是打回第一页。
@@ -236,19 +250,9 @@ export default function Chat() {
    */
   const refreshConversations = useCallback(() => {
     const epoch = ++listEpoch.current
-    const unreadToken = ++unreadEpoch.current
+    refreshUnreadTotal()
     setLoadingMore(false)
     setLoadMoreFailed(false)
-    void fetchConversationUnreadCount()
-      .then((total) => {
-        if (unreadToken !== unreadEpoch.current) return
-        setUnreadTotal(total)
-      })
-      .catch((error) => {
-        console.warn('[miniapp] 未读总数加载异常', error)
-        if (unreadToken !== unreadEpoch.current) return
-        setUnreadTotal(null)
-      })
     void refreshConversationWindow((cursor) => loadConversations(cursor), loadedCountRef.current)
       .then((refreshed) => {
         if (epoch !== listEpoch.current) return
@@ -275,7 +279,7 @@ export default function Chat() {
         setFailed(true)
         setReady(true)
       })
-  }, [])
+  }, [refreshUnreadTotal])
 
   /**
    * 「加载更多会话」：契约按 `lastMessageAt` 降序 + 游标分页，游标原样回传。
@@ -432,7 +436,16 @@ export default function Chat() {
     if (authStatus !== 'authed' || !identity) return
     publishUnread({
       ownerId: identity,
-      conversations: ready && !failed ? (unreadTotal ?? conversationUnread) : null,
+      // 会话分量：服务端聚合优先；聚合拿不到时退回本页求和，但**窗口不完整时的 0 不是
+      // 结论**（#67 R5）—— 直接发 0 会把上一份正确的正数覆盖掉、熄灭底栏红点。
+      conversations:
+        ready && !failed
+          ? conversationUnreadForBadge({
+              aggregate: unreadTotal,
+              windowSum: conversationUnread,
+              windowComplete: listNextCursor === null,
+            })
+          : null,
       notifications: notifsReady && !notifsFailed ? unreadNotifications : null,
     })
   }, [
@@ -440,6 +453,7 @@ export default function Chat() {
     identity,
     ready,
     failed,
+    listNextCursor,
     notifsReady,
     notifsFailed,
     unreadTotal,
@@ -495,17 +509,20 @@ export default function Chat() {
     void Promise.allSettled(unreadItems.map((item) => markConversationRead(item.id))).then(
       (results) => {
         if (epoch !== listEpoch.current) return
-        const done = new Set(
-          unreadItems
-            .filter((_, index) => results[index]?.status === 'fulfilled')
-            .map((item) => item.id),
-        )
-        if (done.size > 0) {
+        const { readIds, missed } = markAllReadOutcome({
+          unreadIds: unreadItems.map((item) => item.id),
+          results,
+        })
+        if (readIds.size > 0) {
           setItems((prev) =>
-            prev.map((item) => (done.has(item.id) ? { ...item, unreadCount: 0 } : item)),
+            prev.map((item) => (readIds.has(item.id) ? { ...item, unreadCount: 0 } : item)),
           )
         }
-        const missed = unreadItems.length - done.size
+        // 已读落定后重取服务端聚合：底栏的会话分量以它为准，不重取就会出现「列表角标
+        // 清零了、底栏那颗点还亮着」（#67 R4）。部分成功同样要重取 —— 服务端只对成功的
+        // 那些动了读位，全量总数本来就该按现在的样子重算；也**不在这里把总数直接置 0**，
+        // 未加载的会话可能仍有未读。
+        refreshUnreadTotal()
         void Taro.showToast({
           title: missed === 0 ? '已全部标为已读' : `有 ${missed} 个会话标记失败，请重试`,
           icon: 'none',

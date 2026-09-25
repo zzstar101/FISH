@@ -158,3 +158,61 @@ export async function refreshConversationWindow(
   }
   return { kind: 'ok', items, nextCursor: cursor ?? null }
 }
+
+/**
+ * 底栏「会话未读」分量的取值（#67 R5）。
+ *
+ * 三种输入必须区分开，混起来就是一次误熄红点：
+ * - `aggregate` 有值 → 服务端全量聚合，权威，直接用；
+ * - `aggregate` 为 `null`（请求失败 / 还没回来）→ 只能退回本页求和，而本页可能**只加载了
+ *   一页**（`windowComplete === false`）：
+ *   - 求和 > 0 → 是**下界**，足以点亮红点，照发；
+ *   - 求和 = 0 且窗口完整（服务端已到底）→ 0 是**确定结论**，可以发；
+ *   - 求和 = 0 但窗口不完整 → 第 51 条会话可能还有未读，这时发 0 会覆盖掉上一份正确的
+ *     正数、把底栏红点熄灭 —— 发 `null`（「不知道」），订阅方按规则保持上一帧。
+ *
+ * 修复前的写法是 `unreadTotal ?? conversationUnread`：聚合一失败就退回求和，求和恰好是 0
+ * 时就发布了 `conversations: 0`，把已知的未读抹掉。
+ */
+export function conversationUnreadForBadge(input: {
+  /** 服务端聚合值；`null` = 还不知道 */
+  aggregate: number | null
+  /** 当前已加载窗口的未读求和（下界） */
+  windowSum: number
+  /** 已加载窗口是否已覆盖到服务端末尾（`nextCursor === null`） */
+  windowComplete: boolean
+}): number | null {
+  if (input.aggregate !== null) return input.aggregate
+  if (input.windowSum > 0) return input.windowSum
+  return input.windowComplete ? 0 : null
+}
+
+/**
+ * 「全部已读」的结果归并（#67 R4）。
+ *
+ * 只把**服务端真的标成功**的那些会话在本地清零：`POST /conversations/:id/read` 是逐条的，
+ * 部分失败时把整批都清零就是谎报已读。`missed` 用于如实提示还差几个。
+ *
+ * 为什么抽出来：这是「哪些 id 算已读」的判据，留在 `index.tsx` 里就没有用例能变红
+ * —— 与 `refreshConversationWindow` 同一个理由。
+ */
+export function markAllReadOutcome(input: {
+  unreadIds: readonly string[]
+  results: readonly PromiseSettledResult<unknown>[]
+}): { readIds: ReadonlySet<string>; missed: number } {
+  const readIds = new Set(
+    input.unreadIds.filter((_, index) => input.results[index]?.status === 'fulfilled'),
+  )
+  return { readIds, missed: input.unreadIds.length - readIds.size }
+}
+
+/**
+ * 一次未读聚合取数的结果是否还该落地（#67 R4）。
+ *
+ * 重取（进页 / 从会话页返回 / 已读落定后）与身份切换都会让代次前进；旧响应迟到时
+ * 必须**整份丢弃**：一份「标记已读之前」发出的响应会把刚拿到的 0 盖回旧的正数，
+ * 底栏红点明明该熄却又亮起来（反之也会把刚涨上去的数字盖回旧值）。
+ */
+export function isLatestUnreadFetch(token: number, latest: number): boolean {
+  return token === latest
+}
