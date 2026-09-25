@@ -9,17 +9,25 @@ export function maskPhone(phone: string): string {
 }
 
 /**
- * DB 行 → 对外 DTO。`student_no` 与 `password_hash` 永不经过这里（#3：不公开完整学号）。
+ * `avatar_url` 在库里是无约束 `text`，契约声明它是 `z.url()`；值域外的历史值一律降级为
+ * `null`，否则前端按 `MeSchema` 解析会直接抛错、登录态全挂。
  *
- * `avatarUrl` 在库里是无约束 `text`，契约声明它是 `z.url()`；
- * 值域外的历史值一律降级为 `null`，否则前端按 `MeSchema` 解析 `/me` 会直接抛错、登录态全挂。
+ * 抽成函数是为了让其它投影（如 #197 扫码确认的最小账号子集）复用同一条规则，
+ * 而不是各写一遍 safeParse。
+ */
+export function washAvatarUrl(value: string | null): string | null {
+  return MeSchema.shape.avatarUrl.safeParse(value).data ?? null
+}
+
+/**
+ * DB 行 → 对外 DTO。`student_no` 与 `password_hash` 永不经过这里（#3：不公开完整学号）。
  * 手机号只出派生态 `phoneBound` / `maskedPhone`，明文不出服务端（#86 C 节）。
  */
 export function toMe(row: UserRow): Me {
   return {
     id: row.id,
     nickname: row.nickname,
-    avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
+    avatarUrl: washAvatarUrl(row.avatarUrl),
     authStatus: row.authStatus,
     verifiedAt: row.verifiedAt?.toISOString() ?? null,
     phoneBound: row.phone !== null,
