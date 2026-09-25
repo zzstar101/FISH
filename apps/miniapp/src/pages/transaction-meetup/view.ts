@@ -112,14 +112,20 @@ export function pendingAfterTerminalRefetch(dto: { status: string } | null): boo
 }
 
 /**
- * 同步期间是否发生过一次写入（#147 返回刷新 / #170 D）。
+ * 单调任务序号是否已被更新的任务超越（#147 返回刷新 / #170 D / 审查 R6）。
  *
- * 只判「此刻有没有人持锁」不够：这份快照可能在拿到响应之前就被一次**已经完成**的写入
- * 超越 —— 那时锁已放掉，检查通过，却会拿写入前的旧快照把刚写成的结果盖回去
- * （`COMPLETED` 被倒回 `PENDING_MEETUP`）。序号变了就丢弃这份快照：写入路径自己已经把
- * 服务端返回的最新 DTO 落到页面上，丢比盖安全。
+ * 两条序号共用这一个比较，因为判据是同一回事：发出时捕获的序号回来时对不上，就说明
+ * 期间已经有更新的任务接管，这份结果落地只会把对方刚写下的状态盖回去 —— 丢比盖安全。
+ *
+ * 但两个**计数器**必须互相独立，不能用其中一个替代另一个：
+ * - `writeSeq`（本页写入，取锁时自增）挡住的是「写入完成并放掉锁之后，写入前发出的读取
+ *   快照才落地」。此刻「有没有人持锁」已经是空的，只有写入序号能证明这份快照旧了；
+ * - `showReadSeq`（返回读取，每次 `syncOnShow` 自增）挡住的是「同一账号内两次返回刷新的
+ *   响应反序完成」：第一次读取发出时交易还待面交 → 对方取消 → 再次返回触发第二次读取、
+ *   先落到 CANCELLED → 第一次的旧快照最后才到。前后账号代次相同、本页一次写入都没有，
+ *   前两个守卫全都判不出先发的那次已经过期。
  */
-export function snapshotSuperseded(seen: number, current: number): boolean {
+export function sequenceSuperseded(seen: number, current: number): boolean {
   return seen !== current
 }
 

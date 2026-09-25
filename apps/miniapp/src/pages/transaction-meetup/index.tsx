@@ -26,8 +26,8 @@ import {
   nextPendingSync,
   pendingAfterTerminalRefetch,
   releaseLock,
+  sequenceSuperseded,
   showSync,
-  snapshotSuperseded,
 } from './view'
 import './index.scss'
 
@@ -171,6 +171,15 @@ export default function TransactionMeetup() {
    * （会把页面拉回写入前的快照），挂到这里，由写链的 `finally` 补一次。
    */
   const pendingSync = useRef(false)
+  /**
+   * 返回读取的任务序号（审查 R6）：每次 `syncOnShow` 发请求前自增，每个 await 之后对不上
+   * 就整份丢弃。
+   *
+   * 为什么账号代次和写入序号都不够：同一账号内连续两次返回会让两次读取重叠，先发的那次
+   * 可能后到 —— 期间只有**对方**动了这笔交易，本页一次写入都没有。两个守卫都会放行，
+   * 于是「第一次读取时还是 PENDING_MEETUP」的旧快照会把第二次读到的 CANCELLED 盖回去。
+   */
+  const showReadSeq = useRef(0)
 
   /**
    * 代次守卫（#168 审查 P1）：只有 `bootstrap` 自己判代次还不够 —— 它通过后启动的
@@ -499,10 +508,21 @@ export default function TransactionMeetup() {
    * 说明），自动重取会把一次核销失败静默变成展示动作。
    *
    * 尽力而为：失败不改动页面（不弹错、不打到错误态），旧快照仍可操作，下次返回再补。
+   *
+   * 三道守卫各管一段，缺一不可（审查 R6）：账号代次管换账号、写入序号管本页写入、
+   * 读取序号管同一账号内两次返回的响应反序。交易读取之后的凭证状态读取是**第二个异步
+   * 窗口**，也必须按同一次读取任务校验。
    */
   const syncOnShow = async (epoch: number) => {
     const targetId = scanRef.current?.transactionId ?? routeTxId
     if (!targetId) return
+    /**
+     * 本次返回读取的任务序号（审查 R6）。发请求**之前**同步取，两段 await 之后各校验
+     * 一次：期间只要又发生了一次返回读取，这份结果就已经旧了，由新的那次负责落地。
+     * 这里**不置** `pendingSync` —— 接手的是另一次真实读取，不是一次写入。
+     */
+    const readId = showReadSeq.current + 1
+    showReadSeq.current = readId
     /** 本代次有写入在飞：此刻落地会覆盖写入结果，改为挂起，等写链收尾再补 */
     const writeInFlight = () => submitLock.current === epoch
     /** 这份快照发出时的写入序号：回来时对不上，说明中途有成过一次的写入 */
@@ -510,12 +530,13 @@ export default function TransactionMeetup() {
     try {
       const dto = await fetchTransaction(targetId)
       if (isStale(epoch)) return
+      if (sequenceSuperseded(readId, showReadSeq.current)) return
       if (writeInFlight()) {
         pendingSync.current = true
         return
       }
       // 写入已经飞完并落下最新 DTO：这份写入前的快照只会把它盖回去（#147 审查 F2）
-      if (snapshotSuperseded(seenWrites, writeSeq.current)) return
+      if (sequenceSuperseded(seenWrites, writeSeq.current)) return
       setTx(dto)
       setLoadError(null)
       if (dto.status !== 'PENDING_MEETUP') {
@@ -533,12 +554,15 @@ export default function TransactionMeetup() {
       }
       const tokenStatus = await fetchMeetupTokenStatus(targetId).catch(() => null)
       if (isStale(epoch)) return
+      // 第二个异步窗口同样属于**这一次**读取：交易那段通过之后又返回过一次，这份凭证
+      // 状态就不能再拿去改确认入口
+      if (sequenceSuperseded(readId, showReadSeq.current)) return
       if (writeInFlight()) {
         pendingSync.current = true
         return
       }
       // 同上：这一步之前若有写入落定，入口该由写链说了算，别用旧快照覆盖
-      if (snapshotSuperseded(seenWrites, writeSeq.current)) return
+      if (sequenceSuperseded(seenWrites, writeSeq.current)) return
       // 读不到凭证状态就别动这个标记：失败是「不知道」，不是「没核销」。
       // 当成 false 会把买家从恢复好的确认入口打回 6 位码输入态，而码已 CONSUMED，
       // 手输只会被后端以「已被使用」拒掉 —— 双方都完不成，只能退出重进。

@@ -7,8 +7,8 @@ import {
   pendingAfterTerminalRefetch,
   releaseLock,
   type SubmitLock,
+  sequenceSuperseded,
   showSync,
-  snapshotSuperseded,
 } from '../src/pages/transaction-meetup/view'
 
 /**
@@ -22,7 +22,10 @@ import {
  *   上一帧的 `false`，两次请求都发出去；
  * - A 的操作链在飞时换到 B，B 已持锁，A 迟到的 `finally` 把 B 的锁放掉 —— 于是 B 的
  *   页面同 tick 又能再发一次；
- * - 从扫码页返回面交页时本代次有写入在飞 —— 立刻重读会把页面拉回写入前的快照。
+ * - 从扫码页返回面交页时本代次有写入在飞 —— 立刻重读会把页面拉回写入前的快照；
+ * - 同一账号内连续两次返回刷新响应反序 —— 先发的那次回来时账号代次与本页写入序号
+ *   都没变（期间只有对方动了这笔交易），旧快照会把刚读到的终态盖回 PENDING_MEETUP
+ *   （审查 R6）。
  *
  * 边界：本文件只跑判据，不跑组件接线（ref 赋值时机、`useDidShow` 注册顺序、渲染期
  * setState）。那部分必须在微信开发者工具里按双账号时序实测，不拿本文件当端上证明。
@@ -180,10 +183,106 @@ describe('meetup 返回刷新（#170 D）', () => {
 
   test('同步窗口内发生过写入时丢弃这份旧快照（不把 COMPLETED 倒回待确认）', () => {
     // 窗口内没有写入：快照就是最新的，可以落地
-    expect(snapshotSuperseded(3, 3)).toBe(false)
+    expect(sequenceSuperseded(3, 3)).toBe(false)
 
     // 窗口内写完了一次并放掉锁：这时「有没有人持锁」是空的，只有序号能看出来。
     // 落地就会用写入前的快照把刚写成的 COMPLETED 盖回 PENDING_MEETUP。
-    expect(snapshotSuperseded(3, 4)).toBe(true)
+    expect(sequenceSuperseded(3, 4)).toBe(true)
+  })
+})
+
+/**
+ * 最小「返回读取任务」模型：对应 index.tsx 的 `showReadSeq` ref 与 `syncOnShow` 的两段
+ * await（交易读取 → 凭证状态读取）。每个动作都走真实导出（`sequenceSuperseded`），判据被
+ * 改坏这里就红；组件接线本身（什么时候自增、在哪几个 await 之后校验）仍只在开发者工具里
+ * 实测 —— 与上面的 `lockbox` 同一取舍。
+ */
+function reader() {
+  return { seq: 0, tx: null as string | null, confirmPending: false }
+}
+
+/** 发起一次返回读取：发请求**之前**同步取自增的序号（`syncOnShow` 开头） */
+function beginRead(r: ReturnType<typeof reader>) {
+  r.seq += 1
+  return r.seq
+}
+
+/** 一段 await 之后，这次读取的结果还能不能落地 */
+function canLand(r: ReturnType<typeof reader>, readId: number) {
+  return !sequenceSuperseded(readId, r.seq)
+}
+
+/** 落地一份交易快照；已被更新的读取超越时按接线里的行为整份丢弃 */
+function land(r: ReturnType<typeof reader>, readId: number, status: string) {
+  if (!canLand(r, readId)) return false
+  r.tx = status
+  r.confirmPending = status === 'PENDING_MEETUP'
+  return true
+}
+
+describe('meetup 返回读取的响应顺序（审查 R6）', () => {
+  test('同账号两次返回反序完成：先发的旧快照不得盖掉后读到的终态', () => {
+    const r = reader()
+    // 第一次返回：此刻交易还待面交，请求已发出、响应未回
+    const first = beginRead(r)
+    // 期间只有**对方**动了这笔交易（取消）；本页一次写入都没有，账号代次与写入序号
+    // 都不会变 —— 所以「有没有人持锁」「写入序号对不对」两个守卫全都放行
+    // 用户再次返回，第二次读取接管
+    const second = beginRead(r)
+
+    // 第二次先到：落到 CANCELLED
+    expect(land(r, second, 'CANCELLED')).toBe(true)
+    expect(r.tx).toBe('CANCELLED')
+    expect(r.confirmPending).toBe(false)
+
+    // 第一次后到：只有读取序号能认出它已经过期
+    expect(canLand(r, first)).toBe(false)
+    expect(land(r, first, 'PENDING_MEETUP')).toBe(false)
+    expect(r.tx).toBe('CANCELLED') // 终态没被倒回
+    expect(r.confirmPending).toBe(false) // 「还差最后一步确认」没被复活
+  })
+
+  test('第一次读取的第二段（凭证状态）迟到时同样不得改状态', () => {
+    const r = reader()
+    const first = beginRead(r)
+    // 第一段通过：交易仍是待面交，且买家已确认、卖家已盖，于是继续查凭证状态
+    expect(land(r, first, 'PENDING_MEETUP')).toBe(true)
+
+    // 第二段在飞期间又返回了一次，第二次读到了终态并落地
+    const second = beginRead(r)
+    expect(land(r, second, 'COMPLETED')).toBe(true)
+
+    // 第一次的凭证状态这时才回来：它属于那一次读取，不能再去改确认入口
+    expect(canLand(r, first)).toBe(false)
+    expect(r.tx).toBe('COMPLETED')
+  })
+
+  test('顺序正常的两次返回照常落地（守卫不误杀）', () => {
+    const r = reader()
+    const first = beginRead(r)
+    expect(land(r, first, 'PENDING_MEETUP')).toBe(true)
+    expect(r.confirmPending).toBe(true)
+
+    // 第一次已经收尾，第二次返回是全新的一次读取，必须能落地
+    const second = beginRead(r)
+    expect(land(r, second, 'CANCELLED')).toBe(true)
+    expect(r.tx).toBe('CANCELLED')
+    expect(r.confirmPending).toBe(false)
+  })
+
+  test('读取序号与写入序号互不替代：合并成一个计数器就漏掉一半', () => {
+    const r = reader()
+    const first = beginRead(r)
+
+    // 一次本页写入落定（写链自己把最新 DTO 落到页面）：读取序号没动，
+    // 光看读取序号会以为这份旧快照还能落地
+    expect(canLand(r, first)).toBe(true)
+    // 只有写入序号能证明它旧了
+    expect(sequenceSuperseded(3, 4)).toBe(true)
+
+    // 反过来：新的返回读取不推进写入序号 —— 那次写入的结果不受影响
+    const second = beginRead(r)
+    expect(canLand(r, first)).toBe(false) // 读取序号认出第一次已过期
+    expect(canLand(r, second)).toBe(true)
   })
 })
