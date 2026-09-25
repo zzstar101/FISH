@@ -1,3 +1,4 @@
+import { MessageIdempotencyConflictError, type MessageSendKey } from './idempotency'
 import type { ConversationParticipant, MessageRow, MessageStore } from './store'
 
 /**
@@ -28,6 +29,9 @@ export class MemoryMessageStore implements MessageStore {
   messages: MessageRow[] = []
   private seq = 0
 
+  /** #67 幂等键 → 已落库消息与指纹（与 SQL 的部分唯一索引同语义）。 */
+  private requestKeys = new Map<string, { requestHash: string; row: MessageRow }>()
+
   async findConversationForUser(conversationId: string, userId: string) {
     const conversation = this.conversations.get(conversationId)
     if (!conversation) return null
@@ -55,7 +59,20 @@ export class MemoryMessageStore implements MessageStore {
     return { kind: 'ok' as const, rows: all.slice(0, filter.limit + 1).reverse() }
   }
 
-  async insertText(conversationId: string, senderId: string, content: string) {
+  async insertText(
+    conversationId: string,
+    senderId: string,
+    content: string,
+    key?: MessageSendKey | null,
+  ) {
+    if (key) {
+      const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
+      if (existing) {
+        // 同键同指纹 = 重试，返回既有行；同键不同指纹 = 幂等键复用。
+        if (existing.requestHash === key.requestHash) return existing.row
+        throw new MessageIdempotencyConflictError(key.clientRequestId)
+      }
+    }
     const row: MessageRow = {
       id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: conversationId,
@@ -67,6 +84,12 @@ export class MemoryMessageStore implements MessageStore {
       sender_avatar_url: null,
     }
     this.messages.push(row)
+    if (key) {
+      this.requestKeys.set(requestKeyOf(senderId, conversationId, key), {
+        requestHash: key.requestHash,
+        row,
+      })
+    }
     return row
   }
 
@@ -85,3 +108,6 @@ export class MemoryMessageStore implements MessageStore {
     return row
   }
 }
+
+const requestKeyOf = (senderId: string, conversationId: string, key: MessageSendKey): string =>
+  `${senderId}|${conversationId}|${key.clientRequestId}`

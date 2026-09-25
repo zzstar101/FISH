@@ -65,8 +65,16 @@ export const TX_EVENT_BADGE: Record<SystemEvent['type'], { label: string; tone: 
   'tx.rejected': { label: '已拒绝', tone: 'secondary' },
 }
 
-/** 会话列表预览与气泡共用：TEXT 直出，SYSTEM 先解析。 */
-export function formatMessageBody(message: { type: 'TEXT' | 'SYSTEM'; content: string }): string {
+/**
+ * 会话列表预览与气泡共用：TEXT 直出，SYSTEM 先解析。
+ *
+ * 也接受 `MEDIA`：会话行摘要里的最后一条消息可能是媒体（#67 第四步），
+ * 此时服务端已把 content 填成 `[图片]`/`[语音]`，直出即可。
+ */
+export function formatMessageBody(message: {
+  type: 'TEXT' | 'SYSTEM' | 'MEDIA'
+  content: string
+}): string {
   return message.type === 'SYSTEM' ? formatSystemMessageBody(message.content) : message.content
 }
 

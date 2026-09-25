@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
 import { createSqlMessageStore } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -139,5 +140,132 @@ describe('messages store (integration)', () => {
 
     await store.insertSystem(conversationA, '{"type":"tx.rejected"}')
     expect(await lastMessageAtMs()).toBe(future.getTime())
+  })
+
+  test('insertText 重放同一幂等键：返回既有消息且只落一行（#67 验收①）', async () => {
+    const key = messageSendKey('01990000-0000-7000-8000-0000000000e1', textRequestHash('重试'))
+    if (!key) throw new Error('unreachable')
+    const first = await store.insertText(conversationA, buyer, '重试', key)
+    const retry = await store.insertText(conversationA, buyer, '重试', key)
+    expect(retry.id).toBe(first.id)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND client_request_id = ${key.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('并发重放同一幂等键：advisory lock 串行化，只落一行且都拿到同一条消息', async () => {
+    const key = messageSendKey('01990000-0000-7000-8000-0000000000e3', textRequestHash('并发重试'))
+    if (!key) throw new Error('unreachable')
+
+    // 8 个并发请求 = 「同一瞬间重试了 8 次」。没有事务级 advisory lock 时它们会同时
+    // 查不到既有行、各自 INSERT：一个赢，其余撞 (sender, conversation, client_request_id)
+    // 的部分唯一索引 → 23505 → 500。锁把「查重 + 插入」压成串行，全部重放同一条。
+    const rows = await Promise.all(
+      Array.from({ length: 8 }, () => store.insertText(conversationA, buyer, '并发重试', key)),
+    )
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND client_request_id = ${key.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('insertText 同一键携带不同内容 → MessageIdempotencyConflictError', async () => {
+    const clientRequestId = '01990000-0000-7000-8000-0000000000e2'
+    await store.insertText(
+      conversationA,
+      seller,
+      'A',
+      messageSendKey(clientRequestId, textRequestHash('A')),
+    )
+    expect(
+      store.insertText(
+        conversationA,
+        seller,
+        'B',
+        messageSendKey(clientRequestId, textRequestHash('B')),
+      ),
+    ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
+  })
+
+  test('会话路径大小写不同也视为同一把锁：并发重试只落一行且拿到同一条（#67 R11）', async () => {
+    const key = messageSendKey(
+      '01990000-0000-7000-8000-0000000000e6',
+      textRequestHash('大小写会话'),
+    )
+    if (!key) throw new Error('unreachable')
+
+    // 路由的 UUID 正则带 /i，所以 `...C1` 与 `...c1` 都会走到 store；Pg 的 uuid 列把两者
+    // 当成同一个会话，但规范化前锁键是两个不同字符串 → 两把锁 → 各自查重未命中 → 争用
+    // 同一唯一索引，其中一个 23505/500。规范化后必须串行成「全部重放同一条」。
+    const rows = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        store.insertText(
+          index % 2 === 0 ? conversationA.toUpperCase() : conversationA,
+          outsider,
+          '大小写会话',
+          key,
+        ),
+      ),
+    )
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND client_request_id = ${key.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('clientRequestId 大小写不同视为同一个键：重试不新增行（#67 R11）', async () => {
+    // client_request_id 是 text 列，不规范化就会「同一次发送的重试」各落一行。
+    const upper = messageSendKey(
+      '01990000-0000-7000-8000-0000000000E7',
+      textRequestHash('请求标识'),
+    )
+    const lower = messageSendKey(
+      '01990000-0000-7000-8000-0000000000e7',
+      textRequestHash('请求标识'),
+    )
+    if (!upper || !lower) throw new Error('unreachable')
+
+    const first = await store.insertText(conversationA, seller, '请求标识', upper)
+    const retry = await store.insertText(conversationA, seller, '请求标识', lower)
+    expect(retry.id).toBe(first.id)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND sender_id = ${seller}
+            AND client_request_id = ${lower.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('大小写不同的同一键携带不同内容 → 幂等冲突，而不是唯一冲突 500（#67 R11）', async () => {
+    const first = messageSendKey('01990000-0000-7000-8000-0000000000E8', textRequestHash('A'))
+    const second = messageSendKey('01990000-0000-7000-8000-0000000000e8', textRequestHash('B'))
+    if (!first || !second) throw new Error('unreachable')
+
+    await store.insertText(conversationA, buyer, 'A', first)
+    expect(store.insertText(conversationA, buyer, 'B', second)).rejects.toBeInstanceOf(
+      MessageIdempotencyConflictError,
+    )
   })
 })

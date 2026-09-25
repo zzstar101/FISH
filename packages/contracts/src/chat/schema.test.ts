@@ -3,12 +3,16 @@ import {
   ChatErrorCodeSchema,
   conversationCreateInputSchema,
   conversationDtoSchema,
+  conversationLastMessageSchema,
   conversationListQuerySchema,
+  imageMediaMessageInputSchema,
   messageDtoSchema,
   messageListQuerySchema,
   messageSendInputSchema,
+  messageTypeSchema,
   realtimeClientEventSchema,
   realtimeServerEventSchema,
+  voiceMediaMessageInputSchema,
 } from './schema'
 
 describe('conversationCreateInputSchema', () => {
@@ -42,6 +46,58 @@ describe('messageSendInputSchema', () => {
 
   test('rejects extra fields (strict)', () => {
     expect(messageSendInputSchema.safeParse({ content: 'hi', type: 'TEXT' }).success).toBe(false)
+  })
+
+  test('accepts an optional uuid clientRequestId and omits it when absent', () => {
+    const clientRequestId = '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+    expect(messageSendInputSchema.parse({ content: 'hi', clientRequestId })).toEqual({
+      content: 'hi',
+      clientRequestId,
+    })
+    expect(messageSendInputSchema.parse({ content: 'hi' }).clientRequestId).toBeUndefined()
+  })
+
+  test('rejects a non-uuid clientRequestId', () => {
+    expect(
+      messageSendInputSchema.safeParse({ content: 'hi', clientRequestId: 'req-1' }).success,
+    ).toBe(false)
+  })
+})
+
+describe('media message input schemas', () => {
+  const image = {
+    kind: 'IMAGE',
+    objectKey: 'chat-media/1/2/a.webp',
+    contentType: 'image/webp',
+    sizeBytes: 1024,
+    width: 800,
+    height: 600,
+  }
+  const voice = {
+    kind: 'VOICE',
+    objectKey: 'chat-media/1/2/a.webm',
+    contentType: 'audio/webm',
+    sizeBytes: 2048,
+    durationMs: 3000,
+  }
+  const clientRequestId = '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+
+  test('accepts an optional uuid clientRequestId for both kinds', () => {
+    expect(imageMediaMessageInputSchema.parse({ ...image, clientRequestId }).clientRequestId).toBe(
+      clientRequestId,
+    )
+    expect(voiceMediaMessageInputSchema.parse({ ...voice, clientRequestId }).clientRequestId).toBe(
+      clientRequestId,
+    )
+  })
+
+  test('rejects a non-uuid clientRequestId', () => {
+    expect(imageMediaMessageInputSchema.safeParse({ ...image, clientRequestId: 'x' }).success).toBe(
+      false,
+    )
+    expect(voiceMediaMessageInputSchema.safeParse({ ...voice, clientRequestId: 'x' }).success).toBe(
+      false,
+    )
   })
 })
 
@@ -141,6 +197,19 @@ describe('conversationDtoSchema', () => {
     expect(parsed.counterpart.avatarUrl).toBe('https://cdn.example.com/a.png')
     expect(parsed.counterpartLastReadAt).toBe('2026-09-12T09:30:00.000Z')
     expect(parsed.lastMessage?.type).toBe('TEXT')
+  })
+
+  test('lastMessage 允许 MEDIA：媒体摘要不进 MessageDto，但会话行必须能显示（#67 第四步）', () => {
+    const parsed = conversationLastMessageSchema.parse({
+      type: 'MEDIA',
+      content: '[图片]',
+      senderId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      createdAt: '2026-09-12T10:00:00.000Z',
+    })
+    expect(parsed.type).toBe('MEDIA')
+    expect(parsed.content).toBe('[图片]')
+    // 媒体正文依然不进消息流：MessageDto 只认 TEXT/SYSTEM
+    expect(messageTypeSchema.safeParse('MEDIA').success).toBe(false)
   })
 
   test('parses a conversation with no messages yet (lastMessage null)', () => {
@@ -263,5 +332,9 @@ describe('realtime events', () => {
 describe('ChatErrorCodeSchema', () => {
   test('rejects an unknown code', () => {
     expect(ChatErrorCodeSchema.safeParse('SOME_OTHER_CODE').success).toBe(false)
+  })
+
+  test('accepts IDEMPOTENCY_KEY_REUSED（#67 同键不同内容的 409）', () => {
+    expect(ChatErrorCodeSchema.parse('IDEMPOTENCY_KEY_REUSED')).toBe('IDEMPOTENCY_KEY_REUSED')
   })
 })
