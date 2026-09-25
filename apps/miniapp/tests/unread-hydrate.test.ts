@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { conversationUnreadForBadge } from '../src/pages/chat/list-view'
 
 /**
  * 未读快照 store 的冷启动行为 —— 锁住 #129 review 的第二条 P1，以及 #89 对
@@ -9,7 +10,7 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
  * 「真实有未读却不亮」或「没有未读却亮着幽灵红点」。
  *
  * 现在冷启动两项都走真实接口：`GET /notifications/unread-count` 与
- * `GET /conversations` 求和（`fetchConversationUnreadCount`，这里被顶替）。
+ * `GET /conversations/unread-count` 聚合（`fetchConversationUnreadCount`，这里被顶替）。
  * **真实构建下接口失败就发「不知道」，绝不回退 fixture**。
  *
  * 用 `mock.module` 顶替 API 层（与 `signature.test.ts` 顶替 Taro 同一手法）。
@@ -156,6 +157,79 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.ownerId).toBe('u-b')
     expect(unreadSnapshot()?.notifications).toBe(5)
     expect(unreadSnapshot()?.conversations).toBe(2)
+  })
+})
+
+describe('未读快照 · 返回前台强制刷新（#67 第三步）', () => {
+  /*
+    底栏的冷启动补数只在「本次账号还没有快照」时取一次。小程序是长驻进程：退到后台
+    再回来时实例还活着、快照还在，于是底栏会一直停在离开前的数字上 —— 这期间对方
+    发来的消息它一无所知，红点也不亮。`refreshUnread` 就是给 `Taro.onAppShow` 用的
+    「不管有没有快照，都重取一次」。
+  */
+  test('已有本次账号快照时仍然重取（hydrate 会短路，refresh 不会）', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.resolve(4)
+
+    publishUnread({ ownerId: 'u-alan', conversations: 5, notifications: 0 })
+
+    // 冷启动那条路：有快照就短路，页面上的权威值原样保留
+    hydrateUnread('u-alan')
+    await flush()
+    expect(unreadSnapshot()?.conversations).toBe(5)
+    expect(unreadSnapshot()?.notifications).toBe(0)
+
+    // 返回前台：这次必须真的重取，把离开期间新增的未读带回来
+    refreshUnread('u-alan')
+    await flush()
+    expect(unreadSnapshot()?.conversations).toBe(4)
+    expect(unreadSnapshot()?.notifications).toBe(3)
+  })
+
+  test('刷新失败的那一项沿用已知旧值，不下调成「不知道」（失败保留，#170 D）', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.reject(new Error('network down'))
+
+    publishUnread({ ownerId: 'u-alan', conversations: 5, notifications: 0 })
+
+    refreshUnread('u-alan')
+    await flush()
+
+    // 拿不到既不等于 0，也不等于把已知的 5 抹成「不知道」：一次网络抖动不该让底栏那颗点变样。
+    // 通知那项是真值，照常更新。
+    expect(unreadSnapshot()?.conversations).toBe(5)
+    expect(unreadSnapshot()?.notifications).toBe(3)
+  })
+
+  test('演示 / 开发构建：刷新失败的那一项退回注入的兜底', async () => {
+    notifResult = () => Promise.resolve(3)
+    convResult = () => Promise.reject(new Error('network down'))
+
+    refreshUnread('u-alan', () => ({ conversations: 9, notifications: 99 }))
+    await flush()
+
+    expect(unreadSnapshot()?.conversations).toBe(9)
+    expect(unreadSnapshot()?.notifications).toBe(3)
+  })
+
+  test('换账号后旧账号的迟到刷新不覆盖新账号快照', async () => {
+    let resolveOld: (value: number) => void = () => {}
+    convResult = () =>
+      new Promise<number>((resolve) => {
+        resolveOld = resolve
+      })
+    notifResult = () => Promise.resolve(3)
+
+    refreshUnread('u-a')
+    await flush()
+
+    publishUnread({ ownerId: 'u-b', conversations: 1, notifications: 1 })
+
+    resolveOld(7)
+    await flush()
+
+    expect(unreadSnapshot()?.ownerId).toBe('u-b')
+    expect(unreadSnapshot()?.conversations).toBe(1)
   })
 })
 
@@ -447,5 +521,162 @@ describe('未读快照 · 显示时刷新', () => {
     await flush()
     expect(unreadSnapshot()?.notifications).toBe(9)
     expect(unreadSnapshot()?.conversations).toBe(4)
+  })
+
+  test('同账号退出重登：旧任务的 finally 不释放新任务的在途占位（#170 复查 N7）', async () => {
+    const notifResolvers: Array<(value: number) => void> = []
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        notifResolvers.push(resolve)
+      })
+    convResult = () => Promise.resolve(4)
+
+    // R1：账号 A 的显示时刷新在途
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(1)
+
+    // 退出（清场）后马上用同一个账号重新登录：R2 起跑
+    clearUnread()
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(2)
+
+    /*
+      R1 这时才回来。它自己的结果早已被 `snapshotSeq` 作废，但它**不能**顺手把
+      `hydrating` 里的占位删掉 —— 那个位置现在是 R2 的。删掉就等于给下一次显示发
+      通行证：多出来的 R3 会和 R2 抢同一个版本号，旧结果先落地就把新结果挤掉。
+    */
+    notifResolvers[0](7)
+    await flush()
+
+    // 去重仍然有效：R2 还在途，再显示一次不该发第三个请求
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(2)
+
+    // R2 的结果照常落地
+    notifResolvers[1](9)
+    await flush()
+    expect(unreadSnapshot()?.notifications).toBe(9)
+  })
+
+  test('旧任务先回来既不落地也不推高版本，新任务带更新的结果照常落地（#170 复查 N7）', async () => {
+    const notifResolvers: Array<(value: number) => void> = []
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        notifResolvers.push(resolve)
+      })
+    convResult = () => Promise.resolve(4)
+
+    refreshUnread('u-a')
+    await flush()
+    clearUnread()
+    refreshUnread('u-a')
+    await flush()
+
+    // 旧任务先回来：被序号作废，既不落地也不推进版本
+    notifResolvers[0](7)
+    await flush()
+    expect(unreadSnapshot()).toBeNull()
+
+    // 新任务带更新的结果回来：必须落地（版本没被旧任务推高，不会被挤掉）
+    notifResolvers[1](9)
+    await flush()
+    expect(unreadSnapshot()?.notifications).toBe(9)
+  })
+
+  test('刷新失败后释放在途占位：下一次显示仍会真的发请求（不留永久锁）', async () => {
+    let notifCalls = 0
+    notifResult = () => {
+      notifCalls += 1
+      return Promise.reject(new Error('network down'))
+    }
+    convResult = () => Promise.reject(new Error('network down'))
+
+    refreshUnread('u-a')
+    await flush()
+    expect(notifCalls).toBe(1)
+
+    refreshUnread('u-a')
+    await flush()
+    expect(notifCalls).toBe(2)
+  })
+
+  test('登出清场后同一账号马上重登：旧任务的在途占位不挡住新任务', async () => {
+    const notifResolvers: Array<(value: number) => void> = []
+    notifResult = () =>
+      new Promise<number>((resolve) => {
+        notifResolvers.push(resolve)
+      })
+    convResult = () => Promise.resolve(4)
+
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(1)
+
+    // 清场必须把在途占位一起清掉：否则重登后第一次显示被旧占位吞掉，D 静默失效
+    clearUnread()
+    refreshUnread('u-a')
+    await flush()
+    expect(notifResolvers).toHaveLength(2)
+  })
+})
+
+/**
+ * 底栏「会话未读」分量的端到端口径（#67 R4 / R5）。
+ *
+ * 上一条 describe 锁的是判定函数本身，这里锁「页面把什么值发布进 store、红点随之怎么变」：
+ * - R4：标记已读后服务端聚合归零 → 红点必须熄灭（修复前页面不重取聚合，红点一直亮着）；
+ * - R5：聚合失败 + 本页窗口不完整 + 求和 0 → 发布的是「不知道」，红点保持上一帧，
+ *   而不是被一个假的 0 熄灭。
+ */
+describe('未读快照 · 会话未读分量与红点（#67 R4 / R5）', () => {
+  test('标记已读后服务端聚合归零：底栏红点随之熄灭', () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 3, notifications: 0 })
+    const lit = badgeShouldLight({ conversations: 3, notifications: 0, previous: false })
+    expect(lit).toBe(true)
+
+    // markAllRead 落定后重取聚合得到的 0
+    publishUnread({ ownerId: 'u-alan', conversations: 0, notifications: 0 })
+    const snap = unreadSnapshot()
+    expect(snap?.conversations).toBe(0)
+    expect(
+      badgeShouldLight({
+        conversations: snap?.conversations ?? null,
+        notifications: snap?.notifications ?? null,
+        previous: lit,
+      }),
+    ).toBe(false)
+  })
+
+  test('聚合失败且本页窗口不完整：不发布确定零，红点保持上一帧', () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 1, notifications: 0 })
+    const lit = badgeShouldLight({ conversations: 1, notifications: 0, previous: false })
+    expect(lit).toBe(true)
+
+    // 下一次聚合失败（null）；本页第一页的会话都已读（求和 0）但服务端还有下一页
+    const conversations = conversationUnreadForBadge({
+      aggregate: null,
+      windowSum: 0,
+      windowComplete: false,
+    })
+    expect(conversations).toBeNull()
+
+    publishUnread({ ownerId: 'u-alan', conversations, notifications: 0 })
+    expect(unreadSnapshot()?.conversations).toBeNull()
+    expect(badgeShouldLight({ conversations, notifications: 0, previous: lit })).toBe(true)
+  })
+
+  test('聚合失败但窗口已到末尾：求和 0 是确定结论，红点熄灭', () => {
+    publishUnread({ ownerId: 'u-alan', conversations: 2, notifications: 0 })
+
+    const conversations = conversationUnreadForBadge({
+      aggregate: null,
+      windowSum: 0,
+      windowComplete: true,
+    })
+    expect(conversations).toBe(0)
+    expect(badgeShouldLight({ conversations, notifications: 0, previous: true })).toBe(false)
   })
 })

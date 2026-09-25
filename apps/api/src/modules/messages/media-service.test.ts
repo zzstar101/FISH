@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { MediaMessageInput, MediaPresignInput } from '@fish/contracts/chat/schema'
 import type { MediaStorage } from '../uploads/storage'
+import {
+  MessageIdempotencyConflictError,
+  type MessageSendKey,
+  mediaRequestHash,
+} from './idempotency'
 import { createMediaMessageService, MediaMessageServiceError } from './media-service'
 import type { MediaMessageStore, MediaRow } from './media-store'
 
@@ -47,6 +52,8 @@ function setup(
     create: async (_conversationId, _senderId, input) => row(input),
     list: async () => [],
     find: async () => row(image),
+    // 默认无幂等命中：既有用例都不带 clientRequestId，快速路径不会触发。
+    findByRequestKey: async () => null,
     ...overrides,
   }
   const storage: MediaStorage = {
@@ -514,5 +521,105 @@ describe('media message service', () => {
         ).toString('base64url'),
       }),
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', status: 422 })
+  })
+})
+
+describe('media message service: send idempotency (#67)', () => {
+  const clientRequestId = '01930000-0000-7000-8000-0000000000e1'
+
+  test('replays the stored media for a retried clientRequestId without touching storage', async () => {
+    let stats = 0
+    let reads = 0
+    let writes = 0
+    const stored = row(image)
+    const service = setup(
+      { findByRequestKey: async () => ({ row: stored, matchedHash: true }) },
+      {
+        stat: async () => {
+          stats++
+          return { size: 1024, contentType: 'image/webp' }
+        },
+        readMediaBytes: async () => {
+          reads++
+          return webpBytes()
+        },
+        writeMediaBytes: async () => {
+          writes++
+        },
+      },
+    )
+    const replayed = await service.create(userId, conversationId, { ...image, clientRequestId })
+    // 返回的是**既有**媒体，且不重复 stat / 解析 / 落快照——否则每次重试都会往存储里
+    // 留一份永远不会被引用的快照（客户端复用同一个预签名 key，原 key 已被覆盖）。
+    expect(replayed.id).toBe(stored.message_id)
+    expect(stats).toBe(0)
+    expect(reads).toBe(0)
+    expect(writes).toBe(0)
+  })
+
+  test('同键不同指纹 → 409 IDEMPOTENCY_KEY_REUSED，且不落新快照', async () => {
+    let writes = 0
+    const service = setup(
+      { findByRequestKey: async () => ({ row: row(image), matchedHash: false }) },
+      {
+        writeMediaBytes: async () => {
+          writes++
+        },
+      },
+    )
+    await expect(
+      service.create(userId, conversationId, { ...image, clientRequestId }),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' })
+    expect(writes).toBe(0)
+  })
+
+  test('把 store 的并发幂等冲突翻译成 409', async () => {
+    const service = setup(
+      {
+        create: async () => {
+          throw new MessageIdempotencyConflictError(clientRequestId)
+        },
+      },
+      { stat: async () => ({ size: 1024, contentType: 'image/webp' }) },
+    )
+    await expect(
+      service.create(userId, conversationId, {
+        ...image,
+        width: 800,
+        height: 600,
+        clientRequestId,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' })
+  })
+
+  test('指纹取客户端**声明**的元数据，而不是服务端探测出的值', async () => {
+    // 用语音做区分：服务端会探测真实时长并覆盖落库值，但指纹必须仍基于客户端声明的
+    // durationMs。IMAGE 区分不开——服务端会直接拒绝「声明尺寸 ≠ 探测尺寸」的图片。
+    let seenKey: MessageSendKey | null | undefined
+    const service = setup(
+      {
+        create: async (_conversation, _sender, input, key) => {
+          seenKey = key
+          return row(input)
+        },
+      },
+      {
+        stat: async () => ({ size: 2048, contentType: 'audio/webm' }),
+        readMediaBytes: async () => webmBytes(5000),
+      },
+    )
+    const voice: MediaMessageInput = {
+      kind: 'VOICE',
+      objectKey: `chat-media/${conversationId}/${userId}/voice.webm`,
+      contentType: 'audio/webm',
+      sizeBytes: 2048,
+      durationMs: 1234,
+      clientRequestId,
+    }
+    await service.create(userId, conversationId, voice)
+
+    expect(seenKey).toEqual({ clientRequestId, requestHash: mediaRequestHash(voice) })
+    // 探测出的 5000 与声明的 1234 必须算出不同指纹，上面的断言才有区分力。
+    expect(mediaRequestHash({ ...voice, durationMs: 5000 })).not.toBe(mediaRequestHash(voice))
   })
 })

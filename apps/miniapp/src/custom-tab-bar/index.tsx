@@ -16,7 +16,7 @@
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import {
@@ -156,7 +156,7 @@ export default function CustomTabBar() {
    *
    * 底栏在每个 Tab 页都渲染，用户可能一次都不进消息页 —— 那时没有任何人发布快照。
    * 这里在「已登录 + 本次账号还没有快照」时补一次真实数据：
-   * `GET /notifications/unread-count` 与 `GET /conversations` 求和
+   * `GET /notifications/unread-count` 与 `GET /conversations/unread-count` 聚合
    * （`hydrateUnread` 内部按账号去重，多 Tab 实例只打一次）。
    *
    * 会话未读此前无论哪条路径都来自 fixture（#89 明写的既有债），于是底栏那颗点
@@ -199,6 +199,36 @@ export default function CustomTabBar() {
     if (!ownerId) return
     refreshUnread(ownerId, demoUnread)
   })
+
+  /**
+   * 返回前台时强制重取一次未读（#67 第三步）。
+   *
+   * 上面那条冷启动路径只在「还没有本次账号的快照」时才取数，所以小程序退到后台待一会儿
+   * 再回来时，底栏会一直停在离开前的数字上 —— 这期间对方发来的消息它一无所知。
+   * 与 `useDidShow` 各管一段：那条管「切 Tab / 页面显示」，这条管「整包回到前台」；
+   * 两条都走 `refreshUnread`，同账号在途时由 store 的去重表收敛成一次请求。
+   *
+   * 登录态走 ref 读最新值：`onAppShow` 只注册一次，直接闭包会拿到旧的 `userId`
+   * （换号后仍替上一个账号取数）。`offAppShow` 必须在清理时调用，否则每次重挂
+   * 底栏都会多一个监听器，一次前台事件打多次请求。
+   */
+  const refreshRef = useRef<() => void>(() => undefined)
+  refreshRef.current = () => {
+    const ownerId = refreshTargetOnShow({
+      authed: authStatus === 'authed',
+      userId,
+      hiddenRoute: currentRoute().includes(HIDDEN_ROUTE),
+    })
+    if (!ownerId) return
+    refreshUnread(ownerId, demoUnread)
+  }
+  useEffect(() => {
+    const onShow = () => refreshRef.current()
+    Taro.onAppShow(onShow)
+    return () => {
+      Taro.offAppShow(onShow)
+    }
+  }, [])
 
   useEffect(() => {
     // 未登录不亮红点：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上

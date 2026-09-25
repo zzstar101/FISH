@@ -153,10 +153,18 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
 }
 
 /**
- * 在途的账号：底栏实例每个 Tab 页各一份，多个实例会同时触发；同账号只发一次请求。
- * 登出（`clearUnread`）会把它一并清掉 —— 理由见那里的注释。
+ * 在途的取数任务：`ownerId → requestToken`。底栏实例每个 Tab 页各一份，多个实例会同时
+ * 触发；同账号只发一次请求。
+ *
+ * 值必须是**这一次任务**的令牌，不能只记 `ownerId`（#170 复查 N7）：同一账号「退出 →
+ * 马上重新登录」会起一个新任务，旧任务的 `finally` 若无条件 `delete(ownerId)`，就会把
+ * 新任务的去重项一起删掉 —— 下一次显示于是又能发一次请求，而它可能和仍在途的新任务抢
+ * 同一个 `snapshotSeq`，旧结果先落地就把新结果挤掉了。登出（`clearUnread`）整表清掉。
  */
-const hydrating = new Set<string>()
+const hydrating = new Map<string, number>()
+
+/** 在途任务的令牌发号器：每真的发一次请求就 +1（与快照的 `snapshotSeq` 分开建模） */
+let requestToken = 0
 
 /** 演示 / 开发构建注入的兜底计数（真实构建不传：读不到就是「不知道」） */
 type UnreadFallback = () => { conversations: number; notifications: number }
@@ -182,7 +190,10 @@ function requestUnread(
   // 本次账号已经有快照（比如刚进过消息页）：那是含会话未读的权威值，不用补
   if (mode === 'fill' && snapshot && snapshot.ownerId === ownerId) return
   if (hydrating.has(ownerId)) return
-  hydrating.add(ownerId)
+  // 占位记的是**本次任务**的令牌：`finally` 只释放自己那一个（同账号退出→重登会起新任务）
+  requestToken += 1
+  const token = requestToken
+  hydrating.set(ownerId, token)
   // 记下发起时刻的版本：期间若有人发布了更权威的快照，这份结果就算过时
   const startedAt = snapshotSeq
   void Promise.all([
@@ -224,7 +235,9 @@ function requestUnread(
     // 上面那条「已被更权威快照作废」的早退路径就不会释放，这个账号从此每次显示时刷新
     // 都被 `hydrating.has(ownerId)` 吞掉 —— D 会静默失效，直到下一次登出清场才恢复。
     .finally(() => {
-      hydrating.delete(ownerId)
+      // 只释放**自己**那一个占位（#170 复查 N7）：同一账号「退出 → 重登」会起新任务，
+      // 无条件 `delete(ownerId)` 会把新任务的去重项一起删掉，D 的共享去重就漏了。
+      if (hydrating.get(ownerId) === token) hydrating.delete(ownerId)
     })
 }
 
@@ -237,8 +250,8 @@ function requestUnread(
  * 「没有未读却亮着幽灵红点」都会发生。
  *
  * 通知数走**真实** `GET /notifications/unread-count`；会话数走**真实**
- * `GET /conversations` 求和（`fetchConversationUnreadCount`，实现它是因为 #89 明写
- * 「接 `GET /conversations` 时必须一并收口会话未读这一分量」）。失败时：
+ * `GET /conversations/unread-count` 聚合（`fetchConversationUnreadCount`）——
+ * 它不再对第一页会话求和，所以会话数超过一页时底栏也不会漏计（#67）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
  * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
@@ -260,8 +273,8 @@ export function hydrateUnread(ownerId: string, demoFallback?: UnreadFallback): v
  * 只在挂载时补一次的话，别处产生的未读（新消息、另一台设备已读）在底栏上永远不更新。
  *
  * 走的是与冷启动补数**同一套**真实接口（`GET /notifications/unread-count` +
- * `GET /conversations` 求和），不另造求和规则；迟到的结果由 `snapshotSeq` 作废，
- * 失败不下调已知值，未登录由调用方拦住。
+ * `GET /conversations/unread-count` 聚合），不另造求和规则；迟到的结果由 `snapshotSeq`
+ * 作废，失败不下调已知值，未登录由调用方拦住。
  */
 export function refreshUnread(ownerId: string, demoFallback?: UnreadFallback): void {
   requestUnread(ownerId, demoFallback, 'refresh')

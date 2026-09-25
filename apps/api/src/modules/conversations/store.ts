@@ -83,6 +83,22 @@ function asDate(value: unknown): Date | string | null {
   return value == null ? null : (value as Date | string)
 }
 
+/**
+ * 会话行摘要的可读文案。
+ *
+ * TEXT/SYSTEM 直接用 `messages.content`（SYSTEM 的 `tx.*` JSON 由客户端解析）；
+ * MEDIA 的正文不在消息流里，客户端没有别的途径知道是图还是语音，所以这里翻成
+ * `[图片]`/`[语音]`——契约 `conversationLastMessageSchema` 明确 MEDIA 的 content
+ * 就是可读文案。`message_media` 缺失（不该发生的脏数据）时退回 `[媒体]`。
+ */
+function lastMessageContent(row: Record<string, unknown>): string {
+  const mediaKind = row.last_message_media_kind as string | null
+  if (!mediaKind) return row.last_message_content as string
+  if (mediaKind === 'IMAGE') return '[图片]'
+  if (mediaKind === 'VOICE') return '[语音]'
+  return '[媒体]'
+}
+
 /** joined 行 → 读模型。字段名与下面的 SELECT 别名一一对应。 */
 function toDetailRow(row: Record<string, unknown>): ConversationDetailRow {
   return {
@@ -114,7 +130,7 @@ function toDetailRow(row: Record<string, unknown>): ConversationDetailRow {
     lastMessage: row.last_message_created_at
       ? {
           type: row.last_message_type as string,
-          content: row.last_message_content as string,
+          content: lastMessageContent(row),
           senderId: (row.last_message_sender_id as string | null) ?? null,
           createdAt: asDate(row.last_message_created_at) as Date | string,
         }
@@ -129,12 +145,14 @@ function toDetailRow(row: Record<string, unknown>): ConversationDetailRow {
  * 会话列表行的 `unread_count` 子查询与 `countUnread` 的聚合**共用这一份**：分叉会让
  * 底栏红点与列表行在「对方还是 SYSTEM 发的」「未读边界」上各说各话。
  *
- * 未读 = 非 MEDIA、由对方或 SYSTEM（sender_id IS NULL）发出、且晚于我 last_read_at 的消息；
+ * 未读 = 由对方或 SYSTEM（sender_id IS NULL）发出、且晚于我 last_read_at 的消息；
  * 我从未读过（last_read_at IS NULL）时全部计未读。会话严格双人，CASE 由 buyer/seller 二选一。
+ *
+ * 媒体消息（MEDIA）**计入未读**（#67 第四步）：对方发来一张图却不亮红点，用户无从得知。
+ * 列表行的摘要同样不再跳过 MEDIA，两边口径仍由这一份谓词与 `detailSelect` 的 LATERAL 对齐。
  */
 const unreadMessagePredicate = (viewerId: string) => sql`
-  m.type <> 'MEDIA'
-  AND (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
+  (m.sender_id IS NULL OR m.sender_id <> ${viewerId})
   AND (
     (CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END) IS NULL
     OR m.created_at > CASE WHEN c.buyer_id = ${viewerId} THEN c.buyer_last_read_at ELSE c.seller_last_read_at END
@@ -155,6 +173,7 @@ const detailSelect = (viewerId: string) => sql`
          to_char(c.last_message_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
            AS last_message_at_cursor,
          lm.type::text AS last_message_type, lm.content AS last_message_content,
+         lm.media_kind AS last_message_media_kind,
          lm.sender_id AS last_message_sender_id, lm.created_at AS last_message_created_at,
          (SELECT count(*) FROM messages m
           WHERE m.conversation_id = c.id AND ${unreadMessagePredicate(viewerId)}
@@ -163,9 +182,12 @@ const detailSelect = (viewerId: string) => sql`
   JOIN listings l ON l.id = c.listing_id
   JOIN users cu ON cu.id = (CASE WHEN c.buyer_id = ${viewerId} THEN c.seller_id ELSE c.buyer_id END)
   LEFT JOIN LATERAL (
-    SELECT m.type, m.content, m.sender_id, m.created_at
+    -- 摘要不再跳过 MEDIA（#67 第四步）：否则发完图片会话行只剩「打个招呼吧」。
+    -- 媒体正文不在消息流里，所以把 kind 一起带出来，由 toDetailRow 翻成可读文案。
+    SELECT m.type, m.content, m.sender_id, m.created_at, mm.kind::text AS media_kind
     FROM messages m
-    WHERE m.conversation_id = c.id AND m.type <> 'MEDIA'
+    LEFT JOIN message_media mm ON mm.message_id = m.id
+    WHERE m.conversation_id = c.id
     ORDER BY m.created_at DESC, m.id DESC
     LIMIT 1
   ) lm ON TRUE

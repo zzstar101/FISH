@@ -18,6 +18,7 @@ import {
 } from '@fish/contracts/chat/schema'
 import { newId } from '@fish/db/ids'
 import { CHAT_MEDIA_PREFIX, type MediaStorage } from '../uploads/storage'
+import { MessageIdempotencyConflictError, mediaRequestHash, messageSendKey } from './idempotency'
 import { probeImage, probeVoiceDuration } from './media-probe'
 import type { MediaListCursor, MediaMessageStore, MediaRow } from './media-store'
 
@@ -34,6 +35,13 @@ export class MediaMessageServiceError extends Error {
 
 const notFound = () => new MediaMessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
 const invalid = (code: string, message: string) => new MediaMessageServiceError(422, code, message)
+/** 同键不同内容：拒绝而不是静默返回旧媒体，否则调用方会以为新内容已送达（丢消息）。 */
+const idempotencyConflict = () =>
+  new MediaMessageServiceError(
+    409,
+    'IDEMPOTENCY_KEY_REUSED',
+    '同一个 clientRequestId 携带了不同内容',
+  )
 
 /** 按 kind 返回该类型允许的真实字节上限（防御纵深：presign 只校验客户端声明值）。 */
 function maxBytesFor(kind: MediaKind): number {
@@ -156,6 +164,22 @@ export function createMediaMessageService({
     },
     async create(userId, conversationId, input) {
       if (!(await store.participant(conversationId, userId))) throw notFound()
+      // #67 幂等键：指纹取客户端**预签名 key** 与声明元数据；未携带键时为 null。
+      const sendKey = messageSendKey(input.clientRequestId, mediaRequestHash(input))
+      // 重试快速路径：命中幂等键直接返回既有媒体，跳过 stat / probe / 快照写入。否则每次
+      // 重试都会往存储再写一份永远不会被引用的快照（同一个预签名 key 被客户端复用）。
+      //
+      // 已知取舍：指纹只含预签名 key + 声明元数据，不含对象字节，所以「同键、同声明元数据、
+      // 但对象已被重新 PUT 成别的内容」会被当成重试而重放旧消息。要拦住它必须每次重试都
+      // stat/probe/读全量字节 —— 那正是这条快速路径要避免的开销；且已交付的消息引用的是
+      // 不可变快照，覆盖原 key 不会改变它指向的内容。
+      if (sendKey) {
+        const replay = await store.findByRequestKey(conversationId, userId, sendKey)
+        if (replay) {
+          if (!replay.matchedHash) throw idempotencyConflict()
+          return dto(replay.row, (id) => mediaUrl(conversationId, id))
+        }
+      }
       const prefix = `chat-media/${conversationId}/${userId}/`
       if (!input.objectKey.startsWith(prefix))
         throw invalid('MEDIA_OBJECT_INVALID', '媒体不属于当前用户或会话')
@@ -187,12 +211,23 @@ export function createMediaMessageService({
       // 保存已校验的同一份字节，而非重新读取/复制可被 PUT 覆盖的临时 key。
       const writeSnapshot = storage.writeMediaBytes
       const persist = async (verified: MediaMessageInput) => {
-        const key = `${CHAT_MEDIA_PREFIX}${conversationId}/${userId}/${newId()}`
-        await writeSnapshot(key, bytes, verified.contentType)
-        const result = dto(
-          await store.create(conversationId, userId, { ...verified, objectKey: key }),
-          (id) => mediaUrl(conversationId, id),
-        )
+        const snapshotKey = `${CHAT_MEDIA_PREFIX}${conversationId}/${userId}/${newId()}`
+        await writeSnapshot(snapshotKey, bytes, verified.contentType)
+        let row: MediaRow
+        try {
+          row = await store.create(
+            conversationId,
+            userId,
+            { ...verified, objectKey: snapshotKey },
+            sendKey,
+          )
+        } catch (error) {
+          // 并发同键：store 已用 advisory lock 串行化并把重放读成既有行，这里只是把
+          // 「同键不同内容」翻译成 409。
+          if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
+          throw error
+        }
+        const result = dto(row, (id) => mediaUrl(conversationId, id))
         const participants = await store.participant(conversationId, userId)
         if (participants) onMediaCreated?.(participants, result)
         return result

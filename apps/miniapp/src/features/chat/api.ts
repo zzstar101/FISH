@@ -11,6 +11,7 @@ import {
   type ConversationListResponse,
   conversationDtoSchema,
   conversationListResponseSchema,
+  conversationUnreadCountSchema,
   type MessageDto,
   type MessageListResponse,
   messageDtoSchema,
@@ -49,15 +50,16 @@ export async function fetchConversations(): Promise<ConversationDto[]> {
 /**
  * 会话未读条数和（底栏「消息」红点用）。
  *
- * 契约没有「会话未读总数」端点，只能对**第一页**（契约上限 50 条）求和。为什么
- * 不循环游标取全：冷启动为了点一颗红点把用户的全部会话都拉一遍，代价与收益不成
- * 比例。已知边界：会话多于 50 且更早那批里还有未读时会漏计 —— 根治要后端补一个
- * unread-count 端点（与 #23 通知的 `GET /notifications/unread-count` 对齐）。
- * 至少它和 Chat 页首屏用的是同一页数据，「页内角标」与「底栏红点」不会互相打架。
+ * 走服务端聚合的 `GET /conversations/unread-count`（#67）。此前是对**第一页**
+ * 会话（契约上限 50 条）求和，会话多于 50 且更早那批里还有未读时会漏计 ——
+ * 底栏那颗点只为一个数字，不该受列表分页影响。
+ *
+ * 请求失败时**照常抛出**，由 `features/chat/unread` 记成「不知道」（`null`）：
+ * 一个没读到的总数不能被当成 0，那会把「还有未读」误判成「没有未读」。
  */
 export async function fetchConversationUnreadCount(): Promise<number> {
-  const items = await fetchConversations()
-  return items.reduce((sum, item) => sum + item.unreadCount, 0)
+  const payload = await apiRequest(CHAT_ROUTES.unreadCount)
+  return conversationUnreadCountSchema.parse(payload).unreadCount
 }
 
 /** 单个会话详情（深链进来时拿对方摘要与商品卡；404 由调用方按「会话不存在」处理） */

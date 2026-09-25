@@ -93,7 +93,24 @@ describe('#170 D 接线层：底栏在显示时刷新未读', () => {
     expect(block).toContain('refreshUnread(ownerId, demoUnread)')
     // 补数在「已有快照」时会直接返回，拿它当显示时刷新等于永远不刷新
     expect(block).not.toContain('hydrateUnread(')
-    expect(code.split('refreshUnread(').length - 1).toBe(1)
+    // 两条刷新入口：页面显示（`useDidShow`）与整包回到前台（`Taro.onAppShow`，#67 第三步）；
+    // 冷启动补数仍然只有挂载期那一次
+    expect(code.split('refreshUnread(').length - 1).toBe(2)
+    expect(code.split('hydrateUnread(').length - 1).toBe(1)
+  })
+
+  test('整包回到前台也刷新，且注册 / 注销成对（#67 第三步与 #170 D 并存）', async () => {
+    const code = stripComments(await source())
+    const block = sliceFrom(code, 'const refreshRef = useRef', '}, [])')
+    expect(block).toContain('Taro.onAppShow(onShow)')
+    // 不注销的话每次重挂底栏都会多一个监听器，一次前台事件打多次请求
+    expect(block).toContain('Taro.offAppShow(onShow)')
+    // 判据与显示链同一份（不是另写一套 `authed && userId`），且同样走 store 的刷新入口
+    expect(block).toContain('refreshTargetOnShow({')
+    expect(block).toContain("authed: authStatus === 'authed'")
+    // 出物页不渲染底栏：这条路径也要带上同一个「出物页不刷」判据，不能只顾显示链
+    expect(block).toContain('hiddenRoute: currentRoute().includes(HIDDEN_ROUTE)')
+    expectBefore(block, 'if (!ownerId) return', 'refreshUnread(ownerId, demoUnread)')
   })
 
   test('不跳过任何一次显示（每个 Tab 页各一份实例，跳过首次 = 该页第一次打开不刷新）', async () => {
