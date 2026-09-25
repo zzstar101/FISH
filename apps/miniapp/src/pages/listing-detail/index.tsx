@@ -18,12 +18,13 @@
 
 import type { CommentDto } from '@fish/contracts/comments/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
-import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import { useAuth } from '@/features/auth/store'
 import { loadListingDetail } from '@/features/fetchers'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -37,6 +38,28 @@ import {
   type MockListing,
 } from '@/mock/api'
 import { findUser } from '@/mock/users'
+import {
+  beginReloadWrite,
+  beginTask,
+  type CommentsRead,
+  clearedPrivateScope,
+  consumeDeferredReload,
+  createDeferredReload,
+  dropPendingComments,
+  hasInflightWrites,
+  isLatestLoad,
+  isOwnerSwitch,
+  isReloadDue,
+  isTaskCurrent,
+  mergeRefreshedComments,
+  ownerChanged,
+  PENDING_COMMENT_PREFIX,
+  requestDeferredReload,
+  resolveRefreshedComments,
+  settleReloadWrite,
+  shouldRefreshOnShow,
+  shouldSurfaceStaleAuthFailure,
+} from './view'
 import './index.scss'
 
 /** 拿不到 id 时的回退商品 */
@@ -91,7 +114,8 @@ let localSeq = 0
 function localComment(content: string): CommentNode {
   localSeq += 1
   return {
-    id: `local-${localSeq}`,
+    // 前缀是 `view.ts` 的判据常量：切号清场靠它认出「还没被服务端确认」的占位
+    id: `${PENDING_COMMENT_PREFIX}${localSeq}`,
     authorName: '我',
     authorInitial: '我',
     isSeller: false,
@@ -143,19 +167,23 @@ function mockCommentToNode(comment: MockComment): CommentNode {
  *
  * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（开发 / 预览）或空列表
  * （生产），商品详情本身照常渲染。
+ *
+ * 返回值必须带上**成败**（#170 复查 N6）：`status: 'failed'` 的兜底列表只给首次加载用，
+ * 静默刷新拿到失败结果时不能拿它去合并（那会把已经显示的留言和游标清掉，见 `./view` 的
+ * `resolveRefreshedComments`）。
  */
 async function loadComments(
   id: string,
   mockFallback: MockComment[],
-): Promise<{ comments: CommentNode[]; nextCursor: string | null }> {
+): Promise<CommentsRead<CommentNode>> {
   try {
     const page = await fetchComments(id)
-    return { comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }
+    return { status: 'ok', comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }
   } catch (error) {
     logCommentFailure('留言列表', error)
     // 开发 / 预览口径下 `loadListingDetail` 已经回退 fixture，这里跟着用同一批 mock 留言；
     // 生产口径拿不到就是空列表（不编数据）。
-    return { comments: mockFallback.map(mockCommentToNode), nextCursor: null }
+    return { status: 'failed', comments: mockFallback.map(mockCommentToNode) }
   }
 }
 
@@ -264,16 +292,76 @@ export default function ListingDetail() {
   const loadingMoreRef = useRef(false)
   /** 组件是否还挂着；卸载后不再 setState（翻页是多次 await，中途离开页面很常见）。 */
   const mountedRef = useRef(true)
-  useEffect(
-    () => () => {
-      mountedRef.current = false
-    },
-    [],
-  )
   const [commentInput, setCommentInput] = useState('')
   /** 正在回复哪条顶层留言（`null` = 没有展开回复行）；稿子同时只开一行 */
   const [replyTo, setReplyTo] = useState<string | null>(null)
   const [replyInput, setReplyInput] = useState('')
+
+  /**
+   * 当前账号。
+   *
+   * 本页是**公开页**：不挂 `useAuthGuard`，匿名也能读；账号只用来决定「哪些是账号
+   * 私有的东西、换号时该清掉」（#170 判据 C）。
+   */
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+  /** 上一个渲染看到的账号：换号要在**渲染期**同步清场，用 effect 会晚一帧画出上个账号的草稿 */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  /** 账号世代：换号与卸载都 +1，让在途写入的迟到响应作废 */
+  const epochRef = useRef(0)
+  /** 异步回调（`.then` / `.catch` / `useDidShow`）里读账号要拿**当前**值，不能读闭包里的旧值 */
+  const ownerRef = useRef<string | null>(null)
+  ownerRef.current = userId
+  /** 详情 / 留言读取的请求序号：重试与返回刷新只有最新那一次能写入（判据 D） */
+  const loadSeqRef = useRef(0)
+  /** 当前留言树：`refresh` 起飞时要按它记下 id 快照，而它可能从更早一帧的闭包里被调到 */
+  const commentsRef = useRef<CommentNode[]>([])
+  commentsRef.current = comments
+  /**
+   * 返回刷新与在途写入的账（判据 D），并且**归当前账号所有**（判据 C）。
+   *
+   * 旧实现是一个裸计数 + 一个裸布尔：A 的在途写入迟到结算时会替 B 销账，还能用 A
+   * 留下的标记在 B 的页面上补跑一次刷新。带上 epoch 之后，带旧 epoch 的结算一律不认。
+   */
+  const reloadRef = useRef(createDeferredReload())
+  /** 首次 show 让给 `useLoad` 的首屏加载，免得一进页双发 */
+  const firstShowRef = useRef(true)
+
+  /**
+   * 换号 / 退出：渲染期同步清掉账号私有的 state。
+   *
+   * 公开快照（`data` / `loadState` / 已确认的 `comments`）**不清** —— 商品与已发布的
+   * 留言对任何账号都是同一份，清了只会白闪一次骨架屏。
+   */
+  if (ownerChanged(prevUserId, userId)) {
+    setPrevUserId(userId)
+    epochRef.current += 1
+    // 在途写入的账整本换新：上一代的结算带的是旧 epoch，从此一律不认 —— 既不能替
+    // 新账号销账，也不能用上一代留下的 deferred 标记在新账号的页面上补跑一次刷新
+    reloadRef.current = createDeferredReload(epochRef.current)
+    // 读取链同样是账号作用域：真正的换号要把在途的 load / refresh / 翻页一并作废，
+    // 迟到的公开快照不许写进新账号的页面。冷启动解析身份（null → id）不算换号，
+    // 那会把首屏 `load` 判过期、页面永远停在骨架屏上
+    if (isOwnerSwitch(prevUserId)) loadSeqRef.current += 1
+    const cleared = clearedPrivateScope()
+    setCommentInput(cleared.commentInput)
+    setReplyInput(cleared.replyInput)
+    setReplyTo(cleared.replyTo)
+    setFaved(cleared.faved)
+    // 未确认的占位属于上一个账号：清场后它的 .then / .catch 已被 epoch 作废，
+    // 留着就是一条永远等不到确认、却对下一个账号可见的幽灵留言。
+    setComments((prev) => dropPendingComments(prev))
+  }
+
+  useEffect(
+    () => () => {
+      mountedRef.current = false
+      // 卸载也作废在途任务：迟到的读取与写入都不该再碰一个已经不在的页面
+      epochRef.current += 1
+      loadSeqRef.current += 1
+    },
+    [],
+  )
 
   const metrics = useMemo(() => readNavMetrics(), [])
 
@@ -315,12 +403,16 @@ export default function ListingDetail() {
   })
 
   const load = () => {
+    loadSeqRef.current += 1
+    const seq = loadSeqRef.current
     // 重试先清残留：上一轮的 notFound / failed 终态与旧数据不能带进新一轮加载（#121）
     setData(null)
     setLoadState('loading')
     // 三态分明：`ok` 渲染详情、`notFound` 走空态（商品真不存在）、
     // `failed` 走错误态 —— 生产口径不退回 mock，拿演示商品顶上比空态更误导
     void loadListingDetail(id).then(async (result) => {
+      // 迟到的一轮不能盖掉最新一轮（判据 D：重试不接受陈旧响应）
+      if (!isLatestLoad(seq, loadSeqRef.current)) return
       const view = result.status === 'ok' ? result.view : null
       setData(view)
       setLoadState(result.status === 'ok' ? 'ok' : result.status)
@@ -328,8 +420,11 @@ export default function ListingDetail() {
       // 留言异步加载（不等详情的终态）：失败不拖垮整页，也不丢掉已拿到的商品信息。
       if (view) {
         const loaded = await loadComments(id, view.comments)
+        if (!isLatestLoad(seq, loadSeqRef.current)) return
+        // 首次加载 / 重试：留言读失败仍展示兜底列表（既有口径），但分页游标只在**成功**
+        // 读取时才收下 —— 失败时那个 `null` 不是「没有下一页」，是「不知道」。
         setComments(loaded.comments)
-        setCommentsCursor(loaded.nextCursor)
+        setCommentsCursor(loaded.status === 'ok' ? loaded.nextCursor : null)
       } else {
         setComments([])
         setCommentsCursor(null)
@@ -337,8 +432,89 @@ export default function ListingDetail() {
     })
   }
 
+  /**
+   * 从子页返回时的**静默**同步（#170 判据 D）。
+   *
+   * 与 `load` 的区别是**不**清残留、**不**回骨架屏：返回时把已经读起来的商品与留言
+   * 整页拆掉重建，等于每次返回都打断一次阅读。刷新失败也保留现有内容 —— 一次网络
+   * 抖动不该把画好的页面翻成错误态；只有服务端明确说这件商品没了（下架 / 删除）
+   * 才切空态，否则页面会永远停在过期快照上。
+   *
+   * 留言这条链同理（#170 复查 N6）：留言请求失败时既不动已有留言也不动分页游标，
+   * 而不是把失败兜底的空列表当成「服务端说没有留言」合并进去。
+   */
+  const refresh = () => {
+    loadSeqRef.current += 1
+    const seq = loadSeqRef.current
+    // 刷新**起飞这一刻**的 id 快照（含嵌套回复）：落地时用它认出「刷新期间才落地的写入」。
+    // 没有它就只能整体覆盖留言树，把用户刚发的那条抹掉 —— 而它的 `.then` 随后已经找不到
+    // 自己的节点，服务端写成功了、界面上却凭空消失（判据 D，见 `./view` 的合并规则）
+    const baseIds = new Set(
+      commentsRef.current.flatMap((node) => [node.id, ...node.replies.map((reply) => reply.id)]),
+    )
+    void loadListingDetail(id).then(async (result) => {
+      if (!isLatestLoad(seq, loadSeqRef.current)) return
+      if (result.status !== 'ok') {
+        if (result.status === 'notFound') {
+          setData(null)
+          setLoadState('notFound')
+          setComments([])
+          setCommentsCursor(null)
+        }
+        return
+      }
+      setData(result.view)
+      setLoadState('ok')
+      const loaded = await loadComments(id, result.view.comments)
+      if (!isLatestLoad(seq, loadSeqRef.current)) return
+      // 留言读失败时**不落地**（#170 复查 N6）：保留已经显示出来的留言与游标，等下一次
+      // 刷新重试。一次网络抖动不该把留言清空 —— 那和「服务端真的没有留言」是两回事。
+      // 成功读到空列表照常合并：那是服务端确认过的空，不能永久停在旧快照上。
+      const applied = resolveRefreshedComments(loaded)
+      if (!applied) return
+      setComments((prev) => mergeRefreshedComments(prev, applied.comments, baseIds))
+      setCommentsCursor(applied.nextCursor)
+    })
+  }
+
+  /**
+   * 进入「要刷新」这一步：本代还有写入在飞就先记账延后（`#170` 判据 D 的「写入在飞
+   * 可延后，但不能丢掉这次刷新」）。
+   *
+   * 乐观占位本身由 `refresh` 的合并规则兜住（刷新期间落地的写入不会被覆盖），延后是
+   * 为了别让一次返回刷新与用户刚点的发送抢同一份列表状态；记账而不是取消，所以写入
+   * 结算后由 `sendComment` / `sendReply` 的 `finally` 补跑一次，这次刷新不会被丢掉。
+   */
+  const requestRefresh = () => {
+    if (hasInflightWrites(reloadRef.current)) {
+      reloadRef.current = requestDeferredReload(reloadRef.current)
+      return
+    }
+    refresh()
+  }
+
+  /**
+   * 一笔写入结算：先按**发起这次写入时**的 epoch 销账（旧世代的结算原样返回 —— 既不替
+   * 新账号销账，也不代表新账号没有在途写入），再看被延后的那次返回刷新该不该补跑
+   * （`finally` 无论成败都会到这里）。
+   */
+  const finishWrite = (epoch: number) => {
+    reloadRef.current = settleReloadWrite(reloadRef.current, epoch)
+    if (!isReloadDue(reloadRef.current)) return
+    reloadRef.current = consumeDeferredReload(reloadRef.current)
+    refresh()
+  }
+
   useLoad(() => {
     load()
+  })
+
+  useDidShow(() => {
+    // 首次 show 与 `useLoad` 的首屏加载是同一次进入，跳过免得双发
+    const firstShow = firstShowRef.current
+    firstShowRef.current = false
+    if (!shouldRefreshOnShow(firstShow)) return
+    requestRefresh()
   })
 
   const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
@@ -371,21 +547,40 @@ export default function ListingDetail() {
   const sendComment = () => {
     const content = commentInput.trim()
     if (!content) return
+    // 铸任务必须在发请求**之前**：之后换号也能凭 epoch 把这次写入（连同回调里的
+    // setState 与 toast 副作用）整条作废，而不是写进下一个账号的页面（判据 C）
+    const task = beginTask(epochRef.current, ownerRef.current)
+    // 在途写入的账也在发请求**之前**记下，且记在当前账号这一代上：返回刷新要等它结算
+    reloadRef.current = beginReloadWrite(reloadRef.current, task.epoch)
     // 先算好再进 updater：updater 必须是纯函数，在里面自增 `localSeq` 会带副作用
     const pending = localComment(content)
     setComments((prev) => [pending, ...prev])
     setCommentInput('')
     void postComment(id, content)
       .then((created) => {
+        if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return
         // 用真实 DTO 换掉占位：拿到真实 id 后才能对它发起回复。
         setComments((prev) =>
           prev.map((node) => (node.id === pending.id ? dtoToNode(created) : node)),
         )
       })
       .catch((error) => {
+        // 迟到失败不回滚也不弹提示：占位已随换号清场作废，提示该弹在发起它的账号上。
+        // 例外是**会话过期**（401）：`apiRequest` 会就地清会话、store 同步回到匿名，
+        // 于是这次失败在守卫看来也是「迟到的」，可失败的正是本人 —— 静默吞掉等于
+        // 「点了发送，什么都没发生」，那种情况仍要把失败说出来（见 `./view`）
+        if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) {
+          if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
+            notifyCommentFailure('留言', error)
+          }
+          return
+        }
         // 回滚本地占位 + 可见反馈；不回滚就会把失败说成成功。
         setComments((prev) => prev.filter((node) => node.id !== pending.id))
         notifyCommentFailure('留言', error)
+      })
+      .finally(() => {
+        finishWrite(task.epoch)
       })
   }
 
@@ -393,6 +588,9 @@ export default function ListingDetail() {
   const sendReply = (commentId: string) => {
     const content = replyInput.trim()
     if (!content) return
+    // 同 `sendComment`：任务与在途写入的账都先记，换号后整条写入连同副作用一起作废
+    const task = beginTask(epochRef.current, ownerRef.current)
+    reloadRef.current = beginReloadWrite(reloadRef.current, task.epoch)
     const pending = localComment(content)
     setComments((prev) =>
       prev.map((node) =>
@@ -403,6 +601,7 @@ export default function ListingDetail() {
     setReplyTo(null)
     void postReply(commentId, content)
       .then((created) => {
+        if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return
         const reply = dtoToNode(created)
         setComments((prev) =>
           prev.map((node) =>
@@ -416,6 +615,13 @@ export default function ListingDetail() {
         )
       })
       .catch((error) => {
+        // 会话过期的例外同 `sendComment`：失败的是本人，必须说出来
+        if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) {
+          if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
+            notifyCommentFailure('回复', error)
+          }
+          return
+        }
         setComments((prev) =>
           prev.map((node) =>
             node.id === commentId
@@ -424,6 +630,9 @@ export default function ListingDetail() {
           ),
         )
         notifyCommentFailure('回复', error)
+      })
+      .finally(() => {
+        finishWrite(task.epoch)
       })
   }
 
@@ -453,6 +662,9 @@ export default function ListingDetail() {
     // 先在局部累积、成功后一次性 setComments：中途失败重试若逐页 append，
     // 会把上一次已追加的页再追加一遍（重复留言）。
     const more: CommentNode[] = []
+    // 记住出发时的读取世代：翻页途中若有重试或返回刷新重来过，这一批就是按旧列表
+    // （旧游标）拼的，追加进去会把同一页留言重复一遍
+    const seq = loadSeqRef.current
     try {
       // 上游页码上限兜底：游标是服务端给的不透明串，服务端 bug 不能让这里转死循环。
       // 上限 20 页 × 单页 50 = 1000 条，远超设计稿需求。
@@ -462,6 +674,7 @@ export default function ListingDetail() {
         cursor = page.nextCursor
       }
       if (!mountedRef.current) return
+      if (!isLatestLoad(seq, loadSeqRef.current)) return
       setComments((prev) => [...prev, ...more])
       setCommentsCursor(cursor)
     } catch (error) {
