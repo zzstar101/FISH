@@ -126,7 +126,7 @@ export function canLoadEditTarget(authed: boolean, userId: string | null): boole
  * 换号清场时，是否该丢掉「待交接的编辑目标」。
  *
  * `null → 已登录`不一定是换号：冷启动时身份先从 `unknown` 解析出来，页面在身份未就绪的
- * 窗口里收到的编辑目标（`?id=` / `takeSellEdit()`）必须先记下来、等身份就绪再交接
+ * 窗口里收到的编辑目标（`?id=` / `takeSellHandoff()`）必须先记下来、等身份就绪再交接
  * （见 `canLoadEditTarget`）。这时把它当成上一个账号的残留清掉，就会静默退回空表单。
  *
  * 真正的换号（退出、切到别人）都从**已知账号**出发，那时残留才确实属于上一个账号。

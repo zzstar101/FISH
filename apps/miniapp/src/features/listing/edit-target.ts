@@ -13,8 +13,9 @@
  * 两种模式的区别：
  *
  * - `edit`：**改这一条**（`PATCH /listings/:id`，图片只读）；
- * - `prefill`：「已售出」的**再次上架**用 —— 契约只有 `POST /listings/:id/online`（`OFFLINE → ACTIVE`，
- *   同一条回来），没有「照一条成交记录另起一条在售」的端点，所以再次上架只能**新发布一条**：
+ * - `prefill`：「已售出」的**再次上架**与「已下架」的**重新上架**共用 —— 契约只有
+ *   `POST /listings/:id/online`（`OFFLINE → ACTIVE`，同一条回来），没有「照一条成交 / 下架记录
+ *   另起一条在售」的端点，所以这两口子都只能**新发布一条**：
  *   把原商品的文案字段带过去，图片必须重选（详情响应刻意不给 `objectKey`，存储布局不进读协议）。
  *
  * **取一次就失效**（`takeSellHandoff` 立即清空）是刻意的：否则用户之后再从底栏点「出物」
@@ -46,7 +47,7 @@ export function requestSellEdit(listingId: string): void {
   pending = { kind: 'edit', listingId }
 }
 
-/** 我的发布页调用（已售出的「再次上架」）：请求出物页带着这些字段进新建态 */
+/** 我的发布页调用（已售出的「再次上架」/ 已下架的「重新上架」）：请求出物页带着这些字段进新建态 */
 export function requestSellPrefill(draft: SellDraft): void {
   pending = { kind: 'prefill', draft }
 }

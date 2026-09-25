@@ -523,13 +523,20 @@ export default function MyList() {
    * （商品读模型不带描述，`adapt.ts` 显式留空），拿它预填就等于把描述悄悄丢掉。
    * 这多出来的一次请求换来的是「预填的内容就是原商品的内容」，值。
    * 图片必须重选（详情不给 `objectKey`）。
+   *
+   * **这一次请求也按代次收口**（与商品列表 / 待确认索引同一把尺子，见 `loadEpoch`）：
+   * 交接是模块级变量、不带账号标记，出物页的渲染期清场救不了它 —— `useDidShow` 在清场
+   * 之后才 `takeSellHandoff()`。所以详情在飞期间换了号，A 的文案就不能再灌进 B 的表单，
+   * 连 `switchTab` 也一并省掉（那时候用户已经不在等这一下了）。
    */
   const relist = (row: Row) => {
     if (relistBusy) return
     setRelistBusy(row.listing.id)
     void (async () => {
+      const epoch = loadEpoch.current
       try {
         const detail = await fetchListingDetail(row.listing.id)
+        if (epoch !== loadEpoch.current) return
         if (!detail) {
           toast('这件商品已经找不到了')
           return
