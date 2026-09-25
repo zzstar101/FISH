@@ -6,6 +6,7 @@ import {
   loadWechatEnv,
 } from '@fish/shared/env'
 import { createApp } from './app'
+import { resolveClientIp } from './client-ip'
 import { websocket } from './ws'
 
 const env = loadServerEnv()
@@ -28,9 +29,17 @@ if (wechatEnv.transport === 'stub') {
   console.warn('[api] WECHAT_TRANSPORT=stub：微信登录/手机号绑定走演示凭证，不验证微信签发')
 }
 
-const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv)
+// `clientIp` 只能从 Bun 的 server 拿（`server.requestIP`）：请求头里的 XFF 是客户端可伪造的。
+// 因此先声明占位、在回调里读取——`createApp` 只会在请求到来时调用它，那时 server 已赋值。
+let server: ReturnType<typeof Bun.serve> | undefined
+const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv, (request) =>
+  resolveClientIp({
+    peerAddress: server?.requestIP(request)?.address ?? null,
+    forwardedFor: request.headers.get('x-forwarded-for'),
+  }),
+)
 
-const server = Bun.serve({
+server = Bun.serve({
   port: env.API_PORT,
   fetch: app.fetch,
   websocket,

@@ -102,7 +102,10 @@ type TokenFetchDeps = {
 }
 
 export function createWechatAccessTokenService(deps: TokenFetchDeps): WechatAccessTokenService {
-  const doFetch = deps.fetchImpl ?? fetch
+  // 默认 fetch **在调用时**解析，而不是构造时捕获：进程是长驻的，且测试会替换全局 fetch
+  // （app 级用例没法往 createApp 内部注入 fetchImpl）。
+  const doFetch = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    (deps.fetchImpl ?? fetch)(input, init)
   const now = deps.now ?? (() => Date.now())
   const timeoutMs = deps.timeoutMs ?? WECHAT_PLATFORM_TIMEOUT_MS
 
@@ -231,7 +234,8 @@ export function createWechatMiniappCodeClient(deps: {
   /** 注入点：单测把超时压到毫秒级。 */
   timeoutMs?: number
 }): WechatMiniappCodeClient {
-  const doFetch = deps.fetchImpl ?? fetch
+  const doFetch = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    (deps.fetchImpl ?? fetch)(input, init)
   const timeoutMs = deps.timeoutMs ?? WECHAT_PLATFORM_TIMEOUT_MS
 
   return {

@@ -64,6 +64,13 @@ export type ScanVerifier = z.infer<typeof ScanVerifierSchema>
 /** `verifier` 的传输位置：请求头而不是 query（不进 URL 就不会进日志与浏览器历史）。 */
 export const SCAN_VERIFIER_HEADER = 'X-Scan-Verifier'
 
+/**
+ * 扫码后要打开的小程序页面。放在契约里是因为它有**两个消费方**：API 用 `getUnlimitedQRCode`
+ * 的 `page` 出码、小程序侧保证这个页面存在——两边各写一份字符串迟早会漂移。
+ * 不带前导 `/`，也不能带参数（参数只能放进 `scene`，微信官方要求）。
+ */
+export const SCAN_CONFIRM_PAGE = 'pages/login-confirm/index'
+
 /** 访问路径参数里的 ticket 与请求头里的 verifier，服务端用同一个形状门禁。 */
 export const ScanTicketParamSchema = z.strictObject({ ticket: ScanTicketSchema })
 

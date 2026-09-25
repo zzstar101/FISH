@@ -472,13 +472,15 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const base = `http://127.0.0.1:${port}`
     // `WEB_ORIGIN` 不覆盖：用 `.env` 里的文档值（它决定 CORS 与 cookie 的 Secure 属性）。
     // MAIL_TRANSPORT：smoke 是本地环境，走 dev outbox（#68 的显式 transport 配置）。
-    // WECHAT_TRANSPORT：#86 评审 P1 后 transport 无默认值——smoke 不碰微信入口，
-    // 显式 off，不依赖调用方环境（本机 .env 的 stub 不漏进子进程）。
+    // WECHAT_TRANSPORT：#86 评审 P1 后 transport 无默认值，这里显式 pin，不依赖调用方环境
+    // （本机 .env 的值不漏进子进程）。**必须是 stub 而不是 off**：扫码登录主链（#197）
+    // 要能建票，off 会让建票端点直接 503；stub 不验证微信签发的凭证，只用于本地/CI，
+    // 生产禁 stub（loader 在 NODE_ENV=production 下直接拒绝）。
     api = spawnChild('apps/api/src/index.ts', {
       ...dbEnv,
       API_PORT: String(port),
       MAIL_TRANSPORT: 'outbox',
-      WECHAT_TRANSPORT: 'off',
+      WECHAT_TRANSPORT: 'stub',
     })
     await waitFor('API /health → 200', async () => {
       try {
@@ -1028,6 +1030,72 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       ((await readJson(afterTerminal)).error as { code: string }).code,
       'TRANSACTION_NOT_IN_PENDING',
       '终态后取码错误码是 TRANSACTION_NOT_IN_PENDING',
+    )
+
+    // ---- 扫码登录（#197）：建票 → 小程序确认 → 浏览器兑换 ----
+    // 这条链横跨「匿名建票」「小程序会话」「一次性兑换」三段，任何一段的契约或事务语义被
+    // 改坏，这里都会红。stub transport 下没有真小程序码（qrCodeDataUrl 为 null），
+    // 但票据与兑换语义与 live 完全一致——真码属于平台侧验收，不在这里冒充。
+    step = '扫码登录'
+    section('扫码登录：建票 → 确认 → 兑换 → 新会话可用')
+
+    const ticketRes = await postJson(base, '/auth/wechat/scan/ticket', {})
+    assertEqual(ticketRes.status, 200, '匿名建票 → 200')
+    assertEqual(ticketRes.headers.get('cache-control'), 'no-store', '建票响应带 no-store')
+    const ticketBody = await readJson(ticketRes)
+    const scanTicket = String(ticketBody.ticket)
+    const scanVerifier = String(ticketBody.verifier)
+    assert(/^[A-Za-z0-9_-]{22}$/.test(scanTicket), 'ticket 是 22 字符 base64url')
+    assert(/^[0-9a-f]{64}$/.test(scanVerifier), 'verifier 是 64 字符小写 hex')
+    assertEqual(ticketBody.qrCodeDataUrl, null, 'stub 下不生成真码（qrCodeDataUrl 为 null）')
+
+    // 小程序侧：微信登录换 FISH 会话（stub provider 从 code 确定性派生 openid）
+    const wechatLogin = await postJson(base, '/auth/wechat/session', { code: 'smoke-scan-code' })
+    assertEqual(wechatLogin.status, 200, '小程序微信登录 → 200')
+    const miniappCookie = cookieOf(wechatLogin)
+
+    const scanConfirm = await fetch(
+      new URL(`/auth/wechat/scan/ticket/${scanTicket}/confirm`, base),
+      { method: 'POST', headers: { cookie: miniappCookie } },
+    )
+    assertEqual(scanConfirm.status, 204, '小程序确认 → 204')
+    assertEqual(scanConfirm.headers.get('cache-control'), 'no-store', '确认响应带 no-store')
+
+    const scanStatus = await fetch(new URL(`/auth/wechat/scan/ticket/${scanTicket}`, base), {
+      headers: { 'X-Scan-Verifier': scanVerifier },
+    })
+    assertEqual(scanStatus.status, 200, '持正确 verifier 查状态 → 200')
+    const scanStatusBody = await readJson(scanStatus)
+    assertEqual(scanStatusBody.status, 'confirmed', '确认后状态是 confirmed')
+    assert(
+      typeof (scanStatusBody.user as { id?: unknown } | undefined)?.id === 'string',
+      'confirmed 状态带最小账号投影',
+    )
+
+    const scanExchange = await fetch(
+      new URL(`/auth/wechat/scan/ticket/${scanTicket}/exchange`, base),
+      { method: 'POST', headers: { 'X-Scan-Verifier': scanVerifier } },
+    )
+    assertEqual(scanExchange.status, 200, '浏览器兑换 → 200')
+    const webCookie = cookieOf(scanExchange)
+    const exchangedMe = await get(base, '/me', webCookie)
+    assertEqual(exchangedMe.status, 200, '兑换出的会话可用（GET /me → 200）')
+    const exchangedUserId = ((await readJson(exchangedMe)).user as { id: string }).id
+    assertEqual(
+      exchangedUserId,
+      (scanStatusBody.user as { id: string }).id,
+      '兑换出的会话就是小程序确认的那个用户',
+    )
+
+    const replayExchange = await fetch(
+      new URL(`/auth/wechat/scan/ticket/${scanTicket}/exchange`, base),
+      { method: 'POST', headers: { 'X-Scan-Verifier': scanVerifier } },
+    )
+    assertEqual(replayExchange.status, 404, '同一张票重复兑换 → 404')
+    assertEqual(
+      ((await readJson(replayExchange)).error as { code: string }).code,
+      'SCAN_TICKET_INVALID',
+      '重复兑换的错误码是 SCAN_TICKET_INVALID',
     )
   } finally {
     await stopWorker()
