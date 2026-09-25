@@ -65,12 +65,29 @@ export function mediaRequestHash(input: MediaMessageInput): string {
   return sha256Hex(join(parts))
 }
 
+/**
+ * UUID 的规范形式（小写）。
+ *
+ * Pg 的 `uuid` 类型把大小写两种文本表示当成**同一个值**，路由的 `UUID_PATTERN` 也带 `/i`
+ * 接受大写；但 `client_request_id` 是 **text** 列，advisory lock 的输入更是普通字符串。
+ * 不统一规范化就会出现「数据库认为是同一条、锁却认为是两把」的错位：两个同发送者、同
+ * requestId 的并发请求分别用大写/小写路径取得不同的锁，各自查重未命中，最后争用同一
+ * 唯一索引 —— 其中一个以 23505/500 失败，而不是按承诺重放既有消息或返回 409（#67 R11）。
+ *
+ * 锁键、查重与落库值因此统一走这里，与 uuid 列的大小写等价规则保持一致。
+ */
+export function canonicalUuid(value: string): string {
+  return value.toLowerCase()
+}
+
 /** 只有客户端携带了 `clientRequestId` 才启用幂等；旧客户端（缺省）退化为非幂等发送。 */
 export function messageSendKey(
   clientRequestId: string | undefined,
   requestHash: string,
 ): MessageSendKey | null {
-  return clientRequestId ? { clientRequestId, requestHash } : null
+  // 键在构造时就规范化：查重是 text 比较，落库值也必须是规范形式，否则同键的两次尝试
+  // 会被当成两个不同的键而各落一行。
+  return clientRequestId ? { clientRequestId: canonicalUuid(clientRequestId), requestHash } : null
 }
 
 /**
@@ -87,6 +104,13 @@ export function sendKeyLockQuery(
   senderId: string,
   clientRequestId: string,
 ): SQL {
-  const key = `chat-send:${conversationId}:${senderId}:${clientRequestId}`
+  // 三个分量都按 UUID 规范形式拼键。会话/发送者列是 uuid（大小写等价），client_request_id
+  // 是 text（落库前已规范化），三者必须与部分唯一索引的等价规则完全一致。
+  const key = [
+    'chat-send',
+    canonicalUuid(conversationId),
+    canonicalUuid(senderId),
+    canonicalUuid(clientRequestId),
+  ].join(':')
   return sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`
 }

@@ -198,4 +198,74 @@ describe('messages store (integration)', () => {
       ),
     ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
   })
+
+  test('会话路径大小写不同也视为同一把锁：并发重试只落一行且拿到同一条（#67 R11）', async () => {
+    const key = messageSendKey(
+      '01990000-0000-7000-8000-0000000000e6',
+      textRequestHash('大小写会话'),
+    )
+    if (!key) throw new Error('unreachable')
+
+    // 路由的 UUID 正则带 /i，所以 `...C1` 与 `...c1` 都会走到 store；Pg 的 uuid 列把两者
+    // 当成同一个会话，但规范化前锁键是两个不同字符串 → 两把锁 → 各自查重未命中 → 争用
+    // 同一唯一索引，其中一个 23505/500。规范化后必须串行成「全部重放同一条」。
+    const rows = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        store.insertText(
+          index % 2 === 0 ? conversationA.toUpperCase() : conversationA,
+          outsider,
+          '大小写会话',
+          key,
+        ),
+      ),
+    )
+    expect(new Set(rows.map((row) => row.id)).size).toBe(1)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND client_request_id = ${key.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('clientRequestId 大小写不同视为同一个键：重试不新增行（#67 R11）', async () => {
+    // client_request_id 是 text 列，不规范化就会「同一次发送的重试」各落一行。
+    const upper = messageSendKey(
+      '01990000-0000-7000-8000-0000000000E7',
+      textRequestHash('请求标识'),
+    )
+    const lower = messageSendKey(
+      '01990000-0000-7000-8000-0000000000e7',
+      textRequestHash('请求标识'),
+    )
+    if (!upper || !lower) throw new Error('unreachable')
+
+    const first = await store.insertText(conversationA, seller, '请求标识', upper)
+    const retry = await store.insertText(conversationA, seller, '请求标识', lower)
+    expect(retry.id).toBe(first.id)
+
+    const result = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND sender_id = ${seller}
+            AND client_request_id = ${lower.clientRequestId}`,
+    )
+    const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+      count: number
+    }
+    expect(row.count).toBe(1)
+  })
+
+  test('大小写不同的同一键携带不同内容 → 幂等冲突，而不是唯一冲突 500（#67 R11）', async () => {
+    const first = messageSendKey('01990000-0000-7000-8000-0000000000E8', textRequestHash('A'))
+    const second = messageSendKey('01990000-0000-7000-8000-0000000000e8', textRequestHash('B'))
+    if (!first || !second) throw new Error('unreachable')
+
+    await store.insertText(conversationA, buyer, 'A', first)
+    expect(store.insertText(conversationA, buyer, 'B', second)).rejects.toBeInstanceOf(
+      MessageIdempotencyConflictError,
+    )
+  })
 })
