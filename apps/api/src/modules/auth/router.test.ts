@@ -1181,6 +1181,8 @@ describe('loadWechatEnv（#86 评审 P1：配置校验）', () => {
       transport: 'live',
       appid: 'wx123',
       appSecret: 's',
+      // #197：出码版本缺省 release（官方默认，要求小程序已发布）。
+      qrEnvVersion: 'release',
     })
     expect(loadWechatEnv({ WECHAT_TRANSPORT: 'off' })).toEqual({ transport: 'off' })
     expect(loadWechatEnv({ WECHAT_TRANSPORT: 'stub' })).toEqual({ transport: 'stub' })
