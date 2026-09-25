@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   beginReloadWrite,
   beginTask,
+  type CommentsRead,
   clearedPrivateScope,
   consumeDeferredReload,
   createDeferredReload,
@@ -16,6 +17,7 @@ import {
   ownerChanged,
   PENDING_COMMENT_PREFIX,
   requestDeferredReload,
+  resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
   shouldSurfaceStaleAuthFailure,
@@ -431,6 +433,53 @@ describe('详情页返回刷新与服务端快照的合并（#170 判据 D）', 
   })
 })
 
+describe('详情页静默刷新的留言读取成败语义（#170 复查 N6）', () => {
+  test('留言读取失败：这次刷新不落地，已显示的留言与游标保持不动', () => {
+    expect(resolveRefreshedComments<Node>({ status: 'failed', comments: [] })).toBeNull()
+  })
+
+  test('失败分支带着 fixture 兜底列表时同样不落地（兜底只给首次加载用）', () => {
+    const failed: CommentsRead<Node> = { status: 'failed', comments: [node('c-1')] }
+    expect(resolveRefreshedComments(failed)).toBeNull()
+  })
+
+  test('失败与换号交错：结果本身不可落地，旧账号的兜底留言没有机会回填到新账号', () => {
+    // 刷新起飞时是 A、落地时已是 B。守卫先把这次刷新整条作废；即便守卫先放行，
+    // 失败结果也只会得到 `null`（而不是一份「A 的留言」），B 的列表不可能被回填。
+    const failed: CommentsRead<Node> = { status: 'failed', comments: [node('c-a')] }
+    expect(resolveRefreshedComments(failed)).toBeNull()
+  })
+
+  test('成功读到空列表：按服务端确认的空结果更新，不永久保留旧快照', () => {
+    const applied = resolveRefreshedComments<Node>({ status: 'ok', comments: [], nextCursor: null })
+    expect(applied).toEqual({ comments: [], nextCursor: null })
+    // 刷新起飞时见过的旧留言既不在快照里、也不在 baseIds 之外 ⇒ 以快照为准被移除
+    expect(
+      mergeRefreshedComments([node('c-1')], applied?.comments ?? [], new Set(['c-1'])),
+    ).toEqual([])
+  })
+
+  test('成功读到空列表：刷新期间新写入的那条仍然留住', () => {
+    const applied = resolveRefreshedComments<Node>({ status: 'ok', comments: [], nextCursor: null })
+    const merged = mergeRefreshedComments(
+      [pendingNode(9), node('c-1')],
+      applied?.comments ?? [],
+      new Set(['c-1']),
+    )
+    expect(merged.map((entry) => entry.id)).toEqual([`${PENDING_COMMENT_PREFIX}9`])
+  })
+
+  test('成功读取带回留言与游标：一起交给合并与游标提交', () => {
+    const incoming = [node('c-2')]
+    const applied = resolveRefreshedComments<Node>({
+      status: 'ok',
+      comments: incoming,
+      nextCursor: 'c-2',
+    })
+    expect(applied).toEqual({ comments: incoming, nextCursor: 'c-2' })
+  })
+})
+
 /** 取 `index.tsx` 里 `from` 到其后第一个 `to` 之间的源码 */
 async function source(): Promise<string> {
   return await Bun.file(new URL('../src/pages/listing-detail/index.tsx', import.meta.url)).text()
@@ -581,15 +630,25 @@ describe('详情页接线（#170 判据 C/D）', () => {
     expect(block.split(guard).length - 1).toBe(2)
     expectBefore(block, guard, 'setData(result.view)')
     // 留言那一次落地也要先判序号：只看整块的话，详情那次守卫会把它遮住
-    const mergeBlock = inner('setData(result.view)', 'setCommentsCursor(loaded.nextCursor)')(block)
+    const mergeBlock = inner('setData(result.view)', 'setCommentsCursor(applied.nextCursor)')(block)
     expectBefore(mergeBlock, guard, 'setComments((prev) => mergeRefreshedComments')
+    // 留言读失败时不落地（#170 复查 N6）：先取决策，`null` 直接返回，绝不动留言与游标
+    expectBefore(
+      mergeBlock,
+      'const applied = resolveRefreshedComments(loaded)',
+      'if (!applied) return',
+    )
+    expectBefore(mergeBlock, 'if (!applied) return', 'setComments((prev) => mergeRefreshedComments')
+    expectBefore(block, 'if (!applied) return', 'setCommentsCursor(applied.nextCursor)')
   })
 
   test('返回刷新按起飞时的 id 快照合并，不整体覆盖留言树', async () => {
     const block = await pageSlice('const refresh = () => {', 'const requestRefresh')
     expectBefore(block, 'const baseIds = new Set(', 'loadListingDetail(id)')
     expectBefore(block, 'const baseIds = new Set(', 'mergeRefreshedComments(')
-    expect(block).toContain('mergeRefreshedComments(prev, loaded.comments, baseIds)')
+    expect(block).toContain('mergeRefreshedComments(prev, applied.comments, baseIds)')
+    // 旧写法（直接拿读取结果整体合并）必须已经不存在：它正是 N6 的成因
+    expect(block).not.toContain('mergeRefreshedComments(prev, loaded.comments, baseIds)')
   })
 
   test('返回刷新要等写入结算：在飞时先记账，结算时按发起那次写入的 epoch 销账', async () => {
@@ -623,5 +682,26 @@ describe('详情页接线（#170 判据 C/D）', () => {
     )
     expect(block).toContain('const seq = loadSeqRef.current')
     expectBefore(block, 'if (!isLatestLoad(seq, loadSeqRef.current)) return', 'setComments((prev)')
+  })
+
+  test('留言读取带成败（N6）：失败分支带兜底列表但没有游标，成功分支才带游标', async () => {
+    const block = await pageSlice('async function loadComments', 'function logCommentFailure')
+    expect(block).toContain(
+      "return { status: 'ok', comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }",
+    )
+    expect(block).toContain(
+      "return { status: 'failed', comments: mockFallback.map(mockCommentToNode) }",
+    )
+    // 失败分支不再回一个「看起来像成功」的 `nextCursor: null`
+    expect(block).not.toContain('nextCursor: null')
+  })
+
+  test('首屏加载：分页游标只在留言读取成功时收下', async () => {
+    const block = await pageSlice('const load = () => {', '* 从子页返回时的**静默**同步')
+    expectBefore(
+      block,
+      'setComments(loaded.comments)',
+      "setCommentsCursor(loaded.status === 'ok' ? loaded.nextCursor : null)",
+    )
   })
 })

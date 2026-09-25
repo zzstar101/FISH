@@ -41,6 +41,7 @@ import { findUser } from '@/mock/users'
 import {
   beginReloadWrite,
   beginTask,
+  type CommentsRead,
   clearedPrivateScope,
   consumeDeferredReload,
   createDeferredReload,
@@ -54,6 +55,7 @@ import {
   ownerChanged,
   PENDING_COMMENT_PREFIX,
   requestDeferredReload,
+  resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
   shouldSurfaceStaleAuthFailure,
@@ -165,19 +167,23 @@ function mockCommentToNode(comment: MockComment): CommentNode {
  *
  * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（开发 / 预览）或空列表
  * （生产），商品详情本身照常渲染。
+ *
+ * 返回值必须带上**成败**（#170 复查 N6）：`status: 'failed'` 的兜底列表只给首次加载用，
+ * 静默刷新拿到失败结果时不能拿它去合并（那会把已经显示的留言和游标清掉，见 `./view` 的
+ * `resolveRefreshedComments`）。
  */
 async function loadComments(
   id: string,
   mockFallback: MockComment[],
-): Promise<{ comments: CommentNode[]; nextCursor: string | null }> {
+): Promise<CommentsRead<CommentNode>> {
   try {
     const page = await fetchComments(id)
-    return { comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }
+    return { status: 'ok', comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }
   } catch (error) {
     logCommentFailure('留言列表', error)
     // 开发 / 预览口径下 `loadListingDetail` 已经回退 fixture，这里跟着用同一批 mock 留言；
     // 生产口径拿不到就是空列表（不编数据）。
-    return { comments: mockFallback.map(mockCommentToNode), nextCursor: null }
+    return { status: 'failed', comments: mockFallback.map(mockCommentToNode) }
   }
 }
 
@@ -415,8 +421,10 @@ export default function ListingDetail() {
       if (view) {
         const loaded = await loadComments(id, view.comments)
         if (!isLatestLoad(seq, loadSeqRef.current)) return
+        // 首次加载 / 重试：留言读失败仍展示兜底列表（既有口径），但分页游标只在**成功**
+        // 读取时才收下 —— 失败时那个 `null` 不是「没有下一页」，是「不知道」。
         setComments(loaded.comments)
-        setCommentsCursor(loaded.nextCursor)
+        setCommentsCursor(loaded.status === 'ok' ? loaded.nextCursor : null)
       } else {
         setComments([])
         setCommentsCursor(null)
@@ -431,6 +439,9 @@ export default function ListingDetail() {
    * 整页拆掉重建，等于每次返回都打断一次阅读。刷新失败也保留现有内容 —— 一次网络
    * 抖动不该把画好的页面翻成错误态；只有服务端明确说这件商品没了（下架 / 删除）
    * 才切空态，否则页面会永远停在过期快照上。
+   *
+   * 留言这条链同理（#170 复查 N6）：留言请求失败时既不动已有留言也不动分页游标，
+   * 而不是把失败兜底的空列表当成「服务端说没有留言」合并进去。
    */
   const refresh = () => {
     loadSeqRef.current += 1
@@ -456,8 +467,13 @@ export default function ListingDetail() {
       setLoadState('ok')
       const loaded = await loadComments(id, result.view.comments)
       if (!isLatestLoad(seq, loadSeqRef.current)) return
-      setComments((prev) => mergeRefreshedComments(prev, loaded.comments, baseIds))
-      setCommentsCursor(loaded.nextCursor)
+      // 留言读失败时**不落地**（#170 复查 N6）：保留已经显示出来的留言与游标，等下一次
+      // 刷新重试。一次网络抖动不该把留言清空 —— 那和「服务端真的没有留言」是两回事。
+      // 成功读到空列表照常合并：那是服务端确认过的空，不能永久停在旧快照上。
+      const applied = resolveRefreshedComments(loaded)
+      if (!applied) return
+      setComments((prev) => mergeRefreshedComments(prev, applied.comments, baseIds))
+      setCommentsCursor(applied.nextCursor)
     })
   }
 
