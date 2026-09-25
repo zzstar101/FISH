@@ -18,6 +18,8 @@ import {
   type AdminModerationQueue,
   AdminModerationQueueSchema,
   AdminModerationRecordSchema,
+  type AdminModerationRecords,
+  AdminModerationRecordsSchema,
   type AdminOverview,
   AdminOverviewSchema,
   type AdminTransactionPage,
@@ -41,6 +43,7 @@ import type {
   AuditLogSummaryRow,
   ListingSummaryRow,
   ModerationDetailRow,
+  ModerationHistoryRow,
   ModerationQueueRow,
   UserSummaryRow,
 } from './store'
@@ -95,6 +98,16 @@ export type AdminAuditLogListQuery = {
 }
 
 export type AdminModerationQueueListQuery = { cursor?: string; limit: number }
+/** 审核记录检索参数（#73 治理半场 PR4）。日期字符串在这里转 Date，非法值由契约层先拦。 */
+export type AdminModerationRecordsListQuery = {
+  decision?: string
+  listingId?: string
+  q?: string
+  createdFrom?: string
+  createdTo?: string
+  cursor?: string
+  limit: number
+}
 export type AdminTransactionListQuery = {
   q?: string
   status?: string
@@ -116,6 +129,8 @@ export interface AdminService {
   getOverview(): Promise<AdminOverview>
   listAuditLogs(query: AdminAuditLogListQuery): Promise<AdminAuditLogPage>
   listModerationQueue(query: AdminModerationQueueListQuery): Promise<AdminModerationQueue>
+  /** 审核记录检索（#73 治理半场 PR4）：已离开 REVIEW 队列的历史，可带筛选与游标。 */
+  listModerationRecords(query: AdminModerationRecordsListQuery): Promise<AdminModerationRecords>
   getModerationDetail(recordId: string): Promise<AdminModerationDetail>
   decideModeration(input: {
     recordId: string
@@ -225,18 +240,20 @@ function toModerationRecord(row: ModerationDetailRow['record']) {
   })
 }
 
-function toModerationItem(row: ModerationQueueRow | ModerationDetailRow) {
+function toModerationItem(row: ModerationQueueRow | ModerationHistoryRow | ModerationDetailRow) {
   const item = {
     record: toModerationRecord(row.record),
-    listing: {
-      id: row.listing.id,
-      title: row.listing.title,
-      description: row.listing.description,
-      status: row.listing.status,
-      moderationStatus: row.listing.moderationStatus,
-      moderationReason: row.listing.moderationReason,
-      createdAt: row.listing.createdAt.toISOString(),
-    },
+    listing: row.listing
+      ? {
+          id: row.listing.id,
+          title: row.listing.title,
+          description: row.listing.description,
+          status: row.listing.status,
+          moderationStatus: row.listing.moderationStatus,
+          moderationReason: row.listing.moderationReason,
+          createdAt: row.listing.createdAt.toISOString(),
+        }
+      : null,
     seller: row.seller,
   }
   return item
@@ -315,9 +332,10 @@ export function createAdminService({
       const summary = await store.findUserSummary(userId)
       if (!summary) throw new AdminError('ADMIN_NOT_FOUND', 404, '用户不存在')
 
-      const [listingStats, recentAuditLogs] = await Promise.all([
+      const [listingStats, recentAuditLogs, activeRestrictions] = await Promise.all([
         store.listingStatusCounts(userId),
         store.recentAuditLogs('USER', userId, 10),
+        store.listActiveRestrictions(userId),
       ])
 
       const user = toUserSummary(summary)
@@ -329,6 +347,14 @@ export function createAdminService({
       return AdminUserDetailSchema.parse({
         user: user.data,
         listingStats,
+        // store 返回 Date 对象，契约要 ISO 字符串（z.iso.datetime()）。漏了这层转换，
+        // 用户一旦有生效中的限制，parse 抛的 ZodError 不是 AdminError，会一路逃到
+        // app.onError 变成 500——「契约字段存在的原因」恰恰是这个场景（对抗审查 F3）。
+        activeRestrictions: activeRestrictions.map((restriction) => ({
+          ...restriction,
+          expiresAt: restriction.expiresAt?.toISOString() ?? null,
+          createdAt: restriction.createdAt.toISOString(),
+        })),
         recentAuditLogs: recentAuditLogs.map(toAuditLogSummary),
       })
     },
@@ -364,6 +390,10 @@ export function createAdminService({
         category: listing.category,
         condition: listing.condition,
         status: listing.status,
+        moderationStatus: listing.moderationStatus,
+        governanceDelistedAt: listing.governanceDelistedAt
+          ? listing.governanceDelistedAt.toISOString()
+          : null,
         urgent: listing.urgent,
         negotiable: listing.negotiable,
         free: listing.free,
@@ -414,6 +444,25 @@ export function createAdminService({
         return AdminModerationQueueSchema.shape.items.element.parse(item)
       })
       return AdminModerationQueueSchema.parse(page)
+    },
+
+    async listModerationRecords(query) {
+      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      if (query.cursor && !cursor) throw invalidCursor()
+      const rows = await store.listModerationRecords({
+        decision: query.decision,
+        listingId: query.listingId,
+        q: query.q,
+        createdFrom: query.createdFrom ? new Date(query.createdFrom) : undefined,
+        createdTo: query.createdTo ? new Date(query.createdTo) : undefined,
+        cursor,
+        limit: query.limit,
+      })
+      const page = pageOf(rows, query.limit, (row) => {
+        const item = toModerationItem(row)
+        return AdminModerationRecordsSchema.shape.items.element.parse(item)
+      })
+      return AdminModerationRecordsSchema.parse(page)
     },
 
     async getModerationDetail(recordId) {

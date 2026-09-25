@@ -7,6 +7,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import type { MediaStorage } from '../uploads/storage'
 import type { MediaMessageService } from './media-service'
 import { MediaMessageServiceError } from './media-service'
@@ -15,6 +16,17 @@ export type MediaRouterOptions = {
   service: MediaMessageService
   storage: MediaStorage
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /**
+   * 封禁写守卫（#73 PR3）。
+   *
+   * 这里**必须**传入并在两个 POST 上生效：文字消息走 `messagesRouter` 的
+   * `guard.write`，而图片 / 语音走同一套「上传→发消息」链路的 media 路由。
+   * 漏挂的后果是封禁只挡住文字，被封用户仍能通过 `POST /:id/media/presign`
+   * + `POST /:id/media` 发图——限制在服务端就是空的（评审 M2）。
+   *
+   * GET 不挂：封禁只禁写、只开放读（#73 决策 Q6）。
+   */
+  guard: RestrictionGuard
 }
 
 function readJson(c: Context): Promise<unknown> {
@@ -60,10 +72,10 @@ function byteRange(
   return { start: startValue, end }
 }
 
-export function createMediaRouter({ service, storage, requireAuth }: MediaRouterOptions) {
+export function createMediaRouter({ service, storage, requireAuth, guard }: MediaRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
-  app.post('/:id/media/presign', requireAuth, async (c) => {
+  app.post('/:id/media/presign', requireAuth, guard.write, async (c) => {
     if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = mediaPresignInputSchema.safeParse(await readJson(c))
     if (!parsed.success) {
@@ -79,7 +91,7 @@ export function createMediaRouter({ service, storage, requireAuth }: MediaRouter
     }
   })
 
-  app.post('/:id/media', requireAuth, async (c) => {
+  app.post('/:id/media', requireAuth, guard.write, async (c) => {
     if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = mediaMessageInputSchema.safeParse(await readJson(c))
     if (!parsed.success) {

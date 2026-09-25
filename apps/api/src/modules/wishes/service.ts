@@ -10,6 +10,7 @@ import {
   wishStatusSchema,
   wishUpdateInputSchema,
 } from '@fish/contracts/wishes/schema'
+import { newId } from '@fish/db/ids'
 import type { WishMatchQueue } from './match-queue'
 import type { EditableWishFields, PoolRow, WishRow, WishStore } from './store'
 
@@ -116,7 +117,7 @@ export function createWishService({
       const now = new Date()
       const result = await store.createOrGetRecent(
         {
-          id: crypto.randomUUID(),
+          id: newId(),
           user_id: userId,
           keyword: parsed.keyword,
           category: parsed.category,

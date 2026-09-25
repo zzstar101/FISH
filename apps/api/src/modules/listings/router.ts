@@ -2,12 +2,16 @@ import {
   ListingCreateInputSchema,
   ListingFeedQuerySchema,
   ListingIdSchema,
+  ListingNoSchema,
   ListingUpdateInputSchema,
 } from '@fish/contracts/listings/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
+import { type ListingNumberLookup, ListingNumberLookupError } from './number-lookup'
 import { type ListingService, ListingServiceError } from './service'
 
 export type ListingsRouterOptions = {
@@ -21,6 +25,9 @@ export type ListingsRouterOptions = {
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   /** 读接口的**可选**身份：匿名返回 null。用于 `isOwner`、`sellerId` 过滤与 OFFLINE 可见性。 */
   resolveViewerId: (c: Context) => Promise<string | null>
+  resolveClientIp: (c: Context) => string | null
+  numberLookup: ListingNumberLookup
+  guard: RestrictionGuard
 }
 
 /** JSON 解析失败（空体 / 非 JSON）按参数不合法处理，而不是让 Hono 抛 500。 */
@@ -47,7 +54,12 @@ function zodValidationFailure(
  * 这条路径**任何匿名请求都能稳定触发**，所以必须显式校验，不能靠 SQL 兜底。
  */
 function requireListingId(c: Context): string {
-  const parsed = ListingIdSchema.safeParse(c.req.param('id'))
+  const raw = c.req.param('id')
+  // Transitional read path: the number lookup already returns a canonical lst_ ID.
+  // UUID routes remain only until all Web/miniapp callers are switched in their gated rollout.
+  if (isPublicId(PUBLIC_ID_PREFIX.listing, raw))
+    return decodePublicId(PUBLIC_ID_PREFIX.listing, raw)
+  const parsed = ListingIdSchema.safeParse(raw)
   if (!parsed.success) {
     throw new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
   }
@@ -58,6 +70,10 @@ function requireListingId(c: Context): string {
 function toErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof ListingServiceError) {
     return c.json(errorBody(error.code, error.message, error.details), error.status)
+  }
+  if (error instanceof ListingNumberLookupError) {
+    if (error.status === 429) c.header('Retry-After', '60')
+    return c.json(errorBody(error.code, error.message), error.status)
   }
   throw error
 }
@@ -80,6 +96,24 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
+  router.get('/by-number/:listingNo', async (c) => {
+    const parsed = ListingNoSchema.safeParse(c.req.param('listingNo'))
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+    try {
+      const viewerId = await options.resolveViewerId(c)
+      return c.json(
+        await options.numberLookup.lookup(
+          parsed.data,
+          viewerId,
+          viewerId ? null : options.resolveClientIp(c),
+        ),
+        200,
+      )
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
   router.get('/:id', async (c) => {
     try {
       const id = requireListingId(c)
@@ -92,7 +126,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
   // —— 写接口：全部要求登录 ——
 
-  router.post('/', options.requireAuth, async (c) => {
+  router.post('/', options.requireAuth, options.guard.publish, async (c) => {
     const parsed = ListingCreateInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
@@ -105,7 +139,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.patch('/:id', options.requireAuth, async (c) => {
+  router.patch('/:id', options.requireAuth, options.guard.publish, async (c) => {
     const parsed = ListingUpdateInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
@@ -117,7 +151,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.post('/:id/offline', options.requireAuth, async (c) => {
+  router.post('/:id/offline', options.requireAuth, options.guard.publish, async (c) => {
     try {
       const id = requireListingId(c)
       return c.json(await service.transition(c.get('userId'), id, 'OFFLINE'), 200)
@@ -126,7 +160,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.post('/:id/online', options.requireAuth, async (c) => {
+  router.post('/:id/online', options.requireAuth, options.guard.publish, async (c) => {
     try {
       const id = requireListingId(c)
       return c.json(await service.transition(c.get('userId'), id, 'ACTIVE'), 200)

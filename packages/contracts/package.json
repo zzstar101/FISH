@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@fish/shared": "workspace:*",
     "zod": "^4.6.2"
   }
 }

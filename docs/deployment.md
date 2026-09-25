@@ -45,10 +45,10 @@
 
 | 项 | 要求 | 依据 |
 | --- | --- | --- |
-| 系统 | Ubuntu 24.04 LTS（apt 里有 PostgreSQL 16）；22.04 需要加 PGDG 源 | [README.md](../README.md) 技术栈表要求 PostgreSQL 16 |
-| PostgreSQL | 16、**17 或 18 均可**（迁移只用枚举/表/索引/ jsonb，无 `CREATE EXTENSION`）；注意 Ubuntu 26.04 的 apt 里只有 18 | 已在 PostgreSQL 18.6 / aarch64 上实测 `db:migrate` 通过 |
+| 系统 | Ubuntu 24.04 LTS；安装 PostgreSQL 18 前按 [PGDG 官方指南](https://www.postgresql.org/download/linux/ubuntu/) 配置仓库 | Ubuntu 24.04 自带的旧版 PostgreSQL 不支持 `uuidv7()` |
+| PostgreSQL | **18 + pgvector**；应用迁移用 `uuidv7()` DB default；本期不提前创建向量表 | 本地 `pgvector/pgvector:pg18`（PostgreSQL 18.6、pgvector 0.8.6）实测 `uuidv7()` 与 `CREATE EXTENSION vector` 可用；宿主机部署仍需单独验证 |
 | Bun | `>= 1.4.0`（本手册钉 `1.4.0`） | 根 `package.json` 的 `engines.bun` / `packageManager` |
-| Node.js | **不需要**。`drizzle-kit` 在本仓也是一直由 Bun 拉起 | `packages/db/package.json` 的 `migrate` 脚本 |
+| Node.js | **不需要**。`db:migrate` 由 Bun + Drizzle ORM migrator 执行 | `packages/db/src/migrate.ts` |
 | 域名 | 两个 A 记录：主域名 + 对象存储子域（`s3.<域名>`） | §6 的 SigV4 约束 |
 | 端口 | 只对外开放 80 / 443 | 下面 ufw 那一步（目标环境只给一个端口时见 §11） |
 
@@ -77,10 +77,12 @@ sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo
 > 代码里没有 `hostname` 选项，所以「只监听回环」这件事目前只能靠 ufw 保证。要让 API 本身只绑
 > 127.0.0.1 需要改 `apps/api/src/index.ts`（Owner 独占，另开 Issue）。
 
-## 2. PostgreSQL 16
+## 2. PostgreSQL 18 + pgvector
+
+先按上方 PGDG 官方指南配置 Ubuntu 软件源，并在目标服务器确认 `postgresql-18-pgvector` 包可用，再运行：
 
 ```bash
-sudo apt install -y postgresql-16 postgresql-client-16
+sudo apt install -y postgresql-18 postgresql-client-18 postgresql-18-pgvector
 
 # 业务库与账号（密码换成真实的，后面 .env 里要用同一份）
 sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
@@ -92,15 +94,35 @@ SQL
 Ubuntu 的默认配置 `listen_addresses = 'localhost'`、`password_encryption = scram-sha-256`，
 即已满足「只允许本机 + 密码校验」，无需改动 `pg_hba.conf`。
 
-**不需要 pgvector 扩展。** `packages/db/src/migrations/*.sql` 里没有任何 `CREATE EXTENSION`
-（CI 与 `docker-compose.yml` 用 `pgvector/pgvector:pg16` 镜像只是与开发环境保持一致）。
-将来若要装：`sudo apt install postgresql-16-pgvector`（可选）。
+pgvector 是后续许愿功能的环境前提；本 Issue 只安装并验证可用，不提前创建向量表或索引。生产宿主机应在非业务测试库里执行 `CREATE EXTENSION vector; SELECT extversion FROM pg_extension WHERE extname = 'vector';` 验证扩展，业务库何时启用由许愿功能的迁移决定。`bun run db:migrate` 会先跑可空编号迁移、可重入旧数据回填（含历史 UUIDv4 愿望及引用）、再跑非空/UUIDv7 default 迁移。迁移期间须停止 API 与 Worker 的写入。
 
 验证：
 
 ```bash
-PGPASSWORD='REPLACE_ME_DB_PASSWORD' psql -h 127.0.0.1 -U fish -d fish -c 'select version()'
+PGPASSWORD='REPLACE_ME_DB_PASSWORD' psql -h 127.0.0.1 -U fish -d fish -c 'select version(), uuidv7()'
 ```
+
+### 本地 Compose 从 PG16 升级（保留原始数据卷）
+
+在暂停本地 API / Worker 写入后，从**旧 PG16 容器仍运行时**导出，备份放在仓库外；
+先确认备份文件非空，绝不能直接把旧 `fish_postgres-data` 卷挂到 PG18 上：
+
+```bash
+BACKUP="$HOME/fish-pg16-$(date +%Y%m%d%H%M%S).dump"
+docker exec fish-postgres-1 pg_dump -U fish -d fish -Fc > "$BACKUP"
+test -s "$BACKUP" || { echo '数据库备份为空，停止升级'; exit 1; }
+docker compose stop postgres
+# 新版 compose 的 postgres18-data 是新卷；旧 fish_postgres-data 不删除。
+docker compose up -d postgres
+# 等 postgres 的 healthcheck healthy 后，再恢复旧库。
+docker exec -i fish-postgres-1 pg_restore -U fish -d fish --no-owner --no-privileges < "$BACKUP"
+bun run db:migrate
+```
+
+恢复后对照备份前的核心表行数、`listing_numbers` 占号数及 `listings.listing_no` 非空数，
+运行 seed **之前**先核对真实开发数据（seed 会清空业务表）；确认新旧引用、API/Worker 回归后
+才考虑处置旧卷和备份。pg18 镜像的 `PGDATA` 为 `/var/lib/postgresql/18/docker`，
+Compose 必须把**新卷挂到 `/var/lib/postgresql`**。不要 `docker compose down -v`。
 
 ## 3. MinIO（对象存储）
 
@@ -425,6 +447,13 @@ sudo systemctl enable fish-api fish-worker
 
 ## 6. 反向代理与 HTTPS
 
+编号精确查询对匿名来源按 IP 持久限流。Caddy 与 API 在同一台主机时，需在 API 的
+`.env` 配置 `LISTING_LOOKUP_TRUSTED_PROXY_IP=127.0.0.1`，并确保只有 Caddy 能连接
+API 端口；下方代理配置会**覆盖**传入的 `X-Real-IP`。不配置受信代理时，API 忽略转发头；
+代理来源不可信或无 IP 时匿名编号查询返回 503，绝不共享代理 IP 配额。IP 只作为
+`MEETUP_TOKEN_SECRET` 经用途隔离的 HMAC 写入数据库，密钥轮换会重置匿名滚动额度。
+
+
 以 Caddy 为例（80/443 自动签发证书）。`sudo apt install -y caddy`，`/etc/caddy/Caddyfile`：
 
 ```caddyfile
@@ -436,7 +465,10 @@ fish.example.com {
 	# 因此不需要跨域，cookie 自动携带。
 	handle /api/* {
 		uri strip_prefix /api
-		reverse_proxy 127.0.0.1:3000
+		reverse_proxy 127.0.0.1:3000 {
+			# 覆盖客户端伪造的头；编号精确查询只在 TCP peer 是受信代理时读取此值。
+			header_up X-Real-IP {remote_host}
+		}
 	}
 
 	# 业务实时通道 /ws/chat：**不做**前缀重写。
@@ -910,6 +942,7 @@ Caddy 必须绑 `0.0.0.0:3000`：Docker 的端口映射转发到容器 eth0，�
 
 ```bash
 API_PORT=3100                                  # 3000 让给 Caddy
+LISTING_LOOKUP_TRUSTED_PROXY_IP=127.0.0.1     # 匿名编号查询必须只信任此 TCP peer
 WEB_ORIGIN=http://10.223.24.16:8101            # 与浏览器地址逐字符一致（内网明文）
 S3_ENDPOINT=http://10.223.24.16:8101           # ⚠️ 不带任何路径
 S3_PUBLIC_URL=http://10.223.24.16:8101/fish    # 读接口拼出的前缀
@@ -927,7 +960,9 @@ S3_BUCKET=fish                                 # 桶名 = Caddy 里的 /fish/* �
 :3000 {
 	handle /api/* {
 		uri strip_prefix /api
-		reverse_proxy 127.0.0.1:3100
+		reverse_proxy 127.0.0.1:3100 {
+			header_up X-Real-IP {remote_host}
+		}
 	}
 
 	# 业务实时通道。不放 `/ws`：那是无鉴权的 echo 冒烟入口（§9 第 11 条）

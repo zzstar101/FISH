@@ -3,11 +3,14 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { type MessageService, MessageServiceError } from './service'
 
 export type MessagesRouterOptions = {
   service: MessageService
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：发消息前检查封禁（含文本与媒体消息，都属 `write` 作用域）。 */
+  guard: RestrictionGuard
 }
 
 function toErrorResponse(c: Context, error: unknown): Response {
@@ -31,7 +34,7 @@ const conversationNotFound = (c: Context) =>
  * Hono 按注册顺序匹配、互不冲突）：本 router 只提供 `/:id/messages` 两个端点，
  * 对外路径即契约的 `CHAT_ROUTES.messages(id)`。
  */
-export function createMessagesRouter({ service, requireAuth }: MessagesRouterOptions) {
+export function createMessagesRouter({ service, requireAuth, guard }: MessagesRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
   app.get('/:id/messages', requireAuth, async (c) => {
@@ -53,7 +56,7 @@ export function createMessagesRouter({ service, requireAuth }: MessagesRouterOpt
     }
   })
 
-  app.post('/:id/messages', requireAuth, async (c) => {
+  app.post('/:id/messages', requireAuth, guard.write, async (c) => {
     if (!UUID_PATTERN.test(c.req.param('id'))) return conversationNotFound(c)
     const parsed = messageSendInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {

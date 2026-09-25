@@ -108,6 +108,10 @@ describe('AdminOverviewSchema', () => {
       newUsersLast24h: 3,
       activeListings: 80,
       completedTransactions: 40,
+      pendingReviewRecords: 2,
+      pendingReports: 1,
+      reportsLast7d: 3,
+      activeRestrictions: 1,
     }
     expect(AdminOverviewSchema.parse(body).activeListings).toBe(80)
   })
@@ -180,6 +184,8 @@ describe('AdminListingDetailSchema', () => {
       category: 'DIGITAL',
       condition: 'GOOD',
       status: 'ACTIVE',
+      moderationStatus: 'APPROVED',
+      governanceDelistedAt: null,
       urgent: false,
       negotiable: true,
       free: false,

@@ -1,9 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { createDb } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { eq, inArray } from 'drizzle-orm'
 import { createSqlPublicUserStore } from './store'
 
@@ -63,9 +65,12 @@ async function withSeller(
   const listingIds: string[] = []
   try {
     for (const [index, spec] of specs.entries()) {
+      const id = newId()
       const rows = await db
         .insert(listings)
         .values({
+          id,
+          listingNo: await reserveTestListingNo(db, id),
           sellerId,
           title: `集成测试商品 ${index}`,
           description: '集成测试描述',
@@ -182,6 +187,7 @@ test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 
 
       expect(rows.map((row) => row.id)).toEqual([listingIds[3] as string, listingIds[4] as string])
       expect(rows.every((row) => row.status === 'ACTIVE')).toBe(true)
+      expect(rows.every((row) => /^[1-9][0-9]{11}$/.test(row.listingNo.toString()))).toBe(true)
       expect((await store.stats(sellerId)).activeListings).toBe(rows.length)
     },
   )

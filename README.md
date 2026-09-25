@@ -57,7 +57,7 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 | UI | Tailwind CSS v4 + 自有 `@fish/ui` 组件 |
 | 后端 | **Hono on Bun**（`Bun.serve`） |
 | 校验 | Zod（Web 与 API 共用 `@fish/contracts`） |
-| 数据库 | PostgreSQL 16 + Drizzle ORM（运行时走 `drizzle-orm/bun-sql`） |
+| 数据库 | PostgreSQL 18 + pgvector + Drizzle ORM（运行时走 `drizzle-orm/bun-sql`） |
 | 异步 | PostgreSQL `jobs` 表 + 独立 Bun Worker 轮询 |
 | 实时 | Hono / Bun 原生 WebSocket |
 | 对象存储 | S3 兼容（本地 MinIO） |
@@ -74,7 +74,7 @@ graph LR
   BROWSER["移动端浏览器"] -->|"GET /"| WEB["apps/web<br/>Vite :5173"]
   BROWSER -->|"/api/*（去前缀）"| API["apps/api<br/>Hono on Bun :3000"]
   BROWSER -->|"/ws（实时）"| API
-  API -->|"bun:sql"| PG[("PostgreSQL 16<br/>:5432")]
+  API -->|"bun:sql"| PG[("PostgreSQL 18 + pgvector<br/>:5432")]
   WORKER["apps/worker<br/>job 轮询"] -->|"bun:sql"| PG
   API -.->|"S3"| MINIO[("MinIO<br/>:9000 / :9001")]
 ```
@@ -107,6 +107,12 @@ bun run db:up
 bun run db:migrate
 bun run db:seed
 ```
+
+> 从旧 PG16 Compose 升级时，**不要把旧 `fish_postgres-data` 卷直接挂到 PG18**，也不要运行
+> `docker compose down -v`。先停 API/Worker 写入，使用 `pg_dump -Fc` 导出旧库到仓库外，
+> 再以新 `fish_postgres18-data` 卷启动 PG18+pgvector，用 `pg_restore` 恢复并核对行数，
+> 最后运行 `bun run db:migrate`。确认迁移与 API/Worker 回归后才考虑处置旧卷；
+> 详见 [部署手册](docs/deployment.md)。
 
 分三个终端启动（或 `bun run dev` 一次并行拉起）：
 

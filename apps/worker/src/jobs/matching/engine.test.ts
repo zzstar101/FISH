@@ -6,6 +6,7 @@ import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { createMatchEngine } from './engine'
 
@@ -60,6 +61,7 @@ async function createListing(
   const id = newId()
   await db.insert(listings).values({
     id,
+    listingNo: await reserveTestListingNo(db, id),
     sellerId,
     title: `测试商品 ${keyword}`,
     description: '匹配引擎集成测试',

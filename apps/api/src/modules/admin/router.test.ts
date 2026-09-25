@@ -7,6 +7,7 @@ import {
   AdminMeResponseSchema,
   AdminModerationDetailSchema,
   AdminModerationQueueSchema,
+  AdminModerationRecordsSchema,
   AdminOverviewSchema,
   AdminTransactionPageSchema,
   AdminUserDetailSchema,
@@ -14,11 +15,15 @@ import {
 } from '@fish/contracts/admin/schema'
 import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import { createDb, type Db } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
+import { userRestrictions } from '@fish/db/schema/governance'
+import { idRekeys } from '@fish/db/schema/id-rekeys'
 import { listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { desc, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -104,6 +109,7 @@ beforeAll(async () => {
   await scratch.insert(listings).values([
     {
       id: LISTING_ID,
+      listingNo: await reserveTestListingNo(scratch, LISTING_ID),
       sellerId: USER_ID,
       title: '管理后台可见商品',
       description: '用于管理员查询的测试商品',
@@ -115,6 +121,7 @@ beforeAll(async () => {
     },
     {
       id: REVIEW_LISTING_ID,
+      listingNo: await reserveTestListingNo(scratch, REVIEW_LISTING_ID),
       sellerId: USER_ID,
       title: '待人工审核商品',
       description: '含有需要人工复核的描述',
@@ -386,6 +393,46 @@ describe('Admin 查询端到端', () => {
     expect(AdminAuditLogPageSchema.parse(await filtered.json()).items).toHaveLength(1)
   })
 
+  test('用户详情同时列出限制/解除历史审计，不混入其他用户的审计', async () => {
+    const restrictionId = newId()
+    const auditId = newId()
+    await scratch.insert(userRestrictions).values({
+      id: restrictionId,
+      userId: USER_ID,
+      actorUserId: ADMIN_TARGET_ID,
+      type: 'PUBLISH_RESTRICT',
+      status: 'LIFTED',
+      reason: '历史处罚',
+      liftedAt: new Date(),
+      liftedBy: ADMIN_TARGET_ID,
+    })
+    await scratch.insert(adminAuditLogs).values({
+      id: auditId,
+      actorUserId: ADMIN_TARGET_ID,
+      action: 'USER_RESTRICTION_LIFTED',
+      targetType: 'USER_RESTRICTION',
+      targetId: restrictionId,
+      before: jsonParam({ status: 'ACTIVE' }),
+      after: jsonParam({ status: 'LIFTED' }),
+      reason: '解除限制',
+      requestId: `test-audit-${auditId}`,
+    })
+    const user = await app.request(ADMIN_ROUTES.userDetail(USER_ID), {
+      headers: { cookie: adminCookie },
+    })
+    expect(user.status).toBe(200)
+    expect(AdminUserDetailSchema.parse(await user.json()).recentAuditLogs).toContainEqual(
+      expect.objectContaining({ id: auditId, targetType: 'USER_RESTRICTION' }),
+    )
+
+    const other = await app.request(ADMIN_ROUTES.userDetail(ADMIN_TARGET_ID), {
+      headers: { cookie: adminCookie },
+    })
+    const otherLogs = AdminUserDetailSchema.parse(await other.json()).recentAuditLogs
+    expect(otherLogs.map((log) => log.id)).not.toContain(auditId)
+    expect(otherLogs).toContainEqual(expect.objectContaining({ action: 'ADMIN_PROMOTED' }))
+  })
+
   test('moderation detail and decision update the listing and audit atomically', async () => {
     const detail = await app.request(ADMIN_ROUTES.moderationDetail(REVIEW_RECORD_ID), {
       headers: { cookie: adminCookie },
@@ -449,6 +496,7 @@ describe('Admin 查询端到端', () => {
   test('ALLOW restores an offline listing after an UPDATE review', async () => {
     await scratch.insert(listings).values({
       id: OFFLINE_REVIEW_LISTING_ID,
+      listingNo: await reserveTestListingNo(scratch, OFFLINE_REVIEW_LISTING_ID),
       sellerId: USER_ID,
       title: '主动下架商品',
       description: '原始描述',
@@ -499,6 +547,7 @@ describe('Admin 查询端到端', () => {
     await scratch.insert(listings).values([
       {
         id: REPEATED_REVIEW_LISTING_ID,
+        listingNo: await reserveTestListingNo(scratch, REPEATED_REVIEW_LISTING_ID),
         sellerId: USER_ID,
         title: '重复审核商品',
         description: '原始描述',
@@ -511,6 +560,7 @@ describe('Admin 查询端到端', () => {
       },
       {
         id: CREATE_REVIEW_CHAIN_LISTING_ID,
+        listingNo: await reserveTestListingNo(scratch, CREATE_REVIEW_CHAIN_LISTING_ID),
         sellerId: USER_ID,
         title: '新建审核商品',
         description: '原始描述',
@@ -641,5 +691,101 @@ describe('Admin 查询端到端', () => {
     )
     expect(badCursor.status).toBe(422)
     expect(await badCursor.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
+  test('审核记录历史保留已删除商品的快照，listing 明确为 null', async () => {
+    const listingId = newId()
+    const recordId = newId()
+    await scratch.insert(listings).values({
+      id: listingId,
+      listingNo: await reserveTestListingNo(scratch, listingId),
+      sellerId: USER_ID,
+      title: '已删除的历史商品',
+      description: '历史描述',
+      priceCents: 100,
+      category: 'BOOKS',
+      condition: 'GOOD',
+      status: 'ACTIVE',
+    })
+    await scratch.insert(listingModerationRecords).values({
+      id: recordId,
+      listingId,
+      sellerId: USER_ID,
+      action: 'CREATE',
+      titleSnapshot: '已删除的历史商品',
+      descriptionSnapshot: '历史描述',
+      decision: 'ALLOW',
+      matchedRules: jsonParam([]),
+      matchedTermsMasked: jsonParam([]),
+      ruleVersion: 'test-v1',
+    })
+    await scratch.delete(listings).where(eq(listings.id, listingId))
+
+    const response = await app.request(`${ADMIN_ROUTES.moderationRecords}?decision=ALLOW`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(response.status).toBe(200)
+    const page = AdminModerationRecordsSchema.parse(await response.json())
+    const historical = page.items.find((item) => item.record.id === recordId)
+    expect(historical?.record).toMatchObject({ listingId: null, titleSnapshot: '已删除的历史商品' })
+    expect(historical?.listing).toBeNull()
+  })
+
+  test('旧人工审核审计保留原文，通过重键映射查回人工决定', async () => {
+    const rootId = newId()
+    const manualId = newId()
+    const oldManualId = crypto.randomUUID()
+    await scratch.insert(listingModerationRecords).values([
+      {
+        id: rootId,
+        listingId: REVIEW_LISTING_ID,
+        sellerId: USER_ID,
+        action: 'CREATE',
+        titleSnapshot: '历史审核',
+        descriptionSnapshot: '旧记录',
+        decision: 'REVIEW',
+        matchedRules: jsonParam([]),
+        matchedTermsMasked: jsonParam([]),
+        ruleVersion: 'test-v1',
+      },
+      {
+        id: manualId,
+        listingId: REVIEW_LISTING_ID,
+        sellerId: USER_ID,
+        action: 'MANUAL_DECISION',
+        titleSnapshot: '历史审核',
+        descriptionSnapshot: '旧记录',
+        decision: 'ALLOW',
+        matchedRules: jsonParam([]),
+        matchedTermsMasked: jsonParam([]),
+        ruleVersion: 'test-v1',
+      },
+    ])
+    await scratch
+      .insert(idRekeys)
+      .values({ resourceTable: 'listing_moderation_records', oldId: oldManualId, newId: manualId })
+    await scratch.insert(adminAuditLogs).values({
+      id: newId(),
+      actorUserId: ADMIN_TARGET_ID,
+      action: 'MODERATION_DECISION',
+      targetType: 'MODERATION_RECORD',
+      targetId: rootId,
+      before: jsonParam({ moderationStatus: 'REVIEW' }),
+      after: jsonParam({ decision: 'ALLOW', manualRecordId: oldManualId }),
+      reason: '历史人工审核通过',
+    })
+
+    const response = await app.request(ADMIN_ROUTES.moderationDetail(manualId), {
+      headers: { cookie: adminCookie },
+    })
+    expect(response.status).toBe(200)
+    const body = AdminModerationDetailSchema.parse(await response.json())
+    expect(body.item.record.id).toBe(rootId)
+    expect(body.humanDecision?.decision).toBe('ALLOW')
+    const [audit] = await scratch
+      .select()
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.targetId, rootId))
+    expect(audit?.after).toMatchObject({ manualRecordId: oldManualId })
   })
 })

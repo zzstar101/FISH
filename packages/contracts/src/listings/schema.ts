@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { AuthStatusSchema, MeSchema } from '../auth/user'
+import { ListingIdSchema as PublicListingIdSchema } from '../system/public-id'
 
 /**
  * Listing Domain Contract（Issue #6，2026-09-12 Freeze）。
@@ -115,6 +116,12 @@ export const ListingCursorTimestampSchema = z.iso.datetime({ precision: 6 })
  */
 export const ListingIdSchema = z.uuid()
 
+/** Exact human reference; never coerce to number (12 digits exceed safe UI conventions). */
+export const ListingNoSchema = z.string().regex(/^[1-9][0-9]{11}$/)
+
+/** Exact-number lookup returns only the canonical public resource ID. */
+export const ListingNumberLookupResponseSchema = z.strictObject({ id: PublicListingIdSchema })
+
 /**
  * 读响应只给拼好的 `url`，不给 `objectKey`：后者是存储实现细节，
  * 放进读契约等于把 S3 布局钉进协议，换 CDN 或换布局都成了破坏性变更。
@@ -146,6 +153,8 @@ export type ListingSeller = z.infer<typeof ListingSellerSchema>
 
 export const ListingCardSchema = z.object({
   id: ListingIdSchema,
+  /** Additive rollout: required after every client page has been prepared for the final ID switch. */
+  listingNo: ListingNoSchema.optional(),
   title: ListingTitleSchema,
   priceCents: PriceCentsSchema,
   category: ListingCategorySchema,
@@ -347,6 +356,8 @@ export const ListingErrorCodeSchema = z.enum([
   'LISTING_NOT_FOUND',
   /** 409：RESERVED / SOLD 上的编辑、下架、上架。 */
   'LISTING_NOT_EDITABLE',
+  /** 409：治理下架后只能由管理员恢复，卖家不能自行修改或上架。 */
+  'LISTING_GOVERNANCE_BLOCKED',
   /** 422：objectKey 前缀不属于本人。（同一 key 重复由 schema 的 refine 先掳下，报 VALIDATION_FAILED。） */
   'IMAGE_REFERENCE_INVALID',
   /** 422：confirm 时对象存储里找不到该对象。 */
@@ -355,6 +366,10 @@ export const ListingErrorCodeSchema = z.enum([
   'LISTING_CONTENT_BLOCKED',
   /** 202：内容需要人工复核，商品不会进入公开列表。 */
   'LISTING_CONTENT_REVIEW',
+  /** 429：完整 12 位编号查询超过每主体 60 秒 50 次。 */
+  'LISTING_LOOKUP_RATE_LIMITED',
+  /** 503：匿名来源不可验证，拒绝计入共享或伪造的 IP 配额。 */
+  'LISTING_LOOKUP_IP_UNAVAILABLE',
 ])
 
 export type ListingErrorCode = z.infer<typeof ListingErrorCodeSchema>

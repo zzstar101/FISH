@@ -6,6 +6,7 @@ import {
 import { createDb, type Db } from '@fish/db/client'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import { createNoopWishMatchQueue, type WishMatchQueue } from './match-queue'
 import { createWishService, type WishService, WishServiceError } from './service'
 import { createSqlWishStore, type WishStore } from './store'
@@ -19,6 +20,15 @@ export type WishesRouterOptions = {
   matchQueue?: WishMatchQueue
   getUserId: WishUserIdResolver
   service?: WishService
+  /**
+   * #73 治理守卫：写愿望前检查封禁 / 限制发布。
+   *
+   * 愿望是用户公开发布的内容（别的用户会浏览，匹配引擎据此给卖家发通知），
+   * 与发布商品属同一类行为，所以挂 `publish` 作用域——PUBLISH_RESTRICT 也挡。
+   * 这里曾误接成 `write`（只挡 BAN），导致「限制发布」的用户仍能继续发 / 改 / 关 /
+   * 成交愿望，是一处治理绕行；对抗审查 F1 修正，作用域由 wishes/router.test.ts 固定。
+   */
+  guard: RestrictionGuard
 }
 
 function jsonError(message: string, code = 'BAD_REQUEST') {
@@ -99,7 +109,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/', async (c) => {
+  app.post('/', options.guard.publish, async (c) => {
     try {
       const input = await parseJson(c, (body) => wishCreateInputSchema.parse(body))
       return c.json(await service.createWish(c.get('userId'), input), 201)
@@ -128,7 +138,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.patch('/:id', async (c) => {
+  app.patch('/:id', options.guard.publish, async (c) => {
     try {
       const id = parseWishId(c.req.param('id'))
       if (!id) return c.json(jsonError('愿望不存在', 'NOT_FOUND'), 404)
@@ -139,7 +149,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/:id/close', async (c) => {
+  app.post('/:id/close', options.guard.publish, async (c) => {
     try {
       const id = parseWishId(c.req.param('id'))
       if (!id) return c.json(jsonError('愿望不存在', 'NOT_FOUND'), 404)
@@ -149,7 +159,7 @@ export function createWishesRouter(options: WishesRouterOptions) {
     }
   })
 
-  app.post('/:id/fulfill', async (c) => {
+  app.post('/:id/fulfill', options.guard.publish, async (c) => {
     try {
       const id = parseWishId(c.req.param('id'))
       if (!id) return c.json(jsonError('愿望不存在', 'NOT_FOUND'), 404)
