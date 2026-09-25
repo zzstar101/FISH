@@ -23,6 +23,8 @@ import { createSqlCommentStore } from './modules/comments/store'
 import { createConversationsRouter } from './modules/conversations/router'
 import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
+import { createChatWatchersRouter } from './modules/conversations/watchers-router'
+import { createChatWatchersService } from './modules/conversations/watchers-service'
 import { createListingsRouter } from './modules/listings/router'
 import { createListingService } from './modules/listings/service'
 import { createSqlListingStore } from './modules/listings/store'
@@ -251,6 +253,13 @@ export function createApp(
           })
         },
       }),
+      requireAuth: auth.requireAuth,
+    }),
+  )
+  app.route(
+    '/',
+    createChatWatchersRouter({
+      service: createChatWatchersService(conversationStore),
       requireAuth: auth.requireAuth,
     }),
   )

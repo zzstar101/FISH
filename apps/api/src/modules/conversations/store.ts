@@ -45,8 +45,24 @@ export interface ListingBrief {
   sellerId: string
 }
 
+export type ChatWatcherRow = {
+  conversationId: string
+  startedAt: Date | string
+  startedAtCursor: string
+  userId: string
+  nickname: string
+  avatarUrl: string | null
+  authStatus: 'UNVERIFIED' | 'VERIFIED'
+}
+
 export interface ConversationStore {
   findListingBrief(listingId: string): Promise<ListingBrief | null>
+  /** 已建会话的买家；页与全量计数采用同一商品/卖家条件、同一数据库语句。 */
+  listChatWatchers(
+    listingId: string,
+    sellerId: string,
+    filter: { limit: number; cursor: { sortKey: string; id: string } | null },
+  ): Promise<{ rows: ChatWatcherRow[]; total: number }>
   /** 幂等创建：同 (listing, buyer) 已存在时不插，返回 null（调用方改走 findDetail）。 */
   insertIfAbsent(
     listingId: string,
@@ -201,6 +217,45 @@ export function createSqlConversationStore(db: Db): ConversationStore {
       )
       const row = rowsOf(result)[0]
       return row ? { id: row.id as string, sellerId: row.seller_id as string } : null
+    },
+
+    async listChatWatchers(listingId, sellerId, { limit, cursor }) {
+      // created_at 不随聊天消息变化；同一 (listing_id,buyer_id) 仅一条会话。
+      // LEFT JOIN LATERAL 让空页仍带回 total；计数与分页在同一 SQL 快照内、同一筛选条件。
+      const condition = sql`c.listing_id = ${listingId}::uuid AND c.seller_id = ${sellerId}::uuid`
+      const after = cursor
+        ? sql`AND (c.created_at, c.id) < (${cursor.sortKey}::timestamptz, ${cursor.id}::uuid)`
+        : sql``
+      const result = await db.execute(sql`
+        SELECT total.n, page.*
+        FROM (SELECT count(*)::int AS n FROM conversations c WHERE ${condition}) total
+        LEFT JOIN LATERAL (
+          SELECT c.id, c.created_at,
+                 to_char(c.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor,
+                 u.id AS user_id, u.nickname, u.avatar_url, u.auth_status::text AS auth_status
+          FROM conversations c
+          JOIN users u ON u.id = c.buyer_id
+          WHERE ${condition} ${after}
+          ORDER BY c.created_at DESC, c.id DESC
+          LIMIT ${limit + 1}
+        ) page ON TRUE
+        ORDER BY page.created_at DESC, page.id DESC
+      `)
+      const rows = rowsOf(result)
+      return {
+        total: Number(rows[0]?.n ?? 0),
+        rows: rows
+          .filter((row) => row.id != null)
+          .map((row) => ({
+            conversationId: row.id as string,
+            startedAt: row.created_at as Date | string,
+            startedAtCursor: row.created_at_cursor as string,
+            userId: row.user_id as string,
+            nickname: row.nickname as string,
+            avatarUrl: (row.avatar_url as string | null) ?? null,
+            authStatus: row.auth_status as 'UNVERIFIED' | 'VERIFIED',
+          })),
+      }
     },
 
     async insertIfAbsent(listingId, buyerId, sellerId) {

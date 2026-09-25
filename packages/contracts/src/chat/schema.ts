@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ListingStatusSchema } from '../listings/schema'
+import { ListingSellerSchema, ListingStatusSchema } from '../listings/schema'
 
 /** Chat Domain Contract（Issue #9）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -242,6 +242,25 @@ export const conversationListResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 })
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>
+
+/** #74「想要的人」以该商品已建立会话的买家为源；仅商品卖家有权查看。 */
+export const chatWatchersQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().min(1).optional(),
+})
+export type ChatWatchersQuery = z.infer<typeof chatWatchersQuerySchema>
+
+export const chatWatchersResponseSchema = z.strictObject({
+  items: z.array(
+    z.strictObject({
+      user: ListingSellerSchema,
+      startedAt: z.iso.datetime(),
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+  total: z.number().int().nonnegative(),
+})
+export type ChatWatchersResponse = z.infer<typeof chatWatchersResponseSchema>
 
 /**
  * 未读总数（#67）。**独立端点**，与通知域 `GET /notifications/unread-count` 同款：

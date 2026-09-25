@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
   ChatErrorCodeSchema,
+  chatWatchersQuerySchema,
+  chatWatchersResponseSchema,
   conversationCreateInputSchema,
   conversationDtoSchema,
   conversationLastMessageSchema,
@@ -28,6 +30,19 @@ describe('conversationCreateInputSchema', () => {
   test('rejects extra fields (strict)', () => {
     const input = { listingId: '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f', buyerId: 'x' }
     expect(conversationCreateInputSchema.safeParse(input).success).toBe(false)
+  })
+})
+
+describe('chatWatchersSchema', () => {
+  test('分页限额与窄字段列表；人数不受单页 limit 影响', () => {
+    expect(chatWatchersQuerySchema.parse({})).toEqual({ limit: 20 })
+    expect(chatWatchersQuerySchema.safeParse({ limit: 51 }).success).toBe(false)
+    expect(chatWatchersQuerySchema.safeParse({ otherUserId: 'x' }).success).toBe(false)
+    expect(chatWatchersResponseSchema.parse({ items: [], total: 35, nextCursor: null })).toEqual({
+      items: [],
+      total: 35,
+      nextCursor: null,
+    })
   })
 })
 
