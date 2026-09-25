@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { canLoad, isLatestLoad, ownerChanged, shouldReloadOnShow } from '../src/pages/match/view'
+import {
+  type ChatTask,
+  canLoad,
+  isCurrentChatTask,
+  isLatestLoad,
+  ownerChanged,
+  shouldReleaseChatTask,
+  shouldReloadOnShow,
+} from '../src/pages/match/view'
 
 /**
  * match 页 owner/epoch 交错的回归（#170 A/B/C/D 的判据层）。
@@ -93,6 +101,150 @@ describe('match 页 owner/epoch 交错', () => {
     const seqAfterLogin = s.seq
     switchOwner(s, 'user-a')
     expect(s.seq).toBe(seqAfterLogin)
+  })
+})
+
+/**
+ * 「聊一聊」任务令牌的模型（#67 R3）。
+ *
+ * 与页面同构：`inFlight` 是 `listingId -> token` 的 Map（不是 Set），`epoch` 只在换账号
+ * 与卸载时前进。`beginChat` 对应 `chat()` 入口，`release` 对应它的 `finally`。
+ */
+function chatPage() {
+  return {
+    ownerId: null as string | null,
+    epoch: 0,
+    inFlight: new Map<string, number>(),
+    taskSeq: 0,
+  }
+}
+
+function switchChatOwner(p: ReturnType<typeof chatPage>, next: string | null) {
+  if (ownerChanged(p.ownerId, next)) {
+    p.ownerId = next
+    // 换账号同时作废建会话任务（index.tsx 的 ownerChanged 分支：chatEpoch += 1、
+    // inFlight.clear()）—— 清掉旧账号的锁，新账号才能立刻对同一商品重新发起。
+    p.epoch += 1
+    p.inFlight.clear()
+  }
+}
+
+/** 对应 `chat()` 入口：在途闸门 + 捕获令牌 + 占锁。被闸门拦住时返回 null。 */
+function beginChat(p: ReturnType<typeof chatPage>, listingId: string): ChatTask | null {
+  if (p.inFlight.has(listingId)) return null
+  p.taskSeq += 1
+  const task: ChatTask = {
+    listingId,
+    ownerId: p.ownerId,
+    epoch: p.epoch,
+    token: p.taskSeq,
+  }
+  p.inFlight.set(listingId, task.token)
+  return task
+}
+
+/** 对应 `chat()` 里的 `isCurrentTask()` */
+function stillCurrent(p: ReturnType<typeof chatPage>, task: ChatTask): boolean {
+  return isCurrentChatTask(task, {
+    ownerId: p.ownerId,
+    epoch: p.epoch,
+    inFlightToken: p.inFlight.get(task.listingId),
+  })
+}
+
+/** 对应 `chat()` 的 `release()`：只释放自己的锁（判据本身取自页面同一个纯函数） */
+function releaseChat(p: ReturnType<typeof chatPage>, task: ChatTask) {
+  if (!shouldReleaseChatTask(task, p.inFlight.get(task.listingId))) return
+  p.inFlight.delete(task.listingId)
+}
+
+describe('match 页「聊一聊」任务令牌（#67 R3）', () => {
+  test('任务仍在当前账号且未被顶替时有效（不能把所有请求都判旧）', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+    const task = beginChat(p, 'listing-1')
+    expect(task).not.toBeNull()
+    expect(stillCurrent(p, task as ChatTask)).toBe(true)
+
+    // 同一账号内从会话页返回触发重拉：只推进加载序号，不推进 chatEpoch，
+    // 否则一次仍然有效的建会话请求会被丢掉。
+    expect(p.epoch).toBe(1)
+    expect(stillCurrent(p, task as ChatTask)).toBe(true)
+  })
+
+  test('A 发起的建会话，切到 B 之后迟到返回也不得写缓存/导航', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+    const taskA = beginChat(p, 'listing-1') as ChatTask
+
+    switchChatOwner(p, 'user-b')
+    expect(p.ownerId).toBe('user-b')
+    expect(stillCurrent(p, taskA)).toBe(false)
+  })
+
+  test('A→B→A 之后 owner 又相等，仍必须判旧（靠代次而不是 owner）', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+    const taskA = beginChat(p, 'listing-1') as ChatTask
+
+    switchChatOwner(p, 'user-b')
+    switchChatOwner(p, 'user-a')
+
+    // 只看 ownerId 会误判为有效，于是迟到的缓存写入与导航会落到 B 已经离开的账号上。
+    expect(p.ownerId).toBe(taskA.ownerId)
+    expect(stillCurrent(p, taskA)).toBe(false)
+  })
+
+  test('卸载（代次前进）后返回的响应判旧', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+    const task = beginChat(p, 'listing-1') as ChatTask
+
+    // index.tsx 卸载 effect：`chatEpoch.current += 1`
+    p.epoch += 1
+    expect(stillCurrent(p, task)).toBe(false)
+  })
+
+  test('B 持锁时结束 A 的请求：A 的收尾不得释放 B 的在途标记', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+    const taskA = beginChat(p, 'listing-1') as ChatTask
+
+    switchChatOwner(p, 'user-b')
+    const taskB = beginChat(p, 'listing-1') as ChatTask
+
+    // A 的迟到 finally 在 B 已经取得锁之后才跑
+    releaseChat(p, taskA)
+    expect(p.inFlight.get('listing-1')).toBe(taskB.token)
+    expect(stillCurrent(p, taskB)).toBe(true)
+
+    // B 自己的收尾正常释放
+    releaseChat(p, taskB)
+    expect(p.inFlight.has('listing-1')).toBe(false)
+  })
+
+  test('缓存命中路径连点只跳一次（在途闸门对缓存分支同样生效）', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+
+    const first = beginChat(p, 'listing-1')
+    const second = beginChat(p, 'listing-1')
+    expect(first).not.toBeNull()
+    expect(second).toBeNull()
+
+    // 释放后允许再次发起（例如用户返回后又点了一次）
+    releaseChat(p, first as ChatTask)
+    expect(beginChat(p, 'listing-1')).not.toBeNull()
+  })
+
+  test('不同商品的在途互不干扰：一个商品的收尾不影响另一个', () => {
+    const p = chatPage()
+    switchChatOwner(p, 'user-a')
+    const task1 = beginChat(p, 'listing-1') as ChatTask
+    const task2 = beginChat(p, 'listing-2') as ChatTask
+
+    releaseChat(p, task1)
+    expect(stillCurrent(p, task2)).toBe(true)
   })
 })
 

@@ -7,10 +7,19 @@ import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { createConversation } from '@/features/chat/api'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
 import { formatAmount, MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
-import { canLoad, isLatestLoad, ownerChanged, shouldReloadOnShow } from './view'
+import {
+  type ChatTask,
+  canLoad,
+  isCurrentChatTask,
+  isLatestLoad,
+  ownerChanged,
+  shouldReleaseChatTask,
+  shouldReloadOnShow,
+} from './view'
 import './index.scss'
 
 /**
@@ -29,7 +38,11 @@ import './index.scss'
  *
  * 空态分两种：愿望本身已经结束（已成交 / 过期 / 已不存在），与「暂时没命中」。
  *
- * **账号作用域（#170）**：`wish` / `items` / `total` / `started` 都属于「当前登录用户」。
+ * **会话入口（#67 第二步）**：「聊一聊」走 `POST /conversations` 拿真实 `conversation.id`
+ * 再跳会话页；本地不再有「点过就算发起成功」的状态。
+ *
+ * **账号作用域（#170）**：`wish` / `items` / `total` / `conversations` / `pending` 都属于
+ * 「当前登录用户」。
  * 加载挂在 `authStatus === 'authed' && userId` 上（不在 `useLoad` 里抢跑：cold start
  * 时 `GET /me` 还没回来，那两个端点必然 401）；换账号时在**渲染期同步**清场并自增
  * epoch，丢掉在途响应；从详情 / 会话子页返回时由 `useDidShow` 重新加载，覆盖期间
@@ -61,8 +74,38 @@ export default function Match() {
   const [state, setState] = useState<'loading' | 'ready' | 'notFound' | 'forbidden' | 'failed'>(
     'loading',
   )
-  /** 逐条的「聊一聊」状态：已发起会话的换成「去会话」 */
-  const [started, setStarted] = useState<Record<string, boolean>>({})
+  /**
+   * 逐条的会话入口：`listingId -> conversation.id`，**只由服务端响应写入**（#67 第二步）。
+   *
+   * 此前这里是一个 `Record<string, boolean>` 的 `started`：点一下先把它置 `true`，
+   * 再用「发起会话待接入」的 toast 收场 —— 本地状态冒充了「会话已建好」这个服务端
+   * 事实，而会话其实从没建出来。现在一律先 `POST /conversations` 拿到真实
+   * `conversation.id` 再跳转。服务端对同一 (listingId, 买家) 复用既有会话
+   * （新建 201 / 复用 200，响应体同型），所以这份缓存只是省一次往返，不是真相来源。
+   */
+  const [conversations, setConversations] = useState<Record<string, string>>({})
+  /** 在途的 listingId：请求期间按钮显示「发起中…」且不再响应点击 */
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  /**
+   * 在途守卫用 ref 而不是上面的 state：同一帧内的两次点击读到的是同一份旧 state，
+   * 会打出两次 POST（服务端幂等不会多建会话，但会往导航栈压两个会话页）。
+   *
+   * 存 `listingId -> 任务令牌`而不是「有没有在途」：A 的迟到收尾会删掉 B 的在途标记，
+   * 让 B 能重复点击；比对令牌才能做到「只释放自己的锁」（#67 R3）。
+   */
+  const inFlight = useRef<Map<string, number>>(new Map())
+
+  /** 「聊一聊」任务的唯一序号，只前进。 */
+  const chatTaskSeq = useRef(0)
+
+  /**
+   * 本页归属账号的**代次**，只在换账号与卸载时 +1。
+   *
+   * 不复用下面的 `loadSeq`：那个每次 `load()` 都前进（从会话页返回触发 `useDidShow`
+   * 就一次），拿它守卫建会话会把一次仍然有效的请求误判过期。而 A→B→A 之后 `userId`
+   * 又等于 A，只比 owner 判不出旧任务，所以需要一个只随账号切换前进的代次（#67 R3）。
+   */
+  const chatEpoch = useRef(0)
 
   /**
    * 自增序号丢弃过期响应：连点重试时先发的请求可能后到；换账号时同步 +1，
@@ -80,10 +123,14 @@ export default function Match() {
   if (ownerChanged(prevUserId, userId)) {
     setPrevUserId(userId)
     loadSeq.current += 1
+    // 建会话的任务令牌一并作废：A→B→A 之后 owner 又相等，只有代次能判出旧任务（#67 R3）。
+    chatEpoch.current += 1
     setWish(null)
     setItems([])
     setTotal(0)
-    setStarted({})
+    setConversations({})
+    setPending({})
+    inFlight.current.clear()
     // `state` 在这里一并重置为 `loading`：守卫在 `anonymous` 阶段只渲染 AuthRequired，
     // 不会清 state；B 进来时若 state 仍是 A 留下的 `'ready'`，加载 effect 推回
     // `'loading'` 之前会闪一帧 A 的列表。同步重置避免那一帧泄漏。
@@ -152,14 +199,80 @@ export default function Match() {
     void load()
   })
 
-  const chat = (view: MatchView) => {
-    const id = view.match.id
-    if (started[id]) {
-      void Taro.switchTab({ url: '/pages/chat/index' })
+  /**
+   * 卸载让旧任务失效：`navigateBack` 之后返回的响应不能再写 state、发导航或弹错
+   * （#67 R3）。只推进代次；`inFlight` 随组件一起丢弃，不需要逐个释放。
+   */
+  useEffect(
+    () => () => {
+      chatEpoch.current += 1
+    },
+    [],
+  )
+
+  /**
+   * 「聊一聊」：真实建/取会话，拿到 `conversation.id` 再跳会话页（#67 第二步）。
+   *
+   * 用 `view.match.listingId`（商品 id）而不是 `view.match.id`（命中行 id）—— 建会话
+   * 的入参是商品。已经拿过 id 的直接跳，省一次往返；跳转失败（页面栈已满）只是不跳，
+   * 会话本身已经建好，再点一次即可。
+   */
+  const chat = async (view: MatchView) => {
+    const { listingId } = view.match
+    // 缓存命中也过这道闸：连点两次会往导航栈压两个会话页。
+    if (inFlight.current.has(listingId)) return
+
+    // 令牌在**发起前**捕获：owner 与代次都要取此刻的值，响应回来时再比对。
+    chatTaskSeq.current += 1
+    const task: ChatTask = {
+      listingId,
+      ownerId: userId,
+      epoch: chatEpoch.current,
+      token: chatTaskSeq.current,
+    }
+    inFlight.current.set(listingId, task.token)
+    const isCurrentTask = (): boolean =>
+      isCurrentChatTask(task, {
+        ownerId: userIdRef.current,
+        epoch: chatEpoch.current,
+        inFlightToken: inFlight.current.get(listingId),
+      })
+    /** 只释放自己的锁：B 已经重新发起时，A 的收尾不能删掉 B 的标记。 */
+    const release = (): void => {
+      if (!shouldReleaseChatTask(task, inFlight.current.get(listingId))) return
+      inFlight.current.delete(listingId)
+      setPending((prev) => {
+        if (prev[listingId] !== true) return prev
+        const next = { ...prev }
+        delete next[listingId]
+        return next
+      })
+    }
+
+    const known = conversations[listingId]
+    if (known) {
+      try {
+        await Taro.navigateTo({ url: `/pages/conversation/index?id=${known}` })
+      } finally {
+        release()
+      }
       return
     }
-    setStarted((prev) => ({ ...prev, [id]: true }))
-    void Taro.showToast({ title: '发起会话待接入', icon: 'none' })
+
+    setPending((prev) => ({ ...prev, [listingId]: true }))
+    try {
+      const conversation = await createConversation(listingId)
+      // 迟到的成功响应一律丢弃：不写缓存、不导航（A→B→A 时 owner 相同，靠代次判旧）。
+      if (!isCurrentTask()) return
+      setConversations((prev) => ({ ...prev, [listingId]: conversation.id }))
+      await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
+    } catch {
+      // 旧任务的失败不能弹给新账号。
+      if (!isCurrentTask()) return
+      void Taro.showToast({ title: '会话发起失败，请重试', icon: 'none' })
+    } finally {
+      release()
+    }
   }
 
   const wishClosed = wish?.status === 'CLOSED' || wish?.status === 'FULFILLED'
@@ -267,7 +380,8 @@ export default function Match() {
       ) : (
         <View className="match__list">
           {items.map((view) => {
-            const on = started[view.match.id]
+            const known = conversations[view.match.listingId]
+            const busy = pending[view.match.listingId] === true
             return (
               <View key={view.match.id} className="match__row">
                 <View
@@ -315,8 +429,11 @@ export default function Match() {
                   </View>
                 </View>
 
-                <View className={`match__chat${on ? ' is-on' : ''}`} onClick={() => chat(view)}>
-                  <Text>{on ? '去会话' : '聊一聊'}</Text>
+                <View
+                  className={`match__chat${known ? ' is-on' : ''}${busy ? ' is-busy' : ''}`}
+                  onClick={() => void chat(view)}
+                >
+                  <Text>{busy ? '发起中…' : known ? '去会话' : '聊一聊'}</Text>
                 </View>
               </View>
             )
