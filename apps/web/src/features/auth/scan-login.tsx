@@ -11,7 +11,7 @@ import { ApiError } from '../../lib/api-client'
 import { FormAlert } from './form'
 import { authKeys } from './queries'
 import { createScanTicket, exchangeScanTicket, fetchScanTicketStatus } from './scan-api'
-import { nextScanPollDelayMs } from './scan-poll'
+import { isScanTicketExpired, nextScanPollDelayMs } from './scan-poll'
 
 type TicketData = Pick<ScanTicketResponse, 'ticket' | 'qrCodeDataUrl' | 'expiresAt'>
 
@@ -146,7 +146,7 @@ export function ScanLoginPanel({
     const schedule = () => {
       if (!isCurrent()) return
       const remainingMs = Date.parse(pendingTicket.expiresAt) - Date.now()
-      if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+      if (isScanTicketExpired(pendingTicket.expiresAt) || remainingMs <= 0) {
         setState({ phase: 'expired', ticket: pendingTicket })
         return
       }
@@ -155,6 +155,10 @@ export function ScanLoginPanel({
 
     const tick = async () => {
       if (!isCurrent()) return
+      if (isScanTicketExpired(pendingTicket.expiresAt)) {
+        setState({ phase: 'expired', ticket: pendingTicket })
+        return
+      }
       try {
         const result = await fetchScanTicketStatus(ticket, verifier)
         if (!isCurrent()) return

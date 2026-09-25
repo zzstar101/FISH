@@ -11,3 +11,9 @@ export function nextScanPollDelayMs(attempt: number): number {
   }
   return Math.min(SCAN_POLL_INITIAL_DELAY_MS * 2 ** attempt, SCAN_POLL_MAX_DELAY_MS)
 }
+
+/** 本地到期判定。非法时间按已过期处理，避免坏契约继续轮询。 */
+export function isScanTicketExpired(expiresAt: string, nowMs = Date.now()): boolean {
+  const expiresAtMs = Date.parse(expiresAt)
+  return !Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs
+}
