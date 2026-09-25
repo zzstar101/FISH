@@ -394,15 +394,23 @@ export default function Sell() {
    * 失败也早暴露在图上去重传，而不是等用户填完表单才说图片传不上去。
    * 用户在飞行途中删掉这张时，`setPhotos` 里已经找不到它 —— 更新自然变成 no-op
    * （对象存储里会留下一个没人引用的对象，可接受）。
+   *
+   * `() => taskAlive(task)` 一路交给上传适配器：presign / 直传 PUT / confirm 三步各自在
+   * **发请求之前**再问一遍归属，换号 / 卸载后剩下的步骤不再发出（#170 复查 #208）。
+   * 中止时抛的是 `UploadAbortedError`，而此刻 `taskAlive(task)` 必为假 —— 下面的 catch
+   * 会原样返回，既不写状态也不提示。
    */
   const startUpload = (photo: SelectedPhoto, task: SellTask) => {
     void (async () => {
       try {
-        const objectKey = await uploadListingImage({
-          path: photo.path,
-          mime: photo.mime,
-          sizeBytes: photo.sizeBytes,
-        })
+        const objectKey = await uploadListingImage(
+          {
+            path: photo.path,
+            mime: photo.mime,
+            sizeBytes: photo.sizeBytes,
+          },
+          () => taskAlive(task),
+        )
         // 换号：A 上传得到的 objectKey 不能留在 B 的表单里（B 发布时会把 A 的图带上）
         if (!taskAlive(task)) return
         setPhotos((prev) =>

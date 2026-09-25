@@ -22,6 +22,7 @@ import {
 } from '@fish/contracts/listings/schema'
 import Taro from '@tarojs/taro'
 import { apiRequest } from '@/lib/request'
+import { assertUploadActive } from './active'
 import { isChooseMediaCancel } from './choose-error'
 import { type AllowedImageMime, mimeFromPath } from './mime'
 
@@ -162,8 +163,15 @@ function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
  * **一张一次调用，独立失败**：出物页在用户**选中图片时**就调用本函数，并自行维护每张图的
  * 「上传中 / 已上传 / 重传」状态。这里刻意不做批量：一张失败不牵连其余张，
  * 重试也只是对那一张再调一次（presign 只签一次用途，重试会重新签）。
+ *
+ * `isActive` 是调用方的在途判据（出物页传 `() => taskAlive(task)`）：三步里**每一次**
+ * 发请求前都会问一遍，换号 / 卸载后立刻中止，不再发出后续鉴权请求（#170 复查 #208）。
  */
-export async function uploadListingImage(photo: PickedPhoto): Promise<string> {
+export async function uploadListingImage(
+  photo: PickedPhoto,
+  isActive?: () => boolean,
+): Promise<string> {
+  assertUploadActive(isActive)
   const presign = UploadPresignResponseSchema.parse(
     await apiRequest(UPLOAD_ROUTES.presign, {
       method: 'POST',
@@ -172,6 +180,9 @@ export async function uploadListingImage(photo: PickedPhoto): Promise<string> {
   )
 
   const buffer = await readFileBuffer(photo.path)
+  // 直传 PUT 不携带会话（只有 presign 的签名），但它会在对象存储里留下真实对象 ——
+  // 换号后这一发同样不该再发。
+  assertUploadActive(isActive)
   const uploaded = await Taro.request({
     url: presign.uploadUrl,
     method: 'PUT',
@@ -186,6 +197,7 @@ export async function uploadListingImage(photo: PickedPhoto): Promise<string> {
     throw new Error('图片上传失败,请重试')
   }
 
+  assertUploadActive(isActive)
   const confirmed = UploadConfirmResponseSchema.parse(
     await apiRequest(UPLOAD_ROUTES.confirm, {
       method: 'POST',

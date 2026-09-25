@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { assertUploadActive, UploadAbortedError } from '../src/features/upload/active'
 import {
   beginTask,
   canLoadEditTarget,
@@ -354,6 +355,109 @@ async function pageSlice(from: string, to: string): Promise<string> {
   expect(end).toBeGreaterThan(start)
   return code.slice(start, end)
 }
+
+/** 取任意源文件里 `from` 到其后第一个 `to` 之间的源码（接线层用） */
+async function fileSlice(file: string, from: string, to: string): Promise<string> {
+  const code = await Bun.file(new URL(file, import.meta.url)).text()
+  const start = code.indexOf(from)
+  expect(start).toBeGreaterThanOrEqual(0)
+  const end = code.indexOf(to, start)
+  expect(end).toBeGreaterThan(start)
+  return code.slice(start, end)
+}
+
+/** 断言 `first` 出现在 `second` 之前（两者都必须存在） */
+function expectBefore(block: string, first: string, second: string): void {
+  const i = block.indexOf(first)
+  const j = block.indexOf(second)
+  expect(i, `应出现 ${first}`).toBeGreaterThanOrEqual(0)
+  expect(j, `应出现 ${second}`).toBeGreaterThanOrEqual(0)
+  expect(i, `${first} 应在 ${second} 之前`).toBeLessThan(j)
+}
+
+/**
+ * 多步上传链的逐步在途检查（#170 复查 #208）。
+ *
+ * 复查原话：`startUpload()` 在整个 `uploadListingImage()` 返回之后才检查任务，而后者内部
+ * 还有 presign → 读文件 → PUT → confirm 多步；换号 / 卸载后旧链**是否继续发鉴权请求**要单独
+ * 验证，必要时把检查贯穿每一步。结论是「会继续发」，所以这里锁两件事：
+ * - 判据层：中止信号是独立的错误类型，链上每一步发请求前都问一遍归属；
+ * - 接线层：三步各有一道检查、且**紧挨着自己的那一步**（挪到请求之后就算失效），出物页
+ *   把 `() => taskAlive(task)` 交给适配器，中止时 catch 的第一个语句就是不写状态。
+ */
+describe('多步上传链的逐步在途检查（#170 复查 #208）', () => {
+  test('不传判据时保持旧行为（一次性调用不关心归属）', () => {
+    expect(() => assertUploadActive()).not.toThrow()
+    expect(() => assertUploadActive(() => true)).not.toThrow()
+  })
+
+  test('判据为假：抛的是中止信号，不是普通上传失败文案', () => {
+    let thrown: unknown = null
+    try {
+      assertUploadActive(() => false)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(UploadAbortedError)
+    expect(thrown).toBeInstanceOf(Error)
+  })
+
+  test('起飞后换号：剩下每一步的请求都不再发出，只留下已经发出的那一步', () => {
+    let active = true
+    const sent: string[] = []
+    const step = (name: string) => {
+      assertUploadActive(() => active)
+      sent.push(name)
+    }
+    step('presign')
+    // 换号 / 卸载：epoch 前进，页面上的 `taskAlive(task)` 从这一刻起为假
+    active = false
+    expect(() => step('put')).toThrow(UploadAbortedError)
+    expect(() => step('confirm')).toThrow(UploadAbortedError)
+    expect(sent).toEqual(['presign'])
+  })
+
+  test('适配器：三步各自在发请求之前问一遍归属（共 3 次，且不跨步复用）', async () => {
+    const block = await fileSlice(
+      '../src/features/upload/api.ts',
+      'export async function uploadListingImage',
+      '\n}',
+    )
+    expect(block).toContain('isActive?: () => boolean')
+    const gates = [...block.matchAll(/assertUploadActive\(isActive\)/g)].map(
+      (match) => match.index ?? -1,
+    )
+    const requests = [
+      'await apiRequest(UPLOAD_ROUTES.presign',
+      'await Taro.request(',
+      'await apiRequest(UPLOAD_ROUTES.confirm',
+    ].map((marker) => block.indexOf(marker))
+    expect(gates).toHaveLength(3)
+    for (const [index, at] of requests.entries()) {
+      expect(at, `缺少第 ${index + 1} 个请求`).toBeGreaterThan(0)
+      const gate = gates.filter((position) => position < at).pop()
+      expect(gate, `第 ${index + 1} 个请求之前没有在途检查`).toBeDefined()
+      // 检查必须紧挨着自己的那一步：中间不能再夹着别的请求（挪到请求之后即失效）
+      const between = requests.filter((other) => (gate ?? 0) < other && other < at)
+      expect(between, `第 ${index + 1} 个请求与它的检查之间夹着别的请求`).toEqual([])
+    }
+  })
+
+  test('出物页把 taskAlive 作为判据交给适配器；中止时 catch 先确认任务、再决定写状态', async () => {
+    const block = await pageSlice(
+      'const startUpload = (photo: SelectedPhoto, task: SellTask) => {',
+      'const pickImage',
+    )
+    expectBefore(block, 'await uploadListingImage(', '() => taskAlive(task),')
+    const catchAt = block.indexOf('} catch (error) {')
+    const guardAt = block.indexOf('if (!taskAlive(task)) return', catchAt)
+    const setAt = block.indexOf('setPhotos(', catchAt)
+    expect(catchAt).toBeGreaterThanOrEqual(0)
+    expect(guardAt).toBeGreaterThan(catchAt)
+    // 中止 = 任务已失效 ⇒ 直接返回：不写状态，也不给用户弹一条莫名其妙的失败
+    expect(setAt).toBeGreaterThan(guardAt)
+  })
+})
 
 describe('出物页接线（#170 判据 C）', () => {
   test('换号清场块覆盖全部 18 个账号作用域 state，并让代次前进、清掉编辑模式与在途润色', async () => {
