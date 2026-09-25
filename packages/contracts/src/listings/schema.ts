@@ -347,6 +347,8 @@ export const ListingErrorCodeSchema = z.enum([
   'LISTING_NOT_FOUND',
   /** 409：RESERVED / SOLD 上的编辑、下架、上架。 */
   'LISTING_NOT_EDITABLE',
+  /** 409：被治理动作下架的商品上的编辑、下架、上架（#73 治理半场 PR3；恢复只能管理员操作）。 */
+  'LISTING_GOVERNANCE_BLOCKED',
   /** 422：objectKey 前缀不属于本人。（同一 key 重复由 schema 的 refine 先掳下，报 VALIDATION_FAILED。） */
   'IMAGE_REFERENCE_INVALID',
   /** 422：confirm 时对象存储里找不到该对象。 */

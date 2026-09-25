@@ -5,6 +5,7 @@ import { adminAuditLogs } from './schema/admin'
 import { aiPolishRequests } from './schema/ai-polish-requests'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
+import { userRestrictions } from './schema/governance'
 import { jobs } from './schema/jobs'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
@@ -12,6 +13,7 @@ import { messageMedia } from './schema/message-media'
 import { messages } from './schema/messages'
 import { listingModerationRecords } from './schema/moderation'
 import { notifications } from './schema/notifications'
+import { reports } from './schema/reports'
 import { sessions } from './schema/sessions'
 import { transactionMeetupTokens, transactions } from './schema/transactions'
 import { users, wechatIdentities } from './schema/users'
@@ -84,10 +86,11 @@ export async function seed(tx: SeedTx): Promise<void> {
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
   // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）/ `wechat_identities`
-  // （#86，引用 users 且 ON DELETE CASCADE）必须在内：漏掉会让 seed 直接失败
+  // （#86，引用 users 且 ON DELETE CASCADE）/ `reports`（#73 治理半场，引用 users）
+  // 必须在内：漏掉会让 seed 直接失败
   // （实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
   )
 
   const now = new Date()

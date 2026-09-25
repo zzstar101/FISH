@@ -7,9 +7,11 @@ import {
   AUDIT_ACTION_LABEL,
   AUTH_STATUS_LABEL,
   formatDateTime,
+  RESTRICTION_TYPE_LABEL,
   statusLabel,
   USER_ROLE_LABEL,
 } from './display'
+import { GovernancePanel } from './governance-panel'
 import { useAdminUser } from './queries'
 
 /**
@@ -27,7 +29,13 @@ export function UserDetailPage() {
 
   const data = detail.data
 
-  const { user, listingStats, recentAuditLogs } = data
+  const { user, listingStats, activeRestrictions, recentAuditLogs } = data
+
+  // 三个治理按钮按**真实状态**收敛（评审 m6）：后端是唯一真相，但「没有任何生效
+  // 限制时仍显示解除按钮」会让操作者照着一个必然 409 的按钮点。反过来，生效中的
+  // 限制也要显式列出来——否则页面看不出该用户到底受哪种限制、什么时候到期。
+  const hasPublishRestrict = activeRestrictions.some((item) => item.type === 'PUBLISH_RESTRICT')
+  const hasBan = activeRestrictions.some((item) => item.type === 'BAN')
 
   return (
     <div className="space-y-4">
@@ -69,7 +77,90 @@ export function UserDetailPage() {
           <StatCell label="已售出" value={listingStats.SOLD} />
           <StatCell label="已下架" value={listingStats.OFFLINE} />
         </div>
+        {/* 交易查询入口（#73 PR4）：交易页的 buyerId / sellerId 是 URL-only 参数，
+            这里正是它们的来源。买家与卖家分成两个链接——同一个请求里同时带两个 id
+            会被后端 AND 起来，结果恒为空。 */}
+        <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line pt-3 text-sm">
+          <span className="text-ink-3">交易记录</span>
+          <Link
+            className="text-brand hover:underline"
+            search={{ buyerId: user.id }}
+            to="/admin/transactions"
+          >
+            作为买家
+          </Link>
+          <Link
+            className="text-brand hover:underline"
+            search={{ sellerId: user.id }}
+            to="/admin/transactions"
+          >
+            作为卖家
+          </Link>
+        </div>
       </Card>
+
+      {/* 治理（#73 PR3）：限制发布 / 封禁 / 解除限制。按钮集合随当前生效中的限制收敛：
+          - 没有任何生效限制 → 只给「限制发布」「封禁用户」，「解除限制」留给真有限制的人；
+          - 已有同类限制 → 后端会用 409 拒绝重复施加，这里提前收起来；
+          - 解除限制一次解除全部（后端口径），所以只在存在任一限制时出现。
+          仍然不做「前端替后端判状态」的猜测：这里只是去掉必然失败的入口。 */}
+      <GovernancePanel
+        actions={[
+          ...(hasPublishRestrict
+            ? []
+            : [
+                {
+                  action: 'restrict-publish' as const,
+                  label: '限制发布',
+                  tone: 'danger' as const,
+                  description: '禁止该用户发布与编辑商品，留言 / 聊天仍可用',
+                },
+              ]),
+          ...(hasBan
+            ? []
+            : [
+                {
+                  action: 'ban' as const,
+                  label: '封禁用户',
+                  tone: 'danger' as const,
+                  description: '禁止全部写入口（发布 / 留言 / 聊天 / 交易），浏览仍可用',
+                },
+              ]),
+          ...(activeRestrictions.length === 0
+            ? []
+            : [
+                {
+                  action: 'lift-restriction' as const,
+                  label: '解除限制',
+                  description: '解除该用户全部生效中的限制（限制发布与封禁一起解）',
+                },
+              ]),
+        ]}
+        targetId={user.id}
+      />
+
+      {activeRestrictions.length > 0 ? (
+        <Card className="p-4">
+          <h2 className="mb-3 font-semibold text-[15px]">生效中的限制</h2>
+          <ul className="divide-y divide-line">
+            {activeRestrictions.map((restriction) => (
+              <li className="flex items-center justify-between gap-3 py-2.5" key={restriction.id}>
+                <div className="flex items-center gap-2">
+                  <Badge shape="pill" variant="danger">
+                    {statusLabel(RESTRICTION_TYPE_LABEL, restriction.type)}
+                  </Badge>
+                  <span className="text-sm text-ink-3">{restriction.reason}</span>
+                </div>
+                <span className="text-sm text-ink-3">
+                  {restriction.expiresAt ? `至 ${formatDateTime(restriction.expiresAt)}` : '永久'}
+                  {' · '}
+                  {formatDateTime(restriction.createdAt)}起
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       <Card className="p-4">
         <h2 className="mb-3 font-semibold text-[15px]">最近 Admin 操作记录</h2>

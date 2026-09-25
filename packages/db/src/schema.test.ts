@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
 import { conversations } from './schema/conversations'
+import { userRestrictions } from './schema/governance'
 import { listings } from './schema/listings'
 import { messages } from './schema/messages'
 import { transactions } from './schema/transactions'
@@ -206,4 +207,79 @@ test('不存在 Offer 表', async () => {
     sql`select table_name from information_schema.tables where table_schema = 'public' and table_name ilike '%offer%'`,
   )
   expect(rows.map((row) => row.table_name)).toEqual([])
+})
+
+/**
+ * #73 治理半场 PR3：`user_restrictions` 的两条 DB 约束是并发安全的兜底。
+ *
+ * 应用层已经用「条件更新 + 409」处理两个管理员同时操作，但条件更新挡不住
+ * 「先查一次没有 ACTIVE 限制、再插两条」这种两条 INSERT 都成功进入的场景；
+ * 部分唯一索引让数据库自己拒绝第二条。
+ */
+test('同一用户同一类型只允许一条生效中的限制（部分唯一索引兜底并发）', async () => {
+  await withFixture(async ({ seller, buyer }) => {
+    const insert = (status: 'ACTIVE' | 'LIFTED', reason: string) =>
+      db
+        .insert(userRestrictions)
+        .values({
+          userId: seller.id,
+          type: 'BAN',
+          status,
+          reason,
+          actorUserId: buyer.id,
+        })
+        .returning({ id: userRestrictions.id })
+
+    let _createdId: string | undefined
+    let _liftedId: string | undefined
+    try {
+      const first = await insert('ACTIVE', '第一条生效中的封禁')
+      _createdId = first[0]?.id
+      expect(first).toHaveLength(1)
+
+      // 第二条 ACTIVE 同 (user_id, type)：必须被部分唯一索引拒绝
+      // （必须是 async 函数：Bun 的 `expect(...).rejects` 不认 Drizzle 的 thenable query builder）
+      const insertSecondActive = async () => await insert('ACTIVE', '第二条生效中的封禁')
+      await expect(insertSecondActive()).rejects.toThrow()
+
+      // 同 (user_id, type) 的 LIFTED 历史行可以共存：解除不是删行
+      const lifted = await insert('LIFTED', '已解除的历史封禁')
+      _liftedId = lifted[0]?.id
+      expect(lifted).toHaveLength(1)
+
+      // 不同类型互不影响：PUBLISH_RESTRICT 可以与 BAN 同时生效
+      const otherType = await db
+        .insert(userRestrictions)
+        .values({
+          userId: seller.id,
+          type: 'PUBLISH_RESTRICT',
+          reason: '限制发布',
+          actorUserId: buyer.id,
+        })
+        .returning({ id: userRestrictions.id })
+      expect(otherType).toHaveLength(1)
+    } finally {
+      await db.delete(userRestrictions).where(eq(userRestrictions.userId, seller.id))
+    }
+  })
+})
+
+test('管理员不能限制自己（DB CHECK）', async () => {
+  await withFixture(async ({ seller }) => {
+    try {
+      const insertSelfRestrict = async () =>
+        await db
+          .insert(userRestrictions)
+          .values({
+            userId: seller.id,
+            type: 'BAN',
+            reason: '自封',
+            actorUserId: seller.id,
+          })
+          .returning({ id: userRestrictions.id })
+      await expect(insertSelfRestrict()).rejects.toThrow()
+    } finally {
+      await db.delete(userRestrictions).where(eq(userRestrictions.userId, seller.id))
+    }
+  })
 })

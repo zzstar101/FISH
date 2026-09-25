@@ -130,6 +130,24 @@ export type AdminListingStatusCount = z.infer<typeof AdminListingStatusCountSche
 export const AdminUserDetailSchema = z.object({
   user: AdminUserSummarySchema,
   listingStats: AdminListingStatusCountSchema,
+  /**
+   * 该用户当前**生效中**的限制（#73 PR3，评审 m6）。
+   *
+   * Admin 需要它才能让治理按钮反映真实状态：没有这个字段时前端只能把三个按钮
+   * （限制发布 / 封禁 / 解除限制）恒定全显，于是「没有任何生效限制的用户」也会看到一个
+   * 点了必然 409 的解除按钮，无从判断该用户当前到底受什么限制。
+   *
+   * 只列生效中的（不含已过期 / 已解除）——历史限制都在 `recentAuditLogs` 里。
+   */
+  activeRestrictions: z.array(
+    z.object({
+      id: z.uuid(),
+      type: z.string(),
+      reason: z.string(),
+      expiresAt: z.iso.datetime().nullable(),
+      createdAt: z.iso.datetime(),
+    }),
+  ),
   /** 最近 10 条针对该用户的 Admin 操作（时间倒序；空数组 = 无操作记录）。 */
   recentAuditLogs: z.array(
     z.object({
@@ -184,6 +202,21 @@ export const AdminListingDetailSchema = z.object({
   category: ListingCategorySchema,
   condition: ListingConditionSchema,
   status: ListingStatusSchema,
+  /**
+   * 审核引擎视角的状态（#73 PR3，评审 M3）。
+   *
+   * 与 `status` 分开：治理下架会同时写 `status='OFFLINE'` 与 `moderationStatus='BLOCKED'`，
+   * 而审核引擎屏蔽商品时只写后者（`status` 保持卖家放的状态）。Admin 要靠它区分
+   * 「这条该走 restore 还是走人工审核」。
+   */
+  moderationStatus: z.enum(['APPROVED', 'REVIEW', 'BLOCKED']),
+  /**
+   * 治理下架时刻；`null` = 没有被治理下架过（评审 M3）。
+   *
+   * 恢复上架按钮只在这一列非空时可用——否则会把审核引擎屏蔽的商品放回公开列表，
+   * 等于用治理端点绕过审核。
+   */
+  governanceDelistedAt: z.iso.datetime().nullable(),
   urgent: z.boolean(),
   negotiable: z.boolean(),
   free: z.boolean(),
@@ -221,6 +254,25 @@ export const AdminOverviewSchema = z.object({
   activeListings: z.number().int().nonnegative(),
   /** transactions.status = COMPLETED 的完成交易数。 */
   completedTransactions: z.number().int().nonnegative(),
+  /**
+   * 待人工审核数：`listings.moderation_status = 'REVIEW'` 的商品数（#73 治理半场 PR4）。
+   * 与审核队列条目不是同一个口径——队列按「每条 listing 只显示最新 REVIEW 记录」去重，
+   * 这里数的是商品，用于概览卡片刻意不重申。
+   */
+  pendingReviewRecords: z.number().int().nonnegative(),
+  /** 待处理举报数：`reports.status = 'PENDING'` 的全量 count，不是当前页条数。 */
+  pendingReports: z.number().int().nonnegative(),
+  /** 近 7 日新增举报数（含已处理），`reports.created_at >= now() - 7 days`。 */
+  reportsLast7d: z.number().int().nonnegative(),
+  /**
+   * 生效中的限制数：`user_restrictions` 的全量 count，谓词是
+   * `status = 'ACTIVE' AND (expires_at IS NULL OR expires_at > now())`。
+   *
+   * `expires_at` 是惰性判断（没有定时任务，到期行在表里仍是 ACTIVE），所以必须和读时
+   * 同一个谓词。写成裸 `status='ACTIVE'` 会把已过期但仍标 ACTIVE 的行算进来，Overview
+   * 虚高，且与写入口的放行行为不一致。
+   */
+  activeRestrictions: z.number().int().nonnegative(),
 })
 export type AdminOverview = z.infer<typeof AdminOverviewSchema>
 
@@ -229,10 +281,31 @@ export type AdminOverview = z.infer<typeof AdminOverviewSchema>
 // ---------------------------------------------------------------------------
 
 /** Admin 动作枚举。高风险人工审核决定必须写入不可变审计日志。 */
-export const AdminAuditActionSchema = z.enum(['ADMIN_PROMOTED', 'MODERATION_DECISION'])
+export const AdminAuditActionSchema = z.enum([
+  'ADMIN_PROMOTED',
+  'MODERATION_DECISION',
+  // #73 治理半场 PR2：处理举报（只写结果，不动商品或用户）。
+  'REPORT_DECISION',
+  // #73 治理半场 PR3：五个治理端点各一个 action，审计可按动作单独筛选。
+  'LISTING_DELISTED',
+  'LISTING_RESTORED',
+  'USER_RESTRICTED',
+  'USER_RESTRICTION_LIFTED',
+  'USER_BANNED',
+  'USER_UNBANNED',
+])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 
-export const AdminAuditTargetTypeSchema = z.enum(['USER', 'LISTING', 'MODERATION_RECORD'])
+export const AdminAuditTargetTypeSchema = z.enum([
+  'USER',
+  'LISTING',
+  'MODERATION_RECORD',
+  // #73 治理半场 PR2：举报单本身作为审计目标。
+  'REPORT',
+  // #73 治理半场 PR3：限制类动作的审计目标是限制记录本身，同一用户被多次限制时
+  // 每条都有独立可查的目标（而不是都挂到 USER 上互相覆盖语义）。
+  'USER_RESTRICTION',
+])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
 
 export const AdminAuditLogEntrySchema = z.object({
@@ -317,6 +390,17 @@ export const AdminModerationDetailSchema = z.object({
 })
 export type AdminModerationDetail = z.infer<typeof AdminModerationDetailSchema>
 
+/**
+ * 审核记录检索（#73 治理半场 PR4）：与 `AdminModerationQueueSchema` 同一条目形状，
+ * 但**不带**「只留每条 listing 最新 REVIEW 记录」和「只列待审商品」这两个收窄——
+ * 队列是工作清单，这里是已经离开队列的历史（含 ALLOW / BLOCK / 仍 REVIEW 的）。
+ */
+export const AdminModerationRecordsSchema = z.object({
+  items: z.array(AdminModerationQueueItemSchema),
+  nextCursor: z.string().nullable(),
+})
+export type AdminModerationRecords = z.infer<typeof AdminModerationRecordsSchema>
+
 export const AdminTransactionSchema = z.object({
   id: z.uuid(),
   listingId: z.uuid(),
@@ -400,6 +484,27 @@ export const AdminAuditLogsQuerySchema = z.strictObject({
 })
 
 export const AdminModerationQueueQuerySchema = z.strictObject({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+})
+
+/**
+ * 审核记录检索参数（#73 治理半场 PR4）。与 `AdminModerationQueueQuerySchema` 的区别只有
+ * 筛选维度——分页口径（`limit` 默认 20 封顶 50、cursor 形态）完全一致。
+ */
+export const AdminModerationRecordsQuerySchema = z.strictObject({
+  /** 机器 / 人工判定。`REVIEW` 会同时列出机器判 REVIEW 与已被人工决定的记录。 */
+  decision: ModerationDecisionSchema.optional(),
+  listingId: z.uuid().optional(),
+  /**
+   * 商品关键词搜索（ILIKE，`%_\` 转义）。检索的是 listings 表的**当前** title /
+   * description，不是记录上的快照——快照是当时内容，按现标题找不到对应行。同
+   * `AdminListingsQuerySchema.q` 的口径，行为一致。
+   */
+  q: z.string().trim().min(1).max(50).optional(),
+  /** 同 `AdminListingsQuerySchema`：左闭右开。 */
+  createdFrom: z.iso.datetime().optional(),
+  createdTo: z.iso.datetime().optional(),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 })

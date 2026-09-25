@@ -28,10 +28,38 @@ export const ADMIN_ROUTES = {
   auditLogs: '/admin/audit-logs',
   /** GET 待人工审核队列。 */
   moderationQueue: '/admin/moderation/queue',
+  /**
+   * GET 审核记录检索（#73 治理半场 PR4）：已离开 REVIEW 队列的历史记录，按判定 /
+   * 商品 / 关键词 / 时间段 + 游标分页。队列端点保持纯 REVIEW 不变。
+   *
+   * **注册顺序**：`/moderation/records` 必须早于 `/moderation/:recordId`，否则
+   * "records" 会被当成 recordId 解析，非 UUID → 404。
+   */
+  moderationRecords: '/admin/moderation/records',
   /** GET 审核记录详情（含机器结果、历史和人工决定）。 */
   moderationDetail: (recordId: string) => `/admin/moderation/${recordId}`,
   /** POST 人工审核决定；Idempotency-Key 由 HTTP header 提供。 */
   moderationDecision: (recordId: string) => `/admin/moderation/${recordId}/decision`,
   /** GET 全量交易查询（仅管理员）。 */
   transactions: '/admin/transactions',
+  /** GET 举报队列（游标分页 + 状态 / 目标类型 / 原因筛选）。 */
+  reports: '/admin/reports',
+  /** GET 举报详情（举报 + 举报人 + 目标摘要 + 同目标其它未决举报）。 */
+  reportDetail: (reportId: string) => `/admin/reports/${reportId}`,
+  /** POST 处理举报（result = HANDLED / REJECTED + reason）。只写处理结果，不触发治理动作。 */
+  reportHandle: (reportId: string) => `/admin/reports/${reportId}/handle`,
+  /**
+   * 治理动作（#73 治理半场 PR3）。五个端点各自独立、可选带 `sourceReportId` 回链举报单；
+   * 业务变更与审计写入同事务，并发靠条件更新（先到者成功，后到者 409）。
+   */
+  /** POST 下架商品（`prior_listing_status` 记进审计快照，供 restore 还原）。 */
+  listingDelist: (listingId: string) => `/admin/listings/${listingId}/delist`,
+  /** POST 恢复商品（目标状态取 delist 审计快照里的 prior_listing_status）。 */
+  listingRestore: (listingId: string) => `/admin/listings/${listingId}/restore`,
+  /** POST 限制用户发布（`PUBLISH_RESTRICT`）。 */
+  userRestrictPublish: (userId: string) => `/admin/users/${userId}/restrict-publish`,
+  /** POST 封禁用户（`BAN`，当前只禁写不禁读）。 */
+  userBan: (userId: string) => `/admin/users/${userId}/ban`,
+  /** POST 解除该用户**全部**生效中的限制（`PUBLISH_RESTRICT` 与 `BAN` 一起解）。 */
+  userLiftRestriction: (userId: string) => `/admin/users/${userId}/lift-restriction`,
 } as const

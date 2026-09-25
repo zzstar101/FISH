@@ -64,6 +64,7 @@ export function AuditLogsPage() {
               <SelectItem value="all">全部动作</SelectItem>
               <SelectItem value="ADMIN_PROMOTED">提升管理员</SelectItem>
               <SelectItem value="MODERATION_DECISION">人工审核决定</SelectItem>
+              <SelectItem value="REPORT_DECISION">举报处理</SelectItem>
             </SelectContent>
           </Select>
           <Select
@@ -81,6 +82,7 @@ export function AuditLogsPage() {
               <SelectItem value="USER">用户</SelectItem>
               <SelectItem value="LISTING">商品</SelectItem>
               <SelectItem value="MODERATION_RECORD">审核记录</SelectItem>
+              <SelectItem value="REPORT">举报</SelectItem>
             </SelectContent>
           </Select>
         </div>

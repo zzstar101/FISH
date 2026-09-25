@@ -1,8 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import type { WishDto } from '@fish/contracts/wishes/schema'
 import { Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import { createWishesRouter } from './router'
 import type { WishService } from './service'
+
+/**
+ * #73 治理守卫测试替身：一律放行。守卫自身用例见 modules/governance/guard.test.ts。
+ */
+const allowGuard: RestrictionGuard = {
+  publish: async (_c, next) => {
+    await next()
+  },
+  write: async (_c, next) => {
+    await next()
+  },
+}
+
 import type { WishRow, WishStore } from './store'
 
 const dto: WishDto = {
@@ -47,6 +61,7 @@ root.route(
     matchQueue,
     getUserId: (c) => c.get('userId'),
     service,
+    guard: allowGuard,
   }),
 )
 
@@ -64,6 +79,7 @@ describe('wishes router', () => {
         matchQueue,
         getUserId: (c) => c.get('userId'),
         service,
+        guard: allowGuard,
       }),
     )
     expect((await unauthedRoot.request('/wishes')).status).toBe(401)
@@ -114,7 +130,11 @@ describe('wishes router', () => {
     })
     app.route(
       '/wishes',
-      createWishesRouter({ store: creatingStore, getUserId: (c) => c.get('userId') }),
+      createWishesRouter({
+        store: creatingStore,
+        getUserId: (c) => c.get('userId'),
+        guard: allowGuard,
+      }),
     )
 
     const response = await app.request('/wishes', {
@@ -155,6 +175,7 @@ describe('wishes router', () => {
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),
+        guard: allowGuard,
         service: {
           ...service,
           updateWish: async () => {
@@ -172,5 +193,88 @@ describe('wishes router', () => {
 
     expect(response.status).toBe(409)
     expect(await response.json()).toMatchObject({ error: { code: 'CONFLICT' } })
+  })
+
+  /**
+   * 固定治理守卫的**作用域**（对抗审查 F1）。
+   *
+   * 四个写路由曾全部接 `guard.write`（只挡 BAN），于是被「限制发布」的用户照样能发 / 改 /
+   * 关 / 成交愿望——愿望是公开内容，与发布商品同类，这是治理绕行。
+   *
+   * 两个方向都断言，缺一个就钉不死：
+   * - `publish` 拒绝 + `write` 放行 → 必须 403（证明挂的是 publish）
+   * - `publish` 放行 + `write` 拒绝 → 不能是 403（证明没有误挂 write）
+   */
+  test('愿望写路由挂在 publish 作用域（限制发布也挡，不只是封禁）', async () => {
+    const buildRoot = (guard: RestrictionGuard) => {
+      const app = new Hono<{ Variables: { userId: string } }>()
+      app.use('*', async (c, next) => {
+        c.set('userId', 'user-1')
+        await next()
+      })
+      app.route(
+        '/wishes',
+        createWishesRouter({
+          store: emptyStore,
+          matchQueue,
+          getUserId: (c) => c.get('userId'),
+          service,
+          guard,
+        }),
+      )
+      return app
+    }
+
+    const denyPublish: RestrictionGuard = {
+      publish: async (c) => c.json({ error: { code: 'FORBIDDEN', message: 'restricted' } }, 403),
+      write: async (_c, next) => {
+        await next()
+      },
+    }
+    const denyWrite: RestrictionGuard = {
+      publish: async (_c, next) => {
+        await next()
+      },
+      write: async (c) => c.json({ error: { code: 'FORBIDDEN', message: 'banned' } }, 403),
+    }
+
+    const wishId = '00000000-0000-0000-0000-000000000001'
+    const writes: [string, RequestInit][] = [
+      [
+        '/wishes',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            keyword: '机械键盘',
+            category: 'DIGITAL',
+            budgetMinCents: 10000,
+            budgetMaxCents: 20000,
+          }),
+        },
+      ],
+      [
+        `/wishes/${wishId}`,
+        {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ budgetMaxCents: 20000 }),
+        },
+      ],
+      [`/wishes/${wishId}/close`, { method: 'POST' }],
+      [`/wishes/${wishId}/fulfill`, { method: 'POST' }],
+    ]
+
+    const publishBlocked = buildRoot(denyPublish)
+    for (const [path, init] of writes) {
+      const response = await publishBlocked.request(path, init)
+      expect(response.status).toBe(403)
+      expect(await response.json()).toMatchObject({ error: { code: 'FORBIDDEN' } })
+    }
+
+    const writeBlocked = buildRoot(denyWrite)
+    for (const [path, init] of writes) {
+      expect((await writeBlocked.request(path, init)).status).not.toBe(403)
+    }
   })
 })

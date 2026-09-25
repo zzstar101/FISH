@@ -4,8 +4,24 @@ import { errorBody } from '@fish/contracts/system/error'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { createCommentsRouter } from './router'
 import { type CommentService, CommentServiceError } from './service'
+
+/**
+ * #73 治理守卫测试替身：一律放行。
+ *
+ * 治理守卫自身的用例见 modules/governance/guard.test.ts——这里只关心各模块
+ * 「请求能正常打到 handler」，守卫的判定逻辑不该在每个模块的单测里重复。
+ */
+const allowGuard: RestrictionGuard = {
+  publish: async (_c, next) => {
+    await next()
+  },
+  write: async (_c, next) => {
+    await next()
+  },
+}
 
 const LISTING_ID = '01930000-0000-7000-8000-000000000011'
 const COMMENT_ID = '01930000-0000-7000-8000-000000000021'
@@ -44,7 +60,10 @@ function buildApp(options: { service: CommentService; authed?: boolean; userId?:
     await next()
   }
 
-  root.route('/', createCommentsRouter({ service: options.service, requireAuth }))
+  root.route(
+    '/',
+    createCommentsRouter({ service: options.service, requireAuth, guard: allowGuard }),
+  )
   return root
 }
 

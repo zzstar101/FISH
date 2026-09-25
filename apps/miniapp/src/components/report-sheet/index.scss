@@ -1,0 +1,158 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 举报浮层样式（#73 治理半场）。
+ * `scrim` / `sheet` 直接复用共享 mixin —— 弹层与遮罩的结构抄 `pages/sell` 的 AI
+ * 润色卡（`sell__scrim` + `sell__sheet`），两处必须长得一样，抄比新造安全。
+ */
+
+.report {
+  /* 【警示意】举报是治理动作，头部用一个暖色小图标先定调：这不是普通表单。 */
+  /*
+   * 【层级警示】`scrim` / `sheet` mixin 自带 z-index 50 / 60，而 `pages/listing-detail`
+   * 的底部操作栏 `.detail__bar` 是 100 —— 浮层若照原值，遮罩压不暗操作栏、
+   * 「提交举报」按钮会被整块盖住（主操作点不到）。这里显式抬到 100 之上，
+   * 挂载本浮层的两个页面（listing-detail / user）都以这个值为准。
+   */
+  &__scrim {
+    @include scrim;
+    z-index: 105;
+  }
+
+  &__sheet {
+    @include sheet;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    /* 长写：`padding` 简写会连 mixin 的安全区下衬一起覆盖掉（见 `pages/favorites` 的同款注释） */
+    padding-top: 36px;
+    padding-left: 40px;
+    padding-right: 40px;
+    padding-bottom: calc(40px + env(safe-area-inset-bottom));
+    z-index: 110;
+  }
+
+  &__hd {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  &__hd-ic {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+  }
+
+  &__hd-tx {
+    font-size: var(--fs-h2);
+    font-weight: 700;
+    color: var(--fg);
+  }
+
+  /* 已选原因：胶囊 chip + 右侧「更换」 */
+  &__reason {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  &__reason-label,
+  &__flabel {
+    font-size: var(--fs-body);
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  &__reason-chip {
+    @include chip;
+    width: 100%;
+    height: 84px;
+    justify-content: space-between;
+    padding: 0 28px;
+  }
+
+  &__reason-chip-tx {
+    @include ellipsis;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  &__reason-change {
+    flex: 0 0 auto;
+    font-size: var(--fs-xs);
+    color: var(--brand-deep);
+    font-weight: 600;
+    padding-left: 16px;
+  }
+
+  &__field {
+    @include field;
+  }
+
+  &__frow {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  &__fhint {
+    flex: 0 0 auto;
+    font-size: var(--fs-2xs);
+    color: var(--muted-2);
+  }
+
+  /*
+   * 补充说明输入盒：数值抄 `pages/wish-publish` 的 `.wp__input` + `--area`
+   * （同一个契约上限量级的多行输入，形态必须一致）。
+   * **不用 `input-box` mixin**：那是给单行输入盒设计的 `display:flex` 垂直居中，
+   * 套在 `Textarea` 上会让占位文字压在框中间，且没有 `box-sizing` 控制。
+   */
+  &__input {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 24px;
+    background: var(--ice);
+    border: 2px solid transparent;
+    font-size: var(--fs-body);
+    color: var(--fg);
+
+    &::placeholder {
+      color: var(--muted-2);
+    }
+  }
+
+  &__input--area {
+    height: 200px;
+    padding: 20px 24px;
+    line-height: 1.62;
+  }
+
+  /* 处理预期：先说明「举报由人工处理、结果不单独通知」，避免用户拿「没回音」当 bug 提 */
+  &__note {
+    font-size: var(--fs-xs);
+    color: var(--muted-2);
+    line-height: 1.6;
+  }
+
+  &__acts {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  &__btn {
+    @include btn-ghost;
+    flex: 1 1 50%;
+    min-width: 0;
+
+    &.is-off {
+      opacity: 0.55;
+    }
+  }
+
+  &__btn--solid {
+    @include btn-brand;
+  }
+}

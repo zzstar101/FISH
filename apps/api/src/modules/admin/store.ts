@@ -10,12 +10,16 @@ import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
+import { userRestrictions } from '@fish/db/schema/governance'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { reports } from '@fish/db/schema/reports'
 import { sessions } from '@fish/db/schema/sessions'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { and, asc, desc, eq, type SQL, sql } from 'drizzle-orm'
+import { ACTIVE_RESTRICTION_WHERE } from '../governance/store'
 import type { ModerationStore } from '../moderation/store'
+import { createdAtCursorText, cursorCondition } from './cursor'
 
 /**
  * Admin store（#73）：管理后台的全部 SQL。
@@ -173,6 +177,10 @@ export interface OverviewRow {
   newUsersLast24h: number
   activeListings: number
   completedTransactions: number
+  pendingReviewRecords: number
+  pendingReports: number
+  reportsLast7d: number
+  activeRestrictions: number
 }
 
 export type ListUsersCriteria = {
@@ -213,6 +221,23 @@ export type ListModerationQueueCriteria = {
   limit: number
 }
 
+/**
+ * 审核记录检索参数（#73 治理半场 PR4）。
+ *
+ * 与队列（`ListModerationQueueCriteria`）的关键区别：这里**没有任何内置收窄**——
+ * 队列强制「只在审商品 + 每条 listing 只留最新 REVIEW 记录」，历史检索不能带这两个条件，
+ * 否则被人工决定过的记录就再也查不到了。筛选全部由调用方显式给出。
+ */
+export type ListModerationRecordsCriteria = {
+  decision: string | undefined
+  listingId: string | undefined
+  q: string | undefined
+  createdFrom: Date | undefined
+  createdTo: Date | undefined
+  cursor: { createdAt: string; id: string } | null
+  limit: number
+}
+
 export type ListAdminTransactionsCriteria = {
   q: string | undefined
   status: string | undefined
@@ -240,6 +265,10 @@ export interface AdminStore {
     > & {
       description: string
       updatedAt: Date
+      /** 审核引擎视角的状态；与 `status` 分开，恢复路径不同（#73 PR3 评审 M3）。 */
+      moderationStatus: string
+      /** 治理下架时刻；`null` = 未被治理下架过。 */
+      governanceDelistedAt: Date | null
       urgent: boolean
       negotiable: boolean
       free: boolean
@@ -250,6 +279,11 @@ export interface AdminStore {
   getOverview(): Promise<OverviewRow>
   listAuditLogs(criteria: ListAuditLogsCriteria): Promise<AuditLogRow[]>
   listModerationQueue(criteria: ListModerationQueueCriteria): Promise<ModerationQueueRow[]>
+  /**
+   * 审核记录检索（#73 治理半场 PR4）：已在 REVIEW 队列之外的历史记录。
+   * 不内置任何收窄（见 `ListModerationRecordsCriteria`），筛选由 criteria 显式给出。
+   */
+  listModerationRecords(criteria: ListModerationRecordsCriteria): Promise<ModerationQueueRow[]>
   getModerationDetail(recordId: string): Promise<ModerationDetailRow | null>
   decideModeration(input: {
     recordId: string
@@ -259,23 +293,28 @@ export interface AdminStore {
     requestId: string
   }): Promise<'applied' | 'idempotent' | 'not-found' | 'conflict' | 'idempotency-conflict'>
   listAdminTransactions(criteria: ListAdminTransactionsCriteria): Promise<AdminTransactionRow[]>
+  /**
+   * 某用户当前**生效中**的限制（#73 PR3，评审 m6）。
+   *
+   * Admin 用户详情要靠它展示用户受限情况，前端要靠它决定「解除限制」按钮是否可用。
+   * 只列生效中的：已过期走惰性判断（与被挡在写入口的行为同源），已解除的在审计里。
+   */
+  listActiveRestrictions(userId: string): Promise<ActiveRestrictionSummaryRow[]>
   /** 某个目标对象最近的 Admin 操作（时间倒序）。 */
   recentAuditLogs(
     targetType: AdminAuditTargetType,
     targetId: string,
     limit: number,
   ): Promise<AuditLogSummaryRow[]>
-  /** 追加一条审计记录（写操作与审计在同一 DB 事务内的入口，见设计 §6 末尾）。 */
-  insertAuditLog(input: {
-    actorUserId: string | null
-    action: AdminAuditAction
-    targetType: AdminAuditTargetType
-    targetId: string
-    before: unknown
-    after: unknown
-    reason: string | null
-    requestId: string | null
-  }): Promise<void>
+}
+
+/** 用户详情里的生效中限制（治理动作的类型用 string 表达，契约层同样放宽）。 */
+export interface ActiveRestrictionSummaryRow {
+  id: string
+  type: string
+  reason: string
+  expiresAt: Date | null
+  createdAt: Date
 }
 
 function userSearchCondition(alias: string, q: string): SQL {
@@ -289,19 +328,6 @@ function userSearchCondition(alias: string, q: string): SQL {
 function listingSearchCondition(alias: string, q: string): SQL {
   const escaped = q.replace(/[\\%_]/g, '\\$&')
   return sql`(${sql.raw(`${alias}.title`)} ILIKE ${`%${escaped}%`} OR ${sql.raw(`${alias}.description`)} ILIKE ${`%${escaped}%`})`
-}
-
-/** `created_at` 的微秒精度 UTC 文本（与 listings/store.ts 同一口径，供游标编码）。 */
-export const createdAtCursorText = (col: SQL) =>
-  sql<string>`to_char(${col} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
-
-/** 游标条件：`(created_at, id) < (cursor.created_at, cursor.id)`（三个列表排序同构）。 */
-function cursorCondition(
-  createdAtCol: SQL,
-  idCol: SQL,
-  cursor: { createdAt: string; id: string },
-): SQL {
-  return sql`(${createdAtCol}, ${idCol}) < (${cursor.createdAt}::timestamptz, ${cursor.id}::uuid)`
 }
 
 /** 用户摘要共用的 SQL SELECT 实体（列表 / 详情都取同一套列，避免口径漂移）。 */
@@ -503,6 +529,10 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           category: sql<string>`${listings.category}::text`,
           condition: sql<string>`${listings.condition}::text`,
           status: sql<string>`${listings.status}::text`,
+          // 治理下架标记（#73 PR3 评审 M3）：Admin 商品详情要能区分「治理下架」与
+          // 「审核引擎屏蔽」，两者恢复路径不同（前者走 restore，后者走人工审核 / 重新送审）。
+          moderationStatus: sql<string>`${listings.moderationStatus}::text`,
+          governanceDelistedAt: listings.governanceDelistedAt,
           createdAt: listings.createdAt,
           updatedAt: listings.updatedAt,
           urgent: listings.urgent,
@@ -530,6 +560,25 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
       return { listing, images: imageRows }
     },
 
+    async listActiveRestrictions(userId) {
+      const result = await db.execute(sql`
+        SELECT id, type::text AS type, reason, expires_at, created_at
+        FROM user_restrictions
+        WHERE user_id = ${userId}
+          AND ${ACTIVE_RESTRICTION_WHERE}
+        ORDER BY created_at DESC, id DESC
+      `)
+      return rowsOf(result).map((row) => ({
+        id: String(row.id),
+        type: String(row.type),
+        reason: String(row.reason),
+        // bun-sql 把 timestamptz 读成 ISO 文本，这里要转成 Date；null 保持 null
+        // （永久限制），不能变成 epoch。
+        expiresAt: row.expires_at ? new Date(row.expires_at as string) : null,
+        createdAt: new Date(row.created_at as string | Date),
+      }))
+    },
+
     async getOverview() {
       const result = await db.execute(sql`
         SELECT
@@ -537,7 +586,13 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           (SELECT count(*)::int FROM ${users}
             WHERE created_at >= now() - interval '24 hours')                     AS new_users_24h,
           (SELECT count(*)::int FROM ${listings} WHERE status = 'ACTIVE')        AS active_listings,
-          (SELECT count(*)::int FROM ${transactions} WHERE status = 'COMPLETED') AS completed_transactions
+          (SELECT count(*)::int FROM ${transactions} WHERE status = 'COMPLETED') AS completed_transactions,
+          (SELECT count(*)::int FROM ${listings} WHERE moderation_status = 'REVIEW') AS pending_review_records,
+          (SELECT count(*)::int FROM ${reports} WHERE status = 'PENDING')      AS pending_reports,
+          (SELECT count(*)::int FROM ${reports}
+            WHERE created_at >= now() - interval '7 days')                     AS reports_last_7d,
+          (SELECT count(*)::int FROM ${userRestrictions}
+            WHERE ${ACTIVE_RESTRICTION_WHERE})                                AS active_restrictions
       `)
       const row = rowsOf(result)[0]
       if (!row) throw new Error('Admin 概览查询未返回行')
@@ -546,6 +601,10 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         newUsersLast24h: Number(row.new_users_24h),
         activeListings: Number(row.active_listings),
         completedTransactions: Number(row.completed_transactions),
+        pendingReviewRecords: Number(row.pending_review_records),
+        pendingReports: Number(row.pending_reports),
+        reportsLast7d: Number(row.reports_last_7d),
+        activeRestrictions: Number(row.active_restrictions),
       }
     },
 
@@ -619,6 +678,56 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
               AND latest.decision = 'REVIEW'
             ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
           )
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT ${criteria.limit + 1}
+      `)
+
+      return rowsOf(result).map((row) => ({
+        id: String(row.id),
+        createdAtCursor: String(row.created_at_cursor),
+        record: moderationRecordFromRow(row),
+        listing: moderationListingFromRow(row),
+        seller: { id: String(row.seller_id), nickname: String(row.seller_nickname) },
+      }))
+    },
+
+    /**
+     * 审核记录检索（#73 治理半场 PR4）。
+     *
+     * 与队列的差别只在 WHERE：队列写死 `l.moderation_status='REVIEW'` + 「每条 listing 只留
+     * 最新 REVIEW 记录」，这里两个都不要，否则人工决定过的记录会从检索里消失——那正是
+     * 「已经离开 REVIEW 队列的记录要有检索入口」要解决的问题。
+     *
+     * `q` 走共用的 `listingSearchCondition('l', q)`：搜的是 listings 表的**当前**
+     * title / description（两者之一命中即返回），不是记录上的 `title_snapshot` /
+     * `description_snapshot`——快照是当时的内容，搜它会得到与当前标题不符的结果，
+     * 管理员按标题找不到对应的行。口径与 `AdminListingsQuerySchema.q` 保持一致。
+     */
+    async listModerationRecords(criteria) {
+      const conditions: SQL[] = []
+      if (criteria.decision)
+        conditions.push(sql`r.decision = ${criteria.decision}::moderation_decision`)
+      if (criteria.listingId) conditions.push(sql`r.listing_id = ${criteria.listingId}`)
+      if (criteria.q) conditions.push(listingSearchCondition('l', criteria.q))
+      if (criteria.createdFrom) conditions.push(sql`r.created_at >= ${criteria.createdFrom}`)
+      if (criteria.createdTo) conditions.push(sql`r.created_at < ${criteria.createdTo}`)
+      if (criteria.cursor) {
+        conditions.push(cursorCondition(sql`r.created_at`, sql`r.id`, criteria.cursor))
+      }
+
+      const result = await db.execute(sql`
+        SELECT r.id, r.listing_id, r.seller_id, r.action,
+               r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
+               r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
+               l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
+               l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
+               l.moderation_reason, l.created_at AS listing_created_at,
+               u.id AS seller_id, u.nickname AS seller_nickname
+        FROM listing_moderation_records r
+        JOIN listings l ON l.id = r.listing_id
+        JOIN users u ON u.id = r.seller_id
+        ${conditions.length > 0 ? sql`WHERE ${sql.join(conditions, sql` AND `)}` : sql``}
         ORDER BY r.created_at DESC, r.id DESC
         LIMIT ${criteria.limit + 1}
       `)
@@ -828,21 +937,6 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         )
         .orderBy(desc(adminAuditLogs.createdAt), desc(adminAuditLogs.id))
         .limit(limit)
-    },
-
-    async insertAuditLog(input) {
-      // jsonb 写入必须经 jsonParam()：裸对象会被 bun-sql 双重 stringify，落库成
-      // 「JSON 字符串套 JSON」（jsonb_typeof = 'string'），审计快照就变成了字符串。
-      await db.insert(adminAuditLogs).values({
-        actorUserId: input.actorUserId,
-        action: input.action,
-        targetType: input.targetType,
-        targetId: input.targetId,
-        before: input.before === null ? null : jsonParam(input.before),
-        after: input.after === null ? null : jsonParam(input.after),
-        reason: input.reason,
-        requestId: input.requestId,
-      })
     },
   }
 }

@@ -8,6 +8,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { type ListingService, ListingServiceError } from './service'
 
 export type ListingsRouterOptions = {
@@ -21,6 +22,11 @@ export type ListingsRouterOptions = {
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   /** 读接口的**可选**身份：匿名返回 null。用于 `isOwner`、`sellerId` 过滤与 OFFLINE 可见性。 */
   resolveViewerId: (c: Context) => Promise<string | null>
+  /**
+   * 发布入口的治理守卫（#73 PR3）。被限制发布 / 封禁的用户直连这些接口仍被 403 挡下——
+   * 前端隐藏按钮只是体验，不是边界。
+   */
+  guard: RestrictionGuard
 }
 
 /** JSON 解析失败（空体 / 非 JSON）按参数不合法处理，而不是让 Hono 抛 500。 */
@@ -92,7 +98,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
   // —— 写接口：全部要求登录 ——
 
-  router.post('/', options.requireAuth, async (c) => {
+  router.post('/', options.requireAuth, options.guard.publish, async (c) => {
     const parsed = ListingCreateInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
@@ -105,7 +111,7 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.patch('/:id', options.requireAuth, async (c) => {
+  router.patch('/:id', options.requireAuth, options.guard.publish, async (c) => {
     const parsed = ListingUpdateInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
@@ -117,7 +123,9 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.post('/:id/offline', options.requireAuth, async (c) => {
+  // 下架同样是写入口（评审 m4）：PUBLISH_RESTRICT 与 BAN 都映射到它，
+  // 否则「限制发布」的用户仍能自己把商品下架，限制就不是完整生效的。
+  router.post('/:id/offline', options.requireAuth, options.guard.publish, async (c) => {
     try {
       const id = requireListingId(c)
       return c.json(await service.transition(c.get('userId'), id, 'OFFLINE'), 200)
@@ -126,7 +134,9 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
-  router.post('/:id/online', options.requireAuth, async (c) => {
+  // `online` 同样要挡：被治理下架的商品（`moderation_status = BLOCKED`）只能由管理员
+  // restore 恢复，卖家重新上架等于绕过治理。
+  router.post('/:id/online', options.requireAuth, options.guard.publish, async (c) => {
     try {
       const id = requireListingId(c)
       return c.json(await service.transition(c.get('userId'), id, 'ACTIVE'), 200)

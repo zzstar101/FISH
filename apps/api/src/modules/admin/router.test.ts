@@ -7,6 +7,7 @@ import {
   AdminMeResponseSchema,
   AdminModerationDetailSchema,
   AdminModerationQueueSchema,
+  AdminModerationRecordsSchema,
   AdminOverviewSchema,
   AdminTransactionPageSchema,
   AdminUserDetailSchema,
@@ -20,7 +21,7 @@ import { listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { loadServerEnv } from '@fish/shared/env'
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 
@@ -59,6 +60,8 @@ const OFFLINE_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a3'
 const REPEATED_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a4'
 const CREATE_REVIEW_CHAIN_LISTING_ID = '01930000-0000-7000-8000-0000000000a5'
 const CREATE_REVIEW_CHAIN_RECORD_ID = '01930000-0000-7000-8000-0000000000b4'
+const AUDIT_ROLLBACK_LISTING_ID = '01930000-0000-7000-8000-0000000000a6'
+const AUDIT_ROLLBACK_RECORD_ID = '01930000-0000-7000-8000-0000000000b5'
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -215,6 +218,68 @@ describe('Admin HTTP 权限边界（设计 §3.2）', () => {
       const body = (await res.json()) as { error: { code: string } }
       expect(body.error.code).toBe('FORBIDDEN')
     }
+  })
+
+  test('a regular user is refused on the admin WRITE endpoint even with a well-formed request', async () => {
+    // 上面的循环只覆盖 GET。写端点（POST 决定）必须在守卫层就挡掉：
+    // 普通用户改前端状态调用它，就等于替管理员做审核决定。
+    // 请求体与 Idempotency-Key 都合法，证明拦住它的是守卫而非参数校验。
+    const res = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: userCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'regular-user-write-attempt',
+      },
+      body: JSON.stringify({ decision: 'BLOCK', reason: '普通用户试图代替管理员' }),
+    })
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { error: { code: string } }).toMatchObject({
+      error: { code: 'FORBIDDEN' },
+    })
+    // 守卫先于 handler：没有任何审计落库，业务状态也不被改写。
+    const audits = await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.requestId, 'regular-user-write-attempt'))
+    expect(audits).toHaveLength(0)
+  })
+
+  test('forged role / identity headers never grant admin access', async () => {
+    // 身份只来自 session cookie（createRequireAuth 读 cookie → loadMe 查库，
+    // session.ts 的 read 只 getCookie，仓库里没有任何 Authorization 之类的头通道），
+    // 任何自称角色的头都不得被采信。下面这份清单是常见的伪造头抽样而非枚举证明，
+    // 真正的结构性保证是「除了 fish_session cookie 没有第二条身份入口」。
+    const forgedHeaders: Record<string, string>[] = [
+      { 'x-user-role': 'ADMIN' },
+      { 'x-role': 'ADMIN' },
+      { 'x-fish-role': 'ADMIN' },
+      { role: 'ADMIN' },
+      { 'x-admin': 'true' },
+      { 'x-is-admin': '1' },
+      { 'x-user-id': ADMIN_TARGET_ID },
+      { 'x-actor-user-id': ADMIN_TARGET_ID },
+      { 'x-user-role': 'ADMIN', 'x-user-id': ADMIN_TARGET_ID, 'x-admin': 'true' },
+    ]
+    for (const headers of forgedHeaders) {
+      // 无 session：伪造头不能替代登录。
+      const anonymous = await app.request(ADMIN_ROUTES.me, { headers })
+      expect(anonymous.status).toBe(401)
+      expect((await anonymous.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: 'UNAUTHENTICATED' },
+      })
+      // 普通用户 session + 伪造头：仍然是 403，不会升权。
+      const asUser = await app.request(ADMIN_ROUTES.me, {
+        headers: { ...headers, cookie: userCookie },
+      })
+      expect(asUser.status).toBe(403)
+      expect((await asUser.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: 'FORBIDDEN' },
+      })
+    }
+    // 反向对照：不带伪造头的管理员 session 仍然畅通，证明上面的 403 不是链路坏了。
+    const asAdmin = await app.request(ADMIN_ROUTES.me, { headers: { cookie: adminCookie } })
+    expect(asAdmin.status).toBe(200)
   })
 
   test('an admin can reach /admin/me and sees role + capabilities', async () => {
@@ -641,5 +706,290 @@ describe('Admin 查询端到端', () => {
     )
     expect(badCursor.status).toBe(422)
     expect(await badCursor.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
+  test('audit write failure rolls the moderation business change back (same transaction)', async () => {
+    // 设计 §6：业务变更与审计写入必须在同一事务。这里在 admin_audit_logs 上挂一个
+    // BEFORE INSERT 触发器，仅在 reason 带注入前缀时抛错（其他用例不受影响），
+    // 从真实 HTTP 入口验证：审计写不进去 → 商品状态 / 人工审核记录 / 入队的匹配
+    // 任务 / 审计行全部回滚，且同一 Idempotency-Key 重放能真正重新应用。
+    await scratch.insert(listings).values({
+      id: AUDIT_ROLLBACK_LISTING_ID,
+      sellerId: USER_ID,
+      title: '审计回滚商品',
+      description: '审计写入失败时应保持原状',
+      priceCents: 2500,
+      category: 'BOOKS',
+      condition: 'GOOD',
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+      moderationReason: '命中规则',
+      moderationRuleVersion: 'test-v1',
+      createdAt: new Date('2026-09-06T02:00:00Z'),
+    })
+    await scratch.insert(listingModerationRecords).values({
+      id: AUDIT_ROLLBACK_RECORD_ID,
+      listingId: AUDIT_ROLLBACK_LISTING_ID,
+      sellerId: USER_ID,
+      action: 'CREATE',
+      titleSnapshot: '审计回滚商品',
+      descriptionSnapshot: '审计写入失败时应保持原状',
+      decision: 'REVIEW',
+      matchedRules: jsonParam(['TEST_RULE']),
+      matchedTermsMasked: jsonParam(['测**']),
+      ruleVersion: 'test-v1',
+      priorListingStatus: 'ACTIVE',
+      createdAt: new Date('2026-09-06T02:01:00Z'),
+    })
+
+    await scratch.$client.unsafe(`
+      CREATE OR REPLACE FUNCTION fish_test_fail_audit() RETURNS trigger AS $fn$
+      BEGIN
+        IF NEW.reason LIKE 'AUDIT_FAIL_INJECT%' THEN
+          RAISE EXCEPTION 'injected audit failure for rollback test';
+        END IF;
+        RETURN NEW;
+      END;
+      $fn$ LANGUAGE plpgsql
+    `)
+    await scratch.$client.unsafe(`
+      CREATE TRIGGER fish_test_fail_audit_trigger
+      BEFORE INSERT ON admin_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION fish_test_fail_audit()
+    `)
+
+    try {
+      const res = await app.request(ADMIN_ROUTES.moderationDecision(AUDIT_ROLLBACK_RECORD_ID), {
+        method: 'POST',
+        headers: {
+          cookie: adminCookie,
+          'content-type': 'application/json',
+          'Idempotency-Key': 'audit-failure-rollback',
+        },
+        body: JSON.stringify({ decision: 'ALLOW', reason: 'AUDIT_FAIL_INJECT 审计写入失败' }),
+      })
+      expect(res.status).toBe(500)
+      expect((await res.json()) as { error: { code: string } }).toMatchObject({
+        error: { code: 'INTERNAL_ERROR' },
+      })
+    } finally {
+      await scratch.$client.unsafe(
+        'DROP TRIGGER IF EXISTS fish_test_fail_audit_trigger ON admin_audit_logs',
+      )
+      await scratch.$client.unsafe('DROP FUNCTION IF EXISTS fish_test_fail_audit()')
+    }
+
+    // 业务状态回滚：商品仍是 REVIEW / OFFLINE，moderation_reason 没被人工决定覆盖。
+    const [listing] = await scratch
+      .select({
+        status: listings.status,
+        moderationStatus: listings.moderationStatus,
+        moderationReason: listings.moderationReason,
+      })
+      .from(listings)
+      .where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
+    expect(listing).toMatchObject({
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+      moderationReason: '命中规则',
+    })
+    // 审核记录没有追加 MANUAL_DECISION 行（还是插入时那一条 CREATE）。
+    const records = await scratch
+      .select({ id: listingModerationRecords.id, action: listingModerationRecords.action })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.listingId, AUDIT_ROLLBACK_LISTING_ID))
+    expect(records).toEqual([{ id: AUDIT_ROLLBACK_RECORD_ID, action: 'CREATE' }])
+    // 同一事务里入队的 MATCH_LISTING 任务也回滚了：若有人把 job 派发挪出事务，
+    // 这个用例必须红——被审计拒绝的决定不该已经把匹配任务派出去。
+    // 只查本商品的 job：本文件前面的用例合法地留下过其它商品的 job 行。
+    const queued = await scratch.execute(
+      sql`SELECT id FROM jobs
+           WHERE type = ${'MATCH_LISTING'} AND payload->>${'listingId'} = ${AUDIT_ROLLBACK_LISTING_ID}`,
+    )
+    expect(queued).toHaveLength(0)
+    // 审计行不存在：失败请求不会留下任何痕迹。
+    const audits = await scratch
+      .select({ id: adminAuditLogs.id })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.requestId, 'audit-failure-rollback'))
+    expect(audits).toHaveLength(0)
+
+    // 同 key 重放：失败请求没有留下幂等记录，所以重试会真正重新应用（而不是被
+    // 误判成「已处理」直接返回）。顺带证明事务回滚是干净的，业务还能走下去。
+    const replayed = await app.request(ADMIN_ROUTES.moderationDecision(AUDIT_ROLLBACK_RECORD_ID), {
+      method: 'POST',
+      headers: {
+        cookie: adminCookie,
+        'content-type': 'application/json',
+        'Idempotency-Key': 'audit-failure-rollback',
+      },
+      body: JSON.stringify({ decision: 'ALLOW', reason: '审计恢复后重放同一请求' }),
+    })
+    expect(replayed.status).toBe(200)
+    const [replayedListing] = await scratch
+      .select({ status: listings.status, moderationStatus: listings.moderationStatus })
+      .from(listings)
+      .where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
+    expect(replayedListing).toMatchObject({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
+
+    // 清掉本条 fixture：本文件是共享 scratch 库，新增的计数类断言不该把 a6/b5 算进去。
+    await scratch
+      .delete(listingModerationRecords)
+      .where(eq(listingModerationRecords.listingId, AUDIT_ROLLBACK_LISTING_ID))
+    await scratch.delete(listings).where(eq(listings.id, AUDIT_ROLLBACK_LISTING_ID))
+  })
+})
+
+/**
+ * 审核记录检索（#73 治理半场 PR4）。
+ *
+ * 与上面「审核队列」用例行分红：队列是**工作清单**（服务端写死只列 REVIEW 商品、
+ * 每条 listing 只留最新 REVIEW 记录），这里是**历史检索**——被人工决定过的、机器直接
+ * 放行的都能捞出来。两者共用同一条目形状与分页口径，差别只在 WHERE。
+ */
+describe('Admin 审核记录检索', () => {
+  test('setup: 匿名 401 / 普通用户 403，证明守卫先于路由解析', async () => {
+    // 顺带覆盖路由顺序：`/moderation/records` 若被 `/moderation/:recordId` 吃掉，
+    // 管理员拿到的是 404 ADMIN_NOT_FOUND 而不是 200。
+    const anonymous = await app.request(ADMIN_ROUTES.moderationRecords)
+    expect(anonymous.status).toBe(401)
+    expect(await anonymous.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
+
+    const asUser = await app.request(ADMIN_ROUTES.moderationRecords, {
+      headers: { cookie: userCookie },
+    })
+    expect(asUser.status).toBe(403)
+    expect(await asUser.json()).toMatchObject({ error: { code: 'FORBIDDEN' } })
+
+    const asAdmin = await app.request(ADMIN_ROUTES.moderationRecords, {
+      headers: { cookie: adminCookie },
+    })
+    expect(asAdmin.status).toBe(200)
+  })
+
+  test('检索返回已离开队列的记录，队列端点仍只列 REVIEW', async () => {
+    const records = await app.request(ADMIN_ROUTES.moderationRecords, {
+      headers: { cookie: adminCookie },
+    })
+    expect(records.status).toBe(200)
+    const page = AdminModerationRecordsSchema.parse(await records.json())
+    const ids = page.items.map((item) => item.record.id)
+    // fixture 里 REVIEW_LISTING_ID 有两条记录：一条 REVIEW、一条 BLOCK。
+    // 队列按「每条 listing 只留最新 REVIEW 记录」去重，检索两条都要在。
+    expect(ids).toContain(REVIEW_RECORD_ID)
+    expect(ids).toContain(BLOCKED_EDIT_RECORD_ID)
+
+    const queue = await app.request(ADMIN_ROUTES.moderationQueue, {
+      headers: { cookie: adminCookie },
+    })
+    expect(queue.status).toBe(200)
+    const queuePage = AdminModerationQueueSchema.parse(await queue.json())
+    expect(queuePage.items.map((item) => item.record.id)).not.toContain(BLOCKED_EDIT_RECORD_ID)
+    for (const item of queuePage.items) {
+      expect(item.record.decision).toBe('REVIEW')
+      expect(item.listing.moderationStatus).toBe('REVIEW')
+    }
+  })
+
+  test('decision / listingId / q / 时间段四个筛选都生效', async () => {
+    const adminHeaders = { cookie: adminCookie }
+
+    const blocked = await app.request(`${ADMIN_ROUTES.moderationRecords}?decision=BLOCK`, {
+      headers: adminHeaders,
+    })
+    const blockedIds = AdminModerationRecordsSchema.parse(await blocked.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(blockedIds).toContain(BLOCKED_EDIT_RECORD_ID)
+    // BLOCKED_EDIT_RECORD_ID 的判定从头到尾是 BLOCK，任何筛 REVIEW 的结果里都不该有它。
+    expect(blockedIds).not.toContain(CREATE_REVIEW_CHAIN_RECORD_ID)
+
+    const review = await app.request(`${ADMIN_ROUTES.moderationRecords}?decision=REVIEW`, {
+      headers: adminHeaders,
+    })
+    const reviewIds = AdminModerationRecordsSchema.parse(await review.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(reviewIds).not.toContain(BLOCKED_EDIT_RECORD_ID)
+
+    const byListing = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?listingId=${REVIEW_LISTING_ID}`,
+      { headers: adminHeaders },
+    )
+    const byListingIds = AdminModerationRecordsSchema.parse(await byListing.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(byListingIds).toEqual(expect.arrayContaining([REVIEW_RECORD_ID, BLOCKED_EDIT_RECORD_ID]))
+
+    const byTitle = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('待人工审核商品')}`,
+      { headers: adminHeaders },
+    )
+    expect(byTitle.status).toBe(200)
+    // q 命中 title 或 description 任一即返回（listingSearchCondition 口径），所以只能断言
+    // 「两条里的标题或描述含关键词」，不能断言 title——描述命中的 fixture 会让后者假红。
+    for (const item of AdminModerationRecordsSchema.parse(await byTitle.json()).items) {
+      expect(`${item.listing.title}${item.listing.description}`).toContain('待人工审核商品')
+    }
+
+    // q 只搜 listings 表，不搜记录快照：BLOCKED_EDIT_RECORD_ID 的 titleSnapshot 是
+    // 「被拦截的新编辑」，而该 listing 当前 title 是「待人工审核商品」——按快照标题搜
+    // 必须搜不到，否则说明 WHERE 碰了 r.title_snapshot。
+    const snapshotOnly = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('被拦截的新编辑')}`,
+      { headers: adminHeaders },
+    )
+    expect(snapshotOnly.status).toBe(200)
+    expect(AdminModerationRecordsSchema.parse(await snapshotOnly.json()).items).toHaveLength(0)
+
+    const noMatch = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?q=${encodeURIComponent('不存在的标题关键词')}`,
+      { headers: adminHeaders },
+    )
+    expect(AdminModerationRecordsSchema.parse(await noMatch.json()).items).toHaveLength(0)
+
+    // 左闭右开：REVIEW_RECORD_ID 在 02:01、BLOCKED_EDIT_RECORD_ID 在 02:02。
+    // 窗口 [02:02, 02:03) 只有后者——正好验证 from 含边界、to 不含边界。
+    const window = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?createdFrom=${encodeURIComponent('2026-09-03T02:02:00.000Z')}&createdTo=${encodeURIComponent('2026-09-03T02:03:00.000Z')}`,
+      { headers: adminHeaders },
+    )
+    expect(window.status).toBe(200)
+    const windowIds = AdminModerationRecordsSchema.parse(await window.json()).items.map(
+      (item) => item.record.id,
+    )
+    expect(windowIds).toContain(BLOCKED_EDIT_RECORD_ID)
+    expect(windowIds).not.toContain(REVIEW_RECORD_ID)
+  })
+
+  test('非法 limit / cursor → 422 VALIDATION_FAILED', async () => {
+    const badLimit = await app.request(`${ADMIN_ROUTES.moderationRecords}?limit=999`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(badLimit.status).toBe(422)
+    expect(await badLimit.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+
+    const badCursor = await app.request(`${ADMIN_ROUTES.moderationRecords}?cursor=not-a-cursor`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(badCursor.status).toBe(422)
+    expect(await badCursor.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
+  test('下一页游标接着第一页往下走', async () => {
+    const first = await app.request(`${ADMIN_ROUTES.moderationRecords}?limit=1`, {
+      headers: { cookie: adminCookie },
+    })
+    const firstPage = AdminModerationRecordsSchema.parse(await first.json())
+    expect(firstPage.items).toHaveLength(1)
+    expect(firstPage.nextCursor).not.toBeNull()
+
+    const second = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?limit=1&cursor=${encodeURIComponent(firstPage.nextCursor ?? '')}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(second.status).toBe(200)
+    const secondPage = AdminModerationRecordsSchema.parse(await second.json())
+    expect(secondPage.items[0]?.record.id).not.toBe(firstPage.items[0]?.record.id)
   })
 })

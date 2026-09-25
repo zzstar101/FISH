@@ -3,8 +3,24 @@ import { errorBody } from '@fish/contracts/system/error'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { createUploadsRouter } from './router'
 import type { MediaStorage } from './storage'
+
+/**
+ * #73 治理守卫测试替身：一律放行。
+ *
+ * 治理守卫自身的用例见 modules/governance/guard.test.ts——这里只关心各模块
+ * 「请求能正常打到 handler」，守卫的判定逻辑不该在每个模块的单测里重复。
+ */
+const allowGuard: RestrictionGuard = {
+  publish: async (_c, next) => {
+    await next()
+  },
+  write: async (_c, next) => {
+    await next()
+  },
+}
 
 const USER_ID = '01930000-0000-7000-8000-00000000000a'
 
@@ -30,7 +46,10 @@ function buildApp(options: { storage: MediaStorage; authed?: boolean }) {
   }
 
   const root = new Hono()
-  root.route('/uploads', createUploadsRouter({ storage: options.storage, requireAuth }))
+  root.route(
+    '/uploads',
+    createUploadsRouter({ storage: options.storage, requireAuth, guard: allowGuard }),
+  )
   return root
 }
 

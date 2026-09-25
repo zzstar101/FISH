@@ -296,6 +296,35 @@
   color: var(--muted-2);
 }
 
+/*
+ * 举报入口（#73 治理半场）：身份块底部一条右对齐的低调文字链。
+ *
+ * 右上角不放（微信原生胶囊占着，见 index.tsx 文件头）；也不挂在「关注」那颗演示钮旁 ——
+ * 关注钮只在演示账号上渲染，举报入口跟着它一起消失会让真实用户永远看不到举报。
+ */
+.uhome__report {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 28px;
+  color: var(--muted-2);
+
+  &:active {
+    opacity: 0.6;
+  }
+}
+
+.uhome__report-ic {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.uhome__report-tx {
+  font-size: var(--fs-xs);
+}
+
 /* ---------------------------------------------------------------- 列表区 */
 
 .uhome__body {

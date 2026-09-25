@@ -68,7 +68,7 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 | F6 | Web `api.ts` 返回 `unknown` + 页面本地重复定义契约类型，契约漂移不会编译失败 | minor | 已修：改为契约类型 + 同 schema 运行时 `parse`（对齐 `features/chat/api.ts`），删除 6 处页面本地的契约类型 / 内联断言（3 处具名类型 + 4 处内联 `as`，含 `overview-page`）与全部 `as never`；CCR-1 由此暴露 |
 | F10 | `db:promote --actor` 只校验学号存在，可把提升记到无管理权限者头上 | minor | 已修：非 ADMIN 的 `--actor` 一律拒绝；补 CLI 集成测试（拒绝 / 合法 actor / 自举三条分支） |
 | F11 | 注释与实现不符（`routes.ts`、`middleware.ts` 都写 app.ts 挂 `requireAuth`）；`createAdminModule` 返回死代码；`router.ts` 残留注释 | minor | 已修 |
-| F3 | `insertAuditLog` 无调用方，且签名不接 `tx`，无法满足设计 §6「审计与业务同事务」 | minor | **未修（有意延后）**：当前 Admin 零写操作，此刻改签名属为未来抽象（AGENTS §4）；随 S6「人工决定接口」一起落地并补「审计失败→业务回滚」用例 |
+| F3 | `insertAuditLog` 无调用方，且签名不接 `tx`，无法满足设计 §6「审计与业务同事务」 | minor | 已修（#73 治理半场 PR1）：删除该死方法而非改签名——API 请求路径内只有 `decideModeration` 一个写入方，为它改签名属为未来抽象（AGENTS §4）；`db:promote` CLI（`packages/db/src/admin-promote.ts`）是另一条独立写入路径，在自举事务内直写、与 API 无共享需求。治理端点落地后若 API 路径出现第二个写入方，再带 `tx` 句柄抽取共享帮助函数。同时补「审计写入失败 → 业务回滚」用例（触发器注入 + HTTP 入口断言） |
 | F7 | `features/scanner/scanner.tsx` 卸载竞态导致摄像头不释放 | minor | **不在 #73 范围**：该文件来自 #69（提交 `527b7c7`）。建议新开 issue，不在本分支修 |
 | F8 | UI 未暴露 `sellerId` / `authStatus` / 时间范围筛选（API 已支持） | minor | **未修（记录为后续项）**：设计 §7 只要求「筛选条件写入 URL」，未要求这三个控件的具体集合；当前 `q` / `status` / `role` 已写入 URL |
 
@@ -77,7 +77,7 @@ DB CHANGE REQUEST C（#74 Moderation 数据依赖）仍未满足，见第 4 节�
 `db:up` → `db:migrate`（重跑幂等）→ `db:seed` → `db:promote` → `dev:api`，逐项验证：
 
 - 未登录 `/admin/*` → `401 UNAUTHENTICATED`；普通用户全端点（含详情路径）→ `403 FORBIDDEN`；管理员 → `200`。
-- 伪造 `X-User-Role: ADMIN` / `X-Admin: true` / `X-Role: ADMIN` → 仍 `403`；伪造 `fish_session` 值 → `401`。
+- 伪造 `X-User-Role: ADMIN` / `X-Admin: true` / `X-Role: ADMIN` → 仍 `403`；伪造 `fish_session` 值 → `401`。（已由 `router.test.ts` 的 forged-headers 用例自动化，覆盖 9 种伪造头 × 无 session / 普通用户 session 两种情形）
 - 公开注册接口带 `role: "ADMIN"` → `422`（`strictObject` 拒绝），且 `apps/api/src/modules/auth/**` 完全不接触 `role` 字段。
 - 非 UUID 路径参数 / 不存在的 UUID → `404`（非 500）；`limit` 越界、坏 cursor → `422`。
 - `Me` DTO 不含 `role`；`/admin/users` 返回脱敏学号（`2021****0002`）。
@@ -165,7 +165,7 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
    对现有模块的侵入为：`app.ts` 加一行挂载、`users` 加一个带默认值的列、`seed.ts` 加一张表进 TRUNCATE 列表。
    **每个 PR 必须由 zzstar101 审核后才可合入，本分支未自行合入。**
 2. **契约收紧的向后兼容**：CCR-1 只拒绝此前会被静默接受的非法枚举值，但若有其它消费者依赖「任意字符串」，需同步。
-3. **审计原子性尚未被代码保证**：F3 记录的 `insertAuditLog` 无事务句柄问题在 S6 落地前一直存在；当前零写操作，暂无实际影响。
+3. **moderation 决策路径的审计原子性已由测试钉住**：F3 的死方法已删（见上表）；「业务变更与审计同一事务」现由 `router.test.ts` 的触发器注入用例守住——审计插入抛错时商品状态、人工审核记录、入队的匹配任务、审计行全部回滚，同一 `Idempotency-Key` 重放仍能真正重新应用。**仅覆盖 `decideModeration` 一条路径**；`db:promote` CLI 的同事务审计写入（`packages/db/src/admin-promote.ts`）尚无失败注入覆盖。
 4. **`db:seed` 的跨分支耦合**：`seed.ts` 的 TRUNCATE 列表按分支维护，任何新增带外键的表都要同步，否则本地 seed 直接失败。
 
 ## 7. #74 Contract 冻结后的 Admin/Moderation 线补充（本次实现）
@@ -181,3 +181,35 @@ c9457fe feat(db): add user role and admin audit log (#73)                      �
 新增 `packages/db/src/migrations/0012_brave_spiral.sql` 仅扩展 `admin_audit_action` 枚举，审核历史复用 #80 已存在的 moderation record 表，不修改已合入 migration 历史。
 
 验证：`bun test apps/api/src/modules/admin/router.test.ts packages/contracts/src/admin/schema.test.ts`、`bun run --filter '@fish/web' build`。
+
+## 8. 治理半场：举报 + 服务端治理 + 后台检索（#73 EPIC 收尾）
+
+§1–§7 交付的是「能看」的后台；本段把「能管」补上。四段拆分，逐段验证、逐段送审：
+
+| 段 | 内容 | DB 变更 |
+| --- | --- | --- |
+| PR1 | 既有权限 / 审计回归：删 F3 死方法；补「普通用户调写端点 403」「伪造角色头不升权」「审计写入失败业务回滚」三条自动化用例 | 无 |
+| PR2 | 举报闭环：`reports` 模型与契约；服务端校验目标存在与举报权限；重复举报并发去重；miniapp 举报入口与真实受理结果；Admin 队列 / 详情 / 处理 | `reports` 表 + 3 枚举 + 部分唯一索引 |
+| PR3 | 服务端治理：下架 / 恢复 / 限制发布 / 解除限制 / 封禁**五个**端点，业务与审计同事务、条件更新防并发；限制接入发布 / 留言 / 聊天等真实服务端入口 | `user_restrictions` 表 + `admin_audit_action` 扩 7 值 + `admin_audit_target_type` 扩 2 值 |
+| PR4 | 历史检索与完整筛选：`GET /admin/moderation/records`；交易筛选写进 URL 且改筛选重置游标；Overview 指标改全量 `count(*)` | 无 |
+
+关键取舍：
+
+- **举报处理与治理动作完全分离**：`POST /admin/reports/:id/handle` 只写受理 / 驳回结果与原因；五个治理端点各自独立、可选带 `sourceReportId` 回链。处理举报不等于处罚用户；治理也会在无举报时发生（巡逻发现）。
+- **限制状态住独立表** `user_restrictions`（`type: BAN | PUBLISH_RESTRICT`、`status: ACTIVE | LIFTED`、`reason` / `actor_user_id` / `source_report_id` / `expires_at` / `lifted_at` / `lifted_by`）而不是 users 加列或从审计日志反推：写请求每次都要读，需要索引；解除是对称动作；`source_report_id` 让处罚可追溯回举报。
+- **限制校验放在写路由的守卫**（`requireAuth` 的姊妹实现，`app.ts` 统一接线），读路由不动：全局 method-aware 中间件会在 `requireAuth` 之前跑、被迫多解析一次 session；散在 service 里的断言容易在新写入口上漏挂。
+- **封禁只禁写不禁读**：被封用户仍可浏览商品 / 他人主页 / 自己的消息，避免「封禁即全站 403」的过度打击。
+- **审核记录检索新开端点**：既有 `queue` 端点保持「只查当前 REVIEW」的纯净语义，历史记录走 `records`。
+- **DB 变更按段各提一次 CHANGE REQUEST**，不手改 `packages/db/src/migrations/**`；`db:seed` 的 TRUNCATE 列表随新表同步（跨分支耦合，见 §6.4）。
+
+落地进度（截至本轮）：
+
+- PR1 已交付：删 `store.insertAuditLog` 死方法；`apps/api/src/modules/admin/router.test.ts` 补「普通用户调写端点 403」「9 种伪造角色头不升权」「审计写入失败业务状态回滚」。
+- PR2 已交付服务端与 web 侧：`reports` 表 + 3 枚举 + 部分唯一索引（迁移 `0020_huge_rocket_raccoon.sql`）、`admin_audit_*` 枚举扩展（`0021_crazy_archangel.sql`）、`reports` 契约、`apps/api/src/modules/reports/**`、admin 三个端点（队列 / 详情 / 处理，相对路径注册）、`apps/web` 举报队列 + 详情 + 处理表单 + 审计筛选新增「举报处理」。
+- PR2 的 **miniapp 举报入口已交付**（与 PR4 同一分支 `feat/73-admin-governance`，Owner 拍板直接叠在本分支上，不按「一页一分支」另开）：`features/report/{api,reasons}.ts`（`submitReport` 包 `REPORT_ROUTES.create` + `ReportCreateResponseSchema.parse`；原因子集从契约 import 不复制）、两页共用的 `components/report-sheet`（`Taro.showActionSheet` 选原因 + 页内补充说明浮层，抄 sell 的 `scrim`/`sheet`）、商品详情页与他人主页各一条低调文字链（右上角被微信原生胶囊占着，底部栏已排满，故都放正文流里）。重复举报 200 + `created:false` 在客户端按**成功**提示「你已举报过同一个对象，无需重复提交」，不当失败。**「我的举报」列表（`GET /reports/mine`）本期不做**，用户端契约已就绪、留待后续。
+- miniapp 侧由 Owner 在微信开发者工具演示并认可后才随本分支提交（`docs/miniapp-dev-workflow.md` §4）。
+
+- PR3 已交付服务端与 web 侧（提交 `1fa1aad`）：`user_restrictions` 表（迁移 `0022_cuddly_pyro.sql`）+ `listings.governance_delisted_at` 列（迁移 `0023_jittery_hercules.sql`）、`admin_audit_*` 枚举扩 7 + 2 值、五个治理端点（`listingDelist` / `listingRestore` / `userRestrictPublish` / `userLiftRestriction` / `userBan`）、写入口守卫 `RestrictionGuard`（`publish` 挡 `PUBLISH_RESTRICT`+`BAN`，`write` 只挡 `BAN`）接入 listings / uploads / comments / conversations / messages / media / profile / transactions / wishes / ai 的写路由、`AdminUserDetail`/`AdminListingDetail` 契约扩限制与治理状态字段、web 治理按钮 + 「生效中的限制」卡。
+- PR3 的对抗性审查发现并已修三条 major：**过期限制行占唯一索引**（索引谓词写不了 `now()`，到期未解除的行让「生效中」判定分裂成 service/store/listActiveRestrictions=0 而 Overview=1，再施加同类限制时 409 是假的——统一为唯一 SQL 定义 `ACTIVE_RESTRICTION_WHERE`，并在 `applyRestriction` 里先把过期行标 `LIFTED`，`lifted_by=NULL` 不写审计）、**媒体消息写入口漏挂守卫**（封禁只挡文字仍可发图 / 语音）、**restore 能解除审核引擎的人工 BLOCKED**（改为只认 `governance_delisted_at IS NOT NULL`）。
+- PR3 仍待办：治理动作与举报单的回链 `sourceReportId` 已在契约与端点层就绪，但「举报详情页一键治理」不在本期范围。
+- PR4 已交付：`GET /admin/moderation/records`（decision/listingId/q/时间段 + 游标，队列端点保持纯 REVIEW 语义）、交易筛选 URL 化（改筛选重置游标；从用户/商品详情带进来的 buyerId/sellerId/listingId 在改筛选时保留）、Overview 四项全量 `count(*)` 指标、审核记录 q 口径注释与测试补强、小程序举报入口（商品详情页 + 他人主页）。
