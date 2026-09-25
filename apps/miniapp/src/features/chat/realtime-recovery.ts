@@ -5,7 +5,6 @@
  * 能在 bun 测试里直接跑，不必 mock `@tarojs/taro`。
  */
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
-import type { MessageDto } from '@fish/contracts/chat/schema'
 
 /** 重连退避上限（与 Web 端 `apps/web/src/features/chat/realtime.ts` 同值） */
 export const MAX_BACKOFF_MS = 30_000
@@ -27,9 +26,9 @@ export function realtimeUrl(apiBase: string): string {
   return `${wsBase.replace(/\/+$/, '')}${REALTIME_WS_PATH}`
 }
 
-/** `loadMessagePage` 里补齐断档需要的三个字段 */
-export type GapPage = {
-  items: MessageDto[]
+/** 分页接口共有的三个字段（消息与媒体历史都长这样） */
+export type GapPage<T> = {
+  items: T[]
   nextCursor: string | null
   failed: boolean
 }
@@ -53,9 +52,9 @@ export type GapStopReason =
   | 'budget'
 
 /** `backfillMessageGap` 的结果 */
-export type GapBackfill = {
+export type GapBackfill<T> = {
   /** 升序的合并结果（可直接交给 `mergeRefreshedMessages`） */
-  items: MessageDto[]
+  items: T[]
   /** 是否已经把断档接上。`false` = 中间可能还有缺口，应带 `resumeCursor` 再来一轮 */
   complete: boolean
   /**
@@ -93,13 +92,13 @@ export type GapBackfill = {
  * 且要跨重连记住它（见 `pages/conversation/index.tsx` 的 `gapResumeCursorsRef`），否则断线
  * 超过 `maxPages` 页的消息永远补不上。
  */
-export async function backfillMessageGap(
-  loadPage: (before?: string) => Promise<GapPage>,
+export async function backfillMessageGap<T extends { id: string }>(
+  loadPage: (before?: string) => Promise<GapPage<T>>,
   knownIds: ReadonlySet<string>,
   options?: { maxPages?: number; startBefore?: string },
-): Promise<GapBackfill> {
+): Promise<GapBackfill<T>> {
   const maxPages = options?.maxPages ?? 10
-  const pages: MessageDto[][] = []
+  const pages: T[][] = []
   // 上一轮没接上时从这里继续往回翻；不传就是新的一轮（从最新一页开始）
   let cursor: string | undefined = options?.startBefore
   let stoppedBy: GapStopReason = 'budget'
@@ -135,7 +134,7 @@ export async function backfillMessageGap(
     stoppedBy = 'budget'
   }
 
-  const out: MessageDto[] = []
+  const out: T[] = []
   const seen = new Set<string>()
   for (const page of pages.reverse()) {
     for (const item of page) {
@@ -166,15 +165,15 @@ export async function backfillMessageGap(
  * 后一轮翻到的消息整体早于前一轮，所以拼装时按轮序反转（与 `backfillMessageGap`
  * 处理页序的方式一致），结果仍是升序。
  */
-export async function backfillGapUntilConnected(
-  loadPage: (before?: string) => Promise<GapPage>,
+export async function backfillGapUntilConnected<T extends { id: string }>(
+  loadPage: (before?: string) => Promise<GapPage<T>>,
   knownIds: ReadonlySet<string>,
   options?: { maxPages?: number; maxPasses?: number; startBefore?: string },
-): Promise<GapBackfill> {
+): Promise<GapBackfill<T>> {
   const maxPasses = Math.max(0, options?.maxPasses ?? 3)
   const startAt = options?.startBefore
-  const chunks: MessageDto[][] = []
-  let last: GapBackfill = {
+  const chunks: T[][] = []
+  let last: GapBackfill<T> = {
     items: [],
     complete: false,
     resumeCursor: startAt ?? null,
@@ -194,7 +193,7 @@ export async function backfillGapUntilConnected(
     startBefore = last.resumeCursor
   }
 
-  const items: MessageDto[] = []
+  const items: T[] = []
   const seen = new Set<string>()
   for (const chunk of chunks.reverse()) {
     for (const item of chunk) {

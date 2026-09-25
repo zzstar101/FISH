@@ -1,14 +1,19 @@
 import { describe, expect, test } from 'bun:test'
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   beginSend,
   canRetry,
+  canRetryMedia,
   clearDeferredReload,
   deferReload,
   initialDeferredReload,
   isFlushDue,
   listingStatusText,
+  mergePushedMedia,
+  mergeRefreshedMedia,
+  mergeTimeline,
+  type PendingMedia,
   type PendingMessage,
   parseTxEvent,
   resetDeferredReload,
@@ -307,5 +312,139 @@ describe('shouldFlushDeferredReload —— 到点之后「真的能发」才补�
     expect(shouldFlushDeferredReload({ ...base, authed: false })).toBe(false)
     expect(shouldFlushDeferredReload({ ...base, hasUserId: false })).toBe(false)
     expect(shouldFlushDeferredReload({ ...base, visible: false })).toBe(false)
+  })
+})
+
+/**
+ * #67 第四步：媒体消息进入会话流的两条新路径。
+ *
+ * 服务端有**两条独立消息流**（文本/系统 + 媒体，各自端点、各自实时事件、没有共同
+ * 联合类型），所以这里锁的是客户端把它们并起来的三条判据：按 `(createdAt,id)` 定序、
+ * 按服务端 id 去重、后台刷新不抹掉「刷新期间才发出去的那条媒体」。
+ */
+const mediaText = (id: string, createdAt: string): MessageDto => ({
+  id,
+  conversationId: 'c-1',
+  senderId: 'u-1',
+  sender: { id: 'u-1', nickname: '我', avatarUrl: null },
+  type: 'TEXT',
+  content: id,
+  createdAt,
+})
+
+const picture = (id: string, createdAt: string): MediaMessageDto => ({
+  id,
+  conversationId: 'c-1',
+  senderId: 'u-1',
+  kind: 'IMAGE',
+  mediaId: `media-${id}`,
+  url: `/api/conversations/c-1/media/media-${id}`,
+  mimeType: 'image/jpeg',
+  sizeBytes: 1024,
+  width: 800,
+  height: 600,
+  durationMs: null,
+  createdAt,
+})
+
+describe('mergeTimeline —— 文本与媒体合成一条升序时间线', () => {
+  test('两条流交错时按时间排回去，而不是「先文本后媒体」', () => {
+    const entries = mergeTimeline(
+      [mediaText('t1', '2026-09-21T10:00:00.000Z'), mediaText('t3', '2026-09-21T10:00:02.000Z')],
+      [picture('m2', '2026-09-21T10:00:01.000Z')],
+    )
+    expect(entries.map((entry) => entry.keyId)).toEqual(['t1', 'm2', 't3'])
+    expect(entries.map((entry) => entry.kind)).toEqual(['message', 'media', 'message'])
+  })
+
+  test('同一毫秒用 id 定序（与 sortMessages 同一口径，不引入新的不稳定来源）', () => {
+    const entries = mergeTimeline(
+      [mediaText('b', '2026-09-21T10:00:00.000Z')],
+      [picture('a', '2026-09-21T10:00:00.000Z')],
+    )
+    expect(entries.map((entry) => entry.keyId)).toEqual(['a', 'b'])
+  })
+
+  test('另一条流为空时也保留这一条（不会因为「没有文本」就丢掉媒体）', () => {
+    expect(mergeTimeline([], [picture('m1', '2026-09-21T10:00:00.000Z')])).toHaveLength(1)
+    expect(mergeTimeline([mediaText('t1', '2026-09-21T10:00:00.000Z')], [])).toHaveLength(1)
+  })
+
+  test('不改动入参数组', () => {
+    const messages = [
+      mediaText('t2', '2026-09-21T10:00:02.000Z'),
+      mediaText('t1', '2026-09-21T10:00:00.000Z'),
+    ]
+    mergeTimeline(messages, [])
+    expect(messages.map((item) => item.id)).toEqual(['t2', 't1'])
+  })
+})
+
+describe('mergePushedMedia —— 实时推送的媒体并入媒体流（#67 第四步）', () => {
+  test('推送乱序到达时按 (createdAt, id) 排回去', () => {
+    const merged = mergePushedMedia(
+      [picture('m3', '2026-09-21T10:00:02.000Z')],
+      picture('m1', '2026-09-21T10:00:00.000Z'),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1', 'm3'])
+  })
+
+  test('重复推送同一条（推送不保证不重）不产生第二条，且返回原数组本身', () => {
+    const previous = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    expect(mergePushedMedia(previous, picture('m1', '2026-09-21T10:00:00.000Z'))).toBe(previous)
+  })
+
+  test('同一毫秒用 id 定序', () => {
+    const merged = mergePushedMedia(
+      [picture('b', '2026-09-21T10:00:00.000Z')],
+      picture('a', '2026-09-21T10:00:00.000Z'),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('mergeRefreshedMedia —— 后台刷新落地时不抹掉刷新期间发出的媒体', () => {
+  test('baseIds 之外、incoming 里也没有的本地新增被保留（与 mergeRefreshedMessages 对称）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('m1', '2026-09-21T10:00:00.000Z'), picture('m2', '2026-09-21T10:00:05.000Z')],
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      new Set(['m1']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1', 'm2'])
+  })
+
+  test('incoming 已经有的 id 不重复（服务端回包与本地乐观条目会撞上）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      new Set(),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1'])
+  })
+
+  test('baseIds 之内的旧条目以服务端快照为准（本地那份不再保留）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      [],
+      new Set(['m1']),
+    )
+    expect(merged).toEqual([])
+  })
+})
+
+describe('canRetryMedia —— 上传失败才可重试', () => {
+  const pendingImage = (status: 'uploading' | 'failed'): PendingMedia => ({
+    kind: 'IMAGE',
+    clientRequestId: 'req-1',
+    path: 'wxfile://tmp/photo.jpg',
+    image: { mime: 'image/jpeg', width: 800, height: 600, sizeBytes: 1024 },
+    id: 'local-1',
+    uploaded: null,
+    status,
+  })
+
+  test('failed 可以重试；uploading 不能（否则同一条媒体会被投两次）', () => {
+    expect(canRetryMedia(pendingImage('failed'))).toBe(true)
+    expect(canRetryMedia(pendingImage('uploading'))).toBe(false)
   })
 })

@@ -185,6 +185,23 @@ const EBML_ID_SIMPLE_BLOCK = 0xa3
 const EBML_ID_BLOCK_GROUP = 0xa0
 const EBML_ID_BLOCK = 0xa1
 
+/**
+ * Segment 这一层的元素。未知长度的 Cluster 遇到它们就结束 —— EBML 规范规定未知长度元素
+ * 延伸到「下一个不是自己子元素」的元素开始处，在 Segment 这一层就是这些 ID。
+ *
+ * `Void`(0xEC) / `CRC-32`(0xBF) **不在**表里：它们是 Cluster 的合法子元素，不构成边界。
+ */
+const SEGMENT_LEVEL_IDS: ReadonlySet<number> = new Set([
+  0x114d9b74, // SeekHead
+  EBML_ID_INFO,
+  EBML_ID_CLUSTER,
+  0x1654ae6b, // Tracks
+  0x1c53bb6b, // Cues
+  0x1941a469, // Attachments
+  0x1043a770, // Chapters
+  0x1254c367, // Tags
+])
+
 /** 默认 1ms per unit（Matroska 规范里的 TimestampScale 默认值）。 */
 const DEFAULT_TIMECODE_SCALE = 1_000_000
 
@@ -213,6 +230,55 @@ function ebmlSizeValue(bytes: Uint8Array, offset: number, length: number): numbe
   let value = (bytes[offset] ?? 0) & (marker - 1)
   for (let i = 1; i < length; i++) value = value * 256 + (bytes[offset + i] ?? 0)
   return value
+}
+
+/**
+ * 未知长度元素的结束位置：扫描到第一个 Segment 级元素为止。
+ *
+ * 返回 `end` = 后面没有 Segment 级元素，一直写到 Segment 结束（流式 WebM 的常态）；
+ * 返回 `null` = 定不了界（元素头畸形、或嵌了另一个未知长度元素），调用方须 fail-closed。
+ */
+function nextSegmentLevelStart(bytes: Uint8Array, start: number, end: number): number | null {
+  let cursor = start
+  while (cursor < end) {
+    const idLength = ebmlVintLength(bytes[cursor] ?? 0)
+    if (idLength === 0 || cursor + idLength > end) return null
+    if (SEGMENT_LEVEL_IDS.has(ebmlIdValue(bytes, cursor, idLength))) return cursor
+    const sizeStart = cursor + idLength
+    if (sizeStart >= end) return null
+    const sizeLength = ebmlVintLength(bytes[sizeStart] ?? 0)
+    if (sizeLength === 0 || sizeStart + sizeLength > end) return null
+    const size = ebmlSizeValue(bytes, sizeStart, sizeLength)
+    // 嵌套的未知长度无法定界：不接受这个形状，也不去猜一个边界。
+    if (size === 2 ** (7 * sizeLength) - 1) return null
+    cursor = sizeStart + sizeLength + size
+  }
+  return end
+}
+
+/** `walkEbmlElements` 的未知长度策略。不传 = 子元素必须有完整边界，一律 fail-closed。 */
+type EbmlWalkOptions = {
+  /** 返回未知长度元素的真实结束位置；返回 null 表示这个形状不接受（判不完整）。 */
+  resolveUnknownSize: (id: number, dataStart: number, end: number) => number | null
+}
+
+/**
+ * Segment 这一层的遍历：**只**放行 Cluster 的未知长度，其余子元素仍须边界完整。
+ *
+ * Chrome 的 MediaRecorder（微信开发者工具里的录音就走它）产出的是流式 WebM —— `Info` 里
+ * 没有 `Duration`，最后一个 `Cluster` 一直写到文件尾，size 字段是 8 字节全 1（未知长度）。
+ * 不放行这一种形状，`probeVoiceDuration` 会直接返回 null，录音一条都发不出去。
+ */
+function walkSegmentElements(
+  bytes: Uint8Array,
+  start: number,
+  end: number,
+  visit: (element: EbmlElement) => void,
+): boolean {
+  return walkEbmlElements(bytes, start, end, visit, {
+    resolveUnknownSize: (id, dataStart, scopeEnd) =>
+      id === EBML_ID_CLUSTER ? nextSegmentLevelStart(bytes, dataStart, scopeEnd) : null,
+  })
 }
 
 /**
@@ -254,6 +320,7 @@ function walkEbmlElements(
   start: number,
   end: number,
   visit: (element: EbmlElement) => void,
+  options?: EbmlWalkOptions,
 ): boolean {
   let cursor = start
   while (cursor < end) {
@@ -268,10 +335,14 @@ function walkEbmlElements(
     const size = ebmlSizeValue(bytes, cursor, sizeLength)
     cursor += sizeLength
 
-    // 只有顶层 Segment 支持未知长度。子元素须有完整边界，不能吞掉后续 Cluster。
+    // 默认要求子元素边界完整，避免吞掉后续 Cluster；只有 options 明确放行的形状（Segment
+    // 这一层的 Cluster）才接受未知长度，并按 EBML 规范延伸到下一个 Segment 级元素。
     const dataStart = cursor
-    const complete = size !== 2 ** (7 * sizeLength) - 1 && dataStart + size <= end
-    const dataEnd = Math.min(end, dataStart + size)
+    const unknownSize = size === 2 ** (7 * sizeLength) - 1
+    const resolver = options?.resolveUnknownSize
+    const resolved = unknownSize && resolver ? resolver(id, dataStart, end) : null
+    const complete = unknownSize ? resolved !== null : dataStart + size <= end
+    const dataEnd = unknownSize ? (resolved ?? end) : Math.min(end, dataStart + size)
     visit({ id, dataStart, dataEnd, complete })
     if (!complete) return false
     cursor = dataEnd
@@ -300,7 +371,7 @@ function lastClusterEndTimecode(
   let lastEnd: number | null = null
   let invalidBlock = false
 
-  const clustersComplete = walkEbmlElements(bytes, start, end, (element) => {
+  const clustersComplete = walkSegmentElements(bytes, start, end, (element) => {
     if (!element.complete) {
       invalidBlock = true
       return
@@ -422,7 +493,7 @@ function webmDuration(bytes: Uint8Array): ProbedDuration | null {
   let durationMs: number | null = null
 
   let malformed = false
-  const segmentComplete = walkEbmlElements(bytes, cursor, segmentEnd, (element) => {
+  const segmentComplete = walkSegmentElements(bytes, cursor, segmentEnd, (element) => {
     if (!element.complete) {
       malformed = true
       return

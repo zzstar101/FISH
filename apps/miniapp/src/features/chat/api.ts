@@ -12,10 +12,14 @@ import {
   conversationDtoSchema,
   conversationListResponseSchema,
   conversationUnreadCountSchema,
+  type ImageMediaMessageInput,
+  type MediaMessageDto,
   type MessageDto,
   type MessageListResponse,
+  mediaMessageDtoSchema,
   messageDtoSchema,
   messageListResponseSchema,
+  type VoiceMediaMessageInput,
 } from '@fish/contracts/chat/schema'
 import { NOTIFICATION_ROUTES } from '@fish/contracts/notifications/routes'
 import {
@@ -84,13 +88,53 @@ export async function fetchMessagePage(
   return messageListResponseSchema.parse(payload)
 }
 
-/** 发一条文本消息（201，响应体 MessageDto） */
-export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
+/**
+ * 发一条文本消息（201，响应体 MessageDto）。
+ *
+ * `clientRequestId`（#67 第一步的客户端一半）：每次**新发送**生成一个 uuid，重试同一条
+ * 消息必须沿用同一个 —— 服务端按 `(sender, conversation, clientRequestId)` 建唯一索引，
+ * 收到重复请求直接返回已创建的那条，所以「响应丢了再点重试」不会在库里留下第二条。
+ * 之前小程序端一直没带这个字段，验收①的小程序路径实际走不通。
+ */
+export async function sendMessage(
+  conversationId: string,
+  content: string,
+  clientRequestId: string,
+): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
-    body: { content },
+    body: { content, clientRequestId },
   })
   return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 创建图片 / 语音消息（201，响应体 MediaMessageDto）。
+ *
+ * 媒体走**独立 DTO**（不扩展 `MessageDto`），且字节先经 `features/chat/media-api.ts`
+ * 直传对象存储拿到 `objectKey`，这里只把声明值交给服务端复核。
+ * 幂等语义与文本完全一致：同一个 `clientRequestId` 重试返回同一条媒体。
+ */
+export async function createImageMessage(
+  conversationId: string,
+  input: Omit<ImageMediaMessageInput, 'kind'>,
+): Promise<MediaMessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.media(conversationId), {
+    method: 'POST',
+    body: { kind: 'IMAGE', ...input },
+  })
+  return mediaMessageDtoSchema.parse(payload)
+}
+
+export async function createVoiceMessage(
+  conversationId: string,
+  input: Omit<VoiceMediaMessageInput, 'kind'>,
+): Promise<MediaMessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.media(conversationId), {
+    method: 'POST',
+    body: { kind: 'VOICE', ...input },
+  })
+  return mediaMessageDtoSchema.parse(payload)
 }
 
 /** 标记会话已读（把查看者的 last_read_at 推进到当前时刻） */

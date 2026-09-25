@@ -45,9 +45,9 @@ function message(id: string, second: number): MessageDto {
  * 每页的 `items` 必须**内部升序**、且越晚取的页整体越早 —— 这正是服务端的契约
  * （`messageListResponseSchema` 按 `(createdAt, id)` 升序返回，游标往前翻）。
  */
-function pagedLoader(pages: Record<string, GapPage>) {
+function pagedLoader(pages: Record<string, GapPage<MessageDto>>) {
   const calls: Array<string | undefined> = []
-  const loadPage = async (before?: string): Promise<GapPage> => {
+  const loadPage = async (before?: string): Promise<GapPage<MessageDto>> => {
     calls.push(before)
     const page = pages[before ?? 'first']
     if (!page) throw new Error(`用例没有准备游标 ${String(before)} 对应的页`)
