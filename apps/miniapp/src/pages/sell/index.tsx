@@ -1,4 +1,3 @@
-import type { AiPolishCandidate, AiPolishProvider } from '@fish/contracts/ai/schema'
 import {
   type ListingCategory,
   type ListingDetail,
@@ -14,9 +13,10 @@ import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { fetchPolishCandidates } from '@/features/ai/api'
 import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
 import { createListing, fetchListingDetail, updateListing } from '@/features/listing/api'
 import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
-import { type PickedPhoto, pickPhotos, uploadListingImage } from '@/features/upload/api'
+import { pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
 import { isApiError } from '@/lib/request'
 import { categoryLabel } from '@/mock/api'
@@ -42,6 +42,19 @@ import {
   polishPreconditionError,
   tickPolishCooldown,
 } from './polish'
+import {
+  beginTask,
+  canLoadEditTarget,
+  clearedSellScope,
+  type EditLoadState,
+  isTaskCurrent,
+  ownerChanged,
+  type PolishState,
+  type SelectedPhoto,
+  type SellCondition,
+  type SellTask,
+  shouldDropPendingTarget,
+} from './view'
 import './index.scss'
 
 /**
@@ -73,7 +86,7 @@ import './index.scss'
  * 明确不做（等后续单）：web 端润色入口；编辑态换图。
  */
 
-const CONDITIONS: { key: 'NEW' | 'LIKE_NEW' | 'GOOD' | 'FAIR'; label: string }[] = [
+const CONDITIONS: { key: SellCondition; label: string }[] = [
   { key: 'NEW', label: '全新' },
   { key: 'LIKE_NEW', label: '九成新' },
   { key: 'GOOD', label: '八成新' },
@@ -93,39 +106,9 @@ const CATEGORIES: ListingCategory[] = [
 ]
 
 /**
- * 已选图片。`url` 是本地临时路径（预览用）；**选中即上传**，`status` 是这一张自己的上传状态。
- *
- * 每张带自己的 `id`：同一张图可以被选两次（本地路径可能相同），
- * 拿 `url` 当 key / 当删除判据会撞 key 并一次删掉两张。
+ * 已选图片、编辑态加载结果与润色状态机的定义随账号作用域模型搬到了 `./view`
+ * （`clearedSellScope()` 要连同它们一起清场，定义留在本文件会形成循环依赖）。
  */
-type SelectedPhoto = PickedPhoto & {
-  id: string
-  url: string
-  status: 'uploading' | 'done' | 'failed'
-  objectKey: string | null
-  error: string | null
-}
-
-/** 编辑态加载结果。`idle` 含「新建」与「编辑内容已就绪」两种正常态。 */
-type EditLoadState = 'idle' | 'loading' | 'notfound' | 'failed'
-
-/**
- * AI 润色状态机。
- *
- * `ready` 带上 `provider` / `redacted`：它们只有响应回来才知道，角标与脱敏说明就靠它们渲染，
- * 不在页面里另存一份。`failed` 只带 `code`（429 另带秒数），文案由 `./polish` 推出来。
- */
-type PolishState =
-  | { phase: 'idle' }
-  | { phase: 'loading' }
-  | {
-      phase: 'ready'
-      candidates: AiPolishCandidate[]
-      index: number
-      provider: AiPolishProvider
-      redacted: boolean
-    }
-  | { phase: 'failed'; code: string; retryAfterSeconds?: number }
 
 /** 分 → 价格输入框的字符串（整数不带小数位，避免回填出 160.00）。 */
 function priceToInput(priceCents: number): string {
@@ -142,16 +125,39 @@ export default function Sell() {
   const [editId, setEditId] = useState<string | null>(routeId)
   const editing = editId !== null
   /**
-   * 当前页面实例处于哪种模式：`null` = 新建。用它判断「这次回到出物页是不是该清掉编辑态」——
-   * 不能读 `editId` state（`useDidShow` 的回调闭包可能拿到旧值）。
+   * 当前页面实例处于哪种模式：`null` = 新建。用它判断「这次回到出物页是不是该清掉编辑态」。
+   *
+   * 用 ref 而不是读 `editId` state：渲染期清场块与 `syncEditTarget` 都要同步读写这个标记
+   * （一个在渲染期、一个在 `useDidShow` 回调里），ref 不触发重渲染，也不会读到待提交的旧值。
+   * 注：Taro 4.2.1 的 `useDidShow` 每帧刷新回调引用，闭包本身不是过期的。
    */
   const modeRef = useRef<string | null>(routeId)
+
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+  /**
+   * 账号作用域（#170 判据 C）。
+   *
+   * 出物是常驻 Tab 页，实例会跨过一次换号（`authed(A) → authed(B)`，或退出到匿名）：
+   * 页面级 state 与四条异步链（编辑目标 / 图片上传 / 提交 / AI 润色）的结果都属于**发起的
+   * 那个账号**。这里给每条链发一个「任务」，落地前必须仍然属于当前账号、且没被换号或卸载
+   * 作废（判据在 `./view`）。
+   *
+   * 只比对 `ownerId` 不够：`A → B → A` 时当前账号又变回 A，A 的旧响应会被写进 A 的**新**
+   * 会话，所以还要叠一个只在换号 / 卸载时前进的代次。
+   */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  const epochRef = useRef(0)
+  const ownerRef = useRef<string | null>(userId)
+  ownerRef.current = userId
+  /** 身份未就绪时先记下的编辑目标，等 `authStatus` 就绪后补一次交接（判据 A） */
+  const pendingEditRef = useRef<string | null>(null)
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [price, setPrice] = useState('')
   const [category, setCategory] = useState<ListingCategory | null>(null)
-  const [condition, setCondition] = useState<(typeof CONDITIONS)[number]['key']>('LIKE_NEW')
+  const [condition, setCondition] = useState<SellCondition>('LIKE_NEW')
   const [free, setFree] = useState(false)
   const [urgent, setUrgent] = useState(false)
   const [negotiable, setNegotiable] = useState(true)
@@ -174,6 +180,65 @@ export default function Sell() {
   const [submitting, setSubmitting] = useState(false)
   /** 审核中的商品 id：非 null 时整页换成结果视图 */
   const [pendingReviewId, setPendingReviewId] = useState<string | null>(null)
+
+  /**
+   * 换账号（含退出到匿名）时**在渲染期**同步清场（#170 判据 C）。
+   *
+   * 为什么是渲染期而不是 effect：effect 要等这一帧提交之后才跑，中间那一帧新账号的界面会
+   * 带着上一个账号的表单、图片（`photos` 里还挂着上个账号上传得到的 `objectKey`）、编辑
+   * 目标与润色候选。判据要求「A 在途切 B 的同一渲染周期内清干净」，所以这里直接 setState
+   * （React 会在提交前就地重渲染本组件，不产生额外一帧）。
+   *
+   * 代次 +1 让四条在途链的迟到响应全部作废。
+   */
+  if (ownerChanged(prevUserId, userId)) {
+    setPrevUserId(userId)
+    epochRef.current += 1
+    // 冷启动把身份从 unknown 解析出来不算换号：那之前记下的编辑目标要留给新身份交接
+    if (shouldDropPendingTarget(prevUserId)) pendingEditRef.current = null
+    modeRef.current = null
+    // 润色请求在这里直接作废而不调 `dropPolishRequest()`：后者定义在本行之下，
+    // 渲染期调用会撞上 TDZ。两行等价。
+    polishCancelRef.current?.()
+    polishCancelRef.current = null
+    const cleared = clearedSellScope()
+    setEditId(cleared.editId)
+    setTitle(cleared.title)
+    setDescription(cleared.description)
+    setPrice(cleared.price)
+    setCategory(cleared.category)
+    setCondition(cleared.condition)
+    setFree(cleared.free)
+    setUrgent(cleared.urgent)
+    setNegotiable(cleared.negotiable)
+    setPhotos(cleared.photos)
+    setExistingImages(cleared.existingImages)
+    setEditState(cleared.editState)
+    setPolish(cleared.polish)
+    setCooldown(cleared.cooldown)
+    setFieldErrors(cleared.fieldErrors)
+    setBlockMessage(cleared.blockMessage)
+    setSubmitting(cleared.submitting)
+    setPendingReviewId(cleared.pendingReviewId)
+  }
+
+  /**
+   * 这个任务是否仍然「活着」——可以写页面、可以解锁自己那一次 loading。
+   *
+   * 成功、失败与 `finally` 解锁都走它：A 的 `finally` 不能解开 B 已经点下的那一次，
+   * 否则 B 会重复发出请求。
+   */
+  const taskAlive = (task: SellTask): boolean =>
+    isTaskCurrent(task, epochRef.current, ownerRef.current)
+
+  useEffect(() => {
+    // 卸载：作废在途任务，并放开飞行中的润色请求（否则回调会在卸载后 setState）
+    return () => {
+      epochRef.current += 1
+      polishCancelRef.current?.()
+      polishCancelRef.current = null
+    }
+  }, [])
 
   const toast = (text: string) => {
     void Taro.showToast({ title: text, icon: 'none' })
@@ -250,10 +315,15 @@ export default function Sell() {
 
   /** 编辑态取回原商品；404 / 非本人一律走「无法编辑」空态，不静默降级成一张空表单 */
   const loadForEdit = (id: string) => {
+    const ownerId = ownerRef.current
+    if (!ownerId) return
+    const task = beginTask(epochRef.current, ownerId)
     setEditState('loading')
     void (async () => {
       try {
         const detail = await fetchListingDetail(id)
+        // 换号：A 的商品详情不能填进 B 的表单（B 看着别人的商品点「发布」会发错东西）
+        if (!taskAlive(task)) return
         if (!detail?.isOwner) {
           setEditState('notfound')
           return
@@ -261,10 +331,20 @@ export default function Sell() {
         applyDetail(detail)
         setEditState('idle')
       } catch {
+        if (!taskAlive(task)) return
         setEditState('failed')
       }
     })()
   }
+
+  /**
+   * 供下面的交接 effect 调用。
+   *
+   * `loadForEdit` 每次渲染都是新函数，直接进依赖会让 effect 每帧重跑（`useExhaustiveDependencies`
+   * 也会判错）；用 ref 拿最新的一份。
+   */
+  const loadForEditRef = useRef(loadForEdit)
+  loadForEditRef.current = loadForEdit
 
   /**
    * 每次显示本页时决定「新建还是改某一件 / 复制某一件」。
@@ -298,6 +378,7 @@ export default function Sell() {
 
     const target = handoff?.kind === 'edit' ? handoff.listingId : routeId
     if (target === null) {
+      pendingEditRef.current = null
       if (modeRef.current !== null) {
         modeRef.current = null
         setEditId(null)
@@ -306,12 +387,36 @@ export default function Sell() {
       }
       return
     }
+    // 判据 A：身份没就绪（冷启动恢复会话中 / 未登录）不发受限请求 —— `GET /listings/:id`
+    // 挂 `requireAuth`，早发必然 401。先记下目标，等身份就绪再补一次（见下面的 effect）。
+    if (!canLoadEditTarget(authStatus === 'authed', ownerRef.current)) {
+      pendingEditRef.current = target
+      return
+    }
+    pendingEditRef.current = null
     modeRef.current = target
     setEditId(target)
     loadForEdit(target)
   }
 
   useDidShow(syncEditTarget)
+
+  /**
+   * 身份就绪后补一次编辑目标交接。
+   *
+   * `useDidShow` 可能在 `authStatus === 'unknown'`（冷启动恢复会话中）时先跑：那时按判据 A
+   * 不发请求，只把目标记在 `pendingEditRef` 里。这里补上，否则带 `?id=` 进入出物页会静默
+   * 丢掉编辑目标，只看到一张空表单。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || !userId) return
+    const target = pendingEditRef.current
+    if (target === null) return
+    pendingEditRef.current = null
+    modeRef.current = target
+    setEditId(target)
+    loadForEditRef.current(target)
+  }, [authStatus, userId])
 
   /**
    * 发布成功 → 商品详情。
@@ -331,21 +436,32 @@ export default function Sell() {
    * 失败也早暴露在图上去重传，而不是等用户填完表单才说图片传不上去。
    * 用户在飞行途中删掉这张时，`setPhotos` 里已经找不到它 —— 更新自然变成 no-op
    * （对象存储里会留下一个没人引用的对象，可接受）。
+   *
+   * `() => taskAlive(task)` 一路交给上传适配器：presign / 直传 PUT / confirm 三步各自在
+   * **发请求之前**再问一遍归属，换号 / 卸载后剩下的步骤不再发出（#170 复查 #208）。
+   * 中止时抛的是 `UploadAbortedError`，而此刻 `taskAlive(task)` 必为假 —— 下面的 catch
+   * 会原样返回，既不写状态也不提示。
    */
-  const startUpload = (photo: SelectedPhoto) => {
+  const startUpload = (photo: SelectedPhoto, task: SellTask) => {
     void (async () => {
       try {
-        const objectKey = await uploadListingImage({
-          path: photo.path,
-          mime: photo.mime,
-          sizeBytes: photo.sizeBytes,
-        })
+        const objectKey = await uploadListingImage(
+          {
+            path: photo.path,
+            mime: photo.mime,
+            sizeBytes: photo.sizeBytes,
+          },
+          () => taskAlive(task),
+        )
+        // 换号：A 上传得到的 objectKey 不能留在 B 的表单里（B 发布时会把 A 的图带上）
+        if (!taskAlive(task)) return
         setPhotos((prev) =>
           prev.map((item) =>
             item.id === photo.id ? { ...item, status: 'done', objectKey, error: null } : item,
           ),
         )
       } catch (error) {
+        if (!taskAlive(task)) return
         setPhotos((prev) =>
           prev.map((item) =>
             item.id === photo.id
@@ -367,9 +483,16 @@ export default function Sell() {
       toast(`最多上传 ${MAX_LISTING_IMAGES} 张图片`)
       return
     }
+    const ownerId = ownerRef.current
+    if (!ownerId) return
+    // 任务必须在**选图之前**铸好：`pickPhotos` 会 await 原生选图 UI，等它回来再读 ref 就等于
+    // 拿新账号的身份给这批图签发通行证，选图期间换号时守卫会整个失效。
+    const task = beginTask(epochRef.current, ownerId)
     void (async () => {
       try {
         const { photos: picked, rejected } = await pickPhotos(remaining)
+        // 选图期间换号 / 卸载：这批图属于上一个账号，整批丢掉（连提示也一并吞掉）
+        if (!taskAlive(task)) return
         if (rejected) toast(rejected)
         if (picked.length === 0) return
         const added: SelectedPhoto[] = picked.map((photo, index) => ({
@@ -382,8 +505,9 @@ export default function Sell() {
         }))
         setPhotos((prev) => [...prev, ...added])
         // 逐张独立上传、并行推进：任何一张失败不影响其余张
-        for (const photo of added) startUpload(photo)
+        for (const photo of added) startUpload(photo, task)
       } catch (error) {
+        if (!taskAlive(task)) return
         // 只有「用户取消」被 pickPhotos 吞掉；走到这里的是权限被拒 / 相机异常等真失败
         toast(error instanceof Error ? error.message : '选择图片失败，请重试')
       }
@@ -391,10 +515,13 @@ export default function Sell() {
   }
 
   const retryUpload = (photo: SelectedPhoto) => {
+    const ownerId = ownerRef.current
+    if (!ownerId) return
+    const task = beginTask(epochRef.current, ownerId)
     setPhotos((prev) =>
       prev.map((item) => (item.id === photo.id ? { ...item, status: 'uploading' } : item)),
     )
-    startUpload(photo)
+    startUpload(photo, task)
   }
 
   /** 服务端拒绝 → 字段级错误落位；认不出的字段不猜，退到整块提示条 */
@@ -440,6 +567,9 @@ export default function Sell() {
     // 类型收窄：validateSellForm 已经挡下这两个分支
     if (priceCents === null || category === null) return
 
+    const ownerId = ownerRef.current
+    if (!ownerId) return
+    const task = beginTask(epochRef.current, ownerId)
     setSubmitting(true)
     setFieldErrors({})
     setBlockMessage('')
@@ -467,15 +597,20 @@ export default function Sell() {
                   .filter((key): key is string => key !== null),
               })
 
+        // 换号：A 的提交结果不能把 B 送去 A 的详情页、也不能给 B 挂上「审核中」结果视图
+        if (!taskAlive(task)) return
         if (sellSubmitOutcome(detail) === 'pending-review') {
           setPendingReviewId(detail.id)
           return
         }
         goDetail(detail.id)
       } catch (error) {
+        // A 的字段级错误 / 提示条同样不能落到 B 的表单上
+        if (!taskAlive(task)) return
         handleSubmitError(error)
       } finally {
-        setSubmitting(false)
+        // 旧任务不解锁：B 可能已经点下自己那一次提交
+        if (taskAlive(task)) setSubmitting(false)
       }
     })()
   }
@@ -541,6 +676,9 @@ export default function Sell() {
   /** 真正发请求。前置校验与守卫在 `openPolish`，失败态的「重试」直接进这里。 */
   const requestPolish = (selectedCategory: ListingCategory) => {
     dropPolishRequest()
+    const ownerId = ownerRef.current
+    if (!ownerId) return
+    const task = beginTask(epochRef.current, ownerId)
     setPolish({ phase: 'loading' })
     // 关 sheet 即 `cancel()`；`accept` 恒真 —— 这次的结果只要没被取消就该用，不按内容过滤
     const load = cancellable(
@@ -555,8 +693,9 @@ export default function Sell() {
     polishCancelRef.current = load.cancel
     void load.promise
       .then((response) => {
-        // `null` = 已被取消（用户关了 sheet）：迟到的候选不再把弹层拉回来
-        if (!response || load.isCancelled()) return
+        // `null` = 已被取消（用户关了 sheet / 换了账号）：迟到的候选不再把弹层拉回来，
+        // 更不能把上一个账号的候选写进新账号的弹层（#170 判据 C）
+        if (!response || load.isCancelled() || !taskAlive(task)) return
         polishCancelRef.current = null
         setPolish({
           phase: 'ready',
@@ -567,7 +706,8 @@ export default function Sell() {
         })
       })
       .catch((error: unknown) => {
-        if (load.isCancelled()) return
+        // 同上：A 的失败（含 429 冷却、字段级错误）不能落到 B 的弹层与按钮上
+        if (load.isCancelled() || !taskAlive(task)) return
         polishCancelRef.current = null
         handlePolishFailure(error)
       })

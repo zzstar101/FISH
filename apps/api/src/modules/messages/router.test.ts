@@ -140,4 +140,48 @@ describe('messages router', () => {
     )
     expect(response.status).toBe(404)
   })
+
+  test('POST /:id/messages forwards clientRequestId and maps 409', async () => {
+    let seen: unknown
+    const app = buildApp({
+      sendTextMessage: async (_userId, _conversationId, input) => {
+        seen = input
+        throw new MessageServiceError(409, 'IDEMPOTENCY_KEY_REUSED', '重复的请求标识')
+      },
+    })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000f3'
+    const response = await app.request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'hi', clientRequestId }),
+      },
+    )
+    expect(seen).toEqual({ content: 'hi', clientRequestId })
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({
+      error: { code: 'IDEMPOTENCY_KEY_REUSED', message: '重复的请求标识' },
+    })
+  })
+
+  test('POST /:id/messages rejects a non-uuid clientRequestId with 422', async () => {
+    let called = false
+    const app = buildApp({
+      sendTextMessage: async () => {
+        called = true
+        return message
+      },
+    })
+    const response = await app.request(
+      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'hi', clientRequestId: 'not-a-uuid' }),
+      },
+    )
+    expect(response.status).toBe(422)
+    expect(called).toBe(false)
+  })
 })

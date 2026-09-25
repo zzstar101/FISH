@@ -134,6 +134,13 @@
       "when": 1790080787230,
       "tag": "0018_lame_sir_ram",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790244241466,
+      "tag": "0019_magical_ghost_rider",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,7 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
-import { applyVerification, authSnapshot, useAuth } from '@/features/auth/store'
+import { applyVerification, useAuth } from '@/features/auth/store'
 import {
   CAMPUS_EMAIL_DOMAIN,
   fetchVerificationStatus,
@@ -25,6 +25,15 @@ import {
   verifyNeedsResend,
 } from '@/features/verify/messages'
 import { isApiError } from '@/lib/request'
+import {
+  beginTask,
+  canLoadStatus,
+  clearedScope,
+  isTaskCurrent,
+  ownerChanged,
+  type VerifyStage,
+  type VerifyTask,
+} from './view'
 import './index.scss'
 
 /**
@@ -41,6 +50,11 @@ import './index.scss'
  * 登录态边界：三个端点都挂 `requireAuth`。会话失效时 `lib/request` 对 401
  * `UNAUTHENTICATED` 就地清会话 → `features/auth/store` 广播 `anonymous` →
  * 本页在守卫跳转落地前先渲染 `AuthRequired`，不会画一帧假数据。
+ *
+ * **账号作用域（#170 判据 C）**：`stage` / `email` / `code` / `left` / 错误与加载态
+ * 全属于「当前登录用户」。换账号时在**渲染期同步**清场并让写任务代次前进；发码与
+ * 验码的成功、失败、`finally` 解锁都先确认任务仍属于当前账号，旧响应不覆盖新账号。
+ * 详见 `prevUserId` / `epochRef` / `taskAlive` 处的注释，判据在 `./view.ts`。
  */
 
 /** 重发倒计时秒数（设计稿：60 秒） */
@@ -56,7 +70,7 @@ const CODE_SLOTS = Array.from({ length: CODE_LEN }, (_, index) => ({
   index,
 }))
 
-type Stage = 'email' | 'code'
+type Stage = VerifyStage
 
 /** `2026-05-06T…Z` → `2026-05-06`；拿不到就显示 `—`，不编造时间 */
 function formatVerifiedAt(iso: string | null | undefined): string {
@@ -100,6 +114,43 @@ export default function Verify() {
   const sendingRef = useRef(false)
   const submittingRef = useRef(false)
 
+  /**
+   * 本页账号作用域状态**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在
+   * **同一帧内**把表单 / 倒计时 / 阶段 / 错误与加载态清干净，不会出现「B 的身份已经
+   * 渲染、画的却是 A 的打码邮箱与输码阶段」那一帧（与 match / mylist 同一理由）。
+   */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  /**
+   * 写任务代次：只在**换账号**与**页面卸载**时前进，用来作废在途的发码 / 验码响应。
+   *
+   * 不随每次请求前进：发码与验码由上面的 ref 锁串行，同账号内互相作废只会把结果丢掉。
+   * 而只比对 `ownerId` 挡不住 `A → B → A` —— 那时当前账号又变回 A，A 的旧响应会被
+   * 放进 A 的新会话。
+   */
+  const epochRef = useRef(0)
+  /** 当前账号：异步回调里要读**最新**值，不能读发请求那个闭包里的 `userId` */
+  const ownerRef = useRef<string | null>(userId)
+  ownerRef.current = userId
+
+  if (ownerChanged(prevUserId, userId)) {
+    setPrevUserId(userId)
+    // 上一个账号所有在途的写任务立即作废（见 `taskAlive`）
+    epochRef.current += 1
+    const cleared = clearedScope()
+    setStage(cleared.stage)
+    setStatus(cleared.status)
+    setEmail(cleared.email)
+    setEmailError(cleared.emailError)
+    setCode(cleared.code)
+    setCodeError(cleared.codeError)
+    setLeft(cleared.left)
+    setSending(cleared.sending)
+    setSubmitting(cleared.submitting)
+    // ref 锁也要清：否则 B 会继承 A 的「正在发码 / 正在认证」而被自己的点击挡回去
+    sendingRef.current = false
+    submittingRef.current = false
+  }
+
   useEffect(() => {
     if (left <= 0) return
     const timer = setTimeout(() => setLeft((n) => n - 1), 1000)
@@ -107,14 +158,25 @@ export default function Verify() {
   }, [left])
 
   /**
+   * 卸载作废在途任务：发码 / 验码由点击发起，不在 effect 里，没有现成的 cleanup。
+   * 不作废的话，卸载后迟到响应照样 `setState`（页面状态已无意义），而 `finally`
+   * 还会去动一个已经不存在的页面的锁。
+   */
+  useEffect(() => {
+    return () => {
+      epochRef.current += 1
+    }
+  }, [])
+
+  /**
    * 拉一次真实认证状态（成功态的教育邮箱 / 认证时间用它）。
    *
    * 依赖 `userId` 而不是整个 `authUser` 对象：换账号必须丢掉上一个账号的状态
    * （与 `pages/profile` 防串号同一理由），而同一账号的普通广播不该触发重拉。
+   * 换号那一帧的 `status` 已由上面的渲染期清场置空，这里不再清（effect 晚一帧）。
    */
   useEffect(() => {
-    setStatus(null)
-    if (authStatus !== 'authed' || !userId) return
+    if (!canLoadStatus(authStatus === 'authed', userId)) return
     let alive = true
     void fetchVerificationStatus()
       .then((next) => {
@@ -143,20 +205,22 @@ export default function Verify() {
   }
 
   /**
-   * 认证响应只属于**发起请求的那个账号**。
+   * 认证响应只属于**发起请求的那个账号**，而且必须仍是**当前这一轮**。
    *
    * 请求可以飞行十几秒（`lib/request` 超时上限 15s），期间用户完全可能退出、换号登录。
-   * 结果回来时若登录的已经不是同一个人，就必须整个丢弃 —— 否则 A 的 `VERIFIED` 会被
-   * 写进 B 的全局 store（`applyVerification` 也按 `ownerId` 再挡一层）。
+   * 只判断「现在登录的是谁」不够：`A → B → A` 时当前账号又变回 A，A 的旧响应会被写进
+   * A 的**新**会话；代次 + 账号一起比对才挡得住（`view.ts` 的 `isTaskCurrent`）。
+   * 成功、失败与 `finally` 解锁都走它 —— 旧的 finally 不能解开新账号的锁。
    */
-  const ownedByCurrent = (ownerId: string): boolean => authSnapshot().user?.id === ownerId
+  const taskAlive = (task: VerifyTask): boolean =>
+    isTaskCurrent(task, epochRef.current, ownerRef.current)
 
   /** 后端说「已认证」时，把页面与 store 都收敛到已认证态；状态拿不到则返回 false，由调用方如实报错 */
-  const convergeVerified = async (ownerId: string): Promise<boolean> => {
+  const convergeVerified = async (task: VerifyTask): Promise<boolean> => {
     const next = await fetchVerificationStatus().catch(() => null)
-    if (!next || !ownedByCurrent(ownerId)) return false
+    if (!next || !taskAlive(task)) return false
     setStatus(next)
-    applyVerification(ownerId, next)
+    applyVerification(task.ownerId, next)
     return true
   }
 
@@ -172,23 +236,30 @@ export default function Verify() {
       showSendError(`请使用校园教育邮箱（如 ${CAMPUS_EMAIL_DOMAIN}）`)
       return
     }
-    const ownerId = userId
+    const ownerId = ownerRef.current
     if (!ownerId) return
+    const task = beginTask(epochRef.current, ownerId)
     sendingRef.current = true
     setEmailError('')
     setCodeError('')
     setSending(true)
     try {
       await sendVerificationCode(trimmed)
+      // 换号后 A 的「已发送」不能把 B 推进输码阶段、也不能给 B 起 A 的倒计时
+      if (!taskAlive(task)) return
       setStage('code')
       setLeft(RESEND_SECONDS)
       setCode('')
       void Taro.showToast({ title: '验证码已发送', icon: 'none' })
     } catch (error) {
+      // 失败文案（含 429 的「还有几秒」）同样是账号作用域的，不能落在 B 的页面上
+      if (!taskAlive(task)) return
       if (isApiError(error)) {
         // 服务端已认证（例如另一端刚认证完）：不是发码失败，收敛到已认证态
         if (error.code === 'ALREADY_VERIFIED') {
-          if (!(await convergeVerified(ownerId))) {
+          // 收敛本身要再拉一次状态，多出一个在途窗口 —— 只有任务仍有效才报错，
+          // 否则这句失败文案会落在换号后 B 的页面上
+          if (!(await convergeVerified(task)) && taskAlive(task)) {
             showSendError('该账号已完成认证，但状态还没同步，请稍后重试')
           }
           return
@@ -198,8 +269,11 @@ export default function Verify() {
       }
       showSendError('发送失败，请检查网络后重试')
     } finally {
-      sendingRef.current = false
-      setSending(false)
+      // 旧任务不解锁：B 可能已经点下了自己那一次发码，被 A 的 finally 放开就会重复发码
+      if (taskAlive(task)) {
+        sendingRef.current = false
+        setSending(false)
+      }
     }
   }
 
@@ -216,21 +290,25 @@ export default function Verify() {
       setCodeError(`请输入 ${CODE_LEN} 位验证码`)
       return
     }
-    const ownerId = userId
+    const ownerId = ownerRef.current
     if (!ownerId) return
+    const task = beginTask(epochRef.current, ownerId)
     submittingRef.current = true
     setSubmitting(true)
     setCodeError('')
     try {
       const next = await verifyCampusCode(email, code)
-      if (!ownedByCurrent(ownerId)) return
+      if (!taskAlive(task)) return
       setStatus(next)
       applyVerification(ownerId, next)
     } catch (error) {
+      // 同上：A 的码错 / 过期 / 次数过多不能写进 B 的错误框，也不能解开 B 的重发倒计时
+      if (!taskAlive(task)) return
       if (isApiError(error)) {
         // 另一端 / 上一次已完成：不是错误，按已认证态收敛
         if (error.code === 'ALREADY_VERIFIED') {
-          if (!(await convergeVerified(ownerId))) {
+          // 同上：收敛的在途窗口里换号的话，这句不能写进 B 的错误框
+          if (!(await convergeVerified(task)) && taskAlive(task)) {
             setCodeError('该账号已完成认证，但状态还没同步，请稍后重试')
           }
           return
@@ -241,8 +319,10 @@ export default function Verify() {
       }
       setCodeError('认证失败，请检查网络后重试')
     } finally {
-      submittingRef.current = false
-      setSubmitting(false)
+      if (taskAlive(task)) {
+        submittingRef.current = false
+        setSubmitting(false)
+      }
     }
   }
 

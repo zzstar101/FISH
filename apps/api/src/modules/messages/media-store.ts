@@ -1,7 +1,12 @@
 import type { MediaKind, MediaMessageInput } from '@fish/contracts/chat/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
-import { sql } from 'drizzle-orm'
+import { type SQL, sql } from 'drizzle-orm'
+import {
+  MessageIdempotencyConflictError,
+  type MessageSendKey,
+  sendKeyLockQuery,
+} from './idempotency'
 
 export type MediaRow = {
   message_id: string
@@ -25,6 +30,14 @@ export type MediaRow = {
 
 /** 媒体列表游标：`(created_at, id)` 反向翻页（向更早）。 */
 export type MediaListCursor = { createdAt: string; id: string }
+
+/**
+ * #67 幂等键命中结果；`matchedHash=false` 表示同键不同内容（调用方报 409）。
+ *
+ * `matchedHash=false` 时 `row` 可能根本不是 MEDIA 行（同键先落在 TEXT 上，见
+ * `mediaByRequestQuery`），此时其中的 media 字段为 null，调用方**不得**使用 `row`。
+ */
+export type MediaRequestLookup = { row: MediaRow; matchedHash: boolean }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
   if (Array.isArray(result)) return result as Record<string, unknown>[]
@@ -63,18 +76,65 @@ const MEDIA_SELECT = sql`
   to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
 `
 
+/**
+ * #67 幂等键命中查询（`db` 与事务 `tx` 共用）。
+ *
+ * 指纹在 SQL 里比较，省一次往返；`hash_matches` 供调用方区分「重试」与「同键换内容」。
+ *
+ * 这里必须 **LEFT JOIN**：唯一的 `(sender_id, conversation_id, client_request_id)` 索引
+ * 不区分消息类型，所以同一个键可能已经落在一条 **TEXT** 行上（先发文字、再拿同一个键发图）。
+ * 用 INNER JOIN 会让这条 TEXT 行「查不到」→ 判重 miss → INSERT 撞唯一索引 23505 → 500。
+ * 加上 `mm.id IS NOT NULL` 后，非 MEDIA 行一律落进 `matchedHash = false`，由调用方判 409。
+ */
+function mediaByRequestQuery(conversationId: string, senderId: string, key: MessageSendKey): SQL {
+  return sql`
+    SELECT ${MEDIA_SELECT},
+           (m.client_request_hash = ${key.requestHash} AND mm.id IS NOT NULL) AS hash_matches
+    FROM messages m
+    LEFT JOIN message_media mm ON mm.message_id = m.id
+    WHERE m.conversation_id = ${conversationId}::uuid
+      AND m.sender_id = ${senderId}::uuid
+      AND m.client_request_id = ${key.clientRequestId}
+  `
+}
+
+function toLookup(result: unknown): MediaRequestLookup | null {
+  const row = rowsOf(result)[0]
+  return row ? { row: toRow(row), matchedHash: row.hash_matches === true } : null
+}
+
 export interface MediaMessageStore {
   participant(
     conversationId: string,
     userId: string,
   ): Promise<{ buyerId: string; sellerId: string } | null>
-  create(conversationId: string, senderId: string, input: MediaMessageInput): Promise<MediaRow>
+  /**
+   * 创建 MEDIA 消息 + message_media 行并 bump 会话（同一事务）。
+   *
+   * 带 `key` 时启用 #67 幂等：同键同指纹 → 返回既有媒体行（不新增）；同键不同指纹 →
+   * 抛 `MessageIdempotencyConflictError`。
+   */
+  create(
+    conversationId: string,
+    senderId: string,
+    input: MediaMessageInput,
+    key?: MessageSendKey | null,
+  ): Promise<MediaRow>
   list(
     conversationId: string,
     userId: string,
     filter: { limit: number; cursor: MediaListCursor | null },
   ): Promise<MediaRow[]>
   find(conversationId: string, mediaId: string, userId: string): Promise<MediaRow | null>
+  /**
+   * #67 幂等键查询：命中时返回既有媒体行。
+   * service 在**上传校验与快照写入之前**调用它，让重试走快速路径而不是重写一份快照。
+   */
+  findByRequestKey(
+    conversationId: string,
+    senderId: string,
+    key: MessageSendKey,
+  ): Promise<MediaRequestLookup | null>
 }
 
 export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
@@ -89,14 +149,35 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
       return row ? { buyerId: row.buyer_id as string, sellerId: row.seller_id as string } : null
     },
 
-    async create(conversationId, senderId, input) {
+    async findByRequestKey(conversationId, senderId, key) {
+      return toLookup(await db.execute(mediaByRequestQuery(conversationId, senderId, key)))
+    },
+
+    async create(conversationId, senderId, input, key) {
       return db.transaction(async (tx) => {
+        if (key) {
+          // 与文本路径同一套串行化：先拿键的 advisory lock，再查重；两个并发同键请求里
+          // 第二个会阻塞到第一个提交，然后读到已提交行并直接返回。
+          await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
+          const existing = toLookup(
+            await tx.execute(mediaByRequestQuery(conversationId, senderId, key)),
+          )
+          if (existing) {
+            if (existing.matchedHash) return existing.row
+            throw new MessageIdempotencyConflictError(key.clientRequestId)
+          }
+        }
         const messageId = newId()
         const mediaId = newId()
         const result = await tx.execute(sql`
           WITH msg AS (
-            INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at)
-            VALUES (${messageId}::uuid, ${conversationId}::uuid, ${senderId}::uuid, 'MEDIA', '[media]', clock_timestamp())
+            INSERT INTO messages
+              (id, conversation_id, sender_id, type, content, created_at,
+               client_request_id, client_request_hash)
+            VALUES (
+              ${messageId}::uuid, ${conversationId}::uuid, ${senderId}::uuid, 'MEDIA', '[media]',
+              clock_timestamp(), ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null}
+            )
             RETURNING id, conversation_id, sender_id, created_at
           ), media AS (
             INSERT INTO message_media

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlConversationStore } from './store'
@@ -83,6 +84,43 @@ describe('conversations store (integration)', () => {
     expect(await store.findIdByListingAndBuyer(listingA, buyer)).toBe(createdId)
   })
 
+  test('商品会话买家分页与全量人数同源，空页仍有总数，不混入别的商品', async () => {
+    const listingId = newId()
+    await seedListing(listingId, seller, '卖家的新商品')
+    const extra = newId()
+    await db.execute(sql`INSERT INTO users (id, student_no, password_hash, nickname)
+      VALUES (${extra}, ${`watchers-${process.pid}`}, 'test-hash', '新买家')`)
+    try {
+      for (const userId of [buyer, outsider, extra]) {
+        await store.insertIfAbsent(listingId, userId, seller)
+      }
+      expect(await store.insertIfAbsent(listingId, buyer, seller)).toBeNull()
+      const seen = new Set<string>()
+      let cursor: { sortKey: string; id: string } | null = null
+      for (let i = 0; i < 3; i++) {
+        const page = await store.listChatWatchers(listingId, seller, { limit: 1, cursor })
+        expect(page.total).toBe(3)
+        expect(page.rows).toHaveLength(i === 2 ? 1 : 2)
+        const first = page.rows[0]
+        if (!first) throw new Error('缺少分页行')
+        seen.add(first.userId)
+        cursor = { sortKey: first.startedAtCursor, id: first.conversationId }
+      }
+      expect(seen).toEqual(new Set([buyer, outsider, extra]))
+      const empty = await store.listChatWatchers(listingId, seller, { limit: 1, cursor })
+      expect(empty).toEqual({ rows: [], total: 3 })
+      const otherListing = await store.listChatWatchers(listingB, seller, {
+        limit: 5,
+        cursor: null,
+      })
+      expect(otherListing.total).toBe(0)
+    } finally {
+      await db.execute(sql`DELETE FROM conversations WHERE listing_id = ${listingId}`)
+      await db.execute(sql`DELETE FROM listings WHERE id = ${listingId}`)
+      await db.execute(sql`DELETE FROM users WHERE id = ${extra}`)
+    }
+  })
+
   test('findDetail returns role data for participants and null for outsiders', async () => {
     const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
     if (!conversationId) throw new Error('unreachable')
@@ -105,22 +143,40 @@ describe('conversations store (integration)', () => {
     // 随机的 uuidv4 上，"最新一条"（及 unread 的边界）就不确定了。
     await db.execute(sql`
       INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
-        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'TEXT', '在吗', now() - interval '2 seconds'),
-        (${crypto.randomUUID()}, ${conversationId}, NULL, 'SYSTEM', '系统提示', now() - interval '1 second'),
-        (${crypto.randomUUID()}, ${conversationId}, ${buyer}, 'TEXT', '我自己发的', now()),
-        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'MEDIA', '[media]', now())
+        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'TEXT', '在吗', now() - interval '4 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, NULL, 'SYSTEM', '系统提示', now() - interval '3 seconds'),
+        (${crypto.randomUUID()}, ${conversationId}, ${buyer}, 'TEXT', '我自己发的', now() - interval '2 seconds')
+    `)
+    // #67 第四步：媒体消息也要能当摘要，而且 content 由服务端翻成可读文案。
+    // 必须连带写 message_media —— 少了它 last_message_media_kind 是 NULL，
+    // 摘要只会退化成 `[媒体]`，就测不出「图片 / 语音」的区分。
+    const mediaMessageId = crypto.randomUUID()
+    await db.execute(sql`
+      INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
+        (${mediaMessageId}, ${conversationId}, ${seller}, 'MEDIA', '[media]', now() - interval '1 second')
+    `)
+    await db.execute(sql`
+      INSERT INTO message_media (id, message_id, conversation_id, owner_id, kind, object_key, mime_type, size_bytes, width, height) VALUES
+        (${crypto.randomUUID()}, ${mediaMessageId}, ${conversationId}, ${seller}, 'IMAGE',
+         ${`conv-test/${mediaMessageId}.jpg`}, 'image/jpeg', 1024, 800, 600)
     `)
 
     const beforeRead = await store.findDetail(conversationId, buyer)
-    expect(beforeRead?.unreadCount).toBe(2) // 对方 + SYSTEM；自己发的不算
-    // lastMessage 摘要 = created_at 最晚的一条（这里是买家刚发的那条 TEXT）
+    expect(beforeRead?.unreadCount).toBe(3) // 对方 TEXT + SYSTEM + 对方的图片；自己发的不算
+    // lastMessage 摘要 = created_at 最晚的一条（这里是对头发来的图片）
     expect(beforeRead?.lastMessage).toMatchObject({
-      type: 'TEXT',
-      content: '我自己发的',
-      senderId: buyer,
+      type: 'MEDIA',
+      content: '[图片]',
+      senderId: seller,
     })
     const sellerView = await store.findDetail(conversationId, seller)
     expect(sellerView?.unreadCount).toBe(2) // 买家的一条 + SYSTEM（SYSTEM 对双方都计未读）
+    // 卖家视角的最后一条是**自己发的图**，同样要能出摘要
+    expect(sellerView?.lastMessage).toMatchObject({
+      type: 'MEDIA',
+      content: '[图片]',
+      senderId: seller,
+    })
 
     const afterRead = await store.markRead(conversationId, buyer)
     expect(afterRead?.unreadCount).toBe(0)
@@ -169,7 +225,7 @@ describe('conversations store (integration)', () => {
     expect(sellerList).toHaveLength(2)
   })
 
-  test('countUnread 判据与列表行恒等：MEDIA 不计、SYSTEM 计入、自己发的不计、读位边界生效', async () => {
+  test('countUnread 判据与列表行恒等：MEDIA 计入、SYSTEM 计入、自己发的不计、读位边界生效', async () => {
     const buyerE = '01990000-0000-7000-8000-0000000000a8'
     const sellerE = '01990000-0000-7000-8000-0000000000a9'
     const listingE = '01990000-0000-7000-8000-0000000000b4'
@@ -186,8 +242,8 @@ describe('conversations store (integration)', () => {
     // 显式秒级递减的时间轴（旧 → 新）：读位边界是确定值，不指望 now() 的相对先后。
     // 未读 = **晚于**读位，所以「该计未读的」必须落在时间轴的新端。
     //
-    // ② MEDIA 刻意放在**买家读位之后、且由对方发出**：这样它只被 MEDIA 判据排除，
-    // 不会被读位或 sender 分支顺带排除 —— 否则 countUnread 漏掉该判据也测不出来。
+    // ② MEDIA 刻意放在**买家读位之后、且由对方发出**（#67 第四步：媒体计入未读）：
+    //    只发了图片也必须有红点，否则用户无从得知对方回了消息。
     await db.execute(sql`
       INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
         (${crypto.randomUUID()}, ${conversationId}, ${sellerE}, 'TEXT', '①读位之前的旧消息', now() - interval '60 seconds'),
@@ -202,9 +258,9 @@ describe('conversations store (integration)', () => {
       UPDATE conversations SET buyer_last_read_at = now() - interval '35 seconds' WHERE id = ${conversationId}
     `)
 
-    // 买家：④ 对方 TEXT + ⑤ SYSTEM = 2；① 在读位之前、② 自己发的、③ MEDIA（若漏判据会变 3）。
-    // 卖家：从未读过 → ②③ 买家 TEXT + ⑤ SYSTEM = 3；①④ 自己发的、③ 侧 MEDIA 都排除。
-    const expected = { buyer: 2, seller: 3 }
+    // 买家：④ 对方 TEXT + MEDIA（对方发的图）+ ⑤ SYSTEM = 3；① 在读位之前、②③ 自己发的不计。
+    // 卖家：从未读过 → ②③ 买家 TEXT + ⑤ SYSTEM = 3；①④ 自己发的、MEDIA 也是卖家自己发的。
+    const expected = { buyer: 3, seller: 3 }
 
     expect(await store.countUnread(buyerE)).toBe(expected.buyer)
     expect(await store.countUnread(sellerE)).toBe(expected.seller)

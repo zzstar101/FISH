@@ -36,11 +36,15 @@ describe('SYSTEM 消息（tx.*）', () => {
     expect(formatSystemMessageBody('不是 JSON')).toBe('不是 JSON')
   })
 
-  test('TEXT 直出，SYSTEM 先解析', () => {
+  test('TEXT 直出，SYSTEM 先解析，MEDIA 用服务端已填好的可读文案', () => {
     expect(formatMessageBody({ type: 'TEXT', content: '还在吗' })).toBe('还在吗')
     expect(formatMessageBody({ type: 'SYSTEM', content: '{"type":"tx.rejected"}' })).toBe(
       '卖家拒绝了本次交易确认',
     )
+    // #67 第四步：会话行摘要的最后一条可能是媒体。媒体正文不在消息流里，
+    // 服务端已经把 content 填成 [图片]/[语音]，这里必须原样直出（不能当 SYSTEM 解析）。
+    expect(formatMessageBody({ type: 'MEDIA', content: '[图片]' })).toBe('[图片]')
+    expect(formatMessageBody({ type: 'MEDIA', content: '[语音]' })).toBe('[语音]')
   })
 
   test('胶囊映射覆盖契约的全部三种事件（多一个少一个都会红）', () => {

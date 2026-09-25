@@ -102,11 +102,15 @@ export function lastTxSignalOf(messages: readonly MessageDto[]): TxSignal | null
  *
  * - 最后一条是 `tx.proposal` / `tx.accepted` / `tx.rejected` → 它就是最后一个交易事件，
  *   不必再拉消息页（这是「买家刚点了想要、卖家还没回话」这一常见情形的零成本路径）；
- * - 其余（TEXT / 非交易系统消息 / 空会话）→ **不能**就此断定「没有提案」：买家提案之后
+ * - 其余（TEXT / 非交易系统消息 / MEDIA / 空会话）→ **不能**就此断定「没有提案」：买家提案之后
  *   卖家可能先回了句话，提案仍在等点头。这时才去拉消息页找最后一个事件。
+ *
+ * `lastMessage` 取 `ConversationDto['lastMessage']` 的完整类型（含 `MEDIA` 与 `senderId`，
+ * 见 `conversationLastMessageSchema`）：媒体消息不进 `MessageDto`，但会作为会话行摘要出现，
+ * 而它同样推导不出交易事件，所以与 TEXT 同路。
  */
 function signalFromLastMessage(item: {
-  lastMessage: { type: 'TEXT' | 'SYSTEM'; content: string; createdAt: string } | null
+  lastMessage: ConversationDto['lastMessage']
 }): TxSignal | null | undefined {
   const last = item.lastMessage
   // 空会话：确实没有交易事件可言

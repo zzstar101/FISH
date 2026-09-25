@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ListingStatusSchema } from '../listings/schema'
+import { ListingSellerSchema, ListingStatusSchema } from '../listings/schema'
 
 /** Chat Domain Contract（Issue #9）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -41,6 +41,8 @@ export const imageMediaMessageInputSchema = z.strictObject({
   sizeBytes: z.number().int().positive().max(MEDIA_MAX_IMAGE_BYTES),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
+  /** #67 发送幂等键；语义同 `messageSendInputSchema.clientRequestId`。 */
+  clientRequestId: z.uuid().optional(),
 })
 export type ImageMediaMessageInput = z.infer<typeof imageMediaMessageInputSchema>
 
@@ -50,6 +52,8 @@ export const voiceMediaMessageInputSchema = z.strictObject({
   contentType: z.string().min(1),
   sizeBytes: z.number().int().positive().max(MEDIA_MAX_VOICE_BYTES),
   durationMs: z.number().int().positive(),
+  /** #67 发送幂等键；语义同 `messageSendInputSchema.clientRequestId`。 */
+  clientRequestId: z.uuid().optional(),
 })
 export type VoiceMediaMessageInput = z.infer<typeof voiceMediaMessageInputSchema>
 
@@ -123,12 +127,24 @@ export const conversationUserSchema = z.object({
 export type ConversationUser = z.infer<typeof conversationUserSchema>
 
 /**
+ * 会话列表摘要的消息类型：比 `messageTypeSchema` 多一个 `MEDIA`。
+ *
+ * 媒体消息刻意不进 `MessageDto`（见文件顶部注释），但**必须**能作为会话行摘要出现：
+ * 否则对方只发了图片/语音时，列表既没有预览、红点也不会亮（#67 第四步）。
+ */
+export const conversationLastMessageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'MEDIA'])
+export type ConversationLastMessageType = z.infer<typeof conversationLastMessageTypeSchema>
+
+/**
  * 会话行内直接可渲染的「最后一条消息」摘要，由服务端组装——前端拿它渲染列表行，
  * 不必对每个会话再拉一次消息页（N+1）。content 是原文：TEXT 即文本，
  * SYSTEM 为 `tx.*` JSON 原文，由前端按既有解析规则处理。
+ *
+ * `MEDIA` 是例外：媒体正文不在消息流里（客户端拿不到消息行推断是图还是语音），
+ * 所以服务端直接把 `content` 填成可读文案（`[图片]` / `[语音]`），前端原样渲染。
  */
 export const conversationLastMessageSchema = z.object({
-  type: messageTypeSchema,
+  type: conversationLastMessageTypeSchema,
   content: z.string(),
   /** SYSTEM 消息没有发送者；与 MessageDto.senderId 同口径。 */
   senderId: z.string().nullable(),
@@ -192,6 +208,16 @@ export type ConversationCreateInput = z.infer<typeof conversationCreateInputSche
 /** P0 只经 HTTP 发 TEXT；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。 */
 export const messageSendInputSchema = z.strictObject({
   content: z.string().trim().min(1, '消息不能为空').max(2000, '消息最多 2000 个字符'),
+  /**
+   * #67 发送幂等键：客户端为「一次新发送」生成的 UUID，重试同一条消息时**沿用同一个值**。
+   *
+   * 服务端以 `(senderId, conversationId, clientRequestId)` 唯一约束去重：命中同键且内容
+   * 指纹一致 → 返回已创建的消息；同键但内容不同 → 409 `IDEMPOTENCY_KEY_REUSED`。
+   *
+   * 可选是为了不打断尚未升级的旧客户端：缺省时退化为非幂等发送（与升级前行为一致）。
+   * 新客户端必须始终携带。
+   */
+  clientRequestId: z.uuid().optional(),
 })
 export type MessageSendInput = z.infer<typeof messageSendInputSchema>
 
@@ -216,6 +242,25 @@ export const conversationListResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 })
 export type ConversationListResponse = z.infer<typeof conversationListResponseSchema>
+
+/** #74「想要的人」以该商品已建立会话的买家为源；仅商品卖家有权查看。 */
+export const chatWatchersQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().min(1).optional(),
+})
+export type ChatWatchersQuery = z.infer<typeof chatWatchersQuerySchema>
+
+export const chatWatchersResponseSchema = z.strictObject({
+  items: z.array(
+    z.strictObject({
+      user: ListingSellerSchema,
+      startedAt: z.iso.datetime(),
+    }),
+  ),
+  nextCursor: z.string().nullable(),
+  total: z.number().int().nonnegative(),
+})
+export type ChatWatchersResponse = z.infer<typeof chatWatchersResponseSchema>
 
 /**
  * 未读总数（#67）。**独立端点**，与通知域 `GET /notifications/unread-count` 同款：
@@ -305,5 +350,10 @@ export const ChatErrorCodeSchema = z.enum([
   'MEDIA_DURATION_EXCEEDED',
   'MEDIA_DIMENSION_EXCEEDED',
   'MEDIA_NOT_FOUND',
+  /**
+   * 409：同一个 `clientRequestId` 被用来发送**内容不同**的消息（幂等键复用）。
+   * 服务端拒绝而不是静默返回旧消息，否则调用方会以为新内容已送达。
+   */
+  'IDEMPOTENCY_KEY_REUSED',
 ])
 export type ChatErrorCode = z.infer<typeof ChatErrorCodeSchema>

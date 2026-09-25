@@ -22,6 +22,8 @@ export const CHAT_ROUTES = {
    * 会在超过单页上限时漏计。
    */
   unreadCount: '/conversations/unread-count',
+  /** #74 卖家查看已发起聊天的买家名单与人数（不含收藏或愿望匹配）。 */
+  watchers: (listingId: string) => `/listings/${listingId}/watchers`,
   /** GET 单个会话详情；服务端按当前用户校验参与者权限。 */
   detail: (id: string) => `/conversations/${id}`,
   /** GET 历史消息（游标分页，升序）；POST 发送 TEXT 消息（201，响应体 MessageDto）。 */
