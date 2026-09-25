@@ -1,6 +1,6 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll } from '@tarojs/taro'
-import { useEffect, useMemo, useState } from 'react'
+import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import brandLockup from '@/assets/brand/brand-lockup.png'
 import { ICONS } from '@/assets/lib-icons'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
@@ -10,6 +10,7 @@ import { readSignature, saveSignature } from '@/features/profile/signature'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { acceptsRefreshedProfile, isLatestLoad, isNotOlderThan, shouldRefreshOnShow } from './view'
 import './index.scss'
 
 /**
@@ -117,6 +118,24 @@ export default function Profile() {
   const anonymous = authStatus === 'anonymous'
 
   /**
+   * 在途取数的**序号**：换号（登录态 effect 重跑）与卸载各前进一次，让上一账号 /
+   * 上一轮的响应在落地前就被判过期。见下方 `useDidShow` 的返回刷新。
+   */
+  const loadSeqRef = useRef(0)
+
+  /**
+   * 当前展示的 `profile` 快照出自哪一次取数（序号见上）。
+   *
+   * 首屏那一次（登录态 effect）与返回刷新（`useDidShow`）是**两条**请求：首屏请求更早发出，
+   * 弱网下却可能**更晚**返回 —— 若不加这层，它会把返回刷新刚拿到的更新快照覆盖回旧值，
+   * 等于「丢掉了这次刷新」。落地前比一次序号即可。
+   *
+   * 这层不会把「刷新失败」误判成「没有数据」：刷新失败时不会写 `shownSeqRef`，
+   * 更早发出的首屏响应仍然可以落地。
+   */
+  const shownSeqRef = useRef(0)
+
+  /**
    * 拿到真实登录态后才打 `GET /profile`。
    *
    * 依赖 `authUser?.id` 而不是只有 `authStatus`：换账号是 `authed → authed`，
@@ -129,29 +148,97 @@ export default function Profile() {
    *    只比对「响应的 user.id === 发请求时的 user.id」**不够**：那只证明响应属于当时的用户，
    *    不能证明现在登录的还是同一个人 —— A 的响应在 B 登录之后回来时，上面那条同样成立，
    *    于是 B 会短暂看到 A 的昵称、商品、愿望和统计。
+   *
+   * `loadSeqRef` 在这里一并前进：`useDidShow` 的返回刷新走的是**另一条**请求，
+   * 不在这个 effect 的 `cancellable` 生命周期里，换号时必须靠序号把它作废。
    */
   useEffect(() => {
+    loadSeqRef.current += 1
+    const seq = loadSeqRef.current
     setProfile(null)
     if (authStatus !== 'authed' || !authUser) return
 
     const forUserId = authUser.id
     const load = cancellable(
       () => loadProfile(),
-      (next) => next !== null && next.user.id === forUserId,
+      // 第二处防串号之外再比一次 `shownSeqRef`：返回刷新若已经拿到并展示了更新的快照，
+      // 这一次更早发出的响应就不许再落地（详见 `shownSeqRef` 的说明）。
+      (next) =>
+        next !== null && next.user.id === forUserId && isNotOlderThan(seq, shownSeqRef.current),
     )
     void load.promise.then((next) => {
-      if (next) setProfile(next)
+      if (!next) return
+      shownSeqRef.current = seq
+      setProfile(next)
     })
 
     return load.cancel
   }, [authStatus, authUser])
 
+  /** 卸载：在途的返回刷新不得再写状态（Tab 页实例常驻，但热重载 / 内存回收仍会卸载） */
+  useEffect(
+    () => () => {
+      loadSeqRef.current += 1
+    },
+    [],
+  )
+
+  /**
+   * 返回本页时重拉统计与资料（#170 D）。
+   *
+   * 本页是 Tab 页，切走再切回**不会重新挂载**，所以「认证 / 改昵称 / 上架 / 下单之后
+   * 回到我的」拿到的是上次拉取的快照：认证完仍写「未认证」、改了昵称仍是旧昵称、
+   * 上架商品后「在售」红点不动。`useDidShow` 在每次显示时补一次重拉。
+   *
+   * 四个约束：
+   * - **首次 show 让渡**给上面的登录态 effect（那一次时点更准，且冷启动 `unknown`
+   *   时本页不该发受限请求），不跳过就会一进页双发；
+   * - **静默刷新**：不清 `profile`、不闪 `—`，新快照到了直接换；
+   * - **失败保留旧数据**：`acceptsRefreshedProfile` 对 `null` 返回 false，一次弱网
+   *   不会把刚看到的统计翻成未知；
+   * - **迟到作废**：序号或账号对不上就丢弃（换号 / 退出 / 卸载后到达的响应）。
+   *
+   * 登录回跳时会与登录态 effect 各打一次 `GET /profile`（同一个账号、幂等 GET），
+   * 与 `pages/match`、`pages/orders-buy` 的同一手法保持一致，不额外加去重状态。
+   */
+  const skipFirstShowRef = useRef(true)
+  const authedRef = useRef(false)
+  const userIdRef = useRef<string | null>(authUser?.id ?? null)
+  authedRef.current = authStatus === 'authed'
+  userIdRef.current = authUser?.id ?? null
+  useDidShow(() => {
+    const firstShow = skipFirstShowRef.current
+    skipFirstShowRef.current = false
+    const currentUserId = userIdRef.current
+    if (
+      !shouldRefreshOnShow({
+        firstShow,
+        authed: authedRef.current,
+        userId: currentUserId,
+      }) ||
+      // 与 `canLoad` 里的 `userId !== null` 重复，但这里是**类型收窄**所必需：
+      // 下面要把 `currentUserId` 当 `string` 传给 `acceptsRefreshedProfile` / `forUserId`。
+      currentUserId === null
+    ) {
+      return
+    }
+    const seq = loadSeqRef.current + 1
+    loadSeqRef.current = seq
+    const forUserId = currentUserId
+    void loadProfile().then((next) => {
+      if (!isLatestLoad(seq, loadSeqRef.current)) return
+      if (!acceptsRefreshedProfile(next, forUserId, userIdRef.current)) return
+      // 记账：这一份快照已经展示，比它更早发出的响应（首屏那一次）不得再覆盖它。
+      shownSeqRef.current = seq
+      setProfile(next)
+    })
+  })
+
   /**
    * 只使用**真实数据**，不回退 mock（演示构建的回退口径见 fetchers）。
    *
-   * 已知取舍：本页是 Tab 页，切走再切回不会重新挂载，所以「发布 / 成交之后回到我的」
-   * 看到的是上次拉取的计数，要等登录态变化或重进小程序才刷新（要更实时就得加
-   * `useDidShow` 重拉，属于后续改动）。
+   * 统计与资料在每次显示时由上面的 `useDidShow` 静默重拉（#170 D），
+   * 「发布 / 认证 / 改昵称 / 上下架之后回到我的」看到的是服务端的最新值。
    */
   const user = profile?.user ?? authUser
   /**
