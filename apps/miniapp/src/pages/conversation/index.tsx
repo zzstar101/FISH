@@ -33,6 +33,7 @@ import { recoverGapsOnReconnect } from '@/features/chat/realtime-recovery'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { newClientRequestId } from '@/lib/uuid'
 import {
@@ -43,9 +44,12 @@ import {
   clearDeferredReload,
   type DeferredReload,
   deferReload,
+  hasEarlierPage,
   initialDeferredReload,
   isLatestPageLoad,
+  isStaleMediaTask,
   listingStatusText,
+  type MediaTaskBinding,
   mergePushedMedia,
   mergePushedMessage,
   mergeRefreshedMedia,
@@ -61,6 +65,7 @@ import {
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
+  startMediaRetry,
   systemPillText,
 } from './view'
 import './index.scss'
@@ -508,18 +513,21 @@ export default function Conversation() {
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null || !conversationId) return
     for (const item of media) {
-      if (cachedMediaPath(item.id) || downloadingRef.current.has(item.id)) continue
-      downloadingRef.current.add(item.id)
-      void downloadChatMedia(conversationId, item.id)
+      // N1：媒体的身份是 `mediaId` —— 契约里 `id` 是**消息** id，鉴权代理端点收的也是
+      // `mediaId`。缓存键同样用 `mediaId`，否则 `media-api` 的模块级 LRU 永远命不中，
+      // 每次进页面都会把同一条媒体重新下载一遍。
+      if (cachedMediaPath(item.mediaId) || downloadingRef.current.has(item.mediaId)) continue
+      downloadingRef.current.add(item.mediaId)
+      void downloadChatMedia(conversationId, item.mediaId)
         .then((path) => {
           if (userIdRef.current !== userId) return
-          rememberPath(item.id, path)
+          rememberPath(item.mediaId, path)
         })
         .catch((error) => {
           console.warn('[miniapp] 媒体下载失败', error)
         })
         .finally(() => {
-          downloadingRef.current.delete(item.id)
+          downloadingRef.current.delete(item.mediaId)
         })
     }
   }, [authStatus, userId, conversationId, media, rememberPath])
@@ -623,47 +631,65 @@ export default function Conversation() {
     })
   }, [authStatus, userId, conversationId, recoverMessageGap, recoverMediaGap])
 
-  /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
+  /**
+   * 「加载更早的消息 / 媒体」：契约的 `before` / `cursor` 游标原样回传，拼接在已有数据之前。
+   *
+   * 消息与媒体是**两条独立的分页流**、各有自己的游标（#67 N3）。修复前入口用文本游标当
+   * 唯一门槛（`if (!nextCursor) return`），文本翻到底而媒体还有历史时按钮消失、剩下的
+   * 媒体再也拉不出来。现在只要任一条还有更早的，就翻那一条。
+   */
   const loadEarlier = () => {
-    if (!nextCursor || loadingEarlier) return
-    setLoadingEarlier(true)
-    setEarlierFailed(false)
+    if (loadingEarlier) return
+    const textBefore = nextCursor
+    const mediaBefore = mediaCursor
+    if (!hasEarlierPage(textBefore, mediaBefore)) return
     const current = epoch.current
-    void loadMessagePage(conversationId, nextCursor)
-      .then((page) => {
-        if (!isLatestPageLoad(current, epoch.current)) return
-        if (page.failed) {
-          setEarlierFailed(true)
-          return
-        }
-        setMessages((prev) => sortMessages([...page.items, ...prev]))
-        setNextCursor(page.nextCursor)
-      })
-      .finally(() => {
-        /**
-         * 还锁也要过同一个守卫（#186 P2-2）：这一批已经属于上一代时锁已被 `load`
-         * 收回、甚至已被新账号的分页重新拿起，无条件 `setLoadingEarlier(false)`
-         * 会把新账号在途的那次分页放掉，同一个游标被并发消费两次。
-         */
-        if (!isLatestPageLoad(current, epoch.current)) return
-        setLoadingEarlier(false)
-      })
+    setLoadingEarlier(true)
+    const jobs: Promise<unknown>[] = []
+
+    if (textBefore) {
+      setEarlierFailed(false)
+      jobs.push(
+        loadMessagePage(conversationId, textBefore).then((page) => {
+          if (!isLatestPageLoad(current, epoch.current)) return
+          if (page.failed) {
+            setEarlierFailed(true)
+            return
+          }
+          setMessages((prev) => sortMessages([...page.items, ...prev]))
+          setNextCursor(page.nextCursor)
+        }),
+      )
+    }
 
     /**
      * 媒体历史跟着一起往前翻（它有自己的游标）。失败只记日志：媒体翻页失败不该让
      * 消息区显示「更早的消息没加载出来」。
      */
-    if (!mediaCursor) return
-    void loadMediaPage(conversationId, mediaCursor)
-      .then((page) => {
-        if (!isLatestPageLoad(current, epoch.current)) return
-        if (page.failed) return
-        setMedia((prev) => mergeRefreshedMedia(prev, page.items, EMPTY_IDS))
-        setMediaCursor(page.nextCursor)
-      })
-      .catch((error) => {
-        console.warn('[miniapp] 加载更早的媒体失败', error)
-      })
+    if (mediaBefore) {
+      jobs.push(
+        loadMediaPage(conversationId, mediaBefore)
+          .then((page) => {
+            if (!isLatestPageLoad(current, epoch.current)) return
+            if (page.failed) return
+            setMedia((prev) => mergeRefreshedMedia(prev, page.items, EMPTY_IDS))
+            setMediaCursor(page.nextCursor)
+          })
+          .catch((error) => {
+            console.warn('[miniapp] 加载更早的媒体失败', error)
+          }),
+      )
+    }
+
+    void Promise.all(jobs).finally(() => {
+      /**
+       * 还锁也要过同一个守卫（#186 P2-2）：这一批已经属于上一代时锁已被 `load`
+       * 收回、甚至已被新账号的分页重新拿起，无条件 `setLoadingEarlier(false)`
+       * 会把新账号在途的那次分页放掉，同一个游标被并发消费两次。
+       */
+      if (!isLatestPageLoad(current, epoch.current)) return
+      setLoadingEarlier(false)
+    })
   }
 
   /**
@@ -766,7 +792,24 @@ export default function Conversation() {
    */
   const runMediaSend = (draft: PendingMedia) => {
     const current = epoch.current
+    /**
+     * 这份任务属于哪个账号的会话（#67 N2）。
+     *
+     * `epoch` 挡不住「A 选了图 → 切到 B → create 才发出去」：`request.ts` 的每个请求
+     * 都是**发出时**才读 `fish_session`，换号后旧任务会带着 B 的 Cookie 落库，B 的会话里
+     * 凭空多出一条自己没发过的媒体。所以这里记下发起时的 Cookie，每一步网络请求前都比
+     * 一次，一变就整条放弃（对象存储里的半成品不落库，旧账号的界面已被身份清场清空）。
+     */
+    const task: MediaTaskBinding = { epoch: current, cookie: sessionCookieHeader() ?? '' }
+    const isStale = () =>
+      isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
     deferredRef.current = beginSend(deferredRef.current, current)
+    // N4：重试时先把气泡切回「上传中」，否则整段重试期间它还挂着失败态与重试按钮
+    if (current === epoch.current) {
+      setPendingMedia((prev) =>
+        prev.map((item) => (item.id === draft.id ? startMediaRetry(item) : item)),
+      )
+    }
     void (async () => {
       let uploaded = draft.uploaded
       if (!uploaded) {
@@ -783,12 +826,14 @@ export default function Conversation() {
                 path: draft.path,
                 durationMs: draft.durationMs,
               })
-        if (current === epoch.current) {
-          setPendingMedia((prev) =>
-            prev.map((item) => (item.id === draft.id ? { ...item, uploaded } : item)),
-          )
-        }
+        // 上传期间换了账号：这条媒体不能再以新账号的身份创建（N2）
+        if (isStale()) return null
+        setPendingMedia((prev) =>
+          prev.map((item) => (item.id === draft.id ? { ...item, uploaded } : item)),
+        )
       }
+      // 直传只写对象存储，`create` 才是落库那一步 —— 落库前再确认一次身份
+      if (isStale()) return null
       return uploaded.kind === 'IMAGE'
         ? await createImageMessage(conversationId, {
             objectKey: uploaded.objectKey,
@@ -807,9 +852,11 @@ export default function Conversation() {
           })
     })()
       .then((created) => {
+        if (created === null) return
         if (current !== epoch.current) return
-        // 自己刚发出去的这张图 / 这段音就在本地，直接记下来：不重新下载，也不闪一下空白
-        rememberPath(created.id, draft.path)
+        // 自己刚发出去的这张图 / 这段音就在本地，直接记下来：不重新下载，也不闪一下空白。
+        // 键用 `mediaId`（N1）：渲染查的 `localPaths` 与模块级缓存都按它索引
+        rememberPath(created.mediaId, draft.path)
         setPendingMedia((prev) => prev.filter((item) => item.id !== draft.id))
         setMedia((prev) => mergePushedMedia(prev, created))
       })
@@ -861,6 +908,7 @@ export default function Conversation() {
       return
     }
     let picked: Awaited<ReturnType<typeof pickChatImages>>
+    const current = epoch.current
     try {
       picked = await pickChatImages(MEDIA_IMAGE_PICK_LIMIT)
     } catch (error) {
@@ -870,6 +918,8 @@ export default function Conversation() {
       })
       return
     }
+    // 选图期间换了账号 / 换了会话：这批图是上一个账号选的，不能以新身份发出去（N2）
+    if (current !== epoch.current) return
     if (picked.rejected) {
       void Taro.showToast({ title: picked.rejected, icon: 'none' })
     }
@@ -966,18 +1016,20 @@ export default function Conversation() {
    * 没有任何反馈会被当成「点了没反应」）。
    */
   const openVoice = (item: MediaMessageDto) => {
+    // 播放态按**气泡**（消息 id / 本地临时 id）记，与 `entry.keyId` 同一空间；
+    // 而下载与缓存按 `mediaId`（N1）。两者是不同的身份，别混用。
     if (playingId === item.id) {
       stopAudio()
       return
     }
-    const local = cachedMediaPath(item.id)
+    const local = cachedMediaPath(item.mediaId)
     if (local) {
       playVoice(item.id, local)
       return
     }
-    void downloadChatMedia(conversationId, item.id)
+    void downloadChatMedia(conversationId, item.mediaId)
       .then((path) => {
-        rememberPath(item.id, path)
+        rememberPath(item.mediaId, path)
         playVoice(item.id, path)
       })
       .catch((error) => {
@@ -1228,7 +1280,7 @@ export default function Conversation() {
       <ScrollView className="conv__scroll" scrollY scrollIntoView={tailId} scrollWithAnimation>
         <View className="conv__list">
           {/* 更早一页（契约的 before 游标） */}
-          {nextCursor || earlierFailed ? (
+          {hasEarlierPage(nextCursor, mediaCursor) || earlierFailed ? (
             <View className="conv__earlier">
               {earlierFailed ? (
                 <View className="conv__retry" onClick={loadEarlier}>
@@ -1289,7 +1341,7 @@ export default function Conversation() {
                   const playing = playingId === entry.keyId
                   // 图片必须用本地临时文件渲染：契约里的 url 是 Web 形态（带 /api 前缀），
                   // 小程序没有同源代理、<Image> 也带不了 Cookie（见 media-api.ts）
-                  const local = item.kind === 'IMAGE' ? localPaths.get(item.id) : undefined
+                  const local = item.kind === 'IMAGE' ? localPaths.get(item.mediaId) : undefined
                   return (
                     <View
                       key={entry.keyId}

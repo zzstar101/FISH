@@ -7,8 +7,10 @@ import {
   canRetryMedia,
   clearDeferredReload,
   deferReload,
+  hasEarlierPage,
   initialDeferredReload,
   isFlushDue,
+  isStaleMediaTask,
   listingStatusText,
   mergePushedMedia,
   mergeRefreshedMedia,
@@ -21,6 +23,7 @@ import {
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
+  startMediaRetry,
   systemPillText,
 } from '../src/pages/conversation/view'
 
@@ -446,5 +449,71 @@ describe('canRetryMedia —— 上传失败才可重试', () => {
   test('failed 可以重试；uploading 不能（否则同一条媒体会被投两次）', () => {
     expect(canRetryMedia(pendingImage('failed'))).toBe(true)
     expect(canRetryMedia(pendingImage('uploading'))).toBe(false)
+  })
+})
+
+describe('hasEarlierPage —— 文本游标到底不再挡住媒体历史（#67 N3）', () => {
+  test('两条流都到底才没有更早的了', () => {
+    expect(hasEarlierPage(null, null)).toBe(false)
+  })
+
+  test('文本还有更早的一页：要翻', () => {
+    expect(hasEarlierPage('c-text', null)).toBe(true)
+  })
+
+  test('文本到底、媒体还有历史：仍然要翻（修复前按钮会消失）', () => {
+    expect(hasEarlierPage(null, 'c-media')).toBe(true)
+  })
+
+  test('两条都还有：照常翻', () => {
+    expect(hasEarlierPage('c-text', 'c-media')).toBe(true)
+  })
+})
+
+describe('startMediaRetry —— 重试期间切回上传中（#67 N4）', () => {
+  const uploadedImage = {
+    kind: 'IMAGE' as const,
+    objectKey: 'chat-media/c/u/p.png',
+    contentType: 'image/png',
+    sizeBytes: 1024,
+    width: 800,
+    height: 600,
+  }
+  const pendingImage = (status: 'uploading' | 'failed'): PendingMedia => ({
+    kind: 'IMAGE',
+    clientRequestId: 'req-1',
+    path: 'wxfile://tmp/photo.jpg',
+    image: { mime: 'image/jpeg', width: 800, height: 600, sizeBytes: 1024 },
+    id: 'local-1',
+    uploaded: uploadedImage,
+    status,
+  })
+
+  test('失败态重试后不再是失败态，重试按钮随之消失', () => {
+    const retried = startMediaRetry(pendingImage('failed'))
+    expect(retried.status).toBe('uploading')
+    expect(canRetryMedia(retried)).toBe(false)
+    // 只改状态：重试只重发 create，`uploaded` 必须原样带着（否则指纹变化 → 409）
+    expect(retried.uploaded).toEqual(uploadedImage)
+  })
+})
+
+describe('isStaleMediaTask —— 媒体发送任务绑定发起时的会话（#67 N2）', () => {
+  const binding = { epoch: 3, cookie: 'fish_session=aaa' }
+
+  test('代次与 cookie 都没变：还是这份任务的', () => {
+    expect(isStaleMediaTask(binding, { epoch: 3, cookie: 'fish_session=aaa' })).toBe(false)
+  })
+
+  test('整页重拉 / 身份清场推进了代次：判旧', () => {
+    expect(isStaleMediaTask(binding, { epoch: 4, cookie: 'fish_session=aaa' })).toBe(true)
+  })
+
+  test('只换了账号、代次没动（直接换 storage 会话）：也必须判旧', () => {
+    expect(isStaleMediaTask(binding, { epoch: 3, cookie: 'fish_session=bbb' })).toBe(true)
+  })
+
+  test('退出登录（cookie 变空）：判旧', () => {
+    expect(isStaleMediaTask(binding, { epoch: 3, cookie: '' })).toBe(true)
   })
 })

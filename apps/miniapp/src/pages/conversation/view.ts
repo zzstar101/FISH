@@ -153,6 +153,45 @@ export function canRetryMedia(pending: PendingMedia): boolean {
 }
 
 /**
+ * 重试一条失败的媒体：把状态切回「上传中」（#67 N4）。
+ *
+ * 修复前重试入口只调 `runMediaSend`，全程不改 `status`，于是整个重试期间气泡仍按
+ * `canRetryMedia` 渲染成失败态、重试按钮还挂在上面 —— 用户看不出点了有没有反应。
+ */
+export function startMediaRetry(pending: PendingMedia): PendingMedia {
+  return { ...pending, status: 'uploading' }
+}
+
+/**
+ * 「加载更早」的按钮该不该在（#67 N3）。
+ *
+ * 消息与媒体是两条独立分页流：文本翻到底（`nextCursor === null`）而媒体还有历史时，
+ * 修复前的入口用文本游标当唯一门槛，按钮消失、剩下的媒体再也拉不出来。
+ */
+export function hasEarlierPage(nextCursor: string | null, mediaCursor: string | null): boolean {
+  return nextCursor !== null || mediaCursor !== null
+}
+
+/**
+ * 媒体发送任务的会话绑定（#67 N2）。
+ *
+ * `request.ts` 的每个请求都是**发出时**才读 `fish_session`，所以「A 选了图 → 切到 B →
+ * create 才发出去」会让这条媒体以 B 的身份落库。`epoch` 只在整页重拉 / 身份清场时 +1，
+ * 挡不住这种时序；把发起时的 cookie 一起记下来才能判旧。
+ */
+export interface MediaTaskBinding {
+  readonly epoch: number
+  readonly cookie: string
+}
+
+export function isStaleMediaTask(
+  task: MediaTaskBinding,
+  current: { epoch: number; cookie: string },
+): boolean {
+  return task.epoch !== current.epoch || task.cookie !== current.cookie
+}
+
+/**
  * 按契约的 `(createdAt, id)` 升序排。
  *
  * 为什么需要：发送成功是按**响应到达顺序**追加的，连发两条时响应可能乱序回来，

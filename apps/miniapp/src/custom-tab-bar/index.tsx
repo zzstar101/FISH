@@ -196,13 +196,15 @@ export default function CustomTabBar() {
    * 对方发来的消息不会让红点亮起来 —— 而「停留中收到消息」恰恰是最常见的一种。
    * 实时通道是那一刻唯一能知道消息到了的来源（服务端先落库、再推送）。
    *
-   * 只认 `message.new`：`pong` 是心跳；`conversation.read` 是读位推进（未读**减少**的
-   * 方向，由会话页自己的已读同步负责）。取数失败仍是「不知道」，不会熄掉一颗已知亮着的点
-   * （见 `features/chat/unread` 的 `refreshUnread`）。
+   * 只认 `message.new` / `media.new`：`pong` 是心跳；`conversation.read` 是读位推进
+   * （未读**减少**的方向，由会话页自己的已读同步负责）。媒体走**独立的** `media.new`
+   * 事件（服务端刻意不并进 `realtimeServerEventSchema`），但媒体同样计入未读，漏掉它
+   * 就会「图片 / 语音到了而红点不亮」（#67 第四步）。取数失败仍是「不知道」，不会熄掉
+   * 一颗已知亮着的点（见 `features/chat/unread` 的 `refreshUnread`）。
    */
   useEffect(() => {
     return subscribeRealtime((event) => {
-      if (event.type !== 'message.new') return
+      if (event.type !== 'message.new' && event.type !== 'media.new') return
       if (authStatus !== 'authed' || !userId) return
       refreshUnread(userId, demoUnread)
     })
