@@ -1,11 +1,13 @@
 import { expect, test } from 'bun:test'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { createDb, type Db } from './client'
+import { newId } from './ids'
 import { conversations } from './schema/conversations'
 import { listings } from './schema/listings'
 import { messages } from './schema/messages'
 import { transactions } from './schema/transactions'
 import { users } from './schema/users'
+import { reserveTestListingNo } from './testing/listing-no'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -35,9 +37,13 @@ async function createUser(client: Db, studentNo: string): Promise<User> {
 }
 
 async function createListing(client: Db, sellerId: string): Promise<Listing> {
+  const id = newId()
+  const listingNo = await reserveTestListingNo(client, id)
   const rows = await client
     .insert(listings)
     .values({
+      id,
+      listingNo,
       sellerId,
       title: '集成测试商品',
       description: '集成测试',
@@ -172,10 +178,14 @@ test('free 商品的价格必须是 0（DB CHECK 兜底并发写入）', async (
   await withFixture(async ({ seller }) => {
     // 必须是 async 函数：Bun 的 `expect(...).rejects` 不认 Drizzle 的 thenable query builder
     // （见本文件上方 helper 的同类说明）。
-    const insertFree = async (priceCents: number) =>
-      db
+    const insertFree = async (priceCents: number) => {
+      const id = newId()
+      const listingNo = await reserveTestListingNo(db, id)
+      return db
         .insert(listings)
         .values({
+          id,
+          listingNo,
           sellerId: seller.id,
           title: `free 商品 ${priceCents}`,
           description: '集成测试',
@@ -185,6 +195,7 @@ test('free 商品的价格必须是 0（DB CHECK 兜底并发写入）', async (
           free: true,
         })
         .returning({ id: listings.id })
+    }
 
     let createdId: string | undefined
     try {

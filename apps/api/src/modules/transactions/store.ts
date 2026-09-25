@@ -486,11 +486,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               WHERE id = ${id} AND status = 'PENDING_MEETUP'
               RETURNING ${TX_COLUMNS}
             ), listing AS (
-              -- 刻意不筛 l.status = 'RESERVED'：契约冻结的是「完成后 Listing -> SOLD」。
-              -- 带谓词时，若商品状态漂移出 RESERVED，这一步影响 0 行、而交易照样被标
-              -- COMPLETED → 「交易已完成但商品未售出」的自相矛盾（#40-4）。
-              -- 去掉谓词后，交易完成必然连带把商品置为 SOLD，不变量由构造保证。
-              UPDATE listings l SET status = 'SOLD', updated_at = now()
+              -- 普通状态漂移仍无条件转 SOLD（#40-4）；治理下架是唯一例外：
+              -- 交易可以完成，但 OFFLINE/BLOCKED 必须保留到管理员恢复时再按终态转 SOLD。
+              UPDATE listings l SET
+                status = CASE WHEN l.governance_delisted_at IS NULL THEN 'SOLD'::listing_status
+                              ELSE l.status END,
+                updated_at = now()
               FROM txn WHERE l.id = txn.listing_id
             )
             SELECT txn.*, c.id AS conversation_id
@@ -524,11 +525,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             WHERE id = ${id} AND ${viewerId} IN (buyer_id, seller_id) AND status = 'PENDING_MEETUP'
             RETURNING ${TX_COLUMNS}
           ), listing AS (
-            -- 契约冻结（packages/contracts/src/transactions/schema.ts:168-169）：cancel 恢复
-            -- listing 是**无条件** RESERVED → ACTIVE（#6 禁止在 RESERVED 上手动下架，因此
-            -- 取消那一刻商品必仍是 RESERVED，不需要条件更新）。带谓词时状态一旦漂移就退化成
-            -- 「交易已 CANCELLED、商品却停在 OFFLINE」——与 confirm 侧同一论证（#40-4）。
-            UPDATE listings l SET status = 'ACTIVE', updated_at = now()
+            -- 普通状态漂移仍无条件转 ACTIVE（#40-4）；治理下架期间保留 OFFLINE/BLOCKED，
+            -- 恢复时由交易终态派生 ACTIVE，不能让交易路径抢先解除治理下架。
+            UPDATE listings l SET
+              status = CASE WHEN l.governance_delisted_at IS NULL THEN 'ACTIVE'::listing_status
+                            ELSE l.status END,
+              updated_at = now()
             FROM txn WHERE l.id = txn.listing_id
           )
           SELECT txn.*, c.id AS conversation_id

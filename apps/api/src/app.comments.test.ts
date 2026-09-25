@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { listings } from '@fish/db/schema/listings'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
@@ -75,6 +76,7 @@ async function createListing(sellerId: string): Promise<string> {
   const id = newId()
   await db.insert(listings).values({
     id,
+    listingNo: await reserveTestListingNo(db, id),
     sellerId,
     title: '留言接线验收商品',
     description: '留言接线验收',

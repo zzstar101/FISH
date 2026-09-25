@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
@@ -41,9 +42,10 @@ beforeAll(async () => {
       VALUES (${uid}, ${`msg${process.pid}_${i}`}, 'test-hash', '消息测试')
     `)
   }
+  const listingNo = await reserveTestListingNo(db, listingA)
   await db.execute(sql`
-    INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-    VALUES (${listingA}, ${seller}, 'K380', '测试商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
+    INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+    VALUES (${listingA}, ${listingNo}, ${seller}, 'K380', '测试商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
   `)
   await db.execute(sql`
     INSERT INTO conversations (id, listing_id, buyer_id, seller_id)

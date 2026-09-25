@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import type { MediaStorage } from '../uploads/storage'
 import { createMediaRouter } from './media-router'
 import type { MediaMessageService } from './media-service'
@@ -60,7 +61,10 @@ function buildApp(
     ...storageOverrides,
   }
   const app = new Hono()
-  app.route('/conversations', createMediaRouter({ service, storage, requireAuth }))
+  app.route(
+    '/conversations',
+    createMediaRouter({ service, storage, requireAuth, guard: allowRestrictionGuard }),
+  )
   return app
 }
 

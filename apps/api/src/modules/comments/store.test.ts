@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { comments } from '@fish/db/schema/comments'
 import { listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { inArray } from 'drizzle-orm'
 import { createCommentService } from './service'
 import { createSqlCommentStore } from './store'
@@ -35,9 +37,12 @@ async function withFixture(
 ) {
   const sellerId = await createUser(db, '卖家')
   const buyerId = await createUser(db, '买家')
+  const id = newId()
   const listingRows = await db
     .insert(listings)
     .values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
       sellerId,
       title: '集成测试商品',
       description: '集成测试描述',

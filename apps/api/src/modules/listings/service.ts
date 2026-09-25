@@ -160,6 +160,7 @@ export function createListingService(deps: {
     const isOwner = input.viewerId === input.listing.sellerId
     const detail = {
       id: input.listing.id,
+      listingNo: input.listing.listingNo.toString(),
       title: input.listing.title,
       priceCents: input.listing.priceCents,
       category: input.listing.category,
@@ -220,10 +221,13 @@ export function createListingService(deps: {
    * 因为 presign 的签名只覆盖 `host`、mime 不受约束（契约 §7.7）。
    */
   async function assertUsableObjectKeys(userId: string, objectKeys: string[]): Promise<void> {
-    const prefix = listingObjectKeyPrefix(userId)
+    const currentPrefix = listingObjectKeyPrefix(userId)
+    const prefixes = objectKeys.every((key) => key.startsWith(currentPrefix))
+      ? [currentPrefix]
+      : [currentPrefix, ...(await store.legacyUserIds(userId)).map(listingObjectKeyPrefix)]
 
     for (const objectKey of objectKeys) {
-      if (!objectKey.startsWith(prefix)) {
+      if (!prefixes.some((prefix) => objectKey.startsWith(prefix))) {
         throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
           { field: 'objectKeys', message: '图片不属于当前用户' },
         ])
@@ -473,6 +477,13 @@ export function createListingService(deps: {
           '商品处于交易中或已售出，无法修改',
         )
       }
+      if (result.kind === 'governance-blocked') {
+        throw new ListingServiceError(
+          409,
+          'LISTING_GOVERNANCE_BLOCKED',
+          '商品已被平台下架，暂不能修改；如需恢复请联系平台处理',
+        )
+      }
       if (result.kind === 'not-owner') {
         throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
       }
@@ -580,6 +591,13 @@ async function requireOwnEditable(
   }
   if (LOCKED_LISTING_STATUSES.includes(state.status)) {
     throw new ListingServiceError(409, 'LISTING_NOT_EDITABLE', '商品处于交易中或已售出，无法修改')
+  }
+  if (state.governanceDelistedAt) {
+    throw new ListingServiceError(
+      409,
+      'LISTING_GOVERNANCE_BLOCKED',
+      '商品已被平台下架，暂不能修改；如需恢复请联系平台处理',
+    )
   }
   return state
 }

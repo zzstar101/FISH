@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createMessagesRouter } from './router'
 import { type MessageService, MessageServiceError } from './service'
 
@@ -29,6 +30,7 @@ function buildApp(overrides: Partial<MessageService> = {}) {
     '/conversations',
     createMessagesRouter({
       service: { ...service, ...overrides },
+      guard: allowRestrictionGuard,
       requireAuth: async (_c, next) => {
         await next()
       },

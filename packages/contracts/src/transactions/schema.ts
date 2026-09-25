@@ -167,8 +167,9 @@ export type TransactionListResponse = z.infer<typeof transactionListResponseSche
 // - cancel：PENDING_MEETUP 上取消 → CANCELLED + listing 恢复；CANCELLED 上重复取消
 //   幂等返回当前 DTO（200）；COMPLETED 上取消拒绝（409 TRANSACTION_NOT_IN_PENDING）。
 //   因此拒绝 cancel 的状态只有 COMPLETED，拒绝 confirm 的状态只有 CANCELLED。
-// - cancel 恢复 listing 是无条件 RESERVED → ACTIVE：#6 禁止在 RESERVED 上手动下架，
-//   因此取消那一刻 listing 必仍是 RESERVED，不需要条件更新。
+// - cancel 通常将 listing 从 RESERVED 恢复 ACTIVE；治理下架可覆盖 RESERVED，
+//   此时取消仅更新交易、保留 OFFLINE/BLOCKED，管理员恢复时再派生 ACTIVE。
+//   完成交易亦同：治理期间保留 OFFLINE/BLOCKED，恢复时根据终态派生 SOLD。
 // - SYSTEM 消息由本模块直写（提案 / tx.accepted / 拒绝三条），先落库再随聊天推送。
 
 // ---------------------------------------------------------------------------

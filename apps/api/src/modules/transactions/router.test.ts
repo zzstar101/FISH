@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createTransactionsRouter } from './router'
 import { type TransactionService, TransactionServiceError } from './service'
 
@@ -85,6 +86,7 @@ function buildApp(overrides: Partial<TransactionService> = {}) {
     '/transactions',
     createTransactionsRouter({
       service,
+      guard: allowRestrictionGuard,
       requireAuth: async (_c, next) => {
         await next()
       },

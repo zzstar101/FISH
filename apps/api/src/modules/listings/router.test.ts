@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingDetail } from '@fish/contracts/listings/schema'
 import { errorBody } from '@fish/contracts/system/error'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createListingsRouter } from './router'
 import { type ListingService, ListingServiceError } from './service'
 
@@ -68,8 +70,13 @@ function buildApp(options: {
     '/listings',
     createListingsRouter({
       service: options.service,
+      guard: allowRestrictionGuard,
       requireAuth,
       resolveViewerId: async () => options.viewerId ?? null,
+      resolveClientIp: () => '127.0.0.1',
+      numberLookup: {
+        lookup: async () => ({ id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID) }),
+      },
     }),
   )
 
@@ -125,6 +132,37 @@ describe('listings router — 读接口匿名可用', () => {
 
     await app.request(`/listings/${LISTING_ID}`)
     expect(viewer).toBe(SELLER_ID)
+  })
+
+  test('12 位编号走独立入口，格式错误 422 且不消耗精确查询额度', async () => {
+    let calls = 0
+    const app = new Hono()
+    app.route(
+      '/listings',
+      createListingsRouter({
+        service: fakeService(),
+        guard: allowRestrictionGuard,
+        requireAuth: async (c, next) => {
+          c.set('userId', SELLER_ID)
+          await next()
+        },
+        resolveViewerId: async () => null,
+        resolveClientIp: () => '127.0.0.1',
+        numberLookup: {
+          lookup: async () => {
+            calls++
+            return { id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID) }
+          },
+        },
+      }),
+    )
+    const invalid = await app.request('/listings/by-number/012345678901')
+    expect(invalid.status).toBe(422)
+    expect(calls).toBe(0)
+    const valid = await app.request('/listings/by-number/123456789012')
+    expect(valid.status).toBe(200)
+    expect(await valid.json()).toEqual({ id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID) })
+    expect(calls).toBe(1)
   })
 
   // 非 UUID 的 :id 曾经直达 uuid 列 → PostgreSQL 类型错误 → 500；契约 §3 要求 404。

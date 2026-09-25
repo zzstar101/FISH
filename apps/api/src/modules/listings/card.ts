@@ -14,6 +14,7 @@ import type { MediaStorage } from '../uploads/storage'
  */
 export type ListingCardSource = {
   id: string
+  listingNo: bigint
   title: string
   priceCents: number
   category: ListingCard['category']
@@ -42,6 +43,7 @@ export function toListingCard(
 ): ListingCard | null {
   const card = {
     id: listing.id,
+    listingNo: listing.listingNo.toString(),
     title: listing.title,
     priceCents: listing.priceCents,
     category: listing.category,

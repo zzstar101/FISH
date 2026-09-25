@@ -8,6 +8,7 @@ import { loadServerEnv, loadWechatEnv } from '@fish/shared/env'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createDevEmailVerificationProvider } from './email-providers'
 import { createAuthModule } from './router'
 import { createAuthService } from './service'
@@ -931,6 +932,7 @@ describe('PENDING 限频预留（评审二轮 P1-1）', () => {
     const { router } = createAuthModule({
       db: scratch,
       verification,
+      guard: allowRestrictionGuard,
       secureCookie: false,
       wechat: { transport: 'off' },
     })

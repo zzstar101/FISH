@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlProfileStore } from './store'
@@ -46,9 +47,10 @@ beforeAll(async () => {
     [listingA, 'ACTIVE'],
     [listingB, 'OFFLINE'], // 本人可见，但不算在售统计
   ] as const) {
+    const listingNo = await reserveTestListingNo(db, listingId)
     await db.execute(sql`
-      INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-      VALUES (${listingId}, ${me}, '商品', '描述', 16000, 'DIGITAL', 'GOOD', ${status})
+      INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+      VALUES (${listingId}, ${listingNo}, ${me}, '商品', '描述', 16000, 'DIGITAL', 'GOOD', ${status})
     `)
   }
   await db.execute(sql`
@@ -64,9 +66,11 @@ beforeAll(async () => {
       ('01990000-0000-7000-8000-0000000000c3', ${listingB}, 'listings/b/2.jpg', 2)
   `)
   // other 的商品，供"我的交易"用：txA 我买，txB 我卖
+  const otherListingId = '01990000-0000-7000-8000-0000000000b3'
+  const otherListingNo = await reserveTestListingNo(db, otherListingId)
   await db.execute(sql`
-    INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-    VALUES ('01990000-0000-7000-8000-0000000000b3', ${other}, '对方商品', '描述', 10000, 'DAILY', 'GOOD', 'SOLD')
+    INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+    VALUES (${otherListingId}, ${otherListingNo}, ${other}, '对方商品', '描述', 10000, 'DAILY', 'GOOD', 'SOLD')
   `)
   await db.execute(sql`
     INSERT INTO transactions (id, listing_id, buyer_id, seller_id, amount_cents, status, completed_at)
@@ -95,6 +99,7 @@ describe('profile store (integration)', () => {
   test('ownListings returns own listings in any status, newest first, with cover', async () => {
     const rows = await store.ownListings(me, 100)
     expect(rows).toHaveLength(2)
+    expect(rows.every((row) => /^[1-9][0-9]{11}$/.test(row.listingNo.toString()))).toBe(true)
     expect(rows[0]?.status).toBe('OFFLINE') // listingB 后插 → 时间倒序在前
     // listingB 只有 2 号图 → 封面判 null；listingA 有 0 号图 → 取 0 号（不是序号最大的那张）
     expect(rows[0]?.coverObjectKey).toBeNull()
@@ -158,9 +163,11 @@ describe('profile store (integration)', () => {
   test('交易摘要的封面只认 sort_order = 0，缺 0 号图时返回 null 而不顶替', async () => {
     // 脏数据形状：商品只有 sort_order = 1 的图片、没有 0 号（#6 契约 §1：0 才是封面）。
     // 放在最后一个用例：它的插入不干扰前面那些列表/统计条数的断言。
+    const noCoverId = '01990000-0000-7000-8000-0000000000b4'
+    const noCoverNo = await reserveTestListingNo(db, noCoverId)
     await db.execute(sql`
-      INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-      VALUES ('01990000-0000-7000-8000-0000000000b4', ${other}, '无封面商品', '描述', 10000, 'DAILY', 'GOOD', 'SOLD')
+      INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+      VALUES (${noCoverId}, ${noCoverNo}, ${other}, '无封面商品', '描述', 10000, 'DAILY', 'GOOD', 'SOLD')
     `)
     await db.execute(sql`
       INSERT INTO listing_images (id, listing_id, object_key, sort_order)

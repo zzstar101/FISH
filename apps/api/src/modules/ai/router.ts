@@ -4,6 +4,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { type AiPolishService, AiPolishServiceError } from './service'
 
 export type AiPolishRouterOptions = {
@@ -13,6 +14,8 @@ export type AiPolishRouterOptions = {
    * 本 router 挂在根路径，`use('*')` 会波及同进程其它根级路由。
    */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：AI 润色前检查封禁（写作用途，属 `write` 作用域）。 */
+  guard: RestrictionGuard
 }
 
 /** JSON 解析失败（空体 / 非 JSON）按参数不合法处理，而不是让 Hono 抛 500。 */
@@ -44,7 +47,7 @@ function toErrorResponse(c: Context, error: unknown): Response {
 export function createAiPolishRouter(options: AiPolishRouterOptions) {
   const router = new Hono<{ Variables: AuthVariables }>()
 
-  router.post(AI_ROUTES.polishCandidates, options.requireAuth, async (c) => {
+  router.post(AI_ROUTES.polishCandidates, options.requireAuth, options.guard.write, async (c) => {
     // title / description / category 全走契约的 strictObject：多字段、空描述、超 500、非法分类
     // 都在这里变成 422（设计 §5.1）。服务端独立成立，不依赖客户端本地校验。
     const parsed = AiPolishCandidatesRequestSchema.safeParse(await readJson(c))
