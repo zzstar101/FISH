@@ -213,9 +213,9 @@ export async function backfillGapUntilConnected<T extends { id: string }>(
  * 当成起点，整次重连就只剩「补旧的」——断线期间新增的消息（最新消息 → 本地前沿）反倒
  * 一条都不取，要等下一次刷新或下一轮补齐才可能冒出来。
  */
-export type GapRecovery = {
+export type GapRecovery<T> = {
   /** 新账在前、旧账在后的合并结果（各段内部升序）；顺序无所谓，调用方会重新定序 */
-  items: MessageDto[]
+  items: T[]
   /**
    * 还没补上的位置（新 → 旧）。下次重连要**同时**做两件事：从最新一页取新款，再逐个
    * 位置接着往回翻。空数组 = 两笔账都清了。
@@ -244,11 +244,11 @@ export type GapRecovery = {
  * 为什么欠账是一**串**位置而不是一个：往回翻一碰到本地已有的消息就停，所以一个补不上
  * 的位置会挡住它下面（更早）的每一页 —— 新缺口与历史欠账各占一段，必须分别记。
  */
-export async function recoverGapsOnReconnect(
-  loadPage: (before?: string) => Promise<GapPage>,
+export async function recoverGapsOnReconnect<T extends { id: string }>(
+  loadPage: (before?: string) => Promise<GapPage<T>>,
   knownIds: ReadonlySet<string>,
   options?: { maxPages?: number; maxPasses?: number; resumeCursors?: readonly string[] },
-): Promise<GapRecovery> {
+): Promise<GapRecovery<T>> {
   const budget = { maxPages: options?.maxPages, maxPasses: options?.maxPasses }
 
   const fresh = await backfillGapUntilConnected(loadPage, knownIds, budget)

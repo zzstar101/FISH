@@ -247,10 +247,13 @@ export default function Conversation() {
   const gapResumeCursorsRef = useRef<readonly string[]>([])
 
   /**
-   * 媒体流自己的断档续拉位置（#67 N5）：媒体与消息是两条独立分页流，游标互不相干。
-   * 共用一个 ref 会让先接上的那条把另一条的欠账清掉。
+   * 媒体流自己的断档欠账位置（#67 N5 / 复查 #221）：媒体与消息是两条独立分页流，
+   * 游标互不相干。共用一个 ref 会让先接上的那条把另一条的欠账清掉。
+   *
+   * 与 `gapResumeCursorsRef` 同样用数组：新缺口与历史欠账各占一段（见
+   * `recoverGapsOnReconnect`）。空数组 = 没有欠账。
    */
-  const mediaGapResumeRef = useRef<string | null>(null)
+  const mediaGapResumeCursorsRef = useRef<readonly string[]>([])
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -270,7 +273,7 @@ export default function Conversation() {
     localSeq.current = 0
     // 上一个账号留下的断档续拉位置对新账号没有意义（游标属于那场会话的历史）
     gapResumeCursorsRef.current = []
-    mediaGapResumeRef.current = null
+    mediaGapResumeCursorsRef.current = []
     // 待刷新标记与在途计数一起归到新 epoch：否则上个账号留下的陈旧标记会被
     // 新账号后续某次发送落定消费掉，闪一次无来由的整页加载。
     deferredRef.current = resetDeferredReload(epoch.current)
@@ -640,19 +643,22 @@ export default function Conversation() {
   )
 
   /**
-   * 补齐媒体流断档：媒体与消息是两条独立的分页流，用同一套算法（`backfillMessageGap`
-   * 已泛型化），但**续拉位置必须分开记** —— 两条流的游标互不相干，共用一个 ref 会让
+   * 补齐媒体流断档（#67 N5 / 复查 #221）：与消息流同一套算法（`recoverGapsOnReconnect`
+   * 已泛型化），但**欠账位置必须分开记** —— 两条流的游标互不相干，共用一个 ref 会让
    * 先接上的那条把另一条的欠账清掉。
+   *
+   * 媒体这条也不能拿旧游标当本轮起点：那样只会补上旧缺口，本次断线新增的媒体一条都不取
+   * （与消息流是完全相同的坑，见 `recoverGapsOnReconnect` 的说明）。
    */
   const recoverMediaGap = useCallback(
     async (current: number, ownerId: string, known: ReadonlySet<string>) => {
-      const result = await backfillGapUntilConnected(
+      const result = await recoverGapsOnReconnect(
         (before) => loadMediaPage(conversationId, before),
         known,
-        { maxPasses: GAP_MAX_PASSES, startBefore: mediaGapResumeRef.current ?? undefined },
+        { maxPasses: GAP_MAX_PASSES, resumeCursors: mediaGapResumeCursorsRef.current },
       )
       if (current !== epoch.current || userIdRef.current !== ownerId) return
-      mediaGapResumeRef.current = result.complete ? null : result.resumeCursor
+      mediaGapResumeCursorsRef.current = result.resumeCursors
       if (result.items.length === 0) return
       setMedia((prev) => mergeRefreshedMedia(prev, result.items, EMPTY_IDS))
     },
