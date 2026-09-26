@@ -1,5 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { type AdminReportsSearch, ReportsQueuePage } from '../features/admin/reports-queue-page'
+import {
+  type AdminReportsSearch,
+  reportsQueueForSearch,
+} from '../features/admin/reports-queue-page'
 
 const STATUSES = ['PENDING', 'HANDLED', 'REJECTED'] as const
 const TARGET_TYPES = ['LISTING', 'USER'] as const
@@ -30,6 +33,6 @@ export const Route = createFileRoute('/admin/reports/')({
   },
   component: () => {
     const search = Route.useSearch()
-    return <ReportsQueuePage search={search} />
+    return reportsQueueForSearch(search)
   },
 })
