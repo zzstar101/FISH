@@ -408,26 +408,23 @@ export default function Profile() {
    */
   const TRADE_CELLS: IconCell[] = [
     {
-      key: 'orders',
-      label: '全部订单',
-      icon: ICONS.profileOrder,
-      // 订单页按视角拆成两页后没有「全部」那一页了，落默认的「我买到的」
-      url: '/pages/orders-buy/index',
-      count: counts.orderCount ?? undefined,
-    },
-    {
       key: 'onsale',
       label: '在售',
       icon: ICONS.profileOnsale,
       url: '/pages/mylist/index',
       count: counts.activeListings ?? undefined,
     },
-    // 订单页已按视角拆成两页：卖出 / 买入 各落对应那页
+    // 订单页已按视角拆成两页：卖出 / 买入 各落对应那页（原「全部订单」格已由「我的举报」接替，
+    // 订单仍可经 卖出 / 买入 两格到达）
     { key: 'sold', label: '卖出', icon: ICONS.profileSold, url: '/pages/orders-sell/index' },
     { key: 'bought', label: '买入', icon: ICONS.profileBought, url: '/pages/orders-buy/index' },
     // 「评价」= 我发过的评论（商品留言 + 交易评价）。该页没有聚合端点：
     // 真实构建下是空态 + 缺口说明，见 pages/comments 的文件头。
     { key: 'review', label: '评价', icon: ICONS.profileReview, url: '/pages/comments/index' },
+    // #252：我的举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标）。
+    // 提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态（举报后端未上线），
+    // 见 pages/my-reports 的文件头。
+    { key: 'reports', label: '我的举报', icon: ICONS.shieldLine, url: '/pages/my-reports/index' },
   ]
 
   /**
@@ -441,15 +438,6 @@ export default function Profile() {
       sub: '通知提醒与账号安全',
       icon: ICONS.settingsMuted,
       url: '/pages/settings/index',
-    },
-    // #252：站内举报的「我的侧」出口（提交入口在商品详情 / 他人主页）。
-    // 真实构建下是缺口空态（举报后端未上线），见 pages/my-reports 的文件头。
-    {
-      key: 'reports',
-      title: '我的举报',
-      sub: '举报记录与处理进度',
-      icon: ICONS.shieldLine,
-      url: '/pages/my-reports/index',
     },
     { key: 'feedback', title: '意见反馈', sub: '提交建议与问题反馈', icon: ICONS.feedbackMuted },
     { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.serviceMuted },
