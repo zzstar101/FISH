@@ -27,7 +27,7 @@ const STATUS_LABEL: Record<ListingStatus, string | null> = {
 }
 
 export function ListingDetailPage({ listingId }: { listingId: string }) {
-  const { me, isInitializing } = useAuth()
+  const { me, isInitializing, error: authError, refetch: refetchAuth } = useAuth()
   const navigate = useNavigate()
   const detail = useListingDetail(listingId)
   const createConversation = useCreateConversation(me?.id ?? null)
@@ -189,7 +189,18 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
             ) : null}
 
             {!item.isOwner && item.status === 'ACTIVE' && !chatUnavailable ? (
-              isInitializing ? (
+              authError !== null && authError !== undefined ? (
+                <div className="mt-5 flex items-center justify-between gap-2 rounded-xl bg-danger-soft px-3 py-2.5 text-danger text-xs">
+                  <span>登录状态加载失败</span>
+                  <button
+                    className="font-medium hover:underline"
+                    onClick={refetchAuth}
+                    type="button"
+                  >
+                    重试
+                  </button>
+                </div>
+              ) : isInitializing ? (
                 <Button className="mt-5 w-full" disabled type="button">
                   正在恢复登录状态…
                 </Button>
