@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { MemoryMessageStore } from '../messages/memory-store.fixture'
 import { createTransactionService, TransactionServiceError } from './service'
 import type {
@@ -104,7 +105,7 @@ class MemoryTxStore implements TransactionStore {
       return { kind: 'listing-not-active' as const }
     }
     const row: TransactionRow = {
-      id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
+      id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: brief.id,
       listing_id: brief.listingId,
       buyer_id: brief.buyerId,
@@ -487,6 +488,9 @@ describe('transaction service: state machine', () => {
     expect(page1.items).toHaveLength(2)
     expect(page1.items[0]?.role).toBe('seller')
     expect(page1.nextCursor).not.toBeNull()
+    expect(JSON.parse(Buffer.from(page1.nextCursor ?? '', 'base64url').toString()).id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.transaction, page1.items[1]?.id ?? ''),
+    )
     const page2 = await service.listTransactions(seller, {
       limit: 2,
       cursor: page1.nextCursor ?? undefined,

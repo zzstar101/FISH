@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import { ConversationServiceError, createConversationService } from './service'
 import type { ConversationDetailRow, ConversationStore, ListingBrief } from './store'
@@ -7,7 +8,7 @@ import type { ConversationDetailRow, ConversationStore, ListingBrief } from './s
 const buyer = '00000000-0000-4000-8000-0000000000a1'
 const seller = '00000000-0000-4000-8000-0000000000a2'
 const listingA = '00000000-0000-4000-8000-0000000000b1'
-const conversationA = '00000000-0000-4000-8000-0000000000c1'
+const conversationA = '01930000-0000-7000-8000-0000000000c1'
 
 const storage: MediaStorage = {
   presignPut: () => ({ url: '', headers: {}, expiresAt: '' }),
@@ -192,6 +193,26 @@ describe('conversation service: listConversations', () => {
     expect(
       service.listConversations(buyer, { limit: 20, cursor: 'garbage!' }),
     ).rejects.toMatchObject({ code: 'VALIDATION_FAILED', status: 422 })
+  })
+
+  test('pages using a cnv_ cursor while the store receives a UUID', async () => {
+    const store = new MemoryConversationStore()
+    const secondId = '01930000-0000-7000-8000-0000000000c2'
+    store.details.set(conversationA, detailRow())
+    store.details.set(
+      secondId,
+      detailRow({ conversation: { ...detailRow().conversation, id: secondId } }),
+    )
+    const service = createConversationService({ store, storage })
+    const first = await service.listConversations(buyer, { limit: 1 })
+    expect(JSON.parse(Buffer.from(first.nextCursor ?? '', 'base64url').toString()).id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.conversation, secondId),
+    )
+    const second = await service.listConversations(buyer, {
+      limit: 1,
+      cursor: first.nextCursor ?? undefined,
+    })
+    expect(second.items.map((item) => item.id)).toEqual([conversationA])
   })
 
   test('nextCursor is null before the page overflows', async () => {

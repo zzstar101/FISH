@@ -1,15 +1,35 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
 
 const ID = '01930000-0000-7000-8000-0000000000a1'
 const TS = '2026-09-12T03:40:10.123456Z'
+const rawCursor = (id: string) =>
+  Buffer.from(JSON.stringify({ sortKey: TS, id })).toString('base64url')
 
 describe('conversations cursor', () => {
-  test('round-trips sortKey and id', () => {
-    expect(decodeCursor(encodeCursor({ sortKey: TS, id: ID }))).toEqual({
+  test('round-trips sortKey and id without exposing a UUID', () => {
+    const encoded = encodeCursor({ sortKey: TS, id: ID })
+    expect(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))).toEqual({
+      sortKey: TS,
+      id: encodePublicId(PUBLIC_ID_PREFIX.conversation, ID),
+    })
+    expect(decodeCursor(encoded)).toEqual({ sortKey: TS, id: ID })
+  })
+
+  test('transaction cursors use txn_ and reject a conversation cursor', () => {
+    const transactionCursor = encodeCursor({ sortKey: TS, id: ID }, PUBLIC_ID_PREFIX.transaction)
+    expect(JSON.parse(Buffer.from(transactionCursor, 'base64url').toString('utf8')).id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.transaction, ID),
+    )
+    expect(decodeCursor(transactionCursor, PUBLIC_ID_PREFIX.transaction)).toEqual({
       sortKey: TS,
       id: ID,
     })
+    expect(decodeCursor(transactionCursor)).toBeNull()
+    expect(
+      decodeCursor(encodeCursor({ sortKey: TS, id: ID }), PUBLIC_ID_PREFIX.transaction),
+    ).toBeNull()
   })
 
   test('rejects malformed base64 / json / shapes', () => {
@@ -19,8 +39,10 @@ describe('conversations cursor', () => {
     expect(
       decodeCursor(Buffer.from(`{"id":"${ID}","sortKey":123}`).toString('base64url')),
     ).toBeNull()
-    // 非 uuid 的 id 会在 SQL 绑定列上炸成 500，必须在入口挡掉
-    expect(decodeCursor(encodeCursor({ sortKey: TS, id: 'conv-1' }))).toBeNull()
+    // Bare UUID / wrong prefix / malformed ID must not reach the UUID column.
+    expect(decodeCursor(rawCursor(ID))).toBeNull()
+    expect(decodeCursor(rawCursor(encodePublicId(PUBLIC_ID_PREFIX.user, ID)))).toBeNull()
+    expect(decodeCursor(rawCursor('cnv_bad'))).toBeNull()
   })
 
   test('isCursorTimestamp requires microsecond precision and valid calendar values', () => {
