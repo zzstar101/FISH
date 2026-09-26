@@ -23,7 +23,20 @@ export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
   const generation = currentSessionGeneration()
 
   try {
-    return await fetchMe()
+    const user = await fetchMe()
+    // 共享同源 Cookie 可能在现有 Web/另一标签页由 A 换成 B，而 PC 没走登录 mutation。
+    // 旧代际的迟到响应不能反过来把新身份覆盖回 A。
+    if (generation !== currentSessionGeneration()) {
+      return queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY) ?? null
+    }
+    const previous = queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)
+    if (previous?.id !== user.id) {
+      const reset = await resetPcSessionIfCurrent(queryClient, user, generation, {
+        cancelAuth: false,
+      })
+      if (!reset) return queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY) ?? null
+    }
+    return user
   } catch (error) {
     if (!isUnauthenticatedError(error)) throw error
 
