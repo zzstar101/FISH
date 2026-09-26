@@ -2,6 +2,7 @@ import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import type { OrderCardView } from '@/features/transaction/adapt'
 import { countsOf, type StatusKey, shownOf } from '@/features/transaction/useOrderList'
@@ -54,16 +55,6 @@ const STATUS_META: Record<
   COMPLETED: { label: '已完成', cls: 'is-done', note: '完成面交', noteNoTime: '已完成面交' },
   CANCELLED: { label: '已取消', cls: 'is-cancel', note: '取消交易', noteNoTime: '已取消交易' },
 }
-
-/**
- * 「回到顶部」钮的出现阈值。
- *
- * 1版稿 `.totop` 是在**内部滚动容器**上按 `scrollTop > 320` 判的（`.content{overflow-y:auto}`），
- * 本页是页面级滚动、`usePageScroll` 给的是逻辑 px（= 稿的 pt），两者不是同一把尺子；
- * 而且仓库对「页面级滚动列表」已经有同口径先例（`pages/chat/index.tsx` 的 380），
- * 所以这里跟先例走，不照抄稿的 320 —— 阈值只影响按钮早出现还是晚出现，观感差约一成。
- */
-export const TOTOP_THRESHOLD = 380
 
 type Props = {
   items: OrderCardView[]
@@ -351,9 +342,7 @@ export default function OrderList({ items, loading, failed, truncated, showTop, 
         ) : null}
       </View>
 
-      <View className={`orders__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="orders__totop-arrow" />
-      </View>
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

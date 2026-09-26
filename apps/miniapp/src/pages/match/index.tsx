@@ -1,8 +1,9 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useDidShow, useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, usePageScroll, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
@@ -68,6 +69,12 @@ export default function Match() {
   const userId = authedUser?.id ?? null
 
   const [wish, setWish] = useState<MockWish | null>(null)
+  /** 回到顶部钮（共享组件）：滚过一屏浮现 */
+  const [showTop, setShowTop] = useState(false)
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
   const [items, setItems] = useState<MatchView[]>([])
   /** `/matches` 的 `total`：与许愿页卡片同源，计数不用 `items.length`（可能被 limit 截断） */
   const [total, setTotal] = useState(0)
@@ -444,6 +451,9 @@ export default function Match() {
       <Text className="match__foot">
         {`低于 ${MATCH_SCORE_THRESHOLD}% 的结果不展示：匹配度 = 关键词命中 + 预算贴合度 + 成色描述的综合分。`}
       </Text>
+
+      {/* 回到顶部 */}
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

@@ -7,7 +7,7 @@
  * 连体卡（图标格子 4 格排 + 5 格排 + 帮助与设置 + 账户操作，发丝线相连）→ 版权行。
  *
  * **本页没有任何吸顶元素**：不挂 `top-bar`，顶部留白由页面内联下发（padding-top），
- * 内容随页面滚动正常滚走；回到顶部钮是悬浮钮（`.profile__totop`），不钉在顶栏。
+ * 内容随页面滚动正常滚走。
  */
 .profile {
   position: relative;
@@ -371,55 +371,6 @@
   opacity: 0.8;
 }
 
-/* ---- 回到顶部（3版稿 .totop）：悬浮玻璃圆钮，滚过一屏浮现 ----
-   稿的 bottom 84pt 是无 TabBar 画布，真机抬到悬浮底栏上方（与消息页同值） */
-.profile__totop {
-  position: fixed;
-  right: 36px;
-  bottom: 200px;
-  z-index: 5;
-  width: 88px;
-  height: 88px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid rgba(255, 255, 255, 0.82);
-  background: rgba(255, 255, 255, 0.68);
-  backdrop-filter: blur(44px) saturate(180%);
-  -webkit-backdrop-filter: blur(44px) saturate(180%);
-  box-shadow: var(--shadow-float);
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(24px) scale(0.9);
-  transition:
-    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
-    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
-    visibility 0s linear 0.26s;
-
-  &.is-show {
-    opacity: 1;
-    visibility: visible;
-    transform: none;
-    transition:
-      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
-      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
-      visibility 0s;
-  }
-
-  &:active {
-    transform: translateY(2px) scale(0.96);
-  }
-}
-
-.profile__totop-arrow {
-  width: 22px;
-  height: 22px;
-  border-left: 4px solid var(--brand);
-  border-top: 4px solid var(--brand);
-  border-radius: 2px;
-  transform: translateY(4px) rotate(45deg);
-}
 
 /* ---- 页脚：组合 logo（brand-lockup：鱼形标 + 鱼小应 YUXIAOYING）+ 版权行 ---- */
 .profile__footer {

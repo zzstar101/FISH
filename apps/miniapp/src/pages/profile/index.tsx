@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
+import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import brandLockup from '@/assets/brand/brand-lockup.png'
 import { ICONS } from '@/assets/lib-icons'
@@ -96,13 +96,8 @@ type Row = {
   url?: string
 }
 
-/** 回到顶部钮的出现阈值：3版稿 .totop 滚过 380pt 后出现。
- *  `usePageScroll` 的单位是逻辑 px（= 稿的 pt），**不是** scss 里的 rpx，不 ×2。 */
-const TOTOP_THRESHOLD = 380
-
 export default function Profile() {
   const [profile, setProfile] = useState<ProfileView | null>(null)
-  const [showTop, setShowTop] = useState(false)
   /** 退出登录 in-flight 守卫：确认弹窗出现前快速双击，只允许走一轮注销 */
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -302,12 +297,6 @@ export default function Profile() {
       setSig({ forUser: userId, text: readSignature(userId) })
       toast('已保存')
     })()
-  }
-
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
-
-  const backToTop = () => {
-    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
   }
 
   const toast = (title: string) => {
@@ -654,11 +643,6 @@ export default function Profile() {
         {settingsPanel(true)}
 
         {footer}
-      </View>
-
-      {/* 3版稿 .totop：滚过一屏后浮现的回到顶部悬浮钮（非吸顶元素） */}
-      <View className={`profile__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="profile__totop-arrow" />
       </View>
     </View>
   )

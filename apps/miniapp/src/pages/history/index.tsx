@@ -3,6 +3,7 @@ import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
@@ -99,10 +100,6 @@ import './index.scss'
  * 换账号 / 退出时 effect 重跑即取消上一轮，迟到结果按 `null` 丢弃。
  * 「清空过哪几档」在换账号时**渲染期重置**（与 `pages/mylist` 同款）。
  */
-
-/** 回到顶部钮的出现阈值：与仓库「页面级滚动列表」的先例同口径（`pages/chat` /
- *  `components/order-list`）。`usePageScroll` 给的是逻辑 px（= 稿的 pt），**不 ×2**。 */
-const TOTOP_THRESHOLD = 380
 
 /**
  * 空态图标（稿 `EMPTY` 表的三支）：只从 `@/assets/lib-icons` 的 `ICONS` 取。
@@ -238,7 +235,11 @@ export default function History() {
   /** 骨架屏只在「还没有数据」时顶替内容（下拉刷新保留了列表，不换骨架屏） */
   const pending = loading && data === null
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
 
   const toast = (text: string) => {
     void Taro.showToast({ title: text, icon: 'none' })
@@ -478,12 +479,7 @@ export default function History() {
         )}
       </View>
 
-      <View
-        className={`hist__totop${showTop ? ' is-show' : ''}`}
-        onClick={() => void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })}
-      >
-        <View className="hist__totop-arrow" />
-      </View>
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

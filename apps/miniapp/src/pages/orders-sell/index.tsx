@@ -1,7 +1,8 @@
 import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import AuthRequired from '@/components/auth-required'
-import OrderList, { TOTOP_THRESHOLD } from '@/components/order-list'
+import { BACK_TOP_THRESHOLD } from '@/components/back-top'
+import OrderList from '@/components/order-list'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { useOrderList } from '@/features/transaction/useOrderList'
@@ -53,7 +54,7 @@ export default function OrdersSell() {
     void reload({ keepList: true }).then(() => Taro.stopPullDownRefresh())
   })
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   /** 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**，避免跳转落地前先画一帧 */
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
