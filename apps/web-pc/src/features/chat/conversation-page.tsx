@@ -69,12 +69,14 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const [draft, setDraft] = useState('')
   const [outbox, setOutbox] = useState<OutboxMessage[]>([])
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
+  const [localMessages, setLocalMessages] = useState<MessageDto[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const markReadRef = useRef(markRead)
   markReadRef.current = markRead
   const sendRef = useRef(sendMessage)
   sendRef.current = sendMessage
   const historyErrorRef = useRef(false)
+  const recoveryGenerationRef = useRef(0)
   historyErrorRef.current = history.isError
   const liveRef = useRef<{ conversationId: string; messages: Map<string, MessageDto> }>({
     conversationId,
@@ -93,6 +95,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   useEffect(() => {
     if (history.isFetching || history.isError) return
     mergeLiveRef.current()
+    setLocalMessages([])
   }, [history.isFetching, history.isError])
 
   const messages = useMemo(() => flattenMessagePages(history.data), [history.data])
@@ -146,16 +149,29 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     liveRef.current.messages.set(message.id, message)
     // 历史 query 处于错误态时不能写伪页，否则会把可重试的 error 改成 success；
     // 消息留在 liveRef，等用户/重连把历史拉成功后再合并。
-    if (historyErrorRef.current) return
+    if (historyErrorRef.current) {
+      setLocalMessages((current) =>
+        current.some((item) => item.id === message.id) ? current : [...current, message],
+      )
+      return
+    }
     insertMessageIntoCache(queryClient, ownerId, conversationId, message)
   }
 
   function recoverAfterReconnect() {
     if (ownerId === null) return
+    const generation = recoveryGenerationRef.current + 1
+    recoveryGenerationRef.current = generation
     setRecoveryError(null)
     void refreshConversationOnReconnect(queryClient, ownerId, conversationId)
-      .then(() => mergeLiveRef.current())
-      .catch(() => setRecoveryError('断线后的历史补拉失败，请重试'))
+      .then(() => {
+        if (recoveryGenerationRef.current !== generation) return
+        mergeLiveRef.current()
+      })
+      .catch(() => {
+        if (recoveryGenerationRef.current !== generation) return
+        setRecoveryError('断线后的历史补拉失败，请重试')
+      })
   }
 
   function dispatch(item: OutboxMessage) {
@@ -345,6 +361,14 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                     isMine={message.senderId === ownerId}
                     isRead={isMessageRead(message, counterpartLastReadAt)}
                     key={message.id}
+                    message={message}
+                  />
+                ))}
+                {localMessages.map((message) => (
+                  <MessageBubble
+                    isMine={message.senderId === ownerId}
+                    isRead={isMessageRead(message, counterpartLastReadAt)}
+                    key={`local-${message.id}`}
                     message={message}
                   />
                 ))}

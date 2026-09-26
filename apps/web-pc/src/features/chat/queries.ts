@@ -46,7 +46,7 @@ export function useConversation(ownerId: string | null, conversationId: string) 
       const current = queryClient.getQueryData<ConversationDto | null>(
         chatKeys.conversation(ownerId, conversationId),
       )
-      return mergeConversationReadMarker(current, fetched)
+      return mergeConversationDto(current, fetched)
     },
     enabled: ownerId !== null,
     staleTime: 15_000,
@@ -289,6 +289,25 @@ export function mergeConversationReadMarker(
   return { ...next, counterpartLastReadAt: current.counterpartLastReadAt }
 }
 
+/**
+ * 会话 DTO 的单调合并：读位不后退，`lastMessageAt` 更旧的 HTTP/read 响应
+ * 也不能把实时推送写入的较新预览覆盖掉。
+ */
+export function mergeConversationDto(
+  current: ConversationDto | null | undefined,
+  next: ConversationDto,
+): ConversationDto {
+  const merged = mergeConversationReadMarker(current, next)
+  if (
+    current &&
+    current.id === next.id &&
+    Date.parse(current.lastMessageAt) > Date.parse(next.lastMessageAt)
+  ) {
+    return { ...merged, lastMessage: current.lastMessage, lastMessageAt: current.lastMessageAt }
+  }
+  return merged
+}
+
 export function updateConversationCaches(
   queryClient: QueryClient,
   ownerId: string,
@@ -297,7 +316,7 @@ export function updateConversationCaches(
   const current = queryClient.getQueryData<ConversationDto | null>(
     chatKeys.conversation(ownerId, conversation.id),
   )
-  const merged = mergeConversationReadMarker(current, conversation)
+  const merged = mergeConversationDto(current, conversation)
   queryClient.setQueryData(chatKeys.conversation(ownerId, conversation.id), merged)
   queryClient.setQueryData<InfiniteData<ConversationListResponse, string | null>>(
     chatKeys.conversations(ownerId),
