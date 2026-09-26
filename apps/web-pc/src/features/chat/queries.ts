@@ -131,13 +131,15 @@ function sameMessage(a: MessageDto, b: MessageDto): boolean {
   )
 }
 
-export function upsertMessagePage<TPageParam>(
-  data: InfiniteData<MessageListResponse, TPageParam> | undefined,
+export function upsertMessagePage(
+  data: InfiniteData<MessageListResponse, string | null> | undefined,
   message: MessageDto,
   conversationId: string,
-): InfiniteData<MessageListResponse, TPageParam> | undefined {
+): InfiniteData<MessageListResponse, string | null> | undefined {
   if (message.conversationId !== conversationId) return data
-  if (!data || data.pages.length === 0) return data
+  if (!data || data.pages.length === 0) {
+    return { pages: [{ items: [message], nextCursor: null }], pageParams: [null] }
+  }
 
   let replaced = false
   let identical = false
@@ -209,6 +211,9 @@ export async function refreshNewestMessages(
   conversationId: string,
 ): Promise<void> {
   const page = await fetchMessagePage(conversationId)
+  // 先取消在途的向上分页：infinite query 完成时会把发起时的旧页整体写回，
+  // 若与本次“最新页替换”交错，会把断线窗口的新消息覆盖掉。
+  await queryClient.cancelQueries({ queryKey: chatKeys.messages(ownerId, conversationId) })
   // 用服务端最新页替换本地页集合：保留服务端 nextCursor，避免断线窗口留下
   // “中间一段永远翻不到”的历史缺口；空缓存时也由此建立初始 InfiniteData。
   queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
