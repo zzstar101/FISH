@@ -842,6 +842,13 @@ export default function ListingDetail() {
                 <Text className="detail__tag">{categoryLabel(listing.category)}</Text>
                 <Text className="detail__tag">{conditionLabel(listing.condition)}</Text>
                 {listing.negotiable ? <Text className="detail__tag">可小刀</Text> : null}
+                {/* #252：举报入口挂在标签行右端（Owner 2026-09-26：与 tag 同排、右边对齐）。
+                    仅非本人商品显示；isOwnListing / goReport 见组件内注释。 */}
+                {!isOwnListing ? (
+                  <View className="detail__tag-report" onClick={goReport}>
+                    <Text>举报</Text>
+                  </View>
+                ) : null}
               </View>
             </View>
 
@@ -1050,14 +1057,6 @@ export default function ListingDetail() {
               </View>
             </View>
           </View>
-
-          {/* ---------------------------------------------------- 举报入口 */}
-          {/* 弱化为居中小字：举报是低频治理动作，不与「收藏/聊一聊/我想要」抢底部操作栏 */}
-          {!isOwnListing ? (
-            <View className="detail__report" onClick={goReport}>
-              <Text>举报商品</Text>
-            </View>
-          ) : null}
         </>
       ) : (
         /* 仍在加载：骨架屏。这个分支只应在 loadState === 'loading' 时到达 ——

@@ -839,15 +839,15 @@
 
 /* ------------------------------------------------------------ 举报入口 */
 
-/* #252：居中小字入口，压在同类推荐之后、底部操作栏之前。
-   弱化成 muted 小字（举报是低频治理动作），点击整行都有热区。 */
-.detail__report {
-  margin: 32px auto 0;
-  width: 200px;
+/* #252：举报入口挂在标签行右端（Owner 2026-09-26 拍板：与 tag 同排、右边对齐）。
+   弱化成 muted 小字（低频治理动作），点击整行有热区；margin-left:auto 吃掉
+   标签行剩余宽度，标签多到换行时它独占一行仍贴右。 */
+.detail__tag-report {
+  margin-left: auto;
   display: flex;
   align-items: center;
-  justify-content: center;
-  min-height: 56px;
+  min-height: 44px;
+  padding: 0 12px;
   font-size: 23px;
   color: var(--muted);
 
