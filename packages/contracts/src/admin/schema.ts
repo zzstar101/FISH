@@ -37,9 +37,6 @@ import {
 export const UserRoleSchema = z.enum(['USER', 'ADMIN'])
 export type UserRole = z.infer<typeof UserRoleSchema>
 
-/** 管理查询 / 路由路径参数的目标 id 形状（用户 / 商品 / 审计目标通用）。非 UUID 直接 404/422，不打到 SQL。 */
-export const AdminTargetIdSchema = z.uuid()
-
 /**
  * 脱敏学号：保留首尾、中段以 `*` 掩蔽（12 位学号 → `2021****0001`）。
  *
