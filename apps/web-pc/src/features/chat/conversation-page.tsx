@@ -1,3 +1,4 @@
+import type { MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -21,6 +22,7 @@ import {
   invalidateConversationDetail,
   invalidateConversationSurfaces,
   isMessageRead,
+  mergeMessagesIntoCache,
   useConversation,
   useMarkConversationRead,
   useMessageHistory,
@@ -70,6 +72,24 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   markReadRef.current = markRead
   const sendRef = useRef(sendMessage)
   sendRef.current = sendMessage
+  const liveRef = useRef<{ conversationId: string; messages: Map<string, MessageDto> }>({
+    conversationId,
+    messages: new Map(),
+  })
+  if (liveRef.current.conversationId !== conversationId) {
+    liveRef.current = { conversationId, messages: new Map() }
+  }
+  const mergeLiveRef = useRef<() => void>(() => {})
+  mergeLiveRef.current = () => {
+    if (ownerId === null) return
+    mergeMessagesIntoCache(queryClient, ownerId, conversationId, [
+      ...liveRef.current.messages.values(),
+    ])
+  }
+  useEffect(() => {
+    if (history.isFetching) return
+    mergeLiveRef.current()
+  }, [history.isFetching])
 
   const messages = useMemo(() => flattenMessagePages(history.data), [history.data])
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
@@ -79,7 +99,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       if (ownerId === null) return
       if (event.type === 'message.new') {
         if (event.conversationId === conversationId) {
-          insertMessageIntoCache(queryClient, ownerId, conversationId, event.message)
+          rememberMessage(event.message)
           if (event.message.senderId !== ownerId) {
             markReadRef.current.mutate(conversationId)
           }
@@ -92,7 +112,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         invalidateConversationSurfaces(queryClient, ownerId)
       }
     },
-    onReconnect: () => {
+    onOpen: () => {
       if (ownerId === null) return
       invalidateConversationDetail(queryClient, ownerId, conversationId)
       invalidateConversationSurfaces(queryClient, ownerId)
@@ -113,6 +133,12 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     node.scrollTop = node.scrollHeight
   }, [scrollSignal])
 
+  function rememberMessage(message: MessageDto) {
+    if (ownerId === null) return
+    liveRef.current.messages.set(message.id, message)
+    insertMessageIntoCache(queryClient, ownerId, conversationId, message)
+  }
+
   function dispatch(item: OutboxMessage) {
     if (ownerId === null) return
     sendRef.current.mutate(
@@ -121,7 +147,8 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         input: { content: item.content, clientRequestId: item.clientRequestId },
       },
       {
-        onSuccess: () => {
+        onSuccess: (message) => {
+          rememberMessage(message)
           setOutbox((current) =>
             current.filter((entry) => entry.clientRequestId !== item.clientRequestId),
           )
@@ -254,7 +281,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
 
             <div className="flex-1 overflow-y-auto bg-surface-2/40 px-5 py-4" ref={scrollRef}>
               {history.isPending ? <LoadingState label="正在加载历史消息…" /> : null}
-              {history.isError ? (
+              {history.isError && !history.isFetchNextPageError ? (
                 <ErrorState message="历史消息加载失败" onRetry={() => void history.refetch()} />
               ) : null}
               {history.isFetchNextPageError ? (
