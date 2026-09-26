@@ -127,28 +127,31 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(ownerChanged('user-a', 'user-a')).toBe(false)
   })
 
-  test('清场只覆盖草稿与收藏，公开快照不在其中', () => {
+  test('清场只覆盖草稿、收藏与购买请求，公开快照不在其中', () => {
     expect(clearedPrivateScope()).toEqual({
       commentInput: '',
       replyInput: '',
       replyTo: null,
       faved: false,
+      buyRequested: false,
     })
   })
 
-  test('换号后 A 的草稿、回复行与收藏心形都不留在 B 的页面上', () => {
+  test('换号后 A 的草稿、回复行、收藏心形与购买请求都不留在 B 的页面上', () => {
     const p = page()
     switchOwner(p, 'user-a')
     p.commentInput = 'A 写到一半的留言'
     p.replyInput = 'A 的回复草稿'
     p.replyTo = 'c-1'
     p.faved = true
+    p.buyRequested = true
 
     switchOwner(p, 'user-b')
     expect(p.commentInput).toBe('')
     expect(p.replyInput).toBe('')
     expect(p.replyTo).toBeNull()
     expect(p.faved).toBe(false)
+    expect(p.buyRequested).toBe(false)
   })
 
   test('换号不动公开的商品快照与已发布留言', () => {
@@ -167,10 +170,12 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     switchOwner(p, 'user-a')
     p.commentInput = 'A 的草稿'
     p.faved = true
+    p.buyRequested = true
 
     switchOwner(p, null)
     expect(p.commentInput).toBe('')
     expect(p.faved).toBe(false)
+    expect(p.buyRequested).toBe(false)
   })
 
   test('未确认的乐观占位随换号丢掉，已确认的留言保持原序', () => {
