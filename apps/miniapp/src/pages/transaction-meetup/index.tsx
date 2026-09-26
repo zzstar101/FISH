@@ -638,7 +638,7 @@ export default function TransactionMeetup() {
   }
 
   const openScanner = () => {
-    void Taro.navigateTo({ url: '/pages/scan/index' })
+    void Taro.navigateTo({ url: '/pages/scan-pr/index' })
   }
 
   /**
