@@ -7,7 +7,7 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { readNavMetrics } from '@/lib/nav-metrics'
-import { parseLoginLaunch } from './view'
+import { resolveLoginLaunch } from './view'
 import './index.scss'
 
 /**
@@ -20,15 +20,16 @@ import './index.scss'
  * **当前交付边界（刻意不伪装完成）**：#197 的四个端点与 access_token 基建
  * 尚未合入，确认动作在真实构建下只给「尚未开放」反馈，不假装登录成功；
  * 演示构建（`TARO_APP_MOCK=1` 的显式演示模式，`DEMO_AUTH_ENABLED`）走一段
- * 模拟确认，且未带票号时自动补一枚演示票，让页面在开发者工具里可以
- * 直接演示完整交互（真实构建不受影响）。
+ * 模拟确认，并在**入口什么都没给**时补一枚形状合法的演示票，让页面在开发者工具里
+ * 可以直接演示完整交互（真实构建不受影响；带了非法票号仍落「无效登录码」）。
  *
  * 其它约定：
  * - 未登录由 `useAuthGuard` 重定向登录页；`unknown`（冷启动身份未恢复）只渲染
  *   占位，不把「还不知道」当「没登录」。
  * - 页面身份：这是**确认页**，头像昵称只读当前会话用户，不接任何「要登录的
  *   电脑端」信息 —— 票据绑定前的设备信息契约不存在，不编造展示。
- * - `ticket` 解析是纯逻辑（`view.ts`，有单测）；取不到票号落「无效登录码」态。
+ * - 票据解析与合法性判定是纯逻辑（`view.ts`，有单测，**形状与 #229 的
+ *   `ScanTicketSchema` 对齐**）；取不到合法票号落「无效登录码」态。
  * - **已知断点（归 #197 接端点时处理）**：未登录进入时守卫用 `redirectTo` 换到
  *   登录页、登录成功后回首页，票据不会自动续上 —— 「登录后回到确认页」需要
  *   把 ticket 带过登录链或调整返回路径，不在本页壳内解决。
@@ -44,11 +45,10 @@ export default function LoginConfirm() {
   const { status, user } = useAuth()
   const router = useRouter<{ ticket?: string; scene?: string }>()
 
-  // 启动参数在页面生命周期内不变，解析一次即可。
-  // 演示构建（显式 TARO_APP_MOCK=1）没有电脑端真的出码：没带票号就补一枚演示票，
-  // 页面可以直接完整演示；真实构建仍按参数判定，取不到票号落「无效登录码」。
+  // 启动参数在页面生命周期内不变，解析一次即可。演示构建的补票（只在入口什么都没给时）
+  // 与真实票据走同一套形状校验，见 `view.ts` 的 `resolveLoginLaunch`。
   const launch = useMemo(
-    () => parseLoginLaunch(router.params) ?? (DEMO_AUTH_ENABLED ? { ticket: 'demo-ticket' } : null),
+    () => resolveLoginLaunch(router.params, DEMO_AUTH_ENABLED),
     [router.params],
   )
   const [phase, setPhase] = useState<Phase>(launch ? 'ready' : 'invalid')
