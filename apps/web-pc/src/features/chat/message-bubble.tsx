@@ -101,10 +101,11 @@ export function PendingMessageBubble({
               <button
                 className="inline-flex items-center gap-0.5 text-ink-3 hover:text-danger"
                 onClick={onDismiss}
+                title="仅移除本地失败记录，不删除服务端消息"
                 type="button"
               >
                 <Trash2 className="size-3" />
-                删除
+                移除
               </button>
             </>
           ) : null}
