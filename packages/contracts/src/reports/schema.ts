@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ReportIdSchema } from '../system/public-id'
 
 /**
  * Reports Domain Contract（#73 治理半场）。
@@ -93,7 +94,7 @@ export const ReportCreateInputSchema = z
 export type ReportCreateInput = z.infer<typeof ReportCreateInputSchema>
 
 export const ReportSchema = z.object({
-  id: z.uuid(),
+  id: ReportIdSchema,
   targetType: ReportTargetTypeSchema,
   targetId: z.uuid(),
   reason: ReportReasonSchema,

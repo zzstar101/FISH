@@ -19,6 +19,7 @@ import {
   AdminReportQueueQuerySchema,
 } from '@fish/contracts/reports/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -67,6 +68,25 @@ function requireTargetId(c: Context, name: string): string {
   const parsed = AdminTargetIdSchema.safeParse(c.req.param(name))
   if (!parsed.success) throw new AdminError('ADMIN_NOT_FOUND', 404, '目标不存在')
   return parsed.data
+}
+
+function requireReportId(c: Context): string {
+  const raw = c.req.param('reportId')
+  if (!isPublicId(PUBLIC_ID_PREFIX.report, raw)) {
+    throw new ReportServiceError('REPORT_NOT_FOUND', 404, '举报不存在')
+  }
+  return decodePublicId(PUBLIC_ID_PREFIX.report, raw)
+}
+
+function internalGovernanceInput<T extends { sourceReportId?: string }>(
+  input: T,
+): Omit<T, 'sourceReportId'> & { sourceReportId?: string } {
+  return {
+    ...input,
+    sourceReportId: input.sourceReportId
+      ? decodePublicId(PUBLIC_ID_PREFIX.report, input.sourceReportId)
+      : undefined,
+  }
 }
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`。 */
@@ -280,7 +300,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
 
     try {
       await reportsService.handleReport({
-        reportId: requireTargetId(c, 'reportId'),
+        reportId: requireReportId(c),
         actorUserId: c.get('userId'),
         result: input.data.result,
         reason: input.data.reason,
@@ -294,7 +314,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
 
   router.get('/reports/:reportId', async (c) => {
     try {
-      return c.json(await reportsService.getAdminReport(requireTargetId(c, 'reportId')), 200)
+      return c.json(await reportsService.getAdminReport(requireReportId(c)), 200)
     } catch (error) {
       return toReportErrorResponse(c, error)
     }
@@ -319,7 +339,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
         await governance.delistListing(
           c.get('userId'),
           requireTargetId(c, 'listingId'),
-          input.data,
+          internalGovernanceInput(input.data),
         ),
         200,
       )
@@ -339,7 +359,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
         await governance.restoreListing(
           c.get('userId'),
           requireTargetId(c, 'listingId'),
-          input.data,
+          internalGovernanceInput(input.data),
         ),
         200,
       )
@@ -354,7 +374,11 @@ export function createAdminRouter(options: AdminRouterOptions) {
 
     try {
       return c.json(
-        await governance.restrictPublish(c.get('userId'), requireTargetId(c, 'userId'), input.data),
+        await governance.restrictPublish(
+          c.get('userId'),
+          requireTargetId(c, 'userId'),
+          internalGovernanceInput(input.data),
+        ),
         200,
       )
     } catch (error) {
@@ -368,7 +392,11 @@ export function createAdminRouter(options: AdminRouterOptions) {
 
     try {
       return c.json(
-        await governance.ban(c.get('userId'), requireTargetId(c, 'userId'), input.data),
+        await governance.ban(
+          c.get('userId'),
+          requireTargetId(c, 'userId'),
+          internalGovernanceInput(input.data),
+        ),
         200,
       )
     } catch (error) {
@@ -384,7 +412,11 @@ export function createAdminRouter(options: AdminRouterOptions) {
 
     try {
       return c.json(
-        await governance.liftRestriction(c.get('userId'), requireTargetId(c, 'userId'), input.data),
+        await governance.liftRestriction(
+          c.get('userId'),
+          requireTargetId(c, 'userId'),
+          internalGovernanceInput(input.data),
+        ),
         200,
       )
     } catch (error) {

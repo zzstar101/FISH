@@ -17,6 +17,7 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { SQL } from 'bun'
 import { desc, eq, like, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -774,7 +775,13 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     const res = await app.request(
       ADMIN_ROUTES.listingDelist(LISTING),
       post(
-        { reason: '带不存在的举报单', sourceReportId: '01940000-0000-7000-8000-0000000000ff' },
+        {
+          reason: '带不存在的举报单',
+          sourceReportId: encodePublicId(
+            PUBLIC_ID_PREFIX.report,
+            '01940000-0000-7000-8000-0000000000ff',
+          ),
+        },
         adminACookie,
       ),
     )
@@ -784,10 +791,25 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     })
   })
 
+  test('举报来源前缀错误在进入数据库前返回 422', async () => {
+    const res = await app.request(
+      ADMIN_ROUTES.listingDelist(LISTING),
+      post(
+        { reason: '非法举报来源', sourceReportId: encodePublicId(PUBLIC_ID_PREFIX.user, OTHER) },
+        adminACookie,
+      ),
+    )
+    expect(res.status).toBe(422)
+    expect(await res.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+  })
+
   test('处罚举报回链必须与商品或用户相关；错目标不留错误归因', async () => {
     const ownListingReport = newId()
     const otherListingReport = newId()
     const userReport = newId()
+    const ownListingPublic = encodePublicId(PUBLIC_ID_PREFIX.report, ownListingReport)
+    const otherListingPublic = encodePublicId(PUBLIC_ID_PREFIX.report, otherListingReport)
+    const userPublic = encodePublicId(PUBLIC_ID_PREFIX.report, userReport)
     await scratch.insert(reports).values([
       {
         id: ownListingReport,
@@ -814,7 +836,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
 
     const wrongDelist = await app.request(
       ADMIN_ROUTES.listingDelist(LISTING),
-      post({ reason: '错误举报来源', sourceReportId: otherListingReport }, adminACookie),
+      post({ reason: '错误举报来源', sourceReportId: otherListingPublic }, adminACookie),
     )
     expect(wrongDelist.status).toBe(422)
     expect(await wrongDelist.json()).toMatchObject({
@@ -822,35 +844,38 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     })
     const wrongUser = await app.request(
       ADMIN_ROUTES.userRestrictPublish(RACE_USER),
-      post({ reason: '商品 A 的卖家不是该用户', sourceReportId: ownListingReport }, adminACookie),
+      post({ reason: '商品 A 的卖家不是该用户', sourceReportId: ownListingPublic }, adminACookie),
     )
     expect(wrongUser.status).toBe(422)
     expect(await restrictionRows(RACE_USER)).toEqual([])
 
     const delisted = await app.request(
       ADMIN_ROUTES.listingDelist(LISTING),
-      post({ reason: '关联本商品举报', sourceReportId: ownListingReport }, adminACookie),
+      post({ reason: '关联本商品举报', sourceReportId: ownListingPublic }, adminACookie),
     )
     expect(delisted.status).toBe(200)
     const wrongRestore = await app.request(
       ADMIN_ROUTES.listingRestore(LISTING),
-      post({ reason: '错误恢复来源', sourceReportId: otherListingReport }, adminACookie),
+      post({ reason: '错误恢复来源', sourceReportId: otherListingPublic }, adminACookie),
     )
     expect(wrongRestore.status).toBe(422)
     const restored = await app.request(
       ADMIN_ROUTES.listingRestore(LISTING),
-      post({ reason: '关联本商品举报恢复', sourceReportId: ownListingReport }, adminACookie),
+      post({ reason: '关联本商品举报恢复', sourceReportId: ownListingPublic }, adminACookie),
     )
     expect(restored.status).toBe(200)
 
     const restricted = await app.request(
       ADMIN_ROUTES.userRestrictPublish(RACE_USER),
-      post({ reason: '关联被举报用户', sourceReportId: userReport }, adminACookie),
+      post({ reason: '关联被举报用户', sourceReportId: userPublic }, adminACookie),
     )
     expect(restricted.status).toBe(200)
+    expect(await restricted.json()).toMatchObject({
+      restriction: { sourceReportId: userPublic },
+    })
     const lifted = await app.request(
       ADMIN_ROUTES.userLiftRestriction(RACE_USER),
-      post({ reason: '关联被举报用户解除', sourceReportId: userReport }, adminACookie),
+      post({ reason: '关联被举报用户解除', sourceReportId: userPublic }, adminACookie),
     )
     expect(lifted.status).toBe(200)
   })

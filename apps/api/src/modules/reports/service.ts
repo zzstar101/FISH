@@ -17,6 +17,7 @@ import {
   type ReportTargetType,
 } from '@fish/contracts/reports/schema'
 import type { SystemErrorCode } from '@fish/contracts/system/error'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../admin/cursor'
 import type { AdminReportRow, ReportRow, ReportStore } from './store'
 
@@ -57,7 +58,7 @@ function invalidCursor(): ReportServiceError {
 
 function toReportDto(row: ReportRow) {
   return ReportSchema.parse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.report, row.id),
     targetType: row.targetType,
     targetId: row.targetId,
     reason: row.reason,
@@ -71,7 +72,7 @@ function toReportDto(row: ReportRow) {
 function toAdminReportItem(row: AdminReportRow): AdminReportItem {
   return AdminReportItemSchema.parse({
     report: {
-      id: row.report.id,
+      id: encodePublicId(PUBLIC_ID_PREFIX.report, row.report.id),
       targetType: row.report.targetType,
       targetId: row.report.targetId,
       reason: row.report.reason,
@@ -139,7 +140,7 @@ export function createReportService(store: ReportStore): ReportService {
     },
 
     async listMine(reporterId, query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.report) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listMine(reporterId, { cursor, limit: query.limit + 1 })
@@ -148,12 +149,15 @@ export function createReportService(store: ReportStore): ReportService {
       const last = items[items.length - 1]
       return ReportListResponseSchema.parse({
         items: items.map(toReportDto),
-        nextCursor: hasMore && last ? encodeCursor(last.createdAtCursor, last.id) : null,
+        nextCursor:
+          hasMore && last
+            ? encodeCursor(last.createdAtCursor, encodePublicId(PUBLIC_ID_PREFIX.report, last.id))
+            : null,
       })
     },
 
     async listAdminReports(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.report) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listAdminReports({
@@ -169,7 +173,12 @@ export function createReportService(store: ReportStore): ReportService {
       return AdminReportListResponseSchema.parse({
         items: items.map(toAdminReportItem),
         nextCursor:
-          hasMore && last ? encodeCursor(last.report.createdAtCursor, last.report.id) : null,
+          hasMore && last
+            ? encodeCursor(
+                last.report.createdAtCursor,
+                encodePublicId(PUBLIC_ID_PREFIX.report, last.report.id),
+              )
+            : null,
       })
     },
 
