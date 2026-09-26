@@ -7,6 +7,7 @@ import type {
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  createConversation,
   fetchConversation,
   fetchConversationPage,
   fetchConversationUnreadCount,
@@ -61,6 +62,19 @@ export function useMessageHistory(ownerId: string | null, conversationId: string
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== null,
     staleTime: 15_000,
+  })
+}
+
+export function useCreateConversation(ownerId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (listingId: string) => createConversation(listingId),
+    onSuccess: (conversation) => {
+      if (ownerId === null) return
+      updateConversationCaches(queryClient, ownerId, conversation)
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
+      void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
+    },
   })
 }
 

@@ -7,5 +7,5 @@ export const Route = createFileRoute('/listing/$listingId')({
 
 function ListingDetailRoute() {
   const { listingId } = Route.useParams()
-  return <ListingDetailPage listingId={listingId} />
+  return <ListingDetailPage key={listingId} listingId={listingId} />
 }

@@ -1,13 +1,21 @@
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { Badge } from '@fish/ui/badge'
+import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
-import { Link } from '@tanstack/react-router'
-import { ChevronRight, Clock, Home, Images, ShieldCheck } from 'lucide-react'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { ChevronRight, Clock, Home, Images, MessageCircle, ShieldCheck } from 'lucide-react'
+import { useState } from 'react'
 import { PriceText } from '../../components/price-text'
+import { ApiError } from '../../lib/api-client'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
+import { currentHref } from '../../lib/redirect'
+import { useAuth } from '../auth/auth-provider'
+import { describeCreateConversationFailure } from '../chat/api'
+import { useCreateConversation } from '../chat/queries'
+import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
 import { useListingDetail } from './queries'
 
@@ -19,7 +27,31 @@ const STATUS_LABEL: Record<ListingStatus, string | null> = {
 }
 
 export function ListingDetailPage({ listingId }: { listingId: string }) {
+  const { me, isInitializing } = useAuth()
+  const navigate = useNavigate()
   const detail = useListingDetail(listingId)
+  const createConversation = useCreateConversation(me?.id ?? null)
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [chatUnavailable, setChatUnavailable] = useState(false)
+
+  function handleChat() {
+    setChatError(null)
+    createConversation.mutate(listingId, {
+      onSuccess: (conversation) => {
+        void navigate({
+          to: '/messages/$conversationId',
+          params: { conversationId: conversation.id },
+        })
+      },
+      onError: (error) => {
+        if (error instanceof ApiError && error.code === 'CANNOT_CHAT_WITH_SELF') {
+          setChatUnavailable(true)
+          return
+        }
+        setChatError(describeCreateConversationFailure(error))
+      },
+    })
+  }
 
   if (detail.isPending) return <LoadingState label="正在加载商品详情…" />
 
@@ -84,6 +116,8 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               {item.description}
             </p>
           </Card>
+
+          <CommentsSection listingId={item.id} />
         </div>
 
         <aside className="sticky top-24 space-y-4">
@@ -152,6 +186,35 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               <p className="mt-5 rounded-xl bg-brand-soft px-3 py-2.5 text-brand text-sm">
                 这是你发布的商品
               </p>
+            ) : null}
+
+            {!item.isOwner && item.status === 'ACTIVE' && !chatUnavailable ? (
+              isInitializing ? (
+                <Button className="mt-5 w-full" disabled type="button">
+                  正在恢复登录状态…
+                </Button>
+              ) : me === null ? (
+                <Button asChild className="mt-5 w-full">
+                  <Link search={{ redirect: currentHref() }} to="/login">
+                    <MessageCircle className="size-4" />
+                    登录后聊一聊
+                  </Link>
+                </Button>
+              ) : (
+                <Button
+                  className="mt-5 w-full"
+                  disabled={createConversation.isPending}
+                  onClick={handleChat}
+                  type="button"
+                >
+                  <MessageCircle className="size-4" />
+                  {createConversation.isPending ? '正在建立会话…' : '聊一聊'}
+                </Button>
+              )
+            ) : null}
+            {chatError !== null ? <p className="mt-3 text-danger text-xs">{chatError}</p> : null}
+            {!item.isOwner && item.status !== 'ACTIVE' ? (
+              <p className="mt-5 text-ink-3 text-xs">商品当前不可发起新会话</p>
             ) : null}
           </Card>
         </aside>
