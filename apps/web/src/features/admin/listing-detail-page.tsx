@@ -1,11 +1,12 @@
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useParams, useSearch } from '@tanstack/react-router'
 import { ChevronLeft } from 'lucide-react'
 import { formatPrice } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
 import { AUDIT_ACTION_LABEL, formatDateTime, LISTING_STATUS_LABEL, statusLabel } from './display'
+import { GovernancePanel } from './governance-panel'
 import { useAdminListing } from './queries'
 
 /**
@@ -14,6 +15,7 @@ import { useAdminListing } from './queries'
  */
 export function ListingDetailPage() {
   const { listingId } = useParams({ from: '/admin/listings/$listingId' })
+  const { sourceReportId } = useSearch({ from: '/admin/listings/$listingId' })
   const detail = useAdminListing(listingId)
 
   if (detail.isPending) return <LoadingState label="正在加载商品详情…" />
@@ -78,11 +80,63 @@ export function ListingDetailPage() {
         <Link
           className="mt-1 inline-block text-sm text-brand"
           params={{ userId: listing.seller.id }}
+          search={{ sourceReportId }}
           to="/admin/users/$userId"
         >
           查看卖家详情
         </Link>
       </Card>
+
+      {/* 交易查询入口（#73 PR4）：交易页的 listingId 是 URL-only 参数，这里正是来源。 */}
+      <Card className="p-4">
+        <h2 className="mb-2 font-semibold text-[15px]">交易</h2>
+        <Link
+          className="text-sm text-brand hover:underline"
+          search={{ listingId: listing.id }}
+          to="/admin/transactions"
+        >
+          查看该商品的交易
+        </Link>
+      </Card>
+
+      {/* 治理（#73 PR3）：下架 / 恢复。按钮集合随当前状态收敛——已下架的商品只给
+          「恢复」，避免后端必然 409 的死路；交易中 / 已售出的商品不给动作，
+          因为后端的条件更新会拒绝，这里提前收起来。恢复的目标状态由后端从
+          delist 审计快照取，这里不提供选择器（避免把 RESERVED 恢复成 ACTIVE）。
+
+          「恢复」只看 `governanceDelistedAt`（评审 M3）：OFFLINE + 没有治理下架标记
+          的商品是**审核引擎**屏蔽的，恢复路径是人工审核 / 卖家重新送审，治理端点会
+         拒绝它。这里如果只看 `status === 'OFFLINE'`，按钮点下去就是必然的 409。 */}
+      <GovernancePanel
+        actions={
+          listing.governanceDelistedAt
+            ? [
+                {
+                  action: 'restore-listing',
+                  label: '恢复上架',
+                  description: '恢复到被下架前的状态（由下架审计快照决定）',
+                },
+              ]
+            : listing.status === 'ACTIVE' && listing.moderationStatus !== 'BLOCKED'
+              ? [
+                  {
+                    action: 'delist-listing',
+                    label: '下架商品',
+                    tone: 'danger',
+                    description: '商品转为已下架，卖家无法自行修改或上架',
+                  },
+                ]
+              : []
+        }
+        targetId={listing.id}
+        sourceReportId={sourceReportId}
+      />
+
+      {listing.status === 'ACTIVE' && listing.moderationStatus === 'BLOCKED' ? (
+        <Card className="p-4 text-sm text-ink-3">
+          该商品已被审核引擎屏蔽，恢复路径是人工审核或卖家修改后重新送审，不在治理动作范围内。
+        </Card>
+      ) : null}
 
       <Card className="p-4">
         <h2 className="mb-3 font-semibold text-[15px]">关联 Admin 操作日志</h2>
