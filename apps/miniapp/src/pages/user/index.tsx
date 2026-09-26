@@ -146,7 +146,8 @@ export default function UserHome() {
    * 给 `.uhome__topbg` 行内定高用 —— 定色带必须正好铺到导航条下沿，
    * 写死样式表数值会在大状态栏机型上让接缝错位。
    */
-  const navTotalHeight = useMemo(() => readNavMetrics().totalHeight, [])
+  const navMetrics = useMemo(() => readNavMetrics(), [])
+  const navTotalHeight = navMetrics.totalHeight
   /**
    * 身份区顶到导航条以下的距离，**设备 px**（行内 px 不经 pxtransform，见 `nav-metrics.ts`）。
    *
@@ -380,6 +381,20 @@ export default function UserHome() {
   }, [measureIdentity, profile, loadState, signOpen, signatureText])
 
   /**
+   * 顶栏举报钮与微信胶囊的间距：`.navfloat` 容器自带 32rpx（16pt）右内边距，
+   * 这里在它之上再让出 capsuleInset 与那段内边距的差值，按钮右缘正好贴着胶囊左边
+   * （「隔壁」）。都在设备 px 口径（32rpx 按屏宽折算，见 nav-metrics.ts 的换算规则）。
+   */
+  const navReportGap = useMemo(() => {
+    try {
+      const w = Taro.getWindowInfo().windowWidth
+      return Math.max(navMetrics.capsuleInset - (32 * w) / 750, 8)
+    } catch {
+      return navMetrics.capsuleInset
+    }
+  }, [navMetrics])
+
+  /**
    * #252：进「举报用户」页。对象三项由 query 带入、页内不可改（公开资料子集：
    * 头像 + 昵称，不带教育邮箱 / 手机号 / 校区 —— #86 边界）。`id` 是**当前契约的
    * uuid**（页面目前不消费该参数，POST /reports 接线时启用）：Report 契约
@@ -396,6 +411,18 @@ export default function UserHome() {
       .join('&')
     void Taro.navigateTo({ url: `/pages/report-user/index?${query}` })
   }
+
+  /** 顶栏举报钮（Owner 拍板：贴微信胶囊放）。仅非本人主页渲染，见 isSelf。 */
+  const navReportAction =
+    profile && !isSelf ? (
+      <View
+        className={`uhome__navreport${glassOn ? ' is-glass' : ''}`}
+        style={{ marginRight: `${navReportGap}px` }}
+        onClick={goReport}
+      >
+        <Image className="uhome__navreport-ic" src={ICONS.shieldLine} mode="aspectFit" />
+      </View>
+    ) : null
 
   /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染） */
   const navTitle = profile ? (
@@ -418,7 +445,12 @@ export default function UserHome() {
           大状态栏机型上让玻璃底最后一段透出页面底色。 */}
       <View className="uhome__topbg" style={{ height: `${navTotalHeight}px` }} />
 
-      <NavBar glass={glassOn} titleAlign="center" title={titled ? navTitle : null} />
+      <NavBar
+        glass={glassOn}
+        titleAlign="center"
+        title={titled ? navTitle : null}
+        actions={navReportAction}
+      />
 
       {loadState === 'failed' ? (
         <LoadError title="主页加载失败" onRetry={() => void load()} />
@@ -649,14 +681,6 @@ export default function UserHome() {
                 <View className="uhome__list-end-line" />
                 <Text className="uhome__list-end-txt num">{`仅显示最近 ${items.length} 件`}</Text>
                 <View className="uhome__list-end-line" />
-              </View>
-            ) : null}
-
-            {/* #252：站内举报用户入口。弱化为居中小字（低频治理动作），压在列表终点之后，
-                不与在售商品抢注意力；对象由 query 带入，页内不可改。 */}
-            {!isSelf ? (
-              <View className="uhome__report" onClick={goReport}>
-                <Text>举报用户</Text>
               </View>
             ) : null}
           </View>
