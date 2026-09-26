@@ -3,11 +3,12 @@ import Taro, { useRouter } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
-import { DEMO_SUBMITTED_USER_ID, findDemoReport, rememberDemoReport } from '@/features/reports/demo'
+import { DEMO_SUBMITTED_USER_ID, rememberDemoReport } from '@/features/reports/demo'
 import {
   bannerCopy,
   REPORT_DESC_DEFAULT_HINT,
@@ -16,6 +17,7 @@ import {
   reasonLabel,
   reasonsOf,
 } from '@/features/reports/meta'
+import { resolveReportView, unavailableCopy } from '@/features/reports/view'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
@@ -28,13 +30,18 @@ import './index.scss'
  * 两张独立页面：各自持有对象形态、原因胶囊与文案，互不跳转。两页只共用
  * `features/reports` 里的枚举 / 状态 / 文案常量（#252 冻结的那部分），页面结构互不复用。
  *
- * ## 同一页面的两种形态（入口 query 决定，页内不切换）
+ * ## 同一页面的三种形态（入口 query 决定，页内不切换）
  *
  * - **新建**：他人主页带 `id / nickname / avatar` 进入。对象卡固定不可改；
  *   公开资料子集只带头像与昵称（#86 边界：不带教育邮箱 / 手机号 / 校区）。
  * - **只读**：「我的举报」点用户卡带 `reportId` 进入 —— 按该条记录的状态渲染
  *   审核中 / 已处理 / 已驳回横幅 + 内容卡（编号可复制，给客服对账用）。
- *   `reportId` 对不上演示数据时退回新建态，不渲染半张详情卡。
+ * - **打不开**：带 `reportId` 但取不到记录（真实构建没有读取端点 / 演示数据里没这条）。
+ *   **不退回新建态** —— 那会让「打开一条记录」静默变成「凭空举报一个没有对象的用户」；
+ *   由 `features/reports/view` 的 `resolveReportView` 判定，页面对应地说明原因。
+ *
+ * 只读记录的查询**只可能在演示构建发生**：样例数据是打包进产物的，真实构建下拿它当
+ * 正式记录渲染，等于给用户看一条带「已处理 / 已驳回」的虚构处理结果（#261 复查 P2）。
  *
  * ## 没有后端时的口径（与 `pages/report-listing` 相同）
  *
@@ -59,9 +66,10 @@ export default function ReportUser() {
   /** 路由参数读一次：两种入口都靠 query 定形态，页内不切换（跳转都是重新开页） */
   const { params } = useRouter()
   const reportId = params.reportId ?? null
-  /** 只读态的记录来自演示数据 */
-  const viewRecord = reportId !== null ? findDemoReport(reportId) : null
-  const mode: 'fill' | 'view' = reportId !== null && viewRecord !== null ? 'view' : 'fill'
+  /** 形态判定：见 `features/reports/view`（真实构建不查样例数据、记录目标类型要对得上） */
+  const view = resolveReportView({ reportId, target: 'USER', demoEnabled: DEMO_MODE })
+  const viewRecord = view.record
+  const mode = view.mode
 
   /** 新建态的举报对象（对方主页带入，页内不可改） */
   const target = {
@@ -138,7 +146,7 @@ export default function ReportUser() {
   const navTitle = (
     <Text>
       举报
-      <Text className="rpu__navem">{mode === 'view' ? '详情' : '用户'}</Text>
+      <Text className="rpu__navem">{mode === 'fill' ? '用户' : '详情'}</Text>
     </Text>
   )
 
@@ -243,6 +251,22 @@ export default function ReportUser() {
             <Text className="rpu__demonote">演示记录：来自演示构建的样例数据。</Text>
           ) : null}
 
+          <View className="rpu__acts">
+            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+              <Text>返回「我的举报」</Text>
+            </View>
+          </View>
+        </View>
+      ) : mode === 'unavailable' ? (
+        /* ═══ 打不开：带 reportId 却取不到记录（见文件头「三种形态」） ═══ */
+        <View className="rpu__content">
+          <View className="rpu__emptypad">
+            <EmptyState
+              title={unavailableCopy(DEMO_MODE).title}
+              text={unavailableCopy(DEMO_MODE).text}
+              icon={ICONS.shieldLine}
+            />
+          </View>
           <View className="rpu__acts">
             <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
               <Text>返回「我的举报」</Text>
