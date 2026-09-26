@@ -1,7 +1,13 @@
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import { useQuery } from '@tanstack/react-query'
 import { meta } from '../../lib/mock/store'
-import { fetchCategoryListings, fetchFeed, fetchFreeListings, searchListings } from '../listing/api'
+import {
+  fetchCategoryListings,
+  fetchFeed,
+  fetchFreeListings,
+  findListingByNumber,
+  searchListings,
+} from '../listing/api'
 
 /**
  * #4 的数据入口。Feed / 分类 / 搜索全部走真实 Listing API（#41，#6 契约）。
@@ -20,6 +26,15 @@ export function useCategoryListings(category: ListingCategory | null) {
     queryFn: () => (category ? fetchCategoryListings(category) : Promise.resolve([])),
     staleTime: 30_000,
     enabled: category !== null,
+  })
+}
+
+export function useListingNumberLookup(listingNo: string) {
+  return useQuery({
+    queryKey: ['listing-number', listingNo],
+    queryFn: () => findListingByNumber(listingNo),
+    enabled: listingNo.length > 0,
+    retry: false,
   })
 }
 
