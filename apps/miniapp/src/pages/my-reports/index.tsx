@@ -9,7 +9,7 @@ import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import type { ReportRecord } from '@/features/reports/demo'
-import { loadMyReports } from '@/features/reports/load'
+import { DEMO_REPORTS_ENABLED, loadMyReports } from '@/features/reports/load'
 import {
   emptyCopyOf,
   REPORT_STATUS_META,
@@ -65,9 +65,14 @@ export default function MyReports() {
   const userId = user?.id ?? null
 
   const [items, setItems] = useState<ReportRecord[]>([])
-  const [demo, setDemo] = useState(false)
+  /**
+   * loading / demo 的初值按**构建判据**而不是恒 true（favorites 同款）：
+   * 真实构建没有在途请求，恒 true 会先闪一帧骨架再落缺口空态；演示构建让副行
+   * Tab 从首帧就在位，数据 120ms 后到时不跳布局。
+   */
+  const [demo, setDemo] = useState(DEMO_REPORTS_ENABLED)
   const [failed, setFailed] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(DEMO_REPORTS_ENABLED)
   const [target, setTarget] = useState<ReportTarget>('LISTING')
 
   /**
@@ -80,9 +85,9 @@ export default function MyReports() {
     setPrevUserId(userId)
     loadEpoch.current += 1
     setItems([])
-    setDemo(false)
+    setDemo(DEMO_REPORTS_ENABLED)
     setFailed(false)
-    setLoading(true)
+    setLoading(DEMO_REPORTS_ENABLED)
     setTarget('LISTING')
   }
 
