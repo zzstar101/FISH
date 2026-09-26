@@ -13,10 +13,12 @@
   "scripts": {
     "dev": "bun run --filter '@fish/*' dev",
     "dev:web": "bun run --filter '@fish/web' dev",
+    "dev:web-pc": "bun run --filter '@fish/web-pc' dev",
     "dev:api": "bun run --filter '@fish/api' dev",
     "dev:worker": "bun run --filter '@fish/worker' dev",
     "dev:miniapp": "bun run --filter '@fish/miniapp' dev:weapp",
     "build": "bun run --filter '@fish/*' build",
+    "build:web-pc": "bun run --filter '@fish/web-pc' build",
     "build:miniapp": "bun run --filter '@fish/miniapp' build:weapp",
     "typecheck": "bun run --filter '@fish/*' typecheck",
     "lint": "biome check .",
