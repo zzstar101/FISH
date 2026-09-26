@@ -442,6 +442,15 @@ export default function Profile() {
       icon: ICONS.settingsMuted,
       url: '/pages/settings/index',
     },
+    // #252：站内举报的「我的侧」出口（提交入口在商品详情 / 他人主页）。
+    // 真实构建下是缺口空态（举报后端未上线），见 pages/my-reports 的文件头。
+    {
+      key: 'reports',
+      title: '我的举报',
+      sub: '举报记录与处理进度',
+      icon: ICONS.shieldLine,
+      url: '/pages/my-reports/index',
+    },
     { key: 'feedback', title: '意见反馈', sub: '提交建议与问题反馈', icon: ICONS.feedbackMuted },
     { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.serviceMuted },
     { key: 'about', title: '关于与版本', sub: '版本信息与用户协议', icon: ICONS.infoMuted },
