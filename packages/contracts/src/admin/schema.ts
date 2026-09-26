@@ -7,7 +7,12 @@ import {
 import { ModerationDecisionSchema, ModerationStatusSchema } from '@fish/contracts/moderation/schema'
 import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
-import { ListingIdSchema, TransactionIdSchema, UserIdSchema } from '../system/public-id'
+import {
+  ListingIdSchema,
+  ModerationRecordIdSchema,
+  TransactionIdSchema,
+  UserIdSchema,
+} from '../system/public-id'
 
 /**
  * Admin Domain Contract（Issue #73）。
@@ -341,9 +346,9 @@ export type AdminAuditLogPage = z.infer<typeof AdminAuditLogPageSchema>
 // ---------------------------------------------------------------------------
 
 export const AdminModerationRecordSchema = z.object({
-  id: z.uuid(),
-  listingId: z.uuid().nullable(),
-  sellerId: z.uuid(),
+  id: ModerationRecordIdSchema,
+  listingId: ListingIdSchema.nullable(),
+  sellerId: UserIdSchema,
   action: z.string().min(1),
   titleSnapshot: z.string(),
   descriptionSnapshot: z.string(),
@@ -358,7 +363,7 @@ export type AdminModerationRecord = z.infer<typeof AdminModerationRecordSchema>
 export const AdminModerationQueueItemSchema = z.object({
   record: AdminModerationRecordSchema,
   listing: z.object({
-    id: z.uuid(),
+    id: ListingIdSchema,
     title: z.string(),
     description: z.string(),
     status: ListingStatusSchema,
@@ -366,7 +371,7 @@ export const AdminModerationQueueItemSchema = z.object({
     moderationReason: z.string().nullable(),
     createdAt: z.iso.datetime(),
   }),
-  seller: z.object({ id: z.uuid(), nickname: z.string() }),
+  seller: z.object({ id: UserIdSchema, nickname: z.string() }),
 })
 export type AdminModerationQueueItem = z.infer<typeof AdminModerationQueueItemSchema>
 
@@ -384,7 +389,7 @@ export const AdminModerationDetailSchema = z.object({
     .object({
       decision: z.enum(['ALLOW', 'BLOCK']),
       reason: z.string(),
-      actor: z.object({ id: z.uuid(), nickname: z.string() }).nullable(),
+      actor: z.object({ id: UserIdSchema, nickname: z.string() }).nullable(),
       decidedAt: z.iso.datetime(),
     })
     .nullable(),
@@ -501,7 +506,7 @@ export const AdminModerationQueueQuerySchema = z.strictObject({
 export const AdminModerationRecordsQuerySchema = z.strictObject({
   /** 机器 / 人工判定。`REVIEW` 会同时列出机器判 REVIEW 与已被人工决定的记录。 */
   decision: ModerationDecisionSchema.optional(),
-  listingId: z.uuid().optional(),
+  listingId: ListingIdSchema.optional(),
   /**
    * 商品关键词搜索（ILIKE，`%_\` 转义）。检索的是 listings 表的**当前** title /
    * description，不是记录上的快照——快照是当时内容，按现标题找不到对应行。同

@@ -73,7 +73,9 @@ function requireTargetId(c: Context, name: string): string {
       ? PUBLIC_ID_PREFIX.listing
       : name === 'userId'
         ? PUBLIC_ID_PREFIX.user
-        : null
+        : name === 'recordId'
+          ? PUBLIC_ID_PREFIX.moderationRecord
+          : null
   if (prefix && isPublicId(prefix, raw)) return decodePublicId(prefix, raw)
   const parsed = AdminTargetIdSchema.safeParse(raw)
   if (!parsed.success) throw new AdminError('ADMIN_NOT_FOUND', 404, '目标不存在')
@@ -233,7 +235,15 @@ export function createAdminRouter(options: AdminRouterOptions) {
     const parsed = AdminModerationRecordsQuerySchema.safeParse(c.req.query())
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
     try {
-      return c.json(await service.listModerationRecords(parsed.data), 200)
+      return c.json(
+        await service.listModerationRecords({
+          ...parsed.data,
+          listingId: parsed.data.listingId
+            ? decodePublicId(PUBLIC_ID_PREFIX.listing, parsed.data.listingId)
+            : undefined,
+        }),
+        200,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }

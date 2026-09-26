@@ -381,7 +381,16 @@ describe('Admin 查询端到端', () => {
     expect(moderation.status).toBe(200)
     const moderationBody = AdminModerationQueueSchema.parse(await moderation.json())
     expect(moderationBody.items).toHaveLength(1)
-    expect(moderationBody.items[0]?.record.id).toBe(REVIEW_RECORD_ID)
+    expect(moderationBody.items[0]?.record.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, REVIEW_RECORD_ID),
+    )
+    expect(moderationBody.items[0]?.record.listingId).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.listing, REVIEW_LISTING_ID),
+    )
+    expect(moderationBody.items[0]?.record.sellerId).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID),
+    )
+    expect(moderationBody.items[0]?.seller.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     expect(moderationBody.items[0]?.record.titleSnapshot).toBe('待人工审核商品')
 
     const transaction = await app.request(ADMIN_ROUTES.transactions, {
@@ -469,7 +478,8 @@ describe('Admin 查询端到端', () => {
   })
 
   test('moderation detail and decision update the listing and audit atomically', async () => {
-    const detail = await app.request(ADMIN_ROUTES.moderationDetail(REVIEW_RECORD_ID), {
+    const recordId = encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, REVIEW_RECORD_ID)
+    const detail = await app.request(ADMIN_ROUTES.moderationDetail(recordId), {
       headers: { cookie: adminCookie },
     })
     expect(detail.status).toBe(200)
@@ -477,7 +487,7 @@ describe('Admin 查询端到端', () => {
     expect(detailBody.machineDecision).toBe('REVIEW')
     expect(detailBody.humanDecision).toBeNull()
 
-    const decided = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
+    const decided = await app.request(ADMIN_ROUTES.moderationDecision(recordId), {
       method: 'POST',
       headers: {
         cookie: adminCookie,
@@ -728,6 +738,28 @@ describe('Admin 查询端到端', () => {
     expect(await badCursor.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
   })
 
+  test('审核记录按 lst_ 商品筛选，裸 UUID 与错误前缀在入库前拒绝', async () => {
+    const publicListingId = encodePublicId(PUBLIC_ID_PREFIX.listing, REVIEW_LISTING_ID)
+    const matching = await app.request(
+      `${ADMIN_ROUTES.moderationRecords}?listingId=${publicListingId}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(matching.status).toBe(200)
+    const page = AdminModerationRecordsSchema.parse(await matching.json())
+    expect(page.items.length).toBeGreaterThan(0)
+    expect(page.items.every((item) => item.record.listingId === publicListingId)).toBe(true)
+
+    for (const id of [
+      REVIEW_LISTING_ID,
+      encodePublicId(PUBLIC_ID_PREFIX.user, REVIEW_LISTING_ID),
+    ]) {
+      const invalid = await app.request(`${ADMIN_ROUTES.moderationRecords}?listingId=${id}`, {
+        headers: { cookie: adminCookie },
+      })
+      expect(invalid.status).toBe(422)
+    }
+  })
+
   test('审核记录历史保留已删除商品的快照，listing 明确为 null', async () => {
     const listingId = newId()
     const recordId = newId()
@@ -761,7 +793,9 @@ describe('Admin 查询端到端', () => {
     })
     expect(response.status).toBe(200)
     const page = AdminModerationRecordsSchema.parse(await response.json())
-    const historical = page.items.find((item) => item.record.id === recordId)
+    const historical = page.items.find(
+      (item) => item.record.id === encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, recordId),
+    )
     expect(historical?.record).toMatchObject({ listingId: null, titleSnapshot: '已删除的历史商品' })
     expect(historical?.listing).toBeNull()
   })
@@ -815,8 +849,11 @@ describe('Admin 查询端到端', () => {
     })
     expect(response.status).toBe(200)
     const body = AdminModerationDetailSchema.parse(await response.json())
-    expect(body.item.record.id).toBe(rootId)
+    expect(body.item.record.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, rootId))
     expect(body.humanDecision?.decision).toBe('ALLOW')
+    expect(body.humanDecision?.actor?.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_TARGET_ID),
+    )
     const [audit] = await scratch
       .select()
       .from(adminAuditLogs)
