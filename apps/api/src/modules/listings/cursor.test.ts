@@ -1,14 +1,22 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from './cursor'
 
-// 真实的 UUIDv7（契约里 id 是 z.uuid()，且它最终会绑到 listings.id 这一 uuid 列上）
+// 真实的 UUIDv7；内部查询仍绑定到 listings.id 这一 uuid 列。
 const ID = '01930000-0000-7000-8000-000000000011'
+const PUBLIC_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, ID)
+const rawCursor = (id: string) =>
+  Buffer.from(JSON.stringify({ sortKey: 1, id })).toString('base64url')
 
 describe('cursor', () => {
   // newest 的 sortKey 是**微秒精度**的文本：用 Date.toISOString() 只会保留毫秒，
   // 同一毫秒内的行会在翻页时被跳过（见 store.test.ts 的回归用例）。
   test('round-trips a microsecond timestamp cursor', () => {
     const encoded = encodeCursor({ sortKey: '2026-09-12T03:40:10.123456Z', id: ID })
+    expect(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))).toEqual({
+      sortKey: '2026-09-12T03:40:10.123456Z',
+      id: PUBLIC_ID,
+    })
     expect(decodeCursor(encoded)).toEqual({ sortKey: '2026-09-12T03:40:10.123456Z', id: ID })
   })
 
@@ -46,11 +54,10 @@ describe('cursor', () => {
     expect(decodeCursor(encodeCursor({ sortKey: '2026-09-12T03:40:10Z', id: ID }))).toBeNull()
   })
 
-  // 非 UUID 的 id 会被绑到 listings.id（uuid 列）→ PostgreSQL 报类型错误 → 500；
-  // 契约要求这种情况是 422（§2.1「非法 cursor → 422」），所以必须在解码阶段拒掉。
-  test('rejects a non-UUID id before it can reach the uuid column', () => {
-    expect(decodeCursor(encodeCursor({ sortKey: 1, id: 'listing-1' }))).toBeNull()
-    expect(decodeCursor(encodeCursor({ sortKey: 1, id: '1' }))).toBeNull()
-    expect(decodeCursor(encodeCursor({ sortKey: 1, id: `${ID}x` }))).toBeNull()
+  test('rejects bare UUID, wrong prefix and malformed public IDs before the DB lookup', () => {
+    expect(decodeCursor(rawCursor(ID))).toBeNull()
+    expect(decodeCursor(rawCursor(encodePublicId(PUBLIC_ID_PREFIX.user, ID)))).toBeNull()
+    expect(decodeCursor(rawCursor(`${PUBLIC_ID}x`))).toBeNull()
+    expect(decodeCursor(rawCursor('listing-1'))).toBeNull()
   })
 })

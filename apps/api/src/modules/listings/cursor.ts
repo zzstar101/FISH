@@ -11,7 +11,13 @@
  * 解码失败一律返回 `null`（路由层报 422），不做"宽容解析"：一个伪造或截断的游标如果被
  * 当成合法起点，用户会看到静默错乱的列表，比直接报错难查得多。
  */
-import { ListingCursorTimestampSchema, ListingIdSchema } from '@fish/contracts/listings/schema'
+import { ListingCursorTimestampSchema } from '@fish/contracts/listings/schema'
+import {
+  decodePublicId,
+  encodePublicId,
+  isPublicId,
+  PUBLIC_ID_PREFIX,
+} from '@fish/shared/public-id'
 
 export type FeedCursor = { sortKey: string | number; id: string }
 
@@ -31,7 +37,10 @@ export function isCursorTimestamp(value: string): boolean {
 }
 
 export function encodeCursor(cursor: FeedCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+  return Buffer.from(
+    JSON.stringify({ ...cursor, id: encodePublicId(PUBLIC_ID_PREFIX.listing, cursor.id) }),
+    'utf8',
+  ).toString('base64url')
 }
 
 export function decodeCursor(raw: string): FeedCursor | null {
@@ -45,9 +54,9 @@ export function decodeCursor(raw: string): FeedCursor | null {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
 
   const { sortKey, id } = parsed as Record<string, unknown>
-  // id 会被绑到 `listings.id`（uuid 列）：非 UUID 会变成 SQL 类型错误 → 500，
-  // 而契约要求这种情况是 422（§2.1"非法 cursor → 422"）。
-  if (typeof id !== 'string' || !ListingIdSchema.safeParse(id).success) return null
+  // Public cursor contains only lst_ IDs. Reject bare UUID and wrong prefixes before
+  // decoding for the store's UUID column (invalid cursors must return 422, not SQL 500).
+  if (!isPublicId(PUBLIC_ID_PREFIX.listing, id)) return null
   if (typeof sortKey !== 'string' && typeof sortKey !== 'number') return null
   // 字符串型 sortKey 只有一种合法来源：`newest` 排序的微秒时间戳（价格游标是数字）。
   // 在这里（而不是只在上层）校验值域，是为了让"字符串形状"本身就蕴含"可被 ::timestamptz 解析"。
@@ -55,5 +64,5 @@ export function decodeCursor(raw: string): FeedCursor | null {
   // NaN / Infinity 无法与 SQL 参数比较，必须在入口挡掉
   if (typeof sortKey === 'number' && !Number.isFinite(sortKey)) return null
 
-  return { sortKey, id }
+  return { sortKey, id: decodePublicId(PUBLIC_ID_PREFIX.listing, id) }
 }
