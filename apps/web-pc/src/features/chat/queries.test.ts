@@ -11,6 +11,8 @@ import {
   chatKeys,
   flattenMessagePages,
   isMessageRead,
+  mergeMessagesIntoCache,
+  updateConversationPage,
   upsertMessagePage,
 } from './queries'
 
@@ -75,12 +77,53 @@ describe('message cache', () => {
     expect(next?.pages[0]?.items.map((item) => item.id)).toEqual(['m1', 'm2'])
   })
 
+  test('returns the same cache object when the message is already identical', () => {
+    const existing = message('m1', '2026-01-01T00:00:00.000Z')
+    const data = messageData([existing])
+
+    expect(upsertMessagePage(data, existing)).toBe(data)
+  })
+
+  test('re-merges live messages after a pagination write', () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(
+      chatKeys.messages('me', 'conversation-1'),
+      messageData([message('m1', '2026-01-01T00:00:00.000Z')]),
+    )
+
+    mergeMessagesIntoCache(queryClient, 'me', 'conversation-1', [
+      message('m2', '2026-01-01T00:00:02.000Z'),
+    ])
+
+    expect(
+      queryClient
+        .getQueryData<{ pages: MessageListResponse[] }>(chatKeys.messages('me', 'conversation-1'))
+        ?.pages[0]?.items.map((item) => item.id),
+    ).toEqual(['m1', 'm2'])
+  })
+
   test('flattens older pages before the newest page', () => {
     const older = { items: [message('m1', '2026-01-01T00:00:00.000Z')], nextCursor: 'm1' }
     const newest = { items: [message('m2', '2026-01-01T00:00:01.000Z')], nextCursor: null }
     const data = { pages: [newest, older], pageParams: [null, 'm1'] }
 
     expect(flattenMessagePages(data).map((item) => item.id)).toEqual(['m1', 'm2'])
+  })
+})
+
+describe('conversation list cache', () => {
+  test('updates an existing row but never inserts a missing conversation', () => {
+    const existing = conversation(null)
+    const data = {
+      pages: [{ items: [existing], nextCursor: null }],
+      pageParams: [null],
+    }
+    const updated = { ...existing, unreadCount: 0 }
+    const next = updateConversationPage(data, updated)
+    expect(next?.pages[0]?.items[0]?.unreadCount).toBe(0)
+
+    const missing = { ...existing, id: 'conversation-2' }
+    expect(updateConversationPage(data, missing)).toBe(data)
   })
 })
 

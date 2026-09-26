@@ -112,6 +112,17 @@ export function compareMessages(a: MessageDto, b: MessageDto): number {
  * 服务端按升序返回，第一页是最新页；新消息只可能进入第一页。若该 id 已存在
  * （重试命中、实时推送与 HTTP 响应同时到达）则原位替换，不重复插入。
  */
+function sameMessage(a: MessageDto, b: MessageDto): boolean {
+  return (
+    a.id === b.id &&
+    a.conversationId === b.conversationId &&
+    a.senderId === b.senderId &&
+    a.type === b.type &&
+    a.content === b.content &&
+    a.createdAt === b.createdAt
+  )
+}
+
 export function upsertMessagePage<TPageParam>(
   data: InfiniteData<MessageListResponse, TPageParam> | undefined,
   message: MessageDto,
@@ -119,15 +130,22 @@ export function upsertMessagePage<TPageParam>(
   if (!data || data.pages.length === 0) return data
 
   let replaced = false
+  let identical = false
   const pages = data.pages.map((page) => {
     const index = page.items.findIndex((item) => item.id === message.id)
     if (index < 0) return page
+    const existing = page.items[index]
+    if (existing && sameMessage(existing, message)) {
+      identical = true
+      return page
+    }
     replaced = true
     const items = [...page.items]
     items[index] = message
     return { ...page, items }
   })
   if (replaced) return { ...data, pages }
+  if (identical) return data
 
   const newest = pages[0]
   if (!newest) return data
@@ -144,6 +162,26 @@ export function insertMessageIntoCache(
   queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
     chatKeys.messages(ownerId, conversationId),
     (data) => upsertMessagePage(data, message),
+  )
+}
+
+/**
+ * 把一批本地实时 / 发送消息重新合进缓存。
+ *
+ * 用途：TanStack infinite query 在分页请求完成时会用发起时的旧页整体写回，
+ * 期间通过 `insertMessageIntoCache` 写入的新消息可能被覆盖。页面在
+ * `isFetching` 落回 false 后再 merge 一次，保证实时消息不丢。
+ */
+export function mergeMessagesIntoCache(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversationId: string,
+  messages: MessageDto[],
+): void {
+  if (messages.length === 0) return
+  queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
+    chatKeys.messages(ownerId, conversationId),
+    (data) => messages.reduce((current, message) => upsertMessagePage(current, message), data),
   )
 }
 
@@ -168,11 +206,17 @@ export function updateConversationCaches(
   queryClient.setQueryData(chatKeys.conversation(ownerId, conversation.id), conversation)
   queryClient.setQueryData<InfiniteData<ConversationListResponse, string | null>>(
     chatKeys.conversations(ownerId),
-    (data) => upsertConversationPage(data, conversation),
+    (data) => updateConversationPage(data, conversation),
   )
 }
 
-export function upsertConversationPage(
+/**
+ * 只更新已在列表页里的会话行。
+ *
+ * 服务端按 `lastMessageAt` 排序；本地找不到时不能凭一次 read/事件把它插到头部，
+ * 否则会破坏服务端顺序。新会话由列表失效后的服务端响应补齐。
+ */
+export function updateConversationPage(
   data: InfiniteData<ConversationListResponse, string | null> | undefined,
   conversation: ConversationDto,
 ): InfiniteData<ConversationListResponse, string | null> | undefined {
@@ -187,14 +231,7 @@ export function upsertConversationPage(
     items[index] = conversation
     return { ...page, items }
   })
-  if (found) return { ...data, pages }
-
-  const first = pages[0]
-  if (!first) return data
-  return {
-    ...data,
-    pages: [{ ...first, items: [conversation, ...first.items] }, ...pages.slice(1)],
-  }
+  return found ? { ...data, pages } : data
 }
 
 /** 对方读位推进事件：只有 readerId !== me 才更新自己的「已读」判据。 */

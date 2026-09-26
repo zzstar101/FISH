@@ -24,7 +24,7 @@ export type ChatRealtimeOptions = {
   url?: string
   createSocket?: (url: string) => RealtimeSocket
   onEvent: (event: RealtimeServerEvent) => void
-  onReconnect?: () => void
+  onOpen?: () => void
   onStatusChange?: (status: ChatRealtimeStatus) => void
   heartbeatIntervalMs?: number
   heartbeatTimeoutMs?: number
@@ -125,12 +125,11 @@ export class ChatRealtime {
   private handleOpen(socket: RealtimeSocket): void {
     if (this.socket !== socket || this.stopped) return
 
-    const reconnected = this.hasOpened
     this.hasOpened = true
     this.reconnectAttempt = 0
     this.setStatus('open')
     this.startHeartbeat()
-    if (reconnected) this.options.onReconnect?.()
+    this.options.onOpen?.()
   }
 
   private handleMessage(raw: unknown): void {
@@ -221,7 +220,7 @@ export class ChatRealtime {
 
 export type ChatRealtimeHandlers = {
   onEvent: (event: RealtimeServerEvent) => void
-  onReconnect?: () => void
+  onOpen?: () => void
   onStatusChange?: (status: ChatRealtimeStatus) => void
 }
 
@@ -245,7 +244,7 @@ export function useChatRealtime(
 
     const realtime = new ChatRealtime({
       onEvent: (event) => handlersRef.current.onEvent(event),
-      onReconnect: () => handlersRef.current.onReconnect?.(),
+      onOpen: () => handlersRef.current.onOpen?.(),
       onStatusChange: (next) => {
         setStatus(next)
         handlersRef.current.onStatusChange?.(next)

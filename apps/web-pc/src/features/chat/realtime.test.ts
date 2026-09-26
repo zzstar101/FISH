@@ -124,7 +124,7 @@ describe('ChatRealtime', () => {
       clearInterval: () => {},
     }
     const sockets: FakeSocket[] = []
-    let reconnects = 0
+    let opens = 0
     const realtime = new ChatRealtime({
       url: 'ws://test/ws/chat',
       createSocket: () => {
@@ -133,8 +133,8 @@ describe('ChatRealtime', () => {
         return socket
       },
       onEvent: () => {},
-      onReconnect: () => {
-        reconnects += 1
+      onOpen: () => {
+        opens += 1
       },
       timers,
       reconnectBaseDelayMs: 100,
@@ -146,7 +146,7 @@ describe('ChatRealtime', () => {
 
     realtime.start()
     sockets[0]?.open()
-    expect(reconnects).toBe(0)
+    expect(opens).toBe(1)
 
     sockets[0]?.close()
     expect(scheduled).toHaveLength(1)
@@ -155,7 +155,7 @@ describe('ChatRealtime', () => {
     scheduled[0]?.handler()
     expect(sockets).toHaveLength(2)
     sockets[1]?.open()
-    expect(reconnects).toBe(1)
+    expect(opens).toBe(2)
 
     realtime.stop()
   })

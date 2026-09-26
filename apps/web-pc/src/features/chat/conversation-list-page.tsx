@@ -8,6 +8,7 @@ import { ListingThumb } from '../../components/listing-thumb'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { useAuth } from '../auth/auth-provider'
 import {
+  invalidateConversationDetail,
   invalidateConversationSurfaces,
   useConversationList,
   useConversationUnreadCount,
@@ -34,10 +35,11 @@ export function ConversationListPage() {
     onEvent: (event) => {
       if (ownerId === null) return
       if (event.type === 'message.new' || event.type === 'conversation.read') {
+        invalidateConversationDetail(queryClient, ownerId, event.conversationId)
         invalidateConversationSurfaces(queryClient, ownerId)
       }
     },
-    onReconnect: () => {
+    onOpen: () => {
       if (ownerId === null) return
       invalidateConversationSurfaces(queryClient, ownerId)
     },
