@@ -8,6 +8,7 @@
 export const LISTING_ROUTES = {
   base: '/listings',
   detail: (id: string) => `/listings/${id}`,
+  byNumber: (listingNo: string) => `/listings/by-number/${listingNo}`,
   /** 下架：ACTIVE → OFFLINE；对已 OFFLINE 幂等。 */
   offline: (id: string) => `/listings/${id}/offline`,
   /** 重新上架：OFFLINE → ACTIVE；对已 ACTIVE 幂等。 */

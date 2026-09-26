@@ -13,6 +13,7 @@ import {
   ListingDetailSchema,
   type ListingFeedResponse,
   ListingFeedResponseSchema,
+  ListingNumberLookupResponseSchema,
   type ListingSort,
   type ListingUpdateInput,
 } from '@fish/contracts/listings/schema'
@@ -73,6 +74,17 @@ export async function fetchCategoryListings(
 export async function searchListings(keyword: string, sort: ListingSort): Promise<ListingCard[]> {
   const page = await fetchFeed({ keyword, sort })
   return page.items
+}
+
+/** Exact number lookup. 404 (missing or invisible) must never fall back to keyword search. */
+export async function findListingByNumber(listingNo: string): Promise<string | null> {
+  try {
+    const payload = await apiRequest(LISTING_ROUTES.byNumber(listingNo))
+    return ListingNumberLookupResponseSchema.parse(payload).id
+  } catch (error) {
+    if (isApiError(error) && error.status === 404) return null
+    throw error
+  }
 }
 
 /**

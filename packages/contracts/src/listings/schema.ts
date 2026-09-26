@@ -115,6 +115,14 @@ export const ListingCursorTimestampSchema = z.iso.datetime({ precision: 6 })
  */
 export const ListingIdSchema = z.uuid()
 
+/** Complete human lookup number; preserve all 12 digits as a string. */
+export const ListingNoSchema = z.string().regex(/^[1-9][0-9]{11}$/)
+
+/** The lookup endpoint returns only an opaque, listing-prefixed public ID. */
+export const ListingNumberLookupResponseSchema = z.strictObject({
+  id: z.string().regex(/^lst_[0-9a-hjkmnp-tv-z]{26}$/),
+})
+
 /**
  * 读响应只给拼好的 `url`，不给 `objectKey`：后者是存储实现细节，
  * 放进读契约等于把 S3 布局钉进协议，换 CDN 或换布局都成了破坏性变更。

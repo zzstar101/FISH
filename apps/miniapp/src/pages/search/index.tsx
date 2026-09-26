@@ -1,12 +1,15 @@
+import { ListingNoSchema } from '@fish/contracts/listings/schema'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadSearch } from '@/features/fetchers'
+import { findListingByNumber } from '@/features/listing/api'
+import { isApiError } from '@/lib/request'
 import {
   defaultSearchHistory,
   hotSearches,
@@ -58,20 +61,56 @@ export default function Search() {
   const [panelOpen, setPanelOpen] = useState(initialKeyword.length === 0)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态而不是「没找到」 */
   const [failed, setFailed] = useState(false)
+  const [numberSearch, setNumberSearch] = useState(false)
+  const [rateLimited, setRateLimited] = useState(false)
+  /** Ignore old requests if a newer query or input supersedes them. */
+  const searchSeq = useRef(0)
 
   const hot = useMemo(() => hotSearches(), [])
 
   const run = async (nextKeyword: string, nextSort: SearchFilter) => {
+    const seq = ++searchSeq.current
     const term = nextKeyword.trim()
     if (!term) {
       setSubmitted('')
       setPanelOpen(true)
       setResults([])
+      setLoading(false)
       return
     }
     setLoading(true)
-    // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch
+    setFailed(false)
+    setRateLimited(false)
+    const exactNumber = ListingNoSchema.safeParse(term).success
+    setNumberSearch(exactNumber)
+    if (exactNumber) {
+      // An exact lookup is never a keyword search, even when the number is not found.
+      setSubmitted(term)
+      setPanelOpen(false)
+      setResults([])
+      try {
+        const id = await findListingByNumber(term)
+        if (seq !== searchSeq.current) return
+        setLoading(false)
+        if (id) {
+          await Taro.navigateTo({ url: `/pages/listing-detail/index?id=${encodeURIComponent(id)}` })
+          // A successful hit must not look like a 404 when the user navigates back.
+          if (seq === searchSeq.current) {
+            setSubmitted('')
+            setPanelOpen(true)
+            setNumberSearch(false)
+          }
+        }
+      } catch (error) {
+        if (seq !== searchSeq.current) return
+        setRateLimited(isApiError(error) && error.status === 429)
+        setFailed(true)
+      }
+      return
+    }
+    // Ordinary keywords keep the existing mock fallback behavior.
     const { items: list, failed: nextFailed } = await loadSearch(term, nextSort)
+    if (seq !== searchSeq.current) return
     setResults(list)
     setFailed(nextFailed)
     setSubmitted(term)
@@ -94,16 +133,21 @@ export default function Search() {
   const submit = () => {
     const term = keyword.trim()
     if (!term) return
-    remember(term)
+    if (!ListingNoSchema.safeParse(term).success) remember(term)
     void run(term, sort)
   }
 
   /** 清空输入：回到建议面板 */
   const clearInput = () => {
+    searchSeq.current += 1
     setKeyword('')
     setSubmitted('')
     setPanelOpen(true)
     setResults([])
+    setNumberSearch(false)
+    setFailed(false)
+    setRateLimited(false)
+    setLoading(false)
   }
 
   const changeSort = (next: SearchFilter) => {
@@ -138,7 +182,17 @@ export default function Search() {
               placeholder={searchPlaceholder}
               placeholderClass="search__input-ph"
               confirmType="search"
-              onInput={(event) => setKeyword(event.detail.value)}
+              onInput={(event) => {
+                searchSeq.current += 1
+                setKeyword(event.detail.value)
+                setLoading(false)
+                if (numberSearch) {
+                  setSubmitted('')
+                  setPanelOpen(true)
+                  setNumberSearch(false)
+                  setFailed(false)
+                }
+              }}
               onConfirm={submit}
             />
             {keyword.length > 0 ? (
@@ -195,35 +249,37 @@ export default function Search() {
         </View>
       ) : (
         <View className="search__results">
-          <View className="search__filters">
-            {searchFilters.map((item) => (
-              <View
-                key={item}
-                className={`search__fchip${item === sort ? ' is-on' : ''}`}
-                onClick={() => changeSort(item)}
-              >
-                <Text>{item}</Text>
-                {item === '价格' ? (
-                  <View className="search__sort">
-                    <Image
-                      className="search__sort-img"
-                      src={ICONS.chevronUpMuted}
-                      mode="aspectFit"
-                    />
-                    <Image
-                      className="search__sort-img"
-                      src={ICONS.chevronDownMuted}
-                      mode="aspectFit"
-                    />
-                  </View>
-                ) : null}
-              </View>
-            ))}
-          </View>
+          {!numberSearch ? (
+            <View className="search__filters">
+              {searchFilters.map((item) => (
+                <View
+                  key={item}
+                  className={`search__fchip${item === sort ? ' is-on' : ''}`}
+                  onClick={() => changeSort(item)}
+                >
+                  <Text>{item}</Text>
+                  {item === '价格' ? (
+                    <View className="search__sort">
+                      <Image
+                        className="search__sort-img"
+                        src={ICONS.chevronUpMuted}
+                        mode="aspectFit"
+                      />
+                      <Image
+                        className="search__sort-img"
+                        src={ICONS.chevronDownMuted}
+                        mode="aspectFit"
+                      />
+                    </View>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          ) : null}
 
           {/* 结果计数不能早于结果本身：否则请求途中会先显示「为你找到 0 件」；
               失败时也不显示，免得把「没加载出来」说成「一件都没有」 */}
-          {loading || failed ? null : (
+          {loading || failed || numberSearch ? null : (
             <View className="search__meta">
               <Text>为你找到</Text>
               <Text className="search__meta-num num">{results.length}</Text>
@@ -232,7 +288,18 @@ export default function Search() {
           )}
 
           {failed ? (
-            <LoadError onRetry={() => void run(submitted, sort)} />
+            <LoadError
+              title={rateLimited ? '查询太频繁' : '加载失败'}
+              text={rateLimited ? '请稍后再查找商品编号' : '检查网络后重试'}
+              onRetry={rateLimited ? undefined : () => void run(submitted, sort)}
+            />
+          ) : !loading && numberSearch ? (
+            <EmptyState
+              title="没有找到这个商品"
+              text="这个编号对应的商品可能已下架，试试关键词搜索。"
+              actionText="换个关键词"
+              onAction={clearInput}
+            />
           ) : !loading && results.length === 0 ? (
             <EmptyState
               title="没有找到相关闲置"

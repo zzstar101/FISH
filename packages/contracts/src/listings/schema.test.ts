@@ -5,6 +5,8 @@ import {
   ListingCreateInputSchema,
   ListingDetailSchema,
   ListingFeedQuerySchema,
+  ListingNoSchema,
+  ListingNumberLookupResponseSchema,
   ListingSellerSchema,
   ListingUpdateInputSchema,
   MAX_IMAGE_BYTES,
@@ -191,6 +193,32 @@ describe('ListingSellerSchema', () => {
     expect('verifiedAt' in parsed).toBe(false)
     expect('campusEmail' in parsed).toBe(false)
     expect('studentNo' in parsed).toBe(false)
+  })
+})
+
+describe('listing number lookup', () => {
+  test('routes only a full, non-zero-leading 12-digit string to exact lookup', () => {
+    expect(ListingNoSchema.safeParse('709541826303').success).toBe(true)
+    for (const value of [
+      '070954182630',
+      '70954182630',
+      '7095418263034',
+      '70954abc6303',
+      709541826303,
+    ]) {
+      expect(ListingNoSchema.safeParse(value).success).toBe(false)
+    }
+  })
+
+  test('accepts the listing-prefixed lookup result, not another resource or bare UUID', () => {
+    expect(
+      ListingNumberLookupResponseSchema.parse({ id: 'lst_01jc000000e00800000000000p' }),
+    ).toEqual({
+      id: 'lst_01jc000000e00800000000000p',
+    })
+    for (const id of ['usr_01jc000000e00800000000000p', '01930000-0000-7000-8000-000000000016']) {
+      expect(ListingNumberLookupResponseSchema.safeParse({ id }).success).toBe(false)
+    }
   })
 })
 
