@@ -37,9 +37,17 @@ export function useConversationList(ownerId: string | null) {
 }
 
 export function useConversation(ownerId: string | null, conversationId: string) {
+  const queryClient = useQueryClient()
   return useQuery({
     queryKey: chatKeys.conversation(ownerId, conversationId),
-    queryFn: () => fetchConversation(conversationId),
+    queryFn: async () => {
+      const fetched = await fetchConversation(conversationId)
+      if (fetched === null || ownerId === null) return fetched
+      const current = queryClient.getQueryData<ConversationDto | null>(
+        chatKeys.conversation(ownerId, conversationId),
+      )
+      return mergeConversationReadMarker(current, fetched)
+    },
     enabled: ownerId !== null,
     staleTime: 15_000,
   })
@@ -201,13 +209,11 @@ export async function refreshNewestMessages(
   conversationId: string,
 ): Promise<void> {
   const page = await fetchMessagePage(conversationId)
+  // 用服务端最新页替换本地页集合：保留服务端 nextCursor，避免断线窗口留下
+  // “中间一段永远翻不到”的历史缺口；空缓存时也由此建立初始 InfiniteData。
   queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
     chatKeys.messages(ownerId, conversationId),
-    (data) =>
-      page.items.reduce(
-        (current, message) => upsertMessagePage(current, message, conversationId),
-        data,
-      ),
+    { pages: [page], pageParams: [null] },
   )
 }
 
@@ -219,6 +225,13 @@ export function refreshConversationOnReconnect(
 ): void {
   void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(ownerId, conversationId) })
   void refreshNewestMessages(queryClient, ownerId, conversationId).catch(() => undefined)
+  void queryClient
+    .fetchQuery({
+      queryKey: chatKeys.unreadCount(ownerId),
+      queryFn: fetchConversationUnreadCount,
+      staleTime: 0,
+    })
+    .catch(() => undefined)
 }
 
 /** 渲染用时间序：最新页在前，反转后按升序拼接。 */
@@ -234,15 +247,37 @@ export function isMessageRead(message: MessageDto, counterpartLastReadAt: string
   return Date.parse(message.createdAt) <= Date.parse(counterpartLastReadAt)
 }
 
+/**
+ * 读位只能单调前进：较旧的 HTTP 响应或 read 响应不能把已经收到的
+ * `conversation.read` 覆盖回更早的值。
+ */
+export function mergeConversationReadMarker(
+  current: ConversationDto | null | undefined,
+  next: ConversationDto,
+): ConversationDto {
+  if (!current || current.id !== next.id || current.counterpartLastReadAt === null) return next
+  if (
+    next.counterpartLastReadAt !== null &&
+    Date.parse(next.counterpartLastReadAt) >= Date.parse(current.counterpartLastReadAt)
+  ) {
+    return next
+  }
+  return { ...next, counterpartLastReadAt: current.counterpartLastReadAt }
+}
+
 export function updateConversationCaches(
   queryClient: QueryClient,
   ownerId: string,
   conversation: ConversationDto,
 ): void {
-  queryClient.setQueryData(chatKeys.conversation(ownerId, conversation.id), conversation)
+  const current = queryClient.getQueryData<ConversationDto | null>(
+    chatKeys.conversation(ownerId, conversation.id),
+  )
+  const merged = mergeConversationReadMarker(current, conversation)
+  queryClient.setQueryData(chatKeys.conversation(ownerId, conversation.id), merged)
   queryClient.setQueryData<InfiniteData<ConversationListResponse, string | null>>(
     chatKeys.conversations(ownerId),
-    (data) => updateConversationPage(data, conversation),
+    (data) => updateConversationPage(data, merged),
   )
 }
 
@@ -296,6 +331,12 @@ export function applyReadEventToCache(
     chatKeys.conversations(ownerId),
     (data) => updateConversationReadAt(data, event.conversationId, event.readAt),
   )
+
+  // 事件到达时详情可能为空或有一次更旧的 HTTP 响应在飞；失效后由服务端
+  // 重新确认读位，避免旧响应把已推进的已读状态覆盖回去。
+  void queryClient.invalidateQueries({
+    queryKey: chatKeys.conversation(ownerId, event.conversationId),
+  })
 }
 
 function updateConversationReadAt(
