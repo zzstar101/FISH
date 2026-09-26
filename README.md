@@ -5,7 +5,7 @@
 </h1>
 
 <p align="center">
-  <strong>广应科校内二手交易平台 · 移动端 Web</strong><br />
+  <strong>广应科校内二手交易平台 · 移动端 Web + PC Web</strong><br />
   同校面交 · 让闲置在校园里流动起来
 </p>
 
@@ -24,7 +24,7 @@
 
 ## 项目简介
 
-FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台，交互以**手机视口**为基线（设计参考 390×844），桌面端只作兼容。
+FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台，交互以**手机视口**为基线（设计参考 390×844）；另设独立的 PC 浏览器 Web 入口，当前处于骨架阶段。
 
 固定信息架构：
 
@@ -52,7 +52,7 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 | 层 | 选型 |
 | --- | --- |
 | Runtime / 包管理 | **Bun**（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
-| 前端 | React 19 + Vite + TypeScript |
+| 前端 | React 19 + Vite + TypeScript（`apps/web` 移动端、`apps/web-pc` PC Web） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4 + 自有 `@fish/ui` 组件 |
 | 后端 | **Hono on Bun**（`Bun.serve`） |
@@ -72,14 +72,17 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 ```mermaid
 graph LR
   BROWSER["移动端浏览器"] -->|"GET /"| WEB["apps/web<br/>Vite :5173"]
+  PC_BROWSER["PC 浏览器"] -->|"GET /pc/"| WEB_PC["apps/web-pc<br/>Vite :5174"]
   BROWSER -->|"/api/*（去前缀）"| API["apps/api<br/>Hono on Bun :3000"]
+  PC_BROWSER -->|"/api/*（去前缀）"| API
   BROWSER -->|"/ws（实时）"| API
+  PC_BROWSER -->|"/ws（实时）"| API
   API -->|"bun:sql"| PG[("PostgreSQL 16<br/>:5432")]
   WORKER["apps/worker<br/>job 轮询"] -->|"bun:sql"| PG
   API -.->|"S3"| MINIO[("MinIO<br/>:9000 / :9001")]
 ```
 
-- Web 一律写相对路径 `/api/...`，开发环境由 Vite 代理去前缀转发到 API；生产同源部署行为一致，无 CORS 与跨域 Cookie 问题。
+- 两套 Web 都写相对路径 `/api/...`，开发环境由各自的 Vite 代理去前缀转发到 API；生产同源部署行为一致，无 CORS 与跨域 Cookie 问题。
 - 跨包只走 `workspace:*` + `exports` 子路径（无大型 barrel）：
 
   ```ts
@@ -108,15 +111,16 @@ bun run db:migrate
 bun run db:seed
 ```
 
-分三个终端启动（或 `bun run dev` 一次并行拉起）：
+分终端启动（或 `bun run dev` 一次并行拉起）：
 
 ```bash
 bun run dev:api      # API    → http://localhost:3000
 bun run dev:worker   # Worker（常驻，不监听端口）
-bun run dev:web      # Web    → http://localhost:5173
+bun run dev:web      # 移动 Web → http://localhost:5173
+bun run dev:web-pc   # PC Web   → http://localhost:5174/pc/
 ```
 
-打开 <http://localhost:5173> 即可。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
+移动端打开 <http://localhost:5173>，PC Web 打开 <http://localhost:5174/pc/>。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
 本地校园认证邮件（含验证码）写入 `apps/api/.dev/mail-outbox.jsonl`，不会发送真实邮件。
 已有 `.env` 也需补上该变量；生产必须使用 `MAIL_TRANSPORT=resend` 并配置 Resend，
 见 [部署手册 §4](docs/deployment.md#4-代码与环境变量)。
@@ -147,12 +151,12 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 | 命令 | 说明 |
 | --- | --- |
-| `bun run dev` | 并行启动 web / api / worker |
-| `bun run dev:web` · `dev:api` · `dev:worker` | 分别启动三个应用 |
+| `bun run dev` | 并行启动 web / web-pc / api / worker |
+| `bun run dev:web` · `dev:web-pc` · `dev:api` · `dev:worker` | 分别启动对应应用 |
 | `bun run typecheck` | 全仓 TypeScript 类型检查 |
 | `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
 | `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |
-| `bun run build` | 构建 |
+| `bun run build` / `bun run build:web-pc` | 全仓构建 / 仅构建 PC Web |
 | `bun run ws:smoke` | WebSocket 连通性冒烟 |
 | `bun run core:smoke` | 核心主链端到端冒烟（`-- --runs=5` 可连跑 5 轮） |
 | `bun run db:up` / `db:down` | 启动 / 停止本地依赖 |
@@ -163,7 +167,8 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 | 服务 | 端口 |
 | --- | --- |
-| web | 5173 |
+| web（移动端） | 5173 |
+| web-pc | 5174（页面 basepath `/pc/`） |
 | api | 3000 |
 | worker | 不监听端口 |
 | MinIO API / Console | 9000 / 9001 |
@@ -175,6 +180,7 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 FISH/
 ├─ apps/
 │  ├─ web/        React SPA（移动端界面）；Vite dev server 兼作 /api 与 /ws 代理
+│  ├─ web-pc/     React SPA（PC 浏览器界面，挂载 /pc/）；当前为骨架
 │  ├─ api/        Hono 应用：HTTP + WebSocket（modules/ 下按 domain 分模块）
 │  └─ worker/     常驻进程：轮询 jobs 表执行异步匹配
 ├─ packages/
@@ -193,6 +199,7 @@ FISH/
 - 后端 domain（auth / listings / wishes / matching / chat / transactions / profile / notifications）与 Worker 异步主链均已交付，前端主链已从 Mock 切到真实 API。
 - **站内通知前端列表仍读 fixture**，后端 `GET /notifications*` 已就绪，尚未接线。
 - **PWA 安装产物（manifest / Service Worker）尚未接线**，当前为移动优先的 Web 应用。
+- **PC Web 仍是骨架**：已接通登录、PC 外壳与首页真实商品流；搜索、详情、发布、消息、通知、个人中心、许愿墙仍为占位页。
 - 商品搜索当前基于 `ILIKE`；架构文档里规划的 PostgreSQL FTS / `pg_trgm` 未落地。
 - 未做的动词：删除商品、删除图片；愿望编辑的 API（`PATCH /wishes/:id`）存在，但契约常量与前端入口未接。
 

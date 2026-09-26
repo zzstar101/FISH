@@ -1,6 +1,6 @@
 # FISH 生产部署手册（Ubuntu + Bun 直跑）
 
-> 目标：把 `apps/web`、`apps/api`、`apps/worker` 直接跑在 Ubuntu 上，**不使用 Docker**。
+> 目标：把 `apps/web`、`apps/web-pc`、`apps/api`、`apps/worker` 直接跑在 Ubuntu 上，**不使用 Docker**。
 > 依赖（PostgreSQL、MinIO）同样装成宿主服务。
 >
 > 本手册只描述部署，不改变任何业务/契约行为。生产形态与 [architecture.md](architecture.md) §4 的
@@ -12,7 +12,7 @@
                  Internet
                     │  80 / 443
               ┌─────▼──────┐
-              │  Caddy     │  TLS + 静态产物 + 反代
+              │  Caddy     │  TLS + 两套静态产物 + 反代
               └──┬──┬───┬──┘
      fish.example.com      s3.fish.example.com
         │        │                │
@@ -33,6 +33,11 @@
                     │ :5432   │
                     └─────────┘
 ```
+
+静态客户端路径：
+
+- `/` → `/var/www/fish`（`apps/web` 移动端 Web）
+- `/pc/` → `/var/www/fish-pc`（`apps/web-pc` PC Web）
 
 必须一直成立的四条不变量（违反任何一条都会出数据问题，见 §9）：
 
@@ -66,7 +71,7 @@ curl -fsSL https://bun.sh/install | sudo BUN_INSTALL=/usr/local bash -s "bun-v1.
 
 # 运行用户与代码目录
 sudo useradd --system --create-home --shell /usr/sbin/nologin fish
-sudo mkdir -p /srv/fish /var/www/fish /var/backups/fish
+sudo mkdir -p /srv/fish /var/www/fish /var/www/fish-pc /var/backups/fish
 sudo chown fish:fish /srv/fish /var/backups/fish
 
 # 防火墙：只放 80/443，3000 / 5432 / 9000 / 9001 一律不对外
@@ -431,8 +436,8 @@ sudo systemctl enable fish-api fish-worker
 fish.example.com {
 	encode zstd gzip
 
-	# 与 apps/web/vite.config.ts 的 /api 代理等价：剥掉 /api 前缀转发到 API 的根级路由。
-	# 浏览器只写相对路径 /api/...（apps/web/src/lib/api-client.ts），生产是同源部署，
+	# 与 apps/web、apps/web-pc 的 /api 代理等价：剥掉 /api 前缀转发到 API 的根级路由。
+	# 两套 Web 都只写相对路径 /api/...（各自的 src/lib/api-client.ts），生产是同源部署，
 	# 因此不需要跨域，cookie 自动携带。
 	handle /api/* {
 		uri strip_prefix /api
@@ -445,6 +450,25 @@ fish.example.com {
 	# 不该出现在公网暴露面上；冒烟请在服务器本地打 API 端口（§8 第 3 步）。
 	handle /ws/* {
 		reverse_proxy 127.0.0.1:3000
+	}
+
+	# PC Web 只挂 /pc/；无尾斜杠先规范化，避免落到移动端根目录。
+	redir /pc /pc/ 308
+
+	# PC Web（/pc/）：资源带内容哈希走长缓存，其余深链接回落到 PC 自己的 index.html
+	handle /pc/assets/* {
+		uri strip_prefix /pc
+		root * /var/www/fish-pc
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle /pc/* {
+		uri strip_prefix /pc
+		root * /var/www/fish-pc
+		header Cache-Control "no-store"
+		try_files {path} /index.html
+		file_server
 	}
 
 	# 带内容哈希的产物：长缓存
@@ -489,6 +513,18 @@ server {
   server_name fish.example.com;
   root /var/www/fish;
 
+  location = /pc {
+    return 308 /pc/;
+  }
+  location /pc/assets/ {
+    alias /var/www/fish-pc/assets/;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+  }
+  location /pc/ {
+    alias /var/www/fish-pc/;
+    add_header Cache-Control "no-store";
+    try_files $uri $uri/ /pc/index.html;
+  }
   location /assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
   location /api/ {
     proxy_pass http://127.0.0.1:3000/;   # 末尾的 / 才会剥掉 /api 前缀
@@ -534,10 +570,11 @@ cd /srv/fish
 # 1) 建表（走仓库文档化的同一条命令；它需要 §4 的 .env）
 sudo -u fish -H /usr/local/bin/bun run db:migrate
 
-# 2) 前端产物：构建到 apps/web/dist，再同步到 Caddy 的根目录
+# 2) 前端产物：构建 apps/web 与 apps/web-pc，分别同步到 Caddy 的两个根目录
 sudo -u fish -H /usr/local/bin/bun run build
 sudo rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/
-sudo chown -R caddy:caddy /var/www/fish   # 换 nginx 时改成 www-data
+sudo rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
+sudo chown -R caddy:caddy /var/www/fish /var/www/fish-pc   # 换 nginx 时改成 www-data
 
 # 3) 起服务（§5 里只 enable 了，这里才第一次启动）
 sudo systemctl restart fish-api fish-worker
@@ -624,6 +661,7 @@ sudo -u fish -H /usr/local/bin/bun run db:migrate
 # 5) 前端产物
 sudo -u fish -H /usr/local/bin/bun run build
 rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/
+rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
 
 # 6) 起服务
 systemctl start fish-api
@@ -676,9 +714,15 @@ cd /srv/fish && WS_URL=ws://127.0.0.1:3000/ws /usr/local/bin/bun run ws:smoke
 #     -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
 #     https://fish.example.com/ws/chat
 
-# 4) SPA 与静态产物
+# 4) SPA 与静态产物：移动端 + PC Web
 curl -sI https://fish.example.com/ | head -1                 # 200
 curl -s  https://fish.example.com/login | grep -q '<div id="root">' && echo SPA-fallback-ok
+curl -sI https://fish.example.com/pc | head -1               # 308
+curl -sI https://fish.example.com/pc/ | head -1              # 200
+curl -s  'https://fish.example.com/pc/search?q=keyboard' | grep -q '<div id="root">' && echo PC-SPA-fallback-ok
+pc_asset=$(curl -s https://fish.example.com/pc/ | grep -o '/pc/assets/[^" ]*\.js' | head -1)
+curl -sI "https://fish.example.com${pc_asset}" | grep -i '^cache-control: public, max-age=31536000, immutable' >/dev/null \
+  && echo PC-asset-cache-ok
 
 # 5) 对象存储。两条都得验，因为浏览器与 API 进程走的是同一个地址：
 #    ① 服务端可达（API 的 stat() 用这个）——在**服务器上**执行：
@@ -935,6 +979,24 @@ S3_BUCKET=fish                                 # 桶名 = Caddy 里的 /fish/* �
 		reverse_proxy 127.0.0.1:3100
 	}
 
+	# PC Web 只挂 /pc/；无尾斜杠先规范化，避免落到移动端根目录。
+	redir /pc /pc/ 308
+
+	handle /pc/assets/* {
+		uri strip_prefix /pc
+		root * /var/www/fish-pc
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle /pc/* {
+		uri strip_prefix /pc
+		root * /var/www/fish-pc
+		header Cache-Control "no-store"
+		try_files {path} /index.html
+		file_server
+	}
+
 	# MinIO：路径原样转发（bucket 名就是第一段），**不要改写 Host**——SigV4 覆盖 host
 	handle /fish/* {
 		reverse_proxy 127.0.0.1:9000
@@ -955,10 +1017,7 @@ S3_BUCKET=fish                                 # 桶名 = Caddy 里的 /fish/* �
 }
 ```
 
-`handle` 按书写顺序匹配，`/fish/*` 必须在兜底之前。仓库现有前端路由没有 `/fish` 前缀
-（`/`, `/wish`, `/search`, `/match`, `/profile`, `/mylist`, `/notifications`, `/publish`,
-`/orders`, `/message`, `/login`, `/register`, `/category`, `/user/*`, `/chat/*`, `/detail/*`,
-`/watchers/*`），不冲突。
+`handle` 按书写顺序匹配，`/fish/*` 必须在兜底之前。仓库现有前端路由（移动端根级路径与 PC 的 `/pc/*` 命名空间）没有 `/fish` 前缀，不冲突。
 
 ### 11.6 容器里没有 systemd 时的代替方案
 
@@ -995,6 +1054,11 @@ ps -p 1 -o comm= ; ls -d /run/systemd/system 2>/dev/null || echo "无 systemd"
 curl -sS http://10.223.24.16:8101/api/health                      # 200 status ok / db up
 cd /srv/fish && WS_URL=ws://127.0.0.1:3100/ws bun run ws:smoke    # /ws 只在回环验（无鉴权）
 curl -s  http://10.223.24.16:8101/login | grep -q 'id="root"'
+curl -sI http://10.223.24.16:8101/pc | head -1                    # 308
+curl -s  http://10.223.24.16:8101/pc/ | grep -q 'id="root"'
+curl -s  http://10.223.24.16:8101/pc/login | grep -q 'id="root"'
+pc_asset=$(curl -s http://10.223.24.16:8101/pc/ | grep -o '/pc/assets/[^" ]*\.js' | head -1)
+curl -sI "http://10.223.24.16:8101${pc_asset}" | grep -i '^cache-control: public, max-age=31536000, immutable' >/dev/null
 # 图片（§11.2 已验证的路径）：发布页传一张图，再直开返回的 URL，应为 200
 ```
 

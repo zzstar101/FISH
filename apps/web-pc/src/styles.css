@@ -1,0 +1,189 @@
+@import "tailwindcss";
+/* shadcn/ui 弹层/抽屉/提示的进出场动画工具类（animate-in / fade-in-0 / zoom-in-95 …） */
+@import "tw-animate-css";
+
+/* packages/ui 的组件源码也参与扫描 */
+@source "../../../packages/ui/src";
+
+/*
+ * 设计令牌（design tokens）——按「鱼小应」品牌主视觉配色方案整体换肤
+ * （配色分析：60% 云灰白 + 25% 雾蓝层次 + 10% 深灰文字 + 5% 品牌蓝点缀）。
+ * 前端全站只使用这里的语义令牌，不在组件里写死颜色。
+ *
+ * 品牌蓝 #5f82c5（Logo 鱼/强调唯一主色），蓝色明度梯度：
+ * #4a6bae(100%) → #5f82c5(80%) → #8aa8d6(60%) → #a9bee2(40%) → #dce5f2(20%) → #f0f3f8(10%)。
+ * 中性色：墨灰 #2d3138 标题 / #5a5f6a 次级 / 中灰 #8b909b 弱化，背景云灰白 #f3f4f6。
+ * 功能色（成功 / 警告 / 危险）不参与换色。
+ *
+ * `static` 是必须的：Tailwind v4 默认只输出被工具类引用到的令牌变量，而 shadcn/ui
+ * 组件会通过 `var(--color-*)` 间接消费这些变量（例如 sonner 的 --normal-bg），
+ * 不强制输出就会出现「变量不存在」的静默降级。
+ */
+@theme static {
+  --color-brand: #5f82c5;
+  --color-brand-soft: #e7edf6;
+  /*
+   * 许愿墙 Banner 的装饰红（自上而下红→白渐变）。
+   * 刻意不复用 `--color-danger`：那是功能色，语义是「出错 / 危险」，而这里的红只做装饰，
+   * 借用会让「红色 = 危险」的约定失效。
+   */
+  --color-coral: #e5544a;
+
+  --color-bg: #f3f4f6;
+  --color-surface: #ffffff;
+  --color-surface-2: #f0f3f8;
+
+  --color-ink: #2d3138;
+  --color-ink-2: #5a5f6a;
+  --color-ink-3: #8b909b;
+
+  --color-line: #dce5f2;
+
+  --color-success: #16a34a;
+  --color-success-soft: #d9f2e4;
+  /* 次级强调：蓝色明度梯度最深档，保证在白底/浅底上当文字用仍有对比度 */
+  --color-lavender: #4a6bae;
+  --color-lavender-soft: #dce5f2;
+  --color-warn: #f59e0b;
+  --color-warn-soft: #fdf0d5;
+  --color-danger: #ef4444;
+  --color-danger-soft: #ffe6e6;
+
+  --font-sans:
+    system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
+    sans-serif;
+}
+
+/*
+ * shadcn/ui 语义令牌桥接。
+ *
+ * shadcn 组件源码里只写 `bg-background` / `text-muted-foreground` / `border-input` 这类
+ * 语义类名；这里把它的令牌逐个指到 FISH 的配色上，因此官方源码可以原样保留，
+ * 换肤只需改这一段。左边的 `--color-*` 由 `@theme inline` 生成工具类，
+ * `:root` 里的裸变量供组件内联 style 直接 `var(--x)` 消费（sonner / chart）。
+ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  /* dialog / sheet 的关闭按钮用 `ring-offset-background`；不定义这条，它的 focus ring 就没有间隙 */
+  --color-ring-offset-background: var(--background);
+
+  /* 圆角刻度：卡片 16px / 图片 12–16px / chip·按钮 999px（DESIGN-SPEC.md） */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /*
+   * `--background` 故意指向 `--color-surface`（白）而不是 `--color-bg`（页面灰 #f3f4f6）。
+   * shadcn 里 `--background` 的语义是「内容所落在的那层表面」——它的 Tabs 选中块、
+   * 描边按钮底色都用 `bg-background`，在默认主题里就是白色。FISH 的页面灰底由
+   * `body { background-color: var(--color-bg) }` 直接给，不经过这个令牌。
+   * 若把它指向页面灰，Tabs 的选中块（#f3f4f6）会压在灰轨道（#f0f3f8）上看不出来。
+   */
+  --background: var(--color-surface);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-ink);
+  --primary: var(--color-brand);
+  --primary-foreground: #ffffff;
+  --secondary: var(--color-surface-2);
+  --secondary-foreground: var(--color-ink-2);
+  --muted: var(--color-surface-2);
+  --muted-foreground: var(--color-ink-3);
+  --accent: var(--color-surface-2);
+  --accent-foreground: var(--color-ink);
+  --destructive: var(--color-danger);
+  --destructive-foreground: #ffffff;
+  --border: var(--color-line);
+  --input: var(--color-line);
+  --ring: var(--color-brand);
+}
+
+@layer base {
+  /*
+   * shadcn/ui 的全局 base 层（官方 index 注册表项里的那段）。
+   * 必须有：Tailwind v4 把 `border` 的默认颜色改成了 currentColor，
+   * 所以只写 `border` 不写颜色的地方（Select 弹层、Card 描边…）会渲染成黑色。
+   * 这里统一回落成 --border（= 我们的 --color-line）与 --ring 的半透明色。
+   */
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+
+  html {
+    /* PC Web 视口基线：设计参考 1440×900 */
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+  }
+
+  button {
+    cursor: pointer;
+  }
+}
+
+/* 底部安全区：Tab Bar 与底部主按钮统一用它留白 */
+@utility pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+}
+
+/* 悬浮胶囊导航离屏幕底部的距离：安全区 + 10px 悬浮间隙 */
+@utility pb-floating-nav {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+}
+
+/*
+ * 一级页内容的底部留白：导航本身占 10px + 62px，这里留到 116px，
+ * 让最后一条内容不贴着悬浮导航。
+ */
+@utility pb-tabbar {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 116px);
+}
+
+/* 横向滚动条（分类栏 / 快捷短语 / chip 行）不显示滚动条 */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/*
+ * PC Web 骨架只支持桌面浏览器视口。
+ * 这里不做移动端折叠布局；低于 1280px 由浏览器横向滚动，不改变信息架构。
+ */
+@layer base {
+  body {
+    min-width: 1280px;
+  }
+}

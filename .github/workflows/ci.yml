@@ -77,6 +77,10 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # PC Web 有独立的生产产物与反代根目录，typecheck 不能替代 Vite build。
+      - name: Build PC web
+        run: bun run build:web-pc
+
       # 对象存储。三个必须注意的点（都踩过）：
       # 1. **不能用 `services:`**：minio 镜像的默认 CMD 是 `minio`（只打印 usage），而 Actions 的
       #    service 块不支持传 command，健康检查会耗尽重试让整个 job 起不来；
