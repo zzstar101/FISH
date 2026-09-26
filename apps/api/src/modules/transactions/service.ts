@@ -18,6 +18,7 @@ import {
   transactionListResponseSchema,
   transactionSystemEventSchema,
 } from '@fish/contracts/transactions/schema'
+import { PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
@@ -370,7 +371,7 @@ export function createTransactionService({
     },
 
     async listTransactions(userId, query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.transaction) : null
       if (query.cursor && !cursor) {
         throw new TransactionServiceError(422, 'VALIDATION_FAILED', '游标不合法')
       }
@@ -388,7 +389,10 @@ export function createTransactionService({
         items: await toDtos(store, storage, page, userId),
         nextCursor:
           hasMore && last?.created_at_cursor
-            ? encodeCursor({ sortKey: last.created_at_cursor, id: last.id })
+            ? encodeCursor(
+                { sortKey: last.created_at_cursor, id: last.id },
+                PUBLIC_ID_PREFIX.transaction,
+              )
             : null,
       })
     },
