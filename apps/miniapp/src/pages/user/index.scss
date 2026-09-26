@@ -552,19 +552,34 @@
 
 /* ------------------------------------------------------------ 举报入口 */
 
-/* #252：居中小字入口，压在列表终点之后。弱化成 muted 小字（低频治理动作），
-   点击整行都有热区。 */
-.uhome__report {
-  margin: 32px auto 48px;
-  width: 200px;
+/* #252：顶栏举报钮（Owner 2026-09-26 拍板：贴微信胶囊放，入口从列表终点挪进顶部栏）。
+   形态沿用 navfloat 的白玻璃圆钮；滚动起玻璃底后白钮会融进底色，
+   补 navfloat--glass 同款墨色描边把圆勾出来。与胶囊的间距由行内 marginRight
+   按 capsuleInset 给（见 index.tsx 的 navReportGap）。 */
+.uhome__navreport {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 56px;
-  font-size: 23px;
-  color: var(--muted);
+  background: rgba(255, 255, 255, 0.82);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 4px 16px -8px rgba(65, 70, 78, 0.4);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
 
   &:active {
-    color: var(--fg);
+    transform: scale(0.94);
+    background: #fff;
   }
+
+  &.is-glass {
+    border-color: rgba(23, 35, 61, 0.2);
+  }
+}
+
+.uhome__navreport-ic {
+  width: 38px;
+  height: 38px;
 }
