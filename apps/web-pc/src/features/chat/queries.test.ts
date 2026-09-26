@@ -10,6 +10,7 @@ import {
   applyReadEventToCache,
   chatKeys,
   flattenMessagePages,
+  insertMessageIntoCache,
   isMessageRead,
   mergeConversationReadMarker,
   mergeMessagesIntoCache,
@@ -104,6 +105,22 @@ describe('message cache', () => {
     expect(upsertMessagePage(data, foreign, 'conversation-1')).toBe(data)
   })
 
+  test('seeds a message cache when none exists', () => {
+    const queryClient = new QueryClient()
+    insertMessageIntoCache(
+      queryClient,
+      'me',
+      'conversation-1',
+      message('m1', '2026-01-01T00:00:00.000Z'),
+    )
+
+    expect(
+      queryClient
+        .getQueryData<{ pages: MessageListResponse[] }>(chatKeys.messages('me', 'conversation-1'))
+        ?.pages[0]?.items.map((item) => item.id),
+    ).toEqual(['m1'])
+  })
+
   test('re-merges live messages after a pagination write', () => {
     const queryClient = new QueryClient()
     queryClient.setQueryData(
@@ -149,6 +166,43 @@ describe('message cache', () => {
       expect(data?.pages[0]?.items.map((item) => item.id)).toEqual(['m2'])
       expect(data?.pages[0]?.nextCursor).toBe('m2')
       expect(data?.pageParams).toEqual([null])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('cancels an in-flight history request before replacing pages', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [message('m2', '2026-01-01T00:00:02.000Z')],
+          nextCursor: null,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch
+    try {
+      const queryClient = new QueryClient()
+      let resolveOld!: (value: MessageListResponse) => void
+      const oldPage = new Promise<MessageListResponse>((resolve) => {
+        resolveOld = resolve
+      })
+      const inFlight = queryClient.fetchInfiniteQuery({
+        queryKey: chatKeys.messages('me', 'conversation-1'),
+        queryFn: () => oldPage,
+        initialPageParam: null as string | null,
+        getNextPageParam: () => undefined,
+      })
+
+      await refreshNewestMessages(queryClient, 'me', 'conversation-1')
+      resolveOld({ items: [message('m1', '2026-01-01T00:00:00.000Z')], nextCursor: null })
+      await inFlight.catch(() => undefined)
+
+      expect(
+        queryClient
+          .getQueryData<{ pages: MessageListResponse[] }>(chatKeys.messages('me', 'conversation-1'))
+          ?.pages[0]?.items.map((item) => item.id),
+      ).toEqual(['m2'])
     } finally {
       globalThis.fetch = originalFetch
     }
