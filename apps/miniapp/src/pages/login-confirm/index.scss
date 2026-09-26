@@ -1,0 +1,162 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 扫码登录确认页。浅色居中版式：顶部淡渐变 hero，中间头像 + 昵称 +
+ * 「确认登录此电脑端」，底部主/次按钮；无效码与成功态复用同一居中舞台。
+ * 尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ */
+
+.lc {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.lc__bg {
+  @include page-hero(380px, 56px);
+}
+
+.lc__inner {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------------------ 居中舞台 */
+
+.lc__stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 60px 64px 0;
+}
+
+.lc__avatar {
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 3px solid var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.lc__avatar-img {
+  width: 100%;
+  height: 100%;
+}
+
+.lc__avatar-ph {
+  width: 84px;
+  height: 84px;
+}
+
+.lc__name {
+  margin-top: 28px;
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.lc__headline {
+  margin-top: 40px;
+  font-size: 34px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.lc__sub {
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.65;
+  color: var(--muted-2);
+}
+
+/* 无效 / 成功 / 等待身份态的圆盘图标 */
+.lc__disc {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-faint);
+  border: 2px solid var(--line);
+
+  &--ok {
+    background: var(--grad-icon);
+    border-color: var(--accent-faint);
+  }
+}
+
+.lc__disc-ic {
+  width: 60px;
+  height: 60px;
+}
+
+.lc__waiting {
+  margin-top: 120px;
+  font-size: 27px;
+  color: var(--muted-2);
+}
+
+/* 无效 / 成功态里的按钮紧跟文案 */
+.lc__stage .lc__btn-ghost,
+.lc__stage .lc__btn-main--inline {
+  margin-top: 48px;
+  min-width: 320px;
+}
+
+/* ------------------------------------------------------------ 底部按钮 */
+
+.lc__acts {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 32px 40px calc(48px + env(safe-area-inset-bottom));
+}
+
+.lc__btn-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 48px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &.is-off {
+    background: var(--accent-faint);
+    color: var(--muted);
+    box-shadow: none;
+  }
+
+  &--inline {
+    box-shadow: var(--shadow-card);
+  }
+}
+
+.lc__btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 92px;
+  border-radius: 46px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+  font-size: 29px;
+  font-weight: 600;
+}
