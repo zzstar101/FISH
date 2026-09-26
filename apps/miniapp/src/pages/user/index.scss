@@ -549,3 +549,22 @@
   gap: 12px;
   padding: 18px 20px 20px;
 }
+
+/* ------------------------------------------------------------ 举报入口 */
+
+/* #252：居中小字入口，压在列表终点之后。弱化成 muted 小字（低频治理动作），
+   点击整行都有热区。 */
+.uhome__report {
+  margin: 32px auto 48px;
+  width: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  font-size: 23px;
+  color: var(--muted);
+
+  &:active {
+    color: var(--fg);
+  }
+}
