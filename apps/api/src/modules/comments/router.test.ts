@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { CommentDto, CommentListQuery } from '@fish/contracts/comments/schema'
 import { errorBody } from '@fish/contracts/system/error'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -8,14 +9,18 @@ import { allowRestrictionGuard } from '../governance/testing'
 import { createCommentsRouter } from './router'
 import { type CommentService, CommentServiceError } from './service'
 
-const LISTING_ID = '01930000-0000-7000-8000-000000000011'
-const COMMENT_ID = '01930000-0000-7000-8000-000000000021'
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-000000000011')
+const COMMENT_ID = encodePublicId(PUBLIC_ID_PREFIX.comment, '01930000-0000-7000-8000-000000000021')
 const AUTHOR_ID = '01930000-0000-7000-8000-00000000000b'
 
 const dto: CommentDto = {
   id: COMMENT_ID,
   listingId: LISTING_ID,
-  author: { id: AUTHOR_ID, nickname: '林一', avatarUrl: null },
+  author: {
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, AUTHOR_ID),
+    nickname: '林一',
+    avatarUrl: null,
+  },
   content: '还在吗？',
   createdAt: '2026-09-12T03:40:10.000Z',
   isSeller: false,

@@ -1,6 +1,7 @@
 import { chatWatchersQuerySchema } from '@fish/contracts/chat/schema'
 import { ListingIdSchema } from '@fish/contracts/listings/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -24,7 +25,13 @@ export function createChatWatchersRouter(options: {
       )
     }
     try {
-      return c.json(await options.service.list(c.get('userId'), id.data, parsed.data))
+      return c.json(
+        await options.service.list(
+          c.get('userId'),
+          decodePublicId(PUBLIC_ID_PREFIX.listing, id.data),
+          parsed.data,
+        ),
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }

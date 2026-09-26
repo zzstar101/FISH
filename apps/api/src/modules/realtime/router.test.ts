@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
 import { createBunWebSocket } from 'hono/bun'
 import { createConnectionHub } from './hub'
@@ -81,10 +82,16 @@ describe('realtime router (integration)', () => {
       })
       hub.pushToUsers(['alice', 'bob'], {
         type: 'message.new',
-        conversationId: 'conv-1',
+        conversationId: encodePublicId(
+          PUBLIC_ID_PREFIX.conversation,
+          '01930000-0000-7000-8000-0000000000c1',
+        ),
         message: {
-          id: '00000000-0000-4000-8000-0000000000d1',
-          conversationId: 'conv-1',
+          id: encodePublicId(PUBLIC_ID_PREFIX.message, '01930000-0000-7000-8000-0000000000d1'),
+          conversationId: encodePublicId(
+            PUBLIC_ID_PREFIX.conversation,
+            '01930000-0000-7000-8000-0000000000c1',
+          ),
           senderId: null,
           sender: null,
           type: 'SYSTEM',

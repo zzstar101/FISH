@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { buildMeetupQrPayload, parseMeetupQrPayload } from './meetup-qr'
 
-const txId = '01990000-0000-7000-8000-0000000000a1'
+const txId = encodePublicId(PUBLIC_ID_PREFIX.transaction, '01990000-0000-7000-8000-0000000000a1')
 const token = 'q3fJ8kLp2wRtY9uBv1cDxy'
 
 describe('meetup-qr payload', () => {
@@ -16,7 +17,7 @@ describe('meetup-qr payload', () => {
     expect(parseMeetupQrPayload('https://example.com/pay?tx=1')).toBeNull()
     expect(parseMeetupQrPayload('random text')).toBeNull()
     expect(parseMeetupQrPayload('123456')).toBeNull()
-    // 前缀对但字段坏：tx 非 uuid / token 含非 base64url / 缺 token
+    // 前缀对但字段坏：tx 非规范 TypeID / token 含非 base64url / 缺 token
     expect(parseMeetupQrPayload(`fish://meetup/redeem?tx=not-a-uuid&t=${token}`)).toBeNull()
     expect(parseMeetupQrPayload(`fish://meetup/redeem?tx=${txId}&t=${token};rm -rf`)).toBeNull()
     expect(parseMeetupQrPayload(`fish://meetup/redeem?tx=${txId}`)).toBeNull()

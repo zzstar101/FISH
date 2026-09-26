@@ -11,7 +11,7 @@
  * #73 治理（举报队列 / 我的举报）复用本文件：游标形状与 Admin 列表一致，只是排序列换成
  * `reports.created_at`，所以 `cursorCondition` 也放在这里，而不是各 store 各抄一份。
  */
-import { ListingCursorTimestampSchema, ListingIdSchema } from '@fish/contracts/listings/schema'
+import { ListingCursorTimestampSchema } from '@fish/contracts/listings/schema'
 import {
   decodePublicId,
   encodePublicId,
@@ -46,17 +46,15 @@ function isCursorTimestamp(value: string): boolean {
 export function encodeCursor(
   createdAtMicro: string,
   id: string,
-  publicPrefix?: PublicIdPrefix,
+  publicPrefix: PublicIdPrefix,
 ): string {
   // 只接受微秒精度的 UTC ISO 文本：与 listings `newest` 排序同款，**必须由 store 的
   // `to_char(..., 'US')` 给出**，不能用 `Date.toISOString()`（JS Date 只有毫秒，同毫秒行
   // 在翻页边界会重复/漏项）。
-  return Buffer.from(
-    `${createdAtMicro}|${publicPrefix ? encodePublicId(publicPrefix, id) : id}`,
-  ).toString('base64url')
+  return Buffer.from(`${createdAtMicro}|${encodePublicId(publicPrefix, id)}`).toString('base64url')
 }
 
-export function decodeCursor(raw: string, publicPrefix?: PublicIdPrefix): AdminCursor | null {
+export function decodeCursor(raw: string, publicPrefix: PublicIdPrefix): AdminCursor | null {
   let decoded: string
   try {
     decoded = Buffer.from(raw, 'base64url').toString('utf8')
@@ -71,11 +69,10 @@ export function decodeCursor(raw: string, publicPrefix?: PublicIdPrefix): AdminC
 
   // A public cursor encodes its resource prefix, but DB comparisons still use UUID.
   // Never accept a legacy bare UUID in a public resource cursor.
-  if (publicPrefix ? !isPublicId(publicPrefix, id) : !ListingIdSchema.safeParse(id).success)
-    return null
+  if (!isPublicId(publicPrefix, id)) return null
   // 时间戳校验交给契约包的 `ListingCursorTimestampSchema`：它查月/日/时/分/秒值域，
   // `2026-13-45T99:99Z` 之类会被 PG 的 ::timestamptz 拒绝成 500，必须在这里拦成 422。
   if (!createdAt || !isCursorTimestamp(createdAt)) return null
 
-  return { createdAt, id: publicPrefix ? decodePublicId(publicPrefix, id) : id }
+  return { createdAt, id: decodePublicId(publicPrefix, id) }
 }

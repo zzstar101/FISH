@@ -1,5 +1,4 @@
 import {
-  type ConversationCreateInput,
   type ConversationDto,
   type ConversationListQuery,
   type ConversationListResponse,
@@ -7,6 +6,8 @@ import {
   conversationDtoSchema,
   conversationListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
 import { decodeCursor, encodeCursor } from './cursor'
 import type { ConversationDetailRow, ConversationStore } from './store'
@@ -49,17 +50,21 @@ function toConversationDto(
   storage: MediaStorage,
 ): ConversationDto {
   return conversationDtoSchema.parse({
-    id: row.conversation.id,
-    listingId: row.conversation.listing_id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation.id),
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.conversation.listing_id),
     role: row.conversation.buyer_id === viewerId ? 'buyer' : 'seller',
     listing: {
-      id: row.listing.id,
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listing.id),
       title: row.listing.title,
       priceCents: row.listing.priceCents,
       status: row.listing.status,
       coverUrl: row.coverObjectKey ? storage.publicUrl(row.coverObjectKey) : null,
     },
-    counterpart: row.counterpart,
+    counterpart: {
+      ...row.counterpart,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.counterpart.id),
+      avatarUrl: publicAvatarUrl(row.counterpart.avatarUrl),
+    },
     unreadCount: row.unreadCount,
     counterpartLastReadAt: readAtIso(row, viewerId, 'counterpart'),
     lastMessage: row.lastMessage
@@ -67,7 +72,9 @@ function toConversationDto(
           // MEDIA 也是合法摘要类型（#67 第四步）：content 由 store 翻成 `[图片]`/`[语音]`。
           type: row.lastMessage.type as 'TEXT' | 'SYSTEM' | 'MEDIA',
           content: row.lastMessage.content,
-          senderId: row.lastMessage.senderId,
+          senderId: row.lastMessage.senderId
+            ? encodePublicId(PUBLIC_ID_PREFIX.user, row.lastMessage.senderId)
+            : null,
           createdAt: new Date(row.lastMessage.createdAt).toISOString(),
         }
       : null,
@@ -80,7 +87,7 @@ export interface ConversationService {
   /** 创建/复用会话。复用返回 created=false（路由据此输出 200/201）。 */
   createOrGetConversation(
     userId: string,
-    input: ConversationCreateInput,
+    input: { listingId: string },
   ): Promise<{ conversation: ConversationDto; created: boolean }>
   listConversations(userId: string, query: ConversationListQuery): Promise<ConversationListResponse>
   getConversation(userId: string, conversationId: string): Promise<ConversationDto>

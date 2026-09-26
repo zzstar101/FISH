@@ -1,13 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import { errorBody } from '@fish/contracts/system/error'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import { allowRestrictionGuard } from '../governance/testing'
+import { legacyMediaToken } from './legacy-url'
 import { createUploadsRouter } from './router'
 import type { MediaStorage } from './storage'
 
 const USER_ID = '01930000-0000-7000-8000-00000000000a'
+const NEW_KEY = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-00000000000b')}.jpg`
+const LEGACY_SECRET = 'test-secret-for-legacy-media-longer-than-32-characters'
 
 function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage {
   return {
@@ -33,7 +37,12 @@ function buildApp(options: { storage: MediaStorage; authed?: boolean }) {
   const root = new Hono()
   root.route(
     '/uploads',
-    createUploadsRouter({ storage: options.storage, requireAuth, guard: allowRestrictionGuard }),
+    createUploadsRouter({
+      storage: options.storage,
+      legacyUrlSecret: LEGACY_SECRET,
+      requireAuth,
+      guard: allowRestrictionGuard,
+    }),
   )
   return root
 }
@@ -95,10 +104,7 @@ describe('uploads router', () => {
 
   test('maps confirm failures onto the frozen error codes', async () => {
     const app = buildApp({ storage: fakeStorage({ stat: async () => null }) })
-    const res = await app.request(
-      '/uploads/confirm',
-      post({ objectKey: `listings/${USER_ID}/a.jpg` }),
-    )
+    const res = await app.request('/uploads/confirm', post({ objectKey: NEW_KEY }))
 
     expect(res.status).toBe(422)
     const body = (await res.json()) as { error: { code: string; details?: { field: string }[] } }
@@ -107,9 +113,42 @@ describe('uploads router', () => {
     expect(body.error.details?.[0]?.field).toBe('objectKey')
   })
 
+  test('历史图片以加密 token 匿名读取，非法 token 不访问存储', async () => {
+    const oldKey = `listings/${USER_ID}/01930000-0000-4000-8000-00000000000c.jpg`
+    const seen: string[] = []
+    const app = buildApp({
+      storage: fakeStorage({
+        stat: async (key) => {
+          seen.push(key)
+          return { size: 3, contentType: 'image/jpeg' }
+        },
+        getObject: (key) => {
+          seen.push(key)
+          return {
+            stream: new ReadableStream({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2, 3]))
+                controller.close()
+              },
+            }),
+            contentType: 'image/jpeg',
+          }
+        },
+      }),
+      authed: false,
+    })
+    const token = legacyMediaToken(oldKey, LEGACY_SECRET)
+    const response = await app.request(`/uploads/legacy/${token}`)
+    expect(response.status).toBe(200)
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
+    expect(seen).toEqual([oldKey, oldKey])
+    expect((await app.request('/uploads/legacy/invalid-token')).status).toBe(404)
+    expect(seen).toHaveLength(2)
+  })
+
   test('returns the public url on a successful confirm', async () => {
     const app = buildApp({ storage: fakeStorage() })
-    const key = `listings/${USER_ID}/a.jpg`
+    const key = NEW_KEY
     const res = await app.request('/uploads/confirm', post({ objectKey: key }))
 
     expect(res.status).toBe(200)

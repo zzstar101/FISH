@@ -7,11 +7,12 @@ import {
   transactionProposalInputSchema,
   transactionRejectInputSchema,
 } from '@fish/contracts/transactions/schema'
+import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
-import { isTransactionId, type TransactionService, TransactionServiceError } from './service'
+import { type TransactionService, TransactionServiceError } from './service'
 
 export type TransactionsRouterOptions = {
   service: TransactionService
@@ -24,6 +25,12 @@ export type TransactionsRouterOptions = {
 /** 畸形 :id 不进 store（uuid 列会 500）：与 listings 的 router 级 id 校验同一惯例。 */
 function txNotFound(c: Context) {
   return c.json(errorBody('TRANSACTION_NOT_FOUND', '交易不存在'), 404)
+}
+
+function transactionId(raw: string): string | null {
+  return isPublicId(PUBLIC_ID_PREFIX.transaction, raw)
+    ? decodePublicId(PUBLIC_ID_PREFIX.transaction, raw)
+    : null
 }
 
 function toErrorResponse(c: Context, error: unknown): Response {
@@ -53,7 +60,13 @@ export function createTransactionsRouter({
       )
     }
     try {
-      return c.json(await service.propose(c.get('userId'), parsed.data), 201)
+      return c.json(
+        await service.propose(c.get('userId'), {
+          ...parsed.data,
+          conversationId: decodePublicId(PUBLIC_ID_PREFIX.conversation, parsed.data.conversationId),
+        }),
+        201,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -68,7 +81,13 @@ export function createTransactionsRouter({
       )
     }
     try {
-      return c.json(await service.reject(c.get('userId'), parsed.data), 200)
+      return c.json(
+        await service.reject(c.get('userId'), {
+          ...parsed.data,
+          conversationId: decodePublicId(PUBLIC_ID_PREFIX.conversation, parsed.data.conversationId),
+        }),
+        200,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -92,9 +111,10 @@ export function createTransactionsRouter({
   // 注意顺序：/proposals、/proposals/reject 已在上面注册，:id 不会吞掉它们；
   // 但 :id 段必须放在它们之后（Hono 按注册顺序匹配）。
   app.get('/:id', requireAuth, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     try {
-      return c.json(await service.getTransaction(c.get('userId'), c.req.param('id')), 200)
+      return c.json(await service.getTransaction(c.get('userId'), id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -110,25 +130,33 @@ export function createTransactionsRouter({
       )
     }
     try {
-      return c.json(await service.accept(c.get('userId'), parsed.data), 201)
+      return c.json(
+        await service.accept(c.get('userId'), {
+          ...parsed.data,
+          conversationId: decodePublicId(PUBLIC_ID_PREFIX.conversation, parsed.data.conversationId),
+        }),
+        201,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }
   })
 
   app.post('/:id/confirm', requireAuth, guard.write, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     try {
-      return c.json(await service.confirm(c.get('userId'), c.req.param('id')), 200)
+      return c.json(await service.confirm(c.get('userId'), id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
   })
 
   app.post('/:id/cancel', requireAuth, guard.write, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     try {
-      return c.json(await service.cancel(c.get('userId'), c.req.param('id')), 200)
+      return c.json(await service.cancel(c.get('userId'), id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -138,9 +166,10 @@ export function createTransactionsRouter({
 
   // 卖家取本单面交码（201；#175 幂等：重复调用返回同一枚；明文码与 qrPayload 只在此响应出现）。
   app.post('/:id/meetup-token', requireAuth, guard.write, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     try {
-      return c.json(await service.issueMeetupToken(c.get('userId'), c.req.param('id')), 201)
+      return c.json(await service.issueMeetupToken(c.get('userId'), id), 201)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -148,9 +177,10 @@ export function createTransactionsRouter({
 
   // 当前凭证状态（无明文）。
   app.get('/:id/meetup-token', requireAuth, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     try {
-      return c.json(await service.getMeetupTokenStatus(c.get('userId'), c.req.param('id')), 200)
+      return c.json(await service.getMeetupTokenStatus(c.get('userId'), id), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -158,7 +188,8 @@ export function createTransactionsRouter({
 
   // 买家核销二维码（200 MeetupVerificationResponse；nextAction 驱动 confirm）。
   app.post('/:id/meetup-token/redeem', requireAuth, guard.write, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     const parsed = meetupTokenRedeemInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {
       return c.json(
@@ -167,10 +198,7 @@ export function createTransactionsRouter({
       )
     }
     try {
-      return c.json(
-        await service.redeemMeetupToken(c.get('userId'), c.req.param('id'), parsed.data),
-        200,
-      )
+      return c.json(await service.redeemMeetupToken(c.get('userId'), id, parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -178,7 +206,8 @@ export function createTransactionsRouter({
 
   // 买家核销 6 位手动码。
   app.post('/:id/meetup-token/verify-code', requireAuth, guard.write, async (c) => {
-    if (!isTransactionId(c.req.param('id'))) return txNotFound(c)
+    const id = transactionId(c.req.param('id') ?? '')
+    if (!id) return txNotFound(c)
     const parsed = meetupTokenVerifyCodeInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {
       return c.json(
@@ -187,10 +216,7 @@ export function createTransactionsRouter({
       )
     }
     try {
-      return c.json(
-        await service.verifyMeetupCode(c.get('userId'), c.req.param('id'), parsed.data),
-        200,
-      )
+      return c.json(await service.verifyMeetupCode(c.get('userId'), id, parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

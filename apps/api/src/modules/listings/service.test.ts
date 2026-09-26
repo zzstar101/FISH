@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingFeedQuery, ListingStatus } from '@fish/contracts/listings/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import { encodeCursor } from './cursor'
 import { createListingService, ListingServiceError } from './service'
@@ -141,7 +142,8 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage {
   }
 }
 
-function feedQuery(overrides: Partial<ListingFeedQuery> = {}): ListingFeedQuery {
+type InternalFeedQuery = Omit<ListingFeedQuery, 'sellerId'> & { sellerId?: string }
+function feedQuery(overrides: Partial<InternalFeedQuery> = {}): InternalFeedQuery {
   return { sort: 'newest', limit: 20, ...overrides }
 }
 
@@ -154,7 +156,7 @@ const validCreate = {
   urgent: false,
   negotiable: false,
   free: false,
-  objectKeys: [`listings/${SELLER_ID}/a.jpg`],
+  objectKeys: [`listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`],
 }
 
 async function expectServiceError(run: () => Promise<unknown>): Promise<ListingServiceError> {
@@ -226,7 +228,9 @@ describe('listFeed', () => {
 
     const response = await service.listFeed(null, feedQuery())
     expect(response.items).toHaveLength(1)
-    expect(response.items[0]?.id).toBe('01930000-0000-7000-8000-000000000012')
+    expect(response.items[0]?.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-000000000012'),
+    )
   })
 
   test('rejects reading another seller listings by status', async () => {
@@ -386,7 +390,7 @@ describe('getDetail', () => {
       `https://cdn.test/listings/${SELLER_ID}/b.jpg`,
     ])
     expect(detail.seller).toEqual({
-      id: SELLER_ID,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID),
       nickname: '阿岚',
       avatarUrl: null,
       authStatus: 'VERIFIED',
@@ -522,7 +526,7 @@ describe('createListing', () => {
 
   test('旧用户重键后可保留本人的历史图片键，非本人旧键仍拒绝', async () => {
     const oldId = '11111111-1111-4111-8111-111111111111'
-    const ownKey = `listings/${oldId}/old.webp`
+    const ownKey = `listings/${oldId}/01930000-0000-4000-8000-0000000000f2.webp`
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
@@ -638,7 +642,7 @@ describe('createListing', () => {
     })
 
     expect(received?.moderationStatus).toBe('REVIEW')
-    expect(result.detail.id).toBe(LISTING_ID)
+    expect(result.detail.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
   })
 
   test('reports created=true and returns the detail', async () => {
@@ -646,7 +650,7 @@ describe('createListing', () => {
     const result = await service.createListing(SELLER_ID, validCreate)
 
     expect(result.created).toBe(true)
-    expect(result.detail.id).toBe(LISTING_ID)
+    expect(result.detail.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
   })
 
   test('returns the existing listing and re-enqueues the match job on a duplicate submit', async () => {
@@ -740,13 +744,15 @@ describe('updateListing', () => {
 
     await service.updateListing(SELLER_ID, LISTING_ID, {
       title: '新标题',
-      objectKeys: [`listings/${SELLER_ID}/new.jpg`],
+      objectKeys: [`listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f3.jpg`],
     })
 
     expect(received.fields).toMatchObject({ title: '新标题', moderationStatus: 'APPROVED' })
     // `objectKeys` 不是 `listings` 的列，绝不能出现在 `fields` 里。
     expect(received.fields).not.toHaveProperty('objectKeys')
-    expect(received.objectKeys).toEqual([`listings/${SELLER_ID}/new.jpg`])
+    expect(received.objectKeys).toEqual([
+      `listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f3.jpg`,
+    ])
   })
 
   // 并发：锁内读到的行已经是 RESERVED / SOLD（#11 的交易流程）——这必须是 409 而不是 404。

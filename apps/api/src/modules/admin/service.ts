@@ -7,6 +7,7 @@ import type {
 import {
   AdminAuditLogEntrySchema,
   AdminAuditLogPageSchema,
+  AdminAuditTargetTypeSchema,
   type AdminListingDetail,
   AdminListingDetailSchema,
   type AdminListingSummaryPage,
@@ -33,8 +34,19 @@ import {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus, Me } from '@fish/contracts/auth/user'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
-import { encodePublicId, PUBLIC_ID_PREFIX, type PublicIdPrefix } from '@fish/shared/public-id'
+import {
+  decodePublicId,
+  encodePublicId,
+  PUBLIC_ID_PREFIX,
+  type PublicIdPrefix,
+} from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
+import {
+  auditTargetInfo,
+  decodeAuditFilter,
+  projectAuditId,
+  projectAuditSnapshot,
+} from './audit-public-id'
 import { decodeCursor, encodeCursor } from './cursor'
 import { AdminError } from './errors'
 import type {
@@ -181,30 +193,40 @@ function toListingSummary(row: ListingSummaryRow, storage: MediaStorage) {
   })
 }
 
-function toAuditLogEntry(row: AuditLogRow) {
+type ResolveLegacyAuditId = AdminStore['resolveLegacyAuditId']
+
+async function toAuditLogEntry(row: AuditLogRow, resolveLegacy: ResolveLegacyAuditId) {
+  const targetType = AdminAuditTargetTypeSchema.safeParse(row.targetType)
+  if (!targetType.success) return AdminAuditLogEntrySchema.safeParse(null)
+  const { prefix, table } = auditTargetInfo(targetType.data)
   return AdminAuditLogEntrySchema.safeParse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, row.id),
     actor:
       row.actorUserId && row.actorNickname != null
-        ? { id: row.actorUserId, nickname: row.actorNickname }
+        ? {
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, row.actorUserId),
+            nickname: row.actorNickname,
+          }
         : null,
     action: row.action,
-    targetType: row.targetType,
-    targetId: row.targetId,
-    before: row.before ?? null,
-    after: row.after ?? null,
+    targetType: targetType.data,
+    targetId: await projectAuditId(prefix, table, row.targetId, resolveLegacy),
+    before: await projectAuditSnapshot(row.before ?? null, resolveLegacy),
+    after: await projectAuditSnapshot(row.after ?? null, resolveLegacy),
     reason: row.reason,
     requestId: row.requestId,
     createdAt: row.createdAt.toISOString(),
   })
 }
 
-function toAuditLogSummary(row: AuditLogSummaryRow) {
+async function toAuditLogSummary(row: AuditLogSummaryRow, resolveLegacy: ResolveLegacyAuditId) {
+  const targetType = AdminAuditTargetTypeSchema.parse(row.targetType)
+  const { prefix, table } = auditTargetInfo(targetType)
   return {
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, row.id),
     action: row.action,
-    targetType: row.targetType,
-    targetId: row.targetId,
+    targetType,
+    targetId: await projectAuditId(prefix, table, row.targetId, resolveLegacy),
     reason: row.reason,
     createdAt: row.createdAt.toISOString(),
   }
@@ -375,7 +397,9 @@ export function createAdminService({
           expiresAt: restriction.expiresAt?.toISOString() ?? null,
           createdAt: restriction.createdAt.toISOString(),
         })),
-        recentAuditLogs: recentAuditLogs.map(toAuditLogSummary),
+        recentAuditLogs: await Promise.all(
+          recentAuditLogs.map((row) => toAuditLogSummary(row, store.resolveLegacyAuditId)),
+        ),
       })
     },
 
@@ -432,8 +456,10 @@ export function createAdminService({
           ...listing.seller,
           id: encodePublicId(PUBLIC_ID_PREFIX.user, listing.seller.id),
         },
-        recentAuditLogs: (await store.recentAuditLogs('LISTING', listingId, 10)).map(
-          toAuditLogSummary,
+        recentAuditLogs: await Promise.all(
+          (await store.recentAuditLogs('LISTING', listingId, 10)).map((row) =>
+            toAuditLogSummary(row, store.resolveLegacyAuditId),
+          ),
         ),
       }
 
@@ -447,24 +473,32 @@ export function createAdminService({
     async listAuditLogs(query) {
       const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.auditLog) : null
       if (query.cursor && !cursor) throw invalidCursor()
+      const targetId = query.targetId
+        ? decodeAuditFilter(query.targetType, query.targetId)
+        : undefined
+      if (query.targetId && !targetId) {
+        throw new AdminError('VALIDATION_FAILED', 422, '审计目标 ID 与资源类型不匹配')
+      }
 
       const rows = await store.listAuditLogs({
-        actorId: query.actorId,
+        actorId: query.actorId ? decodePublicId(PUBLIC_ID_PREFIX.user, query.actorId) : undefined,
         action: query.action,
         targetType: query.targetType,
-        targetId: query.targetId,
+        targetId: targetId?.id,
+        targetTable: targetId?.table,
         createdFrom: query.createdFrom ? new Date(query.createdFrom) : undefined,
         createdTo: query.createdTo ? new Date(query.createdTo) : undefined,
         cursor,
         limit: query.limit,
       })
 
-      const page = pageOf(
-        rows,
-        query.limit,
-        (row) => toAuditLogEntry(row).data ?? null,
-        PUBLIC_ID_PREFIX.auditLog,
+      const projected = await Promise.all(
+        rows.map(async (row) => ({
+          ...row,
+          entry: (await toAuditLogEntry(row, store.resolveLegacyAuditId)).data ?? null,
+        })),
       )
+      const page = pageOf(projected, query.limit, (row) => row.entry, PUBLIC_ID_PREFIX.auditLog)
       return AdminAuditLogPageSchema.parse(page)
     },
 

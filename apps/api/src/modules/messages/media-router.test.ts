@@ -1,12 +1,16 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import type { MediaStorage } from '../uploads/storage'
 import { createMediaRouter } from './media-router'
 import type { MediaMessageService } from './media-service'
 
-const conversationId = '11111111-1111-4111-8111-111111111111'
-const mediaId = '22222222-2222-4222-8222-222222222222'
+const conversationId = encodePublicId(
+  PUBLIC_ID_PREFIX.conversation,
+  '01930000-0000-7000-8000-0000000000c1',
+)
+const mediaId = encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000e1')
 
 const requireAuth = async (
   c: Parameters<NonNullable<Parameters<typeof createMediaRouter>[0]['requireAuth']>>[0],
@@ -28,9 +32,9 @@ function buildApp(
       expiresAt: '2026-09-14T12:10:00.000Z',
     }),
     create: async () => ({
-      id: '44444444-4444-4444-8444-444444444444',
+      id: encodePublicId(PUBLIC_ID_PREFIX.message, '01930000-0000-7000-8000-0000000000d1'),
       conversationId,
-      senderId: '33333333-3333-4333-8333-333333333333',
+      senderId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
       kind: 'IMAGE',
       mediaId,
       url: `/conversations/${conversationId}/media/${mediaId}`,

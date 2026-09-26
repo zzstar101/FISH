@@ -1,4 +1,3 @@
-import { MeSchema } from '@fish/contracts/auth/user'
 import {
   ALLOWED_IMAGE_MIME,
   type ListingCard,
@@ -17,9 +16,12 @@ import {
 } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createModerationService, type ModerationService } from '../moderation/service'
 import type { ModerationField, ModerationResult } from '../moderation/types'
-import type { MediaStorage } from '../uploads/storage'
+import { publicAvatarUrl } from '../uploads/avatar-url'
+import { isLegacyListingKey } from '../uploads/legacy-url'
+import { isPublicListingKey, type MediaStorage } from '../uploads/storage'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
 import type {
@@ -57,8 +59,10 @@ const ACTIVE: ListingStatusValue = 'ACTIVE'
 
 type ListingStatusValue = ListingRow['status']
 
+type ListingFeedCriteria = Omit<ListingFeedQuery, 'sellerId'> & { sellerId?: string }
+
 export interface ListingService {
-  listFeed(viewerId: string | null, query: ListingFeedQuery): Promise<ListingFeedResponse>
+  listFeed(viewerId: string | null, query: ListingFeedCriteria): Promise<ListingFeedResponse>
   getDetail(viewerId: string | null, id: string): Promise<ListingDetail>
   createListing(
     userId: string,
@@ -123,9 +127,9 @@ export function createListingService(deps: {
     authStatus: 'UNVERIFIED' | 'VERIFIED'
   }): ListingSeller {
     return {
-      id: row.id,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
       nickname: row.nickname,
-      avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
+      avatarUrl: publicAvatarUrl(row.avatarUrl),
       authStatus: row.authStatus,
     }
   }
@@ -159,7 +163,7 @@ export function createListingService(deps: {
     const cover = input.images.find((image) => image.sortOrder === 0)
     const isOwner = input.viewerId === input.listing.sellerId
     const detail = {
-      id: input.listing.id,
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, input.listing.id),
       listingNo: input.listing.listingNo.toString(),
       title: input.listing.title,
       priceCents: input.listing.priceCents,
@@ -221,13 +225,17 @@ export function createListingService(deps: {
    * 因为 presign 的签名只覆盖 `host`、mime 不受约束（契约 §7.7）。
    */
   async function assertUsableObjectKeys(userId: string, objectKeys: string[]): Promise<void> {
-    const currentPrefix = listingObjectKeyPrefix(userId)
-    const prefixes = objectKeys.every((key) => key.startsWith(currentPrefix))
-      ? [currentPrefix]
-      : [currentPrefix, ...(await store.legacyUserIds(userId)).map(listingObjectKeyPrefix)]
+    const publicPrefix = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+    const currentLegacyPrefix = listingObjectKeyPrefix(userId)
+    const prefixes = objectKeys.every((key) => key.startsWith(publicPrefix))
+      ? [currentLegacyPrefix]
+      : [currentLegacyPrefix, ...(await store.legacyUserIds(userId)).map(listingObjectKeyPrefix)]
 
     for (const objectKey of objectKeys) {
-      if (!prefixes.some((prefix) => objectKey.startsWith(prefix))) {
+      if (
+        !(isPublicListingKey(objectKey) && objectKey.startsWith(publicPrefix)) &&
+        !(isLegacyListingKey(objectKey) && prefixes.some((prefix) => objectKey.startsWith(prefix)))
+      ) {
         throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
           { field: 'objectKeys', message: '图片不属于当前用户' },
         ])

@@ -1,5 +1,7 @@
 import { messageListQuerySchema, messageSendInputSchema } from '@fish/contracts/chat/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { ConversationIdSchema } from '@fish/contracts/system/public-id'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -24,7 +26,10 @@ function toErrorResponse(c: Context, error: unknown): Response {
  * 路径参数必须是 UUID：否则它作为绑定参数走到 SQL 的 `::uuid` 转换，PG 抛 `22P02` → 500，
  * 而契约对「会话 id 不存在」的口径是 404 `CONVERSATION_NOT_FOUND`（与 #152 的 read 同款）。
  */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const parseConversationId = (raw: string) =>
+  ConversationIdSchema.safeParse(raw).success
+    ? decodePublicId(PUBLIC_ID_PREFIX.conversation, raw)
+    : null
 
 const conversationNotFound = (c: Context) =>
   c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
@@ -38,7 +43,8 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
   const app = new Hono<{ Variables: AuthVariables }>()
 
   app.get('/:id/messages', requireAuth, async (c) => {
-    if (!UUID_PATTERN.test(c.req.param('id'))) return conversationNotFound(c)
+    const id = parseConversationId(c.req.param('id') ?? '')
+    if (!id) return conversationNotFound(c)
     const parsed = messageListQuerySchema.safeParse(c.req.query())
     if (!parsed.success) {
       return c.json(
@@ -48,7 +54,12 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
     }
     try {
       return c.json(
-        await service.listMessages(c.get('userId'), c.req.param('id'), parsed.data),
+        await service.listMessages(c.get('userId'), id, {
+          ...parsed.data,
+          before: parsed.data.before
+            ? decodePublicId(PUBLIC_ID_PREFIX.message, parsed.data.before)
+            : undefined,
+        }),
         200,
       )
     } catch (error) {
@@ -57,7 +68,8 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
   })
 
   app.post('/:id/messages', requireAuth, guard.write, async (c) => {
-    if (!UUID_PATTERN.test(c.req.param('id'))) return conversationNotFound(c)
+    const id = parseConversationId(c.req.param('id') ?? '')
+    if (!id) return conversationNotFound(c)
     const parsed = messageSendInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {
       return c.json(
@@ -66,10 +78,7 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
       )
     }
     try {
-      return c.json(
-        await service.sendTextMessage(c.get('userId'), c.req.param('id'), parsed.data),
-        201,
-      )
+      return c.json(await service.sendTextMessage(c.get('userId'), id, parsed.data), 201)
     } catch (error) {
       return toErrorResponse(c, error)
     }

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ProfileResponse } from '@fish/contracts/profile/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import { UploadServiceError } from '../uploads/service'
@@ -8,9 +9,8 @@ import type { ProfileService } from './service'
 
 const profile = {
   user: {
-    // 契约的 Me.id 是 z.uuid()：PATCH 回包要过 profileUpdateResponseSchema.parse，
-    // fixture 用 'user-1' 会 500（GET 直接回 service 结果，历史上没暴露这一点）。
-    id: '01930000-0000-7000-8000-0000000000a1',
+    // PATCH 回包会经契约校验，必须使用规范 usr_ ID。
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
     nickname: '小明',
     avatarUrl: null,
     authStatus: 'VERIFIED',

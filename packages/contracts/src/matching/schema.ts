@@ -2,6 +2,7 @@ import { z } from 'zod'
 // 包内一律用相对导入（与 `listings/schema.ts` 引 `../auth/user` 同风格）；外部消费者走
 // `@fish/contracts/listings/schema` 这个 subpath。
 import { ListingCardSchema, ListingCategorySchema } from '../listings/schema'
+import { ListingIdSchema, MatchIdSchema, WishIdSchema } from '../system/public-id'
 
 /**
  * Matching Domain Contract（Issue #8，2026-09-12 Freeze）。
@@ -36,7 +37,7 @@ export const MATCH_SCORE_THRESHOLD = 70
  * 变成线上协议的一部分。
  */
 export const MatchBaseSchema = z.object({
-  id: z.uuid(),
+  id: MatchIdSchema,
   score: z.number().int().min(0).max(100),
   createdAt: z.iso.datetime(),
 })
@@ -54,7 +55,7 @@ export type MatchBase = z.infer<typeof MatchBaseSchema>
  * 所以同一份愿望数据经 #7 与 #8 两条路径会给出两种大小写——需要 #7 侧迁移，见 #8 契约评论 §6.6。
  */
 export const WishSummarySchema = z.object({
-  id: z.uuid(),
+  id: WishIdSchema,
   keyword: z.string(),
   category: ListingCategorySchema.nullable(),
   budgetMinCents: z.number().int().nonnegative().nullable(),
@@ -107,8 +108,8 @@ export type ListingMatchListResponse = z.infer<typeof ListingMatchListResponseSc
  */
 export const MatchListQuerySchema = z
   .strictObject({
-    wishId: z.uuid().optional(),
-    listingId: z.uuid().optional(),
+    wishId: WishIdSchema.optional(),
+    listingId: ListingIdSchema.optional(),
     limit: z.coerce.number().int().min(1).max(50).default(10),
   })
   .refine((value) => (value.wishId === undefined) !== (value.listingId === undefined), {

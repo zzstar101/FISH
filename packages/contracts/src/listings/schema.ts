@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { AuthStatusSchema, MeSchema } from '../auth/user'
-import { ListingIdSchema as PublicListingIdSchema } from '../system/public-id'
+import { ListingIdSchema as PublicListingIdSchema, UserIdSchema } from '../system/public-id'
 
 /**
  * Listing Domain Contract（Issue #6，2026-09-12 Freeze）。
@@ -114,7 +114,7 @@ export const ListingCursorTimestampSchema = z.iso.datetime({ precision: 6 })
  * 商品 id 的形状。具名导出是因为它有三个使用点：读模型的 `id`、路由参数 `:id` 的校验、
  * 游标里 `id` 的校验（前两者拼错会变成 uuid 列的 SQL 类型错误 → 500，而不是 404/422）。
  */
-export const ListingIdSchema = z.uuid()
+export const ListingIdSchema = PublicListingIdSchema
 
 /** Exact human reference; never coerce to number (12 digits exceed safe UI conventions). */
 export const ListingNoSchema = z.string().regex(/^[1-9][0-9]{11}$/)
@@ -153,7 +153,7 @@ export type ListingSeller = z.infer<typeof ListingSellerSchema>
 
 export const ListingCardSchema = z.object({
   id: ListingIdSchema,
-  /** Additive rollout: required after every client page has been prepared for the final ID switch. */
+  /** Present on API cards; old client mock records may omit it. */
   listingNo: ListingNoSchema.optional(),
   title: ListingTitleSchema,
   priceCents: PriceCentsSchema,
@@ -283,7 +283,7 @@ export const ListingFeedQuerySchema = z
      */
     cursor: z.string().min(1).optional(),
     /** 只允许等于当前用户，传他人坐标由路由层拒绝（403 NOT_LISTING_OWNER）。 */
-    sellerId: z.uuid().optional(),
+    sellerId: UserIdSchema.optional(),
     /** 只在同时给 `sellerId` 时才接受，否则任何人都能 `?status=SOLD` 拉全站已售商品。 */
     status: ListingStatusSchema.optional(),
   })

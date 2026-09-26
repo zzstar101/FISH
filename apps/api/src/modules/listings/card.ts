@@ -3,6 +3,7 @@ import {
   ListingCardSchema,
   type ListingModerationStatus,
 } from '@fish/contracts/listings/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 
 /**
@@ -42,7 +43,7 @@ export function toListingCard(
   moderationStatus: ListingModerationStatus | null = null,
 ): ListingCard | null {
   const card = {
-    id: listing.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, listing.id),
     listingNo: listing.listingNo.toString(),
     title: listing.title,
     priceCents: listing.priceCents,

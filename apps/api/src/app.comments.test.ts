@@ -4,6 +4,7 @@ import { newId } from '@fish/db/ids'
 import { listings } from '@fish/db/schema/listings'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
 
@@ -69,7 +70,7 @@ async function registerUser(serial: string): Promise<{ id: string; cookie: strin
     .find((value) => value.startsWith('fish_session='))
     ?.split(';')[0]
   if (!cookie) throw new Error('注册未下发 fish_session cookie')
-  return { id: body.user.id, cookie }
+  return { id: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id), cookie }
 }
 
 async function createListing(sellerId: string): Promise<string> {
@@ -93,7 +94,10 @@ async function createListing(sellerId: string): Promise<string> {
  */
 describe('comments API wiring (#111)', () => {
   test('GET is anonymous; writes are 401 without a session', async () => {
-    const listingId = await createListing((await registerUser('01')).id)
+    const listingId = encodePublicId(
+      PUBLIC_ID_PREFIX.listing,
+      await createListing((await registerUser('01')).id),
+    )
 
     const anonRead = await app.request(`/listings/${listingId}/comments`)
     expect(anonRead.status).toBe(200)
@@ -107,7 +111,10 @@ describe('comments API wiring (#111)', () => {
     expect(await anonCreate.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
 
     // 回复路由的 requireAuth 也要杆住：漏挂时上面那条读接口仍然 200，单靠它拦不住。
-    const anonReply = await app.request(`/comments/${newId()}/replies`, post({ content: '还在吗' }))
+    const anonReply = await app.request(
+      `/comments/${encodePublicId(PUBLIC_ID_PREFIX.comment, newId())}/replies`,
+      post({ content: '还在吗' }),
+    )
     expect(anonReply.status).toBe(401)
     expect(await anonReply.json()).toMatchObject({ error: { code: 'UNAUTHENTICATED' } })
   })
@@ -121,7 +128,7 @@ describe('comments API wiring (#111)', () => {
   test('comment then reply round-trips through the real store, with server-side isSeller', async () => {
     const seller = await registerUser('02')
     const buyer = await registerUser('03')
-    const listingId = await createListing(seller.id)
+    const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, await createListing(seller.id))
 
     const created = await app.request(
       `/listings/${listingId}/comments`,

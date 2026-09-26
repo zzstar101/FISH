@@ -1,9 +1,11 @@
+import { WishIdSchema } from '@fish/contracts/system/public-id'
 import {
   wishCreateInputSchema,
   wishListQuerySchema,
   wishUpdateInputSchema,
 } from '@fish/contracts/wishes/schema'
 import { createDb, type Db } from '@fish/db/client'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
@@ -80,9 +82,8 @@ function describeError(error: unknown): string {
 }
 
 /** 非法 uuid 直接 404，避免打到 PG 后抛驱动错误变成 500。 */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function parseWishId(raw: string): string | null {
-  return UUID_PATTERN.test(raw) ? raw : null
+  return WishIdSchema.safeParse(raw).success ? decodePublicId(PUBLIC_ID_PREFIX.wish, raw) : null
 }
 
 /**

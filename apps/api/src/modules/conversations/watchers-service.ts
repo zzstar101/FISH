@@ -1,9 +1,10 @@
-import { MeSchema } from '@fish/contracts/auth/user'
 import {
   type ChatWatchersQuery,
   type ChatWatchersResponse,
   chatWatchersResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import { decodeCursor, encodeCursor } from './cursor'
 import { ConversationServiceError } from './service'
 import type { ConversationStore } from './store'
@@ -33,9 +34,9 @@ export function createChatWatchersService(
       return chatWatchersResponseSchema.parse({
         items: page.map((row) => ({
           user: {
-            id: row.userId,
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, row.userId),
             nickname: row.nickname,
-            avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
+            avatarUrl: publicAvatarUrl(row.avatarUrl),
             authStatus: row.authStatus,
           },
           startedAt: new Date(row.startedAt).toISOString(),

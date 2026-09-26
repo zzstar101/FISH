@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { UserIdSchema, WishIdSchema } from '../system/public-id'
 
 /** Wish Domain Contract（Issue #7）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -66,8 +67,8 @@ export const wishUpdateInputSchema = z
 export type WishUpdateInput = z.infer<typeof wishUpdateInputSchema>
 
 export const wishDtoSchema = z.object({
-  id: z.string(),
-  userId: z.string(),
+  id: WishIdSchema,
+  userId: UserIdSchema,
   keyword: z.string(),
   category: wishCategorySchema,
   budgetMinCents: z.number().int(),

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { z } from 'zod'
 import { MatchListingJobPayloadSchema, MatchWishJobPayloadSchema } from './jobs'
 import {
@@ -19,9 +20,15 @@ function issuePaths(schema: z.ZodType, input: unknown): PropertyKey[][] {
 // `z.uuid()` 会校验 RFC 版本位与变体位，随手编的 UUID 会被拒。
 const wishId = '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d'
 const listingId = '9a8b7c6d-5e4f-4a3b-8c1d-0e9f8a7b6c5d'
+const publicWishId = encodePublicId(PUBLIC_ID_PREFIX.wish, '01930000-0000-7000-8000-000000000021')
+const publicListingId = encodePublicId(
+  PUBLIC_ID_PREFIX.listing,
+  '01930000-0000-7000-8000-000000000011',
+)
+const publicMatchId = encodePublicId(PUBLIC_ID_PREFIX.match, '01930000-0000-7000-8000-000000000031')
 
 const validListingCard = {
-  id: listingId,
+  id: publicListingId,
   title: '罗技 K380 键盘',
   priceCents: 16000,
   category: 'DIGITAL',
@@ -37,32 +44,44 @@ const validListingCard = {
 
 describe('MatchListQuerySchema', () => {
   test('accepts exactly one target and defaults limit to 10', () => {
-    expect(MatchListQuerySchema.parse({ wishId })).toEqual({ wishId, limit: 10 })
-    expect(MatchListQuerySchema.parse({ listingId })).toEqual({ listingId, limit: 10 })
+    expect(MatchListQuerySchema.parse({ wishId: publicWishId })).toEqual({
+      wishId: publicWishId,
+      limit: 10,
+    })
+    expect(MatchListQuerySchema.parse({ listingId: publicListingId })).toEqual({
+      listingId: publicListingId,
+      limit: 10,
+    })
   })
 
   test('coerces limit from the query string', () => {
-    expect(MatchListQuerySchema.parse({ wishId, limit: '3' }).limit).toBe(3)
+    expect(MatchListQuerySchema.parse({ wishId: publicWishId, limit: '3' }).limit).toBe(3)
   })
 
   // 两个都给（或都不给）都是调用方 bug；静默取其一会让前端拿到"不是自己问的那个"结果。
   test('rejects giving both targets or neither', () => {
-    expect(issuePaths(MatchListQuerySchema, { wishId, listingId })).toEqual([['wishId']])
+    expect(
+      issuePaths(MatchListQuerySchema, { wishId: publicWishId, listingId: publicListingId }),
+    ).toEqual([['wishId']])
     expect(issuePaths(MatchListQuerySchema, {})).toEqual([['wishId']])
   })
 
   test('rejects an out-of-range limit', () => {
-    expect(MatchListQuerySchema.safeParse({ wishId, limit: 0 }).success).toBe(false)
-    expect(MatchListQuerySchema.safeParse({ wishId, limit: 51 }).success).toBe(false)
-    expect(MatchListQuerySchema.safeParse({ wishId, limit: 50 }).success).toBe(true)
+    expect(MatchListQuerySchema.safeParse({ wishId: publicWishId, limit: 0 }).success).toBe(false)
+    expect(MatchListQuerySchema.safeParse({ wishId: publicWishId, limit: 51 }).success).toBe(false)
+    expect(MatchListQuerySchema.safeParse({ wishId: publicWishId, limit: 50 }).success).toBe(true)
   })
 
   test('rejects an unknown query parameter instead of dropping it', () => {
-    expect(MatchListQuerySchema.safeParse({ wishId, cursor: 'abc' }).success).toBe(false)
+    expect(MatchListQuerySchema.safeParse({ wishId: publicWishId, cursor: 'abc' }).success).toBe(
+      false,
+    )
   })
 
-  test('rejects a non-uuid target', () => {
-    expect(MatchListQuerySchema.safeParse({ wishId: 'wish-1' }).success).toBe(false)
+  test('rejects bare UUID and wrong-prefix targets', () => {
+    for (const id of [wishId, publicListingId, 'wish-1']) {
+      expect(MatchListQuerySchema.safeParse({ wishId: id }).success).toBe(false)
+    }
   })
 })
 
@@ -72,7 +91,7 @@ describe('WishMatchListResponseSchema', () => {
       total: 1,
       items: [
         {
-          id: wishId,
+          id: publicMatchId,
           score: 100,
           createdAt: '2026-09-12T07:00:00.000Z',
           listing: validListingCard,
@@ -84,7 +103,7 @@ describe('WishMatchListResponseSchema', () => {
 
   test('rejects a score outside 0–100', () => {
     const item = {
-      id: wishId,
+      id: publicMatchId,
       score: 101,
       createdAt: '2026-09-12T07:00:00.000Z',
       listing: validListingCard,
@@ -108,7 +127,7 @@ describe('WishMatchListResponseSchema', () => {
 
 describe('ListingMatchListResponseSchema', () => {
   const validWish = {
-    id: wishId,
+    id: publicWishId,
     keyword: '机械键盘',
     category: 'DIGITAL',
     budgetMinCents: null,
@@ -120,7 +139,7 @@ describe('ListingMatchListResponseSchema', () => {
       total: 1,
       items: [
         {
-          id: listingId,
+          id: publicMatchId,
           score: 88,
           createdAt: '2026-09-12T07:00:00.000Z',
           wish: { ...validWish, category: null, budgetMaxCents: null },

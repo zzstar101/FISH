@@ -8,8 +8,10 @@ import { ModerationDecisionSchema, ModerationStatusSchema } from '@fish/contract
 import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
 import {
+  AuditLogIdSchema,
   ListingIdSchema,
   ModerationRecordIdSchema,
+  ReportIdSchema,
   TransactionIdSchema,
   UserIdSchema,
   UserRestrictionIdSchema,
@@ -131,6 +133,42 @@ export const AdminListingStatusCountSchema = z.object({
 })
 export type AdminListingStatusCount = z.infer<typeof AdminListingStatusCountSchema>
 
+export const AdminAuditTargetTypeSchema = z.enum([
+  'USER',
+  'LISTING',
+  'MODERATION_RECORD',
+  'REPORT',
+  'USER_RESTRICTION',
+])
+export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
+
+export const AdminAuditTargetIdSchema = z.union([
+  UserIdSchema,
+  ListingIdSchema,
+  ModerationRecordIdSchema,
+  ReportIdSchema,
+  UserRestrictionIdSchema,
+])
+
+const auditTargetIdByType = {
+  USER: UserIdSchema,
+  LISTING: ListingIdSchema,
+  MODERATION_RECORD: ModerationRecordIdSchema,
+  REPORT: ReportIdSchema,
+  USER_RESTRICTION: UserRestrictionIdSchema,
+} satisfies Record<AdminAuditTargetType, (typeof AdminAuditTargetIdSchema.options)[number]>
+
+function auditTargetMatches(value: {
+  targetType?: AdminAuditTargetType
+  targetId?: z.infer<typeof AdminAuditTargetIdSchema> | null
+}): boolean {
+  return (
+    value.targetId == null ||
+    value.targetType === undefined ||
+    auditTargetIdByType[value.targetType].safeParse(value.targetId).success
+  )
+}
+
 export const AdminUserDetailSchema = z.object({
   user: AdminUserSummarySchema,
   listingStats: AdminListingStatusCountSchema,
@@ -154,14 +192,16 @@ export const AdminUserDetailSchema = z.object({
   ),
   /** 最近 10 条针对该用户的 Admin 操作（时间倒序；空数组 = 无操作记录）。 */
   recentAuditLogs: z.array(
-    z.object({
-      id: z.uuid(),
-      action: z.string(),
-      targetType: z.string(),
-      targetId: z.uuid(),
-      reason: z.string().nullable(),
-      createdAt: z.iso.datetime(),
-    }),
+    z
+      .object({
+        id: AuditLogIdSchema,
+        action: z.string(),
+        targetType: AdminAuditTargetTypeSchema,
+        targetId: AdminAuditTargetIdSchema.nullable(),
+        reason: z.string().nullable(),
+        createdAt: z.iso.datetime(),
+      })
+      .refine(auditTargetMatches, { path: ['targetId'], message: '审计目标 ID 与资源类型不匹配' }),
   ),
 })
 export type AdminUserDetail = z.infer<typeof AdminUserDetailSchema>
@@ -231,9 +271,9 @@ export const AdminListingDetailSchema = z.object({
   /** 最近 10 条针对该商品的 Admin 操作（时间倒序；空数组 = 无操作记录）。 */
   recentAuditLogs: z.array(
     z.object({
-      id: z.uuid(),
+      id: AuditLogIdSchema,
       action: z.string(),
-      targetType: z.string(),
+      targetType: AdminAuditTargetTypeSchema,
       reason: z.string().nullable(),
       createdAt: z.iso.datetime(),
     }),
@@ -300,37 +340,27 @@ export const AdminAuditActionSchema = z.enum([
 ])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 
-export const AdminAuditTargetTypeSchema = z.enum([
-  'USER',
-  'LISTING',
-  'MODERATION_RECORD',
-  // #73 治理半场 PR2：举报单本身作为审计目标。
-  'REPORT',
-  // #73 治理半场 PR3：限制类动作的审计目标是限制记录本身，同一用户被多次限制时
-  // 每条都有独立可查的目标（而不是都挂到 USER 上互相覆盖语义）。
-  'USER_RESTRICTION',
-])
-export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
-
-export const AdminAuditLogEntrySchema = z.object({
-  id: z.uuid(),
-  /** 操作者；用户被删或初始化提升（无既有 actor）时为 `null`。 */
-  actor: z
-    .object({
-      id: z.uuid(),
-      nickname: z.string(),
-    })
-    .nullable(),
-  action: AdminAuditActionSchema,
-  targetType: AdminAuditTargetTypeSchema,
-  targetId: z.uuid(),
-  /** 脱敏快照（不存密码 / Cookie / 完整学号）。 */
-  before: z.record(z.string(), z.unknown()).nullable(),
-  after: z.record(z.string(), z.unknown()).nullable(),
-  reason: z.string().nullable(),
-  requestId: z.string().nullable(),
-  createdAt: z.iso.datetime(),
-})
+export const AdminAuditLogEntrySchema = z
+  .object({
+    id: AuditLogIdSchema,
+    /** 操作者；用户被删或初始化提升（无既有 actor）时为 `null`。 */
+    actor: z
+      .object({
+        id: UserIdSchema,
+        nickname: z.string(),
+      })
+      .nullable(),
+    action: AdminAuditActionSchema,
+    targetType: AdminAuditTargetTypeSchema,
+    targetId: AdminAuditTargetIdSchema.nullable(),
+    /** 脱敏快照（不存密码 / Cookie / 完整学号）。 */
+    before: z.record(z.string(), z.unknown()).nullable(),
+    after: z.record(z.string(), z.unknown()).nullable(),
+    reason: z.string().nullable(),
+    requestId: z.string().nullable(),
+    createdAt: z.iso.datetime(),
+  })
+  .refine(auditTargetMatches, { path: ['targetId'], message: '审计目标 ID 与资源类型不匹配' })
 export type AdminAuditLogEntry = z.infer<typeof AdminAuditLogEntrySchema>
 
 export const AdminAuditLogPageSchema = z.object({
@@ -480,17 +510,19 @@ export const AdminListingsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 })
 
-export const AdminAuditLogsQuerySchema = z.strictObject({
-  actorId: z.uuid().optional(),
-  action: AdminAuditActionSchema.optional(),
-  targetType: AdminAuditTargetTypeSchema.optional(),
-  targetId: z.uuid().optional(),
-  /** 同 `AdminListingsQuerySchema`：左闭右开。 */
-  createdFrom: z.iso.datetime().optional(),
-  createdTo: z.iso.datetime().optional(),
-  cursor: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(50).default(20),
-})
+export const AdminAuditLogsQuerySchema = z
+  .strictObject({
+    actorId: UserIdSchema.optional(),
+    action: AdminAuditActionSchema.optional(),
+    targetType: AdminAuditTargetTypeSchema.optional(),
+    targetId: AdminAuditTargetIdSchema.optional(),
+    /** 同 `AdminListingsQuerySchema`：左闭右开。 */
+    createdFrom: z.iso.datetime().optional(),
+    createdTo: z.iso.datetime().optional(),
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(50).default(20),
+  })
+  .refine(auditTargetMatches, { path: ['targetId'], message: '审计目标 ID 与资源类型不匹配' })
 
 export const AdminModerationQueueQuerySchema = z.strictObject({
   cursor: z.string().min(1).optional(),

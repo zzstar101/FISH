@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+
+const internalTx = (id: string) => decodePublicId(PUBLIC_ID_PREFIX.transaction, id)
+
 import { MemoryMessageStore } from '../messages/memory-store.fixture'
 import { createTransactionService, TransactionServiceError } from './service'
 import type {
@@ -14,11 +17,11 @@ import type {
 } from './store'
 import { MeetupConsumeRaceError } from './store'
 
-const buyer = '00000000-0000-4000-8000-0000000000a1'
-const seller = '00000000-0000-4000-8000-0000000000a2'
-const outsider = '00000000-0000-4000-8000-0000000000a3'
-const conversationA = '00000000-0000-4000-8000-0000000000c1'
-const listingA = '00000000-0000-4000-8000-0000000000b1'
+const buyer = '01930000-0000-7000-8000-0000000000a1'
+const seller = '01930000-0000-7000-8000-0000000000a2'
+const outsider = '01930000-0000-7000-8000-0000000000a3'
+const conversationA = '01930000-0000-7000-8000-0000000000c1'
+const listingA = '01930000-0000-7000-8000-0000000000b1'
 
 /** 模拟 SQL store 的 to_char 微秒游标键（JS Date 只有毫秒，毫秒段补零到 6 位）。 */
 function microIso(value: Date | string): string {
@@ -361,8 +364,12 @@ describe('transaction service: propose / reject / accept', () => {
     expect(dto.role).toBe('seller')
     expect(dto.amountCents).toBe(15000)
     // DTO 内嵌商品摘要与查看者视角的对方用户（前端订单卡直接渲染，N+1 由服务端消掉）
-    expect(dto.listing).toMatchObject({ id: listingA, title: 'K380 键盘', priceCents: 16000 })
-    expect(dto.counterpart).toMatchObject({ id: buyer })
+    expect(dto.listing).toMatchObject({
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, listingA),
+      title: 'K380 键盘',
+      priceCents: 16000,
+    })
+    expect(dto.counterpart).toMatchObject({ id: encodePublicId(PUBLIC_ID_PREFIX.user, buyer) })
     const event = JSON.parse(messages.messages[0]?.content ?? '{}')
     expect(event).toEqual({
       type: 'tx.accepted',
@@ -398,12 +405,13 @@ describe('transaction service: state machine', () => {
       amountCents: 15000,
     })
 
-    const first = await service.confirm(buyer, created.id)
+    const id = internalTx(created.id)
+    const first = await service.confirm(buyer, id)
     expect(first.status).toBe('PENDING_MEETUP')
     expect(first.buyerConfirmedAt).not.toBeNull()
     expect(first.completedAt).toBeNull()
 
-    const second = await service.confirm(seller, created.id)
+    const second = await service.confirm(seller, id)
     expect(second.status).toBe('COMPLETED')
     expect(second.completedAt).not.toBeNull()
   })
@@ -414,11 +422,12 @@ describe('transaction service: state machine', () => {
       conversationId: conversationA,
       amountCents: 15000,
     })
-    await service.confirm(buyer, created.id)
-    const done = await service.confirm(seller, created.id)
+    const id = internalTx(created.id)
+    await service.confirm(buyer, id)
+    const done = await service.confirm(seller, id)
 
     // COMPLETED 上重复 confirm：幂等返回现状
-    const again = await service.confirm(buyer, created.id)
+    const again = await service.confirm(buyer, id)
     expect(again.status).toBe(done.status)
 
     // 另一笔交易取消后 confirm：409
@@ -426,8 +435,9 @@ describe('transaction service: state machine', () => {
       conversationId: conversationA,
       amountCents: 15000,
     })
-    await service.cancel(buyer, pending.id)
-    expect(service.confirm(seller, pending.id)).rejects.toMatchObject({
+    const pendingId = internalTx(pending.id)
+    await service.cancel(buyer, pendingId)
+    expect(service.confirm(seller, pendingId)).rejects.toMatchObject({
       status: 409,
       code: 'TRANSACTION_NOT_IN_PENDING',
     })
@@ -439,10 +449,11 @@ describe('transaction service: state machine', () => {
       conversationId: conversationA,
       amountCents: 15000,
     })
-    await service.confirm(buyer, created.id)
-    await service.confirm(seller, created.id)
+    const id = internalTx(created.id)
+    await service.confirm(buyer, id)
+    await service.confirm(seller, id)
 
-    expect(service.cancel(buyer, created.id)).rejects.toMatchObject({
+    expect(service.cancel(buyer, id)).rejects.toMatchObject({
       status: 409,
       code: 'TRANSACTION_NOT_IN_PENDING',
     })
@@ -451,9 +462,10 @@ describe('transaction service: state machine', () => {
       conversationId: conversationA,
       amountCents: 15000,
     })
-    const cancelled = await service.cancel(buyer, pending.id)
+    const pendingId = internalTx(pending.id)
+    const cancelled = await service.cancel(buyer, pendingId)
     expect(cancelled.status).toBe('CANCELLED')
-    const repeat = await service.cancel(seller, pending.id)
+    const repeat = await service.cancel(seller, pendingId)
     expect(repeat.status).toBe('CANCELLED')
   })
 
@@ -467,7 +479,9 @@ describe('transaction service: state machine', () => {
     store.hiddenListings.add(listingA)
     const list = await service.listTransactions(buyer, { limit: 20 })
     expect(list.items).toHaveLength(0)
-    await expect(service.getTransaction(buyer, dto.id)).rejects.toMatchObject({ status: 404 })
+    await expect(service.getTransaction(buyer, internalTx(dto.id))).rejects.toMatchObject({
+      status: 404,
+    })
   })
 
   test('listTransactions filters by role and pages with cursor', async () => {
@@ -479,8 +493,8 @@ describe('transaction service: state machine', () => {
         conversationId: conversationA,
         amountCents: 10000 + i,
       })
-      await service.confirm(buyer, dto.id)
-      await service.confirm(seller, dto.id)
+      await service.confirm(buyer, internalTx(dto.id))
+      await service.confirm(seller, internalTx(dto.id))
     }
     void store
 
@@ -489,7 +503,7 @@ describe('transaction service: state machine', () => {
     expect(page1.items[0]?.role).toBe('seller')
     expect(page1.nextCursor).not.toBeNull()
     expect(JSON.parse(Buffer.from(page1.nextCursor ?? '', 'base64url').toString()).id).toBe(
-      encodePublicId(PUBLIC_ID_PREFIX.transaction, page1.items[1]?.id ?? ''),
+      page1.items[1]?.id,
     )
     const page2 = await service.listTransactions(seller, {
       limit: 2,
@@ -502,7 +516,7 @@ describe('transaction service: state machine', () => {
   test('getTransaction 404 for outsiders (不泄漏存在性)', async () => {
     const { service } = await build()
     const created = await service.accept(seller, { conversationId: conversationA, amountCents: 1 })
-    expect(service.getTransaction(outsider, created.id)).rejects.toMatchObject({
+    expect(service.getTransaction(outsider, internalTx(created.id))).rejects.toMatchObject({
       status: 404,
       code: 'TRANSACTION_NOT_FOUND',
     })
@@ -525,16 +539,16 @@ describe('transaction service: meetup token (#70)', () => {
       conversationId: conversationA,
       amountCents: 16000,
     })
-    return { ...ctx, txId: tx.id }
+    return { ...ctx, txId: internalTx(tx.id) }
   }
 
   test('卖家签发：6 位码 + 可解析 qrPayload；DB 只有哈希，状态派生为 ISSUED', async () => {
     const { service, store, txId } = await buildWithPendingTx()
     const token = await service.issueMeetupToken(seller, txId)
     expect(token.code).toMatch(/^\d{6}$/)
-    expect(token.transactionId).toBe(txId)
+    expect(token.transactionId).toBe(encodePublicId(PUBLIC_ID_PREFIX.transaction, txId))
     expect(parseMeetupQrPayload(token.qrPayload)).toEqual({
-      transactionId: txId,
+      transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, txId),
       token: expect.any(String),
     })
     const row = await store.findMeetupToken(txId)
@@ -666,9 +680,9 @@ describe('transaction service: meetup token (#70)', () => {
       qrToken: parseMeetupQrPayload(token.qrPayload)?.token ?? '',
     })
     expect(verification).toMatchObject({
-      transactionId: txId,
+      transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, txId),
       verified: true,
-      verifiedBy: buyer,
+      verifiedBy: encodePublicId(PUBLIC_ID_PREFIX.user, buyer),
       nextAction: 'CONFIRM_DELIVERY',
     })
     // 核销即盖卖家确认（展示码 = 卖家同意），交易仍在 PENDING 等买家侧 confirm
@@ -843,7 +857,7 @@ describe('transaction service: meetup token (#70)', () => {
     const status = await service.getMeetupTokenStatus(seller, txId)
     expect(status).toMatchObject({
       status: 'CONSUMED',
-      consumedBy: buyer,
+      consumedBy: encodePublicId(PUBLIC_ID_PREFIX.user, buyer),
     })
     expect(status.consumedAt).not.toBeNull()
   })

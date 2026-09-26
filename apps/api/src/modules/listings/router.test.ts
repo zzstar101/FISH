@@ -9,11 +9,13 @@ import { allowRestrictionGuard } from '../governance/testing'
 import { createListingsRouter } from './router'
 import { type ListingService, ListingServiceError } from './service'
 
-const LISTING_ID = '01930000-0000-7000-8000-000000000011'
+const RAW_LISTING_ID = '01930000-0000-7000-8000-000000000011'
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, RAW_LISTING_ID)
 const SELLER_ID = '01930000-0000-7000-8000-00000000000a'
 
 const detail = {
   id: LISTING_ID,
+  listingNo: '638294017526',
   title: '罗技 K380 键盘',
   description: '宿舍用了一学期，功能正常。',
   priceCents: 16000,
@@ -28,7 +30,7 @@ const detail = {
   updatedAt: '2026-09-12T03:40:10.000Z',
   images: [],
   seller: {
-    id: SELLER_ID,
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID),
     nickname: '阿岚',
     avatarUrl: null,
     authStatus: 'VERIFIED',
@@ -75,7 +77,7 @@ function buildApp(options: {
       resolveViewerId: async () => options.viewerId ?? null,
       resolveClientIp: () => '127.0.0.1',
       numberLookup: {
-        lookup: async () => ({ id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID) }),
+        lookup: async () => ({ id: LISTING_ID }),
       },
     }),
   )
@@ -151,7 +153,7 @@ describe('listings router — 读接口匿名可用', () => {
         numberLookup: {
           lookup: async () => {
             calls++
-            return { id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID) }
+            return { id: LISTING_ID }
           },
         },
       }),
@@ -161,7 +163,7 @@ describe('listings router — 读接口匿名可用', () => {
     expect(calls).toBe(0)
     const valid = await app.request('/listings/by-number/123456789012')
     expect(valid.status).toBe(200)
-    expect(await valid.json()).toEqual({ id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID) })
+    expect(await valid.json()).toEqual({ id: LISTING_ID })
     expect(calls).toBe(1)
   })
 

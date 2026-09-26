@@ -5,6 +5,7 @@ import { comments } from '@fish/db/schema/comments'
 import { listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { inArray } from 'drizzle-orm'
 import { createCommentService } from './service'
 import { createSqlCommentStore } from './store'
@@ -127,8 +128,12 @@ test('isSeller 由服务端按 listing.sellerId 判定，回复继承父留言�
     const created = await service.createComment(buyerId, listingId, { content: '还在吗' })
     expect(created.isSeller).toBe(false)
 
-    const reply = await service.createReply(sellerId, created.id, { content: '还在的' })
-    expect(reply.listingId).toBe(listingId)
+    const reply = await service.createReply(
+      sellerId,
+      decodePublicId(PUBLIC_ID_PREFIX.comment, created.id),
+      { content: '还在的' },
+    )
+    expect(reply.listingId).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, listingId))
     expect(reply.isSeller).toBe(true)
 
     const page = await service.listComments(listingId, { limit: 20 })

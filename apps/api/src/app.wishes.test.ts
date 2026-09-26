@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { WishDto } from '@fish/contracts/wishes/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { loadServerEnv } from '@fish/shared/env'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
@@ -116,7 +117,7 @@ describe('wishes API wiring (#7)', () => {
 
     const jobs = jobsRows(
       await db.execute(sql`
-        SELECT type, status, payload FROM jobs WHERE payload->>'wishId' = ${wish.id}
+        SELECT type, status, payload FROM jobs WHERE payload->>'wishId' = ${decodePublicId(PUBLIC_ID_PREFIX.wish, wish.id)}
       `),
     )
 
@@ -124,7 +125,7 @@ describe('wishes API wiring (#7)', () => {
     expect(jobs[0]).toMatchObject({
       type: 'MATCH_WISH',
       status: 'PENDING',
-      payload: { wishId: wish.id },
+      payload: { wishId: decodePublicId(PUBLIC_ID_PREFIX.wish, wish.id) },
     })
   })
 

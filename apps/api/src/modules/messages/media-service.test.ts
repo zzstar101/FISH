@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { MediaMessageInput, MediaPresignInput } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import {
   MessageIdempotencyConflictError,
@@ -9,9 +10,9 @@ import {
 import { createMediaMessageService, MediaMessageServiceError } from './media-service'
 import type { MediaMessageStore, MediaRow } from './media-store'
 
-const conversationId = '11111111-1111-4111-8111-111111111111'
-const userId = '22222222-2222-4222-8222-222222222222'
-const mediaId = '33333333-3333-4333-8333-333333333333'
+const conversationId = '01930000-0000-7000-8000-0000000000c1'
+const userId = '01930000-0000-7000-8000-0000000000a1'
+const mediaId = '01930000-0000-7000-8000-0000000000e1'
 
 const image: MediaMessageInput = {
   kind: 'IMAGE',
@@ -24,7 +25,7 @@ const image: MediaMessageInput = {
 
 function row(input: MediaMessageInput): MediaRow {
   return {
-    message_id: '44444444-4444-4444-8444-444444444444',
+    message_id: '01930000-0000-7000-8000-0000000000d1',
     conversation_id: conversationId,
     sender_id: userId,
     media_id: mediaId,
@@ -192,9 +193,12 @@ describe('media message service', () => {
   test('presigns only allowed image and voice metadata', async () => {
     const service = setup()
     const input: MediaPresignInput = { kind: 'IMAGE', contentType: 'image/webp', sizeBytes: 1024 }
-    expect((await service.presign(userId, conversationId, input)).objectKey).toStartWith(
-      `chat-media/${conversationId}/${userId}/`,
+    const presigned = await service.presign(userId, conversationId, input)
+    expect(presigned.objectKey).toStartWith(
+      `chat-media/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId)}/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/med_`,
     )
+    expect(presigned.uploadUrl).not.toContain(conversationId)
+    expect(presigned.objectKey).not.toContain(userId)
     await expect(
       service.presign(userId, conversationId, {
         kind: 'IMAGE',
@@ -269,6 +273,10 @@ describe('media message service', () => {
     })
     expect(created.width).toBe(800)
     expect(created.height).toBe(600)
+    expect(created.url).toBe(
+      `https://api.test/conversations/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId)}/media/${encodePublicId(PUBLIC_ID_PREFIX.media, mediaId)}`,
+    )
+    expect(created.url).not.toContain(conversationId)
   })
 
   // 回归（评审 F-2）：宽高**都要**与真实值对比。旧代码只比 width，height 谎报也放行。
@@ -585,7 +593,7 @@ describe('media message service: send idempotency (#67)', () => {
     const replayed = await service.create(userId, conversationId, { ...image, clientRequestId })
     // 返回的是**既有**媒体，且不重复 stat / 解析 / 落快照——否则每次重试都会往存储里
     // 留一份永远不会被引用的快照（客户端复用同一个预签名 key，原 key 已被覆盖）。
-    expect(replayed.id).toBe(stored.message_id)
+    expect(replayed.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
     expect(stats).toBe(0)
     expect(reads).toBe(0)
     expect(writes).toBe(0)

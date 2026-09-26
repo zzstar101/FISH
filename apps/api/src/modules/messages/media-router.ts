@@ -4,6 +4,7 @@ import {
   mediaPresignInputSchema,
 } from '@fish/contracts/chat/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -39,7 +40,11 @@ function readJson(c: Context): Promise<unknown> {
  * 否则它会被当成绑定参数走到 SQL 的 `::uuid` 转换：非法字串让 PG 报 `22P02` → 500，
  * 而契约要求"不存在"语义（评审 F-3）。与 media-store 里的 `::uuid` 位置一一对应。
  */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function conversationId(raw: string): string | null {
+  return isPublicId(PUBLIC_ID_PREFIX.conversation, raw)
+    ? decodePublicId(PUBLIC_ID_PREFIX.conversation, raw)
+    : null
+}
 
 function conversationNotFound(c: Context) {
   return c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
@@ -76,7 +81,8 @@ export function createMediaRouter({ service, storage, requireAuth, guard }: Medi
   const app = new Hono<{ Variables: AuthVariables }>()
 
   app.post('/:id/media/presign', requireAuth, guard.write, async (c) => {
-    if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
+    const id = conversationId(c.req.param('id') ?? '')
+    if (!id) return conversationNotFound(c)
     const parsed = mediaPresignInputSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       return c.json(
@@ -85,14 +91,15 @@ export function createMediaRouter({ service, storage, requireAuth, guard }: Medi
       )
     }
     try {
-      return c.json(await service.presign(c.get('userId'), c.req.param('id'), parsed.data), 200)
+      return c.json(await service.presign(c.get('userId'), id, parsed.data), 200)
     } catch (error) {
       return errorResponse(c, error)
     }
   })
 
   app.post('/:id/media', requireAuth, guard.write, async (c) => {
-    if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
+    const id = conversationId(c.req.param('id') ?? '')
+    if (!id) return conversationNotFound(c)
     const parsed = mediaMessageInputSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       return c.json(
@@ -101,34 +108,37 @@ export function createMediaRouter({ service, storage, requireAuth, guard }: Medi
       )
     }
     try {
-      return c.json(await service.create(c.get('userId'), c.req.param('id'), parsed.data), 201)
+      return c.json(await service.create(c.get('userId'), id, parsed.data), 201)
     } catch (error) {
       return errorResponse(c, error)
     }
   })
 
   app.get('/:id/media', requireAuth, async (c) => {
-    if (!UUID_RE.test(c.req.param('id'))) return conversationNotFound(c)
+    const id = conversationId(c.req.param('id') ?? '')
+    if (!id) return conversationNotFound(c)
     const parsed = mediaListQuerySchema.safeParse(c.req.query())
     if (!parsed.success) {
       return c.json(errorBody('VALIDATION_FAILED', 'limit 或 cursor 不合法'), 422)
     }
     try {
-      return c.json(await service.list(c.get('userId'), c.req.param('id'), parsed.data), 200)
+      return c.json(await service.list(c.get('userId'), id, parsed.data), 200)
     } catch (error) {
       return errorResponse(c, error)
     }
   })
 
   app.get('/:conversationId/media/:mediaId', requireAuth, async (c) => {
-    if (!UUID_RE.test(c.req.param('conversationId')) || !UUID_RE.test(c.req.param('mediaId'))) {
+    const id = conversationId(c.req.param('conversationId') ?? '')
+    const publicMediaId = c.req.param('mediaId')
+    if (!id || !isPublicId(PUBLIC_ID_PREFIX.media, publicMediaId)) {
       return c.json(errorBody('MEDIA_NOT_FOUND', '媒体不存在'), 404)
     }
     try {
       const object = await service.getObject(
         c.get('userId'),
-        c.req.param('conversationId'),
-        c.req.param('mediaId'),
+        id,
+        decodePublicId(PUBLIC_ID_PREFIX.media, publicMediaId),
       )
       if (!storage.getObject) return c.json(errorBody('MEDIA_NOT_FOUND', '媒体不存在'), 404)
       // If-Range 未提供可验证的 validator 时回完整实体，不发送可能不匹配的分片。

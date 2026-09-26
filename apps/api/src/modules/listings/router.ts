@@ -6,7 +6,7 @@ import {
   ListingUpdateInputSchema,
 } from '@fish/contracts/listings/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
-import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -54,16 +54,11 @@ function zodValidationFailure(
  * 这条路径**任何匿名请求都能稳定触发**，所以必须显式校验，不能靠 SQL 兜底。
  */
 function requireListingId(c: Context): string {
-  const raw = c.req.param('id')
-  // Transitional read path: the number lookup already returns a canonical lst_ ID.
-  // UUID routes remain only until all Web/miniapp callers are switched in their gated rollout.
-  if (isPublicId(PUBLIC_ID_PREFIX.listing, raw))
-    return decodePublicId(PUBLIC_ID_PREFIX.listing, raw)
-  const parsed = ListingIdSchema.safeParse(raw)
-  if (!parsed.success) {
+  const raw = c.req.param('id') ?? ''
+  if (!ListingIdSchema.safeParse(raw).success) {
     throw new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
   }
-  return parsed.data
+  return decodePublicId(PUBLIC_ID_PREFIX.listing, raw)
 }
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`。 */
@@ -90,7 +85,15 @@ export function createListingsRouter(options: ListingsRouterOptions) {
 
     try {
       const viewerId = await options.resolveViewerId(c)
-      return c.json(await service.listFeed(viewerId, parsed.data), 200)
+      return c.json(
+        await service.listFeed(viewerId, {
+          ...parsed.data,
+          sellerId: parsed.data.sellerId
+            ? decodePublicId(PUBLIC_ID_PREFIX.user, parsed.data.sellerId)
+            : undefined,
+        }),
+        200,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }

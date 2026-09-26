@@ -11,6 +11,7 @@ import {
   wishUpdateInputSchema,
 } from '@fish/contracts/wishes/schema'
 import { newId } from '@fish/db/ids'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { WishMatchQueue } from './match-queue'
 import type { EditableWishFields, PoolRow, WishRow, WishStore } from './store'
 
@@ -206,8 +207,8 @@ export function createWishService({
 
 export function toWishDto(row: WishRow): WishDto {
   return {
-    id: row.id,
-    userId: row.user_id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.wish, row.id),
+    userId: encodePublicId(PUBLIC_ID_PREFIX.user, row.user_id),
     keyword: row.keyword,
     category: row.category as WishDto['category'],
     budgetMinCents: row.budget_min_cents,

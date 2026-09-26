@@ -165,7 +165,7 @@ export function createReportService(store: ReportStore): ReportService {
         items: items.map(toReportDto),
         nextCursor:
           hasMore && last
-            ? encodeCursor(last.createdAtCursor, encodePublicId(PUBLIC_ID_PREFIX.report, last.id))
+            ? encodeCursor(last.createdAtCursor, last.id, PUBLIC_ID_PREFIX.report)
             : null,
       })
     },
@@ -188,10 +188,7 @@ export function createReportService(store: ReportStore): ReportService {
         items: items.map(toAdminReportItem),
         nextCursor:
           hasMore && last
-            ? encodeCursor(
-                last.report.createdAtCursor,
-                encodePublicId(PUBLIC_ID_PREFIX.report, last.report.id),
-              )
+            ? encodeCursor(last.report.createdAtCursor, last.report.id, PUBLIC_ID_PREFIX.report)
             : null,
       })
     },

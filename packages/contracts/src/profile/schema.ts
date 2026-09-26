@@ -12,6 +12,7 @@ import {
 } from '@fish/contracts/transactions/schema'
 import { wishDtoSchema } from '@fish/contracts/wishes/schema'
 import { z } from 'zod'
+import { ListingIdSchema, TransactionIdSchema } from '../system/public-id'
 
 /**
  * Profile Domain Contract（Issue #12）。前端和 API 只依赖本目录的字段定义。
@@ -39,8 +40,8 @@ export const profileTransactionUserSchema = transactionUserSchema
 export type ProfileTransactionUser = TransactionUser
 
 export const profileTransactionSchema = z.object({
-  id: z.string(),
-  listingId: z.string(),
+  id: TransactionIdSchema,
+  listingId: ListingIdSchema,
   /** 查看者在交易中的角色（买入 / 卖出列表合并返回，前端据此分组）。 */
   role: transactionRoleSchema,
   /** 订单卡渲染用（服务端组装，前端不逐行回查）；amountCents 是议价结果，与挂价独立。 */

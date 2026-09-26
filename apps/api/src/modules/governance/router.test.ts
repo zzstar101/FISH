@@ -76,6 +76,7 @@ const LOCK_LIFT = '01940000-0000-7000-8000-0000000000b6'
 const RACE_USER = '01940000-0000-7000-8000-0000000000b7'
 const RACE_CONVERSATION = '01940000-0000-7000-8000-0000000000e7'
 const LISTING = '01940000-0000-7000-8000-0000000000c1'
+const PUBLIC_LISTING = encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING)
 const RESERVED_LISTING = '01940000-0000-7000-8000-0000000000c2'
 /** 引擎屏蔽用例专用商品：只改 moderationStatus，不碰 LISTING / RESERVED_LISTING 的状态。 */
 const ROLLBACK_LISTING = '01940000-0000-7000-8000-0000000000c3'
@@ -327,7 +328,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(row).toEqual({ status: 'OFFLINE', moderationStatus: 'BLOCKED' })
 
     // 卖家直连 PATCH / online 都被挡：恢复只能走 admin restore。
-    const patched = await app.request(LISTING_ROUTES.detail(LISTING), {
+    const patched = await app.request(LISTING_ROUTES.detail(PUBLIC_LISTING), {
       method: 'PATCH',
       headers: { cookie: sellerCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ description: '我改一下总能过吧' }),
@@ -335,7 +336,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(patched.status).toBe(409)
     expect(await patched.json()).toMatchObject({ error: { code: 'LISTING_GOVERNANCE_BLOCKED' } })
 
-    const onlined = await app.request(LISTING_ROUTES.online(LISTING), post({}, sellerCookie))
+    const onlined = await app.request(LISTING_ROUTES.online(PUBLIC_LISTING), post({}, sellerCookie))
     expect(onlined.status).toBe(409)
     expect(await onlined.json()).toMatchObject({ error: { code: 'LISTING_GOVERNANCE_BLOCKED' } })
   })
@@ -359,7 +360,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(row).toEqual({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
 
     // 恢复后卖家又能正常编辑。
-    const patched = await app.request(LISTING_ROUTES.detail(LISTING), {
+    const patched = await app.request(LISTING_ROUTES.detail(PUBLIC_LISTING), {
       method: 'PATCH',
       headers: { cookie: sellerCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ description: '正常描述' }),
@@ -420,17 +421,17 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
       expect(delisted.status).toBe(200)
       if (outcome === 'CANCELLED') {
         const cancelled = await app.request(
-          TRANSACTION_ROUTES.cancel(transactionId),
+          TRANSACTION_ROUTES.cancel(encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)),
           post({}, raceCookie),
         )
         expect(cancelled.status).toBe(200)
       } else {
         const buyerConfirmed = await app.request(
-          TRANSACTION_ROUTES.confirm(transactionId),
+          TRANSACTION_ROUTES.confirm(encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)),
           post({}, raceCookie),
         )
         const sellerConfirmed = await app.request(
-          TRANSACTION_ROUTES.confirm(transactionId),
+          TRANSACTION_ROUTES.confirm(encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)),
           post({}, sellerCookie),
         )
         expect(buyerConfirmed.status).toBe(200)
@@ -494,7 +495,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(result.restriction?.id).toBe(result.targetId)
 
     // 发布入口（PATCH 商品）被挡
-    const patched = await app.request(LISTING_ROUTES.detail(LISTING), {
+    const patched = await app.request(LISTING_ROUTES.detail(PUBLIC_LISTING), {
       method: 'PATCH',
       headers: { cookie: sellerCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ description: '受限后还能改吗' }),
@@ -535,11 +536,11 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(await res.json()).toMatchObject({ action: 'USER_BANNED' })
 
     // 读接口不受影响（ban 只禁写）
-    const read = await app.request(LISTING_ROUTES.detail(LISTING))
+    const read = await app.request(LISTING_ROUTES.detail(PUBLIC_LISTING))
     expect(read.status).toBe(200)
 
     // 留言入口被挡
-    const comment = await app.request(`/listings/${LISTING}/comments`, {
+    const comment = await app.request(`/listings/${PUBLIC_LISTING}/comments`, {
       method: 'POST',
       headers: { cookie: sellerCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ content: '封禁后还能留言吗' }),
@@ -581,7 +582,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(rows.every((row) => row.liftedBy === ADMIN_B)).toBe(true)
 
     // 解除后写入口恢复（PATCH 同一个商品，不依赖上传模块）
-    const patched = await app.request(LISTING_ROUTES.detail(LISTING), {
+    const patched = await app.request(LISTING_ROUTES.detail(PUBLIC_LISTING), {
       method: 'PATCH',
       headers: { cookie: sellerCookie, 'content-type': 'application/json' },
       body: JSON.stringify({ description: '解除限制后的正常描述' }),
@@ -1021,7 +1022,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
 
     // 1) 写守卫不认它：过期后仍能留言。
     const comment = await app.request(
-      COMMENT_ROUTES.ofListing(LISTING),
+      COMMENT_ROUTES.ofListing(PUBLIC_LISTING),
       post({ content: '封禁已经到期了' }, expiryCookie),
     )
     expect(comment.status).toBe(201)
@@ -1064,7 +1065,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
 
     // 新的封禁真的生效：同一条留言入口现在被挡。
     const blocked = await app.request(
-      COMMENT_ROUTES.ofListing(LISTING),
+      COMMENT_ROUTES.ofListing(PUBLIC_LISTING),
       post({ content: '刚被封禁还能说话吗' }, expiryCookie),
     )
     expect(blocked.status).toBe(403)
@@ -1085,7 +1086,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
       await tx.execute(sql`LOCK TABLE messages IN ACCESS EXCLUSIVE MODE`)
       sending = Promise.resolve(
         app.request(
-          CHAT_ROUTES.messages(RACE_CONVERSATION),
+          CHAT_ROUTES.messages(encodePublicId(PUBLIC_ID_PREFIX.conversation, RACE_CONVERSATION)),
           post({ content: '封禁前已开始的消息' }, raceCookie),
         ),
       )
@@ -1118,7 +1119,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect((await sending)?.status).toBe(201)
     expect((await banning)?.status).toBe(200)
     const denied = await app.request(
-      CHAT_ROUTES.messages(RACE_CONVERSATION),
+      CHAT_ROUTES.messages(encodePublicId(PUBLIC_ID_PREFIX.conversation, RACE_CONVERSATION)),
       post({ content: '封禁后不得提交' }, raceCookie),
     )
     expect(denied.status).toBe(403)
@@ -1262,7 +1263,10 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     )
     expect(restrict.status).toBe(200)
 
-    const offlined = await app.request(LISTING_ROUTES.offline(LISTING), post({}, sellerCookie))
+    const offlined = await app.request(
+      LISTING_ROUTES.offline(PUBLIC_LISTING),
+      post({}, sellerCookie),
+    )
     expect(offlined.status).toBe(403)
     expect(await offlined.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })
   })
