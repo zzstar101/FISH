@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { UserRow } from '../auth/me'
 import type { UploadService } from '../uploads/service'
 import type { MediaStorage } from '../uploads/storage'
@@ -12,8 +13,9 @@ import type {
   ProfileWishRow,
 } from './store'
 
+const USER_ID = '01930000-0000-7000-8000-0000000000a1'
 const me: Me = {
-  id: '00000000-0000-4000-8000-0000000000a1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID),
   nickname: '小明',
   avatarUrl: null,
   authStatus: 'VERIFIED',
@@ -46,7 +48,7 @@ function fakeUploads(): Pick<UploadService, 'confirm'> & { calls: string[] } {
 
 /** `users` 行 fixture：写用例要断言 DB 行 → Me 的映射仍走认证域的 toMe。 */
 const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
-  id: me.id,
+  id: USER_ID,
   studentNo: null,
   passwordHash: null,
   nickname: '小明',
@@ -62,7 +64,7 @@ const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
 })
 
 const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingRow => ({
-  id: '00000000-0000-4000-8000-0000000000b1',
+  id: '01930000-0000-7000-8000-0000000000b1',
   listingNo: 123456789012n,
   title: 'K380',
   priceCents: 16000,
@@ -78,8 +80,8 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
 })
 
 const wishRow = (overrides: Partial<ProfileWishRow> = {}): ProfileWishRow => ({
-  id: '00000000-0000-4000-8000-0000000000d1',
-  user_id: me.id,
+  id: '01930000-0000-7000-8000-0000000000d1',
+  user_id: USER_ID,
   keyword: '机械键盘',
   category: 'DIGITAL',
   budget_min_cents: 10000,
@@ -94,9 +96,9 @@ const wishRow = (overrides: Partial<ProfileWishRow> = {}): ProfileWishRow => ({
 })
 
 const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransactionRow => ({
-  id: '00000000-0000-4000-8000-0000000000e1',
+  id: '01930000-0000-7000-8000-0000000000e1',
   listingId: listingRow().id,
-  buyerId: me.id, // 我是买家 → role=buyer
+  buyerId: USER_ID, // 我是买家 → role=buyer
   amountCents: 15000,
   status: 'COMPLETED',
   createdAt: '2026-09-12T03:00:00.000Z',
@@ -107,7 +109,7 @@ const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransacti
     coverObjectKey: 'covers/tx.jpg',
   },
   counterpart: {
-    id: '00000000-0000-4000-8000-0000000000a2',
+    id: '01930000-0000-7000-8000-0000000000a2',
     nickname: '卖家小王',
     avatarUrl: null,
   },
@@ -116,6 +118,7 @@ const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransacti
 
 class MemoryProfileStore implements ProfileStore {
   statsRow: ProfileStatsRow = { activeListings: 1, activeWishes: 1, completedTransactions: 1 }
+  lastStatsUserId: string | null = null
   listings: ProfileListingRow[] = [listingRow()]
   wishes: ProfileWishRow[] = [wishRow()]
   transactions: ProfileTransactionRow[] = [txRow()]
@@ -124,7 +127,8 @@ class MemoryProfileStore implements ProfileStore {
   /** 覆盖 `updateUser` 的返回行；null 模拟「认证与写入之间账号被删」。 */
   updateResult: UserRow | null | undefined = undefined
 
-  async stats(): Promise<ProfileStatsRow> {
+  async stats(userId: string): Promise<ProfileStatsRow> {
+    this.lastStatsUserId = userId
     return this.statsRow
   }
   async ownListings(_userId: string, limit: number) {
@@ -151,9 +155,11 @@ const createService = (
 
 describe('profile service: getProfile', () => {
   test('aggregates user + stats + three lists in one call', async () => {
-    const service = createService(new MemoryProfileStore())
+    const store = new MemoryProfileStore()
+    const service = createService(store)
     const profile = await service.getProfile(me)
 
+    expect(store.lastStatsUserId).toBe(USER_ID)
     expect(profile.user).toEqual(me) // user 块原样来自 requireAuth 的 Me
     expect(profile.stats).toEqual({ activeListings: 1, activeWishes: 1, completedTransactions: 1 })
     // 商品卡：封面 objectKey 经 storage 拼 URL；本人可见 OFFLINE
@@ -165,7 +171,7 @@ describe('profile service: getProfile', () => {
     // 交易：我是 buyer → role=buyer；订单卡摘要内嵌商品与对方（coverUrl 由 storage 拼）
     expect(profile.transactions[0]?.role).toBe('buyer')
     expect(profile.transactions[0]?.listing).toEqual({
-      id: listingRow().id,
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, listingRow().id),
       title: 'K380 键盘',
       priceCents: 16000,
       status: 'SOLD',
@@ -184,7 +190,7 @@ describe('profile service: getProfile', () => {
 
   test('transaction role is seller when I am not the buyer', async () => {
     const store = new MemoryProfileStore()
-    store.transactions = [txRow({ buyerId: '00000000-0000-4000-8000-0000000000a2' })]
+    store.transactions = [txRow({ buyerId: '01930000-0000-7000-8000-0000000000a2' })]
     const service = createService(store)
     const profile = await service.getProfile(me)
     expect(profile.transactions[0]?.role).toBe('seller')
@@ -193,7 +199,7 @@ describe('profile service: getProfile', () => {
   test('limit is applied to each list (封顶 100)', async () => {
     const store = new MemoryProfileStore()
     store.listings = Array.from({ length: PROFILE_LIST_LIMIT + 10 }, (_, i) =>
-      listingRow({ id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}` }),
+      listingRow({ id: `01930000-0000-7000-8000-${String(i + 1).padStart(12, '0')}` }),
     )
     const service = createService(store)
     const profile = await service.getProfile(me)
@@ -205,7 +211,7 @@ describe('profile service: getProfile', () => {
     dirty.transactions = [
       txRow({
         counterpart: {
-          id: '00000000-0000-4000-8000-0000000000a2',
+          id: '01930000-0000-7000-8000-0000000000a2',
           nickname: '卖家小王',
           // #2 的 users.avatar_url 是无约束 text：object key 这类历史值不符合契约的 z.url()
           avatarUrl: 'listings/avatar.jpg',
@@ -221,7 +227,7 @@ describe('profile service: getProfile', () => {
     clean.transactions = [
       txRow({
         counterpart: {
-          id: '00000000-0000-4000-8000-0000000000a2',
+          id: '01930000-0000-7000-8000-0000000000a2',
           nickname: '卖家小王',
           avatarUrl: 'https://cdn.test/avatars/a2.jpg',
         },
@@ -248,7 +254,7 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
     const uploads = fakeUploads()
     const user = await createService(store, uploads).updateProfile(me, { nickname: '新名字' })
 
-    expect(store.updated).toEqual({ userId: me.id, patch: { nickname: '新名字' } })
+    expect(store.updated).toEqual({ userId: USER_ID, patch: { nickname: '新名字' } })
     expect(uploads.calls).toEqual([])
     expect(user.nickname).toBe('新名字')
     expect(user.avatarUrl).toBeNull()

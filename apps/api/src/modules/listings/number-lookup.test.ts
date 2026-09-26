@@ -122,7 +122,7 @@ test('真实 HTTP 编号查询返回的 lst_ ID 可直接读取详情；错前�
   expect(decodePublicId(PUBLIC_ID_PREFIX.listing, body.id)).toBe(listingId)
   const detail = await app.request(LISTING_ROUTES.detail(body.id))
   expect(detail.status).toBe(200)
-  expect(await detail.json()).toMatchObject({ id: listingId, listingNo })
+  expect(await detail.json()).toMatchObject({ id: body.id, listingNo })
   const wrongPrefix = encodePublicId(PUBLIC_ID_PREFIX.user, listingId)
   expect((await app.request(LISTING_ROUTES.detail(wrongPrefix))).status).toBe(404)
 })

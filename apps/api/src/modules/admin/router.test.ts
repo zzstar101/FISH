@@ -521,10 +521,112 @@ describe('Admin 查询端到端', () => {
     expect(body.items[0]?.after).toEqual({ role: 'ADMIN' })
     // 审计日志可筛选：按 actor 与动作
     const filtered = await app.request(
-      `${ADMIN_ROUTES.auditLogs}?actorId=${ADMIN_TARGET_ID}&action=ADMIN_PROMOTED`,
+      `${ADMIN_ROUTES.auditLogs}?actorId=${encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_TARGET_ID)}&action=ADMIN_PROMOTED`,
       { headers: { cookie: adminCookie } },
     )
     expect(AdminAuditLogPageSchema.parse(await filtered.json()).items).toHaveLength(1)
+  })
+
+  test('审计公开 ID 按资源投影历史映射；数据库快照原文不改', async () => {
+    const oldReport = '01930000-0000-4000-8000-000000000061'
+    const oldRecord = '01930000-0000-4000-8000-000000000062'
+    const reportId = newId()
+    const recordId = newId()
+    const auditId = newId()
+    await scratch.insert(idRekeys).values([
+      { resourceTable: 'reports', oldId: oldReport, newId: reportId },
+      { resourceTable: 'listing_moderation_records', oldId: oldRecord, newId: recordId },
+    ])
+    await scratch.insert(adminAuditLogs).values({
+      id: auditId,
+      actorUserId: ADMIN_TARGET_ID,
+      action: 'REPORT_DECISION',
+      targetType: 'REPORT',
+      targetId: oldReport,
+      before: jsonParam({ status: 'PENDING' }),
+      after: jsonParam({
+        sourceReportId: oldReport,
+        manualRecordId: oldRecord,
+        targetType: 'LISTING',
+        targetId: LISTING_ID,
+        reporterId: ADMIN_TARGET_ID,
+      }),
+      requestId: 'historical-audit-test',
+    })
+    const response = await app.request(ADMIN_ROUTES.auditLogs, {
+      headers: { cookie: adminCookie },
+    })
+    expect(response.status).toBe(200)
+    const entry = AdminAuditLogPageSchema.parse(await response.json()).items.find(
+      (item) => item.id === encodePublicId(PUBLIC_ID_PREFIX.auditLog, auditId),
+    )
+    expect(entry).toMatchObject({
+      targetId: encodePublicId(PUBLIC_ID_PREFIX.report, reportId),
+      after: {
+        sourceReportId: encodePublicId(PUBLIC_ID_PREFIX.report, reportId),
+        manualRecordId: encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, recordId),
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID),
+        reporterId: encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_TARGET_ID),
+      },
+    })
+    const [stored] = await scratch
+      .select({ after: adminAuditLogs.after })
+      .from(adminAuditLogs)
+      .where(eq(adminAuditLogs.id, auditId))
+    expect(stored?.after).toEqual({
+      sourceReportId: oldReport,
+      manualRecordId: oldRecord,
+      targetType: 'LISTING',
+      targetId: LISTING_ID,
+      reporterId: ADMIN_TARGET_ID,
+    })
+
+    const wrong = await app.request(
+      `${ADMIN_ROUTES.auditLogs}?targetType=REPORT&targetId=${encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_TARGET_ID)}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(wrong.status).toBe(422)
+    for (const query of [
+      `actorId=${ADMIN_TARGET_ID}`,
+      `targetType=REPORT&targetId=${reportId}`,
+      `targetType=REPORT&targetId=${encodePublicId(PUBLIC_ID_PREFIX.listing, reportId)}`,
+    ]) {
+      expect(
+        (
+          await app.request(`${ADMIN_ROUTES.auditLogs}?${query}`, {
+            headers: { cookie: adminCookie },
+          })
+        ).status,
+      ).toBe(422)
+    }
+    const filtered = await app.request(
+      `${ADMIN_ROUTES.auditLogs}?targetType=REPORT&targetId=${encodePublicId(PUBLIC_ID_PREFIX.report, reportId)}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(AdminAuditLogPageSchema.parse(await filtered.json()).items).toHaveLength(1)
+  })
+
+  test('历史无映射目标只省略脏引用，不丢整条审计', async () => {
+    const auditId = newId()
+    const orphan = '01930000-0000-4000-8000-000000000069'
+    await scratch.insert(adminAuditLogs).values({
+      id: auditId,
+      actorUserId: ADMIN_TARGET_ID,
+      action: 'REPORT_DECISION',
+      targetType: 'REPORT',
+      targetId: orphan,
+      after: jsonParam({ status: 'RESOLVED', sourceReportId: orphan }),
+      requestId: 'orphan-audit-test',
+    })
+    const response = await app.request(ADMIN_ROUTES.auditLogs, {
+      headers: { cookie: adminCookie },
+    })
+    expect(response.status).toBe(200)
+    const entry = AdminAuditLogPageSchema.parse(await response.json()).items.find(
+      (item) => item.id === encodePublicId(PUBLIC_ID_PREFIX.auditLog, auditId),
+    )
+    expect(entry).toMatchObject({ targetId: null, after: { status: 'RESOLVED' } })
+    expect(JSON.stringify(entry)).not.toContain(orphan)
   })
 
   test('用户详情同时列出限制/解除历史审计，不混入其他用户的审计', async () => {
@@ -556,14 +658,20 @@ describe('Admin 查询端到端', () => {
     })
     expect(user.status).toBe(200)
     expect(AdminUserDetailSchema.parse(await user.json()).recentAuditLogs).toContainEqual(
-      expect.objectContaining({ id: auditId, targetType: 'USER_RESTRICTION' }),
+      expect.objectContaining({
+        id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, auditId),
+        targetType: 'USER_RESTRICTION',
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.userRestriction, restrictionId),
+      }),
     )
 
     const other = await app.request(ADMIN_ROUTES.userDetail(ADMIN_TARGET_ID), {
       headers: { cookie: adminCookie },
     })
     const otherLogs = AdminUserDetailSchema.parse(await other.json()).recentAuditLogs
-    expect(otherLogs.map((log) => log.id)).not.toContain(auditId)
+    expect(otherLogs.map((log) => log.id)).not.toContain(
+      encodePublicId(PUBLIC_ID_PREFIX.auditLog, auditId),
+    )
     expect(otherLogs).toContainEqual(expect.objectContaining({ action: 'ADMIN_PROMOTED' }))
   })
 
@@ -643,11 +751,14 @@ describe('Admin 查询端到端', () => {
       createdAt: new Date('2026-09-04T02:00:00Z'),
     })
 
-    const edited = await app.request(LISTING_ROUTES.detail(OFFLINE_REVIEW_LISTING_ID), {
-      method: 'PATCH',
-      headers: { cookie: userCookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ description: '加微信联系' }),
-    })
+    const edited = await app.request(
+      LISTING_ROUTES.detail(encodePublicId(PUBLIC_ID_PREFIX.listing, OFFLINE_REVIEW_LISTING_ID)),
+      {
+        method: 'PATCH',
+        headers: { cookie: userCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ description: '加微信联系' }),
+      },
+    )
     expect(edited.status).toBe(200)
 
     const reviewRows = await scratch
@@ -726,19 +837,25 @@ describe('Admin 查询端到端', () => {
       [REPEATED_REVIEW_LISTING_ID, '第一次加微信联系'],
       [CREATE_REVIEW_CHAIN_LISTING_ID, '新建后编辑加微信联系'],
     ] as const) {
-      const edited = await app.request(LISTING_ROUTES.detail(listingId), {
-        method: 'PATCH',
-        headers: { cookie: userCookie, 'content-type': 'application/json' },
-        body: JSON.stringify({ description }),
-      })
+      const edited = await app.request(
+        LISTING_ROUTES.detail(encodePublicId(PUBLIC_ID_PREFIX.listing, listingId)),
+        {
+          method: 'PATCH',
+          headers: { cookie: userCookie, 'content-type': 'application/json' },
+          body: JSON.stringify({ description }),
+        },
+      )
       expect(edited.status).toBe(200)
     }
 
-    const repeatedEdit = await app.request(LISTING_ROUTES.detail(REPEATED_REVIEW_LISTING_ID), {
-      method: 'PATCH',
-      headers: { cookie: userCookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ description: '第二次加微信联系' }),
-    })
+    const repeatedEdit = await app.request(
+      LISTING_ROUTES.detail(encodePublicId(PUBLIC_ID_PREFIX.listing, REPEATED_REVIEW_LISTING_ID)),
+      {
+        method: 'PATCH',
+        headers: { cookie: userCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ description: '第二次加微信联系' }),
+      },
+    )
     expect(repeatedEdit.status).toBe(200)
 
     const reviewIds = await scratch

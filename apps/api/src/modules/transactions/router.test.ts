@@ -1,26 +1,34 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import { createTransactionsRouter } from './router'
 import { type TransactionService, TransactionServiceError } from './service'
 
 const dto: TransactionDto = {
-  id: '00000000-0000-4000-8000-0000000000e1',
-  conversationId: '00000000-0000-4000-8000-0000000000c1',
-  listingId: '00000000-0000-4000-8000-0000000000b1',
-  buyerId: 'user-1',
-  sellerId: 'user-2',
+  id: encodePublicId(PUBLIC_ID_PREFIX.transaction, '01930000-0000-7000-8000-0000000000e1'),
+  conversationId: encodePublicId(
+    PUBLIC_ID_PREFIX.conversation,
+    '01930000-0000-7000-8000-0000000000c1',
+  ),
+  listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1'),
+  buyerId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+  sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a2'),
   role: 'seller',
   listing: {
-    id: '00000000-0000-4000-8000-0000000000b1',
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1'),
     title: 'K380 键盘',
     priceCents: 16000,
     status: 'RESERVED',
     coverUrl: null,
   },
-  counterpart: { id: 'user-1', nickname: '买家', avatarUrl: null },
+  counterpart: {
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+    nickname: '买家',
+    avatarUrl: null,
+  },
   amountCents: 15000,
   status: 'PENDING_MEETUP',
   buyerConfirmedAt: null,
@@ -32,8 +40,11 @@ const dto: TransactionDto = {
 }
 
 const systemMessage: MessageDto = {
-  id: '00000000-0000-4000-8000-0000000000d1',
-  conversationId: '00000000-0000-4000-8000-0000000000c1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.message, '01930000-0000-7000-8000-0000000000d1'),
+  conversationId: encodePublicId(
+    PUBLIC_ID_PREFIX.conversation,
+    '01930000-0000-7000-8000-0000000000c1',
+  ),
   senderId: null,
   sender: null,
   type: 'SYSTEM',
@@ -64,14 +75,14 @@ function buildApp(overrides: Partial<TransactionService> = {}) {
     redeemMeetupToken: async () => ({
       transactionId: dto.id,
       verified: true as const,
-      verifiedBy: 'user-1',
+      verifiedBy: dto.buyerId,
       verifiedAt: '2026-09-12T10:01:00.000Z',
       nextAction: 'CONFIRM_DELIVERY' as const,
     }),
     verifyMeetupCode: async () => ({
       transactionId: dto.id,
       verified: true as const,
-      verifiedBy: 'user-1',
+      verifiedBy: dto.buyerId,
       verifiedAt: '2026-09-12T10:01:00.000Z',
       nextAction: 'CONFIRM_DELIVERY' as const,
     }),
@@ -101,7 +112,7 @@ describe('transactions router', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-0000000000c1',
+        conversationId: dto.conversationId,
         amountCents: 16000,
       }),
     })
@@ -112,7 +123,7 @@ describe('transactions router', () => {
     const response = await buildApp().request('/transactions/proposals', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ conversationId: '00000000-0000-4000-8000-0000000000c1' }),
+      body: JSON.stringify({ conversationId: dto.conversationId }),
     })
     expect(response.status).toBe(422)
     const body = (await response.json()) as { error: { code: string; details?: unknown[] } }
@@ -125,7 +136,7 @@ describe('transactions router', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-0000000000c1',
+        conversationId: dto.conversationId,
         amountCents: 15000,
       }),
     })
@@ -143,7 +154,7 @@ describe('transactions router', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        conversationId: '00000000-0000-4000-8000-0000000000c1',
+        conversationId: dto.conversationId,
         amountCents: 15000,
       }),
     })
@@ -154,10 +165,7 @@ describe('transactions router', () => {
   })
 
   test('POST /:id/confirm returns the completed dto', async () => {
-    const response = await buildApp().request(
-      '/transactions/00000000-0000-4000-8000-0000000000e1/confirm',
-      { method: 'POST' },
-    )
+    const response = await buildApp().request(`/transactions/${dto.id}/confirm`, { method: 'POST' })
     expect(response.status).toBe(200)
     const body = (await response.json()) as TransactionDto
     expect(body.status).toBe('COMPLETED')
@@ -169,7 +177,7 @@ describe('transactions router', () => {
         throw new TransactionServiceError(404, 'TRANSACTION_NOT_FOUND', '交易不存在')
       },
     })
-    const response = await app.request('/transactions/00000000-0000-4000-8000-0000000000e1')
+    const response = await app.request(`/transactions/${dto.id}`)
     expect(response.status).toBe(404)
   })
 
@@ -177,16 +185,13 @@ describe('transactions router', () => {
     const response = await buildApp().request('/transactions/proposals/reject', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ conversationId: '00000000-0000-4000-8000-0000000000c1' }),
+      body: JSON.stringify({ conversationId: dto.conversationId }),
     })
     expect(response.status).toBe(200)
   })
 
   test('POST /:id/cancel returns the cancelled dto; service 409 mapping works', async () => {
-    const ok = await buildApp().request(
-      '/transactions/00000000-0000-4000-8000-0000000000e1/cancel',
-      { method: 'POST' },
-    )
+    const ok = await buildApp().request(`/transactions/${dto.id}/cancel`, { method: 'POST' })
     expect(ok.status).toBe(200)
     const body = (await ok.json()) as TransactionDto
     expect(body.status).toBe('CANCELLED')
@@ -196,10 +201,7 @@ describe('transactions router', () => {
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '已完成的交易不可取消')
       },
     })
-    const conflict = await app.request(
-      '/transactions/00000000-0000-4000-8000-0000000000e1/cancel',
-      { method: 'POST' },
-    )
+    const conflict = await app.request(`/transactions/${dto.id}/cancel`, { method: 'POST' })
     expect(conflict.status).toBe(409)
     const conflictBody = (await conflict.json()) as { error: { code: string; message: string } }
     expect(conflictBody.error).toEqual({

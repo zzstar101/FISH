@@ -1,5 +1,5 @@
-import { transactionSystemEventSchema } from '@fish/contracts/transactions/schema'
 import type { Db } from '@fish/db/client'
+import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -21,18 +21,28 @@ export async function projectSystemContent(
   if (!raw || typeof raw !== 'object' || !('type' in raw) || raw.type !== 'tx.accepted') {
     return content
   }
-  const parsed = transactionSystemEventSchema.safeParse(raw)
-  if (!parsed.success || parsed.data.type !== 'tx.accepted') {
+  const transactionId = 'transactionId' in raw ? raw.transactionId : null
+  const amountCents = 'amountCents' in raw ? raw.amountCents : null
+  if (
+    typeof transactionId !== 'string' ||
+    typeof amountCents !== 'number' ||
+    !Number.isSafeInteger(amountCents) ||
+    amountCents < 0
+  ) {
     return '历史交易消息无法定位订单'
   }
-  const { transactionId, amountCents } = parsed.data
+  if (isPublicId(PUBLIC_ID_PREFIX.transaction, transactionId)) return content
   const resolved = UUID_V7.test(transactionId)
     ? transactionId
     : UUID.test(transactionId)
       ? await resolveOldTransaction(transactionId)
       : null
   if (!resolved || !UUID_V7.test(resolved)) return '历史交易消息无法定位订单'
-  return JSON.stringify({ type: 'tx.accepted', transactionId: resolved, amountCents })
+  return JSON.stringify({
+    type: 'tx.accepted',
+    transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, resolved),
+    amountCents,
+  })
 }
 
 export function createSystemContentProjector(db: Db) {

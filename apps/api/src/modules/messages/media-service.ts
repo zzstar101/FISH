@@ -17,7 +17,13 @@ import {
   mediaPresignResponseSchema,
 } from '@fish/contracts/chat/schema'
 import { newId } from '@fish/db/ids'
-import { CHAT_MEDIA_PREFIX, type MediaStorage } from '../uploads/storage'
+import {
+  decodePublicId,
+  encodePublicId,
+  isPublicId,
+  PUBLIC_ID_PREFIX,
+} from '@fish/shared/public-id'
+import { CHAT_MEDIA_PREFIX, isSafeObjectKey, type MediaStorage } from '../uploads/storage'
 import { MessageIdempotencyConflictError, mediaRequestHash, messageSendKey } from './idempotency'
 import { probeImage, probeVoiceDuration } from './media-probe'
 import type { MediaListCursor, MediaMessageStore, MediaRow } from './media-store'
@@ -50,10 +56,15 @@ function maxBytesFor(kind: MediaKind): number {
 
 /** 微秒精度 UTC ISO（DB 是 timestamptz 微秒）；JS Date 只有毫秒，不能用来生成游标。 */
 const CURSOR_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function encodeMediaCursor(cursor: MediaListCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+  return Buffer.from(
+    JSON.stringify({
+      ...cursor,
+      id: encodePublicId(PUBLIC_ID_PREFIX.message, cursor.id),
+    }),
+    'utf8',
+  ).toString('base64url')
 }
 
 /**
@@ -80,10 +91,10 @@ function decodeMediaCursor(raw: string): MediaListCursor {
   if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 19) !== createdAt.slice(0, 19)) {
     throw invalid('VALIDATION_FAILED', 'cursor 不合法')
   }
-  if (typeof id !== 'string' || !UUID_RE.test(id)) {
+  if (typeof id !== 'string' || !isPublicId(PUBLIC_ID_PREFIX.message, id)) {
     throw invalid('VALIDATION_FAILED', 'cursor 不合法')
   }
-  return { createdAt, id }
+  return { createdAt, id: decodePublicId(PUBLIC_ID_PREFIX.message, id) }
 }
 
 export interface MediaMessageService {
@@ -108,12 +119,12 @@ const voiceMime = (value: string): boolean =>
 
 function dto(row: MediaRow, baseUrl: (id: string) => string): MediaMessageDto {
   return mediaMessageDtoSchema.parse({
-    id: row.message_id,
-    conversationId: row.conversation_id,
-    senderId: row.sender_id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.message, row.message_id),
+    conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation_id),
+    senderId: encodePublicId(PUBLIC_ID_PREFIX.user, row.sender_id),
     kind: row.kind,
-    mediaId: row.media_id,
-    url: baseUrl(row.media_id),
+    mediaId: encodePublicId(PUBLIC_ID_PREFIX.media, row.media_id),
+    url: baseUrl(encodePublicId(PUBLIC_ID_PREFIX.media, row.media_id)),
     mimeType: row.mime_type,
     sizeBytes: row.size_bytes,
     width: row.width,
@@ -153,7 +164,7 @@ export function createMediaMessageService({
         throw invalid('MEDIA_OBJECT_INVALID', '语音格式或大小不符合要求')
       }
       const extension = input.contentType.split('/')[1] ?? 'bin'
-      const key = `chat-media/${conversationId}/${userId}/${newId()}.${extension}`
+      const key = `chat-media/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId)}/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${extension}`
       const signed = storage.presignPut({ key, contentType: input.contentType })
       return mediaPresignResponseSchema.parse({
         uploadUrl: signed.url,
@@ -177,11 +188,21 @@ export function createMediaMessageService({
         const replay = await store.findByRequestKey(conversationId, userId, sendKey)
         if (replay) {
           if (!replay.matchedHash) throw idempotencyConflict()
-          return dto(replay.row, (id) => mediaUrl(conversationId, id))
+          return dto(replay.row, (id) =>
+            mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+          )
         }
       }
-      const prefix = `chat-media/${conversationId}/${userId}/`
-      if (!input.objectKey.startsWith(prefix)) {
+      const prefix = `chat-media/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId)}/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+      if (!isSafeObjectKey(input.objectKey))
+        throw invalid('MEDIA_OBJECT_INVALID', '媒体对象键不合法')
+      const [mediaPart, mediaExtension, extra] = input.objectKey.slice(prefix.length).split('.')
+      const isNewKey =
+        input.objectKey.startsWith(prefix) &&
+        isPublicId(PUBLIC_ID_PREFIX.media, mediaPart) &&
+        mediaExtension === input.contentType.split('/')[1] &&
+        extra === undefined
+      if (!isNewKey) {
         const [conversations, users] = await Promise.all([
           store.legacyIds('conversations', conversationId),
           store.legacyIds('users', userId),
@@ -237,7 +258,9 @@ export function createMediaMessageService({
           if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
           throw error
         }
-        const result = dto(row, (id) => mediaUrl(conversationId, id))
+        const result = dto(row, (id) =>
+          mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+        )
         const participants = await store.participant(conversationId, userId)
         if (participants) onMediaCreated?.(participants, result)
         return result
@@ -276,7 +299,11 @@ export function createMediaMessageService({
       // 反转后最早的一条（page[0]）就是下一页游标。
       const oldest = page[0]
       return mediaListResponseSchema.parse({
-        items: page.map((row) => dto(row, (id) => mediaUrl(conversationId, id))),
+        items: page.map((row) =>
+          dto(row, (id) =>
+            mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+          ),
+        ),
         nextCursor:
           hasMore && oldest
             ? encodeMediaCursor({ createdAt: oldest.created_at_iso, id: oldest.message_id })

@@ -1,5 +1,12 @@
 import { z } from 'zod'
 import { ListingSellerSchema, ListingStatusSchema } from '../listings/schema'
+import {
+  ConversationIdSchema,
+  ListingIdSchema,
+  MediaIdSchema,
+  MessageIdSchema,
+  UserIdSchema,
+} from '../system/public-id'
 
 /** Chat Domain Contract（Issue #9）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -64,11 +71,11 @@ export const mediaMessageInputSchema = z.discriminatedUnion('kind', [
 export type MediaMessageInput = z.infer<typeof mediaMessageInputSchema>
 
 export const mediaMessageDtoSchema = z.strictObject({
-  id: z.uuid(),
-  conversationId: z.uuid(),
-  senderId: z.uuid(),
+  id: MessageIdSchema,
+  conversationId: ConversationIdSchema,
+  senderId: UserIdSchema,
   kind: mediaKindSchema,
-  mediaId: z.uuid(),
+  mediaId: MediaIdSchema,
   url: z.string().min(1),
   mimeType: z.string().min(1),
   sizeBytes: z.number().int().positive(),
@@ -99,7 +106,7 @@ export type MediaListResponse = z.infer<typeof mediaListResponseSchema>
 /** #67 独立媒体实时事件；不并入旧 realtimeServerEventSchema，兼容未接入媒体的客户端。 */
 export const mediaRealtimeEventSchema = z.strictObject({
   type: z.literal('media.new'),
-  conversationId: z.uuid(),
+  conversationId: ConversationIdSchema,
   media: mediaMessageDtoSchema,
 })
 export type MediaRealtimeEvent = z.infer<typeof mediaRealtimeEventSchema>
@@ -110,7 +117,7 @@ export type ConversationRole = z.infer<typeof conversationRoleSchema>
 
 /** 聊天顶部商品卡的最小字段；取值规则与 #6 的商品卡片一致（脏数据不 500）。 */
 export const conversationListingSchema = z.object({
-  id: z.string(),
+  id: ListingIdSchema,
   title: z.string(),
   priceCents: z.number().int(),
   status: ListingStatusSchema,
@@ -119,7 +126,7 @@ export const conversationListingSchema = z.object({
 export type ConversationListing = z.infer<typeof conversationListingSchema>
 
 export const conversationUserSchema = z.object({
-  id: z.string(),
+  id: UserIdSchema,
   nickname: z.string(),
   /** users.avatar_url 可空（DB 同款）；聊天列表/详情的头像位需要它，冻结前与前端确认。 */
   avatarUrl: z.url().nullable(),
@@ -147,14 +154,14 @@ export const conversationLastMessageSchema = z.object({
   type: conversationLastMessageTypeSchema,
   content: z.string(),
   /** SYSTEM 消息没有发送者；与 MessageDto.senderId 同口径。 */
-  senderId: z.string().nullable(),
+  senderId: UserIdSchema.nullable(),
   createdAt: z.iso.datetime(),
 })
 export type ConversationLastMessage = z.infer<typeof conversationLastMessageSchema>
 
 export const conversationDtoSchema = z.object({
-  id: z.string(),
-  listingId: z.string(),
+  id: ConversationIdSchema,
+  listingId: ListingIdSchema,
   /** 同一会话对买卖双方输出不同的 role，前端据此渲染「我发出的 / 对方发出的」。 */
   role: conversationRoleSchema,
   listing: conversationListingSchema,
@@ -180,10 +187,10 @@ export type ConversationDto = z.infer<typeof conversationDtoSchema>
 
 export const messageDtoSchema = z
   .object({
-    id: z.string(),
-    conversationId: z.string(),
+    id: MessageIdSchema,
+    conversationId: ConversationIdSchema,
     /** SYSTEM 消息可为 null；TEXT 必有（DB CHECK messages_text_requires_sender 同源收紧）。 */
-    senderId: z.string().nullable(),
+    senderId: UserIdSchema.nullable(),
     sender: conversationUserSchema.nullable(),
     type: messageTypeSchema,
     content: z.string(),
@@ -202,7 +209,7 @@ export type MessageDto = z.infer<typeof messageDtoSchema>
 // ---------------------------------------------------------------------------
 
 /** `.strict()`：多余字段直接 422，而不是静默丢弃（与 auth/listings 一致）。 */
-export const conversationCreateInputSchema = z.strictObject({ listingId: z.uuid() })
+export const conversationCreateInputSchema = z.strictObject({ listingId: ListingIdSchema })
 export type ConversationCreateInput = z.infer<typeof conversationCreateInputSchema>
 
 /** P0 只经 HTTP 发 TEXT；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。 */
@@ -276,7 +283,7 @@ export type ConversationUnreadCount = z.infer<typeof conversationUnreadCountSche
 
 export const messageListQuerySchema = z.object({
   /** 游标分页：上一页最早一条消息的 id；缺省从最新一页开始。 */
-  before: z.uuid().optional(),
+  before: MessageIdSchema.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 })
 export type MessageListQuery = z.infer<typeof messageListQuerySchema>
@@ -285,7 +292,7 @@ export const messageListResponseSchema = z.object({
   /** 按 (createdAt, id) 升序返回，与 DB 索引 messages_conversation_id_created_at_id_idx 一致。 */
   items: z.array(messageDtoSchema),
   /** null = 已到最早一页；否则作为下一次请求的 before 原样回传。 */
-  nextCursor: z.string().nullable(),
+  nextCursor: MessageIdSchema.nullable(),
 })
 export type MessageListResponse = z.infer<typeof messageListResponseSchema>
 
@@ -304,7 +311,7 @@ export type MessageListResponse = z.infer<typeof messageListResponseSchema>
 export const realtimeServerEventSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('message.new'),
-    conversationId: z.string(),
+    conversationId: ConversationIdSchema,
     message: messageDtoSchema,
   }),
   /**
@@ -317,9 +324,9 @@ export const realtimeServerEventSchema = z.discriminatedUnion('type', [
    */
   z.object({
     type: z.literal('conversation.read'),
-    conversationId: z.string(),
+    conversationId: ConversationIdSchema,
     /** 读位被推进的那一方（即调用 read 端点的用户）。 */
-    readerId: z.string(),
+    readerId: UserIdSchema,
     /** 推进到的时刻（ISO，服务端权威）；`createdAt <= readAt` 的消息算已读。 */
     readAt: z.iso.datetime(),
   }),

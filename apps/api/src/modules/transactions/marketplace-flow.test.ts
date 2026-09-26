@@ -3,12 +3,14 @@ import { CHAT_ROUTES, REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import { PROFILE_ROUTES } from '@fish/contracts/profile/routes'
 import type { ProfileResponse } from '@fish/contracts/profile/schema'
+import { WishIdSchema } from '@fish/contracts/system/public-id'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { WISH_ROUTES } from '@fish/contracts/wishes/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
@@ -260,17 +262,17 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const created = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId }),
+      body: JSON.stringify({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, listingId) }),
     })
     expect(created.status).toBe(201)
     const conversation = await json<{ id: string; listing: { id: string } }>(created)
     conversationId = conversation.id
-    expect(conversation.listing.id).toBe(listingId)
+    expect(conversation.listing.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, listingId))
 
     const reused = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId }),
+      body: JSON.stringify({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, listingId) }),
     })
     expect(reused.status).toBe(200)
     expect((await json<{ id: string }>(reused)).id).toBe(conversationId)
@@ -292,7 +294,9 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const buyerMessage = await json<MessageDto>(sent)
     expect(buyerMessage.content).toBe('这台键盘还在吗') // trim 在服务端做
     expect(buyerMessage.type).toBe('TEXT')
-    expect(buyerMessage.sender?.id).toBe(await userIdOf(BUYER_NO))
+    expect(buyerMessage.sender?.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO)),
+    )
 
     const reply = await api(CHAT_ROUTES.messages(conversationId), {
       method: 'POST',
@@ -329,14 +333,16 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(sellerRow.lastMessage).toMatchObject({
       type: 'TEXT',
       content: '能便宜点吗',
-      senderId: await userIdOf(BUYER_NO),
+      senderId: encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO)),
     })
 
     const buyerRow = await conversationRow(buyerCookie)
     expect(buyerRow.role).toBe('buyer')
     expect(buyerRow.unreadCount).toBe(0)
     expect(buyerRow.lastMessage?.content).toBe('能便宜点吗')
-    expect(buyerRow.counterpart.id).toBe(await userIdOf(SELLER_NO))
+    expect(buyerRow.counterpart.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(SELLER_NO)),
+    )
 
     // read 把未读推进到当前时刻 → 归零（列表与 read 响应两处口径一致）
     const read = await api(CHAT_ROUTES.read(conversationId), {
@@ -433,7 +439,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
       const pushed = seller.frames.find((frame) => frame.type === 'conversation.read')
       if (!pushed?.readAt) throw new Error('conversation.read 帧缺少 readAt')
       expect(pushed.conversationId).toBe(conversationId)
-      expect(pushed.readerId).toBe(await userIdOf(BUYER_NO))
+      expect(pushed.readerId).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO)))
 
       // 推出去的 readAt 必须是**落库那一侧**的值：卖家视角回查会话，对方（买家）读位应与之相等。
       // 若 service 里另取一次 now()，本机 host 时钟比 DB 快约 48ms，会漂到落库值之后，
@@ -606,12 +612,18 @@ describe('marketplace flow 双账号验收（#42）', () => {
 
     const buyerTx = buyerProfile.transactions[0]
     expect(buyerTx?.role).toBe('buyer')
-    expect(buyerTx?.counterpart.id).toBe(await userIdOf(SELLER_NO))
+    expect(buyerTx?.counterpart.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(SELLER_NO)),
+    )
     expect(buyerTx?.id).toBe(sellerTx?.id)
 
     // 统计与列表口径一致：完成后不再计入在售，完成数各计一笔
     expect(sellerProfile.stats.completedTransactions).toBe(1)
-    expect(sellerProfile.listings.find((item) => item.id === listingId)?.status).toBe('SOLD')
+    expect(
+      sellerProfile.listings.find(
+        (item) => item.id === encodePublicId(PUBLIC_ID_PREFIX.listing, listingId),
+      )?.status,
+    ).toBe('SOLD')
     expect(buyerProfile.stats.completedTransactions).toBe(1)
 
     // 只返回本人数据：路人看不到这笔交易
@@ -625,7 +637,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const outsiderConversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: outsiderCookie,
-      body: JSON.stringify({ listingId }),
+      body: JSON.stringify({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, listingId) }),
     })
     expect(outsiderConversation.status).toBe(201)
 
@@ -653,7 +665,9 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId: secondListingId }),
+      body: JSON.stringify({
+        listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, secondListingId),
+      }),
     })
     const secondConversationId = (await json<{ id: string }>(conversation)).id
 
@@ -697,7 +711,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId: thirdListingId }),
+      body: JSON.stringify({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, thirdListingId) }),
     })
     const thirdConversationId = (await json<{ id: string }>(conversation)).id
     await api(TRANSACTION_ROUTES.proposals, {
@@ -732,7 +746,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
       (
         rows(
           await db.execute(
-            sql`SELECT issued_at FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+            sql`SELECT issued_at FROM transaction_meetup_tokens WHERE transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}`,
           ),
         )[0] as { issued_at: Date }
       ).issued_at
@@ -760,7 +774,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     await db.execute(sql`
       UPDATE transaction_meetup_tokens
       SET issued_at = now() - interval '10 minutes'
-      WHERE transaction_id = ${transactionId}
+      WHERE transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}
     `)
 
     // 买家核销 6 位码：成功 + 盖卖家确认，交易停在 PENDING_MEETUP 等买家 confirm
@@ -843,7 +857,9 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId: fourthListingId }),
+      body: JSON.stringify({
+        listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, fourthListingId),
+      }),
     })
     const fourthConversationId = (await json<{ id: string }>(conversation)).id
     await api(TRANSACTION_ROUTES.proposals, {
@@ -882,7 +898,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(status.status).toBe('NONE')
     const tokenRow = rows(
       await db.execute(
-        sql`SELECT count(*)::int AS n FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+        sql`SELECT count(*)::int AS n FROM transaction_meetup_tokens WHERE transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}`,
       ),
     )[0] as { n: number }
     expect(Number(tokenRow.n)).toBe(0)
@@ -902,7 +918,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     // 直接 INSERT 一行模拟旧数据（migration 生成文件不可手改，故用守卫兜住遗留行）。
     await db.execute(sql`
       INSERT INTO transaction_meetup_tokens (transaction_id, token_hash, code_hash, issued_by)
-      VALUES (${transactionId}, ${'legacy'.repeat(10)}, ${'stale'.repeat(10)}, ${await userIdOf(SELLER_NO)})
+      VALUES (${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}, ${'legacy'.repeat(10)}, ${'stale'.repeat(10)}, ${await userIdOf(SELLER_NO)})
     `)
     const legacyStatus = await json<{ status: string }>(
       await api(TRANSACTION_ROUTES.meetupTokenStatus(transactionId), { cookie: sellerCookie }),
@@ -920,7 +936,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     })
     // 清理遗留行，避免影响后续用例对凭证表行数的断言
     await db.execute(
-      sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
+      sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}`,
     )
   })
 
@@ -934,7 +950,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId: fifthListingId }),
+      body: JSON.stringify({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, fifthListingId) }),
     })
     const fifthConversationId = (await json<{ id: string }>(conversation)).id
     await api(TRANSACTION_ROUTES.proposals, {
@@ -955,7 +971,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     await db.execute(sql`
       INSERT INTO transaction_meetup_tokens
         (transaction_id, token_hash, code_hash, issued_by, failed_attempts, locked_until)
-      VALUES (${transactionId}, ${legacyTokenHash}, ${legacyCodeHash},
+      VALUES (${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}, ${legacyTokenHash}, ${legacyCodeHash},
               ${await userIdOf(SELLER_NO)}, 5, now() + interval '10 minutes')
     `)
     // 锁定期间核销：先撞锁定（429），与码对不对无关
@@ -976,7 +992,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const row = rows(
       await db.execute(sql`
         SELECT token_hash, code_hash, failed_attempts, locked_until
-        FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}
+        FROM transaction_meetup_tokens WHERE transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}
       `),
     )[0] as {
       token_hash: string
@@ -998,7 +1014,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(redeemed.status).toBe(200)
   })
 
-  test('#175 大小写 uuid 取码是同一枚码（PG 的 uuid 比较不分大小写，派生按字符串）', async () => {
+  test('公开 txn_ 路径拒绝非规范大小写，不能重签或覆盖既有码', async () => {
     // 第九个商品：同一笔交易分别用大写 / 小写 URL 取码 —— 派生输入必须归一化，
     // 否则大写 URL 会派生另一枚码并覆写未核销行的哈希，作废卖家刚展示的那一枚。
     const caseListingId = await insertListing(
@@ -1008,7 +1024,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId: caseListingId }),
+      body: JSON.stringify({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, caseListingId) }),
     })
     const caseConversationId = (await json<{ id: string }>(conversation)).id
     await api(TRANSACTION_ROUTES.proposals, {
@@ -1024,7 +1040,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(accepted.status).toBe(201)
     const transactionId = (await json<TransactionDto>(accepted)).id
     const upperId = transactionId.toUpperCase()
-    // 生成器给的是小写 uuid；若这里相等，本用例就失去意义（应当显式失败而不是静默通过）
+    // TypeID 只接受规范小写编码；不能借 PG UUID 比较的宽松语义绕过公开边界。
     expect(upperId).not.toBe(transactionId)
 
     const lower = await api(TRANSACTION_ROUTES.issueMeetupToken(transactionId), {
@@ -1038,9 +1054,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
       method: 'POST',
       cookie: sellerCookie,
     })
-    expect(upper.status).toBe(201)
-    const upperToken = await json<{ code: string }>(upper)
-    expect(upperToken.code).toBe(lowerToken.code)
+    expect(upper.status).toBe(404)
 
     // 先展示的那枚码必须仍然可用（它一直是当前码）
     const redeemed = await api(TRANSACTION_ROUTES.verifyMeetupCode(transactionId), {
@@ -1075,7 +1089,9 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const conversation = await api(CHAT_ROUTES.base, {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ listingId: rejectedListingId }),
+      body: JSON.stringify({
+        listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, rejectedListingId),
+      }),
     })
     expect(conversation.status).toBe(201)
     const rejectConversationId = (await json<{ id: string }>(conversation)).id
@@ -1123,7 +1139,9 @@ describe('marketplace flow 双账号验收（#42）', () => {
         const created = await api(CHAT_ROUTES.base, {
           method: 'POST',
           cookie,
-          body: JSON.stringify({ listingId: raceListingId }),
+          body: JSON.stringify({
+            listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, raceListingId),
+          }),
         })
         expect(created.status).toBe(201)
         const id = (await json<{ id: string }>(created)).id
@@ -1169,7 +1187,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
   test('Profile 与 Wish 一致：愿望接口写入后，profile 的愿望与统计同口径', async () => {
     // 用契约常量而不是硬编码路径：PR #44 把 wishes 路由从 /api/wishes 收敛到根级 /wishes，
     // 契约常量在两种状态下都指向当前真实路径。
-    const createWish = async (keyword: string): Promise<string> => {
+    const createWish = async (keyword: string) => {
       const response = await api(WISH_ROUTES.base, {
         method: 'POST',
         cookie: buyerCookie,
@@ -1181,7 +1199,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
         }),
       })
       expect(response.status).toBe(201)
-      return (await json<{ id: string }>(response)).id
+      return WishIdSchema.parse((await json<{ id: string }>(response)).id)
     }
 
     const activeWishId = await createWish('机械键盘')

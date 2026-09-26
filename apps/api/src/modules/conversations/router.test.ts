@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+
+const LISTING = '01930000-0000-7000-8000-0000000000b1'
+const CONVERSATION = '01930000-0000-7000-8000-0000000000c1'
+const SELLER = '01930000-0000-7000-8000-0000000000a2'
+
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import { createConversationsRouter } from './router'
@@ -7,18 +13,18 @@ import type { ConversationService } from './service'
 import { ConversationServiceError } from './service'
 
 const dto: ConversationDto = {
-  id: '00000000-0000-4000-8000-0000000000c1',
-  listingId: '00000000-0000-4000-8000-0000000000b1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.conversation, CONVERSATION),
+  listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING),
   role: 'buyer',
   listing: {
-    id: '00000000-0000-4000-8000-0000000000b1',
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING),
     title: 'K380',
     priceCents: 16000,
     status: 'ACTIVE',
     coverUrl: null,
   },
   counterpart: {
-    id: '00000000-0000-4000-8000-0000000000a2',
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER),
     nickname: '卖家',
     avatarUrl: null,
   },
@@ -27,7 +33,7 @@ const dto: ConversationDto = {
   lastMessage: {
     type: 'TEXT',
     content: '在吗',
-    senderId: '00000000-0000-4000-8000-0000000000a2',
+    senderId: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER),
     createdAt: '2026-09-12T10:00:00.000Z',
   },
   lastMessageAt: '2026-09-12T10:00:00.000Z',
@@ -68,7 +74,7 @@ describe('conversations router', () => {
     const first = await app.request('/conversations', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ listingId: '00000000-0000-4000-8000-0000000000b1' }),
+      body: JSON.stringify({ listingId: dto.listingId }),
     })
     expect(first.status).toBe(201)
     expect(await first.json()).toEqual(dto)
@@ -77,7 +83,7 @@ describe('conversations router', () => {
     const second = await app.request('/conversations', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ listingId: '00000000-0000-4000-8000-0000000000b1' }),
+      body: JSON.stringify({ listingId: dto.listingId }),
     })
     expect(second.status).toBe(200)
   })
@@ -116,7 +122,7 @@ describe('conversations router', () => {
     const response = await app.request('/conversations', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ listingId: '00000000-0000-4000-8000-0000000000b1' }),
+      body: JSON.stringify({ listingId: dto.listingId }),
     })
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({
@@ -133,7 +139,7 @@ describe('conversations router', () => {
       getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
-    const response = await app.request('/conversations/00000000-0000-4000-8000-0000000000c1')
+    const response = await app.request(`/conversations/${dto.id}`)
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual(dto)
   })
@@ -149,7 +155,7 @@ describe('conversations router', () => {
       getUnreadCount: async () => ({ unreadCount: 0 }),
     }
     const app = buildApp(service)
-    const response = await app.request('/conversations/00000000-0000-4000-8000-0000000000c1')
+    const response = await app.request(`/conversations/${dto.id}`)
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({
       error: { code: 'CONVERSATION_NOT_FOUND', message: '会话不存在' },

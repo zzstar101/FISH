@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { profileResponseSchema, profileUpdateRequestSchema } from './schema'
 
 const me = {
-  id: '00000000-0000-4000-8000-0000000000a1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
   nickname: '小明',
   avatarUrl: null,
   authStatus: 'VERIFIED',
@@ -12,7 +13,7 @@ const me = {
 }
 
 const listingCard = {
-  id: '00000000-0000-4000-8000-0000000000b1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1'),
   title: 'K380 键盘',
   priceCents: 16000,
   category: 'DIGITAL',
@@ -27,7 +28,7 @@ const listingCard = {
 }
 
 const wish = {
-  id: '00000000-0000-4000-8000-0000000000d1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.wish, '01930000-0000-7000-8000-0000000000d1'),
   userId: me.id,
   keyword: '机械键盘',
   category: 'DIGITAL',
@@ -42,7 +43,7 @@ const wish = {
 }
 
 const transaction = {
-  id: '00000000-0000-4000-8000-0000000000e1',
+  id: encodePublicId(PUBLIC_ID_PREFIX.transaction, '01930000-0000-7000-8000-0000000000e1'),
   listingId: listingCard.id,
   role: 'buyer',
   listing: {
@@ -53,7 +54,7 @@ const transaction = {
     coverUrl: null,
   },
   counterpart: {
-    id: '00000000-0000-4000-8000-0000000000a2',
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a2'),
     nickname: '卖家小王',
     avatarUrl: null,
   },

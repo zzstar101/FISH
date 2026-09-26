@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import { ConversationServiceError, createConversationService } from './service'
 import type { ConversationDetailRow, ConversationStore, ListingBrief } from './store'
 
-const buyer = '00000000-0000-4000-8000-0000000000a1'
-const seller = '00000000-0000-4000-8000-0000000000a2'
-const listingA = '00000000-0000-4000-8000-0000000000b1'
+const buyer = '01930000-0000-7000-8000-0000000000a1'
+const seller = '01930000-0000-7000-8000-0000000000a2'
+const listingA = '01930000-0000-7000-8000-0000000000b1'
 const conversationA = '01930000-0000-7000-8000-0000000000c1'
 
 const storage: MediaStorage = {
@@ -61,7 +61,7 @@ class MemoryConversationStore implements ConversationStore {
       (row) => row.conversation.listing_id === listingId && row.conversation.buyer_id === buyerId,
     )
     if (existing) return null
-    const id = `00000000-0000-4000-8000-${String(this.details.size + 1).padStart(12, '0')}`
+    const id = `01930000-0000-7000-8000-${String(this.details.size + 1).padStart(12, '0')}`
     this.details.set(
       id,
       detailRow({
@@ -212,7 +212,9 @@ describe('conversation service: listConversations', () => {
       limit: 1,
       cursor: first.nextCursor ?? undefined,
     })
-    expect(second.items.map((item) => item.id)).toEqual([conversationA])
+    expect(second.items.map((item) => item.id)).toEqual([
+      encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationA),
+    ])
   })
 
   test('nextCursor is null before the page overflows', async () => {
@@ -229,7 +231,10 @@ describe('conversation service: markRead', () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({ store, storage })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
-    const dto: ConversationDto = await service.markRead(buyer, conversation.id)
+    const dto: ConversationDto = await service.markRead(
+      buyer,
+      decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id),
+    )
     expect(dto.unreadCount).toBe(0)
   })
 
@@ -246,15 +251,22 @@ describe('conversation service: markRead', () => {
       onRead: (participants, event) => pushed.push({ participants, event }),
     })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
-    const dto = await service.markRead(buyer, conversation.id)
+    const dto = await service.markRead(
+      buyer,
+      decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id),
+    )
 
     expect(pushed).toHaveLength(1)
     expect(pushed[0]?.participants).toEqual({ buyerId: buyer, sellerId: seller })
-    expect(pushed[0]?.event.conversationId).toBe(conversation.id)
+    expect(pushed[0]?.event.conversationId).toBe(
+      decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id),
+    )
     expect(pushed[0]?.event.readerId).toBe(buyer)
     // readAt 必须与落库那一侧完全一致：客户端按它比对「哪些消息已读」，
     // 服务端自己再取一次 now() 会漂在落库值之后，最近一条会被误判成未读。
-    const persisted = store.details.get(conversation.id)?.conversation.buyer_last_read_at
+    const persisted = store.details.get(
+      decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id),
+    )?.conversation.buyer_last_read_at
     if (typeof persisted !== 'string') throw new Error('buyer_last_read_at 应以 ISO 文本落库')
     expect(pushed[0]?.event.readAt).toBe(persisted)
     // 自己读的会话不会污染 DTO 里的「对方读位」
@@ -265,15 +277,16 @@ describe('conversation service: markRead', () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({ store, storage })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
-    const row = store.details.get(conversation.id)
+    const row = store.details.get(decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id))
     if (!row) throw new Error('unreachable')
     row.conversation.buyer_last_read_at = '2026-09-12T10:00:00.000Z'
     row.conversation.seller_last_read_at = '2026-09-12T11:00:00.000Z'
 
-    expect((await service.getConversation(buyer, conversation.id)).counterpartLastReadAt).toBe(
+    const internalId = decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id)
+    expect((await service.getConversation(buyer, internalId)).counterpartLastReadAt).toBe(
       '2026-09-12T11:00:00.000Z',
     )
-    expect((await service.getConversation(seller, conversation.id)).counterpartLastReadAt).toBe(
+    expect((await service.getConversation(seller, internalId)).counterpartLastReadAt).toBe(
       '2026-09-12T10:00:00.000Z',
     )
   })
@@ -302,7 +315,7 @@ describe('conversation service: getUnreadCount', () => {
     const store = new MemoryConversationStore()
     const service = createConversationService({ store, storage })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
-    const row = store.details.get(conversation.id)
+    const row = store.details.get(decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id))
     if (!row) throw new Error('unreachable')
     row.unreadCount = 3
 

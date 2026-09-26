@@ -11,6 +11,7 @@ import {
 } from '@fish/contracts/auth/wechat'
 import { errorBody } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
 import { AuthError } from './errors'
@@ -216,7 +217,7 @@ export function createAuthModule(options: {
     const token = cookie.read(c)
     if (!token) return null
     const me = await service.loadMe(token)
-    return me?.id ?? null
+    return me ? decodePublicId(PUBLIC_ID_PREFIX.user, me.id) : null
   }
 
   return { router, requireAuth, meHandler, resolveViewerId }

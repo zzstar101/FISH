@@ -5,10 +5,12 @@ import { sessions } from '@fish/db/schema/sessions'
 import { users, wechatIdentities } from '@fish/db/schema/users'
 import { campusEmailVerifications } from '@fish/db/schema/verifications'
 import { loadServerEnv, loadWechatEnv } from '@fish/shared/env'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
 import { allowRestrictionGuard } from '../governance/testing'
+import { legacyMediaKey } from '../uploads/legacy-url'
 import { createDevEmailVerificationProvider } from './email-providers'
 import { createAuthModule } from './router'
 import { createAuthService } from './service'
@@ -257,6 +259,31 @@ describe('GET /me', () => {
     const res = await app.request('/me', withCookie(cookie))
     expect(res.status).toBe(200)
     expect(AuthResponseSchema.parse(await res.json()).user.avatarUrl).toBeNull()
+  })
+
+  test('历史 UUID 头像的登录与 /me URL 仅公开加密代理，不泄漏对象键', async () => {
+    const studentNo = '202101000170'
+    const registered = AuthResponseSchema.parse(await (await register({ studentNo })).json())
+    const id = decodePublicId(PUBLIC_ID_PREFIX.user, registered.user.id)
+    const key = `listings/${id}/avatar.webp`
+    await scratch
+      .update(users)
+      .set({ avatarUrl: `${loadServerEnv().S3_PUBLIC_URL}/${key}` })
+      .where(eq(users.id, id))
+
+    const loginRes = await login(studentNo)
+    const cookie = sessionCookie(loginRes)
+    for (const res of [loginRes, await app.request('/me', withCookie(cookie))]) {
+      const body = AuthResponseSchema.parse(await res.json())
+      expect(body.user.avatarUrl).toMatch(/\/api\/uploads\/legacy\//)
+      expect(body.user.avatarUrl).not.toContain(id)
+      expect(
+        legacyMediaKey(
+          body.user.avatarUrl?.split('/').at(-1) ?? '',
+          process.env.MEETUP_TOKEN_SECRET ?? '',
+        ),
+      ).toBe(key)
+    }
   })
 
   test('无 cookie 与伪造令牌都是 401 UNAUTHENTICATED', async () => {
@@ -1043,7 +1070,7 @@ describe('POST /auth/wechat/session（#86 A：微信登录 stub）', () => {
     const mappings = await scratch
       .select({ openid: wechatIdentities.openid })
       .from(wechatIdentities)
-      .where(eq(wechatIdentities.userId, firstUser.id))
+      .where(eq(wechatIdentities.userId, decodePublicId(PUBLIC_ID_PREFIX.user, firstUser.id)))
     expect(mappings).toHaveLength(1)
   })
 

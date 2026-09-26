@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCommentCursor, encodeCommentCursor } from './cursor'
 
 const ID = '01930000-0000-7000-8000-000000000021'
@@ -6,6 +7,9 @@ const ID = '01930000-0000-7000-8000-000000000021'
 describe('comment cursor', () => {
   test('round-trips a microsecond timestamp cursor', () => {
     const encoded = encodeCommentCursor({ createdAt: '2026-09-12T03:40:10.123456Z', id: ID })
+    expect(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))).toMatchObject({
+      id: encodePublicId(PUBLIC_ID_PREFIX.comment, ID),
+    })
     expect(decodeCommentCursor(encoded)).toEqual({
       createdAt: '2026-09-12T03:40:10.123456Z',
       id: ID,
@@ -33,17 +37,12 @@ describe('comment cursor', () => {
     ).toBeNull()
   })
 
-  // 非 UUID 的 id 会被绑到 comments.id（uuid 列）→ 类型错误 → 500；契约要求 422。
-  test('rejects a non-UUID id before it can reach the uuid column', () => {
-    expect(
-      decodeCommentCursor(
-        encodeCommentCursor({ createdAt: '2026-09-12T03:40:10.000000Z', id: 'cm-1' }),
-      ),
-    ).toBeNull()
-    expect(
-      decodeCommentCursor(
-        encodeCommentCursor({ createdAt: '2026-09-12T03:40:10.000000Z', id: `${ID}x` }),
-      ),
-    ).toBeNull()
+  test('rejects a bare UUID, wrong prefix, and malformed public ID before SQL', () => {
+    for (const id of [ID, encodePublicId(PUBLIC_ID_PREFIX.listing, ID), 'cm-1']) {
+      const forged = Buffer.from(
+        JSON.stringify({ createdAt: '2026-09-12T03:40:10.000000Z', id }),
+      ).toString('base64url')
+      expect(decodeCommentCursor(forged)).toBeNull()
+    }
   })
 })

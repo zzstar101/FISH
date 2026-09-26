@@ -18,10 +18,11 @@ import {
   transactionListResponseSchema,
   transactionSystemEventSchema,
 } from '@fish/contracts/transactions/schema'
-import { PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
 import { MeetupTokenCrypto } from './meetup-token'
 import {
@@ -76,20 +77,24 @@ function toTransactionDto(
   storage: MediaStorage,
 ): TransactionDto {
   return transactionDtoSchema.parse({
-    id: row.id,
-    conversationId: row.conversation_id,
-    listingId: row.listing_id,
-    buyerId: row.buyer_id,
-    sellerId: row.seller_id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.transaction, row.id),
+    conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation_id),
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listing_id),
+    buyerId: encodePublicId(PUBLIC_ID_PREFIX.user, row.buyer_id),
+    sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, row.seller_id),
     role: row.buyer_id === viewerId ? 'buyer' : 'seller',
     listing: {
-      id: listing.id,
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, listing.id),
       title: listing.title,
       priceCents: listing.priceCents,
       status: listing.status,
       coverUrl: listing.coverObjectKey ? storage.publicUrl(listing.coverObjectKey) : null,
     },
-    counterpart,
+    counterpart: {
+      ...counterpart,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, counterpart.id),
+      avatarUrl: publicAvatarUrl(counterpart.avatarUrl),
+    },
     amountCents: row.amount_cents,
     status: row.status,
     buyerConfirmedAt: toIso(row.buyer_confirmed_at),
@@ -139,9 +144,18 @@ export type TxSideEffect = (
 
 export interface TransactionService {
   /** 响应是写入的 SYSTEM 消息（契约 MessageDto，camelCase）。 */
-  propose(userId: string, input: TransactionProposalInput): Promise<MessageDto>
-  reject(userId: string, input: TransactionRejectInput): Promise<MessageDto>
-  accept(userId: string, input: TransactionAcceptInput): Promise<TransactionDto>
+  propose(
+    userId: string,
+    input: Omit<TransactionProposalInput, 'conversationId'> & { conversationId: string },
+  ): Promise<MessageDto>
+  reject(
+    userId: string,
+    input: Omit<TransactionRejectInput, 'conversationId'> & { conversationId: string },
+  ): Promise<MessageDto>
+  accept(
+    userId: string,
+    input: Omit<TransactionAcceptInput, 'conversationId'> & { conversationId: string },
+  ): Promise<TransactionDto>
   listTransactions(userId: string, query: TransactionListQuery): Promise<TransactionListResponse>
   getTransaction(userId: string, id: string): Promise<TransactionDto>
   confirm(userId: string, id: string): Promise<TransactionDto>
@@ -264,9 +278,9 @@ export function createTransactionService({
     }
     if (result.kind === 'ok') {
       return meetupVerificationResponseSchema.parse({
-        transactionId: id,
+        transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, id),
         verified: true,
-        verifiedBy: userId,
+        verifiedBy: encodePublicId(PUBLIC_ID_PREFIX.user, userId),
         verifiedAt: toIso(result.row.consumed_at),
         nextAction: 'CONFIRM_DELIVERY',
       })
@@ -351,7 +365,11 @@ export function createTransactionService({
       // content 由本层序列化（契约的唯一出口 systemEventContent），但 transactionId 只有
       // 插入后才存在，因此以回调交给 store，在**同一个事务**里连同交易行一起写入（#40-3）。
       const result = await store.accept(brief, input.amountCents, (transactionId) =>
-        systemEventContent({ type: 'tx.accepted', transactionId, amountCents: input.amountCents }),
+        systemEventContent({
+          type: 'tx.accepted',
+          transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId),
+          amountCents: input.amountCents,
+        }),
       )
       if (result.kind === 'listing-not-active') {
         // 契约冻结语义：并发输给另一买家 / 商品已非 ACTIVE。重试恢复口径见 routes 注释。
@@ -468,9 +486,12 @@ export function createTransactionService({
         )
       }
       return meetupTokenResponseSchema.parse({
-        transactionId: txId,
+        transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, txId),
         code,
-        qrPayload: meetupCrypto.qrPayload(txId, token),
+        qrPayload: meetupCrypto.qrPayload(
+          encodePublicId(PUBLIC_ID_PREFIX.transaction, txId),
+          token,
+        ),
       })
     },
 
@@ -483,7 +504,7 @@ export function createTransactionService({
       // 页面显示「有效」而后端实际已失效——即不出现「页面显示有效、后端已过期」。
       if (row.status !== 'PENDING_MEETUP') {
         return meetupTokenStatusResponseSchema.parse({
-          transactionId: id,
+          transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, id),
           status: 'NONE',
           consumedAt: null,
           consumedBy: null,
@@ -492,7 +513,7 @@ export function createTransactionService({
       const tokenRow = await store.findMeetupToken(id)
       if (!tokenRow) {
         return meetupTokenStatusResponseSchema.parse({
-          transactionId: id,
+          transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, id),
           status: 'NONE',
           consumedAt: null,
           consumedBy: null,
@@ -500,10 +521,12 @@ export function createTransactionService({
       }
       // 状态全部派生，不落列：CONSUMED / ISSUED（#147：终态行已删，无 EXPIRED）。
       return meetupTokenStatusResponseSchema.parse({
-        transactionId: id,
+        transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, id),
         status: tokenRow.consumed_at != null ? 'CONSUMED' : 'ISSUED',
         consumedAt: toIso(tokenRow.consumed_at),
-        consumedBy: tokenRow.consumed_by,
+        consumedBy: tokenRow.consumed_by
+          ? encodePublicId(PUBLIC_ID_PREFIX.user, tokenRow.consumed_by)
+          : null,
       })
     },
 

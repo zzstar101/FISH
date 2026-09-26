@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   meetupTokenRedeemInputSchema,
   meetupTokenResponseSchema,
@@ -15,7 +16,10 @@ import {
   transactionSystemEventSchema,
 } from './schema'
 
-const conversationId = '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+const conversationId = encodePublicId(
+  PUBLIC_ID_PREFIX.conversation,
+  '01930000-0000-7000-8000-0000000000c1',
+)
 
 describe('transactionProposalInputSchema', () => {
   test('accepts a valid proposal', () => {
@@ -96,21 +100,21 @@ describe('transactionStatusSchema', () => {
 
 describe('transactionDtoSchema', () => {
   const base = {
-    id: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+    id: encodePublicId(PUBLIC_ID_PREFIX.transaction, '01930000-0000-7000-8000-0000000000e1'),
     conversationId,
-    listingId: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-    buyerId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-    sellerId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1'),
+    buyerId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+    sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a2'),
     role: 'buyer',
     listing: {
-      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1'),
       title: 'K380 键盘',
       priceCents: 16000,
       status: 'RESERVED',
       coverUrl: null,
     },
     counterpart: {
-      id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a2'),
       nickname: '卖家小王',
       avatarUrl: null,
     },
@@ -216,7 +220,10 @@ describe('transactionSystemEventSchema', () => {
     expect(
       transactionSystemEventSchema.parse({
         type: 'tx.accepted',
-        transactionId: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        transactionId: encodePublicId(
+          PUBLIC_ID_PREFIX.transaction,
+          '01930000-0000-7000-8000-0000000000e1',
+        ),
         amountCents: 16000,
       }).type,
     ).toBe('tx.accepted')
@@ -232,7 +239,10 @@ describe('transactionSystemEventSchema', () => {
 })
 
 describe('meetup token schemas', () => {
-  const transactionId = '6d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+  const transactionId = encodePublicId(
+    PUBLIC_ID_PREFIX.transaction,
+    '01930000-0000-7000-8000-0000000000e1',
+  )
   const verifiedAt = '2026-09-12T10:10:00.000Z'
 
   test('accepts an issued token response without exposing hashes or expiry', () => {
@@ -285,7 +295,7 @@ describe('meetup token schemas', () => {
       meetupVerificationResponseSchema.parse({
         transactionId,
         verified: true,
-        verifiedBy: '7d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        verifiedBy: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
         verifiedAt,
         nextAction: 'CONFIRM_DELIVERY',
       }).nextAction,

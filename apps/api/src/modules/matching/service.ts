@@ -5,6 +5,7 @@ import {
   type WishMatchListResponse,
   WishMatchListResponseSchema,
 } from '@fish/contracts/matching/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { toListingCard } from '../listings/card'
 import type { MediaStorage } from '../uploads/storage'
 import type { MatchingStore } from './store'
@@ -61,7 +62,7 @@ export function createMatchingService(deps: {
         if (!listing) return []
         return [
           {
-            id: entry.matchId,
+            id: encodePublicId(PUBLIC_ID_PREFIX.match, entry.matchId),
             score: entry.score,
             createdAt: entry.createdAt.toISOString(),
             listing,
@@ -91,10 +92,10 @@ export function createMatchingService(deps: {
       return ListingMatchListResponseSchema.parse({
         total,
         items: entries.map((entry) => ({
-          id: entry.matchId,
+          id: encodePublicId(PUBLIC_ID_PREFIX.match, entry.matchId),
           score: entry.score,
           createdAt: entry.createdAt.toISOString(),
-          wish: entry.wish,
+          wish: { ...entry.wish, id: encodePublicId(PUBLIC_ID_PREFIX.wish, entry.wish.id) },
         })),
       })
     },

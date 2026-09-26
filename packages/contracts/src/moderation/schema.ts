@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ListingIdSchema, ModerationRecordIdSchema, UserIdSchema } from '../system/public-id'
 
 /** Moderation Domain Contract（#80 / Admin #73）。机器审核与人工决定共用同一结果值域。 */
 export const ModerationDecisionSchema = z.enum(['ALLOW', 'BLOCK', 'REVIEW'])
@@ -8,9 +9,9 @@ export const ModerationStatusSchema = z.enum(['APPROVED', 'BLOCKED', 'REVIEW'])
 export type ModerationStatus = z.infer<typeof ModerationStatusSchema>
 
 export const ModerationRecordSchema = z.object({
-  id: z.uuid(),
-  listingId: z.uuid().nullable(),
-  sellerId: z.uuid(),
+  id: ModerationRecordIdSchema,
+  listingId: ListingIdSchema.nullable(),
+  sellerId: UserIdSchema,
   action: z.string().min(1),
   titleSnapshot: z.string(),
   descriptionSnapshot: z.string(),
@@ -25,7 +26,7 @@ export type ModerationRecord = z.infer<typeof ModerationRecordSchema>
 export const ModerationQueueItemSchema = z.object({
   record: ModerationRecordSchema,
   listing: z.object({
-    id: z.uuid(),
+    id: ListingIdSchema,
     title: z.string(),
     description: z.string(),
     status: z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE']),
@@ -34,7 +35,7 @@ export const ModerationQueueItemSchema = z.object({
     createdAt: z.iso.datetime(),
   }),
   seller: z.object({
-    id: z.uuid(),
+    id: UserIdSchema,
     nickname: z.string(),
   }),
 })
@@ -57,7 +58,7 @@ export const ModerationDetailSchema = z.object({
     .object({
       decision: z.enum(['ALLOW', 'BLOCK']),
       reason: z.string(),
-      actor: z.object({ id: z.uuid(), nickname: z.string() }).nullable(),
+      actor: z.object({ id: UserIdSchema, nickname: z.string() }).nullable(),
       decidedAt: z.iso.datetime(),
     })
     .nullable(),

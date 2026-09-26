@@ -1,4 +1,16 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+
+const ids = {
+  listing: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1'),
+  conversation: encodePublicId(
+    PUBLIC_ID_PREFIX.conversation,
+    '01930000-0000-7000-8000-0000000000c1',
+  ),
+  message: encodePublicId(PUBLIC_ID_PREFIX.message, '01930000-0000-7000-8000-0000000000d1'),
+  user: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+}
+
 import {
   ChatErrorCodeSchema,
   chatWatchersQuerySchema,
@@ -19,7 +31,7 @@ import {
 
 describe('conversationCreateInputSchema', () => {
   test('accepts a valid listingId', () => {
-    const input = { listingId: '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f' }
+    const input = { listingId: ids.listing }
     expect(conversationCreateInputSchema.parse(input)).toEqual(input)
   })
 
@@ -28,7 +40,7 @@ describe('conversationCreateInputSchema', () => {
   })
 
   test('rejects extra fields (strict)', () => {
-    const input = { listingId: '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f', buyerId: 'x' }
+    const input = { listingId: ids.listing, buyerId: 'x' }
     expect(conversationCreateInputSchema.safeParse(input).success).toBe(false)
   })
 })
@@ -150,8 +162,8 @@ describe('messageListQuerySchema', () => {
 
 describe('messageDtoSchema', () => {
   const base = {
-    id: '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-    conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+    id: ids.message,
+    conversationId: ids.conversation,
     content: 'hello',
     createdAt: '2026-09-12T00:00:00.000Z',
   }
@@ -159,8 +171,8 @@ describe('messageDtoSchema', () => {
   test('parses a TEXT message with a sender', () => {
     const dto = {
       ...base,
-      senderId: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-      sender: { id: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f', nickname: 'A', avatarUrl: null },
+      senderId: ids.user,
+      sender: { id: ids.user, nickname: 'A', avatarUrl: null },
       type: 'TEXT',
     }
     expect(messageDtoSchema.parse(dto).type).toBe('TEXT')
@@ -180,18 +192,18 @@ describe('messageDtoSchema', () => {
 describe('conversationDtoSchema', () => {
   test('parses a full dto with nullable avatar/cover and iso dates', () => {
     const dto = {
-      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-      listingId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      id: ids.conversation,
+      listingId: ids.listing,
       role: 'seller',
       listing: {
-        id: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.listing,
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
         coverUrl: null,
       },
       counterpart: {
-        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.user,
         nickname: '买家小明',
         avatarUrl: 'https://cdn.example.com/a.png',
       },
@@ -200,7 +212,7 @@ describe('conversationDtoSchema', () => {
       lastMessage: {
         type: 'TEXT',
         content: '在吗，可以刀一点吗',
-        senderId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        senderId: ids.user,
         createdAt: '2026-09-12T10:00:00.000Z',
       },
       lastMessageAt: '2026-09-12T10:00:00.000Z',
@@ -218,7 +230,7 @@ describe('conversationDtoSchema', () => {
     const parsed = conversationLastMessageSchema.parse({
       type: 'MEDIA',
       content: '[图片]',
-      senderId: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      senderId: ids.user,
       createdAt: '2026-09-12T10:00:00.000Z',
     })
     expect(parsed.type).toBe('MEDIA')
@@ -229,18 +241,18 @@ describe('conversationDtoSchema', () => {
 
   test('parses a conversation with no messages yet (lastMessage null)', () => {
     const dto = {
-      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-      listingId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      id: ids.conversation,
+      listingId: ids.listing,
       role: 'seller',
       listing: {
-        id: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.listing,
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
         coverUrl: null,
       },
       counterpart: {
-        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.user,
         nickname: '买家小明',
         avatarUrl: null,
       },
@@ -257,17 +269,17 @@ describe('conversationDtoSchema', () => {
 
   test('rejects an unknown role or listing status', () => {
     const base = {
-      id: '3d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-      listingId: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      id: ids.conversation,
+      listingId: ids.listing,
       listing: {
-        id: '4d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.listing,
         title: 'K380 键盘',
         priceCents: 16000,
         status: 'ACTIVE',
         coverUrl: null,
       },
       counterpart: {
-        id: '5d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.user,
         nickname: '买家小明',
         avatarUrl: null,
       },
@@ -305,10 +317,10 @@ describe('realtime events', () => {
   test('discriminates message.new server events', () => {
     const event = {
       type: 'message.new',
-      conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      conversationId: ids.conversation,
       message: {
-        id: '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-        conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+        id: ids.message,
+        conversationId: ids.conversation,
         senderId: null,
         sender: null,
         type: 'SYSTEM',
@@ -329,8 +341,8 @@ describe('realtime events', () => {
   test('discriminates conversation.read with server-authoritative readAt', () => {
     const parsed = realtimeServerEventSchema.parse({
       type: 'conversation.read',
-      conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
-      readerId: '2d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      conversationId: ids.conversation,
+      readerId: ids.user,
       readAt: '2026-09-12T10:05:00.000Z',
     })
     expect(parsed.type).toBe('conversation.read')

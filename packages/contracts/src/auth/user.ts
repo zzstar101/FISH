@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { UserIdSchema } from '../system/public-id'
 
 /**
  * 校园认证状态。值域与 `users.auth_status`（#2 冻结）一致，这里只是对外镜像，
@@ -21,7 +22,7 @@ export type AuthStatus = z.infer<typeof AuthStatusSchema>
  * - 手机号只出派生态 `phoneBound` / `maskedPhone`，明文只存服务端（#86 C 节）。
  */
 export const MeSchema = z.object({
-  id: z.uuid(),
+  id: UserIdSchema,
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
   authStatus: AuthStatusSchema,

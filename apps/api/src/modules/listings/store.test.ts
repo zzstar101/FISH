@@ -8,7 +8,9 @@ import { listingImages, listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq, inArray, sql } from 'drizzle-orm'
+import { legacyMediaToken } from '../uploads/legacy-url'
 import { createListingService, ListingServiceError } from './service'
 import type { CreateListingRecord, FeedCursorKey, ListingStore } from './store'
 import { createSqlListingStore } from './store'
@@ -115,7 +117,7 @@ async function insertListingWithTime(
 test('真实 ID 重键映射允许原商品继续引用旧对象键，不放行其他用户的键', async () => {
   await withSeller(async (sellerId, otherSellerId) => {
     const oldId = crypto.randomUUID()
-    const objectKey = `listings/${oldId}/old.jpg`
+    const objectKey = `listings/${oldId}/${crypto.randomUUID()}.jpg`
     await db.insert(idRekeys).values({ resourceTable: 'users', oldId, newId: sellerId })
     try {
       const input = record(sellerId, { objectKeys: [objectKey] })
@@ -129,14 +131,16 @@ test('真实 ID 重键映射允许原商品继续引用旧对象键，不放行�
             expiresAt: new Date().toISOString(),
           }),
           stat: async () => ({ size: 100, contentType: 'image/jpeg' }),
-          publicUrl: (key) => `https://cdn.test/${key}`,
+          publicUrl: (key) =>
+            `https://web.test/api/uploads/legacy/${legacyMediaToken(key, 'test-secret-for-legacy-media-longer-than-32-characters')}`,
         },
       })
       const result = await service.updateListing(sellerId, input.id, {
         title: '保留历史对象的商品',
         objectKeys: [objectKey],
       })
-      expect(result.images[0]?.url).toContain(objectKey)
+      expect(result.images[0]?.url).toContain('/api/uploads/legacy/')
+      expect(result.images[0]?.url).not.toContain(oldId)
       expect(await store.legacyUserIds(sellerId)).toEqual([oldId])
       await expect(
         service.updateListing(otherSellerId, input.id, { objectKeys: [objectKey] }),
@@ -1039,10 +1043,14 @@ test('本人不传 status 时返回全部状态（含 OFFLINE 的 REVIEW 行）�
 
     // 前端「我发布的」的真实请求形状：带 sellerId、**不带 status**。
     const own = await service.listFeed(sellerId, { sellerId, sort: 'newest', limit: 20 })
-    expect(own.items.map((item) => item.id)).toContain(created.listingId)
+    expect(own.items.map((item) => item.id)).toContain(
+      encodePublicId(PUBLIC_ID_PREFIX.listing, created.listingId),
+    )
 
     // 公开 Feed：同样不带 status，但看不见审核中的商品。
     const publicFeed = await service.listFeed(null, { sort: 'newest', limit: 20 })
-    expect(publicFeed.items.map((item) => item.id)).not.toContain(created.listingId)
+    expect(publicFeed.items.map((item) => item.id)).not.toContain(
+      encodePublicId(PUBLIC_ID_PREFIX.listing, created.listingId),
+    )
   })
 })

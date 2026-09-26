@@ -6,6 +6,7 @@ import { matches } from '@fish/db/schema/matches'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { inArray } from 'drizzle-orm'
 import { createMatchingService, MatchingServiceError } from './service'
 import { createSqlMatchingStore } from './store'
@@ -23,6 +24,8 @@ const db = createDb(databaseUrl)
 afterAll(async () => {
   await db.$client.close()
 })
+const publicListing = (id: string) => encodePublicId(PUBLIC_ID_PREFIX.listing, id)
+const publicWish = (id: string) => encodePublicId(PUBLIC_ID_PREFIX.wish, id)
 const service = createMatchingService({
   store: createSqlMatchingStore(db),
   storage: { publicUrl: (key) => `https://cdn.test/${key}` },
@@ -119,7 +122,9 @@ test('wish 侧：排除 OFFLINE 商品（items 与 total 都不算它），否�
 
     expect(response.total).toBe(2)
     expect(response.items.map((item) => item.score)).toEqual([95, 80])
-    expect(response.items.map((item) => item.listing.id)).toEqual([higher, lower])
+    expect(response.items.map((item) => item.listing.id)).toEqual(
+      [higher, lower].map(publicListing),
+    )
     expect(
       response.items.every((item) => /^[1-9][0-9]{11}$/.test(item.listing.listingNo ?? '')),
     ).toBe(true)
@@ -168,7 +173,7 @@ test('wish 侧：无法映射为契约的卡片被跳过，但 total 仍计入',
     const response = await service.listByWish(ownerId, wishId, 10)
 
     expect(response.total).toBe(2)
-    expect(response.items.map((item) => item.listing.id)).toEqual([clean])
+    expect(response.items.map((item) => item.listing.id)).toEqual([publicListing(clean)])
   })
 })
 
@@ -206,7 +211,7 @@ test('listing 侧：只返回 ACTIVE 愿望，可空字段原样带出', async (
     expect(response.items).toHaveLength(1)
     expect(response.items[0]?.score).toBe(88)
     expect(response.items[0]?.wish).toEqual({
-      id: openWish,
+      id: publicWish(openWish),
       keyword: '机械键盘',
       category: null,
       budgetMinCents: null,
@@ -269,7 +274,7 @@ test('同分时按 id 降序（稳定 tie-break）', async () => {
     const response = await service.listByWish(ownerId, wishId, 10)
 
     const expected = [first, second].sort((a, b) => b.localeCompare(a))
-    expect(response.items.map((item) => item.listing.id)).toEqual(expected)
+    expect(response.items.map((item) => item.listing.id)).toEqual(expected.map(publicListing))
   })
 })
 
@@ -285,7 +290,7 @@ test('价格超出 2 倍预算的行在两个方向都不可见（裸分 70 也�
 
     const wishSide = await service.listByWish(ownerId, wishId, 10)
     expect(wishSide.total).toBe(1)
-    expect(wishSide.items.map((item) => item.listing.id)).toEqual([affordable])
+    expect(wishSide.items.map((item) => item.listing.id)).toEqual([publicListing(affordable)])
 
     const listingSide = await service.listByListing(otherId, tooExpensive, 10)
     expect(listingSide).toEqual({ total: 0, items: [] })
@@ -304,7 +309,7 @@ test('listing 方向同分时也按 id 降序', async () => {
     const response = await service.listByListing(ownerId, listingId, 10)
 
     const expected = [first, second].sort((a, b) => b.localeCompare(a))
-    expect(response.items.map((item) => item.wish.id)).toEqual(expected)
+    expect(response.items.map((item) => item.wish.id)).toEqual(expected.map(publicWish))
   })
 })
 

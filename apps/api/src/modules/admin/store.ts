@@ -214,6 +214,7 @@ export type ListAuditLogsCriteria = {
   action: AdminAuditAction | undefined
   targetType: AdminAuditTargetType | undefined
   targetId: string | undefined
+  targetTable: string | undefined
   createdFrom: Date | undefined
   createdTo: Date | undefined
   cursor: { createdAt: string; id: string } | null
@@ -282,6 +283,7 @@ export interface AdminStore {
   } | null>
   getOverview(): Promise<OverviewRow>
   listAuditLogs(criteria: ListAuditLogsCriteria): Promise<AuditLogRow[]>
+  resolveLegacyAuditId(table: string, oldId: string): Promise<string | null>
   listModerationQueue(criteria: ListModerationQueueCriteria): Promise<ModerationQueueRow[]>
   /**
    * 审核记录检索（#73 治理半场 PR4）：已在 REVIEW 队列之外的历史记录。
@@ -612,12 +614,29 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
       }
     },
 
+    async resolveLegacyAuditId(table, oldId) {
+      const rows = await db.execute(sql`
+        SELECT new_id FROM id_rekeys
+        WHERE resource_table = ${table} AND old_id = ${oldId}::uuid
+        LIMIT 1
+      `)
+      return rows[0]?.new_id ? String(rows[0].new_id) : null
+    },
+
     async listAuditLogs(criteria) {
       const conditions: SQL[] = []
       if (criteria.actorId) conditions.push(eq(adminAuditLogs.actorUserId, criteria.actorId))
       if (criteria.action) conditions.push(eq(adminAuditLogs.action, criteria.action))
       if (criteria.targetType) conditions.push(eq(adminAuditLogs.targetType, criteria.targetType))
-      if (criteria.targetId) conditions.push(eq(adminAuditLogs.targetId, criteria.targetId))
+      if (criteria.targetId)
+        conditions.push(sql`(
+        ${adminAuditLogs.targetId} = ${criteria.targetId}::uuid OR EXISTS (
+          SELECT 1 FROM id_rekeys r
+          WHERE r.new_id = ${criteria.targetId}::uuid
+            AND r.resource_table = ${criteria.targetTable}
+            AND r.old_id = ${adminAuditLogs.targetId}
+        )
+      )`)
       if (criteria.createdFrom) {
         conditions.push(sql`${adminAuditLogs.createdAt} >= ${criteria.createdFrom}`)
       }

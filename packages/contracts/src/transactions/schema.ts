@@ -1,5 +1,11 @@
 import { z } from 'zod'
 import { ListingStatusSchema, PriceCentsSchema } from '../listings/schema'
+import {
+  ConversationIdSchema,
+  ListingIdSchema,
+  TransactionIdSchema,
+  UserIdSchema,
+} from '../system/public-id'
 
 /** Transaction Domain Contract（Issue #11）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -19,7 +25,7 @@ export type TransactionRole = z.infer<typeof transactionRoleSchema>
 
 /** 订单卡内嵌的商品摘要，服务端组装——前端渲染订单列表不必逐行回查商品详情（N+1）。 */
 export const transactionListingSchema = z.object({
-  id: z.string(),
+  id: ListingIdSchema,
   title: z.string(),
   priceCents: z.number().int(),
   status: ListingStatusSchema,
@@ -29,7 +35,7 @@ export type TransactionListing = z.infer<typeof transactionListingSchema>
 
 /** 订单卡内嵌的对方用户摘要，按查看者视角解析：buyer 看到 seller，反之亦然。 */
 export const transactionUserSchema = z.object({
-  id: z.string(),
+  id: UserIdSchema,
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
 })
@@ -37,12 +43,12 @@ export type TransactionUser = z.infer<typeof transactionUserSchema>
 
 export const transactionDtoSchema = z
   .object({
-    id: z.string(),
+    id: TransactionIdSchema,
     /** 该交易对应的唯一会话；买卖双方读取同一交易时值相同。 */
-    conversationId: z.string(),
-    listingId: z.string(),
-    buyerId: z.string(),
-    sellerId: z.string(),
+    conversationId: ConversationIdSchema,
+    listingId: ListingIdSchema,
+    buyerId: UserIdSchema,
+    sellerId: UserIdSchema,
     role: transactionRoleSchema,
     /** 订单卡渲染用；amountCents 是议价结果，与挂价 priceCents 各自独立。 */
     listing: transactionListingSchema,
@@ -87,7 +93,7 @@ export const transactionSystemEventSchema = z.discriminatedUnion('type', [
   /** 卖家接受：transactionId 指向此刻创建的交易行，聊天里可跳交易详情。 */
   z.object({
     type: z.literal('tx.accepted'),
-    transactionId: z.string(),
+    transactionId: TransactionIdSchema,
     amountCents: z.number().int().nonnegative(),
   }),
   /** 卖家拒绝。 */
@@ -107,7 +113,7 @@ export type TransactionSystemEvent = z.infer<typeof transactionSystemEventSchema
  */
 export const transactionProposalInputSchema = z.strictObject({
   /** 会话唯一对应 (listing, buyer)，因此 conversationId 即定位到商品与买家。 */
-  conversationId: z.uuid(),
+  conversationId: ConversationIdSchema,
   /** 议价结果随提案带上；接受时以卖家重传的值为准（提案不落库，无处可读）。 */
   amountCents: PriceCentsSchema,
 })
@@ -123,14 +129,14 @@ export type TransactionProposalInput = z.infer<typeof transactionProposalInputSc
  * 前端不得把 409 直译成"接受失败"。
  */
 export const transactionAcceptInputSchema = z.strictObject({
-  conversationId: z.uuid(),
+  conversationId: ConversationIdSchema,
   amountCents: PriceCentsSchema,
 })
 export type TransactionAcceptInput = z.infer<typeof transactionAcceptInputSchema>
 
 /** 卖家拒绝提案：往会话写一条 `tx.rejected` SYSTEM 消息。 */
 export const transactionRejectInputSchema = z.strictObject({
-  conversationId: z.uuid(),
+  conversationId: ConversationIdSchema,
 })
 export type TransactionRejectInput = z.infer<typeof transactionRejectInputSchema>
 
@@ -185,17 +191,17 @@ export const meetupTokenStatusSchema = z.enum(['NONE', 'ISSUED', 'CONSUMED'])
 export type MeetupTokenStatus = z.infer<typeof meetupTokenStatusSchema>
 
 export const meetupTokenResponseSchema = z.strictObject({
-  transactionId: z.uuid(),
+  transactionId: TransactionIdSchema,
   code: z.string().regex(/^\d{6}$/),
   qrPayload: z.string().min(1),
 })
 export type MeetupTokenResponse = z.infer<typeof meetupTokenResponseSchema>
 
 export const meetupTokenStatusResponseSchema = z.strictObject({
-  transactionId: z.uuid(),
+  transactionId: TransactionIdSchema,
   status: meetupTokenStatusSchema,
   consumedAt: z.iso.datetime().nullable(),
-  consumedBy: z.uuid().nullable(),
+  consumedBy: UserIdSchema.nullable(),
 })
 export type MeetupTokenStatusResponse = z.infer<typeof meetupTokenStatusResponseSchema>
 
@@ -210,9 +216,9 @@ export const meetupTokenVerifyCodeInputSchema = z.strictObject({
 export type MeetupTokenVerifyCodeInput = z.infer<typeof meetupTokenVerifyCodeInputSchema>
 
 export const meetupVerificationResponseSchema = z.strictObject({
-  transactionId: z.uuid(),
+  transactionId: TransactionIdSchema,
   verified: z.literal(true),
-  verifiedBy: z.uuid(),
+  verifiedBy: UserIdSchema,
   verifiedAt: z.iso.datetime(),
   nextAction: z.literal('CONFIRM_DELIVERY'),
 })

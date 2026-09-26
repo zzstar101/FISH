@@ -6,6 +6,8 @@ import {
   messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
 import type { MessageRow, MessageStore } from './store'
 
@@ -28,15 +30,15 @@ const idempotencyConflict = () =>
 
 export function toMessageDto(row: MessageRow): MessageDto {
   return messageDtoSchema.parse({
-    id: row.id,
-    conversationId: row.conversation_id,
-    senderId: row.sender_id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.message, row.id),
+    conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation_id),
+    senderId: row.sender_id ? encodePublicId(PUBLIC_ID_PREFIX.user, row.sender_id) : null,
     sender:
       row.sender_id && row.sender_nickname
         ? {
-            id: row.sender_id,
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, row.sender_id),
             nickname: row.sender_nickname,
-            avatarUrl: row.sender_avatar_url ?? null,
+            avatarUrl: publicAvatarUrl(row.sender_avatar_url ?? null),
           }
         : null,
     type: row.type,
@@ -45,11 +47,13 @@ export function toMessageDto(row: MessageRow): MessageDto {
   })
 }
 
+type InternalMessageListQuery = Omit<MessageListQuery, 'before'> & { before?: string }
+
 export interface MessageService {
   listMessages(
     userId: string,
     conversationId: string,
-    query: MessageListQuery,
+    query: InternalMessageListQuery,
   ): Promise<MessageListResponse>
   sendTextMessage(
     userId: string,
@@ -97,7 +101,7 @@ export function createMessageService({
           ),
         ),
         // 升序页的最早一条即下一页游标；没有更早的消息时为 null（契约：无 hasMore 字段）。
-        nextCursor: hasMore && oldest ? oldest.id : null,
+        nextCursor: hasMore && oldest ? encodePublicId(PUBLIC_ID_PREFIX.message, oldest.id) : null,
       })
     },
 

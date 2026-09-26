@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   PublicUserListingsQuerySchema,
   PublicUserProfileSchema,
   UserErrorCodeSchema,
 } from './schema'
 
-const USER_ID = '01930000-0000-7000-8000-00000000000a'
+const USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-00000000000a')
 
 function profile(overrides: Record<string, unknown> = {}) {
   return {

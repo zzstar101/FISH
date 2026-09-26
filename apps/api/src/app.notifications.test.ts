@@ -8,7 +8,7 @@ import { createDb, type Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import { notifications } from '@fish/db/schema/notifications'
 import { loadServerEnv } from '@fish/shared/env'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
@@ -87,7 +87,7 @@ async function registerUser(serial: string): Promise<{ cookie: string; userId: s
     ?.split(';')[0]
   if (!cookie) throw new Error('注册未下发 fish_session cookie')
   const body = (await response.json()) as { user: { id: string } }
-  return { cookie, userId: body.user.id }
+  return { cookie, userId: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id) }
 }
 
 /**

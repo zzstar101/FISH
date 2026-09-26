@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { MeetupTokenCrypto } from './meetup-token'
 
 const SECRET = 'test-meetup-secret-0123456789abcdef'
@@ -19,8 +20,12 @@ describe('meetup token crypto (#175 确定性派生)', () => {
     }
     // 形状：6 位数字；token 能进 QR payload（构造器会校验 base64url 字符集）
     expect(code).toMatch(/^\d{6}$/)
-    expect(parseMeetupQrPayload(crypto.qrPayload(TX, token))).toEqual({
-      transactionId: TX,
+    expect(
+      parseMeetupQrPayload(
+        crypto.qrPayload(encodePublicId(PUBLIC_ID_PREFIX.transaction, TX), token),
+      ),
+    ).toEqual({
+      transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, TX),
       token,
     })
   })

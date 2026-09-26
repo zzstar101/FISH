@@ -757,7 +757,7 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
      `UPLOAD_OBJECT_MISSING`「图片尚未上传完成」，报错指向的原因和真实原因（服务端连不上对象存储）不一致。
      若服务器无法 hairpin 到自己的公网地址，在 `/etc/hosts` 里把该域名指回 `127.0.0.1`
      （证书按 SNI 名签发，仍然有效），并在 §8 验收里用服务端 `curl` 一个真实存在的 object key 把它验出来。
-   - 读接口返回的图片 URL 是 `S3_PUBLIC_URL + '/' + objectKey`，必须能从浏览器打开。
+   - 新上传的商品图片使用 `usr_` / `med_` 对象键，读接口直链为 `S3_PUBLIC_URL + '/' + objectKey`，必须能从浏览器打开。历史 UUID 对象键不再放进公开 URL；读接口返回 `${WEB_ORIGIN}/api/uploads/legacy/<加密 token>`，由 Web 同源 `/api` 反代给 API 匿名读取。部署时须同时确认这个反代入口和旧图片可用；轮换 `MEETUP_TOKEN_SECRET` 会使已生成的历史图片 token 失效，客户端重新拉取商品响应即可获得新 URL。
    - 正因如此，MinIO 要有暴露面：本手册用 `s3.<域名>` 反代并**保留 Host**（§6）。SigV4 签名覆盖
      `Host`，反代改写 Host 会让 PUT/GET 变成 403。
    - **不能把 MinIO 挂在路径前缀下**（如 `https://主站/s3`）：Bun 1.4.0 的 presign 会把前缀

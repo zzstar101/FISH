@@ -1,10 +1,10 @@
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
-import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
 import type { AiPolishEnv, MailTransportEnv, MeetupTokenEnv, ServerEnv } from '@fish/shared/env'
 import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -40,7 +40,7 @@ import { createMediaRouter } from './modules/messages/media-router'
 import { createMediaMessageService } from './modules/messages/media-service'
 import { createSqlMediaMessageStore } from './modules/messages/media-store'
 import { createMessagesRouter } from './modules/messages/router'
-import { createMessageService } from './modules/messages/service'
+import { createMessageService, toMessageDto } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createSystemContentProjector } from './modules/messages/system-content'
 import { createNotificationsRouter } from './modules/notifications/router'
@@ -158,6 +158,8 @@ export function createApp(
       region: env.S3_REGION,
     }),
     publicUrlBase: env.S3_PUBLIC_URL,
+    legacyUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/legacy`,
+    legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
   })
 
   // Guard transactions use a separate bounded pool, preserving business-store connections;
@@ -186,6 +188,7 @@ export function createApp(
     '/uploads',
     createUploadsRouter({
       storage,
+      legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       requireAuth: auth.requireAuth,
       service: uploadService,
       guard: restrictionGuard,
@@ -279,8 +282,8 @@ export function createApp(
         onRead: (participants, event) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'conversation.read',
-            conversationId: event.conversationId,
-            readerId: event.readerId,
+            conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, event.conversationId),
+            readerId: encodePublicId(PUBLIC_ID_PREFIX.user, event.readerId),
             readAt: event.readAt,
           })
         },
@@ -361,16 +364,8 @@ export function createApp(
         onSystemMessage: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',
-            conversationId: message.conversation_id,
-            message: messageDtoSchema.parse({
-              id: message.id,
-              conversationId: message.conversation_id,
-              senderId: message.sender_id,
-              sender: null,
-              type: message.type,
-              content: message.content,
-              createdAt: new Date(message.created_at).toISOString(),
-            }),
+            conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, message.conversation_id),
+            message: toMessageDto(message),
           })
         },
       }),

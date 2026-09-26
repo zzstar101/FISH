@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { PublicUserListingsQuery, PublicUserProfile } from '@fish/contracts/users/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
 import { createUsersRouter } from './router'
 import { type PublicUserService, PublicUserServiceError } from './service'
 
-const USER_ID = '01930000-0000-7000-8000-00000000000a'
-const LISTING_ID = '01930000-0000-7000-8000-000000000011'
+const INTERNAL_USER_ID = '01930000-0000-7000-8000-00000000000a'
+const USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, INTERNAL_USER_ID)
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-000000000011')
 
 const profile: PublicUserProfile = {
   id: USER_ID,
@@ -106,7 +108,7 @@ describe('users router — 在售列表', () => {
 
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ items: [card], nextCursor: null })
-    expect(service.listCalls).toEqual([{ userId: USER_ID, query: { limit: 20 } }])
+    expect(service.listCalls).toEqual([{ userId: INTERNAL_USER_ID, query: { limit: 20 } }])
   })
 
   test('limit 与 cursor 透传给 service', async () => {
@@ -114,7 +116,9 @@ describe('users router — 在售列表', () => {
     const res = await buildApp(service).request(`/users/${USER_ID}/listings?limit=5&cursor=abc`)
 
     expect(res.status).toBe(200)
-    expect(service.listCalls).toEqual([{ userId: USER_ID, query: { limit: 5, cursor: 'abc' } }])
+    expect(service.listCalls).toEqual([
+      { userId: INTERNAL_USER_ID, query: { limit: 5, cursor: 'abc' } },
+    ])
   })
 
   test('非法查询参数 → 422 VALIDATION_FAILED 并带字段级 details', async () => {

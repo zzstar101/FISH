@@ -1,4 +1,5 @@
 import { describe, expect, setSystemTime, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../listings/cursor'
 import { createPublicUserService, PublicUserServiceError } from './service'
 import type {
@@ -210,7 +211,9 @@ describe('在售列表', () => {
 
     const page = await service(store).listActiveListings(USER_ID, { limit: 2 })
 
-    expect(page.items.map((item) => item.id)).toEqual([LISTING_A, LISTING_B])
+    expect(page.items.map((item) => item.id)).toEqual(
+      [LISTING_A, LISTING_B].map((id) => encodePublicId(PUBLIC_ID_PREFIX.listing, id)),
+    )
     expect(page.nextCursor).not.toBeNull()
     expect(decodeCursor(page.nextCursor as string)).toEqual({
       sortKey: '2026-09-09T02:00:00.000000Z',

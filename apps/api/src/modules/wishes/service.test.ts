@@ -1,10 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import type { WishCreateInput, WishStatus, WishUpdateInput } from '@fish/contracts/wishes/schema'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createWishService, WishServiceError } from './service'
 import type { EditableWishFields, PoolRow, WishRow, WishStore } from './store'
 
-const userA = 'user-a'
-const userB = 'user-b'
+const userA = '01930000-0000-7000-8000-00000000000a'
+const userB = '01930000-0000-7000-8000-00000000000b'
+const internalWish = (id: string) => decodePublicId(PUBLIC_ID_PREFIX.wish, id)
+const testUser = (index: number) =>
+  `01930000-0000-7000-8000-${index.toString(16).padStart(12, '0')}`
 
 class MemoryWishStore implements WishStore {
   rows: WishRow[] = []
@@ -117,11 +121,11 @@ describe('wish service', () => {
     const first = await service.createWish(userA, createInput)
     const second = await service.createWish(userA, createInput)
 
-    expect(first.id).toMatch(
+    expect(internalWish(first.id)).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     )
     expect(second.id).toBe(first.id)
-    expect(queued).toEqual([first.id, first.id])
+    expect(queued).toEqual([internalWish(first.id), internalWish(first.id)])
   })
 
   test('allows a retry to re-enqueue a record after a prior enqueue failure', async () => {
@@ -151,10 +155,10 @@ describe('wish service', () => {
   test('prevents other users from viewing or changing a wish', async () => {
     const { service } = setup()
     const wish = await service.createWish(userA, createInput)
-    await expect(service.getWish(userB, wish.id)).rejects.toMatchObject(
+    await expect(service.getWish(userB, internalWish(wish.id))).rejects.toMatchObject(
       new WishServiceError(403, '无权查看该愿望'),
     )
-    await expect(service.closeWish(userB, wish.id)).rejects.toMatchObject(
+    await expect(service.closeWish(userB, internalWish(wish.id))).rejects.toMatchObject(
       new WishServiceError(403, '无权操作该愿望'),
     )
   })
@@ -162,12 +166,12 @@ describe('wish service', () => {
   test('allows ACTIVE to CLOSED/FULFILLED and makes repeated transitions idempotent', async () => {
     const { service } = setup()
     const closed = await service.createWish(userA, createInput)
-    expect((await service.closeWish(userA, closed.id)).status).toBe('CLOSED')
-    expect((await service.closeWish(userA, closed.id)).status).toBe('CLOSED')
+    expect((await service.closeWish(userA, internalWish(closed.id))).status).toBe('CLOSED')
+    expect((await service.closeWish(userA, internalWish(closed.id))).status).toBe('CLOSED')
 
     const fulfilled = await service.createWish(userA, { ...createInput, keyword: '耳机' })
-    expect((await service.fulfillWish(userA, fulfilled.id)).status).toBe('FULFILLED')
-    await expect(service.closeWish(userA, fulfilled.id)).rejects.toMatchObject(
+    expect((await service.fulfillWish(userA, internalWish(fulfilled.id))).status).toBe('FULFILLED')
+    await expect(service.closeWish(userA, internalWish(fulfilled.id))).rejects.toMatchObject(
       new WishServiceError(409, '愿望已经处于终态'),
     )
   })
@@ -175,10 +179,10 @@ describe('wish service', () => {
   test('validates a partial update against the existing budget range', async () => {
     const { service } = setup()
     const wish = await service.createWish(userA, createInput)
-    await expect(service.updateWish(userA, wish.id, { budgetMinCents: 30000 })).rejects.toThrow(
-      'budgetMaxCents 必须 ≥ budgetMinCents',
-    )
-    const updated = await service.updateWish(userA, wish.id, {
+    await expect(
+      service.updateWish(userA, internalWish(wish.id), { budgetMinCents: 30000 }),
+    ).rejects.toThrow('budgetMaxCents 必须 ≥ budgetMinCents')
+    const updated = await service.updateWish(userA, internalWish(wish.id), {
       keyword: '  蓝牙耳机  ',
       description: null,
     } as WishUpdateInput)
@@ -191,19 +195,19 @@ describe('wish service', () => {
     const { service } = setup(async () => {
       if (failEnqueue) throw new Error('queue unavailable')
     })
-    for (let i = 0; i < 3; i += 1) await service.createWish(`user-${i}`, createInput)
+    for (let i = 0; i < 3; i += 1) await service.createWish(testUser(i), createInput)
     expect((await service.getPool()).items[0]?.wantCount).toBe(3)
 
     failEnqueue = true
-    await expect(service.createWish('user-4', createInput)).rejects.toThrow('queue unavailable')
+    await expect(service.createWish(testUser(4), createInput)).rejects.toThrow('queue unavailable')
 
     expect((await service.getPool()).items[0]?.wantCount).toBe(4)
   })
 
   test('returns only k-anonymous active groups and caches the pool', async () => {
     const { store, service } = setup()
-    for (let i = 0; i < 3; i += 1) await service.createWish(`user-${i}`, createInput)
-    await service.createWish('user-unique', { ...createInput, keyword: '独有商品' })
+    for (let i = 0; i < 3; i += 1) await service.createWish(testUser(i), createInput)
+    await service.createWish(testUser(9), { ...createInput, keyword: '独有商品' })
 
     expect((await service.getPool()).items).toHaveLength(1)
     const original = store.aggregatePool.bind(store)

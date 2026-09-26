@@ -1,6 +1,5 @@
 import {
   type CommentAuthor,
-  CommentAuthorSchema,
   type CommentCreateInput,
   type CommentDto,
   CommentDtoSchema,
@@ -11,7 +10,9 @@ import {
   CommentReplySchema,
 } from '@fish/contracts/comments/schema'
 import type { ApiErrorDetail, SystemErrorCode } from '@fish/contracts/system/error'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createModerationService, type ModerationService } from '../moderation/service'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import { decodeCommentCursor, encodeCommentCursor } from './cursor'
 import type { CommentRow, CommentStore } from './store'
 
@@ -50,17 +51,17 @@ export interface CommentService {
  */
 function toAuthor(row: CommentRow): CommentAuthor {
   return {
-    id: row.authorId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, row.authorId),
     nickname: row.authorNickname,
-    avatarUrl: CommentAuthorSchema.shape.avatarUrl.safeParse(row.authorAvatarUrl).data ?? null,
+    avatarUrl: publicAvatarUrl(row.authorAvatarUrl),
   }
 }
 
 /** 回复 DTO：`replies` 恒为空数组（契约只嵌套一层，`CommentReplySchema` 强制）。 */
 function toReplyDto(row: CommentRow, sellerId: string): CommentReply | null {
   const parsed = CommentReplySchema.safeParse({
-    id: row.id,
-    listingId: row.listingId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.comment, row.id),
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listingId),
     author: toAuthor(row),
     content: row.content,
     createdAt: row.createdAt.toISOString(),
@@ -79,8 +80,8 @@ function toTopLevelDto(
   replies: CommentReply[],
 ): CommentDto | null {
   const parsed = CommentDtoSchema.safeParse({
-    id: row.id,
-    listingId: row.listingId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.comment, row.id),
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listingId),
     author: toAuthor(row),
     content: row.content,
     createdAt: row.createdAt.toISOString(),

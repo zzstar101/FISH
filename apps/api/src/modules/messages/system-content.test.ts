@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { newId as newUuid } from '@fish/db/ids'
 import { idRekeys } from '@fish/db/schema/id-rekeys'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq } from 'drizzle-orm'
 import { createSystemContentProjector, projectSystemContent } from './system-content'
 
@@ -17,7 +18,11 @@ test('旧交易系统消息只在公开出口重映射；其他消息不改写',
         return newId
       }),
     ),
-  ).toEqual({ type: 'tx.accepted', transactionId: newId, amountCents: 15000 })
+  ).toEqual({
+    type: 'tx.accepted',
+    transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, newId),
+    amountCents: 15000,
+  })
   expect(JSON.parse(stored)).toMatchObject({ transactionId: oldId })
   expect(
     await projectSystemContent('TEXT', stored, async () => {
@@ -39,7 +44,10 @@ test('历史交易 ID 在真实映射表中查询，公开消息指向新的订�
       .insert(idRekeys)
       .values({ resourceTable: 'transactions', oldId: legacy, newId: current })
     const projected = await createSystemContentProjector(db)('SYSTEM', stored)
-    expect(JSON.parse(projected)).toMatchObject({ transactionId: current, amountCents: 100 })
+    expect(JSON.parse(projected)).toMatchObject({
+      transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, current),
+      amountCents: 100,
+    })
     expect(JSON.parse(stored)).toMatchObject({ transactionId: legacy })
   } finally {
     await db

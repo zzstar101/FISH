@@ -1,15 +1,21 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+
+const CONVERSATION = '01930000-0000-7000-8000-0000000000c1'
+const conversationPath = `/conversations/${encodePublicId(PUBLIC_ID_PREFIX.conversation, CONVERSATION)}/messages`
+const sender = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1')
+
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
 import { createMessagesRouter } from './router'
 import { type MessageService, MessageServiceError } from './service'
 
 const message: MessageDto = {
-  id: '00000000-0000-4000-8000-0000000000d1',
-  conversationId: '00000000-0000-4000-8000-0000000000c1',
-  senderId: 'user-1',
-  sender: { id: 'user-1', nickname: '买家', avatarUrl: null },
+  id: encodePublicId(PUBLIC_ID_PREFIX.message, '01930000-0000-7000-8000-0000000000d1'),
+  conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, CONVERSATION),
+  senderId: sender,
+  sender: { id: sender, nickname: '买家', avatarUrl: null },
   type: 'TEXT',
   content: '还在吗',
   createdAt: '2026-09-12T10:00:00.000Z',
@@ -41,9 +47,7 @@ function buildApp(overrides: Partial<MessageService> = {}) {
 
 describe('messages router', () => {
   test('GET /:id/messages returns the ascending page', async () => {
-    const response = await buildApp().request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-    )
+    const response = await buildApp().request(conversationPath)
     expect(response.status).toBe(200)
     const body = (await response.json()) as { items: MessageDto[]; nextCursor: string | null }
     expect(body.items).toHaveLength(1)
@@ -56,9 +60,7 @@ describe('messages router', () => {
         throw new MessageServiceError(422, 'VALIDATION_FAILED', '游标不合法')
       },
     })
-    const response = await app.request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-    )
+    const response = await app.request(conversationPath)
     expect(response.status).toBe(422)
     expect(await response.json()).toEqual({
       error: { code: 'VALIDATION_FAILED', message: '游标不合法' },
@@ -66,27 +68,21 @@ describe('messages router', () => {
   })
 
   test('POST /:id/messages returns 201 with the created message', async () => {
-    const response = await buildApp().request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: '还在吗' }),
-      },
-    )
+    const response = await buildApp().request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '还在吗' }),
+    })
     expect(response.status).toBe(201)
     expect(await response.json()).toEqual(message)
   })
 
   test('POST /:id/messages rejects a whitespace-only body with 422', async () => {
-    const response = await buildApp().request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: '   ' }),
-      },
-    )
+    const response = await buildApp().request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '   ' }),
+    })
     expect(response.status).toBe(422)
   })
 
@@ -132,14 +128,11 @@ describe('messages router', () => {
         throw new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
       },
     })
-    const response = await app.request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: 'hi' }),
-      },
-    )
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'hi' }),
+    })
     expect(response.status).toBe(404)
   })
 
@@ -152,14 +145,11 @@ describe('messages router', () => {
       },
     })
     const clientRequestId = '01990000-0000-7000-8000-0000000000f3'
-    const response = await app.request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: 'hi', clientRequestId }),
-      },
-    )
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'hi', clientRequestId }),
+    })
     expect(seen).toEqual({ content: 'hi', clientRequestId })
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({
@@ -175,14 +165,11 @@ describe('messages router', () => {
         return message
       },
     })
-    const response = await app.request(
-      '/conversations/00000000-0000-4000-8000-0000000000c1/messages',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: 'hi', clientRequestId: 'not-a-uuid' }),
-      },
-    )
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'hi', clientRequestId: 'not-a-uuid' }),
+    })
     expect(response.status).toBe(422)
     expect(called).toBe(false)
   })

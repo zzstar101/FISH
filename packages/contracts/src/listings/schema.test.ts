@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { z } from 'zod'
 import {
   ListingCardSchema,
@@ -16,6 +17,9 @@ function issuePaths(schema: z.ZodType, input: unknown): PropertyKey[][] {
   const result = schema.safeParse(input)
   return result.success ? [] : result.error.issues.map((issue) => issue.path)
 }
+
+const USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-00000000000a')
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-000000000011')
 
 const validCreate = {
   title: '罗技 K380 键盘',
@@ -155,7 +159,7 @@ describe('ListingFeedQuerySchema', () => {
     expect(
       ListingFeedQuerySchema.safeParse({
         status: 'SOLD',
-        sellerId: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+        sellerId: USER_ID,
       }).success,
     ).toBe(true)
   })
@@ -179,7 +183,7 @@ describe('ListingSellerSchema', () => {
 
   test('carries authStatus but strips verifiedAt / campusEmail / studentNo（#68：公开徽章成立，敏感字段仍不外泄）', () => {
     const parsed = ListingSellerSchema.parse({
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: USER_ID,
       nickname: '阿岚',
       avatarUrl: null,
       authStatus: 'VERIFIED',
@@ -196,7 +200,7 @@ describe('ListingSellerSchema', () => {
 
 describe('ListingDetailSchema', () => {
   const detail = {
-    id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+    id: LISTING_ID,
     title: '罗技 K380 键盘',
     description: '宿舍用了一学期，功能正常。',
     priceCents: 16000,
@@ -211,8 +215,7 @@ describe('ListingDetailSchema', () => {
     updatedAt: '2026-09-12T03:40:10.000Z',
     images: [],
     seller: {
-      // 注意：`z.uuid()` 会校验 RFC 版本位与变体位，随手编的 UUID 会被拒。
-      id: '9a8b7c6d-5e4f-4a3b-8c1d-0e9f8a7b6c5d',
+      id: USER_ID,
       nickname: '阿岚',
       avatarUrl: null,
       authStatus: 'VERIFIED',
@@ -242,7 +245,7 @@ describe('ListingDetailSchema', () => {
 
 describe('ListingCardSchema', () => {
   const card = {
-    id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+    id: LISTING_ID,
     title: '键盘',
     priceCents: 0,
     category: 'DIGITAL',

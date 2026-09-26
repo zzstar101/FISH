@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { encodeCommentCursor } from './cursor'
 import { CommentServiceError, createCommentService } from './service'
 import type { CommentCursor, CommentRow, CommentStore } from './store'
@@ -113,7 +114,7 @@ describe('comment service — list', () => {
     const result = await service.listComments(LISTING_ID, { limit: 1 })
     expect(result.items).toHaveLength(1)
     expect(result.nextCursor).not.toBeNull()
-    expect(result.items[0]?.id).toBe(COMMENT_ID)
+    expect(result.items[0]?.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.comment, COMMENT_ID))
   })
 
   test('rejects a malformed cursor with 422 instead of letting it reach SQL', async () => {
@@ -197,7 +198,7 @@ describe('comment service — write', () => {
     const service = createCommentService({ store })
 
     const dto = await service.createReply(SELLER_ID, COMMENT_ID, { content: '还在的' })
-    expect(dto.listingId).toBe(LISTING_ID)
+    expect(dto.listingId).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
     expect(dto.isSeller).toBe(true)
   })
 })
