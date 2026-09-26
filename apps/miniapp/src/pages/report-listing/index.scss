@@ -33,6 +33,11 @@
   padding-top: 40px;
 }
 
+/* 「打不开」态（带 reportId 取不到记录）：空态自带 96px 上衬，这里不再叠 */
+.rpl__emptypad {
+  padding-top: 40px;
+}
+
 .rpl__content {
   flex: 1 1 auto;
   min-width: 0;

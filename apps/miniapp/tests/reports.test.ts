@@ -19,6 +19,7 @@ import {
   shortReportId,
   USER_REPORT_REASONS,
 } from '../src/features/reports/meta'
+import { resolveReportView, unavailableCopy } from '../src/features/reports/view'
 
 /**
  * 举报域的纯逻辑（原因枚举 / 状态文案 / 编号截断 / 演示数据完整性）。
@@ -116,8 +117,16 @@ describe('演示数据完整性（7 条 = 商品 4 + 用户 3，三态齐）', (
   })
 
   test('findDemoReport 命中与未命中', () => {
-    expect(findDemoReport('rpt_01J8ZQ3XK7M2')?.objTitle).toContain('戴尔')
-    expect(findDemoReport('rpt_missing')).toBe(null)
+    expect(findDemoReport('rpt_01J8ZQ3XK7M2', 'LISTING')?.objTitle).toContain('戴尔')
+    expect(findDemoReport('rpt_missing', 'LISTING')).toBe(null)
+  })
+
+  test('findDemoReport 按目标类型收口：拿用户举报的记录当商品举报查 → null', () => {
+    // 两页的原因枚举不同，串了 target 会把「举报用户」的记录按商品原因解释
+    expect(findDemoReport('rpt_01J8TN7RD2M4', 'LISTING')).toBe(null)
+    expect(findDemoReport('rpt_01J8TN7RD2M4', 'USER')?.objTitle).toBe('老张的杂货铺')
+    expect(findDemoReport('rpt_01J8ZQ3XK7M2', 'USER')).toBe(null)
+    expect(findDemoReport('rpt_01J8ZQ3XK7M2', 'LISTING')?.target).toBe('LISTING')
   })
 
   test('演示提交记录进列表头；商品 / 用户两类各占一条互不顶掉；同类只留最新', async () => {
@@ -149,16 +158,75 @@ describe('演示数据完整性（7 条 = 商品 4 + 用户 3，三态齐）', (
       DEMO_SUBMITTED_LISTING_ID,
       ...DEMO_REPORTS.map((r) => r.id),
     ])
-    expect(findDemoReport(DEMO_SUBMITTED_LISTING_ID)?.reason).toBe('SPAM')
-    expect(findDemoReport(DEMO_SUBMITTED_USER_ID)?.reason).toBe('HARASSMENT')
+    expect(findDemoReport(DEMO_SUBMITTED_LISTING_ID, 'LISTING')?.reason).toBe('SPAM')
+    expect(findDemoReport(DEMO_SUBMITTED_USER_ID, 'USER')?.reason).toBe('HARASSMENT')
 
     // 同类反复提交：该类只留最新
     const updated: ReportRecord = { ...listingRecord, objTitle: '测试商品二' }
     rememberDemoReport(updated)
     const items = await loadDemoReports()
     expect(items.filter((r) => r.id === DEMO_SUBMITTED_LISTING_ID)).toHaveLength(1)
-    expect(findDemoReport(DEMO_SUBMITTED_LISTING_ID)?.objTitle).toBe('测试商品二')
+    expect(findDemoReport(DEMO_SUBMITTED_LISTING_ID, 'LISTING')?.objTitle).toBe('测试商品二')
     expect(items).toHaveLength(9)
+  })
+})
+
+describe('只读入口判定（resolveReportView，两页共用）', () => {
+  const sample = 'rpt_01J8ZQ3XK7M2' // 商品样例
+  const userSample = 'rpt_01J8TN7RD2M4' // 用户样例
+
+  test('不带 reportId → 新建态', () => {
+    expect(resolveReportView({ reportId: null, target: 'LISTING', demoEnabled: false })).toEqual({
+      mode: 'fill',
+      record: null,
+    })
+    expect(resolveReportView({ reportId: '', target: 'USER', demoEnabled: true }).mode).toBe('fill')
+  })
+
+  /**
+   * #260 / #261 复查 P2 的回归：真实构建（两个演示开关都关）深链直开一条样例编号，
+   * 页面**不得**拿到样例对象 —— 否则用户看到的是没有「演示」标识的虚构处理记录。
+   * 这条用例在修复前会失败：那时 findDemoReport 无条件命中。
+   */
+  test('真实构建：样例编号也拿不到记录，落「打不开」', () => {
+    for (const target of ['LISTING', 'USER'] as const) {
+      const view = resolveReportView({ reportId: sample, target, demoEnabled: false })
+      expect(view.mode).toBe('unavailable')
+      expect(view.record).toBe(null)
+    }
+  })
+
+  test('演示构建：目标类型对得上才是只读态', () => {
+    const listing = resolveReportView({ reportId: sample, target: 'LISTING', demoEnabled: true })
+    expect(listing.mode).toBe('view')
+    expect(listing.record?.objTitle).toContain('戴尔')
+
+    const user = resolveReportView({ reportId: userSample, target: 'USER', demoEnabled: true })
+    expect(user.mode).toBe('view')
+    expect(user.record?.target).toBe('USER')
+  })
+
+  test('演示构建：目标类型串了 → 打不开（不按另一套枚举解释）', () => {
+    expect(
+      resolveReportView({ reportId: userSample, target: 'LISTING', demoEnabled: true }).mode,
+    ).toBe('unavailable')
+    expect(resolveReportView({ reportId: sample, target: 'USER', demoEnabled: true }).mode).toBe(
+      'unavailable',
+    )
+  })
+
+  test('演示构建：不存在的编号 → 打不开（不静默变成新建表单）', () => {
+    expect(
+      resolveReportView({ reportId: 'rpt_missing', target: 'LISTING', demoEnabled: true }).mode,
+    ).toBe('unavailable')
+  })
+
+  test('「打不开」的文案按构建分档，都不导向新建', () => {
+    const real = unavailableCopy(false)
+    expect(real.title).toContain('后端')
+    const demo = unavailableCopy(true)
+    expect(demo.title).not.toBe(real.title)
+    expect(demo.text).toContain('重启')
   })
 })
 

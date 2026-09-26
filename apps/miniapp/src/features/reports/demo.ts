@@ -129,8 +129,19 @@ export function rememberDemoReport(record: ReportRecord): void {
   submittedReports.unshift(record)
 }
 
-export function findDemoReport(id: string): ReportRecord | null {
-  return submittedReports.find((r) => r.id === id) ?? DEMO_REPORTS.find((r) => r.id === id) ?? null
+/**
+ * 按编号取一条**演示**记录；找不到、或记录的目标类型与调用方期望的不符时返回 null。
+ *
+ * 两点都是刻意的：
+ * - `target` 必须对得上 —— 商品举报页拿用户举报的记录去渲染，会把「举报用户」的原因与
+ *   对象当成商品举报解释（两套原因是不同的枚举）；
+ * - 调用方**必须**先用演示开关判据（`DEMO_REPORTS_ENABLED`）拦住真实构建：本模块是纯数据，
+ *   自身不认构建模式，真实构建下调用它就会把样例记录当成真实处理结果渲染出去。
+ */
+export function findDemoReport(id: string, target: ReportTarget): ReportRecord | null {
+  const hit =
+    submittedReports.find((r) => r.id === id) ?? DEMO_REPORTS.find((r) => r.id === id) ?? null
+  return hit !== null && hit.target === target ? hit : null
 }
 
 const DEMO_LATENCY = 120
