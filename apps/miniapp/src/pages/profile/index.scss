@@ -18,9 +18,125 @@
   padding-bottom: 136px;
 }
 
+/**
+ * 顶部背景：六层 mesh 渐变 + 三组纯 CSS 动效（二改 #234 细节整改，Owner 定稿数值）。
+ *
+ * 尺寸仍走本页的 page-hero（250pt 高、32pt 下圆角、绝对定位、pointer-events none），
+ * 只把单层线性渐变换成六层叠加；渐变的尺寸/位置百分比按元素自身宽高算，与本页
+ * 高度无关，定稿比例原样照抄、勿调。
+ *
+ * WXSS 约束：色标全部十六进制/rgba 实值——不写 color-mix（低版本 iOS WKWebView
+ * 不支持）、不用 transparent 关键字（部分基础库渲染成灰），淡出统一
+ * rgba(247,250,255,0)。
+ */
 .profile__hero-bg {
-  /* 3版稿 .topbg：250pt 高、下缘 32pt 圆角 */
   @include page-hero(500px, 64px);
+  /* 裁住流光带（::before 扫过时会越出右缘，防横向溢出），顺带把子层剪进圆角 */
+  overflow: hidden;
+  -webkit-transform: translateZ(0);
+
+  /* 六层叠加，顺序即层序（前面的在上）：① 左上品牌蓝 ② 右上电光蓝
+     ③ 中偏左荧光青 ④ 右侧薄荷绿 ⑤ 底部渐隐 ⑥ 打底冰蓝 */
+  background:
+    radial-gradient(160% 122% at 6% -10%, #6ca0ff 0%, #a8c7ff 36%, rgba(247, 250, 255, 0) 82%),
+    radial-gradient(145% 115% at 97% -6%, #5ec1ff 0%, #acdfff 42%, rgba(247, 250, 255, 0) 86%),
+    radial-gradient(130% 106% at 33% 31%, #8cf2ff 0%, rgba(247, 250, 255, 0) 76%),
+    radial-gradient(140% 112% at 105% 50%, #b0fae9 0%, rgba(247, 250, 255, 0) 80%),
+    linear-gradient(180deg, rgba(247, 250, 255, 0) 68%, #f7faff 100%),
+    linear-gradient(180deg, #91b8ff 0%, #cfe3ff 100%);
+
+  /* 色团缓慢漂移：只动 background-position，6 组值与 6 层严格一一对应
+     （层数对不上会层错位）；幅度 1~2%，24s 往返，呼吸感 */
+  animation: heroMeshDrift 24s ease-in-out infinite alternate;
+}
+
+@keyframes heroMeshDrift {
+  from {
+    background-position:
+      0 0,
+      0 0,
+      0 0,
+      0 0,
+      0 0,
+      0 0;
+  }
+
+  to {
+    background-position:
+      2% 1%,
+      -2% 2%,
+      1.5% -1%,
+      -1% 2%,
+      0 0,
+      0 0;
+  }
+}
+
+/* 顶部高光呼吸：模拟屏幕反光（灵动岛那块更通透），opacity 只在 .35↔.6 间缓慢往返 */
+.profile__hero-bg::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  pointer-events: none;
+  background: radial-gradient(70% 46% at 50% -8%, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0) 72%);
+  opacity: 0.35;
+  animation: heroGlow 7s ease-in-out infinite alternate;
+}
+
+@keyframes heroGlow {
+  from {
+    opacity: 0.35;
+  }
+
+  to {
+    opacity: 0.6;
+  }
+}
+
+/* 流光扫过：斜向白色高光带，只动 transform（translateX + skewX，不动 left）；
+   关键帧聚簇——0~70% 原地停在画外，最后 30% 才扫过一遍，避免匀速跑马灯感 */
+.profile__hero-bg::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.34) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: translateX(-130%) skewX(-18deg);
+  animation: heroSweep 9s ease-in-out infinite;
+}
+
+@keyframes heroSweep {
+  0%,
+  70% {
+    transform: translateX(-130%) skewX(-18deg);
+  }
+
+  100% {
+    transform: translateX(260%) skewX(-18deg);
+  }
+}
+
+/* 弱动效偏好：全部动画关闭，静态呈现定稿配色 */
+@media (prefers-reduced-motion: reduce) {
+  .profile__hero-bg,
+  .profile__hero-bg::before,
+  .profile__hero-bg::after {
+    animation: none;
+  }
+
+  .profile__hero-bg::after {
+    opacity: 0.45;
+  }
+
+  .profile__hero-bg::before {
+    display: none;
+  }
 }
 
 .profile__body {
