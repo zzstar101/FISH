@@ -9,6 +9,7 @@ import { reports } from '@fish/db/schema/reports'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq, inArray } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
@@ -214,6 +215,7 @@ describe('举报闭环（#73 用户端）', () => {
     }
     expect(firstBody.created).toBe(true)
     expect(firstBody.report.status).toBe('PENDING')
+    expect(decodePublicId(PUBLIC_ID_PREFIX.report, firstBody.report.id)).toMatch(/^[0-9a-f-]{36}$/)
     // 用户端 DTO 不得泄漏处理原因（只对管理员可见）。
     expect(firstBody.report.handlingReason).toBeUndefined()
 
@@ -252,6 +254,7 @@ describe('举报闭环（#73 用户端）', () => {
     }
     expect(body.items.length).toBe(1)
     expect(body.items[0]?.reason).toBe('MISLEADING')
+    expect(body.items[0]?.id.startsWith('rpt_')).toBe(true)
     expect(body.nextCursor).toBeNull()
 
     const other = await app.request(REPORT_ROUTES.mine, {
@@ -283,7 +286,7 @@ describe('举报闭环（#73 Admin 端）', () => {
     expect(handle.status).toBe(403)
   })
 
-  test('普通用户碰举报详情也是 403；非 UUID 的 id 是 404 而不是 500', async () => {
+  test('普通用户碰举报详情也是 403；错误前缀或裸 UUID 被挡在 DB 前', async () => {
     const detail = await app.request(
       ADMIN_ROUTES.reportDetail('01930000-0000-7000-8000-0000000000ff'),
       {
@@ -292,11 +295,10 @@ describe('举报闭环（#73 Admin 端）', () => {
     )
     expect(detail.status).toBe(403)
 
-    // 非 UUID 会在 pg uuid 列上炸出 `invalid input syntax`，路由层必须先拦成 404。
-    // 曾经因为 requireTargetId 写在 try 里而 catch 只认 ReportServiceError，漏成 500。
     for (const path of [
-      ADMIN_ROUTES.reportDetail('not-a-uuid'),
-      ADMIN_ROUTES.reportHandle('not-a-uuid'),
+      ADMIN_ROUTES.reportDetail('01930000-0000-7000-8000-0000000000ff'),
+      ADMIN_ROUTES.reportHandle('not-a-typeid'),
+      ADMIN_ROUTES.reportDetail(encodePublicId(PUBLIC_ID_PREFIX.user, REPORTER_ID)),
     ]) {
       const res = await app.request(path, {
         method: path.includes('handle') ? 'POST' : 'GET',
@@ -307,14 +309,16 @@ describe('举报闭环（#73 Admin 端）', () => {
       })
       expect(res.status).toBe(404)
       expect((await res.json()) as { error: { code: string } }).toMatchObject({
-        error: { code: 'ADMIN_NOT_FOUND' },
+        error: { code: 'REPORT_NOT_FOUND' },
       })
     }
   })
 
-  test('处理不存在的举报是 404 REPORT_NOT_FOUND（合法 UUID）', async () => {
+  test('处理不存在的举报是 404 REPORT_NOT_FOUND（合法 rpt_ ID）', async () => {
     const res = await app.request(
-      ADMIN_ROUTES.reportHandle('01930000-0000-7000-8000-0000000000ff'),
+      ADMIN_ROUTES.reportHandle(
+        encodePublicId(PUBLIC_ID_PREFIX.report, '01930000-0000-7000-8000-0000000000ff'),
+      ),
       {
         method: 'POST',
         headers: { cookie: adminCookie, 'content-type': 'application/json' },
@@ -404,7 +408,8 @@ describe('举报闭环（#73 Admin 端）', () => {
     })
     expect(res.status).toBe(204)
 
-    const [row] = await scratch.select().from(reports).where(eq(reports.id, reportId))
+    const internalId = decodePublicId(PUBLIC_ID_PREFIX.report, reportId)
+    const [row] = await scratch.select().from(reports).where(eq(reports.id, internalId))
     expect(row).toMatchObject({ status: 'HANDLED', handledBy: ADMIN_ID })
     expect(row?.handledAt).toBeInstanceOf(Date)
     expect(row?.handlingReason).toBe('已核实，另行下架处理')
@@ -412,7 +417,7 @@ describe('举报闭环（#73 Admin 端）', () => {
     const audit = await scratch
       .select()
       .from(adminAuditLogs)
-      .where(eq(adminAuditLogs.targetId, reportId))
+      .where(eq(adminAuditLogs.targetId, internalId))
     expect(audit.length).toBe(1)
     expect(audit[0]).toMatchObject({
       action: 'REPORT_DECISION',
@@ -476,11 +481,12 @@ describe('举报闭环（#73 Admin 端）', () => {
     ])
     const statuses = results.map((res) => res.status).sort()
     expect(statuses).toEqual([204, 409])
+    const internalId = decodePublicId(PUBLIC_ID_PREFIX.report, reportId)
 
     const audit = await scratch
       .select()
       .from(adminAuditLogs)
-      .where(eq(adminAuditLogs.targetId, reportId))
+      .where(eq(adminAuditLogs.targetId, internalId))
     expect(audit.length).toBe(1)
   })
 
@@ -528,13 +534,14 @@ describe('举报闭环（#73 Admin 端）', () => {
       await scratch.$client.unsafe('DROP FUNCTION IF EXISTS fish_test_fail_audit()')
     }
 
-    const [row] = await scratch.select().from(reports).where(eq(reports.id, reportId))
+    const internalId = decodePublicId(PUBLIC_ID_PREFIX.report, reportId)
+    const [row] = await scratch.select().from(reports).where(eq(reports.id, internalId))
     expect(row).toMatchObject({ status: 'PENDING', handledBy: null })
     expect(row?.handlingReason).toBeNull()
     const audit = await scratch
       .select()
       .from(adminAuditLogs)
-      .where(eq(adminAuditLogs.targetId, reportId))
+      .where(eq(adminAuditLogs.targetId, internalId))
     expect(audit.length).toBe(0)
   })
 
@@ -608,6 +615,13 @@ describe('举报闭环（#73 Admin 端）', () => {
       }
       expect(firstPage.items.map((item) => item.reportCount)).toEqual([3])
       expect(firstPage.nextCursor).not.toBeNull()
+      const decoded = Buffer.from(firstPage.nextCursor ?? '', 'base64url').toString('utf8')
+      expect(decoded.split('|')[1]?.startsWith('rpt_')).toBe(true)
+      const oldCursor = Buffer.from(`${decoded.split('|')[0]}|${ids[0]}`).toString('base64url')
+      const rejected = await app.request(`${query}&cursor=${oldCursor}`, {
+        headers: { cookie: adminCookie },
+      })
+      expect(rejected.status).toBe(422)
       const second = await app.request(
         `${query}&cursor=${encodeURIComponent(firstPage.nextCursor ?? '')}`,
         { headers: { cookie: adminCookie } },

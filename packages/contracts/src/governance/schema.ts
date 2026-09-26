@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { ListingStatusSchema } from '../listings/schema'
+import { ReportIdSchema } from '../system/public-id'
 
 /**
  * 治理动作（#73 治理半场 PR3，设计 §6）。
@@ -58,7 +59,7 @@ export type GovernanceReason = z.infer<typeof GovernanceReasonSchema>
  * 治理也会在无举报时发生（管理员巡逻发现），所以是可选项而不是必填；
  * 填了就必须存在且与受处罚商品或用户相关，避免错误归因。
  */
-const sourceReportIdSchema = z.uuid().optional()
+const sourceReportIdSchema = ReportIdSchema.optional()
 
 /** POST /admin/listings/:id/delist */
 export const GovernanceListingDelistInputSchema = z.strictObject({
@@ -104,7 +105,7 @@ export const GovernanceRestrictionSchema = z.strictObject({
   status: z.enum(['ACTIVE', 'LIFTED']),
   reason: z.string(),
   actorUserId: z.uuid(),
-  sourceReportId: z.uuid().nullable(),
+  sourceReportId: ReportIdSchema.nullable(),
   expiresAt: z.iso.datetime().nullable(),
   liftedAt: z.iso.datetime().nullable(),
   liftedBy: z.uuid().nullable(),

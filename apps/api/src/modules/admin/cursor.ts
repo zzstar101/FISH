@@ -12,6 +12,7 @@
  * `reports.created_at`，所以 `cursorCondition` 也放在这里，而不是各 store 各抄一份。
  */
 import { ListingCursorTimestampSchema, ListingIdSchema } from '@fish/contracts/listings/schema'
+import { decodePublicId, isPublicId, type PublicIdPrefix } from '@fish/shared/public-id'
 import { type SQL, sql } from 'drizzle-orm'
 
 export type AdminCursor = {
@@ -44,7 +45,7 @@ export function encodeCursor(createdAtMicro: string, id: string): string {
   return Buffer.from(`${createdAtMicro}|${id}`).toString('base64url')
 }
 
-export function decodeCursor(raw: string): AdminCursor | null {
+export function decodeCursor(raw: string, publicPrefix?: PublicIdPrefix): AdminCursor | null {
   let decoded: string
   try {
     decoded = Buffer.from(raw, 'base64url').toString('utf8')
@@ -57,12 +58,13 @@ export function decodeCursor(raw: string): AdminCursor | null {
   const createdAt = decoded.slice(0, separator)
   const id = decoded.slice(separator + 1)
 
-  // id 会被绑到 `users.id` / `listings.id`（uuid 列）：非 UUID 会变成 SQL 类型错误 → 500，
-  // 而契约要求这种情况是 422（§2.1"非法 cursor → 422"）。
-  if (!id || !ListingIdSchema.safeParse(id).success) return null
+  // A public cursor encodes its resource prefix, but DB comparisons still use UUID.
+  // Never accept a legacy bare UUID in a public resource cursor.
+  if (publicPrefix ? !isPublicId(publicPrefix, id) : !ListingIdSchema.safeParse(id).success)
+    return null
   // 时间戳校验交给契约包的 `ListingCursorTimestampSchema`：它查月/日/时/分/秒值域，
   // `2026-13-45T99:99Z` 之类会被 PG 的 ::timestamptz 拒绝成 500，必须在这里拦成 422。
   if (!createdAt || !isCursorTimestamp(createdAt)) return null
 
-  return { createdAt, id }
+  return { createdAt, id: publicPrefix ? decodePublicId(publicPrefix, id) : id }
 }

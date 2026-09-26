@@ -13,6 +13,7 @@ import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
 import { jobs } from '@fish/db/schema/jobs'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { isUniqueViolation } from '../auth/unique'
 import { lockUserWrites } from './lock'
@@ -51,12 +52,14 @@ export class GovernanceServiceError extends Error {
   }
 }
 
+type InternalSourceReport<T> = Omit<T, 'sourceReportId'> & { sourceReportId?: string }
+
 export type GovernanceService = {
   /** 下架商品：`status = OFFLINE` + `moderation_status = BLOCKED`，卖家无法自行恢复。 */
   delistListing(
     actorUserId: string,
     listingId: string,
-    input: GovernanceListingDelistInput,
+    input: InternalSourceReport<GovernanceListingDelistInput>,
   ): Promise<GovernanceResult>
   /**
    * 恢复商品：目标 `status` 取**下架时写进审计快照的 `prior_listing_status`**，
@@ -66,25 +69,25 @@ export type GovernanceService = {
   restoreListing(
     actorUserId: string,
     listingId: string,
-    input: GovernanceListingRestoreInput,
+    input: InternalSourceReport<GovernanceListingRestoreInput>,
   ): Promise<GovernanceResult>
   /** 限制发布（`PUBLISH_RESTRICT`）：挡发布入口，不禁言、不封号。 */
   restrictPublish(
     actorUserId: string,
     userId: string,
-    input: GovernanceRestrictInput,
+    input: InternalSourceReport<GovernanceRestrictInput>,
   ): Promise<GovernanceResult>
   /** 封禁（`BAN`）：当前只禁写（发布 / 留言 / 聊天），读保持开放（Q6）。 */
   ban(
     actorUserId: string,
     userId: string,
-    input: GovernanceRestrictInput,
+    input: InternalSourceReport<GovernanceRestrictInput>,
   ): Promise<GovernanceResult>
   /** 解除该用户**全部**生效中的限制（一条端点处理多种限制，避免"解了封禁忘了限制发布"）。 */
   liftRestriction(
     actorUserId: string,
     userId: string,
-    input: GovernanceLiftRestrictionInput,
+    input: InternalSourceReport<GovernanceLiftRestrictionInput>,
   ): Promise<GovernanceResult>
 }
 
@@ -172,7 +175,7 @@ export function createGovernanceService(options: {
   async function applyRestriction(
     actorUserId: string,
     userId: string,
-    input: GovernanceRestrictInput & { type: 'PUBLISH_RESTRICT' | 'BAN' },
+    input: InternalSourceReport<GovernanceRestrictInput> & { type: 'PUBLISH_RESTRICT' | 'BAN' },
   ): Promise<GovernanceResult> {
     if (userId === actorUserId) {
       throw new GovernanceServiceError(422, 'GOVERNANCE_SELF_TARGET', '不能对自己执行治理操作')
@@ -513,7 +516,9 @@ function toContractRestriction(row: RestrictionRow): GovernanceRestriction {
     status: row.status,
     reason: row.reason,
     actorUserId: row.actorUserId,
-    sourceReportId: row.sourceReportId,
+    sourceReportId: row.sourceReportId
+      ? encodePublicId(PUBLIC_ID_PREFIX.report, row.sourceReportId)
+      : null,
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     liftedAt: row.liftedAt ? row.liftedAt.toISOString() : null,
     liftedBy: row.liftedBy,
