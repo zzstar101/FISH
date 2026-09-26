@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { ListingStatusSchema } from '../listings/schema'
-import { ReportIdSchema } from '../system/public-id'
+import {
+  ListingIdSchema,
+  ReportIdSchema,
+  UserIdSchema,
+  UserRestrictionIdSchema,
+} from '../system/public-id'
 
 /**
  * 治理动作（#73 治理半场 PR3，设计 §6）。
@@ -99,16 +104,16 @@ export type GovernanceLiftRestrictionInput = z.infer<typeof GovernanceLiftRestri
 
 /** 生效中 / 已解除的限制记录快照（用户详情、治理结果、Overview 共用）。 */
 export const GovernanceRestrictionSchema = z.strictObject({
-  id: z.uuid(),
-  userId: z.uuid(),
+  id: UserRestrictionIdSchema,
+  userId: UserIdSchema,
   type: z.enum(['PUBLISH_RESTRICT', 'BAN']),
   status: z.enum(['ACTIVE', 'LIFTED']),
   reason: z.string(),
-  actorUserId: z.uuid(),
+  actorUserId: UserIdSchema,
   sourceReportId: ReportIdSchema.nullable(),
   expiresAt: z.iso.datetime().nullable(),
   liftedAt: z.iso.datetime().nullable(),
-  liftedBy: z.uuid().nullable(),
+  liftedBy: UserIdSchema.nullable(),
   createdAt: z.iso.datetime(),
 })
 export type GovernanceRestriction = z.infer<typeof GovernanceRestrictionSchema>
@@ -119,13 +124,20 @@ export type GovernanceRestriction = z.infer<typeof GovernanceRestrictionSchema>
  * 一次调用只动一个目标，因此 `targetType` + `targetId` 单值；附带动的最新状态让前端
  * 不必再拉一次详情就能刷新（但前端仍会 invalidate 相关 query，不依赖这个字段）。
  */
-export const GovernanceResultSchema = z.strictObject({
-  action: GovernanceActionSchema,
-  targetType: GovernanceTargetTypeSchema,
-  targetId: z.uuid(),
-  /** 商品治理后的 listing status（下架 / 恢复才有，其余为 null）。 */
-  listingStatus: ListingStatusSchema.nullable(),
-  /** 限制类动作涉及的限制记录（限制 / 解除才有；封禁与限制发布返回新建的那条）。 */
-  restriction: GovernanceRestrictionSchema.nullable(),
-})
+export const GovernanceResultSchema = z.discriminatedUnion('targetType', [
+  z.strictObject({
+    action: GovernanceActionSchema,
+    targetType: z.literal('LISTING'),
+    targetId: ListingIdSchema,
+    listingStatus: ListingStatusSchema,
+    restriction: z.null(),
+  }),
+  z.strictObject({
+    action: GovernanceActionSchema,
+    targetType: z.literal('USER_RESTRICTION'),
+    targetId: UserRestrictionIdSchema,
+    listingStatus: z.null(),
+    restriction: GovernanceRestrictionSchema,
+  }),
+])
 export type GovernanceResult = z.infer<typeof GovernanceResultSchema>

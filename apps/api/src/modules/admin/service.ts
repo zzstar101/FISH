@@ -371,6 +371,7 @@ export function createAdminService({
         // app.onError 变成 500——「契约字段存在的原因」恰恰是这个场景（对抗审查 F3）。
         activeRestrictions: activeRestrictions.map((restriction) => ({
           ...restriction,
+          id: encodePublicId(PUBLIC_ID_PREFIX.userRestriction, restriction.id),
           expiresAt: restriction.expiresAt?.toISOString() ?? null,
           createdAt: restriction.createdAt.toISOString(),
         })),

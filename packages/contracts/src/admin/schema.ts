@@ -12,6 +12,7 @@ import {
   ModerationRecordIdSchema,
   TransactionIdSchema,
   UserIdSchema,
+  UserRestrictionIdSchema,
 } from '../system/public-id'
 
 /**
@@ -144,7 +145,7 @@ export const AdminUserDetailSchema = z.object({
    */
   activeRestrictions: z.array(
     z.object({
-      id: z.uuid(),
+      id: UserRestrictionIdSchema,
       type: z.string(),
       reason: z.string(),
       expiresAt: z.iso.datetime().nullable(),

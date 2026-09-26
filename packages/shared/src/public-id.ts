@@ -12,6 +12,7 @@ export const PUBLIC_ID_PREFIX = {
   comment: 'cmt',
   notification: 'ntf',
   report: 'rpt',
+  userRestriction: 'rst',
   media: 'med',
   moderationRecord: 'mdr',
   auditLog: 'aud',
