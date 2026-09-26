@@ -115,11 +115,13 @@ export const DEMO_REPORTS: ReportRecord[] = [
 ]
 
 /**
- * 演示提交产生的记录（进程内存，见文件头）。同 id 只保留最新一条：
- * 反复提交同一对象时，「我的举报」里出现的是最后一次。
+ * 演示提交产生的记录（进程内存，见文件头）。**按 id 去重，商品 / 用户两类各占一条**
+ * （两填写页互不相通，各自只写自己的那条）：反复提交同一类时，「我的举报」里出现的
+ * 是该类的最后一次，且一类不会被另一类顶掉。
  */
 const submittedReports: ReportRecord[] = []
-export const DEMO_SUBMITTED_REPORT_ID = 'rpt_01J8DEMO001'
+export const DEMO_SUBMITTED_LISTING_ID = 'rpt_01J8DEMOL001'
+export const DEMO_SUBMITTED_USER_ID = 'rpt_01J8DEMOU001'
 
 export function rememberDemoReport(record: ReportRecord): void {
   const i = submittedReports.findIndex((r) => r.id === record.id)

@@ -1,7 +1,8 @@
 import { describe, expect, mock, test } from 'bun:test'
 import {
   DEMO_REPORTS,
-  DEMO_SUBMITTED_REPORT_ID,
+  DEMO_SUBMITTED_LISTING_ID,
+  DEMO_SUBMITTED_USER_ID,
   findDemoReport,
   loadDemoReports,
   type ReportRecord,
@@ -119,9 +120,9 @@ describe('演示数据完整性（7 条 = 商品 4 + 用户 3，三态齐）', (
     expect(findDemoReport('rpt_missing')).toBe(null)
   })
 
-  test('演示提交记录进列表头，findDemoReport 能找到；同 id 只留最新', async () => {
-    const record: ReportRecord = {
-      id: DEMO_SUBMITTED_REPORT_ID,
+  test('演示提交记录进列表头；商品 / 用户两类各占一条互不顶掉；同类只留最新', async () => {
+    const listingRecord: ReportRecord = {
+      id: DEMO_SUBMITTED_LISTING_ID,
       target: 'LISTING',
       objTitle: '测试商品',
       objPrice: '1',
@@ -130,17 +131,34 @@ describe('演示数据完整性（7 条 = 商品 4 + 用户 3，三态齐）', (
       timeLabel: '刚刚',
       status: 'PENDING',
     }
-    rememberDemoReport(record)
-    expect((await loadDemoReports())[0].id).toBe(DEMO_SUBMITTED_REPORT_ID)
-    expect(findDemoReport(DEMO_SUBMITTED_REPORT_ID)?.objTitle).toBe('测试商品')
+    const userRecord: ReportRecord = {
+      id: DEMO_SUBMITTED_USER_ID,
+      target: 'USER',
+      objTitle: '测试用户',
+      objPrice: null,
+      reason: 'HARASSMENT',
+      desc: '',
+      timeLabel: '刚刚',
+      status: 'PENDING',
+    }
+    rememberDemoReport(listingRecord)
+    rememberDemoReport(userRecord)
+    // 两类同时在列：先提交的商品记录不被后提交的用户记录顶掉（审查 P2-1 的回归）
+    expect((await loadDemoReports()).map((r) => r.id)).toEqual([
+      DEMO_SUBMITTED_USER_ID,
+      DEMO_SUBMITTED_LISTING_ID,
+      ...DEMO_REPORTS.map((r) => r.id),
+    ])
+    expect(findDemoReport(DEMO_SUBMITTED_LISTING_ID)?.reason).toBe('SPAM')
+    expect(findDemoReport(DEMO_SUBMITTED_USER_ID)?.reason).toBe('HARASSMENT')
 
-    const updated: ReportRecord = { ...record, objTitle: '测试商品二' }
+    // 同类反复提交：该类只留最新
+    const updated: ReportRecord = { ...listingRecord, objTitle: '测试商品二' }
     rememberDemoReport(updated)
     const items = await loadDemoReports()
-    expect(items.filter((r) => r.id === DEMO_SUBMITTED_REPORT_ID)).toHaveLength(1)
-    expect(items[0].objTitle).toBe('测试商品二')
-    // 静态 7 条原样在后
-    expect(items).toHaveLength(8)
+    expect(items.filter((r) => r.id === DEMO_SUBMITTED_LISTING_ID)).toHaveLength(1)
+    expect(findDemoReport(DEMO_SUBMITTED_LISTING_ID)?.objTitle).toBe('测试商品二')
+    expect(items).toHaveLength(9)
   })
 })
 

@@ -695,8 +695,10 @@ export default function ListingDetail() {
   /**
    * #252：站内举报入口。此前「举报走微信胶囊菜单」只是稿的取舍，站内并没有举报能力。
    * 仅**非本人商品**显示（本人商品不需要举报自己）；未登录时由举报页的 useAuthGuard
-   * 引导登录。对象四项由 query 带入、页内不可改；**不传商品编号**（#217：详情页不常驻
-   * 展示编号，举报定位走 lst_ 公开 ID）。
+   * 引导登录。对象四项由 query 带入、页内不可改。`id` 传的是**当前契约的 uuid**（页面
+   * 目前不消费该参数，POST /reports 接线时启用）：Report 契约（#231/#240/#241）与
+   * TypeID（#217）冻结后改传 `lst_` 公开 ID，不把裸 UUID 送进未来的公开 API。
+   * 商品编号不在页内展示（#217：详情页不常驻展示编号）。
    */
   const isOwnListing = userId !== null && data !== null && data.seller.id === userId
   const goReport = () => {
