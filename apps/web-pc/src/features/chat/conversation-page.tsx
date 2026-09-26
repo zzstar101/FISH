@@ -99,6 +99,10 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   }, [history.isFetching, history.isError])
 
   const messages = useMemo(() => flattenMessagePages(history.data), [history.data])
+  const visibleLocalMessages = useMemo(
+    () => localMessages.filter((local) => !messages.some((message) => message.id === local.id)),
+    [localMessages, messages],
+  )
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
 
   const realtimeStatus = useChatRealtime(ownerId, {
@@ -150,6 +154,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     // 历史 query 处于错误态时不能写伪页，否则会把可重试的 error 改成 success；
     // 消息留在 liveRef，等用户/重连把历史拉成功后再合并。
     if (historyErrorRef.current) {
+      if (messages.some((item) => item.id === message.id)) return
       setLocalMessages((current) =>
         current.some((item) => item.id === message.id) ? current : [...current, message],
       )
@@ -364,7 +369,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                     message={message}
                   />
                 ))}
-                {localMessages.map((message) => (
+                {visibleLocalMessages.map((message) => (
                   <MessageBubble
                     isMine={message.senderId === ownerId}
                     isRead={isMessageRead(message, counterpartLastReadAt)}

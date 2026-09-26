@@ -199,7 +199,7 @@ FISH/
 - 后端 domain（auth / listings / wishes / matching / chat / transactions / profile / notifications）与 Worker 异步主链均已交付，前端主链已从 Mock 切到真实 API。
 - **站内通知前端列表仍读 fixture**，后端 `GET /notifications*` 已就绪，尚未接线。
 - **PWA 安装产物（manifest / Service Worker）尚未接线**，当前为移动优先的 Web 应用。
-- **PC Web 仍是骨架**：已接通登录、PC 外壳、首页真实商品流、搜索筛选、商品详情与消息中心；发布、通知、个人中心、许愿墙仍为占位页。
+- **PC Web 仍是骨架**：已接通登录、PC 外壳、首页真实商品流、搜索筛选、商品详情与消息中心；发布、通知、许愿墙仍为占位页，个人中心仅完成登录态与退出。
 - 商品搜索当前基于 `ILIKE`；架构文档里规划的 PostgreSQL FTS / `pg_trgm` 未落地。
 - 未做的动词：删除商品、删除图片；愿望编辑的 API（`PATCH /wishes/:id`）存在，但契约常量与前端入口未接。
 

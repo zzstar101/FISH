@@ -77,6 +77,7 @@ export function useMarkConversationRead(ownerId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (conversationId: string) => markConversationRead(conversationId),
+    retry: 1,
     onSuccess: (conversation) => {
       if (ownerId === null) return
       updateConversationCaches(queryClient, ownerId, conversation)
@@ -322,6 +323,9 @@ export function updateConversationCaches(
     chatKeys.conversations(ownerId),
     (data) => updateConversationPage(data, merged),
   )
+  // setQueryData 会清掉之前的 invalidate 标记；read 回写后重新标脏，
+  // 保证回到列表时能重新取到最新的 lastMessage / unreadCount。
+  void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
 }
 
 /**
