@@ -1,0 +1,586 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 举报用户（稿 `小程序1版举报用户.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 与 `pages/report-listing` 同一套版式（ NavBar glass 吸顶 + 渐变页头 + 表单卡 +
+ * 等宽胶囊 + 键值行），差异只在对象卡：用户是**圆形头像 + 昵称**，没有价格行。
+ * 两页 scss 刻意不共享（weapp 页面样式本就按页隔离，共用反而把两页耦死）。
+ *
+ * 胶囊不放图标：标签最长 7 个字（辱骂或恶意行为），图标 + 7 字会撑爆三列等宽
+ * 胶囊体；纯文字 12pt 不换行刚好留出边距（Owner 2026-09-26 验收口径）。
+ */
+
+.rpu {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+/* 居中标题里的品牌色尾段（「举报」黑 + 「用户/详情」蓝，二级页拍板的双色分字） */
+.rpu__navem {
+  color: var(--brand);
+}
+
+.rpu__auth {
+  padding-top: 40px;
+}
+
+.rpu__content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── 渐变页头（随内容滚走，玻璃栏不动） ── */
+.rpu__head {
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+  padding: 32px 40px 40px;
+  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+}
+
+.rpu__kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  letter-spacing: 0.1em;
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.rpu__kicker-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.rpu__title {
+  display: block;
+  margin-top: 16px;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.rpu__sub {
+  display: block;
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+/* ── 表单卡 ── */
+.rpu__card {
+  margin: 28px 40px 0;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 40px;
+  box-shadow: var(--shadow-card);
+  padding: 28px;
+}
+
+.rpu__card.is-err {
+  border-color: var(--danger-line);
+  background: var(--danger-weak);
+}
+
+.rpu__card-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.rpu__card-h2 {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 0 0 auto;
+}
+
+.rpu__req {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.rpu__opt {
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.rpu__card-sub {
+  display: block;
+  margin-top: 10px;
+  font-size: 23px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+/* ── 举报对象（由入口带入，固定不可改）：圆形头像 + 昵称 ── */
+.rpu__obj {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 24px;
+  min-width: 0;
+}
+
+.rpu__ava {
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+/* 对象卡 / 键值行里的头像尺寸 */
+.rpu__ava--obj {
+  width: 96px;
+  height: 96px;
+}
+
+.rpu__ava--sm {
+  width: 88px;
+  height: 88px;
+}
+
+.rpu__ava-ph {
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brand-deep);
+}
+
+.rpu__ava-ph-ic {
+  width: 40px;
+  height: 40px;
+}
+
+/* 占位圆与真实头像同尺寸（class 组合出两种尺寸） */
+.rpu__ava-ph.rpu__ava--obj,
+.rpu__ava.rpu__ava--obj {
+  width: 96px;
+  height: 96px;
+}
+
+.rpu__ava-ph.rpu__ava--sm,
+.rpu__ava.rpu__ava--sm {
+  width: 88px;
+  height: 88px;
+}
+
+.rpu__obj-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rpu__obj-name {
+  display: block;
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  @include ellipsis;
+}
+
+.rpu__obj-sub {
+  display: block;
+  margin-top: 6px;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.rpu__obj-tag {
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  color: var(--muted);
+  border: 2px dashed var(--line);
+  border-radius: 999px;
+  padding: 6px 16px;
+}
+
+/* ── 原因胶囊：5 枚等宽（3+2），不放图标（见文件头），纯文字 24px 不换行 ── */
+.rpu__pills {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.rpu__pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--muted-2);
+  white-space: nowrap;
+  padding: 0 8px;
+  transition:
+    background 0.16s,
+    border-color 0.16s,
+    color 0.16s;
+
+  &:active {
+    transform: translateY(2px);
+  }
+
+  &.is-on {
+    background: var(--accent-weak);
+    border-color: var(--brand);
+    color: var(--brand-deep);
+    box-shadow: inset 0 0 0 2px var(--brand);
+  }
+}
+
+/* 行内错误（选中类型后消失） */
+.rpu__err {
+  margin-top: 16px;
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--danger-ink);
+}
+
+/* ── 补充说明（选填，200 字计数） ── */
+.rpu__field {
+  margin-top: 24px;
+  border-radius: 28px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s;
+
+  &.is-focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+}
+
+.rpu__ta {
+  display: block;
+  width: 100%;
+  min-height: 176px;
+  padding: 24px;
+  box-sizing: border-box;
+  font-size: 26px;
+  line-height: 1.75;
+  color: var(--fg);
+}
+
+.rpu__fieldfoot {
+  display: flex;
+  align-items: center;
+  padding: 0 24px 20px;
+}
+
+.rpu__kb {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.rpu__count {
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ── 隐私提示 + 提交（表单末尾，不吸底：textarea 聚焦后键盘会顶起页面） ── */
+.rpu__note {
+  margin: 4px 40px 28px;
+  display: flex;
+  gap: 14px;
+}
+
+.rpu__note-ic {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+
+.rpu__note-tx {
+  flex: 1 1 auto;
+  font-size: 23px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.rpu__submit {
+  margin: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+  transition:
+    filter 0.16s,
+    background 0.16s;
+
+  &:active {
+    transform: translateY(2px);
+  }
+
+  &.is-off {
+    background: var(--accent-faint);
+    color: var(--muted);
+    box-shadow: none;
+  }
+}
+
+.rpu__formfoot {
+  display: block;
+  margin-top: 24px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ── 成功态（02） ── */
+.rpu__hero {
+  text-align: center;
+  padding: 20px 40px 0;
+}
+
+.rpu__hero-ic {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ok-weak);
+  border: 2px solid var(--ok-line);
+}
+
+.rpu__hero-ic-img {
+  width: 48px;
+  height: 48px;
+}
+
+.rpu__hero-t {
+  display: block;
+  margin-top: 24px;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.rpu__hero-s {
+  display: block;
+  margin-top: 12px;
+  font-size: 25px;
+  line-height: 1.75;
+  color: var(--muted-2);
+}
+
+/* 演示口径说明带（演示构建才有；真实构建不渲染） */
+.rpu__demonote {
+  display: block;
+  margin: 20px 40px 0;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ── 只读态横幅（03/04）：warn=审核中、ok=已处理、danger=已驳回 ── */
+.rpu__banner {
+  margin: 28px 40px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 28px;
+  border: 2px solid;
+
+  &.is-pending {
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+    color: var(--warn-ink);
+  }
+
+  &.is-done {
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+    color: var(--ok-ink);
+  }
+
+  &.is-rejected {
+    background: var(--danger-weak);
+    border-color: var(--danger-line);
+    color: var(--danger-ink);
+  }
+}
+
+.rpu__banner-ic {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.rpu__banner-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rpu__banner-t {
+  display: block;
+  font-size: 27px;
+  font-weight: 700;
+}
+
+.rpu__banner-s {
+  display: block;
+  margin-top: 8px;
+  font-size: 23px;
+  line-height: 1.7;
+}
+
+/* ── 键值行：成功态「提交内容」与只读态「举报内容」共用 ── */
+.rpu__kvobj {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px 0 20px;
+  border-bottom: 2px solid var(--ice);
+}
+
+.rpu__kv {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  padding: 20px 0;
+  border-bottom: 2px solid var(--ice);
+
+  &:last-child {
+    border-bottom: none;
+    padding-bottom: 4px;
+  }
+}
+
+.rpu__kv-k {
+  flex: 0 0 120px;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.rpu__kv-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 25px;
+  line-height: 1.7;
+  color: var(--fg);
+  word-break: break-all;
+
+  &.is-dim {
+    color: var(--muted);
+  }
+}
+
+.rpu__rtag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--accent-weak);
+  border-radius: 999px;
+  padding: 4px 16px;
+}
+
+.rpu__kvid {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.rpu__copy {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+  font-size: 21px;
+  font-weight: 600;
+
+  &:active {
+    background: var(--accent-mid);
+  }
+}
+
+/* ── 动线按钮组 ── */
+.rpu__acts {
+  margin: 28px 40px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rpu__btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    transform: translateY(2px);
+  }
+}
+
+.rpu__btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 84px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 26px;
+  font-weight: 600;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}

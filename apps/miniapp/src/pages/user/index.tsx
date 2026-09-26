@@ -53,10 +53,10 @@ import './index.scss'
  *   组件内状态、无数据面、生产构建不渲染，真实现归属后续「我的关注」页 + 后端 follows 域；
  *   详见 `followState` 处的注释。
  * - **聊一聊 / 更多钮不做**：发起会话要带 `listingId`（Chat 契约按 `(listingId, 买家)`
- *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（稿的理由是举报 / 分享 /
- *   加入黑名单在真机里走微信胶囊的 ··· 菜单 —— 那是稿的取舍）。**这不等于已经有了举报
- *   能力**：仓库没有 Report 契约 / 表 / 接口（#73 的「举报」一节仍全是未勾选项），
- *   本页只是不再放页内入口，真实举报入口归 #73（用户端提交）与 #89（客户端接线）。
+ *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（分享 / 黑名单等真机里走
+ *   微信胶囊的 ··· 菜单 —— 那是稿的取舍）。举报一度只有胶囊菜单、没有站内出口；
+ *   现在列表终点下有「举报用户」行进 `pages/report-user`（#252，原因枚举对齐后端
+ *   Draft PR #231/#240/#241；main 仍没有 Report 契约，页面按演示/如实缺口双档实现）。
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
@@ -375,6 +375,22 @@ export default function UserHome() {
     measureIdentity()
   }, [measureIdentity, profile, loadState, signOpen, signatureText])
 
+  /**
+   * #252：进「举报用户」页。对象三项由 query 带入、页内不可改（公开资料子集：
+   * 头像 + 昵称，不带教育邮箱 / 手机号 / 校区 —— #86 边界）；
+   * 未登录由举报页的 useAuthGuard 引导登录。
+   */
+  const goReport = () => {
+    const query = [
+      `id=${encodeURIComponent(userId)}`,
+      profile?.nickname ? `nickname=${encodeURIComponent(profile.nickname)}` : null,
+      profile?.avatarUrl ? `avatar=${encodeURIComponent(profile.avatarUrl)}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join('&')
+    void Taro.navigateTo({ url: `/pages/report-user/index?${query}` })
+  }
+
   /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染） */
   const navTitle = profile ? (
     <>
@@ -629,6 +645,12 @@ export default function UserHome() {
                 <View className="uhome__list-end-line" />
               </View>
             ) : null}
+
+            {/* #252：站内举报用户入口。弱化为居中小字（低频治理动作），压在列表终点之后，
+                不与在售商品抢注意力；对象由 query 带入，页内不可改。 */}
+            <View className="uhome__report" onClick={goReport}>
+              <Text>举报用户</Text>
+            </View>
           </View>
         </ScrollView>
       )}
