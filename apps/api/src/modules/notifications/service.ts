@@ -2,9 +2,11 @@ import {
   type NotificationDto,
   type NotificationListQuery,
   type NotificationListResponse,
+  type NotificationPayload,
   type NotificationUnreadCount,
   notificationDtoSchema,
 } from '@fish/contracts/notifications/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX, type PublicIdPrefix } from '@fish/shared/public-id'
 import type { NotificationRow, NotificationStore } from './store'
 
 export class NotificationServiceError extends Error {
@@ -39,18 +41,43 @@ function toIsoTimestamp(value: Date | null): string | null | undefined {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined
 }
 
+function publicPayloadField<P extends PublicIdPrefix>(prefix: P, raw: unknown) {
+  if (typeof raw !== 'string') return undefined
+  try {
+    return encodePublicId(prefix, raw)
+  } catch {
+    // An unknown or deleted legacy reference cannot be mapped; keep the notification.
+    return undefined
+  }
+}
+
+function projectPayload(raw: unknown): NotificationPayload | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  // Each unrecognizable field is omitted independently; the notification stays visible.
+  const matchId = publicPayloadField(PUBLIC_ID_PREFIX.match, value.matchId)
+  const listingId = publicPayloadField(PUBLIC_ID_PREFIX.listing, value.listingId)
+  const wishId = publicPayloadField(PUBLIC_ID_PREFIX.wish, value.wishId)
+  return {
+    ...(matchId ? { matchId } : {}),
+    ...(listingId ? { listingId } : {}),
+    ...(wishId ? { wishId } : {}),
+  }
+}
+
 function toNotificationDto(row: NotificationRow): NotificationDto | null {
   const readAt = toIsoTimestamp(row.read_at)
   const createdAt = toIsoTimestamp(row.created_at)
-  if (readAt === undefined || createdAt === undefined) return null
+  const payload = projectPayload(row.payload)
+  if (readAt === undefined || createdAt === undefined || payload === null) return null
 
-  const parsed = notificationDtoSchema.safeParse({
-    id: row.id,
-    type: row.type,
-    payload: row.payload,
-    readAt,
-    createdAt,
-  })
+  let id: string
+  try {
+    id = encodePublicId(PUBLIC_ID_PREFIX.notification, row.id)
+  } catch {
+    return null
+  }
+  const parsed = notificationDtoSchema.safeParse({ id, type: row.type, payload, readAt, createdAt })
   return parsed.success ? parsed.data : null
 }
 

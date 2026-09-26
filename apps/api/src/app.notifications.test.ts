@@ -8,6 +8,7 @@ import { createDb, type Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import { notifications } from '@fish/db/schema/notifications'
 import { loadServerEnv } from '@fish/shared/env'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
@@ -115,6 +116,8 @@ async function seedNotifications(userId: string, ids: ReturnType<typeof fixtureI
 const get = (path: string, cookie?: string) =>
   app.request(path, cookie ? { headers: { cookie } } : undefined)
 
+const publicNotificationId = (id: string) => encodePublicId(PUBLIC_ID_PREFIX.notification, id)
+
 const markRead = (id: string, cookie?: string) =>
   app.request(`/notifications/${id}/read`, {
     method: 'POST',
@@ -138,7 +141,7 @@ describe('notifications API wiring (#23)', () => {
     for (const response of [
       await get('/notifications'),
       await get('/notifications/unread-count'),
-      await markRead(fixtureIds('0001').n1),
+      await markRead(publicNotificationId(fixtureIds('0001').n1)),
     ]) {
       expect(response.status).toBe(401)
       expect(await response.json()).toEqual({
@@ -166,7 +169,11 @@ describe('notifications API wiring (#23)', () => {
 
     // 同一 created_at 的两条按 id DESC（n2 > n1），更早的 n3 在最后；他人的 nOther 虽然最新也不出现。
     const body = await list(me.cookie)
-    expect(body.items.map((item) => item.id)).toEqual([ids.n2, ids.n1, ids.n3])
+    expect(body.items.map((item) => item.id)).toEqual([
+      publicNotificationId(ids.n2),
+      publicNotificationId(ids.n1),
+      publicNotificationId(ids.n3),
+    ])
 
     // DTO 只有 id / type / payload / readAt / createdAt：文案由客户端按 type 渲染，服务端不返回，
     // 也不回 userId（列表与标记已读都只作用于本人）。
@@ -175,16 +182,25 @@ describe('notifications API wiring (#23)', () => {
     expect(first.readAt).toBeNull()
     expect(new Date(first.createdAt).toISOString()).toBe('2026-09-12T10:00:00.000Z')
     expect(first.payload).toEqual({
-      matchId: ids.n2,
-      listingId: ids.n3,
-      wishId: ids.nOther,
+      matchId: encodePublicId(PUBLIC_ID_PREFIX.match, ids.n2),
+      listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, ids.n3),
+      wishId: encodePublicId(PUBLIC_ID_PREFIX.wish, ids.nOther),
     })
+    const [stored] = await db
+      .select({ payload: notifications.payload })
+      .from(notifications)
+      .where(eq(notifications.id, ids.n2))
+    expect(stored?.payload).toEqual({ matchId: ids.n2, listingId: ids.n3, wishId: ids.nOther })
 
     // 未读的 readAt 是 null；已读的是首次已读时间（与库里 read_at 同口径）。
-    expect(body.items.find((item) => item.id === ids.n3)?.readAt).toBe('2026-09-12T09:30:00.000Z')
+    expect(body.items.find((item) => item.id === publicNotificationId(ids.n3))?.readAt).toBe(
+      '2026-09-12T09:30:00.000Z',
+    )
 
     // 对方列表里只有自己那条，与我的三条互不混入。
-    expect((await list(other.cookie)).items.map((item) => item.id)).toEqual([ids.nOther])
+    expect((await list(other.cookie)).items.map((item) => item.id)).toEqual([
+      publicNotificationId(ids.nOther),
+    ])
   })
 
   test('limit 越界 422 VALIDATION_FAILED；默认 20、上限 50', async () => {
@@ -199,14 +215,16 @@ describe('notifications API wiring (#23)', () => {
     }
 
     // 上限内给多少就截多少（n2 最新）。
-    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([ids.n2])
+    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([
+      publicNotificationId(ids.n2),
+    ])
     expect((await list(me.cookie, '?limit=50')).items).toHaveLength(3)
 
     // 21 条才能同时验出「默认 20」与「给满上限 50 时不截断」。用独立用户，不干扰上面的断言。
     const many = await registerUser('04')
     await db.execute(sql`
       INSERT INTO notifications (id, user_id, type, payload, created_at)
-      SELECT gen_random_uuid(), ${many.userId}, 'MATCH', '{}'::jsonb,
+      SELECT uuidv7(), ${many.userId}, 'MATCH', '{}'::jsonb,
              ${new Date(SAME_MOMENT)}::timestamptz - (g || ' minutes')::interval
       FROM generate_series(1, 21) AS g
     `)
@@ -221,15 +239,15 @@ describe('notifications API wiring (#23)', () => {
 
     expect(await unreadCount(me.cookie)).toBe(2)
 
-    const first = await markRead(ids.n1, me.cookie)
+    const first = await markRead(publicNotificationId(ids.n1), me.cookie)
     expect(first.status).toBe(200)
     const dto = (await first.json()) as NotificationDto
-    expect(dto.id).toBe(ids.n1)
+    expect(dto.id).toBe(publicNotificationId(ids.n1))
     expect(dto.readAt).not.toBeNull()
     expect(await unreadCount(me.cookie)).toBe(1)
 
     // 幂等：已读再点仍是 200，且返回体（含**首次**已读时间）逐字不变。
-    const again = await markRead(ids.n1, me.cookie)
+    const again = await markRead(publicNotificationId(ids.n1), me.cookie)
     expect(again.status).toBe(200)
     expect(await again.json()).toEqual(dto)
     expect(await unreadCount(me.cookie)).toBe(1)
@@ -249,7 +267,7 @@ describe('notifications API wiring (#23)', () => {
     `)
 
     // 存在但不是我的：与「不存在」同一个 404（不泄漏存在性），不是 403。
-    const response = await markRead(ids.n1, me.cookie)
+    const response = await markRead(publicNotificationId(ids.n1), me.cookie)
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({
       error: { code: 'NOTIFICATION_NOT_FOUND', message: '通知不存在' },
@@ -280,17 +298,22 @@ describe('notifications API wiring (#23)', () => {
 
     // 不可映射的行**不占 LIMIT 名额**（谓词在 SQL 层，`LIMIT` 只数可映射行）：
     // 一行脏 type + 一行正常时 `?limit=1` 必须给出那行正常的，而不是空页。
-    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([ids.n1])
+    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([
+      publicNotificationId(ids.n1),
+    ])
 
     // 契约外/不可表示的行被跳过，且不让整页 500（时间戳那一行走的是 JS 侧的最后一道闸门）。
-    expect((await list(me.cookie)).items.map((item) => item.id)).toEqual([ids.n1])
+    expect((await list(me.cookie)).items.map((item) => item.id)).toEqual([
+      publicNotificationId(ids.n1),
+    ])
+    expect((await list(me.cookie)).items[0]?.payload).toEqual({})
 
     // 角标与列表**同源**：共用 store 的同一个 type 谓词，所以同为 1
     // （n2 被谓词排除；n3 的 read_at 非空、本就不计未读）。
     expect(await unreadCount(me.cookie)).toBe(1)
 
     // 标记已读对契约外的行是 404 且**零副作用**：库里 read_at 仍为 NULL，角标也不动。
-    expect((await markRead(ids.n2, me.cookie)).status).toBe(404)
+    expect((await markRead(publicNotificationId(ids.n2), me.cookie)).status).toBe(404)
     const [dirtyTypeRow] = await db
       .select({ readAt: notifications.readAt })
       .from(notifications)
@@ -299,7 +322,7 @@ describe('notifications API wiring (#23)', () => {
     expect(await unreadCount(me.cookie)).toBe(1)
   })
 
-  test('payload 形状 / 非有限时间戳同样不占 LIMIT，且角标等于列表里未读条数', async () => {
+  test('非对象 payload 或非有限时间戳不占 LIMIT；脏引用只省略字段且计入角标', async () => {
     const me = await registerUser('10')
     // 逐个写死 id（不走 fixtureIds）：这个用例要摆 8 种形状，逐行可读比模板重要。
     const v1 = '01990007-0000-7000-8000-0000000000b1' // 正常，未读
@@ -311,8 +334,7 @@ describe('notifications API wiring (#23)', () => {
     const dCreatedInfinity = '01990007-0000-7000-8000-0000000000c5' // created_at 非有限
     const vExtraKeys = '01990007-0000-7000-8000-0000000000b3' // 合法但带未知键，未读
 
-    // 脏行的 created_at **都比 v2 新**：如果只在 JS 侧丢行，它们会先占满 LIMIT 名额，
-    // 于是 `?limit=1` 返回空页、角标比列表可展示的未读多几个 —— 这正是要钉住的形状。
+    // 非对象/非有限时间戳的行被 SQL 排除；对象中的脏引用仍保留整条通知。
     await db.execute(sql`
       INSERT INTO notifications (id, user_id, type, payload, read_at, created_at) VALUES
         (${v1}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 'a' })}, NULL,
@@ -321,9 +343,9 @@ describe('notifications API wiring (#23)', () => {
          ${new Date('2026-09-12T11:00:00Z')}),
         (${dJsonbString}, ${me.userId}, 'MATCH', ${jsonParam('jsonb-string')}, NULL,
          ${new Date('2026-09-12T10:05:00Z')}),
-        (${dNumber}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 5 })}, NULL,
+        (${dNumber}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 5, listingId: v2 })}, NULL,
          ${new Date('2026-09-12T10:04:00Z')}),
-        (${dExplicitNull}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: null })}, NULL,
+        (${dExplicitNull}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: null, wishId: v1 })}, NULL,
          ${new Date('2026-09-12T10:03:00Z')}),
         (${dReadInfinity}, ${me.userId}, 'MATCH', ${jsonParam({ matchId: 'x' })},
          'infinity'::timestamptz, ${new Date('2026-09-12T10:02:00Z')}),
@@ -334,40 +356,98 @@ describe('notifications API wiring (#23)', () => {
          ${new Date('2026-09-12T13:00:00Z')})
     `)
 
-    // 谓词在 SQL 层，LIMIT 只数可展示的行：`?limit=1` 给出最新的**可展示**通知，
-    // 而不是被五行脏数据顶掉的空页。vExtraKeys 的 payload 带未知键，属合法（zod 会 strip），
-    // 所以谓词不该比契约更严、必须把它算进来。
-    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([vExtraKeys])
+    // SQL 限制不可展示的行不占 LIMIT，带未知键/脏引用的对象仍可投影。
+    expect((await list(me.cookie, '?limit=1')).items.map((item) => item.id)).toEqual([
+      publicNotificationId(vExtraKeys),
+    ])
     expect((await list(me.cookie, '?limit=2')).items.map((item) => item.id)).toEqual([
-      vExtraKeys,
-      v1,
+      publicNotificationId(vExtraKeys),
+      publicNotificationId(v1),
     ])
 
     // 角标 == 列表里 `readAt === null` 的条数（同一个谓词、同一套未读定义）。
     const items = (await list(me.cookie)).items
-    expect(items.map((item) => item.id)).toEqual([vExtraKeys, v1, v2])
-    expect(items[0]?.payload).toEqual({ matchId: 'z' }) // 未知键被 strip，已知键原样
+    expect(items.map((item) => item.id)).toEqual([
+      publicNotificationId(vExtraKeys),
+      publicNotificationId(v1),
+      publicNotificationId(v2),
+      publicNotificationId(dNumber),
+      publicNotificationId(dExplicitNull),
+    ])
+    expect(items[0]?.payload).toEqual({}) // 脏的旧 matchId 被省略，未知键仍被 strip
+    expect(items[3]?.payload).toEqual({ listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, v2) })
+    expect(items[4]?.payload).toEqual({ wishId: encodePublicId(PUBLIC_ID_PREFIX.wish, v1) })
+    const [storedDirty] = await db
+      .select({ payload: notifications.payload })
+      .from(notifications)
+      .where(eq(notifications.id, dNumber))
+    expect(storedDirty?.payload as unknown).toEqual({ matchId: 5, listingId: v2 })
     expect(await unreadCount(me.cookie)).toBe(items.filter((item) => item.readAt === null).length)
-    expect(await unreadCount(me.cookie)).toBe(3) // 5 行脏数据一行都不计
+    expect(await unreadCount(me.cookie)).toBe(5)
 
     // payload 形状不可表示的行：标记已读 404 且**零写入**。
-    expect((await markRead(dJsonbString, me.cookie)).status).toBe(404)
+    expect((await markRead(publicNotificationId(dJsonbString), me.cookie)).status).toBe(404)
     const [dirtyPayloadRow] = await db
       .select({ readAt: notifications.readAt })
       .from(notifications)
       .where(eq(notifications.id, dJsonbString))
     expect(dirtyPayloadRow?.readAt).toBeNull()
-    expect(await unreadCount(me.cookie)).toBe(3)
+    expect(await unreadCount(me.cookie)).toBe(5)
+    const read = await markRead(publicNotificationId(dNumber), me.cookie)
+    expect(read.status).toBe(200)
+    expect(((await read.json()) as NotificationDto).payload).toEqual({
+      listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, v2),
+    })
+    expect(await unreadCount(me.cookie)).toBe(4)
   })
 
-  test('非法 uuid 与不存在的 id 都是 404，不打到 PG 变 500', async () => {
+  test('旧 v4 通知不进入列表或角标，也不能通过公开入口标记已读', async () => {
+    const me = await registerUser('11')
+    const legacyId = '01990000-0000-4000-8000-0000000000ff'
+    await db.execute(sql`
+      INSERT INTO notifications (id, user_id, type, payload, created_at)
+      VALUES (${legacyId}, ${me.userId}, 'MATCH', '{}'::jsonb, ${new Date(SAME_MOMENT)})
+    `)
+    expect((await list(me.cookie)).items).toEqual([])
+    expect(await unreadCount(me.cookie)).toBe(0)
+    expect((await markRead(legacyId, me.cookie)).status).toBe(404)
+    const [row] = await db
+      .select({ readAt: notifications.readAt })
+      .from(notifications)
+      .where(eq(notifications.id, legacyId))
+    expect(row?.readAt).toBeNull()
+  })
+
+  test('version=7 但 variant 非 RFC 的通知同样不进入列表或角标', async () => {
+    const me = await registerUser('12')
+    const invalidVariant = '01990000-0000-7000-0000-000000000001'
+    await db.execute(sql`
+      INSERT INTO notifications (id, user_id, type, payload, created_at)
+      VALUES (${invalidVariant}, ${me.userId}, 'MATCH', '{}'::jsonb, ${new Date(SAME_MOMENT)})
+    `)
+    expect((await list(me.cookie)).items).toEqual([])
+    expect(await unreadCount(me.cookie)).toBe(0)
+    expect((await markRead(invalidVariant, me.cookie)).status).toBe(404)
+    const [row] = await db
+      .select({ readAt: notifications.readAt })
+      .from(notifications)
+      .where(eq(notifications.id, invalidVariant))
+    expect(row?.readAt).toBeNull()
+  })
+
+  test('非法 TypeID、错误前缀、裸 UUID 与不存在的通知均返回 404', async () => {
     const me = await registerUser('08')
 
     const malformed = await markRead('not-a-uuid', me.cookie)
     expect(malformed.status).toBe(404)
     expect(await malformed.json()).toMatchObject({ error: { code: 'NOTIFICATION_NOT_FOUND' } })
 
-    const unknown = await markRead('01990000-0000-7000-8000-0000000000ff', me.cookie)
+    const rawId = '01990000-0000-7000-8000-0000000000ff'
+    for (const invalid of [rawId, encodePublicId(PUBLIC_ID_PREFIX.listing, rawId)]) {
+      const response = await markRead(invalid, me.cookie)
+      expect(response.status).toBe(404)
+    }
+    const unknown = await markRead(publicNotificationId(rawId), me.cookie)
     expect(unknown.status).toBe(404)
     expect(await unknown.json()).toMatchObject({ error: { code: 'NOTIFICATION_NOT_FOUND' } })
   })
