@@ -12,6 +12,7 @@ import {
   flattenMessagePages,
   insertMessageIntoCache,
   isMessageRead,
+  mergeConversationDto,
   mergeConversationReadMarker,
   mergeMessagesIntoCache,
   refreshNewestMessages,
@@ -306,6 +307,33 @@ describe('read receipt cache', () => {
         conversation('2026-01-01T00:00:05.000Z'),
       ).counterpartLastReadAt,
     ).toBe('2026-01-01T00:00:05.000Z')
+  })
+
+  test('does not let an older DTO replace a newer last message', () => {
+    const current = {
+      ...conversation(null),
+      lastMessageAt: '2026-01-01T00:00:05.000Z',
+      lastMessage: {
+        type: 'TEXT' as const,
+        content: '新的实时消息',
+        senderId: 'user-b',
+        createdAt: '2026-01-01T00:00:05.000Z',
+      },
+    }
+    const older = {
+      ...conversation(null),
+      lastMessageAt: '2026-01-01T00:00:00.000Z',
+      lastMessage: {
+        type: 'TEXT' as const,
+        content: '旧的 HTTP 响应',
+        senderId: 'user-b',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    }
+
+    const merged = mergeConversationDto(current, older)
+    expect(merged.lastMessageAt).toBe('2026-01-01T00:00:05.000Z')
+    expect(merged.lastMessage?.content).toBe('新的实时消息')
   })
 
   test('compares message createdAt against the counterpart read marker', () => {

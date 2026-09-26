@@ -10,6 +10,7 @@ import { useAuth } from '../auth/auth-provider'
 import {
   invalidateConversationDetail,
   invalidateConversationSurfaces,
+  probeChatSession,
   useConversationList,
   useConversationUnreadCount,
 } from './queries'
@@ -42,6 +43,10 @@ export function ConversationListPage() {
     onOpen: () => {
       if (ownerId === null) return
       invalidateConversationSurfaces(queryClient, ownerId)
+    },
+    onDisconnected: () => {
+      if (ownerId === null) return
+      probeChatSession(queryClient, ownerId)
     },
   })
 
