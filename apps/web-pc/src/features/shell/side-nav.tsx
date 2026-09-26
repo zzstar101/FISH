@@ -33,7 +33,7 @@ export function SideNav() {
           骨架阶段
         </div>
         <p className="mt-2 text-ink-2 text-xs leading-5">
-          当前只接通登录、PC Web 外壳和真实商品流。搜索、详情、发布、消息、我的仍是占位页。
+          当前已接通登录、PC Web 外壳、首页商品流和搜索筛选。详情、发布、消息、我的仍是占位页。
         </p>
       </div>
     </aside>
