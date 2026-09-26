@@ -19,10 +19,10 @@ import {
   applyReadEventToCache,
   flattenMessagePages,
   insertMessageIntoCache,
-  invalidateConversationDetail,
   invalidateConversationSurfaces,
   isMessageRead,
   mergeMessagesIntoCache,
+  refreshConversationOnReconnect,
   useConversation,
   useMarkConversationRead,
   useMessageHistory,
@@ -114,7 +114,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     },
     onOpen: () => {
       if (ownerId === null) return
-      invalidateConversationDetail(queryClient, ownerId, conversationId)
+      refreshConversationOnReconnect(queryClient, ownerId, conversationId)
       invalidateConversationSurfaces(queryClient, ownerId)
     },
   })

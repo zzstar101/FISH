@@ -1,10 +1,9 @@
+import { transactionSystemEventSchema } from '@fish/contracts/transactions/schema'
+
 function parseSystemEvent(content: string): { type: string } | null {
   try {
-    const value: unknown = JSON.parse(content)
-    if (value && typeof value === 'object' && 'type' in value) {
-      const type = (value as { type: unknown }).type
-      if (typeof type === 'string') return { type }
-    }
+    const parsed = transactionSystemEventSchema.safeParse(JSON.parse(content))
+    return parsed.success ? { type: parsed.data.type } : null
   } catch {
     // 非 JSON 的系统消息按原文渲染。
   }
@@ -15,7 +14,7 @@ function parseSystemEvent(content: string): { type: string } | null {
 export function systemMessageText(content: string): string {
   const event = parseSystemEvent(content)
   if (event === null) return content
-  if (event.type === 'tx.proposal') return '待对方同意'
+  if (event.type === 'tx.proposal') return '交易确认待处理'
   if (event.type === 'tx.accepted') return '交易已接受，待面交'
   if (event.type === 'tx.rejected') return '卖家已拒绝这次交易'
   return content

@@ -117,7 +117,10 @@ export class ChatRealtime {
     this.setStatus(this.hasOpened ? 'reconnecting' : 'connecting')
 
     socket.onopen = () => this.handleOpen(socket)
-    socket.onmessage = (event) => this.handleMessage(event.data)
+    socket.onmessage = (event) => {
+      if (this.stopped || this.socket !== socket) return
+      this.handleMessage(event.data)
+    }
     socket.onclose = () => this.handleClose(socket)
     socket.onerror = () => this.handleError(socket)
   }

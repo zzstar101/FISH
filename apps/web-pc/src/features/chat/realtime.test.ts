@@ -110,6 +110,9 @@ describe('ChatRealtime', () => {
     realtime.stop()
     expect(sockets[0]?.closed).toBe(true)
     expect(statuses.at(-1)).toBe('closed')
+
+    sockets[0]?.message(JSON.stringify(validMessageEvent))
+    expect(events).toEqual([validMessageEvent])
   })
 
   test('reconnects after a close with the injected timer', () => {
