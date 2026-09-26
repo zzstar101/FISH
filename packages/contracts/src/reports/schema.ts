@@ -155,7 +155,7 @@ export type AdminReportQueueQuery = z.infer<typeof AdminReportQueueQuerySchema>
 
 /** 举报人摘要（复用 Admin 域的脱敏口径，不返回敏感字段）。 */
 export const ReportUserSummarySchema = z.object({
-  id: z.uuid(),
+  id: UserIdSchema,
   nickname: z.string(),
 })
 export type ReportUserSummary = z.infer<typeof ReportUserSummarySchema>

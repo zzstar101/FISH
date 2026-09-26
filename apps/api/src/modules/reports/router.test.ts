@@ -360,8 +360,8 @@ describe('举报闭环（#73 Admin 端）', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       items: {
-        report: { id: string; handlingReason: string | null }
-        reporter: { nickname: string }
+        report: { id: string; handlingReason: string | null; handledBy: { id: string } | null }
+        reporter: { id: string; nickname: string }
         target: { label: string; listingStatus: string }
         reportCount: number
       }[]
@@ -373,7 +373,11 @@ describe('举报闭环（#73 Admin 端）', () => {
       expect(item.target.label).toBe('被举报商品')
       expect(item.target.listingStatus).toBe('ACTIVE')
       expect(item.report.handlingReason).toBeNull()
+      expect(item.report.handledBy).toBeNull()
     }
+    expect(new Set(body.items.map((item) => item.reporter.id))).toEqual(
+      new Set([PUBLIC_REPORTER_ID, encodePublicId(PUBLIC_ID_PREFIX.user, SECOND_REPORTER_ID)]),
+    )
     expect(new Set(body.items.map((item) => item.reporter.nickname))).toEqual(
       new Set(['举报人乙', '举报人丙']),
     )
@@ -444,6 +448,13 @@ describe('举报闭环（#73 Admin 端）', () => {
     expect(row).toMatchObject({ status: 'HANDLED', handledBy: ADMIN_ID })
     expect(row?.handledAt).toBeInstanceOf(Date)
     expect(row?.handlingReason).toBe('已核实，另行下架处理')
+
+    const detail = await app.request(ADMIN_ROUTES.reportDetail(reportId), {
+      headers: { cookie: adminCookie },
+    })
+    expect(detail.status).toBe(200)
+    const handled = (await detail.json()) as { item: { report: { handledBy: { id: string } } } }
+    expect(handled.item.report.handledBy.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_ID))
 
     const audit = await scratch
       .select()

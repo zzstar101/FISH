@@ -90,9 +90,14 @@ function toAdminReportItem(row: AdminReportRow): AdminReportItem {
       createdAt: row.report.createdAt.toISOString(),
       handledAt: row.report.handledAt ? row.report.handledAt.toISOString() : null,
       handlingReason: row.report.handlingReason,
-      handledBy: row.handler,
+      handledBy: row.handler
+        ? { ...row.handler, id: encodePublicId(PUBLIC_ID_PREFIX.user, row.handler.id) }
+        : null,
     },
-    reporter: row.reporter,
+    reporter: {
+      ...row.reporter,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.reporter.id),
+    },
     target: {
       targetType: row.target.targetType,
       targetId: publicTargetId(row.target.targetType, row.target.targetId),
