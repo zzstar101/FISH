@@ -25,6 +25,7 @@ export default defineAppConfig({
     'pages/scan/index',
     'pages/following/index',
     'pages/history/index',
+    'pages/report-listing/index',
   ],
   window: {
     backgroundTextStyle: 'light',

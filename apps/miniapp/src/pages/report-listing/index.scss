@@ -1,0 +1,584 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 举报商品（稿 `小程序1版举报商品.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 结构：NavBar glass（吸顶玻璃栏，居中双色标题，本页只补内容顶部的等高让位）
+ * → 渐变页头（随内容滚走）→ 举报对象卡（固定不可改）→ 原因胶囊（5 枚等宽 3+2）
+ * → 补充说明（200 字计数）→ 隐私提示 + 提交钮 → 成功态 / 只读态复用同一套键值行。
+ *
+ * 顶部栏吸顶由 `components/nav-bar` 的 glass 变体负责（position: fixed），本页不写
+ * 任何 position: fixed / sticky；根节点刻意不写 overflow（会破坏 pageScrollTo 与
+ * 下拉刷新，见 `pages/wish/index.scss` 同类说明）。
+ *
+ * 胶囊不放图标：标签最长 7 个字，图标 + 7 字会撑爆三列等宽（约 102pt）的胶囊体；
+ * 纯文字 12pt 不换行刚好留出边距，5 枚大小完全统一（Owner 2026-09-26 验收口径）。
+ */
+
+.rpl {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+/* 居中标题里的品牌色尾段（「举报」黑 + 「商品/详情」蓝，二级页拍板的双色分字） */
+.rpl__navem {
+  color: var(--brand);
+}
+
+.rpl__auth {
+  padding-top: 40px;
+}
+
+.rpl__content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── 渐变页头（同「意见反馈」稿 .headblock；随内容滚走，玻璃栏不动） ── */
+.rpl__head {
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+  padding: 32px 40px 40px;
+  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+}
+
+.rpl__kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  letter-spacing: 0.1em;
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.rpl__kicker-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.rpl__title {
+  display: block;
+  margin-top: 16px;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.rpl__sub {
+  display: block;
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+/* ── 表单卡 ── */
+.rpl__card {
+  margin: 28px 40px 0;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 40px;
+  box-shadow: var(--shadow-card);
+  padding: 28px;
+}
+
+.rpl__card.is-err {
+  border-color: var(--danger-line);
+  background: var(--danger-weak);
+}
+
+.rpl__card-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.rpl__card-h2 {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--fg);
+  flex: 0 0 auto;
+}
+
+.rpl__req {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.rpl__opt {
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.rpl__card-sub {
+  display: block;
+  margin-top: 10px;
+  font-size: 23px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+/* ── 举报对象（由入口带入，固定不可改） ── */
+.rpl__obj {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-top: 24px;
+  min-width: 0;
+}
+
+.rpl__obj-img {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  background: var(--ice);
+}
+
+.rpl__obj-img--sm {
+  width: 88px;
+  height: 88px;
+}
+
+.rpl__obj-ph {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 24px;
+  background: var(--grad-icon);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rpl__obj-ph--sm {
+  width: 88px;
+  height: 88px;
+}
+
+.rpl__obj-ph-ic {
+  width: 40px;
+  height: 40px;
+}
+
+.rpl__obj-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rpl__obj-name {
+  display: block;
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  @include ellipsis;
+}
+
+.rpl__obj-sub {
+  display: block;
+  margin-top: 6px;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.rpl__obj-price {
+  color: var(--price);
+  font-weight: 700;
+}
+
+.rpl__obj-tag {
+  flex: 0 0 auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 19px;
+  color: var(--muted);
+  border: 2px dashed var(--line);
+  border-radius: 999px;
+  padding: 6px 16px;
+}
+
+/* ── 原因胶囊：5 枚等宽（3+2），不放图标（见文件头），纯文字 24px 不换行 ── */
+.rpl__pills {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.rpl__pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--muted-2);
+  white-space: nowrap;
+  padding: 0 8px;
+  transition:
+    background 0.16s,
+    border-color 0.16s,
+    color 0.16s;
+
+  &:active {
+    transform: translateY(2px);
+  }
+
+  &.is-on {
+    background: var(--accent-weak);
+    border-color: var(--brand);
+    color: var(--brand-deep);
+    box-shadow: inset 0 0 0 2px var(--brand);
+  }
+}
+
+/* 行内错误（选中类型后消失） */
+.rpl__err {
+  margin-top: 16px;
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--danger-ink);
+}
+
+/* ── 补充说明（选填，200 字计数） ── */
+.rpl__field {
+  margin-top: 24px;
+  border-radius: 28px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s;
+
+  &.is-focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+}
+
+.rpl__ta {
+  display: block;
+  width: 100%;
+  min-height: 176px;
+  padding: 24px;
+  box-sizing: border-box;
+  font-size: 26px;
+  line-height: 1.75;
+  color: var(--fg);
+}
+
+.rpl__fieldfoot {
+  display: flex;
+  align-items: center;
+  padding: 0 24px 20px;
+}
+
+.rpl__kb {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.rpl__count {
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ── 隐私提示 + 提交（表单末尾，不吸底：textarea 聚焦后键盘会顶起页面） ── */
+.rpl__note {
+  margin: 4px 40px 28px;
+  display: flex;
+  gap: 14px;
+}
+
+.rpl__note-ic {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+
+.rpl__note-tx {
+  flex: 1 1 auto;
+  font-size: 23px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.rpl__submit {
+  margin: 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+  transition:
+    filter 0.16s,
+    background 0.16s;
+
+  &:active {
+    transform: translateY(2px);
+  }
+
+  &.is-off {
+    background: var(--accent-faint);
+    color: var(--muted);
+    box-shadow: none;
+  }
+}
+
+.rpl__formfoot {
+  display: block;
+  margin-top: 24px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ── 成功态（02） ── */
+.rpl__hero {
+  text-align: center;
+  padding: 20px 40px 0;
+}
+
+.rpl__hero-ic {
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ok-weak);
+  border: 2px solid var(--ok-line);
+}
+
+.rpl__hero-ic-img {
+  width: 48px;
+  height: 48px;
+}
+
+.rpl__hero-t {
+  display: block;
+  margin-top: 24px;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.rpl__hero-s {
+  display: block;
+  margin-top: 12px;
+  font-size: 25px;
+  line-height: 1.75;
+  color: var(--muted-2);
+}
+
+/* 演示口径说明带（演示构建才有；真实构建不渲染） */
+.rpl__demonote {
+  display: block;
+  margin: 20px 40px 0;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ── 只读态横幅（03/04）：warn=审核中、ok=已处理、danger=已驳回 ── */
+.rpl__banner {
+  margin: 28px 40px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 28px;
+  border: 2px solid;
+
+  &.is-pending {
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+    color: var(--warn-ink);
+  }
+
+  &.is-done {
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+    color: var(--ok-ink);
+  }
+
+  &.is-rejected {
+    background: var(--danger-weak);
+    border-color: var(--danger-line);
+    color: var(--danger-ink);
+  }
+}
+
+.rpl__banner-ic {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.rpl__banner-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rpl__banner-t {
+  display: block;
+  font-size: 27px;
+  font-weight: 700;
+}
+
+.rpl__banner-s {
+  display: block;
+  margin-top: 8px;
+  font-size: 23px;
+  line-height: 1.7;
+}
+
+/* ── 键值行：成功态「提交内容」与只读态「举报内容」共用 ── */
+.rpl__kvobj {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px 0 20px;
+  border-bottom: 2px solid var(--ice);
+}
+
+.rpl__kv {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  padding: 20px 0;
+  border-bottom: 2px solid var(--ice);
+
+  &:last-child {
+    border-bottom: none;
+    padding-bottom: 4px;
+  }
+}
+
+.rpl__kv-k {
+  flex: 0 0 120px;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.rpl__kv-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 25px;
+  line-height: 1.7;
+  color: var(--fg);
+  word-break: break-all;
+
+  &.is-dim {
+    color: var(--muted);
+  }
+}
+
+.rpl__rtag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--accent-weak);
+  border-radius: 999px;
+  padding: 4px 16px;
+}
+
+.rpl__kvid {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.rpl__copy {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 18px;
+  border-radius: 999px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+  font-size: 21px;
+  font-weight: 600;
+
+  &:active {
+    background: var(--accent-mid);
+  }
+}
+
+/* ── 动线按钮组 ── */
+.rpl__acts {
+  margin: 28px 40px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rpl__btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    transform: translateY(2px);
+  }
+}
+
+.rpl__btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 84px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 26px;
+  font-weight: 600;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}

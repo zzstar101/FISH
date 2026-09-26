@@ -692,6 +692,28 @@ export default function ListingDetail() {
   const visibleComments = commentsOpen ? comments : comments.slice(0, COMMENT_LIMIT)
   const paragraphs = listing ? descriptionLines(listing.description) : []
 
+  /**
+   * #252：站内举报入口。此前「举报走微信胶囊菜单」只是稿的取舍，站内并没有举报能力。
+   * 仅**非本人商品**显示（本人商品不需要举报自己）；未登录时由举报页的 useAuthGuard
+   * 引导登录。对象四项由 query 带入、页内不可改。`id` 传的是**当前契约的 uuid**（页面
+   * 目前不消费该参数，POST /reports 接线时启用）：Report 契约（#231/#240/#241）与
+   * TypeID（#217）冻结后改传 `lst_` 公开 ID，不把裸 UUID 送进未来的公开 API。
+   * 商品编号不在页内展示（#217：详情页不常驻展示编号）。
+   */
+  const isOwnListing = userId !== null && data !== null && data.seller.id === userId
+  const goReport = () => {
+    if (!data || !listing) return
+    const query = [
+      `id=${encodeURIComponent(listing.id)}`,
+      `title=${encodeURIComponent(listing.title)}`,
+      `price=${encodeURIComponent(formatAmount(listing.priceCents))}`,
+      images[0] ? `cover=${encodeURIComponent(images[0])}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join('&')
+    void Taro.navigateTo({ url: `/pages/report-listing/index?${query}` })
+  }
+
   return (
     <View className="detail">
       {/*
@@ -820,6 +842,13 @@ export default function ListingDetail() {
                 <Text className="detail__tag">{categoryLabel(listing.category)}</Text>
                 <Text className="detail__tag">{conditionLabel(listing.condition)}</Text>
                 {listing.negotiable ? <Text className="detail__tag">可小刀</Text> : null}
+                {/* #252：举报入口挂在标签行右端（Owner 2026-09-26：与 tag 同排、右边对齐）。
+                    仅非本人商品显示；isOwnListing / goReport 见组件内注释。 */}
+                {!isOwnListing ? (
+                  <View className="detail__tag-report" onClick={goReport}>
+                    <Text>举报</Text>
+                  </View>
+                ) : null}
               </View>
             </View>
 
