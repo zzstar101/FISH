@@ -1,17 +1,13 @@
 import { Image, Text, Textarea, View } from '@tarojs/components'
 import Taro, { useRouter } from '@tarojs/taro'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
-import {
-  DEMO_SUBMITTED_REPORT_ID,
-  findDemoReport,
-  rememberDemoReport,
-} from '@/features/reports/demo'
+import { DEMO_SUBMITTED_USER_ID, findDemoReport, rememberDemoReport } from '@/features/reports/demo'
 import {
   bannerCopy,
   REPORT_DESC_DEFAULT_HINT,
@@ -79,6 +75,14 @@ export default function ReportUser() {
   const [fieldFocus, setFieldFocus] = useState(false)
   /** 提交在飞：防重复提交（#252） */
   const [busy, setBusy] = useState(false)
+  /** 提交模拟时延的定时器：卸载时清掉，迟到的 setState 与演示「落库」都不再发生 */
+  const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (submitTimer.current !== null) clearTimeout(submitTimer.current)
+    },
+    [],
+  )
   /** null = 还在表单；非 null = 成功态已落定（整页切换，不再回到表单） */
   const [done, setDone] = useState<{ reason: string; desc: string } | null>(null)
 
@@ -109,12 +113,12 @@ export default function ReportUser() {
       return
     }
     setBusy(true)
-    setTimeout(() => {
+    submitTimer.current = setTimeout(() => {
       setBusy(false)
       setDone({ reason: chosen, desc: desc.trim() })
       // 演示「落库」：追加进进程内存，让「我的举报」列表与只读态都能看到这条（见 demo.ts 文件头）
       rememberDemoReport({
-        id: DEMO_SUBMITTED_REPORT_ID,
+        id: DEMO_SUBMITTED_USER_ID,
         target: 'USER',
         objTitle: target.nickname || '（未带出昵称）',
         objPrice: null,
@@ -268,7 +272,7 @@ export default function ReportUser() {
               reason: done.reason,
               desc: done.desc,
               timeLabel: '刚刚',
-              id: DEMO_SUBMITTED_REPORT_ID,
+              id: DEMO_SUBMITTED_USER_ID,
             })}
           </View>
 
