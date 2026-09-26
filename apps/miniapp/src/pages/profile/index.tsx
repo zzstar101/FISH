@@ -421,10 +421,11 @@ export default function Profile() {
     // 「评价」= 我发过的评论（商品留言 + 交易评价）。该页没有聚合端点：
     // 真实构建下是空态 + 缺口说明，见 pages/comments 的文件头。
     { key: 'review', label: '评价', icon: ICONS.profileReview, url: '/pages/comments/index' },
-    // #252：我的举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标）。
-    // 提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态（举报后端未上线），
-    // 见 pages/my-reports 的文件头。
-    { key: 'reports', label: '我的举报', icon: ICONS.shieldLine, url: '/pages/my-reports/index' },
+    // #252：举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标；
+    // 图标用 safeAccent 与格子家族同色 —— shieldLine 是浅灰蓝，混进品牌蓝的格子
+    // 里发灰）。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
+    // （举报后端未上线），见 pages/my-reports 的文件头。
+    { key: 'reports', label: '举报', icon: ICONS.safeAccent, url: '/pages/my-reports/index' },
   ]
 
   /**
