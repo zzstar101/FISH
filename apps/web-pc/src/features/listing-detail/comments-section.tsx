@@ -44,6 +44,7 @@ function CommentComposer({
     <div className="mt-3">
       <Textarea
         className="min-h-[88px] resize-none"
+        disabled={pending}
         maxLength={200}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -53,7 +54,7 @@ function CommentComposer({
         <span className="text-ink-3 text-xs">{value.length}/200</span>
         <div className="flex items-center gap-2">
           {onCancel ? (
-            <Button onClick={onCancel} size="sm" type="button" variant="ghost">
+            <Button disabled={pending} onClick={onCancel} size="sm" type="button" variant="ghost">
               取消
             </Button>
           ) : null}
@@ -97,6 +98,7 @@ function ReplyRow({ reply }: { reply: CommentReply }) {
 function CommentRow({
   comment,
   canReply,
+  replyEnabled,
   replyOpen,
   replyDraft,
   replyError,
@@ -108,6 +110,7 @@ function CommentRow({
 }: {
   comment: CommentDto
   canReply: boolean
+  replyEnabled: boolean
   replyOpen: boolean
   replyDraft: string
   replyError: string | null
@@ -134,12 +137,15 @@ function CommentRow({
           </div>
           <p className="mt-2 whitespace-pre-wrap text-ink-2 text-sm leading-6">{comment.content}</p>
           <div className="mt-2 flex items-center gap-3 text-xs">
-            <button className="text-brand hover:underline" onClick={onBeginReply} type="button">
+            <button
+              className="text-brand hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!replyEnabled || replyPending}
+              onClick={onBeginReply}
+              type="button"
+            >
               回复
             </button>
-            {comment.replies.length > 0 ? (
-              <span className="text-ink-3">{comment.replies.length} 条回复</span>
-            ) : null}
+            <span className="text-ink-3">{comment.replies.length} 条回复</span>
           </div>
 
           {comment.replies.length > 0 ? (
@@ -168,7 +174,7 @@ function CommentRow({
 }
 
 export function CommentsSection({ listingId }: { listingId: string }) {
-  const { me, isInitializing } = useAuth()
+  const { me, isInitializing, error: authError, refetch: refetchAuth } = useAuth()
   const navigate = useNavigate()
   const comments = useCommentList(listingId)
   const createComment = useCreateComment(listingId)
@@ -180,6 +186,8 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   const [replyError, setReplyError] = useState<string | null>(null)
 
   const items = comments.data?.pages.flatMap((page) => page.items) ?? []
+  const hasAuthError = authError !== null && authError !== undefined
+  const replyEnabled = !isInitializing && !hasAuthError
 
   function submitComment() {
     const content = commentDraft.trim()
@@ -192,6 +200,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   }
 
   function beginReply(commentId: string) {
+    if (!replyEnabled || createReply.isPending) return
     if (me === null) {
       void navigate({ to: '/login', search: { redirect: currentHref() } })
       return
@@ -231,7 +240,16 @@ export function CommentsSection({ listingId }: { listingId: string }) {
 
       {isInitializing ? <LoadingState label="正在恢复登录状态…" /> : null}
 
-      {!isInitializing && me === null ? (
+      {hasAuthError ? (
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm">
+          <span>登录状态加载失败，暂时无法留言或回复</span>
+          <Button onClick={refetchAuth} size="sm" type="button" variant="outline">
+            重试
+          </Button>
+        </div>
+      ) : null}
+
+      {!isInitializing && !hasAuthError && me === null ? (
         <div className="mt-4 rounded-xl bg-surface-2 px-4 py-3 text-ink-2 text-sm">
           <Link
             className="font-medium text-brand hover:underline"
@@ -244,7 +262,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
         </div>
       ) : null}
 
-      {!isInitializing && me !== null ? (
+      {!isInitializing && !hasAuthError && me !== null ? (
         <CommentComposer
           error={commentError}
           onChange={setCommentDraft}
@@ -267,7 +285,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
         <div className="mt-5 divide-y divide-line">
           {items.map((comment) => (
             <CommentRow
-              canReply={me !== null}
+              canReply={me !== null && !isInitializing && !hasAuthError}
               comment={comment}
               key={comment.id}
               onBeginReply={() => beginReply(comment.id)}
@@ -280,6 +298,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
               onSubmitReply={() => submitReply(comment.id)}
               replyDraft={replyDraft}
               replyError={replyError}
+              replyEnabled={replyEnabled}
               replyOpen={replyTo === comment.id}
               replyPending={createReply.isPending}
             />
