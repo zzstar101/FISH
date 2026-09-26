@@ -12,7 +12,12 @@
  * `reports.created_at`，所以 `cursorCondition` 也放在这里，而不是各 store 各抄一份。
  */
 import { ListingCursorTimestampSchema, ListingIdSchema } from '@fish/contracts/listings/schema'
-import { decodePublicId, isPublicId, type PublicIdPrefix } from '@fish/shared/public-id'
+import {
+  decodePublicId,
+  encodePublicId,
+  isPublicId,
+  type PublicIdPrefix,
+} from '@fish/shared/public-id'
 import { type SQL, sql } from 'drizzle-orm'
 
 export type AdminCursor = {
@@ -38,11 +43,17 @@ function isCursorTimestamp(value: string): boolean {
   return ListingCursorTimestampSchema.safeParse(value).success
 }
 
-export function encodeCursor(createdAtMicro: string, id: string): string {
+export function encodeCursor(
+  createdAtMicro: string,
+  id: string,
+  publicPrefix?: PublicIdPrefix,
+): string {
   // 只接受微秒精度的 UTC ISO 文本：与 listings `newest` 排序同款，**必须由 store 的
   // `to_char(..., 'US')` 给出**，不能用 `Date.toISOString()`（JS Date 只有毫秒，同毫秒行
   // 在翻页边界会重复/漏项）。
-  return Buffer.from(`${createdAtMicro}|${id}`).toString('base64url')
+  return Buffer.from(
+    `${createdAtMicro}|${publicPrefix ? encodePublicId(publicPrefix, id) : id}`,
+  ).toString('base64url')
 }
 
 export function decodeCursor(raw: string, publicPrefix?: PublicIdPrefix): AdminCursor | null {
