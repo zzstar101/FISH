@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { ApiError } from '../../lib/api-client'
-import { commentListPath, describeCommentFailure } from './comments-api'
+import { commentListPath, createReply, describeCommentFailure } from './comments-api'
 
 describe('commentListPath', () => {
   test('sets the contract limit and passes the cursor through', () => {
@@ -8,6 +8,36 @@ describe('commentListPath', () => {
     expect(commentListPath('listing-1', 'abc+/=')).toBe(
       '/listings/listing-1/comments?limit=50&cursor=abc%2B%2F%3D',
     )
+  })
+})
+
+describe('createReply', () => {
+  test('parses the single-level reply response with CommentReplySchema', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          id: '01930000-0000-7000-8000-000000000022',
+          listingId: '01930000-0000-7000-8000-000000000011',
+          author: {
+            id: '01930000-0000-7000-8000-00000000000b',
+            nickname: '小北',
+            avatarUrl: null,
+          },
+          content: '还在的',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          isSeller: false,
+          replies: [],
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch
+    try {
+      const reply = await createReply('01930000-0000-7000-8000-000000000021', '还在的')
+      expect(reply.replies).toEqual([])
+      expect(reply.content).toBe('还在的')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 

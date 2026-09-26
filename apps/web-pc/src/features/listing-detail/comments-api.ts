@@ -4,6 +4,8 @@ import {
   CommentDtoSchema,
   type CommentListResponse,
   CommentListResponseSchema,
+  type CommentReply,
+  CommentReplySchema,
 } from '@fish/contracts/comments/schema'
 import { ApiError, apiRequest } from '../../lib/api-client'
 
@@ -35,9 +37,9 @@ export async function createComment(listingId: string, content: string): Promise
   )
 }
 
-/** 回复一条顶层留言；服务端会拒绝回复一条回复。 */
-export async function createReply(commentId: string, content: string): Promise<CommentDto> {
-  return CommentDtoSchema.parse(
+/** 回复一条顶层留言；服务端会拒绝回复一条回复，响应固定是单层 CommentReply。 */
+export async function createReply(commentId: string, content: string): Promise<CommentReply> {
+  return CommentReplySchema.parse(
     await apiRequest(COMMENT_ROUTES.repliesOf(commentId), {
       method: 'POST',
       body: JSON.stringify({ content }),
