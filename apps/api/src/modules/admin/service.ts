@@ -231,9 +231,9 @@ function pageOf<T extends { createdAtCursor: string; id: string }>(
 
 function toModerationRecord(row: ModerationDetailRow['record']) {
   return AdminModerationRecordSchema.parse({
-    id: row.id,
-    listingId: row.listingId,
-    sellerId: row.sellerId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, row.id),
+    listingId: row.listingId ? encodePublicId(PUBLIC_ID_PREFIX.listing, row.listingId) : null,
+    sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, row.sellerId),
     action: row.action,
     titleSnapshot: row.titleSnapshot,
     descriptionSnapshot: row.descriptionSnapshot,
@@ -250,7 +250,7 @@ function toModerationItem(row: ModerationQueueRow | ModerationHistoryRow | Moder
     record: toModerationRecord(row.record),
     listing: row.listing
       ? {
-          id: row.listing.id,
+          id: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listing.id),
           title: row.listing.title,
           description: row.listing.description,
           status: row.listing.status,
@@ -259,7 +259,10 @@ function toModerationItem(row: ModerationQueueRow | ModerationHistoryRow | Moder
           createdAt: row.listing.createdAt.toISOString(),
         }
       : null,
-    seller: row.seller,
+    seller: {
+      ...row.seller,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.seller.id),
+    },
   }
   return item
 }
@@ -276,7 +279,7 @@ function moderationDetailOf(row: ModerationDetailRow) {
           reason: row.humanDecision.reason,
           actor: row.humanDecision.actorId
             ? {
-                id: row.humanDecision.actorId,
+                id: encodePublicId(PUBLIC_ID_PREFIX.user, row.humanDecision.actorId),
                 nickname: row.humanDecision.actorNickname ?? '未知管理员',
               }
             : null,
