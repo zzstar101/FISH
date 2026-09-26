@@ -98,9 +98,10 @@ export function useSendTextMessage(ownerId: string | null) {
   return useMutation({
     mutationFn: ({ conversationId, input }: SendTextVariables) =>
       sendTextMessage(conversationId, input),
-    onSuccess: (message, variables) => {
+    onSuccess: () => {
       if (ownerId === null) return
-      insertMessageIntoCache(queryClient, ownerId, variables.conversationId, message)
+      // 消息缓存由页面按历史查询状态决定是否写入：历史处于错误态时不能写伪页，
+      // 否则会把可重试的 error 状态改成 success。
       void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
       void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
     },
@@ -222,14 +223,32 @@ export async function refreshNewestMessages(
   )
 }
 
-/** 重连收口：详情走一次强校验，消息只补最新一页。 */
-export function refreshConversationOnReconnect(
+/** 重连收口：详情走一次强校验，消息只补最新一页，未读数强制探一次。 */
+export async function refreshConversationOnReconnect(
   queryClient: QueryClient,
   ownerId: string,
   conversationId: string,
-): void {
-  void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(ownerId, conversationId) })
-  void refreshNewestMessages(queryClient, ownerId, conversationId).catch(() => undefined)
+): Promise<void> {
+  await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(ownerId, conversationId) })
+  const [history, unread] = await Promise.allSettled([
+    refreshNewestMessages(queryClient, ownerId, conversationId),
+    queryClient.fetchQuery({
+      queryKey: chatKeys.unreadCount(ownerId),
+      queryFn: fetchConversationUnreadCount,
+      staleTime: 0,
+    }),
+  ])
+  if (history.status === 'rejected') throw history.reason
+  if (unread.status === 'rejected') throw unread.reason
+}
+
+/**
+ * 断线时打一次受鉴权 HTTP 探针。
+ *
+ * WebSocket upgrade 401 在浏览器侧只表现为 onerror/onclose，无法从事件本身识别；
+ * 用 unread-count 这个真实 query 触发 QueryCache 的全局 401 收口即可。
+ */
+export function probeChatSession(queryClient: QueryClient, ownerId: string): void {
   void queryClient
     .fetchQuery({
       queryKey: chatKeys.unreadCount(ownerId),
