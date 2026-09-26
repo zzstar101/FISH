@@ -27,6 +27,7 @@ export default defineAppConfig({
     'pages/history/index',
     'pages/report-listing/index',
     'pages/report-user/index',
+    'pages/my-reports/index',
   ],
   window: {
     backgroundTextStyle: 'light',
