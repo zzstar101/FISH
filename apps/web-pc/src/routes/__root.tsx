@@ -1,4 +1,4 @@
-import { createRootRoute, Outlet, useLocation } from '@tanstack/react-router'
+import { createRootRoute, Outlet, useLocation, useMatchRoute } from '@tanstack/react-router'
 import { AuthProvider } from '../features/auth/auth-provider'
 import { RequireAuth } from '../features/auth/require-auth'
 import { PcShell } from '../features/shell/pc-shell'
@@ -20,9 +20,10 @@ function RootLayout() {
  */
 function RootChrome() {
   const { pathname: rawPathname } = useLocation()
+  const matchRoute = useMatchRoute()
   const pathname = rawPathname.replace(/\/+$/, '') || '/'
   const isAuthPage = pathname === '/login' || pathname === '/register'
-  const isPublicListing = pathname.startsWith('/listing/')
+  const isPublicListing = Boolean(matchRoute({ to: '/listing/$listingId' }))
 
   if (isAuthPage) return <Outlet />
   if (isPublicListing) return <PcShell />
