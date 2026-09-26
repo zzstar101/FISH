@@ -357,6 +357,38 @@ stub**——它返回的是演示文案，客户端会带"演示文案·非真�
   transport。`outbox` 仅供本地开发，不能投递真实邮件。若从 `.env.example` 复制了生产 `.env`，
   移除其中的 `MAIL_TRANSPORT=outbox` 与 `MEETUP_TOKEN_SECRET=dev-only-…`，避免与 API 专属配置并存。
 
+**#228 起 API 还需要内容安全审核配置，且 `CONTENT_MODERATION_TRANSPORT` 无默认值**：升级后不补它，API
+同样**直接启动失败**（`环境变量校验失败：CONTENT_MODERATION_TRANSPORT 必须显式设置为 local 或 tencent`），
+配合 `Restart=always` 就是反复重启。生产必须写 `tencent`——`local` 在 `NODE_ENV=production` 下被
+`loadContentModerationEnv` 直接拒绝，这是刻意的：本地词表不是内容安全审核，禁止生产兜底。
+
+```bash
+read -rs -p '腾讯云 SecretId: ' TENCENT_CLOUD_SECRET_ID
+read -rs -p '腾讯云 SecretKey（不回显）: ' TENCENT_CLOUD_SECRET_KEY && echo
+read -r  -p 'TMS（文本）BizType: ' TENCENT_TMS_BIZ_TYPE
+read -r  -p 'IMS（图片）BizType: ' TENCENT_IMS_BIZ_TYPE
+{
+  printf 'CONTENT_MODERATION_TRANSPORT=tencent\n'
+  printf 'TENCENT_CLOUD_SECRET_ID=%s\n' "$TENCENT_CLOUD_SECRET_ID"
+  printf 'TENCENT_CLOUD_SECRET_KEY=%s\n' "$TENCENT_CLOUD_SECRET_KEY"
+  printf 'TENCENT_TMS_BIZ_TYPE=%s\n' "$TENCENT_TMS_BIZ_TYPE"
+  printf 'TENCENT_IMS_BIZ_TYPE=%s\n' "$TENCENT_IMS_BIZ_TYPE"
+} | sudo tee -a /etc/fish/api-mail.env >/dev/null
+unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
+```
+
+- 四项缺一即启动失败；SecretId / SecretKey 与其它密钥同处 `/etc/fish/api-mail.env`（`root:root`、
+  600），轮换后重启 API 生效，不影响存量数据。
+- `TENCENT_CLOUD_REGION` 可选，默认 `ap-guangzhou`；应与存储/会话所在地域一致，跨境调用会明显变慢。
+- `TENCENT_TMS_BIZ_TYPE` / `TENCENT_IMS_BIZ_TYPE` 是腾讯云控制台按业务创建的两个策略号（文本、图片
+  各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
+- 日志只允许出现腾讯 `RequestId`：Secret 与完整私密文本（含图片字节）都不进日志。密钥随 §10 备份
+  的 `config-*.tar.gz` 进备份，泄漏处置与其它 API 密钥同口径。
+- `local` 的生产禁令**依赖 `NODE_ENV=production`**，而本仓库部署路径当前不设置 `NODE_ENV`（§5.1 的
+  systemd 单元只有 `EnvironmentFile`）。因此生产务必按上面的脚本写 `tencent`，不要指望那道护栏兜底；
+  该前提与既有的 `WECHAT_TRANSPORT=stub` 护栏相同，是否在部署侧统一补 `NODE_ENV` 由 Owner 决定
+  （见 `docs/design/issue-228-content-moderation-adapter.md` §10-R7）。
+
 ## 5. systemd 托管
 
 ### 5.1 API

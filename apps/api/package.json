@@ -13,6 +13,8 @@
     "@fish/db": "workspace:*",
     "@fish/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.7"
+    "hono": "^4.13.7",
+    "tencentcloud-sdk-nodejs-ims": "^4.1.311",
+    "tencentcloud-sdk-nodejs-tms": "^4.1.311"
   }
 }

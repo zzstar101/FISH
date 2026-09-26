@@ -170,3 +170,74 @@ export function loadWechatEnv(
     '环境变量校验失败：WECHAT_TRANSPORT 必须显式设置为 off / stub / live（无默认值，不允许静默回退 stub）',
   )
 }
+
+/** 腾讯云内容安全的默认地域（`TENCENT_CLOUD_REGION` 未配置时使用）。 */
+export const DEFAULT_TENCENT_CLOUD_REGION = 'ap-guangzhou'
+
+/**
+ * 内容安全审核配置（#228）——API 专属，不进共享 `ServerEnv`：worker 不调审核上游。
+ *
+ * `CONTENT_MODERATION_TRANSPORT` **无默认值**：必须显式声明 `local` / `tencent`。
+ * - `local`：只允许显式开发/测试使用。文本走本地词表（`apps/api/src/modules/moderation/rules.ts`），
+ *   图片不做内容审核（一律 REVIEW，不公开）；`NODE_ENV=production` 下直接启动失败——本地词表是
+ *   演示规则，不是内容安全审核，生产禁止本地兜底。
+ * - `tencent`：腾讯云 TMS（文本）/ IMS（图片），四项配置缺一即失败。
+ *
+ * Secret 只在部署环境变量/密钥文件；本加载器只在错误里报变量名，**不回显任何值**。
+ */
+export type ContentModerationEnv =
+  | { transport: 'local' }
+  | {
+      transport: 'tencent'
+      secretId: string
+      secretKey: string
+      region: string
+      tmsBizType: string
+      imsBizType: string
+    }
+
+export function loadContentModerationEnv(
+  source: Record<string, string | undefined> = process.env,
+  nodeEnv: string | undefined = source.NODE_ENV,
+): ContentModerationEnv {
+  const transport = source.CONTENT_MODERATION_TRANSPORT
+  if (transport === 'local') {
+    // `NODE_ENV` 按 trim + 小写比较：这道生产护栏是最后一道防线，不能因为 `Production`
+    // 这种拼写就失效。
+    if (nodeEnv?.trim().toLowerCase() === 'production') {
+      throw new Error(
+        '环境变量校验失败：生产环境（NODE_ENV=production）禁止 CONTENT_MODERATION_TRANSPORT=local（本地词表不是内容安全审核，禁止生产兜底）',
+      )
+    }
+    return { transport: 'local' }
+  }
+  if (transport === 'tencent') {
+    const secretId = source.TENCENT_CLOUD_SECRET_ID?.trim()
+    const secretKey = source.TENCENT_CLOUD_SECRET_KEY?.trim()
+    const tmsBizType = source.TENCENT_TMS_BIZ_TYPE?.trim()
+    const imsBizType = source.TENCENT_IMS_BIZ_TYPE?.trim()
+    if (!secretId || !secretKey || !tmsBizType || !imsBizType) {
+      // 点名「缺了哪一个」：只报一句「四个都要配」的话，运维无法判断到底漏了哪一项。
+      const missing = [
+        !secretId ? 'TENCENT_CLOUD_SECRET_ID' : null,
+        !secretKey ? 'TENCENT_CLOUD_SECRET_KEY' : null,
+        !tmsBizType ? 'TENCENT_TMS_BIZ_TYPE' : null,
+        !imsBizType ? 'TENCENT_IMS_BIZ_TYPE' : null,
+      ].filter((name): name is string => name !== null)
+      throw new Error(
+        `环境变量校验失败：CONTENT_MODERATION_TRANSPORT=tencent 缺少 ${missing.join(' / ')}。四项配置都必须提供：TENCENT_CLOUD_SECRET_ID / TENCENT_CLOUD_SECRET_KEY / TENCENT_TMS_BIZ_TYPE / TENCENT_IMS_BIZ_TYPE`,
+      )
+    }
+    return {
+      transport: 'tencent',
+      secretId,
+      secretKey,
+      tmsBizType,
+      imsBizType,
+      region: source.TENCENT_CLOUD_REGION?.trim() || DEFAULT_TENCENT_CLOUD_REGION,
+    }
+  }
+  throw new Error(
+    '环境变量校验失败：CONTENT_MODERATION_TRANSPORT 必须显式设置为 local 或 tencent（无默认值，不允许静默回退）',
+  )
+}
