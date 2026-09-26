@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
+import { ADMIN_ROUTES as PUBLIC_ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import {
   AdminAuditLogPageSchema,
   AdminListingDetailSchema,
@@ -53,6 +53,19 @@ let scratch: Db
 let app: ReturnType<typeof createApp>
 
 const DEMO_PASSWORD = 'fish123456'
+
+// Fixtures use internal UUIDs for DB setup; requests must use public path IDs.
+const ADMIN_ROUTES = {
+  ...PUBLIC_ADMIN_ROUTES,
+  userDetail: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.userDetail(encodePublicId(PUBLIC_ID_PREFIX.user, id)),
+  listingDetail: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.listingDetail(encodePublicId(PUBLIC_ID_PREFIX.listing, id)),
+  moderationDetail: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.moderationDetail(encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, id)),
+  moderationDecision: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.moderationDecision(encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, id)),
+}
 
 // 固定 UUID：admin 测试的两个演示账号（由 auth /register 创建时用 newId…… 这里改为
 // 手动 INSERT，便于拿到稳定 id 建商品与审计）。
@@ -216,7 +229,7 @@ describe('Admin HTTP 权限边界（设计 §3.2）', () => {
       ADMIN_ROUTES.moderationQueue,
       ADMIN_ROUTES.transactions,
       ADMIN_ROUTES.moderationDetail(REVIEW_RECORD_ID),
-      ADMIN_ROUTES.userDetail(userCookie ? USER_ID : ''),
+      ADMIN_ROUTES.userDetail(USER_ID),
     ]) {
       if (!path) continue
       const res = await app.request(path, { headers: { cookie: userCookie } })
@@ -331,6 +344,83 @@ describe('Admin 查询端到端', () => {
     const body = AdminUserDetailSchema.parse(await res.json())
     expect(body.user.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     expect(body.listingStats.ACTIVE).toBe(1)
+  })
+
+  test('admin detail paths reject bare UUIDs, wrong prefixes and non-canonical IDs', async () => {
+    for (const { path, id, wrongPrefix } of [
+      { path: PUBLIC_ADMIN_ROUTES.userDetail, id: USER_ID, wrongPrefix: PUBLIC_ID_PREFIX.listing },
+      {
+        path: PUBLIC_ADMIN_ROUTES.listingDetail,
+        id: LISTING_ID,
+        wrongPrefix: PUBLIC_ID_PREFIX.user,
+      },
+      {
+        path: PUBLIC_ADMIN_ROUTES.moderationDetail,
+        id: REVIEW_RECORD_ID,
+        wrongPrefix: PUBLIC_ID_PREFIX.listing,
+      },
+    ]) {
+      for (const invalid of [id, encodePublicId(wrongPrefix, id), 'not-a-public-id']) {
+        const res = await app.request(path(invalid), { headers: { cookie: adminCookie } })
+        expect(res.status).toBe(404)
+        expect(await res.json()).toMatchObject({ error: { code: 'ADMIN_NOT_FOUND' } })
+      }
+    }
+  })
+
+  test('admin action paths reject invalid IDs before validating request bodies', async () => {
+    for (const { path, id, prefix, wrongPrefix } of [
+      {
+        path: PUBLIC_ADMIN_ROUTES.moderationDecision,
+        id: REVIEW_RECORD_ID,
+        prefix: PUBLIC_ID_PREFIX.moderationRecord,
+        wrongPrefix: PUBLIC_ID_PREFIX.user,
+      },
+      {
+        path: PUBLIC_ADMIN_ROUTES.listingDelist,
+        id: LISTING_ID,
+        prefix: PUBLIC_ID_PREFIX.listing,
+        wrongPrefix: PUBLIC_ID_PREFIX.user,
+      },
+      {
+        path: PUBLIC_ADMIN_ROUTES.listingRestore,
+        id: LISTING_ID,
+        prefix: PUBLIC_ID_PREFIX.listing,
+        wrongPrefix: PUBLIC_ID_PREFIX.user,
+      },
+      {
+        path: PUBLIC_ADMIN_ROUTES.userRestrictPublish,
+        id: USER_ID,
+        prefix: PUBLIC_ID_PREFIX.user,
+        wrongPrefix: PUBLIC_ID_PREFIX.listing,
+      },
+      {
+        path: PUBLIC_ADMIN_ROUTES.userBan,
+        id: USER_ID,
+        prefix: PUBLIC_ID_PREFIX.user,
+        wrongPrefix: PUBLIC_ID_PREFIX.listing,
+      },
+      {
+        path: PUBLIC_ADMIN_ROUTES.userLiftRestriction,
+        id: USER_ID,
+        prefix: PUBLIC_ID_PREFIX.user,
+        wrongPrefix: PUBLIC_ID_PREFIX.listing,
+      },
+    ]) {
+      for (const invalid of [id, encodePublicId(wrongPrefix, id), 'not-a-public-id']) {
+        const res = await app.request(path(invalid), {
+          ...post({}),
+          headers: { cookie: adminCookie, 'content-type': 'application/json' },
+        })
+        expect(res.status).toBe(404)
+        expect(await res.json()).toMatchObject({ error: { code: 'ADMIN_NOT_FOUND' } })
+      }
+      const valid = await app.request(path(encodePublicId(prefix, id)), {
+        ...post({}),
+        headers: { cookie: adminCookie, 'content-type': 'application/json' },
+      })
+      expect(valid.status).toBe(422)
+    }
   })
 
   test('GET /admin/listings returns seller summary; status filter works', async () => {
@@ -478,7 +568,7 @@ describe('Admin 查询端到端', () => {
   })
 
   test('moderation detail and decision update the listing and audit atomically', async () => {
-    const recordId = encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, REVIEW_RECORD_ID)
+    const recordId = REVIEW_RECORD_ID
     const detail = await app.request(ADMIN_ROUTES.moderationDetail(recordId), {
       headers: { cookie: adminCookie },
     })
@@ -697,7 +787,7 @@ describe('Admin 查询端到端', () => {
     expect(createdRestored[0]).toMatchObject({ status: 'ACTIVE', moderationStatus: 'APPROVED' })
   })
 
-  test('missing user / listing is 404 ADMIN_NOT_FOUND; non-uuid path param is 404, not 500', async () => {
+  test('missing user / listing is 404 ADMIN_NOT_FOUND; malformed TypeID is 404, not 500', async () => {
     const missingUser = await app.request(
       ADMIN_ROUTES.userDetail('01930000-0000-7000-8000-00000000ffff'),
       { headers: { cookie: adminCookie } },

@@ -3,7 +3,6 @@ import {
   AdminListingsQuerySchema,
   AdminModerationQueueQuerySchema,
   AdminModerationRecordsQuerySchema,
-  AdminTargetIdSchema,
   AdminTransactionQuerySchema,
   AdminUsersQuerySchema,
 } from '@fish/contracts/admin/schema'
@@ -61,25 +60,18 @@ function zodValidationFailure(
 }
 
 /**
- * 路径参数 `:userId` / `:listingId` 必须是合法 UUID：否则会被绑到 uuid 列上，
- * PostgreSQL 报 `invalid input syntax for type uuid` → 500。管理后台对非 UUID 一律 404。
+ * 管理端路径只接受资源类型匹配的规范 TypeID；裸 UUID、错误前缀及非规范编码
+ * 均在进入 service / DB 前返回 404。内部查询仍使用解码后的 UUIDv7。
  */
-function requireTargetId(c: Context, name: string): string {
+function requireTargetId(c: Context, name: 'listingId' | 'userId' | 'recordId'): string {
   const raw = c.req.param(name)
-  // Transitional admin read/action paths: report links already carry public target IDs;
-  // legacy UUID entry points are removed only when every caller is converted.
-  const prefix =
-    name === 'listingId'
-      ? PUBLIC_ID_PREFIX.listing
-      : name === 'userId'
-        ? PUBLIC_ID_PREFIX.user
-        : name === 'recordId'
-          ? PUBLIC_ID_PREFIX.moderationRecord
-          : null
-  if (prefix && isPublicId(prefix, raw)) return decodePublicId(prefix, raw)
-  const parsed = AdminTargetIdSchema.safeParse(raw)
-  if (!parsed.success) throw new AdminError('ADMIN_NOT_FOUND', 404, '目标不存在')
-  return parsed.data
+  const prefix = {
+    listingId: PUBLIC_ID_PREFIX.listing,
+    userId: PUBLIC_ID_PREFIX.user,
+    recordId: PUBLIC_ID_PREFIX.moderationRecord,
+  }[name]
+  if (!isPublicId(prefix, raw)) throw new AdminError('ADMIN_NOT_FOUND', 404, '目标不存在')
+  return decodePublicId(prefix, raw)
 }
 
 function requireReportId(c: Context): string {
@@ -112,7 +104,7 @@ function toErrorResponse(c: Context, error: unknown): Response {
 /**
  * 举报 service 异常 → 契约错误信封（与 AdminError 同形状：`{ code, message }`）。
  *
- * 同时认 `AdminError`：`requireTargetId`（非 UUID → 404）写在 try 内最自然，
+ * 同时认 `AdminError`：`requireTargetId`（非法 TypeID → 404）写在 try 内最自然，
  * 只认 ReportServiceError 会让 AdminError 一路逃到 app.onError 变成 500。
  */
 function toReportErrorResponse(c: Context, error: unknown): Response {
@@ -128,7 +120,7 @@ function toReportErrorResponse(c: Context, error: unknown): Response {
 /**
  * 治理 service 异常 → 契约错误信封。
  *
- * 与举报端点同样的理由也要认 `AdminError`：`requireTargetId`（非 UUID → 404）写在 try 内，
+ * 与举报端点同样的理由也要认 `AdminError`：`requireTargetId`（非法 TypeID → 404）写在 try 内，
  * 只认 GovernanceServiceError 会让 AdminError 逃到 app.onError 变成 500。
  */
 function toGovernanceErrorResponse(c: Context, error: unknown): Response {
@@ -139,6 +131,18 @@ function toGovernanceErrorResponse(c: Context, error: unknown): Response {
     return c.json(errorBody(error.code, error.message), error.status)
   }
   throw error
+}
+
+/** Reject an invalid public path ID before parsing an action body or touching the DB. */
+function validatedTargetId(
+  c: Context,
+  name: 'listingId' | 'userId' | 'recordId',
+): string | Response {
+  try {
+    return requireTargetId(c, name)
+  } catch (error) {
+    return toErrorResponse(c, error)
+  }
 }
 
 /**
@@ -229,7 +233,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
   })
 
   // 审核记录检索（#73 治理半场 PR4）：必须注册在 `/moderation/:recordId` **之前**。
-  // 否则字符串 "records" 会被 `:recordId` 吃掉，`requireTargetId` 判非 UUID → 404，
+  // 否则字符串 "records" 会被 `:recordId` 吃掉，`requireTargetId` 判非 TypeID → 404，
   // 检索入口就成了死路（与 `/moderation/queue` 同一约束，见 ADMIN_ROUTES.moderationRecords）。
   router.get('/moderation/records', async (c) => {
     const parsed = AdminModerationRecordsQuerySchema.safeParse(c.req.query())
@@ -258,6 +262,8 @@ export function createAdminRouter(options: AdminRouterOptions) {
   })
 
   router.post('/moderation/:recordId/decision', async (c) => {
+    const recordId = validatedTargetId(c, 'recordId')
+    if (recordId instanceof Response) return recordId
     const input = ModerationDecisionInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!input.success) return zodValidationFailure(c, input.error.issues)
     const requestId = c.req.header('Idempotency-Key')?.trim()
@@ -267,7 +273,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
     try {
       return c.json(
         await service.decideModeration({
-          recordId: requireTargetId(c, 'recordId'),
+          recordId,
           actorUserId: c.get('userId'),
           decision: input.data.decision,
           reason: input.data.reason,
@@ -373,6 +379,8 @@ export function createAdminRouter(options: AdminRouterOptions) {
   // `actorUserId` 取守卫写入的可信 context（`c.get('userId')`），不读任何请求头。
 
   router.post('/listings/:listingId/delist', async (c) => {
+    const listingId = validatedTargetId(c, 'listingId')
+    if (listingId instanceof Response) return listingId
     const input = GovernanceListingDelistInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!input.success) return zodValidationFailure(c, input.error.issues)
 
@@ -380,7 +388,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(
         await governance.delistListing(
           c.get('userId'),
-          requireTargetId(c, 'listingId'),
+          listingId,
           internalGovernanceInput(input.data),
         ),
         200,
@@ -391,6 +399,8 @@ export function createAdminRouter(options: AdminRouterOptions) {
   })
 
   router.post('/listings/:listingId/restore', async (c) => {
+    const listingId = validatedTargetId(c, 'listingId')
+    if (listingId instanceof Response) return listingId
     const input = GovernanceListingRestoreInputSchema.safeParse(
       await c.req.json().catch(() => null),
     )
@@ -400,7 +410,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(
         await governance.restoreListing(
           c.get('userId'),
-          requireTargetId(c, 'listingId'),
+          listingId,
           internalGovernanceInput(input.data),
         ),
         200,
@@ -411,6 +421,8 @@ export function createAdminRouter(options: AdminRouterOptions) {
   })
 
   router.post('/users/:userId/restrict-publish', async (c) => {
+    const userId = validatedTargetId(c, 'userId')
+    if (userId instanceof Response) return userId
     const input = GovernanceRestrictInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!input.success) return zodValidationFailure(c, input.error.issues)
 
@@ -418,7 +430,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(
         await governance.restrictPublish(
           c.get('userId'),
-          requireTargetId(c, 'userId'),
+          userId,
           internalGovernanceInput(input.data),
         ),
         200,
@@ -429,16 +441,14 @@ export function createAdminRouter(options: AdminRouterOptions) {
   })
 
   router.post('/users/:userId/ban', async (c) => {
+    const userId = validatedTargetId(c, 'userId')
+    if (userId instanceof Response) return userId
     const input = GovernanceRestrictInputSchema.safeParse(await c.req.json().catch(() => null))
     if (!input.success) return zodValidationFailure(c, input.error.issues)
 
     try {
       return c.json(
-        await governance.ban(
-          c.get('userId'),
-          requireTargetId(c, 'userId'),
-          internalGovernanceInput(input.data),
-        ),
+        await governance.ban(c.get('userId'), userId, internalGovernanceInput(input.data)),
         200,
       )
     } catch (error) {
@@ -447,6 +457,8 @@ export function createAdminRouter(options: AdminRouterOptions) {
   })
 
   router.post('/users/:userId/lift-restriction', async (c) => {
+    const userId = validatedTargetId(c, 'userId')
+    if (userId instanceof Response) return userId
     const input = GovernanceLiftRestrictionInputSchema.safeParse(
       await c.req.json().catch(() => null),
     )
@@ -456,7 +468,7 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(
         await governance.liftRestriction(
           c.get('userId'),
-          requireTargetId(c, 'userId'),
+          userId,
           internalGovernanceInput(input.data),
         ),
         200,

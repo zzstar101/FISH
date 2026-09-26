@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
+import { ADMIN_ROUTES as PUBLIC_ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import { AdminOverviewSchema, AdminUserDetailSchema } from '@fish/contracts/admin/schema'
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import { COMMENT_ROUTES } from '@fish/contracts/comments/routes'
@@ -47,6 +47,22 @@ const DEMO_PASSWORD = 'fish123456'
 
 const ADMIN_A = '01940000-0000-7000-8000-0000000000a1'
 const ADMIN_B = '01940000-0000-7000-8000-0000000000a2'
+// DB fixtures remain UUIDs; all admin request paths use their canonical public IDs.
+const ADMIN_ROUTES = {
+  ...PUBLIC_ADMIN_ROUTES,
+  listingDelist: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.listingDelist(encodePublicId(PUBLIC_ID_PREFIX.listing, id)),
+  listingRestore: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.listingRestore(encodePublicId(PUBLIC_ID_PREFIX.listing, id)),
+  userRestrictPublish: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.userRestrictPublish(encodePublicId(PUBLIC_ID_PREFIX.user, id)),
+  userBan: (id: string) => PUBLIC_ADMIN_ROUTES.userBan(encodePublicId(PUBLIC_ID_PREFIX.user, id)),
+  userLiftRestriction: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.userLiftRestriction(encodePublicId(PUBLIC_ID_PREFIX.user, id)),
+  userDetail: (id: string) =>
+    PUBLIC_ADMIN_ROUTES.userDetail(encodePublicId(PUBLIC_ID_PREFIX.user, id)),
+}
+
 const SELLER = '01940000-0000-7000-8000-0000000000b1'
 const OTHER = '01940000-0000-7000-8000-0000000000b2'
 const ROLLBACK = '01940000-0000-7000-8000-0000000000d1'
@@ -755,7 +771,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(await res.json()).toMatchObject({ error: { code: 'GOVERNANCE_SELF_TARGET' } })
   })
 
-  test('治理目标不存在 → 404；非 UUID → 404 而不是 500', async () => {
+  test('治理目标不存在 → 404；非法 TypeID → 404 而不是 500', async () => {
     const missing = await app.request(
       ADMIN_ROUTES.userBan('01940000-0000-7000-8000-0000000000ff'),
       post({ reason: '封禁不存在的人' }, adminACookie),
@@ -764,7 +780,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(await missing.json()).toMatchObject({ error: { code: 'GOVERNANCE_TARGET_NOT_FOUND' } })
 
     const notUuid = await app.request(
-      ADMIN_ROUTES.userBan('not-a-uuid'),
+      PUBLIC_ADMIN_ROUTES.userBan('not-a-uuid'),
       post({ reason: 'x' }, adminACookie),
     )
     expect(notUuid.status).toBe(404)
