@@ -9,6 +9,7 @@ import {
   type ListingDetail,
   ListingDetailSchema,
   ListingFeedResponseSchema,
+  ListingNumberLookupResponseSchema,
   type ListingUpdateInput,
 } from '@fish/contracts/listings/schema'
 import { ApiError, apiRequest } from '../../lib/api-client'
@@ -41,6 +42,17 @@ export function fetchCategoryListings(category: ListingCategory): Promise<Listin
 
 export function searchListings(q: string, sort: ListingSort): Promise<ListingCard[]> {
   return fetchFeedPage({ q, sort })
+}
+
+/** 精确编号仅 404 代表未命中；429/503 等错误必须传给页面，不回退关键词。 */
+export async function findListingByNumber(listingNo: string): Promise<string | null> {
+  try {
+    const payload = await apiRequest(LISTING_ROUTES.byNumber(listingNo))
+    return ListingNumberLookupResponseSchema.parse(payload).id
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
 }
 
 /** 「免费送」快捷入口：0 元商品没有文案可搜，契约的 priceMaxCents=0 就是它的筛选器。 */
