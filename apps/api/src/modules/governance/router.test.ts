@@ -3,6 +3,7 @@ import { ADMIN_ROUTES as PUBLIC_ADMIN_ROUTES } from '@fish/contracts/admin/route
 import { AdminOverviewSchema, AdminUserDetailSchema } from '@fish/contracts/admin/schema'
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import { COMMENT_ROUTES } from '@fish/contracts/comments/routes'
+import { GovernanceResultSchema } from '@fish/contracts/governance/schema'
 import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import { REPORT_ROUTES } from '@fish/contracts/reports/routes'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
@@ -314,7 +315,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(await res.json()).toMatchObject({
       action: 'LISTING_DELISTED',
       targetType: 'LISTING',
-      targetId: LISTING,
+      targetId: encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING),
       listingStatus: 'OFFLINE',
     })
 
@@ -475,13 +476,22 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
       post({ reason: '频繁发布违规商品' }, adminACookie),
     )
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({
+    const result = GovernanceResultSchema.parse(await res.json())
+    expect(result).toMatchObject({
       action: 'USER_RESTRICTED',
       targetType: 'USER_RESTRICTION',
-      restriction: { type: 'PUBLISH_RESTRICT', status: 'ACTIVE' },
+      restriction: {
+        userId: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER),
+        actorUserId: encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_A),
+        type: 'PUBLISH_RESTRICT',
+        status: 'ACTIVE',
+      },
     })
+    if (result.targetType !== 'USER_RESTRICTION') throw new Error('预期限制记录治理结果')
     const [createdRestriction] = await restrictionRows(SELLER)
     expect(createdRestriction?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/)
+    expect(result.targetId).toBe(encodePublicId('rst', createdRestriction?.id ?? ''))
+    expect(result.restriction?.id).toBe(result.targetId)
 
     // 发布入口（PATCH 商品）被挡
     const patched = await app.request(LISTING_ROUTES.detail(LISTING), {
@@ -554,9 +564,18 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
       post({ reason: '整改完成，解除全部限制' }, adminBCookie),
     )
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ action: 'USER_UNBANNED' })
+    const result = GovernanceResultSchema.parse(await res.json())
+    expect(result).toMatchObject({
+      action: 'USER_UNBANNED',
+      targetType: 'USER_RESTRICTION',
+      restriction: { liftedBy: encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_B) },
+    })
 
+    if (result.targetType !== 'USER_RESTRICTION') throw new Error('预期限制记录治理结果')
     const rows = await restrictionRows(SELLER)
+    expect(rows.map((row) => encodePublicId(PUBLIC_ID_PREFIX.userRestriction, row.id))).toContain(
+      result.targetId,
+    )
     expect(rows.length).toBe(2)
     expect(rows.every((row) => row.status === 'LIFTED')).toBe(true)
     expect(rows.every((row) => row.liftedBy === ADMIN_B)).toBe(true)
@@ -1154,6 +1173,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect(body.activeRestrictions.length).toBeGreaterThan(0)
     const ban = body.activeRestrictions.find((row) => row.type === 'BAN')
     expect(ban).toBeDefined()
+    expect(ban?.id).toMatch(/^rst_/)
     expect(ban?.expiresAt).toBeNull()
     expect(new Date(ban?.createdAt ?? '').getTime()).toBeGreaterThan(0)
   })

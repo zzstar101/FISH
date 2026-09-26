@@ -263,7 +263,7 @@ export function createGovernanceService(options: {
       return {
         action: input.type === 'BAN' ? 'USER_BANNED' : 'USER_RESTRICTED',
         targetType: 'USER_RESTRICTION',
-        targetId: restriction.id,
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.userRestriction, restriction.id),
         listingStatus: null,
         restriction: toContractRestriction(restriction),
       }
@@ -327,7 +327,7 @@ export function createGovernanceService(options: {
         return {
           action: 'LISTING_DELISTED',
           targetType: 'LISTING',
-          targetId: listingId,
+          targetId: encodePublicId(PUBLIC_ID_PREFIX.listing, listingId),
           listingStatus: 'OFFLINE',
           restriction: null,
         }
@@ -416,7 +416,7 @@ export function createGovernanceService(options: {
         return {
           action: 'LISTING_RESTORED',
           targetType: 'LISTING',
-          targetId: listingId,
+          targetId: encodePublicId(PUBLIC_ID_PREFIX.listing, listingId),
           listingStatus: restoredStatus,
           restriction: null,
         }
@@ -482,7 +482,7 @@ export function createGovernanceService(options: {
             ? 'USER_UNBANNED'
             : 'USER_RESTRICTION_LIFTED',
           targetType: 'USER_RESTRICTION',
-          targetId: firstLifted.id,
+          targetId: encodePublicId(PUBLIC_ID_PREFIX.userRestriction, firstLifted.id),
           listingStatus: null,
           restriction: toContractRestriction(firstLifted),
         }
@@ -510,18 +510,18 @@ type ListingLock = {
  */
 function toContractRestriction(row: RestrictionRow): GovernanceRestriction {
   return {
-    id: row.id,
-    userId: row.userId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.userRestriction, row.id),
+    userId: encodePublicId(PUBLIC_ID_PREFIX.user, row.userId),
     type: row.type,
     status: row.status,
     reason: row.reason,
-    actorUserId: row.actorUserId,
+    actorUserId: encodePublicId(PUBLIC_ID_PREFIX.user, row.actorUserId),
     sourceReportId: row.sourceReportId
       ? encodePublicId(PUBLIC_ID_PREFIX.report, row.sourceReportId)
       : null,
     expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
     liftedAt: row.liftedAt ? row.liftedAt.toISOString() : null,
-    liftedBy: row.liftedBy,
+    liftedBy: row.liftedBy ? encodePublicId(PUBLIC_ID_PREFIX.user, row.liftedBy) : null,
     createdAt: row.createdAt.toISOString(),
   }
 }
