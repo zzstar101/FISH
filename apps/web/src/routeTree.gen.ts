@@ -14,6 +14,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MatchRouteImport } from './routes/match'
 import { Route as MessageRouteImport } from './routes/message'
+import { Route as MyReportsRouteImport } from './routes/my-reports'
 import { Route as MylistRouteImport } from './routes/mylist'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as OrdersRouteImport } from './routes/orders'
@@ -41,6 +42,7 @@ import { Route as AdminReportsIndexRouteImport } from './routes/admin.reports.in
 import { Route as AdminReportsReportIdRouteImport } from './routes/admin.reports.$reportId'
 import { Route as AdminUsersIndexRouteImport } from './routes/admin.users.index'
 import { Route as AdminUsersUserIdRouteImport } from './routes/admin.users.$userId'
+import { Route as ReportTargetTypeTargetIdRouteImport } from './routes/report.$targetType.$targetId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -65,6 +67,11 @@ const MatchRoute = MatchRouteImport.update({
 const MessageRoute = MessageRouteImport.update({
   id: '/message',
   path: '/message',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MyReportsRoute = MyReportsRouteImport.update({
+  id: '/my-reports',
+  path: '/my-reports',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MylistRoute = MylistRouteImport.update({
@@ -202,6 +209,12 @@ const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
   path: '/users/$userId',
   getParentRoute: () => AdminRoute,
 } as any)
+const ReportTargetTypeTargetIdRoute =
+  ReportTargetTypeTargetIdRouteImport.update({
+    id: '/report/$targetType/$targetId',
+    path: '/report/$targetType/$targetId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -209,6 +222,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/match': typeof MatchRoute
   '/message': typeof MessageRoute
+  '/my-reports': typeof MyReportsRoute
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
@@ -232,6 +246,7 @@ export interface FileRoutesByFullPath {
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/report/$targetType/$targetId': typeof ReportTargetTypeTargetIdRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
@@ -242,6 +257,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/match': typeof MatchRoute
   '/message': typeof MessageRoute
+  '/my-reports': typeof MyReportsRoute
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
@@ -265,6 +281,7 @@ export interface FileRoutesByTo {
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/report/$targetType/$targetId': typeof ReportTargetTypeTargetIdRoute
   '/admin/listings': typeof AdminListingsIndexRoute
   '/admin/moderation': typeof AdminModerationIndexRoute
   '/admin/reports': typeof AdminReportsIndexRoute
@@ -277,6 +294,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/match': typeof MatchRoute
   '/message': typeof MessageRoute
+  '/my-reports': typeof MyReportsRoute
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
   '/orders': typeof OrdersRoute
@@ -300,6 +318,7 @@ export interface FileRoutesById {
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/report/$targetType/$targetId': typeof ReportTargetTypeTargetIdRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
@@ -313,6 +332,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/match'
     | '/message'
+    | '/my-reports'
     | '/mylist'
     | '/notifications'
     | '/orders'
@@ -336,6 +356,7 @@ export interface FileRouteTypes {
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
+    | '/report/$targetType/$targetId'
     | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
@@ -346,6 +367,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/match'
     | '/message'
+    | '/my-reports'
     | '/mylist'
     | '/notifications'
     | '/orders'
@@ -369,6 +391,7 @@ export interface FileRouteTypes {
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
+    | '/report/$targetType/$targetId'
     | '/admin/listings'
     | '/admin/moderation'
     | '/admin/reports'
@@ -380,6 +403,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/match'
     | '/message'
+    | '/my-reports'
     | '/mylist'
     | '/notifications'
     | '/orders'
@@ -403,6 +427,7 @@ export interface FileRouteTypes {
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
+    | '/report/$targetType/$targetId'
     | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
@@ -415,6 +440,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   MatchRoute: typeof MatchRoute
   MessageRoute: typeof MessageRoute
+  MyReportsRoute: typeof MyReportsRoute
   MylistRoute: typeof MylistRoute
   NotificationsRoute: typeof NotificationsRoute
   OrdersRoute: typeof OrdersRoute
@@ -431,6 +457,7 @@ export interface RootRouteChildren {
   WatchersListingIdRoute: typeof WatchersListingIdRoute
   CategoryIndexRoute: typeof CategoryIndexRoute
   ProfileIndexRoute: typeof ProfileIndexRoute
+  ReportTargetTypeTargetIdRoute: typeof ReportTargetTypeTargetIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -468,6 +495,13 @@ declare module '@tanstack/react-router' {
       path: '/message'
       fullPath: '/message'
       preLoaderRoute: typeof MessageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/my-reports': {
+      id: '/my-reports'
+      path: '/my-reports'
+      fullPath: '/my-reports'
+      preLoaderRoute: typeof MyReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/mylist': {
@@ -659,6 +693,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminUsersUserIdRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/report/$targetType/$targetId': {
+      id: '/report/$targetType/$targetId'
+      path: '/report/$targetType/$targetId'
+      fullPath: '/report/$targetType/$targetId'
+      preLoaderRoute: typeof ReportTargetTypeTargetIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -698,6 +739,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   MatchRoute: MatchRoute,
   MessageRoute: MessageRoute,
+  MyReportsRoute: MyReportsRoute,
   MylistRoute: MylistRoute,
   NotificationsRoute: NotificationsRoute,
   OrdersRoute: OrdersRoute,
@@ -714,6 +756,7 @@ const rootRouteChildren: RootRouteChildren = {
   WatchersListingIdRoute: WatchersListingIdRoute,
   CategoryIndexRoute: CategoryIndexRoute,
   ProfileIndexRoute: ProfileIndexRoute,
+  ReportTargetTypeTargetIdRoute: ReportTargetTypeTargetIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

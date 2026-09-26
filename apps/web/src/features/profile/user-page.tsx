@@ -2,23 +2,18 @@ import { Button } from '@fish/ui/button'
 import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
+import { Link } from '@tanstack/react-router'
 import { Shield } from 'lucide-react'
-import { useState } from 'react'
-import { toListingCard } from '../../lib/mock/store'
 import { AuthBadge } from '../auth/auth-badge'
+import { useAuth } from '../auth/auth-provider'
 import { ListingRow } from '../search/listing-row'
-import { useIsFollowing, useToggleFollow, useUser, useUserListings } from './queries'
+import { useUser, useUserListings } from './queries'
 
-/**
- * 用户主页（fixture）：真实契约没有公开用户资料端点（P1）。
- * 主体数据仍来自 fixture store；对真实 uuid 会走「用户不存在」空态。
- */
+/** 他人主页只使用 `/users/:id/public` 与 `/users/:id/listings` 的公开读模型。 */
 export function UserPage({ userId }: { userId: string }) {
+  const { me } = useAuth()
   const user = useUser(userId)
   const listings = useUserListings(userId)
-  const following = useIsFollowing(userId)
-  const follow = useToggleFollow(userId)
-  const [reported, setReported] = useState(false)
 
   if (user.isPending) {
     return (
@@ -28,56 +23,46 @@ export function UserPage({ userId }: { userId: string }) {
       </div>
     )
   }
-  if (user.isError || !user.data) {
+  if (user.isError) {
     return (
       <div className="min-h-dvh bg-bg">
         <NavBar onBack={() => window.history.back()} title="主页" />
-        <EmptyState
-          description={user.isError ? '用户主页加载失败,请返回重试' : '用户不存在'}
-          emoji="🫥"
-        />
+        <ErrorState message="用户主页加载失败" onRetry={() => void user.refetch()} />
+      </div>
+    )
+  }
+  if (!user.data) {
+    return (
+      <div className="min-h-dvh bg-bg">
+        <NavBar onBack={() => window.history.back()} title="主页" />
+        <EmptyState description="这位用户不存在或无法访问" emoji="🫥" />
       </div>
     )
   }
 
   const person = user.data
-  const active = listings.data?.filter((item) => item.status === 'ACTIVE') ?? []
-  const sold = listings.data?.filter((item) => item.status === 'SOLD') ?? []
+  const active = listings.data?.pages.flatMap((page) => page.items) ?? []
 
   return (
     <div className="min-h-dvh bg-bg pb-8">
       <div className="sticky top-0 z-20 bg-surface">
         <NavBar onBack={() => window.history.back()} title="主页" />
       </div>
-
-      <section className="flex items-center gap-3 bg-surface px-4 py-3">
-        <UserAvatar emoji={person.emoji} size="xl" tone={person.tone} />
+      <section className="flex items-center gap-3 bg-surface px-4 py-4">
+        <UserAvatar avatarUrl={person.avatarUrl} emoji={person.nickname.slice(0, 1)} size="xl" />
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-2">
             <span className="truncate font-semibold text-lg">{person.nickname}</span>
-            <AuthBadge status={person.verified ? 'VERIFIED' : 'UNVERIFIED'} />
+            <AuthBadge status={person.authStatus} />
           </p>
-          <p className="mt-1 truncate text-ink-3 text-xs">
-            {/* #86 F：产品不采集 / 不公开校区，演示态同步移除 */}
-            {person.college} · {person.joinedAt} 加入
-          </p>
+          <p className="mt-1 text-ink-3 text-xs">加入 {person.joinedDays} 天 · 校内面交</p>
         </div>
-        <Button
-          className="shrink-0"
-          onClick={() => follow.mutate()}
-          size="sm"
-          variant={following.data ? 'secondary' : 'default'}
-        >
-          {following.data ? '已关注' : '关注'}
-        </Button>
       </section>
-
-      <section className="mt-2 grid grid-cols-4 bg-surface py-3">
+      <section className="mt-2 grid grid-cols-3 bg-surface py-3">
         {[
-          { label: '信用分', value: String(person.credit) },
-          { label: '在售', value: String(active.length) },
-          { label: '已售出', value: String(sold.length) },
-          { label: '入学年份', value: person.joinedAt.slice(0, 4) },
+          { label: '在售', value: person.activeCount },
+          { label: '卖出', value: person.soldCount },
+          { label: '加入天数', value: person.joinedDays },
         ].map((item) => (
           <div
             className="flex flex-col items-center gap-1 border-line border-l first:border-l-0"
@@ -88,43 +73,50 @@ export function UserPage({ userId }: { userId: string }) {
           </div>
         ))}
       </section>
-
-      <section className="mt-2 flex gap-3 bg-surface px-4 py-3">
-        {/* 不设「聊一聊」：真实会话必须挂在具体商品上（POST /conversations 只收 listingId），
-            用户主页没有商品上下文，会话入口在商品详情页。 */}
-        <Button
-          className="flex-1"
-          disabled={reported}
-          onClick={() => setReported(true)}
-          size="lg"
-          variant="outline"
-        >
-          <Shield />
-          {reported ? '已举报' : '举报'}
-        </Button>
-      </section>
-      {reported ? (
-        <p className="px-4 pt-2 text-ink-3 text-xs">已收到举报,平台会尽快核实处理</p>
+      {me?.id !== person.id ? (
+        <section className="mt-2 bg-surface px-4 py-3">
+          <Link
+            className="flex items-center justify-center gap-2 rounded-lg border border-line px-4 py-2.5 text-ink-2 text-sm"
+            params={{ targetType: 'USER', targetId: person.id }}
+            to="/report/$targetType/$targetId"
+          >
+            <Shield className="size-4" /> 举报用户
+          </Link>
+        </section>
       ) : null}
-
       <section className="mt-2">
         <h2 className="flex items-baseline justify-between px-4 py-3 font-semibold text-[15px]">
           TA 的在售
-          <span className="font-normal text-ink-3 text-xs">{active.length} 件</span>
+          <span className="font-normal text-ink-3 text-xs">{person.activeCount} 件</span>
         </h2>
         {listings.isPending ? <LoadingState /> : null}
-        {listings.isError ? (
+        {listings.isError && active.length === 0 ? (
           <ErrorState message="TA 的在售加载失败" onRetry={() => void listings.refetch()} />
         ) : null}
-        {active.length === 0 && !listings.isPending && !listings.isError ? (
+        {listings.isSuccess && active.length === 0 ? (
           <EmptyState description="TA 还没有在售的闲置" emoji="🐟" />
         ) : null}
         {active.length > 0 ? (
           <div className="divide-y divide-line bg-surface">
             {active.map((item) => (
-              <ListingRow item={toListingCard(item)} key={item.id} />
+              <ListingRow item={item} key={item.id} />
             ))}
           </div>
+        ) : null}
+        {listings.hasNextPage ? (
+          <Button
+            className="mx-4 mt-4"
+            disabled={listings.isFetchingNextPage}
+            onClick={() => void listings.fetchNextPage()}
+            variant="outline"
+          >
+            {listings.isFetchingNextPage ? '正在加载…' : '加载更多'}
+          </Button>
+        ) : null}
+        {listings.isFetchNextPageError ? (
+          <p className="px-4 pt-3 text-danger text-sm" role="alert">
+            下一页加载失败，请重试
+          </p>
         ) : null}
       </section>
     </div>

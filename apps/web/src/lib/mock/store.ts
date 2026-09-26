@@ -1,4 +1,5 @@
 import type { ListingCard } from '@fish/contracts/listings/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   categories,
   chatQuickPhrases,
@@ -48,6 +49,15 @@ export type ListingView = Listing & {
  * 只认契约形状的行渲染（ListingRow）时的唯一适配点。分类/成色没有 fixture
  * 之外的枚举信息，按「其他闲置 / 9成新」展示；标签从 tags 还原布尔位。
  */
+function mockListingId(id: string): `lst_${string}` {
+  let value = 0n
+  for (const char of id) value = (value * 131n + BigInt(char.charCodeAt(0))) % (1n << 48n)
+  return encodePublicId(
+    PUBLIC_ID_PREFIX.listing,
+    `01930000-0000-7000-8000-${value.toString(16).padStart(12, '0')}`,
+  )
+}
+
 export function toListingCard(item: Listing): ListingCard {
   return {
     category: 'OTHER',
@@ -55,7 +65,7 @@ export function toListingCard(item: Listing): ListingCard {
     createdAt: new Date(Date.now() - item.publishedMinutesAgo * 60_000).toISOString(),
     coverUrl: null,
     free: item.tags.includes('免费送'),
-    id: item.id,
+    id: mockListingId(item.id),
     negotiable: item.tags.includes('可小刀'),
     // mock fixture 没有审核态：按「公开可见」的语义给 null（不编造 REVIEW / BLOCKED）。
     moderationStatus: null,
@@ -216,7 +226,7 @@ export async function searchListings(keyword: string, sort: SearchSort): Promise
 
 export async function fetchListing(id: string): Promise<ListingView | null> {
   await delay()
-  const found = db.listings.find((item) => item.id === id)
+  const found = db.listings.find((item) => item.id === id || mockListingId(item.id) === id)
   return found ? decorate(found) : null
 }
 

@@ -1,4 +1,4 @@
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import { conversationCreateInputSchema, type MessageDto } from '@fish/contracts/chat/schema'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchNotifications as fetchMockNotifications,
@@ -42,7 +42,8 @@ export function useMessages(conversationId: string) {
 
 export function useCreateConversation() {
   return useMutation({
-    mutationFn: (listingId: string) => createConversation({ listingId }),
+    mutationFn: (listingId: string) =>
+      createConversation(conversationCreateInputSchema.parse({ listingId })),
   })
 }
 

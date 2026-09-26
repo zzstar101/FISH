@@ -4,7 +4,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, resetPcSession } from './session-cache'
 
 const user: Me = {
-  id: '01930000-0000-7000-8000-00000000000a',
+  id: 'usr_01jc000000e00800000000000a',
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',
@@ -50,7 +50,7 @@ describe('resetPcSession', () => {
     await resetPcSession(queryClient, user)
     resolveOldRequest({
       ...user,
-      id: '01930000-0000-7000-8000-00000000000b',
+      id: 'usr_01jc000000e00800000000000b',
       nickname: '旧用户',
     })
     await oldRequest.catch(() => undefined)

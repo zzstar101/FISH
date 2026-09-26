@@ -107,8 +107,8 @@ export function AuditLogsPage() {
                     {entry.actor ? `操作者：${entry.actor.nickname}` : '操作者：系统初始化'}
                   </span>
                   <span className="text-xs text-ink-3">
-                    目标：{statusLabel(AUDIT_TARGET_LABEL, entry.targetType)}（
-                    {shortId(entry.targetId)}）
+                    目标：{statusLabel(AUDIT_TARGET_LABEL, entry.targetType)}
+                    {entry.targetId ? `（${shortId(entry.targetId)}）` : null}
                   </span>
                   <span className="ml-auto shrink-0 text-xs text-ink-3">
                     {formatDateTime(entry.createdAt)}

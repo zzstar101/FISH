@@ -70,6 +70,14 @@ export type UserReportReason = z.infer<typeof UserReportReasonSchema>
 
 const ReportTargetIdSchema = z.union([ListingIdSchema, UserIdSchema])
 
+function reportTargetMatches(value: {
+  targetType: ReportTargetType
+  targetId: z.infer<typeof ReportTargetIdSchema>
+}): boolean {
+  return (value.targetType === 'LISTING' ? ListingIdSchema : UserIdSchema).safeParse(value.targetId)
+    .success
+}
+
 // ---------------------------------------------------------------------------
 // 用户端
 // ---------------------------------------------------------------------------
@@ -84,8 +92,7 @@ export const ReportCreateInputSchema = z
     detailText: z.string().trim().min(1).max(200).optional(),
   })
   .superRefine((value, ctx) => {
-    const expected = value.targetType === 'LISTING' ? ListingIdSchema : UserIdSchema
-    if (!expected.safeParse(value.targetId).success) {
+    if (!reportTargetMatches(value)) {
       ctx.addIssue({ code: 'custom', path: ['targetId'], message: '举报目标 ID 前缀不匹配' })
     }
     const allowed = value.targetType === 'LISTING' ? LISTING_REPORT_REASONS : USER_REPORT_REASONS
@@ -99,17 +106,19 @@ export const ReportCreateInputSchema = z
   })
 export type ReportCreateInput = z.infer<typeof ReportCreateInputSchema>
 
-export const ReportSchema = z.object({
-  id: ReportIdSchema,
-  targetType: ReportTargetTypeSchema,
-  targetId: ReportTargetIdSchema,
-  reason: ReportReasonSchema,
-  detailText: z.string().nullable(),
-  status: ReportStatusSchema,
-  createdAt: z.iso.datetime(),
-  /** 处理完成时刻；未处理为 null（前端据此展示「处理中」）。 */
-  handledAt: z.iso.datetime().nullable(),
-})
+export const ReportSchema = z
+  .object({
+    id: ReportIdSchema,
+    targetType: ReportTargetTypeSchema,
+    targetId: ReportTargetIdSchema,
+    reason: ReportReasonSchema,
+    detailText: z.string().nullable(),
+    status: ReportStatusSchema,
+    createdAt: z.iso.datetime(),
+    /** 处理完成时刻；未处理为 null（前端据此展示「处理中」）。 */
+    handledAt: z.iso.datetime().nullable(),
+  })
+  .refine(reportTargetMatches, { path: ['targetId'], message: '举报目标 ID 与资源类型不匹配' })
 export type Report = z.infer<typeof ReportSchema>
 
 export const ReportListResponseSchema = z.object({
@@ -164,19 +173,21 @@ export type ReportUserSummary = z.infer<typeof ReportUserSummarySchema>
  * 被举报目标摘要。`label` 是给管理员看的展示名（商品标题 / 用户昵称）；
  * `status` 是目标当前状态（商品 status / 用户是否受限本期不在此展开，治理在 PR3）。
  */
-export const ReportTargetSummarySchema = z.object({
-  targetType: ReportTargetTypeSchema,
-  targetId: ReportTargetIdSchema,
-  label: z.string(),
-  /** 商品目标才有：当前 status + moderationStatus，帮助管理员判断是否还要下架。 */
-  listingStatus: z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE']).nullable(),
-  moderationStatus: z.enum(['APPROVED', 'BLOCKED', 'REVIEW']).nullable(),
-})
+export const ReportTargetSummarySchema = z
+  .object({
+    targetType: ReportTargetTypeSchema,
+    targetId: ReportTargetIdSchema,
+    label: z.string(),
+    /** 商品目标才有：当前 status + moderationStatus，帮助管理员判断是否还要下架。 */
+    listingStatus: z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE']).nullable(),
+    moderationStatus: z.enum(['APPROVED', 'BLOCKED', 'REVIEW']).nullable(),
+  })
+  .refine(reportTargetMatches, { path: ['targetId'], message: '举报目标 ID 与资源类型不匹配' })
 export type ReportTargetSummary = z.infer<typeof ReportTargetSummarySchema>
 
 export const AdminReportItemSchema = z.object({
   /** 管理端可见处理原因与处理人；其余字段与用户端 DTO 一致。 */
-  report: ReportSchema.extend({
+  report: ReportSchema.safeExtend({
     handlingReason: z.string().nullable(),
     handledBy: ReportUserSummarySchema.nullable(),
   }),
