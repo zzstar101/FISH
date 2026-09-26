@@ -7,6 +7,7 @@ import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
+import { useAuth } from '@/features/auth/store'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
@@ -53,10 +54,10 @@ import './index.scss'
  *   组件内状态、无数据面、生产构建不渲染，真实现归属后续「我的关注」页 + 后端 follows 域；
  *   详见 `followState` 处的注释。
  * - **聊一聊 / 更多钮不做**：发起会话要带 `listingId`（Chat 契约按 `(listingId, 买家)`
- *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（稿的理由是举报 / 分享 /
- *   加入黑名单在真机里走微信胶囊的 ··· 菜单 —— 那是稿的取舍）。**这不等于已经有了举报
- *   能力**：仓库没有 Report 契约 / 表 / 接口（#73 的「举报」一节仍全是未勾选项），
- *   本页只是不再放页内入口，真实举报入口归 #73（用户端提交）与 #89（客户端接线）。
+ *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（分享 / 黑名单等真机里走
+ *   微信胶囊的 ··· 菜单 —— 那是稿的取舍）。举报一度只有胶囊菜单、没有站内出口；
+ *   现在列表终点下有「举报用户」行进 `pages/report-user`（#252，原因枚举对齐后端
+ *   Draft PR #231/#240/#241；main 仍没有 Report 契约，页面按演示/如实缺口双档实现）。
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
@@ -67,6 +68,9 @@ export default function UserHome() {
    * 缺 id 一律进 notFound 态（见下面的 `load`）。
    */
   const userId = router.params.id ?? ''
+  /** 当前登录账号：只用来识别「这是不是本人主页」（本人不显示举报入口） */
+  const { user: authedUser } = useAuth()
+  const isSelf = authedUser !== null && authedUser.id === userId
 
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
@@ -142,7 +146,8 @@ export default function UserHome() {
    * 给 `.uhome__topbg` 行内定高用 —— 定色带必须正好铺到导航条下沿，
    * 写死样式表数值会在大状态栏机型上让接缝错位。
    */
-  const navTotalHeight = useMemo(() => readNavMetrics().totalHeight, [])
+  const navMetrics = useMemo(() => readNavMetrics(), [])
+  const navTotalHeight = navMetrics.totalHeight
   /**
    * 身份区顶到导航条以下的距离，**设备 px**（行内 px 不经 pxtransform，见 `nav-metrics.ts`）。
    *
@@ -375,6 +380,50 @@ export default function UserHome() {
     measureIdentity()
   }, [measureIdentity, profile, loadState, signOpen, signatureText])
 
+  /**
+   * 顶栏举报钮与微信胶囊的间距：`.navfloat` 容器自带 32rpx（16pt）右内边距，
+   * 这里在它之上再让出 capsuleInset 与那段内边距的差值，按钮右缘正好贴着胶囊左边
+   * （「隔壁」）。都在设备 px 口径（32rpx 按屏宽折算，见 nav-metrics.ts 的换算规则）。
+   */
+  const navReportGap = useMemo(() => {
+    try {
+      const w = Taro.getWindowInfo().windowWidth
+      return Math.max(navMetrics.capsuleInset - (32 * w) / 750, 8)
+    } catch {
+      return navMetrics.capsuleInset
+    }
+  }, [navMetrics])
+
+  /**
+   * #252：进「举报用户」页。对象三项由 query 带入、页内不可改（公开资料子集：
+   * 头像 + 昵称，不带教育邮箱 / 手机号 / 校区 —— #86 边界）。`id` 是**当前契约的
+   * uuid**（页面目前不消费该参数，POST /reports 接线时启用）：Report 契约
+   * （#231/#240/#241）与 TypeID（#217）冻结后改传 `usr_` 公开 ID。
+   * 未登录由举报页的 useAuthGuard 引导登录。
+   */
+  const goReport = () => {
+    const query = [
+      `id=${encodeURIComponent(userId)}`,
+      profile?.nickname ? `nickname=${encodeURIComponent(profile.nickname)}` : null,
+      profile?.avatarUrl ? `avatar=${encodeURIComponent(profile.avatarUrl)}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join('&')
+    void Taro.navigateTo({ url: `/pages/report-user/index?${query}` })
+  }
+
+  /** 顶栏举报钮（Owner 拍板：贴微信胶囊放）。仅非本人主页渲染，见 isSelf。 */
+  const navReportAction =
+    profile && !isSelf ? (
+      <View
+        className={`uhome__navreport${glassOn ? ' is-glass' : ''}`}
+        style={{ marginRight: `${navReportGap}px` }}
+        onClick={goReport}
+      >
+        <Image className="uhome__navreport-ic" src={ICONS.shieldLine} mode="aspectFit" />
+      </View>
+    ) : null
+
   /** 导航居中标题：昵称 + 认证徽章（徽章与页头同款，未认证整块不渲染） */
   const navTitle = profile ? (
     <>
@@ -396,7 +445,12 @@ export default function UserHome() {
           大状态栏机型上让玻璃底最后一段透出页面底色。 */}
       <View className="uhome__topbg" style={{ height: `${navTotalHeight}px` }} />
 
-      <NavBar glass={glassOn} titleAlign="center" title={titled ? navTitle : null} />
+      <NavBar
+        glass={glassOn}
+        titleAlign="center"
+        title={titled ? navTitle : null}
+        actions={navReportAction}
+      />
 
       {loadState === 'failed' ? (
         <LoadError title="主页加载失败" onRetry={() => void load()} />
