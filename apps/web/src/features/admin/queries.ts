@@ -72,8 +72,10 @@ export const adminKeys = {
  * 不清理，下一个账号打开 `/admin` 可能直接命中前一个管理员仍 fresh 的缓存，
  * 造成跨账号的后台数据泄露窗口。在身份变化时调用本函数即可。
  */
-export function clearAdminQueries(queryClient: Pick<QueryClient, 'removeQueries'>): void {
-  queryClient.removeQueries({ queryKey: adminKeys.root })
+export function clearAdminQueries(queryClient: Pick<QueryClient, 'resetQueries'>): Promise<void> {
+  // resetQueries 清掉旧账号数据并重取活跃查询；removeQueries 会把进行中的
+  // /admin/me 从缓存移除，却让已挂载的 observer 永远停在 pending。
+  return queryClient.resetQueries({ queryKey: adminKeys.root })
 }
 
 /** 首页守卫数据：非 Admin 会抛 403 `FORBIDDEN`，由 AdminShell 统一转无权限页。 */

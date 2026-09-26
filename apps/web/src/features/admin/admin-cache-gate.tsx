@@ -13,7 +13,7 @@ import { clearAdminQueries } from './queries'
  *
  * 本组件挂在根布局（AuthProvider 内），在登录身份（user id，含登录 → 登出）
  * 变化时清空全部 `['admin', ...]` 查询。用 ref 记录上一个身份，只在变化时
- * removeQueries，避免每次渲染都误清。
+ * resetQueries，避免每次渲染都误清。
  *
  * 注意：不使用 `useMe()` 返回的 id 之外的派生值（如 nickname），避免同一账号
  * 改昵称也被当成换号。登出时 `me` 为 null，同样触发清理。
@@ -27,7 +27,7 @@ export function AdminCacheGate() {
     const userId = me?.id ?? null
     if (lastUserIdRef.current === userId) return
     lastUserIdRef.current = userId
-    clearAdminQueries(queryClient)
+    void clearAdminQueries(queryClient)
   }, [me?.id, queryClient])
 
   return null

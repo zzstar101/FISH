@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { QueryClient } from '@tanstack/react-query'
+import { QueryClient, QueryObserver } from '@tanstack/react-query'
 import { clearAdminQueries } from './queries'
 
 /**
@@ -10,7 +10,27 @@ import { clearAdminQueries } from './queries'
  * 约定：身份变化时调用 `clearAdminQueries`，清掉全部 `['admin', ...]` 查询，
  * 不影响普通用户查询（`['auth', ...]` 等）。
  */
-test('clearAdminQueries 清空全部 admin 查询，不影响其它前缀', () => {
+test('身份切换时，活跃的管理权限查询会重取新身份而不是卡在加载态', async () => {
+  const queryClient = new QueryClient()
+  const key = ['admin', 'me'] as const
+  queryClient.setQueryData(key, { admin: { id: 'a' } })
+  const observer = new QueryObserver(queryClient, {
+    queryKey: key,
+    queryFn: async () => ({ admin: { id: 'b' } }),
+    staleTime: 60_000,
+  })
+  const unsubscribe = observer.subscribe(() => {})
+
+  await clearAdminQueries(queryClient)
+
+  expect(observer.getCurrentResult().data).toEqual({ admin: { id: 'b' } })
+  expect(queryClient.getQueryData<{ admin: { id: string } }>(key)).toEqual({
+    admin: { id: 'b' },
+  })
+  unsubscribe()
+})
+
+test('clearAdminQueries 清空全部 admin 查询，不影响其它前缀', async () => {
   const queryClient = new QueryClient()
   queryClient.setQueryData(['admin', 'me'], { admin: { id: 'a' } })
   queryClient.setQueryData(['admin', 'users', { cursor: null } as const], { items: [] })
@@ -18,7 +38,7 @@ test('clearAdminQueries 清空全部 admin 查询，不影响其它前缀', () =
   queryClient.setQueryData(['auth', 'me'], { id: 'b' })
   queryClient.setQueryData(['profile'], { ok: true })
 
-  clearAdminQueries(queryClient)
+  await clearAdminQueries(queryClient)
 
   expect(queryClient.getQueryData(['admin', 'me'])).toBeUndefined()
   expect(queryClient.getQueryData(['admin', 'users', { cursor: null } as const])).toBeUndefined()

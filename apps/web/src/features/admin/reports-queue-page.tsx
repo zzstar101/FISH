@@ -23,6 +23,20 @@ export type AdminReportsSearch = {
 
 type PageState = { cursor: string | null; stack: (string | null)[] }
 
+/** URL 是筛选来源：筛选变化时同步重挂列表，首帧就丢弃旧游标与上一页栈。 */
+export function reportsQueueForSearch(search: AdminReportsSearch) {
+  return (
+    <ReportsQueuePage
+      key={JSON.stringify([
+        search.status ?? null,
+        search.targetType ?? null,
+        search.reason ?? null,
+      ])}
+      search={search}
+    />
+  )
+}
+
 const STATUSES = ['PENDING', 'HANDLED', 'REJECTED'] as const
 const TARGET_TYPES = ['LISTING', 'USER'] as const
 const REASONS = [
