@@ -27,8 +27,11 @@ PC Web 已接入登录、搜索和商品详情。后续消息、通知、个人�
 - 定义 `PC_QUERY_PREFIX = 'pc'`。
 - 定义唯一例外认证查询 key `['auth', 'me']`；它不属于业务数据缓存。
 - 提供 `resetPcSession(queryClient, user)`：
+  - 默认先 `cancelQueries` 取消在飞的旧 `auth/me`；
   - `removeQueries` 删除 `queryKey[0] === 'pc'` 的 Query；
   - `setQueryData` 写入当前用户或 `null`。
+- 用单调递增的会话代际标记请求归属；迟到的旧 `/me` 401 只能清理它启动时所属的代际，不能覆盖新登录用户。
+- `/me` 自身返回 401 时用 `cancelAuth: false`：不能取消当前查询，但同代际内要清业务缓存并写 `null`。
 
 清空公开 Feed 会多一次请求，但比跨账号串数据安全；这是刻意取舍。
 
@@ -54,7 +57,8 @@ apps/web-pc/src/
 - [ ] 登出后所有 `pc` Query 消失，`auth/me` 为 `null`。
 - [ ] 登录 A 后再登录 B，A 的 Query 不能被 B 命中。
 - [ ] 登录/注册成功后 `auth/me` 是新响应用户。
-- [ ] 401 清账号态后回登录页，回跳路径仍正常。
+- [ ] 其他请求 401 清账号态后回登录页，回跳路径仍正常。
+- [ ] `/me` 手动 refetch 返回 401 时清 `pc` 缓存并写 `null`。
 - [ ] 非 `pc` key 不被误删。
 - [ ] 搜索、详情、登录链路无回归。
 
