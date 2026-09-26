@@ -25,6 +25,7 @@ import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import { useAuth } from '@/features/auth/store'
+import { createConversation } from '@/features/chat/api'
 import { loadListingDetail } from '@/features/fetchers'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -283,6 +284,8 @@ export default function ListingDetail() {
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
+  /** 「立即购买」是否已确认过：确认一次就进入「待店家确认」终态（账号私有，换号清场） */
+  const [buyRequested, setBuyRequested] = useState(false)
   const [commentsOpen, setCommentsOpen] = useState(false)
   /** 留言树（顶层各带 replies）：初值来自加载结果，之后由本页的本地写操作增长 */
   const [comments, setComments] = useState<CommentNode[]>([])
@@ -348,6 +351,8 @@ export default function ListingDetail() {
     setReplyInput(cleared.replyInput)
     setReplyTo(cleared.replyTo)
     setFaved(cleared.faved)
+    // 购买请求是当前账号发出的：换号后「待店家确认」不属于下一个账号
+    setBuyRequested(cleared.buyRequested)
     // 未确认的占位属于上一个账号：清场后它的 .then / .catch 已被 epoch 作废，
     // 留着就是一条永远等不到确认、却对下一个账号可见的幽灵留言。
     setComments((prev) => dropPendingComments(prev))
@@ -519,10 +524,6 @@ export default function ListingDetail() {
 
   const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
 
-  const toast = (title: string) => {
-    void Taro.showToast({ title, icon: 'none' })
-  }
-
   /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
    *
@@ -536,6 +537,49 @@ export default function ListingDetail() {
     } else {
       void Taro.switchTab({ url: '/pages/home/index' })
     }
+  }
+
+  /**
+   * 「聊一聊」：与这件商品的卖家建/取会话后跳会话页 —— 与匹配结果页（#67 第二步）
+   * 同一条路径：`POST /conversations` 以商品 id 为入参，服务端对同一 (listingId, 买家)
+   * **复用**既有会话，所以本页不做本地缓存，重复点击就是幂等的重发。
+   *
+   * 本页是公开页、匿名可读，而会话端点挂 `requireAuth`：匿名点击让请求走一圈、
+   * 401 后按本页留言区的口径提示去登录。在飞守卫只防「连点压出两个会话页」。
+   */
+  const chatInFlightRef = useRef(false)
+  const chatWithSeller = () => {
+    if (chatInFlightRef.current) return
+    chatInFlightRef.current = true
+    void createConversation(id)
+      .then(async (conversation) => {
+        await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
+      })
+      .catch((error: unknown) => {
+        void Taro.showToast({
+          title: isUnauthenticatedError(error) ? '请先登录后再聊一聊' : '会话发起失败，请重试',
+          icon: 'none',
+        })
+      })
+      .finally(() => {
+        chatInFlightRef.current = false
+      })
+  }
+
+  /**
+   * 「立即购买」：微信原生 `showModal` 做二级确认，确认后进入「待店家确认」终态。
+   *
+   * 请求目前只落到本地状态：契约里还没有「向卖家发购买请求」的端点（下单域未开），
+   * 弹窗文案里的「发送请求」暂时没有真实接收方 —— 端点落地后在这里补真实调用。
+   */
+  const buy = () => {
+    if (buyRequested) return
+    void Taro.showModal({
+      title: '确定立即购买',
+      content: '请核实商品信息，确认后向卖家发送请求',
+    }).then((result) => {
+      if (result.confirm) setBuyRequested(true)
+    })
   }
 
   /**
@@ -1042,6 +1086,11 @@ export default function ListingDetail() {
       )}
 
       {/* ---------------------------------------------------- 底部操作栏 */}
+      {/*
+        主次（Owner 拍板）：「聊一聊」为主（品牌实底，占右侧拇指位）、「立即购买」为次
+        （浅底描边）—— 即原来的 solid/ghost 互换。购买已确认后按钮转灰为状态牌，
+        点击无效果（buy 里守卫），心形图标一并摘掉。
+      */}
       <View className="detail__bar">
         <View
           className={`detail__fav${faved ? ' is-on' : ''}`}
@@ -1053,13 +1102,18 @@ export default function ListingDetail() {
             mode="aspectFit"
           />
         </View>
-        <View className="detail__btn detail__btn--ghost" onClick={() => toast('聊天待接入')}>
-          <Image className="detail__btn-img" src={ICONS.chatInk} mode="aspectFit" />
-          <Text>聊一聊</Text>
+        <View
+          className={`detail__btn detail__btn--ghost${buyRequested ? ' detail__btn--pending' : ''}`}
+          onClick={buy}
+        >
+          {buyRequested ? null : (
+            <Image className="detail__btn-img" src={ICONS.heartOn} mode="aspectFit" />
+          )}
+          <Text>{buyRequested ? '待店家确认' : '立即购买'}</Text>
         </View>
-        <View className="detail__btn detail__btn--solid" onClick={() => toast('下单待接入')}>
-          <Image className="detail__btn-img" src={ICONS.heartWhite} mode="aspectFit" />
-          <Text>我想要</Text>
+        <View className="detail__btn detail__btn--solid" onClick={chatWithSeller}>
+          <Image className="detail__btn-img" src={ICONS.chatWhite} mode="aspectFit" />
+          <Text>聊一聊</Text>
         </View>
       </View>
     </View>

@@ -49,16 +49,24 @@ export type PrivateScope = {
   replyTo: string | null
   /** 收藏心形（真实收藏接线归 #190/#193，现在是本页的本地态） */
   faved: boolean
+  /** 「立即购买」已确认（「待店家确认」终态）：请求是当前账号发出的 */
+  buyRequested: boolean
 }
 
 /**
  * 清场后的初值。
  *
  * `faved` 虽然是纯本地的装饰态，但它是**账号私有**的：把上一个账号点亮的红心留给
- * 下一个账号，就是最典型的账号串台。
+ * 下一个账号，就是最典型的账号串台。`buyRequested` 同理 —— 那次确认是上一个账号发的。
  */
 export function clearedPrivateScope(): PrivateScope {
-  return { commentInput: '', replyInput: '', replyTo: null, faved: false }
+  return {
+    commentInput: '',
+    replyInput: '',
+    replyTo: null,
+    faved: false,
+    buyRequested: false,
+  }
 }
 
 /**
