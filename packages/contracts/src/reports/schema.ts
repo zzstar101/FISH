@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ReportIdSchema } from '../system/public-id'
+import { ListingIdSchema, ReportIdSchema, UserIdSchema } from '../system/public-id'
 
 /**
  * Reports Domain Contract（#73 治理半场）。
@@ -68,6 +68,8 @@ export type ListingReportReason = z.infer<typeof ListingReportReasonSchema>
 export const UserReportReasonSchema = z.enum(USER_REPORT_REASONS)
 export type UserReportReason = z.infer<typeof UserReportReasonSchema>
 
+const ReportTargetIdSchema = z.union([ListingIdSchema, UserIdSchema])
+
 // ---------------------------------------------------------------------------
 // 用户端
 // ---------------------------------------------------------------------------
@@ -76,12 +78,16 @@ export const ReportCreateInputSchema = z
   .strictObject({
     targetType: ReportTargetTypeSchema,
     /** 目标 id。服务端会校验目标真实存在（且举报人不是目标本人）。 */
-    targetId: z.uuid(),
+    targetId: ReportTargetIdSchema,
     reason: ReportReasonSchema,
     /** 举报人补充说明，可空；过长由服务端拒绝。 */
     detailText: z.string().trim().min(1).max(200).optional(),
   })
   .superRefine((value, ctx) => {
+    const expected = value.targetType === 'LISTING' ? ListingIdSchema : UserIdSchema
+    if (!expected.safeParse(value.targetId).success) {
+      ctx.addIssue({ code: 'custom', path: ['targetId'], message: '举报目标 ID 前缀不匹配' })
+    }
     const allowed = value.targetType === 'LISTING' ? LISTING_REPORT_REASONS : USER_REPORT_REASONS
     if (!(allowed as readonly string[]).includes(value.reason)) {
       ctx.addIssue({
@@ -96,7 +102,7 @@ export type ReportCreateInput = z.infer<typeof ReportCreateInputSchema>
 export const ReportSchema = z.object({
   id: ReportIdSchema,
   targetType: ReportTargetTypeSchema,
-  targetId: z.uuid(),
+  targetId: ReportTargetIdSchema,
   reason: ReportReasonSchema,
   detailText: z.string().nullable(),
   status: ReportStatusSchema,
@@ -160,7 +166,7 @@ export type ReportUserSummary = z.infer<typeof ReportUserSummarySchema>
  */
 export const ReportTargetSummarySchema = z.object({
   targetType: ReportTargetTypeSchema,
-  targetId: z.uuid(),
+  targetId: ReportTargetIdSchema,
   label: z.string(),
   /** 商品目标才有：当前 status + moderationStatus，帮助管理员判断是否还要下架。 */
   listingStatus: z.enum(['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE']).nullable(),

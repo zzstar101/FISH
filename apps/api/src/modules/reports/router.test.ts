@@ -49,6 +49,9 @@ const REPORTER_ID = '01930000-0000-7000-8000-000000000092'
 const SECOND_REPORTER_ID = '01930000-0000-7000-8000-000000000093'
 const TARGET_USER_ID = '01930000-0000-7000-8000-000000000094'
 const LISTING_ID = '01930000-0000-7000-8000-0000000000a1'
+const PUBLIC_LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID)
+const PUBLIC_TARGET_USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, TARGET_USER_ID)
+const PUBLIC_REPORTER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, REPORTER_ID)
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -165,7 +168,7 @@ describe('举报闭环（#73 用户端）', () => {
       REPORT_ROUTES.create,
       postAs(reporterCookie, {
         targetType: 'LISTING',
-        targetId: '01930000-0000-7000-8000-0000000000ff',
+        targetId: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000ff'),
         reason: 'FRAUD',
       }),
     )
@@ -178,7 +181,7 @@ describe('举报闭环（#73 用户端）', () => {
   test('举报自己是 422 REPORT_SELF_TARGET；原因与对象类型不匹配是 422 VALIDATION_FAILED', async () => {
     const self = await app.request(
       REPORT_ROUTES.create,
-      postAs(reporterCookie, { targetType: 'USER', targetId: REPORTER_ID, reason: 'ABUSE' }),
+      postAs(reporterCookie, { targetType: 'USER', targetId: PUBLIC_REPORTER_ID, reason: 'ABUSE' }),
     )
     expect(self.status).toBe(422)
     expect((await self.json()) as { error: { code: string } }).toMatchObject({
@@ -188,7 +191,11 @@ describe('举报闭环（#73 用户端）', () => {
     // LISTING 只能用商品类原因：HARASSMENT 是用户类原因，契约层就该拒。
     const mismatch = await app.request(
       REPORT_ROUTES.create,
-      postAs(reporterCookie, { targetType: 'LISTING', targetId: LISTING_ID, reason: 'HARASSMENT' }),
+      postAs(reporterCookie, {
+        targetType: 'LISTING',
+        targetId: PUBLIC_LISTING_ID,
+        reason: 'HARASSMENT',
+      }),
     )
     expect(mismatch.status).toBe(422)
     const body = (await mismatch.json()) as {
@@ -198,12 +205,23 @@ describe('举报闭环（#73 用户端）', () => {
     expect(body.error.details?.[0]?.field).toBe('reason')
   })
 
+  test('举报目标错误前缀和旧裸 UUID 在入库前被拒绝', async () => {
+    for (const targetId of [PUBLIC_TARGET_USER_ID, LISTING_ID]) {
+      const res = await app.request(
+        REPORT_ROUTES.create,
+        postAs(reporterCookie, { targetType: 'LISTING', targetId, reason: 'FRAUD' }),
+      )
+      expect(res.status).toBe(422)
+      expect(await res.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+    }
+  })
+
   test('提交举报返回受理结果；同一举报人重复提交不新增（200 + created:false）', async () => {
     const first = await app.request(
       REPORT_ROUTES.create,
       postAs(reporterCookie, {
         targetType: 'LISTING',
-        targetId: LISTING_ID,
+        targetId: PUBLIC_LISTING_ID,
         reason: 'MISLEADING',
         detailText: '标题与实物不符',
       }),
@@ -221,7 +239,11 @@ describe('举报闭环（#73 用户端）', () => {
 
     const again = await app.request(
       REPORT_ROUTES.create,
-      postAs(reporterCookie, { targetType: 'LISTING', targetId: LISTING_ID, reason: 'SPAM' }),
+      postAs(reporterCookie, {
+        targetType: 'LISTING',
+        targetId: PUBLIC_LISTING_ID,
+        reason: 'SPAM',
+      }),
     )
     expect(again.status).toBe(200)
     const againBody = (await again.json()) as { created: boolean; report: { id: string } }
@@ -237,7 +259,7 @@ describe('举报闭环（#73 用户端）', () => {
       REPORT_ROUTES.create,
       postAs(secondReporterCookie, {
         targetType: 'LISTING',
-        targetId: LISTING_ID,
+        targetId: PUBLIC_LISTING_ID,
         reason: 'FRAUD',
       }),
     )
@@ -390,6 +412,15 @@ describe('举报闭环（#73 Admin 端）', () => {
       related: { id: string }[]
     }
     expect(body.item.report.id).toBe(firstId)
+    const targetId = (body.item as { target?: { targetId: string } }).target?.targetId ?? ''
+    expect(targetId).toBe(PUBLIC_LISTING_ID)
+    expect(
+      (
+        await app.request(ADMIN_ROUTES.listingDetail(targetId), {
+          headers: { cookie: adminCookie },
+        })
+      ).status,
+    ).toBe(200)
     expect(body.related.length).toBe(1)
     expect(body.related[0]?.id).not.toBe(firstId)
   })
@@ -453,14 +484,24 @@ describe('举报闭环（#73 Admin 端）', () => {
 
   test('两个管理员同时处理：恰好一个 204，另一个 409（条件更新，不双写审计）', async () => {
     // 造一条新的未决举报给这个用例（上面的用例已经把前两条处理掉了）。
-    await app.request(
+    const created = await app.request(
       REPORT_ROUTES.create,
       postAs(secondReporterCookie, {
         targetType: 'USER',
-        targetId: TARGET_USER_ID,
+        targetId: PUBLIC_TARGET_USER_ID,
         reason: 'IMPERSONATION',
       }),
     )
+    expect(created.status).toBe(201)
+    const createdBody = (await created.json()) as { report: { targetId: string } }
+    expect(createdBody.report.targetId).toBe(PUBLIC_TARGET_USER_ID)
+    expect(
+      (
+        await app.request(ADMIN_ROUTES.userDetail(createdBody.report.targetId), {
+          headers: { cookie: adminCookie },
+        })
+      ).status,
+    ).toBe(200)
     const queue = await app.request(`${ADMIN_ROUTES.reports}?status=PENDING`, {
       headers: { cookie: adminCookie },
     })
@@ -493,7 +534,11 @@ describe('举报闭环（#73 Admin 端）', () => {
   test('审计写入失败时业务状态回滚（同一事务）：举报仍 PENDING，且无审计行', async () => {
     await app.request(
       REPORT_ROUTES.create,
-      postAs(reporterCookie, { targetType: 'USER', targetId: TARGET_USER_ID, reason: 'ABUSE' }),
+      postAs(reporterCookie, {
+        targetType: 'USER',
+        targetId: PUBLIC_TARGET_USER_ID,
+        reason: 'ABUSE',
+      }),
     )
     const queue = await app.request(`${ADMIN_ROUTES.reports}?status=PENDING&reason=ABUSE`, {
       headers: { cookie: adminCookie },

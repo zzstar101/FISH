@@ -65,7 +65,17 @@ function zodValidationFailure(
  * PostgreSQL 报 `invalid input syntax for type uuid` → 500。管理后台对非 UUID 一律 404。
  */
 function requireTargetId(c: Context, name: string): string {
-  const parsed = AdminTargetIdSchema.safeParse(c.req.param(name))
+  const raw = c.req.param(name)
+  // Transitional admin read/action paths: report links already carry public target IDs;
+  // legacy UUID entry points are removed only when every caller is converted.
+  const prefix =
+    name === 'listingId'
+      ? PUBLIC_ID_PREFIX.listing
+      : name === 'userId'
+        ? PUBLIC_ID_PREFIX.user
+        : null
+  if (prefix && isPublicId(prefix, raw)) return decodePublicId(prefix, raw)
+  const parsed = AdminTargetIdSchema.safeParse(raw)
   if (!parsed.success) throw new AdminError('ADMIN_NOT_FOUND', 404, '目标不存在')
   return parsed.data
 }

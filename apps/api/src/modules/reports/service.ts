@@ -15,6 +15,7 @@ import {
   type ReportMineQuery,
   ReportSchema,
   type ReportTargetType,
+  ReportTargetTypeSchema,
 } from '@fish/contracts/reports/schema'
 import type { SystemErrorCode } from '@fish/contracts/system/error'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -56,11 +57,19 @@ function invalidCursor(): ReportServiceError {
   return new ReportServiceError('VALIDATION_FAILED', 422, 'cursor 无效')
 }
 
+function publicTargetId(type: string, id: string) {
+  const targetType = ReportTargetTypeSchema.parse(type)
+  return encodePublicId(
+    targetType === 'LISTING' ? PUBLIC_ID_PREFIX.listing : PUBLIC_ID_PREFIX.user,
+    id,
+  )
+}
+
 function toReportDto(row: ReportRow) {
   return ReportSchema.parse({
     id: encodePublicId(PUBLIC_ID_PREFIX.report, row.id),
     targetType: row.targetType,
-    targetId: row.targetId,
+    targetId: publicTargetId(row.targetType, row.targetId),
     reason: row.reason,
     detailText: row.detailText,
     status: row.status,
@@ -74,7 +83,7 @@ function toAdminReportItem(row: AdminReportRow): AdminReportItem {
     report: {
       id: encodePublicId(PUBLIC_ID_PREFIX.report, row.report.id),
       targetType: row.report.targetType,
-      targetId: row.report.targetId,
+      targetId: publicTargetId(row.report.targetType, row.report.targetId),
       reason: row.report.reason,
       detailText: row.report.detailText,
       status: row.report.status,
@@ -86,7 +95,7 @@ function toAdminReportItem(row: AdminReportRow): AdminReportItem {
     reporter: row.reporter,
     target: {
       targetType: row.target.targetType,
-      targetId: row.target.targetId,
+      targetId: publicTargetId(row.target.targetType, row.target.targetId),
       label: row.target.label ?? MISSING_TARGET_LABEL,
       listingStatus: row.target.listingStatus,
       moderationStatus: row.target.moderationStatus,
