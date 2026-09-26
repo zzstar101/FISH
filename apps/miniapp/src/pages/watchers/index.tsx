@@ -1,10 +1,11 @@
 import type { ChatWatchersResponse } from '@fish/contracts/chat/schema'
 import type { ListingDetail } from '@fish/contracts/listings/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useDidShow, useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
@@ -38,6 +39,12 @@ export default function Watchers() {
   const userId = useAuth().user?.id ?? null
   const listingId = useRouter<{ listingId?: string }>().params.listingId ?? ''
   const [page, setPage] = useState<Page>(initialPage)
+  /** 回到顶部钮（共享组件）：滚过一屏浮现 */
+  const [showTop, setShowTop] = useState(false)
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
   const [showToken, setShowToken] = useState<number | null>(null)
   const [morePending, setMorePending] = useState(false)
   const [moreFailed, setMoreFailed] = useState(false)
@@ -285,6 +292,9 @@ export default function Watchers() {
           )}
         </>
       ) : null}
+
+      {/* 回到顶部 */}
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

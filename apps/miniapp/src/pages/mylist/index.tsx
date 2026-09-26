@@ -4,6 +4,7 @@ import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/tar
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
@@ -166,16 +167,6 @@ const PILL_CLASS: Record<MyListSegment, string> = {
  * 「它们行首要么是主操作、要么是说明文字，左起才是阅读顺序」。
  */
 const END_ALIGNED: MyListSegment[] = ['sale', 'off']
-
-/**
- * 回到顶部钮的出现阈值。
- *
- * 本页的 1版稿 `.totop` 是在**内部滚动容器**上按 `scrollTop > 320` 判的（`.content{overflow-y:auto}`），
- * 本页是页面级滚动，`usePageScroll` 给的 `scrollTop` 是**设备 px**（≈ 稿的 pt），两者不是同一把尺子；
- * 且仓库对「页面级滚动列表」已有同口径先例（`pages/chat` / `pages/profile` / `components/order-list`
- * 都是 380），所以这里跟先例走，不照抄稿的 320 —— 阈值只决定按钮早露头还是晚露头，观感差约一成。
- */
-const TOTOP_THRESHOLD = 380
 
 export default function MyList() {
   const authStatus = useAuthGuard()
@@ -396,7 +387,7 @@ export default function MyList() {
     setShowToken((token) => (token ?? 0) + 1)
   })
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   const awaitingIds = useMemo(() => new Set(pending.proposals.keys()), [pending])
   const counts = countBySegment(cards, awaitingIds)
@@ -1004,10 +995,7 @@ export default function MyList() {
         <Text>发布</Text>
       </View>
 
-      {/* 回到顶部：稿 ⑧，滚过一屏后浮现，压在发布钮之上（见 index.scss 的定位） */}
-      <View className={`ml__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="ml__totop-arrow" />
-      </View>
+      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
 
       {/* ---------------- 下架二次确认（居中卡，稿 ⑤ 的真状态机） ---------------- */}
       {confirming ? (

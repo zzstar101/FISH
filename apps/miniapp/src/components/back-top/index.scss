@@ -1,0 +1,69 @@
+/**
+ * 回到顶部钮的统一视觉：玻璃圆钮 + `ic-top` 箭头。
+ * 材质与过渡取自消息页 / 收藏页 / order-list 的既有先例（各页原是同一套的复制，
+ * 统一到这份；右距 36rpx、直径 88rpx、浮现 0.26s 全应用一致）。
+ * 距底**随页面传值**：各页设计稿的取值本就不同（订单/收藏 22pt、评论/历史/关注 28pt、
+ * Tab 页抬到底栏上方），组件默认取 28pt + 安全区给无稿可依的新页面；稿里的距底是从
+ * 物理底边量起的（稿内自绘了 home indicator），安全区交给 env()，再叠等于算两遍。
+ */
+.backtop {
+  position: fixed;
+  right: 36px;
+  bottom: calc(56px + env(safe-area-inset-bottom));
+  z-index: 5;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid rgba(255, 255, 255, 0.82);
+  background: rgba(255, 255, 255, 0.68);
+  backdrop-filter: blur(44px) saturate(180%);
+  -webkit-backdrop-filter: blur(44px) saturate(180%);
+  box-shadow:
+    0 28px 60px -32px rgba(23, 35, 61, 0.46),
+    0 4px 12px -4px rgba(23, 35, 61, 0.14),
+    inset 0 2px 0 rgba(255, 255, 255, 0.94);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(24px) scale(0.9);
+  transition:
+    opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+    visibility 0s linear 0.26s;
+
+  &.is-show {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.26s cubic-bezier(0.32, 0.72, 0.35, 1),
+      transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+  }
+
+  &:active {
+    transform: translateY(2px) scale(0.96);
+  }
+}
+
+/* 单枚向上折角箭头（Owner 拍板：不要双箭头） */
+.backtop__arrow {
+  position: relative;
+  width: 40px;
+  height: 40px;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    width: 20px;
+    height: 20px;
+    box-sizing: border-box;
+    border-left: 4px solid var(--brand-deep);
+    border-top: 4px solid var(--brand-deep);
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
+}

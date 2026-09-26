@@ -4,6 +4,7 @@ import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
@@ -162,7 +163,22 @@ export default function UserHome() {
     // 标题要等身份区整行（含签名）滚出上沿才出现；留 6px 提前量与稿一致（稿 `+6`）
     const nextTitled = st >= identityBottomAt.current - 6
     setTitled((prev) => (prev === nextTitled ? prev : nextTitled))
+    // 回到顶部钮：滚过一屏浮现（阈值随共享组件；onScroll 的刻度与本页其它阈值同口径）
+    setShowTop(st > BACK_TOP_THRESHOLD)
   }, [])
+
+  /**
+   * 「回到顶部」：本页滚动发生在**内滚 ScrollView** 里，`Taro.pageScrollTo` 够不到它；
+   * 用会话页（`pages/conversation`）同款的 `scrollIntoView` 方案指向内容顶部的锚点。
+   * scrollIntoView 的值不变时原生层不会重滚，所以备两个同位的锚点交替指 —— 连点、
+   * 滚下去再点，每次都能真的回到顶部。
+   */
+  const [topAnchor, setTopAnchor] = useState('')
+  /** 回到顶部钮（共享组件）：滚过一屏浮现（onScroll 里置位） */
+  const [showTop, setShowTop] = useState(false)
+  const backToTop = () => {
+    setTopAnchor((prev) => (prev === 'uhome-top-a' ? 'uhome-top-b' : 'uhome-top-a'))
+  }
 
   /**
    * 量一次身份区底边，换算成**内容坐标**。
@@ -414,8 +430,12 @@ export default function UserHome() {
           scrollY
           enhanced
           showScrollbar={false}
+          scrollIntoView={topAnchor}
           onScroll={onScroll}
         >
+          {/* 回到顶部的两个同位锚点：交替指（见 backToTop 的注释） */}
+          <View id="uhome-top-a" />
+          <View id="uhome-top-b" />
           {/* 页头进滚动区：渐变块只包身份区（稿 `.headblock` 只含 profile/psign/stats），
               列表区坐在页面底色上；昵称区跟着滚走，导航条常驻按需补标题（稿取舍 ②） */}
           <View className="uhome__headblock">
@@ -632,6 +652,9 @@ export default function UserHome() {
           </View>
         </ScrollView>
       )}
+
+      {/* 回到顶部（内滚容器版：滚回由 scrollIntoView 锚点完成，见 backToTop） */}
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

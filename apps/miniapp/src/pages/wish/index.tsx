@@ -1,9 +1,10 @@
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useDidShow } from '@tarojs/taro'
+import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
@@ -120,6 +121,12 @@ export default function Wish() {
   const [hotOpen, setHotOpen] = useState(false)
   const [mine, setMine] = useState<MockWish[]>([])
   const [pool, setPool] = useState<MockWishPoolItem[]>([])
+  /** 回到顶部钮（共享组件）：滚过一屏浮现；Tab 页抬到底栏上方 */
+  const [showTop, setShowTop] = useState(false)
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
   /** 每条 ACTIVE 愿望的命中（key = wishId），与卡片上的「N 件命中」同源 */
   const [hits, setHits] = useState<Record<string, WishHitList>>({})
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
@@ -548,6 +555,9 @@ export default function Wish() {
           </>
         )}
       </View>
+
+      {/* 回到顶部：Tab 页抬到底栏上方 */}
+      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
     </View>
   )
 }

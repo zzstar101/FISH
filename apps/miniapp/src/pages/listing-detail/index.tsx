@@ -21,6 +21,7 @@ import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components
 import Taro, { useDidShow, useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
@@ -381,6 +382,8 @@ export default function ListingDetail() {
   }, [])
 
   const [navSolid, setNavSolid] = useState(false)
+  /** 回到顶部钮（共享组件）：滚过一屏浮现 */
+  const [showTop, setShowTop] = useState(false)
   /** 上一次的滚动状态：滚动事件每帧都来，只有跨过阈值那一次才需要 setState */
   const navSolidRef = useRef(false)
 
@@ -396,11 +399,17 @@ export default function ListingDetail() {
   const navSolidThreshold = hasGalleryBlock ? galleryPx : 1
 
   usePageScroll(({ scrollTop }) => {
+    // 回到顶部钮：滚过一屏浮现（要在 solid 的早退之前算，否则滚动值不变时它不更新）
+    setShowTop(scrollTop > BACK_TOP_THRESHOLD)
     const solid = scrollTop >= navSolidThreshold
     if (solid === navSolidRef.current) return
     navSolidRef.current = solid
     setNavSolid(solid)
   })
+
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
 
   const load = () => {
     loadSeqRef.current += 1
@@ -1062,6 +1071,9 @@ export default function ListingDetail() {
           <Text>我想要</Text>
         </View>
       </View>
+
+      {/* 回到顶部：抬到底部操作栏上方 */}
+      <BackTop show={showTop} onTop={backToTop} bottom="240rpx" />
     </View>
   )
 }
