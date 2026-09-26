@@ -22,10 +22,11 @@ import { userRestrictions } from '@fish/db/schema/governance'
 import { idRekeys } from '@fish/db/schema/id-rekeys'
 import { listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
+import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { desc, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
@@ -242,8 +243,10 @@ describe('Admin 查询端到端', () => {
     const body = AdminUserSummaryPageSchema.parse(await res.json())
     expect(body.items).toHaveLength(2)
     const byId = new Map(body.items.map((item) => [item.id, item]))
-    expect(byId.get(USER_ID)?.studentNoMasked).toBe('2021****0902')
-    expect(byId.get(USER_ID)?.listingCount).toBe(2)
+    expect(byId.get(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))?.studentNoMasked).toBe(
+      '2021****0902',
+    )
+    expect(byId.get(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))?.listingCount).toBe(2)
   })
 
   test('GET /admin/users：微信用户（student_no 为 NULL）的 studentNoMasked 是 null，不是 "n**l"', async () => {
@@ -272,12 +275,16 @@ describe('Admin 查询端到端', () => {
     const byNo = await app.request(`${ADMIN_ROUTES.users}?q=202101000902`, {
       headers: { cookie: adminCookie },
     })
-    expect(AdminUserSummaryPageSchema.parse(await byNo.json()).items[0]?.id).toBe(USER_ID)
+    expect(AdminUserSummaryPageSchema.parse(await byNo.json()).items[0]?.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID),
+    )
 
     const byName = await app.request(`${ADMIN_ROUTES.users}?q=管理员`, {
       headers: { cookie: adminCookie },
     })
-    expect(AdminUserSummaryPageSchema.parse(await byName.json()).items[0]?.id).toBe(ADMIN_TARGET_ID)
+    expect(AdminUserSummaryPageSchema.parse(await byName.json()).items[0]?.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_TARGET_ID),
+    )
 
     const byRole = await app.request(`${ADMIN_ROUTES.users}?role=ADMIN`, {
       headers: { cookie: adminCookie },
@@ -295,10 +302,10 @@ describe('Admin 查询端到端', () => {
     expect(nextCursor).not.toBeNull()
     const raw = Buffer.from(nextCursor ?? '', 'base64url').toString('utf8')
     const timestamp = raw.slice(0, raw.lastIndexOf('|'))
-    expect(raw.slice(raw.lastIndexOf('|') + 1)).toBe(
-      encodePublicId(PUBLIC_ID_PREFIX.user, body1.items[0]?.id ?? ''),
-    )
-    const bareCursor = Buffer.from(`${timestamp}|${body1.items[0]?.id}`).toString('base64url')
+    expect(raw.slice(raw.lastIndexOf('|') + 1)).toBe(body1.items[0]?.id ?? '')
+    const bareCursor = Buffer.from(
+      `${timestamp}|${decodePublicId(PUBLIC_ID_PREFIX.user, body1.items[0]?.id ?? '')}`,
+    ).toString('base64url')
     const bare = await app.request(
       `${ADMIN_ROUTES.users}?limit=1&cursor=${encodeURIComponent(bareCursor)}`,
       { headers: { cookie: adminCookie } },
@@ -322,7 +329,7 @@ describe('Admin 查询端到端', () => {
     })
     expect(res.status).toBe(200)
     const body = AdminUserDetailSchema.parse(await res.json())
-    expect(body.user.id).toBe(USER_ID)
+    expect(body.user.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     expect(body.listingStats.ACTIVE).toBe(1)
   })
 
@@ -331,7 +338,22 @@ describe('Admin 查询端到端', () => {
     expect(res.status).toBe(200)
     const body = AdminListingSummaryPageSchema.parse(await res.json())
     expect(body.items[0]?.title).toBe('管理后台可见商品')
+    expect(body.items[0]?.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
+    expect(body.items[0]?.seller.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     expect(body.items[0]?.seller.nickname).toBe('普通用户乙')
+
+    const bySeller = await app.request(
+      `${ADMIN_ROUTES.listings}?sellerId=${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(bySeller.status).toBe(200)
+    expect(AdminListingSummaryPageSchema.parse(await bySeller.json()).items).toHaveLength(2)
+    for (const sellerId of [USER_ID, encodePublicId(PUBLIC_ID_PREFIX.listing, USER_ID)]) {
+      const invalid = await app.request(`${ADMIN_ROUTES.listings}?sellerId=${sellerId}`, {
+        headers: { cookie: adminCookie },
+      })
+      expect(invalid.status).toBe(422)
+    }
 
     const filtered = await app.request(`${ADMIN_ROUTES.listings}?status=SOLD`, {
       headers: { cookie: adminCookie },
@@ -346,7 +368,8 @@ describe('Admin 查询端到端', () => {
     expect(res.status).toBe(200)
     const body = AdminListingDetailSchema.parse(await res.json())
     expect(body.title).toBe('管理后台可见商品')
-    expect(body.seller.id).toBe(USER_ID)
+    expect(body.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
+    expect(body.seller.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     // 该 LISTING 没有任何审计记录
     expect(body.recentAuditLogs).toEqual([])
   })
@@ -799,5 +822,44 @@ describe('Admin 查询端到端', () => {
       .from(adminAuditLogs)
       .where(eq(adminAuditLogs.targetId, rootId))
     expect(audit?.after).toMatchObject({ manualRecordId: oldManualId })
+  })
+
+  test('管理交易输出资源 TypeID，筛选只接受各资源对应前缀', async () => {
+    const transactionId = newId()
+    await scratch.insert(transactions).values({
+      id: transactionId,
+      listingId: LISTING_ID,
+      buyerId: ADMIN_TARGET_ID,
+      sellerId: USER_ID,
+      amountCents: 15900,
+    })
+    const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID)
+    const buyerId = encodePublicId(PUBLIC_ID_PREFIX.user, ADMIN_TARGET_ID)
+    const sellerId = encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)
+    const page = await app.request(
+      `${ADMIN_ROUTES.transactions}?buyerId=${buyerId}&sellerId=${sellerId}&listingId=${listingId}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(page.status).toBe(200)
+    expect(AdminTransactionPageSchema.parse(await page.json()).items).toEqual([
+      expect.objectContaining({
+        id: encodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId),
+        listingId,
+        buyer: expect.objectContaining({ id: buyerId }),
+        seller: expect.objectContaining({ id: sellerId }),
+      }),
+    ])
+
+    for (const query of [
+      `buyerId=${ADMIN_TARGET_ID}`,
+      `sellerId=${listingId}`,
+      `listingId=${LISTING_ID}`,
+      `listingId=${buyerId}`,
+    ]) {
+      const invalid = await app.request(`${ADMIN_ROUTES.transactions}?${query}`, {
+        headers: { cookie: adminCookie },
+      })
+      expect(invalid.status).toBe(422)
+    }
   })
 })

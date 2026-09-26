@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   AdminAuditLogEntrySchema,
   AdminListingDetailSchema,
@@ -83,7 +84,7 @@ describe('AdminUserSummaryPageSchema', () => {
     const body = {
       items: [
         {
-          id: '01930000-0000-7000-8000-0000000000a1',
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
           studentNoMasked: '2021****0001',
           nickname: '阿岚',
           authStatus: 'VERIFIED',
@@ -177,7 +178,7 @@ describe('AdminAuditLogEntrySchema', () => {
 describe('AdminListingDetailSchema', () => {
   test('parses a listing detail with images and recent audit logs', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000a2'),
       title: '罗技 K380 机械键盘',
       description: '自用一年。',
       priceCents: 16000,
@@ -192,7 +193,10 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: '2026-09-12T03:40:10.000Z',
       images: [{ url: 'http://localhost:9000/fish/listings/a/0.jpg', sortOrder: 0 }],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      seller: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       recentAuditLogs: [],
     }
     const parsed = AdminListingDetailSchema.parse(body)
@@ -202,7 +206,7 @@ describe('AdminListingDetailSchema', () => {
 
   test('requires updatedAt, since listings.updated_at is NOT NULL', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000a2'),
       title: '罗技 K380 机械键盘',
       description: '自用一年。',
       priceCents: 16000,
@@ -215,7 +219,10 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: null,
       images: [],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      seller: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       recentAuditLogs: [],
     }
     expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)
@@ -223,7 +230,7 @@ describe('AdminListingDetailSchema', () => {
 
   test('rejects a category outside the listings enum', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000a2'),
       title: '罗技 K380 机械键盘',
       description: '自用一年。',
       priceCents: 16000,
@@ -236,7 +243,10 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: '2026-09-12T03:40:10.000Z',
       images: [],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      seller: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       recentAuditLogs: [],
     }
     expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)
