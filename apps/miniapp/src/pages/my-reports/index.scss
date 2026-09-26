@@ -106,6 +106,14 @@
 }
 
 /* ── 记录卡列表 ── */
+/* 内容整体抬到页头渐变之上：`.rpts__bg` 是 absolute 定位元素，会画在一切
+   **非定位**流内内容之上 —— 说明带与前一张卡正好落在渐变高度内，不抬层就
+   被渐变整个盖住（favorites 的 .fav__body 同款处理）。 */
+.rpts__body {
+  position: relative;
+  z-index: 1;
+}
+
 .rpts__list {
   padding: 12px 40px 0;
 }
