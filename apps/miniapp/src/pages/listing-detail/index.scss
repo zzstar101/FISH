@@ -836,3 +836,22 @@
 .detail__emptypad {
   padding-top: 148px;
 }
+
+/* ------------------------------------------------------------ 举报入口 */
+
+/* #252：居中小字入口，压在同类推荐之后、底部操作栏之前。
+   弱化成 muted 小字（举报是低频治理动作），点击整行都有热区。 */
+.detail__report {
+  margin: 32px auto 0;
+  width: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 56px;
+  font-size: 23px;
+  color: var(--muted);
+
+  &:active {
+    color: var(--fg);
+  }
+}

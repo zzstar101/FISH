@@ -692,6 +692,26 @@ export default function ListingDetail() {
   const visibleComments = commentsOpen ? comments : comments.slice(0, COMMENT_LIMIT)
   const paragraphs = listing ? descriptionLines(listing.description) : []
 
+  /**
+   * #252：站内举报入口。此前「举报走微信胶囊菜单」只是稿的取舍，站内并没有举报能力。
+   * 仅**非本人商品**显示（本人商品不需要举报自己）；未登录时由举报页的 useAuthGuard
+   * 引导登录。对象四项由 query 带入、页内不可改；**不传商品编号**（#217：详情页不常驻
+   * 展示编号，举报定位走 lst_ 公开 ID）。
+   */
+  const isOwnListing = userId !== null && data !== null && data.seller.id === userId
+  const goReport = () => {
+    if (!data || !listing) return
+    const query = [
+      `id=${encodeURIComponent(listing.id)}`,
+      `title=${encodeURIComponent(listing.title)}`,
+      `price=${encodeURIComponent(formatAmount(listing.priceCents))}`,
+      images[0] ? `cover=${encodeURIComponent(images[0])}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join('&')
+    void Taro.navigateTo({ url: `/pages/report-listing/index?${query}` })
+  }
+
   return (
     <View className="detail">
       {/*
@@ -1028,6 +1048,14 @@ export default function ListingDetail() {
               </View>
             </View>
           </View>
+
+          {/* ---------------------------------------------------- 举报入口 */}
+          {/* 弱化为居中小字：举报是低频治理动作，不与「收藏/聊一聊/我想要」抢底部操作栏 */}
+          {!isOwnListing ? (
+            <View className="detail__report" onClick={goReport}>
+              <Text>举报商品</Text>
+            </View>
+          ) : null}
         </>
       ) : (
         /* 仍在加载：骨架屏。这个分支只应在 loadState === 'loading' 时到达 ——
