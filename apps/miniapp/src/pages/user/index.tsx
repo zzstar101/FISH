@@ -7,6 +7,7 @@ import { ICONS } from '@/assets/lib-icons'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
+import { useAuth } from '@/features/auth/store'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
@@ -67,6 +68,9 @@ export default function UserHome() {
    * 缺 id 一律进 notFound 态（见下面的 `load`）。
    */
   const userId = router.params.id ?? ''
+  /** 当前登录账号：只用来识别「这是不是本人主页」（本人不显示举报入口） */
+  const { user: authedUser } = useAuth()
+  const isSelf = authedUser !== null && authedUser.id === userId
 
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'notFound' | 'failed'>('loading')
   const [profile, setProfile] = useState<PublicUserProfile | null>(null)
@@ -377,7 +381,9 @@ export default function UserHome() {
 
   /**
    * #252：进「举报用户」页。对象三项由 query 带入、页内不可改（公开资料子集：
-   * 头像 + 昵称，不带教育邮箱 / 手机号 / 校区 —— #86 边界）；
+   * 头像 + 昵称，不带教育邮箱 / 手机号 / 校区 —— #86 边界）。`id` 是**当前契约的
+   * uuid**（页面目前不消费该参数，POST /reports 接线时启用）：Report 契约
+   * （#231/#240/#241）与 TypeID（#217）冻结后改传 `usr_` 公开 ID。
    * 未登录由举报页的 useAuthGuard 引导登录。
    */
   const goReport = () => {
@@ -648,9 +654,11 @@ export default function UserHome() {
 
             {/* #252：站内举报用户入口。弱化为居中小字（低频治理动作），压在列表终点之后，
                 不与在售商品抢注意力；对象由 query 带入，页内不可改。 */}
-            <View className="uhome__report" onClick={goReport}>
-              <Text>举报用户</Text>
-            </View>
+            {!isSelf ? (
+              <View className="uhome__report" onClick={goReport}>
+                <Text>举报用户</Text>
+              </View>
+            ) : null}
           </View>
         </ScrollView>
       )}
