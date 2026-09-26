@@ -25,6 +25,7 @@ export type ChatRealtimeOptions = {
   createSocket?: (url: string) => RealtimeSocket
   onEvent: (event: RealtimeServerEvent) => void
   onOpen?: () => void
+  onDisconnected?: () => void
   onStatusChange?: (status: ChatRealtimeStatus) => void
   heartbeatIntervalMs?: number
   heartbeatTimeoutMs?: number
@@ -161,6 +162,7 @@ export class ChatRealtime {
     this.clearHeartbeat()
     if (this.stopped) return
     this.scheduleReconnect()
+    this.options.onDisconnected?.()
   }
 
   private scheduleReconnect(): void {
@@ -223,7 +225,10 @@ export class ChatRealtime {
 
 export type ChatRealtimeHandlers = {
   onEvent: (event: RealtimeServerEvent) => void
+  /** 每次成功建立连接都会调用；首次连接用于补上「HTTP 快照后、WS 建立前」的窗口。 */
   onOpen?: () => void
+  /** 连接断开时调用；用于触发一次受鉴权 HTTP 探针，让全局 401 收口。 */
+  onDisconnected?: () => void
   onStatusChange?: (status: ChatRealtimeStatus) => void
 }
 
@@ -248,6 +253,7 @@ export function useChatRealtime(
     const realtime = new ChatRealtime({
       onEvent: (event) => handlersRef.current.onEvent(event),
       onOpen: () => handlersRef.current.onOpen?.(),
+      onDisconnected: () => handlersRef.current.onDisconnected?.(),
       onStatusChange: (next) => {
         setStatus(next)
         handlersRef.current.onStatusChange?.(next)

@@ -128,6 +128,7 @@ describe('ChatRealtime', () => {
     }
     const sockets: FakeSocket[] = []
     let opens = 0
+    let disconnects = 0
     const realtime = new ChatRealtime({
       url: 'ws://test/ws/chat',
       createSocket: () => {
@@ -138,6 +139,9 @@ describe('ChatRealtime', () => {
       onEvent: () => {},
       onOpen: () => {
         opens += 1
+      },
+      onDisconnected: () => {
+        disconnects += 1
       },
       timers,
       reconnectBaseDelayMs: 100,
@@ -152,6 +156,7 @@ describe('ChatRealtime', () => {
     expect(opens).toBe(1)
 
     sockets[0]?.close()
+    expect(disconnects).toBe(1)
     expect(scheduled).toHaveLength(1)
     expect(scheduled[0]?.timeout).toBe(100)
 
@@ -161,5 +166,6 @@ describe('ChatRealtime', () => {
     expect(opens).toBe(2)
 
     realtime.stop()
+    expect(disconnects).toBe(1)
   })
 })

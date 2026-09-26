@@ -22,6 +22,7 @@ import {
   invalidateConversationSurfaces,
   isMessageRead,
   mergeMessagesIntoCache,
+  probeChatSession,
   refreshConversationOnReconnect,
   useConversation,
   useMarkConversationRead,
@@ -67,11 +68,14 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const sendMessage = useSendTextMessage(ownerId)
   const [draft, setDraft] = useState('')
   const [outbox, setOutbox] = useState<OutboxMessage[]>([])
+  const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const markReadRef = useRef(markRead)
   markReadRef.current = markRead
   const sendRef = useRef(sendMessage)
   sendRef.current = sendMessage
+  const historyErrorRef = useRef(false)
+  historyErrorRef.current = history.isError
   const liveRef = useRef<{ conversationId: string; messages: Map<string, MessageDto> }>({
     conversationId,
     messages: new Map(),
@@ -87,9 +91,9 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     ])
   }
   useEffect(() => {
-    if (history.isFetching) return
+    if (history.isFetching || history.isError) return
     mergeLiveRef.current()
-  }, [history.isFetching])
+  }, [history.isFetching, history.isError])
 
   const messages = useMemo(() => flattenMessagePages(history.data), [history.data])
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
@@ -114,8 +118,12 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     },
     onOpen: () => {
       if (ownerId === null) return
-      refreshConversationOnReconnect(queryClient, ownerId, conversationId)
+      recoverAfterReconnect()
       invalidateConversationSurfaces(queryClient, ownerId)
+    },
+    onDisconnected: () => {
+      if (ownerId === null) return
+      probeChatSession(queryClient, ownerId)
     },
   })
 
@@ -136,7 +144,18 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   function rememberMessage(message: MessageDto) {
     if (ownerId === null) return
     liveRef.current.messages.set(message.id, message)
+    // 历史 query 处于错误态时不能写伪页，否则会把可重试的 error 改成 success；
+    // 消息留在 liveRef，等用户/重连把历史拉成功后再合并。
+    if (historyErrorRef.current) return
     insertMessageIntoCache(queryClient, ownerId, conversationId, message)
+  }
+
+  function recoverAfterReconnect() {
+    if (ownerId === null) return
+    setRecoveryError(null)
+    void refreshConversationOnReconnect(queryClient, ownerId, conversationId)
+      .then(() => mergeLiveRef.current())
+      .catch(() => setRecoveryError('断线后的历史补拉失败，请重试'))
   }
 
   function dispatch(item: OutboxMessage) {
@@ -278,6 +297,19 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                 />
               </Link>
             </div>
+
+            {recoveryError !== null ? (
+              <div className="flex items-center justify-between gap-3 border-line border-b bg-warn-soft px-5 py-2 text-warn text-xs">
+                <span>{recoveryError}</span>
+                <button
+                  className="font-medium hover:underline"
+                  onClick={recoverAfterReconnect}
+                  type="button"
+                >
+                  重试
+                </button>
+              </div>
+            ) : null}
 
             <div className="flex-1 overflow-y-auto bg-surface-2/40 px-5 py-4" ref={scrollRef}>
               {history.isPending ? <LoadingState label="正在加载历史消息…" /> : null}
