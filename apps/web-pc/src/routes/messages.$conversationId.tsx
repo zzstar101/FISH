@@ -5,5 +5,5 @@ export const Route = createFileRoute('/messages/$conversationId')({ component: C
 
 function ConversationRoute() {
   const { conversationId } = Route.useParams()
-  return <ConversationPage conversationId={conversationId} />
+  return <ConversationPage conversationId={conversationId} key={conversationId} />
 }

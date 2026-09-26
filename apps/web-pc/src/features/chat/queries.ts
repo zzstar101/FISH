@@ -126,7 +126,9 @@ function sameMessage(a: MessageDto, b: MessageDto): boolean {
 export function upsertMessagePage<TPageParam>(
   data: InfiniteData<MessageListResponse, TPageParam> | undefined,
   message: MessageDto,
+  conversationId: string,
 ): InfiniteData<MessageListResponse, TPageParam> | undefined {
+  if (message.conversationId !== conversationId) return data
   if (!data || data.pages.length === 0) return data
 
   let replaced = false
@@ -161,7 +163,7 @@ export function insertMessageIntoCache(
 ): void {
   queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
     chatKeys.messages(ownerId, conversationId),
-    (data) => upsertMessagePage(data, message),
+    (data) => upsertMessagePage(data, message, conversationId),
   )
 }
 
@@ -181,8 +183,42 @@ export function mergeMessagesIntoCache(
   if (messages.length === 0) return
   queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
     chatKeys.messages(ownerId, conversationId),
-    (data) => messages.reduce((current, message) => upsertMessagePage(current, message), data),
+    (data) =>
+      messages.reduce(
+        (current, message) => upsertMessagePage(current, message, conversationId),
+        data,
+      ),
   )
+}
+
+/**
+ * 重连时只补最新一页：把服务端最新页中的消息按 id 合进已有缓存，
+ * 不重拉用户已经加载的更早分页。
+ */
+export async function refreshNewestMessages(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversationId: string,
+): Promise<void> {
+  const page = await fetchMessagePage(conversationId)
+  queryClient.setQueryData<InfiniteData<MessageListResponse, string | null>>(
+    chatKeys.messages(ownerId, conversationId),
+    (data) =>
+      page.items.reduce(
+        (current, message) => upsertMessagePage(current, message, conversationId),
+        data,
+      ),
+  )
+}
+
+/** 重连收口：详情走一次强校验，消息只补最新一页。 */
+export function refreshConversationOnReconnect(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversationId: string,
+): void {
+  void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(ownerId, conversationId) })
+  void refreshNewestMessages(queryClient, ownerId, conversationId).catch(() => undefined)
 }
 
 /** 渲染用时间序：最新页在前，反转后按升序拼接。 */

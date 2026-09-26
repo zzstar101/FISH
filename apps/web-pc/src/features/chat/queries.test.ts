@@ -12,6 +12,7 @@ import {
   flattenMessagePages,
   isMessageRead,
   mergeMessagesIntoCache,
+  refreshNewestMessages,
   updateConversationPage,
   upsertMessagePage,
 } from './queries'
@@ -64,7 +65,11 @@ describe('message cache', () => {
       message('m1', '2026-01-01T00:00:00.000Z'),
       message('m2', '2026-01-01T00:00:01.000Z'),
     ])
-    const next = upsertMessagePage(data, message('m1', '2026-01-01T00:00:00.000Z', 'updated'))
+    const next = upsertMessagePage(
+      data,
+      message('m1', '2026-01-01T00:00:00.000Z', 'updated'),
+      'conversation-1',
+    )
 
     expect(next?.pages[0]?.items.map((item) => item.id)).toEqual(['m1', 'm2'])
     expect(next?.pages[0]?.items[0]?.content).toBe('updated')
@@ -72,7 +77,11 @@ describe('message cache', () => {
 
   test('inserts a new message into the newest page and keeps ascending order', () => {
     const data = messageData([message('m1', '2026-01-01T00:00:00.000Z')])
-    const next = upsertMessagePage(data, message('m2', '2026-01-01T00:00:02.000Z'))
+    const next = upsertMessagePage(
+      data,
+      message('m2', '2026-01-01T00:00:02.000Z'),
+      'conversation-1',
+    )
 
     expect(next?.pages[0]?.items.map((item) => item.id)).toEqual(['m1', 'm2'])
   })
@@ -81,7 +90,17 @@ describe('message cache', () => {
     const existing = message('m1', '2026-01-01T00:00:00.000Z')
     const data = messageData([existing])
 
-    expect(upsertMessagePage(data, existing)).toBe(data)
+    expect(upsertMessagePage(data, existing, 'conversation-1')).toBe(data)
+  })
+
+  test('rejects a message that belongs to another conversation', () => {
+    const data = messageData([message('m1', '2026-01-01T00:00:00.000Z')])
+    const foreign = {
+      ...message('m2', '2026-01-01T00:00:02.000Z'),
+      conversationId: 'conversation-2',
+    }
+
+    expect(upsertMessagePage(data, foreign, 'conversation-1')).toBe(data)
   })
 
   test('re-merges live messages after a pagination write', () => {
@@ -100,6 +119,35 @@ describe('message cache', () => {
         .getQueryData<{ pages: MessageListResponse[] }>(chatKeys.messages('me', 'conversation-1'))
         ?.pages[0]?.items.map((item) => item.id),
     ).toEqual(['m1', 'm2'])
+  })
+
+  test('refreshes only the newest page and merges it into loaded pages', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [message('m2', '2026-01-01T00:00:02.000Z')],
+          nextCursor: null,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch
+    try {
+      const queryClient = new QueryClient()
+      queryClient.setQueryData(
+        chatKeys.messages('me', 'conversation-1'),
+        messageData([message('m1', '2026-01-01T00:00:00.000Z')]),
+      )
+
+      await refreshNewestMessages(queryClient, 'me', 'conversation-1')
+
+      expect(
+        queryClient
+          .getQueryData<{ pages: MessageListResponse[] }>(chatKeys.messages('me', 'conversation-1'))
+          ?.pages[0]?.items.map((item) => item.id),
+      ).toEqual(['m1', 'm2'])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('flattens older pages before the newest page', () => {
