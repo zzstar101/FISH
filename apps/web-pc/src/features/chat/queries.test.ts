@@ -11,6 +11,7 @@ import {
   chatKeys,
   flattenMessagePages,
   isMessageRead,
+  mergeConversationReadMarker,
   mergeMessagesIntoCache,
   refreshNewestMessages,
   updateConversationPage,
@@ -121,13 +122,13 @@ describe('message cache', () => {
     ).toEqual(['m1', 'm2'])
   })
 
-  test('refreshes only the newest page and merges it into loaded pages', async () => {
+  test('replaces loaded pages with the newest page on reconnect', async () => {
     const originalFetch = globalThis.fetch
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
           items: [message('m2', '2026-01-01T00:00:02.000Z')],
-          nextCursor: null,
+          nextCursor: 'm2',
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       )) as unknown as typeof fetch
@@ -140,11 +141,38 @@ describe('message cache', () => {
 
       await refreshNewestMessages(queryClient, 'me', 'conversation-1')
 
+      const data = queryClient.getQueryData<{
+        pages: MessageListResponse[]
+        pageParams: Array<string | null>
+      }>(chatKeys.messages('me', 'conversation-1'))
+      expect(data?.pages).toHaveLength(1)
+      expect(data?.pages[0]?.items.map((item) => item.id)).toEqual(['m2'])
+      expect(data?.pages[0]?.nextCursor).toBe('m2')
+      expect(data?.pageParams).toEqual([null])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('seeds an empty message cache from the newest page', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [message('m2', '2026-01-01T00:00:02.000Z')],
+          nextCursor: null,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch
+    try {
+      const queryClient = new QueryClient()
+      await refreshNewestMessages(queryClient, 'me', 'conversation-1')
+
       expect(
         queryClient
           .getQueryData<{ pages: MessageListResponse[] }>(chatKeys.messages('me', 'conversation-1'))
           ?.pages[0]?.items.map((item) => item.id),
-      ).toEqual(['m1', 'm2'])
+      ).toEqual(['m2'])
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -208,6 +236,21 @@ describe('read receipt cache', () => {
     expect(
       queryClient.getQueryData<ConversationDto>(chatKeys.conversation('me', 'conversation-1'))
         ?.counterpartLastReadAt,
+    ).toBe('2026-01-01T00:00:05.000Z')
+  })
+
+  test('never lets a stale conversation DTO move the read marker backwards', () => {
+    expect(
+      mergeConversationReadMarker(
+        conversation('2026-01-01T00:00:05.000Z'),
+        conversation('2026-01-01T00:00:00.000Z'),
+      ).counterpartLastReadAt,
+    ).toBe('2026-01-01T00:00:05.000Z')
+    expect(
+      mergeConversationReadMarker(
+        conversation('2026-01-01T00:00:00.000Z'),
+        conversation('2026-01-01T00:00:05.000Z'),
+      ).counterpartLastReadAt,
     ).toBe('2026-01-01T00:00:05.000Z')
   })
 
