@@ -25,6 +25,7 @@ import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { desc, eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from '../../app'
@@ -292,6 +293,17 @@ describe('Admin 查询端到端', () => {
     expect(body1.items).toHaveLength(1)
     const nextCursor = body1.nextCursor
     expect(nextCursor).not.toBeNull()
+    const raw = Buffer.from(nextCursor ?? '', 'base64url').toString('utf8')
+    const timestamp = raw.slice(0, raw.lastIndexOf('|'))
+    expect(raw.slice(raw.lastIndexOf('|') + 1)).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.user, body1.items[0]?.id ?? ''),
+    )
+    const bareCursor = Buffer.from(`${timestamp}|${body1.items[0]?.id}`).toString('base64url')
+    const bare = await app.request(
+      `${ADMIN_ROUTES.users}?limit=1&cursor=${encodeURIComponent(bareCursor)}`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(bare.status).toBe(422)
 
     const page2 = await app.request(
       `${ADMIN_ROUTES.users}?limit=1&cursor=${encodeURIComponent(nextCursor ?? '')}`,

@@ -33,6 +33,7 @@ import {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus, Me } from '@fish/contracts/auth/user'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
+import { PUBLIC_ID_PREFIX, type PublicIdPrefix } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import { decodeCursor, encodeCursor } from './cursor'
 import { AdminError } from './errors'
@@ -214,13 +215,14 @@ function pageOf<T extends { createdAtCursor: string; id: string }>(
   rows: T[],
   limit: number,
   pick: (row: T) => unknown,
+  prefix: PublicIdPrefix,
 ): { items: unknown[]; nextCursor: string | null } {
   const hasMore = rows.length > limit
   const items = rows.slice(0, limit)
   const last = items[items.length - 1]
   return {
     items: items.map((row) => pick(row)).filter((item) => item !== null),
-    nextCursor: hasMore && last ? encodeCursor(last.createdAtCursor, last.id) : null,
+    nextCursor: hasMore && last ? encodeCursor(last.createdAtCursor, last.id, prefix) : null,
   }
 }
 
@@ -313,7 +315,7 @@ export function createAdminService({
     },
 
     async listUsers(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.user) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listUsers({
@@ -324,7 +326,12 @@ export function createAdminService({
         limit: query.limit,
       })
 
-      const page = pageOf(rows, query.limit, (row) => toUserSummary(row).data ?? null)
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toUserSummary(row).data ?? null,
+        PUBLIC_ID_PREFIX.user,
+      )
       return AdminUserSummaryPageSchema.parse(page)
     },
 
@@ -360,7 +367,7 @@ export function createAdminService({
     },
 
     async listListings(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.listing) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listListings({
@@ -373,7 +380,12 @@ export function createAdminService({
         limit: query.limit,
       })
 
-      const page = pageOf(rows, query.limit, (row) => toListingSummary(row, storage).data ?? null)
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toListingSummary(row, storage).data ?? null,
+        PUBLIC_ID_PREFIX.listing,
+      )
       return AdminListingSummaryPageSchema.parse(page)
     },
 
@@ -417,7 +429,7 @@ export function createAdminService({
     },
 
     async listAuditLogs(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.auditLog) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listAuditLogs({
@@ -431,23 +443,37 @@ export function createAdminService({
         limit: query.limit,
       })
 
-      const page = pageOf(rows, query.limit, (row) => toAuditLogEntry(row).data ?? null)
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toAuditLogEntry(row).data ?? null,
+        PUBLIC_ID_PREFIX.auditLog,
+      )
       return AdminAuditLogPageSchema.parse(page)
     },
 
     async listModerationQueue(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor
+        ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.moderationRecord)
+        : null
       if (query.cursor && !cursor) throw invalidCursor()
       const rows = await store.listModerationQueue({ cursor, limit: query.limit })
-      const page = pageOf(rows, query.limit, (row) => {
-        const item = toModerationItem(row)
-        return AdminModerationQueueSchema.shape.items.element.parse(item)
-      })
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => {
+          const item = toModerationItem(row)
+          return AdminModerationQueueSchema.shape.items.element.parse(item)
+        },
+        PUBLIC_ID_PREFIX.moderationRecord,
+      )
       return AdminModerationQueueSchema.parse(page)
     },
 
     async listModerationRecords(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor
+        ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.moderationRecord)
+        : null
       if (query.cursor && !cursor) throw invalidCursor()
       const rows = await store.listModerationRecords({
         decision: query.decision,
@@ -458,10 +484,15 @@ export function createAdminService({
         cursor,
         limit: query.limit,
       })
-      const page = pageOf(rows, query.limit, (row) => {
-        const item = toModerationItem(row)
-        return AdminModerationRecordsSchema.shape.items.element.parse(item)
-      })
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => {
+          const item = toModerationItem(row)
+          return AdminModerationRecordsSchema.shape.items.element.parse(item)
+        },
+        PUBLIC_ID_PREFIX.moderationRecord,
+      )
       return AdminModerationRecordsSchema.parse(page)
     },
 
@@ -485,7 +516,7 @@ export function createAdminService({
     },
 
     async listAdminTransactions(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.transaction) : null
       if (query.cursor && !cursor) throw invalidCursor()
       const rows = await store.listAdminTransactions({
         q: query.q,
@@ -498,7 +529,12 @@ export function createAdminService({
         cursor,
         limit: query.limit,
       })
-      const page = pageOf(rows, query.limit, (row) => toAdminTransaction(row))
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toAdminTransaction(row),
+        PUBLIC_ID_PREFIX.transaction,
+      )
       return AdminTransactionPageSchema.parse(page)
     },
   }
