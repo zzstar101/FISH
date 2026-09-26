@@ -33,7 +33,7 @@ import {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus, Me } from '@fish/contracts/auth/user'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
-import { PUBLIC_ID_PREFIX, type PublicIdPrefix } from '@fish/shared/public-id'
+import { encodePublicId, PUBLIC_ID_PREFIX, type PublicIdPrefix } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import { decodeCursor, encodeCursor } from './cursor'
 import { AdminError } from './errors'
@@ -152,7 +152,7 @@ function adminMeOf(me: Me): { admin: AdminMe; capabilities: AdminCapability[] } 
 
 function toUserSummary(row: UserSummaryRow) {
   return AdminUserSummaryPageSchema.shape.items.element.safeParse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
     // #86：微信用户没有学号 → null（端上显示占位），不能把 null 喂给 maskStudentNo。
     studentNoMasked: row.studentNo === null ? null : maskStudentNo(row.studentNo),
     nickname: row.nickname,
@@ -166,7 +166,7 @@ function toUserSummary(row: UserSummaryRow) {
 
 function toListingSummary(row: ListingSummaryRow, storage: MediaStorage) {
   return AdminListingSummaryPageSchema.shape.items.element.safeParse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, row.id),
     title: row.title,
     priceCents: row.priceCents,
     category: row.category,
@@ -174,7 +174,10 @@ function toListingSummary(row: ListingSummaryRow, storage: MediaStorage) {
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     coverUrl: row.coverObjectKey ? storage.publicUrl(row.coverObjectKey) : null,
-    seller: { id: row.sellerId, nickname: row.sellerNickname },
+    seller: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.sellerId),
+      nickname: row.sellerNickname,
+    },
   })
 }
 
@@ -285,11 +288,17 @@ function moderationDetailOf(row: ModerationDetailRow) {
 
 function toAdminTransaction(row: AdminTransactionRow) {
   return {
-    id: row.id,
-    listingId: row.listingId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.transaction, row.id),
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listingId),
     listingTitle: row.listingTitle,
-    buyer: { id: row.buyerId, nickname: row.buyerNickname },
-    seller: { id: row.sellerId, nickname: row.sellerNickname },
+    buyer: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.buyerId),
+      nickname: row.buyerNickname,
+    },
+    seller: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.sellerId),
+      nickname: row.sellerNickname,
+    },
     amountCents: row.amountCents,
     status: row.status,
     buyerConfirmedAt: row.buyerConfirmedAt?.toISOString() ?? null,
@@ -395,7 +404,7 @@ export function createAdminService({
 
       const { listing, images } = found
       const detail = {
-        id: listing.id,
+        id: encodePublicId(PUBLIC_ID_PREFIX.listing, listing.id),
         title: listing.title,
         description: listing.description,
         priceCents: listing.priceCents,
@@ -415,7 +424,10 @@ export function createAdminService({
           url: storage.publicUrl(image.objectKey),
           sortOrder: image.sortOrder,
         })),
-        seller: listing.seller,
+        seller: {
+          ...listing.seller,
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, listing.seller.id),
+        },
         recentAuditLogs: (await store.recentAuditLogs('LISTING', listingId, 10)).map(
           toAuditLogSummary,
         ),

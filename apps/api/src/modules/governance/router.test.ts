@@ -1133,7 +1133,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     })
     expect(res.status).toBe(200)
     const body = AdminUserDetailSchema.parse(await res.json())
-    expect(body.user.id).toBe(RESTRICTED)
+    expect(body.user.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, RESTRICTED))
     // 至少一条 BAN：上面的封禁用例刚给这个用户写了生效中的限制。
     expect(body.activeRestrictions.length).toBeGreaterThan(0)
     const ban = body.activeRestrictions.find((row) => row.type === 'BAN')

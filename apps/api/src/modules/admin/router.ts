@@ -185,7 +185,15 @@ export function createAdminRouter(options: AdminRouterOptions) {
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
     try {
-      return c.json(await service.listListings(parsed.data), 200)
+      return c.json(
+        await service.listListings({
+          ...parsed.data,
+          sellerId: parsed.data.sellerId
+            ? decodePublicId(PUBLIC_ID_PREFIX.user, parsed.data.sellerId)
+            : undefined,
+        }),
+        200,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -266,7 +274,21 @@ export function createAdminRouter(options: AdminRouterOptions) {
     const parsed = AdminTransactionQuerySchema.safeParse(c.req.query())
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
     try {
-      return c.json(await service.listAdminTransactions(parsed.data), 200)
+      return c.json(
+        await service.listAdminTransactions({
+          ...parsed.data,
+          buyerId: parsed.data.buyerId
+            ? decodePublicId(PUBLIC_ID_PREFIX.user, parsed.data.buyerId)
+            : undefined,
+          sellerId: parsed.data.sellerId
+            ? decodePublicId(PUBLIC_ID_PREFIX.user, parsed.data.sellerId)
+            : undefined,
+          listingId: parsed.data.listingId
+            ? decodePublicId(PUBLIC_ID_PREFIX.listing, parsed.data.listingId)
+            : undefined,
+        }),
+        200,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }

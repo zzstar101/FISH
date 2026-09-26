@@ -7,6 +7,7 @@ import {
 import { ModerationDecisionSchema, ModerationStatusSchema } from '@fish/contracts/moderation/schema'
 import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
+import { ListingIdSchema, TransactionIdSchema, UserIdSchema } from '../system/public-id'
 
 /**
  * Admin Domain Contract（Issue #73）。
@@ -94,7 +95,7 @@ export type AdminMeResponse = z.infer<typeof AdminMeResponseSchema>
 
 /** 管理员视角的用户摘要（设计 §4.2）。不返回密码哈希、完整学号等敏感凭据。 */
 export const AdminUserSummarySchema = z.object({
-  id: z.uuid(),
+  id: UserIdSchema,
   /**
    * 脱敏学号（`2021****0001`），完整学号不进协议。
    * #86 后微信注册的用户没有学号 → `null`（不是空串；端上据此显示占位而不是 "n**l"）。
@@ -167,13 +168,13 @@ export type AdminUserDetail = z.infer<typeof AdminUserDetailSchema>
 // ---------------------------------------------------------------------------
 
 export const AdminSellerSummarySchema = z.object({
-  id: z.uuid(),
+  id: UserIdSchema,
   nickname: z.string(),
 })
 export type AdminSellerSummary = z.infer<typeof AdminSellerSummarySchema>
 
 export const AdminListingSummarySchema = z.object({
-  id: z.uuid(),
+  id: ListingIdSchema,
   title: z.string(),
   priceCents: z.number().int().nonnegative(),
   // 直接复用商品域枚举：这三个字段的数据来源就是 `listings` 表的同名列，
@@ -195,7 +196,7 @@ export const AdminListingSummaryPageSchema = z.object({
 export type AdminListingSummaryPage = z.infer<typeof AdminListingSummaryPageSchema>
 
 export const AdminListingDetailSchema = z.object({
-  id: z.uuid(),
+  id: ListingIdSchema,
   title: z.string(),
   description: z.string(),
   priceCents: z.number().int().nonnegative(),
@@ -407,11 +408,11 @@ export const AdminModerationRecordsSchema = z.object({
 export type AdminModerationRecords = z.infer<typeof AdminModerationRecordsSchema>
 
 export const AdminTransactionSchema = z.object({
-  id: z.uuid(),
-  listingId: z.uuid(),
+  id: TransactionIdSchema,
+  listingId: ListingIdSchema,
   listingTitle: z.string(),
-  buyer: z.object({ id: z.uuid(), nickname: z.string() }),
-  seller: z.object({ id: z.uuid(), nickname: z.string() }),
+  buyer: z.object({ id: UserIdSchema, nickname: z.string() }),
+  seller: z.object({ id: UserIdSchema, nickname: z.string() }),
   amountCents: z.number().int().nonnegative(),
   status: transactionStatusSchema,
   buyerConfirmedAt: z.iso.datetime().nullable(),
@@ -465,7 +466,7 @@ export const AdminListingsQuerySchema = z.strictObject({
   /** title / description 子串搜索。 */
   q: z.string().trim().min(1).max(50).optional(),
   status: ListingStatusSchema.optional(),
-  sellerId: z.uuid().optional(),
+  sellerId: UserIdSchema.optional(),
   /**
    * 时间段（**左闭右开**：`>= createdFrom` 且 `< createdTo`，与 `store.ts` 的条件一致）；
    * ISO datetime。取「含边界」的客户端会丢掉恰好等于 `createdTo` 的那条记录。
@@ -517,9 +518,9 @@ export const AdminModerationRecordsQuerySchema = z.strictObject({
 export const AdminTransactionQuerySchema = z.strictObject({
   q: z.string().trim().min(1).max(50).optional(),
   status: transactionStatusSchema.optional(),
-  buyerId: z.uuid().optional(),
-  sellerId: z.uuid().optional(),
-  listingId: z.uuid().optional(),
+  buyerId: UserIdSchema.optional(),
+  sellerId: UserIdSchema.optional(),
+  listingId: ListingIdSchema.optional(),
   createdFrom: z.iso.datetime().optional(),
   createdTo: z.iso.datetime().optional(),
   cursor: z.string().min(1).optional(),
