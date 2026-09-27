@@ -183,6 +183,47 @@ export function shouldSurfaceStaleAuthFailure(
 }
 
 /**
+ * 一次「聊一聊」的在飞任务（同 `match` 页 `ChatTask` 的口径）。
+ *
+ * 为什么不能只用一个布尔在飞锁：`POST /conversations` 是**账号作用域**的写操作。
+ * A 发起后退出 / 换 B / 离开本页，迟到的 `.then` 仍会压出会话页、`.catch` 仍会弹
+ * toast；而一个裸布尔锁还有第二重毛病 —— 换号后 B 的点击会被 A 的在途请求堵住，
+ * A 的 `finally` 又会把 B 已经取得的锁清掉，让 B 能连点压出两个会话页。
+ *
+ * 所以令牌（`token`）与账号代次（`ownerId` + `epoch`）分工：
+ * - `token` 决定**锁归谁**（只有持锁任务能释放）；
+ * - `ownerId` + `epoch` 决定**响应还算不算数**。
+ *
+ * 三者必须全等：A → B → A 之后账号名又等于 A，只比账号名会让旧响应重新「匹配」。
+ */
+export type ChatTask = { ownerId: string | null; epoch: number; token: number }
+
+/** 铸任务必须在发请求**之前**：之后再换号 / 卸载，也能凭令牌把整条回调作废。 */
+export function beginChatTask(epoch: number, ownerId: string | null, token: number): ChatTask {
+  return { ownerId, epoch, token }
+}
+
+/** 迟到的会话响应是否仍属于当前账号、当前世代、且仍持有那把在飞锁。 */
+export function isCurrentChatTask(
+  task: ChatTask,
+  current: { ownerId: string | null; epoch: number; token: number | null },
+): boolean {
+  return (
+    current.ownerId === task.ownerId && current.epoch === task.epoch && current.token === task.token
+  )
+}
+
+/**
+ * 收尾时是否该释放这次任务占的锁：**只认令牌**。
+ *
+ * 不比对账号与代次 —— 那两个是「要不要采纳这次响应」的判据；锁的归属只由令牌决定。
+ * 否则 A 的迟到 `finally` 会删掉 B 已经取得的锁（换号时锁已作废，B 可以立刻重新发起）。
+ */
+export function shouldReleaseChatTask(task: ChatTask, inFlightToken: number | null): boolean {
+  return inFlightToken === task.token
+}
+
+/**
  * 迟到响应是否允许写入（读取链）：只有序号仍是最新的那一次才作数。
  * 重试与返回刷新都会让序号前进，先发的响应后到即被判过期。
  */

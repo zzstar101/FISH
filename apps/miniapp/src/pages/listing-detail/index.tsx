@@ -40,6 +40,7 @@ import {
 } from '@/mock/api'
 import { findUser } from '@/mock/users'
 import {
+  beginChatTask,
   beginReloadWrite,
   beginTask,
   type CommentsRead,
@@ -48,6 +49,7 @@ import {
   createDeferredReload,
   dropPendingComments,
   hasInflightWrites,
+  isCurrentChatTask,
   isLatestLoad,
   isOwnerSwitch,
   isReloadDue,
@@ -59,6 +61,7 @@ import {
   resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
+  shouldReleaseChatTask,
   shouldSurfaceStaleAuthFailure,
 } from './view'
 import './index.scss'
@@ -329,6 +332,10 @@ export default function ListingDetail() {
   const reloadRef = useRef(createDeferredReload())
   /** 首次 show 让给 `useLoad` 的首屏加载，免得一进页双发 */
   const firstShowRef = useRef(true)
+  /** 「聊一聊」在飞锁：持有它的是**某一次点击**的令牌（`null` = 没有在途请求） */
+  const chatInFlightRef = useRef<number | null>(null)
+  /** 令牌发号器：只增不减，保证 A 的迟到收尾认不出 B 的锁 */
+  const chatSeqRef = useRef(0)
 
   /**
    * 换号 / 退出：渲染期同步清掉账号私有的 state。
@@ -346,6 +353,9 @@ export default function ListingDetail() {
     // 迟到的公开快照不许写进新账号的页面。冷启动解析身份（null → id）不算换号，
     // 那会把首屏 `load` 判过期、页面永远停在骨架屏上
     if (isOwnerSwitch(prevUserId)) loadSeqRef.current += 1
+    // 「聊一聊」的在飞锁同样作废：A 发起的建会话请求不属于 B，锁也要还给 B ——
+    // 不清的话 B 点「聊一聊」会被 A 的在途请求一直堵着，直到 A 的响应回来
+    chatInFlightRef.current = null
     const cleared = clearedPrivateScope()
     setCommentInput(cleared.commentInput)
     setReplyInput(cleared.replyInput)
@@ -545,25 +555,49 @@ export default function ListingDetail() {
    * **复用**既有会话，所以本页不做本地缓存，重复点击就是幂等的重发。
    *
    * 本页是公开页、匿名可读，而会话端点挂 `requireAuth`：匿名点击让请求走一圈、
-   * 401 后按本页留言区的口径提示去登录。在飞守卫只防「连点压出两个会话页」。
+   * 401 后按本页留言区的口径提示去登录。
+   *
+   * 令牌在**发起前**捕获（同 `pages/match` 的 `ChatTask`）：建会话是账号作用域的写操作，
+   * A 发起后退出 / 换 B / 离开本页，迟到的响应不许再压出会话页、弹 toast 或占着 B 的锁。
    */
-  const chatInFlightRef = useRef(false)
   const chatWithSeller = () => {
-    if (chatInFlightRef.current) return
-    chatInFlightRef.current = true
+    if (chatInFlightRef.current !== null) return
+    chatSeqRef.current += 1
+    const task = beginChatTask(epochRef.current, ownerRef.current, chatSeqRef.current)
+    chatInFlightRef.current = task.token
+    const isCurrentTask = (): boolean =>
+      isCurrentChatTask(task, {
+        ownerId: ownerRef.current,
+        epoch: epochRef.current,
+        token: chatInFlightRef.current,
+      })
+    /** 只释放自己的锁：换号后 B 重新发起时，A 的迟到收尾不能删掉 B 的标记 */
+    const release = (): void => {
+      if (!shouldReleaseChatTask(task, chatInFlightRef.current)) return
+      chatInFlightRef.current = null
+    }
     void createConversation(id)
       .then(async (conversation) => {
+        // 迟到的成功响应一律丢弃、不导航：A → B → A 时账号又等于 A，只比账号挡不住
+        if (!isCurrentTask()) return
         await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
       })
       .catch((error: unknown) => {
+        // 旧任务的失败不能弹给新账号。例外是**会话过期**（401）：`apiRequest` 就地清会话、
+        // store 同步回到匿名，于是失败在守卫看来也是「迟到的」，可失败的正是本人 ——
+        // 静默吞掉等于「点了聊一聊，什么都没发生」（同 `sendComment` 的口径）
+        if (!isCurrentTask()) {
+          if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
+            void Taro.showToast({ title: '请先登录后再聊一聊', icon: 'none' })
+          }
+          return
+        }
         void Taro.showToast({
           title: isUnauthenticatedError(error) ? '请先登录后再聊一聊' : '会话发起失败，请重试',
           icon: 'none',
         })
       })
-      .finally(() => {
-        chatInFlightRef.current = false
-      })
+      .finally(release)
   }
 
   /**
@@ -571,14 +605,20 @@ export default function ListingDetail() {
    *
    * 请求目前只落到本地状态：契约里还没有「向卖家发购买请求」的端点（下单域未开），
    * 弹窗文案里的「发送请求」暂时没有真实接收方 —— 端点落地后在这里补真实调用。
+   *
+   * 弹窗回调同样是迟到的异步回调：等待期间换号 / 卸载之后，「待店家确认」写的就是
+   * 别人的页面了。切号清场只清**已写下**的状态，挡不住清场之后的这次回写。
    */
   const buy = () => {
     if (buyRequested) return
+    const task = beginTask(epochRef.current, ownerRef.current)
     void Taro.showModal({
       title: '确定立即购买',
       content: '请核实商品信息，确认后向卖家发送请求',
     }).then((result) => {
-      if (result.confirm) setBuyRequested(true)
+      if (!result.confirm) return
+      if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return
+      setBuyRequested(true)
     })
   }
 
