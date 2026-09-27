@@ -41,6 +41,7 @@ import {
   parsePriceToCents,
   polishCooldownUntilFrom,
   polishFailureView,
+  polishInputKey,
   polishPreconditionError,
   publishImageCheck,
   publishImageHelperText,
@@ -83,11 +84,13 @@ function PublishForm() {
 
   const mountedRef = useRef(false)
   const formEpochRef = useRef(0)
+  const formRef = useRef(form)
   const imagesRef = useRef<PublishImage[]>([])
   const uploadControllersRef = useRef(new Map<string, AbortController>())
   const polishControllerRef = useRef<AbortController | null>(null)
   const submitControllerRef = useRef<AbortController | null>(null)
 
+  formRef.current = form
   imagesRef.current = images
 
   function replaceImages(next: PublishImage[]) {
@@ -303,7 +306,7 @@ function PublishForm() {
   }
 
   function startPolish() {
-    if (polishCooldownUntil !== null) return
+    if (submitting || polishCooldownUntil !== null) return
     const precondition = polishPreconditionError(form)
     if (precondition !== null) {
       setPolish({ phase: 'failed', view: { message: precondition, detail: null, canRetry: false } })
@@ -315,6 +318,7 @@ function PublishForm() {
     const controller = new AbortController()
     polishControllerRef.current = controller
     const task = createTask()
+    const requestKey = polishInputKey(form)
     setPolishCooldownUntil(null)
     setPolish({ phase: 'loading' })
 
@@ -329,7 +333,12 @@ function PublishForm() {
       },
       {
         onSuccess: (response) => {
-          if (!isTaskCurrent(task) || controller.signal.aborted) return
+          if (
+            !isTaskCurrent(task) ||
+            controller.signal.aborted ||
+            polishInputKey(formRef.current) !== requestKey
+          )
+            return
           setPolishCooldownUntil(null)
           setPolish({
             phase: 'ready',
@@ -340,7 +349,12 @@ function PublishForm() {
           })
         },
         onError: (error) => {
-          if (!isTaskCurrent(task) || controller.signal.aborted) return
+          if (
+            !isTaskCurrent(task) ||
+            controller.signal.aborted ||
+            polishInputKey(formRef.current) !== requestKey
+          )
+            return
           if (error instanceof ApiError) {
             if (error.code === 'AI_POLISH_QUOTA') {
               setPolishCooldownUntil(polishCooldownUntilFrom(error.retryAfterSeconds))
@@ -361,6 +375,7 @@ function PublishForm() {
   }
 
   function applyPolish(text: string) {
+    if (submitting) return
     patchForm({ description: text })
     clearFieldError('description')
   }
@@ -460,6 +475,7 @@ function PublishForm() {
                 </FieldLabel>
                 <Input
                   aria-invalid={fieldErrors.title !== undefined}
+                  disabled={submitting}
                   id="publish-title"
                   maxLength={40}
                   onChange={(event) => {
@@ -479,6 +495,7 @@ function PublishForm() {
                 </FieldLabel>
                 <Textarea
                   aria-invalid={fieldErrors.description !== undefined}
+                  disabled={submitting}
                   id="publish-description"
                   maxLength={500}
                   onChange={(event) => {
@@ -498,6 +515,7 @@ function PublishForm() {
                     分类 <span className="text-danger">*</span>
                   </FieldLabel>
                   <Select
+                    disabled={submitting}
                     onValueChange={(value) => {
                       patchForm({ category: ListingCategorySchema.parse(value) })
                       clearFieldError('category')
@@ -524,6 +542,7 @@ function PublishForm() {
                 <Field>
                   <FieldLabel>成色</FieldLabel>
                   <Select
+                    disabled={submitting}
                     onValueChange={(value) =>
                       patchForm({ condition: ListingConditionSchema.parse(value) })
                     }
@@ -552,7 +571,7 @@ function PublishForm() {
                   <Input
                     aria-invalid={fieldErrors.price !== undefined}
                     className="h-auto flex-1 rounded-none border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:bg-transparent"
-                    disabled={form.free}
+                    disabled={submitting || form.free}
                     id="publish-price"
                     inputMode="decimal"
                     onChange={(event) => {
@@ -570,6 +589,7 @@ function PublishForm() {
                 <FlagRow
                   checked={form.urgent}
                   description="打上「急出」角标，更容易被看到"
+                  disabled={submitting}
                   label="急出"
                   onChange={(checked) => patchForm({ urgent: checked })}
                 />
@@ -578,13 +598,14 @@ function PublishForm() {
                   description={
                     form.free ? '0 元送开启后不可议价，开关已锁定' : '允许买家围绕价格发起协商'
                   }
-                  disabled={form.free}
+                  disabled={submitting || form.free}
                   label="可小刀"
                   onChange={(checked) => patchForm({ negotiable: checked })}
                 />
                 <FlagRow
                   checked={form.free}
                   description="价格自动归零，发布后显示「免费送」"
+                  disabled={submitting}
                   label="免费送"
                   onChange={(checked) => {
                     if (checked) clearFieldError('price')
@@ -603,7 +624,7 @@ function PublishForm() {
         <aside className="sticky top-24 space-y-4">
           <AiPolishPanel
             coolingDown={polishCooldownUntil !== null}
-            disabledReason={disabledReason}
+            disabledReason={submitting ? '正在发布…' : disabledReason}
             onApply={applyPolish}
             onPolish={startPolish}
             onSelect={(index) =>

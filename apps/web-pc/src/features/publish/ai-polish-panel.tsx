@@ -89,7 +89,7 @@ export function AiPolishPanel({
           <AlertTitle>{state.view.message}</AlertTitle>
           <AlertDescription>
             <p>{state.view.detail}</p>
-            {state.view.canRetry ? (
+            {state.view.canRetry && !coolingDown ? (
               <Button className="mt-2" onClick={onPolish} size="sm" type="button" variant="outline">
                 <RefreshCw className="size-3.5" />
                 手动重试
