@@ -1,3 +1,4 @@
+import type { MessageDto } from '@fish/contracts/chat/schema'
 import { transactionSystemEventSchema } from '@fish/contracts/transactions/schema'
 
 function parseSystemEvent(content: string): { type: string } | null {
@@ -28,4 +29,13 @@ export function formatMessageTime(iso: string): string {
     minute: '2-digit',
     hour12: false,
   }).format(date)
+}
+
+/** 历史页里已出现的本地消息不再单独渲染，避免同一 id 出现两个气泡。 */
+export function excludeCachedMessages(
+  localMessages: MessageDto[],
+  messages: MessageDto[],
+): MessageDto[] {
+  const cached = new Set(messages.map((message) => message.id))
+  return localMessages.filter((local) => !cached.has(local.id))
 }

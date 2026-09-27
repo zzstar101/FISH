@@ -204,7 +204,7 @@ export function mergeMessagesIntoCache(
 }
 
 /**
- * 重连时只补最新一页：把服务端最新页中的消息按 id 合进已有缓存，
+ * 重连时只补最新一页：用服务端最新页整体替换本地页集合，
  * 不重拉用户已经加载的更早分页。
  */
 export async function refreshNewestMessages(
@@ -259,12 +259,21 @@ export function probeChatSession(queryClient: QueryClient, ownerId: string): voi
     .catch(() => undefined)
 }
 
-/** 渲染用时间序：最新页在前，反转后按升序拼接。 */
+/**
+ * 渲染用时间序：最新页在前，反转后按升序拼接；同一 id 只保留最新页的版本。
+ *
+ * 实时消息可能被临时塞进最新页，之后加载更早分页时服务端会再返回同一条，
+ * 因此这里按 id 去重，避免同一 message 渲染两次（相同 React key）。
+ */
 export function flattenMessagePages<TPageParam>(
   data: InfiniteData<MessageListResponse, TPageParam> | undefined,
 ): MessageDto[] {
   if (!data) return []
-  return [...data.pages].reverse().flatMap((page) => page.items)
+  const byId = new Map<string, MessageDto>()
+  for (const page of [...data.pages].reverse()) {
+    for (const item of page.items) byId.set(item.id, item)
+  }
+  return [...byId.values()]
 }
 
 export function isMessageRead(message: MessageDto, counterpartLastReadAt: string | null): boolean {

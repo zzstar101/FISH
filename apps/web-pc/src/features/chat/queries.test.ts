@@ -240,6 +240,22 @@ describe('message cache', () => {
 
     expect(flattenMessagePages(data).map((item) => item.id)).toEqual(['m1', 'm2'])
   })
+
+  test('renders a message id once when a stale live message repeats in an older page', () => {
+    // 重连只补最新页（m3）后，比它更旧的实时消息 m1 仍可能被并回最新页；
+    // 之后加载更早分页时服务端会再次返回 m1 —— 渲染层必须按 id 去重。
+    const newest = {
+      items: [message('m1', '2026-01-01T00:00:00.000Z'), message('m3', '2026-01-01T00:00:02.000Z')],
+      nextCursor: 'm3',
+    }
+    const older = {
+      items: [message('m1', '2026-01-01T00:00:00.000Z'), message('m2', '2026-01-01T00:00:01.000Z')],
+      nextCursor: null,
+    }
+    const data = { pages: [newest, older], pageParams: [null, 'm3'] }
+
+    expect(flattenMessagePages(data).map((item) => item.id)).toEqual(['m1', 'm2', 'm3'])
+  })
 })
 
 describe('conversation list cache', () => {

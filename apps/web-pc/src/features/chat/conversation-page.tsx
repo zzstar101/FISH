@@ -30,6 +30,7 @@ import {
   useSendTextMessage,
 } from './queries'
 import { type ChatRealtimeStatus, useChatRealtime } from './realtime'
+import { excludeCachedMessages } from './view'
 
 const STATUS_LABEL: Record<ListingStatus, string> = {
   ACTIVE: '在售',
@@ -100,7 +101,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
 
   const messages = useMemo(() => flattenMessagePages(history.data), [history.data])
   const visibleLocalMessages = useMemo(
-    () => localMessages.filter((local) => !messages.some((message) => message.id === local.id)),
+    () => excludeCachedMessages(localMessages, messages),
     [localMessages, messages],
   )
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
