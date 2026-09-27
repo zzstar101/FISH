@@ -7,7 +7,7 @@ export type AuthFailure = { formError?: string; fieldErrors?: FieldErrors }
  * 错误码 → 用户可读文案，登录与注册共用一份，避免两个页面各写一遍映射。
  *
  * `VALIDATION_FAILED` 在前端已被同一份 zod 契约拦下，能走到这里说明前后端规则漂移：
- * 此时退回服务端 message，而不是假装能定位到某个输入框。
+ * 优先消费服务端 `details` 定位输入框；没有字段信息时才落表单级文案。
  */
 export function describeAuthFailure(error: unknown): AuthFailure {
   if (!(error instanceof ApiError)) return { formError: '网络异常，请稍后重试' }
@@ -17,9 +17,28 @@ export function describeAuthFailure(error: unknown): AuthFailure {
       return { formError: '学号或密码错误' }
     case 'STUDENT_NO_TAKEN':
       return { fieldErrors: { studentNo: '该学号已注册，请直接登录' } }
+    case 'VALIDATION_FAILED': {
+      const fieldErrors = detailsToFieldErrors(error.details)
+      return Object.keys(fieldErrors).length > 0
+        ? { fieldErrors }
+        : { formError: '请求参数不合法，请检查填写内容后重试' }
+    }
     default:
       return { formError: error.message }
   }
+}
+
+function detailsToFieldErrors(
+  details: ReadonlyArray<{ field: string; message: string }> | undefined,
+): FieldErrors {
+  const errors: FieldErrors = {}
+  for (const detail of details ?? []) {
+    const field = detail.field.split('.')[0]
+    if (field !== undefined && field !== '' && errors[field] === undefined) {
+      errors[field] = detail.message
+    }
+  }
+  return errors
 }
 
 /** 表单字段 → 中文标签。只列认证表单实际出现的字段。 */

@@ -22,6 +22,10 @@
 @theme static {
   --color-brand: #5f82c5;
   --color-brand-soft: #e7edf6;
+  --color-night: #0b1b2e;
+  --color-night-2: #17345a;
+  --color-ice: #dbe8fa;
+  --color-paper: #f8f9fb;
   /*
    * 许愿墙 Banner 的装饰红（自上而下红→白渐变）。
    * 刻意不复用 `--color-danger`：那是功能色，语义是「出错 / 危险」，而这里的红只做装饰，
@@ -52,6 +56,7 @@
   --font-sans:
     system-ui, -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC",
     sans-serif;
+  --font-display: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
 }
 
 /*
@@ -185,5 +190,273 @@
 @layer base {
   body {
     min-width: 1280px;
+  }
+}
+
+/*
+ * PC 登录 / 注册页的独立视觉层。
+ *
+ * 方向是「校园登记单」：平面深蓝、硬边分割、巨大鱼形水印、登记线和克制的
+ * 印刷式动效。刻意不使用发光渐变、装饰波浪或悬浮卡片，避免模板化的 SaaS 观感。
+ */
+.auth-shell {
+  background: var(--color-paper);
+}
+
+.auth-frame {
+  isolation: isolate;
+}
+
+.auth-visual {
+  background: var(--color-night);
+}
+
+.auth-visual__watermark {
+  position: absolute;
+  right: -0.08em;
+  bottom: -0.22em;
+  color: rgb(255 255 255 / 0.035);
+  font-family: var(--font-display);
+  font-size: min(34vw, 420px);
+  font-weight: 700;
+  line-height: 0.8;
+  pointer-events: none;
+  user-select: none;
+  animation: auth-watermark-in 1.2s ease-out both;
+}
+
+.auth-visual__copy {
+  animation: auth-copy-in 700ms 80ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-visual__copy h1 {
+  animation: auth-headline-in 900ms 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-form__panel {
+  animation: auth-panel-in 680ms 140ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-field-label {
+  color: var(--color-ink-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.auth-input {
+  height: 3rem;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--color-line) 92%, transparent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding-inline: 0;
+  color: var(--color-ink);
+  transition:
+    border-color 220ms ease,
+    background-color 220ms ease;
+}
+
+.auth-input::placeholder {
+  color: color-mix(in oklab, var(--color-ink-3) 72%, transparent);
+}
+
+.auth-input:hover {
+  border-bottom-color: color-mix(in oklab, var(--color-brand) 46%, var(--color-line));
+}
+
+.auth-input:focus-visible {
+  border-bottom-color: var(--color-brand);
+  background: color-mix(in oklab, var(--color-brand) 4%, transparent);
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--color-brand) 55%, transparent);
+  outline: none;
+}
+
+.auth-input[aria-invalid="true"] {
+  border-bottom-color: var(--color-danger);
+}
+
+.auth-field-line {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: var(--color-brand);
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.group\/auth-field:focus-within .auth-field-line {
+  transform: scaleX(1);
+}
+
+.auth-submit {
+  position: relative;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--color-brand);
+  box-shadow: none;
+  transition:
+    background-color 220ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.auth-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: var(--color-lavender);
+}
+
+.auth-transition {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--color-brand);
+  cursor: wait;
+  pointer-events: auto;
+}
+
+.auth-transition__card {
+  width: min(360px, calc(100vw - 64px));
+  border: 1px solid rgb(255 255 255 / 0.24);
+  background: var(--color-surface);
+  padding: 2rem;
+  text-align: center;
+  animation: auth-success-card 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.auth-transition__icon {
+  display: grid;
+  width: 3rem;
+  height: 3rem;
+  margin-inline: auto;
+  place-items: center;
+  border: 1px solid var(--color-line);
+  color: var(--color-brand);
+}
+
+.auth-transition__line {
+  height: 1px;
+  overflow: hidden;
+  background: var(--color-line);
+}
+
+.auth-transition__line > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform: translateX(-100%);
+  background: var(--color-brand);
+  animation: auth-progress 420ms 80ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+::view-transition-old(root) {
+  animation: auth-view-out 620ms cubic-bezier(0.76, 0, 0.24, 1) both;
+}
+
+::view-transition-new(root) {
+  animation: auth-view-in 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes auth-watermark-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes auth-copy-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes auth-headline-in {
+  from {
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(10px);
+  }
+  to {
+    clip-path: inset(0);
+    transform: none;
+  }
+}
+
+@keyframes auth-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes auth-success-card {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes auth-progress {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes auth-view-out {
+  to {
+    clip-path: inset(0 0 100% 0);
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes auth-view-in {
+  from {
+    clip-path: inset(100% 0 0 0);
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    clip-path: inset(0);
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-visual__watermark,
+  .auth-visual__copy,
+  .auth-visual__copy h1,
+  .auth-form__panel,
+  .auth-transition__card,
+  .auth-transition__line > span,
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+
+  .auth-field-line,
+  .auth-submit {
+    transition: none;
   }
 }
