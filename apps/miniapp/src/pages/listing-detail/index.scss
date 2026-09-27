@@ -795,6 +795,13 @@
   box-shadow: 0 24px 48px -28px rgba(66, 133, 255, 0.7);
 }
 
+/* 购买已确认的终态：灰色状态牌，点击无效果（守卫在 index.tsx 的 buy 里） */
+.detail__btn--pending {
+  background: var(--ink-weak-2);
+  border: 2px solid transparent;
+  color: var(--muted);
+}
+
 /* ------------------------------------------------------------ 加载骨架 */
 
 .detail__skeleton {

@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  beginChatTask,
   beginReloadWrite,
   beginTask,
+  type ChatTask,
   type CommentsRead,
   clearedPrivateScope,
   consumeDeferredReload,
@@ -9,6 +11,7 @@ import {
   type DeferredReload,
   dropPendingComments,
   hasInflightWrites,
+  isCurrentChatTask,
   isLatestLoad,
   isOwnerSwitch,
   isReloadDue,
@@ -20,6 +23,7 @@ import {
   resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
+  shouldReleaseChatTask,
   shouldSurfaceStaleAuthFailure,
   type WriteTask,
 } from '../src/pages/listing-detail/view'
@@ -35,7 +39,9 @@ import {
  * - `A → B → A` 时 A 的**旧**响应不得写进 A 的新会话 —— 只比对 ownerId 挡不住这条；
  * - 从子页返回要同步服务端数据（判据 D），且重试 / 返回刷新互不接受陈旧响应；
  * - 写入在飞时那次返回刷新可以延后，但**不能丢**；
- * - 刷新在飞时**新开始**的那笔写入不能被服务端快照抹掉（`conversation` 页 #186 的 P2-1）。
+ * - 刷新在飞时**新开始**的那笔写入不能被服务端快照抹掉（`conversation` 页 #186 的 P2-1）；
+ * - 底栏两个新动作（「聊一聊」的建会话请求、「立即购买」的原生弹窗回调）也是账号作用域的
+ *   异步回调：换号 / 退出 / 离页后既不能导航、弹错、写「待店家确认」，也不能占着新账号的锁。
  *
  * 两层：
  * 1. 判据层 —— 跑 `view.ts` 的纯函数，用最小的「页面 + 写任务」模型模拟交错；
@@ -127,28 +133,31 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(ownerChanged('user-a', 'user-a')).toBe(false)
   })
 
-  test('清场只覆盖草稿与收藏，公开快照不在其中', () => {
+  test('清场只覆盖草稿、收藏与购买请求，公开快照不在其中', () => {
     expect(clearedPrivateScope()).toEqual({
       commentInput: '',
       replyInput: '',
       replyTo: null,
       faved: false,
+      buyRequested: false,
     })
   })
 
-  test('换号后 A 的草稿、回复行与收藏心形都不留在 B 的页面上', () => {
+  test('换号后 A 的草稿、回复行、收藏心形与购买请求都不留在 B 的页面上', () => {
     const p = page()
     switchOwner(p, 'user-a')
     p.commentInput = 'A 写到一半的留言'
     p.replyInput = 'A 的回复草稿'
     p.replyTo = 'c-1'
     p.faved = true
+    p.buyRequested = true
 
     switchOwner(p, 'user-b')
     expect(p.commentInput).toBe('')
     expect(p.replyInput).toBe('')
     expect(p.replyTo).toBeNull()
     expect(p.faved).toBe(false)
+    expect(p.buyRequested).toBe(false)
   })
 
   test('换号不动公开的商品快照与已发布留言', () => {
@@ -167,10 +176,12 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     switchOwner(p, 'user-a')
     p.commentInput = 'A 的草稿'
     p.faved = true
+    p.buyRequested = true
 
     switchOwner(p, null)
     expect(p.commentInput).toBe('')
     expect(p.faved).toBe(false)
+    expect(p.buyRequested).toBe(false)
   })
 
   test('未确认的乐观占位随换号丢掉，已确认的留言保持原序', () => {
@@ -480,6 +491,133 @@ describe('详情页静默刷新的留言读取成败语义（#170 复查 N6）',
   })
 })
 
+/** 底栏动作的最小模型：一个在飞锁（令牌或 `null`）+ 当页的账号与代次 */
+function actionPage() {
+  return {
+    ownerId: null as string | null,
+    epoch: 0,
+    /** 在飞锁：持有它的是某一次点击的令牌（`null` = 没有在途请求） */
+    inFlight: null as number | null,
+    tokenSeq: 0,
+    buyRequested: false,
+  }
+}
+
+type ActionPage = ReturnType<typeof actionPage>
+
+/** 一次点击：铸令牌并占锁（对应 `index.tsx` 里 `beginChatTask` + 置 `chatInFlightRef`） */
+function tapChat(p: ActionPage): ChatTask {
+  p.tokenSeq += 1
+  const task = beginChatTask(p.epoch, p.ownerId, p.tokenSeq)
+  p.inFlight = task.token
+  return task
+}
+
+/** 令牌此刻是否还有效（`index.tsx` 里 `isCurrentTask()` 读的就是这三个量） */
+function chatTaskOk(p: ActionPage, task: ChatTask): boolean {
+  return isCurrentChatTask(task, {
+    ownerId: p.ownerId,
+    epoch: p.epoch,
+    token: p.inFlight,
+  })
+}
+
+/** 收尾：只有持锁的那次点击能释放锁（对应 `.finally(release)`） */
+function releaseChat(p: ActionPage, task: ChatTask): void {
+  if (!shouldReleaseChatTask(task, p.inFlight)) return
+  p.inFlight = null
+}
+
+describe('详情页底栏动作的账号作用域（#236 复查 P2）', () => {
+  test('同账号同世代、且仍持有那把锁：这次建会话的回调照常落地', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = tapChat(p)
+    expect(chatTaskOk(p, task)).toBe(true)
+    expect(shouldReleaseChatTask(task, p.inFlight)).toBe(true)
+  })
+
+  test('换号后 A 的迟到建会话响应不再落地（不导航、不弹错），且不占着 B 的锁', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = tapChat(p)
+
+    // 渲染期清场：代次前进、在飞锁一并作废
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.inFlight = null
+    expect(chatTaskOk(p, task)).toBe(false)
+    // A 的收尾也认不出这把锁（锁已经是 `null` / 或 B 的新令牌），不会删掉 B 的标记
+    expect(shouldReleaseChatTask(task, p.inFlight)).toBe(false)
+  })
+
+  test('A → B → A：账号名又相同也必须判旧（代次与令牌都不是原来那一个）', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const stale = tapChat(p)
+    releaseChat(p, stale)
+
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.ownerId = 'user-a'
+    p.epoch += 1
+    expect(chatTaskOk(p, stale)).toBe(false)
+  })
+
+  test('卸载让在途的建会话任务作废', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = tapChat(p)
+
+    p.epoch += 1
+    p.inFlight = null
+    expect(chatTaskOk(p, task)).toBe(false)
+  })
+
+  test('锁只由持锁的那一次点击释放：B 已重新发起时 A 的收尾不删 B 的锁', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const aTask = tapChat(p)
+
+    // 换号清场把锁还给 B，B 立刻点了同一次「聊一聊」
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.inFlight = null
+    const bTask = tapChat(p)
+
+    releaseChat(p, aTask)
+    // A 的迟到收尾没有删掉 B 的锁：B 仍在飞，连点第二次会被挡住
+    expect(p.inFlight).toBe(bTask.token)
+    expect(chatTaskOk(p, bTask)).toBe(true)
+  })
+
+  test('换号把在飞锁作废：B 的点击不被 A 的在途请求堵住', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    tapChat(p)
+    expect(p.inFlight).not.toBeNull()
+
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.inFlight = null
+    // B 能立刻发起自己的请求（若沿用裸布尔锁，这里仍是被 A 占着的 true）
+    const bTask = tapChat(p)
+    expect(p.inFlight).toBe(bTask.token)
+  })
+
+  test('购买弹窗的迟到回写：换号 / 退出后不把「待店家确认」写给下一个账号', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = beginTask(p.epoch, p.ownerId)
+
+    // 弹窗还开着的时候换号清场了（清场只能清「已写下」的状态，挡不住随后的回写）
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    expect(isTaskCurrent(task, p.epoch, p.ownerId)).toBe(false)
+    expect(p.buyRequested).toBe(false)
+  })
+})
+
 /** 取 `index.tsx` 里 `from` 到其后第一个 `to` 之间的源码 */
 async function source(): Promise<string> {
   return await Bun.file(new URL('../src/pages/listing-detail/index.tsx', import.meta.url)).text()
@@ -702,6 +840,58 @@ describe('详情页接线（#170 判据 C/D）', () => {
       block,
       'setComments(loaded.comments)',
       "setCommentsCursor(loaded.status === 'ok' ? loaded.nextCursor : null)",
+    )
+  })
+})
+
+describe('详情页底栏动作的接线（#236 复查 P2）', () => {
+  test('聊一聊：令牌在发请求之前铸好并占锁，且不再是裸布尔锁', async () => {
+    const block = await pageSlice('const chatWithSeller = () => {', '/**\n   * 「立即购买」')
+    expectBefore(block, 'const task = beginChatTask(', 'createConversation(id)')
+    expectBefore(block, 'chatInFlightRef.current = task.token', 'createConversation(id)')
+    // 裸布尔锁会「换号后 B 被 A 的在途请求堵住 + A 的收尾删掉 B 的锁」
+    expect(block).not.toMatch(/chatInFlightRef\.current = (true|false)/)
+    expect(block).toContain('if (chatInFlightRef.current !== null) return')
+  })
+
+  test('聊一聊：成功导航与失败提示都在守卫之后，finally 只释放自己的锁', async () => {
+    const block = await pageSlice('const chatWithSeller = () => {', '/**\n   * 「立即购买」')
+    const thenBlock = inner(
+      '.then(async (conversation) => {',
+      '.catch((error: unknown) => {',
+    )(block)
+    expectBefore(thenBlock, 'if (!isCurrentTask()) return', 'Taro.navigateTo(')
+
+    const catchBlock = inner('.catch((error: unknown) => {', '.finally(release)')(block)
+    const guard = 'if (!isCurrentTask()) {'
+    expectBefore(catchBlock, guard, "Taro.showToast({ title: '请先登录后再聊一聊'")
+    // 守卫内部：会话过期（401）造成的迟到失败仍要提示；真正换号才彻底静默
+    expect(catchBlock).toContain('shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error)')
+    // 收尾只释放自己的锁：`release` 内部按令牌比对，A 的迟到 finally 删不掉 B 的标记
+    const releaseBlock = inner(
+      'const release = (): void => {',
+      'void createConversation(id)',
+    )(block)
+    expectBefore(
+      releaseBlock,
+      'if (!shouldReleaseChatTask(task, chatInFlightRef.current)) return',
+      'chatInFlightRef.current = null',
+    )
+    expect(block).toContain('.finally(release)')
+  })
+
+  test('换号清场把在飞的会话锁一并作废（B 不被 A 的在途请求堵住）', async () => {
+    const block = await pageSlice('if (ownerChanged(prevUserId, userId)) {', 'useEffect(')
+    expect(block).toContain('chatInFlightRef.current = null')
+  })
+
+  test('立即购买：确认回写前先确认任务仍属于当前账号（清场挡不住迟到的回写）', async () => {
+    const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
+    expectBefore(block, 'const task = beginTask(', 'Taro.showModal(')
+    expectBefore(
+      block,
+      'if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return',
+      'setBuyRequested(true)',
     )
   })
 })

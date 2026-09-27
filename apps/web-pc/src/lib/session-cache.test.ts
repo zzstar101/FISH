@@ -179,4 +179,37 @@ describe('resetPcSession', () => {
     ).toBeUndefined()
     expect(queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)).toBeNull()
   })
+
+  test('a superseded reset never clobbers the newer session or its cache', async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData<Me>(AUTH_ME_QUERY_KEY, user)
+
+    // 让第一次重置停在 cancelQueries 的 await 上，复现「旧 401 的重置迟到」交错点。
+    const originalCancel = queryClient.cancelQueries.bind(queryClient)
+    let releaseFirstCancel!: () => void
+    const firstCancelGate = new Promise<void>((resolve) => {
+      releaseFirstCancel = resolve
+    })
+    let cancelCalls = 0
+    queryClient.cancelQueries = async (filters) => {
+      cancelCalls += 1
+      if (cancelCalls === 1) await firstCancelGate
+      return originalCancel(filters)
+    }
+
+    const stale = resetPcSession(queryClient, null)
+    await Promise.resolve()
+    const fresh = resetPcSession(queryClient, user)
+    await expect(fresh).resolves.toBe(true)
+
+    // 新会话已经建立并取到了自己的业务数据。
+    const detailKey = ['pc', 'listings', 'detail', 'listing']
+    queryClient.setQueryData(detailKey, { owner: 'B' })
+
+    releaseFirstCancel()
+    await expect(stale).resolves.toBe(false)
+
+    expect(queryClient.getQueryData<Me>(AUTH_ME_QUERY_KEY)).toEqual(user)
+    expect(queryClient.getQueryData<{ owner: string }>(detailKey)).toEqual({ owner: 'B' })
+  })
 })

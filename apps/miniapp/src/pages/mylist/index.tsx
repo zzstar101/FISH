@@ -4,6 +4,7 @@ import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/tar
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
@@ -166,16 +167,6 @@ const PILL_CLASS: Record<MyListSegment, string> = {
  * 「它们行首要么是主操作、要么是说明文字，左起才是阅读顺序」。
  */
 const END_ALIGNED: MyListSegment[] = ['sale', 'off']
-
-/**
- * 回到顶部钮的出现阈值。
- *
- * 本页的 1版稿 `.totop` 是在**内部滚动容器**上按 `scrollTop > 320` 判的（`.content{overflow-y:auto}`），
- * 本页是页面级滚动，`usePageScroll` 给的 `scrollTop` 是**设备 px**（≈ 稿的 pt），两者不是同一把尺子；
- * 且仓库对「页面级滚动列表」已有同口径先例（`pages/chat` / `pages/profile` / `components/order-list`
- * 都是 380），所以这里跟先例走，不照抄稿的 320 —— 阈值只决定按钮早露头还是晚露头，观感差约一成。
- */
-const TOTOP_THRESHOLD = 380
 
 export default function MyList() {
   const authStatus = useAuthGuard()
@@ -396,7 +387,7 @@ export default function MyList() {
     setShowToken((token) => (token ?? 0) + 1)
   })
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   const awaitingIds = useMemo(() => new Set(pending.proposals.keys()), [pending])
   const counts = countBySegment(cards, awaitingIds)
@@ -492,6 +483,26 @@ export default function MyList() {
 
   const openListing = (row: Row) => {
     void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${row.listing.id}` })
+  }
+
+  /**
+   * 「想要 N」→ 想要的人页（C5）。
+   *
+   * **点区只挂「想要」二字，不挂整行 `.ml__rstats`**：这一行里还有「浏览 N」，两个数字
+   * 共用一个容器，而通往想要的人页的入口只有其中一个 —— 点浏览量跳进「想要的人」是语义
+   * 不通的一跳。所以入口收在「想要」那一格上，别图省事挂到行上。
+   *
+   * **入口与计数是否为 0 无关**：这一行按 Owner 2026-09-24 的拍板把契约取不到的计数
+   * 显示成 0（见 `.ml__rstats` 处说明），0 只表示「系统没有这个数」，不表示「没人想要」。
+   * 历史上这个入口被删过两次，两次都是写成「计数为 `null` 就不画入口」—— 把「没有计数」
+   * 误当成「没有想要的人」，顺手把唯一一条通往想要的人页的路也删了。所以这里无条件渲染，
+   * 不拿 `item.listing.wants` 做任何判断。
+   *
+   * URL 只带 `listingId`：watchers 页自己按 id 拉详情与名单（`pages/watchers/index.tsx`
+   * 只读这一个参数），标题不进 URL 也就没有中文编码问题。
+   */
+  const openWatchers = (row: Row) => {
+    void Taro.navigateTo({ url: `/pages/watchers/index?listingId=${row.listing.id}` })
   }
 
   /**
@@ -870,7 +881,13 @@ export default function MyList() {
                               {`浏览 ${item.listing.views ?? 0}`}
                             </Text>
                             <View className="ml__dot" />
-                            <Text className="ml__rstat num">{`想要 ${item.listing.wants ?? 0}`}</Text>
+                            {/*
+                              点区挂在「想要」这一格上（不是整行 `.ml__rstats`），理由与
+                              「入口与计数 0 无关」见 `openWatchers` 处说明。
+                            */}
+                            <Text className="ml__rstat num" onClick={() => openWatchers(item)}>
+                              {`想要 ${item.listing.wants ?? 0}`}
+                            </Text>
                           </View>
                           {/*
                             待确认卡片多一行（稿 `.rreq`）：谁在等、等了多久 —— 卖家点
@@ -1004,10 +1021,7 @@ export default function MyList() {
         <Text>发布</Text>
       </View>
 
-      {/* 回到顶部：稿 ⑧，滚过一屏后浮现，压在发布钮之上（见 index.scss 的定位） */}
-      <View className={`ml__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="ml__totop-arrow" />
-      </View>
+      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
 
       {/* ---------------- 下架二次确认（居中卡，稿 ⑤ 的真状态机） ---------------- */}
       {confirming ? (

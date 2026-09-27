@@ -20,8 +20,10 @@ const AUTH_PAGES = new Set(['/login', '/register'])
 function redirectToLoginOnUnauthenticated(error: unknown, skip: boolean): void {
   if (!isUnauthenticatedError(error)) return
 
-  void resetPcSession(queryClient, null).then(() => {
-    if (skip || AUTH_PAGES.has(currentAppPathname())) return
+  void resetPcSession(queryClient, null).then((applied) => {
+    // 这次 401 的重置已被更新的登录 / 重置取代时，缓存保持新会话，
+    // 也不能再把刚完成认证的用户踢回登录页。
+    if (!applied || skip || AUTH_PAGES.has(currentAppPathname())) return
 
     void router
       .navigate({ to: '/login', search: { redirect: currentHref() } })

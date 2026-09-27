@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
@@ -165,6 +166,8 @@ export default function Home() {
    * 瀑布流整体拽上去一截 —— 所以这里拆成两条：图标条正常滚走，文字条固定在流外。
    */
   const [catsPinned, setCatsPinned] = useState(false)
+  /** 回到顶部钮（共享组件）：滚过一屏浮现 */
+  const [showTop, setShowTop] = useState(false)
   const scrollTopRef = useRef(0)
   /** 图标条下沿越过顶栏下沿时的滚动位置；挂载后量一次 */
   const pinAt = useRef(Number.POSITIVE_INFINITY)
@@ -194,7 +197,13 @@ export default function Home() {
     const next = scrollTop >= pinAt.current
     // 滚动事件很密：值没变就把同一个值还回去，React 会跳过这轮渲染
     setCatsPinned((prev) => (prev === next ? prev : next))
+    // 回到顶部钮：滚过一屏浮现（阈值随共享组件）
+    setShowTop(scrollTop > BACK_TOP_THRESHOLD)
   })
+
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
 
   return (
     <View className="home">
@@ -328,6 +337,9 @@ export default function Home() {
           </View>
         )}
       </View>
+
+      {/* 回到顶部：Tab 页抬到底栏上方 */}
+      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
     </View>
   )
 }

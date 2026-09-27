@@ -1,10 +1,12 @@
 import type { ChatWatchersResponse } from '@fish/contracts/chat/schema'
 import type { ListingDetail } from '@fish/contracts/listings/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
+import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
 import Taro, { useDidShow, useRouter } from '@tarojs/taro'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
@@ -38,6 +40,27 @@ export default function Watchers() {
   const userId = useAuth().user?.id ?? null
   const listingId = useRouter<{ listingId?: string }>().params.listingId ?? ''
   const [page, setPage] = useState<Page>(initialPage)
+  /**
+   * 回到顶部钮（共享组件）：滚过一屏浮现。
+   *
+   * ⚠️ 本页名单在**内滚 ScrollView**（`.wt__scroll`，页面根 `.wt` 是 `height:100vh;
+   * overflow:hidden`），页面本身并不滚动 —— `usePageScroll` 收不到这条滚动流，
+   * `Taro.pageScrollTo` 也够不到它。所以显示判据取自容器的 `onScroll`，回顶走
+   * `scrollIntoView` 锚点（同 `pages/user`、`pages/conversation` 的内滚口径）。
+   */
+  const [showTop, setShowTop] = useState(false)
+  const onScroll = useCallback((e: { detail: ScrollViewProps.onScrollDetail }) => {
+    // `onScroll` 的 `scrollTop` 是设备 px，与共享组件阈值同口径（不 ×2）
+    setShowTop(e.detail.scrollTop > BACK_TOP_THRESHOLD)
+  }, [])
+  /**
+   * `scrollIntoView` 的值不变时原生层不会重滚，所以备两个同位的锚点交替指 ——
+   * 连点、滚下去再点，每次都能真的回到顶部（同 `pages/user` 的做法）。
+   */
+  const [topAnchor, setTopAnchor] = useState('')
+  const backToTop = () => {
+    setTopAnchor((prev) => (prev === 'wt-top-a' ? 'wt-top-b' : 'wt-top-a'))
+  }
   const [showToken, setShowToken] = useState<number | null>(null)
   const [morePending, setMorePending] = useState(false)
   const [moreFailed, setMoreFailed] = useState(false)
@@ -227,7 +250,17 @@ export default function Watchers() {
               <Text className="wt__empty-text">还没有同学为这件商品发起聊天</Text>
             </View>
           ) : (
-            <ScrollView className="wt__scroll" scrollY>
+            <ScrollView
+              className="wt__scroll"
+              scrollY
+              enhanced
+              showScrollbar={false}
+              scrollIntoView={topAnchor}
+              onScroll={onScroll}
+            >
+              {/* 回到顶部的两个同位锚点：交替指（见 backToTop 的注释） */}
+              <View id="wt-top-a" />
+              <View id="wt-top-b" />
               <View className="wt__list">
                 {page.items.map(({ user, startedAt }) => (
                   <View key={user.id} className="wt__row">
@@ -285,6 +318,9 @@ export default function Watchers() {
           )}
         </>
       ) : null}
+
+      {/* 回到顶部（内滚容器版：滚回由 `scrollIntoView` 锚点完成，见 backToTop） */}
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

@@ -3,6 +3,7 @@ import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
@@ -59,12 +60,6 @@ function relativeTime(iso: string): string {
   const days = Math.floor(hours / 24)
   return days === 1 ? '昨天' : `${days} 天前`
 }
-
-/**
- * 回到顶部钮的出现阈值：1版稿 .totop 滚过 380pt 后出现。
- * `usePageScroll` 的单位是逻辑 px（= 稿的 pt），**不是** scss 里的 rpx，不 ×2。
- */
-const TOTOP_THRESHOLD = 380
 
 export default function Chat() {
   // 消息列表需要登录（GET /conversations）；Tab 页只能用 navigateTo 跳登录页
@@ -265,8 +260,8 @@ export default function Chat() {
     reloadConversations()
   })
 
-  /** 1版稿 .totop：滚过一屏半后浮现 */
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  /** 1版稿 .totop：滚过一屏半后浮现（阈值随共享组件） */
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   /**
    * 通知未读数（#23 `GET /notifications/unread-count` 的语义）：切进「通知」tab 即清零。
@@ -623,10 +618,8 @@ export default function Chat() {
         )}
       </View>
 
-      {/* 1版稿 .totop：滚过一屏半浮现，品牌色上箭头 */}
-      <View className={`chat__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="chat__totop-arrow" />
-      </View>
+      {/* 1版稿 .totop：滚过一屏半浮现；Tab 页抬到底栏上方 */}
+      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
     </View>
   )
 }

@@ -123,7 +123,7 @@ describe('#170 D 判据层：迟到 / 跨账号的响应不得落地', () => {
 describe('#170 D 接线层：useDidShow 静默重拉', () => {
   test('页面注册了 useDidShow，且从 @tarojs/taro 引入', async () => {
     const code = await source()
-    expect(code).toContain("import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'")
+    expect(code).toContain("import Taro, { useDidShow } from '@tarojs/taro'")
     expect(code).toContain('useDidShow(() => {')
   })
 
