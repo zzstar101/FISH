@@ -1,11 +1,14 @@
 import { LoginRequestSchema } from '@fish/contracts/auth/session'
 import { Checkbox } from '@fish/ui/checkbox'
 import { Label } from '@fish/ui/label'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@fish/ui/tabs'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { type FormEvent, useState } from 'react'
 import { describeAuthFailure } from '../features/auth/error-messages'
 import { AuthPageShell, FormAlert, SubmitButton, TextField } from '../features/auth/form'
 import { useLogin } from '../features/auth/queries'
+import { ScanLoginPanel } from '../features/auth/scan-login'
+import { type AuthSubmissionGate, createAuthSubmissionGate } from '../features/auth/submission-gate'
 import { type FieldErrors, issuesToFieldErrors } from '../lib/form-errors'
 import { sanitizeRedirect } from '../lib/redirect'
 
@@ -21,14 +24,97 @@ export const Route = createFileRoute('/login')({
 
 function LoginPage() {
   const { redirect } = Route.useSearch()
+  const [tab, setTab] = useState<'scan' | 'password'>('scan')
+  const [agreed, setAgreed] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [submissionGate] = useState(() => createAuthSubmissionGate(setSubmitting))
+  const target = sanitizeRedirect(redirect)
+
+  return (
+    <AuthPageShell
+      description="同校面交 · 让闲置在校园里流动起来"
+      footer={
+        <p className="mt-4 text-center text-ink-3 text-xs leading-relaxed">
+          微信扫码由小程序确认；账号密码仍受 #3 冻结契约保护
+        </p>
+      }
+      iconSrc="/brand-fish.png"
+      title={
+        <img alt="鱼小应 YUXIAOYING" className="mx-auto h-10 w-auto" src="/brand-wordmark.png" />
+      }
+    >
+      <Tabs
+        className="gap-4"
+        onValueChange={(value) => {
+          if (!submitting) setTab(value as 'scan' | 'password')
+        }}
+        value={tab}
+      >
+        <TabsList>
+          <TabsTrigger disabled={submitting} value="scan">
+            扫码登录
+          </TabsTrigger>
+          <TabsTrigger disabled={submitting} value="password">
+            账号密码
+          </TabsTrigger>
+        </TabsList>
+
+        <Label className="flex items-start gap-2 text-ink-2 text-xs">
+          <Checkbox
+            checked={agreed}
+            className="mt-0.5"
+            onCheckedChange={(checked) => setAgreed(checked === true)}
+          />
+          <span>
+            我已阅读并同意 <span className="text-brand">《用户协议》</span> 和{' '}
+            <span className="text-brand">《隐私政策》</span>
+          </span>
+        </Label>
+
+        <TabsContent className="data-[state=inactive]:hidden" forceMount value="scan">
+          <ScanLoginPanel
+            active={tab === 'scan'}
+            agreed={agreed}
+            claimSubmission={submissionGate.claim}
+            target={target}
+          />
+        </TabsContent>
+        <TabsContent className="data-[state=inactive]:hidden" forceMount value="password">
+          <PasswordLoginForm
+            agreed={agreed}
+            claimSubmission={submissionGate.claim}
+            submitting={submitting}
+            target={target}
+          />
+        </TabsContent>
+      </Tabs>
+
+      <p className="mt-4 text-center text-ink-3 text-sm">
+        还没有账号？
+        <Link className="font-medium text-brand" to="/register">
+          注册
+        </Link>
+      </p>
+    </AuthPageShell>
+  )
+}
+
+function PasswordLoginForm({
+  agreed,
+  claimSubmission,
+  submitting,
+  target,
+}: {
+  agreed: boolean
+  claimSubmission: AuthSubmissionGate['claim']
+  submitting: boolean
+  target: string
+}) {
   const login = useLogin()
   const [studentNo, setStudentNo] = useState('')
   const [password, setPassword] = useState('')
-  const [agreed, setAgreed] = useState(true)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
-
-  const target = sanitizeRedirect(redirect)
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -45,12 +131,15 @@ function LoginPage() {
       return
     }
 
+    const finishSubmission = claimSubmission()
+    if (finishSubmission === null) return
     setFieldErrors({})
     login.mutate(parsed.data, {
       // `target` 是任意站内路径，可能尚未在本版路由表里；整页跳转能保证
       // 登录 cookie 生效后的应用状态是干净的，也不会踩 SPA 的未知路由。
       onSuccess: () => window.location.assign(target),
       onError: (error) => {
+        finishSubmission()
         const failure = describeAuthFailure(error)
         setFieldErrors(failure.fieldErrors ?? {})
         setFormError(failure.formError ?? null)
@@ -59,61 +148,31 @@ function LoginPage() {
   }
 
   return (
-    <AuthPageShell
-      description="同校面交 · 让闲置在校园里流动起来"
-      footer={
-        <p className="mt-4 text-center text-ink-3 text-xs leading-relaxed">
-          登录接口来自 #3 冻结契约（学号 + 密码,httpOnly cookie）
-        </p>
-      }
-      iconSrc="/brand-fish.png"
-      title={
-        <img alt="鱼小应 YUXIAOYING" className="mx-auto h-10 w-auto" src="/brand-wordmark.png" />
-      }
-    >
-      <form className="space-y-4" noValidate onSubmit={handleSubmit}>
-        {formError !== null && <FormAlert message={formError} />}
+    <form className="space-y-4" noValidate onSubmit={handleSubmit}>
+      {formError !== null && <FormAlert message={formError} />}
 
-        <TextField
-          autoComplete="username"
-          error={fieldErrors.studentNo}
-          inputMode="numeric"
-          label="学号"
-          onChange={(event) => setStudentNo(event.target.value)}
-          placeholder="12 位学号"
-          value={studentNo}
-        />
-        <TextField
-          autoComplete="current-password"
-          error={fieldErrors.password}
-          label="密码"
-          onChange={(event) => setPassword(event.target.value)}
-          placeholder="8–32 位"
-          type="password"
-          value={password}
-        />
+      <TextField
+        autoComplete="username"
+        error={fieldErrors.studentNo}
+        inputMode="numeric"
+        label="学号"
+        onChange={(event) => setStudentNo(event.target.value)}
+        placeholder="12 位学号"
+        value={studentNo}
+      />
+      <TextField
+        autoComplete="current-password"
+        error={fieldErrors.password}
+        label="密码"
+        onChange={(event) => setPassword(event.target.value)}
+        placeholder="8–32 位"
+        type="password"
+        value={password}
+      />
 
-        <Label className="flex items-start gap-2 text-ink-2 text-xs">
-          <Checkbox
-            checked={agreed}
-            className="mt-0.5"
-            onCheckedChange={(checked) => setAgreed(checked === true)}
-          />
-          <span>
-            我已阅读并同意 <span className="text-brand">《用户协议》</span> 和{' '}
-            <span className="text-brand">《隐私政策》</span>
-          </span>
-        </Label>
-
-        <SubmitButton pending={login.isPending}>登录</SubmitButton>
-      </form>
-
-      <p className="mt-4 text-center text-ink-3 text-sm">
-        还没有账号？
-        <Link className="font-medium text-brand" to="/register">
-          注册
-        </Link>
-      </p>
-    </AuthPageShell>
+      <SubmitButton disabled={submitting} pending={login.isPending}>
+        登录
+      </SubmitButton>
+    </form>
   )
 }

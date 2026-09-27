@@ -143,6 +143,8 @@ export function createApp(
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
     guard: restrictionGuard,
+    clientIp: (request) =>
+      trustedClientIp(request, lookupNetwork.peerIp(request), lookupNetwork.trustedProxyIp),
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)
