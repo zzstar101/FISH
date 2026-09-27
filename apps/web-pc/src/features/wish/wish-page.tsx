@@ -10,7 +10,7 @@ import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice } from '../../lib/format'
 import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
-import { MatchListDialog, type MatchTarget } from './match-list'
+import { formatWishBudgetCents, MatchListDialog, type MatchTarget } from './match-list'
 import { MyWishes } from './my-wishes'
 import { useMyListingsForMatches, useWishPool } from './queries'
 import { WishFormDialog } from './wish-form'
@@ -148,9 +148,11 @@ function WishPool({ ownerId }: { ownerId: string }) {
             <div className="mt-5 flex items-end justify-between gap-3">
               <div>
                 <p className="text-ink-3 text-xs">预算中位数</p>
-                <p className="mt-1 font-semibold text-lg">{formatPrice(item.medianBudgetCents)}</p>
+                <p className="mt-1 font-semibold text-lg">
+                  {formatWishBudgetCents(item.medianBudgetCents)}
+                </p>
               </div>
-              <Badge variant="lavender">{item.wantCount} 人想要</Badge>
+              <Badge variant="lavender">{item.wantCount} 条需求</Badge>
             </div>
             <p className="mt-4 flex items-center gap-1.5 text-brand text-xs">
               <Search className="size-3.5" />

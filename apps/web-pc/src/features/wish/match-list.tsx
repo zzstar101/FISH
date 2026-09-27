@@ -217,13 +217,23 @@ function ListingMatchRow({ item }: { item: ListingMatchItem }) {
   )
 }
 
+export function formatWishBudgetCents(cents: number): string {
+  // 愿望预算的 0 是金额，不是商品价格语义的“免费送”。
+  return cents === 0 ? '¥0' : formatPrice(cents)
+}
+
 export function budgetLabel(min: number | null, max: number | null): string {
   // 愿望下限 0 表示“不设下限”，不是商品语义的“免费送”。
-  if (min === 0) return max === null ? '不限' : `≤ ${formatPrice(max)}`
-  if (min !== null && max !== null) {
-    return min === max ? formatPrice(max) : `${formatPrice(min)} ~ ${formatPrice(max)}`
+  if (min === 0) {
+    if (max === null) return '不限'
+    return max === 0 ? formatWishBudgetCents(0) : `≤ ${formatWishBudgetCents(max)}`
   }
-  if (min !== null) return `≥ ${formatPrice(min)}`
-  if (max !== null) return `≤ ${formatPrice(max)}`
+  if (min !== null && max !== null) {
+    return min === max
+      ? formatWishBudgetCents(max)
+      : `${formatWishBudgetCents(min)} ~ ${formatWishBudgetCents(max)}`
+  }
+  if (min !== null) return `≥ ${formatWishBudgetCents(min)}`
+  if (max !== null) return `≤ ${formatWishBudgetCents(max)}`
   return '不限'
 }
