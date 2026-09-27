@@ -188,7 +188,13 @@ describe('POST /auth/register', () => {
     for (const body of bodies) {
       const res = await app.request('/auth/register', post(body))
       expect(res.status).toBe(422)
-      expect(await res.json()).toMatchObject({ error: { code: 'VALIDATION_FAILED' } })
+
+      const payload = (await res.json()) as {
+        error: { code: string; details?: Array<{ field: string; message: string }> }
+      }
+      expect(payload.error.code).toBe('VALIDATION_FAILED')
+      expect(payload.error.details?.length).toBeGreaterThan(0)
+      expect(payload.error.details?.[0]?.message).not.toBe('')
     }
   })
 })

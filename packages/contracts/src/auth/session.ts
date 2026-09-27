@@ -18,9 +18,9 @@ export const StudentNoSchema = z
  * 8–32 位是**契约里的产品规则**（#3 约定），不是哈希算法的限制：argon2id 没有 bcrypt 那样的
  * 72 字节输入截断问题，因此不要把它当成「为将来换算法留余量」。
  */
-export const PasswordSchema = z.string().min(8).max(32)
+export const PasswordSchema = z.string().min(8, '密码至少 8 个字符').max(32, '密码最多 32 个字符')
 
-export const NicknameSchema = z.string().trim().min(1).max(20)
+export const NicknameSchema = z.string().trim().min(1, '请填写昵称').max(20, '昵称最多 20 个字符')
 
 /** `.strict()`：多余字段直接 422，而不是静默丢弃。#86 F 节：不再采集校区。 */
 export const RegisterRequestSchema = z.strictObject({
