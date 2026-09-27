@@ -128,6 +128,18 @@ function tagSchemeViolations(entries: JournalEntry[]): string[] {
         )
         return
       }
+      const twin = entries.find(
+        (other, otherIndex) => otherIndex !== index && other.idx === entry.idx,
+      )
+      if (entry.idx !== index) {
+        const twinNote =
+          twin === undefined
+            ? ''
+            : `；\`idx=${entry.idx}\` 也出现在 \`${twin.tag}\`（两条并行分支各自追加了同一个编号）`
+        violations.push(
+          `第 ${position} 条 \`${entry.tag}\` 的 idx=${entry.idx} 与它的位置不一致（应为 ${index}）${twinNote}：遗留序号段必须从 0 开始、与位置一一对应且连续`,
+        )
+      }
       const prefix = `${pad4(entry.idx)}_`
       if (!entry.tag.startsWith(prefix)) {
         violations.push(
@@ -335,6 +347,23 @@ test('#316 撞号：点名同时占用同一编号的 tag 与条目位置', () =
     snapshots: legacySnapshots.slice(0, 2),
   })
   expect(messages).toContain('迁移编号 `0001_alpha` 在 journal 中出现 2 次（第 2、3 条）')
+})
+
+test('#316 真实撞号形态：两条并行分支各自追加同一个编号（tag 不同、idx 相同）', () => {
+  const messages = syntheticMessages({
+    entries: [
+      ...legacyEntries,
+      { idx: 3, version: '7', when: 4, tag: '0003_kind_harry_osborn', breakpoints: true },
+      { idx: 3, version: '7', when: 5, tag: '0003_late_havok', breakpoints: true },
+    ],
+    sqlFiles: [...legacySqlFiles, '0003_kind_harry_osborn.sql', '0003_late_havok.sql'],
+    snapshots: [
+      ...legacySnapshots,
+      { name: '0003_snapshot.json', id: syntheticId(3), prevId: syntheticId(2) },
+    ],
+  })
+  expect(messages).toContain('`0003_late_havok` 的 idx=3 与它的位置不一致（应为 4）')
+  expect(messages).toContain('`idx=3` 也出现在 `0003_kind_harry_osborn`')
 })
 
 test('#316 时间戳之后又手写序号：点名两条 tag', () => {
