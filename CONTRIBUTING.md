@@ -8,10 +8,39 @@
 
 ## 1. 认领任务（Issue 即模块）
 
-- 每个 Issue 对应一个模块：认领人把 Issue 指派给自己，并对其验收标准负责。
+- 每个 Issue 对应一个模块：认领人对该 Issue 的**全部验收标准**负责。
 - 模块的**前端（`apps/web`）、后端（`apps/api`）、Contract（`packages/contracts`）都由认领人一个人完成**，不按前后端分包。
 - 认领前先确认与别人正在做的模块互不重叠，避免并行冲突。
 - 认领后按第 3 节开分支：一个 Issue 一个 `feat/<issue>-<slug>`。
+
+### 1.1 认领协议（人与 AI agent 都适用）
+
+同一时间**只做一个 Issue**。认领要走完这四步，缺一步都不算认领成功：
+
+1. **先报备并等确认**：向 Owner 说明「要做哪张 Issue、为什么选它、打算怎么验证」，**得到确认后**再动手。AI agent 必须先报备，不得自行开工。
+2. **在 Issue 上评论认领**：写一条认领评论（谁在做、计划交付什么），并把自己设为 assignee（没有 assign 权限时，评论就是唯一凭据）；同时给 Issue 打上 `state: in progress`。
+3. **开 PR 后改状态**：把 label 换成 `state: has PR`，并在 PR 描述里 `closes #N`。
+4. **停止就释放**：中途放弃或转做别的，必须在 Issue 上评论说明原因、去掉 `state: in progress`**并移除 assignee**（`gh issue edit <N> --repo zzstar101/FISH --remove-assignee @me`）。assignee 必须一起清掉：第 1.2 节的查询带 `no:assignee`，只摘 label 的话这张单会被**永远**排除在可开工列表之外。
+
+### 1.2 找"没人做、也没被阻塞"的 Issue
+
+状态用 label 表达，不靠"谁说过要做"：
+
+| label | 含义 |
+| --- | --- |
+| `state: in progress` | 已被认领并在开发中 |
+| `state: blocked` | 被其它 Issue 或未决口径阻塞，未解除前不要开工 |
+| `state: has PR` | 已开 PR，等 zzstar101 审核 |
+
+查当前可开工的（无人认领、无 PR、未阻塞）：
+
+```bash
+gh issue list -R zzstar101/FISH --state open \
+  --search 'no:assignee -label:"state: in progress" -label:"state: blocked" -linked:pr'
+```
+
+- 优先级仍写在标题里（`[P0|P1|P2|P3][域] 一句话`），**不迁到 label**。
+- Issue 之间的依赖写在正文（`blocked by #N`）；依赖未解除不开工，也不要给带 `blocked by` 的 Issue 打 `state: in progress`。
 
 ## 2. 文件与并行
 
@@ -83,6 +112,7 @@ DB 变更说明
 ## 7. 合入与审核
 
 - 完成验收清单后把 Draft PR 转 Ready，**所有 PR 由 zzstar101 审核**后合入。
+- 推送 PR 之后要盯到本轮结束：CI 红 check 必须查明原因并修到全绿，审查意见必须逐条核实（成立就修，不成立用文件与行号说明）。**带红 check 或未读审查意见的 PR 视为未完成**，不得当成已交付。AI agent 的完整细则见 `AGENTS.md` 第 11 节。
 - 集成问题由各模块认领人自己跟进（前端、后端、Contract）。
 
 ## 8. 禁止事项

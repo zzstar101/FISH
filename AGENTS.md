@@ -2,7 +2,7 @@
 
 给 AI coding agent 的操作手册。**人看的协作规则在 [CONTRIBUTING.md](CONTRIBUTING.md)，架构在 [docs/architecture.md](docs/architecture.md)** —— 本文件不重复它们，只写 agent 最容易做错的部分。
 
-> **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，必须首先遵守 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) 的强制工作流**：每个页面一个新分支、上一个分支完成才开下一个、动手前先提醒 Owner、必须到微信开发者工具演示并经 Owner 确认可行后才允许提交。它是本文件的最高优先级补充，先读它再动小程序代码。
+> **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，先读 [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) 与 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md)**：一批页面一条分支一个 PR、同一时间只开一个小程序 PR、**合并前**必须到微信开发者工具逐页演示并经 Owner 认可。该端上流程**只适用于 `apps/miniapp`**，不适用于 `apps/web`（移动端 PWA）与 `apps/web-pc`（PC 站）—— 这两个按本文件的通用纪律走，一个 PR 同样可以包含多个页面。
 
 本项目是 **移动端 Web PWA**（广应科校内二手交易平台 FISH），monorepo + Bun。
 
@@ -69,7 +69,7 @@ bun run ws:smoke            # WebSocket 连通性冒烟
 4. `bun test --isolate`
 5. 涉及运行时行为时，按 README 的最小启动路径实际跑起来验证（不要只靠静态检查下结论）。
 
-> **小程序端（`apps/miniapp`）另有一条更严的验证门禁**：见 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) —— 页面改动必须在微信开发者工具里演示、经 Owner 确认可行后才允许提交，不能被本节的静态检查替代。
+> **小程序端（`apps/miniapp`）另有一条端上门禁**：见 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) —— 一批页面一个 PR、同一时间只开一个小程序 PR、**合并前**必须在微信开发者工具里逐页演示并经 Owner 认可，不能被本节的静态检查替代。该门禁**只约束 `apps/miniapp`**。
 
 CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都不得声称完成。
 
@@ -100,11 +100,30 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 - 拿不到证据时，直接说明"未验证"，不要把它当作事实陈述。
 - 区分"事实"与"推测"；决策权在人类 Owner 手上。
 
-## 10. 相关文档
+## 10. 基线纪律：先 fetch，只信 `origin/main`
+
+- **开工前先 `git fetch origin --prune`**。本地 checkout 的 remote-tracking ref 会过期，而过期的 `origin/main` 会让"某个文件/某一行的现状"整轮判断错位 —— 本仓已经发生过一次：多个 agent 基于陈旧 ref 把 `origin/main` 认成旧提交，得出一整轮错误结论，全部作废。
+- **关于代码现状的判断只认已提交的 `origin/main`**：读文件用 `git show origin/main:<path>`，搜代码用 `git grep <pat> origin/main`。不要用本地工作区、未 fetch 的 `origin/main` 或记忆下结论 —— 本地工作区可能正被别人的在飞任务占用（例如 dirty 的 `#286` 分支）。
+- **并行任务在独立 worktree 中做**：`git worktree add <dir> -b <branch> origin/main`。不要在别人正在用的 checkout 里切分支、`git add` 或暂存文件；不要动不属于本次任务的脏改动。
+- 下结论前先记基线：`git rev-parse HEAD` / `git rev-parse origin/main`，并在回复或 PR 里写明（例："基于 `origin/main = 529ca42`"）。
+- 引用行号前重新读该文件确认，不要沿用旧结论里的行号（行号随合入漂移）。
+
+## 11. PR 生命周期与署名
+
+- **push 不是任务终点**。PR 推上去之后要盯到自己这一轮彻底结束：
+  - 等 CI 跑完（`.github/workflows/ci.yml`）；红 check 必须查明原因并修到全绿，不能留给 Owner。
+  - 逐条处理审查意见：**先独立核实该发现是否成立** —— 成立就修，不成立就用文件与行号说明理由。
+  - 带红 check、未读审查意见或未勾完的验收清单的 PR，一律视为**未完成**，不得报告"做完了"。
+- **绝不把测试失败当作"预先存在的、与本次无关"而忽略**：任何失败都要先定位（包括确认它在 `main` 上是否也失败）；能修就修，不能修就在 PR 里给出证据与影响面，不允许静默跳过或绕过。
+- **agent 产出的内容要署名**：由 AI agent 协助完成的 PR 描述、Issue 评论、Issue 正文，都注明 agent 与模型，例如：`由 AI agent 协助完成（DSH / deepseek-flash）`。PR 模板已含该栏目。
+
+## 12. 相关文档
 
 | 文档 | 内容 |
 | --- | --- |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Issue 认领、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明 |
-| [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) | **小程序前端强制工作流**：每页一分支、上一个完成再开下一个、改前提醒 Owner、开发者工具演示 + Owner 确认后才提交 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Issue 认领协议与 state label、分支/提交/PR、zzstar101 审核、Contract、DB 变更说明 |
+| [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) | 小程序目录内的端上门禁入口（指向 `docs/miniapp-dev-workflow.md`） |
+| [packages/db/AGENTS.md](packages/db/AGENTS.md) | 迁移与 seed 纪律：`drizzle-kit` 生成、不手改历史、`postgres` devDependency 例外 |
+| [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md) | **小程序端上验证工作流**：一批页面一条分支一个 PR、同一时间只开一个 PR、**合并前**开发者工具逐页演示 + Owner 认可（**只约束 `apps/miniapp`**，不适用于 `apps/web` / `apps/web-pc`） |
 | [docs/architecture.md](docs/architecture.md) | 系统形态、运行时拓扑、链路、端口 |
 | [README.md](README.md) | 最小启动路径与常用命令 |
