@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "generate": "bun --env-file=../../.env drizzle-kit generate",
+    "generate": "bun --env-file=../../.env --preload ./scripts/utc8-timestamp-prefix.ts ./node_modules/drizzle-kit/bin.cjs generate",
     "migrate": "bun --env-file=../../.env src/migrate.ts",
     "studio": "bun --env-file=../../.env drizzle-kit studio",
     "seed": "bun --env-file=../../.env src/seed.ts",
