@@ -23,6 +23,11 @@ export const users = pgTable(
     passwordHash: text('password_hash'),
     nickname: text('nickname').notNull(),
     avatarUrl: text('avatar_url'),
+    /**
+     * 个性签名（#179，列由 #287 批量落迁移）。可空 = 未填写或已清空，两者不区分；
+     * 长度与空白归一化由服务端把关（#179 尚未冻结上限，此处不落 CHECK）。
+     */
+    signature: text('signature'),
     authStatus: authStatusEnum('auth_status').notNull().default('UNVERIFIED'),
     verifiedAt: timestamp('verified_at', { withTimezone: true, mode: 'date' }),
     /**

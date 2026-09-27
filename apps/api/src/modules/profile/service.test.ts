@@ -62,6 +62,8 @@ const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
   passwordHash: null,
   nickname: '小明',
   avatarUrl: null,
+  // #287：users 新增可空 signature 列，fixture 补默认值。
+  signature: null,
   authStatus: 'VERIFIED',
   verifiedAt: new Date('2026-09-12T00:00:00.000Z'),
   campusEmail: null,
