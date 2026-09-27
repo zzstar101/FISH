@@ -2,6 +2,12 @@
 
 closed #
 
+## AI 协作声明
+
+<!-- 本次改动若有 AI agent 参与，请注明 agent 与模型；纯人工改动写「无」。由 agent 产出的评论/Issue 正文同样要署名，见 AGENTS.md 第 11 节 -->
+
+- 参与者：
+
 ## 改动内容
 
 <!-- 简述做了什么，以及为什么这样做 -->
@@ -39,6 +45,7 @@ DB 变更说明
 
 ## 安全检查
 
+- [ ] CI 已全绿；红 check 与每一条审查意见都已处理（带红 check / 未读意见的 PR 视为未完成，见 AGENTS.md 第 11 节）
 - [ ] **未提交任何真实密钥**、Token 或生产连接串
 - [ ] 未手改生成文件（`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`）
 - [ ] 未引入 Issue 范围外的新依赖或无关重构
