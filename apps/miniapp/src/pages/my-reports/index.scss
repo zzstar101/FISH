@@ -95,8 +95,13 @@
   height: 96px;
 }
 
-/* 演示说明带（演示构建才有） */
+/* 演示说明带（演示构建才有）。**必须和 `.rpts__body` 一起抬到页头渐变之上**：
+   `.rpts__bg` 是 absolute 定位元素，按绘制顺序画在一切**非定位**流内内容之上，
+   而说明带（落在 496px 渐变高度内）正是非定位的 —— 漏了这两行它在 DOM 里存在、
+   屏幕上一个字都看不见（走查实测该带盒子 y=194 h=32 全在渐变内，像素纯渐变）。 */
 .rpts__demoband {
+  position: relative;
+  z-index: 1;
   margin: 8px 40px 0;
   text-align: center;
   font-family: ui-monospace, Menlo, Consolas, monospace;
@@ -106,9 +111,7 @@
 }
 
 /* ── 记录卡列表 ── */
-/* 内容整体抬到页头渐变之上：`.rpts__bg` 是 absolute 定位元素，会画在一切
-   **非定位**流内内容之上 —— 说明带与前一张卡正好落在渐变高度内，不抬层就
-   被渐变整个盖住（favorites 的 .fav__body 同款处理）。 */
+/* 内容整体抬到页头渐变之上（同上；favorites 的 .fav__body 同款处理）。 */
 .rpts__body {
   position: relative;
   z-index: 1;
