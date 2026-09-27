@@ -1,0 +1,29 @@
+/**
+ * 扫码家族三段切换钮。**纯文字、不用胶囊容器**（Owner 2026-09-26 整改）：
+ * 一行三等分铺满屏宽，挂在取景框下缘（竖直中线 + 半框 260px）下方 40px。
+ * 激活项白色高亮（--surface），其余压灰（--on-dark）。
+ */
+
+.scantabs {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 300px);
+  z-index: 5;
+  display: flex;
+}
+
+.scantabs__item {
+  flex: 1;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  color: var(--on-dark);
+
+  &.is-active {
+    color: var(--surface);
+    font-weight: 600;
+  }
+}

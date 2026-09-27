@@ -635,7 +635,7 @@ export default function Profile() {
           {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
           <View
             className="profile__scanbtn"
-            onClick={() => void Taro.navigateTo({ url: '/pages/scan/index' })}
+            onClick={() => void Taro.navigateTo({ url: '/pages/scan-pr/index' })}
           >
             <Image className="profile__scanbtn-ic" src={ICONS.scanAccent} mode="aspectFit" />
           </View>

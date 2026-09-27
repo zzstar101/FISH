@@ -29,6 +29,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/orders-sell/index': () => import('@/pages/orders-sell/index'),
   '/pages/transaction-meetup/index': () => import('@/pages/transaction-meetup/index'),
   '/pages/login/index': () => import('@/pages/login/index'),
+  '/pages/login-confirm/index': () => import('@/pages/login-confirm/index'),
   '/pages/settings/index': () => import('@/pages/settings/index'),
   '/pages/verify/index': () => import('@/pages/verify/index'),
   '/pages/user/index': () => import('@/pages/user/index'),
@@ -38,6 +39,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/comments/index': () => import('@/pages/comments/index'),
   '/pages/favorites/index': () => import('@/pages/favorites/index'),
   '/pages/scan/index': () => import('@/pages/scan/index'),
+  '/pages/scan-pr/index': () => import('@/pages/scan-pr/index'),
   '/pages/following/index': () => import('@/pages/following/index'),
   '/pages/history/index': () => import('@/pages/history/index'),
 }

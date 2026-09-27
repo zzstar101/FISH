@@ -1,13 +1,16 @@
 @use '@/styles/mixins' as *;
 
 /**
- * 扫一扫（通用二维码）。几何与 `pages/scan-pr` 同一套深色取景层：
- * `--fg` 打底 + 相机预览，四块遮罩留出 500×520 的取景方框并**两轴居中**，
- * 框下是扫码家族三段切换钮（`components/scan-tabs`）与提示文案。
- * 遮罩/框/文案的位置都从「中线 ± 半框」反推（见下），不写死机型坐标。
+ * C6 扫码。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 整页是**深色取景层**（不是白底页）：`--ink` 打底 + 一层浅蓝渐变的「相机预览占位」，
+ * 上面压四块半透明遮罩留出 500×520 的取景方框并**两轴居中**，四角是品牌色 L 形描边。
+ *
+ * 遮罩/框/文案的位置都从「中线 ± 半框」反推，不写死机型坐标——稿子按 375×667 屏画
+ * （框顶 206pt），高屏上会整体偏上、左右留白也不等。
  */
 
-.scanqr {
+.scan {
   position: relative;
   width: 100vw;
   height: 100vh;
@@ -17,7 +20,7 @@
 
 /* ---------------------------------------------------- 取景底（相机预览位） */
 
-.scanqr__view {
+.scan__view {
   position: absolute;
   left: 0;
   right: 0;
@@ -30,7 +33,7 @@
   background: var(--grad-ph);
 }
 
-.scanqr__view-label {
+.scan__view-label {
   margin-top: 80px;
   font-size: 20px;
   letter-spacing: 0.14em;
@@ -38,8 +41,12 @@
   opacity: 0.7;
 }
 
-/** 原生相机：铺满取景底，依赖基础库同层渲染（低版本端上浮顶层，可接受降级）。 */
-.scanqr__camera {
+/**
+ * 原生相机（#114）：铺满取景底。
+ * 相机是原生组件，上面的遮罩 / 取景框 / 扫描线是普通 view 叠加，
+ * 依赖基础库的同层渲染；低版本端上会浮到顶层，属可接受降级。
+ */
+.scan__camera {
   position: absolute;
   left: 0;
   top: 0;
@@ -49,17 +56,16 @@
 
 /* ------------------------------------------------------------ 遮罩 */
 
-.scanqr__mask {
+.scan__mask {
   position: absolute;
   z-index: 1;
   background: var(--scrim-scan);
 }
 
-/* 遮罩四块由取景框几何**反推**（50% ± 半框），不再用稿子的固定 rpx：
-   稿子按 375×667 屏画（框顶 206pt），高屏上整体偏上、左右留白也不等；
-   反推后取景框在任意机型两轴居中，遮罩孔与框缘永远重合，角标不会被盖。 */
+/* 遮罩四块由取景框几何**反推**（50% ± 半框）：任意机型两轴居中，
+   遮罩孔与框缘永远重合，四角描边不会被盖。 */
 
-.scanqr__mask--t {
+.scan__mask--t {
   left: 0;
   right: 0;
   top: 0;
@@ -67,14 +73,14 @@
   height: calc(50% - 260px);
 }
 
-.scanqr__mask--b {
+.scan__mask--b {
   left: 0;
   right: 0;
   bottom: 0;
   height: calc(50% - 260px);
 }
 
-.scanqr__mask--l {
+.scan__mask--l {
   left: 0;
   /* 取景框 500px 宽：左遮罩到框左缘（水平中线 − 半框宽） */
   width: calc(50% - 250px);
@@ -82,7 +88,7 @@
   height: 520px;
 }
 
-.scanqr__mask--r {
+.scan__mask--r {
   right: 0;
   width: calc(50% - 250px);
   top: calc(50% - 260px);
@@ -90,7 +96,7 @@
 }
 
 /* 无权限态：整屏压暗（没有取景框可看） */
-.scanqr__mask--full {
+.scan__mask--full {
   left: 0;
   right: 0;
   top: 0;
@@ -101,7 +107,7 @@
 
 /* ------------------------------------------------------------ 取景框 */
 
-.scanqr__window {
+.scan__window {
   position: absolute;
   /* 两轴居中：任意屏宽/屏高下框都在正中（遮罩由框几何反推，见上） */
   left: 50%;
@@ -113,12 +119,13 @@
   border-radius: 40px;
   box-shadow: inset 0 0 0 2px var(--hairline);
 
+  /* 切到手动输入 / 错误列表时取景框退到背景，避免与弹层抢注意力 */
   &.is-dim {
     opacity: 0.45;
   }
 }
 
-.scanqr__scanline {
+.scan__scanline {
   position: absolute;
   left: 28px;
   right: 28px;
@@ -129,7 +136,7 @@
 }
 
 /* 四角 L 形描边：每个角只画两条边，各带一个圆角 */
-.scanqr__cnr {
+.scan__cnr {
   position: absolute;
   width: 60px;
   height: 60px;
@@ -173,7 +180,7 @@
 /* 返回钮与标题是页面级绝对定位：top 由组件按 readNavMetrics 行内下发
    （状态栏高度 + 胶囊内容行中线，设备 px），与右侧微信原生胶囊同一行居中。 */
 
-.scanqr__back {
+.scan__back {
   position: absolute;
   left: 32px;
   z-index: 5;
@@ -181,7 +188,7 @@
   @include float-btn(72px);
 }
 
-.scanqr__back-chevron {
+.scan__back-chevron {
   width: 18px;
   height: 18px;
   border-left: 4px solid var(--fg);
@@ -191,7 +198,7 @@
   margin-left: 6px;
 }
 
-.scanqr__topbar-title {
+.scan__topbar-title {
   position: absolute;
   left: 0;
   right: 0;
@@ -206,7 +213,7 @@
 
 /* ------------------------------------------------------------ 提示文案 */
 
-.scanqr__hint {
+.scan__hint {
   position: absolute;
   left: 72px;
   right: 72px;
@@ -219,22 +226,49 @@
   text-align: center;
 }
 
-.scanqr__hint-title {
+.scan__hint-title {
   font-size: 28px;
   font-weight: 600;
   color: var(--surface);
 }
 
-.scanqr__hint-text {
+.scan__hint-text {
   margin-top: 14px;
   font-size: 23px;
   line-height: 1.6;
   color: var(--on-dark);
 }
 
+/* ---- 手动输入 6 位码入口（提示文案下方；点击回面交页输入） ---- */
+
+.scan__btn-manual {
+  position: absolute;
+  left: 40px;
+  right: 40px;
+  /* 提示文案（中线 + 384px，两行约 80px）之下 */
+  top: calc(50% + 500px);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 96px;
+  border-radius: 48px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-card);
+}
+
+.scan__btn-manual-ic {
+  width: 36px;
+  height: 36px;
+}
+
 /* ------------------------------------------------------ 底部弹层（通用） */
 
-.scanqr__scrim {
+.scan__scrim {
   @include scrim;
 
   &--full {
@@ -242,7 +276,7 @@
   }
 }
 
-.scanqr__sheet {
+.scan__sheet {
   position: fixed;
   left: 0;
   right: 0;
@@ -255,7 +289,7 @@
   box-sizing: border-box;
 }
 
-.scanqr__grab {
+.scan__grab {
   width: 80px;
   height: 8px;
   border-radius: var(--r-pill);
@@ -263,7 +297,7 @@
   margin: 0 auto;
 }
 
-.scanqr__sheet-title {
+.scan__sheet-title {
   display: block;
   margin-top: 24px;
   font-size: 36px;
@@ -277,7 +311,7 @@
   }
 }
 
-.scanqr__sheet-sub {
+.scan__sheet-sub {
   display: block;
   margin-top: 14px;
   font-size: 25px;
@@ -290,9 +324,89 @@
   }
 }
 
-/* ---- 主按钮 / 次按钮（无权限弹窗用） ---- */
+/* ---- 6 格输入 ---- */
 
-.scanqr__btn-main {
+.scan__cells {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 36px;
+}
+
+.scan__cell {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  background: var(--ice);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  /* 当前格：白底 + 品牌描边 + 投影，模拟光标位置 */
+  &.is-focus {
+    background: var(--surface);
+    border-color: var(--brand-deep);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* 空位：数字用浅灰，与已填的深色区分 */
+  &.is-dim .scan__cell-tx {
+    color: var(--muted);
+  }
+
+  &.is-err {
+    border-color: var(--danger);
+    background: var(--danger-weak);
+
+    .scan__cell-tx {
+      color: var(--danger-ink);
+    }
+  }
+}
+
+.scan__cell-tx {
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--fg);
+}
+
+/**
+ * 真实输入用的透明 Input。
+ *
+ * 6 格是「视觉呈现」，输入仍由一个小程序原生 `Input` 接管（否则要自己实现
+ * 光标、退格、中文输入法状态）。它被压到 0 尺寸但保持 focus，键盘照常弹。
+ */
+.scan__hidden-input {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  width: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.scan__inline-err {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 22px;
+  font-size: 24px;
+  color: var(--danger-ink);
+}
+
+.scan__inline-err-ic {
+  width: 28px;
+  height: 28px;
+}
+
+/* ---- 主按钮 / 次按钮 ---- */
+
+.scan__btn-main {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -306,12 +420,20 @@
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 
+  /* 凑不够 6 位：置灰但仍是可点元素（点击无反应，由 JS 拦住） */
+  &.is-off {
+    background: var(--accent-faint);
+    color: var(--muted);
+    box-shadow: none;
+  }
+
+  /* 弹层里的主按钮自带外边距由布局给，这里去掉避免双份 */
   &--flat {
     margin-top: 0;
   }
 }
 
-.scanqr__btn-ghost {
+.scan__btn-ghost {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -325,9 +447,24 @@
   font-weight: 600;
 }
 
+.scan__btn-ghost-ic {
+  width: 34px;
+  height: 34px;
+}
+
+.scan__tip {
+  display: block;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 2px solid var(--accent-faint);
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
 /* ------------------------------------------------------ 居中卡（无权限） */
 
-.scanqr__cdialog {
+.scan__cdialog {
   position: fixed;
   left: 48px;
   right: 48px;
@@ -343,7 +480,7 @@
   box-sizing: border-box;
 }
 
-.scanqr__cdisc {
+.scan__cdisc {
   width: 120px;
   height: 120px;
   margin: 0 auto;
@@ -355,12 +492,12 @@
   border: 2px solid var(--accent-faint);
 }
 
-.scanqr__cdisc-ic {
+.scan__cdisc-ic {
   width: 60px;
   height: 60px;
 }
 
-.scanqr__cdialog-title {
+.scan__cdialog-title {
   display: block;
   margin-top: 28px;
   font-size: 32px;
@@ -368,7 +505,7 @@
   color: var(--fg);
 }
 
-.scanqr__cdialog-text {
+.scan__cdialog-text {
   display: block;
   margin-top: 16px;
   font-size: 25px;
@@ -376,7 +513,7 @@
   color: var(--muted-2);
 }
 
-.scanqr__cacts {
+.scan__cacts {
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -385,39 +522,15 @@
 
 /* ------------------------------------------------------ 结果反馈列表 */
 
-.scanqr__sheet--list {
+.scan__sheet--list {
   padding-top: 20px;
 }
 
-/* 面板（z 60）之下的透明点击层：点面板以外的相机区域直接关闭回取景 */
-.scanqr__sheet-dismiss {
-  position: fixed;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  z-index: 50;
-}
-
-.scanqr__btn-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 88px;
-  margin-top: 28px;
-  border-radius: 44px;
-  background: var(--surface);
-  border: 2px solid var(--border);
-  color: var(--fg);
-  font-size: 29px;
-  font-weight: 600;
-}
-
-.scanqr__reasons {
+.scan__reasons {
   margin-top: 24px;
 }
 
-.scanqr__frow {
+.scan__frow {
   display: flex;
   align-items: flex-start;
   gap: 20px;
@@ -430,8 +543,8 @@
   }
 }
 
-/* 原因分类小标签：硬件/交易码 warn、解析 灰、无效 danger */
-.scanqr__pipe {
+/* 原因分类小标签：硬件 warn / 解析 灰 / 无效与过期 danger */
+.scan__pipe {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -458,19 +571,19 @@
   }
 }
 
-.scanqr__fmain {
+.scan__fmain {
   flex: 1;
   min-width: 0;
 }
 
-.scanqr__ft {
+.scan__ft {
   display: block;
   font-size: 26px;
   font-weight: 600;
   color: var(--fg);
 }
 
-.scanqr__fd {
+.scan__fd {
   display: block;
   margin-top: 8px;
   font-size: 23px;
@@ -478,7 +591,7 @@
   color: var(--muted-2);
 }
 
-.scanqr__fact {
+.scan__fact {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;

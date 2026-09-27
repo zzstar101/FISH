@@ -13,15 +13,15 @@
  * 距底 22pt、图标行 42pt、凸起钮 34pt），但**高度与距底都比稿子收紧过**（Owner 反馈
  * 「高度占比太大、还要再往下」）：图标行 42 → 28pt、凸起钮 34 → 28pt、距底 22 → 16pt。
  * 整条栏现在高 101rpx（50.5pt，原生栏是 50pt）。
+ * **位置（左右边距/距底）2026-09-26 起 Owner 拍板改用瑞幸稿的悬浮位**：左右 15pt（30rpx）、
+ * 距底 26.7pt（53rpx，规范 `D:\FISH\瑞幸底部Tab栏设计规范.md` 80px@3x）——栏体形态
+ * （高度/玻璃/凸起钮/图标）维持 1改 收紧后的样子不变，只挪了位置。
  * 改这几个值时必须同步改 4 个 Tab 页的 `padding-bottom`（见 DESIGN.md 第 9 节）。
  *
- * **距底不叠 `env(safe-area-inset-bottom)`**：稿里的 `bottom:22px` 是从屏幕**物理底边**
- * 量起的，而且稿内自绘了 iOS 底部横条（`.home-indicator::after{bottom:8px; height:5px}`，
- * 只占距底 8~13px）—— 安全区那条边已经让出来了。
- * 再叠一层 `env()` 等于按 **34pt** 的安全区去避让，是稿子留白（8~13px）的两倍多：
- * 刘海机上整条栏被顶高 34pt（顶边距屏底 122.5pt，而原生栏只有 84pt），
- * 看起来就是「位置太高」。现在的 32px（16pt）比稿的 22pt 更低，是按 Owner 反馈压下来的，
- * 底栏下沿仍在 home indicator（8~13px）之上。
+ * **距底不叠 `env(safe-area-inset-bottom)`**：瑞幸稿的 80px（@3x）和 1改 稿的 `bottom:22px`
+ * 都是从屏幕**物理底边**量起的（稿内自绘了 iOS 底部横条，只占距底 8~13px）——
+ * 安全区那条边已经让出来了。再叠一层 `env()` 等于按 **34pt** 的安全区去避让，
+ * 刘海机上整条栏被顶高 34pt，看起来就是「位置太高」。
  *
  * 注意：底栏下沿落在系统手势区内（<34pt）是**稿子本来的选择**，不是这里算错。
  *
@@ -33,11 +33,12 @@
   @include vars;
 
   position: fixed;
-  left: 32px;
-  right: 32px;
-  /* 距底 16pt（稿是 22pt，按 Owner 反馈再往下）。整条栏顶边距屏底 = 32 + 101(自身高)
-     = 133rpx，各 Tab 页的 padding-bottom 按这个值让位（见 DESIGN.md 第 9 节） */
-  bottom: 32px;
+  left: 30px;
+  right: 30px;
+  /* 距底 53px（26.7pt，瑞幸稿位置，Owner 2026-09-26 拍板只动位置）。整条栏顶边距屏底
+     = 53 + 101(自身高) = 154rpx，各 Tab 页的 padding-bottom(157px) 按这个值让位
+     （见 DESIGN.md 第 9 节） */
+  bottom: 53px;
   z-index: 100;
   display: flex;
   align-items: center;

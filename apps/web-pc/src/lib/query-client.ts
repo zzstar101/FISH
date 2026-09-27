@@ -1,4 +1,4 @@
-import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
+import { focusManager, MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { router } from '../router'
 import { ApiError, isUnauthenticatedError } from './api-client'
 import { currentHref } from './redirect'
@@ -20,6 +20,7 @@ const AUTH_PAGES = new Set(['/login', '/register'])
 function redirectToLoginOnUnauthenticated(error: unknown, skip: boolean): void {
   if (!isUnauthenticatedError(error)) return
 
+  // 只清理发起请求时的会话代际：迟到的旧 401 不能清掉刚登录的新账号。
   const generation =
     error instanceof ApiError ? error.sessionGeneration : currentSessionGeneration()
   void resetPcSessionIfCurrent(queryClient, null, generation).then((cleared) => {
@@ -28,6 +29,20 @@ function redirectToLoginOnUnauthenticated(error: unknown, skip: boolean): void {
     void router
       .navigate({ to: '/login', search: { redirect: currentHref() } })
       .catch(() => undefined)
+  })
+}
+
+// React Query 默认只听 visibilitychange。另一浏览器窗口切换同源 Cookie 时，
+// PC 页可能一直保持 visible；重新聚焦窗口同样需要触发 /me 身份复核。
+if (typeof window !== 'undefined') {
+  focusManager.setEventListener((onFocus) => {
+    const verify = () => onFocus()
+    window.addEventListener('visibilitychange', verify)
+    window.addEventListener('focus', verify)
+    return () => {
+      window.removeEventListener('visibilitychange', verify)
+      window.removeEventListener('focus', verify)
+    }
   })
 }
 
