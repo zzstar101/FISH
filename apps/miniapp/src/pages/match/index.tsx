@@ -62,7 +62,7 @@ export default function Match() {
   const authStatus = useAuthGuard()
   const { user: authedUser } = useAuth()
   const router = useRouter<{ wishId?: string }>()
-  // 契约的 wishId 是 uuid；本页只能从「我的愿望」卡带参进入，没有 mock 默认愿望可退
+  // 契约的 wishId 是规范 wsh_；本页只能从「我的愿望」卡带参进入，没有 mock 默认愿望可退
   const wishId = router.params.wishId ?? ''
   /** 当前账号身份：账号作用域 state 的清场与加载门禁都要用它（见下） */
   const userId = authedUser?.id ?? null
