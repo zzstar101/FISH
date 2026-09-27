@@ -25,7 +25,7 @@
  * `handledAt` 与（管理端的）`handlingReason` 都不进端上记录：状态三态已经表达了结论，
  * #252 明确要求**管理员处理原因不落端上**。
  */
-import type { Report } from '@fish/contracts/reports/schema'
+import type { Report, ReportCreateResponse } from '@fish/contracts/reports/schema'
 import { dayLabelOf } from '@/lib/time'
 import type { ReportRecord } from './demo'
 import type { ReportTarget } from './meta'
@@ -53,4 +53,19 @@ export function reportToRecord(report: Report, nowMs: number): ReportRecord {
     timeLabel: dayLabelOf(report.createdAt, nowMs),
     status: report.status,
   }
+}
+
+/**
+ * `POST /reports` 的响应 → 成功态要展示的内容。
+ *
+ * **内容一律取服务端的 `res.report`，绝不取本次输入**：`created:false` 表示同一未决目标此前
+ * 已受理过，服务端走 `ON CONFLICT ... DO NOTHING` 返回**原有那条**，本次填写的 `reason` /
+ * `detailText` 并没有落库。若成功卡照搬本次输入，用户会以为刚补充的证据已被受理，而点进只读
+ * 记录又看到另一份内容（PR #280 复查 P2-3）。时间标签同样走 `reportToRecord`，不再硬写「刚刚」。
+ */
+export function submittedRecord(
+  res: ReportCreateResponse,
+  nowMs: number,
+): { record: ReportRecord; created: boolean } {
+  return { record: reportToRecord(res.report, nowMs), created: res.created }
 }

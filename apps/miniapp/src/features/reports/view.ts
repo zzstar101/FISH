@@ -38,6 +38,42 @@ export function wantsReportRecord(reportId: string | null | undefined): boolean 
   return reportId !== null && reportId !== undefined
 }
 
+/**
+ * 一次账号作用域的异步任务（PR #280 复查 P2-1）：属于**哪个账号**、属于**哪一轮**。
+ *
+ * 两张填写页都可能跨过一次换号（`authed(A) → authed(B)`）：只读记录、提交结果、成功态与
+ * toast 全都属于**发起它的那个账号**的私有数据。落地前必须确认任务仍归当前账号所有，
+ * 否则 A 的迟到响应会写进 B 的界面（B 会看到 A 的举报编号、原因、说明与「举报已提交」）。
+ *
+ * 只比对 `ownerId` 不够：`A → B → A` 时当前账号又变回 A，A 的旧响应会被写进 A 的**新**会话，
+ * 所以还要叠一个只在换号 / 卸载时前进的代次。判据与 `pages/sell/view.ts` 的 `SellTask` 同源。
+ */
+export type ReportTask = { ownerId: string; epoch: number }
+
+export function beginReportTask(epoch: number, ownerId: string): ReportTask {
+  return { ownerId, epoch }
+}
+
+/** 任务是否仍然「活着」：代次没被换号 / 卸载作废，且账号就是当前这个人。 */
+export function isReportTaskCurrent(
+  task: ReportTask,
+  currentEpoch: number,
+  currentOwnerId: string | null,
+): boolean {
+  return task.epoch === currentEpoch && task.ownerId === currentOwnerId
+}
+
+/**
+ * 渲染期换号判据。
+ *
+ * 与 `pages/sell/view.ts` 的 `ownerChanged` 同构：冷启动把身份从 `unknown` 解析出来
+ * （`null → usr_…`）也走一次清场 —— 举报页此时本来就没有任何私有数据，清场是空操作，
+ * 但它让代次前进，把「身份还没就绪就发出去的读取」一并作废。
+ */
+export function reportOwnerChanged(previous: string | null, next: string | null): boolean {
+  return previous !== next
+}
+
 export function resolveReportView(input: {
   /** 入口 query 里的 `reportId`；键不存在（`undefined`）才是新建态 */
   reportId: string | null | undefined

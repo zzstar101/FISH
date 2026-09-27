@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import type { Report } from '@fish/contracts/reports/schema'
+import type { Report, ReportCreateResponse } from '@fish/contracts/reports/schema'
 import {
   DEMO_REPORTS,
   DEMO_SUBMITTED_LISTING_ID,
@@ -9,7 +9,7 @@ import {
   type ReportRecord,
   rememberDemoReport,
 } from '../src/features/reports/demo'
-import { reportToRecord } from '../src/features/reports/map'
+import { reportToRecord, submittedRecord } from '../src/features/reports/map'
 import {
   bannerCopy,
   emptyCopyOf,
@@ -22,7 +22,14 @@ import {
   submitFailureText,
   USER_REPORT_REASONS,
 } from '../src/features/reports/meta'
-import { resolveReportView, unavailableCopy, wantsReportRecord } from '../src/features/reports/view'
+import {
+  beginReportTask,
+  isReportTaskCurrent,
+  reportOwnerChanged,
+  resolveReportView,
+  unavailableCopy,
+  wantsReportRecord,
+} from '../src/features/reports/view'
 
 /**
  * 举报域的纯逻辑（原因枚举 / 状态文案 / 编号截断 / 演示数据完整性）。
@@ -384,5 +391,98 @@ describe('提交失败文案（只按错误码给固定说法，不透传服务�
     expect(submitFailureText('UNAUTHENTICATED')).toContain('重新登录')
     expect(submitFailureText(null)).toBe('提交失败，请稍后再试')
     expect(submitFailureText('SOMETHING_ELSE')).toBe('提交失败，请稍后再试')
+  })
+})
+
+/**
+ * PR #280 复查 P2-1：只读记录 / 提交结果 / `busy` 锁都是**账号私有状态**，
+ * 页面实例会跨过一次换号。判据抽成纯逻辑（页面只在写状态前问一句），这里逐条钉住。
+ */
+describe('账号作用域任务（beginReportTask / isReportTaskCurrent / reportOwnerChanged）', () => {
+  test('同一账号同一代次的任务仍然有效', () => {
+    const task = beginReportTask(3, 'usr_a')
+    expect(task).toEqual({ epoch: 3, ownerId: 'usr_a' })
+    expect(isReportTaskCurrent(task, 3, 'usr_a')).toBe(true)
+  })
+
+  test('换号后旧任务失效（A 的响应不能落到 B 的界面）', () => {
+    const taskOfA = beginReportTask(0, 'usr_a')
+    expect(isReportTaskCurrent(taskOfA, 0, 'usr_b')).toBe(false)
+  })
+
+  test('代次前进后旧任务失效（重新发起的查询 / 卸载）', () => {
+    const task = beginReportTask(0, 'usr_a')
+    expect(isReportTaskCurrent(task, 1, 'usr_a')).toBe(false)
+  })
+
+  test('A→B→A 回到同一账号也不复活旧任务（代次已前进）', () => {
+    const taskOfA = beginReportTask(0, 'usr_a')
+    // 换到 B：代次 +1；再换回 A：代次再 +1
+    const epochAfterReturn = 2
+    expect(isReportTaskCurrent(taskOfA, epochAfterReturn, 'usr_a')).toBe(false)
+  })
+
+  test('`finally` 只解锁自己的任务：B 的 busy 不被 A 的 finally 解开', () => {
+    const taskOfA = beginReportTask(0, 'usr_a')
+    const taskOfB = beginReportTask(1, 'usr_b')
+    expect(isReportTaskCurrent(taskOfA, 1, 'usr_b')).toBe(false)
+    expect(isReportTaskCurrent(taskOfB, 1, 'usr_b')).toBe(true)
+  })
+
+  test('reportOwnerChanged：null ↔ 账号、账号 ↔ 账号都算换号，同账号不算', () => {
+    expect(reportOwnerChanged(null, 'usr_a')).toBe(true)
+    expect(reportOwnerChanged('usr_a', null)).toBe(true)
+    expect(reportOwnerChanged('usr_a', 'usr_b')).toBe(true)
+    expect(reportOwnerChanged(null, null)).toBe(false)
+    expect(reportOwnerChanged('usr_a', 'usr_a')).toBe(false)
+  })
+})
+
+/**
+ * PR #280 复查 P2-3：`created:false` 时服务端返回的是**此前那条**（本次输入没落库），
+ * 成功卡必须展示服务端内容，不能把本次填写的原因 / 说明 / 「刚刚」绑到旧举报号上。
+ */
+describe('提交响应 → 成功态内容（submittedRecord，内容取服务端而非本次输入）', () => {
+  const nowMs = new Date('2026-09-27T12:00:00.000Z').getTime()
+  const serverReport: Report = {
+    id: 'rpt_01jc000000e00800000000000a',
+    targetType: 'LISTING',
+    targetId: 'lst_01jc000000e00800000000000h',
+    reason: 'SPAM',
+    detailText: '原有证据 D0',
+    status: 'PENDING',
+    createdAt: '2026-09-25T03:00:00.000Z',
+    handledAt: null,
+  }
+
+  test('created:true：照服务端返回，created 透传', () => {
+    const res: ReportCreateResponse = { report: serverReport, created: true }
+    const { record, created } = submittedRecord(res, nowMs)
+    expect(created).toBe(true)
+    expect(record.id).toBe(serverReport.id)
+    expect(record.reason).toBe('SPAM')
+    expect(record.desc).toBe('原有证据 D0')
+  })
+
+  test('created:false：原因 / 说明 / 时间取服务端那条，不是本次输入', () => {
+    const res: ReportCreateResponse = { report: serverReport, created: false }
+    const { record, created } = submittedRecord(res, nowMs)
+    expect(created).toBe(false)
+    // 本次输入是 FRAUD +「补充证据 D1」；服务端只保留了原来的 SPAM + D0
+    expect(record.reason).toBe('SPAM')
+    expect(record.reason).not.toBe('FRAUD')
+    expect(record.desc).toBe('原有证据 D0')
+    expect(record.desc).not.toContain('D1')
+    // 时间同样来自 `createdAt`，不能硬写「刚刚」
+    expect(record.timeLabel).not.toBe('刚刚')
+    expect(record.timeLabel).toMatch(/9 月 25 日|\d{2}:\d{2}$/)
+  })
+
+  test('detailText 为 null 时落成空串（卡片显示「未填写」，不是 undefined）', () => {
+    const res: ReportCreateResponse = {
+      report: { ...serverReport, detailText: null },
+      created: true,
+    }
+    expect(submittedRecord(res, nowMs).record.desc).toBe('')
   })
 })

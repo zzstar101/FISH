@@ -1,14 +1,15 @@
 import { ListingIdSchema } from '@fish/contracts/listings/schema'
-import type { ListingReportReason } from '@fish/contracts/reports/schema'
+import type { ListingReportReason, ReportCreateResponse } from '@fish/contracts/reports/schema'
 import { Image, Text, Textarea, View } from '@tarojs/components'
 import Taro, { useRouter } from '@tarojs/taro'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
+import { useAuth } from '@/features/auth/store'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { submitReport } from '@/features/reports/api'
 import {
@@ -17,6 +18,7 @@ import {
   rememberDemoReport,
 } from '@/features/reports/demo'
 import { DEMO_REPORTS_ENABLED, loadReportRecord } from '@/features/reports/load'
+import { submittedRecord } from '@/features/reports/map'
 import {
   bannerCopy,
   REPORT_DESC_DEFAULT_HINT,
@@ -26,7 +28,14 @@ import {
   reasonsOf,
   submitFailureText,
 } from '@/features/reports/meta'
-import { resolveReportView, unavailableCopy, wantsReportRecord } from '@/features/reports/view'
+import {
+  beginReportTask,
+  isReportTaskCurrent,
+  reportOwnerChanged,
+  resolveReportView,
+  unavailableCopy,
+  wantsReportRecord,
+} from '@/features/reports/view'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -72,6 +81,19 @@ import './index.scss'
  * 点进详情」动线能走通；重启即消失。服务端给了业务错误码时**不**回退 ——
  * 那会把「失败」说成「成功」（#193 / #260 复查 P2 同款要求）。
  *
+ * ## 账号作用域（PR #280 复查 P2-1）
+ *
+ * 只读记录、提交结果与成功态都是**当前账号的私有数据**，而页面实例会跨过一次换号。所以：
+ * 只读查询与提交各自持有一个「任务」（账号 + 代次），落地前先过
+ * `isReportTaskCurrent`；换号在渲染期同步清场并让代次前进；身份未就绪不发私有读取；
+ * 卸载也作废在途任务。判据是纯逻辑，单测在 `tests/reports.test.ts`。
+ *
+ * ## 成功卡的权威来源（PR #280 复查 P2-3）
+ *
+ * 卡里的原因 / 说明 / 时间 / 状态一律取服务端返回的 `res.report`（`doneOf`），**不取本次输入**。
+ * `created:false` 时服务端返回的是此前那条，本次填的内容没有落库，卡片换成「已受理的举报」
+ * 并明确说明「没有被新增进去」—— 不能用本地成功卡让用户以为新证据已被受理。
+ *
  * ## 顶部栏（吸顶口径）
  *
  * 二级页拍板形态：`NavBar glass` —— `position: fixed` 的玻璃底 + 居中双色标题 +
@@ -89,8 +111,28 @@ const REASON_MAX = 200
 /** 演示构建口径：mock 回退与演示登录态**都要**开（只认 MOCK_FALLBACK 会顶掉 dev:weapp 的真实空态） */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 
-/** 成功态落定后的内容（`created` 决定文案：本次新建 / 此前已受理） */
-type SubmitDone = { reason: string; desc: string; id: string; created: boolean; simulated: boolean }
+/**
+ * 成功态落定后的内容（`created` 决定文案：本次新建 / 此前已受理）。
+ *
+ * **记录本身以服务端返回的 `res.report` 为权威**（PR #280 复查 P2-3）。重复举报同一个未决
+ * 目标时后端走 `ON CONFLICT ... DO NOTHING` 返回**原来那条**，本次填写的 `reason` /
+ * `detailText` / `createdAt` 根本没落库。此前这里用本次输入现拼一张成功卡（还写「刚刚」），
+ * 会让用户以为新补充的说明已被受理 —— 而点开只读记录又会看到另一份内容。
+ * 要补充证据，得等服务端给出明确的写接口，不能在本地成功卡里模拟。
+ */
+type SubmitDone = {
+  /** 服务端返回的那条记录；`created: false` 时是此前已存在的那条 */
+  record: ReportRecord
+  /** 本次是否真的新建了这条举报 */
+  created: boolean
+  /** 记录来自本地模拟，而不是服务端 */
+  simulated: boolean
+}
+
+/** 把服务端响应收成成功态：展示内容一律取 `res.report`（`submittedRecord`），不取本次输入。 */
+function doneOf(res: ReportCreateResponse, nowMs: number): SubmitDone {
+  return { ...submittedRecord(res, nowMs), simulated: false }
+}
 
 /**
  * 这次提交失败能不能按演示口径模拟成功。
@@ -106,6 +148,9 @@ function canSimulateSubmit(error: unknown): boolean {
 
 export default function ReportListing() {
   const authStatus = useAuthGuard()
+  const { user } = useAuth()
+  /** 当前登录账号的公开 ID（`usr_…`）；身份未就绪时为 null */
+  const userId = user?.id ?? null
   /** 路由参数读一次：两种入口都靠 query 定形态，页内不切换（跳转都是重新开页） */
   const { params } = useRouter()
   const reportId = params.reportId
@@ -117,20 +162,6 @@ export default function ReportListing() {
   const [record, setRecord] = useState<ReportRecord | null>(null)
   /** 真实构建的查询是否已落定；新建态与演示构建一开始就是 true */
   const [lookupDone, setLookupDone] = useState(!wantsRecord || DEMO_MODE)
-
-  useEffect(() => {
-    if (!wantsRecord || DEMO_MODE) return
-    let alive = true
-    void loadReportRecord(reportId as string).then((hit) => {
-      // 页面可能已被返回键卸载：迟到的结果不再 setState
-      if (!alive) return
-      setRecord(hit)
-      setLookupDone(true)
-    })
-    return () => {
-      alive = false
-    }
-  }, [wantsRecord, reportId])
 
   /** `null` = 记录还在查（只有真实构建的只读入口会经过） */
   const view = lookupDone
@@ -157,6 +188,62 @@ export default function ReportListing() {
   /** null = 还在表单；非 null = 成功态已落定（整页切换，不再回到表单） */
   const [done, setDone] = useState<SubmitDone | null>(null)
 
+  /**
+   * 账号作用域（PR #280 复查 P2-1）。
+   *
+   * 本页的只读记录、提交结果与成功态都是**当前账号的私有数据**，而页面实例会跨过一次换号
+   * （`authed(A) → authed(B)`，或退出到匿名）。给只读查询与提交各发一个「任务」，落地前必须
+   * 仍然属于当前账号、且没被换号或卸载作废（判据在 `features/reports/view`）。
+   *
+   * 只比对 `ownerId` 不够：`A → B → A` 时当前账号又变回 A，A 的旧响应会被写进 A 的**新**会话，
+   * 所以还要叠一个只在换号 / 卸载时前进的代次。
+   */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  const epochRef = useRef(0)
+  const ownerRef = useRef<string | null>(userId)
+  ownerRef.current = userId
+
+  /**
+   * 换号时**在渲染期**同步清场：effect 要等这一帧提交之后才跑，中间那一帧 B 的界面会带着
+   * A 的只读记录、A 的成功态与 A 填了一半的原因 / 说明。代次 +1 让 A 的在途读取与提交作废。
+   */
+  if (reportOwnerChanged(prevUserId, userId)) {
+    setPrevUserId(userId)
+    epochRef.current += 1
+    setRecord(null)
+    setLookupDone(!wantsRecord || DEMO_MODE)
+    setChosen(null)
+    setDesc('')
+    setTypeErr(false)
+    setBusy(false)
+    setDone(null)
+  }
+
+  /**
+   * 只读记录查询。
+   *
+   * 身份没就绪就**不发**私有读取（冷启动 `unknown` 时用未知身份去查，失败了也不知道该不该
+   * 重试）；等 `authed` 且拿到 `userId` 之后再查，换号会让这个 effect 重新跑一次。
+   */
+  useEffect(() => {
+    if (!wantsRecord || DEMO_MODE) return
+    if (authStatus !== 'authed' || userId === null) return
+    const task = beginReportTask(epochRef.current, userId)
+    void loadReportRecord(reportId as string).then((hit) => {
+      // 换号 / 卸载后迟到的结果一律不落地（`alive` 只能防卸载，防不了 A→B 仍为已登录）
+      if (!isReportTaskCurrent(task, epochRef.current, ownerRef.current)) return
+      setRecord(hit)
+      setLookupDone(true)
+    })
+  }, [wantsRecord, reportId, authStatus, userId])
+
+  /** 卸载：作废在途任务，免得迟到的结果在离页后 setState */
+  useEffect(() => {
+    return () => {
+      epochRef.current += 1
+    }
+  }, [])
+
   const navTotalHeight = readNavMetrics().totalHeight
 
   const toast = (title: string) => {
@@ -177,6 +264,8 @@ export default function ReportListing() {
       toast('请先选择举报类型')
       return
     }
+    // 身份没就绪就不发：`busy` 锁与成功态都归属当前账号，没有账号就没有归属
+    if (authStatus !== 'authed' || userId === null) return
     // 目标 ID 先在本端验一遍：入口 query 可能是被改坏的深链，或旧版本页面传的裸 uuid。
     // 契约 `ReportCreateInputSchema` 也会拦（提交前 `parse`），但那时的报错文案对用户无意义。
     const parsedId = ListingIdSchema.safeParse(targetId)
@@ -187,6 +276,7 @@ export default function ReportListing() {
     // 胶囊来自 `reasonsOf('LISTING')`，取值必属商品类枚举；契约提交前还会再校验一次（superRefine）
     const reason = chosen as ListingReportReason
     const detail = desc.trim()
+    const task = beginReportTask(epochRef.current, userId)
     setBusy(true)
     void (async () => {
       try {
@@ -196,11 +286,13 @@ export default function ReportListing() {
           reason,
           detailText: detail === '' ? undefined : detail,
         })
-        setDone({ reason, desc: detail, id: res.report.id, created: res.created, simulated: false })
+        if (!isReportTaskCurrent(task, epochRef.current, ownerRef.current)) return
+        setDone(doneOf(res, Date.now()))
       } catch (error) {
+        if (!isReportTaskCurrent(task, epochRef.current, ownerRef.current)) return
         if (canSimulateSubmit(error)) {
           // 演示「落库」：追加进进程内存，让「我的举报」列表与只读态都能看到这条（见 demo.ts 文件头）
-          rememberDemoReport({
+          const demoRecord: ReportRecord = {
             id: DEMO_SUBMITTED_LISTING_ID,
             target: 'LISTING',
             objTitle: target.title || '（未带出商品标题）',
@@ -210,19 +302,15 @@ export default function ReportListing() {
             desc: detail,
             timeLabel: '刚刚',
             status: 'PENDING',
-          })
-          setDone({
-            reason,
-            desc: detail,
-            id: DEMO_SUBMITTED_LISTING_ID,
-            created: true,
-            simulated: true,
-          })
+          }
+          rememberDemoReport(demoRecord)
+          setDone({ record: demoRecord, created: true, simulated: true })
         } else {
           toast(submitFailureText(isApiError(error) ? error.code : null))
         }
       } finally {
-        setBusy(false)
+        // A 的 `finally` 不能解开 B 已经点下的那一次，否则 B 会重复发出请求
+        if (isReportTaskCurrent(task, epochRef.current, ownerRef.current)) setBusy(false)
       }
     })()
   }
@@ -388,25 +476,34 @@ export default function ReportListing() {
             <Text className="rpl__hero-s">
               {done.created
                 ? '平台会在核实后处理，处理结果可在「我的举报」中查看。'
-                : '你在近期举报过同一个商品，平台正在核实，无需重复提交。'}
+                : '同一个商品此前已经举报过，平台正在核实，无需重复提交。'}
             </Text>
           </View>
 
           <View className="rpl__card">
             <View className="rpl__card-hd">
-              <Text className="rpl__card-h2">提交内容</Text>
+              {/* `created:false` 时卡里是**原有那条**的内容，标题不能再说「提交内容」 */}
+              <Text className="rpl__card-h2">{done.created ? '提交内容' : '已受理的举报'}</Text>
             </View>
             {rowsOf({
               objTitle: target.title || '（未带出商品标题）',
               objPrice: target.price || null,
-              objId: targetId === '' ? undefined : targetId,
+              objId: done.record.objId,
               cover: target.cover,
-              reason: done.reason,
-              desc: done.desc,
-              timeLabel: '刚刚',
-              id: done.id,
+              reason: done.record.reason,
+              desc: done.record.desc,
+              timeLabel: done.record.timeLabel,
+              id: done.record.id,
             })}
           </View>
+
+          {/* `created:false`：服务端返回的是**此前那条**，本次填写的原因 / 说明没有落库。
+              必须说清楚，否则用户会以为刚补充的证据已经被受理（PR #280 复查 P2-3） */}
+          {done.created ? null : (
+            <Text className="rpl__demonote">
+              上面是这条举报原有的内容：同一个商品此前已经举报过，这次填写的原因和说明没有被新增进去。
+            </Text>
+          )}
 
           {done.simulated ? (
             <Text className="rpl__demonote">
