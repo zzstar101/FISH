@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  beginChatTask,
+  type ActionTask,
+  beginActionTask,
   beginReloadWrite,
   beginTask,
-  type ChatTask,
   type CommentsRead,
   clearedPrivateScope,
   consumeDeferredReload,
@@ -11,7 +11,8 @@ import {
   type DeferredReload,
   dropPendingComments,
   hasInflightWrites,
-  isCurrentChatTask,
+  isColdStartIdentityResolution,
+  isCurrentActionTask,
   isLatestLoad,
   isOwnerSwitch,
   isReloadDue,
@@ -23,7 +24,7 @@ import {
   resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
-  shouldReleaseChatTask,
+  shouldReleaseActionTask,
   shouldSurfaceStaleAuthFailure,
   type WriteTask,
 } from '../src/pages/listing-detail/view'
@@ -491,13 +492,20 @@ describe('详情页静默刷新的留言读取成败语义（#170 复查 N6）',
   })
 })
 
-/** 底栏动作的最小模型：一个在飞锁（令牌或 `null`）+ 当页的账号与代次 */
+/**
+ * 底栏动作的最小模型：**两把**在飞锁（各持一个令牌或 `null`）+ 当页的账号与代次。
+ *
+ * 换号清场（对应 `index.tsx` 的 `ownerChanged` 分支）在这个模型里就是一次
+ * `switchOwner`：代次前进 + 两把锁都作废。
+ */
 function actionPage() {
   return {
     ownerId: null as string | null,
     epoch: 0,
-    /** 在飞锁：持有它的是某一次点击的令牌（`null` = 没有在途请求） */
-    inFlight: null as number | null,
+    /** 「聊一聊」的在飞锁：持有它的是某一次点击的令牌（`null` = 没有在途请求） */
+    chatInFlight: null as number | null,
+    /** 「立即购买」的在飞锁，同形 */
+    buyInFlight: null as number | null,
     tokenSeq: 0,
     buyRequested: false,
   }
@@ -505,116 +513,192 @@ function actionPage() {
 
 type ActionPage = ReturnType<typeof actionPage>
 
-/** 一次点击：铸令牌并占锁（对应 `index.tsx` 里 `beginChatTask` + 置 `chatInFlightRef`） */
-function tapChat(p: ActionPage): ChatTask {
+/** 渲染期换号清场：代次前进、两把在飞锁一并作废（对应 `index.tsx` 的清场块） */
+function switchActionOwner(p: ActionPage, next: string | null): void {
+  p.ownerId = next
+  p.epoch += 1
+  p.chatInFlight = null
+  p.buyInFlight = null
+}
+
+/** 一次点击：铸令牌并占锁（对应 `index.tsx` 里 `beginActionTask` + 置在飞 ref） */
+function tap(p: ActionPage, which: 'chat' | 'buy'): ActionTask {
   p.tokenSeq += 1
-  const task = beginChatTask(p.epoch, p.ownerId, p.tokenSeq)
-  p.inFlight = task.token
+  const task = beginActionTask(p.epoch, p.ownerId, p.tokenSeq)
+  if (which === 'chat') p.chatInFlight = task.token
+  else p.buyInFlight = task.token
   return task
 }
 
-/** 令牌此刻是否还有效（`index.tsx` 里 `isCurrentTask()` 读的就是这三个量） */
-function chatTaskOk(p: ActionPage, task: ChatTask): boolean {
-  return isCurrentChatTask(task, {
-    ownerId: p.ownerId,
-    epoch: p.epoch,
-    token: p.inFlight,
-  })
+/** 令牌此刻是否还有效（`index.tsx` 里 `isTaskLive()` 读的就是这些量） */
+function taskLive(p: ActionPage, task: ActionTask, which: 'chat' | 'buy'): boolean {
+  const inFlight = which === 'chat' ? p.chatInFlight : p.buyInFlight
+  return (
+    isCurrentActionTask(task, { ownerId: p.ownerId, epoch: p.epoch, token: inFlight }) ||
+    isColdStartIdentityResolution(task, p.epoch, p.ownerId)
+  )
 }
 
 /** 收尾：只有持锁的那次点击能释放锁（对应 `.finally(release)`） */
-function releaseChat(p: ActionPage, task: ChatTask): void {
-  if (!shouldReleaseChatTask(task, p.inFlight)) return
-  p.inFlight = null
+function release(p: ActionPage, task: ActionTask, which: 'chat' | 'buy'): void {
+  const inFlight = which === 'chat' ? p.chatInFlight : p.buyInFlight
+  if (!shouldReleaseActionTask(task, inFlight)) return
+  if (which === 'chat') p.chatInFlight = null
+  else p.buyInFlight = null
 }
 
 describe('详情页底栏动作的账号作用域（#236 复查 P2）', () => {
   test('同账号同世代、且仍持有那把锁：这次建会话的回调照常落地', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    const task = tapChat(p)
-    expect(chatTaskOk(p, task)).toBe(true)
-    expect(shouldReleaseChatTask(task, p.inFlight)).toBe(true)
+    const task = tap(p, 'chat')
+    expect(taskLive(p, task, 'chat')).toBe(true)
+    expect(shouldReleaseActionTask(task, p.chatInFlight)).toBe(true)
   })
 
   test('换号后 A 的迟到建会话响应不再落地（不导航、不弹错），且不占着 B 的锁', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    const task = tapChat(p)
+    const task = tap(p, 'chat')
 
-    // 渲染期清场：代次前进、在飞锁一并作废
-    p.ownerId = 'user-b'
-    p.epoch += 1
-    p.inFlight = null
-    expect(chatTaskOk(p, task)).toBe(false)
+    switchActionOwner(p, 'user-b')
+    expect(taskLive(p, task, 'chat')).toBe(false)
     // A 的收尾也认不出这把锁（锁已经是 `null` / 或 B 的新令牌），不会删掉 B 的标记
-    expect(shouldReleaseChatTask(task, p.inFlight)).toBe(false)
+    expect(shouldReleaseActionTask(task, p.chatInFlight)).toBe(false)
   })
 
   test('A → B → A：账号名又相同也必须判旧（代次与令牌都不是原来那一个）', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    const stale = tapChat(p)
-    releaseChat(p, stale)
+    const stale = tap(p, 'chat')
+    release(p, stale, 'chat')
 
-    p.ownerId = 'user-b'
-    p.epoch += 1
-    p.ownerId = 'user-a'
-    p.epoch += 1
-    expect(chatTaskOk(p, stale)).toBe(false)
+    switchActionOwner(p, 'user-b')
+    switchActionOwner(p, 'user-a')
+    expect(taskLive(p, stale, 'chat')).toBe(false)
   })
 
   test('卸载让在途的建会话任务作废', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    const task = tapChat(p)
+    const task = tap(p, 'chat')
 
+    // 卸载只推进代次（在飞 ref 随组件一起丢弃，不需要逐个释放）
     p.epoch += 1
-    p.inFlight = null
-    expect(chatTaskOk(p, task)).toBe(false)
+    expect(taskLive(p, task, 'chat')).toBe(false)
   })
 
   test('锁只由持锁的那一次点击释放：B 已重新发起时 A 的收尾不删 B 的锁', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    const aTask = tapChat(p)
+    const aTask = tap(p, 'chat')
 
     // 换号清场把锁还给 B，B 立刻点了同一次「聊一聊」
-    p.ownerId = 'user-b'
-    p.epoch += 1
-    p.inFlight = null
-    const bTask = tapChat(p)
+    switchActionOwner(p, 'user-b')
+    const bTask = tap(p, 'chat')
 
-    releaseChat(p, aTask)
+    release(p, aTask, 'chat')
     // A 的迟到收尾没有删掉 B 的锁：B 仍在飞，连点第二次会被挡住
-    expect(p.inFlight).toBe(bTask.token)
-    expect(chatTaskOk(p, bTask)).toBe(true)
+    expect(p.chatInFlight).toBe(bTask.token)
+    expect(taskLive(p, bTask, 'chat')).toBe(true)
   })
 
   test('换号把在飞锁作废：B 的点击不被 A 的在途请求堵住', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    tapChat(p)
-    expect(p.inFlight).not.toBeNull()
+    tap(p, 'chat')
+    expect(p.chatInFlight).not.toBeNull()
 
+    switchActionOwner(p, 'user-b')
+    // B 能立刻发起自己的请求（若沿用裸布尔锁，这里仍是被 A 占着的 true）
+    const bTask = tap(p, 'chat')
+    expect(p.chatInFlight).toBe(bTask.token)
+  })
+
+  test('冷启动解析身份（null → id）不算换号：匿名期点的「聊一聊」照常导航', () => {
+    const p = actionPage()
+    // 公开页：登录态还没解析出来（store 是 `unknown`）时底栏就点得动
+    const task = tap(p, 'chat')
+
+    // `GET /me` 回来，身份解析成 A —— 只推进一次代次，是同一个账号在发
+    p.ownerId = 'user-a'
+    p.epoch += 1
+    expect(isColdStartIdentityResolution(task, p.epoch, p.ownerId)).toBe(true)
+    expect(taskLive(p, task, 'chat')).toBe(true)
+  })
+
+  test('冷启动豁免不能放大到真换号：A → B、退出后登录、A → B → A 一律判旧', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = tap(p, 'chat')
+
+    // A → B：只前进一次代次，但账号从「有」变成「另一个」，不是身份解析
     p.ownerId = 'user-b'
     p.epoch += 1
-    p.inFlight = null
-    // B 能立刻发起自己的请求（若沿用裸布尔锁，这里仍是被 A 占着的 true）
-    const bTask = tapChat(p)
-    expect(p.inFlight).toBe(bTask.token)
+    expect(isColdStartIdentityResolution(task, p.epoch, p.ownerId)).toBe(false)
+
+    // 退出后重新登录成 B：两次代次前进（退出一次、登录一次）
+    const p2 = actionPage()
+    p2.ownerId = 'user-a'
+    const task2 = tap(p2, 'chat')
+    switchActionOwner(p2, null)
+    switchActionOwner(p2, 'user-b')
+    expect(isColdStartIdentityResolution(task2, p2.epoch, p2.ownerId)).toBe(false)
+
+    // A → B → A：也是两次，账号名绕回来也不算
+    const p3 = actionPage()
+    p3.ownerId = 'user-a'
+    const task3 = tap(p3, 'chat')
+    switchActionOwner(p3, 'user-b')
+    switchActionOwner(p3, 'user-a')
+    expect(isColdStartIdentityResolution(task3, p3.epoch, p3.ownerId)).toBe(false)
+  })
+
+  test('冷启动豁免只对「匿名发起」成立：已登录账号的旧任务不能靠它复活', () => {
+    // A 已登录时发起，之后代次只前进一次 —— 那不是身份解析（身份早就是 A 了）
+    expect(
+      isColdStartIdentityResolution({ ownerId: 'user-a', epoch: 0, token: 1 }, 1, 'user-b'),
+    ).toBe(false)
+    expect(
+      isColdStartIdentityResolution({ ownerId: 'user-a', epoch: 0, token: 1 }, 1, 'user-a'),
+    ).toBe(false)
   })
 
   test('购买弹窗的迟到回写：换号 / 退出后不把「待店家确认」写给下一个账号', () => {
     const p = actionPage()
     p.ownerId = 'user-a'
-    const task = beginTask(p.epoch, p.ownerId)
+    const task = tap(p, 'buy')
 
     // 弹窗还开着的时候换号清场了（清场只能清「已写下」的状态，挡不住随后的回写）
-    p.ownerId = 'user-b'
-    p.epoch += 1
-    expect(isTaskCurrent(task, p.epoch, p.ownerId)).toBe(false)
+    switchActionOwner(p, 'user-b')
+    expect(taskLive(p, task, 'buy')).toBe(false)
+    // 守卫真的挡住了这次回写（模拟 `.then` 里 confirm 分支的落地语句）
+    if (taskLive(p, task, 'buy')) p.buyRequested = true
     expect(p.buyRequested).toBe(false)
+  })
+
+  test('购买弹窗的确认在同一账号上照常落地（守卫不是「一律拦住」）', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = tap(p, 'buy')
+
+    if (taskLive(p, task, 'buy')) p.buyRequested = true
+    expect(p.buyRequested).toBe(true)
+  })
+
+  test('两把锁互不相干：一个在飞不挡住另一个钮', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const chatTask = tap(p, 'chat')
+
+    // 「聊一聊」在飞时点「立即购买」照样能开弹窗（共用一把锁的话这里会被按死）
+    const buyTask = tap(p, 'buy')
+    expect(p.buyInFlight).toBe(buyTask.token)
+    expect(p.chatInFlight).toBe(chatTask.token)
+    release(p, chatTask, 'chat')
+    expect(p.chatInFlight).toBeNull()
+    // 「聊一聊」收尾没有连坐购买那把锁
+    expect(p.buyInFlight).toBe(buyTask.token)
   })
 })
 
@@ -847,7 +931,7 @@ describe('详情页接线（#170 判据 C/D）', () => {
 describe('详情页底栏动作的接线（#236 复查 P2）', () => {
   test('聊一聊：令牌在发请求之前铸好并占锁，且不再是裸布尔锁', async () => {
     const block = await pageSlice('const chatWithSeller = () => {', '/**\n   * 「立即购买」')
-    expectBefore(block, 'const task = beginChatTask(', 'createConversation(id)')
+    expectBefore(block, 'const task = beginActionTask(', 'createConversation(id)')
     expectBefore(block, 'chatInFlightRef.current = task.token', 'createConversation(id)')
     // 裸布尔锁会「换号后 B 被 A 的在途请求堵住 + A 的收尾删掉 B 的锁」
     expect(block).not.toMatch(/chatInFlightRef\.current = (true|false)/)
@@ -860,10 +944,14 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
       '.then(async (conversation) => {',
       '.catch((error: unknown) => {',
     )(block)
-    expectBefore(thenBlock, 'if (!isCurrentTask()) return', 'Taro.navigateTo(')
+    expectBefore(
+      thenBlock,
+      'if (!isTaskLive(task, chatInFlightRef.current)) return',
+      'Taro.navigateTo(',
+    )
 
     const catchBlock = inner('.catch((error: unknown) => {', '.finally(release)')(block)
-    const guard = 'if (!isCurrentTask()) {'
+    const guard = 'if (!isTaskLive(task, chatInFlightRef.current)) {'
     expectBefore(catchBlock, guard, "Taro.showToast({ title: '请先登录后再聊一聊'")
     // 守卫内部：会话过期（401）造成的迟到失败仍要提示；真正换号才彻底静默
     expect(catchBlock).toContain('shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error)')
@@ -874,24 +962,50 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     )(block)
     expectBefore(
       releaseBlock,
-      'if (!shouldReleaseChatTask(task, chatInFlightRef.current)) return',
+      'if (!shouldReleaseActionTask(task, chatInFlightRef.current)) return',
       'chatInFlightRef.current = null',
     )
     expect(block).toContain('.finally(release)')
   })
 
-  test('换号清场把在飞的会话锁一并作废（B 不被 A 的在途请求堵住）', async () => {
+  test('换号清场把两把在飞锁一并作废（B 不被 A 的在途动作堵住）', async () => {
     const block = await pageSlice('if (ownerChanged(prevUserId, userId)) {', 'useEffect(')
     expect(block).toContain('chatInFlightRef.current = null')
+    expect(block).toContain('buyInFlightRef.current = null')
   })
 
   test('立即购买：确认回写前先确认任务仍属于当前账号（清场挡不住迟到的回写）', async () => {
     const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
-    expectBefore(block, 'const task = beginTask(', 'Taro.showModal(')
+    expectBefore(block, 'const task = beginActionTask(', 'Taro.showModal(')
     expectBefore(
       block,
-      'if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return',
+      'if (!isTaskLive(task, buyInFlightRef.current)) return',
       'setBuyRequested(true)',
     )
+  })
+
+  test('立即购买：在飞时不再弹第二个确认框，且弹窗失败按「没确认」收尾', async () => {
+    const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
+    // 没有这把锁，连点会叠出多个 showModal
+    expect(block).toContain('if (buyRequested || buyInFlightRef.current !== null) return')
+    expectBefore(block, 'buyInFlightRef.current = task.token', 'Taro.showModal(')
+    // 老 Android 上点蒙层 / 卸载走 reject：不写终态、也不弹错，只留痕
+    const catchBlock = inner('.catch((error: unknown) => {', '.finally(release)')(block)
+    expect(catchBlock).toContain('按未确认处理')
+    expect(catchBlock).not.toContain('setBuyRequested(true)')
+    expect(block).toContain('.finally(release)')
+  })
+
+  test('冷启动解析身份的豁免接在两个动作的守卫上（不是只写在注释里）', async () => {
+    const block = await pageSlice('const isTaskLive = (task: ActionTask', 'const chatWithSeller')
+    expect(block).toContain('isCurrentActionTask(task, {')
+    expect(block).toContain(
+      'isColdStartIdentityResolution(task, epochRef.current, ownerRef.current)',
+    )
+    // 两个动作都必须走这条守卫（漏一个就会「点了没反应」）：
+    // 「聊一聊」成功 / 失败两条链各一次，「立即购买」确认链一次
+    const code = await source()
+    expect(code.match(/isTaskLive\(task, chatInFlightRef\.current\)/g)?.length).toBe(2)
+    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(1)
   })
 })
