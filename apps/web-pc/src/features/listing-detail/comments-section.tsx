@@ -98,7 +98,7 @@ function ReplyRow({ reply }: { reply: CommentReply }) {
 function CommentRow({
   comment,
   canReply,
-  replyEnabled,
+  authResolved,
   replyOpen,
   replyDraft,
   replyError,
@@ -110,7 +110,7 @@ function CommentRow({
 }: {
   comment: CommentDto
   canReply: boolean
-  replyEnabled: boolean
+  authResolved: boolean
   replyOpen: boolean
   replyDraft: string
   replyError: string | null
@@ -139,7 +139,7 @@ function CommentRow({
           <div className="mt-2 flex items-center gap-3 text-xs">
             <button
               className="text-brand hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!replyEnabled || replyPending}
+              disabled={!authResolved || replyPending}
               onClick={onBeginReply}
               type="button"
             >
@@ -187,7 +187,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
 
   const items = comments.data?.pages.flatMap((page) => page.items) ?? []
   const hasAuthError = authError !== null && authError !== undefined
-  const replyEnabled = !isInitializing && !hasAuthError
+  const authResolved = !isInitializing && !hasAuthError
 
   function submitComment() {
     const content = commentDraft.trim()
@@ -200,7 +200,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   }
 
   function beginReply(commentId: string) {
-    if (!replyEnabled || createReply.isPending) return
+    if (!authResolved || createReply.isPending) return
     if (me === null) {
       void navigate({ to: '/login', search: { redirect: currentHref() } })
       return
@@ -298,7 +298,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
               onSubmitReply={() => submitReply(comment.id)}
               replyDraft={replyDraft}
               replyError={replyError}
-              replyEnabled={replyEnabled}
+              authResolved={authResolved}
               replyOpen={replyTo === comment.id}
               replyPending={createReply.isPending}
             />

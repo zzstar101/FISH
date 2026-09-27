@@ -72,7 +72,6 @@ export function useCreateConversation(ownerId: string | null) {
     onSuccess: (conversation) => {
       if (ownerId === null) return
       updateConversationCaches(queryClient, ownerId, conversation)
-      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
       void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
     },
   })

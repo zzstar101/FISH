@@ -104,7 +104,6 @@ export function isConversationNotFound(error: unknown): boolean {
 export function describeCreateConversationFailure(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'LISTING_NOT_FOUND') return '商品不存在或已下架'
-    if (error.code === 'CANNOT_CHAT_WITH_SELF') return '不能和自己的商品建立会话'
   }
   return '发起会话失败，请重试'
 }
