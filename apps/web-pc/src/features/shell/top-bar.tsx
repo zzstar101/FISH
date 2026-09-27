@@ -5,12 +5,15 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { Bell, MessageCircle, Plus, Search } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
+import { useUnreadNotificationCount } from '../notifications/queries'
 
 /** PC Web 顶栏：品牌、全局搜索、发布入口、通知 / 消息、当前用户。 */
 export function TopBar() {
   const navigate = useNavigate()
   const { me } = useAuth()
+  const unread = useUnreadNotificationCount()
   const [keyword, setKeyword] = useState('')
+  const unreadCount = unread.data ?? 0
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -48,11 +51,16 @@ export function TopBar() {
             </Link>
           </Button>
           <Link
-            aria-label="通知"
-            className="grid size-10 place-items-center rounded-lg text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+            aria-label={unreadCount > 0 ? `通知，${unreadCount} 条未读` : '通知'}
+            className="relative grid size-10 place-items-center rounded-lg text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
             to="/notifications"
           >
             <Bell className="size-5" />
+            {unreadCount > 0 ? (
+              <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 font-semibold text-[10px] text-white leading-none">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            ) : null}
           </Link>
           <Link
             aria-label="消息"
