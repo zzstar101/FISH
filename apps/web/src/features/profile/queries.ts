@@ -1,11 +1,10 @@
 import type { ListingStatus } from '@fish/contracts/listings/schema'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { PublicUserIdSchema } from '@fish/contracts/users/schema'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   fetchFavoriteListings,
   fetchFollowedUsers,
   fetchHistory,
-  fetchUser,
-  fetchUserListings,
   isFollowing,
   resetDemoData,
   toggleFollow,
@@ -13,6 +12,7 @@ import {
 import { useMe } from '../auth/queries'
 import { offlineListing, onlineListing } from '../listing/api'
 import { fetchMyListingLists, fetchProfileSummary } from './api'
+import { fetchPublicUser, fetchPublicUserListings } from './public-user-api'
 
 /**
  * #12 的数据入口：个人中心聚合走真实 `/profile`，我发布的/在售/卖出走真实
@@ -40,16 +40,19 @@ export function useToggleFollow(userId: string) {
   })
 }
 
-/**
- * 用户主页（fixture）：真实契约没有公开用户资料端点（P1 信用/主页）。
- * `useUserListings(userId)` 仍走 fixture store，服务用户主页与我的列表两处。
- */
+/** 他人主页只读取公开 DTO；不存在 / 非规范用户 ID 显示空态。 */
 export function useUser(id: string) {
-  return useQuery({ queryKey: ['user', id], queryFn: () => fetchUser(id) })
+  return useQuery({ queryKey: ['user', id], queryFn: () => fetchPublicUser(id) })
 }
 
 export function useUserListings(id: string) {
-  return useQuery({ queryKey: ['user', id, 'listings'], queryFn: () => fetchUserListings(id) })
+  return useInfiniteQuery({
+    queryKey: ['user', id, 'listings'],
+    queryFn: ({ pageParam }) => fetchPublicUserListings(id, pageParam),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.nextCursor,
+    enabled: PublicUserIdSchema.safeParse(id).success,
+  })
 }
 
 /** 「我发布的 / 在售 / 我卖出的」分页：真实 sellerId 读路径（需要当前用户 id）。 */

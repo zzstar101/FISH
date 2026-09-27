@@ -1,12 +1,39 @@
+import type { AdminListingDetail } from '@fish/contracts/admin/schema'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
-import { Link, useParams } from '@tanstack/react-router'
+import { Link, useParams, useSearch } from '@tanstack/react-router'
 import { ChevronLeft } from 'lucide-react'
 import { formatPrice } from '../../lib/format'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
 import { AUDIT_ACTION_LABEL, formatDateTime, LISTING_STATUS_LABEL, statusLabel } from './display'
+import { type GovernanceActionSpec, GovernancePanel } from './governance-panel'
 import { useAdminListing } from './queries'
+
+export function listingGovernanceActions(
+  listing: Pick<AdminListingDetail, 'status' | 'moderationStatus' | 'governanceDelistedAt'>,
+): GovernanceActionSpec[] {
+  if (listing.governanceDelistedAt) {
+    return [
+      {
+        action: 'restore-listing',
+        label: '恢复上架',
+        description: '恢复到被下架前的状态（由下架审计快照决定）',
+      },
+    ]
+  }
+  if (listing.moderationStatus === 'APPROVED') {
+    return [
+      {
+        action: 'delist-listing',
+        label: '下架商品',
+        tone: 'danger',
+        description: '商品转为已下架，卖家无法自行修改或上架',
+      },
+    ]
+  }
+  return []
+}
 
 /**
  * 商品详情（#73 设计 §4.3）：商品 + 图片元数据 + 卖家摘要 + 关联操作日志。
@@ -14,6 +41,7 @@ import { useAdminListing } from './queries'
  */
 export function ListingDetailPage() {
   const { listingId } = useParams({ from: '/admin/listings/$listingId' })
+  const { sourceReportId } = useSearch({ from: '/admin/listings/$listingId' })
   const detail = useAdminListing(listingId)
 
   if (detail.isPending) return <LoadingState label="正在加载商品详情…" />
@@ -78,11 +106,40 @@ export function ListingDetailPage() {
         <Link
           className="mt-1 inline-block text-sm text-brand"
           params={{ userId: listing.seller.id }}
+          search={{ sourceReportId }}
           to="/admin/users/$userId"
         >
           查看卖家详情
         </Link>
       </Card>
+
+      {/* 交易查询入口（#73 PR4）：交易页的 listingId 是 URL-only 参数，这里正是来源。 */}
+      <Card className="p-4">
+        <h2 className="mb-2 font-semibold text-[15px]">交易</h2>
+        <Link
+          className="text-sm text-brand hover:underline"
+          search={{ listingId: listing.id }}
+          to="/admin/transactions"
+        >
+          查看该商品的交易
+        </Link>
+      </Card>
+
+      {/* 治理（#73 PR3）：已有治理标记只给恢复；否则只有审核 APPROVED 才能下架，
+          商品是否预订、售出或由卖家下架不影响后端的治理入口。恢复目标状态由后端
+          的下架审计快照决定，这里不提供选择器（避免把 RESERVED 恢复成 ACTIVE）。
+          审核引擎的 BLOCKED 没有治理标记，不能用治理恢复绕过人工审核。 */}
+      <GovernancePanel
+        actions={listingGovernanceActions(listing)}
+        targetId={listing.id}
+        sourceReportId={sourceReportId}
+      />
+
+      {!listing.governanceDelistedAt && listing.moderationStatus === 'BLOCKED' ? (
+        <Card className="p-4 text-sm text-ink-3">
+          该商品已被审核引擎屏蔽，恢复路径是人工审核或卖家修改后重新送审，不在治理动作范围内。
+        </Card>
+      ) : null}
 
       <Card className="p-4">
         <h2 className="mb-3 font-semibold text-[15px]">关联 Admin 操作日志</h2>

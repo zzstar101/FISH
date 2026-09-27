@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   MEMORY_BUYER_ID as buyer,
   MEMORY_CONVERSATION_ID as conversationA,
@@ -15,7 +16,10 @@ describe('message service: listMessages', () => {
     const second = await store.insertText(conversationA, seller, '在的')
     const service = createMessageService({ store })
     const result = await service.listMessages(buyer, conversationA, { limit: 30 })
-    expect(result.items.map((item) => item.id)).toEqual([first.id, second.id])
+    expect(result.items.map((item) => item.id)).toEqual([
+      encodePublicId(PUBLIC_ID_PREFIX.message, first.id),
+      encodePublicId(PUBLIC_ID_PREFIX.message, second.id),
+    ])
     expect(result.items[0]?.sender?.nickname).toBe('买家')
     expect(result.nextCursor).toBeNull()
   })
@@ -49,11 +53,16 @@ describe('message service: listMessages', () => {
     if (!first || !second || !third) throw new Error('unreachable')
 
     const page1 = await service.listMessages(buyer, conversationA, { limit: 2 })
-    expect(page1.items.map((item) => item.id)).toEqual([second, third])
-    expect(page1.nextCursor).toBe(second)
+    expect(page1.items.map((item) => item.id)).toEqual([
+      encodePublicId(PUBLIC_ID_PREFIX.message, second),
+      encodePublicId(PUBLIC_ID_PREFIX.message, third),
+    ])
+    expect(page1.nextCursor).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, second))
 
     const page2 = await service.listMessages(buyer, conversationA, { limit: 2, before: second })
-    expect(page2.items.map((item) => item.id)).toEqual([first])
+    expect(page2.items.map((item) => item.id)).toEqual([
+      encodePublicId(PUBLIC_ID_PREFIX.message, first),
+    ])
     expect(page2.nextCursor).toBeNull()
   })
 })
@@ -64,7 +73,7 @@ describe('message service: sendTextMessage', () => {
     const dto = await service.sendTextMessage(buyer, conversationA, { content: '  还在吗  ' })
     expect(dto.type).toBe('TEXT')
     expect(dto.content).toBe('还在吗')
-    expect(dto.sender?.id).toBe(buyer)
+    expect(dto.sender?.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, buyer))
   })
 
   test('404 for a non-participant sender', async () => {

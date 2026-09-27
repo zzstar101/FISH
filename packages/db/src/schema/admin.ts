@@ -6,6 +6,13 @@ import { users } from './users'
 export const adminAuditActionEnum = pgEnum('admin_audit_action', [
   'ADMIN_PROMOTED',
   'MODERATION_DECISION',
+  'REPORT_DECISION',
+  'LISTING_DELISTED',
+  'LISTING_RESTORED',
+  'USER_RESTRICTED',
+  'USER_RESTRICTION_LIFTED',
+  'USER_BANNED',
+  'USER_UNBANNED',
 ])
 
 /** 审计目标类型。审核决定以 moderation record 为审计目标。 */
@@ -13,6 +20,8 @@ export const adminAuditTargetTypeEnum = pgEnum('admin_audit_target_type', [
   'USER',
   'LISTING',
   'MODERATION_RECORD',
+  'REPORT',
+  'USER_RESTRICTION',
 ])
 
 /**

@@ -5,6 +5,7 @@ import { createDb } from './client'
 import { jsonParam } from './json'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
+import { listingNumbers } from './schema/listing-numbers'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { messages } from './schema/messages'
@@ -77,6 +78,20 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       notifications: 0,
       jobs: 1,
     })
+
+    const originalNumbers = await scratch
+      .select({ id: listings.id, no: listings.listingNo })
+      .from(listings)
+      .orderBy(listings.id)
+    expect(originalNumbers.every((row) => /^[1-9][0-9]{11}$/.test(row.no.toString()))).toBe(true)
+    await scratch.transaction((tx) => seed(tx))
+    expect(
+      await scratch
+        .select({ id: listings.id, no: listings.listingNo })
+        .from(listings)
+        .orderBy(listings.id),
+    ).toEqual(originalNumbers)
+    expect(await scratch.$count(listingNumbers)).toBe(6)
 
     // #157 / #147 不变量：每笔交易都能按 (listing_id, buyer_id, seller_id) join 到
     // 会话——GET /transactions 的 listForUser / findById 就是这个 join，join 不上的

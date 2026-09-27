@@ -4,7 +4,7 @@ import { ApiError } from './api-client'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration, resetPcSession } from './session-cache'
 
 const newUser: Me = {
-  id: '01930000-0000-7000-8000-00000000000b',
+  id: 'usr_01jc000000e00800000000000b',
   nickname: '新用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',

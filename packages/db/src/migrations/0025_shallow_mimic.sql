@@ -1,0 +1,1 @@
+CREATE INDEX "listing_lookup_attempts_created_at_idx" ON "listing_lookup_attempts" USING btree ("created_at");

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingFeedQuery, ListingStatus } from '@fish/contracts/listings/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import { encodeCursor } from './cursor'
 import { createListingService, ListingServiceError } from './service'
@@ -24,6 +25,7 @@ const CREATED_AT = new Date('2026-09-12T03:40:10.000Z')
 function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
   return {
     id: LISTING_ID,
+    listingNo: 638_294_017_526n,
     sellerId: SELLER_ID,
     title: '罗技 K380 键盘',
     description: '宿舍用了一学期，功能正常。',
@@ -38,6 +40,7 @@ function listingRow(overrides: Partial<ListingRow> = {}): ListingRow {
     moderationReason: null,
     moderationRuleVersion: null,
     moderatedAt: null,
+    governanceDelistedAt: null,
     createdAt: CREATED_AT,
     updatedAt: CREATED_AT,
     ...overrides,
@@ -94,12 +97,14 @@ function updateTarget(overrides: Partial<ListingUpdateTarget> = {}): ListingUpda
     negotiable: true,
     free: false,
     moderationStatus: 'APPROVED',
+    governanceDelistedAt: null,
     ...overrides,
   }
 }
 
 function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
   return {
+    legacyUserIds: async () => [],
     createListingAtomic: async () => ({ kind: 'created', listingId: LISTING_ID }),
     enqueueMatchJob: async () => {},
     findDetail: async () => ({
@@ -112,6 +117,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       status: 'ACTIVE',
       priceCents: 16000,
       free: false,
+      governanceDelistedAt: null,
     }),
     listFeed: async () => [],
     updateListingAtomic: async (input) => {
@@ -136,7 +142,8 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage {
   }
 }
 
-function feedQuery(overrides: Partial<ListingFeedQuery> = {}): ListingFeedQuery {
+type InternalFeedQuery = Omit<ListingFeedQuery, 'sellerId'> & { sellerId?: string }
+function feedQuery(overrides: Partial<InternalFeedQuery> = {}): InternalFeedQuery {
   return { sort: 'newest', limit: 20, ...overrides }
 }
 
@@ -149,7 +156,7 @@ const validCreate = {
   urgent: false,
   negotiable: false,
   free: false,
-  objectKeys: [`listings/${SELLER_ID}/a.jpg`],
+  objectKeys: [`listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`],
 }
 
 async function expectServiceError(run: () => Promise<unknown>): Promise<ListingServiceError> {
@@ -221,7 +228,9 @@ describe('listFeed', () => {
 
     const response = await service.listFeed(null, feedQuery())
     expect(response.items).toHaveLength(1)
-    expect(response.items[0]?.id).toBe('01930000-0000-7000-8000-000000000012')
+    expect(response.items[0]?.id).toBe(
+      encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-000000000012'),
+    )
   })
 
   test('rejects reading another seller listings by status', async () => {
@@ -374,13 +383,14 @@ describe('getDetail', () => {
     })
 
     const detail = await service.getDetail(SELLER_ID, LISTING_ID)
+    expect(detail.listingNo).toBe('638294017526')
     expect(detail.isOwner).toBe(true)
     expect(detail.images.map((image) => image.url)).toEqual([
       `https://cdn.test/listings/${SELLER_ID}/a.jpg`,
       `https://cdn.test/listings/${SELLER_ID}/b.jpg`,
     ])
     expect(detail.seller).toEqual({
-      id: SELLER_ID,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID),
       nickname: '阿岚',
       avatarUrl: null,
       authStatus: 'VERIFIED',
@@ -514,6 +524,25 @@ describe('createListing', () => {
     expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
   })
 
+  test('旧用户重键后可保留本人的历史图片键，非本人旧键仍拒绝', async () => {
+    const oldId = '11111111-1111-4111-8111-111111111111'
+    const ownKey = `listings/${oldId}/01930000-0000-4000-8000-0000000000f2.webp`
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        legacyUserIds: async (current) => (current === SELLER_ID ? [oldId] : []),
+      }),
+    })
+    const updated = await service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [ownKey] })
+    expect(updated.images).toHaveLength(1)
+    const invalid = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, {
+        objectKeys: [`listings/${OTHER_ID}/old.webp`],
+      }),
+    )
+    expect(invalid.code).toBe('IMAGE_REFERENCE_INVALID')
+  })
+
   test('rejects object keys that were never uploaded', async () => {
     const service = createListingService({
       storage: fakeStorage({ stat: async () => null }),
@@ -613,7 +642,7 @@ describe('createListing', () => {
     })
 
     expect(received?.moderationStatus).toBe('REVIEW')
-    expect(result.detail.id).toBe(LISTING_ID)
+    expect(result.detail.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
   })
 
   test('reports created=true and returns the detail', async () => {
@@ -621,7 +650,7 @@ describe('createListing', () => {
     const result = await service.createListing(SELLER_ID, validCreate)
 
     expect(result.created).toBe(true)
-    expect(result.detail.id).toBe(LISTING_ID)
+    expect(result.detail.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
   })
 
   test('returns the existing listing and re-enqueues the match job on a duplicate submit', async () => {
@@ -715,13 +744,15 @@ describe('updateListing', () => {
 
     await service.updateListing(SELLER_ID, LISTING_ID, {
       title: '新标题',
-      objectKeys: [`listings/${SELLER_ID}/new.jpg`],
+      objectKeys: [`listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f3.jpg`],
     })
 
     expect(received.fields).toMatchObject({ title: '新标题', moderationStatus: 'APPROVED' })
     // `objectKeys` 不是 `listings` 的列，绝不能出现在 `fields` 里。
     expect(received.fields).not.toHaveProperty('objectKeys')
-    expect(received.objectKeys).toEqual([`listings/${SELLER_ID}/new.jpg`])
+    expect(received.objectKeys).toEqual([
+      `listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f3.jpg`,
+    ])
   })
 
   // 并发：锁内读到的行已经是 RESERVED / SOLD（#11 的交易流程）——这必须是 409 而不是 404。
@@ -878,6 +909,7 @@ describe('transition', () => {
           status: 'OFFLINE',
           priceCents: 16000,
           free: false,
+          governanceDelistedAt: null,
         }),
         findDetail: async () => ({
           listing: listingRow({ status: 'OFFLINE' }),
@@ -905,6 +937,7 @@ describe('transition', () => {
           status: 'RESERVED',
           priceCents: 16000,
           free: false,
+          governanceDelistedAt: null,
         }),
       }),
     })
@@ -937,6 +970,7 @@ describe('transition', () => {
             status: reads === 1 ? 'ACTIVE' : 'RESERVED',
             priceCents: 16000,
             free: false,
+            governanceDelistedAt: null,
           }
         },
       }),
@@ -967,6 +1001,7 @@ describe('transition', () => {
             status: reads === 1 ? 'ACTIVE' : 'OFFLINE',
             priceCents: 16000,
             free: false,
+            governanceDelistedAt: null,
           }
         },
         findDetail: async () => ({

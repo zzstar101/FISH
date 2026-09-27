@@ -6,6 +6,7 @@ import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { UploadServiceError } from '../uploads/service'
 import type { ProfileService } from './service'
 
@@ -17,6 +18,8 @@ export type ProfileRouterOptions = {
    * 不再重复查询 users 表——与 auth 的 toMe 映射不会漂移。
    */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：改资料前检查封禁（个人资料写入属 `write` 作用域）。 */
+  guard: RestrictionGuard
 }
 
 async function readJson(c: Context): Promise<unknown> {
@@ -28,7 +31,7 @@ async function readJson(c: Context): Promise<unknown> {
 }
 
 /** 挂载点是 /profile（app.ts），router 内部用 /。 */
-export function createProfileRouter({ service, requireAuth }: ProfileRouterOptions) {
+export function createProfileRouter({ service, requireAuth, guard }: ProfileRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
   app.get('/', requireAuth, async (c: Context<{ Variables: AuthVariables }>) => {
@@ -42,7 +45,7 @@ export function createProfileRouter({ service, requireAuth }: ProfileRouterOptio
    * 头像的**对象键**在这里被换成绝对 URL（service 内复用上传域的 confirm 校验），
    * 因此 422 必须按上传域的错误码原样透出——端上「发布商品」的错误处理直接复用。
    */
-  app.patch('/', requireAuth, async (c: Context<{ Variables: AuthVariables }>) => {
+  app.patch('/', requireAuth, guard.write, async (c: Context<{ Variables: AuthVariables }>) => {
     const parsed = profileUpdateRequestSchema.safeParse(await readJson(c))
     if (!parsed.success) {
       // 契约 §3：VALIDATION_FAILED 必须带 details，前端据此把错误定位到输入框。

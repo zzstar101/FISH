@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSqlMessageStore } from '../messages/store'
@@ -37,9 +38,10 @@ const conversationA2 = '01990000-0000-7000-8000-0000000000c2' // listingA + buye
 const conversationB = '01990000-0000-7000-8000-0000000000c3' // listingB + buyer1
 
 async function seedListing(id: string) {
+  const listingNo = await reserveTestListingNo(db, id)
   await db.execute(sql`
-    INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-    VALUES (${id}, ${seller}, '测试商品', '描述', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
+    INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+    VALUES (${id}, ${listingNo}, ${seller}, '测试商品', '描述', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
   `)
 }
 

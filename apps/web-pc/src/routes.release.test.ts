@@ -8,7 +8,7 @@ import { AUTH_ME_QUERY_KEY } from './lib/session-cache'
 import { routeTree } from './routeTree.gen'
 
 const USER: Me = {
-  id: '01930000-0000-7000-8000-00000000000a',
+  id: 'usr_01jc000000e00800000000000a',
   nickname: '审查用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',
@@ -54,13 +54,13 @@ function count(html: string, needle: string): number {
 describe('PC release route boundaries', () => {
   test('deep links resolve inside the PC route tree', () => {
     expect(matchedRouteIds('/pc/search?q=keyboard').at(-1)).toBe('/search')
-    expect(matchedRouteIds('/pc/listing/01930000-0000-7000-8000-000000000001').at(-1)).toBe(
+    expect(matchedRouteIds('/pc/listing/lst_01jc000000e00800000000000t').at(-1)).toBe(
       '/listing/$listingId',
     )
-    expect(matchedRouteIds('/pc/messages/01930000-0000-7000-8000-000000000002').at(-1)).toBe(
+    expect(matchedRouteIds('/pc/messages/cnv_01jc000000e00800000000001a').at(-1)).toBe(
       '/messages/$conversationId',
     )
-    expect(matchedRouteIds('/pc/orders/01930000-0000-7000-8000-000000000003').at(-1)).toBe(
+    expect(matchedRouteIds('/pc/orders/txn_01jc000000e00800000000004t').at(-1)).toBe(
       '/orders/$transactionId',
     )
   })

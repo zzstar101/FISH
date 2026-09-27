@@ -4,13 +4,14 @@ import { MATCHING_ROUTES } from '@fish/contracts/matching/routes'
 import type { WishMatchItem } from '@fish/contracts/matching/schema'
 import { WISH_ROUTES } from '@fish/contracts/wishes/routes'
 import type { WishCreateInput, WishDto, WishPoolItem } from '@fish/contracts/wishes/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 
 /**
  * 许愿 / 匹配接真接口的取数行为（#89 的接线）。
  *
  * 锁住三件在接接口时最容易做错、而且错了会被用户当成事实的事：
  * 1. **fail-closed**：愿望与愿望池任一取不到就是整页 `failed`，绝不回退 mock
- *    （mock 的 id 是 `w-001`，真实数据是 uuid，混在一起会造出「真愿望 + 演示命中」）；
+ *    （不能把演示数据伪装成真实愿望或命中）；
  * 2. **命中的来源**：只对 `ACTIVE && matchCount > 0` 的愿望逐条拉
  *    `/matches?wishId=`，且单条失败不拖垮整页（卡片保留契约计数、不编排行）；
  * 3. **卖家**：`/matches` 不返回卖家，逐条拉详情补；补不到是 `null`，
@@ -43,13 +44,21 @@ type ApiCall = {
   body?: unknown
 }
 
-/** 契约里几个必须合法的 id（`ListingIdSchema` 与 `MatchBaseSchema.id` 都是 `z.uuid()`） */
-const WISH_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-const LISTING_ID = '11111111-1111-4111-8111-111111111111'
-const OTHER_LISTING_ID = '22222222-2222-4222-8222-222222222222'
-const SELLER_ID = '33333333-3333-4333-8333-333333333333'
-const MATCH_ID = '44444444-4444-4444-8444-444444444444'
-const MATCH_ID_2 = '55555555-5555-4555-8555-555555555555'
+/** 模拟真实 API 的规范 UUIDv7 → 对应资源公开 ID；测试不会把旧 UUID 当成功响应。 */
+const uuid = (n: number) => `01930000-0000-7000-8000-${n.toString(16).padStart(12, '0')}`
+const WISH_ID = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(1))
+const WISH_OLD = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(2))
+const WISH_NEW = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(3))
+const WISH_CLOSED = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(4))
+const WISH_A = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(5))
+const WISH_B = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(6))
+const WISH_CREATED = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(7))
+const WISH_POOL_ERROR = encodePublicId(PUBLIC_ID_PREFIX.wish, uuid(8))
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, uuid(11))
+const OTHER_LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, uuid(12))
+const SELLER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, uuid(13))
+const MATCH_ID = encodePublicId(PUBLIC_ID_PREFIX.match, uuid(14))
+const MATCH_ID_2 = encodePublicId(PUBLIC_ID_PREFIX.match, uuid(15))
 
 const calls: ApiCall[] = []
 let wishes: WishDto[] = []
@@ -65,7 +74,7 @@ function respond(call: ApiCall): Promise<unknown> {
   if (failWith?.when(call)) return Promise.reject(failWith.error)
 
   if (call.path === WISH_ROUTES.base && call.method === 'POST') {
-    return Promise.resolve(wishes[0] ?? wish({ id: 'w-created' }))
+    return Promise.resolve(wishes[0] ?? wish({ id: WISH_CREATED }))
   }
   if (call.path === WISH_ROUTES.base) {
     const page = Number(call.query?.page ?? 1)
@@ -142,7 +151,7 @@ const { toMockWish, toMockWishPoolItem } = await import('../src/features/wish/ad
 
 function wish(partial: Partial<WishDto> & { id: string }): WishDto {
   return {
-    userId: '66666666-6666-4666-8666-666666666666',
+    userId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(16)),
     keyword: '显示器',
     category: 'DIGITAL',
     budgetMinCents: 20000,
@@ -216,23 +225,23 @@ beforeEach(() => {
 describe('loadWishes —— 我的愿望 + 愿望池 + 命中', () => {
   test('成功：愿望按创建时间倒序，只对 ACTIVE 且有命中的愿望拉命中', async () => {
     wishes = [
-      wish({ id: 'w-old', createdAt: '2026-09-01T00:00:00.000Z', matchCount: 2 }),
-      wish({ id: 'w-new', createdAt: '2026-09-10T00:00:00.000Z', matchCount: 0 }),
+      wish({ id: WISH_OLD, createdAt: '2026-09-01T00:00:00.000Z', matchCount: 2 }),
+      wish({ id: WISH_NEW, createdAt: '2026-09-10T00:00:00.000Z', matchCount: 0 }),
       wish({
-        id: 'w-closed',
+        id: WISH_CLOSED,
         createdAt: '2026-09-05T00:00:00.000Z',
         status: 'CLOSED',
         matchCount: 3,
       }),
     ]
     poolItems = [{ keyword: '显示器', category: 'DIGITAL', wantCount: 4, medianBudgetCents: 30000 }]
-    matchLists.set('w-old', { total: 2, items: [matched(MATCH_ID, LISTING_ID)] })
+    matchLists.set(WISH_OLD, { total: 2, items: [matched(MATCH_ID, LISTING_ID)] })
 
     const result = await loadWishes()
     expect(result.status).toBe('ok')
     if (result.status !== 'ok') return
 
-    expect(result.mine.map((item) => item.id)).toEqual(['w-new', 'w-closed', 'w-old'])
+    expect(result.mine.map((item) => item.id)).toEqual([WISH_NEW, WISH_CLOSED, WISH_OLD])
     expect(result.pool).toHaveLength(1)
     // 列表分页参数按契约（pageSize ≤ 50）
     expect(callsTo(WISH_ROUTES.base).at(0)?.query).toEqual({ page: 1, pageSize: 50 })
@@ -241,27 +250,27 @@ describe('loadWishes —— 我的愿望 + 愿望池 + 命中', () => {
     expect(callsTo(MATCHING_ROUTES.base)).toEqual([
       {
         path: MATCHING_ROUTES.base,
-        query: { wishId: 'w-old', limit: 3 },
+        query: { wishId: WISH_OLD, limit: 3 },
         method: undefined,
         body: undefined,
       },
     ])
-    expect(result.hits['w-old']?.total).toBe(2)
-    expect(result.hits['w-old']?.items[0]?.match).toEqual({
+    expect(result.hits[WISH_OLD]?.total).toBe(2)
+    expect(result.hits[WISH_OLD]?.items[0]?.match).toEqual({
       id: MATCH_ID,
-      wishId: 'w-old',
+      wishId: WISH_OLD,
       listingId: LISTING_ID,
       score: 88,
     })
     // 终态愿望即使 matchCount > 0 也不拉（卡片不展示命中行）
-    expect(result.hits['w-closed']).toBeUndefined()
+    expect(result.hits[WISH_CLOSED]).toBeUndefined()
   })
 
   test('单条命中失败不拖垮整页：该愿望没有命中条目，其余照常', async () => {
-    wishes = [wish({ id: 'w-a', matchCount: 1 }), wish({ id: 'w-b', matchCount: 1 })]
-    matchLists.set('w-b', { total: 1, items: [matched(MATCH_ID_2, LISTING_ID)] })
+    wishes = [wish({ id: WISH_A, matchCount: 1 }), wish({ id: WISH_B, matchCount: 1 })]
+    matchLists.set(WISH_B, { total: 1, items: [matched(MATCH_ID_2, LISTING_ID)] })
     failWith = {
-      when: (call) => call.path === MATCHING_ROUTES.base && call.query?.wishId === 'w-a',
+      when: (call) => call.path === MATCHING_ROUTES.base && call.query?.wishId === WISH_A,
       error: new Error('boom'),
     }
 
@@ -269,8 +278,8 @@ describe('loadWishes —— 我的愿望 + 愿望池 + 命中', () => {
     expect(result.status).toBe('ok')
     if (result.status !== 'ok') return
 
-    expect(result.hits['w-a']).toBeUndefined()
-    expect(result.hits['w-b']?.total).toBe(1)
+    expect(result.hits[WISH_A]).toBeUndefined()
+    expect(result.hits[WISH_B]?.total).toBe(1)
   })
 
   test('列表接口失败：整页 failed（fail-closed，mock 兜底开关打开也不回退）', async () => {
@@ -283,7 +292,7 @@ describe('loadWishes —— 我的愿望 + 愿望池 + 命中', () => {
   })
 
   test('愿望池失败：同样整页 failed，不拿半边数据凑合（mock 兜底开关打开也不回退）', async () => {
-    wishes = [wish({ id: 'w-1' })]
+    wishes = [wish({ id: WISH_POOL_ERROR })]
     failWith = { when: (call) => call.path === WISH_ROUTES.pool, error: new Error('network down') }
 
     expect(await loadWishes()).toEqual({ status: 'failed' })
@@ -365,9 +374,11 @@ describe('loadWishMatches —— 匹配结果 + 逐条补卖家', () => {
     expect((await loadWishMatches(WISH_ID)).status).toBe('failed')
   })
 
-  test('非法 wishId（旧 mock 链接）：直接 notFound，且一个请求都不发', async () => {
+  test('旧 mock、裸 UUID 或错误前缀直接 notFound，且一个请求都不发', async () => {
     // 两个端点对非法 id 给 404 / 422 两种拒绝，谁先 settle 谁决定页面状态 —— 客户端先挡住
-    expect((await loadWishMatches('w-011')).status).toBe('notFound')
+    for (const id of ['w-011', uuid(1), LISTING_ID]) {
+      expect((await loadWishMatches(id)).status).toBe('notFound')
+    }
     expect(calls).toHaveLength(0)
   })
 })
@@ -381,10 +392,10 @@ describe('写操作请求构造', () => {
       budgetMaxCents: 25000,
       acceptSimilar: true,
     }
-    wishes = [wish({ id: 'w-created', keyword: input.keyword })]
+    wishes = [wish({ id: WISH_CREATED, keyword: input.keyword })]
 
     const created = await createWish(input)
-    expect(created.id).toBe('w-created')
+    expect(created.id).toBe(WISH_CREATED)
     expect(callsTo(WISH_ROUTES.base, 'POST')).toEqual([
       { path: WISH_ROUTES.base, query: undefined, method: 'POST', body: input },
     ])

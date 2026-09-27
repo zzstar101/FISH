@@ -1,3 +1,6 @@
+import { isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
+
 /**
  * 对象存储的唯一出入口（#6 契约 §2.7 / §7.7 / §7.8）。
  *
@@ -96,13 +99,28 @@ export function isSafeObjectKey(key: string): boolean {
   return key.split('/').every((segment) => segment !== '.' && segment !== '..')
 }
 
+export function isPublicListingKey(key: string): boolean {
+  const match = /^listings\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
+/** Seed illustrations have stable non-resource slugs, never a user/listing UUID. */
+const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
+
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
   /** 来自 `S3_PUBLIC_URL`（本地为 `http://localhost:9000/fish`）。 */
   publicUrlBase: string
+  /** Web 同源 /api 代理入口，旧对象键只经加密 token 读取，绝不拼裸 UUID 直链。 */
+  legacyUrlBase?: string
+  legacyUrlSecret?: string
   expiresInSeconds?: number
 }): MediaStorage {
-  const { client, publicUrlBase } = options
+  const { client, publicUrlBase, legacyUrlBase, legacyUrlSecret } = options
   const expiresInSeconds = options.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRES_SECONDS
 
   /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
@@ -174,7 +192,17 @@ export function createBunS3MediaStorage(options: {
     },
 
     publicUrl(key) {
-      return `${publicUrlBase.replace(/\/+$/, '')}/${key.replace(/^\/+/, '')}`
+      assertSafeObjectKey(key)
+      if (isLegacyListingKey(key)) {
+        if (!legacyUrlBase || !legacyUrlSecret) throw new Error('旧媒体 URL 代理未配置')
+        return `${legacyUrlBase.replace(/\/+$/, '')}/${legacyMediaToken(key, legacyUrlSecret)}`
+      }
+      // New listing keys must carry strict resource TypeIDs; refuse any other shape instead of
+      // silently exposing raw UUIDs or unknown object namespaces in a public response.
+      if (!isPublicListingKey(key) && !SEED_LISTING_KEY.test(key)) {
+        throw new Error('公开媒体对象键不规范')
+      }
+      return `${publicUrlBase.replace(/\/+$/, '')}/${key}`
     },
   }
 }

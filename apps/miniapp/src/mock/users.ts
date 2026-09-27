@@ -1,4 +1,5 @@
 import { AVATARS } from './images'
+import { mockPublicId } from './public-id'
 import type { MockUser } from './types'
 
 /**
@@ -136,7 +137,7 @@ export const USER_BY_ID: Record<string, MockUser> = Object.fromEntries(
 )
 
 export function getUser(id: string): MockUser {
-  const found = USER_BY_ID[id]
+  const found = USER_BY_ID[id] ?? USERS.find((user) => mockPublicId('usr', user.id) === id)
   if (found) return found
   const fallback = USERS[0]
   if (!fallback) throw new Error('USERS 为空：mock 数据未初始化')

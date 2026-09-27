@@ -4,9 +4,13 @@ import { fetchNotifications, fetchUnreadNotificationCount, markNotificationRead 
 const originalFetch = globalThis.fetch
 
 const notification = {
-  id: 'n1',
+  id: 'ntf_01jc000000e00800000000002a',
   type: 'MATCH',
-  payload: { matchId: 'm1', listingId: 'l1', wishId: 'w1' },
+  payload: {
+    matchId: 'mtc_01jc000000e00800000000003a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    wishId: 'wsh_01jc000000e00800000000003t',
+  },
   readAt: null,
   createdAt: '2026-09-26T00:00:00.000Z',
 } as const
@@ -43,8 +47,10 @@ describe('notifications API', () => {
       return Response.json({ ...notification, readAt: '2026-09-26T01:00:00.000Z' })
     }) as unknown as typeof fetch
 
-    const updated = await markNotificationRead('n1')
+    const updated = await markNotificationRead('ntf_01jc000000e00800000000002a')
     expect(updated.readAt).toBe('2026-09-26T01:00:00.000Z')
-    expect(calls).toEqual([{ url: '/api/notifications/n1/read', method: 'POST' }])
+    expect(calls).toEqual([
+      { url: '/api/notifications/ntf_01jc000000e00800000000002a/read', method: 'POST' },
+    ])
   })
 })

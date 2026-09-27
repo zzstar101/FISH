@@ -1,4 +1,10 @@
 import { z } from 'zod'
+import {
+  ListingIdSchema,
+  MatchIdSchema,
+  NotificationIdSchema,
+  WishIdSchema,
+} from '../system/public-id'
 
 /**
  * Notification Domain Contract（Issue #23）。前端与 API 只依赖本目录的字段定义。
@@ -28,29 +34,28 @@ export type NotificationType = z.infer<typeof notificationTypeSchema>
 /**
  * 读侧口径（冻结，与 `apps/api/src/modules/notifications/{store,service}.ts` 的注释一致）：
  *
- * - 列表、未读数、标记已读**共用同一个「契约能表示这一行」的 SQL 谓词**（store 的 `projectable`），
- *   判据的值域全部从本域契约派生：`type` 取自本枚举，`payload` 的键名取自
- *   `notificationPayloadSchema`（SQL 里没有第二份 type/键名列表）。库里出现契约表示不了的行时
- *   （`type` 不在枚举、`payload` 不是对象、键值不是字符串、时间戳非有限），它既不在列表里
+ * - 列表、未读数、标记已读共用一个「行能否投影」的 SQL 谓词（store 的 `projectable`），
+ *   `type` 取自本枚举。非规范、非字符串的引用只在出口省略该字段；行无法展示时
+ *   （`type` 不在枚举、`payload` 不是对象、通知 ID 非 UUIDv7、时间戳非有限），它既不在列表里
  *   （也不占用 `limit` 名额、不会让 `?limit=1` 返回空页），也不计进 `unreadCount`，
  *   标记已读返回 404 且**不改库** —— 三处口径由 SQL 保证一致。P1 加降价通知只要扩本枚举，
  *   三处自动同步；反过来说，**契约与 worker 必须一起改**，否则新 type 的通知对用户不可见。
- * - 服务端另有一层 zod 投影校验，语义与上面一致，作为纵深防御：SQL 判据与 zod 契约是两套语言
- *   描述同一件事，万一将来加字段时两边没对齐，记日志跳过而不是把整页打成 500。
+ * - 服务端将内部 UUIDv7 转为严格的公开 TypeID，并在投影后作 zod 校验；SQL 判据
+ *   与 zod 是两套语言，若将来加字段时未对齐，跳过脏行而不把整页打成 500。
  */
 
 /**
  * `payload` 的形状（jsonb，按 `type` 解释）。`MATCH` 是 `{ matchId, listingId, wishId }`。
  *
- * 三个 id 都是可选的，而且用 `z.string()` 不用 `z.uuid()`：
- * - 可选是因为它们指向的对象**可能已被删除**（沿用 #6 的口径：跳转前各自确认，确认不了就退回列表）；
- * - 不校验 uuid 是因为 payload 是 jsonb 自由形状，历史/越权写入的脏值不该让整个列表打不开
- *   （与 listings 侧对 `users.avatar_url` 的取舍同源）。
+ * 三个 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_`。
+ * 被删除或无法映射的历史引用只省略该字段，不删除整条通知；数据库 JSON 原文不改。
  */
 export const notificationPayloadSchema = z.object({
-  matchId: z.string().optional(),
-  listingId: z.string().optional(),
-  wishId: z.string().optional(),
+  // Runtime validates strict TypeIDs. Keep DTO TypeScript fields as string until the
+  // miniapp's fixture data can be changed under its separate per-page approval gate.
+  matchId: MatchIdSchema.transform((id): string => id).optional(),
+  listingId: ListingIdSchema.transform((id): string => id).optional(),
+  wishId: WishIdSchema.transform((id): string => id).optional(),
 })
 export type NotificationPayload = z.infer<typeof notificationPayloadSchema>
 
@@ -59,7 +64,7 @@ export type NotificationPayload = z.infer<typeof notificationPayloadSchema>
  * 调用方，只会多一个可被误用的字段。
  */
 export const notificationDtoSchema = z.object({
-  id: z.string(),
+  id: NotificationIdSchema.transform((id): string => id),
   type: notificationTypeSchema,
   payload: notificationPayloadSchema,
   /** 已读时间；`null` = 未读（与库里 `read_at IS NULL` 完全同口径，不额外造布尔字段）。 */
@@ -98,7 +103,7 @@ export type NotificationUnreadCount = z.infer<typeof notificationUnreadCountSche
 export const NotificationErrorCodeSchema = z.enum([
   /**
    * 404：通知不存在，**或**存在但不是当前用户的（决定 2：不泄漏存在性）。
-   * 非法 uuid 的路径参数同样直接 404，不打到 PG 变成 500。
+   * 非法 TypeID（包括裸 UUID）的路径参数同样直接 404，不打到 PG。
    */
   'NOTIFICATION_NOT_FOUND',
 ])

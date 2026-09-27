@@ -5,9 +5,10 @@
  * **不**静态 import 会话域（`chat/api`）—— 少一次无关的模块耦合，测试也不必为了顶替
  * 会话域而引入跨文件的 `mock.module`。
  *
- * 两条加载都没有 mock 回退分支：真接口的愿望 id 是 uuid，mock fixture 是 `w-001` 这种，
+ * 两条加载都没有 mock 回退分支：真接口的愿望 id 是规范 wsh_，mock fixture 是 `w-001` 这种，
  * 混在一起只会造出「真实愿望 + 演示命中」的假象；拿不到就 `failed`，由页面显示错误态。
  */
+import { WishIdSchema } from '@fish/contracts/system/public-id'
 import { isApiError } from '@/lib/request'
 import type { MockUser, MockWish, MockWishPoolItem } from '@/mock/types'
 import { toMockSeller } from '../listing/adapt'
@@ -33,7 +34,7 @@ export type WishesResult =
 /**
  * 许愿页一次要的三块数据：我的愿望 + 愿望池 + 每条 ACTIVE 愿望的命中。
  *
- * **刻意没有 mock 回退**（与 `loadPublicUserHome` 同一取舍）：真接口的愿望 id 是 uuid，
+ * **刻意没有 mock 回退**（与 `loadPublicUserHome` 同一取舍）：真接口的愿望 id 是 wsh_，
  * 而 mock fixture 的 id 是 `w-001` 这种，混在一起只会造出「真实愿望 + 演示命中」的假象。
  * 所以开发 / 预览构建拿不到后端时同样返回 `failed`，由页面显示错误态与重试入口。
  *
@@ -81,12 +82,10 @@ async function loadWishHits(ids: string[]): Promise<Record<string, WishHitList>>
 /* --------------------------------------------------------------- 匹配结果 */
 
 /**
- * 契约 `MatchListQuerySchema` / `wishes` 路由都按 uuid 校验目标 id。
+ * 契约 `MatchListQuerySchema` / `wishes` 路由都按规范 wsh_ 校验目标 id。
  * 用于在客户端先挡掉旧 mock 链接（`w-011`）这类非法 id，避免两个端点给出
  * 404 / 422 两种拒绝、页面状态随竞态抖动。
  */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 export type WishMatchResult =
   | {
       status: 'ok'
@@ -116,10 +115,10 @@ export type WishMatchResult =
  * 卖家那一格 —— 不编造卖家。请求数与命中条数同阶（上限 50，通常个位数）。
  */
 export async function loadWishMatches(wishId: string): Promise<WishMatchResult> {
-  // 契约的 wishId 是 uuid。非法 id 先在客户端挡掉：两个请求并行时，`/wishes/:id` 会返
-  // 404（router 先做 uuid 校验）而 `/matches` 的 `z.uuid()` 返 422 —— 谁先 reject 谁决定
+  // 契约的 wishId 是规范 wsh_。非法 id 先在客户端挡掉：两个请求并行时，`/wishes/:id` 会返
+  // 404（router 先做路径校验）而 `/matches` 的 TypeID 校验返 422 —— 谁先 reject 谁决定
   // 页面显示「已结束」还是「加载失败」。挡住之后结果确定，也不发注定失败的请求。
-  if (!UUID_PATTERN.test(wishId)) return { status: 'notFound' }
+  if (!WishIdSchema.safeParse(wishId).success) return { status: 'notFound' }
   try {
     const [wish, list] = await Promise.all([fetchWish(wishId), fetchWishMatches(wishId)])
     const hits = list.items.map((item) => toWishHit(item, wishId))

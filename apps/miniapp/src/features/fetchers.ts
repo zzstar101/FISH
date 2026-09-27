@@ -337,7 +337,12 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
   } catch (error) {
     reportFailure('会话列表', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
-    const { conversations: mockConversations } = await import('@/mock/api')
+    const {
+      conversations: mockConversations,
+      ME: mockMe,
+      mockPublicId,
+    } = await import('@/mock/api')
+    const mockViewerId = mockPublicId('usr', mockMe.id)
     return {
       /**
        * fixture 里的「系统会话」（`kind === 'system'`）是契约外的展示扩展：它不是
@@ -347,7 +352,7 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
        */
       items: mockConversations()
         .filter((item) => item.kind !== 'system')
-        .map(toConversationDto),
+        .map((item) => toConversationDto(item, mockViewerId)),
       // fixture 没有分页
       nextCursor: null,
       failed: false,
@@ -363,7 +368,9 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
  * 所以要显式补齐而不是直接断言成 `ConversationDto`（断言的失败方式是运行期拿到
  * `undefined`，而不是编译期报错）。
  */
-function toConversationDto(item: MockConversation): ConversationDto {
+function toConversationDto(item: MockConversation, mockViewerId: Me['id']): ConversationDto {
+  // 演示登录与 fixture 的「我」使用不同 ID；摘要必须与历史消息的 senderId 同步投影。
+  const lastMessage = item.lastMessage
   return {
     id: item.id,
     listingId: item.listing.id,
@@ -375,7 +382,10 @@ function toConversationDto(item: MockConversation): ConversationDto {
     // fixture 没有「对方读到哪」这个概念（每个会话只有一条本地读位），给 null：
     // 逐条「已读」的渲染在 Step 3 接 `conversation.read` 时才用得上
     counterpartLastReadAt: null,
-    lastMessage: item.lastMessage,
+    lastMessage:
+      DEMO_AUTH_ENABLED && lastMessage?.senderId === mockViewerId
+        ? { ...lastMessage, senderId: DEMO_USER.id }
+        : lastMessage,
     lastMessageAt: item.lastMessageAt,
     createdAt: item.lastMessageAt,
   }
@@ -395,9 +405,11 @@ export async function loadConversation(conversationId: string): Promise<LoadedCo
     if (isApiError(error) && error.code === 'CONVERSATION_NOT_FOUND') return { status: 'missing' }
     reportFailure('会话详情', error)
     if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
-    const { conversation: mockConversation } = await import('@/mock/api')
+    const { conversation: mockConversation, ME: mockMe, mockPublicId } = await import('@/mock/api')
     const found = mockConversation(conversationId)
-    return found ? { status: 'ok', conversation: toConversationDto(found) } : { status: 'missing' }
+    return found
+      ? { status: 'ok', conversation: toConversationDto(found, mockPublicId('usr', mockMe.id)) }
+      : { status: 'missing' }
   }
 }
 
@@ -433,6 +445,7 @@ export async function loadMessagePage(
       conversation: mockConversation,
       messages: mockMessages,
       ME: mockMe,
+      mockPublicId,
     } = await import('@/mock/api')
     const found = mockConversation(conversationId)
     if (!found) return { items: [], nextCursor: null, failed: false }
@@ -441,7 +454,7 @@ export async function loadMessagePage(
      * `DEMO_USER`。契约的 `senderId` 决定气泡画在左边还是右边，所以要把非对方的
      * 发送者对齐到当前身份，否则 fixture 里「我」发的消息会画到对方那一侧。
      */
-    const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : mockMe
+    const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : { ...mockMe, id: mockPublicId('usr', mockMe.id) }
     return {
       items: mockMessages(conversationId).map((item) => toMessageDto(item, found, viewer)),
       nextCursor: null,
@@ -451,7 +464,7 @@ export async function loadMessagePage(
 }
 
 /** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
-type ViewerLike = { id: string; nickname: string; avatarUrl: string | null }
+type ViewerLike = { id: Me['id']; nickname: string; avatarUrl: string | null }
 
 /**
  * 演示构建的 fixture 消息 → 契约 `MessageDto`。

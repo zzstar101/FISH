@@ -141,6 +141,48 @@
       "when": 1790244241466,
       "tag": "0019_magical_ghost_rider",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790338280355,
+      "tag": "0020_real_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790338897625,
+      "tag": "0021_whole_mister_sinister",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790341206554,
+      "tag": "0022_lethal_oracle",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790343041911,
+      "tag": "0023_open_nightcrawler",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790351276062,
+      "tag": "0024_cultured_mentallo",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790351823799,
+      "tag": "0025_shallow_mimic",
+      "breakpoints": true
     }
   ]
 }

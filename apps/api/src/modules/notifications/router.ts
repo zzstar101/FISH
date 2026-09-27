@@ -1,5 +1,6 @@
 import { notificationListQuerySchema } from '@fish/contracts/notifications/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { type NotificationService, NotificationServiceError } from './service'
@@ -21,11 +22,11 @@ export type NotificationsRouterOptions = {
   getUserId: NotificationUserIdResolver
 }
 
-/** 非法 uuid 直接 404，避免打到 PG 后抛驱动错误变成 500（与 #7 的 `parseWishId` 同款）。 */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
+/** Wrong prefix, non-canonical encoding and bare UUID never reach the UUID column. */
 function parseNotificationId(raw: string): string | null {
-  return UUID_PATTERN.test(raw) ? raw : null
+  return isPublicId(PUBLIC_ID_PREFIX.notification, raw)
+    ? decodePublicId(PUBLIC_ID_PREFIX.notification, raw)
+    : null
 }
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`（与 #6 / #8 的 router 同构）。 */

@@ -13,6 +13,7 @@ import {
   ListingDetailSchema,
   type ListingFeedResponse,
   ListingFeedResponseSchema,
+  ListingNumberLookupResponseSchema,
   type ListingSort,
   type ListingUpdateInput,
 } from '@fish/contracts/listings/schema'
@@ -85,6 +86,26 @@ export async function fetchListingDetail(id: string): Promise<ListingDetail | nu
   try {
     const payload = await apiRequest(LISTING_ROUTES.detail(id))
     return ListingDetailSchema.parse(payload)
+  } catch (error) {
+    if (isApiError(error) && error.status === 404) return null
+    throw error
+  }
+}
+
+/**
+ * 按商品编号精确查一件商品（#217 的 12 位 `listingNo`，非公开 ID）。
+ *
+ * 只把 **404** 收敛成 `null`（这个编号不存在），其余错误必须抛给页面：
+ * 契约对编号查询有**限流**（超限 429 且带 `retryAfterSeconds`），把 429 当成「没这件商品」
+ * 会让用户以为编号写错了，而实际上只是让他等一下；503（服务端暂时不可用）同理。
+ *
+ * 与 Web 端 `apps/web/src/features/listing/api.ts` 的 `findListingByNumber` 同一口径。
+ * 命中返回的是契约公开 ID（`lst_`），直接可进详情页。
+ */
+export async function findListingByNumber(listingNo: string): Promise<string | null> {
+  try {
+    const payload = await apiRequest(LISTING_ROUTES.byNumber(listingNo))
+    return ListingNumberLookupResponseSchema.parse(payload).id
   } catch (error) {
     if (isApiError(error) && error.status === 404) return null
     throw error

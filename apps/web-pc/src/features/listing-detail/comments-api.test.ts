@@ -4,9 +4,11 @@ import { commentListPath, createComment, createReply, describeCommentFailure } f
 
 describe('commentListPath', () => {
   test('sets the contract limit and passes the cursor through', () => {
-    expect(commentListPath('listing-1')).toBe('/listings/listing-1/comments?limit=50')
-    expect(commentListPath('listing-1', 'abc+/=')).toBe(
-      '/listings/listing-1/comments?limit=50&cursor=abc%2B%2F%3D',
+    expect(commentListPath('lst_01jc000000e00800000000000t')).toBe(
+      '/listings/lst_01jc000000e00800000000000t/comments?limit=50',
+    )
+    expect(commentListPath('lst_01jc000000e00800000000000t', 'abc+/=')).toBe(
+      '/listings/lst_01jc000000e00800000000000t/comments?limit=50&cursor=abc%2B%2F%3D',
     )
   })
 })
@@ -20,7 +22,7 @@ describe('comment write contracts', () => {
       return new Response(null, { status: 500 })
     }) as unknown as typeof fetch
     try {
-      await expect(createComment('listing-1', '   ')).rejects.toBeDefined()
+      await expect(createComment('lst_01jc000000e00800000000000t', '   ')).rejects.toBeDefined()
       expect(called).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
@@ -34,10 +36,10 @@ describe('createReply', () => {
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
-          id: '01930000-0000-7000-8000-000000000022',
-          listingId: '01930000-0000-7000-8000-000000000011',
+          id: 'cmt_01jc000000e00800000000004b',
+          listingId: 'lst_01jc000000e00800000000004c',
           author: {
-            id: '01930000-0000-7000-8000-00000000000b',
+            id: 'usr_01jc000000e00800000000000b',
             nickname: '小北',
             avatarUrl: null,
           },
@@ -49,7 +51,7 @@ describe('createReply', () => {
         { status: 201, headers: { 'content-type': 'application/json' } },
       )) as unknown as typeof fetch
     try {
-      const reply = await createReply('01930000-0000-7000-8000-000000000021', '还在的')
+      const reply = await createReply('cmt_01jc000000e00800000000004a', '还在的')
       expect(reply.replies).toEqual([])
       expect(reply.content).toBe('还在的')
     } finally {

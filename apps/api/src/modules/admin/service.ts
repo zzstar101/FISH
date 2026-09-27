@@ -7,6 +7,7 @@ import type {
 import {
   AdminAuditLogEntrySchema,
   AdminAuditLogPageSchema,
+  AdminAuditTargetTypeSchema,
   type AdminListingDetail,
   AdminListingDetailSchema,
   type AdminListingSummaryPage,
@@ -18,6 +19,8 @@ import {
   type AdminModerationQueue,
   AdminModerationQueueSchema,
   AdminModerationRecordSchema,
+  type AdminModerationRecords,
+  AdminModerationRecordsSchema,
   type AdminOverview,
   AdminOverviewSchema,
   type AdminTransactionPage,
@@ -31,7 +34,19 @@ import {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus, Me } from '@fish/contracts/auth/user'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
+import {
+  decodePublicId,
+  encodePublicId,
+  PUBLIC_ID_PREFIX,
+  type PublicIdPrefix,
+} from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
+import {
+  auditTargetInfo,
+  decodeAuditFilter,
+  projectAuditId,
+  projectAuditSnapshot,
+} from './audit-public-id'
 import { decodeCursor, encodeCursor } from './cursor'
 import { AdminError } from './errors'
 import type {
@@ -41,6 +56,7 @@ import type {
   AuditLogSummaryRow,
   ListingSummaryRow,
   ModerationDetailRow,
+  ModerationHistoryRow,
   ModerationQueueRow,
   UserSummaryRow,
 } from './store'
@@ -95,6 +111,16 @@ export type AdminAuditLogListQuery = {
 }
 
 export type AdminModerationQueueListQuery = { cursor?: string; limit: number }
+/** 审核记录检索参数（#73 治理半场 PR4）。日期字符串在这里转 Date，非法值由契约层先拦。 */
+export type AdminModerationRecordsListQuery = {
+  decision?: string
+  listingId?: string
+  q?: string
+  createdFrom?: string
+  createdTo?: string
+  cursor?: string
+  limit: number
+}
 export type AdminTransactionListQuery = {
   q?: string
   status?: string
@@ -116,6 +142,8 @@ export interface AdminService {
   getOverview(): Promise<AdminOverview>
   listAuditLogs(query: AdminAuditLogListQuery): Promise<AdminAuditLogPage>
   listModerationQueue(query: AdminModerationQueueListQuery): Promise<AdminModerationQueue>
+  /** 审核记录检索（#73 治理半场 PR4）：已离开 REVIEW 队列的历史，可带筛选与游标。 */
+  listModerationRecords(query: AdminModerationRecordsListQuery): Promise<AdminModerationRecords>
   getModerationDetail(recordId: string): Promise<AdminModerationDetail>
   decideModeration(input: {
     recordId: string
@@ -136,7 +164,7 @@ function adminMeOf(me: Me): { admin: AdminMe; capabilities: AdminCapability[] } 
 
 function toUserSummary(row: UserSummaryRow) {
   return AdminUserSummaryPageSchema.shape.items.element.safeParse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
     // #86：微信用户没有学号 → null（端上显示占位），不能把 null 喂给 maskStudentNo。
     studentNoMasked: row.studentNo === null ? null : maskStudentNo(row.studentNo),
     nickname: row.nickname,
@@ -150,7 +178,7 @@ function toUserSummary(row: UserSummaryRow) {
 
 function toListingSummary(row: ListingSummaryRow, storage: MediaStorage) {
   return AdminListingSummaryPageSchema.shape.items.element.safeParse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, row.id),
     title: row.title,
     priceCents: row.priceCents,
     category: row.category,
@@ -158,34 +186,47 @@ function toListingSummary(row: ListingSummaryRow, storage: MediaStorage) {
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     coverUrl: row.coverObjectKey ? storage.publicUrl(row.coverObjectKey) : null,
-    seller: { id: row.sellerId, nickname: row.sellerNickname },
+    seller: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.sellerId),
+      nickname: row.sellerNickname,
+    },
   })
 }
 
-function toAuditLogEntry(row: AuditLogRow) {
+type ResolveLegacyAuditId = AdminStore['resolveLegacyAuditId']
+
+async function toAuditLogEntry(row: AuditLogRow, resolveLegacy: ResolveLegacyAuditId) {
+  const targetType = AdminAuditTargetTypeSchema.safeParse(row.targetType)
+  if (!targetType.success) return AdminAuditLogEntrySchema.safeParse(null)
+  const { prefix, table } = auditTargetInfo(targetType.data)
   return AdminAuditLogEntrySchema.safeParse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, row.id),
     actor:
       row.actorUserId && row.actorNickname != null
-        ? { id: row.actorUserId, nickname: row.actorNickname }
+        ? {
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, row.actorUserId),
+            nickname: row.actorNickname,
+          }
         : null,
     action: row.action,
-    targetType: row.targetType,
-    targetId: row.targetId,
-    before: row.before ?? null,
-    after: row.after ?? null,
+    targetType: targetType.data,
+    targetId: await projectAuditId(prefix, table, row.targetId, resolveLegacy),
+    before: await projectAuditSnapshot(row.before ?? null, resolveLegacy),
+    after: await projectAuditSnapshot(row.after ?? null, resolveLegacy),
     reason: row.reason,
     requestId: row.requestId,
     createdAt: row.createdAt.toISOString(),
   })
 }
 
-function toAuditLogSummary(row: AuditLogSummaryRow) {
+async function toAuditLogSummary(row: AuditLogSummaryRow, resolveLegacy: ResolveLegacyAuditId) {
+  const targetType = AdminAuditTargetTypeSchema.parse(row.targetType)
+  const { prefix, table } = auditTargetInfo(targetType)
   return {
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, row.id),
     action: row.action,
-    targetType: row.targetType,
-    targetId: row.targetId,
+    targetType,
+    targetId: await projectAuditId(prefix, table, row.targetId, resolveLegacy),
     reason: row.reason,
     createdAt: row.createdAt.toISOString(),
   }
@@ -199,21 +240,22 @@ function pageOf<T extends { createdAtCursor: string; id: string }>(
   rows: T[],
   limit: number,
   pick: (row: T) => unknown,
+  prefix: PublicIdPrefix,
 ): { items: unknown[]; nextCursor: string | null } {
   const hasMore = rows.length > limit
   const items = rows.slice(0, limit)
   const last = items[items.length - 1]
   return {
     items: items.map((row) => pick(row)).filter((item) => item !== null),
-    nextCursor: hasMore && last ? encodeCursor(last.createdAtCursor, last.id) : null,
+    nextCursor: hasMore && last ? encodeCursor(last.createdAtCursor, last.id, prefix) : null,
   }
 }
 
 function toModerationRecord(row: ModerationDetailRow['record']) {
   return AdminModerationRecordSchema.parse({
-    id: row.id,
-    listingId: row.listingId,
-    sellerId: row.sellerId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, row.id),
+    listingId: row.listingId ? encodePublicId(PUBLIC_ID_PREFIX.listing, row.listingId) : null,
+    sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, row.sellerId),
     action: row.action,
     titleSnapshot: row.titleSnapshot,
     descriptionSnapshot: row.descriptionSnapshot,
@@ -225,19 +267,24 @@ function toModerationRecord(row: ModerationDetailRow['record']) {
   })
 }
 
-function toModerationItem(row: ModerationQueueRow | ModerationDetailRow) {
+function toModerationItem(row: ModerationQueueRow | ModerationHistoryRow | ModerationDetailRow) {
   const item = {
     record: toModerationRecord(row.record),
-    listing: {
-      id: row.listing.id,
-      title: row.listing.title,
-      description: row.listing.description,
-      status: row.listing.status,
-      moderationStatus: row.listing.moderationStatus,
-      moderationReason: row.listing.moderationReason,
-      createdAt: row.listing.createdAt.toISOString(),
+    listing: row.listing
+      ? {
+          id: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listing.id),
+          title: row.listing.title,
+          description: row.listing.description,
+          status: row.listing.status,
+          moderationStatus: row.listing.moderationStatus,
+          moderationReason: row.listing.moderationReason,
+          createdAt: row.listing.createdAt.toISOString(),
+        }
+      : null,
+    seller: {
+      ...row.seller,
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.seller.id),
     },
-    seller: row.seller,
   }
   return item
 }
@@ -254,7 +301,7 @@ function moderationDetailOf(row: ModerationDetailRow) {
           reason: row.humanDecision.reason,
           actor: row.humanDecision.actorId
             ? {
-                id: row.humanDecision.actorId,
+                id: encodePublicId(PUBLIC_ID_PREFIX.user, row.humanDecision.actorId),
                 nickname: row.humanDecision.actorNickname ?? '未知管理员',
               }
             : null,
@@ -266,11 +313,17 @@ function moderationDetailOf(row: ModerationDetailRow) {
 
 function toAdminTransaction(row: AdminTransactionRow) {
   return {
-    id: row.id,
-    listingId: row.listingId,
+    id: encodePublicId(PUBLIC_ID_PREFIX.transaction, row.id),
+    listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.listingId),
     listingTitle: row.listingTitle,
-    buyer: { id: row.buyerId, nickname: row.buyerNickname },
-    seller: { id: row.sellerId, nickname: row.sellerNickname },
+    buyer: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.buyerId),
+      nickname: row.buyerNickname,
+    },
+    seller: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, row.sellerId),
+      nickname: row.sellerNickname,
+    },
     amountCents: row.amountCents,
     status: row.status,
     buyerConfirmedAt: row.buyerConfirmedAt?.toISOString() ?? null,
@@ -296,7 +349,7 @@ export function createAdminService({
     },
 
     async listUsers(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.user) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listUsers({
@@ -307,7 +360,12 @@ export function createAdminService({
         limit: query.limit,
       })
 
-      const page = pageOf(rows, query.limit, (row) => toUserSummary(row).data ?? null)
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toUserSummary(row).data ?? null,
+        PUBLIC_ID_PREFIX.user,
+      )
       return AdminUserSummaryPageSchema.parse(page)
     },
 
@@ -315,9 +373,10 @@ export function createAdminService({
       const summary = await store.findUserSummary(userId)
       if (!summary) throw new AdminError('ADMIN_NOT_FOUND', 404, '用户不存在')
 
-      const [listingStats, recentAuditLogs] = await Promise.all([
+      const [listingStats, recentAuditLogs, activeRestrictions] = await Promise.all([
         store.listingStatusCounts(userId),
         store.recentAuditLogs('USER', userId, 10),
+        store.listActiveRestrictions(userId),
       ])
 
       const user = toUserSummary(summary)
@@ -329,12 +388,23 @@ export function createAdminService({
       return AdminUserDetailSchema.parse({
         user: user.data,
         listingStats,
-        recentAuditLogs: recentAuditLogs.map(toAuditLogSummary),
+        // store 返回 Date 对象，契约要 ISO 字符串（z.iso.datetime()）。漏了这层转换，
+        // 用户一旦有生效中的限制，parse 抛的 ZodError 不是 AdminError，会一路逃到
+        // app.onError 变成 500——「契约字段存在的原因」恰恰是这个场景（对抗审查 F3）。
+        activeRestrictions: activeRestrictions.map((restriction) => ({
+          ...restriction,
+          id: encodePublicId(PUBLIC_ID_PREFIX.userRestriction, restriction.id),
+          expiresAt: restriction.expiresAt?.toISOString() ?? null,
+          createdAt: restriction.createdAt.toISOString(),
+        })),
+        recentAuditLogs: await Promise.all(
+          recentAuditLogs.map((row) => toAuditLogSummary(row, store.resolveLegacyAuditId)),
+        ),
       })
     },
 
     async listListings(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.listing) : null
       if (query.cursor && !cursor) throw invalidCursor()
 
       const rows = await store.listListings({
@@ -347,7 +417,12 @@ export function createAdminService({
         limit: query.limit,
       })
 
-      const page = pageOf(rows, query.limit, (row) => toListingSummary(row, storage).data ?? null)
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toListingSummary(row, storage).data ?? null,
+        PUBLIC_ID_PREFIX.listing,
+      )
       return AdminListingSummaryPageSchema.parse(page)
     },
 
@@ -357,13 +432,17 @@ export function createAdminService({
 
       const { listing, images } = found
       const detail = {
-        id: listing.id,
+        id: encodePublicId(PUBLIC_ID_PREFIX.listing, listing.id),
         title: listing.title,
         description: listing.description,
         priceCents: listing.priceCents,
         category: listing.category,
         condition: listing.condition,
         status: listing.status,
+        moderationStatus: listing.moderationStatus,
+        governanceDelistedAt: listing.governanceDelistedAt
+          ? listing.governanceDelistedAt.toISOString()
+          : null,
         urgent: listing.urgent,
         negotiable: listing.negotiable,
         free: listing.free,
@@ -373,9 +452,14 @@ export function createAdminService({
           url: storage.publicUrl(image.objectKey),
           sortOrder: image.sortOrder,
         })),
-        seller: listing.seller,
-        recentAuditLogs: (await store.recentAuditLogs('LISTING', listingId, 10)).map(
-          toAuditLogSummary,
+        seller: {
+          ...listing.seller,
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, listing.seller.id),
+        },
+        recentAuditLogs: await Promise.all(
+          (await store.recentAuditLogs('LISTING', listingId, 10)).map((row) =>
+            toAuditLogSummary(row, store.resolveLegacyAuditId),
+          ),
         ),
       }
 
@@ -387,33 +471,79 @@ export function createAdminService({
     },
 
     async listAuditLogs(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.auditLog) : null
       if (query.cursor && !cursor) throw invalidCursor()
+      const targetId = query.targetId
+        ? decodeAuditFilter(query.targetType, query.targetId)
+        : undefined
+      if (query.targetId && !targetId) {
+        throw new AdminError('VALIDATION_FAILED', 422, '审计目标 ID 与资源类型不匹配')
+      }
 
       const rows = await store.listAuditLogs({
-        actorId: query.actorId,
+        actorId: query.actorId ? decodePublicId(PUBLIC_ID_PREFIX.user, query.actorId) : undefined,
         action: query.action,
         targetType: query.targetType,
-        targetId: query.targetId,
+        targetId: targetId?.id,
+        targetTable: targetId?.table,
         createdFrom: query.createdFrom ? new Date(query.createdFrom) : undefined,
         createdTo: query.createdTo ? new Date(query.createdTo) : undefined,
         cursor,
         limit: query.limit,
       })
 
-      const page = pageOf(rows, query.limit, (row) => toAuditLogEntry(row).data ?? null)
+      const projected = await Promise.all(
+        rows.map(async (row) => ({
+          ...row,
+          entry: (await toAuditLogEntry(row, store.resolveLegacyAuditId)).data ?? null,
+        })),
+      )
+      const page = pageOf(projected, query.limit, (row) => row.entry, PUBLIC_ID_PREFIX.auditLog)
       return AdminAuditLogPageSchema.parse(page)
     },
 
     async listModerationQueue(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor
+        ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.moderationRecord)
+        : null
       if (query.cursor && !cursor) throw invalidCursor()
       const rows = await store.listModerationQueue({ cursor, limit: query.limit })
-      const page = pageOf(rows, query.limit, (row) => {
-        const item = toModerationItem(row)
-        return AdminModerationQueueSchema.shape.items.element.parse(item)
-      })
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => {
+          const item = toModerationItem(row)
+          return AdminModerationQueueSchema.shape.items.element.parse(item)
+        },
+        PUBLIC_ID_PREFIX.moderationRecord,
+      )
       return AdminModerationQueueSchema.parse(page)
+    },
+
+    async listModerationRecords(query) {
+      const cursor = query.cursor
+        ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.moderationRecord)
+        : null
+      if (query.cursor && !cursor) throw invalidCursor()
+      const rows = await store.listModerationRecords({
+        decision: query.decision,
+        listingId: query.listingId,
+        q: query.q,
+        createdFrom: query.createdFrom ? new Date(query.createdFrom) : undefined,
+        createdTo: query.createdTo ? new Date(query.createdTo) : undefined,
+        cursor,
+        limit: query.limit,
+      })
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => {
+          const item = toModerationItem(row)
+          return AdminModerationRecordsSchema.shape.items.element.parse(item)
+        },
+        PUBLIC_ID_PREFIX.moderationRecord,
+      )
+      return AdminModerationRecordsSchema.parse(page)
     },
 
     async getModerationDetail(recordId) {
@@ -436,7 +566,7 @@ export function createAdminService({
     },
 
     async listAdminTransactions(query) {
-      const cursor = query.cursor ? decodeCursor(query.cursor) : null
+      const cursor = query.cursor ? decodeCursor(query.cursor, PUBLIC_ID_PREFIX.transaction) : null
       if (query.cursor && !cursor) throw invalidCursor()
       const rows = await store.listAdminTransactions({
         q: query.q,
@@ -449,7 +579,12 @@ export function createAdminService({
         cursor,
         limit: query.limit,
       })
-      const page = pageOf(rows, query.limit, (row) => toAdminTransaction(row))
+      const page = pageOf(
+        rows,
+        query.limit,
+        (row) => toAdminTransaction(row),
+        PUBLIC_ID_PREFIX.transaction,
+      )
       return AdminTransactionPageSchema.parse(page)
     },
   }

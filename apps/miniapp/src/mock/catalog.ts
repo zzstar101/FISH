@@ -1,4 +1,5 @@
 import { productImage } from './images'
+import { mockPublicId } from './public-id'
 import type { ImageRatio, ListingCategory, ListingCondition, MockListing } from './types'
 
 /**
@@ -870,7 +871,7 @@ export const LISTING_BY_ID: Record<string, MockListing> = Object.fromEntries(
 )
 
 export function getListing(id: string): MockListing | undefined {
-  return LISTING_BY_ID[id]
+  return LISTING_BY_ID[id] ?? LISTINGS.find((item) => mockPublicId('lst', item.id) === id)
 }
 
 /**
@@ -880,7 +881,7 @@ export function getListing(id: string): MockListing | undefined {
 export function similarListings(id: string, limit = 4): MockListing[] {
   const self = getListing(id)
   if (!self) return LISTINGS.slice(0, limit)
-  const sameCategory = LISTINGS.filter((l) => l.id !== id && l.category === self.category)
-  const others = LISTINGS.filter((l) => l.id !== id && l.category !== self.category)
+  const sameCategory = LISTINGS.filter((l) => l.id !== self.id && l.category === self.category)
+  const others = LISTINGS.filter((l) => l.id !== self.id && l.category !== self.category)
   return [...sameCategory, ...others].slice(0, limit)
 }

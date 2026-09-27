@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   formatMessageBody,
   formatSystemMessageBody,
@@ -21,7 +22,10 @@ describe('SYSTEM 消息（tx.*）', () => {
   test('解析 tx.accepted 并渲染成气泡文案', () => {
     const content = JSON.stringify({
       type: 'tx.accepted',
-      transactionId: 't-1',
+      transactionId: encodePublicId(
+        PUBLIC_ID_PREFIX.transaction,
+        '01930000-0000-7000-8000-0000000000e1',
+      ),
       amountCents: 158000,
     })
     expect(parseSystemEvent(content)?.type).toBe('tx.accepted')

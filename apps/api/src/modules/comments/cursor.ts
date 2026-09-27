@@ -9,10 +9,17 @@
  * 会让人看到静默错乱的列表，比直接报错难查。
  */
 import { CommentCursorTimestampSchema, CommentIdSchema } from '@fish/contracts/comments/schema'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { CommentCursor } from './store'
 
 export function encodeCommentCursor(cursor: CommentCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+  return Buffer.from(
+    JSON.stringify({
+      ...cursor,
+      id: encodePublicId(PUBLIC_ID_PREFIX.comment, cursor.id),
+    }),
+    'utf8',
+  ).toString('base64url')
 }
 
 export function decodeCommentCursor(raw: string): CommentCursor | null {
@@ -33,5 +40,5 @@ export function decodeCommentCursor(raw: string): CommentCursor | null {
     return null
   }
 
-  return { createdAt, id }
+  return { createdAt, id: decodePublicId(PUBLIC_ID_PREFIX.comment, id) }
 }

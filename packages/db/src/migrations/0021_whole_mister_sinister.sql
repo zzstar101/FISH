@@ -1,0 +1,20 @@
+ALTER TABLE "admin_audit_logs" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "ai_polish_requests" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "comments" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "conversations" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "jobs" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "listing_images" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "listings" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "listings" ALTER COLUMN "listing_no" SET NOT NULL;--> statement-breakpoint
+ALTER TABLE "matches" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "message_media" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "messages" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "listing_moderation_records" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "notifications" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "sessions" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "transactions" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "users" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "wechat_identities" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "campus_email_verifications" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "wishes" ALTER COLUMN "id" SET DEFAULT uuidv7();--> statement-breakpoint
+ALTER TABLE "listings" ADD CONSTRAINT "listings_listing_no_owner_fk" FOREIGN KEY ("listing_no","id") REFERENCES "public"."listing_numbers"("listing_no","listing_id") ON DELETE no action ON UPDATE no action;

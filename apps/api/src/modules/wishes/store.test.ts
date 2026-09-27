@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDbWishMatchQueue } from './match-queue'
@@ -133,9 +134,10 @@ describe('wishes store (integration)', () => {
 
     for (let i = 0; i < 2; i += 1) {
       const listingId = crypto.randomUUID()
+      const listingNo = await reserveTestListingNo(db, listingId)
       await db.execute(sql`
-        INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition)
-        VALUES (${listingId}, ${userId}, '测试商品', '描述', 15000, 'DIGITAL', 'GOOD')
+        INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition)
+        VALUES (${listingId}, ${listingNo}, ${userId}, '测试商品', '描述', 15000, 'DIGITAL', 'GOOD')
       `)
       await db.execute(sql`
         INSERT INTO matches (id, listing_id, wish_id, score, category_score, keyword_score, price_score)

@@ -16,11 +16,13 @@ describe('chat api paths', () => {
   })
 
   test('message list always sends the contract limit and optional before cursor', () => {
-    expect(messageListPath('conversation-1')).toBe(
-      '/conversations/conversation-1/messages?limit=100',
+    expect(messageListPath('cnv_01jc000000e00800000000001a')).toBe(
+      '/conversations/cnv_01jc000000e00800000000001a/messages?limit=100',
     )
-    expect(messageListPath('conversation-1', 'message-1')).toBe(
-      '/conversations/conversation-1/messages?limit=100&before=message-1',
+    expect(
+      messageListPath('cnv_01jc000000e00800000000001a', 'msg_01jc000000e00800000000001t'),
+    ).toBe(
+      '/conversations/cnv_01jc000000e00800000000001a/messages?limit=100&before=msg_01jc000000e00800000000001t',
     )
   })
 })
@@ -48,17 +50,17 @@ describe('chat error helpers', () => {
       requestBody = JSON.parse(String(init?.body))
       return new Response(
         JSON.stringify({
-          id: 'conversation-1',
-          listingId: 'listing-1',
+          id: 'cnv_01jc000000e00800000000001a',
+          listingId: 'lst_01jc000000e00800000000000t',
           role: 'buyer',
           listing: {
-            id: 'listing-1',
+            id: 'lst_01jc000000e00800000000000t',
             title: '九成新自行车',
             priceCents: 12000,
             status: 'ACTIVE',
             coverUrl: null,
           },
-          counterpart: { id: 'user-b', nickname: '小林', avatarUrl: null },
+          counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
           unreadCount: 0,
           counterpartLastReadAt: null,
           lastMessage: null,
@@ -69,9 +71,9 @@ describe('chat error helpers', () => {
       )
     }) as unknown as typeof fetch
     try {
-      const conversation = await createConversation('listing-1')
-      expect(requestBody).toEqual({ listingId: 'listing-1' })
-      expect(conversation.id).toBe('conversation-1')
+      const conversation = await createConversation('lst_01jc000000e00800000000000t')
+      expect(requestBody).toEqual({ listingId: 'lst_01jc000000e00800000000000t' })
+      expect(conversation.id).toBe('cnv_01jc000000e00800000000001a')
     } finally {
       globalThis.fetch = originalFetch
     }

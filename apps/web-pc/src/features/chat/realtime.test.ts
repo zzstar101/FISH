@@ -37,12 +37,12 @@ class FakeSocket implements RealtimeSocket {
 
 const validMessageEvent = {
   type: 'message.new',
-  conversationId: 'conversation-1',
+  conversationId: 'cnv_01jc000000e00800000000001a',
   message: {
-    id: 'message-1',
-    conversationId: 'conversation-1',
-    senderId: 'user-b',
-    sender: { id: 'user-b', nickname: '小林', avatarUrl: null },
+    id: 'msg_01jc000000e00800000000001t',
+    conversationId: 'cnv_01jc000000e00800000000001a',
+    senderId: 'usr_01jc000000e00800000000000b',
+    sender: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
     type: 'TEXT',
     content: '在吗',
     createdAt: '2026-01-01T00:00:00.000Z',

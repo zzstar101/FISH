@@ -1,5 +1,6 @@
 import { getListing, LISTINGS } from './catalog'
 import { productImage } from './images'
+import { mockPublicId } from './public-id'
 import type { MediaKind, MockConversation, MockMediaMessage, MockMessage } from './types'
 import { CURRENT_USER_ID, getUser } from './users'
 
@@ -129,7 +130,7 @@ const SPECS: ConversationSpec[] = [
         type: 'SYSTEM',
         content: JSON.stringify({
           type: 'tx.accepted',
-          transactionId: 't-001',
+          transactionId: mockPublicId('txn', 't-001'),
           amountCents: 150000,
         }),
         agoMs: 90 * MIN,
@@ -268,7 +269,11 @@ const SPECS: ConversationSpec[] = [
       {
         senderId: 'u-zhangyu',
         type: 'SYSTEM',
-        content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-101', amountCents: 1800 }),
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: mockPublicId('txn', 't-101'),
+          amountCents: 1800,
+        }),
         agoMs: 5.4 * HOUR,
       },
       {
@@ -296,7 +301,11 @@ const SPECS: ConversationSpec[] = [
       {
         senderId: 'u-lin',
         type: 'SYSTEM',
-        content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-102', amountCents: 8500 }),
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: mockPublicId('txn', 't-102'),
+          amountCents: 8500,
+        }),
         agoMs: 21 * HOUR,
       },
       {
@@ -336,7 +345,7 @@ const SPECS: ConversationSpec[] = [
         type: 'SYSTEM',
         content: JSON.stringify({
           type: 'tx.accepted',
-          transactionId: 't-103',
+          transactionId: mockPublicId('txn', 't-103'),
           amountCents: 105000,
         }),
         agoMs: 30.2 * 24 * HOUR,
@@ -370,7 +379,11 @@ const SPECS: ConversationSpec[] = [
       {
         senderId: 'u-alan',
         type: 'SYSTEM',
-        content: JSON.stringify({ type: 'tx.accepted', transactionId: 't-104', amountCents: 4500 }),
+        content: JSON.stringify({
+          type: 'tx.accepted',
+          transactionId: mockPublicId('txn', 't-104'),
+          amountCents: 4500,
+        }),
         agoMs: 27.5 * 24 * HOUR,
       },
       { senderId: 'u-zhouyan', type: 'TEXT', content: '已收到，谢谢！', agoMs: 27 * 24 * HOUR },
@@ -421,7 +434,7 @@ const SPECS: ConversationSpec[] = [
         type: 'SYSTEM',
         content: JSON.stringify({
           type: 'tx.accepted',
-          transactionId: 't-106',
+          transactionId: mockPublicId('txn', 't-106'),
           amountCents: 16000,
         }),
         agoMs: 34.5 * 24 * HOUR,
@@ -507,7 +520,7 @@ const SPECS: ConversationSpec[] = [
         type: 'SYSTEM',
         content: JSON.stringify({
           type: 'tx.accepted',
-          transactionId: 't-105',
+          transactionId: mockPublicId('txn', 't-105'),
           amountCents: 32000,
         }),
         agoMs: 2.8 * HOUR,
@@ -539,7 +552,7 @@ export const CONVERSATIONS: MockConversation[] = SPECS.map((spec) => {
       : `[语音] ${tail.media.durationSec ?? 0}"`
     : null
   return {
-    id: spec.id,
+    id: mockPublicId('cnv', spec.id),
     role: isSeller ? 'seller' : 'buyer',
     /**
      * 契约 `ConversationDto` 是**服务端组装**好的读模型（商品摘要 + 对方摘要内嵌），
@@ -548,7 +561,7 @@ export const CONVERSATIONS: MockConversation[] = SPECS.map((spec) => {
     listing: {
       // 契约对这张卡片的取值口径是「与 #6 的商品卡片一致（脏数据不 500）」，
       // 所以商品缺失时降级成占位值，而不是让整条会话渲染不出来。
-      id: listing?.id ?? spec.listingId,
+      id: mockPublicId('lst', listing?.id ?? spec.listingId),
       title: listing?.title ?? '商品已下架',
       priceCents: listing?.priceCents ?? 0,
       status: listing?.status ?? 'OFFLINE',
@@ -557,7 +570,7 @@ export const CONVERSATIONS: MockConversation[] = SPECS.map((spec) => {
     counterpart: (() => {
       const user = getUser(spec.counterpartId)
       return {
-        id: user.id,
+        id: mockPublicId('usr', user.id),
         nickname: user.nickname,
         avatarUrl: user.avatarUrl,
         // mock 专属：契约的 ConversationUser 没有 authStatus，列表行徽章要用
@@ -569,7 +582,7 @@ export const CONVERSATIONS: MockConversation[] = SPECS.map((spec) => {
       ? {
           type: last.type,
           content: last.content,
-          senderId: last.senderId,
+          senderId: last.senderId === null ? null : mockPublicId('usr', last.senderId),
           createdAt: isoAgo(last.agoMs),
         }
       : null,
@@ -588,9 +601,9 @@ export const MESSAGES: MockMessage[] = SPECS.flatMap((spec) =>
     if (message.media) return []
     return [
       {
-        id: `${spec.id}-m${String(index + 1).padStart(2, '0')}`,
-        conversationId: spec.id,
-        senderId: message.senderId,
+        id: mockPublicId('msg', `${spec.id}-m${String(index + 1).padStart(2, '0')}`),
+        conversationId: mockPublicId('cnv', spec.id),
+        senderId: message.senderId === null ? null : mockPublicId('usr', message.senderId),
         type: message.type,
         content: message.content,
         createdAt: isoAgo(message.agoMs),
@@ -607,8 +620,8 @@ export const MEDIA: MockMediaMessage[] = SPECS.flatMap((spec) =>
     return [
       {
         id: `${spec.id}-x${String(index + 1).padStart(2, '0')}`,
-        conversationId: spec.id,
-        senderId: message.senderId,
+        conversationId: mockPublicId('cnv', spec.id),
+        senderId: mockPublicId('usr', message.senderId),
         kind,
         imageUrl: imageSlug ? productImage(imageSlug, 0) : null,
         durationSec: durationSec ?? 0,
@@ -632,7 +645,9 @@ export function messagesOf(conversationId: string): MockMessage[] {
  */
 export const FAILED_TEXT_IDS: string[] = SPECS.flatMap((spec) =>
   spec.messages.flatMap((message, index) =>
-    message.sendFail && !message.media ? [`${spec.id}-m${String(index + 1).padStart(2, '0')}`] : [],
+    message.sendFail && !message.media
+      ? [mockPublicId('msg', `${spec.id}-m${String(index + 1).padStart(2, '0')}`)]
+      : [],
   ),
 )
 

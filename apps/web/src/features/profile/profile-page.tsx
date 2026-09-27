@@ -91,6 +91,7 @@ export function ProfilePage() {
             value={orderInProgress > 0 ? `${orderInProgress} 笔进行中` : undefined}
           />
           <NavRow icon={2} label="我的愿望" to="/wish" value={`${wishCount} 条`} />
+          <NavRow description="查看处理进度" icon={3} label="我的举报" to="/my-reports" />
           <MylistRow icon={3} label="浏览历史" type="history" />
           <MylistRow icon={4} label="我的关注" type="follow" />
         </div>
@@ -206,7 +207,7 @@ function RowBody({ icon, label, description, value }: RowContent) {
 function NavRow({
   to,
   ...content
-}: RowContent & { to: '/orders' | '/wish' | '/profile/verification' }) {
+}: RowContent & { to: '/orders' | '/wish' | '/profile/verification' | '/my-reports' }) {
   return (
     <Link className="flex items-center gap-3 px-4 py-3" to={to}>
       <RowBody {...content} />

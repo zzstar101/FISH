@@ -7,6 +7,7 @@ import type { UserRow } from '../auth/me'
 /** 我发布的商品行（含封面 objectKey；URL 由共享映射 listings/card 拼）。 */
 export interface ProfileListingRow {
   id: string
+  listingNo: bigint
   title: string
   priceCents: number
   category: ListingCard['category']
@@ -121,7 +122,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       // 封面只认 `sort_order = 0`（#6 契约 §1：下标即 sortOrder，0 才是封面），与 listings
       // feed / matching / 本文件其它查询同一口径（#40/F3）。
       const result = await db.execute(sql`
-        SELECT l.id, l.title, l.price_cents, l.category::text AS category,
+        SELECT l.id, l.listing_no, l.title, l.price_cents, l.category::text AS category,
                l.condition::text AS condition, l.status::text AS status,
                l.urgent, l.negotiable, l.free, l.created_at,
                (SELECT li.object_key FROM listing_images li
@@ -134,6 +135,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       `)
       return rowsOf(result).map((row) => ({
         id: row.id as string,
+        listingNo: BigInt(String(row.listing_no)),
         title: row.title as string,
         priceCents: row.price_cents as number,
         category: row.category as ProfileListingRow['category'],

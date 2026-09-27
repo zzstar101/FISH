@@ -1,4 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { newId } from '@fish/db/ids'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { MiddlewareHandler } from 'hono'
+import { Hono } from 'hono'
+import type { AuthVariables } from '../auth/middleware'
+import { allowRestrictionGuard } from '../governance/testing'
+import { publicAvatarUrl } from './avatar-url'
+import { createUploadsRouter } from './router'
 import { createBunS3MediaStorage, isSafeObjectKey, type MediaStorage } from './storage'
 
 /**
@@ -84,7 +92,7 @@ describe('Bun S3 存储适配', () => {
     const media = storage
     if (!media) throw new Error('storage 未初始化')
 
-    const key = `listings/${USER_ID}/${crypto.randomUUID()}.jpg`
+    const key = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
     const bytes = new Uint8Array(1024)
 
     const signed = media.presignPut({ key, contentType: 'image/jpeg' })
@@ -110,6 +118,61 @@ describe('Bun S3 存储适配', () => {
     expect(await media.stat(key)).toBeNull()
   })
 
+  test.skipIf(!reachable)('旧对象键经匿名加密 URL 代理读取，公开 URL 不含原 UUID', async () => {
+    if (!client || !config) throw new Error('storage 未初始化')
+    const secret = 'test-secret-for-legacy-media-longer-than-32-characters'
+    const media = createBunS3MediaStorage({
+      client,
+      publicUrlBase: config.publicUrl,
+      legacyUrlBase: 'http://localhost:5173/api/uploads/legacy',
+      legacyUrlSecret: secret,
+    })
+    const key = `listings/${USER_ID}/${crypto.randomUUID()}.jpg`
+    const bytes = new Uint8Array([1, 2, 3])
+    const signed = media.presignPut({ key, contentType: 'image/jpeg' })
+    try {
+      expect(
+        (
+          await fetch(signed.url, {
+            method: 'PUT',
+            body: bytes,
+            headers: { 'Content-Type': 'image/jpeg' },
+          })
+        ).status,
+      ).toBe(200)
+      const url = media.publicUrl(key)
+      expect(url).not.toContain(USER_ID)
+      const root = new Hono()
+      const deny: MiddlewareHandler<{ Variables: AuthVariables }> = async (c) =>
+        c.json({ error: 'auth-required' }, 401)
+      root.route(
+        '/uploads',
+        createUploadsRouter({
+          storage: media,
+          legacyUrlSecret: secret,
+          requireAuth: deny,
+          guard: allowRestrictionGuard,
+        }),
+      )
+      const response = await root.request(new URL(url).pathname.replace(/^\/api/, ''))
+      expect(response.status).toBe(200)
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
+      const avatar = publicAvatarUrl(`${config.publicUrl}/${key}`, {
+        s3PublicUrl: config.publicUrl,
+        webOrigin: 'http://localhost:5173',
+        secret,
+      })
+      expect(avatar).not.toContain(USER_ID)
+      const avatarResponse = await root.request(
+        new URL(avatar ?? '').pathname.replace(/^\/api/, ''),
+      )
+      expect(avatarResponse.status).toBe(200)
+      expect(new Uint8Array(await avatarResponse.arrayBuffer())).toEqual(bytes)
+    } finally {
+      await client.delete(key)
+    }
+  })
+
   test.skipIf(!reachable)('stat 对不存在的对象返回 null 而不是抛错', async () => {
     const media = storage
     if (!media) throw new Error('storage 未初始化')
@@ -120,6 +183,34 @@ describe('Bun S3 存储适配', () => {
 
 // #86 B 线评审 P1：`Bun.S3Client` 用 `new URL()` 拼地址，pathname 会把 `..` 归一化掉，
 // 于是调用方的 `startsWith(prefix)` 归属校验可以被绕过。防线放在这里。
+test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代理', () => {
+  const secret = 'test-secret-for-legacy-media-longer-than-32-characters'
+  const media = createBunS3MediaStorage({
+    client: new Bun.S3Client({
+      endpoint: 'http://127.0.0.1:1',
+      region: 'us-east-1',
+      accessKeyId: 'test',
+      secretAccessKey: 'test',
+      bucket: 'fish',
+    }),
+    publicUrlBase: 'https://cdn.test/fish',
+    legacyUrlBase: 'https://web.test/api/uploads/legacy',
+    legacyUrlSecret: secret,
+  })
+  const modern = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+  const old = `listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`
+  expect(media.publicUrl(modern)).toBe(`https://cdn.test/fish/${modern}`)
+  expect(media.publicUrl('listings/seed-k380/0.jpg')).toBe(
+    'https://cdn.test/fish/listings/seed-k380/0.jpg',
+  )
+  const url = media.publicUrl(old)
+  expect(url.startsWith('https://web.test/api/uploads/legacy/')).toBe(true)
+  expect(url).not.toContain(USER_ID)
+  expect(url).not.toContain('01930000')
+  expect(media.publicUrl(`listings/${USER_ID}/old.jpg`)).not.toContain(USER_ID)
+  expect(() => media.publicUrl(`listings/${USER_ID}/unknown.exe`)).toThrow()
+})
+
 describe('isSafeObjectKey（objectKey 形状白名单）', () => {
   test('放行服务端自己生成的键', () => {
     expect(isSafeObjectKey(`listings/${USER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`)).toBe(

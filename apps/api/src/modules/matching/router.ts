@@ -1,5 +1,6 @@
 import { MatchListQuerySchema } from '@fish/contracts/matching/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -41,9 +42,21 @@ export function createMatchingRouter({ service, requireAuth }: MatchingRouterOpt
 
     try {
       // schema 的 refine 保证二者恰好有一个，这里只是把它落成一个明确的分支。
-      if (wishId !== undefined) return c.json(await service.listByWish(userId, wishId, limit), 200)
+      if (wishId !== undefined) {
+        return c.json(
+          await service.listByWish(userId, decodePublicId(PUBLIC_ID_PREFIX.wish, wishId), limit),
+          200,
+        )
+      }
       if (listingId !== undefined) {
-        return c.json(await service.listByListing(userId, listingId, limit), 200)
+        return c.json(
+          await service.listByListing(
+            userId,
+            decodePublicId(PUBLIC_ID_PREFIX.listing, listingId),
+            limit,
+          ),
+          200,
+        )
       }
     } catch (error) {
       return toErrorResponse(c, error)

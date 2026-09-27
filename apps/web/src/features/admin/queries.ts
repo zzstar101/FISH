@@ -1,5 +1,6 @@
 import type { AdminMeResponse } from '@fish/contracts/admin/schema'
 import type { ModerationDecisionInput } from '@fish/contracts/moderation/schema'
+import type { AdminReportHandleInput } from '@fish/contracts/reports/schema'
 import {
   type QueryClient,
   queryOptions,
@@ -13,18 +14,30 @@ import {
   type AdminListingsQuery,
   type AdminListQuery,
   type AdminModerationQueueQuery,
+  type AdminModerationRecordsQuery,
+  type AdminReportsQuery,
   type AdminTransactionsQuery,
+  banAdminUser,
   decideAdminModeration,
+  delistAdminListing,
   fetchAdminAuditLogs,
   fetchAdminListing,
   fetchAdminListings,
   fetchAdminMe,
   fetchAdminModerationDetail,
   fetchAdminModerationQueue,
+  fetchAdminModerationRecords,
   fetchAdminOverview,
+  fetchAdminReport,
+  fetchAdminReports,
   fetchAdminTransactions,
   fetchAdminUser,
   fetchAdminUsers,
+  type GovernanceActionInput,
+  handleAdminReport,
+  liftAdminUserRestriction,
+  restoreAdminListing,
+  restrictAdminUserPublish,
 } from './api'
 
 /**
@@ -44,7 +57,11 @@ export const adminKeys = {
   auditLogs: (query: AdminAuditLogsQuery) => ['admin', 'audit-logs', query] as const,
   moderationQueue: (query: AdminModerationQueueQuery) =>
     ['admin', 'moderation-queue', query] as const,
+  moderationRecords: (query: AdminModerationRecordsQuery) =>
+    ['admin', 'moderation-records', query] as const,
   moderationDetail: (recordId: string) => ['admin', 'moderation', recordId] as const,
+  reports: (query: AdminReportsQuery) => ['admin', 'reports', query] as const,
+  report: (reportId: string) => ['admin', 'report', reportId] as const,
   transactions: (query: AdminTransactionsQuery) => ['admin', 'transactions', query] as const,
 }
 
@@ -55,8 +72,10 @@ export const adminKeys = {
  * 不清理，下一个账号打开 `/admin` 可能直接命中前一个管理员仍 fresh 的缓存，
  * 造成跨账号的后台数据泄露窗口。在身份变化时调用本函数即可。
  */
-export function clearAdminQueries(queryClient: Pick<QueryClient, 'removeQueries'>): void {
-  queryClient.removeQueries({ queryKey: adminKeys.root })
+export function clearAdminQueries(queryClient: Pick<QueryClient, 'resetQueries'>): Promise<void> {
+  // resetQueries 清掉旧账号数据并重取活跃查询；removeQueries 会把进行中的
+  // /admin/me 从缓存移除，却让已挂载的 observer 永远停在 pending。
+  return queryClient.resetQueries({ queryKey: adminKeys.root })
 }
 
 /** 首页守卫数据：非 Admin 会抛 403 `FORBIDDEN`，由 AdminShell 统一转无权限页。 */
@@ -124,11 +143,61 @@ export function useAdminModerationQueue(query: AdminModerationQueueQuery) {
   })
 }
 
+/**
+ * 审核记录检索（#73 治理半场 PR4）。key 与队列**不同名**：两者的响应内容不重叠
+ * （队列是待审清单，这里是已处理历史），同名会让切 Tab 时命中对方缓存。
+ */
+export function useAdminModerationRecords(query: AdminModerationRecordsQuery) {
+  return useQuery({
+    queryKey: adminKeys.moderationRecords(query),
+    queryFn: () => fetchAdminModerationRecords(query),
+  })
+}
+
 export function useAdminModerationDetail(recordId: string) {
   return useQuery({
     queryKey: adminKeys.moderationDetail(recordId),
     queryFn: () => fetchAdminModerationDetail(recordId),
     enabled: Boolean(recordId),
+  })
+}
+
+export function useAdminReports(query: AdminReportsQuery) {
+  return useQuery({
+    queryKey: adminKeys.reports(query),
+    queryFn: () => fetchAdminReports(query),
+  })
+}
+
+export function useAdminReport(reportId: string) {
+  return useQuery({
+    queryKey: adminKeys.report(reportId),
+    queryFn: () => fetchAdminReport(reportId),
+    enabled: Boolean(reportId),
+  })
+}
+
+/**
+ * 处理举报（#73）：成功 / 失败都刷新队列与详情。
+ *
+ * 失败也要刷新是故意的——409 REPORT_CONFLICT 说明另一个管理员刚处理了同一条，
+ * 此时队列和详情的旧缓存都是过期的，让界面立刻显示真实状态，而不是让操作者
+ * 看着一张已失效的表单反复提交。
+ */
+export function useHandleAdminReport(reportId: string) {
+  const queryClient = useQueryClient()
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ['admin', 'reports'] })
+    void queryClient.invalidateQueries({ queryKey: ['admin', 'report'] })
+    void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+  }
+  return useMutation({
+    mutationFn: (input: AdminReportHandleInput) => handleAdminReport(reportId, input),
+    onError: invalidate,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminKeys.report(reportId) })
+      invalidate()
+    },
   })
 }
 
@@ -153,6 +222,58 @@ export function useDecideAdminModeration(recordId: string) {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'moderation-queue'] })
       void queryClient.invalidateQueries({ queryKey: adminKeys.listing(detail.item.listing.id) })
       void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+    },
+  })
+}
+
+/**
+ * 治理动作（#73 治理半场 PR3）：下架 / 恢复商品，限制发布 / 封禁 / 解除限制。
+ *
+ * 五个端点共用一个 mutation，区别只在 `action` 与目标 id；成功后统一 invalidate
+ * 商品详情、用户详情、审计日志与 Overview——治理结果的落点就是这四处。
+ *
+ * 409 `GOVERNANCE_CONFLICT` 是**预期的正常分支**（另一个管理员刚做过同一动作），
+ * 不是错误提示，调用方据此把按钮换成「已下架」这类真实状态。
+ */
+export type GovernanceAction =
+  | 'delist-listing'
+  | 'restore-listing'
+  | 'restrict-publish'
+  | 'ban'
+  | 'lift-restriction'
+
+export function useGovernanceAction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      action,
+      targetId,
+      input,
+    }: {
+      action: GovernanceAction
+      targetId: string
+      input: GovernanceActionInput
+    }) => {
+      if (action === 'delist-listing') return delistAdminListing(targetId, input)
+      if (action === 'restore-listing') return restoreAdminListing(targetId, input)
+      if (action === 'restrict-publish') return restrictAdminUserPublish(targetId, input)
+      if (action === 'ban') return banAdminUser(targetId, input)
+      return liftAdminUserRestriction(targetId, input)
+    },
+    onSuccess: (_result, variables) => {
+      // 用 mutation 参数而不是 `result.targetId`（评审 m5）：限制类动作的
+      // `result.targetId` 是**限制记录 id**（审计目标），拿它 invalidate 用户详情只会
+      // 命中一个永不存在的 key，用户详情一直停在旧状态。
+      // `variables.targetId` 对商品动作是 listingId、对用户动作是 userId。
+      if (variables.action === 'delist-listing' || variables.action === 'restore-listing') {
+        void queryClient.invalidateQueries({ queryKey: adminKeys.listing(variables.targetId) })
+        void queryClient.invalidateQueries({ queryKey: ['admin', 'listings'] })
+      } else {
+        void queryClient.invalidateQueries({ queryKey: adminKeys.user(variables.targetId) })
+        void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      }
+      void queryClient.invalidateQueries({ queryKey: adminKeys.auditLogs({}) })
+      void queryClient.invalidateQueries({ queryKey: adminKeys.overview() })
     },
   })
 }

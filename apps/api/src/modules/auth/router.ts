@@ -11,7 +11,9 @@ import {
 } from '@fish/contracts/auth/wechat'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
+import type { RestrictionGuard } from '../governance/guard'
 import { AuthError } from './errors'
 import { maskPhone } from './me'
 import { type AuthVariables, createRequireAuth } from './middleware'
@@ -52,6 +54,7 @@ function toErrorResponse(c: Context, error: unknown): Response {
 export function createAuthModule(options: {
   db: Db
   verification: VerificationService
+  guard: RestrictionGuard
   /** 由 `WEB_ORIGIN` 的 scheme 推导，见 `session.ts`。 */
   secureCookie: boolean
   /**
@@ -112,7 +115,7 @@ export function createAuthModule(options: {
   })
 
   // ---- 手机号绑定（#86 C）：只追加绑定，不动已有会话 ----
-  router.post('/phone/bind', requireAuth, async (c) => {
+  router.post('/phone/bind', requireAuth, options.guard.write, async (c) => {
     if (phoneResolver === null) {
       return c.json(errorBody('WECHAT_DISABLED', '手机号绑定暂未开通'), 503)
     }
@@ -190,7 +193,7 @@ export function createAuthModule(options: {
   // 若未来要收紧，应在 send 阶段统一返回受理结果、冲突只在 verify 暴露。
   const verification = options.verification
 
-  router.post('/verification/code', requireAuth, async (c) => {
+  router.post('/verification/code', requireAuth, options.guard.write, async (c) => {
     const parsed = SendCodeRequestSchema.safeParse(await readJson(c))
     if (!parsed.success)
       return c.json(
@@ -206,7 +209,7 @@ export function createAuthModule(options: {
     }
   })
 
-  router.post('/verification/verify', requireAuth, async (c) => {
+  router.post('/verification/verify', requireAuth, options.guard.write, async (c) => {
     const parsed = VerifyCodeRequestSchema.safeParse(await readJson(c))
     if (!parsed.success)
       return c.json(
@@ -238,7 +241,7 @@ export function createAuthModule(options: {
     const token = cookie.read(c)
     if (!token) return null
     const me = await service.loadMe(token)
-    return me?.id ?? null
+    return me ? decodePublicId(PUBLIC_ID_PREFIX.user, me.id) : null
   }
 
   return { router, requireAuth, meHandler, resolveViewerId }

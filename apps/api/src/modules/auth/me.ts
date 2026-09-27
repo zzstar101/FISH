@@ -1,5 +1,7 @@
-import { type Me, MeSchema } from '@fish/contracts/auth/user'
+import type { Me } from '@fish/contracts/auth/user'
 import type { users } from '@fish/db/schema/users'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 
 export type UserRow = typeof users.$inferSelect
 
@@ -17,9 +19,9 @@ export function maskPhone(phone: string): string {
  */
 export function toMe(row: UserRow): Me {
   return {
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
     nickname: row.nickname,
-    avatarUrl: MeSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
+    avatarUrl: publicAvatarUrl(row.avatarUrl),
     authStatus: row.authStatus,
     verifiedAt: row.verifiedAt?.toISOString() ?? null,
     phoneBound: row.phone !== null,

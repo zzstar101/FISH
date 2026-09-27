@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createDb } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { migrateWithBackfill } from './migrate'
 
 /**
  * #147 迁移回归：**旧语义下已过期的凭证不得在 drop column 后复活**。
@@ -149,7 +150,7 @@ test('#147 迁移：旧语义下已过期的凭证被清理，不复活成长期
     expect(Number([...before][0]?.n)).toBe(4) // 前置条件：旧数据确实灌进去了
 
     // ---- 阶段二：应用 0015（清理）与 0016（drop column）----
-    await migrate(scratch, { migrationsFolder })
+    await migrateWithBackfill(scratchUrl)
 
     // ① 旧语义下已过期、未消费的行必须被清理（否则 drop column 后复活成 ISSUED）
     const expiredRow = await scratch.execute<{ n: number }>(

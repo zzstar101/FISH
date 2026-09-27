@@ -1,5 +1,6 @@
 import type { WishCategory, WishStatus } from '@fish/contracts/wishes/schema'
 import type { Db } from '@fish/db/client'
+import { newId } from '@fish/db/ids'
 import { type SQL, sql } from 'drizzle-orm'
 
 /** 愿望持久化接口。DB schema/migration 由 Dev A 通过 DB CHANGE REQUEST 落地。 */
@@ -130,7 +131,7 @@ export function createSqlWishStore(db: Db): WishStore {
             RETURNING *
           ), match_job AS (
             INSERT INTO jobs (id, type, payload)
-            SELECT ${crypto.randomUUID()}, 'MATCH_WISH', jsonb_build_object('wishId', inserted.id::text)
+            SELECT ${newId()}, 'MATCH_WISH', jsonb_build_object('wishId', inserted.id::text)
             FROM inserted
             RETURNING id
           )

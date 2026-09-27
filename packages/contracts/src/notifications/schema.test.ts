@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   notificationDtoSchema,
   notificationListQuerySchema,
@@ -7,10 +8,16 @@ import {
   notificationUnreadCountSchema,
 } from './schema'
 
+const UUID = '0199a000-0000-7000-8000-000000000001'
+const notificationId = encodePublicId(PUBLIC_ID_PREFIX.notification, UUID)
+const matchId = encodePublicId(PUBLIC_ID_PREFIX.match, UUID)
+const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, UUID)
+const wishId = encodePublicId(PUBLIC_ID_PREFIX.wish, UUID)
+
 const validDto = {
-  id: '0199a000-0000-7000-8000-000000000001',
+  id: notificationId,
   type: 'MATCH',
-  payload: { matchId: 'm1', listingId: 'l1', wishId: 'w1' },
+  payload: { matchId, listingId, wishId },
   readAt: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 } as const
@@ -38,21 +45,26 @@ describe('notificationPayloadSchema', () => {
   // 三个 id 都可选：它们指向的对象可能已被删除（#6 口径），缺了不该让整页打不开。
   test('accepts a partial or empty payload and strips unknown keys', () => {
     expect(notificationPayloadSchema.parse({})).toEqual({})
-    expect(notificationPayloadSchema.parse({ listingId: 'l1' })).toEqual({ listingId: 'l1' })
-    expect(notificationPayloadSchema.parse({ matchId: 'm1', extra: true })).toEqual({
-      matchId: 'm1',
-    })
+    expect(notificationPayloadSchema.parse({ listingId })).toEqual({ listingId })
+    expect(notificationPayloadSchema.parse({ matchId, extra: true })).toEqual({ matchId })
   })
 
   // 值必须是字符串：store 的 SQL 谓词正是按这条判据把「键存在但不是字符串」的行挡在
   // SELECT 之外（`projectable`），谓词比契约严一格会藏掉合法行，松一格会让脏行把列表打成 500。
-  test('rejects a non-string id, explicit null included', () => {
-    expect(notificationPayloadSchema.safeParse({ matchId: 5 }).success).toBe(false)
-    expect(notificationPayloadSchema.safeParse({ matchId: null }).success).toBe(false)
+  test('rejects non-string IDs, wrong prefixes and bare UUIDs', () => {
+    for (const matchId of [5, null, listingId, UUID]) {
+      expect(notificationPayloadSchema.safeParse({ matchId }).success).toBe(false)
+    }
   })
 })
 
 describe('notificationDtoSchema', () => {
+  test('rejects a bare or wrong-prefix notification ID', () => {
+    for (const id of [UUID, listingId]) {
+      expect(notificationDtoSchema.safeParse({ ...validDto, id }).success).toBe(false)
+    }
+  })
+
   test('accepts readAt: null as 未读 and an ISO timestamp as 已读', () => {
     expect(notificationDtoSchema.parse(validDto).readAt).toBeNull()
     expect(
