@@ -11,10 +11,14 @@ import { ArrowLeft, Send } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
-import { ApiError } from '../../lib/api-client'
 import { useAuth } from '../auth/auth-provider'
-import { describeSendFailure } from './api'
-import { MessageBubble, type OutboxMessage, PendingMessageBubble } from './message-bubble'
+import { MessageBubble, PendingMessageBubble } from './message-bubble'
+import {
+  createOutboxMessage,
+  dispatchOutboxSend,
+  type OutboxMessage,
+  resetOutboxForRetry,
+} from './outbox'
 import {
   applyReadEventToCache,
   flattenMessagePages,
@@ -182,60 +186,28 @@ export function ConversationPage({ conversationId }: { conversationId: string })
 
   function dispatch(item: OutboxMessage) {
     if (ownerId === null) return
-    sendRef.current.mutate(
-      {
-        conversationId,
-        input: { content: item.content, clientRequestId: item.clientRequestId },
-      },
-      {
-        onSuccess: (message) => {
-          rememberMessage(message)
-          setOutbox((current) =>
-            current.filter((entry) => entry.clientRequestId !== item.clientRequestId),
-          )
-        },
-        onError: (error) => {
-          const errorCode = error instanceof ApiError ? error.code : null
-          setOutbox((current) =>
-            current.map((entry) =>
-              entry.clientRequestId === item.clientRequestId
-                ? {
-                    ...entry,
-                    status: 'failed',
-                    error: describeSendFailure(error),
-                    errorCode,
-                  }
-                : entry,
-            ),
-          )
-        },
-      },
-    )
+    void dispatchOutboxSend({
+      item,
+      conversationId,
+      mutation: sendRef.current,
+      setOutbox,
+      onSent: rememberMessage,
+    })
   }
 
+  // 按钮、Enter、重试同一套规则：允许排队连发，每条各自结算（见 dispatchOutboxSend），
+  // 不再用 mutation.isPending 只锁住发送按钮。
   function submit() {
     const content = draft.trim()
     if (ownerId === null || content.length === 0 || content.length > 2000) return
-    const item: OutboxMessage = {
-      clientRequestId: crypto.randomUUID(),
-      content,
-      status: 'sending',
-      error: null,
-      errorCode: null,
-    }
+    const item = createOutboxMessage(content)
     setOutbox((current) => [...current, item])
     setDraft('')
     dispatch(item)
   }
 
   function retry(item: OutboxMessage) {
-    setOutbox((current) =>
-      current.map((entry) =>
-        entry.clientRequestId === item.clientRequestId
-          ? { ...entry, status: 'sending', error: null, errorCode: null }
-          : entry,
-      ),
-    )
+    setOutbox((current) => resetOutboxForRetry(current, item.clientRequestId))
     dispatch(item)
   }
 
@@ -405,7 +377,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                 />
                 <Button
                   className="h-11"
-                  disabled={draft.trim().length === 0 || sendMessage.isPending}
+                  disabled={draft.trim().length === 0}
                   onClick={submit}
                   type="button"
                 >
