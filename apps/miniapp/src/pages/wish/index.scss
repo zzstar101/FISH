@@ -13,8 +13,8 @@
 .wish {
   position: relative;
   min-height: 100vh;
-  /* 底部留白：让出悬浮 TabBar 的顶边（32 + 101 = 133rpx，取 136），见 DESIGN.md 第 9 节 */
-  padding-bottom: 136px;
+  /* 底部留白：让出悬浮 TabBar 的顶边（53 + 101 = 154rpx，取 157），见 DESIGN.md 第 9 节 */
+  padding-bottom: 157px;
   /* 注意：**不要**在这里写 overflow-x: hidden。
      只要根节点带 overflow（非 visible），页面自身就成了滚动容器，
      里面 position: sticky 的悬浮 TabBar 会退化成普通元素（实测跑到文档末尾 y=4813）。

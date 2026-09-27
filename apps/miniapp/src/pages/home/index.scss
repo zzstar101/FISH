@@ -10,8 +10,8 @@
 .home {
   position: relative;
   min-height: 100vh;
-  /* 底部留白：让出悬浮 TabBar 的顶边（32 + 101 = 133rpx，取 136），见 DESIGN.md 第 9 节 */
-  padding-bottom: 136px;
+  /* 底部留白：让出悬浮 TabBar 的顶边（53 + 101 = 154rpx，取 157），见 DESIGN.md 第 9 节 */
+  padding-bottom: 157px;
 }
 
 .home__hero-bg {
