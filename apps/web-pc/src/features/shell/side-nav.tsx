@@ -9,7 +9,7 @@ const NAV_ITEMS = [
   { to: '/profile', label: '我的', Icon: UserRound, exact: false },
 ] as const
 
-/** PC Web 左侧一级导航。骨架阶段只保留一级路由，不画移动端底部 TabBar。 */
+/** PC Web 左侧一级导航。只保留一级路由，不画移动端底部 TabBar。 */
 export function SideNav() {
   return (
     <aside className="sticky top-24 self-start">
@@ -30,7 +30,7 @@ export function SideNav() {
       <div className="mt-7 rounded-2xl border border-line bg-surface p-4">
         <div className="flex items-center gap-2 font-semibold text-sm">
           <Compass className="size-4 text-brand" />
-          骨架阶段
+          当前进度
         </div>
         <p className="mt-2 text-ink-2 text-xs leading-5">
           当前已接通登录、PC Web

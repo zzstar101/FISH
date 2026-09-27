@@ -11,10 +11,11 @@ import {
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { MessageCircle } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice } from '../../lib/format'
 import { categoryLabel } from '../../lib/labels'
+import { currentSessionGeneration } from '../../lib/session-cache'
 import { conversationStartError, MATCH_PAGE_LIMIT, wishMatchError } from './api'
 import { useListingMatches, useStartConversation, useWishMatches } from './queries'
 
@@ -44,6 +45,13 @@ export function MatchListDialog({
   )
   const startConversation = useStartConversation(ownerId)
   const [notice, setNotice] = useState<string | null>(null)
+  // 对话框关闭或组件卸载时作废在途的「聊一聊」导航，避免把用户拉回会话。
+  const chatEpochRef = useRef(0)
+  useEffect(() => {
+    return () => {
+      chatEpochRef.current += 1
+    }
+  }, [])
   const active = target?.kind === 'wish' ? wishMatches : listingMatches
   const total =
     target?.kind === 'wish' ? (wishMatches.data?.total ?? 0) : (listingMatches.data?.total ?? 0)
@@ -55,16 +63,28 @@ export function MatchListDialog({
   const unmappableCount = Math.max(0, expectedVisible - itemCount)
   const truncated = total > MATCH_PAGE_LIMIT
 
+  function closeDialog() {
+    chatEpochRef.current += 1
+    setNotice(null)
+    onClose()
+  }
+
   async function chat(listingId: string) {
     setNotice(null)
+    const epoch = chatEpochRef.current
+    const generation = currentSessionGeneration()
+    const stale = () => epoch !== chatEpochRef.current || generation !== currentSessionGeneration()
+
     try {
       const conversationId = await startConversation.mutateAsync(listingId)
-      onClose()
+      if (stale()) return
+      closeDialog()
       await navigate({
         to: '/messages/$conversationId',
         params: { conversationId },
       })
     } catch (error) {
+      if (stale()) return
       setNotice(conversationStartError(error))
     }
   }
@@ -72,10 +92,7 @@ export function MatchListDialog({
   return (
     <Dialog
       onOpenChange={(open) => {
-        if (!open) {
-          setNotice(null)
-          onClose()
-        }
+        if (!open) closeDialog()
       }}
       open={target !== null}
     >
