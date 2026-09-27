@@ -20,7 +20,7 @@
 1. **先报备并等确认**：向 Owner 说明「要做哪张 Issue、为什么选它、打算怎么验证」，**得到确认后**再动手。AI agent 必须先报备，不得自行开工。
 2. **在 Issue 上评论认领**：写一条认领评论（谁在做、计划交付什么），并把自己设为 assignee（没有 assign 权限时，评论就是唯一凭据）；同时给 Issue 打上 `state: in progress`。
 3. **开 PR 后改状态**：把 label 换成 `state: has PR`，并在 PR 描述里 `closes #N`。
-4. **停止就释放**：中途放弃或转做别的，必须在 Issue 上评论说明原因、去掉 `state: in progress`，让其他人能接手。
+4. **停止就释放**：中途放弃或转做别的，必须在 Issue 上评论说明原因、去掉 `state: in progress`**并移除 assignee**（`gh issue edit <N> --repo zzstar101/FISH --remove-assignee @me`）。assignee 必须一起清掉：第 1.2 节的查询带 `no:assignee`，只摘 label 的话这张单会被**永远**排除在可开工列表之外。
 
 ### 1.2 找"没人做、也没被阻塞"的 Issue
 
