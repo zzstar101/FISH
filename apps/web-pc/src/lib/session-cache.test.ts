@@ -3,6 +3,16 @@ import type { Me } from '@fish/contracts/auth/user'
 import { QueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, resetPcSession } from './session-cache'
 
+const newUser: Me = {
+  id: '01930000-0000-7000-8000-00000000000b',
+  nickname: '新账号',
+  avatarUrl: null,
+  authStatus: 'UNVERIFIED',
+  verifiedAt: null,
+  phoneBound: false,
+  maskedPhone: null,
+}
+
 const user: Me = {
   id: '01930000-0000-7000-8000-00000000000a',
   nickname: '阿岚',
@@ -56,6 +66,31 @@ describe('resetPcSession', () => {
     await oldRequest.catch(() => undefined)
 
     expect(queryClient.getQueryData<Me>(AUTH_ME_QUERY_KEY)).toEqual(user)
+  })
+
+  test('a reset that becomes stale during auth cancellation cannot overwrite newer login', async () => {
+    const queryClient = new QueryClient()
+    const originalCancelQueries = queryClient.cancelQueries.bind(queryClient)
+    let releaseFirstCancel!: () => void
+    let firstCancel = true
+    queryClient.cancelQueries = async (filters) => {
+      if (firstCancel) {
+        firstCancel = false
+        await new Promise<void>((resolve) => {
+          releaseFirstCancel = resolve
+        })
+      }
+      return originalCancelQueries(filters)
+    }
+
+    const staleReset = resetPcSession(queryClient, null)
+    await Promise.resolve()
+    const newLoginReset = resetPcSession(queryClient, newUser)
+    releaseFirstCancel()
+
+    await expect(staleReset).resolves.toBe(false)
+    await expect(newLoginReset).resolves.toBe(true)
+    expect(queryClient.getQueryData<Me>(AUTH_ME_QUERY_KEY)).toEqual(newUser)
   })
 
   test('writes null when logging out', async () => {

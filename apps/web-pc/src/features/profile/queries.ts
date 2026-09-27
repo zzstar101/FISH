@@ -125,6 +125,7 @@ export function useUpdateListing(ownerId: string) {
       invalidateProfileSummary(queryClient, ownerId)
       invalidateListingLists(queryClient, ownerId)
       invalidateListingViews(queryClient)
+      invalidateChatSurfaces(queryClient)
     },
   })
 }
@@ -141,6 +142,7 @@ export function useSetListingStatus(ownerId: string) {
       invalidateProfileSummary(queryClient, ownerId)
       invalidateListingLists(queryClient, ownerId)
       invalidateListingViews(queryClient)
+      invalidateChatSurfaces(queryClient)
     },
   })
 }

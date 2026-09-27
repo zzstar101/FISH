@@ -21,17 +21,22 @@ export async function resetPcSession(
   queryClient: QueryClient,
   user: Me | null,
   options: { cancelAuth?: boolean } = {},
-): Promise<void> {
-  sessionGeneration += 1
+): Promise<boolean> {
+  const generation = sessionGeneration + 1
+  sessionGeneration = generation
 
   if (options.cancelAuth !== false) {
     await queryClient.cancelQueries({ queryKey: AUTH_ME_QUERY_KEY, exact: true })
   }
 
+  // 取消在飞 auth 查询期间可能已有更新的登录/登出开始；旧 reset 不得覆盖新会话。
+  if (generation !== sessionGeneration) return false
+
   queryClient.removeQueries({
     predicate: (query) => query.queryKey[0] === PC_QUERY_PREFIX,
   })
   queryClient.setQueryData(AUTH_ME_QUERY_KEY, user)
+  return true
 }
 
 /** 只允许启动时所属的会话代际清理；迟到的旧 `/me` 401 不能覆盖新登录用户。 */
@@ -43,6 +48,5 @@ export async function resetPcSessionIfCurrent(
 ): Promise<boolean> {
   if (generation !== sessionGeneration) return false
 
-  await resetPcSession(queryClient, user, options)
-  return true
+  return resetPcSession(queryClient, user, options)
 }
