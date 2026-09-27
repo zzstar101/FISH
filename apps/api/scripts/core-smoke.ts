@@ -46,6 +46,7 @@ import { notifications } from '@fish/db/schema/notifications'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq, sql } from 'drizzle-orm'
 import { MEETUP_TOKEN_MAX_ATTEMPTS } from '../src/modules/transactions/service'
 
@@ -340,7 +341,7 @@ async function transactionCount(db: Db): Promise<number> {
 async function meetupTokenRowCount(db: Db, transactionId: string): Promise<number> {
   const rows = await db.execute<{ n: number }>(sql`
     select count(*)::int as n from transaction_meetup_tokens
-    where transaction_id = ${transactionId}
+    where transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}
   `)
   return [...rows][0]?.n ?? 0
 }
@@ -510,7 +511,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     const demoCookie = await login(base, DEMO_BUYER_STUDENT_NO)
     const demoWishSide = await readJson(
-      await get(base, `/matches?wishId=${seedWish.id}`, demoCookie),
+      await get(
+        base,
+        `/matches?wishId=${encodePublicId(PUBLIC_ID_PREFIX.wish, seedWish.id)}`,
+        demoCookie,
+      ),
     )
     assertEqual(total(demoWishSide, 'demo /matches?wishId='), 1, 'demo 买家能读到“愿望成真”')
     assertEqual(topScore(demoWishSide, 'demo /matches?wishId='), 100, 'demo 读接口分数 = 100')
@@ -586,9 +591,10 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     assertEqual(createResponse.status, 201, 'POST /listings → 201（发布立即返回）')
     const listing = await readJson(createResponse)
-    const listingId = String(listing.id)
+    const listingPublicId = String(listing.id)
+    const listingId = decodePublicId(PUBLIC_ID_PREFIX.listing, listingPublicId)
 
-    const detailResponse = await get(base, `/listings/${listingId}`)
+    const detailResponse = await get(base, `/listings/${listingPublicId}`)
     assertEqual(detailResponse.status, 200, '匿名 GET /listings/:id → 200')
     const coverUrl = (await readJson(detailResponse)).coverUrl
     assert(typeof coverUrl === 'string', '详情返回可用的 coverUrl')
@@ -616,7 +622,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       buyer,
     )
     assertEqual(wishResponse.status, 201, 'POST /wishes → 201')
-    const wishId = String((await readJson(wishResponse)).id)
+    const wishPublicId = String((await readJson(wishResponse)).id)
+    const wishId = decodePublicId(PUBLIC_ID_PREFIX.wish, wishPublicId)
 
     const wishJobRows = await jobRows(db, 'MATCH_WISH', 'wishId', wishId)
     assertEqual(wishJobRows.length, 1, '创建愿望写入恰好一条 MATCH_WISH')
@@ -636,8 +643,10 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     await waitJob(db, listingJob.id, 'DONE')
     await waitJob(db, wishJob.id, 'DONE')
 
-    const wishSide = await readJson(await get(base, `/matches?wishId=${wishId}`, buyer))
-    const listingSide = await readJson(await get(base, `/matches?listingId=${listingId}`, seller))
+    const wishSide = await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer))
+    const listingSide = await readJson(
+      await get(base, `/matches?listingId=${listingPublicId}`, seller),
+    )
     assertEqual(total(wishSide, '买家 /matches?wishId='), 1, '买家 /matches?wishId= 命中 1 条')
     assertEqual(
       total(listingSide, '卖家 /matches?listingId='),
@@ -657,7 +666,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const replayKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
     const replayPatch = await patchJson(
       base,
-      `/listings/${listingId}`,
+      `/listings/${listingPublicId}`,
       { negotiable: true },
       seller,
     )
@@ -673,19 +682,22 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const overBudgetKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
     const overBudget = await patchJson(
       base,
-      `/listings/${listingId}`,
+      `/listings/${listingPublicId}`,
       { priceCents: 50000 },
       seller,
     )
     assertEqual(overBudget.status, 200, 'PATCH 价格 50000 → 200')
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, overBudgetKnown, 'DONE')
     assertEqual(
-      total(await readJson(await get(base, `/matches?wishId=${wishId}`, buyer)), '超预算'),
+      total(await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer)), '超预算'),
       0,
       '超预算后买家侧不再展示',
     )
     assertEqual(
-      total(await readJson(await get(base, `/matches?listingId=${listingId}`, seller)), '超预算'),
+      total(
+        await readJson(await get(base, `/matches?listingId=${listingPublicId}`, seller)),
+        '超预算',
+      ),
       0,
       '超预算后卖家侧不再展示',
     )
@@ -694,11 +706,16 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(downgraded?.score, 70, '分数被覆盖成真实裸分 70（分类 100 + 关键词 100 + 价格 0）')
 
     const restoreKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
-    const restore = await patchJson(base, `/listings/${listingId}`, { priceCents: 16000 }, seller)
+    const restore = await patchJson(
+      base,
+      `/listings/${listingPublicId}`,
+      { priceCents: 16000 },
+      seller,
+    )
     assertEqual(restore.status, 200, 'PATCH 价格恢复 16000 → 200')
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, restoreKnown, 'DONE')
     assertEqual(
-      total(await readJson(await get(base, `/matches?wishId=${wishId}`, buyer)), '恢复后'),
+      total(await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer)), '恢复后'),
       1,
       '价格恢复后买家侧重新可见',
     )
@@ -713,11 +730,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     step = '上下架'
     section('下架隐藏、重新上架恢复')
     const offlineKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
-    const offline = await postJson(base, `/listings/${listingId}/offline`, {}, seller)
+    const offline = await postJson(base, `/listings/${listingPublicId}/offline`, {}, seller)
     assertEqual(offline.status, 200, 'POST offline → 200')
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, offlineKnown, 'DONE')
     assertEqual(
-      total(await readJson(await get(base, `/matches?wishId=${wishId}`, buyer)), '下架后'),
+      total(await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer)), '下架后'),
       0,
       '下架后买家侧不展示该 Match',
     )
@@ -726,17 +743,20 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 卖家仍能看见自己 OFFLINE 商品的 match——这是 #8 契约的有意取舍，这里把它一并钉住，
     // 将来若要改成双向隐藏，这条断言会提醒改动者那是契约变更。
     assertEqual(
-      total(await readJson(await get(base, `/matches?listingId=${listingId}`, seller)), '下架后'),
+      total(
+        await readJson(await get(base, `/matches?listingId=${listingPublicId}`, seller)),
+        '下架后',
+      ),
       1,
       '下架后卖家侧仍可见（#8 有意取舍）',
     )
 
     const onlineKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
-    const online = await postJson(base, `/listings/${listingId}/online`, {}, seller)
+    const online = await postJson(base, `/listings/${listingPublicId}/online`, {}, seller)
     assertEqual(online.status, 200, 'POST online → 200')
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, onlineKnown, 'DONE')
     assertEqual(
-      total(await readJson(await get(base, `/matches?wishId=${wishId}`, buyer)), '上架后'),
+      total(await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer)), '上架后'),
       1,
       '重新上架后买家侧恢复展示',
     )
@@ -749,7 +769,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const stoppedKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
     const stoppedPatch = await patchJson(
       base,
-      `/listings/${listingId}`,
+      `/listings/${listingPublicId}`,
       { negotiable: false },
       seller,
     )
@@ -823,7 +843,12 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     section('交易与面交：三元组一致、取消/成交终态销毁、一单一码、重取解锁')
 
     // 不变量 ①：交易 ↔ 会话三元组一致。join 不上的交易在订单页静默消失（#157 的失败模式）。
-    const conversationResponse = await postJson(base, CHAT_ROUTES.base, { listingId }, buyer)
+    const conversationResponse = await postJson(
+      base,
+      CHAT_ROUTES.base,
+      { listingId: listingPublicId },
+      buyer,
+    )
     assertEqual(conversationResponse.status, 201, 'POST /conversations → 201')
     const conversationId = String((await readJson(conversationResponse)).id)
 
@@ -886,7 +911,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       'CANCELLED 后取码错误码是 TRANSACTION_NOT_IN_PENDING',
     )
 
-    const restored = await readJson(await get(base, `/listings/${listingId}`))
+    const restored = await readJson(await get(base, `/listings/${listingPublicId}`))
     assertEqual(restored.status, 'ACTIVE', '取消后商品恢复 ACTIVE（可再次成交）')
 
     const acceptResponse = await postJson(
@@ -908,10 +933,14 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
         on c.listing_id = t.listing_id
        and c.buyer_id = t.buyer_id
        and c.seller_id = t.seller_id
-      where t.id = ${transactionId}
+      where t.id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}
     `)
     assertEqual([...joined].length, 1, '交易按三元组恰好 join 到 1 个会话')
-    assertEqual([...joined][0]?.id, conversationId, 'join 到的会话就是本笔交易的会话')
+    assertEqual(
+      [...joined][0]?.id,
+      decodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId),
+      'join 到的会话就是本笔交易的会话',
+    )
     for (const [who, cookie] of [
       ['买家', buyer],
       ['卖家', seller],
@@ -987,7 +1016,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(String((await readJson(reissued)).code), meetupCode, '重取解锁不换码')
     const tokenRows = await db.execute<{ failedAttempts: number; lockedUntil: string | null }>(sql`
       select failed_attempts as "failedAttempts", locked_until as "lockedUntil"
-      from transaction_meetup_tokens where transaction_id = ${transactionId}
+      from transaction_meetup_tokens where transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}
     `)
     assertEqual([...tokenRows].length, 1, '重取后凭证行仍在（未核销）')
     assertEqual([...tokenRows][0]?.failedAttempts, 0, '重取码复位失败计数')

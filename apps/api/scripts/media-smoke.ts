@@ -4,6 +4,7 @@ import { createDb } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createSessions } from '../src/modules/auth/session'
@@ -86,7 +87,7 @@ try {
       new URL('../src/modules/messages/fixtures/voice-fragmented.mp4', import.meta.url),
     ).arrayBuffer(),
   )
-  const mediaPath = `/conversations/${conversation}/media`
+  const mediaPath = `/conversations/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversation)}/media`
   const headers = { Cookie: cookie, 'Content-Type': 'application/json' }
   const response = await fetch(`${base}${mediaPath}/presign`, {
     method: 'POST',
@@ -125,7 +126,7 @@ try {
   const media = (await created.json()) as { mediaId: string; durationMs: number }
   assert.equal(media.durationMs, 1021)
   const saved = await db.execute(
-    sql`SELECT object_key FROM message_media WHERE id = ${media.mediaId}`,
+    sql`SELECT object_key FROM message_media WHERE id = ${decodePublicId(PUBLIC_ID_PREFIX.media, media.mediaId)}`,
   )
   const finalKey = String(saved[0]?.object_key)
   keys.push(finalKey)
