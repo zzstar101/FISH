@@ -15,24 +15,26 @@ export function currentSessionGeneration(): number {
  * 最后写入当前会话归属。活跃查询的 observer 会立即丢掉旧结果并重新取服务端数据，
  * 宁可多一次请求也不冒串号风险。
  *
- * 取消期间可能已有更新的登录 / 登出开始，此时本次 reset 已过期，必须返回 `false`
- * 让调用方放弃写入，避免旧会话把新身份覆盖回去。
+ * `cancelQueries` 的 await 是并发重置的交错点：等待期间可能已发生更新的重置（登录、
+ * 登出、另一个 401），此时本次重置整体放弃，避免把新身份覆盖回旧值。
  *
  * `/me` 自己的 401 处理需要保留当前查询的终止路径，因此可传 `cancelAuth: false`。
+ *
+ * @returns 是否由本次调用写入会话归属；`false` 表示已被更新的重置取代，未改动缓存。
  */
 export async function resetPcSession(
   queryClient: QueryClient,
   user: Me | null,
   options: { cancelAuth?: boolean } = {},
 ): Promise<boolean> {
-  const generation = sessionGeneration + 1
-  sessionGeneration = generation
+  const generation = ++sessionGeneration
 
   if (options.cancelAuth !== false) {
     await queryClient.cancelQueries({ queryKey: AUTH_ME_QUERY_KEY, exact: true })
+    // 等待期间更新的重置已递增代际并写入新身份：迟到的清理必须整体退出，
+    // 否则 removeQueries + setQueryData(null) 会把刚登录的用户登出并丢掉 B 的缓存。
+    if (generation !== sessionGeneration) return false
   }
-
-  if (generation !== sessionGeneration) return false
 
   const pcQueries = { queryKey: [PC_QUERY_PREFIX] }
   if (user === null) {
@@ -47,7 +49,11 @@ export async function resetPcSession(
   return true
 }
 
-/** 只允许启动时所属的会话代际清理；迟到的旧 `/me` 401 不能覆盖新登录用户。 */
+/**
+ * 只允许启动时所属的会话代际清理；迟到的旧 `/me` 401 不能覆盖新登录用户。
+ * 入口代际校验之外，`resetPcSession` 在 `cancelQueries` 的 await 之后还会二次校验，
+ * 因此默认（`cancelAuth` 不为 `false`）的调用在等待期间被取代时会返回 `false`。
+ */
 export async function resetPcSessionIfCurrent(
   queryClient: QueryClient,
   user: Me | null,

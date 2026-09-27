@@ -3,6 +3,7 @@ import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
@@ -57,9 +58,6 @@ import './index.scss'
  * 评论是**逐条**的东西：要删的往往是某一条说错的话，批量选择反而要点两下。
  * 删除没有端点，点击给「待接入」说明，**不做本地假删除**（那会与真实数据不一致）。
  */
-
-/** 回到顶部钮的出现阈值（`usePageScroll` 的 `scrollTop` 是设备 px ≈ 稿的 pt，不 ×2） */
-const TOTOP_THRESHOLD = 380
 
 /** 缩略图色块：分类基色取自 mock 的演示色块（由设计令牌派生，不是新增色值） */
 function blockOf(category: MyComment['category']): string {
@@ -139,7 +137,7 @@ export default function MyComments() {
     void read(true).then(() => Taro.stopPullDownRefresh())
   })
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   const toast = (title: string) => {
     void Taro.showToast({ title, icon: 'none' })
@@ -349,9 +347,7 @@ export default function MyComments() {
         )}
       </View>
 
-      <View className={`cmt__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="cmt__totop-arrow" />
-      </View>
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }
