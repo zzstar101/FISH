@@ -7,7 +7,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-const listingId = '01930000-0000-7000-8000-000000000013'
+const listingId = 'lst_01jc000000e00800000000000k'
 const detailFixture = {
   id: listingId,
   title: '高等数学上册',
@@ -24,7 +24,7 @@ const detailFixture = {
   description: '无笔记，封面完整。',
   images: [],
   seller: {
-    id: '01930000-0000-7000-8000-00000000000a',
+    id: 'usr_01jc000000e00800000000000a',
     nickname: '阿岚',
     avatarUrl: null,
     authStatus: 'VERIFIED',
@@ -34,6 +34,18 @@ const detailFixture = {
 }
 
 describe('fetchListingDetail', () => {
+  test('does not request a bare UUID or wrong-prefix listing route', async () => {
+    let calls = 0
+    globalThis.fetch = mock(async () => {
+      calls += 1
+      return new Response(null, { status: 500 })
+    }) as unknown as typeof fetch
+
+    await expect(fetchListingDetail('01930000-0000-7000-8000-000000000013')).resolves.toBeNull()
+    await expect(fetchListingDetail('usr_01jc000000e00800000000000a')).resolves.toBeNull()
+    expect(calls).toBe(0)
+  })
+
   test('requests the detail endpoint and parses a valid response', async () => {
     let requestedUrl = ''
     globalThis.fetch = mock(async (input: string | URL | Request) => {
@@ -76,6 +88,6 @@ describe('fetchListingDetail', () => {
         ),
     ) as unknown as typeof fetch
 
-    await expect(fetchListingDetail('00000000-0000-4000-8000-000000000000')).resolves.toBeNull()
+    await expect(fetchListingDetail('lst_01jc000000e00800000000000m')).resolves.toBeNull()
   })
 })

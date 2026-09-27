@@ -1,7 +1,9 @@
 import { sql } from 'drizzle-orm'
 import {
+  bigint,
   boolean,
   check,
+  foreignKey,
   index,
   integer,
   pgEnum,
@@ -13,6 +15,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core'
 import { createdAt, primaryKey, timestamps } from './common'
+import { listingNumbers } from './listing-numbers'
 import { users } from './users'
 
 /** 分类值集由 #2 冻结；#8 的匹配按分类等值打分，需要稳定值域。 */
@@ -40,6 +43,7 @@ export const listings = pgTable(
   'listings',
   {
     ...primaryKey(),
+    listingNo: bigint('listing_no', { mode: 'bigint' }).notNull(),
     sellerId: uuid('seller_id')
       .notNull()
       .references(() => users.id),
@@ -56,6 +60,11 @@ export const listings = pgTable(
     moderationReason: text('moderation_reason'),
     moderationRuleVersion: text('moderation_rule_version'),
     moderatedAt: timestamp('moderated_at', { withTimezone: true, mode: 'date' }),
+    /** 治理下架标记仅由管理员恢复清除；区别于普通内容审核拦截。 */
+    governanceDelistedAt: timestamp('governance_delisted_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
     /** #6 的 P0 工作项；#14 只消费这三列做标签与加权。 */
     urgent: boolean('urgent').notNull().default(false),
     negotiable: boolean('negotiable').notNull().default(false),
@@ -64,6 +73,13 @@ export const listings = pgTable(
   },
   (table) => [
     check('listings_price_cents_non_negative', sql`${table.priceCents} >= 0`),
+    unique('listings_listing_no_uq').on(table.listingNo),
+    // The reservation belongs to exactly this UUID, even after a physical DELETE.
+    foreignKey({
+      name: 'listings_listing_no_owner_fk',
+      columns: [table.listingNo, table.id],
+      foreignColumns: [listingNumbers.listingNo, listingNumbers.listingId],
+    }),
     /**
      * 契约 §1 的 `free ⟹ priceCents = 0` 在这里兜底：service 已经会按"合并后的最终状态"
      * 判定（§7.1），但它读一次状态再写，同一卖家的两个并发 PATCH 各自通过校验就会留下

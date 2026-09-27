@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createUploadService, UploadServiceError } from './service'
 import type { MediaStorage } from './storage'
 
 const USER_ID = '01930000-0000-7000-8000-00000000000a'
 const OTHER_ID = '01930000-0000-7000-8000-00000000000b'
+const PREFIX = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/`
+const NEW_KEY = `${PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-00000000000c')}.jpg`
 
 function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage {
   return {
@@ -35,7 +38,8 @@ describe('presign', () => {
     const jpeg = await service.presign(USER_ID, { contentType: 'image/jpeg', sizeBytes: 1024 })
     const webp = await service.presign(USER_ID, { contentType: 'image/webp', sizeBytes: 1024 })
 
-    expect(jpeg.objectKey.startsWith(`listings/${USER_ID}/`)).toBe(true)
+    expect(jpeg.objectKey.startsWith(PREFIX)).toBe(true)
+    expect(jpeg.objectKey).toMatch(/\/med_[a-z0-9]+\.jpg$/)
     expect(jpeg.objectKey.endsWith('.jpg')).toBe(true)
     expect(webp.objectKey.endsWith('.webp')).toBe(true)
     // 每次 presign 都是新对象：重试时前端替换槽位，旧键成为孤儿（契约 §4 取舍 1）
@@ -63,7 +67,7 @@ describe('presign', () => {
 describe('confirm', () => {
   test('returns the public url for an object the caller owns', async () => {
     const service = createUploadService({ storage: fakeStorage() })
-    const key = `listings/${USER_ID}/a.jpg`
+    const key = NEW_KEY
 
     expect(await service.confirm(USER_ID, { objectKey: key })).toEqual({
       objectKey: key,
@@ -83,7 +87,9 @@ describe('confirm', () => {
     })
 
     const error = await expectUploadError(() =>
-      service.confirm(USER_ID, { objectKey: `listings/${OTHER_ID}/a.jpg` }),
+      service.confirm(USER_ID, {
+        objectKey: `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, OTHER_ID)}/a.jpg`,
+      }),
     )
     expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
     expect(statCalled).toBe(false)
@@ -100,10 +106,10 @@ describe('confirm', () => {
       }),
     })
 
-    const key = `listings/${USER_ID}/../${OTHER_ID}/x.jpg`
+    const key = `${PREFIX}../${OTHER_ID}/x.jpg`
     // 前缀校验单独拦不住：这个键确实以调用方前缀开头，但 Bun.S3Client 拼 URL 时
     // 会把 `..` 归一化掉，实际请求别人的对象（#86 B 线评审 P1）。
-    expect(key.startsWith(`listings/${USER_ID}/`)).toBe(true)
+    expect(key.startsWith(PREFIX)).toBe(true)
 
     const error = await expectUploadError(() => service.confirm(USER_ID, { objectKey: key }))
     expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
@@ -113,11 +119,11 @@ describe('confirm', () => {
   test('rejects object keys that carry path syntax（空段 / 反斜杠 / 百分号编码）', async () => {
     const service = createUploadService({ storage: fakeStorage({ stat: async () => null }) })
     const keys = [
-      `listings/${USER_ID}//x.jpg`,
-      `listings/${USER_ID}/..\\${OTHER_ID}/x.jpg`,
-      `listings/${USER_ID}/..%2f${OTHER_ID}/x.jpg`,
-      `listings/${USER_ID}/./x.jpg`,
-      `/listings/${USER_ID}/x.jpg`,
+      `${PREFIX}/x.jpg`,
+      `${PREFIX}..\\${OTHER_ID}/x.jpg`,
+      `${PREFIX}..%2f${OTHER_ID}/x.jpg`,
+      `${PREFIX}./x.jpg`,
+      `/${PREFIX}x.jpg`,
     ]
 
     for (const objectKey of keys) {
@@ -128,9 +134,7 @@ describe('confirm', () => {
 
   test('rejects a key that was never uploaded', async () => {
     const service = createUploadService({ storage: fakeStorage({ stat: async () => null }) })
-    const error = await expectUploadError(() =>
-      service.confirm(USER_ID, { objectKey: `listings/${USER_ID}/a.jpg` }),
-    )
+    const error = await expectUploadError(() => service.confirm(USER_ID, { objectKey: NEW_KEY }))
     expect(error.code).toBe('UPLOAD_OBJECT_MISSING')
   })
 
@@ -142,22 +146,14 @@ describe('confirm', () => {
       }),
     })
     expect(
-      (
-        await expectUploadError(() =>
-          oversize.confirm(USER_ID, { objectKey: `listings/${USER_ID}/a.jpg` }),
-        )
-      ).code,
+      (await expectUploadError(() => oversize.confirm(USER_ID, { objectKey: NEW_KEY }))).code,
     ).toBe('IMAGE_REFERENCE_INVALID')
 
     const wrongMime = createUploadService({
       storage: fakeStorage({ stat: async () => ({ size: 10, contentType: 'image/heic' }) }),
     })
     expect(
-      (
-        await expectUploadError(() =>
-          wrongMime.confirm(USER_ID, { objectKey: `listings/${USER_ID}/a.jpg` }),
-        )
-      ).code,
+      (await expectUploadError(() => wrongMime.confirm(USER_ID, { objectKey: NEW_KEY }))).code,
     ).toBe('IMAGE_REFERENCE_INVALID')
   })
 })

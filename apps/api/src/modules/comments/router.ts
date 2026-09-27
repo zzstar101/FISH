@@ -5,9 +5,12 @@ import {
   CommentListQuerySchema,
 } from '@fish/contracts/comments/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
+import { ListingIdSchema } from '@fish/contracts/system/public-id'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { RestrictionGuard } from '../governance/guard'
 import { type CommentService, CommentServiceError } from './service'
 
 export type CommentsRouterOptions = {
@@ -19,6 +22,8 @@ export type CommentsRouterOptions = {
    * `isSeller` 由服务端拿 listing.sellerId 判定，读路径不需要 viewer，因此 GET 完全不碰身份。
    */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
+  /** #73 治理守卫：写留言前检查封禁（留言只有 `write` 一种作用域）。 */
+  guard: RestrictionGuard
 }
 
 /** JSON 解析失败（空体 / 非 JSON）按参数不合法处理，而不是让 Hono 抛 500。 */
@@ -38,9 +43,14 @@ function zodValidationFailure(
 }
 
 /** 路径参数必须是合法 UUID；否则直接 404，避免非 uuid 绑到 uuid 列后抛驱动错误变 500。 */
-function requireUuidParam(c: Context, name: string): string | null {
-  const parsed = CommentIdSchema.safeParse(c.req.param(name))
-  return parsed.success ? parsed.data : null
+function requireResourceId(c: Context, name: 'listingId' | 'commentId'): string | null {
+  const raw = c.req.param(name) ?? ''
+  const prefix = name === 'listingId' ? PUBLIC_ID_PREFIX.listing : PUBLIC_ID_PREFIX.comment
+  const valid =
+    name === 'listingId'
+      ? ListingIdSchema.safeParse(raw).success
+      : CommentIdSchema.safeParse(raw).success
+  return valid ? decodePublicId(prefix, raw) : null
 }
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`。 */
@@ -71,7 +81,7 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
 
   // —— 读接口：匿名可用（与 listings 的读公开同一口径）——
   router.get(LISTING_COMMENTS_PATH, async (c) => {
-    const listingId = requireUuidParam(c, 'listingId')
+    const listingId = requireResourceId(c, 'listingId')
     if (!listingId) return c.json(errorBody('LISTING_NOT_FOUND', '商品不存在'), 404)
 
     const parsed = CommentListQuerySchema.safeParse(c.req.query())
@@ -85,8 +95,8 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
   })
 
   // —— 写接口：全部要求登录 ——
-  router.post(LISTING_COMMENTS_PATH, options.requireAuth, async (c) => {
-    const listingId = requireUuidParam(c, 'listingId')
+  router.post(LISTING_COMMENTS_PATH, options.requireAuth, options.guard.write, async (c) => {
+    const listingId = requireResourceId(c, 'listingId')
     if (!listingId) return c.json(errorBody('LISTING_NOT_FOUND', '商品不存在'), 404)
 
     const parsed = CommentCreateInputSchema.safeParse(await readJson(c))
@@ -99,8 +109,8 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
     }
   })
 
-  router.post(COMMENT_REPLIES_PATH, options.requireAuth, async (c) => {
-    const commentId = requireUuidParam(c, 'commentId')
+  router.post(COMMENT_REPLIES_PATH, options.requireAuth, options.guard.write, async (c) => {
+    const commentId = requireResourceId(c, 'commentId')
     if (!commentId) return c.json(errorBody('COMMENT_NOT_FOUND', '留言不存在'), 404)
 
     const parsed = CommentCreateInputSchema.safeParse(await readJson(c))

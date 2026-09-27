@@ -1,7 +1,4 @@
-import {
-  notificationPayloadSchema,
-  notificationTypeSchema,
-} from '@fish/contracts/notifications/schema'
+import { notificationTypeSchema } from '@fish/contracts/notifications/schema'
 import type { Db } from '@fish/db/client'
 import { notifications } from '@fish/db/schema/notifications'
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
@@ -43,37 +40,30 @@ export interface NotificationStore {
 }
 
 /**
- * 「这一行能被契约表示」的 SQL 谓词，五条判据与契约**逐条对齐**，值域全部从契约派生
- * （enum 取值 + payload 的键名），不在这里重写第二份真相：P1 往契约里加降价通知，改枚举即可，
- * 列表 / 角标 / 标记已读三处自动同步。
+ * 三处读操作共用的「这一行能够投影成公开 DTO」谓词。type 的值域来自契约；
+ * payload 对象里的脏引用只影响对应字段，不影响行是否可展示。
  *
  * 1. `type` ∈ `notificationTypeSchema.options`（库里 `type` 是裸 `text`、无 CHECK）；
  * 2. `jsonb_typeof(payload) = 'object'`（契约要的是对象；jsonb 字符串/数组/标量都不行）；
  * 3. `isfinite(created_at)` —— PG 能存 `'infinity'::timestamptz`，而 JS 的 `Date` 表示不了；
  * 4. `read_at IS NULL OR isfinite(read_at)`（NULL = 未读，是合法状态）；
- * 5. `payload` 的三个可选键**存在时必须是字符串**（契约是 `z.string().optional()`：
- *    显式 `null` / 数字都不合法；键缺失才合法，所以判据是「不存在 **或** 是字符串」）。
+ * 5. payload 中的引用不参与筛行：任意脏字段均在公开出口单独省略。
+ * 6. 通知自身 UUID 必须同时有 v7 版本位与 RFC variant 位，才能编码为公开 `ntf_`；
+ *    否则三种读口径均跳过。
  *
  * **为什么必须在 SQL 里收窄而不是只在 JS 里丢行**（#23 评审 F1/F1'）：`LIMIT` 与 `count(*)`
  * 都在 SQL 阶段生效，JS 侧丢行会让不可展示的行**占掉名额**——一行正常 + 若干脏行时
  * `?limit=1` 返回空页（用户明明有可展示的未读），角标也会比列表多出几个。
  *
- * 实测（`bun --env-file=../../.env -e`，本仓 drizzle 0.45.2 + bun-sql）：
- * - `jsonb_exists(payload, 'k')` 与 `payload ? 'k'` 在真实列上结果逐行一致；
- *   这里用**函数形式**，避免 `?` 在 SQL 模板/驱动层被当成占位符的歧义；
- * - 键名作为参数时必须显式 `::text`（`jsonb -> text` 与 `jsonb -> integer` 两个重载，
- *   未定型的参数会歧义）；
- * - `isfinite(NULL)` 为 NULL，所以 `read_at` 那条必须写成 `IS NULL OR isfinite(...)`。
+ * `isfinite(NULL)` 为 NULL，所以 `read_at` 那条必须写成 `IS NULL OR isfinite(...)`。
  */
 const projectable = and(
   inArray(notifications.type, [...notificationTypeSchema.options]),
   sql`jsonb_typeof(${notifications.payload}) = 'object'`,
   sql`isfinite(${notifications.createdAt})`,
+  sql`substring(${notifications.id}::text, 15, 1) = '7'`,
+  sql`substring(${notifications.id}::text, 20, 1) IN ('8', '9', 'a', 'b')`,
   sql`(${notifications.readAt} IS NULL OR isfinite(${notifications.readAt}))`,
-  ...Object.keys(notificationPayloadSchema.shape).map(
-    (key) =>
-      sql`(NOT jsonb_exists(${notifications.payload}, ${key}::text) OR jsonb_typeof(${notifications.payload} -> ${key}::text) = 'string')`,
-  ),
 )
 
 /** 只取契约会用到的五列（不返回 `user_id`：调用方已经知道是谁的）。 */

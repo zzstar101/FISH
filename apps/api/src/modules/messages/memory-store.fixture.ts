@@ -14,10 +14,10 @@ import type { ConversationParticipant, MessageRow, MessageStore } from './store'
  */
 
 /** 替身内置身份：默认会话与 TEXT 消息的昵称映射都基于它们，测试里请引用这些常量。 */
-export const MEMORY_BUYER_ID = '00000000-0000-4000-8000-0000000000a1'
-export const MEMORY_SELLER_ID = '00000000-0000-4000-8000-0000000000a2'
-export const MEMORY_OUTSIDER_ID = '00000000-0000-4000-8000-0000000000a3'
-export const MEMORY_CONVERSATION_ID = '00000000-0000-4000-8000-0000000000c1'
+export const MEMORY_BUYER_ID = '01930000-0000-7000-8000-0000000000a1'
+export const MEMORY_SELLER_ID = '01930000-0000-7000-8000-0000000000a2'
+export const MEMORY_OUTSIDER_ID = '01930000-0000-7000-8000-0000000000a3'
+export const MEMORY_CONVERSATION_ID = '01930000-0000-7000-8000-0000000000c1'
 
 export class MemoryMessageStore implements MessageStore {
   conversations = new Map<string, ConversationParticipant>([
@@ -74,7 +74,7 @@ export class MemoryMessageStore implements MessageStore {
       }
     }
     const row: MessageRow = {
-      id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
+      id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: conversationId,
       sender_id: senderId,
       type: 'TEXT',
@@ -95,7 +95,7 @@ export class MemoryMessageStore implements MessageStore {
 
   async insertSystem(conversationId: string, content: string) {
     const row: MessageRow = {
-      id: `00000000-0000-4000-8000-${String(++this.seq).padStart(12, '0')}`,
+      id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: conversationId,
       sender_id: null,
       type: 'SYSTEM',

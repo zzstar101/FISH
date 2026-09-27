@@ -25,9 +25,11 @@
  */
 import type { AuthStatus } from '@fish/contracts/auth/user'
 import type {
+  ConversationDto,
   ConversationListing,
   ConversationRole,
   ConversationUser,
+  MessageDto,
   MessageType,
 } from '@fish/contracts/chat/schema'
 import type {
@@ -174,7 +176,7 @@ export type { ConversationRole, MessageType }
 export type MockConversationCounterpart = ConversationUser & { authStatus: AuthStatus }
 
 export type MockConversation = {
-  id: string
+  id: ConversationDto['id']
   /** 契约 `ConversationDto.role`：我在这条会话里是买家还是卖家 */
   role: ConversationRole
   /**
@@ -188,7 +190,7 @@ export type MockConversation = {
   lastMessage: {
     type: MessageType
     content: string
-    senderId: string | null
+    senderId: ConversationUser['id'] | null
     createdAt: string
   } | null
   lastMessageAt: string
@@ -213,9 +215,9 @@ export type MockConversation = {
 }
 
 export type MockMessage = {
-  id: string
-  conversationId: string
-  senderId: string | null
+  id: MessageDto['id']
+  conversationId: ConversationDto['id']
+  senderId: ConversationUser['id'] | null
   type: MessageType
   content: string
   createdAt: string
@@ -237,8 +239,8 @@ export type MediaKind = 'IMAGE' | 'VOICE'
  */
 export type MockMediaMessage = {
   id: string
-  conversationId: string
-  senderId: string
+  conversationId: ConversationDto['id']
+  senderId: ConversationUser['id']
   kind: MediaKind
   /** 图片本地资源；语音没有封面，为 null */
   imageUrl: string | null
@@ -262,9 +264,13 @@ export type { TransactionStatus }
 
 /**
  * 交易里的对方：契约 `TransactionUser`（id / nickname / avatarUrl）
- * **+ mock 专属** `authStatus`（订单卡上的认证徽章）。
+ * **+ mock 专属** `authStatus`（订单卡上的认证徽章）；`id` 仍是内部 fixture 键，
+ * 会话投影会将该键映射成 usr_；订单页的旧 fixture 键另按逐页门禁处理。
  */
-export type MockTransactionCounterpart = TransactionUser & { authStatus: AuthStatus }
+export type MockTransactionCounterpart = Omit<TransactionUser, 'id'> & {
+  id: string
+  authStatus: AuthStatus
+}
 
 export type MockTransaction = {
   id: string

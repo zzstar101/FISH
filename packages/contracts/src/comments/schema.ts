@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  ListingIdSchema,
+  CommentIdSchema as PublicCommentIdSchema,
+  UserIdSchema,
+} from '../system/public-id'
 
 /**
  * Comment Domain Contract（Issue #111）。
@@ -36,7 +41,7 @@ export type CommentContent = z.infer<typeof CommentContentSchema>
  * 历史脏值由服务端降级成 `null`，不允许一个用户的脏头像让整页留言 500。
  */
 export const CommentAuthorSchema = z.object({
-  id: z.uuid(),
+  id: UserIdSchema,
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
 })
@@ -62,8 +67,8 @@ export type CommentReply = {
 }
 
 export const CommentReplySchema: z.ZodType<CommentReply> = z.object({
-  id: z.uuid(),
-  listingId: z.uuid(),
+  id: PublicCommentIdSchema,
+  listingId: ListingIdSchema,
   author: CommentAuthorSchema,
   content: CommentContentSchema,
   createdAt: z.iso.datetime(),
@@ -82,8 +87,8 @@ export type CommentDto = Omit<CommentReply, 'replies'> & {
 }
 
 export const CommentDtoSchema: z.ZodType<CommentDto> = z.object({
-  id: z.uuid(),
-  listingId: z.uuid(),
+  id: PublicCommentIdSchema,
+  listingId: ListingIdSchema,
   author: CommentAuthorSchema,
   content: CommentContentSchema,
   createdAt: z.iso.datetime(),
@@ -101,7 +106,7 @@ export const CommentDtoSchema: z.ZodType<CommentDto> = z.object({
 export const CommentCursorTimestampSchema = z.iso.datetime({ precision: 6 })
 
 /** 商品 id / 留言 id 的形状：路由参数与游标里的 id 都用它校验，避免非 uuid 打到 PG 变 500。 */
-export const CommentIdSchema = z.uuid()
+export const CommentIdSchema = PublicCommentIdSchema
 
 /**
  * 列表查询。`cursor` 是不透明串（服务端对 `(created_at, id)` 编码），前端禁止解析或构造，

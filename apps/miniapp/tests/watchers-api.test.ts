@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test'
 
-const listingId = '01990000-0000-7000-8000-0000000000b1'
+const listingId = 'lst_01k4000000e00800000000005h'
 const calls: { path: string; query: unknown }[] = []
 let payload: unknown = { items: [], total: 0, nextCursor: null }
 
@@ -19,7 +19,7 @@ test('调用卖家专属路由、不解析不透明游标，保留不受分页�
     items: [
       {
         user: {
-          id: '01990000-0000-7000-8000-0000000000a1',
+          id: 'usr_01k4000000e008000000000051',
           nickname: '同学甲',
           avatarUrl: null,
           authStatus: 'VERIFIED',

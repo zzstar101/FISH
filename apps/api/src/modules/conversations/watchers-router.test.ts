@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
 import { ConversationServiceError } from './service'
 import { createChatWatchersRouter } from './watchers-router'
 import type { ChatWatchersService } from './watchers-service'
 
 const listing = '01990000-0000-7000-8000-0000000000b1'
+const publicListing = encodePublicId(PUBLIC_ID_PREFIX.listing, listing)
 
 function appFor(service: ChatWatchersService) {
   const app = new Hono<{ Variables: { userId: string } }>()
@@ -31,14 +33,14 @@ test('匿名 401、路径非法 404、查询超限 422；非法请求不触发�
       return { items: [], total: 0, nextCursor: null }
     },
   })
-  expect((await app.request(`/listings/${listing}/watchers`)).status).toBe(401)
+  expect((await app.request(`/listings/${publicListing}/watchers`)).status).toBe(401)
   expect(
     (await app.request('/listings/not-a-uuid/watchers', { headers: { authorization: 'ok' } }))
       .status,
   ).toBe(404)
   expect(
     (
-      await app.request(`/listings/${listing}/watchers?limit=51`, {
+      await app.request(`/listings/${publicListing}/watchers?limit=51`, {
         headers: { authorization: 'ok' },
       })
     ).status,
@@ -54,7 +56,7 @@ test('卖家拿到同源分页结果，非卖家 403', async () => {
       return { items: [], total: 4, nextCursor: null }
     },
   })
-  const response = await app.request(`/listings/${listing}/watchers?limit=2`, {
+  const response = await app.request(`/listings/${publicListing}/watchers?limit=2`, {
     headers: { authorization: 'ok' },
   })
   expect(response.status).toBe(200)
@@ -70,7 +72,10 @@ test('卖家拿到同源分页结果，非卖家 403', async () => {
     },
   })
   expect(
-    (await forbidden.request(`/listings/${listing}/watchers`, { headers: { authorization: 'ok' } }))
-      .status,
+    (
+      await forbidden.request(`/listings/${publicListing}/watchers`, {
+        headers: { authorization: 'ok' },
+      })
+    ).status,
   ).toBe(403)
 })

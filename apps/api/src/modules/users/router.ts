@@ -1,6 +1,7 @@
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import { USER_ROUTES } from '@fish/contracts/users/routes'
 import { PublicUserIdSchema, PublicUserListingsQuerySchema } from '@fish/contracts/users/schema'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { type PublicUserService, PublicUserServiceError } from './service'
@@ -19,7 +20,7 @@ export type UsersRouterOptions = {
  */
 function requireUserId(c: Context): string | null {
   const parsed = PublicUserIdSchema.safeParse(c.req.param('userId'))
-  return parsed.success ? parsed.data : null
+  return parsed.success ? decodePublicId(PUBLIC_ID_PREFIX.user, parsed.data) : null
 }
 
 /** 与 `service.ts` 的 `userNotFound` 同码同文案：格式不合法与不存在不给可区分的响应。 */

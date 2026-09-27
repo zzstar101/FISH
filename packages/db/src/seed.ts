@@ -5,13 +5,16 @@ import { adminAuditLogs } from './schema/admin'
 import { aiPolishRequests } from './schema/ai-polish-requests'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
+import { userRestrictions } from './schema/governance'
 import { jobs } from './schema/jobs'
+import { listingNumbers } from './schema/listing-numbers'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
 import { messageMedia } from './schema/message-media'
 import { messages } from './schema/messages'
 import { listingModerationRecords } from './schema/moderation'
 import { notifications } from './schema/notifications'
+import { reports } from './schema/reports'
 import { sessions } from './schema/sessions'
 import { transactionMeetupTokens, transactions } from './schema/transactions'
 import { users, wechatIdentities } from './schema/users'
@@ -48,6 +51,16 @@ const ids = {
   transactionBasketball: '01930000-0000-7000-8000-000000000052',
   jobMatchListing: '01930000-0000-7000-8000-000000000071',
 } as const
+
+/** Fixed non-sequential references: rerunning the local seed restores the same logical listings. */
+const listingReferences = [
+  { listingId: ids.listingK380, listingNo: 638_294_017_526n },
+  { listingId: ids.listingMonitor, listingNo: 872_106_953_482n },
+  { listingId: ids.listingTextbook, listingNo: 416_829_075_631n },
+  { listingId: ids.listingLamp, listingNo: 951_367_208_414n },
+  { listingId: ids.listingBasketball, listingNo: 274_809_136_725n },
+  { listingId: ids.listingSneakers, listingNo: 709_541_826_303n },
+] as const
 
 /**
  * 三个 seed 账号共用的演示密码，用 `Bun.password`（argon2id）真实哈希写入（#3 替换了 #2 的占位值）。
@@ -87,7 +100,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // （#86，引用 users 且 ON DELETE CASCADE）必须在内：漏掉会让 seed 直接失败
   // （实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
   )
 
   const now = new Date()
@@ -121,9 +134,29 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
   ])
 
+  // The reservation table must not be truncated: historical references remain occupied.
+  // Only the same seed UUID may reclaim its own reserved number on repeated local resets.
+  await tx
+    .insert(listingNumbers)
+    .values([...listingReferences])
+    .onConflictDoNothing()
+  const reserved = await tx
+    .select({ listingId: listingNumbers.listingId, listingNo: listingNumbers.listingNo })
+    .from(listingNumbers)
+  for (const reference of listingReferences) {
+    if (
+      !reserved.some(
+        (row) => row.listingId === reference.listingId && row.listingNo === reference.listingNo,
+      )
+    ) {
+      throw new Error(`seed 商品编号已被其他商品占用：${reference.listingNo}`)
+    }
+  }
+
   await tx.insert(listings).values([
     {
       id: ids.listingK380,
+      listingNo: listingReferences[0].listingNo,
       sellerId: ids.sellerA,
       title: '罗技 K380 机械键盘',
       description: '自用一年，键帽无打油，附原装收纳袋。可刀。',
@@ -135,6 +168,7 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
     {
       id: ids.listingMonitor,
+      listingNo: listingReferences[1].listingNo,
       sellerId: ids.sellerA,
       title: 'Redmi 23.8 寸显示器',
       description: '毕业出，无亮点无坏点，支持 HDMI。',
@@ -146,6 +180,7 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
     {
       id: ids.listingTextbook,
+      listingNo: listingReferences[2].listingNo,
       sellerId: ids.sellerA,
       title: '高等数学上册（同济第七版）',
       description: '有少量笔记，不影响阅读。',
@@ -156,6 +191,7 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
     {
       id: ids.listingLamp,
+      listingNo: listingReferences[3].listingNo,
       sellerId: ids.buyerB,
       title: '宿舍护眼台灯',
       description: '三档色温，USB 供电。',
@@ -167,6 +203,7 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
     {
       id: ids.listingBasketball,
+      listingNo: listingReferences[4].listingNo,
       sellerId: ids.buyerB,
       title: '斯伯丁室外篮球',
       description: '打了半个学期，气密性正常。',
@@ -178,6 +215,7 @@ export async function seed(tx: SeedTx): Promise<void> {
     },
     {
       id: ids.listingSneakers,
+      listingNo: listingReferences[5].listingNo,
       sellerId: ids.buyerC,
       title: '匡威 1970s 帆布鞋 42 码',
       description: '尺码不合，穿过两次。0 元送给有缘人。',

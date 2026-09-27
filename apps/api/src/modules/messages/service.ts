@@ -6,6 +6,8 @@ import {
   messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
 import type { MessageRow, MessageStore } from './store'
 
@@ -28,15 +30,15 @@ const idempotencyConflict = () =>
 
 export function toMessageDto(row: MessageRow): MessageDto {
   return messageDtoSchema.parse({
-    id: row.id,
-    conversationId: row.conversation_id,
-    senderId: row.sender_id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.message, row.id),
+    conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation_id),
+    senderId: row.sender_id ? encodePublicId(PUBLIC_ID_PREFIX.user, row.sender_id) : null,
     sender:
       row.sender_id && row.sender_nickname
         ? {
-            id: row.sender_id,
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, row.sender_id),
             nickname: row.sender_nickname,
-            avatarUrl: row.sender_avatar_url ?? null,
+            avatarUrl: publicAvatarUrl(row.sender_avatar_url ?? null),
           }
         : null,
     type: row.type,
@@ -45,11 +47,13 @@ export function toMessageDto(row: MessageRow): MessageDto {
   })
 }
 
+type InternalMessageListQuery = Omit<MessageListQuery, 'before'> & { before?: string }
+
 export interface MessageService {
   listMessages(
     userId: string,
     conversationId: string,
-    query: MessageListQuery,
+    query: InternalMessageListQuery,
   ): Promise<MessageListResponse>
   sendTextMessage(
     userId: string,
@@ -62,8 +66,10 @@ export function createMessageService({
   store,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
+  projectContent = async (_type: string, content: string) => content,
 }: {
   store: MessageStore
+  projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
     message: MessageDto,
@@ -89,9 +95,13 @@ export function createMessageService({
       const page = hasMore ? result.rows.slice(-query.limit) : result.rows
       const oldest = page[0]
       return messageListResponseSchema.parse({
-        items: page.map(toMessageDto),
+        items: await Promise.all(
+          page.map(async (row) =>
+            toMessageDto({ ...row, content: await projectContent(row.type, row.content) }),
+          ),
+        ),
         // 升序页的最早一条即下一页游标；没有更早的消息时为 null（契约：无 hasMore 字段）。
-        nextCursor: hasMore && oldest ? oldest.id : null,
+        nextCursor: hasMore && oldest ? encodePublicId(PUBLIC_ID_PREFIX.message, oldest.id) : null,
       })
     },
 

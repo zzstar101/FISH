@@ -3,7 +3,7 @@ name: fish
 # 只托管本地依赖；应用（web / api / worker）由宿主机 bun 直接运行。
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg18
     restart: unless-stopped
     # 官方镜像默认 max_connections=100 不够：`bun test` 跑 47 个测试文件，其中 15 个各自建
     # 一个连接池（12 个在 afterAll 关、1 个在用例的 finally 里关，但都只在自己的文件跑完时
@@ -22,7 +22,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # PG18 image stores the cluster under /var/lib/postgresql/18/docker. Use a NEW
+      # volume: never mount the PG16 data directory here or silently initialize an empty DB.
+      - postgres18-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fish -d fish"]
       interval: 5s
@@ -66,5 +68,5 @@ services:
       "
 
 volumes:
-  postgres-data:
+  postgres18-data:
   minio-data:

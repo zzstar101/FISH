@@ -1,5 +1,6 @@
 import type { Me } from '@fish/contracts/auth/user'
 import { errorBody } from '@fish/contracts/system/error'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import type { AuthService } from './service'
 import type { SessionCookie } from './session'
@@ -27,7 +28,7 @@ export function createRequireAuth(deps: {
     const me = token ? await deps.service.loadMe(token) : null
     if (!me) return c.json(errorBody('UNAUTHENTICATED', '请先登录'), 401)
 
-    c.set('userId', me.id)
+    c.set('userId', decodePublicId(PUBLIC_ID_PREFIX.user, me.id))
     c.set('me', me)
     await next()
   }

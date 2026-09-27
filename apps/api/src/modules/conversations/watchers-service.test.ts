@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor } from './cursor'
 import type { ConversationServiceError } from './service'
 import { createChatWatchersService } from './watchers-service'
@@ -60,7 +61,12 @@ test('人数来自全部会话而非当前页；只暴露最小买家字段，�
   expect(response.total).toBe(18)
   expect(response.items).toEqual([
     {
-      user: { id: buyer, nickname: '同学甲', avatarUrl: null, authStatus: 'VERIFIED' },
+      user: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, buyer),
+        nickname: '同学甲',
+        avatarUrl: null,
+        authStatus: 'VERIFIED',
+      },
       startedAt: '2026-09-12T09:00:00.123Z',
     },
   ])

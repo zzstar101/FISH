@@ -1,13 +1,18 @@
 import { describe, expect, test } from 'bun:test'
 import type { WishDto } from '@fish/contracts/wishes/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono } from 'hono'
+import { allowRestrictionGuard } from '../governance/testing'
 import { createWishesRouter } from './router'
 import type { WishService } from './service'
 import type { WishRow, WishStore } from './store'
 
+const USER_UUID = '01930000-0000-7000-8000-00000000000a'
+const WISH_UUID = '01930000-0000-7000-8000-000000000021'
+const WISH_ID = encodePublicId(PUBLIC_ID_PREFIX.wish, WISH_UUID)
 const dto: WishDto = {
-  id: '00000000-0000-0000-0000-000000000001',
-  userId: 'user-1',
+  id: WISH_ID,
+  userId: encodePublicId(PUBLIC_ID_PREFIX.user, USER_UUID),
   keyword: '机械键盘',
   category: 'DIGITAL',
   budgetMinCents: 10000,
@@ -37,12 +42,13 @@ const creatingStore = Object.assign({} as WishStore, {
 const matchQueue = { enqueue: async () => undefined }
 const root = new Hono<{ Variables: { userId: string } }>()
 root.use('/wishes/*', async (c, next) => {
-  c.set('userId', 'user-1')
+  c.set('userId', USER_UUID)
   await next()
 })
 root.route(
   '/wishes',
   createWishesRouter({
+    guard: allowRestrictionGuard,
     store: emptyStore,
     matchQueue,
     getUserId: (c) => c.get('userId'),
@@ -60,6 +66,7 @@ describe('wishes router', () => {
     const unauthedRoot = new Hono().route(
       '/wishes',
       createWishesRouter({
+        guard: allowRestrictionGuard,
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),
@@ -87,34 +94,37 @@ describe('wishes router', () => {
     expect(await listResponse.json()).toMatchObject({ page: 2, pageSize: 5, total: 1 })
 
     expect((await request('/wishes/pool')).status).toBe(200)
-    expect(
-      (await request('/wishes/00000000-0000-0000-0000-000000000001/close', { method: 'POST' }))
-        .status,
-    ).toBe(200)
+    expect((await request(`/wishes/${WISH_ID}/close`, { method: 'POST' })).status).toBe(200)
     expect(
       (
-        await request('/wishes/00000000-0000-0000-0000-000000000001/fulfill', {
+        await request(`/wishes/${WISH_ID}/fulfill`, {
           method: 'POST',
         })
       ).status,
     ).toBe(200)
   })
 
-  test('returns 404 instead of 500 for a malformed wish id', async () => {
-    const response = await request('/wishes/not-a-uuid')
-    expect(response.status).toBe(404)
-    expect(await response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } })
+  test('rejects bare UUID, wrong prefix and malformed wish paths before the service', async () => {
+    for (const id of [WISH_UUID, encodePublicId(PUBLIC_ID_PREFIX.listing, WISH_UUID), 'bad']) {
+      const response = await request(`/wishes/${id}`)
+      expect(response.status).toBe(404)
+      expect(await response.json()).toMatchObject({ error: { code: 'NOT_FOUND' } })
+    }
   })
 
   test('defaults to the no-op match queue when none is provided', async () => {
     const app = new Hono<{ Variables: { userId: string } }>()
     app.use('*', async (c, next) => {
-      c.set('userId', 'user-1')
+      c.set('userId', USER_UUID)
       await next()
     })
     app.route(
       '/wishes',
-      createWishesRouter({ store: creatingStore, getUserId: (c) => c.get('userId') }),
+      createWishesRouter({
+        store: creatingStore,
+        getUserId: (c) => c.get('userId'),
+        guard: allowRestrictionGuard,
+      }),
     )
 
     const response = await app.request('/wishes', {
@@ -146,12 +156,13 @@ describe('wishes router', () => {
     // 约束兜底保证数据正确，HTTP 语义应是 409 冲突而不是 500。
     const app = new Hono<{ Variables: { userId: string } }>()
     app.use('*', async (c, next) => {
-      c.set('userId', 'user-1')
+      c.set('userId', USER_UUID)
       await next()
     })
     app.route(
       '/wishes',
       createWishesRouter({
+        guard: allowRestrictionGuard,
         store: emptyStore,
         matchQueue,
         getUserId: (c) => c.get('userId'),
@@ -164,7 +175,7 @@ describe('wishes router', () => {
       }),
     )
 
-    const response = await app.request('/wishes/00000000-0000-0000-0000-000000000001', {
+    const response = await app.request(`/wishes/${WISH_ID}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ budgetMaxCents: 20000 }),

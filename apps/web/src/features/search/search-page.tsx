@@ -4,9 +4,11 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Tabs, TabsList, TabsTrigger } from '@fish/ui/tabs'
 import { useNavigate } from '@tanstack/react-router'
 import { Camera, ChevronLeft, RefreshCw, Search, Trash2 } from 'lucide-react'
-import { useState } from 'react'
-import { meta, useFreeListings, useSearch } from '../home/queries'
+import { useEffect, useState } from 'react'
+import { ApiError } from '../../lib/api-client'
+import { meta, useFreeListings, useListingNumberLookup, useSearch } from '../home/queries'
 import { ListingRow } from './listing-row'
+import { isListingNumberQuery } from './number-query'
 
 /** 排序口径与 #6 冻结契约一致（ListingSortSchema：newest / priceAsc / priceDesc）。 */
 const SORTS = [
@@ -22,21 +24,41 @@ export function SearchPage({ keyword, free = false }: { keyword: string; free?: 
   const [sort, setSort] = useState<ListingSort>('newest')
   const [history, setHistory] = useState<string[]>(meta.searchHistory)
   const [suggestions, setSuggestions] = useState<string[]>(meta.searchSuggestions)
-  const results = useSearch(free ? '' : keyword, sort)
+  const isNumber = !free && isListingNumberQuery(keyword)
+  const results = useSearch(free || isNumber ? '' : keyword, sort)
+  const numberLookup = useListingNumberLookup(isNumber ? keyword.trim() : '')
   const freeResults = useFreeListings(sort)
-  const items = free ? (freeResults.data ?? []) : (results.data ?? [])
-  const pending = free ? freeResults.isPending : results.isPending
-  const error = free ? freeResults.error : results.error
-  const retry = () => void (free ? freeResults.refetch() : results.refetch())
-  const isEmpty = free
-    ? freeResults.isSuccess && items.length === 0
-    : results.isSuccess && items.length === 0
+  const items = isNumber ? [] : free ? (freeResults.data ?? []) : (results.data ?? [])
+  const pending = isNumber
+    ? numberLookup.isPending || (numberLookup.isSuccess && numberLookup.data !== null)
+    : free
+      ? freeResults.isPending
+      : results.isPending
+  const error = isNumber ? numberLookup.error : free ? freeResults.error : results.error
+  const retry = () =>
+    void (isNumber ? numberLookup.refetch() : free ? freeResults.refetch() : results.refetch())
+  const isEmpty = isNumber
+    ? numberLookup.isSuccess && numberLookup.data === null
+    : free
+      ? freeResults.isSuccess && items.length === 0
+      : results.isSuccess && items.length === 0
+
+  useEffect(() => {
+    if (!isNumber || !numberLookup.data) return
+    void navigate({
+      to: '/detail/$listingId',
+      params: { listingId: numberLookup.data },
+      replace: true,
+    })
+  }, [isNumber, numberLookup.data, navigate])
 
   const submit = (value: string) => {
     const next = value.trim()
     if (!next) return
     setDraft(next)
-    setHistory((prev) => [next, ...prev.filter((item) => item !== next)].slice(0, 10))
+    if (!isListingNumberQuery(next)) {
+      setHistory((prev) => [next, ...prev.filter((item) => item !== next)].slice(0, 10))
+    }
     void navigate({ to: '/search', search: { kw: next } })
   }
 
@@ -136,27 +158,42 @@ export function SearchPage({ keyword, free = false }: { keyword: string; free?: 
               <span className="font-semibold">“{free ? '免费送' : keyword}”</span>{' '}
               {items.length > 0 ? <span className="text-ink-3">{items.length} 件</span> : null}
             </span>
-            <Tabs
-              className="shrink-0"
-              onValueChange={(next) => setSort(next as ListingSort)}
-              value={sort}
-            >
-              <TabsList>
-                {SORTS.map((option) => (
-                  <TabsTrigger className="px-3" key={option.value} value={option.value}>
-                    {option.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+            {!isNumber ? (
+              <Tabs
+                className="shrink-0"
+                onValueChange={(next) => setSort(next as ListingSort)}
+                value={sort}
+              >
+                <TabsList>
+                  {SORTS.map((option) => (
+                    <TabsTrigger className="px-3" key={option.value} value={option.value}>
+                      {option.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            ) : null}
           </div>
 
           <div className="mt-2 px-3 pb-6">
             {pending ? <LoadingState /> : null}
-            {error ? <ErrorState message="搜索失败,请稍后重试" onRetry={retry} /> : null}
+            {error ? (
+              <ErrorState
+                message={
+                  isNumber && error instanceof ApiError && error.status === 429
+                    ? '编号查询太频繁，请稍后再试'
+                    : '搜索失败，请稍后重试'
+                }
+                onRetry={retry}
+              />
+            ) : null}
             {isEmpty ? (
               <EmptyState
-                description={`没有找到与「${free ? '免费送' : keyword}」相关的闲置`}
+                description={
+                  isNumber
+                    ? `没有找到编号为「${keyword.trim()}」的闲置`
+                    : `没有找到与「${free ? '免费送' : keyword}」相关的闲置`
+                }
                 emoji="🔍"
               />
             ) : null}

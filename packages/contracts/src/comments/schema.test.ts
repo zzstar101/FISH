@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   CommentContentSchema,
   CommentCreateInputSchema,
@@ -7,12 +8,17 @@ import {
   CommentReplySchema,
 } from './schema'
 
-const AUTHOR = { id: '01930000-0000-7000-8000-00000000000a', nickname: '阿岚', avatarUrl: null }
-const LISTING_ID = '01930000-0000-7000-8000-000000000011'
+const AUTHOR = {
+  id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-00000000000a'),
+  nickname: '阿岚',
+  avatarUrl: null,
+}
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-000000000011')
+const REPLY_ID = encodePublicId(PUBLIC_ID_PREFIX.comment, '01930000-0000-7000-8000-000000000022')
 
 function comment(overrides: Record<string, unknown> = {}) {
   return {
-    id: '01930000-0000-7000-8000-000000000021',
+    id: encodePublicId(PUBLIC_ID_PREFIX.comment, '01930000-0000-7000-8000-000000000021'),
     listingId: LISTING_ID,
     author: AUTHOR,
     content: '还在吗？',
@@ -68,7 +74,7 @@ describe('CommentListQuerySchema', () => {
 describe('CommentDtoSchema', () => {
   test('accepts a top-level comment with one level of replies', () => {
     const reply = comment({
-      id: '01930000-0000-7000-8000-000000000022',
+      id: REPLY_ID,
       content: '还在的',
       isSeller: true,
     })
@@ -91,7 +97,7 @@ describe('CommentDtoSchema', () => {
 // 契约只允许一层回复；这是防「服务端漂移出二级回复」的回归用例（评审阻断项 1）。
 describe('CommentReplySchema — 回复的 replies 必须为空', () => {
   test('accepts a reply with an empty replies array', () => {
-    const reply = comment({ id: '01930000-0000-7000-8000-000000000022' })
+    const reply = comment({ id: REPLY_ID })
     expect(CommentReplySchema.safeParse(reply).success).toBe(true)
   })
 

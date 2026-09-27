@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   AdminAuditLogEntrySchema,
+  AdminAuditLogsQuerySchema,
   AdminListingDetailSchema,
   AdminMeResponseSchema,
   AdminOverviewSchema,
+  AdminUserDetailSchema,
   AdminUserSummaryPageSchema,
   maskStudentNo,
   UserRoleSchema,
@@ -45,7 +48,7 @@ describe('AdminMeResponseSchema', () => {
   test('parses an admin me response with capabilities', () => {
     const body = {
       admin: {
-        id: '01930000-0000-7000-8000-0000000000a1',
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
         nickname: '阿岚',
         avatarUrl: null,
         authStatus: 'VERIFIED',
@@ -83,7 +86,7 @@ describe('AdminUserSummaryPageSchema', () => {
     const body = {
       items: [
         {
-          id: '01930000-0000-7000-8000-0000000000a1',
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
           studentNoMasked: '2021****0001',
           nickname: '阿岚',
           authStatus: 'VERIFIED',
@@ -108,6 +111,10 @@ describe('AdminOverviewSchema', () => {
       newUsersLast24h: 3,
       activeListings: 80,
       completedTransactions: 40,
+      pendingReviewRecords: 2,
+      pendingReports: 1,
+      reportsLast7d: 3,
+      activeRestrictions: 1,
     }
     expect(AdminOverviewSchema.parse(body).activeListings).toBe(80)
   })
@@ -121,11 +128,14 @@ describe('AdminOverviewSchema', () => {
 describe('AdminAuditLogEntrySchema', () => {
   test('parses an audit entry with actor, before/after snapshots and request id', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
-      actor: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, '01930000-0000-7000-8000-0000000000f1'),
+      actor: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       action: 'ADMIN_PROMOTED',
       targetType: 'USER',
-      targetId: '01930000-0000-7000-8000-0000000000a1',
+      targetId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
       before: { role: 'USER' },
       after: { role: 'ADMIN' },
       reason: '初始化管理后台',
@@ -139,11 +149,11 @@ describe('AdminAuditLogEntrySchema', () => {
 
   test('parses an audit entry with null actor (system-initiated)', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, '01930000-0000-7000-8000-0000000000f1'),
       actor: null,
       action: 'ADMIN_PROMOTED',
       targetType: 'USER',
-      targetId: '01930000-0000-7000-8000-0000000000a1',
+      targetId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
       before: null,
       after: { role: 'ADMIN' },
       reason: '初始化',
@@ -153,13 +163,45 @@ describe('AdminAuditLogEntrySchema', () => {
     expect(AdminAuditLogEntrySchema.parse(body).actor).toBeNull()
   })
 
+  test('rejects a target ID whose TypeID prefix does not match targetType', () => {
+    const userId = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1')
+    const mismatched = {
+      id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, '01930000-0000-7000-8000-0000000000f1'),
+      actor: null,
+      action: 'REPORT_DECISION',
+      targetType: 'REPORT',
+      targetId: userId,
+      before: null,
+      after: null,
+      reason: null,
+      requestId: null,
+      createdAt: '2026-09-12T03:40:10.000Z',
+    }
+    expect(AdminAuditLogEntrySchema.safeParse(mismatched).success).toBe(false)
+    expect(
+      AdminAuditLogsQuerySchema.safeParse({ targetType: 'REPORT', targetId: userId }).success,
+    ).toBe(false)
+    expect(AdminAuditLogsQuerySchema.safeParse({ targetId: userId }).success).toBe(true)
+    expect(
+      AdminUserDetailSchema.shape.recentAuditLogs.element.safeParse({
+        id: mismatched.id,
+        action: mismatched.action,
+        targetType: mismatched.targetType,
+        targetId: mismatched.targetId,
+        reason: null,
+        createdAt: mismatched.createdAt,
+      }).success,
+    ).toBe(false)
+    expect(AdminAuditLogEntrySchema.safeParse({ ...mismatched, targetId: null }).success).toBe(true)
+  })
+
   test('rejects an unknown audit action', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.auditLog, '01930000-0000-7000-8000-0000000000f1'),
       actor: null,
       action: 'DROP_ALL',
       targetType: 'USER',
-      targetId: '01930000-0000-7000-8000-0000000000a1',
+      targetId: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
       before: null,
       after: null,
       reason: null,
@@ -173,20 +215,25 @@ describe('AdminAuditLogEntrySchema', () => {
 describe('AdminListingDetailSchema', () => {
   test('parses a listing detail with images and recent audit logs', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000a2'),
       title: '罗技 K380 机械键盘',
       description: '自用一年。',
       priceCents: 16000,
       category: 'DIGITAL',
       condition: 'GOOD',
       status: 'ACTIVE',
+      moderationStatus: 'APPROVED',
+      governanceDelistedAt: null,
       urgent: false,
       negotiable: true,
       free: false,
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: '2026-09-12T03:40:10.000Z',
       images: [{ url: 'http://localhost:9000/fish/listings/a/0.jpg', sortOrder: 0 }],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      seller: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       recentAuditLogs: [],
     }
     const parsed = AdminListingDetailSchema.parse(body)
@@ -196,7 +243,7 @@ describe('AdminListingDetailSchema', () => {
 
   test('requires updatedAt, since listings.updated_at is NOT NULL', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000a2'),
       title: '罗技 K380 机械键盘',
       description: '自用一年。',
       priceCents: 16000,
@@ -209,7 +256,10 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: null,
       images: [],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      seller: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       recentAuditLogs: [],
     }
     expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)
@@ -217,7 +267,7 @@ describe('AdminListingDetailSchema', () => {
 
   test('rejects a category outside the listings enum', () => {
     const body = {
-      id: '0d9c6f2a-1f3e-4a5b-8c7d-6e5f4a3b2c1d',
+      id: encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000a2'),
       title: '罗技 K380 机械键盘',
       description: '自用一年。',
       priceCents: 16000,
@@ -230,7 +280,10 @@ describe('AdminListingDetailSchema', () => {
       createdAt: '2026-09-12T03:40:10.000Z',
       updatedAt: '2026-09-12T03:40:10.000Z',
       images: [],
-      seller: { id: '01930000-0000-7000-8000-0000000000a1', nickname: '阿岚' },
+      seller: {
+        id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1'),
+        nickname: '阿岚',
+      },
       recentAuditLogs: [],
     }
     expect(AdminListingDetailSchema.safeParse(body).success).toBe(false)

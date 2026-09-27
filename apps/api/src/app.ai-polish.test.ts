@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
 import { aiPolishRequests } from '@fish/db/schema/ai-polish-requests'
 import { loadServerEnv } from '@fish/shared/env'
+import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createAiPolishStub } from '../scripts/ai-polish-stub'
@@ -92,7 +93,7 @@ async function registerUser(): Promise<{ id: string; cookie: string }> {
     .find((value) => value.startsWith('fish_session='))
     ?.split(';')[0]
   if (!cookie) throw new Error('注册未下发 fish_session cookie')
-  return { id: body.user.id, cookie }
+  return { id: decodePublicId(PUBLIC_ID_PREFIX.user, body.user.id), cookie }
 }
 
 const BODY = {

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { MediaMessageInput } from '@fish/contracts/chat/schema'
 import { createDb } from '@fish/db/client'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import {
@@ -82,9 +83,10 @@ beforeAll(async () => {
       VALUES (${uid}, ${`media${process.pid}_${i}`}, 'test-hash', '媒体测试')
     `)
   }
+  const listingNo = await reserveTestListingNo(db, listingA)
   await db.execute(sql`
-    INSERT INTO listings (id, seller_id, title, description, price_cents, category, condition, status)
-    VALUES (${listingA}, ${seller}, 'K380', '测试商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
+    INSERT INTO listings (id, listing_no, seller_id, title, description, price_cents, category, condition, status)
+    VALUES (${listingA}, ${listingNo}, ${seller}, 'K380', '测试商品', 16000, 'DIGITAL', 'GOOD', 'ACTIVE')
   `)
   await db.execute(sql`
     INSERT INTO conversations (id, listing_id, buyer_id, seller_id)
@@ -99,6 +101,23 @@ afterAll(async () => {
 })
 
 describe('media message store (integration)', () => {
+  test('真实重键映射只返回指定会话与参与者的历史对象前缀', async () => {
+    const oldConversation = crypto.randomUUID()
+    const oldBuyer = crypto.randomUUID()
+    await db.execute(sql`INSERT INTO id_rekeys (resource_table, old_id, new_id)
+      VALUES ('conversations', ${oldConversation}::uuid, ${conversationA}::uuid),
+             ('users', ${oldBuyer}::uuid, ${buyer}::uuid)`)
+    try {
+      expect(await mediaStore.legacyIds('conversations', conversationA)).toEqual([oldConversation])
+      expect(await mediaStore.legacyIds('users', buyer)).toEqual([oldBuyer])
+      expect(await mediaStore.legacyIds('users', seller)).toEqual([])
+    } finally {
+      await db.execute(
+        sql`DELETE FROM id_rekeys WHERE old_id IN (${oldConversation}::uuid, ${oldBuyer}::uuid)`,
+      )
+    }
+  })
+
   test('create 落一条 MEDIA 消息 + message_media 行并 bump last_message_at', async () => {
     const image = imageFor('base')
     const created = await mediaStore.create(conversationA, buyer, image)

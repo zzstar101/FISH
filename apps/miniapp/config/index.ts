@@ -3,7 +3,10 @@ import { dirname, resolve } from 'node:path'
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
 
 const contractsRoot = resolve(__dirname, '../../../packages/contracts')
+const sharedRoot = resolve(__dirname, '../../../packages/shared')
 const contractsRequire = createRequire(resolve(contractsRoot, 'package.json'))
+const sharedRequire = createRequire(resolve(sharedRoot, 'package.json'))
+const typeidRequire = createRequire(sharedRequire.resolve('typeid-js'))
 const miniappRequire = createRequire(resolve(__dirname, '../package.json'))
 const runtimeRequire = createRequire(miniappRequire.resolve('@tarojs/runtime'))
 
@@ -90,13 +93,17 @@ export default defineConfig<'webpack5'>(async (merge) => {
       // webpack 默认不编译 node_modules 下的文件，一旦有代码「值导入」契约（纯类型引用会在 babel
       // 阶段被抹掉，不受影响），TS 语法就会被 webpack 的 JS 解析器拒绝，报：
       //   ModuleParseError: Module parse failed: Unexpected token ... export type HealthResponse = ...
-      // 所以这里把 contracts 的源码目录加进 babel-loader 的 include。
+      // 所以这里把 contracts 与 mock ID 映射依赖的 shared 源码目录加进 babel-loader 的 include。
       //
       // 注意：@tarojs/service 只会把白名单字段与 `mini` / 平台（`weapp`）块合并进 runner 配置，
       // `compile` 写在顶层会被静默丢弃（runner 收到的 config.compile 为空），必须放在 mini 这一层。
       compile: {
         include: [
           resolve(contractsRoot, 'src'),
+          resolve(sharedRoot, 'src'),
+          dirname(sharedRequire.resolve('typeid-js')),
+          // TypeID 的 uuid 依赖发布了未转译的默认参数，必须进入小程序 ES5 编译链。
+          resolve(dirname(typeidRequire.resolve('uuid')), '..'),
           // Zod 的发布产物含 class/const，Taro 默认只转译源码及自身依赖。
           dirname(contractsRequire.resolve('zod/package.json')),
           // tslib 的 ESM 默认导出含属性简写，开发构建也必须转译。

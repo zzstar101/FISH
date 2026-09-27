@@ -14,17 +14,19 @@
  *   一次性消费 + 交易进终态同事务销毁兜底，不靠 URL 保密。
  */
 
+import { TransactionIdSchema } from '../system/public-id'
+
 const PAYLOAD_PREFIX = 'fish://meetup/redeem'
 
-/** transactionId 必须是 uuid 形状（畸形 id 不应进入 redeem 路由的 :id 段）。 */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** 扫码 URL 只包含规范 txn_ ID，不暴露内部 UUID。 */
+const validTransactionId = (value: string) => TransactionIdSchema.safeParse(value).success
 
 /** token 字符集 = base64url（`-`/`_`/字母数字），与签发侧生成逻辑对齐。 */
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,128}$/
 
 export function buildMeetupQrPayload(transactionId: string, token: string): string {
-  if (!UUID_RE.test(transactionId)) {
-    throw new Error(`buildMeetupQrPayload: transactionId 不是 uuid：${transactionId}`)
+  if (!validTransactionId(transactionId)) {
+    throw new Error(`buildMeetupQrPayload: transactionId 不是规范 txn_ ID：${transactionId}`)
   }
   if (!TOKEN_RE.test(token)) {
     throw new Error('buildMeetupQrPayload: token 含非法字符（仅允许 base64url）')
@@ -42,6 +44,6 @@ export function parseMeetupQrPayload(payload: string): MeetupQrPayload | null {
   if (url.protocol !== 'fish:' || url.host !== 'meetup' || url.pathname !== '/redeem') return null
   const transactionId = url.searchParams.get('tx') ?? ''
   const token = url.searchParams.get('t') ?? ''
-  if (!UUID_RE.test(transactionId) || !TOKEN_RE.test(token)) return null
+  if (!validTransactionId(transactionId) || !TOKEN_RE.test(token)) return null
   return { transactionId, token }
 }

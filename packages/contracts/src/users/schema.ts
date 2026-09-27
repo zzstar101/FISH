@@ -30,13 +30,14 @@ import {
   ListingFeedResponseSchema,
 } from '@fish/contracts/listings/schema'
 import { z } from 'zod'
+import { UserIdSchema } from '../system/public-id'
 
 /**
  * 用户 id。路由层的路径参数校验也用它 —— 非法 uuid 在被绑到 `users.id`（uuid 列）之前
  * 就要挡住，否则驱动会抛 `invalid input syntax for type uuid` 变成 500，
  * 而本域的契约是「非法 uuid 与不存在都是 404」（与 `listings` 的 `ListingIdSchema` 同款用途）。
  */
-export const PublicUserIdSchema = z.uuid()
+export const PublicUserIdSchema = UserIdSchema
 
 export type PublicUserId = z.infer<typeof PublicUserIdSchema>
 

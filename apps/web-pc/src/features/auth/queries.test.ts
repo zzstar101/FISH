@@ -10,7 +10,7 @@ import { loadMe, meQueryOptions } from './queries'
 
 const originalFetch = globalThis.fetch
 const oldUser: Me = {
-  id: '01930000-0000-7000-8000-00000000000a',
+  id: 'usr_01jc000000e00800000000000a',
   nickname: '旧用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',
@@ -20,7 +20,7 @@ const oldUser: Me = {
 }
 const newUser: Me = {
   ...oldUser,
-  id: '01930000-0000-7000-8000-00000000000b',
+  id: 'usr_01jc000000e00800000000000b',
   nickname: '新用户',
 }
 

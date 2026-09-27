@@ -1,3 +1,4 @@
+import { conversationCreateInputSchema } from '@fish/contracts/chat/schema'
 import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -68,6 +69,7 @@ export function useToggleFavorite(id: string) {
 
 export function useStartConversation() {
   return useMutation({
-    mutationFn: (listingId: string) => createConversation({ listingId }),
+    mutationFn: (listingId: string) =>
+      createConversation(conversationCreateInputSchema.parse({ listingId })),
   })
 }

@@ -8,8 +8,10 @@ import {
   PublicUserProfileSchema,
   type UserErrorCode,
 } from '@fish/contracts/users/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { toListingCard } from '../listings/card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from '../listings/cursor'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
 import type {
   PublicListingCursor,
@@ -78,11 +80,11 @@ function toPublicProfile(
   now: Date,
 ): PublicUserProfile {
   return PublicUserProfileSchema.parse({
-    id: row.id,
+    id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
     nickname: row.nickname,
     // `users.avatar_url` 是无约束 text，值域外的历史脏值降级为 null，
     // 不让一个人的脏头像把整页打成 500（与 comments 的 `toAuthor` 同一取舍）。
-    avatarUrl: PublicUserProfileSchema.shape.avatarUrl.safeParse(row.avatarUrl).data ?? null,
+    avatarUrl: publicAvatarUrl(row.avatarUrl),
     authStatus: row.authStatus,
     joinedDays: joinedDaysOf(row.createdAt, now),
     activeCount: stats.activeListings,

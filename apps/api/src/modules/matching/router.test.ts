@@ -4,6 +4,7 @@ import type {
   WishMatchListResponse,
 } from '@fish/contracts/matching/schema'
 import { errorBody } from '@fish/contracts/system/error'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
@@ -11,14 +12,16 @@ import { createMatchingRouter } from './router'
 import { type MatchingService, MatchingServiceError } from './service'
 
 const USER_ID = '01930000-0000-7000-8000-00000000000a'
-const WISH_ID = '01930000-0000-7000-8000-000000000021'
-const LISTING_ID = '01930000-0000-7000-8000-000000000011'
+const RAW_WISH_ID = '01930000-0000-7000-8000-000000000021'
+const WISH_ID = encodePublicId(PUBLIC_ID_PREFIX.wish, RAW_WISH_ID)
+const RAW_LISTING_ID = '01930000-0000-7000-8000-000000000011'
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, RAW_LISTING_ID)
 
 const wishResponse: WishMatchListResponse = {
   total: 1,
   items: [
     {
-      id: '01930000-0000-7000-8000-000000000031',
+      id: encodePublicId(PUBLIC_ID_PREFIX.match, '01930000-0000-7000-8000-000000000031'),
       score: 92,
       createdAt: '2026-09-12T03:40:10.000Z',
       listing: {
@@ -43,7 +46,7 @@ const listingResponse: ListingMatchListResponse = {
   total: 1,
   items: [
     {
-      id: '01930000-0000-7000-8000-000000000031',
+      id: encodePublicId(PUBLIC_ID_PREFIX.match, '01930000-0000-7000-8000-000000000031'),
       score: 92,
       createdAt: '2026-09-12T03:40:10.000Z',
       wish: {
@@ -109,7 +112,7 @@ describe('GET /matches', () => {
 
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(wishResponse)
-    expect(calls).toEqual([{ userId: USER_ID, wishId: WISH_ID, limit: 10 }])
+    expect(calls).toEqual([{ userId: USER_ID, wishId: RAW_WISH_ID, limit: 10 }])
   })
 
   test('按 listingId 返回商品侧的匹配，并透传 limit', async () => {
@@ -125,7 +128,7 @@ describe('GET /matches', () => {
 
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(listingResponse)
-    expect(calls).toEqual([{ userId: USER_ID, listingId: LISTING_ID, limit: 3 }])
+    expect(calls).toEqual([{ userId: USER_ID, listingId: RAW_LISTING_ID, limit: 3 }])
   })
 
   // 两个过滤参数恰好一个（契约 §2）：两个都给、都不给、以及越界的 limit 都是参数错误。

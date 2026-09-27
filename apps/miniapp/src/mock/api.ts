@@ -30,7 +30,7 @@ import {
   watcherCount,
   watcherStats,
 } from './account'
-import { getListing, LISTING_BY_ID, LISTINGS, similarListings } from './catalog'
+import { getListing, LISTINGS, similarListings } from './catalog'
 import {
   CHAT_SUMMARY,
   CONVERSATIONS,
@@ -48,6 +48,7 @@ import {
   SEARCH_FILTERS,
   SEARCH_PLACEHOLDER,
 } from './discover'
+import { mockPublicId } from './public-id'
 import type {
   ConversationRole,
   HotSearchItem,
@@ -96,6 +97,7 @@ export type {
   MyListingStatusKey,
   SearchFilter,
 }
+export { mockPublicId }
 
 /** 模拟网络往返，让加载态在演示时真实可见 */
 const LATENCY = 120
@@ -258,7 +260,7 @@ export type ListingDetailView = {
 export async function fetchListingDetail(id: string): Promise<ListingDetailView | null> {
   const listing = getListing(id)
   if (!listing) return delay(null)
-  const comments = commentsOf(id)
+  const comments = commentsOf(listing.id)
   return delay({
     listing,
     seller: getUser(listing.sellerId),
@@ -268,7 +270,7 @@ export async function fetchListingDetail(id: string): Promise<ListingDetailView 
 }
 
 export function findListing(id: string): MockListing | undefined {
-  return LISTING_BY_ID[id]
+  return getListing(id)
 }
 
 /* ------------------------------------------------------------------ 搜索 */
@@ -399,11 +401,12 @@ function decorateNotification(
         ? `${listing.title} · ¥${formatAmount(listing.priceCents)}`
         : '这条匹配对应的商品已经被下架了',
       tone: listing ? 'mint' : 'warn',
-      target: listing
-        ? { kind: 'listing', listingId: listing.id }
-        : wishId
-          ? { kind: 'wish', wishId }
-          : null,
+      target:
+        listing && listingId
+          ? { kind: 'listing', listingId }
+          : wishId
+            ? { kind: 'wish', wishId }
+            : null,
     }
   }
   // 契约 P0 只有 MATCH；#14 扩 type 时在这里加分支，页面不用动。
@@ -496,7 +499,9 @@ export type OrderView = {
  */
 export function openConversation(listingId: string, counterpartId: string): string | null {
   const hit = conversations().find(
-    (item) => item.listing.id === listingId && item.counterpart.id === counterpartId,
+    (item) =>
+      item.listing.id === mockPublicId('lst', listingId) &&
+      item.counterpart.id === mockPublicId('usr', counterpartId),
   )
   return hit?.id ?? null
 }

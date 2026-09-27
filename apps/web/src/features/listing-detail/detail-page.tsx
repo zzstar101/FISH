@@ -7,7 +7,7 @@ import { NavBar } from '@fish/ui/nav-bar'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Thumb } from '@fish/ui/thumb'
 import { UserAvatar } from '@fish/ui/user-avatar'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronDown, ChevronLeft, Clock, Heart, MessageCircle, Share2 } from 'lucide-react'
 import { useState } from 'react'
 import { formatRelativeTime, formatRelativeTimeAt, formatYuan } from '../../lib/format'
@@ -157,11 +157,23 @@ export function DetailPage({ listingId }: { listingId: string }) {
           <AttrPair label="成色" value={conditionLabel(item.condition)} />
           <AttrPair label="分类" value={categoryLabel(item.category)} />
         </div>
+        {!item.isOwner ? (
+          <Link
+            className="mt-4 inline-block text-ink-3 text-xs underline-offset-4 hover:text-danger hover:underline"
+            params={{ targetType: 'LISTING', targetId: item.id }}
+            to="/report/$targetType/$targetId"
+          >
+            举报商品
+          </Link>
+        ) : null}
       </section>
 
       <section className="mt-2 flex items-center gap-3 bg-surface px-4 py-3">
-        {/* 卖家卡不做跳转：真实契约没有公开用户主页端点（P1），跳 fixture 页只会看到空态。 */}
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+        <Link
+          className="flex min-w-0 flex-1 items-center gap-3"
+          params={{ userId: item.seller.id }}
+          to="/user/$userId"
+        >
           <UserAvatar
             avatarUrl={item.seller.avatarUrl}
             emoji={item.seller.nickname.slice(0, 1)}
@@ -174,7 +186,7 @@ export function DetailPage({ listingId }: { listingId: string }) {
               {item.seller.authStatus === 'VERIFIED' ? <VerifiedText /> : null}
             </p>
           </div>
-        </div>
+        </Link>
         <Button
           className="shrink-0"
           onClick={() => follow.mutate()}

@@ -1,7 +1,6 @@
 import {
   ALLOWED_IMAGE_MIME,
   type ListingErrorCode,
-  listingObjectKeyPrefix,
   MAX_IMAGE_BYTES,
   type UploadConfirmRequest,
   type UploadConfirmResponse,
@@ -10,7 +9,8 @@ import {
 } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
-import { isSafeObjectKey, type MediaStorage } from './storage'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { isPublicListingKey, isSafeObjectKey, type MediaStorage } from './storage'
 
 export class UploadServiceError extends Error {
   /**
@@ -37,7 +37,11 @@ export interface UploadService {
   confirm(userId: string, input: UploadConfirmRequest): Promise<UploadConfirmResponse>
 }
 
-/** 契约 §2.7：`listings/{userId}/{uuid}.{ext}`；扩展名由 mime 推导，不接受客户端指定。 */
+/** 新对象键只使用规范 TypeID；旧 UUID 对象键由 listing 读取链路兼容。 */
+const publicListingPrefix = (userId: string) =>
+  `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+
+/** 扩展名由 mime 推导，不接受客户端指定。 */
 const EXTENSION_BY_MIME: Record<(typeof ALLOWED_IMAGE_MIME)[number], string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
@@ -51,7 +55,7 @@ export function createUploadService(deps: { storage: MediaStorage }): UploadServ
     async presign(userId, input) {
       // 对象键由服务端生成，且必须带 userId：create 时只靠这个前缀校验归属，
       // 不需要新增"上传登记表"（契约 §2.3）。
-      const objectKey = `${listingObjectKeyPrefix(userId)}${newId()}.${EXTENSION_BY_MIME[input.contentType]}`
+      const objectKey = `${publicListingPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${EXTENSION_BY_MIME[input.contentType]}`
       const signed = storage.presignPut({ key: objectKey, contentType: input.contentType })
 
       return {
@@ -69,7 +73,8 @@ export function createUploadService(deps: { storage: MediaStorage }): UploadServ
       // 比"对象不存在"更准确的错误码。
       if (
         !isSafeObjectKey(input.objectKey) ||
-        !input.objectKey.startsWith(listingObjectKeyPrefix(userId))
+        !isPublicListingKey(input.objectKey) ||
+        !input.objectKey.startsWith(publicListingPrefix(userId))
       ) {
         throw new UploadServiceError(
           422,
