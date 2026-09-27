@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { AuthStatus } from '../src/features/auth/store'
 import {
   type ActionTask,
   beginActionTask,
@@ -493,15 +494,17 @@ describe('详情页静默刷新的留言读取成败语义（#170 复查 N6）',
 })
 
 /**
- * 底栏动作的最小模型：**两把**在飞锁（各持一个令牌或 `null`）+ 当页的账号与代次。
+ * 底栏动作的最小模型：**两把**在飞锁（各持一个令牌或 `null`）+ 当页的账号、代次与登录态。
  *
  * 换号清场（对应 `index.tsx` 的 `ownerChanged` 分支）在这个模型里就是一次
- * `switchOwner`：代次前进 + 两把锁都作废。
+ * `switchActionOwner`：代次前进 + 两把锁都作废。
  */
 function actionPage() {
   return {
     ownerId: null as string | null,
     epoch: 0,
+    /** 当页的登录态：`unknown` 才会吃冷启动豁免 */
+    authStatus: 'unknown' as AuthStatus,
     /** 「聊一聊」的在飞锁：持有它的是某一次点击的令牌（`null` = 没有在途请求） */
     chatInFlight: null as number | null,
     /** 「立即购买」的在飞锁，同形 */
@@ -513,7 +516,7 @@ function actionPage() {
 
 type ActionPage = ReturnType<typeof actionPage>
 
-/** 渲染期换号清场：代次前进、两把在飞锁一并作废（对应 `index.tsx` 的清场块） */
+/** 渲染期换号清场：代次前进、两把在飞锁一并作废（对应 `index.tsx` 的 `isOwnerSwitch` 分支） */
 function switchActionOwner(p: ActionPage, next: string | null): void {
   p.ownerId = next
   p.epoch += 1
@@ -521,10 +524,21 @@ function switchActionOwner(p: ActionPage, next: string | null): void {
   p.buyInFlight = null
 }
 
+/**
+ * 冷启动解析身份：`unknown`（匿名、身份未解析）→ `authed` 的 A。
+ *
+ * **与换号不同**：代次前进，但在飞锁**不清**（同一个人，cookie 本来就取自本地存储）。
+ */
+function resolveIdentity(p: ActionPage, userId: string): void {
+  p.authStatus = 'authed'
+  p.ownerId = userId
+  p.epoch += 1
+}
+
 /** 一次点击：铸令牌并占锁（对应 `index.tsx` 里 `beginActionTask` + 置在飞 ref） */
 function tap(p: ActionPage, which: 'chat' | 'buy'): ActionTask {
   p.tokenSeq += 1
-  const task = beginActionTask(p.epoch, p.ownerId, p.tokenSeq)
+  const task = beginActionTask(p.epoch, p.ownerId, p.tokenSeq, p.authStatus)
   if (which === 'chat') p.chatInFlight = task.token
   else p.buyInFlight = task.token
   return task
@@ -533,10 +547,18 @@ function tap(p: ActionPage, which: 'chat' | 'buy'): ActionTask {
 /** 令牌此刻是否还有效（`index.tsx` 里 `isTaskLive()` 读的就是这些量） */
 function taskLive(p: ActionPage, task: ActionTask, which: 'chat' | 'buy'): boolean {
   const inFlight = which === 'chat' ? p.chatInFlight : p.buyInFlight
-  return (
-    isCurrentActionTask(task, { ownerId: p.ownerId, epoch: p.epoch, token: inFlight }) ||
-    isColdStartIdentityResolution(task, p.epoch, p.ownerId)
-  )
+  const current = { ownerId: p.ownerId, epoch: p.epoch, token: inFlight }
+  return isCurrentActionTask(task, current) || isColdStartIdentityResolution(task, current)
+}
+
+/** 直接铸一个动作任务（不走点击模型）：给「不依赖当页状态」的纯判据用例用 */
+function beginTask4(
+  ownerId: string | null,
+  authStatus: AuthStatus,
+  epoch: number,
+  token: number,
+): ActionTask {
+  return beginActionTask(epoch, ownerId, token, authStatus)
 }
 
 /** 收尾：只有持锁的那次点击能释放锁（对应 `.finally(release)`） */
@@ -615,53 +637,82 @@ describe('详情页底栏动作的账号作用域（#236 复查 P2）', () => {
     expect(p.chatInFlight).toBe(bTask.token)
   })
 
-  test('冷启动解析身份（null → id）不算换号：匿名期点的「聊一聊」照常导航', () => {
+  test('冷启动解析身份（unknown → 已登录）不算换号：匿名期点的「聊一聊」照常导航', () => {
     const p = actionPage()
     // 公开页：登录态还没解析出来（store 是 `unknown`）时底栏就点得动
     const task = tap(p, 'chat')
 
-    // `GET /me` 回来，身份解析成 A —— 只推进一次代次，是同一个账号在发
-    p.ownerId = 'user-a'
-    p.epoch += 1
-    expect(isColdStartIdentityResolution(task, p.epoch, p.ownerId)).toBe(true)
+    // `GET /me` 回来，身份解析成 A —— 代次前进一次，但在飞锁不清（同一个人）
+    resolveIdentity(p, 'user-a')
     expect(taskLive(p, task, 'chat')).toBe(true)
+    // 收尾也能正常释放自己那把锁
+    release(p, task, 'chat')
+    expect(p.chatInFlight).toBeNull()
   })
 
   test('冷启动豁免不能放大到真换号：A → B、退出后登录、A → B → A 一律判旧', () => {
+    const current = (p: ActionPage, task: ActionTask) => ({
+      ownerId: p.ownerId,
+      epoch: p.epoch,
+      token: p.chatInFlight ?? task.token,
+    })
+
+    // A → B：代次只前进一次，但账号从「有」变成「另一个」，不是身份解析
     const p = actionPage()
     p.ownerId = 'user-a'
+    p.authStatus = 'authed'
     const task = tap(p, 'chat')
-
-    // A → B：只前进一次代次，但账号从「有」变成「另一个」，不是身份解析
     p.ownerId = 'user-b'
     p.epoch += 1
-    expect(isColdStartIdentityResolution(task, p.epoch, p.ownerId)).toBe(false)
+    expect(isColdStartIdentityResolution(task, current(p, task))).toBe(false)
 
     // 退出后重新登录成 B：两次代次前进（退出一次、登录一次）
     const p2 = actionPage()
     p2.ownerId = 'user-a'
+    p2.authStatus = 'authed'
     const task2 = tap(p2, 'chat')
     switchActionOwner(p2, null)
-    switchActionOwner(p2, 'user-b')
-    expect(isColdStartIdentityResolution(task2, p2.epoch, p2.ownerId)).toBe(false)
+    resolveIdentity(p2, 'user-b')
+    expect(isColdStartIdentityResolution(task2, current(p2, task2))).toBe(false)
 
     // A → B → A：也是两次，账号名绕回来也不算
     const p3 = actionPage()
     p3.ownerId = 'user-a'
+    p3.authStatus = 'authed'
     const task3 = tap(p3, 'chat')
     switchActionOwner(p3, 'user-b')
     switchActionOwner(p3, 'user-a')
-    expect(isColdStartIdentityResolution(task3, p3.epoch, p3.ownerId)).toBe(false)
+    expect(isColdStartIdentityResolution(task3, current(p3, task3))).toBe(false)
   })
 
-  test('冷启动豁免只对「匿名发起」成立：已登录账号的旧任务不能靠它复活', () => {
-    // A 已登录时发起，之后代次只前进一次 —— 那不是身份解析（身份早就是 A 了）
-    expect(
-      isColdStartIdentityResolution({ ownerId: 'user-a', epoch: 0, token: 1 }, 1, 'user-b'),
-    ).toBe(false)
-    expect(
-      isColdStartIdentityResolution({ ownerId: 'user-a', epoch: 0, token: 1 }, 1, 'user-a'),
-    ).toBe(false)
+  test('冷启动豁免只对「发起时确实是 unknown」成立：已登录 / 已确认匿名的旧任务不能靠它复活', () => {
+    const at = (epoch: number, token: number) => ({ ownerId: 'user-a', epoch, token })
+
+    // 已登录（A）时发起，之后代次只前进一次 —— 身份早就解析完了，不是冷启动
+    expect(isColdStartIdentityResolution(beginTask4('user-a', 'authed', 0, 1), at(1, 1))).toBe(
+      false,
+    )
+    // **已确认匿名**（用户真的没登录）时发起，随后登录成 A：不是身份解析，是换了身份
+    expect(isColdStartIdentityResolution(beginTask4(null, 'anonymous', 0, 1), at(1, 1))).toBe(false)
+    // 对照：`unknown` 时发起的同一个任务，同样条件下放行
+    expect(isColdStartIdentityResolution(beginTask4(null, 'unknown', 0, 1), at(1, 1))).toBe(true)
+  })
+
+  test('冷启动豁免要求「仍持有那把锁」：匿名请求在飞时又点了一次，旧响应不再导航', () => {
+    const p = actionPage()
+    const stale = tap(p, 'chat')
+
+    // 身份解析还没落地，用户又点了一次「聊一聊」——令牌前进、锁被新任务接走
+    const fresh = tap(p, 'chat')
+    p.ownerId = 'user-a'
+    p.epoch += 1
+
+    const current = { ownerId: p.ownerId, epoch: p.epoch, token: p.chatInFlight }
+    expect(isColdStartIdentityResolution(stale, current)).toBe(false)
+    expect(taskLive(p, stale, 'chat')).toBe(false)
+    // 新任务照常有效（否则用户这一下就白点了）
+    expect(isColdStartIdentityResolution(fresh, current)).toBe(true)
+    expect(taskLive(p, fresh, 'chat')).toBe(true)
   })
 
   test('购买弹窗的迟到回写：换号 / 退出后不把「待店家确认」写给下一个账号', () => {
@@ -745,9 +796,13 @@ describe('详情页接线（#170 判据 C/D）', () => {
     expect(block).toContain('setReplyTo(cleared.replyTo)')
     expect(block).toContain('setFaved(cleared.faved)')
     expect(block).toContain('epochRef.current += 1')
-    // 在途写入的账整本换新，读取世代只在**真正的换号**时推进（冷启动解析身份不算）
+    // 在途写入的账整本换新，读取世代与两把动作锁只在**真正的换号**时推进 / 作废
+    // （冷启动解析身份不算：那会把首屏 load 判过期，也会让匿名期那次点击永远失效）
     expect(block).toContain('reloadRef.current = createDeferredReload(epochRef.current)')
-    expect(block).toContain('if (isOwnerSwitch(prevUserId)) loadSeqRef.current += 1')
+    expect(block).toContain('if (isOwnerSwitch(prevUserId)) {')
+    expect(block).toContain('loadSeqRef.current += 1')
+    expect(block).toContain('chatInFlightRef.current = null')
+    expect(block).toContain('buyInFlightRef.current = null')
     expect(block).toContain('setComments((prev) => dropPendingComments(prev))')
     // 公开快照不清：清了只会白闪一次骨架屏
     expect(block).not.toContain('setData(')
@@ -999,9 +1054,11 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
   test('冷启动解析身份的豁免接在两个动作的守卫上（不是只写在注释里）', async () => {
     const block = await pageSlice('const isTaskLive = (task: ActionTask', 'const chatWithSeller')
     expect(block).toContain('isCurrentActionTask(task, {')
-    expect(block).toContain(
-      'isColdStartIdentityResolution(task, epochRef.current, ownerRef.current)',
-    )
+    // 豁免必须走完整的 current（含令牌 + 账号 + 代次），不是只传两个标量
+    expect(block).toContain('isColdStartIdentityResolution(task, {')
+    expect(block).toContain('token: inFlight,')
+    // 铸任务时必须把发起那一刻的登录态带上，否则「已确认匿名」也会被当成冷启动
+    expect(await source()).toContain('authStatus,')
     // 两个动作都必须走这条守卫（漏一个就会「点了没反应」）：
     // 「聊一聊」成功 / 失败两条链各一次，「立即购买」确认链一次
     const code = await source()

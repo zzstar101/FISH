@@ -11,6 +11,9 @@
  * 后者仍须在微信开发者工具里按 C/D 的时序实测（`docs/miniapp-dev-workflow.md` §5）。
  */
 
+// 只取类型：本模块是纯判据，`import type` 在编译期擦除，不会把 store 的运行时副作用带进来
+import type { AuthStatus } from '@/features/auth/store'
+
 /** 乐观占位的 id 前缀：只有它能在本地列表里认出「还没被服务端确认」的那几条 */
 export const PENDING_COMMENT_PREFIX = 'local-'
 
@@ -183,22 +186,33 @@ export function shouldSurfaceStaleAuthFailure(
 }
 
 /**
- * 冷启动解析身份（`null → id`）那一次代次前进要不要放过（#236 复查 N1）。
+ * 冷启动解析身份（`unknown → authed`）那一次代次前进要不要放过（#236 复查 N1）。
  *
- * 本页是公开页：登录态还没解析出来时（store 的 `unknown`，`userId = null`）底栏就点得动，
- * 而请求带的 cookie 取自本地存储（`lib/session`），本来就是**同一个账号**在发。判过期
- * 会让用户点了「聊一聊」后页面毫无反应 —— 会话其实已在服务端建好，只是不再导航。
+ * 本页是公开页：登录态还没解析出来时（store 的 `unknown`）底栏就点得动，而请求带的
+ * cookie 取自本地存储（`lib/session`），本来就是**同一个账号**在发 —— 那次响应虽然
+ * 跨过了代次前进，却不该被当成过期：判过期会让用户点了「聊一聊」后页面毫无反应
+ * （会话其实已在服务端建好，只是不再导航）。
  *
- * 判据是代次只前进**一次**：真正的换号（退出后登录、A → B、A → B → A）至少要前进两次，
- * 卸载也不会把匿名变成某个账号 —— 都落不进这里。与读取链的 `isOwnerSwitch`
- * （冷启动解析身份不算换号）是同一类豁免。
+ * 三条约束缺一不可（#284 审查回合 3）：
+ * 1. **发起时确实是 `unknown`**：`userId` 为 null 有两种，已确认的 `anonymous` 不在豁免内
+ *    —— 那种情况下用户是真的没登录，期间的登录是「换了身份」（哪怕换成了自己）。
+ * 2. **代次只前进一次**：真正的换号（退出后登录 / A → B / A → B → A）至少前进两次，
+ *    卸载也不会把匿名变成某个账号 —— 都落不进这里。与读取链的 `isOwnerSwitch` 同源。
+ * 3. **那次动作仍持有它自己那把锁**：否则「匿名请求还在飞 → 用户又点了一次」时，
+ *    旧响应会绕过令牌校验一起导航（压出两个会话页）。换号清场只在**真换号**时清锁，
+ *    就是为了让这条在身份解析路径上成立。
  */
 export function isColdStartIdentityResolution(
-  task: WriteTask,
-  epoch: number,
-  ownerId: string | null,
+  task: ActionTask,
+  current: { ownerId: string | null; epoch: number; token: number | null },
 ): boolean {
-  return task.ownerId === null && ownerId !== null && epoch === task.epoch + 1
+  return (
+    task.authStatus === 'unknown' &&
+    task.ownerId === null &&
+    current.ownerId !== null &&
+    current.epoch === task.epoch + 1 &&
+    current.token === task.token
+  )
 }
 
 /** 一次「聊一聊」或「立即购买」的在飞任务（同 `match` 页 `ChatTask` 的口径）。
@@ -214,11 +228,22 @@ export function isColdStartIdentityResolution(
  *
  * 三者必须全等：A → B → A 之后账号名又等于 A，只比账号名会让旧回调重新「匹配」。
  */
-export type ActionTask = { ownerId: string | null; epoch: number; token: number }
+export type ActionTask = {
+  ownerId: string | null
+  epoch: number
+  token: number
+  /** 发起那一刻的登录态：`unknown`（还没解析出来）才吃冷启动豁免，见上 */
+  authStatus: AuthStatus
+}
 
 /** 铸任务必须在发请求 / 弹窗**之前**：之后再换号 / 卸载，也能凭令牌把整条回调作废。 */
-export function beginActionTask(epoch: number, ownerId: string | null, token: number): ActionTask {
-  return { ownerId, epoch, token }
+export function beginActionTask(
+  epoch: number,
+  ownerId: string | null,
+  token: number,
+  authStatus: AuthStatus,
+): ActionTask {
+  return { ownerId, epoch, token, authStatus }
 }
 
 /** 迟到的回调是否仍是当前账号、当前世代，且那次动作仍持有这把在飞锁。 */

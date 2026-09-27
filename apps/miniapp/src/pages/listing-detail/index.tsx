@@ -312,7 +312,7 @@ export default function ListingDetail() {
    * 本页是**公开页**：不挂 `useAuthGuard`，匿名也能读；账号只用来决定「哪些是账号
    * 私有的东西、换号时该清掉」（#170 判据 C）。
    */
-  const { user } = useAuth()
+  const { user, status: authStatus } = useAuth()
   const userId = user?.id ?? null
   /** 上一个渲染看到的账号：换号要在**渲染期**同步清场，用 effect 会晚一帧画出上个账号的草稿 */
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
@@ -360,11 +360,16 @@ export default function ListingDetail() {
     // 读取链同样是账号作用域：真正的换号要把在途的 load / refresh / 翻页一并作废，
     // 迟到的公开快照不许写进新账号的页面。冷启动解析身份（null → id）不算换号，
     // 那会把首屏 `load` 判过期、页面永远停在骨架屏上
-    if (isOwnerSwitch(prevUserId)) loadSeqRef.current += 1
-    // 两个动作的在飞锁同样作废：A 发起的建会话请求 / 还开着的购买弹窗不属于 B，
-    // 锁也要还给 B —— 不清的话 B 点下去会被 A 的在途动作一直堵着
-    chatInFlightRef.current = null
-    buyInFlightRef.current = null
+    if (isOwnerSwitch(prevUserId)) {
+      loadSeqRef.current += 1
+      // 两个动作的在飞锁同样只在**真换号**时作废：A 发起的建会话请求 / 还开着的购买
+      // 弹窗不属于 B，锁要还给 B —— 不清的话 B 点下去会被 A 的在途动作一直堵着。
+      // 冷启动解析身份是同一个人（cookie 本来就取自本地存储），锁必须留着：
+      // 清掉它 `isColdStartIdentityResolution` 的「仍持有那把锁」就永远不成立，
+      // 那次点击又会被判过期（等于白改）。
+      chatInFlightRef.current = null
+      buyInFlightRef.current = null
+    }
     const cleared = clearedPrivateScope()
     setCommentInput(cleared.commentInput)
     setReplyInput(cleared.replyInput)
@@ -572,14 +577,20 @@ export default function ListingDetail() {
    * 除了「账号 + 代次 + 令牌全等」，还要放过**冷启动解析身份**那一次代次前进：
    * 本页公开、底栏一进来就点得动，而登录态解析（`unknown → authed`）会在点击之后
    * 才落地。请求带的 cookie 本来就取自本地存储、是同一个账号，把这一次判过期等于
-   * 「点了没反应」（会话其实已经建好了）。判据见 `isColdStartIdentityResolution`。
+   * 「点了没反应」（会话其实已经建好了）。判据见 `isColdStartIdentityResolution`
+   * —— 它同时要求「发起时确实是 `unknown`」与「仍持有那把锁」，不是无条件放行。
    */
   const isTaskLive = (task: ActionTask, inFlight: number | null): boolean =>
     isCurrentActionTask(task, {
       ownerId: ownerRef.current,
       epoch: epochRef.current,
       token: inFlight,
-    }) || isColdStartIdentityResolution(task, epochRef.current, ownerRef.current)
+    }) ||
+    isColdStartIdentityResolution(task, {
+      ownerId: ownerRef.current,
+      epoch: epochRef.current,
+      token: inFlight,
+    })
 
   /**
    * 「聊一聊」：与这件商品的卖家建/取会话后跳会话页 —— 与匹配结果页（#67 第二步）
@@ -595,7 +606,12 @@ export default function ListingDetail() {
   const chatWithSeller = () => {
     if (chatInFlightRef.current !== null) return
     actionSeqRef.current += 1
-    const task = beginActionTask(epochRef.current, ownerRef.current, actionSeqRef.current)
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
     chatInFlightRef.current = task.token
     /** 只释放自己的锁：换号后 B 重新发起时，A 的迟到收尾不能删掉 B 的标记 */
     const release = (): void => {
@@ -642,7 +658,12 @@ export default function ListingDetail() {
   const buy = () => {
     if (buyRequested || buyInFlightRef.current !== null) return
     actionSeqRef.current += 1
-    const task = beginActionTask(epochRef.current, ownerRef.current, actionSeqRef.current)
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
     buyInFlightRef.current = task.token
     const release = (): void => {
       if (!shouldReleaseActionTask(task, buyInFlightRef.current)) return
