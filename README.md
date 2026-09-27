@@ -138,6 +138,10 @@ bun run ws:smoke     # WebSocket 连通性，期望 [ws-smoke] ok
 bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/Worker/MinIO）
 ```
 
+`core:smoke` 失败时**默认保留现场**：不 drop 本轮 scratch 库、不删已上传的 MinIO 对象，并在 stderr
+打印轮次 / 步骤名 / 断言标签 / 实得值 / 完整 stack 以及库名与对象 key，便于用 `psql` / MinIO 事后
+复查（按输出里的命令清理）。要旧的「失败也清理」行为，加 `-- --clean`。
+
 ## 演示账号（仅本地）
 
 `bun run db:seed` 会写入三个可登录账号，密码统一 `fish123456`（**仅本地演示，禁止用于生产**）：
@@ -164,7 +168,7 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 | `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |
 | `bun run build` / `bun run build:web-pc` | 全仓构建 / 仅构建 PC Web |
 | `bun run ws:smoke` | WebSocket 连通性冒烟 |
-| `bun run core:smoke` | 核心主链端到端冒烟（`-- --runs=5` 可连跑 5 轮） |
+| `bun run core:smoke` | 核心主链端到端冒烟（`-- --runs=5` 连跑 5 轮；失败默认保留 scratch 库与 MinIO 对象供事后查证，`-- --clean` 改为失败也清理） |
 | `bun run db:up` / `db:down` | 启动 / 停止本地依赖 |
 | `bun run db:generate` / `db:migrate` / `db:studio` | Drizzle 迁移与调试 |
 | `bun run db:seed` | 写入演示数据（**会先清空业务表**，仅允许本地数据库） |

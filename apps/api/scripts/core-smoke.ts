@@ -18,11 +18,16 @@
  * bun run db:up                    # 前置：Postgres + MinIO
  * bun run core:smoke               # 跑 1 轮
  * bun run core:smoke -- --runs=5   # 连跑 5 轮，每轮独立 scratch 库与独立 API/Worker 进程
+ * bun run core:smoke -- --clean    # 失败时也清理现场（默认保留现场，便于事后查证）
  * ```
  *
  * 不需要事先 migrate / seed：脚本自己建空库，并用文档化的 `bun run db:migrate` / `db:seed`
- * 把 schema 与基础数据建出来（因此它顺带验证了“干净环境按文档可启动”）。跑完自动 drop 掉
- * scratch 库，不碰开发库。
+ * 把 schema 与基础数据建出来（因此它顺带验证了“干净环境按文档可启动”）。不碰开发库。
+ *
+ * 清理策略：**成功**时无条件 drop 本轮 scratch 库、删掉本轮上传的 MinIO 对象；**失败**时默认
+ * **保留现场**（库与对象都不动），并在 stderr 打印轮次 / 步骤名 / 断言标签 / 实得值 / 完整
+ * stack，以及 scratch 库名与对象 key，供 `psql` / MinIO 复查。失败现场会累积到下次复查，按输出
+ * 里给出的命令清理；要旧的“失败也清理”行为用 `--clean`。
  *
  * 保真边界：
  * - migration / seed 走文档化 CLI（覆盖 drizzle-kit、`--env-file` 路径与 `seed.ts` 的 `import.meta.main` 守卫）；
@@ -31,7 +36,8 @@
  *   没有被本脚本覆盖；
  * - `claimNext` 与 handler 返回之间的“执行中途被 kill -9”窗口是毫秒级、无可注入点，崩溃态是**构造**
  *   出来的（见“重启恢复 ②”）；
- * - MinIO 不是 scratch 的：脚本结束时删掉本轮上传的对象，否则 `--runs=5` 会在桶里累积垃圾。
+ * - MinIO 不是 scratch 的：脚本成功时删掉本轮上传的对象，否则 `--runs=5` 会在桶里累积垃圾
+ *   （失败时默认保留，见上面的清理策略）。
  */
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
@@ -66,7 +72,13 @@ const JPEG = Buffer.from(
 )
 
 let checks = 0
-let step = ''
+/**
+ * 当前步骤名。初值不能是空串：建库 / 清同名库 / 建 `Db` 句柄这段（`runOnce` 进入 `try` 之前）
+ * 失败时 `assert` 会打出 `✗ [] …`，事后无法定位是哪一步断的。
+ */
+let step = '建库'
+/** 失败报告用的轮次前缀。多轮连跑时不说清是哪一轮，stack 与 scratch 库名就对不上号。 */
+let currentRunLabel = '启动阶段（未进入任何轮次）'
 
 function section(title: string): void {
   console.log(`\n  ── ${title}`)
@@ -135,6 +147,14 @@ function readRuns(argv: string[]): number {
   const runs = Number(arg.slice('--runs='.length))
   if (!Number.isInteger(runs) || runs < 1) throw new Error(`--runs 需要正整数：${arg}`)
   return runs
+}
+
+/**
+ * 失败时是否也清理现场。**默认保留**（不 drop scratch 库、不删已上传对象）——失败时最需要的是
+ * 能用 `psql` / MinIO 复查现场；成功路径无论如何都会清理。`--clean` 显式要求失败时也清掉。
+ */
+function readCleanFlag(argv: string[]): boolean {
+  return argv.includes('--clean')
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +414,9 @@ function scratchUrl(databaseUrl: string, name: string): string {
 async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<void> {
   const dbName = `fish_core_smoke_${process.pid}_${runIndex}`
   const dbUrl = scratchUrl(env.DATABASE_URL, dbName)
+  currentRunLabel = `第 ${runIndex} 轮（${dbName}）`
+  // 每轮从头开始记步骤名：`step` 是模块级变量，不重置的话上一轮的最后一步会盖住本轮的早段失败。
+  step = '建库'
   console.log(`\n[core-smoke] ===== 第 ${runIndex} 轮：${dbName} =====`)
 
   // 上一次被硬杀（Ctrl-C / 超时）留下的同名库会让 `create database` 报 42P04，
@@ -402,7 +425,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
   await admin.$client.unsafe(`create database "${dbName}"`)
   const db = createDb(dbUrl)
   const dbEnv = { ...env, DATABASE_URL: dbUrl }
-  // MinIO 不是 scratch 的：记下本轮上传的对象，结束时删掉（否则 `--runs=5` 会在桶里累积垃圾）。
+  // MinIO 不是 scratch 的：记下本轮上传的对象，成功时删掉（否则 `--runs=5` 会在桶里累积垃圾）；
+  // 失败时默认保留，好让现场可复查。用数组而不是单个变量：上传点以后可能不止一处。
   const s3 = new Bun.S3Client({
     accessKeyId: env.S3_ACCESS_KEY_ID,
     secretAccessKey: env.S3_SECRET_ACCESS_KEY,
@@ -410,7 +434,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     endpoint: env.S3_ENDPOINT,
     region: env.S3_REGION,
   })
-  let uploadedObjectKey: string | null = null
+  const uploadedObjectKeys: string[] = []
   let api: Child | null = null
   let worker: Child | null = null
 
@@ -427,6 +451,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     worker = null
   }
 
+  let failed = false
   try {
     // 0. 干净库：migration + seed，走 README 里那条文档化命令
     step = '干净环境'
@@ -559,10 +584,12 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       putResponse.status >= 200 && putResponse.status < 300,
       `presigned PUT → ${putResponse.status}`,
     )
+    // 对象一落桶就登记（不等到 confirm 成功）：confirm 断言若失败，对象仍在 MinIO 里，
+    // 失败现场块必须能报出这个 key，否则事后无从查证、也无从清理。
+    uploadedObjectKeys.push(objectKey)
 
     const confirmResponse = await postJson(base, '/uploads/confirm', { objectKey }, seller)
     assertEqual(confirmResponse.status, 200, 'POST /uploads/confirm → 200')
-    uploadedObjectKey = objectKey
     const publicUrl = String((await readJson(confirmResponse)).url)
 
     const publicResponse = await fetch(publicUrl)
@@ -1061,14 +1088,38 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       'TRANSACTION_NOT_IN_PENDING',
       '终态后取码错误码是 TRANSACTION_NOT_IN_PENDING',
     )
+  } catch (error) {
+    failed = true
+    throw error
   } finally {
     await stopWorker()
     await stop(api)
     await db.$client.close()
-    if (uploadedObjectKey) {
-      await s3.delete(uploadedObjectKey).catch(() => undefined)
+    if (failed && !cleanOnFailure) {
+      // 默认保留现场：失败时最需要的是能用 psql / MinIO 事后复查。scratch 库名带 pid、对象 key 是
+      // 随机串，不在这里打出来，事后就找不回是哪一份。
+      console.error('\n[core-smoke] 失败现场已保留（默认不清理；`--clean` 表示失败时也清理）：')
+      console.error(`[core-smoke]   scratch 库：${dbName}`)
+      console.error(
+        `[core-smoke]   已上传对象：${uploadedObjectKeys.length === 0 ? '（无）' : uploadedObjectKeys.join(', ')}`,
+      )
+      console.error(
+        `[core-smoke]   复查完清理：psql "$DATABASE_URL" -c 'drop database if exists "${dbName}" with (force)'`,
+      )
+      if (uploadedObjectKeys.length > 0) {
+        const objectPaths = uploadedObjectKeys
+          .map((key) => `/data/${env.S3_BUCKET}/${key}`)
+          .join(' ')
+        console.error(
+          `[core-smoke]   复查完清理对象（本地 docker 开发栈）：docker exec fish-minio-1 rm -rf ${objectPaths}`,
+        )
+      }
+    } else {
+      for (const key of uploadedObjectKeys) {
+        await s3.delete(key).catch(() => undefined)
+      }
+      await admin.$client.unsafe(`drop database if exists "${dbName}" with (force)`)
     }
-    await admin.$client.unsafe(`drop database if exists "${dbName}" with (force)`)
   }
 }
 
@@ -1076,7 +1127,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 // 入口
 // ---------------------------------------------------------------------------
 
-const runs = readRuns(process.argv.slice(2))
+const argv = process.argv.slice(2)
+const runs = readRuns(argv)
+const cleanOnFailure = readCleanFlag(argv)
 const env = requireEnv()
 const admin = createDb(env.DATABASE_URL)
 const startedAt = performance.now()
@@ -1089,7 +1142,10 @@ try {
     `\n[core-smoke] ok — ${runs} 轮全部通过，共 ${checks} 项断言（${Math.round(performance.now() - startedAt)}ms）`,
   )
 } catch (error) {
-  console.error(`\n[core-smoke] 失败：${error instanceof Error ? error.message : String(error)}`)
+  // 轮次 + 步骤名 + stack 三者缺一不可：断言消息里有标签与实得值，但只有 stack 能给出失败位置
+  // （脚本自身、还是它 spawn 的 API / Worker 子进程）。
+  console.error(`\n[core-smoke] 失败：${currentRunLabel}｜步骤：${step}`)
+  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
   process.exitCode = 1
 } finally {
   await admin.$client.close()
