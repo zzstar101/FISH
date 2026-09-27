@@ -49,6 +49,8 @@ export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
       queryClient.setQueryData(AUTH_ME_QUERY_KEY, null)
       return null
     }
+    // 公开详情/留言在匿名态仍挂载；身份未变时不能清掉其查询缓存。
+    if (previous === null) return null
 
     // 当前查询正在执行，不能取消自己；只有同一会话代际的 401 才允许清场。
     await resetPcSessionIfCurrent(queryClient, null, generation, { cancelAuth: false })

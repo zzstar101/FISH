@@ -70,6 +70,30 @@ describe('loadMe', () => {
     ).toEqual({ items: [] })
     expect(queryClient.getQueryData(AUTH_ME_QUERY_KEY)).toBeNull()
   })
+  test('a repeated anonymous /me 401 keeps public pc queries', async () => {
+    globalThis.fetch = mock(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: 'UNAUTHENTICATED', message: '未登录' },
+          }),
+          { status: 401, headers: { 'content-type': 'application/json' } },
+        ),
+    ) as unknown as typeof fetch
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(AUTH_ME_QUERY_KEY, null)
+    queryClient.setQueryData(['pc', 'listings', 'detail', 'public'], { id: 'public' })
+
+    await expect(loadMe(queryClient)).resolves.toBeNull()
+
+    expect(
+      queryClient.getQueryData<{ id: string }>(['pc', 'listings', 'detail', 'public']),
+    ).toEqual({
+      id: 'public',
+    })
+    expect(queryClient.getQueryData(AUTH_ME_QUERY_KEY)).toBeNull()
+  })
+
   test('a successful /me identity switch clears the previous account cache before publishing B', async () => {
     globalThis.fetch = mock(
       async () =>
