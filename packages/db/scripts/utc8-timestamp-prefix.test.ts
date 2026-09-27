@@ -58,7 +58,9 @@ test('#316 第二个模块实例再次 apply 仍只 +8h：补丁不会套在补�
   const epochMs = Date.UTC(2026, 8, 27, 22, 30, 0)
   const second = await loadSecondInstance('second-instance')
   second.applyUtc8TimestampPrefix()
-  // 若补丁包装的是「当前原型上的 toISOString」而不是全局槽位里的真·原生实现，这里会是 +16h。
+  // 这条覆盖「重复 apply 不叠加」：标记守卫会让第二次 apply 直接返回。
+  // 能证伪 fdd0848 旧写法（模块求值捕获 + 按函数引用判幂等）的是下一条 —— 先 restore 清掉标记、
+  // 再由第二实例 apply，stale-native 才会在那里叠成 +16h。
   expect(new Date(epochMs).toISOString()).toBe('2026-09-28T06:30:00.000Z')
 })
 
