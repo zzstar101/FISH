@@ -16,7 +16,11 @@ import { join } from 'node:path'
  * #316 把迁移编号从「按合入顺序分配的 4 位序号」换成「UTC+8 时间戳前缀」，因此本文件相对 #309 的
  * 门禁有两点口径变化：**`idx` 不再要求全局唯一 / 连续**（时间戳方案下 idx 不代表身份，两条并行分支
  * 合入后重复是良性的），改以 **tag 唯一** 作为「编号不撞车」的硬约束；并新增「时间戳前缀必须是合法
- * UTC+8 墙钟时间且与 `when` 对应」与「`when` 沿 journal 顺序严格递增」两条不变式。
+ * UTC+8 墙钟时间且与 `when` 对应」、「`when` 沿 journal 顺序严格递增」、「`when` 是有限数字」三条不变式。
+ *
+ * 还**冻结了遗留序号段**：数字 tag 的数量与末条 tag 必须停在 #316 合入时的 `0000_init` … `0025_shallow_mimic`
+ * （26 条）。文档明令「不要手写 `0026_xxx`」，而只断言 `NNNN === pad4(idx)` 是挡不住的——紧接着手写的
+ * `0026_hand_written` 恰好满足「idx 与位置一致」，所以这里再钉一条「遗留段不得增长」。
  *
  * 失败信息点名冲突双方（重复的 tag 与其条目位置、乱序的两条 tag 与 when、孤儿文件名、断链的
  * snapshot 与期望 id），而不是一句 `expect(...).toBe(true)`。
@@ -33,11 +37,15 @@ const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000
 const WHEN_TOLERANCE_MS = 2000
 const NUMERIC_TAG = /^(\d{4})_/
 const TIMESTAMP_TAG = /^(\d{14})_/
+/** #316 合入时遗留序号段的快照：`0000_init` … `0025_shallow_mimic`，此后只允许时间戳 tag。 */
+const FROZEN_LEGACY_TAG_COUNT = 26
+const FROZEN_LEGACY_LAST_TAG = '0025_shallow_mimic'
 
 type JournalEntry = {
   idx: number
   version: string
-  when: number
+  /** drizzle-kit 一定会写；声明成可选才能让门禁真的验出「缺字段」（见 `whenFieldViolations`）。 */
+  when?: number
   tag: string
   /** drizzle-kit 会写这个字段，但门禁不依赖它。 */
   breakpoints?: boolean
@@ -53,8 +61,20 @@ type MigrationsFixture = {
   snapshots: Snapshot[]
 }
 
+type JournalGateOptions = {
+  /**
+   * 冻结遗留序号段：只在真实目录上启用——内存夹具为了可读性只造 2~3 条缩略遗留段，
+   * 对它们套用真实数量（26 条）会误报。
+   */
+  frozenLegacy?: { count: number; lastTag: string }
+}
+
 function pad4(idx: number): string {
   return String(idx).padStart(4, '0')
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
 }
 
 /** snapshot 的短标签：`0007_snapshot.json` / `20260928063000_snapshot.json` → 前缀数字。 */
@@ -62,9 +82,23 @@ function snapshotLabel(snapshot: Snapshot): string {
   return /^(\d+)_/.exec(snapshot.name)?.[1] ?? snapshot.name
 }
 
-/** epoch 毫秒 → UTC+8 墙钟的 14 位前缀，例 `1790546582603` → `20260928060302`。 */
+/**
+ * epoch 毫秒 → UTC+8 墙钟的 14 位前缀，例 `1790546582603` → `20260928060302`。
+ *
+ * 刻意只用 `getUTC*` 取值、**不走 `toISOString()`**：生成侧 preload（`scripts/utc8-timestamp-prefix.ts`）
+ * 会把 `Date.prototype.toISOString` 全局改写成「按 UTC+8 渲染」，若这里依赖它，同进程跑完那个测试文件后
+ * 期望值会被多叠一次 8 小时（+16h）而误报。
+ */
 function formatUtc8Prefix(when: number): string {
-  return new Date(when + UTC8_OFFSET_MS).toISOString().slice(0, 19).replace(/[-:T]/g, '')
+  const shifted = new Date(when + UTC8_OFFSET_MS)
+  return [
+    String(shifted.getUTCFullYear()),
+    pad2(shifted.getUTCMonth() + 1),
+    pad2(shifted.getUTCDate()),
+    pad2(shifted.getUTCHours()),
+    pad2(shifted.getUTCMinutes()),
+    pad2(shifted.getUTCSeconds()),
+  ].join('')
 }
 
 /** 14 位 UTC+8 墙钟前缀 → epoch 毫秒；不是合法墙钟时间（如 `20261332000000`）时返回 null。 */
@@ -163,13 +197,57 @@ function tagSchemeViolations(entries: JournalEntry[]): string[] {
       )
       return
     }
-    const deltaMs = entry.when - prefixEpochMs
+    // `when` 缺失 / NaN 由 `whenFieldViolations` 单独点名，这里不重复报。
+    const when = entry.when
+    if (typeof when !== 'number' || !Number.isFinite(when)) return
+    const deltaMs = when - prefixEpochMs
     if (Math.abs(deltaMs) > WHEN_TOLERANCE_MS) {
       violations.push(
-        `第 ${position} 条 \`${entry.tag}\` 的时间戳前缀与 when=${entry.when} 不对应：按 UTC+8 应为 \`${formatUtc8Prefix(entry.when)}\`（相差 ${deltaMs}ms，容差 ${WHEN_TOLERANCE_MS}ms）`,
+        `第 ${position} 条 \`${entry.tag}\` 的时间戳前缀与 when=${when} 不对应：按 UTC+8 应为 \`${formatUtc8Prefix(when)}\`（相差 ${deltaMs}ms，容差 ${WHEN_TOLERANCE_MS}ms）`,
       )
     }
   })
+  return violations
+}
+
+/**
+ * `when` 必须是有限数字：drizzle 的 migrator 用 `when > 已应用的 folderMillis` 判断是否应用，
+ * `when` 缺失或为 `NaN` 时比较恒为 false，该迁移会被**静默跳过**（`db:migrate` 照样全绿）。
+ */
+function whenFieldViolations(entries: JournalEntry[]): string[] {
+  const violations: string[] = []
+  entries.forEach((entry, index) => {
+    if (!Number.isFinite(entry.when)) {
+      violations.push(
+        `第 ${index + 1} 条 \`${entry.tag}\` 的 when=${String(entry.when)} 不是有限数字：migrator 以 when 判定「哪些迁移已应用」，缺字段或 NaN 会让该迁移被静默跳过`,
+      )
+    }
+  })
+  return violations
+}
+
+/**
+ * 遗留序号段冻结：数字 tag 只允许是 #316 合入时的 `0000_init` … `0025_shallow_mimic`（26 条）。
+ * 只断言 `NNNN === pad4(idx)` 挡不住「紧接着手写 `0026_xxx`」（它与位置恰好一致），而文档
+ * （`CONTRIBUTING.md` / `packages/db/AGENTS.md`）明令不得再手写序号，故在此钉死遗留段长度。
+ */
+function legacyFreezeViolations(
+  entries: JournalEntry[],
+  frozen: { count: number; lastTag: string },
+): string[] {
+  const violations: string[] = []
+  const numericTags = entries.map((entry) => entry.tag).filter((tag) => NUMERIC_TAG.test(tag))
+  const lastNumericTag = numericTags[numericTags.length - 1]
+  if (lastNumericTag !== undefined && lastNumericTag !== frozen.lastTag) {
+    violations.push(
+      `遗留序号段的末条 tag 是 \`${lastNumericTag}\`，应为 \`${frozen.lastTag}\`：遗留段已冻结，新增迁移必须用生成器产出的 UTC+8 时间戳 tag`,
+    )
+  }
+  if (numericTags.length !== frozen.count) {
+    violations.push(
+      `遗留序号 tag 共 ${numericTags.length} 条，应为 ${frozen.count} 条（\`0000_init\` … \`${frozen.lastTag}\`）：不得再手写 \`00NN_xxx\`，请用 \`bun run --filter '@fish/db' generate\` 生成时间戳编号`,
+    )
+  }
   return violations
 }
 
@@ -180,9 +258,14 @@ function whenOrderViolations(entries: JournalEntry[]): string[] {
     const previous = entries[index - 1]
     const current = entries[index]
     if (previous === undefined || current === undefined) continue
-    if (current.when <= previous.when) {
+    const previousWhen = previous.when
+    const currentWhen = current.when
+    // 缺字段 / 非有限数字由 `whenFieldViolations` 点名，这里不重复报。
+    if (typeof previousWhen !== 'number' || typeof currentWhen !== 'number') continue
+    if (!Number.isFinite(previousWhen) || !Number.isFinite(currentWhen)) continue
+    if (currentWhen <= previousWhen) {
       violations.push(
-        `第 ${index + 1} 条 \`${current.tag}\` 的 when=${current.when} 不大于第 ${index} 条 \`${previous.tag}\` 的 when=${previous.when}：migrator 按 when 递增判定是否应用，乱序会让该迁移被静默跳过`,
+        `第 ${index + 1} 条 \`${current.tag}\` 的 when=${currentWhen} 不大于第 ${index} 条 \`${previous.tag}\` 的 when=${previousWhen}：migrator 按 when 递增判定是否应用，乱序会让该迁移被静默跳过`,
       )
     }
   }
@@ -238,17 +321,41 @@ function snapshotChainViolations(entries: JournalEntry[], snapshots: Snapshot[])
       )
     }
   }
+  // snapshot 文件名前缀必须与同位置条目的编号前缀一致（`0007_snapshot.json` ↔ `0007_*`、
+  // `20260928063000_snapshot.json` ↔ `20260928063000_*`）：挡住「文件名与 tag 无关」的脏数据。
+  if (ordered.length === entries.length) {
+    entries.forEach((entry, index) => {
+      const snapshot = ordered[index]
+      if (snapshot === undefined) return
+      const tagPrefix = /^(\d+)_/.exec(entry.tag)?.[1]
+      if (tagPrefix === undefined) return
+      const label = snapshotLabel(snapshot)
+      if (label !== tagPrefix) {
+        violations.push(
+          `第 ${index + 1} 条 \`${entry.tag}\` 对应 snapshot \`${snapshot.name}\` 的前缀 \`${label}\` 与编号前缀 \`${tagPrefix}\` 不一致：应为 \`${tagPrefix}_snapshot.json\``,
+        )
+      }
+    })
+  }
   return violations
 }
 
-function collectJournalViolations(fixture: MigrationsFixture): string[] {
-  return [
+function collectJournalViolations(
+  fixture: MigrationsFixture,
+  options: JournalGateOptions = {},
+): string[] {
+  const violations = [
     ...tagUniquenessViolations(fixture.entries),
     ...tagSchemeViolations(fixture.entries),
+    ...whenFieldViolations(fixture.entries),
     ...whenOrderViolations(fixture.entries),
     ...fileMappingViolations(fixture.entries, fixture.sqlFiles),
     ...snapshotChainViolations(fixture.entries, fixture.snapshots),
   ]
+  if (options.frozenLegacy) {
+    violations.push(...legacyFreezeViolations(fixture.entries, options.frozenLegacy))
+  }
+  return violations
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -283,7 +390,11 @@ test('#316 真实迁移目录：tag 唯一 / 前缀方案 / when 递增 / .sql �
   expect(fixture.entries.length).toBeGreaterThan(0)
   expect(fixture.sqlFiles.length).toBeGreaterThan(0)
   expect(fixture.snapshots.length).toBeGreaterThan(0)
-  expect(collectJournalViolations(fixture)).toEqual([])
+  expect(
+    collectJournalViolations(fixture, {
+      frozenLegacy: { count: FROZEN_LEGACY_TAG_COUNT, lastTag: FROZEN_LEGACY_LAST_TAG },
+    }),
+  ).toEqual([])
 })
 
 /** 以下用例的合法基线：若基线本身有告警，失败用例就不能证明断言有效。 */
@@ -478,4 +589,84 @@ test('#316 snapshot 数量与 prevId 链：点名断链的 snapshot 与期望 id
       ),
     }),
   ).toContain(`snapshot 0002 的 prevId 指向 ${syntheticId(9)}，但 0001 的 id 是 ${syntheticId(1)}`)
+})
+
+test('#316 when 缺失：不再静默通过（drizzle 会静默跳过该迁移）', () => {
+  const messages = syntheticMessages({
+    entries: [{ idx: 0, version: '7', tag: '0000_init', breakpoints: true }],
+    sqlFiles: ['0000_init.sql'],
+    snapshots: [{ name: '0000_snapshot.json', id: syntheticId(0), prevId: ZERO_UUID }],
+  })
+  expect(messages).toContain('第 1 条 `0000_init` 的 when=undefined 不是有限数字')
+  expect(messages).toContain('静默跳过')
+})
+
+test('#316 snapshot 文件名前缀与编号不对应：点名文件与期望文件名', () => {
+  expect(
+    syntheticMessages({
+      snapshots: [
+        { name: '0000_snapshot.json', id: syntheticId(0), prevId: ZERO_UUID },
+        { name: '0001_snapshot.json', id: syntheticId(1), prevId: syntheticId(0) },
+        { name: '9999_snapshot.json', id: syntheticId(2), prevId: syntheticId(1) },
+      ],
+    }),
+  ).toContain('对应 snapshot `9999_snapshot.json` 的前缀 `9999` 与编号前缀 `0002` 不一致')
+})
+
+/** 遗留段冻结用「真实规模」的夹具：26 条 `0000_init` … `0025_shallow_mimic`。 */
+const frozenLegacyEntries: JournalEntry[] = Array.from(
+  { length: FROZEN_LEGACY_TAG_COUNT },
+  (_, index) => ({
+    idx: index,
+    version: '7',
+    when: index + 1,
+    tag:
+      index === FROZEN_LEGACY_TAG_COUNT - 1
+        ? FROZEN_LEGACY_LAST_TAG
+        : `${pad4(index)}_legacy_${index}`,
+    breakpoints: true,
+  }),
+)
+const frozenLegacySqlFiles = frozenLegacyEntries.map((entry) => `${entry.tag}.sql`)
+const frozenLegacySnapshots: Snapshot[] = frozenLegacyEntries.map((_, index) => ({
+  name: `${pad4(index)}_snapshot.json`,
+  id: syntheticId(index),
+  prevId: index === 0 ? ZERO_UUID : syntheticId(index - 1),
+}))
+const frozenLegacyOption: JournalGateOptions = {
+  frozenLegacy: { count: FROZEN_LEGACY_TAG_COUNT, lastTag: FROZEN_LEGACY_LAST_TAG },
+}
+
+test('#316 遗留段冻结：26 条真实规模的合法夹具零告警', () => {
+  expect(
+    collectJournalViolations(
+      {
+        entries: frozenLegacyEntries,
+        sqlFiles: frozenLegacySqlFiles,
+        snapshots: frozenLegacySnapshots,
+      },
+      frozenLegacyOption,
+    ),
+  ).toEqual([])
+})
+
+test('#316 遗留段冻结：接着手写 0026_xxx（idx 与位置恰好一致）也要报错', () => {
+  const messages = collectJournalViolations(
+    {
+      entries: [
+        ...frozenLegacyEntries,
+        { idx: 26, version: '7', when: 27, tag: '0026_hand_written', breakpoints: true },
+      ],
+      sqlFiles: [...frozenLegacySqlFiles, '0026_hand_written.sql'],
+      snapshots: [
+        ...frozenLegacySnapshots,
+        { name: '0026_snapshot.json', id: syntheticId(26), prevId: syntheticId(25) },
+      ],
+    },
+    frozenLegacyOption,
+  ).join('\n')
+  expect(messages).toContain(
+    '遗留序号段的末条 tag 是 `0026_hand_written`，应为 `0025_shallow_mimic`',
+  )
+  expect(messages).toContain('遗留序号 tag 共 27 条，应为 26 条')
 })
