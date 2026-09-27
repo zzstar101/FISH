@@ -81,7 +81,7 @@
   color: var(--muted-2);
 }
 
-/* 无效 / 成功 / 等待身份态的圆盘图标 */
+/* 无效 / 成功态的圆盘图标（等待身份态只有一行 .lc__waiting 文案，没有圆盘） */
 .lc__disc {
   width: 120px;
   height: 120px;

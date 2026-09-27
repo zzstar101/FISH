@@ -22,16 +22,25 @@ export type LoginLaunch = { ticket: string }
 const TICKET_RE = /^[A-Za-z0-9_-]{22}$/
 
 /**
- * 演示构建（`TARO_APP_MOCK=1`）在**没有电脑端真的出码**时的兜底票号：形状与真实票据一致，
- * 让「确认 → 成功」这条动线在开发者工具里可以直接演示。
+ * 演示构建（`TARO_APP_MOCK=1`）在**没有电脑端真的出码**时的兜底票号。
+ *
+ * `'demoLoginConfirm'` 的 16 字节 base64url（`ZGVtb0xvZ2luQ29uZmlybQ`）：与真实票据
+ * **同形同长**（22 字符，末字符落在 16 字节 base64url 的合法集合 `A/Q/g/w` 里），
+ * 所以演示票过的是与真实票据完全同一道门禁，不需要为它开口子。
  */
-export const DEMO_LOGIN_TICKET = 'demoLoginConfirm000001'
+export const DEMO_LOGIN_TICKET = 'ZGVtb0xvZ2luQ29uZmlybQ'
 
-/** 形状校验：只接受 22 字符 base64url；空值、纯空白、任意文本一律不算票据 */
+/**
+ * 形状校验：只接受 22 字符 base64url。
+ *
+ * **不 trim**：`ScanTicketSchema` 是 `z.string().regex(/^[A-Za-z0-9_-]{22}$/)`，没有
+ * 任何 trim/transform —— `"  <票据>  "` 这类字符串后端永远不会签发。这里多一层 trim
+ * 就等于把「合法票据」的集合放得比契约宽：显式入口带这种值时页面会进确认态，
+ * 而真实链路一定失败（#258 复查 P1）。
+ */
 function asTicket(raw: string | undefined): string | null {
-  const value = raw?.trim()
-  if (value === undefined || value === '') return null
-  return TICKET_RE.test(value) ? value : null
+  if (raw === undefined || raw === '') return null
+  return TICKET_RE.test(raw) ? raw : null
 }
 
 /**

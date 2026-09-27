@@ -43,13 +43,21 @@ describe('真实入口：scene 里的裸票据（#229 出码形状）', () => {
     expect(parseLoginLaunch({ scene: encodeURIComponent(TICKET) })).toEqual({ ticket: TICKET })
   })
 
-  test('票据里的 - / _ 在百分号编码后也还原（base64url 的合法字符）', () => {
+  test('scene 里带真的百分号转义（%41 → A）也能解码出票', () => {
+    // base64url 字符集在 encodeURIComponent 下原样不变，所以上一个用例其实没走到解码；
+    // 这条用 `%41` 让 `decodeURIComponent` 真的改变字符串，覆盖解码路径。
+    const escaped = `%41${'B'.repeat(21)}`
+    const decoded = `A${'B'.repeat(21)}`
+    expect(decoded).toHaveLength(22)
+    expect(parseLoginLaunch({ scene: escaped })).toEqual({ ticket: decoded })
+  })
+
+  test('票据里的 - / _ 原样进入也还原（base64url 的合法字符）', () => {
     const withSymbols = 'a-b_c-d_e-f_g_h-i_j0_8'
     expect(withSymbols).toHaveLength(22)
-    expect(parseLoginLaunch({ scene: encodeURIComponent(withSymbols) })).toEqual({
-      ticket: withSymbols,
-    })
+    expect(parseLoginLaunch({ scene: withSymbols })).toEqual({ ticket: withSymbols })
   })
+
   test('坏长度 / 坏字符 / 非法 scene 一律 null', () => {
     expect(parseLoginLaunch({ scene: TICKET.slice(0, 21) })).toBeNull() // 21 字符
     expect(parseLoginLaunch({ scene: `${TICKET}a` })).toBeNull() // 23 字符
@@ -61,15 +69,26 @@ describe('真实入口：scene 里的裸票据（#229 出码形状）', () => {
 })
 
 describe('显式 ticket 入口：与 scene 同一套合法性校验', () => {
-  test('合法票据直达（前后空白修剪）', () => {
+  test('合法票据直达，且原样返回（不做任何改写）', () => {
     expect(parseLoginLaunch({ ticket: TICKET })).toEqual({ ticket: TICKET })
-    expect(parseLoginLaunch({ ticket: `  ${TICKET}  ` })).toEqual({ ticket: TICKET })
+    expect(parseLoginLaunch({ ticket: OTHER_TICKET })).toEqual({ ticket: OTHER_TICKET })
   })
 
   test('任意非空文本不算票据 —— 否则「无效登录码」态永远走不到', () => {
     expect(parseLoginLaunch({ ticket: 'tk_abc123' })).toBeNull()
     expect(parseLoginLaunch({ ticket: '   ' })).toBeNull()
     expect(parseLoginLaunch({ ticket: `t=${TICKET}` })).toBeNull()
+  })
+
+  /**
+   * `ScanTicketSchema` 是 `z.string().regex(/^[A-Za-z0-9_-]{22}$/)`，**没有 trim**：
+   * 前后带空白的字符串后端永远不会签发。本地若先 trim 再匹配，等于把「合法票据」
+   * 的集合放得比契约宽 —— 这种值会进确认态，而真实链路一定失败（#258 复查）。
+   */
+  test('前后带空白的票据不算合法（本地规则不得宽于契约）', () => {
+    expect(parseLoginLaunch({ ticket: ` ${TICKET} ` })).toBeNull()
+    expect(parseLoginLaunch({ ticket: `${TICKET}\n` })).toBeNull()
+    expect(parseLoginLaunch({ scene: ` ${TICKET} ` })).toBeNull()
   })
 
   test('两个入口同时给：显式参数优先', () => {
