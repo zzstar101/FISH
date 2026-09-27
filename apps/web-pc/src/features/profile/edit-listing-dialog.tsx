@@ -67,7 +67,7 @@ export function EditListingDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const detail = useListingDetail(listing.id, open)
+  const detail = useListingDetail(listing.id, ownerId, { enabled: open })
   const updateListing = useUpdateListing(ownerId)
   const [form, setForm] = useState<EditForm | null>(null)
   const [fieldErrors, setFieldErrors] = useState<EditFieldErrors>({})

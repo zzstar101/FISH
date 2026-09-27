@@ -6,7 +6,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronRight, Clock, Home, Images, MessageCircle, ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { PriceText } from '../../components/price-text'
 import { ApiError } from '../../lib/api-client'
 import { formatRelativeTimeAt } from '../../lib/format'
@@ -29,28 +29,46 @@ const STATUS_LABEL: Record<ListingStatus, string | null> = {
 export function ListingDetailPage({ listingId }: { listingId: string }) {
   const { me, isInitializing, error: authError, refetch: refetchAuth } = useAuth()
   const navigate = useNavigate()
-  const detail = useListingDetail(listingId)
-  const createConversation = useCreateConversation(me?.id ?? null)
+  const viewerId = me?.id ?? null
+  const detail = useListingDetail(listingId, viewerId)
+  const createConversation = useCreateConversation()
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)
+  const viewerRef = useRef(viewerId)
+  const resetViewerRef = useRef(viewerId)
+  viewerRef.current = viewerId
+
+  useEffect(() => {
+    if (resetViewerRef.current === viewerId) return
+    resetViewerRef.current = viewerId
+    setChatError(null)
+    setChatUnavailable(false)
+  }, [viewerId])
 
   function handleChat() {
+    const requestedBy = viewerId
+    if (requestedBy === null) return
     setChatError(null)
-    createConversation.mutate(listingId, {
-      onSuccess: (conversation) => {
-        void navigate({
-          to: '/messages/$conversationId',
-          params: { conversationId: conversation.id },
-        })
+    createConversation.mutate(
+      { listingId, ownerId: requestedBy },
+      {
+        onSuccess: (conversation) => {
+          if (viewerRef.current !== requestedBy) return
+          void navigate({
+            to: '/messages/$conversationId',
+            params: { conversationId: conversation.id },
+          })
+        },
+        onError: (error) => {
+          if (viewerRef.current !== requestedBy) return
+          if (error instanceof ApiError && error.code === 'CANNOT_CHAT_WITH_SELF') {
+            setChatUnavailable(true)
+            return
+          }
+          setChatError(describeCreateConversationFailure(error))
+        },
       },
-      onError: (error) => {
-        if (error instanceof ApiError && error.code === 'CANNOT_CHAT_WITH_SELF') {
-          setChatUnavailable(true)
-          return
-        }
-        setChatError(describeCreateConversationFailure(error))
-      },
-    })
+    )
   }
 
   if (detail.isPending) return <LoadingState label="正在加载商品详情…" />

@@ -1,3 +1,4 @@
+import type { Me } from '@fish/contracts/auth/user'
 import type {
   ConversationDto,
   ConversationListResponse,
@@ -6,6 +7,7 @@ import type {
 } from '@fish/contracts/chat/schema'
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AUTH_ME_QUERY_KEY } from '../../lib/session-cache'
 import {
   createConversation,
   fetchConversation,
@@ -65,15 +67,29 @@ export function useMessageHistory(ownerId: string | null, conversationId: string
   })
 }
 
-export function useCreateConversation(ownerId: string | null) {
+/**
+ * 只把会话写入仍属于该 mutation 发起账号的缓存。
+ * 公开详情页在切号后不会卸载，迟到的 POST 不能用新账号 ownerId 覆盖缓存。
+ */
+export function updateConversationForOwner(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversation: ConversationDto,
+): boolean {
+  const currentOwnerId = queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)?.id ?? null
+  if (currentOwnerId !== ownerId) return false
+  updateConversationCaches(queryClient, ownerId, conversation)
+  return true
+}
+
+export function useCreateConversation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (listingId: string) => createConversation(listingId),
-    onSuccess: (conversation) => {
-      if (ownerId === null) return
-      updateConversationCaches(queryClient, ownerId, conversation)
-      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
-      void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
+    mutationFn: ({ listingId }: { listingId: string; ownerId: string }) =>
+      createConversation(listingId),
+    onSuccess: (conversation, variables) => {
+      if (!updateConversationForOwner(queryClient, variables.ownerId, conversation)) return
+      void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(variables.ownerId) })
     },
   })
 }
@@ -218,7 +234,7 @@ export function mergeMessagesIntoCache(
 }
 
 /**
- * 重连时只补最新一页：把服务端最新页中的消息按 id 合进已有缓存，
+ * 重连时只补最新一页：用服务端最新页整体替换本地页集合，
  * 不重拉用户已经加载的更早分页。
  */
 export async function refreshNewestMessages(
@@ -273,12 +289,21 @@ export function probeChatSession(queryClient: QueryClient, ownerId: string): voi
     .catch(() => undefined)
 }
 
-/** 渲染用时间序：最新页在前，反转后按升序拼接。 */
+/**
+ * 渲染用时间序：最新页在前，反转后按升序拼接；同一 id 只保留最新页的版本。
+ *
+ * 实时消息可能被临时塞进最新页，之后加载更早分页时服务端会再返回同一条，
+ * 因此这里按 id 去重，避免同一 message 渲染两次（相同 React key）。
+ */
 export function flattenMessagePages<TPageParam>(
   data: InfiniteData<MessageListResponse, TPageParam> | undefined,
 ): MessageDto[] {
   if (!data) return []
-  return [...data.pages].reverse().flatMap((page) => page.items)
+  const byId = new Map<string, MessageDto>()
+  for (const page of [...data.pages].reverse()) {
+    for (const item of page.items) byId.set(item.id, item)
+  }
+  return [...byId.values()]
 }
 
 export function isMessageRead(message: MessageDto, counterpartLastReadAt: string | null): boolean {
@@ -306,7 +331,7 @@ export function mergeConversationReadMarker(
 
 /**
  * 会话 DTO 的单调合并：读位不后退，`lastMessageAt` 更旧的 HTTP/read 响应
- * 也不能把实时推送写入的较新预览覆盖掉。
+ * 也不能把实时推送写入的较新预览与未读数覆盖掉。
  */
 export function mergeConversationDto(
   current: ConversationDto | null | undefined,
@@ -318,7 +343,12 @@ export function mergeConversationDto(
     current.id === next.id &&
     Date.parse(current.lastMessageAt) > Date.parse(next.lastMessageAt)
   ) {
-    return { ...merged, lastMessage: current.lastMessage, lastMessageAt: current.lastMessageAt }
+    return {
+      ...merged,
+      lastMessage: current.lastMessage,
+      lastMessageAt: current.lastMessageAt,
+      unreadCount: current.unreadCount,
+    }
   }
   return merged
 }

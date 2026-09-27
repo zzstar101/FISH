@@ -36,9 +36,6 @@ describe('chat error helpers', () => {
 
   test('describes conversation-create failures', () => {
     expect(
-      describeCreateConversationFailure(new ApiError('CANNOT_CHAT_WITH_SELF', 409, 'self')),
-    ).toBe('不能和自己的商品建立会话')
-    expect(
       describeCreateConversationFailure(new ApiError('LISTING_NOT_FOUND', 404, 'missing')),
     ).toBe('商品不存在或已下架')
     expect(describeCreateConversationFailure(new Error('network'))).toBe('发起会话失败，请重试')

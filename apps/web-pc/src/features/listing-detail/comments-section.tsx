@@ -7,7 +7,7 @@ import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ShieldCheck } from 'lucide-react'
-import { useId, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
@@ -40,13 +40,9 @@ function CommentComposer({
   placeholder: string
   onCancel?: () => void
 }) {
-  const errorId = useId()
   return (
     <div className="mt-3">
       <Textarea
-        aria-describedby={error !== null ? errorId : undefined}
-        aria-invalid={error !== null}
-        aria-label={placeholder}
         className="min-h-[88px] resize-none"
         disabled={pending}
         maxLength={200}
@@ -72,11 +68,7 @@ function CommentComposer({
           </Button>
         </div>
       </div>
-      {error !== null ? (
-        <p className="mt-2 text-danger text-xs" id={errorId} role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error !== null ? <p className="mt-2 text-danger text-xs">{error}</p> : null}
     </div>
   )
 }
@@ -106,7 +98,7 @@ function ReplyRow({ reply }: { reply: CommentReply }) {
 function CommentRow({
   comment,
   canReply,
-  replyEnabled,
+  authResolved,
   replyOpen,
   replyDraft,
   replyError,
@@ -118,7 +110,7 @@ function CommentRow({
 }: {
   comment: CommentDto
   canReply: boolean
-  replyEnabled: boolean
+  authResolved: boolean
   replyOpen: boolean
   replyDraft: string
   replyError: string | null
@@ -147,7 +139,7 @@ function CommentRow({
           <div className="mt-2 flex items-center gap-3 text-xs">
             <button
               className="text-brand hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!replyEnabled || replyPending}
+              disabled={!authResolved || replyPending}
               onClick={onBeginReply}
               type="button"
             >
@@ -192,23 +184,44 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   const [replyTo, setReplyTo] = useState<string | null>(null)
   const [replyDraft, setReplyDraft] = useState('')
   const [replyError, setReplyError] = useState<string | null>(null)
+  const viewerId = me?.id ?? null
+  const viewerRef = useRef(viewerId)
+  const resetViewerRef = useRef(viewerId)
+  viewerRef.current = viewerId
+
+  useEffect(() => {
+    if (resetViewerRef.current === viewerId) return
+    resetViewerRef.current = viewerId
+    setCommentDraft('')
+    setCommentError(null)
+    setReplyTo(null)
+    setReplyDraft('')
+    setReplyError(null)
+  }, [viewerId])
 
   const items = comments.data?.pages.flatMap((page) => page.items) ?? []
   const hasAuthError = authError !== null && authError !== undefined
-  const replyEnabled = !isInitializing && !hasAuthError
+  const authResolved = !isInitializing && !hasAuthError
 
   function submitComment() {
     const content = commentDraft.trim()
     if (content.length === 0) return
+    const submittedBy = viewerId
     setCommentError(null)
     createComment.mutate(content, {
-      onSuccess: () => setCommentDraft(''),
-      onError: (error) => setCommentError(describeCommentFailure(error)),
+      onSuccess: () => {
+        if (viewerRef.current !== submittedBy) return
+        setCommentDraft('')
+      },
+      onError: (error) => {
+        if (viewerRef.current !== submittedBy) return
+        setCommentError(describeCommentFailure(error))
+      },
     })
   }
 
   function beginReply(commentId: string) {
-    if (!replyEnabled || createReply.isPending) return
+    if (!authResolved || createReply.isPending) return
     if (me === null) {
       void navigate({ to: '/login', search: { redirect: currentHref() } })
       return
@@ -221,15 +234,20 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   function submitReply(commentId: string) {
     const content = replyDraft.trim()
     if (content.length === 0) return
+    const submittedBy = viewerId
     setReplyError(null)
     createReply.mutate(
       { commentId, content },
       {
         onSuccess: () => {
+          if (viewerRef.current !== submittedBy) return
           setReplyDraft('')
           setReplyTo(null)
         },
-        onError: (error) => setReplyError(describeCommentFailure(error)),
+        onError: (error) => {
+          if (viewerRef.current !== submittedBy) return
+          setReplyError(describeCommentFailure(error))
+        },
       },
     )
   }
@@ -306,7 +324,7 @@ export function CommentsSection({ listingId }: { listingId: string }) {
               onSubmitReply={() => submitReply(comment.id)}
               replyDraft={replyDraft}
               replyError={replyError}
-              replyEnabled={replyEnabled}
+              authResolved={authResolved}
               replyOpen={replyTo === comment.id}
               replyPending={createReply.isPending}
             />

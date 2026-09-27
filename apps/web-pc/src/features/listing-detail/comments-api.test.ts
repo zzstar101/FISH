@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { ApiError } from '../../lib/api-client'
-import { commentListPath, createReply, describeCommentFailure } from './comments-api'
+import { commentListPath, createComment, createReply, describeCommentFailure } from './comments-api'
 
 describe('commentListPath', () => {
   test('sets the contract limit and passes the cursor through', () => {
@@ -8,6 +8,23 @@ describe('commentListPath', () => {
     expect(commentListPath('listing-1', 'abc+/=')).toBe(
       '/listings/listing-1/comments?limit=50&cursor=abc%2B%2F%3D',
     )
+  })
+})
+
+describe('comment write contracts', () => {
+  test('rejects an empty comment before making a request', async () => {
+    const originalFetch = globalThis.fetch
+    let called = false
+    globalThis.fetch = (async () => {
+      called = true
+      return new Response(null, { status: 500 })
+    }) as unknown as typeof fetch
+    try {
+      await expect(createComment('listing-1', '   ')).rejects.toBeDefined()
+      expect(called).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 
