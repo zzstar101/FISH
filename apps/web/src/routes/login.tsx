@@ -8,6 +8,7 @@ import { describeAuthFailure } from '../features/auth/error-messages'
 import { AuthPageShell, FormAlert, SubmitButton, TextField } from '../features/auth/form'
 import { useLogin } from '../features/auth/queries'
 import { ScanLoginPanel } from '../features/auth/scan-login'
+import { type AuthSubmissionGate, createAuthSubmissionGate } from '../features/auth/submission-gate'
 import { type FieldErrors, issuesToFieldErrors } from '../lib/form-errors'
 import { sanitizeRedirect } from '../lib/redirect'
 
@@ -25,6 +26,8 @@ function LoginPage() {
   const { redirect } = Route.useSearch()
   const [tab, setTab] = useState<'scan' | 'password'>('scan')
   const [agreed, setAgreed] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [submissionGate] = useState(() => createAuthSubmissionGate(setSubmitting))
   const target = sanitizeRedirect(redirect)
 
   return (
@@ -42,12 +45,18 @@ function LoginPage() {
     >
       <Tabs
         className="gap-4"
-        onValueChange={(value) => setTab(value as 'scan' | 'password')}
+        onValueChange={(value) => {
+          if (!submitting) setTab(value as 'scan' | 'password')
+        }}
         value={tab}
       >
         <TabsList>
-          <TabsTrigger value="scan">扫码登录</TabsTrigger>
-          <TabsTrigger value="password">账号密码</TabsTrigger>
+          <TabsTrigger disabled={submitting} value="scan">
+            扫码登录
+          </TabsTrigger>
+          <TabsTrigger disabled={submitting} value="password">
+            账号密码
+          </TabsTrigger>
         </TabsList>
 
         <Label className="flex items-start gap-2 text-ink-2 text-xs">
@@ -63,10 +72,20 @@ function LoginPage() {
         </Label>
 
         <TabsContent className="data-[state=inactive]:hidden" forceMount value="scan">
-          <ScanLoginPanel active={tab === 'scan'} agreed={agreed} target={target} />
+          <ScanLoginPanel
+            active={tab === 'scan'}
+            agreed={agreed}
+            claimSubmission={submissionGate.claim}
+            target={target}
+          />
         </TabsContent>
         <TabsContent className="data-[state=inactive]:hidden" forceMount value="password">
-          <PasswordLoginForm agreed={agreed} target={target} />
+          <PasswordLoginForm
+            agreed={agreed}
+            claimSubmission={submissionGate.claim}
+            submitting={submitting}
+            target={target}
+          />
         </TabsContent>
       </Tabs>
 
@@ -80,7 +99,17 @@ function LoginPage() {
   )
 }
 
-function PasswordLoginForm({ agreed, target }: { agreed: boolean; target: string }) {
+function PasswordLoginForm({
+  agreed,
+  claimSubmission,
+  submitting,
+  target,
+}: {
+  agreed: boolean
+  claimSubmission: AuthSubmissionGate['claim']
+  submitting: boolean
+  target: string
+}) {
   const login = useLogin()
   const [studentNo, setStudentNo] = useState('')
   const [password, setPassword] = useState('')
@@ -102,12 +131,15 @@ function PasswordLoginForm({ agreed, target }: { agreed: boolean; target: string
       return
     }
 
+    const finishSubmission = claimSubmission()
+    if (finishSubmission === null) return
     setFieldErrors({})
     login.mutate(parsed.data, {
       // `target` 是任意站内路径，可能尚未在本版路由表里；整页跳转能保证
       // 登录 cookie 生效后的应用状态是干净的，也不会踩 SPA 的未知路由。
       onSuccess: () => window.location.assign(target),
       onError: (error) => {
+        finishSubmission()
         const failure = describeAuthFailure(error)
         setFieldErrors(failure.fieldErrors ?? {})
         setFormError(failure.formError ?? null)
@@ -138,7 +170,9 @@ function PasswordLoginForm({ agreed, target }: { agreed: boolean; target: string
         value={password}
       />
 
-      <SubmitButton pending={login.isPending}>登录</SubmitButton>
+      <SubmitButton disabled={submitting} pending={login.isPending}>
+        登录
+      </SubmitButton>
     </form>
   )
 }

@@ -12,6 +12,7 @@ import { FormAlert } from './form'
 import { authKeys } from './queries'
 import { createScanTicket, exchangeScanTicket, fetchScanTicketStatus } from './scan-api'
 import { isScanTicketExpired, nextScanPollDelayMs } from './scan-poll'
+import type { AuthSubmissionGate } from './submission-gate'
 
 type TicketData = Pick<ScanTicketResponse, 'ticket' | 'qrCodeDataUrl' | 'expiresAt'>
 
@@ -56,10 +57,12 @@ function scanFailureMessage(error: unknown, stage: 'create' | 'status' | 'exchan
 export function ScanLoginPanel({
   active,
   agreed,
+  claimSubmission,
   target,
 }: {
   active: boolean
   agreed: boolean
+  claimSubmission: AuthSubmissionGate['claim']
   target: string
 }) {
   const queryClient = useQueryClient()
@@ -208,6 +211,9 @@ export function ScanLoginPanel({
       return
     }
 
+    const finishSubmission = claimSubmission()
+    if (finishSubmission === null) return
+    let redirected = false
     setNotice(null)
     setExchangePending(true)
     try {
@@ -222,6 +228,7 @@ export function ScanLoginPanel({
       }
       queryClient.setQueryData(authKeys.me(), user)
       window.location.assign(target)
+      redirected = true
     } catch (error) {
       if (!mountedRef.current || seq !== requestSeqRef.current || ticketRef.current !== ticket) {
         return
@@ -232,6 +239,7 @@ export function ScanLoginPanel({
       }
       setNotice(scanFailureMessage(error, 'exchange'))
     } finally {
+      if (!redirected) finishSubmission()
       if (mountedRef.current && seq === requestSeqRef.current) setExchangePending(false)
     }
   }
