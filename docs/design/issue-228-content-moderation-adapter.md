@@ -12,12 +12,12 @@
 
 一句话：把「调用腾讯 TMS / IMS 并返回统一判定」做成一个**可注入、可测、失败必抛错**的适配器；商品发布、审核记录、图片固化还没接线，所以**两条安全条件尚未在业务链上成立**。
 
-需要你本人做的三件事：
+需要你本人确认的四件事（第 2、4 项已拍板，原始判断依据保留在下面）：
 
 1. **授权测试环境**：目前只有模拟响应测试。最小真实调用需要一个可用的腾讯云账号、`SecretId` / `SecretKey`、以及文本（TMS）与图片（IMS）各一个 `BizType`，然后 `bun --env-file=.env apps/api/scripts/moderation-live-probe.ts`（见 §9.3）。
-2. **确认 SDK 引入的 lockfile 传递版本变化**：`tencentcloud-sdk-nodejs-tms` / `-ims@4.1.311` 会把 hoist 槽位上的 `form-data` 4.0.6→3.0.5、`get-stream` 3.0.0→6.0.1、`ini` 1.3.8→2.0.0、`tslib` 2.8.1→1.13.0、`uuid` 8.3.2→9.0.1 换成旧/新版，并为 `@tarojs/*` 补嵌套 `tslib@2.8.1`（`bun.lock` +73/−7，**无镜像源 URL 改写**）。见 §10-R1。
+2. **确认 SDK 引入的 lockfile 传递版本变化**：`tencentcloud-sdk-nodejs-tms` / `-ims@4.1.311` 会把 hoist 槽位上的 `form-data` 4.0.6→3.0.5、`get-stream` 3.0.0→6.0.1、`ini` 1.3.8→2.0.0、`tslib` 2.8.1→1.13.0、`uuid` 8.3.2→9.0.1 换成旧/新版，并为 `@tarojs/*` 补嵌套 `tslib@2.8.1`（`bun.lock` +73/−7，**无镜像源 URL 改写**）。见 §10-R1。**Owner 已确认保留官方 SDK**：Bun 在运行时接管 `node-fetch`，实际 HTTP 走 Bun 原生实现（实证见 §10-R1）。
 3. **确认运维影响**：`apps/api/src/index.ts` 现在启动就校验 `CONTENT_MODERATION_TRANSPORT`；**已部署机器不补这一行会 crash loop**（与 #141 的 `AI_POLISH_TRANSPORT` 同款，`docs/deployment.md` §4 已给追加脚本）。
-4. **决定生产护栏要不要在部署侧补齐 `NODE_ENV`**：`local` 的生产禁令只在 `NODE_ENV=production` 时生效（已按 trim + 小写归一化），但仓库现有部署路径**没有任何地方设置 `NODE_ENV`**（`docs/deployment.md` §5.1 的 systemd 单元只有 `EnvironmentFile=/etc/fish/api-mail.env`，`apps/api/package.json` 的 `start` 也没有，`bun --env-file` 不会设置它）。也就是说：只补 `CONTENT_MODERATION_TRANSPORT=local` 的生产机仍会启动成功、只打一条 warn。同款前提也存在于既有的 `WECHAT_TRANSPORT=stub` 护栏，因此"是否在 systemd 单元统一加 `Environment=NODE_ENV=production`"是跨模块的运维决定，留给 Owner（见 §10-R7）。
+4. **决定生产护栏要不要在部署侧补齐 `NODE_ENV`**：`local` 的生产禁令只在 `NODE_ENV=production` 时生效（已按 trim + 小写归一化），但仓库现有部署路径**没有任何地方设置 `NODE_ENV`**（`docs/deployment.md` §5.1 的 systemd 单元只有 `EnvironmentFile=/etc/fish/api-mail.env`，`apps/api/package.json` 的 `start` 也没有，`bun --env-file` 不会设置它）。也就是说：只补 `CONTENT_MODERATION_TRANSPORT=local` 的生产机仍会启动成功、只打一条 warn。同款前提也存在于既有的 `WECHAT_TRANSPORT=stub` 护栏，因此"是否在 systemd 单元统一加 `Environment=NODE_ENV=production`"是跨模块的运维决定。**Owner 已决定：本期不并进本 PR，另案处理**（见 §10-R7）。
 
 本期刻意的"不做"是决定，不是遗漏：不改商品 CREATE/UPDATE 主链、不改审核记录表/迁移、不做图片确认与不可变对象接线、不动 Admin 展示与客户端错误反馈、不动共享生产上传路径与存储配置。
 
@@ -240,13 +240,13 @@ bun --env-file=.env apps/api/scripts/moderation-live-probe.ts '文本样例' [�
 
 ## 10. 已知限制与风险
 
-- **R1 · SDK 带来的 lockfile 传递版本变化**：见 §0 第 2 条。要不要接受由 Owner 决定；若决定不接受，替代方案是手写 TC3 签名（只改 `providers/tencent.ts` 一个文件）。
+- **R1 · SDK 带来的 lockfile 传递版本变化**：见 §0 第 2 条。**Owner 已确认保留官方 SDK**，理由：运行时并不执行 Node 版 `node-fetch`——在 SDK 自己的包目录里（旁边就有 `../node_modules/node-fetch` 符号链接、磁盘上也有真实 `node-fetch@2.7.0`）实测 `require.resolve('node-fetch')` 仍返回裸说明符，即 Bun 用内置兼容实现接管，超时文案是 Bun shim 的 `The operation timed out.` 而不是真实库的 `network timeout at: …`（互证见 R2）。残余代价：5 个 hoist 槽位变动、+38 个包/约 3.6MB 安装体积、`json-bigint`。若日后要把新增运行时依赖归零，替代方案是手写 TC3 签名（只改 `providers/tencent.ts` 一个文件，可用腾讯官方 TC3 测试向量在无授权环境下做单测）。
 - **R2 · Bun 下的传输超时不精确**：Bun 把 SDK 依赖的 `node-fetch` 解析到内置实现，实测错误消息是 `The operation timed out.`（Node 上是 `network timeout at: …`），且 `reqTimeout` 被量化（1–3s → ~4s，5–8s → ~8s）。已用消息/名称双重识别归类为 `timeout` 并有限重试；**不影响放行与否**（都不放行），但"单次超时约等于 `timeoutMs`"这一点在 Bun 下不成立。
 - **R3 · 跨境延迟**：`TENCENT_CLOUD_REGION` 与业务/存储地域不一致会显著放大超时概率；部署时应与存储同地域。
 - **R4 · 生产启动强依赖**：未补 `CONTENT_MODERATION_TRANSPORT` 的机器会 crash loop（§6）。这是刻意 fail-fast，但必须在升级说明里对齐。
 - **R5 · 真实审核质量未验证**：没有授权环境，`Review`/`Block` 判定质量、IMS 对 OCR/二维码/广告引流的覆盖度均**未验证**，不能作为上线依据。
 - **R6 · 成本与配额未处理**：并发、QPS、限频退避参数（`maxAttempts` / `retryDelayMs`）当前是适配器内常量，未按真实配额调参，也无告警。
-- **R7 · 生产 `local` 禁令的前提是部署侧设置了 `NODE_ENV`**：`loadContentModerationEnv` 只在 `NODE_ENV=production`（trim + 小写）时拒绝 `local`，但仓库现有部署路径不设置 `NODE_ENV`（见 §0 第 4 条），因此按现有手册部署的生产机若写 `CONTENT_MODERATION_TRANSPORT=local` 仍会启动、只打一条 warn。缓解：`docs/deployment.md` §4 已要求生产写 `tencent`（五项变量由脚本写入 `/etc/fish/api-mail.env`）；根治要 Owner 决定是否在 systemd 单元统一加 `Environment=NODE_ENV=production`——那同时会收紧既有的 `WECHAT_TRANSPORT=stub` 护栏，属跨模块运维变更，本期不动。
+- **R7 · 生产 `local` 禁令的前提是部署侧设置了 `NODE_ENV`**：`loadContentModerationEnv` 只在 `NODE_ENV=production`（trim + 小写）时拒绝 `local`，但仓库现有部署路径不设置 `NODE_ENV`（见 §0 第 4 条），因此按现有手册部署的生产机若写 `CONTENT_MODERATION_TRANSPORT=local` 仍会启动、只打一条 warn。缓解：`docs/deployment.md` §4 已要求生产写 `tencent`（五项变量由脚本写入 `/etc/fish/api-mail.env`）；根治要 Owner 决定是否在 systemd 单元统一加 `Environment=NODE_ENV=production`——那同时会收紧既有的 `WECHAT_TRANSPORT=stub` 护栏，属跨模块运维变更。**Owner 已决定：本期不并进本 PR，另案处理。**
 - **R8 · TC3 签名正确性未验证**：见 §9.2。模拟响应测试只证明 SDK 在 Bun 下能跑通、能发出形状正确的请求；真实签名/鉴权结果必须由 §9.3 的授权环境调用证明。
 - **R9 · 腾讯侧 `DataId` 去重语义未查证**：若腾讯按 `DataId` 缓存去重，用同一个 `${dataId}-${field}` 复审同一字段改动后的文案可能拿到旧结论。本机网络无法访问腾讯云文档，**未验证**；接线前应在授权环境实测（`moderation-live-probe.ts` 已可用）并在需要时给 `dataId` 加版本后缀。
 
