@@ -1,5 +1,6 @@
 import {
   loadAiPolishEnv,
+  loadContentModerationEnv,
   loadMailTransportEnv,
   loadMeetupTokenEnv,
   loadServerEnv,
@@ -18,6 +19,9 @@ const aiEnv = loadAiPolishEnv()
 // 微信身份配置（#86 评审 P1）：transport 无默认值（off/stub/live），生产禁 stub；
 // off 时登录/绑定入口 503 关闭，不静默降级 stub。
 const wechatEnv = loadWechatEnv()
+// 内容安全审核配置（#228）：transport 无默认值，生产禁 local；缺腾讯配置启动即失败。
+// 这里只做启动期校验——商品写入/图片引用的接线是后续 Issue 的范围，API 暂不消费该 provider。
+const moderationEnv = loadContentModerationEnv()
 
 // 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
 if (aiEnv.transport === 'stub') {
@@ -26,6 +30,12 @@ if (aiEnv.transport === 'stub') {
 // 同款警告：stub 微信身份不验证微信签发的凭证，只用于本地开发/测试。
 if (wechatEnv.transport === 'stub') {
   console.warn('[api] WECHAT_TRANSPORT=stub：微信登录/手机号绑定走演示凭证，不验证微信签发')
+}
+// 同款警告：local 走本地词表，图片不审内容，只适合本地开发/测试。
+if (moderationEnv.transport === 'local') {
+  console.warn(
+    '[api] CONTENT_MODERATION_TRANSPORT=local：文本走本地词表、图片不做内容审核（一律进人工队列），不是内容安全审核',
+  )
 }
 
 const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv)

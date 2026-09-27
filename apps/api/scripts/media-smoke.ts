@@ -62,6 +62,9 @@ try {
       // #86：微信登录 / 手机号绑定 transport 无默认值（评审 P1）。本冒烟不碰这两个入口，
       // 显式 off——不依赖调用方环境，也不让本机的 stub 配置漏进子进程。
       WECHAT_TRANSPORT: 'off',
+      // #228：内容审核 transport 无默认值，缺配置 API 启动即失败。本冒烟不经过商品发布链，
+      // 适配器不会被调用；显式 local（本地词表 + 图片一律 REVIEW），不让生产的 tencent 配置漏进来。
+      CONTENT_MODERATION_TRANSPORT: 'local',
     },
     stdout: 'inherit',
     stderr: 'inherit',

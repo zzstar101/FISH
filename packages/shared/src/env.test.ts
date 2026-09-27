@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { loadAiPolishEnv } from './env'
+import { DEFAULT_TENCENT_CLOUD_REGION, loadAiPolishEnv, loadContentModerationEnv } from './env'
 
 describe('loadAiPolishEnv', () => {
   test('stub 只需 transport 与 base_url，没有 apiKey 字段', () => {
@@ -104,6 +104,109 @@ describe('loadAiPolishEnv', () => {
       baseUrl: 'https://api.example.com/',
       apiKey: 'sk-not-a-real-key',
       model: 'deepseek-flash',
+    })
+  })
+})
+
+describe('loadContentModerationEnv', () => {
+  test('local 只在非生产环境可用，且不带任何密钥字段', () => {
+    expect(
+      loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: 'local' }, 'development'),
+    ).toEqual({ transport: 'local' })
+    expect(loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: 'local' }, 'test')).toEqual({
+      transport: 'local',
+    })
+  })
+
+  test('生产环境禁止 local：本地词表不是内容安全审核，不静默兜底', () => {
+    expect(() =>
+      loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: 'local' }, 'production'),
+    ).toThrow(/CONTENT_MODERATION_TRANSPORT/)
+    // `NODE_ENV` 未显式传参时取 `source.NODE_ENV`。
+    expect(() =>
+      loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: 'local', NODE_ENV: 'production' }),
+    ).toThrow(/NODE_ENV=production/)
+    // 大小写 / 两侧空白变体同样按生产处理：最后一道护栏不能因为拼写就失效。
+    for (const nodeEnv of ['Production', 'PRODUCTION', ' production '] as const) {
+      expect(() =>
+        loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: 'local' }, nodeEnv),
+      ).toThrow(/NODE_ENV=production/)
+    }
+  })
+
+  test('transport 无默认值：缺失或非法值都直接失败', () => {
+    expect(() => loadContentModerationEnv({})).toThrow(/CONTENT_MODERATION_TRANSPORT/)
+    expect(() => loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: 'stub' })).toThrow(
+      /CONTENT_MODERATION_TRANSPORT/,
+    )
+    expect(() => loadContentModerationEnv({ CONTENT_MODERATION_TRANSPORT: ' tencent' })).toThrow(
+      /CONTENT_MODERATION_TRANSPORT/,
+    )
+  })
+
+  test('tencent 四项必填，缺任一项都失败（错误信息只报变量名）', () => {
+    const complete = {
+      CONTENT_MODERATION_TRANSPORT: 'tencent',
+      TENCENT_CLOUD_SECRET_ID: 'secret-id-value',
+      TENCENT_CLOUD_SECRET_KEY: 'secret-key-value',
+      TENCENT_TMS_BIZ_TYPE: 'tms-biz',
+      TENCENT_IMS_BIZ_TYPE: 'ims-biz',
+    }
+    expect(loadContentModerationEnv(complete)).toEqual({
+      transport: 'tencent',
+      secretId: 'secret-id-value',
+      secretKey: 'secret-key-value',
+      tmsBizType: 'tms-biz',
+      imsBizType: 'ims-biz',
+      region: DEFAULT_TENCENT_CLOUD_REGION,
+    })
+
+    for (const key of [
+      'TENCENT_CLOUD_SECRET_ID',
+      'TENCENT_CLOUD_SECRET_KEY',
+      'TENCENT_TMS_BIZ_TYPE',
+      'TENCENT_IMS_BIZ_TYPE',
+    ] as const) {
+      const source: Record<string, string | undefined> = { ...complete, [key]: ' ' }
+      let message = ''
+      try {
+        loadContentModerationEnv(source)
+      } catch (error) {
+        message = (error as Error).message
+      }
+      // 必须点名「缺的是哪一个」：只报一句「四个都要配」的话，删掉任一变量的校验这个断言仍会通过。
+      expect(message).toContain(`缺少 ${key}。`)
+      // 密钥值绝不进错误消息（错误信息可能进日志/告警）。
+      expect(message).not.toContain('secret-key-value')
+      expect(message).not.toContain('secret-id-value')
+    }
+
+    // 同时缺两项时两项都要点名。
+    expect(() =>
+      loadContentModerationEnv({
+        ...complete,
+        TENCENT_TMS_BIZ_TYPE: ' ',
+        TENCENT_IMS_BIZ_TYPE: ' ',
+      }),
+    ).toThrow(/缺少 TENCENT_TMS_BIZ_TYPE \/ TENCENT_IMS_BIZ_TYPE。/)
+  })
+
+  test('值两侧空白被 trim，region 可覆盖且默认 ap-guangzhou', () => {
+    const env = loadContentModerationEnv({
+      CONTENT_MODERATION_TRANSPORT: 'tencent',
+      TENCENT_CLOUD_SECRET_ID: ' id ',
+      TENCENT_CLOUD_SECRET_KEY: ' key ',
+      TENCENT_TMS_BIZ_TYPE: ' tms ',
+      TENCENT_IMS_BIZ_TYPE: ' ims ',
+      TENCENT_CLOUD_REGION: ' ap-shanghai ',
+    })
+    expect(env).toEqual({
+      transport: 'tencent',
+      secretId: 'id',
+      secretKey: 'key',
+      tmsBizType: 'tms',
+      imsBizType: 'ims',
+      region: 'ap-shanghai',
     })
   })
 })
