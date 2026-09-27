@@ -140,7 +140,8 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 `core:smoke` 失败时**默认保留现场**：不 drop 本轮 scratch 库、不删已上传的 MinIO 对象，并在 stderr
 打印轮次 / 步骤名 / 断言标签 / 实得值 / 完整 stack 以及库名与对象 key，便于用 `psql` / MinIO 事后
-复查（按输出里的命令清理）。要旧的「失败也清理」行为，加 `-- --clean`。
+复查（按输出里的命令清理；两条清理命令按本地 `db:up` 栈 `fish-postgres-1` / `fish-minio-1` 给出）。
+要旧的「失败也清理」行为，加 `-- --clean`。
 
 ## 演示账号（仅本地）
 

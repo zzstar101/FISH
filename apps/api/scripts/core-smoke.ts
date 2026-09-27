@@ -27,7 +27,8 @@
  * 清理策略：**成功**时无条件 drop 本轮 scratch 库、删掉本轮上传的 MinIO 对象；**失败**时默认
  * **保留现场**（库与对象都不动），并在 stderr 打印轮次 / 步骤名 / 断言标签 / 实得值 / 完整
  * stack，以及 scratch 库名与对象 key，供 `psql` / MinIO 复查。失败现场会累积到下次复查，按输出
- * 里给出的命令清理；要旧的“失败也清理”行为用 `--clean`。
+ * 里给出的命令清理（两条清理命令按本地 `bun run db:up` 栈给出：`fish-postgres-1` / `fish-minio-1`，
+ * 非本地栈请自行换算）；要旧的“失败也清理”行为用 `--clean`。
  *
  * 保真边界：
  * - migration / seed 走文档化 CLI（覆盖 drizzle-kit、`--env-file` 路径与 `seed.ts` 的 `import.meta.main` 守卫）；
@@ -1104,7 +1105,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
         `[core-smoke]   已上传对象：${uploadedObjectKeys.length === 0 ? '（无）' : uploadedObjectKeys.join(', ')}`,
       )
       console.error(
-        `[core-smoke]   复查完清理：psql "$DATABASE_URL" -c 'drop database if exists "${dbName}" with (force)'`,
+        `[core-smoke]   复查完清理库（本地 docker 开发栈）：docker exec fish-postgres-1 psql -U fish -d postgres -c 'drop database if exists "${dbName}" with (force)'`,
       )
       if (uploadedObjectKeys.length > 0) {
         const objectPaths = uploadedObjectKeys
