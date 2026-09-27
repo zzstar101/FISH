@@ -23,6 +23,7 @@ export default defineAppConfig({
     'pages/comments/index',
     'pages/favorites/index',
     'pages/scan/index',
+    'pages/scan-pr/index',
     'pages/following/index',
     'pages/history/index',
   ],
