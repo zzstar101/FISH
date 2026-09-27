@@ -24,7 +24,7 @@ export function NotificationRow({ item, onOpen }: NotificationRowProps) {
       <span className="relative mt-0.5 grid size-11 shrink-0 place-items-center rounded-full bg-brand-soft text-xl">
         <span aria-hidden>{copy.emoji}</span>
         {unread ? (
-          <span className="absolute top-0 right-0 size-2.5 rounded-full bg-danger ring-2 ring-surface" />
+          <span className="absolute top-0 right-0 size-2.5 rounded-full bg-coral ring-2 ring-surface" />
         ) : null}
       </span>
 
@@ -44,9 +44,9 @@ export function NotificationRow({ item, onOpen }: NotificationRowProps) {
         </span>
       </span>
 
-      {target.kind === 'none' ? null : (
+      {target.kind === 'listing' ? (
         <ChevronRight className="mt-3 size-[18px] shrink-0 text-ink-3 transition-transform group-hover:translate-x-0.5" />
-      )}
+      ) : null}
     </button>
   )
 }

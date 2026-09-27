@@ -57,7 +57,7 @@ export function TopBar() {
           >
             <Bell className="size-5" />
             {unreadCount > 0 ? (
-              <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 font-semibold text-[10px] text-white leading-none">
+              <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-coral px-1 font-semibold text-[10px] text-white leading-none">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             ) : null}
