@@ -242,7 +242,11 @@ mc admin policy attach local fish-app-rw --user fish-app
 （桶名出现在策略 JSON 的两处 `arn:aws:s3:::fish`，改 `S3_BUCKET` 时要一起改。）
 
 升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
-允许匿名 GetObject；`chat-media/*` 和 `chat-media-final/*` 不能匿名读或列举。
+允许匿名 GetObject；`chat-media/*`、`chat-media-final/*` 和 `listing-media/*`（#286 的上传
+staging 前缀）不能匿名读或列举。上传时 presign 只签 `listing-media/{userId}/{id}.{ext}`，
+审核固化后才把字节写到服务端生成的 `listings/{userId}/{id}.{ext}`——因此"未审核图片不进公开
+read model"依赖这条策略：**staging 前缀一旦被放开匿名读，未审核的图就能凭 presign 返回的键直接
+被外部访问**。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
 上线前执行 `MEETUP_TOKEN_SECRET=$(openssl rand -hex 32) bun --env-file=.env apps/api/scripts/media-smoke.ts`，
 验证聊天直链返回 403、鉴权代理仍能读取及 Range 播放。那个变量是因为脚本会**自己拉起一个 API 进程**
 （`apps/api/scripts/media-smoke.ts:52`），而 API 启动时会校验面交码密钥（§4）；这里给的是只活在这条

@@ -109,6 +109,9 @@ const NO_CONFIRMED_IMAGES: ConfirmedImageLookup = {
   findConfirmedFinalKey: async () => null,
 }
 
+/** create 时商品还不存在，图片组必然是空的：没有任何"没变的老图片"可以豁免确认校验。 */
+const NO_STORED_KEYS: ReadonlySet<string> = new Set()
+
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
@@ -244,12 +247,18 @@ export function createListingService(deps: {
    * 引用"由此成立。大小与 mime 仍要在这里查真实对象，因为 presign 的签名只覆盖 `host`、
    * mime 不受约束（契约 §7.7）。
    *
+   * `storedKeys` 是这条商品**当前**已存的图片键（create 传空集）：编辑时"没变的老图片"会带着既有
+   * 键回传（#286 要求），而它们只在当初写入时校验过一次 —— 确认记录那一层因此对它们豁免（#286 之前
+   * 的存量图根本没有记录，否则存量商品的编辑保存会被一律拒掉）。归属与格式仍然照旧校验：豁免的只是
+   * "这张图审没审过"，不是"这能不能引用别人的对象"。新增的键仍然必须走完 confirm。
+   *
    * 返回值是每张已确认图片的审核结论：调用方把它与文本结论聚合，`REVIEW` 图会把整条商品
    * 压进人工队列（`aggregateModerationDecision`，ALLOW < REVIEW < BLOCK）。
    */
   async function assertUsableObjectKeys(
     userId: string,
     objectKeys: string[],
+    storedKeys: ReadonlySet<string>,
   ): Promise<ModerationDecision[]> {
     const publicPrefix = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
     const currentLegacyPrefix = listingObjectKeyPrefix(userId)
@@ -279,16 +288,18 @@ export function createListingService(deps: {
     // 逐张校验：≤9 次 HEAD，换掉"客户端可以拿 presign 传任意类型"的洞（契约 §7.7）。
     for (const objectKey of objectKeys) {
       // 新形态的公开键必须命中一行确认记录（#286）。没有记录 = 没走完 confirm，或当初被判 BLOCK
-      // （BLOCK 不固化、不落 final 键），两种都不允许被引用。历史遗留键是 #286 之前的存量数据，
-      // 本来就没有对应记录，不做这一层校验（它们的归属与格式仍由上面的前缀校验 + stat 守住）。
+      // （BLOCK 不固化、不落 final 键），两种都不允许被引用。两类键不做这一层校验：历史遗留键是
+      // #286 之前的存量数据，本来就没有对应记录；`storedKeys` 里的键是本商品图片组里没变的老图，
+      // 写入时已经校验过（它们的归属与格式仍由上面的前缀校验 + stat 守住）。
       if (isPublicListingKey(objectKey)) {
         const confirmed = await mediaObjects.findConfirmedFinalKey(objectKey)
-        if (!confirmed || confirmed.userId !== userId) {
+        if (confirmed && confirmed.userId === userId) {
+          decisions.push(confirmed.moderationDecision)
+        } else if (!storedKeys.has(objectKey)) {
           throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
             { field: 'objectKeys', message: '图片尚未通过审核' },
           ])
         }
-        decisions.push(confirmed.moderationDecision)
       }
 
       const stat = await storage.stat(objectKey)
@@ -304,6 +315,30 @@ export function createListingService(deps: {
       }
     }
 
+    return decisions
+  }
+
+  /**
+   * 编辑不带 `objectKeys` = 图片整组不变（契约：`objectKeys` 是**全量替换**，缺省即保持原图）。
+   * 图片内容没变，图片结论就不该变：按库里现有的图片键回读确认记录，把它们重新并入聚合结论。
+   *
+   * 不做这一步的后果是"一次纯文本编辑就能把图片 REVIEW 洗掉"：`moderation_status` 从 REVIEW 回到
+   * APPROVED，商品从管理员的人工队列里消失（`admin/store.ts` 按 `moderation_status = 'REVIEW'` 取
+   * 队列），卖家再调一次上架接口就能让未审核的图片公开。这与文本侧的口径一致 —— 编辑总是对**当前
+   * 内容**重算结论，而不是只看请求里带了什么。
+   *
+   * 存量图（#286 之前的键、或没有确认记录的键）按"未知"处理、不参与聚合，保持原有行为。
+   */
+  async function imageDecisionsOfStoredKeys(
+    userId: string,
+    storedKeys: readonly string[],
+  ): Promise<ModerationDecision[]> {
+    const decisions: ModerationDecision[] = []
+    for (const objectKey of storedKeys) {
+      if (!isPublicListingKey(objectKey)) continue
+      const confirmed = await mediaObjects.findConfirmedFinalKey(objectKey)
+      if (confirmed && confirmed.userId === userId) decisions.push(confirmed.moderationDecision)
+    }
     return decisions
   }
 
@@ -396,7 +431,7 @@ export function createListingService(deps: {
         )
       }
 
-      const imageDecisions = await assertUsableObjectKeys(userId, input.objectKeys)
+      const imageDecisions = await assertUsableObjectKeys(userId, input.objectKeys, NO_STORED_KEYS)
       // 图片结论与文本结论取最严的一档（ALLOW < REVIEW < BLOCK，见 aggregateModerationDecision）：
       // 只要有一张图是 REVIEW，整条商品就进人工队列。图片侧给不出 BLOCK —— 被判 BLOCK 的图不固化、
       // 确认表里根本没有它的键，所以上面的引用校验早就拒了；BLOCK 只可能来自文本，且已经拦下。
@@ -447,11 +482,17 @@ export function createListingService(deps: {
 
     async updateListing(userId, id, input) {
       // #286：图片结论必须在**事务外**算好 —— 它要查确认表 + 逐张 HEAD 对象存储，不能在持有
-      // `SELECT ... FOR UPDATE` 的事务里做网络 I/O。结论本身是只读的（表里不会再变），闭包捕获后
+      // `SELECT ... FOR UPDATE` 的事务里做网络 I/O。结论本身是只读的（确认表里不会再变），闭包捕获后
       // 交给锁内的 `apply` 与文本结论聚合。
+      //
+      // 但"哪些图算数"是另一回事：不带 `objectKeys` 时以**库里现有的图片**为准（`listImageKeys`），
+      // 否则一次纯文本编辑就能把图片 REVIEW 洗掉（见 `imageDecisionsOfStoredKeys`）；带 `objectKeys`
+      // 时以请求为准，其中本来就在库里的键视为"没变的老图片"，不再要求确认记录（存量数据兼容）。
+      const storedKeys = await store.listImageKeys(id)
+      const storedKeySet = new Set(storedKeys)
       const imageDecisions = input.objectKeys
-        ? await assertUsableObjectKeys(userId, input.objectKeys)
-        : []
+        ? await assertUsableObjectKeys(userId, input.objectKeys, storedKeySet)
+        : await imageDecisionsOfStoredKeys(userId, storedKeys)
 
       // "读当前行 → 合并最终内容 → 审核 → UPDATE + moderation record" 全部在同一个事务内，
       // 且当前行由 `SELECT ... FOR UPDATE` 锁住（store.updateListingAtomic）。把审核放在事务外
@@ -483,12 +524,18 @@ export function createListingService(deps: {
               title: finalTitle,
               description: finalDescription,
             })
+            // 图片组在事务外读、在锁内写：中间可能被另一个 PATCH 整组替换（`storedKeys` 已经不是锁内这
+            // 一行的图片）。这时旧结论不再成立，按最保守的 REVIEW 处理 —— 宁可让管理员再看一眼，也不
+            // 能把"未审核图片 + APPROVED"写回库里（`current.objectKeys` 就是锁内读到的那一组）。
+            const imagesReplacedConcurrently =
+              input.objectKeys === undefined && !sameObjectKeys(current.objectKeys, storedKeys)
             // 与 create 同一口径：图片结论与文本结论取最严一档（ALLOW < REVIEW < BLOCK）。
             // 图片侧给不出 BLOCK（BLOCK 的图不固化、确认表里没有它的键），所以下面的阻断细节
             // 仍然只可能来自文本。
             const decision = aggregateModerationDecision([
               moderationResult.decision,
               ...imageDecisions,
+              ...(imagesReplacedConcurrently ? (['REVIEW'] as const) : []),
             ])
             // 阻断：只写审计（由 store 在**同一锁内事务**完成），不写商品。
             const moderationPlan = {
@@ -653,6 +700,11 @@ function moderationBlockDetails(result: ModerationResult): ApiErrorDetail[] | un
 
 function isAllowedMime(contentType: string): boolean {
   return (ALLOWED_IMAGE_MIME as readonly string[]).includes(contentType)
+}
+
+/** 两张图片列表是否**逐位**相同（顺序有意义：`objectKeys` 决定 `sort_order`，即封面）。 */
+function sameObjectKeys(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index])
 }
 
 /**

@@ -5,6 +5,7 @@ import { createDb } from './client'
 import { jsonParam } from './json'
 import { conversations } from './schema/conversations'
 import { jobs } from './schema/jobs'
+import { listingMediaObjects } from './schema/listing-media'
 import { listingNumbers } from './schema/listing-numbers'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
@@ -51,6 +52,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       users,
       listings,
       listingImages,
+      listingMediaObjects,
       wishes,
       matches,
       conversations,
@@ -66,6 +68,9 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       users: 3,
       listings: 6,
       listingImages: 4,
+      // #286：审核台账由 confirm 写入，seed 不预置（本地 transport 恒 REVIEW，预置反而会造出
+      // "已确认"的假象）。它引用 users，因此必须一起 TRUNCATE，否则 seed 会撞外键。
+      listingMediaObjects: 0,
       wishes: 2,
       // `matches` / `notifications` 由 worker 用真实打分产出（#43）：seed 只投一条
       // PENDING 的 MATCH_LISTING，不再预写结果，否则 seed 会成为引擎之外的第二份真相。

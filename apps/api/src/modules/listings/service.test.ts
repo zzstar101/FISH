@@ -100,6 +100,7 @@ function updateTarget(overrides: Partial<ListingUpdateTarget> = {}): ListingUpda
     free: false,
     moderationStatus: 'APPROVED',
     governanceDelistedAt: null,
+    objectKeys: [],
     ...overrides,
   }
 }
@@ -121,6 +122,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       free: false,
       governanceDelistedAt: null,
     }),
+    listImageKeys: async () => [],
     listFeed: async () => [],
     updateListingAtomic: async (input) => {
       input.apply(input, updateTarget())
@@ -1043,6 +1045,111 @@ describe('image confirmation', () => {
     await service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [CONFIRMED_KEY] })
 
     expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
+  })
+
+  // #286 回归：`objectKeys` 缺省 = 图片整组不变，图片结论必须按**库里现有的图片**重算。
+  // 之前这里直接取 `[]`，于是一次纯文本编辑就把图片 REVIEW 洗成 APPROVED，商品从人工队列消失。
+  test('keeps a REVIEW image in the manual queue when the edit omits objectKeys', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const images = fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW' }])
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: images,
+      store: fakeStore({
+        listImageKeys: async () => [CONFIRMED_KEY],
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { title: '换了标题的键盘' })
+
+    expect(images.asked).toEqual([CONFIRMED_KEY])
+    expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
+  })
+
+  // 存量图：新形态键但确认表里没有记录（#286 之前上传、或迁移前就存在的图）。编辑保存不能因此被拒。
+  test('accepts a resent key that predates the confirmation table', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages(),
+      store: fakeStore({
+        listImageKeys: async () => [CONFIRMED_KEY],
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [CONFIRMED_KEY] })
+
+    expect(plans[0]).toMatchObject({ moderationStatus: 'APPROVED' })
+  })
+
+  test('does not treat a legacy stored key as an image to re-moderate', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const legacyKey = `listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`
+    const images = fakeImages()
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: images,
+      store: fakeStore({
+        listImageKeys: async () => [legacyKey],
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [legacyKey] }))
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { priceCents: 15000 })
+
+    expect(images.asked).toEqual([])
+    expect(plans[0]).toMatchObject({ moderationStatus: 'APPROVED' })
+  })
+
+  // 事务外读到的图片组必须与锁内读到的一致，否则旧结论不能用来写状态。
+  test('fails closed when the stored images changed under the transaction', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'ALLOW' }]),
+      store: fakeStore({
+        listImageKeys: async () => [CONFIRMED_KEY],
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [] }))
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { title: '换了标题的键盘' })
+
+    expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
+  })
+
+  // 豁免只给"本来就在库里的键"：新引用的键仍然必须走完 confirm。
+  test('still rejects an unconfirmed key that is not part of the stored images', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages(),
+      store: fakeStore({ listImageKeys: async () => [] }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [CONFIRMED_KEY] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(error.details).toEqual([{ field: 'objectKeys', message: '图片尚未通过审核' }])
   })
 
   test('rejects a staging key on update without touching the transaction', async () => {
