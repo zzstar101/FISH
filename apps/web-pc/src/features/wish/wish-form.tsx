@@ -18,11 +18,12 @@ import { Input } from '@fish/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@fish/ui/select'
 import { Switch } from '@fish/ui/switch'
 import { Textarea } from '@fish/ui/textarea'
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
 import { CATEGORY_LABEL } from '../../lib/labels'
 import { parseBudgetCents } from './api'
-import { useCreateWish, useUpdateWish } from './queries'
+import { useCreateWish, useUpdateWish, wishKeys } from './queries'
 
 type WishFormState = {
   keyword: string
@@ -60,6 +61,7 @@ export function WishFormDialog({
   ownerId: string
   wish?: WishDto
 }) {
+  const queryClient = useQueryClient()
   const createWish = useCreateWish(ownerId)
   const updateWish = useUpdateWish(ownerId)
   const [form, setForm] = useState<WishFormState>(INITIAL_FORM)
@@ -138,6 +140,7 @@ export function WishFormDialog({
       if (error instanceof ApiError) {
         if (error.status === 403) setMessage('只能编辑自己的愿望')
         else if (error.status === 409) {
+          void queryClient.invalidateQueries({ queryKey: wishKeys.all() })
           setMessage(wish === undefined ? error.message : '愿望状态已变化，请刷新后重试')
         } else if (error.status === 404) setMessage('愿望不存在或已不可用')
         else setMessage(error.message)
