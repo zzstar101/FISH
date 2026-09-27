@@ -1,5 +1,6 @@
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
-import { LISTING_BY_ID } from './catalog'
+import { getListing, LISTING_BY_ID } from './catalog'
+import { mockPublicId } from './public-id'
 import type { HotSearchItem, MockComment, SearchFilter } from './types'
 import { WISHES } from './wishes'
 
@@ -94,31 +95,31 @@ export function commentsOf(listingId: string): MockComment[] {
  */
 export const NOTIFICATIONS: NotificationDto[] = [
   {
-    id: 'n-001',
+    id: mockPublicId('ntf', 'n-001'),
     type: 'MATCH',
-    payload: { listingId: 'l-004', wishId: 'w-001' },
+    payload: { listingId: mockPublicId('lst', 'l-004'), wishId: mockPublicId('wsh', 'w-001') },
     readAt: null,
     createdAt: iso(1),
   },
   {
-    id: 'n-002',
+    id: mockPublicId('ntf', 'n-002'),
     type: 'MATCH',
-    payload: { listingId: 'l-001', wishId: 'w-003' },
+    payload: { listingId: mockPublicId('lst', 'l-001'), wishId: mockPublicId('wsh', 'w-003') },
     readAt: null,
     createdAt: iso(1.2),
   },
   {
-    id: 'n-003',
+    id: mockPublicId('ntf', 'n-003'),
     type: 'MATCH',
-    payload: { listingId: 'l-002', wishId: 'w-002' },
+    payload: { listingId: mockPublicId('lst', 'l-002'), wishId: mockPublicId('wsh', 'w-002') },
     readAt: iso(20),
     createdAt: iso(20),
   },
   {
     // 目标商品已被删除 / 下架：跳转要退回愿望页（与 web 端 decorateNotification 同口径）
-    id: 'n-004',
+    id: mockPublicId('ntf', 'n-004'),
     type: 'MATCH',
-    payload: { wishId: 'w-004' },
+    payload: { wishId: mockPublicId('wsh', 'w-004') },
     readAt: iso(30),
     createdAt: iso(30),
   },
@@ -161,7 +162,7 @@ export function assertFixtures(): string[] {
   for (const notification of NOTIFICATIONS) {
     // `listingId` 在契约里是 `payload` 的嵌套键；缺省（如 n-004 的容错演示）不算问题
     const id = notification.payload.listingId
-    if (id && !LISTING_BY_ID[id]) {
+    if (id && !getListing(id)) {
       problems.push(`NOTIFICATIONS ${notification.id} → ${id}`)
     }
   }

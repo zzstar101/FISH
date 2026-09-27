@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test'
 import type { ListingCard } from '@fish/contracts/listings/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 
 /**
  * `fetchMyListings` 的翻页上限与「这份列表是不是全部」。
@@ -30,9 +31,11 @@ function page(count: number, nextCursor: string | null) {
   }
 }
 
+let nextId = 1
 function card(id: string): ListingCard {
+  const uuid = `01930000-0000-7000-8000-${(nextId++).toString(16).padStart(12, '0')}`
   return {
-    id: crypto.randomUUID(),
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, uuid),
     title: `闲置 ${id}`,
     priceCents: 1000,
     category: 'BOOKS',
@@ -83,7 +86,7 @@ mock.module('@/lib/request', () => ({
 
 const { fetchMyListings } = await import('../src/features/listing/api')
 
-const SELLER = '11111111-1111-4111-8111-111111111111'
+const SELLER = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-000000000a00')
 
 describe('fetchMyListings —— 翻页与 truncated', () => {
   test('遇到 nextCursor 为 null 就停：列表是全部，truncated 为 false', async () => {
