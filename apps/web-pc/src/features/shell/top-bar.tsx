@@ -11,7 +11,7 @@ import { useUnreadNotificationCount } from '../notifications/queries'
 export function TopBar() {
   const navigate = useNavigate()
   const { me } = useAuth()
-  const unread = useUnreadNotificationCount()
+  const unread = useUnreadNotificationCount(me !== null)
   const [keyword, setKeyword] = useState('')
   const unreadCount = unread.data ?? 0
 

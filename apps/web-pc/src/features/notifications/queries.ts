@@ -25,10 +25,13 @@ export function useNotifications(limit = NOTIFICATION_PAGE_LIMIT) {
   })
 }
 
-export function useUnreadNotificationCount() {
+export function useUnreadNotificationCount(enabled = true) {
   return useQuery({
     queryKey: notificationKeys.unread,
     queryFn: fetchUnreadNotificationCount,
+    // 匿名访问公开详情 / 404 时也会渲染顶栏；未登录不能请求未读数，
+    // 否则 401 会触发全局跳登录，把匿名浏览者挤出公开页。
+    enabled,
     staleTime: 30_000,
     refetchOnMount: 'always',
   })

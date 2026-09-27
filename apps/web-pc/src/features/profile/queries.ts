@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
+import { listingDetailQueryKey } from '../listing-detail/queries'
 import {
   cancelTransaction,
   confirmTransaction,
@@ -121,7 +122,7 @@ export function useUpdateListing(ownerId: string) {
     onMutate: captureSession,
     onSuccess: (detail, variables, context) => {
       if (!isSessionCurrent(context)) return
-      queryClient.setQueryData(['pc', 'listings', 'detail', variables.id], detail)
+      queryClient.setQueryData(listingDetailQueryKey(variables.id, ownerId), detail)
       invalidateProfileSummary(queryClient, ownerId)
       invalidateListingLists(queryClient, ownerId)
       invalidateListingViews(queryClient)
@@ -138,7 +139,7 @@ export function useSetListingStatus(ownerId: string) {
     onMutate: captureSession,
     onSuccess: (detail, variables, context) => {
       if (!isSessionCurrent(context)) return
-      queryClient.setQueryData(['pc', 'listings', 'detail', variables.id], detail)
+      queryClient.setQueryData(listingDetailQueryKey(variables.id, ownerId), detail)
       invalidateProfileSummary(queryClient, ownerId)
       invalidateListingLists(queryClient, ownerId)
       invalidateListingViews(queryClient)
