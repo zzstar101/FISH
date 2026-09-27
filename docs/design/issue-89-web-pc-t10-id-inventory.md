@@ -17,7 +17,7 @@
 | --- | --- | --- | --- |
 | `ListingDetail.id` / `ListingCard.id` | 详情查询、缓存 key、跳转参数 | 否 | 保留内部 UUID；若要展示编号，新增 DTO 字段而不是复用 `id` |
 | `ConversationDto.id` | 会话列表与详情跳转、读位 | 否 | 保留内部 UUID |
-| `TransactionDto.id` | 订单列表与详情跳转、确认 / 取消 | 否 | 保留内部 UUID |
+| `TransactionDto.id` | 订单列表与详情跳转、确认 / 取消；订单详情显示为“订单号” | **是**：当前直接展示内部 UUID | #217 冻结后必须改为公开编号或移除该展示；不得继续把内部 UUID 当用户编号 |
 | `WishDto.id` / `matchId` | 许愿编辑、匹配列表、发起会话 | 否 | 保留内部 UUID |
 | `NotificationDto.id` | 通知列表 key、标记已读 API 路径 | 否 | 保留内部 UUID；不把通知 id 暴露成可复制编号 |
 | `NotificationDto.payload.listingId` / `wishId` | 通知跳转前的目标校验 | 否 | #217 后若要兼容编号，先扩展 payload 契约，不在 PC 端猜测 |
@@ -32,10 +32,10 @@
 | 列表 cursor | `apps/api/src/modules/listings/cursor.ts` 用 base64url 包装 `(sortKey, id)`，`id` 是内部 UUID | 对前端是不透明字符串；PC 只原样回传 |
 | 会话 cursor | 服务端同样编码 `(lastMessageAt, conversationId)` | 对前端是不透明字符串；PC 不解析 |
 | 消息历史 cursor | `messageListQuerySchema.before` 是 `z.uuid()`；服务端把上一页最早消息 `id` 作为 `nextCursor`，PC 原样作为 `before` 回传 | 当前确实把消息 UUID 当分页键；#217 若要改公开编号，需单独迁移该参数与兼容策略 |
-| 分享 / 复制 URL | 当前仅复制含 UUID 的 `/pc/...` 地址 | #217 若定义公开 URL，需同时定义重定向和兼容策略 |
+| 分享 / 复制 URL | 当前没有内置复制/分享按钮；浏览器地址栏或外部复制仍会暴露 `/pc/...` 中的 UUID | #217 若定义公开 URL，需同时定义重定向和兼容策略 |
 
 ## 4. 结论
 
-- 当前 PC Web 没有把 UUID 当“给用户看的稳定编号”展示，也没有编号搜索入口。
+- 当前 PC Web 没有编号搜索入口；唯一直接把内部 UUID 当用户可见“订单号”展示的位置是订单详情，已登记为 #217 必须处理项。
 - UUID 仍被用作路由和 API 内部标识；在 #217 冻结前这是已登记的事实，不是新的公开编号契约。
 - #217 若引入 TypeID / 公开编号，PC Web 需要单独完成：DTO 字段接入、URL 兼容、搜索入口、分享口令和 cursor 迁移测试。

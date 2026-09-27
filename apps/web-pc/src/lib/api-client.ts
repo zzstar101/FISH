@@ -1,4 +1,5 @@
 import { type ApiErrorDetail, ApiErrorSchema } from '@fish/contracts/system/error'
+import { currentSessionGeneration } from './session-cache'
 
 /**
  * 契约里的错误信封（`{ error: { code, message, details?, retryAfterSeconds? } }`）。
@@ -12,6 +13,7 @@ export class ApiError extends Error {
     message: string,
     readonly details?: ApiErrorDetail[],
     readonly retryAfterSeconds?: number,
+    readonly sessionGeneration = currentSessionGeneration(),
   ) {
     super(message)
     this.name = 'ApiError'
@@ -33,6 +35,7 @@ export function isUnauthenticatedError(error: unknown): boolean {
  * 同源部署，cookie 自动携带，因此不需要 `credentials`。
  */
 export async function apiRequest(path: string, init: RequestInit = {}): Promise<unknown> {
+  const requestGeneration = currentSessionGeneration()
   const headers = new Headers(init.headers)
   if (init.body !== undefined && !headers.has('content-type')) {
     headers.set('content-type', 'application/json')
@@ -53,8 +56,16 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
           parsed.data.error.message,
           parsed.data.error.details,
           parsed.data.error.retryAfterSeconds,
+          requestGeneration,
         )
-      : new ApiError('INTERNAL_ERROR', response.status, '请求失败，请稍后重试')
+      : new ApiError(
+          'INTERNAL_ERROR',
+          response.status,
+          '请求失败，请稍后重试',
+          undefined,
+          undefined,
+          requestGeneration,
+        )
   }
 
   return payload

@@ -11,6 +11,7 @@ import {
   type MyListingStatusFilter,
   type OrderStatusFilter,
   setListingStatus,
+  updateListing,
   updateProfile,
 } from './api'
 
@@ -53,6 +54,14 @@ function invalidateListingViews(queryClient: QueryClient): void {
 
 function invalidateChatSurfaces(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['pc', 'chat'] })
+}
+
+export function invalidateTransactionSurfaces(queryClient: QueryClient, ownerId: string): void {
+  invalidateProfileSummary(queryClient, ownerId)
+  invalidateOrderLists(queryClient, ownerId)
+  invalidateListingLists(queryClient, ownerId)
+  invalidateListingViews(queryClient)
+  invalidateChatSurfaces(queryClient)
 }
 
 export function useProfile(ownerId: string) {
@@ -104,6 +113,22 @@ export function useUpdateProfile(ownerId: string) {
   })
 }
 
+export function useUpdateListing(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: string; input: Parameters<typeof updateListing>[1] }) =>
+      updateListing(id, input),
+    onMutate: captureSession,
+    onSuccess: (detail, variables, context) => {
+      if (!isSessionCurrent(context)) return
+      queryClient.setQueryData(['pc', 'listings', 'detail', variables.id], detail)
+      invalidateProfileSummary(queryClient, ownerId)
+      invalidateListingLists(queryClient, ownerId)
+      invalidateListingViews(queryClient)
+    },
+  })
+}
+
 export function useSetListingStatus(ownerId: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -131,10 +156,7 @@ function useTransactionMutation(
     onSuccess: (transaction, transactionId, context) => {
       if (!isSessionCurrent(context)) return
       queryClient.setQueryData(profileKeys.order(ownerId, transactionId), transaction)
-      invalidateProfileSummary(queryClient, ownerId)
-      invalidateOrderLists(queryClient, ownerId)
-      invalidateListingViews(queryClient)
-      invalidateChatSurfaces(queryClient)
+      invalidateTransactionSurfaces(queryClient, ownerId)
     },
   })
 }

@@ -1,8 +1,8 @@
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { router } from '../router'
-import { isUnauthenticatedError } from './api-client'
+import { ApiError, isUnauthenticatedError } from './api-client'
 import { currentHref } from './redirect'
-import { resetPcSession } from './session-cache'
+import { currentSessionGeneration, resetPcSessionIfCurrent } from './session-cache'
 
 /** 应用内部路径（去掉 router basepath 与尾斜杠），用于比较登录 / 注册页。 */
 function currentAppPathname(): string {
@@ -20,8 +20,10 @@ const AUTH_PAGES = new Set(['/login', '/register'])
 function redirectToLoginOnUnauthenticated(error: unknown, skip: boolean): void {
   if (!isUnauthenticatedError(error)) return
 
-  void resetPcSession(queryClient, null).then(() => {
-    if (skip || AUTH_PAGES.has(currentAppPathname())) return
+  const generation =
+    error instanceof ApiError ? error.sessionGeneration : currentSessionGeneration()
+  void resetPcSessionIfCurrent(queryClient, null, generation).then((cleared) => {
+    if (!cleared || skip || AUTH_PAGES.has(currentAppPathname())) return
 
     void router
       .navigate({ to: '/login', search: { redirect: currentHref() } })

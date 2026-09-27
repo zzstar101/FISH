@@ -81,6 +81,10 @@ jobs:
       - name: Build PC web
         run: bun run build:web-pc
 
+      # 真实验证 Vite preview 的 /pc 308、深链回退与未知路径回退到 PC index。
+      - name: PC preview smoke
+        run: bun apps/web-pc/scripts/preview-smoke.ts
+
       # 对象存储。三个必须注意的点（都踩过）：
       # 1. **不能用 `services:`**：minio 镜像的默认 CMD 是 `minio`（只打印 usage），而 Actions 的
       #    service 块不支持传 command，健康检查会耗尽重试让整个 job 起不来；

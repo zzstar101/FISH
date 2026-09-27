@@ -7,6 +7,7 @@ import {
   profileUpdateErrorView,
   transactionActionError,
   transactionsPath,
+  updateListing,
 } from './api'
 
 const originalFetch = globalThis.fetch
@@ -24,6 +25,56 @@ describe('profile api paths', () => {
     expect(myListingsPath('seller-1', 'ALL', 'abc+/=')).toBe(
       '/listings?sellerId=seller-1&limit=50&cursor=abc%2B%2F%3D',
     )
+  })
+
+  test('listing edit sends PATCH /listings/:id', async () => {
+    const calls: Array<{ url: string; method: string; body: string | null }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      })
+      return Response.json({
+        id: '01930000-0000-7000-8000-000000000001',
+        title: '新标题',
+        description: '新描述',
+        priceCents: 1234,
+        category: 'BOOKS',
+        condition: 'LIKE_NEW',
+        status: 'ACTIVE',
+        urgent: false,
+        negotiable: false,
+        free: false,
+        coverUrl: null,
+        createdAt: '2026-09-27T00:00:00.000Z',
+        updatedAt: '2026-09-27T00:00:00.000Z',
+        moderationStatus: 'APPROVED',
+        images: [],
+        seller: {
+          id: '01930000-0000-7000-8000-00000000000a',
+          nickname: '卖家',
+          avatarUrl: null,
+          authStatus: 'UNVERIFIED',
+        },
+        isOwner: true,
+      })
+    }) as unknown as typeof fetch
+
+    await updateListing('01930000-0000-7000-8000-000000000001', {
+      title: '新标题',
+      description: '新描述',
+      priceCents: 1234,
+    })
+
+    expect(calls).toEqual([
+      {
+        url: '/api/listings/01930000-0000-7000-8000-000000000001',
+        method: 'PATCH',
+        body: JSON.stringify({ title: '新标题', description: '新描述', priceCents: 1234 }),
+      },
+    ])
   })
 
   test('transaction list sends role and status only when selected', () => {

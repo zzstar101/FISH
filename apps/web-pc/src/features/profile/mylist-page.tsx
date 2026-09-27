@@ -12,6 +12,7 @@ import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
 import type { MyListingStatusFilter } from './api'
 import { listingActionError } from './api'
+import { EditListingDialog } from './edit-listing-dialog'
 import { useMyListings, useSetListingStatus } from './queries'
 
 const STATUS_TABS: ReadonlyArray<{ value: MyListingStatusFilter; label: string }> = [
@@ -38,6 +39,7 @@ export function MyListPage() {
 function MyListContent({ ownerId }: { ownerId: string }) {
   const [status, setStatus] = useState<MyListingStatusFilter>('ALL')
   const [notice, setNotice] = useState<string | null>(null)
+  const [editing, setEditing] = useState<ListingCard | null>(null)
   const listings = useMyListings(ownerId, status)
   const setStatusMutation = useSetListingStatus(ownerId)
 
@@ -120,6 +122,9 @@ function MyListContent({ ownerId }: { ownerId: string }) {
           {listings.data.items.map((item) => {
             const statusView = listingStatusView(item)
             const actionEnabled = item.moderationStatus === 'APPROVED' && statusView.actionable
+            const editEnabled =
+              item.moderationStatus === 'APPROVED' &&
+              (item.status === 'ACTIVE' || item.status === 'OFFLINE')
             const pending =
               setStatusMutation.isPending && setStatusMutation.variables?.id === item.id
 
@@ -155,31 +160,51 @@ function MyListContent({ ownerId }: { ownerId: string }) {
                     <p className="font-bold text-xl text-danger">
                       ¥{(item.priceCents / 100).toFixed(2)}
                     </p>
-                    {actionEnabled ? (
-                      <Button
-                        disabled={pending}
-                        onClick={() => void toggle(item)}
-                        size="sm"
-                        variant="outline"
-                      >
-                        {pending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                        {item.status === 'ACTIVE' ? '下架' : '重新上架'}
-                      </Button>
-                    ) : (
-                      <span className="text-ink-3 text-xs">
-                        {item.moderationStatus === 'REVIEW'
-                          ? '审核通过后可在 PC 端上架'
-                          : item.moderationStatus === 'BLOCKED'
-                            ? '审核未通过'
-                            : '当前状态不可手动操作'}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {editEnabled ? (
+                        <Button onClick={() => setEditing(item)} size="sm" variant="outline">
+                          编辑
+                        </Button>
+                      ) : null}
+                      {actionEnabled ? (
+                        <Button
+                          disabled={pending}
+                          onClick={() => void toggle(item)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          {pending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                          {item.status === 'ACTIVE' ? '下架' : '重新上架'}
+                        </Button>
+                      ) : null}
+                      {!actionEnabled && !editEnabled ? (
+                        <span className="text-ink-3 text-xs">
+                          {item.moderationStatus === 'REVIEW'
+                            ? '审核通过后可在 PC 端上架'
+                            : item.moderationStatus === 'BLOCKED'
+                              ? '审核未通过'
+                              : '当前状态不可手动操作'}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               </article>
             )
           })}
         </Card>
+      ) : null}
+
+      {editing !== null ? (
+        <EditListingDialog
+          key={editing.id}
+          listing={editing}
+          onOpenChange={(open) => {
+            if (!open) setEditing(null)
+          }}
+          open
+          ownerId={ownerId}
+        />
       ) : null}
     </div>
   )

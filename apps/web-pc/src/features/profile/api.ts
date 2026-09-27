@@ -6,6 +6,7 @@ import {
   type ListingFeedResponse,
   ListingFeedResponseSchema,
   type ListingStatus,
+  type ListingUpdateInput,
 } from '@fish/contracts/listings/schema'
 import { PROFILE_ROUTES } from '@fish/contracts/profile/routes'
 import {
@@ -74,6 +75,15 @@ export async function fetchMyListings(
   status: MyListingStatusFilter = 'ALL',
 ): Promise<ListingFeedResponse> {
   return ListingFeedResponseSchema.parse(await apiRequest(myListingsPath(sellerId, status)))
+}
+
+export async function updateListing(id: string, input: ListingUpdateInput): Promise<ListingDetail> {
+  return ListingDetailSchema.parse(
+    await apiRequest(LISTING_ROUTES.detail(id), {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  )
 }
 
 export async function setListingStatus(

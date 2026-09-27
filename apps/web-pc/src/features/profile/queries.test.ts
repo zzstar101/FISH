@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
 import { QueryClient } from '@tanstack/react-query'
 import { resetPcSession } from '../../lib/session-cache'
-import { profileKeys } from './queries'
+import { invalidateTransactionSurfaces, profileKeys } from './queries'
 
 const oldUser: Me = {
   id: '01930000-0000-7000-8000-00000000000a',
@@ -30,6 +30,22 @@ describe('profile query cache scope', () => {
     expect(profileKeys.aggregate(oldUser.id)).not.toEqual(
       profileKeys.aggregate('01930000-0000-7000-8000-00000000000b'),
     )
+  })
+
+  test('transaction invalidation refreshes my listings and chat surfaces', async () => {
+    const queryClient = new QueryClient()
+    const listingsKey = profileKeys.listings(oldUser.id, 'ALL')
+    const chatKey = ['pc', 'chat', 'unread-count', oldUser.id] as const
+    queryClient.setQueryData(listingsKey, { items: [{ id: 'listing-1', status: 'RESERVED' }] })
+    queryClient.setQueryData(chatKey, 1)
+
+    invalidateTransactionSurfaces(queryClient, oldUser.id)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(queryClient.getQueryCache().find({ queryKey: listingsKey })?.state.isInvalidated).toBe(
+      true,
+    )
+    expect(queryClient.getQueryCache().find({ queryKey: chatKey })?.state.isInvalidated).toBe(true)
   })
 
   test('switching accounts clears profile caches with the pc namespace', async () => {

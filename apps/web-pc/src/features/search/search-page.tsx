@@ -128,7 +128,10 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
             onValueChange={(value) => update({ sort: ListingSortSchema.parse(value) })}
             value={sort}
           >
-            <SelectTrigger className="h-9 w-[142px] shrink-0 rounded-lg border-line bg-surface-2">
+            <SelectTrigger
+              aria-label="排序方式"
+              className="h-9 w-[142px] shrink-0 rounded-lg border-line bg-surface-2"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent align="end">

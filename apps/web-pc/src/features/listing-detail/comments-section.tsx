@@ -7,7 +7,7 @@ import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
@@ -40,9 +40,12 @@ function CommentComposer({
   placeholder: string
   onCancel?: () => void
 }) {
+  const errorId = useId()
   return (
     <div className="mt-3">
       <Textarea
+        aria-describedby={error !== null ? errorId : undefined}
+        aria-invalid={error !== null}
         aria-label={placeholder}
         className="min-h-[88px] resize-none"
         disabled={pending}
@@ -69,7 +72,11 @@ function CommentComposer({
           </Button>
         </div>
       </div>
-      {error !== null ? <p className="mt-2 text-danger text-xs">{error}</p> : null}
+      {error !== null ? (
+        <p className="mt-2 text-danger text-xs" id={errorId} role="alert">
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }
