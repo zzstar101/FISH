@@ -368,6 +368,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
             <div className="border-line border-t p-4">
               <div className="flex items-end gap-3">
                 <Textarea
+                  aria-label="消息内容"
                   className="max-h-[160px] min-h-[44px] flex-1 resize-none"
                   maxLength={2000}
                   onChange={(event) => setDraft(event.target.value)}

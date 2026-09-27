@@ -5,12 +5,15 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { Bell, MessageCircle, Plus, Search } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
+import { useUnreadNotificationCount } from '../notifications/queries'
 
 /** PC Web 顶栏：品牌、全局搜索、发布入口、通知 / 消息、当前用户。 */
 export function TopBar() {
   const navigate = useNavigate()
   const { me } = useAuth()
+  const unread = useUnreadNotificationCount(me !== null)
   const [keyword, setKeyword] = useState('')
+  const unreadCount = unread.data ?? 0
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -31,6 +34,7 @@ export function TopBar() {
           <div className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-surface-2 px-3.5 focus-within:ring-3 focus-within:ring-brand/15">
             <Search className="size-4 shrink-0 text-ink-3" />
             <Input
+              aria-label="搜索商品"
               className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
               maxLength={50}
               onChange={(event) => setKeyword(event.target.value)}
@@ -48,11 +52,16 @@ export function TopBar() {
             </Link>
           </Button>
           <Link
-            aria-label="通知"
-            className="grid size-10 place-items-center rounded-lg text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
+            aria-label={unreadCount > 0 ? `通知，${unreadCount} 条未读` : '通知'}
+            className="relative grid size-10 place-items-center rounded-lg text-ink-2 transition-colors hover:bg-surface-2 hover:text-ink"
             to="/notifications"
           >
             <Bell className="size-5" />
+            {unreadCount > 0 ? (
+              <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-coral px-1 font-semibold text-[10px] text-white leading-none">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            ) : null}
           </Link>
           <Link
             aria-label="消息"

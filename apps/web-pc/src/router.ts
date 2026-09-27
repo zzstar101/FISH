@@ -8,6 +8,7 @@ import { routeTree } from './routeTree.gen'
 export const router = createRouter({
   routeTree,
   basepath: '/pc',
+  notFoundMode: 'root',
 })
 
 declare module '@tanstack/react-router' {

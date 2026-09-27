@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { Me } from '@fish/contracts/auth/user'
 import type {
   ConversationDto,
   ConversationListResponse,
@@ -6,6 +7,7 @@ import type {
   MessageListResponse,
 } from '@fish/contracts/chat/schema'
 import { QueryClient } from '@tanstack/react-query'
+import { AUTH_ME_QUERY_KEY } from '../../lib/session-cache'
 import {
   applyReadEventToCache,
   chatKeys,
@@ -16,6 +18,7 @@ import {
   mergeConversationReadMarker,
   mergeMessagesIntoCache,
   refreshNewestMessages,
+  updateConversationForOwner,
   updateConversationPage,
   upsertMessagePage,
 } from './queries'
@@ -259,6 +262,24 @@ describe('message cache', () => {
 })
 
 describe('conversation list cache', () => {
+  test('does not write a late conversation into another account cache', () => {
+    const queryClient = new QueryClient()
+    const ownerA = { id: 'owner-a' } as Me
+    const ownerB = { id: 'owner-b' } as Me
+    queryClient.setQueryData(AUTH_ME_QUERY_KEY, ownerA)
+
+    expect(updateConversationForOwner(queryClient, ownerA.id, conversation(null))).toBe(true)
+    expect(
+      queryClient.getQueryData(chatKeys.conversation(ownerA.id, 'conversation-1')),
+    ).toBeDefined()
+
+    queryClient.setQueryData(AUTH_ME_QUERY_KEY, ownerB)
+    expect(updateConversationForOwner(queryClient, ownerA.id, conversation(null))).toBe(false)
+    expect(
+      queryClient.getQueryData(chatKeys.conversation(ownerB.id, 'conversation-1')),
+    ).toBeUndefined()
+  })
+
   test('updates an existing row but never inserts a missing conversation', () => {
     const existing = conversation(null)
     const data = {

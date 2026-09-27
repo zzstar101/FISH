@@ -37,6 +37,16 @@ export async function fetchConversationPage(cursor?: string): Promise<Conversati
   return conversationListResponseSchema.parse(await apiRequest(conversationListPath(cursor)))
 }
 
+/** 创建或复用与商品卖家的会话（201 新建 / 200 复用都返回同一个 ConversationDto）。 */
+export async function createConversation(listingId: string): Promise<ConversationDto> {
+  return conversationDtoSchema.parse(
+    await apiRequest(CHAT_ROUTES.base, {
+      method: 'POST',
+      body: JSON.stringify({ listingId }),
+    }),
+  )
+}
+
 /** 未读总数独立端点，不受列表分页影响。 */
 export async function fetchConversationUnreadCount(): Promise<number> {
   const payload = await apiRequest(CHAT_ROUTES.unreadCount)
@@ -88,6 +98,14 @@ export function isConversationNotFound(error: unknown): boolean {
   return (
     error instanceof ApiError && error.status === 404 && error.code === 'CONVERSATION_NOT_FOUND'
   )
+}
+
+/** 发起会话失败的展示文案；自聊由调用方决定隐藏入口。 */
+export function describeCreateConversationFailure(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === 'LISTING_NOT_FOUND') return '商品不存在或已下架'
+  }
+  return '发起会话失败，请重试'
 }
 
 /** 发送失败的展示文案：只根据契约错误码分支，不把未知错误伪装成成功。 */

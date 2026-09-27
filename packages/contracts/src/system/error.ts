@@ -23,8 +23,7 @@ export const ApiErrorSchema = z.object({
      * （`VALIDATION_FAILED`、`IMAGE_REFERENCE_INVALID`、`UPLOAD_OBJECT_MISSING`，
      * 见 #6 冻结契约 §3 / §7.9）。
      *
-     * 可选是刻意的：auth 的 422 与 wishes 的既有响应都不带它，加这个字段必须保持纯增量，
-     * 否则就是替它们改协议（§7.4）。
+     * 可选是刻意的：能定位到字段时传，不能定位时保持纯增量省略；wishes 的既有响应仍不带它。
      */
     details: z.array(ApiErrorDetailSchema).optional(),
     /**
@@ -41,8 +40,8 @@ export type ApiError = z.infer<typeof ApiErrorSchema>
 /**
  * 唯一的错误响应构造入口：所有 domain 都用它，信封形状因此不可能各自漂移。
  *
- * `details` 在**商品域的 422 校验类失败**时传（#6 冻结契约 §3 / §7.9）；不传时响应体与本函数
- * 加第三参之前**逐字节相同** —— 既有调用方无需改动（auth 的 422 不带 details；health 不走本函数）。
+ * `details` 在**能定位到字段的 422 校验类失败**时传（商品域 #6 契约 §3 / §7.9；认证域注册、登录等
+ * 表单入口）；不传时响应体与本函数加第三参之前**逐字节相同** —— 既有调用方无需改动。
  *
  * `retryAfterSeconds` 只在 429 类拒绝时传（#141）；同样保证不传即不出现该键。
  */

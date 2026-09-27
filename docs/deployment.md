@@ -751,7 +751,10 @@ curl -sI https://fish.example.com/ | head -1                 # 200
 curl -s  https://fish.example.com/login | grep -q '<div id="root">' && echo SPA-fallback-ok
 curl -sI https://fish.example.com/pc | head -1               # 308
 curl -sI https://fish.example.com/pc/ | head -1              # 200
-curl -s  'https://fish.example.com/pc/search?q=keyboard' | grep -q '<div id="root">' && echo PC-SPA-fallback-ok
+# PC 与移动端 index 都有 <div id="root">，必须用 PC 自己的 title 区分回落目标。
+curl -s  'https://fish.example.com/pc/search?q=keyboard' | grep -q '<title>FISH · 校园二手</title>' && echo PC-SPA-fallback-ok
+# curl 只能确认未知路径回落到 PC index；404 文案“页面不存在”仍需在浏览器里确认。
+curl -s  https://fish.example.com/pc/no-such-route | grep -q '<title>FISH · 校园二手</title>' && echo PC-404-fallback-ok
 pc_asset=$(curl -s https://fish.example.com/pc/ | grep -o '/pc/assets/[^" ]*\.js' | head -1)
 curl -sI "https://fish.example.com${pc_asset}" | grep -i '^cache-control: public, max-age=31536000, immutable' >/dev/null \
   && echo PC-asset-cache-ok
