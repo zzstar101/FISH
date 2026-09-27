@@ -20,10 +20,10 @@ function LoginPage() {
   const { redirect } = Route.useSearch()
   const login = useLogin()
 
-  // 登录页的液态玻璃背景铺满整屏，需要把页面灰底换成自有底色。
+  // 液态玻璃页铺满整屏，需要撤掉 PC 外壳的 1280px 最小宽度，避免窄视口横向滚动。
   useLayoutEffect(() => {
-    document.body.classList.add('auth-login-body')
-    return () => document.body.classList.remove('auth-login-body')
+    document.body.classList.add('auth-glass-body')
+    return () => document.body.classList.remove('auth-glass-body')
   }, [])
 
   const [studentNo, setStudentNo] = useState('')

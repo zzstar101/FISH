@@ -66,7 +66,7 @@ function OrdersContent({
           <h1 className="font-semibold text-[26px] tracking-[-0.03em]">我的订单</h1>
           <p className="mt-1.5 text-ink-3 text-sm">买卖订单由服务端按角色与状态筛选。</p>
         </div>
-        <p className="text-ink-3 text-xs">真实 API · 每页 50 条</p>
+        <p className="text-ink-3 text-xs">真实 API · 最多显示 50 条</p>
       </div>
 
       <section className="flex items-center justify-between gap-5 rounded-2xl border border-line bg-surface p-3">

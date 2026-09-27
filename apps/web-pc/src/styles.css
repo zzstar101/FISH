@@ -183,7 +183,7 @@
  * 这里不做移动端折叠布局；低于 1280px 由浏览器横向滚动，不改变信息架构。
  */
 @layer base {
-  body:not(.auth-login-body) {
+  body:not(.auth-glass-body) {
     min-width: 1280px;
   }
 }
@@ -456,7 +456,7 @@
   }
 }
 /* Auth is the one PC route that should adapt instead of inheriting the app shell's 1280px canvas. */
-body.auth-login-body {
+body.auth-glass-body {
   min-width: 0;
 }
 @media (max-width: 900px) {

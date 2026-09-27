@@ -1,6 +1,6 @@
 import { RegisterRequestSchema } from '@fish/contracts/auth/session'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useLayoutEffect, useState } from 'react'
 import { describeAuthFailure, toAuthFieldErrors } from '../features/auth/error-messages'
 import { AuthPageShell, FormAlert, SubmitButton, TextField } from '../features/auth/form'
 import { useRegister } from '../features/auth/queries'
@@ -19,6 +19,12 @@ export const Route = createFileRoute('/register')({
 function RegisterPage() {
   const { redirect } = Route.useSearch()
   const register = useRegister()
+
+  // 与登录页同口径：玻璃页不继承 PC 外壳的 1280px 最小宽度，窄视口走自身断点。
+  useLayoutEffect(() => {
+    document.body.classList.add('auth-glass-body')
+    return () => document.body.classList.remove('auth-glass-body')
+  }, [])
   const [studentNo, setStudentNo] = useState('')
   const [password, setPassword] = useState('')
   const [nickname, setNickname] = useState('')

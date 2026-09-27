@@ -2,7 +2,6 @@ import { Alert, AlertDescription } from '@fish/ui/alert'
 import { Button } from '@fish/ui/button'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@fish/ui/select'
 import { Spinner } from '@fish/ui/spinner'
 import {
   ArrowUpRight,
@@ -239,48 +238,6 @@ export function TextField({
         id={id}
       />
       {error === undefined ? null : <FieldError id={errorId}>{error}</FieldError>}
-      {error === undefined && hint !== undefined ? (
-        <FieldDescription className="text-xs">{hint}</FieldDescription>
-      ) : null}
-    </Field>
-  )
-}
-
-export function SelectField({
-  label,
-  error,
-  hint,
-  options,
-  value,
-  onValueChange,
-}: FieldChrome & {
-  options: readonly { value: string; label: string }[]
-  value: string
-  onValueChange: (value: string) => void
-}) {
-  const id = useId()
-  return (
-    <Field className="gap-1.5" data-invalid={error !== undefined}>
-      <FieldLabel className="text-ink-2 text-sm" htmlFor={id}>
-        {label}
-      </FieldLabel>
-      <Select onValueChange={onValueChange} value={value}>
-        <SelectTrigger
-          aria-invalid={error === undefined ? undefined : true}
-          className="h-11 w-full rounded-lg border-line bg-surface-2 px-3 text-[15px]"
-          id={id}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      {error === undefined ? null : <FieldError>{error}</FieldError>}
       {error === undefined && hint !== undefined ? (
         <FieldDescription className="text-xs">{hint}</FieldDescription>
       ) : null}
