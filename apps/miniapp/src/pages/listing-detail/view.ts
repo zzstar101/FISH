@@ -11,6 +11,9 @@
  * 后者仍须在微信开发者工具里按 C/D 的时序实测（`docs/miniapp-dev-workflow.md` §5）。
  */
 
+// 只取类型：本模块是纯判据，`import type` 在编译期擦除，不会把 store 的运行时副作用带进来
+import type { AuthStatus } from '@/features/auth/store'
+
 /** 乐观占位的 id 前缀：只有它能在本地列表里认出「还没被服务端确认」的那几条 */
 export const PENDING_COMMENT_PREFIX = 'local-'
 
@@ -183,29 +186,69 @@ export function shouldSurfaceStaleAuthFailure(
 }
 
 /**
- * 一次「聊一聊」的在飞任务（同 `match` 页 `ChatTask` 的口径）。
+ * 冷启动解析身份（`unknown → authed`）那一次代次前进要不要放过（#236 复查 N1）。
  *
- * 为什么不能只用一个布尔在飞锁：`POST /conversations` 是**账号作用域**的写操作。
- * A 发起后退出 / 换 B / 离开本页，迟到的 `.then` 仍会压出会话页、`.catch` 仍会弹
- * toast；而一个裸布尔锁还有第二重毛病 —— 换号后 B 的点击会被 A 的在途请求堵住，
- * A 的 `finally` 又会把 B 已经取得的锁清掉，让 B 能连点压出两个会话页。
+ * 本页是公开页：登录态还没解析出来时（store 的 `unknown`）底栏就点得动，而请求带的
+ * cookie 取自本地存储（`lib/session`），本来就是**同一个账号**在发 —— 那次响应虽然
+ * 跨过了代次前进，却不该被当成过期：判过期会让用户点了「聊一聊」后页面毫无反应
+ * （会话其实已在服务端建好，只是不再导航）。
+ *
+ * 三条约束缺一不可（#284 审查回合 3）：
+ * 1. **发起时确实是 `unknown`**：`userId` 为 null 有两种，已确认的 `anonymous` 不在豁免内
+ *    —— 那种情况下用户是真的没登录，期间的登录是「换了身份」（哪怕换成了自己）。
+ * 2. **代次只前进一次**：真正的换号（退出后登录 / A → B / A → B → A）至少前进两次，
+ *    卸载也不会把匿名变成某个账号 —— 都落不进这里。与读取链的 `isOwnerSwitch` 同源。
+ * 3. **那次动作仍持有它自己那把锁**：否则「匿名请求还在飞 → 用户又点了一次」时，
+ *    旧响应会绕过令牌校验一起导航（压出两个会话页）。换号清场只在**真换号**时清锁，
+ *    就是为了让这条在身份解析路径上成立。
+ */
+export function isColdStartIdentityResolution(
+  task: ActionTask,
+  current: { ownerId: string | null; epoch: number; token: number | null },
+): boolean {
+  return (
+    task.authStatus === 'unknown' &&
+    task.ownerId === null &&
+    current.ownerId !== null &&
+    current.epoch === task.epoch + 1 &&
+    current.token === task.token
+  )
+}
+
+/** 一次「聊一聊」或「立即购买」的在飞任务（同 `match` 页 `ChatTask` 的口径）。
+ *
+ * 为什么不能只用一个布尔在飞锁：这两个动作都会发**账号作用域**的异步回调（建会话请求，
+ * 原生弹窗的确认回调）。A 发起后退出 / 换 B / 离开本页，迟到的回调仍会压出会话页、弹
+ * toast 或把「待店家确认」写进 B 的页面；而一个裸布尔锁还有第二重毛病 —— 换号后 B 的
+ * 点击会被 A 的在途动作堵住，A 的 `finally` 又会把 B 已经取得的锁清掉，让 B 能连点。
  *
  * 所以令牌（`token`）与账号代次（`ownerId` + `epoch`）分工：
  * - `token` 决定**锁归谁**（只有持锁任务能释放）；
- * - `ownerId` + `epoch` 决定**响应还算不算数**。
+ * - `ownerId` + `epoch` 决定**回调还算不算数**。
  *
- * 三者必须全等：A → B → A 之后账号名又等于 A，只比账号名会让旧响应重新「匹配」。
+ * 三者必须全等：A → B → A 之后账号名又等于 A，只比账号名会让旧回调重新「匹配」。
  */
-export type ChatTask = { ownerId: string | null; epoch: number; token: number }
-
-/** 铸任务必须在发请求**之前**：之后再换号 / 卸载，也能凭令牌把整条回调作废。 */
-export function beginChatTask(epoch: number, ownerId: string | null, token: number): ChatTask {
-  return { ownerId, epoch, token }
+export type ActionTask = {
+  ownerId: string | null
+  epoch: number
+  token: number
+  /** 发起那一刻的登录态：`unknown`（还没解析出来）才吃冷启动豁免，见上 */
+  authStatus: AuthStatus
 }
 
-/** 迟到的会话响应是否仍属于当前账号、当前世代、且仍持有那把在飞锁。 */
-export function isCurrentChatTask(
-  task: ChatTask,
+/** 铸任务必须在发请求 / 弹窗**之前**：之后再换号 / 卸载，也能凭令牌把整条回调作废。 */
+export function beginActionTask(
+  epoch: number,
+  ownerId: string | null,
+  token: number,
+  authStatus: AuthStatus,
+): ActionTask {
+  return { ownerId, epoch, token, authStatus }
+}
+
+/** 迟到的回调是否仍是当前账号、当前世代，且那次动作仍持有这把在飞锁。 */
+export function isCurrentActionTask(
+  task: ActionTask,
   current: { ownerId: string | null; epoch: number; token: number | null },
 ): boolean {
   return (
@@ -216,10 +259,10 @@ export function isCurrentChatTask(
 /**
  * 收尾时是否该释放这次任务占的锁：**只认令牌**。
  *
- * 不比对账号与代次 —— 那两个是「要不要采纳这次响应」的判据；锁的归属只由令牌决定。
+ * 不比对账号与代次 —— 那两个是「要不要采纳这次回调」的判据；锁的归属只由令牌决定。
  * 否则 A 的迟到 `finally` 会删掉 B 已经取得的锁（换号时锁已作废，B 可以立刻重新发起）。
  */
-export function shouldReleaseChatTask(task: ChatTask, inFlightToken: number | null): boolean {
+export function shouldReleaseActionTask(task: ActionTask, inFlightToken: number | null): boolean {
   return inFlightToken === task.token
 }
 

@@ -41,7 +41,8 @@ import {
 } from '@/mock/api'
 import { findUser } from '@/mock/users'
 import {
-  beginChatTask,
+  type ActionTask,
+  beginActionTask,
   beginReloadWrite,
   beginTask,
   type CommentsRead,
@@ -50,7 +51,8 @@ import {
   createDeferredReload,
   dropPendingComments,
   hasInflightWrites,
-  isCurrentChatTask,
+  isColdStartIdentityResolution,
+  isCurrentActionTask,
   isLatestLoad,
   isOwnerSwitch,
   isReloadDue,
@@ -62,7 +64,7 @@ import {
   resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
-  shouldReleaseChatTask,
+  shouldReleaseActionTask,
   shouldSurfaceStaleAuthFailure,
 } from './view'
 import './index.scss'
@@ -310,7 +312,7 @@ export default function ListingDetail() {
    * 本页是**公开页**：不挂 `useAuthGuard`，匿名也能读；账号只用来决定「哪些是账号
    * 私有的东西、换号时该清掉」（#170 判据 C）。
    */
-  const { user } = useAuth()
+  const { user, status: authStatus } = useAuth()
   const userId = user?.id ?? null
   /** 上一个渲染看到的账号：换号要在**渲染期**同步清场，用 effect 会晚一帧画出上个账号的草稿 */
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
@@ -333,10 +335,15 @@ export default function ListingDetail() {
   const reloadRef = useRef(createDeferredReload())
   /** 首次 show 让给 `useLoad` 的首屏加载，免得一进页双发 */
   const firstShowRef = useRef(true)
-  /** 「聊一聊」在飞锁：持有它的是**某一次点击**的令牌（`null` = 没有在途请求） */
+  /**
+   * 底栏两个动作的在飞锁：各自持有**某一次点击**的令牌（`null` = 它没有在途动作）。
+   *
+   * 两把独立的锁：两个钮互不相干，一个在飞不该把另一个也按死。
+   */
   const chatInFlightRef = useRef<number | null>(null)
+  const buyInFlightRef = useRef<number | null>(null)
   /** 令牌发号器：只增不减，保证 A 的迟到收尾认不出 B 的锁 */
-  const chatSeqRef = useRef(0)
+  const actionSeqRef = useRef(0)
 
   /**
    * 换号 / 退出：渲染期同步清掉账号私有的 state。
@@ -353,10 +360,16 @@ export default function ListingDetail() {
     // 读取链同样是账号作用域：真正的换号要把在途的 load / refresh / 翻页一并作废，
     // 迟到的公开快照不许写进新账号的页面。冷启动解析身份（null → id）不算换号，
     // 那会把首屏 `load` 判过期、页面永远停在骨架屏上
-    if (isOwnerSwitch(prevUserId)) loadSeqRef.current += 1
-    // 「聊一聊」的在飞锁同样作废：A 发起的建会话请求不属于 B，锁也要还给 B ——
-    // 不清的话 B 点「聊一聊」会被 A 的在途请求一直堵着，直到 A 的响应回来
-    chatInFlightRef.current = null
+    if (isOwnerSwitch(prevUserId)) {
+      loadSeqRef.current += 1
+      // 两个动作的在飞锁同样只在**真换号**时作废：A 发起的建会话请求 / 还开着的购买
+      // 弹窗不属于 B，锁要还给 B —— 不清的话 B 点下去会被 A 的在途动作一直堵着。
+      // 冷启动解析身份是同一个人（cookie 本来就取自本地存储），锁必须留着：
+      // 清掉它 `isColdStartIdentityResolution` 的「仍持有那把锁」就永远不成立，
+      // 那次点击又会被判过期（等于白改）。
+      chatInFlightRef.current = null
+      buyInFlightRef.current = null
+    }
     const cleared = clearedPrivateScope()
     setCommentInput(cleared.commentInput)
     setReplyInput(cleared.replyInput)
@@ -559,6 +572,27 @@ export default function ListingDetail() {
   }
 
   /**
+   * 底栏动作的在飞任务是否还作数（两个动作共用）。
+   *
+   * 除了「账号 + 代次 + 令牌全等」，还要放过**冷启动解析身份**那一次代次前进：
+   * 本页公开、底栏一进来就点得动，而登录态解析（`unknown → authed`）会在点击之后
+   * 才落地。请求带的 cookie 本来就取自本地存储、是同一个账号，把这一次判过期等于
+   * 「点了没反应」（会话其实已经建好了）。判据见 `isColdStartIdentityResolution`
+   * —— 它同时要求「发起时确实是 `unknown`」与「仍持有那把锁」，不是无条件放行。
+   */
+  const isTaskLive = (task: ActionTask, inFlight: number | null): boolean =>
+    isCurrentActionTask(task, {
+      ownerId: ownerRef.current,
+      epoch: epochRef.current,
+      token: inFlight,
+    }) ||
+    isColdStartIdentityResolution(task, {
+      ownerId: ownerRef.current,
+      epoch: epochRef.current,
+      token: inFlight,
+    })
+
+  /**
    * 「聊一聊」：与这件商品的卖家建/取会话后跳会话页 —— 与匹配结果页（#67 第二步）
    * 同一条路径：`POST /conversations` 以商品 id 为入参，服务端对同一 (listingId, 买家)
    * **复用**既有会话，所以本页不做本地缓存，重复点击就是幂等的重发。
@@ -571,31 +605,30 @@ export default function ListingDetail() {
    */
   const chatWithSeller = () => {
     if (chatInFlightRef.current !== null) return
-    chatSeqRef.current += 1
-    const task = beginChatTask(epochRef.current, ownerRef.current, chatSeqRef.current)
+    actionSeqRef.current += 1
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
     chatInFlightRef.current = task.token
-    const isCurrentTask = (): boolean =>
-      isCurrentChatTask(task, {
-        ownerId: ownerRef.current,
-        epoch: epochRef.current,
-        token: chatInFlightRef.current,
-      })
     /** 只释放自己的锁：换号后 B 重新发起时，A 的迟到收尾不能删掉 B 的标记 */
     const release = (): void => {
-      if (!shouldReleaseChatTask(task, chatInFlightRef.current)) return
+      if (!shouldReleaseActionTask(task, chatInFlightRef.current)) return
       chatInFlightRef.current = null
     }
     void createConversation(id)
       .then(async (conversation) => {
         // 迟到的成功响应一律丢弃、不导航：A → B → A 时账号又等于 A，只比账号挡不住
-        if (!isCurrentTask()) return
+        if (!isTaskLive(task, chatInFlightRef.current)) return
         await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
       })
       .catch((error: unknown) => {
         // 旧任务的失败不能弹给新账号。例外是**会话过期**（401）：`apiRequest` 就地清会话、
         // store 同步回到匿名，于是失败在守卫看来也是「迟到的」，可失败的正是本人 ——
         // 静默吞掉等于「点了聊一聊，什么都没发生」（同 `sendComment` 的口径）
-        if (!isCurrentTask()) {
+        if (!isTaskLive(task, chatInFlightRef.current)) {
           if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
             void Taro.showToast({ title: '请先登录后再聊一聊', icon: 'none' })
           }
@@ -617,18 +650,39 @@ export default function ListingDetail() {
    *
    * 弹窗回调同样是迟到的异步回调：等待期间换号 / 卸载之后，「待店家确认」写的就是
    * 别人的页面了。切号清场只清**已写下**的状态，挡不住清场之后的这次回写。
+   *
+   * 在飞锁与「聊一聊」同口径（另一把锁）：`showModal` 没回之前不再弹第二个，否则
+   * 连点会叠出多个确认框；`fail`（老 Android 上点蒙层 / 页面卸载走 reject）按
+   * 「没确认」处理 —— 不写终态，也不弹错。
    */
   const buy = () => {
-    if (buyRequested) return
-    const task = beginTask(epochRef.current, ownerRef.current)
+    if (buyRequested || buyInFlightRef.current !== null) return
+    actionSeqRef.current += 1
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
+    buyInFlightRef.current = task.token
+    const release = (): void => {
+      if (!shouldReleaseActionTask(task, buyInFlightRef.current)) return
+      buyInFlightRef.current = null
+    }
     void Taro.showModal({
       title: '确定立即购买',
       content: '请核实商品信息，确认后向卖家发送请求',
-    }).then((result) => {
-      if (!result.confirm) return
-      if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return
-      setBuyRequested(true)
     })
+      .then((result) => {
+        if (!result.confirm) return
+        if (!isTaskLive(task, buyInFlightRef.current)) return
+        setBuyRequested(true)
+      })
+      .catch((error: unknown) => {
+        // 弹窗没完成（点蒙层 / 页面卸载 / 平台走 fail）就是「没确认」，留痕不打扰用户
+        console.debug('[miniapp] 购买确认弹窗未完成，按未确认处理', error)
+      })
+      .finally(release)
   }
 
   /**
