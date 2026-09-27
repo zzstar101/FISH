@@ -137,7 +137,7 @@ describe('publish API', () => {
       calls.push({ url, method: init?.method ?? 'GET' })
       return Response.json(
         {
-          id: '01930000-0000-7000-8000-000000000001',
+          id: 'lst_01jc000000e00800000000000t',
           title: '教材',
           priceCents: 100,
           category: 'BOOKS',
@@ -152,7 +152,7 @@ describe('publish API', () => {
           description: '九成新',
           images: [],
           seller: {
-            id: '01930000-0000-7000-8000-000000000002',
+            id: 'usr_01jc000000e00800000000000b',
             nickname: '卖家',
             avatarUrl: null,
             authStatus: 'UNVERIFIED',

@@ -5,7 +5,7 @@ import { resetPcSession } from '../../lib/session-cache'
 import { invalidateTransactionSurfaces, profileKeys } from './queries'
 
 const oldUser: Me = {
-  id: '01930000-0000-7000-8000-00000000000a',
+  id: 'usr_01jc000000e00800000000000a',
   nickname: '旧用户',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',
@@ -28,7 +28,7 @@ describe('profile query cache scope', () => {
       expect(key).toContain(oldUser.id)
     }
     expect(profileKeys.aggregate(oldUser.id)).not.toEqual(
-      profileKeys.aggregate('01930000-0000-7000-8000-00000000000b'),
+      profileKeys.aggregate('usr_01jc000000e00800000000000b'),
     )
   })
 
@@ -36,7 +36,9 @@ describe('profile query cache scope', () => {
     const queryClient = new QueryClient()
     const listingsKey = profileKeys.listings(oldUser.id, 'ALL')
     const chatKey = ['pc', 'chat', 'unread-count', oldUser.id] as const
-    queryClient.setQueryData(listingsKey, { items: [{ id: 'listing-1', status: 'RESERVED' }] })
+    queryClient.setQueryData(listingsKey, {
+      items: [{ id: 'lst_01jc000000e00800000000000t', status: 'RESERVED' }],
+    })
     queryClient.setQueryData(chatKey, 1)
 
     invalidateTransactionSurfaces(queryClient, oldUser.id)

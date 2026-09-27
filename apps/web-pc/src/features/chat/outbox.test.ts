@@ -9,12 +9,12 @@ import {
 } from './outbox'
 import type { SendTextVariables } from './queries'
 
-function message(id: string, content: string): MessageDto {
+function message(id: MessageDto['id'], content: string): MessageDto {
   return {
     id,
-    conversationId: 'conversation-1',
-    senderId: 'user-a',
-    sender: { id: 'user-a', nickname: '阿岚', avatarUrl: null },
+    conversationId: 'cnv_01jc000000e00800000000001a',
+    senderId: 'usr_01jc000000e00800000000000a',
+    sender: { id: 'usr_01jc000000e00800000000000a', nickname: '阿岚', avatarUrl: null },
     type: 'TEXT',
     content,
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -114,23 +114,23 @@ describe('dispatchOutboxSend', () => {
 
     void dispatchOutboxSend({
       item: first,
-      conversationId: 'conversation-1',
+      conversationId: 'cnv_01jc000000e00800000000001a',
       mutation: fake.mutation,
       setOutbox: store.setOutbox,
       onSent: (value) => sent.push(value),
     })
     void dispatchOutboxSend({
       item: second,
-      conversationId: 'conversation-1',
+      conversationId: 'cnv_01jc000000e00800000000001a',
       mutation: fake.mutation,
       setOutbox: store.setOutbox,
       onSent: (value) => sent.push(value),
     })
 
     // 反序返回：第二条先成功落地，第一条仍在途。
-    fake.resolve(second.clientRequestId, message('msg-2', '第二条'))
+    fake.resolve(second.clientRequestId, message('msg_01jc000000e00800000000001w', '第二条'))
     await flush()
-    expect(sent).toEqual([message('msg-2', '第二条')])
+    expect(sent).toEqual([message('msg_01jc000000e00800000000001w', '第二条')])
     expect(store.outbox).toEqual([first])
 
     fake.reject(first.clientRequestId, new ApiError('CONVERSATION_NOT_FOUND', 404, 'nope'))
@@ -153,7 +153,7 @@ describe('dispatchOutboxSend', () => {
     const sent: string[] = []
     const input = (item: OutboxMessage) => ({
       item,
-      conversationId: 'conversation-1',
+      conversationId: 'cnv_01jc000000e00800000000001a',
       mutation: fake.mutation,
       setOutbox: store.setOutbox,
       onSent: (value: MessageDto) => sent.push(value.id),
@@ -162,14 +162,14 @@ describe('dispatchOutboxSend', () => {
     void dispatchOutboxSend(input(first))
     void dispatchOutboxSend(input(second))
 
-    fake.resolve(first.clientRequestId, message('msg-1', '第一条'))
+    fake.resolve(first.clientRequestId, message('msg_01jc000000e00800000000001v', '第一条'))
     await flush()
-    expect(sent).toEqual(['msg-1'])
+    expect(sent).toEqual(['msg_01jc000000e00800000000001v'])
     expect(store.outbox).toEqual([second])
 
-    fake.resolve(second.clientRequestId, message('msg-2', '第二条'))
+    fake.resolve(second.clientRequestId, message('msg_01jc000000e00800000000001w', '第二条'))
     await flush()
-    expect(sent).toEqual(['msg-1', 'msg-2'])
+    expect(sent).toEqual(['msg_01jc000000e00800000000001v', 'msg_01jc000000e00800000000001w'])
     expect(store.outbox).toEqual([])
   })
 
@@ -188,12 +188,12 @@ describe('dispatchOutboxSend', () => {
 
     void dispatchOutboxSend({
       item: retrying,
-      conversationId: 'conversation-1',
+      conversationId: 'cnv_01jc000000e00800000000001a',
       mutation: fake.mutation,
       setOutbox: store.setOutbox,
       onSent: () => undefined,
     })
-    fake.resolve(item.clientRequestId, message('msg-1', '重试我'))
+    fake.resolve(item.clientRequestId, message('msg_01jc000000e00800000000001v', '重试我'))
     await flush()
     expect(store.outbox).toEqual([])
   })

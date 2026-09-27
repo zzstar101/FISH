@@ -15,7 +15,7 @@ const user: Me = {
 
 const newUser: Me = {
   ...user,
-  id: '01930000-0000-7000-8000-00000000000b',
+  id: 'usr_01jc000000e00800000000000b',
   nickname: '新账号',
 }
 

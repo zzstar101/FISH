@@ -6,7 +6,7 @@ import { fetchCurrentListingTarget } from './queries'
 
 const originalFetch = globalThis.fetch
 
-const listingId = '01930000-0000-7000-8000-000000000001'
+const listingId = 'lst_01jc000000e00800000000000t'
 const listing: ListingDetail = {
   id: listingId,
   title: '测试商品',
@@ -23,7 +23,7 @@ const listing: ListingDetail = {
   description: '测试描述',
   images: [],
   seller: {
-    id: '01930000-0000-7000-8000-000000000002',
+    id: 'usr_01jc000000e00800000000000b',
     nickname: '卖家',
     avatarUrl: null,
     authStatus: 'UNVERIFIED',

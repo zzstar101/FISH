@@ -37,7 +37,7 @@ describe('profile api paths', () => {
         body: typeof init?.body === 'string' ? init.body : null,
       })
       return Response.json({
-        id: '01930000-0000-7000-8000-000000000001',
+        id: 'lst_01jc000000e00800000000000t',
         title: '新标题',
         description: '新描述',
         priceCents: 1234,
@@ -53,7 +53,7 @@ describe('profile api paths', () => {
         moderationStatus: 'APPROVED',
         images: [],
         seller: {
-          id: '01930000-0000-7000-8000-00000000000a',
+          id: 'usr_01jc000000e00800000000000a',
           nickname: '卖家',
           avatarUrl: null,
           authStatus: 'UNVERIFIED',
@@ -62,7 +62,7 @@ describe('profile api paths', () => {
       })
     }) as unknown as typeof fetch
 
-    await updateListing('01930000-0000-7000-8000-000000000001', {
+    await updateListing('lst_01jc000000e00800000000000t', {
       title: '新标题',
       description: '新描述',
       priceCents: 1234,
@@ -70,7 +70,7 @@ describe('profile api paths', () => {
 
     expect(calls).toEqual([
       {
-        url: '/api/listings/01930000-0000-7000-8000-000000000001',
+        url: '/api/listings/lst_01jc000000e00800000000000t',
         method: 'PATCH',
         body: JSON.stringify({ title: '新标题', description: '新描述', priceCents: 1234 }),
       },

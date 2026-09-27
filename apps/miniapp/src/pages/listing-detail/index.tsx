@@ -1020,8 +1020,12 @@ export default function ListingDetail() {
    * `ListingCardSchema.id` = `ListingIdSchema` 的 `lst_` 公开 ID（`packages/contracts/src/listings/schema.ts`），
    * 举报页会用 `ListingIdSchema.safeParse` 硬校验后才 POST /reports —— 裸 UUID 到不了公开 API。
    * 商品编号不在页内展示（#217：详情页不常驻展示编号）。
+   *
+   * 「是不是本人」统一取上面的 `ownListing`（#274 的 `ownerViewUserId` 口径：演示构建
+   * 会把当前登录 uuid 换成 mock 世界的「我」）。本页曾另立一个直接比 `userId` 的局部
+   * 变量，与 `./view` 里同名的 `isOwnListing` 谓词撞在同一作用域，合并后会把上面那次
+   * 调用压进 TDZ —— 现在只剩一个归属判据。
    */
-  const isOwnListing = userId !== null && data !== null && data.seller.id === userId
   const goReport = () => {
     if (!data || !listing) return
     const query = [
@@ -1164,8 +1168,8 @@ export default function ListingDetail() {
                 <Text className="detail__tag">{conditionLabel(listing.condition)}</Text>
                 {listing.negotiable ? <Text className="detail__tag">可小刀</Text> : null}
                 {/* #252：举报入口挂在标签行右端（Owner 2026-09-26：与 tag 同排、右边对齐）。
-                    仅非本人商品显示；isOwnListing / goReport 见组件内注释。 */}
-                {!isOwnListing ? (
+                    仅非本人商品显示；ownListing / goReport 见组件内注释。 */}
+                {!ownListing ? (
                   <View className="detail__tag-report" onClick={goReport}>
                     <Text>举报</Text>
                   </View>
