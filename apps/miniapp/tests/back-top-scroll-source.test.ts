@@ -99,13 +99,19 @@ describe('watchers 回顶钮的滚动源（内滚容器）', () => {
     expect(await watchersSource()).toContain('onTop={backToTop}')
   })
 
-  test('名单换了一份就把浮现态归零（否则钮会悬在骨架屏 / 空态上）', async () => {
-    // 用下一个语句当右界：清场块里有多个 `}`（`setScope({ ... })`），切到第一个就断了
-    const block = await slice(
+  test('名单每次重载都把浮现态归零（否则钮会悬在骨架屏 / 空态上）', async () => {
+    // 换商品 / 换账号那一支：用下一个语句当右界（块里有多个 `}`，切到第一个就断了）
+    const scopeBlock = await slice(
       'if (scope.userId !== userId || scope.listingId !== listingId)',
       'useDidShow(',
     )
-    expect(block).toContain('setPage(initialPage())')
-    expect(block).toContain('setShowTop(false)')
+    expect(scopeBlock).toContain('setPage(initialPage())')
+    expect(scopeBlock).toContain('setShowTop(false)')
+
+    // 从详情页返回触发 `useDidShow` → 重拉那一支：页面实例没换，清场块不会跑，
+    // 所以这里也得归零（实测：漏了它，返回后钮仍悬着，而列表已回到顶部）
+    const reloadBlock = await slice('useEffect(() => {', 'if (!listingId) {')
+    expect(reloadBlock).toContain('setPage(initialPage())')
+    expect(reloadBlock).toContain('setShowTop(false)')
   })
 })

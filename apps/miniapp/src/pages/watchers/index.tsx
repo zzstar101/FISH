@@ -87,6 +87,9 @@ export default function Watchers() {
     setPage(initialPage())
     setMorePending(false)
     setMoreFailed(false)
+    // 名单重新加载：`ScrollView` 会被骨架屏替下、新列表又从 `scrollTop=0` 开始，
+    // 而浮现态是上一份名单滚出来的 —— 不归零它就会悬在不可滚的界面上（先例：user 页同坑）
+    setShowTop(false)
 
     if (!listingId) {
       setPage((prev) => ({ ...prev, phase: 'not-found' }))
