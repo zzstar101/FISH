@@ -301,7 +301,7 @@ export function mergeConversationReadMarker(
 
 /**
  * 会话 DTO 的单调合并：读位不后退，`lastMessageAt` 更旧的 HTTP/read 响应
- * 也不能把实时推送写入的较新预览覆盖掉。
+ * 也不能把实时推送写入的较新预览与未读数覆盖掉。
  */
 export function mergeConversationDto(
   current: ConversationDto | null | undefined,
@@ -313,7 +313,12 @@ export function mergeConversationDto(
     current.id === next.id &&
     Date.parse(current.lastMessageAt) > Date.parse(next.lastMessageAt)
   ) {
-    return { ...merged, lastMessage: current.lastMessage, lastMessageAt: current.lastMessageAt }
+    return {
+      ...merged,
+      lastMessage: current.lastMessage,
+      lastMessageAt: current.lastMessageAt,
+      unreadCount: current.unreadCount,
+    }
   }
   return merged
 }

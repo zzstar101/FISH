@@ -352,6 +352,23 @@ describe('read receipt cache', () => {
     expect(merged.lastMessage?.content).toBe('新的实时消息')
   })
 
+  test('keeps the newer unread count when an older detail response arrives', () => {
+    const current = {
+      ...conversation(null),
+      lastMessageAt: '2026-01-01T00:00:05.000Z',
+      unreadCount: 2,
+    }
+    const older = {
+      ...conversation(null),
+      lastMessageAt: '2026-01-01T00:00:00.000Z',
+      unreadCount: 0,
+    }
+
+    const merged = mergeConversationDto(current, older)
+    expect(merged.lastMessageAt).toBe('2026-01-01T00:00:05.000Z')
+    expect(merged.unreadCount).toBe(2)
+  })
+
   test('compares message createdAt against the counterpart read marker', () => {
     expect(
       isMessageRead(message('m1', '2026-01-01T00:00:00.000Z'), '2026-01-01T00:00:00.000Z'),
