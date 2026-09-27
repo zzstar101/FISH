@@ -81,7 +81,7 @@ type ContentModerationProvider = {
 ```
 
 - `TextModerationResult.fields` 每个字段一条 `FieldModerationResult`；`decision` 是字段聚合后的最高风险。
-- `ImageModerationResult.contentDigest` 是腾讯 `FileMD5`（腾讯未返回则 `null`，**不得把 null 当通过**）。
+- `ImageModerationResult.contentDigest` 是腾讯 `FileMD5`（腾讯未返回则 `null`，**不得把 null 当通过**）；非空但**不是 32 位十六进制**时按 `invalid_response`（`detail=digest`）失败——它是后续「图片未被替换」的证明，不能把任意上游字符串当摘要透传。
 - `policyVersion`：腾讯 transport 记录 `BizType`，本地 transport 记录 `MODERATION_RULE_VERSION`。
 - `score` / `label` / `subLabel` 只回带腾讯原值供审计与调参，**适配器不做任何阈值判定**（#228 §2）。
 - `requestId` 已过白名单（字母数字 `._-`，≤64），非该形状时为 `null`：它会进日志，上游不能借它注入换行。
@@ -202,7 +202,7 @@ if (image.decision === 'ALLOW' && image.contentDigest) {
 ## 8. 图片审核与"不可覆盖"的材料
 
 - 每张图独立 `moderateImage`：`Pass` 才能直接用；`Review` 使商品进人工队列；`Block` 不允许引用。
-- 适配器返回腾讯 `FileMD5` 作为 `contentDigest`。**这是"审核后不允许覆盖同一对象"的材料，不是实现**：固化到不可覆盖 key、或校验 ETag/摘要/版本，都在后续接线的 Issue 里（与 #217 协调上传路径）。
+- 适配器返回腾讯 `FileMD5` 作为 `contentDigest`（已校验为 32 位十六进制并统一小写；形状不符按 `invalid_response` 失败，不放行）。**这是"审核后不允许覆盖同一对象"的材料，不是实现**：固化到不可覆盖 key、或校验 ETag/摘要/版本，都在后续接线的 Issue 里（与 #217 协调上传路径）。
 - 只校验 size/mime 不能证明内容未被替换；`contentDigest === null` 时调用方**不得**视为通过。
 - 本地 transport 判不了图片内容，一律 `REVIEW` + `reasonCode: 'LOCAL_IMAGE_NOT_AUDITED'`，不会给出 `ALLOW`。
 
@@ -216,7 +216,7 @@ if (image.decision === 'ALLOW' && image.contentDigest) {
 bun test apps/api/src/modules/moderation packages/shared/src/env.test.ts
 ```
 
-- `providers/tencent.test.ts`：用 `Bun.serve` 起本地假上游（随机端口），按 `X-TC-Action` 分流 TMS/IMS。覆盖 `Pass`/`Review`/`Block` 映射、多字段聚合、base64 请求体、请求不带 Secret、5xx/429/403/非 JSON/`Response` 非对象/`Error.Code`/`Suggestion` 非法/连接失败/传输超时的分类与重试次数、错误消息不搬运上游文本、`RequestId` 非白名单形状置 null、多字段 `dataId` 越界时不发任何请求、图片 `FileMD5` → `contentDigest`、对象不存在/过大/dataId 越界、读取对象抛存储异常 → `network`（503 而非 500）、图片重试只读一次字节。
+- `providers/tencent.test.ts`：用 `Bun.serve` 起本地假上游（随机端口），按 `X-TC-Action` 分流 TMS/IMS。覆盖 `Pass`/`Review`/`Block` 映射、多字段聚合、base64 请求体、请求不带 Secret、5xx/429/403/非 JSON/`Response` 非对象/`Error.Code`/`Suggestion` 非法/连接失败/传输超时的分类与重试次数、错误消息不搬运上游文本、`RequestId` 非白名单形状置 null、多字段 `dataId` 越界时不发任何请求、图片 `FileMD5` → `contentDigest`（大小写统一为小写）、`FileMD5` 非 MD5 形状 → `invalid_response`（可重试、不放行）、对象不存在/过大/dataId 越界、读取对象抛存储异常 → `network`（503 而非 500）、图片重试只读一次字节。
 - `providers/provider.test.ts`：本地词表 transport 的判定语义、聚合、全空白拒绝、图片一律 `REVIEW`；工厂按 transport 选实现；决策聚合取最高风险、空集合与未知判定值都抛错。
 - `providers/retry.test.ts`：可重试错误重放到上限、不可重试错误只调用一次、`attempts < 1` 抛 `RangeError`。
 - `packages/shared/src/env.test.ts`：4 项缺一即失败（并点名缺哪一项）、生产禁 `local`（含大小写/空白变体）、无默认值、trim、错误信息不含密钥值。

@@ -46,6 +46,8 @@ const TENCENT_IMS_MAX_BASE64_CHARS = 10_000_000
 const MAX_IMAGE_BYTES = Math.floor(TENCENT_IMS_MAX_BASE64_CHARS / 4) * 3
 /** 腾讯 `DataId` 取值：英文字母、数字、`_` `-` `@` `#`，长度不超过 64。 */
 const TENCENT_DATA_ID_PATTERN = /^[A-Za-z0-9_@#-]{1,64}$/
+/** 腾讯 IMS `FileMD5`：「检测对象对应的 MD5 校验值」，即 32 位十六进制。 */
+const TENCENT_FILE_MD5_PATTERN = /^[0-9a-fA-F]{32}$/
 /**
  * 传输层超时的 message 特征。SDK 在 `doRequestWithSign3` 的 catch 里把底层异常拍平成
  * `TencentCloudSDKHttpException(e.message)`，`type`/`name` 全丢，只剩 message 能区分超时与断连：
@@ -136,6 +138,26 @@ function verdictFromPayload(payload: unknown, provider: ModerationProviderName):
     score: typeof payload.Score === 'number' ? payload.Score : null,
     requestId,
   }
+}
+
+/**
+ * IMS 响应里的 `FileMD5` → 固化材料。它会被调用方当成「图片内容未被替换」的证明，所以只接受
+ * MD5 十六进制形状（SDK 文档：检测对象对应的 MD5 校验值）：非空但不符形状说明上游响应不可信，
+ * 按 `invalid_response` 失败（**绝不放行**），不把任意字符串当摘要透传。缺字段仍返回 null——
+ * 调用方不得把 null 当通过（设计文档 §7/§8）。
+ */
+function digestFromPayload(payload: TencentModerationPayload): string | null {
+  const raw = nonEmpty(payload.FileMD5)
+  if (raw === null) return null
+  if (!TENCENT_FILE_MD5_PATTERN.test(raw)) {
+    throw new ContentModerationError({
+      reason: 'invalid_response',
+      provider: 'TENCENT_IMS',
+      detail: 'digest',
+    })
+  }
+  // 统一小写：同一图片的摘要用于跨次比对，大小写不该造成假不等。
+  return raw.toLowerCase()
 }
 
 /**
@@ -268,7 +290,7 @@ export function createTencentContentModerationProvider(
     }
     return {
       verdict: verdictFromPayload(payload, 'TENCENT_IMS'),
-      contentDigest: nonEmpty(payload.FileMD5),
+      contentDigest: digestFromPayload(payload),
     }
   }
 

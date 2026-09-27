@@ -65,8 +65,9 @@ export type ImageModerationResult = ModerationVerdict & {
   objectKey: string
   policyVersion: string
   /**
-   * 图片内容摘要（腾讯 IMS 的 `FileMD5`）。#228 要求「审核通过后不能用覆盖同一对象的方式
-   * 替换图片内容」，固化/校验需要这个摘要；腾讯未返回时为 null（调用方不得把 null 当通过）。
+   * 图片内容摘要（腾讯 IMS 的 `FileMD5`，已校验为 32 位十六进制并统一小写）。#228 要求
+   * 「审核通过后不能用覆盖同一对象的方式替换图片内容」，固化/校验需要这个摘要；腾讯未返回时
+   * 为 null（调用方不得把 null 当通过）；非空但不是合法摘要形状时按 `invalid_response` 失败。
    */
   contentDigest: string | null
   /** 无法判定时的原因（本地 provider 不审图片内容时为 `LOCAL_IMAGE_NOT_AUDITED`）。 */

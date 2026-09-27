@@ -460,7 +460,11 @@ describe('腾讯 provider · 图片判定', () => {
   test('IMS Pass → ALLOW，并回带 FileMD5 作为 contentDigest', async () => {
     const upstream = startMockUpstream((call) =>
       call.action === 'ImageModeration'
-        ? tencentOk({ FileMD5: 'digest-1', Suggestion: 'Pass', Label: 'Normal' })
+        ? tencentOk({
+            FileMD5: 'd41d8cd98f00b204e9800998ecf8427e',
+            Suggestion: 'Pass',
+            Label: 'Normal',
+          })
         : tencentOk(),
     )
     const provider = createProvider(upstream, {}, {})
@@ -470,7 +474,7 @@ describe('腾讯 provider · 图片判定', () => {
     expect(result.decision).toBe('ALLOW')
     expect(result.provider).toBe('TENCENT_IMS')
     expect(result.objectKey).toBe('listings/a.jpg')
-    expect(result.contentDigest).toBe('digest-1')
+    expect(result.contentDigest).toBe('d41d8cd98f00b204e9800998ecf8427e')
     expect(result.policyVersion).toBe(IMS_BIZ_TYPE)
     expect(result.reasonCode).toBeNull()
     expect(upstream.calls[0]?.action).toBe('ImageModeration')
@@ -496,6 +500,46 @@ describe('腾讯 provider · 图片判定', () => {
     expect(blockResult.decision).toBe('BLOCK')
     expect(reviewResult.decision).toBe('REVIEW')
     expect(reviewResult.subLabel).toBeNull()
+    // 上游没回 FileMD5：摘要为 null（调用方不得把 null 当通过），而不是编造一个。
+    expect(blockResult.contentDigest).toBeNull()
+  })
+
+  test('FileMD5 大小写不同 → 统一小写（同一图片的摘要不该假不等）', async () => {
+    const upstream = startMockUpstream(() =>
+      tencentOk({ FileMD5: 'D41D8CD98F00B204E9800998ECF8427E', Suggestion: 'Pass' }),
+    )
+
+    const result = await createProvider(upstream).moderateImage({
+      dataId: 'img_8',
+      objectKey: 'listings/h.jpg',
+    })
+
+    expect(result.contentDigest).toBe('d41d8cd98f00b204e9800998ecf8427e')
+  })
+
+  test('FileMD5 非 MD5 形状 → invalid_response（不放行），不把任意字符串当摘要', async () => {
+    const upstream = startMockUpstream(() =>
+      tencentOk({ FileMD5: 'ok\n[api] FAKE ADMIN LOGIN', Suggestion: 'Pass' }),
+    )
+    running.push(upstream)
+    const provider = createProvider(upstream, { maxAttempts: 2, retryDelayMs: 0 }, {})
+
+    const error = await captureError(() =>
+      provider.moderateImage({ dataId: 'img_9', objectKey: 'listings/i.jpg' }),
+    )
+
+    // 摘要是后续「图片未被替换」的证明：形状不对说明上游响应不可信，按可重试的
+    // invalid_response 失败，绝不把任意字符串透传给调用方当证明。
+    expect(error.reason).toBe('invalid_response')
+    expect(error.provider).toBe('TENCENT_IMS')
+    expect(error.detail).toBe('digest')
+    expect(error.retryable).toBe(true)
+    expect(moderationErrorResponse(error)).toEqual({
+      status: 503,
+      code: 'CONTENT_MODERATION_UNAVAILABLE',
+    })
+    expect(upstream.calls).toHaveLength(2)
+    expect(error.message).not.toContain('FAKE ADMIN LOGIN')
   })
 
   test('对象不存在 / 图片过大 / dataId 越界 → invalid_input，不发请求', async () => {
