@@ -9,7 +9,7 @@ import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import type { ReportRecord } from '@/features/reports/demo'
-import { DEMO_REPORTS_ENABLED, loadMyReports } from '@/features/reports/load'
+import { loadMyReports } from '@/features/reports/load'
 import {
   emptyCopyOf,
   REPORT_STATUS_META,
@@ -31,22 +31,23 @@ import './index.scss'
  *
  * ## Tab 是**筛选取数口径**，不是死控件
  *
- * 真实构建没有数据源（`features/reports/load` 不发请求），整条 Tab 行**不渲染**
- * （没有数据源的「0」会把「系统不知道」说成「你没有举报」，与 `pages/comments` 的
- * 分段栏同一口径）；演示构建（`TARO_APP_MOCK=1`）下两条 tab 都有数据，计数真实可切。
+ * 两个 Tab 的计数来自同一份列表（`GET /reports/mine`，不分目标类型），**列表读完就渲染**
+ * ——真实构建也渲染：数据源已经接线，计数为 0 是「你没有举报过」这个事实，不是「系统不知道」。
+ * 只有加载中（还不知道有几条）与失败态不渲染 Tab 行，避免先闪一排 0 再跳成真实计数。
  *
  * ## 演示 / 真实双档（与 favorites / comments 同一体系）
  *
- * - **演示构建**：7 条演示记录（商品 4 + 用户 3，三态齐）+ 新建态提交追加的进程内
- *   记录；卡片可点进对应填写页的只读态。列表下有「演示数据」说明带。
- * - **真实构建**：缺口空态（「举报功能还没有后端」句式，见 `emptyCopyOf`），如实说明。
- * - `failed` 分支已就位（LoadError + 重试），真实接口接线后即可生效。
+ * - **真实构建**：先发 `GET /reports/mine`（`features/reports/load` 翻页拉齐，封顶 250 条）。
+ *   成功 → 真实记录；失败 → `LoadError` + 重试（**不**用演示数据顶替）。
+ * - **演示构建**（`TARO_APP_MOCK=1`）：真实请求失败才回退到 7 条演示记录（商品 4 + 用户 3，
+ *   三态齐）+ 新建态提交追加的进程内记录，列表下有「演示数据」说明带。
  *
  * ## 卡片点击的去向
  *
  * 商品卡 → `pages/report-listing?reportId=…`，用户卡 → `pages/report-user?reportId=…`
- * （两页互不相通，Owner 2026-09-26 拍板）。演示记录的 `rpt_` 编号能在演示数据里找到；
- * 真实接线后改为后端返回的记录 id。
+ * （两页互不相通，Owner 2026-09-26 拍板）。编号是后端返回的 `rpt_` 记录 id；两个填写页
+ * 按这个编号自己再查一次（契约没有单条读取端点，见 `features/reports/load` 的
+ * `loadReportRecord`）。
  *
  * ## 账号作用域（#170 A–D）
  *
@@ -66,13 +67,14 @@ export default function MyReports() {
 
   const [items, setItems] = useState<ReportRecord[]>([])
   /**
-   * loading / demo 的初值按**构建判据**而不是恒 true（favorites 同款）：
-   * 真实构建没有在途请求，恒 true 会先闪一帧骨架再落缺口空态；演示构建让副行
-   * Tab 从首帧就在位，数据 120ms 后到时不跳布局。
+   * `demo` 初值恒 false、`loading` 初值恒 true：真实接口已接线（#252），登录后一定有一次
+   * 在途请求，`loading` 初值为 false 会先闪一帧空态再跳成列表。
    */
-  const [demo, setDemo] = useState(DEMO_REPORTS_ENABLED)
+  const [demo, setDemo] = useState(false)
   const [failed, setFailed] = useState(false)
-  const [loading, setLoading] = useState(DEMO_REPORTS_ENABLED)
+  const [loading, setLoading] = useState(true)
+  /** 翻到页数上限时后面还有（`nextCursor` 非 null）→ 脚注不能说「已经到底了」 */
+  const [truncated, setTruncated] = useState(false)
   const [target, setTarget] = useState<ReportTarget>('LISTING')
 
   /**
@@ -85,9 +87,10 @@ export default function MyReports() {
     setPrevUserId(userId)
     loadEpoch.current += 1
     setItems([])
-    setDemo(DEMO_REPORTS_ENABLED)
+    setDemo(false)
     setFailed(false)
-    setLoading(DEMO_REPORTS_ENABLED)
+    setLoading(true)
+    setTruncated(false)
     setTarget('LISTING')
   }
 
@@ -100,6 +103,7 @@ export default function MyReports() {
     setItems(result.items)
     setDemo(result.demo)
     setFailed(result.failed)
+    setTruncated(result.truncated)
     setLoading(false)
   }, [])
 
@@ -148,8 +152,8 @@ export default function MyReports() {
         title="我的"
         titleEm="举报"
         below={
-          /* 真实构建没有数据源：Tab 行不渲染（见文件头「不是死控件」） */
-          demo ? (
+          /* 加载中 / 失败时不渲染：还不知道有几条，先摆一排 0 再跳成真实计数比不摆更差 */
+          loading || failed ? null : (
             <View className="rpts__filters">
               <View className="rpts__tabs">
                 {TABS.map((tab) => {
@@ -168,17 +172,17 @@ export default function MyReports() {
                 })}
               </View>
             </View>
-          ) : null
+          )
         }
       />
       {/* 副行占位：20（上衬）+ 68（Tab 高）+ 8（下衬）= 96px，与 .rpts__filters 对应；
-          真实构建没有副行，只留主行让位（TopBar 的 spacer 已出） */}
-      {demo ? <View className="rpts__header-gap" /> : null}
+          加载中 / 失败时没有副行，只留主行让位（TopBar 的 spacer 已出） */}
+      {loading || failed ? null : <View className="rpts__header-gap" />}
 
       {/* 演示口径说明带：界面上必须能看出列表是演示数据（comments 同款要求） */}
       {demo && !loading ? (
         <View className="rpts__demoband">
-          <Text>演示数据：举报功能还没有后端，以下是演示记录。</Text>
+          <Text>演示数据：当前构建没有连上真实接口，以下是演示记录。</Text>
         </View>
       ) : null}
 
@@ -240,6 +244,14 @@ export default function MyReports() {
                     <View className="rpts__foot">
                       <Text className="num">{record.timeLabel}</Text>
                       <Text className="rpts__sep">·</Text>
+                      {/* 真实记录的 objTitle 是中性称呼（契约不返回对象摘要），
+                          这行目标公开 ID 让用户认出自己举报的是哪一件 / 哪个人 */}
+                      {record.objId ? (
+                        <>
+                          <Text className="rpts__id num">{shortReportId(record.objId)}</Text>
+                          <Text className="rpts__sep">·</Text>
+                        </>
+                      ) : null}
                       <Text className="rpts__id num">{shortReportId(record.id)}</Text>
                     </View>
                   </View>
@@ -247,7 +259,10 @@ export default function MyReports() {
                 </View>
               )
             })}
-            <Text className="rpts__more">· 已经到底了 ·</Text>
+            {/* 翻到页数上限时后面还有，脚注不能说「已经到底了」（`ReportsLoad.truncated`） */}
+            <Text className="rpts__more">
+              {truncated ? '· 仅显示最近的处理记录 ·' : '· 已经到底了 ·'}
+            </Text>
           </View>
         )}
       </View>

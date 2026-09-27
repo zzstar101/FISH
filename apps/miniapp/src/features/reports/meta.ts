@@ -7,13 +7,15 @@
  * 他人主页），各自持有自己的对象形态、原因胶囊与文案，互不跳转、页面结构互不复用。
  * 本模块只放两边按 #252 必须保持一致的**枚举、状态与文案**，不放任何页面结构。
  *
- * ## 契约对应（#252）
+ * ## 枚举取自契约，不在这里抄一份（#252 第 ④ 项「消除漂移」）
  *
- * 仓库 main 还没有 Report 契约（后端在 Draft PR #231/#240/#241，#217 的 TypeID 也未冻结），
- * 这里的 key 以 #252 文本冻结的原因枚举为准：
- * - 商品类：MISLEADING / PROHIBITED / FRAUD / SPAM / OTHER
- * - 用户类：HARASSMENT / FRAUD / IMPERSONATION / ABUSE / OTHER
- * 契约合并后若不一致，**以契约为准改这里的 key**（label / hint 可随意调，key 是对外的）。
+ * 原因 / 状态枚举的**唯一来源**是 `@fish/contracts/reports/schema`：本模块只按契约给出的
+ * 顺序补 label / hint，并用 `Record<契约联合, …>` 兜住完整性 —— 契约加了枚举值而这里没补
+ * 文案，`tsc` 当场报错，而不是线上渲染成一个空胶囊。契约的 `ReportCreateInputSchema`
+ * 还会在提交时再校验一次「原因属于该 targetType」，所以这里即使漏了一档请求也发不出去。
+ *
+ * 曾经的写法（本地硬编码 key + 注释「契约合并后以契约为准」）已经作废：#260/#261 建分支时
+ * 契约还在 Draft，现在契约就在树里，抄一份只会在契约演进时静默漂移。
  *
  * ## 结果文案的边界（#252 明确要求）
  *
@@ -22,9 +24,17 @@
  *
  * 本模块不 import 任何 Taro / fixture 模块，`tests/reports.test.ts` 直接加载它。
  */
+import {
+  LISTING_REPORT_REASONS as CONTRACT_LISTING_REASONS,
+  USER_REPORT_REASONS as CONTRACT_USER_REASONS,
+  type ReportStatus as ContractReportStatus,
+  type ListingReportReason,
+  type ReportTargetType,
+  type UserReportReason,
+} from '@fish/contracts/reports/schema'
 
-export type ReportTarget = 'LISTING' | 'USER'
-export type ReportStatus = 'PENDING' | 'HANDLED' | 'REJECTED'
+export type ReportTarget = ReportTargetType
+export type ReportStatus = ContractReportStatus
 
 export type ReportReasonOption = {
   /** 后端原因枚举（#252）；对外值，不得随意改名 */
@@ -35,63 +45,68 @@ export type ReportReasonOption = {
   hint: string
 }
 
-/** 商品类原因（#252）。顺序即稿子里胶囊的排布（3+2）。 */
-export const LISTING_REPORT_REASONS: ReportReasonOption[] = [
-  {
-    key: 'MISLEADING',
+/**
+ * 商品类原因的 label / hint。key 必须与契约 `ListingReportReasonSchema` 一一对应
+ * （多一个 / 少一个都编译不过），顺序由契约的 `LISTING_REPORT_REASONS` 决定。
+ */
+const LISTING_REASON_COPY: Record<ListingReportReason, { label: string; hint: string }> = {
+  MISLEADING: {
     label: '描述与实物不符',
     hint: '请说明商品页描述与实际不符的地方（成色 / 型号 / 功能…），便于平台核对',
   },
-  {
-    key: 'PROHIBITED',
+  PROHIBITED: {
     label: '违禁品或禁售物',
     hint: '请说明涉嫌违规的品类或内容，以及你看到它的位置',
   },
-  {
-    key: 'FRAUD',
+  FRAUD: {
     label: '涉嫌欺诈',
     hint: '请提供对方的具体言行（如要求线下转账）与大致时间，便于核对会话记录',
   },
-  {
-    key: 'SPAM',
+  SPAM: {
     label: '垃圾广告或引流',
     hint: '请说明引流方式（如外部链接 / 二维码 / 加微信）与出现的位置',
   },
-  {
-    key: 'OTHER',
+  OTHER: {
     label: '其他',
     hint: '请描述该商品的违规情形，包含具体位置与内容',
   },
-]
+}
 
-/** 用户类原因（#252）。与商品类是**两套枚举**，页面互不相通（见文件头）。 */
-export const USER_REPORT_REASONS: ReportReasonOption[] = [
-  {
-    key: 'HARASSMENT',
+/** 用户类原因的 label / hint（与商品类是**两套枚举**，页面互不相通，见文件头）。 */
+const USER_REASON_COPY: Record<UserReportReason, { label: string; hint: string }> = {
+  HARASSMENT: {
     label: '骚扰',
     hint: '请说明对方骚扰的方式与大致时间，便于核对会话记录',
   },
-  {
-    key: 'FRAUD',
+  FRAUD: {
     label: '涉嫌欺诈',
     hint: '请提供对方的具体言行（如要求线下转账）与大致时间，便于核对会话记录',
   },
-  {
-    key: 'IMPERSONATION',
+  IMPERSONATION: {
     label: '冒充他人',
     hint: '请说明对方冒充的身份（如同学 / 官方人员）以及你判断的依据',
   },
-  {
-    key: 'ABUSE',
+  ABUSE: {
     label: '辱骂或恶意行为',
     hint: '请描述对方的言行与大致时间，便于核对会话记录',
   },
-  {
-    key: 'OTHER',
+  OTHER: {
     label: '其他',
     hint: '请描述该用户的违规情形，包含具体言行与时间',
   },
-]
+}
+
+/** 商品类原因（顺序即契约 `LISTING_REPORT_REASONS` 的顺序，也是稿子里胶囊的排布 3+2）。 */
+export const LISTING_REPORT_REASONS: ReportReasonOption[] = CONTRACT_LISTING_REASONS.map((key) => ({
+  key,
+  ...LISTING_REASON_COPY[key],
+}))
+
+/** 用户类原因（同上，顺序取自契约）。 */
+export const USER_REPORT_REASONS: ReportReasonOption[] = CONTRACT_USER_REASONS.map((key) => ({
+  key,
+  ...USER_REASON_COPY[key],
+}))
 
 /** 两类页面的补充说明 placeholder 都用它（未选类型时） */
 export const REPORT_DESC_DEFAULT_HINT = '选填：补充时间、对方言行等细节，帮助平台更快核查'
@@ -145,8 +160,9 @@ export function bannerCopy(status: ReportStatus): { title: string; text: string 
 
 /**
  * 「我的举报」空态文案。
- * - 真实构建：如实说缺口（举报表与接口都还没有，与 `pages/favorites` 的「收藏功能还没有后端」同一句式）；
- * - 演示构建：两个 tab 都有演示数据，这个分支只在数据被清空时兜底，不再说「没有后端」。
+ *
+ * 真实构建已经接了 `GET /reports/mine`（#252 接线），空列表的含义就是「你还没举报过」——
+ * 不再是「功能还没有后端」。演示构建两个 tab 都有演示数据，这个分支只在数据被清空时兜底。
  */
 export function emptyCopyOf(demo: boolean): {
   title: string
@@ -161,12 +177,27 @@ export function emptyCopyOf(demo: boolean): {
     }
   }
   return {
-    title: '举报功能还没有后端',
-    // 说清缺的是**服务端**：入口（商品详情 / 他人主页 / 我的页）与填写表单都在，
-    // 只差提交与查询接口。写「提交入口也还没有开放」会和用户眼前的入口自相矛盾。
-    text: '服务端还没有举报表与接口（#252），提交的记录暂时存不下来、也查不到。',
+    title: '还没有提交过举报',
+    text: '在商品详情或对方主页点击「举报」，提交后处理进度会出现在这里。',
     actionLabel: '去逛逛',
   }
+}
+
+/**
+ * 提交失败的用户可见文案（`POST /reports` 抛出的 `ApiError.code`，见契约
+ * `ReportErrorCodeSchema`）。**只按码给固定文案**：服务端 `message` 是给排查用的，
+ * 直接透给用户既可能泄露内部信息、也不保证是中文。
+ *
+ * `null` 覆盖非 `ApiError`（网络层、契约解析失败）：
+ * - 解析失败意味着前后端已经漂移，文案不该说成「你没网」；
+ * - 统一给「稍后再试」，细节留在 `reportFailure` 的日志里。
+ */
+export function submitFailureText(code: string | null): string {
+  if (code === 'REPORT_TARGET_NOT_FOUND') return '被举报的内容已不存在，无法提交举报'
+  if (code === 'REPORT_SELF_TARGET') return '不能举报自己发布的内容'
+  if (code === 'REPORT_CONFLICT') return '这条举报的状态刚变过，请稍后再试'
+  if (code === 'UNAUTHENTICATED') return '登录已过期，请重新登录后再提交'
+  return '提交失败，请稍后再试'
 }
 
 /**

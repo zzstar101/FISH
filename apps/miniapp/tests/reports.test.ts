@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
+import type { Report } from '@fish/contracts/reports/schema'
 import {
   DEMO_REPORTS,
   DEMO_SUBMITTED_LISTING_ID,
@@ -8,6 +9,7 @@ import {
   type ReportRecord,
   rememberDemoReport,
 } from '../src/features/reports/demo'
+import { reportToRecord } from '../src/features/reports/map'
 import {
   bannerCopy,
   emptyCopyOf,
@@ -17,9 +19,10 @@ import {
   reasonLabel,
   reasonsOf,
   shortReportId,
+  submitFailureText,
   USER_REPORT_REASONS,
 } from '../src/features/reports/meta'
-import { resolveReportView, unavailableCopy } from '../src/features/reports/view'
+import { resolveReportView, unavailableCopy, wantsReportRecord } from '../src/features/reports/view'
 
 /**
  * 举报域的纯逻辑（原因枚举 / 状态文案 / 编号截断 / 演示数据完整性）。
@@ -240,9 +243,14 @@ describe('只读入口判定（resolveReportView，两页共用）', () => {
 
   test('「打不开」的文案按构建分档，都不导向新建', () => {
     const real = unavailableCopy(false)
-    expect(real.title).toContain('后端')
     const demo = unavailableCopy(true)
-    expect(demo.title).not.toBe(real.title)
+    // 标题同一句（都是「这条举报打不开」），差别在解释：真实构建是查不到，演示构建是重启即失
+    expect(real.title).toBe('这条举报打不开')
+    expect(demo.title).toBe(real.title)
+    expect(demo.text).not.toBe(real.text)
+    // #252 已接线：真实构建不能再把「查不到这条记录」说成「后端还没做」
+    expect(real.text).not.toContain('后端')
+    expect(real.text).not.toContain('接口')
     expect(demo.text).toContain('重启')
   })
 })
@@ -258,15 +266,123 @@ describe('取数包装（演示构建）', () => {
 })
 
 describe('空态文案', () => {
-  test('真实构建如实说缺口并给去逛逛出口；演示构建不说缺口', () => {
+  test('真实构建如实说「你还没举报过」，不再声称缺口；演示构建同款', () => {
     const real = emptyCopyOf(false)
-    expect(real.title).toBe('举报功能还没有后端')
+    expect(real.title).toBe('还没有提交过举报')
     expect(real.actionLabel).toBe('去逛逛')
-    // 缺的是服务端：入口与表单都在（商品详情 / 他人主页 / 我的页三处），
-    // 文案不能声称「提交入口也还没有开放」——那与用户眼前的入口自相矛盾
-    expect(real.text).not.toContain('入口')
+    // `GET /reports/mine` 已接线：空列表的语义是「你还没举报过」，
+    // 不能再写「服务端还没有举报表与接口（#252）」——那与眼前的真实列表自相矛盾
+    expect(real.text).not.toContain('后端')
+    expect(real.text).not.toContain('接口')
     const demo = emptyCopyOf(true)
     expect(demo.title).toBe('还没有提交过举报')
     expect(demo.actionLabel).toBe(null)
+  })
+})
+
+describe('「入口带没带编号」的判据（wantsReportRecord，两页共用）', () => {
+  test('键不存在 = 新建态；空串 = 要查（查不到就是打不开）', () => {
+    expect(wantsReportRecord(undefined)).toBe(false)
+    expect(wantsReportRecord(null)).toBe(false)
+    expect(wantsReportRecord('')).toBe(true)
+    expect(wantsReportRecord('rpt_01J8ZQ3XK7M2')).toBe(true)
+  })
+})
+
+describe('真实构建的只读态：记录由调用方查，target 照样收口', () => {
+  const record: ReportRecord = {
+    id: 'rpt_01J8ZQ3XK7M2',
+    target: 'LISTING',
+    objTitle: '被举报商品',
+    objPrice: null,
+    objId: 'lst_01jc000000e00800000000000k',
+    reason: 'FRAUD',
+    desc: '',
+    timeLabel: '刚刚',
+    status: 'PENDING',
+  }
+
+  test('查到记录才是只读态，且带上目标公开 ID', () => {
+    const view = resolveReportView({
+      reportId: record.id,
+      target: 'LISTING',
+      demoEnabled: false,
+      record,
+    })
+    expect(view.mode).toBe('view')
+    expect(view.record?.objId).toBe('lst_01jc000000e00800000000000k')
+  })
+
+  test('目标类型串了 → 打不开（真实记录同样按 target 收口）', () => {
+    expect(
+      resolveReportView({ reportId: record.id, target: 'USER', demoEnabled: false, record }).mode,
+    ).toBe('unavailable')
+  })
+
+  test('还没查（undefined）与查不到（null）都落打不开，不静默变新建表单', () => {
+    expect(
+      resolveReportView({ reportId: record.id, target: 'LISTING', demoEnabled: false }).mode,
+    ).toBe('unavailable')
+    expect(
+      resolveReportView({
+        reportId: record.id,
+        target: 'LISTING',
+        demoEnabled: false,
+        record: null,
+      }).mode,
+    ).toBe('unavailable')
+  })
+})
+
+describe('契约 DTO → 端上记录（reportToRecord）', () => {
+  const report: Report = {
+    id: 'rpt_01J8ZQ3XK7M2',
+    targetType: 'LISTING',
+    targetId: 'lst_01jc000000e00800000000000k',
+    reason: 'FRAUD',
+    detailText: null,
+    status: 'PENDING',
+    createdAt: '2025-09-14T12:15:00.000Z',
+    handledAt: null,
+  }
+  const now = Date.parse('2025-09-14T13:00:00.000Z')
+
+  test('用户端 DTO 没有对象摘要：给中性称呼 + 目标公开 ID 让用户指认', () => {
+    const record = reportToRecord(report, now)
+    expect(record.target).toBe('LISTING')
+    expect(record.objTitle).toBe('被举报商品')
+    expect(record.objId).toBe('lst_01jc000000e00800000000000k')
+    expect(record.objPrice).toBe(null)
+    expect(record.reason).toBe('FRAUD')
+    expect(record.status).toBe('PENDING')
+    expect(record.desc).toBe('')
+  })
+
+  test('detailText 落到补充说明，时间戳落成 HH:mm 结尾的文案', () => {
+    const record = reportToRecord({ ...report, detailText: '描述与实物不符' }, now)
+    expect(record.desc).toBe('描述与实物不符')
+    expect(record.timeLabel).toMatch(/\d{2}:\d{2}$/)
+  })
+
+  test('用户目标用「被举报用户」，且不把管理员处理原因带出来', () => {
+    const record = reportToRecord(
+      { ...report, targetType: 'USER', targetId: 'usr_01jc000000e00800000000000a' },
+      now,
+    )
+    expect(record.target).toBe('USER')
+    expect(record.objTitle).toBe('被举报用户')
+    // 契约的用户端 DTO 里根本没有 handlingReason，映射后也不该凭空多出来
+    expect(Object.keys(record)).not.toContain('handlingReason')
+  })
+})
+
+describe('提交失败文案（只按错误码给固定说法，不透传服务端 message）', () => {
+  test('已知码各有说法，未知码兜底', () => {
+    expect(submitFailureText('REPORT_TARGET_NOT_FOUND')).toContain('不存在')
+    expect(submitFailureText('REPORT_SELF_TARGET')).toContain('自己')
+    expect(submitFailureText('REPORT_CONFLICT')).toContain('稍后')
+    expect(submitFailureText('UNAUTHENTICATED')).toContain('重新登录')
+    expect(submitFailureText(null)).toBe('提交失败，请稍后再试')
+    expect(submitFailureText('SOMETHING_ELSE')).toBe('提交失败，请稍后再试')
   })
 })

@@ -38,6 +38,15 @@
   padding-top: 40px;
 }
 
+/* 只读入口的取数占位（真实构建按编号翻 `/reports/mine`，从列表进详情通常只闪一下） */
+.rpl__loading {
+  display: block;
+  padding: 48px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 26px;
+}
+
 .rpl__content {
   flex: 1 1 auto;
   min-width: 0;

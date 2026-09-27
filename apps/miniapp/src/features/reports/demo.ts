@@ -1,42 +1,48 @@
 /**
- * 「我的举报」的演示数据与取数包装（`pages/my-reports` 用；填写页的只读态也从这里找记录）。
+ * 「我的举报」的演示数据（`pages/my-reports` 用；填写页的只读态也从这里找记录）。
  *
  * ## 演示口径（与 `pages/favorites` / `features/comments` 同一体系）
  *
- * main 还没有 `GET /reports/mine`（#252 的后端在 Draft PR #231/#240/#241，未合并）：
- * - 真实构建**不发请求**，`loadMyReports()` 回空列表，页面渲染缺口空态；
- * - 演示构建（判据见 `./load`，`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）回下面 7 条。
+ * 后端 `GET /reports/mine` 与 `POST /reports` **已经接线**（#252）：真实构建先发请求，
+ * 只有请求失败且构建开关允许时才回退到这里（判据见 `./load` 的 `DEMO_REPORTS_ENABLED`），
+ * 页面据 `demo` 标志渲染「演示数据」说明带。下面 7 条只在本地演示 / 预览构建里出现。
  *
  * ## 数据照稿（`小程序1版我的举报.html`）
  *
  * 商品 4 条 + 用户 3 条，PENDING/HANDLED/REJECTED 三态都出现；`rpt_` 编号与时间都是
- * 演示占位（编号只为撑样式与复制动线，不代表 TypeID 规则已冻结）。这 7 条**不与
- * 「我的」页任何数字对齐**（`demoProfile()` 没有举报计数），别当成跨页一致性要求。
+ * 演示占位（编号只为撑样式与复制动线）。这 7 条**不与「我的」页任何数字对齐**
+ * （`demoProfile()` 没有举报计数），别当成跨页一致性要求。
  *
  * ## 演示提交的「落库」只落在进程内存
  *
- * 演示构建里提交举报不会真的保存（后端不存在），但为了让「提交 → 查看我的举报 →
- * 点进详情」动线在演示里能走通，`rememberDemoReport()` 把这条记录**追加进本次进程的
- * 列表头**（与 `pages/history` 的「演示清空仅页面实例内生效」同一取舍）：重启小程序
- * 就消失，不落 storage、更不落服务端。真实接线后整段删除。
+ * 演示兜底路径下提交举报不会真的保存，但为了让「提交 → 查看我的举报 → 点进详情」
+ * 动线在演示里能走通，`rememberDemoReport()` 把这条记录**追加进本次进程的列表头**
+ * （与 `pages/history` 的「演示清空仅页面实例内生效」同一取舍）：重启小程序就消失，
+ * 不落 storage、更不落服务端。
  *
  * 本模块不 import 任何 Taro / fixture 模块，`tests/reports.test.ts` 直接加载它。
  */
 import type { ReportStatus, ReportTarget } from './meta'
 
 export type ReportRecord = {
-  /** 演示举报编号（`rpt_` 前缀占位；真实值以后端返回为准） */
+  /** 举报编号（`rpt_` 前缀；真实记录来自后端返回的 `report.id`） */
   id: string
   target: ReportTarget
-  /** 商品标题 / 用户昵称 */
+  /** 商品标题 / 用户昵称。真实记录是「被举报商品 / 被举报用户」这种占位称呼，见 `./map` */
   objTitle: string
   /** 商品价格文案（数字部分，页面自己补「¥」）；用户举报恒为 null */
   objPrice: string | null
+  /**
+   * 被举报对象的公开 ID（`lst_` / `usr_`）。真实记录由后端 `report.targetId` 带入；
+   * 用户端 DTO **不返回对象摘要**（`ReportSchema` 没有标题字段），页面拿它给用户指认对象。
+   * 演示数据不带（样例标题本身就是可读的），所以是可选的。
+   */
+  objId?: string
   /** 原因枚举（target 对应的那套，见 `meta.ts`） */
   reason: string
   /** 补充说明原文；空串 = 提交时未填写（详情行显示「未填写」） */
   desc: string
-  /** 提交时间文案（演示占位；契约没有时间戳可派生） */
+  /** 提交时间文案（演示占位；真实记录由 `createdAt` 派生，见 `./map`） */
   timeLabel: string
   status: ReportStatus
 }
@@ -142,6 +148,19 @@ export function findDemoReport(id: string, target: ReportTarget): ReportRecord |
   const hit =
     submittedReports.find((r) => r.id === id) ?? DEMO_REPORTS.find((r) => r.id === id) ?? null
   return hit !== null && hit.target === target ? hit : null
+}
+
+/**
+ * 按编号取一条**演示**记录，**不校验目标类型**。
+ *
+ * 只给「填写页的只读态」用：那里先按编号取到记录、再交给 `resolveReportView` 判定
+ * target 是否对得上并给出「这条举报打不开」。这样「编号存在但类型不符」与「编号不存在」
+ * 走的是同一个出口，两页的判定逻辑（含测试）不用各写一份。
+ *
+ * **真实构建不得调用**（同 `findDemoReport`：本模块不认构建模式）。
+ */
+export function findDemoReportById(id: string): ReportRecord | null {
+  return submittedReports.find((r) => r.id === id) ?? DEMO_REPORTS.find((r) => r.id === id) ?? null
 }
 
 const DEMO_LATENCY = 120

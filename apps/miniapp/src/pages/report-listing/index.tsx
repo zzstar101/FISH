@@ -1,6 +1,8 @@
+import { ListingIdSchema } from '@fish/contracts/listings/schema'
+import type { ListingReportReason } from '@fish/contracts/reports/schema'
 import { Image, Text, Textarea, View } from '@tarojs/components'
 import Taro, { useRouter } from '@tarojs/taro'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import EmptyState from '@/components/empty-state'
@@ -8,7 +10,13 @@ import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
-import { DEMO_SUBMITTED_LISTING_ID, rememberDemoReport } from '@/features/reports/demo'
+import { submitReport } from '@/features/reports/api'
+import {
+  DEMO_SUBMITTED_LISTING_ID,
+  type ReportRecord,
+  rememberDemoReport,
+} from '@/features/reports/demo'
+import { DEMO_REPORTS_ENABLED, loadReportRecord } from '@/features/reports/load'
 import {
   bannerCopy,
   REPORT_DESC_DEFAULT_HINT,
@@ -16,9 +24,12 @@ import {
   reasonHint,
   reasonLabel,
   reasonsOf,
+  submitFailureText,
 } from '@/features/reports/meta'
-import { resolveReportView, unavailableCopy } from '@/features/reports/view'
+import { resolveReportView, unavailableCopy, wantsReportRecord } from '@/features/reports/view'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
+import { routeParam } from '@/lib/route-param'
 import './index.scss'
 
 /**
@@ -34,22 +45,32 @@ import './index.scss'
  *
  * - **新建**：商品详情带 `id / title / price / cover` 进入。对象卡固定不可改 ——
  *   防止拿别人的资源 id 拼举报；商品编号不在页内展示（#217 拍板「详情页不常驻展示编号」）。
+ *   提交用的目标 ID 是 `params.id`（商品详情传的是契约 `lst_` 公开 ID），**裸 UUID 或错前缀
+ *   在发请求前就被挡下**（`ListingIdSchema.safeParse` + 契约 `ReportCreateInputSchema`）。
  * - **只读**：「我的举报」点卡片带 `reportId` 进入 —— 按该条记录的状态渲染
  *   审核中 / 已处理 / 已驳回横幅 + 内容卡（编号可复制，给客服对账用）。
- * - **打不开**：带 `reportId` 但取不到记录（真实构建没有读取端点 / 演示数据里没这条）。
- *   **不退回新建态** —— 那会让「打开一条记录」静默变成「凭空举报一个没有对象的商品」；
- *   由 `features/reports/view` 的 `resolveReportView` 判定，页面对应地说明原因。
+ * - **打不开**：带 `reportId` 但取不到记录。**不退回新建态** —— 那会让「打开一条记录」
+ *   静默变成「凭空举报一个没有对象的商品」；由 `features/reports/view` 的
+ *   `resolveReportView` 判定，页面对应地说明原因。
  *
- * 只读记录的查询**只可能在演示构建发生**：样例数据是打包进产物的，真实构建下拿它当
- * 正式记录渲染，等于给用户看一条带「已处理 / 已驳回」的虚构处理结果（#260 复查 P2）。
+ * ## 只读记录的来源（#252 接线）
  *
- * ## 没有后端时的口径（与 `pages/favorites` / `pages/comments` 同一体系）
+ * 契约**没有单条举报读取端点**（`REPORT_ROUTES` 只有 create / mine），所以：
+ * - 真实构建：`loadReportRecord(reportId)` 翻 `GET /reports/mine` 找这条（见 `load.ts`），
+ *   查询期间渲染加载占位；
+ * - 演示构建：记录就在打包产物里，`resolveReportView` 同步取（`demoEnabled`），不发请求。
+ *   真实构建**绝不**回落到样例数据 —— 那等于给用户看一条带「已处理 / 已驳回」的虚构结论。
  *
- * main 还没有 `POST /reports`（#252 的后端在 Draft PR #231/#240/#241）：
- * - **真实构建**：提交按钮如实告知后端未上线，**不假成功、不写本地**（#193 同款要求）；
- * - **演示构建**（`TARO_APP_MOCK=1`）：提交走 700ms 模拟时延落到成功态，成功态标明
- *   是演示提交，并把记录追加进进程内存（`features/reports/demo`），让
- *   「提交 → 查看我的举报 → 点进详情」动线能走通；重启即消失。
+ * ## 提交的口径（#252）
+ *
+ * 后端 `POST /reports` 已接线，真实构建直接提交，并据响应的 `created` 分两种成功：
+ * - `created: true` →「举报已提交」（本次新建）；
+ * - `created: false` →「这条举报已受理」（同一未决目标的重复提交，服务端返回 200 而不是报错）。
+ *
+ * 演示构建（`TARO_APP_MOCK=1`）先试真实请求，只有请求**没到过后端**（网络层失败，或演示假会话
+ * 必然拿到的 401）才回退到本地模拟并把记录追加进进程内存，让「提交 → 查看我的举报 →
+ * 点进详情」动线能走通；重启即消失。服务端给了业务错误码时**不**回退 ——
+ * 那会把「失败」说成「成功」（#193 / #260 复查 P2 同款要求）。
  *
  * ## 顶部栏（吸顶口径）
  *
@@ -68,27 +89,64 @@ const REASON_MAX = 200
 /** 演示构建口径：mock 回退与演示登录态**都要**开（只认 MOCK_FALLBACK 会顶掉 dev:weapp 的真实空态） */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 
+/** 成功态落定后的内容（`created` 决定文案：本次新建 / 此前已受理） */
+type SubmitDone = { reason: string; desc: string; id: string; created: boolean; simulated: boolean }
+
+/**
+ * 这次提交失败能不能按演示口径模拟成功。
+ *
+ * 只有「请求根本没到过后端」才可以：网络层失败、契约解析失败，以及演示构建里假会话
+ * 必然拿到的 `UNAUTHENTICATED`。服务端若给了业务错误码（目标不存在 / 不能举报自己 / 冲突…），
+ * 说明请求真的到达了后端，改用模拟就是把失败说成成功。
+ */
+function canSimulateSubmit(error: unknown): boolean {
+  if (!DEMO_REPORTS_ENABLED) return false
+  return !isApiError(error) || error.code === 'UNAUTHENTICATED'
+}
+
 export default function ReportListing() {
   const authStatus = useAuthGuard()
   /** 路由参数读一次：两种入口都靠 query 定形态，页内不切换（跳转都是重新开页） */
   const { params } = useRouter()
-  /** 形态判定：见 `features/reports/view`（真实构建不查样例数据、记录目标类型要对得上）。
-      参数**原样传**、不在这里 `?? null`：`?reportId=` 这种空值入口也算「给了编号」，
-      判定归 `resolveReportView`，页面不各写一套。 */
-  const view = resolveReportView({
-    reportId: params.reportId,
-    target: 'LISTING',
-    demoEnabled: DEMO_MODE,
-  })
-  const viewRecord = view.record
-  const mode = view.mode
+  const reportId = params.reportId
+  /** 入口带没带 `reportId`（判据与 `resolveReportView` 同一个，见 `features/reports/view`）。
+        参数**原样传**、不在这里 `?? null`：`?reportId=` 这种空值入口也算「给了编号」。 */
+  const wantsRecord = wantsReportRecord(reportId)
 
-  /** 新建态的举报对象（商品详情带入，页内不可改） */
+  /** 真实构建按编号查到的记录；演示构建不用它（记录同步可得） */
+  const [record, setRecord] = useState<ReportRecord | null>(null)
+  /** 真实构建的查询是否已落定；新建态与演示构建一开始就是 true */
+  const [lookupDone, setLookupDone] = useState(!wantsRecord || DEMO_MODE)
+
+  useEffect(() => {
+    if (!wantsRecord || DEMO_MODE) return
+    let alive = true
+    void loadReportRecord(reportId as string).then((hit) => {
+      // 页面可能已被返回键卸载：迟到的结果不再 setState
+      if (!alive) return
+      setRecord(hit)
+      setLookupDone(true)
+    })
+    return () => {
+      alive = false
+    }
+  }, [wantsRecord, reportId])
+
+  /** `null` = 记录还在查（只有真实构建的只读入口会经过） */
+  const view = lookupDone
+    ? resolveReportView({ reportId, target: 'LISTING', demoEnabled: DEMO_MODE, record })
+    : null
+  const mode = view === null ? null : view.mode
+  const viewRecord = view === null ? null : view.record
+
+  /** 新建态的举报对象（商品详情带入，页内不可改）。query 未解码，取值统一过 `routeParam` */
   const target = {
-    title: params.title ?? '',
-    price: params.price ?? '',
-    cover: params.cover ?? '',
+    title: routeParam(params.title),
+    price: routeParam(params.price),
+    cover: routeParam(params.cover),
   }
+  /** 提交用的目标 ID：商品详情传的是契约 `lst_` 公开 ID（#269/#270 收口后不再传裸 uuid） */
+  const targetId = params.id ?? ''
 
   const [chosen, setChosen] = useState<string | null>(null)
   const [desc, setDesc] = useState('')
@@ -96,16 +154,8 @@ export default function ReportListing() {
   const [fieldFocus, setFieldFocus] = useState(false)
   /** 提交在飞：防重复提交（#252） */
   const [busy, setBusy] = useState(false)
-  /** 提交模拟时延的定时器：卸载时清掉，迟到的 setState 与演示「落库」都不再发生 */
-  const submitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(
-    () => () => {
-      if (submitTimer.current !== null) clearTimeout(submitTimer.current)
-    },
-    [],
-  )
   /** null = 还在表单；非 null = 成功态已落定（整页切换，不再回到表单） */
-  const [done, setDone] = useState<{ reason: string; desc: string } | null>(null)
+  const [done, setDone] = useState<SubmitDone | null>(null)
 
   const navTotalHeight = readNavMetrics().totalHeight
 
@@ -127,28 +177,54 @@ export default function ReportListing() {
       toast('请先选择举报类型')
       return
     }
-    // 真实构建：不假成功（#193 同款）。后端在 Draft PR（#231/#240/#241），合并后把
-    // 这一段换成真实 POST /reports（created:true/false 分别落「已受理/此前已受理」）。
-    if (!DEMO_MODE) {
-      toast('举报提交还没有后端，等功能上线后再来')
+    // 目标 ID 先在本端验一遍：入口 query 可能是被改坏的深链，或旧版本页面传的裸 uuid。
+    // 契约 `ReportCreateInputSchema` 也会拦（提交前 `parse`），但那时的报错文案对用户无意义。
+    const parsedId = ListingIdSchema.safeParse(targetId)
+    if (!parsedId.success) {
+      toast('举报对象编号无效，请从商品详情重新进入')
       return
     }
+    // 胶囊来自 `reasonsOf('LISTING')`，取值必属商品类枚举；契约提交前还会再校验一次（superRefine）
+    const reason = chosen as ListingReportReason
+    const detail = desc.trim()
     setBusy(true)
-    submitTimer.current = setTimeout(() => {
-      setBusy(false)
-      setDone({ reason: chosen, desc: desc.trim() })
-      // 演示「落库」：追加进进程内存，让「我的举报」列表与只读态都能看到这条（见 demo.ts 文件头）
-      rememberDemoReport({
-        id: DEMO_SUBMITTED_LISTING_ID,
-        target: 'LISTING',
-        objTitle: target.title || '（未带出商品标题）',
-        objPrice: target.price || null,
-        reason: chosen,
-        desc: desc.trim(),
-        timeLabel: '刚刚',
-        status: 'PENDING',
-      })
-    }, 700)
+    void (async () => {
+      try {
+        const res = await submitReport({
+          targetType: 'LISTING',
+          targetId: parsedId.data,
+          reason,
+          detailText: detail === '' ? undefined : detail,
+        })
+        setDone({ reason, desc: detail, id: res.report.id, created: res.created, simulated: false })
+      } catch (error) {
+        if (canSimulateSubmit(error)) {
+          // 演示「落库」：追加进进程内存，让「我的举报」列表与只读态都能看到这条（见 demo.ts 文件头）
+          rememberDemoReport({
+            id: DEMO_SUBMITTED_LISTING_ID,
+            target: 'LISTING',
+            objTitle: target.title || '（未带出商品标题）',
+            objPrice: target.price || null,
+            objId: targetId === '' ? undefined : targetId,
+            reason,
+            desc: detail,
+            timeLabel: '刚刚',
+            status: 'PENDING',
+          })
+          setDone({
+            reason,
+            desc: detail,
+            id: DEMO_SUBMITTED_LISTING_ID,
+            created: true,
+            simulated: true,
+          })
+        } else {
+          toast(submitFailureText(isApiError(error) ? error.code : null))
+        }
+      } finally {
+        setBusy(false)
+      }
+    })()
   }
 
   /** 成功态主按钮：用 redirectTo 把表单页换成列表页（返回键回到商品详情，栈不加深） */
@@ -167,6 +243,8 @@ export default function ReportListing() {
   const rowsOf = (data: {
     objTitle: string
     objPrice: string | null
+    /** 被举报对象的公开 ID；真实记录有（契约 `targetId`），成功态刚提交时也有 */
+    objId?: string
     cover: string
     reason: string
     desc: string
@@ -189,6 +267,9 @@ export default function ReportListing() {
               <Text className="rpl__obj-price">{`¥${data.objPrice}`}</Text>
             </Text>
           ) : null}
+          {/* 用户端 DTO 不返回被举报对象的标题（`ReportSchema` 只有 targetId），
+              所以真实记录靠这行公开 ID 让用户指认自己举报的是哪一件 */}
+          {data.objId ? <Text className="rpl__obj-sub num">{data.objId}</Text> : null}
         </View>
       </View>
       <View className="rpl__kv">
@@ -227,6 +308,11 @@ export default function ReportListing() {
         <View className="rpl__auth">
           <AuthRequired restoring={authStatus === 'unknown'} />
         </View>
+      ) : mode === null ? (
+        /* ═══ 只读入口的取数占位（真实构建按编号查 `/reports/mine`，列表进详情通常只闪一下） ═══ */
+        <View className="rpl__content">
+          <Text className="rpl__loading">加载中…</Text>
+        </View>
       ) : mode === 'view' && viewRecord !== null ? (
         /* ═══ 只读态：审核中 / 已处理 / 已驳回（入口：「我的举报」点卡片） ═══ */
         <View className="rpl__content">
@@ -255,6 +341,7 @@ export default function ReportListing() {
             {rowsOf({
               objTitle: viewRecord.objTitle,
               objPrice: viewRecord.objPrice,
+              objId: viewRecord.objId,
               cover: '',
               reason: viewRecord.reason,
               desc: viewRecord.desc,
@@ -290,15 +377,18 @@ export default function ReportListing() {
           </View>
         </View>
       ) : done !== null ? (
-        /* ═══ 成功态（02）：不 toast 了事，整页落成功并给「我的举报」动线 ═══ */
+        /* ═══ 成功态（02）：不 toast 了事，整页落成功并给「我的举报」动线 ═══
+              `created:false` 表示这个未决目标此前已受理过，文案不能再说一次「已提交」 */
         <View className="rpl__content">
           <View className="rpl__hero">
             <View className="rpl__hero-ic">
               <Image className="rpl__hero-ic-img" src={ICONS.checkAccent} mode="aspectFit" />
             </View>
-            <Text className="rpl__hero-t">举报已提交</Text>
+            <Text className="rpl__hero-t">{done.created ? '举报已提交' : '这条举报已受理'}</Text>
             <Text className="rpl__hero-s">
-              平台会在核实后处理，处理结果可在「我的举报」中查看。
+              {done.created
+                ? '平台会在核实后处理，处理结果可在「我的举报」中查看。'
+                : '你在近期举报过同一个商品，平台正在核实，无需重复提交。'}
             </Text>
           </View>
 
@@ -309,17 +399,18 @@ export default function ReportListing() {
             {rowsOf({
               objTitle: target.title || '（未带出商品标题）',
               objPrice: target.price || null,
+              objId: targetId === '' ? undefined : targetId,
               cover: target.cover,
               reason: done.reason,
               desc: done.desc,
               timeLabel: '刚刚',
-              id: DEMO_SUBMITTED_LISTING_ID,
+              id: done.id,
             })}
           </View>
 
-          {DEMO_MODE ? (
+          {done.simulated ? (
             <Text className="rpl__demonote">
-              演示提交：举报后端还没上线（#252），这条记录没有真的保存。
+              演示提交：这次提交走的是本地模拟，没有真的发到服务端，记录也不会保存。
             </Text>
           ) : null}
 
