@@ -65,9 +65,14 @@ export default function ReportUser() {
   const authStatus = useAuthGuard()
   /** 路由参数读一次：两种入口都靠 query 定形态，页内不切换（跳转都是重新开页） */
   const { params } = useRouter()
-  const reportId = params.reportId ?? null
-  /** 形态判定：见 `features/reports/view`（真实构建不查样例数据、记录目标类型要对得上） */
-  const view = resolveReportView({ reportId, target: 'USER', demoEnabled: DEMO_MODE })
+  /** 形态判定：见 `features/reports/view`（真实构建不查样例数据、记录目标类型要对得上）。
+      参数**原样传**、不在这里 `?? null`：`?reportId=` 这种空值入口也算「给了编号」，
+      判定归 `resolveReportView`，页面不各写一套。 */
+  const view = resolveReportView({
+    reportId: params.reportId,
+    target: 'USER',
+    demoEnabled: DEMO_MODE,
+  })
   const viewRecord = view.record
   const mode = view.mode
 

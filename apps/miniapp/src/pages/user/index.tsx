@@ -56,8 +56,8 @@ import './index.scss'
  * - **聊一聊 / 更多钮不做**：发起会话要带 `listingId`（Chat 契约按 `(listingId, 买家)`
  *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（分享 / 黑名单等真机里走
  *   微信胶囊的 ··· 菜单 —— 那是稿的取舍）。举报一度只有胶囊菜单、没有站内出口；
- *   现在列表终点下有「举报用户」行进 `pages/report-user`（#252，原因枚举对齐后端
- *   Draft PR #231/#240/#241；main 仍没有 Report 契约，页面按演示/如实缺口双档实现）。
+ *   现在的出口是**顶栏举报钮**（贴微信胶囊，见下方 `navReportAction`，#252；原因枚举
+ *   对齐后端 Draft PR #231/#240/#241；main 仍没有 Report 契约，页面按演示/如实缺口双档实现）。
  * - **不做下拉刷新**（稿的 `.refresher` 不实现）。
  */
 export default function UserHome() {
