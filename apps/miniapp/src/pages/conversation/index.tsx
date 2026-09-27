@@ -759,8 +759,19 @@ export default function Conversation() {
       */}
       <View className="conv__bar">
         <View className="conv__bar-row">
+          {/*
+            这颗钮是**两态开关**，图标要跟着态走：键盘态显示话筒（点了进语音），
+            语音态显示键盘（点了切回输入框）。图标不变的话，进了语音态就没有「怎么切回去」
+            的视觉指示 —— 输入区那边虽然换成了「按住 说话」，但那不构成返回入口。
+            稿子 `1版conversation.html` 的 `syncVoice()` 正是这么切的（`#ic-mic` / `#ic-keyboard`），
+            与微信自己的输入栏一致。
+          */}
           <View className={`conv__cbtn${voiceMode ? ' is-on' : ''}`} onClick={toggleVoiceMode}>
-            <Image className="conv__cbtn-ic" src={ICONS.mic} mode="aspectFit" />
+            <Image
+              className="conv__cbtn-ic"
+              src={voiceMode ? ICONS.keyboard : ICONS.mic}
+              mode="aspectFit"
+            />
           </View>
 
           {voiceMode ? (

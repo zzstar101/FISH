@@ -82,6 +82,7 @@ import imageMuted from '@/assets/lib-icons/image-muted@3x.png'
 import info from '@/assets/lib-icons/info@3x.png'
 import infoMuted from '@/assets/lib-icons/info-muted@3x.png'
 import key from '@/assets/lib-icons/key@3x.png'
+import keyboard from '@/assets/lib-icons/keyboard@3x.png'
 import location from '@/assets/lib-icons/location@3x.png'
 import lock from '@/assets/lib-icons/lock@3x.png'
 import lockWhite from '@/assets/lib-icons/lock-white@3x.png'
@@ -240,6 +241,7 @@ export const ICONS = {
   mic,
   micWhite,
   voiceWave,
+  keyboard,
   location,
   cart,
   coupon,
