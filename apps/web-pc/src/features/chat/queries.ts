@@ -1,3 +1,4 @@
+import type { Me } from '@fish/contracts/auth/user'
 import type {
   ConversationDto,
   ConversationListResponse,
@@ -6,6 +7,7 @@ import type {
 } from '@fish/contracts/chat/schema'
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AUTH_ME_QUERY_KEY } from '../../lib/session-cache'
 import {
   createConversation,
   fetchConversation,
@@ -65,14 +67,29 @@ export function useMessageHistory(ownerId: string | null, conversationId: string
   })
 }
 
-export function useCreateConversation(ownerId: string | null) {
+/**
+ * 只把会话写入仍属于该 mutation 发起账号的缓存。
+ * 公开详情页在切号后不会卸载，迟到的 POST 不能用新账号 ownerId 覆盖缓存。
+ */
+export function updateConversationForOwner(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversation: ConversationDto,
+): boolean {
+  const currentOwnerId = queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)?.id ?? null
+  if (currentOwnerId !== ownerId) return false
+  updateConversationCaches(queryClient, ownerId, conversation)
+  return true
+}
+
+export function useCreateConversation() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (listingId: string) => createConversation(listingId),
-    onSuccess: (conversation) => {
-      if (ownerId === null) return
-      updateConversationCaches(queryClient, ownerId, conversation)
-      void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
+    mutationFn: ({ listingId }: { listingId: string; ownerId: string }) =>
+      createConversation(listingId),
+    onSuccess: (conversation, variables) => {
+      if (!updateConversationForOwner(queryClient, variables.ownerId, conversation)) return
+      void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(variables.ownerId) })
     },
   })
 }

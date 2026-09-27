@@ -1,5 +1,6 @@
 import { COMMENT_ROUTES } from '@fish/contracts/comments/routes'
 import {
+  CommentCreateInputSchema,
   type CommentDto,
   CommentDtoSchema,
   type CommentListResponse,
@@ -29,20 +30,22 @@ export async function fetchCommentPage(
 
 /** 发一条顶层留言，返回服务端写入的 DTO（含服务端判定的 isSeller）。 */
 export async function createComment(listingId: string, content: string): Promise<CommentDto> {
+  const input = CommentCreateInputSchema.parse({ content })
   return CommentDtoSchema.parse(
     await apiRequest(COMMENT_ROUTES.ofListing(listingId), {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(input),
     }),
   )
 }
 
 /** 回复一条顶层留言；服务端会拒绝回复一条回复，响应固定是单层 CommentReply。 */
 export async function createReply(commentId: string, content: string): Promise<CommentReply> {
+  const input = CommentCreateInputSchema.parse({ content })
   return CommentReplySchema.parse(
     await apiRequest(COMMENT_ROUTES.repliesOf(commentId), {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify(input),
     }),
   )
 }
