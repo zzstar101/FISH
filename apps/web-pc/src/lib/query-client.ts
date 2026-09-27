@@ -1,8 +1,8 @@
-import { focusManager, MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
+import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { router } from '../router'
-import { isUnauthenticatedError } from './api-client'
+import { ApiError, isUnauthenticatedError } from './api-client'
 import { currentHref } from './redirect'
-import { resetPcSession } from './session-cache'
+import { currentSessionGeneration, resetPcSessionIfCurrent } from './session-cache'
 
 /** 应用内部路径（去掉 router basepath 与尾斜杠），用于比较登录 / 注册页。 */
 function currentAppPathname(): string {
@@ -20,28 +20,15 @@ const AUTH_PAGES = new Set(['/login', '/register'])
 function redirectToLoginOnUnauthenticated(error: unknown, skip: boolean): void {
   if (!isUnauthenticatedError(error)) return
 
-  void resetPcSession(queryClient, null).then((applied) => {
-    // 这次 401 的重置已被更新的登录 / 重置取代时，缓存保持新会话，
-    // 也不能再把刚完成认证的用户踢回登录页。
-    if (!applied || skip || AUTH_PAGES.has(currentAppPathname())) return
+  // 只清理发起请求时的会话代际：迟到的旧 401 不能清掉刚登录的新账号。
+  const generation =
+    error instanceof ApiError ? error.sessionGeneration : currentSessionGeneration()
+  void resetPcSessionIfCurrent(queryClient, null, generation).then((cleared) => {
+    if (!cleared || skip || AUTH_PAGES.has(currentAppPathname())) return
 
     void router
       .navigate({ to: '/login', search: { redirect: currentHref() } })
       .catch(() => undefined)
-  })
-}
-
-// React Query 默认只听 visibilitychange。另一浏览器窗口切换同源 Cookie 时，
-// PC 页可能一直保持 visible；重新聚焦窗口同样需要触发 /me 身份复核。
-if (typeof window !== 'undefined') {
-  focusManager.setEventListener((onFocus) => {
-    const verify = () => onFocus()
-    window.addEventListener('visibilitychange', verify)
-    window.addEventListener('focus', verify)
-    return () => {
-      window.removeEventListener('visibilitychange', verify)
-      window.removeEventListener('focus', verify)
-    }
   })
 }
 

@@ -21,6 +21,7 @@ export const authKeys = {
  */
 export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
   const generation = currentSessionGeneration()
+  const previous = queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)
 
   try {
     const user = await fetchMe()
@@ -29,7 +30,11 @@ export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
     if (generation !== currentSessionGeneration()) {
       return queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY) ?? null
     }
-    const previous = queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)
+    if (previous === undefined) {
+      // 首次建立会话时，公开详情/留言查询可能已经挂载；没有旧身份需要清理。
+      queryClient.setQueryData(AUTH_ME_QUERY_KEY, user)
+      return user
+    }
     if (previous?.id !== user.id) {
       const reset = await resetPcSessionIfCurrent(queryClient, user, generation, {
         cancelAuth: false,
@@ -39,6 +44,13 @@ export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
     return user
   } catch (error) {
     if (!isUnauthenticatedError(error)) throw error
+    if (generation !== currentSessionGeneration()) return null
+    if (previous === undefined) {
+      queryClient.setQueryData(AUTH_ME_QUERY_KEY, null)
+      return null
+    }
+    // 公开详情/留言在匿名态仍挂载；身份未变时不能清掉其查询缓存。
+    if (previous === null) return null
 
     // 当前查询正在执行，不能取消自己；只有同一会话代际的 401 才允许清场。
     await resetPcSessionIfCurrent(queryClient, null, generation, { cancelAuth: false })

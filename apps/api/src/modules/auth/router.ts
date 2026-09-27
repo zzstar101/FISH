@@ -9,7 +9,7 @@ import {
   WechatSessionRequestSchema,
   WechatSessionResponseSchema,
 } from '@fish/contracts/auth/wechat'
-import { errorBody } from '@fish/contracts/system/error'
+import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import type { Db } from '@fish/db/client'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
@@ -99,7 +99,11 @@ export function createAuthModule(options: {
       return c.json(errorBody('WECHAT_DISABLED', '微信登录暂未开通'), 503)
     }
     const parsed = WechatSessionRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+    if (!parsed.success)
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
 
     try {
       const { user, token, expiresAt } = await wechat.signIn(parsed.data)
@@ -116,7 +120,11 @@ export function createAuthModule(options: {
       return c.json(errorBody('WECHAT_DISABLED', '手机号绑定暂未开通'), 503)
     }
     const parsed = PhoneBindRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+    if (!parsed.success)
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
 
     try {
       // stub：phone code 即明文手机号（getPhoneNumber 真实接入需要企业主体 + AppSecret，
@@ -139,7 +147,11 @@ export function createAuthModule(options: {
   // 注册即登录：响应体与 /me 同构，前端不需要再打一次 /auth/login
   router.post('/register', async (c) => {
     const parsed = RegisterRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+    if (!parsed.success)
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
 
     try {
       const { user, token, expiresAt } = await service.register(parsed.data)
@@ -152,7 +164,11 @@ export function createAuthModule(options: {
 
   router.post('/login', async (c) => {
     const parsed = LoginRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+    if (!parsed.success)
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
 
     try {
       const { user, token, expiresAt } = await service.login(parsed.data)
@@ -179,7 +195,11 @@ export function createAuthModule(options: {
 
   router.post('/verification/code', requireAuth, options.guard.write, async (c) => {
     const parsed = SendCodeRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+    if (!parsed.success)
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
 
     try {
       await verification.sendCode(c.get('userId'), parsed.data)
@@ -191,7 +211,11 @@ export function createAuthModule(options: {
 
   router.post('/verification/verify', requireAuth, options.guard.write, async (c) => {
     const parsed = VerifyCodeRequestSchema.safeParse(await readJson(c))
-    if (!parsed.success) return c.json(errorBody('VALIDATION_FAILED', '请求参数不合法'), 422)
+    if (!parsed.success)
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
 
     try {
       const status = await verification.verify(c.get('userId'), parsed.data)

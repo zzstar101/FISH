@@ -862,3 +862,137 @@
     color: var(--fg);
   }
 }
+
+/* ---------------------------------------------------------- 卖家视角底栏 */
+
+/* 非在售状态行：替代整条操作钮，只有一句状态 + 去我的发布的入口 */
+.detail__bar-note {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.detail__bar-note-text {
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--muted-2);
+}
+
+.detail__bar-note-link {
+  flex: 0 0 auto;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* ---------------------------------------------- 下架确认弹层（同 mylist 三态卡） */
+
+/*
+ * 本页底栏是 z-index 100 的悬浮玻璃条，`scrim` mixin 自带的 50 压不住它 ——
+ * 遮罩必须连底栏一起盖住（打开确认卡时不允许底栏还可点），弹层再高一层。
+ */
+.detail__scrim {
+  @include scrim;
+  z-index: 110;
+}
+
+.detail__dialog {
+  position: fixed;
+  left: 40px;
+  right: 40px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 120;
+  padding: 40px;
+  border-radius: 48px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-float);
+  box-sizing: border-box;
+}
+
+.detail__dialog-title {
+  display: block;
+  font-size: 32px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--fg);
+}
+
+.detail__dialog-sub {
+  display: block;
+  margin-top: 18px;
+  font-size: 25px;
+  line-height: 1.65;
+  text-align: center;
+  color: var(--muted-2);
+}
+
+.detail__dlg-tip {
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: 24px;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn);
+  color: var(--warn-ink);
+  font-size: 23px;
+  line-height: 1.6;
+}
+
+.detail__dlg-acts {
+  display: flex;
+  gap: 20px;
+  margin-top: 32px;
+}
+
+.detail__dlg-cancel,
+.detail__dlg-ok {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 92px;
+  border-radius: 46px;
+  font-size: 29px;
+  font-weight: 600;
+}
+
+.detail__dlg-cancel {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+}
+
+.detail__dlg-ok {
+  background: var(--danger-ink);
+  color: var(--surface);
+
+  &.is-busy {
+    opacity: 0.9;
+  }
+
+  /* 失败态复用取消按钮的样式（描边 + 深红字），语义是「可重试」而不是「危险」 */
+  &.is-failed {
+    background: var(--surface);
+    border: 2px solid var(--danger-line);
+    color: var(--danger-ink);
+  }
+}
+
+.detail__spin {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 4px solid var(--on-dark-track);
+  border-top-color: var(--surface);
+  animation: detail-spin 0.7s linear infinite;
+}
+
+@keyframes detail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -25,10 +25,13 @@ import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
+import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
 import { createConversation } from '@/features/chat/api'
 import { loadListingDetail } from '@/features/fetchers'
+import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
+import { requestSellEdit } from '@/features/listing/edit-target'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
@@ -39,9 +42,10 @@ import {
   type MockComment,
   type MockListing,
 } from '@/mock/api'
-import { findUser } from '@/mock/users'
+import { findUser, ME as mockMe } from '@/mock/users'
 import {
-  beginChatTask,
+  type ActionTask,
+  beginActionTask,
   beginReloadWrite,
   beginTask,
   type CommentsRead,
@@ -50,19 +54,24 @@ import {
   createDeferredReload,
   dropPendingComments,
   hasInflightWrites,
-  isCurrentChatTask,
+  isColdStartIdentityResolution,
+  isCurrentActionTask,
   isLatestLoad,
   isOwnerSwitch,
+  isOwnListing,
   isReloadDue,
   isTaskCurrent,
   mergeRefreshedComments,
+  type OfflineSubmit,
   ownerChanged,
+  ownerStatusNote,
   PENDING_COMMENT_PREFIX,
   requestDeferredReload,
   resolveRefreshedComments,
   settleReloadWrite,
   shouldRefreshOnShow,
-  shouldReleaseChatTask,
+  shouldReleaseActionTask,
+  shouldReleaseOfflineTask,
   shouldSurfaceStaleAuthFailure,
 } from './view'
 import './index.scss'
@@ -290,6 +299,10 @@ export default function ListingDetail() {
   const [faved, setFaved] = useState(false)
   /** 「立即购买」是否已确认过：确认一次就进入「待店家确认」终态（账号私有，换号清场） */
   const [buyRequested, setBuyRequested] = useState(false)
+  /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」；账号私有，换号清场） */
+  const [offlineConfirmOpen, setOfflineConfirmOpen] = useState(false)
+  /** 下架确认卡按钮三态：确认下架 / 下架中 / 重试（同我的发布页的 submit 状态机） */
+  const [offlineSubmit, setOfflineSubmit] = useState<OfflineSubmit>('idle')
   const [commentsOpen, setCommentsOpen] = useState(false)
   /** 留言树（顶层各带 replies）：初值来自加载结果，之后由本页的本地写操作增长 */
   const [comments, setComments] = useState<CommentNode[]>([])
@@ -310,7 +323,7 @@ export default function ListingDetail() {
    * 本页是**公开页**：不挂 `useAuthGuard`，匿名也能读；账号只用来决定「哪些是账号
    * 私有的东西、换号时该清掉」（#170 判据 C）。
    */
-  const { user } = useAuth()
+  const { user, status: authStatus } = useAuth()
   const userId = user?.id ?? null
   /** 上一个渲染看到的账号：换号要在**渲染期**同步清场，用 effect 会晚一帧画出上个账号的草稿 */
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
@@ -333,10 +346,25 @@ export default function ListingDetail() {
   const reloadRef = useRef(createDeferredReload())
   /** 首次 show 让给 `useLoad` 的首屏加载，免得一进页双发 */
   const firstShowRef = useRef(true)
-  /** 「聊一聊」在飞锁：持有它的是**某一次点击**的令牌（`null` = 没有在途请求） */
+  /**
+   * 底栏两个动作的在飞锁：各自持有**某一次点击**的令牌（`null` = 它没有在途动作）。
+   *
+   * 两把独立的锁：两个钮互不相干，一个在飞不该把另一个也按死。
+   */
   const chatInFlightRef = useRef<number | null>(null)
+  const buyInFlightRef = useRef<number | null>(null)
   /** 令牌发号器：只增不减，保证 A 的迟到收尾认不出 B 的锁 */
-  const chatSeqRef = useRef(0)
+  const actionSeqRef = useRef(0)
+  /**
+   * 「管理」ActionSheet 的在飞锁：拿的同样是**某一次点击**的令牌（`null` = 没有在途弹层）。
+   *
+   * 弹出层（原生 ActionSheet）的 `.then` 是跨帧回调：等待期间换号 / 卸载之后，A 的
+   * `tapIndex` 仍会去写编辑交接、`switchTab` 或重开卖家下架卡。铸任务见 `manageListing`，
+   * 校验见 `isCurrentActionTask`。
+   */
+  const menuInFlightRef = useRef<number | null>(null)
+  /** 下架请求在飞守持的令牌（`null` = 没有在途请求；同 `chatInFlightRef` 的口径） */
+  const offlineInFlightRef = useRef<number | null>(null)
 
   /**
    * 换号 / 退出：渲染期同步清掉账号私有的 state。
@@ -353,10 +381,21 @@ export default function ListingDetail() {
     // 读取链同样是账号作用域：真正的换号要把在途的 load / refresh / 翻页一并作废，
     // 迟到的公开快照不许写进新账号的页面。冷启动解析身份（null → id）不算换号，
     // 那会把首屏 `load` 判过期、页面永远停在骨架屏上
-    if (isOwnerSwitch(prevUserId)) loadSeqRef.current += 1
-    // 「聊一聊」的在飞锁同样作废：A 发起的建会话请求不属于 B，锁也要还给 B ——
-    // 不清的话 B 点「聊一聊」会被 A 的在途请求一直堵着，直到 A 的响应回来
-    chatInFlightRef.current = null
+    if (isOwnerSwitch(prevUserId)) {
+      loadSeqRef.current += 1
+      // 两个动作的在飞锁同样只在**真换号**时作废：A 发起的建会话请求 / 还开着的购买
+      // 弹窗不属于 B，锁要还给 B —— 不清的话 B 点下去会被 A 的在途动作一直堵着。
+      // 冷启动解析身份是同一个人（cookie 本来就取自本地存储），锁必须留着：
+      // 清掉它 `isColdStartIdentityResolution` 的「仍持有那把锁」就永远不成立，
+      // 那次点击又会被判过期（等于白改）。
+      chatInFlightRef.current = null
+      buyInFlightRef.current = null
+      // 「管理」ActionSheet 与「下架」请求同理：A 的弹层回调 / 在途下架不属于 B。锁在这里
+      // 作废（置 `null`）之后，A 的迟到回调连令牌都对不上，`isCurrentActionTask` 必定拒绝 ——
+      // 只靠 `ownerId` + `epoch` 不够：A → B → A 时账号名又相等，得靠这把锁的归属区分。
+      menuInFlightRef.current = null
+      offlineInFlightRef.current = null
+    }
     const cleared = clearedPrivateScope()
     setCommentInput(cleared.commentInput)
     setReplyInput(cleared.replyInput)
@@ -364,6 +403,10 @@ export default function ListingDetail() {
     setFaved(cleared.faved)
     // 购买请求是当前账号发出的：换号后「待店家确认」不属于下一个账号
     setBuyRequested(cleared.buyRequested)
+    // 下架确认卡是卖家视角的操作面板：下一个账号未必还是这件商品的卖家，
+    // 连卡带请求三态一起复位，别把 A 的「下架中」留给 B
+    setOfflineConfirmOpen(cleared.offlineConfirmOpen)
+    setOfflineSubmit(cleared.offlineSubmit)
     // 未确认的占位属于上一个账号：清场后它的 .then / .catch 已被 epoch 作废，
     // 留着就是一条永远等不到确认、却对下一个账号可见的幽灵留言。
     setComments((prev) => dropPendingComments(prev))
@@ -544,6 +587,28 @@ export default function ListingDetail() {
   const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
 
   /**
+   * 卖家视角（Owner 2026-09-27 拍板）：当前账号是这件商品的卖家时，底部栏换成
+   * 「管理 / 看谁想要」。每帧用**当前** userId 重算（见 `view.isOwnListing`），
+   * 换号不用清场就会自动切回买家形态。非在售（本人可见的 OFFLINE / SOLD /
+   * RESERVED）不渲染操作钮，整条换成状态行。
+   *
+   * 归属比对用的「当前用户」在演示档下要换成 mock 世界的「我」（`mock/users` 的
+   * `ME.id = 'u-alan'`）：演示登录态是 `DEMO_USER` 的 uuid，而 fixture 商品的
+   * sellerId 全是 `u-*` —— 拿 uuid 比对永远不相等，卖家视角在演示构建里永远出不来。
+   * 真实构建 `DEMO_AUTH_ENABLED` 是编译常量 `false`，走真实会话 id。
+   *
+   * 边界：`TARO_APP_MOCK=1` 但本机 API 可达时详情走真接口（sellerId 是真实 uuid），
+   * 钉死的 `'u-alan'` 同样永不匹配 —— 那种组合下卖家视角不可达；演示口径是
+   * 「后端不可达、fixture 回退」，两个演示开关不要混用。
+   *
+   * 退出登录后 `userId` 为 `null` 时**不许**回落到钉死的演示账号：本页不挂登录守卫，
+   * 那会让匿名态渲染出卖家底栏，「匿名永远是买家形态」的判据当场破掉。
+   */
+  const ownerViewUserId = DEMO_AUTH_ENABLED && userId !== null ? mockMe.id : userId
+  const ownListing = data !== null && isOwnListing(data.listing.sellerId, ownerViewUserId)
+  const ownerNote = ownListing && data !== null ? ownerStatusNote(data.listing.status) : null
+
+  /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
    *
    * 本页不再用那个组件（它的钮是 `absolute`，会随内容滚走，且尺寸/留白与稿子不符），
@@ -559,6 +624,27 @@ export default function ListingDetail() {
   }
 
   /**
+   * 底栏动作的在飞任务是否还作数（两个动作共用）。
+   *
+   * 除了「账号 + 代次 + 令牌全等」，还要放过**冷启动解析身份**那一次代次前进：
+   * 本页公开、底栏一进来就点得动，而登录态解析（`unknown → authed`）会在点击之后
+   * 才落地。请求带的 cookie 本来就取自本地存储、是同一个账号，把这一次判过期等于
+   * 「点了没反应」（会话其实已经建好了）。判据见 `isColdStartIdentityResolution`
+   * —— 它同时要求「发起时确实是 `unknown`」与「仍持有那把锁」，不是无条件放行。
+   */
+  const isTaskLive = (task: ActionTask, inFlight: number | null): boolean =>
+    isCurrentActionTask(task, {
+      ownerId: ownerRef.current,
+      epoch: epochRef.current,
+      token: inFlight,
+    }) ||
+    isColdStartIdentityResolution(task, {
+      ownerId: ownerRef.current,
+      epoch: epochRef.current,
+      token: inFlight,
+    })
+
+  /**
    * 「聊一聊」：与这件商品的卖家建/取会话后跳会话页 —— 与匹配结果页（#67 第二步）
    * 同一条路径：`POST /conversations` 以商品 id 为入参，服务端对同一 (listingId, 买家)
    * **复用**既有会话，所以本页不做本地缓存，重复点击就是幂等的重发。
@@ -571,31 +657,30 @@ export default function ListingDetail() {
    */
   const chatWithSeller = () => {
     if (chatInFlightRef.current !== null) return
-    chatSeqRef.current += 1
-    const task = beginChatTask(epochRef.current, ownerRef.current, chatSeqRef.current)
+    actionSeqRef.current += 1
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
     chatInFlightRef.current = task.token
-    const isCurrentTask = (): boolean =>
-      isCurrentChatTask(task, {
-        ownerId: ownerRef.current,
-        epoch: epochRef.current,
-        token: chatInFlightRef.current,
-      })
     /** 只释放自己的锁：换号后 B 重新发起时，A 的迟到收尾不能删掉 B 的标记 */
     const release = (): void => {
-      if (!shouldReleaseChatTask(task, chatInFlightRef.current)) return
+      if (!shouldReleaseActionTask(task, chatInFlightRef.current)) return
       chatInFlightRef.current = null
     }
     void createConversation(id)
       .then(async (conversation) => {
         // 迟到的成功响应一律丢弃、不导航：A → B → A 时账号又等于 A，只比账号挡不住
-        if (!isCurrentTask()) return
+        if (!isTaskLive(task, chatInFlightRef.current)) return
         await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
       })
       .catch((error: unknown) => {
         // 旧任务的失败不能弹给新账号。例外是**会话过期**（401）：`apiRequest` 就地清会话、
         // store 同步回到匿名，于是失败在守卫看来也是「迟到的」，可失败的正是本人 ——
         // 静默吞掉等于「点了聊一聊，什么都没发生」（同 `sendComment` 的口径）
-        if (!isCurrentTask()) {
+        if (!isTaskLive(task, chatInFlightRef.current)) {
           if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
             void Taro.showToast({ title: '请先登录后再聊一聊', icon: 'none' })
           }
@@ -617,18 +702,161 @@ export default function ListingDetail() {
    *
    * 弹窗回调同样是迟到的异步回调：等待期间换号 / 卸载之后，「待店家确认」写的就是
    * 别人的页面了。切号清场只清**已写下**的状态，挡不住清场之后的这次回写。
+   *
+   * 在飞锁与「聊一聊」同口径（另一把锁）：`showModal` 没回之前不再弹第二个，否则
+   * 连点会叠出多个确认框；`fail`（老 Android 上点蒙层 / 页面卸载走 reject）按
+   * 「没确认」处理 —— 不写终态，也不弹错。
    */
   const buy = () => {
-    if (buyRequested) return
-    const task = beginTask(epochRef.current, ownerRef.current)
+    if (buyRequested || buyInFlightRef.current !== null) return
+    actionSeqRef.current += 1
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
+    buyInFlightRef.current = task.token
+    const release = (): void => {
+      if (!shouldReleaseActionTask(task, buyInFlightRef.current)) return
+      buyInFlightRef.current = null
+    }
     void Taro.showModal({
       title: '确定立即购买',
       content: '请核实商品信息，确认后向卖家发送请求',
-    }).then((result) => {
-      if (!result.confirm) return
-      if (!isTaskCurrent(task, epochRef.current, ownerRef.current)) return
-      setBuyRequested(true)
     })
+      .then((result) => {
+        if (!result.confirm) return
+        if (!isTaskLive(task, buyInFlightRef.current)) return
+        setBuyRequested(true)
+      })
+      .catch((error: unknown) => {
+        // 弹窗没完成（点蒙层 / 页面卸载 / 平台走 fail）就是「没确认」，留痕不打扰用户
+        console.debug('[miniapp] 购买确认弹窗未完成，按未确认处理', error)
+      })
+      .finally(release)
+  }
+
+  /* ------------------------------------------------------ 卖家视角底栏动作 */
+
+  /**
+   * 「管理」：两项动作（Owner 2026-09-27 拍板：编辑 / 下架，没有第三项）。
+   * 原生 ActionSheet 够用，不自绘面板；二改要换样式再说。
+   *
+   * 令牌在**弹出之前**捕获（同 `chatWithSeller` / `buy` 的 `ActionTask` 口径，
+   * 见 `./view`）：弹出层的结果是跨帧回调，等待期间换号 / 退出 / 卸载
+   * 之后，A 的 `tapIndex` 仍会去写编辑交接、`switchTab` 或给已经清场的页面重开卖家下架卡
+   * —— 这三步都在服务器任何校验**之前**，商品归属校验挡不住。所以回调里先问
+   * `isTaskLive`，过期就整条丢弃。
+   */
+  const manageListing = () => {
+    // 在飞时再点：不弹第二张。换号时锁在这里被置 `null`，A 的迟到回调因此连令牌都对不上
+    if (menuInFlightRef.current !== null) return
+    actionSeqRef.current += 1
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
+    menuInFlightRef.current = task.token
+    /** 只释放自己的锁：换号后 B 重新弹层时，A 的迟到收尾不能删掉 B 的标记 */
+    const release = (): void => {
+      if (!shouldReleaseActionTask(task, menuInFlightRef.current)) return
+      menuInFlightRef.current = null
+    }
+    void Taro.showActionSheet({ itemList: ['编辑', '下架'] })
+      .then((res) => {
+        // 迟到的结果一律丢弃、不产生任何副作用：A → B → A 时账号名又相等，只比账号名挡不住
+        if (!isTaskLive(task, menuInFlightRef.current)) return
+        if (res.tapIndex === 0) {
+          // 与我的发布页同一条交接：出物页是 Tab 页不能带 query（`edit-target` 模块说明），
+          // 出物页取到交接后进编辑态并回填原商品信息
+          requestSellEdit(id)
+          void Taro.switchTab({ url: '/pages/sell/index' })
+        } else if (res.tapIndex === 1) {
+          setOfflineSubmit('idle')
+          setOfflineConfirmOpen(true)
+        }
+      })
+      // 点遮罩 / 「取消」的 reject 不是错误，静默收场
+      .catch(() => {})
+      .finally(release)
+  }
+
+  /**
+   * 「看谁想要」：只统计已发起聊天的买家（#214 的口径），页内自带非本人守卫，
+   * 非卖家打开会落在它自己的空态。
+   */
+  const goWatchers = () => {
+    void Taro.navigateTo({ url: `/pages/watchers/index?listingId=${id}` })
+  }
+
+  /** 非在售状态行的去处：编辑 / 重新上架这些管理动作都收在「我的发布」里 */
+  const goMyList = () => {
+    void Taro.navigateTo({ url: '/pages/mylist/index' })
+  }
+
+  /**
+   * 「下架」确认卡：与我的发布页同一真状态机（默认可点 / 下架中 / 失败重试），
+   * 失败停在弹层里给「重试」，成功后静默刷新详情 —— 状态行以服务端真值为准，
+   * 不本地假改 `status`。
+   */
+  const confirmOffline = () => {
+    // 在飞守卫是**令牌**而不是布尔（同 `chatInFlightRef` / mylist 的 confirmOffline）：
+    // 布尔锁下 A 的迟到 `finally` 会把 B（或 A 自己下一轮）的在飞标记一并删掉，
+    // 于是同一件商品被重复下架、弹层里还会看到矛盾的「下架中 / 失败」。
+    // 挡下来时给一句提示：卡片是「关掉再打开」就回到可点态，光 `return` 会变成点了没反应。
+    if (offlineInFlightRef.current !== null) {
+      void Taro.showToast({ title: '正在下架，请稍候', icon: 'none' })
+      return
+    }
+    // 与底栏另两个动作同一把尺：铸任务（账号 + 世代 + 令牌）+ 记入航班，回调里问
+    // `isTaskLive`，换号 / 卸载后迟到的下架不许写进 B 的页面
+    actionSeqRef.current += 1
+    const task = beginActionTask(
+      epochRef.current,
+      ownerRef.current,
+      actionSeqRef.current,
+      authStatus,
+    )
+    offlineInFlightRef.current = task.token
+    /** 只释放自己那把锁（同 `release`）：令牌已经被换号清场或下一轮请求换掉时不动它 */
+    const release = (): void => {
+      if (!shouldReleaseOfflineTask(task.token, offlineInFlightRef.current)) return
+      offlineInFlightRef.current = null
+    }
+    reloadRef.current = beginReloadWrite(reloadRef.current, task.epoch)
+    setOfflineSubmit('busy')
+    void (async () => {
+      try {
+        await offlineListing(id)
+        if (!isTaskLive(task, offlineInFlightRef.current)) return
+        setOfflineSubmit('idle')
+        setOfflineConfirmOpen(false)
+        void Taro.showToast({ title: '已下架', icon: 'none' })
+        // 刷新本身也可能被并发的留言写入延后，走同一套记账
+        requestRefresh()
+      } catch (error) {
+        // 迟到失败不写状态也不提示；例外是**会话过期**（401）：清会话后 store 已回
+        // 匿名、这次失败在守卫看来是「迟到的」，可失败的就是本人 —— 静默吞掉等于
+        // 「点了确认下架，什么都没发生」（同 sendComment 的口径，见 `./view`）
+        if (!isTaskLive(task, offlineInFlightRef.current)) {
+          if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
+            void Taro.showToast({ title: '下架失败，请重试', icon: 'none' })
+          }
+          return
+        }
+        setOfflineSubmit('failed')
+        void Taro.showToast({
+          title: isApiError(error) ? error.message || '下架失败，请重试' : '下架失败，请重试',
+          icon: 'none',
+        })
+      } finally {
+        release()
+        finishWrite(task.epoch)
+      }
+    })()
   }
 
   /**
@@ -1165,35 +1393,106 @@ export default function ListingDetail() {
 
       {/* ---------------------------------------------------- 底部操作栏 */}
       {/*
-        主次（Owner 拍板）：「聊一聊」为主（品牌实底，占右侧拇指位）、「立即购买」为次
-        （浅底描边）—— 即原来的 solid/ghost 互换。购买已确认后按钮转灰为状态牌，
-        点击无效果（buy 里守卫），心形图标一并摘掉。
+        买家形态（Owner 拍板的主次）：「聊一聊」为主（品牌实底，占右侧拇指位）、
+        「立即购买」为次（浅底描边）—— 即原来的 solid/ghost 互换。购买已确认后按钮
+        转灰为状态牌，点击无效果（buy 里守卫）。
+        卖家形态（Owner 2026-09-27 拍板）：当前账号是卖家时换成「管理 / 看谁想要」，
+        收藏心不出现（卖家不收藏自己的商品）；非在售不渲染操作钮，整条换状态行
+        （见 view.ownerStatusNote）。举报入口在标签行（#260），与本栏无关。
       */}
       <View className="detail__bar">
-        <View
-          className={`detail__fav${faved ? ' is-on' : ''}`}
-          onClick={() => setFaved((prev) => !prev)}
-        >
-          <Image
-            className="detail__fav-img"
-            src={faved ? ICONS.heartOn : ICONS.heartMuted}
-            mode="aspectFit"
-          />
-        </View>
-        <View
-          className={`detail__btn detail__btn--ghost${buyRequested ? ' detail__btn--pending' : ''}`}
-          onClick={buy}
-        >
-          {buyRequested ? null : (
-            <Image className="detail__btn-img" src={ICONS.heartOn} mode="aspectFit" />
-          )}
-          <Text>{buyRequested ? '待店家确认' : '立即购买'}</Text>
-        </View>
-        <View className="detail__btn detail__btn--solid" onClick={chatWithSeller}>
-          <Image className="detail__btn-img" src={ICONS.chatWhite} mode="aspectFit" />
-          <Text>聊一聊</Text>
-        </View>
+        {ownListing && ownerNote === null ? (
+          <>
+            <View className="detail__btn detail__btn--ghost" onClick={manageListing}>
+              <Image className="detail__btn-img" src={ICONS.settingsMuted} mode="aspectFit" />
+              <Text>管理</Text>
+            </View>
+            <View className="detail__btn detail__btn--solid" onClick={goWatchers}>
+              <Image className="detail__btn-img" src={ICONS.heartWhite} mode="aspectFit" />
+              <Text>看谁想要</Text>
+            </View>
+          </>
+        ) : ownListing && ownerNote !== null ? (
+          <View className="detail__bar-note">
+            <Text className="detail__bar-note-text">{ownerNote}</Text>
+            <Text className="detail__bar-note-link" onClick={goMyList}>
+              去我的发布管理
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View
+              className={`detail__fav${faved ? ' is-on' : ''}`}
+              onClick={() => setFaved((prev) => !prev)}
+            >
+              <Image
+                className="detail__fav-img"
+                src={faved ? ICONS.heartOn : ICONS.heartMuted}
+                mode="aspectFit"
+              />
+            </View>
+            <View
+              className={`detail__btn detail__btn--ghost${
+                buyRequested ? ' detail__btn--pending' : ''
+              }`}
+              onClick={buy}
+            >
+              {buyRequested ? null : (
+                <Image className="detail__btn-img" src={ICONS.heartOn} mode="aspectFit" />
+              )}
+              <Text>{buyRequested ? '待店家确认' : '立即购买'}</Text>
+            </View>
+            <View className="detail__btn detail__btn--solid" onClick={chatWithSeller}>
+              <Image className="detail__btn-img" src={ICONS.chatWhite} mode="aspectFit" />
+              <Text>聊一聊</Text>
+            </View>
+          </>
+        )}
       </View>
+
+      {/* ---------------- 下架二次确认（卖家视角，同我的发布页的三态卡） ---------------- */}
+      {offlineConfirmOpen ? (
+        <>
+          <View className="detail__scrim" onClick={() => setOfflineConfirmOpen(false)} />
+          <View className="detail__dialog">
+            <Text className="detail__dialog-title">确认下架这件商品？</Text>
+            <Text className="detail__dialog-sub">
+              下架后买家在首页与搜索里都看不到它，已有的会话不受影响。
+            </Text>
+            <View className="detail__dlg-tip">
+              <Text>
+                下架是可恢复操作：之后在「我的发布」的「已下架」里点「重新上架」，即可把商品信息带进出物页重新发布。
+              </Text>
+            </View>
+            <View className="detail__dlg-acts">
+              <View
+                className="detail__dlg-cancel"
+                onClick={() => {
+                  setOfflineConfirmOpen(false)
+                  setOfflineSubmit('idle')
+                }}
+              >
+                <Text>取消</Text>
+              </View>
+              <View
+                className={`detail__dlg-ok${offlineSubmit === 'busy' ? ' is-busy' : ''}${
+                  offlineSubmit === 'failed' ? ' is-failed' : ''
+                }`}
+                onClick={confirmOffline}
+              >
+                {offlineSubmit === 'busy' ? <View className="detail__spin" /> : null}
+                <Text>
+                  {offlineSubmit === 'busy'
+                    ? '下架中'
+                    : offlineSubmit === 'failed'
+                      ? '重试'
+                      : '确认下架'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </>
+      ) : null}
 
       {/* 回到顶部：抬到底部操作栏上方 */}
       <BackTop show={showTop} onTop={backToTop} bottom="240rpx" />
