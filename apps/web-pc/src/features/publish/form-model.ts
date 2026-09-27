@@ -169,8 +169,8 @@ export function polishFailureView(code: string, retryAfterSeconds?: number): Pol
               : retryAfterSeconds > 60
                 ? `操作太频繁，约 ${retryAfterText(retryAfterSeconds)}后可重试`
                 : `操作太频繁，${retryAfterSeconds} 秒后可重试`,
-        detail: '不会自动重试，当前描述保持不变。',
-        canRetry: false,
+        detail: '不会自动重试，冷却结束后可以手动重试。',
+        canRetry: true,
       }
     case 'AI_TIMEOUT':
       return {
@@ -203,6 +203,13 @@ export function polishFailureView(code: string, retryAfterSeconds?: number): Pol
         canRetry: true,
       }
   }
+}
+
+/** AI 请求依赖的表单快照；用于丢弃编辑后迟到的候选/错误。 */
+export function polishInputKey(
+  form: Pick<PublishFormState, 'title' | 'description' | 'category'>,
+): string {
+  return JSON.stringify([form.title.trim(), form.description.trim(), form.category])
 }
 
 export function polishPreconditionError(form: PublishFormState): string | null {

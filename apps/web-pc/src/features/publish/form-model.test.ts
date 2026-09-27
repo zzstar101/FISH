@@ -8,6 +8,7 @@ import {
   parsePriceToCents,
   polishCooldownUntilFrom,
   polishFailureView,
+  polishInputKey,
   publishFieldErrorsFromDetails,
   publishImageCheck,
   publishImageHelperText,
@@ -101,12 +102,22 @@ describe('publish form model', () => {
   test('keeps AI failure semantics explicit', () => {
     expect(polishFailureView('AI_POLISH_QUOTA', 30)).toMatchObject({
       message: '操作太频繁，30 秒后可重试',
-      canRetry: false,
+      canRetry: true,
     })
     expect(polishCooldownUntilFrom(30, 1_000)).toBe(31_000)
     expect(polishCooldownUntilFrom(undefined, 1_000)).toBe(Number.POSITIVE_INFINITY)
     expect(polishFailureView('AI_TIMEOUT').canRetry).toBe(true)
     expect(polishFailureView('AI_RESULT_EMPTY').message).toBe('没有可用候选')
     expect(polishFailureView('AI_NOT_CONFIGURED').canRetry).toBe(false)
+  })
+
+  test('keys AI responses to the exact form content that requested them', () => {
+    const form = { title: '  教材  ', description: '九成新', category: 'BOOKS' as const }
+    expect(polishInputKey(form)).toBe(
+      polishInputKey({ title: '教材', description: '九成新', category: 'BOOKS' }),
+    )
+    expect(polishInputKey(form)).not.toBe(
+      polishInputKey({ title: '教材', description: '全新未拆', category: 'BOOKS' }),
+    )
   })
 })

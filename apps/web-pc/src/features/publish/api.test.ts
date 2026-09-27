@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import {
   createListing,
   fetchPolishCandidates,
+  imagePreparationMessage,
   PublishTaskCancelledError,
   uploadListingImage,
   validateImageFile,
@@ -20,6 +21,12 @@ describe('publish API', () => {
     ).toBe('仅支持 JPG / PNG / WebP 图片')
     expect(validateImageFile(new File([], 'empty.jpg', { type: 'image/jpeg' }))).toBe(
       '图片文件为空或无法读取',
+    )
+    expect(
+      imagePreparationMessage(new File(['pdf'], 'fake.jpg', { type: 'application/pdf' })),
+    ).toBe('仅支持 JPG / PNG / WebP 图片')
+    expect(imagePreparationMessage(new File(['heic'], 'photo.heic', { type: 'image/heic' }))).toBe(
+      'HEIC 图片转换失败，请改用 JPG / PNG / WebP',
     )
   })
 
@@ -98,6 +105,29 @@ describe('publish API', () => {
     await expect(
       fetchPolishCandidates({ title: '教材', description: '九成新', category: 'BOOKS' }),
     ).rejects.toMatchObject({ code: 'AI_POLISH_QUOTA', retryAfterSeconds: 42 })
+  })
+
+  test('rejects invalid create input before fetch', async () => {
+    let called = false
+    globalThis.fetch = mock(async () => {
+      called = true
+      return new Response(null, { status: 500 })
+    }) as unknown as typeof fetch
+
+    await expect(
+      createListing({
+        title: '教材',
+        description: '九成新',
+        priceCents: 100,
+        category: 'BOOKS',
+        condition: 'LIKE_NEW',
+        urgent: false,
+        negotiable: false,
+        free: true,
+        objectKeys: ['listings/u/a.jpg'],
+      }),
+    ).rejects.toBeDefined()
+    expect(called).toBe(false)
   })
 
   test('creates a listing through POST /listings and parses the returned detail', async () => {
