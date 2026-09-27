@@ -175,12 +175,29 @@ describe('只读入口判定（resolveReportView，两页共用）', () => {
   const sample = 'rpt_01J8ZQ3XK7M2' // 商品样例
   const userSample = 'rpt_01J8TN7RD2M4' // 用户样例
 
-  test('不带 reportId → 新建态', () => {
-    expect(resolveReportView({ reportId: null, target: 'LISTING', demoEnabled: false })).toEqual({
+  test('不带 reportId（键不存在）→ 新建态', () => {
+    expect(
+      resolveReportView({ reportId: undefined, target: 'LISTING', demoEnabled: false }),
+    ).toEqual({
       mode: 'fill',
       record: null,
     })
-    expect(resolveReportView({ reportId: '', target: 'USER', demoEnabled: true }).mode).toBe('fill')
+    expect(resolveReportView({ reportId: null, target: 'USER', demoEnabled: true }).mode).toBe(
+      'fill',
+    )
+  })
+
+  /**
+   * `?reportId=` 这种**带了参数、值为空**的链接不是新建态：判据是「入口有没有给
+   * reportId」，不是「值是不是空串」——否则被改坏的深链会静默变成一张空表单。
+   */
+  test('reportId 为空串 → 打不开，不落新建表单', () => {
+    expect(resolveReportView({ reportId: '', target: 'LISTING', demoEnabled: true }).mode).toBe(
+      'unavailable',
+    )
+    expect(resolveReportView({ reportId: '', target: 'USER', demoEnabled: false }).mode).toBe(
+      'unavailable',
+    )
   })
 
   /**
@@ -245,6 +262,9 @@ describe('空态文案', () => {
     const real = emptyCopyOf(false)
     expect(real.title).toBe('举报功能还没有后端')
     expect(real.actionLabel).toBe('去逛逛')
+    // 缺的是服务端：入口与表单都在（商品详情 / 他人主页 / 我的页三处），
+    // 文案不能声称「提交入口也还没有开放」——那与用户眼前的入口自相矛盾
+    expect(real.text).not.toContain('入口')
     const demo = emptyCopyOf(true)
     expect(demo.title).toBe('还没有提交过举报')
     expect(demo.actionLabel).toBe(null)

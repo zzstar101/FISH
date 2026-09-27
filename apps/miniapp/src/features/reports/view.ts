@@ -12,6 +12,8 @@
  *
  * 只给了 `reportId` 却拿不到记录时**不退回新建表单**：那会让「打开一条记录」静默变成
  * 「凭空举报一个没有对象的商品」。落 `unavailable`，由页面明确说这条打不开。
+ * `reportId=` 这种**带了参数但值为空**的链接同样算「打不开」—— 判据是「入口有没有给
+ * reportId」，不是「这个值是不是空串」，否则被改坏的深链会静默变成新建表单。
  */
 import { findDemoReport, type ReportRecord } from './demo'
 import type { ReportTarget } from './meta'
@@ -25,15 +27,15 @@ export type ReportView = {
 }
 
 export function resolveReportView(input: {
-  /** 入口 query 里的 `reportId`；没有就是新建态 */
-  reportId: string | null
+  /** 入口 query 里的 `reportId`；键不存在（`undefined`）才是新建态 */
+  reportId: string | null | undefined
   /** 本页负责的目标类型（商品页 / 用户页各一个） */
   target: ReportTarget
   /** 演示构建判据（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`） */
   demoEnabled: boolean
 }): ReportView {
   const { reportId, target, demoEnabled } = input
-  if (reportId === null || reportId === '') return { mode: 'fill', record: null }
+  if (reportId === null || reportId === undefined) return { mode: 'fill', record: null }
   const record = demoEnabled ? findDemoReport(reportId, target) : null
   return record === null ? { mode: 'unavailable', record: null } : { mode: 'view', record }
 }
