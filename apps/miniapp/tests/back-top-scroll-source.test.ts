@@ -12,12 +12,16 @@ import { describe, expect, test } from 'bun:test'
  * 那个容器（钮出现了也回不去）。演示时名单短、滚不动，这一条同样看不出来。
  *
  * 本仓 `tests/` 没有 Taro 组件渲染基建，只能读源码钉住接线（先例
- * `tests/user-list-end.test.ts` 的「页面接线」段）。这里钉的是**滚动源的选择**：
- * 内滚页必须走容器 `onScroll` + `scrollIntoView`，且不得再留 `usePageScroll`。
+ * `tests/user-list-end.test.ts` 的「页面接线」段）。断言**切到具体片段**再查，不查整份
+ * 文件 —— 整份文件的子串命中挡不住「属性挂错了元素」「锚点挪到了列表末尾」这类改法。
  */
 
 async function watchersSource(): Promise<string> {
   return await Bun.file(new URL('../src/pages/watchers/index.tsx', import.meta.url)).text()
+}
+
+async function watchersStyle(): Promise<string> {
+  return await Bun.file(new URL('../src/pages/watchers/index.scss', import.meta.url)).text()
 }
 
 /**
@@ -31,8 +35,14 @@ function code(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
-async function watchersStyle(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/watchers/index.scss', import.meta.url)).text()
+/** 取 `from` 到其后第一个 `to` 之间的源码（两端都不含） */
+async function slice(from: string, to: string): Promise<string> {
+  const text = await watchersSource()
+  const start = text.indexOf(from)
+  expect(start, `缺少片段：${from}`).toBeGreaterThanOrEqual(0)
+  const end = text.indexOf(to, start + from.length)
+  expect(end, `缺少片段：${to}`).toBeGreaterThan(start)
+  return text.slice(start + from.length, end)
 }
 
 describe('watchers 回顶钮的滚动源（内滚容器）', () => {
@@ -42,7 +52,9 @@ describe('watchers 回顶钮的滚动源（内滚容器）', () => {
     // 页面不滚（`height:100vh` + `overflow:hidden`），所以页面级滚动源在这里必然失效
     expect(root).toContain('height: 100vh')
     expect(root).toContain('overflow: hidden')
-    expect(style).toContain('.wt__scroll')
+    // 名单容器的滚动样式（`flex: 1 1 auto; min-height: 0`）也在
+    const scroll = style.slice(style.indexOf('.wt__scroll'))
+    expect(scroll.slice(0, scroll.indexOf('}'))).toContain('min-height: 0')
   })
 
   test('不再用页面级滚动源（`usePageScroll` / `Taro.pageScrollTo` 都够不到内滚容器）', async () => {
@@ -51,23 +63,49 @@ describe('watchers 回顶钮的滚动源（内滚容器）', () => {
     expect(source).not.toContain('pageScrollTo')
   })
 
-  test('显示判据挂在 ScrollView 的 onScroll 上，阈值仍取自共享组件', async () => {
-    const source = await watchersSource()
-    expect(source).toContain("from '@/components/back-top'")
-    expect(source).toContain('BACK_TOP_THRESHOLD')
-    expect(source).toContain('onScroll={onScroll}')
-    // 判据来自事件里的 scrollTop，而不是页面级钩子
-    expect(source).toContain('e.detail.scrollTop')
-    expect(source).toContain('setShowTop(')
+  test('显示判据挂在名单那个 ScrollView 自己的 onScroll 上，阈值取自共享组件', async () => {
+    // 只切到 `<ScrollView ...>` 这个开标签：挂在骨架屏 / 空态的 `<View>` 上会被这里拦住
+    const tag = await slice('<ScrollView', '>')
+    expect(tag).toContain('className="wt__scroll"')
+    expect(tag).toContain('scrollY')
+    expect(tag).toContain('onScroll={onScroll}')
+    expect(tag).toContain('scrollIntoView={topAnchor}')
+
+    // 判据来自事件里的 scrollTop（设备 px，与共享组件阈值同口径），且阈值不是写死的数字
+    const handler = await slice('const onScroll = useCallback(', 'const [topAnchor')
+    expect(handler).toContain('e.detail.scrollTop')
+    expect(handler).toContain('BACK_TOP_THRESHOLD')
+    expect(handler).toContain('setShowTop(')
   })
 
-  test('回顶走 scrollIntoView 双锚点交替：连点两次也能真的回顶', async () => {
+  test('阈值与钮的组件都从共享组件来（不是页面里再写一个数字 / 一份实现）', async () => {
+    const importLine = await slice('import BackTop, {', '\n')
+    expect(importLine).toContain('BACK_TOP_THRESHOLD')
+    expect(importLine).toContain("from '@/components/back-top'")
+    // 页面里不许再出现一份自己画的圆钮箭头（旧实现的类名前缀）
     const source = await watchersSource()
-    expect(source).toContain('scrollIntoView={topAnchor}')
-    expect(source).toContain('id="wt-top-a"')
-    expect(source).toContain('id="wt-top-b"')
-    // 交替指：同值不会重触发滚动，所以不能写成固定常量
-    expect(source).toContain("prev === 'wt-top-a' ? 'wt-top-b' : 'wt-top-a'")
-    expect(source).toContain('onTop={backToTop}')
+    expect(source).not.toContain('wt__totop')
+  })
+
+  test('回顶锚点在名单之前（不是在列表末尾），且双锚点交替指', async () => {
+    // 两个同位锚点必须排在 `.wt__list` 之前 —— 放末尾就变成「滚到底」
+    const inside = await slice('scrollIntoView={topAnchor}', '<View className="wt__list">')
+    expect(inside).toContain('id="wt-top-a"')
+    expect(inside).toContain('id="wt-top-b"')
+
+    const toggle = await slice('const backToTop = () => {', 'const [showToken')
+    // 交替指：同值原生层不会重滚，写成固定常量会让「连点第二次」失效
+    expect(toggle).toContain("prev === 'wt-top-a' ? 'wt-top-b' : 'wt-top-a'")
+    expect(await watchersSource()).toContain('onTop={backToTop}')
+  })
+
+  test('名单换了一份就把浮现态归零（否则钮会悬在骨架屏 / 空态上）', async () => {
+    // 用下一个语句当右界：清场块里有多个 `}`（`setScope({ ... })`），切到第一个就断了
+    const block = await slice(
+      'if (scope.userId !== userId || scope.listingId !== listingId)',
+      'useDidShow(',
+    )
+    expect(block).toContain('setPage(initialPage())')
+    expect(block).toContain('setShowTop(false)')
   })
 })

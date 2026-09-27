@@ -74,6 +74,9 @@ export default function Watchers() {
     setPage(initialPage())
     setMorePending(false)
     setMoreFailed(false)
+    // 名单换了一份，回顶钮的判据要跟着归零：不清的话它会悬在骨架屏 / 空态上，
+    // 而那时根本没有可滚的内容（要等下一次滚动事件才会纠正）
+    setShowTop(false)
   }
 
   useDidShow(() => setShowToken((value) => (value ?? 0) + 1))
@@ -253,8 +256,6 @@ export default function Watchers() {
             <ScrollView
               className="wt__scroll"
               scrollY
-              enhanced
-              showScrollbar={false}
               scrollIntoView={topAnchor}
               onScroll={onScroll}
             >
