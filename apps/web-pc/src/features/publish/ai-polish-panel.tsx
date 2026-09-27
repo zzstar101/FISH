@@ -38,7 +38,9 @@ export function AiPolishPanel({
 }: AiPolishPanelProps) {
   const candidate = state.phase === 'ready' ? state.candidates[state.index] : undefined
   const hasCandidates = state.phase === 'ready' && state.candidates.length > 0
-  const canStart = disabledReason === null && state.phase !== 'loading' && !coolingDown
+  const retryBlocked = state.phase === 'failed' && !state.view.canRetry
+  const canStart =
+    disabledReason === null && state.phase !== 'loading' && !coolingDown && !retryBlocked
 
   return (
     <Card className="gap-0 border border-line p-6">

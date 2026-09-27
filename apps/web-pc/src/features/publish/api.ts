@@ -1,6 +1,7 @@
 import { AI_ROUTES } from '@fish/contracts/ai/routes'
 import {
   type AiPolishCandidatesRequest,
+  AiPolishCandidatesRequestSchema,
   type AiPolishCandidatesResponse,
   AiPolishCandidatesResponseSchema,
 } from '@fish/contracts/ai/schema'
@@ -8,10 +9,13 @@ import { LISTING_ROUTES, UPLOAD_ROUTES } from '@fish/contracts/listings/routes'
 import {
   ALLOWED_IMAGE_MIME,
   type ListingCreateInput,
+  ListingCreateInputSchema,
   type ListingDetail,
   ListingDetailSchema,
   MAX_IMAGE_BYTES,
+  UploadConfirmRequestSchema,
   UploadConfirmResponseSchema,
+  UploadPresignRequestSchema,
   UploadPresignResponseSchema,
 } from '@fish/contracts/listings/schema'
 import { apiRequest } from '../../lib/api-client'
@@ -77,6 +81,15 @@ export function validateImageFile(file: File): string | null {
   return null
 }
 
+/** 图片预处理失败时的可区分文案；HEIC 失败不应伪装成“不支持格式”。 */
+export function imagePreparationMessage(file: File): string {
+  if (allowedMime(file) !== null) return '无法读取或转换图片'
+  if (file.type === 'image/heic' || extensionOf(file.name) === 'heic') {
+    return 'HEIC 图片转换失败，请改用 JPG / PNG / WebP'
+  }
+  return '仅支持 JPG / PNG / WebP 图片'
+}
+
 export class PublishTaskCancelledError extends Error {
   constructor() {
     super('发布任务已失效')
@@ -110,10 +123,14 @@ export async function uploadListingImage(file: File, options: UploadOptions): Pr
   const invalid = validateImageFile(file)
   if (invalid !== null) throw new Error(invalid)
 
+  const presignInput = UploadPresignRequestSchema.parse({
+    contentType,
+    sizeBytes: file.size,
+  })
   const presign = UploadPresignResponseSchema.parse(
     await apiRequest(UPLOAD_ROUTES.presign, {
       method: 'POST',
-      body: JSON.stringify({ contentType, sizeBytes: file.size }),
+      body: JSON.stringify(presignInput),
       ...(options.signal ? { signal: options.signal } : {}),
     }),
   )
@@ -128,10 +145,11 @@ export async function uploadListingImage(file: File, options: UploadOptions): Pr
   if (!uploaded.ok) throw new Error('图片上传失败，请重试')
   assertCurrent(options.isCurrent)
 
+  const confirmInput = UploadConfirmRequestSchema.parse({ objectKey: presign.objectKey })
   const confirmed = UploadConfirmResponseSchema.parse(
     await apiRequest(UPLOAD_ROUTES.confirm, {
       method: 'POST',
-      body: JSON.stringify({ objectKey: presign.objectKey }),
+      body: JSON.stringify(confirmInput),
       ...(options.signal ? { signal: options.signal } : {}),
     }),
   )
@@ -143,9 +161,10 @@ export async function createListing(
   input: ListingCreateInput,
   signal?: AbortSignal,
 ): Promise<ListingDetail> {
+  const parsedInput = ListingCreateInputSchema.parse(input)
   const payload = await apiRequest(LISTING_ROUTES.base, {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify(parsedInput),
     ...(signal ? { signal } : {}),
   })
   return ListingDetailSchema.parse(payload)
@@ -155,9 +174,10 @@ export async function fetchPolishCandidates(
   input: AiPolishCandidatesRequest,
   signal?: AbortSignal,
 ): Promise<AiPolishCandidatesResponse> {
+  const parsedInput = AiPolishCandidatesRequestSchema.parse(input)
   const payload = await apiRequest(AI_ROUTES.polishCandidates, {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify(parsedInput),
     ...(signal ? { signal } : {}),
   })
   return AiPolishCandidatesResponseSchema.parse(payload)

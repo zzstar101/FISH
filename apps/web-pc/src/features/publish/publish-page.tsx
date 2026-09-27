@@ -23,6 +23,7 @@ import { currentSessionGeneration } from '../../lib/session-cache'
 import { useAuth } from '../auth/auth-provider'
 import { AiPolishPanel, type PolishState } from './ai-polish-panel'
 import {
+  imagePreparationMessage,
   isPublishTaskCancelled,
   toUploadableFile,
   uploadListingImage,
@@ -208,11 +209,10 @@ function PublishForm() {
     if (!isTaskCurrent(task)) return
     if (!imagesRef.current.some((image) => image.id === id)) return
     if (file === null) {
+      const error = imagePreparationMessage(sourceFile)
       updateImages((current) =>
         current.map((image) =>
-          image.id === id
-            ? { ...image, status: 'failed', file: null, error: '无法读取或转换图片' }
-            : image,
+          image.id === id ? { ...image, status: 'failed', file: null, error } : image,
         ),
       )
       return
@@ -586,13 +586,14 @@ function PublishForm() {
                   checked={form.free}
                   description="价格自动归零，发布后显示「免费送」"
                   label="免费送"
-                  onChange={(checked) =>
+                  onChange={(checked) => {
+                    if (checked) clearFieldError('price')
                     patchForm({
                       free: checked,
                       price: checked ? '' : form.price,
                       negotiable: checked ? false : form.negotiable,
                     })
-                  }
+                  }}
                 />
               </dl>
             </div>
