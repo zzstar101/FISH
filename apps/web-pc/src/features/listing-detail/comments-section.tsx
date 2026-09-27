@@ -7,7 +7,7 @@ import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
@@ -184,6 +184,20 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   const [replyTo, setReplyTo] = useState<string | null>(null)
   const [replyDraft, setReplyDraft] = useState('')
   const [replyError, setReplyError] = useState<string | null>(null)
+  const viewerId = me?.id ?? null
+  const viewerRef = useRef(viewerId)
+  const resetViewerRef = useRef(viewerId)
+  viewerRef.current = viewerId
+
+  useEffect(() => {
+    if (resetViewerRef.current === viewerId) return
+    resetViewerRef.current = viewerId
+    setCommentDraft('')
+    setCommentError(null)
+    setReplyTo(null)
+    setReplyDraft('')
+    setReplyError(null)
+  }, [viewerId])
 
   const items = comments.data?.pages.flatMap((page) => page.items) ?? []
   const hasAuthError = authError !== null && authError !== undefined
@@ -192,10 +206,17 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   function submitComment() {
     const content = commentDraft.trim()
     if (content.length === 0) return
+    const submittedBy = viewerId
     setCommentError(null)
     createComment.mutate(content, {
-      onSuccess: () => setCommentDraft(''),
-      onError: (error) => setCommentError(describeCommentFailure(error)),
+      onSuccess: () => {
+        if (viewerRef.current !== submittedBy) return
+        setCommentDraft('')
+      },
+      onError: (error) => {
+        if (viewerRef.current !== submittedBy) return
+        setCommentError(describeCommentFailure(error))
+      },
     })
   }
 
@@ -213,15 +234,20 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   function submitReply(commentId: string) {
     const content = replyDraft.trim()
     if (content.length === 0) return
+    const submittedBy = viewerId
     setReplyError(null)
     createReply.mutate(
       { commentId, content },
       {
         onSuccess: () => {
+          if (viewerRef.current !== submittedBy) return
           setReplyDraft('')
           setReplyTo(null)
         },
-        onError: (error) => setReplyError(describeCommentFailure(error)),
+        onError: (error) => {
+          if (viewerRef.current !== submittedBy) return
+          setReplyError(describeCommentFailure(error))
+        },
       },
     )
   }
