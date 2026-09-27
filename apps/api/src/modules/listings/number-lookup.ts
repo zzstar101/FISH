@@ -11,11 +11,17 @@ type LookupCode =
   | 'LISTING_LOOKUP_RATE_LIMITED'
   | 'LISTING_LOOKUP_IP_UNAVAILABLE'
 
+/** 滚动窗口与上限：SQL 里两处 `interval '60 seconds'` 必须与窗口常量保持一致。 */
+const NUMBER_LOOKUP_WINDOW_SECONDS = 60
+const NUMBER_LOOKUP_MAX_ATTEMPTS = 50
+
 export class ListingNumberLookupError extends Error {
   constructor(
     readonly status: 404 | 429 | 503,
     readonly code: LookupCode,
     message: string,
+    /** 仅 429 携带：还要等多少秒才有名额（契约 §4.2，客户端不必解析 message）。 */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'ListingNumberLookupError'
@@ -87,24 +93,44 @@ export function createListingNumberLookup(
         ).join('')
       }
       const subjectKey = subject
-      const allowed = await db.transaction(async (tx) => {
-        await tx.execute(
-          sql`SELECT pg_advisory_xact_lock(hashtext('listing-no-lookup'), hashtext(${`${type}:${subjectKey}`}))`,
-        )
-        await tx.execute(sql`DELETE FROM listing_lookup_attempts
+      const quota: { allowed: true } | { allowed: false; retryAfterSeconds: number } =
+        await db.transaction(async (tx) => {
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtext('listing-no-lookup'), hashtext(${`${type}:${subjectKey}`}))`,
+          )
+          await tx.execute(sql`DELETE FROM listing_lookup_attempts
           WHERE subject_type = ${type} AND subject_key = ${subjectKey}
             AND created_at <= clock_timestamp() - interval '60 seconds'`)
-        const [row] = rowsOf(
-          await tx.execute(sql`SELECT count(*)::int AS count FROM listing_lookup_attempts
+          const [row] = rowsOf(
+            await tx.execute(sql`SELECT count(*)::int AS count,
+            COALESCE(EXTRACT(EPOCH FROM (clock_timestamp() - min(created_at))), 0)::float8 AS oldest_age
+          FROM listing_lookup_attempts
           WHERE subject_type = ${type} AND subject_key = ${subjectKey}`),
-        )
-        if (Number(row?.count ?? 0) >= 50) return false
-        await tx.execute(sql`INSERT INTO listing_lookup_attempts (id, subject_type, subject_key, created_at)
+          )
+          if (Number(row?.count ?? 0) >= NUMBER_LOOKUP_MAX_ATTEMPTS) {
+            // 滚动窗口：名额要等**最早**那次尝试滑出窗口才释放，所以剩余秒数由最老一条的年龄决定。
+            // 取 `Math.max(1, …)` 是因为契约要求 `retryAfterSeconds` 是正整数。
+            const oldestAgeSeconds = Number(row?.oldest_age ?? 0)
+            return {
+              allowed: false,
+              retryAfterSeconds: Math.max(
+                1,
+                Math.ceil(NUMBER_LOOKUP_WINDOW_SECONDS - oldestAgeSeconds),
+              ),
+            }
+          }
+          await tx.execute(sql`INSERT INTO listing_lookup_attempts (id, subject_type, subject_key, created_at)
           VALUES (${newId()}::uuid, ${type}, ${subjectKey}, clock_timestamp())`)
-        return true
-      })
-      if (!allowed)
-        throw new ListingNumberLookupError(429, 'LISTING_LOOKUP_RATE_LIMITED', '编号查询过于频繁')
+          return { allowed: true }
+        })
+      if (!quota.allowed) {
+        throw new ListingNumberLookupError(
+          429,
+          'LISTING_LOOKUP_RATE_LIMITED',
+          '编号查询过于频繁',
+          quota.retryAfterSeconds,
+        )
+      }
       if (Math.random() < 0.02) await pruneExpiredNumberLookups(db)
       const [found] = rowsOf(
         await db.execute(sql`

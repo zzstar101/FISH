@@ -67,8 +67,14 @@ function toErrorResponse(c: Context, error: unknown): Response {
     return c.json(errorBody(error.code, error.message, error.details), error.status)
   }
   if (error instanceof ListingNumberLookupError) {
-    if (error.status === 429) c.header('Retry-After', '60')
-    return c.json(errorBody(error.code, error.message), error.status)
+    // 429 的剩余秒数走结构化字段（契约 §4.2 / #141），header 只是给中间层的兜底提示。
+    if (error.retryAfterSeconds !== undefined) {
+      c.header('Retry-After', String(error.retryAfterSeconds))
+    }
+    return c.json(
+      errorBody(error.code, error.message, undefined, error.retryAfterSeconds),
+      error.status,
+    )
   }
   throw error
 }

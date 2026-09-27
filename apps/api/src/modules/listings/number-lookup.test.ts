@@ -127,6 +127,31 @@ test('真实 HTTP 编号查询返回的 lst_ ID 可直接读取详情；错前�
   expect((await app.request(LISTING_ROUTES.detail(wrongPrefix))).status).toBe(404)
 })
 
+test('HTTP 429 响应体带结构化 retryAfterSeconds，且与 Retry-After header 一致', async () => {
+  const app = createApp(
+    { ...loadServerEnv(), DATABASE_URL: scratchUrl.toString() },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { peerIp: () => '192.0.2.77', trustedProxyIp: null },
+  )
+  for (let i = 0; i < 50; i++) {
+    expect((await app.request(LISTING_ROUTES.byNumber('348572910466'))).status).toBe(404)
+  }
+  const blocked = await app.request(LISTING_ROUTES.byNumber(listingNo))
+  expect(blocked.status).toBe(429)
+  const body = (await blocked.json()) as {
+    error: { code: string; retryAfterSeconds?: number }
+  }
+  expect(body.error.code).toBe('LISTING_LOOKUP_RATE_LIMITED')
+  const retryAfterSeconds = body.error.retryAfterSeconds ?? 0
+  expect(retryAfterSeconds).toBeGreaterThanOrEqual(1)
+  expect(retryAfterSeconds).toBeLessThanOrEqual(60)
+  // 两套真相必须一致：小程序只读 body，中间层读 header
+  expect(Number(blocked.headers.get('Retry-After'))).toBe(retryAfterSeconds)
+})
+
 test('匿名持久滚动额度：50 次合法未命中计入，超限 429；DB 不存原始 IP', async () => {
   const numberLookup = lookup()
   const ip = '192.0.2.53'
@@ -138,10 +163,15 @@ test('匿名持久滚动额度：50 次合法未命中计入，超限 429；DB �
       status: 404,
     })
   }
-  await expect(numberLookup.lookup(listingNo, null, ip)).rejects.toMatchObject({
+  const blocked = await numberLookup.lookup(listingNo, null, ip).catch((error: unknown) => error)
+  expect(blocked).toMatchObject({
     status: 429,
     code: 'LISTING_LOOKUP_RATE_LIMITED',
   })
+  // 429 的剩余秒数走结构化字段（契约 §4.2 / #141）：滚动窗口从最老一条尝试算起，故 1 ≤ N ≤ 60。
+  const retryAfterSeconds = (blocked as { retryAfterSeconds?: number }).retryAfterSeconds ?? 0
+  expect(retryAfterSeconds).toBeGreaterThanOrEqual(1)
+  expect(retryAfterSeconds).toBeLessThanOrEqual(60)
   const attempts = await db.select().from(listingLookupAttempts)
   const anonymous = attempts.filter((row) => row.subjectType === 'ip')
   expect(anonymous).toHaveLength(before + 50)
