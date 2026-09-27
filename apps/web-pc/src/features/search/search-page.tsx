@@ -77,6 +77,7 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
           <div className="flex h-11 min-w-0 flex-1 items-center gap-3 rounded-xl bg-surface-2 px-4">
             <Search className="size-4 shrink-0 text-ink-3" />
             <Input
+              aria-label="搜索商品"
               className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
               maxLength={50}
               onChange={(event) => setDraft(event.target.value)}

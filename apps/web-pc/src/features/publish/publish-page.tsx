@@ -494,7 +494,7 @@ function PublishForm() {
 
               <div className="grid grid-cols-2 gap-5">
                 <Field data-invalid={fieldErrors.category !== undefined}>
-                  <FieldLabel>
+                  <FieldLabel htmlFor="publish-category">
                     分类 <span className="text-danger">*</span>
                   </FieldLabel>
                   <Select
@@ -507,6 +507,7 @@ function PublishForm() {
                     <SelectTrigger
                       aria-invalid={fieldErrors.category !== undefined}
                       className="h-11 w-full bg-surface-2"
+                      id="publish-category"
                     >
                       <SelectValue placeholder="请选择分类" />
                     </SelectTrigger>
@@ -522,14 +523,14 @@ function PublishForm() {
                 </Field>
 
                 <Field>
-                  <FieldLabel>成色</FieldLabel>
+                  <FieldLabel htmlFor="publish-condition">成色</FieldLabel>
                   <Select
                     onValueChange={(value) =>
                       patchForm({ condition: ListingConditionSchema.parse(value) })
                     }
                     value={form.condition}
                   >
-                    <SelectTrigger className="h-11 w-full bg-surface-2">
+                    <SelectTrigger className="h-11 w-full bg-surface-2" id="publish-condition">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

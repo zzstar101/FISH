@@ -13,6 +13,7 @@
 | [design/issue-89-web-pc-t8-profile-orders.md](design/issue-89-web-pc-t8-profile-orders.md) | PC Web T8：我的、在售与订单 |
 | [design/issue-89-web-pc-t9-wish-match.md](design/issue-89-web-pc-t9-wish-match.md) | PC Web T9：许愿墙与匹配 |
 | [design/issue-89-web-pc-t10-release-hardening.md](design/issue-89-web-pc-t10-release-hardening.md) | PC Web T10：发布收口与运行验收 |
+| [design/issue-89-web-pc-t10-id-inventory.md](design/issue-89-web-pc-t10-id-inventory.md) | PC Web T10：#217 ID 边界冻结检查表 |
 | [deployment.md](deployment.md) | 生产部署手册（Ubuntu + Bun 直跑，不用 Docker）：依赖安装、环境变量、systemd、反代与 HTTPS、发布/回滚、备份与硬约束 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | 文件所有权、分支与提交规范、PR 要求、Contract 流程、DB CHANGE REQUEST |
 | [../AGENTS.md](../AGENTS.md) | 给 AI agent 的命令、编码铁律、范围与实现纪律、对抗性审查流程 |

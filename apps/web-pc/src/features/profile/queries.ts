@@ -51,6 +51,10 @@ function invalidateListingViews(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['pc', 'listings'] })
 }
 
+function invalidateChatSurfaces(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'chat'] })
+}
+
 export function useProfile(ownerId: string) {
   return useQuery({
     queryKey: profileKeys.aggregate(ownerId),
@@ -130,6 +134,7 @@ function useTransactionMutation(
       invalidateProfileSummary(queryClient, ownerId)
       invalidateOrderLists(queryClient, ownerId)
       invalidateListingViews(queryClient)
+      invalidateChatSurfaces(queryClient)
     },
   })
 }

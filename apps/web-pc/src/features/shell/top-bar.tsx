@@ -11,7 +11,7 @@ import { useUnreadNotificationCount } from '../notifications/queries'
 export function TopBar() {
   const navigate = useNavigate()
   const { me } = useAuth()
-  const unread = useUnreadNotificationCount()
+  const unread = useUnreadNotificationCount(me !== null)
   const [keyword, setKeyword] = useState('')
   const unreadCount = unread.data ?? 0
 
@@ -34,6 +34,7 @@ export function TopBar() {
           <div className="flex h-11 w-full items-center gap-2.5 rounded-xl bg-surface-2 px-3.5 focus-within:ring-3 focus-within:ring-brand/15">
             <Search className="size-4 shrink-0 text-ink-3" />
             <Input
+              aria-label="搜索商品"
               className="h-auto min-w-0 flex-1 rounded-none border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
               maxLength={50}
               onChange={(event) => setKeyword(event.target.value)}

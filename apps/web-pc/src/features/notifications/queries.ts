@@ -20,10 +20,11 @@ export function useNotifications(limit = 50) {
   })
 }
 
-export function useUnreadNotificationCount() {
+export function useUnreadNotificationCount(enabled = true) {
   return useQuery({
     queryKey: notificationKeys.unread,
     queryFn: fetchUnreadNotificationCount,
+    enabled,
     staleTime: 30_000,
     refetchOnMount: 'always',
   })

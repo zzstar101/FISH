@@ -720,6 +720,7 @@ curl -s  https://fish.example.com/login | grep -q '<div id="root">' && echo SPA-
 curl -sI https://fish.example.com/pc | head -1               # 308
 curl -sI https://fish.example.com/pc/ | head -1              # 200
 curl -s  'https://fish.example.com/pc/search?q=keyboard' | grep -q '<div id="root">' && echo PC-SPA-fallback-ok
+curl -s  https://fish.example.com/pc/no-such-route | grep -q '<div id="root">' && echo PC-404-fallback-ok
 pc_asset=$(curl -s https://fish.example.com/pc/ | grep -o '/pc/assets/[^" ]*\.js' | head -1)
 curl -sI "https://fish.example.com${pc_asset}" | grep -i '^cache-control: public, max-age=31536000, immutable' >/dev/null \
   && echo PC-asset-cache-ok

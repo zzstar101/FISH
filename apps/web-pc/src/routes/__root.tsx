@@ -1,16 +1,24 @@
 import { createRootRoute, Outlet, useLocation, useMatchRoute } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 import { AuthProvider } from '../features/auth/auth-provider'
 import { RequireAuth } from '../features/auth/require-auth'
 import { PcShell } from '../features/shell/pc-shell'
+import { RouteErrorPage, RouteNotFoundPage } from '../features/shell/route-fallback'
 
-export const Route = createRootRoute({ component: RootLayout })
+export const Route = createRootRoute({
+  shellComponent: AuthShell,
+  component: RootLayout,
+  errorComponent: RouteErrorPage,
+  notFoundComponent: RouteNotFoundPage,
+})
+
+/** Router 级 provider 外壳：错误边界和 404 页也必须能读取登录态。 */
+function AuthShell({ children }: { children: ReactNode }) {
+  return <AuthProvider>{children}</AuthProvider>
+}
 
 function RootLayout() {
-  return (
-    <AuthProvider>
-      <RootChrome />
-    </AuthProvider>
-  )
+  return <RootChrome />
 }
 
 /**

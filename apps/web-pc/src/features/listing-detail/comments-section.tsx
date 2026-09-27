@@ -43,6 +43,7 @@ function CommentComposer({
   return (
     <div className="mt-3">
       <Textarea
+        aria-label={placeholder}
         className="min-h-[88px] resize-none"
         disabled={pending}
         maxLength={200}

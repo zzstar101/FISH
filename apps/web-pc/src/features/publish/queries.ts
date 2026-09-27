@@ -9,6 +9,7 @@ export function useCreateListing() {
       createListing(input, signal),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['pc', 'listings'] })
+      void queryClient.invalidateQueries({ queryKey: ['pc', 'profile'] })
     },
   })
 }
