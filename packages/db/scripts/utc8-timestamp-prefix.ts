@@ -25,6 +25,14 @@
  *    `$onUpdate(() => new Date())` 这类运行时钩子（见 `src/schema/common.ts`）。
  */
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000
+/**
+ * 补丁标记：幂等守卫按标记判定，而不是按函数引用 —— 同一进程若用两个不同 specifier 各加载一次本模块，
+ * 第二个实例的 `toUtc8ISOString` 与第一个不是同一个引用，按引用判定会再包一层（+16h）。
+ */
+const UTC8_PATCH_MARKER = 'utc8Patched'
+
+type PatchedToISOString = (() => string) & { [UTC8_PATCH_MARKER]?: true }
+
 /** 原生实现：`restoreNativeToISOString()` 用它还原，测试收尾必须调用。 */
 export const nativeToISOString = Date.prototype.toISOString
 
@@ -32,9 +40,12 @@ function toUtc8ISOString(this: Date): string {
   return nativeToISOString.call(new Date(this.getTime() + UTC8_OFFSET_MS))
 }
 
-/** 幂等：重复调用（例如同时存在 preload 与显式调用）不会叠加偏移。 */
+const markedToUtc8ISOString = toUtc8ISOString as PatchedToISOString
+markedToUtc8ISOString[UTC8_PATCH_MARKER] = true
+
+/** 幂等：重复调用（含「preload + 显式调用」与「同进程两个模块实例」两种形态）都不会叠加偏移。 */
 export function applyUtc8TimestampPrefix(): void {
-  if (Date.prototype.toISOString === toUtc8ISOString) return
+  if ((Date.prototype.toISOString as PatchedToISOString)[UTC8_PATCH_MARKER]) return
   Date.prototype.toISOString = toUtc8ISOString
 }
 

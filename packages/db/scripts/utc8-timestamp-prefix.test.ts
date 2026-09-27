@@ -38,16 +38,31 @@ test('#316 重复应用不叠加偏移（幂等守卫按函数引用判定，还
   expect(new Date(epochMs).toISOString()).toBe('2026-09-28T06:30:00.000Z')
 })
 
-test('#316 时间点本身不变：+new Date() 仍是真实 epoch 毫秒', () => {
+test('#316 幂等守卫按标记判定：补丁函数带 utc8Patched 标记（跨模块实例也不会叠成 +16h）', () => {
   applyUtc8TimestampPrefix()
-  const when = 1790546582603
-  expect(+new Date(when)).toBe(when)
-  expect(new Date(when).getTime()).toBe(when)
+  const patched = Date.prototype.toISOString as (() => string) & { utc8Patched?: true }
+  expect(patched.utc8Patched).toBe(true)
 })
 
-test('#316 UTC+8 偏移量就是 8 小时', () => {
+test('#316 时间点本身不变：`+new Date()` / `getTime()` 仍是真实 epoch 毫秒', () => {
+  // 补丁只换渲染、不换时间值：journal 的 `when` 取自 `+new Date()`，被改写会让 drizzle 误判"已应用"而静默跳过迁移。
+  // 断言在「还原原生实现」与「应用补丁」两种状态下都成立 —— 未来若有人改成包装 valueOf/now，这里会红。
+  restoreNativeToISOString()
+  const when = 1790546582603
+  const before = +new Date(when)
   applyUtc8TimestampPrefix()
+  expect(+new Date(when)).toBe(before)
+  expect(new Date(when).getTime()).toBe(before)
+})
+
+test('#316 偏移量就是 8 小时：补丁渲染与原生渲染相差正好 8h', () => {
   const epochMs = Date.UTC(2026, 0, 1, 0, 0, 0)
-  expect(new Date(epochMs).getTime() + UTC8_OFFSET_MS).toBe(Date.parse('2026-01-01T08:00:00.000Z'))
-  expect(new Date(epochMs).toISOString()).toBe('2026-01-01T08:00:00.000Z')
+  restoreNativeToISOString()
+  const native = new Date(epochMs).toISOString()
+  applyUtc8TimestampPrefix()
+  const patched = new Date(epochMs).toISOString()
+  // 可证伪：+16h、偏移 0、或换成了别的时区，都会在这里红。
+  expect(Date.parse(patched) - Date.parse(native)).toBe(UTC8_OFFSET_MS)
+  expect(native).toBe('2026-01-01T00:00:00.000Z')
+  expect(patched).toBe('2026-01-01T08:00:00.000Z')
 })

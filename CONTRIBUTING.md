@@ -98,9 +98,9 @@ grep -oE 'https?://[^"]+' bun.lock | grep -vE '^https://registry\.npmjs\.org/' &
 
 ## 6. DB schema 变更
 
-- schema 与 migration 就是普通代码，随模块 PR 一起落地：改 schema 必须用 `bun run --filter '@fish/db' generate`（`drizzle-kit`）生成 migration，**不手改 migration 历史**与生成文件（含 `meta/_journal.json`）。
+- schema 与 migration 就是普通代码，随模块 PR 一起落地：改 schema 必须用 `bun run --filter '@fish/db' generate`（`drizzle-kit`）生成 migration，**不手改 migration 历史**与生成文件（含 `meta/_journal.json`；唯一例外见第 8 节第 2 条）。
 - **迁移编号 = 生成时刻的 UTC+8 时间戳**（例 `20260928063000_late_havok`），不再按合入顺序人工分配 4 位序号：并行分支各写各的时间戳，天然不撞号；**不要手写 `0026_xxx` 这类序号**（`0000`–`0025` 是遗留编号）。
-- rebase 到最新 `main` 后要**重新生成**自己分支的迁移（把本分支产出的 `.sql` + `meta/*_snapshot.json` + journal 条目交回生成器重建）；解 `_journal.json` 冲突只允许按 `when` 升序排列条目，不得改动任何条目的 `tag`/`when`。
+- rebase 到最新 `main` 后要**重新生成**自己分支的迁移（把本分支产出的 `.sql` + `meta/*_snapshot.json` + journal 条目交回生成器重建 —— 这是第 8 节「不手改生成文件」的**唯一例外**，且只允许**删除本分支自己新增的**条目）；解 `_journal.json` 冲突只允许按 `when` 升序排列条目，不得改动任何条目的 `tag`/`when`。
 - 改动 schema 时，在 PR 里填写变更说明（供 zzstar101 审核把关）：
 
 ```text
@@ -120,7 +120,7 @@ DB 变更说明
 ## 8. 禁止事项
 
 1. 不提交任何真实密钥、Token、连接串；只维护 `.env.example`。
-2. 不手改生成文件：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`（含 `meta/_journal.json`）；迁移 tag 只能由生成器写（UTC+8 时间戳），不手写序号、不重排迁移历史。
+2. 不手改生成文件：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`（含 `meta/_journal.json`）；迁移 tag 只能由生成器写（UTC+8 时间戳），不手写序号、不重排迁移历史。**唯一例外**：rebase 后重建本分支的迁移时，允许删除**本分支自己新增的** `.sql` / `meta/*_snapshot.json` / 对应 journal 条目（见第 6 节）；已合入历史条目的 `tag`/`when`/SQL 内容仍一个字节都不改，也不得手工拼装 journal。
 3. 加/删依赖必须带 `--registry`（见第 3.1 节），不污染 `bun.lock`。
 4. 不在业务 Issue 中顺手做无关重构；发现问题先报告，确有必要时新开 Issue。
 5. 不引入 V1 明确排除的组件（Redis / Kafka / OpenSearch / K8s 等）。
