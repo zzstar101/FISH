@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bell } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NotificationRow } from './notification-row'
 import {
   notificationReadErrorMessage,
@@ -28,6 +28,13 @@ export function NotificationsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const openEpochRef = useRef(0)
   const items = notifications.data?.items ?? []
+
+  useEffect(() => {
+    return () => {
+      // 卸载后让所有在途的标记已读/目标确认流程失效，避免异步导航把用户拉回详情页。
+      openEpochRef.current += 1
+    }
+  }, [])
 
   async function open(item: NotificationDto) {
     const epoch = openEpochRef.current + 1
