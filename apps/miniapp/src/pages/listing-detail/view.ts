@@ -11,6 +11,7 @@
  * 后者仍须在微信开发者工具里按 C/D 的时序实测（`docs/miniapp-dev-workflow.md` §5）。
  */
 
+import type { ListingStatus } from '@fish/contracts/listings/schema'
 // 只取类型：本模块是纯判据，`import type` 在编译期擦除，不会把 store 的运行时副作用带进来
 import type { AuthStatus } from '@/features/auth/store'
 
@@ -54,7 +55,14 @@ export type PrivateScope = {
   faved: boolean
   /** 「立即购买」已确认（「待店家确认」终态）：请求是当前账号发出的 */
   buyRequested: boolean
+  /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」的操作面板） */
+  offlineConfirmOpen: boolean
+  /** 下架确认卡按钮的三态：「确认下架 / 下架中 / 重试」（同我的发布页的 submit） */
+  offlineSubmit: OfflineSubmit
 }
+
+/** 「下架」确认卡确认钮的三态（与我的发布页的 submit 状态机同型） */
+export type OfflineSubmit = 'idle' | 'busy' | 'failed'
 
 /**
  * 清场后的初值。
@@ -69,6 +77,8 @@ export function clearedPrivateScope(): PrivateScope {
     replyTo: null,
     faved: false,
     buyRequested: false,
+    offlineConfirmOpen: false,
+    offlineSubmit: 'idle',
   }
 }
 
@@ -267,6 +277,16 @@ export function shouldReleaseActionTask(task: ActionTask, inFlightToken: number 
 }
 
 /**
+ * 下架请求收尾时是否该释放它占的锁：同样**只认令牌**。
+ *
+ * 布尔锁下 A 的迟到 `finally` 会把 B（或 A 下一轮）的在飞标记一并删掉：同一件商品被
+ * 重复下架，弹层里还会看到矛盾的「下架中 / 失败」。令牌对不上就不动它。
+ */
+export function shouldReleaseOfflineTask(taskToken: number, inFlightToken: number | null): boolean {
+  return inFlightToken === taskToken
+}
+
+/**
  * 迟到响应是否允许写入（读取链）：只有序号仍是最新的那一次才作数。
  * 重试与返回刷新都会让序号前进，先发的响应后到即被判过期。
  */
@@ -349,4 +369,38 @@ export function isReloadDue(state: DeferredReload): boolean {
 /** 标记这次补跑已经消费掉：延后的刷新只跑一次，不然后续每次写入结算都会再刷一次。 */
 export function consumeDeferredReload(state: DeferredReload): DeferredReload {
   return { ...state, deferred: false }
+}
+
+/* --------------------------------------------------------- 卖家视角底栏（Owner 2026-09-27 拍板） */
+
+/**
+ * 当前登录用户是不是这件商品的卖家（底栏渲染成卖家形态的开关）。
+ *
+ * 用「`sellerId === 当前 userId`」的本地比对，而不是详情 DTO 里的 `isOwner` 真值：
+ * 公开快照在换号时**不清**（`clearedPrivateScope` 的口径），A 登录时请求回来的快照
+ * 带着 A 的 `isOwner=true`，B 接着看同一份快照就会拿到上一任账号的视角。本地比对
+ * 每帧用当前 `userId` 重算，换号即刻切底栏 —— 与 `watchers` 页的
+ * `listing.isOwner && seller.id === userId` 是同一类双保险，这里快照可能陈旧，所以
+ * 只信本地比对。匿名（`userId = null`）永远走买家形态；列表卡的 `NO_SELLER` 空串
+ * 哨兵也要判否 —— 空串与空串「相等」会把「没有卖家」读成「我就是卖家」。
+ */
+export function isOwnListing(sellerId: string, userId: string | null): boolean {
+  return userId !== null && userId !== '' && sellerId === userId
+}
+
+/**
+ * 卖家本人打开**非在售**商品时，底部栏显示的状态行；`null` = 在售，渲染
+ * 「管理 / 看谁想要」两个操作钮。
+ *
+ * 文案与我的发布页同一套口径（Owner 2026-09-24 拍板：**商品全流程里没有「审核中」
+ * 这个前端状态**）——被审核拒绝的商品在库里就是 `OFFLINE`，与卖家自己下架的一起
+ * 读作「已下架」；`RESERVED` = 提案已被卖家同意、等双方面交（mylist 的「已同意 ·
+ * 等面交」）。管理动作（编辑 / 重新上架）不在这里重复出现，状态行统一把人引去
+ * 「我的发布」。
+ */
+export function ownerStatusNote(status: ListingStatus): string | null {
+  if (status === 'OFFLINE') return '商品已下架'
+  if (status === 'SOLD') return '商品已售出'
+  if (status === 'RESERVED') return '已同意 · 等面交'
+  return null
 }

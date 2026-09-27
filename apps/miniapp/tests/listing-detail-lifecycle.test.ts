@@ -26,6 +26,7 @@ import {
   settleReloadWrite,
   shouldRefreshOnShow,
   shouldReleaseActionTask,
+  shouldReleaseOfflineTask,
   shouldSurfaceStaleAuthFailure,
   type WriteTask,
 } from '../src/pages/listing-detail/view'
@@ -142,6 +143,8 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
       replyTo: null,
       faved: false,
       buyRequested: false,
+      offlineConfirmOpen: false,
+      offlineSubmit: 'idle',
     })
   })
 
@@ -1064,5 +1067,223 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     const code = await source()
     expect(code.match(/isTaskLive\(task, chatInFlightRef\.current\)/g)?.length).toBe(2)
     expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(1)
+  })
+})
+
+/**
+ * 「管理」ActionSheet 的迟到回调（#236 复查 P2）。
+ *
+ * 弹层结果是跨帧回调：A 作为卖家弹出菜单，在结果返回**之前**换号 / 卸载之后，旧结果
+ * 仍会去写编辑交接、`switchTab` 或给已经清场的页面重开卖家下架卡 —— 这三步都在服务器
+ * 任何校验之前，商品归属校验拦不住。所以判据是「铸任务（owner + epoch + token）→ 回调
+ * 返回后校验 → 过期整条丢弃」，锁的释放只认令牌。
+ */
+
+/** 一次弹层点击：铸令牌并占锁（对应 `index.tsx` 里 `beginActionTask` + 置 `menuInFlightRef`） */
+function openSheet(p: ActionPage): ActionTask {
+  p.tokenSeq += 1
+  const task = beginActionTask(p.epoch, p.ownerId, p.tokenSeq, p.authStatus)
+  p.inFlight = task.token
+  return task
+}
+
+/** 令牌此刻是否还有效（`index.tsx` 里 `isTaskLive()` 读的就是这些量，含冷启动豁免） */
+function sheetTaskOk(p: ActionPage, task: ActionTask): boolean {
+  const current = { ownerId: p.ownerId, epoch: p.epoch, token: p.inFlight }
+  return isCurrentActionTask(task, current) || isColdStartIdentityResolution(task, current)
+}
+
+/** 收尾：只有持锁的那次点击能释放锁（对应 `.finally(release)`） */
+function releaseSheet(p: ActionPage, task: ActionTask): void {
+  if (!shouldReleaseActionTask(task, p.inFlight)) return
+  p.inFlight = null
+}
+
+/** 回调返回后的落地：编辑交接 + 导航，或重开下架卡（都是账号作用域的副作用） */
+function applySheetResult(
+  p: ActionPage,
+  task: ActionTask,
+  tapIndex: number,
+): { handoff: string | null; navigated: boolean; confirmOpen: boolean } {
+  if (!sheetTaskOk(p, task)) return { handoff: null, navigated: false, confirmOpen: false }
+  if (tapIndex === 0) return { handoff: 'listing-1', navigated: true, confirmOpen: false }
+  return { handoff: null, navigated: false, confirmOpen: true }
+}
+
+describe('详情页「管理」ActionSheet 的迟到回调（#236 复查 P2）', () => {
+  test('同账号同世代、且仍持有那把锁：A 的两项操作照常落地', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = openSheet(p)
+    expect(applySheetResult(p, task, 0)).toEqual({
+      handoff: 'listing-1',
+      navigated: true,
+      confirmOpen: false,
+    })
+    expect(applySheetResult(p, task, 1)).toEqual({
+      handoff: null,
+      navigated: false,
+      confirmOpen: true,
+    })
+  })
+
+  test('挂起期间换号：A 的「编辑」「下架」结果都不落地（无交接、无导航、不重开下架卡）', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = openSheet(p)
+
+    // 渲染期清场：代次前进、弹层锁一并作废
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.inFlight = null
+
+    expect(applySheetResult(p, task, 0)).toEqual({
+      handoff: null,
+      navigated: false,
+      confirmOpen: false,
+    })
+    expect(applySheetResult(p, task, 1)).toEqual({
+      handoff: null,
+      navigated: false,
+      confirmOpen: false,
+    })
+    // A 的迟到收尾也认不出这把锁（锁已是 `null` / 或 B 的新令牌），删不掉 B 的标记
+    expect(shouldReleaseActionTask(task, p.inFlight)).toBe(false)
+  })
+
+  test('挂起期间卸载：同样整条丢弃', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const task = openSheet(p)
+
+    p.epoch += 1
+    p.inFlight = null
+
+    expect(applySheetResult(p, task, 0).navigated).toBe(false)
+    expect(applySheetResult(p, task, 1).confirmOpen).toBe(false)
+  })
+
+  test('A → B → A：账号名又相同也必须判旧（代次与令牌都不是原来那一个）', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const stale = openSheet(p)
+
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.ownerId = 'user-a'
+    p.epoch += 1
+
+    expect(sheetTaskOk(p, stale)).toBe(false)
+    expect(applySheetResult(p, stale, 0).navigated).toBe(false)
+  })
+
+  test('换号把弹层锁还给 B：A 的迟到收尾删不掉 B 的锁，B 能重新弹层', () => {
+    const p = actionPage()
+    p.ownerId = 'user-a'
+    const aTask = openSheet(p)
+
+    p.ownerId = 'user-b'
+    p.epoch += 1
+    p.inFlight = null
+    const bTask = openSheet(p)
+
+    releaseSheet(p, aTask)
+    expect(p.inFlight).toBe(bTask.token)
+    expect(sheetTaskOk(p, bTask)).toBe(true)
+  })
+
+  test('下架请求的迟到收尾同样只释放自己的令牌（布尔锁会删掉下一轮的在飞标记）', () => {
+    // 下架走的是 `WriteTask`（只有 owner + epoch，没有令牌），锁另配一个发号器：
+    // 令牌对不上就不能动锁，否则同一件商品会被重复下架
+    const inFlight: { token: number | null } = { token: null }
+    let seq = 0
+    const lock = (): number => {
+      seq += 1
+      inFlight.token = seq
+      return seq
+    }
+    const release = (taskToken: number): void => {
+      if (!shouldReleaseOfflineTask(taskToken, inFlight.token)) return
+      inFlight.token = null
+    }
+
+    const first = lock()
+
+    // A → B → A 之间 B（或 A 自己下一轮）重新发起下架
+    inFlight.token = null
+    const second = lock()
+    release(first)
+    expect(inFlight.token).toBe(second)
+
+    // 第二轮自己收尾时锁才真的还回去
+    release(second)
+    expect(inFlight.token).toBeNull()
+  })
+})
+
+describe('详情页卖家底栏的接线（#236 复查 P2）', () => {
+  test('管理：令牌在弹层之前铸好并占锁，不再是「弹完再补」', async () => {
+    const block = await pageSlice('const manageListing = () => {', '/**\n   * 「看谁想要」')
+    expectBefore(block, 'const task = beginActionTask(', 'Taro.showActionSheet(')
+    expectBefore(block, 'menuInFlightRef.current = task.token', 'Taro.showActionSheet(')
+    expect(block).toContain('if (menuInFlightRef.current !== null) return')
+  })
+
+  test('管理：编辑交接与下架卡都在守卫之后，finally 只释放自己的锁', async () => {
+    const block = await pageSlice('const manageListing = () => {', '/**\n   * 「看谁想要」')
+    // 判据不能只看「回调里有一行 if」：守卫必须是共用的 `isTaskLive`（内部落到 `./view`
+    // 的 `isCurrentActionTask` 三元比对：账号 + 世代 + 锁令牌），掏空成 `() => true`
+    // 会连 `isCurrentActionTask` 一起删掉，「聊一聊 / 立即购买」那组断言就挂
+    const thenBlock = inner('.then((res) => {', '.catch(() => {})')(block)
+    const guard = 'if (!isTaskLive(task, menuInFlightRef.current)) return'
+    expectBefore(thenBlock, guard, 'requestSellEdit(id)')
+    expectBefore(thenBlock, guard, 'Taro.switchTab(')
+    expectBefore(thenBlock, guard, 'setOfflineConfirmOpen(true)')
+
+    const releaseBlock = inner('const release = (): void => {', 'void Taro.showActionSheet(')(block)
+    expectBefore(
+      releaseBlock,
+      'if (!shouldReleaseActionTask(task, menuInFlightRef.current)) return',
+      'menuInFlightRef.current = null',
+    )
+    expect(block).toContain('.finally(release)')
+  })
+
+  test('换号清场把 ActionSheet 与下架请求的在飞锁一并作废', async () => {
+    const block = await pageSlice('if (ownerChanged(prevUserId, userId)) {', 'useEffect(')
+    expect(block).toContain('menuInFlightRef.current = null')
+    expect(block).toContain('offlineInFlightRef.current = null')
+  })
+
+  test('下架：确认卡请求也先铸任务、再落地状态（清场挡不住迟到的回写）', async () => {
+    const block = await pageSlice('const confirmOffline = () => {', '/**\n   * 发一条顶层留言')
+    expectBefore(block, 'const task = beginActionTask(', 'await offlineListing(id)')
+    expectBefore(
+      block,
+      'if (!isTaskLive(task, offlineInFlightRef.current)) return',
+      "title: '已下架'",
+    )
+    expectBefore(
+      block,
+      'if (!isTaskLive(task, offlineInFlightRef.current)) {',
+      "setOfflineSubmit('failed')",
+    )
+  })
+
+  test('下架的在飞锁是令牌而不是布尔，且收尾只释放自己的令牌', async () => {
+    const block = await pageSlice('const confirmOffline = () => {', '/**\n   * 发一条顶层留言')
+    expect(block).not.toContain('offlineInFlightRef = useRef(false)')
+    expectBefore(block, 'offlineInFlightRef.current = task.token', 'await offlineListing(id)')
+
+    const releaseBlock = inner(
+      'const release = (): void => {',
+      'reloadRef.current = beginReloadWrite',
+    )(block)
+    expectBefore(
+      releaseBlock,
+      'if (!shouldReleaseOfflineTask(task.token, offlineInFlightRef.current)) return',
+      'offlineInFlightRef.current = null',
+    )
+    expect(block).toContain('release()')
   })
 })
