@@ -1,50 +1,103 @@
 name: CI
 
+# 按改动范围裁剪（#307）：只有 `changes`（算范围）与 `ci`（聚合结论）总在跑，
+# 其余作业由 `scripts/ci-changes.ts` 算出的 outputs 门控。
+#   - 纯文档改动（`docs/**`、`*.md`）：不装依赖、不起容器、不跑测试；
+#   - 改哪个领域就跑哪个领域的作业，作业之间并行，可单独重跑；
+#   - 改 CI 自身 / `scripts/` / `infra/` / 根级构建基座 / 认不出的路径：全量；
+#   - `push` 到 `main` 一律全量，与 PR 口径分开是为了让 main 上的结论可溯源。
+# 本地完成门禁不变，仍是 `bun run typecheck` → `bun run lint` → `bun test --isolate`（全量）。
+
 on:
   push:
     branches: [main]
   pull_request:
+  # 手动触发的语义就是「我不确定，全都跑一遍」。
+  workflow_dispatch:
+
+env:
+  DATABASE_URL: postgres://fish:fish@localhost:5432/fish
+  API_PORT: "3000"
+  WEB_ORIGIN: http://localhost:5173
+  S3_ENDPOINT: http://localhost:9000
+  S3_REGION: us-east-1
+  S3_ACCESS_KEY_ID: fish
+  S3_SECRET_ACCESS_KEY: fish-secret
+  S3_BUCKET: fish
+  S3_PUBLIC_URL: http://localhost:9000/fish
+  MEETUP_TOKEN_SECRET: ci-only-meetup-secret-0123456789abcdef
+  # #141：CI 不出网、不持有上游密钥，AI 润色一律走 stub（用例内用临时端口的 stub 服务覆盖 base_url）。
+  AI_POLISH_TRANSPORT: stub
+  AI_POLISH_BASE_URL: http://127.0.0.1:8787
+  # #86：微信登录 / 手机号绑定 transport 无默认值（评审 P1：禁止静默回退 stub）。
+  # CI 不验证微信链路，显式 off——`WECHAT_TRANSPORT` 未设置时 API 启动即失败是预期行为。
+  WECHAT_TRANSPORT: off
+  # #228：内容安全审核 transport 无默认值，缺配置 API 启动即失败。CI 不出网、不持有腾讯密钥，
+  # 一律 local（本地词表 + 图片一律 REVIEW）；发布链本期未接入适配器，冒烟不会真的审核。
+  CONTENT_MODERATION_TRANSPORT: local
 
 jobs:
-  ci:
+  # 唯一总是运行的作业之一：算出「这次改了什么」。
+  # 只用 git 与 bun 内置模块，不装依赖、不起容器，所以纯文档 PR 的整条流水线就到这里结束。
+  changes:
+    name: changes
     runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.range.outputs.full }}
+      static: ${{ steps.range.outputs.static }}
+      db_tests: ${{ steps.range.outputs.db_tests }}
+      unit_tests: ${{ steps.range.outputs.unit_tests }}
+      web_pc: ${{ steps.range.outputs.web_pc }}
+      smoke: ${{ steps.range.outputs.smoke }}
+      api: ${{ steps.range.outputs.api }}
+      worker: ${{ steps.range.outputs.worker }}
+      web: ${{ steps.range.outputs.web }}
+      miniapp: ${{ steps.range.outputs.miniapp }}
+      db: ${{ steps.range.outputs.db }}
+      contracts: ${{ steps.range.outputs.contracts }}
+      shared: ${{ steps.range.outputs.shared }}
+      ui: ${{ steps.range.outputs.ui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 要和 PR 的 base 比 diff，浅克隆取不到 base 的历史。
+          fetch-depth: 0
 
-    services:
-      postgres:
-        image: pgvector/pgvector:pg18
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Compute change scope
+        id: range
         env:
-          POSTGRES_USER: fish
-          POSTGRES_PASSWORD: fish
-          POSTGRES_DB: fish
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fish -d fish"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          args=(--all)
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if git fetch --no-tags origin "$BASE_REF:refs/remotes/origin/$BASE_REF"; then
+              args=(--base "origin/$BASE_REF" --head HEAD --merge-base)
+            else
+              echo "::warning::取不到 base（$BASE_REF），回退全量" >&2
+            fi
+          fi
 
-    env:
-      DATABASE_URL: postgres://fish:fish@localhost:5432/fish
-      API_PORT: "3000"
-      WEB_ORIGIN: http://localhost:5173
-      S3_ENDPOINT: http://localhost:9000
-      S3_REGION: us-east-1
-      S3_ACCESS_KEY_ID: fish
-      S3_SECRET_ACCESS_KEY: fish-secret
-      S3_BUCKET: fish
-      S3_PUBLIC_URL: http://localhost:9000/fish
-      MEETUP_TOKEN_SECRET: ci-only-meetup-secret-0123456789abcdef
-      # #141：CI 不出网、不持有上游密钥，AI 润色一律走 stub（用例内用临时端口的 stub 服务覆盖 base_url）。
-      AI_POLISH_TRANSPORT: stub
-      AI_POLISH_BASE_URL: http://127.0.0.1:8787
-      # #86：微信登录 / 手机号绑定 transport 无默认值（评审 P1：禁止静默回退 stub）。
-      # CI 不验证微信链路，显式 off——`WECHAT_TRANSPORT` 未设置时 API 启动即失败是预期行为。
-      WECHAT_TRANSPORT: off
-      # #228：内容安全审核 transport 无默认值，缺配置 API 启动即失败。CI 不出网、不持有腾讯密钥，
-      # 一律 local（本地词表 + 图片一律 REVIEW）；发布链本期未接入适配器，冒烟不会真的审核。
-      CONTENT_MODERATION_TRANSPORT: local
+          out="$(mktemp)"
+          # 范围算不出来时必须回退全量：宁可多跑，也不能因为脚本出错而少跑。
+          if ! bun scripts/ci-changes.ts "${args[@]}" > "$out"; then
+            echo "::warning::改动范围计算失败，回退全量" >&2
+            bun scripts/ci-changes.ts --all > "$out"
+          fi
+          cat "$out"
+          cat "$out" >> "$GITHUB_OUTPUT"
 
+  # lockfile 守卫 + lint + typecheck：任何被识别为「有代码改动」的范围都要跑。
+  static:
+    name: static
+    needs: changes
+    if: needs.changes.outputs.static == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -80,13 +133,37 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      # PC Web 有独立的生产产物与反代根目录，typecheck 不能替代 Vite build。
-      - name: Build PC web
-        run: bun run build:web-pc
+  # 需要 Postgres 的测试（apps/api 还需要 MinIO）：apps/api、apps/worker、packages/db。
+  db-tests:
+    name: db-tests
+    needs: changes
+    if: needs.changes.outputs.db_tests == 'true'
+    runs-on: ubuntu-latest
 
-      # 真实验证 Vite preview 的 /pc 308、深链回退与未知路径回退到 PC index。
-      - name: PC preview smoke
-        run: bun apps/web-pc/scripts/preview-smoke.ts
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: fish
+          POSTGRES_PASSWORD: fish
+          POSTGRES_DB: fish
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fish -d fish"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install
+        run: bun install --frozen-lockfile
 
       # 对象存储。三个必须注意的点（都踩过）：
       # 1. **不能用 `services:`**：minio 镜像的默认 CMD 是 `minio`（只打印 usage），而 Actions 的
@@ -95,7 +172,9 @@ jobs:
       #    同名仓库不再公开（匿名拉取 401）、`dl.min.io` 二进制返回 410 Gone。故改用社区重建的
       #    `pgsty/minio` / `pgsty/mc`：多架构，entrypoint / CMD 与官方镜像兼容，命令无需改动。见 #216。
       # 3. `--entrypoint /bin/sh`：mc 镜像的 ENTRYPOINT 是 `/usr/bin/mc`，不覆盖的话 `sh -c` 会被当成 mc 参数。
+      # 只有 apps/api 的用例需要对象存储（图片/媒体），纯 db / worker 改动不必起它。
       - name: Start MinIO
+        if: needs.changes.outputs.api == 'true'
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=fish -e MINIO_ROOT_PASSWORD=fish-secret \
@@ -116,6 +195,7 @@ jobs:
       # 少了匿名读策略，集成测试里的公开 URL 会 403。
       # `--entrypoint /bin/sh`：mc 镜像的 ENTRYPOINT 是 `/usr/bin/mc`，不覆盖的话 `sh -c` 会被当成 mc 的参数。
       - name: Init MinIO bucket
+        if: needs.changes.outputs.api == 'true'
         run: |
           docker run --rm --network host --entrypoint /bin/sh \
             -v "$PWD/infra/minio-public-policy.json:/policies/public.json:ro" \
@@ -168,15 +248,195 @@ jobs:
         run: bun run db:migrate
 
       - name: Chat media smoke
+        if: needs.changes.outputs.api == 'true'
         run: bun apps/api/scripts/media-smoke.ts
 
+      # 只跑本次受影响的工作区；`--isolate` 与全量跑时一致（逐文件独立进程）。
       - name: Test
-        run: bun test --isolate
+        run: |
+          set -euo pipefail
+          targets=()
+          if [ "${{ needs.changes.outputs.api }}" = "true" ]; then targets+=(apps/api); fi
+          if [ "${{ needs.changes.outputs.worker }}" = "true" ]; then targets+=(apps/worker); fi
+          if [ "${{ needs.changes.outputs.db }}" = "true" ]; then targets+=(packages/db); fi
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "::error::db_tests 为真却没有任何测试目录，改动范围计算有问题" >&2
+            exit 1
+          fi
+          echo "测试范围：${targets[*]}"
+          bun test --isolate "${targets[@]}"
 
-      # 核心主链端到端冒烟（#43）：自建 scratch 库 + 真实 API / Worker + 上面起的 MinIO，
-      # 覆盖图片上传、双向匹配、编辑/上下架重算、崩溃重启恢复，以及交易与面交不变量
-      # （#147：交易↔会话三元组一致、取消/成交两个终态销毁凭证、一单一码、重取即解锁）。
-      # 每个 PR 跑 1 轮作为回归门禁；验收要求的“连跑 5 次”是 `bun run core:smoke -- --runs=5`
-      # （约 60s，不放进每 PR 的流水线以免拖长 CI）。
+  # 不需要任何服务的单测：web（PWA）、web-pc、miniapp、共享包，以及 `scripts/` 自身。
+  unit-tests:
+    name: unit-tests
+    needs: changes
+    if: needs.changes.outputs.unit_tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          targets=()
+          if [ "${{ needs.changes.outputs.web }}" = "true" ]; then targets+=(apps/web); fi
+          if [ "${{ needs.changes.outputs.web_pc }}" = "true" ]; then targets+=(apps/web-pc); fi
+          if [ "${{ needs.changes.outputs.miniapp }}" = "true" ]; then targets+=(apps/miniapp); fi
+          if [ "${{ needs.changes.outputs.contracts }}" = "true" ]; then targets+=(packages/contracts); fi
+          if [ "${{ needs.changes.outputs.shared }}" = "true" ]; then targets+=(packages/shared); fi
+          if [ "${{ needs.changes.outputs.full }}" = "true" ]; then targets+=(scripts); fi
+          if [ "${#targets[@]}" -eq 0 ]; then
+            echo "::error::unit_tests 为真却没有任何测试目录，改动范围计算有问题" >&2
+            exit 1
+          fi
+          echo "测试范围：${targets[*]}"
+          bun test --isolate "${targets[@]}"
+
+  # PC Web 有独立的生产产物与反代根目录，typecheck 不能替代 Vite build。
+  web-pc:
+    name: web-pc
+    needs: changes
+    if: needs.changes.outputs.web_pc == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Build PC web
+        run: bun run build:web-pc
+
+      # 真实验证 Vite preview 的 /pc 308、深链回退与未知路径回退到 PC index。
+      - name: PC preview smoke
+        run: bun apps/web-pc/scripts/preview-smoke.ts
+
+  # 核心主链端到端冒烟（#43）：自建 scratch 库 + 真实 API / Worker + 上面起的 MinIO，
+  # 覆盖图片上传、双向匹配、编辑/上下架重算、崩溃重启恢复，以及交易与面交不变量
+  # （#147：交易↔会话三元组一致、取消/成交两个终态销毁凭证、一单一码、重取即解锁）。
+  # 每个相关 PR 跑 1 轮作为回归门禁；验收要求的“连跑 5 次”是 `bun run core:smoke -- --runs=5`
+  # （约 60s，不放进每 PR 的流水线以免拖长 CI）。
+  core-smoke:
+    name: core-smoke
+    needs: changes
+    if: needs.changes.outputs.smoke == 'true'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: fish
+          POSTGRES_PASSWORD: fish
+          POSTGRES_DB: fish
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fish -d fish"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # 与 db-tests 同一套 MinIO 起法（三条注意事项见那边的注释）。
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=fish -e MINIO_ROOT_PASSWORD=fish-secret \
+            pgsty/minio:latest server /data --console-address ":9001"
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1; then
+              echo "minio is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "minio 未在 30s 内就绪" >&2
+          docker logs minio
+          exit 1
+
+      - name: Init MinIO bucket
+        run: |
+          docker run --rm --network host --entrypoint /bin/sh \
+            -v "$PWD/infra/minio-public-policy.json:/policies/public.json:ro" \
+            -e MC_HOST_local=http://fish:fish-secret@localhost:9000 \
+            pgsty/mc:latest -c "
+              mc mb --ignore-existing local/fish &&
+              mc anonymous set-json /policies/public.json local/fish
+            "
+
+      - name: Raise Postgres max_connections
+        run: |
+          cid="${{ job.services.postgres.id }}"
+          if [ -z "$cid" ]; then
+            echo "::error::拿不到 postgres 服务容器 id（job.services.postgres.id 未解析）" >&2
+            exit 1
+          fi
+          docker exec "$cid" psql -U fish -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET max_connections = 200"
+          docker restart "$cid"
+          ready=""
+          for _ in $(seq 1 30); do
+            if docker exec "$cid" pg_isready -U fish -d fish >/dev/null 2>&1; then
+              ready=yes
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$ready" ]; then
+            echo "postgres 重启后 30s 内未就绪" >&2
+            docker logs "$cid"
+            exit 1
+          fi
+          effective="$(docker exec "$cid" psql -U fish -d postgres -tAc 'show max_connections')"
+          if [ "$effective" != "200" ]; then
+            echo "::error::max_connections 未生效：$effective（期望 200）" >&2
+            exit 1
+          fi
+          echo "postgres is up (max_connections=$effective)"
+
+      - name: Migrate
+        run: bun run db:migrate
+
       - name: Core smoke
         run: bun run core:smoke
+
+  # 聚合结论：作业按范围跳过是正常的（skipped），失败或取消才是红。
+  # 分支保护里要求的检查名是 `ci`，与拆分前保持一致。
+  ci:
+    name: ci
+    if: always()
+    needs: [changes, static, db-tests, unit-tests, web-pc, core-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总各作业结论
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NEEDS"
+          if printf '%s' "$NEEDS" | grep -qE '"result":[[:space:]]*"(failure|cancelled)"'; then
+            echo "::error::有作业失败或被取消，见上面的汇总" >&2
+            exit 1
+          fi
+          echo "所有需要的作业均为成功或按改动范围跳过"
