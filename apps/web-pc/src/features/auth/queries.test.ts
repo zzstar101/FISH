@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
-import { QueryClient } from '@tanstack/react-query'
+import { focusManager, QueryClient, QueryObserver } from '@tanstack/react-query'
 import {
   AUTH_ME_QUERY_KEY,
   currentSessionGeneration,
   resetPcSession,
 } from '../../lib/session-cache'
-import { loadMe } from './queries'
+import { loadMe, meQueryOptions } from './queries'
 
 const originalFetch = globalThis.fetch
 const oldUser: Me = {
@@ -46,6 +46,52 @@ describe('loadMe', () => {
     expect(queryClient.getQueryData<Me>(AUTH_ME_QUERY_KEY)).toEqual(newUser)
     expect(queryClient.getQueryData(['pc', 'listing', 'detail'])).toBeUndefined()
     expect(currentSessionGeneration()).toBe(generation + 1)
+  })
+
+  test('returning to a PC tab revalidates fresh /me and replaces A with B', async () => {
+    let resolveResponse!: (response: Response) => void
+    let fetches = 0
+    globalThis.fetch = mock(async () => {
+      fetches += 1
+      return new Promise<Response>((resolve) => {
+        resolveResponse = resolve
+      })
+    }) as unknown as typeof fetch
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+    })
+    queryClient.setQueryData(AUTH_ME_QUERY_KEY, oldUser)
+    queryClient.setQueryData(['pc', 'listing', 'detail'], { owner: 'A' })
+    focusManager.setFocused(false)
+    queryClient.mount()
+    const observer = new QueryObserver(queryClient, meQueryOptions(queryClient))
+    let resolveNewUser!: (user: Me) => void
+    const newUserShown = new Promise<Me>((resolve) => {
+      resolveNewUser = resolve
+    })
+    const unsubscribe = observer.subscribe((result) => {
+      if (result.data?.id === newUser.id) resolveNewUser(result.data)
+    })
+    try {
+      expect(observer.getCurrentResult().data?.id).toBe(oldUser.id)
+      focusManager.setFocused(true)
+      // QueryClient 在处理焦点事件前会先 await resumePausedMutations()。
+      await Promise.resolve()
+      expect(observer.getCurrentResult().isFetching).toBe(true)
+      expect(fetches).toBe(1)
+      resolveResponse(
+        new Response(JSON.stringify({ user: newUser }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+      expect((await newUserShown).id).toBe(newUser.id)
+      expect(queryClient.getQueryData(['pc', 'listing', 'detail'])).toBeUndefined()
+    } finally {
+      unsubscribe()
+      queryClient.unmount()
+      focusManager.setFocused(undefined)
+    }
   })
 
   test('a successful /me refresh for the same identity keeps business cache', async () => {
