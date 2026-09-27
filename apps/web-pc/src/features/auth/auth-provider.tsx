@@ -14,7 +14,7 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null)
 
-/** 登录态初始化：应用挂载时打一次 `GET /me`，结果通过 context 供全站读取。 */
+/** 登录态初始化：应用挂载时获取 `GET /me`，窗口重新获得焦点时再校验一次，结果通过 context 供全站读取。 */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data, isPending, isFetching, error, refetch } = useMe()
   const value = useMemo<AuthState>(

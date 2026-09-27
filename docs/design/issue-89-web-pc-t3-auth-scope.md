@@ -26,11 +26,12 @@ PC Web 已接入登录、搜索和商品详情。后续消息、通知、个人�
 
 - 定义 `PC_QUERY_PREFIX = 'pc'`。
 - 定义唯一例外认证查询 key `['auth', 'me']`；它不属于业务数据缓存。
-- 提供 `resetPcSession(queryClient, user)`：
+- 提供 `resetPcSession(queryClient, user)`，返回是否由本次调用写入会话归属：
   - 默认先 `cancelQueries` 取消在飞的旧 `auth/me`；
-  - `removeQueries` 删除 `queryKey[0] === 'pc'` 的 Query；
+  - 登出（`user === null`）用 `removeQueries` 删除 `queryKey[0] === 'pc'` 的 Query；
+  - 切换账号用 `resetQueries`，让已挂载的 observer 立即丢掉 A 的数据并重新取数；
   - `setQueryData` 写入当前用户或 `null`。
-- 用单调递增的会话代际标记请求归属；迟到的旧 `/me` 401 只能清理它启动时所属的代际，不能覆盖新登录用户。
+- 用单调递增的会话代际标记请求归属；`cancelQueries` 的 await 之后二次校验代际，迟到的重置整体放弃（返回 `false`）：既不能覆盖新登录用户，也不能让全局 401 把刚登录的用户跳回登录页。迟到的旧 `/me` 401 只能清理它启动时所属的代际。
 - `/me` 自身返回 401 时用 `cancelAuth: false`：不能取消当前查询，但同代际内要清业务缓存并写 `null`。
 
 清空公开 Feed 会多一次请求，但比跨账号串数据安全；这是刻意取舍。
@@ -40,7 +41,7 @@ PC Web 已接入登录、搜索和商品详情。后续消息、通知、个人�
 - `useLogin().onSuccess`：清旧账号 → 写新用户。
 - `useRegister().onSuccess`：同上。
 - `useLogout().onSuccess`：清 PC Query → 写 `null`。
-- 全局 `401 + UNAUTHENTICATED`：先清会话，再跳登录页并保留回跳地址。
+- 全局 `401 + UNAUTHENTICATED`：先清会话（已被更新的登录 / 重置取代时整体放弃，也不跳登录页），再跳登录页并保留回跳地址。
 
 ## 4. 文件范围
 
@@ -83,5 +84,5 @@ apps/web-pc/src/
 | 风险 | 处理 |
 | --- | --- |
 | 清理过宽导致公开页重新请求 | 接受；账号隔离优先于缓存命中 |
-| 401 回调中清 Query 引发循环 | 只用 `removeQueries`，不重新触发当前请求 |
+| 401 回调中清 Query 引发循环 | `/me` 自身的 401 用 `cancelAuth: false`，且登出分支只用 `removeQueries`，不重新触发当前请求 |
 | 新页面忘记 `pc` 前缀 | T4 起把 query key 前缀作为代码审查项 |
