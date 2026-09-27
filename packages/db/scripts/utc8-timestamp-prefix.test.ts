@@ -25,7 +25,7 @@ test('#316 toISOString 按 UTC+8 渲染：北京时间 2026-09-28 06:30:00 → 0
   expect(new Date(epochMs).toISOString().replace(/\D/g, '').slice(0, 14)).toBe('20260928063000')
 })
 
-test('#316 重复应用不叠加偏移（幂等守卫按函数引用判定，还原后重新应用仍只 +8h）', () => {
+test('#316 重复应用不叠加偏移（幂等守卫按标记判定，还原后重新应用仍只 +8h）', () => {
   const epochMs = Date.UTC(2026, 8, 27, 22, 30, 0)
   applyUtc8TimestampPrefix()
   const once = new Date(epochMs).toISOString()
@@ -44,15 +44,45 @@ test('#316 幂等守卫按标记判定：补丁函数带 utc8Patched 标记（�
   expect(patched.utc8Patched).toBe(true)
 })
 
+type PrefixModule = {
+  applyUtc8TimestampPrefix: () => void
+  restoreNativeToISOString: () => void
+}
+
+/** 带 query 的 specifier 会解析成**第二份模块记录**（无 query 的写法与 `.ts` 去重为同一实例）。 */
+async function loadSecondInstance(query: string): Promise<PrefixModule> {
+  return (await import(`./utc8-timestamp-prefix?${query}`)) as PrefixModule
+}
+
+test('#316 第二个模块实例再次 apply 仍只 +8h：补丁不会套在补丁上', async () => {
+  const epochMs = Date.UTC(2026, 8, 27, 22, 30, 0)
+  const second = await loadSecondInstance('second-instance')
+  second.applyUtc8TimestampPrefix()
+  // 若补丁包装的是「当前原型上的 toISOString」而不是全局槽位里的真·原生实现，这里会是 +16h。
+  expect(new Date(epochMs).toISOString()).toBe('2026-09-28T06:30:00.000Z')
+})
+
+test('#316 任一实例的 restore 都回到真·原生实现：还原后再由另一实例 apply 仍只 +8h', async () => {
+  const epochMs = Date.UTC(2026, 8, 27, 22, 30, 0)
+  const second = await loadSecondInstance('third-instance')
+  restoreNativeToISOString()
+  expect(new Date(epochMs).toISOString()).toBe('2026-09-27T22:30:00.000Z')
+  second.applyUtc8TimestampPrefix()
+  expect(new Date(epochMs).toISOString()).toBe('2026-09-28T06:30:00.000Z')
+  // 第二个实例导出的「原生实现」必须是真·原生函数，否则它的 restore 会还原不回去。
+  second.restoreNativeToISOString()
+  expect(new Date(epochMs).toISOString()).toBe('2026-09-27T22:30:00.000Z')
+})
+
 test('#316 时间点本身不变：`+new Date()` / `getTime()` 仍是真实 epoch 毫秒', () => {
   // 补丁只换渲染、不换时间值：journal 的 `when` 取自 `+new Date()`，被改写会让 drizzle 误判"已应用"而静默跳过迁移。
-  // 断言在「还原原生实现」与「应用补丁」两种状态下都成立 —— 未来若有人改成包装 valueOf/now，这里会红。
-  restoreNativeToISOString()
+  // 断言用字面量 `when`（不是 apply 前后自比较），并在「原生实现」与「补丁生效」两种状态下都成立。
   const when = 1790546582603
-  const before = +new Date(when)
+  restoreNativeToISOString()
+  expect(+new Date(when)).toBe(when)
   applyUtc8TimestampPrefix()
-  expect(+new Date(when)).toBe(before)
-  expect(new Date(when).getTime()).toBe(before)
+  expect(+new Date(when)).toBe(when)
+  expect(new Date(when).getTime()).toBe(when)
 })
 
 test('#316 偏移量就是 8 小时：补丁渲染与原生渲染相差正好 8h', () => {

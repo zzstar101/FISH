@@ -19,24 +19,40 @@
  * 1. **import 即生效**（文件末尾直接调用 `applyUtc8TimestampPrefix()`），同一进程里后跑的测试会拿到被
  *    改写的 `toISOString`。因此 `scripts/utc8-timestamp-prefix.test.ts` 在 `afterAll` 里调用
  *    `restoreNativeToISOString()`，而 `src/migrations-journal.test.ts` 的 `formatUtc8Prefix` 刻意不用
- *    `toISOString()`，免得期望值被叠加成 +16h。
+ *    `toISOString()`，免得期望值被叠加成 +16h。真·原生实现额外存在全局槽位（`Symbol.for`，见下），
+ *    所以**任意**模块实例的 `restoreNativeToISOString()` 都能还原到原生实现。
  * 2. **不要依赖 `toISOString()` 的生成期默认值**：它同时改写了 `Date.prototype.toJSON`，
  *    schema 里若写 `.default(new Date())`，生成的 SQL 会嵌入 +8h 的字面量。时间戳列继续用
  *    `$onUpdate(() => new Date())` 这类运行时钩子（见 `src/schema/common.ts`）。
  */
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000
 /**
- * 补丁标记：幂等守卫按标记判定，而不是按函数引用 —— 同一进程若用两个不同 specifier 各加载一次本模块，
- * 第二个实例的 `toUtc8ISOString` 与第一个不是同一个引用，按引用判定会再包一层（+16h）。
+ * 真·原生 `toISOString` 的全局槽位（`Symbol.for`，跨模块实例共享）：补丁一律基于它做 +8h，
+ * 于是「同进程用两个 specifier 各加载一次本模块」时，第二个实例的 apply 也不可能把补丁套在补丁上
+ * （+16h）；第二个实例的 restore 也能还原到真正的原生实现。
+ */
+const NATIVE_TO_ISO_STRING_SLOT = Symbol.for('fish.utc8-timestamp-prefix.native')
+
+type PatchRegistry = typeof globalThis & { [NATIVE_TO_ISO_STRING_SLOT]?: () => string }
+
+const patchRegistry = globalThis as PatchRegistry
+
+/** 原生实现：`restoreNativeToISOString()` 用它还原，测试收尾必须调用。 */
+export const nativeToISOString: () => string =
+  patchRegistry[NATIVE_TO_ISO_STRING_SLOT] ?? Date.prototype.toISOString
+
+patchRegistry[NATIVE_TO_ISO_STRING_SLOT] = nativeToISOString
+
+/**
+ * 补丁标记：幂等守卫按标记判定，而不是按函数引用 —— 同进程两个模块实例的 `toUtc8ISOString`
+ * 不是同一个引用，按引用判定会漏过守卫。
  */
 const UTC8_PATCH_MARKER = 'utc8Patched'
 
 type PatchedToISOString = (() => string) & { [UTC8_PATCH_MARKER]?: true }
 
-/** 原生实现：`restoreNativeToISOString()` 用它还原，测试收尾必须调用。 */
-export const nativeToISOString = Date.prototype.toISOString
-
 function toUtc8ISOString(this: Date): string {
+  // 始终基于真·原生实现（而非当前 `Date.prototype.toISOString`）做偏移：叠加不可能发生。
   return nativeToISOString.call(new Date(this.getTime() + UTC8_OFFSET_MS))
 }
 
