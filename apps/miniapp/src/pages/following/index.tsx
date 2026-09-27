@@ -3,6 +3,7 @@ import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
@@ -69,10 +70,6 @@ const TABS: { key: FollowingTab; label: string }[] = [
   { key: 'people', label: '关注的人' },
   { key: 'feed', label: '关注动态' },
 ]
-
-/** 回到顶部钮的出现阈值：稿 `.totop` 滚过 380pt 后出现。
- *  `usePageScroll` 的单位是逻辑 px（= 稿的 pt），**不是** scss 里的 rpx，不 ×2。 */
-const TOTOP_THRESHOLD = 380
 
 /**
  * 本构建是不是演示态（口径与「我的」页的回退一致，见 `./features/following/load.ts`）。
@@ -182,7 +179,7 @@ export default function Following() {
     void runLoad().then(() => Taro.stopPullDownRefresh())
   })
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   const people = load?.kind === 'demo' ? load.people : []
   /** 统计**从正在渲染的这份列表现算**，不旁路读任何汇总 —— 否则会出现「统计 5 人 / 列表 3 行」 */
@@ -408,9 +405,7 @@ export default function Following() {
         </>
       )}
 
-      <View className={`fw__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="fw__totop-arrow" />
-      </View>
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }

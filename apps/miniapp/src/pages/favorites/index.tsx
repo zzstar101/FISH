@@ -3,6 +3,7 @@ import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
@@ -73,12 +74,6 @@ import './index.scss'
  * **演示数据那句小注释行去掉**（代价是屏幕上不再有「这是演示数据」的标记 ——
  * 演示行点下去仍会给说明 toast，见上）。
  */
-
-/**
- * 回到顶部钮的出现阈值：与「我的」页 / 消息页同一口径（稿 `.totop` 滚过 380pt）。
- * `usePageScroll` 的 `scrollTop` 是**设备 px**（≈ 稿的 pt），不 ×2。
- */
-const TOTOP_THRESHOLD = 380
 
 /**
  * 演示构建：**两个开关都要**（与「我的」页的回退口径一致）。
@@ -166,7 +161,7 @@ export default function Favorites() {
     }
   }, [authStatus, userId, startLoad])
 
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > TOTOP_THRESHOLD))
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   usePullDownRefresh(() => {
     if (authStatus !== 'authed' || userId === null) {
@@ -501,13 +496,7 @@ export default function Favorites() {
         </View>
       ) : null}
 
-      {/*
-        回到顶部钮：管理态里由 CSS 藏掉（`index.scss` 的 `.fav.is-managing .fav__totop`）——
-        底栏是 `fixed` 的一块，圆钮在它下面只会被压住，留着就成了一条点不到的死按钮。
-      */}
-      <View className={`fav__totop${showTop ? ' is-show' : ''}`} onClick={backToTop}>
-        <View className="fav__totop-arrow" />
-      </View>
+      <BackTop show={showTop && !managing} onTop={backToTop} />
     </View>
   )
 }

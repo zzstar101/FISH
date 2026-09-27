@@ -1,7 +1,8 @@
 import { Image, Input, Text, View } from '@tarojs/components'
-import Taro, { useLoad, useRouter } from '@tarojs/taro'
+import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
@@ -52,6 +53,12 @@ export default function Search() {
   /** 已提交的关键词；为空时显示建议面板（搜索历史 + 热门搜索） */
   const [submitted, setSubmitted] = useState(initialKeyword)
   const [results, setResults] = useState<MockListing[]>([])
+  /** 回到顶部钮（共享组件）：滚过一屏浮现 */
+  const [showTop, setShowTop] = useState(false)
+  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+  const backToTop = () => {
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
+  }
   const [sort, setSort] = useState<SearchFilter>('综合')
   const [history, setHistory] = useState<string[]>(defaultSearchHistory)
   const [loading, setLoading] = useState(false)
@@ -268,6 +275,9 @@ export default function Search() {
           )}
         </View>
       )}
+
+      {/* 回到顶部 */}
+      <BackTop show={showTop} onTop={backToTop} />
     </View>
   )
 }
