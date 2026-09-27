@@ -55,6 +55,8 @@ export const meQueryOptions = (queryClient: QueryClient) =>
     queryKey: authKeys.me(),
     queryFn: () => loadMe(queryClient),
     staleTime: 60_000,
+    // 共享 Cookie 可在另一标签页换号；即使缓存仍 fresh，回到 PC 也必须重验身份。
+    refetchOnWindowFocus: 'always',
     meta: { skipAuthRedirect: true },
   })
 
