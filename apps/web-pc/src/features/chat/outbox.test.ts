@@ -145,6 +145,34 @@ describe('dispatchOutboxSend', () => {
     ])
   })
 
+  test('按提交顺序返回时，先发出的那条同样各自收敛', async () => {
+    const fake = createMutationFake()
+    const first = createOutboxMessage('第一条')
+    const second = createOutboxMessage('第二条')
+    const store = createStore([first, second])
+    const sent: string[] = []
+    const input = (item: OutboxMessage) => ({
+      item,
+      conversationId: 'conversation-1',
+      mutation: fake.mutation,
+      setOutbox: store.setOutbox,
+      onSent: (value: MessageDto) => sent.push(value.id),
+    })
+
+    void dispatchOutboxSend(input(first))
+    void dispatchOutboxSend(input(second))
+
+    fake.resolve(first.clientRequestId, message('msg-1', '第一条'))
+    await flush()
+    expect(sent).toEqual(['msg-1'])
+    expect(store.outbox).toEqual([second])
+
+    fake.resolve(second.clientRequestId, message('msg-2', '第二条'))
+    await flush()
+    expect(sent).toEqual(['msg-1', 'msg-2'])
+    expect(store.outbox).toEqual([])
+  })
+
   test('重试沿用同一个幂等键，不新增待发条目', async () => {
     const fake = createMutationFake()
     const item = createOutboxMessage('重试我')
