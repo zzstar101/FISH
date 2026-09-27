@@ -54,6 +54,12 @@ const ROUTES = [
   '/pages/following/index',
   // 历史浏览：三类数据都没有端点，本页不发业务请求（因此**不进** WIRED）
   '/pages/history/index',
+  // 举报商品页（#252）：后端未上线，`features/reports/load` 在非演示构建下直接回空列表、
+  // 一个请求都不发，因此同样**不进** WIRED —— 一旦这里报出业务请求，说明隔离被绕过了
+  '/pages/report-listing/index',
+  // 举报用户页 / 我的举报同样零业务请求（用户页与列表页在本分支）
+  '/pages/report-user/index',
+  '/pages/my-reports/index',
 ]
 
 /**

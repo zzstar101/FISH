@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sql } from 'drizzle-orm'
@@ -36,8 +36,10 @@ test('#217 旧数据无损补号、v4 愿望及引用迁到 v7，空档中断重
     }
     const entries = journal.entries.filter((entry) => entry.idx <= 19)
     await Bun.write(join(staging, 'meta/_journal.json'), JSON.stringify({ ...journal, entries }))
+    // 复制而非软链：Windows 普通终端没有创建符号链接的权限（EPERM -4048），
+    // migrator 只读这些 .sql，复制行为等价。
     for (const entry of entries) {
-      await symlink(join(folder, `${entry.tag}.sql`), join(staging, `${entry.tag}.sql`))
+      await copyFile(join(folder, `${entry.tag}.sql`), join(staging, `${entry.tag}.sql`))
     }
     await migrate(scratch, { migrationsFolder: staging })
 

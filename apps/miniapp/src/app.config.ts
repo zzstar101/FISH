@@ -27,6 +27,9 @@ export default defineAppConfig({
     'pages/scan-pr/index',
     'pages/following/index',
     'pages/history/index',
+    'pages/report-listing/index',
+    'pages/report-user/index',
+    'pages/my-reports/index',
   ],
   window: {
     backgroundTextStyle: 'light',

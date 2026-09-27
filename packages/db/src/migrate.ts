@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sql } from 'drizzle-orm'
@@ -127,8 +127,11 @@ export async function migrateWithBackfill(databaseUrl: string): Promise<void> {
     const legacy = await hasLegacyGovernance(db)
     await mkdir(join(staging, 'meta'))
     const throughConstraints = journal.entries.slice(0, constraintPhase + 1)
+    // 复制而不是软链：Windows 上创建符号链接需要开发者模式或管理员权限，普通终端里
+    // `symlink` 直接 EPERM（errno -4048），会让 `bun run db:migrate` 在 Windows 上完全跑不了。
+    // drizzle 的 migrator 只读这些 .sql，复制一份行为等价。
     for (const entry of throughConstraints) {
-      await symlink(join(folder, `${entry.tag}.sql`), join(staging, `${entry.tag}.sql`))
+      await copyFile(join(folder, `${entry.tag}.sql`), join(staging, `${entry.tag}.sql`))
     }
     await Bun.write(
       join(staging, 'meta/_journal.json'),
