@@ -41,6 +41,9 @@ jobs:
       # #86：微信登录 / 手机号绑定 transport 无默认值（评审 P1：禁止静默回退 stub）。
       # CI 不验证微信链路，显式 off——`WECHAT_TRANSPORT` 未设置时 API 启动即失败是预期行为。
       WECHAT_TRANSPORT: off
+      # #228：内容安全审核 transport 无默认值，缺配置 API 启动即失败。CI 不出网、不持有腾讯密钥，
+      # 一律 local（本地词表 + 图片一律 REVIEW）；发布链本期未接入适配器，冒烟不会真的审核。
+      CONTENT_MODERATION_TRANSPORT: local
 
     steps:
       - uses: actions/checkout@v7
