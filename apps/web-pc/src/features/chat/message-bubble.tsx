@@ -1,15 +1,8 @@
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { AlertCircle, RotateCcw, Trash2 } from 'lucide-react'
+import type { OutboxMessage } from './outbox'
 import { formatMessageTime, systemMessageText } from './view'
-
-export type OutboxMessage = {
-  clientRequestId: string
-  content: string
-  status: 'sending' | 'failed'
-  error: string | null
-  errorCode: string | null
-}
 
 export function MessageBubble({
   message,

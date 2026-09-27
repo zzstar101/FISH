@@ -74,6 +74,9 @@ export default function Watchers() {
     setPage(initialPage())
     setMorePending(false)
     setMoreFailed(false)
+    // 名单换了一份，回顶钮的判据要跟着归零：不清的话它会悬在骨架屏 / 空态上，
+    // 而那时根本没有可滚的内容（要等下一次滚动事件才会纠正）
+    setShowTop(false)
   }
 
   useDidShow(() => setShowToken((value) => (value ?? 0) + 1))
@@ -84,6 +87,9 @@ export default function Watchers() {
     setPage(initialPage())
     setMorePending(false)
     setMoreFailed(false)
+    // 名单重新加载：`ScrollView` 会被骨架屏替下、新列表又从 `scrollTop=0` 开始，
+    // 而浮现态是上一份名单滚出来的 —— 不归零它就会悬在不可滚的界面上（先例：user 页同坑）
+    setShowTop(false)
 
     if (!listingId) {
       setPage((prev) => ({ ...prev, phase: 'not-found' }))
@@ -253,8 +259,6 @@ export default function Watchers() {
             <ScrollView
               className="wt__scroll"
               scrollY
-              enhanced
-              showScrollbar={false}
               scrollIntoView={topAnchor}
               onScroll={onScroll}
             >

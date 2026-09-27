@@ -243,6 +243,22 @@ describe('message cache', () => {
 
     expect(flattenMessagePages(data).map((item) => item.id)).toEqual(['m1', 'm2'])
   })
+
+  test('renders a message id once when a stale live message repeats in an older page', () => {
+    // 重连只补最新页（m3）后，比它更旧的实时消息 m1 仍可能被并回最新页；
+    // 之后加载更早分页时服务端会再次返回 m1 —— 渲染层必须按 id 去重。
+    const newest = {
+      items: [message('m1', '2026-01-01T00:00:00.000Z'), message('m3', '2026-01-01T00:00:02.000Z')],
+      nextCursor: 'm3',
+    }
+    const older = {
+      items: [message('m1', '2026-01-01T00:00:00.000Z'), message('m2', '2026-01-01T00:00:01.000Z')],
+      nextCursor: null,
+    }
+    const data = { pages: [newest, older], pageParams: [null, 'm3'] }
+
+    expect(flattenMessagePages(data).map((item) => item.id)).toEqual(['m1', 'm2', 'm3'])
+  })
 })
 
 describe('conversation list cache', () => {
@@ -355,6 +371,23 @@ describe('read receipt cache', () => {
     const merged = mergeConversationDto(current, older)
     expect(merged.lastMessageAt).toBe('2026-01-01T00:00:05.000Z')
     expect(merged.lastMessage?.content).toBe('新的实时消息')
+  })
+
+  test('keeps the newer unread count when an older detail response arrives', () => {
+    const current = {
+      ...conversation(null),
+      lastMessageAt: '2026-01-01T00:00:05.000Z',
+      unreadCount: 2,
+    }
+    const older = {
+      ...conversation(null),
+      lastMessageAt: '2026-01-01T00:00:00.000Z',
+      unreadCount: 0,
+    }
+
+    const merged = mergeConversationDto(current, older)
+    expect(merged.lastMessageAt).toBe('2026-01-01T00:00:05.000Z')
+    expect(merged.unreadCount).toBe(2)
   })
 
   test('compares message createdAt against the counterpart read marker', () => {

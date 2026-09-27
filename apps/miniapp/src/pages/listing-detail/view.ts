@@ -11,6 +11,10 @@
  * 后者仍须在微信开发者工具里按 C/D 的时序实测（`docs/miniapp-dev-workflow.md` §5）。
  */
 
+import type { ListingStatus } from '@fish/contracts/listings/schema'
+// 只取类型：本模块是纯判据，`import type` 在编译期擦除，不会把 store 的运行时副作用带进来
+import type { AuthStatus } from '@/features/auth/store'
+
 /** 乐观占位的 id 前缀：只有它能在本地列表里认出「还没被服务端确认」的那几条 */
 export const PENDING_COMMENT_PREFIX = 'local-'
 
@@ -51,7 +55,14 @@ export type PrivateScope = {
   faved: boolean
   /** 「立即购买」已确认（「待店家确认」终态）：请求是当前账号发出的 */
   buyRequested: boolean
+  /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」的操作面板） */
+  offlineConfirmOpen: boolean
+  /** 下架确认卡按钮的三态：「确认下架 / 下架中 / 重试」（同我的发布页的 submit） */
+  offlineSubmit: OfflineSubmit
 }
+
+/** 「下架」确认卡确认钮的三态（与我的发布页的 submit 状态机同型） */
+export type OfflineSubmit = 'idle' | 'busy' | 'failed'
 
 /**
  * 清场后的初值。
@@ -66,6 +77,8 @@ export function clearedPrivateScope(): PrivateScope {
     replyTo: null,
     faved: false,
     buyRequested: false,
+    offlineConfirmOpen: false,
+    offlineSubmit: 'idle',
   }
 }
 
@@ -183,29 +196,69 @@ export function shouldSurfaceStaleAuthFailure(
 }
 
 /**
- * 一次「聊一聊」的在飞任务（同 `match` 页 `ChatTask` 的口径）。
+ * 冷启动解析身份（`unknown → authed`）那一次代次前进要不要放过（#236 复查 N1）。
  *
- * 为什么不能只用一个布尔在飞锁：`POST /conversations` 是**账号作用域**的写操作。
- * A 发起后退出 / 换 B / 离开本页，迟到的 `.then` 仍会压出会话页、`.catch` 仍会弹
- * toast；而一个裸布尔锁还有第二重毛病 —— 换号后 B 的点击会被 A 的在途请求堵住，
- * A 的 `finally` 又会把 B 已经取得的锁清掉，让 B 能连点压出两个会话页。
+ * 本页是公开页：登录态还没解析出来时（store 的 `unknown`）底栏就点得动，而请求带的
+ * cookie 取自本地存储（`lib/session`），本来就是**同一个账号**在发 —— 那次响应虽然
+ * 跨过了代次前进，却不该被当成过期：判过期会让用户点了「聊一聊」后页面毫无反应
+ * （会话其实已在服务端建好，只是不再导航）。
+ *
+ * 三条约束缺一不可（#284 审查回合 3）：
+ * 1. **发起时确实是 `unknown`**：`userId` 为 null 有两种，已确认的 `anonymous` 不在豁免内
+ *    —— 那种情况下用户是真的没登录，期间的登录是「换了身份」（哪怕换成了自己）。
+ * 2. **代次只前进一次**：真正的换号（退出后登录 / A → B / A → B → A）至少前进两次，
+ *    卸载也不会把匿名变成某个账号 —— 都落不进这里。与读取链的 `isOwnerSwitch` 同源。
+ * 3. **那次动作仍持有它自己那把锁**：否则「匿名请求还在飞 → 用户又点了一次」时，
+ *    旧响应会绕过令牌校验一起导航（压出两个会话页）。换号清场只在**真换号**时清锁，
+ *    就是为了让这条在身份解析路径上成立。
+ */
+export function isColdStartIdentityResolution(
+  task: ActionTask,
+  current: { ownerId: string | null; epoch: number; token: number | null },
+): boolean {
+  return (
+    task.authStatus === 'unknown' &&
+    task.ownerId === null &&
+    current.ownerId !== null &&
+    current.epoch === task.epoch + 1 &&
+    current.token === task.token
+  )
+}
+
+/** 一次「聊一聊」或「立即购买」的在飞任务（同 `match` 页 `ChatTask` 的口径）。
+ *
+ * 为什么不能只用一个布尔在飞锁：这两个动作都会发**账号作用域**的异步回调（建会话请求，
+ * 原生弹窗的确认回调）。A 发起后退出 / 换 B / 离开本页，迟到的回调仍会压出会话页、弹
+ * toast 或把「待店家确认」写进 B 的页面；而一个裸布尔锁还有第二重毛病 —— 换号后 B 的
+ * 点击会被 A 的在途动作堵住，A 的 `finally` 又会把 B 已经取得的锁清掉，让 B 能连点。
  *
  * 所以令牌（`token`）与账号代次（`ownerId` + `epoch`）分工：
  * - `token` 决定**锁归谁**（只有持锁任务能释放）；
- * - `ownerId` + `epoch` 决定**响应还算不算数**。
+ * - `ownerId` + `epoch` 决定**回调还算不算数**。
  *
- * 三者必须全等：A → B → A 之后账号名又等于 A，只比账号名会让旧响应重新「匹配」。
+ * 三者必须全等：A → B → A 之后账号名又等于 A，只比账号名会让旧回调重新「匹配」。
  */
-export type ChatTask = { ownerId: string | null; epoch: number; token: number }
-
-/** 铸任务必须在发请求**之前**：之后再换号 / 卸载，也能凭令牌把整条回调作废。 */
-export function beginChatTask(epoch: number, ownerId: string | null, token: number): ChatTask {
-  return { ownerId, epoch, token }
+export type ActionTask = {
+  ownerId: string | null
+  epoch: number
+  token: number
+  /** 发起那一刻的登录态：`unknown`（还没解析出来）才吃冷启动豁免，见上 */
+  authStatus: AuthStatus
 }
 
-/** 迟到的会话响应是否仍属于当前账号、当前世代、且仍持有那把在飞锁。 */
-export function isCurrentChatTask(
-  task: ChatTask,
+/** 铸任务必须在发请求 / 弹窗**之前**：之后再换号 / 卸载，也能凭令牌把整条回调作废。 */
+export function beginActionTask(
+  epoch: number,
+  ownerId: string | null,
+  token: number,
+  authStatus: AuthStatus,
+): ActionTask {
+  return { ownerId, epoch, token, authStatus }
+}
+
+/** 迟到的回调是否仍是当前账号、当前世代，且那次动作仍持有这把在飞锁。 */
+export function isCurrentActionTask(
+  task: ActionTask,
   current: { ownerId: string | null; epoch: number; token: number | null },
 ): boolean {
   return (
@@ -216,11 +269,21 @@ export function isCurrentChatTask(
 /**
  * 收尾时是否该释放这次任务占的锁：**只认令牌**。
  *
- * 不比对账号与代次 —— 那两个是「要不要采纳这次响应」的判据；锁的归属只由令牌决定。
+ * 不比对账号与代次 —— 那两个是「要不要采纳这次回调」的判据；锁的归属只由令牌决定。
  * 否则 A 的迟到 `finally` 会删掉 B 已经取得的锁（换号时锁已作废，B 可以立刻重新发起）。
  */
-export function shouldReleaseChatTask(task: ChatTask, inFlightToken: number | null): boolean {
+export function shouldReleaseActionTask(task: ActionTask, inFlightToken: number | null): boolean {
   return inFlightToken === task.token
+}
+
+/**
+ * 下架请求收尾时是否该释放它占的锁：同样**只认令牌**。
+ *
+ * 布尔锁下 A 的迟到 `finally` 会把 B（或 A 下一轮）的在飞标记一并删掉：同一件商品被
+ * 重复下架，弹层里还会看到矛盾的「下架中 / 失败」。令牌对不上就不动它。
+ */
+export function shouldReleaseOfflineTask(taskToken: number, inFlightToken: number | null): boolean {
+  return inFlightToken === taskToken
 }
 
 /**
@@ -306,4 +369,38 @@ export function isReloadDue(state: DeferredReload): boolean {
 /** 标记这次补跑已经消费掉：延后的刷新只跑一次，不然后续每次写入结算都会再刷一次。 */
 export function consumeDeferredReload(state: DeferredReload): DeferredReload {
   return { ...state, deferred: false }
+}
+
+/* --------------------------------------------------------- 卖家视角底栏（Owner 2026-09-27 拍板） */
+
+/**
+ * 当前登录用户是不是这件商品的卖家（底栏渲染成卖家形态的开关）。
+ *
+ * 用「`sellerId === 当前 userId`」的本地比对，而不是详情 DTO 里的 `isOwner` 真值：
+ * 公开快照在换号时**不清**（`clearedPrivateScope` 的口径），A 登录时请求回来的快照
+ * 带着 A 的 `isOwner=true`，B 接着看同一份快照就会拿到上一任账号的视角。本地比对
+ * 每帧用当前 `userId` 重算，换号即刻切底栏 —— 与 `watchers` 页的
+ * `listing.isOwner && seller.id === userId` 是同一类双保险，这里快照可能陈旧，所以
+ * 只信本地比对。匿名（`userId = null`）永远走买家形态；列表卡的 `NO_SELLER` 空串
+ * 哨兵也要判否 —— 空串与空串「相等」会把「没有卖家」读成「我就是卖家」。
+ */
+export function isOwnListing(sellerId: string, userId: string | null): boolean {
+  return userId !== null && userId !== '' && sellerId === userId
+}
+
+/**
+ * 卖家本人打开**非在售**商品时，底部栏显示的状态行；`null` = 在售，渲染
+ * 「管理 / 看谁想要」两个操作钮。
+ *
+ * 文案与我的发布页同一套口径（Owner 2026-09-24 拍板：**商品全流程里没有「审核中」
+ * 这个前端状态**）——被审核拒绝的商品在库里就是 `OFFLINE`，与卖家自己下架的一起
+ * 读作「已下架」；`RESERVED` = 提案已被卖家同意、等双方面交（mylist 的「已同意 ·
+ * 等面交」）。管理动作（编辑 / 重新上架）不在这里重复出现，状态行统一把人引去
+ * 「我的发布」。
+ */
+export function ownerStatusNote(status: ListingStatus): string | null {
+  if (status === 'OFFLINE') return '商品已下架'
+  if (status === 'SOLD') return '商品已售出'
+  if (status === 'RESERVED') return '已同意 · 等面交'
+  return null
 }
