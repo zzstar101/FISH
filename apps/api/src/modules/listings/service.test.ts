@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingFeedQuery, ListingStatus } from '@fish/contracts/listings/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { ModerationDecision } from '../moderation/types'
+import type { ConfirmedImageLookup } from '../uploads/media-objects'
 import type { MediaStorage } from '../uploads/storage'
 import { encodeCursor } from './cursor'
 import { createListingService, ListingServiceError } from './service'
@@ -157,6 +159,37 @@ const validCreate = {
   negotiable: false,
   free: false,
   objectKeys: [`listings/${SELLER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`],
+}
+
+// —— #286：新形态对象键（`listings/{usr_…}/{med_…}.jpg`）与确认表 ——
+const IMAGE_PREFIX = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)}/`
+const CONFIRMED_KEY = `${IMAGE_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c1')}.jpg`
+const STAGING_KEY = `listing-media/${encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c2')}.jpg`
+
+/** `listing_media_objects` 的只读夹具：只认列出来的 final 键，并记下被问过哪些键。 */
+function fakeImages(
+  rows: { finalKey: string; userId?: string; decision: ModerationDecision }[] = [],
+): ConfirmedImageLookup & { asked: string[] } {
+  const asked: string[] = []
+  return {
+    asked,
+    findConfirmedFinalKey: async (finalKey) => {
+      asked.push(finalKey)
+      const row = rows.find((entry) => entry.finalKey === finalKey)
+      if (!row) return null
+      return { userId: row.userId ?? SELLER_ID, finalKey, moderationDecision: row.decision }
+    },
+  }
+}
+
+/** 收集 create 落库的那条记录（`moderationStatus` / `moderation.decision` 是断言重点）。 */
+function captureCreate(records: CreateListingRecord[]): Partial<ListingStore> {
+  return {
+    createListingAtomic: async (record) => {
+      records.push(record)
+      return { kind: 'created', listingId: LISTING_ID }
+    },
+  }
 }
 
 async function expectServiceError(run: () => Promise<unknown>): Promise<ListingServiceError> {
@@ -879,6 +912,157 @@ describe('updateListing', () => {
 
     expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
     expect(error.details).toEqual([{ field: 'description', message: '描述包含平台禁止发布的内容' }])
+  })
+})
+
+// —— #286：新形态对象键必须先在上传确认表里落地，才允许被 Listing 引用 ——
+describe('image confirmation', () => {
+  test('rejects a staging key because the image has not been confirmed yet', async () => {
+    let statCalled = false
+    const service = createListingService({
+      storage: fakeStorage({
+        stat: async () => {
+          statCalled = true
+          return { size: 1024, contentType: 'image/jpeg' }
+        },
+      }),
+      store: fakeStore(),
+    })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, objectKeys: [STAGING_KEY] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(error.details).toEqual([
+      { field: 'objectKeys', message: '图片尚未通过审核，请使用上传确认后返回的图片标识' },
+    ])
+    expect(statCalled).toBe(false)
+  })
+
+  test('rejects a final key when no confirmation lookup is wired (fail closed)', async () => {
+    const service = createListingService({ storage: fakeStorage(), store: fakeStore() })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, objectKeys: [CONFIRMED_KEY] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(error.details).toEqual([{ field: 'objectKeys', message: '图片尚未通过审核' }])
+  })
+
+  test('asks the confirmation table about a final key before rejecting it', async () => {
+    const images = fakeImages()
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: images,
+      store: fakeStore(),
+    })
+
+    await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, objectKeys: [CONFIRMED_KEY] }),
+    )
+
+    expect(images.asked).toEqual([CONFIRMED_KEY])
+  })
+
+  test('accepts a confirmed ALLOW image and keeps the listing APPROVED', async () => {
+    const records: CreateListingRecord[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'ALLOW' }]),
+      store: fakeStore(captureCreate(records)),
+    })
+
+    await service.createListing(SELLER_ID, { ...validCreate, objectKeys: [CONFIRMED_KEY] })
+
+    expect(records[0]?.objectKeys).toEqual([CONFIRMED_KEY])
+    expect(records[0]?.moderationStatus).toBe('APPROVED')
+    expect(records[0]?.moderation?.decision).toBe('ALLOW')
+  })
+
+  test('sends the listing to the manual queue when a confirmed image is REVIEW', async () => {
+    const records: CreateListingRecord[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW' }]),
+      store: fakeStore(captureCreate(records)),
+    })
+
+    await service.createListing(SELLER_ID, { ...validCreate, objectKeys: [CONFIRMED_KEY] })
+
+    expect(records[0]?.moderationStatus).toBe('REVIEW')
+    expect(records[0]?.moderation?.decision).toBe('REVIEW')
+  })
+
+  test('rejects a confirmed image that belongs to another user', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, userId: OTHER_ID, decision: 'ALLOW' }]),
+      store: fakeStore(),
+    })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, objectKeys: [CONFIRMED_KEY] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(error.details).toEqual([{ field: 'objectKeys', message: '图片尚未通过审核' }])
+  })
+
+  test('keeps legacy keys working without consulting the confirmation table', async () => {
+    const records: CreateListingRecord[] = []
+    const images = fakeImages()
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: images,
+      store: fakeStore(captureCreate(records)),
+    })
+
+    await service.createListing(SELLER_ID, validCreate)
+
+    expect(images.asked).toEqual([])
+    expect(records[0]?.objectKeys).toEqual(validCreate.objectKeys)
+    expect(records[0]?.moderationStatus).toBe('APPROVED')
+  })
+
+  test('sends an update with a REVIEW image back to the manual queue', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW' }]),
+      store: fakeStore({
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget())
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [CONFIRMED_KEY] })
+
+    expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
+  })
+
+  test('rejects a staging key on update without touching the transaction', async () => {
+    let touched = false
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        updateListingAtomic: async () => {
+          touched = true
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { objectKeys: [STAGING_KEY] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(touched).toBe(false)
   })
 })
 

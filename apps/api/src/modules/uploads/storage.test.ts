@@ -152,6 +152,15 @@ describe('Bun S3 存储适配', () => {
           legacyUrlSecret: secret,
           requireAuth: deny,
           guard: allowRestrictionGuard,
+          // 本用例只走 legacy 代理读；service 是必填依赖但不会被调用。
+          service: {
+            presign: async () => {
+              throw new Error('本用例不涉及 presign')
+            },
+            confirm: async () => {
+              throw new Error('本用例不涉及 confirm')
+            },
+          },
         }),
       )
       const response = await root.request(new URL(url).pathname.replace(/^\/api/, ''))

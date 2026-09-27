@@ -9,7 +9,8 @@ import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
 import { legacyMediaKey } from './legacy-url'
-import { createUploadService, type UploadService, UploadServiceError } from './service'
+import type { UploadService } from './service'
+import { UploadServiceError } from './service'
 import type { MediaStorage } from './storage'
 
 export type UploadsRouterOptions = {
@@ -20,7 +21,11 @@ export type UploadsRouterOptions = {
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   /** #73 治理守卫：上传确认前检查封禁（上传是写链的第一步，属 `write` 作用域）。 */
   guard: RestrictionGuard
-  service?: UploadService
+  /**
+   * #286：必传。`confirm` 现在需要审核 provider 与媒体对象存储（幂等表），router 无从自行推断
+   * 这两个依赖，所以不再提供 `createUploadService({ storage })` 兜底。
+   */
+  service: UploadService
 }
 
 async function readJson(c: Context): Promise<unknown> {
@@ -39,7 +44,7 @@ function toErrorResponse(c: Context, error: unknown): Response {
 }
 
 export function createUploadsRouter(options: UploadsRouterOptions) {
-  const service = options.service ?? createUploadService({ storage: options.storage })
+  const service = options.service
   const router = new Hono<{ Variables: AuthVariables }>()
 
   const legacySecret = options.legacyUrlSecret

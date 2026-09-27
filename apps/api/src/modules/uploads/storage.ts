@@ -1,4 +1,4 @@
-import { isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
 
 /**
@@ -110,6 +110,32 @@ export function isPublicListingKey(key: string): boolean {
 
 /** Seed illustrations have stable non-resource slugs, never a user/listing UUID. */
 const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
+
+/**
+ * #286：**待审核**的 staging 前缀。
+ *
+ * 它故意不落在匿名读白名单里（`docs/deployment.md` 只放开 `listings/*`），因此「未审核的图天然
+ * 不可被公开读到」是存储策略给的，不需要新 bucket、也不需要改 ACL。presign 只签这个前缀，
+ * 所以客户端**结构上无法**覆盖已固化到 `listings/` 下的 final 对象。
+ */
+export const LISTING_MEDIA_PREFIX = 'listing-media/'
+
+/** staging 键形状：`listing-media/{usr_…}/{med_…}.{ext}`（两段都必须是规范 TypeID）。 */
+const LISTING_MEDIA_STAGING_KEY = /^listing-media\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
+
+/** 归属校验的前缀。与 `isPublicListingKey` 同理：键里带 userId 才不用新增"上传登记表"。 */
+export function listingMediaStagingPrefix(userId: string): string {
+  return `${LISTING_MEDIA_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+}
+
+export function isListingMediaStagingKey(key: string): boolean {
+  const match = LISTING_MEDIA_STAGING_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
 
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client

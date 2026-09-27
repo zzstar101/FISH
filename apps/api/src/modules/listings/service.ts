@@ -17,11 +17,13 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { aggregateModerationDecision } from '../moderation/providers/types'
 import { createModerationService, type ModerationService } from '../moderation/service'
-import type { ModerationField, ModerationResult } from '../moderation/types'
+import type { ModerationDecision, ModerationField, ModerationResult } from '../moderation/types'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isLegacyListingKey } from '../uploads/legacy-url'
-import { isPublicListingKey, type MediaStorage } from '../uploads/storage'
+import type { ConfirmedImageLookup } from '../uploads/media-objects'
+import { isListingMediaStagingKey, isPublicListingKey, type MediaStorage } from '../uploads/storage'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
 import type {
@@ -99,14 +101,29 @@ function isFreePriceConstraintViolation(error: unknown): boolean {
   return false
 }
 
+/**
+ * `deps.mediaObjects` 缺省时的实现：没有任何一张图能被证明"已确认"，新形态键因此一律被拒
+ * （fail closed），而不是静默放过。生产接线在 `apps/api/src/app.ts` 显式注入真实实现。
+ */
+const NO_CONFIRMED_IMAGES: ConfirmedImageLookup = {
+  findConfirmedFinalKey: async () => null,
+}
+
 export function createListingService(deps: {
   store: ListingStore
   storage: MediaStorage
+  /**
+   * #286：图片审核确认表（`listing_media_objects`）。给了它，`listings/` 前缀的图片引用就必须
+   * 命中一行"已确认"记录；**不给就等于没有任何一行记录能被证明已确认**，新形态的图片键因此一律
+   * 被拒（fail closed，见 `assertUsableObjectKeys`）。历史遗留键（裸 UUID 前缀）不受影响。
+   */
+  mediaObjects?: ConfirmedImageLookup
   moderation?: ModerationService
   /** 可注入时钟：去重窗口的边界断言不需要 sleep。 */
   now?: () => Date
 }): ListingService {
   const { store, storage } = deps
+  const mediaObjects = deps.mediaObjects ?? NO_CONFIRMED_IMAGES
   const moderation = deps.moderation ?? createModerationService()
   const now = deps.now ?? (() => new Date())
 
@@ -219,12 +236,21 @@ export function createListingService(deps: {
   /**
    * 写入前的图片校验。分两类错误码：
    * - 对象不存在 → `UPLOAD_OBJECT_MISSING`（多半是前端没传完就提交）；
-   * - 前缀不属于本人 / 超出大小或 mime → `IMAGE_REFERENCE_INVALID`（引用了不该引用的对象）。
+   * - 键还在 staging 前缀 / 前缀不属于本人 / 图片没有确认记录 / 超出大小或 mime →
+   *   `IMAGE_REFERENCE_INVALID`（引用了不该引用的对象）。
    *
-   * 归属只靠前缀，不需要新表（契约 §2.3）；大小与 mime 必须在这里查真实对象，
-   * 因为 presign 的签名只覆盖 `host`、mime 不受约束（契约 §7.7）。
+   * 归属只靠前缀，不需要新表（契约 §2.3）；但"这张图审没审过"只能查 `listing_media_objects`
+   * （#286）：BLOCK 的图不固化，确认表里因此不存在它的 final 键，"被阻断的图不能被 Listing
+   * 引用"由此成立。大小与 mime 仍要在这里查真实对象，因为 presign 的签名只覆盖 `host`、
+   * mime 不受约束（契约 §7.7）。
+   *
+   * 返回值是每张已确认图片的审核结论：调用方把它与文本结论聚合，`REVIEW` 图会把整条商品
+   * 压进人工队列（`aggregateModerationDecision`，ALLOW < REVIEW < BLOCK）。
    */
-  async function assertUsableObjectKeys(userId: string, objectKeys: string[]): Promise<void> {
+  async function assertUsableObjectKeys(
+    userId: string,
+    objectKeys: string[],
+  ): Promise<ModerationDecision[]> {
     const publicPrefix = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
     const currentLegacyPrefix = listingObjectKeyPrefix(userId)
     const prefixes = objectKeys.every((key) => key.startsWith(publicPrefix))
@@ -232,6 +258,13 @@ export function createListingService(deps: {
       : [currentLegacyPrefix, ...(await store.legacyUserIds(userId)).map(listingObjectKeyPrefix)]
 
     for (const objectKey of objectKeys) {
+      // staging 键既能过"是自己前缀"，也能过对象存在性 —— 但它的内容**没有**经过审核固化。
+      // 先单独拦一道，给出比"不属于当前用户"更准确的原因：客户端必须回填 confirm 返回的 final 键。
+      if (isListingMediaStagingKey(objectKey)) {
+        throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
+          { field: 'objectKeys', message: '图片尚未通过审核，请使用上传确认后返回的图片标识' },
+        ])
+      }
       if (
         !(isPublicListingKey(objectKey) && objectKey.startsWith(publicPrefix)) &&
         !(isLegacyListingKey(objectKey) && prefixes.some((prefix) => objectKey.startsWith(prefix)))
@@ -242,8 +275,22 @@ export function createListingService(deps: {
       }
     }
 
+    const decisions: ModerationDecision[] = []
     // 逐张校验：≤9 次 HEAD，换掉"客户端可以拿 presign 传任意类型"的洞（契约 §7.7）。
     for (const objectKey of objectKeys) {
+      // 新形态的公开键必须命中一行确认记录（#286）。没有记录 = 没走完 confirm，或当初被判 BLOCK
+      // （BLOCK 不固化、不落 final 键），两种都不允许被引用。历史遗留键是 #286 之前的存量数据，
+      // 本来就没有对应记录，不做这一层校验（它们的归属与格式仍由上面的前缀校验 + stat 守住）。
+      if (isPublicListingKey(objectKey)) {
+        const confirmed = await mediaObjects.findConfirmedFinalKey(objectKey)
+        if (!confirmed || confirmed.userId !== userId) {
+          throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
+            { field: 'objectKeys', message: '图片尚未通过审核' },
+          ])
+        }
+        decisions.push(confirmed.moderationDecision)
+      }
+
       const stat = await storage.stat(objectKey)
       if (!stat) {
         throw new ListingServiceError(422, 'UPLOAD_OBJECT_MISSING', '图片尚未上传完成', [
@@ -256,6 +303,8 @@ export function createListingService(deps: {
         ])
       }
     }
+
+    return decisions
   }
 
   return {
@@ -347,7 +396,17 @@ export function createListingService(deps: {
         )
       }
 
-      await assertUsableObjectKeys(userId, input.objectKeys)
+      const imageDecisions = await assertUsableObjectKeys(userId, input.objectKeys)
+      // 图片结论与文本结论取最严的一档（ALLOW < REVIEW < BLOCK，见 aggregateModerationDecision）：
+      // 只要有一张图是 REVIEW，整条商品就进人工队列。图片侧给不出 BLOCK —— 被判 BLOCK 的图不固化、
+      // 确认表里根本没有它的键，所以上面的引用校验早就拒了；BLOCK 只可能来自文本，且已经拦下。
+      // 这里仍然显式挡一次：聚合结果绝不能掉进下面的 `APPROVED` 分支。
+      const decision = aggregateModerationDecision([moderationResult.decision, ...imageDecisions])
+      if (decision === 'BLOCK') {
+        throw new ListingServiceError(422, 'IMAGE_CONTENT_BLOCKED', '图片内容未通过审核', [
+          { field: 'objectKeys', message: '图片内容未通过审核' },
+        ])
+      }
 
       const listingId = newId()
       const result = await store.createListingAtomic({
@@ -363,15 +422,16 @@ export function createListingService(deps: {
         free: input.free,
         objectKeys: input.objectKeys,
         duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
-        moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+        moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
         moderationReason: moderationResult.reasonCode,
         moderationRuleVersion: moderationResult.ruleVersion,
         moderation: {
-          decision: moderationResult.decision,
+          // 落库的结论是**整条商品**的结论（可能由某张 REVIEW 图抬上来），不只是文本那一档。
+          decision,
           matchedRules: moderationResult.matches.map((match) => match.ruleCode),
           matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
           ruleVersion: moderationResult.ruleVersion,
-          priorListingStatus: moderationResult.decision === 'REVIEW' ? 'ACTIVE' : null,
+          priorListingStatus: decision === 'REVIEW' ? 'ACTIVE' : null,
         },
       })
 
@@ -386,7 +446,12 @@ export function createListingService(deps: {
     },
 
     async updateListing(userId, id, input) {
-      if (input.objectKeys) await assertUsableObjectKeys(userId, input.objectKeys)
+      // #286：图片结论必须在**事务外**算好 —— 它要查确认表 + 逐张 HEAD 对象存储，不能在持有
+      // `SELECT ... FOR UPDATE` 的事务里做网络 I/O。结论本身是只读的（表里不会再变），闭包捕获后
+      // 交给锁内的 `apply` 与文本结论聚合。
+      const imageDecisions = input.objectKeys
+        ? await assertUsableObjectKeys(userId, input.objectKeys)
+        : []
 
       // "读当前行 → 合并最终内容 → 审核 → UPDATE + moderation record" 全部在同一个事务内，
       // 且当前行由 `SELECT ... FOR UPDATE` 锁住（store.updateListingAtomic）。把审核放在事务外
@@ -418,22 +483,29 @@ export function createListingService(deps: {
               title: finalTitle,
               description: finalDescription,
             })
+            // 与 create 同一口径：图片结论与文本结论取最严一档（ALLOW < REVIEW < BLOCK）。
+            // 图片侧给不出 BLOCK（BLOCK 的图不固化、确认表里没有它的键），所以下面的阻断细节
+            // 仍然只可能来自文本。
+            const decision = aggregateModerationDecision([
+              moderationResult.decision,
+              ...imageDecisions,
+            ])
             // 阻断：只写审计（由 store 在**同一锁内事务**完成），不写商品。
             const moderationPlan = {
               title: finalTitle,
               description: finalDescription,
-              decision: moderationResult.decision,
+              decision,
               matchedRules: moderationResult.matches.map((match) => match.ruleCode),
               matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
               ruleVersion: moderationResult.ruleVersion,
               priorListingStatus:
-                moderationResult.decision === 'REVIEW'
+                decision === 'REVIEW'
                   ? current.pendingReviewAction === 'CREATE'
                     ? 'ACTIVE'
                     : (current.pendingReviewPriorStatus ?? current.status)
                   : null,
             }
-            if (moderationResult.decision === 'BLOCK') {
+            if (decision === 'BLOCK') {
               blockedDetails = moderationBlockDetails(moderationResult)
               return { kind: 'blocked' as const, moderation: moderationPlan }
             }
@@ -445,11 +517,11 @@ export function createListingService(deps: {
               kind: 'write' as const,
               fields: {
                 ...fields,
-                moderationStatus: moderationResult.decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+                moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
                 moderationReason: moderationResult.reasonCode,
                 moderationRuleVersion: moderationResult.ruleVersion,
                 moderatedAt: new Date(),
-                ...(moderationResult.decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
+                ...(decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
               },
               moderation: moderationPlan,
             }

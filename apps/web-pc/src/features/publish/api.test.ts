@@ -30,16 +30,23 @@ describe('publish API', () => {
     )
   })
 
-  test('uploads one image through presign, object storage, then confirm', async () => {
-    const calls: Array<{ url: string; method: string }> = []
+  test('引用 confirm 固化后的 final 键，而不是 presign 签发的 staging 键', async () => {
+    // presign 只签 staging 前缀，可引用键必须来自 confirm（#286）。
+    const STAGING_KEY = 'listing-media/u/staging.jpg'
+    const FINAL_KEY = 'listings/u/image.jpg'
+    const calls: Array<{ url: string; method: string; body: string | null }> = []
     globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      calls.push({ url, method: init?.method ?? 'GET' })
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      })
 
       if (url === '/api/uploads/presign') {
         return Response.json({
           uploadUrl: 'https://object.test/put',
-          objectKey: 'listings/u/image.jpg',
+          objectKey: STAGING_KEY,
           headers: {},
           expiresAt: '2026-09-26T00:00:00.000Z',
         })
@@ -47,21 +54,27 @@ describe('publish API', () => {
       if (url === 'https://object.test/put') return new Response(null, { status: 200 })
       if (url === '/api/uploads/confirm') {
         return Response.json({
-          objectKey: 'listings/u/image.jpg',
-          url: 'https://cdn.test/listings/u/image.jpg',
+          objectKey: FINAL_KEY,
+          url: `https://cdn.test/${FINAL_KEY}`,
         })
       }
       return new Response(null, { status: 500 })
     }) as unknown as typeof fetch
 
     const file = new File(['image'], 'photo.jpg', { type: 'image/jpeg' })
-    await expect(uploadListingImage(file, { isCurrent: () => true })).resolves.toBe(
-      'listings/u/image.jpg',
-    )
+    await expect(uploadListingImage(file, { isCurrent: () => true })).resolves.toBe(FINAL_KEY)
     expect(calls).toEqual([
-      { url: '/api/uploads/presign', method: 'POST' },
-      { url: 'https://object.test/put', method: 'PUT' },
-      { url: '/api/uploads/confirm', method: 'POST' },
+      {
+        url: '/api/uploads/presign',
+        method: 'POST',
+        body: JSON.stringify({ contentType: 'image/jpeg', sizeBytes: 5 }),
+      },
+      { url: 'https://object.test/put', method: 'PUT', body: null },
+      {
+        url: '/api/uploads/confirm',
+        method: 'POST',
+        body: JSON.stringify({ objectKey: STAGING_KEY }),
+      },
     ])
   })
 
@@ -74,7 +87,7 @@ describe('publish API', () => {
       stale = true
       return Response.json({
         uploadUrl: 'https://object.test/put',
-        objectKey: 'listings/u/image.jpg',
+        objectKey: 'listing-media/u/staging.jpg',
         headers: {},
         expiresAt: '2026-09-26T00:00:00.000Z',
       })

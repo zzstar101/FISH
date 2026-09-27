@@ -21,7 +21,7 @@ const aiEnv = loadAiPolishEnv()
 // off 时登录/绑定入口 503 关闭，不静默降级 stub。
 const wechatEnv = loadWechatEnv()
 // 内容安全审核配置（#228）：transport 无默认值，生产禁 local；缺腾讯配置启动即失败。
-// 这里只做启动期校验——商品写入/图片引用的接线是后续 Issue 的范围，API 暂不消费该 provider。
+// #286 起该配置被真正消费：图片 confirm 会用它构造 provider 做内容审核并固化 final 对象。
 const moderationEnv = loadContentModerationEnv()
 
 // 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
@@ -33,6 +33,7 @@ if (wechatEnv.transport === 'stub') {
   console.warn('[api] WECHAT_TRANSPORT=stub：微信登录/手机号绑定走演示凭证，不验证微信签发')
 }
 // 同款警告：local 走本地词表，图片不审内容，只适合本地开发/测试。
+// 图片仍然可以确认（会固化），但结论恒为 REVIEW，商品会进人工队列，不会被当成审核通过。
 if (moderationEnv.transport === 'local') {
   console.warn(
     '[api] CONTENT_MODERATION_TRANSPORT=local：文本走本地词表、图片不做内容审核（一律进人工队列），不是内容安全审核',
@@ -44,10 +45,18 @@ if (proxyIp !== null && normalizeIp(proxyIp) === null) {
   throw new Error('LISTING_LOOKUP_TRUSTED_PROXY_IP 必须是规范 IPv4/IPv6 地址')
 }
 let server: ReturnType<typeof Bun.serve>
-const app = createApp(env, mailEnv, meetupEnv, aiEnv, wechatEnv, {
-  peerIp: (request) => server?.requestIP(request)?.address ?? null,
-  trustedProxyIp: proxyIp,
-})
+const app = createApp(
+  env,
+  mailEnv,
+  meetupEnv,
+  aiEnv,
+  wechatEnv,
+  {
+    peerIp: (request) => server?.requestIP(request)?.address ?? null,
+    trustedProxyIp: proxyIp,
+  },
+  moderationEnv,
+)
 
 server = Bun.serve({
   port: env.API_PORT,

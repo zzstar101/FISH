@@ -318,7 +318,13 @@ export type UploadPresignRequest = z.infer<typeof UploadPresignRequestSchema>
 
 export const UploadPresignResponseSchema = z.object({
   uploadUrl: z.url(),
-  /** 服务端生成 `listings/{userId}/{uuid}.{ext}`，前端视为不透明字符串。 */
+  /**
+   * 服务端生成的 **staging** 键（`listing-media/{userId}/{uuid}.{ext}`），前端视为不透明字符串。
+   *
+   * #286：这个键只是「待审核的临时对象」，**不能**进 `objectKeys`——`listing-media/` 不在公开读
+   * 白名单里，而且 Listing 的引用校验只接受审核固化后的 final 键。可引用的键只能从
+   * `UploadConfirmResponseSchema.objectKey` 拿。
+   */
   objectKey: z.string().min(1),
   /**
    * 服务端要求客户端在直传 `PUT` 时原样附带的头。
@@ -338,6 +344,11 @@ export const UploadConfirmRequestSchema = z.strictObject({ objectKey: z.string()
 export type UploadConfirmRequest = z.infer<typeof UploadConfirmRequestSchema>
 
 export const UploadConfirmResponseSchema = z.object({
+  /**
+   * #286：**审核固化后的 final 键**（`listings/{userId}/{uuid}.{ext}`）——这才是能进
+   * `objectKeys` 的那个键。它与 presign 返回的 staging 键**不是同一个字符串**，
+   * 前端必须用它回填，不能继续用自己手里那份 presign 响应。
+   */
   objectKey: z.string().min(1),
   url: z.url(),
 })
@@ -362,6 +373,15 @@ export const ListingErrorCodeSchema = z.enum([
   'IMAGE_REFERENCE_INVALID',
   /** 422：confirm 时对象存储里找不到该对象。 */
   'UPLOAD_OBJECT_MISSING',
+  /**
+   * 422：confirm 时图片被内容安全审核判定为阻断（BLOCK）。
+   * 对象**不会**被固化到可引用前缀，因此这张图无法进入任何 Listing 的 `objectKeys`。
+   */
+  'IMAGE_CONTENT_BLOCKED',
+  /** 400：审核上游判定输入本身不合法（图片缺失 / 超限），confirm 无法完成。 */
+  'CONTENT_MODERATION_INVALID_INPUT',
+  /** 503：内容安全服务不可用（超时 / 网络 / 上游错误），图片未固化、不可引用；可稍后重试。 */
+  'CONTENT_MODERATION_UNAVAILABLE',
   /** 422：标题或描述命中服务端阻断规则。 */
   'LISTING_CONTENT_BLOCKED',
   /** 202：内容需要人工复核，商品不会进入公开列表。 */
