@@ -1,6 +1,21 @@
 import { describe, expect, test } from 'bun:test'
-import { createMemoryHistory, createRouter } from '@tanstack/react-router'
+import type { Me } from '@fish/contracts/auth/user'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
+import { createElement } from 'react'
+import { renderToString } from 'react-dom/server'
+import { AUTH_ME_QUERY_KEY } from './lib/session-cache'
 import { routeTree } from './routeTree.gen'
+
+const USER: Me = {
+  id: '01930000-0000-7000-8000-00000000000a',
+  nickname: '审查用户',
+  avatarUrl: null,
+  authStatus: 'UNVERIFIED',
+  verifiedAt: null,
+  phoneBound: false,
+  maskedPhone: null,
+}
 
 function routerAt(entry: string) {
   return createRouter({
@@ -15,6 +30,25 @@ function matchedRouteIds(entry: string): string[] {
   const router = routerAt(entry)
   const location = router.parseLocation(router.history.location)
   return router.matchRoutes(location).map((match) => match.routeId)
+}
+
+async function renderAt(entry: string, user: Me | null): Promise<string> {
+  const router = routerAt(entry)
+  await router.load()
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(AUTH_ME_QUERY_KEY, user)
+
+  return renderToString(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(RouterProvider, { router }),
+    ),
+  )
+}
+
+function count(html: string, needle: string): number {
+  return html.split(needle).length - 1
 }
 
 describe('PC release route boundaries', () => {
@@ -49,5 +83,14 @@ describe('PC release route boundaries', () => {
     expect('shellComponent' in root.options).toBe(true)
     expect(root.options.errorComponent).toBeDefined()
     expect(root.options.notFoundComponent).toBeDefined()
+  })
+
+  test('unknown PC paths render one PC shell for both auth states', async () => {
+    for (const user of [USER, null]) {
+      const html = await renderAt('/pc/no-such-route', user)
+      expect(html).toContain('页面不存在')
+      expect(count(html, '<header')).toBe(1)
+      expect(count(html, 'aria-label="主导航"')).toBe(1)
+    }
   })
 })

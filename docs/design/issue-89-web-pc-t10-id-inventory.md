@@ -19,7 +19,9 @@
 | `ConversationDto.id` | 会话列表与详情跳转、读位 | 否 | 保留内部 UUID |
 | `TransactionDto.id` | 订单列表与详情跳转、确认 / 取消 | 否 | 保留内部 UUID |
 | `WishDto.id` / `matchId` | 许愿编辑、匹配列表、发起会话 | 否 | 保留内部 UUID |
+| `NotificationDto.id` | 通知列表 key、标记已读 API 路径 | 否 | 保留内部 UUID；不把通知 id 暴露成可复制编号 |
 | `NotificationDto.payload.listingId` / `wishId` | 通知跳转前的目标校验 | 否 | #217 后若要兼容编号，先扩展 payload 契约，不在 PC 端猜测 |
+| `MessageDto.id` / `senderId` | 消息 key、发送者判断、历史分页 `before` | 否 | 保留内部 UUID；`before` 只按不透明分页参数处理 |
 | `User.id` / `ownerId` | 账号作用域缓存、资料与订单 key | 否 | 保留内部 UUID；不得作为可复制的用户编号 |
 
 ## 3. 搜索与 cursor
@@ -29,6 +31,7 @@
 | 商品搜索 | 只接受 `q`、`category`、`sort`、`cursor`；不解析数字编号 | #217 前不增加“编号搜索” |
 | 列表 cursor | `apps/api/src/modules/listings/cursor.ts` 用 base64url 包装 `(sortKey, id)`，`id` 是内部 UUID | 对前端是不透明字符串；PC 只原样回传 |
 | 会话 cursor | 服务端同样编码 `(lastMessageAt, conversationId)` | 对前端是不透明字符串；PC 不解析 |
+| 消息历史 cursor | `messageListQuerySchema.before` 是 `z.uuid()`；服务端把上一页最早消息 `id` 作为 `nextCursor`，PC 原样作为 `before` 回传 | 当前确实把消息 UUID 当分页键；#217 若要改公开编号，需单独迁移该参数与兼容策略 |
 | 分享 / 复制 URL | 当前仅复制含 UUID 的 `/pc/...` 地址 | #217 若定义公开 URL，需同时定义重定向和兼容策略 |
 
 ## 4. 结论
