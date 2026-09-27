@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bell } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NotificationRow } from './notification-row'
 import {
   notificationReadErrorMessage,
@@ -29,15 +29,27 @@ export function NotificationsPage() {
   const openEpochRef = useRef(0)
   const items = notifications.data?.items ?? []
 
-  function open(item: NotificationDto) {
+  useEffect(() => {
+    return () => {
+      // 卸载后让所有在途的标记已读/目标确认流程失效，避免异步导航把用户拉回详情页。
+      openEpochRef.current += 1
+    }
+  }, [])
+
+  async function open(item: NotificationDto) {
     const epoch = openEpochRef.current + 1
     openEpochRef.current = epoch
     setActionError(null)
     if (item.readAt === null) {
-      markRead.mutate(item.id, {
-        onError: (error) => setActionError(notificationReadErrorMessage(error)),
-      })
+      try {
+        await markRead.mutateAsync(item.id)
+      } catch (error) {
+        if (epoch !== openEpochRef.current) return
+        setActionError(notificationReadErrorMessage(error))
+        return
+      }
     }
+    if (epoch !== openEpochRef.current) return
 
     const target = notificationTarget(item)
     if (target.kind === 'none') return
@@ -47,7 +59,7 @@ export function NotificationsPage() {
       return
     }
 
-    void openListingTarget(target, epoch)
+    await openListingTarget(target, epoch)
   }
 
   async function openListingTarget(
@@ -104,12 +116,12 @@ export function NotificationsPage() {
         />
       ) : null}
 
-      {items.length > 0 ? (
+      {notifications.isSuccess && items.length > 0 ? (
         <Card className="gap-0 overflow-hidden border border-line p-0">
           <ul className="divide-y divide-line">
             {items.map((item) => (
               <li key={item.id}>
-                <NotificationRow item={item} onOpen={open} />
+                <NotificationRow item={item} onOpen={(item) => void open(item)} />
               </li>
             ))}
           </ul>

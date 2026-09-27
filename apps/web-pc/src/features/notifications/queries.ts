@@ -2,7 +2,12 @@ import type { QueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchListingDetail } from '../listing-detail/api'
 import { listingDetailQueryKey } from '../listing-detail/queries'
-import { fetchNotifications, fetchUnreadNotificationCount, markNotificationRead } from './api'
+import {
+  fetchNotifications,
+  fetchUnreadNotificationCount,
+  markNotificationRead,
+  NOTIFICATION_PAGE_LIMIT,
+} from './api'
 
 export const notificationKeys = {
   listPrefix: ['pc', 'notifications', 'list'] as const,
@@ -10,7 +15,7 @@ export const notificationKeys = {
   unread: ['pc', 'notifications', 'unread-count'] as const,
 }
 
-export function useNotifications(limit = 50) {
+export function useNotifications(limit = NOTIFICATION_PAGE_LIMIT) {
   return useQuery({
     queryKey: notificationKeys.list(limit),
     queryFn: () => fetchNotifications(limit),
@@ -20,11 +25,10 @@ export function useNotifications(limit = 50) {
   })
 }
 
-export function useUnreadNotificationCount(enabled = true) {
+export function useUnreadNotificationCount() {
   return useQuery({
     queryKey: notificationKeys.unread,
     queryFn: fetchUnreadNotificationCount,
-    enabled,
     staleTime: 30_000,
     refetchOnMount: 'always',
   })
