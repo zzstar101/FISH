@@ -29,6 +29,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/orders-sell/index': () => import('@/pages/orders-sell/index'),
   '/pages/transaction-meetup/index': () => import('@/pages/transaction-meetup/index'),
   '/pages/login/index': () => import('@/pages/login/index'),
+  '/pages/login-confirm/index': () => import('@/pages/login-confirm/index'),
   '/pages/settings/index': () => import('@/pages/settings/index'),
   '/pages/verify/index': () => import('@/pages/verify/index'),
   '/pages/user/index': () => import('@/pages/user/index'),
