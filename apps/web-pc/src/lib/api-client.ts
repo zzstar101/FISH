@@ -1,14 +1,17 @@
-import { ApiErrorSchema } from '@fish/contracts/system/error'
+import { type ApiErrorDetail, ApiErrorSchema } from '@fish/contracts/system/error'
 
 /**
- * 契约里的错误信封（`{ error: { code, message } }`）。所有非 2xx 响应都解析成它，
- * 调用方只依赖 `code` 做分支，不再各自判断 `res.ok` 或解析不同形状。
+ * 契约里的错误信封（`{ error: { code, message, details?, retryAfterSeconds? } }`）。
+ * 所有非 2xx 响应都解析成它，调用方只依赖 `code` 做分支，不再各自判断 `res.ok`
+ * 或解析不同形状。
  */
 export class ApiError extends Error {
   constructor(
     readonly code: string,
     readonly status: number,
     message: string,
+    readonly details?: ApiErrorDetail[],
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -44,7 +47,13 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
   if (!response.ok) {
     const parsed = ApiErrorSchema.safeParse(payload)
     throw parsed.success
-      ? new ApiError(parsed.data.error.code, response.status, parsed.data.error.message)
+      ? new ApiError(
+          parsed.data.error.code,
+          response.status,
+          parsed.data.error.message,
+          parsed.data.error.details,
+          parsed.data.error.retryAfterSeconds,
+        )
       : new ApiError('INTERNAL_ERROR', response.status, '请求失败，请稍后重试')
   }
 

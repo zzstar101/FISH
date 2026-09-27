@@ -34,7 +34,7 @@ export function SideNav() {
         </div>
         <p className="mt-2 text-ink-2 text-xs leading-5">
           当前已接通登录、PC Web
-          外壳、首页商品流、搜索筛选、商品详情和消息中心；发布、通知、许愿墙仍是占位页，个人中心仅完成登录态与退出。
+          外壳、首页商品流、搜索筛选、商品详情、消息中心、发布和个人中心；通知与许愿墙仍是占位页。
         </p>
       </div>
     </aside>
