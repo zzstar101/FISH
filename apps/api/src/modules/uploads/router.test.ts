@@ -42,7 +42,11 @@ function fakeService(overrides: Partial<UploadService> = {}): FakeService {
     }),
     confirm: async (userId, input) => {
       calls.push({ userId, objectKey: input.objectKey })
-      return { objectKey: FINAL_KEY, url: `https://cdn.test/${FINAL_KEY}` }
+      return {
+        objectKey: FINAL_KEY,
+        url: `https://cdn.test/${FINAL_KEY}`,
+        moderationDecision: 'ALLOW',
+      }
     },
     ...overrides,
   }
@@ -192,7 +196,11 @@ describe('uploads router', () => {
       service: fakeService({
         confirm: async () => {
           called = true
-          return { objectKey: FINAL_KEY, url: `https://cdn.test/${FINAL_KEY}` }
+          return {
+            objectKey: FINAL_KEY,
+            url: `https://cdn.test/${FINAL_KEY}`,
+            moderationDecision: 'ALLOW',
+          }
         },
       }),
     })

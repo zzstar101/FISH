@@ -17,7 +17,12 @@ import {
   type ContentModerationProvider,
   moderationErrorResponse,
 } from '../moderation/providers/types'
-import type { ListingMediaObjectRow, ListingMediaObjectStore } from './media-objects'
+import {
+  effectiveModerationDecision,
+  type ListingMediaObjectRow,
+  type ListingMediaObjectStore,
+} from './media-objects'
+import { isListingReviewMediaKey, listingReviewMediaPrefix } from './review-media'
 import {
   isListingMediaStagingKey,
   isPublicListingKey,
@@ -49,12 +54,27 @@ const objectKeyDetail = (message: string): ApiErrorDetail[] => [{ field: 'object
 
 export interface UploadService {
   presign(userId: string, input: UploadPresignRequest): Promise<UploadPresignResponse>
-  confirm(userId: string, input: UploadConfirmRequest): Promise<UploadConfirmResponse>
+  /**
+   * 返回值比契约多一个 `moderationDecision`（内部调用方用）：头像没有人工审核队列，`local`
+   * transport 下恒为 `REVIEW`，所以 `profile` 必须能看出来并 fail-closed 保留旧头像
+   * （`modules/profile/service.ts`）。HTTP 响应只投影契约里的两个字段（`router.ts`）。
+   */
+  confirm(userId: string, input: UploadConfirmRequest): Promise<UploadConfirmResult>
+}
+
+export type UploadConfirmResult = UploadConfirmResponse & {
+  /**
+   * **有效**结论 = 人工结算优先（`settled_decision ?? moderation_decision`）。
+   * 人工放行过的 REVIEW 图在这里就是 `ALLOW`，卖家再编辑不会被重新压回人工队列。
+   */
+  moderationDecision: ListingMediaObjectRow['moderationDecision']
 }
 
 /** 固化后的可引用对象键前缀（= 现有 `isPublicListingKey` 的前缀，公开读只放开了它）。 */
 const publicListingPrefix = (userId: string) =>
   `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+
+/** 有效结论：人工结算过就以结算为准，否则用机器结论（`media-objects.ts` 的同一实现）。 */
 
 /** 扩展名由 mime 推导，不接受客户端指定。 */
 const EXTENSION_BY_MIME: Record<(typeof ALLOWED_IMAGE_MIME)[number], string> = {
@@ -86,8 +106,9 @@ export function createUploadService(deps: {
   const { storage, mediaObjects, createModeration } = deps
 
   /** 复用一个已经落库的结论（幂等快速路径）。 */
-  function reuse(row: ListingMediaObjectRow): UploadConfirmResponse {
-    if (row.moderationDecision === 'BLOCK') {
+  function reuse(row: ListingMediaObjectRow): UploadConfirmResult {
+    const decision = effectiveModerationDecision(row)
+    if (decision === 'BLOCK') {
       throw new UploadServiceError(
         422,
         'IMAGE_CONTENT_BLOCKED',
@@ -95,10 +116,10 @@ export function createUploadService(deps: {
         objectKeyDetail('图片内容未通过审核'),
       )
     }
-    // DB 的 `listing_media_objects_final_key_required` 保证非 BLOCK 行必有 final 键；
+    // DB 的 `listing_media_objects_final_key_required` 保证非 BLOCK 行必有可引用键；
     // 真出现脏行宁可 503 也不要拿一个空键去换一个 500。
     if (row.finalKey === null) {
-      console.error('[uploads] 审核记录缺少 final 键', row.id)
+      console.error('[uploads] 审核记录缺少可引用键', row.id)
       throw new UploadServiceError(
         503,
         'CONTENT_MODERATION_UNAVAILABLE',
@@ -106,7 +127,11 @@ export function createUploadService(deps: {
         objectKeyDetail('图片确认状态不可用，请稍后重试'),
       )
     }
-    return { objectKey: row.finalKey, url: storage.publicUrl(row.finalKey) }
+    return {
+      objectKey: row.finalKey,
+      url: storage.publicUrl(row.finalKey),
+      moderationDecision: decision,
+    }
   }
 
   return {
@@ -125,12 +150,22 @@ export function createUploadService(deps: {
     },
 
     async confirm(userId, input) {
-      // 已经确认过的 **final** 键会再交回来一次：改头像（`PATCH /profile` 的 `avatarObjectKey`）
-      // 拿到的就是客户端上一次 confirm 的返回值，服务端仍然调同一个 confirm 校验它（见
+      // 已经确认过的键会再交回来一次：改头像（`PATCH /profile` 的 `avatarObjectKey`）拿到的就是
+      // 客户端上一次 confirm 的返回值，服务端仍然调同一个 confirm 校验它（见
       // `modules/profile/service.ts`）。它不是一次新的上传，因此不读字节、不重新审核，只验证
       // 「这个键确实是当前用户已确认、且未被 BLOCK 的对象」。
-      if (isSafeObjectKey(input.objectKey) && isPublicListingKey(input.objectKey)) {
-        if (!input.objectKey.startsWith(publicListingPrefix(userId))) {
+      //
+      // #286 复审 blocker 2 之后可引用的键有两类：机器 `ALLOW` 的公开 `listings/…`，以及
+      // `REVIEW`/已结算 `ALLOW` 的私有 `listing-review-media/…`。两类都要在这里放行，
+      // 否则「编辑时回传老图」会把审核中的图当场判死。
+      const alreadyConfirmedKey =
+        isSafeObjectKey(input.objectKey) &&
+        (isPublicListingKey(input.objectKey) || isListingReviewMediaKey(input.objectKey))
+      if (alreadyConfirmedKey) {
+        const ownersPrefix = isPublicListingKey(input.objectKey)
+          ? publicListingPrefix(userId)
+          : listingReviewMediaPrefix(userId)
+        if (!input.objectKey.startsWith(ownersPrefix)) {
           throw new UploadServiceError(
             422,
             'IMAGE_REFERENCE_INVALID',
@@ -147,7 +182,11 @@ export function createUploadService(deps: {
             objectKeyDetail('图片尚未通过审核，请重新上传'),
           )
         }
-        return { objectKey: confirmed.finalKey, url: storage.publicUrl(confirmed.finalKey) }
+        return {
+          objectKey: confirmed.finalKey,
+          url: storage.publicUrl(confirmed.finalKey),
+          moderationDecision: confirmed.moderationDecision,
+        }
       }
 
       // 形状检查必须排在 `startsWith` 之前，且不是冗余：`Bun.S3Client` 拼 URL 时会归一化
@@ -302,14 +341,26 @@ export function createUploadService(deps: {
         )
       }
 
-      // ALLOW / REVIEW 都固化（#286 步骤 3 明确写了 "Pass / Review → writeMediaBytes"）：REVIEW 的
-      // 图可以进 Listing，但审核结论会跟着 final 键回到 `assertUsableObjectKeys`，由商品链把整条
-      // 商品压进人工队列（见 listings/service.ts）——不是公开。
-      const finalKey = `${publicListingPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${EXTENSION_BY_MIME[contentType]}`
+      // 固化前缀取决于机器结论（#286 复审 blocker 2）：
+      // - `ALLOW`：公开的 `listings/…`，客户端拿到的键可以直接进 Listing 并被匿名读到；
+      // - `REVIEW`：**私有**的 `listing-review-media/…`。它在匿名白名单之外，所以「还没过人工审核
+      //   的图不能被公开读到」是存储策略给的，而不是靠"商品不进公开 Feed"这种间接性质 ——
+      //   上传者拿到直链仍可主动分享，商品可见性管不住对象本身。
+      // 人工放行时再由管理员决策同事务把它搬到公开前缀（见 listing-media-settlement.ts）。
+      const finalKey =
+        verdict.decision === 'ALLOW'
+          ? `${publicListingPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${EXTENSION_BY_MIME[contentType]}`
+          : `${listingReviewMediaPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.${EXTENSION_BY_MIME[contentType]}`
       await storage.writeMediaBytes(finalKey, bytes, contentType)
 
       const inserted = await mediaObjects.insert({ ...record, finalKey })
-      if (inserted) return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
+      if (inserted) {
+        return {
+          objectKey: finalKey,
+          url: storage.publicUrl(finalKey),
+          moderationDecision: verdict.decision,
+        }
+      }
 
       // 并发 confirm 抢先落库（唯一索引挡下）：改用先落库那一行的 final 键。本次写的对象成为
       // 孤儿，但内容相同且已过审，不影响可引用键的唯一性。

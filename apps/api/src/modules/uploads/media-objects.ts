@@ -1,10 +1,23 @@
 import type { Db } from '@fish/db/client'
 import { listingMediaObjects } from '@fish/db/schema/listing-media'
-import { and, eq, ne } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import type { ImageModerationResult } from '../moderation/providers/types'
 import type { ModerationDecision } from '../moderation/types'
 
 export type ListingMediaObjectRow = typeof listingMediaObjects.$inferSelect
+
+/**
+ * #286 复审 blocker 1：**有效结论** = 人工结算优先。
+ *
+ * `moderation_decision` 是机器原始结论，不可变；管理员对商品做出 ALLOW/BLOCK 时，这张 REVIEW 图
+ * 在同事务里被结算（`settled_decision` / `settled_at`）。所有"这张图现在算不算过审"的判定都必须
+ * 走这里 —— 否则人工放行过的图会被原始 REVIEW 重新压回人工队列。
+ */
+export function effectiveModerationDecision(
+  row: Pick<ListingMediaObjectRow, 'moderationDecision' | 'settledDecision'>,
+): ModerationDecision {
+  return row.settledDecision ?? row.moderationDecision
+}
 
 /** 引用校验需要的切片：这是谁的图、固化到哪、结论是什么。 */
 export type ConfirmedListingMediaObject = {
@@ -13,12 +26,30 @@ export type ConfirmedListingMediaObject = {
   moderationDecision: ModerationDecision
 }
 
+/** `findByFinalKey` 的切片：原始结论 + 人工结算结论（调用方自行取有效值）。 */
+export type StoredListingMediaObject = {
+  userId: string
+  finalKey: string
+  moderationDecision: ModerationDecision
+  settledDecision: ModerationDecision | null
+}
+
 /**
- * Listing 引用校验的最小端口（#286）。`listings` 只需要回答「这个 final 键是否已经是一个
- * 审核过的图片对象」，不需要知道 staging / 摘要 / provider 这些上传域细节。
+ * Listing 引用校验的最小端口（#286）。`listings` 只需要回答「这个键是否已经是一个审核过的图片对象，
+ * 以及它现在的**有效**结论是什么」，不需要知道 staging / 摘要 / provider 这些上传域细节。
  */
 export interface ConfirmedImageLookup {
+  /**
+   * 可引用的确认记录：有效结论为 BLOCK 的行**不返回**（`null`），调用方据此拒绝引用。
+   * 幂等快速路径与引用校验都用它。
+   */
   findConfirmedFinalKey(finalKey: string): Promise<ConfirmedListingMediaObject | null>
+  /**
+   * 按键取原始记录，**包含**有效结论为 BLOCK 的行。人工结算成 BLOCK 的审核图仍然躺在
+   * `listing_images` 里（商品被下架但图片键没变），编辑链路必须能看出它已被阻断并继续拦下，
+   * 而不是把它当成"没有记录"而豁免（那会让一次纯文本编辑洗掉人工 BLOCK）。
+   */
+  findByFinalKey(finalKey: string): Promise<StoredListingMediaObject | null>
 }
 
 export type ListingMediaObjectInsert = {
@@ -71,9 +102,9 @@ export function createSqlListingMediaObjectStore(db: Db): ListingMediaObjectStor
         .where(
           and(
             eq(listingMediaObjects.finalKey, finalKey),
-            // BLOCK 行本来就写不进去 final 键（DB CHECK），这里再挡一次：判定结论是安全关键，
-            // 不依赖「上游写库时没写错」这一个前提。
-            ne(listingMediaObjects.moderationDecision, 'BLOCK'),
+            // 有效结论为 BLOCK 的行不可引用：机器 BLOCK 行本来就写不进可引用键（DB CHECK），
+            // 但人工结算成 BLOCK 的 REVIEW 行是有的。判定结论是安全关键，不依赖"上游写库时没写错"。
+            sql`COALESCE(${listingMediaObjects.settledDecision}, ${listingMediaObjects.moderationDecision}) <> 'BLOCK'`,
           ),
         )
         .limit(1)
@@ -81,8 +112,22 @@ export function createSqlListingMediaObjectStore(db: Db): ListingMediaObjectStor
       return {
         userId: row.userId,
         finalKey: row.finalKey,
-        moderationDecision: row.moderationDecision,
+        moderationDecision: effectiveModerationDecision(row),
       }
+    },
+
+    async findByFinalKey(finalKey) {
+      const [row] = await db
+        .select({
+          userId: listingMediaObjects.userId,
+          finalKey: listingMediaObjects.finalKey,
+          moderationDecision: listingMediaObjects.moderationDecision,
+          settledDecision: listingMediaObjects.settledDecision,
+        })
+        .from(listingMediaObjects)
+        .where(eq(listingMediaObjects.finalKey, finalKey))
+        .limit(1)
+      return row && row.finalKey !== null ? { ...row, finalKey: row.finalKey } : null
     },
 
     async insert(input) {

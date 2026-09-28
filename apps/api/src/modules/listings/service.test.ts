@@ -167,19 +167,45 @@ const validCreate = {
 const IMAGE_PREFIX = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)}/`
 const CONFIRMED_KEY = `${IMAGE_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c1')}.jpg`
 const STAGING_KEY = `listing-media/${encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c2')}.jpg`
+// 机器结论 REVIEW 的图固化在私有前缀（#286 复审 blocker 2），人工放行后才搬到 IMAGE_PREFIX。
+const REVIEW_PREFIX = `listing-review-media/${encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)}/`
+const REVIEW_KEY = `${REVIEW_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c3')}.jpg`
 
-/** `listing_media_objects` 的只读夹具：只认列出来的 final 键，并记下被问过哪些键。 */
+/**
+ * `listing_media_objects` 的只读夹具：只认列出来的 final 键，并记下被问过哪些键。
+ * `settled` 模拟人工结算结论（#286 复审 blocker 1），有效结论 = `settled ?? decision`。
+ */
 function fakeImages(
-  rows: { finalKey: string; userId?: string; decision: ModerationDecision }[] = [],
+  rows: {
+    finalKey: string
+    userId?: string
+    decision: ModerationDecision
+    settled?: ModerationDecision
+  }[] = [],
 ): ConfirmedImageLookup & { asked: string[] } {
   const asked: string[] = []
+  const lookup = (finalKey: string) => rows.find((entry) => entry.finalKey === finalKey) ?? null
+  const effectiveOf = (row: { decision: ModerationDecision; settled?: ModerationDecision }) =>
+    row.settled ?? row.decision
   return {
     asked,
     findConfirmedFinalKey: async (finalKey) => {
       asked.push(finalKey)
-      const row = rows.find((entry) => entry.finalKey === finalKey)
+      const row = lookup(finalKey)
+      // 与 SQL 实现一致：有效结论为 BLOCK 的行不返回（调用方据此拒绝引用）。
+      if (!row || effectiveOf(row) === 'BLOCK') return null
+      return { userId: row.userId ?? SELLER_ID, finalKey, moderationDecision: effectiveOf(row) }
+    },
+    findByFinalKey: async (finalKey) => {
+      asked.push(finalKey)
+      const row = lookup(finalKey)
       if (!row) return null
-      return { userId: row.userId ?? SELLER_ID, finalKey, moderationDecision: row.decision }
+      return {
+        userId: row.userId ?? SELLER_ID,
+        finalKey,
+        moderationDecision: row.decision,
+        settledDecision: row.settled ?? null,
+      }
     },
   }
 }
@@ -997,6 +1023,42 @@ describe('image confirmation', () => {
     expect(records[0]?.moderation?.decision).toBe('REVIEW')
   })
 
+  // #286 复审 blocker 2：REVIEW 图的固化键是私有的 `listing-review-media/`，它对卖家是**正常**的
+  // 可引用键 —— 商品得带着审核中的图进人工队列，管理员才能看到这张图并做结论。
+  test('accepts a confirmed image stored under the private review prefix', async () => {
+    const records: CreateListingRecord[] = []
+    const images = fakeImages([{ finalKey: REVIEW_KEY, decision: 'REVIEW' }])
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: images,
+      store: fakeStore(captureCreate(records)),
+    })
+
+    await service.createListing(SELLER_ID, { ...validCreate, objectKeys: [REVIEW_KEY] })
+
+    expect(images.asked).toEqual([REVIEW_KEY])
+    expect(records[0]?.objectKeys).toEqual([REVIEW_KEY])
+    expect(records[0]?.moderationStatus).toBe('REVIEW')
+  })
+
+  test('rejects a review key that belongs to another user', async () => {
+    const otherReviewKey = `listing-review-media/${encodePublicId(PUBLIC_ID_PREFIX.user, OTHER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c4')}.jpg`
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([
+        { finalKey: otherReviewKey, userId: OTHER_ID, decision: 'REVIEW' },
+      ]),
+      store: fakeStore(),
+    })
+
+    const error = await expectServiceError(() =>
+      service.createListing(SELLER_ID, { ...validCreate, objectKeys: [otherReviewKey] }),
+    )
+
+    expect(error.code).toBe('IMAGE_REFERENCE_INVALID')
+    expect(error.details).toEqual([{ field: 'objectKeys', message: '图片不属于当前用户' }])
+  })
+
   test('rejects a confirmed image that belongs to another user', async () => {
     const service = createListingService({
       storage: fakeStorage(),
@@ -1069,6 +1131,54 @@ describe('image confirmation', () => {
 
     expect(images.asked).toEqual([CONFIRMED_KEY])
     expect(plans[0]).toMatchObject({ moderationStatus: 'REVIEW', status: 'OFFLINE' })
+  })
+
+  // #286 复审 blocker 1：人工放行后媒体行的有效结论是结算列 `ALLOW`。卖家下一次"不改图"的文本
+  // 编辑必须读到 ALLOW —— 否则刚放行的商品会被压回人工队列（就是 Owner 复现的那条路径）。
+  test('keeps a settled image out of the manual queue when the edit omits objectKeys', async () => {
+    const plans: (UpdateListingFields | undefined)[] = []
+    const images = fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW', settled: 'ALLOW' }])
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: images,
+      store: fakeStore({
+        listImageKeys: async () => [CONFIRMED_KEY],
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
+          if (plan.kind === 'write') plans.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { title: '换了标题的键盘' })
+
+    expect(images.asked).toEqual([CONFIRMED_KEY])
+    expect(plans[0]).toMatchObject({ moderationStatus: 'APPROVED' })
+  })
+
+  // 反向：人工下架（结算 BLOCK）过的图片不能被一次纯文本编辑洗回可发布状态。
+  test('blocks an edit when a stored image was settled to BLOCK', async () => {
+    const planKinds: string[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW', settled: 'BLOCK' }]),
+      store: fakeStore({
+        listImageKeys: async () => [CONFIRMED_KEY],
+        updateListingAtomic: async (input) => {
+          const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
+          planKinds.push(plan.kind)
+          return { kind: 'rejected', moderation: { decision: 'BLOCK' } } as never
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { title: '换了标题的键盘' }),
+    )
+
+    expect(planKinds).toEqual(['blocked'])
+    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
   })
 
   // 存量图：新形态键但确认表里没有记录（#286 之前上传、或迁移前就存在的图）。编辑保存不能因此被拒。

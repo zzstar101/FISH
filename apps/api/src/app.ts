@@ -175,6 +175,11 @@ export function createApp(
     publicUrlBase: env.S3_PUBLIC_URL,
     legacyUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/legacy`,
     legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+    // #286 复审 blocker 2：审核中的图片固化在私有的 `listing-review-media/`，不在匿名白名单内。
+    // 三端全部用 `<img>` / Taro `<Image>` 直出（小程序的原生图片加载不带 cookie），所以私有键不能
+    // 指望「带鉴权代理」，只能走短期签名 URL —— 签名本身就承载授权，因此路由仍然匿名可访问。
+    reviewUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/media`,
+    reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
   })
 
   // #286：图片确认记录表。uploads 侧写入（审核结论 + 固化后的 final 键），listings 侧读取
@@ -219,6 +224,7 @@ export function createApp(
     createUploadsRouter({
       storage,
       legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+      reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       requireAuth: auth.requireAuth,
       service: uploadService,
       guard: restrictionGuard,

@@ -22,7 +22,8 @@ import { createModerationService, type ModerationService } from '../moderation/s
 import type { ModerationDecision, ModerationField, ModerationResult } from '../moderation/types'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isLegacyListingKey } from '../uploads/legacy-url'
-import type { ConfirmedImageLookup } from '../uploads/media-objects'
+import { type ConfirmedImageLookup, effectiveModerationDecision } from '../uploads/media-objects'
+import { isListingReviewMediaKey, listingReviewMediaPrefix } from '../uploads/review-media'
 import { isListingMediaStagingKey, isPublicListingKey, type MediaStorage } from '../uploads/storage'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
@@ -107,6 +108,7 @@ function isFreePriceConstraintViolation(error: unknown): boolean {
  */
 const NO_CONFIRMED_IMAGES: ConfirmedImageLookup = {
   findConfirmedFinalKey: async () => null,
+  findByFinalKey: async () => null,
 }
 
 /** create 时商品还不存在，图片组必然是空的：没有任何"没变的老图片"可以豁免确认校验。 */
@@ -261,8 +263,14 @@ export function createListingService(deps: {
     storedKeys: ReadonlySet<string>,
   ): Promise<ModerationDecision[]> {
     const publicPrefix = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+    // #286 复审 blocker 2：`REVIEW` 图片固化在私有的 `listing-review-media/`（不在匿名白名单里），
+    // 由签名代理读取。它对卖家来说是**正常的**可引用键：商品要带着审核中的图进人工队列，管理员才能
+    // 看到这张图并做出结论（`admin/service.ts` 用 `storage.publicUrl` 取签名 URL）。
+    const reviewPrefix = listingReviewMediaPrefix(userId)
     const currentLegacyPrefix = listingObjectKeyPrefix(userId)
-    const prefixes = objectKeys.every((key) => key.startsWith(publicPrefix))
+    const prefixes = objectKeys.every(
+      (key) => key.startsWith(publicPrefix) || key.startsWith(reviewPrefix),
+    )
       ? [currentLegacyPrefix]
       : [currentLegacyPrefix, ...(await store.legacyUserIds(userId)).map(listingObjectKeyPrefix)]
 
@@ -276,6 +284,7 @@ export function createListingService(deps: {
       }
       if (
         !(isPublicListingKey(objectKey) && objectKey.startsWith(publicPrefix)) &&
+        !(isListingReviewMediaKey(objectKey) && objectKey.startsWith(reviewPrefix)) &&
         !(isLegacyListingKey(objectKey) && prefixes.some((prefix) => objectKey.startsWith(prefix)))
       ) {
         throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
@@ -287,14 +296,23 @@ export function createListingService(deps: {
     const decisions: ModerationDecision[] = []
     // 逐张校验：≤9 次 HEAD，换掉"客户端可以拿 presign 传任意类型"的洞（契约 §7.7）。
     for (const objectKey of objectKeys) {
-      // 新形态的公开键必须命中一行确认记录（#286）。没有记录 = 没走完 confirm，或当初被判 BLOCK
-      // （BLOCK 不固化、不落 final 键），两种都不允许被引用。两类键不做这一层校验：历史遗留键是
+      // 两类服务端固化键都必须命中一行确认记录（#286）：机器 `ALLOW` 的公开键，以及审核中的私有键。
+      // 没有记录 = 没走完 confirm，或当初被判 BLOCK（BLOCK 不固化、不落可引用键）。历史遗留键是
       // #286 之前的存量数据，本来就没有对应记录；`storedKeys` 里的键是本商品图片组里没变的老图，
       // 写入时已经校验过（它们的归属与格式仍由上面的前缀校验 + stat 守住）。
-      if (isPublicListingKey(objectKey)) {
-        const confirmed = await mediaObjects.findConfirmedFinalKey(objectKey)
-        if (confirmed && confirmed.userId === userId) {
-          decisions.push(confirmed.moderationDecision)
+      if (isPublicListingKey(objectKey) || isListingReviewMediaKey(objectKey)) {
+        // 用原始行而不是 `findConfirmedFinalKey`：后者对"有效结论 = BLOCK"与"没有记录"都返回 null，
+        // 而这里必须区分 —— 人工结算成 BLOCK 的图仍躺在商品图片组里（商品已下架），一旦被当成
+        // "没有记录"就会走 `storedKeys` 豁免，等于让一次纯文本编辑洗掉人工 BLOCK。
+        const row = await mediaObjects.findByFinalKey(objectKey)
+        const decision = row && row.userId === userId ? effectiveModerationDecision(row) : null
+        if (decision === 'BLOCK') {
+          throw new ListingServiceError(422, 'IMAGE_CONTENT_BLOCKED', '图片内容未通过审核', [
+            { field: 'objectKeys', message: '图片内容未通过审核' },
+          ])
+        }
+        if (decision !== null) {
+          decisions.push(decision)
         } else if (!storedKeys.has(objectKey)) {
           throw new ListingServiceError(422, 'IMAGE_REFERENCE_INVALID', '图片引用无效', [
             { field: 'objectKeys', message: '图片尚未通过审核' },
@@ -335,9 +353,11 @@ export function createListingService(deps: {
   ): Promise<ModerationDecision[]> {
     const decisions: ModerationDecision[] = []
     for (const objectKey of storedKeys) {
-      if (!isPublicListingKey(objectKey)) continue
-      const confirmed = await mediaObjects.findConfirmedFinalKey(objectKey)
-      if (confirmed && confirmed.userId === userId) decisions.push(confirmed.moderationDecision)
+      if (!isPublicListingKey(objectKey) && !isListingReviewMediaKey(objectKey)) continue
+      // 同样用原始行：有效结论为 BLOCK 的老图必须继续把整条商品压住（推入 BLOCK 让聚合结果为
+      // BLOCK），而不是因为查不到"可引用记录"被跳过。
+      const row = await mediaObjects.findByFinalKey(objectKey)
+      if (row && row.userId === userId) decisions.push(effectiveModerationDecision(row))
     }
     return decisions
   }

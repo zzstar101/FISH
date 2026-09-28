@@ -1,5 +1,10 @@
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
+import {
+  isListingReviewMediaKey,
+  REVIEW_MEDIA_URL_TTL_SECONDS,
+  reviewMediaToken,
+} from './review-media'
 
 /**
  * 对象存储的唯一出入口（#6 契约 §2.7 / §7.7 / §7.8）。
@@ -60,7 +65,17 @@ export interface MediaStorage {
    */
   readMediaBytes?(key: string, maxBytes?: number): Promise<Uint8Array | null>
 
-  /** 读响应里的公开 URL，仅适用于 listings 前缀的匿名读策略。 */
+  /**
+   * 读响应里的客户端读取地址。
+   *
+   * - `listings/*`（公开固化）与 seed 插图 → 直链，与匿名读策略一致；
+   * - `listing-review-media/*`（审核中的私有快照，#286 复审 blocker 2）→ 短期签名代理地址：
+   *   对象本身不在匿名白名单里，只有拿着这个 secret 派生、带过期时刻的令牌才能读到；
+   * - 其余键一律抛错（fail-closed），不允许把未知命名空间拼进公开响应。
+   *
+   * 放在这里而不是每个调用点各写一遍：`listings` / `admin` / `transactions` / `conversations`
+   * / `profile` 全都用这个函数拼商品图地址，审核中的图因此**不需要**改任何读模型就能显示。
+   */
   publicUrl(key: string): string
 }
 
@@ -144,9 +159,13 @@ export function createBunS3MediaStorage(options: {
   /** Web 同源 /api 代理入口，旧对象键只经加密 token 读取，绝不拼裸 UUID 直链。 */
   legacyUrlBase?: string
   legacyUrlSecret?: string
+  /** 审核中图片的短期签名代理入口（`/api/uploads/media`）。 */
+  reviewUrlBase?: string
+  reviewUrlSecret?: string
   expiresInSeconds?: number
 }): MediaStorage {
-  const { client, publicUrlBase, legacyUrlBase, legacyUrlSecret } = options
+  const { client, publicUrlBase, legacyUrlBase, legacyUrlSecret, reviewUrlBase, reviewUrlSecret } =
+    options
   const expiresInSeconds = options.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRES_SECONDS
 
   /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
@@ -219,6 +238,12 @@ export function createBunS3MediaStorage(options: {
 
     publicUrl(key) {
       assertSafeObjectKey(key)
+      // 审核中的私有快照：对象不在匿名白名单里，只能通过带过期时刻的签名代理读（#286 复审 blocker 2）。
+      if (isListingReviewMediaKey(key)) {
+        if (!reviewUrlBase || !reviewUrlSecret) throw new Error('私有媒体 URL 代理未配置')
+        const expiresAtSeconds = Math.floor(Date.now() / 1000) + REVIEW_MEDIA_URL_TTL_SECONDS
+        return `${reviewUrlBase.replace(/\/+$/, '')}/${reviewMediaToken(key, reviewUrlSecret, expiresAtSeconds)}`
+      }
       if (isLegacyListingKey(key)) {
         if (!legacyUrlBase || !legacyUrlSecret) throw new Error('旧媒体 URL 代理未配置')
         return `${legacyUrlBase.replace(/\/+$/, '')}/${legacyMediaToken(key, legacyUrlSecret)}`

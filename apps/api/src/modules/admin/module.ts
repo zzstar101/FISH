@@ -7,6 +7,7 @@ import { createSqlModerationStore } from '../moderation/store'
 import { createReportsRouter } from '../reports/router'
 import { createReportService } from '../reports/service'
 import { createSqlReportStore } from '../reports/store'
+import { createListingMediaSettlement } from '../uploads/listing-media-settlement'
 import type { MediaStorage } from '../uploads/storage'
 import { createRequireAdmin } from './middleware'
 import { createAdminRouter } from './router'
@@ -30,7 +31,12 @@ export function createAdminModule(options: {
   governance: GovernanceService
   guard: RestrictionGuard
 }) {
-  const moderation = createSqlModerationStore(options.db)
+  // #286 复审 blocker 1：管理员对 REVIEW 商品的 ALLOW/BLOCK 必须同时结算它引用的审核中图片，
+  // 否则人工放行会被卖家下一次「不改图」的文本编辑重新压回人工队列。钩子从 uploads 域注入，
+  // moderation 域只负责在决策事务里调用它（见 modules/moderation/store.ts 的 decideWithin）。
+  const moderation = createSqlModerationStore(options.db, {
+    settleListingMedia: createListingMediaSettlement({ storage: options.storage }),
+  })
   const store = createSqlAdminStore(options.db, moderation)
   const requireAdmin = createRequireAdmin({ store })
   const reportStore = createSqlReportStore(options.db)

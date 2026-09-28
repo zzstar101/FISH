@@ -11,6 +11,7 @@ import type {
   ListingMediaObjectRow,
   ListingMediaObjectStore,
 } from './media-objects'
+import { isListingReviewMediaKey, listingReviewMediaPrefix } from './review-media'
 import { createUploadService, UploadServiceError } from './service'
 import {
   isListingMediaStagingKey,
@@ -23,6 +24,7 @@ const USER_ID = '01930000-0000-7000-8000-00000000000a'
 const OTHER_ID = '01930000-0000-7000-8000-00000000000b'
 const FINAL_PREFIX = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/`
 const STAGING_PREFIX = listingMediaStagingPrefix(USER_ID)
+const REVIEW_PREFIX = listingReviewMediaPrefix(USER_ID)
 const STAGING_KEY = `${STAGING_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c1')}.jpg`
 const FINAL_KEY = `${FINAL_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c2')}.jpg`
 const ROW_ID = '01930000-0000-7000-8000-0000000000d1'
@@ -59,7 +61,14 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): FakeStorage {
 }
 
 function mediaRow(input: ListingMediaObjectInsert): ListingMediaObjectRow {
-  return { id: ROW_ID, createdAt: new Date('2026-09-12T03:40:10.000Z'), ...input }
+  return {
+    id: ROW_ID,
+    createdAt: new Date('2026-09-12T03:40:10.000Z'),
+    // #286 复审 blocker 1：人工结算列默认未结算（机器结论生效）。
+    settledDecision: null,
+    settledAt: null,
+    ...input,
+  }
 }
 
 type FakeMediaObjects = ListingMediaObjectStore & {
@@ -78,6 +87,7 @@ function fakeMediaObjects(overrides: Partial<ListingMediaObjectStore> = {}): Fak
       return null
     },
     findConfirmedFinalKey: async () => null,
+    findByFinalKey: async () => null,
     insert: async (input) => {
       inserted.push(input)
       return mediaRow(input)
@@ -233,6 +243,7 @@ describe('confirm', () => {
     await expect(service.confirm(USER_ID, { objectKey: FINAL_KEY })).resolves.toEqual({
       objectKey: FINAL_KEY,
       url: `https://cdn.test/${FINAL_KEY}`,
+      moderationDecision: 'ALLOW',
     })
     expect(statCalled).toBe(false)
     expect(storage.reads).toBe(0)
@@ -482,21 +493,76 @@ describe('confirm', () => {
     })
   })
 
-  // 本地 transport 下 IMS 不可用：图片照样能确认并固化，但结论是 REVIEW，商品会带着
-  // `REVIEW` 进人工队列（不是公开，也不是把图卡死）。
-  test('fixates a REVIEW image and keeps the verdict for the listing chain', async () => {
+  // 本地 transport 下 IMS 不可用：图片照样能确认，但结论是 REVIEW。**#286 复审 blocker 2** 之后
+  // 它固化在私有的 `listing-review-media/`（不在匿名白名单里），商品带着 `REVIEW` 进人工队列。
+  // 「没过人工审核的图不能被公开读到」由此是存储策略给的，而不是靠"商品不进公开 Feed"——
+  // 上传者拿着直链仍可主动分享，商品可见性管不住对象本身。
+  test('fixates a REVIEW image under a private key, never the public prefix', async () => {
     const { service, storage, mediaObjects } = buildService({
       moderateImage: async (i) => localVerdict(i),
     })
 
     const confirmed = await service.confirm(USER_ID, { objectKey: STAGING_KEY })
 
+    expect(isListingReviewMediaKey(confirmed.objectKey)).toBe(true)
+    expect(confirmed.objectKey.startsWith(REVIEW_PREFIX)).toBe(true)
+    expect(confirmed.objectKey.startsWith('listings/')).toBe(false)
+    expect(confirmed.moderationDecision).toBe('REVIEW')
     expect(storage.writes).toHaveLength(1)
+    expect(storage.writes[0]?.key).toBe(confirmed.objectKey)
     expect(mediaObjects.inserted[0]).toMatchObject({
       moderationDecision: 'REVIEW',
       provider: 'LOCAL',
       providerMd5: null,
       finalKey: confirmed.objectKey,
+    })
+  })
+
+  // 同一张图重复 confirm（客户端重试 / 改头像回传上一次的键）必须复用既有结论，且**不**重新
+  // 固化到公开前缀 —— 否则「审核中」会随着一次重试消失。
+  test('accepts an already confirmed review key without re-moderating or promoting it', async () => {
+    let moderated = 0
+    const reviewKey = `${REVIEW_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c5')}.jpg`
+    const { service, storage } = buildService({
+      mediaObjects: fakeMediaObjects({
+        findConfirmedFinalKey: async (finalKey) =>
+          finalKey === reviewKey
+            ? { userId: USER_ID, finalKey: reviewKey, moderationDecision: 'REVIEW' }
+            : null,
+      }),
+      moderateImage: async (input) => {
+        moderated += 1
+        return localVerdict(input)
+      },
+    })
+
+    await expect(service.confirm(USER_ID, { objectKey: reviewKey })).resolves.toEqual({
+      objectKey: reviewKey,
+      url: `https://cdn.test/${reviewKey}`,
+      moderationDecision: 'REVIEW',
+    })
+    expect(moderated).toBe(0)
+    expect(storage.reads).toBe(0)
+    expect(storage.writes).toEqual([])
+  })
+
+  // 人工结算（#286 复审 blocker 1）：管理员放行之后，有效结论变成 ALLOW，于是卖家再编辑
+  // （编辑请求回传同一个键）不会把它重新压回人工队列。
+  test('reports the settled ALLOW verdict once an admin has released the image', async () => {
+    const reviewKey = `${REVIEW_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000c6')}.jpg`
+    const { service } = buildService({
+      mediaObjects: fakeMediaObjects({
+        findConfirmedFinalKey: async (finalKey) =>
+          finalKey === reviewKey
+            ? { userId: USER_ID, finalKey: reviewKey, moderationDecision: 'ALLOW' }
+            : null,
+      }),
+    })
+
+    await expect(service.confirm(USER_ID, { objectKey: reviewKey })).resolves.toEqual({
+      objectKey: reviewKey,
+      url: `https://cdn.test/${reviewKey}`,
+      moderationDecision: 'ALLOW',
     })
   })
 
@@ -569,6 +635,7 @@ describe('confirm', () => {
     expect(await service.confirm(USER_ID, { objectKey: STAGING_KEY })).toEqual({
       objectKey: FINAL_KEY,
       url: `https://cdn.test/${FINAL_KEY}`,
+      moderationDecision: 'ALLOW',
     })
     expect(moderated).toBe(0)
     expect(storage.writes).toEqual([])

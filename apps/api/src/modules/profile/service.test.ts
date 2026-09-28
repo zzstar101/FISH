@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { UserRow } from '../auth/me'
-import type { UploadService } from '../uploads/service'
+import { type UploadService, UploadServiceError } from '../uploads/service'
 import type { MediaStorage } from '../uploads/storage'
 import { createProfileService, PROFILE_LIST_LIMIT } from './service'
 import type {
@@ -34,14 +34,23 @@ const storage: MediaStorage = {
  * #86 B：改头像必须复用上传域的 `confirm`（归属前缀 + 对象已上传 + 格式/大小）。
  * 读用例不碰它；写用例要断言「服务端拼的是 confirm 给的 URL，而不是端上给的字符串」，
  * 所以这里给一个能记录调用的假实现（真实现要求 storage.stat 有对象，本文件不搭 S3）。
+ *
+ * #286 复审 blocker 2 之后 `confirm` 还会回传**有效**审核结论：只有机器 `ALLOW` 才允许把地址写进
+ * 公开的 `avatarUrl`，所以这里默认给 `ALLOW`，需要验证 fail-closed 的用例显式传 `REVIEW`/`BLOCK`。
  */
-function fakeUploads(): Pick<UploadService, 'confirm'> & { calls: string[] } {
+function fakeUploads(
+  decision: 'ALLOW' | 'REVIEW' | 'BLOCK' = 'ALLOW',
+): Pick<UploadService, 'confirm'> & { calls: string[] } {
   const calls: string[] = []
   return {
     calls,
     async confirm(_userId, input) {
       calls.push(input.objectKey)
-      return { objectKey: input.objectKey, url: `https://cdn.test/${input.objectKey}` }
+      return {
+        objectKey: input.objectKey,
+        url: `https://cdn.test/${input.objectKey}`,
+        moderationDecision: decision,
+      }
     },
   }
 }
@@ -311,5 +320,31 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
       createService(store, rejected).updateProfile(me, { avatarObjectKey: 'listings/u2/b.jpg' }),
     ).rejects.toThrow('IMAGE_REFERENCE_INVALID')
     expect(store.updated).toBeNull()
+  })
+
+  // #286 复审 blocker 2：REVIEW 的头像固化在**私有**前缀、BLOCK 的头像根本不固化，两者都不可能
+  // 进公开的 `avatarUrl`。头像没有人工审核队列，所以只能 fail-closed：接口 422，库里旧头像不变。
+  test('审核未通过的头像 fail-closed：422 IMAGE_CONTENT_BLOCKED，不写库', async () => {
+    for (const decision of ['REVIEW', 'BLOCK'] as const) {
+      const store = new MemoryProfileStore()
+      const uploads = fakeUploads(decision)
+
+      const caught = await createService(store, uploads)
+        .updateProfile(me, { avatarObjectKey: 'listing-review-media/u1/a.jpg' })
+        .then(
+          () => null,
+          (error: unknown) => error,
+        )
+
+      expect(caught).toBeInstanceOf(UploadServiceError)
+      if (!(caught instanceof UploadServiceError)) throw caught
+      expect(caught.status).toBe(422)
+      expect(caught.code).toBe('IMAGE_CONTENT_BLOCKED')
+      expect(caught.details).toEqual([
+        { field: 'avatarObjectKey', message: '头像未通过审核，请更换图片' },
+      ])
+      expect(uploads.calls).toEqual(['listing-review-media/u1/a.jpg'])
+      expect(store.updated).toBeNull()
+    }
   })
 })

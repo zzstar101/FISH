@@ -651,15 +651,36 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const finalKey = String(confirmed.objectKey)
     // #286 的核心契约：客户端能引用的键是 **confirm 返回的 final 键**，不是它自己 PUT 的那个
     // staging 键。三个 App 的上传适配器都以这个返回值为准（见各自的 api.test.ts）。
-    assert(finalKey.startsWith('listings/'), `confirm 返回 final 键（实得：${finalKey}）`)
+    // CI 与本地都跑 `CONTENT_MODERATION_TRANSPORT=local`，provider 给不出内容摘要 ⇒ 结论恒为 REVIEW
+    // ⇒ 复审 blocker 2 要求它固化在**私有**的 `listing-review-media/` 下，绝不落在匿名可读的 `listings/*`。
+    assert(
+      finalKey.startsWith('listing-review-media/'),
+      `local transport 下 confirm 返回私有 review 键（实得：${finalKey}）`,
+    )
     assert(finalKey !== stagingKey, 'final 键与 staging 键不同')
     uploadedObjectKeys.push(finalKey)
 
-    const publicResponse = await fetch(String(confirmed.url))
-    assertEqual(publicResponse.status, 200, '匿名 GET final URL → 200')
+    // 私有固化对象与 staging 一样不在匿名白名单里：没有签名就取不到，不依赖"审核完再删"的时序假设。
+    assertEqual(
+      (await fetch(`${env.S3_PUBLIC_URL}/${finalKey}`)).status,
+      403,
+      '私有 review 对象匿名直读 → 403',
+    )
+
+    // 卖家与审核队列要能看到它，靠的是 confirm 回的**签名代理 URL**（capability URL，无 cookie 也能读，
+    // 小程序原生 `<Image>` 因此能显示）。它指向 WEB_ORIGIN（同源代理），smoke 里没有 web 进程，
+    // 所以按同一路径改打 API。
+    const confirmToken = /\/uploads\/media\/([A-Za-z0-9_-]+)$/.exec(String(confirmed.url))?.[1]
     assert(
-      bytesEqual(new Uint8Array(await publicResponse.arrayBuffer()), JPEG),
-      '公开读到的字节与上传一致',
+      typeof confirmToken === 'string',
+      `confirm 回的 review URL 带代理令牌（实得：${confirmed.url}）`,
+    )
+    if (!confirmToken) throw new Error('confirm 没有回 review 代理令牌')
+    const reviewResponse = await fetch(`${base}/uploads/media/${confirmToken}`)
+    assertEqual(reviewResponse.status, 200, '签名代理 URL 匿名 GET → 200（无 cookie）')
+    assert(
+      bytesEqual(new Uint8Array(await reviewResponse.arrayBuffer()), JPEG),
+      '签名代理读到的字节与上传一致',
     )
 
     // 接口重试不得重复计费审核：同一 staging 键 + 同一内容的第二次 confirm 直接复用既有结论。
@@ -731,10 +752,22 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const heldSellerView = await readJson(await get(base, `/listings/${heldId}`, seller))
     assertEqual(heldSellerView.status, 'OFFLINE', '人工队列商品对卖家显示 OFFLINE')
     assertEqual(heldSellerView.moderationStatus, 'REVIEW', '人工队列商品标注 REVIEW')
-    // 卖家视角的 coverUrl 走的仍是「#6 契约 §7.8」那一个实现，且固化后的对象在 `listings/*`
-    // 白名单里匿名可读 —— 图片落盘与 URL 投影这两件事在这里也有运行时证据。
+    // 卖家视角的 coverUrl 走的仍是「#6 契约 §7.8」那一个实现；审核中的图是私有的，所以它必须投影成
+    // 签名代理 URL（而不是 `listings/*` 的匿名直链）—— 这也是"未过审的图对公众取不到"的运行时证据。
     assert(typeof heldSellerView.coverUrl === 'string', '人工队列商品对卖家仍返回可用的 coverUrl')
-    assertEqual((await fetch(String(heldSellerView.coverUrl))).status, 200, 'final 封面匿名 → 200')
+    const heldToken = /\/uploads\/media\/([A-Za-z0-9_-]+)$/.exec(
+      String(heldSellerView.coverUrl),
+    )?.[1]
+    assert(
+      typeof heldToken === 'string',
+      `人工队列商品的 coverUrl 是签名代理（实得：${heldSellerView.coverUrl}）`,
+    )
+    if (!heldToken) throw new Error('人工队列商品的 coverUrl 没有代理令牌')
+    assertEqual(
+      (await fetch(`${base}/uploads/media/${heldToken}`)).status,
+      200,
+      '签名代理封面 → 200（卖家/审核队列可见）',
+    )
 
     // 生产形态的“已通过审核”图片：CI 与本地都跑 `CONTENT_MODERATION_TRANSPORT=local`，本地 provider
     // 恒给 REVIEW（上一节就是它的证据），而 #43 的匹配/交易链路需要一个公开在售（ACTIVE / APPROVED）

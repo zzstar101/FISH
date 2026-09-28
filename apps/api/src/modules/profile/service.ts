@@ -10,6 +10,7 @@ import { toMe } from '../auth/me'
 import { toListingCard } from '../listings/card'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { UploadService } from '../uploads/service'
+import { UploadServiceError } from '../uploads/service'
 import type { MediaStorage } from '../uploads/storage'
 import { toWishDto } from '../wishes/service'
 import type { ProfileStore, ProfileTransactionRow } from './store'
@@ -114,7 +115,19 @@ export function createProfileService({
         // 复用上传域的 confirm，而不是自己再写一遍前缀 / stat / mime 校验：
         // 发布商品与改头像的失败码与文案必须是同一套（IMAGE_REFERENCE_INVALID /
         // UPLOAD_OBJECT_MISSING），端上才能共用一份错误处理。
-        const { url } = await uploads.confirm(userId, { objectKey: input.avatarObjectKey })
+        const { url, moderationDecision } = await uploads.confirm(userId, {
+          objectKey: input.avatarObjectKey,
+        })
+        // #286 复审 blocker 2 的取舍：审核中的头像固化在**私有**前缀，而 `avatarUrl` 是到处直出的
+        // 公开字段（9 处 `publicAvatarUrl` 投影）。头像没有人工审核队列（`listing_moderation_records`
+        // 只挂 Listing），所以这里 fail closed：没拿到机器 `ALLOW` 就不换头像、保留旧值，而不是把
+        // 一个私有/未审核的对象地址写进公开资料。代价是 `local` transport（图片恒 REVIEW）下改不了
+        // 头像 —— 这是有意的：宁可功能不可用，也不放未审核的图进公开字段。
+        if (moderationDecision !== 'ALLOW') {
+          throw new UploadServiceError(422, 'IMAGE_CONTENT_BLOCKED', '头像未通过审核，请更换图片', [
+            { field: 'avatarObjectKey', message: '头像未通过审核，请更换图片' },
+          ])
+        }
         patch.avatarUrl = url
       }
 
