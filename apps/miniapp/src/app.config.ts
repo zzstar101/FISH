@@ -30,6 +30,13 @@ export default defineAppConfig({
     'pages/report-listing/index',
     'pages/report-user/index',
     'pages/my-reports/index',
+    // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）：
+    // 关于与版本 / 用户协议 / 隐私政策 / 意见反馈 —— 一批一起落，入口在
+    // 「我的 → 帮助与设置」与设置页「关于」组，另由登录页协议勾选行带 `?from=login` 进入
+    'pages/about/index',
+    'pages/terms/index',
+    'pages/privacy/index',
+    'pages/feedback/index',
   ],
   window: {
     backgroundTextStyle: 'light',

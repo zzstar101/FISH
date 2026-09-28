@@ -174,12 +174,15 @@ export default function Login() {
                 {/*
                   链接必须吃掉冒泡：父级是「勾选框」的 onClick，不拦截的话点协议会顺手
                   把默认勾选翻成未勾（然后点登录只得到「请先阅读并同意」的提示）。
+
+                  带 `?from=login`：法务页据此显示吸底同意条（稿状态 02）——
+                  从设置页进来是纯阅读，不该再点一次「同意」（稿取舍 ⑦）。
                 */}
                 <Text
                   className="login__lk"
                   onClick={(event) => {
                     event.stopPropagation()
-                    toast('用户协议待接入')
+                    void Taro.navigateTo({ url: '/pages/terms/index?from=login' })
                   }}
                 >
                   《用户协议》
@@ -189,7 +192,7 @@ export default function Login() {
                   className="login__lk"
                   onClick={(event) => {
                     event.stopPropagation()
-                    toast('隐私政策待接入')
+                    void Taro.navigateTo({ url: '/pages/privacy/index?from=login' })
                   }}
                 >
                   《隐私政策》

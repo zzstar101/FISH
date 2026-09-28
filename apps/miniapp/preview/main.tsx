@@ -45,6 +45,11 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/report-listing/index': () => import('@/pages/report-listing/index'),
   '/pages/report-user/index': () => import('@/pages/report-user/index'),
   '/pages/my-reports/index': () => import('@/pages/my-reports/index'),
+  // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）
+  '/pages/about/index': () => import('@/pages/about/index'),
+  '/pages/terms/index': () => import('@/pages/terms/index'),
+  '/pages/privacy/index': () => import('@/pages/privacy/index'),
+  '/pages/feedback/index': () => import('@/pages/feedback/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */

@@ -1,0 +1,597 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 意见反馈（稿 `小程序1版意见反馈.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 结构：NavBar glass（吸顶玻璃栏，居中标题，本页只补内容顶部的等高让位）
+ * → 渐变页头（随内容滚走）→ 本机暂存恢复提示条 → 反馈类型卡（6 枚胶囊 3×2）
+ * → 问题描述卡（500 字计数）→ 联系方式卡（选填）→ 隐私提示 + 表单末尾的提交钮
+ * → 结果 · 兜底渠道弹层（scrim + 吸底 sheet）。
+ *
+ * 稿里被丢掉的外壳（见 index.tsx 文件头）：状态栏 / 灵动岛 / 机身侧键 /
+ * home indicator / **模拟原生栏 `.mp-nav` 与假胶囊 `.mp-capsule`** / 机身外演示控制条 /
+ * `--rpx`+`--pt`+`cqw` 自适应 / 固定 390×844 的 `.screen`；稿的 `.toast` 也由
+ * `Taro.showToast` 承担，不做成页面元素。
+ *
+ * 根节点刻意**不写 `overflow`**：写了页面自身就成了滚动容器，`pageScrollTo` 会失真
+ * （见 `pages/favorites/index.scss` 的同类说明），校验失败要滚到出错卡片正是靠它。
+ *
+ * 颜色一律走令牌（稿的派生色 `--brand-deep` / `--warn-weak` / `--danger-weak` 等
+ * 在 `styles/_token-vars.scss` 里已有对应项），不新增色值。
+ */
+
+.fb {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  /* 非 Tab 页：底部只让出安全区（无底栏） */
+  padding-bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+/* ──────────────────────────────── 渐变页头（稿 .headblock） */
+
+.fb__head {
+  background: var(--grad-page);
+  border-bottom-left-radius: 64px;
+  border-bottom-right-radius: 64px;
+  padding: 32px 40px 40px;
+  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+}
+
+.fb__kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  letter-spacing: 0.1em;
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.fb__kicker-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.fb__title {
+  display: block;
+  margin-top: 16px;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.fb__sub {
+  display: block;
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+/* 正文里的强调：稿有 `.fh-sub strong{color:var(--fg)}` 与 `.card-sub strong`（只加粗、仍取父级色），
+   所以分成两个类，别把两处都染成 --fg。 */
+.fb__strong {
+  font-weight: 600;
+}
+
+.fb__strong--fg {
+  color: var(--fg);
+}
+
+/* ──────────────────────────────── 本机暂存恢复提示条 */
+
+.fb__draft {
+  margin: 28px 40px 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 24px;
+  border-radius: 28px;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn-line);
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--warn-ink);
+}
+
+.fb__draft-ic {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+.fb__draft-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fb__draft-clear {
+  flex: 0 0 auto;
+  font-size: 23px;
+  font-weight: 600;
+  color: var(--warn-ink);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  padding: 4px 8px;
+
+  &:active {
+    color: var(--fg);
+  }
+}
+
+/* ──────────────────────────────── 表单卡 */
+
+.fb__form {
+  padding: 28px 40px 0;
+}
+
+.fb__card {
+  margin-bottom: 24px;
+  padding: 28px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 40px;
+  box-shadow: var(--shadow-card);
+
+  /* 校验失败：整卡转危险色（稿 .card.is-err） */
+  &.is-err {
+    border-color: var(--danger-line);
+    background: var(--danger-weak);
+  }
+}
+
+.fb__card-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.fb__card-h2 {
+  flex: 0 0 auto;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.fb__req {
+  color: var(--danger);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.fb__opt {
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.fb__card-sub {
+  display: block;
+  margin-top: 10px;
+  font-size: 23px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+/* ──────────────────────────────── 反馈类型：6 枚胶囊排两行（3×2） */
+
+.fb__pills {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.fb__pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 72px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--muted-2);
+  white-space: nowrap;
+  transition:
+    background 0.16s,
+    border-color 0.16s,
+    color 0.16s;
+
+  &:active {
+    transform: translateY(2px);
+  }
+
+  &.is-on {
+    background: var(--accent-weak);
+    border-color: var(--brand);
+    color: var(--brand-deep);
+    box-shadow: inset 0 0 0 2px var(--brand);
+  }
+}
+
+.fb__pill-ic {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+}
+
+/* ──────────────────────────────── 行内错误（选好类型 / 补足字数后消失） */
+
+.fb__err {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--danger-ink);
+}
+
+.fb__err-ic {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
+/* ──────────────────────────────── 描述框（min-height 104pt） */
+
+.fb__field {
+  margin-top: 24px;
+  border-radius: 28px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s;
+
+  &.is-focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+
+  &.is-err {
+    border-color: var(--danger);
+  }
+}
+
+.fb__ta {
+  display: block;
+  width: 100%;
+  min-height: 208px;
+  padding: 24px;
+  box-sizing: border-box;
+  font-size: 26px;
+  line-height: 1.75;
+  color: var(--fg);
+}
+
+.fb__fieldfoot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 24px 20px;
+}
+
+.fb__kb {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.fb__count {
+  margin-left: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+
+  /* 超过 500 字：计数转警示色（提交会被拦住） */
+  &.is-over {
+    color: var(--danger);
+    font-weight: 600;
+  }
+}
+
+/* ──────────────────────────────── 单行输入（联系方式，选填 40 字） */
+
+.fb__inputwrap {
+  margin-top: 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 88px;
+  padding: 0 24px;
+  border-radius: 28px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  transition:
+    border-color 0.16s,
+    box-shadow 0.16s;
+
+  &.is-focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 6px var(--accent-soft);
+  }
+}
+
+.fb__input-ic {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.fb__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26px;
+  color: var(--fg);
+}
+
+/* ──────────────────────────────── 隐私提示 + 提交（表单末尾，不吸底） */
+
+.fb__privacy {
+  margin: 4px 0 28px;
+  display: flex;
+  gap: 14px;
+  font-size: 23px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+.fb__privacy-ic {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+
+.fb__privacy-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fb__link {
+  color: var(--brand-deep);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.fb__submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  height: 96px;
+  border-radius: 999px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+  transition:
+    filter 0.16s,
+    background 0.16s,
+    box-shadow 0.16s;
+
+  &:active {
+    transform: translateY(2px);
+  }
+
+  /* 未填齐：浅底灰字（仍可点 —— 点了会指出缺哪一项，同稿） */
+  &.is-off {
+    background: var(--accent-faint);
+    color: var(--muted);
+    box-shadow: none;
+  }
+
+  &.is-busy {
+    background: var(--brand-deep-2);
+    box-shadow: none;
+  }
+}
+
+.fb__formfoot {
+  display: block;
+  margin-top: 24px;
+  text-align: center;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  color: var(--muted);
+}
+
+/* ──────────────────────────────── 结果 · 兜底渠道弹层 */
+
+.fb__scrim {
+  @include scrim;
+}
+
+/*
+ * 吸底弹层：`@include sheet` 给 `fixed` 吸底、上投影与安全区下衬；
+ * 横向内边距**用长写属性**，别用 `padding: 0 40px` 简写 —— 那会把 mixin 的安全区下衬一起覆盖掉
+ * （同 `pages/favorites/index.scss` 的同类说明）。上圆角按稿的 24pt（=48px）覆盖 mixin 的 `--r-hero`。
+ */
+.fb__sheet {
+  @include sheet;
+  border-radius: 48px 48px 0 0;
+  padding-top: 0;
+  padding-right: 40px;
+  padding-left: 40px;
+}
+
+.fb__sheet-grip {
+  width: 76px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent-mid);
+  margin: 20px auto 0;
+}
+
+.fb__sheet-ic {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  margin: 32px auto 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn-line);
+}
+
+.fb__sheet-ic-img {
+  width: 48px;
+  height: 48px;
+}
+
+.fb__sheet-title {
+  display: block;
+  margin-top: 24px;
+  text-align: center;
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.fb__sheet-text {
+  display: block;
+  margin-top: 16px;
+  text-align: center;
+  font-size: 25px;
+  line-height: 1.75;
+  color: var(--muted-2);
+}
+
+.fb__mailrow {
+  margin-top: 32px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 32px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+}
+
+.fb__mail-ic {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+}
+
+.fb__mail-txt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fb__mail-em {
+  display: block;
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+.fb__mail-b {
+  display: block;
+  margin-top: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  word-break: break-all;
+}
+
+/* 待填占位（稿里那条虚线；客服邮箱定稿后由 TSX 的 SUPPORT_MAIL 顶上） */
+.fb__ph {
+  color: var(--warn-ink);
+  border-bottom: 3px dashed var(--warn);
+  padding-bottom: 2px;
+  font-weight: 600;
+}
+
+.fb__mail-copy {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 24px;
+  border-radius: 999px;
+  background: var(--brand-deep);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+
+  &:active {
+    background: var(--brand-deep-2);
+  }
+}
+
+.fb__copy-ic {
+  width: 28px;
+  height: 28px;
+}
+
+.fb__sheet-acts {
+  margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fb__btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 84px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--fg);
+
+  &:active {
+    background: var(--accent-weak);
+    border-color: var(--line);
+  }
+}
+
+.fb__btn-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 68px;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &:active {
+    color: var(--danger-ink);
+  }
+}
+
+.fb__btn-ic {
+  width: 30px;
+  height: 30px;
+}
+
+.fb__btn-link .fb__btn-ic {
+  width: 28px;
+  height: 28px;
+}
