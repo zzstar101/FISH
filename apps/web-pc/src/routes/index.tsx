@@ -2,6 +2,7 @@ import type { ListingCard } from '@fish/contracts/listings/schema'
 import { Button } from '@fish/ui/button'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { createFileRoute } from '@tanstack/react-router'
+import { AnnouncementBar } from '../features/home/announcement-bar'
 import { PcListingCard } from '../features/listings/listing-card'
 import { useHomeFeed } from '../features/listings/queries'
 import { useHiddenListings } from '../features/recommendation/hidden'
@@ -29,6 +30,8 @@ function HomePage() {
 
   return (
     <div>
+      <AnnouncementBar />
+
       <div className="mb-5 flex items-end justify-between gap-6">
         <div>
           <h1 className="font-semibold text-[26px] tracking-[-0.03em]">今日上新</h1>
