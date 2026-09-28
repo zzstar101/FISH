@@ -5,10 +5,10 @@
 
 ## 1. 系统形态
 
-**移动端 Web PWA + PC Web**：面向广应科校内的二手交易平台，用户主要在手机上使用；`apps/web-pc` 提供独立的 PC 浏览器入口。
+**微信小程序（移动端入口）+ PC Web**：面向广应科校内的二手交易平台，用户主要在手机上使用；移动端入口是微信小程序 `apps/miniapp`，`apps/web-pc` 提供独立的 PC 浏览器入口。
 
 - 交互基线是**移动端视口**（设计参考 390×844）；PC Web 使用独立外壳和桌面布局，当前处于骨架阶段。
-- 产品目标是可安装、可离线的 Web 应用形态；**PWA 的具体实现（manifest / Service Worker / 图标 / 离线策略）由前端 Owner 在 #4 起建立**，#1 不生成任何 PWA 产物。
+- **移动端 Web PWA（`apps/web`）已弃用、待移除**（[#325](https://github.com/zzstar101/FISH/issues/325)）：可安装 / 可离线的 Web 应用目标随弃用一并作废，PWA 产物不再建设。
 - 固定信息架构：`首页 / 许愿 / 卖闲置（视觉中心）/ 消息 / 我的`。
 
 ## 2. 技术基线
@@ -16,7 +16,7 @@
 | 层 | 选型 |
 | --- | --- |
 | Runtime / 包管理 | Bun（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
-| 前端 | React + Vite + TypeScript（移动端 `apps/web` / PC `apps/web-pc`） |
+| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React + Vite + TypeScript，`apps/web-pc`）；`apps/web` 移动端 PWA 已弃用（[#325](https://github.com/zzstar101/FISH/issues/325)） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4（shadcn/ui 由前端 Owner 接入） |
 | 后端 | Hono on Bun（`Bun.serve`） |
@@ -65,7 +65,7 @@ import { createDb } from '@fish/db/client'
 ```mermaid
 graph LR
   subgraph Host["宿主机（Bun）"]
-    WEB["apps/web<br/>Vite :5173"]
+    MINIAPP["apps/miniapp<br/>微信小程序"]
     WEB_PC["apps/web-pc<br/>Vite :5174"]
     API["apps/api<br/>Hono on Bun.serve :3000"]
     WORKER["apps/worker<br/>job 轮询"]
@@ -76,11 +76,9 @@ graph LR
     MINIO[("MinIO<br/>:9000 / :9001")]
   end
 
-  BROWSER["移动端浏览器"] -->|"GET /"| WEB
+  MINIAPP -->|"根级路由（绝对地址）"| API
   PC_BROWSER["PC 浏览器"] -->|"GET /pc/"| WEB_PC
-  BROWSER -->|"/api/* 代理去前缀"| API
   PC_BROWSER -->|"/api/* 代理去前缀"| API
-  BROWSER -->|"/ws 代理"| API
   PC_BROWSER -->|"/ws 代理"| API
   API -->|"bun:sql"| PG
   WORKER -->|"bun:sql"| PG
@@ -96,7 +94,7 @@ graph LR
 ```mermaid
 sequenceDiagram
   participant B as 浏览器
-  participant W as Vite :5173
+  participant W as Vite :5174（apps/web-pc）
   participant A as API :3000
   participant P as PostgreSQL
 

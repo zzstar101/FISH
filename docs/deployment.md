@@ -1,7 +1,9 @@
 # FISH 生产部署手册（Ubuntu + Bun 直跑）
 
-> 目标：把 `apps/web`、`apps/web-pc`、`apps/api`、`apps/worker` 直接跑在 Ubuntu 上，**不使用 Docker**。
+> 目标：把 `apps/web-pc`、`apps/api`、`apps/worker` 直接跑在 Ubuntu 上，**不使用 Docker**。
 > 依赖（PostgreSQL、MinIO）同样装成宿主服务。
+>
+> **`apps/web`（移动端 PWA）已弃用、待移除**（[#325](https://github.com/zzstar101/FISH/issues/325)）。本手册里它的构建与同步步骤在移除前仍然有效；移动端入口是微信小程序 `apps/miniapp`（不走本手册的静态站点部署）。
 >
 > 本手册只描述部署，不改变任何业务/契约行为。生产形态与 [architecture.md](architecture.md) §4 的
 > 本地拓扑**同构**，区别只是应用由 systemd 托管、前面多一个反向代理提供 HTTPS。
@@ -36,7 +38,7 @@
 
 静态客户端路径：
 
-- `/` → `/var/www/fish`（`apps/web` 移动端 Web）
+- `/` → `/var/www/fish`（`apps/web` 移动端 Web —— **已弃用、待移除**，见 [#325](https://github.com/zzstar101/FISH/issues/325)；移除后 `/` 的处置见该 Issue）
 - `/pc/` → `/var/www/fish-pc`（`apps/web-pc` PC Web）
 
 必须一直成立的四条不变量（违反任何一条都会出数据问题，见 §9）：
@@ -507,8 +509,9 @@ API 端口；下方代理配置会**覆盖**传入的 `X-Real-IP`。不配置受
 fish.example.com {
 	encode zstd gzip
 
-	# 与 apps/web、apps/web-pc 的 /api 代理等价：剥掉 /api 前缀转发到 API 的根级路由。
-	# 两套 Web 都只写相对路径 /api/...（各自的 src/lib/api-client.ts），生产是同源部署，
+	# 与 apps/web-pc 的 /api 代理等价：剥掉 /api 前缀转发到 API 的根级路由。
+	# （apps/web 已弃用、待移除，见 #325；它的 Vite 代理行为与 web-pc 相同。）
+	# PC Web 只写相对路径 /api/...（src/lib/api-client.ts），生产是同源部署，
 	# 因此不需要跨域，cookie 自动携带。
 	handle /api/* {
 		uri strip_prefix /api
@@ -611,7 +614,7 @@ server {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_read_timeout 1h;              # 客户端心跳 25s 一次（apps/web/src/features/chat/realtime.ts）
+    proxy_read_timeout 1h;              # 客户端心跳 25s 一次（apps/web-pc/src/features/chat/realtime.ts）
   }
   location / {
     add_header Cache-Control "no-store";
@@ -644,9 +647,10 @@ cd /srv/fish
 # 1) 建表（走仓库文档化的同一条命令；它需要 §4 的 .env）
 sudo -u fish -H /usr/local/bin/bun run db:migrate
 
-# 2) 前端产物：构建 apps/web 与 apps/web-pc，分别同步到 Caddy 的两个根目录
+# 2) 前端产物：构建并同步到 Caddy 的两个根目录
+#    `apps/web` 已弃用、待移除（#325）：移除后删掉它那一行与 `/` 的 rsync。
 sudo -u fish -H /usr/local/bin/bun run build
-sudo rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/
+sudo rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/        # 已弃用（#325）
 sudo rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
 sudo chown -R caddy:caddy /var/www/fish /var/www/fish-pc   # 换 nginx 时改成 www-data
 
@@ -733,8 +737,9 @@ systemctl stop fish-worker fish-api
 sudo -u fish -H /usr/local/bin/bun run db:migrate
 
 # 5) 前端产物
+#    `apps/web` 已弃用、待移除（#325）：移除后删掉它那一行 rsync。
 sudo -u fish -H /usr/local/bin/bun run build
-rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/
+rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/   # 已弃用（#325）
 rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
 
 # 6) 起服务
@@ -840,7 +845,9 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
 4. **`S3_ENDPOINT` / `S3_PUBLIC_URL` 必须同时对“服务端”与“浏览器”可达**：
    - 图片是**客户端直传**：`presign` 返回的 URL 由 `Bun.S3Client` 按 `S3_ENDPOINT` 的 host 签名
      （`apps/api/src/modules/uploads/storage.ts`），浏览器直接 `PUT` 它
-     （`apps/web/src/features/sell/api.ts:61`）。写成 `http://127.0.0.1:9000` 只有服务器能访问，上传必失败。
+     （`apps/web/src/features/sell/api.ts:61`；移动端小程序对应 `apps/miniapp/src/features/upload/api.ts` 的直传 PUT。
+     `apps/web` 已弃用、待移除，见 [#325](https://github.com/zzstar101/FISH/issues/325)。）
+     写成 `http://127.0.0.1:9000` 只有服务器能访问，上传必失败。
    - **服务端也要能访问同一个地址**：上传确认时 API 会调 `storage.stat()`（`apps/api/src/modules/uploads/service.ts`），
      它走的是同一个 `S3Client`/同一个 `S3_ENDPOINT`。而 `stat()` 把**任何**失败都降级成 `null` → 接口返回 422
      `UPLOAD_OBJECT_MISSING`「图片尚未上传完成」，报错指向的原因和真实原因（服务端连不上对象存储）不一致。

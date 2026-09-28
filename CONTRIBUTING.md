@@ -9,7 +9,7 @@
 ## 1. 认领任务（Issue 即模块）
 
 - 每个 Issue 对应一个模块：认领人对该 Issue 的**全部验收标准**负责。
-- 模块的**前端（`apps/web`）、后端（`apps/api`）、Contract（`packages/contracts`）都由认领人一个人完成**，不按前后端分包。
+- 模块的**前端（`apps/miniapp` / `apps/web-pc`）、后端（`apps/api`）、Contract（`packages/contracts`）都由认领人一个人完成**，不按前后端分包。（`apps/web` 移动端 PWA 已弃用，见 [#325](https://github.com/zzstar101/FISH/issues/325)，新功能不再写进该目录。）
 - 认领前先确认与别人正在做的模块互不重叠，避免并行冲突。
 - 认领后按第 3 节开分支：一个 Issue 一个 `feat/<issue>-<slug>`。
 

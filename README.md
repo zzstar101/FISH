@@ -5,7 +5,7 @@
 </h1>
 
 <p align="center">
-  <strong>广应科校内二手交易平台 · 移动端 Web + PC Web</strong><br />
+  <strong>广应科校内二手交易平台 · 微信小程序 + PC Web</strong><br />
   同校面交 · 让闲置在校园里流动起来
 </p>
 
@@ -24,7 +24,7 @@
 
 ## 项目简介
 
-FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台，交互以**手机视口**为基线（设计参考 390×844）；另设独立的 PC 浏览器 Web 入口，正在逐项接入。
+FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台，移动端入口是**微信小程序**（`apps/miniapp`，交互以手机视口为基线，设计参考 390×844）；PC 端是独立的 PC 浏览器 Web 入口 `apps/web-pc`。（原移动端 Web PWA `apps/web` 已弃用，见 [#325](https://github.com/zzstar101/FISH/issues/325)。）
 
 固定信息架构：
 
@@ -52,7 +52,7 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 | 层 | 选型 |
 | --- | --- |
 | Runtime / 包管理 | **Bun**（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
-| 前端 | React 19 + Vite + TypeScript（`apps/web` 移动端、`apps/web-pc` PC Web） |
+| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React 19 + Vite + TypeScript，`apps/web-pc`）；`apps/web` 移动端 PWA 已弃用（[#325](https://github.com/zzstar101/FISH/issues/325)） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4 + 自有 `@fish/ui` 组件 |
 | 后端 | **Hono on Bun**（`Bun.serve`） |
@@ -71,18 +71,16 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 
 ```mermaid
 graph LR
-  BROWSER["移动端浏览器"] -->|"GET /"| WEB["apps/web<br/>Vite :5173"]
+  MINIAPP["微信小程序<br/>apps/miniapp"] -->|"根级路由（绝对地址）"| API["apps/api<br/>Hono on Bun :3000"]
   PC_BROWSER["PC 浏览器"] -->|"GET /pc/"| WEB_PC["apps/web-pc<br/>Vite :5174"]
-  BROWSER -->|"/api/*（去前缀）"| API["apps/api<br/>Hono on Bun :3000"]
   PC_BROWSER -->|"/api/*（去前缀）"| API
-  BROWSER -->|"/ws（实时）"| API
   PC_BROWSER -->|"/ws（实时）"| API
   API -->|"bun:sql"| PG[("PostgreSQL 18 + pgvector<br/>:5432")]
   WORKER["apps/worker<br/>job 轮询"] -->|"bun:sql"| PG
   API -.->|"S3"| MINIO[("MinIO<br/>:9000 / :9001")]
 ```
 
-- 两套 Web 都写相对路径 `/api/...`，开发环境由各自的 Vite 代理去前缀转发到 API；生产同源部署行为一致，无 CORS 与跨域 Cookie 问题。
+- PC Web 写相对路径 `/api/...`，开发环境由 Vite 代理去前缀转发到 API；生产同源部署行为一致，无 CORS 与跨域 Cookie 问题。小程序没有代理层，直接用绝对地址拼 API 的**根级路由**（`apps/miniapp/src/lib/api-base.ts`）。
 - 跨包只走 `workspace:*` + `exports` 子路径（无大型 barrel）：
 
   ```ts
@@ -122,11 +120,11 @@ bun run db:seed
 ```bash
 bun run dev:api      # API    → http://localhost:3000
 bun run dev:worker   # Worker（常驻，不监听端口）
-bun run dev:web      # 移动 Web → http://localhost:5173
+bun run dev:web      # 已弃用（apps/web → http://localhost:5173，见 #325）
 bun run dev:web-pc   # PC Web   → http://localhost:5174/pc/
 ```
 
-移动端打开 <http://localhost:5173>，PC Web 打开 <http://localhost:5174/pc/>。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
+PC Web 打开 <http://localhost:5174/pc/>；移动端是微信小程序（用微信开发者工具打开 `apps/miniapp` 的构建产物，见 [apps/miniapp/README.md](apps/miniapp/README.md)）。已弃用的移动 Web 仍在 <http://localhost:5173>（见 [#325](https://github.com/zzstar101/FISH/issues/325)）。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
 本地校园认证邮件（含验证码）写入 `apps/api/.dev/mail-outbox.jsonl`，不会发送真实邮件。
 已有 `.env` 也需补上该变量；生产必须使用 `MAIL_TRANSPORT=resend` 并配置 Resend，
 见 [部署手册 §4](docs/deployment.md#4-代码与环境变量)。
@@ -162,8 +160,8 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 | 命令 | 说明 |
 | --- | --- |
-| `bun run dev` | 并行启动 web / web-pc / api / worker |
-| `bun run dev:web` · `dev:web-pc` · `dev:api` · `dev:worker` | 分别启动对应应用 |
+| `bun run dev` | 并行启动各应用（含已弃用的 `dev:web`，见 [#325](https://github.com/zzstar101/FISH/issues/325)） |
+| `bun run dev:web-pc` · `dev:api` · `dev:worker` | 分别启动对应应用（`dev:web` 已弃用） |
 | `bun run typecheck` | 全仓 TypeScript 类型检查 |
 | `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
 | `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |

@@ -4,7 +4,9 @@
 
 > **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，先读 [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) 与 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md)**：一批页面一条分支一个 PR、同一时间只开一个小程序 PR、**合并前**必须到微信开发者工具逐页演示并经 Owner 认可。该端上流程**只适用于 `apps/miniapp`**，不适用于 `apps/web`（移动端 PWA）与 `apps/web-pc`（PC 站）—— 这两个按本文件的通用纪律走，一个 PR 同样可以包含多个页面。
 
-本项目是 **移动端 Web PWA**（广应科校内二手交易平台 FISH），monorepo + Bun。
+本项目是**微信小程序 + PC Web**（广应科校内二手交易平台 FISH），monorepo + Bun。
+
+> **⚠️ `apps/web`（移动端 PWA，Vite :5173，部署在 `/`）已弃用，待移除（见 [#325](https://github.com/zzstar101/FISH/issues/325)）**：移动端入口是 `apps/miniapp`，PC 端是 `apps/web-pc`。**新功能不要再写进 `apps/web`**；现有构建 / 部署步骤暂时保留，移除进度以 #325 为准。
 
 ## 1. 命令
 
@@ -14,7 +16,7 @@ cp .env.example .env        # 首次；.env 不进版本库
 bun run db:up               # 启动本地依赖（Postgres + MinIO）
 bun run dev:api             # API   :3000
 bun run dev:worker          # Worker（常驻，无端口）
-bun run dev:web             # Web   :5173
+bun run dev:web             # 已弃用（apps/web，见 #325）
 
 bun run typecheck           # TypeScript 7 全仓类型检查
 bun run lint                # Biome 检查
