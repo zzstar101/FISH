@@ -123,12 +123,39 @@ export const ListingNoSchema = z.string().regex(/^[1-9][0-9]{11}$/)
 export const ListingNumberLookupResponseSchema = z.strictObject({ id: PublicListingIdSchema })
 
 /**
- * 读响应只给拼好的 `url`，不给 `objectKey`：后者是存储实现细节，
- * 放进读契约等于把 S3 布局钉进协议，换 CDN 或换布局都成了破坏性变更。
+ * 读响应默认只给拼好的 `url`，不给 `objectKey`：后者是存储实现细节，放进读契约等于把 S3 布局
+ * 钉进协议，换 CDN 或换布局都成了破坏性变更。
+ *
+ * **唯一的例外是卖家本人视角的 `objectKey`**（可选、只在本人视角出现）：被拒商品要能「带着原图
+ * 回出物页改一改重新提交」，而写契约只接受 `objectKey`（`ListingCreateInputSchema.objectKeys`），
+ * 从 `url` 反推键等于让客户端解析存储布局。这不算新增信息泄漏 —— 那把键本来就是卖家自己上传时
+ * 从 `UploadConfirmResponse` 拿到的。
+ *
+ * 取值口径见 `ListingDetailSchema.images` 的说明：**只在卖家本人视角、且这把键能被重新引用时**才给。
  */
 export const ListingImageSchema = z.object({
   url: z.url(),
   sortOrder: z.number().int().nonnegative(),
+  /**
+   * 仅卖家本人视角，且**这把键当前可被重新引用**时才出现。
+   *
+   * 为什么需要它：被拒的商品要「带着原图回出物页改一改重新提交」，而写契约只接受
+   * `objectKey`（`ListingCreateInputSchema.objectKeys` 是全量替换）。从 `url` 反推键等于让
+   * 客户端解析存储布局 —— 而这把键本来就是卖家自己上传时从 `UploadConfirmResponse` 拿到的，
+   * 给回本人不算新增泄漏。
+   *
+   * **缺席即「这张图不能保留」**：被判 BLOCK 的图（人工结算成 BLOCK）不可再引用，
+   * 服务端会拒掉带着它的写请求（`IMAGE_CONTENT_BLOCKED`）。客户端据此要求卖家换图，
+   * 而不是提交一个注定 422 的表单。
+   */
+  objectKey: z.string().min(1).optional(),
+  /**
+   * 仅卖家本人视角：这张图当前的审核结论（`ALLOW → APPROVED` / `REVIEW` / `BLOCK`）。
+   *
+   * 有了它，「图片不过审」才可操作 —— 否则卖家只知道「整条商品被拒」，不知道 9 张图里该换哪张。
+   * 存量键（#286 之前、没有确认台账）没有结论，字段缺席，客户端按「无标记」渲染。
+   */
+  moderationStatus: ListingModerationStatusSchema.optional(),
 })
 
 export type ListingImage = z.infer<typeof ListingImageSchema>
@@ -183,6 +210,24 @@ export const ListingCardSchema = z.object({
    * 与 `listingNo` 同样取 `.optional()`：老客户端 mock 记录可以不带它，缺省即「不是治理下架」。
    */
   governanceDelisted: z.boolean().nullable().optional(),
+  /**
+   * 卖家本人可见的**未通过原因**（一句给卖家看的话），只有 `moderationStatus === 'BLOCKED'`
+   * 且是本人视角时才有值；其余情形恒 `null`。
+   *
+   * 为什么现在就给：Owner 2026-09-28 拍板「不过审要在编辑区上方用红字标注原因」——
+   * 没有这句话，卖家只知道「被拒了」却不知道改哪里，只能瞎试。
+   *
+   * 值的来源与口径：
+   * - 机器判定 → `moderation_reason` 存的是**规则码**（如 `PROHIBITED_CONTENT`），
+   *   客户端映射成一句人话（见 miniapp 的 `listing/moderation-reason.ts`）；
+   * - 人工终审 → 管理员填的原因原文（`ModerationDecisionInputSchema.reason`，1–500 字）。
+   *
+   * 因此它是一个**可能很长**的自由文本：客户端必须截断展示，不能当短标签用。
+   * 只给本人，公开 Feed / 他人视角恒 `null` —— 与 `moderationStatus` 同一取向：
+   * 平台内部审核结论不是买家该看到的信息（`reports/schema.ts` 里对 `moderationReason`
+   * 「只对管理员可见」的注记说的是 admin 端旧口径；本字段是**发给人看的那一句**，不是审计原文）。
+   */
+  moderationReason: z.string().nullable().optional(),
 })
 
 export type ListingCard = z.infer<typeof ListingCardSchema>

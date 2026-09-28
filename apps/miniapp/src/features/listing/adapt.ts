@@ -106,6 +106,7 @@ export function toMockListing(card: ListingCard, now: number = Date.now()): Mock
     // 由「我的发布」判段与动作。公开 Feed / 他人视角拿到的是 null，页面据此按「已通过」渲染。
     moderationStatus: card.moderationStatus,
     governanceDelisted: card.governanceDelisted ?? null,
+    moderationReason: card.moderationReason ?? null,
     createdHoursAgo: hoursAgo(card.createdAt, now),
     createdAt: card.createdAt,
   }

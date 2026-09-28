@@ -48,6 +48,7 @@ import {
   canLoadEditTarget,
   clearedSellScope,
   type EditLoadState,
+  type ExistingPhoto,
   isTaskCurrent,
   ownerChanged,
   type PolishState,
@@ -69,8 +70,9 @@ import './index.scss'
  *    presign → 直传对象存储 → confirm（`features/upload/api.ts`）。**选中即上传**：
  *    每张图带自己的「上传中 / 重传」状态，发布那一刻只剩一次 create 请求。
  * 2. 提交：`POST /listings`；编辑态走 `PATCH /listings/:id`。
- *    编辑态图片只读 —— 详情响应不给 `objectKey`，没有全量替换所需的输入（换图能力见
- *    `#165`，需要契约先向本人暴露 objectKey 或新增增删端点）。
+ *    编辑态图片**可增删换**（Owner 2026-09-28）：详情响应在本人视角给回 `objectKey`
+ *    （`ListingImageSchema.objectKey`），提交时 `objectKeys` 全量替换 —— 原有键与新上传的键
+ *    一起回传。服务端对"本来就在库里的键"豁免确认记录校验，所以原样回传是安全的。
  *    编辑目标由 `features/listing/edit-target.ts` 一次性交接（Tab 页不能带 query 跳转），
  *    在 `useDidShow` 里消费；也兼容 `?id=`（开发者工具演示 / 带参进入）。
  *    **同一条交接也承载「再次上架」**（我的发布 · 已售出）：契约没有「照成交记录另起一条在售」的
@@ -163,8 +165,12 @@ export default function Sell() {
   const [urgent, setUrgent] = useState(false)
   const [negotiable, setNegotiable] = useState(true)
   const [photos, setPhotos] = useState<SelectedPhoto[]>([])
-  /** 编辑态的商品原图（只读）：详情响应只给 url，不给 objectKey，无法全量替换 */
-  const [existingImages, setExistingImages] = useState<string[]>([])
+  /**
+   * 编辑态商品原有的图片（可增删）：服务端在**本人视角**给回 `objectKey`，所以编辑态与新建态
+   * 一样能换图 —— 提交时这些键原样回传（`objectKeys` 是全量替换），不需要重新上传。
+   * `objectKey` 为 null 的那几张（服务端拒了保留，例如被判 BLOCK 的图）要提示卖家换掉。
+   */
+  const [existingPhotos, setExistingPhotos] = useState<ExistingPhoto[]>([])
   const [editState, setEditState] = useState<EditLoadState>(routeId ? 'loading' : 'idle')
   const [polish, setPolish] = useState<PolishState>({ phase: 'idle' })
   /**
@@ -213,7 +219,7 @@ export default function Sell() {
     setUrgent(cleared.urgent)
     setNegotiable(cleared.negotiable)
     setPhotos(cleared.photos)
-    setExistingImages(cleared.existingImages)
+    setExistingPhotos(cleared.existingPhotos)
     setEditState(cleared.editState)
     setPolish(cleared.polish)
     setCooldown(cleared.cooldown)
@@ -266,11 +272,15 @@ export default function Sell() {
     setCondition(detail.condition)
     setUrgent(detail.urgent)
     setNegotiable(detail.negotiable)
-    setExistingImages(
+    setExistingPhotos(
       detail.images
         .slice()
         .sort((a, b) => a.sortOrder - b.sortOrder)
-        .map((image) => image.url),
+        .map((image) => ({
+          objectKey: image.objectKey ?? null,
+          url: image.url,
+          moderationStatus: image.moderationStatus ?? null,
+        })),
     )
   }
 
@@ -304,7 +314,7 @@ export default function Sell() {
     setUrgent(false)
     setNegotiable(true)
     setPhotos([])
-    setExistingImages([])
+    setExistingPhotos([])
     // 润色候选也属于「这一份表单」：不清的话发布成功后回到本页，新表单里还挂着上一件的候选。
     // 飞行中的请求一并作废 —— 它回来时对应的已经不是这份表单了。
     dropPolishRequest()
@@ -550,20 +560,28 @@ export default function Sell() {
 
   const submit = () => {
     if (submitting) return
-    // 选中即上传：还有没传完 / 传失败的图就先别提交，否则 create 会缺图
-    if (!editing) {
-      if (photos.some((photo) => photo.status === 'failed')) {
-        toast('有图片上传失败，点缩略图上的「重传」')
-        return
-      }
-      if (photos.some((photo) => photo.status === 'uploading')) {
-        toast('图片还在上传，稍等一下')
-        return
-      }
+    // 选中即上传：还有没传完 / 传失败的图就先别提交，否则 create / 编辑都会缺图
+    if (photos.some((photo) => photo.status === 'failed')) {
+      toast('有图片上传失败，点缩略图上的「重传」')
+      return
+    }
+    if (photos.some((photo) => photo.status === 'uploading')) {
+      toast('图片还在上传，稍等一下')
+      return
+    }
+    // 服务端标了「保留不了」的原有图（被判 BLOCK）：带着它提交必然 422，先让卖家换掉
+    if (hasStaleImage) {
+      toast('有图片不能再使用，请删掉后重新选一张')
+      return
     }
     const priceCents = parsePriceToCents(price, free)
-    const imageCount = editing ? existingImages.length : photos.length
-    const localError = validateSellForm({ title, description, priceCents, category, imageCount })
+    const localError = validateSellForm({
+      title,
+      description,
+      priceCents,
+      category,
+      imageCount: totalImages,
+    })
     if (localError) {
       toast(localError)
       return
@@ -589,17 +607,25 @@ export default function Sell() {
           negotiable: free ? false : negotiable,
           free,
         }
+        /*
+         * 图片组**总是显式提交**（`objectKeys` 是全量替换）：原有键在前、本次新上传的在后，
+         * 与屏幕上看到的顺序一致（第一张即封面）。
+         *
+         * 编辑态不再「省略 = 保持原图」：那条路径没有表达力（删一张、换一张都做不到），
+         * 而卖家被拒后最需要的恰恰是换图。服务端对"本来就在库里的键"豁免确认记录校验
+         * （`storedKeys`，见 `assertUsableObjectKeys`），所以原样回传是安全的。
+         *
+         * 上面已挡下「有图没传完 / 传失败 / 原有图不可保留」，这里的 key 必然齐全。
+         */
+        const objectKeys = [
+          ...existingPhotos.map((photo) => photo.objectKey),
+          ...photos.map((photo) => photo.objectKey),
+        ].filter((key): key is string => key !== null)
+
         const detail =
           editing && editId !== null
-            ? // 编辑：省略 objectKeys = 保持原图
-              await updateListing(editId, input)
-            : await createListing({
-                ...input,
-                // 上面已挡下「还有图没传完/传失败」，这里的 key 必然齐全
-                objectKeys: photos
-                  .map((photo) => photo.objectKey)
-                  .filter((key): key is string => key !== null),
-              })
+            ? await updateListing(editId, { ...input, objectKeys })
+            : await createListing({ ...input, objectKeys })
 
         // 换号：A 的提交结果不能把 B 送去 A 的详情页、也不能给 B 挂上「审核中」结果视图
         if (!taskAlive(task)) return
@@ -804,7 +830,11 @@ export default function Sell() {
   const imagesError = fieldErrors.images
   const categoryError = fieldErrors.category
   /** 有图没传上去：提交会被挡下，所以这里要给出可操作的提示 */
-  const hasUploadFailure = !editing && photos.some((photo) => photo.status === 'failed')
+  const hasUploadFailure = photos.some((photo) => photo.status === 'failed')
+  /** 当前表单里的图片总数（原有 + 本次新选）：上限按它算，封面是第一张 */
+  const totalImages = existingPhotos.length + photos.length
+  /** 编辑态里服务端不给键的图（保留不了）：提交前必须让卖家换掉，否则必然 422 */
+  const hasStaleImage = existingPhotos.some((photo) => photo.objectKey === null)
 
   /**
    * 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**。
@@ -914,78 +944,89 @@ export default function Sell() {
             <View className="sell__frow">
               <Text className="sell__label">商品图片</Text>
               <Text className="sell__fhint num">
-                {editing
-                  ? `${existingImages.length} 张 · 编辑时不可更换`
-                  : `${photos.length} / ${MAX_LISTING_IMAGES} · 第一张为封面`}
+                {`${totalImages} / ${MAX_LISTING_IMAGES} · 第一张为封面`}
               </Text>
             </View>
-            {editing ? (
-              <>
-                <View className="sell__photos">
-                  {existingImages.map((url, index) => (
-                    <View key={url} className="sell__photo">
-                      <Image className="sell__photo-img" src={url} mode="aspectFill" />
-                      {index === 0 ? <Text className="sell__photo-cover">封面</Text> : null}
-                    </View>
-                  ))}
-                </View>
-                <Text className="sell__pnote num">图片暂不支持修改；需要换图请下架后重新发布</Text>
-              </>
-            ) : (
-              <>
-                <View className="sell__photos">
-                  {photos.map((photo, index) => (
-                    <View key={photo.id} className="sell__photo">
-                      <Image className="sell__photo-img" src={photo.url} mode="aspectFill" />
-                      {index === 0 ? <Text className="sell__photo-cover">封面</Text> : null}
-                      {photo.status === 'done' ? null : (
-                        <Text
-                          className={`sell__photo-flag${photo.status === 'failed' ? ' is-err' : ''}`}
-                          onClick={photo.status === 'failed' ? () => retryUpload(photo) : undefined}
-                        >
-                          {photo.status === 'failed' ? '重传' : '上传中'}
-                        </Text>
-                      )}
-                      <View
-                        className="sell__photo-del"
-                        onClick={() =>
-                          setPhotos((prev) => prev.filter((item) => item.id !== photo.id))
-                        }
-                      >
-                        <Image
-                          className="sell__photo-del-img"
-                          src={ICONS.delete}
-                          mode="aspectFit"
-                        />
-                      </View>
-                    </View>
-                  ))}
-                  {photos.length < MAX_LISTING_IMAGES ? (
-                    <View className="sell__photo sell__photo--add" onClick={pickImage}>
-                      <Image
-                        className="sell__photo-add-img"
-                        src={ICONS.plusLine}
-                        mode="aspectFit"
-                      />
-                    </View>
+            {/*
+              编辑态与新建态**同一套图片区**（Owner 2026-09-28）：详情响应在本人视角给回
+              `objectKey`，所以原有的图可以直接沿用、也可以删掉换新的 —— 提交时 `objectKeys`
+              是全量替换，原有键与本次新上传的键一起回传。
+
+              原有图放在前面（它们就是当前封面顺序），新选的接在后面；封面永远是第一张。
+            */}
+            <View className="sell__photos">
+              {existingPhotos.map((photo, index) => (
+                <View key={photo.url} className="sell__photo">
+                  <Image className="sell__photo-img" src={photo.url} mode="aspectFill" />
+                  {index === 0 ? <Text className="sell__photo-cover">封面</Text> : null}
+                  {/*
+                    服务端没给键 = 这张图保留不了（被判 BLOCK / 台账异常）：标出来并要求换掉。
+                    不标的话卖家会原样提交，然后收到一条看不懂的 422。
+                  */}
+                  {photo.objectKey === null ? (
+                    <Text className="sell__photo-flag is-err">需重选</Text>
                   ) : null}
+                  <View
+                    className="sell__photo-del"
+                    onClick={() =>
+                      setExistingPhotos((prev) => prev.filter((item) => item.url !== photo.url))
+                    }
+                  >
+                    <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
+                  </View>
                 </View>
-                {imagesError ? (
-                  <View className="sell__err">
-                    <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
-                    <Text className="sell__err-tx">{imagesError}</Text>
-                  </View>
-                ) : hasUploadFailure ? (
-                  <View className="sell__err">
-                    <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
-                    <Text className="sell__err-tx">
-                      有图片上传失败，点缩略图上的「重传」再发布。
+              ))}
+              {photos.map((photo, index) => (
+                <View key={photo.id} className="sell__photo">
+                  <Image className="sell__photo-img" src={photo.url} mode="aspectFill" />
+                  {existingPhotos.length === 0 && index === 0 ? (
+                    <Text className="sell__photo-cover">封面</Text>
+                  ) : null}
+                  {photo.status === 'done' ? null : (
+                    <Text
+                      className={`sell__photo-flag${photo.status === 'failed' ? ' is-err' : ''}`}
+                      onClick={photo.status === 'failed' ? () => retryUpload(photo) : undefined}
+                    >
+                      {photo.status === 'failed' ? '重传' : '上传中'}
                     </Text>
+                  )}
+                  <View
+                    className="sell__photo-del"
+                    onClick={() => setPhotos((prev) => prev.filter((item) => item.id !== photo.id))}
+                  >
+                    <Image className="sell__photo-del-img" src={ICONS.delete} mode="aspectFit" />
                   </View>
-                ) : (
-                  <Text className="sell__pnote num">支持 JPG / PNG / WebP，单张不超过 5MB</Text>
-                )}
-              </>
+                </View>
+              ))}
+              {totalImages < MAX_LISTING_IMAGES ? (
+                <View className="sell__photo sell__photo--add" onClick={pickImage}>
+                  <Image className="sell__photo-add-img" src={ICONS.plusLine} mode="aspectFit" />
+                </View>
+              ) : null}
+            </View>
+            {imagesError ? (
+              <View className="sell__err">
+                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Text className="sell__err-tx">{imagesError}</Text>
+              </View>
+            ) : hasUploadFailure ? (
+              <View className="sell__err">
+                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Text className="sell__err-tx">有图片上传失败，点缩略图上的「重传」再提交。</Text>
+              </View>
+            ) : hasStaleImage ? (
+              <View className="sell__err">
+                <Image className="sell__err-ic" src={ICONS.warnInk} mode="aspectFit" />
+                <Text className="sell__err-tx">
+                  标着「需重选」的图片不能再使用，请删掉后重新选一张。
+                </Text>
+              </View>
+            ) : (
+              <Text className="sell__pnote num">
+                {editing
+                  ? '支持增删与换图，第一张为封面 · JPG / PNG / WebP，单张不超过 5MB'
+                  : '支持 JPG / PNG / WebP，单张不超过 5MB'}
+              </Text>
             )}
           </View>
 

@@ -1,5 +1,5 @@
 import type { AiPolishCandidate, AiPolishProvider } from '@fish/contracts/ai/schema'
-import type { ListingCategory } from '@fish/contracts/listings/schema'
+import type { ListingCategory, ListingModerationStatus } from '@fish/contracts/listings/schema'
 import type { PickedPhoto } from '@/features/upload/api'
 import type { SellFieldErrors } from './form'
 import type { PolishCooldown } from './polish'
@@ -29,6 +29,32 @@ export type SelectedPhoto = PickedPhoto & {
   status: 'uploading' | 'done' | 'failed'
   objectKey: string | null
   error: string | null
+}
+
+/**
+ * 编辑态带回来的**已有图片**（服务端固化键 + 它的审核结论）。
+ *
+ * 与新建态的 `SelectedPhoto` 分开，因为两者语义不同：
+ * - `SelectedPhoto` 是"这一轮选进来的"，带本地上传状态与 objectKey 的写入所有权；
+ * - `ExistingPhoto` 是"这条商品原本就有的"，它**已经**在服务端固化了 —— 编辑提交时把这些键
+ *   原样回传（`objectKeys` 是全量替换），**不需要也不应该重新上传**。
+ *
+ * `objectKey` 可能缺席（服务端只对**可重新引用**的图给键：被判 BLOCK 的不给，存量键给键但没结论）。
+ * 缺席 = 这张图保留不了，客户端要提示卖家换掉它（带着它提交会被服务端 422 拒掉）。
+ */
+export type ExistingPhoto = {
+  /** 服务端固化键；`null` = 服务端没给（BLOCK 的图 / 台账异常），必须换图 */
+  objectKey: string | null
+  /** 展示用 URL（`objectKey` 缺席时也能显示，让卖家知道是哪一张） */
+  url: string
+  /**
+   * 服务端给出的图片审核结论（`ListingModerationStatus`）；缺席 = 存量键、结论未知。
+   *
+   * 实际取不到 `BLOCKED`：被判阻断的图服务端连 `objectKey` 都不给（见契约 `ListingImageSchema`）。
+   * 这里不把类型收窄成 `'APPROVED' | 'REVIEW'` —— 那是服务端的当前策略，不是契约的承诺，
+   * 收窄了会在策略放宽时变成一处无声的谎言。
+   */
+  moderationStatus: ListingModerationStatus | null
 }
 
 /** 编辑态加载结果。`idle` 含「新建」与「编辑内容已就绪」两种正常态。 */
@@ -74,7 +100,7 @@ export type ClearedSellScope = {
   urgent: boolean
   negotiable: boolean
   photos: SelectedPhoto[]
-  existingImages: string[]
+  existingPhotos: ExistingPhoto[]
   editState: EditLoadState
   polish: PolishState
   cooldown: PolishCooldown | null
@@ -96,7 +122,7 @@ export function clearedSellScope(): ClearedSellScope {
     urgent: false,
     negotiable: true,
     photos: [],
-    existingImages: [],
+    existingPhotos: [],
     editState: 'idle',
     polish: { phase: 'idle' },
     cooldown: null,

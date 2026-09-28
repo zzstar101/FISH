@@ -118,6 +118,24 @@ describe('mylist 下架 / 删除链的账号代次收口', () => {
     expect(scrim).toContain("setSubmit('idle')")
   })
 
+  test('审核段的商品不给详情入口（未过审的商品没有详情页）', async () => {
+    const code = await page()
+    // 判据在 Row.canOpenDetail（数据层），点击处理只读它 —— 别在这里再写一遍 segment 条件
+    expect(code).toContain("canOpenDetail: key !== 'review'")
+    const open = sliceBetween(code, 'const openListing = (row: Row) => {', 'const openWatchers =')
+    expect(open).toContain('if (!row.canOpenDetail) return')
+  })
+
+  test('不过审的原因渲染在动作区上方（红字说明卖家该改什么）', async () => {
+    const code = await page()
+    const reject = code.indexOf('className="ml__reject"')
+    expect(reject).toBeGreaterThan(-1)
+    // 原因块在动作区之前：同一张卡里「为什么被拒」要先于「能做什么」
+    expect(reject).toBeLessThan(code.indexOf('className={`ml__acts'))
+    // 文案来自可测的纯函数，不在 JSX 里拼前缀
+    expect(code).toContain("rejection: moderation === 'BLOCKED' ? rejectionNote(")
+  })
+
   test('三个动作的按钮判据来自 list.ts 的纯函数，不在 JSX 里各写一份状态条件', async () => {
     const code = await page()
     const acts = sliceBetween(code, 'className={`ml__acts', 'className="ml__fab"')

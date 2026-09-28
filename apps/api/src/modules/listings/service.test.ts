@@ -385,6 +385,42 @@ describe('listFeed', () => {
     expect(anonymous.items[0]?.governanceDelisted).toBeNull()
   })
 
+  /*
+   * 未通过原因（Owner 2026-09-28：「不过审要在编辑区上方用红字标注原因」）。
+   * 三个口径都要锁：只给本人、只在真的被拒时给、`REVIEW` 不给。
+   */
+  test('carries the rejection reason to the seller own cards, and only when blocked', async () => {
+    const blockedRow = listingRow({
+      status: 'OFFLINE',
+      moderationStatus: 'BLOCKED',
+      moderationReason: 'PROHIBITED_CONTENT',
+    })
+    const store = fakeStore({ listFeed: async () => [feedEntry(blockedRow, null)] })
+    const service = createListingService({ storage: fakeStorage(), store })
+
+    const own = await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID }))
+    expect(own.items[0]?.moderationReason).toBe('PROHIBITED_CONTENT')
+
+    // 公开 Feed 连审核态都不给，原因同理
+    const anonymous = await service.listFeed(null, feedQuery())
+    expect(anonymous.items[0]?.moderationReason).toBeNull()
+  })
+
+  test('does not leak a reason for a listing that is only under review', async () => {
+    // REVIEW 是"还没结论"：把机器规则码当原因摆出来会让卖家以为已经判了、去改一个没问题的字段
+    const reviewRow = listingRow({
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+      moderationReason: 'CONTENT_REQUIRES_REVIEW',
+    })
+    const store = fakeStore({ listFeed: async () => [feedEntry(reviewRow, null)] })
+    const service = createListingService({ storage: fakeStorage(), store })
+
+    const own = await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID }))
+    expect(own.items[0]?.moderationStatus).toBe('REVIEW')
+    expect(own.items[0]?.moderationReason).toBeNull()
+  })
+
   // 反向保证：公开 Feed（没有 sellerId）仍必须显式限定 ACTIVE，不能顺手把过滤打开。
   test('public feed still pins the status filter to ACTIVE', async () => {
     const seen: FeedCriteria[] = []
@@ -572,6 +608,60 @@ describe('getDetail', () => {
     expect('verifiedAt' in detail.seller).toBe(false)
     expect('campusEmail' in detail.seller).toBe(false)
     expect('studentNo' in detail.seller).toBe(false)
+  })
+
+  /*
+   * 卖家本人视角的 `objectKey` / 图片结论（Owner 2026-09-28：被拒商品要能带着原图回出物页改）。
+   * 三条口径：非本人不给、BLOCK 的图不给（不可再引用）、台账缺失不给（结论未知）。
+   */
+  test('exposes the objectKey and image decision to the owner only', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      mediaObjects: fakeImages([
+        { finalKey: CONFIRMED_KEY, decision: 'ALLOW' },
+        { finalKey: REVIEW_KEY, decision: 'REVIEW' },
+      ]),
+      store: fakeStore({
+        findDetail: async () => ({
+          listing: listingRow(),
+          seller: sellerRow(),
+          images: [imageRow(0, CONFIRMED_KEY), imageRow(1, REVIEW_KEY)],
+        }),
+      }),
+    })
+
+    const owner = await service.getDetail(SELLER_ID, LISTING_ID)
+    expect(owner.images.map((image) => image.objectKey)).toEqual([CONFIRMED_KEY, REVIEW_KEY])
+    expect(owner.images.map((image) => image.moderationStatus)).toEqual(['APPROVED', 'REVIEW'])
+
+    // 非本人（匿名）：同一件商品只给 url —— 存储布局不进公开读协议
+    const anon = await service.getDetail(null, LISTING_ID)
+    expect(anon.images.map((image) => image.objectKey)).toEqual([undefined, undefined])
+    expect(anon.images.map((image) => image.moderationStatus)).toEqual([undefined, undefined])
+  })
+
+  test('withholds the objectKey of an image that was settled to BLOCK', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      // 人工结算成 BLOCK 的图仍躺在商品图片组里，但不可再引用：带着它提交会被
+      // `IMAGE_CONTENT_BLOCKED` 拒掉，所以不能让客户端以为可以原样保留
+      mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW', settled: 'BLOCK' }]),
+      store: fakeStore({
+        findDetail: async () => ({
+          listing: listingRow({ status: 'OFFLINE', moderationStatus: 'BLOCKED' }),
+          seller: sellerRow(),
+          images: [imageRow(0, CONFIRMED_KEY), imageRow(1, `listings/${SELLER_ID}/old.jpg`)],
+        }),
+      }),
+    })
+
+    const owner = await service.getDetail(SELLER_ID, LISTING_ID)
+    expect(owner.images[0]?.objectKey).toBeUndefined()
+    expect(owner.images[0]?.moderationStatus).toBeUndefined()
+    // 存量键（没有台账行）结论未知，**但可以原样保留**：写路径对 storedKeys 里的老键豁免
+    // 「审没审过」那一层，所以键照给、只是不给结论
+    expect(owner.images[1]?.objectKey).toBe(`listings/${SELLER_ID}/old.jpg`)
+    expect(owner.images[1]?.moderationStatus).toBeUndefined()
   })
 
   // #47：封面只认 0 号图，不能退化成「最小 sort_order」。store 按 `ORDER BY sort_order ASC`

@@ -32,10 +32,10 @@ export type ListingCardSource = {
  *
  * `storage` 只取 `publicUrl`：「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。
  *
- * `moderationStatus` 与 `governanceDelisted` 都由调用方按**视角**决定：只有卖家本人视角才传
- * 真实值，公开 Feed / 匹配 / 他人主页一律省略（→ `null`）。审核态与治理下架都不是买家该看到的信息
- * （#74 / #73）。两者的区别见契约 `ListingCardSchema.governanceDelisted`：治理下架在库里
- * 与「内容被拒」同形，只凭前者分不出，而两者的可做动作完全不同。
+ * `moderationStatus` / `governanceDelisted` / `moderationReason` 都由调用方按**视角**决定：
+ * 只有卖家本人视角才传真实值，公开 Feed / 匹配 / 他人主页一律省略（→ `null`）。
+ * 审核态、治理下架与未通过原因都不是买家该看到的信息（#74 / #73 / Owner 2026-09-28 的
+ * 「不过审要点明原因」）。三者的区别见契约 `ListingCardSchema` 上各自的注释。
  */
 export function toListingCard(
   listing: ListingCardSource,
@@ -43,6 +43,7 @@ export function toListingCard(
   storage: Pick<MediaStorage, 'publicUrl'>,
   moderationStatus: ListingModerationStatus | null = null,
   governanceDelisted: boolean | null = null,
+  moderationReason: string | null = null,
 ): ListingCard | null {
   const card = {
     id: encodePublicId(PUBLIC_ID_PREFIX.listing, listing.id),
@@ -59,6 +60,7 @@ export function toListingCard(
     createdAt: listing.createdAt.toISOString(),
     moderationStatus,
     governanceDelisted,
+    moderationReason,
   }
 
   const parsed = ListingCardSchema.safeParse(card)

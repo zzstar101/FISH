@@ -164,7 +164,7 @@ export function createListingService(deps: {
   /**
    * 卡片映射抽到 `card.ts`：#8 的 `/matches` 也要给同一张卡片，两处各写一份必然漂移。
    *
-   * 后两个参数是**卖家本人视角的两个内部状态**（审核态 / 治理下架）：只有查自己时才传真值，
+   * 后三个参数是**卖家本人视角的内部状态**（审核态 / 治理下架 / 未通过原因）：只有查自己时才传真值，
    * 公开 Feed 与查他人一律省掉（→ `null`）。见 `card.ts` 的说明。
    */
   function toCard(
@@ -172,11 +172,77 @@ export function createListingService(deps: {
     coverObjectKey: string | null,
     moderationStatus: ListingModerationStatus | null = null,
     governanceDelisted: boolean | null = null,
+    moderationReason: string | null = null,
   ): ListingCard | null {
-    return toListingCard(listing, coverObjectKey, storage, moderationStatus, governanceDelisted)
+    return toListingCard(
+      listing,
+      coverObjectKey,
+      storage,
+      moderationStatus,
+      governanceDelisted,
+      moderationReason,
+    )
   }
 
-  function toDetail(input: {
+  /**
+   * 详情里的图片组。**只有卖家本人**才带 `objectKey` 与 `moderationStatus`（见契约 `ListingImageSchema`）：
+   * - `objectKey` 让「被拒商品带着原图回出物页改一改重提交」成为可能（写契约只接受键，编辑态因此
+   *   也能像新建态一样增删图）；
+   * - `moderationStatus` 让卖家知道 9 张图里该换哪一张。
+   *
+   * 唯一的例外是**被判 BLOCK 的图**（含人工结算成 BLOCK 的）：它不可再引用，服务端会拒掉带着它的
+   * 写请求，所以两个字段都不给 —— 客户端据此要求换图，而不是提交一个注定 422 的表单。
+   * 存量键（#286 之前的裸 UUID / seed 键）没有台账行，**结论未知但可以保留**：键照给，只是没有标记。
+   *
+   * 逐张查台账（≤9 次点查）：这些键本来就是本商品图片组里的，`findByFinalKey` 是唯一索引点查。
+   */
+  async function toDetailImages(
+    images: readonly ListingImageRow[],
+    /** 非 null = 本人视角（调用方已判定）；值是卖家自己的 userId，用于核对台账行归属 */
+    ownerId: string | null,
+  ): Promise<ListingDetail['images']> {
+    if (ownerId === null) {
+      return images.map((image) => ({
+        url: storage.publicUrl(image.objectKey),
+        sortOrder: image.sortOrder,
+      }))
+    }
+    return Promise.all(
+      images.map(async (image) => {
+        const base = { url: storage.publicUrl(image.objectKey), sortOrder: image.sortOrder }
+        /*
+         * 服务端固化过的两类键（公开 `listings/…` 与私有 `listing-review-media/…`）才有台账行；
+         * #286 之前的存量键没有记录 —— 但它们**仍然可以原样回传**：写路径的引用校验对
+         * `storedKeys` 里的老键豁免"审没审过"这一层（见 `assertUsableObjectKeys`）。
+         * 所以结论未知不等于不可保留，这里照样给 `objectKey`，只是不给结论。
+         */
+        const canonical =
+          isPublicListingKey(image.objectKey) || isListingReviewMediaKey(image.objectKey)
+        const row = canonical ? await mediaObjects.findByFinalKey(image.objectKey) : null
+        if (row && row.userId !== ownerId) {
+          // 台账行不属于本人：这条商品引用了别人的图（脏数据）。不给键，让卖家重选。
+          return base
+        }
+        // 被判 BLOCK 的图不可再引用：不给 objectKey —— 客户端据此要求换图，
+        // 而不是提交一个必然被 `IMAGE_CONTENT_BLOCKED` 拒掉的表单。
+        if (row && effectiveModerationDecision(row) === 'BLOCK') return base
+        return {
+          ...base,
+          objectKey: image.objectKey,
+          ...(row
+            ? {
+                moderationStatus:
+                  effectiveModerationDecision(row) === 'ALLOW'
+                    ? ('APPROVED' as const)
+                    : ('REVIEW' as const),
+              }
+            : {}),
+        }
+      }),
+    )
+  }
+
+  async function toDetail(input: {
     listing: ListingRow
     seller: {
       id: string
@@ -186,7 +252,7 @@ export function createListingService(deps: {
     }
     images: ListingImageRow[]
     viewerId: string | null
-  }): ListingDetail {
+  }): Promise<ListingDetail> {
     // 封面只认 0 号图（#6 契约 §1「下标即 sortOrder（0 = 封面）」），与 feed / profile /
     // matching / conversations / transactions 五处读模型同口径：缺 0 号图 → null。
     // 不能退化成「最小 sort_order」——store 按 `ORDER BY sort_order ASC` 返回，
@@ -209,10 +275,7 @@ export function createListingService(deps: {
       coverUrl: cover ? storage.publicUrl(cover.objectKey) : null,
       createdAt: input.listing.createdAt.toISOString(),
       description: input.listing.description,
-      images: input.images.map((image) => ({
-        url: storage.publicUrl(image.objectKey),
-        sortOrder: image.sortOrder,
-      })),
+      images: await toDetailImages(input.images, isOwner ? input.listing.sellerId : null),
       seller: toSeller(input.seller),
       isOwner,
       // 审核态只给卖家本人：买家看到的商品本来就只可能是 APPROVED，
@@ -220,6 +283,16 @@ export function createListingService(deps: {
       moderationStatus: isOwner ? input.listing.moderationStatus : null,
       // 治理下架标记同理只给本人（见契约 `governanceDelisted`）。
       governanceDelisted: isOwner ? input.listing.governanceDelistedAt !== null : null,
+      /*
+       * 未通过原因只给本人，且只在**真的被拒**时给（见契约 `moderationReason`）：
+       * `REVIEW` 是"还没结论"，把机器规则码当原因摆出来会让卖家以为已经判了。
+       * 值是原始文本 —— 机器判定是规则码（`PROHIBITED_CONTENT`），人工终审是管理员填的原话，
+       * 客户端负责把前者映射成人话并截断（见 miniapp 的 `listing/moderation-reason.ts`）。
+       */
+      moderationReason:
+        isOwner && input.listing.moderationStatus === 'BLOCKED'
+          ? input.listing.moderationReason
+          : null,
       updatedAt: input.listing.updatedAt.toISOString(),
     }
 
@@ -243,6 +316,7 @@ export function createListingService(deps: {
     )
       throw notFound()
 
+    // `toDetail` 现在是异步的（本人视角要逐张查图片台账给 `objectKey` / 图片结论）
     return toDetail({
       listing: found.listing,
       seller: found.seller,
@@ -420,12 +494,16 @@ export function createListingService(deps: {
 
       const items: ListingCard[] = []
       for (const entry of page) {
-        // 只有「查自己」的列表带审核态与治理标记；公开 Feed 与查他人都是 null（见 `toListingCard`）。
+        // 只有「查自己」的列表带审核态 / 治理标记 / 未通过原因；公开 Feed 与查他人都是 null
+        // （见 `toListingCard`）。未通过原因同样只在真的被拒时给（`REVIEW` 是"还没结论"）。
         const card = toCard(
           entry.listing,
           entry.coverObjectKey,
           ownSellerQuery ? entry.listing.moderationStatus : null,
           ownSellerQuery ? entry.listing.governanceDelistedAt !== null : null,
+          ownSellerQuery && entry.listing.moderationStatus === 'BLOCKED'
+            ? entry.listing.moderationReason
+            : null,
         )
         if (card) items.push(card)
       }

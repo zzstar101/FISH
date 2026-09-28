@@ -345,6 +345,40 @@
   font-weight: 600;
 }
 
+/**
+ * 未通过原因（Owner 2026-09-28 拍板：红字标在编辑区上方）。
+ *
+ * 独立一行、**不参与 `.ml__acts` 的横排**：那句话可能是管理员写的整句（上限 500 字），
+ * 与「编辑 / 删除」挤在一行会把按钮推出屏幕。所以它与动作区分成两块，各自有上边框，
+ * 视觉上「原因 → 能做什么」是两段而不是一行。
+ *
+ * 底色用 `--warn-weak` 而不是纯红底：这是一条**说明**不是错误弹窗，红字 + 浅底足够醒目，
+ * 块面饱和会盖过卡片本身的层级。
+ */
+.ml__reject {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 2px solid var(--accent-faint);
+  background: var(--warn-weak);
+}
+
+.ml__reject-ic {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+}
+
+.ml__reject-tx {
+  flex: 1;
+  min-width: 0;
+  font-size: 22px;
+  line-height: 1.45;
+  color: var(--danger-ink);
+}
+
 /* ------------------------------------------------------------- 行内动作区 */
 
 /*

@@ -116,6 +116,8 @@ export type MockListing = {
    */
   moderationStatus?: ListingModerationStatus | null
   governanceDelisted?: boolean | null
+  /** 未通过原因（原始文本：规则码或管理员原话），只在本人视角的 BLOCKED 商品上非空 */
+  moderationReason?: string | null
   /** 距今天数，用于「2 小时前发布」这类相对时间 */
   createdHoursAgo: number
   createdAt: string

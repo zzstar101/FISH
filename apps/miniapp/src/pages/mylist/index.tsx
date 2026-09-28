@@ -22,6 +22,7 @@ import {
   offlineListing,
 } from '@/features/listing/api'
 import { requestSellEdit, requestSellPrefill } from '@/features/listing/edit-target'
+import { rejectionNote } from '@/features/listing/moderation-reason'
 import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -181,6 +182,21 @@ type Row = {
   canEdit: boolean
   canOffline: boolean
   canDelete: boolean
+  /**
+   * 不过审的原因（已翻成人话并截断），只有「不过审」这一种子状态非 null。
+   *
+   * Owner 2026-09-28 拍板：红字标在**编辑区上方**，卖家才知道该改哪里。
+   * 判据与文案在 `features/listing/moderation-reason.ts`（可测）。
+   */
+  rejection: string | null
+  /**
+   * 能不能点进商品详情页。
+   *
+   * **审核段的商品没有详情页**（Owner 2026-09-28 拍板）：未过审的商品在公开读模型里就是不可见的，
+   * 卖家点进去只会看到「商品不存在或已下架」的空态 —— 既然这一页已经给出了状态与原因，
+   * 就不该再给一个通向空态的入口。审核中与不过审都不给。
+   */
+  canOpenDetail: boolean
   /** 这一行对应的会话；**只有「待确认」段带值**（已售出拿不到成交那条，见 `rows` 处注释） */
   conversationId: string
   /** 待确认段在等的那条提案；已同意（`RESERVED`）与其它段为 null */
@@ -489,6 +505,13 @@ export default function MyList() {
       canOffline: canOffline(key, governanceDelisted),
       canDelete: canDelete(key, moderation, governanceDelisted),
       /*
+       * 未通过原因：只在「不过审」这一种子状态给。`REVIEW` 是"还没结论"，摆一条原因会让卖家
+       * 以为已经判了、跑去改一个没问题的字段；平台下架的原因归平台说（卡片上是锁定说明）。
+       */
+      rejection: moderation === 'BLOCKED' ? rejectionNote(card.moderationReason) : null,
+      // 审核段（审核中 / 不过审）没有详情页可看（见 Row.canOpenDetail）
+      canOpenDetail: key !== 'review',
+      /*
        * 会话 id **只给「待确认」段**（见下）：
        *
        * - 有提案 → 提案所在的那条会话（精确，就是卖家要点头的那条）；
@@ -538,7 +561,15 @@ export default function MyList() {
     backToTop()
   }
 
+  /**
+   * 点缩略图 / 标题进商品详情。
+   *
+   * **审核段不给这个入口**（Owner 2026-09-28 拍板：未过审的商品没有详情页）：
+   * 它在公开读模型里不可见，点进去只会看到「商品不存在或已下架」的空态。
+   * 这里显式挡住而不是让用户撞空态 —— 卡片上的状态与原因已经是这一页能给的全部信息。
+   */
   const openListing = (row: Row) => {
+    if (!row.canOpenDetail) return
     void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${row.listing.id}` })
   }
 
@@ -1037,6 +1068,19 @@ export default function MyList() {
                           ) : null}
                         </View>
                       </View>
+
+                      {/*
+                        「不过审」的原因（Owner 2026-09-28 拍板：红字标在**编辑区上方**）。
+                        它是独立一行、不塞进 `.ml__acts` 的横排里 —— 那句话可能是管理员写的
+                        一整句（上限 500 字），跟「编辑 / 删除」挤在一行会把按钮推出屏幕。
+                        没有原因（机器没给码 / 老数据）时整块不渲染，不留空行。
+                      */}
+                      {item.rejection ? (
+                        <View className="ml__reject">
+                          <Image className="ml__reject-ic" src={ICONS.warnInk} mode="aspectFit" />
+                          <Text className="ml__reject-tx">{item.rejection}</Text>
+                        </View>
+                      ) : null}
 
                       <View
                         className={`ml__acts${END_ALIGNED.includes(item.segment) ? ' ml__acts--end' : ''}`}
