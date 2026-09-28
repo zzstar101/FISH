@@ -197,6 +197,13 @@
       "when": 1790574189698,
       "tag": "20260928134309_crazy_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790581409316,
+      "tag": "20260928154329_sloppy_proteus",
+      "breakpoints": true
     }
   ]
 }
