@@ -14,6 +14,11 @@ services:
     # 「注册原子性 > 会话写入失败时回滚已创建的用户」在整套并发时撞 53300（同文件单跑
     # 16 pass / 0 fail）。`--max-concurrency=4` 压不下来（峰值同为 91）：池在文件 import
     # 阶段就建好，限测试并发不改变同时存活的池数。
+    # 补充（#298）：这里的 53300 与「注册偶发 400」是**两类不同的失败**，不能互相归因——
+    # 53300 是 PG 侧报错，既不是 AuthError 也不是 VerificationError，会沿 auth/service.ts:63-69 →
+    # auth/router.ts:41-47 重抛 → apps/api/src/app.ts:454-458 落成 500 INTERNAL_ERROR；
+    # 而注册链路在应用层没有任何 400 出口（#298 逐出口 grep 核实），能吐 400 的只有 Bun.serve 的
+    # HTTP 解析层（空响应体、无 content-type、无 error.code），其具体产出点**尚未定位**。
     command: postgres -c max_connections=200
     environment:
       POSTGRES_USER: fish

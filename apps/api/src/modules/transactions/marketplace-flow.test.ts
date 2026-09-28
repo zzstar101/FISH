@@ -147,12 +147,28 @@ async function register(studentNo: string, nickname: string): Promise<string> {
     method: 'POST',
     body: JSON.stringify({ studentNo, password: PASSWORD, nickname }),
   })
-  // #146：失败时先打出响应体再断言状态码——此前只报「期望 200 实际 400」，
+  // #146/#298：失败时先打出响应体再断言状态码——此前只报「期望 200 实际 400」，
   // 拿不到 error.code 无法定位（register 的 4xx 出口按契约只有 422 / 409，
   // 400 属于异常路径，出现时响应体是唯一线索）。
+  // #298 排查：本仓注册链路在**应用层没有任何 400 出口**（逐个出口 grep 核实，见 PR），
+  // 但那次 400 的产出点**未定位**——Bun.serve 是二进制，给不出 file:line。
+  // 已知 Bun 1.4.0 的 HTTP 解析层有两种失败形态：① `HTTP/1.1 400 Bad Request\r\nConnection: close`
+  // （空响应体、无 content-type、无 error.code）；② 直接关连接，fetch 直接 reject（这个分支拿不到 Response）。
+  // 应用层错误则一定是带 error.code 的 JSON 信封。这里把响应头与「层」一起打出来，
+  // 下次复现时可一步定级，不用再靠猜。
   if (response.status !== 200) {
     const body = await response.text().catch(() => '<unreadable>')
-    throw new Error(`注册失败：${studentNo} → HTTP ${response.status} ${body}`)
+    const headerList: string[] = []
+    response.headers.forEach((value, key) => {
+      headerList.push(`${key}: ${value}`)
+    })
+    const layer =
+      body.trim() === '' && response.headers.get('content-type') === null
+        ? 'HTTP 解析层（空响应体、无 content-type，无 error.code）'
+        : '应用层（见 JSON error.code）'
+    throw new Error(
+      `注册失败：${studentNo} → HTTP ${response.status} | 疑似层=${layer} | headers=[${headerList.join(' | ')}] | body=${body}`,
+    )
   }
   const cookie = response.headers
     .getSetCookie()
