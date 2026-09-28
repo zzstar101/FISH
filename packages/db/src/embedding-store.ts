@@ -1,4 +1,4 @@
-import { and, eq, lt, ne, type SQL, sql } from 'drizzle-orm'
+import { and, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { newId } from './ids'
 import { embeddings } from './schema/embeddings'
@@ -340,4 +340,57 @@ export async function topKSimilarWishes(db: Db, query: SimilarQuery): Promise<Si
     .where(and(eq(embeddings.model, query.model), freshWishesEmbedding(), query.filter))
     .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
     .limit(query.limit)
+}
+
+/**
+ * 按 id **精确补算**向量相似度（#322 M3）：给"union 进来的已有 `matches` 行"用。
+ *
+ * 评估集合 = 新 Top-K ∪ 该 target 已有 matches（#322 契约），落选的已有行**不在 Top-K 里**，
+ * 因此必须单独取一次相似度：否则这些对拿不到 cosine，只能退回 v1 打分，于是"召回状态变化"
+ * 会被误读成"匹配质量变化"，出现了同一对在两种状态下两套分数的假降级。
+ *
+ * 无 `LIMIT`（行数就是该 target 的已有匹配数，量级个位到几十），也没有结构化过滤——
+ * 已有行的存在本身就说明它曾经通过过结构化规则，这里要的是"这一对现在多少分"。
+ */
+export type SimilarByIdsQuery = {
+  /** 必须显式给出，与 `topKSimilar*` 同一口径。 */
+  model: string
+  vector: number[]
+  /** 待补算的候选 id（空数组直接返回空，不发 SQL）。 */
+  ids: string[]
+}
+
+export async function similarListingsByIds(
+  db: Db,
+  query: SimilarByIdsQuery,
+): Promise<SimilarCandidate[]> {
+  if (query.ids.length === 0) return []
+  const vector = JSON.stringify(query.vector)
+
+  return db
+    .select({
+      id: listings.id,
+      distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
+    })
+    .from(embeddings)
+    .innerJoin(listings, eq(listings.id, embeddings.listingId))
+    .where(and(eq(embeddings.model, query.model), inArray(embeddings.listingId, query.ids)))
+}
+
+/** `similarListingsByIds` 的镜像（愿望侧）。 */
+export async function similarWishesByIds(
+  db: Db,
+  query: SimilarByIdsQuery,
+): Promise<SimilarCandidate[]> {
+  if (query.ids.length === 0) return []
+  const vector = JSON.stringify(query.vector)
+
+  return db
+    .select({
+      id: wishes.id,
+      distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
+    })
+    .from(embeddings)
+    .innerJoin(wishes, eq(wishes.id, embeddings.wishId))
+    .where(and(eq(embeddings.model, query.model), inArray(embeddings.wishId, query.ids)))
 }

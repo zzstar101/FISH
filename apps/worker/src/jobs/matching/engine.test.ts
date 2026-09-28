@@ -4,7 +4,12 @@ import {
   buildWishEmbeddingText,
   contentHashOf,
 } from '@fish/contracts/embedding/text'
-import { MATCH_SCORE_THRESHOLD, MATCH_SEMANTIC_TOP_K } from '@fish/contracts/matching/schema'
+import {
+  MATCH_SCORE_THRESHOLD,
+  MATCH_SEMANTIC_TOP_K,
+  RANKING_VERSION,
+  RANKING_VERSION_V1,
+} from '@fish/contracts/matching/schema'
 import { createDb } from '@fish/db/client'
 import { saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
@@ -560,7 +565,7 @@ async function embedJobs(kind: 'listing' | 'wish', id: string) {
 }
 
 describe('向量召回（#322 M2）', () => {
-  test('目标向量就绪：走 vector-topk，且打分与 v1 完全一致', async () => {
+  test('目标向量就绪：走 vector-topk，语义分参与打分并落库', async () => {
     await withFixture(async ({ sellerId, buyerId }) => {
       const keyword = uniqueKeyword()
       const listingId = await createListing(sellerId, keyword)
@@ -575,10 +580,13 @@ describe('向量召回（#322 M2）', () => {
       // 本 model 的向量只有这一条 ⇒ Top-K 里恰好一个候选。
       expect(result.vectorCandidates).toBe(1)
 
-      // M2 不动打分：category/keyword/price 全中 = 100，与 v1 逐项相同。
+      // 两侧向量相同（cos = 1 ⇒ 语义分 100），结构三项全中 ⇒ v2 总分仍是 100。
       const rows = await matchRows(listingId, wishId)
       expect(rows).toHaveLength(1)
       expect(rows[0]?.score).toBe(100)
+      // #322 M3：语义可用时落库 semantic_score + ranking_version = 2（读侧据此区分 v1/v2 行）。
+      expect(rows[0]?.semanticScore).toBe(100)
+      expect(rows[0]?.rankingVersion).toBe(RANKING_VERSION)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
       // 目标向量新鲜 ⇒ 不需要补投。
       expect(await embedJobs('listing', listingId)).toHaveLength(0)
@@ -655,6 +663,7 @@ describe('向量召回（#322 M2）', () => {
         created: 1,
         recall: 'vector-topk',
       })
+      expect((await matchRows(listingId, wishId))[0]?.rankingVersion).toBe(RANKING_VERSION)
 
       // 让这一对掉出召回：删掉愿望的向量（候选侧无向量 ⇒ 不在 Top-K），并把关键词改成不再命中。
       await db.delete(embeddings).where(eq(embeddings.wishId, wishId))
@@ -675,6 +684,9 @@ describe('向量召回（#322 M2）', () => {
       expect(rows[0]?.score).toBe(65)
       expect(rows[0]?.score).toBeLessThan(MATCH_SCORE_THRESHOLD)
       expect(rows[0]?.keywordScore).toBe(0)
+      // 这一对拿不到 cosine（候选侧向量已被删除）⇒ 按对退回 v1 口径：语义分落 NULL、版本号 1。
+      expect(rows[0]?.semanticScore).toBeNull()
+      expect(rows[0]?.rankingVersion).toBe(RANKING_VERSION_V1)
     })
   })
 
@@ -692,6 +704,10 @@ describe('向量召回（#322 M2）', () => {
       // 退化不改变 v1 的行为：词法命中照样建行、照样发通知。
       expect(fromListing.created).toBe(1)
       expect(await matchRows(listingId, wishId)).toHaveLength(1)
+      // 退化 = v1 口径：语义分落 NULL、版本号 1（读侧据此知道这行没有语义分）。
+      const fallbackRows = await matchRows(listingId, wishId)
+      expect(fallbackRows[0]?.semanticScore).toBeNull()
+      expect(fallbackRows[0]?.rankingVersion).toBe(RANKING_VERSION_V1)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
       expect(await embedJobs('listing', listingId)).toEqual([
         { type: 'EMBED_LISTING', status: 'PENDING' },
@@ -799,7 +815,9 @@ describe('向量召回（#322 M2）', () => {
       expect(fitted.created).toBe(1)
       const rows = await matchRows(listingId, wishIds[matchingIndex] as string)
       expect(rows).toHaveLength(1)
-      expect(rows[0]?.score).toBe(100)
+      // v2 hybrid 口径（#322 M3）：这个候选是最远的第 K+1 个（angle = 0.51 ⇒ cos ≈ 0.8727
+      // ⇒ 语义分 83），分类 / 词法 / 价格全中 ⇒ 0.30*83 + 0.32*100 + 0.15*100 + 0.23*100 = 95。
+      expect(rows[0]?.score).toBe(95)
     })
   })
 })

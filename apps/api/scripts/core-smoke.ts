@@ -46,11 +46,22 @@
  *   （失败时默认保留，见上面的清理策略）。
  */
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
+import {
+  buildListingEmbeddingText,
+  buildWishEmbeddingText,
+  contentHashOf,
+} from '@fish/contracts/embedding/text'
+import {
+  MATCH_SCORE_THRESHOLD,
+  RANKING_VERSION,
+  RANKING_VERSION_V1,
+} from '@fish/contracts/matching/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
+import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
 import { jobs } from '@fish/db/schema/jobs'
 import { listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
@@ -356,6 +367,42 @@ function jobIds(rows: JobRow[]): Set<string> {
   return new Set(rows.map((row) => row.id))
 }
 
+/**
+ * 等某实体的 EMBED_* job **至少有一条** DONE（#322）。
+ *
+ * 不能要求「恰好一条」：编辑会追加新 job（M1 的 partial unique 只挡同状态的重复投递），
+ * 而这里只关心"向量已经落库"，所以只要有任意一条跑完就够 —— 之后由调用方直接读 embeddings 行。
+ */
+async function waitEmbedJob(db: Db, type: string, key: string, value: string): Promise<void> {
+  await waitFor(`${type}（${value}）→ DONE`, async () =>
+    (await jobRows(db, type, key, value)).some((row) => row.status === 'DONE'),
+  )
+  ok(`${type} 已有 DONE`)
+}
+
+/**
+ * 读某实体当前的向量行（#322 smoke 专用）。
+ *
+ * 直接读整行、先拿 `model` 再按 model 使用，避免把 provider 的模型名硬编码进 smoke
+ *（`EMBEDDING_TRANSPORT` 换实现时模型名就会变，而 #322 的读侧纪律是"必须显式带 model"）。
+ */
+async function embeddingRow(db: Db, column: 'listingId' | 'wishId', id: string) {
+  const rows = await db.select().from(embeddings).where(eq(embeddings[column], id)).limit(1)
+  return rows[0] ?? null
+}
+
+/** `/matches` 响应里是否存在某个分数的条目（用于卖家侧可能有多条的情形）。 */
+function hasScore(response: Record<string, unknown>, score: number): boolean {
+  const items = response.items
+  if (!Array.isArray(items)) return false
+  return items.some(
+    (item) =>
+      typeof item === 'object' &&
+      item !== null &&
+      (item as Record<string, unknown>).score === score,
+  )
+}
+
 async function matchRow(db: Db, listingId: string, wishId: string) {
   const rows = await db
     .select()
@@ -558,7 +605,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     // 2. Demo 高分样例必须由引擎真实产出（seed 不再预写结果）
     step = 'Demo 样例'
-    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160')
+    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 降级口径）')
     startWorker()
     ok('Worker 已启动')
     await waitJob(db, seededJob.id, 'DONE')
@@ -569,6 +616,20 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(seededMatch.categoryScore, 100, 'demo 样例分类分 = 100')
     assertEqual(seededMatch.keywordScore, 100, 'demo 样例关键词分 = 100')
     assertEqual(seededMatch.priceScore, 100, 'demo 样例价格分 = 100')
+    // #322 M2 的降级契约在真实链路上的证据：seed 按 #43 契约**只投一条 MATCH_LISTING**、不投
+    // EMBED_*，所以愿望这一侧没有向量 ⇒ 本轮按 v1 口径打分（semantic_score 落 NULL、
+    // ranking_version = 1、分数是 0.35/0.35/0.30 的 #8 算法），同时补投目标实体的 EMBED_LISTING。
+    // v2（hybrid + semantic_score）由本文件后面的「语义链」一节在同一套 API/Worker/DB 上验证。
+    assertEqual(
+      seededMatch.rankingVersion,
+      RANKING_VERSION_V1,
+      'demo 行是 v1 退化口径（愿望没有向量）',
+    )
+    assertEqual(seededMatch.semanticScore, null, 'v1 行的 semantic_score 落 NULL，不伪造语义分')
+    assert(
+      (await jobRows(db, 'EMBED_LISTING', 'listingId', seedListing.id)).length > 0,
+      '降级时补投了 EMBED_LISTING（否则这一对永远停在 v1）',
+    )
     assertEqual(
       await notificationCount(db, seedListing.id, seedWish.id),
       1,
@@ -861,6 +922,12 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     await waitJob(db, listingJob.id, 'DONE')
     await waitJob(db, wishJob.id, 'DONE')
 
+    // #322 M2/M3：`MATCH_*` 与 `EMBED_*` 是同一次写事务里并行投出的两条链，队列按 (run_at, id)
+    // 领取 ⇒ 第一轮 MATCH 完全可能还没拿到向量（那时落的是 v1 退化行）。所以先等 embedding 真正
+    // 落库，再断言分数 —— 在这里钉绝对值会变成"谁先跑完"的竞态。
+    await waitEmbedJob(db, 'EMBED_LISTING', 'listingId', listingId)
+    await waitEmbedJob(db, 'EMBED_WISH', 'wishId', wishId)
+
     const wishSide = await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer))
     const listingSide = await readJson(
       await get(base, `/matches?listingId=${listingPublicId}`, seller),
@@ -873,8 +940,10 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     const wishScore = topScore(wishSide, '买家 /matches?wishId=')
     const listingScore = topScore(listingSide, '卖家 /matches?listingId=')
-    assertEqual(wishScore, 100, '买家侧 score = 100')
-    assertEqual(listingScore, 100, '卖家侧 score = 100（与买家侧一致）')
+    // 口径无关的不变式：同一对、同一套权重 ⇒ 两个方向必须给出同一个分数；且它必须 ≥ 阈值
+    //（读谓词本身就要求 score ≥ MATCH_SCORE_THRESHOLD，能读到就说明成立）。
+    assertEqual(wishScore, listingScore, '两个方向的 score 一致（同一套语义定义）')
+    assert(wishScore >= MATCH_SCORE_THRESHOLD, `可见的 match 分数 ≥ 阈值（实得 ${wishScore}）`)
     assertEqual(await matchCount(db, listingId, wishId), 1, 'matches 只有 1 行（幂等键生效）')
     assertEqual(await notificationCount(db, listingId, wishId), 1, '首次匹配恰好 1 条通知')
 
@@ -892,7 +961,33 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, replayKnown, 'DONE')
     assertEqual(await matchCount(db, listingId, wishId), 1, '重算不新增 match 行')
     assertEqual(await notificationCount(db, listingId, wishId), 1, '重算不重复发通知')
-    assertEqual((await matchRow(db, listingId, wishId))?.score, 100, '重算后分数不变')
+
+    // #322 M3：embedding 就绪后这一对必然按 v2 口径重算。这里断言的不是某个绝对值（语义分取决于
+    // provider 的尺度，stub 与 live 不可比），而是**冻结后的权重算式**：结构三项全中（分类 100 /
+    // 关键词 100 / 价格 100）+ S4 权重 {semantic .30, category .32, keyword .15, price .23} ⇒
+    // score = round(0.30×semantic + 0.32×100 + 0.15×100 + 0.23×100) = 70 + round(0.30×semantic)。
+    const recomputed = await matchRow(db, listingId, wishId)
+    assert(recomputed !== null, '重算后 matches 行仍在')
+    if (!recomputed) throw new Error('重算后 matches 行丢了')
+    assertEqual(
+      recomputed.rankingVersion,
+      RANKING_VERSION,
+      '重算后是 v2 口径（ranking_version = 2）',
+    )
+    assert(recomputed.semanticScore !== null, 'v2 行必须落 semantic_score（不是 NULL）')
+    assertEqual(
+      recomputed.score,
+      70 + Math.round(0.3 * (recomputed.semanticScore ?? 0)),
+      'v2 分数 = S4 权重下的四路加权和（结构三项全中）',
+    )
+    assertEqual(
+      topScore(
+        await readJson(await get(base, `/matches?wishId=${wishPublicId}`, buyer)),
+        '重算后买家侧',
+      ),
+      recomputed.score,
+      '读接口分数 = 落库分数（v2 行）',
+    )
 
     // 6. 编辑改变事实：价格越过 2× 预算后旧 Match 必须降级
     step = '编辑重算'
@@ -921,7 +1016,16 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     const downgraded = await matchRow(db, listingId, wishId)
     assert(downgraded !== null, '降级保留 matches 行（不删行）')
-    assertEqual(downgraded?.score, 70, '分数被覆盖成真实裸分 70（分类 100 + 关键词 100 + 价格 0）')
+    if (!downgraded) throw new Error('降级后 matches 行丢了')
+    // 超预算 ⇒ 价格分 0；分类/关键词仍全中 ⇒ 0.32×100 + 0.15×100 + 0.23×0 = 47，
+    // 加上语义项 = 47 + round(0.30×semantic)。"看不见"由读谓词的 priceWithinBudget 决定
+    //（与分数无关），所以这里钉的是"旧 100 分被覆盖成真实裸分"这件事。
+    assertEqual(downgraded.priceScore, 0, '超预算后价格分 = 0')
+    assertEqual(
+      downgraded.score,
+      47 + Math.round(0.3 * (downgraded.semanticScore ?? 0)),
+      '超预算后的分数 = S4 权重下的四路加权和（价格项归零）',
+    )
 
     const restoreKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
     const restore = await patchJson(
@@ -937,11 +1041,18 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       1,
       '价格恢复后买家侧重新可见',
     )
-    // 只断 total 挡不住“分数停在 70、但已满足读谓词（≥70 且在预算内）”：必须确认分数真的被重算回 100。
+    // 只断 total 挡不住"分数停在裸分、但已满足读谓词（≥阈值且在预算内）"：必须确认分数真的被重算。
+    const restoredMatch = await matchRow(db, listingId, wishId)
+    assert(restoredMatch !== null, '恢复后 matches 行仍在')
+    if (!restoredMatch) throw new Error('恢复后 matches 行丢了')
     assertEqual(
-      (await matchRow(db, listingId, wishId))?.score,
-      100,
-      '恢复后分数被重算回 100（不只是重新可见）',
+      restoredMatch.score,
+      70 + Math.round(0.3 * (restoredMatch.semanticScore ?? 0)),
+      '恢复后分数被重算回 v2 的四路加权和（不只是重新可见）',
+    )
+    assert(
+      restoredMatch.score >= MATCH_SCORE_THRESHOLD,
+      `恢复后分数 ≥ 阈值（实得 ${restoredMatch.score}）`,
     )
 
     // 7. 下架 / 重新上架
@@ -978,6 +1089,116 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       1,
       '重新上架后买家侧恢复展示',
     )
+
+    // 7.5 #322 M3 语义链：向量召回 + hybrid 打分在真实 API / Worker / DB 上成立
+    step = '语义链'
+    section('语义链：零词法重叠 → 向量召回 → hybrid 分数')
+    // 关键词与描述跟链路商品**零 token 重叠**（substring 与空白分词都命不中），同分类、预算内。
+    const semanticWishResponse = await postJson(
+      base,
+      '/wishes',
+      {
+        keyword: '户外露营装备',
+        description: '想要一顶轻便的帐篷，最好能塞进背包侧袋。',
+        category: 'DIGITAL',
+        budgetMinCents: 5000,
+        budgetMaxCents: 20000,
+        acceptSimilar: true,
+      },
+      buyer,
+    )
+    assertEqual(semanticWishResponse.status, 201, 'POST /wishes（语义样本）→ 201')
+    const semanticWishPublicId = String((await readJson(semanticWishResponse)).id)
+    const semanticWishId = decodePublicId(PUBLIC_ID_PREFIX.wish, semanticWishPublicId)
+
+    await waitEmbedJob(db, 'EMBED_WISH', 'wishId', semanticWishId)
+    // 结构分不够：分类 100 + 价格 100 + 关键词 0 ⇒ v1 = 0.35×100 + 0.30×100 = 65，
+    // v2 = 0.32×100 + 0.23×100 + 0.30×0 = 55，都低于阈值 70 ⇒ 不建行。
+    assertEqual(
+      await matchCount(db, listingId, semanticWishId),
+      0,
+      '文本语义不可比时不建 Match（关键词 0 命中，v1/v2 都过不了阈值）',
+    )
+
+    const listingEmbedded = await embeddingRow(db, 'listingId', listingId)
+    const wishEmbedded = await embeddingRow(db, 'wishId', semanticWishId)
+    assert(listingEmbedded !== null && wishEmbedded !== null, '两个实体都有向量行')
+    if (!listingEmbedded || !wishEmbedded) throw new Error('向量行缺失')
+    assertEqual(listingEmbedded.dimensions, EMBEDDING_DIMENSIONS, '商品向量维度 = 迁移 typmod')
+    assertEqual(wishEmbedded.dimensions, EMBEDDING_DIMENSIONS, '愿望向量维度 = 迁移 typmod')
+    assertEqual(listingEmbedded.model, wishEmbedded.model, '两实体用同一 model 的向量（不混模型）')
+    // 文本构造与指纹的端到端证据：落库的 content_hash 必须等于"当前内容"的指纹（#322 M1 契约）。
+    assertEqual(
+      listingEmbedded.contentHash,
+      contentHashOf(
+        buildListingEmbeddingText({
+          title: CHAIN_LISTING_FIELDS.title,
+          description: CHAIN_LISTING_FIELDS.description,
+          category: CHAIN_LISTING_FIELDS.category,
+        }),
+      ),
+      '商品 content_hash = 当前内容的指纹',
+    )
+
+    const semanticWishRow = (
+      await db.select().from(wishes).where(eq(wishes.id, semanticWishId)).limit(1)
+    )[0]
+    assert(semanticWishRow !== undefined, '读到语义样本愿望')
+    if (!semanticWishRow) throw new Error('语义样本愿望缺失')
+    const semanticWishTextHash = contentHashOf(
+      buildWishEmbeddingText({
+        keyword: semanticWishRow.keyword,
+        description: semanticWishRow.description,
+        category: semanticWishRow.category,
+      }),
+    )
+    assertEqual(
+      wishEmbedded.contentHash,
+      semanticWishTextHash,
+      '愿望 content_hash = 当前内容的指纹',
+    )
+
+    // 把愿望的向量替换成与商品**逐位相同**的向量：cos = 1 ⇒ 归一化语义分 100（与 provider 的尺度
+    // 无关，stub 与 live 都成立），而两边文本仍然零重叠（keywordScore 必须还是 0）。
+    // content_hash 写成当前内容的指纹，让引擎认为它新鲜（M2 的就绪判定 = model + dimensions + 指纹）。
+    await db.execute(sql`
+      update embeddings
+         set embedding = ${JSON.stringify(listingEmbedded.embedding)}::vector,
+             content_hash = ${semanticWishTextHash},
+             source_updated_at = (select updated_at from wishes where id = ${semanticWishId}),
+             updated_at = now()
+       where wish_id = ${semanticWishId} and model = ${listingEmbedded.model}
+    `)
+
+    // 直接投一条 MATCH_WISH：这一节验的是召回与打分，投递钩子已由别处钉住。
+    const semanticJobId = newId()
+    await db.execute(sql`
+      insert into jobs (id, type, payload)
+      values (${semanticJobId}, 'MATCH_WISH', ${jsonParam({ wishId: semanticWishId })})
+    `)
+    await waitJob(db, semanticJobId, 'DONE')
+
+    const semanticMatch = await matchRow(db, listingId, semanticWishId)
+    assert(semanticMatch !== null, '向量逐位相同 ⇒ 召回并建 Match（文本零重叠也召回）')
+    if (!semanticMatch) throw new Error('语义样本没有建 Match')
+    assertEqual(semanticMatch.keywordScore, 0, '关键词分 0 证明召回不是 substring 决定的')
+    assertEqual(semanticMatch.categoryScore, 100, '分类分 100（结构化硬规则仍然生效）')
+    assertEqual(semanticMatch.semanticScore, 100, '逐位相同的向量 ⇒ 归一化语义分 100')
+    assertEqual(semanticMatch.rankingVersion, RANKING_VERSION, 'match 行是 v2 口径')
+    assertEqual(
+      semanticMatch.score,
+      85,
+      'v2 = 0.30×100 + 0.32×100 + 0.15×0 + 0.23×100 = 85（同样两行走 v1 只有 65，低于阈值）',
+    )
+    const semanticWishSide = await readJson(
+      await get(base, `/matches?wishId=${semanticWishPublicId}`, buyer),
+    )
+    assertEqual(total(semanticWishSide, '语义链买家侧'), 1, '语义链买家侧恰好 1 条')
+    assertEqual(topScore(semanticWishSide, '语义链买家侧'), 85, '语义链买家侧 score = 85')
+    const semanticListingSide = await readJson(
+      await get(base, `/matches?listingId=${listingPublicId}`, seller),
+    )
+    assert(hasScore(semanticListingSide, 85), '卖家侧同样看得到这一对（两个方向口径一致）')
 
     // 8. 重启恢复·口径 1：worker 停机期间投递的 job，重启后继续
     step = '重启恢复（停机积压）'

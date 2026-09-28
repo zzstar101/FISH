@@ -374,6 +374,10 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 主 Demo 的"愿望成真"样例**不预写结果**：只投一条 PENDING 的 MATCH_LISTING，
   // 由 worker 用真实打分产出那对 match（K380 + "机械键盘 ≤¥200" → 100 分）与首条通知。
   //
+  // seed **刻意不投 EMBED_* job**：这对实体没有向量，引擎按 #322 M2 的降级契约走 v1 口径
+  // （semantic_score = NULL、ranking_version = 1、权重 0.35/0.35/0.30），所以这里仍是 100 分。
+  // 补向量是 M4 backfill 的事，不是 seed 漏投。
+  //
   // #43 之前这里硬编码了 score=92 / keyword=85 / price=90，而引擎对同样两行的真实结果是 100；
   // seed 因此成了引擎之外的"第二份真相"，权重或分词一改就静默漂移，且那条 job 已 DONE，
   // 永远不会被纠正。代价是：只跑 seed、不起 worker 时愿望页暂时没有匹配——
