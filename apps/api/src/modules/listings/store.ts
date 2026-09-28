@@ -271,6 +271,32 @@ export interface ListingStore {
    * 否则下架期间新建的愿望永远匹配不到它）。没改到行就不投。
    */
   setStatus(input: { id: string; from: ListingStatus; to: ListingStatus }): Promise<boolean>
+
+  /**
+   * 物理删除一条商品（Owner 2026-09-28 拍板：「不过审」的商品可以删除，直接清除不保留痕迹）。
+   *
+   * 单事务内完成，结果分支与 `updateListingAtomic` 同一口径（锁内读行，service 不必二次读）：
+   * - `not-found` / `not-owner`：行不存在 / 归别人（`SELECT ... FOR UPDATE` 先锁行，
+   *   并发的交易创建（复合外键要取 `FOR KEY SHARE`）会在锁上排队，删除提交后其写入按 0 行处理）；
+   * - `not-deletable`：只有 `OFFLINE` + `BLOCKED` 且**不是治理下架**的（即「不过审」）可删。
+   *   审核中（`REVIEW`）要等人工结论；其余状态各有去处；带 `governance_delisted_at` 的是
+   *   平台下架（管理员可恢复、卖家可申诉），那是治理证据，不由卖家清除；且**带任何交易记录**
+   *   （哪怕已取消）的商品不可删 —— transactions 的复合外键是刻意的 NO ACTION
+   *   （「成交记录不可连坐删除」），物理删除会把成交凭证一并带走，所以服务层先查先拒，
+   *   不让调用方撞裸外键错误；
+   * - `deleted`：行已删除。`favorites` / `conversations`（含其 messages，级联）在删除行**之前**
+   *   显式清掉 —— 这两张表的外键同样是刻意的 NO ACTION（收藏归属、会话留存当时留给 Owner 决定），
+   *   「清除不保留痕迹」的拍板在这里落实，不改外键、不动迁移。
+   *   `comments` / `listing_images` / `matches` 走 CASCADE，moderation 审计走 SET NULL，
+   *   都交给外键。
+   */
+  deleteListingAtomic(input: {
+    id: string
+    sellerId: string
+  }): Promise<
+    { kind: 'deleted' } | { kind: 'not-found' } | { kind: 'not-owner' } | { kind: 'not-deletable' }
+  >
+
   recordModeration?(input: {
     listingId?: string
     sellerId: string
@@ -702,6 +728,55 @@ export function createSqlListingStore(db: Db): ListingStore {
         await enqueueListingJobsWith(tx, input.id)
 
         return true
+      })
+    },
+
+    async deleteListingAtomic(input) {
+      return db.transaction(async (tx) => {
+        // 先锁行再判定：并发侧（交易创建要走复合外键的 FOR KEY SHARE）会在锁上排队，
+        // 结论不会在「读完 → 删除」之间失效。
+        const current = await tx.execute(sql`
+          SELECT seller_id::text AS seller_id,
+                 status::text AS status,
+                 moderation_status::text AS moderation_status,
+                 governance_delisted_at
+          FROM listings
+          WHERE id = ${input.id}
+          FOR UPDATE
+        `)
+        const row = rowsOf(current)[0]
+        if (!row) return { kind: 'not-found' as const }
+        if (String(row.seller_id) !== input.sellerId) return { kind: 'not-owner' as const }
+        /*
+         * 只有「不过审」可删（判定口径见接口注释）。
+         *
+         * `BLOCKED` 有两个写入方（`governance/service.ts` 的 delist 与审核引擎 / 人工终审），
+         * 前者同时写 `governance_delisted_at`，语义是**平台下架**（可申诉、可被管理员恢复），
+         * 那是治理证据，不能由卖家一键清除。判据与 `governance/service.ts` 的 restore 同源：
+         * 用 `governance_delisted_at` 把两个写入方分开，而不是只看 `moderation_status`。
+         */
+        if (
+          String(row.status) !== 'OFFLINE' ||
+          String(row.moderation_status) !== 'BLOCKED' ||
+          row.governance_delisted_at !== null
+        ) {
+          return { kind: 'not-deletable' as const }
+        }
+        // 有交易记录就拒：成交/取消记录是交易域凭证（复合外键刻意 NO ACTION），
+        // 在删除商品行之前显式拦下，而不是等 PostgreSQL 报裸外键错误变成 500。
+        const txRows = await tx.execute(sql`
+          SELECT 1 FROM transactions WHERE listing_id = ${input.id} LIMIT 1
+        `)
+        if (rowsOf(txRows).length > 0) return { kind: 'not-deletable' as const }
+
+        // NO ACTION 外键的两张表先清（口径见接口注释）：
+        // 收藏随商品消失；会话连同其消息（messages 对 conversations 是 CASCADE）一起清。
+        await tx.execute(sql`DELETE FROM favorites WHERE listing_id = ${input.id}`)
+        await tx.execute(sql`DELETE FROM conversations WHERE listing_id = ${input.id}`)
+
+        // 商品行本身：comments / listing_images / matches 级联，moderation 审计 SET NULL。
+        await tx.execute(sql`DELETE FROM listings WHERE id = ${input.id}`)
+        return { kind: 'deleted' as const }
       })
     },
   }

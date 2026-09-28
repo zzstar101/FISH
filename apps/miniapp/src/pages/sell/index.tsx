@@ -826,7 +826,7 @@ export default function Sell() {
             <Text className="sell__result-title">已提交，正在审核</Text>
             <Text className="sell__result-text">
               这件闲置需要人工复核，通过后才会出现在首页与搜索里。审核期间它停在「我的发布 ·
-              已下架」里，通过后会自动回到「在售」。
+              审核」里；新发布的通过后自动上架，编辑过的回到它原来的状态。
             </Text>
             <View
               className="sell__submit"

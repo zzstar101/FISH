@@ -46,6 +46,7 @@ function fakeService(overrides: Partial<ListingService> = {}): ListingService {
     createListing: async () => ({ created: true, detail }),
     updateListing: async () => detail,
     transition: async () => detail,
+    deleteListing: async () => {},
     ...overrides,
   }
 }
@@ -168,7 +169,7 @@ describe('listings router — 读接口匿名可用', () => {
   })
 
   // 非 UUID 的 :id 曾经直达 uuid 列 → PostgreSQL 类型错误 → 500；契约 §3 要求 404。
-  // 这条路径任何匿名请求都能稳定触发，所以四个带 :id 的端点都要覆盖。
+  // 这条路径任何匿名请求都能稳定触发，所以五个带 :id 的端点都要覆盖。
   test('returns 404 (not 500) for a non-UUID listing id', async () => {
     const app = buildApp({ service: fakeService(), authed: true })
 
@@ -182,6 +183,7 @@ describe('listings router — 读接口匿名可用', () => {
       }),
       app.request('/listings/not-a-uuid/offline', { method: 'POST' }),
       app.request('/listings/not-a-uuid/online', { method: 'POST' }),
+      app.request('/listings/not-a-uuid', { method: 'DELETE' }),
     ])
 
     for (const res of responses) {
@@ -231,6 +233,7 @@ describe('listings router — 写接口要求登录', () => {
       ],
       [`/listings/${LISTING_ID}/offline`, { method: 'POST' }],
       [`/listings/${LISTING_ID}/online`, { method: 'POST' }],
+      [`/listings/${LISTING_ID}`, { method: 'DELETE' }],
     ] as [string, RequestInit][]) {
       const res = await app.request(path, init)
       expect(res.status).toBe(401)
@@ -300,5 +303,44 @@ describe('listings router — 写接口要求登录', () => {
     await app.request(`/listings/${LISTING_ID}/online`, { method: 'POST' })
 
     expect(targets).toEqual(['OFFLINE', 'ACTIVE'])
+  })
+
+  test('物理删除成功回 204 空响应体，并把解码后的 UUID 传给 service', async () => {
+    const received: { userId?: string; id?: string } = {}
+    const app = buildApp({
+      service: fakeService({
+        deleteListing: async (userId, id) => {
+          received.userId = userId
+          received.id = id
+        },
+      }),
+      authed: true,
+    })
+    const res = await app.request(`/listings/${LISTING_ID}`, { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(await res.text()).toBe('')
+    expect(received).toEqual({ userId: SELLER_ID, id: RAW_LISTING_ID })
+  })
+
+  test('删除被状态机拒绝时按契约错误信封返回 409', async () => {
+    const app = buildApp({
+      service: fakeService({
+        deleteListing: async () => {
+          throw new ListingServiceError(
+            409,
+            'LISTING_NOT_DELETABLE',
+            '只有未通过审核且没有交易记录的商品可以删除',
+          )
+        },
+      }),
+      authed: true,
+    })
+    const res = await app.request(`/listings/${LISTING_ID}`, { method: 'DELETE' })
+
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      'LISTING_NOT_DELETABLE',
+    )
   })
 })

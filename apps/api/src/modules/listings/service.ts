@@ -74,6 +74,11 @@ export interface ListingService {
   updateListing(userId: string, id: string, input: ListingUpdateInput): Promise<ListingDetail>
   /** 下架（ACTIVE → OFFLINE）与重新上架（OFFLINE → ACTIVE），幂等。 */
   transition(userId: string, id: string, to: 'OFFLINE' | 'ACTIVE'): Promise<ListingDetail>
+  /**
+   * 物理删除（Owner 2026-09-28 拍板：「不过审」的商品直接清除、不保留痕迹）。
+   * 删除口径与连带清理都在 `store.deleteListingAtomic` 的一个事务里，成功无返回体。
+   */
+  deleteListing(userId: string, id: string): Promise<void>
 }
 
 /** 契约 §1 的 `free ⟹ priceCents = 0` 在库里的约束名（见 `packages/db/src/schema/listings.ts`）。 */
@@ -654,6 +659,22 @@ export function createListingService(deps: {
       }
 
       return loadDetail(userId, id)
+    },
+
+    async deleteListing(userId, id) {
+      const result = await store.deleteListingAtomic({ id, sellerId: userId })
+      // 分支顺序与 updateListing 的收口一致：404 / 403 / 409 各回各的，不互相吞。
+      if (result.kind === 'not-found') throw notFound()
+      if (result.kind === 'not-owner') {
+        throw new ListingServiceError(403, 'NOT_LISTING_OWNER', '只能操作自己的商品')
+      }
+      if (result.kind === 'not-deletable') {
+        throw new ListingServiceError(
+          409,
+          'LISTING_NOT_DELETABLE',
+          '只有未通过审核且没有交易记录的商品可以删除',
+        )
+      }
     },
   }
 }

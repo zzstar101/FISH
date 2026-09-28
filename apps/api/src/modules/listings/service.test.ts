@@ -131,6 +131,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       return { kind: 'updated' }
     },
     setStatus: async () => true,
+    deleteListingAtomic: async () => ({ kind: 'deleted' }),
     ...overrides,
   }
 }
@@ -1425,5 +1426,53 @@ describe('transition', () => {
     expect(
       (await expectServiceError(() => service.transition(OTHER_ID, LISTING_ID, 'OFFLINE'))).status,
     ).toBe(403)
+  })
+})
+
+describe('deleteListing', () => {
+  test('物理删除成功时不带返回体，并把解码后的 id / 卖家原样传给 store', async () => {
+    const received: { id?: string; sellerId?: string } = {}
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        deleteListingAtomic: async (input) => {
+          received.id = input.id
+          received.sellerId = input.sellerId
+          return { kind: 'deleted' }
+        },
+      }),
+    })
+    await service.deleteListing(SELLER_ID, LISTING_ID)
+    expect(received).toEqual({ id: LISTING_ID, sellerId: SELLER_ID })
+  })
+
+  test('商品不存在 → 404 LISTING_NOT_FOUND', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({ deleteListingAtomic: async () => ({ kind: 'not-found' }) }),
+    })
+    const error = await expectServiceError(() => service.deleteListing(SELLER_ID, LISTING_ID))
+    expect(error.status).toBe(404)
+    expect(error.code).toBe('LISTING_NOT_FOUND')
+  })
+
+  test('别人的商品 → 403 NOT_LISTING_OWNER（与编辑同一口径）', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({ deleteListingAtomic: async () => ({ kind: 'not-owner' }) }),
+    })
+    const error = await expectServiceError(() => service.deleteListing(OTHER_ID, LISTING_ID))
+    expect(error.status).toBe(403)
+    expect(error.code).toBe('NOT_LISTING_OWNER')
+  })
+
+  test('状态不许可（审核中 / 已下架 / 有交易记录）→ 409 LISTING_NOT_DELETABLE', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({ deleteListingAtomic: async () => ({ kind: 'not-deletable' }) }),
+    })
+    const error = await expectServiceError(() => service.deleteListing(SELLER_ID, LISTING_ID))
+    expect(error.status).toBe(409)
+    expect(error.code).toBe('LISTING_NOT_DELETABLE')
   })
 })

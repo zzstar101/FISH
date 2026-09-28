@@ -369,6 +369,12 @@ export const ListingErrorCodeSchema = z.enum([
   'LISTING_NOT_EDITABLE',
   /** 409：治理下架后只能由管理员恢复，卖家不能自行修改或上架。 */
   'LISTING_GOVERNANCE_BLOCKED',
+  /**
+   * 409：物理删除只对「不过审」（`OFFLINE` + `BLOCKED`）且没有交易记录的商品开放
+   * （Owner 2026-09-28 拍板）。审核中要等审核结论，其余状态各有去处，
+   * 带交易记录的商品连着成交凭证，都不能整行删除。
+   */
+  'LISTING_NOT_DELETABLE',
   /** 422：objectKey 前缀不属于本人。（同一 key 重复由 schema 的 refine 先掳下，报 VALIDATION_FAILED。） */
   'IMAGE_REFERENCE_INVALID',
   /** 422：confirm 时对象存储里找不到该对象。 */

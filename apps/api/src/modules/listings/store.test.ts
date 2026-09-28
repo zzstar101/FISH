@@ -1,14 +1,18 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { buildListingEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
 import { createDb, type Db } from '@fish/db/client'
 import { findEmbedding, saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
+import { conversations } from '@fish/db/schema/conversations'
 import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
+import { favorites } from '@fish/db/schema/favorites'
 import { idRekeys } from '@fish/db/schema/id-rekeys'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { messages } from '@fish/db/schema/messages'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
+import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -1125,5 +1129,143 @@ test('本人不传 status 时返回全部状态（含 OFFLINE 的 REVIEW 行）�
     expect(publicFeed.items.map((item) => item.id)).not.toContain(
       encodePublicId(PUBLIC_ID_PREFIX.listing, created.listingId),
     )
+  })
+})
+
+describe('deleteListingAtomic（不过审商品的物理删除）', () => {
+  /** 直插一条指定状态 / 审核态的商品（不走 service：这里测的就是 store 的删除口径）。 */
+  async function insertListing(
+    sellerId: string,
+    input: { status: 'ACTIVE' | 'OFFLINE'; moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW' },
+  ): Promise<string> {
+    const id = newId()
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: '待删除商品',
+      description: '删除测试',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: input.status,
+      moderationStatus: input.moderationStatus,
+    })
+    return id
+  }
+
+  test('删除不过审商品时同事务清掉收藏与会话（含消息），商品行消失', async () => {
+    await withSeller(async (sellerId, otherSellerId) => {
+      const listingId = await insertListing(sellerId, {
+        status: 'OFFLINE',
+        moderationStatus: 'BLOCKED',
+      })
+      // otherSellerId 兼任买家（会话 CHECK 只要求 buyer ≠ seller）
+      await db.insert(favorites).values({ userId: otherSellerId, listingId })
+      const conversationId = newId()
+      await db.insert(conversations).values({
+        id: conversationId,
+        listingId,
+        buyerId: otherSellerId,
+        sellerId,
+      })
+      await db.insert(messages).values({
+        conversationId,
+        senderId: otherSellerId,
+        type: 'TEXT',
+        content: '还想看看这个',
+      })
+
+      await expect(store.deleteListingAtomic({ id: listingId, sellerId })).resolves.toEqual({
+        kind: 'deleted',
+      })
+
+      // 商品行没了；NO ACTION 的两张表被显式清掉（messages 随 conversations 级联）
+      expect(await store.findState(listingId)).toBeNull()
+      expect(
+        await db
+          .select({ id: favorites.userId })
+          .from(favorites)
+          .where(eq(favorites.listingId, listingId)),
+      ).toEqual([])
+      expect(
+        await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(eq(conversations.listingId, listingId)),
+      ).toEqual([])
+      expect(
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(eq(messages.conversationId, conversationId)),
+      ).toEqual([])
+    })
+  })
+
+  test('审核中 / 已下架 / 在售状态一律拒绝删除，行保持原样', async () => {
+    await withSeller(async (sellerId) => {
+      const cases = [
+        { status: 'ACTIVE', moderationStatus: 'APPROVED' },
+        { status: 'OFFLINE', moderationStatus: 'APPROVED' },
+        { status: 'OFFLINE', moderationStatus: 'REVIEW' },
+      ] as const
+      for (const item of cases) {
+        const listingId = await insertListing(sellerId, item)
+        await expect(store.deleteListingAtomic({ id: listingId, sellerId })).resolves.toEqual({
+          kind: 'not-deletable',
+        })
+        // 拒绝必须是「什么都没动」，不是删了一半
+        expect(await store.findState(listingId)).not.toBeNull()
+      }
+    })
+  })
+
+  test('带交易记录的不过审商品拒绝删除；交易清掉后才能删', async () => {
+    await withSeller(async (sellerId, otherSellerId) => {
+      const listingId = await insertListing(sellerId, {
+        status: 'OFFLINE',
+        moderationStatus: 'BLOCKED',
+      })
+      // 曾经在售过：留了一笔已取消的交易
+      await db.insert(transactions).values({
+        listingId,
+        buyerId: otherSellerId,
+        sellerId,
+        amountCents: 900,
+        status: 'CANCELLED',
+        cancelledAt: new Date(),
+      })
+
+      await expect(store.deleteListingAtomic({ id: listingId, sellerId })).resolves.toEqual({
+        kind: 'not-deletable',
+      })
+      expect(await store.findState(listingId)).not.toBeNull()
+
+      // 凭证消失（测试收尾自己清，不能留给 withSeller 的 listings 清理撞外键）
+      await db.delete(transactions).where(eq(transactions.listingId, listingId))
+      await expect(store.deleteListingAtomic({ id: listingId, sellerId })).resolves.toEqual({
+        kind: 'deleted',
+      })
+      expect(await store.findState(listingId)).toBeNull()
+    })
+  })
+
+  test('别人的商品回 not-owner，不存在的 id 回 not-found', async () => {
+    await withSeller(async (sellerId, otherSellerId) => {
+      const listingId = await insertListing(sellerId, {
+        status: 'OFFLINE',
+        moderationStatus: 'BLOCKED',
+      })
+
+      await expect(
+        store.deleteListingAtomic({ id: listingId, sellerId: otherSellerId }),
+      ).resolves.toEqual({ kind: 'not-owner' })
+      expect(await store.findState(listingId)).not.toBeNull()
+
+      await expect(store.deleteListingAtomic({ id: newId(), sellerId })).resolves.toEqual({
+        kind: 'not-found',
+      })
+    })
   })
 })
