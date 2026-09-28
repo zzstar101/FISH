@@ -3,6 +3,7 @@ import { Button } from '@fish/ui/button'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { createFileRoute } from '@tanstack/react-router'
 import { AnnouncementBar } from '../features/home/announcement-bar'
+import { TopSellers } from '../features/home/top-sellers'
 import { PcListingCard } from '../features/listings/listing-card'
 import { useHomeFeed } from '../features/listings/queries'
 import { useHiddenListings } from '../features/recommendation/hidden'
@@ -31,6 +32,8 @@ function HomePage() {
   return (
     <div>
       <AnnouncementBar />
+
+      <TopSellers />
 
       <div className="mb-5 flex items-end justify-between gap-6">
         <div>

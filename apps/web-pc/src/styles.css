@@ -727,8 +727,7 @@ body.auth-glass-body {
 }
 
 .announcement-bar:hover .announcement-track,
-.announcement-bar:focus-within .announcement-track,
-.announcement-track[data-paused="true"] {
+.announcement-bar:focus-within .announcement-track {
   animation-play-state: paused;
 }
 

@@ -1,5 +1,4 @@
-import { Pause, Play } from 'lucide-react'
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment } from 'react'
 
 /**
  * 首页顶部公告 / 广告位。
@@ -22,21 +21,6 @@ const GROUP_ROUNDS = [
   { id: 'repeat-1', decorative: true },
   { id: 'repeat-2', decorative: true },
 ] as const
-
-function usePrefersReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
-    setReduced(query.matches)
-    const onChange = (event: MediaQueryListEvent) => setReduced(event.matches)
-    query.addEventListener('change', onChange)
-    return () => query.removeEventListener('change', onChange)
-  }, [])
-
-  return reduced
-}
 
 /**
  * 一组公告。滚动轨道里放两组完全相同的副本做无缝循环，
@@ -63,10 +47,6 @@ function AnnouncementGroup({ copy }: { copy: boolean }) {
 }
 
 export function AnnouncementBar() {
-  const reducedMotion = usePrefersReducedMotion()
-  const [paused, setPaused] = useState(false)
-  const isPaused = paused || reducedMotion
-
   return (
     <section
       aria-label="站内公告"
@@ -78,27 +58,11 @@ export function AnnouncementBar() {
       </p>
 
       <div className="announcement-viewport min-w-0 flex-1 overflow-hidden">
-        <div className="announcement-track" data-paused={isPaused}>
+        <div className="announcement-track">
           <AnnouncementGroup copy={false} />
           <AnnouncementGroup copy />
         </div>
       </div>
-
-      {reducedMotion ? null : (
-        <button
-          aria-label="暂停公告滚动"
-          aria-pressed={isPaused}
-          className="mr-3 grid size-9 shrink-0 place-items-center rounded-full text-ink-2 transition-colors hover:bg-surface hover:text-ink focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-2"
-          onClick={() => setPaused((current) => !current)}
-          type="button"
-        >
-          {isPaused ? (
-            <Play aria-hidden="true" className="size-4" />
-          ) : (
-            <Pause aria-hidden="true" className="size-4" />
-          )}
-        </button>
-      )}
     </section>
   )
 }
