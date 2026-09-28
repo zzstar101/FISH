@@ -622,7 +622,7 @@ export default function Chat() {
       </View>
 
       {/* 1版稿 .totop：滚过一屏半浮现；Tab 页抬到底栏上方 */}
-      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
+      <BackTop show={showTop} onTop={backToTop} bottom="170rpx" />
     </View>
   )
 }

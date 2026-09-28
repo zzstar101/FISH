@@ -1020,7 +1020,7 @@ export default function MyList() {
         <Text>发布</Text>
       </View>
 
-      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
+      <BackTop show={showTop} onTop={backToTop} bottom="170rpx" />
 
       {/* ---------------- 下架二次确认（居中卡，稿 ⑤ 的真状态机） ---------------- */}
       {confirming ? (
