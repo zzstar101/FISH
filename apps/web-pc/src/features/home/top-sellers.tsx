@@ -20,7 +20,7 @@ const TOP_SELLERS = [
 
 export function TopSellers() {
   return (
-    <section aria-labelledby="top-sellers-title" className="mt-9">
+    <section aria-labelledby="top-sellers-title">
       <div className="mb-4">
         <h2 className="font-semibold text-[22px] tracking-[-0.03em]" id="top-sellers-title">
           优质商家

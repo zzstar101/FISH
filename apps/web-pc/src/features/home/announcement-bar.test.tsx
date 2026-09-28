@@ -11,6 +11,8 @@ test('公告栏渲染文案与无障碍副本，且没有暂停控件', () => {
   expect(html.match(/发布闲置只要 30 秒/g)?.length).toBe(6)
   // 按 Owner 要求移除暂停键：栏内不再有任何按钮。
   expect(html).not.toContain('<button')
+  // 键盘可达的停止方式：区域本身可聚焦，:focus-within 才可能被触发。
+  expect(html).toContain('tabindex="0"')
 })
 
 test('公告栏高度受 20dvh 上限约束', () => {

@@ -51,7 +51,9 @@ export function AnnouncementBar() {
     <section
       aria-label="站内公告"
       // 高度上限 72px，且任何视口下都不超过 20dvh（要求：上下占比 ≤ 20%）。
-      className="announcement-bar mb-5 flex h-[min(72px,20dvh)] items-center gap-3 overflow-hidden rounded-2xl border border-line bg-brand-soft"
+      className="announcement-bar mb-5 flex h-[min(72px,20dvh)] items-center gap-3 overflow-hidden rounded-2xl border border-line bg-brand-soft focus-visible:outline-2 focus-visible:outline-brand focus-visible:outline-offset-2"
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: WCAG 2.2.2 要求自动滚动内容有键盘可达的暂停方式；Owner 明确不要按钮，所以让区域本身可聚焦，聚焦即暂停（见 styles.css 的 :focus-within 规则）。
+      tabIndex={0}
     >
       <p className="ml-4 shrink-0 rounded-full bg-brand px-3 py-1 font-semibold text-white text-xs">
         公告
