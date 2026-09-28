@@ -31,6 +31,10 @@ const store = new Map<string, unknown>()
 let viewerReadsBeforeRotation = Number.POSITIVE_INFINITY
 let rotationUserId: string | null = null
 
+/** 模拟 `removeStorageSync` / `setStorageSync` 静默失效（不抛错也不生效）。 */
+let silentRemoveDrops = false
+let silentWriteDrops = false
+
 mock.module('@tarojs/taro', () => ({
   default: {
     getStorageSync: (key: string) => {
@@ -41,9 +45,11 @@ mock.module('@tarojs/taro', () => ({
       return store.get(key) ?? ''
     },
     setStorageSync: (key: string, data: unknown) => {
+      if (silentWriteDrops) return
       store.set(key, data)
     },
     removeStorageSync: (key: string) => {
+      if (silentRemoveDrops) return
       store.delete(key)
     },
     onAppShow: () => undefined,
@@ -62,7 +68,7 @@ mock.module('../src/features/recommendation/api', () => ({
 }))
 
 const {
-  dropUnattributableQueue,
+  clearRecommendationQueue,
   enqueueRecommendationEvent,
   flushRecommendationQueue,
   syncRecommendationViewer,
@@ -101,6 +107,8 @@ beforeEach(() => {
   calls = []
   viewerReadsBeforeRotation = Number.POSITIVE_INFINITY
   rotationUserId = null
+  silentRemoveDrops = false
+  silentWriteDrops = false
   // 模块级身份跨用例存活，必须显式重置：`null` = 已建立「未登录」身份、队列为空
   syncRecommendationViewer(null)
 })
@@ -172,26 +180,63 @@ describe('syncRecommendationViewer', () => {
     expect(queuedEventIds()).toEqual(queued.map((item) => item.eventId))
   })
 
-  test('模块加载时丢弃身份不明的遗留队列', () => {
-    // 旧版本客户端留下的队列：有事件、没有身份标记 —— 不可能是本页面生命周期写的
-    store.delete(VIEWER_KEY)
-    const legacy = [event(), event()]
-    seedQueue(legacy)
-
-    dropUnattributableQueue()
-
+  test('清除队列只有在确认清空之后才算成功', () => {
+    seedQueue([event()])
+    expect(clearRecommendationQueue()).toBe(true)
     expect(queuedEventIds()).toEqual([])
+
+    // 静默失败：不抛错也没删掉。只信返回值就会误判成「旧身份的事件已经清干净」。
+    seedQueue([event()])
+    silentRemoveDrops = true
+    expect(clearRecommendationQueue()).toBe(false)
+    expect(queuedEventIds()).toHaveLength(1)
   })
 
-  test('身份标记已经写下时，模块加载不丢弃队列', () => {
-    store.delete(VIEWER_KEY)
-    syncRecommendationViewer(null)
+  test('清除队列静默失效时不采纳新身份，也不补发旧身份事件', async () => {
+    syncRecommendationViewer('A')
     const queued = [event(), event()]
     seedQueue(queued)
 
-    dropUnattributableQueue()
+    // 换号 B：标记照常写进去，但删队列静默失效 —— 存储里仍是 A 的事件、标记却是 B
+    silentRemoveDrops = true
+    syncRecommendationViewer('B')
 
+    await flushRecommendationQueue()
+
+    expect(calls).toEqual([])
     expect(queuedEventIds()).toEqual(queued.map((item) => item.eventId))
+  })
+
+  test('身份标记写不进去时不采纳新身份，也不补发旧身份事件', async () => {
+    syncRecommendationViewer('A')
+    const queued = [event(), event()]
+    seedQueue(queued)
+
+    // 换号 B：队列清空成功，但标记写入静默失效 —— 存储里仍是旧标记 A
+    silentWriteDrops = true
+    syncRecommendationViewer('B')
+
+    await flushRecommendationQueue()
+
+    expect(calls).toEqual([])
+    expect(queuedEventIds()).toEqual([])
+    expect(store.get(VIEWER_KEY)).toEqual({ userId: 'A' })
+  })
+
+  test('非权威身份广播（冷启动 /me 网络失败）只关闸门，不当成匿名投递', async () => {
+    syncRecommendationViewer('A')
+    const queued = [event(), event()]
+    seedQueue(queued)
+
+    // `store.ts` 的 catch 分支：401 已清凭据的才算权威匿名，网络失败时 cookie 可能还是登录态
+    syncRecommendationViewer(undefined)
+
+    await flushRecommendationQueue()
+
+    expect(calls).toEqual([])
+    expect(queuedEventIds()).toEqual(queued.map((item) => item.eventId))
+    // 也不许把它按匿名写进标记：标记仍是 A
+    expect(store.get(VIEWER_KEY)).toEqual({ userId: 'A' })
   })
 })
 

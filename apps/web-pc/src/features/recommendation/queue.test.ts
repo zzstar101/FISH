@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { RecommendationEventInput } from '@fish/contracts/recommendation/schema'
 import {
-  dropUnattributableQueue,
+  clearRecommendationQueue,
   enqueueRecommendationEvent,
   flushRecommendationQueue,
   syncRecommendationViewer,
@@ -15,6 +15,8 @@ const LISTING_ID = 'lst_01jc000000e00800000000001a'
 let failWrites = false
 /** 模拟静默失败：`setItem` 不抛错也不落盘（某些浏览器 / 隐私模式下的 `localStorage`）。 */
 let silentWriteDrops = false
+/** 模拟删除静默失败：`removeItem` 不抛错也不生效（旧身份的事件会留在存储里）。 */
+let silentRemoveDrops = false
 
 function createStorage(): Storage {
   const entries = new Map<string, string>()
@@ -32,6 +34,7 @@ function createStorage(): Storage {
       return [...entries.keys()][index] ?? null
     },
     removeItem(key) {
+      if (silentRemoveDrops) return
       entries.delete(key)
     },
     setItem(key, value) {
@@ -71,6 +74,7 @@ beforeEach(() => {
   localStorageStub.clear()
   failWrites = false
   silentWriteDrops = false
+  silentRemoveDrops = false
   calls = []
   respond = async () => accepted()
   Object.assign(globalThis, {
@@ -385,20 +389,57 @@ describe('syncRecommendationViewer', () => {
     expect(queuedEvents()).toEqual([])
   })
 
-  test('模块加载时丢弃身份不明的遗留队列', () => {
-    // 旧版本客户端只写过队列、没写过标记：这批事件无法归属，补发时会被记到当前 Cookie 名下。
-    seedQueue([event(), event()])
-    dropViewerMarker()
-
-    dropUnattributableQueue()
-
+  test('清除队列只有在确认清空之后才算成功', () => {
+    seedQueue([event()])
+    expect(clearRecommendationQueue()).toBe(true)
     expect(queuedEvents()).toEqual([])
+
+    // 静默失败：不抛错也没删掉。只信返回值就会误判成「旧身份的事件已经清干净」。
+    seedQueue([event()])
+    silentRemoveDrops = true
+    expect(clearRecommendationQueue()).toBe(false)
+    expect(queuedEvents()).toHaveLength(1)
   })
 
-  test('身份标记已经写下时不丢弃队列', () => {
-    seedQueue([event(), event()])
+  test('清除队列静默失效时不采纳新身份，也不补发旧身份事件', async () => {
+    syncRecommendationViewer('A')
+    const queued = [event(), event()]
+    seedQueue(queued)
 
-    dropUnattributableQueue()
+    // 换号 B：标记照常写进去，但删队列静默失效 —— 存储里仍是 A 的事件、标记却是 B。
+    silentRemoveDrops = true
+    syncRecommendationViewer('B')
+
+    // 没有确认清空就不许采纳 B：否则这批事件会按 B 的 Cookie 投出去（串号）。
+    await flushRecommendationQueue()
+    expect(calls).toEqual([])
+    expect(queuedEvents().map((item) => item.eventId)).toEqual(queued.map((item) => item.eventId))
+  })
+
+  test('身份标记写不进去时不采纳新身份，也不补发旧身份事件', async () => {
+    syncRecommendationViewer('A')
+    const queued = [event(), event()]
+    seedQueue(queued)
+
+    // 换号 B：队列清空成功，但标记写入静默失效 —— 存储里仍是旧标记 A。
+    // 若此时内存采纳 B，复核会读到 A 与内存 B 不一致而「同意」……
+    // 更糟的是反过来：内存若留在 A，闸门照样会开，A 的事件就按 B 的 Cookie 发出去了。
+    silentWriteDrops = true
+    syncRecommendationViewer('B')
+
+    await flushRecommendationQueue()
+    expect(calls).toEqual([])
+    expect(queuedEvents()).toEqual([])
+    expect(JSON.parse(localStorageStub.getItem(VIEWER_STORAGE_KEY) ?? 'null')).toEqual({
+      userId: 'A',
+    })
+  })
+
+  test('身份不明时模块加载（导入 queue.ts）不丢队列', () => {
+    // 冷启动 `loadMe` 网络失败时整段会话都不写标记：本客户端自己攒的事件不能被当成
+    // 「旧版本客户端的遗留队列」丢掉（模块加载时的丢弃规则已被删除）。
+    seedQueue([event(), event()])
+    dropViewerMarker()
 
     expect(queuedEvents()).toHaveLength(2)
   })

@@ -68,62 +68,67 @@ function writeQueue(queue: RecommendationEventInput[]): boolean {
 /**
  * 读「当前身份」标记。
  *
- * 三个返回值的区别是这个模块的关键：`undefined` = **没有标记**（本客户端还没同步过身份，
- * 或旧版本客户端留下的数据）；`null` = 标记存在且当时**未登录**；字符串 = 当时登录的 userId。
+ * 三个返回值的区别是这个模块的关键：`undefined` = **没有标记 / 身份不明**（本客户端还没同步过
+ * 身份、旧版本客户端留下的数据、数据损坏、存储不可用）；`null` = 标记存在且当时**未登录**；
+ * 字符串 = 当时登录的 userId。读不出来、解析不出来一律当「身份不明」，调用方按「不投递」处理。
  */
 function readViewerMarker(): string | null | undefined {
   try {
     const raw: unknown = Taro.getStorageSync(VIEWER_KEY)
     if (typeof raw !== 'object' || raw === null) return undefined
     const userId = (raw as { userId?: unknown }).userId
-    if (userId === undefined) return undefined
-    return typeof userId === 'string' ? userId : null
+    if (userId === null) return null
+    return typeof userId === 'string' ? userId : undefined
   } catch {
     return undefined
   }
 }
 
-function writeViewerMarker(userId: string | null): void {
+/**
+ * 写入身份标记，返回**是否真的落盘**（写完重读核对）。
+ *
+ * 返回值是「采纳新身份」的前置条件：标记没写进去就采纳，内存身份会与存储标记分叉，下一次
+ * 冲刷的复核就会失准。写不进去就退回「身份不明」（闸门关着）—— 宁可停发也不能串号。
+ */
+function writeViewerMarker(userId: string | null): boolean {
   try {
     Taro.setStorageSync(VIEWER_KEY, { userId })
   } catch {
-    /* 存储失败不致命：内存里的 currentViewer 仍是权威，最坏情况是下次冷启动当「没有标记」处理 */
+    // 存储失败：下面的重读才是判据。
   }
+  const stored = readViewerMarker()
+  return stored !== undefined && stored === userId
 }
 
 /**
- * 丢弃本地全部待发事件（离队 + 移除队列存储）。
+ * 丢弃本地全部待发事件（离队 + 移除队列存储），返回**是否确认清空**（重读核对）。
  *
  * 身份变化时用它：未发送的事件属于**旧身份**，而服务端是按「投递那一刻的会话 cookie」
  * 解析事件归属的（`apps/api/src/modules/recommendation/service.ts` 的 `let userId = viewerId`），
  * 留在队列里只会在换号后被记到新账号头上 —— 那正是本次要修的 blocker。
- */
-export function clearRecommendationQueue(): void {
-  // 复用 writeQueue 的「空队列 = 移除 key」语义；存储失败不致命：本来就是要丢掉它们
-  writeQueue([])
-}
-
-/**
- * 丢弃「身份不明」的遗留队列。
  *
- * 模块**加载时**调用一次：那一刻队列里的事件不可能是本次小程序进程写下的（埋点入口还没接上），
- * 只可能来自旧版本客户端（那时还没有身份标记）。这类事件无法归属，补发时会被服务端按当时的
- * 会话 cookie 记到别人账号上 —— 宁可丢，也不能串号。
- *
- * 导出是为了可测：模块加载后就再没有第二个这样的时机了。
+ * 返回值是「采纳新身份」的前置条件：`removeStorageSync` 同样会静默失效（既不抛错也不生效），
+ * 只看有没有抛错就采纳新身份，等于把旧身份留在存储里的事件按新身份投出去。读不回来一律算
+ * 没清干净。
  */
-export function dropUnattributableQueue(): void {
-  if (readViewerMarker() !== undefined) return
-  if (readQueue().length === 0) return
-  clearRecommendationQueue()
+export function clearRecommendationQueue(): boolean {
+  try {
+    Taro.removeStorageSync(QUEUE_KEY)
+  } catch {
+    // 删不掉没关系，下面的重读才是判据。
+  }
+  try {
+    const raw: unknown = Taro.getStorageSync(QUEUE_KEY)
+    return raw === undefined || raw === null || raw === ''
+  } catch {
+    return false
+  }
 }
-
-dropUnattributableQueue()
 
 /**
  * 内存里的「当前身份」。
  *
- * `undefined` 与 `null` 的区别同 `readViewerMarker()`：前者是「没有标记」，后者是「标记为未登录」。
+ * `undefined` 与 `null` 的区别同 `readViewerMarker()`：前者是「身份不明」，后者是「标记为未登录」。
  * 模块初始化时读一次，之后只由 `syncRecommendationViewer()` 与冲刷前的存储比对更新。
  */
 let currentViewer: string | null | undefined = readViewerMarker()
@@ -137,52 +142,79 @@ let currentViewer: string | null | undefined = readViewerMarker()
  * 宁可丢一批身份不明的行为，也不能把 A 的行为挂到 B 上；把历史行为缝合到某个账号上
  * 留给后续 issue，R1 只解决「不串号」。
  */
-export function syncRecommendationViewer(userId: string | null): void {
+export function syncRecommendationViewer(userId: string | null | undefined): void {
+  /*
+    `undefined` = 调用方明确表示「这次广播不是权威身份」（例如冷启动 `/me` 网络失败，cookie 却
+    可能仍然是登录态）。这时既不采纳存储里的标记、也不碰队列，只把内存身份退回「身份不明」、
+    闸门关上 —— 否则队列会按仍然有效的登录 Cookie 投出去，那正是要修的串号。
+  */
+  if (userId === undefined) {
+    currentViewer = undefined
+    return
+  }
+
   const stored = readViewerMarker()
 
-  if (stored === undefined) {
-    /*
-      身份从「未知」第一次变成已知。已知身份是某个账号时，队列里那批事件可能是匿名会话产生的
-      （身份解析出来之前就入了队），挂到账号上就是一次「匿名 → 登录」迁移 —— 按锁定口径丢弃。
-      已知身份仍是匿名则保留：它们本来就是匿名会话的事件。
-      遗留队列（旧版本客户端写的、身份不明）不在这里丢：`dropUnattributableQueue()` 在模块
-      加载时已经处理过一次了。
-    */
-    if (userId !== null && readQueue().length > 0) clearRecommendationQueue()
-    writeViewerMarker(userId)
-    currentViewer = userId
+  /*
+    「身份不明 → 匿名」是**唯一保留队列**的轮换：以匿名投递时服务端只会落 `user_id = NULL`，
+    事件各自带 `anonymousSessionId`，挂不到任何账号头上 —— 冷启动断网期间入队的事件正是靠这条
+    保住并在身份就绪后补发（不能按「身份不明一律丢」处理：那会把整段离线会话的埋点删光，
+    而且这里并没有任何串号风险）。
+  */
+  if (stored === undefined && userId === null) {
+    if (!writeViewerMarker(null)) {
+      currentViewer = undefined
+      return
+    }
+    currentViewer = null
     return
   }
 
-  if (stored === userId) {
+  if (stored === userId && stored !== undefined && currentViewer === userId) {
     // 身份没变：只更新内存。**不许轮换** —— 否则每次刷新页面 / 每个 401 都会把待发事件丢光
-    currentViewer = userId
     return
   }
 
-  // 登录 / 注册 / 退出 / 换号：未发送的旧身份事件全部丢弃（理由见上方「为什么宁丢不迁移」）
-  clearRecommendationQueue()
-  writeViewerMarker(userId)
+  /*
+    其余都是真正的轮换：匿名 → 登录、A → B、退出登录，以及「身份不明 → 登录」（那批事件可能
+    来自匿名会话，按锁定口径「不迁移」丢弃）。必须**先确认队列清空、再确认标记写入**才采纳新
+    身份；任一步失败就退回「身份不明」，冲刷的闸门会一直关着 —— 宁可停发一批，也不能把旧身份
+    的行为按新身份的 Cookie 投出去。
+  */
+  if (!clearRecommendationQueue()) {
+    currentViewer = undefined
+    return
+  }
+  if (!writeViewerMarker(userId)) {
+    currentViewer = undefined
+    return
+  }
   currentViewer = userId
 }
 
 /**
  * 用存储里的身份标记校正内存身份；返回「本轮还能不能用手里这份队列投递」。
  *
- * 三种情况：
+ * 四种情况：
  * - 没有标记（`undefined`）：身份还没解析出来，手里这批事件属于谁不知道 —— 留着，等
  *   `syncRecommendationViewer` 写下标记后再发（冷启动会先入队、后解析身份）。
+ * - 内存身份也是「不明」（上一次轮换没能确认清空队列）：闸门关着，不投递。
  * - 标记与内存一致：正常投递。
  * - 标记与内存不一致：另一个页面在本页不知情时轮换过身份。对方会清空队列，所以本页通常读到
  *   空队列；但队列也可能还在（对方写存储失败，或标记不是走 `syncRecommendationViewer` 改的）
- *   —— 那时队列里的事件属于**旧身份**，只能丢，绝不能以新身份投递。代价是「对方轮换后、本页
- *   下一次冲刷前新入队的事件」也会被丢，在「宁丢不串号」的口径下这是可接受的保守选择。
+ *   —— 那时队列里的事件属于**旧身份**，只能丢，绝不能以新身份投递；清不干净就退回「身份不明」。
+ *   代价是「对方轮换后、本页下一次冲刷前新入队的事件」也会被丢，在「宁丢不串号」的口径下这是
+ *   可接受的保守选择。
  */
 function refreshViewerFromStorage(): boolean {
   const stored = readViewerMarker()
   if (stored === undefined) return false
+  if (currentViewer === undefined) return false
   if (stored === currentViewer) return true
-  clearRecommendationQueue()
+  if (!clearRecommendationQueue()) {
+    currentViewer = undefined
+    return false
+  }
   currentViewer = stored
   return false
 }
