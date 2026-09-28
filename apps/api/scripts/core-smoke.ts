@@ -1160,7 +1160,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     // 把愿望的向量替换成与商品**逐位相同**的向量：cos = 1 ⇒ 归一化语义分 100（与 provider 的尺度
     // 无关，stub 与 live 都成立），而两边文本仍然零重叠（keywordScore 必须还是 0）。
-    // content_hash 写成当前内容的指纹，让引擎认为它新鲜（M2 的就绪判定 = model + dimensions + 指纹）。
+    // content_hash 写成当前内容的指纹，且 source_updated_at 对齐愿望当前版本：目标侧的就绪判定用
+    // 前者（model + dimensions + 指纹），候选侧的新鲜度谓词用后者（#322 M3 评审 blocker），两者都满足
+    // 引擎才会把这条向量当"对应当前内容"。
     await db.execute(sql`
       update embeddings
          set embedding = ${JSON.stringify(listingEmbedded.embedding)}::vector,

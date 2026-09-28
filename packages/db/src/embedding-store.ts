@@ -12,6 +12,22 @@ import { wishes } from './schema/wishes'
  * `@fish/contracts/embedding/text`（文本与内容指纹）与
  * `apps/worker/src/jobs/embedding/handlers.ts`（生成决策）里。这样 M2 的召回与 M4 的
  * backfill 可以复用同一存取层，而不必各自再写一遍 SQL。
+ *
+ * ## 新鲜度不变量（#322 M2/M3，评审 blocker 修复）
+ *
+ * **只有"对应当前实体版本"的向量才允许进入召回与打分。** 候选侧用
+ * `embeddings.source_updated_at = 实体当前 updated_at` 作为判据（下面两条 `fresh*` 谓词）：
+ *
+ * - 实体被编辑后、`EMBED_*` 还没跑完（或失败）时，旧向量不满足等式 ⇒ **不进 Top-K**
+ *   （不占 K 名额），也不会被按 id 补算拿去做 hybrid 打分 ⇒ 这一对退回 v1 口径。
+ *   否则会把"旧向量"和"当前的价格/分类事实"拼成一个混合版本的分，甚至让过期候选挤掉
+ *   真正相关的新鲜候选——这正是评审指出的问题。
+ * - 内容没变但实体版本前进（改价、改状态这类不碰 embedding 文本的编辑）由 handler 的
+ *   `refreshEmbeddingSourceVersion` 推进标记，因此合法向量不会被误判成过期。
+ *
+ * 目标侧（`findEmbedding` 的调用方）用更精确的判据：直接把 `content_hash` 与当前文本指纹比
+ * （引擎在那里本来就要构文本）。候选侧没法在 SQL 里逐行算文本指纹，才用版本标记这个等价代理；
+ * 两者的共同含义都是"这条向量是不是对应当前内容"。
  */
 
 /** 向量指向的实体。单表双可空 FK，所以"哪个实体"必须是显式参数（见 `schema/embeddings.ts`）。 */
@@ -180,45 +196,6 @@ export async function hasEmbeddingFromOtherModel(
   return rows.length > 0
 }
 
-export type RefreshEmbeddingVersionInput = {
-  entity: EmbeddingEntity
-  model: string
-  /** 只有库里那行的内容指纹与它一致，才允许推进版本——否则那行描述的是**别的**内容。 */
-  contentHash: string
-  /** 实体当前版本（读实体那一刻的 `updated_at`）。 */
-  sourceUpdatedAt: Date
-}
-
-/**
- * 把"内容没变、但实体版本已经前进"的向量行推进到实体当前版本（#322 M2 复审 blocker 的必要配套）。
- *
- * 场景：只改了价格/状态这类**不进 embedding 文本**的字段。EMBED_* job 重跑后按指纹判定为
- * `unchanged`、不调 provider，但 `updated_at` 已经变了——若不把版本标记一起推进，这条向量在
- * 召回时会被新鲜度谓词判为过期、直接消失，等于"改个价格语义召回就断了"。
- *
- * 两个守卫：指纹必须与库里一致（否则不允许动这行），版本只能**前进**（`<` 而不是 `<=`，
- * 旧 job 不能把版本标记回退）。返回是否真的推进了一行。
- */
-export async function refreshEmbeddingSourceVersion(
-  db: Db,
-  input: RefreshEmbeddingVersionInput,
-): Promise<boolean> {
-  const rows = await db
-    .update(embeddings)
-    .set({ sourceUpdatedAt: input.sourceUpdatedAt, updatedAt: new Date() })
-    .where(
-      and(
-        entityFilter(input.entity),
-        eq(embeddings.model, input.model),
-        eq(embeddings.contentHash, input.contentHash),
-        lt(embeddings.sourceUpdatedAt, input.sourceUpdatedAt),
-      ),
-    )
-    .returning({ id: embeddings.id })
-
-  return rows.length > 0
-}
-
 /**
  * 内容一变就让旧向量立即不可召回（#333 复审 blocker 的**主判据**）。
  *
@@ -307,6 +284,9 @@ export type SimilarQuery = {
  *
  * 不建 ANN 索引（M2 实测数据量下 exact scan 足够，见 M2 设计文档 §6）：本函数就是一次
  * `ORDER BY embedding <=> $1 LIMIT K` 的全表 exact 扫描。
+ *
+ * **只召回新鲜向量**：`freshListingsEmbedding()` 把"实体编辑后还没重算向量"的候选挡在
+ * Top-K 之外——它们既不占 K 名额，也不会被送去 hybrid 打分（评审 blocker 修复）。
  */
 export async function topKSimilarListings(
   db: Db,
@@ -351,6 +331,9 @@ export async function topKSimilarWishes(db: Db, query: SimilarQuery): Promise<Si
  *
  * 无 `LIMIT`（行数就是该 target 的已有匹配数，量级个位到几十），也没有结构化过滤——
  * 已有行的存在本身就说明它曾经通过过结构化规则，这里要的是"这一对现在多少分"。
+ *
+ * **但新鲜度一样要查**：已有行如果指向的是过期向量，就不能把旧 cosine 当 ranking v2 的真值
+ * （那会给出"当前结构事实 + 旧语义"的混合分）。查不到就当作这一对没有语义分，按 v1 口径重算。
  */
 export type SimilarByIdsQuery = {
   /** 必须显式给出，与 `topKSimilar*` 同一口径。 */
@@ -374,7 +357,13 @@ export async function similarListingsByIds(
     })
     .from(embeddings)
     .innerJoin(listings, eq(listings.id, embeddings.listingId))
-    .where(and(eq(embeddings.model, query.model), inArray(embeddings.listingId, query.ids)))
+    .where(
+      and(
+        eq(embeddings.model, query.model),
+        freshListingsEmbedding(),
+        inArray(embeddings.listingId, query.ids),
+      ),
+    )
 }
 
 /** `similarListingsByIds` 的镜像（愿望侧）。 */
@@ -392,5 +381,53 @@ export async function similarWishesByIds(
     })
     .from(embeddings)
     .innerJoin(wishes, eq(wishes.id, embeddings.wishId))
-    .where(and(eq(embeddings.model, query.model), inArray(embeddings.wishId, query.ids)))
+    .where(
+      and(
+        eq(embeddings.model, query.model),
+        freshWishesEmbedding(),
+        inArray(embeddings.wishId, query.ids),
+      ),
+    )
+}
+
+/**
+ * 把一条**内容仍然对得上**的向量行的版本标记推进到实体当前版本。
+ *
+ * 用在 handler 的 `unchanged` 分支：内容指纹一致 ⇒ 不必重算向量、不必重新计费，但实体版本可能
+ * 已经前进（改价、改状态、改图片这类不碰 embedding 文本的编辑）。不推进标记，这条向量就会被
+ * 上面的新鲜度谓词误判成过期：候选侧从此进不了 Top-K，等于"改个价就再也匹配不上"。
+ *
+ * 两个守卫保证它只能"把仍然正确的向量标记为当前版本"，永远不会把旧向量写成新的：
+ * - `content_hash = 本次内容指纹`：向量对得上当前内容才允许推进；
+ * - `source_updated_at < 当前实体版本`：只前进不回退（并发下晚到的旧 job 不会把标记拉回去）。
+ *
+ * 返回是否真的推进了；没有可推进的行时返回 `false`（不是错误，`unchanged` 仍然是成功）。
+ */
+export type RefreshEmbeddingVersionInput = {
+  entity: EmbeddingEntity
+  model: string
+  /** 本次按实体当前内容算出的指纹（必须与库里的行一致才允许推进）。 */
+  contentHash: string
+  /** 读实体那一刻的版本（`updated_at`）。 */
+  sourceUpdatedAt: Date
+}
+
+export async function refreshEmbeddingSourceVersion(
+  db: Db,
+  input: RefreshEmbeddingVersionInput,
+): Promise<boolean> {
+  const rows = await db
+    .update(embeddings)
+    .set({ sourceUpdatedAt: input.sourceUpdatedAt, updatedAt: new Date() })
+    .where(
+      and(
+        entityFilter(input.entity),
+        eq(embeddings.model, input.model),
+        eq(embeddings.contentHash, input.contentHash),
+        lt(embeddings.sourceUpdatedAt, input.sourceUpdatedAt),
+      ),
+    )
+    .returning({ id: embeddings.id })
+
+  return rows.length > 0
 }

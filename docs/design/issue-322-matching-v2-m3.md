@@ -120,6 +120,23 @@ semanticAllowed = wish.acceptSimilar || keywordScore > 0 || categoryScore > 0
   按 id 精确补算 cosine —— 否则这些行会被当成"没有语义"而降级，出现"分数掉下阈值、旧高分残留"
   或"假降级"。
 - 补算是**一次批量查询**（`inArray`，无 LIMIT、无结构化过滤），不做逐行查询。
+- **新鲜度不变量（#338 评审 blocker，判据在 #333 第二轮复审后改为内容指纹）**：只有"描述的就是当前
+  实体内容"的向量才允许进召回与打分。
+  - **主判据 = 写路径按内容指纹失效**（M2 §13 第二轮）：实体内容一变，写路径就在同一执行器里删掉该实体下
+    `content_hash` 与当前文本指纹不符的向量行（`pruneStaleEmbeddings()`），所以"行还在"等价于"它描述的是
+    当前内容"，与时间戳精度无关，也不取决于 worker 何时跑到 `EMBED_*`。
+  - **时间戳谓词是纵深防御**：候选侧仍带
+    `date_trunc('milliseconds', embeddings.source_updated_at) = date_trunc('milliseconds', <实体>.updated_at)`
+    （`freshListingsEmbedding()` / `freshWishesEmbedding()`，见 `packages/db/src/embedding-store.ts`），
+    兜住"某个写路径忘了调 prune"的情形。实体被编辑后、`EMBED_*` 还没跑完（或失败）时，旧向量
+    **不进 Top-K**（不占 K 名额），也**不被按 id 补算**去算 hybrid 分 ⇒ 这一对退回 v1 口径
+    （`ranking_version = 1`、`semantic_score = NULL`）。
+  - 目标侧仍用更精确的判据（`content_hash` 与当前文本指纹一致）。
+  - 按毫秒截断是必须的：库里 `updated_at` 是微秒精度（`now()`），而 JS `Date` 只有毫秒精度，handler
+    读出来再写进 `source_updated_at` 时已经截断，直接等值比较会**永远不成立**（所有候选都被误判过期）。
+  - 内容没变但实体版本前进（改价/改状态这类不碰 embedding 文本的编辑）由 handler 的
+    `refreshEmbeddingSourceVersion` 推进标记——两个守卫（指纹一致 + 版本只前进）保证它不会把旧向量
+    写成新的。
 
 ## 7. 权重冻结证据（Q4/Q5）
 
@@ -159,6 +176,10 @@ semanticAllowed = wish.acceptSimilar || keywordScore > 0 || categoryScore > 0
   / 0.68 ≈ 77.9`，语义够高就能召回。12/12 与人工判断一致。
 - 阈值 70 在 S4 下**不需要动**：`MATCH_SCORE_THRESHOLD` 保持 70，`ranking.test.ts` 里 12 条样本
   的判定与人工判断逐条一致。
+- **口径说明（#338 评审非 blocker）**：上表的 cosine 是**人工给定**的 fixture 值，用来钉住"给定
+  相似度时权重如何决定判定"。因此本阶段冻结的是**算法口径**（四路权重、锚点、门禁、阈值），
+  **不是**对真实模型语义质量的验证——12/12 是"fixture 与人工判断一致"，不等于"真实 provider 下
+  的中文同义/品牌型号样本也 12/12"。真实分布的校准（含锚点 `0.5/0.95` 与 K）属 M4 live 验证。
 
 ## 8. 可观测（Q8/Q9）
 
@@ -180,6 +201,7 @@ semanticAllowed = wish.acceptSimilar || keywordScore > 0 || categoryScore > 0
 | 权重/阈值基于证据冻结 | ✅ | §7（S4 12/12，阈值保持 70） |
 | 分数兼容（客户端只消费 0..100） | ✅ | `MatchBaseSchema` 未改；新字段只落库 |
 | 既有行掉出 Top-K/变低后能降级不残留 | ✅ | `engine.test.ts`（65 分覆盖 100 分、NULL/1 落库） |
+| 候选向量过期时不得参与召回/打分（#338 评审 blocker） | ✅ | `embeddings.test.ts`（Top-K 与 by-ids 排除过期向量、`refreshEmbeddingSourceVersion` 三个守卫）、`engine.test.ts`（编辑候选后旧向量不进 Top-K、已有行退回 v1、重算后恢复 v2）、`handlers.test.ts`（改价后 `unchanged` 仍推进版本标记） |
 | core smoke 覆盖一条语义匹配链 | ✅ | `apps/api/scripts/core-smoke.ts` 的「语义链」一节（零词法重叠 → 85 分） |
 | 无 substring 的语义近似可召回 | ⏸ 部分 | smoke 用手工向量证明**召回由向量决定**；真实模型的语义质量属 M4 live 验证 |
 | backfill / 真实 provider live smoke | ⏸ M4 | 不在本阶段 |
@@ -218,3 +240,46 @@ bun run core:smoke                         # 端到端（含语义链一节）
   snapshot 的 `prevId` 链必须连续 —— 上层 rebase 到最新 main 后要**重新 generate**，不能把两条
   sibling snapshot 直接拼进 journal（`migrations-journal.test.ts` 会红）。
 - 本 PR 的 `matches` 迁移链在 M2 snapshot 之后；M1/M2 已审过的迁移在本分支不动。
+
+## 13. 评审修复（#338）：候选向量新鲜度不变量
+
+评审（zzstar101，针对 HEAD `3988afb`）指出的 blocker：M2 的 `topKSimilarListings/Wishes` 只按
+`model` + 结构化条件筛，M3 新增的 `similarListingsByIds/similarWishesByIds` 只按 model + id 取
+cosine，**都没有验证向量是否对应当前实体内容**。后果有三：①Top-K 仍按旧内容向量排序，过期候选会
+挤掉新鲜候选；②旧 cosine 被送进 `scoreMatch(..., semantic)`，与当前的价格/分类事实拼成"混合版本"
+的分；③既有行的按 id 补算把过期 cosine 当 v2 真值。
+
+修法（统一在向量读路径上建立不变量，而不是在每个调用点各判一次）：
+
+| 位置 | 改动 |
+|---|---|
+| `packages/db/src/embedding-store.ts` | 新增 `freshListingsEmbedding()` / `freshWishesEmbedding()`（毫秒截断的版本相等谓词）；`topKSimilar*` 与 `similar*ByIds` 的 `where` 全部带上它 |
+| 同上 | 新增 `refreshEmbeddingSourceVersion()`：把"内容指纹仍然一致"的向量行的版本标记推进到实体当前版本（两个守卫：指纹一致 + 版本只前进） |
+| `apps/worker/src/jobs/embedding/handlers.ts` | `unchanged` 分支调用 `refreshEmbeddingSourceVersion`：内容没变但实体版本前进（改价/改状态）时，不推进就会让仍然正确的向量被候选侧判成过期 |
+| 引擎 | 不需要改：召回与补算都被 SQL 谓词挡住，`similarities` 里没有这一对 ⇒ 自动退回 v1 口径 |
+
+- **为什么按毫秒截断**：`updated_at` 是微秒精度（`now()`），JS `Date` 只有毫秒——handler 读实体后
+  写进 `source_updated_at` 的值已被截断，直接等值比较几乎永不成立（第一次实现就是这样，全部候选被
+  误判过期，6 条既有用例当场变红）。毫秒是应用层能表达的精度，也就取它作为比较精度。
+- **为什么不用"写前重读实体"**：那只能在写入侧收敛，召回侧的排序问题（过期候选挤掉新鲜候选）依旧
+  存在；判据放在读路径上，召回与打分同时被覆盖。
+- 回归证据：`packages/db/src/embeddings.test.ts`（过期向量不进 Top-K、by-ids 同样过滤、重算后恢复、
+  `refreshEmbeddingSourceVersion` 的三个守卫）、`apps/worker/src/jobs/matching/engine.test.ts`
+  的 `describe('候选向量新鲜度（#322 M3 评审 blocker）')`（已有行退回 v1 → 重算后恢复 v2；没有既有行
+  时过期候选连"新建"都进不来）、`apps/worker/src/jobs/embedding/handlers.test.ts`（只改价格时
+  `unchanged` 且版本标记跟上实体）。
+
+### 13.1 后续修订（#333 第二轮复审）：主判据改为内容指纹
+
+上面这一轮的判据是**版本号相等**，但实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率）——
+同一毫秒内的两次编辑内容不同、版本号却完全相同，旧向量仍会被判成新鲜。这一条在 #333 的第二轮复审里
+被指出，修法落在 M2 分支（`prune-on-write`：写路径删掉 `content_hash` 与当前指纹不符的行，
+`pruneStaleEmbeddings()`），本 PR rebase 后即继承：
+
+- **主判据**：写路径内容指纹失效（"行还在"⇒"描述的是当前内容"）；
+- **本 PR 的 `fresh*Embedding()` 谓词与 `similar*ByIds` 的 `where`**：降级为纵深防御，兜住"某写路径
+  忘了调 prune"的情形；毫秒截断原因不变；
+- **引擎与打分口径不变**：进不了召回/补算的候选依旧退回 v1（`ranking_version = 1`、
+  `semantic_score = NULL`），所以 M3 的 hybrid 分数不会用到任何"旧语义"。
+
+细节与回归证据见 `docs/design/issue-322-matching-v2-m2.md` §13 与 §5。

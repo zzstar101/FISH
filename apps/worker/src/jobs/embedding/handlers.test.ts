@@ -227,6 +227,36 @@ describe('EMBED_LISTING', () => {
     expect(after?.embedding).not.toEqual(before?.embedding)
   })
 
+  test('只改价格（内容不变）时仍是 unchanged，但版本标记会推进到实体当前版本', async () => {
+    const listingId = await createListing()
+    const entity = { kind: 'listing', id: listingId } as const
+    const wrapped = counting(stub)
+    const handlers = createEmbedJobHandlers(db, wrapped.provider)
+
+    const first = await handlers.EMBED_LISTING({ listingId })
+    const before = await findEmbedding(db, entity, STUB_EMBEDDING_MODEL)
+
+    // 改价：不碰 embedding 文本，但会把 listings.updated_at 推进。显式给一个未来的时间戳是为了
+    // 不受毫秒粒度影响（`$onUpdate` 不会覆盖显式传入的 updatedAt）。
+    const bumped = new Date(Date.now() + 1000)
+    await db
+      .update(listings)
+      .set({ priceCents: 12000, updatedAt: bumped })
+      .where(eq(listings.id, listingId))
+
+    const second = await handlers.EMBED_LISTING({ listingId })
+    const after = await findEmbedding(db, entity, STUB_EMBEDDING_MODEL)
+
+    expect(second.status).toBe('unchanged')
+    expect(expectHash(second)).toBe(expectHash(first))
+    // 内容没变 ⇒ 不重新调用 provider（不重复计费），向量本身也不动。
+    expect(wrapped.calls()).toBe(1)
+    expect(after?.embedding).toEqual(before?.embedding)
+    // 但版本标记必须跟上实体：否则候选侧的新鲜度检查会把这条仍然正确的向量判成过期，
+    // 这一对就再也进不了语义召回（#322 M3 评审 blocker）。
+    expect(after?.sourceUpdatedAt.getTime()).toBe(bumped.getTime())
+  })
+
   test('并发：旧 job 卡在 provider 期间实体被编辑，晚到的旧结果不覆盖新内容向量（#322 验收）', async () => {
     const listingId = await createListing({ title: 'K380 机械键盘' })
     const entity = { kind: 'listing', id: listingId } as const
