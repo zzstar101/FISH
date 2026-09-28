@@ -1,6 +1,6 @@
 name: fish
 
-# 只托管本地依赖；应用（web / api / worker）由宿主机 bun 直接运行。
+# 只托管本地依赖；应用（api / worker / web-pc）由宿主机 bun 直接运行。
 services:
   postgres:
     image: pgvector/pgvector:pg18

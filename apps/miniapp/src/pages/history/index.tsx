@@ -57,7 +57,7 @@ import './index.scss'
  * | 能力 | 契约现状 | 证据 |
  * | --- | --- | --- |
  * | 浏览足迹 | ❌ 无该域（无表、无端点） | `packages/contracts/src/` 下无 footprint / view_history |
- * | 收藏 | ❌ 契约无、API 无模块、DB 无表 | 全仓 `grep -i favorit` 只命中 web mock 与小程序文案 |
+ * | 收藏 | ❌ 契约无、API 无模块（DB 侧只有表） | `packages/contracts` / `apps/api` 无 favorites 域；`packages/db/src/schema/favorites.ts` 有表无端点 |
  * | 「我发过的留言」聚合 | ❌ 只有**按商品**取留言的那一条路由 | `packages/contracts/src/comments/routes.ts` 的 `COMMENT_ROUTES`；`comments/schema.ts` 的 `CommentListQuerySchema` 只有 `limit` / `cursor`，**没有 author 过滤** |
  * | 交易评价 / 评分 | ❌ 交易域无 review / rating 字段 | `packages/contracts/src/transactions/schema.ts` 里 `review` / `rating` 零命中（「我留言的」这一档里的**交易评价**那 4 条同样是演示数据） |
  * | 清空 / 取消收藏 / 删留言（写端点） | ❌ 一个都没有 | 全 API 无 `.delete(` 路由；契约里可写的只有 listings 的 offline/online、wishes 的 close/fulfill、notifications 的 markRead |

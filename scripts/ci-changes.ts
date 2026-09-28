@@ -84,7 +84,7 @@ function closeOverDependencies(hit: Set<Area>): void {
     for (const area of ['api', 'worker', 'web_pc', 'miniapp'] as const) hit.add(area)
   }
   if (hit.has('db')) {
-    // 数据库包只被服务端消费；web / miniapp 不直接依赖它。
+    // 数据库包只被服务端消费；web-pc / miniapp 不直接依赖它。
     hit.add('api')
     hit.add('worker')
   }

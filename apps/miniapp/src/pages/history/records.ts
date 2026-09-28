@@ -9,7 +9,7 @@
  * | 能力 | 契约现状 | 证据 |
  * | --- | --- | --- |
  * | 浏览足迹 | ❌ 全仓无 footprint / view_history 表与端点 | `packages/contracts/src/` 无该域 |
- * | 收藏 | ❌ 契约无、API 无模块、DB 无表 | 全仓 `grep -i favorit` 只命中 web mock 与小程序文案 |
+ * | 收藏 | ❌ 契约无、API 无模块（DB 侧只有表） | `packages/contracts` / `apps/api` 无 favorites 域；`packages/db/src/schema/favorites.ts` 有表无端点 |
  * | 「我发过的留言」聚合 | ❌ 留言只有**按商品**取的那条路由 | `packages/contracts/src/comments/routes.ts` 的 `COMMENT_ROUTES`；`comments/schema.ts` 的 `CommentListQuerySchema` 只有 `limit` / `cursor`，没有 author 过滤 |
  *
  * 所以本模块里的 `DEMO_*` 只服务**演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，

@@ -39,7 +39,7 @@
 静态客户端路径：
 
 - `/pc/` → `/var/www/fish-pc`（`apps/web-pc` PC Web）
-- `/` → **不提供静态站点**（原 `apps/web` 移动端 PWA 已随 [#325](https://github.com/zzstar101/FISH/issues/325) 移除；反代里不配 `/` 的 handle，直接 404，不做重定向、不留落地页）
+- `/` → **不提供静态站点**（原 `apps/web` 移动端 PWA 已随 [#325](https://github.com/zzstar101/FISH/issues/325) 移除；反代里显式兜底 404 —— Caddy `handle { respond 404 }`、nginx `location / { return 404; }`，不做重定向、不留落地页）
 
 必须一直成立的四条不变量（违反任何一条都会出数据问题，见 §9）：
 
@@ -547,7 +547,12 @@ fish.example.com {
 		file_server
 	}
 
-	# 站点根 `/` 不配 handle：`apps/web` 移除后 `/` 直接 404（不重定向、不留落地页，见 §0 / #325）。
+	# 站点根 `/`（以及其它未匹配路径）：`apps/web` 移除后不提供静态站点，显式 404
+	#（不重定向、不留落地页，见 §0 / #325）。必须显式兜底：Caddy 对站点块内没有
+	# handle 命中的请求返回 **200 空响应**，不写这一条 `/` 会是 200 而不是 404。
+	handle {
+		respond 404
+	}
 }
 
 # 对象存储单独域名，仅透传。
@@ -773,7 +778,7 @@ cd /srv/fish && WS_URL=ws://127.0.0.1:3000/ws /usr/local/bin/bun run ws:smoke
 #     -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
 #     https://fish.example.com/ws/chat
 
-# 4) 静态产物：只有 PC Web（站点根 `/` 不再有静态站点，见 §0）
+# 4) 静态产物：只有 PC Web（站点根 `/` 不再有静态站点，由反代显式兜底返回 404，见 §0）
 curl -sI https://fish.example.com/ | head -1                 # 404
 curl -sI https://fish.example.com/pc | head -1               # 308
 curl -sI https://fish.example.com/pc/ | head -1              # 200
@@ -1066,10 +1071,15 @@ S3_BUCKET=fish                                 # 桶名 = Caddy 里的 /fish/* �
 	handle /fish/* {
 		reverse_proxy 127.0.0.1:9000
 	}
+
+	# 站点根 `/` 与其它未匹配路径：apps/web 移除后显式 404（见 §0 / #325）。
+	handle {
+		respond 404
+	}
 }
 ```
 
-`handle` 按书写顺序匹配，`/fish/*` 必须在兜底之前。仓库现有前端路由（PC 的 `/pc/*` 命名空间）没有 `/fish` 前缀，不冲突。站点根 `/` 不配 handle（#325：`apps/web` 移除后 `/` 直接 404，不做重定向、不留落地页），`/fish/*` 之后没有兜底 handle 也不会吞掉其它路径。
+`handle` 按书写顺序匹配，`/fish/*` 必须在兜底之前。仓库现有前端路由（PC 的 `/pc/*` 命名空间）没有 `/fish` 前缀，不冲突。站点根 `/` 与其它未匹配路径由最后的 `handle { respond 404 }` 显式拒绝（#325：`apps/web` 移除后不提供静态站点，不做重定向、不留落地页）；Caddy 对站点块内没有 handle 命中的请求返回 200 空响应，所以这条兜底不能省。
 
 ### 11.6 容器里没有 systemd 时的代替方案
 

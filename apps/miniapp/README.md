@@ -111,7 +111,8 @@ error TS2322: Type 'React.ReactNode' is not assignable to type
 
 - `packages/ui` / `apps/web-pc` 各自嵌套 `react@19.3.0`（`apps/web-pc/dist` 里只有一个 React 实例）
 - `@tarojs/react` 与 `@tarojs/plugin-framework-react` 各自嵌套 `react@18.3.1`
-- 实测 symlink：绝大多数指向 `react@19.3.0`，只有 `@tarojs/*` 那几处指向 `react@18.3.1`，且都不在浏览器模块图里
+- 实测 `node_modules` 下名为 `react` 的 symlink：75 个指向 `react@19.3.0`，6 个指向 `react@18.3.1`
+  （`@tarojs/*` 及其拉起的 `react-dom@18.3.1` / `react-reconciler@0.29.0`），且 18 的那几个都不在 web-pc 的浏览器模块图里
 
 需要注意的只有一件事：**将来在 `apps/web-pc` 侧新增依赖时，不要依赖「提升兜底」拿到 React**，
 要在 package.json 里显式声明；否则可能静默拿到 18。
