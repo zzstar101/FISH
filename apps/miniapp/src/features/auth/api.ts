@@ -42,3 +42,15 @@ export async function wechatSignIn(code: string): Promise<Me> {
   const payload = await apiRequest('/auth/wechat/session', { method: 'POST', body: { code } })
   return WechatSessionResponseSchema.parse(payload).user
 }
+
+/**
+ * 扫码登录确认（#197）：把登录票据绑到**当前会话用户**。
+ *
+ * 契约 `packages/contracts/src/auth/scan.ts`：204 无响应体；`ticket` 是 22 字符
+ * base64url（URL 安全字符集，无需编码）。失败错误码原样透出，由确认页翻译：
+ * 404 `SCAN_TICKET_INVALID`（不存在 / 过期 / 已兑换）与 409 `SCAN_TICKET_CONFLICT`
+ * （已被另一个账号确认）。会话 cookie 由 `apiRequest` 统一携带。
+ */
+export async function confirmScanTicket(ticket: string): Promise<void> {
+  await apiRequest(`/auth/wechat/scan/ticket/${ticket}/confirm`, { method: 'POST' })
+}

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  classifyConfirmFailure,
   DEMO_LOGIN_TICKET,
   parseLoginLaunch,
   resolveLoginLaunch,
@@ -132,4 +133,29 @@ describe('入口判定 resolveLoginLaunch（解析 + 演示构建补票）', () 
     expect(resolveLoginLaunch({ scene: TICKET }, true)).toEqual({ ticket: TICKET })
     expect(resolveLoginLaunch({ ticket: OTHER_TICKET }, true)).toEqual({ ticket: OTHER_TICKET })
   })
+})
+
+describe('确认失败分类 classifyConfirmFailure（#197 接真实端点）', () => {
+  test('404 SCAN_TICKET_INVALID → invalid（不存在 / 过期 / 已兑换统一走这个码）', () => {
+    expect(classifyConfirmFailure({ code: 'SCAN_TICKET_INVALID' })).toBe('invalid')
+  })
+
+  test('409 SCAN_TICKET_CONFLICT → conflict（票已被另一个账号确认）', () => {
+    expect(classifyConfirmFailure({ code: 'SCAN_TICKET_CONFLICT' })).toBe('conflict')
+  })
+
+  test('其余错误码（网络 5xx、429、401 会话失效…）→ retry，不伪装成票据问题', () => {
+    expect(classifyConfirmFailure({ code: 'INTERNAL_ERROR' })).toBe('retry')
+    expect(classifyConfirmFailure({ code: 'UNAUTHENTICATED' })).toBe('retry')
+    expect(classifyConfirmFailure({ code: 'RATE_LIMITED' })).toBe('retry')
+  })
+
+  test('非 ApiError（调用方收窄成 null）→ retry', () => {
+    expect(classifyConfirmFailure(null)).toBe('retry')
+  })
+
+  /**
+   * 错误码是**唯一**分支依据：404 语义由服务端契约保证统一（`scan.ts` 冻结「四种原因
+   * 刻意合并」），客户端不看 status 重复推断——否则服务端换状态码时页面就漂移了。
+   */
 })

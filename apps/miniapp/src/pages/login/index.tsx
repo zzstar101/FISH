@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
+import Taro, { useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
@@ -28,9 +28,14 @@ import './index.scss'
  *
  * 数据：`POST /auth/wechat/session`。成功后 `features/auth/store` 广播登录态、
  * `@/lib/request` 落盘会话 cookie，本页据此跳首页。
+ *
+ * **带回跳（#197 扫码登录续接）**：扫码确认页在未登录时带
+ * `back=pages/login-confirm/index&ticket=<票据>` 跳到本页；登录成功后原路回确认页
+ * 把票据续上，而不是回首页（票据印在二维码里是公开的，放进页内参数不扩大暴露面）。
  */
 
 export default function Login() {
+  const router = useRouter<{ back?: string; ticket?: string }>()
   /** 微信登录的忙碌位：防连点（成功跳转期间保持 loading），同时驱动按钮的 loading 态 */
   const [wechatBusy, setWechatBusy] = useState(false)
   /**
@@ -74,12 +79,24 @@ export default function Login() {
     const pages = Taro.getCurrentPages()
     const top = (pages[pages.length - 1] as { route?: string } | undefined)?.route ?? ''
     if (top !== 'pages/login/index') return
+    // #197 续接：确认页带来的 `back` + `ticket` 在场 → 原路回确认页（票据不合法时
+    // 确认页自己的形状门禁会落「无效登录码」，这里不做二次校验，规则只有一份）。
+    if (router.params.back === 'pages/login-confirm/index' && router.params.ticket) {
+      void Taro.redirectTo({
+        url: `/pages/login-confirm/index?ticket=${encodeURIComponent(router.params.ticket)}`,
+      }).catch(() => {
+        // 跳转失败必须给出口：否则按钮会永远停在「登录中…」的禁用态上
+        setBusy(false)
+        void Taro.showToast({ title: '已登录，请手动返回扫码确认页', icon: 'none' })
+      })
+      return
+    }
     void Taro.switchTab({ url: '/pages/home/index' }).catch(() => {
       // 跳转失败必须给出口：否则按钮会永远停在「登录中…」的禁用态上
       setBusy(false)
       void Taro.showToast({ title: '已登录，请手动返回首页', icon: 'none' })
     })
-  }, [status, setBusy])
+  }, [status, setBusy, router.params])
 
   const canWechat = agreed && !wechatBusy
 
