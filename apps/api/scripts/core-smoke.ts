@@ -30,6 +30,11 @@
  * 里给出的命令清理（两条清理命令按本地 `bun run db:up` 栈给出：`fish-postgres-1` / `fish-minio-1`，
  * 非本地栈请自行换算）；要旧的“失败也清理”行为用 `--clean`。
  *
+ * 错误优先级：清理阶段（停子进程 / 关 scratch 库连接 / 删对象 / drop 库）的失败**不会**覆盖原始
+ * smoke 错误——每一步单独捕获，作为附加诊断打印，且不阻断现场报告或 `--clean` 清理的其余步骤。
+ * 同理，建库 / 建 `Db` 句柄 / 建 S3 客户端这些早段步骤也在保护范围内：它们失败时同样输出本轮
+ * 现场（轮次、scratch 库名、对象 key）并按 `--clean` 决定清理。
+ *
  * 保真边界：
  * - migration / seed 走文档化 CLI（覆盖 drizzle-kit、`--env-file` 路径与 `seed.ts` 的 `import.meta.main` 守卫）；
  * - API / Worker **直接 spawn 各自入口**并显式覆盖 `DATABASE_URL` / `API_PORT`——重启恢复需要能对单个
@@ -420,24 +425,16 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
   step = '建库'
   console.log(`\n[core-smoke] ===== 第 ${runIndex} 轮：${dbName} =====`)
 
-  // 上一次被硬杀（Ctrl-C / 超时）留下的同名库会让 `create database` 报 42P04，
-  // 而那个错误信息与真实原因无关。先无条件清掉同名库。
-  await admin.$client.unsafe(`drop database if exists "${dbName}" with (force)`)
-  await admin.$client.unsafe(`create database "${dbName}"`)
-  const db = createDb(dbUrl)
   const dbEnv = { ...env, DATABASE_URL: dbUrl }
   // MinIO 不是 scratch 的：记下本轮上传的对象，成功时删掉（否则 `--runs=5` 会在桶里累积垃圾）；
   // 失败时默认保留，好让现场可复查。用数组而不是单个变量：上传点以后可能不止一处。
-  const s3 = new Bun.S3Client({
-    accessKeyId: env.S3_ACCESS_KEY_ID,
-    secretAccessKey: env.S3_SECRET_ACCESS_KEY,
-    bucket: env.S3_BUCKET,
-    endpoint: env.S3_ENDPOINT,
-    region: env.S3_REGION,
-  })
   const uploadedObjectKeys: string[] = []
   let api: Child | null = null
   let worker: Child | null = null
+  // 现场报告与清理要用的句柄。它们的**创建**在下面的 `try` 内（建库成功后初始化失败同样要保留
+  // 现场、同样要让 `--clean` 生效），所以这里只能先留可空引用，创建成功后再赋值。
+  let scratchDb: Db | null = null
+  let scratchS3: Bun.S3Client | null = null
 
   const stop = async (child: Child | null): Promise<void> => {
     if (!child) return
@@ -454,6 +451,25 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
   let failed = false
   try {
+    // 建库 / 建 `Db` 句柄 / 建 S3 客户端都在保护范围内：这一段失败时同样要输出本轮现场（轮次、
+    // scratch 库名、对象 key），并按 `--clean` 决定是否清理。放在 `try` 外面的话，建库成功后
+    // 初始化失败会静默留下 scratch 库、且 `--clean` 也不生效。
+    // 上一次被硬杀（Ctrl-C / 超时）留下的同名库会让 `create database` 报 42P04，
+    // 而那个错误信息与真实原因无关。先无条件清掉同名库。
+    await admin.$client.unsafe(`drop database if exists "${dbName}" with (force)`)
+    await admin.$client.unsafe(`create database "${dbName}"`)
+    // 主链内继续用 `db` / `s3` 两个局部名，主链代码不变；外部引用供 finally 报告与清理用。
+    const db = createDb(dbUrl)
+    scratchDb = db
+    const s3 = new Bun.S3Client({
+      accessKeyId: env.S3_ACCESS_KEY_ID,
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      bucket: env.S3_BUCKET,
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+    })
+    scratchS3 = s3
+
     // 0. 干净库：migration + seed，走 README 里那条文档化命令
     step = '干净环境'
     section('干净环境：bun run db:migrate + db:seed')
@@ -1093,9 +1109,29 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     failed = true
     throw error
   } finally {
-    await stopWorker()
-    await stop(api)
-    await db.$client.close()
+    // 清理阶段：停子进程 / 关 scratch 库连接 / 删对象 / drop 库，每一步都单独捕获。清理失败只作为
+    // **附加诊断**打印，绝不覆盖原始 smoke 错误、也绝不阻断后面的现场报告或 `--clean` 清理——否则
+    // 最需要现场的时候（清理本身也坏了）恰好什么都看不到。
+    const cleanupErrors: string[] = []
+    const attempt = async (what: string, action: () => Promise<void>): Promise<void> => {
+      try {
+        await action()
+      } catch (error) {
+        cleanupErrors.push(`${what}：${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+
+    await attempt('停止 worker', stopWorker)
+    await attempt('停止 API', async () => {
+      await stop(api)
+    })
+    const dbHandle = scratchDb
+    if (dbHandle) {
+      await attempt('关闭 scratch 库连接', async () => {
+        await dbHandle.$client.close()
+      })
+    }
+
     if (failed && !cleanOnFailure) {
       // 默认保留现场：失败时最需要的是能用 psql / MinIO 事后复查。scratch 库名带 pid、对象 key 是
       // 随机串，不在这里打出来，事后就找不回是哪一份。
@@ -1116,10 +1152,23 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
         )
       }
     } else {
+      const s3Handle = scratchS3
       for (const key of uploadedObjectKeys) {
-        await s3.delete(key).catch(() => undefined)
+        if (!s3Handle) break
+        await attempt(`删除对象 ${key}`, async () => {
+          await s3Handle.delete(key)
+        })
       }
-      await admin.$client.unsafe(`drop database if exists "${dbName}" with (force)`)
+      await attempt('drop scratch 库', async () => {
+        await admin.$client.unsafe(`drop database if exists "${dbName}" with (force)`)
+      })
+    }
+
+    if (cleanupErrors.length > 0) {
+      console.error(
+        `\n[core-smoke] 清理阶段有 ${cleanupErrors.length} 处失败（不改变上方结论；现场可能残留）：`,
+      )
+      for (const line of cleanupErrors) console.error(`[core-smoke]   ${line}`)
     }
   }
 }
@@ -1149,5 +1198,10 @@ try {
   console.error(error instanceof Error ? (error.stack ?? error.message) : String(error))
   process.exitCode = 1
 } finally {
-  await admin.$client.close()
+  // admin 连接的关闭失败不该覆盖已经打印出来的失败诊断（脚本到此即将退出）。
+  await admin.$client.close().catch((error: unknown) => {
+    console.error(
+      `[core-smoke] 关闭 admin 连接失败（忽略）：${error instanceof Error ? error.message : String(error)}`,
+    )
+  })
 }
