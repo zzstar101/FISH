@@ -706,7 +706,7 @@ body.auth-glass-body {
 
 /*
  * 首页公告栏：横向无缝滚动。
- * 自动滚动内容按 WAI 要求提供暂停控件，并在 hover / focus / prefers-reduced-motion 下停止；
+ * 按 Owner 要求不放暂停按钮：改为 hover / focus / prefers-reduced-motion 下停止；
  * 位移只用 transform，避免触发布局重排；轨道由两组等宽副本组成，位移 50% 即无缝衔接。
  */
 .announcement-track {
