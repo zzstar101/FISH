@@ -56,6 +56,8 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
     passwordHash: 'not-a-real-hash',
     nickname: '阿岚',
     avatarUrl: null,
+    // #287：users 新增可空 signature 列，oldest fixture 也带默认值。
+    signature: null,
     authStatus: 'VERIFIED',
     verifiedAt: CREATED_AT,
     campusEmail: null,
