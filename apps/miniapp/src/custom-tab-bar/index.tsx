@@ -106,11 +106,17 @@ function currentTabKey(): TabKey {
 /**
  * 唯一不渲染底栏的 Tab 页：设计稿该页（`小程序第1版。发布闲置publish-listing.html`）
  * **根本没有画底栏**（全文 grep `tabbar` 零命中）—— 发布表单要占满屏高，
- * 底栏浮在上面会压住提交区。
+ * 底栏浮在上面会压住提交区（Owner 2026-09-28 二次确认维持此设计）。
  *
  * `TAB_ITEMS` 里**保留** sell 项：`tabBar.list` 与 `switchTab` 仍需要它作为合法路由，
  * 隐藏只发生在本组件的渲染层。代价是该页只剩左上返回钮一个出口，
  * 所以 `pages/sell/index.tsx` 必须显示返回钮。
+ *
+ * ⚠️ 隐藏依赖 `currentRoute()` 的**渲染期求值**，而 tab-bar 实例挂载早于页面栈更新 ——
+ * mount 首渲染时 route 还是上一页，tabbar 会先渲染出来；之后**唯一**能把早退判定
+ * 「重新求值」的触发是 `setActive`（值变才重渲染）。所以 **sell 页也必须
+ * `useDidShow(notifyTabbarRoute)` 广播**（2026-09-28 实测教训：漏了它，出物页底栏
+ * 顶着上一页的高光常驻）。广播 → sync → setActive('sell') → 重渲染 → 早退生效。
  */
 const HIDDEN_ROUTE = 'pages/sell/index'
 
@@ -226,7 +232,9 @@ export default function CustomTabBar() {
     void Taro.switchTab({ url: item.path }).catch(() => undefined)
   }
 
-  // 早退必须写在所有 hook 之后：hook 数量不能随路由变化
+  // 出物页早退：写在所有 hook 之后（hook 数量不能随路由变化）。
+  // 判定是渲染期求值 —— 依赖 sell 页自己的 onShow 广播触发 setActive 重渲染，
+  // 否则 mount 时（栈未更新）渲染出的底栏会带着旧页高光常驻（实测教训）。
   if (currentRoute().includes(HIDDEN_ROUTE)) return null
 
   return (
