@@ -23,6 +23,7 @@ import type { Db } from '@fish/db/client'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type Context, type Handler, Hono } from 'hono'
 import type { RestrictionGuard } from '../governance/guard'
+import { createWechatAccessTokenService, WechatPlatformError } from '../wechat/access-token'
 import { AuthError } from './errors'
 import { maskPhone } from './me'
 import { type AuthVariables, createRequireAuth } from './middleware'
@@ -32,12 +33,7 @@ import { createAuthService } from './service'
 import { createSessionCookie, createSessions } from './session'
 import type { VerificationService } from './verification-service'
 import { VerificationError } from './verification-store'
-import {
-  createWechatAccessTokenService,
-  createWechatMiniappCodeClient,
-  type WechatMiniappCodeClient,
-  WechatPlatformError,
-} from './wechat-platform'
+import { createWechatMiniappCodeClient, type WechatMiniappCodeClient } from './wechat-platform'
 import {
   createLiveWechatIdentityProvider,
   createStubWechatIdentityProvider,
