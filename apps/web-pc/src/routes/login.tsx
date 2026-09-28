@@ -173,14 +173,16 @@ function LoginPage() {
           variant="login"
         />
         <div className="flex items-center gap-6 pl-1">
+          {/* onSuccess 持有的是提交时闭包值，pending 期间必须锁死勾选，否则取消勾选后旧凭据仍会被写回存储 */}
           <CheckboxField
             checked={remember}
+            disabled={login.isPending}
             label="记住账号密码"
             onCheckedChange={handleRememberChange}
           />
           <CheckboxField
             checked={autoLogin}
-            disabled={!remember}
+            disabled={login.isPending || !remember}
             label="自动登录"
             onCheckedChange={handleAutoLoginChange}
           />
