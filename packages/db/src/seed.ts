@@ -7,6 +7,7 @@ import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
 import { userRestrictions } from './schema/governance'
 import { jobs } from './schema/jobs'
+import { listingMediaObjects } from './schema/listing-media'
 import { listingNumbers } from './schema/listing-numbers'
 import { listingImages, listings } from './schema/listings'
 import { matches } from './schema/matches'
@@ -97,10 +98,11 @@ export async function seed(tx: SeedTx): Promise<void> {
   // / `admin_audit_logs`（#73，引用 users 且 ON DELETE RESTRICT）/ `message_media`（#79）
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
   // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）/ `wechat_identities`
-  // （#86，引用 users 且 ON DELETE CASCADE）必须在内：漏掉会让 seed 直接失败
+  // （#86，引用 users 且 ON DELETE CASCADE）/ `listing_media_objects`（#286，引用 users）
+  // 必须在内：漏掉会让 seed 直接失败
   // （实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
   )
 
   const now = new Date()

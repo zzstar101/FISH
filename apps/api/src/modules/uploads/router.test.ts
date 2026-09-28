@@ -7,10 +7,12 @@ import type { AuthVariables } from '../auth/middleware'
 import { allowRestrictionGuard } from '../governance/testing'
 import { legacyMediaToken } from './legacy-url'
 import { createUploadsRouter } from './router'
-import type { MediaStorage } from './storage'
+import { type UploadService, UploadServiceError } from './service'
+import { isListingMediaStagingKey, type MediaStorage } from './storage'
 
 const USER_ID = '01930000-0000-7000-8000-00000000000a'
-const NEW_KEY = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-00000000000b')}.jpg`
+const STAGING_KEY = `listing-media/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-00000000000d')}.jpg`
+const FINAL_KEY = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-00000000000e')}.jpg`
 const LEGACY_SECRET = 'test-secret-for-legacy-media-longer-than-32-characters'
 
 function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage {
@@ -26,7 +28,31 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage {
   }
 }
 
-function buildApp(options: { storage: MediaStorage; authed?: boolean }) {
+type FakeService = UploadService & { calls: { userId: string; objectKey: string }[] }
+
+function fakeService(overrides: Partial<UploadService> = {}): FakeService {
+  const calls: { userId: string; objectKey: string }[] = []
+  return {
+    calls,
+    presign: async () => ({
+      uploadUrl: 'https://s3.test/put?sig=x',
+      objectKey: STAGING_KEY,
+      headers: {},
+      expiresAt: '2026-09-12T03:50:10.000Z',
+    }),
+    confirm: async (userId, input) => {
+      calls.push({ userId, objectKey: input.objectKey })
+      return {
+        objectKey: FINAL_KEY,
+        url: `https://cdn.test/${FINAL_KEY}`,
+        moderationDecision: 'ALLOW',
+      }
+    },
+    ...overrides,
+  }
+}
+
+function buildApp(options: { storage: MediaStorage; authed?: boolean; service?: UploadService }) {
   const authed = options.authed ?? true
   const requireAuth: MiddlewareHandler<{ Variables: AuthVariables }> = async (c, next) => {
     if (!authed) return c.json(errorBody('UNAUTHENTICATED', '请先登录'), 401)
@@ -42,6 +68,7 @@ function buildApp(options: { storage: MediaStorage; authed?: boolean }) {
       legacyUrlSecret: LEGACY_SECRET,
       requireAuth,
       guard: allowRestrictionGuard,
+      service: options.service ?? fakeService(),
     }),
   )
   return root
@@ -67,15 +94,31 @@ describe('uploads router', () => {
     }
   })
 
-  test('returns a presigned upload for an allowed mime type', async () => {
-    const app = buildApp({ storage: fakeStorage() })
-    const res = await app.request(
-      '/uploads/presign',
-      post({ contentType: 'image/jpeg', sizeBytes: 1024 }),
-    )
+  test('presigns a staging key and confirm answers with the fixated final key', async () => {
+    const service = fakeService()
+    const app = buildApp({ storage: fakeStorage(), service })
 
-    expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ uploadUrl: 'https://s3.test/put?sig=x', headers: {} })
+    const presigned = (await (
+      await app.request('/uploads/presign', post({ contentType: 'image/jpeg', sizeBytes: 1024 }))
+    ).json()) as { objectKey: string; uploadUrl: string; headers: Record<string, string> }
+
+    expect(presigned.uploadUrl).toBe('https://s3.test/put?sig=x')
+    expect(presigned.headers).toEqual({})
+    // #286：presign 只签 staging 前缀，客户端结构上拿不到 final 前缀的写权限。
+    expect(isListingMediaStagingKey(presigned.objectKey)).toBe(true)
+    expect(presigned.objectKey.startsWith('listings/')).toBe(false)
+
+    const confirmed = await app.request(
+      '/uploads/confirm',
+      post({ objectKey: presigned.objectKey }),
+    )
+    const body = (await confirmed.json()) as { objectKey: string; url: string }
+
+    // 可引用的键来自 confirm 响应，而不是客户端 PUT 的那个 staging 键。
+    expect(body.objectKey).toBe(FINAL_KEY)
+    expect(body.objectKey).not.toBe(presigned.objectKey)
+    expect(body.url).toBe(`https://cdn.test/${FINAL_KEY}`)
+    expect(service.calls).toEqual([{ userId: USER_ID, objectKey: presigned.objectKey }])
   })
 
   // iOS 相册的 HEIC 不在允许列表里：契约 §1 的前端约束要求先转码，服务端必须明确拒绝。
@@ -103,14 +146,84 @@ describe('uploads router', () => {
   })
 
   test('maps confirm failures onto the frozen error codes', async () => {
-    const app = buildApp({ storage: fakeStorage({ stat: async () => null }) })
-    const res = await app.request('/uploads/confirm', post({ objectKey: NEW_KEY }))
+    const cases = [
+      new UploadServiceError(422, 'UPLOAD_OBJECT_MISSING', '图片尚未上传完成', [
+        { field: 'objectKey', message: '图片尚未上传完成' },
+      ]),
+      new UploadServiceError(422, 'IMAGE_CONTENT_BLOCKED', '图片内容未通过审核', [
+        { field: 'objectKey', message: '图片内容未通过审核' },
+      ]),
+      new UploadServiceError(
+        400,
+        'CONTENT_MODERATION_INVALID_INPUT',
+        '图片审核暂时不可用，请稍后重试',
+        [{ field: 'objectKey', message: '图片审核暂时不可用，请稍后重试' }],
+      ),
+      new UploadServiceError(
+        503,
+        'CONTENT_MODERATION_UNAVAILABLE',
+        '图片审核暂时不可用，请稍后重试',
+        [{ field: 'objectKey', message: '图片审核暂时不可用，请稍后重试' }],
+      ),
+    ]
+
+    for (const error of cases) {
+      const app = buildApp({
+        storage: fakeStorage({ stat: async () => null }),
+        service: fakeService({
+          confirm: async () => {
+            throw error
+          },
+        }),
+      })
+      const res = await app.request('/uploads/confirm', post({ objectKey: STAGING_KEY }))
+
+      expect(res.status).toBe(error.status)
+      const body = (await res.json()) as {
+        error: { code: string; message: string; details?: { field: string }[] }
+      }
+      expect(body.error.code).toBe(error.code)
+      expect(body.error.message).toBe(error.message)
+      // 契约 §3 的 422/503 校验类失败都带字段信息（口径见契约评论 §7.9）
+      expect(body.error.details?.[0]?.field).toBe('objectKey')
+    }
+  })
+
+  test('rejects a malformed confirm body before the service runs', async () => {
+    let called = false
+    const app = buildApp({
+      storage: fakeStorage(),
+      service: fakeService({
+        confirm: async () => {
+          called = true
+          return {
+            objectKey: FINAL_KEY,
+            url: `https://cdn.test/${FINAL_KEY}`,
+            moderationDecision: 'ALLOW',
+          }
+        },
+      }),
+    })
+
+    const res = await app.request('/uploads/confirm', post({ objectKey: '' }))
 
     expect(res.status).toBe(422)
-    const body = (await res.json()) as { error: { code: string; details?: { field: string }[] } }
-    expect(body.error.code).toBe('UPLOAD_OBJECT_MISSING')
-    // 契约 §3 的 422 校验类失败都带字段信息（口径见契约评论 §7.9）
-    expect(body.error.details?.[0]?.field).toBe('objectKey')
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_FAILED')
+    expect(called).toBe(false)
+  })
+
+  test('does not pretend an unexpected failure is an upload error', async () => {
+    const app = buildApp({
+      storage: fakeStorage(),
+      service: fakeService({
+        confirm: async () => {
+          throw new Error('boom')
+        },
+      }),
+    })
+
+    const res = await app.request('/uploads/confirm', post({ objectKey: STAGING_KEY }))
+    expect(res.status).toBe(500)
   })
 
   test('历史图片以加密 token 匿名读取，非法 token 不访问存储', async () => {
@@ -144,14 +257,5 @@ describe('uploads router', () => {
     expect(seen).toEqual([oldKey, oldKey])
     expect((await app.request('/uploads/legacy/invalid-token')).status).toBe(404)
     expect(seen).toHaveLength(2)
-  })
-
-  test('returns the public url on a successful confirm', async () => {
-    const app = buildApp({ storage: fakeStorage() })
-    const key = NEW_KEY
-    const res = await app.request('/uploads/confirm', post({ objectKey: key }))
-
-    expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ objectKey: key, url: `https://cdn.test/${key}` })
   })
 })

@@ -698,7 +698,7 @@ test('service 把真库的 free/price CHECK 冲突映射成 422', async () => {
           const rows = await tx.select().from(listings).where(eq(listings.id, input.id)).limit(1)
           const current = rows[0]
           if (!current) return { kind: 'not-found' as const }
-          const plan = await input.apply(input, current)
+          const plan = await input.apply(input, { ...current, objectKeys: [] })
           if (plan.kind === 'blocked') return { kind: 'rejected' as const }
           // 在计划之外偷偷把 free 改成 true —— service 的合并校验看不到这一步。
           await tx

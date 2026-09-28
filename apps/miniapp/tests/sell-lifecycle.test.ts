@@ -443,6 +443,19 @@ describe('多步上传链的逐步在途检查（#170 复查 #208）', () => {
     }
   })
 
+  test('适配器：引用 confirm 固化后的 final 键，confirm 请求带的仍是 presign 的 staging 键（#286）', async () => {
+    const block = await fileSlice(
+      '../src/features/upload/api.ts',
+      'export async function uploadListingImage',
+      '\n}',
+    )
+    // 请求体送的是 presign 签发的 staging 键……
+    expect(block).toContain('body: { objectKey: presign.objectKey }')
+    // ……但返回给调用方、最终进 `objectKeys` 的只能是 confirm 固化后的键。
+    expect(block).toContain('return confirmed.objectKey')
+    expect(block).not.toContain('return presign.objectKey')
+  })
+
   test('出物页把 taskAlive 作为判据交给适配器；中止时 catch 先确认任务、再决定写状态', async () => {
     const block = await pageSlice(
       'const startUpload = (photo: SelectedPhoto, task: SellTask) => {',

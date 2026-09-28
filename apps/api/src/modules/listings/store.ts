@@ -151,6 +151,11 @@ export type ListingUpdateTarget = {
   free: boolean
   moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
   governanceDelistedAt: Date | null
+  /**
+   * 锁内读到的**当前**图片键（按 `sort_order`）。编辑不带 `objectKeys` 时图片整组不变，service 要靠
+   * 它才知道"当前是哪几张图"，并在锁内发现并发替换（只读事务外那次的结果不能代表锁内这一行）。
+   */
+  objectKeys: string[]
   pendingReviewAction?: 'CREATE' | 'UPDATE'
   pendingReviewPriorStatus?: ListingStatus | null
 }
@@ -217,6 +222,12 @@ export interface ListingStore {
   findDetail(
     id: string,
   ): Promise<{ listing: ListingRow; seller: SellerRow; images: ListingImageRow[] } | null>
+
+  /**
+   * 这条商品当前的图片键（按 `sort_order`）。编辑（PATCH）要在事务外算图片结论，而"图片没变"这个
+   * 事实只能从库里读；`updateListingAtomic` 会在锁内再读一次，用于发现并发替换。
+   */
+  listImageKeys(id: string): Promise<string[]>
 
   findState(id: string): Promise<ListingState | null>
 
@@ -428,6 +439,16 @@ export function createSqlListingStore(db: Db): ListingStore {
       return { listing: row.listing, seller: row.seller, images }
     },
 
+    async listImageKeys(id) {
+      const rows = await db
+        .select({ objectKey: listingImages.objectKey })
+        .from(listingImages)
+        .where(eq(listingImages.listingId, id))
+        .orderBy(asc(listingImages.sortOrder))
+
+      return rows.map((row) => row.objectKey)
+    },
+
     async findState(id) {
       const rows = await db
         .select({
@@ -532,7 +553,18 @@ export function createSqlListingStore(db: Db): ListingStore {
         // 与管理员下架串行：锁内检查，卖家的 PATCH 不能清除治理标记。
         if (row.governanceDelistedAt) return { kind: 'governance-blocked' as const }
 
-        let updateTarget: ListingUpdateTarget = row
+        // 图片组与商品行在**同一个锁内快照**里读：service 在事务外算出的图片结论只对"当时那几张图"
+        // 有效，锁内这次读取让 `apply` 能发现"图片已被并发替换"，从而不会拿旧结论写回状态。
+        const storedImages = await tx
+          .select({ objectKey: listingImages.objectKey })
+          .from(listingImages)
+          .where(eq(listingImages.listingId, input.id))
+          .orderBy(asc(listingImages.sortOrder))
+
+        let updateTarget: ListingUpdateTarget = {
+          ...row,
+          objectKeys: storedImages.map((image) => image.objectKey),
+        }
         if (row.moderationStatus === 'REVIEW') {
           const pendingRoot = await tx.execute(sql`
             SELECT action, prior_listing_status::text AS prior_listing_status
@@ -553,7 +585,7 @@ export function createSqlListingStore(db: Db): ListingStore {
           `)
           const root = rowsOf(pendingRoot)[0]
           updateTarget = {
-            ...row,
+            ...updateTarget,
             pendingReviewAction:
               root?.action === 'CREATE' || root?.action === 'UPDATE' ? root.action : undefined,
             pendingReviewPriorStatus: (root?.prior_listing_status as ListingStatus | null) ?? null,

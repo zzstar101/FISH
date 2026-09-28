@@ -13,6 +13,43 @@ export type ModerationDecisionResult =
 
 export type ModerationRecord = typeof listingModerationRecords.$inferSelect
 
+/**
+ * 图片结算**拒绝**本次人工结论（#286）：调用方必须让整个决策事务回滚，并把拒绝原因翻译成
+ * 客户端可读的状态码。`code` 区分三种情形：
+ *
+ * - `IMAGE_BLOCKED`：这张图已被人工阻断，不能借本次放行把字节放进公开前缀（结论本身站不住）；
+ * - `SETTLEMENT_FAILED`：结算过程失败（存储不支持读写、并发抢占），重试可能成功；
+ * - `SETTLEMENT_DATA_MISSING`：台账行 / 对象缺失，是**持久**状态，重试永远不会成功，需要人工排查。
+ */
+export type ModerationSettlementErrorCode =
+  | 'IMAGE_BLOCKED'
+  | 'SETTLEMENT_FAILED'
+  | 'SETTLEMENT_DATA_MISSING'
+
+export class ModerationSettlementError extends Error {
+  readonly code: ModerationSettlementErrorCode
+
+  constructor(code: ModerationSettlementErrorCode, message: string) {
+    super(message)
+    this.name = 'ModerationSettlementError'
+    this.code = code
+  }
+}
+
+/**
+ * 图片结算钩子（#286 复审 blocker 1）：人工结论落库后、**同一事务内**结算该 Listing 的审核中图片。
+ * 从 uploads 域注入，`moderation` 域因此不需要知道对象存储与前缀规则（实现见
+ * `modules/uploads/listing-media-settlement.ts`）。
+ */
+export type SettleListingMediaHook = (
+  tx: ModerationDbTransaction,
+  input: { listingId: string; decision: 'ALLOW' | 'BLOCK' },
+) => Promise<void>
+
+export interface ModerationStoreOptions {
+  settleListingMedia?: SettleListingMediaHook
+}
+
 export interface ModerationStore {
   listByListing(listingId: string, limit?: number): Promise<ModerationRecord[]>
   getById(id: string): Promise<ModerationRecord | null>
@@ -31,7 +68,11 @@ function rowsOf(result: unknown): Record<string, unknown>[] {
   return []
 }
 
-export function createSqlModerationStore(db: Db): ModerationStore {
+export function createSqlModerationStore(
+  db: Db,
+  options: ModerationStoreOptions = {},
+): ModerationStore {
+  const { settleListingMedia } = options
   return {
     async listByListing(listingId, limit = 50) {
       return db
@@ -99,6 +140,15 @@ export function createSqlModerationStore(db: Db): ModerationStore {
             updated_at = now()
         WHERE id = ${record.listing_id}
       `)
+
+      // #286 复审 blocker 1：人工结论必须与图片结算同事务落库，否则卖家下一次不改图的文本编辑
+      // 会从 `listing_images` 重新读到机器 `REVIEW`，把刚放行的商品压回人工队列。
+      if (settleListingMedia) {
+        await settleListingMedia(tx, {
+          listingId: String(record.listing_id),
+          decision: input.decision,
+        })
+      }
 
       const manualRecordId = newId()
       await tx.execute(sql`

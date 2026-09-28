@@ -560,6 +560,21 @@ export function createAdminService({
       if (result === 'idempotency-conflict') {
         throw new AdminError('MODERATION_CONFLICT', 409, 'Idempotency-Key 已用于其它审核决定')
       }
+      // #286：图片结算拒绝本次决策（图已被人工阻断 / 私有对象或台账缺失），事务已回滚。
+      if (result === 'media-blocked') {
+        throw new AdminError('MODERATION_CONFLICT', 409, '该商品的图片已被人工阻断，不能放行')
+      }
+      if (result === 'media-settlement-failed') {
+        throw new AdminError('MODERATION_CONFLICT', 409, '图片结算失败，本次决策未生效，请重试')
+      }
+      // 台账行 / 私有对象缺失是持久状态：重试不会成功，要人工排查，所以与可重试的上一条分开报。
+      if (result === 'media-settlement-data-missing') {
+        throw new AdminError(
+          'MODERATION_CONFLICT',
+          409,
+          '该商品的审核图片台账或对象缺失，无法放行，请人工核查',
+        )
+      }
       const row = await store.getModerationDetail(input.recordId)
       if (!row) throw new AdminError('ADMIN_NOT_FOUND', 404, '审核记录不存在')
       return moderationDetailOf(row)

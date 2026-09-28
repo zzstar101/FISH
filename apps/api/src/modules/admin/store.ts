@@ -18,7 +18,7 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { and, asc, desc, eq, type SQL, sql } from 'drizzle-orm'
 import { ACTIVE_RESTRICTION_WHERE } from '../governance/store'
-import type { ModerationStore } from '../moderation/store'
+import { ModerationSettlementError, type ModerationStore } from '../moderation/store'
 import { createdAtCursorText, cursorCondition } from './cursor'
 
 /**
@@ -297,7 +297,16 @@ export interface AdminStore {
     decision: 'ALLOW' | 'BLOCK'
     reason: string
     requestId: string
-  }): Promise<'applied' | 'idempotent' | 'not-found' | 'conflict' | 'idempotency-conflict'>
+  }): Promise<
+    | 'applied'
+    | 'idempotent'
+    | 'not-found'
+    | 'conflict'
+    | 'idempotency-conflict'
+    | 'media-blocked'
+    | 'media-settlement-failed'
+    | 'media-settlement-data-missing'
+  >
   listAdminTransactions(criteria: ListAdminTransactionsCriteria): Promise<AdminTransactionRow[]>
   /**
    * 某用户当前**生效中**的限制（#73 PR3，评审 m6）。
@@ -844,11 +853,12 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
     },
 
     async decideModeration(input) {
-      return db.transaction(async (tx) => {
-        await tx.execute(sql`
+      try {
+        return await db.transaction(async (tx) => {
+          await tx.execute(sql`
           SELECT pg_advisory_xact_lock(hashtext(${`${input.recordId}:${input.requestId}`}))
         `)
-        const existingRequest = await tx.execute(sql`
+          const existingRequest = await tx.execute(sql`
           SELECT after, reason, actor_user_id
           FROM admin_audit_logs
           WHERE action = 'MODERATION_DECISION'
@@ -857,41 +867,54 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
             AND request_id = ${input.requestId}
           LIMIT 1
         `)
-        const existing = rowsOf(existingRequest)[0]
-        if (existing) {
-          const after =
-            typeof existing.after === 'string' ? JSON.parse(existing.after) : existing.after
-          const previousDecision =
-            after && typeof after === 'object' ? (after as { decision?: unknown }).decision : null
-          const previousReason = existing.reason == null ? null : String(existing.reason)
-          return previousDecision === input.decision && previousReason === input.reason
-            ? ('idempotent' as const)
-            : ('idempotency-conflict' as const)
-        }
+          const existing = rowsOf(existingRequest)[0]
+          if (existing) {
+            const after =
+              typeof existing.after === 'string' ? JSON.parse(existing.after) : existing.after
+            const previousDecision =
+              after && typeof after === 'object' ? (after as { decision?: unknown }).decision : null
+            const previousReason = existing.reason == null ? null : String(existing.reason)
+            return previousDecision === input.decision && previousReason === input.reason
+              ? ('idempotent' as const)
+              : ('idempotency-conflict' as const)
+          }
 
-        const result = await moderation.decideWithin(tx, {
-          recordId: input.recordId,
-          decision: input.decision,
-          reason: input.reason,
-        })
-        if (result.kind !== 'applied') return result.kind
-
-        await tx.insert(adminAuditLogs).values({
-          id: newId(),
-          actorUserId: input.actorUserId,
-          action: 'MODERATION_DECISION',
-          targetType: 'MODERATION_RECORD',
-          targetId: input.recordId,
-          before: jsonParam({ moderationStatus: result.previousStatus }),
-          after: jsonParam({
+          const result = await moderation.decideWithin(tx, {
+            recordId: input.recordId,
             decision: input.decision,
-            manualRecordId: result.manualRecordId,
-          }),
-          reason: input.reason,
-          requestId: input.requestId,
+            reason: input.reason,
+          })
+          if (result.kind !== 'applied') return result.kind
+
+          await tx.insert(adminAuditLogs).values({
+            id: newId(),
+            actorUserId: input.actorUserId,
+            action: 'MODERATION_DECISION',
+            targetType: 'MODERATION_RECORD',
+            targetId: input.recordId,
+            before: jsonParam({ moderationStatus: result.previousStatus }),
+            after: jsonParam({
+              decision: input.decision,
+              manualRecordId: result.manualRecordId,
+            }),
+            reason: input.reason,
+            requestId: input.requestId,
+          })
+          return 'applied' as const
         })
-        return 'applied' as const
-      })
+      } catch (error) {
+        // #286：图片结算拒绝本次人工结论（图已被人为阻断 / 私有对象或台账缺失）时会抛错让事务整体回滚，
+        // 这里把拒绝翻译成结果码，管理员拿到可解释的 409，商品仍留在人工队列。`SETTLEMENT_DATA_MISSING`
+        // 是持久状态（重试不会成功），与可重试的 `SETTLEMENT_FAILED` 分开，便于前端给出不同文案。
+        if (error instanceof ModerationSettlementError) {
+          if (error.code === 'IMAGE_BLOCKED') return 'media-blocked' as const
+          if (error.code === 'SETTLEMENT_DATA_MISSING') {
+            return 'media-settlement-data-missing' as const
+          }
+          return 'media-settlement-failed' as const
+        }
+        throw error
+      }
     },
 
     async listAdminTransactions(criteria) {

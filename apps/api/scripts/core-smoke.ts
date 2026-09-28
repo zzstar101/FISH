@@ -2,7 +2,7 @@
  * 核心主链端到端冒烟（Issue #43）。
  *
  * 用**真实进程**走完整条 P0 主链：自建 scratch 库 → migration + seed → 真实 API + 真实 Worker
- * + 真实 MinIO → 图片 presign/PUT/公开读 → 发布 Listing → MATCH_LISTING → Worker → Match →
+ * + 真实 MinIO → 图片 presign(staging)/PUT/confirm(审核+固化)/公开读（#286）→ 发布 Listing → MATCH_LISTING → Worker → Match →
  * 创建 Wish → MATCH_WISH → 双方向 `/matches` → 编辑/上下架重算 → 崩溃重启恢复 → 坏 payload 失败 →
  * 交易与面交（交易↔会话三元组一致 / 取消与成交两个终态销毁凭证 / 一单一码 / 重取即解锁）。
  *
@@ -76,6 +76,27 @@ const JPEG = Buffer.from(
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==',
   'base64',
 )
+
+/**
+ * 覆盖 PUT 用的第二份字节：在合法 JPEG 后面多挂一个 EOI 标记。它和 `JPEG` 摘要不同、大小不同，
+ * 用来验证"同一个 staging 键被 PUT 成别的内容后，旧审核结论不会被复用"（#286 验收）。
+ */
+const OVERWRITE_JPEG = Buffer.concat([JPEG, Buffer.from([0xff, 0xd9])])
+
+/**
+ * #43 链路商品的字段。抽成常量是为了让「人工队列商品」和「链路商品」共用同一份事实，只在
+ * 必要处覆盖 title / description / objectKeys —— 避免某处漏改一个字段就让两个商品悄悄不同。
+ */
+const CHAIN_LISTING_FIELDS = {
+  title: '罗技 C270 网络摄像头',
+  description: '端到端冒烟创建：支持 720p，附原装支架与数据线。',
+  priceCents: 16000,
+  category: 'DIGITAL',
+  condition: 'GOOD',
+  urgent: false,
+  negotiable: false,
+  free: false,
+} as const
 
 let checks = 0
 /**
@@ -589,8 +610,14 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(presignResponse.status, 200, 'POST /uploads/presign → 200')
     const presigned = await readJson(presignResponse)
     const uploadUrl = String(presigned.uploadUrl)
-    const objectKey = String(presigned.objectKey)
+    const stagingKey = String(presigned.objectKey)
     const extraHeaders = (presigned.headers ?? {}) as Record<string, string>
+    // #286 的结构性保证：presign 只签 staging 前缀，客户端**拿不到** `listings/` 的签名，
+    // 于是"审核通过后再 PUT 覆盖同一对象"这条绕过不靠摘要比对去拦，而是根本做不到。
+    assert(
+      stagingKey.startsWith('listing-media/'),
+      `presign 签发 staging 键（实得：${stagingKey}）`,
+    )
 
     const putResponse = await fetch(uploadUrl, {
       method: 'PUT',
@@ -603,37 +630,181 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     // 对象一落桶就登记（不等到 confirm 成功）：confirm 断言若失败，对象仍在 MinIO 里，
     // 失败现场块必须能报出这个 key，否则事后无从查证、也无从清理。
-    uploadedObjectKeys.push(objectKey)
+    uploadedObjectKeys.push(stagingKey)
 
-    const confirmResponse = await postJson(base, '/uploads/confirm', { objectKey }, seller)
-    assertEqual(confirmResponse.status, 200, 'POST /uploads/confirm → 200')
-    const publicUrl = String((await readJson(confirmResponse)).url)
-
-    const publicResponse = await fetch(publicUrl)
-    assertEqual(publicResponse.status, 200, '匿名 GET 公开 URL → 200')
-    assert(
-      bytesEqual(new Uint8Array(await publicResponse.arrayBuffer()), JPEG),
-      '公开读到的字节与上传一致',
+    // staging 不在匿名读白名单里（`infra/minio-public-policy.json` 只放开 `listings/*`）：未过审的
+    // 图**结构上就取不到**，不依赖"审核完再删"这种时序假设。
+    assertEqual(
+      (await fetch(`${env.S3_PUBLIC_URL}/${stagingKey}`)).status,
+      403,
+      'staging 对象匿名读 → 403',
     )
+
+    const confirmResponse = await postJson(
+      base,
+      '/uploads/confirm',
+      { objectKey: stagingKey },
+      seller,
+    )
+    assertEqual(confirmResponse.status, 200, 'POST /uploads/confirm → 200')
+    const confirmed = await readJson(confirmResponse)
+    const finalKey = String(confirmed.objectKey)
+    // #286 的核心契约：客户端能引用的键是 **confirm 返回的 final 键**，不是它自己 PUT 的那个
+    // staging 键。三个 App 的上传适配器都以这个返回值为准（见各自的 api.test.ts）。
+    // CI 与本地都跑 `CONTENT_MODERATION_TRANSPORT=local`，provider 给不出内容摘要 ⇒ 结论恒为 REVIEW
+    // ⇒ 复审 blocker 2 要求它固化在**私有**的 `listing-review-media/` 下，绝不落在匿名可读的 `listings/*`。
+    assert(
+      finalKey.startsWith('listing-review-media/'),
+      `local transport 下 confirm 返回私有 review 键（实得：${finalKey}）`,
+    )
+    assert(finalKey !== stagingKey, 'final 键与 staging 键不同')
+    uploadedObjectKeys.push(finalKey)
+
+    // 私有固化对象与 staging 一样不在匿名白名单里：没有签名就取不到，不依赖"审核完再删"的时序假设。
+    assertEqual(
+      (await fetch(`${env.S3_PUBLIC_URL}/${finalKey}`)).status,
+      403,
+      '私有 review 对象匿名直读 → 403',
+    )
+
+    // 卖家与审核队列要能看到它，靠的是 confirm 回的**签名代理 URL**（capability URL，无 cookie 也能读，
+    // 小程序原生 `<Image>` 因此能显示）。它指向 WEB_ORIGIN（同源代理），smoke 里没有 web 进程，
+    // 所以按同一路径改打 API。
+    const confirmToken = /\/uploads\/media\/([A-Za-z0-9_-]+)$/.exec(String(confirmed.url))?.[1]
+    assert(
+      typeof confirmToken === 'string',
+      `confirm 回的 review URL 带代理令牌（实得：${confirmed.url}）`,
+    )
+    if (!confirmToken) throw new Error('confirm 没有回 review 代理令牌')
+    const reviewResponse = await fetch(`${base}/uploads/media/${confirmToken}`)
+    assertEqual(reviewResponse.status, 200, '签名代理 URL 匿名 GET → 200（无 cookie）')
+    assert(
+      bytesEqual(new Uint8Array(await reviewResponse.arrayBuffer()), JPEG),
+      '签名代理读到的字节与上传一致',
+    )
+
+    // 接口重试不得重复计费审核：同一 staging 键 + 同一内容的第二次 confirm 直接复用既有结论。
+    const replay = await postJson(base, '/uploads/confirm', { objectKey: stagingKey }, seller)
+    assertEqual(replay.status, 200, '重复 confirm → 200')
+    assertEqual(
+      String((await readJson(replay)).objectKey),
+      finalKey,
+      '重复 confirm 复用同一 final 键（幂等，不重复审核）',
+    )
+
+    // 对象覆盖不能绕过已完成的审核：把同一个 staging 键 PUT 成**别的字节**后再 confirm，摘要不同
+    // ⇒ 不命中幂等行 ⇒ 重新审核并产出**新的** final 键，旧审核结论不会被套到新内容上。
+    const overwritePut = await fetch(uploadUrl, {
+      method: 'PUT',
+      body: OVERWRITE_JPEG,
+      headers: { 'content-type': 'image/jpeg', ...extraHeaders },
+    })
+    assert(
+      overwritePut.status >= 200 && overwritePut.status < 300,
+      `覆盖 PUT → ${overwritePut.status}`,
+    )
+    const overwriteConfirm = await postJson(
+      base,
+      '/uploads/confirm',
+      { objectKey: stagingKey },
+      seller,
+    )
+    assertEqual(overwriteConfirm.status, 200, '覆盖后 confirm → 200')
+    const overwrittenFinalKey = String((await readJson(overwriteConfirm)).objectKey)
+    assert(
+      overwrittenFinalKey !== finalKey,
+      '覆盖后 confirm 产出新的 final 键（旧结论不套用新内容）',
+    )
+    uploadedObjectKeys.push(overwrittenFinalKey)
+
+    section('#286 引用校验与人工队列（CI / 本地 transport：图片一律 REVIEW）')
+    // staging 键进 `objectKeys` → 422：未确认的对象结构上不可能被 Listing 引用。
+    const stagingRef = await postJson(
+      base,
+      '/listings',
+      { ...CHAIN_LISTING_FIELDS, objectKeys: [stagingKey] },
+      seller,
+    )
+    assertEqual(stagingRef.status, 422, 'objectKeys 带 staging 键 → 422')
+    assertEqual(
+      ((await readJson(stagingRef)).error as { code: string }).code,
+      'IMAGE_REFERENCE_INVALID',
+      'staging 键的错误码是 IMAGE_REFERENCE_INVALID',
+    )
+
+    // final 键可以引用，但 local transport 给不出内容摘要 ⇒ 图片结论恒为 REVIEW ⇒ 商品进人工队列
+    //（status 变 OFFLINE，匿名读不到）。这就是「宁可进人工队列，也不当作审核通过」的运行时证据。
+    // 标题刻意与下面的链路商品不同，免得人工队列商品被卷进后面的匹配断言。
+    const heldResponse = await postJson(
+      base,
+      '/listings',
+      {
+        ...CHAIN_LISTING_FIELDS,
+        title: '人工队列样例（本地审核 transport）',
+        description: '本地 transport 给不出内容摘要，图片一律 REVIEW：该商品应停在人工队列。',
+        objectKeys: [finalKey],
+      },
+      seller,
+    )
+    assertEqual(heldResponse.status, 201, 'final 键发布 → 201（发布本身不失败）')
+    const heldId = String((await readJson(heldResponse)).id)
+    assertEqual((await get(base, `/listings/${heldId}`)).status, 404, '人工队列商品匿名读不到')
+    const heldSellerView = await readJson(await get(base, `/listings/${heldId}`, seller))
+    assertEqual(heldSellerView.status, 'OFFLINE', '人工队列商品对卖家显示 OFFLINE')
+    assertEqual(heldSellerView.moderationStatus, 'REVIEW', '人工队列商品标注 REVIEW')
+    // 卖家视角的 coverUrl 走的仍是「#6 契约 §7.8」那一个实现；审核中的图是私有的，所以它必须投影成
+    // 签名代理 URL（而不是 `listings/*` 的匿名直链）—— 这也是"未过审的图对公众取不到"的运行时证据。
+    assert(typeof heldSellerView.coverUrl === 'string', '人工队列商品对卖家仍返回可用的 coverUrl')
+    const heldToken = /\/uploads\/media\/([A-Za-z0-9_-]+)$/.exec(
+      String(heldSellerView.coverUrl),
+    )?.[1]
+    assert(
+      typeof heldToken === 'string',
+      `人工队列商品的 coverUrl 是签名代理（实得：${heldSellerView.coverUrl}）`,
+    )
+    if (!heldToken) throw new Error('人工队列商品的 coverUrl 没有代理令牌')
+    assertEqual(
+      (await fetch(`${base}/uploads/media/${heldToken}`)).status,
+      200,
+      '签名代理封面 → 200（卖家/审核队列可见）',
+    )
+
+    // 生产形态的“已通过审核”图片：CI 与本地都跑 `CONTENT_MODERATION_TRANSPORT=local`，本地 provider
+    // 恒给 REVIEW（上一节就是它的证据），而 #43 的匹配/交易链路需要一个公开在售（ACTIVE / APPROVED）
+    // 的商品，商品又必须至少带 1 张图。这里直接落一行“腾讯 IMS 判 ALLOW”形态的记录（final 键 + 对象
+    // 本体 + 64 位摘要），让链路继续走真实的 API 路径 —— 本地 transport 产不出这个状态，只能构造。
+    const approvedSellerPublicId = finalKey.split('/')[1] ?? ''
+    assert(approvedSellerPublicId.length > 0, 'confirm 的 final 键里带用户段')
+    const approvedKey = `listings/${approvedSellerPublicId}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+    const approvedStagingKey = `listing-media/${approvedSellerPublicId}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+    await s3.write(approvedKey, JPEG, { type: 'image/jpeg' })
+    await db.execute(sql`
+      insert into listing_media_objects
+        (user_id, staging_key, final_key, content_digest, provider_md5, moderation_decision, provider, provider_request_id)
+      values (
+        ${decodePublicId(PUBLIC_ID_PREFIX.user, approvedSellerPublicId)},
+        ${approvedStagingKey},
+        ${approvedKey},
+        ${new Bun.CryptoHasher('sha256').update(JPEG).digest('hex')},
+        null,
+        'ALLOW',
+        'LOCAL',
+        null
+      )
+    `)
+    uploadedObjectKeys.push(approvedKey)
 
     section('发布 Listing 与 MATCH_LISTING 投递')
     // 关键词刻意不复用 demo 的“机械键盘”：seed 里已有一条 K380（DIGITAL / ¥160 / 标题含“机械键盘”），
     // 若愿望也用同一关键词，会同时命中 seed 那条与本次发布的这条。demo 那一对由上面的 seed 步骤
     // 专门验证，这里用 seed 不存在的“网络摄像头”，双方向才能一义地断言各 1 条。
+    //
+    // 链路商品带的是上一节构造的 ALLOW 图片（本地 transport 的图一律 REVIEW，见上一节），所以它
+    // 是公开在售的商品，后面的匹配/交易链路才能照旧跑。
     const createResponse = await postJson(
       base,
       '/listings',
-      {
-        title: '罗技 C270 网络摄像头',
-        description: '端到端冒烟创建：支持 720p，附原装支架与数据线。',
-        priceCents: 16000,
-        category: 'DIGITAL',
-        condition: 'GOOD',
-        urgent: false,
-        negotiable: false,
-        free: false,
-        objectKeys: [objectKey],
-      },
+      { ...CHAIN_LISTING_FIELDS, objectKeys: [approvedKey] },
       seller,
     )
     assertEqual(createResponse.status, 201, 'POST /listings → 201（发布立即返回）')

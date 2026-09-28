@@ -80,6 +80,16 @@ describe('publish form model', () => {
     expect(
       uploadFailureMessage(new ApiError('UPLOAD_OBJECT_MISSING', 422, '图片尚未上传完成')),
     ).toBe('图片尚未上传完成')
+    // #286：confirm 这一步现在会带着内容审核结论失败（BLOCK / 审核服务不可用），上传位必须把服务端
+    // 的中文文案原样给用户，而不是退化成错误码或浏览器的英文底层报错。
+    expect(
+      uploadFailureMessage(new ApiError('IMAGE_CONTENT_BLOCKED', 422, '图片内容未通过审核')),
+    ).toBe('图片内容未通过审核')
+    expect(
+      uploadFailureMessage(
+        new ApiError('CONTENT_MODERATION_UNAVAILABLE', 503, '图片审核暂时不可用，请稍后重试'),
+      ),
+    ).toBe('图片审核暂时不可用，请稍后重试')
   })
 
   test('maps BLOCK details to the matching visible fields', () => {

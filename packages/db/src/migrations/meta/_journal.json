@@ -183,6 +183,13 @@
       "when": 1790351823799,
       "tag": "0025_shallow_mimic",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790573530653,
+      "tag": "20260928133210_special_ego",
+      "breakpoints": true
     }
   ]
 }

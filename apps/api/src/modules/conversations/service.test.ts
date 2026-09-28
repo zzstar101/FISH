@@ -151,6 +151,26 @@ describe('conversation service: createOrGetConversation', () => {
     expect(result.conversation.listing.coverUrl).toBe(`https://cdn.test/covers/${listingA}.jpg`)
   })
 
+  test('审核中的图（私有 listing-review-media 键）不作为会话封面签发直读 URL', async () => {
+    const store = new MemoryConversationStore()
+    const reviewKey = `listing-review-media/${encodePublicId(PUBLIC_ID_PREFIX.user, seller)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000d1')}.jpg`
+    store.coverObjectKeys = async (listingIds) => new Map(listingIds.map((id) => [id, reviewKey]))
+    const service = createConversationService({ store, storage })
+
+    // #286 复审：任意登录用户只要能对一条 REVIEW 商品建会话，就会拿到无会话鉴权的直读 URL。
+    const created = await service.createOrGetConversation(buyer, { listingId: listingA })
+    expect(created.conversation.listing.coverUrl).toBeNull()
+    const conversationId = decodePublicId(PUBLIC_ID_PREFIX.conversation, created.conversation.id)
+    const detail = await service.getConversation(buyer, conversationId)
+    expect(detail.listing.coverUrl).toBeNull()
+
+    // 对照：公开前缀的封面照旧出图（不是把封面整体关掉）。
+    store.coverObjectKeys = async (listingIds) =>
+      new Map(listingIds.map((id) => [id, `covers/${id}.jpg`]))
+    const after = await service.getConversation(buyer, conversationId)
+    expect(after.listing.coverUrl).toBe(`https://cdn.test/covers/${listingA}.jpg`)
+  })
+
   test('reuses the existing conversation for the same (listing, buyer)', async () => {
     const service = createConversationService({ store: new MemoryConversationStore(), storage })
     const first = await service.createOrGetConversation(buyer, { listingId: listingA })

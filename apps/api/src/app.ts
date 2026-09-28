@@ -2,7 +2,13 @@ import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
-import type { AiPolishEnv, MailTransportEnv, MeetupTokenEnv, ServerEnv } from '@fish/shared/env'
+import type {
+  AiPolishEnv,
+  ContentModerationEnv,
+  MailTransportEnv,
+  MeetupTokenEnv,
+  ServerEnv,
+} from '@fish/shared/env'
 import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
@@ -43,6 +49,7 @@ import { createMessagesRouter } from './modules/messages/router'
 import { createMessageService, toMessageDto } from './modules/messages/service'
 import { createSqlMessageStore } from './modules/messages/store'
 import { createSystemContentProjector } from './modules/messages/system-content'
+import { createContentModerationProvider } from './modules/moderation/providers/factory'
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
@@ -54,6 +61,7 @@ import { createRealtimeRouter } from './modules/realtime/router'
 import { createTransactionsRouter } from './modules/transactions/router'
 import { createTransactionService } from './modules/transactions/service'
 import { createSqlTransactionStore } from './modules/transactions/store'
+import { createSqlListingMediaObjectStore } from './modules/uploads/media-objects'
 import { createUploadsRouter } from './modules/uploads/router'
 import { createUploadService } from './modules/uploads/service'
 import { createBunS3MediaStorage } from './modules/uploads/storage'
@@ -107,6 +115,13 @@ export function createApp(
     peerIp: () => null,
     trustedProxyIp: null,
   },
+  /**
+   * 内容安全审核配置（#228 的 transport + 腾讯凭证，#286 起真正被消费）：index.ts 用
+   * `loadContentModerationEnv()` 做启动期校验后传入。默认值是**不发布**的 `local` transport ——
+   * 本地 provider 给不出内容摘要、只能给 `REVIEW`，图片会固化但商品进人工队列，绝不会被当成
+   * 审核通过（生产由 index.ts 显式传入；local 在生产直接启动失败，见 `@fish/shared/env`）。
+   */
+  moderationEnv: ContentModerationEnv = { transport: 'local' },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -160,7 +175,16 @@ export function createApp(
     publicUrlBase: env.S3_PUBLIC_URL,
     legacyUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/legacy`,
     legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+    // #286 复审 blocker 2：审核中的图片固化在私有的 `listing-review-media/`，不在匿名白名单内。
+    // 三端全部用 `<img>` / Taro `<Image>` 直出（小程序的原生图片加载不带 cookie），所以私有键不能
+    // 指望「带鉴权代理」，只能走短期签名 URL —— 签名本身就承载授权，因此路由仍然匿名可访问。
+    reviewUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/media`,
+    reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
   })
+
+  // #286：图片确认记录表。uploads 侧写入（审核结论 + 固化后的 final 键），listings 侧读取
+  // （只允许引用已确认的 final 键），两侧共用同一个实例，读写的语义因此不可能漂移。
+  const mediaObjects = createSqlListingMediaObjectStore(db)
 
   // Guard transactions use a separate bounded pool, preserving business-store connections;
   // both pools coordinate through the same Postgres advisory key.
@@ -168,7 +192,11 @@ export function createApp(
   const projectSystemContent = createSystemContentProjector(db)
 
   // #6：`GET /listings*` 匿名可用，写接口在 router 内逐路由挂 requireAuth（读路径不能整体 401）。
-  const listingService = createListingService({ store: createSqlListingStore(db), storage })
+  const listingService = createListingService({
+    store: createSqlListingStore(db),
+    storage,
+    mediaObjects,
+  })
   app.route(
     '/listings',
     createListingsRouter({
@@ -182,13 +210,21 @@ export function createApp(
     }),
   )
   // 上传域实例只建一次：#86 B 的头像写入复用同一个 `confirm`（归属前缀 + 对象已上传 +
-  // 格式/大小），发布商品与改头像的失败码与文案因此不可能漂移。
-  const uploadService = createUploadService({ storage })
+  // 格式/大小 + #286 的图片审核与固化），发布商品与改头像的失败码与文案因此不可能漂移。
+  //
+  // `createModeration` 是工厂而非实例：每次 confirm 现绑一个 provider，注入的 `loadImage`
+  // 直接回放本次已经读到的字节，对象存储只读一次（provider 内部重试只重放 IMS 调用）。
+  const uploadService = createUploadService({
+    storage,
+    mediaObjects,
+    createModeration: (loadImage) => createContentModerationProvider(moderationEnv, { loadImage }),
+  })
   app.route(
     '/uploads',
     createUploadsRouter({
       storage,
       legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+      reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       requireAuth: auth.requireAuth,
       service: uploadService,
       guard: restrictionGuard,
