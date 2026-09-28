@@ -12,10 +12,16 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
+import type { RecommendationDomainRecorder } from '../recommendation/domain-events'
 import { type TransactionService, TransactionServiceError } from './service'
 
 export type TransactionsRouterOptions = {
   service: TransactionService
+  /**
+   * #323 §M0：交易有两个服务端确证的行为——建行（TRANSACTION_START）与确认成交
+   * （PURCHASE）。客户端上报会在断网/重试时丢失或重复，只有服务端知道这两件事真的发生了。
+   */
+  recorder?: RecommendationDomainRecorder
   /** 交易没有匿名路径（一切操作都以参与者身份为前提），整条路由挂 requireAuth。 */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   /** #73 治理守卫：提案 / 接受 / 拒绝前检查封禁（交易推进属 `write` 作用域）。 */
@@ -48,6 +54,7 @@ export function createTransactionsRouter({
   service,
   requireAuth,
   guard,
+  recorder,
 }: TransactionsRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -130,13 +137,19 @@ export function createTransactionsRouter({
       )
     }
     try {
-      return c.json(
-        await service.accept(c.get('userId'), {
-          ...parsed.data,
-          conversationId: decodePublicId(PUBLIC_ID_PREFIX.conversation, parsed.data.conversationId),
-        }),
-        201,
-      )
+      const transaction = await service.accept(c.get('userId'), {
+        ...parsed.data,
+        conversationId: decodePublicId(PUBLIC_ID_PREFIX.conversation, parsed.data.conversationId),
+      })
+      // 建行 = 交易开始。议价提案（/proposals）还不是交易，所以不在这里之前记。
+      if (recorder) {
+        await recorder.record(c, {
+          viewerId: c.get('userId'),
+          listingId: decodePublicId(PUBLIC_ID_PREFIX.listing, transaction.listingId),
+          eventType: 'TRANSACTION_START',
+        })
+      }
+      return c.json(transaction, 201)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -146,7 +159,21 @@ export function createTransactionsRouter({
     const id = transactionId(c.req.param('id') ?? '')
     if (!id) return txNotFound(c)
     try {
-      return c.json(await service.confirm(c.get('userId'), id), 200)
+      const transaction = await service.confirm(c.get('userId'), id)
+      // 双侧都确认后交易才 COMPLETED —— 这才是「成交」（PURCHASE）那个时刻。
+      //
+      // 已知取舍：COMPLETED 上的再次 confirm 在 store 层是幂等返回，所以重复点确认
+      // 可能多发一条 PURCHASE。v1 接受（R6 的评估按 request/listing 去重），因为客户端
+      // 重试的精确一次由 `recommendation_events.event_id` 唯一索引负责，而这里是服务端
+      // 已确证行为，宁可多记也不漏记。
+      if (recorder && transaction.status === 'COMPLETED') {
+        await recorder.record(c, {
+          viewerId: c.get('userId'),
+          listingId: decodePublicId(PUBLIC_ID_PREFIX.listing, transaction.listingId),
+          eventType: 'PURCHASE',
+        })
+      }
+      return c.json(transaction, 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

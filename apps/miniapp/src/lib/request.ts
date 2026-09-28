@@ -78,6 +78,11 @@ type RequestOptions = {
   /** 查询参数；值为 undefined 的键会被跳过 */
   query?: Record<string, string | number | boolean | undefined>
   body?: unknown
+  /**
+   * 额外的请求头。推荐域用它带匿名会话标识（`x-anonymous-session-id`）——
+   * 那是跟着**别人的**请求走的带外上下文，塞进任何业务 body 都会给该契约加无关字段。
+   */
+  headers?: Record<string, string>
 }
 
 /**
@@ -101,13 +106,46 @@ function buildQuery(query: RequestOptions['query']): string {
 }
 
 /**
- * 发一次请求并返回**未解析**的响应体。
+ * 响应元信息：调用方除了响应体，有时还要响应头 —— 推荐 Feed 会在
+ * `x-anonymous-session-id` 里补发匿名会话标识，客户端必须采纳（见 `features/recommendation/api.ts`）。
+ */
+export type ApiResponseMeta = {
+  data: unknown
+  /** 响应头；宿主对头名大小写处理不一致，取值请走 `readResponseHeader` */
+  headers: Record<string, string>
+}
+
+/**
+ * 按名读响应头。
+ *
+ * 小程序宿主对头名的处理不一致：微信把响应头名统一成小写，H5 预览原样保留。
+ * 直接 `headers[name]` 会在其中一端静默取不到，所以按大小写不敏感查一遍。
+ */
+export function readResponseHeader(
+  headers: Record<string, string>,
+  name: string,
+): string | undefined {
+  const lower = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value
+  }
+  return undefined
+}
+
+/**
+ * 发一次请求并返回**未解析**的响应体与响应头。
  *
  * 之所以不在这里 parse 成具体契约类型：每个域的形状不同（列表 / 详情 / 空 204），
  * 由各自的 `api.ts` 用对应 schema 收口，这里只负责传输、错误信封与登录态。
  */
-export async function apiRequest(path: string, options: RequestOptions = {}): Promise<unknown> {
-  const header: Record<string, string> = { 'content-type': 'application/json' }
+export async function apiRequestWithMeta(
+  path: string,
+  options: RequestOptions = {},
+): Promise<ApiResponseMeta> {
+  const header: Record<string, string> = {
+    ...options.headers,
+    'content-type': 'application/json',
+  }
   const cookie = sessionCookieHeader()
   if (cookie) header.Cookie = cookie
 
@@ -128,9 +166,10 @@ export async function apiRequest(path: string, options: RequestOptions = {}): Pr
   if (issued && epoch === sessionEpoch()) saveSession(issued)
 
   const { statusCode } = response
+  const headers = (response.header ?? {}) as Record<string, string>
 
   // 204 无正文（例如 `POST /auth/logout`）
-  if (statusCode === 204) return null
+  if (statusCode === 204) return { data: null, headers }
 
   const payload: unknown = response.data
 
@@ -158,5 +197,10 @@ export async function apiRequest(path: string, options: RequestOptions = {}): Pr
     throw new ApiError('INTERNAL_ERROR', statusCode, '请求失败，请稍后重试')
   }
 
-  return payload
+  return { data: payload, headers }
+}
+
+/** 只关心响应体的调用方走这个；需要响应头的（推荐 Feed）走 `apiRequestWithMeta` */
+export async function apiRequest(path: string, options: RequestOptions = {}): Promise<unknown> {
+  return (await apiRequestWithMeta(path, options)).data
 }

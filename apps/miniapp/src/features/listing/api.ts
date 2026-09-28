@@ -55,12 +55,6 @@ export async function fetchFeed(args: FeedArgs = {}): Promise<ListingFeedRespons
   return ListingFeedResponseSchema.parse(payload)
 }
 
-/** 首页瀑布流：取最新一页（不做无限滚动，与设计稿一致） */
-export async function fetchHomeFeed(): Promise<ListingCard[]> {
-  const page = await fetchFeed({ sort: 'newest' })
-  return page.items
-}
-
 /** 按分类取商品（首页的分类筛选），可指定排序（契约只支持 newest / priceAsc / priceDesc） */
 export async function fetchCategoryListings(
   category: ListingCategory,

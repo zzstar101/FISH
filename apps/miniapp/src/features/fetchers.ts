@@ -58,7 +58,6 @@ import { mergeMarkReadResults } from './chat/notif-read'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
   fetchCategoryListings,
-  fetchHomeFeed,
   fetchListingDetail,
   fetchSimilarListings,
   searchListings,
@@ -110,23 +109,66 @@ export type LoadedList = {
    * 页面据此渲染错误态：这一页是「加载不出来」，不是「恰好没有商品」。
    */
   failed: boolean
+  /**
+   * 本次推荐请求的 id（`GET /recommendations/feed` 的 `requestId`）。
+   *
+   * 分类列表、以及退 mock 的开发/预览都没有推荐请求上下文 → `null`：此时**不发**
+   * IMPRESSION / QUICK_SKIP，因为契约强制这两个事件必须带 requestId（见 `recommendation/schema.ts`），
+   * 没有归因就发等于制造必然被拒的事件。
+   */
+  requestId?: string | null
+  /**
+   * 公开 id → 本次推荐请求内的全局 `position`。
+   *
+   * 序号按**服务端那一份 feed 的原始下标**算：页面按本地隐藏名单过滤展示件时不能重新编号，
+   * 否则归因会整体错位（服务端看到的 position 与它下发的那条不一致）。
+   */
+  positions?: Map<string, number>
 }
 
-/** 首页 feed。真实失败：开发 / 预览退 mock，生产返回 `failed`。 */
+/** 首页 feed。「推荐」走推荐端点，分类走商品列表；真实失败：开发 / 预览退 mock，生产返回 `failed`。 */
 export async function loadHomeFeed(
   category: ListingCategory | 'ALL' = 'ALL',
   now: number = Date.now(),
 ): Promise<LoadedList> {
   try {
-    // 「推荐」= 全部：契约的 `category` 是可选枚举，没有 ALL 这个值，所以不传
-    const cards = category === 'ALL' ? await fetchHomeFeed() : await fetchCategoryListings(category)
+    if (category === 'ALL') {
+      /*
+        首页的「推荐」改走 `GET /recommendations/feed`（R1）：它比 `GET /listings` 多给出
+        `requestId` 与 `strategyVersion`，曝光与详情归因都要挂在这个 requestId 上。
+        排序语义不变（R1 服务端透传 newest），所以对用户来说还是同一批商品。
+
+        **必须惰性 import**：`features/recommendation/*` 静态依赖 `@tarojs/taro`（会话标识存在
+        小程序存储里），而本文件被测试动态 import 时 `@/lib/request` 是被 mock 掉的、Taro 运行时
+        并不会被求值。顶层静态引入会把 Taro 拖进模块图，让这些用例在 `bun test` 下直接
+        `ReferenceError: ENABLE_INNER_HTML is not defined`（与 `@/mock/api` 同一套做法）。
+      */
+      const { fetchRecommendationFeed } = await import('@/features/recommendation/api')
+      const feed = await fetchRecommendationFeed()
+      return {
+        items: toMockListings(feed.items, now),
+        fromApi: true,
+        failed: false,
+        requestId: feed.requestId,
+        positions: new Map(feed.items.map((card, index): [string, number] => [card.id, index])),
+      }
+    }
+    // 其余分类仍是确定性商品查询：契约的 `category` 是可选枚举，没有 ALL 这个值，所以不传
+    const cards = await fetchCategoryListings(category)
     return { items: toMockListings(cards, now), fromApi: true, failed: false }
   } catch (error) {
     reportFailure('首页 feed', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
     const { fetchHomeFeed: mockFeed } = await import('@/mock/api')
+    // 退 mock 没有服务端 requestId → 显式置 null，页面据此跳过曝光类事件
     const result = await mockFeed({ category, limit: 40 })
-    return { items: result.items, fromApi: false, failed: false }
+    return {
+      items: result.items,
+      fromApi: false,
+      failed: false,
+      requestId: null,
+      positions: new Map(),
+    }
   }
 }
 

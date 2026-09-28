@@ -3,6 +3,7 @@ import '@/lib/zod-jitless'
 import { useLaunch } from '@tarojs/taro'
 import type { PropsWithChildren } from 'react'
 import { bootstrapAuth } from '@/features/auth/store'
+import { startRecommendationQueueAutoFlush } from '@/features/recommendation/queue'
 import './app.scss'
 
 export default function App({ children }: PropsWithChildren) {
@@ -13,6 +14,12 @@ export default function App({ children }: PropsWithChildren) {
    */
   useLaunch(() => {
     void bootstrapAuth()
+    /*
+      埋点队列的自动冲刷（定时器 / 回到前台 / 网络恢复）是**应用级**的：
+      上次退出时队列里可能还留着没送出去的事件，而那时可能根本没有页面实例。
+      注册是幂等的（见 `startRecommendationQueueAutoFlush`），重复调用不会挂多个定时器。
+    */
+    startRecommendationQueueAutoFlush()
   })
 
   return children

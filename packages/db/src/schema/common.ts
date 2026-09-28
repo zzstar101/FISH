@@ -15,8 +15,11 @@ export const primaryKey = () => ({
 
 /**
  * 绝对时刻统一用 timestamptz + JS Date（#2 决策：不用无时区 timestamp、不用数值时间戳）。
+ *
+ * 领域表需要语义化时刻列（如 `requested_at` / `occurred_at`）时直接用这个工厂，
+ * 不要再写一份 `timestamp(name, {...})`：类型选项散开后，"不用无时区 timestamp"这条决策就守不住了。
  */
-const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
+export const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
 
 export const createdAt = () => timestamptz('created_at').notNull().defaultNow()
 

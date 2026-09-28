@@ -15,6 +15,7 @@ import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
 import { describeCreateConversationFailure } from '../chat/api'
 import { useCreateConversation } from '../chat/queries'
+import { useDetailTracking } from '../recommendation/use-detail-tracking'
 import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
 import { useListingDetail } from './queries'
@@ -31,6 +32,8 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const navigate = useNavigate()
   const viewerId = me?.id ?? null
   const detail = useListingDetail(listingId, viewerId)
+  // 详情页行为埋点：浏览与长浏览，与详情数据是否加载成功无关，因此放在提前返回之前。
+  useDetailTracking(listingId)
   const createConversation = useCreateConversation()
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)

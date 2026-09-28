@@ -1,6 +1,7 @@
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { fetchHomeFeed, fetchListingFeed } from './api'
+import { useInfiniteQuery } from '@tanstack/react-query'
+import { fetchRecommendationFeed } from '../recommendation/api'
+import { fetchListingFeed } from './api'
 
 export type ListingSearchFilters = {
   q?: string
@@ -8,10 +9,18 @@ export type ListingSearchFilters = {
   sort: ListingSort
 }
 
+/**
+ * 首页 feed 走推荐端点（#323 R1）：R1 服务端透传 `newest`，顺序与 `GET /listings` 一致，
+ * 但它额外给出 `requestId`——曝光和详情归因必须挂到真实的推荐请求上才成立。
+ * 分页沿用搜索页同一套写法，翻页时服务端复用同一个 requestId，position 才能连续。
+ */
 export function useHomeFeed() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['pc', 'listings', 'home'],
-    queryFn: fetchHomeFeed,
+    queryFn: ({ pageParam }) =>
+      fetchRecommendationFeed({ limit: 24, cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 30_000,
   })
 }

@@ -19,6 +19,7 @@
 | [../AGENTS.md](../AGENTS.md) | 给 AI agent 的命令、编码铁律、范围与实现纪律、对抗性审查流程 |
 | [../README.md](../README.md) | 最小启动路径与常用命令 |
 | [design/issue-147-transaction-invariants.md](design/issue-147-transaction-invariants.md) | #147 交易 / 面交剩余项设计方案（两个 PR 的切分、不变量清单、验证门禁） |
+| [design/issue-323-r1-event-tracking.md](design/issue-323-r1-event-tracking.md) | #323 R1 行为埋点与推荐归因契约（事件/表/索引、接口、幂等与拒收口径、隐私与保留策略、R1 的验证） |
 
 ## 关于文档职责
 

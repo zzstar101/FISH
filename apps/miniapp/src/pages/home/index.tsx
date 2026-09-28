@@ -16,6 +16,14 @@ import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
+import type { FeedAttribution } from '@/features/recommendation/attribution'
+import { hideListing, readHiddenListingIds } from '@/features/recommendation/hidden'
+import { flushRecommendationQueue } from '@/features/recommendation/queue'
+import { trackRecommendationEvent } from '@/features/recommendation/track'
+import {
+  type FeedTrackingContext,
+  useFeedImpressions,
+} from '@/features/recommendation/use-impressions'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
@@ -82,6 +90,62 @@ export default function Home() {
    */
   const reqSeq = useRef(0)
 
+  /**
+   * 埋点上下文：本次推荐请求的 `requestId` 与「公开 id → 全局 position」。
+   *
+   * 退 mock（开发 / 预览）或分类列表时 `requestId` 为 `null` —— 此时**不发** IMPRESSION /
+   * QUICK_SKIP：契约强制这两个事件必须带 requestId + position，没有归因就发等于制造必然被拒的事件。
+   */
+  const [feedContext, setFeedContext] = useState<FeedTrackingContext>({
+    requestId: null,
+    positions: new Map(),
+  })
+  /**
+   * 事件回调（点开 / 长按）里要读**最新**的上下文，但它们是随渲染重建的闭包 ——
+   * 用 ref 兜住，免得把上下文塞进每个回调的依赖里、或在滚动时反复重建回调。
+   */
+  const feedContextRef = useRef(feedContext)
+  feedContextRef.current = feedContext
+
+  /** 曝光 / 快速划过的判定（观察器、计时、去重都在里面） */
+  const impressions = useFeedImpressions({ items, contextRef: feedContextRef })
+
+  /** 从推荐流上屏的卡片才有归因；分类列表与退 mock 都是 `null`（详情页照样发 DETAIL_VIEW，只是不带） */
+  const attributionOf = (listingId: string): FeedAttribution | null => {
+    const { requestId, positions } = feedContext
+    const position = positions.get(listingId)
+    if (!requestId || position === undefined) return null
+    return { requestId, position }
+  }
+
+  /**
+   * 长按卡片 →「不感兴趣」。
+   *
+   * R1 **没有**服务端隐藏接口（见 `recommendation/hidden`）：发一条 HIDE、立刻把卡片从列表
+   * 移除、把 id 记进本地名单，三步都在本地完成。所以隐藏是立刻生效的，不需要等接口回来
+   * ——也就不会出现「点了没反应」这种最容易被读成坏了的状态。
+   */
+  const onHideListing = async (item: MockListing) => {
+    let confirmed = false
+    try {
+      const result = await Taro.showActionSheet({ itemList: ['不感兴趣'] })
+      confirmed = result.tapIndex === 0
+    } catch {
+      // 用户点了取消 / 蒙层：`showActionSheet` 以 reject 收场，这不是错误
+      return
+    }
+    if (!confirmed) return
+    trackRecommendationEvent({
+      listingId: item.id,
+      eventType: 'HIDE',
+      attribution: attributionOf(item.id),
+    })
+    hideListing(item.id)
+    // 先结算它的曝光计时：卡片马上要被移除，留着计时器会在它消失之后补发一条曝光
+    impressions.settleListing(item.id)
+    setItems((prev) => prev.filter((row) => row.id !== item.id))
+  }
+
   const load = async (next: ListingCategory | 'ALL') => {
     const seq = reqSeq.current + 1
     reqSeq.current = seq
@@ -90,10 +154,17 @@ export default function Home() {
     setFailed(false)
     // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
-    const { items: list, failed: nextFailed } =
+    const result =
       next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')
     // 期间又切过分类：这次结果已经过期，丢弃（否则会把新分类的商品覆盖成旧分类的）
     if (seq !== reqSeq.current) return
+    /*
+      本地隐藏名单在这里过滤（R1 没有服务端隐藏接口，见 `recommendation/hidden`）。
+      过滤发生在**取数之后、上屏之前**：`positions` 仍按服务端那份 feed 的原始下标算，
+      重新编号会让后续曝光与详情归因整体错位。
+    */
+    const hidden = new Set(readHiddenListingIds())
+    const visible = result.items.filter((item) => !hidden.has(item.id))
     /*
       三件套一次结转（纯函数，`./list-state.ts`）。`loadedFor` 的口径：
       成功 → 置为 `next`；**失败 → 作废为 `null`**（失败时 `items` 已被清成空数组，
@@ -104,7 +175,12 @@ export default function Home() {
       `loadedFor !== category` 全程成立，重试期间由骨架屏接管；空态只在**真的成功
       拿到空列表**时出现。判定逻辑与用例见 `./list-state.ts`。
     */
-    const applied = applyLoadResult({ requested: next, items: list, failed: nextFailed })
+    const applied = applyLoadResult({ requested: next, items: visible, failed: result.failed })
+    // 上下文与列表同一次渲染生效：曝光观察器建起来时就已经能拿到 requestId 与序号
+    setFeedContext({
+      requestId: result.requestId ?? null,
+      positions: result.positions ?? new Map(),
+    })
     setItems(applied.items)
     setFailed(applied.failed)
     setLoadedFor(applied.loadedFor)
@@ -112,6 +188,11 @@ export default function Home() {
 
   useLoad(() => {
     void load('ALL')
+  })
+
+  // 回到这个页面时补一次冲刷：队列里攒着的事件不该等到下一个 15s 定时器（见 `recommendation/queue`）
+  useDidShow(() => {
+    void flushRecommendationQueue()
   })
 
   // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
@@ -410,6 +491,11 @@ export default function Home() {
                   listing={item}
                   seller={findUser(item.sellerId)}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
+                  // 推荐归因随卡片带进详情页（R1 §3.5）；分类列表里为 null
+                  attribution={attributionOf(item.id)}
+                  // 点开前先记下「这张卡被点开过」：快速划过的判定要求「未点开」
+                  onOpen={() => impressions.markOpened(item.id)}
+                  onLongPress={() => void onHideListing(item)}
                 />
               ))}
             </View>
@@ -420,6 +506,9 @@ export default function Home() {
                   listing={item}
                   seller={findUser(item.sellerId)}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
+                  attribution={attributionOf(item.id)}
+                  onOpen={() => impressions.markOpened(item.id)}
+                  onLongPress={() => void onHideListing(item)}
                 />
               ))}
             </View>
