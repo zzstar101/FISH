@@ -54,5 +54,18 @@ export async function postRecommendationEvents(events: RecommendationEventInput[
   const parsed = RecommendationEventIngestResponseSchema.safeParse(data)
   if (!parsed.success) {
     console.warn('[recommendation] 事件写入响应形状异常', parsed.error.issues)
+    return
+  }
+  /*
+    `rejected` = 通过契约校验但服务端**拒收**的条数（商品不存在 / 归属与 requestId 不符 /
+    `occurredAt` 越界）。客户端重试不会变好，所以只留一条日志让人能顺着查；不弹提示、
+    也不重发 —— 静默吞掉的话，线上只会看到「事件写进去了」却查不出为什么数据少了。
+  */
+  if (parsed.data.rejected > 0) {
+    console.warn('[recommendation] 行为事件被服务端拒收', {
+      rejected: parsed.data.rejected,
+      accepted: parsed.data.accepted,
+      duplicates: parsed.data.duplicates,
+    })
   }
 }

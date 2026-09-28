@@ -124,6 +124,22 @@ function tamperListingCursor(cursor: string, listingCursor: string): string {
   ).toString('base64url')
 }
 
+/** 查某商品的某类事件（多个 describe 共用，所以放模块作用域）。 */
+async function eventsFor(listingPublicId: string, eventType: RecommendationEventType) {
+  return db
+    .select()
+    .from(recommendationEvents)
+    .where(
+      and(
+        eq(recommendationEvents.eventType, eventType),
+        eq(
+          recommendationEvents.listingId,
+          decodePublicId(PUBLIC_ID_PREFIX.listing, listingPublicId),
+        ),
+      ),
+    )
+}
+
 describe('recommendation API wiring (#323 R1)', () => {
   test('匿名 Feed：返回 requestId/strategyVersion，并补发会话标识', async () => {
     const seller = await registerUser('01')
@@ -453,20 +469,6 @@ describe('recommendation API wiring (#323 R1)', () => {
  * 归因缺失（没带推荐上下文头）时事件仍然落库（归因可以丢，行为不能丢）。
  */
 describe('recommendation domain events (#323 R1)', () => {
-  const internalListingId = (publicId: string) => decodePublicId(PUBLIC_ID_PREFIX.listing, publicId)
-
-  async function eventsFor(listingPublicId: string, eventType: RecommendationEventType) {
-    return db
-      .select()
-      .from(recommendationEvents)
-      .where(
-        and(
-          eq(recommendationEvents.eventType, eventType),
-          eq(recommendationEvents.listingId, internalListingId(listingPublicId)),
-        ),
-      )
-  }
-
   test('评论成功 → 服务端补一条 COMMENT 事件（无归因也落库）', async () => {
     const seller = await registerUser('11')
     const buyer = await registerUser('12')
@@ -551,13 +553,14 @@ describe('recommendation domain events (#323 R1)', () => {
   })
 
   /**
-   * 已知取舍的**回归护栏**（不是期望行为）：COMPLETED 上的重复 confirm 在 store 层是幂等返回
-   * （`transactions/store.ts` 的 `confirm` 幂等分支也回 `{kind:'ok'}`，没有"这次是否真的推进"的信号），
-   * 所以服务端会再记一条 PURCHASE。v1 接受：服务端已确证的行为宁可多记不可漏记，R6 评估按
-   * request/listing 去重；要根治需要 store.confirm 回一个 `justCompleted` 标志（跨模块改动，不属 R1）。
-   * 这条测试的作用是：一旦将来真的做了精确一次，这里会失败并提醒同步更新文档与评估口径。
+   * `PURCHASE` 的精确一次护栏。
+   *
+   * 确认成交在 store 层是幂等的（已 COMPLETED 的交易再确认仍返回 ok），而 `recordDomainEvent`
+   * 每次都新生成 `eventId`，`event_id` 唯一索引对这类重复无效：不拦的话卖家重复点确认或重放
+   * `POST /transactions/:id/confirm` 就能把最强的正样本无界放大。服务端按「一个商品只会成交
+   * 一次」（成交即转 SOLD）在写入前查一次，所以这里必须恰好一条。
    */
-  test('重复确认成交：v1 会再记一条 PURCHASE（已知取舍，见上方注释）', async () => {
+  test('重复确认成交不会重复记 PURCHASE（商品级唯一事实）', async () => {
     const seller = await registerUser('17')
     const buyer = await registerUser('18')
     const listingId = await createListing(seller.id, '重复确认验收商品')
@@ -591,13 +594,177 @@ describe('recommendation domain events (#323 R1)', () => {
     expect(((await sellerConfirm.json()) as { status: string }).status).toBe('COMPLETED')
     expect(await eventsFor(listingId, 'PURCHASE')).toHaveLength(1)
 
-    // 已完成后重复确认：store 幂等返回 COMPLETED，服务端据此又记一条。
+    // 已完成后重复确认：store 幂等返回 COMPLETED，但事件不重复。
     const replay = await app.request(
       `/transactions/${transaction.id}/confirm`,
       post({}, { cookie: seller.cookie }),
     )
     expect(replay.status).toBe(200)
     expect(((await replay.json()) as { status: string }).status).toBe('COMPLETED')
-    expect(await eventsFor(listingId, 'PURCHASE')).toHaveLength(2)
+    expect(await eventsFor(listingId, 'PURCHASE')).toHaveLength(1)
+  })
+
+  test('归因头里的 position 溢出 int4 时退化为无归因，但事件必须落库', async () => {
+    const seller = await registerUser('19')
+    const buyer = await registerUser('20')
+    const listingId = await createListing(seller.id, '位次溢出验收商品')
+
+    // 上界之外的值如果照收，INSERT 会报 `integer out of range`，而写失败被 recordDomainEvent
+    // 的 try/catch 吞掉 —— 整条 COMMENT 都没了，不只是丢归因。
+    const response = await app.request(
+      `/listings/${listingId}/comments`,
+      post(
+        { content: '位次溢出了' },
+        {
+          cookie: buyer.cookie,
+          'x-recommendation-position': '99999999999',
+          'x-recommendation-request-id': newId(),
+        },
+      ),
+    )
+    expect(response.status).toBe(201)
+
+    const rows = await eventsFor(listingId, 'COMMENT')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.position).toBeNull()
+  })
+})
+
+describe('recommendation ingest 契约 (#323 R1)', () => {
+  test('大写 UUID 的会话标识与小写等价：翻页 200 且事件不被判 identity_mismatch', async () => {
+    const seller = await registerUser('21')
+    const listingId = await createListing(seller.id, '大写会话验收商品')
+    const uppercaseSession = 'D49C7312-6A1D-4977-962C-6B7CC5F6F68C'
+
+    const first = await fetchFeed('?limit=1', { [SESSION_HEADER]: uppercaseSession })
+    expect(first.status).toBe(200)
+    expect(first.body.nextCursor).not.toBeNull()
+    // 客户端已经带了会话标识 → 服务端不补发（补发只发生在客户端没带时）。
+    expect(first.sessionId).toBeNull()
+
+    // PG 的 uuid 列回读是小写：不规范化就会在这里 422。
+    const second = await fetchFeed(
+      `?limit=1&cursor=${encodeURIComponent(first.body.nextCursor ?? '')}`,
+      { [SESSION_HEADER]: uppercaseSession },
+    )
+    expect(second.status).toBe(200)
+    expect(second.body.requestId).toBe(first.body.requestId)
+
+    const ingest = await app.request(
+      '/recommendations/events',
+      post({
+        events: [
+          {
+            eventId: newId(),
+            requestId: first.body.requestId.toUpperCase(),
+            listingId: first.body.items[0]?.id ?? listingId,
+            eventType: 'IMPRESSION',
+            position: 0,
+            anonymousSessionId: uppercaseSession,
+            occurredAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    )
+    expect(ingest.status).toBe(202)
+    expect((await ingest.json()) as unknown).toMatchObject({
+      accepted: 1,
+      duplicates: 0,
+      rejected: 0,
+    })
+  })
+
+  test('切号不串事件：登出后带旧 requestId 的事件被拒（identity_mismatch）', async () => {
+    const seller = await registerUser('22')
+    const buyer = await registerUser('23')
+    const listingId = await createListing(seller.id, '切号验收商品')
+
+    // 登录用户发起的推荐请求：请求行的身份真值是 userId。
+    const feed = await fetchFeed('?limit=1', { cookie: buyer.cookie })
+    expect(feed.status).toBe(200)
+    expect(feed.body.requestId).toBeTruthy()
+
+    // 登出（无 cookie）后再发这个 requestId 的事件：匿名视角不是这条请求的主人。
+    const anonymous = await app.request(
+      '/recommendations/events',
+      post({
+        events: [
+          {
+            eventId: newId(),
+            requestId: feed.body.requestId,
+            listingId,
+            eventType: 'DETAIL_VIEW',
+            occurredAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    )
+    expect(anonymous.status).toBe(202)
+    expect((await anonymous.json()) as unknown).toMatchObject({ accepted: 0, rejected: 1 })
+
+    // 另一个账号拿着别人的 requestId 也一样被拒。
+    const other = await registerUser('24')
+    const foreign = await app.request(
+      '/recommendations/events',
+      post(
+        {
+          events: [
+            {
+              eventId: newId(),
+              requestId: feed.body.requestId,
+              listingId,
+              eventType: 'DETAIL_VIEW',
+              occurredAt: new Date().toISOString(),
+            },
+          ],
+        },
+        { cookie: other.cookie },
+      ),
+    )
+    expect(foreign.status).toBe(202)
+    expect((await foreign.json()) as unknown).toMatchObject({ accepted: 0, rejected: 1 })
+    expect(await eventsFor(listingId, 'DETAIL_VIEW')).toHaveLength(0)
+  })
+
+  test('occurredAt 超前或过旧的事件被拒；批内重复 eventId 计入 duplicates', async () => {
+    const seller = await registerUser('25')
+    const listingId = await createListing(seller.id, '时间窗验收商品')
+    const eventId = newId()
+    const base = {
+      requestId: null,
+      listingId,
+      eventType: 'IMAGE_VIEW' as RecommendationEventType,
+      metadata: { imageIndex: 0 },
+    }
+
+    const response = await app.request(
+      '/recommendations/events',
+      post({
+        events: [
+          // 超前 11 分钟（容忍上限 10 分钟）
+          {
+            ...base,
+            eventId: newId(),
+            occurredAt: new Date(Date.now() + 11 * 60 * 1_000).toISOString(),
+          },
+          // 早于 180 天保留期
+          {
+            ...base,
+            eventId: newId(),
+            occurredAt: new Date(Date.now() - 181 * 24 * 60 * 60 * 1_000).toISOString(),
+          },
+          // 批内两条同 eventId：第一条落库，第二条计入 duplicates。
+          { ...base, eventId, occurredAt: new Date().toISOString() },
+          { ...base, eventId, occurredAt: new Date().toISOString() },
+        ],
+      }),
+    )
+    expect(response.status).toBe(202)
+    expect((await response.json()) as unknown).toMatchObject({
+      accepted: 1,
+      duplicates: 1,
+      rejected: 2,
+    })
+    expect(await eventsFor(listingId, 'IMAGE_VIEW')).toHaveLength(1)
   })
 })

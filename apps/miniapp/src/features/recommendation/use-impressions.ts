@@ -9,7 +9,7 @@
  * `observeAll: true` 让一个观察器盯住整屏卡片，不为每张卡各建一个观察器。
  */
 import { RECOMMENDATION_THRESHOLDS } from '@fish/contracts/recommendation/schema'
-import Taro, { useDidHide } from '@tarojs/taro'
+import Taro, { useDidHide, useDidShow } from '@tarojs/taro'
 import { useCallback, useEffect, useRef } from 'react'
 import { trackRecommendationEvent } from './track'
 
@@ -98,15 +98,37 @@ function readListingId(result: ObserveResult): string | null {
   return null
 }
 
+/**
+ * 结算原因。
+ *
+ * - `viewport`：卡片真的离开了视口（滑走 / 数据换批），按可见时长判曝光还是快速划过；
+ * - `dismissed`：用户明确「不感兴趣」把卡片移除。这是一次**有意**操作，不能因为停留
+ *   不足 1s 再补一条 QUICK_SKIP —— 那个事件的含义是「没点开就被划过去了」，与主动隐藏相反。
+ */
+type SettleReason = 'viewport' | 'dismissed'
+
 type VisibleSegment = {
   listingId: string
   requestId: string
   position: number
-  /** 这一段连续可见的起点 */
+  /** 当前这一轮连续可见的计时起点；`paused` 为真时不推进 */
   startedAt: number
+  /** 之前几轮连续可见已累计的时长；页面隐藏会把当时那一轮并进来 */
+  visibleMs: number
+  /** 页面隐藏造成的暂停：暂停期间既不计时，也不参与判定 */
+  paused: boolean
   /** 这一段里的最大可见比例（曝光事件要带上它） */
   maxRatio: number
   timer: ReturnType<typeof setTimeout> | null
+}
+
+/**
+ * 这一段的**可见**时长。页面隐藏的时间不计入：切走时用户没有在看，
+ * 把它算成停留会让「回到小程序」变成一次假曝光。
+ */
+function visibleDurationOf(segment: VisibleSegment, now = Date.now()): number {
+  if (segment.paused) return segment.visibleMs
+  return segment.visibleMs + Math.max(0, now - segment.startedAt)
 }
 
 /** 发一条曝光；`durationMs` 由调用方给（实时结算与收尾结算的时刻不同） */
@@ -127,8 +149,13 @@ function emitImpression(segment: VisibleSegment, durationMs: number): void {
 export type FeedImpressions = {
   /** 卡片被点开：快速划过的判定要求「未点开」，所以这个信号必须在导航之前记下 */
   markOpened: (listingId: string) => void
-  /** 卡片从列表里消失（隐藏 / 刷新）：就地结算它的可见段，别让计时器事后补发曝光 */
-  settleListing: (listingId: string) => void
+  /**
+   * 卡片从列表里消失（隐藏 / 刷新）：就地结算它的可见段，别让计时器事后补发曝光。
+   *
+   * `reason` 默认 `viewport`；用户明确「不感兴趣」时传 `dismissed`，
+   * 那一次结算不会再补 QUICK_SKIP（见 `SettleReason`）。
+   */
+  settleListing: (listingId: string, reason?: SettleReason) => void
 }
 
 export function useFeedImpressions(options: {
@@ -143,40 +170,74 @@ export function useFeedImpressions(options: {
   const { items, contextRef } = options
   /** 正在计时的可见段，键 = `requestId:listingId` */
   const segmentsRef = useRef(new Map<string, VisibleSegment>())
-  /** 已结算过的键：同一 requestId 内同一商品只发一次曝光 / 快速划过 */
-  const settledRef = useRef(new Set<string>())
+  /*
+    曝光与快速划过**各自**只发一次，所以要两本账：
+    合成一本的话，先发的 QUICK_SKIP 会把键永久占住，之后这张卡真被看满 1s 也发不出 IMPRESSION
+    （用户快速划过又回来看完，正是最该记成曝光的情况）。
+  */
+  const impressionSettledRef = useRef(new Set<string>())
+  const quickSkipSettledRef = useRef(new Set<string>())
   /** 被点开过的键：快速划过的条件是「可见不到阈值且**未点开**」 */
   const openedRef = useRef(new Set<string>())
+  /** 页面是否处于隐藏态：隐藏期间不计时（见 `pauseAll` / `resumeAll`） */
+  const hiddenRef = useRef(false)
 
   /**
    * 结算一个可见段：按已可见时长决定发曝光还是快速划过。
    *
-   * 收尾结算（页面隐藏 / 组件卸载 / 卡片被移除）也走这里 —— 用户确实看了那么久，
+   * 收尾结算（数据换批 / 组件卸载 / 卡片被移除）也走这里 —— 用户确实看了那么久，
    * 不能因为「没等到计时器响」就整段丢掉。
    */
-  const settle = useCallback((segment: VisibleSegment) => {
+  const settle = useCallback((segment: VisibleSegment, reason: SettleReason = 'viewport') => {
     const key = segmentKey(segment.requestId, segment.listingId)
     if (segment.timer !== null) clearTimeout(segment.timer)
     segmentsRef.current.delete(key)
-    if (settledRef.current.has(key)) return
-    // 点开过就不算「快速划过」：点进详情说明这张卡被真的看上了，
-    // 记成划过会把一次有意的点击说成「不感兴趣」。但也不算已曝光，回到列表再看满阈值照样算。
-    if (openedRef.current.has(key)) return
-    settledRef.current.add(key)
-    const durationMs = Math.max(0, Date.now() - segment.startedAt)
+    const durationMs = visibleDurationOf(segment)
     if (durationMs >= RECOMMENDATION_THRESHOLDS.impressionMinDurationMs) {
+      if (impressionSettledRef.current.has(key)) return
+      impressionSettledRef.current.add(key)
       emitImpression(segment, durationMs)
       return
     }
-    if (durationMs < RECOMMENDATION_THRESHOLDS.quickSkipMaxDurationMs) {
-      trackRecommendationEvent({
-        listingId: segment.listingId,
-        eventType: 'QUICK_SKIP',
-        attribution: { requestId: segment.requestId, position: segment.position },
-        metadata: { durationMs },
-      })
-    }
+    // 明确「不感兴趣」不是「划过去」：不发 QUICK_SKIP（曝光在上面已按真实时长判过）
+    if (reason === 'dismissed') return
+    // 点开过就不算「快速划过」：点进详情说明这张卡被真的看上了，
+    // 记成划过会把一次有意的点击说成「不感兴趣」。但也不算已曝光，回到列表再看满阈值照样算。
+    if (openedRef.current.has(key)) return
+    // 已经曝光过的不再补一条划过（曝光是更强的信号，回头再滑走不推翻它）
+    if (impressionSettledRef.current.has(key)) return
+    if (durationMs >= RECOMMENDATION_THRESHOLDS.quickSkipMaxDurationMs) return
+    if (quickSkipSettledRef.current.has(key)) return
+    quickSkipSettledRef.current.add(key)
+    trackRecommendationEvent({
+      listingId: segment.listingId,
+      eventType: 'QUICK_SKIP',
+      attribution: { requestId: segment.requestId, position: segment.position },
+      metadata: { durationMs },
+    })
   }, [])
+
+  /**
+   * 给可见段挂上「连续可见满 `impressionMinDurationMs` 就结算」的计时器。
+   *
+   * 剩余时长按**已可见时长**算，而不是固定 1000ms：页面隐藏会暂停计时，
+   * 回来后要接着走完剩下的那点时间，不能从头再计一遍（否则隐藏一次就永久发不出曝光）。
+   */
+  const armTimer = useCallback(
+    (segment: VisibleSegment) => {
+      if (segment.timer !== null) clearTimeout(segment.timer)
+      const key = segmentKey(segment.requestId, segment.listingId)
+      const remaining = Math.max(
+        0,
+        RECOMMENDATION_THRESHOLDS.impressionMinDurationMs - visibleDurationOf(segment),
+      )
+      segment.timer = setTimeout(() => {
+        if (segmentsRef.current.get(key) !== segment) return
+        settle(segment)
+      }, remaining)
+    },
+    [settle],
+  )
 
   const handleObserve = useCallback(
     (raw: unknown) => {
@@ -207,22 +268,22 @@ export function useFeedImpressions(options: {
           requestId,
           position,
           startedAt: Date.now(),
+          visibleMs: 0,
+          // 页面隐藏时不会有观察器回调；万一有，新段也先按暂停起，由 resumeAll 接手
+          paused: hiddenRef.current,
           maxRatio: ratio,
           timer: null,
         }
-        // 计时期间滑走会被 settle 清掉；能响铃就说明「连续可见」满了阈值
-        segment.timer = setTimeout(() => {
-          if (segmentsRef.current.get(key) !== segment) return
-          settle(segment)
-        }, RECOMMENDATION_THRESHOLDS.impressionMinDurationMs)
         segmentsRef.current.set(key, segment)
+        // 计时期间滑走会被 settle 清掉；能响铃就说明「连续可见」满了阈值
+        if (!segment.paused) armTimer(segment)
         return
       }
 
       // 可见比例掉到阈值以下（含 0 = 完全离开视口）：这一段到此为止
       if (existing) settle(existing)
     },
-    [contextRef, settle],
+    [contextRef, settle, armTimer],
   )
 
   useEffect(() => {
@@ -271,20 +332,54 @@ export function useFeedImpressions(options: {
   )
 
   const settleListing = useCallback(
-    (listingId: string) => {
+    (listingId: string, reason: SettleReason = 'viewport') => {
       for (const segment of [...segmentsRef.current.values()]) {
-        if (segment.listingId === listingId) settle(segment)
+        if (segment.listingId === listingId) settle(segment, reason)
       }
     },
     [settle],
   )
 
-  // 页面隐藏 / 组件卸载：把还开着的可见段收尾结算，别把它们留在计时器里
+  /**
+   * 页面隐藏（切后台 / 跳走）**暂停**所有可见段的计时。
+   *
+   * 隐藏不是「离开视口」：把每一段就地结算的话，所有不到 1s 的段都会变成 QUICK_SKIP
+   * （用户只是切出去接了个电话），而切走的那段时间也不是停留 —— 所以这里既不结算、
+   * 也把计时器停掉，回到页面再从剩余时长接着走。
+   */
+  const pauseAll = useCallback(() => {
+    hiddenRef.current = true
+    const now = Date.now()
+    for (const segment of segmentsRef.current.values()) {
+      if (segment.paused) continue
+      segment.visibleMs += Math.max(0, now - segment.startedAt)
+      segment.paused = true
+      if (segment.timer !== null) {
+        clearTimeout(segment.timer)
+        segment.timer = null
+      }
+    }
+  }, [])
+
+  /** 回到页面：接着走完每一段剩下的可见时长（隐藏的时间已经排除在外） */
+  const resumeAll = useCallback(() => {
+    hiddenRef.current = false
+    for (const segment of segmentsRef.current.values()) {
+      if (!segment.paused) continue
+      segment.paused = false
+      segment.startedAt = Date.now()
+      armTimer(segment)
+    }
+  }, [armTimer])
+
+  useDidHide(pauseAll)
+  useDidShow(resumeAll)
+
+  // 组件卸载：把还开着的可见段收尾结算，别把它们留在计时器里
   const settleAll = useCallback(() => {
     for (const segment of [...segmentsRef.current.values()]) settle(segment)
   }, [settle])
 
-  useDidHide(settleAll)
   useEffect(() => settleAll, [settleAll])
 
   return { markOpened, settleListing }

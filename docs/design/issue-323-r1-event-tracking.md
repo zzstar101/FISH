@@ -99,7 +99,7 @@
 
 这四类**在写入端点上被显式拒收**（`server_confirmed_event_type`，见契约的 `RECOMMENDATION_SERVER_CONFIRMED_EVENT_TYPES`）：端点匿名可写，照收的话任何人 POST 一批 `PURCHASE` 就能污染训练数据，而且落库后与真实交易**无法区分**（表里没有来源列）。拒收之后「表里出现这四类 = 服务端写的」这条不变式在数据层面成立，不必再加列。`FAVORITE` / `UNFAVORITE` 反过来只能由客户端上报（服务端还没有收藏写路径，见 §1），R1 接受这份不对称。
 
-已知取舍：`transactions` store 对 `COMPLETED` 上的重复 confirm 是**幂等返回**（`{kind:'ok'}` 里没有「这次是否真的推进」的信号），所以重复点确认会多发一条 `PURCHASE`。v1 接受：服务端已确证的行为宁可多记不可漏记；客户端重试的精确一次由 `event_id` 唯一索引负责，R6 的指标按 `request/listing` 去重。这条取舍有一条**回归护栏测试**钉着（`重复确认成交：v1 会再记一条 PURCHASE`）；要根治得让 `transactions/store.ts` 的 `confirm` 回一个 `justCompleted` 标志，属跨模块改动，不在 R1。
+`PURCHASE` 的精确一次：`transactions` store 对 `COMPLETED` 上的重复 confirm 是**幂等返回**（`{kind:'ok'}` 里没有「这次是否真的推进」的信号），而 `recordDomainEvent` 每次都新生成 `eventId`，`event_id` 唯一索引对这类重复**永远不生效** —— 不拦的话卖家重复点确认或重放 `POST /transactions/:id/confirm` 就能把最强的正样本无界放大。因此服务端在写入前按「一个商品只会成交一次」（成交即转 `SOLD`，同一商品的第二条成交事件在业务上不存在）查一次 `hasListingEvent(listingId, 'PURCHASE')`，命中即不写。护栏测试：`重复确认成交不会重复记 PURCHASE（商品级唯一事实）`。若将来真的要支持同一商品重卖，需要把去重键从 listing 换成 transaction（届时 `transactions` store 应回一个 `justCompleted` 标志，属跨模块改动）。
 
 ---
 
@@ -109,7 +109,8 @@
 - 归属校验：事件的 `requestId` 必须属于**当前身份**（登录请求按 `user_id`、匿名请求按 `anonymous_session_id`）；不符即拒收（`identity_mismatch`）。退出 / 切号后旧会话的事件不会记到新账号上。
 - 无归因事件（没有 `requestId`，例如详情页的 DETAIL_VIEW）：`user_id` 仍取 token 真值，`anonymous_session_id` 是**客户端自述**。匿名侧本来就没有可验证凭据，这里的会话标识只用于把同一浏览器 / 同一小程序的行为串起来（以及 R2 的会话内兴趣），**不构成授权，也不参与任何身份判断**；因此伪造它最多只能污染自己那一行匿名统计。
 - 匿名会话标识：客户端生成 UUIDv4，存 `localStorage` / `Taro` storage，**TTL 180 天**；服务端在 Feed 响应用户没带时补发并在响应头回写。
-- **`position` 与 `source` 也是客户端自述**，R1 服务端不校验它们与请求行的对应关系：`source` 缺省时服务端补 `fresh`（R1 只有一条召回通道，客户端不该猜），但客户端**显式**报别的通道也照收；`position` 只受契约约束（0..10000），伪造一个不存在的位次同样落库。R1 不修的原因：请求行没有记录「这次返回了哪些商品、每个商品在第几位」，服务端**没有可比对的真值**；可信的曝光位次要到 R3/R4 由 Feed 侧记录（那时才有召回通道与位次的服务端真值）。对 R1 的影响：曝光率这类指标在 R1 只能当参考，不能当实验结论。
+- **UUID 大小写规范化**：契约的 `z.uuid()` 与 `isUuidShape` 都接受大写，而 PG 的 `uuid` 列写入即规范化成小写、回读也是小写。所以服务端在**边界**（`readAnonymousSessionId` / `readRecommendationContext` / `ingest` 里的 `requestId`、`anonymousSessionId`）统一 `toLowerCase()` 后再比对与落库；否则同一个合法会话标识会第一页 200、第二页 422，带该 `requestId` 的事件全被判 `identity_mismatch`。仓库内两个客户端本来就产小写，所以这是潜伏缺陷（自研/第三方客户端或做大小写规范化的代理会踩到）。
+- **`position` 与 `source` 也是客户端自述**，R1 服务端不校验它们与请求行的对应关系：`source` 缺省时服务端补 `fresh`（R1 只有一条召回通道，客户端不该猜），但客户端**显式**报别的通道也照收；`position` 只受契约约束（0..`RECOMMENDATION_MAX_POSITION`），伪造一个不存在的位次同样落库。**归因头里的 `position` 会在服务端先按 `[0, RECOMMENDATION_MAX_POSITION]` 过滤，越界一律退化为「无归因」**：该列是 int4，头的数字直接落库时 `99999999999` 会让整条 INSERT 报 `integer out of range`，而写失败被 `recordDomainEvent` 的 catch 吞掉 → 评论/下单事件**整条**丢失；归因不值得用整条事件陪葬。R1 不修的（`position`/`source` 真值校验）原因：请求行没有记录「这次返回了哪些商品、每个商品在第几位」，服务端**没有可比对的真值**；可信的曝光位次要到 R3/R4 由 Feed 侧记录（那时才有召回通道与位次的服务端真值）。对 R1 的影响：曝光率这类指标在 R1 只能当参考，不能当实验结论。
 - 账号注销：`recommendation_events.user_id` 与 `recommendation_requests.user_id` 都是 **ON DELETE SET NULL**，行为统计保留为匿名，不随账号消失，也不残留可回指个人的外键。
 
 ---
@@ -138,7 +139,7 @@
 ## 8. R1 的验证
 
 - 契约单测（`packages/contracts/src/recommendation/schema.test.ts`）：12 类事件、阈值常量、metadata 白名单逐类型、曝光缺 `position` 必拒、批量上限。
-- API 集成测试（`apps/api/src/app.recommendation.test.ts`，14 例）：匿名 Feed + 会话补发、归因链（Feed → IMPRESSION → DETAIL_VIEW 落库）、幂等重放计 `duplicates`、拒收（商品不存在 / 身份不符 / 服务端确证类事件）、游标复用、伪造游标与**篡改内层游标**都是 422、`GET /listings?sort=newest` 未被污染、四个服务端领域事件、`source` 服务端补 `fresh`、重复确认多发一条 `PURCHASE` 的护栏。
+- API 集成测试（`apps/api/src/app.recommendation.test.ts`，18 例）：匿名 Feed + 会话补发、归因链（Feed → IMPRESSION → DETAIL_VIEW 落库）、幂等重放计 `duplicates`、批内重复 `eventId` 计 `duplicates`、拒收（商品不存在 / 身份不符 / 服务端确证类事件 / `occurredAt` 超前 / 过旧）、游标复用、伪造游标与**篡改内层游标**都是 422、`GET /listings?sort=newest` 未被污染、四个服务端领域事件、`source` 服务端补 `fresh`、**大写 UUID 会话与小写等价**（翻页 200 + 事件不被判 `identity_mismatch`）、**切号不串事件**（登出/换账号带旧 `requestId` → `identity_mismatch`）、`position` 溢出 int4 时退化为无归因但事件仍落库、重复确认成交不会重复记 `PURCHASE`。
 - 门禁：`bun run typecheck` → `bun run lint` → `bun test --isolate` → 真实跑起来（web-pc 首页 / 小程序首页）。
 - `#302` core smoke 的归因链用例等其合入后再挂（本 PR 用 API 集成测试覆盖同一条链路）。
 
@@ -151,3 +152,10 @@
 - 拒收路径逐条实测（均 202 + `rejected:1` 且不写行）：伪造 listingId → `listing_not_found`；不存在的 requestId → `request_not_found`；真实 requestId + 他人会话 → `identity_mismatch`；`occurredAt` 未来 1 小时 → `occurred_at_in_future`；客户端上报 PURCHASE/CHAT_START/COMMENT/TRANSACTION_START → `server_confirmed_event_type`。
 - 契约层 422（整批不写）：曝光缺 `position`、非规范公开 id、51 条批量、空 body。
 - 共享开发库 `fish` 当时被并行任务（#322）迁入了 `embeddings` 表，`db:seed` 的 TRUNCATE 名单与之冲突；本 PR 的 `seed.ts` 只登记本分支存在的表，实跑因此走隔离库（干净库上 migrate + seed 均通过）。
+
+### 修复轮实跑记录（同一隔离库，用修复后的代码重启真实 API）
+
+第一轮对抗性审查报出的缺陷修复后，重启 API（`apps/api/src/index.ts`，端口 3000，`MAIL_TRANSPORT=outbox`）复测：
+
+- **大写 UUID 会话（P1）**：`GET /recommendations/feed?limit=1` 带 `x-anonymous-session-id: D49C7312-6A1D-4977-962C-6B7CC5F6F68C` → 200 并拿到 `nextCursor`；带**同一个大写**会话头 + 该游标翻页 → **200**（修复前 422），`requestId` 与首页一致；换小写同样 200。
+- `PURCHASE` 精确一次、`position` 溢出退化为无归因、切号不串事件、`occurredAt` 时间窗、批内重复 `eventId` 由集成测试覆盖（`apps/api/src/app.recommendation.test.ts`，18 例全绿）。

@@ -29,6 +29,8 @@ export function ListingGallery({
   }
 
   function selectImage(index: number) {
+    // 点已经展示的那张不算「查看」：否则连点同一个缩略图会刷出一串 IMAGE_VIEW。
+    if (index === activeIndex) return
     setSelectedIndex(index)
     // 只有用户主动切图才上报：首屏自动展示第一张不算「查看」。
     trackListingEvent({ listingId, eventType: 'IMAGE_VIEW', metadata: { imageIndex: index } })

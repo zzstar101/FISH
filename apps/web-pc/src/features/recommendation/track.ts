@@ -2,7 +2,7 @@ import type {
   RecommendationEventInput,
   RecommendationEventType,
 } from '@fish/contracts/recommendation/schema'
-import type { ListingId } from '@fish/contracts/system/public-id'
+import { type ListingId, ListingIdSchema } from '@fish/contracts/system/public-id'
 import { enqueueRecommendationEvent } from './queue'
 import { ensureAnonymousSessionId } from './session'
 
@@ -99,6 +99,53 @@ export function readAttribution(listingId: ListingId): RecommendationAttribution
   return null
 }
 
+/**
+ * 本页浏览生效的归因：详情页进入时 `consumeAttribution` 消费一次并记在这里，同一次浏览
+ * 之后的 DETAIL_VIEW / LONG_VIEW / IMAGE_VIEW 都从这里取。
+ *
+ * 为什么不继续读持久化记录：消费掉的条目必须失效，否则 30 分钟内换个入口（搜索、分类）
+ * 再进同一件商品时，还会被挂上上一次推荐请求的 requestId / position。
+ * 上限只为防长会话里内存无限增长，容量远大于同时打开的详情页数。
+ */
+const activeAttribution = new Map<string, RecommendationAttribution>()
+const MAX_ACTIVE_ATTRIBUTIONS = 256
+
+/** 从内存与持久化两处删掉某个商品的归因。 */
+function forgetAttribution(listingId: string): void {
+  attributionMemory.delete(listingId)
+  const store = readAttributionStore()
+  if (store[listingId] === undefined) return
+  delete store[listingId]
+  try {
+    window.sessionStorage.setItem(ATTRIBUTION_STORAGE_KEY, JSON.stringify(store))
+  } catch {
+    // 存储写不进去（隐私模式 / 配额）时这条旧归因只能靠 30 分钟 TTL 自然过期。
+  }
+}
+
+/**
+ * 消费归因：详情页进入时调用一次。
+ *
+ * 有归因就返回它、并把它从持久化记录里删掉（本次浏览的后续事件改从生效表取），这样
+ * 「从推荐卡片点进 A」的这次浏览仍然完整归因；没有归因则清掉生效表里的残留，保证
+ * 「从搜索再进 A」不会被上一次推荐请求污染。消费方需保证同一次浏览只消费一次。
+ */
+export function consumeAttribution(listingId: ListingId): RecommendationAttribution | null {
+  const found = readAttribution(listingId)
+  if (found === null) {
+    activeAttribution.delete(listingId)
+    return null
+  }
+
+  forgetAttribution(listingId)
+  activeAttribution.set(listingId, found)
+  if (activeAttribution.size > MAX_ACTIVE_ATTRIBUTIONS) {
+    const oldest = activeAttribution.keys().next().value
+    if (oldest !== undefined) activeAttribution.delete(oldest)
+  }
+  return found
+}
+
 export type TrackEventInput = {
   listingId: ListingId
   eventType: RecommendationEventType
@@ -117,9 +164,17 @@ export type TrackEventInput = {
  * - 没有 `requestId` 时不带 `position`：位置只在某次推荐请求内才有意义。
  */
 export function trackEvent(input: TrackEventInput): void {
+  // 事件契约只收规范的公开 id（`lst_...`）：一个非法 id 会让整批事件 422，把队列里
+  // 合法的事件一起拖死。在这里收口丢掉并留痕（与小程序端一致）。
+  const parsedListingId = ListingIdSchema.safeParse(input.listingId)
+  if (!parsedListingId.success) {
+    console.warn('[recommendation] 跳过非公开 id 的埋点事件', input.eventType, input.listingId)
+    return
+  }
+
   const event: RecommendationEventInput = {
     eventId: crypto.randomUUID(),
-    listingId: input.listingId,
+    listingId: parsedListingId.data,
     eventType: input.eventType,
     anonymousSessionId: ensureAnonymousSessionId(),
     occurredAt: new Date().toISOString(),
@@ -132,13 +187,16 @@ export function trackEvent(input: TrackEventInput): void {
   enqueueRecommendationEvent(event)
 }
 
-/** 上报一条挂在某商品上的事件，归因自动取。没有归因就不带 requestId，事件照发。 */
+/**
+ * 上报一条挂在某商品上的事件，归因取本次浏览消费到的那份（`consumeAttribution`）。
+ * 没有归因就不带 requestId，事件照发——搜索、分类进来的浏览同样是有效的行为信号。
+ */
 export function trackListingEvent(input: {
   listingId: ListingId
   eventType: RecommendationEventType
   metadata?: Record<string, unknown>
 }): void {
-  const attribution = readAttribution(input.listingId)
+  const attribution = activeAttribution.get(input.listingId) ?? null
   trackEvent({
     listingId: input.listingId,
     eventType: input.eventType,

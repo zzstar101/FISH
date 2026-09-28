@@ -181,7 +181,10 @@ export function createRecommendationService(deps: {
         ...new Set(
           events
             .map((event) => event.requestId)
-            .filter((id): id is string => id !== null && id !== undefined),
+            .filter((id): id is string => id !== null && id !== undefined)
+            // 与 readAnonymousSessionId 同理：契约接受大写 uuid，PG 的 uuid 列回读是小写，
+            // 不规范化就会把大写 requestId 判成 `request_not_found`。
+            .map((id) => id.toLowerCase()),
         ),
       ]
 
@@ -230,8 +233,10 @@ export function createRecommendationService(deps: {
         }
 
         let userId = viewerId
-        let anonymousSessionId = event.anonymousSessionId ?? null
-        const requestId = event.requestId ?? null
+        // 会话标识与 requestId 一律先规范化成小写再比对/落库：契约与小程序的 `isUuidShape`
+        // 都接受大写，而 PG 的 uuid 列回读必然是小写，保留原样大小写会让 `ownsRequest` 误判。
+        let anonymousSessionId = event.anonymousSessionId?.toLowerCase() ?? null
+        const requestId = event.requestId?.toLowerCase() ?? null
 
         if (requestId !== null) {
           const row = requestsById.get(requestId)
@@ -294,6 +299,15 @@ export function createRecommendationService(deps: {
       occurredAt,
     }) {
       try {
+        // `PURCHASE` 是商品级唯一事实：确认成交对已 COMPLETED 的交易是幂等返回（store 层直接
+        // 返回既有行），而我们每次都新生成 `eventId`，`event_id` 唯一索引对这类重复无效——
+        // 卖家重复点确认或重放 `POST /transactions/:id/confirm` 就能无界放大最强的正样本。
+        // 按「一个商品只会成交一次」在写入前查一次：商品成交即转 SOLD，同一商品的第二条成交
+        // 事件在业务上不存在（真要重卖，R6 也会按 listing 去重）。
+        if (eventType === 'PURCHASE' && (await store.hasListingEvent(listingId, eventType))) {
+          return
+        }
+
         // 服务端写路径已经证明"行为发生了"，所以事件本身必须落库；只有**归因**可以丢。
         // 因此这里不用 ingest 的"归属不符就拒收"策略：归因对不上就退化成无归因事件。
         let requestId: string | null = null

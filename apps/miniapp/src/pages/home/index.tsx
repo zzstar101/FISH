@@ -141,8 +141,13 @@ export default function Home() {
       attribution: attributionOf(item.id),
     })
     hideListing(item.id)
-    // 先结算它的曝光计时：卡片马上要被移除，留着计时器会在它消失之后补发一条曝光
-    impressions.settleListing(item.id)
+    /*
+      先结算它的曝光计时：卡片马上要被移除，留着计时器会在它消失之后补发一条曝光。
+      结算原因传 `dismissed` —— 长按「不感兴趣」时这次 tap 被卡片吃掉（`swallowNextTapRef`），
+      `markOpened` 根本没跑过；按默认的「离开视口」结算会把这不足 1s 的停留
+      再记一条 QUICK_SKIP，等于把一次明确表态说成「没看上就划过去了」。
+    */
+    impressions.settleListing(item.id, 'dismissed')
     setItems((prev) => prev.filter((row) => row.id !== item.id))
   }
 

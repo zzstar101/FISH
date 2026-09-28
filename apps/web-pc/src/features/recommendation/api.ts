@@ -3,6 +3,7 @@ import {
   RECOMMENDATION_ROUTES,
 } from '@fish/contracts/recommendation/routes'
 import {
+  RecommendationEventIngestResponseSchema,
   type RecommendationEventInput,
   type RecommendationFeedResponse,
   RecommendationFeedResponseSchema,
@@ -47,13 +48,23 @@ export async function fetchRecommendationFeed(
  * 批量上报行为事件。
  *
  * 匿名可写，但必须带站点现有凭证：同源 fetch 自动带 Cookie，登录用户的曝光才能
- * 归到 userId 上。`202` 里的 `duplicates` 是重试的正常结果，不是错误。
+ * 归到 userId 上。`202` 里的 `duplicates` 是重试的正常结果，不是错误；`rejected`
+ * 则是服务端**拒收**（商品不存在 / 归属与 requestId 不符 / occurredAt 越界），
+ * 客户端对它无能为力，但静默丢弃会让埋点构造的 bug 永远看不见，所以喊一声。
  */
 export async function postRecommendationEvents(
   events: readonly RecommendationEventInput[],
 ): Promise<void> {
-  await apiRequest(RECOMMENDATION_ROUTES.events, {
+  const payload = await apiRequest(RECOMMENDATION_ROUTES.events, {
     method: 'POST',
     body: JSON.stringify({ events }),
   })
+
+  const result = RecommendationEventIngestResponseSchema.safeParse(payload)
+  if (result.success && result.data.rejected > 0) {
+    console.warn('[recommendation] 服务端拒收行为事件', {
+      rejected: result.data.rejected,
+      duplicates: result.data.duplicates,
+    })
+  }
 }

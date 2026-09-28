@@ -7,7 +7,7 @@ import { jsonParam } from '@fish/db/json'
 import { listings } from '@fish/db/schema/listings'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
-import { inArray } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 
 /** 一次推荐请求的上下文行。`id` 就是响应里的 `requestId`。 */
 export interface RecommendationRequestRow {
@@ -49,6 +49,15 @@ export interface RecommendationStore {
    * 所以调用方算 duplicates 时要用"尝试写入数 − 返回数"。
    */
   insertEvents(records: RecommendationEventRecord[]): Promise<number>
+
+  /**
+   * 某商品是否已经记过某类事件。
+   *
+   * 只服务于 `PURCHASE` 这类「商品级唯一事实」：确认成交端点是幂等的（已 COMPLETED 的交易再
+   * 确认仍返回成功），而 `recordDomainEvent` 每次都新生成 `eventId`，`event_id` 唯一索引对
+   * 这种重复永远不生效 —— 卖家重复点确认或 HTTP 重放就能把最强的正样本无界放大。
+   */
+  hasListingEvent(listingId: string, eventType: RecommendationEventType): Promise<boolean>
 }
 
 export function createSqlRecommendationStore(db: Db): RecommendationStore {
@@ -116,6 +125,20 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
         .onConflictDoNothing({ target: recommendationEvents.eventId })
         .returning({ id: recommendationEvents.id })
       return inserted.length
+    },
+
+    async hasListingEvent(listingId, eventType) {
+      const [row] = await db
+        .select({ id: recommendationEvents.id })
+        .from(recommendationEvents)
+        .where(
+          and(
+            eq(recommendationEvents.listingId, listingId),
+            eq(recommendationEvents.eventType, eventType),
+          ),
+        )
+        .limit(1)
+      return row !== undefined
     },
   }
 }

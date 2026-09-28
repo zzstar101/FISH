@@ -32,8 +32,9 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const navigate = useNavigate()
   const viewerId = me?.id ?? null
   const detail = useListingDetail(listingId, viewerId)
-  // 详情页行为埋点：浏览与长浏览，与详情数据是否加载成功无关，因此放在提前返回之前。
-  useDetailTracking(listingId)
+  // 详情页行为埋点：必须等详情真的加载出来才上报——加载中和 404（商品不存在）都不该记
+  // 一次浏览，所以钩子仍放在提前返回之前，但把「数据已就绪」传进去，由钩子决定发不发。
+  useDetailTracking(listingId, detail.data !== null && detail.data !== undefined)
   const createConversation = useCreateConversation()
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)

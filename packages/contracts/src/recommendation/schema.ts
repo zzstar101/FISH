@@ -87,6 +87,16 @@ export const RECOMMENDATION_THRESHOLDS = {
 export const RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES = ['IMPRESSION', 'QUICK_SKIP'] as const
 
 /**
+ * 曝光序号上限。
+ *
+ * 必须与 `recommendation_events.position` 的 int4 列同时可用：服务端要从**请求头**读这个值
+ * （`readRecommendationContext`），头里的数字先过 `Number.parseInt` 再落库，没有上界时
+ * `99999999999` 能让整条 INSERT 报 `integer out of range`，而写失败被 `recordDomainEvent`
+ * 的 try/catch 吞掉——结果是评论/下单事件整条丢失。上限取一次 Feed 根本达不到的位次。
+ */
+export const RECOMMENDATION_MAX_POSITION = 10_000
+
+/**
  * 服务端确证类事件：行为由服务端业务写路径确证（评论 / 会话 / 交易），**客户端写入端点拒收**。
  *
  * 这个端点匿名可写，如果照收客户端上报的这几类，任何人 POST 一批 `PURCHASE` 就能污染训练数据，
@@ -173,7 +183,7 @@ export const RecommendationEventInputSchema = z
     listingId: PublicListingIdSchema,
     eventType: RecommendationEventTypeSchema,
     /** 在**本次推荐请求**里的全局序号（跨页连续，从 0 开始）。 */
-    position: z.number().int().min(0).max(10_000).nullable().optional(),
+    position: z.number().int().min(0).max(RECOMMENDATION_MAX_POSITION).nullable().optional(),
     source: RecommendationSourceSchema.nullable().optional(),
     /** 匿名会话标识（客户端生成 UUIDv4，TTL 180 天）；登录用户的真值仍以 token 解析出的 userId 为准。 */
     anonymousSessionId: z.uuid().nullable().optional(),
