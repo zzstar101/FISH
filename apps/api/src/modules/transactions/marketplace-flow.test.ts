@@ -1244,4 +1244,48 @@ describe('marketplace flow 双账号验收（#42）', () => {
     expect(profile.stats.activeWishes).toBe(1) // 写成具体数字：挡住「把 CLOSED 也数进去」
     expect(profile.stats.activeWishes).toBe(activeWishes.items.length)
   })
+
+  // #298 回归：失败诊断本身必须能一步定级，否则下次复现又只剩「期望 200 实际 400」。
+  // 两种形态各自固定：Bun.serve 的 HTTP 解析层对畸形请求回的是空响应体、无 content-type 的
+  // 裸 400（裸 socket 探针实测）；而应用层 4xx 一定是带 error.code 的 JSON 信封。
+  // 桩只截 /auth/register，其余请求仍走真实 fetch。
+  test('注册失败诊断：解析层裸 400 与应用层 JSON 错误可区分（#298）', async () => {
+    // 两个形态各起一个真实端点：解析层形态＝空响应体 + 无 content-type（Bun 的 HTTP 解析层
+    // 对畸形请求就是这么回的，裸 socket 探针实测）；应用层形态＝带 error.code 的 JSON 信封。
+    // 桩只把 /auth/register 改指向端点，其余请求仍走真实 fetch。
+    const parserLayerServer = Bun.serve({ port: 0, fetch: () => new Response('', { status: 400 }) })
+    const appLayerServer = Bun.serve({
+      port: 0,
+      fetch: () =>
+        new Response(JSON.stringify({ error: { code: 'STUDENT_NO_TAKEN' } }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        }),
+    })
+    const realFetch = globalThis.fetch
+    const redirectRegister = (origin: string): void => {
+      // Bun 的 fetch 类型自带静态 preconnect，替换时必须一起带上。
+      globalThis.fetch = Object.assign(
+        (input: Parameters<typeof realFetch>[0], init: Parameters<typeof realFetch>[1]) => {
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          if (url.endsWith('/auth/register')) return realFetch(`${origin}/auth/register`, init)
+          return realFetch(input, init)
+        },
+        { preconnect: realFetch.preconnect },
+      )
+    }
+
+    try {
+      redirectRegister(`http://127.0.0.1:${parserLayerServer.port}`)
+      await expect(register('2025000001', '诊断桩')).rejects.toThrow(/疑似层=HTTP 解析层/)
+
+      redirectRegister(`http://127.0.0.1:${appLayerServer.port}`)
+      await expect(register('2025000001', '诊断桩')).rejects.toThrow(/疑似层=应用层/)
+    } finally {
+      globalThis.fetch = realFetch
+      parserLayerServer.stop(true)
+      appLayerServer.stop(true)
+    }
+  })
 })
