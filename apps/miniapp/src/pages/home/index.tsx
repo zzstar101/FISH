@@ -199,11 +199,36 @@ export default function Home() {
   const navSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /**
+   * 按**当前**滚动位置重算吸顶态。锁定期间 `usePageScroll` 把判定钉在旧值上，解锁时
+   * 必须自己补这一算（见 `lockNavSettle` 的注释）。
+   */
+  const syncCatsPinned = () => {
+    const next = scrollTopRef.current >= pinAt.current
+    // 值没变就把同一个值还回去，React 会跳过这轮渲染（与 `usePageScroll` 同口径）
+    setCatsPinned((prev) => (prev === next ? prev : next))
+  }
+
+  /** 只清账（定时器 + 锁标志），不碰 React 状态 —— 卸载路径用它 */
+  const clearNavSettle = () => {
+    if (navSettleTimerRef.current) {
+      clearTimeout(navSettleTimerRef.current)
+      navSettleTimerRef.current = null
+    }
+    navSettleRef.current = false
+  }
+
+  /**
    * 上锁 / 解锁吸顶判定（`usePageScroll` 里据此决定跟不跟阈值）。
    *
    * 每次上锁都**先清掉上一轮的定时器**：连点 A→B→C 时，A 的定时器会在 C 的滚动动画
    * 还没跑完时把 `navSettleRef` 置回 false，判定随即在动画途中翻面 —— 正是这层锁要消除
    * 的抖动。计时从**最后一次**归位算起（审查 P2）。
+   *
+   * 解锁时**按当前位置重算一次**：锁定期间那些滚动事件都被强制成旧值了，解锁后若不再
+   * 有滚动事件（用户已经停手），判定就会永远停在锁住的那一刻。端上实测过这条 ——
+   * 归位那跳会被**骨架屏**的 maxScroll 夹住（列表替换时页面变矮，滚不到 `pinAt`），
+   * 于是页面停在阈值以下、吸顶条却还挂着，与「回到顶部应淡化收起」自相矛盾。
+   * 重算放在动画结束之后（`NAV_SETTLE_MS` > `CATEGORY_SCROLL_DURATION`），不会再引入抖动。
    *
    * 用全局 `setTimeout` 而不是 `window.setTimeout`（审查 P1）：真机的小程序逻辑层是
    * JSCore / V8 环境，没有浏览器 `window`，那行会抛 `ReferenceError`，分类切换在
@@ -219,20 +244,18 @@ export default function Home() {
     navSettleTimerRef.current = setTimeout(() => {
       navSettleTimerRef.current = null
       navSettleRef.current = false
+      syncCatsPinned()
     }, NAV_SETTLE_MS)
   }
 
   /** 这一跳不需要归位 → 别把上一轮的锁留着，判定立刻恢复跟随滚动 */
   const releaseNavSettle = () => {
-    if (navSettleTimerRef.current) {
-      clearTimeout(navSettleTimerRef.current)
-      navSettleTimerRef.current = null
-    }
-    navSettleRef.current = false
+    clearNavSettle()
+    syncCatsPinned()
   }
 
-  // 卸载清掉未释放的锁定时器：迟到的回调不该写回已销毁的页面
-  useUnload(releaseNavSettle)
+  // 卸载清掉未释放的锁定时器：迟到的回调不该写回已销毁的页面（也不该再 setState）
+  useUnload(clearNavSettle)
 
   useReady(() => {
     Taro.createSelectorQuery()
