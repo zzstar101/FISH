@@ -11,18 +11,11 @@
   overflow: hidden;
   background: var(--surface);
   border: 2px solid var(--border);
+  border-radius: var(--r-card);
   &:active {
     transform: scale(0.985);
   }
   @include pressable;
-
-  &--home {
-    border-radius: var(--r-card);
-  }
-
-  &--search {
-    border-radius: var(--r-card-lg);
-  }
 }
 
 .pcard__ph {
@@ -57,17 +50,8 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  gap: 14px;
-}
-
-.pcard--home .pcard__body {
   padding: 18px 22px 22px;
   gap: 12px;
-}
-
-.pcard--search .pcard__body {
-  padding: 20px 24px 24px;
-  gap: 16px;
 }
 
 .pcard__title {
@@ -75,15 +59,8 @@
   line-height: 1.38;
   font-weight: 500;
   color: var(--fg);
-  @include clamp(2);
-}
-
-.pcard--home .pcard__title {
   min-height: 70px;
-}
-
-.pcard--search .pcard__title {
-  min-height: 74px;
+  @include clamp(2);
 }
 
 .pcard__title-text {
@@ -115,14 +92,7 @@
 .pcard__price {
   display: flex;
   align-items: baseline;
-}
-
-.pcard--home .pcard__price {
   color: var(--danger);
-}
-
-.pcard--search .pcard__price {
-  color: var(--fg);
 }
 
 .pcard__cur {
@@ -145,29 +115,11 @@
   white-space: nowrap;
 }
 
-.pcard__cond-pill {
-  padding: 2px 14px;
-  border: 2px solid var(--border);
-  border-radius: var(--r-pill);
-  color: var(--muted);
-  font-size: 20px;
-  white-space: nowrap;
-}
-
 .pcard__seller {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-}
-
-.pcard--home .pcard__seller {
-  font-size: 22px;
-}
-
-.pcard--search .pcard__seller {
-  padding-top: 16px;
-  border-top: 2px solid var(--border);
   font-size: 22px;
 }
 

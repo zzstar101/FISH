@@ -359,7 +359,6 @@ export default function Search() {
                     key={item.id}
                     listing={item}
                     seller={findUser(item.sellerId)}
-                    variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
@@ -370,7 +369,6 @@ export default function Search() {
                     key={item.id}
                     listing={item}
                     seller={findUser(item.sellerId)}
-                    variant="search"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}

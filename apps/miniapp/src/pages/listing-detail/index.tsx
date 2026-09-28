@@ -1363,7 +1363,6 @@ export default function ListingDetail() {
                       mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
                     */
                     seller={findUser(item.sellerId)}
-                    variant="home"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
@@ -1375,7 +1374,6 @@ export default function ListingDetail() {
                     listing={item}
                     /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
                     seller={findUser(item.sellerId)}
-                    variant="home"
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
