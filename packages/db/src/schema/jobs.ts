@@ -46,10 +46,19 @@ export const jobs = pgTable(
     check('jobs_attempts_non_negative', sql`${table.attempts} >= 0`),
     index('jobs_status_run_at_id_idx').on(table.status, table.runAt, table.id),
     index('jobs_running_locked_at_idx').on(table.lockedAt).where(sql`${table.status} = 'RUNNING'`),
-    // 幂等键：同一个愿望最多一条 MATCH_WISH job（#7 的重复请求/重放不得刷出重复任务）。
-    uniqueIndex('jobs_match_wish_wish_id_uidx')
+    /*
+     * 幂等键（#7 的重复请求/重放不得刷出重复任务；#322 M2 修正谓词）：
+     * 同一个愿望最多一条**待执行**（`status = 'PENDING'`）的 MATCH_WISH job。
+     *
+     * 原谓词只有 `type = 'MATCH_WISH'`（实体终身一条），后果是 `DONE` 行永久占位：
+     * 愿望被编辑后 `updateWish` 投的新 job 会被 `ON CONFLICT DO NOTHING` 静默吃掉，
+     * 于是"编辑愿望 → 重算匹配"从不发生。加上 `status = 'PENDING'` 后，投递幂等性
+     * （同一时刻只排一条）不变，但终态行不再阻塞后续重投——与下面的 EMBED_* 同一形状。
+     * 索引名一并改掉：旧名 `..._wish_id_uidx` 描述的是错误语义，留着会误导。
+     */
+    uniqueIndex('jobs_match_wish_wish_id_pending_uidx')
       .on(sql`(${table.payload}->>'wishId')`)
-      .where(sql`${table.type} = 'MATCH_WISH'`),
+      .where(sql`${table.type} = 'MATCH_WISH' AND ${table.status} = 'PENDING'`),
     // #322 M1：EMBED_* 的幂等键**只锁"待执行"那一行**（`status = 'PENDING'`），
     // 与上面 MATCH_WISH 的"实体终身一条"刻意不同：内容改动后必须能重新投递
     // （否则编辑永远不触发重新生成），而仍在队列里的那一条本来就会在运行时重读实体

@@ -1,7 +1,9 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, ne, type SQL, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { newId } from './ids'
 import { embeddings } from './schema/embeddings'
+import { listings } from './schema/listings'
+import { wishes } from './schema/wishes'
 
 /**
  * 向量行的读写（#322 M1）。
@@ -155,4 +157,91 @@ export async function saveEmbedding(
     })
     .returning({ id: embeddings.id })
   return rows.length > 0
+}
+
+/**
+ * 该实体是否存在**别的模型**的向量（#322 M2，只判存在、不读向量）。
+ *
+ * 用途只有一个：把"从来没有生成本模型的向量"（`missing`）与"有向量但属于旧模型、需要 backfill"
+ * （`model-mismatch`）区分开。两者对召回都是"不可用"，但成因不同——线上排障与 M4 的换模型重建
+ * 都要能看出来。**不取那行向量**：混用不同模型的向量算相似度正是 #322 禁止的事。
+ */
+export async function hasEmbeddingFromOtherModel(
+  db: Db,
+  entity: EmbeddingEntity,
+  model: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: embeddings.id })
+    .from(embeddings)
+    .where(and(entityFilter(entity), ne(embeddings.model, model)))
+    .limit(1)
+
+  return rows.length > 0
+}
+
+/** 一条语义召回候选：`distance` 是 cosine **距离**（0 = 同向、1 = 正交、2 = 反向）。 */
+export type SimilarCandidate = { id: string; distance: number }
+
+export type SimilarQuery = {
+  /** 必须显式给出：不同模型的向量不可比较（见上面的 `findEmbedding`）。 */
+  model: string
+  /** 查询向量（目标实体的向量）。 */
+  vector: number[]
+  /** 取前几条。 */
+  limit: number
+  /**
+   * 结构化收窄条件（由引擎构造的 SQL 片段，两个方向各自的规则）。
+   *
+   * **必须带**：召回是在"结构化过滤后的集合"里排序取 Top-K，而不是先全域取 Top-K 再过滤——
+   * 后者会让被价格/分类/状态挡掉的候选挤掉合法候选（也违背"C 结构化规则继续做硬约束"）。
+   */
+  filter?: SQL
+}
+
+/**
+ * 语义召回（#322 M2）：与目标**愿望**最相近的前 `limit` 条商品。
+ *
+ * 两个方向共用同一套语义定义：同一个 `model`、同一个距离算子（`<=>`）、同一个 Top-K 常量、
+ * 同一份结构化收窄规则（由调用方以 `filter` 传入），只有"候选是哪张表"不同。
+ *
+ * 只返回 `{id, distance}`：打分需要的是完整实体行，而 Top-K 只需要 id 与顺序。让调用方按 id
+ * 再取一遍实体（而不是在这里宽表 join 出打分字段），是为了让"召回"与"打分输入"各自只有一处
+ * 投影定义——见 `engine.ts` 里两个方向的 `*Columns`。
+ *
+ * 不建 ANN 索引（M2 实测数据量下 exact scan 足够，见 M2 设计文档 §6）：本函数就是一次
+ * `ORDER BY embedding <=> $1 LIMIT K` 的全表 exact 扫描。
+ */
+export async function topKSimilarListings(
+  db: Db,
+  query: SimilarQuery,
+): Promise<SimilarCandidate[]> {
+  const vector = JSON.stringify(query.vector)
+
+  return db
+    .select({
+      id: listings.id,
+      distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
+    })
+    .from(embeddings)
+    .innerJoin(listings, eq(listings.id, embeddings.listingId))
+    .where(and(eq(embeddings.model, query.model), query.filter))
+    .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
+    .limit(query.limit)
+}
+
+/** 语义召回：与目标**商品**最相近的前 `limit` 条愿望（`topKSimilarListings` 的镜像）。 */
+export async function topKSimilarWishes(db: Db, query: SimilarQuery): Promise<SimilarCandidate[]> {
+  const vector = JSON.stringify(query.vector)
+
+  return db
+    .select({
+      id: wishes.id,
+      distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
+    })
+    .from(embeddings)
+    .innerJoin(wishes, eq(wishes.id, embeddings.wishId))
+    .where(and(eq(embeddings.model, query.model), query.filter))
+    .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
+    .limit(query.limit)
 }

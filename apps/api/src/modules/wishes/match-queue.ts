@@ -36,9 +36,12 @@ export function createNoopWishMatchQueue(): WishMatchQueue {
 export function createDbWishMatchQueue(db: Db): WishMatchQueue {
   return {
     async enqueue(wishId: string) {
-      // 幂等：jobs_match_wish_wish_id_uidx（payload->>'wishId' 的 partial unique index）保证
-      // 同一个愿望最多一条 MATCH_WISH job；重复请求/重放被 DB 原子地忽略，
-      // 而前一次投递真正失败（没插进去）时这里会补上一条。
+      // 幂等：jobs_match_wish_wish_id_pending_uidx（(payload->>'wishId') 的 partial unique index，
+      // 谓词是 type='MATCH_WISH' AND status='PENDING'）保证同一愿望至多一条**待跑**的 MATCH_WISH job；
+      // 重复请求/重放被 DB 原子地忽略，而前一次投递真正失败（没插进去）时这里会补上一条。
+      //
+      // 谓词里的 status='PENDING' 是 #322 M2 修的（原先只有 type）：旧谓词下 DONE 的行会永久占位，
+      // 编辑愿望后投的 job 被 ON CONFLICT DO NOTHING 静默吃掉，"改了就重算"从不发生。
       await db.execute(sql`
         INSERT INTO jobs (id, type, payload)
         VALUES (${newId()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb)

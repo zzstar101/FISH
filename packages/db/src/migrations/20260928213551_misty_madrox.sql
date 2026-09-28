@@ -1,0 +1,2 @@
+DROP INDEX "jobs_match_wish_wish_id_uidx";--> statement-breakpoint
+CREATE UNIQUE INDEX "jobs_match_wish_wish_id_pending_uidx" ON "jobs" USING btree (("payload"->>'wishId')) WHERE "jobs"."type" = 'MATCH_WISH' AND "jobs"."status" = 'PENDING';

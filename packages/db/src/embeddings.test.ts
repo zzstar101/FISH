@@ -2,7 +2,13 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb, type Db } from './client'
-import { findEmbedding, saveEmbedding } from './embedding-store'
+import {
+  findEmbedding,
+  hasEmbeddingFromOtherModel,
+  saveEmbedding,
+  topKSimilarListings,
+  topKSimilarWishes,
+} from './embedding-store'
 import { newId } from './ids'
 import { EMBEDDING_DIMENSIONS, embeddings } from './schema/embeddings'
 import { listings } from './schema/listings'
@@ -432,4 +438,196 @@ test('cosine Top-K 顺序有固定 fixture：`<=>` 的排序与距离值都被�
     { listingId: middle, distance: 0.2929 },
     { listingId: far, distance: 1 },
   ])
+})
+
+// ---------------------------------------------------------------------------
+// #322 M2：向量召回（`topKSimilar*` / `hasEmbeddingFromOtherModel`）
+//
+// 这些查询是"结构化过滤 → cosine Top-K"里的第二步。测试把 `filter` 参数用起来，
+// 正是为了钉死**结构化条件在 Top-K 之前生效**（被过滤掉的最近候选不占名额）。
+// ---------------------------------------------------------------------------
+
+/** 带指定向量的愿望（`keyword` 用来做隔离过滤，所以不能复用 `createWish` 的自动命名）。 */
+async function createWishWithEmbedding(
+  userId: string,
+  keyword: string,
+  embedding: number[],
+  model = MODEL,
+): Promise<string> {
+  const id = newId()
+  await db.insert(wishes).values({
+    id,
+    userId,
+    keyword,
+    budgetMaxCents: 20000,
+    category: ISOLATED_CATEGORY,
+  })
+  await saveEmbedding(db, {
+    entity: { kind: 'wish', id },
+    model,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${id}`,
+    embedding,
+    sourceUpdatedAt: V1,
+  })
+  return id
+}
+
+/** 带指定向量的商品（同上，`title` 既当内容也当隔离过滤条件）。 */
+async function createListingWithEmbedding(
+  sellerId: string,
+  title: string,
+  embedding: number[],
+  model = MODEL,
+): Promise<string> {
+  const id = newId()
+  await db.insert(listings).values({
+    id,
+    listingNo: await reserveTestListingNo(db, id),
+    sellerId,
+    title,
+    description: 'Top-K 召回测试',
+    priceCents: 9900,
+    category: ISOLATED_CATEGORY,
+    condition: 'GOOD',
+  })
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id },
+    model,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${id}`,
+    embedding,
+    sourceUpdatedAt: V1,
+  })
+  return id
+}
+
+test('topKSimilarWishes：按 cosine 距离升序取前 K，且只认指定 model 的向量', async () => {
+  const owner = await createUser()
+  const marker = `topk-wish-${seq++}`
+  const near = await createWishWithEmbedding(owner, `${marker}-near`, unitVector(0))
+  const middle = await createWishWithEmbedding(owner, `${marker}-middle`, mixedVector())
+  const far = await createWishWithEmbedding(owner, `${marker}-far`, unitVector(1))
+  // 只有**别的** model 的向量：绝不能出现在本 model 的召回里（否则就是静默混用两套向量）。
+  const otherModel = await createWishWithEmbedding(
+    owner,
+    `${marker}-other`,
+    unitVector(0),
+    OTHER_MODEL,
+  )
+  // 根本没有向量：同样不出现。
+  const noVector = await createWish(owner)
+
+  const filter = sql`${wishes.keyword} like ${`${marker}%`}`
+  const ranked = await topKSimilarWishes(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    limit: 10,
+    filter,
+  })
+
+  expect(ranked.map((row) => row.id)).toEqual([near, middle, far])
+  expect(ranked[0]?.distance).toBe(0)
+  expect(ranked[1]?.distance).toBeCloseTo(0.2929, 4)
+  expect(ranked[2]?.distance).toBe(1)
+
+  // LIMIT 就是 K：候选池大小由它决定。
+  const limited = await topKSimilarWishes(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    limit: 2,
+    filter,
+  })
+  expect(limited.map((row) => row.id)).toEqual([near, middle])
+  expect(limited.map((row) => row.id)).not.toContain(otherModel)
+  expect(limited.map((row) => row.id)).not.toContain(noVector)
+})
+
+test('topKSimilarWishes：结构化收窄在 Top-K 之前生效，被过滤的最近候选不占名额', async () => {
+  const owner = await createUser()
+  const marker = `topk-filter-${seq++}`
+  // 最近的候选会被 filter 排除；如果先取 Top-K 再过滤，`allowed` 就会被挤出 K。
+  await createWishWithEmbedding(owner, `${marker}-nearest`, unitVector(0))
+  const allowed = await createWishWithEmbedding(owner, `${marker}-allowed`, mixedVector())
+
+  const ranked = await topKSimilarWishes(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    limit: 1,
+    filter: sql`${wishes.keyword} = ${`${marker}-allowed`}`,
+  })
+
+  expect(ranked.map((row) => row.id)).toEqual([allowed])
+  expect(ranked[0]?.distance).toBeCloseTo(0.2929, 4)
+})
+
+test('topKSimilarListings：与愿望方向同一套语义（model 过滤、排序、LIMIT 一致）', async () => {
+  const sellerId = await createUser()
+  const marker = `topk-listing-${seq++}`
+  const near = await createListingWithEmbedding(sellerId, `${marker}-near`, unitVector(3))
+  const far = await createListingWithEmbedding(sellerId, `${marker}-far`, unitVector(4))
+  const otherModel = await createListingWithEmbedding(
+    sellerId,
+    `${marker}-other`,
+    unitVector(3),
+    OTHER_MODEL,
+  )
+
+  const filter = sql`${listings.title} like ${`${marker}%`}`
+  const ranked = await topKSimilarListings(db, {
+    model: MODEL,
+    vector: unitVector(3),
+    limit: 10,
+    filter,
+  })
+
+  expect(ranked.map((row) => row.id)).toEqual([near, far])
+  expect(ranked[0]?.distance).toBe(0)
+  expect(ranked[1]?.distance).toBe(1)
+
+  const limited = await topKSimilarListings(db, {
+    model: MODEL,
+    vector: unitVector(3),
+    limit: 1,
+    filter,
+  })
+  expect(limited.map((row) => row.id)).toEqual([near])
+  expect(limited.map((row) => row.id)).not.toContain(otherModel)
+})
+
+test('hasEmbeddingFromOtherModel：区分“从没生成过”与“只有旧 model 的向量”', async () => {
+  const sellerId = await createUser()
+  const never = await createListing(sellerId)
+  const oldOnly = await createListing(sellerId)
+  const current = await createListing(sellerId)
+
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id: oldOnly },
+    model: OTHER_MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${oldOnly}`,
+    embedding: unitVector(5),
+    sourceUpdatedAt: V1,
+  })
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id: current },
+    model: MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${current}`,
+    embedding: unitVector(5),
+    sourceUpdatedAt: V1,
+  })
+
+  // 引擎靠它把 fallbackReason 分成 'missing'（该补投 EMBED job）与 'model-mismatch'（换模型了，别当成没生成过）。
+  expect(await hasEmbeddingFromOtherModel(db, { kind: 'listing', id: never }, MODEL)).toBe(false)
+  expect(await hasEmbeddingFromOtherModel(db, { kind: 'listing', id: oldOnly }, MODEL)).toBe(true)
+  expect(await hasEmbeddingFromOtherModel(db, { kind: 'listing', id: current }, MODEL)).toBe(false)
+  // 愿望方向同一实现。
+  const wishId = await createWishWithEmbedding(
+    sellerId,
+    `topk-other-model-${seq++}`,
+    unitVector(5),
+    OTHER_MODEL,
+  )
+  expect(await hasEmbeddingFromOtherModel(db, { kind: 'wish', id: wishId }, MODEL)).toBe(true)
 })
