@@ -117,6 +117,31 @@ test('无 session 存储时登出标志按未设置处理', () => {
   markExplicitLogout(undefined)
 })
 
+test('sessionStorage 写失败时登出标志落到 localStorage，登出仍被抑制一次', () => {
+  const local = new MemoryStorage()
+  markExplicitLogout(new BrokenStorage(), local)
+  expect(consumeExplicitLogout(new BrokenStorage(), local)).toBe(true)
+  expect(consumeExplicitLogout(new MemoryStorage(), local)).toBe(false)
+})
+
+test('登出标志双写 sessionStorage 与 localStorage，消费时两处一起清', () => {
+  const session = new MemoryStorage()
+  const local = new MemoryStorage()
+  markExplicitLogout(session, local)
+  expect(session.getItem('fish.pc.login.logout')).toBe('1')
+  expect(local.getItem('fish.pc.login.logout')).toBe('1')
+  expect(consumeExplicitLogout(session, local)).toBe(true)
+  expect(session.getItem('fish.pc.login.logout')).toBeNull()
+  expect(local.getItem('fish.pc.login.logout')).toBeNull()
+})
+
+test('session 标志丢失（换 tab / 会话过期）时仍可从 localStorage 消费一次', () => {
+  const local = new MemoryStorage()
+  local.setItem('fish.pc.login.logout', '1')
+  expect(consumeExplicitLogout(new MemoryStorage(), local)).toBe(true)
+  expect(consumeExplicitLogout(new MemoryStorage(), local)).toBe(false)
+})
+
 test('存储不可访问（抛 SecurityError）时全部操作按无存储降级，不抛错', () => {
   const broken = new BrokenStorage()
   expect(loadRememberedCredentials(broken)).toBeNull()
