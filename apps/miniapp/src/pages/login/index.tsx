@@ -5,6 +5,7 @@ import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
 import { ICONS } from '@/assets/lib-icons'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
+import { confirmBackTicket } from '@/features/auth/login-continue'
 import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
 import { signInWithWechat, useAuth } from '@/features/auth/store'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -79,11 +80,13 @@ export default function Login() {
     const pages = Taro.getCurrentPages()
     const top = (pages[pages.length - 1] as { route?: string } | undefined)?.route ?? ''
     if (top !== 'pages/login/index') return
-    // #197 续接：确认页带来的 `back` + `ticket` 在场 → 原路回确认页（票据不合法时
-    // 确认页自己的形状门禁会落「无效登录码」，这里不做二次校验，规则只有一份）。
-    if (router.params.back === 'pages/login-confirm/index' && router.params.ticket) {
+    // #197 续接：确认页带来的 `back` + `ticket` 在场 → 原路回确认页（判定与解码在
+    // `features/auth/login-continue.ts`，有单测；票据不合法时确认页自己的形状门禁会落
+    // 「无效登录码」，这里不做二次校验，规则只有一份）。
+    const backTicket = confirmBackTicket(router.params.back, router.params.ticket)
+    if (backTicket !== null) {
       void Taro.redirectTo({
-        url: `/pages/login-confirm/index?ticket=${encodeURIComponent(router.params.ticket)}`,
+        url: `/pages/login-confirm/index?ticket=${encodeURIComponent(backTicket)}`,
       }).catch(() => {
         // 跳转失败必须给出口：否则按钮会永远停在「登录中…」的禁用态上
         setBusy(false)
