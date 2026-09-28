@@ -66,41 +66,56 @@ function ruleBody(rawStyle: string, selector: string): string {
   return style.slice(open, close)
 }
 
-/** 取某条属性的 px 数值 */
-function px(body: string, prop: string): number {
+/** 取某条属性的 px 数值；缺失时返回 null（用于「有就用、没有就回落」的取值） */
+function pxOrNull(body: string, prop: string): number | null {
   const matched = new RegExp(`(?:^|[;{\\s])${prop}:\\s*([\\d.]+)px`).exec(body)
-  expect(matched, `缺少 ${prop}: <数值>px`).not.toBeNull()
-  return Number(matched?.[1])
+  return matched ? Number(matched[1]) : null
+}
+
+/** 取某条属性的 px 数值（缺失即失败） */
+function px(body: string, prop: string): number {
+  const value = pxOrNull(body, prop)
+  expect(value, `缺少 ${prop}: <数值>px`).not.toBeNull()
+  return value as number
 }
 
 /**
  * 悬浮底栏的几何（从 `custom-tab-bar/index.scss` 真读）。
  *
- * 高度是**算出来的**，不是抄注释里的 101：border(2×2) + padding(8+10) + 图标行 56 +
- * 行距 2 + 文字行 20×1.05 ≈ 101rpx。栏体的 `box-sizing` 是 content-box —— 页面级
- * `border-box` 只写在 `.page` 上（`app.scss`），`.tabbar` 是挂在 `<page>` 之外的组件。
+ * 高度取**最高那一列**：栏体是 `display:flex; align-items:center`，5 个子项各是一个
+ * flex 纵向列 —— 四个普通 tab 是「`.tabbar__icon` + 行距 + 文字」，中间的凸起 tab 是
+ * 「`.tabbar__pub` + 行距 + 文字」。**凸起钮才是决定栏高的那个**（设计稿里它比图标行
+ * 大），今天两者都是 56px 纯属巧合 —— 只读 `.tabbar__icon` 的话，把 `.tabbar__pub`
+ * 单独改大（稿子本来画的是 68px）测试仍会全绿，而底栏顶边已经压到回顶钮上。
+ *
+ * 文字行高同理：`font-size` 继承自 `.tabbar__tab`，但 `.tabbar__label` 允许自己覆盖，
+ * 所以取「自己声明优先、否则继承」。
+ *
+ * 栏体的 `box-sizing` 是 content-box —— 页面级 `border-box` 只写在 `.page` 上
+ * （`app.scss`），`.tabbar` 是挂在 `<page>` 之外的组件。
  */
 async function tabBarGeometry(): Promise<{ bottom: number; height: number }> {
   const style = await Bun.file(new URL('../src/custom-tab-bar/index.scss', import.meta.url)).text()
   const bar = ruleBody(style, '.tabbar')
+  const tab = ruleBody(style, '.tabbar__tab')
+  const label = ruleBody(style, '.tabbar__label')
+
   const borderWidth = px(bar, 'border')
   const padding = /padding:\s*([\d.]+)px\s+[\d.]+px\s+([\d.]+)px/.exec(bar)
   expect(padding, '.tabbar 的 padding 不是三段式').not.toBeNull()
   const paddingY = Number(padding?.[1]) + Number(padding?.[2])
-  const fontSize = px(ruleBody(style, '.tabbar__tab'), 'font-size')
-  const lineHeight = Number(
-    /line-height:\s*([\d.]+)\s*;/.exec(ruleBody(style, '.tabbar__label'))?.[1],
-  )
+
+  const iconColumn = px(ruleBody(style, '.tabbar__icon'), 'height')
+  const pubColumn = px(ruleBody(style, '.tabbar__pub'), 'height')
+  const gap = px(tab, 'gap')
+  const fontSize = pxOrNull(label, 'font-size') ?? px(tab, 'font-size')
+  const lineHeight = Number(/line-height:\s*([\d.]+)\s*;/.exec(label)?.[1])
   expect(lineHeight, '.tabbar__label 没有可解析的 line-height').toBeGreaterThan(0)
 
   return {
     bottom: px(bar, 'bottom'),
     height:
-      borderWidth * 2 +
-      paddingY +
-      px(ruleBody(style, '.tabbar__icon'), 'height') +
-      px(ruleBody(style, '.tabbar__tab'), 'gap') +
-      fontSize * lineHeight,
+      borderWidth * 2 + paddingY + Math.max(iconColumn, pubColumn) + gap + fontSize * lineHeight,
   }
 }
 
@@ -119,7 +134,7 @@ describe('回顶钮 bottom：Tab 页避让底栏', () => {
   for (const file of ['home/index.tsx', 'chat/index.tsx', 'wish/index.tsx']) {
     test(`${file} 抬到底栏顶边之上（顶边 + ${TAB_GAP}rpx 缝）`, async () => {
       const bar = await tabBarGeometry()
-      // 底栏挪位而这里没跟着改 —— 就是 #235 留下的存量错（145rpx 对应旧的 133rpx 顶边）
+      // 底栏挪位、这里没跟着改 —— 就是 145rpx 变成存量错的那次（#237 按更早的底栏位置算的值）
       expect(await backTopBottom(file)).toBe(Math.round(bar.bottom + bar.height + TAB_GAP))
     })
   }
@@ -173,8 +188,14 @@ describe('回顶钮 bottom 文档口径', () => {
      * 传值」—— #235 时根本没有传值可同步 —— 而是「#237 接入时按 #235 之前的底栏位置
      * （距底 32px、顶边 133rpx）算了 145rpx，落盘时那个位置已经被 #235 挪走了」。
      * 归因错了会让后来人按「#235 漏改」去找别处的漏改点，白跑一趟。
+     *
+     * 断言**实质**（那三个具体数字）而不只是措辞：只查 `#237` 在不在的话，一句
+     * 「#237 时漏同步了 #235 的底栏」也能过，而那正是要防的错。
      */
     expect(source).toContain('#237')
+    expect(source).toContain('2878bbb')
+    expect(source).toContain('bottom: 32px')
+    expect(source).toContain('133rpx')
     expect(source).not.toContain('漏同步')
     expect(source).not.toContain('漏改')
   })
