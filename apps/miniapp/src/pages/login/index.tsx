@@ -9,7 +9,7 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { confirmBackTicket } from '@/features/auth/login-continue'
 import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
 import { signInWithWechat, useAuth } from '@/features/auth/store'
-import { takeDeclined } from '@/features/legal/entry'
+import { takeConsent } from '@/features/legal/entry'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import './index.scss'
@@ -61,15 +61,20 @@ export default function Login() {
   const [agreed, setAgreed] = useState(true)
 
   /**
-   * 从法务页返回时兑现「不同意」（见 `features/legal/entry.ts`）。
+   * 从法务页返回时兑现同意条上的决定（见 `features/legal/entry.ts`）。
    *
-   * 协议链带 `?from=login` 进法务页，那边点「不同意」会 `markDeclined()` 再返回；
-   * 不在这里消费的话，用户点了「不同意」回来勾选仍是勾上的、照样能一键登录，
-   * 那句「未同意，无法继续使用」就成了假话。`takeDeclined()` 取走即清，
-   * 所以之后每次正常返回本页不会反复取消用户的勾选。
+   * 协议链带 `?from=login` 进法务页，那边点「同意并继续」/「不同意」会 `markConsent(...)`
+   * 再返回；不在这里消费的话两个方向都会说谎：
+   * - 点「不同意」回来勾选仍是勾上的、照样能一键登录 → 那句「未同意，无法继续使用」是假的；
+   * - 先取消勾选、再进协议页点「同意并继续」，回来勾选仍是空的、CTA 仍禁用 → 用户刚按过
+   *   「同意」，界面却否认。
+   *
+   * `takeConsent()` 取走即清，所以之后每次正常返回本页不会反复改动用户的勾选。
    */
   useDidShow(() => {
-    if (takeDeclined()) setAgreed(false)
+    const decision = takeConsent()
+    if (decision === 'agreed') setAgreed(true)
+    if (decision === 'declined') setAgreed(false)
   })
 
   const { status } = useAuth()

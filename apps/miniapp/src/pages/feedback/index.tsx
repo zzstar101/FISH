@@ -32,6 +32,10 @@ import './index.scss'
  * 「后端反馈接口尚未上线 / 你的内容已暂存在本机 / 可复制客服邮箱发给我们」，
  * 并给出「清空本机暂存的内容」。等真有了 `POST /feedback`，这一段换成成功态即可。
  *
+ * 弹层正文按**实际成立的事**分三档（见 `stored` / `hasMail`）：暂存失败时不说「已暂存在本机」；
+ * 客服邮箱未定时不提「复制后发给客服邮箱」，那一段的复制钮也一并**不渲染** ——
+ * 唯一的送达渠道还没定，就不能把用户指去一个做不到的动作。
+ *
  * ## 与稿的差异（稿是「模拟微信原生栏」的演示壳，不照搬）
  *
  * - 稿的 `.mp-nav` + 假胶囊 `.mp-capsule` 是**模拟原生导航栏**，本项目全端
@@ -51,6 +55,11 @@ import './index.scss'
  * `ic-clock`→`clockMuted`（暂存恢复提示）、`ic-check`→`checkAccent`（知道了）。
  * 稿里没有 `ic-chevron` 这个 symbol（返回箭头由 `components/nav-bar` 自绘），
  * 所以 `chevronRightMuted` 本页用不到。
+ *
+ * ⚠️ **已知色偏（记录，不修）**：稿的图标是内联 SVG 描边、走 `currentColor`，所以
+ * `.err .ic-line` 能被染成稿要求的 `--danger` 红；仓内 `ICONS` 是固定色 PNG、不可染色，
+ * `warnInk` 实测是 **#17233D（墨色）**。所以行内错误图标与弹层警示图标比稿「暗一档」。
+ * 要严格对齐得往图标生成器里加一个 danger 红变体，不是在本页调色。
  *
  * ## 行为口径（照稿）
  *
@@ -175,6 +184,12 @@ export default function Feedback() {
   const [busy, setBusy] = useState(false)
   /** 结果弹层（兜底渠道）是否打开 */
   const [sheetOpen, setSheetOpen] = useState(false)
+  /**
+   * 本次提交有没有真的落进本机暂存（`null` = 还没提交过）。
+   *
+   * 弹层正文与它绑定：`false` 时不能说「你的内容已暂存在本机」（存储失败，说了就是假话）。
+   */
+  const [stored, setStored] = useState<boolean | null>(null)
 
   const nav = useMemo(() => readNavMetrics(), [])
   const scrollTopRef = useRef(0)
@@ -207,16 +222,20 @@ export default function Feedback() {
   }
 
   /**
-   * 写本机暂存。失败静默（稿注释 ⑥「存储失败不致命」）。
+   * 写本机暂存。**失败不抛**（稿注释 ⑥「存储失败不致命」），但**要把成败回报给调用方** ——
+   * 提交结果弹层里那句「你的内容已暂存在本机」是页面对用户的承诺，存储失败时它就不是真的，
+   * 这时要换成「本机暂存失败，请先复制内容」。
    *
    * **必须显式传整份草稿**，不能在回调里读 state：`setState` 要下一轮渲染才生效，
    * 事件回调里读到的是**改动前**的值，那样刚输入的字不会进暂存。
    */
-  const persistDraft = (next: FeedbackDraft) => {
+  const persistDraft = (next: FeedbackDraft): boolean => {
     try {
       Taro.setStorageSync(FEEDBACK_DRAFT_KEY, next)
+      return true
     } catch {
-      // 存储失败不影响页面交互
+      // 存储失败不影响页面交互，只影响弹层怎么措辞
+      return false
     }
   }
 
@@ -233,6 +252,7 @@ export default function Feedback() {
     setTypeErr(false)
     setDescErr(null)
     setRestored(false)
+    setStored(null)
   }
 
   const selectType = (key: FeedbackTypeKey) => {
@@ -295,8 +315,9 @@ export default function Feedback() {
       timerRef.current = null
       setBusy(false)
       // 内容落本机暂存，弹层才敢说「你的内容已暂存在本机」（稿的 submit 同款顺序）。
-      // 读 `stateRef` 而不是闭包里的 state：这 700ms 内用户可能又补了字（见 stateRef 的说明）
-      persistDraft(stateRef.current)
+      // 读 `stateRef` 而不是闭包里的 state：这 700ms 内用户可能又补了字（见 stateRef 的说明）；
+      // 落盘成败一并记下，弹层据此换措辞（存储失败时那句话不能照说）
+      setStored(persistDraft(stateRef.current))
       setSheetOpen(true)
     }, 700)
   }
@@ -305,14 +326,13 @@ export default function Feedback() {
    * 复制客服邮箱。
    *
    * 稿里复制的是 `.mail-txt b` 的可见文字（虚线占位「待填」）—— 邮箱还没定，
-   * 把占位符当邮箱复制走是假信息，所以空值时只提示待定，不碰剪贴板。
+   * 把占位符当邮箱复制走是假信息。所以**邮箱为空时这一行根本不渲染复制钮**
+   * （见下面的 `hasMail`），这里只处理「有邮箱」的那条路径；`SUPPORT_MAIL` 一旦填上，
+   * 弹层文案与复制钮自动恢复成稿的形态。
    * 复制成功后微信自己会弹「内容已复制」，这里不再叠一层 toast（同 `pages/report-listing`）。
    */
   const copyMail = () => {
-    if (SUPPORT_MAIL === '') {
-      toast('客服邮箱待定，暂时无法复制')
-      return
-    }
+    if (SUPPORT_MAIL === '') return
     void Taro.setClipboardData({ data: SUPPORT_MAIL }).catch(() => toast('复制失败，请长按选中'))
   }
 
@@ -323,6 +343,8 @@ export default function Feedback() {
   const tooLong = desc.length > DESC_MAX
   const canSubmit = type !== '' && desc.trim().length >= DESC_MIN && !tooLong
   const descSub = type === 'dispute' || type === 'report' ? DESC_SUB_CHECKABLE : DESC_SUB_DEFAULT
+  /** 客服邮箱定稿了没有（见 `SUPPORT_MAIL`）。没定就不渲染复制钮、弹层也不提「复制后发给我们」 */
+  const hasMail = SUPPORT_MAIL !== ''
 
   return (
     <View className="fb">
@@ -486,24 +508,47 @@ export default function Feedback() {
               <Image className="fb__sheet-ic-img" src={ICONS.warnInk} mode="aspectFit" />
             </View>
             <Text className="fb__sheet-title">提交功能待接入</Text>
-            <Text className="fb__sheet-text">
-              后端反馈接口尚未上线。
-              <Text className="fb__strong fb__strong--fg">你的内容已暂存在本机</Text>
-              ，可直接复制后通过下面的客服邮箱发给我们。
-            </Text>
+            {/*
+              正文三档，**每一档都只说成立的话**：
+              - 暂存失败：不能再说「已暂存在本机」（`persistDraft` 的返回值说了算）；
+              - 邮箱已定：稿的原文；
+              - 邮箱未定：不能指引用户去「复制后发给客服邮箱」—— 那个按钮这一档根本不渲染，
+                说「可直接复制后通过下面的客服邮箱发给我们」等于把人指去一个做不到的动作。
+            */}
+            {stored === false ? (
+              <Text className="fb__sheet-text">
+                <Text className="fb__strong fb__strong--fg">本机暂存失败</Text>
+                ，请先把上面写好的内容复制到别处，再离开本页。
+              </Text>
+            ) : hasMail ? (
+              <Text className="fb__sheet-text">
+                后端反馈接口尚未上线。
+                <Text className="fb__strong fb__strong--fg">你的内容已暂存在本机</Text>
+                ，可直接复制后通过下面的客服邮箱发给我们。
+              </Text>
+            ) : (
+              <Text className="fb__sheet-text">
+                后端反馈接口尚未上线。
+                <Text className="fb__strong fb__strong--fg">你的内容已暂存在本机</Text>
+                ；客服邮箱待定，暂时还没有可用的送达渠道，接口上线后这里会给出直接提交的入口。
+              </Text>
+            )}
 
             <View className="fb__mailrow">
               <Image className="fb__mail-ic" src={ICONS.mail} mode="aspectFit" />
               <View className="fb__mail-txt">
                 <Text className="fb__mail-em">客服邮箱</Text>
                 <Text className="fb__mail-b">
-                  {SUPPORT_MAIL === '' ? <Text className="fb__ph">待填</Text> : SUPPORT_MAIL}
+                  {hasMail ? SUPPORT_MAIL : <Text className="fb__ph">待填</Text>}
                 </Text>
               </View>
-              <View className="fb__mail-copy" onClick={copyMail}>
-                <Image className="fb__copy-ic" src={ICONS.docMuted} mode="aspectFit" />
-                <Text>复制</Text>
-              </View>
+              {/* 邮箱未定时不渲染复制钮：画一个点不动的按钮比不画更让人困惑 */}
+              {hasMail ? (
+                <View className="fb__mail-copy" onClick={copyMail}>
+                  <Image className="fb__copy-ic" src={ICONS.docMuted} mode="aspectFit" />
+                  <Text>复制</Text>
+                </View>
+              ) : null}
             </View>
 
             <View className="fb__sheet-acts">

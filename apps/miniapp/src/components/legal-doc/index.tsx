@@ -4,7 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
-import { markDeclined } from '@/features/legal/entry'
+import { markConsent } from '@/features/legal/entry'
 import type { Block, LegalDoc, LegalSection, ListItem, Run } from '@/features/legal/types'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
@@ -217,6 +217,20 @@ export default function LegalDocView({ doc, entry }: Props) {
   const headAtRef = useRef(Number.POSITIVE_INFINITY)
   /** 已提交的进度值。用 ref 而不是读 state：`usePageScroll` 的回调闭包不保证是最新一帧的 */
   const progressRef = useRef(0)
+  /**
+   * 吸底同意条按钮的**同步**防连点闸门。
+   *
+   * 同意条在页面卸载前一直渲染，两次快速点击会连发两次 `navigateBack()`，把登录页一起弹掉
+   * （仓库对同类问题有先例：`pages/login` 的 `wechatBusyRef`，#198 P3-2 —— `setState`
+   * 要下一轮渲染才可见，同一帧的第二次点击读到的仍是旧值，所以必须用 ref 判）。
+   */
+  const consentTapRef = useRef(false)
+
+  const claimConsentTap = () => {
+    if (consentTapRef.current) return false
+    consentTapRef.current = true
+    return true
+  }
 
   useReady(() => {
     Taro.createSelectorQuery()
@@ -424,6 +438,9 @@ export default function LegalDocView({ doc, entry }: Props) {
           <View
             className="ld__agree-ok"
             onClick={() => {
+              if (!claimConsentTap()) return
+              // 把「同意」带回登录页勾上：用户可能先取消过勾选，不回传的话回来 CTA 仍是禁用的
+              markConsent('agreed')
               void Taro.showToast({ title: '已同意', icon: 'none' })
               void Taro.navigateBack()
             }}
@@ -434,8 +451,9 @@ export default function LegalDocView({ doc, entry }: Props) {
           <View
             className="ld__agree-no"
             onClick={() => {
+              if (!claimConsentTap()) return
               // 把「不同意」带回登录页取消勾选，否则这句提示是假的（见 `entry.ts` 的说明）
-              markDeclined()
+              markConsent('declined')
               void Taro.showToast({ title: '未同意，无法继续使用', icon: 'none' })
               void Taro.navigateBack()
             }}
