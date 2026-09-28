@@ -3,6 +3,7 @@ import { CHAT_ROUTES, REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import { PROFILE_ROUTES } from '@fish/contracts/profile/routes'
 import type { ProfileResponse } from '@fish/contracts/profile/schema'
+import { ApiErrorSchema } from '@fish/contracts/system/error'
 import { WishIdSchema } from '@fish/contracts/system/public-id'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
@@ -142,6 +143,28 @@ async function json<T>(response: Response): Promise<T> {
   return (await response.json()) as T
 }
 
+/**
+ * #298：把注册失败响应定级到「层」，供下次复现时一步定位。
+ *
+ * 唯一可靠判据是统一错误信封能否解析（`ApiErrorSchema`，`@fish/contracts/system/error`）：
+ * 解析出 `error.code` 才是应用层错误；其余一律只报「不是应用层信封」并附原始响应体与响应头，
+ * 不硬猜产出点。**不用「body 是否为空」当代理**——空体但带 `content-type`（如 text/plain 的 404）、
+ * 以及响应体读取失败（连接被重置）都会被它误判成应用层，把下次排查指向不存在的 `error.code`。
+ */
+function classifyFailureLayer(raw: string | null, contentType: string | null): string {
+  if (raw === null) return '未知（响应体读取失败，连接可能被中断，拿不到 error.code）'
+  try {
+    const parsed = ApiErrorSchema.safeParse(JSON.parse(raw))
+    if (parsed.success) return `应用层信封（error.code=${parsed.data.error.code}）`
+  } catch {
+    // 不是 JSON：不是应用层信封，继续看是不是解析层裸 400 的形态。
+  }
+  if (raw.trim() === '' && contentType === null) {
+    return '非应用层（空响应体 + 无 content-type，与 Bun 1.4.0 解析层裸 400 形态一致）'
+  }
+  return '未知（既不是应用层 error.code 信封，也不是解析层裸 400，见 headers / body）'
+}
+
 async function register(studentNo: string, nickname: string): Promise<string> {
   const response = await api('/auth/register', {
     method: 'POST',
@@ -150,22 +173,21 @@ async function register(studentNo: string, nickname: string): Promise<string> {
   // #146/#298：失败时先打出响应体再断言状态码——此前只报「期望 200 实际 400」，
   // 拿不到 error.code 无法定位（register 的 4xx 出口按契约只有 422 / 409，
   // 400 属于异常路径，出现时响应体是唯一线索）。
-  // #298 排查：本仓注册链路在**应用层没有任何 400 出口**（逐个出口 grep 核实，见 PR），
-  // 但那次 400 的产出点**未定位**——Bun.serve 是二进制，给不出 file:line。
-  // 已知 Bun 1.4.0 的 HTTP 解析层有两种失败形态：① `HTTP/1.1 400 Bad Request\r\nConnection: close`
-  // （空响应体、无 content-type、无 error.code）；② 直接关连接，fetch 直接 reject（这个分支拿不到 Response）。
-  // 应用层错误则一定是带 error.code 的 JSON 信封。这里把响应头与「层」一起打出来，
-  // 下次复现时可一步定级，不用再靠猜。
+  // #298 排查结论：本仓注册链路在**应用层没有任何 400 出口**（逐个出口 grep 核实）；
+  // 但那次 400 的产出点**未定位**（Bun.serve 是二进制，给不出 file:line）。
+  // 已知线索（**假设，未归因于那次 400**）：Bun 1.4.0 的 HTTP 解析层**可以**对畸形请求回裸 400
+  // `HTTP/1.1 400 Bad Request\r\nConnection: close`（空响应体、无 content-type、无 error.code，
+  // 裸 socket 探针实测；6000 次良构并发 POST 均未触发该形态）；另一种形态是直接关连接
+  // （fetch 直接 reject，这个分支拿不到 Response）。应用层错误则一定是能过 `ApiErrorSchema` 的
+  // JSON 信封。这里把响应头与「层」一起打出来，下次复现时可一步定级，不用再靠猜。
   if (response.status !== 200) {
-    const body = await response.text().catch(() => '<unreadable>')
+    const raw = await response.text().catch(() => null)
+    const body = raw ?? '<unreadable>'
     const headerList: string[] = []
     response.headers.forEach((value, key) => {
       headerList.push(`${key}: ${value}`)
     })
-    const layer =
-      body.trim() === '' && response.headers.get('content-type') === null
-        ? 'HTTP 解析层（空响应体、无 content-type，无 error.code）'
-        : '应用层（见 JSON error.code）'
+    const layer = classifyFailureLayer(raw, response.headers.get('content-type'))
     throw new Error(
       `注册失败：${studentNo} → HTTP ${response.status} | 疑似层=${layer} | headers=[${headerList.join(' | ')}] | body=${body}`,
     )
@@ -1246,21 +1268,39 @@ describe('marketplace flow 双账号验收（#42）', () => {
   })
 
   // #298 回归：失败诊断本身必须能一步定级，否则下次复现又只剩「期望 200 实际 400」。
-  // 两种形态各自固定：Bun.serve 的 HTTP 解析层对畸形请求回的是空响应体、无 content-type 的
-  // 裸 400（裸 socket 探针实测）；而应用层 4xx 一定是带 error.code 的 JSON 信封。
+  // 三个形态都走真实的 register() 路径，并钉住真实响应字节：
+  //   ① 空响应体但带 content-type（如 text/plain）——既不是应用层信封也不像解析层裸 400。
+  //      放第一个断言是刻意的：修复前的判据用「body 是否为空」当代理，这一支会被误报成
+  //      「应用层（见 JSON error.code）」，把排查指向一个不存在的 error.code。
+  //   ② 解析层裸 400 —— 裸 socket 手写 `HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n`
+  //      （真实解析层不带 content-length / date，用 Bun.serve 造不出这种响应）；
+  //   ③ 应用层 4xx —— 能过 ApiErrorSchema 的 JSON 信封，诊断必须报出真实 error.code。
   // 桩只截 /auth/register，其余请求仍走真实 fetch。
-  test('注册失败诊断：解析层裸 400 与应用层 JSON 错误可区分（#298）', async () => {
-    // 两个形态各起一个真实端点：解析层形态＝空响应体 + 无 content-type（Bun 的 HTTP 解析层
-    // 对畸形请求就是这么回的，裸 socket 探针实测）；应用层形态＝带 error.code 的 JSON 信封。
-    // 桩只把 /auth/register 改指向端点，其余请求仍走真实 fetch。
-    const parserLayerServer = Bun.serve({ port: 0, fetch: () => new Response('', { status: 400 }) })
+  test('注册失败诊断：解析层裸 400、应用层 JSON 信封与未知形态可区分（#298）', async () => {
+    let rawReplied = false
+    const rawParserServer = Bun.listen({
+      hostname: '127.0.0.1',
+      port: 0,
+      socket: {
+        data(socket) {
+          if (rawReplied) return
+          rawReplied = true
+          socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+          socket.end()
+        },
+      },
+    })
     const appLayerServer = Bun.serve({
       port: 0,
       fetch: () =>
-        new Response(JSON.stringify({ error: { code: 'STUDENT_NO_TAKEN' } }), {
-          status: 409,
-          headers: { 'content-type': 'application/json' },
-        }),
+        new Response(
+          JSON.stringify({ error: { code: 'STUDENT_NO_TAKEN', message: '该学号已注册' } }),
+          { status: 409, headers: { 'content-type': 'application/json' } },
+        ),
+    })
+    const textLayerServer = Bun.serve({
+      port: 0,
+      fetch: () => new Response('', { status: 400, headers: { 'content-type': 'text/plain' } }),
     })
     const realFetch = globalThis.fetch
     const redirectRegister = (origin: string): void => {
@@ -1277,15 +1317,23 @@ describe('marketplace flow 双账号验收（#42）', () => {
     }
 
     try {
-      redirectRegister(`http://127.0.0.1:${parserLayerServer.port}`)
-      await expect(register('2025000001', '诊断桩')).rejects.toThrow(/疑似层=HTTP 解析层/)
+      redirectRegister(`http://127.0.0.1:${textLayerServer.port}`)
+      await expect(register('2025000001', '诊断桩')).rejects.toThrow(/疑似层=未知/)
+
+      redirectRegister(`http://127.0.0.1:${rawParserServer.port}`)
+      await expect(register('2025000001', '诊断桩')).rejects.toThrow(
+        /疑似层=非应用层（空响应体 \+ 无 content-type/,
+      )
 
       redirectRegister(`http://127.0.0.1:${appLayerServer.port}`)
-      await expect(register('2025000001', '诊断桩')).rejects.toThrow(/疑似层=应用层/)
+      await expect(register('2025000001', '诊断桩')).rejects.toThrow(
+        /疑似层=应用层信封（error.code=STUDENT_NO_TAKEN）/,
+      )
     } finally {
       globalThis.fetch = realFetch
-      parserLayerServer.stop(true)
+      rawParserServer.stop(true)
       appLayerServer.stop(true)
+      textLayerServer.stop(true)
     }
   })
 })
