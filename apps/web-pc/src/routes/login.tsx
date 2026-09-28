@@ -13,6 +13,8 @@ import { useLogin } from '../features/auth/queries'
 import {
   clearRememberedCredentials,
   consumeExplicitLogout,
+  decideAutoLogin,
+  disableAutoLogin,
   loadRememberedCredentials,
   saveRememberedCredentials,
 } from '../features/auth/remembered-credentials'
@@ -51,24 +53,27 @@ function LoginPage() {
   // 挂载时回填本机记住的凭据；勾了自动登录就代用户提交一次。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 挂载一次性读取本机凭据，login/redirect 取首挂值即可
   useEffect(() => {
+    // 无条件消费登出标志：即使本次没有自动登录凭据，也不让标志滞留到未来的登录。
+    const logoutMarked = consumeExplicitLogout()
     const stored = loadRememberedCredentials()
     if (stored === null) return
     setStudentNo(stored.studentNo)
     setPassword(stored.password)
     setRemember(true)
     setAutoLogin(stored.autoLogin)
-    if (!stored.autoLogin || autoLoginAttempted.current) return
+    if (autoLoginAttempted.current) return
+    const decision = decideAutoLogin(stored, logoutMarked)
+    if (decision.action !== 'submit') return
     autoLoginAttempted.current = true
-    if (consumeExplicitLogout()) return
     login.mutate(
-      { password: stored.password, studentNo: stored.studentNo },
+      { password: decision.password, studentNo: decision.studentNo },
       {
         onSuccess: () => window.location.assign(sanitizeRedirect(redirect)),
         onError: (error) => {
           // 凭据已被服务端拒绝（改密等）就关掉自动登录，避免每次进页都报错；
           // 网络抖动等非凭据失败保留开关，凭据本身仍保留。
           if (error instanceof ApiError && error.status === 401) {
-            saveRememberedCredentials({ ...stored, autoLogin: false })
+            saveRememberedCredentials(disableAutoLogin(stored))
             setAutoLogin(false)
           }
           const failure = describeAuthFailure(error)
