@@ -305,6 +305,7 @@ export interface AdminStore {
     | 'idempotency-conflict'
     | 'media-blocked'
     | 'media-settlement-failed'
+    | 'media-settlement-data-missing'
   >
   listAdminTransactions(criteria: ListAdminTransactionsCriteria): Promise<AdminTransactionRow[]>
   /**
@@ -903,11 +904,14 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         })
       } catch (error) {
         // #286：图片结算拒绝本次人工结论（图已被人为阻断 / 私有对象或台账缺失）时会抛错让事务整体回滚，
-        // 这里把拒绝翻译成结果码，管理员拿到可解释的 409，商品仍留在人工队列。
+        // 这里把拒绝翻译成结果码，管理员拿到可解释的 409，商品仍留在人工队列。`SETTLEMENT_DATA_MISSING`
+        // 是持久状态（重试不会成功），与可重试的 `SETTLEMENT_FAILED` 分开，便于前端给出不同文案。
         if (error instanceof ModerationSettlementError) {
-          return error.code === 'IMAGE_BLOCKED'
-            ? ('media-blocked' as const)
-            : ('media-settlement-failed' as const)
+          if (error.code === 'IMAGE_BLOCKED') return 'media-blocked' as const
+          if (error.code === 'SETTLEMENT_DATA_MISSING') {
+            return 'media-settlement-data-missing' as const
+          }
+          return 'media-settlement-failed' as const
         }
         throw error
       }

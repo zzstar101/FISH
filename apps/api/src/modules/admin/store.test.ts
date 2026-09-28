@@ -40,12 +40,20 @@ test('结算判定"图已被人工阻断"时返回 media-blocked（决策事务�
   expect(await store.decideModeration(input())).toBe('media-blocked')
 })
 
-test('结算过程失败（对象/台账缺失）时返回 media-settlement-failed', async () => {
+test('结算过程失败（存储不支持读写 / 并发抢占）时返回 media-settlement-failed', async () => {
   const store = storeWith(async () => {
-    throw new ModerationSettlementError('SETTLEMENT_FAILED', '审核图片对象缺失')
+    throw new ModerationSettlementError('SETTLEMENT_FAILED', '媒体存储不支持读写字节')
   })
 
   expect(await store.decideModeration(input())).toBe('media-settlement-failed')
+})
+
+test('台账行 / 对象缺失（持久状态）时返回 media-settlement-data-missing', async () => {
+  const store = storeWith(async () => {
+    throw new ModerationSettlementError('SETTLEMENT_DATA_MISSING', '审核图片台账缺失')
+  })
+
+  expect(await store.decideModeration(input())).toBe('media-settlement-data-missing')
 })
 
 test('与结算无关的异常不被吞掉（仍然是服务端错误，而不是"决策未生效"）', async () => {

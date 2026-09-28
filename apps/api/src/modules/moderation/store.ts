@@ -15,13 +15,21 @@ export type ModerationRecord = typeof listingModerationRecords.$inferSelect
 
 /**
  * 图片结算**拒绝**本次人工结论（#286）：调用方必须让整个决策事务回滚，并把拒绝原因翻译成
- * 客户端可读的状态码。`code` 区分「图已被人为阻断」（结论本身站不住）与「结算过程失败」
- * （对象缺失 / 台账缺失 / 存储不支持读写），两者对管理员都是"这次决策没生效"。
+ * 客户端可读的状态码。`code` 区分三种情形：
+ *
+ * - `IMAGE_BLOCKED`：这张图已被人工阻断，不能借本次放行把字节放进公开前缀（结论本身站不住）；
+ * - `SETTLEMENT_FAILED`：结算过程失败（存储不支持读写、并发抢占），重试可能成功；
+ * - `SETTLEMENT_DATA_MISSING`：台账行 / 对象缺失，是**持久**状态，重试永远不会成功，需要人工排查。
  */
-export class ModerationSettlementError extends Error {
-  readonly code: 'IMAGE_BLOCKED' | 'SETTLEMENT_FAILED'
+export type ModerationSettlementErrorCode =
+  | 'IMAGE_BLOCKED'
+  | 'SETTLEMENT_FAILED'
+  | 'SETTLEMENT_DATA_MISSING'
 
-  constructor(code: 'IMAGE_BLOCKED' | 'SETTLEMENT_FAILED', message: string) {
+export class ModerationSettlementError extends Error {
+  readonly code: ModerationSettlementErrorCode
+
+  constructor(code: ModerationSettlementErrorCode, message: string) {
     super(message)
     this.name = 'ModerationSettlementError'
     this.code = code

@@ -350,3 +350,149 @@ test('台账行缺失（脏数据）时拒绝人工放行，不放过一张结�
     expect(images.map((image) => image.objectKey)).toEqual([reviewKey])
   })
 })
+
+test('多图放行先校验全部图片：后一张已被 BLOCK 时不写任何公开对象（不留匿名可读孤儿）', async () => {
+  const sellerId = await createUser()
+  const listingId = newId()
+  await db.insert(listings).values({
+    id: listingId,
+    listingNo: await reserveTestListingNo(db, listingId),
+    sellerId,
+    title: '两张待审图、其中一张已被阻断',
+    description: '集成测试',
+    priceCents: 1000,
+    category: 'DIGITAL',
+    condition: 'GOOD',
+    status: 'OFFLINE',
+    moderationStatus: 'REVIEW',
+  })
+
+  const prefix = listingReviewMediaPrefix(sellerId)
+  let firstKey = `${prefix}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+  let blockedKey = `${prefix}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+  // 结算按 key 排序取锁/校验：让**已被 BLOCK 的那张排在后面**，才能证明第一张合法图没有被提前写出去
+  // （对象写入不随事务回滚，旧实现会在这里留下一个无人引用的匿名可读孤儿对象）。
+  if (blockedKey < firstKey) {
+    ;[firstKey, blockedKey] = [blockedKey, firstKey]
+  }
+
+  const objects = new Map<string, Uint8Array>([
+    [firstKey, IMAGE_BYTES],
+    [blockedKey, IMAGE_BYTES],
+  ])
+  const storage = fakeStorage(objects)
+  await db.insert(listingMediaObjects).values([
+    {
+      userId: sellerId,
+      stagingKey: `listing-media/${sellerId}/${newId()}.jpg`,
+      finalKey: firstKey,
+      contentDigest: 'e'.repeat(64),
+      providerMd5: null,
+      moderationDecision: 'REVIEW',
+      provider: 'LOCAL',
+      providerRequestId: null,
+    },
+    {
+      userId: sellerId,
+      stagingKey: `listing-media/${sellerId}/${newId()}.jpg`,
+      finalKey: blockedKey,
+      contentDigest: 'f'.repeat(64),
+      providerMd5: null,
+      moderationDecision: 'REVIEW',
+      provider: 'LOCAL',
+      providerRequestId: null,
+      settledDecision: 'BLOCK',
+      settledAt: new Date(),
+    },
+  ])
+  await db.insert(listingImages).values([
+    { listingId, objectKey: firstKey, sortOrder: 0 },
+    { listingId, objectKey: blockedKey, sortOrder: 1 },
+  ])
+
+  try {
+    const settlement = createListingMediaSettlement({ storage })
+
+    await expect(
+      db.transaction(async (tx) => {
+        await settlement(tx, { listingId, decision: 'ALLOW' })
+      }),
+    ).rejects.toThrow('审核图片已被人工阻断')
+
+    // 关键断言：合法的第一张图也没有被写进公开前缀。
+    expect(storage.writes).toEqual([])
+    expect(storage.reads).toBe(1)
+    const images = await db
+      .select()
+      .from(listingImages)
+      .where(eq(listingImages.listingId, listingId))
+      .orderBy(listingImages.sortOrder)
+    expect(images.map((image) => image.objectKey)).toEqual([firstKey, blockedKey])
+  } finally {
+    await db.delete(listings).where(eq(listings.id, listingId))
+    await db.delete(users).where(eq(users.id, sellerId))
+  }
+})
+
+test('并发：放行事务已锁台账行时，另一条商品的 BLOCK 会等锁并让放行结论胜出（不被覆盖）', async () => {
+  await withSharedReviewKey(
+    async ({ sellerId, blockedListingId, pendingListingId, reviewKey, storage }) => {
+      const settlement = createListingMediaSettlement({ storage })
+      const readMediaBytes = storage.readMediaBytes
+      if (!readMediaBytes) throw new Error('fake storage 必须实现 readMediaBytes')
+
+      let releaseRead = () => {}
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = () => resolve()
+      })
+      let markReadStarted = () => {}
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = () => resolve()
+      })
+      // 卡住放行事务的字节读取：此刻它已经 `SELECT … FOR UPDATE` 锁住台账行、尚未写公开对象。
+      storage.readMediaBytes = async (key, maxBytes) => {
+        markReadStarted()
+        await readGate
+        return readMediaBytes(key, maxBytes)
+      }
+
+      const allow = db.transaction(async (tx) => {
+        await settlement(tx, { listingId: pendingListingId, decision: 'ALLOW' })
+      })
+      await readStarted
+
+      let blockDone = false
+      const block = db
+        .transaction(async (tx) => {
+          await settlement(tx, { listingId: blockedListingId, decision: 'BLOCK' })
+        })
+        .then(() => {
+          blockDone = true
+        })
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      // BLOCK 想的行锁被放行事务占着：它没能在放行提交之前把结论写成 BLOCK。
+      expect(blockDone).toBe(false)
+
+      releaseRead()
+      await allow
+      await block
+
+      expect(storage.writes).toHaveLength(1)
+      const publicKey = storage.writes[0]?.key ?? ''
+      const rows = await db
+        .select()
+        .from(listingMediaObjects)
+        .where(eq(listingMediaObjects.userId, sellerId))
+      expect(rows).toHaveLength(1)
+      // 先提交的结论胜出：BLOCK 没有把 ALLOW 覆盖掉，也没有把字节留在私有前缀。
+      expect(rows[0]?.settledDecision).toBe('ALLOW')
+      expect(rows[0]?.finalKey).toBe(publicKey)
+      expect(await mediaRowOf(reviewKey)).toHaveLength(0)
+      const images = await db
+        .select()
+        .from(listingImages)
+        .where(eq(listingImages.listingId, blockedListingId))
+      expect(images.map((image) => image.objectKey)).toEqual([publicKey])
+    },
+  )
+})
