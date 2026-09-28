@@ -99,17 +99,21 @@
  * 加粗片段（稿 `<strong>`）。基类只给字重：**颜色按上下文决定** ——
  * 稿里 `.notlist strong` 只加粗不改色（保持成功色）、`.callout p strong` 同理（保持警示色），
  * 其余六处的 `<strong>` 才转 `--fg`。一刀切换成 `--fg` 会把这两块的语义色吃掉。
+ *
+ * `:not(.ld__ph)` 不是洁癖：稿第 11.2 条是 `<strong>… <span class="ph">运营者全称</span> …</strong>`
+ * —— 一个片段**同时**是加粗与待填占位。没有这个排除项，上面那组 0-2-0 的上下文规则会盖掉
+ * `.ld__ph` 的 0-1-0 警示色，占位提示**静默消失**（虚线还在，但字色与正文一样，看不出没定稿）。
  */
 .ld__b {
   font-weight: 600;
 }
 
-.ld__clause-tx .ld__b,
-.ld__sub-tx .ld__b,
-.ld__key-tx .ld__b,
-.ld__item-use .ld__b,
-.ld__brief-lead .ld__b,
-.ld__brief-li-tx .ld__b {
+.ld__clause-tx .ld__b:not(.ld__ph),
+.ld__sub-tx .ld__b:not(.ld__ph),
+.ld__key-tx .ld__b:not(.ld__ph),
+.ld__item-use .ld__b:not(.ld__ph),
+.ld__brief-lead .ld__b:not(.ld__ph),
+.ld__brief-li-tx .ld__b:not(.ld__ph) {
   color: var(--fg);
 }
 
@@ -628,18 +632,53 @@
   height: 28px;
 }
 
+/*
+ * 吸底同意条的两个按钮**照稿给显式值**，不用 `btn-brand` / `btn-ghost` 两个通用 mixin。
+ *
+ * 稿（`小程序1版用户协议.html` 的 `.btn-primary` / `.btn-ghost`）与 mixin 差三处，且都不是细节：
+ * 1. 圆角：稿 999 胶囊，mixin 是 28px 圆角矩形（`DESIGN.md` §3 明确「胶囊 / 按钮 / 标签 = 999」）；
+ * 2. 高度：稿 46pt / 38pt（92px / 76px），mixin 两个都是 96px；
+ * 3. **「不同意」在稿里没有边框也没有底色**（只有 `--muted-2` 字色），mixin 会给它 2px 描边 +
+ *    白底 + `--fg` 字色 —— 主/次层级会反转，而这一屏正是「从登录流程进入」的验收状态。
+ */
 .ld__agree-ok {
-  @include btn-brand;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 92px;
+  border-radius: var(--r-pill);
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    transform: translateY(2px);
+  }
 }
 
 .ld__agree-ok-ic {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
 }
 
 .ld__agree-no {
-  @include btn-ghost;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin-top: 16px;
+  height: 76px;
+  border-radius: var(--r-pill);
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &:active {
+    color: var(--fg);
+    background: var(--ink-weak);
+  }
 }
 
 /* ---------------------------------------------------------------- 目录抽屉 */
@@ -648,8 +687,13 @@
   @include scrim;
 }
 
+/*
+ * `@include sheet` 给的上圆角是 `--r-hero`(64px)，稿这里是 24pt = 48px；同批的
+ * `pages/feedback` 弹层对同一个 mixin 也做了同样的覆盖 —— 两页的抽屉圆角要一致。
+ */
 .ld__sheet {
   @include sheet;
+  border-radius: 48px 48px 0 0;
   max-height: 74%;
   display: flex;
   flex-direction: column;
@@ -718,9 +762,14 @@
   height: 32px;
 }
 
-/* 抽屉内可滚（稿 `.sheet-body`）：12 章竖排约 520pt，抽屉放得下但要能滚 */
+/*
+ * 抽屉内可滚（稿 `.sheet-body`）：12 章竖排约 520pt，抽屉放得下但要能滚。
+ *
+ * 下内边距留 0：`@include sheet` 已经给容器 `padding-bottom: calc(48px + safe-area)`
+ * —— 稿的 24pt(=48px) 就是这一档，这里再给 24px 等于叠成 96px。
+ */
 .ld__sheet-body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 0 40px 24px;
+  padding: 0 40px;
 }

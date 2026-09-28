@@ -4,6 +4,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import NavBar from '@/components/nav-bar'
+import { markDeclined } from '@/features/legal/entry'
 import type { Block, LegalDoc, LegalSection, ListItem, Run } from '@/features/legal/types'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
@@ -81,12 +82,19 @@ function Runs({ runs }: { runs: Run[] }) {
   )
 }
 
-/** 片段标记 → class；无标记返回 undefined（不挂多余 class） */
+/**
+ * 片段标记 → class（**可叠加**）。
+ *
+ * 稿里 `<strong>` 与 `<span class="ph">` 会嵌套（第 11.2 条的
+ * `<strong>… <span class="ph">运营者全称</span> …</strong>`），所以一个片段可能同时是
+ * 加粗与待填占位 —— 早先写成「命中即 return」会让 `ph` 静默失效（占位提示消失）。
+ */
 function runClass(run: Run): string | undefined {
-  if (run.b) return 'ld__b'
-  if (run.em) return 'ld__em'
-  if (run.ph) return 'ld__ph'
-  return undefined
+  const cls: string[] = []
+  if (run.b) cls.push('ld__b')
+  if (run.em) cls.push('ld__em')
+  if (run.ph) cls.push('ld__ph')
+  return cls.length > 0 ? cls.join(' ') : undefined
 }
 
 /** 信息清单的一条：名称 + 必要性标签 + 用途 */
@@ -426,6 +434,8 @@ export default function LegalDocView({ doc, entry }: Props) {
           <View
             className="ld__agree-no"
             onClick={() => {
+              // 把「不同意」带回登录页取消勾选，否则这句提示是假的（见 `entry.ts` 的说明）
+              markDeclined()
               void Taro.showToast({ title: '未同意，无法继续使用', icon: 'none' })
               void Taro.navigateBack()
             }}

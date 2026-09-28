@@ -4,6 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS, type IconName } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import {
+  FEEDBACK_DRAFT_KEY,
+  type FeedbackDraft,
+  type FeedbackTypeKey,
+  parseFeedbackDraft,
+} from './draft'
 import './index.scss'
 
 /**
@@ -61,8 +67,6 @@ import './index.scss'
  */
 
 /** 反馈类型：label 给胶囊，hint 给 placeholder（见文件头「本页的实际内容由 zzstar 决策」） */
-type FeedbackTypeKey = 'bug' | 'ux' | 'dispute' | 'report' | 'account' | 'other'
-
 type FeedbackType = {
   key: FeedbackTypeKey
   label: string
@@ -128,21 +132,11 @@ const DESC_MIN = 5
 const DESC_MAXLENGTH = 600
 const CONTACT_MAXLENGTH = 40
 
-/** 本机暂存键（与 `fish:settings` 同一命名风格） */
-const DRAFT_KEY = 'fish:feedback:draft'
-
 /**
  * 客服邮箱：**待 zzstar 决策后填写**（稿里用虚线 `.ph` 标出的占位）。
  * 留空 = 还没定，页面照稿渲染「待填」，复制按钮只提示待定。
  */
 const SUPPORT_MAIL = ''
-
-/** 本机暂存的草稿形状（与 `state` 一一对应） */
-type Draft = { type: FeedbackTypeKey | ''; desc: string; contact: string }
-
-function isTypeKey(value: unknown): value is FeedbackTypeKey {
-  return typeof value === 'string' && TYPES.some((item) => item.key === value)
-}
 
 function hintOf(key: FeedbackTypeKey | ''): string {
   const hit = TYPES.find((item) => item.key === key)
@@ -150,24 +144,14 @@ function hintOf(key: FeedbackTypeKey | ''): string {
 }
 
 /**
- * 读本机暂存。**任何一步失败都当作「没有草稿」**：存储不可用不该让页面崩（稿注释 ⑥）。
+ * 读本机暂存。**存储不可用 / 内容为空都当作「没有草稿」**，不该让页面崩。
  *
- * `Taro.getStorageSync` 在小程序里直接返回对象、在 H5 里返回 JSON 字符串，两种都要认；
- * 空草稿（三个字段都空）不打扰用户 —— 同稿 `restoreFromDraft` 的判据。
+ * 解析本身（两种存储形态、字段级容错、空草稿判据）在 `./draft`，是纯函数、有单测；
+ * 这里只剩「取 → 解析」这一步必须碰 Taro 的部分。
  */
-function readDraft(): Draft | null {
+function readStoredDraft(): FeedbackDraft | null {
   try {
-    const raw: unknown = Taro.getStorageSync(DRAFT_KEY)
-    if (!raw) return null
-    const data: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw
-    if (data === null || typeof data !== 'object') return null
-    const rec = data as Record<string, unknown>
-    const draft: Draft = {
-      type: isTypeKey(rec.type) ? rec.type : '',
-      desc: typeof rec.desc === 'string' ? rec.desc : '',
-      contact: typeof rec.contact === 'string' ? rec.contact : '',
-    }
-    return draft.type === '' && draft.desc === '' && draft.contact === '' ? null : draft
+    return parseFeedbackDraft(Taro.getStorageSync(FEEDBACK_DRAFT_KEY))
   } catch {
     return null
   }
@@ -175,7 +159,7 @@ function readDraft(): Draft | null {
 
 export default function Feedback() {
   /** 冷启动读一次本机暂存；`null` = 没有可恢复的内容 */
-  const [draft] = useState(readDraft)
+  const [draft] = useState(readStoredDraft)
   const [type, setType] = useState<FeedbackTypeKey | ''>(draft?.type ?? '')
   const [desc, setDesc] = useState(draft?.desc ?? '')
   const [contact, setContact] = useState(draft?.contact ?? '')
@@ -195,6 +179,16 @@ export default function Feedback() {
   const nav = useMemo(() => readNavMetrics(), [])
   const scrollTopRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 表单当前值的**最新**快照（每次渲染同步刷新）。
+   *
+   * 「提交中…」那 700ms 里输入框没有禁用（用户还在打字，输入会即时落暂存），
+   * 而定时器回调是个**旧闭包**：直接读 `type/desc/contact` 拿到的是点击那一刻的值，
+   * 一旦用户在等待期间补了字，回调落地时会把新内容**覆盖回旧值** —— 恰好违背弹层那句
+   * 「你的内容已暂存在本机」。定时器里一律读这个 ref。
+   */
+  const stateRef = useRef({ type, desc, contact })
+  stateRef.current = { type, desc, contact }
 
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop
@@ -218,9 +212,9 @@ export default function Feedback() {
    * **必须显式传整份草稿**，不能在回调里读 state：`setState` 要下一轮渲染才生效，
    * 事件回调里读到的是**改动前**的值，那样刚输入的字不会进暂存。
    */
-  const persistDraft = (next: Draft) => {
+  const persistDraft = (next: FeedbackDraft) => {
     try {
-      Taro.setStorageSync(DRAFT_KEY, next)
+      Taro.setStorageSync(FEEDBACK_DRAFT_KEY, next)
     } catch {
       // 存储失败不影响页面交互
     }
@@ -229,7 +223,7 @@ export default function Feedback() {
   /** 清空本机暂存并复位表单（提示条的「清空」与弹层的「清空本机暂存的内容」共用） */
   const resetForm = () => {
     try {
-      Taro.removeStorageSync(DRAFT_KEY)
+      Taro.removeStorageSync(FEEDBACK_DRAFT_KEY)
     } catch {
       // 忽略：清不掉也只是留着一份草稿，不该让页面崩
     }
@@ -300,8 +294,9 @@ export default function Feedback() {
     timerRef.current = setTimeout(() => {
       timerRef.current = null
       setBusy(false)
-      // 内容落本机暂存，弹层才敢说「你的内容已暂存在本机」（稿的 submit 同款顺序）
-      persistDraft({ type, desc, contact })
+      // 内容落本机暂存，弹层才敢说「你的内容已暂存在本机」（稿的 submit 同款顺序）。
+      // 读 `stateRef` 而不是闭包里的 state：这 700ms 内用户可能又补了字（见 stateRef 的说明）
+      persistDraft(stateRef.current)
       setSheetOpen(true)
     }, 700)
   }

@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
@@ -9,6 +9,7 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { confirmBackTicket } from '@/features/auth/login-continue'
 import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
 import { signInWithWechat, useAuth } from '@/features/auth/store'
+import { takeDeclined } from '@/features/legal/entry'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import './index.scss'
@@ -58,6 +59,18 @@ export default function Login() {
    * 所以这里默认 `true`，但**允许取消**，且取消后不允许登录 —— 勾选框要真的有意义。
    */
   const [agreed, setAgreed] = useState(true)
+
+  /**
+   * 从法务页返回时兑现「不同意」（见 `features/legal/entry.ts`）。
+   *
+   * 协议链带 `?from=login` 进法务页，那边点「不同意」会 `markDeclined()` 再返回；
+   * 不在这里消费的话，用户点了「不同意」回来勾选仍是勾上的、照样能一键登录，
+   * 那句「未同意，无法继续使用」就成了假话。`takeDeclined()` 取走即清，
+   * 所以之后每次正常返回本页不会反复取消用户的勾选。
+   */
+  useDidShow(() => {
+    if (takeDeclined()) setAgreed(false)
+  })
 
   const { status } = useAuth()
 
