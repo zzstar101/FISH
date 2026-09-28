@@ -1166,7 +1166,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     if (cleanupErrors.length > 0) {
       console.error(
-        `\n[core-smoke] 清理阶段有 ${cleanupErrors.length} 处失败（不改变上方结论；现场可能残留）：`,
+        `\n[core-smoke] 清理阶段有 ${cleanupErrors.length} 处失败（不改变原始结论；现场可能残留）：`,
       )
       for (const line of cleanupErrors) console.error(`[core-smoke]   ${line}`)
     }
