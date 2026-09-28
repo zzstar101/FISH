@@ -150,7 +150,7 @@
 - 契约单测（`packages/contracts/src/recommendation/schema.test.ts`）：12 类事件、阈值常量、metadata 白名单逐类型、曝光缺 `position` 必拒、批量上限。
 - API 集成测试（`apps/api/src/app.recommendation.test.ts`，20 例）：匿名 Feed + 会话补发、归因链（Feed → IMPRESSION → DETAIL_VIEW 落库）、幂等重放计 `duplicates`、**同一 `(request_id, listing_id)` 的曝光换 `eventId` 重报只落一行且计 `duplicates`**、批内重复 `eventId` 计 `duplicates`、拒收（商品不存在 / 身份不符 / 服务端确证类事件 / `occurredAt` 超前 / 过旧）、游标复用、伪造游标与**篡改内层游标**都是 422、`GET /listings?sort=newest` 未被污染、四个服务端领域事件（**含回复留言也记 `COMMENT`**）、`source` 服务端补 `fresh`、**大写 UUID 会话与小写等价**（翻页 200 + 事件不被判 `identity_mismatch`）、**切号不串事件**（登出/换账号带旧 `requestId` → `identity_mismatch`）、`position` 溢出 int4 时退化为无归因但事件仍落库、重复确认成交不会重复记 `PURCHASE`。
 - 门禁：`bun run typecheck` → `bun run lint` → `bun test --isolate` → 真实跑起来（web-pc 首页 / 小程序首页）。
-- `#302` core smoke 的归因链用例等其合入后再挂（本 PR 用 API 集成测试覆盖同一条链路）。
+- core smoke（`apps/api/scripts/core-smoke.ts`）：在「发布 Listing」之后真实打一次推荐 Feed（匿名会话 + `limit=5`）→ 取首张卡的 `position=0` 发 `IMPRESSION` + `DETAIL_VIEW` → 回库按 `(listing_id, request_id)` 断言两条事件各自带上同一次 `request_id` 与 `position=0`、且 `user_id` 为空。它是**真实进程**链路（scratch 库 + 真实 API），因此覆盖的是「契约 → 路由 → 服务 → 库」整条归因链；`#302` 分支只改 core smoke 的失败诊断/清理健壮性，与本步骤不冲突。
 
 ### 端到端实跑记录（本地隔离库 `fish_r1_smoke`，2026-09-28）
 

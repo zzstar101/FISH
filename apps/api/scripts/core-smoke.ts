@@ -56,6 +56,10 @@ import {
   RANKING_VERSION,
   RANKING_VERSION_V1,
 } from '@fish/contracts/matching/schema'
+import {
+  RECOMMENDATION_HEADERS,
+  RECOMMENDATION_ROUTES,
+} from '@fish/contracts/recommendation/routes'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { createDb, type Db } from '@fish/db/client'
@@ -66,6 +70,7 @@ import { jobs } from '@fish/db/schema/jobs'
 import { listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
+import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
@@ -878,6 +883,88 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const coverUrl = (await readJson(detailResponse)).coverUrl
     assert(typeof coverUrl === 'string', '详情返回可用的 coverUrl')
     assertEqual((await fetch(String(coverUrl))).status, 200, '封面 URL 匿名 → 200')
+
+    // 推荐归因链（#323 R1 验收）：一次推荐请求 → 曝光 → 开详情，事件必须能按
+    // `requestId` / `position` 归因回**同一次**推荐请求。R1 的 Feed 是 newest 透传
+    // （`strategy_version = rec-v1-none`），这里用匿名会话真打一次 Feed，取首张卡发
+    // IMPRESSION + DETAIL_VIEW，再回库里核对归因字段（客户端上报的四类"服务端确证事件"
+    // 由业务写路径产生，不在这一步里造）。
+    step = '推荐归因链（request → IMPRESSION → DETAIL_VIEW）'
+    section('推荐归因链：request → IMPRESSION → DETAIL_VIEW')
+    const anonSessionId = crypto.randomUUID()
+    const feedResponse = await fetch(new URL(`${RECOMMENDATION_ROUTES.feed}?limit=5`, base), {
+      headers: { [RECOMMENDATION_HEADERS.sessionId]: anonSessionId },
+    })
+    assertEqual(feedResponse.status, 200, '匿名 GET /recommendations/feed → 200')
+    const feed = await readJson(feedResponse)
+    assertEqual(feed.strategyVersion, 'rec-v1-none', 'R1 推荐策略版本 = rec-v1-none')
+    const feedItems = feed.items as { id: string }[]
+    assert(feedItems.length > 0, '推荐 Feed 至少返回一张卡')
+    const feedListingPublicId = String(feedItems[0]?.id)
+    const feedListingId = decodePublicId(PUBLIC_ID_PREFIX.listing, feedListingPublicId)
+    const requestId = String(feed.requestId)
+    const occurredAt = new Date().toISOString()
+
+    const impressionResponse = await postJson(base, RECOMMENDATION_ROUTES.events, {
+      events: [
+        {
+          eventId: crypto.randomUUID(),
+          requestId,
+          listingId: feedListingPublicId,
+          eventType: 'IMPRESSION',
+          position: 0,
+          anonymousSessionId: anonSessionId,
+          occurredAt,
+          metadata: { visibleRatio: 1, durationMs: 1_500 },
+        },
+      ],
+    })
+    assertEqual(impressionResponse.status, 202, 'POST /recommendations/events（IMPRESSION）→ 202')
+    assertEqual(
+      (await readJson(impressionResponse)).accepted,
+      1,
+      'IMPRESSION 被接受（accepted = 1）',
+    )
+
+    const detailViewResponse = await postJson(base, RECOMMENDATION_ROUTES.events, {
+      events: [
+        {
+          eventId: crypto.randomUUID(),
+          requestId,
+          listingId: feedListingPublicId,
+          eventType: 'DETAIL_VIEW',
+          position: 0,
+          anonymousSessionId: anonSessionId,
+          occurredAt,
+        },
+      ],
+    })
+    assertEqual(detailViewResponse.status, 202, 'POST /recommendations/events（DETAIL_VIEW）→ 202')
+
+    const attributed = await db
+      .select({
+        eventType: recommendationEvents.eventType,
+        requestId: recommendationEvents.requestId,
+        position: recommendationEvents.position,
+        userId: recommendationEvents.userId,
+      })
+      .from(recommendationEvents)
+      .where(
+        and(
+          eq(recommendationEvents.listingId, feedListingId),
+          eq(recommendationEvents.requestId, requestId),
+        ),
+      )
+    const attributedByType = new Map(attributed.map((row) => [row.eventType, row]))
+    assertEqual(attributed.length, 2, '库里恰两条事件（IMPRESSION + DETAIL_VIEW）')
+    assertEqual(
+      [...attributedByType.keys()].sort().join(','),
+      'DETAIL_VIEW,IMPRESSION',
+      '库里两条事件都归因到同一次 request（IMPRESSION + DETAIL_VIEW）',
+    )
+    assertEqual(attributedByType.get('IMPRESSION')?.position, 0, 'IMPRESSION 记录了 position = 0')
+    assertEqual(attributedByType.get('DETAIL_VIEW')?.position, 0, 'DETAIL_VIEW 记录了 position = 0')
+    assertEqual(attributedByType.get('IMPRESSION')?.userId, null, '匿名流量的事件不挂 user_id')
 
     const listingJobRows = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     assertEqual(listingJobRows.length, 1, '发布写入恰好一条 MATCH_LISTING')
