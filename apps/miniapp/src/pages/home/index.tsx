@@ -5,6 +5,7 @@ import Taro, {
   usePageScroll,
   usePullDownRefresh,
   useReady,
+  useUnload,
 } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
@@ -20,6 +21,7 @@ import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
 import { findUser } from '@/mock/users'
 import { applyLoadResult, homeListState } from './list-state'
+import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
 import './index.scss'
 
 /** 瀑布流列宽（设计值 = 2×pt）：750 - 左右各 28 - 列间距 20，再除以 2 */
@@ -149,23 +151,27 @@ export default function Home() {
    * 归位期间（Owner 反馈「切换 tag 不需要抖动」）把吸顶判定**锁在当前值**：滚动动画
    * 途中 `scrollTop` 会贴着阈值来回、新分类列表替换时页面高度先塌再涨，两者都会让
    * `scrollTop >= pinAt` 瞬间翻 false，吸顶条滑出一半又被拽回 —— 视觉即抖动。
-   * 锁到动画结束（260ms > 200ms duration + 余量）再恢复跟随。
+   * 锁到动画结束（`NAV_SETTLE_MS` > `CATEGORY_SCROLL_DURATION`）再恢复跟随。
+   *
+   * 「锁」只跟着**真的会发生滚动**的那一跳走（`resolveCategorySettle`）：页面还没过
+   * 吸顶点时落点就是当前位置，这一跳不带位移、也不需要在途锁 —— 否则用户点完分类立刻
+   * 下滑的那 260ms 里吸顶条出不来（判定被钉在旧值上，而此刻本该跟手出现）。
    */
   const onCategoryTap = (key: ListingCategory | 'ALL') => {
-    // 已滚过吸顶点 → 归位到刚好吸顶（+1px 保证落点判定仍为 true）；还没滚到 → 原地不动
-    const scrollTop = Math.min(scrollTopRef.current, pinAt.current + 1)
-    navSettleRef.current = true
-    window.setTimeout(() => {
-      navSettleRef.current = false
-    }, 260)
+    // 已滚过吸顶点 → 归位到刚好吸顶；还没滚到 → 原地不动（`repositions` 同时决定是否上锁）
+    const { target, repositions } = resolveCategorySettle(scrollTopRef.current, pinAt.current)
+    if (repositions) lockNavSettle()
+    else releaseNavSettle()
     if (key === category) {
       if (failed) void load(key)
-      void Taro.pageScrollTo({ scrollTop, duration: 200 })
+      if (repositions)
+        void Taro.pageScrollTo({ scrollTop: target, duration: CATEGORY_SCROLL_DURATION })
       return
     }
     setCategory(key)
     void load(key)
-    void Taro.pageScrollTo({ scrollTop, duration: 200 })
+    if (repositions)
+      void Taro.pageScrollTo({ scrollTop: target, duration: CATEGORY_SCROLL_DURATION })
   }
 
   /**
@@ -189,6 +195,44 @@ export default function Home() {
   const pinAt = useRef(Number.POSITIVE_INFINITY)
   /** 分类归位动画进行中：期间吸顶判定锁定（见 onCategoryTap 的抖动注释） */
   const navSettleRef = useRef(false)
+  /** 归位锁的释放定时器。换一轮先清旧的、卸载时清掉，见 `lockNavSettle` */
+  const navSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /**
+   * 上锁 / 解锁吸顶判定（`usePageScroll` 里据此决定跟不跟阈值）。
+   *
+   * 每次上锁都**先清掉上一轮的定时器**：连点 A→B→C 时，A 的定时器会在 C 的滚动动画
+   * 还没跑完时把 `navSettleRef` 置回 false，判定随即在动画途中翻面 —— 正是这层锁要消除
+   * 的抖动。计时从**最后一次**归位算起（审查 P2）。
+   *
+   * 用全局 `setTimeout` 而不是 `window.setTimeout`（审查 P1）：真机的小程序逻辑层是
+   * JSCore / V8 环境，没有浏览器 `window`，那行会抛 `ReferenceError`，分类切换在
+   * `load()` / `pageScrollTo()` 之前就断掉。⚠️ **开发者工具测不出这条** —— 它的模拟器
+   * 自己注入了浏览器式全局（实测 `typeof window === 'object'`、`window === globalThis`、
+   * `window.setTimeout` 可用），`@tarojs/runtime` 则只把窗口对象挂在 `env` 上、不设全局
+   * 别名。所以这里同时用 `tests/home-sticky-nav-wiring.test.ts` 按源码钉住写法。
+   * 本仓 `login-confirm` / `user` 两页同此写法。
+   */
+  const lockNavSettle = () => {
+    if (navSettleTimerRef.current) clearTimeout(navSettleTimerRef.current)
+    navSettleRef.current = true
+    navSettleTimerRef.current = setTimeout(() => {
+      navSettleTimerRef.current = null
+      navSettleRef.current = false
+    }, NAV_SETTLE_MS)
+  }
+
+  /** 这一跳不需要归位 → 别把上一轮的锁留着，判定立刻恢复跟随滚动 */
+  const releaseNavSettle = () => {
+    if (navSettleTimerRef.current) {
+      clearTimeout(navSettleTimerRef.current)
+      navSettleTimerRef.current = null
+    }
+    navSettleRef.current = false
+  }
+
+  // 卸载清掉未释放的锁定时器：迟到的回调不该写回已销毁的页面
+  useUnload(releaseNavSettle)
 
   useReady(() => {
     Taro.createSelectorQuery()
