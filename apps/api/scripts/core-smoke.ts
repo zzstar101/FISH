@@ -60,6 +60,7 @@ import {
   RECOMMENDATION_HEADERS,
   RECOMMENDATION_ROUTES,
 } from '@fish/contracts/recommendation/routes'
+import { RECOMMENDATION_STRATEGY_VERSION_NONE } from '@fish/contracts/recommendation/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { createDb, type Db } from '@fish/db/client'
@@ -889,6 +890,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // （`strategy_version = rec-v1-none`），这里用匿名会话真打一次 Feed，取首张卡发
     // IMPRESSION + DETAIL_VIEW，再回库里核对归因字段（客户端上报的四类"服务端确证事件"
     // 由业务写路径产生，不在这一步里造）。
+    const stepBeforeRecommendation = step
     step = '推荐归因链（request → IMPRESSION → DETAIL_VIEW）'
     section('推荐归因链：request → IMPRESSION → DETAIL_VIEW')
     const anonSessionId = crypto.randomUUID()
@@ -897,7 +899,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     })
     assertEqual(feedResponse.status, 200, '匿名 GET /recommendations/feed → 200')
     const feed = await readJson(feedResponse)
-    assertEqual(feed.strategyVersion, 'rec-v1-none', 'R1 推荐策略版本 = rec-v1-none')
+    assertEqual(
+      feed.strategyVersion,
+      RECOMMENDATION_STRATEGY_VERSION_NONE,
+      'R1 推荐策略版本 = rec-v1-none',
+    )
     const feedItems = feed.items as { id: string }[]
     assert(feedItems.length > 0, '推荐 Feed 至少返回一张卡')
     const feedListingPublicId = String(feedItems[0]?.id)
@@ -940,6 +946,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       ],
     })
     assertEqual(detailViewResponse.status, 202, 'POST /recommendations/events（DETAIL_VIEW）→ 202')
+    assertEqual(
+      (await readJson(detailViewResponse)).accepted,
+      1,
+      'DETAIL_VIEW 被接受（accepted = 1）',
+    )
 
     const attributed = await db
       .select({
@@ -964,7 +975,19 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     assertEqual(attributedByType.get('IMPRESSION')?.position, 0, 'IMPRESSION 记录了 position = 0')
     assertEqual(attributedByType.get('DETAIL_VIEW')?.position, 0, 'DETAIL_VIEW 记录了 position = 0')
-    assertEqual(attributedByType.get('IMPRESSION')?.userId, null, '匿名流量的事件不挂 user_id')
+    assertEqual(
+      attributedByType.get('IMPRESSION')?.userId,
+      null,
+      '匿名流量的 IMPRESSION 不挂 user_id',
+    )
+    assertEqual(
+      attributedByType.get('DETAIL_VIEW')?.userId,
+      null,
+      '匿名流量的 DETAIL_VIEW 不挂 user_id',
+    )
+
+    // 归因链小节到此结束：把 `step` 复位，否则紧接的 MATCH_LISTING 断言失败会被误报成这一步。
+    step = stepBeforeRecommendation
 
     const listingJobRows = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     assertEqual(listingJobRows.length, 1, '发布写入恰好一条 MATCH_LISTING')
