@@ -362,6 +362,29 @@ describe('listFeed', () => {
     expect(anonymous.items[0]?.moderationStatus).toBeNull()
   })
 
+  /*
+   * 治理下架在库里与「引擎/人工终审的 BLOCKED」同形（`OFFLINE` + `BLOCKED`），
+   * 客户端只靠 `moderationStatus` 分不出「平台下架了你的商品」与「你的内容没过审」——
+   * 两者的可做动作完全不同（前者等服务端，后者改内容重审）。所以本人视角要多带一个
+   * `governanceDelisted`；公开 Feed / 查他人一律 null（那是平台内部状态，与审核态同一取向）。
+   */
+  test('carries the governance flag to the seller own cards only', async () => {
+    const delistedRow = listingRow({
+      status: 'OFFLINE',
+      moderationStatus: 'BLOCKED',
+      governanceDelistedAt: CREATED_AT,
+    })
+    const store = fakeStore({ listFeed: async () => [feedEntry(delistedRow, null)] })
+    const service = createListingService({ storage: fakeStorage(), store })
+
+    const own = await service.listFeed(SELLER_ID, feedQuery({ sellerId: SELLER_ID }))
+    expect(own.items[0]?.governanceDelisted).toBe(true)
+
+    // 同一条商品在公开 Feed 里连审核态都不给，治理标记同理
+    const anonymous = await service.listFeed(null, feedQuery())
+    expect(anonymous.items[0]?.governanceDelisted).toBeNull()
+  })
+
   // 反向保证：公开 Feed（没有 sellerId）仍必须显式限定 ACTIVE，不能顺手把过滤打开。
   test('public feed still pins the status filter to ACTIVE', async () => {
     const seen: FeedCriteria[] = []
@@ -505,6 +528,31 @@ describe('getDetail', () => {
     expect((await service.getDetail(SELLER_ID, LISTING_ID)).moderationStatus).toBe('REVIEW')
 
     // 公开/他人视角看不到未过审商品（404），也就不会泄漏审核态。
+    expect((await expectServiceError(() => service.getDetail(OTHER_ID, LISTING_ID))).status).toBe(
+      404,
+    )
+    expect((await expectServiceError(() => service.getDetail(null, LISTING_ID))).status).toBe(404)
+  })
+
+  test('详情也带治理标记，且只在本人视角非 null', async () => {
+    const delisted = listingRow({
+      status: 'OFFLINE',
+      moderationStatus: 'BLOCKED',
+      governanceDelistedAt: CREATED_AT,
+    })
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        findDetail: async () => ({ listing: delisted, seller: sellerRow(), images: [] }),
+      }),
+    })
+
+    // 本人：两个内部状态都给（治理标记优先于审核态由客户端判读，服务端只如实投影）
+    const own = await service.getDetail(SELLER_ID, LISTING_ID)
+    expect(own.governanceDelisted).toBe(true)
+    expect(own.moderationStatus).toBe('BLOCKED')
+
+    // 他人 / 匿名：这条商品是 OFFLINE + BLOCKED，本来就连详情都看不到（404）
     expect((await expectServiceError(() => service.getDetail(OTHER_ID, LISTING_ID))).status).toBe(
       404,
     )

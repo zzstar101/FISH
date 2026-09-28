@@ -179,6 +179,30 @@ describe('conversation service: createOrGetConversation', () => {
     expect(second.conversation.id).toBe(first.conversation.id)
   })
 
+  /*
+   * 「查存在 → 建会话」不是原子的：#74 给商品加了物理删除，商品在这两步之间被删掉时，
+   * `INSERT` 会撞 `conversations_listing_id_seller_id_fk`。那条路径的语义与「查不到」
+   * 完全一样（商品不存在），所以必须是同一个 404 —— 不接住的话 23503 会走 `app.onError`
+   * 变成 500，客户端只会说「服务器内部错误」。
+   */
+  test('商品在写入瞬间被删（外键冲突）→ 同一个 404，而不是 500', async () => {
+    const store = new MemoryConversationStore()
+    store.insertIfAbsent = async () => {
+      // 真实驱动的形状：SQLSTATE 在 errno 上，Drizzle 再包一层 cause
+      throw Object.assign(new Error('Failed query: insert into conversations …'), {
+        query: 'insert into conversations …',
+        params: [],
+        cause: Object.assign(new Error('violates foreign key constraint'), { errno: '23503' }),
+      })
+    }
+    const service = createConversationService({ store, storage })
+
+    expect(service.createOrGetConversation(buyer, { listingId: listingA })).rejects.toMatchObject({
+      code: 'LISTING_NOT_FOUND',
+      status: 404,
+    })
+  })
+
   test('404 LISTING_NOT_FOUND for an unknown listing', async () => {
     const service = createConversationService({ store: new MemoryConversationStore(), storage })
     expect(

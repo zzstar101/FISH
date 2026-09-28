@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  canDelete,
+  canEdit,
+  canOffline,
   cardLabel,
   countBySegment,
   emptyText,
@@ -12,17 +15,20 @@ import {
 } from '../src/pages/mylist/list'
 
 /**
- * 「我的发布」分档判定（#74 / #89 mylist 行真实接线；「审核」段见 Owner 2026-09-28 拍板）。
+ * 「我的发布」分档与动作判据（#74 / #89 mylist 行真实接线；「审核」段见 Owner 2026-09-28 拍板）。
  * 组件接线没有单测（本仓 tests/ 只有纯逻辑测试，无 Taro 组件渲染基线）。
  *
- * 三组最容易做错的边界：
+ * 四组最容易做错的边界：
  *
  * 1. **「审核」段要同时读 `status` 与 `moderationStatus`**：审核中（`REVIEW`）与不过审
  *    （`BLOCKED`）在库里都是 `status = OFFLINE`，只看 `status` 会把它们跟「自己下架的」
  *    混成一段，两种子状态的动作（等结论 vs 编辑/删除）也就无从区分。
- * 2. **`moderationStatus = null` 的历史行仍读作「已下架」**：`null` 是加审核列之前的老数据，
- *    不是「审核中」。
- * 3. **「待确认」有两个来源**：`RESERVED`（卖家已同意、待面交），以及**商品仍是 `ACTIVE`
+ * 2. **治理下架（`governanceDelisted`）要从这一段里挑出去**：它与「不过审」在库里**同形**
+ *    （`OFFLINE` + `BLOCKED`），出路却完全不同（找平台 vs 改内容重审），而且它的
+ *    编辑 / 重新上架 / 删除在服务端一律 409 —— 归错段就会出现「按钮在、按下去必然失败」。
+ * 3. **`moderationStatus = null` 读作「已下架」**：契约里该字段只在查自己时非 null
+ *    （本页正是查自己），真正的 `null` 只可能出现在公开 / 他人视角；判成「已下架」是取最保守落点。
+ * 4. **「待确认」有两个来源**：`RESERVED`（卖家已同意、待面交），以及**商品仍是 `ACTIVE`
  *    但有买家在等**（`awaiting`，会话侧推导后传进来）。只看 `status` 的话，一件买家点了
  *    「我想要」的商品会显示成「在售」，卖家根本看不出有人在等。
  */
@@ -51,8 +57,28 @@ describe('segmentOf —— 状态 + 审核态一起决定分段', () => {
     expect(segmentOf(card({ status: 'OFFLINE', moderationStatus: 'APPROVED' }), false)).toBe('off')
   })
 
-  test('审核态为 null（加审核列之前的老行）读作「已下架」，不当成审核中', () => {
+  test('审核态为 null 读作「已下架」，不当成审核中', () => {
+    // 该列在库里是 NOT NULL DEFAULT 'APPROVED'，`null` 只可能来自非本人视角；
+    // 判成「已下架」是保守落点（宁可少给动作，也不同把已放行的商品划进审核段）
     expect(segmentOf(card({ status: 'OFFLINE', moderationStatus: null }), false)).toBe('off')
+  })
+
+  test('治理下架归「已下架」段，不与「不过审」混为一谈', () => {
+    // 两者在库里都是 OFFLINE + BLOCKED（见 governance/service.ts 的 delist）；
+    // 只有 governance_delisted_at 能分开，契约把它投影成 `governanceDelisted`
+    expect(
+      segmentOf(
+        card({ status: 'OFFLINE', moderationStatus: 'BLOCKED', governanceDelisted: true }),
+        false,
+      ),
+    ).toBe('off')
+    // 没有治理标记的同形态商品仍在「审核」段
+    expect(
+      segmentOf(
+        card({ status: 'OFFLINE', moderationStatus: 'BLOCKED', governanceDelisted: false }),
+        false,
+      ),
+    ).toBe('review')
   })
 
   test('审核态只在 OFFLINE 时参与分档：ACTIVE / RESERVED / SOLD 都不因它换段', () => {
@@ -137,6 +163,14 @@ describe('cardLabel —— 两段里的子状态要分开说', () => {
     expect(cardLabel('pending', false, null)).toBe('待面交')
   })
 
+  test('「已下架」段里的平台下架另有名字', () => {
+    // 商品确实不在架上了，所以归「已下架」；但卖家能做的是找平台，
+    // 与「自己下架、随时可重新上架」不是一回事 —— 名字必须分开
+    expect(cardLabel('off', false, 'BLOCKED', true)).toBe('平台下架')
+    expect(cardLabel('off', false, 'APPROVED', true)).toBe('平台下架')
+    expect(cardLabel('off', false, 'APPROVED', false)).toBe('已下架')
+  })
+
   test('其余三段与分段名一致（awaiting / moderation 不影响它们）', () => {
     expect(cardLabel('sale', false, null)).toBe('在售')
     expect(cardLabel('sold', false, null)).toBe('已售出')
@@ -157,20 +191,86 @@ describe('pillClassOf —— 胶囊配色按子状态分档', () => {
     expect(pillClassOf('sold', null)).toBe('is-sold')
     expect(pillClassOf('off', null)).toBe('is-off')
   })
+
+  test('平台下架的胶囊不落回中性的「已下架」描边色', () => {
+    // 它与「不过审」同类（都被平台拦下），用同一档 danger 色；
+    // 若落回 is-off，卡片看着就像卖家自己下架的普通商品
+    expect(pillClassOf('off', 'APPROVED', true)).toBe('is-blocked')
+    expect(pillClassOf('off', 'APPROVED', false)).toBe('is-off')
+  })
 })
 
-describe('lockNote —— 已售出与审核中各有说明', () => {
+describe('lockNote —— 已售出 / 审核中 / 平台下架各有说明', () => {
   test('审核中给「暂不可修改」，不过审不给（它的出路是编辑 / 删除）', () => {
-    expect(lockNote('review', 'REVIEW')).not.toBe('')
+    expect(lockNote('review', 'REVIEW')).toBe('审核期间暂不可修改')
     // 不过审的卡片上有编辑与删除两个按钮，再挂一句「不可修改」就是自相矛盾
     expect(lockNote('review', 'BLOCKED')).toBe('')
   })
 
+  test('平台下架的说明要说出路是找平台，而不是「改一改再上架」', () => {
+    const note = lockNote('off', 'BLOCKED', true)
+    expect(note).toContain('平台下架')
+    // 它没有任何按钮，所以这里必须说清为什么（服务端对编辑/上架一律 409）
+    expect(note).toContain('不可')
+    // 普通「已下架」不挂锁：它有自己的「重新上架」
+    expect(lockNote('off', 'APPROVED', false)).toBe('')
+  })
+
   test('已售出给说明，待确认不给', () => {
-    expect(lockNote('sold')).not.toBe('')
+    expect(lockNote('sold')).toBe('已成交锁定 · 不可改')
     // 待确认的「先别改」由「谁在等」那行 + 决策按钮表达，挂锁图标会跟旁边的按钮打架（稿 ⑥）
     expect(lockNote('pending')).toBe('')
     expect(lockNote('off')).toBe('')
+  })
+})
+
+/**
+ * 三个动作的判据必须与「服务端会不会放行」一致 —— 卡面上摆一个按下去必然 409 的按钮，
+ * 就是让用户白点一次。这里的每一条都对应一个服务端拒绝分支：
+ * `canEdit=false`（审核中 / 平台下架）对应 `LISTING_GOVERNANCE_BLOCKED` 与交易锁定，
+ * `canDelete=false`（除不过审之外的一切）对应 `LISTING_NOT_DELETABLE`。
+ */
+describe('canEdit / canOffline / canDelete —— 动作判据与服务端一致', () => {
+  test('编辑：在售 / 已下架 / 不过审可编辑，其余都不可', () => {
+    expect(canEdit('sale', 'APPROVED')).toBe(true)
+    expect(canEdit('off', 'APPROVED')).toBe(true)
+    expect(canEdit('review', 'BLOCKED')).toBe(true)
+    // 审核中要等结论（拍板），待确认 / 已售出被交易锁定，平台下架服务端一律拒
+    expect(canEdit('review', 'REVIEW')).toBe(false)
+    expect(canEdit('pending', 'APPROVED')).toBe(false)
+    expect(canEdit('sold', 'APPROVED')).toBe(false)
+    expect(canEdit('off', 'BLOCKED', true)).toBe(false)
+    expect(canEdit('review', 'BLOCKED', true)).toBe(false)
+  })
+
+  test('下架：只有在售可下架', () => {
+    expect(canOffline('sale')).toBe(true)
+    expect(canOffline('off')).toBe(false)
+    expect(canOffline('review', false)).toBe(false)
+    expect(canOffline('pending')).toBe(false)
+    expect(canOffline('sold')).toBe(false)
+    // 治理下架的形态是 OFFLINE + BLOCKED（本就不可能落在「在售」段），这里仍显式判否：
+    // 判据不依赖「上游分档恰好不会给出这种组合」
+    expect(canOffline('off', true)).toBe(false)
+  })
+
+  test('删除：只有不过审可删', () => {
+    expect(canDelete('review', 'BLOCKED')).toBe(true)
+    // 审核中等结论；已下架 / 在售 / 待确认 / 已售出各有去处；平台下架是治理证据
+    expect(canDelete('review', 'REVIEW')).toBe(false)
+    expect(canDelete('off', 'APPROVED')).toBe(false)
+    expect(canDelete('sale', 'APPROVED')).toBe(false)
+    expect(canDelete('pending', 'APPROVED')).toBe(false)
+    expect(canDelete('sold', 'APPROVED')).toBe(false)
+    expect(canDelete('review', 'BLOCKED', true)).toBe(false)
+  })
+
+  test('平台下架一律不给编辑 / 重新上架 / 删除（三个动作都被服务端拒）', () => {
+    for (const segment of ['sale', 'review', 'pending', 'sold', 'off'] as const) {
+      expect(canEdit(segment, 'BLOCKED', true)).toBe(false)
+      expect(canOffline(segment, true)).toBe(false)
+      expect(canDelete(segment, 'BLOCKED', true)).toBe(false)
+    }
   })
 })
 

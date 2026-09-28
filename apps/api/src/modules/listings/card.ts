@@ -26,21 +26,23 @@ export type ListingCardSource = {
   free: boolean
   createdAt: Date
 }
-
 /**
  * 决策 C（Issue #6）：读响应校验失败**不 500**，记日志后跳过该条——一条脏数据不该让整个列表打不开。
  * 返回 `null` 的调用方负责跳过（feed 少一条、匹配少一条）。
  *
  * `storage` 只取 `publicUrl`：「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。
  *
- * `moderationStatus` 由调用方按**视角**决定：只有卖家本人视角才传真实值，公开 Feed / 匹配 /
- * 他人主页一律省略（→ `null`）。审核态不是买家该看到的信息（#74）。
+ * `moderationStatus` 与 `governanceDelisted` 都由调用方按**视角**决定：只有卖家本人视角才传
+ * 真实值，公开 Feed / 匹配 / 他人主页一律省略（→ `null`）。审核态与治理下架都不是买家该看到的信息
+ * （#74 / #73）。两者的区别见契约 `ListingCardSchema.governanceDelisted`：治理下架在库里
+ * 与「内容被拒」同形，只凭前者分不出，而两者的可做动作完全不同。
  */
 export function toListingCard(
   listing: ListingCardSource,
   coverObjectKey: string | null,
   storage: Pick<MediaStorage, 'publicUrl'>,
   moderationStatus: ListingModerationStatus | null = null,
+  governanceDelisted: boolean | null = null,
 ): ListingCard | null {
   const card = {
     id: encodePublicId(PUBLIC_ID_PREFIX.listing, listing.id),
@@ -56,6 +58,7 @@ export function toListingCard(
     coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
     createdAt: listing.createdAt.toISOString(),
     moderationStatus,
+    governanceDelisted,
   }
 
   const parsed = ListingCardSchema.safeParse(card)

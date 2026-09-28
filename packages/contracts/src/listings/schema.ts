@@ -171,6 +171,18 @@ export const ListingCardSchema = z.object({
    * 客户端据此把审核中的商品显示成「审核中」，而不是 `OFFLINE`（已下架）。
    */
   moderationStatus: ListingModerationStatusSchema.nullable(),
+  /**
+   * 平台（治理）下架标记，仅**卖家本人**视角非 `null`；`true` = 管理员下架（可申诉、可由管理员恢复）。
+   *
+   * 为什么必须单独给一个字段：治理下架在库里的形态与「内容被审核引擎拒绝」**完全相同**
+   * （`status = OFFLINE` + `moderation_status = BLOCKED`，见 `governance/service.ts` 的 delist），
+   * 只凭 `moderationStatus` 分不出「平台下架了你的商品」与「你的内容没过审」——
+   * 两者的可做动作完全不同（前者等平台处理，后者改内容重新送审），
+   * 混成一种会让卖家看到一条被平台下架的商品顶着「不过审」的标签、旁边摆着按下去必然 409 的按钮。
+   *
+   * 与 `listingNo` 同样取 `.optional()`：老客户端 mock 记录可以不带它，缺省即「不是治理下架」。
+   */
+  governanceDelisted: z.boolean().nullable().optional(),
 })
 
 export type ListingCard = z.infer<typeof ListingCardSchema>

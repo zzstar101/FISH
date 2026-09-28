@@ -10,6 +10,7 @@ import {
   CommentReplySchema,
 } from '@fish/contracts/comments/schema'
 import type { ApiErrorDetail, SystemErrorCode } from '@fish/contracts/system/error'
+import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createModerationService, type ModerationService } from '../moderation/service'
 import { publicAvatarUrl } from '../uploads/avatar-url'
@@ -124,6 +125,31 @@ export function createCommentService(deps: {
     return sellerId
   }
 
+  /**
+   * 写留言 / 回复的落库，把「商品在写入的一瞬间被删掉」翻成 404。
+   *
+   * 存在性检查（`requireSellerId`）与 INSERT 不在同一个事务里，而 #74 给商品加了**物理删除**：
+   * 两步之间商品被删掉时，`comments_listing_id_listings_id_fk` 会拒绝这次写入。
+   * 那是并发下的正常结果（商品没了），不是服务端故障 —— 不接住的话 23503 走 `app.onError`
+   * 变成 500，而契约要求 404 `LISTING_NOT_FOUND`。
+   *
+   * 回复路径（`createReply`）也走这里：它先读父留言拿到 `listingId`，父留言能读到说明当时
+   * 商品还在，但同样的窗口存在（父留言随商品级联删除）。
+   */
+  async function insertComment(input: {
+    listingId: string
+    authorId: string
+    parentId: string | null
+    content: string
+  }): Promise<string> {
+    try {
+      return await store.insert(input)
+    } catch (error) {
+      if (isForeignKeyViolation(error)) throw listingNotFound()
+      throw error
+    }
+  }
+
   return {
     async listComments(listingId, query) {
       const sellerId = await requireSellerId(listingId)
@@ -180,7 +206,7 @@ export function createCommentService(deps: {
       const sellerId = await requireSellerId(listingId)
       assertContentAllowed(input.content)
 
-      const id = await store.insert({
+      const id = await insertComment({
         listingId,
         authorId: userId,
         parentId: null,
@@ -207,7 +233,7 @@ export function createCommentService(deps: {
       const sellerId = await requireSellerId(parent.listingId)
       assertContentAllowed(input.content)
 
-      const id = await store.insert({
+      const id = await insertComment({
         listingId: parent.listingId,
         authorId: userId,
         parentId: commentId,

@@ -161,13 +161,19 @@ export function createListingService(deps: {
     }
   }
 
-  /** 卡片映射抽到 `card.ts`：#8 的 `/matches` 也要给同一张卡片，两处各写一份必然漂移。 */
+  /**
+   * 卡片映射抽到 `card.ts`：#8 的 `/matches` 也要给同一张卡片，两处各写一份必然漂移。
+   *
+   * 后两个参数是**卖家本人视角的两个内部状态**（审核态 / 治理下架）：只有查自己时才传真值，
+   * 公开 Feed 与查他人一律省掉（→ `null`）。见 `card.ts` 的说明。
+   */
   function toCard(
     listing: ListingRow,
     coverObjectKey: string | null,
     moderationStatus: ListingModerationStatus | null = null,
+    governanceDelisted: boolean | null = null,
   ): ListingCard | null {
-    return toListingCard(listing, coverObjectKey, storage, moderationStatus)
+    return toListingCard(listing, coverObjectKey, storage, moderationStatus, governanceDelisted)
   }
 
   function toDetail(input: {
@@ -212,6 +218,8 @@ export function createListingService(deps: {
       // 审核态只给卖家本人：买家看到的商品本来就只可能是 APPROVED，
       // 返回真实值等于白送一个内部状态字段（见契约 `ListingModerationStatusSchema`）。
       moderationStatus: isOwner ? input.listing.moderationStatus : null,
+      // 治理下架标记同理只给本人（见契约 `governanceDelisted`）。
+      governanceDelisted: isOwner ? input.listing.governanceDelistedAt !== null : null,
       updatedAt: input.listing.updatedAt.toISOString(),
     }
 
@@ -412,11 +420,12 @@ export function createListingService(deps: {
 
       const items: ListingCard[] = []
       for (const entry of page) {
-        // 只有「查自己」的列表带审核态；公开 Feed 与查他人都是 null（见 `toListingCard`）。
+        // 只有「查自己」的列表带审核态与治理标记；公开 Feed 与查他人都是 null（见 `toListingCard`）。
         const card = toCard(
           entry.listing,
           entry.coverObjectKey,
           ownSellerQuery ? entry.listing.moderationStatus : null,
+          ownSellerQuery ? entry.listing.governanceDelistedAt !== null : null,
         )
         if (card) items.push(card)
       }

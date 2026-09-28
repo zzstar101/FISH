@@ -102,6 +102,10 @@ export function toMockListing(card: ListingCard, now: number = Date.now()): Mock
     // 契约无这两个计数 —— 不编数字
     views: null,
     wants: null,
+    // 卖家本人视角的两个内部状态：只在查自己时非 null（契约如是说），这里原样带过去，
+    // 由「我的发布」判段与动作。公开 Feed / 他人视角拿到的是 null，页面据此按「已通过」渲染。
+    moderationStatus: card.moderationStatus,
+    governanceDelisted: card.governanceDelisted ?? null,
     createdHoursAgo: hoursAgo(card.createdAt, now),
     createdAt: card.createdAt,
   }

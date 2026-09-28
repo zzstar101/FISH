@@ -1221,6 +1221,40 @@ describe('deleteListingAtomic（不过审商品的物理删除）', () => {
     })
   })
 
+  /*
+   * 治理下架在库里与「审核引擎 / 人工终审的 BLOCKED」**形态完全相同**
+   * （`status = OFFLINE` + `moderation_status = BLOCKED`，见 `governance/service.ts` 的 delist），
+   * 唯一的分辨依据是 `governance_delisted_at`。这一档是删除判据里唯一额外读的列，
+   * 少了它，卖家就能把自己被平台下架的商品当作「不过审」一键清除，把治理证据抹掉。
+   */
+  test('治理下架的 BLOCKED 商品拒绝删除：与「不过审」同形，靠 governance_delisted_at 分开', async () => {
+    await withSeller(async (sellerId) => {
+      const listingId = await insertListing(sellerId, {
+        status: 'OFFLINE',
+        moderationStatus: 'BLOCKED',
+      })
+      // 模拟治理 delist 的写法（只补这一列，其余形态与上面那条完全相同）
+      await db
+        .update(listings)
+        .set({ governanceDelistedAt: new Date() })
+        .where(eq(listings.id, listingId))
+
+      await expect(store.deleteListingAtomic({ id: listingId, sellerId })).resolves.toEqual({
+        kind: 'not-deletable',
+      })
+      expect(await store.findState(listingId)).not.toBeNull()
+
+      // 反证：清掉治理标记后同一条商品变得可删 —— 证明拒绝确实来自那一列，而不是别的条件
+      await db
+        .update(listings)
+        .set({ governanceDelistedAt: null })
+        .where(eq(listings.id, listingId))
+      await expect(store.deleteListingAtomic({ id: listingId, sellerId })).resolves.toEqual({
+        kind: 'deleted',
+      })
+    })
+  })
+
   test('带交易记录的不过审商品拒绝删除；交易清掉后才能删', async () => {
     await withSeller(async (sellerId, otherSellerId) => {
       const listingId = await insertListing(sellerId, {

@@ -14,9 +14,11 @@ import { users } from './users'
  *
  * 外键的删除行为是**刻意不对称**的：
  * - 用户被删除 → 关系跟着消失（CASCADE），收藏是账号的从属数据；
- * - 商品被删除 → NO ACTION（不预设 CASCADE）。#190 明确"商品彻底删除后的收藏如何处理
- *   仍待 Owner 决定"，此时用 CASCADE 等于替 Owner 做出"静默丢弃收藏"的决定，
- *   用 NO ACTION 则会让物理删除先撞上外键报错，把决定留在明面上。
+ * - 商品被删除 → NO ACTION（不预设 CASCADE）。这条外键把「商品彻底删除后收藏怎么办」
+ *   留在明面上而不是悄悄替人决定；**Owner 2026-09-28 拍板**了那个决定：不过审的商品被
+ *   物理删除时，它的收藏一并清除（`listings/store.ts` 的 `deleteListingAtomic` 在删商品行
+ *   之前显式 `DELETE FROM favorites`）。保持 NO ACTION 不动 —— 谁来删都绕不过这一层，
+ *   少一个"外键顺手帮我删了"的隐式行为。
  *   （商品下架走 `listings.status = 'OFFLINE'`，不触发这条外键。）
  */
 export const favorites = pgTable(
