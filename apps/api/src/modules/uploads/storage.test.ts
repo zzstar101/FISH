@@ -220,6 +220,34 @@ test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代�
   expect(() => media.publicUrl(`listings/${USER_ID}/unknown.exe`)).toThrow()
 })
 
+// #286 复审 F4：审核中的私有快照不在匿名白名单里，只能拿到带过期时刻的签名代理 URL；
+// 没配代理时必须拒绝出图，而不是回落到公开桶地址（那会把未审内容放到匿名可读前缀）。
+test('审核中的图返回签名代理 URL；未配置代理时拒绝出图', () => {
+  const client = new Bun.S3Client({
+    endpoint: 'http://127.0.0.1:1',
+    region: 'us-east-1',
+    accessKeyId: 'test',
+    secretAccessKey: 'test',
+    bucket: 'fish',
+  })
+  const reviewKey = `listing-review-media/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+
+  const configured = createBunS3MediaStorage({
+    client,
+    publicUrlBase: 'https://cdn.test/fish',
+    reviewUrlBase: 'https://web.test/api/uploads/media',
+    reviewUrlSecret: 'test-secret-for-review-media-longer-than-32-characters',
+  })
+  const url = configured.publicUrl(reviewKey)
+  expect(url.startsWith('https://web.test/api/uploads/media/')).toBe(true)
+  expect(url).not.toContain(reviewKey)
+  expect(url).not.toContain(USER_ID)
+  expect(url.startsWith('https://cdn.test/fish/')).toBe(false)
+
+  const unconfigured = createBunS3MediaStorage({ client, publicUrlBase: 'https://cdn.test/fish' })
+  expect(() => unconfigured.publicUrl(reviewKey)).toThrow('私有媒体 URL 代理未配置')
+})
+
 describe('isSafeObjectKey（objectKey 形状白名单）', () => {
   test('放行服务端自己生成的键', () => {
     expect(isSafeObjectKey(`listings/${USER_ID}/01930000-0000-7000-8000-0000000000f1.jpg`)).toBe(

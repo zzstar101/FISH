@@ -203,10 +203,146 @@ test('私有对象缺失时结算失败（事务回滚），不留下"已放行�
       db.transaction(async (tx) => {
         await settlement(tx, { listingId, decision: 'ALLOW' })
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow('审核图片对象缺失')
 
     const [row] = await mediaRowOf(reviewKey)
     expect(row?.settledDecision).toBeNull()
+    const images = await db
+      .select()
+      .from(listingImages)
+      .where(eq(listingImages.listingId, listingId))
+    expect(images.map((image) => image.objectKey)).toEqual([reviewKey])
+  })
+})
+
+/** 同一张审核图被两个商品引用：客户端正常流程不产生（每个表单都新传对象），只有直接复用键才会。 */
+type SharedFixture = {
+  sellerId: string
+  blockedListingId: string
+  pendingListingId: string
+  reviewKey: string
+  storage: FakeStorage
+}
+
+async function withSharedReviewKey(run: (fixture: SharedFixture) => Promise<void>) {
+  const sellerId = await createUser()
+  const blockedListingId = newId()
+  const pendingListingId = newId()
+  for (const [index, id] of [blockedListingId, pendingListingId].entries()) {
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: `共享审核图的商品 ${index}`,
+      description: '集成测试',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+    })
+  }
+
+  const reviewKey = `${listingReviewMediaPrefix(sellerId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+  const objects = new Map<string, Uint8Array>([[reviewKey, IMAGE_BYTES]])
+  const storage = fakeStorage(objects)
+  await db.insert(listingMediaObjects).values({
+    userId: sellerId,
+    stagingKey: `listing-media/${sellerId}/${newId()}.jpg`,
+    finalKey: reviewKey,
+    contentDigest: 'c'.repeat(64),
+    providerMd5: null,
+    moderationDecision: 'REVIEW',
+    provider: 'LOCAL',
+    providerRequestId: null,
+  })
+  await db.insert(listingImages).values([
+    { listingId: blockedListingId, objectKey: reviewKey, sortOrder: 0 },
+    { listingId: pendingListingId, objectKey: reviewKey, sortOrder: 0 },
+  ])
+
+  try {
+    await run({ sellerId, blockedListingId, pendingListingId, reviewKey, storage })
+  } finally {
+    await db.delete(listings).where(eq(listings.sellerId, sellerId))
+    await db.delete(users).where(eq(users.id, sellerId))
+  }
+}
+
+test('同一个键已被人工 BLOCK 时，另一个引用它的商品不能被放行（阻断过的字节不得进公开前缀）', async () => {
+  await withSharedReviewKey(async ({ blockedListingId, pendingListingId, reviewKey, storage }) => {
+    const settlement = createListingMediaSettlement({ storage })
+
+    await db.transaction(async (tx) => {
+      await settlement(tx, { listingId: blockedListingId, decision: 'BLOCK' })
+    })
+
+    await expect(
+      db.transaction(async (tx) => {
+        await settlement(tx, { listingId: pendingListingId, decision: 'ALLOW' })
+      }),
+    ).rejects.toThrow('审核图片已被人工阻断')
+
+    expect(storage.reads).toBe(0)
+    expect(storage.writes).toEqual([])
+    const [row] = await mediaRowOf(reviewKey)
+    expect(row?.settledDecision).toBe('BLOCK')
+    const images = await db
+      .select()
+      .from(listingImages)
+      .where(eq(listingImages.listingId, pendingListingId))
+    expect(images.map((image) => image.objectKey)).toEqual([reviewKey])
+  })
+})
+
+test('同一个键被另一条商品放行后，所有引用该键的商品图片一起改成公开键（不留私有键残引用）', async () => {
+  await withSharedReviewKey(async ({ blockedListingId, pendingListingId, reviewKey, storage }) => {
+    const settlement = createListingMediaSettlement({ storage })
+
+    await db.transaction(async (tx) => {
+      await settlement(tx, { listingId: blockedListingId, decision: 'ALLOW' })
+    })
+    expect(storage.writes).toHaveLength(1)
+    const publicKey = storage.writes[0]?.key ?? ''
+    expect(isListingReviewMediaKey(publicKey)).toBe(false)
+    expect(reviewKey).not.toBe(publicKey)
+
+    // 引用同一个键的另一条商品也必须一起改成公开键：否则它会停在"已人工放行但图仍是私有键"，
+    // 而且媒体行的 `final_key` 已经改名，它自己再放行时既搬不动、也没有台账行可查。
+    const images = await db
+      .select()
+      .from(listingImages)
+      .where(eq(listingImages.listingId, pendingListingId))
+    expect(images.map((image) => image.objectKey)).toEqual([publicKey])
+
+    // 它自己的人工放行因此是空操作：图片组里已经没有审核中的私有键，不会重复搬运。
+    await db.transaction(async (tx) => {
+      await settlement(tx, { listingId: pendingListingId, decision: 'ALLOW' })
+    })
+    expect(storage.writes).toHaveLength(1)
+    const after = await db
+      .select()
+      .from(listingImages)
+      .where(eq(listingImages.listingId, pendingListingId))
+    expect(after.map((image) => image.objectKey)).toEqual([publicKey])
+  })
+})
+
+test('台账行缺失（脏数据）时拒绝人工放行，不放过一张结论不明的图', async () => {
+  await withReviewListing(async ({ sellerId, listingId, reviewKey, storage }) => {
+    // 引用着私有键、却没有对应台账行：没有任何正常来源（放行会在同一事务里把两边一起改写），
+    // 因此宁可让这次人工决策失败（商品留在队列），也不能放行。
+    await db.delete(listingMediaObjects).where(eq(listingMediaObjects.userId, sellerId))
+    const settlement = createListingMediaSettlement({ storage })
+
+    await expect(
+      db.transaction(async (tx) => {
+        await settlement(tx, { listingId, decision: 'ALLOW' })
+      }),
+    ).rejects.toThrow('台账缺失')
+
+    expect(storage.reads).toBe(0)
+    expect(storage.writes).toEqual([])
     const images = await db
       .select()
       .from(listingImages)

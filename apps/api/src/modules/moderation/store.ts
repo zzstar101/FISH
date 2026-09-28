@@ -14,6 +14,21 @@ export type ModerationDecisionResult =
 export type ModerationRecord = typeof listingModerationRecords.$inferSelect
 
 /**
+ * 图片结算**拒绝**本次人工结论（#286）：调用方必须让整个决策事务回滚，并把拒绝原因翻译成
+ * 客户端可读的状态码。`code` 区分「图已被人为阻断」（结论本身站不住）与「结算过程失败」
+ * （对象缺失 / 台账缺失 / 存储不支持读写），两者对管理员都是"这次决策没生效"。
+ */
+export class ModerationSettlementError extends Error {
+  readonly code: 'IMAGE_BLOCKED' | 'SETTLEMENT_FAILED'
+
+  constructor(code: 'IMAGE_BLOCKED' | 'SETTLEMENT_FAILED', message: string) {
+    super(message)
+    this.name = 'ModerationSettlementError'
+    this.code = code
+  }
+}
+
+/**
  * 图片结算钩子（#286 复审 blocker 1）：人工结论落库后、**同一事务内**结算该 Listing 的审核中图片。
  * 从 uploads 域注入，`moderation` 域因此不需要知道对象存储与前缀规则（实现见
  * `modules/uploads/listing-media-settlement.ts`）。

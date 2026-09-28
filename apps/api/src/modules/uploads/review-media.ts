@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac } from 'node:crypto'
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  timingSafeEqual,
+} from 'node:crypto'
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 
 /**
@@ -69,6 +75,13 @@ export function reviewMediaToken(key: string, secret: string, expiresAtSeconds: 
   return Buffer.concat([nonce, encrypted, cipher.getAuthTag()]).toString('base64url')
 }
 
+/** 令牌比较用常量时间：长度由格式决定、不是秘密，等长时再逐字节比。 */
+function tokensEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'utf8')
+  const right = Buffer.from(b, 'utf8')
+  return left.length === right.length && timingSafeEqual(left, right)
+}
+
 /** 校验并解出对象键；过期、伪造、键形状不符一律返回 `null`（调用方 404）。 */
 export function reviewMediaKey(token: string, secret: string, nowSeconds: number): string | null {
   if (!TOKEN.test(token)) return null
@@ -93,7 +106,7 @@ export function reviewMediaKey(token: string, secret: string, nowSeconds: number
     // 重算令牌：拒掉非规范 nonce / 被改过的密文，且顺带保证键形状合法。
     if (
       !isListingReviewMediaKey(key) ||
-      reviewMediaToken(key, secret, expiresAtSeconds) !== token
+      !tokensEqual(reviewMediaToken(key, secret, expiresAtSeconds), token)
     ) {
       return null
     }

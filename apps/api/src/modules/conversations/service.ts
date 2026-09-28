@@ -8,6 +8,7 @@ import {
 } from '@fish/contracts/chat/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { publicAvatarUrl } from '../uploads/avatar-url'
+import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
 import { decodeCursor, encodeCursor } from './cursor'
 import type { ConversationDetailRow, ConversationStore } from './store'
@@ -58,7 +59,13 @@ function toConversationDto(
       title: row.listing.title,
       priceCents: row.listing.priceCents,
       status: row.listing.status,
-      coverUrl: row.coverObjectKey ? storage.publicUrl(row.coverObjectKey) : null,
+      // 审核中的图（私有 `listing-review-media/` 键）不在这里出图：#286 复审指出，任何登录用户只要对
+      // 一条 REVIEW 商品建一次会话，就能从封面拿到 `GET /media/:token` 这种无会话的直读 URL。卖家在
+      // 自己的商品详情里仍能看到审核中的图（那条路径按归属校验），会话封面统一不给。
+      coverUrl:
+        row.coverObjectKey && !isListingReviewMediaKey(row.coverObjectKey)
+          ? storage.publicUrl(row.coverObjectKey)
+          : null,
     },
     counterpart: {
       ...row.counterpart,

@@ -2,11 +2,16 @@ import { expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jobs } from '@fish/db/schema/jobs'
-import { listings } from '@fish/db/schema/listings'
+import { listingMediaObjects } from '@fish/db/schema/listing-media'
+import { listingImages, listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { eq, sql } from 'drizzle-orm'
+import { createListingMediaSettlement } from '../uploads/listing-media-settlement'
+import { listingReviewMediaPrefix } from '../uploads/review-media'
+import type { MediaStorage } from '../uploads/storage'
 import { createSqlModerationStore, type ModerationDbTransaction } from './store'
 
 // 与 packages/db 的集成测试同一约定：没有 DATABASE_URL 就明确失败，而不是静默跳过。
@@ -216,4 +221,160 @@ test('未注入结算钩子时决策行为不变（无图片链路的调用方�
       moderationStatus: 'APPROVED',
     })
   })
+})
+
+const IMAGE_BYTES = new Uint8Array([1, 2, 3, 4])
+
+type SharedImageFixture = {
+  sellerId: string
+  blockedListingId: string
+  blockedRecordId: string
+  pendingListingId: string
+  pendingRecordId: string
+  reviewKey: string
+  storage: MediaStorage
+  writes: string[]
+}
+
+/**
+ * 同一张审核图（私有键）被两个商品引用。客户端正常流程不会产生这种数据（每个表单都新传对象），
+ * 但直接调 API 复用 confirm 返回的键就会 —— 人工结论因此可能对同一个键给出互相矛盾的判定。
+ */
+async function withSharedReviewImage(run: (fixture: SharedImageFixture) => Promise<void>) {
+  const sellerId = await createUser()
+  const blockedListingId = newId()
+  const pendingListingId = newId()
+  const recordIds = [newId(), newId()]
+  for (const [index, listingId] of [blockedListingId, pendingListingId].entries()) {
+    await db.insert(listings).values({
+      id: listingId,
+      listingNo: await reserveTestListingNo(db, listingId),
+      sellerId,
+      title: `共享审核图的商品 ${index}`,
+      description: '集成测试',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: 'OFFLINE',
+      moderationStatus: 'REVIEW',
+    })
+    await db.insert(listingModerationRecords).values({
+      id: recordIds[index] as string,
+      listingId,
+      sellerId,
+      action: 'CREATE',
+      titleSnapshot: `共享审核图的商品 ${index}`,
+      descriptionSnapshot: '集成测试',
+      decision: 'REVIEW',
+      matchedRules: [],
+      matchedTermsMasked: [],
+      ruleVersion: 'test-rule-v1',
+      priorListingStatus: null,
+    })
+  }
+
+  const reviewKey = `${listingReviewMediaPrefix(sellerId)}${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
+  await db.insert(listingMediaObjects).values({
+    userId: sellerId,
+    stagingKey: `listing-media/${sellerId}/${newId()}.jpg`,
+    finalKey: reviewKey,
+    contentDigest: 'd'.repeat(64),
+    providerMd5: null,
+    moderationDecision: 'REVIEW',
+    provider: 'LOCAL',
+    providerRequestId: null,
+  })
+  await db.insert(listingImages).values([
+    { listingId: blockedListingId, objectKey: reviewKey, sortOrder: 0 },
+    { listingId: pendingListingId, objectKey: reviewKey, sortOrder: 0 },
+  ])
+
+  const objects = new Map<string, Uint8Array>([[reviewKey, IMAGE_BYTES]])
+  const writes: string[] = []
+  const storage: MediaStorage = {
+    presignPut: () => ({ url: '', headers: {}, expiresAt: '' }),
+    stat: async () => null,
+    publicUrl: (key) => `https://cdn.test/${key}`,
+    readMediaBytes: async (key) => objects.get(key) ?? null,
+    writeMediaBytes: async (key, bytes) => {
+      writes.push(key)
+      objects.set(key, bytes)
+    },
+  }
+
+  try {
+    await run({
+      sellerId,
+      blockedListingId,
+      blockedRecordId: recordIds[0] as string,
+      pendingListingId,
+      pendingRecordId: recordIds[1] as string,
+      reviewKey,
+      storage,
+      writes,
+    })
+  } finally {
+    await db
+      .delete(jobs)
+      .where(
+        sql`${jobs.payload}->>'listingId' = ${blockedListingId} or ${jobs.payload}->>'listingId' = ${pendingListingId}`,
+      )
+    await db.delete(listingModerationRecords).where(eq(listingModerationRecords.sellerId, sellerId))
+    await db.delete(listings).where(eq(listings.sellerId, sellerId))
+    await db.delete(users).where(eq(users.id, sellerId))
+  }
+}
+
+test('同一个键已被人工 BLOCK 后，另一个引用它的商品放行失败并整事务回滚', async () => {
+  await withSharedReviewImage(
+    async ({
+      blockedListingId,
+      blockedRecordId,
+      pendingListingId,
+      pendingRecordId,
+      reviewKey,
+      storage,
+      writes,
+    }) => {
+      const store = createSqlModerationStore(db, {
+        settleListingMedia: createListingMediaSettlement({ storage }),
+      })
+
+      const blocked = await db.transaction((tx) =>
+        store.decideWithin(tx, {
+          recordId: blockedRecordId,
+          decision: 'BLOCK',
+          reason: '人工下架',
+        }),
+      )
+      expect(blocked.kind).toBe('applied')
+      expect(await listingState(blockedListingId)).toEqual({
+        status: 'OFFLINE',
+        moderationStatus: 'BLOCKED',
+      })
+
+      // 阻断过的字节绝不能借第二个商品的 ALLOW 变成匿名可读的公开对象：决策整体回滚。
+      await expect(
+        db.transaction((tx) =>
+          store.decideWithin(tx, {
+            recordId: pendingRecordId,
+            decision: 'ALLOW',
+            reason: '人工放行',
+          }),
+        ),
+      ).rejects.toThrow('审核图片已被人工阻断')
+
+      expect(writes).toEqual([])
+      expect(await listingState(pendingListingId)).toEqual({
+        status: 'OFFLINE',
+        moderationStatus: 'REVIEW',
+      })
+      expect(await moderationActions(pendingListingId)).toEqual(['CREATE:REVIEW'])
+      const [row] = await db
+        .select()
+        .from(listingMediaObjects)
+        .where(eq(listingMediaObjects.finalKey, reviewKey))
+      expect(row?.settledDecision).toBe('BLOCK')
+    },
+  )
 })
