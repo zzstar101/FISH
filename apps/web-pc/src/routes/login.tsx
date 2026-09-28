@@ -2,7 +2,13 @@ import { LoginRequestSchema } from '@fish/contracts/auth/session'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { describeAuthFailure, toAuthFieldErrors } from '../features/auth/error-messages'
-import { AuthPageShell, CheckboxField, FormAlert, SubmitButton, TextField } from '../features/auth/form'
+import {
+  AuthPageShell,
+  CheckboxField,
+  FormAlert,
+  SubmitButton,
+  TextField,
+} from '../features/auth/form'
 import { useLogin } from '../features/auth/queries'
 import {
   clearRememberedCredentials,
@@ -54,20 +60,23 @@ function LoginPage() {
     if (!stored.autoLogin || autoLoginAttempted.current) return
     autoLoginAttempted.current = true
     if (consumeExplicitLogout()) return
-    login.mutate({ password: stored.password, studentNo: stored.studentNo }, {
-      onSuccess: () => window.location.assign(sanitizeRedirect(redirect)),
-      onError: (error) => {
-        // 凭据已被服务端拒绝（改密等）就关掉自动登录，避免每次进页都报错；
-        // 网络抖动等非凭据失败保留开关，凭据本身仍保留。
-        if (error instanceof ApiError && error.status === 401) {
-          saveRememberedCredentials({ ...stored, autoLogin: false })
-          setAutoLogin(false)
-        }
-        const failure = describeAuthFailure(error)
-        setFieldErrors(failure.fieldErrors ?? {})
-        setFormError(failure.formError ?? null)
+    login.mutate(
+      { password: stored.password, studentNo: stored.studentNo },
+      {
+        onSuccess: () => window.location.assign(sanitizeRedirect(redirect)),
+        onError: (error) => {
+          // 凭据已被服务端拒绝（改密等）就关掉自动登录，避免每次进页都报错；
+          // 网络抖动等非凭据失败保留开关，凭据本身仍保留。
+          if (error instanceof ApiError && error.status === 401) {
+            saveRememberedCredentials({ ...stored, autoLogin: false })
+            setAutoLogin(false)
+          }
+          const failure = describeAuthFailure(error)
+          setFieldErrors(failure.fieldErrors ?? {})
+          setFormError(failure.formError ?? null)
+        },
       },
-    })
+    )
   }, [])
 
   function handleRememberChange(next: boolean) {

@@ -54,9 +54,7 @@ export function clearRememberedCredentials(
   storage?.removeItem(STORAGE_KEY)
 }
 
-export function markExplicitLogout(
-  storage: Storage | undefined = globalThis.sessionStorage,
-): void {
+export function markExplicitLogout(storage: Storage | undefined = globalThis.sessionStorage): void {
   storage?.setItem(LOGOUT_FLAG_KEY, '1')
 }
 
