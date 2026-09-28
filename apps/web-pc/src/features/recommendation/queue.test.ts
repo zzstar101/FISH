@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import type { RecommendationEventInput } from '@fish/contracts/recommendation/schema'
-import { enqueueRecommendationEvent, flushRecommendationQueue } from './queue'
+import {
+  dropUnattributableQueue,
+  enqueueRecommendationEvent,
+  flushRecommendationQueue,
+  syncRecommendationViewer,
+} from './queue'
 
 const QUEUE_STORAGE_KEY = 'fish.recommendation.queue'
+const VIEWER_STORAGE_KEY = 'fish.recommendation.viewer'
 const LISTING_ID = 'lst_01jc000000e00800000000001a'
 
 /** 模拟配额写满：置为 true 后 `setItem` 抛错，`getItem` 仍能读到已写入的内容。 */
@@ -77,7 +83,16 @@ beforeEach(() => {
       return respond()
     },
   })
+  // 身份标记写下来（匿名）＝ 身份已解析：冲刷的身份门打开，且内存里的当前身份回到确定值，
+  // 用例之间不会互相污染。需要「身份未知」状态的用例自己调 `dropViewerMarker()`。
+  syncRecommendationViewer(null)
+  calls = []
 })
+
+/** 回到「身份未知」：首次使用 / 旧版本客户端 / 身份还没解析出来。 */
+function dropViewerMarker(): void {
+  localStorageStub.removeItem(VIEWER_STORAGE_KEY)
+}
 
 function event(): RecommendationEventInput {
   return {
@@ -258,5 +273,147 @@ describe('enqueueRecommendationEvent', () => {
     expect(queued.some((item) => item.eventId === oldest)).toBe(false)
 
     await flushRecommendationQueue()
+  })
+})
+
+/**
+ * #323 R1 复审 blocker：离线队列必须按「事件发生时的登录身份」归属。
+ * 队列里没有 `requestId` 的事件补发时由服务端按补发那一刻的 Cookie 落 `user_id`，
+ * 所以客户端必须在身份变化时丢掉旧身份的待发事件。
+ */
+describe('syncRecommendationViewer', () => {
+  test('切号后不再补发旧身份的待发事件', async () => {
+    syncRecommendationViewer('A')
+    // 断网期间入队：冲刷失败，A 的两条事件留在本地。
+    respond = async () => rejected(503)
+    enqueueRecommendationEvent(event())
+    enqueueRecommendationEvent(event())
+    await flushRecommendationQueue()
+    expect(queuedEvents()).toHaveLength(2)
+    const callsBeforeSwitch = calls.length
+
+    // A 退出、B 登录（真实入口是 `resetPcSession` / `loadMe`）。
+    respond = async () => accepted()
+    syncRecommendationViewer('B')
+    await flushRecommendationQueue()
+
+    expect(queuedEvents()).toEqual([])
+    // 旧身份的队列被丢弃，本轮一条都没发出去。
+    expect(calls).toHaveLength(callsBeforeSwitch)
+
+    const fresh = event()
+    enqueueRecommendationEvent(fresh)
+    await flushRecommendationQueue()
+
+    expect(calls.slice(callsBeforeSwitch).flatMap((call) => sentEventIds(call))).toEqual([
+      fresh.eventId,
+    ])
+  })
+
+  test('身份没变时重复同步不轮换队列', async () => {
+    syncRecommendationViewer('A')
+    const queued = [event(), event()]
+    seedQueue(queued)
+
+    syncRecommendationViewer('A')
+    syncRecommendationViewer('A')
+
+    // 队列内容一个字都没变（每次刷新页面都会走到这里，轮换就等于丢掉待发事件）。
+    expect(queuedEvents().map((item) => item.eventId)).toEqual(queued.map((item) => item.eventId))
+
+    await flushRecommendationQueue()
+    expect(sentEventIds(calls[0])).toEqual(queued.map((item) => item.eventId))
+  })
+
+  test('另一个标签页轮换身份后本页不再补发', async () => {
+    syncRecommendationViewer('A')
+    seedQueue([event(), event()])
+    // 模拟另一个标签页换号：它写下了自己的身份标记（并按协议清空了共享队列）。
+    // 这里故意留下队列，证明本页即使还握着 A 的批次也不会把它投递出去。
+    localStorageStub.setItem(VIEWER_STORAGE_KEY, JSON.stringify({ userId: 'B' }))
+
+    await flushRecommendationQueue()
+
+    expect(calls).toEqual([])
+  })
+
+  test('取到批次之后身份被换掉时不再投递这一批', async () => {
+    syncRecommendationViewer('A')
+    seedQueue(Array.from({ length: 51 }, () => event()))
+    // 第一批的请求在飞时另一个标签页换号：第二批必须在 POST 之前复核到标记已变。
+    respond = async () => {
+      localStorageStub.setItem(VIEWER_STORAGE_KEY, JSON.stringify({ userId: 'B' }))
+      return accepted()
+    }
+
+    await flushRecommendationQueue()
+
+    expect(calls).toHaveLength(1)
+    expect(queuedEvents()).toHaveLength(1)
+  })
+
+  test('身份未知时入队的事件在解析出登录态后不迁移', async () => {
+    // 冷启动：身份还没解析出来（没有标记）就入了队，随后解析出登录态 A。
+    // 这批事件可能来自匿名会话，挂到 A 上就是一次「匿名 → 登录」迁移 —— 按锁定口径丢弃。
+    seedQueue([event(), event()])
+    dropViewerMarker()
+
+    syncRecommendationViewer('A')
+
+    expect(queuedEvents()).toEqual([])
+    await flushRecommendationQueue()
+    expect(calls).toEqual([])
+  })
+
+  test('身份未就绪时不投递，事件留在队列等身份解析', async () => {
+    const queued = [event(), event()]
+    seedQueue(queued)
+    dropViewerMarker()
+
+    // 没有标记 = 还不知道这批事件属于谁：此刻发送只能按当时的 Cookie 落 `user_id`。
+    await flushRecommendationQueue()
+
+    expect(calls).toEqual([])
+    expect(queuedEvents().map((item) => item.eventId)).toEqual(queued.map((item) => item.eventId))
+
+    // 身份解析出来（这里仍是匿名）后照常补发：冷启动的曝光数据不会丢。
+    respond = async () => accepted()
+    syncRecommendationViewer(null)
+    await flushRecommendationQueue()
+
+    expect(sentEventIds(calls.at(-1))).toEqual(queued.map((item) => item.eventId))
+    expect(queuedEvents()).toEqual([])
+  })
+
+  test('模块加载时丢弃身份不明的遗留队列', () => {
+    // 旧版本客户端只写过队列、没写过标记：这批事件无法归属，补发时会被记到当前 Cookie 名下。
+    seedQueue([event(), event()])
+    dropViewerMarker()
+
+    dropUnattributableQueue()
+
+    expect(queuedEvents()).toEqual([])
+  })
+
+  test('身份标记已经写下时不丢弃队列', () => {
+    seedQueue([event(), event()])
+
+    dropUnattributableQueue()
+
+    expect(queuedEvents()).toHaveLength(2)
+  })
+
+  test('退出登录后不补发已登录身份的待发事件', async () => {
+    syncRecommendationViewer('A')
+    seedQueue([event(), event()])
+
+    syncRecommendationViewer(null)
+
+    expect(queuedEvents()).toEqual([])
+    expect(JSON.parse(localStorageStub.getItem(VIEWER_STORAGE_KEY) ?? 'null')).toEqual({
+      userId: null,
+    })
+    await flushRecommendationQueue()
+    expect(calls).toEqual([])
   })
 })

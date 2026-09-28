@@ -59,9 +59,8 @@ mock.module('../src/features/recommendation/api', () => ({
   },
 }))
 
-const { flushRecommendationQueue, enqueueRecommendationEvent } = await import(
-  '../src/features/recommendation/queue'
-)
+const { flushRecommendationQueue, enqueueRecommendationEvent, syncRecommendationViewer } =
+  await import('../src/features/recommendation/queue')
 
 function event(): RecommendationEventInput {
   return {
@@ -103,6 +102,9 @@ beforeEach(() => {
   calls = []
   failPost = false
   throwOnWrite = false
+  // 模块级身份跨用例存活，必须显式重置：`null` = 已建立「未登录」身份。
+  // 身份标记是冲刷的前置条件（身份未知时事件留在队列里不投递），这里先把闸门打开。
+  syncRecommendationViewer(null)
 })
 
 describe('flushRecommendationQueue', () => {

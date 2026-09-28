@@ -15,6 +15,7 @@
  */
 import type { Me } from '@fish/contracts/auth/user'
 import { useSyncExternalStore } from 'react'
+import { syncRecommendationViewer } from '@/features/recommendation/queue'
 import { ApiError, isUnauthenticatedError } from '@/lib/request'
 import { clearSession, onSessionCleared, readSession } from '@/lib/session'
 import { fetchMe, logout, wechatSignIn } from './api'
@@ -40,6 +41,13 @@ const listeners = new Set<() => void>()
 
 function emit(next: AuthSnapshot): void {
   snapshot = next
+  /*
+    身份变了就把队列里未发送的旧身份事件丢掉（#323 R1 复审 blocker）。
+    这里是登录（`signInWithWechat`）、退出（`clearLocalSession`）、401（`onSessionCleared`
+    监听）唯一的广播出口，覆盖全部身份变化；同一身份重复 emit 不会轮换队列
+    （见 `features/recommendation/queue.ts` 的 `syncRecommendationViewer`）。
+  */
+  syncRecommendationViewer(next.user?.id ?? null)
   for (const listener of listeners) listener()
 }
 
