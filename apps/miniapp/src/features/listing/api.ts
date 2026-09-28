@@ -99,7 +99,7 @@ export async function fetchListingDetail(id: string): Promise<ListingDetail | nu
  * 契约对编号查询有**限流**（超限 429 且带 `retryAfterSeconds`），把 429 当成「没这件商品」
  * 会让用户以为编号写错了，而实际上只是让他等一下；503（服务端暂时不可用）同理。
  *
- * 与 Web 端 `apps/web/src/features/listing/api.ts` 的 `findListingByNumber` 同一口径。
+ * 判据只有契约一处：`LISTING_ROUTES.byNumber` 的 404 / 429 / 503 语义。
  * 命中返回的是契约公开 ID（`lst_`），直接可进详情页。
  */
 export async function findListingByNumber(listingNo: string): Promise<string | null> {

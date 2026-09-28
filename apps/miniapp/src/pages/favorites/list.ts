@@ -6,7 +6,7 @@
  *
  * **收藏在契约 / API / DB 三层都不存在**：`packages/contracts` 没有 favorites 路由或
  * schema、`apps/api` 没有 favorites 模块、`packages/db/src/schema/` 没有收藏表；
- * 全仓 `grep -i favorit` 只命中 `apps/web` 的 mock 与 miniapp 的文案。所以本页
+ * 全仓 `grep -i favorit` 只命中 miniapp 自己的 mock 与文案。所以本页
  * **没有可读的端点**，也就没有「真实列表」这种状态：
  *
  * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）：页面只渲染空态 + 一句如实的

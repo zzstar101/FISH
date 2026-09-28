@@ -47,6 +47,6 @@ DB 变更说明
 
 - [ ] CI 已全绿；红 check 与每一条审查意见都已处理（带红 check / 未读意见的 PR 视为未完成，见 AGENTS.md 第 11 节）
 - [ ] **未提交任何真实密钥**、Token 或生产连接串
-- [ ] 未手改生成文件（`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`）
+- [ ] 未手改生成文件（`apps/web-pc/src/routeTree.gen.ts`、`packages/db/src/migrations/**`）
 - [ ] 未引入 Issue 范围外的新依赖或无关重构
 - [ ] 若本次改动过依赖：`bun.lock` 未被镜像源污染（`grep -oE 'https?://[^"]+' bun.lock | grep -vE '^https://registry\.npmjs\.org/' && echo '被污染了' || echo '干净'` 应输出「干净」；加依赖时已带 `--registry https://registry.npmjs.org`，见 CONTRIBUTING.md 第 3.1 节）

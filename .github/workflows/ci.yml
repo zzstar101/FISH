@@ -18,7 +18,9 @@ on:
 env:
   DATABASE_URL: postgres://fish:fish@localhost:5432/fish
   API_PORT: "3000"
-  WEB_ORIGIN: http://localhost:5173
+  # #325：`apps/web`（移动端 PWA，:5173）移除后，本地唯一会发跨域请求 / 拼直链的浏览器源
+  # 就是 PC Web dev server（:5174），与 .env.example 保持同一口径。
+  WEB_ORIGIN: http://localhost:5174
   S3_ENDPOINT: http://localhost:9000
   S3_REGION: us-east-1
   S3_ACCESS_KEY_ID: fish
@@ -51,7 +53,6 @@ jobs:
       smoke: ${{ steps.range.outputs.smoke }}
       api: ${{ steps.range.outputs.api }}
       worker: ${{ steps.range.outputs.worker }}
-      web: ${{ steps.range.outputs.web }}
       miniapp: ${{ steps.range.outputs.miniapp }}
       db: ${{ steps.range.outputs.db }}
       contracts: ${{ steps.range.outputs.contracts }}
@@ -266,7 +267,7 @@ jobs:
           echo "测试范围：${targets[*]}"
           bun test --isolate "${targets[@]}"
 
-  # 不需要任何服务的单测：web（PWA）、web-pc、miniapp、共享包，以及 `scripts/` 自身。
+  # 不需要任何服务的单测：web-pc、miniapp、共享包，以及 `scripts/` 自身。
   unit-tests:
     name: unit-tests
     needs: changes
@@ -286,7 +287,6 @@ jobs:
         run: |
           set -euo pipefail
           targets=()
-          if [ "${{ needs.changes.outputs.web }}" = "true" ]; then targets+=(apps/web); fi
           if [ "${{ needs.changes.outputs.web_pc }}" = "true" ]; then targets+=(apps/web-pc); fi
           if [ "${{ needs.changes.outputs.miniapp }}" = "true" ]; then targets+=(apps/miniapp); fi
           if [ "${{ needs.changes.outputs.contracts }}" = "true" ]; then targets+=(packages/contracts); fi
@@ -322,25 +322,7 @@ jobs:
       - name: PC preview smoke
         run: bun apps/web-pc/scripts/preview-smoke.ts
 
-  # Web（移动端 PWA）与小程序同样有独立的生产产物，typecheck 不能替代 Vite / Taro build。
-  web:
-    name: web
-    needs: changes
-    if: needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.0"
-
-      - name: Install
-        run: bun install --frozen-lockfile
-
-      - name: Build Web
-        run: bun run --filter '@fish/web' build
-
+  # 小程序同样有独立的生产产物，typecheck 不能替代 Taro build。
   # `taro build` 走 production，且顶层 env 未注入 mock 开关，
   # 故产物里 `__ALLOW_MOCK_FALLBACK__ === false`（生产口径）。
   miniapp:
@@ -465,7 +447,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [changes, static, db-tests, unit-tests, web-pc, web, miniapp, core-smoke]
+    needs: [changes, static, db-tests, unit-tests, web-pc, miniapp, core-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: 汇总各作业结论

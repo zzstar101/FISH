@@ -2,7 +2,7 @@
  * Admin Domain 路由常量（Issue #73）。
  *
  * 这些是 **API 侧路径**（根级 `/admin`）。Web 侧写相对路径 `/api` + 常量，由 Vite 代理去掉
- * 前缀（`apps/web/vite.config.ts`、`docs/architecture.md` §5.1）；生产同源部署行为一致。
+ * 前缀（`apps/web-pc/vite.config.ts:46-51`、`docs/architecture.md` §5.1）；生产同源部署行为一致。
  * 前端 typed client 与 API router 共用本文件，禁止在别处硬编码这些路径。
  *
  * 挂载：`apps/api/src/app.ts` 只把本 router 挂到 `/admin`（`app.route`），认证与授权两道守卫都在

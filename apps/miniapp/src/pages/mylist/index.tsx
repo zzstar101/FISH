@@ -71,8 +71,7 @@ import './index.scss'
  *   （`POST /transactions/proposals`），商品仍是 `ACTIVE`；只有**卖家接受**
  *   （`POST /transactions`，唯一创建交易行的端点）才会把商品置 `RESERVED`。
  *   所以「有买家在等」这件事必须从**卖家侧会话 + 会话内最后一个交易事件**推导，
- *   即 `./pending.ts` 的 `loadPendingIndex`。判据与 Web 端会话页同源
- *   （`apps/web/src/features/chat/chat-page.tsx` 的 `lastTxEvent`）。
+ *   即 `./pending.ts` 的 `loadPendingIndex`。
  * - 因此本段装的是**两种**东西：`ACTIVE` + 未回应的提案（等卖家点头），以及 `RESERVED`
  *   （已同意、待面交）。后者是 `status` 本身就有的，卡片没有提案行。
  * - 「拒绝」= `POST /transactions/proposals/reject`（写 `tx.rejected`，商品留在在售）；

@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="apps/web/public/brand-fish.png" alt="鱼小应 YUXIAOYING" width="112" />
+  <img src="apps/api/public/brand/brand-fish.png" alt="鱼小应 YUXIAOYING" width="112" />
   <br />
   FISH · 鱼小应
 </h1>
@@ -24,7 +24,7 @@
 
 ## 项目简介
 
-FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台，移动端入口是**微信小程序**（`apps/miniapp`，交互以手机视口为基线，设计参考 390×844）；PC 端是独立的 PC 浏览器 Web 入口 `apps/web-pc`。（原移动端 Web PWA `apps/web` 已弃用，见 [#325](https://github.com/zzstar101/FISH/issues/325)。）
+FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台，移动端入口是**微信小程序**（`apps/miniapp`，交互以手机视口为基线，设计参考 390×844）；PC 端是独立的 PC 浏览器 Web 入口 `apps/web-pc`。
 
 固定信息架构：
 
@@ -52,7 +52,7 @@ FISH（产品名 **鱼小应**）是面向广应科校内的二手交易平台�
 | 层 | 选型 |
 | --- | --- |
 | Runtime / 包管理 | **Bun**（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
-| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React 19 + Vite + TypeScript，`apps/web-pc`）；`apps/web` 移动端 PWA 已弃用（[#325](https://github.com/zzstar101/FISH/issues/325)） |
+| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React 19 + Vite + TypeScript，`apps/web-pc`） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4 + 自有 `@fish/ui` 组件 |
 | 后端 | **Hono on Bun**（`Bun.serve`） |
@@ -120,11 +120,10 @@ bun run db:seed
 ```bash
 bun run dev:api      # API    → http://localhost:3000
 bun run dev:worker   # Worker（常驻，不监听端口）
-bun run dev:web      # 已弃用（apps/web → http://localhost:5173，见 #325）
 bun run dev:web-pc   # PC Web   → http://localhost:5174/pc/
 ```
 
-PC Web 打开 <http://localhost:5174/pc/>；移动端是微信小程序（用微信开发者工具打开 `apps/miniapp` 的构建产物，见 [apps/miniapp/README.md](apps/miniapp/README.md)）。已弃用的移动 Web 仍在 <http://localhost:5173>（见 [#325](https://github.com/zzstar101/FISH/issues/325)）。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
+PC Web 打开 <http://localhost:5174/pc/>；移动端是微信小程序（用微信开发者工具打开 `apps/miniapp` 的构建产物，见 [apps/miniapp/README.md](apps/miniapp/README.md)）。`.env.example` 显式设置 `MAIL_TRANSPORT=outbox`，
 本地校园认证邮件（含验证码）写入 `apps/api/.dev/mail-outbox.jsonl`，不会发送真实邮件。
 已有 `.env` 也需补上该变量；生产必须使用 `MAIL_TRANSPORT=resend` 并配置 Resend，
 见 [部署手册 §4](docs/deployment.md#4-代码与环境变量)。
@@ -160,8 +159,8 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 | 命令 | 说明 |
 | --- | --- |
-| `bun run dev` | 并行启动各应用（含已弃用的 `dev:web`，见 [#325](https://github.com/zzstar101/FISH/issues/325)） |
-| `bun run dev:web-pc` · `dev:api` · `dev:worker` | 分别启动对应应用（`dev:web` 已弃用） |
+| `bun run dev` | 并行启动各应用（API / Worker / PC Web） |
+| `bun run dev:web-pc` · `dev:api` · `dev:worker` | 分别启动对应应用 |
 | `bun run typecheck` | 全仓 TypeScript 类型检查 |
 | `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
 | `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |
@@ -176,7 +175,6 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 
 | 服务 | 端口 |
 | --- | --- |
-| web（移动端） | 5173 |
 | web-pc | 5174（页面 basepath `/pc/`） |
 | api | 3000 |
 | worker | 不监听端口 |
@@ -188,7 +186,6 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 ```text
 FISH/
 ├─ apps/
-│  ├─ web/        React SPA（移动端界面）；Vite dev server 兼作 /api 与 /ws 代理
 │  ├─ web-pc/     React SPA（PC 浏览器界面，挂载 /pc/）；当前为骨架
 │  ├─ api/        Hono 应用：HTTP + WebSocket（modules/ 下按 domain 分模块）
 │  └─ worker/     常驻进程：轮询 jobs 表执行异步匹配
@@ -207,7 +204,6 @@ FISH/
 
 - 后端 domain（auth / listings / wishes / matching / chat / transactions / profile / notifications）与 Worker 异步主链均已交付，前端主链已从 Mock 切到真实 API。
 - **站内通知前端列表仍读 fixture**，后端 `GET /notifications*` 已就绪，尚未接线。
-- **PWA 安装产物（manifest / Service Worker）尚未接线**，当前为移动优先的 Web 应用。
 - **PC Web 逐项接入中**：已接通登录、PC 外壳、首页真实商品流、搜索筛选、商品详情、消息中心、发布、通知、个人中心与订单、许愿墙与匹配；其余能力按各自 Issue 推进。
 - 商品搜索当前基于 `ILIKE`；架构文档里规划的 PostgreSQL FTS / `pg_trgm` 未落地。
 - 未做的动词：删除商品、删除图片；愿望编辑的 API（`PATCH /wishes/:id`）存在，但契约常量与前端入口未接。

@@ -29,8 +29,8 @@ export default defineConfig<'webpack5'>(async (merge) => {
     /**
      * 构建期注入 API 绝对地址。
      *
-     * 小程序没有 Vite 那样的同源代理，请求必须写绝对地址（`apps/web` 靠
-     * `vite.config.ts` 的 `/api` 代理，小程序没有这一层）。所以后端域名只能在构建期
+     * 小程序没有 Vite 那样的同源代理，请求必须写绝对地址（PC Web 靠
+     * `apps/web-pc/vite.config.ts` 的 `/api` 代理，小程序没有这一层）。所以后端域名只能在构建期
      * 由环境变量给进来：`TARO_APP_API_BASE=https://api.example.com bun run build:miniapp`。
      *
      * 未设置时注入空串，`src/lib/api-base.ts` 据此回落到本机 `http://localhost:3000`

@@ -28,7 +28,7 @@ import { cn } from '@fish/ui/lib/utils'
 ## 配色是怎么接上的
 
 shadcn 的组件源码里只写语义类名（`bg-background` / `text-muted-foreground` / `border-input` /
-`ring-ring` …），这些类名的值全部在 `apps/web/src/styles.css` 里被指到 FISH 的设计令牌上：
+`ring-ring` …），这些类名的值全部在 `apps/web-pc/src/styles.css` 里被指到 FISH 的设计令牌上：
 
 ```
 shadcn 语义令牌            来源（FISH design token）
@@ -86,7 +86,7 @@ shadcn 里 `--background` 的意思是「内容所落在的那层表面」，它
 | `tabs` | 轨道改成整宽（`flex w-full`）、分段间 `gap-0.5`；内边距 3px→2px（选中块正好 32px）；未选中 `text-ink-2`；选中态补 `ring-1 ring-primary/25` + `font-semibold` | 原自研 `Segmented` 就是块级整宽、`gap-0.5`，选中块白底由 `--background` 令牌保证（见上），页面里不需要再各写一份覆盖 |
 | `card` | 去掉描边与投影，`rounded-2xl`，内边距 24px→16px，并加上 `overflow-hidden` | 截图里是纯白平面卡；`overflow-hidden` 是原来卡片外层的写法，移进组件以免每个调用方都写一遍 |
 | `empty` | 去掉虚线边框，`px-8 py-14`，标题 18px→14px | 替代原自研 `EmptyState` |
-| `sonner` | 去掉 `next-themes`，固定 `theme="light"` | 本仓库是单浅色移动端 Web，没有 `.dark` |
+| `sonner` | 去掉 `next-themes`，固定 `theme="light"` | 本仓库是单浅色 Web 应用（PC Web），没有 `.dark` |
 | `field` / `button-group` | `div[role=group]` → `<fieldset>`，并加 `min-w-0` | 让分组语义来自原生元素，同时满足 Biome a11y 规则；`min-w-0` 抵消 `<fieldset>` 默认的 `min-inline-size: min-content` |
 | `breadcrumb` | 当前页去掉 `role="link"` / `aria-disabled`，只留 `aria-current="page"` | 同上 |
 | `pagination` | 去掉 `<nav>` 上冗余的 `role="navigation"` | 同上 |
@@ -110,7 +110,7 @@ curl -s https://ui.shadcn.com/r/styles/new-york-v4/<name>.json
 # 3. 补 exports 后跑验证
 bunx biome check --write packages/ui/src
 bun run typecheck
-bunx biome check packages/ui/src apps/web/src   # 不要直接跑 `bun run lint`：
+bunx biome check packages/ui/src apps/web-pc/src   # 不要直接跑 `bun run lint`：
 # Windows 检出时 core.autocrlf=true 会让所有被跟踪文件变 CRLF，
 # 全仓 biome check 会报一堆与本次改动无关的换行符格式错误。
 ```

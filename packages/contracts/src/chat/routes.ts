@@ -2,7 +2,7 @@
  * Chat Domain 路由常量（Issue #9）。
  *
  * HTTP 路径是 **API 侧路径**（根级）。Web 侧写相对路径 `/api` + 常量，由 Vite 代理去掉前缀；
- * WebSocket 例外：`/ws/*` 由 Vite 原样透传（`apps/web/vite.config.ts` 的 `/ws` 代理项不做
+ * WebSocket 例外：`/ws/*` 由 Vite 原样透传（`apps/web-pc/vite.config.ts:51` 的 `/ws` 代理项不做
  * rewrite），因此 `REALTIME_WS_PATH` 已是 Web 直连的完整路径。
  *
  * 前端 typed client 与 API router 共用本文件，禁止在别处硬编码这些路径。

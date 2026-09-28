@@ -2,8 +2,8 @@
  * 认证域 API（微信登录 / 当前用户 / 退出）。
  *
  * 主身份是「微信 code → 会话」（`packages/contracts/src/auth/wechat.ts`）；
- * 学号 + 密码那条契约（`packages/contracts/src/auth/session.ts`）**只留在 web 端**
- * （见 `apps/web/src/routes/login.tsx`），小程序侧已无入口。cookie 的存取由
+ * 学号 + 密码那条契约（`packages/contracts/src/auth/session.ts`）**只留在 PC Web 端**
+ * （见 `apps/web-pc/src/routes/login.tsx`），小程序侧已无入口。cookie 的存取由
  * `@/lib/session` 负责，`apiRequest` 已在响应里接住 `Set-Cookie`，调用方不用管。
  *
  * 这里只做「发请求 + 用契约 schema 收口」，不吞错误码：

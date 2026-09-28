@@ -8,7 +8,7 @@
 **微信小程序（移动端入口）+ PC Web**：面向广应科校内的二手交易平台，用户主要在手机上使用；移动端入口是微信小程序 `apps/miniapp`，`apps/web-pc` 提供独立的 PC 浏览器入口。
 
 - 交互基线是**移动端视口**（设计参考 390×844）；PC Web 使用独立外壳和桌面布局，当前处于骨架阶段。
-- **移动端 Web PWA（`apps/web`）已弃用、待移除**（[#325](https://github.com/zzstar101/FISH/issues/325)）：可安装 / 可离线的 Web 应用目标随弃用一并作废，PWA 产物不再建设。
+- **移动端 Web PWA（`apps/web`）已移除**（[#325](https://github.com/zzstar101/FISH/issues/325)）：可安装 / 可离线的 Web 应用目标一并作废，不再建设 PWA 产物。
 - 固定信息架构：`首页 / 许愿 / 卖闲置（视觉中心）/ 消息 / 我的`。
 
 ## 2. 技术基线
@@ -16,7 +16,7 @@
 | 层 | 选型 |
 | --- | --- |
 | Runtime / 包管理 | Bun（`packageManager: bun@1.4.0`，`engines.bun >= 1.4.0`） |
-| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React + Vite + TypeScript，`apps/web-pc`）；`apps/web` 移动端 PWA 已弃用（[#325](https://github.com/zzstar101/FISH/issues/325)） |
+| 前端 | 移动端微信小程序（Taro 4 + React，`apps/miniapp`）· PC Web（React + Vite + TypeScript，`apps/web-pc`） |
 | 路由 / 服务端状态 | TanStack Router（file-based）+ TanStack Query |
 | UI | Tailwind CSS v4（shadcn/ui 由前端 Owner 接入） |
 | 后端 | Hono on Bun（`Bun.serve`） |
@@ -35,7 +35,6 @@
 ```text
 FISH/
 ├─ apps/
-│  ├─ web/       React SPA（移动端 PWA 壳）；Vite dev server 兼作 /api 与 /ws 代理
 │  ├─ web-pc/    React SPA（PC 浏览器站，挂载 /pc/）；当前为骨架
 │  ├─ api/       Hono 应用；对外 HTTP + WebSocket
 │  └─ worker/    常驻进程；轮询 jobs 表执行异步任务
@@ -89,7 +88,7 @@ graph LR
 
 ### 5.1 HTTP 请求
 
-两套 Web 都写**相对路径** `/api/...`；各自的 Vite 在开发时代理到 API 并**去掉 `/api` 前缀**，因此 API 自身路由保持根级（`/health`）。生产同源部署时行为一致，无需 CORS 与跨域 Cookie。
+PC Web 写**相对路径** `/api/...`，Vite 在开发时代理到 API 并**去掉 `/api` 前缀**，因此 API 自身路由保持根级（`/health`）；小程序没有代理层，直接写绝对地址（`apps/miniapp/config/index.ts`）。生产同源部署时行为一致，无需 CORS 与跨域 Cookie。
 
 ```mermaid
 sequenceDiagram
@@ -159,7 +158,6 @@ sequenceDiagram
 
 | 服务 | 端口 |
 | --- | --- |
-| web（Vite dev，移动端） | 5173 |
 | web-pc（Vite dev，PC Web，basepath `/pc/`） | 5174 |
 | api（Hono / Bun.serve） | 3000 |
 | worker | 不监听端口 |

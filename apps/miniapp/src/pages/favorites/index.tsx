@@ -29,7 +29,7 @@ import './index.scss'
  *
  * 收藏在契约 / API / DB **三层都不存在**：`packages/contracts` 没有 favorites 的
  * 路由或 schema、`apps/api` 没有 favorites 模块、`packages/db/src/schema/` 没有收藏表
- * （全仓 `grep -i favorit` 只命中 `apps/web` 的 mock 与 miniapp 的文案；
+ * （全仓 `grep -i favorit` 只命中 miniapp 自己的 mock 与文案；
  * 商品详情页的「收藏」至今是本地 `useState`，见 `pages/listing-detail/index.tsx`）。
  * 所以本页**不发任何请求**，也因此只有两种诚实形态：
  *
