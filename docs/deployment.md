@@ -499,6 +499,7 @@ sudo systemctl enable fish-api fish-worker
 API 端口；下方代理配置会**覆盖**传入的 `X-Real-IP`。不配置受信代理时，API 忽略转发头；
 代理来源不可信或无 IP 时匿名编号查询返回 503，绝不共享代理 IP 配额。IP 只作为
 `MEETUP_TOKEN_SECRET` 经用途隔离的 HMAC 写入数据库，密钥轮换会重置匿名滚动额度。
+扫码建票也按同一受信来源限流；来源不明时退化到共享的 `unknown` 桶，因此反代部署必须配置该值。
 
 
 以 Caddy 为例（80/443 自动签发证书）。`sudo apt install -y caddy`，`/etc/caddy/Caddyfile`：
