@@ -1020,7 +1020,10 @@ export default function MyList() {
         <Text>发布</Text>
       </View>
 
-      <BackTop show={showTop} onTop={backToTop} bottom="170rpx" />
+      {/* 本页不是 Tab 页（底栏不含 mylist），右下是**本页自己的**悬浮发布钮：
+          回顶钮按 `.ml__fab` 的几何定位 —— 44（fab 距底）+ 104（fab 高）+ 40（20pt 缝）= 188rpx。
+          别照 Tab 页的 170rpx 抄，那个值推的是底栏顶边、与本页无关。 */}
+      <BackTop show={showTop} onTop={backToTop} bottom="188rpx" />
 
       {/* ---------------- 下架二次确认（居中卡，稿 ⑤ 的真状态机） ---------------- */}
       {confirming ? (
