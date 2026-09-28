@@ -1,5 +1,5 @@
 {
-  "id": "500945df-1475-442c-a5e1-5b91508d3bd4",
+  "id": "00268d56-b390-4765-b411-038026cef229",
   "prevId": "1234850c-a496-4fc3-999c-40fb32578969",
   "version": "7",
   "dialect": "postgresql",
@@ -1147,6 +1147,19 @@
           "primaryKey": false,
           "notNull": true
         },
+        "settled_decision": {
+          "name": "settled_decision",
+          "type": "moderation_decision",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "settled_at": {
+          "name": "settled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "provider": {
           "name": "provider",
           "type": "text",
@@ -1270,6 +1283,14 @@
         "listing_media_objects_provider_known": {
           "name": "listing_media_objects_provider_known",
           "value": "\"listing_media_objects\".\"provider\" IN ('LOCAL', 'TENCENT_IMS')"
+        },
+        "listing_media_objects_settled_pair": {
+          "name": "listing_media_objects_settled_pair",
+          "value": "(\"listing_media_objects\".\"settled_decision\" IS NULL AND \"listing_media_objects\".\"settled_at\" IS NULL)\n          OR (\"listing_media_objects\".\"settled_decision\" IS NOT NULL AND \"listing_media_objects\".\"settled_at\" IS NOT NULL)"
+        },
+        "listing_media_objects_settled_review_only": {
+          "name": "listing_media_objects_settled_review_only",
+          "value": "\"listing_media_objects\".\"settled_decision\" IS NULL OR \"listing_media_objects\".\"moderation_decision\" = 'REVIEW'"
         }
       },
       "isRLSEnabled": false

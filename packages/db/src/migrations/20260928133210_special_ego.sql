@@ -6,6 +6,8 @@ CREATE TABLE "listing_media_objects" (
 	"content_digest" text NOT NULL,
 	"provider_md5" text,
 	"moderation_decision" "moderation_decision" NOT NULL,
+	"settled_decision" "moderation_decision",
+	"settled_at" timestamp with time zone,
 	"provider" text NOT NULL,
 	"provider_request_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -13,7 +15,10 @@ CREATE TABLE "listing_media_objects" (
 	CONSTRAINT "listing_media_objects_content_digest_sha256" CHECK ("listing_media_objects"."content_digest" ~ '^[0-9a-f]{64}$'),
 	CONSTRAINT "listing_media_objects_provider_md5_shape" CHECK ("listing_media_objects"."provider_md5" IS NULL OR "listing_media_objects"."provider_md5" ~ '^[0-9a-f]{32}$'),
 	CONSTRAINT "listing_media_objects_final_key_required" CHECK (("listing_media_objects"."moderation_decision" = 'BLOCK') OR ("listing_media_objects"."final_key" IS NOT NULL)),
-	CONSTRAINT "listing_media_objects_provider_known" CHECK ("listing_media_objects"."provider" IN ('LOCAL', 'TENCENT_IMS'))
+	CONSTRAINT "listing_media_objects_provider_known" CHECK ("listing_media_objects"."provider" IN ('LOCAL', 'TENCENT_IMS')),
+	CONSTRAINT "listing_media_objects_settled_pair" CHECK (("listing_media_objects"."settled_decision" IS NULL AND "listing_media_objects"."settled_at" IS NULL)
+          OR ("listing_media_objects"."settled_decision" IS NOT NULL AND "listing_media_objects"."settled_at" IS NOT NULL)),
+	CONSTRAINT "listing_media_objects_settled_review_only" CHECK ("listing_media_objects"."settled_decision" IS NULL OR "listing_media_objects"."moderation_decision" = 'REVIEW')
 );
 --> statement-breakpoint
 ALTER TABLE "listing_media_objects" ADD CONSTRAINT "listing_media_objects_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
