@@ -128,23 +128,44 @@ test('存储不可访问（抛 SecurityError）时全部操作按无存储降级
   expect(() => markExplicitLogout(broken)).not.toThrow()
 })
 
-test('自动登录决策：无凭据 / 未勾自动登录 / 登出标志都不代提交', () => {
-  expect(decideAutoLogin(null, false)).toEqual({ action: 'none' })
-  expect(decideAutoLogin({ ...validCredentials, autoLogin: false }, false)).toEqual({
+test('自动登录决策：无凭据 / 未勾自动登录 / 登出标志 / 已决策过都不代提交', () => {
+  expect(decideAutoLogin(null, false, false)).toEqual({ action: 'none' })
+  expect(decideAutoLogin({ ...validCredentials, autoLogin: false }, false, false)).toEqual({
     action: 'none',
   })
-  expect(decideAutoLogin({ ...validCredentials, autoLogin: true }, true)).toEqual({
+  expect(decideAutoLogin({ ...validCredentials, autoLogin: true }, true, false)).toEqual({
+    action: 'none',
+  })
+  expect(decideAutoLogin({ ...validCredentials, autoLogin: true }, false, true)).toEqual({
     action: 'none',
   })
 })
 
 test('自动登录决策：有凭据且勾选自动登录时提交记住的账号密码', () => {
   const stored = { ...validCredentials, autoLogin: true }
-  expect(decideAutoLogin(stored, false)).toEqual({
+  expect(decideAutoLogin(stored, false, false)).toEqual({
     action: 'submit',
     password: stored.password,
     studentNo: stored.studentNo,
   })
+})
+
+test('StrictMode 双跑时序：第 1 跑消费登出标志决策为 none，第 2 跑不得因标志丢失翻转为 submit', () => {
+  const session = new MemoryStorage()
+  const local = new MemoryStorage()
+  const stored = { ...validCredentials, autoLogin: true }
+  saveRememberedCredentials(stored, local)
+  markExplicitLogout(session)
+
+  // 第 1 跑：置位 alreadyAttempted → 消费标志 → 决策
+  const firstAttempted = true
+  const firstMarked = consumeExplicitLogout(session)
+  expect(decideAutoLogin(stored, firstMarked, firstAttempted)).toEqual({ action: 'none' })
+
+  // 第 2 跑：标志已空，但 alreadyAttempted 仍短路
+  const secondMarked = consumeExplicitLogout(session)
+  expect(secondMarked).toBe(false)
+  expect(decideAutoLogin(stored, secondMarked, true)).toEqual({ action: 'none' })
 })
 
 test('凭据被 401 拒绝后只关自动登录，账号密码保留', () => {

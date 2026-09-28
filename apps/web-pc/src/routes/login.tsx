@@ -53,7 +53,10 @@ function LoginPage() {
   // 挂载时回填本机记住的凭据；勾了自动登录就代用户提交一次。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 挂载一次性读取本机凭据，login/redirect 取首挂值即可
   useEffect(() => {
-    // 无条件消费登出标志：即使本次没有自动登录凭据，也不让标志滞留到未来的登录。
+    // 每次挂载只做一次「决策 + 标志消费」；StrictMode 双跑在开头就被短路，
+    // 否则第 1 跑消费登出标志后，第 2 跑会因标志丢失而翻转成自动登录。
+    if (autoLoginAttempted.current) return
+    autoLoginAttempted.current = true
     const logoutMarked = consumeExplicitLogout()
     const stored = loadRememberedCredentials()
     if (stored === null) return
@@ -61,10 +64,8 @@ function LoginPage() {
     setPassword(stored.password)
     setRemember(true)
     setAutoLogin(stored.autoLogin)
-    if (autoLoginAttempted.current) return
-    const decision = decideAutoLogin(stored, logoutMarked)
+    const decision = decideAutoLogin(stored, logoutMarked, false)
     if (decision.action !== 'submit') return
-    autoLoginAttempted.current = true
     login.mutate(
       { password: decision.password, studentNo: decision.studentNo },
       {

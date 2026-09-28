@@ -96,7 +96,9 @@ export function consumeExplicitLogout(storage?: Storage): boolean {
   }
 }
 
-/** 挂载时的自动登录决策：回填归组件 state，这里只决定「要不要代用户提交一次」。 */
+/** 挂载时的自动登录决策：回填归组件 state，这里只决定「要不要代用户提交一次」。
+ * alreadyAttempted 必须由调用方在**决策之前**置位——StrictMode 双跑下，
+ * 第 1 跑消费了登出标志后决策为 none，第 2 跑若不短路，标志丢失会让决策翻转为 submit。 */
 export type AutoLoginDecision =
   | { action: 'none' }
   | { action: 'submit'; password: string; studentNo: string }
@@ -104,8 +106,11 @@ export type AutoLoginDecision =
 export function decideAutoLogin(
   stored: RememberedCredentials | null,
   logoutMarked: boolean,
+  alreadyAttempted: boolean,
 ): AutoLoginDecision {
-  if (stored === null || logoutMarked || !stored.autoLogin) return { action: 'none' }
+  if (alreadyAttempted || stored === null || logoutMarked || !stored.autoLogin) {
+    return { action: 'none' }
+  }
   return { action: 'submit', password: stored.password, studentNo: stored.studentNo }
 }
 
