@@ -1,12 +1,17 @@
 /**
  * 愿望 → 匹配的解耦层（Issue #7 设计方案 §5）。
  * matching 模块与 worker 归 Dev A；本模块只投递事件。
+ *
+ * #322 M1 起 `enqueue` 投**两条** job：`MATCH_WISH`（v1 重算）与 `EMBED_WISH`（语义向量刷新）。
+ * 两者成对投递的理由与商品侧一致：愿望的 keyword/description/category 同时是打分输入与向量输入，
+ * 分两处投递迟早会漏掉一边。
  */
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
 
 export interface WishMatchQueue {
+  /** 投递该愿望的匹配重算 + 向量刷新（各自幂等，重复调用不会产生重复待跑任务）。 */
   enqueue(wishId: string): Promise<void>
 }
 
@@ -37,6 +42,16 @@ export function createDbWishMatchQueue(db: Db): WishMatchQueue {
       await db.execute(sql`
         INSERT INTO jobs (id, type, payload)
         VALUES (${newId()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
+        ON CONFLICT DO NOTHING
+      `)
+
+      // #322 M1：同一入口投 EMBED_WISH，同样用 `::text::jsonb` 两段转型（理由见上面的 ⚠️）。
+      // 它的唯一键是 (payload->>'wishId') WHERE type='EMBED_WISH' AND status='PENDING'——
+      // 与 MATCH_WISH 那条"终身一条"刻意不同：已有待跑任务时 DO NOTHING 即可，而任务跑完
+      // （DONE/FAILED）后再次编辑会真正插进一条新的，向量因此不会永久停在旧内容上。
+      await db.execute(sql`
+        INSERT INTO jobs (id, type, payload)
+        VALUES (${newId()}, 'EMBED_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
         ON CONFLICT DO NOTHING
       `)
     },

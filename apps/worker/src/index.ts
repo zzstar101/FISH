@@ -1,7 +1,10 @@
 import { createDb } from '@fish/db/client'
-import { loadServerEnv } from '@fish/shared/env'
+import { loadEmbeddingEnv, loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
-import { createMatchJobHandlers, InvalidJobPayloadError } from './jobs/matching/handlers'
+import { createEmbedJobHandlers } from './jobs/embedding/handlers'
+import { createEmbeddingProvider } from './jobs/embedding/providers'
+import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
+import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
 
 const POLL_INTERVAL_MS = 1000
@@ -9,16 +12,25 @@ const POLL_INTERVAL_MS = 1000
 const env = loadServerEnv()
 const db = createDb(env.DATABASE_URL)
 
+// embedding provider 在启动期装配：`EMBEDDING_TRANSPORT` 没有默认值，配错/没配在这里就失败，
+// 而不是等第一条 EMBED_* job 跑起来才发疯（那时已经在库里留下状态）。
+const embeddingEnv = loadEmbeddingEnv()
+const embeddingProvider = createEmbeddingProvider(embeddingEnv)
+
 // 启动自检：连不上 Postgres 立即失败，而不是空转。
 await db.execute(sql`select 1`)
 console.log('[worker] postgres connection ok')
+console.log(
+  `[worker] embedding provider: ${embeddingProvider.model} (${embeddingProvider.dimensions}d, transport=${embeddingEnv.transport})`,
+)
 
 /**
- * job 类型 → handler。目前只有匹配域（#8）；新 domain 在这里加一项
- * （`jobs.type` 是裸 text，TS 联合只是收窄，见 `packages/db/src/schema/jobs.ts:7-8`）。
+ * job 类型 → handler。匹配域（#8）与 embedding 域（#322 M1）各一张表在这里合并；
+ * 新 domain 在对应目录加 `createXxxJobHandlers` 再展开一项
+ * （`jobs.type` 是裸 text，TS 联合只是收窄，见 `packages/db/src/schema/jobs.ts:18`）。
  */
 const queue = createJobQueue(db, {
-  handlers: { ...createMatchJobHandlers(db) },
+  handlers: { ...createMatchJobHandlers(db), ...createEmbedJobHandlers(db, embeddingProvider) },
   isFatalError: (error) => error instanceof InvalidJobPayloadError,
 })
 

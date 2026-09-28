@@ -241,3 +241,58 @@ export function loadContentModerationEnv(
     '环境变量校验失败：CONTENT_MODERATION_TRANSPORT 必须显式设置为 local 或 tencent（无默认值，不允许静默回退）',
   )
 }
+
+/**
+ * embedding 生成配置（#322 M1）——**worker 专属**，不进共享 `ServerEnv`：API 进程只投递
+ * `EMBED_*` job、不调 embedding 上游，上游密钥不扩散到不需要它的进程（与
+ * `AI_POLISH_*` / `TENCENT_CLOUD_*` 同一拆分原则）。
+ *
+ * `EMBEDDING_TRANSPORT` **无默认值**：必须显式声明 `stub` 或 `live`。
+ * - `stub`：进程内确定性向量（`apps/worker/src/jobs/embedding/providers/stub.ts`），
+ *   只允许显式开发/测试使用；`NODE_ENV=production` 下直接启动失败——确定性假向量在
+ *   生产会变成"看似有语义、实则无关"的召回，比缺配置更难发现。
+ * - `live`：真实上游，三项配置缺一即失败。`EMBEDDING_MODEL` 会原样写入
+ *   `embeddings.model`：换模型必须显式改配置，读侧按 model 过滤，不静默混用不同模型向量。
+ *
+ * 本加载器只在错误里报变量名，**不回显任何值**。
+ */
+export type EmbeddingEnv =
+  | { transport: 'stub' }
+  | { transport: 'live'; baseUrl: string; apiKey: string; model: string }
+
+export function loadEmbeddingEnv(
+  source: Record<string, string | undefined> = process.env,
+  nodeEnv: string | undefined = source.NODE_ENV,
+): EmbeddingEnv {
+  const transport = source.EMBEDDING_TRANSPORT
+  if (transport === 'stub') {
+    // 与 `WECHAT_TRANSPORT=stub` / `CONTENT_MODERATION_TRANSPORT=local` 同一护栏，
+    // `NODE_ENV` 按 trim + 小写比较，避免 `Production` 这种拼写让护栏失效。
+    if (nodeEnv?.trim().toLowerCase() === 'production') {
+      throw new Error(
+        '环境变量校验失败：生产环境（NODE_ENV=production）禁止 EMBEDDING_TRANSPORT=stub（确定性假向量会产生看似合理的语义召回）',
+      )
+    }
+    return { transport: 'stub' }
+  }
+  if (transport === 'live') {
+    const baseUrl = source.EMBEDDING_BASE_URL?.trim()
+    const apiKey = source.EMBEDDING_API_KEY?.trim()
+    const model = source.EMBEDDING_MODEL?.trim()
+    if (!baseUrl || !apiKey || !model) {
+      // 点名「缺了哪一个」，而不是只说「三个都要配」。
+      const missing = [
+        !baseUrl ? 'EMBEDDING_BASE_URL' : null,
+        !apiKey ? 'EMBEDDING_API_KEY' : null,
+        !model ? 'EMBEDDING_MODEL' : null,
+      ].filter((name): name is string => name !== null)
+      throw new Error(
+        `环境变量校验失败：EMBEDDING_TRANSPORT=live 缺少 ${missing.join(' / ')}。三项配置都必须提供：EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL`,
+      )
+    }
+    return { transport: 'live', baseUrl, apiKey, model }
+  }
+  throw new Error(
+    '环境变量校验失败：EMBEDDING_TRANSPORT 必须显式设置为 stub 或 live（无默认值，不允许静默回退）',
+  )
+}

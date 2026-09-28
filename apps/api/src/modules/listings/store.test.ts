@@ -176,9 +176,10 @@ test('发布在世界内写入商品、有序图片与 MATCH_LISTING job', async
       .select({ type: jobs.type, payload: jobs.payload, status: jobs.status })
       .from(jobs)
       .where(sql`${jobs.payload}->>'listingId' = ${input.id}`)
-    expect(queued).toHaveLength(1)
-    expect(queued[0]?.type).toBe('MATCH_LISTING')
-    expect(queued[0]?.status).toBe('PENDING')
+    // #322 M1：一次成功创建投两条 job——v1 的匹配重算 + 语义向量刷新（成对投递，避免漏掉一边）。
+    expect(queued).toHaveLength(2)
+    expect(queued.map((job) => job.type).sort()).toEqual(['EMBED_LISTING', 'MATCH_LISTING'])
+    expect(queued.every((job) => job.status === 'PENDING')).toBe(true)
   })
 })
 
@@ -224,7 +225,8 @@ test('5 秒窗口内的同内容重复提交命中已有商品，不新建也不
       .select({ id: jobs.id })
       .from(jobs)
       .where(sql`${jobs.payload}->>'listingId' = ${first.listingId}`)
-    expect(queued).toHaveLength(1)
+    // 命中重复窗口时**不投递**：这里的两条仍然只是第一次创建投下的（#322 M1 起 MATCH + EMBED）。
+    expect(queued).toHaveLength(2)
   })
 })
 

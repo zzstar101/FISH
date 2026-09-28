@@ -87,28 +87,29 @@ describe('wishes store (integration)', () => {
     if (replay.kind === 'duplicate') expect(replay.row.id).toBe(created.row.id)
   })
 
-  test('db match queue inserts a PENDING MATCH_WISH job with the wishId payload', async () => {
+  test('db match queue 投递 MATCH_WISH + EMBED_WISH 两条 PENDING job，且重复投递幂等', async () => {
     const wishId = crypto.randomUUID()
     await matchQueue.enqueue(wishId)
 
-    const job = rows(
+    const queued = rows(
       await db.execute(sql`
         SELECT type, payload, status FROM jobs
-        WHERE payload->>'wishId' = ${wishId} ORDER BY created_at DESC LIMIT 1
+        WHERE payload->>'wishId' = ${wishId} ORDER BY type
       `),
-    )[0]
-    expect(job?.type).toBe('MATCH_WISH')
-    expect(job?.status).toBe('PENDING')
-    expect(job?.payload).toEqual({ wishId })
+    )
+    // #322 M1：一次 enqueue = v1 重算 + 语义向量刷新，成对投递（漏一边会让编辑后的状态不一致）。
+    expect(queued.map((row) => row.type)).toEqual(['EMBED_WISH', 'MATCH_WISH'])
+    expect(queued.map((row) => row.status)).toEqual(['PENDING', 'PENDING'])
+    for (const row of queued) expect(row.payload).toEqual({ wishId })
 
-    // 幂等：重复投递同一 wishId 不再新增 job（重放只补投真正缺失的那条）
+    // 幂等：重复投递同一 wishId 不再新增 job（重放只补投真正缺失的那条）。
     await matchQueue.enqueue(wishId)
     const count = rows(
       await db.execute(
         sql`SELECT count(*)::int AS c FROM jobs WHERE payload->>'wishId' = ${wishId}`,
       ),
     )[0]
-    expect(Number(count?.c)).toBe(1)
+    expect(Number(count?.c)).toBe(2)
   })
 
   test('rolls back the wish when the MATCH_WISH job insert fails', async () => {

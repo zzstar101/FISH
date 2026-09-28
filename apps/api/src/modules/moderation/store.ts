@@ -166,6 +166,18 @@ export function createSqlModerationStore(
         payload: jsonParam({ listingId: String(record.listing_id) }),
       })
 
+      // 人工放行同样要刷新语义向量（#322 M1）：这是待审商品进入匹配链路的入口之一，
+      // 与 `governance` / `listings store` 的成对投递保持同一条规则。
+      // `ON CONFLICT DO NOTHING` 对应 `EMBED_LISTING` 的部分唯一索引（待跑时再投不算错误）。
+      await tx
+        .insert(jobs)
+        .values({
+          id: newId(),
+          type: 'EMBED_LISTING',
+          payload: jsonParam({ listingId: String(record.listing_id) }),
+        })
+        .onConflictDoNothing()
+
       return {
         kind: 'applied',
         manualRecordId,

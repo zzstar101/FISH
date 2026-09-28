@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_TENCENT_CLOUD_REGION, loadAiPolishEnv, loadContentModerationEnv } from './env'
+import {
+  DEFAULT_TENCENT_CLOUD_REGION,
+  loadAiPolishEnv,
+  loadContentModerationEnv,
+  loadEmbeddingEnv,
+} from './env'
 
 describe('loadAiPolishEnv', () => {
   test('stub 只需 transport 与 base_url，没有 apiKey 字段', () => {
@@ -208,5 +213,76 @@ describe('loadContentModerationEnv', () => {
       imsBizType: 'ims',
       region: 'ap-shanghai',
     })
+  })
+})
+
+describe('loadEmbeddingEnv', () => {
+  test('stub 不需要任何上游配置，也不带密钥字段', () => {
+    expect(loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub' }, 'development')).toEqual({
+      transport: 'stub',
+    })
+    expect(loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub' }, 'test')).toEqual({ transport: 'stub' })
+  })
+
+  test('生产环境禁止 stub：确定性假向量会产出看似合理的召回', () => {
+    expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub' }, 'production')).toThrow(
+      /NODE_ENV=production/,
+    )
+    expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub', NODE_ENV: 'production' })).toThrow(
+      /NODE_ENV=production/,
+    )
+    for (const nodeEnv of ['Production', 'PRODUCTION', ' production '] as const) {
+      expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub' }, nodeEnv)).toThrow(
+        /NODE_ENV=production/,
+      )
+    }
+  })
+
+  test('live 三项齐全时返回 baseUrl / apiKey / model（值两侧空白被 trim）', () => {
+    expect(
+      loadEmbeddingEnv({
+        EMBEDDING_TRANSPORT: 'live',
+        EMBEDDING_BASE_URL: ' https://api.example.com/v1 ',
+        EMBEDDING_API_KEY: ' sk-not-a-real-key ',
+        EMBEDDING_MODEL: ' text-embedding-3-small ',
+      }),
+    ).toEqual({
+      transport: 'live',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-not-a-real-key',
+      model: 'text-embedding-3-small',
+    })
+  })
+
+  test('live 缺任一项都失败，错误信息点名缺的变量且不回显密钥', () => {
+    const complete: Record<string, string | undefined> = {
+      EMBEDDING_TRANSPORT: 'live',
+      EMBEDDING_BASE_URL: 'https://api.example.com/v1',
+      EMBEDDING_API_KEY: 'sk-not-a-real-key',
+      EMBEDDING_MODEL: 'text-embedding-3-small',
+    }
+
+    for (const key of ['EMBEDDING_BASE_URL', 'EMBEDDING_API_KEY', 'EMBEDDING_MODEL'] as const) {
+      let message = ''
+      try {
+        // 空白与缺失等价：`'   '` 这种"看着配了其实是空白"的配置必须在启动期就被拒绝。
+        loadEmbeddingEnv({ ...complete, [key]: '   ' })
+      } catch (error) {
+        message = (error as Error).message
+      }
+      expect(message).toContain(`缺少 ${key}。`)
+      expect(message).not.toContain('sk-not-a-real-key')
+    }
+
+    expect(() => loadEmbeddingEnv({ ...complete, EMBEDDING_MODEL: undefined })).toThrow(
+      /EMBEDDING_MODEL/,
+    )
+  })
+
+  test('transport 无默认值：缺失 / 空串 / 非法取值都失败', () => {
+    expect(() => loadEmbeddingEnv({})).toThrow(/必须显式设置/)
+    expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: '' })).toThrow(/必须显式设置/)
+    expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub ' })).toThrow(/必须显式设置/)
+    expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'local' })).toThrow(/必须显式设置/)
   })
 })

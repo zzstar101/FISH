@@ -11,6 +11,12 @@
 - 门禁：`src/migrations-journal.test.ts` 断言 tag 唯一、遗留数字序号段从 0 起与位置一一对应（并行分支各自追加同一编号会在这里被点名）、**遗留序号段已冻结**（数字 tag 恒为 26 条、末条 `0025_shallow_mimic`：接着手写 `0026_xxx` 会被点名，即使它的 idx 与位置恰好一致）、时间戳前缀 == 同条目 `when` 的 UTC+8 墙钟（容差 2s）、`when` 必须是有限数字（缺失 / `NaN` 会被 drizzle 静默跳过）且沿 journal 严格递增、`.sql` ↔ journal 双向对应、snapshot 数量 / `prevId` 链 / snapshot 文件名前缀与编号前缀一致，失败信息点名冲突双方；它在 `packages/db` 变更时随 `db-tests` job 在 CI 跑。
 - 落地与本地验证：`bun run db:up`（起 Postgres）→ `bun run --filter '@fish/db' migrate`。改 schema 时按 `CONTRIBUTING.md` 第 6 节在 PR 里填「DB 变更说明」。
 
+## pgvector 扩展（#322 M1）
+
+- 镜像本来就是 `pgvector/pgvector:pg18`（`docker-compose.yml` 与 CI 两个 job），但**扩展不会自动创建**：`CREATE EXTENSION IF NOT EXISTS vector;` 写在本分支新增迁移 `.sql` 的**最前面**（`vector` 类型必须先于使用它的 `CREATE TABLE` 存在）。这是根 `AGENTS.md` 第 8 节「第二处例外」允许的**追加式**编辑，边界是「生成器产出的语句一个字节不动」。
+- 维度只写在 typmod 上：`embeddings.embedding` 是 `vector(1536)`（常量 `EMBEDDING_DIMENSIONS`，见 `src/schema/embeddings.ts`）。**不要写裸 `vector`**——无 typmod 的列不校验维度（实测同一列可以同时插 3 维与 4 维，完全静默），HNSW 也无法在其上创建（`ERROR: column does not have dimensions`）。
+- 第一版**不建 ANN 索引**（HNSW / IVFFlat）：#322 的 M2 才会用真实数据量 + `explain (analyze)` 决定；小数据量下 exact cosine scan 足够，先加索引没有证据支撑。
+
 ## seed
 
 - `src/seed.ts` 用**单条 `TRUNCATE`** 清库（`:102-104`，表清单在 `:103`）。**新增业务表必须同步加进这条语句**，否则本地 seed 会直接失败（报 `0A000`，不需要表里真有数据）；`:96-101` 的注释表清单与 `seed.test.ts` 的 counts 也要一并更新。

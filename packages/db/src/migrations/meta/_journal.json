@@ -197,6 +197,13 @@
       "when": 1790574189698,
       "tag": "20260928134309_crazy_captain_flint",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790584646851,
+      "tag": "20260928163726_jittery_ink",
+      "breakpoints": true
     }
   ]
 }

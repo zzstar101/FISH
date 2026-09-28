@@ -111,22 +111,49 @@ describe('wishes API wiring (#7)', () => {
     expect(forged.status).toBe(401)
   })
 
-  test('create writes a PENDING MATCH_WISH job for the created wish', async () => {
+  test('create writes PENDING MATCH_WISH + EMBED_WISH jobs for the created wish', async () => {
     const cookie = await registerUser('01')
     const wish = await createWish(cookie)
+    const wishId = decodePublicId(PUBLIC_ID_PREFIX.wish, wish.id)
 
     const jobs = jobsRows(
       await db.execute(sql`
-        SELECT type, status, payload FROM jobs WHERE payload->>'wishId' = ${decodePublicId(PUBLIC_ID_PREFIX.wish, wish.id)}
+        SELECT type, status, payload FROM jobs WHERE payload->>'wishId' = ${wishId}
       `),
     )
 
-    expect(jobs).toHaveLength(1)
-    expect(jobs[0]).toMatchObject({
-      type: 'MATCH_WISH',
-      status: 'PENDING',
-      payload: { wishId: decodePublicId(PUBLIC_ID_PREFIX.wish, wish.id) },
+    // #322 M1：一次创建投两条 job——v1 的匹配重算 + 语义向量刷新，两者都必须可被 worker 消费。
+    expect(jobs).toHaveLength(2)
+    expect(jobs.map((job) => job.type).sort()).toEqual(['EMBED_WISH', 'MATCH_WISH'])
+    for (const job of jobs) {
+      expect(job).toMatchObject({ status: 'PENDING', payload: { wishId } })
+    }
+  })
+
+  // #322 M1：编辑愿望此前**一行 job 都不投**，于是改完 keyword/description 既不重算匹配、
+  // 也不刷新向量。这条断言把"PATCH 必须重新入队"钉在 HTTP 契约层。
+  test('PATCH re-enqueues MATCH_WISH + EMBED_WISH so edited content is re-scored', async () => {
+    const cookie = await registerUser('10')
+    const wish = await createWish(cookie)
+    const wishId = decodePublicId(PUBLIC_ID_PREFIX.wish, wish.id)
+
+    // 先清掉创建时投的那两条，否则两个唯一键都会让 PATCH 的插入落进 ON CONFLICT DO NOTHING，
+    // 断言就变成"创建投过 job"，而不是"编辑会重新投递"。
+    await db.execute(sql`DELETE FROM jobs WHERE payload->>'wishId' = ${wishId}`)
+
+    const patch = await app.request(`/wishes/${wish.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ keyword: '改了关键词的愿望' }),
     })
+    expect(patch.status).toBe(200)
+
+    const jobs = jobsRows(
+      await db.execute(sql`
+        SELECT type, status, payload FROM jobs WHERE payload->>'wishId' = ${wishId}
+      `),
+    )
+    expect(jobs.map((job) => job.type).sort()).toEqual(['EMBED_WISH', 'MATCH_WISH'])
   })
 
   test('owner can read/update/close; another user only gets 403', async () => {
