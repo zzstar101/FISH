@@ -1,9 +1,16 @@
 import { LoginRequestSchema } from '@fish/contracts/auth/session'
 import { createFileRoute, Link } from '@tanstack/react-router'
-import { type FormEvent, useLayoutEffect, useState } from 'react'
+import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { describeAuthFailure, toAuthFieldErrors } from '../features/auth/error-messages'
-import { AuthPageShell, FormAlert, SubmitButton, TextField } from '../features/auth/form'
+import { AuthPageShell, CheckboxField, FormAlert, SubmitButton, TextField } from '../features/auth/form'
 import { useLogin } from '../features/auth/queries'
+import {
+  clearRememberedCredentials,
+  consumeExplicitLogout,
+  loadRememberedCredentials,
+  saveRememberedCredentials,
+} from '../features/auth/remembered-credentials'
+import { ApiError } from '../lib/api-client'
 import type { FieldErrors } from '../lib/form-errors'
 import { sanitizeRedirect } from '../lib/redirect'
 
@@ -28,8 +35,53 @@ function LoginPage() {
 
   const [studentNo, setStudentNo] = useState('')
   const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(false)
+  const [autoLogin, setAutoLogin] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
+  // 自动登录每次进页只尝试一次；StrictMode 会双跑 effect，用 ref 挡住第二次。
+  const autoLoginAttempted = useRef(false)
+
+  // 挂载时回填本机记住的凭据；勾了自动登录就代用户提交一次。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 挂载一次性读取本机凭据，login/redirect 取首挂值即可
+  useEffect(() => {
+    const stored = loadRememberedCredentials()
+    if (stored === null) return
+    setStudentNo(stored.studentNo)
+    setPassword(stored.password)
+    setRemember(true)
+    setAutoLogin(stored.autoLogin)
+    if (!stored.autoLogin || autoLoginAttempted.current) return
+    autoLoginAttempted.current = true
+    if (consumeExplicitLogout()) return
+    login.mutate({ password: stored.password, studentNo: stored.studentNo }, {
+      onSuccess: () => window.location.assign(sanitizeRedirect(redirect)),
+      onError: (error) => {
+        // 凭据已被服务端拒绝（改密等）就关掉自动登录，避免每次进页都报错；
+        // 网络抖动等非凭据失败保留开关，凭据本身仍保留。
+        if (error instanceof ApiError && error.status === 401) {
+          saveRememberedCredentials({ ...stored, autoLogin: false })
+          setAutoLogin(false)
+        }
+        const failure = describeAuthFailure(error)
+        setFieldErrors(failure.fieldErrors ?? {})
+        setFormError(failure.formError ?? null)
+      },
+    })
+  }, [])
+
+  function handleRememberChange(next: boolean) {
+    setRemember(next)
+    if (next) return
+    setAutoLogin(false)
+    // 直接取消勾选也要立刻清掉本机凭据，不等下一次登录。
+    clearRememberedCredentials()
+  }
+
+  function handleAutoLoginChange(next: boolean) {
+    setAutoLogin(next)
+    if (next) setRemember(true)
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -43,7 +95,18 @@ function LoginPage() {
 
     setFieldErrors({})
     login.mutate(parsed.data, {
-      onSuccess: () => window.location.assign(sanitizeRedirect(redirect)),
+      onSuccess: () => {
+        if (remember) {
+          saveRememberedCredentials({
+            autoLogin,
+            password: parsed.data.password,
+            studentNo: parsed.data.studentNo,
+          })
+        } else {
+          clearRememberedCredentials()
+        }
+        window.location.assign(sanitizeRedirect(redirect))
+      },
       onError: (error) => {
         const failure = describeAuthFailure(error)
         setFieldErrors(failure.fieldErrors ?? {})
@@ -94,6 +157,19 @@ function LoginPage() {
           value={password}
           variant="login"
         />
+        <div className="flex items-center gap-6 pl-1">
+          <CheckboxField
+            checked={remember}
+            label="记住账号密码"
+            onCheckedChange={handleRememberChange}
+          />
+          <CheckboxField
+            checked={autoLogin}
+            disabled={!remember}
+            label="自动登录"
+            onCheckedChange={handleAutoLoginChange}
+          />
+        </div>
         <SubmitButton pending={login.isPending} variant="login">
           登录
         </SubmitButton>
