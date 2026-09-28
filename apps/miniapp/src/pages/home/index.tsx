@@ -141,22 +141,31 @@ export default function Home() {
    * 顶栏与悬浮底栏由首页自己持有，所以分类视图与「推荐」共用它们；
    * 商品列表按分类重新取数，卡片仍是首页那套瀑布流（`ProductCard`），不换成分类页的自绘卡。
    *
-   * 切完回到顶部：用户多半是在吸顶的纯文字条上点的分类（此时页面已滚过一屏），
-   * 不回顶的话新商品从半截开始显示，看不出「换过一批」。
+   * 切完的落点（Owner 2026-09-28 拍板，闲鱼口径）：滚到「文字导航刚好吸顶」的位置，
+   * 不再回列表顶 —— 吸顶条下方正好是新一批商品的开头；页面还没滚到吸顶点时保持原位，
+   * 不把用户往下拽。重复点**当前**分类不重新取数（没有新信息可拿），但也不是完全
+   * no-op：失败态下当作「重试」，成功态只做落点归位。
    *
-   * 重复点**当前**分类不重新取数（没有新信息可拿），但也不是完全 no-op：
-   * 失败态下当作「重试」（否则用户点了没反应，只能去找错误块里的重试按钮），
-   * 成功态下只回顶。两条分支都回顶 —— 与切分类同口径，重试成功后列表从顶部开始。
+   * 归位期间（Owner 反馈「切换 tag 不需要抖动」）把吸顶判定**锁在当前值**：滚动动画
+   * 途中 `scrollTop` 会贴着阈值来回、新分类列表替换时页面高度先塌再涨，两者都会让
+   * `scrollTop >= pinAt` 瞬间翻 false，吸顶条滑出一半又被拽回 —— 视觉即抖动。
+   * 锁到动画结束（260ms > 200ms duration + 余量）再恢复跟随。
    */
   const onCategoryTap = (key: ListingCategory | 'ALL') => {
+    // 已滚过吸顶点 → 归位到刚好吸顶（+1px 保证落点判定仍为 true）；还没滚到 → 原地不动
+    const scrollTop = Math.min(scrollTopRef.current, pinAt.current + 1)
+    navSettleRef.current = true
+    window.setTimeout(() => {
+      navSettleRef.current = false
+    }, 260)
     if (key === category) {
       if (failed) void load(key)
-      void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
+      void Taro.pageScrollTo({ scrollTop, duration: 200 })
       return
     }
     setCategory(key)
     void load(key)
-    void Taro.pageScrollTo({ scrollTop: 0, duration: 200 })
+    void Taro.pageScrollTo({ scrollTop, duration: 200 })
   }
 
   /**
@@ -178,6 +187,8 @@ export default function Home() {
   const scrollTopRef = useRef(0)
   /** 图标条下沿越过顶栏下沿时的滚动位置；挂载后量一次 */
   const pinAt = useRef(Number.POSITIVE_INFINITY)
+  /** 分类归位动画进行中：期间吸顶判定锁定（见 onCategoryTap 的抖动注释） */
+  const navSettleRef = useRef(false)
 
   useReady(() => {
     Taro.createSelectorQuery()
@@ -203,7 +214,8 @@ export default function Home() {
   useDidShow(notifyTabbarRoute)
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop
-    const next = scrollTop >= pinAt.current
+    // 分类归位动画期间吸顶判定锁定在当前值（防阈值边界抖动，见 onCategoryTap）
+    const next = navSettleRef.current ? catsPinned : scrollTop >= pinAt.current
     // 滚动事件很密：值没变就把同一个值还回去，React 会跳过这轮渲染
     setCatsPinned((prev) => (prev === next ? prev : next))
     // 回到顶部钮：滚过一屏浮现（阈值随共享组件）
@@ -265,26 +277,29 @@ export default function Home() {
         </ScrollView>
       </View>
 
-      {/* 图标条滚出顶栏下沿之后，接管分类导航：纯文字 + 当前项下横杠 */}
-      {catsPinned ? (
-        <View className="home__catnav" style={{ top: `${navHeight}px` }}>
-          <ScrollView className="home__catnav-scroll" scrollX enableFlex>
-            <View className="home__catnav-inner">
-              {HOME_CATEGORIES.map((item) => (
-                <View
-                  key={item.key}
-                  // 与图标条同一份选中态来源，两条导航不会各说各话
-                  // `--${key}` 修饰类同样是为了端上自动化能定位到具体一项
-                  className={`home__catnav-item home__catnav-item--${item.key}${item.key === category ? ' is-on' : ''}`}
-                  onClick={() => onCategoryTap(item.key)}
-                >
-                  <Text className="home__catnav-label">{item.label}</Text>
-                </View>
-              ))}
-            </View>
-          </ScrollView>
-        </View>
-      ) : null}
+      {/* 图标条滚出顶栏下沿之后，接管分类导航：纯文字 + 当前项下横杠。
+          常驻渲染 + `is-pinned` 类切换过渡（Owner 2026-09-28 拍板）：
+          下滑过阈值从顶栏下沿滑入弹出，回顶滑回并淡化，不再突然出现/消失。 */}
+      <View
+        className={`home__catnav${catsPinned ? ' is-pinned' : ''}`}
+        style={{ top: `${navHeight}px` }}
+      >
+        <ScrollView className="home__catnav-scroll" scrollX enableFlex>
+          <View className="home__catnav-inner">
+            {HOME_CATEGORIES.map((item) => (
+              <View
+                key={item.key}
+                // 与图标条同一份选中态来源，两条导航不会各说各话
+                // `--${key}` 修饰类同样是为了端上自动化能定位到具体一项
+                className={`home__catnav-item home__catnav-item--${item.key}${item.key === category ? ' is-on' : ''}`}
+                onClick={() => onCategoryTap(item.key)}
+              >
+                <Text className="home__catnav-label">{item.label}</Text>
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
 
       <View className="home__grid">
         {listState === 'error' ? (

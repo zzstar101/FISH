@@ -164,6 +164,10 @@
  *
  * 玻璃配方与 `.topbar--glass` 同一套，让两行读起来是一块连续的顶栏；
  * 底部分隔线 + 投影来自设计稿的 `.cats.stuck`。
+ *
+ * 显隐是**常驻渲染 + `is-pinned` 过渡**（Owner 2026-09-28 拍板，替换旧的布尔条件渲染）：
+ * 吸顶时从顶栏下沿滑入弹出（translateY + opacity），回顶滑回顶栏后面并淡化。
+ * `visibility` 的过渡延迟到滑出结束再生效，隐藏期间不挡下面内容的点击。
  */
 .home__catnav {
   position: fixed;
@@ -175,6 +179,22 @@
   -webkit-backdrop-filter: blur(36px) saturate(180%);
   border-bottom: 2px solid var(--accent-faint);
   box-shadow: 0 24px 48px -44px rgba(23, 35, 61, 0.6);
+  transform: translateY(-110%);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+    opacity 0.24s ease,
+    visibility 0s linear 0.28s;
+
+  &.is-pinned {
+    transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
+    transition:
+      transform 0.28s cubic-bezier(0.33, 1, 0.68, 1),
+      opacity 0.2s ease;
+  }
 }
 
 .home__catnav-scroll {
