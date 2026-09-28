@@ -1,7 +1,7 @@
 /**
  * 小程序端 API 基地址。
  *
- * Web 端走同源 `/api` 前缀，由 Vite 代理去掉前缀转发到 API（`apps/web/vite.config.ts`）。
+ * Web 端走同源 `/api` 前缀，由 Vite 代理去掉前缀转发到 API（`apps/web-pc/vite.config.ts`）。
  * 小程序没有代理层，必须写**绝对地址**，所以这里单独抽一个常量，由构建期注入
  * （`config/index.ts` 的 `defineConstants`）。
  *

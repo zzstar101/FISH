@@ -17,7 +17,6 @@
 export const AREAS = [
   'api',
   'worker',
-  'web',
   'web_pc',
   'miniapp',
   'db',
@@ -35,7 +34,7 @@ export interface Flags {
   static: boolean
   /** 需要 Postgres（其中 apps/api 还需要 MinIO）的测试：apps/api、apps/worker、packages/db */
   dbTests: boolean
-  /** 不需要任何服务的单测：apps/web、apps/web-pc、apps/miniapp、packages/{contracts,shared,ui}、scripts */
+  /** 不需要任何服务的单测：apps/web-pc、apps/miniapp、packages/{contracts,shared,ui}、scripts */
   unitTests: boolean
   /** `build:web-pc` + PC preview smoke */
   webPc: boolean
@@ -44,12 +43,11 @@ export interface Flags {
   areas: Record<Area, boolean>
 }
 
-/** 路径前缀 → 领域。`apps/web-pc/` 必须排在 `apps/web/` 前面，否则会被当成 web。 */
+/** 路径前缀 → 领域。 */
 const AREA_OF_PREFIX: ReadonlyArray<readonly [string, Area]> = [
   ['apps/api/', 'api'],
   ['apps/worker/', 'worker'],
   ['apps/web-pc/', 'web_pc'],
-  ['apps/web/', 'web'],
   ['apps/miniapp/', 'miniapp'],
   ['packages/db/', 'db'],
   ['packages/contracts/', 'contracts'],
@@ -83,10 +81,10 @@ function isInert(file: string): boolean {
 /** 传递闭包：共享包改动 → 依赖它的 app 一起算受影响。 */
 function closeOverDependencies(hit: Set<Area>): void {
   if (hit.has('shared') || hit.has('contracts') || hit.has('ui')) {
-    for (const area of ['api', 'worker', 'web', 'web_pc', 'miniapp'] as const) hit.add(area)
+    for (const area of ['api', 'worker', 'web_pc', 'miniapp'] as const) hit.add(area)
   }
   if (hit.has('db')) {
-    // 数据库包只被服务端消费；web / miniapp 不直接依赖它。
+    // 数据库包只被服务端消费；web-pc / miniapp 不直接依赖它。
     hit.add('api')
     hit.add('worker')
   }
@@ -126,8 +124,7 @@ export function computeFlags(files: readonly string[], options: { full?: boolean
     full,
     static: full || hit.size > 0,
     dbTests: areas.api || areas.worker || areas.db,
-    unitTests:
-      areas.web || areas.web_pc || areas.miniapp || areas.contracts || areas.shared || areas.ui,
+    unitTests: areas.web_pc || areas.miniapp || areas.contracts || areas.shared || areas.ui,
     webPc: areas.web_pc,
     smoke: areas.api || areas.worker || areas.db || areas.contracts || areas.shared,
     areas,

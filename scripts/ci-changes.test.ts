@@ -45,11 +45,14 @@ describe('computeFlags', () => {
     expect(flags.areas.db).toBe(false)
   })
 
-  test('apps/web-pc 不会被当成 apps/web', () => {
+  test('改 apps/web-pc：只跑 unit 与 web-pc 构建，不碰 DB 测试与 smoke', () => {
     const flags = computed('apps/web-pc/src/main.tsx')
     expect(flags.areas.web_pc).toBe(true)
-    expect(flags.areas.web).toBe(false)
     expect(flags).toMatchObject({ webPc: true, unitTests: true, dbTests: false, smoke: false })
+  })
+
+  test('#325 移除 apps/web 后该路径不再是已知领域（认不出 → 全量，不会静默不跑）', () => {
+    expect(computeFlags(['apps/web/src/main.tsx']).full).toBe(true)
   })
 
   test('改 apps/worker：需要 Postgres 的测试与 core smoke，但不跑 unit', () => {
@@ -64,7 +67,7 @@ describe('computeFlags', () => {
     expect(flags.areas.db).toBe(true)
     expect(flags.areas.api).toBe(true)
     expect(flags.areas.worker).toBe(true)
-    expect(flags.areas.web).toBe(false)
+    expect(flags.areas.web_pc).toBe(false)
     expect(flags.areas.miniapp).toBe(false)
     expect(flags).toMatchObject({ dbTests: true, unitTests: false, smoke: true })
   })
@@ -78,7 +81,6 @@ describe('computeFlags', () => {
       const flags = computed(file)
       expect(flags.areas.api).toBe(true)
       expect(flags.areas.worker).toBe(true)
-      expect(flags.areas.web).toBe(true)
       expect(flags.areas.web_pc).toBe(true)
       expect(flags.areas.miniapp).toBe(true)
       expect(flags).toMatchObject({ dbTests: true, unitTests: true, webPc: true, smoke: true })

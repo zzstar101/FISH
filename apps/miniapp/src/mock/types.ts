@@ -396,7 +396,6 @@ export type { NotificationDto }
  *
  * 依据 #23：「服务端不存也不返回文案——标题/描述/图标由客户端按 `type`（必要时结合 `payload`
  * 回查商品名）渲染」，所以 `title` / `description` / `target` 都是**客户端产物**，不进契约。
- * 与 web 端 `apps/web/src/lib/mock/store.ts` 的 `decorateNotification` 同一口径。
  *
  * `readAt`（契约字段）是唯一的已读来源：`null` = 未读，不额外造布尔字段。
  */

@@ -362,8 +362,7 @@ export function chatSummary() {
 /**
  * 通知文案 / 跳转目标由前端按 `type` + `payload` 组装（#23：服务端不存文案）。
  *
- * 放在数据层而不是页面里 —— 与 web 端 `apps/web/src/lib/mock/store.ts` 的
- * `decorateNotification` 同一口径：改文案不用碰 UI；换真实接口时把 title/description
+ * 放在数据层而不是页面里：改文案不用碰 UI；换真实接口时把 title/description
  * 从服务端替进来即可。目标商品已删除/下架时退回愿望页，而不是给一个点不动的死入口。
  *
  * `resolve` 是「拿 listingId 查商品标题」的能力。默认查 mock 目录（fixture 场景）；

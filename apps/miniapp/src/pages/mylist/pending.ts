@@ -12,8 +12,7 @@
  * - 契约也没有「按商品列提案」的端点，`GET /conversations` 只支持 `limit` / `cursor`。
  *
  * 因此这里用**卖家侧会话 + 会话内最后一个交易事件**来判：某商品的最新会话里，最后一个
- * `tx.*` 事件是 `tx.proposal`，就说明有买家在等卖家点头。这与 Web 端会话页
- * `lastTransactionEvent(list)` 的判据同源（`apps/web/src/features/chat/chat-page.tsx`）。
+ * `tx.*` 事件是 `tx.proposal`，就说明有买家在等卖家点头。
  *
  * 取「最后一个事件」而不是「最后一条消息」：买家提案之后卖家可能先回了句话（TEXT），
  * 申请仍在等点头，只认最后一条消息会漏掉它。

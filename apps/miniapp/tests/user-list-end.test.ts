@@ -41,7 +41,7 @@ describe('userListEnd —— 列表终点判定', () => {
 })
 
 /**
- * 页面接线（读源码，先例 `apps/web/src/profile-verification.test.ts`）。
+ * 页面接线（读源码，同目录先例 `tests/mylist-relist.test.ts`、`tests/back-top-scroll-source.test.ts`）。
  *
  * 纯函数用例锁不住「页面是不是真的用它」：实测把页面改回无条件的
  * `loadState === 'ok' && items.length > 0 → 已经到底了`（正是上一轮审查点名的写法），

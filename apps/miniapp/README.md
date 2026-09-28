@@ -42,7 +42,7 @@ TARO_APP_ID=wx你的appid bun run build:miniapp
 
 ## 接后端：API 地址怎么给
 
-小程序**没有** `apps/web` 那样的同源代理（Web 靠 `vite.config.ts` 的 `/api` 代理转发），
+小程序**没有** PC Web 那样的同源代理（`apps/web-pc/vite.config.ts` 的 `/api` 代理转发），
 请求必须写绝对地址。地址在构建期由环境变量注入：
 
 ```bash
@@ -89,10 +89,10 @@ runner 拿到的 `config.compile` 是空对象 —— 不报错，只是不生�
 
 ### 2. 根 `package.json` 的 `@types/react` 固定为 `^19.3.0`
 
-Taro 4.2.1 的 `@tarojs/react` peer 是 `react: ^18`，而 `apps/web` / `packages/ui` 用 React 19，
+Taro 4.2.1 的 `@tarojs/react` peer 是 `react: ^18`，而 `packages/ui` / `apps/web-pc` 用 React 19，
 两个大版本必然并存。小程序引入 React 18 后，bun 会把 lock 里的**默认提升条目**从
 `@types/react@19.3.0` 改写成 `18.3.31`，于是 `node_modules/.bun/**` 下第三方包（`cmdk` / `vaul` /
-`lucide-react`）的 `.d.ts` 全部解析到 React 18 类型，`@fish/ui` 与 `@fish/web` 立刻报错：
+`lucide-react`）的 `.d.ts` 全部解析到 React 18 类型，`@fish/ui` 与 `@fish/web-pc` 立刻报错：
 
 ```
 error TS2322: Type 'React.ReactNode' is not assignable to type
@@ -101,7 +101,7 @@ error TS2322: Type 'React.ReactNode' is not assignable to type
 ```
 
 在根 devDependencies 显式声明 `@types/react: ^19.3.0` 可以把默认提升条目钉回 19。
-删掉这一行就会复现上面的报错（`apps/web` 与 `packages/ui` 仍各自嵌套 19，但 `.bun/**` 内部的解析已经坏了）。
+删掉这一行就会复现上面的报错（`packages/ui` 与 `apps/web-pc` 仍各自嵌套 19，但 `.bun/**` 内部的解析已经坏了）。
 
 ### 3. 副作用：lock 里「提升默认条目」的 react 变成了 18
 
@@ -109,9 +109,10 @@ error TS2322: Type 'React.ReactNode' is not assignable to type
 （`node_modules/.bun/node_modules/react -> react@18.3.1`）。这是新增一个「受约束更强」的消费者后的正常结果，
 且**当前无实际影响**：
 
-- `apps/web` / `packages/ui` 各自嵌套 `react@19.3.0`（`apps/web/dist` 里只有一个 React 实例）
+- `packages/ui` / `apps/web-pc` 各自嵌套 `react@19.3.0`（`apps/web-pc/dist` 里只有一个 React 实例）
 - `@tarojs/react` 与 `@tarojs/plugin-framework-react` 各自嵌套 `react@18.3.1`
-- 实测 symlink 统计：75 个指向 `react@19.3.0`，5 个指向 `react@18.3.1`，且 18 的那 5 个都不在 web 的浏览器模块图里
+- 实测 `node_modules` 下名为 `react` 的 symlink：75 个指向 `react@19.3.0`，6 个指向 `react@18.3.1`
+  （`@tarojs/*` 及其拉起的 `react-dom@18.3.1` / `react-reconciler@0.29.0`），且 18 的那几个都不在 web-pc 的浏览器模块图里
 
-需要注意的只有一件事：**将来在 `apps/web` 侧新增依赖时，不要依赖「提升兜底」拿到 React**，
+需要注意的只有一件事：**将来在 `apps/web-pc` 侧新增依赖时，不要依赖「提升兜底」拿到 React**，
 要在 package.json 里显式声明；否则可能静默拿到 18。

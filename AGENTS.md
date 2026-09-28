@@ -4,7 +4,7 @@
 
 > **⚠️ 涉及 `apps/miniapp`（小程序端）前端的任何改动，先读 [apps/miniapp/AGENTS.md](apps/miniapp/AGENTS.md) 与 [docs/miniapp-dev-workflow.md](docs/miniapp-dev-workflow.md)**：一批页面一条分支一个 PR、同一时间只开一个小程序 PR、**合并前**必须到微信开发者工具逐页演示并经 Owner 认可。该端上流程**只适用于 `apps/miniapp`**，不适用于 `apps/web`（移动端 PWA）与 `apps/web-pc`（PC 站）—— 这两个按本文件的通用纪律走，一个 PR 同样可以包含多个页面。
 
-本项目是 **移动端 Web PWA**（广应科校内二手交易平台 FISH），monorepo + Bun。
+本项目是**微信小程序 + PC Web**（广应科校内二手交易平台 FISH），monorepo + Bun。
 
 ## 1. 命令
 
@@ -14,7 +14,6 @@ cp .env.example .env        # 首次；.env 不进版本库
 bun run db:up               # 启动本地依赖（Postgres + MinIO）
 bun run dev:api             # API   :3000
 bun run dev:worker          # Worker（常驻，无端口）
-bun run dev:web             # Web   :5173
 
 bun run typecheck           # TypeScript 7 全仓类型检查
 bun run lint                # Biome 检查
@@ -89,7 +88,7 @@ CI 会跑同样的检查（`.github/workflows/ci.yml`）。任何一步失败都
 - **不自行合入 PR**：每个 PR 必须由 zzstar101 审核后合入（见 CONTRIBUTING 第 7 节）。
 - **不提交任何真实密钥**；只维护 `.env.example`。
 - **不污染 `bun.lock`**：加/删依赖必须带 `--registry https://registry.npmjs.org`（本机默认源若是镜像源，会重写 lockfile 里全部已存在条目的 tarball URL）；详见 CONTRIBUTING.md 第 3.1 节。
-- **不手改生成文件**：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`（含 `meta/_journal.json`）—— 迁移 tag 由生成器写，见 `packages/db/AGENTS.md`。**唯一例外**：rebase 后把自己分支产出的迁移交回生成器重建时，允许**删除本分支自己新增的** `.sql` / `meta/*_snapshot.json` / 对应 journal 条目，并**仅在这些新增条目之间按 `when` 升序重排**（见下面「并行分支的迁移冲突只按 `when` 解决」那一条）；已合入历史条目的 `tag`/`when`/SQL 内容仍一个字节都不改，也不得手工拼装 journal。
+- **不手改生成文件**：`apps/web-pc/src/routeTree.gen.ts`、`packages/db/src/migrations/**`（含 `meta/_journal.json`）—— 迁移 tag 由生成器写，见 `packages/db/AGENTS.md`。**唯一例外**：rebase 后把自己分支产出的迁移交回生成器重建时，允许**删除本分支自己新增的** `.sql` / `meta/*_snapshot.json` / 对应 journal 条目，并**仅在这些新增条目之间按 `when` 升序重排**（见下面「并行分支的迁移冲突只按 `when` 解决」那一条）；已合入历史条目的 `tag`/`when`/SQL 内容仍一个字节都不改，也不得手工拼装 journal。
 - **不调整 `migration` 历史**：已合入迁移的 `tag` / `when` / 文件内容一个字节都不改、不重排、不复用；新迁移只能由 `bun run --filter '@fish/db' generate` 追加。**迁移编号 = 生成时刻的 UTC+8 时间戳**（例 `20260928063000_late_havok`），不再按合入顺序手工分配 4 位序号；需要 schema 变更走 DB CHANGE REQUEST。
 - **并行分支的迁移冲突只按 `when` 解决**：rebase 到最新 `main` 后必须**重新生成**本分支自己的迁移（删掉本分支产出的 `.sql` + `meta/*_snapshot.json` + `_journal.json` 条目再跑 `generate`）。这是上文「不手改生成文件」的**唯一例外**，且只允许两种编辑：删除本分支自己新增的条目，以及仅在这些新增条目之间按 `when` 升序重排；禁止手写序号，禁止改动或重排历史条目，禁止手工把两条 journal 条目拼在一起。
 - 不执行破坏性 git 操作（`reset --hard`、`push --force`）到共享分支。

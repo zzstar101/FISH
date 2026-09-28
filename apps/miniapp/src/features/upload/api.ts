@@ -5,7 +5,7 @@
  * 再用 `confirm` 对对象存储发 HEAD 复核真实大小与 mime（presign 的签名只覆盖 host，
  * 声明值不可信，见契约 §7.7）。
  *
- * 与 Web 端 `apps/web/src/features/sell/api.ts` 同一套三步语义，差异只有平台层：
+ * 与 PC Web 端 `apps/web-pc/src/features/publish/api.ts` 同一套三步语义，差异只有平台层：
  * 1. 小程序读本地临时文件要 `getFileSystemManager().readFile`（**不传 encoding**，
  *    传 utf8 会把二进制读坏），浏览器直接拿 `File`；
  * 2. 直传用 `Taro.request`（PUT + ArrayBuffer），浏览器用 `fetch`；

@@ -1,7 +1,7 @@
 /**
  * 统一请求入口。
  *
- * 与 Web 端 `apps/web/src/lib/api-client.ts` **同一套契约语义**，差异只有两处，都是平台决定的：
+ * 与 Web 端 `apps/web-pc/src/lib/api-client.ts` **同一套契约语义**，差异只有两处，都是平台决定的：
  * 1. 小程序没有同源代理，必须拼绝对地址（`API_BASE`）；
  * 2. 小程序不会自动带 cookie，登录态手动放进 `Cookie` 头（见 `./session`）。
  *

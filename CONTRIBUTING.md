@@ -9,7 +9,7 @@
 ## 1. 认领任务（Issue 即模块）
 
 - 每个 Issue 对应一个模块：认领人对该 Issue 的**全部验收标准**负责。
-- 模块的**前端（`apps/web`）、后端（`apps/api`）、Contract（`packages/contracts`）都由认领人一个人完成**，不按前后端分包。
+- 模块的**前端（`apps/miniapp` / `apps/web-pc`）、后端（`apps/api`）、Contract（`packages/contracts`）都由认领人一个人完成**，不按前后端分包。
 - 认领前先确认与别人正在做的模块互不重叠，避免并行冲突。
 - 认领后按第 3 节开分支：一个 Issue 一个 `feat/<issue>-<slug>`。
 
@@ -120,7 +120,7 @@ DB 变更说明
 ## 8. 禁止事项
 
 1. 不提交任何真实密钥、Token、连接串；只维护 `.env.example`。
-2. 不手改生成文件：`apps/web/src/routeTree.gen.ts`、`packages/db/src/migrations/**`（含 `meta/_journal.json`）；迁移 tag 只能由生成器写（UTC+8 时间戳），不手写序号、不重排迁移历史。**唯一例外**：rebase 后重建本分支的迁移时，允许删除**本分支自己新增的** `.sql` / `meta/*_snapshot.json` / 对应 journal 条目，并仅在这些新增条目之间按 `when` 重排（见第 6 节）；已合入历史条目的 `tag`/`when`/SQL 内容仍一个字节都不改，也不得手工拼装 journal。
+2. 不手改生成文件：`apps/web-pc/src/routeTree.gen.ts`、`packages/db/src/migrations/**`（含 `meta/_journal.json`）；迁移 tag 只能由生成器写（UTC+8 时间戳），不手写序号、不重排迁移历史。**唯一例外**：rebase 后重建本分支的迁移时，允许删除**本分支自己新增的** `.sql` / `meta/*_snapshot.json` / 对应 journal 条目，并仅在这些新增条目之间按 `when` 重排（见第 6 节）；已合入历史条目的 `tag`/`when`/SQL 内容仍一个字节都不改，也不得手工拼装 journal。
 3. 加/删依赖必须带 `--registry`（见第 3.1 节），不污染 `bun.lock`。
 4. 不在业务 Issue 中顺手做无关重构；发现问题先报告，确有必要时新开 Issue。
 5. 不引入 V1 明确排除的组件（Redis / Kafka / OpenSearch / K8s 等）。

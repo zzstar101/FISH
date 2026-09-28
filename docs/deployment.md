@@ -1,7 +1,9 @@
 # FISH 生产部署手册（Ubuntu + Bun 直跑）
 
-> 目标：把 `apps/web`、`apps/web-pc`、`apps/api`、`apps/worker` 直接跑在 Ubuntu 上，**不使用 Docker**。
+> 目标：把 `apps/web-pc`、`apps/api`、`apps/worker` 直接跑在 Ubuntu 上，**不使用 Docker**。
 > 依赖（PostgreSQL、MinIO）同样装成宿主服务。
+>
+> **`apps/web`（移动端 PWA）已随 [#325](https://github.com/zzstar101/FISH/issues/325) 移除**：本手册不再有它的构建与同步步骤，站点根 `/` 不再提供静态站点（不设重定向）。移动端入口是微信小程序 `apps/miniapp`（不走本手册的静态站点部署）。
 >
 > 本手册只描述部署，不改变任何业务/契约行为。生产形态与 [architecture.md](architecture.md) §4 的
 > 本地拓扑**同构**，区别只是应用由 systemd 托管、前面多一个反向代理提供 HTTPS。
@@ -12,7 +14,7 @@
                  Internet
                     │  80 / 443
               ┌─────▼──────┐
-              │  Caddy     │  TLS + 两套静态产物 + 反代
+              │  Caddy     │  TLS + PC 静态产物 + 反代
               └──┬──┬───┬──┘
      fish.example.com      s3.fish.example.com
         │        │                │
@@ -36,8 +38,8 @@
 
 静态客户端路径：
 
-- `/` → `/var/www/fish`（`apps/web` 移动端 Web）
 - `/pc/` → `/var/www/fish-pc`（`apps/web-pc` PC Web）
+- `/` → **不提供静态站点**（原 `apps/web` 移动端 PWA 已随 [#325](https://github.com/zzstar101/FISH/issues/325) 移除；反代里显式兜底 404 —— Caddy `handle { respond 404 }`、nginx `location / { return 404; }`，不做重定向、不留落地页）
 
 必须一直成立的四条不变量（违反任何一条都会出数据问题，见 §9）：
 
@@ -71,7 +73,7 @@ curl -fsSL https://bun.sh/install | sudo BUN_INSTALL=/usr/local bash -s "bun-v1.
 
 # 运行用户与代码目录
 sudo useradd --system --create-home --shell /usr/sbin/nologin fish
-sudo mkdir -p /srv/fish /var/www/fish /var/www/fish-pc /var/backups/fish
+sudo mkdir -p /srv/fish /var/www/fish-pc /var/backups/fish
 sudo chown fish:fish /srv/fish /var/backups/fish
 
 # 防火墙：只放 80/443，3000 / 5432 / 9000 / 9001 一律不对外
@@ -507,8 +509,8 @@ API 端口；下方代理配置会**覆盖**传入的 `X-Real-IP`。不配置受
 fish.example.com {
 	encode zstd gzip
 
-	# 与 apps/web、apps/web-pc 的 /api 代理等价：剥掉 /api 前缀转发到 API 的根级路由。
-	# 两套 Web 都只写相对路径 /api/...（各自的 src/lib/api-client.ts），生产是同源部署，
+	# 与 apps/web-pc 的 /api 代理等价：剥掉 /api 前缀转发到 API 的根级路由。
+	# PC Web 只写相对路径 /api/...（src/lib/api-client.ts），生产是同源部署，
 	# 因此不需要跨域，cookie 自动携带。
 	handle /api/* {
 		uri strip_prefix /api
@@ -526,7 +528,7 @@ fish.example.com {
 		reverse_proxy 127.0.0.1:3000
 	}
 
-	# PC Web 只挂 /pc/；无尾斜杠先规范化，避免落到移动端根目录。
+	# PC Web 只挂 /pc/；无尾斜杠先规范化。
 	redir /pc /pc/ 308
 
 	# PC Web（/pc/）：资源带内容哈希走长缓存，其余深链接回落到 PC 自己的 index.html
@@ -545,20 +547,11 @@ fish.example.com {
 		file_server
 	}
 
-	# 带内容哈希的产物：长缓存
-	handle /assets/* {
-		root * /var/www/fish
-		header Cache-Control "public, max-age=31536000, immutable"
-		file_server
-	}
-
-	# SPA 兜底：TanStack Router 走 history 路由，深链接必须回落到 index.html；
-	# index.html 不缓存，否则发版后客户端会一直拿着指向旧哈希产物的壳。
+	# 站点根 `/`（以及其它未匹配路径）：`apps/web` 移除后不提供静态站点，显式 404
+	#（不重定向、不留落地页，见 §0 / #325）。必须显式兜底：Caddy 对站点块内没有
+	# handle 命中的请求返回 **200 空响应**，不写这一条 `/` 会是 200 而不是 404。
 	handle {
-		root * /var/www/fish
-		header Cache-Control "no-store"
-		try_files {path} /index.html
-		file_server
+		respond 404
 	}
 }
 
@@ -585,7 +578,6 @@ sudo systemctl reload caddy
 server {
   listen 443 ssl http2;
   server_name fish.example.com;
-  root /var/www/fish;
 
   location = /pc {
     return 308 /pc/;
@@ -599,7 +591,6 @@ server {
     add_header Cache-Control "no-store";
     try_files $uri $uri/ /pc/index.html;
   }
-  location /assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
   location /api/ {
     proxy_pass http://127.0.0.1:3000/;   # 末尾的 / 才会剥掉 /api 前缀
     proxy_set_header Host $host;
@@ -611,11 +602,12 @@ server {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
-    proxy_read_timeout 1h;              # 客户端心跳 25s 一次（apps/web/src/features/chat/realtime.ts）
+    proxy_read_timeout 1h;              # 客户端心跳 25s 一次（apps/web-pc/src/features/chat/realtime.ts）
   }
+  # 站点根 `/`：apps/web 移除后不提供静态站点，显式 404（不重定向、不留落地页，见 #325 与 §0）。
+  # 本 server 块里已无 root 指令，若不显式拒绝，`/` 会落到 nginx 编译期的默认站点目录。
   location / {
-    add_header Cache-Control "no-store";
-    try_files $uri /index.html;
+    return 404;
   }
 }
 
@@ -644,11 +636,10 @@ cd /srv/fish
 # 1) 建表（走仓库文档化的同一条命令；它需要 §4 的 .env）
 sudo -u fish -H /usr/local/bin/bun run db:migrate
 
-# 2) 前端产物：构建 apps/web 与 apps/web-pc，分别同步到 Caddy 的两个根目录
+# 2) 前端产物：构建并同步到静态根目录
 sudo -u fish -H /usr/local/bin/bun run build
-sudo rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/
 sudo rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
-sudo chown -R caddy:caddy /var/www/fish /var/www/fish-pc   # 换 nginx 时改成 www-data
+sudo chown -R caddy:caddy /var/www/fish-pc   # 换 nginx 时改成 www-data
 
 # 3) 起服务（§5 里只 enable 了，这里才第一次启动）
 sudo systemctl restart fish-api fish-worker
@@ -734,7 +725,6 @@ sudo -u fish -H /usr/local/bin/bun run db:migrate
 
 # 5) 前端产物
 sudo -u fish -H /usr/local/bin/bun run build
-rsync -a --delete /srv/fish/apps/web/dist/ /var/www/fish/
 rsync -a --delete /srv/fish/apps/web-pc/dist/ /var/www/fish-pc/
 
 # 6) 起服务
@@ -788,12 +778,11 @@ cd /srv/fish && WS_URL=ws://127.0.0.1:3000/ws /usr/local/bin/bun run ws:smoke
 #     -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
 #     https://fish.example.com/ws/chat
 
-# 4) SPA 与静态产物：移动端 + PC Web
-curl -sI https://fish.example.com/ | head -1                 # 200
-curl -s  https://fish.example.com/login | grep -q '<div id="root">' && echo SPA-fallback-ok
+# 4) 静态产物：只有 PC Web（站点根 `/` 不再有静态站点，由反代显式兜底返回 404，见 §0）
+curl -sI https://fish.example.com/ | head -1                 # 404
 curl -sI https://fish.example.com/pc | head -1               # 308
 curl -sI https://fish.example.com/pc/ | head -1              # 200
-# PC 与移动端 index 都有 <div id="root">，必须用 PC 自己的 title 区分回落目标。
+# PC index 有 <div id="root">，必须用 PC 自己的 title 区分回落目标。
 curl -s  'https://fish.example.com/pc/search?q=keyboard' | grep -q '<title>FISH · 校园二手</title>' && echo PC-SPA-fallback-ok
 # curl 只能确认未知路径回落到 PC index；404 文案“页面不存在”仍需在浏览器里确认。
 curl -s  https://fish.example.com/pc/no-such-route | grep -q '<title>FISH · 校园二手</title>' && echo PC-404-fallback-ok
@@ -840,7 +829,8 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
 4. **`S3_ENDPOINT` / `S3_PUBLIC_URL` 必须同时对“服务端”与“浏览器”可达**：
    - 图片是**客户端直传**：`presign` 返回的 URL 由 `Bun.S3Client` 按 `S3_ENDPOINT` 的 host 签名
      （`apps/api/src/modules/uploads/storage.ts`），浏览器直接 `PUT` 它
-     （`apps/web/src/features/sell/api.ts:61`）。写成 `http://127.0.0.1:9000` 只有服务器能访问，上传必失败。
+     （`apps/web-pc/src/features/publish/api.ts`；移动端小程序对应 `apps/miniapp/src/features/upload/api.ts` 的直传 PUT。）
+     写成 `http://127.0.0.1:9000` 只有服务器能访问，上传必失败。
    - **服务端也要能访问同一个地址**：上传确认时 API 会调 `storage.stat()`（`apps/api/src/modules/uploads/service.ts`），
      它走的是同一个 `S3Client`/同一个 `S3_ENDPOINT`。而 `stat()` 把**任何**失败都降级成 `null` → 接口返回 422
      `UPLOAD_OBJECT_MISSING`「图片尚未上传完成」，报错指向的原因和真实原因（服务端连不上对象存储）不一致。
@@ -861,7 +851,7 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
    线上跑的是哪个版本，要用 `git -C /srv/fish rev-parse HEAD`。
 9. **单机单点**：Postgres、MinIO、API、Worker 都在一台机器上，任何一块坏了整站不可用；§10 的备份
    是唯一的恢复手段。
-10. **HTTPS 是硬需求**：产品是移动端 PWA，且会话 cookie 依赖 Secure。同时反代证书续期失败会直接
+10. **HTTPS 是硬需求**：会话 cookie 依赖 Secure（`WEB_ORIGIN` 必须以 `https://` 开头）。同时反代证书续期失败会直接
     让整站不可访问，需要监控。（内网明文部署是例外，见 §11。）
 11. **`/ws` 是无鉴权的 echo 入口**：`apps/api/src/app.ts` 的 `app.get('/ws', upgradeWebSocket(...))`
     只回显文本帧，不做任何认证，仅供链路冒烟。反代不要暴露它（§6 只放 `/ws/*`），验收时打回环
@@ -1059,7 +1049,7 @@ S3_BUCKET=fish                                 # 桶名 = Caddy 里的 /fish/* �
 		reverse_proxy 127.0.0.1:3100
 	}
 
-	# PC Web 只挂 /pc/；无尾斜杠先规范化，避免落到移动端根目录。
+	# PC Web 只挂 /pc/；无尾斜杠先规范化。
 	redir /pc /pc/ 308
 
 	handle /pc/assets/* {
@@ -1082,22 +1072,14 @@ S3_BUCKET=fish                                 # 桶名 = Caddy 里的 /fish/* �
 		reverse_proxy 127.0.0.1:9000
 	}
 
-	handle /assets/* {
-		root * /var/www/fish
-		header Cache-Control "public, max-age=31536000, immutable"
-		file_server
-	}
-
+	# 站点根 `/` 与其它未匹配路径：apps/web 移除后显式 404（见 §0 / #325）。
 	handle {
-		root * /var/www/fish
-		header Cache-Control "no-store"
-		try_files {path} /index.html
-		file_server
+		respond 404
 	}
 }
 ```
 
-`handle` 按书写顺序匹配，`/fish/*` 必须在兜底之前。仓库现有前端路由（移动端根级路径与 PC 的 `/pc/*` 命名空间）没有 `/fish` 前缀，不冲突。
+`handle` 按书写顺序匹配，`/fish/*` 必须在兜底之前。仓库现有前端路由（PC 的 `/pc/*` 命名空间）没有 `/fish` 前缀，不冲突。站点根 `/` 与其它未匹配路径由最后的 `handle { respond 404 }` 显式拒绝（#325：`apps/web` 移除后不提供静态站点，不做重定向、不留落地页）；Caddy 对站点块内没有 handle 命中的请求返回 200 空响应，所以这条兜底不能省。
 
 ### 11.6 容器里没有 systemd 时的代替方案
 
