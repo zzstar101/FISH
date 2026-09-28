@@ -103,14 +103,17 @@ async function drainQueue(): Promise<void> {
 
     // 按 eventId 出队：冲刷期间新入队的事件要留下（读最新再过滤）。
     const sent = new Set(batch.map((event) => event.eventId))
-    const written = writeQueue(readQueue().filter((event) => !sent.has(event.eventId)))
-    if (written) continue
+    const rest = readQueue().filter((event) => !sent.has(event.eventId))
 
-    // 写回失败：本地队列一个字都没变，再循环只会把同一批无限重发——`flushPromise` 永不
-    // settle，之后所有入队与定时器都挂在死 promise 上。埋点是尽力而为的旁路，喊一声就收工；
-    // 事件留在本地，下次写成功时连原 eventId 一起补发。
-    console.warn('[recommendation] 本地队列写回失败，停止本轮冲刷', batch.length)
-    return
+    // 两道判据：写回是否返回成功，以及**重读确认**已发出的 id 真的不在队列里了。
+    // `setItem` 在某些浏览器 / 隐私模式下既不抛错也不落盘（静默失败），只看返回值就会以为
+    // 出队成功，于是同一批被无限重发、`flushPromise` 永不 settle（之后所有入队与定时器都挂在
+    // 死 promise 上）。埋点是尽力而为的旁路，喊一声就收工；事件留在本地，下次写成功时连原
+    // eventId 一起补发。
+    if (!writeQueue(rest) || readQueue().some((event) => sent.has(event.eventId))) {
+      console.warn('[recommendation] 本地队列写回失败，停止本轮冲刷', batch.length)
+      return
+    }
   }
 }
 

@@ -652,6 +652,25 @@ describe('recommendation domain events (#323 R1)', () => {
     const rows = await eventsFor(listingId, 'COMMENT')
     expect(rows).toHaveLength(1)
     expect(rows[0]?.position).toBeNull()
+
+    // 非规范整数字串也不能被 `Number.parseInt` 悄悄截断：`5.9` → 5、`1e3` → 1 都是凭空
+    // 多出来的错误位次，归因宁可没有。
+    const decimal = await app.request(
+      `/listings/${listingId}/comments`,
+      post(
+        { content: '位次不是整数字串' },
+        {
+          cookie: buyer.cookie,
+          'x-recommendation-position': '5.9',
+          'x-recommendation-request-id': newId(),
+        },
+      ),
+    )
+    expect(decimal.status).toBe(201)
+
+    const withDecimal = await eventsFor(listingId, 'COMMENT')
+    expect(withDecimal).toHaveLength(2)
+    expect(withDecimal.every((row) => row.position === null)).toBe(true)
   })
 })
 

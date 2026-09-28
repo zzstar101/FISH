@@ -7,6 +7,8 @@ const LISTING_ID = 'lst_01jc000000e00800000000001a'
 
 /** 模拟配额写满：置为 true 后 `setItem` 抛错，`getItem` 仍能读到已写入的内容。 */
 let failWrites = false
+/** 模拟静默失败：`setItem` 不抛错也不落盘（某些浏览器 / 隐私模式下的 `localStorage`）。 */
+let silentWriteDrops = false
 
 function createStorage(): Storage {
   const entries = new Map<string, string>()
@@ -28,6 +30,7 @@ function createStorage(): Storage {
     },
     setItem(key, value) {
       if (failWrites) throw new Error('QuotaExceededError')
+      if (silentWriteDrops) return
       entries.set(key, value)
     },
   }
@@ -61,6 +64,7 @@ function rejected(status: number): Response {
 beforeEach(() => {
   localStorageStub.clear()
   failWrites = false
+  silentWriteDrops = false
   calls = []
   respond = async () => accepted()
   Object.assign(globalThis, {
@@ -184,6 +188,34 @@ describe('flushRecommendationQueue', () => {
     expect(calls).toHaveLength(1)
     // 事件保留在本地（读得到），下次写成功时连原 eventId 一起补发。
     failWrites = false
+    expect(queuedEvents().map((item) => item.eventId)).toEqual(queued.map((item) => item.eventId))
+  })
+
+  test('本地存储静默丢弃写入时同样收工（只看返回值会无限重发）', async () => {
+    const queued = [event(), event()]
+    seedQueue(queued)
+    let delivered = 0
+    respond = async () => {
+      delivered += 1
+      if (delivered > 3) throw new Error('静默写失败后仍在重发同一批事件')
+      return new Response(JSON.stringify({ accepted: 0, duplicates: 2, rejected: 0 }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    // `setItem` 不抛错也不落盘：只看返回值的实现会以为已经出队，于是把同一批发第二遍。
+    silentWriteDrops = true
+
+    const settled = await Promise.race([
+      withoutWarnings(() => flushRecommendationQueue()).then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 1_000)
+      }),
+    ])
+
+    expect(settled).toBe(true)
+    expect(calls).toHaveLength(1)
+    // 队列在存储里一个字都没变，事件还在（下次写成功时连原 eventId 一起补发）。
     expect(queuedEvents().map((item) => item.eventId)).toEqual(queued.map((item) => item.eventId))
   })
 

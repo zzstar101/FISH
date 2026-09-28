@@ -46,7 +46,10 @@ export function readRecommendationContext(c: Context): RecommendationContext {
   const sourceRaw = c.req.header(RECOMMENDATION_HEADERS.source)
   const sourceParsed = sourceRaw ? RecommendationSourceSchema.safeParse(sourceRaw) : null
   const positionRaw = c.req.header(RECOMMENDATION_HEADERS.position)
-  const position = positionRaw ? Number.parseInt(positionRaw, 10) : Number.NaN
+  // 只认规范的十进制整数字串。`Number.parseInt` 会把 `5.9` 读成 5、`1e3` 读成 1、` 7 ` 读成 7，
+  // 与请求体 `z.number().int()` 的严格口径不一致——分析维度会凭空多出错误的位次。
+  const position =
+    positionRaw && /^\d+$/.test(positionRaw) ? Number.parseInt(positionRaw, 10) : Number.NaN
 
   return {
     // requestId 同样转小写：它与 `recommendation_requests.id` 比对，PG 回读的是小写。

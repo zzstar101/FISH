@@ -37,7 +37,7 @@
 
 ## 3. 数据模型
 
-迁移：`packages/db/src/migrations/20260928164032_dusty_doctor_spectrum.sql`（由 `bun run --filter '@fish/db' generate` 生成，未手改）。
+迁移：`packages/db/src/migrations/20260928191108_special_the_call.sql`（由 `bun run --filter '@fish/db' generate` 生成，未手改；第三轮加了 `PURCHASE` 的部分唯一索引后删掉本分支旧条目重新生成，故 tag 与文件名都变了）。
 
 ### `recommendation_requests` — 一次推荐请求的上下文（不可变行）
 
