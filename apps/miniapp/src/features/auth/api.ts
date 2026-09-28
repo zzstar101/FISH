@@ -2,8 +2,8 @@
  * 认证域 API（微信登录 / 当前用户 / 退出）。
  *
  * 主身份是「微信 code → 会话」（`packages/contracts/src/auth/wechat.ts`）；
- * 学号 + 密码那条契约（`packages/contracts/src/auth/session.ts`）**只留在 PC Web 端**
- * （见 `apps/web-pc/src/routes/login.tsx`），小程序侧已无入口。cookie 的存取由
+ * 学号 + 密码那条契约（`packages/contracts/src/auth/session.ts`）**只留在 web 端**
+ * （见 `apps/web/src/routes/login.tsx`），小程序侧已无入口。cookie 的存取由
  * `@/lib/session` 负责，`apiRequest` 已在响应里接住 `Set-Cookie`，调用方不用管。
  *
  * 这里只做「发请求 + 用契约 schema 收口」，不吞错误码：
@@ -41,4 +41,16 @@ export async function logout(): Promise<void> {
 export async function wechatSignIn(code: string): Promise<Me> {
   const payload = await apiRequest('/auth/wechat/session', { method: 'POST', body: { code } })
   return WechatSessionResponseSchema.parse(payload).user
+}
+
+/**
+ * 扫码登录确认（#197）：把登录票据绑到**当前会话用户**。
+ *
+ * 契约 `packages/contracts/src/auth/scan.ts`：204 无响应体；`ticket` 是 22 字符
+ * base64url（URL 安全字符集，无需编码）。失败错误码原样透出，由确认页翻译：
+ * 404 `SCAN_TICKET_INVALID`（不存在 / 过期 / 已兑换）与 409 `SCAN_TICKET_CONFLICT`
+ * （已被另一个账号确认）。会话 cookie 由 `apiRequest` 统一携带。
+ */
+export async function confirmScanTicket(ticket: string): Promise<void> {
+  await apiRequest(`/auth/wechat/scan/ticket/${ticket}/confirm`, { method: 'POST' })
 }

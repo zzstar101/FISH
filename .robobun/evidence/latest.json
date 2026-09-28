@@ -1,0 +1,63 @@
+{
+  "schema": "robobun.verify/1",
+  "task": null,
+  "attempt": null,
+  "profile": "full",
+  "commit": "babf4d1c4098db892a2e93974eb6457757c79782",
+  "dirty": true,
+  "started_at": "2026-09-28T15:16:48.545Z",
+  "finished_at": "2026-09-28T15:17:25.211Z",
+  "status": "passed",
+  "stages": [
+    {
+      "name": "install",
+      "command": "bun install --frozen-lockfile",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 43,
+      "failed_tests": [],
+      "log": ".robobun/evidence/verify-2026-09-28T15-16-48-518Z/logs/install.log"
+    },
+    {
+      "name": "db_prepare",
+      "command": "docker compose up -d --wait postgres minio && bun run db:generate && bun run db:migrate && bun run db:seed",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 1077,
+      "failed_tests": [],
+      "log": ".robobun/evidence/verify-2026-09-28T15-16-48-518Z/logs/db_prepare.log"
+    },
+    {
+      "name": "typecheck",
+      "command": "bun run typecheck",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 1471,
+      "failed_tests": [],
+      "log": ".robobun/evidence/verify-2026-09-28T15-16-48-518Z/logs/typecheck.log"
+    },
+    {
+      "name": "lint",
+      "command": "bun run lint",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 423,
+      "failed_tests": [],
+      "log": ".robobun/evidence/verify-2026-09-28T15-16-48-518Z/logs/lint.log"
+    },
+    {
+      "name": "unit_test",
+      "command": "bun test --isolate --timeout 20000",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 33652,
+      "failed_tests": [],
+      "log": ".robobun/evidence/verify-2026-09-28T15-16-48-518Z/logs/unit_test.log"
+    }
+  ],
+  "summary": {
+    "passed": 5,
+    "failed": 0,
+    "skipped": 0
+  }
+}

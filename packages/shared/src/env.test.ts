@@ -4,6 +4,7 @@ import {
   loadAiPolishEnv,
   loadContentModerationEnv,
   loadEmbeddingEnv,
+  loadWechatEnv,
 } from './env'
 
 describe('loadAiPolishEnv', () => {
@@ -284,5 +285,43 @@ describe('loadEmbeddingEnv', () => {
     expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: '' })).toThrow(/必须显式设置/)
     expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'stub ' })).toThrow(/必须显式设置/)
     expect(() => loadEmbeddingEnv({ EMBEDDING_TRANSPORT: 'local' })).toThrow(/必须显式设置/)
+  })
+})
+
+describe('loadWechatEnv 的 WECHAT_QR_ENV_VERSION（#197）', () => {
+  const live = (extra: Record<string, string>) =>
+    loadWechatEnv({
+      WECHAT_TRANSPORT: 'live',
+      WECHAT_APPID: 'wx123',
+      WECHAT_APP_SECRET: 's',
+      ...extra,
+    })
+
+  test('缺省 release（官方默认，要求小程序已发布）', () => {
+    expect(live({})).toEqual({
+      transport: 'live',
+      appid: 'wx123',
+      appSecret: 's',
+      qrEnvVersion: 'release',
+    })
+  })
+
+  test('trial / develop 可显式指定；空白视为未设置', () => {
+    expect(live({ WECHAT_QR_ENV_VERSION: 'trial' })).toMatchObject({ qrEnvVersion: 'trial' })
+    expect(live({ WECHAT_QR_ENV_VERSION: 'develop' })).toMatchObject({ qrEnvVersion: 'develop' })
+    expect(live({ WECHAT_QR_ENV_VERSION: '  ' })).toMatchObject({ qrEnvVersion: 'release' })
+  })
+
+  test('拼错的版本名在启动时就炸，而不是等第一次扫码', () => {
+    expect(() => live({ WECHAT_QR_ENV_VERSION: 'dev' })).toThrow('WECHAT_QR_ENV_VERSION')
+  })
+
+  test('设置即校验：off / stub 下的非法取值同样启动失败', () => {
+    expect(() => loadWechatEnv({ WECHAT_TRANSPORT: 'off', WECHAT_QR_ENV_VERSION: 'dev' })).toThrow(
+      'WECHAT_QR_ENV_VERSION',
+    )
+    expect(() => loadWechatEnv({ WECHAT_TRANSPORT: 'stub', WECHAT_QR_ENV_VERSION: 'dev' })).toThrow(
+      'WECHAT_QR_ENV_VERSION',
+    )
   })
 })

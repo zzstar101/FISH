@@ -1,0 +1,102 @@
+diff --git a/packages/db/src/seed.test.ts b/packages/db/src/seed.test.ts
+index c88c268..f05529d 100644
+--- a/packages/db/src/seed.test.ts
++++ b/packages/db/src/seed.test.ts
+@@ -112,6 +112,64 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
+     `)
+     expect([...orphanTx]).toEqual([])
+ 
++    // #301 业务不变量：SQL 直查库（不经客户端 mock），违规行一律期望空数组。
++    // 断言口径取自真实读写路径：交易状态机由 accept 的条件更新驱动
++    // （schema/transactions.ts 的「UPDATE listings ... WHERE status='ACTIVE'」注释），
++    // fixture 若绕过状态机写脏数据，这里必须红。CANCELLED 不参与：交易取消后
++    // 商品可以另行售出，CANCELLED ↔ 非 SOLD 不构成不变量。
++    const txListingStatusViolations = await scratch.execute<{
++      id: string
++      txStatus: string
++      listingStatus: string
++    }>(sql`
++      select t.id, t.status as "txStatus", l.status as "listingStatus"
++      from transactions t
++      join listings l on l.id = t.listing_id
++      where (t.status = 'COMPLETED' and l.status <> 'SOLD')
++         or (t.status = 'PENDING_MEETUP' and l.status = 'SOLD')
++    `)
++    expect([...txListingStatusViolations]).toEqual([])
++
++    // 会话参与者对称：buyer ≠ seller，且两人都真实存在于 users。
++    const conversationParticipantViolations = await scratch.execute<{ id: string }>(sql`
++      select c.id
++      from conversations c
++      left join users b on b.id = c.buyer_id
++      left join users s on s.id = c.seller_id
++      where c.buyer_id = c.seller_id or b.id is null or s.id is null
++    `)
++    expect([...conversationParticipantViolations]).toEqual([])
++
++    // 消息发送者合法：sender 为 null（SYSTEM），或属于该会话的买家/卖家。
++    const messageSenderViolations = await scratch.execute<{ id: string }>(sql`
++      select m.id
++      from messages m
++      join conversations c on c.id = m.conversation_id
++      where m.sender_id is not null
++        and m.sender_id <> c.buyer_id
++        and m.sender_id <> c.seller_id
++    `)
++    expect([...messageSenderViolations]).toEqual([])
++
++    // tx.accepted SYSTEM 消息必须指向真实交易，且不带发送者。content 是 text，
++    // 可能是纯文案（如「买家发起了交易确认。」），不能无条件 ::jsonb——
++    // CASE 包住 pg_input_is_valid，Postgres 只对命中的分支求值，纯文案行安全跳过。
++    // join 用 id::text 比较：payload 是坏 UUID 时报「违规行」而不是把测试打崩。
++    const txMessageViolations = await scratch.execute<{ id: string }>(sql`
++      with payloads as (
++        select m.id,
++               m.sender_id,
++               case when pg_input_is_valid(m.content, 'jsonb') then m.content::jsonb end as payload
++        from messages m
++      )
++      select p.id
++      from payloads p
++      left join transactions t on t.id::text = p.payload ->> 'transactionId'
++      where p.payload ->> 'type' = 'tx.accepted'
++        and (t.id is null or p.sender_id is not null)
++    `)
++    expect([...txMessageViolations]).toEqual([])
++
+     // seed 写的是真实 argon2id 哈希（#3 替换了 #2 的占位值），前端要用它登录调试，
+     // 因此这里断言文档里的演示密码（README「演示账号」）确实能校验通过，而不只断言行数。
+     const demoUsers = await scratch
+@@ -144,6 +202,18 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
+       .select({ status: jobs.status, attempts: jobs.attempts })
+       .from(jobs)
+     expect(seededJobs).toEqual([{ status: 'PENDING', attempts: 0 }])
++
++    // #301：补上 payload 引用的 listing 存在性（上面只查了 jsonb_typeof）。
++    // 口径 = listings.id：契约 MatchListingJobPayloadSchema 是 z.uuid()，worker 的
++    // matchListing 也按 id 消费；issue 原文写的 listingNo 与契约/fixture 均不符，不采用。
++    const jobListingViolations = await scratch.execute<{ id: string }>(sql`
++      select j.id
++      from jobs j
++      left join listings l on l.id::text = j.payload ->> 'listingId'
++      where j.payload ->> 'listingId' is not null
++        and l.id is null
++    `)
++    expect([...jobListingViolations]).toEqual([])
+   } finally {
+     await scratch.$client.close()
+     await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
+diff --git a/packages/db/src/seed.ts b/packages/db/src/seed.ts
+index 30571dc..0046336 100644
+--- a/packages/db/src/seed.ts
++++ b/packages/db/src/seed.ts
+@@ -142,6 +142,9 @@ export async function seed(tx: SeedTx): Promise<void> {
+ 
+   // The reservation table must not be truncated: historical references remain occupied.
+   // Only the same seed UUID may reclaim its own reserved number on repeated local resets.
++  // #301 TRUNCATE 差额审计：有意不清空的另外两张是 `id_rekeys`（ID 迁移台账，无外键）
++  // 与 `listing_lookup_attempts`（60s 限流台账，subjectKey 是 HMAC 文本，不引用业务表），
++  // 清空它们既不必要也不会解除任何外键阻塞。
+   await tx
+     .insert(listingNumbers)
+     .values([...listingReferences])

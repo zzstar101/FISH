@@ -1,0 +1,32 @@
+bun test v1.4.2 (744846f84)
+
+packages/db/src/seed.test.ts:
+126 |       from transactions t
+127 |       join listings l on l.id = t.listing_id
+128 |       where (t.status = 'COMPLETED' and l.status <> 'SOLD')
+129 |          or (t.status = 'PENDING_MEETUP' and l.status = 'SOLD')
+130 |     `)
+131 |     expect([...txListingStatusViolations]).toEqual([])
+                                                 ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "id": "01930000-0000-7000-8000-000000000052",
++     "listingStatus": "RESERVED",
++     "txStatus": "COMPLETED",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 7
+
+      at <anonymous> (/Users/coast/Documents/project/Fish-301/packages/db/src/seed.test.ts:131:44)
+(fail) seed 可生成基础数据（matches/notifications 留空，由 worker 产出），且演示账号可登录 [406.40ms]
+(pass) jsonParam 把对象与数组都编码成对应类型的 jsonb [149.17ms]
+
+ 1 pass
+ 1 fail
+ 13 expect() calls
+Ran 2 tests across 1 file. [604.00ms]

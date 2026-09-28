@@ -21,6 +21,12 @@ const LOGIN_PAGE = '/pages/login/index'
 type GuardOptions = {
   /** 当前页是 Tab 页 */
   tab?: boolean
+  /**
+   * 跳登录页用的地址（可带参数），缺省 `LOGIN_PAGE`。扫码确认页（#197）带
+   * `back` + `ticket` 跳转：登录成功后原路回到确认页把票据续上，否则
+   * 「扫码时未登录 → 登录 → 回首页」会把票据丢在半路。
+   */
+  loginUrl?: string
 }
 
 /**
@@ -42,11 +48,12 @@ export function useAuthGuard(options: GuardOptions = {}): AuthStatus {
 
   useEffect(() => {
     if (status !== 'anonymous') return
+    const url = options.loginUrl ?? LOGIN_PAGE
     const navigate = options.tab ? Taro.navigateTo : Taro.redirectTo
-    void navigate({ url: LOGIN_PAGE }).catch(() => {
-      void Taro.reLaunch({ url: LOGIN_PAGE })
+    void navigate({ url }).catch(() => {
+      void Taro.reLaunch({ url })
     })
-  }, [status, options.tab])
+  }, [status, options.tab, options.loginUrl])
 
   return status
 }

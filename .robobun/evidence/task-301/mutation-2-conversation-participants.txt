@@ -1,0 +1,46 @@
+bun test v1.4.2 (744846f84)
+
+packages/db/src/seed.test.ts:
+36 |   async queryWithCache(queryString, params, query) {
+37 |     if (this.cache === void 0 || is(this.cache, NoopCache) || this.queryMetadata === void 0) {
+38 |       try {
+39 |         return await query();
+40 |       } catch (e) {
+41 |         throw new DrizzleQueryError(queryString, params, e);
+                   ^
+error: Failed query: insert into "conversations" ("id", "listing_id", "buyer_id", "seller_id", "buyer_last_read_at", "seller_last_read_at", "last_message_at", "created_at", "updated_at") values ($1, $2, $3, $4, $5, default, $6, $7, default), ($8, $9, $10, $11, $12, default, $13, $14, default), ($15, $16, $17, $18, $19, default, $20, $21, default)
+params: 01930000-0000-7000-8000-000000000041,01930000-0000-7000-8000-000000000011,01930000-0000-7000-8000-00000000000b,01930000-0000-7000-8000-00000000000a,2026-09-27T15:14:18.629Z,2026-09-27T15:14:18.629Z,2026-09-27T15:14:18.629Z,01930000-0000-7000-8000-000000000044,01930000-0000-7000-8000-000000000014,01930000-0000-7000-8000-00000000000b,01930000-0000-7000-8000-00000000000b,2026-09-27T15:14:18.629Z,2026-09-27T15:14:18.629Z,2026-09-27T15:14:18.629Z,01930000-0000-7000-8000-000000000045,01930000-0000-7000-8000-000000000015,01930000-0000-7000-8000-00000000000c,01930000-0000-7000-8000-00000000000b,2026-09-21T15:14:18.629Z,2026-09-21T15:14:18.629Z,2026-09-21T15:14:18.629Z
+  query: "insert into \"conversations\" (\"id\", \"listing_id\", \"buyer_id\", \"seller_id\", \"buyer_last_read_at\", \"seller_last_read_at\", \"last_message_at\", \"created_at\", \"updated_at\") values ($1, $2, $3, $4, $5, default, $6, $7, default), ($8, $9, $10, $11, $12, default, $13, $14, default), ($15, $16, $17, $18, $19, default, $20, $21, default)",
+ params: [
+  "01930000-0000-7000-8000-000000000041", "01930000-0000-7000-8000-000000000011", "01930000-0000-7000-8000-00000000000b",
+  "01930000-0000-7000-8000-00000000000a", "2026-09-27T15:14:18.629Z", "2026-09-27T15:14:18.629Z",
+  "2026-09-27T15:14:18.629Z", "01930000-0000-7000-8000-000000000044", "01930000-0000-7000-8000-000000000014",
+  "01930000-0000-7000-8000-00000000000b", "01930000-0000-7000-8000-00000000000b", "2026-09-27T15:14:18.629Z",
+  "2026-09-27T15:14:18.629Z", "2026-09-27T15:14:18.629Z", "01930000-0000-7000-8000-000000000045",
+  "01930000-0000-7000-8000-000000000015", "01930000-0000-7000-8000-00000000000c", "01930000-0000-7000-8000-00000000000b",
+  "2026-09-21T15:14:18.629Z", "2026-09-21T15:14:18.629Z", "2026-09-21T15:14:18.629Z"
+],
+
+      at queryWithCache (/Users/coast/Documents/project/Fish-301/node_modules/.bun/drizzle-orm@0.45.2+fa2ecce84dfbcbb3/node_modules/drizzle-orm/pg-core/session.js:41:15)
+      at async <anonymous> (/Users/coast/Documents/project/Fish-301/node_modules/.bun/drizzle-orm@0.45.2+fa2ecce84dfbcbb3/node_modules/drizzle-orm/bun-sql/session.js:32:29)
+
+PostgresError: new row for relation "conversations" violates check constraint "conversations_buyer_id_differs_from_seller_id"
+      errno: "23514",
+     detail: "Failing row contains (01930000-0000-7000-8000-000000000044, 01930000-0000-7000-8000-000000000014, 01930000-0000-7000-8000-00000000000b, 01930000-0000-7000-8000-00000000000b, 2026-09-27 15:14:18.629+00, null, 2026-09-27 15:14:18.629+00, 2026-09-27 15:14:18.629+00, 2026-09-28 15:14:18.619582+00).",
+   severity: "ERROR",
+     schema: "public",
+      table: "conversations",
+ constraint: "conversations_buyer_id_differs_from_seller_id",
+       file: "execMain.c",
+    routine: "ExecConstraints",
+       code: "ERR_POSTGRES_SERVER_ERROR"
+
+      at wrapPostgresError (internal:sql/postgres:176:27)
+      at onRejectPostgresQuery (internal:sql/postgres:204:33)
+(fail) seed 可生成基础数据（matches/notifications 留空，由 worker 产出），且演示账号可登录 [205.74ms]
+(pass) jsonParam 把对象与数组都编码成对应类型的 jsonb [132.02ms]
+
+ 1 pass
+ 1 fail
+ 7 expect() calls
+Ran 2 tests across 1 file. [369.00ms]

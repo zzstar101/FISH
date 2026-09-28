@@ -1,0 +1,5 @@
+TRUNCATE 清单表数:       26
+--- information_schema public 业务表 ∖ TRUNCATE 清单 ---
+id_rekeys
+listing_lookup_attempts
+listing_numbers

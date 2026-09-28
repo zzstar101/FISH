@@ -24,7 +24,6 @@ import {
 } from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
-import { createBrandAssetsRouter } from './modules/brand-assets/router'
 import { createCommentsRouter } from './modules/comments/router'
 import { createCommentService } from './modules/comments/service'
 import { createSqlCommentStore } from './modules/comments/store'
@@ -134,10 +133,6 @@ export function createApp(
 
   app.use('*', cors({ origin: env.WEB_ORIGIN, exposeHeaders: [RECOMMENDATION_HEADERS.sessionId] }))
 
-  // 品牌静态图（#325）：`apps/web` 移除后站点静态根不存在了，邮件 logo / README 头图改由
-  // API 托管，URL 形如 `${WEB_ORIGIN}/api/brand/logo.png`（生产 Caddy 的 `/api/*` 剥前缀）。
-  app.route('/', createBrandAssetsRouter())
-
   // The auth module also has authenticated write endpoints. Construct the shared guard
   // before mounting auth, so those writes follow the same restriction rules as domains.
   const governanceStore = createSqlGovernanceStore(db)
@@ -149,27 +144,27 @@ export function createApp(
   //
   // #68：注册一律 UNVERIFIED；认证走校园邮箱验证码（Provider 见 verification-provider.ts，
   // dev 实现写 .dev/mail-outbox.jsonl，不进日志）。接入真实 SMTP / CAS 时只换 Provider 实现。
-  // 邮件里的图片必须绝对地址；#325 起 logo 由 API 自己托管（apps/api/public/brand/logo.png），
-  // 生产 Caddy 的 `/api/*` 会剥前缀再转发，所以对外地址固定带 `/api`。
-  // transport 由 MAIL_TRANSPORT 显式选择（无默认值，缺配置启动失败，不静默降级）。
-  const brandLogoUrl = `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/brand/logo.png`
   const auth = createAuthModule({
     db,
     verification: createVerificationService({
       db,
+      // 邮件里的图片必须绝对地址；logo 由 Web 站点托管（apps/web/public/logo.png）。
+      // transport 由 MAIL_TRANSPORT 显式选择（无默认值，缺配置启动失败，不静默降级）。
       provider:
         mailEnv.transport === 'resend'
           ? createResendEmailVerificationProvider(
               { apiKey: mailEnv.resendApiKey, from: mailEnv.resendFrom },
-              { logoUrl: brandLogoUrl },
+              { logoUrl: `${env.WEB_ORIGIN}/logo.png` },
             )
           : createDevEmailVerificationProvider(undefined, {
-              logoUrl: brandLogoUrl,
+              logoUrl: `${env.WEB_ORIGIN}/logo.png`,
             }),
     }),
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
     guard: restrictionGuard,
+    clientIp: (request) =>
+      trustedClientIp(request, lookupNetwork.peerIp(request), lookupNetwork.trustedProxyIp),
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)

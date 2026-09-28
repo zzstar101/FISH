@@ -1,0 +1,30 @@
+bun test v1.4.2 (744846f84)
+
+packages/db/src/seed.test.ts:
+147 |       join conversations c on c.id = m.conversation_id
+148 |       where m.sender_id is not null
+149 |         and m.sender_id <> c.buyer_id
+150 |         and m.sender_id <> c.seller_id
+151 |     `)
+152 |     expect([...messageSenderViolations]).toEqual([])
+                                               ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "id": "01930000-0000-7000-8000-000000000042",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 5
+
+      at <anonymous> (/Users/coast/Documents/project/Fish-301/packages/db/src/seed.test.ts:152:42)
+(fail) seed 可生成基础数据（matches/notifications 留空，由 worker 产出），且演示账号可登录 [405.29ms]
+(pass) jsonParam 把对象与数组都编码成对应类型的 jsonb [153.86ms]
+
+ 1 pass
+ 1 fail
+ 15 expect() calls
+Ran 2 tests across 1 file. [590.00ms]
