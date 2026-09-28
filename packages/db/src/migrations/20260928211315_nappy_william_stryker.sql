@@ -1,9 +1,7 @@
--- #322 M1：embeddings.embedding 用 pgvector 的 `vector` 类型，扩展必须先于 CREATE TABLE 存在。
--- 本行是本仓库「不手改生成迁移」的唯一一处**追加式**例外（只加不提：生成器产出的语句一个字节不动），
--- 理由与边界见根 AGENTS.md 第 8 节与 packages/db/AGENTS.md 的「pgvector 扩展」一条：
--- drizzle-kit 0.31 / drizzle-orm 0.45 都没有 `CREATE EXTENSION` 的表达能力（无 `pgExtension`），
--- 而 `drizzle-kit generate --custom` 只产 `.sql` 与 journal 条目、**不产 snapshot**，
--- 会直接踩红 `src/migrations-journal.test.ts` 的「snapshot 数量 === journal 条目数」断言。
+-- 本行是 AGENTS.md §8「第二处例外」允许的唯一手加内容：drizzle-kit 0.31 不能生成
+-- CREATE EXTENSION，而 `generate --custom` 只产 .sql + journal 条目、不产 snapshot，
+-- 会踩红 packages/db/src/migrations-journal.test.ts 的「snapshot 数量 === journal 条目数」断言。
+-- 必须排在 CREATE TABLE 之前：vector 类型要先存在。
 CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
 CREATE TABLE "embeddings" (
 	"id" uuid PRIMARY KEY DEFAULT uuidv7() NOT NULL,
@@ -13,6 +11,7 @@ CREATE TABLE "embeddings" (
 	"dimensions" integer NOT NULL,
 	"content_hash" text NOT NULL,
 	"embedding" vector(1536) NOT NULL,
+	"source_updated_at" timestamp with time zone NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "embeddings_exactly_one_entity" CHECK (("embeddings"."listing_id" is null) <> ("embeddings"."wish_id" is null)),

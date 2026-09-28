@@ -1,5 +1,5 @@
 {
-  "id": "a613fa3a-04fe-4a5f-ba3d-9361b34ebdea",
+  "id": "5a7b06ee-899f-430c-bda9-0c06ade2c1c4",
   "prevId": "153ce9d0-1916-4d0f-ba2f-4d3d2114b3d5",
   "version": "7",
   "dialect": "postgresql",
@@ -647,6 +647,12 @@
         "embedding": {
           "name": "embedding",
           "type": "vector(1536)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_updated_at": {
+          "name": "source_updated_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
         },

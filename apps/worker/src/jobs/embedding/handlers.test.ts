@@ -120,6 +120,50 @@ function failing(reason: EmbeddingProviderError['reason'], model = STUB_EMBEDDIN
   return provider
 }
 
+/**
+ * 向量内容由入参文本决定：第 0 维编码"这份文本属于哪一版内容"，用来断言库里最终留下的是
+ * **哪一版**的向量（stub provider 的向量无法从数值上区分内容）。
+ */
+const TEXT_KEYED_MODEL = 'text-keyed-v1'
+function textKeyedProvider(): EmbeddingProvider {
+  return {
+    model: TEXT_KEYED_MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    async embed(texts) {
+      return texts.map((text) => {
+        const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0)
+        vector[0] = text.includes('AirPods') ? 2 : 1
+        return vector
+      })
+    },
+  }
+}
+
+/**
+ * 可控 provider：进入 `embed()` 后卡在闸门上，直到测试显式放行。
+ * 用来制造"旧 job 在 provider 网络调用期间，实体被编辑且新 job 已经写完"这个竞态。
+ */
+function blocking(inner: EmbeddingProvider) {
+  let release = () => {}
+  let markEntered = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve
+  })
+  const provider: EmbeddingProvider = {
+    model: inner.model,
+    dimensions: inner.dimensions,
+    async embed(texts) {
+      markEntered()
+      await gate
+      return inner.embed(texts)
+    },
+  }
+  return { provider, release: () => release(), entered: () => entered }
+}
+
 const stub = createStubEmbeddingProvider()
 
 describe('EMBED_LISTING', () => {
@@ -177,9 +221,42 @@ describe('EMBED_LISTING', () => {
 
     const after = await findEmbedding(db, entity, STUB_EMBEDDING_MODEL)
     expect(after?.contentHash).toBe(expectHash(second))
-    // 覆盖而不是新增：旧 job 晚到不会留下第二行（唯一键 (listing_id, model)）。
+    // 覆盖而不是新增：唯一键 (listing_id, model) 保证同一模型只有一行；"晚到的旧写入"
+    // 由写入条件里的版本 CAS 拒绝（见下面的并发用例）。
     expect(await db.$count(embeddings, eq(embeddings.listingId, listingId))).toBe(1)
     expect(after?.embedding).not.toEqual(before?.embedding)
+  })
+
+  test('并发：旧 job 卡在 provider 期间实体被编辑，晚到的旧结果不覆盖新内容向量（#322 验收）', async () => {
+    const listingId = await createListing({ title: 'K380 机械键盘' })
+    const entity = { kind: 'listing', id: listingId } as const
+    const keyed = textKeyedProvider()
+
+    // 旧 job：读到旧内容后卡在 provider 里（此时它已经拿定 contentHash 与实体版本）。
+    const gate = blocking(keyed)
+    const oldRun = createEmbedJobHandlers(db, gate.provider).EMBED_LISTING({ listingId })
+    await gate.entered()
+
+    // 编辑实体（真实路径上 API 会同事务投一条新的 EMBED_LISTING）。
+    await db
+      .update(listings)
+      .set({ title: 'AirPods Pro 2 USB-C' })
+      .where(eq(listings.id, listingId))
+
+    // 新 job 完整跑完：库里是新内容的向量。
+    const newResult = await createEmbedJobHandlers(db, keyed).EMBED_LISTING({ listingId })
+    expect(newResult.status).toBe('generated')
+    const afterNew = await findEmbedding(db, entity, TEXT_KEYED_MODEL)
+    expect(afterNew?.embedding[0]).toBe(2)
+
+    // 放行旧 job：它拿到的向量基于旧内容，写入必须被 CAS 整条丢弃并报 stale。
+    gate.release()
+    expect((await oldRun).status).toBe('stale')
+
+    const final = await findEmbedding(db, entity, TEXT_KEYED_MODEL)
+    expect(final?.embedding[0]).toBe(2)
+    expect(final?.contentHash).toBe(afterNew?.contentHash)
+    expect(await db.$count(embeddings, eq(embeddings.listingId, listingId))).toBe(1)
   })
 
   test('provider 失败时抛错且不写任何向量（绝不产生"空向量=正常匹配"）', async () => {

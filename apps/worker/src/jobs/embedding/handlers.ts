@@ -20,18 +20,27 @@ import { InvalidJobPayloadError } from '../invalid-payload-error'
 /**
  * embedding 生成 handler（#322 M1）。
  *
- * 一次运行 = "读实体 → 构文本 → 比内容指纹 →（必要时）调 provider → 写库"。三个关键点：
- * 1. **payload 只带 id，内容在运行时读**：所以晚到的旧 job 也只会拿最新内容算，
- *    结构上不存在"旧内容覆盖新向量"；同时"内容没变就不重复计费"由指纹比对保证。
- * 2. **失败 fail-closed**：provider 报错、维度不符、返回非有限数值一律抛出去让队列重试/失败，
+ * 一次运行 = "读实体（连同它的 `updated_at` 版本）→ 构文本 → 比内容指纹 →（必要时）调 provider
+ * → 带 CAS 写库"。四个关键点：
+ * 1. **payload 只带 id，内容在运行时读**：所以晚到的旧 job 也只会拿最新内容算；"内容没变就不
+ *    重复计费"由指纹比对保证。
+ * 2. **写入带版本 CAS**：向量落库时带上"读实体那一刻的 `updated_at`"，由 `saveEmbedding` 的
+ *    `excluded.source_updated_at >= embeddings.source_updated_at` 决定是否生效。若 provider 调用
+ *    期间实体被编辑、新 job 已写入新向量，这次**基于旧内容**的写入会被整条丢弃并返回 `stale`
+ *    （#322 验收："旧 job 晚到不能覆盖新 embedding"）。只比 content_hash 做不到——两份写入
+ *    都和各自读到的内容一致，必须靠单调版本分先后。
+ * 3. **失败 fail-closed**：provider 报错、维度不符、返回非有限数值一律抛出去让队列重试/失败，
  *    绝不写一条"空向量"当成功。
- * 3. **软删除/已删实体不算失败**：实体在 job 执行前被删掉时返回 `missing` 并让 job DONE——
+ * 4. **软删除/已删实体不算失败**：实体在 job 执行前被删掉时返回 `missing` 并让 job DONE——
  *    重试也找不回来，卡在 PENDING 只会一直重试。
  */
 export type EmbedRunResult = {
   entity: 'listing' | 'wish'
-  /** `generated` 写了新向量；`unchanged` 指纹一致未调 provider；`missing` 实体已不存在。 */
-  status: 'generated' | 'unchanged' | 'missing'
+  /**
+   * `generated` 写了新向量；`unchanged` 指纹一致未调 provider；`missing` 实体已不存在；
+   * `stale` 本次结果被更高版本（更新的内容）取代，未写库——job 应 DONE，不需要重试。
+   */
+  status: 'generated' | 'unchanged' | 'stale' | 'missing'
   model: string
   contentHash: string | null
 }
@@ -65,12 +74,15 @@ function assertVector(vector: number[] | undefined): number[] {
 
 /**
  * 生成并写入一条向量；返回本次运行的结果（会作为 job 的 result 记录）。
+ *
+ * `sourceUpdatedAt` 是读实体那一刻的版本，原样带进写入条件（见 `saveEmbedding`）。
  */
 async function generate(
   db: Db,
   provider: EmbeddingProvider,
   entity: EmbeddingEntity,
   text: string,
+  sourceUpdatedAt: Date,
 ): Promise<EmbedRunResult> {
   assertDimensions(provider.dimensions, `provider ${provider.model} 声明的维度不符`)
 
@@ -88,15 +100,21 @@ async function generate(
   }
 
   const [vector] = await provider.embed([text])
-  await saveEmbedding(db, {
+  const written = await saveEmbedding(db, {
     entity,
     model: provider.model,
     dimensions: provider.dimensions,
     contentHash,
     embedding: assertVector(vector),
+    sourceUpdatedAt,
   })
 
-  return { entity: entity.kind, status: 'generated', model: provider.model, contentHash }
+  return {
+    entity: entity.kind,
+    status: written ? 'generated' : 'stale',
+    model: provider.model,
+    contentHash,
+  }
 }
 
 export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): EmbedJobHandlers {
@@ -112,6 +130,7 @@ export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): Emb
           title: listings.title,
           description: listings.description,
           category: listings.category,
+          updatedAt: listings.updatedAt,
         })
         .from(listings)
         .where(eq(listings.id, parsed.data.listingId))
@@ -132,6 +151,7 @@ export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): Emb
         provider,
         { kind: 'listing', id: parsed.data.listingId },
         buildListingEmbeddingText(listing),
+        listing.updatedAt,
       )
     },
 
@@ -146,6 +166,7 @@ export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): Emb
           keyword: wishes.keyword,
           description: wishes.description,
           category: wishes.category,
+          updatedAt: wishes.updatedAt,
         })
         .from(wishes)
         .where(eq(wishes.id, parsed.data.wishId))
@@ -161,6 +182,7 @@ export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): Emb
         provider,
         { kind: 'wish', id: parsed.data.wishId },
         buildWishEmbeddingText(wish),
+        wish.updatedAt,
       )
     },
   }

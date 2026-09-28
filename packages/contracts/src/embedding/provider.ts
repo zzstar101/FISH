@@ -29,10 +29,24 @@ export type EmbeddingFailureReason =
 
 export class EmbeddingProviderError extends Error {
   readonly reason: EmbeddingFailureReason
+  /** HTTP 状态码；仅 `reason === 'http_status'` 时有值，供重试判定使用。 */
+  readonly status: number | null
+  /**
+   * 这次失败是否值得重试：超时 / 网络错误默认可重试；HTTP 侧只有 429 与 5xx 可重试
+   * （4xx 是请求本身的问题，重发同样会失败），非法响应与维度不符一律不重试。
+   * 重试次数上限由调用方（live provider）负责，这个字段只回答"重发有没有意义"。
+   */
+  readonly retryable: boolean
 
-  constructor(reason: EmbeddingFailureReason, message: string) {
+  constructor(
+    reason: EmbeddingFailureReason,
+    message: string,
+    options: { retryable?: boolean; status?: number | null } = {},
+  ) {
     super(message)
     this.name = 'EmbeddingProviderError'
     this.reason = reason
+    this.status = options.status ?? null
+    this.retryable = options.retryable ?? (reason === 'timeout' || reason === 'network')
   }
 }

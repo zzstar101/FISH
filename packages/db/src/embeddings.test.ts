@@ -36,6 +36,13 @@ const MODEL = 'stub-deterministic-v1'
 const OTHER_MODEL = 'another-model-v2'
 const ISOLATED_CATEGORY = 'OTHER'
 
+/**
+ * 写入 CAS 的实体版本（"读实体那一刻的 updated_at"）。测试里显式给两个固定版本，不依赖真实
+ * `updated_at` 的毫秒抖动，才能把"旧版本写入被拒绝"钉死。
+ */
+const V1 = new Date('2026-01-01T00:00:00.000Z')
+const V2 = new Date('2026-01-02T00:00:00.000Z')
+
 let db: Db
 let seq = 0
 
@@ -163,6 +170,7 @@ test('写入后能按 (实体, model) 读回同一向量；别的 model 读不�
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-a',
     embedding: unitVector(7),
+    sourceUpdatedAt: V1,
   })
 
   const found = await findEmbedding(db, { kind: 'listing', id: listingId }, MODEL)
@@ -171,6 +179,7 @@ test('写入后能按 (实体, model) 读回同一向量；别的 model 读不�
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-a',
     embedding: unitVector(7),
+    sourceUpdatedAt: V1,
   })
   // 读侧必须显式带 model：否则换模型期间会静默读到另一种向量。
   expect(await findEmbedding(db, { kind: 'listing', id: listingId }, OTHER_MODEL)).toBeNull()
@@ -187,14 +196,19 @@ test('同实体同 model 重复写入是更新而不是新增（旧 job 晚到�
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-old',
     embedding: unitVector(1),
+    sourceUpdatedAt: V1,
   })
-  await saveEmbedding(db, {
-    entity,
-    model: MODEL,
-    dimensions: EMBEDDING_DIMENSIONS,
-    contentHash: 'hash-new',
-    embedding: unitVector(2),
-  })
+  // 更高的实体版本覆盖旧的：返回值 true 表示这次写入真的生效了。
+  expect(
+    await saveEmbedding(db, {
+      entity,
+      model: MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: 'hash-new',
+      embedding: unitVector(2),
+      sourceUpdatedAt: V2,
+    }),
+  ).toBe(true)
 
   // `saveEmbedding` 的 ON CONFLICT 打在 partial unique index (listing_id, model) 上：
   // 这条断言同时验证了 drizzle 的 `targetWhere` 在 bun-sql 下确实生成了合法 SQL。
@@ -208,6 +222,82 @@ test('同实体同 model 重复写入是更新而不是新增（旧 job 晚到�
   expect(found?.embedding).toEqual(unitVector(2))
 })
 
+test('CAS：基于旧版本的写入被整条拒绝，不会把新内容向量改回旧的（#322 验收）', async () => {
+  const sellerId = await createUser()
+  const listingId = await createListing(sellerId)
+  const entity = { kind: 'listing', id: listingId } as const
+
+  // 新版本（编辑后的内容）先落库。
+  expect(
+    await saveEmbedding(db, {
+      entity,
+      model: MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: 'hash-new',
+      embedding: unitVector(9),
+      sourceUpdatedAt: V2,
+    }),
+  ).toBe(true)
+
+  // 旧 job 晚到：它携带的是 V1 版本，写入必须被 `excluded.source_updated_at >= 目标列` 拒绝。
+  expect(
+    await saveEmbedding(db, {
+      entity,
+      model: MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: 'hash-old',
+      embedding: unitVector(8),
+      sourceUpdatedAt: V1,
+    }),
+  ).toBe(false)
+
+  const found = await findEmbedding(db, entity, MODEL)
+  expect(found?.contentHash).toBe('hash-new')
+  expect(found?.embedding).toEqual(unitVector(9))
+  expect(found?.sourceUpdatedAt.getTime()).toBe(V2.getTime())
+  expect(await db.$count(embeddings, eq(embeddings.listingId, listingId))).toBe(1)
+
+  // 同版本重写是幂等的（等于"同一个 job 又跑了一次"），不应被 CAS 挡掉。
+  expect(
+    await saveEmbedding(db, {
+      entity,
+      model: MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: 'hash-new',
+      embedding: unitVector(9),
+      sourceUpdatedAt: V2,
+    }),
+  ).toBe(true)
+  expect(await db.$count(embeddings, eq(embeddings.listingId, listingId))).toBe(1)
+})
+
+test('CAS 在愿望侧同样生效（两个方向的写入规则必须一致）', async () => {
+  const userId = await createUser()
+  const wishId = await createWish(userId)
+  const entity = { kind: 'wish', id: wishId } as const
+
+  await saveEmbedding(db, {
+    entity,
+    model: MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: 'wish-new',
+    embedding: unitVector(10),
+    sourceUpdatedAt: V2,
+  })
+  expect(
+    await saveEmbedding(db, {
+      entity,
+      model: MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: 'wish-old',
+      embedding: unitVector(11),
+      sourceUpdatedAt: V1,
+    }),
+  ).toBe(false)
+
+  expect((await findEmbedding(db, entity, MODEL))?.contentHash).toBe('wish-new')
+})
+
 test('同一实体允许新旧模型并存（换模型不覆盖旧向量，读侧按 model 选择）', async () => {
   const sellerId = await createUser()
   const listingId = await createListing(sellerId)
@@ -219,6 +309,7 @@ test('同一实体允许新旧模型并存（换模型不覆盖旧向量，读�
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-old-model',
     embedding: unitVector(3),
+    sourceUpdatedAt: V1,
   })
   await saveEmbedding(db, {
     entity,
@@ -226,6 +317,7 @@ test('同一实体允许新旧模型并存（换模型不覆盖旧向量，读�
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-new-model',
     embedding: unitVector(4),
+    sourceUpdatedAt: V1,
   })
 
   expect((await findEmbedding(db, entity, MODEL))?.contentHash).toBe('hash-old-model')
@@ -241,14 +333,14 @@ test('CHECK：必须且只能属于一个实体（两个都空 / 两个都填都
   const vector = JSON.stringify(unitVector(0))
 
   const bothNull = db.execute(sql`
-    insert into embeddings (listing_id, wish_id, model, dimensions, content_hash, embedding)
-    values (null, null, ${MODEL}, ${EMBEDDING_DIMENSIONS}, 'h', ${vector}::vector)
+    insert into embeddings (listing_id, wish_id, model, dimensions, content_hash, embedding, source_updated_at)
+    values (null, null, ${MODEL}, ${EMBEDDING_DIMENSIONS}, 'h', ${vector}::vector, now())
   `)
   await expectSqlRejected(() => bothNull, /embeddings_exactly_one_entity/)
 
   const bothSet = db.execute(sql`
-    insert into embeddings (listing_id, wish_id, model, dimensions, content_hash, embedding)
-    values (${listingId}, ${wishId}, ${MODEL}, ${EMBEDDING_DIMENSIONS}, 'h', ${vector}::vector)
+    insert into embeddings (listing_id, wish_id, model, dimensions, content_hash, embedding, source_updated_at)
+    values (${listingId}, ${wishId}, ${MODEL}, ${EMBEDDING_DIMENSIONS}, 'h', ${vector}::vector, now())
   `)
   await expectSqlRejected(() => bothSet, /embeddings_exactly_one_entity/)
 })
@@ -259,14 +351,14 @@ test('维度护栏：vector 列拒绝错维向量，dimensions 列必须等于 E
 
   // provider 报错维度时 handler 会先拒绝；这里是 DB 层的最后一道护栏（typmod）。
   const wrongDimensions = db.execute(sql`
-    insert into embeddings (listing_id, model, dimensions, content_hash, embedding)
-    values (${listingId}, ${MODEL}, ${EMBEDDING_DIMENSIONS}, 'h', '[1,2,3]'::vector)
+    insert into embeddings (listing_id, model, dimensions, content_hash, embedding, source_updated_at)
+    values (${listingId}, ${MODEL}, ${EMBEDDING_DIMENSIONS}, 'h', '[1,2,3]'::vector, now())
   `)
   await expectSqlRejected(() => wrongDimensions, /expected 1536 dimensions/)
 
   const wrongDeclared = db.execute(sql`
-    insert into embeddings (listing_id, model, dimensions, content_hash, embedding)
-    values (${listingId}, ${MODEL}, 768, 'h', ${JSON.stringify(unitVector(0))}::vector)
+    insert into embeddings (listing_id, model, dimensions, content_hash, embedding, source_updated_at)
+    values (${listingId}, ${MODEL}, 768, 'h', ${JSON.stringify(unitVector(0))}::vector, now())
   `)
   await expectSqlRejected(() => wrongDeclared, /embeddings_dimensions_matches_column/)
 })
@@ -283,6 +375,7 @@ test('删除父实体时 embedding 随 CASCADE 清理，不留孤儿', async () 
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-listing',
     embedding: unitVector(5),
+    sourceUpdatedAt: V1,
   })
   await saveEmbedding(db, {
     entity: { kind: 'wish', id: wishId },
@@ -290,6 +383,7 @@ test('删除父实体时 embedding 随 CASCADE 清理，不留孤儿', async () 
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: 'hash-wish',
     embedding: unitVector(6),
+    sourceUpdatedAt: V1,
   })
 
   await db.delete(listings).where(eq(listings.id, listingId))
@@ -317,6 +411,7 @@ test('cosine Top-K 顺序有固定 fixture：`<=>` 的排序与距离值都被�
       dimensions: EMBEDDING_DIMENSIONS,
       contentHash: `hash-${listingId}`,
       embedding: [...embedding],
+      sourceUpdatedAt: V1,
     })
   }
 

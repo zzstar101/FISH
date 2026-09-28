@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm'
-import { check, integer, pgTable, text, uniqueIndex, uuid, vector } from 'drizzle-orm/pg-core'
+import {
+  check,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  vector,
+} from 'drizzle-orm/pg-core'
 import { primaryKey, timestamps } from './common'
 import { listings } from './listings'
 import { wishes } from './wishes'
@@ -40,6 +49,18 @@ export const embeddings = pgTable(
     /** 生成该向量时的文本指纹（sha256 hex，含模板版本前缀）。 */
     contentHash: text('content_hash').notNull(),
     embedding: vector('embedding', { dimensions: EMBEDDING_DIMENSIONS }).notNull(),
+    /**
+     * 生成该向量时所读实体行的 `updated_at`——写入时的 **CAS 版本号**（#322 验收：
+     * "旧 job 晚到不能覆盖新 embedding / 并发任务不得互相覆盖较新的 embedding"）。
+     *
+     * job 在 provider 网络调用**之前**读实体，所以一次运行携带的版本可能已经过期：
+     * 实体编辑后会产生新的 EMBED_* job 并写入更高版本。`saveEmbedding` 的
+     * `excluded.source_updated_at >= embeddings.source_updated_at` 条件让**晚到的旧写入
+     * 整条被丢弃**（不覆盖、不报错），于是最终库里留下的一定是版本最高（最新内容）的那份向量，
+     * 与两个 job 的完成顺序无关。只比 `content_hash` 做不到这一点——两份都"和自己读到的
+     * 内容一致"，需要一个单调的版本才能分出先后。
+     */
+    sourceUpdatedAt: timestamp('source_updated_at', { withTimezone: true, mode: 'date' }).notNull(),
     ...timestamps(),
   },
   (table) => [

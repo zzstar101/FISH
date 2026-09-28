@@ -70,7 +70,7 @@
 | Q6 | 扩展落点 | A：追加在本分支新增迁移 `.sql` 开头 + 改两处 AGENTS 开例外 | 见 §0.1、§9 |
 | Q7 | 契约落点 | A：`packages/contracts/src/embedding/{jobs,provider,text}.ts` | worker 与 M4 backfill 共用；维度常量归 db |
 | Q8 | env | A：`EMBEDDING_TRANSPORT`（`stub`/`live`，无默认值）**只被 worker 读**；live 三项齐全 | 与既有 transport 范式一致，密钥不扩散到不需要它的进程 |
-| Q9 | provider 调用 | A：单次调用 + `AbortSignal.timeout(10_000)` + **不重试**；重试交给队列 3 次有界重试 | 队列已有 `DEFAULT_MAX_ATTEMPTS = 3`；重试时 handler 会重新读实体，不会用旧文本重算 |
+| Q9 | provider 调用 | ~~A：单次调用 + **不重试**~~ → **评审后改为 B：有界重试**（`EMBEDDING_MAX_ATTEMPTS = 3` + 指数退避；只重试超时/网络/429/5xx） | #322 Provider 验收明确要求「timeout + **有界 retry**」，队列自身的 3 次重试不能替代 provider 内的重试（队列重试要重读实体、重算指纹，粒度更粗）。见 §6、§13 |
 | Q10 | 文本/指纹函数位置 | A：`packages/contracts/src/embedding/text.ts` 纯函数 | worker 与 M4 backfill 共用同一份规范 |
 | Q11 | 指纹 | A：`sha256(f"{EMBEDDING_TEXT_FORMAT_VERSION}:{规范化文本}")`，**不含** model/dimensions | 换模型由 `(entity, model)` 唯一键与读侧 model 参数表达；指纹只回答「内容有没有变」 |
 | Q12 | 入队点 | B：**复用现有 MATCH 钩子**（listings store / governance / moderation / wishes match-queue 成对投递），并补 `updateWish` 的投递缺口 | 少一处新入口就少一处必漏；`updateWish` 此前一行 job 都不投 |
@@ -93,6 +93,8 @@ DB 变更说明
   * embeddings.dimensions integer NOT NULL（并 CHECK dimensions = 1536）
   * embeddings.content_hash text NOT NULL（sha256(文本格式版本:规范化文本)）
   * embeddings.embedding vector(1536) NOT NULL（pgvector 定长列，typmod 由扩展保证）
+  * embeddings.source_updated_at timestamptz NOT NULL（生成该向量时所读实体行的 updated_at，
+    写入 CAS 的版本号：只允许版本不低于已有行的写入生效，见 §7）
   * embeddings.created_at / updated_at timestamptz NOT NULL DEFAULT now()
   * 既有表 jobs：仅新增两条**部分唯一索引**，列与约束不变
     - jobs_embed_listing_listing_id_uidx ON ((payload->>'listingId')) WHERE type='EMBED_LISTING' AND status='PENDING'
@@ -100,7 +102,7 @@ DB 变更说明
 - 使用场景（对应 Issue）：#322 M1 —— 愿望/商品语义向量的生成、存放与失效；M2 在此表上做 cosine Top-K。
 - 是否影响已有数据：不影响。新表为空；两条索引是新增约束，只要求「同实体同类型的待跑 job 不重复」。
   迁移同时执行 CREATE EXTENSION IF NOT EXISTS vector（pgvector 0.8.6，镜像 pgvector/pgvector:pg18 自带）。
-- 迁移文件：packages/db/src/migrations/20260928163726_jittery_ink.sql（generate 产出 + 文件开头一条手加 CREATE EXTENSION，见 §9）
+- 迁移文件：packages/db/src/migrations/20260928211315_nappy_william_stryker.sql（generate 产出 + 文件开头一条手加 CREATE EXTENSION，见 §9）
 ```
 
 ---
@@ -115,6 +117,9 @@ DB 变更说明
   **同一实体允许新旧模型并存**（换模型期间不覆盖旧向量），但读侧必须 `findEmbedding(db, entity, model)` 显式带 model。
 - `CHECK ((listing_id IS NULL) <> (wish_id IS NULL))`：必须且只能属于一个实体。
 - 两条 FK `ON DELETE CASCADE`：删 listing / wish 时向量随之消失，不需要清理任务。
+- `source_updated_at`：**写入 CAS 的版本号**。`saveEmbedding` 的 `ON CONFLICT DO UPDATE` 带
+  `WHERE excluded.source_updated_at >= embeddings.source_updated_at`，因此携带旧版本的写入会被整条丢弃
+  （既不覆盖也不报错），最终留下的一定是版本最高、也就是最新内容的那份向量（与两个 job 的完成顺序无关）。见 §7。
 
 ### `jobs`（`packages/db/src/schema/jobs.ts`）
 
@@ -150,15 +155,22 @@ export interface EmbeddingProvider {
 }
 export type EmbeddingFailureReason =
   | 'timeout' | 'network' | 'http_status' | 'invalid_response' | 'dimension_mismatch'
-export class EmbeddingProviderError extends Error { readonly reason: EmbeddingFailureReason }
+export class EmbeddingProviderError extends Error {
+  readonly reason: EmbeddingFailureReason
+  readonly status: number | null   // 仅 http_status 时有值
+  readonly retryable: boolean      // 默认 timeout/network 为 true；http_status 由状态码决定
+}
 ```
 
 - **stub**（`EMBEDDING_TRANSPORT=stub`，进程内确定性）：`STUB_EMBEDDING_MODEL = 'stub-deterministic-v1'`，
   按词元 sha256 投到固定维度并做 L2 归一化；**全空白文本给固定方向而不是零向量**（零向量余弦无定义）。
   `stub` 在 `NODE_ENV=production`（trim + 小写归一）时**启动即失败**，避免假向量产生看似合理的召回。
 - **live**（`EMBEDDING_TRANSPORT=live`，需 `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` / `EMBEDDING_MODEL` 三项齐全）：
-  `POST {baseUrl 去尾斜杠}/embeddings`，body `{ model, input }`，`AbortSignal.timeout(EMBEDDING_TIMEOUT_MS = 10_000)`，
-  **不重试**；错误消息不含请求文本、也不搬运上游响应体（响应体可能回显用户原文）。
+  `POST {baseUrl 去尾斜杠}/embeddings`，body `{ model, input }`，每次请求 `AbortSignal.timeout(EMBEDDING_TIMEOUT_MS = 10_000)`；
+  **有界重试**（#322 验收）：最多 `EMBEDDING_MAX_ATTEMPTS = 3` 次（含首次），按 `EMBEDDING_RETRY_BASE_DELAY_MS = 100`
+  指数退避（100ms / 200ms）；**只有**超时、网络错误、429 与 5xx 重试，其它 4xx、`invalid_response`、
+  `dimension_mismatch` 一律不重试（重发不会变好，只会多占一轮）。错误消息不含请求文本、也不搬运上游响应体
+  （响应体可能回显用户原文）。
 - env loader `loadEmbeddingEnv()` 在 `packages/shared/src/env.ts`，**只被 worker 读取**：
   transport 缺失/非法一律抛错（`必须显式设置`），live 缺项逐项点名，错误只报变量名不回显密钥值。
 - 维度护栏三处：provider 声明 `dimensions !== EMBEDDING_DIMENSIONS` → 立即失败；返回向量长度不符 → `dimension_mismatch`；
@@ -171,13 +183,20 @@ export class EmbeddingProviderError extends Error { readonly reason: EmbeddingFa
 - 新增 `EMBED_LISTING` / `EMBED_WISH`（`packages/contracts/src/embedding/jobs.ts`，payload `strictObject` 只带实体 id）。
 - worker 侧 `createEmbedJobHandlers(db, provider)`（`apps/worker/src/jobs/embedding/handlers.ts`）：
   1. `safeParse` 失败 → `InvalidJobPayloadError`（FATAL，不重试）。该类已从 matching 域提到 `apps/worker/src/jobs/invalid-payload-error.ts` 共用。
-  2. **运行时重读实体**（listing 读 `title/description/category`，wish 读 `keyword/description/category`）；查不到 → `status: 'missing'`（job 正常 DONE，重试无意义）。
+  2. **运行时重读实体**（listing 读 `title/description/category/updated_at`，wish 读 `keyword/description/category/updated_at`）；查不到 → `status: 'missing'`（job 正常 DONE，重试无意义）。
   3. 构文本 + `contentHashOf`；`findEmbedding(entity, model)` 命中且 `contentHash` 相同且 `dimensions` 一致 → `unchanged`，**不调用 provider**（内容不变不重复计费）。
-  4. 否则 `provider.embed([text])` → `saveEmbedding`（`(entity, model)` upsert）→ `generated`。
+  4. 否则 `provider.embed([text])` → `saveEmbedding`（`(entity, model)` upsert **带版本 CAS**）：
+     写进去了 → `generated`；被更高版本抢先 → `stale`（job 正常 DONE，**不需要重试**——新 job 已经写了新内容）。
 - provider 抛错时不写库：**旧向量原样保留**（不会先删后写），因此匹配侧在重算失败时仍有可用向量。
-- **「旧 job 晚到不能覆盖新 embedding」是结构性满足的**：job payload 不带文本、也不带指纹，
-  handler 永远读当前内容；写入按 `(entity, model)` 覆盖，不存在「旧向量盖新向量」的窗口。
+- **「旧 job 晚到不能覆盖新 embedding」由写入 CAS 保证**（不是"结构性"保证）：payload 只带 id 只能保证
+  旧 job 读到的是**当时**的最新内容，不能阻止它在 provider 上卡住期间内容被改动。
+  一次运行携带读实体那一刻的 `updated_at`，`saveEmbedding` 只在
+  `excluded.source_updated_at >= embeddings.source_updated_at` 时生效，于是：
+  - 新 job 先写完、旧 job 后到 → 旧写入被拒绝（`stale`），库里保留新向量；
+  - 旧 job 先写完、新 job 后到 → 新写入版本更高，正常覆盖。
+  两种完成顺序都收敛到"最新内容的那份向量"。只比 `content_hash` 做不到：两份写入都和各自读到的内容一致。
 - 队列语义沿用既有 `createJobQueue`：`DEFAULT_MAX_ATTEMPTS = 3`、无退避、`isFatalError` 只认坏 payload。
+  加上 provider 内的 3 次有界重试，单条 job 最坏情况的上游请求数是 3 × 3 = 9（两侧都各自有界）。
 
 ---
 
@@ -195,7 +214,7 @@ export class EmbeddingProviderError extends Error { readonly reason: EmbeddingFa
 
 ## 9. pgvector 扩展的引导语句与例外
 
-- 迁移 `packages/db/src/migrations/20260928163726_jittery_ink.sql` 的**最前面**手加：
+- 迁移 `packages/db/src/migrations/20260928211315_nappy_william_stryker.sql` 的**最前面**手加：
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
@@ -223,11 +242,11 @@ CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
 | create 生成 embedding | ✅ | `handlers.test.ts` 首次 `generated` + 指纹 == `contentHashOf(build*EmbeddingText(...))`；API 侧 `app.wishes.test.ts` 断言创建愿望投 `MATCH_WISH`+`EMBED_WISH`、`listings/store.test.ts` 断言投 `MATCH_LISTING`+`EMBED_LISTING` |
 | 内容改动失效并重算 | ✅ | 改 title/description（listing）与改 keyword（wish）后 `generated` 且指纹变化；同一实体仍只有 1 行 |
 | 内容不变不重复生成 | ✅ | 第二次 `unchanged` 且 provider 调用次数 `=== 1` |
-| 旧 job 晚到不能覆盖新 embedding | ✅（结构性） | handler 运行时重读实体 + `(entity, model)` upsert；测试覆盖「编辑后重算覆盖同一行」 |
-| provider timeout/5xx 不产生伪匹配 | ✅ | 失败抛类型化错误且 `embeddings` 0 行；重算失败时旧向量 `toEqual(before)` 原样保留；live provider 单测覆盖 `http_status` / `timeout` / `network` / `invalid_response` / `dimension_mismatch`，且断言**不重试** |
+| 旧 job 晚到不能覆盖新 embedding | ✅ | **写入 CAS**：`embeddings.test.ts`「CAS：基于旧版本的写入被整条拒绝」（旧版本写入返回 `false`、库里仍是新向量、同版本重写幂等）+ 愿望侧同款；“真实并发”用例见 `handlers.test.ts`「旧 job 卡在 provider 期间实体被编辑，晚到的旧结果不覆盖新内容向量」（旧 job 返回 `stale`，最终向量仍是新内容） |
+| provider timeout/5xx 不产生伪匹配 | ✅ | 失败抛类型化错误且 `embeddings` 0 行；重算失败时旧向量 `toEqual(before)` 原样保留；live provider 单测覆盖 `http_status` / `timeout` / `network` / `invalid_response` / `dimension_mismatch` 的分类与**重试次数上限**（可重试的恰好 `EMBEDDING_MAX_ATTEMPTS` 次、不可重试的恰好 1 次） |
 | `bun run typecheck` | ✅ | 全包 exit 0 |
 | `bun run lint` | ✅ | `biome check .`：909 文件 0 错误 |
-| `bun test --isolate` | ✅ | 全量回归 **1968 通过 / 0 失败**（211 个文件，含本轮新增的 4 个测试文件与 4 处既有断言更新） |
+| `bun test --isolate` | ✅ | 全量回归 **1972 通过 / 0 失败**（211 个文件；含新增的 4 个测试文件、4 处既有断言更新，以及评审修复轮新增的 4 条用例：CAS ×2、真实并发 ×1、429 重试 ×1） |
 | Worker + API 真实 DB 集成测试 | ✅ | `apps/worker/src/jobs/embedding/**`、`apps/api/src/app.wishes.test.ts`、`apps/api/src/modules/listings/store.test.ts`、`packages/db/src/embeddings.test.ts` 全绿 |
 | core smoke 覆盖语义匹配链 | ➖ | M1 不涉及召回/排序，语义链属 M2/M3；本阶段未改 core smoke |
 | production embedding provider 最小 live smoke | ➖ | M1 只保证 live 实现存在 + 假 fetch 全覆盖；真实出网属 M4 |
@@ -264,3 +283,34 @@ bun test --isolate
 集成测试需要 `.env` 里的 `DATABASE_URL`，以及 `.github/workflows/ci.yml` 顶层 env 那组 transport 选择
 （`MEETUP_TOKEN_SECRET`、`AI_POLISH_TRANSPORT=stub`、`WECHAT_TRANSPORT=off`、`CONTENT_MODERATION_TRANSPORT=local`、
 `EMBEDDING_TRANSPORT=stub`）。缺任一项都会由各自的 loader 直接报错，不会静默回退。
+
+---
+
+## 13. 评审意见的处理（PR #328 第一轮复审）
+
+复审（HEAD `a533d19`）给了 2 个合入 blocker，本轮的第二个提交逐条处理：
+
+1. **「旧 embedding job 可以晚到覆盖新内容向量」** → 加**版本 CAS**：新增
+   `embeddings.source_updated_at`（生成该向量时所读实体行的 `updated_at`），`saveEmbedding` 的 upsert 带
+   `WHERE excluded.source_updated_at >= embeddings.source_updated_at` 并用 `.returning()` 判断是否真的写入；
+   handler 因此多一个 `stale` 结果（本次结果被更高版本取代，未写库，job DONE 不重试）。
+   - 为什么选 CAS 而不是评审给的另一个选项「写前重读实体重算 hash」：重读与写库之间仍有窗口，而且要多一次
+     DB 往返；CAS 是**写入条件本身**，与两个 job 的完成顺序无关。
+   - 证据：`packages/db/src/embeddings.test.ts` 的两条 CAS 用例（旧版本写入返回 `false`、库里仍是新向量、
+     同版本重写幂等、愿望侧同样生效）+ `apps/worker/src/jobs/embedding/handlers.test.ts` 的真实并发用例
+     （旧 job 卡在 provider → 编辑实体 → 新 job 跑完 → 放行旧 job：旧 job 得到 `stale`，库里保留新内容向量）。
+2. **「live provider 明确没有 bounded retry」** → provider 内加**有界重试**：`EMBEDDING_MAX_ATTEMPTS = 3`
+   （含首次）+ `EMBEDDING_RETRY_BASE_DELAY_MS = 100` 指数退避；只重试超时 / 网络 / 429 / 5xx，
+   4xx 参数错误与 `invalid_response`、`dimension_mismatch` 不重试。`EmbeddingProviderError` 增加
+   `status` 与 `retryable` 两个字段承载这个判定。
+   - 原决策 Q9（"不重试，交给队列"）被推翻，已在 §2 标注；队列自身的 3 次重试保留（两侧都各自有界）。
+   - 证据：`apps/worker/src/jobs/embedding/providers/live.test.ts`（假 fetch）断言 5xx / 超时 / 网络恰好重试到
+     上限、429 第二次成功即返回、400 与非法响应只请求一次。
+3. **评审提醒的合并顺序**：`#328` 与 `#330` 两个 snapshot 的 `prevId` 都指向同一个 main snapshot
+   （`153ce9d0-…`），所以两条分支**开发可并行、合并不能并行**。本 PR 先合；`#330` 在 #328 合入后 rebase
+   最新 main 并重新 `generate`，不能把两条 sibling snapshot 直接拼进 journal。
+4. 本轮改了 schema ⇒ 按 `packages/db/AGENTS.md` 的规则把本分支自己的迁移**交回生成器重建**：
+   删掉旧 `.sql` + `meta/*_snapshot.json`、把 `meta/_journal.json` 恢复到 `origin/main`，重新
+   `bun run --filter '@fish/db' generate`，再把 `CREATE EXTENSION` 引导语句加回文件最前面（§9 的例外边界不变）。
+   本机开发库因该表已由上一版迁移建过，同步时先手工 `DROP TABLE embeddings` + 两条 `jobs_embed_*` 索引再 migrate
+   （与 §9 末尾那条运维注意同源）。
