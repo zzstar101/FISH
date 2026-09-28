@@ -14,6 +14,7 @@ import {
   type EmbeddingEntity,
   type EmbeddingExecutor,
   findEmbedding,
+  refreshEmbeddingSourceVersion,
   saveEmbedding,
 } from '@fish/db/embedding-store'
 import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
@@ -163,6 +164,15 @@ async function generate(
     existing.contentHash === contentHash &&
     existing.dimensions === EMBEDDING_DIMENSIONS
   ) {
+    // 内容没变但实体版本前进了（只改了价格/状态这类不进 embedding 文本的字段）：把向量行的
+    // 版本标记一起推进到实体当前版本。没有这一步，召回侧的新鲜度谓词（#322 M2 复审 blocker）
+    // 会把这条本来正确的向量判为过期，等于"改个价格语义召回就断了"。
+    await refreshEmbeddingSourceVersion(db, {
+      entity,
+      model: provider.model,
+      contentHash,
+      sourceUpdatedAt: initial.updatedAt,
+    })
     return { entity: entity.kind, status: 'unchanged', model: provider.model, contentHash }
   }
 

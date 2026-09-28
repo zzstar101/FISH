@@ -479,9 +479,6 @@ describe('matchWish', () => {
 // 否则引擎会判 `stale` 而退化——那正是另一条用例要覆盖的分支。
 // ---------------------------------------------------------------------------
 
-/** 写入 CAS 的实体版本；这几条用例不关心版本先后，只要一个固定值。 */
-const SOURCE_VERSION = new Date('2026-03-01T00:00:00.000Z')
-
 /** 第 `axis` 维为 1 的单位向量（float4 往返精确，余弦距离可手算）。 */
 function axisVector(axis: number): number[] {
   const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0)
@@ -506,6 +503,7 @@ async function embedListing(
   listingId: string,
   vector: number[],
   model = TEST_EMBEDDING_MODEL,
+  stale = false,
 ): Promise<void> {
   const row = (await db.select().from(listings).where(eq(listings.id, listingId)).limit(1))[0]
   if (!row) throw new Error('embedListing：商品不存在')
@@ -521,7 +519,9 @@ async function embedListing(
       }),
     ),
     embedding: vector,
-    sourceUpdatedAt: SOURCE_VERSION,
+    // 版本取实体**当前**的 `updated_at`：候选侧新鲜度判据要求它相等（毫秒截断比较）。
+    // `stale = true` 构造"实体改过、向量还没重算"的候选。
+    sourceUpdatedAt: stale ? new Date(row.updatedAt.getTime() - 60_000) : row.updatedAt,
   })
 }
 
@@ -530,6 +530,7 @@ async function embedWish(
   wishId: string,
   vector: number[],
   model = TEST_EMBEDDING_MODEL,
+  stale = false,
 ): Promise<void> {
   const row = (await db.select().from(wishes).where(eq(wishes.id, wishId)).limit(1))[0]
   if (!row) throw new Error('embedWish：愿望不存在')
@@ -545,7 +546,7 @@ async function embedWish(
       }),
     ),
     embedding: vector,
-    sourceUpdatedAt: SOURCE_VERSION,
+    sourceUpdatedAt: stale ? new Date(row.updatedAt.getTime() - 60_000) : row.updatedAt,
   })
 }
 
@@ -601,6 +602,43 @@ describe('向量召回（#322 M2）', () => {
       expect(await matchRows(listingId, wishId)).toHaveLength(0)
       // 候选缺向量是候选自己的 EMBED job 的事；召回侧不为它排队（否则一次召回会投出上百条 job）。
       expect(await embedJobs('wish', wishId)).toHaveLength(0)
+    })
+  })
+
+  test('候选向量过期（实体改过、还没重算）不进 Top-K，重算后恢复（#333 复审 blocker）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      await embedWish(wishId, axisVector(0))
+
+      // 候选实体被编辑（描述变了 ⇒ 已有向量与当前内容不再对应），而 EMBED_WISH 还没跑。
+      // 这一版向量不许再进 Top-K：否则它会挤掉新鲜候选，还会被按 id 补算进打分。
+      const bumped = new Date(Date.now() + 1000)
+      await db
+        .update(wishes)
+        .set({ description: '编辑后的描述：与旧向量不再对应', updatedAt: bumped })
+        .where(eq(wishes.id, wishId))
+
+      const stale = await engine.matchListing(listingId)
+
+      expect(stale.recall).toBe('vector-topk')
+      expect(stale.vectorCandidates).toBe(0)
+      expect(stale.created).toBe(0)
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+
+      // 重算向量（handler 把版本推进到实体当前值）后恢复召回。
+      await embedWish(wishId, axisVector(0))
+
+      const restored = await engine.matchListing(listingId)
+
+      expect(restored.recall).toBe('vector-topk')
+      expect(restored.vectorCandidates).toBe(1)
+      expect(restored.created).toBe(1)
+      const rows = await matchRows(listingId, wishId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(100)
     })
   })
 
@@ -741,14 +779,7 @@ describe('向量召回（#322 M2）', () => {
           category: ISOLATED_CATEGORY,
           budgetMaxCents: 20000,
         })
-        await saveEmbedding(db, {
-          entity: { kind: 'wish', id },
-          model: TEST_EMBEDDING_MODEL,
-          dimensions: EMBEDDING_DIMENSIONS,
-          contentHash: `hash-${id}`,
-          embedding: fanVector(index),
-          sourceUpdatedAt: SOURCE_VERSION,
-        })
+        await embedWish(id, fanVector(index))
       }
 
       const truncated = await engine.matchListing(listingId)

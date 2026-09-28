@@ -5,6 +5,7 @@ import { createDb, type Db } from './client'
 import {
   findEmbedding,
   hasEmbeddingFromOtherModel,
+  refreshEmbeddingSourceVersion,
   saveEmbedding,
   topKSimilarListings,
   topKSimilarWishes,
@@ -453,22 +454,30 @@ async function createWishWithEmbedding(
   keyword: string,
   embedding: number[],
   model = MODEL,
+  stale = false,
 ): Promise<string> {
   const id = newId()
-  await db.insert(wishes).values({
-    id,
-    userId,
-    keyword,
-    budgetMaxCents: 20000,
-    category: ISOLATED_CATEGORY,
-  })
+  const rows = await db
+    .insert(wishes)
+    .values({
+      id,
+      userId,
+      keyword,
+      budgetMaxCents: 20000,
+      category: ISOLATED_CATEGORY,
+    })
+    .returning({ updatedAt: wishes.updatedAt })
+  const row = rows[0]
+  if (!row) throw new Error('insert wishes 未返回行')
   await saveEmbedding(db, {
     entity: { kind: 'wish', id },
     model,
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: `hash-${id}`,
     embedding,
-    sourceUpdatedAt: V1,
+    // 版本必须取实体**当前**的 `updated_at`：召回侧按"版本是否仍然相等"判新鲜（毫秒截断比较），
+    // 随便给个固定日期会让所有候选都被判为过期。`stale` 用来构造"实体改过、向量还没重算"。
+    sourceUpdatedAt: stale ? new Date(row.updatedAt.getTime() - 60_000) : row.updatedAt,
   })
   return id
 }
@@ -479,27 +488,54 @@ async function createListingWithEmbedding(
   title: string,
   embedding: number[],
   model = MODEL,
+  stale = false,
 ): Promise<string> {
   const id = newId()
-  await db.insert(listings).values({
-    id,
-    listingNo: await reserveTestListingNo(db, id),
-    sellerId,
-    title,
-    description: 'Top-K 召回测试',
-    priceCents: 9900,
-    category: ISOLATED_CATEGORY,
-    condition: 'GOOD',
-  })
+  const rows = await db
+    .insert(listings)
+    .values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title,
+      description: 'Top-K 召回测试',
+      priceCents: 9900,
+      category: ISOLATED_CATEGORY,
+      condition: 'GOOD',
+    })
+    .returning({ updatedAt: listings.updatedAt })
+  const row = rows[0]
+  if (!row) throw new Error('insert listings 未返回行')
   await saveEmbedding(db, {
     entity: { kind: 'listing', id },
     model,
     dimensions: EMBEDDING_DIMENSIONS,
     contentHash: `hash-${id}`,
     embedding,
-    sourceUpdatedAt: V1,
+    sourceUpdatedAt: stale ? new Date(row.updatedAt.getTime() - 60_000) : row.updatedAt,
   })
   return id
+}
+
+/** 实体当前的 `updated_at`——也就是"向量要跟上才算新鲜"的那个版本。 */
+async function currentWishVersion(wishId: string): Promise<Date> {
+  const rows = await db
+    .select({ updatedAt: wishes.updatedAt })
+    .from(wishes)
+    .where(eq(wishes.id, wishId))
+  const row = rows[0]
+  if (!row) throw new Error('wish 不存在')
+  return row.updatedAt
+}
+
+async function currentListingVersion(listingId: string): Promise<Date> {
+  const rows = await db
+    .select({ updatedAt: listings.updatedAt })
+    .from(listings)
+    .where(eq(listings.id, listingId))
+  const row = rows[0]
+  if (!row) throw new Error('listing 不存在')
+  return row.updatedAt
 }
 
 test('topKSimilarWishes：按 cosine 距离升序取前 K，且只认指定 model 的向量', async () => {
@@ -593,6 +629,114 @@ test('topKSimilarListings：与愿望方向同一套语义（model 过滤、排�
   })
   expect(limited.map((row) => row.id)).toEqual([near])
   expect(limited.map((row) => row.id)).not.toContain(otherModel)
+})
+
+test('topKSimilarWishes：过期向量（实体编辑后还没重算）不进 Top-K，重算后恢复（#333 复审 blocker）', async () => {
+  const owner = await createUser()
+  const marker = `topk-stale-${seq++}`
+  const fresh = await createWishWithEmbedding(owner, `${marker}-fresh`, unitVector(0))
+  // 向量是"编辑之前"那一版的候选：与实体当前版本不一致，必须被排除。
+  const stale = await createWishWithEmbedding(owner, `${marker}-stale`, unitVector(0), MODEL, true)
+
+  const filter = sql`${wishes.keyword} like ${`${marker}%`}`
+  const ranked = await topKSimilarWishes(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    limit: 10,
+    filter,
+  })
+  expect(ranked.map((row) => row.id)).toEqual([fresh])
+  expect(ranked.map((row) => row.id)).not.toContain(stale)
+
+  // 重算后（版本推进到实体当前值）恢复召回——这里直接推进版本标记，等价于 handler 判定
+  // "内容没变、只改了不进文本的字段"时做的那一步。
+  const version = await currentWishVersion(stale)
+  expect(
+    await refreshEmbeddingSourceVersion(db, {
+      entity: { kind: 'wish', id: stale },
+      model: MODEL,
+      contentHash: `hash-${stale}`,
+      sourceUpdatedAt: version,
+    }),
+  ).toBe(true)
+
+  const restored = await topKSimilarWishes(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    limit: 10,
+    filter,
+  })
+  expect(restored).toHaveLength(2)
+  expect(restored.map((row) => row.id)).toContain(stale)
+  expect(restored.map((row) => row.id)).toContain(fresh)
+})
+
+test('topKSimilarListings：候选新鲜度判据与愿望方向同一套（过期商品不进 Top-K）', async () => {
+  const sellerId = await createUser()
+  const marker = `topk-listing-stale-${seq++}`
+  const fresh = await createListingWithEmbedding(sellerId, `${marker}-fresh`, unitVector(3))
+  const stale = await createListingWithEmbedding(
+    sellerId,
+    `${marker}-stale`,
+    unitVector(3),
+    MODEL,
+    true,
+  )
+
+  const filter = sql`${listings.title} like ${`${marker}%`}`
+  const ranked = await topKSimilarListings(db, {
+    model: MODEL,
+    vector: unitVector(3),
+    limit: 10,
+    filter,
+  })
+
+  expect(ranked.map((row) => row.id)).toEqual([fresh])
+  expect(ranked.map((row) => row.id)).not.toContain(stale)
+})
+
+test('refreshEmbeddingSourceVersion：只把“内容仍然对得上”的向量推进到实体当前版本', async () => {
+  const sellerId = await createUser()
+  const listingId = await createListingWithEmbedding(sellerId, `refresh-${seq++}`, unitVector(7))
+  // 只改价格：不进 embedding 文本，所以指纹不变，但实体版本前进了。
+  await db.update(listings).set({ priceCents: 12345 }).where(eq(listings.id, listingId))
+  const version = await currentListingVersion(listingId)
+
+  const before = await findEmbedding(db, { kind: 'listing', id: listingId }, MODEL)
+
+  // 指纹不符：这行描述的是别的内容，不许动它的版本标记。
+  expect(
+    await refreshEmbeddingSourceVersion(db, {
+      entity: { kind: 'listing', id: listingId },
+      model: MODEL,
+      contentHash: 'hash-别的内容',
+      sourceUpdatedAt: version,
+    }),
+  ).toBe(false)
+
+  expect(
+    await refreshEmbeddingSourceVersion(db, {
+      entity: { kind: 'listing', id: listingId },
+      model: MODEL,
+      contentHash: `hash-${listingId}`,
+      sourceUpdatedAt: version,
+    }),
+  ).toBe(true)
+
+  const after = await findEmbedding(db, { kind: 'listing', id: listingId }, MODEL)
+  expect(after?.sourceUpdatedAt.getTime()).toBe(version.getTime())
+  // 只动版本标记，向量逐位不变。
+  expect(after?.embedding).toEqual(before?.embedding)
+
+  // 已经是最新版本：不再写（`<` 而不是 `<=`，旧 job 不能把版本标记回退）。
+  expect(
+    await refreshEmbeddingSourceVersion(db, {
+      entity: { kind: 'listing', id: listingId },
+      model: MODEL,
+      contentHash: `hash-${listingId}`,
+      sourceUpdatedAt: version,
+    }),
+  ).toBe(false)
 })
 
 test('hasEmbeddingFromOtherModel：区分“从没生成过”与“只有旧 model 的向量”', async () => {

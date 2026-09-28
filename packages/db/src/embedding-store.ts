@@ -1,4 +1,4 @@
-import { and, eq, ne, type SQL, sql } from 'drizzle-orm'
+import { and, eq, lt, ne, type SQL, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { newId } from './ids'
 import { embeddings } from './schema/embeddings'
@@ -180,6 +180,69 @@ export async function hasEmbeddingFromOtherModel(
   return rows.length > 0
 }
 
+export type RefreshEmbeddingVersionInput = {
+  entity: EmbeddingEntity
+  model: string
+  /** 只有库里那行的内容指纹与它一致，才允许推进版本——否则那行描述的是**别的**内容。 */
+  contentHash: string
+  /** 实体当前版本（读实体那一刻的 `updated_at`）。 */
+  sourceUpdatedAt: Date
+}
+
+/**
+ * 把"内容没变、但实体版本已经前进"的向量行推进到实体当前版本（#322 M2 复审 blocker 的必要配套）。
+ *
+ * 场景：只改了价格/状态这类**不进 embedding 文本**的字段。EMBED_* job 重跑后按指纹判定为
+ * `unchanged`、不调 provider，但 `updated_at` 已经变了——若不把版本标记一起推进，这条向量在
+ * 召回时会被新鲜度谓词判为过期、直接消失，等于"改个价格语义召回就断了"。
+ *
+ * 两个守卫：指纹必须与库里一致（否则不允许动这行），版本只能**前进**（`<` 而不是 `<=`，
+ * 旧 job 不能把版本标记回退）。返回是否真的推进了一行。
+ */
+export async function refreshEmbeddingSourceVersion(
+  db: Db,
+  input: RefreshEmbeddingVersionInput,
+): Promise<boolean> {
+  const rows = await db
+    .update(embeddings)
+    .set({ sourceUpdatedAt: input.sourceUpdatedAt, updatedAt: new Date() })
+    .where(
+      and(
+        entityFilter(input.entity),
+        eq(embeddings.model, input.model),
+        eq(embeddings.contentHash, input.contentHash),
+        lt(embeddings.sourceUpdatedAt, input.sourceUpdatedAt),
+      ),
+    )
+    .returning({ id: embeddings.id })
+
+  return rows.length > 0
+}
+
+/**
+ * 候选向量新鲜度谓词（#322 M2 复审 blocker）。
+ *
+ * `source_updated_at` 是生成这条向量时读到的实体 `updated_at`：只有它与实体**当前**的
+ * `updated_at` 一致，这条向量才描述的仍是当前内容。（目标侧另有强判据：`loadTargetVector()`
+ * 会用当前文本重算 content hash；候选侧是批量取行、逐行重算 hash 代价与收益不成比例，用版本
+ * 相等作判据即可——向量行的指纹与它自己的版本号是同步写入的。）
+ *
+ * 不新鲜的候选**必须从语义召回里排除**，而不是取进来再在 JS 层降级：否则它会占掉 Top-K 名额，
+ * 把真正新鲜的候选挤出去（#322 "existing match 掉出 Top K 后能降级" 的前提是候选集合本身正确），
+ * 而且 M3 会拿这个旧 cosine 直接进 hybrid 打分，得到"当前结构事实 + 旧语义"的混合分。
+ *
+ * 比较**必须按毫秒截断**：实体 `updated_at` 由 `now()` 写入（微秒精度），而版本号经应用侧
+ * `Date`（毫秒）往返——handler 写 `source_updated_at` 时已被截断。直接等值比较会让几乎所有向量
+ * 都判定为过期（只有恰好落在毫秒边界上才相等）。
+ */
+function freshListingsEmbedding(): SQL {
+  return sql`date_trunc('milliseconds', ${embeddings.sourceUpdatedAt}) = date_trunc('milliseconds', ${listings.updatedAt})`
+}
+
+function freshWishesEmbedding(): SQL {
+  return sql`date_trunc('milliseconds', ${embeddings.sourceUpdatedAt}) = date_trunc('milliseconds', ${wishes.updatedAt})`
+}
+
 /** 一条语义召回候选：`distance` 是 cosine **距离**（0 = 同向、1 = 正交、2 = 反向）。 */
 export type SimilarCandidate = { id: string; distance: number }
 
@@ -225,7 +288,7 @@ export async function topKSimilarListings(
     })
     .from(embeddings)
     .innerJoin(listings, eq(listings.id, embeddings.listingId))
-    .where(and(eq(embeddings.model, query.model), query.filter))
+    .where(and(eq(embeddings.model, query.model), freshListingsEmbedding(), query.filter))
     .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
     .limit(query.limit)
 }
@@ -241,7 +304,7 @@ export async function topKSimilarWishes(db: Db, query: SimilarQuery): Promise<Si
     })
     .from(embeddings)
     .innerJoin(wishes, eq(wishes.id, embeddings.wishId))
-    .where(and(eq(embeddings.model, query.model), query.filter))
+    .where(and(eq(embeddings.model, query.model), freshWishesEmbedding(), query.filter))
     .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
     .limit(query.limit)
 }

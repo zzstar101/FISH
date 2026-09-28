@@ -131,6 +131,16 @@ pgvector cosine Top-K（ORDER BY embedding <=> $queryVector LIMIT MATCH_SEMANTIC
   降级路径保证的是：**功能不倒退**（v1 行为原样保留）+ **不产生伪匹配**（缺失向量绝不等于「无候选」或「全命中」）。
 - **为什么候选侧不补投**：一次召回可能有上百个候选，为它们排队会淹没队列；
   候选自己的 `EMBED_*` 由「创建/编辑」路径负责（M1 已接），补投责任不重复。
+- **候选向量也必须新鲜**（#333 复审 blocker）：目标侧的 `content_hash` 判据只保证「target 的向量对应当前内容」，
+  Top-K 里的**候选行**同样可能过期——候选实体被编辑、`EMBED_*` 还没跑完时，旧向量会挤掉新鲜候选，
+  还会被按 id 补算进打分，得到「当前结构事实 + 旧语义」的混合分。所以候选侧不逐行回表比 `content_hash`
+  （Top-K 是纯 SQL 排序，拿到 JS 里再过滤已经晚了：K 个名额先被过期行占掉），而是在 `WHERE` 里直接加
+  **版本相等**谓词：`date_trunc('milliseconds', embeddings.source_updated_at) = date_trunc('milliseconds', <实体>.updated_at)`。
+  **毫秒截断是必需的**：实体 `updated_at` 是 `now()` 的微秒精度，而版本经 JS `Date` 往返后只剩毫秒，
+  直接等值比较几乎永不成立（第一版实现就是这么红的）。新鲜度无法证明的候选**不进 Top-K**，而不是进来再降级。
+- **「只改价格」不会误伤**：价格不进 embedding 文本，这类编辑后 `EMBED_*` 判定 `unchanged`——但版本已经前进，
+  所以 `unchanged` 分支会把版本标记推进到实体当前值（`refreshEmbeddingSourceVersion()`，两个守卫：
+  指纹仍然一致 + 只前进不回退），合法向量不会被后续召回判成过期。
 - **`fallbackReason` 分三档**而不是布尔：`missing` 与 `model-mismatch` 的运维含义完全不同
   （前者是「还没生成」，后者是「换模型了、需要 backfill」），M4 的指标要能区分。
 
@@ -201,11 +211,12 @@ Execution Time: 40.863 ms
 | stale embedding 不被当新内容 | ✅ | `engine.test.ts`「目标向量过期：判 stale 并退化」；判据含 `content_hash` 与 `dimensions` |
 | 不静默混用不同模型的向量 | ✅ | `engine.test.ts`「只有别的模型的向量：判 `model-mismatch`，绝不用另一种模型的向量召回」；`hasEmbeddingFromOtherModel` 在 DB 层单独覆盖 |
 | 候选侧缺向量不替它投递 | ✅ | `engine.test.ts`「候选侧没有向量就进不了 Top-K：本轮不新建匹配，也不替候选投递」（`vectorCandidates=0`、`embedJobs('wish')=0`） |
+| 候选向量过期时不得参与召回/打分（#333 复审） | ✅ | `embeddings.test.ts`「过期向量不进 Top-K，重算后恢复」「`topKSimilarListings` 与愿望方向同一套判据」「`refreshEmbeddingSourceVersion` 只推进内容对得上的向量」；`engine.test.ts`「候选向量过期不进 Top-K，重算后恢复」（`vectorCandidates=0`、`created=0`，重算后 `created=1`/100 分） |
 | K380 + 机械键盘 ≤¥200 demo 继续成立 | ✅ | core smoke 的 demo 流程没有 embeddings ⇒ 走 `v1-fallback`，打分与召回前的 v1 完全一致；`bun run core:smoke` 覆盖 |
 | `MATCH_WISH` 编辑后能真正重算 | ✅ | 索引谓词修复（§3）+ `apps/api/src/modules/wishes/store.test.ts` 的「重复投递幂等」与 `app.wishes.test.ts` 的「PATCH 重投两条 job」 |
 | `bun run typecheck` | ✅ | 全包 exit 0 |
 | `bun run lint` | ✅ | `biome check .`：0 错误 |
-| `bun test --isolate` | ✅ | 见 PR 描述（本轮新增 11 条用例：DB 层 4 条 + worker 层 7 条） |
+| `bun test --isolate` | ✅ | 见 PR 描述（本轮新增 11 条用例：DB 层 4 条 + worker 层 7 条；#333 复审修复再新增 4 条：DB 层 3 条 + worker 层 1 条） |
 | Worker + API 真实 DB 集成测试 | ✅ | `apps/worker/src/jobs/matching/**`、`packages/db/src/embeddings.test.ts`、`apps/api/src/**` 全绿 |
 | ANN 索引决策 | ✅ | §8：exact scan 实测 + 触发条件 |
 | 「无 substring 的语义近似可召回」 | ⏸ M3 | semantic 不进分数时 M2 不可能发生（§1） |
