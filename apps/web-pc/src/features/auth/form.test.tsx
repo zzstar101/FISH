@@ -47,12 +47,12 @@ test('勾选框渲染选中态与禁用态', () => {
   )
   expect(checked).toContain('记住账号密码')
   expect(checked).toContain('data-state="checked"')
-  expect(checked).not.toContain('disabled')
+  expect(checked).not.toContain('disabled=""')
 
   const disabled = renderToStaticMarkup(
     <CheckboxField checked={false} disabled label="自动登录" onCheckedChange={() => {}} />,
   )
   expect(disabled).toContain('自动登录')
-  expect(disabled).toContain('disabled')
+  expect(disabled).toContain('disabled=""')
   expect(disabled).not.toContain('data-state="checked"')
 })
