@@ -1,6 +1,7 @@
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { createFileRoute } from '@tanstack/react-router'
 import { AnnouncementBar } from '../features/home/announcement-bar'
+import { TopSellers } from '../features/home/top-sellers'
 import { PcListingCard } from '../features/listings/listing-card'
 import { useHomeFeed } from '../features/listings/queries'
 
@@ -36,6 +37,8 @@ function HomePage() {
           ))}
         </section>
       ) : null}
+
+      <TopSellers />
     </div>
   )
 }
