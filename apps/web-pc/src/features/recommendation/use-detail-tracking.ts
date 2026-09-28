@@ -11,13 +11,17 @@ import { consumeAttribution, trackListingEvent } from './track'
  * 会在用户早就离开之后才回调，把「没看」记成「长浏览」；隐藏即暂停、回到前台按已累计
  * 时长续上剩余时间，`metadata.durationMs` 才是用户真的看了多久（与小程序端口径一致）。
  *
- * 归因（requestId / position）在本次详情页浏览开始时消费一次（`consumeAttribution`），
- * DETAIL_VIEW 与随后的 LONG_VIEW 共用同一份；消费后持久化条目即被删掉，所以换个入口
- * （搜索 / 分类）再进同一件商品时不再被算作推荐进来的。
+ * 归因（requestId / position）在进入详情页时消费一次（`consumeAttribution`），DETAIL_VIEW 与
+ * 随后的 LONG_VIEW 共用同一份；消费后持久化条目即被删掉，所以换个入口（搜索 / 分类）再进
+ * 同一件商品时不再被算作推荐进来的。消费**不依赖** `ready`：404、请求失败、用户在数据回来
+ * 前就返回，这些路径同样算「进过详情页」，留到 30 分钟后就会污染别的入口；DETAIL_VIEW 则
+ * 仍必须等 `ready`（不存在的商品不该记一次浏览）。
  */
 export function useDetailTracking(listingId: string, ready: boolean): void {
-  /** 本页实例正在跟踪的商品：StrictMode 二次执行时不重复发 DETAIL_VIEW、不重复消费归因。 */
+  /** 本页实例正在跟踪的商品：StrictMode 二次执行时不重复消费归因、不重复重置计时。 */
   const trackedIdRef = useRef<ListingId | null>(null)
+  /** DETAIL_VIEW 每件商品只发一次；`ready` 可能晚于商品切换才就绪，所以不能复用 trackedIdRef。 */
+  const detailViewSentRef = useRef(false)
   /** 已经累计的可见停留时长（毫秒）。 */
   const dwellRef = useRef(0)
   /** 当前这段可见计时的起点；页面不可见时为 null，表示暂停。 */
@@ -27,8 +31,6 @@ export function useDetailTracking(listingId: string, ready: boolean): void {
   const longViewSentRef = useRef(false)
 
   useEffect(() => {
-    // 详情还没就绪（加载中 / 404）：一条事件都不发，不存在的商品不该记一次浏览。
-    if (!ready) return
     // 路由参数是裸字符串，而事件契约要求规范的公开 id（`lst_...`）。
     // 不是规范的 id 就不上报：那种链接服务端本来也取不到详情。
     const parsed = ListingIdSchema.safeParse(listingId)
@@ -83,9 +85,18 @@ export function useDetailTracking(listingId: string, ready: boolean): void {
       dwellRef.current = 0
       runningSinceRef.current = null
       longViewSentRef.current = false
+      detailViewSentRef.current = false
       // 消费归因：本次浏览的 DETAIL_VIEW / LONG_VIEW / IMAGE_VIEW 共用这一份。
+      // 必须排在 `ready` 早退之前（见文件头注释），消费掉的条目随即失效。
       consumeAttribution(publicListingId)
+    }
+
+    // 详情还没就绪（加载中 / 404）：一条事件都不发，不存在的商品不该记一次浏览。
+    if (!ready) return
+
+    if (!detailViewSentRef.current) {
       // StrictMode 下 effect 会执行两次：DETAIL_VIEW 只发一次，避免开发期浏览计数翻倍。
+      detailViewSentRef.current = true
       trackListingEvent({ listingId: publicListingId, eventType: 'DETAIL_VIEW' })
     }
     resume()

@@ -488,6 +488,31 @@ describe('recommendation domain events (#323 R1)', () => {
     expect(rows[0]?.position).toBeNull()
   })
 
+  test('回复留言 → 同样补一条 COMMENT 事件（回复是独立的 insert 路径）', async () => {
+    const seller = await registerUser('31')
+    const buyer = await registerUser('32')
+    const listingId = await createListing(seller.id, '回复验收商品')
+
+    const top = await app.request(
+      `/listings/${listingId}/comments`,
+      post({ content: '还在吗？' }, { cookie: buyer.cookie }),
+    )
+    expect(top.status).toBe(201)
+    const comment = (await top.json()) as { id: string }
+
+    const reply = await app.request(
+      `/comments/${comment.id}/replies`,
+      post({ content: '在的，明天面交' }, { cookie: seller.cookie }),
+    )
+    expect(reply.status).toBe(201)
+
+    // 两条：顶层留言 + 回复。回复走 `createReply` 自己的 insert，不经过 `createComment`，
+    // 而 ingest 又拒收客户端上报的 COMMENT —— 漏掉这条路等于把回复类强正反馈整条丢掉。
+    const rows = await eventsFor(listingId, 'COMMENT')
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.userId).sort()).toEqual([buyer.id, seller.id].sort())
+  })
+
   test('新建会话 → CHAT_START；复用同一会话不重复记', async () => {
     const seller = await registerUser('13')
     const buyer = await registerUser('14')
@@ -766,5 +791,46 @@ describe('recommendation ingest 契约 (#323 R1)', () => {
       rejected: 2,
     })
     expect(await eventsFor(listingId, 'IMAGE_VIEW')).toHaveLength(1)
+  })
+
+  test('同一请求同一商品的曝光换 eventId 重复上报 → 只落一行，其余计入 duplicates', async () => {
+    const seller = await registerUser('33')
+    await createListing(seller.id, '曝光去重验收商品')
+
+    const feed = await fetchFeed('?limit=1')
+    expect(feed.status).toBe(200)
+    const listingId = feed.body.items[0]?.id as string
+    const sessionId = feed.sessionId as string
+
+    const impression = (position: number) => ({
+      eventId: newId(),
+      requestId: feed.body.requestId,
+      listingId,
+      eventType: 'IMPRESSION' as RecommendationEventType,
+      position,
+      anonymousSessionId: sessionId,
+      metadata: { visibleRatio: 1, durationMs: 1_500 },
+      occurredAt: new Date().toISOString(),
+    })
+
+    const response = await app.request(
+      '/recommendations/events',
+      post(
+        { events: [impression(0), impression(0), impression(1)] },
+        {
+          [SESSION_HEADER]: sessionId,
+        },
+      ),
+    )
+    expect(response.status).toBe(202)
+    // 「同一请求内同一张卡只曝光一次」不能只是客户端承诺：端点匿名可写、eventId 由客户端
+    // 自生成，换一个 UUID 就能刷出任意多行。库级部分唯一索引 (request_id, listing_id,
+    // event_type) WHERE event_type IN ('IMPRESSION','QUICK_SKIP') 把它变成硬约束。
+    expect((await response.json()) as unknown).toMatchObject({
+      accepted: 1,
+      duplicates: 2,
+      rejected: 0,
+    })
+    expect(await eventsFor(listingId, 'IMPRESSION')).toHaveLength(1)
   })
 })

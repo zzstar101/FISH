@@ -7,6 +7,8 @@
  * 更关键的是：参数是对**这一次导航**的精确归属，不存在「同一件商品从搜索页进来」
  * 被键冲突误判成推荐来源的问题，也就不需要 TTL 兜底。
  */
+import { RECOMMENDATION_MAX_POSITION } from '@fish/contracts/recommendation/schema'
+
 export type FeedAttribution = {
   requestId: string
   position: number
@@ -39,6 +41,16 @@ export function readFeedAttribution(
   const rawPosition = params[POSITION_PARAM]
   if (!requestId || rawPosition === undefined) return null
   const position = Number.parseInt(rawPosition, 10)
-  if (!Number.isInteger(position) || position < 0) return null
+  /*
+    上界必须与契约的 `RECOMMENDATION_MAX_POSITION` 一致：越界的 position 会让事件在
+    `queue.ts` 的 `isSendable`（`RecommendationEventInputSchema.safeParse`）里整条不合格，
+    于是这次浏览的 DETAIL_VIEW / LONG_VIEW 一起被**静默丢弃**（不是 422，日志里只有一条丢弃）。
+    正常路径不可达（下标 0..49），但手改或被分享的 `?pos=` 链接能造出来。
+    口径与 `apps/api/src/modules/recommendation/context.ts` 一致：超界一律当没有归因，
+    宁可这一次浏览没有归因，也不能让整条事件消失。
+  */
+  if (!Number.isInteger(position) || position < 0 || position > RECOMMENDATION_MAX_POSITION) {
+    return null
+  }
   return { requestId, position }
 }

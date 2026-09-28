@@ -122,7 +122,10 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
             occurredAt: record.occurredAt,
           })),
         )
-        .onConflictDoNothing({ target: recommendationEvents.eventId })
+        // 不指定 target：表上有三条唯一索引（event_id、曝光类 (request_id,listing_id,event_type)、
+        // 商品级 PURCHASE），冲突任何一个都该当"重复上报"静默吞掉并计入 duplicates。
+        // PostgreSQL 的 ON CONFLICT 一次只能推断一个仲裁者，所以这里必须留空。
+        .onConflictDoNothing()
         .returning({ id: recommendationEvents.id })
       return inserted.length
     },

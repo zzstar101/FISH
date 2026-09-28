@@ -67,6 +67,11 @@
 | `occurred_at` / `created_at` | 客户端发生时刻 / 落库时刻 |
 
 索引：`UNIQUE(event_id)`、`(user_id, occurred_at)`、`(listing_id, occurred_at)`、`(request_id)`、`(anonymous_session_id, occurred_at)`。
+两条**部分唯一索引**（把"换一个 `event_id` 就能重复写"的数据污染变成库级约束，`ON CONFLICT DO NOTHING` 吞掉冲突并计入 `duplicates`）：
+
+- `UNIQUE(request_id, listing_id, event_type) WHERE event_type IN ('IMPRESSION','QUICK_SKIP')`：曝光/快速划过在契约里本就是「每次推荐请求每张卡各一次」，而端点匿名可写、`eventId` 由客户端自生成、R1 又故意不做限流 → 不拦的话同一 `(request_id, listing_id)` 能被无成本刷出任意多行，曝光率、CTR 与「多次曝光无点击」的负样本全部被放大。只约束这两类：`DETAIL_VIEW` 允许重复（同一商品可以被反复点开），`IMAGE_VIEW` 更是每张图一条。
+- `UNIQUE(listing_id) WHERE event_type = 'PURCHASE'`：`PURCHASE` 是商品级唯一事实（见 §4）。服务层写前先查一次 `hasListingEvent`，但那是 check-then-insert —— 两个并发 confirm 可以都查到「无行」再各自插入，这条索引才是并发下的真保证。
+
 约束：`recommendation_events_impression_requires_attribution`（`IMPRESSION` / `QUICK_SKIP` 必须同时有 `request_id` 与 `position`）、`recommendation_events_position_non_negative`。
 
 不做分区：R1 的量级用 B-tree 索引足够，分区键（时间）会把唯一索引约束复杂化，等 R6 的保留作业需要时才谈。
@@ -89,17 +94,19 @@
 
 - body `{ events: RecommendationEventInput[] }`，1..50 条；**202** → `{ accepted, duplicates, rejected }`。
 - 匿名可用（不挂 `requireAuth`）。会话标识走 **body**（离线补发的一批可能横跨会话切换），Feed 的会话标识走头。
-- 幂等：同一 `event_id` 撞唯一索引 → 计入 `duplicates`，不写第二行。
+- 幂等：同一 `event_id` 撞唯一索引 → 计入 `duplicates`，不写第二行。三本"重复"账合起来看：`event_id` 相同（客户端重发）、同一 `(request_id, listing_id)` 的曝光类事件换 `eventId` 重报（多标签页 / 坏客户端 / 无上限重试）、同一商品的第二条 `PURCHASE` —— 后两类由 §3 的部分唯一索引拦下，同样计入 `duplicates`（不是 `rejected`：客户端没做错什么，只是重复）。
 - 拒收（通过契约校验但服务端不收）计入 `rejected`，逐条原因只写服务端日志：`listing_not_found` / `request_not_found` / `identity_mismatch` / `occurred_at_in_future`（超过 now + 10 分钟）/ `occurred_at_too_old`（早于 now − 180 天）/ `server_confirmed_event_type`（见下）。原因不进响应体：客户端对这些无能为力，把枚举写进契约意味着每加一种原因就要改协议。
 - 写入是 **fire-and-forget**：不阻塞也不影响主流程（评论、会话、交易都不因为埋点失败而失败）。
 
 ### 服务端确证行为的埋点（客户端不上报这些）
 
-`COMMENT`（评论创建成功）、`CHAT_START`（**新建**会话；复用既有会话不是新行为信号）、`TRANSACTION_START`（卖家接受 = 唯一建行端点）、`PURCHASE`（双方确认后 `status = COMPLETED`）。挂点是各 router 的成功分支，通过窄接口 `RecommendationDomainRecorder`（`apps/api/src/modules/recommendation/domain-events.ts`）注入，业务模块不依赖推荐模块的 store / 召回 / 游标。
+`COMMENT`（评论创建成功，**含回复**）、`CHAT_START`（**新建**会话；复用既有会话不是新行为信号）、`TRANSACTION_START`（卖家接受 = 唯一建行端点）、`PURCHASE`（双方确认后 `status = COMPLETED`）。挂点是各 router 的成功分支，通过窄接口 `RecommendationDomainRecorder`（`apps/api/src/modules/recommendation/domain-events.ts`）注入，业务模块不依赖推荐模块的 store / 召回 / 游标。
+
+`COMMENT` 有两个写路径：顶层留言走 `service.createComment`，`POST /comments/:commentId/replies` 的回复走 `createReply` 自己的 `store.insert`（同一张表、同一 listing 上的新行，不经过 `createComment`）。两条路都必须挂 recorder —— ingest 拒收客户端上报的 `COMMENT`，漏一条就等于把该类强正反馈整条丢掉。回复路径的 listing 从 DTO 的公开 id 解回 DB uuid（`decodePublicId`）后再交给 recorder。
 
 这四类**在写入端点上被显式拒收**（`server_confirmed_event_type`，见契约的 `RECOMMENDATION_SERVER_CONFIRMED_EVENT_TYPES`）：端点匿名可写，照收的话任何人 POST 一批 `PURCHASE` 就能污染训练数据，而且落库后与真实交易**无法区分**（表里没有来源列）。拒收之后「表里出现这四类 = 服务端写的」这条不变式在数据层面成立，不必再加列。`FAVORITE` / `UNFAVORITE` 反过来只能由客户端上报（服务端还没有收藏写路径，见 §1），R1 接受这份不对称。
 
-`PURCHASE` 的精确一次：`transactions` store 对 `COMPLETED` 上的重复 confirm 是**幂等返回**（`{kind:'ok'}` 里没有「这次是否真的推进」的信号），而 `recordDomainEvent` 每次都新生成 `eventId`，`event_id` 唯一索引对这类重复**永远不生效** —— 不拦的话卖家重复点确认或重放 `POST /transactions/:id/confirm` 就能把最强的正样本无界放大。因此服务端在写入前按「一个商品只会成交一次」（成交即转 `SOLD`，同一商品的第二条成交事件在业务上不存在）查一次 `hasListingEvent(listingId, 'PURCHASE')`，命中即不写。护栏测试：`重复确认成交不会重复记 PURCHASE（商品级唯一事实）`。若将来真的要支持同一商品重卖，需要把去重键从 listing 换成 transaction（届时 `transactions` store 应回一个 `justCompleted` 标志，属跨模块改动）。
+`PURCHASE` 的精确一次：`transactions` store 对 `COMPLETED` 上的重复 confirm 是**幂等返回**（`{kind:'ok'}` 里没有「这次是否真的推进」的信号），而 `recordDomainEvent` 每次都新生成 `eventId`，`event_id` 唯一索引对这类重复**永远不生效** —— 不拦的话卖家重复点确认或重放 `POST /transactions/:id/confirm` 就能把最强的正样本无界放大。因此服务端在写入前按「一个商品只会成交一次」（成交即转 `SOLD`，同一商品的第二条成交事件在业务上不存在）查一次 `hasListingEvent(listingId, 'PURCHASE')`，命中即不写；并发下真正的保证是 §3 的 `UNIQUE(listing_id) WHERE event_type = 'PURCHASE'`（先查后插是 check-then-insert，两个并发 confirm 可以都查到「无行」，索引让输家静默落空而不是 500）。护栏测试：`重复确认成交不会重复记 PURCHASE（商品级唯一事实）`。若将来真的要支持同一商品重卖，需要把去重键从 listing 换成 transaction（届时 `transactions` store 应回一个 `justCompleted` 标志，属跨模块改动）。
 
 ---
 
@@ -132,14 +139,16 @@
 2. **曝光**：卡片可见 ≥ 50% 且连续 ≥ 1000ms → `IMPRESSION`（metadata `visibleRatio` / `durationMs` / `pageIndex`）；可见但 < 1000ms 且未点开 → `QUICK_SKIP`。同一 `requestId` 内同一卡片只发一次。
 3. **详情归因**：从推荐卡片进入详情时记住 `{ requestId, position }` → `DETAIL_VIEW`；停留 ≥ 10000ms → `LONG_VIEW`；主动切图 → `IMAGE_VIEW`。非推荐来源的详情**照发 `DETAIL_VIEW`**，只是不带 `requestId`（搜索进来的浏览同样是有效行为信号）。
 4. **不感兴趣**：web-pc 卡片菜单、小程序卡片长按 → `HIDE` + 立刻移除 + 本地隐藏名单（TTL 180 天）。服务端持久化不在 R1。
-5. **离线队列**：事件入队即固化 `eventId`、`anonymousSessionId` 与 `occurredAt`，持久化到本地存储；触发冲刷：入队即冲刷 + 应用启动 + `online` + 回到前台 + 每 15 秒。每批 ≤ 50 条，2xx 才出队（重试沿用原 `eventId`，所以服务端看到的仍是同一条事件）；上限 500 条，超出丢最旧。发送前用契约 schema 自检，不合格的丢弃并 `console.warn`（客户端 bug 不该把整批打成 422）。
+5. **离线队列**：事件入队即固化 `eventId`、`anonymousSessionId` 与 `occurredAt`，持久化到本地存储；触发冲刷：入队即冲刷 + 应用启动 + `online` + 回到前台 + 每 15 秒。每批 ≤ 50 条，2xx 才出队（重试沿用原 `eventId`，所以服务端看到的仍是同一条事件）；上限 500 条，超出丢最旧。发送前用契约 schema 自检，不合格的丢弃并 `console.warn`（客户端 bug 不该把整批打成 422）。**冲刷循环的退出条件是「队列真的被缩短」而不是「这一批发完了」**：本地存储写回失败（配额写满等）时队列内容不变，只按"发完了"退出的话下一轮会读到同一批再 POST —— 一个坏存储就能把队列变成无限重发器（实测 1.5 秒 501 次 POST），且 flush promise 永不 settle，之后所有入队与定时器都挂在死 promise 上。写回失败即 `console.warn` 一次并结束本轮，事件留在队列里等下次触发。
+6. **曝光去重表的容量**：两端都按 `requestId` 维护已发过的 key，并在请求切换时重置。淘汰**只允许淘汰不属于当前 `requestId`** 的 key —— 首页把已加载的多页拼成一个列表（每页 24 条、各页共用同一个 `requestId`），按 FIFO 无差别淘汰最旧 key 会在 11 页之后把最早的卡片挤出表，滚回顶部再看满 1s 就会对同一 `(requestId, listingId)` 发出第二条 `IMPRESSION`（服务端现在也会把它计成 `duplicates`，但曝光率已经被客户端算错了）。
+7. **归因的消费时机**：进入详情页就消费归因（而不是"等数据 ready 再消费"）。404 / 请求失败 / 用户在数据回来前返回，都不该让那份 `{requestId, position}` 在存储里继续存活 30 分钟 —— 否则从搜索页再点开同一商品时会挂上上一次推荐请求的 `requestId`/`position`。`DETAIL_VIEW` 仍必须等数据 ready 才发（404 不记浏览）。
 
 ---
 
 ## 8. R1 的验证
 
 - 契约单测（`packages/contracts/src/recommendation/schema.test.ts`）：12 类事件、阈值常量、metadata 白名单逐类型、曝光缺 `position` 必拒、批量上限。
-- API 集成测试（`apps/api/src/app.recommendation.test.ts`，18 例）：匿名 Feed + 会话补发、归因链（Feed → IMPRESSION → DETAIL_VIEW 落库）、幂等重放计 `duplicates`、批内重复 `eventId` 计 `duplicates`、拒收（商品不存在 / 身份不符 / 服务端确证类事件 / `occurredAt` 超前 / 过旧）、游标复用、伪造游标与**篡改内层游标**都是 422、`GET /listings?sort=newest` 未被污染、四个服务端领域事件、`source` 服务端补 `fresh`、**大写 UUID 会话与小写等价**（翻页 200 + 事件不被判 `identity_mismatch`）、**切号不串事件**（登出/换账号带旧 `requestId` → `identity_mismatch`）、`position` 溢出 int4 时退化为无归因但事件仍落库、重复确认成交不会重复记 `PURCHASE`。
+- API 集成测试（`apps/api/src/app.recommendation.test.ts`，20 例）：匿名 Feed + 会话补发、归因链（Feed → IMPRESSION → DETAIL_VIEW 落库）、幂等重放计 `duplicates`、**同一 `(request_id, listing_id)` 的曝光换 `eventId` 重报只落一行且计 `duplicates`**、批内重复 `eventId` 计 `duplicates`、拒收（商品不存在 / 身份不符 / 服务端确证类事件 / `occurredAt` 超前 / 过旧）、游标复用、伪造游标与**篡改内层游标**都是 422、`GET /listings?sort=newest` 未被污染、四个服务端领域事件（**含回复留言也记 `COMMENT`**）、`source` 服务端补 `fresh`、**大写 UUID 会话与小写等价**（翻页 200 + 事件不被判 `identity_mismatch`）、**切号不串事件**（登出/换账号带旧 `requestId` → `identity_mismatch`）、`position` 溢出 int4 时退化为无归因但事件仍落库、重复确认成交不会重复记 `PURCHASE`。
 - 门禁：`bun run typecheck` → `bun run lint` → `bun test --isolate` → 真实跑起来（web-pc 首页 / 小程序首页）。
 - `#302` core smoke 的归因链用例等其合入后再挂（本 PR 用 API 集成测试覆盖同一条链路）。
 
@@ -158,4 +167,13 @@
 第一轮对抗性审查报出的缺陷修复后，重启 API（`apps/api/src/index.ts`，端口 3000，`MAIL_TRANSPORT=outbox`）复测：
 
 - **大写 UUID 会话（P1）**：`GET /recommendations/feed?limit=1` 带 `x-anonymous-session-id: D49C7312-6A1D-4977-962C-6B7CC5F6F68C` → 200 并拿到 `nextCursor`；带**同一个大写**会话头 + 该游标翻页 → **200**（修复前 422），`requestId` 与首页一致；换小写同样 200。
-- `PURCHASE` 精确一次、`position` 溢出退化为无归因、切号不串事件、`occurredAt` 时间窗、批内重复 `eventId` 由集成测试覆盖（`apps/api/src/app.recommendation.test.ts`，18 例全绿）。
+- `PURCHASE` 精确一次、`position` 溢出退化为无归因、切号不串事件、`occurredAt` 时间窗、批内重复 `eventId` 由集成测试覆盖（`apps/api/src/app.recommendation.test.ts`，20 例全绿）。
+
+### 第三轮审查修复记录（同一隔离库，用第三轮修复后的代码重启真实 API）
+
+第三轮对抗性审查（服务端 / 客户端各一个全新子代理）之后：
+
+- 服务端：回复留言补记 `COMMENT`（`apps/api/src/modules/comments/router.ts` 的 `COMMENT_REPLIES_PATH` 分支走的是 `createReply` 自己的 `store.insert`，不经过 `createComment`，而 ingest 拒收客户端上报的 `COMMENT` → 回复类强正反馈原本 100% 丢失）；`recommendation_events` 加两条**部分唯一索引** —— `recommendation_events_impression_once_uq`（`request_id, listing_id, event_type`，`WHERE event_type IN ('IMPRESSION','QUICK_SKIP')`）与 `recommendation_events_purchase_once_uq`（`listing_id`，`WHERE event_type = 'PURCHASE'`），迁移删掉本分支自己的旧条目后重新生成，tag `20260928191108_special_the_call`；`store.insertEvents` 的 `.onConflictDoNothing({ target: eventId })` 改为不指定仲裁者（PG 的 `ON CONFLICT` 一次只能推断一个索引，三本重复账都要吞成 `duplicates`）。
+- 客户端：两端离线队列把「写回队列是否成功」当成本轮冲刷的退出条件（`writeQueue()` 返回 `boolean`；坏存储下原实现会 1.5 秒发 501 次 POST 且 `flushPromise` 永不 settle）；web-pc 曝光去重表淘汰只淘汰不属于当前 `requestId` 的 key（11 页 × 24 条之后 FIFO 会无差别淘汰导致同卡重复曝光）、`openedRef` 由组件级改模块级（首页 → 详情 → 返回后同一份缓存数据里点开过的卡不再被误判为快速划过）、进详情页即消费归因（原来 `ready` 之前早退，404 / 加载失败都会让归因在 `sessionStorage` 里存活 30 分钟）；miniapp `readFeedAttribution` 的 `position` 补上界 `RECOMMENDATION_MAX_POSITION`（越界原本会被发送前自检静默丢弃，连累该次浏览的 `DETAIL_VIEW` / `LONG_VIEW`）。
+- 实跑复测：新库 `migrate` + `seed` 通过，`pg_indexes` 列出 8 条索引（含两条部分唯一索引）；同 `(requestId, listingId)` 三条不同 `eventId` 的 IMPRESSION → `{"accepted":1,"duplicates":2,"rejected":0}`（修复前 `accepted:3`）；注册两个新用户后顶层留言 201 + 回复 201，库里 `event_type` 计数为 `COMMENT 2` / `IMPRESSION 1`（修复前 `COMMENT 1`）。
+- 新增测试与回归证明：`apps/miniapp/tests/recommendation-attribution.test.ts`、`apps/miniapp/tests/recommendation-queue.test.ts`（mock `@tarojs/taro` 存储与投递函数，不 import 真 Taro）；web-pc `queue.test.ts` 新增「写回失败时立刻收工」用例（修复前 `Expected length: 1 / Received length: 4`）。把两处修复临时还原回改前版本：miniapp `11 pass / 4 fail`、web-pc `1 fail`，失败者正是新用例。

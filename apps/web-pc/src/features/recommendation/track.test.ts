@@ -18,6 +18,7 @@ const LISTING_EXPIRED = 'lst_01jc000000e00800000000001d'
 const LISTING_CONSUMED = 'lst_01jc000000e00800000000001e'
 const LISTING_REVISITED = 'lst_01jc000000e00800000000001f'
 const LISTING_SHARED = 'lst_01jc000000e008000000000020'
+const LISTING_REFRESHED = 'lst_01jc000000e008000000000021'
 
 const REQUEST_ID = '2f1c7b3e-4d5a-4c6b-8d9e-0a1b2c3d4e5f'
 
@@ -66,10 +67,20 @@ describe('推荐归因', () => {
     expect(readAttribution(LISTING_REMEMBERED)).toEqual({ requestId: REQUEST_ID, position: 7 })
   })
 
-  test('刷新页面后仍能从 sessionStorage 接上归因', () => {
+  test('未消费的归因写在 sessionStorage，刷新后（内存表已空）仍能被读回', () => {
+    // 只覆盖「读」这一半：详情页刷新时内存表是空的，靠这条记录接上归因。
     seedStoredAttribution(LISTING_RESTORED, 3, Date.now() + 60_000)
 
     expect(readAttribution(LISTING_RESTORED)).toEqual({ requestId: REQUEST_ID, position: 3 })
+  })
+
+  test('刷新后从 sessionStorage 接上的归因只会被消费一次', () => {
+    seedStoredAttribution(LISTING_REFRESHED, 3, Date.now() + 60_000)
+
+    expect(consumeAttribution(LISTING_REFRESHED)).toEqual({ requestId: REQUEST_ID, position: 3 })
+    // 消费即从持久化记录里删掉：之后再进同一件商品（含再次刷新）没有归因，属可接受降级。
+    expect(readAttribution(LISTING_REFRESHED)).toBeNull()
+    expect(consumeAttribution(LISTING_REFRESHED)).toBeNull()
   })
 
   test('没有归因的 listing 返回 null（搜索/分类进来的浏览）', () => {

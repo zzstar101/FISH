@@ -132,7 +132,19 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
     try {
-      return c.json(await service.createReply(c.get('userId'), commentId, parsed.data), 201)
+      const reply = await service.createReply(c.get('userId'), commentId, parsed.data)
+      // 回复与顶层留言是同一张表、同一 listing 上的新行（`createReply` 自己 insert，
+      // 不经过 `createComment`），所以这里必须单独补一次埋点 —— ingest 又拒收客户端
+      // 上报的 COMMENT，漏掉这条路等于把"回复"这类强正反馈整条丢掉。
+      // DTO 的 `listingId` 是公开 id（`CommentDtoSchema`），record 要的是解码后的 DB uuid。
+      if (options.recorder) {
+        await options.recorder.record(c, {
+          viewerId: c.get('userId'),
+          listingId: decodePublicId(PUBLIC_ID_PREFIX.listing, reply.listingId),
+          eventType: 'COMMENT',
+        })
+      }
+      return c.json(reply, 201)
     } catch (error) {
       return toErrorResponse(c, error)
     }

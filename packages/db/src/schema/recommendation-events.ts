@@ -51,7 +51,8 @@ export const recommendationSourceEnum = pgEnum('recommendation_source', [
  * 幂等：`event_id` 是**客户端生成**的 UUIDv4（重试必须复用同一个 id），
  * `unique(event_id)` + `ON CONFLICT DO NOTHING` 让"重发同一批"变成 no-op，
  * 而不是在服务层先查再插（并发下会插进两行）。服务端生成 id 做不到这件事 ——
- * 只有客户端知道"这两次请求是同一条事件"。
+ * 只有客户端知道"这两次请求是同一条事件"。另两条部分唯一索引（曝光类按请求+商品、
+ * PURCHASE 按商品）各自封掉一类"换个 event_id 就能重复写"的数据污染，见下方注释。
  *
  * 身份两列都可空，且**不互斥**：登录用户一样有匿名会话标识（同一浏览器先匿名后登录），
  * 两列同时存在是正常情况。两列全空的事件仍然要收：它算不出个人兴趣，但"这件商品被曝光过
@@ -87,6 +88,27 @@ export const recommendationEvents = pgTable(
   },
   (table) => [
     uniqueIndex('recommendation_events_event_id_uq').on(table.eventId),
+    /*
+      曝光类事件的「同一请求内同一商品只记一次」在 R1 只是**客户端承诺**：端点匿名可写、
+      `eventId` 由客户端自生成（换一个 UUID 就绕过去）、R1 又故意不做限流。于是同一
+      (request_id, listing_id) 可以被一个坏客户端无成本地刷出任意多行 IMPRESSION ——
+      曝光率、CTR 和「多次曝光无点击」的负样本全部被放大，而 R2/R4 直接拿这张表当训练数据。
+      重复抑制不需要服务端真值，所以把它落成库级约束：冲突行由 `ON CONFLICT DO NOTHING`
+      吞掉并计入 `duplicates`，语义上就是「客户端重发/多标签页重复上报」。
+      只约束 IMPRESSION / QUICK_SKIP：这两类在契约里本就是「每次推荐请求每张卡各一次」；
+      DETAIL_VIEW 允许重复（同一商品可以被反复点开），IMAGE_VIEW 更是每张图一条。
+    */
+    uniqueIndex('recommendation_events_impression_once_uq')
+      .on(table.requestId, table.listingId, table.eventType)
+      .where(sql`${table.eventType} IN ('IMPRESSION', 'QUICK_SKIP')`),
+    /*
+      PURCHASE 是商品级唯一事实（成交即转 SOLD）。服务层写前先查一次 `hasListingEvent`，
+      但那是 check-then-insert：两个并发 confirm 可以都查到「无行」再各自插入。这条部分唯一
+      索引才是并发下的真保证，`ON CONFLICT DO NOTHING` 让输家静默落空而不是 500。
+    */
+    uniqueIndex('recommendation_events_purchase_once_uq')
+      .on(table.listingId)
+      .where(sql`${table.eventType} = 'PURCHASE'`),
     index('recommendation_events_user_id_occurred_at_idx').on(table.userId, table.occurredAt),
     index('recommendation_events_listing_id_occurred_at_idx').on(table.listingId, table.occurredAt),
     index('recommendation_events_request_id_idx').on(table.requestId),

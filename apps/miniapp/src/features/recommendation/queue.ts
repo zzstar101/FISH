@@ -38,15 +38,23 @@ function readQueue(): RecommendationEventInput[] {
   }
 }
 
-function writeQueue(queue: RecommendationEventInput[]): void {
+/**
+ * 写回队列，返回**是否真的落盘**。
+ *
+ * 返回值是 `runFlush` 的循环退出条件：写失败时队列内容不变，继续循环只会把同一批事件
+ * 无限重发（见 `runFlush`）。
+ */
+function writeQueue(queue: RecommendationEventInput[]): boolean {
   try {
     if (queue.length === 0) {
       Taro.removeStorageSync(QUEUE_KEY)
-      return
+      return true
     }
     Taro.setStorageSync(QUEUE_KEY, queue)
+    return true
   } catch {
     /* 存储失败不致命：本轮不落盘，事件仍可能在本次冲刷里送出去 */
+    return false
   }
 }
 
@@ -99,7 +107,20 @@ async function runFlush(): Promise<void> {
     // 只有 2xx 才移除，且只移除本次**消费过**的那些 id（含被丢弃的不合格项）。
     // 不能整表写回 `queue.slice(BATCH_SIZE)`：await 期间新入队的事件会在这中间丢掉。
     const consumed = new Set(batch.map((event) => event.eventId))
-    writeQueue(readQueue().filter((event) => !consumed.has(event.eventId)))
+    const rest = readQueue().filter((event) => !consumed.has(event.eventId))
+
+    /*
+      退出条件必须是「队列**真的**被缩短了」，不能是「这一批发完了」。
+      写回失败时存储里还是原队列，下一轮读到同一批 → 再 POST 一次 → 再写失败……
+      服务端能按 eventId 去重，但客户端会一直发下去：循环永不退出，flush promise 永不
+      settle，之后所有入队与定时器都吊在这个死 promise 上。
+      两个判据都要：写回抛错时看返回值；存储「不抛错但也没写进去」时，重读里那些已消费的
+      id 还在，同样说明这一步没生效。任一为假就警告一次并结束本轮（事件留着，下轮重试）。
+    */
+    if (!writeQueue(rest) || readQueue().some((event) => consumed.has(event.eventId))) {
+      console.warn('[recommendation] 事件队列写回失败，已停止本轮冲刷（事件保留，下次重试）')
+      return
+    }
   }
 }
 

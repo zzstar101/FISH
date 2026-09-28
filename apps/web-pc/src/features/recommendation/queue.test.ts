@@ -5,6 +5,9 @@ import { enqueueRecommendationEvent, flushRecommendationQueue } from './queue'
 const QUEUE_STORAGE_KEY = 'fish.recommendation.queue'
 const LISTING_ID = 'lst_01jc000000e00800000000001a'
 
+/** 模拟配额写满：置为 true 后 `setItem` 抛错，`getItem` 仍能读到已写入的内容。 */
+let failWrites = false
+
 function createStorage(): Storage {
   const entries = new Map<string, string>()
   return {
@@ -24,6 +27,7 @@ function createStorage(): Storage {
       entries.delete(key)
     },
     setItem(key, value) {
+      if (failWrites) throw new Error('QuotaExceededError')
       entries.set(key, value)
     },
   }
@@ -56,6 +60,7 @@ function rejected(status: number): Response {
 
 beforeEach(() => {
   localStorageStub.clear()
+  failWrites = false
   calls = []
   respond = async () => accepted()
   Object.assign(globalThis, {
@@ -147,6 +152,39 @@ describe('flushRecommendationQueue', () => {
 
     expect(sentEventIds(calls[0])).toEqual([valid.eventId])
     expect(queuedEvents()).toEqual([])
+  })
+
+  test('本地队列写回失败时立刻收工，不会把同一批无限重发', async () => {
+    const queued = [event(), event()]
+    seedQueue(queued)
+    let delivered = 0
+    respond = async () => {
+      delivered += 1
+      // 修复前 drainQueue 的 `for(;;)` 会读到同一批再 POST（这正是缺陷本身），且因为
+      // 全是已 resolve 的微任务，定时器会被饿死、进程挂死。这里给个上限，让用例以断言
+      // 失败收场而不是把测试进程挂住。
+      if (delivered > 3) throw new Error('写回失败后仍在重发同一批事件')
+      return new Response(JSON.stringify({ accepted: 0, duplicates: 2, rejected: 0 }), {
+        status: 202,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    // 服务端收下了，但本地写不回去（配额满）：队列内容一个字都没变。
+    failWrites = true
+
+    // 超时是第二道保险：冲刷必须在有限时间内 settle（否则之后所有入队都挂在死 promise 上）。
+    const settled = await Promise.race([
+      withoutWarnings(() => flushRecommendationQueue()).then(() => true),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 1_000)
+      }),
+    ])
+
+    expect(settled).toBe(true)
+    expect(calls).toHaveLength(1)
+    // 事件保留在本地（读得到），下次写成功时连原 eventId 一起补发。
+    failWrites = false
+    expect(queuedEvents().map((item) => item.eventId)).toEqual(queued.map((item) => item.eventId))
   })
 
   test('并发冲刷只保留一个在飞的请求', async () => {

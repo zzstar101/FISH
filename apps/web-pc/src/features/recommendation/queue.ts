@@ -20,11 +20,14 @@ const FLUSH_BATCH_SIZE = 50
 /** 定时冲刷间隔。 */
 const FLUSH_INTERVAL_MS = 15_000
 
-function writeQueue(events: readonly RecommendationEventInput[]): void {
+/** 写回队列；返回是否真的写成功——调用方不能假定内容已更新。 */
+function writeQueue(events: readonly RecommendationEventInput[]): boolean {
   try {
     window.localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(events))
+    return true
   } catch {
     // 配额写满：丢队列比让页面抛错重要，埋点不值得打断用户。
+    return false
   }
 }
 
@@ -100,7 +103,14 @@ async function drainQueue(): Promise<void> {
 
     // 按 eventId 出队：冲刷期间新入队的事件要留下（读最新再过滤）。
     const sent = new Set(batch.map((event) => event.eventId))
-    writeQueue(readQueue().filter((event) => !sent.has(event.eventId)))
+    const written = writeQueue(readQueue().filter((event) => !sent.has(event.eventId)))
+    if (written) continue
+
+    // 写回失败：本地队列一个字都没变，再循环只会把同一批无限重发——`flushPromise` 永不
+    // settle，之后所有入队与定时器都挂在死 promise 上。埋点是尽力而为的旁路，喊一声就收工；
+    // 事件留在本地，下次写成功时连原 eventId 一起补发。
+    console.warn('[recommendation] 本地队列写回失败，停止本轮冲刷', batch.length)
+    return
   }
 }
 

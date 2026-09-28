@@ -18,11 +18,20 @@ export type ImpressionTarget = {
  * 组件级标记会跟着丢，同一次推荐请求里的同一张卡片就会被重复计数；反过来，服务端换了
  * 新的 requestId 时组件 ref 不会重置，卡片就再也发不出曝光。键含 requestId 同时解决两边。
  *
- * 两张表都会随浏览一直长，所以有两道边界：requestId 变了（服务端发了新一次推荐请求，
- * 旧 key 再也不会被查到）就整体清空；单表超过 MAX_EMITTED_KEYS 时按插入顺序 FIFO 淘汰。
+ * 两张记标记的表都会随浏览一直长，所以有两道边界：requestId 变了（服务端发了新一次推荐请求，
+ * 旧 key 再也不会被查到）就整体清空；单表超过 MAX_EMITTED_KEYS 时按插入顺序淘汰最旧的
+ * **不属于当前 requestId** 的 key（见 `markEmitted`）。
  */
 const emittedImpressions = new Set<string>()
 const emittedQuickSkips = new Set<string>()
+/**
+ * 已点开的 key（模块级，键与上面两张表同构）。
+ *
+ * 组件级 ref 在路由往返后归零，而首页返回时会复用同一份推荐数据（同一 requestId）：
+ * 用户明明点开过这张卡，返回后 1 秒内滑出视口又会被记成 QUICK_SKIP。跟去重表一样只在
+ * requestId 变化时清空，组件卸载时**不**清。
+ */
+const openedKeys = new Set<string>()
 const MAX_EMITTED_KEYS = 256
 
 /** 最近一次见过的推荐请求 id：变了就说明是新一次推荐，旧的去重标记全部作废。 */
@@ -32,12 +41,23 @@ function emitKey(requestId: string, listingId: string): string {
   return `${requestId}:${listingId}`
 }
 
-/** 记一条去重标记；超过上限时按插入顺序（Set 保序）淘汰最早的。 */
+/**
+ * 记一条去重标记；超过上限时只淘汰**不属于当前 requestId** 的最早 key。
+ *
+ * 首页会把已加载的多页拼起来（每页 24 条）且各页共用同一个 requestId：纯 FIFO 淘汰到当前
+ * requestId 的 key 后，滚回顶部、重新看满阈值的卡片会再发一条 IMPRESSION（同一 requestId +
+ * listingId 出现多行，曝光率偏大）。当前 requestId 的 key 一个都不淘汰——单次推荐请求的
+ * 卡片数是有界的，内存可接受；全当前 requestId 时就让它长。
+ */
 function markEmitted(emitted: Set<string>, key: string): void {
   emitted.add(key)
   if (emitted.size <= MAX_EMITTED_KEYS) return
-  const oldest = emitted.values().next().value
-  if (oldest !== undefined) emitted.delete(oldest)
+  const currentPrefix = trackedRequestId === null ? null : `${trackedRequestId}:`
+  for (const candidate of emitted) {
+    if (currentPrefix !== null && candidate.startsWith(currentPrefix)) continue
+    emitted.delete(candidate)
+    return
+  }
 }
 
 /** 换了推荐请求就清表：旧 requestId 的 key 不会再命中，留着只会无限增长。 */
@@ -46,6 +66,7 @@ function resetEmittedOnRequestChange(requestId: string): void {
   trackedRequestId = requestId
   emittedImpressions.clear()
   emittedQuickSkips.clear()
+  openedKeys.clear()
 }
 
 /**
@@ -65,7 +86,6 @@ export function useImpressionTracking(target: ImpressionTarget): {
 } {
   const { listingId, requestId, position, pageIndex } = target
   const cardRef = useRef<HTMLDivElement | null>(null)
-  const openedRef = useRef(false)
   /** 当前这段可见计时的起点；null 表示没在计时（暂停中或已结算）。 */
   const visibleSinceRef = useRef<number | null>(null)
   /** 本段（进入视口 → 离开视口）已经累计的可见时长；页面隐藏时把跑着的一段并进来。 */
@@ -75,8 +95,10 @@ export function useImpressionTracking(target: ImpressionTarget): {
   const timerRef = useRef<number | null>(null)
 
   const markOpened = useCallback(() => {
-    openedRef.current = true
-  }, [])
+    // 没有 requestId 就没有推荐请求可归因（也不会判 QUICK_SKIP），不必记。
+    if (requestId === null) return
+    openedKeys.add(emitKey(requestId, listingId))
+  }, [requestId, listingId])
 
   useEffect(() => {
     const element = cardRef.current
@@ -158,7 +180,7 @@ export function useImpressionTracking(target: ImpressionTarget): {
         emitImpression(durationMs)
         return
       }
-      if (openedRef.current || emittedImpressions.has(key) || emittedQuickSkips.has(key)) return
+      if (openedKeys.has(key) || emittedImpressions.has(key) || emittedQuickSkips.has(key)) return
       if (durationMs >= RECOMMENDATION_THRESHOLDS.quickSkipMaxDurationMs) return
 
       markEmitted(emittedQuickSkips, key)
