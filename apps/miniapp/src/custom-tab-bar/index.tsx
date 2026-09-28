@@ -21,6 +21,7 @@ import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
 import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
 
@@ -113,6 +114,20 @@ function currentTabKey(): TabKey {
  */
 const HIDDEN_ROUTE = 'pages/sell/index'
 
+/**
+ * 选中胶囊（Owner 2026-09-28 拍板）：**不做动画、不存独立状态**，位置直接由 `active`
+ * 派生（渲染时从 `TAB_ITEMS.findIndex` 求值），而 `active` 的唯一真源是「当前页面路径」
+ * —— 每个 Tab 页 `useDidShow` 经 `lib/tabbar-sync` 广播，本组件同步。
+ *
+ * 历史教训（三次返工的根因，别再走回头路）：
+ * 1. 任何「挂载时算一次」的状态都会残留 —— 实例被复用显示时不重新渲染；
+ * 2. 任何「点击侧滑动 + 延迟 switchTab」的接力时序都会被切页时机打断；
+ * 3. 槽位坐标必须是**显式 rpx**（`TAB_SLOT_RPX`）：750 设计稿下栏宽恒定
+ *    （left/right 30rpx + border 2rpx×2 + padding 16rpx×2 → 内容区 654rpx，5 槽等分
+ *    130.8rpx）。百分比/calc 的混合运算在 WXSS 运行时解析不可靠（实测偏位）。
+ */
+const TAB_SLOT_RPX = 130.8
+
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
   const [dot, setDot] = useState(false)
@@ -194,14 +209,20 @@ export default function CustomTabBar() {
     setDot(fallback.conversations + fallback.notifications > 0)
   }, [authStatus, userId, unread, demoUnread, dot])
 
-  // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
+  // 选中态同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
+  // 复用实例不重新渲染，靠广播是它唯一能感知「我又被显示」的机会。
   useEffect(() => {
-    setActive(currentTabKey())
+    const sync = () => setActive(currentTabKey())
+    sync()
+    Taro.eventCenter.on(TABBAR_ROUTE_EVENT, sync)
+    return () => {
+      Taro.eventCenter.off(TABBAR_ROUTE_EVENT, sync)
+    }
   }, [])
 
   const go = (item: TabItem) => {
     if (item.key === active) return
-    setActive(item.key)
+    // 只负责发起切换；选中态由目标页 onShow 的广播驱动（路径真源，无动画）
     void Taro.switchTab({ url: item.path }).catch(() => undefined)
   }
 
@@ -210,6 +231,23 @@ export default function CustomTabBar() {
 
   return (
     <View className="tabbar">
+      {/*
+        选中胶囊：纯透明液体玻璃高光，位置由 `active`（当前页面路径）直接派生，
+        瞬时落位、无过渡。槽位坐标显式 rpx（`TAB_SLOT_RPX`，750 稿恒定）。
+        是 .tabbar 的第一个子元素 → 图标/文字（后面的兄弟）天然盖在它上面；
+        `pointer-events: none` 让点击穿透到 tab。
+      */}
+      <View
+        className="tabbar__capsule"
+        style={{
+          transform: `translateX(${
+            Math.max(
+              0,
+              TAB_ITEMS.findIndex((item) => item.key === active),
+            ) * TAB_SLOT_RPX
+          }rpx)`,
+        }}
+      />
       {TAB_ITEMS.map((item) => {
         const on = item.key === active
         if (item.key === 'sell') {

@@ -10,6 +10,7 @@ import { readSignature, saveSignature } from '@/features/profile/signature'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { acceptsRefreshedProfile, isLatestLoad, isNotOlderThan, shouldRefreshOnShow } from './view'
 import './index.scss'
 
@@ -201,6 +202,8 @@ export default function Profile() {
   const userIdRef = useRef<string | null>(authUser?.id ?? null)
   authedRef.current = authStatus === 'authed'
   userIdRef.current = authUser?.id ?? null
+  // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
+  useDidShow(notifyTabbarRoute)
   useDidShow(() => {
     const firstShow = skipFirstShowRef.current
     skipFirstShowRef.current = false

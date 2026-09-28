@@ -82,6 +82,37 @@
 }
 
 /**
+ * 选中胶囊（Owner 2026-09-28 拍板）：**纯透明液体玻璃**高光。
+ *
+ * - 定位**全显式 rpx**，不走百分比/calc：WXSS 对混合单位 calc 的解析不可靠（实测偏位）。
+ *   750 稿恒定值：栏 border-box 690rpx（left/right 30）− border 4rpx = padding box 686，
+ *   − padding 32 = 内容区 654rpx，5 槽等分 **130.8rpx**；胶囊 left = padding 16rpx（相对
+ *   padding box = 内容区左缘），translateX(槽位 × 130.8rpx) 由 tsx 内联下发。
+ * - 尺寸：宽 = 一槽；上下各留 4/6rpx，露出底栏自己的玻璃边，读作「栏内的一层」。
+ * - 配方：低白度 22% + 内高光描边 + blur(16rpx)，纯透明、无品牌色 —— 选中语义仍由
+ *   `.is-on` 的品牌色图标/文字承担，胶囊只负责「位置高光」。
+ * - **无过渡**（Owner 2026-09-28 拍板「先去掉高光胶囊的动画」）：位置随页面路径
+ *   瞬时落位。此前滑动动画受「每页一实例」机制约束被切页打断，三次返工后砍掉。
+ * - `pointer-events:none`：点击必须穿透到 tab，胶囊只是高光层。
+ */
+.tabbar__capsule {
+  position: absolute;
+  top: 4rpx;
+  bottom: 6rpx;
+  left: 16rpx;
+  width: 130.8rpx;
+  border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.22);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.65),
+    0 10px 24px -14px rgba(23, 35, 61, 0.28);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  pointer-events: none;
+}
+
+/**
  * 中间「出物」：凸起钮恒定是品牌渐变，选中反馈只能落在**文字**上。
  * 未选中时文字跟随其它 tab 的灰，选中时转品牌色 + 加粗（与设计稿一致）。
  */

@@ -12,6 +12,7 @@ import { useAuth } from '@/features/auth/store'
 import { markConversationRead } from '@/features/chat/api'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
+import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import type { MockNotification } from '@/mock/types'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
 import './index.scss'
@@ -251,6 +252,8 @@ export default function Chat() {
   const skipFirstShow = useRef(true)
   const authedRef = useRef(false)
   authedRef.current = authStatus === 'authed'
+  // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
+  useDidShow(notifyTabbarRoute)
   useDidShow(() => {
     if (skipFirstShow.current) {
       skipFirstShow.current = false
