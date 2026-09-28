@@ -259,6 +259,43 @@ describe('EMBED_LISTING', () => {
     expect(await db.$count(embeddings, eq(embeddings.listingId, listingId))).toBe(1)
   })
 
+  test('并发：两次编辑落在同一毫秒（updated_at 完全相同）时，晚到的旧结果也不覆盖新内容（#328 复审 blocker）', async () => {
+    // 版本号来自应用侧 `Date`（毫秒分辨率）：这里刻意让"旧内容"和"新内容"拿到**完全相同**的
+    // updated_at，于是写入条件里的
+    // `excluded.source_updated_at >= embeddings.source_updated_at` 恒成立——单靠它挡不住旧写入。
+    // 真正兜住的是 provider 返回后的原子复检（锁实体行 + 用当前内容重算指纹）。
+    const sameMoment = new Date()
+    const listingId = await createListing({ title: 'K380 机械键盘', updatedAt: sameMoment })
+    const entity = { kind: 'listing', id: listingId } as const
+    const keyed = textKeyedProvider()
+
+    // 旧 job：读到旧内容后卡在 provider 里（已拿定旧内容指纹与旧版本）。
+    const gate = blocking(keyed)
+    const oldRun = createEmbedJobHandlers(db, gate.provider).EMBED_LISTING({ listingId })
+    await gate.entered()
+
+    // 编辑成新内容，但版本时间戳与旧内容**一模一样**。
+    await db
+      .update(listings)
+      .set({ title: 'AirPods Pro 2 USB-C', updatedAt: sameMoment })
+      .where(eq(listings.id, listingId))
+
+    const newResult = await createEmbedJobHandlers(db, keyed).EMBED_LISTING({ listingId })
+    expect(newResult.status).toBe('generated')
+    const afterNew = await findEmbedding(db, entity, TEXT_KEYED_MODEL)
+    expect(afterNew?.embedding[0]).toBe(2)
+    expect(afterNew?.sourceUpdatedAt.getTime()).toBe(sameMoment.getTime())
+
+    // 放行旧 job：内容指纹已经变了，复检必须让它整条作废（哪怕版本 CAS 认为"版本相同"）。
+    gate.release()
+    expect((await oldRun).status).toBe('stale')
+
+    const final = await findEmbedding(db, entity, TEXT_KEYED_MODEL)
+    expect(final?.embedding[0]).toBe(2)
+    expect(final?.contentHash).toBe(afterNew?.contentHash)
+    expect(await db.$count(embeddings, eq(embeddings.listingId, listingId))).toBe(1)
+  })
+
   test('provider 失败时抛错且不写任何向量（绝不产生"空向量=正常匹配"）', async () => {
     const listingId = await createListing()
     const handlers = createEmbedJobHandlers(db, failing('timeout'))

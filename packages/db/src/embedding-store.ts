@@ -15,6 +15,12 @@ import { embeddings } from './schema/embeddings'
 /** 向量指向的实体。单表双可空 FK，所以"哪个实体"必须是显式参数（见 `schema/embeddings.ts`）。 */
 export type EmbeddingEntity = { kind: 'listing'; id: string } | { kind: 'wish'; id: string }
 
+/**
+ * 只声明本模块真正用到的方法：这样 `Db` 与 `db.transaction(tx => ...)` 里的 `tx` 都能直接传进来。
+ * 调用方需要在**同一条事务**里完成"复检实体内容 + 落向量"，所以执行器必须是可替换的。
+ */
+export type EmbeddingExecutor = Pick<Db, 'select' | 'insert'>
+
 /** 一行向量（不含指向哪个实体——调用方本来就知道自己查的是谁）。 */
 export type EmbeddingRow = {
   model: string
@@ -51,11 +57,11 @@ function entityFilter(entity: EmbeddingEntity) {
  * 不带模型查询就会随机拿到一套向量去算相似度——那正是 #322 要禁止的"静默混用不同模型向量"。
  */
 export async function findEmbedding(
-  db: Db,
+  executor: Pick<Db, 'select'>,
   entity: EmbeddingEntity,
   model: string,
 ): Promise<EmbeddingRow | null> {
-  const rows = await db
+  const rows = await executor
     .select({
       model: embeddings.model,
       dimensions: embeddings.dimensions,
@@ -81,8 +87,19 @@ export async function findEmbedding(
  * 的写入（在 provider 上卡住期间实体被编辑过）即使晚到也会被整条丢弃，不会把新向量改回旧的。
  * 返回值就是"这次到底写没写进去"：`false` 表示被更新的版本抢先，调用方必须当成"本次结果作废"
  * （handler 记为 `stale`），而不是当成写入成功。
+ *
+ * **但这层 CAS 不是"旧 job 永不覆盖新 embedding"的充分条件**（#328 复审 blocker）：版本号来自
+ * 应用侧 `new Date()`（JS `Date` 只有**毫秒**分辨率），同一毫秒内的两次内容更新会拿到**完全相同**
+ * 的版本号，此时 `excluded >= embeddings` 恒成立，晚到的旧写入照样能覆盖新内容。把条件改成
+ * 严格 `>` 也不对——同一毫秒的**新**内容反而会写不进去。真正的先后判定必须靠"内容指纹是否仍是
+ * 当前内容"，由调用方在**同一条事务里锁住实体行**复检（见
+ * `apps/worker/src/jobs/embedding/handlers.ts` 的原子复检）。这里的 CAS 保留作纵深防御：
+ * 它能挡住"版本明显更旧"的写入，且是幂等重写的天然护栏。
  */
-export async function saveEmbedding(db: Db, input: SaveEmbeddingInput): Promise<boolean> {
+export async function saveEmbedding(
+  executor: Pick<Db, 'insert'>,
+  input: SaveEmbeddingInput,
+): Promise<boolean> {
   const listingId = input.entity.kind === 'listing' ? input.entity.id : null
   const wishId = input.entity.kind === 'wish' ? input.entity.id : null
 
@@ -114,7 +131,7 @@ export async function saveEmbedding(db: Db, input: SaveEmbeddingInput): Promise<
   // 冲突目标必须带 partial index 的谓词，否则 PG 无法把 (col, model) 推断到那条 partial
   // unique index 上（两条 partial 索引的形状相同，只差哪一列非空）。
   if (listingId !== null) {
-    const rows = await db
+    const rows = await executor
       .insert(embeddings)
       .values(values)
       .onConflictDoUpdate({
@@ -127,7 +144,7 @@ export async function saveEmbedding(db: Db, input: SaveEmbeddingInput): Promise<
     return rows.length > 0
   }
 
-  const rows = await db
+  const rows = await executor
     .insert(embeddings)
     .values(values)
     .onConflictDoUpdate({
