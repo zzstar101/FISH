@@ -318,7 +318,6 @@ export default function Home() {
                   key={item.id}
                   listing={item}
                   seller={findUser(item.sellerId)}
-                  variant="home"
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                 />
               ))}
@@ -329,7 +328,6 @@ export default function Home() {
                   key={item.id}
                   listing={item}
                   seller={findUser(item.sellerId)}
-                  variant="home"
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                 />
               ))}

@@ -1,9 +1,9 @@
 /**
- * 商品卡（首页 / 搜索 / 相似推荐共用）。
+ * 商品卡（首页 / 搜索 / 相似推荐共用，同一套版式）。
  *
- * 两个变体：
- * - `home`：设计稿首页的瀑布流卡 —— 成色印章压在标题前、价格走品牌蓝、右下「N人想要」；
- * - `search`：设计稿搜索结果的卡 —— 左上角角标、价格走深色、成色是描边胶囊。
+ * 版式以 1改 稿首页瀑布流卡为准：成色印章压在标题前、价格走 --danger 红、
+ * 右下「N人想要」（契约无此计数时不渲染）。历史上曾有 `search` 变体
+ * （价格深色、成色胶囊挪到价格同位），Owner 2026-09-28 拍板全部统一为首页版式，变体已收掉。
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
@@ -11,8 +11,6 @@ import { ICONS } from '@/assets/lib-icons'
 import { conditionLabel, formatAmount } from '@/mock/api'
 import type { MockListing, MockUser } from '@/mock/types'
 import './index.scss'
-
-export type ProductCardVariant = 'home' | 'search'
 
 type ProductCardProps = {
   listing: MockListing
@@ -24,17 +22,11 @@ type ProductCardProps = {
    * 所以调用方必须用 `findUser` 并把 `null` 原样传进来）。
    */
   seller: MockUser | null
-  variant?: ProductCardVariant
   /** 图片区高度（rpx），由瀑布流按列宽 × 比例算好后传入 */
   imageHeight: number
 }
 
-export default function ProductCard({
-  listing,
-  seller,
-  variant = 'home',
-  imageHeight,
-}: ProductCardProps) {
+export default function ProductCard({ listing, seller, imageHeight }: ProductCardProps) {
   const verified = seller?.authStatus === 'VERIFIED'
   const price = formatAmount(listing.priceCents)
 
@@ -43,7 +35,7 @@ export default function ProductCard({
   }
 
   return (
-    <View className={`pcard pcard--${variant}`} onClick={open}>
+    <View className="pcard" onClick={open}>
       <View className="pcard__ph" style={{ height: `${imageHeight}rpx` }}>
         <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" />
         {listing.badge ? <Text className="pcard__badge">{listing.badge}</Text> : null}
@@ -51,9 +43,7 @@ export default function ProductCard({
 
       <View className="pcard__body">
         <View className="pcard__title">
-          {variant === 'home' ? (
-            <Text className="pcard__cond">{conditionLabel(listing.condition)}</Text>
-          ) : null}
+          <Text className="pcard__cond">{conditionLabel(listing.condition)}</Text>
           <Text className="pcard__title-text">{listing.title}</Text>
         </View>
 
@@ -62,13 +52,9 @@ export default function ProductCard({
             <Text className="pcard__cur">¥</Text>
             <Text className="pcard__amt">{price}</Text>
           </View>
-          {variant === 'home' ? (
-            // 契约没有「想要」计数：真实数据下为 null，整块不渲染，不编成 0
-            listing.wants === null ? null : (
-              <Text className="pcard__want">{`${listing.wants}人想要`}</Text>
-            )
-          ) : (
-            <Text className="pcard__cond-pill">{conditionLabel(listing.condition)}</Text>
+          {/* 契约没有「想要」计数：真实数据下为 null，整块不渲染，不编成 0 */}
+          {listing.wants === null ? null : (
+            <Text className="pcard__want">{`${listing.wants}人想要`}</Text>
           )}
         </View>
 

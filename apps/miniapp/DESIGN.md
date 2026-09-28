@@ -110,7 +110,7 @@ src/
   features/*/api.ts          # 各域的契约请求函数
   features/fetchers.ts       # 页面取数统一入口：先真接口、失败退 mock
   components/
-    product-card/            # 首页/搜索共用的商品卡（两个 variant）
+    product-card/            # 首页/搜索/相似推荐共用的商品卡（单一版式，变体已收）
     empty-state/             # 空态
     nav-bar/                 # 自绘导航栏（设计稿是吸顶漂浮按钮）
   pages/<name>/index.tsx + index.scss + index.config.ts
