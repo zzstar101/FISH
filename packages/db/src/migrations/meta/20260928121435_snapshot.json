@@ -1,5 +1,5 @@
 {
-  "id": "6374543b-56dd-40a3-b1bd-a7979f4904ac",
+  "id": "6a9a72ea-f10a-45d3-9645-2c6ec9f131e5",
   "prevId": "1234850c-a496-4fc3-999c-40fb32578969",
   "version": "7",
   "dialect": "postgresql",
@@ -2786,6 +2786,92 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.transaction_review_images": {
+      "name": "transaction_review_images",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "review_id": {
+          "name": "review_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "object_key": {
+          "name": "object_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "transaction_review_images_review_id_sort_order_uq": {
+          "name": "transaction_review_images_review_id_sort_order_uq",
+          "columns": [
+            {
+              "expression": "review_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "sort_order",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "transaction_review_images_review_id_transaction_reviews_id_fk": {
+          "name": "transaction_review_images_review_id_transaction_reviews_id_fk",
+          "tableFrom": "transaction_review_images",
+          "tableTo": "transaction_reviews",
+          "columnsFrom": [
+            "review_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "transaction_review_images_sort_order_non_negative": {
+          "name": "transaction_review_images_sort_order_non_negative",
+          "value": "\"transaction_review_images\".\"sort_order\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.transaction_reviews": {
       "name": "transaction_reviews",
       "schema": "",
@@ -2811,7 +2897,8 @@
         },
         "rating": {
           "name": "rating",
-          "type": "integer",
+          "type": "transaction_review_rating",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
@@ -3863,6 +3950,15 @@
       "values": [
         "LISTING",
         "USER"
+      ]
+    },
+    "public.transaction_review_rating": {
+      "name": "transaction_review_rating",
+      "schema": "public",
+      "values": [
+        "POSITIVE",
+        "NEUTRAL",
+        "NEGATIVE"
       ]
     },
     "public.transaction_status": {

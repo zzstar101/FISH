@@ -19,7 +19,7 @@ import { listingModerationRecords } from './schema/moderation'
 import { notifications } from './schema/notifications'
 import { reports } from './schema/reports'
 import { sessions } from './schema/sessions'
-import { transactionReviews } from './schema/transaction-reviews'
+import { transactionReviewImages, transactionReviews } from './schema/transaction-reviews'
 import { transactionMeetupTokens, transactions } from './schema/transactions'
 import { users, wechatIdentities } from './schema/users'
 import { campusEmailVerifications } from './schema/verifications'
@@ -103,10 +103,10 @@ export async function seed(tx: SeedTx): Promise<void> {
   // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）/ `wechat_identities`
   // （#86，引用 users 且 ON DELETE CASCADE）/ `listing_media_objects`（#286，引用 users）
   // / `favorites`（#190）/ `follows`（#188）/ `transaction_reviews`（#195，引用 users 与
-  // transactions）必须在内：漏掉会让 seed 直接失败
-  // （实测未列入时报 0A000，不需要该表里真有数据）。
+  // transactions）/ `transaction_review_images`（#195，引用 transaction_reviews）必须在内：
+  // 漏掉会让 seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${favorites}, ${follows}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${favorites}, ${follows}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}`,
   )
 
   const now = new Date()
