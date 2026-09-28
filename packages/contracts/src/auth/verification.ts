@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ScanErrorCodeSchema } from './scan'
 import { AuthErrorCodeSchema } from './session'
 import { AuthStatusSchema } from './user'
 
@@ -80,13 +81,23 @@ export const VerificationErrorCodeSchema = z.enum([
 
 export type VerificationErrorCode = z.infer<typeof VerificationErrorCodeSchema>
 
-/** 认证域完整错误码取值 = 会话子域 + 校园认证子域。auth 模块 errors.ts 用它收窄。 */
-export const AuthErrorCodeAllSchema = z.enum([
+/**
+ * 认证域完整错误码取值 = 会话子域 + 校园认证子域 + 扫码登录子域（#197）。
+ * auth 模块 errors.ts 用它收窄。
+ *
+ * 刻意用 `as const` 而不是 `as [string, ...string[]]`：后者会把推导出的类型扩宽成
+ * `string`，`AuthError` 就再也挡不住拼错的错误码了。这里让 schema 与类型都从同一个
+ * 字面量元组派生，运行时 `.options` 与编译期联合类型不会分叉。
+ */
+const AUTH_ERROR_CODES = [
   ...AuthErrorCodeSchema.options,
   ...VerificationErrorCodeSchema.options,
-] as [string, ...string[]])
+  ...ScanErrorCodeSchema.options,
+] as const
 
-export type AuthErrorCodeAll = z.infer<typeof AuthErrorCodeAllSchema>
+export const AuthErrorCodeAllSchema = z.enum(AUTH_ERROR_CODES)
+
+export type AuthErrorCodeAll = (typeof AUTH_ERROR_CODES)[number]
 
 /** `g***@gzasc.edu.cn`：本地部分只留首字符（空本地不可能，min(1) 保证）。 */
 export function maskCampusEmail(email: string): string {
