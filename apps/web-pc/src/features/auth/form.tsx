@@ -258,6 +258,7 @@ export function CheckboxField({
   onCheckedChange: (checked: boolean) => void
 }) {
   return (
+    // biome-ignore lint/a11y/noLabelWithoutControl: Checkbox 是 button[role=checkbox]，label 实际包裹着控件
     <label className="flex cursor-pointer items-center gap-2 text-sm text-[#527281] select-none">
       <Checkbox
         checked={checked}
