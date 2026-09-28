@@ -199,3 +199,16 @@ idle
 - 当前限流是进程内单实例实现；多实例部署前必须换共享存储，并配置受信代理 CIDR。
 
 以上外部事实与真机差异必须保留证据，不能用本地 stub、H5 预览或 CI 测试冒充真实扫码验收。
+
+## v2 集成增补（2026-09-29，PR rework）
+
+按 #327 关闭复审执行的两处架构修正：
+
+1. **UI 基线**：浏览器实现整体落在 `apps/web-pc`（`features/auth/scan-*` + `routes/login.tsx`
+   双 Tab），`apps/web` 已随 #334 移除，不再有任何 PWA 代码。
+2. **token 生命周期**：`access_token` 缓存 / 单飞 / 退避下沉到共用模块
+   `apps/api/src/modules/wechat/access-token.ts`（#294 形状），出码客户端经
+   `deps.tokens` 注入；#204 手机号换取复用同一实例。选 `POST /cgi-bin/stable_token`
+   的官方依据见该文件头注。
+3. `login_tickets` 迁移按迁移规则从新 main journal 重新生成（`20260929000513_absurd_medusa`），
+   不复用旧 `20260928154329` 条目。
