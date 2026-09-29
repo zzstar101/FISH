@@ -1,6 +1,8 @@
 import type { ListingImage } from '@fish/contracts/listings/schema'
+import type { ListingId } from '@fish/contracts/system/public-id'
 import { useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
+import { trackListingEvent } from '../recommendation/track'
 
 export function ListingGallery({
   images,
@@ -8,7 +10,7 @@ export function ListingGallery({
   title,
 }: {
   images: ListingImage[]
-  listingId: string
+  listingId: ListingId
   title: string
 }) {
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -24,6 +26,14 @@ export function ListingGallery({
       next.add(url)
       return next
     })
+  }
+
+  function selectImage(index: number) {
+    // 点已经展示的那张不算「查看」：否则连点同一个缩略图会刷出一串 IMAGE_VIEW。
+    if (index === activeIndex) return
+    setSelectedIndex(index)
+    // 只有用户主动切图才上报：首屏自动展示第一张不算「查看」。
+    trackListingEvent({ listingId, eventType: 'IMAGE_VIEW', metadata: { imageIndex: index } })
   }
   const showFallback = active === undefined || failedUrls.has(active.url)
 
@@ -55,7 +65,7 @@ export function ListingGallery({
                 activeIndex === index ? 'border-brand' : 'border-transparent hover:border-brand/40'
               }`}
               key={image.url}
-              onClick={() => setSelectedIndex(index)}
+              onClick={() => selectImage(index)}
               type="button"
             >
               {failedUrls.has(image.url) ? (

@@ -15,6 +15,7 @@
  */
 import type { Me } from '@fish/contracts/auth/user'
 import { useSyncExternalStore } from 'react'
+import { syncRecommendationViewer } from '@/features/recommendation/queue'
 import { ApiError, isUnauthenticatedError } from '@/lib/request'
 import { clearSession, onSessionCleared, readSession } from '@/lib/session'
 import { fetchMe, logout, wechatSignIn } from './api'
@@ -38,8 +39,19 @@ let snapshot: AuthSnapshot = DEMO_AUTH_ENABLED
 
 const listeners = new Set<() => void>()
 
-function emit(next: AuthSnapshot): void {
+function emit(next: AuthSnapshot, viewerKnown = true): void {
   snapshot = next
+  /*
+    身份变了就把队列里未发送的旧身份事件丢掉（#323 R1 复审 blocker）。
+    这里是登录（`signInWithWechat`）、退出（`clearLocalSession`）、401（`onSessionCleared`
+    监听）唯一的广播出口，覆盖全部身份变化；同一身份重复 emit 不会轮换队列
+    （见 `features/recommendation/queue.ts` 的 `syncRecommendationViewer`）。
+
+    `viewerKnown = false` 表示这次广播**不是**权威身份（冷启动 `/me` 网络失败：cookie 可能仍然
+    是登录态）。这种情况只把队列的身份闸门关掉（`undefined` = 身份不明），绝不当成匿名 ——
+    否则待发队列会按仍然有效的登录 Cookie 投出去，那正是要修的串号。
+  */
+  syncRecommendationViewer(viewerKnown ? (next.user?.id ?? null) : undefined)
   for (const listener of listeners) listener()
 }
 
@@ -105,8 +117,11 @@ export function bootstrapAuth(): Promise<void> {
       // 删掉会逼用户重新登录一次（而 401 UNAUTHENTICATED 时 `apiRequest`
       // 已就地清过存储，这里不必重复）。
       if (isUnauthenticatedError(error)) clearSession()
-      // 两种情况在 UI 上都按未登录处理：我们无法证明当前会话还有效
-      emit({ status: 'anonymous', user: null })
+      // 两种情况在 UI 上都按未登录处理：我们无法证明当前会话还有效。
+      // 但只有 401（`clearSession()` 已就地清掉凭据）才是权威的「匿名」；网络不可达 / 5xx 时
+      // 凭据还在，事件归属仍未确定 —— 此时交给 emit 关掉身份闸门（`viewerKnown = false`），
+      // 队列留着，等下一次权威身份解析（登录 / 退出 / 401 / 下次冷启动）再定归属。
+      emit({ status: 'anonymous', user: null }, isUnauthenticatedError(error))
     })
     .finally(() => {
       booting = null

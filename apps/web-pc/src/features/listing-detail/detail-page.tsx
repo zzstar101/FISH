@@ -15,6 +15,7 @@ import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
 import { describeCreateConversationFailure } from '../chat/api'
 import { useCreateConversation } from '../chat/queries'
+import { useDetailTracking } from '../recommendation/use-detail-tracking'
 import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
 import { useListingDetail } from './queries'
@@ -31,6 +32,9 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const navigate = useNavigate()
   const viewerId = me?.id ?? null
   const detail = useListingDetail(listingId, viewerId)
+  // 详情页行为埋点：必须等详情真的加载出来才上报——加载中和 404（商品不存在）都不该记
+  // 一次浏览，所以钩子仍放在提前返回之前，但把「数据已就绪」传进去，由钩子决定发不发。
+  useDetailTracking(listingId, detail.data !== null && detail.data !== undefined)
   const createConversation = useCreateConversation()
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)

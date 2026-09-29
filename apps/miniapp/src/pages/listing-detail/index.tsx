@@ -32,6 +32,9 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+import { readFeedAttribution } from '@/features/recommendation/attribution'
+import { trackRecommendationEvent } from '@/features/recommendation/track'
+import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
@@ -293,6 +296,12 @@ export default function ListingDetail() {
   const router = useRouter()
   const id = router.params.id ?? FALLBACK_ID
 
+  /**
+   * 推荐归因：从推荐流点进来时 URL 上带 `rid` / `pos` 两个参数（见 `@/features/recommendation/attribution`）。
+   * 搜索 / 分类 / 卖家主页进来的没有归因 —— 本页照样发 DETAIL_VIEW，只是不带 requestId。
+   */
+  const attribution = readFeedAttribution(router.params)
+
   const [data, setData] = useState<ListingDetailView | null>(null)
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
@@ -334,6 +343,13 @@ export default function ListingDetail() {
   ownerRef.current = userId
   /** 详情 / 留言读取的请求序号：重试与返回刷新只有最新那一次能写入（判据 D） */
   const loadSeqRef = useRef(0)
+  /**
+   * 上一次上报过的轮播下标。
+   *
+   * R1 §3.5 规定首屏自动展示第一张**不算**用户主动查看，所以 `IMAGE_VIEW` 只在「下标真的变过」
+   * 时才发：初始化那次 `onChange`（如果宿主给了）的下标与它相等，于是被挡掉。
+   */
+  const slideRef = useRef(0)
   /** 当前留言树：`refresh` 起飞时要按它记下 id 快照，而它可能从更早一帧的闭包里被调到 */
   const commentsRef = useRef<CommentNode[]>([])
   commentsRef.current = comments
@@ -421,6 +437,14 @@ export default function ListingDetail() {
     },
     [],
   )
+
+  /**
+   * DETAIL_VIEW 与 LONG_VIEW（R1 §3.5）。
+   *
+   * 传的是**已经加载出来**的商品 id：商品不存在（`notFound`）或还没加载完时传 `null`，
+   * 那时不发事件 —— 发一条指向不存在的商品只会被服务端按 `listing_not_found` 拒收。
+   */
+  useListingDetailTracking(data?.listing.id ?? null, attribution)
 
   const metrics = useMemo(() => readNavMetrics(), [])
 
@@ -1102,7 +1126,23 @@ export default function ListingDetail() {
                   className="detail__swiper"
                   circular
                   current={slide}
-                  onChange={(event) => setSlide(event.detail.current)}
+                  onChange={(event) => {
+                    const index = event.detail.current
+                    setSlide(index)
+                    /*
+                      R1 §3.5：用户主动切图发 IMAGE_VIEW（含点圆点），首屏自动展示第一张不算。
+                      `slideRef` 是上一次上报过的下标，初始化那次下标与它相等，于是不发 ——
+                      比时间窗更准（不需要猜视图层什么时候会补一次 onChange）。
+                    */
+                    if (index === slideRef.current) return
+                    slideRef.current = index
+                    trackRecommendationEvent({
+                      listingId: listing.id,
+                      eventType: 'IMAGE_VIEW',
+                      attribution,
+                      metadata: { imageIndex: index },
+                    })
+                  }}
                 >
                   {images.map((url) => (
                     <SwiperItem key={url} className="detail__slide">

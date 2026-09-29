@@ -1,5 +1,6 @@
 import type { Me } from '@fish/contracts/auth/user'
 import type { QueryClient } from '@tanstack/react-query'
+import { syncRecommendationViewer } from '../features/recommendation/queue'
 
 export const PC_QUERY_PREFIX = 'pc'
 export const AUTH_ME_QUERY_KEY = ['auth', 'me'] as const
@@ -46,6 +47,11 @@ export async function resetPcSession(
     void queryClient.resetQueries(pcQueries)
   }
   queryClient.setQueryData(AUTH_ME_QUERY_KEY, user)
+  // 登录 / 注册 / 退出 / 401 过期 / `loadMe` 检测到的跨标签页换号都收敛到这里，所以行为事件
+  // 队列的身份标记也在这里同步：身份变了就丢掉未发送的旧身份事件（#323 R1 复审 blocker）。
+  // 只在本次重置真的写入会话归属后才同步，被更新代际取代的迟到重置（上面已 return false）
+  // 不能碰队列，否则会把新身份的事件当成旧身份丢掉。
+  syncRecommendationViewer(user?.id ?? null)
   return true
 }
 

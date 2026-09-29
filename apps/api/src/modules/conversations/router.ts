@@ -9,10 +9,16 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
+import type { RecommendationDomainRecorder } from '../recommendation/domain-events'
 import { type ConversationService, ConversationServiceError } from './service'
 
 export type ConversationsRouterOptions = {
   service: ConversationService
+  /**
+   * #323 §M0：**新建**会话（`created === true`）是"想聊这件商品"的服务端确证信号，
+   * 由服务端补一条 CHAT_START 事件；复用既有会话不算这次行为，不记。
+   */
+  recorder?: RecommendationDomainRecorder
   /** 会话没有匿名路径（列表只含本人的会话），整条路由挂 requireAuth（与 matching 同构）。 */
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   /** #73 治理守卫：发起会话前检查封禁（会话属于 `write` 作用域）。 */
@@ -36,6 +42,7 @@ export function createConversationsRouter({
   service,
   requireAuth,
   guard,
+  recorder,
 }: ConversationsRouterOptions) {
   const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -50,9 +57,18 @@ export function createConversationsRouter({
     }
 
     try {
+      const listingId = decodePublicId(PUBLIC_ID_PREFIX.listing, parsed.data.listingId)
       const { conversation, created } = await service.createOrGetConversation(c.get('userId'), {
-        listingId: decodePublicId(PUBLIC_ID_PREFIX.listing, parsed.data.listingId),
+        listingId,
       })
+      // 只在新建会话时补事件：重复点"联系卖家"复用同一个会话，不是新的行为信号。
+      if (created && recorder) {
+        await recorder.record(c, {
+          viewerId: c.get('userId'),
+          listingId,
+          eventType: 'CHAT_START',
+        })
+      }
       return c.json(conversation, created ? 201 : 200)
     } catch (error) {
       return toErrorResponse(c, error)

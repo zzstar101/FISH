@@ -30,8 +30,3 @@ export async function fetchListingFeed(query: PcListingFeedQuery): Promise<Listi
   const payload = await apiRequest(listingFeedPath(query))
   return ListingFeedResponseSchema.parse(payload)
 }
-
-/** PC 首页第一页：契约 limit 上限 50，网格按 4 列取 24 条。 */
-export async function fetchHomeFeed(): Promise<ListingFeedResponse> {
-  return fetchListingFeed({ limit: 24, sort: 'newest' })
-}

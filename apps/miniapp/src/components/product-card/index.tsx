@@ -7,7 +7,9 @@
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
+import { useRef } from 'react'
 import { ICONS } from '@/assets/lib-icons'
+import { buildListingDetailUrl, type FeedAttribution } from '@/features/recommendation/attribution'
 import { conditionLabel, formatAmount } from '@/mock/api'
 import type { MockListing, MockUser } from '@/mock/types'
 import './index.scss'
@@ -24,18 +26,65 @@ type ProductCardProps = {
   seller: MockUser | null
   /** 图片区高度（rpx），由瀑布流按列宽 × 比例算好后传入 */
   imageHeight: number
+  /**
+   * 推荐归因（R1 §3.5）：从推荐流点进详情时把它拼进详情页 URL，详情页据此发带 requestId 的事件。
+   * 搜索 / 相似推荐等入口没有推荐来源，传 `null` 或不传 —— 详情页照样发 DETAIL_VIEW，只是不带归因。
+   */
+  attribution?: FeedAttribution | null
+  /** 点开之前的钩子：首页推荐流用它记「这张卡被点开过」（快速划过的判定要求「未点开」） */
+  onOpen?: () => void
+  /** 长按回调：首页推荐流用它弹「不感兴趣」；不传则卡片没有长按行为 */
+  onLongPress?: () => void
 }
 
-export default function ProductCard({ listing, seller, imageHeight }: ProductCardProps) {
+export default function ProductCard({
+  listing,
+  seller,
+  imageHeight,
+  attribution = null,
+  onOpen,
+  onLongPress,
+}: ProductCardProps) {
   const verified = seller?.authStatus === 'VERIFIED'
   const price = formatAmount(listing.priceCents)
 
-  const open = () => {
-    void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })
+  /**
+   * 长按之后微信仍会补一次 tap：不拦住的话「不感兴趣」的弹层刚关，人就跳进详情页了。
+   *
+   * 用「吃掉紧随长按的那一次 tap」而不是时间窗：长按到松手的间隔是用户自己决定的，
+   * 时间窗挡不住（长按 5 秒再松手，时间窗早过了）。
+   */
+  const swallowNextTapRef = useRef(false)
+
+  const handleLongPress = () => {
+    // 没有长按行为时（搜索 / 相似推荐）连 tap 也不该被吃掉
+    if (!onLongPress) return
+    swallowNextTapRef.current = true
+    onLongPress()
+  }
+
+  const handleOpen = () => {
+    if (swallowNextTapRef.current) {
+      swallowNextTapRef.current = false
+      return
+    }
+    onOpen?.()
+    void Taro.navigateTo({ url: buildListingDetailUrl(listing.id, attribution) })
   }
 
   return (
-    <View className="pcard" onClick={open}>
+    <View
+      className="pcard"
+      /*
+        曝光观察器靠这两个属性把回调对回具体商品：`data-listing-id` 走 dataset，
+        `id` 走回调的 `id` 字段。两条都写是因为宿主对 observeAll 回调的填充不完全一致，
+        哪条先被认出来都能用（见 `features/recommendation/use-impressions.ts`）。
+      */
+      id={`pcard-${listing.id}`}
+      data-listing-id={listing.id}
+      onClick={handleOpen}
+      onLongPress={handleLongPress}
+    >
       <View className="pcard__ph" style={{ height: `${imageHeight}rpx` }}>
         <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" />
         {listing.badge ? <Text className="pcard__badge">{listing.badge}</Text> : null}

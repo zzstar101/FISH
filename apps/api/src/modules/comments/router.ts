@@ -11,10 +11,16 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
+import type { RecommendationDomainRecorder } from '../recommendation/domain-events'
 import { type CommentService, CommentServiceError } from './service'
 
 export type CommentsRouterOptions = {
   service: CommentService
+  /**
+   * #323 §M0：留言成功是服务端确证的行为，由服务端补一条 COMMENT 事件（客户端不报）。
+   * 可选依赖：不传就没有埋点，既有测试/其它装配不必知道推荐模块存在。
+   */
+  recorder?: RecommendationDomainRecorder
   /**
    * 写接口的登录守卫，由 `auth` 模块提供。**读接口匿名可用**（与 listings 的 §0.2
    * 同一分界），所以不能用 `router.use('*', requireAuth)`。
@@ -103,7 +109,16 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
     try {
-      return c.json(await service.createComment(c.get('userId'), listingId, parsed.data), 201)
+      const comment = await service.createComment(c.get('userId'), listingId, parsed.data)
+      // 埋点是旁路：`record` 内部已吞掉全部异常，不会把已成功的留言变成 500。
+      if (options.recorder) {
+        await options.recorder.record(c, {
+          viewerId: c.get('userId'),
+          listingId,
+          eventType: 'COMMENT',
+        })
+      }
+      return c.json(comment, 201)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -117,7 +132,19 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
     if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
 
     try {
-      return c.json(await service.createReply(c.get('userId'), commentId, parsed.data), 201)
+      const reply = await service.createReply(c.get('userId'), commentId, parsed.data)
+      // 回复与顶层留言是同一张表、同一 listing 上的新行（`createReply` 自己 insert，
+      // 不经过 `createComment`），所以这里必须单独补一次埋点 —— ingest 又拒收客户端
+      // 上报的 COMMENT，漏掉这条路等于把"回复"这类强正反馈整条丢掉。
+      // DTO 的 `listingId` 是公开 id（`CommentDtoSchema`），record 要的是解码后的 DB uuid。
+      if (options.recorder) {
+        await options.recorder.record(c, {
+          viewerId: c.get('userId'),
+          listingId: decodePublicId(PUBLIC_ID_PREFIX.listing, reply.listingId),
+          eventType: 'COMMENT',
+        })
+      }
+      return c.json(reply, 201)
     } catch (error) {
       return toErrorResponse(c, error)
     }

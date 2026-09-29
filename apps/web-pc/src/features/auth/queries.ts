@@ -9,6 +9,7 @@ import {
   resetPcSession,
   resetPcSessionIfCurrent,
 } from '../../lib/session-cache'
+import { syncRecommendationViewer } from '../recommendation/queue'
 import { fetchMe, login, logout, register } from './api'
 
 export const authKeys = {
@@ -30,6 +31,9 @@ export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
     if (generation !== currentSessionGeneration()) {
       return queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY) ?? null
     }
+    // 冷启动首次建立身份、以及 query 缓存为空时不走 `resetPcSession` 的路径：这里补一次
+    // 队列身份同步（身份没变时 `syncRecommendationViewer` 不动队列）。
+    syncRecommendationViewer(user.id)
     if (previous === undefined) {
       // 首次建立会话时，公开详情/留言查询可能已经挂载；没有旧身份需要清理。
       queryClient.setQueryData(AUTH_ME_QUERY_KEY, user)
@@ -45,6 +49,9 @@ export async function loadMe(queryClient: QueryClient): Promise<Me | null> {
   } catch (error) {
     if (!isUnauthenticatedError(error)) throw error
     if (generation !== currentSessionGeneration()) return null
+    // 401 = 未登录：队列身份落成匿名。旧身份的待发事件在 `syncRecommendationViewer` 里丢弃，
+    // 否则它们会被下一次带登录 Cookie 的补发记到别人账号上。
+    syncRecommendationViewer(null)
     if (previous === undefined) {
       queryClient.setQueryData(AUTH_ME_QUERY_KEY, null)
       return null

@@ -1,4 +1,5 @@
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
+import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import { createDb } from '@fish/db/client'
@@ -59,6 +60,10 @@ import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
+import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
+import { createRecommendationRouter } from './modules/recommendation/router'
+import { createRecommendationService } from './modules/recommendation/service'
+import { createSqlRecommendationStore } from './modules/recommendation/store'
 import { createTransactionsRouter } from './modules/transactions/router'
 import { createTransactionService } from './modules/transactions/service'
 import { createSqlTransactionStore } from './modules/transactions/store'
@@ -127,7 +132,7 @@ export function createApp(
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
 
-  app.use('*', cors({ origin: env.WEB_ORIGIN }))
+  app.use('*', cors({ origin: env.WEB_ORIGIN, exposeHeaders: [RECOMMENDATION_HEADERS.sessionId] }))
 
   // 品牌静态图（#325）：`apps/web` 移除后站点静态根不存在了，邮件 logo / README 头图改由
   // API 托管，URL 形如 `${WEB_ORIGIN}/api/brand/logo.png`（生产 Caddy 的 `/api/*` 剥前缀）。
@@ -216,6 +221,26 @@ export function createApp(
       guard: restrictionGuard,
     }),
   )
+  // #323 R1：行为埋点与推荐上下文。推荐 Feed 与事件写入都**匿名可用**（未登录访客也要能看首页，
+  // 登录前的行为更要能采集），所以整条不挂 requireAuth —— 与 listings 的「读公开、写必须登录」不同。
+  //
+  // 推荐 Feed 复用 listingService 的读路径（R1 不重写列表查询），只把结果包上推荐上下文；
+  // 真实多路召回 / ranker / re-rank 归 R3/R4。
+  //
+  // 实例只建一次：服务端确证行为的埋点（评论 / 会话 / 交易）复用同一个 recorder，
+  // 各业务模块只依赖那个窄接口，不需要知道推荐模块的 store 与召回。
+  const recommendationService = createRecommendationService({
+    store: createSqlRecommendationStore(db),
+    listings: listingService,
+  })
+  const recommendationRecorder = createRecommendationDomainRecorder(recommendationService)
+  app.route(
+    '/recommendations',
+    createRecommendationRouter({
+      service: recommendationService,
+      resolveViewerId: auth.resolveViewerId,
+    }),
+  )
   // 上传域实例只建一次：#86 B 的头像写入复用同一个 `confirm`（归属前缀 + 对象已上传 +
   // 格式/大小 + #286 的图片审核与固化），发布商品与改头像的失败码与文案因此不可能漂移。
   //
@@ -247,6 +272,7 @@ export function createApp(
       service: createCommentService({ store: createSqlCommentStore(db) }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
+      recorder: recommendationRecorder,
     }),
   )
 
@@ -333,6 +359,7 @@ export function createApp(
       }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
+      recorder: recommendationRecorder,
     }),
   )
   app.route(
@@ -414,6 +441,7 @@ export function createApp(
       }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
+      recorder: recommendationRecorder,
     }),
   )
 

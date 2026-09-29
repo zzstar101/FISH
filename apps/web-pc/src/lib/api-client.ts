@@ -35,6 +35,20 @@ export function isUnauthenticatedError(error: unknown): boolean {
  * 同源部署，cookie 自动携带，因此不需要 `credentials`。
  */
 export async function apiRequest(path: string, init: RequestInit = {}): Promise<unknown> {
+  const { payload } = await apiRequestWithResponse(path, init)
+  return payload
+}
+
+/**
+ * 与 `apiRequest` 相同，但把原始 `Response` 一并返回。
+ *
+ * 推荐 Feed 需要读响应头里的 `x-anonymous-session-id`（服务端可能在客户端没带或
+ * 带的值不被认时补发），而 `apiRequest` 只给 payload。错误处理只保留这一份。
+ */
+export async function apiRequestWithResponse(
+  path: string,
+  init: RequestInit = {},
+): Promise<{ payload: unknown; response: Response }> {
   const requestGeneration = currentSessionGeneration()
   const headers = new Headers(init.headers)
   if (init.body !== undefined && !headers.has('content-type')) {
@@ -43,7 +57,7 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
 
   const response = await fetch(`/api${path}`, { ...init, headers })
 
-  if (response.status === 204) return null
+  if (response.status === 204) return { payload: null, response }
 
   const payload: unknown = await response.json().catch(() => null)
 
@@ -68,5 +82,5 @@ export async function apiRequest(path: string, init: RequestInit = {}): Promise<
         )
   }
 
-  return payload
+  return { payload, response }
 }
