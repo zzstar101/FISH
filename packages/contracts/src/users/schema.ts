@@ -7,8 +7,8 @@
  *
  * ## 写进契约的隐私边界（本 Issue 的验收核心）
  *
- * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / joinedDays / activeCount /
- * soldCount` 七个字段。以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以
+ * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / signature / joinedDays /
+ * activeCount / soldCount` 八个字段。以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以
  * 为空"，而是**契约里根本没有这个字段**）：
  *
  * - `studentNo`（学号即账号）、`campusEmail`（校园认证绑定）、`passwordHash`、`role`
@@ -52,6 +52,13 @@ export const PublicUserProfileSchema = z.object({
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
   authStatus: AuthStatusSchema,
+  /**
+   * 个性签名（#179）：用户主动公开的自我介绍，`null` = 未填写或已清空。
+   * 服务端存 trim 后的原文（可能多行），展示层自行取首行。
+   * 这是用户自填的自述内容，不是平台侧资料——不属于下方「任何情况下不得出现」
+   * 的隐私清单；该清单（学号 / 邮箱 / 手机号 / role / 评价 / 关注）不变。
+   */
+  signature: z.string().nullable(),
   /**
    * 加入天数（服务端算，下限 1）。
    *

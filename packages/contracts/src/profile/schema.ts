@@ -95,15 +95,32 @@ export type ProfileResponse = z.infer<typeof profileResponseSchema>
  *
  * 昵称复用认证域的 `NicknameSchema`（trim + 1–20 字），注册与改名不会出现两套长度口径。
  */
+/**
+ * 个性签名（#179）。长度上限冻结在 200 字符（trim 后计），契约不落 DB CHECK，
+ * 超长在这里 422。语义：
+ * - **允许换行**：服务端存原文（trim 后），展示层自行取首行（miniapp `signatureFirstLine`）；
+ * - **空串 = 清空**：trim 后为空的输入由服务端归一化落 `null`，与「从未填写」同态；
+ * - 不设最短长度：只留空白等于想清空，不该被 422 挡住。
+ */
+export const SignatureSchema = z.string().trim().max(200, '个性签名最多 200 字')
+
 export const profileUpdateRequestSchema = z
   .strictObject({
     nickname: NicknameSchema.optional(),
     /** `POST /uploads/confirm` 返回的 objectKey（`listings/{userId}/{uuid}.{ext}`）。 */
     avatarObjectKey: z.string().trim().min(1).max(256).optional(),
+    /** 个性签名（#179）；缺省 = 不修改。空串 = 清空。 */
+    signature: SignatureSchema.optional(),
   })
-  .refine((value) => value.nickname !== undefined || value.avatarObjectKey !== undefined, {
-    message: 'nickname 与 avatarObjectKey 至少要提供一项',
-  })
+  .refine(
+    (value) =>
+      value.nickname !== undefined ||
+      value.avatarObjectKey !== undefined ||
+      value.signature !== undefined,
+    {
+      message: 'nickname 与 avatarObjectKey 与 signature 至少要提供一项',
+    },
+  )
 
 export type ProfileUpdateRequest = z.infer<typeof profileUpdateRequestSchema>
 
