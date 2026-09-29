@@ -16,7 +16,12 @@ import { useImpressionTracking } from '../recommendation/use-impressions'
  */
 export type CardImpression = { requestId: string | null; position: number; pageIndex: number }
 
-/** PC 商品卡：图上信息下，保持桌面四列网格的稳定高度。 */
+/**
+ * PC 商品卡：图上信息下。
+ *
+ * 高度由内容自然决定，不再写死：首页用多列瀑布流排版，卡片高度各有差异才会有错落；
+ * 搜索页是 `grid`，默认 `align-items: stretch` 会把同行卡片拉齐，不受影响。
+ */
 export function PcListingCard({
   item,
   impression,
@@ -83,10 +88,8 @@ export function PcListingCard({
               </Badge>
             ) : null}
           </div>
-          <div className="flex min-h-[132px] flex-1 flex-col p-4">
-            <h2 className="line-clamp-2 min-h-[44px] font-medium text-[15px] leading-[1.45]">
-              {item.title}
-            </h2>
+          <div className="flex flex-1 flex-col p-4">
+            <h2 className="line-clamp-2 font-medium text-[15px] leading-[1.45]">{item.title}</h2>
             <p className="mt-2 flex items-center gap-1.5 text-ink-3 text-xs">
               <Clock className="size-3.5" />
               {formatRelativeTimeAt(item.createdAt)}发布 · {categoryLabel(item.category)}

@@ -703,3 +703,50 @@ body.auth-glass-body {
     border-radius: 26px;
   }
 }
+
+/*
+ * 首页公告栏：横向无缝滚动。
+ * 按 Owner 要求不放暂停按钮：改为 hover / focus / prefers-reduced-motion 下停止；
+ * 位移只用 transform，避免触发布局重排；轨道由两组等宽副本组成，位移 50% 即无缝衔接。
+ */
+.announcement-track {
+  display: flex;
+  width: max-content;
+  animation: announcement-marquee 36s linear infinite;
+  will-change: transform;
+}
+
+.announcement-group {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3rem;
+  padding-inline: 1.5rem;
+  color: var(--color-ink-2);
+  font-size: 0.875rem;
+}
+
+.announcement-bar:hover .announcement-track,
+.announcement-bar:focus-within .announcement-track {
+  animation-play-state: paused;
+}
+
+@keyframes announcement-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .announcement-track {
+    animation: none;
+  }
+
+  /* 不自动滚动时仍可手动横向查看内容 */
+  .announcement-viewport {
+    overflow-x: auto;
+  }
+}
