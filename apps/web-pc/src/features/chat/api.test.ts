@@ -6,6 +6,7 @@ import {
   createConversation,
   describeCreateConversationFailure,
   describeSendFailure,
+  fetchMediaPage,
   isConversationNotFound,
   MediaUploadError,
   mediaListPath,
@@ -150,6 +151,33 @@ describe('chat error helpers', () => {
       '媒体不存在或不可访问',
     )
     expect(describeSendFailure(new MediaUploadError())).toBe('媒体上传失败，请重试')
+  })
+
+  test('describes platform restrictions so a banned account is not told to retry', () => {
+    expect(describeSendFailure(new ApiError('USER_RESTRICTED', 403, '账号被封禁'))).toBe(
+      '账号已被限制，暂不能发送消息',
+    )
+    expect(describeSendFailure(new ApiError('USER_GUARD_BUSY', 503, '繁忙'))).toBe(
+      '操作繁忙，请稍后重试',
+    )
+  })
+
+  test('rejects the owned-by-someone-else media history read instead of faking an empty list', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({ error: { code: 'CONVERSATION_NOT_FOUND', message: '会话不存在' } }),
+        { status: 404, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch
+    try {
+      await expect(fetchMediaPage(CONVERSATION_ID)).rejects.toBeInstanceOf(ApiError)
+      await expect(fetchMediaPage(CONVERSATION_ID)).rejects.toMatchObject({
+        code: 'CONVERSATION_NOT_FOUND',
+        status: 404,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })
 

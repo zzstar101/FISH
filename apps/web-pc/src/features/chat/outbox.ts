@@ -1,4 +1,4 @@
-import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MediaPresignResponse, MessageDto } from '@fish/contracts/chat/schema'
 import { ApiError } from '../../lib/api-client'
 import { describeSendFailure } from './api'
 import type { MediaUploadDraft } from './media'
@@ -25,6 +25,17 @@ export type OutboxMediaMessage = OutboxBase & {
   draft: MediaUploadDraft
   /** 本地预览用的 object URL；条目离场或页面卸载时 revoke。 */
   previewUrl: string
+  /**
+   * 首次预签名结果，重试**必须**复用。
+   *
+   * `objectKey` 参与服务端幂等指纹（`mediaRequestHash`），而 presign 每次都生成新 key：
+   * 如果重试重新预签名，服务端会看到「同 clientRequestId + 不同指纹」，判成幂等键复用
+   * （409）而不是重放既有消息 —— 响应丢失后的重试就永远拿不回那一条。
+   *
+   * 代价：`uploadUrl` 有有效期（本地 MinIO 为 10 分钟）。条目放很久后重试会卡在直传，
+   * 此时移除本地记录重新发送即可；换取的是「重试绝不产生第二条消息」。
+   */
+  upload: MediaPresignResponse | null
 }
 
 export type OutboxMessage = OutboxTextMessage | OutboxMediaMessage
@@ -62,10 +73,22 @@ export function createMediaOutboxMessage(
     clientRequestId: crypto.randomUUID(),
     draft,
     previewUrl,
+    upload: null,
     status: 'sending',
     error: null,
     errorCode: null,
   }
+}
+
+/** 预签名完成后落进 outbox：重试与后续渲染都从这条记录取 key。 */
+export function attachMediaUpload(
+  current: OutboxMessage[],
+  clientRequestId: string,
+  upload: MediaPresignResponse,
+): OutboxMessage[] {
+  return current.map((item) =>
+    item.clientRequestId === clientRequestId && item.kind === 'MEDIA' ? { ...item, upload } : item,
+  )
 }
 
 /** 发送成功：该条 outbox 离场，服务端消息由 onSent 落到缓存。 */
@@ -155,22 +178,38 @@ export function dispatchOutboxSend(input: {
   })
 }
 
-/** 媒体发送：与文本同一套幂等/重试语义，只是变量换成 presign + 直传 + create 的载荷。 */
+/**
+ * 媒体发送：与文本同一套重试语义，但预签名只做一次。
+ *
+ * 首次尝试先 presign 并把结果写回 outbox；重试直接用记录里的同一个 `objectKey`
+ * （见 `OutboxMediaMessage.upload`），保证服务端幂等指纹不变、命中重放。
+ */
 export function dispatchMediaOutboxSend(input: {
   item: OutboxMediaMessage
   conversationId: string
   mutation: OutboxMediaSendMutation
+  presign: (conversationId: string, draft: MediaUploadDraft) => Promise<MediaPresignResponse>
   setOutbox: (update: (current: OutboxMessage[]) => OutboxMessage[]) => void
   onSent: (message: MediaMessageDto) => void
 }): Promise<void> {
-  const { item, conversationId, mutation, setOutbox, onSent } = input
-  const variables: SendMediaVariables = {
+  const { item, conversationId, mutation, presign, setOutbox, onSent } = input
+  const upload =
+    item.upload === null
+      ? presign(conversationId, item.draft).then((result) => {
+          setOutbox((current) => attachMediaUpload(current, item.clientRequestId, result))
+          return result
+        })
+      : Promise.resolve(item.upload)
+
+  const variables = upload.then<SendMediaVariables>((resolved) => ({
     conversationId,
     draft: item.draft,
+    upload: resolved,
     clientRequestId: item.clientRequestId,
-  }
+  }))
+
   return settleSend({
-    result: mutation.mutateAsync(variables),
+    result: variables.then((value) => mutation.mutateAsync(value)),
     clientRequestId: item.clientRequestId,
     setOutbox,
     onSent,

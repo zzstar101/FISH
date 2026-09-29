@@ -4,6 +4,7 @@ import type {
   ConversationListResponse,
   MediaListResponse,
   MediaMessageDto,
+  MediaPresignResponse,
   MessageDto,
   MessageListResponse,
 } from '@fish/contracts/chat/schema'
@@ -18,7 +19,7 @@ import {
   fetchMediaPage,
   fetchMessagePage,
   markConversationRead,
-  sendMediaMessage,
+  sendMediaObject,
   sendTextMessage,
 } from './api'
 import type { MediaUploadDraft } from './media'
@@ -149,14 +150,16 @@ export type SendTextVariables = {
 export type SendMediaVariables = {
   conversationId: string
   draft: MediaUploadDraft
+  /** 首次预签名结果；重试沿用同一个（objectKey 参与服务端幂等指纹）。 */
+  upload: MediaPresignResponse
   clientRequestId: string
 }
 
 export function useSendMediaMessage(ownerId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ conversationId, draft, clientRequestId }: SendMediaVariables) =>
-      sendMediaMessage(conversationId, draft, clientRequestId),
+    mutationFn: ({ conversationId, draft, upload, clientRequestId }: SendMediaVariables) =>
+      sendMediaObject(conversationId, draft, upload, clientRequestId),
     onSuccess: () => {
       if (ownerId === null) return
       // 与文本同一口径：媒体缓存由页面按历史查询状态决定是否写入，这里只失效列表面。

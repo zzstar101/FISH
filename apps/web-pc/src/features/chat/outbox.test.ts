@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MediaPresignResponse, MessageDto } from '@fish/contracts/chat/schema'
 import { ApiError } from '../../lib/api-client'
 import type { MediaUploadDraft } from './media'
 import {
   createMediaOutboxMessage,
   createOutboxMessage,
-  dispatchMediaOutboxSend,
+  dispatchMediaOutboxSend as dispatchMediaSend,
   dispatchOutboxSend,
   type OutboxMessage,
   type OutboxTextMessage,
@@ -114,17 +114,17 @@ function createMutationFake() {
  */
 function createMediaMutationFake() {
   const requests = new Map<string, Deferred<MediaMessageDto>>()
-  const seenClientRequestIds: string[] = []
+  const variables: SendMediaVariables[] = []
   return {
     mutation: {
-      mutateAsync(variables: SendMediaVariables) {
-        seenClientRequestIds.push(variables.clientRequestId)
+      mutateAsync(next: SendMediaVariables) {
+        variables.push(next)
         const request = deferred<MediaMessageDto>()
-        requests.set(variables.clientRequestId, request)
+        requests.set(next.clientRequestId, request)
         return request.promise
       },
     },
-    seenClientRequestIds,
+    variables,
     reject(clientRequestId: string, error: unknown) {
       requests.get(clientRequestId)?.reject(error)
     },
@@ -133,6 +133,14 @@ function createMediaMutationFake() {
     },
   }
 }
+
+const firstPresign = (overrides: Partial<MediaPresignResponse> = {}): MediaPresignResponse => ({
+  uploadUrl: 'https://minio.test/chat-media/first.webm',
+  objectKey: 'chat-media/cnv_01jc000000e00800000000001a/usr_a/med_first.webm',
+  headers: { 'x-amz-acl': 'private' },
+  expiresAt: '2026-01-01T00:05:00.000Z',
+  ...overrides,
+})
 
 const voiceDraft = (): MediaUploadDraft => ({
   kind: 'VOICE',
@@ -228,6 +236,7 @@ describe('dispatchOutboxSend', () => {
 
   test('媒体重试沿用同一个幂等键，成功后才销账、不重复落条', async () => {
     const fake = createMediaMutationFake()
+    let presignCalls = 0
     const item = createMediaOutboxMessage(voiceDraft(), 'blob:preview-1')
     const store = createStore([item])
     const sent: MediaMessageDto[] = []
@@ -235,34 +244,93 @@ describe('dispatchOutboxSend', () => {
       item: current,
       conversationId: 'cnv_01jc000000e00800000000001a',
       mutation: fake.mutation,
+      presign: async () => {
+        presignCalls += 1
+        return firstPresign()
+      },
       setOutbox: store.setOutbox,
       onSent: (value: MediaMessageDto) => sent.push(value),
     })
 
-    void dispatchMediaOutboxSend(input(item))
+    void dispatchMediaSend(input(item))
+    await flush()
     fake.reject(item.clientRequestId, new ApiError('MEDIA_OBJECT_NOT_FOUND', 422, '尚未上传完成'))
     await flush()
-    expect(store.outbox).toEqual([
-      {
-        ...item,
-        status: 'failed',
-        error: '媒体上传未完成，请重试',
-        errorCode: 'MEDIA_OBJECT_NOT_FOUND',
-      },
-    ])
+    const failed = store.outbox[0]
+    if (failed?.kind !== 'MEDIA') throw new Error('unreachable')
+    expect(failed).toMatchObject({
+      status: 'failed',
+      error: '媒体上传未完成，请重试',
+      errorCode: 'MEDIA_OBJECT_NOT_FOUND',
+    })
 
     store.setOutbox((current) => resetOutboxForRetry(current, item.clientRequestId))
     const retrying = store.outbox[0]
-    if (retrying === undefined || retrying.kind !== 'MEDIA') throw new Error('unreachable')
+    if (retrying?.kind !== 'MEDIA') throw new Error('unreachable')
     expect(retrying.clientRequestId).toBe(item.clientRequestId)
-    void dispatchMediaOutboxSend(input(retrying))
+    void dispatchMediaSend(input(retrying))
+    // 复用已缓存的 presign 时，mutateAsync 在微任务里才发出，先让它登记。
+    await flush()
 
     fake.resolve(item.clientRequestId, mediaMessage('msg_01jc000000e00800000000001v'))
     await flush()
     expect(store.outbox).toEqual([])
     expect(sent.map((value) => value.id)).toEqual(['msg_01jc000000e00800000000001v'])
-    // 两次请求（首次 + 重试）用同一个幂等键，服务端据此返回同一条而不是新建。
-    expect(fake.seenClientRequestIds).toEqual([item.clientRequestId, item.clientRequestId])
+    // 首次 + 重试用同一个幂等键，服务端据此返回同一条而不是新建。
+    expect(fake.variables.map((value) => value.clientRequestId)).toEqual([
+      item.clientRequestId,
+      item.clientRequestId,
+    ])
+    expect(presignCalls).toBe(1)
+  })
+
+  test('响应丢失后的重试复用首次预签名 key（objectKey 是服务端幂等指纹的一部分）', async () => {
+    const fake = createMediaMutationFake()
+    let presignCalls = 0
+    const presign = async (): Promise<MediaPresignResponse> => {
+      presignCalls += 1
+      return firstPresign()
+    }
+    const item = createMediaOutboxMessage(voiceDraft(), 'blob:preview-1')
+    const store = createStore([item])
+    const sent: MediaMessageDto[] = []
+    const input = (current: typeof item) => ({
+      item: current,
+      conversationId: 'cnv_01jc000000e00800000000001a',
+      mutation: fake.mutation,
+      presign,
+      setOutbox: store.setOutbox,
+      onSent: (value: MediaMessageDto) => sent.push(value),
+    })
+
+    // 第一次：presign + create。create 实际已落库，但响应在网络里丢了。
+    void dispatchMediaSend(input(item))
+    await flush()
+    const afterPresign = store.outbox[0]
+    if (afterPresign?.kind !== 'MEDIA') throw new Error('unreachable')
+    expect(afterPresign.upload?.objectKey).toBe(firstPresign().objectKey)
+    fake.reject(item.clientRequestId, new Error('network down'))
+    await flush()
+
+    // 重试：必须复用同一个 presign，否则服务端看到「同键不同指纹」会 409，
+    // 而不是把已经创建的那条消息重放回来。
+    const retrying = store.outbox[0]
+    if (retrying?.kind !== 'MEDIA') throw new Error('unreachable')
+    const sending = resetOutboxForRetry([retrying], retrying.clientRequestId)[0]
+    if (sending?.kind !== 'MEDIA') throw new Error('unreachable')
+    void dispatchMediaSend(input(sending))
+    await flush()
+
+    fake.resolve(item.clientRequestId, mediaMessage('msg_01jc000000e00800000000001w'))
+    await flush()
+
+    expect(presignCalls).toBe(1)
+    expect(fake.variables.map((value) => value.upload.objectKey)).toEqual([
+      firstPresign().objectKey,
+      firstPresign().objectKey,
+    ])
+    expect(sent.map((value) => value.id)).toEqual(['msg_01jc000000e00800000000001w'])
+    expect(store.outbox).toEqual([])
   })
 
   test('重试沿用同一个幂等键，不新增待发条目', async () => {

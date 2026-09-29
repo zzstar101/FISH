@@ -127,31 +127,45 @@ export class MediaUploadError extends Error {
 }
 
 /**
- * 三段式发送媒体：presign → 客户端直传对象存储 → 创建媒体消息。
+ * 媒体预签名：拿到对象存储的直传地址与 `objectKey`。
  *
- * 直传那一段**不能**走 `apiRequest`：它固定拼 `/api` 前缀并把响应当错误信封解析，
- * 而 `uploadUrl` 是对象存储的外域绝对地址（与 publish/api.ts 的图片上传同一先例）。
- * 幂等键由调用方为一次新发送生成，重试沿用同一个值。
+ * **重试必须复用第一次的返回值**（见 `outbox.ts` 的 `upload` 字段）：`objectKey` 是服务端
+ * 幂等指纹的一部分（`apps/api/src/modules/messages/idempotency.ts` 的 `mediaRequestHash`），
+ * 每次重试都重新预签名会得到新 key，于是「同 clientRequestId + 不同指纹」被服务端判成
+ * 幂等键复用（409），响应丢失后的重试就再也拿不回同一条消息。
  */
-export async function sendMediaMessage(
+export async function presignMediaUpload(
   conversationId: string,
   draft: MediaUploadDraft,
-  clientRequestId: string,
-): Promise<MediaMessageDto> {
-  const contentType = draft.file.type
-  const presign: MediaPresignResponse = mediaPresignResponseSchema.parse(
+): Promise<MediaPresignResponse> {
+  return mediaPresignResponseSchema.parse(
     await apiRequest(CHAT_ROUTES.mediaPresign(conversationId), {
       method: 'POST',
       body: JSON.stringify(
         mediaPresignInputSchema.parse({
           kind: draft.kind,
-          contentType,
+          contentType: draft.file.type,
           sizeBytes: draft.file.size,
         }),
       ),
     }),
   )
+}
 
+/**
+ * 第二、三段：客户端直传对象存储 → 创建媒体消息。
+ *
+ * 直传那一段**不能**走 `apiRequest`：它固定拼 `/api` 前缀并把响应当错误信封解析，
+ * 而 `uploadUrl` 是对象存储的外域绝对地址（与 publish/api.ts 的图片上传同一先例）。
+ * 幂等键由调用方为一次新发送生成，重试沿用同一个值。
+ */
+export async function sendMediaObject(
+  conversationId: string,
+  draft: MediaUploadDraft,
+  presign: MediaPresignResponse,
+  clientRequestId: string,
+): Promise<MediaMessageDto> {
+  const contentType = draft.file.type
   const uploaded = await fetch(presign.uploadUrl, {
     method: 'PUT',
     body: draft.file,
@@ -185,6 +199,16 @@ export async function sendMediaMessage(
       body: JSON.stringify(input),
     }),
   )
+}
+
+/** 首次发送：预签名 + 直传 + 创建。重试走 `sendMediaObject` 并复用首次的 presign。 */
+export async function sendMediaMessage(
+  conversationId: string,
+  draft: MediaUploadDraft,
+  clientRequestId: string,
+): Promise<MediaMessageDto> {
+  const presign = await presignMediaUpload(conversationId, draft)
+  return sendMediaObject(conversationId, draft, presign, clientRequestId)
 }
 
 /** 标记会话已读，响应是同会话的未读归零 DTO。 */
@@ -221,6 +245,9 @@ export function describeSendFailure(error: unknown): string {
     if (error.code === 'MEDIA_DURATION_EXCEEDED') return '语音不能超过 60 秒'
     if (error.code === 'MEDIA_DIMENSION_EXCEEDED') return '图片尺寸超过限制'
     if (error.code === 'MEDIA_NOT_FOUND') return '媒体不存在或不可访问'
+    // #73 治理守卫：被封禁的账号在 media 路由上被 403 挡下，重试不会变成成功。
+    if (error.code === 'USER_RESTRICTED') return '账号已被限制，暂不能发送消息'
+    if (error.code === 'USER_GUARD_BUSY') return '操作繁忙，请稍后重试'
   }
   return '发送失败，请重试'
 }

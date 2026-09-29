@@ -13,6 +13,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { useAuth } from '../auth/auth-provider'
+import { presignMediaUpload } from './api'
 import {
   describeImageDimensionRejection,
   describeMediaFileRejection,
@@ -110,6 +111,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const [outbox, setOutbox] = useState<OutboxMessage[]>([])
   const [mediaError, setMediaError] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
+  const [voiceStarting, setVoiceStarting] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [localMessages, setLocalMessages] = useState<MessageDto[]>([])
   const [localMedia, setLocalMedia] = useState<MediaMessageDto[]>([])
@@ -118,6 +120,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const recorderRef = useRef<VoiceRecorder | null>(null)
   const recordStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mediaPreviewUrlsRef = useRef(new Map<string, string>())
+  const mountedRef = useRef(true)
   const markReadRef = useRef(markRead)
   markReadRef.current = markRead
   const sendRef = useRef(sendMessage)
@@ -172,6 +175,12 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       }
     }
   }, [outbox])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   useEffect(
     () => () => {
       if (recordStopTimerRef.current !== null) clearTimeout(recordStopTimerRef.current)
@@ -310,6 +319,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         item,
         conversationId,
         mutation: sendMediaRef.current,
+        presign: presignMediaUpload,
         setOutbox,
         onSent: rememberMedia,
       })
@@ -382,18 +392,28 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   }
 
   async function toggleRecording() {
+    // 授权弹窗期间按钮还在，再点一次会开出第二条录音；用 voiceStarting 挡掉。
+    if (voiceStarting) return
     if (recording) {
       await finishRecording()
       return
     }
+    setVoiceStarting(true)
     try {
       const recorder = await startVoiceRecording()
+      // 授权/初始化期间可能已切会话（会话页按账号+会话 id 重挂载）：立即释放，别留下常亮麦克风。
+      if (!mountedRef.current) {
+        recorder.cancel()
+        return
+      }
       recorderRef.current = recorder
       setRecording(true)
       setMediaError(null)
       recordStopTimerRef.current = setTimeout(() => void finishRecording(), VOICE_AUTO_STOP_MS)
     } catch (error) {
       setMediaError(error instanceof Error ? error.message : '无法开始录音，请检查麦克风权限')
+    } finally {
+      setVoiceStarting(false)
     }
   }
 
@@ -614,6 +634,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                 <Button
                   aria-label={recording ? '结束录音并发送' : '录制语音'}
                   className={`h-11 w-11 ${recording ? 'animate-pulse' : ''}`}
+                  disabled={voiceStarting}
                   onClick={() => void toggleRecording()}
                   type="button"
                   variant={recording ? 'default' : 'outline'}

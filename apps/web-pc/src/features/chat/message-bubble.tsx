@@ -70,54 +70,81 @@ export function MediaBubble({
   isMine: boolean
   isRead: boolean
 }) {
-  const [previewOpen, setPreviewOpen] = useState(false)
   return (
     <div className={`flex gap-2.5 ${isMine ? 'justify-end' : 'justify-start'}`}>
       <div className={`flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
-        {media.kind === 'IMAGE' ? (
-          <>
-            <button
-              className="overflow-hidden rounded-2xl border border-line bg-surface transition-opacity hover:opacity-90"
-              onClick={() => setPreviewOpen(true)}
-              type="button"
-            >
-              <img
-                alt="图片消息"
-                className="max-h-[320px] w-auto max-w-full object-cover"
-                loading="lazy"
-                src={media.url}
-              />
-            </button>
-            <Dialog onOpenChange={setPreviewOpen} open={previewOpen}>
-              <DialogContent className="max-w-[92vw] p-4 sm:max-w-3xl">
-                <DialogHeader>
-                  <DialogTitle>图片预览</DialogTitle>
-                </DialogHeader>
-                <img
-                  alt="图片消息预览"
-                  className="mx-auto max-h-[80vh] w-auto max-w-full object-contain"
-                  src={media.url}
-                />
-              </DialogContent>
-            </Dialog>
-          </>
-        ) : (
-          <div className="flex flex-col gap-1 rounded-2xl border border-line bg-surface px-3 py-2">
-            {/*
-              biome-ignore lint/a11y/useMediaCaption: 语音是用户自己录的音频，客户端拿不到
-              转写内容，无法生成有意义的字幕轨。
-            */}
-            <audio className="h-9 w-60" controls preload="metadata" src={media.url} />
-            <span className="text-[11px] text-ink-3">
-              语音 {formatVoiceDuration(media.durationMs)}
-            </span>
-          </div>
-        )}
+        {media.kind === 'IMAGE' ? <ImageBubble media={media} /> : <VoiceBubble media={media} />}
         <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-3">
           <time dateTime={media.createdAt}>{formatMessageTime(media.createdAt)}</time>
           {isMine && isRead ? <span>已读</span> : null}
         </div>
       </div>
+    </div>
+  )
+}
+
+/** 鉴权读取失败（401/404/对象缺失）时的可见反馈，避免只剩一个破图或空播放器。 */
+function MediaLoadFailed({ label }: { label: string }) {
+  return (
+    <p className="rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-ink-3 text-sm">
+      {label}
+    </p>
+  )
+}
+
+function ImageBubble({ media }: { media: MediaMessageDto }) {
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  if (loadFailed) return <MediaLoadFailed label="图片加载失败，请刷新重试" />
+  return (
+    <>
+      <button
+        className="overflow-hidden rounded-2xl border border-line bg-surface transition-opacity hover:opacity-90"
+        onClick={() => setPreviewOpen(true)}
+        type="button"
+      >
+        <img
+          alt="图片消息"
+          className="max-h-[320px] w-auto max-w-full object-cover"
+          loading="lazy"
+          onError={() => setLoadFailed(true)}
+          src={media.url}
+        />
+      </button>
+      <Dialog onOpenChange={setPreviewOpen} open={previewOpen}>
+        <DialogContent className="max-w-[92vw] p-4 sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>图片预览</DialogTitle>
+          </DialogHeader>
+          <img
+            alt="图片消息预览"
+            className="mx-auto max-h-[80vh] w-auto max-w-full object-contain"
+            onError={() => setLoadFailed(true)}
+            src={media.url}
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+function VoiceBubble({ media }: { media: MediaMessageDto }) {
+  const [loadFailed, setLoadFailed] = useState(false)
+  if (loadFailed) return <MediaLoadFailed label="语音加载失败，请刷新重试" />
+  return (
+    <div className="flex flex-col gap-1 rounded-2xl border border-line bg-surface px-3 py-2">
+      {/*
+        biome-ignore lint/a11y/useMediaCaption: 语音是用户自己录的音频，客户端拿不到
+        转写内容，无法生成有意义的字幕轨。
+      */}
+      <audio
+        className="h-9 w-60"
+        controls
+        onError={() => setLoadFailed(true)}
+        preload="metadata"
+        src={media.url}
+      />
+      <span className="text-[11px] text-ink-3">语音 {formatVoiceDuration(media.durationMs)}</span>
     </div>
   )
 }
@@ -145,7 +172,7 @@ function PendingFooter({
             <AlertCircle className="size-3" />
             {error}
           </span>
-          {errorCode === 'IDEMPOTENCY_KEY_REUSED' ? null : (
+          {errorCode === 'IDEMPOTENCY_KEY_REUSED' || errorCode === 'USER_RESTRICTED' ? null : (
             <button
               className="inline-flex items-center gap-0.5 text-brand hover:underline"
               onClick={onRetry}
