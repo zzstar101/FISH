@@ -26,8 +26,13 @@ import { assertUploadActive } from './active'
 import { isChooseMediaCancel } from './choose-error'
 import { type AllowedImageMime, mimeFromPath } from './mime'
 
-/** 直传超时：5MB 弱网首包可能很慢，比普通请求的 15s 宽。 */
-const UPLOAD_TIMEOUT_MS = 60_000
+/**
+ * 直传超时：5MB 弱网首包可能很慢，比普通请求的 15s 宽。
+ *
+ * 导出给识图查询图上传复用（`features/visual-search/api.ts`）：两处都是"读本地文件 → PUT 直传"，
+ * 同一条链路该有同一个超时口径。
+ */
+export const UPLOAD_TIMEOUT_MS = 60_000
 
 /** 与契约同源的大小上限：超了直接给文案，不打 API。 */
 export function validatePickedSize(sizeBytes: number): string | null {
@@ -113,8 +118,11 @@ function toArrayBuffer(data: unknown): ArrayBuffer | null {
  * 优先异步 `readFile`（**不传 encoding**：传 utf8 会把二进制读坏），
  * 失败或拿到的不是二进制时退到 `readFileSync` —— 开发工具与真机上
  * 「异步读临时文件偶发失败」是已知现象，同步读能兜住同一次上传。
+ *
+ * 导出给识图查询图上传复用（`features/visual-search/api.ts`）：realm 判据（`toArrayBuffer`）
+ * 是踩过坑的，两处各写一份迟早漂移。
  */
-function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
+export function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const fs = Taro.getFileSystemManager()
 

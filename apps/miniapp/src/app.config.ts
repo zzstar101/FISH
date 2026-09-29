@@ -25,6 +25,7 @@ export default defineAppConfig({
     'pages/favorites/index',
     'pages/scan/index',
     'pages/scan-pr/index',
+    'pages/scan-vision/index',
     'pages/following/index',
     'pages/history/index',
     'pages/report-listing/index',

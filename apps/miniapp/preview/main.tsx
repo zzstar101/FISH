@@ -40,6 +40,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/favorites/index': () => import('@/pages/favorites/index'),
   '/pages/scan/index': () => import('@/pages/scan/index'),
   '/pages/scan-pr/index': () => import('@/pages/scan-pr/index'),
+  '/pages/scan-vision/index': () => import('@/pages/scan-vision/index'),
   '/pages/following/index': () => import('@/pages/following/index'),
   '/pages/history/index': () => import('@/pages/history/index'),
   '/pages/report-listing/index': () => import('@/pages/report-listing/index'),
