@@ -17,6 +17,7 @@ import type {
   ListingCondition,
 } from '@fish/contracts/listings/schema'
 import type { VisualInterpretation } from '@fish/contracts/visual/schema'
+import { categoryLabel } from '@/mock/api'
 import type { SearchFilter } from '@/mock/types'
 
 /** 查询图卡的文案（稿 01 的默认态 / 05 的 `interpretation === null` 变体）。 */
@@ -39,25 +40,15 @@ const NO_INTERPRETATION: QueryCardCopy = {
 /**
  * 分类中文名。
  *
- * **刻意与 `mock/api.ts` 的 `categoryLabel` 同值但不同源**：那一份在 `mock/` 里，
- * 静态 import 会把整包 fixture 拖进本页（`mock/api.ts` 顶层 import 了 catalog / chat /
- * discover 等一堆数据），而本页只需要 8 个中文词。`pages/history/records.ts` 出于同一
- * 理由自己持有一份。两处值必须一致，漂移由单测钉住（`tests/vision-result-view.test.ts`）。
+ * **直接用 `mock/api.ts` 的 `categoryLabel`**（而不是自己再抄一份 8 项中文表）：
+ * 同页已经在 import 同一个模块的 `searchFilters`（排序胶囊与搜索页同源），
+ * 另抄一份只会多出一个「同值不同源」的漂移点 —— 分类口径变化时两边不会一起动。
+ *
+ * `mock/` 是 Taro-free 的纯数据模块（`git grep @tarojs apps/miniapp/src/mock` 无命中），
+ * 本文件因此在 `tests/` 里可以直接 import。
  */
-const CATEGORY_TEXT: Record<ListingCategory, string> = {
-  DIGITAL: '数码电子',
-  BOOKS: '教材书籍',
-  BEAUTY: '美妆洗护',
-  DAILY: '宿舍好物',
-  SPORTS: '运动户外',
-  APPAREL: '服饰鞋包',
-  TRANSPORT: '代步出行',
-  OTHER: '其他闲置',
-}
-
-/** 分类中文名（与 `mock/api.ts` 的 `categoryLabel` 同值） */
 export function categoryText(category: ListingCategory): string {
-  return CATEGORY_TEXT[category]
+  return categoryLabel(category)
 }
 
 /**

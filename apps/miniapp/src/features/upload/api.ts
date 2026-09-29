@@ -127,16 +127,19 @@ export async function pickPhotos(limit: number): Promise<PickResult> {
  * 给出三种来源。弹窗项与分派在 `./photo-source`（纯逻辑，可单测）。
  *
  * **取消**（弹窗取消 / 面板取消）统一返回空结果、不报错：取消是正常路径。
- * 权限被拒与平台失败照旧抛出可展示的错误，由调用方提示并让用户重试。
+ * 权限被拒与平台失败照旧抛出可展示的错误，由调用方提示并让用户重试 —— 包括来源弹窗
+ * 自身的失败：这里**不能**把 `showActionSheet` 的 reject 一律当成取消，那正是
+ * `./choose-error` 记录过的那类回归（用户点了按钮「什么都没发生」）。
  */
 export async function pickPhotoFromSource(): Promise<PickResult> {
   let tapIndex: number
   try {
     const picked = await Taro.showActionSheet({ itemList: [...PHOTO_SOURCE_OPTIONS] })
     tapIndex = picked.tapIndex
-  } catch {
-    // 用户取消 / 点蒙层：`showActionSheet` 以 reject 收场，这不是错误
-    return { photos: [], rejected: null }
+  } catch (error) {
+    // 只吞「用户取消 / 点蒙层」，其余（已有模态浮层、基础库异常…）冒泡给页面提示
+    if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+    throw new Error('无法打开取图方式选择，请重试')
   }
   const source: PhotoSource | null = photoSourceFromTapIndex(tapIndex)
   // 越界（理论上不可达）：与取消同一处置，不把一次平台抖动变成用户可见的报错

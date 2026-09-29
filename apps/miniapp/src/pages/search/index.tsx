@@ -208,15 +208,15 @@ export default function Search() {
    * （`pages/vision-result`），不是本页的结果列表 —— 混进本页会让「已提交的关键词」
    * 与「这一批图搜出来的结果」对不上。
    *
-   * 发起前**作废在途的文本搜索**：识图期间若上一次关键词搜索的响应迟到，会把结果写回
-   * 本页（用户已经去识图了，回来看到一批与输入框无关的商品）。这与 `clearInput` 同一纪律。
+   * 作废在途的文本搜索挂在 `onPicked`（取图成功、即将上传那一刻）：提前作废的话，
+   * 用户点开弹窗又取消就会白丢一次本来能成的搜索，而 `run()` 的迟到守卫会跳过
+   * `setLoading(false)` —— 本页在 `loading` 期间不渲染任何占位，结果是一片空白。
    */
   const visionSearch = async () => {
     if (visionBusy) return
     setVisionBusy(true)
-    invalidateSearchTasks(taskLog)
     try {
-      await startVisualSearch()
+      await startVisualSearch({ onPicked: () => invalidateSearchTasks(taskLog) })
     } finally {
       setVisionBusy(false)
     }

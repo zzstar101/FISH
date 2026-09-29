@@ -26,7 +26,7 @@ export type StartVisualSearchOutcome =
   | 'rejected'
   /** 已跳结果页 */
   | 'navigated'
-  /** 上传或跳转失败 —— 已提示 */
+  /** 上传失败，或上传成功但跳转失败 —— 都已提示 */
   | 'failed'
 
 export type StartVisualSearchOptions = {
@@ -40,10 +40,23 @@ export type StartVisualSearchOptions = {
    * 入口页（`scan-vision`）与搜索页传 `false`，它们是「往前一步」的语义。
    */
   replace?: boolean
+  /**
+   * **取图成功、即将发起上传**时的钩子。
+   *
+   * 调用方要「作废在途的旧任务」时必须挂在这里，而不是在调用本函数之前：取图弹窗会一直
+   * 停到用户选完或取消，提前作废会把「用户只是点了取消」也当成一次换图，让已经发出去的
+   * 那次检索被丢弃（结果页会永远停在加载态、搜索页会丢一次本来能成的搜索）。
+   *
+   * 在**上传之前**调用的理由是语义：这一刻之后，旧任务的结果已经确定不是用户要看的了。
+   */
+  onPicked?: () => void
 }
 
 /**
  * 取图 → 上传 → 跳结果页。
+ *
+ * **取消是「什么都没发生」**：取图在用户选完之前不作废调用方的在途任务（见 `onPicked`），
+ * 取消时也不提示、不导航 —— 调用方按返回值复位自己的「在途」标记即可。
  */
 export async function startVisualSearch(
   options: StartVisualSearchOptions = {},
@@ -62,6 +75,9 @@ export async function startVisualSearch(
     const photo = photos[0]
     if (photo === undefined) return 'cancelled'
 
+    // 确定要换图了：此刻才作废调用方的旧任务（见 `onPicked` 的说明）
+    options.onPicked?.()
+
     loading = true
     void Taro.showLoading({ title: '正在上传查询图…', mask: true })
     const objectKey = await uploadVisualQueryImage(photo, options.isActive)
@@ -72,9 +88,13 @@ export async function startVisualSearch(
     // 服务端给不出可渲染 URL，见 `./link`）
     const url = visionResultPageUrl(objectKey, photo.path)
     const navigate = options.replace === true ? Taro.redirectTo : Taro.navigateTo
-    await navigate({ url }).catch(() => {
+    try {
+      await navigate({ url })
+    } catch {
+      // 跳转失败（页面栈满）：不上报成未发生，返回 `failed` 让调用方复位
       void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
-    })
+      return 'failed'
+    }
     return 'navigated'
   } catch (error) {
     // 先收掉 loading 再提示（两者共用同一层浮层，反序会把提示一起收掉）

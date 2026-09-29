@@ -136,6 +136,15 @@ export default function VisionResult() {
       const result = await searchByVisualQuery(objectKey)
       // 迟到的响应不得写回：页面已重开一次检索 / 已卸载
       if (!isSearchTaskCurrent(taskLog.current, startedAt)) return
+      /*
+        契约要求客户端**记录**这三个值（`packages/contracts/src/visual/schema.ts` 的
+        `VisualSearchResponseSchema`：M6 要求可记录、可回放，排查「为什么昨天的结果不一样」
+        时客户端日志里必须有 strategyVersion / embeddingModel）。所以它们不只是内部字段 ——
+        debug 档留一条，把「这一次结果是哪一版策略 + 哪个模型算的」钉在日志里。
+      */
+      console.debug(
+        `[miniapp] 识图完成 queryId=${result.queryId} strategy=${result.strategyVersion} model=${result.embeddingModel}`,
+      )
       setInterpretation(result.interpretation)
       setItems(result.items)
       setLoading(false)
@@ -165,13 +174,28 @@ export default function VisionResult() {
   /**
    * 换一张图 / 重拍：走与入口页同一条链（弹来源 → 上传 → 跳结果页），
    * 但用 `redirectTo` **替换当前页** —— 否则每换一次图都在页面栈里多压一层结果页。
+   *
+   * 作废在途检索挂在 `onPicked`（取图成功、即将上传那一刻）而**不是**这里：本页在
+   * `loading` 期间也渲染「重拍」（用户就是想在识别中换图），提前作废会让「用户只是点了
+   * 取消」把已经发出去的那次检索丢弃，而 `loading` 再没有复位路径 —— 页面会永远停在
+   * 骨架屏上（`search` 的迟到守卫直接 `return`，`setLoading(false)` 被跳过）。
    */
   const retake = async () => {
     if (retaking) return
     setRetaking(true)
-    invalidateSearchTasks(taskLog.current)
+    /** `onPicked` 是否真的跑过（跑过 = 在途检索已被作废，页面自己得把 loading 收回来） */
+    let invalidated = false
     try {
-      await startVisualSearch({ replace: true })
+      const outcome = await startVisualSearch({
+        replace: true,
+        onPicked: () => {
+          invalidated = true
+          invalidateSearchTasks(taskLog.current)
+        },
+      })
+      // 作废过却没跳走（上传失败 / 跳转失败）：重跑一次当前这张图的检索。
+      // 不重跑的话旧响应已被丢弃、`loading` 无人复位，页面会停在骨架屏上。
+      if (invalidated && outcome !== 'navigated') void search()
     } finally {
       setRetaking(false)
     }
@@ -212,15 +236,13 @@ export default function VisionResult() {
   return (
     <View className="vres">
       {/* ---------------- 页头：顶栏 + 查询图卡 + 统计行（随内容滚走） ---------------- */}
-      <View className="vres__head">
-        <View
-          className="vres__topbar"
-          style={{
-            paddingTop: `${nav.statusBarHeight}px`,
-            // 胶囊是原生绘制、点不到也盖不住，只能把内容让出去（与 `components/top-bar` 同一口径）
-            paddingRight: `${nav.capsuleInset}px`,
-          }}
-        >
+      <View
+        className="vres__head"
+        // 状态栏占位走页头的 padding-top（设备 px，内联下发不参与 rpx 缩放）：
+        // 这样「返回钮 + 居中标题」那一行本身就是整条栏的宽度，标题居中即屏幕居中
+        style={{ paddingTop: `${nav.statusBarHeight}px` }}
+      >
+        <View className="vres__topbar">
           <View className="vres__back" onClick={() => void Taro.navigateBack()}>
             <View className="vres__back-chevron" />
           </View>
@@ -245,9 +267,12 @@ export default function VisionResult() {
             {cardCopy.subtitle ? <Text className="vres__qsub">{cardCopy.subtitle}</Text> : null}
           </View>
           {missingQuery ? null : (
-            <View className={`vres__qretake${retaking ? ' is-busy' : ''}`} onClick={retake}>
-              <Image className="vres__qretake-ic" src={ICONS.camera} mode="aspectFit" />
-              <Text>{retaking ? '上传中' : '重拍'}</Text>
+            // 命中区补偿挂在包裹层（88px = 44pt），胶囊保持 64px 的视觉高，见 `index.scss`
+            <View className="vres__qretake-hit" onClick={retake}>
+              <View className={`vres__qretake${retaking ? ' is-busy' : ''}`}>
+                <Image className="vres__qretake-ic" src={ICONS.camera} mode="aspectFit" />
+                <Text>{retaking ? '上传中' : '重拍'}</Text>
+              </View>
             </View>
           )}
         </View>
@@ -283,6 +308,8 @@ export default function VisionResult() {
         见 `pages/wish/index.scss` 的实测记录），所以根节点只给 `min-height`。
 
         只在有结果时渲染：空态 / 失败态下排序没有对象（稿 03 / 04 也没有这一条）。
+        稿 02（识别中）**画了**这一条，但本页在加载态不渲染 —— 此刻排序改的是空数组，
+        给一排能按但按不出东西的胶囊不如不给；这条取舍与稿的差异记在这里。
       */}
       {!statsPending && items.length > 0 ? (
         <View className="vres__filters">
@@ -315,6 +342,8 @@ export default function VisionResult() {
             text="从识图页重新拍一张，或在搜索框里点相机图标再来一次。"
             actionText="回到首页"
             onAction={() => void Taro.switchTab({ url: '/pages/home/index' })}
+            /* 稿 §2 的图标映射：空态圆盘用「搜索」那枚（默认的「分类」图标语义不对） */
+            icon={ICONS.search}
           />
         ) : loading ? (
           /* 骨架屏（稿 02）：两列四张，图片区高度取真实卡片的两档（4:5 / 1:1） */
@@ -353,6 +382,8 @@ export default function VisionResult() {
               text="换一张图或换个角度再拍一次；也可以把需求发到许愿墙，命中后会通知你。"
               actionText={retaking ? '上传中…' : '重新拍一张'}
               onAction={() => void retake()}
+              /* 稿 §2 的图标映射：空态圆盘用「搜索」那枚（默认的「分类」图标语义不对） */
+              icon={ICONS.search}
             />
             <View className="vres__btn-ghost vres__btn-ghost--narrow" onClick={goWish}>
               <Image className="vres__btn-ic" src={ICONS.tabWish} mode="aspectFit" />

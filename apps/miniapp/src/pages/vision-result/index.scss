@@ -29,6 +29,10 @@
  * 与同族页面（history / mylist / following）不同，这里**不用** `page-hero` 混入 ——
  * 那个是 `position: absolute` 的纯背景层（给 fixed 顶栏当底），而本页页头是**内容块**：
  * 它要参与文档流、随页面滚走。所以直接把渐变铺在这块上。
+ *
+ * 左右内边距 40px 是内容（查询图卡 / 统计行）的栅格；`padding-top` 由页面按运行时读到的
+ * 状态栏高内联下发（设备 px）。**右边不留 `capsuleInset`**：本页没有 fixed 顶栏要避让，
+ * 页头里的标题是绝对定位居中，留出那一截只会把查询图卡挤窄。
  */
 .vres__head {
   background: var(--grad-page);
@@ -47,6 +51,29 @@
   box-sizing: border-box;
 }
 
+/**
+ * 标题**绝对定位到整条栏的中线**（而不是当普通 flex 子项居中）。
+ *
+ * 为什么：标题右边是微信原生胶囊，页头必须把那一截让出去（`.vres__head` 的右内边距由
+ * 页面按运行时反推的 `capsuleInset` 下发，见 `index.tsx`）—— 让出之后剩余宽度不再对称，
+ * 直接 `justify-content: center` 会把标题顶到偏左约半格的位置（实测 390pt 屏左偏 ~51pt）。
+ * 拉满左右定位再居中，标题才落在屏幕上，与设计稿 `.topbar` 和 `pages/scan-vision` 一致。
+ *
+ * 不接收点击：它盖在返回钮与页头之上，`pointer-events: none` 让这一层彻底穿透。
+ */
+.vres__title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+  pointer-events: none;
+  color: var(--fg);
+}
+
+/* 返回钮：玻璃圆钮，绝对定位在行首（标题拉满整行后不能靠 flex 排它） */
 .vres__back {
   position: absolute;
   left: 0;
@@ -75,13 +102,6 @@
   border-radius: 2px;
   transform: rotate(45deg);
   margin-left: 6px;
-}
-
-.vres__title {
-  font-size: 34px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--fg);
 }
 
 /* ---------------------------------------------------------------- 查询图卡 */
@@ -174,9 +194,22 @@
   @include ellipsis;
 }
 
-/* 重拍：稿 `.qretake`，视觉高 64px（32pt）；命中区靠外层 padding 补到 88px（44pt） */
-.vres__qretake {
+/**
+ * 重拍：稿 `.qretake` 视觉高 64px（32pt）。
+ *
+ * **命中区补偿 **在这层包裹元素上做**：稿的说明要求实现侧把 32pt 的视觉高撑到 44pt
+ * 命中区，而外层 `.vres__qcard` 的 padding 属于卡片、**不会**扩大子元素的点击区域，
+ * 按钮自己加透明 padding 又会顶破 116px 的卡片（内容盒只有 88px）—— 所以把 `onClick`
+ * 挂在这个 88px（= 44pt，正好等于卡片内容盒高）的包裹层上，胶囊保持 64px 的视觉高。
+ */
+.vres__qretake-hit {
   flex: 0 0 auto;
+  height: 88px;
+  display: flex;
+  align-items: center;
+}
+
+.vres__qretake {
   display: inline-flex;
   align-items: center;
   gap: 10px;
