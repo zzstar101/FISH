@@ -17,11 +17,10 @@ import './index.scss'
 type ProductCardProps = {
   listing: MockListing
   /**
-   * 卖家。**可为 `null`**：契约的 `ListingCard` 没有卖家字段
-   * （`packages/contracts/src/listings/schema.ts` 只给了 id/title/price/…），
-   * 真实接口的列表卡因此拿不到卖家。此时整行不渲染 ——
-   * 不编一个卖家出来（`mock/users.ts` 的 `getUser` 会对未知 id 兜底到某个真实演示用户，
-   * 所以调用方必须用 `findUser` 并把 `null` 原样传进来）。
+   * 卖家。**可为 `null`**：#191 起契约卡片内嵌 `seller`（公开四字段），调用方传
+   * `listing.seller` 即真值；契约 `seller` 缺席的老 mock 记录是 `null`，
+   * 此时整行不渲染 —— 不编一个卖家出来（`mock/users.ts` 的 `getUser` 会对未知 id
+   * 兜底到某个真实演示用户，绝不能把卡片卖家喂给它）。
    */
   seller: MockUser | null
   /** 图片区高度（rpx），由瀑布流按列宽 × 比例算好后传入 */
