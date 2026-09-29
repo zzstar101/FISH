@@ -1328,6 +1328,10 @@ describe('image confirmation', () => {
       mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW', settled: 'BLOCK' }]),
       store: fakeStore({
         listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
           planKinds.push(plan.kind)
@@ -1342,6 +1346,8 @@ describe('image confirmation', () => {
 
     expect(planKinds).toEqual(['blocked'])
     expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    // #228 复审 F1：文本是干净的，BLOCK 来自图片 —— 不能把 title/description 说成违规。
+    expect(error.details).toBeUndefined()
   })
 
   // 存量图：新形态键但确认表里没有记录（#286 之前上传、或迁移前就存在的图）。编辑保存不能因此被拒。

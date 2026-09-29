@@ -32,7 +32,13 @@ export const listingModerationRecords = pgTable(
     matchedTermsMasked: jsonb('matched_terms_masked').$type<string[]>().notNull(),
     ruleVersion: text('rule_version').notNull(),
     priorListingStatus: listingStatusEnum('prior_listing_status'),
-    /** `LOCAL | TENCENT_TMS | TENCENT_IMS | MANUAL`；#228 之前的历史行为 NULL。 */
+    /**
+     * `LOCAL | TENCENT_TMS | TENCENT_IMS | MANUAL`；#228 之前的历史行为 NULL。
+     *
+     * 下面这组 provider 字段描述的是**文本**判定（本行快照就是 title/description）；`decision`
+     * 是**整条商品**的聚合结论，可能被图片抬升（图片结论在 `listing_media_objects`）。因此
+     * 「文本 Pass + 图片 Review」会落成 `decision=REVIEW, suggestion=Pass`，两者不矛盾。
+     */
     provider: text('provider'),
     /** 腾讯 `RequestId`（已过白名单形状校验）；本地与人工结论为 NULL。 */
     providerRequestId: text('provider_request_id'),

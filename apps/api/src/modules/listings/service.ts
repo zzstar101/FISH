@@ -929,8 +929,13 @@ const MODERATION_FIELD_LABEL: Record<ModerationField, string> = {
 }
 
 function moderationBlockDetailsOf(result: TextModerationResult): ApiErrorDetail[] | undefined {
-  const blocked = result.fields.filter((field) => field.decision === 'BLOCK')
-  const fields = [...new Set((blocked.length > 0 ? blocked : result.fields).map((f) => f.field))]
+  // 只认**文本**被判 BLOCK 的字段。结论由图片抬升到 BLOCK 时（例如库内某张图已被人工结算为
+  // BLOCK）文本其实干净，把 title/description 说成「包含禁止发布的内容」是误导（#228 复审 F1）。
+  const fields = [
+    ...new Set(
+      result.fields.filter((field) => field.decision === 'BLOCK').map((field) => field.field),
+    ),
+  ]
   if (fields.length === 0) return undefined
   return fields.map((field) => ({
     field,
