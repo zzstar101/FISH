@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingFeedQuery, ListingStatus } from '@fish/contracts/listings/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+  type TextModerationResult,
+} from '../moderation/providers/types'
 import type { ModerationDecision } from '../moderation/types'
 import type { ConfirmedImageLookup } from '../uploads/media-objects'
 import type { MediaStorage } from '../uploads/storage'
@@ -1633,5 +1638,281 @@ describe('deleteListing', () => {
     const error = await expectServiceError(() => service.deleteListing(SELLER_ID, LISTING_ID))
     expect(error.status).toBe(409)
     expect(error.code).toBe('LISTING_NOT_DELETABLE')
+  })
+})
+
+// —— #228：文本审核 provider 接线（事务外审核 / fail-closed / CAS 重审）——
+
+/** 可控 provider：按调用次序返回结果或抛错，并记录每次入参。 */
+function fakeProvider(steps: Array<TextModerationResult | Error>): {
+  provider: ContentModerationProvider
+  calls: Array<{ dataId: string; fields: { field: string; value: string }[] }>
+} {
+  const calls: Array<{ dataId: string; fields: { field: string; value: string }[] }> = []
+  let index = 0
+  return {
+    calls,
+    provider: {
+      transport: 'tencent',
+      async moderateText(input) {
+        calls.push({
+          dataId: input.dataId,
+          fields: input.fields.map((field) => ({ field: field.field, value: field.value })),
+        })
+        const step = steps[Math.min(index, steps.length - 1)]
+        index += 1
+        if (step === undefined) throw new Error('fakeProvider 没有下一步')
+        if (step instanceof Error) throw step
+        return step
+      },
+      moderateImage: () => Promise.reject(new Error('listings 不审图片')),
+    },
+  }
+}
+
+/** 腾讯风格的文本结果（默认全字段 Pass）。 */
+function textResult(overrides: Partial<TextModerationResult> = {}): TextModerationResult {
+  return {
+    provider: 'TENCENT_TMS',
+    transport: 'tencent',
+    dataId: 'lst_test',
+    policyVersion: 'biz-228',
+    decision: 'ALLOW',
+    suggestion: 'Pass',
+    fields: [
+      {
+        field: 'title',
+        decision: 'ALLOW',
+        suggestion: 'Pass',
+        label: null,
+        subLabel: null,
+        score: null,
+        requestId: 'req-title',
+      },
+      {
+        field: 'description',
+        decision: 'ALLOW',
+        suggestion: 'Pass',
+        label: null,
+        subLabel: null,
+        score: null,
+        requestId: 'req-desc',
+      },
+    ],
+    ...overrides,
+  }
+}
+
+function blockedTextResult(): TextModerationResult {
+  const base = textResult()
+  return {
+    ...base,
+    decision: 'BLOCK',
+    suggestion: 'Block',
+    fields: [
+      {
+        ...base.fields[0]!,
+        decision: 'BLOCK',
+        suggestion: 'Block',
+        label: 'Ad',
+        subLabel: 'AdLaw',
+        score: 99,
+      },
+      base.fields[1]!,
+    ],
+  }
+}
+
+describe('文本审核 provider 接线（#228）', () => {
+  test('CREATE：ALLOW 建为 APPROVED，并把腾讯结论写进审核记录', async () => {
+    const fake = fakeProvider([textResult()])
+    const created: CreateListingRecord[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async (record) => {
+          created.push(record)
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    await service.createListing(SELLER_ID, validCreate)
+
+    expect(created[0]?.moderationStatus).toBe('APPROVED')
+    expect(created[0]?.moderation).toMatchObject({
+      decision: 'ALLOW',
+      provider: 'TENCENT_TMS',
+      suggestion: 'Pass',
+      providerRequestId: 'req-title',
+      ruleVersion: 'biz-228',
+    })
+    expect(fake.calls[0]?.fields).toEqual([
+      { field: 'title', value: validCreate.title },
+      { field: 'description', value: validCreate.description },
+    ])
+  })
+
+  test('CREATE：REVIEW 落 REVIEW（不进公开 Feed）', async () => {
+    const fake = fakeProvider([{ ...textResult(), decision: 'REVIEW', suggestion: 'Review' }])
+    const created: CreateListingRecord[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async (record) => {
+          created.push(record)
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    await service.createListing(SELLER_ID, validCreate)
+
+    expect(created[0]?.moderationStatus).toBe('REVIEW')
+    expect(created[0]?.moderationReason).toBe('CONTENT_REQUIRES_REVIEW')
+  })
+
+  test('CREATE：BLOCK 报字段级错误且不泄漏腾讯 Label/策略', async () => {
+    const fake = fakeProvider([blockedTextResult()])
+    const recorded: Array<Record<string, unknown>> = []
+    let createdCalls = 0
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async () => {
+          createdCalls += 1
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+        recordModeration: async (input) => {
+          recorded.push(input as unknown as Record<string, unknown>)
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() => service.createListing(SELLER_ID, validCreate))
+
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    expect(error.details?.[0]?.field).toBe('title')
+    // 阻断文案只有安全话术：不含 label/subLabel/命中词。
+    expect(JSON.stringify(error.details)).not.toContain('AdLaw')
+    expect(createdCalls).toBe(0)
+    // 审计仍记录 provider 元数据（#228 §6），供人工复核与调参。
+    expect(recorded[0]).toMatchObject({
+      action: 'CREATE',
+      decision: 'BLOCK',
+      provider: 'TENCENT_TMS',
+      providerRequestId: 'req-title',
+      suggestion: 'Block',
+      label: 'Ad',
+      subLabel: 'AdLaw',
+      score: 99,
+      ruleVersion: 'biz-228',
+    })
+  })
+
+  test('CREATE：provider 不可用时 fail-closed（503，且不落库）', async () => {
+    const fake = fakeProvider([new ContentModerationError({ reason: 'timeout' })])
+    let createdCalls = 0
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async () => {
+          createdCalls += 1
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() => service.createListing(SELLER_ID, validCreate))
+
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
+    expect(createdCalls).toBe(0)
+  })
+
+  test('UPDATE：provider 不可用时不改旧内容（503）', async () => {
+    const fake = fakeProvider([new ContentModerationError({ reason: 'upstream_error' })])
+    let updateCalls = 0
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        updateListingAtomic: async () => {
+          updateCalls += 1
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { title: '新标题' }),
+    )
+
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
+    expect(updateCalls).toBe(0)
+  })
+
+  test('UPDATE：CAS 冲突后重读并重新审核，最终按新内容写回', async () => {
+    const fake = fakeProvider([textResult(), textResult()])
+    const snapshots = [
+      updateTarget({ title: '原标题' }),
+      updateTarget({ title: '被并发改过的标题' }),
+    ]
+    let snapshotCalls = 0
+    const received: UpdateListingFields[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        getUpdateSnapshot: async () => {
+          const row = snapshots[Math.min(snapshotCalls, snapshots.length - 1)]
+          snapshotCalls += 1
+          return { kind: 'ok', row: row! }
+        },
+        updateListingAtomic: async (input) => {
+          if (snapshotCalls === 1) return { kind: 'conflict' }
+          const plan = await input.apply(
+            input,
+            input.expected ? updateTarget({ title: input.expected.title }) : updateTarget(),
+          )
+          if (plan.kind === 'write') received.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { priceCents: 15000 })
+
+    // 两次快照 = 一次冲突后重读；两次审核 = 旧结论绝不套到新内容上。
+    expect(snapshotCalls).toBe(2)
+    expect(fake.calls).toHaveLength(2)
+    expect(fake.calls[0]?.fields[0]?.value).toBe('原标题')
+    expect(fake.calls[1]?.fields[0]?.value).toBe('被并发改过的标题')
+    expect(received[0]?.title).toBeUndefined()
+  })
+
+  test('UPDATE：连续冲突到上限时报 409，不写旧审核结论', async () => {
+    const fake = fakeProvider([textResult()])
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        updateListingAtomic: async () => ({ kind: 'conflict' }),
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { title: '新标题' }),
+    )
+
+    expect(error.status).toBe(409)
+    expect(error.code).toBe('LISTING_NOT_EDITABLE')
+    expect(fake.calls).toHaveLength(3)
   })
 })

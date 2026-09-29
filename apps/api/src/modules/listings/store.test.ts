@@ -1315,3 +1315,82 @@ describe('deleteListingAtomic（不过审商品的物理删除）', () => {
     })
   })
 })
+
+/**
+ * #228：UPDATE 的文本审核在**事务外**完成，锁内必须拿 `expected` 复核同一份内容。
+ * 这里断言两件事：内容没变才写；内容变过返回 `conflict` 且**一个字节都不写**（含审计行）。
+ */
+test('updateListingAtomic 用 expected 做 CAS：内容变过就 conflict 且不写库', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const moderation = {
+      title: '集成测试商品',
+      description: '集成测试描述',
+      decision: 'ALLOW' as const,
+      matchedRules: [],
+      matchedTermsMasked: [],
+      ruleVersion: 'biz-228',
+      provider: 'TENCENT_TMS',
+      providerRequestId: 'req-1',
+      suggestion: 'Pass',
+      label: null,
+      subLabel: null,
+      score: null,
+    }
+    // `record()` 默认带一张图：CAS 比对的是**图片组**，expected 必须用同一组键。
+    const expected = {
+      title: '集成测试商品',
+      description: '集成测试描述',
+      moderationStatus: 'APPROVED' as const,
+      objectKeys: [`listings/${sellerId}/a.jpg`],
+    }
+
+    const written = await store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      expected,
+      apply: () => ({ kind: 'write', fields: { title: '改过标题的商品' }, moderation }),
+    })
+    expect(written.kind).toBe('updated')
+
+    // provider 元数据真的落库了（#228 §6），且能在 SQL 层按列查询。
+    const rows = await db.execute<{
+      provider: string
+      requestId: string
+      suggestion: string
+      ruleVersion: string
+    }>(sql`
+      SELECT provider,
+             provider_request_id AS "requestId",
+             suggestion,
+             rule_version AS "ruleVersion"
+      FROM listing_moderation_records
+      WHERE listing_id = ${created.listingId}
+    `)
+    expect(rows[0]).toMatchObject({
+      provider: 'TENCENT_TMS',
+      requestId: 'req-1',
+      suggestion: 'Pass',
+      ruleVersion: 'biz-228',
+    })
+
+    // expected 已经落后（标题被上一步改掉）→ CAS 失败：商品与审计都不动。
+    const stale = await store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      expected,
+      apply: () => ({ kind: 'write', fields: { title: '不该写进去的标题' }, moderation }),
+    })
+    expect(stale.kind).toBe('conflict')
+
+    const after = await db
+      .select({ title: listings.title })
+      .from(listings)
+      .where(eq(listings.id, created.listingId))
+    expect(after[0]?.title).toBe('改过标题的商品')
+    const count = await db.execute<{ n: string }>(sql`
+      SELECT count(*)::text AS n FROM listing_moderation_records WHERE listing_id = ${created.listingId}
+    `)
+    expect(count[0]?.n).toBe('1')
+  })
+})
