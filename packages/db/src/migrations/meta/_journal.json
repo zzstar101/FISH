@@ -225,6 +225,13 @@
       "when": 1790647048884,
       "tag": "20260929095728_modern_ultimates",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790647547177,
+      "tag": "20260929100547_woozy_wolfpack",
+      "breakpoints": true
     }
   ]
 }
