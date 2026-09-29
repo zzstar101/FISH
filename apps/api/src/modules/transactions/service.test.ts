@@ -493,6 +493,45 @@ describe('transaction service: 交易进展通知（任务一 #89）', () => {
     ])
     expect(store.rows[0]?.status).toBe('CANCELLED')
   })
+
+  /*
+   * 幂等重放：store 对 no-op 也返回 ok（COMPLETED 上重复确认 / CANCELLED 上重复取消），
+   * 而客户端明确会重试（面交页 `retryConfirm`、PC 订单详情响应丢失后再点）。无脑发通知
+   * 会让同一进展反复推送并污染未读角标 —— 这里钉住「状态没变就不发」。
+   */
+  test('重复确认 / 重复取消都不再发第二条通知', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    const txId = internalTx(dto.id)
+
+    // 同一侧连点两次 confirm：第二次没有任何新进展，对方不该再收到一条
+    await service.confirm(buyer, txId)
+    notifications.length = 0
+    await service.confirm(buyer, txId)
+    await service.confirm(buyer, txId)
+    expect(notifications).toEqual([])
+
+    // 对侧补确认 → COMPLETED（买方收到）；完成后重复 confirm 仍是 COMPLETED，不再发
+    await service.confirm(seller, txId)
+    expect(notifications.map((n) => n.event)).toEqual(['COMPLETED'])
+    notifications.length = 0
+    await service.confirm(seller, txId)
+    expect(notifications).toEqual([])
+  })
+
+  test('重复取消不发第二条（首次取消仍发对方）', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    notifications.length = 0
+    const txId = internalTx(dto.id)
+
+    await service.cancel(buyer, txId)
+    expect(notifications.map((n) => n.event)).toEqual(['CANCELLED'])
+    notifications.length = 0
+    await service.cancel(buyer, txId)
+    await service.cancel(seller, txId)
+    expect(notifications).toEqual([])
+  })
 })
 
 describe('transaction service: state machine', () => {

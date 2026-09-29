@@ -138,6 +138,24 @@ function toIso(value: Date | string | null): string | null {
   return value == null ? null : new Date(value).toISOString()
 }
 
+/**
+ * 确认类动作下，**对方视角**能收到的交易事件；没有新东西可说时返回 null。
+ *
+ * - 交易已 `COMPLETED` → 对方看到的都是「交易已完成」（谁是最后确认的一方都一样）；
+ * - 仍在 `PENDING_MEETUP`：我方这一侧还没确认 → 对方没有任何新进展（null）；
+ *   我方已确认 → 对方学到的是「对方已确认」（`CONFIRMED`）。
+ *
+ * `confirm` 用它比动作前后：相同就不发通知（no-op 重放不发），不同才发。
+ */
+function eventKnownToCounterpart(
+  status: string,
+  myConfirmedAt: Date | string | null,
+): 'CONFIRMED' | 'COMPLETED' | 'CANCELLED' | null {
+  if (status === 'COMPLETED') return 'COMPLETED'
+  if (status === 'CANCELLED') return 'CANCELLED'
+  return myConfirmedAt === null ? null : 'CONFIRMED'
+}
+
 export type TxSideEffect = (
   participants: { buyerId: string; sellerId: string },
   message: MessageRow,
@@ -489,21 +507,46 @@ export function createTransactionService({
         throw notFound()
       }
       const role = existing.buyer_id === userId ? 'buyer' : 'seller'
+      /*
+       * 动作**前**对方已经知道什么，必须在 `store.confirm` 之前读出来：store 的
+       * 内存实现会原地改 `rows` 里的行对象，`existing` 与返回值可能别名同一个对象，
+       * 动作后再读会拿到新状态（真 SQL 实现回的是新行，但这里不能依赖实现差异）。
+       */
+      const recipient = existing.buyer_id === userId ? existing.seller_id : existing.buyer_id
+      const myPriorConfirmedAt =
+        role === 'buyer' ? existing.buyer_confirmed_at : existing.seller_confirmed_at
+      const before = eventKnownToCounterpart(existing.status, myPriorConfirmedAt)
+
       const result = await store.confirm(id, userId, role)
       if (result.kind === 'cancelled') {
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '交易已取消，无法确认')
       }
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
-      // 收件人是**对方**（先确认的那一方）：本次确认让对方等到「对方已确认」；
-      // 若这一确认同时触发 COMPLETED，对方收到的是「交易已完成」。
-      notify?.({
-        userId: existing.buyer_id === userId ? existing.seller_id : existing.buyer_id,
-        event: result.row.status === 'COMPLETED' ? 'COMPLETED' : 'CONFIRMED',
-        conversationId: existing.conversation_id,
-        listingId: existing.listing_id,
-        transactionId: existing.id,
-      })
+
+      /*
+       * 只在「对方真的能学到新东西」时才发通知。
+       *
+       * store 对 no-op 也返回 `ok`：COMPLETED 上重复确认走幂等分支（`store.ts` 的
+       * `kind: 'ok'` 注释），同侧在 PENDING_MEETUP 上重复确认会重新 `now()` 盖章 ——
+       * 两者都是「状态没变」，但客户端明确会重试（面交页的 `retryConfirm`、PC 订单详情
+       * 响应丢失后再点）。无脑发通知会让同一进展反复推送「对方已确认面交」并污染未读角标。
+       *
+       * 判据是**对方视角的事件**在动作前后是否相同；相同就不发。收件人始终是对方
+       * （发起方自己刚做完这个动作，不需要再被告知一遍）。
+       */
+      const myNewConfirmedAt =
+        role === 'buyer' ? result.row.buyer_confirmed_at : result.row.seller_confirmed_at
+      const after = eventKnownToCounterpart(result.row.status, myNewConfirmedAt)
+      if (after !== null && after !== before) {
+        notify?.({
+          userId: recipient,
+          event: after,
+          conversationId: existing.conversation_id,
+          listingId: existing.listing_id,
+          transactionId: existing.id,
+        })
+      }
       return dto
     },
 
@@ -513,6 +556,8 @@ export function createTransactionService({
       if (!existing || (existing.buyer_id !== userId && existing.seller_id !== userId)) {
         throw notFound()
       }
+      // 同 confirm：动作前的状态要先读出来（内存 store 会原地改行对象）
+      const wasCancelled = existing.status === 'CANCELLED'
       const result = await store.cancel(id, userId)
       if (result.kind === 'not-cancellable') {
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '已完成的交易不可取消')
@@ -520,13 +565,16 @@ export function createTransactionService({
       if (result.kind !== 'ok') throw notFound()
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
-      notify?.({
-        userId: existing.buyer_id === userId ? existing.seller_id : existing.buyer_id,
-        event: 'CANCELLED',
-        conversationId: existing.conversation_id,
-        listingId: existing.listing_id,
-        transactionId: existing.id,
-      })
+      // 已经是 CANCELLED 的重复取消（store 幂等返回现状）不再发第二条通知，理由同 confirm。
+      if (!wasCancelled) {
+        notify?.({
+          userId: existing.buyer_id === userId ? existing.seller_id : existing.buyer_id,
+          event: 'CANCELLED',
+          conversationId: existing.conversation_id,
+          listingId: existing.listing_id,
+          transactionId: existing.id,
+        })
+      }
       return dto
     },
 

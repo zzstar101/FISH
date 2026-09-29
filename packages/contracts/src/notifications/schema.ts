@@ -79,7 +79,7 @@ export type NotificationAccountSubject = z.infer<typeof notificationAccountSubje
  * - `MODERATION`：`{ listingId, outcome }`；
  * - `ACCOUNT`：`{ subject, outcome }`。
  *
- * 各 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_` / `tx_` / `cnv_`。
+ * 各 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_` / `txn_` / `cnv_`。
  * 被删除或无法映射的历史引用只省略该字段，不删除整条通知；数据库 JSON 原文不改。
  * 库里存**裸 UUID**（worker/api 写入侧），读侧 `service.ts` 的 `projectPayload`
  * 负责转成公开 TypeID —— 与 MATCH 的既有口径一致。

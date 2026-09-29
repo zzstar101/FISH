@@ -191,8 +191,11 @@
 /*
  * 未读角标：设计稿 --badge 红底（#fa5151），1版稿移到圆形头像右上。
  * Owner 2026-09-29 端上定版：**正圆**（不再按位数拉长的胶囊），字号与圆同大 ——
- * 字号取圆的内径（38 − 两侧各 4 的描边 = 30），数字撑满整圆；去掉横向 padding，
- * 双位数（`badgeText` 已封顶 99+）靠 `overflow: hidden` 不撑破圆形。
+ * 内径 = 38 − 两侧各 4 的描边 = 30，所以单数字用 30px 撑满整圆。
+ *
+ * 多位数必须缩字号：等宽数字宽约 0.6em，30px 字号下两位数就是 36px > 内径 30px，
+ * 会被 `overflow: hidden` 裁掉一半（`99+` 更宽）。`is-multi` 按位数降到 20px
+ * （两/三位均 ≤ 内径），圆心与单数字一致。
  */
 .chat__bdg {
   position: absolute;
@@ -212,6 +215,12 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
+
+  /* 两位数 / `99+`：缩到 20px（三位宽 36px，仍在 38px 盒内不裁字） */
+  &.is-multi {
+    font-size: 20px;
+    letter-spacing: -1px;
+  }
 }
 
 /* 中列：名字+胶囊 / 预览 / 时间，三行纵向（1版稿 .corp） */
