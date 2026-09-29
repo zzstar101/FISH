@@ -25,6 +25,7 @@ import { apiRequest } from '@/lib/request'
 import { assertUploadActive } from './active'
 import { isChooseMediaCancel } from './choose-error'
 import { type AllowedImageMime, mimeFromPath } from './mime'
+import { PHOTO_SOURCE_OPTIONS, type PhotoSource, photoSourceFromTapIndex } from './photo-source'
 
 /**
  * 直传超时：5MB 弱网首包可能很慢，比普通请求的 15s 宽。
@@ -53,6 +54,34 @@ export type PickResult = {
   rejected: string | null
 }
 
+/** 平台选图 API 给出的文件：两个 API 的字段名不同（`tempFilePath` vs `path`），这里先归一。 */
+type PickedFile = { path: string; size: number }
+
+/**
+ * 逐张本地校验：只保留白名单格式与大小内的，不合规的回报原因。
+ *
+ * 两个选图入口（`chooseMedia` / `chooseMessageFile`）共用这一步 —— 校验口径只有一份，
+ * 否则「相册能过、聊天记录过不了」这类差异会变成用户眼里的玄学。
+ */
+function collectPhotos(files: PickedFile[]): PickResult {
+  const photos: PickedPhoto[] = []
+  let rejected: string | null = null
+  for (const file of files) {
+    const mime = mimeFromPath(file.path)
+    if (!mime) {
+      rejected = '仅支持 JPG / PNG / WebP 图片'
+      continue
+    }
+    const tooBig = validatePickedSize(file.size)
+    if (tooBig) {
+      rejected = tooBig
+      continue
+    }
+    photos.push({ path: file.path, mime, sizeBytes: file.size })
+  }
+  return { photos, rejected }
+}
+
 /**
  * 选图。最多 `limit` 张，只挑图片。
  *
@@ -78,22 +107,68 @@ export async function pickPhotos(limit: number): Promise<PickResult> {
     throw new Error('无法选择图片，请检查相册/相机权限后重试')
   }
 
-  const photos: PickedPhoto[] = []
-  let rejected: string | null = null
-  for (const file of result.tempFiles) {
-    const mime = mimeFromPath(file.tempFilePath)
-    if (!mime) {
-      rejected = '仅支持 JPG / PNG / WebP 图片'
-      continue
-    }
-    const tooBig = validatePickedSize(file.size)
-    if (tooBig) {
-      rejected = tooBig
-      continue
-    }
-    photos.push({ path: file.tempFilePath, mime, sizeBytes: file.size })
+  return collectPhotos(
+    result.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size })),
+  )
+}
+
+/**
+ * 单张取图：先弹**来源弹窗**（拍摄 / 从相册选择 / 从聊天会话选择），再按来源调对应的
+ * 微信原生取图 API。识图入口页与搜索页的识图按钮共用这一条链。
+ *
+ * | 来源 | 原生 API | 面板 |
+ * | --- | --- | --- |
+ * | 拍摄 | `chooseMedia`（`sourceType: ['camera']`） | 系统相机 |
+ * | 从相册选择 | `chooseMedia`（`sourceType: ['album']`） | 系统相册（`compressed` 压过再给） |
+ * | 从聊天会话选择 | `chooseMessageFile`（`type: 'image'`） | 微信会话文件选择器 |
+ *
+ * **为什么是弹窗 + 分派而不是一次调用**：`chooseMedia` 的原生面板只有「拍摄 / 相册」
+ * 两项，而「从聊天会话选择」是另一个独立面板（`chooseMessageFile`），没有一次调用能同时
+ * 给出三种来源。弹窗项与分派在 `./photo-source`（纯逻辑，可单测）。
+ *
+ * **取消**（弹窗取消 / 面板取消）统一返回空结果、不报错：取消是正常路径。
+ * 权限被拒与平台失败照旧抛出可展示的错误，由调用方提示并让用户重试。
+ */
+export async function pickPhotoFromSource(): Promise<PickResult> {
+  let tapIndex: number
+  try {
+    const picked = await Taro.showActionSheet({ itemList: [...PHOTO_SOURCE_OPTIONS] })
+    tapIndex = picked.tapIndex
+  } catch {
+    // 用户取消 / 点蒙层：`showActionSheet` 以 reject 收场，这不是错误
+    return { photos: [], rejected: null }
   }
-  return { photos, rejected }
+  const source: PhotoSource | null = photoSourceFromTapIndex(tapIndex)
+  // 越界（理论上不可达）：与取消同一处置，不把一次平台抖动变成用户可见的报错
+  if (source === null) return { photos: [], rejected: null }
+
+  if (source === 'chat') {
+    let result: Taro.chooseMessageFile.SuccessCallbackResult
+    try {
+      // `type: 'image'` 已经在平台侧过滤过一遍；本地仍按同一套白名单与大小复核
+      result = await Taro.chooseMessageFile({ count: 1, type: 'image' })
+    } catch (error) {
+      if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+      throw new Error('无法从聊天记录选择图片，请重试')
+    }
+    return collectPhotos(result.tempFiles.map((file) => ({ path: file.path, size: file.size })))
+  }
+
+  let result: Taro.chooseMedia.SuccessCallbackResult
+  try {
+    result = await Taro.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: [source],
+      sizeType: ['compressed'],
+    })
+  } catch (error) {
+    if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+    throw new Error('无法选择图片，请检查相册/相机权限后重试')
+  }
+  return collectPhotos(
+    result.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size })),
+  )
 }
 
 /**
