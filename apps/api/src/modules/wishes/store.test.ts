@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { buildWishEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
 import { createDb } from '@fish/db/client'
+import { findEmbedding, saveEmbedding } from '@fish/db/embedding-store'
+import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
+import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDbWishMatchQueue } from './match-queue'
 import { createSqlWishStore, type WishRow } from './store'
@@ -54,6 +58,25 @@ const baseRow = (overrides: Partial<WishRow> = {}): WishRow => ({
   updated_at: new Date(),
   ...overrides,
 })
+
+// ---- #322 M2 复审 blocker：向量行失效（写路径按内容指纹删旧行）用到的辅助 ----
+
+const EMBEDDING_MODEL = 'stub-deterministic-v1'
+
+function unitVector(axis: number): number[] {
+  return Array.from({ length: EMBEDDING_DIMENSIONS }, (_, index) => (index === axis ? 1 : 0))
+}
+
+/** 实体当前的 `updated_at`：向量行要记的版本号，也是"新鲜"判据的一端。 */
+async function currentWishVersion(wishId: string): Promise<Date> {
+  const rows = await db
+    .select({ updatedAt: wishes.updatedAt })
+    .from(wishes)
+    .where(eq(wishes.id, wishId))
+  const row = rows[0]
+  if (!row) throw new Error('wish 不存在')
+  return row.updatedAt
+}
 
 beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
@@ -110,6 +133,54 @@ describe('wishes store (integration)', () => {
       ),
     )[0]
     expect(Number(count?.c)).toBe(2)
+  })
+
+  test('db match queue：投递前先让旧内容的向量行失效（#333 复审 blocker）', async () => {
+    const wishId = crypto.randomUUID()
+    // keyword 必须唯一：同 user + 同 keyword + 同 category 的 5 秒窗口查重会命中前面用例建的行。
+    const wishRow = baseRow({
+      id: wishId,
+      keyword: `愿望失效-${crypto.randomUUID()}`,
+      description: '旧描述',
+    })
+    const created = await store.createOrGetRecent(wishRow, 10, new Date(Date.now() - 5_000))
+    expect(created.kind).toBe('created')
+
+    const facts = {
+      keyword: wishRow.keyword,
+      description: wishRow.description,
+      category: wishRow.category,
+    }
+    await saveEmbedding(db, {
+      entity: { kind: 'wish', id: wishId },
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: contentHashOf(buildWishEmbeddingText(facts)),
+      embedding: unitVector(0),
+      sourceUpdatedAt: await currentWishVersion(wishId),
+    })
+
+    // 编辑内容后走写路径的投递入口（service 的顺序就是 update 之后 enqueue）：旧向量当场消失，
+    // 不必等 worker 跑到 EMBED_WISH——这是"按内容失效"而不是"等向量重算"的关键差别。
+    await store.update(wishId, { description: '新描述：语义完全变了' }, new Date())
+    await matchQueue.enqueue(wishId)
+    expect(await findEmbedding(db, { kind: 'wish', id: wishId }, EMBEDDING_MODEL)).toBeNull()
+
+    // 新内容的向量落库后内容没再变：再投一次不该删掉它（指纹一致 ⇒ EMBED_WISH 走 unchanged，不重复计费）。
+    await saveEmbedding(db, {
+      entity: { kind: 'wish', id: wishId },
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: contentHashOf(
+        buildWishEmbeddingText({ ...facts, description: '新描述：语义完全变了' }),
+      ),
+      embedding: unitVector(1),
+      sourceUpdatedAt: await currentWishVersion(wishId),
+    })
+    await matchQueue.enqueue(wishId)
+    expect(
+      (await findEmbedding(db, { kind: 'wish', id: wishId }, EMBEDDING_MODEL))?.embedding,
+    ).toEqual(unitVector(1))
   })
 
   test('rolls back the wish when the MATCH_WISH job insert fails', async () => {

@@ -220,12 +220,45 @@ export async function refreshEmbeddingSourceVersion(
 }
 
 /**
- * 候选向量新鲜度谓词（#322 M2 复审 blocker）。
+ * 内容一变就让旧向量立即不可召回（#333 复审 blocker 的**主判据**）。
  *
- * `source_updated_at` 是生成这条向量时读到的实体 `updated_at`：只有它与实体**当前**的
- * `updated_at` 一致，这条向量才描述的仍是当前内容。（目标侧另有强判据：`loadTargetVector()`
- * 会用当前文本重算 content hash；候选侧是批量取行、逐行重算 hash 代价与收益不成比例，用版本
- * 相等作判据即可——向量行的指纹与它自己的版本号是同步写入的。）
+ * **为什么不能用时间戳证明新鲜**：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），
+ * 同一毫秒内的两次编辑会得到完全相同的版本号——#328 的并发用例已经证明"不同内容可以有相同的
+ * `updatedAt`"。时间戳相等推不出内容相同，所以候选侧需要一个**按内容**的判据。
+ *
+ * 判据就是 `content_hash`：调用方（写路径）在**同一事务**里用新内容重算指纹，然后删掉该实体下
+ * 指纹不同的所有向量行。理由：
+ *   - 那些行描述的是**已经不存在的内容**，留着只会被召回、被打分（M3 还会拿旧 cosine 与当前
+ *     结构事实混算出"当前结构 + 旧语义"的分数）；
+ *   - 删除是"立即失效"，不取决于 worker 什么时候跑到 EMBED_* job；
+ *   - 不软标记（不加 `invalidated_at` 之类的新列）：EMBED_* job 会重建，旧向量没有任何保留价值。
+ *
+ * 指纹一致的行**不动**：只改价格/状态这类不进 embedding 文本的编辑走 handler 的 `unchanged`
+ * 分支（`refreshEmbeddingSourceVersion`），不会重复调用 provider（"内容不变不重复计费"）。
+ *
+ * 返回被删掉的行数（0 = 本来就没有旧内容向量，或内容没变）。
+ */
+export async function pruneStaleEmbeddings(
+  executor: Pick<Db, 'delete'>,
+  input: { entity: EmbeddingEntity; contentHash: string },
+): Promise<number> {
+  const rows = await executor
+    .delete(embeddings)
+    .where(and(entityFilter(input.entity), ne(embeddings.contentHash, input.contentHash)))
+    .returning({ id: embeddings.id })
+
+  return rows.length
+}
+
+/**
+ * 候选向量新鲜度谓词（#322 M2 复审 blocker）——**纵深防御**，不是主判据。
+ *
+ * 主判据是写路径的 `pruneStaleEmbeddings()`：实体内容一变，同一事务里就把指纹不符的向量行删掉，
+ * 于是"行还在"本身就意味着它对应的是当前内容（按内容证明，与时间戳精度无关）。
+ *
+ * 这里再比一次 `source_updated_at`，是为了兜住"某个写路径忘了调 prune"的情形：那种情况下旧行的
+ * 版本号仍停在编辑前，只要编辑落在**不同的毫秒**就会被挡掉。它是补充，不能单独承担正确性
+ * （同一毫秒内两次编辑的版本号相同，见 #328）。
  *
  * 不新鲜的候选**必须从语义召回里排除**，而不是取进来再在 JS 层降级：否则它会占掉 Top-K 名额，
  * 把真正新鲜的候选挤出去（#322 "existing match 掉出 Top K 后能降级" 的前提是候选集合本身正确），

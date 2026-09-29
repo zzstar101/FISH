@@ -1,9 +1,11 @@
+import { buildListingEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
 import type {
   ListingCategory,
   ListingCondition,
   ListingStatus,
 } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
+import { pruneStaleEmbeddings } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { newListingNo } from '@fish/db/listing-no'
@@ -749,10 +751,47 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 }
 
 /**
+ * 内容一变就让该商品已有的向量行当场失效（#322 M2 复审 blocker）。
+ *
+ * 为什么不能只靠时间戳：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），同一毫秒内
+ * 的两次编辑内容不同却版本相同——时间戳相等推不出内容相同（#328 的并发用例已确立）。所以判据
+ * 必须是**内容**：用当前字段重算指纹，删掉指纹不符的向量行（`pruneStaleEmbeddings`）。
+ *
+ * 调用点全部与实体改动同事务，于是"写提交"与"旧向量不可召回"是同一个原子事件，不依赖 worker
+ * 什么时候跑到 `EMBED_LISTING`。指纹一致（只改了价格/图片/状态这类不进 embedding 文本的字段）
+ * 时一行都不删，重跑的 `EMBED_LISTING` 会走 `unchanged` 分支，不重复调用 provider。
+ */
+async function invalidateStaleEmbeddingWith(
+  executor: Pick<Db, 'select' | 'delete'>,
+  listingId: string,
+): Promise<void> {
+  const rows = await executor
+    .select({
+      title: listings.title,
+      description: listings.description,
+      category: listings.category,
+    })
+    .from(listings)
+    .where(eq(listings.id, listingId))
+    .limit(1)
+
+  const row = rows[0]
+  if (!row) return
+
+  await pruneStaleEmbeddings(executor, {
+    entity: { kind: 'listing', id: listingId },
+    contentHash: contentHashOf(buildListingEmbeddingText(row)),
+  })
+}
+
+/**
  * 写 `MATCH_LISTING` + `EMBED_LISTING` 两条 job（#322 M1 起成对投递）。
  *
  * 为什么成对：`EMBED_LISTING` 的输入（标题/描述/分类）与 `MATCH_LISTING` 的打分输入是同一批字段，
  * 凡是要重算匹配的写操作，语义向量同样可能过期；分两处投递迟早会漏掉一边。
+ *
+ * #322 M2 复审起，投递前先在同一执行器（调用点的事务）里失效旧内容向量：见
+ * `invalidateStaleEmbeddingWith()`。
  *
  * `payload` 必须经 `jsonParam()` 包装：直接用裸对象会被 drizzle + `bun-sql` stringify 两次，
  * 落库成为「JSON 字符串套 JSON」，于是 `payload->>'listingId'` 在 SQL 层恒为 NULL，
@@ -764,9 +803,11 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
  * 反过来，`MATCH_LISTING` 保持原样（无唯一索引、也无冲突处理），v1 语义一个字节不动。
  */
 async function enqueueListingJobsWith(
-  executor: Pick<Db, 'insert'>,
+  executor: Pick<Db, 'insert' | 'select' | 'delete'>,
   listingId: string,
 ): Promise<void> {
+  await invalidateStaleEmbeddingWith(executor, listingId)
+
   await executor.insert(jobs).values({
     id: newId(),
     type: 'MATCH_LISTING',

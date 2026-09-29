@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test'
+import { buildListingEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
 import { createDb, type Db } from '@fish/db/client'
+import { findEmbedding, saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
+import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
 import { idRekeys } from '@fish/db/schema/id-rekeys'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingNumbers } from '@fish/db/schema/listing-numbers'
@@ -180,6 +183,74 @@ test('发布在世界内写入商品、有序图片与 MATCH_LISTING job', async
     expect(queued).toHaveLength(2)
     expect(queued.map((job) => job.type).sort()).toEqual(['EMBED_LISTING', 'MATCH_LISTING'])
     expect(queued.every((job) => job.status === 'PENDING')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #322 M2 复审 blocker：内容一变就让旧向量当场失效（写路径失效，而不是靠时间戳证明新鲜）
+// ---------------------------------------------------------------------------
+
+const EMBEDDING_MODEL = 'stub-deterministic-v1'
+
+function unitVector(axis: number): number[] {
+  return Array.from({ length: EMBEDDING_DIMENSIONS }, (_, index) => (index === axis ? 1 : 0))
+}
+
+/** 实体当前的 `updated_at`：向量行要记的版本号，也是"新鲜"判据的一端。 */
+async function currentVersion(listingId: string): Promise<Date> {
+  const rows = await db
+    .select({ updatedAt: listings.updatedAt })
+    .from(listings)
+    .where(eq(listings.id, listingId))
+  const row = rows[0]
+  if (!row) throw new Error('listing 不存在')
+  return row.updatedAt
+}
+
+test('编辑内容后旧向量当场失效；只改价格不删向量（#333 复审 blocker）', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const listingId = created.listingId
+    const facts = { title: '集成测试商品', description: '集成测试描述', category: 'DIGITAL' }
+
+    await saveEmbedding(db, {
+      entity: { kind: 'listing', id: listingId },
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: contentHashOf(buildListingEmbeddingText(facts)),
+      embedding: unitVector(0),
+      sourceUpdatedAt: await currentVersion(listingId),
+    })
+
+    // 改标题 ⇒ 内容指纹变了 ⇒ 写路径在同一事务里删掉旧向量，不取决于 worker 何时跑到 EMBED_LISTING。
+    // 这正是"时间戳之外还要内容判据"的落地点：库里此刻不会留下任何描述旧内容的向量。
+    const result = await store.updateListingAtomic({
+      id: listingId,
+      sellerId,
+      apply: () => ({ kind: 'write' as const, fields: { title: '改过标题的商品' } }),
+    })
+    expect(result).toEqual({ kind: 'updated' })
+    expect(await findEmbedding(db, { kind: 'listing', id: listingId }, EMBEDDING_MODEL)).toBeNull()
+
+    // 新内容的向量落库后，只改价格（不进 embedding 文本）不该把它删掉：指纹一致 ⇒ EMBED_LISTING
+    // 重跑走 unchanged 分支，不重复调用 provider。
+    await saveEmbedding(db, {
+      entity: { kind: 'listing', id: listingId },
+      model: EMBEDDING_MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      contentHash: contentHashOf(buildListingEmbeddingText({ ...facts, title: '改过标题的商品' })),
+      embedding: unitVector(1),
+      sourceUpdatedAt: await currentVersion(listingId),
+    })
+
+    await store.updateListingAtomic({
+      id: listingId,
+      sellerId,
+      apply: () => ({ kind: 'write' as const, fields: { priceCents: 18800 } }),
+    })
+
+    const kept = await findEmbedding(db, { kind: 'listing', id: listingId }, EMBEDDING_MODEL)
+    expect(kept?.embedding).toEqual(unitVector(1))
   })
 })
 

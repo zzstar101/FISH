@@ -131,13 +131,29 @@ pgvector cosine Top-K（ORDER BY embedding <=> $queryVector LIMIT MATCH_SEMANTIC
   降级路径保证的是：**功能不倒退**（v1 行为原样保留）+ **不产生伪匹配**（缺失向量绝不等于「无候选」或「全命中」）。
 - **为什么候选侧不补投**：一次召回可能有上百个候选，为它们排队会淹没队列；
   候选自己的 `EMBED_*` 由「创建/编辑」路径负责（M1 已接），补投责任不重复。
-- **候选向量也必须新鲜**（#333 复审 blocker）：目标侧的 `content_hash` 判据只保证「target 的向量对应当前内容」，
-  Top-K 里的**候选行**同样可能过期——候选实体被编辑、`EMBED_*` 还没跑完时，旧向量会挤掉新鲜候选，
-  还会被按 id 补算进打分，得到「当前结构事实 + 旧语义」的混合分。所以候选侧不逐行回表比 `content_hash`
-  （Top-K 是纯 SQL 排序，拿到 JS 里再过滤已经晚了：K 个名额先被过期行占掉），而是在 `WHERE` 里直接加
-  **版本相等**谓词：`date_trunc('milliseconds', embeddings.source_updated_at) = date_trunc('milliseconds', <实体>.updated_at)`。
-  **毫秒截断是必需的**：实体 `updated_at` 是 `now()` 的微秒精度，而版本经 JS `Date` 往返后只剩毫秒，
-  直接等值比较几乎永不成立（第一版实现就是这么红的）。新鲜度无法证明的候选**不进 Top-K**，而不是进来再降级。
+- **候选向量必须新鲜，而且判据必须是「内容」而不是「时间戳」**（#333 复审 blocker，第二轮）：目标侧的
+  `content_hash` 判据只保证「target 的向量对应当前内容」，Top-K 里的**候选行**同样可能过期——候选实体被
+  编辑、`EMBED_*` 还没跑完时，旧向量会挤掉新鲜候选，还会被按 id 补算进打分，得到「当前结构事实 + 旧语义」
+  的混合分。分三层落实：
+  - **主判据 = 写路径按内容指纹失效（prune-on-write）**：编辑/创建商品或愿望时，用新字段重算内容指纹，
+    删掉该实体下指纹不符的向量行（`packages/db/src/embedding-store.ts` 的 `pruneStaleEmbeddings()`；不软标记，
+    因为 `EMBED_*` 会重建）。于是「行还在」本身就等于「它描述的是当前内容」，与时间戳精度无关，也不取决于
+    worker 何时跑到 `EMBED_*`。指纹一致的行一行不删——只改价格/图片/状态这类不进 embedding 文本的编辑照旧
+    走 `unchanged`，不重复调用 provider。调用点：商品侧 `apps/api/src/modules/listings/store.ts` 的
+    `enqueueListingJobsWith()`（创建/编辑/审核通过/重投递四个入口，其中三个在实体写入的**同一事务**里）；
+    愿望侧 `apps/api/src/modules/wishes/match-queue.ts` 的 `invalidateStaleEmbedding()`（`enqueue` 内，
+    在 HTTP 响应返回之前）。
+  - **为什么不能只用时间戳**：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），同一毫秒内的两次
+    编辑内容不同却版本号相同——#328 已确立「时间戳相等推不出内容相同」。以版本相等当作主判据，这类编辑后的
+    旧向量会被当成新鲜（`embeddings.test.ts` 里「同一毫秒内改内容」的用例钉住了这个边界）。
+  - **时间戳谓词降级为纵深防御**：`WHERE` 里仍保留 `date_trunc('milliseconds', embeddings.source_updated_at)
+    = date_trunc('milliseconds', <实体>.updated_at)`，用来兜住「某个写路径忘了调 prune」的情形（此时旧行版本
+    仍停在编辑前，只要编辑落在不同毫秒就会被挡掉）。**毫秒截断是必需的**：实体 `updated_at` 是 `now()` 的微秒
+    精度，而版本经 JS `Date` 往返后只剩毫秒，直接等值比较几乎永不成立（第一版实现就是这么红的）。新鲜度无法
+    证明的候选**不进 Top-K**，而不是进来再降级。
+  - **愿望写路径的事务性**：愿望的 `store.update` 本身不事务化（既有语义，`service.ts` 有「不假装它原子」的
+    注释），所以愿望侧的失效与 `EMBED_WISH` 投递一样发生在 `enqueue()` 里、且在响应返回之前；商品侧与实体写入
+    同事务。
 - **「只改价格」不会误伤**：价格不进 embedding 文本，这类编辑后 `EMBED_*` 判定 `unchanged`——但版本已经前进，
   所以 `unchanged` 分支会把版本标记推进到实体当前值（`refreshEmbeddingSourceVersion()`，两个守卫：
   指纹仍然一致 + 只前进不回退），合法向量不会被后续召回判成过期。
@@ -212,6 +228,7 @@ Execution Time: 40.863 ms
 | 不静默混用不同模型的向量 | ✅ | `engine.test.ts`「只有别的模型的向量：判 `model-mismatch`，绝不用另一种模型的向量召回」；`hasEmbeddingFromOtherModel` 在 DB 层单独覆盖 |
 | 候选侧缺向量不替它投递 | ✅ | `engine.test.ts`「候选侧没有向量就进不了 Top-K：本轮不新建匹配，也不替候选投递」（`vectorCandidates=0`、`embedJobs('wish')=0`） |
 | 候选向量过期时不得参与召回/打分（#333 复审） | ✅ | `embeddings.test.ts`「过期向量不进 Top-K，重算后恢复」「`topKSimilarListings` 与愿望方向同一套判据」「`refreshEmbeddingSourceVersion` 只推进内容对得上的向量」；`engine.test.ts`「候选向量过期不进 Top-K，重算后恢复」（`vectorCandidates=0`、`created=0`，重算后 `created=1`/100 分） |
+| 内容变了旧向量必须**当场**失效，不能靠时间戳证明新鲜（#333 复审第二轮） | ✅ | `embeddings.test.ts`「同一毫秒内改了内容（版本号完全相同）也能让旧向量退出召回」+「只删内容对不上的行」；`apps/api/src/modules/listings/store.test.ts`「编辑内容后旧向量当场失效；只改价格不删向量」；`apps/api/src/modules/wishes/store.test.ts`「db match queue：投递前先让旧内容的向量行失效」 |
 | K380 + 机械键盘 ≤¥200 demo 继续成立 | ✅ | core smoke 的 demo 流程没有 embeddings ⇒ 走 `v1-fallback`，打分与召回前的 v1 完全一致；`bun run core:smoke` 覆盖 |
 | `MATCH_WISH` 编辑后能真正重算 | ✅ | 索引谓词修复（§3）+ `apps/api/src/modules/wishes/store.test.ts` 的「重复投递幂等」与 `app.wishes.test.ts` 的「PATCH 重投两条 job」 |
 | `bun run typecheck` | ✅ | 全包 exit 0 |
@@ -269,3 +286,56 @@ bun run core:smoke                      # K380 demo（无 embeddings ⇒ v1-fall
   开发可以并行，**合并不能并行**——M1 先合，本分支 rebase 最新 main 后**重新生成**迁移
   （`packages/db/AGENTS.md` 的规则：rebase 后必须重新生成），不能把两条 sibling snapshot 直接拼进 journal。
 - M2 的迁移只做索引替换（§3），与 M1 的 `CREATE TABLE embeddings` 互不冲突。
+
+---
+
+## 13. 评审修复（第二轮 #333）：候选新鲜度的判据必须是内容，而不是时间戳
+
+### 评审意见（review 5346491423，commit `a8b4e69`，blocker）
+
+第一轮把「候选向量必须新鲜」放进 Top-K 的 `WHERE` 里是对的，但**判据仍然是时间戳**：
+`embeddings.source_updated_at` 与实体 `updated_at` 相等（毫秒截断后）只能证明「两者是同一版本号」，
+不能证明「向量描述的就是当前内容」。实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），
+**同一毫秒内的两次编辑内容不同、版本号却完全相同** ⇒ 内容 A 的旧向量仍被判成新鲜，能进 Top-K 占名额；
+M3 还会拿它算 cosine，与内容 B 的当前结构事实混成「旧语义 + 新结构」的分数。评审要求补一条与 #328
+同款的回归：旧向量的 `sourceUpdatedAt` 与编辑后的实体 `updatedAt` **完全相同**、文本不同时，
+新 `EMBED_*` 跑完之前该候选必须进不了 semantic Top-K，新向量落库后才恢复。
+
+### 修法：写路径按内容指纹失效（prune-on-write）
+
+**主判据换成内容指纹，时间戳谓词降级为纵深防御。** 实体内容一变，写路径就在同一执行器里删掉该实体下
+`content_hash` 与「当前内容指纹」不符的向量行（`packages/db/src/embedding-store.ts` 的
+`pruneStaleEmbeddings(executor, { entity, contentHash })`）。这样「行还在」本身就等价于「它描述的是当前内容」，
+与时间戳精度无关，也不取决于 worker 何时跑到 `EMBED_*`。
+
+| 文件 | 改动 |
+| --- | --- |
+| `packages/db/src/embedding-store.ts` | 新增 `pruneStaleEmbeddings()`；候选新鲜度谓词的注释改写为「纵深防御，不是主判据」 |
+| `apps/api/src/modules/listings/store.ts` | 新增 `invalidateStaleEmbeddingWith()`（select 当前 title/description/category → prune）；`enqueueListingJobsWith()` 执行器放宽到 `insert \| select \| delete` 并在投递前调用它（创建/编辑/审核通过/重投递四个入口，其中三个与实体写入同事务） |
+| `apps/api/src/modules/wishes/match-queue.ts` | 新增 `invalidateStaleEmbedding()`；`enqueue()` 第一行调用（愿望的 `store.update` 不事务化，失效与 `EMBED_WISH` 投递同样在响应返回之前完成） |
+
+**为什么不用时间戳做主判据**：同一毫秒内的两次编辑版本号相同（#328 已确立的边界），
+`embeddings.test.ts` 新增的用例先断言「此时 Top-K 仍能召回它」把这条边界钉住，再证明 prune 之后立刻召回不了。
+
+**为什么保留时间戳谓词**：它兜住「某个写路径忘了调 prune」的情形——那种情况下旧行的版本仍停在编辑前，
+只要编辑落在不同毫秒就会被挡掉。**毫秒截断依旧必需**（实体 `updated_at` 是 `now()` 的微秒精度，
+版本经 JS `Date` 往返后只剩毫秒，直接等值比较几乎永不成立）。
+
+**被否决的替代方案**：
+- 实体维护单调 `revision`：同样要给每个写路径加维护代码，忘了就 fail-open；而且 M3 已经证明
+  「忘记维护」的失败模式正是本次 blocker，换成 revision 只是把同一个坑换了个字段。
+- SQL 生成列 / SQL 侧重算 `content_hash`：必须在 SQL 里复刻 `buildListingEmbeddingText` /
+  `buildWishEmbeddingText` 的 null 处理、空行省略与 `EMBEDDING_TEXT_FORMAT_VERSION` 规则 ⇒ 必然漂移。
+- `xmin` 当版本号：冻结元组的 `xmin` 会塌成 `2`，旧版本与当前版本相等 ⇒ 不成立。
+
+**只改价格这类编辑不误伤**：指纹一致的行一行不删，`EMBED_*` 照旧判 `unchanged`（§5 的
+`refreshEmbeddingSourceVersion()` 仍负责把版本推进到实体当前值）。
+
+### 回归证据
+
+| 层 | 用例 | 钉住的行为 |
+| --- | --- | --- |
+| DB | `embeddings.test.ts`「同一毫秒内改了内容（版本号完全相同）也能让旧向量退出召回」 | 时间戳相等**不足以**证明新鲜（先召回得进来）→ prune 后立刻出局 → 落新指纹向量后恢复 |
+| DB | `embeddings.test.ts`「只删内容对不上的行——指纹一致的行与别的实体一行不动」 | 指纹一致得 0 行；同一实体的多种模型旧行一起清；别的实体不受影响 |
+| API | `listings/store.test.ts`「编辑内容后旧向量当场失效；只改价格不删向量」 | 编辑事务提交后 `findEmbedding` 即为 null；只改价格时向量原样保留 |
+| API | `wishes/store.test.ts`「db match queue：投递前先让旧内容的向量行失效」 | `enqueue()` 返回时旧指纹行已消失；新指纹行不受影响 |

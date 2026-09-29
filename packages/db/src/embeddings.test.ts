@@ -5,6 +5,7 @@ import { createDb, type Db } from './client'
 import {
   findEmbedding,
   hasEmbeddingFromOtherModel,
+  pruneStaleEmbeddings,
   refreshEmbeddingSourceVersion,
   saveEmbedding,
   topKSimilarListings,
@@ -737,6 +738,86 @@ test('refreshEmbeddingSourceVersion：只把“内容仍然对得上”的向量
       sourceUpdatedAt: version,
     }),
   ).toBe(false)
+})
+
+test('pruneStaleEmbeddings：同一毫秒内改了内容（版本号完全相同）也能让旧向量退出召回（#333 复审 blocker）', async () => {
+  const owner = await createUser()
+  const marker = `prune-same-ms-${seq++}`
+  const wishId = await createWishWithEmbedding(owner, `${marker}-v1`, unitVector(0))
+  const version = await currentWishVersion(wishId)
+
+  // 内容换成 v2，但把 `updated_at` 写回**同一个毫秒**：此时版本号判据无法区分新旧内容——
+  // 这正是 #328 已经确立的边界（同一毫秒可以有不同内容），所以 M2 的主判据必须是内容指纹。
+  await db
+    .update(wishes)
+    .set({ keyword: `${marker}-v2`, updatedAt: version })
+    .where(eq(wishes.id, wishId))
+  expect((await currentWishVersion(wishId)).getTime()).toBe(version.getTime())
+
+  const filter = sql`${wishes.keyword} like ${`${marker}%`}`
+  const query = { model: MODEL, vector: unitVector(0), limit: 10, filter }
+
+  // 先钉住"单靠时间戳证明不了"：版本相等 ⇒ 版本谓词放行，旧向量此刻仍在召回里。
+  expect((await topKSimilarWishes(db, query)).map((row) => row.id)).toContain(wishId)
+
+  // 写路径的失效（内容指纹）把它删掉：旧向量不再占 Top-K 名额，也不会被 M3 拿去与当前结构事实混算。
+  expect(
+    await pruneStaleEmbeddings(db, {
+      entity: { kind: 'wish', id: wishId },
+      contentHash: 'hash-v2',
+    }),
+  ).toBe(1)
+  expect((await topKSimilarWishes(db, query)).map((row) => row.id)).not.toContain(wishId)
+
+  // 新向量落库后恢复召回。
+  await saveEmbedding(db, {
+    entity: { kind: 'wish', id: wishId },
+    model: MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: 'hash-v2',
+    embedding: unitVector(1),
+    sourceUpdatedAt: await currentWishVersion(wishId),
+  })
+  expect((await topKSimilarWishes(db, query)).map((row) => row.id)).toEqual([wishId])
+})
+
+test('pruneStaleEmbeddings：只删内容对不上的行——指纹一致的行与别的实体一行不动', async () => {
+  const sellerId = await createUser()
+  const listingId = await createListingWithEmbedding(
+    sellerId,
+    `prune-scope-${seq++}`,
+    unitVector(2),
+  )
+  const other = await createListingWithEmbedding(sellerId, `prune-other-${seq++}`, unitVector(2))
+
+  // 指纹一致（只改了价格/图片这类不进 embedding 文本的字段）：一行都不删，`unchanged` 分支照旧生效。
+  expect(
+    await pruneStaleEmbeddings(db, {
+      entity: { kind: 'listing', id: listingId },
+      contentHash: `hash-${listingId}`,
+    }),
+  ).toBe(0)
+
+  // 同一实体的**另一个模型**的行同样是"旧内容"：内容变了就一起失效，否则会留下可被召回、
+  // 却描述着旧内容的向量（M4 换模型重建也依赖这条语义）。
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id: listingId },
+    model: OTHER_MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${listingId}`,
+    embedding: unitVector(2),
+    sourceUpdatedAt: V1,
+  })
+
+  expect(
+    await pruneStaleEmbeddings(db, {
+      entity: { kind: 'listing', id: listingId },
+      contentHash: 'hash-新内容',
+    }),
+  ).toBe(2)
+  expect(await findEmbedding(db, { kind: 'listing', id: listingId }, MODEL)).toBeNull()
+  expect(await findEmbedding(db, { kind: 'listing', id: listingId }, OTHER_MODEL)).toBeNull()
+  expect(await findEmbedding(db, { kind: 'listing', id: other }, MODEL)).not.toBeNull()
 })
 
 test('hasEmbeddingFromOtherModel：区分“从没生成过”与“只有旧 model 的向量”', async () => {
