@@ -292,14 +292,19 @@ export default function UserHome() {
 
   /**
    * 演示内容的**唯一闸门**：演示构建 + 页主是演示账号（seed 三号之一，见
-   * `features/user/demo-signatures.ts`）。假签名、假关注钮、骨架里的签名占位都挂在它上面。
+   * `features/user/demo-signatures.ts`）。**只**管演示签名行与骨架里的签名占位
+   * ——关注钮自 #188 起走真实接口，与它不是一套闸门（见 `follow` 处的说明）。
    *
    * ⚠️ 只判 `MOCK_FALLBACK_ENABLED` 不够：它在 `NODE_ENV === 'development'` 下也为真
    * （`config/index.ts`），而 `bun run dev:weapp` 是连真后端的 —— 那样每张真实用户主页
-   * 都会长出假的关注钮和「已关注（演示）」toast。所以再加一层真实 uuid 白名单。
+   * 都会长出演示签名行。所以再加一层 uuid 白名单。
    *
    * 判据用**路由参数 `userId`** 而不是 `profile.id`：骨架屏阶段 profile 还没到，
    * 而骨架里要不要留签名行占位也取决于同一条判据（留了才不跳高）。
+   *
+   * ⚠️ 已知口径问题（**先于本单存在**，不在 #188 范围内）：本表与 `DEMO_USER_IDS` 的键是
+   * **裸 seed UUID**，而本页 `userId` 是 `usr_` Public ID（导航方给的都是 `seller.id`），
+   * 所以这条判据在本页恒为 false —— 演示签名行一直没亮过。另开 Issue 处理，本单不动。
    */
   const isDemoUser = MOCK_FALLBACK_ENABLED && DEMO_USER_IDS.includes(userId)
 
@@ -500,8 +505,8 @@ export default function UserHome() {
   ) : null
 
   /**
-   * 按钮在**读到状态之前不渲染**（不先画一个「关注」再跳成「已关注」）。
-   * 骨架屏里给这一格留了同宽的占位（见 `uhome__follow-skel`），所以状态到位时不会横跳。
+   * 按钮在**读到状态之前不渲染**（不先画一个「关注」再跳成「已关注」），
+   * 那一格由同宽的 `uhome__follow-skel` 占位顶住：资料先到、关注态后到也不会横跳。
    */
   const followVisible = canFollow && follow !== null
   const followOn = follow?.following === true
@@ -585,7 +590,8 @@ export default function UserHome() {
                   {/* 关注按钮（稿 `.btn-follow`）：**头像行内第三格**，昵称块右侧 ——
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。
                       见上方 `follow` 注释：真实三态，未关注（品牌渐变 + plus）/ 写入中
-                      （转圈 + 禁用）/ 已关注（浅底 + check）。初始状态读到之前整颗不渲染。 */}
+                      （转圈 + 禁用）/ 已关注（浅底 + check）。
+                      已登录且非本人主页、但状态还没读到时，用同宽占位顶住这一格（不横跳）。 */}
                   {followVisible ? (
                     <View
                       className={`uhome__follow${followOn ? ' uhome__follow--on' : ''}${
@@ -617,6 +623,8 @@ export default function UserHome() {
                         </>
                       )}
                     </View>
+                  ) : canFollow ? (
+                    <View className="uhome__follow-skel" />
                   ) : null}
                 </View>
 
