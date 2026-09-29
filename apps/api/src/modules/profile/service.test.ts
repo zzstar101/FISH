@@ -135,7 +135,10 @@ class MemoryProfileStore implements ProfileStore {
   wishes: ProfileWishRow[] = [wishRow()]
   transactions: ProfileTransactionRow[] = [txRow()]
   /** `updateUser` 收到的最后一次写入（写用例断言「只写了该写的列」）。 */
-  updated: { userId: string; patch: { nickname?: string; avatarUrl?: string } } | null = null
+  updated: {
+    userId: string
+    patch: { nickname?: string; avatarUrl?: string; signature?: string | null }
+  } | null = null
   /** 覆盖 `updateUser` 的返回行；null 模拟「认证与写入之间账号被删」。 */
   updateResult: UserRow | null | undefined = undefined
 

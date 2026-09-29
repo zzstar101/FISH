@@ -27,14 +27,12 @@ import './index.scss'
  * **数据来源（#122）**：`GET /users/:userId/public` + `GET /users/:userId/listings`
  * （`@fish/contracts/users/routes`），两个端点匿名可读。页面只渲染契约真有的字段：
  *
- * - **个性签名（稿 `.psign`）：展示样式与演示态已就绪，真实字段接线待 #179**。
- *   契约 `PublicUserProfileSchema` 没有 signature 字段（原 #143 已 CLOSED/NOT_PLANNED
- *   并入 #86），后端三层都没有，所以本页**没有** `profile.signature` 可读 —— 下面那个
- *   `signatureText` 只取演示注入表，后端将来加上字段也不会自动显示，需要一次接线改动。
- *   **演示态（Owner 拍板「mock 先行」）**：页内从 `features/user/demo-signatures.ts` 取
- *   （按真实 uuid 分键、不落契约、不落 DB、不读本机存储）；真实构建或非演示账号下
- *   **这一行不渲染、不留白**。⚠️ 不能读本机存储来顶：`features/profile/signature.ts`
- *   的键按**本人 id** 分，本机只有当前登录用户自己的签名，读出来给别人看是错的。
+ * - **个性签名（稿 `.psign`）：#179 已接真实字段**——`PublicUserProfile.signature`
+ *   有值就只取首行展示（见下方 `signatureText`）。
+ *   **演示态（Owner 拍板「mock 先行」，仅 dev 演示构建）**：真实字段为空且页主是
+ *   演示账号（`features/user/demo-signatures.ts` 按 seed uuid 分键）时落演示文案，
+ *   生产闸恒 false——真实空值在生产语义下**整行不渲染、不留白**。⚠️ 不能读本机
+ *   存储来顶：本机只有当前登录用户自己的签名，读出来给别人看是错的。
  * - **校区不渲染（#86 F：已从产品整体移除）**：2026-09-22 产品冻结「不采集、不公开校区」，
  *   `users.campus` 列与所有契约字段（`Me` / `ListingSeller` / `PublicUserProfile`）已删除，
  *   本页没有任何 campus 数据可读，也不会显示「XX校区」。
@@ -301,14 +299,19 @@ export default function UserHome() {
 
   /**
    * 签名展示口径（与「我的」页一致）：
-   * - 只对演示账号取演示注入表（Owner 拍板 mock 先行）；其它人 / 真实构建 →
-   *   `undefined`，签名行整行不渲染、不留白。
+   * - **真实字段优先（#179）**：契约 `PublicUserProfile.signature` 有值（服务端 trim 后
+   *   的原文，可能多行）就只取首行展示；
+   * - 真实字段为 `null`（未填/已清空/演示构建无后端）且是演示构建里的演示账号时，
+   *   才落到演示注入表（Owner 拍板 mock 先行，生产闸恒 false）——生产语义下
+   *   真实空值就是整行不渲染、不留白，不补任何演示文案。
    * - 只取首行（`signatureFirstLine`），折叠成单行省略号。
    */
   const signatureText = useMemo(() => {
+    const real = profile?.signature
+    if (real) return signatureFirstLine(real)
     const raw = DEMO_SIGNATURES[userId]
     return isDemoUser && raw ? signatureFirstLine(raw) : ''
-  }, [isDemoUser, userId])
+  }, [profile?.signature, isDemoUser, userId])
 
   /** 折叠态是否真被截断：`false` 时点击不展开、箭头不渲染（稿 `.has-more` 判定） */
   const [signHasMore, setSignHasMore] = useState(false)
