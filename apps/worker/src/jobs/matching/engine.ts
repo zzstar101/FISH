@@ -1,33 +1,75 @@
+import {
+  buildListingEmbeddingText,
+  buildWishEmbeddingText,
+  contentHashOf,
+} from '@fish/contracts/embedding/text'
 import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
-import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
+import { MATCH_SCORE_THRESHOLD, MATCH_SEMANTIC_TOP_K } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
+import {
+  type EmbeddingEntity,
+  findEmbedding,
+  hasEmbeddingFromOtherModel,
+  topKSimilarListings,
+  topKSimilarWishes,
+} from '@fish/db/embedding-store'
 import { jsonParam } from '@fish/db/json'
+import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
 import { listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { wishes } from '@fish/db/schema/wishes'
-import { and, eq, ne, sql } from 'drizzle-orm'
+import { and, eq, inArray, ne, type SQL, sql } from 'drizzle-orm'
+import { enqueueEmbedJob } from '../embedding/enqueue'
 import { type MatchListingFacts, scoreMatch } from './scoring'
 
 /**
- * Match Engine（Issue #8 契约评论 §3）。
+ * Match Engine（Issue #8 契约评论 §3；#322 M2 起先做语义召回）。
  *
- * 一次运行 = 「候选集收窄（SQL）→ 打分（纯函数）→ 对齐 `matches`（幂等）」。
- * 两个方向共用同一套打分与写入逻辑，只有"谁是候选"和"通知发给谁"不同。
+ * 一次运行 = 「候选召回（结构化收窄 → 向量 Top-K，或退化时用 v1 全量收窄）→ 打分（纯函数）
+ * → 对齐 `matches`（幂等）」。
+ * 两个方向共用同一套打分、召回与写入逻辑，只有"谁是候选"和"通知发给谁"不同。
  *
- * **"对齐"而不是"只补新行"**：收窄候选之外，该目标**已有匹配行**的那几对也要重新评估。
+ * **"对齐"而不是"只补新行"**：召回集合之外，该目标**已有匹配行**的那几对也要重新评估。
  * 否则商品被编辑（改分类/改价/改标题）或愿望被关闭后，旧行会永远停在旧分数上，
  * 而读接口按阈值过滤也就挡不住它（只加过滤是不够的）。
+ * 这条在 M2 里更重要：掉出 Top-K 的旧匹配必须被降级，而不是因为"不再被召回"就冻在旧高分上。
  *
- * 只读 `listings` / `wishes`、只写 `matches` / `notifications`：RESERVED / SOLD 的状态
- * 由交易域负责（#11），本模块不改商品状态。
+ * **向量未就绪时不做等待**（#322 M1 交给 M2 的前置，见 M2 设计文档 §5）：目标实体缺本模型的向量
+ * / 向量与当前内容不一致 / 只有旧模型的向量时，本轮退回 v1 的结构化全量候选（含已有行），
+ * 并补投一条 `EMBED_*` job；候选侧没有向量只是"进不了 Top-K"，不额外投递、也不会产生伪匹配
+ * （打分仍是 v1 的结构化打分，semantic 在 M2 不参与分数——那是 M3）。
+ *
+ * 只读 `listings` / `wishes` / `embeddings`，只写 `matches` / `notifications` / 补投 `jobs`：
+ * RESERVED / SOLD 的状态由交易域负责（#11），本模块不改商品状态。
  */
 
 /** 目标行不存在 / 不再是可匹配状态时的原因；正常跑完为 `null`。 */
 export type MatchSkipReason = 'target-missing' | 'target-not-active'
 
+/** 本轮候选是怎么来的：向量 Top-K，或退化回 v1 的结构化全量收窄。 */
+export type MatchRecall = 'vector-topk' | 'v1-fallback'
+
+/**
+ * 为什么没能用向量召回（`recall === 'v1-fallback'` 时必有一个）。
+ *
+ * - `missing`：该实体没有本模型的向量（从没生成过，或生成失败后一直没有补投成功）；
+ * - `stale`：有本模型的向量，但维度不符或 `content_hash` 与当前内容不一致（内容改过还没重算）；
+ * - `model-mismatch`：只有**别的模型**的向量（换了 `EMBEDDING_MODEL` 但还没 backfill）。
+ *
+ * 三者对召回都是"不可用"，但成因不同：前两者由 EMBED_* job 补，后者要 M4 的重建流程。
+ */
+export type MatchFallbackReason = 'missing' | 'stale' | 'model-mismatch'
+
+/** 本轮的召回结果（`MatchRunResult` 的三个可观测字段，也是 M4 指标的雏形）。 */
+type RecallOutcome = {
+  recall: MatchRecall | null
+  fallbackReason: MatchFallbackReason | null
+  vectorCandidates: number
+}
+
 export type MatchRunResult = {
-  /** 本轮**重新评估**过的对数：收窄候选 ∪ 已有匹配行，去重后。 */
+  /** 本轮**重新评估**过的对数：召回候选 ∪ 已有匹配行，去重后。 */
   evaluated: number
   /** 本轮写入且**读接口会展示**的对数（新建 + 覆盖）。 */
   matched: number
@@ -40,6 +82,12 @@ export type MatchRunResult = {
   downgraded: number
   /** 目标不存在 / 不再是可匹配状态时的原因；正常跑完为 `null`。 */
   skipped: MatchSkipReason | null
+  /** 本轮的候选召回方式；`null` = 没跑召回（目标缺失/不可匹配，此时 `skipped !== null`）。 */
+  recall: MatchRecall | null
+  /** `recall === 'v1-fallback'` 时退化的原因；向量召回成功时为 `null`。 */
+  fallbackReason: MatchFallbackReason | null
+  /** 向量召回收到的候选条数（退化时为 0）。 */
+  vectorCandidates: number
 }
 
 /*
@@ -143,7 +191,8 @@ const ok = (
   matched: number,
   created: number,
   downgraded: number,
-): MatchRunResult => ({ evaluated, matched, created, downgraded, skipped: null })
+  recall: RecallOutcome,
+): MatchRunResult => ({ evaluated, matched, created, downgraded, skipped: null, ...recall })
 
 const skipped = (reason: MatchSkipReason): MatchRunResult => ({
   evaluated: 0,
@@ -151,19 +200,85 @@ const skipped = (reason: MatchSkipReason): MatchRunResult => ({
   created: 0,
   downgraded: 0,
   skipped: reason,
+  recall: null,
+  fallbackReason: null,
+  vectorCandidates: 0,
 })
 
+/**
+ * 打分与收窄只需要这几个字段，所以"召回候选"与"已有匹配行"都投影成同一形状。
+ *
+ * 两处都复用同一个投影（而不是一处 `.select()` 全列、一处手写字段）：召回只返回 id，需要按 id
+ * 回表取打分字段，若两处投影不一致，"Top-K 拿到的候选"与"已有行"就会是两种形状。
+ */
+const WISH_COLUMNS = {
+  id: wishes.id,
+  userId: wishes.userId,
+  keyword: wishes.keyword,
+  status: wishes.status,
+  category: wishes.category,
+  budgetMaxCents: wishes.budgetMaxCents,
+}
+
+const LISTING_COLUMNS = {
+  id: listings.id,
+  sellerId: listings.sellerId,
+  title: listings.title,
+  description: listings.description,
+  priceCents: listings.priceCents,
+  category: listings.category,
+  status: listings.status,
+  moderationStatus: listings.moderationStatus,
+}
+
 /*
- * 候选集的两个收窄条件在这里写成整段 SQL（两个方向的写法不同，就不抽 helper 了）：
+ * 结构化收窄的两个方向（v1 起就没变；M2 起**同一份条件**既喂给向量 Top-K 查询、也喂给退化时的
+ * 全量查询）：
  *
  * - 分类：`wish.category IS NULL`（不限分类）时放行全部；
  * - 价格：`price <= 2 × budget_max`。这是一条**产品规则**，不只是性能优化：超过 2 倍预算的候选
  *   **不参与匹配**，即使它分类与关键词都满分（那种情况总分恰好 70，本可以过阈值）。
  *   界限与 `scoring.ts` 里 `priceScore` 归零的位置相同，但不能读成"只排除 priceScore = 0 的候选"。
  *   用 `::bigint` 是因为 `integer` 列上 `2 * max` 会溢出（PG 22003 直接 500）。
+ *
+ * ⚠️ 向量召回**必须**把它作为 Top-K 查询的 WHERE，而不是先全域取 Top-K 再过滤：否则被价格/
+ * 分类/状态挡掉的候选会挤占 K 个名额，合法候选掉出召回——"结构化规则继续做硬约束"就不成立了。
  */
+function narrowedWishes(listing: ListingTarget): SQL | undefined {
+  return and(
+    eq(wishes.status, 'ACTIVE'),
+    // 自己的愿望不吃自己的商品。
+    ne(wishes.userId, listing.sellerId),
+    sql`(${wishes.category} IS NULL OR ${wishes.category} = ${listing.category})`,
+    sql`(${wishes.budgetMaxCents} IS NULL OR ${listing.priceCents}::bigint <= 2::bigint * ${wishes.budgetMaxCents})`,
+  )
+}
 
-export function createMatchEngine(db: Db): MatchEngine {
+function narrowedListings(wish: WishTarget): SQL | undefined {
+  return and(
+    eq(listings.status, 'ACTIVE'),
+    eq(listings.moderationStatus, 'APPROVED'),
+    ne(listings.sellerId, wish.userId),
+    /*
+     * 不限分类 → 不生成条件。
+     *
+     * 不能写成 `sql`(${wish.category} IS NULL OR ...)``：`wish.category` 是**值**，
+     * `$n IS NULL OR col = $n` 会让 PG 推不出参数类型（实测 42P18）。
+     */
+    wish.category === null ? undefined : eq(listings.category, wish.category),
+    wish.budgetMaxCents === null
+      ? undefined
+      : sql`${listings.priceCents}::bigint <= 2::bigint * ${wish.budgetMaxCents}`,
+  )
+}
+
+/** 本进程使用的 embedding 模型名由 worker 在装配时给出（`provider.model`）。 */
+export type MatchEngineOptions = {
+  embeddingModel: string
+}
+
+export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEngine {
+  const { embeddingModel } = options
   type Tx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
   /**
@@ -239,10 +354,39 @@ export function createMatchEngine(db: Db): MatchEngine {
     return 'updated'
   }
 
+  /**
+   * 判断目标实体的向量能不能用来召回。
+   *
+   * "新鲜"的判据 = `model`（查询已带）+ `dimensions` + **`content_hash` 等于当前内容重算的指纹**。
+   * 只判"有没有行"会把过期向量当最新用：EMBED job 在 provider 网络调用期间实体被编辑时，写进去的
+   * 是旧内容的向量（#322 验收："stale embedding 不能被当新内容继续匹配"）。反过来，内容改了又改
+   * 回来时指纹相同——那份向量确实对应当前内容，不需要重算。
+   *
+   * 三种退化原因都退回 v1 召回（见 `matchListing` / `matchWish`），并补投 EMBED_* job。
+   */
+  async function loadTargetVector(
+    entity: EmbeddingEntity,
+    text: string,
+  ): Promise<
+    { status: 'ready'; embedding: number[] } | { status: 'fallback'; reason: MatchFallbackReason }
+  > {
+    const row = await findEmbedding(db, entity, embeddingModel)
+    if (row === null) {
+      // 没有本模型的向量：可能是从没生成过，也可能只有旧模型的（换模型后未 backfill）。
+      const otherModel = await hasEmbeddingFromOtherModel(db, entity, embeddingModel)
+      return { status: 'fallback', reason: otherModel ? 'model-mismatch' : 'missing' }
+    }
+    if (row.dimensions !== EMBEDDING_DIMENSIONS || row.contentHash !== contentHashOf(text)) {
+      return { status: 'fallback', reason: 'stale' }
+    }
+    return { status: 'ready', embedding: row.embedding }
+  }
+
   /** 把「本轮评估集合」跑完：打分 → 写入 → 计数。 */
   async function applyTargets(
     targetListing: ListingTarget,
     targets: Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>,
+    recall: RecallOutcome,
   ): Promise<MatchRunResult> {
     const listingFacts: MatchListingFacts = {
       title: targetListing.title,
@@ -282,7 +426,7 @@ export function createMatchEngine(db: Db): MatchEngine {
       }
     })
 
-    return ok(targets.size, matched, created, downgraded)
+    return ok(targets.size, matched, created, downgraded, recall)
   }
 
   return {
@@ -296,33 +440,6 @@ export function createMatchEngine(db: Db): MatchEngine {
         return skipped('target-not-active')
       }
 
-      const [candidates, existingRows] = await Promise.all([
-        db
-          .select()
-          .from(wishes)
-          .where(
-            and(
-              eq(wishes.status, 'ACTIVE'),
-              // 自己的愿望不吃自己的商品。
-              ne(wishes.userId, listing.sellerId),
-              sql`(${wishes.category} IS NULL OR ${wishes.category} = ${listing.category})`,
-              sql`(${wishes.budgetMaxCents} IS NULL OR ${listing.priceCents}::bigint <= 2::bigint * ${wishes.budgetMaxCents})`,
-            ),
-          ),
-        db
-          .select({
-            id: wishes.id,
-            userId: wishes.userId,
-            keyword: wishes.keyword,
-            status: wishes.status,
-            category: wishes.category,
-            budgetMaxCents: wishes.budgetMaxCents,
-          })
-          .from(matches)
-          .innerJoin(wishes, eq(wishes.id, matches.wishId))
-          .where(eq(matches.listingId, listing.id)),
-      ])
-
       const listingTarget: ListingTarget = {
         id: listing.id,
         sellerId: listing.sellerId,
@@ -333,6 +450,53 @@ export function createMatchEngine(db: Db): MatchEngine {
         status: listing.status,
         moderationStatus: listing.moderationStatus,
       }
+
+      // 已有行与候选召回互不依赖：先发查询，下面只 await（省一次串行往返）。
+      const existingRowsPromise = db
+        .select(WISH_COLUMNS)
+        .from(matches)
+        .innerJoin(wishes, eq(wishes.id, matches.wishId))
+        .where(eq(matches.listingId, listing.id))
+
+      const narrowing = narrowedWishes(listingTarget)
+      const targetVector = await loadTargetVector(
+        { kind: 'listing', id: listing.id },
+        buildListingEmbeddingText({
+          title: listing.title,
+          description: listing.description,
+          category: listing.category,
+        }),
+      )
+
+      let candidates: WishTarget[]
+      let recall: MatchRecall
+      let fallbackReason: MatchFallbackReason | null = null
+      let vectorCandidates = 0
+
+      if (targetVector.status === 'ready') {
+        const similar = await topKSimilarWishes(db, {
+          model: embeddingModel,
+          vector: targetVector.embedding,
+          limit: MATCH_SEMANTIC_TOP_K,
+          filter: narrowing,
+        })
+        vectorCandidates = similar.length
+        const ids = similar.map((row) => row.id)
+        // 空集合直接跳过回表（`inArray(col, [])` 会生成恒假条件，但没必要发这次查询）。
+        candidates =
+          ids.length === 0
+            ? []
+            : await db.select(WISH_COLUMNS).from(wishes).where(inArray(wishes.id, ids))
+        recall = 'vector-topk'
+      } else {
+        // 退化：本轮退回 v1 的结构化全量候选，同时补投一条 EMBED_* job（下次运行就能用上向量）。
+        candidates = await db.select(WISH_COLUMNS).from(wishes).where(narrowing)
+        recall = 'v1-fallback'
+        fallbackReason = targetVector.reason
+        await enqueueEmbedJob(db, { kind: 'listing', id: listing.id })
+      }
+
+      const existingRows = await existingRowsPromise
 
       const existingIds = new Set(existingRows.map((row) => row.id))
       const targets = new Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>()
@@ -357,7 +521,7 @@ export function createMatchEngine(db: Db): MatchEngine {
         }
       }
 
-      return applyTargets(listingTarget, targets)
+      return applyTargets(listingTarget, targets, { recall, fallbackReason, vectorCandidates })
     },
 
     async matchWish(wishId) {
@@ -365,43 +529,6 @@ export function createMatchEngine(db: Db): MatchEngine {
       if (!wish) return skipped('target-missing')
       // 已关闭 / 已满足的愿望不再拉新匹配（与愿望池只统计 ACTIVE 同一取向）。
       if (wish.status !== 'ACTIVE') return skipped('target-not-active')
-
-      const [candidates, existingRows] = await Promise.all([
-        db
-          .select()
-          .from(listings)
-          .where(
-            and(
-              eq(listings.status, 'ACTIVE'),
-              eq(listings.moderationStatus, 'APPROVED'),
-              ne(listings.sellerId, wish.userId),
-              /*
-               * 不限分类 → 不生成条件。
-               *
-               * 不能写成 `sql`(${wish.category} IS NULL OR ...)``：`wish.category` 是**值**，
-               * `$n IS NULL OR col = $n` 会让 PG 推不出参数类型（实测 42P18）。
-               */
-              wish.category === null ? undefined : eq(listings.category, wish.category),
-              wish.budgetMaxCents === null
-                ? undefined
-                : sql`${listings.priceCents}::bigint <= 2::bigint * ${wish.budgetMaxCents}`,
-            ),
-          ),
-        db
-          .select({
-            id: listings.id,
-            sellerId: listings.sellerId,
-            title: listings.title,
-            description: listings.description,
-            priceCents: listings.priceCents,
-            category: listings.category,
-            status: listings.status,
-            moderationStatus: listings.moderationStatus,
-          })
-          .from(matches)
-          .innerJoin(listings, eq(listings.id, matches.listingId))
-          .where(eq(matches.wishId, wish.id)),
-      ])
 
       const wishTarget: WishTarget = {
         id: wish.id,
@@ -411,6 +538,51 @@ export function createMatchEngine(db: Db): MatchEngine {
         category: wish.category,
         budgetMaxCents: wish.budgetMaxCents,
       }
+
+      // 与 listing 方向同构：已有行与召回并发发出，取回顺序不影响结果。
+      const existingRowsPromise = db
+        .select(LISTING_COLUMNS)
+        .from(matches)
+        .innerJoin(listings, eq(listings.id, matches.listingId))
+        .where(eq(matches.wishId, wish.id))
+
+      const narrowing = narrowedListings(wishTarget)
+      const targetVector = await loadTargetVector(
+        { kind: 'wish', id: wish.id },
+        buildWishEmbeddingText({
+          keyword: wish.keyword,
+          description: wish.description,
+          category: wish.category,
+        }),
+      )
+
+      let candidates: ListingTarget[]
+      let recall: MatchRecall
+      let fallbackReason: MatchFallbackReason | null = null
+      let vectorCandidates = 0
+
+      if (targetVector.status === 'ready') {
+        const similar = await topKSimilarListings(db, {
+          model: embeddingModel,
+          vector: targetVector.embedding,
+          limit: MATCH_SEMANTIC_TOP_K,
+          filter: narrowing,
+        })
+        vectorCandidates = similar.length
+        const ids = similar.map((row) => row.id)
+        candidates =
+          ids.length === 0
+            ? []
+            : await db.select(LISTING_COLUMNS).from(listings).where(inArray(listings.id, ids))
+        recall = 'vector-topk'
+      } else {
+        candidates = await db.select(LISTING_COLUMNS).from(listings).where(narrowing)
+        recall = 'v1-fallback'
+        fallbackReason = targetVector.reason
+        await enqueueEmbedJob(db, { kind: 'wish', id: wish.id })
+      }
+
+      const existingRows = await existingRowsPromise
 
       const existingIds = new Set(existingRows.map((row) => row.id))
       const targets = new Map<
@@ -475,7 +647,11 @@ export function createMatchEngine(db: Db): MatchEngine {
         }
       })
 
-      return ok(targets.size, matched, created, downgraded)
+      return ok(targets.size, matched, created, downgraded, {
+        recall,
+        fallbackReason,
+        vectorCandidates,
+      })
     },
   }
 }

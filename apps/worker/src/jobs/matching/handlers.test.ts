@@ -13,7 +13,7 @@ afterAll(async () => {
   await db.$client.close()
 })
 
-const handlers = createMatchJobHandlers(db)
+const handlers = createMatchJobHandlers(db, { embeddingModel: 'm2-handlers-test-model' })
 
 /**
  * `Backend Done` 的第 2 条："双方向匹配均可独立触发"——这里就是不经过应用入口、
@@ -29,6 +29,10 @@ describe('createMatchJobHandlers', () => {
       created: 0,
       downgraded: 0,
       skipped: 'target-missing' as const,
+      // #322 M2：没跑召回时三个召回字段都是"无"（区别于"跑了但退化为 v1"）。
+      recall: null,
+      fallbackReason: null,
+      vectorCandidates: 0,
     }
     expect(await handlers.MATCH_LISTING({ listingId: newId() })).toEqual(expected)
     expect(await handlers.MATCH_WISH({ wishId: newId() })).toEqual(expected)

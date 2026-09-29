@@ -30,7 +30,12 @@ console.log(
  * （`jobs.type` 是裸 text，TS 联合只是收窄，见 `packages/db/src/schema/jobs.ts:18`）。
  */
 const queue = createJobQueue(db, {
-  handlers: { ...createMatchJobHandlers(db), ...createEmbedJobHandlers(db, embeddingProvider) },
+  handlers: {
+    // 匹配引擎必须显式拿到"本进程用的是哪个模型"：读向量与召回都按它过滤，绝不从表里随便取一行
+    // （#322 M1 §11.6）。换模型 = 换这里的 provider，向量由 M4 的 backfill 重建。
+    ...createMatchJobHandlers(db, { embeddingModel: embeddingProvider.model }),
+    ...createEmbedJobHandlers(db, embeddingProvider),
+  },
   isFatalError: (error) => error instanceof InvalidJobPayloadError,
 })
 

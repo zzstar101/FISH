@@ -25,6 +25,21 @@ import { ListingIdSchema, MatchIdSchema, WishIdSchema } from '../system/public-i
  */
 export const MATCH_SCORE_THRESHOLD = 70
 
+/**
+ * 向量召回 Top-K（#322 M2）：`MATCH_WISH` / `MATCH_LISTING` 两个方向**共用**的召回上限。
+ *
+ * 语义是"从结构化收窄后的集合里按 cosine 距离取前 K 条"，K 之外的候选本轮不进入评估集合
+ * （已有 `matches` 行的那几对仍会被重新评估，见 `engine.ts` 的评估集合定义）。
+ *
+ * 取 50 的理由：`/matches` 默认只展示 10 条、上限 50（`MatchListQuerySchema`），召回池要显著
+ * 大于展示量，M3 的 hybrid ranking 才有可排的材料；同时 50 与本阶段"不建 ANN、小数据量下
+ * exact cosine scan 足够快"的取舍相容（见 `docs/design/issue-322-matching-v2-m2.md` §6）。
+ *
+ * **不做 env 可配**：K 直接决定"哪些对会被评估"，让部署之间不一致会让线上匹配结果无法复现，
+ * 也等于把召回策略藏进部署配置里。要调就改这个常量并走 fixture 对照（M3 冻结权重时一并做）。
+ */
+export const MATCH_SEMANTIC_TOP_K = 50
+
 // ---------------------------------------------------------------------------
 // 读模型
 // ---------------------------------------------------------------------------

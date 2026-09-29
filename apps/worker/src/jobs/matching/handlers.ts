@@ -5,7 +5,7 @@ import {
 } from '@fish/contracts/matching/jobs'
 import type { Db } from '@fish/db/client'
 import { InvalidJobPayloadError } from '../invalid-payload-error'
-import { createMatchEngine, type MatchRunResult } from './engine'
+import { createMatchEngine, type MatchEngineOptions, type MatchRunResult } from './engine'
 
 /**
  * job → handler 的入口（Issue #8 契约评论 §3.5 / §3.7）。
@@ -30,8 +30,8 @@ export type MatchJobHandlers = {
   [MATCH_JOB_TYPES.wish]: (payload: unknown) => Promise<MatchRunResult>
 }
 
-export function createMatchJobHandlers(db: Db): MatchJobHandlers {
-  const engine = createMatchEngine(db)
+export function createMatchJobHandlers(db: Db, options: MatchEngineOptions): MatchJobHandlers {
+  const engine = createMatchEngine(db, options)
 
   return {
     [MATCH_JOB_TYPES.listing]: async (payload) => {

@@ -1,6 +1,15 @@
 import { afterAll, describe, expect, test } from 'bun:test'
+import {
+  buildListingEmbeddingText,
+  buildWishEmbeddingText,
+  contentHashOf,
+} from '@fish/contracts/embedding/text'
+import { MATCH_SCORE_THRESHOLD, MATCH_SEMANTIC_TOP_K } from '@fish/contracts/matching/schema'
 import { createDb } from '@fish/db/client'
+import { saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
+import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
+import { jobs } from '@fish/db/schema/jobs'
 import { listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
@@ -21,7 +30,14 @@ afterAll(async () => {
   await db.$client.close()
 })
 
-const engine = createMatchEngine(db)
+/**
+ * 本文件用的 embedding 模型名（#322 M2）。这些用例**不写 embeddings 行**，所以引擎一律走
+ * `v1-fallback`（结构化全量候选，与 M1 之前的行为一致）——"向量召回"另有专门的用例：
+ * 手工插入 `embeddings` 行做受控 fixture，见文件末尾的 `describe('向量召回')`。
+ */
+const TEST_EMBEDDING_MODEL = 'm2-engine-test-model'
+
+const engine = createMatchEngine(db, { embeddingModel: TEST_EMBEDDING_MODEL })
 
 /**
  * 隔离手段：本地库里通常还有 `db:seed` 的数据（6 个商品 / 2 个愿望）。
@@ -120,6 +136,22 @@ async function withFixture(
   try {
     await run({ sellerId, buyerId })
   } finally {
+    // #322 M2：向量未就绪时引擎会补投 `EMBED_*` job；`jobs` 没有外键，不会跟着实体一起删。
+    const ownedListings = await db
+      .select({ id: listings.id })
+      .from(listings)
+      .where(inArray(listings.sellerId, [sellerId, buyerId]))
+    const ownedWishes = await db
+      .select({ id: wishes.id })
+      .from(wishes)
+      .where(inArray(wishes.userId, [sellerId, buyerId]))
+    for (const { id } of ownedListings) {
+      await db.delete(jobs).where(sql`${jobs.payload}->>'listingId' = ${id}`)
+    }
+    for (const { id } of ownedWishes) {
+      await db.delete(jobs).where(sql`${jobs.payload}->>'wishId' = ${id}`)
+    }
+
     await db.delete(notifications).where(inArray(notifications.userId, [sellerId, buyerId]))
     await db.delete(wishes).where(inArray(wishes.userId, [sellerId, buyerId]))
     await db.delete(listings).where(inArray(listings.sellerId, [sellerId, buyerId]))
@@ -435,6 +467,339 @@ describe('matchWish', () => {
       expect(fromWish.created).toBe(0)
       expect(await matchRows(listingId, wishId)).toHaveLength(1)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #322 M2：向量召回
+//
+// 这些用例**手工插入 `embeddings` 行**做受控 fixture（不经过 provider）：召回只取决于向量本身，
+// 用 provider 只会引入不确定性与网络。所有向量的 `content_hash` 都按实体**当前**内容算，
+// 否则引擎会判 `stale` 而退化——那正是另一条用例要覆盖的分支。
+// ---------------------------------------------------------------------------
+
+/** 第 `axis` 维为 1 的单位向量（float4 往返精确，余弦距离可手算）。 */
+function axisVector(axis: number): number[] {
+  const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0)
+  vector[axis] = 1
+  return vector
+}
+
+/**
+ * 与 `axisVector(0)` 的夹角随 `index` 单调增大的单位向量（距离 = 1 - cos(角度) 也单调增大）。
+ * 给 Top-K 造"顺序确定"的候选池时用它：纯正交向量彼此距离都是 1，并列时排序不确定。
+ */
+function fanVector(index: number): number[] {
+  const angle = (index + 1) * 0.01
+  const vector = new Array<number>(EMBEDDING_DIMENSIONS).fill(0)
+  vector[0] = Math.cos(angle)
+  vector[1] = Math.sin(angle)
+  return vector
+}
+
+/** 给商品写一份"与当前内容一致"的向量（model 默认就是引擎在用的那个）。 */
+async function embedListing(
+  listingId: string,
+  vector: number[],
+  model = TEST_EMBEDDING_MODEL,
+  stale = false,
+): Promise<void> {
+  const row = (await db.select().from(listings).where(eq(listings.id, listingId)).limit(1))[0]
+  if (!row) throw new Error('embedListing：商品不存在')
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id: listingId },
+    model,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: contentHashOf(
+      buildListingEmbeddingText({
+        title: row.title,
+        description: row.description,
+        category: row.category,
+      }),
+    ),
+    embedding: vector,
+    // 版本取实体**当前**的 `updated_at`：候选侧新鲜度判据要求它相等（毫秒截断比较）。
+    // `stale = true` 构造"实体改过、向量还没重算"的候选。
+    sourceUpdatedAt: stale ? new Date(row.updatedAt.getTime() - 60_000) : row.updatedAt,
+  })
+}
+
+/** 给愿望写一份"与当前内容一致"的向量。 */
+async function embedWish(
+  wishId: string,
+  vector: number[],
+  model = TEST_EMBEDDING_MODEL,
+  stale = false,
+): Promise<void> {
+  const row = (await db.select().from(wishes).where(eq(wishes.id, wishId)).limit(1))[0]
+  if (!row) throw new Error('embedWish：愿望不存在')
+  await saveEmbedding(db, {
+    entity: { kind: 'wish', id: wishId },
+    model,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: contentHashOf(
+      buildWishEmbeddingText({
+        keyword: row.keyword,
+        description: row.description,
+        category: row.category,
+      }),
+    ),
+    embedding: vector,
+    sourceUpdatedAt: stale ? new Date(row.updatedAt.getTime() - 60_000) : row.updatedAt,
+  })
+}
+
+/** 引擎在目标向量未就绪时补投的 `EMBED_*` job（payload 里只有实体 id）。 */
+async function embedJobs(kind: 'listing' | 'wish', id: string) {
+  const key = kind === 'listing' ? 'listingId' : 'wishId'
+  return db
+    .select({ type: jobs.type, status: jobs.status })
+    .from(jobs)
+    .where(sql`${jobs.payload}->>${sql.raw(`'${key}'`)} = ${id}`)
+}
+
+describe('向量召回（#322 M2）', () => {
+  test('目标向量就绪：走 vector-topk，且打分与 v1 完全一致', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      await embedWish(wishId, axisVector(0))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result.recall).toBe('vector-topk')
+      expect(result.fallbackReason).toBeNull()
+      // 本 model 的向量只有这一条 ⇒ Top-K 里恰好一个候选。
+      expect(result.vectorCandidates).toBe(1)
+
+      // M2 不动打分：category/keyword/price 全中 = 100，与 v1 逐项相同。
+      const rows = await matchRows(listingId, wishId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(100)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+      // 目标向量新鲜 ⇒ 不需要补投。
+      expect(await embedJobs('listing', listingId)).toHaveLength(0)
+    })
+  })
+
+  test('候选侧没有向量就进不了 Top-K：本轮不新建匹配，也不替候选投递', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      // 只给目标写向量：愿望侧没有 ⇒ 它词法上完全命中，也进不了召回集合。
+      await embedListing(listingId, axisVector(0))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result.recall).toBe('vector-topk')
+      expect(result.vectorCandidates).toBe(0)
+      expect(result.evaluated).toBe(0)
+      expect(result.created).toBe(0)
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+      // 候选缺向量是候选自己的 EMBED job 的事；召回侧不为它排队（否则一次召回会投出上百条 job）。
+      expect(await embedJobs('wish', wishId)).toHaveLength(0)
+    })
+  })
+
+  test('候选向量过期（实体改过、还没重算）不进 Top-K，重算后恢复（#333 复审 blocker）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      await embedWish(wishId, axisVector(0))
+
+      // 候选实体被编辑（描述变了 ⇒ 已有向量与当前内容不再对应），而 EMBED_WISH 还没跑。
+      // 这一版向量不许再进 Top-K：否则它会挤掉新鲜候选，还会被按 id 补算进打分。
+      const bumped = new Date(Date.now() + 1000)
+      await db
+        .update(wishes)
+        .set({ description: '编辑后的描述：与旧向量不再对应', updatedAt: bumped })
+        .where(eq(wishes.id, wishId))
+
+      const stale = await engine.matchListing(listingId)
+
+      expect(stale.recall).toBe('vector-topk')
+      expect(stale.vectorCandidates).toBe(0)
+      expect(stale.created).toBe(0)
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+
+      // 重算向量（handler 把版本推进到实体当前值）后恢复召回。
+      await embedWish(wishId, axisVector(0))
+
+      const restored = await engine.matchListing(listingId)
+
+      expect(restored.recall).toBe('vector-topk')
+      expect(restored.vectorCandidates).toBe(1)
+      expect(restored.created).toBe(1)
+      const rows = await matchRows(listingId, wishId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(100)
+    })
+  })
+
+  test('已有匹配掉出 Top-K：仍被 union 回来重算，旧高分不残留', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      await embedWish(wishId, axisVector(0))
+
+      // 第一轮：双方都有向量且词法命中 → 建行、100 分。
+      expect(await engine.matchListing(listingId)).toMatchObject({
+        created: 1,
+        recall: 'vector-topk',
+      })
+
+      // 让这一对掉出召回：删掉愿望的向量（候选侧无向量 ⇒ 不在 Top-K），并把关键词改成不再命中。
+      await db.delete(embeddings).where(eq(embeddings.wishId, wishId))
+      await db.update(wishes).set({ keyword: '完全无关的词' }).where(eq(wishes.id, wishId))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result.recall).toBe('vector-topk')
+      expect(result.vectorCandidates).toBe(0)
+      // 关键：#322 的"评估集合 = 新 Top-K ∪ 已有 matches"——它确实被拉回来评估了。
+      expect(result.evaluated).toBe(1)
+      expect(result.matched).toBe(0)
+      expect(result.downgraded).toBe(1)
+
+      // 旧高分（100）必须被覆盖成真实裸分（35 + 0 + 30 = 65），否则读接口再也挡不住这一行。
+      const rows = await matchRows(listingId, wishId)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(65)
+      expect(rows[0]?.score).toBeLessThan(MATCH_SCORE_THRESHOLD)
+      expect(rows[0]?.keywordScore).toBe(0)
+    })
+  })
+
+  test('目标缺向量：退化为 v1 全量候选 + 补投 EMBED_* job（两个方向对称）', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+
+      const fromListing = await engine.matchListing(listingId)
+
+      expect(fromListing.recall).toBe('v1-fallback')
+      expect(fromListing.fallbackReason).toBe('missing')
+      expect(fromListing.vectorCandidates).toBe(0)
+      // 退化不改变 v1 的行为：词法命中照样建行、照样发通知。
+      expect(fromListing.created).toBe(1)
+      expect(await matchRows(listingId, wishId)).toHaveLength(1)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+      expect(await embedJobs('listing', listingId)).toEqual([
+        { type: 'EMBED_LISTING', status: 'PENDING' },
+      ])
+
+      // 愿望方向同构（对称性是 #322 的硬要求）。
+      const otherKeyword = uniqueKeyword()
+      const listingB = await createListing(sellerId, otherKeyword)
+      const wishB = await createWish(buyerId, otherKeyword)
+
+      const fromWish = await engine.matchWish(wishB)
+
+      expect(fromWish.recall).toBe('v1-fallback')
+      expect(fromWish.fallbackReason).toBe('missing')
+      expect(fromWish.created).toBe(1)
+      expect(await matchRows(listingB, wishB)).toHaveLength(1)
+      expect(await embedJobs('wish', wishB)).toEqual([{ type: 'EMBED_WISH', status: 'PENDING' }])
+    })
+  })
+
+  test('目标向量过期（内容变了、指纹没跟上）：判 stale 并退化，不拿旧向量当新内容', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      // 候选仍然存在（v1 退化要靠它建行）；这里不需要 wishId。
+      await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      // 改了内容但不更新向量：指纹与当前内容不一致（EMBED job 还在路上时的真实状态）。
+      await db
+        .update(listings)
+        .set({ title: `改名后的商品 ${keyword}` })
+        .where(eq(listings.id, listingId))
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result.recall).toBe('v1-fallback')
+      expect(result.fallbackReason).toBe('stale')
+      expect(result.vectorCandidates).toBe(0)
+      // 旧向量没被当成新内容的向量用：这一轮是 v1 全量候选（仍然按真实分数建行）。
+      expect(result.created).toBe(1)
+      expect(await embedJobs('listing', listingId)).toEqual([
+        { type: 'EMBED_LISTING', status: 'PENDING' },
+      ])
+    })
+  })
+
+  test('只有别的模型的向量：判 model-mismatch，绝不用另一种模型的向量召回', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0), 'legacy-model-v9')
+      await embedWish(wishId, axisVector(0), 'legacy-model-v9')
+
+      const result = await engine.matchListing(listingId)
+
+      expect(result.recall).toBe('v1-fallback')
+      // 与 'missing' 区分开：换模型后需要的是 backfill，不是"从没生成过"。
+      expect(result.fallbackReason).toBe('model-mismatch')
+      expect(result.vectorCandidates).toBe(0)
+      // 换模型后要按**当前**模型重建，所以仍然补投。
+      expect(await embedJobs('listing', listingId)).toEqual([
+        { type: 'EMBED_LISTING', status: 'PENDING' },
+      ])
+    })
+  })
+
+  test('Top-K 的 K 是硬边界：第 K+1 个候选（词法命中的那个）不再被召回', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      await embedListing(listingId, axisVector(0))
+
+      // 造 K+1 个候选：距离随 index 单调增大，最后一个才是词法上完全命中的那个。
+      const matchingIndex = MATCH_SEMANTIC_TOP_K
+      const wishIds: string[] = []
+      for (let index = 0; index <= MATCH_SEMANTIC_TOP_K; index += 1) {
+        const id = newId()
+        wishIds.push(id)
+        await db.insert(wishes).values({
+          id,
+          userId: buyerId,
+          // 只有最后一个与商品标题同词：其余是"只在语义上接近"的候选。
+          keyword: index === matchingIndex ? keyword : `${keyword}-${index}`,
+          category: ISOLATED_CATEGORY,
+          budgetMaxCents: 20000,
+        })
+        await embedWish(id, fanVector(index))
+      }
+
+      const truncated = await engine.matchListing(listingId)
+
+      expect(truncated.recall).toBe('vector-topk')
+      // 池子里有 K+1 个，Top-K 只放 K 个进来。
+      expect(truncated.vectorCandidates).toBe(MATCH_SEMANTIC_TOP_K)
+      // 词法命中的那个恰好是最远的第 K+1 个 ⇒ 被 K 挡住，本轮不新建匹配。
+      expect(await matchRows(listingId, wishIds[matchingIndex] as string)).toHaveLength(0)
+
+      // 移掉最近的候选后池子刚好 K 个，它就能进来了——证明"挡住它的确实是 K"，而不是别的条件。
+      await db.delete(wishes).where(eq(wishes.id, wishIds[0] as string))
+
+      const fitted = await engine.matchListing(listingId)
+
+      expect(fitted.vectorCandidates).toBe(MATCH_SEMANTIC_TOP_K)
+      expect(fitted.created).toBe(1)
+      const rows = await matchRows(listingId, wishIds[matchingIndex] as string)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.score).toBe(100)
     })
   })
 })
