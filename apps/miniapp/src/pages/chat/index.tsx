@@ -1,4 +1,5 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto } from '@fish/contracts/transactions/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,8 +11,10 @@ import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { markConversationRead } from '@/features/chat/api'
+import { capsuleFor, transactionsByConversation } from '@/features/chat/capsule'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
+import { fetchAllTransactions } from '@/features/transaction/api'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import type { MockNotification } from '@/mock/types'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
@@ -86,6 +89,12 @@ export default function Chat() {
   /** 真实接口失败且没有回退 mock（生产口径）：「通知」tab 显示错误态而不是空态 */
   const [notifsFailed, setNotifsFailed] = useState(false)
   /**
+   * 交易行快照（#89 状态胶囊）：`conversationId → TransactionDto`，买卖双角色各取完
+   * 一份合成。**失败静默降级成空映射（不显示胶囊）**，不打错误态 —— 胶囊是列表的
+   * 增强信息，交易域挂了不该连会话都看不到。
+   */
+  const [txMap, setTxMap] = useState<Map<string, TransactionDto>>(new Map())
+  /**
    * 通知的已读口径：**切进「通知」tab 即视为看过**（Owner 拍板），未读角标随之清零，
    * 同时把当前已加载的未读条目逐条真实标记已读（声明式 effect，见下方「已读回写」）——
    * 服务端与本地同源后，重进页面 / 重启未读不再复活。
@@ -129,6 +138,7 @@ export default function Chat() {
     setNotifsReady(false)
     setNotifsFailed(false)
     setNotifsViewed(false)
+    setTxMap(new Map())
   }
 
   /**
@@ -144,6 +154,18 @@ export default function Chat() {
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
     // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
     setLoadMoreFailed(false)
+    // 交易快照与会话同一轮刷新（同一代次守卫）：从会话页返回时面交确认可能刚发生，
+    // 胶囊必须跟着重算；「加载更多」不重拉（早前会话的交易在首屏快照里已就位）。
+    void Promise.all([fetchAllTransactions('buyer'), fetchAllTransactions('seller')])
+      .then(([buyer, seller]) => {
+        if (epoch !== listEpoch.current) return
+        setTxMap(transactionsByConversation(buyer.items, seller.items))
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 交易快照加载失败，本屏不显示交易胶囊', error)
+        if (epoch !== listEpoch.current) return
+        setTxMap(new Map())
+      })
     void loadConversations()
       .then(({ items: list, nextCursor: cursor, failed: nextFailed }) => {
         if (epoch !== listEpoch.current) return
@@ -415,6 +437,18 @@ export default function Chat() {
       void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.target.listingId}` })
       return
     }
+    if (item.target?.kind === 'conversation') {
+      void Taro.navigateTo({ url: `/pages/conversation/index?id=${item.target.conversationId}` })
+      return
+    }
+    if (item.target?.kind === 'mylist') {
+      void Taro.navigateTo({ url: '/pages/mylist/index' })
+      return
+    }
+    if (item.target?.kind === 'verify') {
+      void Taro.navigateTo({ url: '/pages/verify/index' })
+      return
+    }
     if (item.target?.kind === 'wish') void Taro.switchTab({ url: '/pages/wish/index' })
   }
 
@@ -552,6 +586,8 @@ export default function Chat() {
               /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
               const user = item.counterpart
               const unread = item.unreadCount
+              /** 交易进度胶囊（#89）：数据源与状态机见 `features/chat/capsule.ts` */
+              const capsule = capsuleFor(item, txMap)
 
               return (
                 <View
@@ -575,6 +611,9 @@ export default function Chat() {
                   <View className="chat__corp">
                     <View className="chat__corp-top">
                       <Text className="chat__nm-tx">{user.nickname}</Text>
+                      {capsule ? (
+                        <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
+                      ) : null}
                     </View>
                     <Text className="chat__msg">{previewOf(item)}</Text>
                     {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}

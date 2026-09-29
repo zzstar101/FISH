@@ -415,8 +415,18 @@ export type { NotificationDto }
 export type MockNotification = NotificationDto & {
   title: string
   description: string
-  /** 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读） */
-  target: { kind: 'listing'; listingId: string } | { kind: 'wish'; wishId: string } | null
+  /**
+   * 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读）。
+   * `conversation` = 会话详情（TX 进展都在会话里）、`mylist` = 我的发布（审核结果）、
+   * `verify` = 校园认证页（认证结果）。
+   */
+  target:
+    | { kind: 'listing'; listingId: string }
+    | { kind: 'wish'; wishId: string }
+    | { kind: 'conversation'; conversationId: string }
+    | { kind: 'mylist' }
+    | { kind: 'verify' }
+    | null
   /** 视觉语气：命中成功 / 需要留意 */
   tone: 'mint' | 'warn'
 }
