@@ -89,9 +89,7 @@ export function PcListingCard({
             ) : null}
           </div>
           <div className="flex flex-1 flex-col p-4">
-            <h2 className="line-clamp-2 font-medium text-[15px] leading-[1.45]">
-              {item.title}
-            </h2>
+            <h2 className="line-clamp-2 font-medium text-[15px] leading-[1.45]">{item.title}</h2>
             <p className="mt-2 flex items-center gap-1.5 text-ink-3 text-xs">
               <Clock className="size-3.5" />
               {formatRelativeTimeAt(item.createdAt)}发布 · {categoryLabel(item.category)}
