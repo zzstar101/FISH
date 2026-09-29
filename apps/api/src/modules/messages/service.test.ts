@@ -83,6 +83,27 @@ describe('message service: sendTextMessage', () => {
     ).rejects.toBeInstanceOf(MessageServiceError)
   })
 
+  /*
+   * 会话随商品物理删除（#74 的删除路径连带清 `conversations` 与其消息），所以
+   * 「读会话 → 写消息」之间会话消失是可达的：`messages.conversation_id` 的外键会拒绝。
+   * 语义与「会话不存在」一致 —— 必须是 404，不能让 23503 走 `app.onError` 变 500。
+   */
+  test('会话在写入瞬间被删（外键冲突）→ 404 CONVERSATION_NOT_FOUND，而不是 500', async () => {
+    const store = new MemoryMessageStore()
+    store.insertText = async () => {
+      throw Object.assign(new Error('Failed query: insert into messages …'), {
+        query: 'insert into messages …',
+        params: [],
+        cause: Object.assign(new Error('violates foreign key constraint'), { errno: '23503' }),
+      })
+    }
+    const service = createMessageService({ store })
+
+    expect(
+      service.sendTextMessage(buyer, conversationA, { content: '还在吗' }),
+    ).rejects.toMatchObject({ status: 404, code: 'CONVERSATION_NOT_FOUND' })
+  })
+
   test('replays the stored message for a retried clientRequestId（同键同内容）', async () => {
     const store = new MemoryMessageStore()
     const service = createMessageService({ store })

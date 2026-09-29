@@ -327,6 +327,26 @@ describe('transaction service: propose / reject / accept', () => {
     expect(messages.messages).toHaveLength(1)
   })
 
+  /*
+   * 会话随商品物理删除（#74 的删除路径连带清 `conversations` 与其消息）。买家在
+   * 「读会话 → 写 tx.proposal」之间商品被卖家删掉时，`messages.conversation_id` 的外键
+   * 会拒绝这次写入。语义与「会话不存在」一致 —— 必须是 404，不能让 23503 变成 500。
+   */
+  test('会话在写入瞬间被删（外键冲突）→ 404 CONVERSATION_NOT_FOUND，而不是 500', async () => {
+    const { service, messages } = await build()
+    messages.insertSystem = async () => {
+      throw Object.assign(new Error('Failed query: insert into messages …'), {
+        query: 'insert into messages …',
+        params: [],
+        cause: Object.assign(new Error('violates foreign key constraint'), { errno: '23503' }),
+      })
+    }
+
+    expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 16000 }),
+    ).rejects.toMatchObject({ status: 404, code: 'CONVERSATION_NOT_FOUND' })
+  })
+
   test('403 NOT_CONVERSATION_BUYER when the seller proposes; 404 for outsiders', async () => {
     const { service } = await build()
     expect(

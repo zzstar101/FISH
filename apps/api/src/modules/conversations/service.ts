@@ -6,6 +6,7 @@ import {
   conversationDtoSchema,
   conversationListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
@@ -150,12 +151,24 @@ export function createConversationService({
         throw new ConversationServiceError(409, 'CANNOT_CHAT_WITH_SELF', '不能和自己的商品建立会话')
       }
 
-      const inserted = await store.insertIfAbsent(input.listingId, userId, listing.sellerId)
+      // 商品在「查存在 → 建会话」之间被卖家物理删除时，INSERT 会撞复合外键
+      // `conversations_listing_id_seller_id_fk`（#74 的删除路径让这个窗口从"理论上"变成可达）。
+      // 语义就是「商品不存在」，与上面那次查不到同码；不接住的话 23503 会走 app.onError 变成 500，
+      // 而契约要求 404。判据与 `store.insertIfAbsent` 的返回分开：一个查不到、一个插不进。
+      const inserted = await store
+        .insertIfAbsent(input.listingId, userId, listing.sellerId)
+        .catch((error: unknown) => {
+          if (isForeignKeyViolation(error)) {
+            throw new ConversationServiceError(404, 'LISTING_NOT_FOUND', '商品不存在')
+          }
+          throw error
+        })
       const conversationId =
         inserted?.id ?? (await store.findIdByListingAndBuyer(input.listingId, userId))
       if (!conversationId) {
-        // 防御分支：商品刚查过必然存在，走到这里只能是会话行在竞态窗口里消失了
-        // （P0 无删除路径，实际不可达）。语义是"会话不在"，不是"商品不在"。
+        // 防御分支：商品与卖家都是刚查到的，走到这里只能是会话行在竞态窗口里消失了
+        // （并发下 `insertIfAbsent` 与 `findIdByListingAndBuyer` 之间另一事务删掉了它）。
+        // 语义是"会话不在"，不是"商品不在"。
         throw notFound()
       }
 

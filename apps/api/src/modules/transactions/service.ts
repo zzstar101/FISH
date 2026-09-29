@@ -18,6 +18,7 @@ import {
   transactionListResponseSchema,
   transactionSystemEventSchema,
 } from '@fish/contracts/transactions/schema'
+import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
@@ -224,7 +225,18 @@ export function createTransactionService({
     conversationId: string,
     event: Parameters<typeof transactionSystemEventSchema.parse>[0],
   ) {
-    const row = await messages.insertSystem(conversationId, systemEventContent(event))
+    let row: MessageRow
+    try {
+      row = await messages.insertSystem(conversationId, systemEventContent(event))
+    } catch (error) {
+      /*
+       * 会话在「读会话 → 写 SYSTEM 消息」之间被删掉：`messages.conversation_id` 的外键拒绝。
+       * 会话随商品物理删除（#74 的删除路径连带清 `conversations` 与其消息），窗口可达。
+       * 语义与前面那次查不到一致（会话不存在），所以复用同一个 404；不接住会变 500。
+       */
+      if (isForeignKeyViolation(error)) throw conversationNotFound()
+      throw error
+    }
     onSystemMessage?.(participants, row)
     return row
   }

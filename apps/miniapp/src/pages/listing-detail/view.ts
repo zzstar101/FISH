@@ -11,7 +11,7 @@
  * 后者仍须在微信开发者工具里按 C/D 的时序实测（`docs/miniapp-dev-workflow.md` §5）。
  */
 
-import type { ListingStatus } from '@fish/contracts/listings/schema'
+import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
 // 只取类型：本模块是纯判据，`import type` 在编译期擦除，不会把 store 的运行时副作用带进来
 import type { AuthStatus } from '@/features/auth/store'
 
@@ -392,14 +392,27 @@ export function isOwnListing(sellerId: string, userId: string | null): boolean {
  * 卖家本人打开**非在售**商品时，底部栏显示的状态行；`null` = 在售，渲染
  * 「管理 / 看谁想要」两个操作钮。
  *
- * 文案与我的发布页同一套口径（Owner 2026-09-24 拍板：**商品全流程里没有「审核中」
- * 这个前端状态**）——被审核拒绝的商品在库里就是 `OFFLINE`，与卖家自己下架的一起
- * 读作「已下架」；`RESERVED` = 提案已被卖家同意、等双方面交（mylist 的「已同意 ·
- * 等面交」）。管理动作（编辑 / 重新上架）不在这里重复出现，状态行统一把人引去
- * 「我的发布」。
+ * 口径与「我的发布」的分段同一套（Owner 2026-09-28 拍板给这一页补了「审核」段，
+ * 取代 2026-09-24「商品全流程里没有『审核中』这个前端状态」的旧口径）：
+ * 卖家从「我的发布 · 审核」点进商品详情，底部状态行不能反过来说「商品已下架」——
+ * 同一件商品在两屏给出两个结论。所以审核态与治理标记都要读（契约里它们只在
+ * **卖家本人视角**非 null，本函数也只在本人视角被调用）。
+ *
+ * `RESERVED` = 提案已被卖家同意、等双方面交（mylist 的「已同意 · 等面交」）。
+ * 管理动作（编辑 / 重新上架）不在这里重复出现，状态行统一把人引去「我的发布」。
  */
-export function ownerStatusNote(status: ListingStatus): string | null {
-  if (status === 'OFFLINE') return '商品已下架'
+export function ownerStatusNote(
+  status: ListingStatus,
+  moderationStatus: ListingModerationStatus | null = null,
+  governanceDelisted = false,
+): string | null {
+  if (status === 'OFFLINE') {
+    // 治理下架与内容被拒在库里同形（见「我的发布」的 `list.ts`），出路不同、说法也要分开
+    if (governanceDelisted) return '商品已被平台下架'
+    if (moderationStatus === 'REVIEW') return '商品审核中'
+    if (moderationStatus === 'BLOCKED') return '商品审核未通过'
+    return '商品已下架'
+  }
   if (status === 'SOLD') return '商品已售出'
   if (status === 'RESERVED') return '已同意 · 等面交'
   return null

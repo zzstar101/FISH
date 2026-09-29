@@ -6,6 +6,7 @@ import {
   messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
@@ -118,6 +119,14 @@ export function createMessageService({
         row = await store.insertText(conversationId, userId, content, key)
       } catch (error) {
         if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
+        /*
+         * 会话在「读会话 → 写消息」之间被删掉：`messages.conversation_id` 的外键拒绝这次写入。
+         *
+         * 会话随商品物理删除（#74 的删除路径连带清 `conversations` 与其消息），所以这个窗口
+         * 从「理论上」变成可达。语义就是「会话不存在」，与上面那次查不到同码 —— 不接住的话
+         * 23503 会走 `app.onError` 变成 500，而契约要求 404。
+         */
+        if (isForeignKeyViolation(error)) throw notFound()
         throw error
       }
       const dto = toMessageDto(row)

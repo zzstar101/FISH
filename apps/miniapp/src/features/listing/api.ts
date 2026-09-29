@@ -203,3 +203,14 @@ export async function onlineListing(id: string): Promise<ListingDetail> {
   const payload = await apiRequest(LISTING_ROUTES.online(id), { method: 'POST' })
   return ListingDetailSchema.parse(payload)
 }
+
+/**
+ * 物理删除（Owner 2026-09-28 拍板：「不过审」的商品直接清除、不保留痕迹）。
+ *
+ * 只有 `OFFLINE` + `BLOCKED` 且**没有交易记录**的商品能删（409 `LISTING_NOT_DELETABLE`，
+ * 口径与连带清理见后端 `store.deleteListingAtomic`）；成功是 204 无响应体 —— 客户端
+ * 本地移除该卡片即可，没有需要回读的状态。
+ */
+export async function deleteListing(id: string): Promise<void> {
+  await apiRequest(LISTING_ROUTES.detail(id), { method: 'DELETE' })
+}

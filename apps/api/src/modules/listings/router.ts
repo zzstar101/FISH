@@ -178,6 +178,19 @@ export function createListingsRouter(options: ListingsRouterOptions) {
     }
   })
 
+  // 物理删除（Owner 2026-09-28 拍板）：只对「不过审」且无交易记录的商品开放，口径见
+  // `service.deleteListing` / `store.deleteListingAtomic`。204 无响应体 —— 客户端成功后
+  // 本地移除该卡片，没有需要回读的状态。
+  router.delete('/:id', options.requireAuth, options.guard.publish, async (c) => {
+    try {
+      const id = requireListingId(c)
+      await service.deleteListing(c.get('userId'), id)
+      return c.body(null, 204)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
   return router
 }
 

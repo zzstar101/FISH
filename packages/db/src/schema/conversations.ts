@@ -22,7 +22,13 @@ export const conversations = pgTable(
   'conversations',
   {
     ...primaryKey(),
-    /** 业务记录，不用 CASCADE：会话是用户产生的数据，不因商品行消失而被连坐清除。 */
+    /**
+     * 业务记录，不用 CASCADE：会话是用户产生的数据，不因商品行消失而被连坐清除。
+     *
+     * **Owner 2026-09-28 拍板**：不过审的商品被物理删除时，它名下的会话（连同消息）
+     * 一并清除 —— 但那一步由 `listings/store.ts` 的 `deleteListingAtomic` 显式执行，
+     * 不是靠这条外键。保持 NO ACTION：谁来删商品都得自己声明要带走什么。
+     */
     listingId: uuid('listing_id').notNull(),
     buyerId: uuid('buyer_id')
       .notNull()

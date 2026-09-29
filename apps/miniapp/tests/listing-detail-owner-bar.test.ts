@@ -45,6 +45,20 @@ describe('ownerStatusNote', () => {
     expect(ownerStatusNote('SOLD')).toBe('商品已售出')
     expect(ownerStatusNote('RESERVED')).toBe('已同意 · 等面交')
   })
+
+  test('审核态与治理标记改口径：不能再把审核中 / 不过审 / 平台下架都说成「商品已下架」', () => {
+    /*
+     * 「我的发布」在 2026-09-28 给审核阶段单开了一段，卖家从那里点进详情时
+     * 底栏若还写「商品已下架」，同一件商品在两屏给出两个结论。
+     */
+    expect(ownerStatusNote('OFFLINE', 'REVIEW')).toBe('商品审核中')
+    expect(ownerStatusNote('OFFLINE', 'BLOCKED')).toBe('商品审核未通过')
+    expect(ownerStatusNote('OFFLINE', null, true)).toBe('商品已被平台下架')
+    // 治理下架在库里也是 BLOCKED，标记优先 —— 否则平台下架会被说成「内容没过审」
+    expect(ownerStatusNote('OFFLINE', 'BLOCKED', true)).toBe('商品已被平台下架')
+    // 审核态对**非 OFFLINE** 的商品不参与：已售出就是已售出
+    expect(ownerStatusNote('SOLD', 'REVIEW')).toBe('商品已售出')
+  })
 })
 
 describe('下架确认卡是账号私有的', () => {

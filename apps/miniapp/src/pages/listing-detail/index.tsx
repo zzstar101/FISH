@@ -606,7 +606,19 @@ export default function ListingDetail() {
    */
   const ownerViewUserId = DEMO_AUTH_ENABLED && userId !== null ? mockMe.id : userId
   const ownListing = data !== null && isOwnListing(data.listing.sellerId, ownerViewUserId)
-  const ownerNote = ownListing && data !== null ? ownerStatusNote(data.listing.status) : null
+  /*
+   * 状态行要读审核态与治理标记：它们只在**卖家本人视角**非 null（契约如是说），
+   * 本行又只在 `ownListing` 为真时才算 —— 两件事恰好对上，不必再判一次视角。
+   * mock fixture 不带这两个字段，缺省即「已通过、非治理下架」，与公开读模型同义。
+   */
+  const ownerNote =
+    ownListing && data !== null
+      ? ownerStatusNote(
+          data.listing.status,
+          data.listing.moderationStatus ?? null,
+          data.listing.governanceDelisted === true,
+        )
+      : null
 
   /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。

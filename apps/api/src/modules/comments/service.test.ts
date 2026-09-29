@@ -164,6 +164,28 @@ describe('comment service — write', () => {
     expect(store.inserts).toHaveLength(0)
   })
 
+  /*
+   * 存在性检查（`requireSellerId`）与 INSERT 不在同一事务里，而 #74 给商品加了物理删除：
+   * 商品在两步之间被删掉时，`comments_listing_id_listings_id_fk` 会拒绝这次写入。
+   * 那是并发下的正常结果（商品没了），语义与「查不到商品」一样 —— 必须是 404，
+   * 而不是让 23503 走 `app.onError` 变成 500。
+   */
+  test('商品在写入瞬间被删（外键冲突）→ 404 LISTING_NOT_FOUND，而不是 500', async () => {
+    const store = fakeStore()
+    store.insert = async () => {
+      throw Object.assign(new Error('Failed query: insert into comments …'), {
+        query: 'insert into comments …',
+        params: [],
+        cause: Object.assign(new Error('violates foreign key constraint'), { errno: '23503' }),
+      })
+    }
+    const service = createCommentService({ store })
+
+    await expect(
+      service.createComment(BUYER_ID, LISTING_ID, { content: '还在吗' }),
+    ).rejects.toMatchObject({ status: 404, code: 'LISTING_NOT_FOUND' })
+  })
+
   test('creates a top-level comment and returns it with isSeller=false', async () => {
     const store = fakeStore()
     const service = createCommentService({ store })

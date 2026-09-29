@@ -4,7 +4,7 @@
  * C4 我的发布（1版稿 `小程序1版mylist.html`）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
  * 结构：冰蓝页头 → **两级顶栏**（`components/top-bar` 的 glass 变体：返回 + 居中两段式
- * 标题，副行是四段状态分段控件，内容从玻璃底下滚过）→ 商品行列表（卡内分两块：
+ * 标题，副行是五段状态分段控件，内容从玻璃底下滚过）→ 商品行列表（卡内分两块：
  * 上块「缩略图 + 标题 + 价格」，下块「锁定说明 + 动作」）→ 到底提示；右下是悬浮
  * 「+ 发布」圆钮，其上方是回到顶部玻璃钮；下架确认是遮罩 + 居中卡。
  *
@@ -38,7 +38,7 @@
   @include page-hero(560px, 64px);
 }
 
-/* ------------------------------------------------ 顶栏副行：四段状态分段控件 */
+/* ------------------------------------------------ 顶栏副行：五段状态分段控件 */
 
 /**
  * 顶栏标题（稿 `.mp-title`：屏幕水平居中、「发布」二字走品牌色）。
@@ -220,7 +220,7 @@
   @include clamp(2);
 }
 
-/* ---- 状态胶囊：各态一色（在售浅蓝 / 待确认 warn / 已售出 灰 / 已下架 描边） ---- */
+/* ---- 状态胶囊：各态一色（在售浅蓝 / 审核中灰 / 不过审描红 / 待确认 warn / 已售出 灰 / 已下架 描边） ---- */
 
 .ml__pill {
   flex: 0 0 auto;
@@ -237,6 +237,24 @@
     background: var(--accent-weak);
     border: 2px solid var(--accent-mid);
     color: var(--brand-deep);
+  }
+
+  /*
+   * 审核中：进行态、**不需要卖家做任何事**（等结论）—— 所以刻意不用 warn 的
+   * 「要你处理」琥珀色，改用中性灰蓝一档（`--ink-weak` 半透明墨色压在卡片白底上）。
+   * 描边留 2px 透明：与其它胶囊等高，不靠 border 撑高度。
+   */
+  &.is-review {
+    background: var(--ink-weak);
+    border: 2px solid transparent;
+    color: var(--muted-2);
+  }
+
+  /* 不过审：被拒 —— 「审核」段里唯一要卖家动手的子状态，用 danger 描红 */
+  &.is-blocked {
+    background: var(--surface);
+    border: 2px solid var(--danger-line);
+    color: var(--danger-ink);
   }
 
   /* 待确认：等卖家点头，用 warn 色提示「这一条要你处理」（稿 `.pill-pending`） */
@@ -325,6 +343,40 @@
 /* 买家名字重一档（稿 `.rreq b{font-weight:600}`）：一眼先看到「谁」 */
 .ml__rreq-b {
   font-weight: 600;
+}
+
+/**
+ * 未通过原因（Owner 2026-09-28 拍板：红字标在编辑区上方）。
+ *
+ * 独立一行、**不参与 `.ml__acts` 的横排**：那句话可能是管理员写的整句（上限 500 字），
+ * 与「编辑 / 删除」挤在一行会把按钮推出屏幕。所以它与动作区分成两块，各自有上边框，
+ * 视觉上「原因 → 能做什么」是两段而不是一行。
+ *
+ * 底色用 `--warn-weak` 而不是纯红底：这是一条**说明**不是错误弹窗，红字 + 浅底足够醒目，
+ * 块面饱和会盖过卡片本身的层级。
+ */
+.ml__reject {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 24px;
+  border-top: 2px solid var(--accent-faint);
+  background: var(--warn-weak);
+}
+
+.ml__reject-ic {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  margin-top: 2px;
+}
+
+.ml__reject-tx {
+  flex: 1;
+  min-width: 0;
+  font-size: 22px;
+  line-height: 1.45;
+  color: var(--danger-ink);
 }
 
 /* ------------------------------------------------------------- 行内动作区 */

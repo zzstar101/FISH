@@ -35,6 +35,7 @@ import type {
 import type {
   ListingCategory,
   ListingCondition,
+  ListingModerationStatus,
   ListingStatus,
 } from '@fish/contracts/listings/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
@@ -105,6 +106,18 @@ export type MockListing = {
    */
   views: number | null
   wants: number | null
+  /**
+   * 卖家本人视角的两个内部状态（审核态 / 平台下架），由 `adapt.ts` 的 `toMockListing`
+   * 从契约卡片原样投影。
+   *
+   * 为什么可空：**非本人视角契约就返回 `null`**（审核态与治理标记都不是买家该看的信息），
+   * 而 mock fixture 也没有这两个概念。`undefined` / `null` 一律按「已通过、非治理下架」渲染
+   * —— 那是这两个字段在公开读模型里的真实语义，不是兜底猜测。
+   */
+  moderationStatus?: ListingModerationStatus | null
+  governanceDelisted?: boolean | null
+  /** 未通过原因（原始文本：规则码或管理员原话），只在本人视角的 BLOCKED 商品上非空 */
+  moderationReason?: string | null
   /** 距今天数，用于「2 小时前发布」这类相对时间 */
   createdHoursAgo: number
   createdAt: string

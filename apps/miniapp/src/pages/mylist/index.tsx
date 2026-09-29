@@ -1,4 +1,8 @@
-import type { ListingCard, ListingDetail } from '@fish/contracts/listings/schema'
+import type {
+  ListingCard,
+  ListingDetail,
+  ListingModerationStatus,
+} from '@fish/contracts/listings/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -11,8 +15,14 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { fetchConversationPage, fetchMessagePage } from '@/features/chat/api'
 import { toMockListing } from '@/features/listing/adapt'
-import { fetchListingDetail, fetchMyListings, offlineListing } from '@/features/listing/api'
+import {
+  deleteListing,
+  fetchListingDetail,
+  fetchMyListings,
+  offlineListing,
+} from '@/features/listing/api'
 import { requestSellEdit, requestSellPrefill } from '@/features/listing/edit-target'
+import { rejectionNote } from '@/features/listing/moderation-reason'
 import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -20,12 +30,16 @@ import { relativeTimeOf } from '@/lib/time'
 import { formatAmount } from '@/mock/api'
 import type { MockListing } from '@/mock/types'
 import {
+  canDelete,
+  canEdit,
+  canOffline,
   cardLabel,
   countBySegment,
   emptyText,
   emptyTitle,
   lockNote,
   type MyListSegment,
+  pillClassOf,
   SEGMENTS,
   segmentLabel,
   segmentOf,
@@ -113,17 +127,31 @@ import './index.scss'
  *
  * ## 其余保留的口径
  *
- * - **审核态不参与这一页**（Owner 2026-09-24 拍板：**商品全流程里没有「审核中」这个前端状态**）。
- *   Owner 口述的全流程：发布 → **AI 审核（瞬时，没有进行状态，直接出结果）** → 在售 →
- *   买家点「我想要」→ 待确认 → 双方同意 → 待面交 → 线下面交（交易码）→ 已完成 →
- *   点「重新上架」回出物页重新发布（让一件商品可以反复卖 / 批发卖）。
- *   所以卡片的分段只由 `status` 决定，`moderationStatus` 一律不读 —— 卡在审核里的商品在
- *   库里同样是 `status = OFFLINE`，与「自己下架的」一起读作「已下架」；前端不给出审核中
- *   状态，就不存在「把审核中的商品拿去重新上架」这条路径（见 `relist` 处说明）。
- * - **编辑入口只给在售 / 已下架**：`RESERVED` / `SOLD` 被交易锁定（与服务端
- *   `LOCKED_LISTING_STATUSES` 同一口径，违者 409），「待确认」按稿 ⑥ 也不给。
+ * - **「审核」段（Owner 2026-09-28 拍板，取代 2026-09-24「审核态不参与这一页」的旧口径）**：
+ *   发布后的审核阶段要有自己的分段，排在「在售」之后，装两种子状态 ——
+ *   `REVIEW`（审核中）与 `BLOCKED`（不过审），两者在库里都是 `status = OFFLINE`，
+ *   所以分段要同时读 `status` 与 `moderationStatus`（`./list.ts` 的 `segmentOf`）。
+ *   子状态的动作按拍板收口：**审核中不给编辑 / 下架**（等结论），**不过审只给编辑 / 删除** ——
+ *   编辑同样进出物页编辑态（提交后重审，`APPROVED` 会落回它原来的状态再走重新上架）；
+ *   删除走 `DELETE /listings/:id` 的**物理删除**（二次确认后清除，只有不过审且无交易记录的商品
+ *   能删，口径见 `features/listing/api.ts` 的 `deleteListing`）。
+ *   审核通过的状态翻转在服务端（`moderation/store.ts` 的 `decideWithin`）：
+ *   新发布放行后 `ACTIVE`（自动上架），编辑再审的恢复原状态 —— 卡片上的锁定说明因此
+ *   只说「审核期间暂不可修改」，不承诺通过后去哪。
+ * - **治理下架（平台下架）本段之外**：管理员下架在库里与「不过审」同形
+ *   （`OFFLINE` + `BLOCKED`），只能靠契约新给的 `governanceDelisted` 分开（`list.ts` 文件头）。
+ *   它落在**「已下架」**段、胶囊写「平台下架」，且不给编辑 / 重新上架 / 删除 ——
+ *   那三个动作在服务端分别是 `LISTING_GOVERNANCE_BLOCKED` 与 `LISTING_NOT_DELETABLE`，
+ *   摆出来就是死路。三个动作的判据一律走 `list.ts` 的 `canEdit` / `canOffline` / `canDelete`。
+ * - **编辑入口只给在售 / 已下架 / 不过审**：`RESERVED` / `SOLD` 被交易锁定（与服务端
+ *   `LOCKED_LISTING_STATUSES` 同一口径，违者 409），「待确认」按稿 ⑥ 也不给，
+ *   「审核中」按 09-28 拍板不给。
  * - **下架要二次确认**（稿 ⑤ 的真状态机）：遮罩 + 居中确认卡，确认按钮有「默认可点 /
  *   下架中 / 失败重试」三态；成功与失败都以服务端响应为准，不本地假装成功。
+ * - **删除也要二次确认**（Owner 2026-09-28 拍板），与下架共用同一套弹层形态。
+ *   文案只说能兑现的：**商品行消失、图片记录 / 评论 / 收藏 / 相关会话（含聊天记录）被清除**
+ *   —— 不写「不留痕迹」（审核审计行仍在，只是 `listing_id` 置空；见 `store.deleteListingAtomic`）。
+ *   成功后本地直接移除这张卡（没有「挪到某个段」的过渡态），计数随 `cards` 自动重算。
  * - **「同意」以服务端结论为准**：商品置 `RESERVED` 是接受那一步的服务端行为，本地不假改；
  *   契约冻结的重试口径说 409 `LISTING_NOT_ACTIVE` 表示「商品已不是 ACTIVE」（并发买家赢了，
  *   或上一次其实已经成功），所以 409 一律**重拉列表**而不是直译成「同意失败」。
@@ -144,28 +172,47 @@ type Row = {
   listing: MockListing
   segment: MyListSegment
   statusLabel: string
+  /** 胶囊配色：由分段 + 审核子状态 + 治理标记决定（见 `list.ts` 的 `pillClassOf`） */
+  pillClass: string
+  /** 审核子状态（只有「审核」段非 null）：`REVIEW` = 审核中，`BLOCKED` = 不过审 */
+  moderation: ListingModerationStatus | null
+  /** 平台（治理）下架：与「不过审」在库里同形，但出路是找平台（见 `list.ts` 文件头） */
+  governanceDelisted: boolean
+  /** 这一行能做什么 —— 三个动作的判据都由 `list.ts` 的纯函数给（见那三个函数的说明） */
+  canEdit: boolean
+  canOffline: boolean
+  canDelete: boolean
+  /**
+   * 不过审的原因（已翻成人话并截断），只有「不过审」这一种子状态非 null。
+   *
+   * Owner 2026-09-28 拍板：红字标在**编辑区上方**，卖家才知道该改哪里。
+   * 判据与文案在 `features/listing/moderation-reason.ts`（可测）。
+   */
+  rejection: string | null
+  /**
+   * 能不能点进商品详情页。
+   *
+   * **审核段的商品没有详情页**（Owner 2026-09-28 拍板）：未过审的商品在公开读模型里就是不可见的，
+   * 卖家点进去只会看到「商品不存在或已下架」的空态 —— 既然这一页已经给出了状态与原因，
+   * 就不该再给一个通向空态的入口。审核中与不过审都不给。
+   */
+  canOpenDetail: boolean
   /** 这一行对应的会话；**只有「待确认」段带值**（已售出拿不到成交那条，见 `rows` 处注释） */
   conversationId: string
   /** 待确认段在等的那条提案；已同意（`RESERVED`）与其它段为 null */
   proposal: PendingProposal | null
 }
 
-/** 状态胶囊配色（在售浅蓝 / 待确认 warn / 已售出灰 / 已下架描边） */
-const PILL_CLASS: Record<MyListSegment, string> = {
-  sale: 'is-sale',
-  pending: 'is-pending',
-  sold: 'is-sold',
-  off: 'is-off',
-}
-
 /**
- * 操作区贴右收口的段（1版稿 ⑪）：在售（编辑 / 下架）与已下架（编辑 / 重新上架）都只有
- * 两个按钮，左起排会在那一行里空掉右半条，看着跟上面的缩略图 / 文案脱开。
+ * 操作区贴右收口的段（1版稿 ⑪）：在售（编辑 / 下架）、已下架（编辑 / 重新上架）与
+ * 不过审（编辑 / 删除）都只有两个按钮，左起排会在那一行里空掉右半条，看着跟上面的
+ * 缩略图 / 文案脱开。
  *
- * 待确认（三按钮，行首是「查看会话」）与已售出（锁定说明 + 两按钮）仍左起排：稿 ⑪ 的口径是
- * 「它们行首要么是主操作、要么是说明文字，左起才是阅读顺序」。
+ * 待确认（三按钮，行首是「查看会话」）、已售出（锁定说明 + 两按钮）与**平台下架**仍左起排：
+ * 稿 ⑪ 的口径是「它们行首要么是主操作、要么是说明文字，左起才是阅读顺序」。
+ * 审核中与平台下架同理 —— 行首是锁定说明，没有任何按钮。
  */
-const END_ALIGNED: MyListSegment[] = ['sale', 'off']
+const END_ALIGNED: MyListSegment[] = ['sale', 'off', 'review']
 
 export default function MyList() {
   const authStatus = useAuthGuard()
@@ -207,8 +254,15 @@ export default function MyList() {
   const [relistBusy, setRelistBusy] = useState<string | null>(null)
   const [segment, setSegment] = useState<MyListSegment>('sale')
   const [showTop, setShowTop] = useState(false)
-  /** 下架确认弹层：null = 关闭；否则是被操作的那一行 */
-  const [confirming, setConfirming] = useState<Row | null>(null)
+  /**
+   * 二次确认弹层：null = 关闭；否则是「对哪一行做哪件事」。
+   *
+   * 下架与删除共用一个弹层状态（两种语义的弹层形态一致，且不可能同时开）：
+   * 一起放在这里，账号切换时的清场就只有一处，不会漏掉新加的那种。
+   */
+  const [confirming, setConfirming] = useState<{ row: Row; kind: 'offline' | 'delete' } | null>(
+    null,
+  )
   const [submit, setSubmit] = useState<SubmitState>('idle')
   /**
    * 每次显示本页 +1，驱动重新拉取。
@@ -248,7 +302,7 @@ export default function MyList() {
     setPrevUserId(userId)
     // 旧账号所有在飞的请求立即作废
     loadEpoch.current += 1
-    // 账号作用域的界面状态一律重置：卡片、完整度、待确认索引、加载态、分段、下架确认弹层
+    // 账号作用域的界面状态一律重置：卡片、完整度、待确认索引、加载态、分段、二次确认弹层
     setCards([])
     cardSetRef.current = ''
     setTruncated(false)
@@ -316,7 +370,7 @@ export default function MyList() {
          *
          * **下拉刷新且商品没变时不置「加载中」**：`keepList` 的意义就是「让用户手上的这一屏
          * 继续成立」，而 `pendingLoading` 一旦为真，`showCounts` 立刻把整排分段计数收掉、
-         * 底部还多挂一句「正在读取待确认…」—— 用户只是想刷新一下，却眼看四个数字消失。
+         * 底部还多挂一句「正在读取待确认…」—— 用户只是想刷新一下，却眼看整排数字消失。
          * 商品一模一样时旧索引仍然配得上（同一次成功加载的产物），照旧显示即可。
          *
          * ⚠️ **商品变了就必须收**：`setCards` 是同步生效的，而索引要等下面 `loadPending`
@@ -426,10 +480,37 @@ export default function MyList() {
     const key = segmentOf(card, awaiting)
     // 只有「待确认」段可能带提案：`RESERVED`（已同意）有会话但没有在等的提案
     const proposal = key === 'pending' ? (pending.proposals.get(card.id) ?? null) : null
+    /*
+     * 审核子状态**只在「审核」段带值**（`segmentOf` 只在 `REVIEW` / `BLOCKED` 时给出这一段，
+     * 所以这里不会出现「review 段却是 null」）。其它段一律 null —— 让「审核」这个事实
+     * 只从一个地方流出来，卡片胶囊、锁定说明、动作按钮三处都读它，不会各判各的。
+     */
+    const moderation =
+      key === 'review' ? (card.moderationStatus === 'BLOCKED' ? 'BLOCKED' : 'REVIEW') : null
+    /*
+     * 治理下架与「不过审」在库里同形（`OFFLINE` + `BLOCKED`），只能靠契约的
+     * `governanceDelisted` 分开 —— 两者的出路不同（找平台 vs 改内容重审），
+     * 而且治理下架的编辑 / 重新上架 / 删除在服务端一律 409，不给它任何按钮。
+     */
+    const governanceDelisted = card.governanceDelisted === true
     return {
       listing: toMockListing(card),
       segment: key,
-      statusLabel: cardLabel(key, awaiting),
+      statusLabel: cardLabel(key, awaiting, moderation, governanceDelisted),
+      pillClass: pillClassOf(key, moderation, governanceDelisted),
+      moderation,
+      governanceDelisted,
+      // 三个动作的判据都来自 `list.ts` 的纯函数（可测），不在这里各写一份条件
+      canEdit: canEdit(key, moderation, governanceDelisted),
+      canOffline: canOffline(key, governanceDelisted),
+      canDelete: canDelete(key, moderation, governanceDelisted),
+      /*
+       * 未通过原因：只在「不过审」这一种子状态给。`REVIEW` 是"还没结论"，摆一条原因会让卖家
+       * 以为已经判了、跑去改一个没问题的字段；平台下架的原因归平台说（卡片上是锁定说明）。
+       */
+      rejection: moderation === 'BLOCKED' ? rejectionNote(card.moderationReason) : null,
+      // 审核段（审核中 / 不过审）没有详情页可看（见 Row.canOpenDetail）
+      canOpenDetail: key !== 'review',
       /*
        * 会话 id **只给「待确认」段**（见下）：
        *
@@ -480,7 +561,15 @@ export default function MyList() {
     backToTop()
   }
 
+  /**
+   * 点缩略图 / 标题进商品详情。
+   *
+   * **审核段不给这个入口**（Owner 2026-09-28 拍板：未过审的商品没有详情页）：
+   * 它在公开读模型里不可见，点进去只会看到「商品不存在或已下架」的空态。
+   * 这里显式挡住而不是让用户撞空态 —— 卡片上的状态与原因已经是这一页能给的全部信息。
+   */
   const openListing = (row: Row) => {
+    if (!row.canOpenDetail) return
     void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${row.listing.id}` })
   }
 
@@ -507,10 +596,15 @@ export default function MyList() {
   /**
    * 编辑：把 id 交给出物页并切到那个 Tab —— Tab 页不能带 query（见 `edit-target` 说明）。
    *
-   * **只给「在售」/「已下架」两段用**（调用处就是那个渲染条件）：
+   * **只给「在售」/「已下架」/「不过审」三段用**（调用处就是那个渲染条件）：
    * 「待确认」按稿 ⑥ 不给编辑入口（等卖家点头前先别改，那一段的说明由卡片上的
-   * 「谁在等」一行与决策按钮承担），「已售出」的成交记录锁定、压根不渲染这个按钮 ——
-   * 所以这里不必再分支，那两段不会走到这儿。
+   * 「谁在等」一行与决策按钮承担），「已售出」的成交记录锁定、压根不渲染这个按钮，
+   * 「审核中」按 Owner 2026-09-28 拍板也不给（等审核结论）—— 所以这里不必再分支。
+   *
+   * 不过审走这条路径与「已下架」**完全同一条**：出物页只认「改这一条」（`PATCH /listings/:id`），
+   * 提交后服务端重新审核；`APPROVED` 的商品编辑后落回它**原来的**状态（`priorListingStatus`），
+   * 不过审商品的原始状态是 `OFFLINE`，所以改完通过也是「已下架」，再由用户点「重新上架」。
+   * 这一条不在这里替服务端假设，页头与本函数的注释都只描述这条路走出来的事实。
    */
   const edit = (row: Row) => {
     requestSellEdit(row.listing.id)
@@ -572,14 +666,21 @@ export default function MyList() {
 
   /**
    * 上下架成功后只改这两个字段：其余字段服务器没动，本地不重造整张卡。
-   * `moderationStatus` 本页不再参与渲染（见页头「审核态不参与这一页」），这里一并同步是为了
-   * 让本地卡片与服务端真值保持一致，不给以后读它的人留下陈旧值。
+   * 两个字段都要同步，是因为**分段是它们一起决定的**（`segmentOf` 读 `status` +
+   * `moderationStatus`，见 `./list.ts`）—— 只改一个会让卡片落在错的段里。
    */
   const applyTransition = (detail: ListingDetail) => {
     setCards((prev) =>
       prev.map((card) =>
         card.id === detail.id
-          ? { ...card, status: detail.status, moderationStatus: detail.moderationStatus }
+          ? {
+              ...card,
+              status: detail.status,
+              moderationStatus: detail.moderationStatus,
+              // 治理标记一并同步：服务端不会在上下架里改它，但保持与服务端真值一致，
+              // 不给以后读它的人留下陈旧值（与 `moderationStatus` 同一取舍）
+              governanceDelisted: detail.governanceDelisted ?? null,
+            }
           : card,
       ),
     )
@@ -588,24 +689,88 @@ export default function MyList() {
   const errorText = (error: unknown, fallback: string): string =>
     isApiError(error) ? error.message || fallback : fallback
 
-  const confirmOffline = () => {
-    if (!confirming || submit === 'busy') return
-    const target = confirming
-    setSubmit('busy')
+  /**
+   * 下架 / 删除两条链的**账号代次收口**（与 `relist` 同一把尺子，见 `loadEpoch`）。
+   *
+   * 两条链都会在 await 之后改界面（摘卡 / 切段 / 弹 toast）。换号发生在请求在飞期间时，
+   * 那些改动与提示会落到**新账号**的界面上 —— B 会看到一句「已删除」，而他什么都没删。
+   * 页面自持的状态（`cards` / `segment`）在换号时已被渲染期清场重置，所以这里只要
+   * 「不再往下走」即可：不 toast、不 setState，旧结果直接作废。
+   */
+  const withEpoch = (run: (epoch: number) => Promise<void>) => {
+    const epoch = loadEpoch.current
     void (async () => {
+      await run(epoch)
+    })()
+  }
+
+  const confirmOffline = () => {
+    if (confirming?.kind !== 'offline' || submit === 'busy') return
+    const target = confirming.row
+    setSubmit('busy')
+    withEpoch(async (epoch) => {
       try {
         const detail = await offlineListing(target.listing.id)
+        if (epoch !== loadEpoch.current) return
         applyTransition(detail)
         setSubmit('idle')
         setConfirming(null)
         setSegment('off')
         toast('已下架')
       } catch (error) {
+        if (epoch !== loadEpoch.current) return
         // 失败就停在弹层里给「重试」，不关弹层、也不本地改状态
         setSubmit('failed')
         toast(errorText(error, '下架失败，请重试'))
       }
-    })()
+    })
+  }
+
+  /**
+   * 删除（不过审的商品，Owner 2026-09-28 拍板）：`DELETE /listings/:id` 是**物理删除**，
+   * 成功后本地把这张卡从 `cards` 里摘掉 —— 没有「挪到某个段」的过渡态，分段计数与
+   * 「已经到底了 · N 件」跟着重算。
+   *
+   * 摘卡时**连 `pending` 索引里那一条一起清**：索引是按商品 id 取的，留着一条已经不存在的
+   * 商品 id 虽不影响今天的渲染（`rows` 只遍历 `cards`），但下一次有人从索引直接派生结论时
+   * 就会读到幽灵数据。
+   *
+   * 失败：409（`LISTING_NOT_DELETABLE` 已有交易记录 / 状态变了；`LISTING_GOVERNANCE_BLOCKED`
+   * 平台下架）一律**重拉列表** —— 本地那张卡是旧的，继续摆在弹层底下只会让用户反复点；
+   * 重拉之后它落在真正该在的段里、按钮也跟着对。其余错误留在弹层里给「重试」。
+   */
+  const confirmDelete = () => {
+    if (confirming?.kind !== 'delete' || submit === 'busy') return
+    const target = confirming.row
+    setSubmit('busy')
+    withEpoch(async (epoch) => {
+      try {
+        await deleteListing(target.listing.id)
+        if (epoch !== loadEpoch.current) return
+        setCards((prev) => prev.filter((card) => card.id !== target.listing.id))
+        setPending((prev) => {
+          const proposals = new Map(prev.proposals)
+          const conversationIds = new Map(prev.conversationIds)
+          proposals.delete(target.listing.id)
+          conversationIds.delete(target.listing.id)
+          return { ...prev, proposals, conversationIds }
+        })
+        setSubmit('idle')
+        setConfirming(null)
+        toast('已删除')
+      } catch (error) {
+        if (epoch !== loadEpoch.current) return
+        if (isApiError(error) && error.status === 409) {
+          setSubmit('idle')
+          setConfirming(null)
+          toast('这件商品已不能删除 · 已刷新')
+          reload()
+          return
+        }
+        setSubmit('failed')
+        toast(errorText(error, '删除失败，请重试'))
+      }
+    })
   }
 
   /** 「查看会话」：有会话 id 就精确跳那一条，否则退回消息 Tab 的会话列表 */
@@ -854,9 +1019,7 @@ export default function MyList() {
                             <Text className="ml__rtitle" onClick={() => openListing(item)}>
                               {item.listing.title}
                             </Text>
-                            <Text className={`ml__pill ${PILL_CLASS[item.segment]}`}>
-                              {item.statusLabel}
-                            </Text>
+                            <Text className={`ml__pill ${item.pillClass}`}>{item.statusLabel}</Text>
                           </View>
 
                           <View className="ml__price">
@@ -906,21 +1069,37 @@ export default function MyList() {
                         </View>
                       </View>
 
+                      {/*
+                        「不过审」的原因（Owner 2026-09-28 拍板：红字标在**编辑区上方**）。
+                        它是独立一行、不塞进 `.ml__acts` 的横排里 —— 那句话可能是管理员写的
+                        一整句（上限 500 字），跟「编辑 / 删除」挤在一行会把按钮推出屏幕。
+                        没有原因（机器没给码 / 老数据）时整块不渲染，不留空行。
+                      */}
+                      {item.rejection ? (
+                        <View className="ml__reject">
+                          <Image className="ml__reject-ic" src={ICONS.warnInk} mode="aspectFit" />
+                          <Text className="ml__reject-tx">{item.rejection}</Text>
+                        </View>
+                      ) : null}
+
                       <View
                         className={`ml__acts${END_ALIGNED.includes(item.segment) ? ' ml__acts--end' : ''}`}
                       >
-                        {/* 锁定说明只给「已售出」（稿 ⑥ 的 LOCK 表）：「待确认」的「先别改」
-                            由上面那行「谁在等」加决策按钮表达，不挂锁图标 */}
-                        {lockNote(item.segment) ? (
+                        {/* 锁定说明（稿 ⑥ 的 LOCK 表）：「已售出」「审核中」「平台下架」各一句。
+                            「待确认」的「先别改」由上面那行「谁在等」加决策按钮表达，不挂锁图标 */}
+                        {lockNote(item.segment, item.moderation, item.governanceDelisted) ? (
                           <View className="ml__locks">
                             <View className="ml__lock-ic" />
-                            <Text>{lockNote(item.segment)}</Text>
+                            <Text>
+                              {lockNote(item.segment, item.moderation, item.governanceDelisted)}
+                            </Text>
                           </View>
                         ) : null}
 
-                        {/* 编辑只给在售 / 已下架两段（改文案与价格）。
-                            待确认与已售出不可编辑，点击走 `edit` 里的说明分支 */}
-                        {item.segment === 'sale' || item.segment === 'off' ? (
+                        {/* 编辑只给在售 / 已下架 / 不过审（改文案与价格）。
+                            审核中按拍板不给（等结论）；平台下架服务端一律拒（`LISTING_GOVERNANCE_BLOCKED`）；
+                            待确认与已售出不可编辑。判据见 `list.ts` 的 `canEdit`。 */}
+                        {item.canEdit ? (
                           <View className="ml__act" onClick={() => edit(item)}>
                             <Text>编辑</Text>
                           </View>
@@ -973,7 +1152,9 @@ export default function MyList() {
                           </>
                         ) : null}
 
-                        {item.segment === 'off' ? (
+                        {/* 「重新上架」不给平台下架的商品：那一条落在本段（商品确实不在架上了），
+                            但服务端会以 `LISTING_GOVERNANCE_BLOCKED` 拒绝上架，按钮摆着就是死路 */}
+                        {item.segment === 'off' && !item.governanceDelisted ? (
                           <View
                             className={`ml__act ml__act--primary${
                               relistBusy === item.listing.id ? ' is-busy' : ''
@@ -984,12 +1165,24 @@ export default function MyList() {
                           </View>
                         ) : null}
 
-                        {item.segment === 'sale' ? (
+                        {item.canOffline ? (
                           <View
                             className="ml__act ml__act--danger"
-                            onClick={() => setConfirming(item)}
+                            onClick={() => setConfirming({ row: item, kind: 'offline' })}
                           >
                             <Text>下架</Text>
+                          </View>
+                        ) : null}
+
+                        {/* 删除只给「不过审」（Owner 2026-09-28 拍板）：审核中的出路是等结论 + 编辑重审，
+                            已下架 / 已售出另有去处，平台下架是治理证据（服务端同样拒）。
+                            判据见 `list.ts` 的 `canDelete`。 */}
+                        {item.canDelete ? (
+                          <View
+                            className="ml__act ml__act--danger"
+                            onClick={() => setConfirming({ row: item, kind: 'delete' })}
+                          >
+                            <Text>删除</Text>
                           </View>
                         ) : null}
                       </View>
@@ -1025,37 +1218,65 @@ export default function MyList() {
           别照 Tab 页的 170rpx 抄，那个值推的是底栏顶边、与本页无关。 */}
       <BackTop show={showTop} onTop={backToTop} bottom="188rpx" />
 
-      {/* ---------------- 下架二次确认（居中卡，稿 ⑤ 的真状态机） ---------------- */}
+      {/*
+        ---------------- 二次确认（居中卡，稿 ⑤ 的真状态机） ----------------
+
+        下架与删除共用这一套形态（同一个 `confirming`，用 `kind` 分语义）：稿 ⑤ 的确认按钮
+        本来就是深红底（`.ml__dlg-ok`），两个动作都落在「危险」这一档，所以按钮样式不分叉，
+        差别全在文案上 —— 下架可恢复、说清「之后怎么回来」；删除是**物理删除、不可恢复**，
+        所以把「会一并清掉什么」说在前面。
+      */}
       {confirming ? (
         <>
-          <View className="ml__scrim" onClick={() => setConfirming(null)} />
+          {/*
+            蒙层关闭（点空白处）与「取消」同义：`submit` 一并复位，否则上一次失败的
+            「重试」态会串到下一次打开的弹层上（两种动作共用一个 `submit`）。
+          */}
+          <View
+            className="ml__scrim"
+            onClick={() => {
+              setConfirming(null)
+              setSubmit('idle')
+            }}
+          />
           <View className="ml__dialog">
-            <Text className="ml__dialog-title">确认下架这件商品？</Text>
+            <Text className="ml__dialog-title">
+              {confirming.kind === 'delete' ? '确认删除这件商品？' : '确认下架这件商品？'}
+            </Text>
             <Text className="ml__dialog-sub">
-              下架后买家在首页与搜索里都看不到它，已有的会话不受影响。
+              {confirming.kind === 'delete'
+                ? '删除后无法恢复，商品会从「我的发布」里彻底消失。'
+                : '下架后买家在首页与搜索里都看不到它，已有的会话不受影响。'}
             </Text>
 
             <View className="ml__dlg-item">
               <View className="ml__dlg-thumb">
                 <Image
                   className="ml__dlg-thumb-img"
-                  src={confirming.listing.coverUrl}
+                  src={confirming.row.listing.coverUrl}
                   mode="aspectFill"
                 />
               </View>
               <View className="ml__dlg-main">
-                <Text className="ml__dlg-title">{confirming.listing.title}</Text>
+                <Text className="ml__dlg-title">{confirming.row.listing.title}</Text>
                 <Text className="ml__dlg-price num">
-                  ¥{formatAmount(confirming.listing.priceCents)}
+                  ¥{formatAmount(confirming.row.listing.priceCents)}
                 </Text>
               </View>
             </View>
 
             <View className="ml__dlg-tip">
-              <Text>
-                下架是可恢复操作：之后在「已下架」里点「重新上架」，即可把商品信息带进出物页重新发布。
-                已有的会话不受影响。
-              </Text>
+              {confirming.kind === 'delete' ? (
+                <Text>
+                  删除后无法恢复：商品会从「我的发布」里消失，图片记录、它名下的评论、收藏与相关会话
+                  （含聊天记录）都会一并清除。
+                </Text>
+              ) : (
+                <Text>
+                  下架是可恢复操作：之后在「已下架」里点「重新上架」，即可把商品信息带进出物页重新发布。
+                  已有的会话不受影响。
+                </Text>
+              )}
             </View>
 
             <View className="ml__dlg-acts">
@@ -1072,11 +1293,21 @@ export default function MyList() {
                 className={`ml__dlg-ok${submit === 'busy' ? ' is-busy' : ''}${
                   submit === 'failed' ? ' is-failed' : ''
                 }`}
-                onClick={confirmOffline}
+                onClick={confirming.kind === 'delete' ? confirmDelete : confirmOffline}
               >
                 {submit === 'busy' ? <View className="ml__spin" /> : null}
                 <Text>
-                  {submit === 'busy' ? '下架中' : submit === 'failed' ? '重试' : '确认下架'}
+                  {confirming.kind === 'delete'
+                    ? submit === 'busy'
+                      ? '删除中'
+                      : submit === 'failed'
+                        ? '重试'
+                        : '确认删除'
+                    : submit === 'busy'
+                      ? '下架中'
+                      : submit === 'failed'
+                        ? '重试'
+                        : '确认下架'}
                 </Text>
               </View>
             </View>

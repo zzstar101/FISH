@@ -30,6 +30,14 @@ import {
  * （`docs/miniapp-dev-workflow.md` §5），不拿本文件当端上证明。
  */
 
+/** 一张编辑态带回来的已有图片（服务端固化键 + 结论；`null` 键 = 服务端拒了保留） */
+function existingPhoto(
+  url: string,
+  objectKey: string | null = `listings/a/${url.split('/').pop()}`,
+) {
+  return { url, objectKey, moderationStatus: 'APPROVED' as const }
+}
+
 /** 一张已选图片（`status: 'done'` 表示上传完成、带 objectKey） */
 function photo(id: string, objectKey: string | null): SelectedPhoto {
   return {
@@ -134,7 +142,7 @@ describe('出物页换号清场', () => {
       urgent: false,
       negotiable: true,
       photos: [],
-      existingImages: [],
+      existingPhotos: [],
       editState: 'idle',
       polish: { phase: 'idle' },
       cooldown: null,
@@ -160,7 +168,7 @@ describe('出物页换号清场', () => {
       urgent: true,
       negotiable: false,
       photos: [photo('p1', 'listings/a/1.jpg')],
-      existingImages: ['https://cdn.example.com/a.jpg'],
+      existingPhotos: [existingPhoto('https://cdn.example.com/a.jpg')],
       editState: 'idle' as const,
       polish: {
         phase: 'ready' as const,
@@ -199,12 +207,12 @@ describe('出物页 owner/epoch 交错', () => {
     const wrote = settle(p, taskA, () => {
       p.editId = 'listing-a'
       p.title = 'A 的商品'
-      p.existingImages = ['https://cdn.example.com/a.jpg']
+      p.existingPhotos = [existingPhoto('https://cdn.example.com/a.jpg')]
     })
     expect(wrote).toBe(false)
     expect(p.title).toBe('')
     expect(p.editId).toBeNull()
-    expect(p.existingImages).toEqual([])
+    expect(p.existingPhotos).toEqual([])
 
     expect(
       settle(p, taskB, () => {
@@ -489,7 +497,7 @@ describe('出物页接线（#170 判据 C）', () => {
       'setUrgent',
       'setNegotiable',
       'setPhotos',
-      'setExistingImages',
+      'setExistingPhotos',
       'setEditState',
       'setPolish',
       'setCooldown',
