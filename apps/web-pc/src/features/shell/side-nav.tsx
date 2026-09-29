@@ -47,7 +47,7 @@ export function SideNav() {
         </nav>
       </div>
 
-      <div className="mt-4 rounded-2xl border border-white/70 bg-white/72 p-4 backdrop-blur-md">
+      <div className="mt-7 rounded-2xl border border-white/70 bg-white/72 p-4 backdrop-blur-md">
         <div className="flex items-center gap-2 font-semibold text-sm">
           <Compass className="size-4 text-brand" />
           当前进度
