@@ -1,5 +1,11 @@
 import { Image, ScrollView, Text, View } from '@tarojs/components'
-import Taro, { useLoad, usePageScroll, usePullDownRefresh, useReady } from '@tarojs/taro'
+import Taro, {
+  useDidShow,
+  useLoad,
+  usePageScroll,
+  usePullDownRefresh,
+  useReady,
+} from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
 import brandLogo from '@/assets/brand/logo.png'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
@@ -10,6 +16,7 @@ import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
 import { findUser } from '@/mock/users'
 import { applyLoadResult, homeListState } from './list-state'
@@ -192,6 +199,8 @@ export default function Home() {
       })
   })
 
+  // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
+  useDidShow(notifyTabbarRoute)
   usePageScroll(({ scrollTop }) => {
     scrollTopRef.current = scrollTop
     const next = scrollTop >= pinAt.current

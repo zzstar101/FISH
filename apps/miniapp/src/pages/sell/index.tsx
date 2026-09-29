@@ -19,6 +19,7 @@ import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
 import { pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
 import { isApiError } from '@/lib/request'
+import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { categoryLabel } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import {
@@ -400,6 +401,9 @@ export default function Sell() {
   }
 
   useDidShow(syncEditTarget)
+  // 本页不渲染底栏，但**必须广播**：tab-bar 实例挂载早于页面栈更新，不广播的话
+  // 「本页不渲染」的早退判定没有重渲染触发，底栏会顶着上一页的高光常驻（实测）。
+  useDidShow(notifyTabbarRoute)
 
   /**
    * 身份就绪后补一次编辑目标交接。

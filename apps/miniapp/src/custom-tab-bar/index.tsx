@@ -21,6 +21,7 @@ import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
 import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
 
@@ -105,13 +106,33 @@ function currentTabKey(): TabKey {
 /**
  * 唯一不渲染底栏的 Tab 页：设计稿该页（`小程序第1版。发布闲置publish-listing.html`）
  * **根本没有画底栏**（全文 grep `tabbar` 零命中）—— 发布表单要占满屏高，
- * 底栏浮在上面会压住提交区。
+ * 底栏浮在上面会压住提交区（Owner 2026-09-28 二次确认维持此设计）。
  *
  * `TAB_ITEMS` 里**保留** sell 项：`tabBar.list` 与 `switchTab` 仍需要它作为合法路由，
  * 隐藏只发生在本组件的渲染层。代价是该页只剩左上返回钮一个出口，
  * 所以 `pages/sell/index.tsx` 必须显示返回钮。
+ *
+ * ⚠️ 隐藏依赖 `currentRoute()` 的**渲染期求值**，而 tab-bar 实例挂载早于页面栈更新 ——
+ * mount 首渲染时 route 还是上一页，tabbar 会先渲染出来；之后**唯一**能把早退判定
+ * 「重新求值」的触发是 `setActive`（值变才重渲染）。所以 **sell 页也必须
+ * `useDidShow(notifyTabbarRoute)` 广播**（2026-09-28 实测教训：漏了它，出物页底栏
+ * 顶着上一页的高光常驻）。广播 → sync → setActive('sell') → 重渲染 → 早退生效。
  */
 const HIDDEN_ROUTE = 'pages/sell/index'
+
+/**
+ * 选中胶囊（Owner 2026-09-28 拍板）：**不做动画、不存独立状态**，位置直接由 `active`
+ * 派生（渲染时从 `TAB_ITEMS.findIndex` 求值），而 `active` 的唯一真源是「当前页面路径」
+ * —— 每个 Tab 页 `useDidShow` 经 `lib/tabbar-sync` 广播，本组件同步。
+ *
+ * 历史教训（三次返工的根因，别再走回头路）：
+ * 1. 任何「挂载时算一次」的状态都会残留 —— 实例被复用显示时不重新渲染；
+ * 2. 任何「点击侧滑动 + 延迟 switchTab」的接力时序都会被切页时机打断；
+ * 3. 槽位坐标必须是**显式 rpx**（`TAB_SLOT_RPX`）：750 设计稿下栏宽恒定
+ *    （left/right 30rpx + border 2rpx×2 + padding 16rpx×2 → 内容区 654rpx，5 槽等分
+ *    130.8rpx）。百分比/calc 的混合运算在 WXSS 运行时解析不可靠（实测偏位）。
+ */
+const TAB_SLOT_RPX = 130.8
 
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
@@ -194,22 +215,47 @@ export default function CustomTabBar() {
     setDot(fallback.conversations + fallback.notifications > 0)
   }, [authStatus, userId, unread, demoUnread, dot])
 
-  // 切换 Tab 后组件会重新渲染，这里同步一次高亮项
+  // 选中态同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
+  // 复用实例不重新渲染，靠广播是它唯一能感知「我又被显示」的机会。
   useEffect(() => {
-    setActive(currentTabKey())
+    const sync = () => setActive(currentTabKey())
+    sync()
+    Taro.eventCenter.on(TABBAR_ROUTE_EVENT, sync)
+    return () => {
+      Taro.eventCenter.off(TABBAR_ROUTE_EVENT, sync)
+    }
   }, [])
 
   const go = (item: TabItem) => {
     if (item.key === active) return
-    setActive(item.key)
+    // 只负责发起切换；选中态由目标页 onShow 的广播驱动（路径真源，无动画）
     void Taro.switchTab({ url: item.path }).catch(() => undefined)
   }
 
-  // 早退必须写在所有 hook 之后：hook 数量不能随路由变化
+  // 出物页早退：写在所有 hook 之后（hook 数量不能随路由变化）。
+  // 判定是渲染期求值 —— 依赖 sell 页自己的 onShow 广播触发 setActive 重渲染，
+  // 否则 mount 时（栈未更新）渲染出的底栏会带着旧页高光常驻（实测教训）。
   if (currentRoute().includes(HIDDEN_ROUTE)) return null
 
   return (
     <View className="tabbar">
+      {/*
+        选中胶囊：纯透明液体玻璃高光，位置由 `active`（当前页面路径）直接派生，
+        瞬时落位、无过渡。槽位坐标显式 rpx（`TAB_SLOT_RPX`，750 稿恒定）。
+        是 .tabbar 的第一个子元素 → 图标/文字（后面的兄弟）天然盖在它上面；
+        `pointer-events: none` 让点击穿透到 tab。
+      */}
+      <View
+        className="tabbar__capsule"
+        style={{
+          transform: `translateX(${
+            Math.max(
+              0,
+              TAB_ITEMS.findIndex((item) => item.key === active),
+            ) * TAB_SLOT_RPX
+          }rpx)`,
+        }}
+      />
       {TAB_ITEMS.map((item) => {
         const on = item.key === active
         if (item.key === 'sell') {

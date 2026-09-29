@@ -14,6 +14,7 @@ import type { WishHit } from '@/features/match/adapt'
 import { closeWish as closeWishApi } from '@/features/wish/api'
 import { consumeWishesDirty } from '@/features/wish/refresh'
 import { isApiError } from '@/lib/request'
+import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import {
   categoryLabel,
   formatAmount,
@@ -176,6 +177,8 @@ export default function Wish() {
     if (!consumeWishesDirty()) return
     void load(true)
   })
+  // 底栏选中态的真源是页面路径：本页 onShow 时广播一次（见 lib/tabbar-sync）
+  useDidShow(notifyTabbarRoute)
 
   const mineList = mineFilter === 'ALL' ? mine : mine.filter((wish) => wish.status === mineFilter)
   const poolList = poolFilter === 'ALL' ? pool : pool.filter((item) => item.category === poolFilter)
