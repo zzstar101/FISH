@@ -71,6 +71,18 @@ export default function ProductCard({
     void Taro.navigateTo({ url: buildListingDetailUrl(listing.id, attribution) })
   }
 
+  /**
+   * 卖家行是卡片内的**独立点击区**（#191 验收：点击进入正确公开主页）：
+   * 拦下冒泡，同一次点击只进卖家主页、不进商品详情。
+   * Taro 合成事件的 `stopPropagation` 在运行时阻断冒泡，效果等同小程序的 catch 语义。
+   * 根节点的 `handleOpen` 不会触发。
+   */
+  const handleOpenSeller = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation()
+    if (!seller) return
+    void Taro.navigateTo({ url: `/pages/user/index?id=${seller.id}` })
+  }
+
   return (
     <View
       className="pcard"
@@ -107,11 +119,12 @@ export default function ProductCard({
         </View>
 
         {/*
-          卖家行整行依赖 seller：真实列表卡没有卖家字段，传进来就是 null。
+          卖家行整行依赖 seller：契约 `seller` 缺席的老 mock 记录传进来是 null。
           此时不渲染这一行，而不是显示一个占位名 —— 卡片下方留白比假人诚实。
+          有卖家时整行可点：进 TA 的公开主页（详情页顶部卖家卡同一跳转口径）。
         */}
         {seller ? (
-          <View className="pcard__seller">
+          <View className="pcard__seller" onClick={handleOpenSeller}>
             <Image className="pcard__avatar" src={seller.avatarUrl} mode="aspectFill" />
             <Text className="pcard__who">{seller.nickname}</Text>
             {verified ? (
