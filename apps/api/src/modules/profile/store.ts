@@ -62,6 +62,8 @@ export interface ProfileStatsRow {
   activeListings: number
   activeWishes: number
   completedTransactions: number
+  /** 我关注的人数（#188）：与 /me/following 的 `total` 同表同向。 */
+  followingCount: number
 }
 
 export interface ProfileStore {
@@ -106,7 +108,9 @@ export function createSqlProfileStore(db: Db): ProfileStore {
               AND category IS NOT NULL) AS active_wishes,
           (SELECT count(*)::int FROM transactions
             WHERE (buyer_id = ${userId} OR seller_id = ${userId}) AND status = 'COMPLETED')
-            AS completed_transactions
+            AS completed_transactions,
+          (SELECT count(*)::int FROM follows
+            WHERE follower_id = ${userId}) AS following_count
       `)
       const row = rowsOf(result)[0]
       if (!row) throw new Error('Profile 统计查询未返回行')
@@ -114,6 +118,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         activeListings: Number(row.active_listings),
         activeWishes: Number(row.active_wishes),
         completedTransactions: Number(row.completed_transactions),
+        followingCount: Number(row.following_count),
       }
     },
 

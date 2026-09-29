@@ -18,7 +18,7 @@ const profile = {
     phoneBound: false,
     maskedPhone: null,
   },
-  stats: { activeListings: 1, activeWishes: 1, completedTransactions: 1 },
+  stats: { activeListings: 1, activeWishes: 1, completedTransactions: 1, followingCount: 2 },
   listings: [],
   wishes: [],
   transactions: [],

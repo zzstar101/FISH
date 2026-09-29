@@ -19,7 +19,10 @@
  *   `phoneBound` / `maskedPhone`），公开 DTO 两者皆不含。
  * - `goodRate`（好评率）：仓库没有 reviews / ratings 表，**没有真实口径**，不编造。
  *   `listing-detail` 对卖家好评率已经是「契约没有 → 传 null → 整行不渲染」的同款处理。
- * - `following`（是否已关注）：没有 follows 表，关注关系未拆 Domain，#122 明确不做。
+ * - `following`（是否已关注）：关注关系已按 #188 拆成独立的 follows Domain
+ *   （`@fish/contracts/follows/schema`），但它**仍然不属于这份匿名公开读模型** ——
+ *   关注状态随「看的人是谁」而变，塞进来就等于让一个匿名端点带视角，与 #122
+ *   「同一响应给所有人」的口径冲突。本人视角走 `GET /users/:userId/follow`。
  *
  * `joinedAt` 也不出：它和 `joinedDays` 是同一事实的两种表达，两个字段必然漂移。
  * 口径由服务端固定，端上不再自己算（见 `joinedDays` 注释）。
