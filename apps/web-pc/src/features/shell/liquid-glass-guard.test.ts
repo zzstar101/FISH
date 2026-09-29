@@ -46,12 +46,18 @@ test('.pc-glass 位于 components 层内，Tailwind 工具类才能覆盖它', (
   expect(styles).toMatch(/@layer components\s*\{[\s\S]*?\.pc-glass/)
 })
 
-test('两个玻璃表面上没有 backdrop-blur / isolate 这类工具类', () => {
+test('两个玻璃表面上没有会造成 backdrop root 的工具类', () => {
+  // 四种成因都要堵住，漏一个折射就会静默消失：
+  // backdrop-filter(backdrop-blur) / isolation(isolate) / opacity<1(opacity-*) /
+  // will-change:opacity(will-change-*)。只堵前两个是不够的——实测给顶栏加
+  // `opacity-90` 或 `will-change-opacity` 时，折射同样失效但测试不会红。
+  const forbidden = ['backdrop-blur', 'isolate', 'opacity-', 'will-change', 'filter']
   for (const source of [topBar, sideNav]) {
     const line = glassLine(source)
     expect(line).toContain('pc-glass')
-    expect(line).not.toContain('backdrop-blur')
-    expect(line).not.toContain('isolate')
+    for (const token of forbidden) {
+      expect(line).not.toContain(token)
+    }
   }
 })
 
