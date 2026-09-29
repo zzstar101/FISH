@@ -7,7 +7,11 @@
  * 三个路径分两类：
  * - `myFollowing`：本人数据，未登录 401 `UNAUTHENTICATED`；
  * - `followRelation`：他人主页上的关注状态与写入口，同样要求登录（匿名访客没有关注关系），
- *   未登录 401，目标不存在 404 `USER_NOT_FOUND`，自关注 422 `CANNOT_FOLLOW_SELF`。
+ *   未登录 401，目标不存在 404 `USER_NOT_FOUND`。
+ *
+ * `CANNOT_FOLLOW_SELF`（422）**只约束 POST / DELETE**：与自己建立 / 解除关注边在 DB 层
+ * 不可表达（`follows_no_self_follow` CHECK）。`GET` 不判自关注 —— 它对自己只是一个
+ * 无写入的读，返回 `{ following: false, mutual: false }`（端上不会这样调用，也没有副作用）。
  *
  * **读公开、写必须登录**在这里不适用：关注关系是「我」与某个人的有向边，两条都不公开
  * ——`GET /users/:userId/public`（#122）保持匿名可读且**不带**任何视角相关字段，

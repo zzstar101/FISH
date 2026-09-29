@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
+import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -89,6 +89,15 @@ export default function Following() {
 
   const [tab, setTab] = useState<FollowingTab>('people')
   const [load, setLoad] = useState<FollowingLoad>({ kind: 'loading' })
+  /**
+   * `useDidShow` 的触发计数（`null` = 还没显示过，与 `pages/watchers` 同一手法）。
+   *
+   * 取数**只由这一条驱动**：进页时触发一次，从他人主页（本页点进去的 `/pages/user`）
+   * 返回时再触发一次 —— 那边可能刚关注 / 取关过，不重拉就会显示过期的列表与计数
+   * （验收：关注/取关与计数同源、重进状态一致）。登录态变化（`authStatus` / `userId`）
+   * 也让同一个 effect 重跑，所以冷启动恢复到已登录时同样会取数。
+   */
+  const [showToken, setShowToken] = useState<number | null>(null)
   const [showTop, setShowTop] = useState(false)
   /** 页脚「加载更多」在飞；`moreError` 是这一页失败（列表本身仍是好的，不整页报错）。 */
   const [loadingMore, setLoadingMore] = useState(false)
@@ -125,6 +134,8 @@ export default function Following() {
    * `cancel()`，迟到结果一律丢弃 —— 只比对响应里的 id 不够（见 `lib/cancellable` 的说明）。
    */
   const pending = useRef<(() => void) | null>(null)
+  /** 「加载更多」那一发（与首屏分开持有：它不该顶掉首屏的取消句柄，见审查发现 M1）。 */
+  const pendingMore = useRef<(() => void) | null>(null)
 
   /** 首屏取数。演示构建走 fixture（带一点延迟让骨架屏看得见），其余走真接口。 */
   const loadFirstPage = useCallback(async (): Promise<FollowingLoad> => {
@@ -151,23 +162,35 @@ export default function Following() {
 
   const runLoad = useCallback(async (): Promise<void> => {
     pending.current?.()
+    pendingMore.current?.()
     setLoadingMore(false)
     setMoreError(false)
+    // 首屏才摆骨架屏：已有列表时（下拉刷新 / 从他人主页返回）保留旧列表，
+    // 等新的一页到了再整体替换，避免每回一次子页就闪一帧骨架。
+    setLoad((prev) => (prev.kind === 'ready' ? prev : { kind: 'loading' }))
+    const seq = accountSeq.current
     const run = cancellable(loadFirstPage, () => true)
     pending.current = run.cancel
     const next = await run.promise
+    // 换账号 / 退出后到达的旧结果一律丢弃，不写进新账号的界面（验收：迟到任务不串状态）
+    if (accountSeq.current !== seq) return
     if (next) setLoad(next)
   }, [loadFirstPage])
 
+  /** `useDidShow`：进页 + 每次从子页返回都重拉（见 `showToken` 的说明）。 */
+  useDidShow(() => setShowToken((value) => (value ?? 0) + 1))
+
   useEffect(() => {
-    // 未登录 / 登录态未就绪：守卫在跳转，这里不发请求。
-    if (authStatus !== 'authed' || userId === null) return
+    // 还没显示过 / 未登录 / 登录态未就绪：不发请求（守卫在跳转）。
+    if (showToken === null || authStatus !== 'authed' || userId === null) return
     void runLoad()
     return () => {
       pending.current?.()
+      pendingMore.current?.()
       pending.current = null
+      pendingMore.current = null
     }
-  }, [authStatus, userId, runLoad])
+  }, [showToken, authStatus, userId, runLoad])
 
   /**
    * 下拉刷新用**微信原生**（`index.config.ts` 的 `enablePullDownRefresh: true`）。
@@ -193,13 +216,17 @@ export default function Following() {
       () => fetchMyFollowing(load.nextCursor ?? undefined),
       () => true,
     )
-    pending.current = run.cancel
+    pendingMore.current = run.cancel
     const page = await run.promise.catch((error: unknown) => {
       console.debug('[miniapp] 我的关注：加载更多失败', error)
       return null
     })
     // 换账号了：旧结果一律丢弃，不动新账号的状态
     if (accountSeq.current !== seq) return
+    // **被新一轮取数取消**（下拉刷新 / 从他人主页返回时 runLoad 会 cancel 这一发）：
+    // `cancellable` 对「取消」与「失败」都给 null，不区分就会把一次正常刷新渲染成
+    // 页脚的「没加载出来 · 重试」。取消不是失败，什么都不改（新一轮已接管状态）。
+    if (run.isCancelled()) return
     setLoadingMore(false)
     if (!page) {
       setMoreError(true)

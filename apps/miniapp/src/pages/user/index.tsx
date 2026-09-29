@@ -331,6 +331,13 @@ export default function UserHome() {
    *   失败不改状态、只提示。
    * - 换账号 / 退出 / 换页主：`followKeyRef` 让迟到的回包与 finally 一律作废，
    *   不把上一账号的关注状态画到新账号上（验收：迟到任务与旧 finally 不影响新账号）。
+   *
+   * ⚠️ **没有演示分支**：Owner 2026-09-22 拍板的那颗本地三态钮挂在 `isDemoUser` 上，而
+   * 那个判据要求路由参数命中 `DEMO_USER_IDS` —— 那三个键是**裸 seed UUID**，本页的
+   * `userId` 却是 `usr_` Public ID（`listing-detail` / `following` 都用 `seller.id` 导航，
+   * `GET /users/:userId/public` 也只认 `usr_`）。所以 `isDemoUser` 在本页恒为 false
+   * （签名行同样从来没亮过）—— 这是一条**先于本单存在的**白名单口径问题，另开 Issue 处理，
+   * 本单不顺手改；这里因此不留一条永远走不到的死分支。
    */
   const [follow, setFollowState] = useState<FollowState | null>(null)
   const [followBusy, setFollowBusy] = useState(false)
@@ -492,6 +499,14 @@ export default function UserHome() {
     </>
   ) : null
 
+  /**
+   * 按钮在**读到状态之前不渲染**（不先画一个「关注」再跳成「已关注」）。
+   * 骨架屏里给这一格留了同宽的占位（见 `uhome__follow-skel`），所以状态到位时不会横跳。
+   */
+  const followVisible = canFollow && follow !== null
+  const followOn = follow?.following === true
+  const followBusyView = followBusy
+
   return (
     <View className="uhome">
       {/* 钉在滚动区后面的浅蓝定色带：只铺到导航条下沿，与页头渐变同起点色，
@@ -571,14 +586,14 @@ export default function UserHome() {
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。
                       见上方 `follow` 注释：真实三态，未关注（品牌渐变 + plus）/ 写入中
                       （转圈 + 禁用）/ 已关注（浅底 + check）。初始状态读到之前整颗不渲染。 */}
-                  {canFollow && follow !== null ? (
+                  {followVisible ? (
                     <View
-                      className={`uhome__follow${
-                        follow.following ? ' uhome__follow--on' : ''
-                      }${followBusy ? ' uhome__follow--busy' : ''}`}
+                      className={`uhome__follow${followOn ? ' uhome__follow--on' : ''}${
+                        followBusyView ? ' uhome__follow--busy' : ''
+                      }`}
                       onClick={toggleFollow}
                     >
-                      {follow.following ? (
+                      {followOn ? (
                         <>
                           <Image
                             className="uhome__follow-ic"
@@ -587,7 +602,7 @@ export default function UserHome() {
                           />
                           <Text>已关注</Text>
                         </>
-                      ) : followBusy ? (
+                      ) : followBusyView ? (
                         <>
                           <View className="uhome__follow-spin" />
                           <Text>关注中</Text>
@@ -645,11 +660,12 @@ export default function UserHome() {
                 </View>
               </View>
             ) : (
-              /* 资料没拿到之前先给页头骨架：头像盘 + 昵称条 + 签名条 + 数据行条
-                  （稿 04 帧的页头骨架）。骨架里**不画关注钮占位** —— 那颗钮是
-                  演示态、生产不渲染，给它留位只会在真机上留一块空白。
-                  签名条反过来**要**画（稿 `signHTML` 的 loading 分支）：演示账号的
-                  签名行必然出现，骨架里缺这一行会让数据到位时整页下跳约 40px。
+              /* 资料没拿到之前先给页头骨架：头像盘 + 昵称条 + 关注钮占位 + 数据行条
+                  （稿 04 帧的页头骨架）。
+                  **关注钮要占位**（#188 起它是真实钮：已登录且非本人主页时必然渲染），
+                  不占位的话状态一到，那颗钮会把昵称区挤窄、整行横跳一次。
+                  签名条反过来**不**占位：它只在演示白名单命中时才渲染，真实构建恒不出现
+                  （见 `signatureText` 的说明）。
                   id 与数据态同一套：loading 期也要参与「身份块滚干净了没」的测量。 */
               <View className="uhome__identity" style={{ marginTop: `${identityTopGap}px` }}>
                 <View className="uhome__profile" id="uhome-profile">
@@ -661,6 +677,8 @@ export default function UserHome() {
                       style={{ width: '42%' }}
                     />
                   </View>
+                  {/* 关注钮占位：与 `.uhome__follow` 同高、同圆角，宽度取「已关注 + check」那一档 */}
+                  {canFollow ? <View className="uhome__follow-skel" /> : null}
                 </View>
                 {isDemoUser ? (
                   <View className="uhome__psign" id="uhome-psign">

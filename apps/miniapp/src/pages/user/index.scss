@@ -170,6 +170,15 @@
   box-shadow: var(--shadow-btn);
 }
 
+/* 关注钮的骨架占位（#188）：与 `.uhome__follow` 同高同圆角，宽度取「已关注 + check」那一档 */
+.uhome__follow-skel {
+  flex: 0 0 auto;
+  width: 168px;
+  height: 64px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
+}
+
 .uhome__follow-ic {
   width: 28px;
   height: 28px;
