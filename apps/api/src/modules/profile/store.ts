@@ -70,15 +70,16 @@ export interface ProfileStore {
   ownWishes(userId: string, limit: number): Promise<ProfileWishRow[]>
   ownTransactions(userId: string, limit: number): Promise<ProfileTransactionRow[]>
   /**
-   * #86 B：本域**唯一**的写操作——只改传入的列（昵称 / 头像 URL）。
+   * #86 B：本域**唯一**的写操作——只改传入的列（昵称 / 头像 URL / 签名）。
    *
    * 回整行而不是只回 `Me`：对外映射统一走认证域的 `toMe`（头像脏值降级、
    * 手机号只出派生态都在那里），本域不复制第二份。
    * 行不存在（认证与写入之间账号被删）回 `null`，由 service 决定怎么报。
+   * #179：`signature` 传 `null` 即清空（service 已做 trim 与空串归一化）。
    */
   updateUser(
     userId: string,
-    patch: { nickname?: string; avatarUrl?: string },
+    patch: { nickname?: string; avatarUrl?: string; signature?: string | null },
   ): Promise<UserRow | null>
 }
 

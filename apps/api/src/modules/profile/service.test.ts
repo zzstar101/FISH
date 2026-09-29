@@ -22,6 +22,7 @@ const me: Me = {
   verifiedAt: '2026-09-12T00:00:00.000Z',
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 const storage: MediaStorage = {
@@ -269,6 +270,30 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
     expect(uploads.calls).toEqual([])
     expect(user.nickname).toBe('新名字')
     expect(user.avatarUrl).toBeNull()
+  })
+
+  test('签名（#179）：原文落库、空白串归一化为 null（清空）', async () => {
+    const store = new MemoryProfileStore()
+    const user = await createService(store).updateProfile(me, {
+      signature: '  面交优先，可小刀  ',
+    })
+
+    expect(store.updated?.patch).toEqual({ signature: '面交优先，可小刀' })
+    expect(user.signature).toBe('面交优先，可小刀')
+  })
+
+  test('签名（#179）：只传空白 = 清空，patch.signature 是 null', async () => {
+    const store = new MemoryProfileStore()
+    const user = await createService(store).updateProfile(me, { signature: '   ' })
+
+    expect(store.updated?.patch).toEqual({ signature: null })
+    expect(user.signature).toBeNull()
+  })
+
+  test('签名（#179）：不传 signature 就不碰该列', async () => {
+    const store = new MemoryProfileStore()
+    await createService(store).updateProfile(me, { nickname: '新名字' })
+    expect(Object.hasOwn(store.updated?.patch ?? {}, 'signature')).toBe(false)
   })
 
   test('只改头像：objectKey 交给上传域 confirm，落库的是它给的绝对 URL', async () => {
