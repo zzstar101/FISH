@@ -8,6 +8,8 @@ import {
   pruneStaleEmbeddings,
   refreshEmbeddingSourceVersion,
   saveEmbedding,
+  similarListingsByIds,
+  similarWishesByIds,
   topKSimilarListings,
   topKSimilarWishes,
 } from './embedding-store'
@@ -455,6 +457,10 @@ async function createWishWithEmbedding(
   keyword: string,
   embedding: number[],
   model = MODEL,
+  /**
+   * 造"过期向量"fixture：把版本标记退到实体当前版本之前。默认写入实体当前版本 ⇒ 新鲜
+   * （候选侧召回只认新鲜向量，见 `embedding-store.ts` 的新鲜度不变量）。
+   */
   stale = false,
 ): Promise<string> {
   const id = newId()
@@ -489,6 +495,7 @@ async function createListingWithEmbedding(
   title: string,
   embedding: number[],
   model = MODEL,
+  /** 同 `createWishWithEmbedding`：`true` 写入过期版本（实体编辑后还没重算的向量）。 */
   stale = false,
 ): Promise<string> {
   const id = newId()
@@ -855,4 +862,83 @@ test('hasEmbeddingFromOtherModel：区分“从没生成过”与“只有旧 mo
     OTHER_MODEL,
   )
   expect(await hasEmbeddingFromOtherModel(db, { kind: 'wish', id: wishId }, MODEL)).toBe(true)
+})
+
+// ---------------------------------------------------------------------------
+// #322 M3：按 id 补算 cosine（`similar*ByIds`）同样只认新鲜向量
+// ---------------------------------------------------------------------------
+
+test('similarWishesByIds / similarListingsByIds：按 id 补算也只认新鲜向量', async () => {
+  const owner = await createUser()
+  const marker = `stale-byids-${seq++}`
+  const freshWish = await createWishWithEmbedding(owner, `${marker}-wish-fresh`, unitVector(0))
+  const staleWish = await createWishWithEmbedding(
+    owner,
+    `${marker}-wish-stale`,
+    unitVector(0),
+    MODEL,
+    true,
+  )
+  const freshListing = await createListingWithEmbedding(
+    owner,
+    `${marker}-listing-fresh`,
+    unitVector(0),
+  )
+  const staleListing = await createListingWithEmbedding(
+    owner,
+    `${marker}-listing-stale`,
+    unitVector(0),
+    MODEL,
+    true,
+  )
+
+  const wishesBefore = await similarWishesByIds(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    ids: [freshWish, staleWish],
+  })
+  expect(wishesBefore.map((row) => row.id)).toEqual([freshWish])
+  expect(wishesBefore[0]?.distance).toBe(0)
+
+  const listingsBefore = await similarListingsByIds(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    ids: [freshListing, staleListing],
+  })
+  expect(listingsBefore.map((row) => row.id)).toEqual([freshListing])
+
+  // 重算之后两条都能被补算出来（同一套新鲜度规则，两个方向一致）。
+  await saveEmbedding(db, {
+    entity: { kind: 'wish', id: staleWish },
+    model: MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${staleWish}`,
+    embedding: unitVector(0),
+    sourceUpdatedAt: await currentWishVersion(staleWish),
+  })
+  await saveEmbedding(db, {
+    entity: { kind: 'listing', id: staleListing },
+    model: MODEL,
+    dimensions: EMBEDDING_DIMENSIONS,
+    contentHash: `hash-${staleListing}`,
+    embedding: unitVector(0),
+    sourceUpdatedAt: await currentListingVersion(staleListing),
+  })
+
+  const wishesAfter = await similarWishesByIds(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    ids: [freshWish, staleWish],
+  })
+  expect(wishesAfter.map((row) => row.id).sort()).toEqual([freshWish, staleWish].sort())
+
+  const listingsAfter = await similarListingsByIds(db, {
+    model: MODEL,
+    vector: unitVector(0),
+    ids: [freshListing, staleListing],
+  })
+  expect(listingsAfter.map((row) => row.id).sort()).toEqual([freshListing, staleListing].sort())
+
+  // 空 id 列表直接返回空（不发 SQL）。
+  expect(await similarWishesByIds(db, { model: MODEL, vector: unitVector(0), ids: [] })).toEqual([])
 })

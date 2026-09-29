@@ -4,7 +4,12 @@ import {
   buildWishEmbeddingText,
   contentHashOf,
 } from '@fish/contracts/embedding/text'
-import { MATCH_SCORE_THRESHOLD, MATCH_SEMANTIC_TOP_K } from '@fish/contracts/matching/schema'
+import {
+  MATCH_SCORE_THRESHOLD,
+  MATCH_SEMANTIC_TOP_K,
+  RANKING_VERSION,
+  RANKING_VERSION_V1,
+} from '@fish/contracts/matching/schema'
 import { createDb } from '@fish/db/client'
 import { saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
@@ -498,7 +503,12 @@ function fanVector(index: number): number[] {
   return vector
 }
 
-/** 给商品写一份"与当前内容一致"的向量（model 默认就是引擎在用的那个）。 */
+/**
+ * 给商品写一份"与当前内容一致"的向量（model 默认就是引擎在用的那个）。
+ *
+ * 版本标记默认写实体当前的 `updated_at` ⇒ 引擎认为它**新鲜**；传 `stale: true` 可造
+ * "实体编辑后向量还没重算"的 fixture（候选侧的新鲜度检查会把它挡在召回之外）。
+ */
 async function embedListing(
   listingId: string,
   vector: number[],
@@ -525,7 +535,7 @@ async function embedListing(
   })
 }
 
-/** 给愿望写一份"与当前内容一致"的向量。 */
+/** 给愿望写一份"与当前内容一致"的向量（`stale` 含义同 `embedListing`）。 */
 async function embedWish(
   wishId: string,
   vector: number[],
@@ -560,7 +570,7 @@ async function embedJobs(kind: 'listing' | 'wish', id: string) {
 }
 
 describe('向量召回（#322 M2）', () => {
-  test('目标向量就绪：走 vector-topk，且打分与 v1 完全一致', async () => {
+  test('目标向量就绪：走 vector-topk，语义分参与打分并落库', async () => {
     await withFixture(async ({ sellerId, buyerId }) => {
       const keyword = uniqueKeyword()
       const listingId = await createListing(sellerId, keyword)
@@ -575,10 +585,13 @@ describe('向量召回（#322 M2）', () => {
       // 本 model 的向量只有这一条 ⇒ Top-K 里恰好一个候选。
       expect(result.vectorCandidates).toBe(1)
 
-      // M2 不动打分：category/keyword/price 全中 = 100，与 v1 逐项相同。
+      // 两侧向量相同（cos = 1 ⇒ 语义分 100），结构三项全中 ⇒ v2 总分仍是 100。
       const rows = await matchRows(listingId, wishId)
       expect(rows).toHaveLength(1)
       expect(rows[0]?.score).toBe(100)
+      // #322 M3：语义可用时落库 semantic_score + ranking_version = 2（读侧据此区分 v1/v2 行）。
+      expect(rows[0]?.semanticScore).toBe(100)
+      expect(rows[0]?.rankingVersion).toBe(RANKING_VERSION)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
       // 目标向量新鲜 ⇒ 不需要补投。
       expect(await embedJobs('listing', listingId)).toHaveLength(0)
@@ -655,6 +668,7 @@ describe('向量召回（#322 M2）', () => {
         created: 1,
         recall: 'vector-topk',
       })
+      expect((await matchRows(listingId, wishId))[0]?.rankingVersion).toBe(RANKING_VERSION)
 
       // 让这一对掉出召回：删掉愿望的向量（候选侧无向量 ⇒ 不在 Top-K），并把关键词改成不再命中。
       await db.delete(embeddings).where(eq(embeddings.wishId, wishId))
@@ -675,6 +689,9 @@ describe('向量召回（#322 M2）', () => {
       expect(rows[0]?.score).toBe(65)
       expect(rows[0]?.score).toBeLessThan(MATCH_SCORE_THRESHOLD)
       expect(rows[0]?.keywordScore).toBe(0)
+      // 这一对拿不到 cosine（候选侧向量已被删除）⇒ 按对退回 v1 口径：语义分落 NULL、版本号 1。
+      expect(rows[0]?.semanticScore).toBeNull()
+      expect(rows[0]?.rankingVersion).toBe(RANKING_VERSION_V1)
     })
   })
 
@@ -692,6 +709,10 @@ describe('向量召回（#322 M2）', () => {
       // 退化不改变 v1 的行为：词法命中照样建行、照样发通知。
       expect(fromListing.created).toBe(1)
       expect(await matchRows(listingId, wishId)).toHaveLength(1)
+      // 退化 = v1 口径：语义分落 NULL、版本号 1（读侧据此知道这行没有语义分）。
+      const fallbackRows = await matchRows(listingId, wishId)
+      expect(fallbackRows[0]?.semanticScore).toBeNull()
+      expect(fallbackRows[0]?.rankingVersion).toBe(RANKING_VERSION_V1)
       expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
       expect(await embedJobs('listing', listingId)).toEqual([
         { type: 'EMBED_LISTING', status: 'PENDING' },
@@ -779,6 +800,7 @@ describe('向量召回（#322 M2）', () => {
           category: ISOLATED_CATEGORY,
           budgetMaxCents: 20000,
         })
+        // 用 helper 写向量（按当前内容算指纹 + 版本标记 = 实体当前版本 ⇒ 新鲜）。
         await embedWish(id, fanVector(index))
       }
 
@@ -799,7 +821,100 @@ describe('向量召回（#322 M2）', () => {
       expect(fitted.created).toBe(1)
       const rows = await matchRows(listingId, wishIds[matchingIndex] as string)
       expect(rows).toHaveLength(1)
-      expect(rows[0]?.score).toBe(100)
+      // v2 hybrid 口径（#322 M3）：这个候选是最远的第 K+1 个（angle = 0.51 ⇒ cos ≈ 0.8727
+      // ⇒ 语义分 83），分类 / 词法 / 价格全中 ⇒ 0.30*83 + 0.32*100 + 0.15*100 + 0.23*100 = 95。
+      expect(rows[0]?.score).toBe(95)
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #322 M3：候选向量新鲜度（PR #338 评审 blocker 的回归）
+//
+// 评审指出的漏洞：候选实体被编辑后、EMBED_* 还没跑完（或失败）时，旧向量仍会进 Top-K 参与
+// hybrid 打分——那是"当前的价格/分类事实 + 旧的语义"的混合版本，还会把过期候选排到新鲜候选
+// 前面。修复后的不变量：**只有对应当前实体版本的向量才允许进召回与打分**，证明不了新鲜的一对
+// 退回 v1 口径（`ranking_version = 1`、`semantic_score = NULL`）。
+// ---------------------------------------------------------------------------
+describe('候选向量新鲜度（#322 M3 评审 blocker）', () => {
+  test('候选编辑后旧向量不进 Top-K：已有行退回 v1，重算向量后恢复 v2', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      await embedWish(wishId, axisVector(0))
+
+      // 先建立一条 v2 匹配行（两侧向量一致 ⇒ 语义分 100）。
+      expect((await engine.matchListing(listingId)).recall).toBe('vector-topk')
+      const before = (await matchRows(listingId, wishId))[0]
+      expect(before?.rankingVersion).toBe(RANKING_VERSION)
+      expect(before?.semanticScore).toBe(100)
+
+      // 编辑候选（愿望）但**不重算向量**：库里那条向量对应的是旧内容，不再是当前版本。
+      await db
+        .update(wishes)
+        .set({ keyword: `${keyword}-改过` })
+        .where(eq(wishes.id, wishId))
+
+      // 从商品方向再跑：目标向量新鲜，但候选的旧向量被新鲜度检查挡住 ⇒ 不进 Top-K（不占 K 名额），
+      // 已有行仍被 union 回来重算，只是拿不到 cosine ⇒ 退回 v1 口径。
+      const afterEdit = await engine.matchListing(listingId)
+
+      expect(afterEdit.recall).toBe('vector-topk')
+      expect(afterEdit.vectorCandidates).toBe(0)
+      expect(afterEdit.evaluated).toBe(1)
+
+      const downgraded = (await matchRows(listingId, wishId))[0]
+      expect(downgraded?.rankingVersion).toBe(RANKING_VERSION_V1)
+      expect(downgraded?.semanticScore).toBeNull()
+      // v1 口径的裸分：分类 100 + 关键词 0（关键词已改掉）+ 价格 100 ⇒ 0.35*100 + 0.3*100 = 65。
+      expect(downgraded?.score).toBe(65)
+
+      // 重算向量（新内容 + 新版本）之后恢复 v2。
+      await embedWish(wishId, axisVector(0))
+
+      const restored = await engine.matchListing(listingId)
+
+      expect(restored.vectorCandidates).toBe(1)
+      const fresh = (await matchRows(listingId, wishId))[0]
+      expect(fresh?.rankingVersion).toBe(RANKING_VERSION)
+      expect(fresh?.semanticScore).toBe(100)
+    })
+  })
+
+  test('候选编辑后旧向量连"新建"都进不来：重算向量后才建立 v2 匹配', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword)
+      const wishId = await createWish(buyerId, keyword)
+      await embedListing(listingId, axisVector(0))
+      // 先写向量、再编辑候选 ⇒ 库里那条向量对应的是旧内容。
+      await embedWish(wishId, axisVector(0))
+      await db
+        .update(wishes)
+        .set({ keyword: `${keyword}-改过` })
+        .where(eq(wishes.id, wishId))
+
+      const staleRun = await engine.matchListing(listingId)
+
+      // 没有已有行可 union ⇒ 过期的候选连"新建"的机会都没有（这正是评审要的：旧向量不能参与召回）。
+      expect(staleRun.vectorCandidates).toBe(0)
+      expect(staleRun.evaluated).toBe(0)
+      expect(staleRun.created).toBe(0)
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+
+      await embedWish(wishId, axisVector(0))
+
+      const freshRun = await engine.matchListing(listingId)
+
+      expect(freshRun.vectorCandidates).toBe(1)
+      expect(freshRun.created).toBe(1)
+      const rows = await matchRows(listingId, wishId)
+      // 结构分：分类 100 + 关键词 0 + 价格 100；语义分 100 ⇒ 0.30*100 + 0.32*100 + 0.23*100 = 85。
+      expect(rows[0]?.score).toBe(85)
+      expect(rows[0]?.rankingVersion).toBe(RANKING_VERSION)
+      expect(rows[0]?.semanticScore).toBe(100)
     })
   })
 })

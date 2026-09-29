@@ -40,6 +40,36 @@ export const MATCH_SCORE_THRESHOLD = 70
  */
 export const MATCH_SEMANTIC_TOP_K = 50
 
+/**
+ * 落库的 `matches.ranking_version` 取值（#322 M3）：这一行是**哪一版算法**算出来的。
+ *
+ * - `RANKING_VERSION_V1 = 1`：v1 三路权重（分类 0.35 / 关键词 0.35 / 价格 0.30）。
+ *   语义不可用（向量缺失/过期/模型不匹配）时逐位退回这一版，`semantic_score` 记 NULL。
+ * - `RANKING_VERSION = 2`：v2 四路权重（语义 + 分类 + 关键词 + 价格），`semantic_score` 落库。
+ *
+ * 放契约里导出：库里存的就是这个数，`docs` 与 `/matches` 的口径解释都要引用它，
+ * 不允许在 worker 里另写一套字面量（`packages/db/src/schema/matches.ts` 的 CHECK 也只允许 1/2）。
+ */
+export const RANKING_VERSION_V1 = 1
+export const RANKING_VERSION = 2
+
+/**
+ * 语义分归一化的分段线性锚点（#322 M3）：把 cosine 相似度映射到 0–100。
+ *
+ * `semanticScore = clamp((similarity - FLOOR) / (CEILING - FLOOR), 0, 1) × 100`
+ *
+ * 为什么不直接把 cosine [-1, 1] 线性拉到 0–100（Issue 明说不要这么干）：真实 embedding 的
+ * 相似度集中在 0.6–0.95，直接映射会把所有对压进 60–98 这一段、失去区分度；锚点把"语义上
+ * 确实相关"的区间拉开，同时让"无关但 cosine 略正"的对落到 0。
+ *
+ * 这两个数是**证据项**：M3 用标注 fixture（人工给定 cosine）校准后冻结；改动它们等于改排序，
+ * 必须带 fixture 对照与 Top-K 排名证据。`stub` provider 的余弦尺度与真实模型不可比
+ * （实测 seed 相关对 0.33–0.49），所以 stub 环境下语义项通常为 0——见
+ * `docs/design/issue-322-matching-v2-m3.md` §锚点校准，不要为了 stub 调这两个数。
+ */
+export const SEMANTIC_SCORE_FLOOR = 0.5
+export const SEMANTIC_SCORE_CEILING = 0.95
+
 // ---------------------------------------------------------------------------
 // 读模型
 // ---------------------------------------------------------------------------

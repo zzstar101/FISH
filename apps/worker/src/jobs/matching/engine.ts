@@ -10,6 +10,8 @@ import {
   type EmbeddingEntity,
   findEmbedding,
   hasEmbeddingFromOtherModel,
+  similarListingsByIds,
+  similarWishesByIds,
   topKSimilarListings,
   topKSimilarWishes,
 } from '@fish/db/embedding-store'
@@ -37,8 +39,13 @@ import { type MatchListingFacts, scoreMatch } from './scoring'
  *
  * **向量未就绪时不做等待**（#322 M1 交给 M2 的前置，见 M2 设计文档 §5）：目标实体缺本模型的向量
  * / 向量与当前内容不一致 / 只有旧模型的向量时，本轮退回 v1 的结构化全量候选（含已有行），
- * 并补投一条 `EMBED_*` job；候选侧没有向量只是"进不了 Top-K"，不额外投递、也不会产生伪匹配
- * （打分仍是 v1 的结构化打分，semantic 在 M2 不参与分数——那是 M3）。
+ * 并补投一条 `EMBED_*` job；候选侧没有向量只是"进不了 Top-K"，不额外投递、也不会产生伪匹配。
+ *
+ * **打分是 v2 hybrid，但语义分按对判定**（#322 M3，见 `scoring.ts`）：本模块的职责只是把
+ * "这一对现在多少 cosine"凑齐并交给纯函数——Top-K 候选取 `<=>` 距离，**union 进来的已有行**
+ * 单独按 id 精确补算（它们不在 Top-K 里，拿不到距离就会退化成 v1 分，看起来像"召回状态变了
+ * 所以质量变差"）。拿不到相似度的对（目标向量不可用，或候选侧没有向量）传 `null` 给
+ * `scoreMatch`，那一行按 v1 算：`semantic_score = NULL`、`ranking_version = 1`。
  *
  * 只读 `listings` / `wishes` / `embeddings`，只写 `matches` / `notifications` / 补投 `jobs`：
  * RESERVED / SOLD 的状态由交易域负责（#11），本模块不改商品状态。
@@ -117,6 +124,8 @@ type WishTarget = {
   status: typeof wishes.$inferSelect.status
   category: ListingCategory | null
   budgetMaxCents: number | null
+  /** #322 M3：`false` 时语义不能单独成立（门禁在 `scoring.ts`）。 */
+  acceptSimilar: boolean
 }
 
 type ListingTarget = {
@@ -218,6 +227,7 @@ const WISH_COLUMNS = {
   status: wishes.status,
   category: wishes.category,
   budgetMaxCents: wishes.budgetMaxCents,
+  acceptSimilar: wishes.acceptSimilar,
 }
 
 const LISTING_COLUMNS = {
@@ -307,14 +317,15 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       breakdown: ReturnType<typeof scoreMatch>
     },
   ): Promise<'created' | 'updated' | 'skipped'> {
-    const { score, categoryScore, keywordScore, priceScore } = input.breakdown
+    const { score, categoryScore, keywordScore, priceScore, semanticScore, rankingVersion } =
+      input.breakdown
 
     // 不成立又没行可写：直接跳过——否则会为一个不成立的匹配新建行**并发出通知**。
     if (!input.qualifies) {
       if (!input.hadRow) return 'skipped'
       await tx
         .update(matches)
-        .set({ score, categoryScore, keywordScore, priceScore })
+        .set({ score, categoryScore, keywordScore, priceScore, semanticScore, rankingVersion })
         .where(and(eq(matches.listingId, input.listingId), eq(matches.wishId, input.wishId)))
       return 'updated'
     }
@@ -328,6 +339,8 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         categoryScore,
         keywordScore,
         priceScore,
+        semanticScore,
+        rankingVersion,
       })
       .onConflictDoNothing({ target: [matches.listingId, matches.wishId] })
       .returning({ id: matches.id })
@@ -349,7 +362,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
 
     await tx
       .update(matches)
-      .set({ score, categoryScore, keywordScore, priceScore })
+      .set({ score, categoryScore, keywordScore, priceScore, semanticScore, rankingVersion })
       .where(and(eq(matches.listingId, input.listingId), eq(matches.wishId, input.wishId)))
     return 'updated'
   }
@@ -382,11 +395,18 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
     return { status: 'ready', embedding: row.embedding }
   }
 
-  /** 把「本轮评估集合」跑完：打分 → 写入 → 计数。 */
+  /**
+   * 把「本轮评估集合」跑完：打分 → 写入 → 计数。
+   *
+   * `similarities`：候选 id → 原始 cosine（`1 - pgvector 距离`）。**没有条目 = 这一对拿不到
+   * 语义分**（目标向量不可用，或候选侧没有向量），该对按 v1 打分——与"语义分恰好是 0"区分开：
+   * 前者 `semantic_score = NULL` / `ranking_version = 1`，后者是 v2 算出的真实 0 分。
+   */
   async function applyTargets(
     targetListing: ListingTarget,
     targets: Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>,
     recall: RecallOutcome,
+    similarities: Map<string, number>,
   ): Promise<MatchRunResult> {
     const listingFacts: MatchListingFacts = {
       title: targetListing.title,
@@ -401,11 +421,18 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
 
     await db.transaction(async (tx) => {
       for (const { wish, hadRow, creatable: canCreate } of targets.values()) {
-        const breakdown = scoreMatch(listingFacts, {
-          keyword: wish.keyword,
-          category: wish.category,
-          budgetMaxCents: wish.budgetMaxCents,
-        })
+        const similarity = similarities.get(wish.id)
+        const breakdown = scoreMatch(
+          listingFacts,
+          {
+            keyword: wish.keyword,
+            category: wish.category,
+            budgetMaxCents: wish.budgetMaxCents,
+            acceptSimilar: wish.acceptSimilar,
+          },
+          // 拿不到 cosine 的对走 v1 分支（`semantic_score = NULL`、`ranking_version = 1`）。
+          similarity === undefined ? null : { similarity },
+        )
         // `qualifies` 只决定"能不能新建这一对"；计数按**读接口会不会展示**（可见性）来分。
         const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD
         const outcome = await persist(tx, {
@@ -472,6 +499,8 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       let recall: MatchRecall
       let fallbackReason: MatchFallbackReason | null = null
       let vectorCandidates = 0
+      /** 候选 id → 原始 cosine（`1 - 距离`）；只放"真的算得出相似度"的那些对。 */
+      const similarities = new Map<string, number>()
 
       if (targetVector.status === 'ready') {
         const similar = await topKSimilarWishes(db, {
@@ -481,6 +510,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
           filter: narrowing,
         })
         vectorCandidates = similar.length
+        for (const row of similar) similarities.set(row.id, 1 - row.distance)
         const ids = similar.map((row) => row.id)
         // 空集合直接跳过回表（`inArray(col, [])` 会生成恒假条件，但没必要发这次查询）。
         candidates =
@@ -497,6 +527,21 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       }
 
       const existingRows = await existingRowsPromise
+
+      /*
+       * union 进来的已有行**不在 Top-K 里**，上面那轮 `<=>` 不会给它们距离：不补算的话这些对
+       * 只能按 v1 打分，于是"某对掉出 Top-K"会被算成"分数变低"（假降级），同一对在两种召回
+       * 状态下出现两套分数。按 id 精确补一次（行数 = 该商品的已有匹配数，个位到几十）。
+       */
+      if (targetVector.status === 'ready') {
+        const missing = existingRows.map((row) => row.id).filter((id) => !similarities.has(id))
+        const extra = await similarWishesByIds(db, {
+          model: embeddingModel,
+          vector: targetVector.embedding,
+          ids: missing,
+        })
+        for (const row of extra) similarities.set(row.id, 1 - row.distance)
+      }
 
       const existingIds = new Set(existingRows.map((row) => row.id))
       const targets = new Map<string, { wish: WishTarget; hadRow: boolean; creatable: boolean }>()
@@ -521,7 +566,12 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         }
       }
 
-      return applyTargets(listingTarget, targets, { recall, fallbackReason, vectorCandidates })
+      return applyTargets(
+        listingTarget,
+        targets,
+        { recall, fallbackReason, vectorCandidates },
+        similarities,
+      )
     },
 
     async matchWish(wishId) {
@@ -537,6 +587,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         status: wish.status,
         category: wish.category,
         budgetMaxCents: wish.budgetMaxCents,
+        acceptSimilar: wish.acceptSimilar,
       }
 
       // 与 listing 方向同构：已有行与召回并发发出，取回顺序不影响结果。
@@ -560,6 +611,8 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       let recall: MatchRecall
       let fallbackReason: MatchFallbackReason | null = null
       let vectorCandidates = 0
+      /** 候选 id → 原始 cosine（`1 - 距离`），与 listing 方向同一口径。 */
+      const similarities = new Map<string, number>()
 
       if (targetVector.status === 'ready') {
         const similar = await topKSimilarListings(db, {
@@ -569,6 +622,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
           filter: narrowing,
         })
         vectorCandidates = similar.length
+        for (const row of similar) similarities.set(row.id, 1 - row.distance)
         const ids = similar.map((row) => row.id)
         candidates =
           ids.length === 0
@@ -583,6 +637,17 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       }
 
       const existingRows = await existingRowsPromise
+
+      // 与 listing 方向同构：union 进来的已有行不在 Top-K 里，按 id 精确补算相似度。
+      if (targetVector.status === 'ready') {
+        const missing = existingRows.map((row) => row.id).filter((id) => !similarities.has(id))
+        const extra = await similarListingsByIds(db, {
+          model: embeddingModel,
+          vector: targetVector.embedding,
+          ids: missing,
+        })
+        for (const row of extra) similarities.set(row.id, 1 - row.distance)
+      }
 
       const existingIds = new Set(existingRows.map((row) => row.id))
       const targets = new Map<
@@ -611,6 +676,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         keyword: wish.keyword,
         category: wish.category,
         budgetMaxCents: wish.budgetMaxCents,
+        acceptSimilar: wish.acceptSimilar,
       }
 
       let matched = 0
@@ -619,6 +685,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
 
       await db.transaction(async (tx) => {
         for (const { listing, hadRow, creatable: canCreate } of targets.values()) {
+          const similarity = similarities.get(listing.id)
           const breakdown = scoreMatch(
             {
               title: listing.title,
@@ -627,6 +694,8 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
               category: listing.category,
             },
             wishFacts,
+            // 拿不到 cosine 的对走 v1 分支（该商品没有本模型的向量）。
+            similarity === undefined ? null : { similarity },
           )
           // `qualifies` 管新建；计数按 `matchWish` 对应的读接口（`/matches?wishId=`，wish 侧镜像）。
           const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD

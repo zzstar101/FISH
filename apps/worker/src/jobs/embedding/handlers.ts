@@ -43,6 +43,10 @@ import { InvalidJobPayloadError } from '../invalid-payload-error'
  *    绝不写一条"空向量"当成功。
  * 5. **软删除/已删实体不算失败**：实体在 job 执行前被删掉时返回 `missing` 并让 job DONE——
  *    重试也找不回来，卡在 PENDING 只会一直重试。
+ * 6. **`unchanged` 也要推进版本标记**：内容指纹一致说明向量仍然对应当前内容，但实体版本可能已经
+ *    前进（改价/改状态这类不碰 embedding 文本的编辑）。此时用
+ *    `refreshEmbeddingSourceVersion` 把 `source_updated_at` 推到当前版本——否则候选侧的新鲜度
+ *    检查会把它当成过期向量，这一对再也进不了语义召回（#322 M3 评审 blocker 修复）。
  */
 export type EmbedRunResult = {
   entity: 'listing' | 'wish'
@@ -165,7 +169,7 @@ async function generate(
     existing.dimensions === EMBEDDING_DIMENSIONS
   ) {
     // 内容没变但实体版本前进了（只改了价格/状态这类不进 embedding 文本的字段）：把向量行的
-    // 版本标记一起推进到实体当前版本。没有这一步，召回侧的新鲜度谓词（#322 M2 复审 blocker）
+    // 版本标记一起推进到实体当前版本。没有这一步，召回侧的新鲜度谓词（#322 M2/M3 复审 blocker）
     // 会把这条本来正确的向量判为过期，等于"改个价格语义召回就断了"。
     await refreshEmbeddingSourceVersion(db, {
       entity,

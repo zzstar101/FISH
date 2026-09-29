@@ -159,6 +159,11 @@ pgvector cosine Top-K（ORDER BY embedding <=> $queryVector LIMIT MATCH_SEMANTIC
   指纹仍然一致 + 只前进不回退），合法向量不会被后续召回判成过期。
 - **`fallbackReason` 分三档**而不是布尔：`missing` 与 `model-mismatch` 的运维含义完全不同
   （前者是「还没生成」，后者是「换模型了、需要 backfill」），M4 的指标要能区分。
+- **候选侧的新鲜度（M3 补，PR #338 评审 blocker）**：上表只判「目标」向量。候选侧也要判，而且必须在
+  **读路径的 SQL 里**判——`topKSimilar*` 与 `similar*ByIds` 现在都带
+  `source_updated_at` 与实体 `updated_at` 的（毫秒截断）相等谓词，因此「实体编辑后向量还没重算」的
+  候选**不进 Top-K**（不占 K 名额），也不会被按 id 补算拿去打分（否则会得到「当前结构事实 + 旧语义」
+  的混合分）。详见 M3 设计文档 §6 与 §13。
 
 ---
 
