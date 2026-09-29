@@ -1,5 +1,6 @@
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
+import { LiquidGlassLayer } from '@fish/ui/liquid-glass'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Bell, MessageCircle, Plus, Search } from 'lucide-react'
@@ -22,7 +23,22 @@ export function TopBar() {
   }
 
   return (
-    <header className="sticky top-0 z-30 h-16 border-line border-b bg-surface/95 backdrop-blur">
+    /*
+     * 液态玻璃顶栏。原来的 `bg-surface/95 backdrop-blur` 必须去掉：`backdrop-filter`
+     * 会让这里变成 backdrop root，把 <LiquidGlassLayer/> 的折射直接压没（磨砂改由
+     * 它自己的 warp 提供）。`sticky z-30` 同时负责建层叠上下文，让 warp 的
+     * z-index:-1 老实待在玻璃内部。见 styles.css 的 .pc-glass。
+     *
+     * 磨砂用组件默认值（blurAmount 0.375 → 24px），**不调薄**：顶栏是 sticky 的，
+     * 商品卡会从它底下滚过去，正是 liquid-glass.tsx 里「14px 挡不住位移、会把文字拖进
+     * 边缘像鬼影」那个实测场景。玻璃要透得好看的地方在侧栏（见 side-nav）。
+     * 白度 /72 由那行 --color-ink-3 的副标题「广应科校内二手」倒推：它直接落在玻璃上，
+     * 必须让对比度不低于原来的 2.91。`saturation` 也要从默认的 180 收到 120 —— 180 会把
+     * 水层的青放大到蓝通道接近饱和（实测底色 rgb(200,230,253)），亮度掉下来，那行副标题
+     * 就只有 2.47；120 下回到约 2.98。
+     */
+    <header className="pc-glass sticky top-0 z-30 h-16 border-b border-white/55 bg-white/72">
+      <LiquidGlassLayer saturation={120} />
       <div className="mx-auto flex h-full max-w-[1600px] items-center gap-7 px-8">
         <Link className="flex min-w-[220px] items-center gap-2.5" to="/">
           <img alt="鱼小应" className="size-8 object-contain" src="/pc/brand-fish.png" />
