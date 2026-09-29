@@ -183,6 +183,12 @@ export function createWishService({
       const updated = await store.update(id, toEditableFields(patch), new Date())
       if (updated) {
         invalidatePoolCache()
+        // #322 M1：编辑愿望此前**不投递任何 job**，于是改完 keyword/description/category 既不重算
+        // 匹配、也不刷新语义向量。规则与商品侧一致且刻意简单：一次成功 PATCH = 一次重算 + 一次
+        // 向量刷新（重算按 wishId 幂等；向量侧还会按内容指纹跳过没变的重新生成，不重复计费）。
+        // 投递放在 `store.update` 之后：wish store 的 update 本身不是事务化的（与 `createWish`
+        // 的既有顺序一致），不假装它原子。
+        await matchQueue.enqueue(id)
         return toWishDto(updated)
       }
       throw new WishServiceError(409, '只有 ACTIVE 愿望可以编辑')

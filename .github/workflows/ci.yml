@@ -37,6 +37,9 @@ env:
   # #228：内容安全审核 transport 无默认值，缺配置 API 启动即失败。CI 不出网、不持有腾讯密钥，
   # 一律 local（本地词表 + 图片一律 REVIEW）；发布链本期未接入适配器，冒烟不会真的审核。
   CONTENT_MODERATION_TRANSPORT: local
+  # #322 M1：embedding transport 无默认值，缺配置 worker 启动即失败。CI 不出网、不持有上游密钥，
+  # 一律 stub（进程内确定性向量）；live 分支只由单测以假 fetch 覆盖。
+  EMBEDDING_TRANSPORT: stub
 
 jobs:
   # 唯一总是运行的作业之一：算出「这次改了什么」。

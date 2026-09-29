@@ -4,6 +4,7 @@ import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { jsonParam } from './json'
 import { conversations } from './schema/conversations'
+import { embeddings } from './schema/embeddings'
 import { jobs } from './schema/jobs'
 import { listingMediaObjects } from './schema/listing-media'
 import { listingNumbers } from './schema/listing-numbers'
@@ -54,6 +55,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       listingImages,
       listingMediaObjects,
       wishes,
+      embeddings,
       matches,
       conversations,
       messages,
@@ -72,6 +74,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       // "已确认"的假象）。它引用 users，因此必须一起 TRUNCATE，否则 seed 会撞外键。
       listingMediaObjects: 0,
       wishes: 2,
+      // #322 M1：向量由 worker 的 EMBED_* job 生成，seed 不预置（假向量落进 seed 库比空表更误导）。
+      embeddings: 0,
       // `matches` / `notifications` 由 worker 用真实打分产出（#43）：seed 只投一条
       // PENDING 的 MATCH_LISTING，不再预写结果，否则 seed 会成为引擎之外的第二份真相。
       matches: 0,

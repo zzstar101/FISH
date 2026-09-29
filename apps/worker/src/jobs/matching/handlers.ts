@@ -4,6 +4,7 @@ import {
   MatchWishJobPayloadSchema,
 } from '@fish/contracts/matching/jobs'
 import type { Db } from '@fish/db/client'
+import { InvalidJobPayloadError } from '../invalid-payload-error'
 import { createMatchEngine, type MatchRunResult } from './engine'
 
 /**
@@ -14,13 +15,8 @@ import { createMatchEngine, type MatchRunResult } from './engine'
  * 应当直接 `FAILED`（见 `InvalidJobPayloadError`）。
  */
 
-/** payload 不合法：重试没有意义，worker 应当直接置 FAILED。 */
-export class InvalidJobPayloadError extends Error {
-  constructor(jobType: string, detail: string) {
-    super(`job ${jobType} 的 payload 不合法：${detail}`)
-    this.name = 'InvalidJobPayloadError'
-  }
-}
+/** 保持既有导入路径可用；类本体已提到 job 层共用（`../invalid-payload-error`）。 */
+export { InvalidJobPayloadError }
 
 /**
  * 匹配域的 job handler 表。

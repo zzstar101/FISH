@@ -303,7 +303,7 @@ export function createGovernanceService(options: {
         // 下架会改变匹配结果（商品离开 ACTIVE），按 listings store `setStatus` 的同一条
         // 规则投 `MATCH_LISTING`（引擎对非 ACTIVE 是 no-op，投了无害；漏投会让缓存里的
         // 匹配结果继续引用一个已不公开的商品）。
-        await enqueueMatchJob(tx, listingId)
+        await enqueueListingJobs(tx, listingId)
 
         await writeAudit(tx, {
           actorUserId,
@@ -394,7 +394,7 @@ export function createGovernanceService(options: {
         }
 
         // 恢复成 ACTIVE 时必须重算匹配：下架期间新建的愿望要靠这条 job 才能匹配上它。
-        await enqueueMatchJob(tx, listingId)
+        await enqueueListingJobs(tx, listingId)
 
         await writeAudit(tx, {
           actorUserId,
@@ -573,13 +573,29 @@ async function priorListingStatus(
   return { status, moderationStatus: row?.prior_moderation === 'APPROVED' ? 'APPROVED' : 'REVIEW' }
 }
 
-/** 与 listings store `enqueueMatchJobWith` 同一条规则：改商品状态就重算匹配。 */
-async function enqueueMatchJob(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
+/**
+ * 与 listings store `enqueueListingJobsWith` 同一条规则（#322 M1 起两条 job 成对投）：
+ * 改商品状态/可见性就重算匹配，并同步刷新语义向量。
+ *
+ * 治理动作是**待审商品转 APPROVED 的唯一入口**（`moderation_status` 变化后匹配才允许进入
+ * 链路），所以这里必须带上 `EMBED_LISTING`：否则审核通过的商品永远不会生成向量，
+ * M2 的语义召回对它直接失效。
+ */
+async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
   await executor.insert(jobs).values({
     id: newId(),
     type: 'MATCH_LISTING',
     payload: jsonParam({ listingId }),
   })
+
+  await executor
+    .insert(jobs)
+    .values({
+      id: newId(),
+      type: 'EMBED_LISTING',
+      payload: jsonParam({ listingId }),
+    })
+    .onConflictDoNothing()
 }
 
 /**

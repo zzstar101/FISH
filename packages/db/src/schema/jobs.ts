@@ -15,7 +15,7 @@ import { primaryKey, timestamps } from './common'
 export const jobStatusEnum = pgEnum('job_status', ['PENDING', 'RUNNING', 'DONE', 'FAILED'])
 
 /** job 类型跨 Owner 增长，用 text + TS 收窄，避免每加一类都要改 migration。 */
-export type JobType = 'MATCH_LISTING' | 'MATCH_WISH'
+export type JobType = 'MATCH_LISTING' | 'MATCH_WISH' | 'EMBED_LISTING' | 'EMBED_WISH'
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
 
@@ -50,5 +50,15 @@ export const jobs = pgTable(
     uniqueIndex('jobs_match_wish_wish_id_uidx')
       .on(sql`(${table.payload}->>'wishId')`)
       .where(sql`${table.type} = 'MATCH_WISH'`),
+    // #322 M1：EMBED_* 的幂等键**只锁"待执行"那一行**（`status = 'PENDING'`），
+    // 与上面 MATCH_WISH 的"实体终身一条"刻意不同：内容改动后必须能重新投递
+    // （否则编辑永远不触发重新生成），而仍在队列里的那一条本来就会在运行时重读实体
+    // （见 `apps/worker/src/jobs/embedding/handlers.ts`），重复投递没有意义。
+    uniqueIndex('jobs_embed_listing_listing_id_uidx')
+      .on(sql`(${table.payload}->>'listingId')`)
+      .where(sql`${table.type} = 'EMBED_LISTING' AND ${table.status} = 'PENDING'`),
+    uniqueIndex('jobs_embed_wish_wish_id_uidx')
+      .on(sql`(${table.payload}->>'wishId')`)
+      .where(sql`${table.type} = 'EMBED_WISH' AND ${table.status} = 'PENDING'`),
   ],
 )

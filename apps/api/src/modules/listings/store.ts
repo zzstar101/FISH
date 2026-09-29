@@ -408,7 +408,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         )
 
         if ((record.moderationStatus ?? 'APPROVED') === 'APPROVED') {
-          await enqueueMatchJobWith(tx, record.id)
+          await enqueueListingJobsWith(tx, record.id)
         }
 
         return { kind: 'created' as const, listingId: record.id }
@@ -416,7 +416,7 @@ export function createSqlListingStore(db: Db): ListingStore {
     },
 
     async enqueueMatchJob(listingId) {
-      await enqueueMatchJobWith(db, listingId)
+      await enqueueListingJobsWith(db, listingId)
     },
 
     async findDetail(id) {
@@ -654,7 +654,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         // 否则 `matches` 里那一对会一直是旧分数（#8 契约 §3.3 的"matches 行 = 当前有效匹配"就不成立）。
         // 投递与写入同一事务：编辑成功而 job 丢失会让该商品永久停在旧分数。
         // 即使只改了图片也照投：规则简单（一条 PATCH = 一条 job），重算本身幂等且不会重复建通知。
-        await enqueueMatchJobWith(tx, input.id)
+        await enqueueListingJobsWith(tx, input.id)
 
         return { kind: 'updated' as const }
       })
@@ -697,7 +697,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         // - `ACTIVE`（重新上架）：下架期间新建的愿望必须能匹配上，否则商品永远等不到新的"愿望成真"；
         // - `OFFLINE`（下架）：引擎对非 ACTIVE 是 `target-not-active` no-op，投了无害，
         //   而"凡是可能改变匹配结果的写操作都投一条"这条规则不必再记例外。
-        await enqueueMatchJobWith(tx, input.id)
+        await enqueueListingJobsWith(tx, input.id)
 
         return true
       })
@@ -749,16 +749,36 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 }
 
 /**
- * 写 `MATCH_LISTING` job。
+ * 写 `MATCH_LISTING` + `EMBED_LISTING` 两条 job（#322 M1 起成对投递）。
+ *
+ * 为什么成对：`EMBED_LISTING` 的输入（标题/描述/分类）与 `MATCH_LISTING` 的打分输入是同一批字段，
+ * 凡是要重算匹配的写操作，语义向量同样可能过期；分两处投递迟早会漏掉一边。
  *
  * `payload` 必须经 `jsonParam()` 包装：直接用裸对象会被 drizzle + `bun-sql` stringify 两次，
  * 落库成为「JSON 字符串套 JSON」，于是 `payload->>'listingId'` 在 SQL 层恒为 NULL，
  * #8 的 worker 就再也匹配不到这个商品（详见 `@fish/db/json` 的实测说明）。
+ *
+ * `EMBED_LISTING` 带 `ON CONFLICT DO NOTHING`：它的唯一索引是**部分索引**
+ * （`(payload->>'listingId') WHERE type='EMBED_LISTING' AND status='PENDING'`），
+ * 已有一条待跑时再投会撞唯一键——那不是错误，只是"同一份内容已经排好队了"。
+ * 反过来，`MATCH_LISTING` 保持原样（无唯一索引、也无冲突处理），v1 语义一个字节不动。
  */
-async function enqueueMatchJobWith(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
+async function enqueueListingJobsWith(
+  executor: Pick<Db, 'insert'>,
+  listingId: string,
+): Promise<void> {
   await executor.insert(jobs).values({
     id: newId(),
     type: 'MATCH_LISTING',
     payload: jsonParam({ listingId }),
   })
+
+  await executor
+    .insert(jobs)
+    .values({
+      id: newId(),
+      type: 'EMBED_LISTING',
+      payload: jsonParam({ listingId }),
+    })
+    .onConflictDoNothing()
 }
