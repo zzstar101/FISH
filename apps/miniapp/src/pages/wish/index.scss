@@ -5,7 +5,7 @@
  *
  * 区块顺序：冰蓝页头 → 玻璃顶栏（两段式标题 + 副行一级 tab）→ 热门求购卡 →
  * 区块标题行（+「我要许愿」）→ 二级筛选横滑胶囊 → `.mw` / `.pool` 卡片列表 →
- * k-匿名说明 → 悬浮 TabBar。
+ * 悬浮 TabBar。
  *
  * 顶栏由 `components/top-bar` 提供（`fixed` + 自带等高占位块），页面不再自绘标题行；
  * 副行（tab）的占位由 `.wish__header-gap` 补 —— 组件的 `spacer` 只含主行。
@@ -103,15 +103,7 @@
   overflow: hidden;
 }
 
-.hot::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 6px;
-  background: linear-gradient(90deg, var(--brand), var(--accent-mid));
-}
+
 
 .hot__hd {
   display: flex;
@@ -376,6 +368,34 @@
   @include card;
 }
 
+/* 整卡随状态变色（Owner 2026-09-29 拍板）：
+   - 有命中 → #ecfcee 75% 玻璃（底栏同款半透明），命中商品行白底；
+   - 终态（已完成 / 已关闭）→ 深灰 #404040（Owner 指定色值），文字翻浅色；
+   - 许愿中无命中 → 白玻璃，不加修饰类。 */
+/* 状态色必须压过下方「卡片材质」块的 background（材质块与本条同为单类/双类，
+   但 .mw/.pool 靠源序在后 —— 这里用 .mw.mw--xx 双类提高特异性，与源序无关地稳赢）。 */
+.mw.mw--hit {
+  /* 命中卡：白玻璃垫层加白（56% → 72%）+ #b7e896 绿罩退到 10%（90% 透明），
+     整卡更白更淡（Owner 2026-09-29 拍板：透明度再加 10%、更白一点） */
+  background-color: rgba(255, 255, 255, 0.72);
+  background-image: linear-gradient(rgba(183, 232, 150, 0.1), rgba(183, 232, 150, 0.1));
+}
+
+.mw--hit .wishhit {
+  background: var(--surface);
+  border-color: transparent;
+}
+
+/* 终态灰卡：中性灰玻璃（--fg 16% ≈ #d4d8de，介于近白与过深的 #404040 之间），
+   文字维持默认深色、预算红保留，只把底色压灰。 */
+.mw.mw--dim {
+  /* 终态灰卡（Owner 2026-09-29 拍板）：白玻璃垫层 80% + --fg 灰罩 10%（90% 透明）——灰罩减半才能让「加白」肉眼可见（0.2 罩主导最终色），
+     与命中卡同一叠层逻辑（白垫混色、blur 保持生效）。 */
+  background-color: rgba(255, 255, 255, 0.7);
+  background-image: linear-gradient(rgba(23, 35, 61, 0.1), rgba(23, 35, 61, 0.1));
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
 .mw__top {
   display: flex;
   align-items: flex-start;
@@ -438,7 +458,8 @@
 .mw__budget-val {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-weight: 700;
-  color: var(--fg);
+  /* 金额一律红（与商品卡价格同色） */
+  color: var(--danger);
 }
 
 /* 命中数：可点进匹配结果页（只有真的命中过才高亮 + 带箭头） */
@@ -538,6 +559,8 @@
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 26px;
   font-weight: 700;
+  /* 金额一律红（与商品卡价格同色） */
+  color: var(--danger);
   white-space: nowrap;
 }
 
@@ -686,24 +709,21 @@
   color: var(--muted);
 }
 
-/* k-匿名说明条（设计稿 `.knote`）：虚线描边的等宽小字 */
-.knote {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 24px;
-  padding: 20px 24px;
-  border-radius: 28px;
-  background: var(--accent-weak);
-  border: 2px dashed var(--accent-mid);
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 19px;
-  line-height: 1.65;
-  color: var(--muted);
-}
-
-.knote__line {
-  display: block;
+/* ── 卡片材质：底部栏（custom-tab-bar）同款玻璃，全部卡片统一（Owner 2026-09-29 拍板）──
+   配方源自 `custom-tab-bar/index.scss` 的栏体：56% 白 + blur(30px) saturate(190%) +
+   白描边 + 内高光；**投影比底栏轻一档**（Owner 2026-09-29：底栏的重投影压卡片太深）。
+   必须放在 `.pool` 之后——同特异性下靠源序覆盖 `@include card`。 */
+.hot,
+.mw,
+.pool {
+  background: rgba(255, 255, 255, 0.56);
+  border-color: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 16px 36px -22px rgba(23, 35, 61, 0.22),
+    0 4px 10px -6px rgba(23, 35, 61, 0.08),
+    inset 0 2px 0 rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(30px) saturate(190%);
+  -webkit-backdrop-filter: blur(30px) saturate(190%);
 }
 
 /* ─────────────────────────── 空态（两分支共用） ─────────────────────────── */
