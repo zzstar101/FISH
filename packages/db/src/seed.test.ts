@@ -158,6 +158,8 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
     // tx.accepted SYSTEM 消息必须指向真实交易，且不带发送者。content 是 text，
     // 可能是纯文案（如「买家发起了交易确认。」），不能无条件 ::jsonb——
     // CASE 包住 pg_input_is_valid，Postgres 只对命中的分支求值，纯文案行安全跳过。
+    // 先限定 m.type = 'SYSTEM'：用户合法发一条 TEXT、内容恰好是
+    // {"type":"tx.accepted",...} 时，不该被误当成交易系统事件。
     // join 用 id::text 比较：payload 是坏 UUID 时报「违规行」而不是把测试打崩。
     const txMessageViolations = await scratch.execute<{ id: string }>(sql`
       with payloads as (
@@ -165,6 +167,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
                m.sender_id,
                case when pg_input_is_valid(m.content, 'jsonb') then m.content::jsonb end as payload
         from messages m
+        where m.type = 'SYSTEM'
       )
       select p.id
       from payloads p
