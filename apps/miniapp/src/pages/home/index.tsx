@@ -346,7 +346,7 @@ export default function Home() {
       </View>
 
       {/* 回到顶部：Tab 页抬到底栏上方 */}
-      <BackTop show={showTop} onTop={backToTop} bottom="145rpx" />
+      <BackTop show={showTop} onTop={backToTop} bottom="170rpx" />
     </View>
   )
 }
