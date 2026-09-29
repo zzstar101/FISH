@@ -3,7 +3,6 @@ import {
   ACCESS_TOKEN_FAILURE_BACKOFF_MS,
   ACCESS_TOKEN_REFRESH_MARGIN_MS,
   createWechatAccessTokenService,
-  type WechatAccessTokenService,
   WechatPlatformError,
 } from './access-token'
 
