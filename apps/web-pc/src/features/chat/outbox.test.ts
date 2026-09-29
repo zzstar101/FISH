@@ -1,13 +1,34 @@
 import { describe, expect, test } from 'bun:test'
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { ApiError } from '../../lib/api-client'
+import type { MediaUploadDraft } from './media'
 import {
+  createMediaOutboxMessage,
   createOutboxMessage,
+  dispatchMediaOutboxSend,
   dispatchOutboxSend,
   type OutboxMessage,
+  type OutboxTextMessage,
   resetOutboxForRetry,
 } from './outbox'
-import type { SendTextVariables } from './queries'
+import type { SendMediaVariables, SendTextVariables } from './queries'
+
+function mediaMessage(id: MediaMessageDto['id']): MediaMessageDto {
+  return {
+    id,
+    conversationId: 'cnv_01jc000000e00800000000001a',
+    senderId: 'usr_01jc000000e00800000000000a',
+    kind: 'VOICE',
+    mediaId: 'med_01jc000000e00800000000002a',
+    url: `/api/conversations/cnv_01jc000000e00800000000001a/media/med_01jc000000e00800000000002a`,
+    mimeType: 'audio/webm',
+    sizeBytes: 2_048,
+    width: null,
+    height: null,
+    durationMs: 1_500,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }
+}
 
 function message(id: MessageDto['id'], content: string): MessageDto {
   return {
@@ -87,6 +108,38 @@ function createMutationFake() {
   }
 }
 
+/**
+ * 媒体发送的 fake：记录每次请求用的幂等键，用来验证「重试沿用同键」——
+ * 服务端就是靠同一个 clientRequestId 才把重试认成重放而不是新消息。
+ */
+function createMediaMutationFake() {
+  const requests = new Map<string, Deferred<MediaMessageDto>>()
+  const seenClientRequestIds: string[] = []
+  return {
+    mutation: {
+      mutateAsync(variables: SendMediaVariables) {
+        seenClientRequestIds.push(variables.clientRequestId)
+        const request = deferred<MediaMessageDto>()
+        requests.set(variables.clientRequestId, request)
+        return request.promise
+      },
+    },
+    seenClientRequestIds,
+    reject(clientRequestId: string, error: unknown) {
+      requests.get(clientRequestId)?.reject(error)
+    },
+    resolve(clientRequestId: string, value: MediaMessageDto) {
+      requests.get(clientRequestId)?.resolve(value)
+    },
+  }
+}
+
+const voiceDraft = (): MediaUploadDraft => ({
+  kind: 'VOICE',
+  file: new File(['voice-bytes'], 'voice.webm', { type: 'audio/webm' }),
+  durationMs: 1_500,
+})
+
 /** 让 per-call 回调与 Promise 链各自跑完一轮微任务。 */
 function flush(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -151,7 +204,7 @@ describe('dispatchOutboxSend', () => {
     const second = createOutboxMessage('第二条')
     const store = createStore([first, second])
     const sent: string[] = []
-    const input = (item: OutboxMessage) => ({
+    const input = (item: OutboxTextMessage) => ({
       item,
       conversationId: 'cnv_01jc000000e00800000000001a',
       mutation: fake.mutation,
@@ -171,6 +224,45 @@ describe('dispatchOutboxSend', () => {
     await flush()
     expect(sent).toEqual(['msg_01jc000000e00800000000001v', 'msg_01jc000000e00800000000001w'])
     expect(store.outbox).toEqual([])
+  })
+
+  test('媒体重试沿用同一个幂等键，成功后才销账、不重复落条', async () => {
+    const fake = createMediaMutationFake()
+    const item = createMediaOutboxMessage(voiceDraft(), 'blob:preview-1')
+    const store = createStore([item])
+    const sent: MediaMessageDto[] = []
+    const input = (current: typeof item) => ({
+      item: current,
+      conversationId: 'cnv_01jc000000e00800000000001a',
+      mutation: fake.mutation,
+      setOutbox: store.setOutbox,
+      onSent: (value: MediaMessageDto) => sent.push(value),
+    })
+
+    void dispatchMediaOutboxSend(input(item))
+    fake.reject(item.clientRequestId, new ApiError('MEDIA_OBJECT_NOT_FOUND', 422, '尚未上传完成'))
+    await flush()
+    expect(store.outbox).toEqual([
+      {
+        ...item,
+        status: 'failed',
+        error: '媒体上传未完成，请重试',
+        errorCode: 'MEDIA_OBJECT_NOT_FOUND',
+      },
+    ])
+
+    store.setOutbox((current) => resetOutboxForRetry(current, item.clientRequestId))
+    const retrying = store.outbox[0]
+    if (retrying === undefined || retrying.kind !== 'MEDIA') throw new Error('unreachable')
+    expect(retrying.clientRequestId).toBe(item.clientRequestId)
+    void dispatchMediaOutboxSend(input(retrying))
+
+    fake.resolve(item.clientRequestId, mediaMessage('msg_01jc000000e00800000000001v'))
+    await flush()
+    expect(store.outbox).toEqual([])
+    expect(sent.map((value) => value.id)).toEqual(['msg_01jc000000e00800000000001v'])
+    // 两次请求（首次 + 重试）用同一个幂等键，服务端据此返回同一条而不是新建。
+    expect(fake.seenClientRequestIds).toEqual([item.clientRequestId, item.clientRequestId])
   })
 
   test('重试沿用同一个幂等键，不新增待发条目', async () => {
