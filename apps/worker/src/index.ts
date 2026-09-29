@@ -3,6 +3,7 @@ import { loadEmbeddingEnv, loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { createEmbedJobHandlers } from './jobs/embedding/handlers'
 import { createEmbeddingProvider } from './jobs/embedding/providers'
+import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
@@ -35,6 +36,8 @@ const queue = createJobQueue(db, {
     // （#322 M1 §11.6）。换模型 = 换这里的 provider，向量由 M4 的 backfill 重建。
     ...createMatchJobHandlers(db, { embeddingModel: embeddingProvider.model }),
     ...createEmbedJobHandlers(db, embeddingProvider),
+    // 长期兴趣画像（#323 R2）同样要显式拿到模型：聚合只吃当前模型的向量，换模型后由 backfill 重建。
+    ...createInterestJobHandlers(db, { embeddingModel: embeddingProvider.model }),
   },
   isFatalError: (error) => error instanceof InvalidJobPayloadError,
 })

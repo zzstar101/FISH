@@ -232,6 +232,13 @@
       "when": 1790647547177,
       "tag": "20260929100547_woozy_wolfpack",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790669695148,
+      "tag": "20260929161455_thick_wolfpack",
+      "breakpoints": true
     }
   ]
 }

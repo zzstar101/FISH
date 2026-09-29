@@ -61,6 +61,7 @@ import { createSqlProfileStore } from './modules/profile/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
+import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
@@ -234,6 +235,9 @@ export function createApp(
   const recommendationService = createRecommendationService({
     store: createSqlRecommendationStore(db),
     listings: listingService,
+    // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
+    // （画像只给登录用户，匿名行为不投 job）。
+    interest: createDbInterestRefreshQueue(db),
   })
   const recommendationRecorder = createRecommendationDomainRecorder(recommendationService)
   app.route(
