@@ -1,5 +1,6 @@
 import { Alert, AlertDescription } from '@fish/ui/alert'
 import { Button } from '@fish/ui/button'
+import { Checkbox } from '@fish/ui/checkbox'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
 import { Spinner } from '@fish/ui/spinner'
@@ -242,6 +243,31 @@ export function TextField({
         <FieldDescription className="text-xs">{hint}</FieldDescription>
       ) : null}
     </Field>
+  )
+}
+
+export function CheckboxField({
+  checked,
+  disabled,
+  label,
+  onCheckedChange,
+}: {
+  checked: boolean
+  disabled?: boolean
+  label: string
+  onCheckedChange: (checked: boolean) => void
+}) {
+  return (
+    // biome-ignore lint/a11y/noLabelWithoutControl: Checkbox 是 button[role=checkbox]，label 实际包裹着控件
+    <label className="flex cursor-pointer items-center gap-2 text-sm text-[#527281] select-none">
+      <Checkbox
+        checked={checked}
+        className="border-[#c3d9e0] data-[state=checked]:border-[#1677a1] data-[state=checked]:bg-[#1677a1]"
+        disabled={disabled}
+        onCheckedChange={(value) => onCheckedChange(value === true)}
+      />
+      <span>{label}</span>
+    </label>
   )
 }
 

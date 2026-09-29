@@ -6,7 +6,8 @@
       "!**/node_modules",
       "!**/dist",
       "!**/src/routeTree.gen.ts",
-      "!packages/db/src/migrations"
+      "!packages/db/src/migrations",
+      "!**/.robobun/evidence"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },

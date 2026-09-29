@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { AuthPageShell, SubmitButton, TextField } from './form'
+import { AuthPageShell, CheckboxField, SubmitButton, TextField } from './form'
 
 test('登录请求中禁用按钮并展示可读的加载状态', () => {
   const html = renderToStaticMarkup(
@@ -39,4 +39,20 @@ test('字段错误与输入框关联，登录与注册各自使用独立外壳',
   expect(loginShell).toContain('登录表单')
   expect(loginShell).toContain('auth-glass-card')
   expect(loginShell).not.toContain('auth-register-page')
+})
+
+test('勾选框渲染选中态与禁用态', () => {
+  const checked = renderToStaticMarkup(
+    <CheckboxField checked label="记住账号密码" onCheckedChange={() => {}} />,
+  )
+  expect(checked).toContain('记住账号密码')
+  expect(checked).toContain('data-state="checked"')
+  expect(checked).not.toContain('disabled=""')
+
+  const disabled = renderToStaticMarkup(
+    <CheckboxField checked={false} disabled label="自动登录" onCheckedChange={() => {}} />,
+  )
+  expect(disabled).toContain('自动登录')
+  expect(disabled).toContain('disabled=""')
+  expect(disabled).not.toContain('data-state="checked"')
 })
