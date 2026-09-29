@@ -29,6 +29,7 @@ import {
   type SQL,
   sql,
 } from 'drizzle-orm'
+import type { ListingCardSeller } from './card'
 
 export type ListingRow = typeof listings.$inferSelect
 export type ListingImageRow = typeof listingImages.$inferSelect
@@ -81,6 +82,8 @@ export type FeedEntry = {
    */
   createdAtCursor: string
   coverObjectKey: string | null
+  /** 卖家公开投影源列（#191）：inner join users 同页带出，不逐卡补查。 */
+  seller: ListingCardSeller
 }
 
 export type CreateListingRecord = {
@@ -533,12 +536,21 @@ export function createSqlListingStore(db: Db): ListingStore {
       if (cursorCondition) conditions.push(cursorCondition)
 
       // 多取一行用于判断"还有没有下一页"，返回前丢掉（契约 §2.1：不另给 hasMore）。
+      // innerJoin users（#191）：卡片要带卖家公开子集；`seller_id` 外键保证行存在，
+      // PK join 是 1:1，不影响分页、游标与排序。
       const rows = await db
         .select({
           listing: listings,
           createdAtCursor: sql<string>`to_char(${listings.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+          seller: {
+            id: users.id,
+            nickname: users.nickname,
+            avatarUrl: users.avatarUrl,
+            authStatus: users.authStatus,
+          },
         })
         .from(listings)
+        .innerJoin(users, eq(users.id, listings.sellerId))
         .where(and(...conditions))
         .orderBy(...orderBySql(criteria.sort))
         .limit(criteria.limit + 1)
@@ -559,6 +571,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         listing: row.listing,
         createdAtCursor: row.createdAtCursor,
         coverObjectKey: coverByListing.get(row.listing.id) ?? null,
+        seller: row.seller,
       }))
     },
 
