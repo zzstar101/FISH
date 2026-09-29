@@ -143,6 +143,23 @@ export type TxSideEffect = (
   message: MessageRow,
 ) => void
 
+/**
+ * 交易事件通知（任务一 #89：交易进展通知的产生点）。
+ *
+ * 服务在动作**成功后**调用，收件人是动作的对方（发起方不给自己发：PROPOSED 发卖家、
+ * ACCEPTED / REJECTED 发买家、CONFIRMED / COMPLETED / CANCELLED 发对方）。
+ * 实现方负责落 notifications 表并**自吞错误** —— 通知是旁路，失败不得影响交易响应，
+ * 也不允许留下 unhandled rejection（见 app.ts 的注入实现）。
+ */
+export type TransactionNotifier = (input: {
+  userId: string
+  event: 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED'
+  conversationId: string
+  listingId: string
+  /** PROPOSED 阶段提案不落表，没有交易 id；其余事件都有。 */
+  transactionId?: string
+}) => void
+
 export interface TransactionService {
   /** 响应是写入的 SYSTEM 消息（契约 MessageDto，camelCase）。 */
   propose(
@@ -212,12 +229,15 @@ export function createTransactionService({
   meetupSecret,
   /** SYSTEM 消息写入后回调（实时推送）；推送失败不得影响响应。 */
   onSystemMessage,
+  /** 交易事件通知（任务一）；实现自吞错误，见 `TransactionNotifier`。 */
+  notify,
 }: {
   store: TransactionStore
   messages: MessageStore
   storage: MediaStorage
   meetupSecret: string
   onSystemMessage?: TxSideEffect
+  notify?: TransactionNotifier
 }): TransactionService {
   const meetupCrypto = new MeetupTokenCrypto(meetupSecret)
   async function writeSystem(
@@ -336,12 +356,22 @@ export function createTransactionService({
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
-      return toMessageDto(
-        await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+      const message = await writeSystem(
+        { buyerId: brief.buyerId, sellerId: brief.sellerId },
+        brief.id,
+        {
           type: 'tx.proposal',
           amountCents: input.amountCents,
-        }),
+        },
       )
+      // 提案不落表，收件人卖家拿不到「可跳的交易」——通知只带会话/商品。
+      notify?.({
+        userId: brief.sellerId,
+        event: 'PROPOSED',
+        conversationId: brief.id,
+        listingId: brief.listingId,
+      })
+      return toMessageDto(message)
     },
 
     async reject(userId, input) {
@@ -355,11 +385,20 @@ export function createTransactionService({
           '只有卖家可以拒绝交易确认',
         )
       }
-      return toMessageDto(
-        await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+      const message = await writeSystem(
+        { buyerId: brief.buyerId, sellerId: brief.sellerId },
+        brief.id,
+        {
           type: 'tx.rejected',
-        }),
+        },
       )
+      notify?.({
+        userId: brief.buyerId,
+        event: 'REJECTED',
+        conversationId: brief.id,
+        listingId: brief.listingId,
+      })
+      return toMessageDto(message)
     },
 
     async accept(userId, input) {
@@ -390,6 +429,13 @@ export function createTransactionService({
 
       // 消息已随交易落库，这里只负责推给在线端（落库失败则根本走不到这一步）。
       onSystemMessage?.({ buyerId: brief.buyerId, sellerId: brief.sellerId }, result.message)
+      notify?.({
+        userId: brief.buyerId,
+        event: 'ACCEPTED',
+        conversationId: brief.id,
+        listingId: brief.listingId,
+        transactionId: result.row.id,
+      })
       // 刚建的行 FK 必然齐备；拿不到摘要属于不可达防御分支。此刻交易已创建且
       // listing 已锁定、SYSTEM 消息已推送——不能复用 409 业务码（会诱导客户端把
       // "实际已成功"当失败重试），交给 onError 统一成 500 INTERNAL_ERROR。
@@ -449,6 +495,15 @@ export function createTransactionService({
       }
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
+      // 收件人是**对方**（先确认的那一方）：本次确认让对方等到「对方已确认」；
+      // 若这一确认同时触发 COMPLETED，对方收到的是「交易已完成」。
+      notify?.({
+        userId: existing.buyer_id === userId ? existing.seller_id : existing.buyer_id,
+        event: result.row.status === 'COMPLETED' ? 'COMPLETED' : 'CONFIRMED',
+        conversationId: existing.conversation_id,
+        listingId: existing.listing_id,
+        transactionId: existing.id,
+      })
       return dto
     },
 
@@ -465,6 +520,13 @@ export function createTransactionService({
       if (result.kind !== 'ok') throw notFound()
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
+      notify?.({
+        userId: existing.buyer_id === userId ? existing.seller_id : existing.buyer_id,
+        event: 'CANCELLED',
+        conversationId: existing.conversation_id,
+        listingId: existing.listing_id,
+        transactionId: existing.id,
+      })
       return dto
     },
 

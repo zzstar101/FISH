@@ -1,8 +1,10 @@
 import { z } from 'zod'
 import {
+  ConversationIdSchema,
   ListingIdSchema,
   MatchIdSchema,
   NotificationIdSchema,
+  TransactionIdSchema,
   WishIdSchema,
 } from '../system/public-id'
 
@@ -23,13 +25,38 @@ import {
  */
 
 /**
- * 通知类型。P0 只有 `MATCH`（#8 的匹配引擎在「愿望 ↔ 商品」首次命中时写入，收件人是愿望所有者）。
+ * 通知类型。`MATCH` 是 #8 的匹配引擎在「愿望 ↔ 商品」首次命中时写入（收件人是愿望所有者）；
+ * `TX` / `MODERATION` / `ACCOUNT` 是任务一（#89 消息页通知真实化）加入的三类：
+ * 交易进展（提议/接受/拒绝/确认/完成/取消）、商品审核出结果、账号与认证事件。
  *
  * 与库里的 `text + TS 收窄` 保持一致而**不用 pgEnum**：值集尚未冻结（P1 还有降价通知），
  * 加类型时改这一处 + `packages/db/src/schema/notifications.ts` 的类型，不必迁移枚举。
  */
-export const notificationTypeSchema = z.enum(['MATCH'])
+export const notificationTypeSchema = z.enum(['MATCH', 'TX', 'MODERATION', 'ACCOUNT'])
 export type NotificationType = z.infer<typeof notificationTypeSchema>
+
+/**
+ * `TX` 通知的具体事件。收件人由产生点决定：`PROPOSED` 发给卖家、`ACCEPTED` / `REJECTED`
+ * 发给买家、`CONFIRMED` / `COMPLETED` / `CANCELLED` 发给对方（发起动作的一方不给自己发）。
+ * `PROPOSED` 阶段提案不落表，因此 payload 没有 `transactionId`。
+ */
+export const notificationTxEventSchema = z.enum([
+  'PROPOSED',
+  'ACCEPTED',
+  'REJECTED',
+  'CONFIRMED',
+  'COMPLETED',
+  'CANCELLED',
+])
+export type NotificationTxEvent = z.infer<typeof notificationTxEventSchema>
+
+/** `MODERATION` / `ACCOUNT` 通知的结论（审核通过与否、认证通过与否）。 */
+export const notificationOutcomeSchema = z.enum(['APPROVED', 'REJECTED'])
+export type NotificationOutcome = z.infer<typeof notificationOutcomeSchema>
+
+/** `ACCOUNT` 通知的主题。P1 只有一颗：校园邮箱认证结果。 */
+export const notificationAccountSubjectSchema = z.enum(['VERIFICATION'])
+export type NotificationAccountSubject = z.infer<typeof notificationAccountSubjectSchema>
 
 /**
  * 读侧口径（冻结，与 `apps/api/src/modules/notifications/{store,service}.ts` 的注释一致）：
@@ -45,10 +72,17 @@ export type NotificationType = z.infer<typeof notificationTypeSchema>
  */
 
 /**
- * `payload` 的形状（jsonb，按 `type` 解释）。`MATCH` 是 `{ matchId, listingId, wishId }`。
+ * `payload` 的形状（jsonb，按 `type` 解释）。
  *
- * 三个 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_`。
+ * - `MATCH`：`{ matchId, listingId, wishId }`；
+ * - `TX`：`{ event, transactionId?, conversationId?, listingId? }`（PROPOSED 无 transactionId）；
+ * - `MODERATION`：`{ listingId, outcome }`；
+ * - `ACCOUNT`：`{ subject, outcome }`。
+ *
+ * 各 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_` / `tx_` / `cnv_`。
  * 被删除或无法映射的历史引用只省略该字段，不删除整条通知；数据库 JSON 原文不改。
+ * 库里存**裸 UUID**（worker/api 写入侧），读侧 `service.ts` 的 `projectPayload`
+ * 负责转成公开 TypeID —— 与 MATCH 的既有口径一致。
  */
 export const notificationPayloadSchema = z.object({
   // Runtime validates strict TypeIDs. Keep DTO TypeScript fields as string until the
@@ -56,6 +90,11 @@ export const notificationPayloadSchema = z.object({
   matchId: MatchIdSchema.transform((id): string => id).optional(),
   listingId: ListingIdSchema.transform((id): string => id).optional(),
   wishId: WishIdSchema.transform((id): string => id).optional(),
+  transactionId: TransactionIdSchema.transform((id): string => id).optional(),
+  conversationId: ConversationIdSchema.transform((id): string => id).optional(),
+  event: notificationTxEventSchema.optional(),
+  outcome: notificationOutcomeSchema.optional(),
+  subject: notificationAccountSubjectSchema.optional(),
 })
 export type NotificationPayload = z.infer<typeof notificationPayloadSchema>
 

@@ -3,6 +3,7 @@ import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
+import { notifications } from '@fish/db/schema/notifications'
 import { desc, eq, sql } from 'drizzle-orm'
 
 export type ModerationDbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0]
@@ -164,6 +165,20 @@ export function createSqlModerationStore(
         id: newId(),
         type: 'MATCH_LISTING',
         payload: jsonParam({ listingId: String(record.listing_id) }),
+      })
+
+      // 审核出结果 → MODERATION 通知（任务一 #89）：与决策**同事务**落库，
+      // 决策回滚则通知不存在；收件人是商品卖家，客户端按 outcome 渲染通过/未通过。
+      // `jsonParam` 不能省：裸对象会落成 jsonb 字符串，读侧的 `jsonb_typeof = 'object'`
+      // 谓词会把整行判成不可投影（见 `packages/db/src/json.ts`）。
+      await tx.insert(notifications).values({
+        id: newId(),
+        userId: String(record.seller_id),
+        type: 'MODERATION',
+        payload: jsonParam({
+          listingId: String(record.listing_id),
+          outcome: input.decision === 'ALLOW' ? 'APPROVED' : 'REJECTED',
+        }),
       })
 
       // 人工放行同样要刷新语义向量（#322 M1）：这是待审商品进入匹配链路的入口之一，

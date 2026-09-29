@@ -6,7 +6,11 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 const internalTx = (id: string) => decodePublicId(PUBLIC_ID_PREFIX.transaction, id)
 
 import { MemoryMessageStore } from '../messages/memory-store.fixture'
-import { createTransactionService, TransactionServiceError } from './service'
+import {
+  createTransactionService,
+  type TransactionNotifier,
+  TransactionServiceError,
+} from './service'
 import type {
   ConversationLookup,
   MeetupConsumeInput,
@@ -303,14 +307,19 @@ async function build() {
     publicUrl: (key: string) => `https://cdn.test/${key}`,
   }
   const systemEvents: string[] = []
+  /** 任务一 #89：交易进展通知的 spy（服务约定「动作成功后调用、收件人是对方」） */
+  const notifications: Parameters<TransactionNotifier>[0][] = []
   const service = createTransactionService({
     store,
     messages,
     storage,
     meetupSecret: 'test-meetup-secret',
     onSystemMessage: (_p, message) => systemEvents.push(message.content),
+    notify: (input) => {
+      notifications.push(input)
+    },
   })
-  return { store, service, messages, systemEvents }
+  return { store, service, messages, systemEvents, notifications }
 }
 
 describe('transaction service: propose / reject / accept', () => {
@@ -414,6 +423,75 @@ describe('transaction service: propose / reject / accept', () => {
     const message = await service.reject(seller, { conversationId: conversationA })
     expect(JSON.parse(message.content).type).toBe('tx.rejected')
     expect(store.rows).toHaveLength(0)
+  })
+})
+
+describe('transaction service: 交易进展通知（任务一 #89）', () => {
+  test('propose 通知卖家 PROPOSED（无交易 id）；accept 通知买家 ACCEPTED（带交易 id）', async () => {
+    const { service, notifications } = await build()
+    await service.propose(buyer, { conversationId: conversationA, amountCents: 16000 })
+    expect(notifications).toEqual([
+      { userId: seller, event: 'PROPOSED', conversationId: conversationA, listingId: listingA },
+    ])
+
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    expect(notifications[1]).toEqual({
+      userId: buyer,
+      event: 'ACCEPTED',
+      conversationId: conversationA,
+      listingId: listingA,
+      transactionId: internalTx(dto.id),
+    })
+  })
+
+  test('首次确认通知对方 CONFIRMED；对侧补确认后，先确认方收到 COMPLETED', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    notifications.length = 0
+    const txId = internalTx(dto.id)
+
+    await service.confirm(buyer, txId)
+    expect(notifications).toEqual([
+      {
+        userId: seller,
+        event: 'CONFIRMED',
+        conversationId: conversationA,
+        listingId: listingA,
+        transactionId: txId,
+      },
+    ])
+
+    await service.confirm(seller, txId)
+    expect(notifications[1]).toEqual({
+      userId: buyer,
+      event: 'COMPLETED',
+      conversationId: conversationA,
+      listingId: listingA,
+      transactionId: txId,
+    })
+  })
+
+  test('cancel 通知对方 CANCELLED；失败的动作（403/404/409）不发通知', async () => {
+    const { service, notifications, store } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    notifications.length = 0
+    const txId = internalTx(dto.id)
+
+    // 外人取消 → 404，不给任何一方发通知
+    expect(service.cancel(outsider, txId)).rejects.toMatchObject({ status: 404 })
+    expect(notifications).toEqual([])
+
+    await service.cancel(buyer, txId)
+    expect(notifications).toEqual([
+      {
+        userId: seller,
+        event: 'CANCELLED',
+        conversationId: conversationA,
+        listingId: listingA,
+        transactionId: txId,
+      },
+    ])
+    expect(store.rows[0]?.status).toBe('CANCELLED')
   })
 })
 

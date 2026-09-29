@@ -27,6 +27,22 @@ export function notificationCopy(item: NotificationDto): {
         title: '许愿有匹配结果',
         description: '找到了一件可能符合你愿望的闲置。',
       }
+    // 任务一扩展的三类：Web 端只按 type 给文案（无会话/审核页跳转），
+    // 保证新 type 的通知在 PC 消息中心也能读出内容，而不是显示成未知类型。
+    case 'TX':
+      return {
+        emoji: '🤝',
+        title: '交易有新的进展',
+        description: '到小程序查看这笔交易的当前状态。',
+      }
+    case 'MODERATION':
+      return item.payload.outcome === 'APPROVED'
+        ? { emoji: '✅', title: '商品审核通过', description: '你的闲置已重新上架可见。' }
+        : { emoji: '⚠️', title: '商品未通过审核', description: '请在「我的发布」查看原因。' }
+    case 'ACCOUNT':
+      return item.payload.outcome === 'APPROVED'
+        ? { emoji: '🎓', title: '校园认证通过', description: '已完成校园认证。' }
+        : { emoji: '⚠️', title: '校园认证未通过', description: '可以重新提交验证。' }
   }
 }
 
