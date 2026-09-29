@@ -54,16 +54,49 @@ export function notificationCopy(item: NotificationDto): {
       return {
         emoji: '🤝',
         title: '交易有新的进展',
-        description: '打开会话查看这笔交易的当前状态。',
+        description: txEventCopy(item.payload.event),
       }
     case 'MODERATION':
+      /*
+       * 落点是 `/mylist`，文案只能说那里**真的**有的东西：PC「我的发布」对未通过的商品
+       * 只给一个「审核未通过」标记，既没有未通过原因、也不给编辑入口（`BLOCKED` 的
+       * `actionEnabled` / `editEnabled` 都是 `false`）。写「查看原因并编辑重发」会把用户
+       * 送到一个什么都没有的页面 —— 小程序端那句成立，是因为那边两样都有。
+       */
       return item.payload.outcome === 'APPROVED'
         ? { emoji: '✅', title: '商品审核通过', description: '你的闲置已重新上架可见。' }
-        : { emoji: '⚠️', title: '商品未通过审核', description: '到「我的发布」查看原因。' }
+        : { emoji: '⚠️', title: '商品未通过审核', description: '到「我的发布」可以看到这条商品。' }
     case 'ACCOUNT':
       return item.payload.outcome === 'APPROVED'
         ? { emoji: '🎓', title: '校园认证通过', description: '已完成校园认证。' }
         : { emoji: '⚠️', title: '校园认证未通过', description: '可以重新提交验证。' }
+  }
+}
+
+/**
+ * TX 一行里说给**收件人**听的那句。收件人由产生点决定（契约注释），事件本身即视角：
+ * `PROPOSED` 只发卖家、`ACCEPTED` / `REJECTED` 只发买家、`CONFIRMED` / `COMPLETED` /
+ * `CANCELLED` 只发对方 —— 所以按事件写死措辞是安全的，不需要再区分角色。
+ *
+ * 六种事件各给一句：`event` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，
+ * 而不是留空行或编一个可能不对的进展。
+ */
+function txEventCopy(event: NotificationDto['payload']['event']): string {
+  switch (event) {
+    case 'PROPOSED':
+      return '买家发起了交易确认，等你接受。'
+    case 'ACCEPTED':
+      return '卖家接受了你的交易确认，去安排面交吧。'
+    case 'REJECTED':
+      return '卖家拒绝了你的交易确认。'
+    case 'CONFIRMED':
+      return '对方已确认面交，等你确认。'
+    case 'COMPLETED':
+      return '交易已完成。'
+    case 'CANCELLED':
+      return '交易已取消。'
+    default:
+      return '打开会话查看这笔交易的当前状态。'
   }
 }
 

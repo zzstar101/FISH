@@ -141,11 +141,16 @@ function toIso(value: Date | string | null): string | null {
 /**
  * 确认类动作下，**对方视角**能收到的交易事件；没有新东西可说时返回 null。
  *
- * - 交易已 `COMPLETED` → 对方看到的都是「交易已完成」（谁是最后确认的一方都一样）；
+ * - 交易已 `COMPLETED` → 对方看到的是「交易已完成」（谁是最后确认的一方都一样）；
  * - 仍在 `PENDING_MEETUP`：我方这一侧还没确认 → 对方没有任何新进展（null）；
  *   我方已确认 → 对方学到的是「对方已确认」（`CONFIRMED`）。
  *
  * `confirm` 用它比动作前后：相同就不发通知（no-op 重放不发），不同才发。
+ *
+ * 由「我方刚盖章」推出来的，因此只覆盖 `confirm` 这条路径：`CONFIRMED` 必然发给
+ * 尚未确认的那一方，而卖家那一侧的确认另有来源（核销展示码，`consumeMeetup`），
+ * 它的 `COMPLETED` 由那里直接发（见 `consumeMeetup` 的注释）—— 两边合起来才是
+ * 完整的「谁在什么时候学到什么」，不要在别处假定 `CONFIRMED` 也会发给卖家。
  */
 function eventKnownToCounterpart(
   status: string,
@@ -327,6 +332,25 @@ export function createTransactionService({
       throw error
     }
     if (result.kind === 'ok') {
+      /*
+       * 核销盖的是**卖家自己**的面交确认（出示码就是他的同意），所以卖家不需要
+       * 「对方已确认」这种通知。但买家先单侧确认过时，本次核销就是第二侧确认事件，
+       * 交易在同一事务里直接 COMPLETED —— 这条 `COMPLETED` 只有这里能发：
+       * 客户端随后的 `confirm` 在 COMPLETED 上是幂等重放，`eventKnownToCounterpart`
+       * 前后相同、按设计不发（见 `confirm` 的注释），不发就等于卖家永远不知道成交了。
+       *
+       * 重读一次交易（非热路径）：`result.row` 是凭证行，不带交易状态。
+       */
+      const after = await store.findById(id)
+      if (after?.status === 'COMPLETED') {
+        notify?.({
+          userId: row.seller_id,
+          event: 'COMPLETED',
+          conversationId: row.conversation_id,
+          listingId: row.listing_id,
+          transactionId: id,
+        })
+      }
       return meetupVerificationResponseSchema.parse({
         transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, id),
         verified: true,

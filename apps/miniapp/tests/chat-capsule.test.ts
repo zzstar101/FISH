@@ -125,7 +125,7 @@ describe('capsuleFor —— 交易行状态', () => {
     })
   })
 
-  test('交易行存在时优先于 lastMessage 的提案（接受后成交前闲聊不改状态）', () => {
+  test('未终结的交易行优先于 lastMessage / 扫描结果（接受后成交前的提案消息不改状态）', () => {
     const conversation = dto({
       lastMessage: {
         type: 'SYSTEM',
@@ -134,7 +134,40 @@ describe('capsuleFor —— 交易行状态', () => {
         createdAt: '2026-09-21T03:30:00.000Z',
       },
     })
-    expect(capsuleFor(conversation, new Map([['c-1', tx({ status: 'CANCELLED' })]]))).toEqual({
+    // accepted 之后那条提案消息还在会话里，但它已是历史：状态由交易行说了算。
+    expect(capsuleFor(conversation, new Map([['c-1', tx({ status: 'PENDING_MEETUP' })]]))).toEqual({
+      label: '待面交',
+      cls: 'is-warn',
+    })
+    expect(
+      capsuleFor(
+        conversation,
+        new Map([['c-1', tx({ status: 'COMPLETED' })]]),
+        new Map([['c-1', { type: 'tx.proposal', amountCents: 15000 }]]),
+      ),
+    ).toEqual({ label: '已完成', cls: 'is-ok' })
+  })
+
+  /*
+   * 取消后重新提案：`cancel` 把 listing 放回 ACTIVE，买家可以再提一次案（提案只写
+   * SYSTEM 消息、不落表），于是「旧行 CANCELLED + 新提案在等点头」同时存在。
+   * 只认交易行会把「等你接受」显示成「已取消」，卖家明明要动手却看到终态。
+   * 终态不产生 SYSTEM 消息（契约 `transactionSystemEventSchema` 只有三元），所以
+   * 行已取消时「最后一个交易事件是提案」必然来自取消之后。
+   */
+  test('已取消的行被之后的提案盖过 → 回到待同意/待接受', () => {
+    const cancelled = new Map([
+      ['c-1', tx({ status: 'CANCELLED', cancelledAt: '2026-09-21T04:00:00.000Z' })],
+    ])
+    const scanned = new Map([['c-1', { type: 'tx.proposal' as const, amountCents: 16000 }]])
+
+    expect(capsuleFor(dto(), cancelled, scanned)).toEqual({ label: '待同意', cls: 'is-pending' })
+    expect(capsuleFor(dto({ role: 'seller' }), cancelled, scanned)).toEqual({
+      label: '待接受',
+      cls: 'is-pending',
+    })
+    // 扫过、确认取消之后没有新提案 → 仍是已取消
+    expect(capsuleFor(dto(), cancelled, new Map([['c-1', null]]))).toEqual({
       label: '已取消',
       cls: 'is-plain',
     })
@@ -258,6 +291,27 @@ describe('needsProposalScan —— 哪些行要补拉消息页', () => {
     })
     expect(needsProposalScan(proposalLast, new Map())).toBe(false)
     expect(needsProposalScan(dto(), new Map())).toBe(false)
+  })
+
+  /*
+   * 已取消是唯一「行存在也仍要扫」的状态：取消把 listing 放回 ACTIVE，同一会话可以
+   * 重新提案（见 `capsuleFor` 的用例）。COMPLETED / PENDING_MEETUP 下 `propose`
+   * 必 409（SOLD / RESERVED），扫了也只是白发请求。
+   */
+  test('已取消的交易行仍要扫（取消后可能重新提案）；完成 / 待面交不用扫', () => {
+    const textLast = dto({
+      lastMessage: {
+        type: 'TEXT',
+        content: '在吗',
+        senderId: 'u-2',
+        createdAt: '2026-09-21T03:40:00.000Z',
+      },
+    })
+    expect(needsProposalScan(textLast, new Map([['c-1', tx({ status: 'CANCELLED' })]]))).toBe(true)
+    expect(needsProposalScan(textLast, new Map([['c-1', tx({ status: 'COMPLETED' })]]))).toBe(false)
+    expect(needsProposalScan(textLast, new Map([['c-1', tx({ status: 'PENDING_MEETUP' })]]))).toBe(
+      false,
+    )
   })
 
   test('没有交易行且 lastMessage 是 TEXT / 非交易 SYSTEM → 要扫', () => {

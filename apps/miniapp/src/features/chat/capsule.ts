@@ -53,7 +53,14 @@ export function needsProposalScan(
   conversation: ConversationDto,
   transactions: Map<string, TransactionDto>,
 ): boolean {
-  if (transactions.has(conversation.id)) return false
+  /*
+   * 有交易行就只看交易行 —— **除了已取消**：取消后同一会话可以重新提案（`propose`
+   * 只写 SYSTEM 消息、不落表），此时行与提案并存，只认交易行会把「等你点头」显示成
+   * 「已取消」。完成态不可能再有新提案（listing 已 SOLD，`propose` 必 409），
+   * PENDING_MEETUP 期间 listing 被 RESERVED 锁住、同样提不出案。
+   */
+  const tx = transactions.get(conversation.id)
+  if (tx && tx.status !== 'CANCELLED') return false
   const last = conversation.lastMessage
   if (!last) return false
   if (last.type !== 'SYSTEM') return true
@@ -80,7 +87,20 @@ export function capsuleFor(
   txEvents?: TxEventIndex,
 ): ConversationCapsule | null {
   const tx = transactions.get(conversation.id)
-  if (tx) {
+  const event = txEvents?.has(conversation.id)
+    ? (txEvents.get(conversation.id) ?? null)
+    : lastEventOfLastMessage(conversation)
+  /*
+   * 已取消的行可以被**后来的**提案盖过：取消把 listing 放回 ACTIVE，同一会话即可
+   * 重新提案（`propose` 只写消息、不落表），此时行与提案并存。终态不写 SYSTEM 消息
+   * （契约 `transactionSystemEventSchema` 三元），所以「最后一个交易事件是提案」
+   * 只可能来自 accepted 之后的新提案 —— 此刻更能回答「现在等我做什么」的是提案。
+   *
+   * 完成态与 PENDING_MEETUP 不适用：前者商品已 SOLD、后者被 RESERVED 锁住，
+   * `propose` 都会 409，不可能再有新提案。
+   */
+  const proposalSupersedes = tx?.status === 'CANCELLED' && event?.type === 'tx.proposal'
+  if (tx && !proposalSupersedes) {
     // 终态：完成走绿、取消走浅底灰字（唯一不用做任何事的一档）。
     if (tx.status === 'COMPLETED') return { label: '已完成', cls: 'is-ok' }
     if (tx.status === 'CANCELLED') return { label: '已取消', cls: 'is-plain' }
@@ -94,9 +114,6 @@ export function capsuleFor(
       : { label: '待对方确认', cls: 'is-pending' }
   }
 
-  const event = txEvents?.has(conversation.id)
-    ? (txEvents.get(conversation.id) ?? null)
-    : lastEventOfLastMessage(conversation)
   if (event?.type === 'tx.proposal') {
     // 提案只由买家发起：买家视角是「我发的、等对方同意」，卖家视角是「等我先接受」。
     return conversation.role === 'buyer'

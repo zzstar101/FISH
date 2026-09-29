@@ -76,7 +76,7 @@ describe('notification view', () => {
     expect(notificationCopy(item({ event: 'PROPOSED' }, 'TX'))).toEqual({
       emoji: '🤝',
       title: '交易有新的进展',
-      description: '打开会话查看这笔交易的当前状态。',
+      description: '买家发起了交易确认，等你接受。',
     })
     expect(notificationCopy(item({ listingId: 'l1', outcome: 'APPROVED' }, 'MODERATION'))).toEqual({
       emoji: '✅',
@@ -89,5 +89,22 @@ describe('notification view', () => {
     expect(
       notificationCopy(item({ subject: 'VERIFICATION', outcome: 'APPROVED' }, 'ACCOUNT')),
     ).toEqual({ emoji: '🎓', title: '校园认证通过', description: '已完成校园认证。' })
+  })
+
+  /*
+   * TX 的 `event` 是「谁在什么时候学到什么」的唯一信息源：不说事件的话，六种进展
+   * （等接受 / 已接受 / 被拒 / 对方已确认 / 已完成 / 已取消）在列表上长得一模一样。
+   * `event` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，不留空行。
+   */
+  test('TX 按 event 给不同措辞，事件缺席时退回通用句', () => {
+    const descriptionOf = (event: NotificationDto['payload']['event']) =>
+      notificationCopy(item({ listingId: 'l1', conversationId: 'c1', event }, 'TX')).description
+
+    expect(descriptionOf('ACCEPTED')).toBe('卖家接受了你的交易确认，去安排面交吧。')
+    expect(descriptionOf('REJECTED')).toBe('卖家拒绝了你的交易确认。')
+    expect(descriptionOf('CONFIRMED')).toBe('对方已确认面交，等你确认。')
+    expect(descriptionOf('COMPLETED')).toBe('交易已完成。')
+    expect(descriptionOf('CANCELLED')).toBe('交易已取消。')
+    expect(descriptionOf(undefined)).toBe('打开会话查看这笔交易的当前状态。')
   })
 })
