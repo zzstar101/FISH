@@ -149,6 +149,9 @@ export async function seed(tx: SeedTx): Promise<void> {
 
   // The reservation table must not be truncated: historical references remain occupied.
   // Only the same seed UUID may reclaim its own reserved number on repeated local resets.
+  // #301 TRUNCATE 差额审计：有意不清空的另外两张是 `id_rekeys`（ID 迁移台账，无外键）
+  // 与 `listing_lookup_attempts`（60s 限流台账，subjectKey 是 HMAC 文本，不引用业务表），
+  // 清空它们既不必要也不会解除任何外键阻塞。
   await tx
     .insert(listingNumbers)
     .values([...listingReferences])
