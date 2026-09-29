@@ -9,7 +9,7 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { confirmBackTicket } from '@/features/auth/login-continue'
 import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
 import { signInWithWechat, useAuth } from '@/features/auth/store'
-import { takeConsent } from '@/features/legal/entry'
+import { applyConsent, takeConsent } from '@/features/legal/entry'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import './index.scss'
@@ -72,9 +72,10 @@ export default function Login() {
    * `takeConsent()` 取走即清，所以之后每次正常返回本页不会反复改动用户的勾选。
    */
   useDidShow(() => {
+    // 决定在**事件回调里**先取出来，不放进 setState 的 updater：
+    // updater 必须是纯函数（StrictMode 下会被调用两次），在里面消费一次性信号会取不到第二次
     const decision = takeConsent()
-    if (decision === 'agreed') setAgreed(true)
-    if (decision === 'declined') setAgreed(false)
+    setAgreed((prev) => applyConsent(decision, prev))
   })
 
   const { status } = useAuth()

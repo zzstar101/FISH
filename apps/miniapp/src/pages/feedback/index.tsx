@@ -10,6 +10,7 @@ import {
   type FeedbackTypeKey,
   parseFeedbackDraft,
 } from './draft'
+import { SHEET_BODY, sheetVariant } from './sheet'
 import './index.scss'
 
 /**
@@ -194,6 +195,8 @@ export default function Feedback() {
   const nav = useMemo(() => readNavMetrics(), [])
   const scrollTopRef = useRef(0)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 提交在飞的**同步**闸门（见 `submit` 的说明；`busy` 只负责 UI） */
+  const submitBusyRef = useRef(false)
   /**
    * 表单当前值的**最新**快照（每次渲染同步刷新）。
    *
@@ -299,7 +302,9 @@ export default function Feedback() {
    * 一次说清。校验不过时不弹层：标红对应卡片 + 滚到第一个出错处 + toast。
    */
   const submit = () => {
-    if (busy) return
+    // 判 ref 而不是 state：`setState` 要下一轮渲染才可见，同一帧里的第二次点击读到的仍是
+    // 旧值，会起两个定时器（与 `pages/login` 的 `wechatBusyRef` 同一个理由，#198 P3-2）
+    if (submitBusyRef.current) return
     const missingType = type === ''
     const descTooLong = desc.length > DESC_MAX
     const descTooShort = desc.trim().length < DESC_MIN
@@ -310,9 +315,13 @@ export default function Feedback() {
       toast('还有必填项没有填完')
       return
     }
+    submitBusyRef.current = true
     setBusy(true)
+    // 清掉上一轮可能还在飞的定时器：卸载时只清得掉最后一个，两个定时器会各开一次弹层
+    if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = null
+      submitBusyRef.current = false
       setBusy(false)
       // 内容落本机暂存，弹层才敢说「你的内容已暂存在本机」（稿的 submit 同款顺序）。
       // 读 `stateRef` 而不是闭包里的 state：这 700ms 内用户可能又补了字（见 stateRef 的说明）；
@@ -509,30 +518,18 @@ export default function Feedback() {
             </View>
             <Text className="fb__sheet-title">提交功能待接入</Text>
             {/*
-              正文三档，**每一档都只说成立的话**：
+              正文三档，**每一档都只说成立的话**（档位判定与文案在 `./sheet`，有单测）：
               - 暂存失败：不能再说「已暂存在本机」（`persistDraft` 的返回值说了算）；
               - 邮箱已定：稿的原文；
-              - 邮箱未定：不能指引用户去「复制后发给客服邮箱」—— 那个按钮这一档根本不渲染，
-                说「可直接复制后通过下面的客服邮箱发给我们」等于把人指去一个做不到的动作。
+              - 邮箱未定：不能指引用户去「复制后发给客服邮箱」—— 那个按钮这一档根本不渲染。
             */}
-            {stored === false ? (
-              <Text className="fb__sheet-text">
-                <Text className="fb__strong fb__strong--fg">本机暂存失败</Text>
-                ，请先把上面写好的内容复制到别处，再离开本页。
-              </Text>
-            ) : hasMail ? (
-              <Text className="fb__sheet-text">
-                后端反馈接口尚未上线。
-                <Text className="fb__strong fb__strong--fg">你的内容已暂存在本机</Text>
-                ，可直接复制后通过下面的客服邮箱发给我们。
-              </Text>
-            ) : (
-              <Text className="fb__sheet-text">
-                后端反馈接口尚未上线。
-                <Text className="fb__strong fb__strong--fg">你的内容已暂存在本机</Text>
-                ；客服邮箱待定，暂时还没有可用的送达渠道，接口上线后这里会给出直接提交的入口。
-              </Text>
-            )}
+            <Text className="fb__sheet-text">
+              {SHEET_BODY[sheetVariant(stored, hasMail)].map((run) => (
+                <Text key={run.t} className={run.b ? 'fb__strong fb__strong--fg' : undefined}>
+                  {run.t}
+                </Text>
+              ))}
+            </Text>
 
             <View className="fb__mailrow">
               <Image className="fb__mail-ic" src={ICONS.mail} mode="aspectFit" />
@@ -556,17 +553,24 @@ export default function Feedback() {
                 <Image className="fb__btn-ic" src={ICONS.checkAccent} mode="aspectFit" />
                 <Text>知道了，我稍后再发</Text>
               </View>
-              <View
-                className="fb__btn-link"
-                onClick={() => {
-                  resetForm()
-                  setSheetOpen(false)
-                  toast('已清空本机暂存')
-                }}
-              >
-                <Image className="fb__btn-ic" src={ICONS.delete} mode="aspectFit" />
-                <Text>清空本机暂存的内容</Text>
-              </View>
+              {/*
+                暂存失败那一档**不给清空钮**：这一档刚告诉用户「内容没落盘、先复制再走」，
+                而 `resetForm()` 会把表单里唯一一份内容也清掉 —— 按下去等于亲手毁掉
+                刚被劝住的东西；何况此时本机根本没有暂存，「已清空本机暂存」也是假的。
+              */}
+              {stored === false ? null : (
+                <View
+                  className="fb__btn-link"
+                  onClick={() => {
+                    resetForm()
+                    setSheetOpen(false)
+                    toast('已清空本机暂存')
+                  }}
+                >
+                  <Image className="fb__btn-ic" src={ICONS.delete} mode="aspectFit" />
+                  <Text>清空本机暂存的内容</Text>
+                </View>
+              )}
             </View>
           </View>
         </>

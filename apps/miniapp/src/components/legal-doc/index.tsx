@@ -97,6 +97,22 @@ function runClass(run: Run): string | undefined {
   return cls.length > 0 ? cls.join(' ') : undefined
 }
 
+/** 法务文档之间互链的两个目标；只有它们需要继承「从登录流程进入」这个来源 */
+const LEGAL_PAGES = new Set(['/pages/terms/index', '/pages/privacy/index'])
+
+/**
+ * 页脚互链的落点。
+ *
+ * 从登录流程进来的实例带着 `?from=login`（同意条据此显示）。互链**必须把它传下去**，
+ * 否则：登录 → 用户协议（有同意条）→ 页脚《隐私政策》（**没有**同意条）→ 再互链回用户协议
+ * 又是个新实例、仍然没有 —— 用户读到一半发现同意条整段消失，得连按几次返回才回到有它的那层。
+ * 稿的页脚是裸 `<a href>`（静态稿里没有「来源」这个概念），这里按落地需要补上。
+ * 意见反馈不是法务文档，不带这个参数。
+ */
+function crossLinkUrl(page: string, entry: boolean): string {
+  return entry && LEGAL_PAGES.has(page) ? `${page}?from=login` : page
+}
+
 /** 信息清单的一条：名称 + 必要性标签 + 用途 */
 function ItemRow({ item }: { item: ListItem }) {
   return (
@@ -230,6 +246,21 @@ export default function LegalDocView({ doc, entry }: Props) {
     if (consentTapRef.current) return false
     consentTapRef.current = true
     return true
+  }
+
+  /**
+   * 同意条按下之后的返回。
+   *
+   * `navigateBack` 也可能失败（冷启动直接落在这一页、或栈里只有这一页）——失败时**把闸门放开**，
+   * 否则两个按钮会永久无响应且没有任何提示（先例 `pages/login` 的 `setBusy(false)` 就在
+   * 失败路径上复位）。决定已经 `markConsent` 落值，所以即使返回失败，用户用导航栏返回时
+   * 登录页仍能兑现它。
+   */
+  const leaveAfterConsent = () => {
+    void Taro.navigateBack().catch(() => {
+      consentTapRef.current = false
+      void Taro.showToast({ title: '返回失败，请用左上角返回', icon: 'none' })
+    })
   }
 
   useReady(() => {
@@ -395,7 +426,7 @@ export default function LegalDocView({ doc, entry }: Props) {
               <View
                 key={link.page}
                 className="ld__foot-link"
-                onClick={() => void Taro.navigateTo({ url: link.page })}
+                onClick={() => void Taro.navigateTo({ url: crossLinkUrl(link.page, entry) })}
               >
                 <Image className="ld__foot-link-ic" src={ICONS[link.icon]} mode="aspectFit" />
                 <Text>{link.label}</Text>
@@ -405,8 +436,9 @@ export default function LegalDocView({ doc, entry }: Props) {
         </View>
       </View>
     ),
-    // `tocRow` 已经把 `goToSection` 收进自己的依赖，所以这里不必再列一次；`doc` 是静态数据
-    [doc, tocRow],
+    // `tocRow` 已经把 `goToSection` 收进自己的依赖，所以这里不必再列一次；
+    // `doc` 是静态数据，`entry` 只影响页脚互链要不要带上 `?from=login`
+    [doc, tocRow, entry],
   )
 
   return (
@@ -442,7 +474,7 @@ export default function LegalDocView({ doc, entry }: Props) {
               // 把「同意」带回登录页勾上：用户可能先取消过勾选，不回传的话回来 CTA 仍是禁用的
               markConsent('agreed')
               void Taro.showToast({ title: '已同意', icon: 'none' })
-              void Taro.navigateBack()
+              leaveAfterConsent()
             }}
           >
             <Image className="ld__agree-ok-ic" src={ICONS.checkWhite} mode="aspectFit" />
@@ -455,7 +487,7 @@ export default function LegalDocView({ doc, entry }: Props) {
               // 把「不同意」带回登录页取消勾选，否则这句提示是假的（见 `entry.ts` 的说明）
               markConsent('declined')
               void Taro.showToast({ title: '未同意，无法继续使用', icon: 'none' })
-              void Taro.navigateBack()
+              leaveAfterConsent()
             }}
           >
             <Text>{doc.agree.no}</Text>

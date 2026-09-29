@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { isEntryFromAuth, markConsent, takeConsent } from '../src/features/legal/entry'
+import {
+  applyConsent,
+  isEntryFromAuth,
+  markConsent,
+  takeConsent,
+} from '../src/features/legal/entry'
 
 /**
  * 法务页入口来源与同意决定的回传。
@@ -42,5 +47,20 @@ describe('takeConsent —— 同意条决定的跨页一次性信号', () => {
     markConsent('declined')
     expect(takeConsent()).toBe('declined')
     expect(takeConsent()).toBeNull()
+  })
+})
+
+describe('applyConsent —— 决定怎么落到登录页的勾选态上', () => {
+  test('agreed 一律勾上、declined 一律取消 —— 两个方向都覆盖', () => {
+    // 「同意并继续」在用户先取消过勾选时也必须把勾选补回来，否则回到登录页 CTA 仍是禁用的
+    expect(applyConsent('agreed', false)).toBe(true)
+    expect(applyConsent('agreed', true)).toBe(true)
+    expect(applyConsent('declined', true)).toBe(false)
+    expect(applyConsent('declined', false)).toBe(false)
+  })
+
+  test('没有待处理的决定时保持原值，不擅自改动用户的勾选', () => {
+    expect(applyConsent(null, true)).toBe(true)
+    expect(applyConsent(null, false)).toBe(false)
   })
 })

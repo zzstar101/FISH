@@ -42,3 +42,16 @@ export function takeConsent(): ConsentDecision | null {
   pendingConsent = null
   return value
 }
+
+/**
+ * 把决定应用到登录页**当前**的勾选态上；`null`（没有待处理的决定）保持原值。
+ *
+ * 单独摘成纯函数是为了让它可测：登录页那一行 `setAgreed` 被删掉时，
+ * typecheck / lint / 现有测试都不会红，而这条正是「同意并继续」有没有落地的唯一凭据
+ * （见 `tests/legal-entry.test.ts`）。
+ */
+export function applyConsent(decision: ConsentDecision | null, current: boolean): boolean {
+  if (decision === 'agreed') return true
+  if (decision === 'declined') return false
+  return current
+}
