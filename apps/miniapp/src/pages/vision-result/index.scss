@@ -1,97 +1,82 @@
 @use '@/styles/mixins' as *;
 
 /**
- * 识图结果页（设计稿 `D:\Downloads\2改\设计稿_V1-vision-result.html`）。
- * 尺寸 = 设计稿 pt × 2（见 DESIGN.md），与稿内 `.pagehead` / `.qcard` / `.stats` /
- * `.filterbar` / `.wf` 逐块对应。
+ * 识图结果页 —— **全屏查询图 + 底部可拖拽面板**（Owner 2026-09-30 按参考图定版）。
+ * 尺寸 = 设计稿 pt × 2（SCSS 里的 px 会被 Taro pxtransform 换算成 rpx）。
  *
- * **根节点不写 `overflow`**：写了页面自身就成了滚动容器，`.vres__filters` 的
- * `position: sticky` 会退化成普通元素（同 `pages/wish/index.scss` 记录的实测）。
+ * 结构：`.vres__stage`（铺满屏的查询图，含状态栏那一截）+ 顶部漂浮返回钮/标题 +
+ * `.vres__sheet`（结果面板：把手区 → 查询图与结论 → 统计 → 排序胶囊 → 内层滚动结果区）。
  *
- * 稿里被丢掉的外壳：状态栏 / 灵动岛 / 机身侧键 / home indicator / 假微信胶囊 /
- * 390×844 的固定 `.screen` / 审阅用的状态陈列卡。真机顶栏只做**避让**（`lib/nav-metrics`
- * 运行时反推胶囊，本页按它下发 `padding-top` 与 `padding-right`）。
+ * **面板的几何由 `features/visual-search/sheet.ts` 算好、行内下发**（设备 px，不参与 rpx 缩放）：
+ * 高度固定为「打开高度」，收起靠 `translateY` 下移 —— 改高度会让内层瀑布流每帧重新布局，
+ * 拖动时明显掉帧。
+ *
+ * **页面根节点不写 `overflow`**（仓库铁律：写了页面自身就成了滚动容器，fixed/sticky 退化）；
+ * 本页的滚动发生在面板内的 `ScrollView` 里，页面本身不滚。
  */
 
 .vres {
   position: relative;
-  min-height: 100vh;
-  background: var(--bg);
-  /* 底部留白：让出回到顶部钮与安全区（非 Tab 页，没有底栏要避让） */
-  padding-bottom: calc(120px + env(safe-area-inset-bottom));
+  width: 100vw;
+  height: 100vh;
+  background: var(--fg);
 }
 
-/* ---------------------------------------------------------------- 页头（随内容滚走） */
+/* ------------------------------------------------------------ 背景：查询图 */
 
-/**
- * 稿 `.pagehead`：冰蓝渐变 + 下缘 32pt 圆角，里面装顶栏 / 查询图卡 / 统计行三块。
- *
- * 与同族页面（history / mylist / following）不同，这里**不用** `page-hero` 混入 ——
- * 那个是 `position: absolute` 的纯背景层（给 fixed 顶栏当底），而本页页头是**内容块**：
- * 它要参与文档流、随页面滚走。所以直接把渐变铺在这块上。
- *
- * 左右内边距 40px 是内容（查询图卡 / 统计行）的栅格；`padding-top` 由页面按运行时读到的
- * 状态栏高内联下发（设备 px）。**右边不留 `capsuleInset`**：本页没有 fixed 顶栏要避让，
- * 页头里的标题是绝对定位居中，留出那一截只会把查询图卡挤窄。
- */
-.vres__head {
-  background: var(--grad-page);
-  border-bottom-left-radius: 64px;
-  border-bottom-right-radius: 64px;
-  padding: 0 40px 20px;
-}
-
-/* 顶栏：返回钮 + 居中标题（与识图家族另两页同一形态） */
-.vres__topbar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 92px;
-  box-sizing: border-box;
-}
-
-/**
- * 标题**绝对定位到整条栏的中线**（而不是当普通 flex 子项居中）。
- *
- * 为什么：标题右边是微信原生胶囊，页头必须把那一截让出去（`.vres__head` 的右内边距由
- * 页面按运行时反推的 `capsuleInset` 下发，见 `index.tsx`）—— 让出之后剩余宽度不再对称，
- * 直接 `justify-content: center` 会把标题顶到偏左约半格的位置（实测 390pt 屏左偏 ~51pt）。
- * 拉满左右定位再居中，标题才落在屏幕上，与设计稿 `.topbar` 和 `pages/scan-vision` 一致。
- *
- * 不接收点击：它盖在返回钮与页头之上，`pointer-events: none` 让这一层彻底穿透。
- */
-.vres__title {
+.vres__stage {
   position: absolute;
   left: 0;
   right: 0;
-  font-size: 34px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-align: center;
-  pointer-events: none;
-  color: var(--fg);
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  overflow: hidden;
 }
 
-/* 返回钮：玻璃圆钮，绝对定位在行首（标题拉满整行后不能靠 flex 排它） */
-.vres__back {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 72px;
-  height: 72px;
+.vres__photo {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/** 两条路都拿不到图时的占位：深色底 + 一句说明（不画裂图） */
+.vres__photo-ph {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 50%;
-  background: var(--glass-strong);
-  border: 2px solid var(--surface);
-  box-shadow: var(--shadow-card);
+  background: var(--fg);
+}
 
-  &:active {
-    transform: translateY(-50%) translateY(2px);
-  }
+.vres__photo-ph-text {
+  font-size: 26px;
+  letter-spacing: 0.08em;
+  color: var(--on-dark-track);
+}
+
+/**
+ * 这次取框的那一块：框内保持原亮度、框外整体压暗（`box-shadow` 的 9999px 扩散就是遮罩，
+ * 与识图入口页取框态同一手法）。参考图②的「整张照片 + 框住主体」。
+ */
+.vres__frame {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  border: 4px solid var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(23, 35, 61, 0.42);
+}
+
+/* ------------------------------------------------------------ 顶部漂浮层 */
+
+.vres__back {
+  position: absolute;
+  left: 32px;
+  z-index: 5;
+  transform: translateY(-50%);
+  @include float-btn(72px);
 }
 
 .vres__back-chevron {
@@ -104,32 +89,89 @@
   margin-left: 6px;
 }
 
-/* ---------------------------------------------------------------- 查询图卡 */
+.vres__title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--surface);
+}
 
-/* 稿 `.qcard`：高 116px（58pt）、圆角 40px（20pt）、白底 + 极淡描边 */
-.vres__qcard {
+/* ------------------------------------------------------------ 底部结果面板 */
+
+/**
+ * 面板：**高度 = 打开高度**（行内下发），收起靠 `translateY` 下移。
+ *
+ * `transition` 只在非拖动状态生效（`.is-dragging` 关掉）—— 拖动时若还带过渡，
+ * 面板会「追不上手指」，手感发飘。
+ */
+.vres__sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
   display: flex;
-  align-items: center;
-  gap: 22px;
-  margin-top: 20px;
-  height: 116px;
-  padding: 14px 16px 14px 14px;
+  flex-direction: column;
   box-sizing: border-box;
   background: var(--surface);
-  border: 2px solid var(--border);
-  border-radius: 40px;
-  box-shadow: var(--shadow-card);
+  border-radius: 40px 40px 0 0;
+  box-shadow: 0 -12px 40px -20px rgba(23, 35, 61, 0.6);
+  transition: transform 0.26s cubic-bezier(0.33, 1, 0.68, 1);
+  will-change: transform;
+
+  &.is-dragging {
+    transition: none;
+  }
+}
+
+/** 把手区：整套拖动都挂在这一块（下面是滚动列表，不能抢手势） */
+.vres__grabwrap {
+  flex: 0 0 auto;
+  padding: 18px 32px 10px;
+  text-align: center;
+}
+
+.vres__grab {
+  width: 80px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-mid);
+  margin: 0 auto;
+}
+
+/** 收起态那句提示（告诉用户这里还有东西、上滑能拉起来） */
+.vres__hint {
+  display: block;
+  margin-top: 12px;
+  font-size: 24px;
+  color: var(--muted-2);
+}
+
+/* ---- 查询图 + 识别结论 + 重拍 ---- */
+
+.vres__qhead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px 32px 0;
 }
 
 .vres__qthumb {
   flex: 0 0 auto;
-  width: 88px;
-  height: 88px;
+  width: 84px;
+  height: 84px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 24px;
+  border-radius: 20px;
   background: var(--grad-ph);
   border: 2px solid var(--accent-faint);
 }
@@ -140,7 +182,6 @@
   display: block;
 }
 
-/* 占位（拿不到本地路径时）：等宽小字，不画裂图 */
 .vres__qthumb-ph {
   font-family: ui-monospace, Menlo, Consolas, monospace;
   font-size: 16px;
@@ -160,7 +201,6 @@
   min-width: 0;
 }
 
-/* 分类胶囊：稿 `.qcat`，高 36px（18pt）、品牌深色字 + 淡品牌底 */
 .vres__qcat {
   flex: 0 0 auto;
   display: inline-flex;
@@ -177,7 +217,7 @@
 
 .vres__qname {
   min-width: 0;
-  font-size: 27px;
+  font-size: 28px;
   font-weight: 600;
   line-height: 1.25;
   color: var(--fg);
@@ -186,30 +226,29 @@
 
 .vres__qsub {
   display: block;
-  margin-top: 10px;
+  margin-top: 8px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 20px;
+  font-size: 21px;
   line-height: 1.3;
   color: var(--muted-2);
   @include ellipsis;
 }
 
 /**
- * 重拍：稿 `.qretake` 视觉高 64px（32pt）。
+ * 重拍：视觉高 64px（32pt），**命中区补偿**在包裹层上做。
  *
- * **命中区补偿 **在这层包裹元素上做**：稿的说明要求实现侧把 32pt 的视觉高撑到 44pt
- * 命中区，而外层 `.vres__qcard` 的 padding 属于卡片、**不会**扩大子元素的点击区域，
- * 按钮自己加透明 padding 又会顶破 116px 的卡片（内容盒只有 88px）—— 所以把 `onClick`
- * 挂在这个 88px（= 44pt，正好等于卡片内容盒高）的包裹层上，胶囊保持 64px 的视觉高。
+ * 稿的说明要求把 32pt 的视觉高撑到 44pt 命中区，而外层容器（`.vres__qhead`）的 gap 属于布局、
+ * 不会扩大子元素的点击区域；按钮自己加透明 padding 又会顶破 84px 的查询图缩略图那一行。
+ * 所以把 `onClick` 挂在 88px（= 44pt）的包裹层上，胶囊保持 64px 的视觉高。
  */
-.vres__qretake-hit {
+.vres__retake-hit {
   flex: 0 0 auto;
   height: 88px;
   display: flex;
   align-items: center;
 }
 
-.vres__qretake {
+.vres__retake {
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -233,19 +272,20 @@
   }
 }
 
-.vres__qretake-ic {
+.vres__retake-ic {
   width: 30px;
   height: 30px;
   flex: 0 0 auto;
 }
 
-/* ---------------------------------------------------------------- 两段统计行 */
+/* ---- 统计行：在售同款 | 价格区间 ---- */
 
 .vres__stats {
+  flex: 0 0 auto;
   display: flex;
   align-items: baseline;
   gap: 20px;
-  margin-top: 20px;
+  padding: 20px 32px 0;
   color: var(--muted-2);
 }
 
@@ -278,7 +318,6 @@
   margin-left: 2px;
 }
 
-/* 识别中 / 失败：统计位给 `—` 而不是 0 件 */
 .vres__stat-dash {
   font-size: 26px;
   font-weight: 700;
@@ -293,40 +332,24 @@
   background: var(--accent-mid);
 }
 
-/* ---------------------------------------------------------------- 吸顶排序条 */
+/* ---- 排序胶囊 ---- */
 
-/**
- * 稿 `.filterbar`：玻璃条（`--glass-strong` + blur）+ 底部描边。
- *
- * `position: sticky` + `top: 0`：页面根节点没写 `overflow`，所以它能真的吸住
- * （见文件头）。`z-index` 低于 `components/top-bar`（40）与弹层（50/60），
- * 与回到顶部钮（`BackTop` 自己那层）不冲突。
- */
 .vres__filters {
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 16px;
-  height: 100px;
-  padding: 0 40px;
-  box-sizing: border-box;
+  padding: 20px 32px 0;
   overflow-x: auto;
   white-space: nowrap;
-  background: var(--glass-strong);
-  border-bottom: 2px solid var(--border);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
 }
 
-/* 排序胶囊：稿 `.chip`，高 68px（34pt）；选中态深墨底白字 */
 .vres__fchip {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  height: 68px;
+  height: 64px;
   padding: 0 28px;
   border-radius: var(--r-pill);
   background: var(--surface);
@@ -354,18 +377,26 @@
   height: 18px;
 }
 
-/* ---------------------------------------------------------------- 结果区 */
+/* ---- 结果区：面板内滚动 ---- */
 
+/**
+ * 面板内滚动区。`flex: 1 + min-height: 0` 是必须的：flex 子项默认 `min-height: auto`，
+ * 不加这一条时内容会把面板顶高（面板高度是行内固定的，于是内容溢出到屏幕外）。
+ */
+.vres__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+}
 .vres__body {
-  padding: 12px 0 0;
+  padding: 0 32px 40px;
 }
 
-/* 瀑布流容器与首页 / 搜索页同一套（左右内边距 40px、列间距 24px） */
+/* 瀑布流容器与首页 / 搜索页同一套（左右内边距与面板一致、列间距 20px） */
 .waterfall {
   display: flex;
   align-items: flex-start;
-  gap: 24px;
-  padding: 0 40px;
+  gap: 20px;
 }
 
 .waterfall__col {
@@ -373,10 +404,10 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
-/* ---------------------------------------------------------------- 骨架屏（稿 02） */
+/* ------------------------------------------------------------ 骨架屏 */
 
 .vres__skel {
   overflow: hidden;
@@ -405,17 +436,16 @@
   }
 }
 
-/* ---------------------------------------------------------------- 失败态（稿 04） */
+/* ------------------------------------------------------------ 失败态 */
 
 .vres__err {
   display: flex;
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 68px 60px 0;
+  padding: 40px 40px 0;
 }
 
-/* 稿 `.errdisc`：120px 圆盘 + 暖色系（`--warn-weak` / `--warn-ink`） */
 .vres__err-disc {
   width: 120px;
   height: 120px;
@@ -455,7 +485,7 @@
   margin-top: 36px;
 }
 
-/* ---------------------------------------------------------------- 主 / 次按钮（稿 §3.5 §3.6） */
+/* ------------------------------------------------------------ 主 / 次按钮 */
 
 .vres__btn-main {
   display: flex;
@@ -494,14 +524,12 @@
     background: var(--accent-weak);
   }
 
-  /* 换图上传在途：与 `.vres__qretake` 同一档反馈（按钮不 disabled，只压暗 —— 
-     真正的防连点由页面里的 `retaking` 判据负责） */
   &.is-busy {
     opacity: 0.72;
   }
 }
 
-/* 空态里的次按钮：与 EmptyState 的内容同宽居中，不占满整屏 */
+/** 空态里的次按钮：与 EmptyState 的内容同宽居中，不占满整屏 */
 .vres__empty {
   display: flex;
   flex-direction: column;
@@ -510,7 +538,7 @@
 
 .vres__btn-ghost--narrow {
   width: 440px;
-  max-width: calc(100% - 120px);
+  max-width: calc(100% - 80px);
   margin-top: 8px;
 }
 

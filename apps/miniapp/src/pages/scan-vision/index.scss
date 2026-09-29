@@ -1,13 +1,18 @@
 @use '@/styles/mixins' as *;
 
 /**
- * 识图入口页。深色底与扫码家族另外两页同一套（`--fg` 打底、返回钮与标题对齐微信胶囊、
- * 取图框两轴居中，于是 `ScanTabs` 组件自己钉的 `50% + 300px` 正好落在框下缘下方 40px），
- * 差异是**没有相机层**：取图走 `chooseMedia` 的原生面板（见 `index.tsx` 的说明）。
+ * 识图入口页（Owner 2026-09-29 按两张参考图定版）。
+ * 尺寸 = 设计稿 pt × 2（SCSS 里的 px 会被 Taro pxtransform 换算成 rpx）。
  *
- * 竖直几何按稿子的 375×667 基线排：取图框 500×520 居中 → 切换钮（组件内定位）→
- * 说明文案 → 主按钮 → 隐私口径。再矮的屏（<667）会让最后两行贴底，与扫码家族
- * 同一取舍（`pages/scan/index.scss` 的取景框几何也是按这条基线反推的）。
+ * 两态同页：
+ * - **取景态**：`<Camera mode="normal">` 全屏铺满（不做任何遮罩压暗）+ 页面自绘的取景框
+ *   （500×520rpx，与扫一扫 / 交易码两页同一套角标语言）+ 底部一排「相册 · 快门 · 聊天记录」
+ *   + 扫码家族三段切换钮（保留）；
+ * - **取框态**：冻结的照片铺满屏，取景框原位换成可拖拽的取选框（四角 + 四边手柄），
+ *   底部换成「重新拍 / 搜索」。
+ *
+ * 取景框两轴居中，切换钮仍由 `components/scan-tabs` 自己钉在 `50% + 300px`（框下缘下方
+ * 40rpx）—— 该值与本页取景框几何是配套的，改框高必须同步（见 `scan-tabs/index.scss`）。
  */
 
 .scanvis {
@@ -15,7 +20,55 @@
   width: 100vw;
   height: 100vh;
   overflow: hidden;
-  background: var(--fg);
+  /* 取景态透出相机预览；取框态被照片盖住。**不再是全屏深色底**（Owner：把框外的遮罩去掉） */
+  background: #000;
+}
+
+/* ------------------------------------------------------------ 取景底 / 照片 */
+
+.scanvis__stage {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+}
+
+.scanvis__camera,
+.scanvis__shot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/** 相机不可用时的兜底文案：**不弹窗**（弹窗会挡住换来源，见 index.tsx 的说明） */
+.scanvis__noCam {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 0 80px;
+  text-align: center;
+}
+
+.scanvis__noCam-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--on-dark);
+}
+
+.scanvis__noCam-text {
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--on-dark-track);
 }
 
 /* ------------------------------------------------------------ 顶部 */
@@ -51,8 +104,14 @@
   color: var(--surface);
 }
 
-/* --------------------------------------------------------- 取图提示框 */
+/* --------------------------------------------------------- 取景框（取景态） */
 
+/**
+ * 取景框：尺寸与位置**保持不变**（500×520，两轴居中）。
+ *
+ * 参考图里框只有四角折线、没有整圈描边与半透明底 —— 所以这里去掉原来的虚线边与底色，
+ * 只留角标；框本身仍是绝对定位的一层，用来把角标钉在同一位置。
+ */
 .scanvis__frame {
   position: absolute;
   left: 50%;
@@ -62,18 +121,19 @@
   height: 520px;
   margin: -260px 0 0 -250px;
   box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px dashed rgba(255, 255, 255, 0.22);
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.04);
+  pointer-events: none;
 }
 
+/** 框内提示：参考图①把它放在框内偏下 */
 .scanvis__frame-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 40px;
+  text-align: center;
   font-size: 26px;
   letter-spacing: 0.02em;
-  color: var(--on-dark);
+  color: var(--surface);
 }
 
 /* 四角标记：与扫一扫页取景框同一套角标语言（只描两边、贴住框角） */
@@ -117,30 +177,251 @@
   border-bottom-right-radius: 28px;
 }
 
-/* --------------------------------------------------------- 文案与主按钮 */
+/* --------------------------------------------------------- 取选框（取框态） */
+
+/**
+ * 取选框：位置与尺寸由**行内 style** 下发（设备 px，来自 `features/visual-search/crop.ts`
+ * 的几何计算），这里只给外观与手势相关的样式。
+ *
+ * `touch-action: none` 与 `disableScroll` 是必须的：拖动取框时页面不能跟着滚，
+ * 否则框会滑出屏幕、手势也被页面抢走。
+ */
+.scanvis__crop {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 9999px rgba(23, 35, 61, 0.42);
+  touch-action: none;
+}
+
+/** 九宫格手柄：四角是可见的 L 形加粗，四边是细条（与参考图②一致） */
+.scanvis__handle {
+  position: absolute;
+  background: var(--surface);
+  border-radius: 4px;
+}
+
+/* 四角：粗 L 形 */
+.scanvis__handle--tl,
+.scanvis__handle--tr,
+.scanvis__handle--bl,
+.scanvis__handle--br {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: 6px solid var(--surface);
+}
+
+.scanvis__handle--tl {
+  left: -3px;
+  top: -3px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.scanvis__handle--tr {
+  right: -3px;
+  top: -3px;
+  border-left: 0;
+  border-bottom: 0;
+}
+
+.scanvis__handle--bl {
+  left: -3px;
+  bottom: -3px;
+  border-right: 0;
+  border-top: 0;
+}
+
+.scanvis__handle--br {
+  right: -3px;
+  bottom: -3px;
+  border-left: 0;
+  border-top: 0;
+}
+
+/* 四边中点：短粗条（提示「这条边也能拖」） */
+.scanvis__handle--t,
+.scanvis__handle--b {
+  left: 50%;
+  width: 48px;
+  height: 8px;
+  margin-left: -24px;
+}
+
+.scanvis__handle--l,
+.scanvis__handle--r {
+  top: 50%;
+  width: 8px;
+  height: 48px;
+  margin-top: -24px;
+}
+
+.scanvis__handle--t {
+  top: -5px;
+}
+
+.scanvis__handle--b {
+  bottom: -5px;
+}
+
+.scanvis__handle--l {
+  left: -5px;
+}
+
+.scanvis__handle--r {
+  right: -5px;
+}
+
+/* --------------------------------------------------------- 提示文案与底部 */
 
 .scanvis__lead {
   position: absolute;
   left: 0;
   right: 0;
   top: calc(50% + 372px);
-  z-index: 2;
+  z-index: 4;
   text-align: center;
   font-size: 26px;
+  color: var(--surface);
+}
+
+/** 取景态底部一排：相册 · 快门 · 聊天记录（三等分，快门居中） */
+.scanvis__actions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(150px + env(safe-area-inset-bottom));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0 60px;
+}
+
+.scanvis__act {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  /* 命中区 ≥ 88px（44pt）：图标本身只有 44px，这里靠 padding 撑开（AGENTS 的热区口径） */
+  padding: 16px 24px;
+}
+
+.scanvis__act-ic {
+  position: relative;
+  width: 52px;
+  height: 44px;
+  border: 4px solid var(--surface);
+  border-radius: 8px;
+
+  /* 相册：一条山形折线 + 一个小圆（纯 CSS，仓库不引 SVG） */
+  &--album::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    width: 22px;
+    height: 14px;
+    border-left: 4px solid var(--surface);
+    border-bottom: 4px solid var(--surface);
+    transform: skewX(-32deg);
+  }
+
+  &--album::after {
+    content: '';
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--surface);
+  }
+
+  /* 聊天记录：一个对话气泡（方框 + 左下角小尾巴） */
+  &--chat::after {
+    content: '';
+    position: absolute;
+    left: 8px;
+    bottom: -12px;
+    width: 12px;
+    height: 12px;
+    border-left: 4px solid var(--surface);
+    border-bottom: 4px solid var(--surface);
+    transform: skewX(28deg);
+  }
+}
+
+.scanvis__act-label {
+  font-size: 22px;
   color: var(--on-dark);
 }
 
-.scanvis__cta {
-  position: absolute;
-  left: 64px;
-  right: 64px;
-  top: calc(50% + 424px);
-  z-index: 2;
-  height: 96px;
+/** 快门：白圈 + 内实心（参考图①的中间按钮） */
+.scanvis__shutter {
+  width: 128px;
+  height: 128px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 28px;
+  border-radius: 50%;
+  border: 6px solid var(--surface);
+  box-sizing: border-box;
+
+  &:active .scanvis__shutter-core {
+    transform: scale(0.92);
+  }
+
+  &.is-busy {
+    opacity: 0.6;
+  }
+}
+
+.scanvis__shutter-core {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--surface);
+  transition: transform 0.12s ease;
+}
+
+/** 取框态底部：重新拍（次） + 搜索（主） */
+.scanvis__adjust {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(60px + env(safe-area-inset-bottom));
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 60px;
+}
+
+.scanvis__adjust-ghost {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  padding: 0 48px;
+  border-radius: 48px;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.scanvis__adjust-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 96px;
+  border-radius: 48px;
   background: var(--grad-brand);
   color: var(--surface);
   font-size: 30px;
@@ -152,19 +433,16 @@
   }
 }
 
-.scanvis__notes {
-  position: absolute;
-  left: 48px;
-  right: 48px;
-  top: calc(50% + 560px);
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
+/* --------------------------------------------------------- 离屏画布（裁剪用） */
 
-.scanvis__note {
-  font-size: 22px;
-  line-height: 1.5;
-  color: var(--on-dark);
+/**
+ * 裁剪用的离屏画布：真实尺寸（1600×1600 级别）会让它撑破布局，所以固定成 1×1 并挪出视口。
+ * `drawImage` 的目标尺寸由参数决定，与画布元素的 CSS 尺寸无关 —— 这里只借它的坐标系。
+ */
+.scanvis__canvas {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  width: 1px;
+  height: 1px;
 }

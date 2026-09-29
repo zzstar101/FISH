@@ -113,18 +113,51 @@ export async function pickPhotos(limit: number): Promise<PickResult> {
 }
 
 /**
- * 单张取图：先弹**来源弹窗**（拍摄 / 从相册选择 / 从聊天会话选择），再按来源调对应的
- * 微信原生取图 API。识图入口页与搜索页的识图按钮共用这一条链。
+ * 按来源取一张图（**不弹来源弹窗**）：相册走 `chooseMedia`、聊天记录走 `chooseMessageFile`。
  *
- * | 来源 | 原生 API | 面板 |
- * | --- | --- | --- |
- * | 拍摄 | `chooseMedia`（`sourceType: ['camera']`） | 系统相机 |
- * | 从相册选择 | `chooseMedia`（`sourceType: ['album']`） | 系统相册（`compressed` 压过再给） |
- * | 从聊天会话选择 | `chooseMessageFile`（`type: 'image'`） | 微信会话文件选择器 |
+ * 识图入口页把这两个来源做成两个直点的按钮（相机由页面自己开，见 `pages/scan-vision`），
+ * 所以取图腿按来源单独暴露；`pickPhotoFromSource` 只是「弹一次两项弹窗再调它」的包装。
  *
- * **为什么是弹窗 + 分派而不是一次调用**：`chooseMedia` 的原生面板只有「拍摄 / 相册」
- * 两项，而「从聊天会话选择」是另一个独立面板（`chooseMessageFile`），没有一次调用能同时
- * 给出三种来源。弹窗项与分派在 `./photo-source`（纯逻辑，可单测）。
+ * **取消**返回空结果、不报错：取消是正常路径。权限被拒与平台失败抛出可展示的错误，
+ * 由调用方提示并让用户重试。
+ */
+export async function pickPhotoOfSource(source: PhotoSource): Promise<PickResult> {
+  if (source === 'chat') {
+    let result: Taro.chooseMessageFile.SuccessCallbackResult
+    try {
+      // `type: 'image'` 已经在平台侧过滤过一遍；本地仍按同一套白名单与大小复核
+      result = await Taro.chooseMessageFile({ count: 1, type: 'image' })
+    } catch (error) {
+      if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+      throw new Error('无法从聊天记录选择图片，请重试')
+    }
+    return collectPhotos(result.tempFiles.map((file) => ({ path: file.path, size: file.size })))
+  }
+
+  let result: Taro.chooseMedia.SuccessCallbackResult
+  try {
+    result = await Taro.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['album'],
+      // compressed：iOS 相册原图常是 HEIC，压缩后通常是 JPG，能直接过契约白名单
+      sizeType: ['compressed'],
+    })
+  } catch (error) {
+    if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+    throw new Error('无法选择图片，请检查相册权限后重试')
+  }
+  return collectPhotos(
+    result.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size })),
+  )
+}
+
+/**
+ * 单张取图：先弹**来源弹窗**（从相册选择 / 从聊天会话选择），再调对应的微信原生取图 API。
+ * 搜索页的识图按钮与结果页的「换图」用它 —— 这两处没有相机，取图只可能来自这两个来源。
+ *
+ * **拍摄不在这里**（Owner 2026-09-29）：识图入口页自己开着相机、自己出快门，
+ * 原生面板里再放一个「拍摄」就是同一个能力两条路。
  *
  * **取消**（弹窗取消 / 面板取消）统一返回空结果、不报错：取消是正常路径。
  * 权限被拒与平台失败照旧抛出可展示的错误，由调用方提示并让用户重试 —— 包括来源弹窗
@@ -145,33 +178,7 @@ export async function pickPhotoFromSource(): Promise<PickResult> {
   // 越界（理论上不可达）：与取消同一处置，不把一次平台抖动变成用户可见的报错
   if (source === null) return { photos: [], rejected: null }
 
-  if (source === 'chat') {
-    let result: Taro.chooseMessageFile.SuccessCallbackResult
-    try {
-      // `type: 'image'` 已经在平台侧过滤过一遍；本地仍按同一套白名单与大小复核
-      result = await Taro.chooseMessageFile({ count: 1, type: 'image' })
-    } catch (error) {
-      if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
-      throw new Error('无法从聊天记录选择图片，请重试')
-    }
-    return collectPhotos(result.tempFiles.map((file) => ({ path: file.path, size: file.size })))
-  }
-
-  let result: Taro.chooseMedia.SuccessCallbackResult
-  try {
-    result = await Taro.chooseMedia({
-      count: 1,
-      mediaType: ['image'],
-      sourceType: [source],
-      sizeType: ['compressed'],
-    })
-  } catch (error) {
-    if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
-    throw new Error('无法选择图片，请检查相册/相机权限后重试')
-  }
-  return collectPhotos(
-    result.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size })),
-  )
+  return pickPhotoOfSource(source)
 }
 
 /**
@@ -241,6 +248,25 @@ export function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
       readSync()
     }
   })
+}
+
+/**
+ * 读本地文件大小（`Bytes`）。`getImageInfo` / `chooseMedia` 拿不到大小时用它兜底，
+ * 也是识图页「相机拍照后」取大小时的唯一来源（`takePhoto` 只给路径，不给 size）。
+ *
+ * 同步优先、异步兜底：与 `readFileBuffer` 同一取舍（开发者工具与真机上都出现过
+ * 「异步读临时文件偶发失败」）。取不到返回 `0`，由调用方按「未知大小」处理 ——
+ * 上传前服务端还会按真实字节复核，本地这个数只用于预检文案。
+ */
+export function readFileSize(filePath: string): number {
+  try {
+    const stats = Taro.getFileSystemManager().statSync(filePath)
+    const size = (stats as { size?: unknown }).size
+    return typeof size === 'number' ? size : 0
+  } catch (error) {
+    console.error('[upload] statSync 失败', error)
+    return 0
+  }
 }
 
 /**
