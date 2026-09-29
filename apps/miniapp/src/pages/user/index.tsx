@@ -1,3 +1,4 @@
+import type { FollowState } from '@fish/contracts/follows/schema'
 import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
 import type { ScrollViewProps } from '@tarojs/components/types/ScrollView'
@@ -10,9 +11,12 @@ import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import { fetchFollowState, setFollow } from '@/features/following/api'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
+import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { isUnauthenticatedError } from '@/lib/request'
 import { formatAmount, type MockListing } from '@/mock/api'
 import { userListEnd } from './list-end'
 import './index.scss'
@@ -50,10 +54,10 @@ import './index.scss'
  * 居中标题（`NavBar` 的 `glass` / `titleAlign="center"`，组件默认渲染与旧版逐像素一致）。
  *
  * **本页范围内的取舍（Owner 拍板）**：
- * - **关注钮：演示态**（2026-09-22 二次拍板 —— 稿里那颗三态钮要还原可见）。关注关系
- *   没有 follows 表（契约 `users/schema.ts` 注释明确「#122 明确不做」），所以按钮只有
- *   组件内状态、无数据面、生产构建不渲染，真实现归属后续「我的关注」页 + 后端 follows 域；
- *   详见 `followState` 处的注释。
+ * - **关注钮：真实接线（#188）**。已登录且不是本人主页时渲染，状态取
+ *   `GET /users/:userId/follow`、写入走 `POST|DELETE` 同一路径，成功以服务端回包为准；
+ *   读到状态之前不渲染（不先画一个「关注」再跳成「已关注」）。匿名访客不渲染。
+ *   详见 `follow` / `toggleFollow` 处的注释。
  * - **聊一聊 / 更多钮不做**：发起会话要带 `listingId`（Chat 契约按 `(listingId, 买家)`
  *   复用会话），主页没有商品上下文；「更多」钮按稿 ① 删掉（分享 / 黑名单等真机里走
  *   微信胶囊的 ··· 菜单 —— 那是稿的取舍）。举报一度只有胶囊菜单、没有站内出口；
@@ -315,39 +319,74 @@ export default function UserHome() {
   const [signOpen, setSignOpen] = useState(false)
 
   /**
-   * 关注按钮（稿 `.btn-follow`，Owner 2026-09-22 二次拍板「本次页面改版先还原稿里的
-   * 演示态」）：**纯演示，没有数据面**。没有 follows 表（契约 `users/schema.ts` 注释
-   * 明确「#122 明确不做」），所以：
-   * - 状态只是组件内的 `followState`（未关注 → 关注中 1.5s → 已关注 → 可点回未关注），
-   *   刷新/重进就重置 —— 不落存储、不假装后端已有关注关系；
-   * - **生产口径不变**：`MOCK_FALLBACK_ENABLED === false` 时不渲染按钮（未关注占位、
-   *   不留白），与签名行同一套「字段到位才渲染」的边界；
-   * - 归属不变：真实现归「我的关注」页 + 后端 follows 域，PR 里写明。
+   * 关注按钮（稿 `.btn-follow`）：**真实接线（#188）**。
+   *
+   * - 只在「已登录 且 不是本人主页」时渲染。匿名访客看到的是公开主页；关注关系是
+   *   「我」与 TA 的有向边，未登录没有可读写的状态（接口 401），所以整颗不渲染，
+   *   与签名行同一套「字段到位才渲染」的边界。
+   * - 初始状态来自 `GET /users/:userId/follow`。**读到之前不渲染按钮** —— 先画一个
+   *   「关注」再跳成「已关注」是本地猜测，服务端可能本来就说已关注（验收：成功以
+   *   服务端为准、不假翻转）。
+   * - 点击走 `POST` / `DELETE /users/:userId/follow`，回包直接采用（含 mutual）；
+   *   失败不改状态、只提示。
+   * - 换账号 / 退出 / 换页主：`followKeyRef` 让迟到的回包与 finally 一律作废，
+   *   不把上一账号的关注状态画到新账号上（验收：迟到任务与旧 finally 不影响新账号）。
    */
-  type FollowState = 'none' | 'busy' | 'on'
-  const [followState, setFollowState] = useState<FollowState>('none')
-  const showFollowBtn = isDemoUser
-  const followTimer = useRef<ReturnType<typeof setTimeout>>()
+  const [follow, setFollowState] = useState<FollowState | null>(null)
+  const [followBusy, setFollowBusy] = useState(false)
+  const canFollow = authedUser !== null && !isSelf && userId !== ''
+  const followKey = `${authedUser?.id ?? ''}|${userId}`
+  const followKeyRef = useRef(followKey)
+  followKeyRef.current = followKey
 
-  // 卸载时清掉未完成的「关注中」定时器（换人由 reLaunch/navigateTo 重建实例兜住）
   useEffect(() => {
-    return () => {
-      if (followTimer.current) clearTimeout(followTimer.current)
-    }
-  }, [])
+    setFollowState(null)
+    setFollowBusy(false)
+    if (!canFollow) return
+
+    const key = followKey
+    const run = cancellable(
+      () => fetchFollowState(userId),
+      () => true,
+    )
+    void run.promise
+      .then((state) => {
+        if (followKeyRef.current !== key || state === null) return
+        setFollowState(state)
+      })
+      .catch((error: unknown) => {
+        // 读不到就**保持未知**（按钮不渲染），绝不猜一个状态画上去
+        if (followKeyRef.current !== key) return
+        console.debug('[miniapp] 他人主页：关注状态读取失败', error)
+      })
+    return run.cancel
+  }, [canFollow, followKey, userId])
 
   const toggleFollow = () => {
-    if (followState === 'busy') return
-    if (followState === 'on') {
-      setFollowState('none')
-      void Taro.showToast({ title: '已取消关注（演示）', icon: 'none' })
-      return
-    }
-    setFollowState('busy')
-    followTimer.current = setTimeout(() => {
-      setFollowState('on')
-      void Taro.showToast({ title: '已关注（演示）', icon: 'none' })
-    }, 1500)
+    if (followBusy || follow === null || !canFollow) return
+    const key = followKey
+    const next = !follow.following
+    setFollowBusy(true)
+    const run = cancellable(
+      () => setFollow(userId, next),
+      () => true,
+    )
+    void run.promise
+      .then((state) => {
+        // 成功以服务端回包为准（含 mutual）；迟到的回包丢弃
+        if (followKeyRef.current !== key || state === null) return
+        setFollowState(state)
+      })
+      .catch((error: unknown) => {
+        if (followKeyRef.current !== key) return
+        void Taro.showToast({
+          title: isUnauthenticatedError(error) ? '登录已失效，请重新登录' : '操作失败，请重试',
+          icon: 'none',
+        })
+      })
+      .finally(() => {
+        if (followKeyRef.current === key) setFollowBusy(false)
+      })
   }
   /** 展开态点击收起 / 折叠态点击展开；短签名（`!signHasMore`）点击无效果 */
   const toggleSign = () => {
@@ -530,21 +569,16 @@ export default function UserHome() {
                   </View>
                   {/* 关注按钮（稿 `.btn-follow`）：**头像行内第三格**，昵称块右侧 ——
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。
-                      见上方 `followState` 注释：纯演示三态，未关注（品牌渐变 + plus）/
-                      关注中（转圈 + 禁用 1.5s）/ 已关注（浅底 + check）；无后端，
-                      生产构建整颗不渲染。 */}
-                  {showFollowBtn ? (
+                      见上方 `follow` 注释：真实三态，未关注（品牌渐变 + plus）/ 写入中
+                      （转圈 + 禁用）/ 已关注（浅底 + check）。初始状态读到之前整颗不渲染。 */}
+                  {canFollow && follow !== null ? (
                     <View
                       className={`uhome__follow${
-                        followState === 'on'
-                          ? ' uhome__follow--on'
-                          : followState === 'busy'
-                            ? ' uhome__follow--busy'
-                            : ''
-                      }`}
+                        follow.following ? ' uhome__follow--on' : ''
+                      }${followBusy ? ' uhome__follow--busy' : ''}`}
                       onClick={toggleFollow}
                     >
-                      {followState === 'on' ? (
+                      {follow.following ? (
                         <>
                           <Image
                             className="uhome__follow-ic"
@@ -553,7 +587,7 @@ export default function UserHome() {
                           />
                           <Text>已关注</Text>
                         </>
-                      ) : followState === 'busy' ? (
+                      ) : followBusy ? (
                         <>
                           <View className="uhome__follow-spin" />
                           <Text>关注中</Text>
