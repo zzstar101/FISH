@@ -1,5 +1,6 @@
 import type { EmbeddingProvider } from '@fish/contracts/embedding/provider'
 import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
+import { STUB_EMBEDDING_MODEL } from '@fish/shared/env'
 
 /**
  * 确定性 stub provider（#322 M1）：本地开发、单测与 CI 用它，不需要任何上游密钥。
@@ -9,9 +10,10 @@ import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
  * 词袋 + L2 归一化，够用且完全可复现。
  *
  * 模型名刻意带 `stub-` 前缀：它会被写进 `embeddings.model`，所以开发库里的假向量永远不会
- * 被误当成真实模型的向量（读侧按 model 过滤）。
+ * 被误当成真实模型的向量（读侧按 model 过滤）。常量本身定义在 `@fish/shared/env`（R3 起 api
+ * 也要用它按 model 过滤向量，两侧必须是同一个名字），这里 re-export 保持原有 import 路径可用。
  */
-export const STUB_EMBEDDING_MODEL = 'stub-deterministic-v1'
+export { STUB_EMBEDDING_MODEL }
 
 /** 拉丁词按整词、CJK 按单字：中文没有空格分词，按单字切至少能让同字词元重合。 */
 const TOKEN_PATTERN = /[a-z0-9]+|[\u4e00-\u9fff]/gi

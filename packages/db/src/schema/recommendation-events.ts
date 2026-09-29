@@ -34,12 +34,19 @@ export const recommendationEventTypeEnum = pgEnum('recommendation_event_type', [
   'HIDE',
 ])
 
-/** 召回通道。R1 的 Feed 只有 `fresh`（newest 透传），其余是 R3 的目标通道。 */
+/**
+ * 召回通道。R1 的 Feed 只有 `fresh`（newest 透传），其余是 R3 的目标通道。
+ *
+ * `category` 由 R3 追加（Issue #323 M2 第 5 路），与
+ * `packages/contracts/src/recommendation/schema.ts` 的 `RecommendationSourceSchema` 同步：
+ * 两处不一致时"事件里写了 category、契约拒收"这类漂移只会在运行期暴露。
+ */
 export const recommendationSourceEnum = pgEnum('recommendation_source', [
   'fresh',
   'popular',
   'semantic',
   'wish',
+  'category',
   'follow',
   'similar',
   'explore',
@@ -111,6 +118,12 @@ export const recommendationEvents = pgTable(
       .where(sql`${table.eventType} = 'PURCHASE'`),
     index('recommendation_events_user_id_occurred_at_idx').on(table.userId, table.occurredAt),
     index('recommendation_events_listing_id_occurred_at_idx').on(table.listingId, table.occurredAt),
+    /*
+      R3 的 Popular 召回按**时间窗**全局聚合（`occurred_at >= now() - 14 天` 后按 listing 分组），
+      而 R1 建的四条索引都以 user/listing/session 开头，带范围条件时不满足最左前缀，只能全表扫。
+      这条单列索引专门给"最近 N 天的行为"这种聚合用：扫描范围由时间窗决定，不随总行数增长。
+    */
+    index('recommendation_events_occurred_at_idx').on(table.occurredAt),
     index('recommendation_events_request_id_idx').on(table.requestId),
     index('recommendation_events_session_id_occurred_at_idx').on(
       table.anonymousSessionId,

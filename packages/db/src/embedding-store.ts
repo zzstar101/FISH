@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { newId } from './ids'
 import { embeddings } from './schema/embeddings'
@@ -297,16 +297,21 @@ export async function topKSimilarListings(
 ): Promise<SimilarCandidate[]> {
   const vector = JSON.stringify(query.vector)
 
-  return db
-    .select({
-      id: listings.id,
-      distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
-    })
-    .from(embeddings)
-    .innerJoin(listings, eq(listings.id, embeddings.listingId))
-    .where(and(eq(embeddings.model, query.model), freshListingsEmbedding(), query.filter))
-    .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
-    .limit(query.limit)
+  return (
+    db
+      .select({
+        id: listings.id,
+        distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
+      })
+      .from(embeddings)
+      .innerJoin(listings, eq(listings.id, embeddings.listingId))
+      .where(and(eq(embeddings.model, query.model), freshListingsEmbedding(), query.filter))
+      // 距离并列时用 `id` 兜底：`<=>` 只有一个排序键，并列的行谁进 Top-K 会取决于物理返回顺序，
+      // 于是"同输入 ⇒ 同候选集"（#323 验收项 9）在并列边界上不成立。加上次键后 LIMIT K 的结果
+      // 由数据决定，与插入顺序 / 页填充 / vacuum 时机无关。
+      .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`, asc(listings.id))
+      .limit(query.limit)
+  )
 }
 
 /** 语义召回：与目标**商品**最相近的前 `limit` 条愿望（`topKSimilarListings` 的镜像）。 */

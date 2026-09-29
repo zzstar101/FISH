@@ -1,0 +1,2 @@
+ALTER TYPE "public"."recommendation_source" ADD VALUE 'category' BEFORE 'follow';--> statement-breakpoint
+CREATE INDEX "recommendation_events_occurred_at_idx" ON "recommendation_events" USING btree ("occurred_at");
