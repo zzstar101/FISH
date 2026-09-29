@@ -126,6 +126,8 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
     }),
     listImageKeys: async () => [],
     listFeed: async () => [],
+    // #228：service 先读事务外快照再审核；假 store 让快照与锁内行一致（CAS 因此总能通过）。
+    getUpdateSnapshot: async () => ({ kind: 'ok', row: updateTarget() }),
     updateListingAtomic: async (input) => {
       input.apply(input, updateTarget())
       return { kind: 'updated' }
@@ -915,7 +917,11 @@ describe('updateListing', () => {
     const freeListing = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        // 合并校验在 `apply` 里抛：store 的回调在真实实现中也会把它带出事务。
+        // #228：合并校验基于**事务外快照**（真实 store 里锁内行必须与它一致）。
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ priceCents: 0, free: true }),
+        }),
         updateListingAtomic: async (input) => {
           input.apply(input, updateTarget({ priceCents: 0, free: true }))
           return { kind: 'updated' }
@@ -1036,20 +1042,23 @@ describe('updateListing', () => {
     ).toBe(404)
   })
 
-  // 回归（评审 blocker 1 的 service 一半）：审核必须跑在**锁内读到的那一行**上。
-  // store 把当前行交给 `apply`，service 必须用它的 title/description 去合并 —— 而不是任何
-  // 事务外的预读。这里让锁内的行已经是"待审内容 + REVIEW"，断言只改价格的 PATCH 也会
-  // 重新产出 REVIEW（而不是写回 APPROVED）。真正的行锁行为由 store.test.ts 的真库并发用例覆盖。
-  test('re-moderates against the row handed over by the locked transaction', async () => {
+  // #228：审核在**事务外**跑（provider 是网络调用），依据 `getUpdateSnapshot` 读到的快照；
+  // 锁内行由 store 用 CAS 复核（不一致就 conflict，由 service 重读重审）。
+  // 这里让快照本身就是"待审内容 + REVIEW"，断言只改价格的 PATCH 也会重新产出 REVIEW
+  // （而不是写回 APPROVED）。锁与 CAS 的真库行为由 store.test.ts 覆盖。
+  test('re-moderates against the snapshot read outside the transaction', async () => {
     const plans: (UpdateListingFields | undefined)[] = []
+    const reviewed = updateTarget({
+      title: '加微信联系',
+      moderationStatus: 'REVIEW',
+      status: 'OFFLINE',
+    })
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
+        getUpdateSnapshot: async () => ({ kind: 'ok', row: reviewed }),
         updateListingAtomic: async (input) => {
-          const plan = await input.apply(
-            input,
-            updateTarget({ title: '加微信联系', moderationStatus: 'REVIEW', status: 'OFFLINE' }),
-          )
+          const plan = await input.apply(input, reviewed)
           if (plan.kind === 'write') plans.push(plan.fields)
           return { kind: 'updated' }
         },
@@ -1260,6 +1269,10 @@ describe('image confirmation', () => {
       mediaObjects: images,
       store: fakeStore({
         listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
           if (plan.kind === 'write') plans.push(plan.fields)
@@ -1284,6 +1297,10 @@ describe('image confirmation', () => {
       mediaObjects: images,
       store: fakeStore({
         listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
           if (plan.kind === 'write') plans.push(plan.fields)
@@ -1352,6 +1369,10 @@ describe('image confirmation', () => {
       mediaObjects: images,
       store: fakeStore({
         listImageKeys: async () => [legacyKey],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [legacyKey] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [legacyKey] }))
           if (plan.kind === 'write') plans.push(plan.fields)
