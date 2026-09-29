@@ -21,7 +21,7 @@ import {
   voiceMediaMessageInputSchema,
 } from '@fish/contracts/chat/schema'
 import { ApiError, apiRequest } from '../../lib/api-client'
-import type { MediaUploadDraft } from './media'
+import { type MediaUploadDraft, resolveMediaContentType } from './media'
 
 /** 契约里会话列表 limit 上限 50。 */
 export const CONVERSATION_PAGE_LIMIT = 50
@@ -138,18 +138,30 @@ export async function presignMediaUpload(
   conversationId: string,
   draft: MediaUploadDraft,
 ): Promise<MediaPresignResponse> {
+  const contentType = mediaContentType(draft)
   return mediaPresignResponseSchema.parse(
     await apiRequest(CHAT_ROUTES.mediaPresign(conversationId), {
       method: 'POST',
       body: JSON.stringify(
         mediaPresignInputSchema.parse({
           kind: draft.kind,
-          contentType: draft.file.type,
+          contentType,
           sizeBytes: draft.file.size,
         }),
       ),
     }),
   )
+}
+
+/**
+ * 上传与落库共用同一份 MIME（含「浏览器不给 MIME 时按扩展名回退」），
+ * 两边不一致会被服务端的 stat 复核判成 MEDIA_OBJECT_INVALID。
+ * 调用方在入 outbox 前已经过 `describeMediaFileRejection`，这里只是兜底。
+ */
+function mediaContentType(draft: MediaUploadDraft): string {
+  const contentType = resolveMediaContentType(draft.kind, draft.file)
+  if (contentType === null) throw new MediaUploadError()
+  return contentType
 }
 
 /**
@@ -165,7 +177,7 @@ export async function sendMediaObject(
   presign: MediaPresignResponse,
   clientRequestId: string,
 ): Promise<MediaMessageDto> {
-  const contentType = draft.file.type
+  const contentType = mediaContentType(draft)
   const uploaded = await fetch(presign.uploadUrl, {
     method: 'PUT',
     body: draft.file,

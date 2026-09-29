@@ -21,6 +21,7 @@ import {
   IMAGE_FILE_ACCEPT,
   type MediaUploadDraft,
   probeImageSize,
+  resolveMediaContentType,
   startVoiceRecording,
   type VoiceRecorder,
 } from './media'
@@ -374,7 +375,9 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       setMediaError(fileError)
       return
     }
-    const size = await probeImageSize(file)
+    // 与服务端同一份 MIME 口径（浏览器不给 MIME 时按扩展名回退）。
+    const contentType = resolveMediaContentType('IMAGE', file)
+    const size = contentType === null ? null : await probeImageSize(file, contentType)
     if (size === null) {
       setMediaError('无法读取图片尺寸，请换一张')
       return
