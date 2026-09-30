@@ -24,9 +24,9 @@ import { useAcceptProposal, useMyListings, usePendingProposals, useRejectProposa
  */
 export function PendingSection({ ownerId }: { ownerId: string }) {
   const pending = usePendingProposals(ownerId)
-  // 待确认只可能挂在 ACTIVE 商品上（推导侧同口径），所以这里也只取 ACTIVE：
-  // 与 `usePendingProposals` 共用同一个查询键，不为拿标题再拉一遍列表。
-  const listings = useMyListings(ownerId, 'ACTIVE')
+  // 取全量：待确认的申请也可能挂在**已下架**的商品上（卖家收到申请后把它下架了），
+  // 那时仍需要标题来渲染这一行。与 `usePendingProposals` 共用同一个查询键。
+  const listings = useMyListings(ownerId, 'ALL')
   const accept = useAcceptProposal(ownerId)
   const reject = useRejectProposal(ownerId)
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -57,7 +57,7 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
         })
         setNotice({
           tone: 'success',
-          text: `已拒绝 ${proposal.buyerName} 的申请，商品仍在在售。`,
+          text: `已拒绝 ${proposal.buyerName} 的申请，商品仍在售。`,
           toOrders: false,
         })
       }
@@ -70,6 +70,32 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
       }
     }
   }
+
+  /*
+   * 决定已经写进服务端，而「随后这次重读失败」是另一件事：两条信息必须能同时呈现。
+   * 否则同意之后重读一失败，刚给出的成功提示与「去我卖出的出示交易码」链接会一起消失，
+   * 用户既不知道同意是否生效，也拿不到取码入口。
+   */
+  const noticeBlock = (className: string) =>
+    notice === null ? null : (
+      <div
+        className={`rounded-xl px-4 py-3 text-sm ${
+          notice.tone === 'success' ? 'bg-success-soft text-success' : 'bg-warn-soft text-warn'
+        } ${className}`}
+        role="status"
+      >
+        <p>{notice.text}</p>
+        {notice.toOrders ? (
+          <Link
+            className="mt-1.5 inline-block font-medium underline"
+            search={{ role: 'seller' }}
+            to="/orders"
+          >
+            去「我卖出的」出示交易码
+          </Link>
+        ) : null}
+      </div>
+    )
 
   // 没读到 ≠ 没有申请：整轮失败必须显式说明，否则在等的商品会被当成没人要。
   if (pending.isError || failed) {
@@ -86,6 +112,7 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
             重试
           </Button>
         </div>
+        {noticeBlock('mt-4')}
       </Card>
     )
   }
@@ -122,25 +149,7 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
         )}
       </div>
 
-      {notice !== null ? (
-        <div
-          className={`mx-5 mb-4 rounded-xl px-4 py-3 text-sm ${
-            notice.tone === 'success' ? 'bg-success-soft text-success' : 'bg-warn-soft text-warn'
-          }`}
-          role="status"
-        >
-          <p>{notice.text}</p>
-          {notice.toOrders ? (
-            <Link
-              className="mt-1.5 inline-block font-medium underline"
-              search={{ role: 'seller' }}
-              to="/orders"
-            >
-              去「我卖出的」出示交易码
-            </Link>
-          ) : null}
-        </div>
-      ) : null}
+      {noticeBlock('mx-5 mb-4')}
 
       {proposals.size === 0 ? (
         <p className="border-line border-t px-5 py-4 text-ink-3 text-sm">暂无待确认的申请。</p>
@@ -154,6 +163,9 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
           const rejecting =
             reject.isPending && reject.variables?.conversationId === proposal.conversationId
           const busy = accepting || rejecting
+          // 接受要求商品仍是 ACTIVE（服务端条件更新），拒绝不看商品状态 —— 两者不对称
+          const acceptable = proposal.listingStatus === 'ACTIVE'
+          const listingStatusLabel = proposal.listingStatus === 'OFFLINE' ? '商品已下架' : null
 
           return (
             <article className="flex flex-wrap items-center gap-4 p-5" key={listingId}>
@@ -171,7 +183,13 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
                   <span className="font-medium text-danger">
                     {formatPrice(proposal.amountCents)}
                   </span>
+                  {listingStatusLabel !== null ? ` · ${listingStatusLabel}` : ''}
                 </p>
+                {acceptable ? null : (
+                  <p className="mt-1 text-ink-3 text-xs">
+                    商品已下架，重新上架后才能同意；现在可以直接拒绝。
+                  </p>
+                )}
               </div>
 
               <div className="flex shrink-0 items-center gap-2">
@@ -192,10 +210,12 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
                   {rejecting ? <Loader2 className="size-3.5 animate-spin" /> : null}
                   拒绝
                 </Button>
-                <Button disabled={busy} onClick={() => void decide('accept', proposal)} size="sm">
-                  {accepting ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  同意
-                </Button>
+                {acceptable ? (
+                  <Button disabled={busy} onClick={() => void decide('accept', proposal)} size="sm">
+                    {accepting ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                    同意
+                  </Button>
+                ) : null}
               </div>
             </article>
           )

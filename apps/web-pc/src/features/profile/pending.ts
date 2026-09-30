@@ -19,11 +19,12 @@
  * 4. 单条会话消息读不到：`complete = false`，但这件商品按「不在等」处理。
  * 5. 整轮失败返回 `failed: true` —— **不能**把「读不到」当成「没有提案」，
  *    否则在等的商品会被显示成普通在售。
- * 6. `listingIds` 由调用方给，且只应包含**仍可交易（`ACTIVE`）**的商品：接受与拒绝在
- *    服务端都要求商品是 `ACTIVE`，非 ACTIVE 只会 409。调用方取 id 时自己也受
- *    「我的发布」的 `limit=50` 约束 —— 卖家商品超过 50 件时，第 51 件起的申请推导不到。
+ * 6. 商品状态由调用方给的 map 决定，且只纳入 `ACTIVE` 与 `OFFLINE`（见
+ *    `ACTIONABLE_STATUSES`）；调用方取列表时自己也受「我的发布」的 `limit=50` 约束 ——
+ *    卖家商品超过 50 件时，第 51 件起的申请推导不到。
  */
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { ListingStatus } from '@fish/contracts/listings/schema'
 import type { ConversationId, ListingId } from '@fish/contracts/system/public-id'
 import {
   type TransactionSystemEvent,
@@ -46,6 +47,12 @@ export type PendingProposal = {
   amountCents: number
   /** 提案那条 SYSTEM 消息的时间（「等了多久」的基准） */
   createdAt: string
+  /**
+   * 商品当前状态。**决定这张卡片能给哪些动作**：只有 `ACTIVE` 能接受
+   * （`accept` 走条件更新，非 ACTIVE 一律 409 `LISTING_NOT_ACTIVE`），
+   * 而拒绝不校验商品状态，所以 `OFFLINE` 仍然只给「拒绝」。
+   */
+  listingStatus: ListingStatus
 }
 
 export type PendingIndex = {
@@ -60,6 +67,19 @@ export type PendingIndex = {
   /** 推导**没读到**（整轮失败）。与 `complete: false` 不是一回事：这是「不知道」 */
   failed: boolean
 }
+
+/**
+ * 可以继续处理的商品状态。
+ *
+ * 取舍来自服务端的不对称：`accept` 要求商品仍是 `ACTIVE`（`LISTING_NOT_ACTIVE` 由
+ * store 的条件更新兜底），而 `reject` 只校验「会话存在 + 调用者是卖家」，**不看商品状态**。
+ * 因此：
+ * - `OFFLINE` 要保留 —— 卖家在收到申请后把商品下架，那条申请仍然可以被拒绝；
+ *   一并排除会让「待确认」成为 PC 上唯一的同意/拒绝入口失效，买家一直等、卖家连拒绝都点不到。
+ * - `RESERVED` / `SOLD` 排除 —— 商品已被锁走或已售出，其余买家的 `tx.proposal`
+ *   虽然还留在会话里，但同意必 409、拒绝也无意义。
+ */
+const ACTIONABLE_STATUSES: ReadonlySet<ListingStatus> = new Set(['ACTIVE', 'OFFLINE'])
 
 type TxSignal = { event: TransactionSystemEvent; createdAt: string }
 
@@ -132,13 +152,14 @@ const emptyIndex = (over: Partial<PendingIndex> = {}): PendingIndex => ({
 /**
  * 拉一遍卖家侧会话，推导待确认索引。
  *
- * `listingIds` = 自己名下商品 id（含各种状态）：只有自己的商品才可能出现在「我的发布」里，
+ * `listings` = 自己名下商品 id → 状态（调用方应给全量，本函数自行按 `ACTIONABLE_STATUSES` 筛）：
+ * 只有自己的商品才可能出现在「我的发布」里，
  * 会话列表里其余会话（我是买家那些）与本页无关。
  *
  * **不抛错**：整轮失败返回 `failed: true`，由调用方决定怎么显示（见文件头第 5 条）。
  */
 export async function loadPendingIndex(
-  listingIds: ReadonlySet<ListingId>,
+  listings: ReadonlyMap<ListingId, ListingStatus>,
   fetchConversationPage: FetchConversationPage,
   fetchMessagePage: FetchMessagePage,
 ): Promise<PendingIndex> {
@@ -147,6 +168,7 @@ export async function loadPendingIndex(
     listingId: ListingId
     buyerName: string
     lastMessage: ConversationDto['lastMessage']
+    listingStatus: ListingStatus
   }[] = []
   let complete = true
 
@@ -156,12 +178,15 @@ export async function loadPendingIndex(
       const result = await fetchConversationPage(cursor)
       for (const item of result.items) {
         // 只认卖家视角：买家视角的会话是「我想买别人的东西」，不是本页要处理的申请
-        if (item.role !== 'seller' || !listingIds.has(item.listingId)) continue
+        if (item.role !== 'seller') continue
+        const listingStatus = listings.get(item.listingId)
+        if (listingStatus === undefined || !ACTIONABLE_STATUSES.has(listingStatus)) continue
         conversations.push({
           id: item.id,
           listingId: item.listingId,
           buyerName: item.counterpart.nickname,
           lastMessage: item.lastMessage,
+          listingStatus,
         })
       }
       if (result.nextCursor === null) break
@@ -201,6 +226,7 @@ export async function loadPendingIndex(
           buyerName: item.buyerName,
           amountCents: shortcut.event.amountCents,
           createdAt: shortcut.createdAt,
+          listingStatus: item.listingStatus,
         })
       }
       continue
@@ -221,6 +247,7 @@ export async function loadPendingIndex(
       buyerName: item.buyerName,
       amountCents: signal.event.amountCents,
       createdAt: signal.createdAt,
+      listingStatus: item.listingStatus,
     })
   }
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { ListingStatus } from '@fish/contracts/listings/schema'
 import type { ConversationId, ListingId, MessageId, UserId } from '@fish/contracts/system/public-id'
 import { lastTxSignalOf, loadPendingIndex } from './pending'
 
@@ -94,7 +95,7 @@ function messagePages(
   }
 }
 
-const OWN_IDS = new Set<ListingId>([OWN_LISTING])
+const OWN_LISTINGS = new Map<ListingId, ListingStatus>([[OWN_LISTING, 'ACTIVE']])
 
 describe('lastTxSignalOf', () => {
   test('returns the last transaction event, not the last message', () => {
@@ -119,7 +120,7 @@ describe('loadPendingIndex', () => {
   test('records a proposal straight from the conversation summary without reading messages', async () => {
     let messageRequests = 0
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       singlePage([conversation({ id: 'cnv_1', buyerName: '小林' })]),
       async () => {
         messageRequests += 1
@@ -135,12 +136,13 @@ describe('loadPendingIndex', () => {
       buyerName: '小林',
       amountCents: 11000,
       createdAt: '2026-01-02T00:00:00.000Z',
+      listingStatus: 'ACTIVE',
     })
   })
 
   test('reads the message page when the last summary is not a transaction event', async () => {
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       singlePage([conversation({ id: 'cnv_1', lastMessage: lastMessage('在的', 'TEXT') })]),
       messagePages({
         cnv_1: [
@@ -160,7 +162,7 @@ describe('loadPendingIndex', () => {
 
   test('ignores buyer-side conversations and listings that are not mine', async () => {
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       singlePage([
         conversation({ id: 'cnv_1', role: 'buyer' }),
         conversation({ id: 'cnv_2', listingId: OTHER_LISTING }),
@@ -173,7 +175,7 @@ describe('loadPendingIndex', () => {
 
   test('a rejection in one conversation does not hide another buyer still waiting', async () => {
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       singlePage([
         conversation({
           id: 'cnv_new',
@@ -192,12 +194,43 @@ describe('loadPendingIndex', () => {
       buyerName: '还在等的买家',
       amountCents: 11000,
       createdAt: '2026-01-02T00:00:00.000Z',
+      listingStatus: 'ACTIVE',
     })
+  })
+
+  test('keeps an offline listing whose proposal can still be rejected, drops locked ones', async () => {
+    /*
+     * 服务端不对称：accept 要求商品是 ACTIVE（否则 409 LISTING_NOT_ACTIVE），
+     * 而 reject 只校验「会话存在 + 调用者是卖家」，不看商品状态。
+     * 所以已下架的商品要保留（卖家下架后仍能拒绝那条申请），
+     * 而 RESERVED / SOLD（已被别人锁走或已售）一律排除。
+     */
+    const offline: ListingId = 'lst_offline'
+    const reserved: ListingId = 'lst_reserved'
+    const sold: ListingId = 'lst_sold'
+    const listings = new Map<ListingId, ListingStatus>([
+      [offline, 'OFFLINE'],
+      [reserved, 'RESERVED'],
+      [sold, 'SOLD'],
+    ])
+
+    const index = await loadPendingIndex(
+      listings,
+      singlePage([
+        conversation({ id: 'cnv_offline', listingId: offline }),
+        conversation({ id: 'cnv_reserved', listingId: reserved }),
+        conversation({ id: 'cnv_sold', listingId: sold }),
+      ]),
+      messagePages({}),
+    )
+
+    expect([...index.proposals.keys()]).toEqual([offline])
+    expect(index.proposals.get(offline)?.listingStatus).toBe('OFFLINE')
   })
 
   test('marks the derivation incomplete when the cursor stops advancing', async () => {
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       async () => ({ items: [conversation({ id: 'cnv_1' })], nextCursor: 'stuck' }),
       messagePages({}),
     )
@@ -207,7 +240,7 @@ describe('loadPendingIndex', () => {
 
   test('never invents a proposal for a conversation whose messages cannot be read', async () => {
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       singlePage([conversation({ id: 'cnv_1', lastMessage: lastMessage('在的', 'TEXT') })]),
       async () => {
         throw new Error('network')
@@ -220,7 +253,7 @@ describe('loadPendingIndex', () => {
 
   test('reports a whole-round failure instead of pretending nothing is waiting', async () => {
     const index = await loadPendingIndex(
-      OWN_IDS,
+      OWN_LISTINGS,
       async () => {
         throw new Error('network')
       },
@@ -241,14 +274,14 @@ describe('loadPendingIndex', () => {
       listingId: 'lst_13',
       lastMessage: lastMessage('在的', 'TEXT'),
     })
-    const ids = new Set<ListingId>([
-      ...shortCircuits.map((item) => item.listingId),
-      needsScan.listingId,
+    const listings = new Map<ListingId, ListingStatus>([
+      ...shortCircuits.map((item) => [item.listingId, 'ACTIVE'] as const),
+      [needsScan.listingId, 'ACTIVE'] as const,
     ])
 
     let scans = 0
     const index = await loadPendingIndex(
-      ids,
+      listings,
       singlePage([...shortCircuits, needsScan]),
       async (id) => {
         scans += 1
