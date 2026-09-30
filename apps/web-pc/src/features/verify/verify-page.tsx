@@ -1,10 +1,8 @@
-import type { Me } from '@fish/contracts/auth/user'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
-import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
+import { currentSessionGeneration } from '../../lib/session-cache'
 import { useAuth } from '../auth/auth-provider'
-import { profileKeys } from '../profile/queries'
 import {
   CAMPUS_EMAIL_REQUIREMENT,
   fetchVerificationStatus,
@@ -13,14 +11,9 @@ import {
   verifyCampusCode,
 } from './api'
 import { sendErrorMessage, verifyErrorMessage, verifyNeedsResend } from './messages'
+import { applyVerificationResult, verificationStatusKey } from './queries'
 import { VerifyPanelView } from './verify-panel-view'
 import { RESEND_COOLDOWN_MS, resendSecondsLeft, stageFromStatus, type VerifyStage } from './view'
-
-/**
- * 认证状态查询。key 以 `pc` 开头：`resetPcSession` 只按 `['pc']` 前缀清理，
- * 换号时这条查询必须一起被清掉，否则会把 A 的认证状态展示给 B。
- */
-const verificationStatusKey = () => ['pc', 'verify', 'status'] as const
 
 /**
  * 校园认证页（#380）。三个端点（发码 / 校验 / 状态）整段挂 `requireAuth`，
@@ -52,8 +45,13 @@ function VerifyContent({ ownerId }: { ownerId: string }) {
   // 倒计时只在真的有发码之后才走：进页面**不发任何请求**，刷新页面也不会自动补发
   // （补发会扣服务端配额）。见 `view.ts` 的 `RESEND_COOLDOWN_MS`。
   useEffect(() => {
-    if (resendAt === null) return
-    const timer = setInterval(() => setNowMs(Date.now()), 1000)
+    if (resendAt === null || Date.now() >= resendAt) return
+    const timer = setInterval(() => {
+      const now = Date.now()
+      setNowMs(now)
+      // 到点就停表：否则停在页面上会每秒空转重渲染一次，直到组件卸载。
+      if (now >= resendAt) clearInterval(timer)
+    }, 1000)
     return () => clearInterval(timer)
   }, [resendAt])
 
@@ -72,19 +70,7 @@ function VerifyContent({ ownerId }: { ownerId: string }) {
     onSuccess: (result, _input, context) => {
       // 迟到的响应不能把上一个账号的认证状态写进当前会话（与 profile/queries.ts 同一守卫）。
       if (context.generation !== currentSessionGeneration()) return
-      // 校验响应就是权威认证状态：直接写 Me，顶栏徽章**立即**更新，不需要整页刷新。
-      const previous = queryClient.getQueryData<Me | null>(AUTH_ME_QUERY_KEY)
-      if (previous) {
-        queryClient.setQueryData<Me>(AUTH_ME_QUERY_KEY, {
-          ...previous,
-          authStatus: result.authStatus,
-          verifiedAt: result.verifiedAt,
-        })
-      }
-      queryClient.setQueryData(verificationStatusKey(), result)
-      // 个人中心的徽章读的是 profile 聚合读模型，不是 Me；不失效它就会在 15s staleTime 内
-      // 继续显示「未认证」。
-      void queryClient.invalidateQueries({ queryKey: profileKeys.aggregate(ownerId) })
+      void applyVerificationResult(queryClient, ownerId, result)
     },
   })
 

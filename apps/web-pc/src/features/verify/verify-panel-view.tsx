@@ -105,6 +105,9 @@ export function VerifyPanelView({
               aria-describedby={emailError === null ? undefined : emailErrorId}
               aria-invalid={emailError === null ? undefined : true}
               autoComplete="email"
+              // 发码在途时锁住输入框：发码成功会把界面推进到「填验证码」并回填发出请求的地址，
+              // 若此时允许编辑，用户刚敲的地址会被静默覆盖成旧的那个。
+              disabled={sending}
               id={emailId}
               inputMode="email"
               onChange={(event) => onEmailChange(event.target.value)}

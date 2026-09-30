@@ -44,6 +44,17 @@ test('未认证态给出邮箱输入、域名要求与获取验证码', () => {
   expect(html).toContain('@gzasc.edu.cn')
 })
 
+test('发码在途时邮箱输入框被锁住，避免刚敲的地址被成功回包覆盖', () => {
+  const idle = render({ email: 'zhangsan@gzasc.edu.cn' })
+  // 空闲时输入框与按钮都可点。
+  expect(disabledCount(idle)).toBe(0)
+
+  const inFlight = render({ email: 'zhangsan@gzasc.edu.cn', sending: true })
+  // 输入框 + 「正在发送…」按钮都禁用：在途期间改不了地址。
+  expect(disabledCount(inFlight)).toBe(2)
+  expect(inFlight).toContain('正在发送…')
+})
+
 test('已发码态给验证码输入，倒计时内「完成认证」与「重新发送」都点不动', () => {
   const waiting = render({
     stage: 'codeSent',
