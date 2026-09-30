@@ -10,6 +10,7 @@ function message(id: MessageDto['id']): MessageDto {
     sender: { id: 'usr_01jc000000e00800000000000a', nickname: '阿岚', avatarUrl: null },
     type: 'TEXT',
     content: id,
+    listing: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   }
 }

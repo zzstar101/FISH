@@ -37,6 +37,7 @@ function message(id: MessageDto['id'], createdAt: string, content: string = id):
     sender,
     type: 'TEXT',
     content,
+    listing: null,
     createdAt,
   }
 }

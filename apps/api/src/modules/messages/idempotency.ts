@@ -39,6 +39,14 @@ export function textRequestHash(content: string): string {
 }
 
 /**
+ * LISTING（#359）的指纹即被分享商品的公开 id（与落库的 `content` 同一值）。
+ * 客户端重试必然携带同一 `listingId`，公开 id 是文本列可比的规范形态。
+ */
+export function listingRequestHash(listingId: string): string {
+  return sha256Hex(join(['listing', listingId]))
+}
+
+/**
  * MEDIA 指纹基于**客户端预签名 key**（重试时不变）与声明的元数据。
  *
  * 服务端写入的快照 key 每次重试都会新生成，不能参与指纹，否则同一请求的两次尝试

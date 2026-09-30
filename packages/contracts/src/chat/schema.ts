@@ -10,7 +10,13 @@ import {
 
 /** Chat Domain Contract（Issue #9）。前端和 API 只依赖本目录的字段定义。 */
 
-export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM'])
+/**
+ * LISTING（#359）：商品卡片消息。`MessageDto.content` 存被分享商品的**公开 id**
+ * （`lst_…`），可渲染数据由服务端富化的 `listing` 投射携带——正文是引用不是用户文本，
+ * 不参与内容审核投射（`projectSystemContent` 只动 SYSTEM，天然放行）。
+ * 媒体仍是独立通道（见下），不在本枚举内。
+ */
+export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'LISTING'])
 export type MessageType = z.infer<typeof messageTypeSchema>
 
 /** #67 媒体消息不扩展旧 MessageDto，避免破坏现有文本/交易消息链路。 */
@@ -138,8 +144,9 @@ export type ConversationUser = z.infer<typeof conversationUserSchema>
  *
  * 媒体消息刻意不进 `MessageDto`（见文件顶部注释），但**必须**能作为会话行摘要出现：
  * 否则对方只发了图片/语音时，列表既没有预览、红点也不会亮（#67 第四步）。
+ * `LISTING`（#359）同理：正文是商品 id 不是可读文本，服务端把摘要翻成 `[商品]`。
  */
-export const conversationLastMessageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'MEDIA'])
+export const conversationLastMessageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'MEDIA', 'LISTING'])
 export type ConversationLastMessageType = z.infer<typeof conversationLastMessageTypeSchema>
 
 /**
@@ -194,6 +201,13 @@ export const messageDtoSchema = z
     sender: conversationUserSchema.nullable(),
     type: messageTypeSchema,
     content: z.string(),
+    /**
+     * LISTING 消息（#359）的可渲染投射，由服务端在历史端点与 `message.new` 推送里
+     * 同源组装（前端拿它直接画卡片，零 N+1）：id/title/priceCents/status/coverUrl，
+     * 取值规则与会话头商品卡（`conversationListingSchema`）一致。
+     * TEXT / SYSTEM 恒 `null`；商品随后被删除时也可能为 `null`（客户端按失效卡渲染）。
+     */
+    listing: conversationListingSchema.nullable(),
     createdAt: z.iso.datetime(),
   })
   // DB 的 CHECK 只保证「TEXT ⟹ sender_id 非空」；这里同步收紧到联合完整性，
@@ -212,20 +226,38 @@ export type MessageDto = z.infer<typeof messageDtoSchema>
 export const conversationCreateInputSchema = z.strictObject({ listingId: ListingIdSchema })
 export type ConversationCreateInput = z.infer<typeof conversationCreateInputSchema>
 
-/** P0 只经 HTTP 发 TEXT；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。 */
-export const messageSendInputSchema = z.strictObject({
+/**
+ * P0 只经 HTTP 发 TEXT；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。
+ * LISTING（#359）为商品卡分享：正文是 `listingId` 引用，可见性由服务端校验（404）。
+ */
+export const textMessageSendInputSchema = z.strictObject({
+  type: z.literal('TEXT'),
   content: z.string().trim().min(1, '消息不能为空').max(2000, '消息最多 2000 个字符'),
-  /**
-   * #67 发送幂等键：客户端为「一次新发送」生成的 UUID，重试同一条消息时**沿用同一个值**。
-   *
-   * 服务端以 `(senderId, conversationId, clientRequestId)` 唯一约束去重：命中同键且内容
-   * 指纹一致 → 返回已创建的消息；同键但内容不同 → 409 `IDEMPOTENCY_KEY_REUSED`。
-   *
-   * 可选是为了不打断尚未升级的旧客户端：缺省时退化为非幂等发送（与升级前行为一致）。
-   * 新客户端必须始终携带。
-   */
   clientRequestId: z.uuid().optional(),
 })
+export type TextMessageSendInput = z.infer<typeof textMessageSendInputSchema>
+
+export const listingMessageSendInputSchema = z.strictObject({
+  type: z.literal('LISTING'),
+  /** 被分享商品的公开 id；落库到 `messages.content`，可渲染数据走富化的 `listing` 投射。 */
+  listingId: ListingIdSchema,
+  clientRequestId: z.uuid().optional(),
+})
+export type ListingMessageSendInput = z.infer<typeof listingMessageSendInputSchema>
+
+/**
+ * #67 发送幂等键：客户端为「一次新发送」生成的 UUID，重试同一条消息时**沿用同一个值**。
+ *
+ * 服务端以 `(senderId, conversationId, clientRequestId)` 唯一约束去重：命中同键且内容
+ * 指纹一致 → 返回已创建的消息；同键但内容不同 → 409 `IDEMPOTENCY_KEY_REUSED`。
+ *
+ * 可选是为了不打断尚未升级的旧客户端：缺省时退化为非幂等发送（与升级前行为一致）。
+ * 新客户端必须始终携带。
+ */
+export const messageSendInputSchema = z.discriminatedUnion('type', [
+  textMessageSendInputSchema,
+  listingMessageSendInputSchema,
+])
 export type MessageSendInput = z.infer<typeof messageSendInputSchema>
 
 export const conversationListQuerySchema = z.strictObject({
@@ -348,7 +380,7 @@ export type RealtimeClientEvent = z.infer<typeof realtimeClientEventSchema>
 export const ChatErrorCodeSchema = z.enum([
   /** 404：会话 id 不存在，或查看者不是会话双方（404 而非 403，不泄漏存在性）。 */
   'CONVERSATION_NOT_FOUND',
-  /** 404：创建会话时 listingId 不存在。 */
+  /** 404：创建会话时 listingId 不存在；#359 起也覆盖商品卡发送（商品不存在或不可见）。 */
   'LISTING_NOT_FOUND',
   /** 409：买家 = 卖家（与 DB CHECK conversations_buyer_id_differs_from_seller_id 同源）。 */
   'CANNOT_CHAT_WITH_SELF',

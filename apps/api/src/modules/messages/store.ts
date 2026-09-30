@@ -53,10 +53,35 @@ export interface MessageStore {
     key?: MessageSendKey | null,
   ): Promise<MessageRow>
   /**
+   * 插入 LISTING 消息（#359 商品卡）并 bump 会话的 `last_message_at`：与 `insertText`
+   * 同一事务/幂等结构，`content` 存商品**公开 id**（引用不是用户文本，不走内容审核）。
+   */
+  insertListing(
+    conversationId: string,
+    senderId: string,
+    listingPublicId: string,
+    key?: MessageSendKey | null,
+  ): Promise<MessageRow>
+  /**
+   * 按内部 uuid 批量取 LISTING 消息富化用的商品最小投射（#359）。缺失的 id 不在
+   * 返回 Map 里；无图商品 coverObjectKey 显式为 null（与 conversations 的封面口径同源）。
+   */
+  findListingBriefs(ids: string[]): Promise<Map<string, ListingBrief>>
+  /**
    * 服务端写入 SYSTEM 消息（#11 的交易提案/接受/拒绝）：无发送者，事务内 bump
    * last_message_at。不对客户端暴露——只有同属服务端的 domain 模块调用。
    */
   insertSystem(conversationId: string, content: string): Promise<MessageRow>
+}
+
+/** LISTING 消息卡片投射的最小行（#359）；status / moderationStatus 取值域由契约收窄。 */
+export interface ListingBrief {
+  id: string
+  title: string
+  priceCents: number
+  status: string
+  moderationStatus: string | null
+  coverObjectKey: string | null
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -169,21 +194,73 @@ export function createSqlMessageStore(db: Db): MessageStore {
      * 读到第一个已提交的行并直接返回，不会撞唯一索引变成 500。
      */
     async insertText(conversationId, senderId, content, key) {
-      return db.transaction(async (tx) => {
-        if (key) {
-          await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
-          const existing = await findByRequestKey(tx, conversationId, senderId, key)
-          if (existing) {
-            if (existing.hashMatches) return toRow(existing.row)
-            throw new MessageIdempotencyConflictError(key.clientRequestId)
-          }
-        }
-        const result = await tx.execute(sql`
+      return insertUserMessage(db, conversationId, senderId, 'TEXT', content, key)
+    },
+
+    async insertListing(conversationId, senderId, listingPublicId, key) {
+      return insertUserMessage(db, conversationId, senderId, 'LISTING', listingPublicId, key)
+    },
+
+    async findListingBriefs(ids) {
+      const map = new Map<string, ListingBrief>()
+      if (ids.length === 0) return map
+      const result = await db.execute(sql`
+        SELECT l.id, l.title, l.price_cents, l.status::text, l.moderation_status::text,
+               li.object_key AS cover_object_key
+        FROM listings l
+        LEFT JOIN listing_images li ON li.listing_id = l.id AND li.sort_order = 0
+        WHERE l.id IN (${sql.join(
+          ids.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      `)
+      for (const row of rowsOf(result)) {
+        map.set(row.id as string, {
+          id: row.id as string,
+          title: row.title as string,
+          priceCents: row.price_cents as number,
+          status: row.status as string,
+          moderationStatus: (row.moderation_status as string | null) ?? null,
+          coverObjectKey: (row.cover_object_key as string | null) ?? null,
+        })
+      }
+      return map
+    },
+
+    async insertSystem(conversationId, content) {
+      // 与 insertText 同构，仅 sender 为 NULL（DB CHECK 只约束 TEXT 必须有发送者）。
+      return db.transaction((tx) => insertSystemWithin(tx, conversationId, content))
+    },
+  }
+}
+
+/**
+ * 用户消息（TEXT / LISTING，#359）共用的插入路径：同一事务结构、同一幂等语义、同一
+ * last_message_at bump。两类型只有 `type` 与 content 语义不同（正文 vs 商品引用）。
+ */
+async function insertUserMessage(
+  db: Db,
+  conversationId: string,
+  senderId: string,
+  type: 'TEXT' | 'LISTING',
+  content: string,
+  key?: MessageSendKey | null,
+): Promise<MessageRow> {
+  return db.transaction(async (tx) => {
+    if (key) {
+      await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
+      const existing = await findByRequestKey(tx, conversationId, senderId, key)
+      if (existing) {
+        if (existing.hashMatches) return toRow(existing.row)
+        throw new MessageIdempotencyConflictError(key.clientRequestId)
+      }
+    }
+    const result = await tx.execute(sql`
           WITH msg AS (
             INSERT INTO messages
               (id, conversation_id, sender_id, type, content, client_request_id, client_request_hash)
             VALUES (
-              ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, 'TEXT', ${content},
+              ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, ${type}, ${content},
               ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null}
             )
             RETURNING id, conversation_id, sender_id, type::text, content, created_at
@@ -196,17 +273,10 @@ export function createSqlMessageStore(db: Db): MessageStore {
           SELECT msg.*, u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
           FROM msg LEFT JOIN users u ON u.id = msg.sender_id
         `)
-        const row = rowsOf(result)[0]
-        if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
-        return toRow(row)
-      })
-    },
-
-    async insertSystem(conversationId, content) {
-      // 与 insertText 同构，仅 sender 为 NULL（DB CHECK 只约束 TEXT 必须有发送者）。
-      return db.transaction((tx) => insertSystemWithin(tx, conversationId, content))
-    },
-  }
+    const row = rowsOf(result)[0]
+    if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
+    return toRow(row)
+  })
 }
 
 /**

@@ -505,6 +505,53 @@ export async function loadMessagePage(
   }
 }
 
+/* ------------------------------------------------ 发送商品选择页（#359） */
+
+/** 发送商品选择页某一侧（我的 / TA 的）在售商品的加载结果 */
+export type LoadedListingCandidates = {
+  items: MockListing[]
+  failed: boolean
+}
+
+async function loadListingCandidates(
+  userId: string,
+  demoFallback: () => Promise<MockListing[]>,
+): Promise<LoadedListingCandidates> {
+  try {
+    const page = await fetchPublicUserListings(userId)
+    // 404（用户不存在）按失败处理：会话对方的用户必然存在，走到这里只可能是环境/网络问题。
+    if (page === null) return { items: [], failed: true }
+    return { items: toMockListings(page.items), failed: false }
+  } catch (error) {
+    reportFailure('发送商品选择页', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)
+    if (!MOCK_FALLBACK_ENABLED || !DEMO_AUTH_ENABLED) return { items: [], failed: true }
+    return { items: await demoFallback(), failed: false }
+  }
+}
+
+/**
+ * 「TA的宝贝」tab：对方卖家的在售商品（与 他人主页/发送页 同一公开读端点）。
+ * 演示回退用 fixture 的同 id 空间查询（mock 会话的 counterpart id 就是 fixture 的用户 id）。
+ */
+export function loadCounterpartListings(userId: string): Promise<LoadedListingCandidates> {
+  return loadListingCandidates(userId, async () => {
+    const { fetchUserListings } = await import('@/mock/api')
+    return fetchUserListings(userId)
+  })
+}
+
+/**
+ * 「我的宝贝」tab：我在售的商品。
+ * 演示身份（`DEMO_USER`）与 fixture 的「我」不同 ID，回退不能按 id 查——直接取
+ * fixture 里「我」的在售列表（与会话详情回退把 viewer 投影成当前身份的同一取舍）。
+ */
+export function loadMyListings(meId: string): Promise<LoadedListingCandidates> {
+  return loadListingCandidates(meId, async () => {
+    const { myListings } = await import('@/mock/api')
+    return myListings().filter((item) => item.status === 'ACTIVE')
+  })
+}
+
 /** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
 type ViewerLike = { id: Me['id']; nickname: string; avatarUrl: string | null }
 
@@ -540,6 +587,7 @@ function toMessageDto(
     sender,
     type: item.type,
     content: item.content,
+    listing: null,
     createdAt: item.createdAt,
   }
 }

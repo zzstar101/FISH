@@ -1,16 +1,31 @@
 import {
+  type ConversationListing,
+  conversationListingSchema,
+  type ListingMessageSendInput,
   type MessageDto,
   type MessageListQuery,
   type MessageListResponse,
-  type MessageSendInput,
   messageDtoSchema,
   messageListResponseSchema,
+  type TextMessageSendInput,
 } from '@fish/contracts/chat/schema'
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  decodePublicId,
+  encodePublicId,
+  isPublicId,
+  PUBLIC_ID_PREFIX,
+} from '@fish/shared/public-id'
 import { publicAvatarUrl } from '../uploads/avatar-url'
-import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
-import type { MessageRow, MessageStore } from './store'
+import { isListingReviewMediaKey } from '../uploads/review-media'
+import type { MediaStorage } from '../uploads/storage'
+import {
+  listingRequestHash,
+  MessageIdempotencyConflictError,
+  messageSendKey,
+  textRequestHash,
+} from './idempotency'
+import type { ListingBrief, MessageRow, MessageStore } from './store'
 
 export class MessageServiceError extends Error {
   constructor(
@@ -24,6 +39,9 @@ export class MessageServiceError extends Error {
 }
 
 const notFound = () => new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '会话不存在')
+
+const listingNotFound = () =>
+  new MessageServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
 
 /** 同键不同内容：拒绝而不是静默返回旧消息，否则调用方会以为新内容已送达（丢消息）。 */
 const idempotencyConflict = () =>
@@ -44,8 +62,59 @@ export function toMessageDto(row: MessageRow): MessageDto {
         : null,
     type: row.type,
     content: row.content,
+    // TEXT/SYSTEM 恒 null；LISTING 由调用方按商品投射覆写（#359）。
+    listing: null,
     createdAt: new Date(row.created_at).toISOString(),
   })
+}
+
+/** 商品投射 → 契约卡片。封面口径与 conversations 的头卡同源：0 号图 + 审核私有键不出 URL。 */
+function toListingCard(brief: ListingBrief, storage: MediaStorage): ConversationListing {
+  return conversationListingSchema.parse({
+    id: encodePublicId(PUBLIC_ID_PREFIX.listing, brief.id),
+    title: brief.title,
+    priceCents: brief.priceCents,
+    status: brief.status,
+    coverUrl:
+      brief.coverObjectKey && !isListingReviewMediaKey(brief.coverObjectKey)
+        ? storage.publicUrl(brief.coverObjectKey)
+        : null,
+  })
+}
+
+/** LISTING 行 content（公开 id）→ 内部 uuid；非公开 id 的脏数据按「无投射」处理。 */
+function listingUuidOf(content: string): string | null {
+  if (!isPublicId(PUBLIC_ID_PREFIX.listing, content)) return null
+  return decodePublicId(PUBLIC_ID_PREFIX.listing, content)
+}
+
+/**
+ * 一页消息统一富化（#359）：LISTING 行按 `content` 引用的商品补 `listing` 投射，
+ * 其余行原样（listing 为 null）。批量查商品，避免对每条卡片消息单独走一次查询。
+ */
+async function enrichMessageRows(
+  store: MessageStore,
+  storage: MediaStorage,
+  rows: MessageRow[],
+  projectContent: (type: string, content: string) => Promise<string>,
+): Promise<MessageDto[]> {
+  const uuids = new Set<string>()
+  for (const row of rows) {
+    if (row.type !== 'LISTING') continue
+    const uuid = listingUuidOf(row.content)
+    if (uuid) uuids.add(uuid)
+  }
+  const briefs =
+    uuids.size > 0 ? await store.findListingBriefs([...uuids]) : new Map<string, ListingBrief>()
+  return Promise.all(
+    rows.map(async (row) => {
+      const dto = toMessageDto({ ...row, content: await projectContent(row.type, row.content) })
+      if (row.type !== 'LISTING') return dto
+      const uuid = listingUuidOf(row.content)
+      const brief = uuid ? briefs.get(uuid) : undefined
+      return { ...dto, listing: brief ? toListingCard(brief, storage) : null }
+    }),
+  )
 }
 
 type InternalMessageListQuery = Omit<MessageListQuery, 'before'> & { before?: string }
@@ -59,17 +128,25 @@ export interface MessageService {
   sendTextMessage(
     userId: string,
     conversationId: string,
-    input: MessageSendInput,
+    input: TextMessageSendInput,
+  ): Promise<MessageDto>
+  sendListingMessage(
+    userId: string,
+    conversationId: string,
+    input: ListingMessageSendInput,
   ): Promise<MessageDto>
 }
 
 export function createMessageService({
   store,
+  /** LISTING 卡片封面 URL 的拼装（存储布局不进读模型，与 conversations 同一规则）。 */
+  storage,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
   projectContent = async (_type: string, content: string) => content,
 }: {
   store: MessageStore
+  storage: MediaStorage
   projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
@@ -96,11 +173,7 @@ export function createMessageService({
       const page = hasMore ? result.rows.slice(-query.limit) : result.rows
       const oldest = page[0]
       return messageListResponseSchema.parse({
-        items: await Promise.all(
-          page.map(async (row) =>
-            toMessageDto({ ...row, content: await projectContent(row.type, row.content) }),
-          ),
-        ),
+        items: await enrichMessageRows(store, storage, page, projectContent),
         // 升序页的最早一条即下一页游标；没有更早的消息时为 null（契约：无 hasMore 字段）。
         nextCursor: hasMore && oldest ? encodePublicId(PUBLIC_ID_PREFIX.message, oldest.id) : null,
       })
@@ -133,6 +206,43 @@ export function createMessageService({
       // 先落库（上面已 await）再推送；推送失败由 hub 吞掉，不影响 201 响应。
       // 重试命中既有消息时也会推一次：契约明确「推送不保证不重不漏」，客户端按服务端
       // id 去重（#67 第三步），这里不为去重再引入「新建/重放」的返回值分叉。
+      onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
+      return dto
+    },
+
+    async sendListingMessage(userId, conversationId, input) {
+      const conversation = await store.findConversationForUser(conversationId, userId)
+      if (!conversation) throw notFound()
+      /*
+       * 「存在且可见」与发送页两个 tab 的数据源（`GET /users/:id/listings`：
+       * `status='ACTIVE' AND moderation_status='APPROVED'`）完全同口径——
+       * 不依赖「非 APPROVED ⟹ OFFLINE」这条跨模块不变量（库里存在 ACTIVE+REVIEW 行），
+       * 判据在这里自证。不存在 / 非在售 / 未过审统一 404 LISTING_NOT_FOUND，
+       * 与 listings/users 的「不区分不存在与不可见」同一取舍，不给状态空间开探针。
+       */
+      if (!isPublicId(PUBLIC_ID_PREFIX.listing, input.listingId)) throw listingNotFound()
+      const listingUuid = decodePublicId(PUBLIC_ID_PREFIX.listing, input.listingId)
+      const briefs = await store.findListingBriefs([listingUuid])
+      const brief = briefs.get(listingUuid)
+      if (brief?.status !== 'ACTIVE' || brief.moderationStatus !== 'APPROVED') {
+        throw listingNotFound()
+      }
+      const key = messageSendKey(input.clientRequestId, listingRequestHash(input.listingId))
+      let row: MessageRow
+      try {
+        row = await store.insertListing(conversationId, userId, input.listingId, key)
+      } catch (error) {
+        if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
+        // 同 sendTextMessage：会话在读写窗口内被并发删除 → 外键拒绝 → 404。
+        if (isForeignKeyViolation(error)) throw notFound()
+        throw error
+      }
+      // 校验阶段已拿到 brief，直接富化，不再回查一次；幂等重试返回的既有行 content
+      // 与本次输入同键同指纹，brief 必然对应。
+      const dto: MessageDto = {
+        ...toMessageDto(row),
+        listing: toListingCard(brief, storage),
+      }
       onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
       return dto
     },
