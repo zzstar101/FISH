@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { ApiError } from '../../lib/api-client'
 import {
+  acceptTransaction,
   fetchTransaction,
   listingActionError,
   myListingsPath,
   profileUpdateErrorView,
+  proposalDecisionError,
+  rejectProposal,
   transactionActionError,
   transactionsPath,
   updateListing,
@@ -15,6 +18,36 @@ const originalFetch = globalThis.fetch
 afterEach(() => {
   globalThis.fetch = originalFetch
 })
+
+const CONVERSATION_ID = 'cnv_01jc000000e00800000000001a'
+const LISTING_ID = 'lst_01jc000000e00800000000000t'
+
+function transactionFixture() {
+  return {
+    id: 'txn_01jc000000e00800000000004t',
+    conversationId: CONVERSATION_ID,
+    listingId: LISTING_ID,
+    buyerId: 'usr_01jc000000e00800000000000b',
+    sellerId: 'usr_01jc000000e00800000000000a',
+    role: 'seller',
+    listing: {
+      id: LISTING_ID,
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'RESERVED',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    amountCents: 11000,
+    status: 'PENDING_MEETUP',
+    buyerConfirmedAt: null,
+    sellerConfirmedAt: null,
+    completedAt: null,
+    cancelledAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+  }
+}
 
 describe('profile api paths', () => {
   test('my listings always scope by seller and keep optional filters opaque', () => {
@@ -125,5 +158,84 @@ describe('profile api errors', () => {
     )
     expect(view.message).toBe('请求参数不合法')
     expect(view.fields).toEqual({ nickname: '昵称过长', avatarObjectKey: '头像对象无效' })
+  })
+})
+
+describe('proposal decisions', () => {
+  test('accept posts the conversation and the amount carried by the proposal', async () => {
+    const calls: Array<{ url: string; method: string; body: string | null }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      })
+      return Response.json(transactionFixture(), { status: 201 })
+    }) as unknown as typeof fetch
+
+    const transaction = await acceptTransaction(CONVERSATION_ID, 11000)
+
+    // 提案不落库，服务端无处可读金额，所以接受请求必须由端上重传
+    expect(calls).toEqual([
+      {
+        url: '/api/transactions',
+        method: 'POST',
+        body: JSON.stringify({ conversationId: CONVERSATION_ID, amountCents: 11000 }),
+      },
+    ])
+    expect(transaction.id).toBe('txn_01jc000000e00800000000004t')
+  })
+
+  test('reject posts only the conversation and returns the system message', async () => {
+    const calls: Array<{ url: string; method: string; body: string | null }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      })
+      return Response.json({
+        id: 'msg_01jc000000e00800000000001t',
+        conversationId: CONVERSATION_ID,
+        senderId: null,
+        sender: null,
+        type: 'SYSTEM',
+        content: JSON.stringify({ type: 'tx.rejected' }),
+        createdAt: '2026-01-02T00:00:00.000Z',
+      })
+    }) as unknown as typeof fetch
+
+    const message = await rejectProposal(CONVERSATION_ID)
+
+    expect(calls).toEqual([
+      {
+        url: '/api/transactions/proposals/reject',
+        method: 'POST',
+        body: JSON.stringify({ conversationId: CONVERSATION_ID }),
+      },
+    ])
+    expect(message.type).toBe('SYSTEM')
+  })
+
+  test('never reads LISTING_NOT_ACTIVE as "the decision failed"', () => {
+    // 契约明确该码在重试场景下也可能意味着交易已创建：只能刷新后由服务端状态定论
+    const view = proposalDecisionError(new ApiError('LISTING_NOT_ACTIVE', 409, '商品非在售'))
+    expect(view.refresh).toBe(true)
+    expect(view.message).not.toContain('失败')
+  })
+
+  test('maps the remaining decision errors', () => {
+    expect(proposalDecisionError(new ApiError('NOT_CONVERSATION_SELLER', 403, '不是卖家'))).toEqual(
+      {
+        message: '只有卖家可以处理这笔申请',
+        refresh: false,
+      },
+    )
+    expect(proposalDecisionError(new Error('network'))).toEqual({
+      message: '操作失败，请重试',
+      refresh: false,
+    })
   })
 })
