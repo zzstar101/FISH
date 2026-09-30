@@ -4,6 +4,7 @@ import { Label } from '@fish/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@fish/ui/tabs'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { INITIAL_LOGIN_AGREEMENT_ACCEPTED } from '../features/auth/agreement'
 import { describeAuthFailure, toAuthFieldErrors } from '../features/auth/error-messages'
 import {
   AuthPageShell,
@@ -39,7 +40,7 @@ export const Route = createFileRoute('/login')({
 function LoginPage() {
   const { redirect } = Route.useSearch()
   const [tab, setTab] = useState<'scan' | 'password'>('scan')
-  const [agreed, setAgreed] = useState(true)
+  const [agreed, setAgreed] = useState(INITIAL_LOGIN_AGREEMENT_ACCEPTED)
   const [submitting, setSubmitting] = useState(false)
   const [submissionGate] = useState(() => createAuthSubmissionGate(setSubmitting))
   const target = sanitizeRedirect(redirect)
