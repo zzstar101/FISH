@@ -27,6 +27,7 @@ import {
   deferReload,
   initialDeferredReload,
   isLatestPageLoad,
+  keepRecalledTombstones,
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
@@ -35,10 +36,12 @@ import {
   messageActions,
   type PendingMessage,
   parseTxEvent,
+  REPLY_DROPPED_TIP,
   recallFailureText,
   resetDeferredReload,
   resolveConvState,
   settleSend,
+  shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
@@ -261,9 +264,16 @@ export default function Conversation() {
              * silent 刷新**合并**而不是替换（#186 P2-1）：它带回来的快照可能早于
              * 本次刷新期间才发送成功的那条消息，无条件 `setMessages(page.items)`
              * 会把那条刚确认的消息抹掉。非 silent 是整页重拉，直接替换。
+             *
+             * 两条路径都要过 `keepRecalledTombstones`（#359 3c 审查回合）：撤回在途
+             * 15s 内任何一次 `load()` 都可能带着「撤回前」的快照回来，把刚落地的
+             * 撤回碑写回正文。判据与理由见 `./view`。
              */
             setMessages((prev) =>
-              baseIds === null ? page.items : mergeRefreshedMessages(prev, page.items, baseIds),
+              keepRecalledTombstones(
+                prev,
+                baseIds === null ? page.items : mergeRefreshedMessages(prev, page.items, baseIds),
+              ),
             )
             setNextCursor(page.nextCursor)
             setMsgState(page.failed ? 'failed' : 'ok')
@@ -435,9 +445,21 @@ export default function Conversation() {
       .catch((error) => {
         if (current !== epoch.current) return
         console.warn('[miniapp] 发送消息失败', error)
+        const code = isApiError(error) ? error.code : undefined
+        /**
+         * 引用失效（422 `MESSAGE_REPLY_INVALID`）必须把这条气泡的引用摘掉：
+         * `retry` 会把 `item.replyTo` 原样传回来，不摘就是每次重试必然 422 的死循环。
+         * 判据见 `./view` 的 `shouldDropReplyOnSendFailure`。
+         */
+        const dropReply = shouldDropReplyOnSendFailure(code)
         setPending((prev) =>
-          prev.map((item) => (item.id === id ? { ...item, status: 'failed' } : item)),
+          prev.map((item) =>
+            item.id === id
+              ? { ...item, status: 'failed', replyTo: dropReply ? null : item.replyTo }
+              : item,
+          ),
         )
+        if (dropReply) void Taro.showToast({ title: REPLY_DROPPED_TIP, icon: 'none' })
       })
       .finally(() => {
         deferredRef.current = settleSend(deferredRef.current, current)
@@ -506,7 +528,11 @@ export default function Conversation() {
       return
     }
     if (picked === 'copy') {
-      void Taro.setClipboardData({ data: message.content })
+      void Taro.setClipboardData({ data: message.content }).catch((error) => {
+        // 复制失败此前完全没有处理（unhandled rejection + 界面无反馈）。
+        console.warn('[miniapp] 复制消息失败', error)
+        void Taro.showToast({ title: '复制失败', icon: 'none' })
+      })
       return
     }
     if (picked === 'reply') {
@@ -555,8 +581,16 @@ export default function Conversation() {
    * 点气泡里的摘引：滚到被引用那条（页内定位，不重新拉取）。
    *
    * `tail` 记下此刻的尾行 id（见 `jumpTo` 的说明）：新消息一到尾行变化，目标即失效。
+   *
+   * 目标不在**已加载**的消息里时不能装作没事（#359 3c 审查回合）：被引用的那条可能落在
+   * 更早的分页里（本页不做无限滚动，更早一页要用户自己点「加载更早的消息」），此时
+   * `scrollIntoView` 拿到一个不存在的 id 会静默什么都不做 —— 用户点了没反应、也没有提示。
    */
   const locateMessage = (messageId: string) => {
+    if (!messages.some((item) => item.id === messageId)) {
+      void Taro.showToast({ title: '引用的消息在更早的记录里', icon: 'none' })
+      return
+    }
     setJumpTo({ id: `e-${messageId}`, tail: tailId })
   }
 

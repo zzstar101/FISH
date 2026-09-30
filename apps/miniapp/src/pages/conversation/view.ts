@@ -129,6 +129,36 @@ export function mergeRefreshedMessages(
 }
 
 /**
+ * 撤回不可回退：快照里「还没撤回」的那条不能把本地刚落地的撤回碑写回正文。
+ *
+ * 为什么需要这一层（#359 3c 审查回合）：`recalled_at` 在服务端是**单调**的
+ * （`UPDATE … SET recalled_at = COALESCE(recalled_at, now())`，只前进、永不清空），
+ * 所以「本地已经落碑、刚回来的快照却说没撤回」只可能是**快照拍得比落碑更早**。
+ * 而撤回在途最长 15s，期间任何一次 `load()`（从子页返回的整页重拉、上一次发送落定后的
+ * silent 补刷）都可能带着撤回前的快照回来 —— 非 silent 直接 `setMessages(page.items)`
+ * 会把正文写回去，用户看到「撤回成功了、一刷新又回来了」。
+ *
+ * 落地口径：其余字段仍取快照那份（可能含对方刚发的新消息与顺序修正），只把
+ * `content` 清空、`recalledAt` 取本地那个（服务端权威值会在下一次真实刷新时覆盖它）。
+ */
+export function keepRecalledTombstones(
+  previous: readonly MessageDto[],
+  incoming: readonly MessageDto[],
+): MessageDto[] {
+  const recalled = new Map<string, MessageDto>()
+  for (const item of previous) {
+    if (item.recalledAt !== null) recalled.set(item.id, item)
+  }
+  if (recalled.size === 0) return [...incoming]
+  return incoming.map((item) => {
+    if (item.recalledAt !== null) return item
+    const local = recalled.get(item.id)
+    if (!local) return item
+    return { ...item, content: '', recalledAt: local.recalledAt }
+  })
+}
+
+/**
  * 「加载更早一页」的落定守卫（#186 P2-2）。
  *
  * 更早一页是**账号 + 会话作用域**的快照：发起后若发生换账号、换会话或整页重拉
@@ -388,3 +418,17 @@ export function recallFailureText(code: string | undefined): string {
   if (code === 'MESSAGE_NOT_FOUND') return '消息已不存在'
   return '撤回失败，请重试'
 }
+
+/**
+ * 发送失败要不要把这条气泡的引用摘掉（#359 3c 审查回合）。
+ *
+ * 四种发送体在「被引用的消息已被撤回 / 不存在 / 跨会话 / 是 SYSTEM」时统一 422
+ * `MESSAGE_REPLY_INVALID`，而 `retry` 会把 `item.replyTo` 原样传回下一次 `doSend` ——
+ * 不摘掉引用，重试必然再撞同一个 422，用户看到的是一个永远点不成功的「发送失败 · 重试」。
+ */
+export function shouldDropReplyOnSendFailure(code: string | undefined): boolean {
+  return code === 'MESSAGE_REPLY_INVALID'
+}
+
+/** 摘掉引用后的提示文案（失败气泡留在原地，用户可以再点重试） */
+export const REPLY_DROPPED_TIP = '引用的消息已失效，已去掉引用'

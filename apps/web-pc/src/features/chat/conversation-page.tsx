@@ -135,8 +135,15 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         气泡翻成撤回碑（气泡渲染读的是缓存里的 DTO）。重取一次历史/详情即可拿到
         `recalledAt`，气泡随之变成撤回碑。
       */
-      if (event.type === 'message.recalled' && event.conversationId === conversationId) {
-        invalidateConversationDetail(queryClient, ownerId, conversationId)
+      if (event.type === 'message.recalled') {
+        if (event.conversationId === conversationId) {
+          invalidateConversationDetail(queryClient, ownerId, conversationId)
+        }
+        /*
+          别的会话里的撤回也要刷新列表（#359 3c 审查回合）：那条会话行的摘要会翻成
+          「[消息已撤回]」，而列表只是 staleTime 15s 的普通查询，不主动失效就会一直
+          显示撤回前的原文。与 `message.new` 同款处理（那个分支无条件失效）。
+        */
         invalidateConversationSurfaces(queryClient, ownerId)
       }
     },
