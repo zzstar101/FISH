@@ -372,6 +372,41 @@
   flex: 0 0 auto;
 }
 
+/*
+ * 在线态（#359 第五点）：卖家昵称行右端，头像右侧的同一条水平线上。
+ *
+ * `flex: 0 0 auto` 保证长昵称先省略、不把在线态挤出行外（`.detail__snick` 自带 ellipsis）。
+ * 绿点用系统成功色 `--ok`，离线压成中性灰 `--muted`；字号比昵称小一档（24px），
+ * 与下方「卖出 N 件」同一档。
+ */
+.detail__presence {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.detail__presence-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.detail__presence.is-online .detail__presence-dot {
+  background: var(--ok);
+}
+
+.detail__presence-tx {
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.detail__presence.is-online .detail__presence-tx {
+  color: var(--ok-ink);
+}
+
 .detail__ssub {
   display: flex;
   align-items: center;

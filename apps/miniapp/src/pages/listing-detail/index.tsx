@@ -32,6 +32,7 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
@@ -645,6 +646,16 @@ export default function ListingDetail() {
       : null
 
   /**
+   * 卖家在线态（#359 第五点）：卖家行里、头像右侧那一列的昵称行。
+   *
+   * 数据来自详情页**并行拉取**的公开资料（见 `features/fetchers.ts` 的 `loadListingDetail`，
+   * 「卖出 N 件」与在线态同一次请求），没有额外接口；拿不到（fixture 兜底 / 那次请求失败）
+   * 时 `data.seller.presence` 为 null → 整块不渲染，不画一个假的「离线」。
+   * 判据与文案走三处展示位共用的 `features/presence/view`。
+   */
+  const sellerPresence = data ? presenceView(data.seller.presence, Date.now()) : null
+
+  /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
    *
    * 本页不再用那个组件（它的钮是 `absolute`，会随内容滚走，且尺寸/留白与稿子不符），
@@ -1239,6 +1250,16 @@ export default function ListingDetail() {
                     <Text className="detail__snick">{data.seller.nickname}</Text>
                     {data.seller.authStatus === 'VERIFIED' ? (
                       <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
+                    ) : null}
+                    {/* 在线态（#359 第五点）：昵称行右端、头像右侧的同一条水平线上。
+                        绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）。 */}
+                    {sellerPresence ? (
+                      <View
+                        className={`detail__presence${sellerPresence.online ? ' is-online' : ''}`}
+                      >
+                        <View className="detail__presence-dot" />
+                        <Text className="detail__presence-tx">{sellerPresence.text}</Text>
+                      </View>
                     ) : null}
                   </View>
                   {/*

@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyPresencePoll,
   beginSend,
   canRetry,
   clearDeferredReload,
@@ -100,6 +101,75 @@ describe('sortMessages —— 回到契约的 (createdAt, id) 升序', () => {
     const input = [msg('b', '2026-09-21T10:00:00.000Z'), msg('a', '2026-09-21T10:00:00.000Z')]
     expect(sortMessages(input).map((item) => item.id)).toEqual(['a', 'b'])
     expect(input.map((item) => item.id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('applyPresencePoll —— 在线态轮询只写在线态（#359 第五点）', () => {
+  const dto = (overrides: Partial<ConversationDto> = {}): ConversationDto => ({
+    id: 'cnv_01jc000000e00800000000001a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    role: 'buyer',
+    listing: {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    counterpartPresence: { online: false, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    unreadCount: 1,
+    counterpartLastReadAt: null,
+    lastMessage: {
+      type: 'TEXT',
+      content: '在吗',
+      senderId: 'usr_01jc000000e00800000000000b',
+      createdAt: '2026-09-30T10:59:00.000Z',
+    },
+    lastMessageAt: '2026-09-30T10:59:00.000Z',
+    createdAt: '2026-09-30T10:00:00.000Z',
+    ...overrides,
+  })
+
+  test('把新拿到的在线态写回', () => {
+    const merged = applyPresencePoll(
+      dto(),
+      dto({ counterpartPresence: { online: true, lastActiveAt: '2026-09-30T12:00:00.000Z' } }),
+    )
+    expect(merged.counterpartPresence).toEqual({
+      online: true,
+      lastActiveAt: '2026-09-30T12:00:00.000Z',
+    })
+  })
+
+  test('轮询响应即使更旧，也不回退消息 / 未读 / 商品等字段', () => {
+    const current = dto({
+      unreadCount: 3,
+      lastMessage: {
+        type: 'TEXT',
+        content: '我刚发出去的',
+        senderId: 'usr_01jc000000e00800000000000a',
+        createdAt: '2026-09-30T12:00:00.000Z',
+      },
+      lastMessageAt: '2026-09-30T12:00:00.000Z',
+      listing: {
+        id: 'lst_01jc000000e00800000000000t',
+        title: '九成新自行车',
+        priceCents: 12000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+    })
+    // 这次轮询的响应是「刚发出消息之前」的快照
+    const stale = dto()
+
+    const merged = applyPresencePoll(current, stale)
+    expect(merged.unreadCount).toBe(3)
+    expect(merged.lastMessage?.content).toBe('我刚发出去的')
+    expect(merged.lastMessageAt).toBe('2026-09-30T12:00:00.000Z')
+    expect(merged.listing.status).toBe('RESERVED')
+    // 只有在线态取新值（这里恰好是同一份，重点是其余字段一个都没动）
+    expect(merged.counterpartPresence).toEqual(stale.counterpartPresence)
   })
 })
 

@@ -8,12 +8,14 @@ import EmptyState from '@/components/empty-state'
 import LoadError from '@/components/load-error'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
-import { markConversationRead, sendMessage } from '@/features/chat/api'
+import { fetchConversation, markConversationRead, sendMessage } from '@/features/chat/api'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
+import { presenceView } from '@/features/presence/view'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import {
+  applyPresencePoll,
   beginSend,
   canRetry,
   clearDeferredReload,
@@ -68,6 +70,14 @@ const PANEL_TILES = [
 
 /** 媒体能力的统一提示（#67 未落地前，任何「发图 / 发语音」入口都只说这一句） */
 const MEDIA_PENDING_TIP = '图片 / 语音消息待接入（#67）'
+
+/**
+ * 对方在线态的轮询间隔（#359 第五点）。
+ *
+ * 20s 与服务的在线窗口（`PRESENCE_ONLINE_TTL_MS = 60s`）成比例：最坏情况下「对方断线」
+ * 要等 TTL + 一跳才在端上体现（约 80s）。太密会白烧请求，太疏则演示与体感都迟钝。
+ */
+const PRESENCE_POLL_MS = 20_000
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -333,6 +343,36 @@ export default function Conversation() {
     }
   }, [])
 
+  /**
+   * 对方在线态的轮询（#359 第五点）。
+   *
+   * 为什么是轮询而不是 `presence.changed` 事件：小程序端现在**没有**实时客户端
+   * （#213→#220 链路未合入 main），拿不到那条推送。于是这里按固定间隔**只重拉会话详情**
+   * 并只把 `counterpartPresence` 写回 state —— 不碰消息流、不碰 epoch、不重复上报已读
+   * （那三件事归 `load`，重发会把乐观气泡与分页游标搅乱）。
+   *
+   * 判据：只在「已登录 + 详情已就绪」时挂表；每跳还要过页面可见性与代次守卫 ——
+   * 页面被盖住（`useDidHide`）时白跳，`load` 在同一个 tick 里重拉过（epoch 前进）时
+   * 把这次的陈旧响应丢掉，免得用旧快照把刚拿到的在线态写回去。
+   *
+   * 有了实时客户端之后这里应当整块换成事件订阅；在那之前，它是「断线后转为离线」在
+   * 端上唯一能被看见的路径（服务端按 TTL 判定，最迟 `PRESENCE_POLL_MS` 一跳内体现）。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || convState !== 'ok') return
+    const timer = setInterval(() => {
+      if (!visibleRef.current || !aliveRef.current) return
+      const current = epoch.current
+      void fetchConversation(conversationId)
+        .then((next) => {
+          if (current !== epoch.current) return
+          setConversation((prev) => (prev === null ? prev : applyPresencePoll(prev, next)))
+        })
+        .catch((error) => console.warn('[miniapp] 在线态刷新失败', error))
+    }, PRESENCE_POLL_MS)
+    return () => clearInterval(timer)
+  }, [authStatus, userId, convState, conversationId])
+
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */
   const loadEarlier = () => {
     if (!nextCursor || loadingEarlier) return
@@ -559,6 +599,13 @@ export default function Conversation() {
   const counterpart = conversation.counterpart
   const listing = conversation.listing
   const now = Date.now()
+  /**
+   * 对方的在线态（#359 第五点）：顶部栏昵称旁边。
+   *
+   * 判据走三处展示位共用的 `features/presence/view`（服务端判定 + 端上按同一 TTL 过期）；
+   * 本页每 `PRESENCE_POLL_MS` 重拉一次详情，所以「对方断线」会在一跳内翻成离线文案。
+   */
+  const counterpartPresence = presenceView(conversation.counterpartPresence, now)
   /** 日期分隔条看**已加载的第一条**（分页后它会跟着变早），没有消息时退回会话的最后活跃时间 */
   const firstEntry = entries.length > 0 ? entries[0] : undefined
   const dayLabel = dayLabelOf(
@@ -634,6 +681,14 @@ export default function Conversation() {
           <View className="conv__title">
             <View className="conv__title-in" style={{ maxWidth: `${titleMaxWidth}px` }}>
               <Text className="conv__title-nm">{counterpart.nickname}</Text>
+              {/* 在线态（#359 第五点）：顶部栏用户名隔壁。绿点 + 文案；离线时说
+                  「多久没上线」（`12 分钟前活跃`），拿不到在线态时整块不渲染。 */}
+              {counterpartPresence ? (
+                <View className={`conv__presence${counterpartPresence.online ? ' is-online' : ''}`}>
+                  <View className="conv__presence-dot" />
+                  <Text className="conv__presence-tx">{counterpartPresence.text}</Text>
+                </View>
+              ) : null}
             </View>
           </View>
         </View>

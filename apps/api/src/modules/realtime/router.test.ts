@@ -13,6 +13,8 @@ import { createRealtimeRouter } from './router'
 async function startServer(resolveUserId: (req: Request) => Promise<string | null>) {
   const { upgradeWebSocket, websocket } = createBunWebSocket()
   const hub = createConnectionHub()
+  /** #359 第五点：保活帧的在线态心跳（装配层传 presence.touch） */
+  const heartbeats: string[] = []
 
   const app = new Hono<{ Variables: { userId: string } }>()
   app.get(
@@ -20,6 +22,7 @@ async function startServer(resolveUserId: (req: Request) => Promise<string | nul
     createRealtimeRouter({
       hub,
       resolveUserId: (c) => resolveUserId(c.req.raw),
+      onHeartbeat: (userId) => heartbeats.push(userId),
       upgradeWebSocket: upgradeWebSocket as never,
     }),
   )
@@ -30,7 +33,7 @@ async function startServer(resolveUserId: (req: Request) => Promise<string | nul
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     websocket: websocket as never,
   })
-  return { server, hub, url: `ws://localhost:${server.port}/ws/chat` }
+  return { server, hub, heartbeats, url: `ws://localhost:${server.port}/ws/chat` }
 }
 
 describe('realtime router (integration)', () => {
@@ -49,7 +52,7 @@ describe('realtime router (integration)', () => {
   })
 
   test('authenticated client gets pong for ping; hub push reaches both participants', async () => {
-    const { server, hub, url } = await startServer(async (req) => {
+    const { server, hub, heartbeats, url } = await startServer(async (req) => {
       return req.headers.get('x-test-user')
     })
     try {
@@ -59,6 +62,8 @@ describe('realtime router (integration)', () => {
         alice.onerror = reject
       })
       expect(hub.connectionCount()).toBe(1)
+      // #359 第五点：连上还没活动过 —— 心跳只在 ping 时续（握手那次由 resolveUserId 记）
+      expect(heartbeats).toEqual([])
 
       alice.send(JSON.stringify({ type: 'ping' }))
       const pong = await new Promise<string>((resolve, reject) => {
@@ -66,6 +71,7 @@ describe('realtime router (integration)', () => {
         setTimeout(() => reject(new Error('pong timeout')), 2000)
       })
       expect(JSON.parse(pong)).toEqual({ type: 'pong' })
+      expect(heartbeats).toEqual(['alice'])
 
       // bob 也在另一个连接上；消息服务推送（hub.pushToUsers）双方都能收到
       const bob = new WebSocket(url, { headers: { 'x-test-user': 'bob' } } as never)
@@ -110,7 +116,9 @@ describe('realtime router (integration)', () => {
   })
 
   test('unknown client frames are silently ignored (connection stays open)', async () => {
-    const { server, url } = await startServer(async (req) => req.headers.get('x-test-user'))
+    const { server, heartbeats, url } = await startServer(async (req) =>
+      req.headers.get('x-test-user'),
+    )
     try {
       const ws = new WebSocket(url, { headers: { 'x-test-user': 'alice' } } as never)
       await new Promise<void>((resolve, reject) => {
@@ -120,6 +128,8 @@ describe('realtime router (integration)', () => {
 
       ws.send('not-json')
       ws.send(JSON.stringify({ type: 'subscribe', channel: 'conv-1' }))
+      // 坏帧 / 未知帧不构成活动证据（#359 第五点：只有 ping 续在线态）
+      expect(heartbeats).toEqual([])
 
       // 连接仍然活着：ping 还能拿到 pong
       ws.send(JSON.stringify({ type: 'ping' }))
@@ -128,6 +138,7 @@ describe('realtime router (integration)', () => {
         setTimeout(() => reject(new Error('pong timeout')), 2000)
       })
       expect(JSON.parse(pong)).toEqual({ type: 'pong' })
+      expect(heartbeats).toEqual(['alice'])
       ws.close()
     } finally {
       server.stop(true)

@@ -1,4 +1,4 @@
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 
 /**
  * 会话页的展示逻辑（#89：从 fixture 改为真实历史 / 发送 / 已读）。
@@ -124,8 +124,22 @@ export function mergeRefreshedMessages(
 }
 
 /**
- * 「加载更早一页」的落定守卫（#186 P2-2）。
+ * 在线态轮询落地（#359 第五点）：**只**把对方的在线态写回，其余字段一律不动。
  *
+ * 为什么必须显式限定：这一跳是「只为了在线态」的重拉，它带回来的整份详情快照可能比
+ * 屏幕上的状态**更旧**（这次请求发出之后用户刚发出一条消息、或刚推进过读位）。
+ * 无条件 `setConversation(next)` 会让 `lastMessage` / `unreadCount` / `lastMessageAt`
+ * 一起回退 —— 与 `mergeRefreshedMessages` 防的是同一类「陈旧快照覆盖新状态」。
+ */
+export function applyPresencePoll(
+  previous: ConversationDto,
+  incoming: ConversationDto,
+): ConversationDto {
+  return { ...previous, counterpartPresence: incoming.counterpartPresence }
+}
+
+/**
+ * 「加载更早一页」的落定守卫（#186 P2-2）。
  * 更早一页是**账号 + 会话作用域**的快照：发起后若发生换账号、换会话或整页重拉
  * （三者都会 `epoch +1`），这批数据与 `loadingEarlier` 这把锁就都已经属于上一代。
  *

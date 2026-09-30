@@ -8,8 +8,9 @@
  * ## 写进契约的隐私边界（本 Issue 的验收核心）
  *
  * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / joinedDays / activeCount /
- * soldCount` 七个字段。以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以
- * 为空"，而是**契约里根本没有这个字段**）：
+ * soldCount / presence` 八个字段（`presence` 是 #359 第五点新增的在线态，见
+ * `UserPresenceSchema` 的 Owner 拍板记录）。以下字段**在任何情况下都不得出现在响应里**
+ * （不是"当前没有数据所以为空"，而是**契约里根本没有这个字段**）：
  *
  * - `studentNo`（学号即账号）、`campusEmail`（校园认证绑定）、`passwordHash`、`role`
  *   —— 表里有，但永远不进公开 DTO；
@@ -40,6 +41,42 @@ import { UserIdSchema } from '../system/public-id'
 export const PublicUserIdSchema = UserIdSchema
 
 export type PublicUserId = z.infer<typeof PublicUserIdSchema>
+
+/**
+ * 在线判定窗口（#359 第五点）：`now - lastActiveAt < PRESENCE_ONLINE_TTL_MS` 即在线。
+ *
+ * 服务端按它算 `UserPresence.online`；**客户端也拿同一个常量**把在线态在本地过期
+ * （实时事件只在「变在线」时推，见 `chat/schema.ts` 的 `presence.changed`），
+ * 两端的窗口必须同源，否则会出现「服务端说离线、客户端还画着绿点」。
+ */
+export const PRESENCE_ONLINE_TTL_MS = 60_000
+
+/**
+ * 用户在线态（#359 第五点）。
+ *
+ * 口径：**已认证活动 + TTL**，不是「WebSocket 连接还在不在」—— 小程序端当前没有
+ * 实时客户端（#213→#220 链未合入 main），若只认 WS 连接，端上永远没有人在线。
+ * 所以服务端把「最近一次已认证活动」（HTTP 请求或 WS 心跳）记进进程内的登记表，
+ * `online = 最近活动在 TTL 窗口内`。
+ *
+ * 两个字段的取值语义：
+ * - `online`：服务端**读取这一刻**的判定结果（活动窗口内）；
+ * - `lastActiveAt`：最后一次已认证活动的时刻（ISO，**在线时也照给**，客户端据此
+ *   在本地越过 TTL 后自行翻成离线）；服务端自本次进程启动以来没见过该用户活动时为
+ *   `null`（进程重启会丢掉登记表，见 `apps/api/src/modules/presence/presence.ts`），
+ *   此时客户端的降级文案是「离线」，不编造一个「最后活跃」时刻。
+ *
+ * 隐私边界（Owner 2026-09-30 拍板）：在线态**给他人看**——他人主页与商品详情的卖家行
+ * 都要显示（#359 第五点的三处展示位）。因此它是公开读模型的一部分，匿名访客也能读到。
+ * 这一条是产品决策，不是实现泄漏；若要收回到「仅登录用户可见」，改动点是服务端在
+ * 匿名视角把 `presence` 恒置 `{ online: false, lastActiveAt: null }` 并同步本注释。
+ */
+export const UserPresenceSchema = z.object({
+  online: z.boolean(),
+  lastActiveAt: z.iso.datetime().nullable(),
+})
+
+export type UserPresence = z.infer<typeof UserPresenceSchema>
 
 /**
  * 公开用户资料。
@@ -74,6 +111,13 @@ export const PublicUserProfileSchema = z.object({
    * 这里是**成交数**。页面上写「卖出」就该用这个。
    */
   soldCount: z.number().int().nonnegative(),
+  /**
+   * 在线态（#359 第五点）。他人主页的头像右侧要显示它；商品详情页的卖家行复用同一个
+   * 端点（`GET /users/:id/public`）拿到的这份值，因此两屏不可能各说各话。
+   *
+   * 公开可见是刻意的（见 `UserPresenceSchema` 的隐私边界注记）。
+   */
+  presence: UserPresenceSchema,
 })
 
 export type PublicUserProfile = z.infer<typeof PublicUserProfileSchema>

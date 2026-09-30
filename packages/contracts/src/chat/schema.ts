@@ -7,6 +7,7 @@ import {
   MessageIdSchema,
   UserIdSchema,
 } from '../system/public-id'
+import { UserPresenceSchema } from '../users/schema'
 
 /** Chat Domain Contract（Issue #9）。前端和 API 只依赖本目录的字段定义。 */
 
@@ -167,6 +168,17 @@ export const conversationDtoSchema = z.object({
   listing: conversationListingSchema,
   /** 会话对面的用户；SYSTEM 消息没有发送者，但会话必有双方。 */
   counterpart: conversationUserSchema,
+  /**
+   * 对方的在线态（#359 第五点）。会话页顶部栏在昵称旁渲染它。
+   *
+   * 为什么是 `ConversationDto` 的**兄弟字段**而不是塞进 `counterpart`：`conversationUserSchema`
+   * 被 `MessageDto.sender` 复用，塞进去会让每条消息的发送者都背上一次在线态查询（N+1），
+   * 而这里只需要「会话对方」这一个用户的值。
+   *
+   * 口径与 `PublicUserProfileSchema.presence` 同源（同一个 `UserPresenceSchema`、
+   * 同一个进程内登记表），端上两处不会各说各话。
+   */
+  counterpartPresence: UserPresenceSchema,
   /** 查看者的未读数；调用 read 端点后归 0。 */
   unreadCount: z.number().int().nonnegative(),
   /**
@@ -329,6 +341,26 @@ export const realtimeServerEventSchema = z.discriminatedUnion('type', [
     readerId: UserIdSchema,
     /** 推进到的时刻（ISO，服务端权威）；`createdAt <= readAt` 的消息算已读。 */
     readAt: z.iso.datetime(),
+  }),
+  /**
+   * 某个用户的在线态变了（#359 第五点）。
+   *
+   * **推给谁**：与该用户有会话的其它用户（对方），不是全站 —— 广播范围由
+   * `ConversationStore.listCounterpartUserIds` 收口，与 `message.new` 的
+   * `pushToUsers` 语义同源。
+   *
+   * **只推「变在线」**：在线态的口径是「最近一次已认证活动在 `PRESENCE_ONLINE_TTL_MS`
+   * 窗口内」（见 `users/schema.ts` 的 `UserPresenceSchema`）。服务端能观察到的**转变**
+   * 只有离线→在线（`touch` 的那一刻）；在线→离线没有对应的服务端事件（TTL 到期的瞬间
+   * 没有任何请求），所以**由客户端按同一个 TTL 常量在本地过期**，服务端的 HTTP 读模型
+   * （`ConversationDto.counterpartPresence.online`）也已在读取那一刻算好了同一个结论。
+   * 收方拿到 `presence.online === false` 是可能的（读到已被 TTL 过期的值），照常渲染。
+   */
+  z.object({
+    type: z.literal('presence.changed'),
+    /** 在线态发生变化的那个用户（公开 id）。 */
+    userId: UserIdSchema,
+    presence: UserPresenceSchema,
   }),
   z.object({ type: z.literal('pong') }),
 ])

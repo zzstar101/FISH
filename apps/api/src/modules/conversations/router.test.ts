@@ -28,6 +28,8 @@ const dto: ConversationDto = {
     nickname: '卖家',
     avatarUrl: null,
   },
+  // #359 第五点：对方在线态是 ConversationDto 的必填字段（这里给「在线」以覆盖绿点分支）
+  counterpartPresence: { online: true, lastActiveAt: '2026-09-12T10:00:00.000Z' },
   unreadCount: 0,
   counterpartLastReadAt: null,
   lastMessage: {

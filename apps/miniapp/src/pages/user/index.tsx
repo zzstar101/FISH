@@ -10,6 +10,7 @@ import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import { presenceView } from '@/features/presence/view'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -277,6 +278,15 @@ export default function UserHome() {
   const verified = profile?.authStatus === 'VERIFIED'
 
   /**
+   * 在线态（#359 第五点）：头像右侧那一列的昵称行下方。
+   *
+   * 判据走 `features/presence/view`（三处展示位共用）：服务端的 `online` 加上端上按同一
+   * TTL 的本地过期 —— 本页进页只拉一次资料，不做过期处理的话，几分钟前拿到的
+   * 「在线」会一直挂在屏幕上。`profile` 还没到时不渲染（骨架屏阶段没有在线态可说）。
+   */
+  const presence = profile ? presenceView(profile.presence, Date.now()) : null
+
+  /**
    * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。
    *
    * 「已经到底了」要两个信号同时点头：服务端游标说没有下一页，且这份列表条数不少于
@@ -527,6 +537,15 @@ export default function UserHome() {
                         </View>
                       ) : null}
                     </View>
+                    {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
+                        「多久没上线」由 `presenceView` 折算成「12 分钟前活跃」这类相对时间。
+                        拿不到在线态时整块不渲染（不画一个假的「离线」）。 */}
+                    {presence ? (
+                      <View className={`uhome__presence${presence.online ? ' is-online' : ''}`}>
+                        <View className="uhome__presence-dot" />
+                        <Text className="uhome__presence-tx">{presence.text}</Text>
+                      </View>
+                    ) : null}
                   </View>
                   {/* 关注按钮（稿 `.btn-follow`）：**头像行内第三格**，昵称块右侧 ——
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。

@@ -85,6 +85,14 @@ export interface ConversationStore {
   countUnread(viewerId: string): Promise<number>
   /** 把查看者一侧的 last_read_at 单调推进到 now（只前进不后退）；非参与者返回 null。 */
   markRead(conversationId: string, viewerId: string): Promise<ConversationDetailRow | null>
+  /**
+   * 与该用户有会话的**对方**用户 id 去重列表（#359 第五点的 `presence.changed` 广播范围）。
+   *
+   * 为什么必须收口在这里：在线态不能广播给全站（那是把所有人的上下线变成一份公开的
+   * 活动时间线）。会话严格双人，所以「对方」= 每行里不是 TA 的那一列，去重后就是该用户
+   * 的可见范围 —— 与 `pushToUsers` 推消息时用的收件人集合同源。
+   */
+  listCounterpartUserIds(userId: string): Promise<string[]>
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -359,6 +367,19 @@ export function createSqlConversationStore(db: Db): ConversationStore {
       `)
       if (rowsOf(updated).length === 0) return null
       return this.findDetail(conversationId, viewerId)
+    },
+
+    async listCounterpartUserIds(userId) {
+      // 会话严格双人：每行取「不是 TA 的那一列」。DISTINCT 让「同一对买卖家的多件商品会话」
+      // 只出现一次 —— 广播是幂等的（同一个 socket 收到两遍同一条 presence.changed 无害），
+      // 但没必要让同一个收件人在一次广播里被推两遍。
+      const result = await db.execute(sql`
+        SELECT DISTINCT CASE WHEN c.buyer_id = ${userId}::uuid THEN c.seller_id ELSE c.buyer_id END
+          AS counterpart_id
+        FROM conversations c
+        WHERE c.buyer_id = ${userId}::uuid OR c.seller_id = ${userId}::uuid
+      `)
+      return rowsOf(result).map((row) => row.counterpart_id as string)
     },
   }
 }

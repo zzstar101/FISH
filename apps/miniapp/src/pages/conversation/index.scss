@@ -123,6 +123,41 @@
   letter-spacing: 0.01em;
 }
 
+/*
+ * 在线态（#359 第五点）：顶部栏用户名隔壁，一行「绿点 + 文案」。
+ *
+ * `flex: 0 0 auto` + 昵称自己的 ellipsis：长昵称先省略，在线态永远留在标题行内
+ * （`.conv__title-in` 的 `maxWidth` 是胶囊避让宽度，超出会被裁）。
+ * 绿点用系统成功色 `--ok`，离线压成中性灰；字号比昵称小一档（24px）。
+ */
+.conv__presence {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conv__presence-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.conv__presence.is-online .conv__presence-dot {
+  background: var(--ok);
+}
+
+.conv__presence-tx {
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.conv__presence.is-online .conv__presence-tx {
+  color: var(--ok-ink);
+}
+
 /* ---------------------------------------------------------------- 商品摘要条 */
 
 /* 稿子 .pcard：本页唯一的吸顶锚点，点它进商品详情 */

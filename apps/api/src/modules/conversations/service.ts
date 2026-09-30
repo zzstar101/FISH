@@ -8,6 +8,7 @@ import {
 } from '@fish/contracts/chat/schema'
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { PresenceReader } from '../presence/presence'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -50,6 +51,7 @@ function toConversationDto(
   row: ConversationDetailRow,
   viewerId: string,
   storage: MediaStorage,
+  presence: PresenceReader,
 ): ConversationDto {
   return conversationDtoSchema.parse({
     id: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation.id),
@@ -73,6 +75,11 @@ function toConversationDto(
       id: encodePublicId(PUBLIC_ID_PREFIX.user, row.counterpart.id),
       avatarUrl: publicAvatarUrl(row.counterpart.avatarUrl),
     },
+    /**
+     * 对方的在线态（#359 第五点）。取的是**对方**（`row.counterpart.id`）的值 —— 会话页
+     * 顶部栏显示的是对方在不在线；自己那一侧的在线态本页没有消费方（不顺手多查一个）。
+     */
+    counterpartPresence: presence.presenceOf(row.counterpart.id),
     unreadCount: row.unreadCount,
     counterpartLastReadAt: readAtIso(row, viewerId, 'counterpart'),
     lastMessage: row.lastMessage
@@ -107,11 +114,18 @@ export interface ConversationService {
 export function createConversationService({
   store,
   storage,
+  presence,
   onRead,
   projectContent = async (_type: string, content: string) => content,
 }: {
   store: ConversationStore
   storage: MediaStorage
+  /**
+   * 在线态读模型（#359 第五点）。**必填**：没有它 `ConversationDto.counterpartPresence`
+   * 就无从组装（契约里是必填字段），给个「永远离线」的默认值只会把漏接线伪装成
+   * 「对方恰好不在线」，在类型层就要求装配方显式提供。
+   */
+  presence: PresenceReader
   projectContent?: (type: string, content: string) => Promise<string>
   /**
    * 读位推进成功后调用（先落库再推送，与 messages 的 `onMessageCreated` 同语义）；
@@ -136,7 +150,7 @@ export function createConversationService({
           },
         }
       : row
-    return toConversationDto(projected, viewerId, storage)
+    return toConversationDto(projected, viewerId, storage, presence)
   }
 
   return {

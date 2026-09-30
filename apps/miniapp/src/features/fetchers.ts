@@ -256,8 +256,7 @@ export async function loadListingDetail(
     // 失败降级成「没有相似推荐 / 不展示卖出件数」，但要留痕 —— 静默吞掉会让契约解析漂移
     // 看起来像「这个分类恰好没有同类商品」或「这个卖家恰好没卖过东西」。
     //
-    // 卖家公开资料只为了「卖出 N 件」这一个数：详情契约的 `ListingSellerSchema` 里没有它
-    // （只有 id / nickname / avatarUrl / authStatus），所以走 #122 的公开端点。
+    // 卖家公开资料一次拿两样：卖出件数，以及在线态（#359 第五点，详情页卖家行要显示）。
     // 认证状态**不**从这里取：详情响应本身就带真值，不必多一次请求去问同一件事。
     const [similar, sellerProfile] = await Promise.all([
       fetchSimilarListings(detail.category, detail.id).catch((error) => {
@@ -265,11 +264,15 @@ export async function loadListingDetail(
         return []
       }),
       fetchPublicUserProfile(detail.seller.id).catch((error) => {
-        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数', error)
+        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数与在线态', error)
         return null
       }),
     ])
-    const seller: MockUser = toMockSeller(detail, sellerProfile?.soldCount ?? null)
+    const seller: MockUser = toMockSeller(
+      detail,
+      sellerProfile?.soldCount ?? null,
+      sellerProfile?.presence ?? null,
+    )
     // 先按列表卡投影一次拿到公共字段（角标 / 比例 / 相对时间），再补详情独有的几项。
     // 不用 `[0]!`：空数组断言会掩盖投影层的 bug，这里显式兜底。
     const [base] = toMockListings([detail], now)
@@ -424,6 +427,12 @@ function toConversationDto(item: MockConversation, mockViewerId: Me['id']): Conv
     // fixture 没有「对方读到哪」这个概念（每个会话只有一条本地读位），给 null：
     // 逐条「已读」的渲染在 Step 3 接 `conversation.read` 时才用得上
     counterpartLastReadAt: null,
+    /**
+     * 在线态（#359 第五点）只有服务端有（进程内活动登记表），fixture 里没有任何可投影的
+     * 事实，所以给「拿不到」的形状：`{ online: false, lastActiveAt: null }` 由端上渲染成
+     * 「离线」。不编一个假的「5 分钟前活跃」—— fixture 里的固定时刻会随时间漂成假话。
+     */
+    counterpartPresence: { online: false, lastActiveAt: null },
     lastMessage:
       DEMO_AUTH_ENABLED && lastMessage?.senderId === mockViewerId
         ? { ...lastMessage, senderId: DEMO_USER.id }

@@ -113,6 +113,41 @@
 }
 
 /*
+ * 在线态（#359 第五点）：头像右侧那一列的昵称行下方，一行「绿点 + 文案」。
+ *
+ * 绿点用系统成功色 `--ok`（认证徽章的描边同款），离线态压成中性灰 `--muted`：
+ * 在线/离线只靠颜色区分（形状一致），文案已经把「多久没上线」说清楚了。
+ * 字号比昵称小一档（21px = 稿 10.5pt），与 `.uhome__badge` 同一档。
+ */
+.uhome__presence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.uhome__presence-dot {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.uhome__presence.is-online .uhome__presence-dot {
+  background: var(--ok);
+}
+
+.uhome__presence-tx {
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.uhome__presence.is-online .uhome__presence-tx {
+  color: var(--ok-ink);
+}
+
+/*
  * 认证徽章（稿 `.badge`）：浅强调底 + 中强调描边 + 品牌深字，与 `watchers` 页的
  * 认证徽章同一套色值，也正是 `ICONS.verifiedAccent`（品牌蓝 `#4285ff`）的icon 需要的底。
  * 尺寸按稿 20pt / 10.5pt / 8pt·6pt → 40 / 21 / 16·12px。
