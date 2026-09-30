@@ -476,6 +476,16 @@ export class VoicePermissionError extends Error {
 
 /** 录音失败文案：权限被拒要给「去设置」，其它给可重试的提示。 */
 export function voiceError(error: unknown): Error {
+  /**
+   * 已经是归一化过的权限错误就**原样返回**（#364 审查回合二）。
+   *
+   * 这条路径会被走两遍：`RecorderManager.onError` 先经这里归一化成 `VoicePermissionError`
+   * 再由 `startVoiceRecording` 带外上报给页面，页面拿到后还会再调一次本函数。而
+   * `VoicePermissionError` 是普通 `Error` 子类、没有 `errMsg` —— 二次归一化会把它降级成
+   * 「录音失败，请重试」，页面的 `instanceof VoicePermissionError` 判据从此恒假，
+   * 「去设置」入口（`getSetting` → `openSetting`）永远进不去，用户只能反复看到通用文案。
+   */
+  if (error instanceof VoicePermissionError) return error
   const message =
     typeof error === 'object' && error !== null && 'errMsg' in error
       ? String((error as { errMsg?: unknown }).errMsg ?? '')

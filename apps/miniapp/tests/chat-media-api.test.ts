@@ -106,7 +106,11 @@ const IMAGE = {
   mime: 'image/png' as const,
   width: 600,
   height: 400,
-  sizeBytes: 4,
+  /**
+   * 故意与 mock 读出来的字节数（4）**不同**（#364 审查回合二）：需求是「`sizeBytes` 取
+   * 读出来的真实字节长度」，两边相等时断言分不出实现用的是声明值还是真实值。
+   */
+  sizeBytes: 99,
 }
 
 beforeEach(() => {
@@ -218,7 +222,7 @@ describe('uploadChatImage —— 上传链每一步都问一次在途判据（#6
     expect(uploads).toHaveLength(0)
   })
 
-  test('身份一直有效：presign → PUT（显式带 content-type）→ 返回声明值', async () => {
+  test('身份一直有效：presign → PUT（显式带 content-type）→ sizeBytes 取真实字节、尺寸取调用方声明', async () => {
     const uploaded = await uploadChatImage(CONVERSATION, IMAGE, () => true)
 
     expect(apiCalls[0]?.path).toBe(CHAT_ROUTES.mediaPresign(CONVERSATION))
@@ -289,6 +293,18 @@ describe('voiceError —— 权限被拒必须与普通失败可区分', () => {
     const error = voiceError({ errMsg: 'operateRecorder:fail auth deny' })
     expect(error).toBeInstanceOf(VoicePermissionError)
     expect(error.message).toBe('需要麦克风权限才能发语音')
+  })
+
+  test('已经是权限错误时再归一化一次不许降级（否则页面永远进不去「去设置」）', () => {
+    /*
+      错误会被归一化两遍：`onError` 里先 `voiceError(平台错误)` 得到 VoicePermissionError，
+      页面拿到后（`handleVoiceFailure`）还会再调一次 `voiceError`。而 VoicePermissionError
+      是普通 Error 子类、没有 `errMsg` —— 修复前这里会降级成「录音失败，请重试」，
+      页面的 `instanceof VoicePermissionError` 判据恒假，「去设置」分支不可达。
+    */
+    expect(voiceError(new VoicePermissionError())).toBeInstanceOf(VoicePermissionError)
+    // 普通错误仍旧照常归一化（不能因为这条特例把通用文案也放过）
+    expect(voiceError(new Error('录音失败，请重试')).message).toBe('录音失败，请重试')
   })
 
   test('其它失败：普通 Error，页面只提示、不拉设置页', () => {

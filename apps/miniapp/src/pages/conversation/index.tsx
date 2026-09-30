@@ -288,6 +288,12 @@ export default function Conversation() {
     audioRef.current?.destroy()
     audioRef.current = null
     downloadingRef.current.clear()
+    /*
+     * 在途的媒体重试锁同样属于上一个身份（#364 审查回合二）：`localSeq` 上面刚归零，
+     * 新账号的第一条媒体会拿到与旧账号相同的 `local-N` 临时 id —— 不清锁的话，B 点重试
+     * 会被 A 那条仍在飞的链的锁挡掉（`retryMedia` 静默 return，无提示、无状态变化）。
+     */
+    retryingMediaRef.current.clear()
     // 在途的语音下载到此失效：回来时不许再写缓存、更不许出声
     playSeqRef.current += 1
     clearMediaCache()
