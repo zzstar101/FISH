@@ -76,7 +76,15 @@ describe('PC release route boundaries', () => {
    * 断言页面本体渲染出来了：走登录守卫时渲染的是 `Navigate`，看不到这行加载态。
    */
   test('the public user profile renders for an anonymous visitor', async () => {
-    const html = await renderAt('/pc/users/usr_01jc000000e00800000000000c', null)
+    const html = await renderAt('/pc/users/usr_01jc000000e00800000000000c', null).catch(
+      (error: unknown) => {
+        // 白名单被摘掉时 `RequireAuth` 会走 `currentHref()`，在 SSR 下抛 `window is not defined`。
+        // 原始报错指向环境，容易被误读成「测试坏了」，换成能说明问题的信息。
+        throw new Error(
+          `匿名渲染他人主页失败 —— 多半是 /users/$userId 从 __root.tsx 的免登录白名单里掉了。\n原因：${String(error)}`,
+        )
+      },
+    )
     expect(html).toContain('正在加载用户资料')
   })
 

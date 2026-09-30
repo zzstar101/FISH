@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createElement } from 'react'
+import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../lib/api-client'
 import { AUTH_ME_QUERY_KEY } from '../../lib/session-cache'
@@ -44,6 +44,12 @@ mock.module('./queries', () => ({
 mock.module('../listings/listing-card', () => ({
   PcListingCard: ({ item }: { item: { id: string; title: string } }) =>
     createElement('a', { href: `/pc/listing/${item.id}` }, item.title),
+}))
+
+/** 同上：页面自己的「去个人中心」也是一个 `Link`，静态渲染下换成普通 `<a>`。 */
+mock.module('@tanstack/react-router', () => ({
+  Link: ({ to, children, ...rest }: { to: string; children?: ReactNode }) =>
+    createElement('a', { href: to, ...rest }, children),
 }))
 
 const { UserProfilePage } = await import('./user-profile-page')
@@ -89,9 +95,9 @@ function idleListings(overrides: Record<string, unknown> = {}): Record<string, u
   }
 }
 
-function render(): string {
+function render(me: Me = ME): string {
   const client = new QueryClient()
-  client.setQueryData(AUTH_ME_QUERY_KEY, ME)
+  client.setQueryData(AUTH_ME_QUERY_KEY, me)
   return renderToStaticMarkup(
     createElement(
       QueryClientProvider,
@@ -129,7 +135,26 @@ describe('UserProfilePage', () => {
     expect(html).toContain('二手自行车')
     // 契约的公开 DTO 只有七个字段，页面上不得出现编造指标。
     expect(html).not.toContain('好评')
+    // 看的是别人的主页，不该出现「自己的公开主页」那条提示。
+    expect(html).not.toContain('这是你的公开主页')
     expect(listingsEnabled).toBe(true)
+  })
+
+  /** 验收标准「访问自己主页时的表现明确」：明确的表现就是这条提示 + 回个人中心的出口。 */
+  test('marks your own page and offers the way back to 个人中心', () => {
+    profileResult = {
+      data: PROFILE,
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    listingsResult = idleListings()
+
+    const html = render({ ...ME, id: USER_ID })
+
+    expect(html).toContain('这是你的公开主页')
+    expect(html).toContain('去个人中心')
   })
 
   /**
