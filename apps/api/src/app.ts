@@ -397,7 +397,7 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
-        // LISTING 卡片封面 URL 的拼装（#359）；与 conversations 服务同一 storage。
+        // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
         storage,
         projectContent: projectSystemContent,
         onMessageCreated: (participants, message) => {

@@ -1087,7 +1087,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
       sending = Promise.resolve(
         app.request(
           CHAT_ROUTES.messages(encodePublicId(PUBLIC_ID_PREFIX.conversation, RACE_CONVERSATION)),
-          post({ type: 'TEXT', content: '封禁前已开始的消息' }, raceCookie),
+          post({ content: '封禁前已开始的消息' }, raceCookie),
         ),
       )
       let insertBlocked = false
@@ -1120,7 +1120,7 @@ describe('服务端治理（#73 治理半场 PR3）', () => {
     expect((await banning)?.status).toBe(200)
     const denied = await app.request(
       CHAT_ROUTES.messages(encodePublicId(PUBLIC_ID_PREFIX.conversation, RACE_CONVERSATION)),
-      post({ type: 'TEXT', content: '封禁后不得提交' }, raceCookie),
+      post({ content: '封禁后不得提交' }, raceCookie),
     )
     expect(denied.status).toBe(403)
     expect(await denied.json()).toMatchObject({ error: { code: 'USER_RESTRICTED' } })

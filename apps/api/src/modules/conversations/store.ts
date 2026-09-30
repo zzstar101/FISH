@@ -106,7 +106,9 @@ function asDate(value: unknown): Date | string | null {
  * MEDIA 的正文不在消息流里，客户端没有别的途径知道是图还是语音，所以这里翻成
  * `[图片]`/`[语音]`——契约 `conversationLastMessageSchema` 明确 MEDIA 的 content
  * 就是可读文案。`message_media` 缺失（不该发生的脏数据）时退回 `[媒体]`。
- * LISTING（#359）正文是商品公开 id 不是可读文本，同一处理翻成 `[商品]`。
+ *
+ * LISTING（#359）同理但要**先判 type**：它的 `content` 是商品公开 id（`lst_…`），
+ * 原样下发会在列表行里显示一串 id —— 契约明确该类型的 content 是可读文案 `[商品]`。
  */
 function lastMessageContent(row: Record<string, unknown>): string {
   if (row.last_message_type === 'LISTING') return '[商品]'

@@ -6,7 +6,7 @@ import { users } from './users'
 
 /**
  * #9/#67/#359 消息类型；旧 TEXT/SYSTEM 保持不变，媒体使用独立 MEDIA 行与 message_media 关联，
- * LISTING（#359 商品卡）正文是商品引用（messages.content 存公开 id），没有独立表。
+ * LISTING（#359 商品卡）正文是商品引用（`messages.content` 存商品公开 id），不另建表。
  */
 export const messageTypeEnum = pgEnum('message_type', ['TEXT', 'SYSTEM', 'MEDIA', 'LISTING'])
 

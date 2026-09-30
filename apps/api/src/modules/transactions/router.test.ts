@@ -49,7 +49,6 @@ const systemMessage: MessageDto = {
   sender: null,
   type: 'SYSTEM',
   content: '{"type":"tx.proposal","amountCents":16000}',
-  listing: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 

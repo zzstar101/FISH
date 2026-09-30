@@ -39,11 +39,13 @@ export function textRequestHash(content: string): string {
 }
 
 /**
- * LISTING（#359）的指纹即被分享商品的公开 id（与落库的 `content` 同一值）。
- * 客户端重试必然携带同一 `listingId`，公开 id 是文本列可比的规范形态。
+ * LISTING（#359）的指纹 = 被分享商品的**公开 id**（与落库的 `content` 同一值）。
+ *
+ * 重试同一条商品卡 → 同一指纹 → 重放既有消息；同一个 `clientRequestId` 换了商品 →
+ * 不同指纹 → 409，与 TEXT 的语义完全同源。
  */
-export function listingRequestHash(listingId: string): string {
-  return sha256Hex(join(['listing', listingId]))
+export function listingRequestHash(listingPublicId: string): string {
+  return sha256Hex(join(['listing', listingPublicId]))
 }
 
 /**
