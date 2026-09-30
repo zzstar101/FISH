@@ -625,14 +625,19 @@ export default function Conversation() {
    * `listing` 投射为 null（商品被并发删除的脏数据）时退化成灰气泡占位，不给点击——
    * 与「正文是引用不是文本」的语义一致，宁可少一个可点目标也不画一张空卡。
    *
-   * 已下架的卡也不给点击入口（#359 3a 审查回合）：详情对「非卖家的 OFFLINE / 未过审」
-   * 一律 404（`listings/service.ts` 的 `loadDetail`），可点等于给一个必败入口；自己发的
-   * （我是卖家）仍然可看。读侧不对 LISTING 做可见性过滤，所以这种卡会长期留在历史里。
+   * 已下架的卡也不给点击入口：详情对「非商品卖家的 OFFLINE / 未过审」一律 404
+   * （`listings/service.ts` 的 `loadDetail` 判的是 `sellerId !== viewerId`）。
+   * 判据**不能**用「这条卡是不是我发的」：分享页两侧都能选（我的宝贝 / TA的宝贝），
+   * 同一会话里买卖双方都可能发一张**别人的**卡 —— 买家把卖家商品卡发进来，商品下架后
+   * 这条仍是 `isMine`，可买家并不是卖家，点进去必然 404。而投射里没有 `sellerId`
+   * （`conversationListingSchema` 只有 id / title / priceCents / status / coverUrl），
+   * 判不出「我是不是这件商品的卖家」，所以取保守口径：已下架一律不给入口。
+   * 读侧不对 LISTING 做可见性过滤，这类卡会长期留在历史里。
    */
   const renderListing = (message: MessageDto) => {
     const mine = message.senderId === me?.id
     const card = message.listing
-    const canOpen = card !== null && card !== undefined && (mine || card.status !== 'OFFLINE')
+    const canOpen = card !== null && card !== undefined && card.status !== 'OFFLINE'
     return (
       <View
         key={message.id}
@@ -665,7 +670,14 @@ export default function Conversation() {
                   {` · ${listingStatusText(card.status)}`}
                 </Text>
               </View>
-              <Image className="conv__lcard-caret" src={ICONS.chevronRightMuted} mode="aspectFit" />
+              {/* 不可点的卡不给「可以点进去」的箭头（#359 3a 审查回合） */}
+              {canOpen ? (
+                <Image
+                  className="conv__lcard-caret"
+                  src={ICONS.chevronRightMuted}
+                  mode="aspectFit"
+                />
+              ) : null}
             </View>
           ) : (
             <View className="conv__bubble">

@@ -23,16 +23,13 @@ const STATUS_LABEL: Record<ListingStatus, string> = {
  * 两个必须处理的边界：
  * - 投射缺失（商品被物理删除）→ 退化成不可点的 `[商品]` 占位，**绝不能把 `lst_…`
  *   当正文画出来**（那正是这条气泡在本分支修掉的问题）；
- * - 详情对「非卖家的 OFFLINE / 未过审」一律 404（`listings/service.ts` 的 `loadDetail`）
- *   → 已下架且不是自己发的卡不给可点入口，自己发的仍然可看。
+ * - 已下架的卡不给可点入口：详情对「非商品卖家的 OFFLINE / 未过审」一律 404
+ *   （`listings/service.ts` 的 `loadDetail` 判的是 `sellerId !== viewerId`）。判据**不能**
+ *   用「这条卡是不是我发的」—— 分享页两侧都能选，买家也会发一张**别人的**卡，商品下架后
+ *   它仍是「我发的」但点进去必然 404；而投射里没有 `sellerId`，判不出我是不是卖家，
+ *   所以取保守口径：已下架一律不可点。
  */
-function ListingBubble({
-  listing,
-  isMine,
-}: {
-  listing: ConversationListing | null | undefined
-  isMine: boolean
-}) {
+function ListingBubble({ listing }: { listing: ConversationListing | null | undefined }) {
   if (!listing) {
     return (
       <div className="rounded-2xl border border-line bg-surface-2 px-3.5 py-2.5 text-ink-3 text-sm leading-6">
@@ -41,6 +38,8 @@ function ListingBubble({
     )
   }
 
+  const openable = listing.status !== 'OFFLINE'
+  const statusText = STATUS_LABEL[listing.status] ?? listing.status
   const card = (
     <>
       <ListingThumb
@@ -51,8 +50,9 @@ function ListingBubble({
       />
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium text-ink text-sm">{listing.title}</p>
+        {/* 不可点时不留「点击查看商品」——不能给一个必败入口的暗示 */}
         <p className="mt-0.5 text-ink-3 text-xs">
-          {`${STATUS_LABEL[listing.status] ?? listing.status} · 点击查看商品`}
+          {openable ? `${statusText} · 点击查看商品` : statusText}
         </p>
       </div>
       <PriceText cents={listing.priceCents} className="shrink-0 font-bold text-sm" />
@@ -61,7 +61,7 @@ function ListingBubble({
   const cardClass =
     'flex w-60 max-w-full items-center gap-2.5 rounded-xl border border-line bg-surface p-2'
 
-  if (isMine || listing.status !== 'OFFLINE') {
+  if (openable) {
     return (
       <Link
         className={`${cardClass} transition-colors hover:bg-surface-2`}
@@ -107,7 +107,7 @@ export function MessageBubble({
       <div className={`flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
         {isMine ? null : <p className="mb-1 text-ink-3 text-xs">{senderName}</p>}
         {message.type === 'LISTING' ? (
-          <ListingBubble isMine={isMine} listing={message.listing} />
+          <ListingBubble listing={message.listing} />
         ) : (
           <div
             className={`rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${

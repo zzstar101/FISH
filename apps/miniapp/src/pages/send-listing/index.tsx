@@ -215,7 +215,15 @@ export default function SendListing() {
           </View>
         ) : visible.length === 0 ? (
           <View className="sl__center">
-            <Text className="sl__center-tx">没有匹配「{query.trim()}」的商品</Text>
+            {/*
+              服务端还有下一页时必须点明「只在已加载的这 N 件里没有匹配」（#359 3a 审查回合）：
+              客户端只过滤已加载的那一页，说成「没有匹配」会把「在第 2 页」误报成「不存在」。
+            */}
+            <Text className="sl__center-tx">
+              {side?.hasMore
+                ? `前 ${items.length} 件里没有匹配「${query.trim()}」的商品`
+                : `没有匹配「${query.trim()}」的商品`}
+            </Text>
           </View>
         ) : (
           <>
