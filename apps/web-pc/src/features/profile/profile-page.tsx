@@ -76,11 +76,21 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2.5">
               <h2 className="truncate font-semibold text-2xl">{user.nickname}</h2>
-              {user.authStatus === 'VERIFIED' ? (
-                <Badge variant="success">已认证</Badge>
-              ) : (
-                <Badge variant="secondary">未认证</Badge>
-              )}
+              {/* 徽章本身就是认证入口（#380）：未认证时点它去 /verify 完成教育邮箱验证。 */}
+              <Link
+                aria-label={user.authStatus === 'VERIFIED' ? '查看校园认证' : '去完成校园认证'}
+                className="inline-flex items-center gap-1"
+                to="/verify"
+              >
+                {user.authStatus === 'VERIFIED' ? (
+                  <Badge variant="success">已认证</Badge>
+                ) : (
+                  <Badge shape="pill" variant="secondary">
+                    未认证 · 去认证
+                  </Badge>
+                )}
+                <ChevronRight className="size-3.5 text-ink-3" />
+              </Link>
             </div>
             <p className="mt-2 text-ink-3 text-sm">
               {user.phoneBound ? `手机号 ${user.maskedPhone ?? '已绑定'}` : '未绑定手机号'}

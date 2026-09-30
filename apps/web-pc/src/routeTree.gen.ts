@@ -19,6 +19,7 @@ import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as VerifyRouteImport } from './routes/verify'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as ListingListingIdRouteImport } from './routes/listing.$listingId'
 import { Route as MessagesIndexRouteImport } from './routes/messages.index'
@@ -76,6 +77,11 @@ const SearchRoute = SearchRouteImport.update({
   path: '/search',
   getParentRoute: () => rootRouteImport,
 } as any)
+const VerifyRoute = VerifyRouteImport.update({
+  id: '/verify',
+  path: '/verify',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WishRoute = WishRouteImport.update({
   id: '/wish',
   path: '/wish',
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
+  '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
@@ -134,6 +141,7 @@ export interface FileRoutesByTo {
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
+  '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
@@ -153,6 +161,7 @@ export interface FileRoutesById {
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
+  '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
@@ -173,6 +182,7 @@ export interface FileRouteTypes {
     | '/publish'
     | '/register'
     | '/search'
+    | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
@@ -189,6 +199,7 @@ export interface FileRouteTypes {
     | '/publish'
     | '/register'
     | '/search'
+    | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
@@ -207,6 +218,7 @@ export interface FileRouteTypes {
     | '/publish'
     | '/register'
     | '/search'
+    | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
@@ -226,6 +238,7 @@ export interface RootRouteChildren {
   PublishRoute: typeof PublishRoute
   RegisterRoute: typeof RegisterRoute
   SearchRoute: typeof SearchRoute
+  VerifyRoute: typeof VerifyRoute
   WishRoute: typeof WishRoute
   ListingListingIdRoute: typeof ListingListingIdRoute
 }
@@ -300,6 +313,13 @@ declare module '@tanstack/react-router' {
       path: '/search'
       fullPath: '/search'
       preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/verify': {
+      id: '/verify'
+      path: '/verify'
+      fullPath: '/verify'
+      preLoaderRoute: typeof VerifyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/wish': {
@@ -385,6 +405,7 @@ const rootRouteChildren: RootRouteChildren = {
   PublishRoute: PublishRoute,
   RegisterRoute: RegisterRoute,
   SearchRoute: SearchRoute,
+  VerifyRoute: VerifyRoute,
   WishRoute: WishRoute,
   ListingListingIdRoute: ListingListingIdRoute,
 }

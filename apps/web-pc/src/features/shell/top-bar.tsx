@@ -1,3 +1,4 @@
+import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
 import { UserAvatar } from '@fish/ui/user-avatar'
@@ -70,6 +71,24 @@ export function TopBar() {
           >
             <MessageCircle className="size-5" />
           </Link>
+          {/* 认证徽章是认证入口（#380）：未认证时点击去 /verify，认证成功后由 Me 缓存即时切换。 */}
+          {me === null ? null : (
+            <Link
+              aria-label={me.authStatus === 'VERIFIED' ? '查看校园认证' : '去完成校园认证'}
+              className="ml-1"
+              to="/verify"
+            >
+              {me.authStatus === 'VERIFIED' ? (
+                <Badge shape="pill" variant="success">
+                  已认证
+                </Badge>
+              ) : (
+                <Badge shape="pill" variant="secondary">
+                  去认证
+                </Badge>
+              )}
+            </Link>
+          )}
           <Link aria-label="我的" className="ml-1" to="/profile">
             <UserAvatar
               avatarUrl={me?.avatarUrl ?? null}
