@@ -34,7 +34,8 @@ export function SideNav() {
         </div>
         <p className="mt-2 text-ink-2 text-xs leading-5">
           当前已接通登录、PC Web
-          外壳、首页商品流、搜索筛选、商品详情、消息中心、发布、通知、个人中心与订单、许愿墙与匹配。
+          外壳、首页商品流、搜索筛选、商品详情、消息中心、发布、通知、个人中心与订单、许愿墙与匹配、
+          举报与我的举报。
         </p>
       </div>
     </aside>
