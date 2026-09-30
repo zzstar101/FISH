@@ -19,6 +19,9 @@
  * 4. 单条会话消息读不到：`complete = false`，但这件商品按「不在等」处理。
  * 5. 整轮失败返回 `failed: true` —— **不能**把「读不到」当成「没有提案」，
  *    否则在等的商品会被显示成普通在售。
+ * 6. `listingIds` 由调用方给，且只应包含**仍可交易（`ACTIVE`）**的商品：接受与拒绝在
+ *    服务端都要求商品是 `ACTIVE`，非 ACTIVE 只会 409。调用方取 id 时自己也受
+ *    「我的发布」的 `limit=50` 约束 —— 卖家商品超过 50 件时，第 51 件起的申请推导不到。
  */
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ConversationId, ListingId } from '@fish/contracts/system/public-id'

@@ -36,13 +36,16 @@ export function classifyRedeemInput(raw: string, transactionId: string): RedeemI
 
 export type MeetupFailure = {
   message: string
-  /** 服务端状态可能已经变了：页面必须重新读，而不是把失败当结论留在原地。 */
+  /**
+   * 服务端状态可能已经变了：页面必须重新读，而不是把失败当结论留在原地。
+   *
+   * 没有单独的「终态」标志：终态由订单页的 `status` 决定（`PENDING_MEETUP` 之外
+   * 根本不挂载本面板），再加一个只被测试读取的信号是死代码。
+   */
   refresh: boolean
-  /** 交易已进终态：不再有可核销的凭证。 */
-  terminal: boolean
 }
 
-const NO_REFRESH: Omit<MeetupFailure, 'message'> = { refresh: false, terminal: false }
+const NO_REFRESH: Omit<MeetupFailure, 'message'> = { refresh: false }
 
 /**
  * 卖家取码失败。
@@ -53,13 +56,16 @@ const NO_REFRESH: Omit<MeetupFailure, 'message'> = { refresh: false, terminal: f
 export function meetupIssueFailure(error: unknown): MeetupFailure {
   if (error instanceof ApiError) {
     if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
-      return { message: '这笔交易已不是待面交状态，正在刷新', refresh: true, terminal: true }
+      return { message: '这笔交易已不是待面交状态，正在刷新', refresh: true }
     }
     if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
       return { message: '只有交易的卖家可以出示交易码', ...NO_REFRESH }
     }
-    if (error.code === 'MEETUP_TOKEN_NOT_FOUND') {
-      return { message: '这笔交易当前没有可用的交易码，正在刷新', refresh: true, terminal: false }
+    // 取码路径不抛 MEETUP_TOKEN_NOT_FOUND（那是核销与状态查询的码）：参与者/存在性
+    // 失败在这里是 404 TRANSACTION_NOT_FOUND，终态是 409（service.ts 的
+    // `loadPendingTxForMeetup`）。原先把 404 写成 MEETUP_TOKEN_NOT_FOUND 的分支不可达。
+    if (error.code === 'TRANSACTION_NOT_FOUND') {
+      return { message: '这笔交易不存在或当前账号无权查看，正在刷新', refresh: true }
     }
     return { message: error.message, ...NO_REFRESH }
   }
@@ -76,7 +82,7 @@ export function meetupRedeemFailure(error: unknown): MeetupFailure {
       }
     }
     if (error.code === 'MEETUP_TOKEN_CONSUMED') {
-      return { message: '这个交易码已被使用，不能重复核销。', refresh: true, terminal: false }
+      return { message: '这个交易码已被使用，不能重复核销。', refresh: true }
     }
     if (error.code === 'MEETUP_TOKEN_LOCKED') {
       return {
@@ -88,7 +94,7 @@ export function meetupRedeemFailure(error: unknown): MeetupFailure {
       return { message: '对方还没有出示本单的交易码。', ...NO_REFRESH }
     }
     if (error.code === 'TRANSACTION_NOT_IN_PENDING') {
-      return { message: '这笔交易已不是待面交状态，正在刷新', refresh: true, terminal: true }
+      return { message: '这笔交易已不是待面交状态，正在刷新', refresh: true }
     }
     if (error.code === 'MEETUP_TOKEN_NOT_ALLOWED') {
       return { message: '这是你自己出示的交易码，需要对方来核销。', ...NO_REFRESH }

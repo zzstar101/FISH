@@ -68,7 +68,6 @@ describe('meetupRedeemFailure', () => {
   test('treats a terminal transaction as a refresh, not as a plain failure', () => {
     const failure = meetupRedeemFailure(new ApiError('TRANSACTION_NOT_IN_PENDING', 409, 'x'))
     expect(failure.refresh).toBe(true)
-    expect(failure.terminal).toBe(true)
   })
 
   test('does not ask for a refresh when the code was simply mistyped', () => {
@@ -83,13 +82,17 @@ describe('meetupIssueFailure', () => {
     expect(meetupIssueFailure(new ApiError('MEETUP_TOKEN_NOT_ALLOWED', 403, 'x'))).toEqual({
       message: '只有交易的卖家可以出示交易码',
       refresh: false,
-      terminal: false,
     })
-    expect(meetupIssueFailure(new ApiError('MEETUP_TOKEN_NOT_FOUND', 404, 'x')).refresh).toBe(true)
+    // 取码路径的 404 是 TRANSACTION_NOT_FOUND；MEETUP_TOKEN_NOT_FOUND 只出现在
+    // 核销与状态查询（service.ts 的 getMeetupTokenStatus / consumeMeetup）
+    expect(meetupIssueFailure(new ApiError('TRANSACTION_NOT_FOUND', 404, 'x')).refresh).toBe(true)
+    expect(meetupIssueFailure(new ApiError('MEETUP_TOKEN_NOT_FOUND', 404, 'x'))).toEqual({
+      message: 'x',
+      refresh: false,
+    })
     expect(meetupIssueFailure(new Error('network'))).toEqual({
       message: '交易码获取失败，请重试',
       refresh: false,
-      terminal: false,
     })
   })
 })

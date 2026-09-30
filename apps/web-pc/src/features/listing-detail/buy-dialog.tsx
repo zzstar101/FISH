@@ -57,10 +57,18 @@ export function BuyDialog({
   const [submitError, setSubmitError] = useState<string | null>(null)
   const ownerRef = useRef(ownerId)
   ownerRef.current = ownerId
+  /*
+   * 在飞互斥（契约把「提案不重复」明确交给前端）。按钮的 `disabled` 依赖
+   * `isPending`，而它要等下一次渲染才为真 —— 双击会在这之前挤进第二次调用，
+   * 于是往同一会话写两条 `tx.proposal`。ref 是同步的，堵住这个窗口。
+   */
+  const inFlightRef = useRef(false)
 
   const submitting = createConversation.isPending || propose.isPending
 
   async function submit() {
+    if (inFlightRef.current) return
+
     const fieldError = proposalAmountError(amount, free)
     if (fieldError !== null) {
       setAmountError(fieldError)
@@ -69,34 +77,42 @@ export function BuyDialog({
     const cents = proposalAmountCents(amount, free)
     if (cents === null) return
 
+    inFlightRef.current = true
     setAmountError(null)
     setSubmitError(null)
     const requestedBy = ownerId
 
-    let conversationId: string
     try {
-      const conversation = await createConversation.mutateAsync({ listingId, ownerId: requestedBy })
-      if (ownerRef.current !== requestedBy) return
-      conversationId = conversation.id
-    } catch (error) {
-      if (ownerRef.current !== requestedBy) return
-      setSubmitError(describeCreateConversationFailure(error))
-      return
-    }
+      let conversationId: string
+      try {
+        const conversation = await createConversation.mutateAsync({
+          listingId,
+          ownerId: requestedBy,
+        })
+        if (ownerRef.current !== requestedBy) return
+        conversationId = conversation.id
+      } catch (error) {
+        if (ownerRef.current !== requestedBy) return
+        setSubmitError(describeCreateConversationFailure(error))
+        return
+      }
 
-    try {
-      await propose.mutateAsync({ conversationId, amountCents: cents })
-      if (ownerRef.current !== requestedBy) return
-      onOpenChange(false)
-      void navigate({
-        to: '/messages/$conversationId',
-        params: { conversationId },
-      })
-    } catch (error) {
-      if (ownerRef.current !== requestedBy) return
-      const view = describeProposeFailure(error)
-      setSubmitError(view.message)
-      if (view.refresh) onListingStale()
+      try {
+        await propose.mutateAsync({ conversationId, amountCents: cents })
+        if (ownerRef.current !== requestedBy) return
+        onOpenChange(false)
+        void navigate({
+          to: '/messages/$conversationId',
+          params: { conversationId },
+        })
+      } catch (error) {
+        if (ownerRef.current !== requestedBy) return
+        const view = describeProposeFailure(error)
+        setSubmitError(view.message)
+        if (view.refresh) onListingStale()
+      }
+    } finally {
+      inFlightRef.current = false
     }
   }
 

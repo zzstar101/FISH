@@ -196,21 +196,24 @@ const EMPTY_PENDING: PendingIndex = {
 /**
  * 卖家侧「谁在等我点头」的推导（口径见 `./pending` 文件头）。
  *
- * 自己拉一遍名下商品（`status=ALL`）拿 id 全集：**不能**只用手上那一页列表 ——
- * 「我的发布」的标签页可能停在「已下架」，而待确认的申请挂在 `ACTIVE` 商品上，
- * 换个标签页就会整段消失。响应体与 `useMyListings` 共用查询键，正常情况下不产生
- * 第二次请求。
+ * 商品 id 只取 **ACTIVE**：接受与拒绝在服务端都要求商品仍是 `ACTIVE`（非 ACTIVE 一律
+ * 409 `LISTING_NOT_ACTIVE`），而「同意其中一个买家」会把商品置 `RESERVED` —— 其余买家
+ * 留在会话里的 `tx.proposal` 并不会因此消失。若把非 ACTIVE 的商品也算进来，卖家会看到
+ * 一张永远点不动的卡片（每次点同意都 409，刷新后它还在）。
+ *
+ * id 全集独立取一次，不跟着「我的发布」当前标签页走：申请挂在 ACTIVE 商品上，
+ * 而标签页可能停在「已下架 / 已预定」。
  */
 export function usePendingProposals(ownerId: string) {
   const queryClient = useQueryClient()
   return useQuery({
     queryKey: profileKeys.pending(ownerId),
     queryFn: async () => {
-      // 走 `useMyListings` 的同一个查询键：标签页停在「全部」时复用它的响应，
+      // 走 `useMyListings` 的同一个查询键：标签页停在「在售」时复用它的响应，
       // 不为了拿 id 再拉一遍商品列表。
       const listings = await queryClient.fetchQuery({
-        queryKey: profileKeys.listings(ownerId, 'ALL'),
-        queryFn: () => fetchMyListings(ownerId, 'ALL'),
+        queryKey: profileKeys.listings(ownerId, 'ACTIVE'),
+        queryFn: () => fetchMyListings(ownerId, 'ACTIVE'),
         staleTime: 15_000,
       })
       const ids = new Set(listings.items.map((item) => item.id))

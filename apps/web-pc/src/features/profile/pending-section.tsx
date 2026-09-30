@@ -4,6 +4,10 @@ import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
+
+/** 段内提示：错误用 warn，决定做完用 success 并可按需指向「我卖出的」。 */
+type Notice = { tone: 'success' | 'warn'; text: string; toOrders: boolean }
+
 import { proposalDecisionError } from './api'
 import type { PendingProposal } from './pending'
 import { useAcceptProposal, useMyListings, usePendingProposals, useRejectProposal } from './queries'
@@ -20,10 +24,12 @@ import { useAcceptProposal, useMyListings, usePendingProposals, useRejectProposa
  */
 export function PendingSection({ ownerId }: { ownerId: string }) {
   const pending = usePendingProposals(ownerId)
-  const listings = useMyListings(ownerId, 'ALL')
+  // 待确认只可能挂在 ACTIVE 商品上（推导侧同口径），所以这里也只取 ACTIVE：
+  // 与 `usePendingProposals` 共用同一个查询键，不为拿标题再拉一遍列表。
+  const listings = useMyListings(ownerId, 'ACTIVE')
   const accept = useAcceptProposal(ownerId)
   const reject = useRejectProposal(ownerId)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
 
   const proposals = pending.data?.proposals
   const failed = pending.data?.failed === true
@@ -37,15 +43,27 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
           conversationId: proposal.conversationId,
           amountCents: proposal.amountCents,
         })
+        // 同意之后这一件会从「待确认」消失，所以必须留下结果与去处：
+        // 取码入口在订单详情页，不给指路用户就断在这里。
+        setNotice({
+          tone: 'success',
+          text: `已同意 ${proposal.buyerName} 的申请，商品已锁定。`,
+          toOrders: true,
+        })
       } else {
         await reject.mutateAsync({
           conversationId: proposal.conversationId,
           amountCents: proposal.amountCents,
         })
+        setNotice({
+          tone: 'success',
+          text: `已拒绝 ${proposal.buyerName} 的申请，商品仍在在售。`,
+          toOrders: false,
+        })
       }
     } catch (error) {
       const view = proposalDecisionError(error)
-      setNotice(view.message)
+      setNotice({ tone: 'warn', text: view.message, toOrders: false })
       // 409 LISTING_NOT_ACTIVE 可能是「上一次其实成功了」：不猜结论，重新读服务端状态。
       if (view.refresh) {
         await Promise.allSettled([pending.refetch(), listings.refetch()])
@@ -83,7 +101,8 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
     )
   }
 
-  if (!proposals || proposals.size === 0) return null
+  // 空且无话可说就整段不渲染；刚做完决定时要留着把结果说完
+  if (!proposals || (proposals.size === 0 && notice === null)) return null
 
   const cards = new Map(listings.data?.items.map((item) => [item.id, item]) ?? [])
 
@@ -104,9 +123,27 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
       </div>
 
       {notice !== null ? (
-        <p className="mx-5 mb-4 rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn" role="status">
-          {notice}
-        </p>
+        <div
+          className={`mx-5 mb-4 rounded-xl px-4 py-3 text-sm ${
+            notice.tone === 'success' ? 'bg-success-soft text-success' : 'bg-warn-soft text-warn'
+          }`}
+          role="status"
+        >
+          <p>{notice.text}</p>
+          {notice.toOrders ? (
+            <Link
+              className="mt-1.5 inline-block font-medium underline"
+              search={{ role: 'seller' }}
+              to="/orders"
+            >
+              去「我卖出的」出示交易码
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
+      {proposals.size === 0 ? (
+        <p className="border-line border-t px-5 py-4 text-ink-3 text-sm">暂无待确认的申请。</p>
       ) : null}
 
       <div className="divide-y divide-line border-line border-t">
