@@ -9,6 +9,7 @@ import {
   deferReload,
   initialDeferredReload,
   isFlushDue,
+  isLatestPresencePoll,
   listingStatusText,
   type PendingMessage,
   parseTxEvent,
@@ -170,6 +171,27 @@ describe('applyPresencePoll —— 在线态轮询只写在线态（#359 第五�
     expect(merged.listing.status).toBe('RESERVED')
     // 只有在线态取新值（这里恰好是同一份，重点是其余字段一个都没动）
     expect(merged.counterpartPresence).toEqual(stale.counterpartPresence)
+  })
+})
+
+/**
+ * #376 审查回合：同一代次内两跳轮询的响应可能乱序回来，而 `applyPresencePoll` 是
+ * last-write-wins —— 守卫必须只让**最新一次发起**的那跳落地，否则刚点亮的绿点会被
+ * 先发后至的旧快照灭回去。
+ */
+describe('isLatestPresencePoll —— 在线态轮询乱序落地守卫（#359 第五点）', () => {
+  test('同一代次：只有序号最新的一跳落地（先发后至的旧快照被丢掉）', () => {
+    // 第 1 跳在第 2 跳之后才 resolve
+    expect(isLatestPresencePoll({ seq: 1, epoch: 7, latestSeq: 2, latestEpoch: 7 })).toBe(false)
+    expect(isLatestPresencePoll({ seq: 2, epoch: 7, latestSeq: 2, latestEpoch: 7 })).toBe(true)
+  })
+
+  test('代次变了（换账号 / 换会话 / 整页重拉）→ 一律不落地，即使序号恰好最新', () => {
+    expect(isLatestPresencePoll({ seq: 2, epoch: 6, latestSeq: 2, latestEpoch: 7 })).toBe(false)
+  })
+
+  test('序号与代次同时过期 → 不落地', () => {
+    expect(isLatestPresencePoll({ seq: 1, epoch: 6, latestSeq: 2, latestEpoch: 7 })).toBe(false)
   })
 })
 

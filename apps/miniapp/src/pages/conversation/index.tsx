@@ -23,6 +23,7 @@ import {
   deferReload,
   initialDeferredReload,
   isLatestPageLoad,
+  isLatestPresencePoll,
   listingStatusText,
   mergeRefreshedMessages,
   type PendingMessage,
@@ -133,6 +134,18 @@ export default function Conversation() {
    * 只有 `[conversationId]`，直接闭包读 `messages` 会永远拿到首帧的空数组。
    */
   const messagesRef = useRef<MessageDto[]>([])
+  /**
+   * 在线态轮询的启停把手（#376 审查回合，P3）：`useDidHide` 要能**真的**把表停掉 ——
+   * 只在 tick 里判 `visibleRef` 是空转（定时器照常每 20s 走一圈），页面被盖住期间白烧唤醒。
+   * effect 建立 / 收回把手，`useDidShow` / `useDidHide` 与卸载都从同一个把手进出。
+   */
+  const presencePollRef = useRef<{ start: () => void; stop: () => void } | null>(null)
+  /**
+   * 在线态轮询的请求序号（#376 审查回合，P3）：每跳自增，落地时只认最新一次。
+   * 判据见 `./view` 的 `isLatestPresencePoll`（`applyPresencePoll` 是 last-write-wins，
+   * 不设序号时先发的旧快照会盖掉后发的新结论）。
+   */
+  const presenceSeq = useRef(0)
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -316,6 +329,8 @@ export default function Conversation() {
   messagesRef.current = messages
   useDidShow(() => {
     visibleRef.current = true
+    // 回到本页：把在线态的轮询表续上（隐藏时真的停掉了，见 useDidHide）
+    presencePollRef.current?.start()
     const sending = pendingRef.current.some((item) => item.status === 'sending')
     if (
       !shouldReloadOnShow({
@@ -334,6 +349,8 @@ export default function Conversation() {
   })
   useDidHide(() => {
     visibleRef.current = false
+    // 页面被盖住：在线态已经不显示了，把轮询停掉（不再让定时器在后台空转每一跳）
+    presencePollRef.current?.stop()
   })
   /** 卸载后不再补刷新：didHide 不覆盖卸载这一路径 */
   useEffect(() => {
@@ -351,26 +368,59 @@ export default function Conversation() {
    * 并只把 `counterpartPresence` 写回 state —— 不碰消息流、不碰 epoch、不重复上报已读
    * （那三件事归 `load`，重发会把乐观气泡与分页游标搅乱）。
    *
-   * 判据：只在「已登录 + 详情已就绪」时挂表；每跳还要过页面可见性与代次守卫 ——
-   * 页面被盖住（`useDidHide`）时白跳，`load` 在同一个 tick 里重拉过（epoch 前进）时
-   * 把这次的陈旧响应丢掉，免得用旧快照把刚拿到的在线态写回去。
+   * 判据：只在「已登录 + 详情已就绪」时挂表；每跳还要过三道守卫 —— 页面可见性 / 存活
+   * （`aliveRef`）、加载代次（换会话 / 换账号 / 整页重拉都 +1）、以及本跳的**请求序号**
+   * （同一代次内乱序回来的旧快照不许盖掉新结论，见 `isLatestPresencePoll`）。
+   *
+   * 页面被盖住（`useDidHide`）时**真的把表停掉**，不是让定时器空转着每跳判一次可见性；
+   * 回到本页（`useDidShow`）再续上（#376 审查回合，P3）。
    *
    * 有了实时客户端之后这里应当整块换成事件订阅；在那之前，它是「断线后转为离线」在
    * 端上唯一能被看见的路径（服务端按 TTL 判定，最迟 `PRESENCE_POLL_MS` 一跳内体现）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null || convState !== 'ok') return
-    const timer = setInterval(() => {
-      if (!visibleRef.current || !aliveRef.current) return
-      const current = epoch.current
-      void fetchConversation(conversationId)
-        .then((next) => {
-          if (current !== epoch.current) return
-          setConversation((prev) => (prev === null ? prev : applyPresencePoll(prev, next)))
-        })
-        .catch((error) => console.warn('[miniapp] 在线态刷新失败', error))
-    }, PRESENCE_POLL_MS)
-    return () => clearInterval(timer)
+    /** 本轮的定时器；`null` 表示表停着（页面隐藏 / effect 已收回） */
+    let timer: ReturnType<typeof setInterval> | null = null
+    const stop = () => {
+      if (timer === null) return
+      clearInterval(timer)
+      timer = null
+    }
+    const start = () => {
+      if (timer !== null) return
+      timer = setInterval(() => {
+        if (!visibleRef.current || !aliveRef.current) return
+        const current = epoch.current
+        presenceSeq.current += 1
+        const seq = presenceSeq.current
+        void fetchConversation(conversationId)
+          .then((next) => {
+            if (
+              !isLatestPresencePoll({
+                seq,
+                epoch: current,
+                latestSeq: presenceSeq.current,
+                latestEpoch: epoch.current,
+              })
+            ) {
+              return
+            }
+            setConversation((prev) => (prev === null ? prev : applyPresencePoll(prev, next)))
+          })
+          .catch((error) => console.warn('[miniapp] 在线态刷新失败', error))
+      }, PRESENCE_POLL_MS)
+    }
+    presencePollRef.current = { start, stop }
+    /**
+     * 依赖变化会让 effect 重跑，但**页面被盖住时它仍是挂着的**：这时不许把表重新走起来，
+     * 否则「隐藏即停表」会被一次无关的状态变化作废。启动交给 didShow。
+     */
+    if (visibleRef.current) start()
+    return () => {
+      stop()
+      presencePollRef.current = null
+    }
   }, [authStatus, userId, convState, conversationId])
 
   /** 「加载更早的消息」：契约的 `before` 游标原样回传，拼接在已有消息之前 */

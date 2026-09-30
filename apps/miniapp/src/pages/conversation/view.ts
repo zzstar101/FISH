@@ -139,6 +139,34 @@ export function applyPresencePoll(
 }
 
 /**
+ * 在线态轮询的落地守卫（#376 审查回合，P3）。
+ *
+ * `applyPresencePoll` 是 last-write-wins：谁最后落地谁说了算。而「谁最后落地」并不等于
+ * 「谁最后发出」—— 同一 epoch 内相邻两跳的响应没有先后保证。正常情况下前一跳应当已经
+ * 落定（每跳超时 `REQUEST_TIMEOUT_MS = 15s`、间隔 `PRESENCE_POLL_MS = 20s`），但这个
+ * 先后**只是传输层的承诺**：超时由宿主兑现（小程序原生层 / H5 的 XHR），一旦它没兑现，
+ * 前一跳就会在下一跳之后才 resolve，先发的旧快照把后发的新结论盖掉 —— 刚点亮的绿点又
+ * 灭回去，且要等下一跳才纠正。序号守卫让「只让最新一次落地」不再依赖传输层。
+ *
+ * 两个条件缺一不可：
+ * - `seq === latestSeq`：只有最新一次发起的轮询可以落地；
+ * - `epoch === latestEpoch`：换账号 / 换会话 / 整页重拉之后，上一代的响应一律作废
+ *   （与 `isLatestPageLoad` 同一道闸，只是多了序号这一维）。
+ */
+export function isLatestPresencePoll(input: {
+  /** 本次轮询**发起时**取的序号 */
+  seq: number
+  /** 本次轮询发起时的加载代次 */
+  epoch: number
+  /** 落地时页面上的最新序号 */
+  latestSeq: number
+  /** 落地时页面上的最新代次 */
+  latestEpoch: number
+}): boolean {
+  return input.seq === input.latestSeq && input.epoch === input.latestEpoch
+}
+
+/**
  * 「加载更早一页」的落定守卫（#186 P2-2）。
  * 更早一页是**账号 + 会话作用域**的快照：发起后若发生换账号、换会话或整页重拉
  * （三者都会 `epoch +1`），这批数据与 `loadingEarlier` 这把锁就都已经属于上一代。

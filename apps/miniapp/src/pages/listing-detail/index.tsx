@@ -32,6 +32,7 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
@@ -652,8 +653,13 @@ export default function ListingDetail() {
    * 「卖出 N 件」与在线态同一次请求），没有额外接口；拿不到（fixture 兜底 / 那次请求失败）
    * 时 `data.seller.presence` 为 null → 整块不渲染，不画一个假的「离线」。
    * 判据与文案走三处展示位共用的 `features/presence/view`。
+   *
+   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页只在进页拉一次详情，没有任何
+   * 轮询能带来重渲染，直接用 `Date.now()` 等于把 TTL 过期判据冻在首帧。该 hook 不发
+   * 请求，页面被盖住（例如跳去看会话）时停表。
    */
-  const sellerPresence = data ? presenceView(data.seller.presence, Date.now()) : null
+  const sellerPresenceNow = usePresenceNow()
+  const sellerPresence = data ? presenceView(data.seller.presence, sellerPresenceNow) : null
 
   /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
@@ -1251,7 +1257,9 @@ export default function ListingDetail() {
                     {data.seller.authStatus === 'VERIFIED' ? (
                       <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
                     ) : null}
-                    {/* 在线态（#359 第五点）：昵称行右端、头像右侧的同一条水平线上。
+                    {/* 在线态（#359 第五点）：昵称行里紧挨昵称（认证勾之后）、头像右侧的
+                        同一条水平线上（与稿 `.seller .nm` 的排布一致，右侧那个独立槽位是
+                        「进TA主页」）。
                         绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）。 */}
                     {sellerPresence ? (
                       <View

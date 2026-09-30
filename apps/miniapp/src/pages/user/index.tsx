@@ -10,6 +10,7 @@ import LoadError from '@/components/load-error'
 import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
@@ -283,8 +284,13 @@ export default function UserHome() {
    * 判据走 `features/presence/view`（三处展示位共用）：服务端的 `online` 加上端上按同一
    * TTL 的本地过期 —— 本页进页只拉一次资料，不做过期处理的话，几分钟前拿到的
    * 「在线」会一直挂在屏幕上。`profile` 还没到时不渲染（骨架屏阶段没有在线态可说）。
+   *
+   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页没有任何轮询能带来重渲染，
+   * 直接用 `Date.now()` 只在资料到位那一帧求值一次，那段本地过期永远不会被触发。
+   * 该 hook 不发请求，页面被盖住时停表。
    */
-  const presence = profile ? presenceView(profile.presence, Date.now()) : null
+  const presenceNow = usePresenceNow()
+  const presence = profile ? presenceView(profile.presence, presenceNow) : null
 
   /**
    * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。

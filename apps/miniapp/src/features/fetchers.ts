@@ -429,8 +429,13 @@ function toConversationDto(item: MockConversation, mockViewerId: Me['id']): Conv
     counterpartLastReadAt: null,
     /**
      * 在线态（#359 第五点）只有服务端有（进程内活动登记表），fixture 里没有任何可投影的
-     * 事实，所以给「拿不到」的形状：`{ online: false, lastActiveAt: null }` 由端上渲染成
-     * 「离线」。不编一个假的「5 分钟前活跃」—— fixture 里的固定时刻会随时间漂成假话。
+     * 事实，所以这里是一个**合法但一无所知**的值：`{ online: false, lastActiveAt: null }`
+     * 会被端上如实渲染成「离线」，演示构建里每个会话都显示「离线」。
+     *
+     * 注意它**不是**「拿不到」的形状 —— 那个是 `null`，由端上整块不渲染（见
+     * `features/presence/view`）。也**不编**一个假的「5 分钟前活跃」：fixture 里的固定
+     * 时刻会随时间漂成假话。⚠️「一无所知」到底该画成「离线」还是整块不渲染
+     * （服务端进程重启后全站都是这一档），待 Owner 拍板，见 PR #376 审查回合的报告。
      */
     counterpartPresence: { online: false, lastActiveAt: null },
     lastMessage:

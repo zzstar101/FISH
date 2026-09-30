@@ -359,10 +359,17 @@
   overflow: hidden;
 }
 
+/*
+ * 昵称必须**可收缩**（#376 审查回合，P2）：`flex: 0 0 auto` 的基准尺寸是 max-content、
+ * 且永不收缩，`@include ellipsis` 因此没有触发的机会 —— 长昵称整块溢出，把后面的
+ * 在线态顶出 `.detail__sname` 的 `overflow: hidden`，第三处展示位直接消失。
+ * `min-width: 0` 是 flex 项能被压到内容宽度以下的前提；压下去之后 ellipsis 才成立。
+ */
 .detail__snick {
   color: var(--fg);
   white-space: nowrap;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   @include ellipsis;
 }
 
@@ -373,9 +380,11 @@
 }
 
 /*
- * 在线态（#359 第五点）：卖家昵称行右端，头像右侧的同一条水平线上。
+ * 在线态（#359 第五点）：卖家昵称行里**紧挨昵称**（认证勾之后），头像右侧的同一条
+ * 水平线上 —— 与稿 `.seller .nm` 的排布一致（稿那一行只有 昵称 + 认证勾，右端没有
+ * 独立槽位；`.detail__go` 才是 `margin-left: auto` 的那一个）。
  *
- * `flex: 0 0 auto` 保证长昵称先省略、不把在线态挤出行外（`.detail__snick` 自带 ellipsis）。
+ * `flex: 0 0 auto`：昵称省略号化之后这一块不被压缩，始终留在行内。
  * 绿点用系统成功色 `--ok`，离线压成中性灰 `--muted`；字号比昵称小一档（24px），
  * 与下方「卖出 N 件」同一档。
  */
