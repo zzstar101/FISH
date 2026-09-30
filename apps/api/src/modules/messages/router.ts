@@ -78,6 +78,10 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
       )
     }
     try {
+      // 契约发送体是判别联合（#359）：LISTING 走商品卡路径（可见性校验 + 富化投射）。
+      if (parsed.data.type === 'LISTING') {
+        return c.json(await service.sendListingMessage(c.get('userId'), id, parsed.data), 201)
+      }
       return c.json(await service.sendTextMessage(c.get('userId'), id, parsed.data), 201)
     } catch (error) {
       return toErrorResponse(c, error)

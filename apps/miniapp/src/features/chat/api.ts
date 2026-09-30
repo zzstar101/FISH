@@ -97,11 +97,28 @@ export async function fetchMessagePage(
   return messageListResponseSchema.parse(payload)
 }
 
-/** 发一条文本消息（201，响应体 MessageDto） */
+/** 发一条文本消息（201，响应体 MessageDto）。契约发送体是判别联合，TEXT 显式带判别值。 */
 export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
-    body: { content },
+    body: { type: 'TEXT', content },
+  })
+  return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 发一张商品卡消息（#359；201，响应体 MessageDto）。
+ *
+ * `listingId` 是被分享商品的公开 id；可渲染的卡片数据由响应里的 `listing` 投射携带
+ * （服务端富化，与会话头商品卡同源）。商品不存在或非在售 → 404 LISTING_NOT_FOUND。
+ */
+export async function sendListingMessage(
+  conversationId: string,
+  listingId: string,
+): Promise<MessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
+    method: 'POST',
+    body: { type: 'LISTING', listingId },
   })
   return messageDtoSchema.parse(payload)
 }

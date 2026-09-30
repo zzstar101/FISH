@@ -1,5 +1,5 @@
 import { MessageIdempotencyConflictError, type MessageSendKey } from './idempotency'
-import type { ConversationParticipant, MessageRow, MessageStore } from './store'
+import type { ConversationParticipant, ListingBrief, MessageRow, MessageStore } from './store'
 
 /**
  * `MessageStore` 的内存替身（测试专用）。
@@ -65,6 +65,38 @@ export class MemoryMessageStore implements MessageStore {
     content: string,
     key?: MessageSendKey | null,
   ) {
+    return this.insertUser('TEXT', conversationId, senderId, content, key)
+  }
+
+  async insertListing(
+    conversationId: string,
+    senderId: string,
+    listingPublicId: string,
+    key?: MessageSendKey | null,
+  ) {
+    return this.insertUser('LISTING', conversationId, senderId, listingPublicId, key)
+  }
+
+  /** LISTING 富化源（#359）：测试直接往里塞 brief，键是内部 uuid。 */
+  listingBriefs = new Map<string, ListingBrief>()
+
+  async findListingBriefs(ids: string[]) {
+    const map = new Map<string, ListingBrief>()
+    for (const id of ids) {
+      const brief = this.listingBriefs.get(id)
+      if (brief) map.set(id, brief)
+    }
+    return map
+  }
+
+  /** TEXT 与 LISTING（#359）共用的插入路径，与 SQL store 的 `insertUserMessage` 同构。 */
+  private insertUser(
+    type: 'TEXT' | 'LISTING',
+    conversationId: string,
+    senderId: string,
+    content: string,
+    key?: MessageSendKey | null,
+  ) {
     if (key) {
       const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
       if (existing) {
@@ -77,7 +109,7 @@ export class MemoryMessageStore implements MessageStore {
       id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: conversationId,
       sender_id: senderId,
-      type: 'TEXT',
+      type,
       content,
       created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
       sender_nickname: senderId === MEMORY_BUYER_ID ? '买家' : '卖家',

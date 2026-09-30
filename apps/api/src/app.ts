@@ -397,6 +397,8 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        // LISTING 卡片封面 URL 的拼装（#359）；与 conversations 服务同一 storage。
+        storage,
         projectContent: projectSystemContent,
         onMessageCreated: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {

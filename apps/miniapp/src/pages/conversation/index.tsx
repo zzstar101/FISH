@@ -462,13 +462,15 @@ export default function Conversation() {
     void Taro.navigateTo({ url: '/pages/transaction-meetup/index' })
   }
 
-  /** 「+」面板的三格：图片 / 拍照属于 #67；商品卡片是另一件事，文案不能混为一谈 */
+  /** 「+」面板的三格：商品卡进发送选择页（#359）；图片 / 拍照仍属 #67 的媒体通道 */
   const panelAction = (key: (typeof PANEL_TILES)[number]['key']) => {
     setPanelOpen(false)
-    void Taro.showToast({
-      title: key === 'product' ? '商品卡片待接入' : MEDIA_PENDING_TIP,
-      icon: 'none',
-    })
+    if (key === 'product') {
+      if (!conversationId) return
+      void Taro.navigateTo({ url: `/pages/send-listing/index?id=${conversationId}` })
+      return
+    }
+    void Taro.showToast({ title: MEDIA_PENDING_TIP, icon: 'none' })
   }
 
   /**
@@ -618,6 +620,57 @@ export default function Conversation() {
     )
   }
 
+  /**
+   * LISTING 消息（#359）：服务端富化的商品卡（缩略图 + 标题 + 价格），点击进商品详情。
+   * `listing` 投射为 null（商品被并发删除的脏数据）时退化成灰气泡占位，不给点击——
+   * 与「正文是引用不是文本」的语义一致，宁可少一个可点目标也不画一张空卡。
+   */
+  const renderListing = (message: MessageDto) => {
+    const mine = message.senderId === me?.id
+    const card = message.listing
+    return (
+      <View
+        key={message.id}
+        id={`e-${message.id}`}
+        className={`conv__row${mine ? ' is-mine' : ''}`}
+      >
+        {renderAvatar(mine)}
+        <View className="conv__col">
+          {card ? (
+            <View
+              className="conv__lcard"
+              onClick={() =>
+                void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${card.id}` })
+              }
+            >
+              <View className="conv__lcard-thumb">
+                {card.coverUrl ? (
+                  <Image className="conv__lcard-img" src={card.coverUrl} mode="aspectFill" />
+                ) : (
+                  <Image className="conv__lcard-ph" src={ICONS.imageMuted} mode="aspectFit" />
+                )}
+              </View>
+              <View className="conv__lcard-main">
+                <Text className="conv__lcard-title">{card.title}</Text>
+                <Text className="conv__lcard-meta num">
+                  {`¥`}
+                  <Text className="conv__lcard-price">{formatAmount(card.priceCents)}</Text>
+                  {` · ${listingStatusText(card.status)}`}
+                </Text>
+              </View>
+              <Image className="conv__lcard-caret" src={ICONS.chevronRightMuted} mode="aspectFit" />
+            </View>
+          ) : (
+            <View className="conv__bubble">
+              <Text className="conv__bubble-tx">[商品]</Text>
+            </View>
+          )}
+          <Text className="conv__time num">{clockTime(message.createdAt)}</Text>
+        </View>
+      </View>
+    )
+  }
+
   const statusLabel = listingStatusText(listing.status)
 
   return (
@@ -723,6 +776,7 @@ export default function Conversation() {
 
                 const message = entry.message
                 if (message.type === 'SYSTEM') return renderSystem(message)
+                if (message.type === 'LISTING') return renderListing(message)
 
                 const mine = message.senderId === me?.id
                 return (

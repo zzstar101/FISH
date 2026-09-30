@@ -128,7 +128,8 @@ export function useSendTextMessage(ownerId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ conversationId, input }: SendTextVariables) =>
-      sendTextMessage(conversationId, input),
+      // 契约发送体已是判别联合（#359 加 LISTING）；本 hook 语义就是发文本，在这里补判别值。
+      sendTextMessage(conversationId, { type: 'TEXT', ...input }),
     onSuccess: () => {
       if (ownerId === null) return
       // 消息缓存由页面按历史查询状态决定是否写入：历史处于错误态时不能写伪页，

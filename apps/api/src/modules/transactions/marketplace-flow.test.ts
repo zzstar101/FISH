@@ -288,7 +288,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const sent = await api(CHAT_ROUTES.messages(conversationId), {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ content: '  这台键盘还在吗  ' }),
+      body: JSON.stringify({ type: 'TEXT', content: '  这台键盘还在吗  ' }),
     })
     expect(sent.status).toBe(201)
     const buyerMessage = await json<MessageDto>(sent)
@@ -301,7 +301,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const reply = await api(CHAT_ROUTES.messages(conversationId), {
       method: 'POST',
       cookie: sellerCookie,
-      body: JSON.stringify({ content: '还在，160 可以出' }),
+      body: JSON.stringify({ type: 'TEXT', content: '还在，160 可以出' }),
     })
     expect(reply.status).toBe(201)
 
@@ -324,7 +324,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     await api(CHAT_ROUTES.messages(conversationId), {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ content: '能便宜点吗' }),
+      body: JSON.stringify({ type: 'TEXT', content: '能便宜点吗' }),
     })
 
     const sellerRow = await conversationRow(sellerCookie)
@@ -362,7 +362,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
       const sent = await api(CHAT_ROUTES.messages(conversationId), {
         method: 'POST',
         cookie: buyerCookie,
-        body: JSON.stringify({ content: '我今晚可以来拿' }),
+        body: JSON.stringify({ type: 'TEXT', content: '我今晚可以来拿' }),
       })
       expect(sent.status).toBe(201)
       const created = await json<MessageDto>(sent)
@@ -395,7 +395,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
         await api(CHAT_ROUTES.messages(conversationId), {
           method: 'POST',
           cookie: sellerCookie,
-          body: JSON.stringify({ content: '好，那就这么定' }),
+          body: JSON.stringify({ type: 'TEXT', content: '好，那就这么定' }),
         }),
       )
       await waitFor(
@@ -478,7 +478,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
     const offline = await api(CHAT_ROUTES.messages(conversationId), {
       method: 'POST',
       cookie: buyerCookie,
-      body: JSON.stringify({ content: '我到楼下了' }),
+      body: JSON.stringify({ type: 'TEXT', content: '我到楼下了' }),
     })
     expect(offline.status).toBe(201)
 
@@ -497,7 +497,7 @@ describe('marketplace flow 双账号验收（#42）', () => {
         await api(CHAT_ROUTES.messages(conversationId), {
           method: 'POST',
           cookie: buyerCookie,
-          body: JSON.stringify({ content: '我到了' }),
+          body: JSON.stringify({ type: 'TEXT', content: '我到了' }),
         }),
       )
       await waitFor(

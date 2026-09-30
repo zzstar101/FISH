@@ -45,6 +45,7 @@ const validMessageEvent = {
     sender: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
     type: 'TEXT',
     content: '在吗',
+    listing: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   },
 } satisfies RealtimeServerEvent

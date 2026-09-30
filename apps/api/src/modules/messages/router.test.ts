@@ -18,12 +18,14 @@ const message: MessageDto = {
   sender: { id: sender, nickname: '买家', avatarUrl: null },
   type: 'TEXT',
   content: '还在吗',
+  listing: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 
 const service: MessageService = {
   listMessages: async () => ({ items: [message], nextCursor: null }),
   sendTextMessage: async () => message,
+  sendListingMessage: async () => message,
 }
 
 function buildApp(overrides: Partial<MessageService> = {}) {
@@ -71,7 +73,7 @@ describe('messages router', () => {
     const response = await buildApp().request(conversationPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: '还在吗' }),
+      body: JSON.stringify({ type: 'TEXT', content: '还在吗' }),
     })
     expect(response.status).toBe(201)
     expect(await response.json()).toEqual(message)
@@ -81,7 +83,7 @@ describe('messages router', () => {
     const response = await buildApp().request(conversationPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: '   ' }),
+      body: JSON.stringify({ type: 'TEXT', content: '   ' }),
     })
     expect(response.status).toBe(422)
   })
@@ -113,7 +115,7 @@ describe('messages router', () => {
     const response = await app.request('/conversations/not-a-uuid/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'hi' }),
+      body: JSON.stringify({ type: 'TEXT', content: 'hi' }),
     })
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({
@@ -131,7 +133,7 @@ describe('messages router', () => {
     const response = await app.request(conversationPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'hi' }),
+      body: JSON.stringify({ type: 'TEXT', content: 'hi' }),
     })
     expect(response.status).toBe(404)
   })
@@ -148,9 +150,9 @@ describe('messages router', () => {
     const response = await app.request(conversationPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'hi', clientRequestId }),
+      body: JSON.stringify({ type: 'TEXT', content: 'hi', clientRequestId }),
     })
-    expect(seen).toEqual({ content: 'hi', clientRequestId })
+    expect(seen).toEqual({ type: 'TEXT', content: 'hi', clientRequestId })
     expect(response.status).toBe(409)
     expect(await response.json()).toEqual({
       error: { code: 'IDEMPOTENCY_KEY_REUSED', message: '重复的请求标识' },
@@ -168,7 +170,45 @@ describe('messages router', () => {
     const response = await app.request(conversationPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: 'hi', clientRequestId: 'not-a-uuid' }),
+      body: JSON.stringify({ type: 'TEXT', content: 'hi', clientRequestId: 'not-a-uuid' }),
+    })
+    expect(response.status).toBe(422)
+    expect(called).toBe(false)
+  })
+
+  test('POST type=LISTING 分发到 sendListingMessage 并原样透传 listingId（#359）', async () => {
+    let seen: unknown
+    const listingId = encodePublicId(
+      PUBLIC_ID_PREFIX.listing,
+      '01930000-0000-7000-8000-0000000000b1',
+    )
+    const app = buildApp({
+      sendListingMessage: async (_userId, _conversationId, input) => {
+        seen = input
+        return message
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'LISTING', listingId }),
+    })
+    expect(response.status).toBe(201)
+    expect(seen).toEqual({ type: 'LISTING', listingId })
+  })
+
+  test('POST 缺 type 判别值（旧客户端形状）→ 422', async () => {
+    let called = false
+    const app = buildApp({
+      sendTextMessage: async () => {
+        called = true
+        return message
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'hi' }),
     })
     expect(response.status).toBe(422)
     expect(called).toBe(false)

@@ -60,33 +60,60 @@ describe('chatWatchersSchema', () => {
 
 describe('messageSendInputSchema', () => {
   test('trims content', () => {
-    expect(messageSendInputSchema.parse({ content: '  还在吗  ' }).content).toBe('还在吗')
+    expect(messageSendInputSchema.parse({ type: 'TEXT', content: '  还在吗  ' })).toEqual({
+      type: 'TEXT',
+      content: '还在吗',
+    })
   })
 
   test('rejects whitespace-only content', () => {
-    expect(messageSendInputSchema.safeParse({ content: '   ' }).success).toBe(false)
+    expect(messageSendInputSchema.safeParse({ type: 'TEXT', content: '   ' }).success).toBe(false)
   })
 
   test('rejects content over 2000 chars', () => {
-    expect(messageSendInputSchema.safeParse({ content: 'a'.repeat(2001) }).success).toBe(false)
+    expect(
+      messageSendInputSchema.safeParse({ type: 'TEXT', content: 'a'.repeat(2001) }).success,
+    ).toBe(false)
   })
 
   test('rejects extra fields (strict)', () => {
-    expect(messageSendInputSchema.safeParse({ content: 'hi', type: 'TEXT' }).success).toBe(false)
+    expect(
+      messageSendInputSchema.safeParse({ type: 'TEXT', content: 'hi', listingId: 'lst_x' }).success,
+    ).toBe(false)
   })
 
   test('accepts an optional uuid clientRequestId and omits it when absent', () => {
     const clientRequestId = '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
-    expect(messageSendInputSchema.parse({ content: 'hi', clientRequestId })).toEqual({
+    expect(messageSendInputSchema.parse({ type: 'TEXT', content: 'hi', clientRequestId })).toEqual({
+      type: 'TEXT',
       content: 'hi',
       clientRequestId,
     })
-    expect(messageSendInputSchema.parse({ content: 'hi' }).clientRequestId).toBeUndefined()
+    expect(
+      messageSendInputSchema.parse({ type: 'TEXT', content: 'hi' }).clientRequestId,
+    ).toBeUndefined()
   })
 
   test('rejects a non-uuid clientRequestId', () => {
     expect(
-      messageSendInputSchema.safeParse({ content: 'hi', clientRequestId: 'req-1' }).success,
+      messageSendInputSchema.safeParse({ type: 'TEXT', content: 'hi', clientRequestId: 'req-1' })
+        .success,
+    ).toBe(false)
+  })
+
+  test('LISTING 分支要求 listingId（#359）', () => {
+    expect(messageSendInputSchema.safeParse({ type: 'LISTING', listingId: 'lst_hi' }).success).toBe(
+      false,
+    )
+  })
+
+  test('LISTING 分支拒绝未知字段（strict，#359）', () => {
+    expect(
+      messageSendInputSchema.safeParse({
+        type: 'LISTING',
+        listingId: 'lst_hi',
+        content: 'hi',
+      }).success,
     ).toBe(false)
   })
 })
@@ -164,6 +191,7 @@ describe('messageDtoSchema', () => {
   const base = {
     id: ids.message,
     conversationId: ids.conversation,
+    listing: null,
     content: 'hello',
     createdAt: '2026-09-12T00:00:00.000Z',
   }
@@ -325,6 +353,7 @@ describe('realtime events', () => {
         sender: null,
         type: 'SYSTEM',
         content: 'hi',
+        listing: null,
         createdAt: '2026-09-12T00:00:00.000Z',
       },
     }
