@@ -272,7 +272,11 @@ export function createMessageService({
       if (replay) {
         if (!replay.hashMatches) throw idempotencyConflict()
         // 重放：投射取商品**此刻**的状态（可能已下架 / 已被物理删除 → 失效卡）。
-        return toMessageDto(replay.row, await listingCardOf(store, storage, input.listingId))
+        const dto = toMessageDto(replay.row, await listingCardOf(store, storage, input.listingId))
+        // 与 sendTextMessage 的重放语义一致：命中既有消息**也推一次**（契约「推送不保证不重
+        // 不漏」，客户端按服务端 id 去重）。否则首次推送丢失时，重试成功却通知不到对方。
+        onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
+        return dto
       }
 
       /*

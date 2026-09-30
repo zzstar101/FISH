@@ -282,6 +282,34 @@ describe('message service: sendListingMessage（#359 商品卡）', () => {
     expect(store.messages).toHaveLength(1)
   })
 
+  /*
+   * 重放要**再推一次** message.new：首次推送可能在网络上丢了，而客户端是拿同一个幂等键重试的；
+   * 重试若静默重放，对方只能靠重新拉历史才知道这条消息（与 sendTextMessage 的既有语义分叉）。
+   */
+  test('幂等重放也会推一次 message.new（与 TEXT 重放同语义）', async () => {
+    const store = new MemoryMessageStore()
+    store.listings.set(LISTING_ID, listingBrief())
+    const pushed: string[] = []
+    const service = createMessageService({
+      store,
+      storage,
+      onMessageCreated: (_participants, message) => pushed.push(message.id),
+    })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000e6'
+    const first = await service.sendListingMessage(buyer, conversationA, {
+      type: 'LISTING',
+      listingId: LISTING_PUBLIC_ID,
+      clientRequestId,
+    })
+    const retry = await service.sendListingMessage(buyer, conversationA, {
+      type: 'LISTING',
+      listingId: LISTING_PUBLIC_ID,
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(pushed).toEqual([first.id, first.id])
+  })
+
   test('同一 clientRequestId 换一个商品 → 409 IDEMPOTENCY_KEY_REUSED', async () => {
     const store = new MemoryMessageStore()
     store.listings.set(LISTING_ID, listingBrief())
