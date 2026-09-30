@@ -405,6 +405,16 @@ export function createApp(
             message,
           })
         },
+        // #359 3c 撤回：落库成功后推给会话双方（同一人多连接也要同步）。
+        onMessageRecalled: (participants, event) => {
+          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+            type: 'message.recalled',
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            recalledAt: event.recalledAt,
+            recalledBy: event.recalledBy,
+          })
+        },
       }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,

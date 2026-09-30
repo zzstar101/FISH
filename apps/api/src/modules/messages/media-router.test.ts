@@ -43,6 +43,8 @@ function buildApp(
       width: 100,
       height: 80,
       durationMs: null,
+      recalledAt: null,
+      replyTo: null,
       createdAt: '2026-09-14T12:00:00.000Z',
     }),
     list: async () => ({ items: [], nextCursor: null }),

@@ -497,8 +497,10 @@ export async function loadMessagePage(
      * 发送者对齐到当前身份，否则 fixture 里「我」发的消息会画到对方那一侧。
      */
     const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : { ...mockMe, id: mockPublicId('usr', mockMe.id) }
+    const rows = mockMessages(conversationId)
     return {
-      items: mockMessages(conversationId).map((item) => toMessageDto(item, found, viewer)),
+      // 传整份 fixture：引用摘引要在同一批里找被引用那条（#359 3c）
+      items: rows.map((item) => toMessageDto(item, found, viewer, rows)),
       nextCursor: null,
       failed: false,
     }
@@ -515,11 +517,15 @@ type ViewerLike = { id: Me['id']; nickname: string; avatarUrl: string | null }
  * `messageDtoSchema` 的 refine 同源），而 fixture 只存 `senderId`，
  * 所以要按「这条是不是对方发的」补出 `sender`。`senderId` 也要一起对齐到
  * `viewer`（见调用点的说明）。
+ *
+ * #359 3c：`replyTo` 与 `recalledAt` 同样按契约语义补出来 —— 撤回的消息正文清空
+ * （服务端也不下发），引用则按 `replyToId` 从同一份 fixture 里合成摘引。
  */
 function toMessageDto(
   item: MockMessage,
   conversation: MockConversation,
   viewer: ViewerLike,
+  all: readonly MockMessage[] = [],
 ): MessageDto {
   const fromCounterpart = item.senderId !== null && item.senderId === conversation.counterpart.id
   const senderId = item.senderId === null ? null : fromCounterpart ? item.senderId : viewer.id
@@ -533,15 +539,50 @@ function toMessageDto(
             avatarUrl: conversation.counterpart.avatarUrl,
           }
         : { id: viewer.id, nickname: viewer.nickname, avatarUrl: viewer.avatarUrl }
+  /**
+   * #359 3c：被引用那条在本会话里的投影（用于合成摘引）。只在这里用，不递归 ——
+   * 被引用消息自己的 `replyTo` 恒为空，避免「引用链」在演示数据里无限展开。
+   */
+  const replied = item.replyToId
+    ? all.find((candidate) => candidate.id === item.replyToId)
+    : undefined
+  const replyTo = replied
+    ? {
+        id: replied.id,
+        senderId:
+          replied.senderId === null
+            ? null
+            : replied.senderId === conversation.counterpart.id
+              ? conversation.counterpart.id
+              : viewer.id,
+        excerpt: toReplyExcerpt(replied),
+      }
+    : null
   return {
     id: item.id,
     conversationId: item.conversationId,
     senderId,
     sender,
     type: item.type,
-    content: item.content,
+    // 撤回后正文不再下发（服务端同口径）：演示态也清空，两档画同一个撤回碑。
+    content: item.recalled ? '' : item.content,
+    // fixture 没有「撤回时刻」这个概念，用占位时间戳表达「已撤回」这一个事实
+    recalledAt: item.recalled ? item.createdAt : null,
+    replyTo,
     createdAt: item.createdAt,
   }
+}
+
+/**
+ * 演示消息的摘引文案。口径与服务端 `replyExcerpt`
+ * （`apps/api/src/modules/messages/reply.ts`）一致：已撤回 `[消息已撤回]`、
+ * 空文本 `[消息]`、超长截断到 120 字含省略号。
+ */
+function toReplyExcerpt(item: MockMessage): string {
+  if (item.recalled) return '[消息已撤回]'
+  const text = item.content.trim()
+  if (text.length === 0) return '[消息]'
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text
 }
 
 /* --------------------------------------------------------------- 订单 */

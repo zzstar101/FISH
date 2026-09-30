@@ -97,13 +97,34 @@ export async function fetchMessagePage(
   return messageListResponseSchema.parse(payload)
 }
 
-/** 发一条文本消息（201，响应体 MessageDto） */
-export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
+/**
+ * 发一条文本消息（201，响应体 MessageDto）。
+ *
+ * `replyToId` 是**被引用消息的公开 id**（#359 3c）：带上它就发一条「引用消息」，
+ * 服务端在响应与历史里回同一份 `replyTo` 摘引投射。目标不可引用（不存在 / 跨会话 /
+ * SYSTEM / 已撤回）→ 422 `MESSAGE_REPLY_INVALID`。
+ */
+export async function sendMessage(
+  conversationId: string,
+  content: string,
+  replyToId?: string,
+): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
-    body: { content },
+    body: { content, replyToId },
   })
   return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 撤回自己发的一条消息（#359 3c；204 无响应体）。
+ *
+ * `messageId` 是**公开 id**。窗口 `MESSAGE_RECALL_WINDOW_MS`（2 分钟）内、仅发送者本人；
+ * 对已撤回消息幂等（重复调用同样 204）。失败三档：404 `MESSAGE_NOT_FOUND`、
+ * 403 `MESSAGE_RECALL_FORBIDDEN`、409 `MESSAGE_RECALL_WINDOW_EXCEEDED`。
+ */
+export async function recallMessage(conversationId: string, messageId: string): Promise<void> {
+  await apiRequest(CHAT_ROUTES.recall(conversationId, messageId), { method: 'POST' })
 }
 
 /** 标记会话已读（把查看者的 last_read_at 推进到当前时刻） */

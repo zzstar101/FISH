@@ -1,6 +1,6 @@
 import { messageListQuerySchema, messageSendInputSchema } from '@fish/contracts/chat/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
-import { ConversationIdSchema } from '@fish/contracts/system/public-id'
+import { ConversationIdSchema, MessageIdSchema } from '@fish/contracts/system/public-id'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
@@ -33,6 +33,10 @@ const parseConversationId = (raw: string) =>
 
 const conversationNotFound = (c: Context) =>
   c.json(errorBody('CONVERSATION_NOT_FOUND', '会话不存在'), 404)
+
+/** 路径里的消息 id 同理：非公开 id 形状直接按「消息不存在」处理，不落 SQL。 */
+const parseMessageId = (raw: string) =>
+  MessageIdSchema.safeParse(raw).success ? decodePublicId(PUBLIC_ID_PREFIX.message, raw) : null
 
 /**
  * 挂载点也是 /conversations（与 conversations router 并列 route 到同一路径前缀，
@@ -79,6 +83,23 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
     }
     try {
       return c.json(await service.sendTextMessage(c.get('userId'), id, parsed.data), 201)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  /**
+   * 撤回（#359 3c）：204 无响应体；对已撤回消息幂等。
+   * 非公开 id 形状与「不存在」同码（404 MESSAGE_NOT_FOUND），不泄漏 id 空间。
+   */
+  app.post('/:id/messages/:messageId/recall', requireAuth, guard.write, async (c) => {
+    const id = parseConversationId(c.req.param('id') ?? '')
+    if (!id) return conversationNotFound(c)
+    const messageId = parseMessageId(c.req.param('messageId') ?? '')
+    if (!messageId) return c.json(errorBody('MESSAGE_NOT_FOUND', '消息不存在'), 404)
+    try {
+      await service.recallMessage(c.get('userId'), id, messageId)
+      return c.body(null, 204)
     } catch (error) {
       return toErrorResponse(c, error)
     }

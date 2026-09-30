@@ -392,3 +392,21 @@ describe('conversations store (integration)', () => {
     expect(finalReadAt).toBe(t2ReadAt)
   })
 })
+
+// #359 3c：撤回后列表行摘要不能继续显示原文（recalled_at 只标记不删正文，读侧必须自己收敛）。
+test('撤回的消息在会话行摘要里显示为「消息已撤回」，不再泄漏原文', async () => {
+  const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
+  if (!conversationId) throw new Error('unreachable')
+
+  const messageId = crypto.randomUUID()
+  await db.execute(sql`
+    INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at)
+    VALUES (${messageId}, ${conversationId}, ${seller}, 'TEXT', '这句要撤回', now() + interval '10 minutes')
+  `)
+  const before = await store.findDetail(conversationId, buyer)
+  expect(before?.lastMessage).toMatchObject({ content: '这句要撤回' })
+
+  await db.execute(sql`UPDATE messages SET recalled_at = now() WHERE id = ${messageId}`)
+  const after = await store.findDetail(conversationId, buyer)
+  expect(after?.lastMessage).toMatchObject({ content: '[消息已撤回]', senderId: seller })
+})

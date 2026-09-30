@@ -66,6 +66,11 @@ export type PendingMessage = {
   id: string
   content: string
   status: 'sending' | 'failed'
+  /**
+   * 本条要引用的消息（#359 3c）：被引用消息的**公开 id** + 本地摘引文案。
+   * 发送成功前服务端还没给投射，气泡里的摘引只能先用本地这份画。
+   */
+  replyTo?: { id: string; excerpt: string } | null
 }
 
 /**
@@ -285,4 +290,101 @@ export function shouldFlushDeferredReload(input: {
   visible: boolean
 }): boolean {
   return isFlushDue(input.state) && input.authed && input.hasUserId && input.visible
+}
+
+/* ------------------------------------------------- 长按菜单 / 引用 / 撤回（#359 3c） */
+
+/**
+ * 长按气泡能做什么。`copy` / `reply` 对双方都成立；`recall` 只对自己的消息成立。
+ * 商品卡与媒体消息没有可复制文本，因此不给 `copy`（与微信一致）。
+ */
+export type MessageAction = 'copy' | 'reply' | 'recall'
+
+/**
+ * 这条消息此刻还能不能撤回。
+ *
+ * 三个条件缺一不可：**是我发的**、**还没撤回**、**在 2 分钟窗口内**。
+ * SYSTEM 消息天然不满足第一条（`senderId` 为 null）。
+ *
+ * ⚠️ 这里的窗口判定用的是**客户端时钟**，只作「要不要显示撤回项」的 UX 门禁；
+ * 权威判定在服务端（`clock_timestamp() - created_at`）。两端时钟有偏差时，可能出现
+ * 「本端显示可撤回、服务端回 409」或反之 —— 前者由调用方按 `MESSAGE_RECALL_WINDOW_EXCEEDED`
+ * 提示，后者只是少给了一个入口，都不影响数据正确性。
+ */
+export function canRecallMessage(
+  message: MessageDto,
+  meId: string | null,
+  nowMs: number,
+  windowMs: number,
+): boolean {
+  if (!meId || message.senderId !== meId) return false
+  if (message.recalledAt !== null) return false
+  const created = Date.parse(message.createdAt)
+  if (Number.isNaN(created)) return false
+  return nowMs - created <= windowMs
+}
+
+/** 长按菜单项（按显示顺序）。撤回是破坏性动作，排在最后。 */
+export function messageActions(
+  message: MessageDto,
+  meId: string | null,
+  nowMs: number,
+  windowMs: number,
+): MessageAction[] {
+  if (message.type === 'SYSTEM') return []
+  const actions: MessageAction[] = []
+  // 已撤回的气泡只剩撤回碑，没有正文可复制、也没有可引用的内容。
+  if (message.recalledAt === null) {
+    if (message.type === 'TEXT') actions.push('copy')
+    actions.push('reply')
+  }
+  if (canRecallMessage(message, meId, nowMs, windowMs)) actions.push('recall')
+  return actions
+}
+
+/** 菜单项 → 中文文案（`Taro.showActionSheet` 的 itemList）。 */
+export const MESSAGE_ACTION_LABEL: Record<MessageAction, string> = {
+  copy: '复制',
+  reply: '引用',
+  recall: '撤回',
+}
+
+/** 与契约 `messageReplySchema.excerpt` 的 max 同源 */
+export const REPLY_EXCERPT_MAX = 120
+
+/**
+ * 本地摘引文案：引用栏与「发送中」气泡在服务端投射回来之前先用它。
+ *
+ * 口径与服务端 `replyExcerpt`（`apps/api/src/modules/messages/reply.ts`）保持一致：
+ * 已撤回 `[消息已撤回]`、空文本 `[消息]`、超长截断到 120 字含省略号。
+ * 本地这份**只影响观感**：发送成功后气泡会换成服务端回的那条（含权威 `replyTo`）。
+ */
+export function localReplyExcerpt(message: MessageDto): string {
+  if (message.recalledAt !== null) return '[消息已撤回]'
+  const text = message.content.trim()
+  if (text.length === 0) return '[消息]'
+  return text.length > REPLY_EXCERPT_MAX ? `${text.slice(0, REPLY_EXCERPT_MAX - 1)}…` : text
+}
+
+/**
+ * 撤回落地：把本地消息流里那一条翻成撤回碑。
+ *
+ * 服务端撤回后**不再下发正文**（`content` 为空串），所以本地也必须清掉 `content` ——
+ * 否则「撤回后刷新」与「撤回后不刷新」会画出两种不同的气泡。保留 `id` / `senderId` /
+ * `createdAt` 等身份字段：撤回碑仍要有头像与时间。
+ */
+export function applyRecalled(
+  items: MessageDto[],
+  messageId: string,
+  recalledAt: string,
+): MessageDto[] {
+  return items.map((item) => (item.id === messageId ? { ...item, content: '', recalledAt } : item))
+}
+
+/** 撤回失败的提示文案（服务端三档错误码各有说法，其余归到通用失败） */
+export function recallFailureText(code: string | undefined): string {
+  if (code === 'MESSAGE_RECALL_WINDOW_EXCEEDED') return '超过 2 分钟，不能撤回了'
+  if (code === 'MESSAGE_RECALL_FORBIDDEN') return '只能撤回自己发的消息'
+  if (code === 'MESSAGE_NOT_FOUND') return '消息已不存在'
+  return '撤回失败，请重试'
 }

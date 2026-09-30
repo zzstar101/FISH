@@ -234,6 +234,20 @@ export type MockMessage = {
   type: MessageType
   content: string
   createdAt: string
+  /**
+   * #359 3c 演示扩展：这条消息引用了哪一条（被引用消息的 id）。
+   *
+   * 契约里引用投射（`replyTo`）由**服务端**组装，fixture 只记关系，`fetchers` 的
+   * `toMessageDto` 再按它合成投射 —— 与会话详情「服务端组装读模型」的既有取舍同源。
+   */
+  replyToId?: MessageDto['id']
+  /**
+   * #359 3c 演示扩展：已撤回的演示消息（撤回碑）。
+   *
+   * 契约里撤回后正文不再下发，所以 fixture 里这类消息的 `content` 会被投影清空
+   * （见 `toMessageDto`）—— 演示态与真实态画同一个撤回碑。
+   */
+  recalled?: boolean
 }
 
 /** 媒体消息种类（D2 会话页新增） */

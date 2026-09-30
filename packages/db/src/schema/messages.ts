@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm'
-import { check, index, pgEnum, pgTable, text, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import {
+  type AnyPgColumn,
+  check,
+  index,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core'
 import { createdAt, primaryKey } from './common'
 import { conversations } from './conversations'
 import { users } from './users'
@@ -29,6 +39,19 @@ export const messages = pgTable(
      * 同键同指纹 = 重试，返回既有消息；同键不同指纹 = 幂等键复用，409 拒绝。
      */
     clientRequestHash: text('client_request_hash'),
+    /**
+     * #359 3c 引用：被引用消息的 id（同会话内）。`ON DELETE SET NULL` 而不是 cascade ——
+     * 引用者不该因为被引用行被删而消失；删除路径（会话随商品物理删除）会连带清掉整会话，
+     * 那时这行也不在了。自引用外键指向本表。
+     */
+    replyToId: uuid('reply_to_id').references((): AnyPgColumn => messages.id, {
+      onDelete: 'set null',
+    }),
+    /**
+     * #359 3c 撤回时间；未撤回为 NULL。**正文不删**（审计保留），读侧按该字段
+     * 把消息渲染成「撤回碑」并且不返回 content / listing / 媒体详情。
+     */
+    recalledAt: timestamp('recalled_at', { withTimezone: true }),
     createdAt: createdAt(),
   },
   (table) => [

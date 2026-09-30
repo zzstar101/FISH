@@ -23,6 +23,20 @@ export function MessageBubble({
     )
   }
 
+  /**
+   * 撤回碑（#359 3c）：服务端撤回后不下发正文，照常渲染气泡会是一个空气泡。
+   * 文案与小程序端一致；会话页的撤回入口本身不在本 Issue 范围（PC 只负责不再画空泡）。
+   */
+  if (message.recalledAt !== null) {
+    return (
+      <div className="my-3 flex justify-center">
+        <span className="rounded-full bg-surface-2 px-3.5 py-1.5 text-center text-ink-3 text-xs leading-5">
+          {isMine ? '你撤回了一条消息' : '对方撤回了一条消息'}
+        </span>
+      </div>
+    )
+  }
+
   const senderName = message.sender?.nickname ?? '用户'
   return (
     <div className={`flex gap-2.5 ${isMine ? 'justify-end' : 'justify-start'}`}>

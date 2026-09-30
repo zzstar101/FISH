@@ -2,15 +2,21 @@ import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyRecalled,
   beginSend,
+  canRecallMessage,
   canRetry,
   clearDeferredReload,
   deferReload,
   initialDeferredReload,
   isFlushDue,
   listingStatusText,
+  localReplyExcerpt,
+  MESSAGE_ACTION_LABEL,
+  messageActions,
   type PendingMessage,
   parseTxEvent,
+  recallFailureText,
   resetDeferredReload,
   settleSend,
   shouldFlushDeferredReload,
@@ -307,5 +313,162 @@ describe('shouldFlushDeferredReload —— 到点之后「真的能发」才补�
     expect(shouldFlushDeferredReload({ ...base, authed: false })).toBe(false)
     expect(shouldFlushDeferredReload({ ...base, hasUserId: false })).toBe(false)
     expect(shouldFlushDeferredReload({ ...base, visible: false })).toBe(false)
+  })
+})
+
+/**
+ * 长按菜单 / 引用 / 撤回（#359 3c）。
+ *
+ * 锁的是「哪些动作该出现、哪些不该」这条判据 —— 它是页面里唯一决定「用户能不能撤回
+ * 别人的消息」的地方，写错会直接变成越权入口（服务端仍会拦，但界面不该给）。
+ */
+describe('messageActions / canRecallMessage —— 长按菜单能做什么（#359 3c）', () => {
+  const WINDOW = 120_000
+  const NOW = Date.parse('2026-09-21T10:00:00.000Z')
+  const ME = 'usr_01jc000000e0080000000000a1'
+
+  const text = (over: Partial<MessageDto> = {}): MessageDto => ({
+    id: 'msg_01jc000000e0080000000000d1',
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: ME,
+    sender: { id: ME, nickname: '我', avatarUrl: null },
+    type: 'TEXT',
+    content: '在的',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T09:59:30.000Z',
+    ...over,
+  })
+
+  test('自己的未撤回 TEXT：复制 / 引用 / 撤回三项齐全', () => {
+    expect(messageActions(text(), ME, NOW, WINDOW)).toEqual(['copy', 'reply', 'recall'])
+  })
+
+  test('对方发的：没有撤回项（界面不给越权入口）', () => {
+    expect(messageActions(text({ senderId: 'usr_x' }), ME, NOW, WINDOW)).toEqual(['copy', 'reply'])
+  })
+
+  test('超出 2 分钟窗口：撤回项消失，复制与引用仍在', () => {
+    const old = text({ createdAt: '2026-09-21T09:57:00.000Z' })
+    expect(canRecallMessage(old, ME, NOW, WINDOW)).toBe(false)
+    expect(messageActions(old, ME, NOW, WINDOW)).toEqual(['copy', 'reply'])
+  })
+
+  test('窗口边界（恰好 120s）仍可撤回，多 1ms 即不可', () => {
+    expect(canRecallMessage(text({ createdAt: '2026-09-21T09:58:00.000Z' }), ME, NOW, WINDOW)).toBe(
+      true,
+    )
+    expect(canRecallMessage(text({ createdAt: '2026-09-21T09:57:59.999Z' }), ME, NOW, WINDOW)).toBe(
+      false,
+    )
+  })
+
+  test('已撤回的：只剩撤回碑，没有复制 / 引用 / 撤回任何一项', () => {
+    const recalled = text({ content: '', recalledAt: '2026-09-21T09:59:40.000Z' })
+    expect(messageActions(recalled, ME, NOW, WINDOW)).toEqual([])
+  })
+
+  test('SYSTEM 消息不给任何动作（交易事实不是用户消息）', () => {
+    const system = text({ type: 'SYSTEM', senderId: null, sender: null })
+    expect(messageActions(system, ME, NOW, WINDOW)).toEqual([])
+  })
+
+  test('商品卡消息：没有可复制正文，给引用与撤回', () => {
+    const listing = text({ type: 'LISTING' })
+    expect(messageActions(listing, ME, NOW, WINDOW)).toEqual(['reply', 'recall'])
+  })
+
+  test('未登录（meId 为 null）：撤回入口消失，本地动作仍在', () => {
+    // 复制 / 引用不依赖身份（纯本地动作），撤回必须依赖「是不是我发的」——
+    // 身份缺失时不能凭空给出撤回入口。
+    expect(messageActions(text(), null, NOW, WINDOW)).toEqual(['copy', 'reply'])
+    expect(canRecallMessage(text(), null, NOW, WINDOW)).toBe(false)
+  })
+
+  test('时间戳解析不了：不误判成「在窗口内」', () => {
+    expect(canRecallMessage(text({ createdAt: 'not-a-date' }), ME, NOW, WINDOW)).toBe(false)
+  })
+
+  test('每个动作都有中文文案（菜单不会出现空行）', () => {
+    for (const action of ['copy', 'reply', 'recall'] as const) {
+      expect(MESSAGE_ACTION_LABEL[action].length).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('localReplyExcerpt —— 本地摘引文案（与服务端 replyExcerpt 同口径）', () => {
+  const base = {
+    id: 'msg_01jc000000e0080000000000d1',
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: 'usr_x',
+    sender: { id: 'usr_x', nickname: 'A', avatarUrl: null },
+    type: 'TEXT' as const,
+    content: '在的',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+  }
+
+  test('普通文本原样；首尾空白先 trim', () => {
+    expect(localReplyExcerpt({ ...base, content: '  在的  ' })).toBe('在的')
+  })
+
+  test('超长截断到 120 字含省略号（契约 excerpt 的 max）', () => {
+    const long = 'a'.repeat(200)
+    expect(localReplyExcerpt({ ...base, content: long })).toBe(`${'a'.repeat(119)}…`)
+    expect(localReplyExcerpt({ ...base, content: long }).length).toBe(120)
+  })
+
+  test('空正文与已撤回各给占位，不画空引用条', () => {
+    expect(localReplyExcerpt({ ...base, content: '   ' })).toBe('[消息]')
+    expect(
+      localReplyExcerpt({ ...base, content: '', recalledAt: '2026-09-21T10:00:00.000Z' }),
+    ).toBe('[消息已撤回]')
+  })
+})
+
+describe('applyRecalled —— 撤回落地（#359 3c）', () => {
+  const make = (id: string): MessageDto => ({
+    id,
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: 'usr_01jc000000e0080000000000a1',
+    sender: { id: 'usr_01jc000000e0080000000000a1', nickname: '我', avatarUrl: null },
+    type: 'TEXT',
+    content: '发错了',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+  })
+
+  test('目标那条正文清空并落 recalledAt，其余不动', () => {
+    const items = [make('m1'), make('m2')]
+    const out = applyRecalled(items, 'm1', '2026-09-21T10:00:05.000Z')
+    expect(out[0]).toMatchObject({ id: 'm1', content: '', recalledAt: '2026-09-21T10:00:05.000Z' })
+    expect(out[1]).toEqual(items[1])
+  })
+
+  test('不改动入参数组（避免原地改 state 里那份）', () => {
+    const items = [make('m1')]
+    applyRecalled(items, 'm1', '2026-09-21T10:00:05.000Z')
+    expect(items[0]?.content).toBe('发错了')
+    expect(items[0]?.recalledAt).toBeNull()
+  })
+
+  test('id 不存在时原样返回，不误伤别的消息', () => {
+    const items = [make('m1')]
+    expect(applyRecalled(items, 'nope', '2026-09-21T10:00:05.000Z')).toEqual(items)
+  })
+})
+
+describe('recallFailureText —— 撤回失败的三档文案', () => {
+  test('超窗 / 越权 / 不存在各有说法', () => {
+    expect(recallFailureText('MESSAGE_RECALL_WINDOW_EXCEEDED')).toBe('超过 2 分钟，不能撤回了')
+    expect(recallFailureText('MESSAGE_RECALL_FORBIDDEN')).toBe('只能撤回自己发的消息')
+    expect(recallFailureText('MESSAGE_NOT_FOUND')).toBe('消息已不存在')
+  })
+
+  test('其它错误码与缺省走通用文案（不泄漏服务端原文）', () => {
+    expect(recallFailureText('INTERNAL_ERROR')).toBe('撤回失败，请重试')
+    expect(recallFailureText(undefined)).toBe('撤回失败，请重试')
   })
 })

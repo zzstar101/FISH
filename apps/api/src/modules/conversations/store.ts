@@ -106,8 +106,13 @@ function asDate(value: unknown): Date | string | null {
  * MEDIA 的正文不在消息流里，客户端没有别的途径知道是图还是语音，所以这里翻成
  * `[图片]`/`[语音]`——契约 `conversationLastMessageSchema` 明确 MEDIA 的 content
  * 就是可读文案。`message_media` 缺失（不该发生的脏数据）时退回 `[媒体]`。
+ *
+ * 撤回（#359 3c）**优先于**上面所有分支：`recalled_at` 只标记不删正文（审计），
+ * 照常读 `content` 会让撤回的话原样留在列表行上 —— 撤回就没意义了。文案与
+ * `apps/api/src/modules/messages/reply.ts` 的 `[消息已撤回]` 同口径。
  */
 function lastMessageContent(row: Record<string, unknown>): string {
+  if (row.last_message_recalled_at) return '[消息已撤回]'
   const mediaKind = row.last_message_media_kind as string | null
   if (!mediaKind) return row.last_message_content as string
   if (mediaKind === 'IMAGE') return '[图片]'
@@ -190,6 +195,7 @@ const detailSelect = (viewerId: string) => sql`
            AS last_message_at_cursor,
          lm.type::text AS last_message_type, lm.content AS last_message_content,
          lm.media_kind AS last_message_media_kind,
+         lm.recalled_at AS last_message_recalled_at,
          lm.sender_id AS last_message_sender_id, lm.created_at AS last_message_created_at,
          (SELECT count(*) FROM messages m
           WHERE m.conversation_id = c.id AND ${unreadMessagePredicate(viewerId)}
@@ -200,7 +206,8 @@ const detailSelect = (viewerId: string) => sql`
   LEFT JOIN LATERAL (
     -- 摘要不再跳过 MEDIA（#67 第四步）：否则发完图片会话行只剩「打个招呼吧」。
     -- 媒体正文不在消息流里，所以把 kind 一起带出来，由 toDetailRow 翻成可读文案。
-    SELECT m.type, m.content, m.sender_id, m.created_at, mm.kind::text AS media_kind
+    SELECT m.type, m.content, m.sender_id, m.created_at, m.recalled_at,
+           mm.kind::text AS media_kind
     FROM messages m
     LEFT JOIN message_media mm ON mm.message_id = m.id
     WHERE m.conversation_id = c.id

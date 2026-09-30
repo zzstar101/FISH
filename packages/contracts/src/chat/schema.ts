@@ -13,6 +13,25 @@ import {
 export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM'])
 export type MessageType = z.infer<typeof messageTypeSchema>
 
+/**
+ * 引用块（#359 3c）的服务端投射：前端拿它直接画「引用条 / 气泡内摘引」，
+ * 不需要再回查被引用消息。`excerpt` 由服务端按被引用行的类型合成（TEXT 原文截断、
+ * MEDIA `[媒体]`、LISTING `[商品]`、已撤回 `[消息已撤回]`），与会话行摘要同一套可读口径。
+ */
+export const messageReplySchema = z.object({
+  id: MessageIdSchema,
+  /** 被引用消息的发送者；SYSTEM 不可被引用，因此运行期恒非 null（仍按可空建模防御）。 */
+  senderId: UserIdSchema.nullable(),
+  excerpt: z.string().min(1).max(120, '引用摘要最多 120 个字符'),
+})
+export type MessageReply = z.infer<typeof messageReplySchema>
+
+/**
+ * 撤回窗口（#359 3c）：发出后 2 分钟内可撤回，与微信的产品惯例一致。
+ * 只约束用户消息（TEXT / LISTING / MEDIA）；SYSTEM 是服务端写入的交易事实，不可撤回。
+ */
+export const MESSAGE_RECALL_WINDOW_MS = 120_000
+
 /** #67 媒体消息不扩展旧 MessageDto，避免破坏现有文本/交易消息链路。 */
 export const mediaKindSchema = z.enum(['IMAGE', 'VOICE'])
 export const MEDIA_MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -50,6 +69,8 @@ export const imageMediaMessageInputSchema = z.strictObject({
   height: z.number().int().positive(),
   /** #67 发送幂等键；语义同 `messageSendInputSchema.clientRequestId`。 */
   clientRequestId: z.uuid().optional(),
+  /** 引用某条消息（#359 3c）：被引用行必须属于同一会话、可引用类型且未撤回。 */
+  replyToId: MessageIdSchema.optional(),
 })
 export type ImageMediaMessageInput = z.infer<typeof imageMediaMessageInputSchema>
 
@@ -61,6 +82,8 @@ export const voiceMediaMessageInputSchema = z.strictObject({
   durationMs: z.number().int().positive(),
   /** #67 发送幂等键；语义同 `messageSendInputSchema.clientRequestId`。 */
   clientRequestId: z.uuid().optional(),
+  /** 引用某条消息（#359 3c）；语义同图片。 */
+  replyToId: MessageIdSchema.optional(),
 })
 export type VoiceMediaMessageInput = z.infer<typeof voiceMediaMessageInputSchema>
 
@@ -70,18 +93,29 @@ export const mediaMessageInputSchema = z.discriminatedUnion('kind', [
 ])
 export type MediaMessageInput = z.infer<typeof mediaMessageInputSchema>
 
+/**
+ * 媒体消息 DTO。**不扩展** `MessageDto`（媒体正文不在消息流里，见文件顶部注释），
+ * 因此撤回/引用这两件事必须在两处各自表达：这里与 `messageDtoSchema`。
+ *
+ * 撤回后 `url` 为空串、`sizeBytes` 归零、尺寸/时长为 null —— 客户端按 `recalledAt`
+ * 渲染撤回碑，不下载、不播放（字节仍在存储里，审计与「对方可能已缓存」的事实不变）。
+ */
 export const mediaMessageDtoSchema = z.strictObject({
   id: MessageIdSchema,
   conversationId: ConversationIdSchema,
   senderId: UserIdSchema,
   kind: mediaKindSchema,
   mediaId: MediaIdSchema,
-  url: z.string().min(1),
-  mimeType: z.string().min(1),
-  sizeBytes: z.number().int().positive(),
+  url: z.string(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int().nonnegative(),
   width: z.number().int().positive().nullable(),
   height: z.number().int().positive().nullable(),
   durationMs: z.number().int().positive().nullable(),
+  /** 撤回时间（#359 3c）；未撤回为 null。 */
+  recalledAt: z.iso.datetime().nullable(),
+  /** 引用块投射（#359 3c）；无引用为 null。 */
+  replyTo: messageReplySchema.nullable(),
   createdAt: z.iso.datetime(),
 })
 export type MediaMessageDto = z.infer<typeof mediaMessageDtoSchema>
@@ -194,6 +228,13 @@ export const messageDtoSchema = z
     sender: conversationUserSchema.nullable(),
     type: messageTypeSchema,
     content: z.string(),
+    /**
+     * 撤回时间（#359 3c）；未撤回为 null。撤回后正文在 DB 保留（审计），但客户端
+     * 必须按「撤回碑」渲染，不得再展示 `content`。
+     */
+    recalledAt: z.iso.datetime().nullable(),
+    /** 引用块投射（#359 3c）；无引用为 null。被引用行已撤回时 excerpt 为 `[消息已撤回]`。 */
+    replyTo: messageReplySchema.nullable(),
     createdAt: z.iso.datetime(),
   })
   // DB 的 CHECK 只保证「TEXT ⟹ sender_id 非空」；这里同步收紧到联合完整性，
@@ -225,6 +266,8 @@ export const messageSendInputSchema = z.strictObject({
    * 新客户端必须始终携带。
    */
   clientRequestId: z.uuid().optional(),
+  /** 引用某条消息（#359 3c）：被引用行必须属于同一会话、可引用类型且未撤回。 */
+  replyToId: MessageIdSchema.optional(),
 })
 export type MessageSendInput = z.infer<typeof messageSendInputSchema>
 
@@ -330,6 +373,20 @@ export const realtimeServerEventSchema = z.discriminatedUnion('type', [
     /** 推进到的时刻（ISO，服务端权威）；`createdAt <= readAt` 的消息算已读。 */
     readAt: z.iso.datetime(),
   }),
+  /**
+   * 消息被撤回（#359 3c）：推给会话双方（同一人多连接/多设备也要同步）。
+   * 客户端按 `messageId` 把本地那条翻成「撤回碑」；离线端重连后由历史端点
+   * 的 `recalledAt` 兜底（与 message.new 的「不保证不重不漏」同一语义）。
+   */
+  z.object({
+    type: z.literal('message.recalled'),
+    conversationId: ConversationIdSchema,
+    messageId: MessageIdSchema,
+    /** 撤回时间（ISO，服务端权威）。 */
+    recalledAt: z.iso.datetime(),
+    /** 撤回者（即消息发送者本人；SYSTEM 不可撤回）。 */
+    recalledBy: UserIdSchema,
+  }),
   z.object({ type: z.literal('pong') }),
 ])
 export type RealtimeServerEvent = z.infer<typeof realtimeServerEventSchema>
@@ -362,5 +419,13 @@ export const ChatErrorCodeSchema = z.enum([
    * 服务端拒绝而不是静默返回旧消息，否则调用方会以为新内容已送达。
    */
   'IDEMPOTENCY_KEY_REUSED',
+  /** 404：消息不存在，或不在当前会话里（撤回/引用共用，不泄漏跨会话存在性）。 */
+  'MESSAGE_NOT_FOUND',
+  /** 422：被引用的消息不可用（类型不可引用——SYSTEM、已撤回）。 */
+  'MESSAGE_REPLY_INVALID',
+  /** 403：撤回者不是消息发送者本人（SYSTEM 不可撤回）。 */
+  'MESSAGE_RECALL_FORBIDDEN',
+  /** 409：超出撤回窗口（`MESSAGE_RECALL_WINDOW_MS`）。 */
+  'MESSAGE_RECALL_WINDOW_EXCEEDED',
 ])
 export type ChatErrorCode = z.infer<typeof ChatErrorCodeSchema>
