@@ -96,6 +96,13 @@ export class MemoryMessageStore implements MessageStore {
     return row
   }
 
+  /** 幂等键快速路径（只读）：与 SQL store 的 `findByRequestKey` 同语义。 */
+  async findByRequestKey(conversationId: string, senderId: string, key: MessageSendKey) {
+    const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
+    if (!existing) return null
+    return { row: existing.row, matchedHash: existing.requestHash === key.requestHash }
+  }
+
   async findReplyTargets(ids: string[]) {
     const map = new Map<string, ReplyTargetRow>()
     for (const row of this.messages) {

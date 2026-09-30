@@ -521,27 +521,33 @@ export default function Conversation() {
    * 也会推 `message.recalled`，但实时客户端还没接（在未合入的 #213→#220 链上），
    * 所以这里以 HTTP 204 为准落地，保证「点了就变」。
    *
-   * 过 epoch 守卫：A 的撤回可能在换到 B 之后才 resolve，那时不能去改 B 的消息流。
+   * ⚠️ 这里**不设 epoch 守卫**（与 `doSend` 不同）。撤回的在途期最长 15s，期间任何一次
+   * `load()` 都会 `epoch + 1`（从子页返回、或上一次发送落定后的补刷新），若按 epoch 判过期：
+   * - 成功路径被跳过 → 服务端已撤回、屏幕上正文照旧（在途快照还会把它覆盖回来）；
+   * - `finally` 里的解锁被跳过 → `recallingId` 永久停在那个 id 上，此后每次撤回都撞
+   *   `if (recallingId) return`，**弹了菜单、点了撤回、什么也不发生**，只能退出页面重进。
+   *
+   * 不设守卫是安全的：`applyRecalled` 只按 id 改命中的那一条，换账号时 `messages` 已被
+   * 清空（改不到任何行），而消息 id 全局唯一、不可能落在新账号的会话里。
+   * 锁在 `finally` 里**无条件**释放 —— 单条在途由 `if (recallingId) return` 保证，
+   * 不会有第二次撤回并发进来抢这个槽位。
    */
   const doRecall = async (message: MessageDto) => {
     if (recallingId) return
-    const current = epoch.current
     setRecallingId(message.id)
     try {
       await recallMessage(conversationId, message.id)
-      if (current !== epoch.current) return
       setMessages((prev) => applyRecalled(prev, message.id, new Date().toISOString()))
       // 撤回的正是正在引用的那条：引用栏里的摘引已经失效，收起它
       setReplyTarget((prev) => (prev?.id === message.id ? null : prev))
     } catch (error) {
-      if (current !== epoch.current) return
       console.warn('[miniapp] 撤回消息失败', error)
       void Taro.showToast({
         title: recallFailureText(isApiError(error) ? error.code : undefined),
         icon: 'none',
       })
     } finally {
-      if (current === epoch.current) setRecallingId(null)
+      setRecallingId(null)
     }
   }
 

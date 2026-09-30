@@ -23,6 +23,7 @@ import {
   applyReadEventToCache,
   flattenMessagePages,
   insertMessageIntoCache,
+  invalidateConversationDetail,
   invalidateConversationSurfaces,
   isMessageRead,
   mergeMessagesIntoCache,
@@ -125,6 +126,17 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       }
       if (event.type === 'conversation.read') {
         applyReadEventToCache(queryClient, ownerId, event)
+        invalidateConversationSurfaces(queryClient, ownerId)
+        return
+      }
+      /*
+        撤回（#359 3c）：**必须重取历史**。服务端撤回后不再下发正文，但本页缓存里那条仍是
+        撤回前的快照，而 `message.recalled` 只带 messageId 与 recalledAt —— 光靠它无法把
+        气泡翻成撤回碑（气泡渲染读的是缓存里的 DTO）。重取一次历史/详情即可拿到
+        `recalledAt`，气泡随之变成撤回碑。
+      */
+      if (event.type === 'message.recalled' && event.conversationId === conversationId) {
+        invalidateConversationDetail(queryClient, ownerId, conversationId)
         invalidateConversationSurfaces(queryClient, ownerId)
       }
     },

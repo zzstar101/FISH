@@ -74,6 +74,21 @@ export interface MessageStore {
    */
   findReplyTargets(ids: string[]): Promise<Map<string, ReplyTargetRow>>
   /**
+   * 幂等键查询（**只读、不在事务内**）：命中时返回既有行与指纹是否一致。
+   *
+   * service 在**引用目标校验之前**调它，让「第一次已落库、响应丢了」的重试直接重放既有行
+   * —— 否则那条重试会因为「被引用消息此刻已撤回」撞 422，而消息其实早就发出去了
+   * （媒体域 `media-store.ts` 的 `findByRequestKey` 是同一套快速路径）。
+   *
+   * 这只是**快速路径**，不是去重的权威判据：真正的串行化仍由 `insertText` 事务内的
+   * advisory lock + 查重承担（本查询命中不了未提交的并发行）。
+   */
+  findByRequestKey(
+    conversationId: string,
+    senderId: string,
+    key: MessageSendKey,
+  ): Promise<{ row: MessageRow; matchedHash: boolean } | null>
+  /**
    * 撤回（#359 3c）：把 `recalled_at` 从 NULL 单调推进为 now，返回撤回后的行。
    *
    * 返回 `'not-found'`：消息不在本会话；`'forbidden'`：不是发送者（含 SYSTEM，
@@ -241,6 +256,22 @@ export function createSqlMessageStore(db: Db): MessageStore {
         if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
         return toRow(row)
       })
+    },
+
+    async findByRequestKey(conversationId, senderId, key) {
+      const result = await db.execute(sql`
+        SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
+               m.reply_to_id, m.recalled_at,
+               u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
+               (m.client_request_hash = ${key.requestHash}) AS hash_matches
+        FROM messages m
+        LEFT JOIN users u ON u.id = m.sender_id
+        WHERE m.conversation_id = ${conversationId}::uuid
+          AND m.sender_id = ${senderId}::uuid
+          AND m.client_request_id = ${key.clientRequestId}
+      `)
+      const row = rowsOf(result)[0]
+      return row ? { row: toRow(row), matchedHash: row.hash_matches === true } : null
     },
 
     async findReplyTargets(ids) {

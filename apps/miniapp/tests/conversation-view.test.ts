@@ -472,3 +472,39 @@ describe('recallFailureText —— 撤回失败的三档文案', () => {
     expect(recallFailureText(undefined)).toBe('撤回失败，请重试')
   })
 })
+
+/**
+ * `doRecall` 的 epoch 契约（#365 审查 P1）。
+ *
+ * 组件里的 `doRecall` 刻意**不设** epoch 守卫，原因写在 `index.tsx` 的注释里：撤回在途
+ * 最长 15s，期间任何一次 `load()` 都会 `epoch + 1`，按 epoch 判过期会让「撤回成功后本地
+ * 不落碑」+「`recallingId` 永久锁死」同时发生。页面组件没有渲染测试基建，所以把这条
+ * 不变式锚在 `applyRecalled` 上：它**只按 id 命中**，换账号后 `messages` 已清空，
+ * 陈旧响应改不到任何行 —— 这正是「不设守卫也安全」的依据。
+ */
+describe('applyRecalled 的跨账号安全性（doRecall 不设 epoch 守卫的依据）', () => {
+  const msg = (id: string, senderId: string): MessageDto => ({
+    id,
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId,
+    sender: { id: senderId, nickname: 'A', avatarUrl: null },
+    type: 'TEXT',
+    content: 'x',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+  })
+
+  test('id 不在流里时逐条原样返回（换账号后清空 → 陈旧撤回改不到新账号的消息）', () => {
+    const other = [msg('m-b', 'usr_b'), msg('m-c', 'usr_b')]
+    const out = applyRecalled(other, 'm-a', '2026-09-21T10:00:05.000Z')
+    expect(out).toEqual(other)
+  })
+
+  test('只改命中 id 的那一条，同会话其它消息（含同发送者）不动', () => {
+    const items = [msg('m-a', 'usr_a'), msg('m-b', 'usr_a')]
+    const out = applyRecalled(items, 'm-a', '2026-09-21T10:00:05.000Z')
+    expect(out[0]?.recalledAt).toBe('2026-09-21T10:00:05.000Z')
+    expect(out[1]).toEqual(items[1])
+  })
+})

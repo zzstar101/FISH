@@ -317,3 +317,61 @@ describe('message service: 撤回（#359 3c）', () => {
     expect(events[0]?.recalledBy).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, buyer))
   })
 })
+
+describe('message service: 幂等重放先于引用校验（#365 审查）', () => {
+  const internalIdOf = (publicId: string): string =>
+    decodePublicId(PUBLIC_ID_PREFIX.message, publicId)
+
+  test('重试时被引用那条已撤回：重放既有消息，而不是 422', async () => {
+    const store = new MemoryMessageStore()
+    const target = await store.insertText(conversationA, seller, '在的')
+    const service = createMessageService({ store })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000fa'
+    const first = await service.sendTextMessage(buyer, conversationA, {
+      content: '收到',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+      clientRequestId,
+    })
+    // 重试之前被引用那条被撤回了：消息其实早就发出去了，重试必须重放它。
+    target.recalled_at = new Date('2026-09-12T10:00:09.000000Z')
+    const retry = await service.sendTextMessage(buyer, conversationA, {
+      content: '收到',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(store.messages).toHaveLength(2)
+    // 摘引取自那条既有行的 reply_to_id，此刻已被撤回 → 与历史同口径
+    expect(retry.replyTo?.excerpt).toBe('[消息已撤回]')
+  })
+
+  test('重放仍守 409：同键不同内容不会被快速路径放行', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000fb'
+    await service.sendTextMessage(buyer, conversationA, { content: 'A', clientRequestId })
+    expect(
+      service.sendTextMessage(buyer, conversationA, { content: 'B', clientRequestId }),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' })
+  })
+
+  test('重放不带引用：既有行没有引用就不给投射（不按本次请求凭空补一条）', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store })
+    const target = await store.insertText(conversationA, seller, '在的')
+    const clientRequestId = '01990000-0000-7000-8000-0000000000fc'
+    const first = await service.sendTextMessage(buyer, conversationA, {
+      content: '收到',
+      clientRequestId,
+    })
+    // 用同一个键 + 同一正文，但改成带引用重试 —— 指纹不含引用，判为同一次请求
+    const retry = await service.sendTextMessage(buyer, conversationA, {
+      content: '收到',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(retry.replyTo).toBeNull()
+    expect(internalIdOf(retry.id)).toBe(internalIdOf(first.id))
+  })
+})

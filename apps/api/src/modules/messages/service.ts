@@ -215,12 +215,31 @@ export function createMessageService({
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
       const content = input.content.trim()
-      // 引用目标先校验（#359 3c）：不可用直接 422，不落库。
-      const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
       // #67 幂等键：指纹取 trim 后的正文（与落库的 content 同一值）；未携带键时为 null。
       // 引用不进指纹：同一正文 + 同一 clientRequestId 换引用目标是同一个发送请求的重试，
       // 重放既有行（含它当时的引用）才是「重试」的正确语义。
       const key = messageSendKey(input.clientRequestId, textRequestHash(content))
+      // 重试快速路径（与媒体域同一取舍）：命中幂等键就**直接重放既有行**，先于引用目标校验。
+      // 否则「第一次其实已落库、响应丢了」的重试会因为被引用那条此刻已撤回而撞 422
+      // （消息早发出去了，客户端却以为没发成）。权威去重仍在 insertText 的事务里。
+      if (key) {
+        const replay = await store.findByRequestKey(conversationId, userId, key)
+        if (replay) {
+          if (!replay.matchedHash) throw idempotencyConflict()
+          const dto = await withReply(
+            store,
+            toMessageDto(replay.row),
+            replay.row.reply_to_id ?? null,
+          )
+          onMessageCreated?.(
+            { buyerId: conversation.buyerId, sellerId: conversation.sellerId },
+            dto,
+          )
+          return dto
+        }
+      }
+      // 引用目标先校验（#359 3c）：不可用直接 422，不落库。
+      const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
       let row: MessageRow
       try {
         row = await store.insertText(conversationId, userId, content, key, replyToId)
@@ -236,7 +255,10 @@ export function createMessageService({
         if (isForeignKeyViolation(error)) throw notFound()
         throw error
       }
-      const dto = await withReply(store, toMessageDto(row), replyToId)
+      // 投射按**行里的** `reply_to_id` 取（而不是本次请求的 `replyToId`）：并发下这里的
+      // `insertText` 可能命中幂等键、返回的是既有行，行里记的才是权威的引用目标
+      // （与媒体域 `media-service.ts` 的重放路径同口径）。新插入时两者本就相同。
+      const dto = await withReply(store, toMessageDto(row), row.reply_to_id ?? null)
       // 先落库（上面已 await）再推送；推送失败由 hub 吞掉，不影响 201 响应。
       // 重试命中既有消息时也会推一次：契约明确「推送不保证不重不漏」，客户端按服务端
       // id 去重（#67 第三步），这里不为去重再引入「新建/重放」的返回值分叉。
