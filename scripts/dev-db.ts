@@ -43,12 +43,12 @@ function parseCli(argv: string[]): Cli {
   let dbNameOverride: string | null = null
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]
+    const arg = argv[i] ?? ''
     const takeValue = (name: string): string => {
       if (arg === name) {
         i++
         if (i >= argv.length) fail(`缺少 ${name} 的参数值`)
-        return argv[i]
+        return argv[i] ?? ''
       }
       if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1)
       return ''
@@ -105,8 +105,17 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`
 }
 
+/** 管理连接 URL 的解析出口：非法 URL 走统一的 fail()，不把原始 TypeError 堆栈甩给用户。 */
+function parseAdminUrl(adminUrl: string): URL {
+  try {
+    return new URL(adminUrl)
+  } catch {
+    return fail(`管理连接 URL 无法解析：${adminUrl}`)
+  }
+}
+
 function devDbUrl(adminUrl: string, dbName: string): string {
-  const url = new URL(adminUrl)
+  const url = parseAdminUrl(adminUrl)
   url.pathname = `/${dbName}`
   url.hash = ''
   return url.toString()
@@ -134,11 +143,28 @@ async function connectAdmin(adminUrl: string): Promise<SQL> {
   }
 }
 
-/** 把底层连接/查询错误折叠成一行可读信息（含 PG error code，如 42P04）。 */
+/**
+ * 把底层连接/查询错误折叠成一行可读信息。
+ *
+ * 取 PG 的 SQLSTATE（如 42P04）要读 `errno`：Bun 的 SQL 错误把服务端 SQLSTATE 放在
+ * `errno`，而 `code` 恒为 `ERR_POSTGRES_SERVER_ERROR`（实测），照 `code` 取会丢掉真正的码。
+ */
 function pgMessage(err: unknown): string {
-  const code = (err as { code?: string } | null)?.code
+  const shaped = err as { errno?: string; code?: string } | null
+  const code = shaped?.errno ?? shaped?.code
   const msg = err instanceof Error ? err.message : String(err)
   return code ? `[${code}] ${msg}` : msg
+}
+
+/**
+ * 按库名派生一个稳定的 64 位 advisory lock key（取 sha256 前 60 位，恒为正）。
+ *
+ * 同一 worktree 并发 `up` 时用它把「建库 + 迁移」整段串行化：只处理建库竞态是不够的，
+ * 输家紧接着还会和赢家同时跑 `drizzle-kit migrate`，撞在 `pg_namespace` 的唯一约束上。
+ */
+function advisoryLockKey(dbName: string): string {
+  const hex = new Bun.CryptoHasher('sha256').update(`dev-db:${dbName}`).digest('hex')
+  return BigInt(`0x${hex.slice(0, 15)}`).toString()
 }
 
 async function currentWorktree(): Promise<{ worktree: string; branch: string }> {
@@ -159,36 +185,54 @@ async function cmdUp(cli: Cli): Promise<void> {
   const devUrl = devDbUrl(cli.adminUrl, dbName)
 
   const sql = await connectAdmin(cli.adminUrl)
+  const lockKey = advisoryLockKey(dbName)
   try {
-    const rows = await sql`select 1 from pg_database where datname = ${dbName}`
-    if (rows.length > 0) {
-      console.log(`[dev-db] ${dbName} 已存在，跳过建库`)
-    } else {
-      const owner = new URL(cli.adminUrl).username.replace(/"/g, '""') || 'fish'
-      await sql.unsafe(`create database ${quoteIdent(dbName)} owner ${quoteIdent(owner)}`)
-      console.log(`[dev-db] 已创建 ${dbName}`)
-    }
-  } catch (err) {
-    // 并发 up 同一 worktree 的 TOCTOU 竞态：输家撞 42P04 duplicate_database，按已存在处理
-    if ((err as { code?: string } | null)?.code === '42P04') {
+    /*
+     * 同一 worktree 并发 `up` 时，赢家与输家会同时建库、同时迁移。这里用一把按库名的
+     * 会话级 advisory lock 把「建库 + 迁移」整段串行化：输家等赢家做完再进临界区，
+     * 此时库已存在、迁移也已完成（drizzle migrate 幂等），直接放行。
+     * 只兜住建库那一步是不够的 —— 实测输家随后会在 `drizzle-kit migrate` 上撞
+     * `pg_namespace_nspname_index`。
+     */
+    await sql`select pg_advisory_lock(${lockKey}::bigint)`
+    try {
+      const rows = await sql`select 1 from pg_database where datname = ${dbName}`
+      if (rows.length > 0) {
+        console.log(`[dev-db] ${dbName} 已存在，跳过建库`)
+      } else {
+        const owner = parseAdminUrl(cli.adminUrl).username.replace(/"/g, '""') || 'fish'
+        await sql.unsafe(`create database ${quoteIdent(dbName)} owner ${quoteIdent(owner)}`)
+        console.log(`[dev-db] 已创建 ${dbName}`)
+      }
+    } catch (err) {
+      /*
+       * 兜底：极端情况下仍可能撞上唯一约束（例如别的工具建了同名库）。
+       * PG 给的既可能是 42P04 duplicate_database，也可能是 23505 撞
+       * pg_database_datname_index（实测后者）。SQLSTATE 读 `errno`（见 pgMessage）。
+       */
+      const errno = (err as { errno?: string } | null)?.errno
+      const message = err instanceof Error ? err.message : String(err)
+      const alreadyExists =
+        errno === '42P04' || (errno === '23505' && message.includes('pg_database_datname_index'))
+      if (!alreadyExists) fail(`建库/查询失败：${pgMessage(err)}`)
       console.log(`[dev-db] ${dbName} 已存在（并发创建，按已存在处理），跳过建库`)
-    } else {
-      fail(`建库/查询失败：${pgMessage(err)}`)
     }
+
+    console.log(`[dev-db] 正在迁移 ${dbName}（bun run --filter '@fish/db' migrate）…`)
+    const proc = Bun.spawn(['bun', 'run', '--filter', '@fish/db', 'migrate'], {
+      cwd: worktree,
+      env: { ...process.env, DATABASE_URL: devUrl },
+      stdout: 'inherit',
+      stderr: 'inherit',
+    })
+    const code = await proc.exited
+    if (code !== 0) fail(`迁移失败（exit ${code}），库 ${dbName} 保留以便排查`)
+    console.log(`[dev-db] 完成。使用方式：export DATABASE_URL=${devUrl}`)
   } finally {
+    // 会话级 advisory lock 随连接关闭也会释放，这里显式解锁让锁的持有范围一目了然
+    await sql`select pg_advisory_unlock(${lockKey}::bigint)`.catch(() => undefined)
     await sql.end()
   }
-
-  console.log(`[dev-db] 正在迁移 ${dbName}（bun run --filter '@fish/db' migrate）…`)
-  const proc = Bun.spawn(['bun', 'run', '--filter', '@fish/db', 'migrate'], {
-    cwd: worktree,
-    env: { ...process.env, DATABASE_URL: devUrl },
-    stdout: 'inherit',
-    stderr: 'inherit',
-  })
-  const code = await proc.exited
-  if (code !== 0) fail(`迁移失败（exit ${code}），库 ${dbName} 保留以便排查`)
-  console.log(`[dev-db] 完成。使用方式：export DATABASE_URL=${devUrl}`)
 }
 
 async function cmdUrl(cli: Cli): Promise<void> {
@@ -237,8 +281,8 @@ async function cmdList(cli: Cli): Promise<void> {
   const sql = await connectAdmin(cli.adminUrl)
   let rows: { datname: string }[]
   try {
-    rows =
-      await sql`select datname from pg_database where datname like 'fish_dev_%' order by datname`
+    // 用正则而不是 LIKE：LIKE 里 `_` 是单字符通配，'fishXdevY_…' 也会被列进来
+    rows = await sql`select datname from pg_database where datname ~ '^fish_dev_' order by datname`
   } catch (err) {
     fail(`查询失败：${pgMessage(err)}`)
   } finally {

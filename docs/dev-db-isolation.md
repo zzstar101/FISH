@@ -47,6 +47,14 @@ bun run db:dev up --admin-url postgres://fish:fish@localhost:55432/postgres
 
 `up` 的迁移步骤会把 `DATABASE_URL` 指向新库再执行 `bun run --filter '@fish/db' migrate`；Bun 中进程环境变量优先于包脚本里的 `--env-file=../../.env`，因此不会回落到 `.env` 里的共享库。
 
+## 并发语义
+
+同一 worktree 并发 `up` 是安全的：脚本按库名取一把会话级 advisory lock，把「建库 + 迁移」整段串行化，后到者等前一个做完再进临界区，此时库已存在、迁移已完成（`drizzle-kit migrate` 幂等），直接放行输出 `DATABASE_URL`。
+
+只兜住建库那一步是不够的——实测两个 `up` 会同时进入迁移步骤并撞在 `pg_namespace` 的唯一约束上，所以锁覆盖的是整段而不只是 `create database`。
+
+**不同 worktree 之间不需要锁**：库名由 worktree 路径派生，互相不重叠，可以真正并行。
+
 ## 三条禁令
 
 1. **不得对共享 `fish` 库跑别的分支的 migration**——并行任务一律 `db:dev up` 各自的 `fish_dev_*`。
