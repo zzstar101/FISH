@@ -109,10 +109,16 @@ export type UploadedVoice = {
 /**
  * 选图。最多 `limit` 张。
  *
+ * `source` 决定相册还是相机（#359 3b 的「图片」/「拍照」两格）：`album` 只开相册，
+ * `camera` 只开相机。不传时两者都给（历史行为）。
+ *
  * **只有用户取消**才当「没选」返回空数组（否则每次取消都会弹一个吓人的错误）；
  * 权限被拒 / 相机异常 / 平台失败一律抛出可展示的错误，由页面提示并让用户重试。
  */
-export async function pickChatImages(limit: number): Promise<ChatImagePick> {
+export async function pickChatImages(
+  limit: number,
+  source: 'album' | 'camera' | 'both' = 'both',
+): Promise<ChatImagePick> {
   if (limit <= 0) return { images: [], rejected: null }
 
   let result: Taro.chooseMedia.SuccessCallbackResult
@@ -120,13 +126,15 @@ export async function pickChatImages(limit: number): Promise<ChatImagePick> {
     result = await Taro.chooseMedia({
       count: limit,
       mediaType: ['image'],
-      sourceType: ['album', 'camera'],
+      sourceType: source === 'both' ? ['album', 'camera'] : [source],
       // compressed：iOS 相册原图常是 HEIC，压缩后通常是 JPG，能直接过契约白名单
       sizeType: ['compressed'],
     })
   } catch (error) {
     if (isChooseMediaCancel(error)) return { images: [], rejected: null }
-    throw new Error('无法选择图片，请检查相册/相机权限后重试')
+    throw new Error(
+      source === 'camera' ? '无法拍照，请检查相机权限后重试' : '无法选择图片，请检查相册权限后重试',
+    )
   }
 
   const images: PickedChatImage[] = []

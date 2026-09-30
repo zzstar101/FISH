@@ -11,10 +11,14 @@ import {
   type ConversationListResponse,
   conversationDtoSchema,
   conversationListResponseSchema,
+  type ImageMediaMessageInput,
+  type MediaMessageDto,
   type MessageDto,
   type MessageListResponse,
+  mediaMessageDtoSchema,
   messageDtoSchema,
   messageListResponseSchema,
+  type VoiceMediaMessageInput,
 } from '@fish/contracts/chat/schema'
 import { NOTIFICATION_ROUTES } from '@fish/contracts/notifications/routes'
 import {
@@ -104,6 +108,35 @@ export async function sendMessage(conversationId: string, content: string): Prom
     body: { content },
   })
   return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 创建一条图片媒体消息（201，响应体 `MediaMessageDto`）。
+ *
+ * 媒体**刻意不并进 `MessageDto`**（契约文件顶部注释）：它是独立 DTO、独立端点、独立实时
+ * 事件。`clientRequestId` 是 #67 幂等键，语义同文本消息：新发送生成、重试沿用同一个。
+ */
+export async function createImageMessage(
+  conversationId: string,
+  input: Omit<ImageMediaMessageInput, 'kind'>,
+): Promise<MediaMessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.media(conversationId), {
+    method: 'POST',
+    body: { kind: 'IMAGE', ...input },
+  })
+  return mediaMessageDtoSchema.parse(payload)
+}
+
+/** 创建一条语音媒体消息（同 `createImageMessage`，`durationMs` 由服务端按字节重解析）。 */
+export async function createVoiceMessage(
+  conversationId: string,
+  input: Omit<VoiceMediaMessageInput, 'kind'>,
+): Promise<MediaMessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.media(conversationId), {
+    method: 'POST',
+    body: { kind: 'VOICE', ...input },
+  })
+  return mediaMessageDtoSchema.parse(payload)
 }
 
 /** 标记会话已读（把查看者的 last_read_at 推进到当前时刻） */
