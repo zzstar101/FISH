@@ -7,6 +7,7 @@ import { Link } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
+import { PriceText } from '../../components/price-text'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
@@ -157,9 +158,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
                   </div>
 
                   <div className="mt-4 flex items-center justify-between gap-4">
-                    <p className="font-bold text-xl text-danger">
-                      ¥{(item.priceCents / 100).toFixed(2)}
-                    </p>
+                    <MyListingPrice cents={item.priceCents} />
                     <div className="flex items-center gap-2">
                       {editEnabled ? (
                         <Button onClick={() => setEditing(item)} size="sm" variant="outline">
@@ -208,6 +207,11 @@ function MyListContent({ ownerId }: { ownerId: string }) {
       ) : null}
     </div>
   )
+}
+
+/** 我的发布卡片价格：复用全站 `PriceText`，0 元显示「免费送」而不是 `¥0.00`。 */
+export function MyListingPrice({ cents }: { cents: number }) {
+  return <PriceText cents={cents} className="font-bold text-xl" />
 }
 
 function listingStatusView(item: ListingCard): {
