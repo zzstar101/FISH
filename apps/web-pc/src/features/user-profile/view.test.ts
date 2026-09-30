@@ -12,6 +12,8 @@ describe('isUserNotFound', () => {
   test('is false for other failures, so they still render as load errors', () => {
     expect(isUserNotFound(new ApiError('INTERNAL_ERROR', 500, '服务异常'))).toBe(false)
     expect(isUserNotFound(new ApiError('UNAUTHENTICATED', 401, '未登录'))).toBe(false)
+    // 同一个错误码但状态不是 404：契约里 USER_NOT_FOUND 恒为 404，别处复用该码时不能误判。
+    expect(isUserNotFound(new ApiError('USER_NOT_FOUND', 500, '服务异常'))).toBe(false)
     expect(isUserNotFound(new Error('network down'))).toBe(false)
     expect(isUserNotFound(null)).toBe(false)
   })

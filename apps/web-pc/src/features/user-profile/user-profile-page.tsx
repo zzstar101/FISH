@@ -88,6 +88,9 @@ export function UserProfilePage({ userId }: { userId: string }) {
         {listings.isPending ? <LoadingState label="正在加载在售商品…" /> : null}
 
         {listings.isError ? (
+          // 防御性兜底：资料查询成功才发这条查询（见上方 `enabled`），所以正常情况下
+          // 同一个 userId 不会再 404。只有资料来自 30s 缓存、而用户在两次请求之间被删掉
+          // 时才会走到这里 —— 那时给「用户不存在」比「加载失败」准确。
           isUserNotFound(listings.error) ? (
             <EmptyState
               description="这位用户不存在，或者已不可见。"

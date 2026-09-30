@@ -5,9 +5,12 @@ import { ApiError } from '../../lib/api-client'
  * `404 USER_NOT_FOUND`。服务端**刻意**让「非法 id」与「用户不存在」返回同一个响应
  * （这条路径任何匿名请求都能稳定触发，区分两者等于给出一份用户 id 空间探针）。
  * 端上据此渲染「用户不存在」，而不是「TA 暂无在售商品」。
+ *
+ * 同时校验 `status === 404`：契约把 `USER_NOT_FOUND` 固定为 404，只比对 code 的话，
+ * 将来别处复用这个码会把非 404 也判成「用户不存在」。
  */
 export function isUserNotFound(error: unknown): boolean {
-  return error instanceof ApiError && error.code === 'USER_NOT_FOUND'
+  return error instanceof ApiError && error.status === 404 && error.code === 'USER_NOT_FOUND'
 }
 
 /**
