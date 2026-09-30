@@ -3,6 +3,7 @@ import { buildMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { ApiError } from '../../lib/api-client'
 import {
   classifyRedeemInput,
+  hasConfirmedOwnSide,
   meetupIssueFailure,
   meetupRedeemFailure,
   meetupStatusLabel,
@@ -98,5 +99,34 @@ describe('meetupStatusLabel', () => {
     expect(meetupStatusLabel('NONE')).toBe('尚未取码')
     expect(meetupStatusLabel('ISSUED')).toBe('已出示，等待对方核销')
     expect(meetupStatusLabel('CONSUMED')).toBe('已核销')
+  })
+})
+
+describe('hasConfirmedOwnSide', () => {
+  test('reads only the viewer own column', () => {
+    expect(
+      hasConfirmedOwnSide({
+        role: 'buyer',
+        buyerConfirmedAt: '2026-01-02T00:00:00.000Z',
+        sellerConfirmedAt: null,
+      }),
+    ).toBe(true)
+    expect(
+      hasConfirmedOwnSide({
+        role: 'buyer',
+        buyerConfirmedAt: null,
+        sellerConfirmedAt: '2026-01-02T00:00:00.000Z',
+      }),
+    ).toBe(false)
+    expect(
+      hasConfirmedOwnSide({
+        role: 'seller',
+        buyerConfirmedAt: null,
+        sellerConfirmedAt: '2026-01-02T00:00:00.000Z',
+      }),
+    ).toBe(true)
+    expect(
+      hasConfirmedOwnSide({ role: 'seller', buyerConfirmedAt: null, sellerConfirmedAt: null }),
+    ).toBe(false)
   })
 })

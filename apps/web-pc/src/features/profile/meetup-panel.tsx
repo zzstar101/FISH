@@ -61,6 +61,8 @@ export function MeetupPanelView({
 }: MeetupPanelViewProps) {
   const isSeller = role === 'seller'
   const busy = issuing || redeeming
+  // 凭证是一次性的且「已核销不复活」：消费之后再给出任何动作都只会撞 409/404
+  const consumed = status === 'CONSUMED'
 
   return (
     <Card className="gap-0 border border-line p-6">
@@ -75,8 +77,17 @@ export function MeetupPanelView({
             当面出示给买家：对方可扫二维码，或输入下面的 6 位码。交易码随本单长期有效，
             交易进入终态时自动失效。
           </p>
+          <p className="mt-2 rounded-xl bg-brand-soft px-3 py-2.5 text-brand text-xs leading-5">
+            出示交易码即视为你同意这次面交 —— 服务端会在对方核销成功时记下你这一侧的确认，
+            之后无需你再点一次「确认完成面交」。
+          </p>
 
-          {token === null ? (
+          {consumed ? (
+            // 凭证已一次性消费且「已核销不复活」（#176）：再给「出示交易码」只会撞 404
+            <p className="mt-5 rounded-xl bg-surface-2 px-4 py-3 text-ink-2 text-sm leading-5">
+              交易码已被对方核销，本单不需要再出示。
+            </p>
+          ) : token === null ? (
             <Button className="mt-5 w-full" disabled={busy} onClick={onTakeToken} type="button">
               {issuing ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -125,29 +136,35 @@ export function MeetupPanelView({
           <p className="mt-3 text-ink-3 text-sm leading-6">
             对方会当面出示 6 位交易码或二维码。输入交易码即可核销；扫码请用小程序。
           </p>
-          <div className="mt-5 space-y-3">
-            <Input
-              aria-label="交易码"
-              disabled={busy}
-              id="meetup-code"
-              onChange={(event) => onDraftChange(event.target.value)}
-              placeholder="6 位交易码，或粘贴对方转来的交易码链接"
-              value={draft}
-            />
-            <Button
-              className="w-full"
-              disabled={busy || draft.trim().length === 0}
-              onClick={onRedeem}
-              type="button"
-            >
-              {redeeming ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <QrCode className="size-4" />
-              )}
-              {redeeming ? '正在核销…' : '核销交易码'}
-            </Button>
-          </div>
+          {consumed ? (
+            <p className="mt-5 rounded-xl bg-surface-2 px-4 py-3 text-ink-2 text-sm leading-5">
+              交易码已核销，不能再重复核销。确认完成面交即可收尾。
+            </p>
+          ) : (
+            <div className="mt-5 space-y-3">
+              <Input
+                aria-label="交易码"
+                disabled={busy}
+                id="meetup-code"
+                onChange={(event) => onDraftChange(event.target.value)}
+                placeholder="6 位交易码，或粘贴对方转来的交易码链接"
+                value={draft}
+              />
+              <Button
+                className="w-full"
+                disabled={busy || draft.trim().length === 0}
+                onClick={onRedeem}
+                type="button"
+              >
+                {redeeming ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <QrCode className="size-4" />
+                )}
+                {redeeming ? '正在核销…' : '核销交易码'}
+              </Button>
+            </div>
+          )}
         </>
       )}
 
@@ -228,7 +245,7 @@ export function MeetupPanel({ ownerId, transaction, onStale }: MeetupPanelProps)
       setDraft('')
       setNotice({
         tone: 'success',
-        text: '交易码已核销。接下来请与对方各自点一次「确认完成面交」。',
+        text: '交易码已核销，卖家一侧的确认已随核销完成。你点一次「确认完成面交」即可完成这笔交易。',
       })
       await status.refetch()
     } catch (error) {

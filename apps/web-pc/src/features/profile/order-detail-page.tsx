@@ -20,6 +20,7 @@ import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
 import { useAuth } from '../auth/auth-provider'
 import { transactionActionError } from './api'
 import { MeetupPanel } from './meetup-panel'
+import { hasConfirmedOwnSide } from './meetup-view'
 import { orderStatusView } from './orders-page'
 import { useCancelTransaction, useConfirmTransaction, useOrder } from './queries'
 
@@ -218,14 +219,22 @@ function OrderDetailContent({
             </div>
             {detail.status === 'PENDING_MEETUP' ? (
               <div className="mt-5 space-y-3">
-                <Button
-                  className="w-full"
-                  disabled={pendingAction}
-                  onClick={() => void runAction('confirm')}
-                >
-                  <PackageCheck className="size-4" />
-                  {confirm.isPending ? '正在确认…' : '确认完成面交'}
-                </Button>
+                {hasConfirmedOwnSide(detail) ? (
+                  <p className="rounded-xl bg-success-soft px-4 py-3 text-sm text-success leading-5">
+                    {detail.role === 'seller'
+                      ? '你这一侧已确认（出示交易码即视为同意面交），等买家确认后交易完成。'
+                      : '你这一侧已确认，等卖家确认后交易完成。'}
+                  </p>
+                ) : (
+                  <Button
+                    className="w-full"
+                    disabled={pendingAction}
+                    onClick={() => void runAction('confirm')}
+                  >
+                    <PackageCheck className="size-4" />
+                    {confirm.isPending ? '正在确认…' : '确认完成面交'}
+                  </Button>
+                )}
                 <Button
                   className="w-full"
                   disabled={pendingAction}

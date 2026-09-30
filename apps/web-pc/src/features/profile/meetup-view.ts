@@ -6,7 +6,7 @@
  */
 
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
-import type { MeetupTokenStatus } from '@fish/contracts/transactions/schema'
+import type { MeetupTokenStatus, TransactionDto } from '@fish/contracts/transactions/schema'
 import { ApiError } from '../../lib/api-client'
 
 export const MEETUP_CODE_LENGTH = 6
@@ -115,4 +115,20 @@ const STATUS_LABEL: Record<MeetupTokenStatus, string> = {
 
 export function meetupStatusLabel(status: MeetupTokenStatus): string {
   return STATUS_LABEL[status]
+}
+
+/**
+ * 交易里「我这一侧」是否已经确认过面交。
+ *
+ * 卖家的确认**由核销本身盖上**：服务端在核销成功那一个事务里写 `seller_confirmed_at`
+ * —— 契约原话是「展示码即卖家对面交的同意」（`transactions/store.ts` 的 `consumeMeetup`
+ * 注释）。所以核销之后卖家不该再被要求点一次「确认完成面交」，那时剩下的只有买家那一侧；
+ * 反过来若买家先单侧确认过，核销就是第二侧确认事件，交易当场 COMPLETED。
+ */
+export function hasConfirmedOwnSide(
+  transaction: Pick<TransactionDto, 'role' | 'buyerConfirmedAt' | 'sellerConfirmedAt'>,
+): boolean {
+  return transaction.role === 'buyer'
+    ? transaction.buyerConfirmedAt !== null
+    : transaction.sellerConfirmedAt !== null
 }

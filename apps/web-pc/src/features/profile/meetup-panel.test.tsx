@@ -60,22 +60,41 @@ test('an empty draft cannot be redeemed', () => {
   expect(view({ role: 'buyer', draft: '123456' })).not.toContain('disabled=""')
 })
 
-test('a consumed credential is reported as consumed', () => {
-  const html = view({
+test('a consumed credential offers no action on either side', () => {
+  // 凭证一次性且「已核销不复活」：再给动作只会撞 404 / 409
+  const buyerHtml = view({
     role: 'buyer',
     status: 'CONSUMED',
     consumedAt: '2026-01-02T00:00:00.000Z',
   })
-  expect(html).toContain('已核销')
-  expect(html).toContain('核销')
+  expect(buyerHtml).toContain('凭证状态：已核销')
+  expect(buyerHtml).not.toContain('aria-label="交易码"')
+  expect(buyerHtml).not.toContain('核销交易码')
+
+  const sellerHtml = view({ status: 'CONSUMED', token: TOKEN })
+  expect(sellerHtml).toContain('本单不需要再出示')
+  expect(sellerHtml).not.toContain('>出示交易码<')
+  expect(sellerHtml).not.toContain('重新取码（码不变）')
+  // 已核销的码不再回显，免得被当成还能用的凭证
+  expect(sellerHtml).not.toContain('123456')
 })
 
-test('the success notice hands the next step back to the confirm button', () => {
+test('the success notice asks only the redeemer to confirm, not both sides', () => {
+  // 卖家那一侧的确认由核销本身盖上（展示码即同意），所以文案不能再要求「双方各自确认」
   const html = view({
     role: 'buyer',
-    notice: { tone: 'success', text: '交易码已核销。接下来请与对方各自点一次「确认完成面交」。' },
+    notice: {
+      tone: 'success',
+      text: '交易码已核销，卖家一侧的确认已随核销完成。你点一次「确认完成面交」即可完成这笔交易。',
+    },
   })
   expect(html).toContain('确认完成面交')
+  expect(html).not.toContain('各自点一次')
+})
+
+test('the issuer is told that showing the code counts as their agreement', () => {
+  const html = view({ status: 'NONE' })
+  expect(html).toContain('出示交易码即视为你同意这次面交')
 })
 
 test('a locked-out code reports its own message rather than a generic failure', () => {
