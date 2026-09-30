@@ -23,6 +23,7 @@ import {
   isLatestPageLoad,
   listingStatusText,
   mergeRefreshedMessages,
+  messageReadLabel,
   type PendingMessage,
   parseTxEvent,
   resetDeferredReload,
@@ -47,8 +48,12 @@ import './index.scss'
  * 3. 发送是**真实落库**：本地乐观气泡在成功后被服务端返回的那条替换（按 id 去重，
  *    实时推送送来的同一条不会重复），失败留在原地给重试 —— 不再有「假装成功」的态；
  * 4. 删除契约里不存在的展示件：认证徽章（`conversationUserSchema` 无 `authStatus`）、
- *    每条消息的「已读」标记（实时契约没有已读回执，见 #149）、`tx.completed` 评价卡
- *    （交易域没有这个事件）、以及媒体消息与上传/播放的本地模拟（#67 的范围）。
+ *    `tx.completed` 评价卡（交易域没有这个事件）、以及媒体消息与上传/播放的本地模拟
+ *    （#67 的范围）。其中「每条消息的已读标记」当年是照 #149 未合入删掉的（理由已过期），
+ *    #359 四 用契约的 `counterpartLastReadAt` 把它接回来 —— 判据见 `./view` 的
+ *    `messageReadLabel`，只标我发出的气泡，实时更新靠 `conversation.read`（小程序实时
+ *    客户端仍在 #213→#220 链上，未合入；本轮由重进页面 / 从子页返回 / 发送落定后的
+ *    静默补刷带回最新读位）。
  *
  * 页头商品卡的状态、SYSTEM 事件的中文化、时间文案都走 `./view` 的纯函数（有用例）。
  *
@@ -725,6 +730,15 @@ export default function Conversation() {
                 if (message.type === 'SYSTEM') return renderSystem(message)
 
                 const mine = message.senderId === me?.id
+                /**
+                 * 逐条读位（#359 四）：只对我发出的消息判，对方发来的为 null 不渲染。
+                 * 读位来自详情的 `counterpartLastReadAt`，所以它随 `load` 一起刷新。
+                 */
+                const readLabel = messageReadLabel({
+                  mine,
+                  createdAt: message.createdAt,
+                  counterpartLastReadAt: conversation.counterpartLastReadAt,
+                })
                 return (
                   <View
                     key={message.id}
@@ -736,7 +750,14 @@ export default function Conversation() {
                       <View className={`conv__bubble${mine ? ' is-mine' : ''}`}>
                         <Text className="conv__bubble-tx">{message.content}</Text>
                       </View>
-                      <Text className="conv__time num">{clockTime(message.createdAt)}</Text>
+                      <Text className="conv__time num">
+                        {clockTime(message.createdAt)}
+                        {readLabel ? (
+                          <Text className={`conv__rd${readLabel === '未读' ? ' is-unread' : ''}`}>
+                            {` · ${readLabel}`}
+                          </Text>
+                        ) : null}
+                      </Text>
                     </View>
                   </View>
                 )

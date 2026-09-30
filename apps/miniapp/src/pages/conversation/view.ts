@@ -56,6 +56,37 @@ export function listingStatusText(status: string | undefined): string {
 }
 
 /**
+ * 逐条「已读 / 未读」的读位判据（#359 四、已读状态）。
+ *
+ * 契约只给**对方那一侧**的读位（`ConversationDto.counterpartLastReadAt`）：
+ * `message.createdAt <= counterpartLastReadAt` 即对方已读到该条。所以这个标签只对
+ * **我发出的消息**有意义 —— 对方发来的消息标的是「我」的读位，契约里没有这个字段，
+ * 而且我正在看它。Owner 拍板：只标我发出的气泡（而不是只标最后一条）。
+ *
+ * 「标不出来」一律算 `未读`：对方从未读过（null）、或时间戳解析不了。把没把握的读回执
+ * 说成「已读」是在骗用户，宁可多显示一次红字 —— 读位只前进，下一次刷新（进页 /
+ * 从子页返回 / 发送落定后的静默补刷）就会修正。
+ *
+ * 与 web-pc 的 `isMessageRead`（`apps/web-pc/src/features/chat/queries.ts`）同口径，
+ * 那边也是「判不出来 → 未读」。
+ */
+export type MessageReadLabel = '已读' | '未读'
+
+export function messageReadLabel(input: {
+  /** 这条是不是我发的；不是我的消息返回 null（不渲染标签） */
+  mine: boolean
+  createdAt: string
+  counterpartLastReadAt: string | null
+}): MessageReadLabel | null {
+  if (!input.mine) return null
+  if (input.counterpartLastReadAt === null) return '未读'
+  const readAt = Date.parse(input.counterpartLastReadAt)
+  const sentAt = Date.parse(input.createdAt)
+  if (Number.isNaN(readAt) || Number.isNaN(sentAt)) return '未读'
+  return sentAt <= readAt ? '已读' : '未读'
+}
+
+/**
  * 本地乐观消息（正在发送 / 发送失败）。
  *
  * 契约里没有「发送中」，这是纯客户端的临时状态：成功后被服务端返回的那条替换掉

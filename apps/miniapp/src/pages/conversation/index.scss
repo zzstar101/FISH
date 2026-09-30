@@ -8,8 +8,9 @@
  * → 底部输入栏（语音切换 + 自动长高输入框 + 「+」+ 发送）→ 展开的面板。
  *
  * 与 1版稿的差异（#89 接真实接口时删掉的契约外展示件）：认证徽章（契约无
- * `authStatus`）、每条消息的「已读」标记（实时契约无已读回执）、`tx.completed`
- * 评价卡（交易域无该事件）。媒体气泡样式保留给 #67，见文件中部的标注。
+ * `authStatus`）、`tx.completed` 评价卡（交易域无该事件）。「每条消息的已读标记」
+ * 当年照 #149 未合入删掉，#359 四 已用 `counterpartLastReadAt` 接回（`.conv__rd`）。
+ * 媒体气泡样式保留给 #67，见文件中部的标注。
  * 尺寸口径见 1版稿（`D:\Downloads\1改\小程序1版conversation.html`）。
  *
  * 页面根节点是 100vh 的纵向 flex：页头固定、消息区滚动、输入栏吸底。
@@ -410,8 +411,13 @@
 }
 
 .conv__rd {
-  color: var(--brand-deep);
+  color: var(--ink);
   font-weight: 600;
+}
+
+/* 未读红、已读黑（#359 四）：只挂在我发出的气泡的时间后面，判据见 view.ts 的 messageReadLabel */
+.conv__rd.is-unread {
+  color: var(--danger);
 }
 
 /* 失败重试胶囊：高 24pt，与媒体的上传失败共用 */
