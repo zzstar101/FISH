@@ -624,10 +624,15 @@ export default function Conversation() {
    * LISTING 消息（#359）：服务端富化的商品卡（缩略图 + 标题 + 价格），点击进商品详情。
    * `listing` 投射为 null（商品被并发删除的脏数据）时退化成灰气泡占位，不给点击——
    * 与「正文是引用不是文本」的语义一致，宁可少一个可点目标也不画一张空卡。
+   *
+   * 已下架的卡也不给点击入口（#359 3a 审查回合）：详情对「非卖家的 OFFLINE / 未过审」
+   * 一律 404（`listings/service.ts` 的 `loadDetail`），可点等于给一个必败入口；自己发的
+   * （我是卖家）仍然可看。读侧不对 LISTING 做可见性过滤，所以这种卡会长期留在历史里。
    */
   const renderListing = (message: MessageDto) => {
     const mine = message.senderId === me?.id
     const card = message.listing
+    const canOpen = card !== null && card !== undefined && (mine || card.status !== 'OFFLINE')
     return (
       <View
         key={message.id}
@@ -639,8 +644,10 @@ export default function Conversation() {
           {card ? (
             <View
               className="conv__lcard"
-              onClick={() =>
-                void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${card.id}` })
+              onClick={
+                canOpen
+                  ? () => void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${card.id}` })
+                  : undefined
               }
             >
               <View className="conv__lcard-thumb">

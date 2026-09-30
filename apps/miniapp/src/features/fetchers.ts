@@ -511,6 +511,8 @@ export async function loadMessagePage(
 export type LoadedListingCandidates = {
   items: MockListing[]
   failed: boolean
+  /** 服务端还有下一页：本页不做无限滚动，只用来如实提示「只展示了前 N 件」 */
+  hasMore: boolean
 }
 
 async function loadListingCandidates(
@@ -520,23 +522,34 @@ async function loadListingCandidates(
   try {
     const page = await fetchPublicUserListings(userId)
     // 404（用户不存在）按失败处理：会话对方的用户必然存在，走到这里只可能是环境/网络问题。
-    if (page === null) return { items: [], failed: true }
-    return { items: toMockListings(page.items), failed: false }
+    if (page === null) return { items: [], failed: true, hasMore: false }
+    return { items: toMockListings(page.items), failed: false, hasMore: page.nextCursor !== null }
   } catch (error) {
     reportFailure('发送商品选择页', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)
-    if (!MOCK_FALLBACK_ENABLED || !DEMO_AUTH_ENABLED) return { items: [], failed: true }
-    return { items: await demoFallback(), failed: false }
+    if (!MOCK_FALLBACK_ENABLED || !DEMO_AUTH_ENABLED) {
+      return { items: [], failed: true, hasMore: false }
+    }
+    // 回退是整份 fixture，没有「下一页」这回事。
+    return { items: await demoFallback(), failed: false, hasMore: false }
   }
 }
 
 /**
  * 「TA的宝贝」tab：对方卖家的在售商品（与 他人主页/发送页 同一公开读端点）。
- * 演示回退用 fixture 的同 id 空间查询（mock 会话的 counterpart id 就是 fixture 的用户 id）。
+ *
+ * 演示回退必须先把**公开 id 反查回 fixture 键**：会话里的 `counterpart.id` 是
+ * `mockPublicId('usr', …)` 生成的 `usr_…`，而 fixture 的 `sellerId` 是原始键（`u-…`），
+ * 直接按公开 id 过滤恒为空 —— 表现是「TA 暂无在售商品」的假空态，而初始 tab 恰好是这一侧
+ * （买家进页面默认看对方）。`mock/users.ts` 的 `getUser` 是同一套反查。
  */
 export function loadCounterpartListings(userId: string): Promise<LoadedListingCandidates> {
   return loadListingCandidates(userId, async () => {
-    const { fetchUserListings } = await import('@/mock/api')
-    return fetchUserListings(userId)
+    const { userListings } = await import('@/mock/api')
+    const { USERS } = await import('@/mock/users')
+    const { mockPublicId } = await import('@/mock/public-id')
+    const raw = USERS.find((user) => mockPublicId('usr', user.id) === userId)
+    // 与真实端点同口径：只给在售。
+    return raw ? userListings(raw.id).filter((item) => item.status === 'ACTIVE') : []
   })
 }
 

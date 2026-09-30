@@ -1,7 +1,7 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
 import { Image, Input, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useRouter } from '@tarojs/taro'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import LoadError from '@/components/load-error'
@@ -17,6 +17,8 @@ import {
 } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { isApiError } from '@/lib/request'
+import { randomUuidV4 } from '@/lib/uuid'
+import { sendFailureText, sendKeyFor, shouldDropSendKey } from './view'
 import './index.scss'
 
 type TabKey = 'mine' | 'theirs'
@@ -30,7 +32,9 @@ type TabKey = 'mine' | 'theirs'
  * - 初始 tab 按 `ConversationDto.role`：我是买家 → 「TA的宝贝」（对面卖家在售）；
  *   我是卖家 → 「我的宝贝」（我在售）；
  * - 点「发送」→ `POST /conversations/:id/messages`（type=LISTING）成功后返回会话页，
- *   新卡片由会话页的 didShow 重拉带入；商品已下架/已售 → 404，行内 toast 说明。
+ *   新卡片由会话页的 didShow 重拉带入；商品已下架/已售 → 404，行内 toast 说明；
+ * - 每次发送带 `clientRequestId`（#359 3a 审查回合）：同一件商品的重试复用同一个键，
+ *   服务端据此重放既有那条而不是落第二条（`./view` 的 `sendKeyFor`）。
  */
 export default function SendListing() {
   const authStatus = useAuthGuard()
@@ -51,6 +55,13 @@ export default function SendListing() {
   const [query, setQuery] = useState('')
   /** 在途发送的商品 id：一行一个在飞锁，防止连点重复发送 */
   const [sendingId, setSendingId] = useState<string | null>(null)
+  /**
+   * 每件商品这一次发送的幂等键（发出时生成、失败保持、成功丢弃）。
+   *
+   * 放 ref 不放 state：它不参与渲染，且必须在同一次点击与随后重试之间**稳定**
+   * （`setState` 在闭包里读到的是旧值）。
+   */
+  const sendKeysRef = useRef(new Map<string, string>())
 
   const load = useCallback(() => {
     if (!conversationId) {
@@ -108,20 +119,22 @@ export default function SendListing() {
 
   const handleSend = (listingId: string) => {
     if (sendingId || !conversationId) return
+    const key = sendKeyFor(sendKeysRef.current, listingId, randomUuidV4)
     setSendingId(listingId)
-    void sendListingMessage(conversationId, listingId)
+    void sendListingMessage(conversationId, listingId, key)
       .then(() => {
-        void Taro.navigateBack()
+        // 成功才丢弃键：这条发送已经落定，下一次点击是另一次新发送。
+        sendKeysRef.current.delete(listingId)
+        // 回会话页；本页被深链/预览直接打开时栈里没有上一页，回消息列表而不是卡住。
+        const pages = Taro.getCurrentPages()
+        if (pages.length > 1) void Taro.navigateBack()
+        else void Taro.switchTab({ url: '/pages/chat/index' })
       })
       .catch((error) => {
-        // 404 LISTING_NOT_FOUND：列表拉到之后商品刚好被卖掉/下架（或会话已失效）。
-        void Taro.showToast({
-          title:
-            isApiError(error) && error.code === 'LISTING_NOT_FOUND'
-              ? '商品已下架或已售出'
-              : '发送失败，请重试',
-          icon: 'none',
-        })
+        const code = isApiError(error) ? error.code : null
+        // 同键换了内容（服务端指纹不一致）→ 作废旧键，否则下一次点击还会撞 409。
+        if (shouldDropSendKey(code)) sendKeysRef.current.delete(listingId)
+        void Taro.showToast({ title: sendFailureText(code), icon: 'none' })
       })
       .finally(() => {
         setSendingId(null)
@@ -205,23 +218,34 @@ export default function SendListing() {
             <Text className="sl__center-tx">没有匹配「{query.trim()}」的商品</Text>
           </View>
         ) : (
-          visible.map((item) => (
-            <View key={item.id} className="sl__row">
-              <Image className="sl__row-cover" src={item.coverUrl} mode="aspectFill" />
-              <View className="sl__row-main">
-                <Text className="sl__row-title">{item.title}</Text>
-                <Text className="sl__row-price num">
-                  {item.free ? '免费送' : `¥${formatAmount(item.priceCents)}`}
-                </Text>
+          <>
+            {visible.map((item) => (
+              <View key={item.id} className="sl__row">
+                <Image className="sl__row-cover" src={item.coverUrl} mode="aspectFill" />
+                <View className="sl__row-main">
+                  <Text className="sl__row-title">{item.title}</Text>
+                  <Text className="sl__row-price num">
+                    {item.free ? '免费送' : `¥${formatAmount(item.priceCents)}`}
+                  </Text>
+                </View>
+                <View
+                  className={`sl__row-send${sendingId === item.id ? ' is-busy' : ''}`}
+                  onClick={() => handleSend(item.id)}
+                >
+                  <Text>{sendingId === item.id ? '发送中…' : '发送'}</Text>
+                </View>
               </View>
-              <View
-                className={`sl__row-send${sendingId === item.id ? ' is-busy' : ''}`}
-                onClick={() => handleSend(item.id)}
-              >
-                <Text>{sendingId === item.id ? '发送中…' : '发送'}</Text>
+            ))}
+            {/*
+              服务端还有下一页时如实说明：本页不做无限滚动（单侧在售量级小），
+              沉默地截断会让人以为「就这么多」——他人主页为同一件事抽了 list-end 文案。
+            */}
+            {side?.hasMore ? (
+              <View className="sl__center">
+                <Text className="sl__center-tx">{`只展示了前 ${items.length} 件在售商品`}</Text>
               </View>
-            </View>
-          ))
+            ) : null}
+          </>
         )}
       </ScrollView>
     </View>
