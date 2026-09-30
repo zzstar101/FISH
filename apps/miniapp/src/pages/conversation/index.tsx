@@ -302,13 +302,20 @@ export default function Conversation() {
    * （那是「用户真的看到了首屏」才该做的副作用）、不动消息流与游标。
    *
    * 页面不可见时不发请求（`visibleRef` 由 useDidShow / useDidHide 维护）。
+   *
+   * 落地时还要过**代次闸**（#359 四 审查回合二）：这条轮询同样可能在换账号 / 换会话 /
+   * 整页重拉的途中落地，而 `applyReadPoll` 取的是「更晚的那份」——上一代视角的读位一旦
+   * 写进去会被钉住，直到下一次整页重拉才自愈。判据与 `load` / `doSend` 同一道
+   * （`current !== epoch.current`）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null || !conversationId) return undefined
     const timer = setInterval(() => {
       if (!visibleRef.current) return
+      const current = epoch.current
       void loadConversation(conversationId).then((detail) => {
         if (!visibleRef.current || detail.status !== 'ok') return
+        if (current !== epoch.current) return
         setConversation((prev) => (prev === null ? prev : applyReadPoll(prev, detail.conversation)))
       })
     }, READ_POLL_MS)
