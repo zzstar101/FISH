@@ -523,6 +523,15 @@
   padding: 18px 24px;
 }
 
+/*
+  语音气泡里的失败角标（#364 审查）：图片那枚绝对定位贴在照片左上角，而语音气泡的
+  左上被播放钮占着（贴上去会盖住它），所以这里让它回到文档流、跟时长排在同一行。
+*/
+.conv__bubble--voice .conv__failmark {
+  position: static;
+  flex: 0 0 auto;
+}
+
 .conv__play {
   flex: 0 0 auto;
   width: 52px;

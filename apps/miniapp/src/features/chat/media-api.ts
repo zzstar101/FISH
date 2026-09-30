@@ -390,21 +390,54 @@ export type VoiceRecording = {
 }
 
 /**
+ * 录音机的最长时长：**比契约上限少 1 秒**（#364 审查）。
+ *
+ * 服务端是**严格大于**即拒（`media-service.ts`：`probed.durationMs > MEDIA_MAX_VOICE_DURATION_MS`），
+ * 而 WAV 的时长由服务端按 `data.size / byteRate` 算出来的是**精确值**：录音机在 60s
+ * 上限处收尾时多补一帧（`data` 块按帧对齐）就会算出 60004ms 之类，正好越过上限被拒。
+ * 留 1 秒余量，用户最多录 59 秒，不会出现「录满一分钟反而发不出去」。
+ */
+const VOICE_RECORD_MAX_MS = MEDIA_MAX_VOICE_DURATION_MS - 1000
+
+/**
  * 开始录音（按住说话）。
  *
  * `format: 'wav'`（#359 3b 定案）：微信只提供 mp3 / aac / wav / PCM，其中只有 wav 的
  * RIFF 容器在**真机与开发者工具**上都带 fmt.byteRate / data.size，服务端能精确解析时长；
  * aac 在 Android/开发者工具上落成裸 ADTS（无容器头），iOS 上落成 M4A——同一份代码两种
  * 产物，其中一种必然解析失败。真正的判定仍在 `uploadChatVoice` 里按字节做，这里不押注。
+ *
+ * `onError`：录音**进行中**失败（最常见的是麦克风权限被拒、设备被占用）时**立刻**上报
+ * （#364 审查）。`RecorderManager` 只有 `onError` 这一条失败通道，而它可能在用户**还没
+ * 松手**时就到 —— 不在这里上报的话，页面要等到 `stop()` 的 catch 才知道失败，期间按钮
+ * 还写着「松开 发送」，用户以为在录、其实什么都没录。
  */
-export function startVoiceRecording(): VoiceRecording {
+export function startVoiceRecording(onError?: (error: Error) => void): VoiceRecording {
   const manager = recorder()
+  /**
+   * `stop()` 已经调过：此后同一个错误会从 `done` 的 reject 走到 `stop()` 的 catch，
+   * 这里不再重复上报（否则用户一松手会被提示两次）。
+   */
+  let stopping = false
   const done = new Promise<RecordedVoice>((resolve, reject) => {
-    voiceHandlers = { resolve, reject }
+    voiceHandlers = {
+      resolve,
+      reject: (error) => {
+        reject(error)
+        if (!stopping) onError?.(error)
+      },
+    }
   })
+  /**
+   * 有 `onError` 时错误已经**带外**上报过了，而用户可能永远不松手（`stop()` 也就不会
+   * 被调用）—— 那条 `done` 的 rejection 就没人接，运行时会报「未处理的 Promise 拒绝」。
+   * 挂一个空 handler 收掉它；调用方仍然能从 `stop()` 拿到这个 rejection（多个 handler
+   * 互不影响），页面自己的提示照旧。
+   */
+  if (onError) void done.catch(() => undefined)
 
   manager.start({
-    duration: MEDIA_MAX_VOICE_DURATION_MS,
+    duration: VOICE_RECORD_MAX_MS,
     format: 'wav',
     sampleRate: 16_000,
     numberOfChannels: 1,
@@ -413,6 +446,7 @@ export function startVoiceRecording(): VoiceRecording {
 
   return {
     stop: () => {
+      stopping = true
       manager.stop()
       return done
     },
@@ -427,6 +461,19 @@ export function startVoiceRecording(): VoiceRecording {
   }
 }
 
+/**
+ * 麦克风权限被拒（与「录音失败，请重试」分开，见 `voiceError`）。
+ *
+ * 页面据此给「去设置」入口（`Taro.openSetting`，与扫码页的相机权限同一范式）：
+ * 权限没开时再点多少次「重试」都只会失败，只提示一句「录音失败」等于把用户困在原地。
+ */
+export class VoicePermissionError extends Error {
+  constructor() {
+    super('需要麦克风权限才能发语音')
+    this.name = 'VoicePermissionError'
+  }
+}
+
 /** 录音失败文案：权限被拒要给「去设置」，其它给可重试的提示。 */
 export function voiceError(error: unknown): Error {
   const message =
@@ -434,7 +481,7 @@ export function voiceError(error: unknown): Error {
       ? String((error as { errMsg?: unknown }).errMsg ?? '')
       : ''
   if (/auth|permission|scope/i.test(message)) {
-    return new Error('需要麦克风权限才能发语音')
+    return new VoicePermissionError()
   }
   return new Error('录音失败，请重试')
 }

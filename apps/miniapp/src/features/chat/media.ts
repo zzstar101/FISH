@@ -5,7 +5,11 @@
  * 平台层（选图、录音、直传、下载）在 `./media-api.ts`。
  */
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
-import type { MEDIA_IMAGE_MIME, MEDIA_VOICE_MIME } from '@fish/contracts/chat/schema'
+import {
+  type MEDIA_IMAGE_MIME,
+  MEDIA_MAX_IMAGE_BYTES,
+  type MEDIA_VOICE_MIME,
+} from '@fish/contracts/chat/schema'
 
 /** 契约白名单里的图片 mime（与会话媒体的 `MEDIA_IMAGE_MIME` 同源）。 */
 export type ChatImageMime = (typeof MEDIA_IMAGE_MIME)[number]
@@ -23,8 +27,12 @@ export const MEDIA_IMAGE_PICK_LIMIT = 9
 /**
  * 服务端 `stat.size` 只等于这里报出去的那个数，所以 `sizeBytes` 必须来自**读出来的字节长度**。
  * 这条注释是给未来改代码的人看的：不要换成 `chooseMedia` 的 `file.size`。
+ *
+ * 上限直接引用契约的 `MEDIA_MAX_IMAGE_BYTES`，不再自己写一遍 5MB 字面量（#364 审查）：
+ * 两边一旦漂移，用户会看到「本地预检通过、服务端 422」。语音侧同理，见 `./media-api`
+ * 直接引用 `MEDIA_MAX_VOICE_DURATION_MS`。
  */
-export const MEDIA_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+export const MEDIA_IMAGE_MAX_BYTES = MEDIA_MAX_IMAGE_BYTES
 
 /**
  * 从字节头判语音容器。

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test'
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
+import { MEDIA_MAX_VOICE_DURATION_MS } from '@fish/contracts/chat/schema'
 
 /**
  * 会话媒体平台层的在途闸（#67 复查 #222）。
@@ -34,6 +35,17 @@ let duringRead: (() => void) | null = null
 /** 「下载已经回来、还没来得及写缓存」时执行的钩子 */
 let duringDownload: (() => void) | null = null
 
+/**
+ * 录音机的回调与最近一次 `start` 的入参。
+ *
+ * 回调**不能**在 `beforeEach` 里清空：`media-api` 的 `RecorderManager` 是模块级单例、
+ * `onStop` / `onError` 只注册一次，清掉就再也接不上了。
+ */
+const recorderHooks: {
+  onError: ((error: { errMsg: string }) => void) | null
+} = { onError: null }
+let recorderStartOptions: { duration?: number } | null = null
+
 mock.module('@tarojs/taro', () => ({
   default: {
     getFileSystemManager: () => ({
@@ -41,6 +53,16 @@ mock.module('@tarojs/taro', () => ({
         option.success({ data: new Uint8Array([1, 2, 3, 4]).buffer })
         duringRead?.()
       },
+    }),
+    getRecorderManager: () => ({
+      onStop: () => undefined,
+      onError: (handler: (error: { errMsg: string }) => void) => {
+        recorderHooks.onError = handler
+      },
+      start: (options: { duration?: number }) => {
+        recorderStartOptions = options
+      },
+      stop: () => undefined,
     }),
     request: async (option: UploadCall) => {
       uploads.push({ url: option.url, method: option.method, header: option.header })
@@ -66,9 +88,15 @@ mock.module('@/lib/request', () => ({
 }))
 
 const { MediaAbortedError } = await import('../src/features/chat/media')
-const { cachedMediaPath, clearMediaCache, downloadChatMedia, uploadChatImage } = await import(
-  '../src/features/chat/media-api'
-)
+const {
+  cachedMediaPath,
+  clearMediaCache,
+  downloadChatMedia,
+  startVoiceRecording,
+  uploadChatImage,
+  VoicePermissionError,
+  voiceError,
+} = await import('../src/features/chat/media-api')
 
 const CONVERSATION = '01930000-0000-7000-8000-000000000041'
 const MEDIA = '01930000-0000-7000-8000-0000000000a1'
@@ -90,6 +118,7 @@ beforeEach(() => {
   duringDownload = null
   uploadStatus = 200
   downloadStatus = 200
+  recorderStartOptions = null
   presignResponse = {
     uploadUrl: 'http://localhost:9000/fish/chat-media/up',
     objectKey: `chat-media/${CONVERSATION}/me/1.png`,
@@ -217,5 +246,54 @@ describe('uploadChatImage —— 上传链每一步都问一次在途判据（#6
     await expect(uploadChatImage(CONVERSATION, IMAGE, () => true)).rejects.toThrow(
       '图片发送失败，请重试',
     )
+  })
+})
+
+describe('startVoiceRecording —— 失败立刻上报 + 时长留余量（#364 审查）', () => {
+  test('录音上限比契约上限小：服务端严格大于即 422，而 WAV 时长是精确值', () => {
+    startVoiceRecording()
+    expect(recorderStartOptions?.duration).toBeDefined()
+    // 修复前这里就是契约上限本身（60000）：录音机收尾时多补一帧算出的 60004ms
+    // 正好越过服务端的 `> MEDIA_MAX_VOICE_DURATION_MS`，录满一分钟反而发不出去。
+    expect(recorderStartOptions?.duration ?? 0).toBeLessThan(MEDIA_MAX_VOICE_DURATION_MS)
+  })
+
+  test('录音进行中 onError：不等用户松手就上报，且是能走「去设置」的权限错误', () => {
+    const reported: Error[] = []
+    startVoiceRecording((error) => reported.push(error))
+
+    recorderHooks.onError?.({ errMsg: 'operateRecorder:fail auth deny' })
+
+    // 修复前 `startVoiceRecording` 不收回调：这个错误要等到用户松手、`stop()` 的
+    // catch 才被看到，期间按钮一直写着「松开 发送」，实际什么都没在录。
+    // （顺带锁住「错误已带外上报时就没人接 `done` 的 rejection」：漏了这条，本用例
+    // 会因为未处理的 Promise 拒绝而变红。）
+    expect(reported).toHaveLength(1)
+    expect(reported[0]).toBeInstanceOf(VoicePermissionError)
+  })
+
+  test('onError 在 stop() 之后才到：交给 stop() 的 catch 上报一次，不重复弹', async () => {
+    const reported: Error[] = []
+    const session = startVoiceRecording((error) => reported.push(error))
+
+    const stopped = session.stop()
+    recorderHooks.onError?.({ errMsg: 'operateRecorder:fail system error' })
+
+    await expect(stopped).rejects.toThrow('录音失败，请重试')
+    expect(reported).toHaveLength(0)
+  })
+})
+
+describe('voiceError —— 权限被拒必须与普通失败可区分', () => {
+  test('权限 / auth 类错误：VoicePermissionError（页面据此给「去设置」）', () => {
+    const error = voiceError({ errMsg: 'operateRecorder:fail auth deny' })
+    expect(error).toBeInstanceOf(VoicePermissionError)
+    expect(error.message).toBe('需要麦克风权限才能发语音')
+  })
+
+  test('其它失败：普通 Error，页面只提示、不拉设置页', () => {
+    const error = voiceError({ errMsg: 'operateRecorder:fail system error' })
+    expect(error).not.toBeInstanceOf(VoicePermissionError)
+    expect(error.message).toBe('录音失败，请重试')
   })
 })

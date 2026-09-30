@@ -29,6 +29,7 @@ import {
   startVoiceRecording,
   uploadChatImage,
   uploadChatVoice,
+  VoicePermissionError,
   type VoiceRecording,
   voiceError,
 } from '@/features/chat/media-api'
@@ -50,9 +51,11 @@ import {
   initialDeferredReload,
   isCurrentPlayRequest,
   isLatestPageLoad,
+  isStaleMediaIdentity,
   isStaleMediaTask,
   listingStatusText,
   type MediaTaskBinding,
+  type MediaTaskIdentity,
   mergePushedMedia,
   mergeRefreshedMedia,
   mergeRefreshedMessages,
@@ -232,6 +235,12 @@ export default function Conversation() {
   const downloadingRef = useRef<Set<string>>(new Set())
   /** 语音播放请求令牌：每次点击 +1，迟到的下载回来据此判「已经不是当前这次」 */
   const playSeqRef = useRef(0)
+  /**
+   * 正在重试的媒体 id（#364 审查）：`canRetryMedia` 读的是**渲染态**，同一帧连点两次
+   * 两次看到的都还是 `failed`，于是起两条链。必须有一把同步锁，在 `runMediaSend` 的
+   * 落定处释放。
+   */
+  const retryingMediaRef = useRef<Set<string>>(new Set())
 
   /**
    * 本页数据**属于哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
@@ -495,6 +504,12 @@ export default function Conversation() {
     recordingRef.current?.abort()
     recordingRef.current = null
     setRecording(false)
+    /**
+     * 语音播放也要停（#364 审查）：`navigateTo` 子页（商品详情 / 交易码页）只 hide
+     * 不卸载，本页的 `InnerAudioContext` 会一直响下去 —— 用户已经在子页里了，
+     * 声音却还从上一个页面出来。卸载那条路径由下面的 effect 负责，这里补上 hide。
+     */
+    stopAudio()
   })
   /** 卸载后不再补刷新（didHide 不覆盖卸载这一路径），同时回收录音与播放器 */
   useEffect(() => {
@@ -714,9 +729,15 @@ export default function Conversation() {
    * 链。若失败发生在**直传**阶段（`uploaded === null`），两条链各签发一个 objectKey 却
    * 共用同一个 `clientRequestId` → 一条 201、一条 409 `IDEMPOTENCY_KEY_REUSED`，外加
    * 一个没人引用的 PUT 对象 —— 正是「重试只重发 create」要躲开的那个 409。
+   *
+   * `canRetryMedia` 读的是**渲染态**（#364 审查）：同一帧里连点两次时，第二次拿到的
+   * `item` 还是那份 `status: 'failed'` 的旧对象，门禁形同虚设。所以再加一把**同步锁**
+   * （`retryingMediaRef`），落定后由 `runMediaSend` 的 finally 释放。
    */
   const retryMedia = (item: PendingMedia) => {
     if (!canRetryMedia(item)) return
+    if (retryingMediaRef.current.has(item.id)) return
+    retryingMediaRef.current.add(item.id)
     runMediaSend(item)
   }
 
@@ -836,6 +857,8 @@ export default function Conversation() {
         )
       })
       .finally(() => {
+        // 还掉重试锁（#364 审查）：失败的话用户还要能再点一次
+        retryingMediaRef.current.delete(draft.id)
         deferredRef.current = settleSend(deferredRef.current, current)
         if (
           !shouldFlushDeferredReload({
@@ -865,6 +888,31 @@ export default function Conversation() {
     runMediaSend(item)
   }
 
+  /**
+   * 当前身份（账号 + 会话 Cookie），**不含 `epoch`**（判据见 `./view` 的
+   * `isStaleMediaIdentity`）。
+   *
+   * 读 `userIdRef` 而不是闭包里的 `userId`：这些判据都在 `await` 之后才跑，闭包读到的
+   * 是发起那一刻的旧值，而身份要按**回来时**算（换号正是发生在 await 期间）。
+   */
+  const currentIdentity = () => ({
+    cookie: sessionCookieHeader() ?? '',
+    userId: userIdRef.current,
+  })
+
+  /**
+   * 「这份内容因为**换号**作废了」的提示（#364 审查）。
+   *
+   * 身份没变就不该丢（那只是整页重拉，不是换人）；真的换了账号就必须说一句 ——
+   * 静默 return 会让用户以为「点了没反应」。离页（`aliveRef` 为假）不提示：用户已经
+   * 不在这个页面上了；令牌不匹配（用户自己又点了一次）也不提示，那不是作废。
+   */
+  const noticeIdentityLost = (identity: MediaTaskIdentity, message: string) => {
+    if (!aliveRef.current) return
+    if (!isStaleMediaIdentity(identity, currentIdentity())) return
+    void Taro.showToast({ title: message, icon: 'none' })
+  }
+
   /** 「图片 / 拍照」：选图 → 逐张发送（多选时每张各自一条消息，互不阻塞） */
   const pickAndSendImages = async (source: 'album' | 'camera') => {
     if (!canSend) {
@@ -872,7 +920,15 @@ export default function Conversation() {
       return
     }
     let picked: Awaited<ReturnType<typeof pickChatImages>>
-    const current = epoch.current
+    /**
+     * 选图可能要好几秒（用户还要在相册里挑），期间任何一次 `load()` —— 切后台再回来、
+     * 发送落定后的补刷新 —— 都会把 `epoch` +1。那是「整页重拉」不是「换人」，所以这里
+     * 记的是**身份**而不是代次（#364 审查）：拿 epoch 当身份会把用户刚选好的图静默丢掉。
+     */
+    const identity: MediaTaskIdentity = {
+      cookie: sessionCookieHeader() ?? '',
+      userId: userIdRef.current,
+    }
     try {
       // 相机一次只拍一张（微信 `chooseMedia` 在 `camera` 源下同样只给一张）
       picked = await pickChatImages(source === 'camera' ? 1 : MEDIA_IMAGE_PICK_LIMIT, source)
@@ -883,8 +939,14 @@ export default function Conversation() {
       })
       return
     }
-    // 选图期间换了账号 / 换了会话：这批图是上一个账号选的，不能以新身份发出去（N2）
-    if (current !== epoch.current) return
+    // 离页（navigateBack 卸载）：这一批已经没人接了，静默丢弃
+    if (!aliveRef.current) return
+    // 选图期间换了账号：这批图是上一个账号选的，不能以新身份发出去（N2）
+    if (isStaleMediaIdentity(identity, currentIdentity())) {
+      // 不能静默 return：用户明明选了图，什么都不发生会被当成页面坏了
+      void Taro.showToast({ title: '账号已切换，请重新选择图片', icon: 'none' })
+      return
+    }
     if (picked.rejected) {
       void Taro.showToast({ title: picked.rejected, icon: 'none' })
     }
@@ -903,15 +965,55 @@ export default function Conversation() {
     }
   }
 
-  /** 按住说话：开始录音。失败（无权限 / 设备忙）只提示，不留下半截状态 */
+  /**
+   * 录音失败的统一出口（#364 审查）。两个入口共用：
+   * - `startVoiceRecording` 的 `onError` —— 录音**还在进行中**（用户手指还按着）；
+   * - `finishVoice` 的 `.catch` —— 松手之后才失败。
+   *
+   * 无论从哪来，`recording` 都必须先复位：不复位的话按钮还写着「松开 发送」，
+   * 用户以为在录、其实什么都没录。
+   *
+   * 权限被拒要给「去设置」入口，用的是与扫码页（`pages/scan` / `pages/scan-pr`）同一范式：
+   * `Taro.getSetting` 先确认这个 scope 真的是被用户拒的，再 `Taro.openSetting` 把人送进
+   * 设置页。不是被拒（例如麦克风被别的应用占着）就别拉设置页，那会让用户白跑一趟。
+   */
+  const handleVoiceFailure = (error: unknown) => {
+    recordingRef.current = null
+    setRecording(false)
+    const failure = voiceError(error)
+    if (!(failure instanceof VoicePermissionError)) {
+      void Taro.showToast({ title: failure.message, icon: 'none' })
+      return
+    }
+    void Taro.getSetting()
+      .then((setting) => {
+        if (setting.authSetting['scope.record'] !== false) {
+          void Taro.showToast({ title: failure.message, icon: 'none' })
+          return
+        }
+        return Taro.showModal({
+          title: '需要麦克风权限',
+          content: '在设置里打开「麦克风」后即可发送语音',
+          confirmText: '去设置',
+          cancelText: '取消',
+        }).then((modal) => {
+          if (!modal.confirm) return
+          void Taro.openSetting({}).catch(() => undefined)
+        })
+      })
+      .catch(() => undefined)
+  }
+
+  /** 按住说话：开始录音。失败（无权限 / 设备忙）立刻提示，不留下半截状态 */
   const startVoice = () => {
     if (!canSend || recordingRef.current) return
     try {
-      recordingRef.current = startVoiceRecording()
+      // `onError` 不等松手：录音期间失败（权限被拒最常见）时按钮不该继续谎报「松开 发送」
+      recordingRef.current = startVoiceRecording(handleVoiceFailure)
       setRecording(true)
     } catch (error) {
       recordingRef.current = null
-      void Taro.showToast({ title: voiceError(error).message, icon: 'none' })
+      handleVoiceFailure(error)
     }
   }
 
@@ -925,12 +1027,24 @@ export default function Conversation() {
       session.abort()
       return
     }
-    const current = epoch.current
+    /**
+     * 同 `pickAndSendImages`：记**身份**而不是代次（#364 审查）。录音同样要好几秒，
+     * 期间一次 `load()` 推进的只是 epoch —— 那段录音还是当前账号录的，不该被丢掉。
+     */
+    const identity: MediaTaskIdentity = {
+      cookie: sessionCookieHeader() ?? '',
+      userId: userIdRef.current,
+    }
     void session
       .stop()
       .then((recorded) => {
-        // 录音期间可能已经换号 / 换会话：那段音频不该带着新身份的 Cookie 发出去
-        if (current !== epoch.current) return
+        // 离页（卸载）：这段录音已经没人接了，静默丢弃
+        if (!aliveRef.current) return
+        if (isStaleMediaIdentity(identity, currentIdentity())) {
+          // 录了音却什么都没发生会被当成页面坏了，必须说清楚
+          void Taro.showToast({ title: '账号已切换，请重新录制语音', icon: 'none' })
+          return
+        }
         sendMedia({
           kind: 'VOICE',
           clientRequestId: randomUuidV4(),
@@ -939,7 +1053,7 @@ export default function Conversation() {
         })
       })
       .catch((error) => {
-        void Taro.showToast({ title: voiceError(error).message, icon: 'none' })
+        handleVoiceFailure(error)
       })
   }
 
@@ -984,6 +1098,10 @@ export default function Conversation() {
    * 看住「换号 / 离页 / 用户又点了别的」—— 修复前 `.then` 无条件 `rememberPath` +
    * `playVoice`，早就离页的下载回来照样出声，还把上一个身份的私有媒体写进模块缓存。
    * 同一个判据也传给 `downloadChatMedia`，守住它写缓存的那一步。
+   *
+   * 判据里**不含 `epoch`**（#364 审查）：`epoch` 会被任何一次整页重拉推进，但那是
+   * 「重拉」不是「换人」—— 拿它当身份会让用户在下载中途赶上一次补刷新时，点了语音
+   * 既不预览也不提示（见 `./view` 的 `isCurrentPlayRequest`）。
    */
   const openVoice = (item: MediaMessageDto) => {
     // 播放态按**气泡**（消息 id / 本地临时 id）记，与 `entry.keyId` 同一空间；
@@ -998,24 +1116,35 @@ export default function Conversation() {
       return
     }
     playSeqRef.current += 1
-    const task: MediaTaskBinding = { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' }
+    const task: MediaTaskIdentity = {
+      cookie: sessionCookieHeader() ?? '',
+      userId: userIdRef.current,
+    }
     const request = { token: playSeqRef.current, task }
     const isCurrent = () =>
       isCurrentPlayRequest(request, {
+        ...currentIdentity(),
         token: playSeqRef.current,
-        epoch: epoch.current,
-        cookie: sessionCookieHeader() ?? '',
         alive: aliveRef.current,
       })
     void downloadChatMedia(conversationId, item.mediaId, isCurrent)
       .then((path) => {
         if (!isCurrent()) return
         rememberPath(item.mediaId, path)
+        /**
+         * 已经离开本页（`useDidHide`：跳去了商品详情 / 交易码页）就不许出声 ——
+         * `useDidHide` 里停的是**正在播**的那一段，这条挡的是**下载刚好在离开之后
+         * 才回来**的那一段（#364 审查）。字节照常回填缓存，用户回来一点就能放。
+         */
+        if (!visibleRef.current) return
         playVoice(item.id, path)
       })
       .catch((error) => {
-        // 换号 / 离页导致的中止是预期路径：不出声、也不提示（用户已经不在这个身份上了）
-        if (error instanceof MediaAbortedError) return
+        // 换号 / 离页导致的中止是预期路径：不出声、也不当失败打日志。换号要说一句（见上）
+        if (error instanceof MediaAbortedError) {
+          noticeIdentityLost(task, '账号已切换，请重新打开语音')
+          return
+        }
         console.warn('[miniapp] 语音下载失败', error)
         void Taro.showToast({ title: '语音加载失败，请重试', icon: 'none' })
       })
@@ -1044,10 +1173,16 @@ export default function Conversation() {
       return
     }
     downloadingRef.current.add(item.mediaId)
-    const task: MediaTaskBinding = { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' }
-    const isActive = () =>
-      aliveRef.current &&
-      !isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
+    /**
+     * 判据是**身份 + 离页**，不含 `epoch`（#364 审查）：下载是异步的，用户点开一张图后
+     * 赶上任何一次整页重拉（切后台回来、补刷新）时，旧写法会既不预览也不提示 ——
+     * 「点了没反应」。图还是当前账号的图，身份没变就该放出来。
+     */
+    const identity: MediaTaskIdentity = {
+      cookie: sessionCookieHeader() ?? '',
+      userId: userIdRef.current,
+    }
+    const isActive = () => aliveRef.current && !isStaleMediaIdentity(identity, currentIdentity())
     void downloadChatMedia(conversationId, item.mediaId, isActive)
       .then((path) => {
         if (!isActive()) return
@@ -1055,8 +1190,11 @@ export default function Conversation() {
         void Taro.previewImage({ current: path, urls: [path] })
       })
       .catch((error) => {
-        // 换号 / 离页导致的中止是预期路径：不提示（用户已经不在这个身份 / 这个页面上了）
-        if (error instanceof MediaAbortedError) return
+        // 换号 / 离页导致的中止是预期路径：不当失败打日志。换号要说一句（见上）
+        if (error instanceof MediaAbortedError) {
+          noticeIdentityLost(identity, '账号已切换，请重新打开图片')
+          return
+        }
         console.warn('[miniapp] 图片下载失败', error)
         void Taro.showToast({ title: '图片加载失败，请重试', icon: 'none' })
       })
@@ -1070,12 +1208,16 @@ export default function Conversation() {
    *
    * `onPress` 由调用方给：服务端那条是「下载后再放」（`openVoice`），本地那条是
    * 「直接放本地临时文件」（不下载）。播放态按 `keyId` 判 —— 与 `playingId` 同一空间。
+   *
+   * `failed` 只有本地乐观气泡会传（#364 审查）：失败的语音乐观气泡此前没有 `!` 角标
+   * （图片分支有），用户只看得出「有颗重试按钮」，看不出**这个气泡本身**是坏的。
    */
   const renderVoiceBubble = (
     keyId: string,
     durationMs: number | null | undefined,
     mine: boolean,
     onPress: () => void,
+    failed = false,
   ) => {
     const playing = playingId === keyId
     return (
@@ -1098,6 +1240,7 @@ export default function Conversation() {
         <Text className={`conv__dur num${mine ? ' is-mine' : ''}`}>
           {voiceDurationLabel(durationMs)}
         </Text>
+        {failed ? <View className="conv__failmark">!</View> : null}
       </View>
     )
   }
@@ -1107,7 +1250,7 @@ export default function Conversation() {
    *
    * 「按住说话」的结束靠那颗按钮的 `onTouchEnd` / `onTouchCancel`，而切语音态 / 开
    * 「+」面板会把整颗按钮**卸载**掉 —— 手指还按着也不会再触发任何回调。不清的话：
-   * 麦克风继续录到 60s 上限（那一段最终被丢弃），`recording` 常亮「松开 发送」，
+   * 麦克风继续录到时长上限（那一段最终被丢弃），`recording` 常亮「松开 发送」，
    * 且 `startVoice` 的 `recordingRef.current` 判定从此恒真，**本次进页面再也按不下录音**
    * （#359 3b 审查）。切走即放弃，与 `onTouchCancel` 同一语义。
    */
@@ -1469,9 +1612,15 @@ export default function Conversation() {
                       {renderAvatar(true)}
                       <View className="conv__col">
                         {item.kind === 'VOICE' ? (
-                          // 本地录音文件直接播，不下载：自己刚录的这段就在本地
-                          renderVoiceBubble(entry.keyId, item.durationMs, true, () =>
-                            playVoice(entry.keyId, item.path),
+                          // 本地录音文件直接播，不下载：自己刚录的这段就在本地。
+                          // 失败同样给 `!` 角标（#364 审查）：修复前只有 IMAGE 分支有，
+                          // 失败的语音气泡本身看不出是坏的。
+                          renderVoiceBubble(
+                            entry.keyId,
+                            item.durationMs,
+                            true,
+                            () => playVoice(entry.keyId, item.path),
+                            failed,
                           )
                         ) : (
                           <View className="conv__bubble conv__bubble--media">

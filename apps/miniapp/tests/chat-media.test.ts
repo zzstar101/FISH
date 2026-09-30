@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { MEDIA_MAX_IMAGE_BYTES } from '@fish/contracts/chat/schema'
 import {
   assertMediaActive,
   imageRejectReason,
@@ -153,7 +154,9 @@ describe('常量 —— 与契约口径对齐', () => {
   })
 
   test('5MB 上限来自契约的 MEDIA_MAX_IMAGE_BYTES', () => {
-    expect(MEDIA_IMAGE_MAX_BYTES).toBe(5 * 1024 * 1024)
+    // 断的是契约常量本身，不是 5MB 这个数字（#364 审查）：本地预检再写一遍字面量的话，
+    // 契约一改，测试还是会绿着骗人。
+    expect(MEDIA_IMAGE_MAX_BYTES).toBe(MEDIA_MAX_IMAGE_BYTES)
   })
 })
 

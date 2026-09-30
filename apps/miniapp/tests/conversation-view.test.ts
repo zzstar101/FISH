@@ -11,6 +11,7 @@ import {
   initialDeferredReload,
   isCurrentPlayRequest,
   isFlushDue,
+  isStaleMediaIdentity,
   isStaleMediaTask,
   listingStatusText,
   mergePushedMedia,
@@ -517,6 +518,60 @@ describe('isStaleMediaTask —— 媒体发送任务绑定发起时的会话（#
   })
 })
 
+describe('isStaleMediaIdentity —— 选图 / 录音 / 点开媒体的身份判据（#364 审查）', () => {
+  const identity = { cookie: 'fish_session=aaa', userId: 'user-a' }
+
+  test('身份没变就不判旧：整页重拉推进的只是 epoch，不是换人', () => {
+    // 修复前这几处用的是 `isStaleMediaTask(task, { epoch, cookie })`：用户选图 / 录音
+    // 期间任何一次 `load()`（切后台回来、发送落定后的补刷新）都会把 epoch 推走，
+    // 于是「选了图 / 录了音，什么都没发生」——素材被静默丢掉。
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: 'user-a' })).toBe(
+      false,
+    )
+  })
+
+  test('与新判据的差别就是修复点：同一个身份下 epoch 被推进，旧的 isStaleMediaTask 会判旧', () => {
+    // 左边这条正是修复前的行为（发送链仍在用 `isStaleMediaTask`，那里 epoch 有意义）；
+    // 选图 / 录音 / 点开媒体换成右边这条判据后，整页重拉不再丢掉用户已经拿到的东西。
+    expect(
+      isStaleMediaTask(
+        { epoch: 3, cookie: 'fish_session=aaa' },
+        {
+          epoch: 4,
+          cookie: 'fish_session=aaa',
+        },
+      ),
+    ).toBe(true)
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: 'user-a' })).toBe(
+      false,
+    )
+  })
+
+  test('换了账号（userId 变了）：判旧', () => {
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: 'user-b' })).toBe(
+      true,
+    )
+  })
+
+  test('直接换 storage 会话（userId 没变、cookie 变了）：也要判旧', () => {
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=bbb', userId: 'user-a' })).toBe(
+      true,
+    )
+  })
+
+  test('退出登录（userId 变 null / cookie 变空）：判旧', () => {
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: null })).toBe(true)
+    expect(isStaleMediaIdentity(identity, { cookie: '', userId: 'user-a' })).toBe(true)
+    // 反向同理：未登录时起的任务遇上登录，也不是同一个身份
+    expect(
+      isStaleMediaIdentity(
+        { cookie: 'fish_session=aaa', userId: null },
+        { cookie: 'fish_session=aaa', userId: 'user-a' },
+      ),
+    ).toBe(true)
+  })
+})
+
 describe('planMediaLoad —— 缓存命中要回填本页路径（#67 复查 #222）', () => {
   test('第一次进会话：模块缓存还空 → 去下载', () => {
     expect(planMediaLoad({ cached: null, downloading: false })).toEqual({ kind: 'download' })
@@ -547,36 +602,39 @@ describe('planMediaLoad —— 缓存命中要回填本页路径（#67 复查 #2
 })
 
 describe('isCurrentPlayRequest —— 迟到的语音下载不许落地（#67 复查 #222）', () => {
-  const task = { epoch: 3, cookie: 'fish_session=aaa' }
+  const task = { cookie: 'fish_session=aaa', userId: 'user-a' }
   const request = { token: 7, task }
 
-  test('当前有效：还活着、还是同一次点击、还是同一个身份', () => {
+  test('当前有效：还活着、还是同一次点击、还是同一个身份（整页重拉不算换人）', () => {
+    // #364 审查：`epoch` 会被任何一次整页重拉推进（切后台回来、发送落定后的补刷新），
+    // 但它**不代表换人** —— 用户点开一段语音、下载还没回来时正好赶上一次重拉，旧实现
+    // 把 epoch 也当身份，于是既不预览也不提示（点了没反应）。判据里没有 epoch 这一项。
     expect(
       isCurrentPlayRequest(request, {
         token: 7,
-        epoch: 3,
         cookie: 'fish_session=aaa',
+        userId: 'user-a',
         alive: true,
       }),
     ).toBe(true)
   })
 
   test('点播放 → 下载挂起 → 换了账号：下载回来不许出声、不许回填缓存', () => {
-    // 直接换 storage 会话（代次没动）也要拦住：缓存里是上一个身份的私有媒体临时文件
+    // 直接换 storage 会话（userId 没动）也要拦住：缓存里是上一个身份的私有媒体临时文件
     expect(
       isCurrentPlayRequest(request, {
         token: 7,
-        epoch: 3,
         cookie: 'fish_session=bbb',
+        userId: 'user-a',
         alive: true,
       }),
     ).toBe(false)
-    // 退出登录 / 整页重拉推进代次
+    // 退出登录（cookie 与 userId 一起没了）
     expect(
       isCurrentPlayRequest(request, {
         token: 7,
-        epoch: 4,
-        cookie: 'fish_session=aaa',
+        cookie: '',
+        userId: null,
         alive: true,
       }),
     ).toBe(false)
@@ -586,8 +644,8 @@ describe('isCurrentPlayRequest —— 迟到的语音下载不许落地（#67 �
     expect(
       isCurrentPlayRequest(request, {
         token: 7,
-        epoch: 3,
         cookie: 'fish_session=aaa',
+        userId: 'user-a',
         alive: false,
       }),
     ).toBe(false)
@@ -597,20 +655,20 @@ describe('isCurrentPlayRequest —— 迟到的语音下载不许落地（#67 �
     expect(
       isCurrentPlayRequest(request, {
         token: 8,
-        epoch: 3,
         cookie: 'fish_session=aaa',
+        userId: 'user-a',
         alive: true,
       }),
     ).toBe(false)
   })
 
   test('只看 playingId 不够：令牌不同就必须判旧（迟到的回调读到的是别人的答案）', () => {
-    // 这条断言的含义是：即使身份没变（epoch / cookie 都一样），
+    // 这条断言的含义是：即使身份没变（cookie / userId 都一样），
     // 只要播放请求序号被后来的点击推进过，旧回调就不能落地。
     expect(
       isCurrentPlayRequest(
         { token: 1, task },
-        { token: 2, epoch: task.epoch, cookie: task.cookie, alive: true },
+        { token: 2, cookie: task.cookie, userId: task.userId, alive: true },
       ),
     ).toBe(false)
   })

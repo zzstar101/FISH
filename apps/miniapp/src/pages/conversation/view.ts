@@ -182,6 +182,30 @@ export function isStaleMediaTask(
 }
 
 /**
+ * 用户明确发起、要等好几秒的那几件事（选图 / 录音 / 点开一张图或一段语音）的**身份**
+ * （#364 审查）：换账号才算旧。
+ *
+ * 与 `MediaTaskBinding` 的差别只有一个 `epoch`，但这个差别就是那个 bug：`epoch` 是
+ * **「整页重拉」计数器** —— 切后台再回来（`useDidShow`）、发送落定后的补刷新都会把它
+ * +1，可它并不代表换人。用户「选了图 → 等相册回调」的这几秒里，任何一次 `load()` 都会
+ * 把 epoch 推走，拿 epoch 当身份就会把刚选好的素材**静默丢掉**（选了图 / 录了音，什么都
+ * 没发生）。真正让素材作废的只有换账号：`userId` 与 `fish_session`（cookie）一起看。
+ */
+export interface MediaTaskIdentity {
+  readonly cookie: string
+  /** 未登录时是 null（与页面的 `userId` 同口径），一样参与比对 */
+  readonly userId: string | null
+}
+
+export function isStaleMediaIdentity(
+  task: MediaTaskIdentity,
+  current: { readonly cookie: string; readonly userId: string | null },
+): boolean {
+  // userId 从非空变成 null（退出登录）同样判旧
+  return task.cookie !== current.cookie || task.userId !== current.userId
+}
+
+/**
  * 自动下载该对一条媒体做什么（#67 复查 #222）。
  *
  * `reuse` 这一支是修复的核心：`media-api` 的模块级缓存与页面级 `localPaths` 是**两份**
@@ -208,22 +232,26 @@ export function planMediaLoad(input: {
  * 三道闸缺一不可：
  * - `alive` —— 已经离开会话页（卸载）；回来时不该突然出声。
  * - `token` —— 用户又点了另一条语音 / 又点了一次；旧下载回来不该抢走当前播放。
- * - `MediaTaskBinding` —— 换了账号（epoch 或 cookie 变了）；私有媒体的字节属于上一个身份。
+ * - `MediaTaskIdentity` —— 换了账号（`userId` 或 cookie 变了）；私有媒体的字节属于上一个身份。
+ *
+ * **这里刻意不看 `epoch`**（#364 审查）：`epoch` 会被任何一次整页重拉推进（切后台回来、
+ * 补刷新），但那是「重拉」不是「换人」—— 用户点开一段语音、下载还没回来时正好赶上一次
+ * 重拉，旧实现就既不预览也不提示，点了等于没点。身份没变就允许落地。
  *
  * 为什么不能只看 `playingId`：下载是异步的，`playingId` 那套只在**点击时**比对，
  * 迟到的回调回来时 `playingId` 可能已经被别的请求占用，读它得到的是「别人的答案」。
  */
 export function isCurrentPlayRequest(
-  request: { readonly token: number; readonly task: MediaTaskBinding },
+  request: { readonly token: number; readonly task: MediaTaskIdentity },
   current: {
     readonly token: number
-    readonly epoch: number
     readonly cookie: string
+    readonly userId: string | null
     readonly alive: boolean
   },
 ): boolean {
   return (
-    current.alive && current.token === request.token && !isStaleMediaTask(request.task, current)
+    current.alive && current.token === request.token && !isStaleMediaIdentity(request.task, current)
   )
 }
 
