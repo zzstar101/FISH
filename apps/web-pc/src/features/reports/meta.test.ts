@@ -4,7 +4,13 @@ import {
   USER_REPORT_REASONS as CONTRACT_USER_REASONS,
   ReportCreateInputSchema,
 } from '@fish/contracts/reports/schema'
-import { LISTING_REASON_OPTIONS, reasonLabel, reasonsOf, USER_REASON_OPTIONS } from './meta'
+import {
+  LISTING_REASON_OPTIONS,
+  REPORT_DETAIL_MAX_LENGTH,
+  reasonLabel,
+  reasonsOf,
+  USER_REASON_OPTIONS,
+} from './meta'
 
 const LISTING_ID = 'lst_01jc000000e00800000000000t'
 const USER_ID = 'usr_01jc000000e00800000000000a'
@@ -57,5 +63,30 @@ describe('report reason options', () => {
     expect(reasonLabel('LISTING', 'PROHIBITED')).toBe('违禁品或禁售物')
     // 枚举演进后短暂错位时回退成 key，不渲染成空白。
     expect(reasonLabel('USER', 'SOMETHING_NEW')).toBe('SOMETHING_NEW')
+  })
+})
+
+/**
+ * 弹窗的 `maxLength` 与计数器用的是本地常量，而真正的硬上限在契约的
+ * `ReportCreateInputSchema`。两边一旦漂移，用户会填到「看起来合法但提交 422」的长度。
+ */
+describe('说明长度上限与契约一致', () => {
+  const input = (detailText: string) => ({
+    targetType: 'LISTING' as const,
+    targetId: LISTING_ID,
+    reason: 'MISLEADING' as const,
+    detailText,
+  })
+
+  test('恰好上限长度可提交', () => {
+    expect(
+      ReportCreateInputSchema.safeParse(input('a'.repeat(REPORT_DETAIL_MAX_LENGTH))).success,
+    ).toBe(true)
+  })
+
+  test('超出一字即被服务端拒绝', () => {
+    expect(
+      ReportCreateInputSchema.safeParse(input('a'.repeat(REPORT_DETAIL_MAX_LENGTH + 1))).success,
+    ).toBe(false)
   })
 })

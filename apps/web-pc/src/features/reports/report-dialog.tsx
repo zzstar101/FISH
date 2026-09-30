@@ -47,10 +47,11 @@ export function ReportDialog({
   const [detail, setDetail] = useState('')
   const { data, error, isPending, isSuccess, mutate, reset } = useSubmitReport()
 
-  // 每次打开都从干净状态开始：上一次的原因与说明不能带到下一次举报。
+  // 关闭时清场，而不是打开时清场：effect 在 paint 之后才跑，若在 `open` 变 true 时清，
+  // 重开的那一帧会先带着上一次的原因与说明画出来再被重置（看得见的闪一下）。
   // 换举报对象由调用方的 `key` 触发重挂载（见 `report-entry.tsx`），这里不必再盯 target。
   useEffect(() => {
-    if (!open) return
+    if (open) return
     setReason(null)
     setDetail('')
     reset()
