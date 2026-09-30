@@ -14,6 +14,7 @@ import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import {
+  applyReadPoll,
   beginSend,
   canRetry,
   clearDeferredReload,
@@ -51,9 +52,11 @@ import './index.scss'
  *    `tx.completed` 评价卡（交易域没有这个事件）、以及媒体消息与上传/播放的本地模拟
  *    （#67 的范围）。其中「每条消息的已读标记」当年是照 #149 未合入删掉的（理由已过期），
  *    #359 四 用契约的 `counterpartLastReadAt` 把它接回来 —— 判据见 `./view` 的
- *    `messageReadLabel`，只标我发出的气泡，实时更新靠 `conversation.read`（小程序实时
- *    客户端仍在 #213→#220 链上，未合入；本轮由重进页面 / 从子页返回 / 发送落定后的
- *    静默补刷带回最新读位）。
+ *    `messageReadLabel`，只标我发出的气泡。读位由进页 / 从子页返回 / 点重试，以及本页的
+ *    **读位轮询**（`READ_POLL_MS`，只补这一个字段、不 bump epoch、不重发已读）刷新；
+ *    `conversation.read` 的实时接收仍要等小程序实时客户端合入（#213→#220 链）。
+ *    原先注释把「发送落定后的静默补刷」当常规刷新时机是错的：那条路径只在「发送未落定
+ *    就离开本页、再回来」时才发生（见 `./view` 的 `shouldFlushDeferredReload`）。
  *
  * 页头商品卡的状态、SYSTEM 事件的中文化、时间文案都走 `./view` 的纯函数（有用例）。
  *
@@ -73,6 +76,14 @@ const PANEL_TILES = [
 
 /** 媒体能力的统一提示（#67 未落地前，任何「发图 / 发语音」入口都只说这一句） */
 const MEDIA_PENDING_TIP = '图片 / 语音消息待接入（#67）'
+
+/**
+ * 读位补刷周期（#359 四 审查回合）。
+ *
+ * 取 20s：这是「对方读没读」这种状态的合理粒度（用户不会盯着一个标签等秒级精确），
+ * 又与 `GET /conversations/:id` 的既有刷新节奏同量级 —— 一次详情请求，成本可忽略。
+ */
+const READ_POLL_MS = 20_000
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -278,6 +289,31 @@ export default function Conversation() {
     if (authStatus !== 'authed' || userId === null) return
     load()
   }, [authStatus, userId, load])
+
+  /**
+   * 读位补刷（#359 四 审查回合）。
+   *
+   * 为什么必须有：端上没有「实时」——小程序没有实时客户端，`conversation.read` 帧没人接，
+   * 而 `load()` 的触发点只有进页 / 从子页返回 / 点重试。用户盯着屏幕时读位永远不会更新，
+   * 红「未读」会一直红到离开再回来，看起来就是坏的。
+   *
+   * 只做一件事：拉一次详情、只把 `counterpartLastReadAt` 写回（`applyReadPoll` 还会挡住
+   * 乱序的更旧读位）。不 bump epoch（否则在途发送的响应会被判过期丢弃）、不重发已读上报
+   * （那是「用户真的看到了首屏」才该做的副作用）、不动消息流与游标。
+   *
+   * 页面不可见时不发请求（`visibleRef` 由 useDidShow / useDidHide 维护）。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || !conversationId) return undefined
+    const timer = setInterval(() => {
+      if (!visibleRef.current) return
+      void loadConversation(conversationId).then((detail) => {
+        if (!visibleRef.current || detail.status !== 'ok') return
+        setConversation((prev) => (prev === null ? prev : applyReadPoll(prev, detail.conversation)))
+      })
+    }, READ_POLL_MS)
+    return () => clearInterval(timer)
+  }, [authStatus, userId, conversationId])
 
   /**
    * 从子页返回（商品详情 / 交易码页）时重拉：那边可能改了商品 / 交易状态，

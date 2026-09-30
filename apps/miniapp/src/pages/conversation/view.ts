@@ -1,4 +1,4 @@
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 
 /**
  * 会话页的展示逻辑（#89：从 fixture 改为真实历史 / 发送 / 已读）。
@@ -64,8 +64,12 @@ export function listingStatusText(status: string | undefined): string {
  * 而且我正在看它。Owner 拍板：只标我发出的气泡（而不是只标最后一条）。
  *
  * 「标不出来」一律算 `未读`：对方从未读过（null）、或时间戳解析不了。把没把握的读回执
- * 说成「已读」是在骗用户，宁可多显示一次红字 —— 读位只前进，下一次刷新（进页 /
- * 从子页返回 / 发送落定后的静默补刷）就会修正。
+ * 说成「已读」是在骗用户，宁可多显示一次红字 —— 读位只前进，下一次刷新就会修正。
+ *
+ * 刷新时机（#359 四 审查回合修正）：进页 / 从子页返回 / 点重试，**以及本页新增的
+ * 读位轮询**（`applyReadPoll`）。原先注释里写的「发送落定后的静默补刷」只在
+ * 「发送未落定就离开本页、再回来」时才发生（`shouldFlushDeferredReload` 要求
+ * `deferred === true`），普通发送落定后不会补刷 —— 那是过期注释。
  *
  * 与 web-pc 的 `isMessageRead`（`apps/web-pc/src/features/chat/queries.ts`）同口径，
  * 那边也是「判不出来 → 未读」。
@@ -84,6 +88,37 @@ export function messageReadLabel(input: {
   const sentAt = Date.parse(input.createdAt)
   if (Number.isNaN(readAt) || Number.isNaN(sentAt)) return '未读'
   return sentAt <= readAt ? '已读' : '未读'
+}
+
+/**
+ * 读位轮询的落地：**只**把 `counterpartLastReadAt` 写回详情（#359 四 审查回合）。
+ *
+ * 为什么不复用 `load()`：`load` 会 `epoch + 1`（在途发送的响应会被判过期丢弃）、
+ * 会重发一次已读上报、还会整份替换详情与消息流。而这条轮询只想补一个字段。
+ *
+ * 为什么要取「更新的那一份」：读位在服务端**单调只前进**
+ * （`conversations/store.ts` 的「只前进不后退」），但 HTTP 响应会乱序 —— 20s 间隔下
+ * 两次轮询可以同时在飞，先发的后到就会把「已读」打回「未读」。web-pc 的
+ * `mergeConversationReadMarker` 是同一套判据。
+ */
+export function applyReadPoll(
+  conversation: ConversationDto,
+  next: ConversationDto,
+): ConversationDto {
+  const merged = laterReadMarker(conversation.counterpartLastReadAt, next.counterpartLastReadAt)
+  if (merged === conversation.counterpartLastReadAt) return conversation
+  return { ...conversation, counterpartLastReadAt: merged }
+}
+
+/** 两个读位取更晚的那个；解析不了的一方让位给另一方（都不行则保留原值） */
+function laterReadMarker(current: string | null, candidate: string | null): string | null {
+  if (candidate === null) return current
+  if (current === null) return candidate
+  const left = Date.parse(current)
+  const right = Date.parse(candidate)
+  if (Number.isNaN(right)) return current
+  if (Number.isNaN(left)) return candidate
+  return right > left ? candidate : current
 }
 
 /**

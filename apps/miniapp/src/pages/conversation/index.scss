@@ -417,7 +417,12 @@
 
 /* 未读红、已读黑（#359 四）：只挂在我发出的气泡的时间后面，判据见 view.ts 的 messageReadLabel */
 .conv__rd.is-unread {
-  color: var(--danger);
+  /*
+    用 `--danger-ink` 而不是 `--danger`（#359 四 审查回合）：这是 20rpx（10pt）的文字，
+    底色是 `--bg`（#f7faff），`--danger`（#ff5f6d）对比度只有 2.82:1，连 AA-large 的
+    3:1 都不到；`--danger-ink`（#974457）是 6.12:1。同文件的 `.conv__retry` 也用的是 ink 版。
+  */
+  color: var(--danger-ink);
 }
 
 /* 失败重试胶囊：高 24pt，与媒体的上传失败共用 */
