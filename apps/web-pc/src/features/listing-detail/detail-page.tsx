@@ -184,13 +184,18 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
           <Card className="gap-0 border border-line p-6">
             <h2 className="font-semibold text-base">卖家</h2>
-            <div className="mt-4 flex items-center gap-3">
+            {/* 可点进他人主页：公开资料与 TA 的在售商品（匿名也能看）。 */}
+            <Link
+              className="mt-4 flex items-center gap-3 rounded-xl p-1.5 transition-colors hover:bg-surface-2"
+              params={{ userId: item.seller.id }}
+              to="/users/$userId"
+            >
               <UserAvatar
                 avatarUrl={item.seller.avatarUrl}
                 emoji={item.seller.nickname.slice(0, 1)}
                 size="lg"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{item.seller.nickname}</p>
                 <div className="mt-1.5">
                   {item.seller.authStatus === 'VERIFIED' ? (
@@ -203,7 +208,8 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   )}
                 </div>
               </div>
-            </div>
+              <ChevronRight className="size-4 shrink-0 text-ink-3" />
+            </Link>
             {item.isOwner ? (
               <p className="mt-5 rounded-xl bg-brand-soft px-3 py-2.5 text-brand text-sm">
                 这是你发布的商品
