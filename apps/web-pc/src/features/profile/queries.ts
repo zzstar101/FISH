@@ -1,3 +1,5 @@
+import type { ListingStatus } from '@fish/contracts/listings/schema'
+import type { ListingId } from '@fish/contracts/system/public-id'
 import type { QueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
@@ -207,15 +209,30 @@ export function usePendingProposals(ownerId: string) {
   return useQuery({
     queryKey: profileKeys.pending(ownerId),
     queryFn: async () => {
-      // 走 `useMyListings` 的同一个查询键：标签页停在「全部」时复用它的响应，
-      // 不为了拿 id 再拉一遍商品列表。
-      const listings = await queryClient.fetchQuery({
-        queryKey: profileKeys.listings(ownerId, 'ALL'),
-        queryFn: () => fetchMyListings(ownerId, 'ALL'),
-        staleTime: 15_000,
-      })
-      if (listings.items.length === 0) return EMPTY_PENDING
-      const byId = new Map(listings.items.map((item) => [item.id, item.status]))
+      /*
+       * 按 `ACTIVE` / `OFFLINE` 分别取再合并，**不用**单次 `status=ALL`：
+       * 列表接口只回首页 `limit=50` 且按创建时间倒序，`ALL` 下较新的 SOLD/OFFLINE
+       * 会把较老的 ACTIVE 挤出首页 —— 那些商品查不到状态就会被推导整条跳过，
+       * 正好复现「卖家看不到在等的申请」。分开取让每个状态各自拥有 50 个名额。
+       * 单状态超过 50 件时仍会漏（与「我的发布」同一上限，见 pending.ts 边界 6）。
+       */
+      const [active, offline] = await Promise.all([
+        queryClient.fetchQuery({
+          queryKey: profileKeys.listings(ownerId, 'ACTIVE'),
+          queryFn: () => fetchMyListings(ownerId, 'ACTIVE'),
+          staleTime: 15_000,
+        }),
+        queryClient.fetchQuery({
+          queryKey: profileKeys.listings(ownerId, 'OFFLINE'),
+          queryFn: () => fetchMyListings(ownerId, 'OFFLINE'),
+          staleTime: 15_000,
+        }),
+      ])
+      const byId = new Map<ListingId, ListingStatus>([
+        ...active.items.map((item) => [item.id, item.status] as const),
+        ...offline.items.map((item) => [item.id, item.status] as const),
+      ])
+      if (byId.size === 0) return EMPTY_PENDING
       return loadPendingIndex(byId, fetchConversationPage, fetchMessagePage)
     },
     enabled: ownerId !== '',

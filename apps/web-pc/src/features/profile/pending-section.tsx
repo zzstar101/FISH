@@ -10,6 +10,7 @@ type Notice = { tone: 'success' | 'warn'; text: string; toOrders: boolean }
 
 import { proposalDecisionError } from './api'
 import type { PendingProposal } from './pending'
+import { pendingSectionMode } from './pending-view'
 import { useAcceptProposal, useMyListings, usePendingProposals, useRejectProposal } from './queries'
 
 /**
@@ -97,8 +98,16 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
       </div>
     )
 
+  const mode = pendingSectionMode({
+    isError: pending.isError,
+    failed,
+    isPending: pending.isPending,
+    proposalCount: proposals?.size ?? 0,
+    hasNotice: notice !== null,
+  })
+
   // 没读到 ≠ 没有申请：整轮失败必须显式说明，否则在等的商品会被当成没人要。
-  if (pending.isError || failed) {
+  if (mode === 'error') {
     return (
       <Card className="gap-0 border border-line p-5">
         <div className="flex items-center justify-between gap-4">
@@ -117,7 +126,7 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
     )
   }
 
-  if (pending.isPending) {
+  if (mode === 'loading') {
     return (
       <Card className="gap-0 border border-line p-5">
         <p className="flex items-center gap-2 text-ink-3 text-sm">
@@ -129,7 +138,7 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
   }
 
   // 空且无话可说就整段不渲染；刚做完决定时要留着把结果说完
-  if (!proposals || (proposals.size === 0 && notice === null)) return null
+  if (mode === 'hidden' || !proposals) return null
 
   const cards = new Map(listings.data?.items.map((item) => [item.id, item]) ?? [])
 
