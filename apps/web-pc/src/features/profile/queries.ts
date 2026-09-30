@@ -7,16 +7,20 @@ import {
   acceptTransaction,
   cancelTransaction,
   confirmTransaction,
+  fetchMeetupTokenStatus,
   fetchMyListings,
   fetchProfile,
   fetchTransaction,
   fetchTransactions,
+  issueMeetupToken,
   type MyListingStatusFilter,
   type OrderStatusFilter,
+  redeemMeetupToken,
   rejectProposal,
   setListingStatus,
   updateListing,
   updateProfile,
+  verifyMeetupCode,
 } from './api'
 import { loadPendingIndex, type PendingIndex } from './pending'
 
@@ -30,6 +34,8 @@ export const profileKeys = {
   order: (ownerId: string, transactionId: string) =>
     ['pc', 'profile', 'order', ownerId, transactionId] as const,
   pending: (ownerId: string) => ['pc', 'profile', 'pending', ownerId] as const,
+  meetupToken: (ownerId: string, transactionId: string) =>
+    ['pc', 'profile', 'meetup-token', ownerId, transactionId] as const,
 }
 
 type SessionMutationContext = { generation: number }
@@ -249,6 +255,77 @@ export function useRejectProposal(ownerId: string) {
       if (!isSessionCurrent(context)) return
       invalidateChatSurfaces(queryClient)
       invalidatePending(queryClient, ownerId)
+    },
+  })
+}
+
+/**
+ * 面交凭证状态（不含明文码）。
+ *
+ * `enabled` 由页面按「交易处于 PENDING_MEETUP」给：终态订单不该再去问凭证，
+ * 免得给只读页面拉出一个永远不会有值的请求。
+ */
+export function useMeetupTokenStatus(ownerId: string, transactionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: profileKeys.meetupToken(ownerId, transactionId),
+    queryFn: () => fetchMeetupTokenStatus(transactionId),
+    enabled: enabled && ownerId !== '' && transactionId !== '',
+    staleTime: 15_000,
+  })
+}
+
+function invalidateMeetupToken(
+  queryClient: QueryClient,
+  ownerId: string,
+  transactionId: string,
+): void {
+  void queryClient.invalidateQueries({
+    queryKey: profileKeys.meetupToken(ownerId, transactionId),
+  })
+}
+
+/**
+ * 卖家取码。幂等「确保并读取」，所以重取不会换码；成功后只失效凭证状态
+ * （明文码由调用方留在组件状态里，不进缓存 —— 缓存会被 devtools / 序列化带出去）。
+ */
+export function useIssueMeetupToken(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (transactionId: string) => issueMeetupToken(transactionId),
+    onMutate: captureSession,
+    onSuccess: (_token, transactionId, context) => {
+      if (!isSessionCurrent(context)) return
+      invalidateMeetupToken(queryClient, ownerId, transactionId)
+    },
+  })
+}
+
+export type RedeemVariables = {
+  transactionId: string
+  input: { kind: 'code'; code: string } | { kind: 'qr'; token: string }
+}
+
+/**
+ * 核销（6 位码或二维码载荷）。
+ *
+ * 成功只代表「凭证已消费」，交易仍是 `PENDING_MEETUP` —— 契约用
+ * `nextAction: 'CONFIRM_DELIVERY'` 表达下一步是双方各确认一次，页面据此引导到
+ * 已有的「确认完成面交」，这里不替它推进终态。
+ */
+export function useRedeemMeetupToken(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ transactionId, input }: RedeemVariables) =>
+      input.kind === 'code'
+        ? verifyMeetupCode(transactionId, input.code)
+        : redeemMeetupToken(transactionId, input.token),
+    onMutate: captureSession,
+    onSuccess: (_verification, variables, context) => {
+      if (!isSessionCurrent(context)) return
+      invalidateMeetupToken(queryClient, ownerId, variables.transactionId)
+      void queryClient.invalidateQueries({
+        queryKey: profileKeys.order(ownerId, variables.transactionId),
+      })
     },
   })
 }

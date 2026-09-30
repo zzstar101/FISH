@@ -19,6 +19,12 @@ import {
 } from '@fish/contracts/profile/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
+  type MeetupTokenResponse,
+  type MeetupTokenStatusResponse,
+  type MeetupVerificationResponse,
+  meetupTokenResponseSchema,
+  meetupTokenStatusResponseSchema,
+  meetupVerificationResponseSchema,
   type TransactionDto,
   type TransactionListResponse,
   type TransactionRole,
@@ -161,6 +167,52 @@ export async function rejectProposal(conversationId: string): Promise<MessageDto
     await apiRequest(TRANSACTION_ROUTES.reject, {
       method: 'POST',
       body: JSON.stringify({ conversationId }),
+    }),
+  )
+}
+
+/**
+ * 卖家取本单面交码。
+ *
+ * 契约是**幂等「确保并读取」**：同一笔交易恒定同一枚码，重复调用不换码
+ * （只清失败计数与锁定），所以「重新取码」按钮不需要禁用态。
+ * 明文码（`code` / `qrPayload`）只在这个响应里出现，状态端点不返回。
+ */
+export async function issueMeetupToken(id: string): Promise<MeetupTokenResponse> {
+  return meetupTokenResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.issueMeetupToken(id), { method: 'POST' }),
+  )
+}
+
+/** 凭证状态：`NONE` / `ISSUED` / `CONSUMED`（含消费方与时间，不含明文码）。 */
+export async function fetchMeetupTokenStatus(id: string): Promise<MeetupTokenStatusResponse> {
+  return meetupTokenStatusResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.meetupTokenStatus(id)),
+  )
+}
+
+/** 用二维码载荷核销；`qrToken` 由 `parseMeetupQrPayload` 从载荷里取出。 */
+export async function redeemMeetupToken(
+  id: string,
+  qrToken: string,
+): Promise<MeetupVerificationResponse> {
+  return meetupVerificationResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.redeemMeetupToken(id), {
+      method: 'POST',
+      body: JSON.stringify({ qrToken }),
+    }),
+  )
+}
+
+/** 用 6 位手动码核销。 */
+export async function verifyMeetupCode(
+  id: string,
+  code: string,
+): Promise<MeetupVerificationResponse> {
+  return meetupVerificationResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.verifyMeetupCode(id), {
+      method: 'POST',
+      body: JSON.stringify({ code }),
     }),
   )
 }

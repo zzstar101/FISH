@@ -19,6 +19,7 @@ import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
 import { useAuth } from '../auth/auth-provider'
 import { transactionActionError } from './api'
+import { MeetupPanel } from './meetup-panel'
 import { orderStatusView } from './orders-page'
 import { useCancelTransaction, useConfirmTransaction, useOrder } from './queries'
 
@@ -201,6 +202,14 @@ function OrderDetailContent({
               </Link>
             </Button>
           </Card>
+
+          {detail.status === 'PENDING_MEETUP' ? (
+            <MeetupPanel
+              onStale={() => void order.refetch()}
+              ownerId={ownerId}
+              transaction={detail}
+            />
+          ) : null}
 
           <Card className="gap-0 border border-line p-6">
             <div className="flex items-center gap-2">

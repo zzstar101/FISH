@@ -2,15 +2,19 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { ApiError } from '../../lib/api-client'
 import {
   acceptTransaction,
+  fetchMeetupTokenStatus,
   fetchTransaction,
+  issueMeetupToken,
   listingActionError,
   myListingsPath,
   profileUpdateErrorView,
   proposalDecisionError,
+  redeemMeetupToken,
   rejectProposal,
   transactionActionError,
   transactionsPath,
   updateListing,
+  verifyMeetupCode,
 } from './api'
 
 const originalFetch = globalThis.fetch
@@ -237,5 +241,79 @@ describe('proposal decisions', () => {
       message: '操作失败，请重试',
       refresh: false,
     })
+  })
+})
+
+describe('meetup credential api', () => {
+  const TX = 'txn_01jc000000e00800000000004t'
+
+  function recordCalls(response: () => Response) {
+    const calls: Array<{ url: string; method: string; body: string | null }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({
+        url,
+        method: init?.method ?? 'GET',
+        body: typeof init?.body === 'string' ? init.body : null,
+      })
+      return response()
+    }) as unknown as typeof fetch
+    return calls
+  }
+
+  test('issuing a code is a POST to the token endpoint', async () => {
+    const calls = recordCalls(() =>
+      Response.json(
+        { transactionId: TX, code: '123456', qrPayload: 'fish://meetup/redeem?tx=x&t=y' },
+        { status: 201 },
+      ),
+    )
+    const token = await issueMeetupToken(TX)
+    expect(calls).toEqual([
+      { url: `/api/transactions/${TX}/meetup-token`, method: 'POST', body: null },
+    ])
+    expect(token.code).toBe('123456')
+  })
+
+  test('reading the status is a GET on the same path', async () => {
+    const calls = recordCalls(() =>
+      Response.json({ transactionId: TX, status: 'ISSUED', consumedAt: null, consumedBy: null }),
+    )
+    const status = await fetchMeetupTokenStatus(TX)
+    expect(calls).toEqual([
+      { url: `/api/transactions/${TX}/meetup-token`, method: 'GET', body: null },
+    ])
+    expect(status.status).toBe('ISSUED')
+  })
+
+  test('redeeming sends the qr token, and the manual path sends the 6-digit code', async () => {
+    const verification = () =>
+      Response.json({
+        transactionId: TX,
+        verified: true,
+        verifiedBy: 'usr_01jc000000e00800000000000b',
+        verifiedAt: '2026-01-02T00:00:00.000Z',
+        nextAction: 'CONFIRM_DELIVERY',
+      })
+
+    const redeemCalls = recordCalls(verification)
+    await redeemMeetupToken(TX, 'qr-token-value')
+    expect(redeemCalls).toEqual([
+      {
+        url: `/api/transactions/${TX}/meetup-token/redeem`,
+        method: 'POST',
+        body: JSON.stringify({ qrToken: 'qr-token-value' }),
+      },
+    ])
+
+    const codeCalls = recordCalls(verification)
+    await verifyMeetupCode(TX, '123456')
+    expect(codeCalls).toEqual([
+      {
+        url: `/api/transactions/${TX}/meetup-token/verify-code`,
+        method: 'POST',
+        body: JSON.stringify({ code: '123456' }),
+      },
+    ])
   })
 })
