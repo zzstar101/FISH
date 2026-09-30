@@ -11,6 +11,7 @@ import {
   messageDtoSchema,
   messageListResponseSchema,
 } from '@fish/contracts/chat/schema'
+import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { ApiError, apiRequest } from '../../lib/api-client'
 
 /** 契约里会话列表 limit 上限 50。 */
@@ -116,4 +117,50 @@ export function describeSendFailure(error: unknown): string {
     if (error.code === 'VALIDATION_FAILED') return '消息内容不合法'
   }
   return '发送失败，请重试'
+}
+
+/**
+ * 买家发起交易确认（`POST /transactions/proposals`）：往会话写一条 `tx.proposal` SYSTEM 消息，
+ * 响应体就是那条消息，因此和发消息一样走 chat 的消息缓存。
+ *
+ * 商品仍是 `ACTIVE` —— 提案**不是商品状态**（契约注释同源）：只有卖家接受
+ * （`POST /transactions`）才创建交易行并把商品置 `RESERVED`。
+ *
+ * `amountCents` 是议价结果，随提案带上；接受时以卖家重传的值为准（提案不落库，服务端无处可读）。
+ */
+export async function proposeTransaction(
+  conversationId: string,
+  amountCents: number,
+): Promise<MessageDto> {
+  return messageDtoSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.proposals, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, amountCents }),
+    }),
+  )
+}
+
+/**
+ * 发起交易确认失败的展示文案。
+ *
+ * `LISTING_NOT_ACTIVE` 标 `refresh: true`：商品被他人拍下或已下架是**状态漂移**，
+ * 页面必须重新取详情，而不是把过期页面留在原地。
+ */
+export function describeProposeFailure(error: unknown): { message: string; refresh: boolean } {
+  if (error instanceof ApiError) {
+    if (error.code === 'LISTING_NOT_ACTIVE') {
+      return { message: '商品已不在售，可能已被他人拍下', refresh: true }
+    }
+    if (error.code === 'NOT_CONVERSATION_BUYER') {
+      return { message: '只有买家可以发起交易确认', refresh: false }
+    }
+    if (error.code === 'CONVERSATION_NOT_FOUND') {
+      return { message: '会话不存在或不可访问', refresh: false }
+    }
+    if (error.code === 'VALIDATION_FAILED') {
+      return { message: '金额不合法，请核对后重试', refresh: false }
+    }
+    return { message: error.message, refresh: false }
+  }
+  return { message: '发起交易确认失败，请重试', refresh: false }
 }

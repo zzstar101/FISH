@@ -4,9 +4,11 @@ import {
   conversationListPath,
   createConversation,
   describeCreateConversationFailure,
+  describeProposeFailure,
   describeSendFailure,
   isConversationNotFound,
   messageListPath,
+  proposeTransaction,
 } from './api'
 
 describe('chat api paths', () => {
@@ -87,5 +89,58 @@ describe('chat error helpers', () => {
       '会话不存在或不可访问',
     )
     expect(describeSendFailure(new Error('network'))).toBe('发送失败，请重试')
+  })
+})
+
+describe('proposeTransaction', () => {
+  test('posts the conversation and amount to the proposals route', async () => {
+    const originalFetch = globalThis.fetch
+    let requestedUrl: string | undefined
+    let requestBody: unknown
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = String(input)
+      requestBody = JSON.parse(String(init?.body))
+      return new Response(
+        JSON.stringify({
+          id: 'msg_01jc000000e00800000000001t',
+          conversationId: 'cnv_01jc000000e00800000000001a',
+          senderId: null,
+          sender: null,
+          type: 'SYSTEM',
+          content: JSON.stringify({ type: 'tx.proposal', amountCents: 2000 }),
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      )
+    }) as unknown as typeof fetch
+    try {
+      const message = await proposeTransaction('cnv_01jc000000e00800000000001a', 2000)
+      expect(requestedUrl).toBe('/api/transactions/proposals')
+      expect(requestBody).toEqual({
+        conversationId: 'cnv_01jc000000e00800000000001a',
+        amountCents: 2000,
+      })
+      expect(message.type).toBe('SYSTEM')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('marks a listing that is no longer active as needing a refresh', () => {
+    // 商品被他人拍下是状态漂移：文案之外还必须让页面重新取详情，否则过期页留在原地。
+    expect(describeProposeFailure(new ApiError('LISTING_NOT_ACTIVE', 409, '已预定'))).toEqual({
+      message: '商品已不在售，可能已被他人拍下',
+      refresh: true,
+    })
+    expect(describeProposeFailure(new ApiError('NOT_CONVERSATION_BUYER', 403, '不是买家'))).toEqual(
+      {
+        message: '只有买家可以发起交易确认',
+        refresh: false,
+      },
+    )
+    expect(describeProposeFailure(new Error('network'))).toEqual({
+      message: '发起交易确认失败，请重试',
+      refresh: false,
+    })
   })
 })
