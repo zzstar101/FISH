@@ -11,6 +11,8 @@ function message(id: MessageDto['id']): MessageDto {
     type: 'TEXT',
     content: id,
     listing: null,
+    recalledAt: null,
+    replyTo: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   }
 }

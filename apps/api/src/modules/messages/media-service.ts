@@ -12,6 +12,7 @@ import {
   type MediaMessageInput,
   type MediaPresignInput,
   type MediaPresignResponse,
+  type MessageReply,
   mediaListResponseSchema,
   mediaMessageDtoSchema,
   mediaPresignResponseSchema,
@@ -27,6 +28,7 @@ import { CHAT_MEDIA_PREFIX, isSafeObjectKey, type MediaStorage } from '../upload
 import { MessageIdempotencyConflictError, mediaRequestHash, messageSendKey } from './idempotency'
 import { probeImage, probeVoiceDuration } from './media-probe'
 import type { MediaListCursor, MediaMessageStore, MediaRow } from './media-store'
+import { ReplyTargetInvalidError, resolveReplyTarget, toReply } from './reply'
 
 export class MediaMessageServiceError extends Error {
   constructor(
@@ -117,19 +119,32 @@ const imageMime = (value: string): boolean =>
 const voiceMime = (value: string): boolean =>
   (MEDIA_VOICE_MIME as readonly string[]).includes(value)
 
-function dto(row: MediaRow, baseUrl: (id: string) => string): MediaMessageDto {
+/**
+ * 媒体行 → DTO（#359 3b 起含撤回与引用）。
+ *
+ * 撤回后**不下发** url / 尺寸 / 时长：客户端只该渲染撤回碑，不该再去下载字节。
+ * 字节仍在存储里（审计保留），所以这里只是读侧收敛，不是删除。
+ */
+function dto(
+  row: MediaRow,
+  baseUrl: (id: string) => string,
+  replyTo: MessageReply | null = null,
+): MediaMessageDto {
+  const recalled = row.recalled_at !== null
   return mediaMessageDtoSchema.parse({
     id: encodePublicId(PUBLIC_ID_PREFIX.message, row.message_id),
     conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversation_id),
     senderId: encodePublicId(PUBLIC_ID_PREFIX.user, row.sender_id),
     kind: row.kind,
     mediaId: encodePublicId(PUBLIC_ID_PREFIX.media, row.media_id),
-    url: baseUrl(encodePublicId(PUBLIC_ID_PREFIX.media, row.media_id)),
+    url: recalled ? '' : baseUrl(encodePublicId(PUBLIC_ID_PREFIX.media, row.media_id)),
     mimeType: row.mime_type,
-    sizeBytes: row.size_bytes,
-    width: row.width,
-    height: row.height,
-    durationMs: row.duration_ms,
+    sizeBytes: recalled ? 0 : row.size_bytes,
+    width: recalled ? null : row.width,
+    height: recalled ? null : row.height,
+    durationMs: recalled ? null : row.duration_ms,
+    recalledAt: recalled ? new Date(row.recalled_at as Date | string).toISOString() : null,
+    replyTo,
     createdAt: new Date(row.created_at).toISOString(),
   })
 }
@@ -175,6 +190,25 @@ export function createMediaMessageService({
     },
     async create(userId, conversationId, input) {
       if (!(await store.participant(conversationId, userId))) throw notFound()
+      // 引用目标先校验（#359 3b）：不可用直接 422，不做 stat / probe / 快照写入。
+      let replyToId: string | null
+      try {
+        // 契约里 replyToId 是公开 id（与 listing 域的 `input.listingId` 同口径），
+        // 在 service 内解码；形状不对与「不存在」同码。
+        if (input.replyToId && !isPublicId(PUBLIC_ID_PREFIX.message, input.replyToId)) {
+          throw new ReplyTargetInvalidError()
+        }
+        replyToId = await resolveReplyTarget(
+          (ids) => store.findReplyTargets(ids),
+          conversationId,
+          input.replyToId ? decodePublicId(PUBLIC_ID_PREFIX.message, input.replyToId) : undefined,
+        )
+      } catch (error) {
+        if (error instanceof ReplyTargetInvalidError) {
+          throw invalid('MESSAGE_REPLY_INVALID', '被引用的消息不可引用')
+        }
+        throw error
+      }
       // #67 幂等键：指纹取客户端**预签名 key** 与声明元数据；未携带键时为 null。
       const sendKey = messageSendKey(input.clientRequestId, mediaRequestHash(input))
       // 重试快速路径：命中幂等键直接返回既有媒体，跳过 stat / probe / 快照写入。否则每次
@@ -188,8 +222,13 @@ export function createMediaMessageService({
         const replay = await store.findByRequestKey(conversationId, userId, sendKey)
         if (replay) {
           if (!replay.matchedHash) throw idempotencyConflict()
-          return dto(replay.row, (id) =>
-            mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+          const target = replay.row.reply_to_id
+            ? (await store.findReplyTargets([replay.row.reply_to_id])).get(replay.row.reply_to_id)
+            : undefined
+          return dto(
+            replay.row,
+            (id) => mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+            target ? toReply(target) : null,
           )
         }
       }
@@ -251,6 +290,7 @@ export function createMediaMessageService({
             userId,
             { ...verified, objectKey: snapshotKey },
             sendKey,
+            replyToId,
           )
         } catch (error) {
           // 并发同键：store 已用 advisory lock 串行化并把重放读成既有行，这里只是把
@@ -258,8 +298,13 @@ export function createMediaMessageService({
           if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
           throw error
         }
-        const result = dto(row, (id) =>
-          mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+        const target = replyToId
+          ? (await store.findReplyTargets([replyToId])).get(replyToId)
+          : undefined
+        const result = dto(
+          row,
+          (id) => mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+          target ? toReply(target) : null,
         )
         const participants = await store.participant(conversationId, userId)
         if (participants) onMediaCreated?.(participants, result)
@@ -298,12 +343,19 @@ export function createMediaMessageService({
       const page = (hasMore ? rows.slice(0, query.limit) : rows).reverse()
       // 反转后最早的一条（page[0]）就是下一页游标。
       const oldest = page[0]
+      const replyIds = [
+        ...new Set(page.map((row) => row.reply_to_id).filter((id): id is string => !!id)),
+      ]
+      const targets = replyIds.length > 0 ? await store.findReplyTargets(replyIds) : new Map()
       return mediaListResponseSchema.parse({
-        items: page.map((row) =>
-          dto(row, (id) =>
-            mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
-          ),
-        ),
+        items: page.map((row) => {
+          const target = row.reply_to_id ? targets.get(row.reply_to_id) : undefined
+          return dto(
+            row,
+            (id) => mediaUrl(encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId), id),
+            target ? toReply(target) : null,
+          )
+        }),
         nextCursor:
           hasMore && oldest
             ? encodeMediaCursor({ createdAt: oldest.created_at_iso, id: oldest.message_id })

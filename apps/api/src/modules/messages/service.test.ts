@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MediaStorage } from '../uploads/storage'
 import {
   MEMORY_BUYER_ID as buyer,
@@ -377,5 +377,185 @@ describe('message service: sendListingMessage（#359）', () => {
         listingId: listingPublicId,
       }),
     ).rejects.toMatchObject({ status: 404, code: 'CONVERSATION_NOT_FOUND' })
+  })
+})
+
+describe('message service: 引用（#359 3b）', () => {
+  const listingUuid = '01930000-0000-7000-8000-0000000000b1'
+  const listingPublicId = encodePublicId(PUBLIC_ID_PREFIX.listing, listingUuid)
+
+  const seedActiveListing = (store: MemoryMessageStore) => {
+    store.listingBriefs.set(listingUuid, {
+      id: listingUuid,
+      title: '机械键盘',
+      priceCents: 16000,
+      status: 'ACTIVE',
+      moderationStatus: 'APPROVED',
+      coverObjectKey: null,
+    })
+  }
+
+  test('引用一条 TEXT：新消息带 replyTo 投射（id / senderId / 摘要）', async () => {
+    const store = new MemoryMessageStore()
+    const target = await store.insertText(conversationA, seller, '还在的，随时可看')
+    const service = createMessageService({ store, storage })
+    const dto = await service.sendTextMessage(buyer, conversationA, {
+      type: 'TEXT',
+      content: '那我晚点来',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+    })
+    expect(dto.replyTo).toEqual({
+      id: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+      senderId: encodePublicId(PUBLIC_ID_PREFIX.user, seller),
+      excerpt: '还在的，随时可看',
+    })
+  })
+
+  test('摘要超长截断到 120 字并带省略号（契约 excerpt 上限）', async () => {
+    const store = new MemoryMessageStore()
+    const long = 'a'.repeat(200)
+    const target = await store.insertText(conversationA, buyer, long)
+    const service = createMessageService({ store, storage })
+    const dto = await service.sendTextMessage(seller, conversationA, {
+      type: 'TEXT',
+      content: '收到',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+    })
+    expect(dto.replyTo?.excerpt).toBe(`${'a'.repeat(119)}…`)
+  })
+
+  test('引用商品卡/媒体：摘要用方括号占位（不泄漏正文）', async () => {
+    const store = new MemoryMessageStore()
+    seedActiveListing(store)
+    const card = await store.insertListing(conversationA, seller, listingPublicId)
+    const service = createMessageService({ store, storage })
+    const dto = await service.sendTextMessage(buyer, conversationA, {
+      type: 'TEXT',
+      content: '这件还在吗',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, card.id),
+    })
+    expect(dto.replyTo?.excerpt).toBe('[商品]')
+  })
+
+  test('历史消息批量带引用投射；无引用的行 replyTo 为 null', async () => {
+    const store = new MemoryMessageStore()
+    const target = await store.insertText(conversationA, seller, '在的')
+    const service = createMessageService({ store, storage })
+    await service.sendTextMessage(buyer, conversationA, {
+      type: 'TEXT',
+      content: '好',
+      replyToId: encodePublicId(PUBLIC_ID_PREFIX.message, target.id),
+    })
+    const page = await service.listMessages(buyer, conversationA, { limit: 30 })
+    expect(page.items[0]?.replyTo).toBeNull()
+    expect(page.items[1]?.replyTo?.excerpt).toBe('在的')
+  })
+
+  test('不可引用的目标统一 422 MESSAGE_REPLY_INVALID：不存在 / SYSTEM / 已撤回', async () => {
+    const store = new MemoryMessageStore()
+    const system = await store.insertSystem(conversationA, '{"type":"tx.proposal"}')
+    const recalled = await store.insertText(conversationA, buyer, '口误')
+    recalled.recalled_at = new Date('2026-09-12T10:00:09.000000Z')
+    const service = createMessageService({ store, storage })
+    const missing = encodePublicId(PUBLIC_ID_PREFIX.message, '01930000-0000-7000-8000-0000000000ee')
+    for (const id of [
+      missing,
+      encodePublicId(PUBLIC_ID_PREFIX.message, system.id),
+      encodePublicId(PUBLIC_ID_PREFIX.message, recalled.id),
+    ]) {
+      expect(
+        service.sendTextMessage(buyer, conversationA, {
+          type: 'TEXT',
+          content: 'x',
+          replyToId: id,
+        }),
+      ).rejects.toMatchObject({ status: 422, code: 'MESSAGE_REPLY_INVALID' })
+    }
+    expect(store.messages).toHaveLength(2)
+  })
+})
+
+describe('message service: 撤回（#359 3b）', () => {
+  /** `recallMessage` 的入参是内部 uuid（router 负责从公开 id 解出，与 listMessages 同口径）。 */
+  const internalIdOf = (publicId: string): string =>
+    decodePublicId(PUBLIC_ID_PREFIX.message, publicId)
+
+  test('发送者本人在窗口内撤回：recalledAt 落库、正文清空、历史不再下发原文', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store, storage })
+    const sent = await service.sendTextMessage(buyer, conversationA, {
+      type: 'TEXT',
+      content: '发错了',
+    })
+    expect(sent.recalledAt).toBeNull()
+    await service.recallMessage(buyer, conversationA, internalIdOf(sent.id))
+    const page = await service.listMessages(buyer, conversationA, { limit: 30 })
+    const row = page.items.find((item) => item.id === sent.id)
+    expect(row?.recalledAt).not.toBeNull()
+    expect(row?.content).toBe('')
+  })
+
+  test('重复撤回幂等（撤回时刻不被刷新）', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store, storage })
+    const sent = await service.sendTextMessage(buyer, conversationA, { type: 'TEXT', content: 'x' })
+    await service.recallMessage(buyer, conversationA, internalIdOf(sent.id))
+    const first = store.messages[0]?.recalled_at
+    store.recallNow = new Date('2026-09-12T10:00:20.000000Z')
+    await service.recallMessage(buyer, conversationA, internalIdOf(sent.id))
+    expect(store.messages[0]?.recalled_at).toEqual(first)
+  })
+
+  test('非发送者撤回 → 403 MESSAGE_RECALL_FORBIDDEN', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store, storage })
+    const sent = await service.sendTextMessage(buyer, conversationA, { type: 'TEXT', content: 'x' })
+    expect(
+      service.recallMessage(seller, conversationA, internalIdOf(sent.id)),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: 'MESSAGE_RECALL_FORBIDDEN',
+    })
+  })
+
+  test('超出窗口 → 409 MESSAGE_RECALL_WINDOW_EXCEEDED', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store, storage })
+    const sent = await service.sendTextMessage(buyer, conversationA, { type: 'TEXT', content: 'x' })
+    // fixture 的 created_at 是「第 seq 秒」，把「现在」推到 120s 窗口之外。
+    store.recallNow = new Date('2026-09-12T10:05:00.000000Z')
+    expect(
+      service.recallMessage(buyer, conversationA, internalIdOf(sent.id)),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: 'MESSAGE_RECALL_WINDOW_EXCEEDED',
+    })
+  })
+
+  test('跨会话 / 不存在的消息 → 404 MESSAGE_NOT_FOUND（不泄漏存在性）', async () => {
+    const store = new MemoryMessageStore()
+    const service = createMessageService({ store, storage })
+    await service.sendTextMessage(buyer, conversationA, { type: 'TEXT', content: 'x' })
+    const missing = '01930000-0000-7000-8000-0000000000ef'
+    expect(service.recallMessage(buyer, conversationA, missing)).rejects.toMatchObject({
+      status: 404,
+      code: 'MESSAGE_NOT_FOUND',
+    })
+  })
+
+  test('撤回成功后回调 onMessageRecalled（推送契约字段）', async () => {
+    const store = new MemoryMessageStore()
+    const events: Array<Record<string, string>> = []
+    const service = createMessageService({
+      store,
+      storage,
+      onMessageRecalled: (_participants, event) =>
+        events.push(event as unknown as Record<string, string>),
+    })
+    const sent = await service.sendTextMessage(buyer, conversationA, { type: 'TEXT', content: 'x' })
+    await service.recallMessage(buyer, conversationA, internalIdOf(sent.id))
+    expect(events).toHaveLength(1)
+    expect(events[0]?.messageId).toBe(sent.id)
+    expect(events[0]?.recalledBy).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, buyer))
   })
 })

@@ -2,6 +2,7 @@ import {
   type ConversationListing,
   conversationListingSchema,
   type ListingMessageSendInput,
+  MESSAGE_RECALL_WINDOW_MS,
   type MessageDto,
   type MessageListQuery,
   type MessageListResponse,
@@ -15,6 +16,7 @@ import {
   encodePublicId,
   isPublicId,
   PUBLIC_ID_PREFIX,
+  type PublicId,
 } from '@fish/shared/public-id'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
@@ -25,11 +27,12 @@ import {
   messageSendKey,
   textRequestHash,
 } from './idempotency'
-import type { ListingBrief, MessageRow, MessageStore } from './store'
+import { ReplyTargetInvalidError, resolveReplyTarget, toReply } from './reply'
+import type { ListingBrief, MessageRow, MessageStore, ReplyTargetRow } from './store'
 
 export class MessageServiceError extends Error {
   constructor(
-    readonly status: 404 | 409 | 422,
+    readonly status: 403 | 404 | 409 | 422,
     readonly code: string,
     message: string,
   ) {
@@ -43,9 +46,41 @@ const notFound = () => new MessageServiceError(404, 'CONVERSATION_NOT_FOUND', '�
 const listingNotFound = () =>
   new MessageServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
 
+/** 引用目标不可用（不存在 / 不在本会话 / SYSTEM / 已撤回）。 */
+const replyInvalid = () =>
+  new MessageServiceError(422, 'MESSAGE_REPLY_INVALID', '被引用的消息不可引用')
+
+/** 共享内核只抛类型化错误，这里翻成契约错误码（与 media 域同码，见 `./reply`）。 */
+function translateReplyError(error: unknown): never {
+  if (error instanceof ReplyTargetInvalidError) throw replyInvalid()
+  throw error
+}
+
 /** 同键不同内容：拒绝而不是静默返回旧消息，否则调用方会以为新内容已送达（丢消息）。 */
 const idempotencyConflict = () =>
   new MessageServiceError(409, 'IDEMPOTENCY_KEY_REUSED', '同一个 clientRequestId 携带了不同内容')
+
+/** 撤回失败的三档：不存在 / 不是本人 / 超窗口。 */
+const recallNotFound = () => new MessageServiceError(404, 'MESSAGE_NOT_FOUND', '消息不存在')
+const recallForbidden = () =>
+  new MessageServiceError(403, 'MESSAGE_RECALL_FORBIDDEN', '只能撤回自己发送的消息')
+const recallExpired = () =>
+  new MessageServiceError(409, 'MESSAGE_RECALL_WINDOW_EXCEEDED', '超出可撤回时间')
+
+/**
+ * 单条消息的引用投射（发送路径用；历史/推送走 `enrichMessageRows` 的批量富化）。
+ * `replyToId` 刚刚校验过，这里只补投射；查不到（并发删除）就退化为「无引用」，
+ * 不让一次投射失败把已经落库的消息变成 500。
+ */
+async function withReply(
+  store: MessageStore,
+  dto: MessageDto,
+  replyToId: string | null,
+): Promise<MessageDto> {
+  if (!replyToId) return dto
+  const target = (await store.findReplyTargets([replyToId])).get(replyToId)
+  return target ? { ...dto, replyTo: toReply(target) } : dto
+}
 
 export function toMessageDto(row: MessageRow): MessageDto {
   return messageDtoSchema.parse({
@@ -61,9 +96,12 @@ export function toMessageDto(row: MessageRow): MessageDto {
           }
         : null,
     type: row.type,
-    content: row.content,
+    // 撤回后正文**不再下发**（DB 保留审计）：客户端只该拿到撤回碑，不该拿到旧文本。
+    content: row.recalled_at ? '' : row.content,
     // TEXT/SYSTEM 恒 null；LISTING 由调用方按商品投射覆写（#359）。
     listing: null,
+    recalledAt: row.recalled_at ? new Date(row.recalled_at).toISOString() : null,
+    replyTo: null,
     createdAt: new Date(row.created_at).toISOString(),
   })
 }
@@ -89,8 +127,9 @@ function listingUuidOf(content: string): string | null {
 }
 
 /**
- * 一页消息统一富化（#359）：LISTING 行按 `content` 引用的商品补 `listing` 投射，
- * 其余行原样（listing 为 null）。批量查商品，避免对每条卡片消息单独走一次查询。
+ * 一页消息统一富化（#359 / #359 3b）：LISTING 行按 `content` 引用的商品补 `listing`
+ * 投射、有 `reply_to_id` 的行补 `replyTo` 引用块，其余行原样。商品与引用目标都批量查，
+ * 避免对每条消息单独走一次查询。
  */
 async function enrichMessageRows(
   store: MessageStore,
@@ -98,21 +137,38 @@ async function enrichMessageRows(
   rows: MessageRow[],
   projectContent: (type: string, content: string) => Promise<string>,
 ): Promise<MessageDto[]> {
-  const uuids = new Set<string>()
+  const listingUuids = new Set<string>()
+  const replyIds = new Set<string>()
   for (const row of rows) {
-    if (row.type !== 'LISTING') continue
-    const uuid = listingUuidOf(row.content)
-    if (uuid) uuids.add(uuid)
+    if (row.type === 'LISTING') {
+      const uuid = listingUuidOf(row.content)
+      if (uuid) listingUuids.add(uuid)
+    }
+    if (row.reply_to_id) replyIds.add(row.reply_to_id)
   }
-  const briefs =
-    uuids.size > 0 ? await store.findListingBriefs([...uuids]) : new Map<string, ListingBrief>()
+  const [briefs, replyTargets] = await Promise.all([
+    listingUuids.size > 0
+      ? store.findListingBriefs([...listingUuids])
+      : Promise.resolve(new Map<string, ListingBrief>()),
+    replyIds.size > 0
+      ? store.findReplyTargets([...replyIds])
+      : Promise.resolve(new Map<string, ReplyTargetRow>()),
+  ])
+
   return Promise.all(
     rows.map(async (row) => {
       const dto = toMessageDto({ ...row, content: await projectContent(row.type, row.content) })
-      if (row.type !== 'LISTING') return dto
+      const target = row.reply_to_id ? replyTargets.get(row.reply_to_id) : undefined
+      const replyTo = target ? toReply(target) : null
+      if (row.type !== 'LISTING') return { ...dto, replyTo }
       const uuid = listingUuidOf(row.content)
       const brief = uuid ? briefs.get(uuid) : undefined
-      return { ...dto, listing: brief ? toListingCard(brief, storage) : null }
+      // 撤回的 LISTING 不下发卡片（`toMessageDto` 已清空 content，这里同步清投射）。
+      return {
+        ...dto,
+        listing: dto.recalledAt ? null : brief ? toListingCard(brief, storage) : null,
+        replyTo,
+      }
     }),
   )
 }
@@ -135,6 +191,32 @@ export interface MessageService {
     conversationId: string,
     input: ListingMessageSendInput,
   ): Promise<MessageDto>
+  /** 撤回自己的消息（#359 3b）；幂等，重复撤回返回当前状态。 */
+  recallMessage(userId: string, conversationId: string, messageId: string): Promise<void>
+}
+
+/**
+ * 引用目标校验（#359 3b）。入参是契约里的**公开 id**（与 `listingId` 同口径，在 service
+ * 内解码成内部 uuid）：调用方（router）因此不需要知道内部 id 空间。
+ * 判据在共享内核 `./reply`（media 域同一份），这里把它的错误翻成契约错误码。
+ */
+async function assertReplyTargetUsable(
+  store: MessageStore,
+  conversationId: string,
+  replyToPublicId: string | undefined,
+): Promise<string | null> {
+  if (!replyToPublicId) return null
+  // 形状不对（伪造前缀）与「不存在」同码：不把 id 空间当探针。
+  if (!isPublicId(PUBLIC_ID_PREFIX.message, replyToPublicId)) throw replyInvalid()
+  try {
+    return await resolveReplyTarget(
+      (ids) => store.findReplyTargets(ids),
+      conversationId,
+      decodePublicId(PUBLIC_ID_PREFIX.message, replyToPublicId),
+    )
+  } catch (error) {
+    return translateReplyError(error)
+  }
 }
 
 export function createMessageService({
@@ -143,6 +225,8 @@ export function createMessageService({
   storage,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
+  /** 撤回落库后推送（#359 3b）：与 `message.new` 同一条「先落库再推送」语义。 */
+  onMessageRecalled,
   projectContent = async (_type: string, content: string) => content,
 }: {
   store: MessageStore
@@ -151,6 +235,15 @@ export function createMessageService({
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
     message: MessageDto,
+  ) => void
+  onMessageRecalled?: (
+    participants: { buyerId: string; sellerId: string },
+    event: {
+      conversationId: PublicId<'cnv'>
+      messageId: PublicId<'msg'>
+      recalledAt: string
+      recalledBy: PublicId<'usr'>
+    },
   ) => void
 }): MessageService {
   return {
@@ -185,11 +278,15 @@ export function createMessageService({
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
       const content = input.content.trim()
+      // 引用目标先校验（#359 3b）：不可用直接 422，不落库。
+      const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
       // #67 幂等键：指纹取 trim 后的正文（与落库的 content 同一值）；未携带键时为 null。
+      // 引用不进指纹：同一正文 + 同一 clientRequestId 换引用目标是同一个发送请求的重试，
+      // 重放既有行（含它当时的引用）才是「重试」的正确语义。
       const key = messageSendKey(input.clientRequestId, textRequestHash(content))
       let row: MessageRow
       try {
-        row = await store.insertText(conversationId, userId, content, key)
+        row = await store.insertText(conversationId, userId, content, key, replyToId)
       } catch (error) {
         if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
         /*
@@ -202,7 +299,7 @@ export function createMessageService({
         if (isForeignKeyViolation(error)) throw notFound()
         throw error
       }
-      const dto = toMessageDto(row)
+      const dto = await withReply(store, toMessageDto(row), replyToId)
       // 先落库（上面已 await）再推送；推送失败由 hub 吞掉，不影响 201 响应。
       // 重试命中既有消息时也会推一次：契约明确「推送不保证不重不漏」，客户端按服务端
       // id 去重（#67 第三步），这里不为去重再引入「新建/重放」的返回值分叉。
@@ -227,10 +324,11 @@ export function createMessageService({
       if (brief?.status !== 'ACTIVE' || brief.moderationStatus !== 'APPROVED') {
         throw listingNotFound()
       }
+      const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
       const key = messageSendKey(input.clientRequestId, listingRequestHash(input.listingId))
       let row: MessageRow
       try {
-        row = await store.insertListing(conversationId, userId, input.listingId, key)
+        row = await store.insertListing(conversationId, userId, input.listingId, key, replyToId)
       } catch (error) {
         if (error instanceof MessageIdempotencyConflictError) throw idempotencyConflict()
         // 同 sendTextMessage：会话在读写窗口内被并发删除 → 外键拒绝 → 404。
@@ -239,12 +337,31 @@ export function createMessageService({
       }
       // 校验阶段已拿到 brief，直接富化，不再回查一次；幂等重试返回的既有行 content
       // 与本次输入同键同指纹，brief 必然对应。
-      const dto: MessageDto = {
-        ...toMessageDto(row),
-        listing: toListingCard(brief, storage),
-      }
+      const dto: MessageDto = await withReply(
+        store,
+        { ...toMessageDto(row), listing: toListingCard(brief, storage) },
+        replyToId,
+      )
       onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
       return dto
+    },
+
+    async recallMessage(userId, conversationId, messageId) {
+      const conversation = await store.findConversationForUser(conversationId, userId)
+      if (!conversation) throw notFound()
+      const result = await store.recall(conversationId, messageId, userId, MESSAGE_RECALL_WINDOW_MS)
+      if (result === 'not-found') throw recallNotFound()
+      if (result === 'forbidden') throw recallForbidden()
+      if (result === 'window-exceeded') throw recallExpired()
+      onMessageRecalled?.(
+        { buyerId: conversation.buyerId, sellerId: conversation.sellerId },
+        {
+          conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId),
+          messageId: encodePublicId(PUBLIC_ID_PREFIX.message, messageId),
+          recalledAt: new Date(result.recalled_at as Date | string).toISOString(),
+          recalledBy: encodePublicId(PUBLIC_ID_PREFIX.user, userId),
+        },
+      )
     },
   }
 }

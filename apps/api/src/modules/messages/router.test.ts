@@ -19,6 +19,8 @@ const message: MessageDto = {
   type: 'TEXT',
   content: '还在吗',
   listing: null,
+  recalledAt: null,
+  replyTo: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 
@@ -26,6 +28,7 @@ const service: MessageService = {
   listMessages: async () => ({ items: [message], nextCursor: null }),
   sendTextMessage: async () => message,
   sendListingMessage: async () => message,
+  recallMessage: async () => undefined,
 }
 
 function buildApp(overrides: Partial<MessageService> = {}) {

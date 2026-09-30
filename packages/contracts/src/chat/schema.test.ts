@@ -192,6 +192,8 @@ describe('messageDtoSchema', () => {
     id: ids.message,
     conversationId: ids.conversation,
     listing: null,
+    recalledAt: null,
+    replyTo: null,
     content: 'hello',
     createdAt: '2026-09-12T00:00:00.000Z',
   }
@@ -354,6 +356,8 @@ describe('realtime events', () => {
         type: 'SYSTEM',
         content: 'hi',
         listing: null,
+        recalledAt: null,
+        replyTo: null,
         createdAt: '2026-09-12T00:00:00.000Z',
       },
     }

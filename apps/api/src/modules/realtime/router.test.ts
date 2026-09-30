@@ -97,6 +97,8 @@ describe('realtime router (integration)', () => {
           type: 'SYSTEM',
           content: 'hi',
           listing: null,
+          recalledAt: null,
+          replyTo: null,
           createdAt: '2026-09-12T10:00:00.000Z',
         },
       })

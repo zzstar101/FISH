@@ -50,6 +50,8 @@ const systemMessage: MessageDto = {
   type: 'SYSTEM',
   content: '{"type":"tx.proposal","amountCents":16000}',
   listing: null,
+  recalledAt: null,
+  replyTo: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 

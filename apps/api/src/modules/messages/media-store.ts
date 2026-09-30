@@ -7,6 +7,7 @@ import {
   type MessageSendKey,
   sendKeyLockQuery,
 } from './idempotency'
+import type { ReplyTargetRow } from './store'
 
 export type MediaRow = {
   message_id: string
@@ -20,6 +21,10 @@ export type MediaRow = {
   width: number | null
   height: number | null
   duration_ms: number | null
+  /** #359 3b 撤回时间；未撤回为 null。撤回后 service 不下发 url / 尺寸 / 时长。 */
+  recalled_at: Date | string | null
+  /** #359 3b 引用的被引用消息 id；无引用为 null。 */
+  reply_to_id: string | null
   created_at: Date | string
   /**
    * 微秒精度的 `created_at` 文本（DB 直接 `to_char`）。
@@ -60,6 +65,8 @@ function toRow(row: Record<string, unknown>): MediaRow {
     width: (row.width as number | null) ?? null,
     height: (row.height as number | null) ?? null,
     duration_ms: (row.duration_ms as number | null) ?? null,
+    recalled_at: (row.recalled_at as Date | string | null) ?? null,
+    reply_to_id: (row.reply_to_id as string | null) ?? null,
     created_at: row.created_at as Date | string,
     created_at_iso: row.created_at_iso as string,
   }
@@ -73,6 +80,7 @@ const MEDIA_SELECT = sql`
   m.id AS message_id, m.conversation_id, m.sender_id,
   mm.id AS media_id, mm.kind::text, mm.object_key, mm.mime_type,
   mm.size_bytes, mm.width, mm.height, mm.duration_ms, m.created_at,
+  m.recalled_at, m.reply_to_id,
   to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
 `
 
@@ -121,6 +129,7 @@ export interface MediaMessageStore {
     senderId: string,
     input: MediaMessageInput,
     key?: MessageSendKey | null,
+    replyToId?: string | null,
   ): Promise<MediaRow>
   list(
     conversationId: string,
@@ -137,6 +146,8 @@ export interface MediaMessageStore {
     senderId: string,
     key: MessageSendKey,
   ): Promise<MediaRequestLookup | null>
+  /** #359 3b 引用投射：批量取被引用行（与 messages 域同形的投射源）。 */
+  findReplyTargets(ids: string[]): Promise<Map<string, ReplyTargetRow>>
 }
 
 export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
@@ -163,7 +174,31 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
       return toLookup(await db.execute(mediaByRequestQuery(conversationId, senderId, key)))
     },
 
-    async create(conversationId, senderId, input, key) {
+    async findReplyTargets(ids) {
+      const map = new Map<string, ReplyTargetRow>()
+      if (ids.length === 0) return map
+      const result = await db.execute(sql`
+        SELECT id, conversation_id, sender_id, type::text, content, recalled_at
+        FROM messages
+        WHERE id IN (${sql.join(
+          ids.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      `)
+      for (const row of rowsOf(result)) {
+        map.set(row.id as string, {
+          id: row.id as string,
+          conversation_id: row.conversation_id as string,
+          sender_id: (row.sender_id as string | null) ?? null,
+          type: row.type as string,
+          content: row.content as string,
+          recalled_at: (row.recalled_at as Date | string | null) ?? null,
+        })
+      }
+      return map
+    },
+
+    async create(conversationId, senderId, input, key, replyToId) {
       return db.transaction(async (tx) => {
         if (key) {
           // 与文本路径同一套串行化：先拿键的 advisory lock，再查重；两个并发同键请求里
@@ -183,10 +218,11 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
           WITH msg AS (
             INSERT INTO messages
               (id, conversation_id, sender_id, type, content, created_at,
-               client_request_id, client_request_hash)
+               client_request_id, client_request_hash, reply_to_id)
             VALUES (
               ${messageId}::uuid, ${conversationId}::uuid, ${senderId}::uuid, 'MEDIA', '[media]',
-              clock_timestamp(), ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null}
+              clock_timestamp(), ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null},
+              ${replyToId ?? null}::uuid
             )
             RETURNING id, conversation_id, sender_id, created_at
           ), media AS (
@@ -208,6 +244,7 @@ export function createSqlMediaMessageStore(db: Db): MediaMessageStore {
           SELECT msg.id AS message_id, msg.conversation_id, msg.sender_id,
                  media.id AS media_id, media.kind::text, media.object_key, media.mime_type,
                  media.size_bytes, media.width, media.height, media.duration_ms, msg.created_at,
+                 NULL::timestamptz AS recalled_at, ${replyToId ?? null}::uuid AS reply_to_id,
                  to_char(msg.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_iso
           FROM msg CROSS JOIN media
         `)

@@ -40,6 +40,12 @@ export const CHAT_ROUTES = {
   /** #67 受会话权限保护的媒体读取代理。 */
   mediaObject: (conversationId: string, mediaId: string) =>
     `/conversations/${conversationId}/media/${mediaId}`,
+  /**
+   * POST 撤回一条自己的消息（#359 3b）：窗口 `MESSAGE_RECALL_WINDOW_MS` 内、
+   * 仅发送者本人；对已撤回消息幂等（返回 204）。204 无响应体。
+   */
+  recall: (conversationId: string, messageId: string) =>
+    `/conversations/${conversationId}/messages/${messageId}/recall`,
 } as const
 
 /** 业务实时推送端点（`apps/api/src/modules/realtime`）；root 层接线由 Platform Owner 完成。 */

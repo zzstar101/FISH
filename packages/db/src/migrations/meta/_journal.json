@@ -239,6 +239,13 @@
       "when": 1790730008119,
       "tag": "20260930090008_curved_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1790738957774,
+      "tag": "20260930112917_thick_morgan_stark",
+      "breakpoints": true
     }
   ]
 }

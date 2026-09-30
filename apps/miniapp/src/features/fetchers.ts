@@ -588,6 +588,8 @@ function toMessageDto(
     type: item.type,
     content: item.content,
     listing: null,
+    recalledAt: null,
+    replyTo: null,
     createdAt: item.createdAt,
   }
 }
