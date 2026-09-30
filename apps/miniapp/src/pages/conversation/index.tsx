@@ -377,10 +377,16 @@ export default function Conversation() {
           /**
            * 媒体历史是**独立一条流**（契约 `GET /conversations/:id/media`，游标参数叫
            * `cursor` 而不是 `before`）。它失败**不连坐消息区**：文字照常显示，媒体半边
-           * 留空等下一次 load 重试，绝不把 `msgState` 打回 failed —— 那会把已经读到的
-           * 整屏文字换成错误卡。`mediaBaseIds` 的处理与消息一致（silent 走并集，不替换）。
+           * 保留现状等下一次 load 重试，绝不把 `msgState` 打回 failed —— 那会把已经读到
+           * 的整屏文字换成错误卡。
+           *
+           * **失败一律不落地**（不只是 silent）：失败时 `loadMediaPage` 回的是
+           * `{ items: [], nextCursor: null, failed: true }`，照常写入会把屏幕上已有的
+           * 图片 / 语音**整批抹掉**、游标也一起清空 —— 而媒体没有自己的错误态，用户看到
+           * 的是「消息凭空少了」且无从重试（#359 3b 审查）。成功时 silent 仍走并集合并，
+           * 不一刀切替换。
            */
-          if (!(silent && mediaPage.failed)) {
+          if (!mediaPage.failed) {
             setMedia((prev) =>
               mediaBaseIds === null
                 ? mediaPage.items
@@ -702,6 +708,19 @@ export default function Conversation() {
   }
 
   /**
+   * 重试一条失败的媒体（与文本的 `retry` 同一道门禁）。
+   *
+   * 门禁不能省：`runMediaSend` 自己不看状态，重试期间（`uploading`）再点一次会起第二条
+   * 链。若失败发生在**直传**阶段（`uploaded === null`），两条链各签发一个 objectKey 却
+   * 共用同一个 `clientRequestId` → 一条 201、一条 409 `IDEMPOTENCY_KEY_REUSED`，外加
+   * 一个没人引用的 PUT 对象 —— 正是「重试只重发 create」要躲开的那个 409。
+   */
+  const retryMedia = (item: PendingMedia) => {
+    if (!canRetryMedia(item)) return
+    runMediaSend(item)
+  }
+
+  /**
    * 媒体发送：直传 → create 两段（#359 3b）。
    *
    * **重试只重发 create**：媒体创建的幂等指纹里含 `objectKey`（服务端
@@ -716,15 +735,20 @@ export default function Conversation() {
   const runMediaSend = (draft: PendingMedia) => {
     const current = epoch.current
     /**
-     * 这份任务属于哪个账号的会话（#67 N2）。
+     * 这份任务属于哪个账号的会话、以及**本页是否还在**（#67 N2 + #359 3b 审查）。
      *
      * `epoch` 挡不住「A 选了图 → 切到 B → create 才发出去」：`request.ts` 的每个请求
      * 都是**发出时**才读 `fish_session`，换号后旧任务会带着 B 的 Cookie 落库，B 的会话里
      * 凭空多出一条自己没发过的媒体。所以这里记下发起时的 Cookie，每一步网络请求前都比
      * 一次，一变就整条放弃（对象存储里的半成品不落库，旧账号的界面已被身份清场清空）。
+     *
+     * `aliveRef` 是另一半：**离页（navigateBack 卸载）不会推进 `epoch`**，只判代次的话
+     * 用户退出会话后 presign / PUT / create 仍会照发 —— 正是上传层 `assertMediaActive`
+     * 要挡的那些「没人引用的对象」。所以离页与换号在这里走同一条闸。
      */
     const task: MediaTaskBinding = { epoch: current, cookie: sessionCookieHeader() ?? '' }
     const isStale = () =>
+      !aliveRef.current ||
       isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
     deferredRef.current = beginSend(deferredRef.current, current)
     // N4：重试时先把气泡切回「上传中」，否则整段重试期间它还挂着失败态与重试按钮
@@ -1001,16 +1025,44 @@ export default function Conversation() {
    * 点图片气泡：看大图。
    *
    * `Taro.previewImage` 只能收**本地路径或可公开访问的 URL**，而会话媒体是鉴权代理
-   * （要带会话 Cookie），`<Image src>` 与预览都带不了 —— 所以必须先用已下载的本地
-   * 临时文件；还没下载完就点，提示一句而不是弹一个空白预览。
+   * （要带会话 Cookie），`<Image src>` 与预览都带不了 —— 所以必须先用本地临时文件。
+   *
+   * 与 `openVoice` 同一条兜底：自动下载是 best-effort（失败只记日志、不会自动重试），
+   * 只在 `localPaths` 里查一次的话，**一次瞬时失败就会让这张图在整个停留期内点不开**
+   * —— 用户明确点了却只说「稍后再试」，而「稍后」永远不会来（#359 3b 审查）。所以这里
+   * 也带上下载：还没下来（或之前失败了）就现取一次，取到再预览。
    */
   const openImage = (item: MediaMessageDto) => {
-    const local = localPaths.get(item.mediaId)
-    if (!local) {
+    const cached = cachedMediaPath(item.mediaId)
+    if (cached) {
+      void Taro.previewImage({ current: cached, urls: [cached] })
+      return
+    }
+    // 自动下载正在飞：不并发重复取，提示一句即可（它落地后就能点开）
+    if (downloadingRef.current.has(item.mediaId)) {
       void Taro.showToast({ title: '图片还在加载，稍后再试', icon: 'none' })
       return
     }
-    void Taro.previewImage({ current: local, urls: [local] })
+    downloadingRef.current.add(item.mediaId)
+    const task: MediaTaskBinding = { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' }
+    const isActive = () =>
+      aliveRef.current &&
+      !isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
+    void downloadChatMedia(conversationId, item.mediaId, isActive)
+      .then((path) => {
+        if (!isActive()) return
+        rememberPath(item.mediaId, path)
+        void Taro.previewImage({ current: path, urls: [path] })
+      })
+      .catch((error) => {
+        // 换号 / 离页导致的中止是预期路径：不提示（用户已经不在这个身份 / 这个页面上了）
+        if (error instanceof MediaAbortedError) return
+        console.warn('[miniapp] 图片下载失败', error)
+        void Taro.showToast({ title: '图片加载失败，请重试', icon: 'none' })
+      })
+      .finally(() => {
+        downloadingRef.current.delete(item.mediaId)
+      })
   }
 
   /**
@@ -1050,15 +1102,36 @@ export default function Conversation() {
     )
   }
 
+  /**
+   * 放弃正在进行的录音（切输入态 / 切面板前必须调）。
+   *
+   * 「按住说话」的结束靠那颗按钮的 `onTouchEnd` / `onTouchCancel`，而切语音态 / 开
+   * 「+」面板会把整颗按钮**卸载**掉 —— 手指还按着也不会再触发任何回调。不清的话：
+   * 麦克风继续录到 60s 上限（那一段最终被丢弃），`recording` 常亮「松开 发送」，
+   * 且 `startVoice` 的 `recordingRef.current` 判定从此恒真，**本次进页面再也按不下录音**
+   * （#359 3b 审查）。切走即放弃，与 `onTouchCancel` 同一语义。
+   */
+  const abortRecording = () => {
+    const session = recordingRef.current
+    if (!session) return
+    recordingRef.current = null
+    setRecording(false)
+    session.abort()
+  }
+
   /** 语音/键盘切换：进语音态时收起面板（两态不并存，与稿子一致） */
   const toggleVoiceMode = () => {
     if (!voiceMode) setPanelOpen(false)
+    else abortRecording()
     setVoiceMode(!voiceMode)
   }
 
   /** 「+」开合面板：开面板时退回键盘态 */
   const togglePanel = () => {
-    if (!panelOpen) setVoiceMode(false)
+    if (!panelOpen) {
+      abortRecording()
+      setVoiceMode(false)
+    }
     setPanelOpen(!panelOpen)
   }
 
@@ -1420,7 +1493,7 @@ export default function Conversation() {
                           </View>
                         )}
                         {failed ? (
-                          <View className="conv__retry" onClick={() => runMediaSend(item)}>
+                          <View className="conv__retry" onClick={() => retryMedia(item)}>
                             <Image
                               className="conv__retry-ic"
                               src={ICONS.refresh}
