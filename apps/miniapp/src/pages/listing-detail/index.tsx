@@ -28,6 +28,7 @@ import ProductCard from '@/components/product-card'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
 import { createConversation } from '@/features/chat/api'
+import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
@@ -35,6 +36,7 @@ import { requestSellEdit } from '@/features/listing/edit-target'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
+import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -307,7 +309,24 @@ export default function ListingDetail() {
   const [data, setData] = useState<ListingDetailView | null>(null)
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
+  /**
+   * 心形的收藏态。契约的 `ListingCardSchema` 与详情投影**都不带**收藏标记，所以只能问
+   * `GET /listings/:id/favorite`（见下面的 effect）。
+   *
+   * 瀑布流卡片不能这么做（一屏二三十张就是二三十个请求），那边是**长按时才问一次**，
+   * 见 `components/product-card`；本页一次只展示一件商品，多这一个请求是划算的。
+   */
   const [faved, setFaved] = useState(false)
+  /** 心形的写在途：挡住连点，避免同一件商品被写两遍 */
+  const [favoriteBusy, setFavoriteBusy] = useState(false)
+  /**
+   * 「同类推荐」里本机已隐藏的 id：进页读一次本地名单，之后由卡片菜单的 `onDislike` 累加。
+   * 卡片自己也会隐藏（它读同一份名单），但**页面这份列表**也得跟着少一条 ——
+   * 否则全部隐藏完时，「同类推荐」会剩一个只有标题的空区块。
+   */
+  const [hiddenSimilar, setHiddenSimilar] = useState<readonly string[]>(() =>
+    readHiddenListingIds(),
+  )
   /** 「立即购买」是否已确认过：确认一次就进入「待店家确认」终态（账号私有，换号清场） */
   const [buyRequested, setBuyRequested] = useState(false)
   /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」；账号私有，换号清场） */
@@ -495,6 +514,69 @@ export default function ListingDetail() {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
   }
 
+  /**
+   * 读一次心形的真实收藏态。
+   *
+   * 依赖 `authStatus` 与 `userId`：匿名进来时先不问（该端点挂 `requireAuth`，问了必然 401），
+   * 等登录态解析成 `authed` 再问；**换账号**（`userId` 变）也要重问 ——
+   * `clearedPrivateScope` 在渲染期把 `faved` 清成 `false`，那是「不属于新账号」的复位，
+   * 不等于「新账号没收藏过这件」。
+   *
+   * 读失败（网络 / 未登录）**不报错、也不拦页面**：心形不是这一页的主内容，保持未选中即可，
+   * 真点下去时由写接口给出准确结论。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null) {
+      setFaved(false)
+      return
+    }
+    let live = true
+    void fetchFavoriteState(id)
+      .then((state) => {
+        if (live) setFaved(state.favorited)
+      })
+      .catch(() => {
+        // 见上：读不到就保持未选中
+      })
+    return () => {
+      live = false
+    }
+  }, [id, authStatus, userId])
+
+  /**
+   * 心形：真写 `POST|DELETE /listings/:id/favorite`（幂等，见 `@/features/favorites/api`）。
+   *
+   * 匿名点击**不发请求**（必然 401），直接提示去登录 —— 与「聊一聊」同一口径。
+   * **以服务端返回为准**：本地不先翻转（`faved` 只在响应落地时改），
+   * 所以写失败时心形不会假装变过。
+   */
+  const toggleFavorite = () => {
+    if (favoriteBusy) return
+    if (authStatus !== 'authed') {
+      void Taro.showToast({ title: '请先登录后再收藏', icon: 'none' })
+      return
+    }
+    setFavoriteBusy(true)
+    void setFavorite(id, !faved)
+      .then((state) => {
+        setFaved(state.favorited)
+      })
+      .catch((error: unknown) => {
+        // 写路径上的 404 只有一个含义：这件东西已经不在货架上了（见 `favorites/api`）
+        if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') {
+          void Taro.showToast({ title: '这件宝贝已经下架或卖掉了', icon: 'none' })
+          return
+        }
+        void Taro.showToast({
+          title: isUnauthenticatedError(error) ? '请先登录后再收藏' : '收藏没成功，请重试',
+          icon: 'none',
+        })
+      })
+      .finally(() => {
+        setFavoriteBusy(false)
+      })
+  }
+
   const load = () => {
     loadSeqRef.current += 1
     const seq = loadSeqRef.current
@@ -606,11 +688,26 @@ export default function ListingDetail() {
     // 首次 show 与 `useLoad` 的首屏加载是同一次进入，跳过免得双发
     const firstShow = firstShowRef.current
     firstShowRef.current = false
+    // 本机隐藏名单是跨页的：别的页面刚隐藏的商品要在这里跟着消失（见 `hiddenSimilar`）
+    setHiddenSimilar(readHiddenListingIds())
     if (!shouldRefreshOnShow(firstShow)) return
     requestRefresh()
   })
 
-  const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
+  /*
+    「同类推荐」是复用首页那张瀑布流卡的第三处（首页 / 搜索 / 这里）。
+
+    **分列按服务端那份原列表**（`data.similar`），隐藏只让对应的那张卡自己不渲染：
+    先过滤再分列的话，隐藏一件会让它后面每张卡换列（`splitColumns` 按 index 奇偶），
+    跨父节点移动 = React 卸载重挂（图片重载），用户看到整片跳一下。
+    `visibleSimilarCount` 只为「还有没有内容可推荐」这一件事服务（空区块不该只剩标题）。
+  */
+  const similarAll = useMemo(() => data?.similar ?? [], [data])
+  const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(similarAll), [similarAll])
+  const visibleSimilarCount = useMemo(
+    () => similarAll.filter((item) => !hiddenSimilar.includes(item.id)).length,
+    [similarAll, hiddenSimilar],
+  )
 
   /**
    * 卖家视角（Owner 2026-09-27 拍板）：当前账号是这件商品的卖家时，底部栏换成
@@ -1422,45 +1519,53 @@ export default function ListingDetail() {
           </View>
 
           {/* ---------------------------------------------------- 同类推荐 */}
-          <View className="detail__similar">
-            <View className="detail__seclabel">
-              <Image className="detail__seclabel-img" src={ICONS.category} mode="aspectFit" />
-              <Text>同类推荐</Text>
-            </View>
+          {/* 一件能推的都没有时整块不渲染：只剩一个「同类推荐」标题是空壳 */}
+          {visibleSimilarCount === 0 ? null : (
+            <View className="detail__similar">
+              <View className="detail__seclabel">
+                <Image className="detail__seclabel-img" src={ICONS.category} mode="aspectFit" />
+                <Text>同类推荐</Text>
+              </View>
 
-            <View className="detail__waterfall">
-              <View className="detail__wf-col">
-                {/* 卡片自带点击 → `navigateTo('/pages/listing-detail/index?id=' + id)`，
-                    这里不再包一层 onClick，避免同一次点击 push 两次路由 */}
-                {leftSimilar.map((item) => (
-                  <ProductCard
-                    key={item.id}
-                    listing={item}
-                    /*
-                      卖家用**这张卡自己内嵌的** seller，不能用 `data.seller`。
-                      `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
-                      把当前卖家挂上去就是给别人的商品捏造了一个卖家。
-                      #191 起契约卡片内嵌 `seller`（`toMockListing` 同源投影）：
-                      真实数据下是这张卡的卖家真值；老 mock 记录缺席时是 null → 整行不渲染。
-                    */
-                    seller={item.seller}
-                    imageHeight={RATIO_HEIGHT[item.ratio]}
-                  />
-                ))}
-              </View>
-              <View className="detail__wf-col">
-                {rightSimilar.map((item) => (
-                  <ProductCard
-                    key={item.id}
-                    listing={item}
-                    /* 同左列：用卡片自己内嵌的 seller，不用当前商品的卖家 */
-                    seller={item.seller}
-                    imageHeight={RATIO_HEIGHT[item.ratio]}
-                  />
-                ))}
+              <View className="detail__waterfall">
+                <View className="detail__wf-col">
+                  {/* 卡片自带点击 → `navigateTo('/pages/listing-detail/index?id=' + id)`，
+                      这里不再包一层 onClick，避免同一次点击 push 两次路由 */}
+                  {leftSimilar.map((item) => (
+                    <ProductCard
+                      key={item.id}
+                      listing={item}
+                      /*
+                        卖家用**这张卡自己内嵌的** seller，不能用 `data.seller`。
+                        `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
+                        把当前卖家挂上去就是给别人的商品捏造了一个卖家。
+                        #191 起契约卡片内嵌 `seller`（`toMockListing` 同源投影）：
+                        真实数据下是这张卡的卖家真值；老 mock 记录缺席时是 null → 整行不渲染。
+                      */
+                      seller={item.seller}
+                      imageHeight={RATIO_HEIGHT[item.ratio]}
+                      /* 卡片就地不渲染；页面这份名单管跨页同步与「还有没有内容可推荐」 */
+                      hidden={hiddenSimilar.includes(item.id)}
+                      onDislike={() => setHiddenSimilar((prev) => [...prev, item.id])}
+                    />
+                  ))}
+                </View>
+                <View className="detail__wf-col">
+                  {rightSimilar.map((item) => (
+                    <ProductCard
+                      key={item.id}
+                      listing={item}
+                      /* 同左列：用卡片自己内嵌的 seller，不用当前商品的卖家 */
+                      seller={item.seller}
+                      imageHeight={RATIO_HEIGHT[item.ratio]}
+                      hidden={hiddenSimilar.includes(item.id)}
+                      onDislike={() => setHiddenSimilar((prev) => [...prev, item.id])}
+                    />
+                  ))}
+                </View>
               </View>
             </View>
-          </View>
+          )}
         </>
       ) : (
         /* 仍在加载：骨架屏。这个分支只应在 loadState === 'loading' 时到达 ——
@@ -1504,10 +1609,7 @@ export default function ListingDetail() {
           </View>
         ) : (
           <>
-            <View
-              className={`detail__fav${faved ? ' is-on' : ''}`}
-              onClick={() => setFaved((prev) => !prev)}
-            >
+            <View className={`detail__fav${faved ? ' is-on' : ''}`} onClick={toggleFavorite}>
               <Image
                 className="detail__fav-img"
                 src={faved ? ICONS.heartOn : ICONS.heartMuted}

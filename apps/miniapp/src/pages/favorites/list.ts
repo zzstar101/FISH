@@ -2,16 +2,26 @@
  * 「我的收藏」的纯逻辑与**演示数据**（不 import Taro / 组件 / 图片资源，
  * `tests/favorites-list.test.ts` 直接 import）。
  *
- * ## 数据口径（依据《四页面并行-收藏历史评论关注》§2）
+ * ## 数据口径（依据《四页面并行-收藏历史评论关注》§2；端点随 #394 上线）
  *
- * **收藏在契约 / API 两层没有实现**：`packages/contracts` 没有 favorites 路由或
- * schema、`apps/api` 没有 favorites 模块（`packages/db/src/schema/favorites.ts` 只有表，
- * 没有对外端点）。所以本页
- * **没有可读的端点**，也就没有「真实列表」这种状态：
+ * **收藏在契约 / API 两层已实现**：契约在 `@fish/contracts/favorites`，端点是
+ * `GET /me/favorites`（列表）与 `GET|POST|DELETE /listings/:id/favorite`（单品态与两个幂等写）。
+ * 所以本页有两种真实形态，**都不再是「缺口空态」**：
  *
- * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）：页面只渲染空态 + 一句如实的
- *   缺口说明（`emptyCopy(segment, false)`），**不是**假列表、**不是**错误态；
- * - **演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）：才用下面的 fixture。
+ * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）：页面调真接口，于是有三种状态 ——
+ *   骨架屏 / 列表 / 真空态（`emptyCopy(segment, false)`，说的是「你还没有收藏」）；
+ * - **演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）：用下面的 fixture。
+ *
+ * ## 契约行 → 本页行的适配（`toFavoriteItems`）
+ *
+ * 契约给的是**商品卡片 + 收藏时间**（`FavoriteItemSchema = { listing: ListingCardSchema,
+ * favoritedAt }`），本页要的是排版用的行（分段、品类小字、色块、收藏时间人话）。
+ * 中间这一层是纯函数、放在本模块而不是页面里，`tests/favorites-list.test.ts` 直接测它。
+ *
+ * **契约不新增「是否失效」字段**（见 `favorites/schema.ts` 的说明）：分段完全由
+ * `listing.status` 推出来 —— `SOLD` → 「已卖掉」、`OFFLINE` → 「已下架」、
+ * `ACTIVE` / `RESERVED` → 有效段。这也意味着**收藏行不会因为商品下架而消失**，
+ * 它只是换一段呈现。
  *
  * ## 演示数据与「我的」页对得上
  *
@@ -27,7 +37,10 @@
  * 本目录禁止内联新色值，所以缩略图取 `mock/blocks.ts` 的**分类基色**（由令牌派生），
  * 头像取 `AVATAR_BLOCKS`（同上），下标写在 fixture 里。
  */
-import type { ListingCategory } from '@fish/contracts/listings/schema'
+import type { FavoriteItem as ContractFavoriteItem } from '@fish/contracts/favorites/schema'
+import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
+import { shortCategoryLabel } from '@/features/comments/mine'
+import { relativeTimeOf } from '@/lib/time'
 import { AVATAR_BLOCKS, LISTING_BLOCKS } from '@/mock/blocks'
 
 /** 分段：两段互斥（有效 ⊎ 失效 = 全部） */
@@ -76,7 +89,7 @@ type FavoriteBase = {
   coverUrl: string
   /**
    * 这一行来自演示 fixture：`id` 在商品库里**不存在**，跳详情必然 404。
-   * 收藏端点就绪后真实行会是 `false`，那时才真跳（页面 `openItem()` 据此分支）。
+   * 真实行恒为 `false`（见 `toFavoriteItems`），页面 `openItem()` 据此分支。
    */
   demo: boolean
 }
@@ -263,42 +276,84 @@ export type EmptyCopy = {
 /**
  * 两段各自的空态文案。
  *
- * **两种构建的文案不同，且都不能自相矛盾**：
- * - 演示构建（`demo = true`）照稿的 `EMPTY` 表，说的是「你还没收藏 / 没有失效的」；
- * - 真实构建照方案 §2.1：收藏没有后端，所以**不能说成「你恰好没有收藏」** ——
- *   那会让用户以为自己的收藏丢了。要如实说这是缺口（收藏不了，也就没有可看的）。
+ * **只剩一份了**：端点上线前这里按「演示 / 真实」分两支，真实那支写的是
+ * 「收藏还没接后端 / 服务端还没有收藏接口」。端点（#394）上线后两支的前提都不成立 ——
+ * 真实构建读的是真接口，空列表就是**用户真的没有收藏**，如实说「还没有收藏的宝贝」即可。
+ * 再按构建分叉，只会让真实构建继续宣称一个已经不存在的缺口。
+ *
+ * 失效段要解释「谁会出现在这里」：用户没见过这一段有过东西，不解释会被读成坏了。
  */
-export function emptyCopy(segment: FavoriteSegment, demo: boolean): EmptyCopy {
-  if (demo) {
-    return segment === 'sale'
-      ? {
-          icon: 'heart',
-          title: '还没有收藏的宝贝',
-          text: '逛首页看到喜欢的，点一下 ♡ 就会收在这里',
-          actionLabel: '去逛逛',
-          action: 'browse',
-        }
-      : {
-          icon: 'box',
-          title: '没有失效的收藏',
-          text: '被卖家下架、或者被别人买走的宝贝会收在这里',
-          actionLabel: '回有效宝贝',
-          action: 'backToSale',
-        }
-  }
+export function emptyCopy(segment: FavoriteSegment): EmptyCopy {
   return segment === 'sale'
     ? {
         icon: 'heart',
-        title: '收藏功能还没有后端',
-        text: '服务端还没有收藏表与接口，所以现在收藏不了，也就还没有有效宝贝。',
+        title: '还没有收藏的宝贝',
+        text: '逛首页看到喜欢的，点一下 ♡ 就会收在这里',
         actionLabel: '去逛逛',
         action: 'browse',
       }
     : {
         icon: 'box',
-        title: '收藏功能还没有后端',
-        text: '服务端还没有收藏表与接口。等收藏能用之后，被下架或卖掉的宝贝会收在这里。',
+        title: '没有失效的收藏',
+        text: '被卖家下架、或者被别人买走的宝贝会收在这里',
         actionLabel: '回有效宝贝',
         action: 'backToSale',
       }
+}
+
+/* ---------------------------------------------------------------- 契约 → 本页的适配 */
+
+/** 收藏时间的人话（`favoritedAt` → 「3 天前收藏」）；ISO 坏值时兜底成空串，不编一个时间。 */
+function savedLabelOf(favoritedAt: string, nowMs: number): string {
+  const relative = relativeTimeOf(favoritedAt, nowMs)
+  return relative === '' ? '' : `${relative}收藏`
+}
+
+/**
+ * 契约的 `listing.status` → 本页的两段。
+ *
+ * `RESERVED`（已被预订）仍进**有效**段：东西还在货架上，详情页对它也是公开可读的
+ * （`favorites/schema.ts` 里写明 GET 读状态镜像详情页可见性）。把它算成失效会让用户
+ * 以为东西没了，而「预订中」恰恰是还可能买到的信号。只有 `SOLD` / `OFFLINE` 才是真买不到。
+ */
+function segmentOf(
+  status: ListingStatus,
+): { segment: 'sale' } | { segment: 'gone'; goneReason: FavoriteGoneReason } {
+  if (status === 'SOLD') return { segment: 'gone', goneReason: '已卖掉' }
+  if (status === 'OFFLINE') return { segment: 'gone', goneReason: '已下架' }
+  return { segment: 'sale' }
+}
+
+/**
+ * 契约收藏行 → 本页行。
+ *
+ * `nowMs` 由调用方传入（**不在里面取 `Date.now()`**）：同一屏多行各取一次「现在」，
+ * 相邻两行会对同一个时间点给出不同答案（`@/lib/time` 的同一条约定）。
+ */
+export function toFavoriteItems(
+  saved: readonly ContractFavoriteItem[],
+  nowMs: number,
+): FavoriteItem[] {
+  return saved.map(({ listing, favoritedAt }) => {
+    const base: FavoriteBase = {
+      id: listing.id,
+      category: listing.category,
+      categoryText: shortCategoryLabel(listing.category),
+      title: listing.title,
+      priceCents: listing.priceCents,
+      seller: listing.seller?.nickname ?? '',
+      // 契约的 `avatarUrl` 可为 `null`（库里是无约束 text）。缺图给通用占位色块，
+      // 与 `features/listing/adapt.ts` 同一取法 —— 占位图是「这张图没有」的呈现，
+      // 不是编造这个人的身份。
+      avatarUrl: listing.seller?.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
+      verified: listing.seller?.authStatus === 'VERIFIED',
+      // 契约没有「想要」计数（`ListingCardSchema` 无该字段）→ 恒 `null`，页面整块不画
+      wants: null,
+      savedLabel: savedLabelOf(favoritedAt, nowMs),
+      // 无封面图 → 分类基色块（同上，不新增色值）
+      coverUrl: listing.coverUrl ?? coverOf(listing.category),
+      demo: false,
+    }
+    return { ...base, ...segmentOf(listing.status) }
+  })
 }

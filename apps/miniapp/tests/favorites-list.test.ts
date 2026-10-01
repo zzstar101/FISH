@@ -1,4 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test'
+import type { FavoriteItem as ContractFavoriteItem } from '@fish/contracts/favorites/schema'
+import type { ListingCard } from '@fish/contracts/listings/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   DEMO_FAVORITES,
   emptyCopy,
@@ -7,6 +10,7 @@ import {
   inSegment,
   itemsOf,
   loadDemoFavorites,
+  toFavoriteItems,
 } from '../src/pages/favorites/list'
 
 /**
@@ -19,6 +23,11 @@ import {
 // `@tarojs/taro` 一并顶掉：Bun 下加载真 Taro 会在求值阶段抛（手法同 `wishes-api.test.ts`）。
 mock.module('@tarojs/taro', () => ({ default: {} }))
 Object.assign(globalThis, { __DEMO_AUTH__: true, __ALLOW_MOCK_FALLBACK__: true })
+
+/** 规范 UUIDv7 → 对应资源公开 ID（与 `wishes-api.test.ts` 同一手法） */
+const uuid = (n: number) => `01930000-0000-7000-8000-${n.toString(16).padStart(12, '0')}`
+const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, uuid(11))
+const SELLER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, uuid(13))
 
 /** 造一行：`goneReason` 一给就是失效行（与 fixture 同一口径） */
 function item(over: Partial<FavoriteItem> & { id?: string } = {}): FavoriteItem {
@@ -103,28 +112,131 @@ describe('分段 —— 两段互斥，一行只进一段', () => {
   })
 })
 
-describe('emptyCopy —— 演示态与真实态的文案不能互换', () => {
-  test('真实构建说的是缺口（收藏没有后端），不说「你恰好没有收藏」', () => {
-    const real = emptyCopy('sale', false)
-    expect(real.title).toContain('后端')
-    // 缺口要指到具体的东西：服务端的收藏表与接口
-    expect(real.text).toContain('接口')
-    // 「还没有收藏的宝贝」会被读成用户自己没收藏过 —— 真实构建下不能这么说
-    expect(real.title).not.toBe(emptyCopy('sale', true).title)
-    expect(real.text).not.toContain('点一下 ♡')
+describe('emptyCopy —— 端点上线后，「空」就是真的空', () => {
+  test('有效段说「你还没有收藏」，不再自称「没有后端」', () => {
+    const copy = emptyCopy('sale')
+    /*
+      #394 之后这一页读的是真接口，「列表为空」确实等于「你还没收藏过」。
+      旧文案「服务端还没有收藏接口 / 只记在这台设备上」现在是假话，而且方向最坏：
+      用户明明收藏过，页面却告诉他服务端没有这份数据。
+    */
+    expect(copy.title).toContain('还没有收藏')
+    expect(copy.text).not.toContain('后端')
+    expect(copy.text).not.toContain('接口')
+    expect(copy.text).not.toContain('这台设备')
   })
 
-  test('演示态照稿：有效给「去逛逛」、失效给「回有效宝贝」', () => {
-    expect(emptyCopy('sale', true).action).toBe('browse')
-    expect(emptyCopy('gone', true).action).toBe('backToSale')
-    expect(emptyCopy('sale', true).actionLabel).toBe('去逛逛')
-    expect(emptyCopy('gone', true).actionLabel).toBe('回有效宝贝')
+  test('照稿：有效给「去逛逛」、失效给「回有效宝贝」', () => {
+    expect(emptyCopy('sale').action).toBe('browse')
+    expect(emptyCopy('gone').action).toBe('backToSale')
+    expect(emptyCopy('sale').actionLabel).toBe('去逛逛')
+    expect(emptyCopy('gone').actionLabel).toBe('回有效宝贝')
   })
 
   test('两段的文案各不相同（失效段要解释「谁会出现在这里」）', () => {
-    for (const demo of [true, false]) {
-      expect(emptyCopy('sale', demo).text).not.toBe(emptyCopy('gone', demo).text)
-    }
+    expect(emptyCopy('sale').text).not.toBe(emptyCopy('gone').text)
+    expect(emptyCopy('sale').title).not.toBe(emptyCopy('gone').title)
+  })
+})
+
+/** 契约收藏行：只填本页真正读的字段，其余按 `ListingCardSchema` 的最小合法形态 */
+function saved(
+  over: {
+    id?: string
+    status?: ListingCard['status']
+    category?: ListingCard['category']
+    coverUrl?: string | null
+    favoritedAt?: string
+    seller?: ListingCard['seller']
+  } = {},
+): ContractFavoriteItem {
+  return {
+    listing: {
+      id: over.id ?? LISTING_ID,
+      title: '九成新山地车',
+      priceCents: 38000,
+      category: over.category ?? 'SPORTS',
+      condition: 'GOOD',
+      status: over.status ?? 'ACTIVE',
+      urgent: false,
+      negotiable: true,
+      free: false,
+      coverUrl: over.coverUrl === undefined ? null : over.coverUrl,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      ...(over.seller === undefined ? {} : { seller: over.seller }),
+      // 卡片契约要求这个字段（`.nullable()`，不是 optional）：买家视角恒 null
+      moderationStatus: null,
+    },
+    favoritedAt: over.favoritedAt ?? '2026-09-30T00:00:00.000Z',
+  }
+}
+
+describe('toFavoriteItems —— 契约行 → 本页行（#397 接真数据的那一步）', () => {
+  test('分段完全由 listing.status 推出，失效原因要分开说', () => {
+    const rows = toFavoriteItems(
+      [
+        saved({ status: 'ACTIVE' }),
+        saved({ status: 'RESERVED' }),
+        saved({ status: 'SOLD' }),
+        saved({ status: 'OFFLINE' }),
+      ],
+      0,
+    )
+    // 在售与已预定都还看得见（详情页可见性同口径），只有卖掉 / 下架才算失效
+    expect(rows.map((row) => row.segment)).toEqual(['sale', 'sale', 'gone', 'gone'])
+    // 「被买走」和「被下架」对用户是两件事（一个等不到、一个可能重新上架），不能混成一句
+    expect(
+      itemsOf(rows, 'gone').map((row) => (row.segment === 'gone' ? row.goneReason : '')),
+    ).toEqual(['已卖掉', '已下架'])
+  })
+
+  test('卖家取自卡片内嵌的 seller；缺席时不留编造的占位身份', () => {
+    const withSeller = toFavoriteItems(
+      [
+        saved({
+          seller: {
+            id: SELLER_ID,
+            nickname: '阿星',
+            avatarUrl: 'data:image/png;base64,BBB',
+            authStatus: 'VERIFIED',
+          },
+        }),
+      ],
+      0,
+    )[0]
+    expect(withSeller?.seller).toBe('阿星')
+    expect(withSeller?.verified).toBe(true)
+    expect(withSeller?.avatarUrl).toBe('data:image/png;base64,BBB')
+
+    const withoutSeller = toFavoriteItems([saved()], 0)[0]
+    // 昵称缺席就留空（页面不画这一行），但**不能编一个名字**
+    expect(withoutSeller?.seller).toBe('')
+    expect(withoutSeller?.verified).toBe(false)
+    // 头像缺席落既有占位块（`features/listing/adapt.ts` 同一取法），不是空串
+    expect(withoutSeller?.avatarUrl.startsWith('data:image/png;base64,')).toBe(true)
+  })
+
+  test('无图落分类基色块、分类名走两字表、真实行 demo 恒 false', () => {
+    const row = toFavoriteItems([saved({ category: 'SPORTS' })], 0)[0]
+    expect(row?.categoryText).toBe('运动')
+    expect(row?.coverUrl.startsWith('data:image/png;base64,')).toBe(true)
+    // `demo: false` 是「这是服务端真数据」的标记：页面据它决定能不能真取消收藏
+    expect(row?.demo).toBe(false)
+
+    const withCover = toFavoriteItems([saved({ coverUrl: 'https://cdn.example.com/a.png' })], 0)[0]
+    expect(withCover?.coverUrl).toBe('https://cdn.example.com/a.png')
+  })
+
+  test('savedLabel 按收藏时间算，而且读的是传进来的 nowMs', () => {
+    const now = Date.parse('2026-10-01T12:00:00.000Z')
+    const same = saved({ favoritedAt: '2026-10-01T11:59:30.000Z' })
+    const justNow = toFavoriteItems([same], now)[0]
+    expect(justNow?.savedLabel).toContain('收藏')
+    /*
+      同一个 `favoritedAt` 换个 `nowMs` 必须换文案 —— 否则说明函数内部自己取了
+      `Date.now()`，页面上「刚刚收藏」会永远停在写代码那天的口径。
+    */
+    expect(toFavoriteItems([same], now + 86_400_000)[0]?.savedLabel).not.toBe(justNow?.savedLabel)
   })
 })
 

@@ -9,9 +9,11 @@ import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { fetchMyFavorites, setFavorite } from '@/features/favorites/api'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { type Cancellable, cancellable } from '@/lib/cancellable'
 import { formatAmount } from '@/lib/money'
+import { isApiError } from '@/lib/request'
 import {
   emptyCopy,
   FAVORITE_SEGMENTS,
@@ -19,45 +21,43 @@ import {
   type FavoriteSegment,
   itemsOf,
   loadDemoFavorites,
+  toFavoriteItems,
 } from './list'
 import './index.scss'
 
 /**
  * 我的收藏（设计稿 `小程序1版favorites.html`，模板 A 的调用方之一）。
  *
- * ## ⚠️ 这一页**没有后端**（本文件最重要的一件事）
+ * ## 数据源（端点随 #394 上线，本页已接真接口）
  *
- * 收藏在契约 / API **两层没有实现**：`packages/contracts` 没有 favorites 的
- * 路由或 schema、`apps/api` 没有 favorites 模块（`packages/db/src/schema/favorites.ts`
- * 只有表，没有对外端点；商品详情页的「收藏」至今是本地 `useState`，
- * 见 `pages/listing-detail/index.tsx`）。
- * 所以本页**不发任何请求**，也因此只有两种诚实形态：
+ * `GET /me/favorites` 是唯一出口（`@/features/favorites/api` 收口契约与解析）。
+ * 于是本页有**四种**诚实形态，没有一种需要编造：
  *
- * 1. **真实构建**（`MOCK_FALLBACK_ENABLED === false`）：空态 + 一句如实的缺口说明
- *    （文案在 `./list.ts` 的 `emptyCopy(segment, false)`）。
- *    **不是**假列表、**不是**错误态 —— 没有请求可失败，给错误态是编造一次故障，
- *    给假列表是编造用户的收藏。
- * 2. **演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，两个开关都要）：
- *    摆 8 件（6 有效 + 2 失效）设计稿示例数据。条数与 `features/fetchers.ts` 的
- *    `demoProfile()`（收藏 8）对齐，否则演示时会出现「我的页数字栏 8、点进来 6 件」
- *    这种自相矛盾。
+ * 1. **骨架屏**：真有一份请求在飞；
+ * 2. **列表**：接口回来的行，经 `./list.ts` 的 `toFavoriteItems` 适配成排版行；
+ * 3. **空态**：接口成功但这一段没有行 —— 如实说「还没有收藏的宝贝」（`emptyCopy`）；
+ * 4. **失败态**：请求失败。**不再用空态冒充失败** —— 那会让用户以为自己的收藏丢了。
  *
- * 端点就绪后要改的是**两处**，别只改一处：
+ * **演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，两个开关都要）才读 fixture：
+ * 摆 8 件（6 有效 + 2 失效）设计稿示例数据，条数与 `features/fetchers.ts` 的
+ * `demoProfile()`（收藏 8）对齐，否则演示时会出现「我的页数字栏 8、点进来 6 件」这种自相矛盾。
  *
- * 1. `loadFavorites()` 换成真接口调用（含失败态）—— 版式与下面的分段判定都不用动；
- * 2. **空态文案**（`./list.ts` 的 `emptyCopy`）：它的真实分支现在写的是「收藏功能还没有
- *    后端」，那是**今天的缺口**、不是空列表的常态。接口一上线，这一支必须换成真正的
- *    「你还没有收藏」—— 否则演示构建里 `DEMO_MODE` 仍为真，页面会拿着真数据说
- *    「还没有后端」。
+ * ## 分页
  *
- * ## 写操作一律不假装
+ * 契约一页最多 50 条、默认 20，`nextCursor !== null` 表示还有下一页，`total` 是**全量**计数。
+ * 本页没有「加载更多」的交互位，所以 `loadFavorites()` 把页翻完（上限见 `MAX_PAGES`），
+ * 用 `items.length >= total` 判断是否真的取全 —— 没取全时列表末尾**不写「已显示全部」**，
+ * 免得在一页装不下的收藏夹上说假话。
+ *
+ * ## 写操作
  *
  * - **批量管理是纯前端 UI 状态**（`managing` / `selected`）：勾选、全选、进出管理态
  *   都不代表任何一次写入，所以可以照稿做；
- * - **「取消收藏」不发假写**：没有端点就没有「提交」，点了只给一句如实的说明
- *   （**不做**本地删除 + 回滚 —— 那会让人以为收藏真的被取消了，刷新一次又回来）；
+ * - **「取消收藏」是真写**：`DELETE /listings/:id/favorite`（幂等），成功后**就地摘掉那些行**
+ *   并按服务端结果把 `total` 减掉 —— 不靠重拉整页，也不做「本地删了刷新又回来」的假动作；
+ *   失败的 id 原样留在选中集合里，用户能看见哪几条没成功；
  * - 「聊一聊」给「待接入」说明，「立即购买」与点行按稿进商品详情页 ——
- *   但演示数据的 id 在库里不存在，跳过去必然 404，所以演示行给说明 toast，
+ *   演示数据的 id 在库里不存在，跳过去必然 404，所以演示行给说明 toast，
  *   **不跳、也不假装跳成功**（判据是行上的 `demo` 标记，见 `./list.ts`）。
  *
  * ## 稿里刻意没有的东西（别加回来）
@@ -82,14 +82,57 @@ import './index.scss'
  */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 
+/** 一次取数的结果：适配好的行 + 服务端的全量计数（用来判断有没有取全） */
+type FavoritesLoad = {
+  items: FavoriteItem[]
+  /** 服务端 `total`：**全量**收藏数，不是这一页 / 这一次翻页的长度 */
+  total: number
+}
+
+/**
+ * 翻页上限（10 × 20 = 200 件）。
+ *
+ * 本页没有「加载更多」的交互位，所以真接口要自己把页翻完；但**不能无限翻** ——
+ * `nextCursor` 一旦因为服务端 bug 原地打转就是死循环。到顶时页面会看到
+ * `items.length < total`，列表末尾因此不写「已显示全部」（见文件头的「分页」）。
+ */
+const MAX_PAGES = 10
+
+/**
+ * 读取失败时给用户的那句话。
+ *
+ * 优先用服务端文案（`ApiError.message` 本来就是给人看的一句话），
+ * 拿不到才退回通用文案 —— 不把「请求超时」这类底层异常原文贴到界面上。
+ */
+function failureText(caught: unknown): string {
+  return isApiError(caught) ? caught.message : '网络不太好，收藏没读出来'
+}
+
 /**
  * 本页的「取数」。
  *
- * 真实构建回一份空列表（**不是** reject）：收藏没有端点这件事不是一次失败，
- * 页面据此渲染缺口空态；演示构建读 fixture（见 `./list.ts`）。
+ * 真实构建调 `GET /me/favorites` 并翻完页；演示构建读 fixture（见 `./list.ts`）。
+ * **失败不在这里吞**：直接抛给 `startLoad`，由它转成页面的失败态 ——
+ * 用空态冒充失败会让用户以为自己的收藏丢了。
  */
-function loadFavorites(): Promise<FavoriteItem[]> {
-  return DEMO_MODE ? loadDemoFavorites() : Promise.resolve([])
+async function loadFavorites(): Promise<FavoritesLoad> {
+  if (DEMO_MODE) {
+    const items = await loadDemoFavorites()
+    return { items, total: items.length }
+  }
+  // 一屏的「收藏时间」必须共用同一把尺子（见 `toFavoriteItems` 的 `nowMs` 约定）
+  const nowMs = Date.now()
+  const items: FavoriteItem[] = []
+  let total = 0
+  let cursor: string | undefined
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const response = await fetchMyFavorites(cursor)
+    items.push(...toFavoriteItems(response.items, nowMs))
+    total = response.total
+    if (response.nextCursor === null) break
+    cursor = response.nextCursor
+  }
+  return { items, total }
 }
 
 export default function Favorites() {
@@ -98,17 +141,26 @@ export default function Favorites() {
   const userId = auth.user?.id ?? null
 
   const [items, setItems] = useState<FavoriteItem[]>([])
-  /** 真实构建没有在途请求 → 初值就不该是 loading（否则会闪一帧骨架屏） */
-  const [loading, setLoading] = useState(DEMO_MODE)
+  /** 服务端 `total`：判断列表有没有取全（决定末尾写不写「已显示全部」） */
+  const [total, setTotal] = useState(0)
+  /**
+   * 读取失败的那句话。**与空态分开**：空列表是「你真的没有收藏」，
+   * 读失败是「这次没读到」—— 用空态冒充失败会让用户以为自己的收藏丢了。
+   */
+  const [error, setError] = useState<string | null>(null)
+  /** 两种构建初次进入都必有一次在途请求 → 初值就是 loading，不闪一帧空态 */
+  const [loading, setLoading] = useState(true)
   const [segment, setSegment] = useState<FavoriteSegment>('sale')
   const [showTop, setShowTop] = useState(false)
 
   /** 批量管理态：进出、勾选都只是本地 UI 状态，不代表任何一次写入（见文件头） */
   const [managing, setManaging] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
+  /** 「取消收藏」在途：挡住连点，避免同一批被写两遍 */
+  const [removing, setRemoving] = useState(false)
 
   /** 最近一次在飞的读取：换账号 / 卸载时取消，迟到的结果不再写状态（`@/lib/cancellable`） */
-  const inFlight = useRef<Cancellable<FavoriteItem[]> | null>(null)
+  const inFlight = useRef<Cancellable<FavoritesLoad> | null>(null)
   /**
    * 本页数据属于**哪个账号**。渲染期就能拿到上一帧的 `userId`，所以在**同一帧内**
    * 把账号作用域状态清干净，不会出现「B 的身份已经渲染出来了，画的却还是 A 的数据」。
@@ -121,11 +173,14 @@ export default function Favorites() {
     setPrevUserId(userId)
     inFlight.current?.cancel()
     setItems([])
-    setLoading(DEMO_MODE)
+    setTotal(0)
+    setError(null)
+    setLoading(true)
     setSegment('sale')
     // 选中集合是按 id 记的，换账号后必须一并清掉，否则会「勾着上一个人的宝贝」
     setManaging(false)
     setSelected([])
+    setRemoving(false)
   }
 
   /**
@@ -137,14 +192,27 @@ export default function Favorites() {
    * 「换账号后页面还画着上一个账号」这类 bug 的入口）。
    * 依赖里没有会变的东西，所以身份不变时它不会让 effect 多跑。
    */
-  const startLoad = useCallback(async (): Promise<FavoriteItem[] | null> => {
+  const startLoad = useCallback(async (): Promise<FavoritesLoad | null> => {
     inFlight.current?.cancel()
     const current = cancellable(loadFavorites, () => true)
     inFlight.current = current
-    const next = await current.promise
+    setError(null)
+    let next: FavoritesLoad | null
+    try {
+      next = await current.promise
+    } catch (caught) {
+      // 已经被后一次读取顶掉 / 已卸载之后才失败的：那次失败不属于这一屏，不写状态
+      if (current.isCancelled()) return null
+      setLoading(false)
+      setItems([])
+      setTotal(0)
+      setError(failureText(caught))
+      return null
+    }
     // `null` = 已被取消（换账号 / 卸载 / 被后一次读取顶掉）：整份结果丢弃，不写状态
     if (next === null) return null
-    setItems(next)
+    setItems(next.items)
+    setTotal(next.total)
     setLoading(false)
     // 列表换了一茬，旧的勾选不再对得上任何一行（刷新后还留着勾是「选了不存在的东西」）
     setSelected([])
@@ -153,7 +221,7 @@ export default function Favorites() {
 
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null) return
-    setLoading(DEMO_MODE)
+    setLoading(true)
     void startLoad()
     // 取消的是**最新**那次：卸载时可能还有一次下拉刷新在飞
     return () => {
@@ -170,8 +238,8 @@ export default function Favorites() {
     }
     void startLoad().then((next) => {
       void Taro.stopPullDownRefresh()
-      // 真实构建里下拉只是收指示器：没有端点可刷新，报一个数字才是骗人
-      if (next && DEMO_MODE) toast(`已刷新 · ${next.length} 件收藏`)
+      // 只有真取到了才报数字；失败时 `startLoad` 已经把失败态写在页面上
+      if (next) toast(`已刷新 · ${next.items.length} 件收藏`)
     })
   })
 
@@ -246,7 +314,7 @@ export default function Favorites() {
   const chat = () => toast('聊天待接入')
 
   const shown = itemsOf(items, segment)
-  const empty = emptyCopy(segment, DEMO_MODE)
+  const empty = emptyCopy(segment)
 
   /** 全选的作用域是**当前这一段**：失效宝贝在另一段，两段的勾选互不干扰 */
   const allPicked = shown.length > 0 && shown.every((item) => selected.includes(item.id))
@@ -256,17 +324,56 @@ export default function Favorites() {
   }
 
   /**
-   * 「取消收藏」：**没有端点，所以没有提交**。
+   * 「取消收藏」：**真写**（`DELETE /listings/:id/favorite`，幂等，见 `@/features/favorites/api`）。
    *
-   * 这里刻意**不做**本地删除（删掉再回滚、或删掉就算成功）：两种都是编造一次写入 ——
-   * 前者让人以为收藏真的被取消了，后者刷新一次又回来。只给一句如实的说明。
+   * 契约只有单品路径，没有批量端点，所以逐条写。**按服务端结果摘行**：成功的那几条从
+   * `items` 里去掉并把 `total` 减掉，失败的原样留着、也继续留在选中集合里 ——
+   * 用户能看见哪几条没成功，而不是本地先删再回滚（那会让人以为取消了，刷新一次又回来）。
+   *
+   * 演示行的 id（`F01` 这种）不在库里，写过去必然 404 —— 一并按「不假装」处理：
+   * 只给一句说明，不把它算进成功数（判据是行上的 `demo` 标记，见 `./list.ts`）。
    */
-  const removePicked = () => {
+  const removePicked = async () => {
     if (selected.length === 0) {
       toast('还没有选中宝贝')
       return
     }
-    toast('收藏还没有后端接口，取消收藏待接入')
+    if (removing) return
+    const realIds = items
+      .filter((item) => selected.includes(item.id) && !item.demo)
+      .map((item) => item.id)
+    if (realIds.length === 0) {
+      toast('演示数据：这些宝贝不在库里，取消不了')
+      return
+    }
+
+    setRemoving(true)
+    const failed: string[] = []
+    let removed = 0
+    for (const id of realIds) {
+      try {
+        await setFavorite(id, false)
+        removed += 1
+      } catch {
+        failed.push(id)
+      }
+    }
+    setRemoving(false)
+
+    if (removed > 0) {
+      const keep = new Set(failed)
+      setItems((prev) => prev.filter((item) => keep.has(item.id)))
+      setTotal((prev) => Math.max(0, prev - removed))
+    }
+    setSelected(failed)
+
+    if (failed.length === 0) {
+      toast(removed > 1 ? `已取消 ${removed} 件收藏` : '已取消收藏')
+      return
+    }
+    toast(
+      removed === 0 ? '取消收藏没成功，请重试' : `${removed} 件已取消，${failed.length} 件没成功`,
+    )
   }
 
   const onEmptyAction = () => {
@@ -367,6 +474,21 @@ export default function Favorites() {
               <Text className="fav__skel-hint-tx">正在读取收藏…</Text>
             </View>
           </View>
+        ) : error !== null ? (
+          /*
+            失败态**不能**用空态冒充：空列表是「你真的没有收藏」，读失败是「这次没读到」——
+            混在一起，用户会以为自己的收藏丢了。所以这一支单独渲染，并给一个重试出口。
+          */
+          <EmptyState
+            title="收藏没读出来"
+            text={error}
+            icon={ICONS.box}
+            actionText="重试"
+            onAction={() => {
+              setLoading(true)
+              void startLoad()
+            }}
+          />
         ) : shown.length === 0 ? (
           <EmptyState
             title={empty.title}
@@ -465,10 +587,18 @@ export default function Favorites() {
               })}
             </View>
 
-            {/* 「全部 N 件」里的 N 是**这一段**的件数 */}
+            {/*
+              「全部 N 件」里的 N 是**这一段**的件数。
+              `items.length < total` 说明翻页到了上限还没取全，此时**不能**写「全部」——
+              在一个装不下的收藏夹上说「已显示全部」就是假话。
+            */}
             <View className="fav__end">
               <View className="fav__end-line" />
-              <Text className="fav__end-tx num">{`已显示全部 ${shown.length} 件`}</Text>
+              <Text className="fav__end-tx num">
+                {items.length >= total
+                  ? `已显示全部 ${shown.length} 件`
+                  : `已显示前 ${shown.length} 件（共 ${total} 件）`}
+              </Text>
               <View className="fav__end-line" />
             </View>
           </>
@@ -490,8 +620,8 @@ export default function Favorites() {
             <Text className="fav__all-tx">全选</Text>
           </View>
 
-          <View className="fav__remove" onClick={removePicked}>
-            <Text>取消收藏</Text>
+          <View className="fav__remove" onClick={() => void removePicked()}>
+            <Text>{removing ? '取消中…' : '取消收藏'}</Text>
           </View>
         </View>
       ) : null}
