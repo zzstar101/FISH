@@ -25,8 +25,11 @@ export const MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 export const MEDIA_MAX_VOICE_DURATION_MS = 60_000
 export const MEDIA_MAX_IMAGE_DIMENSION = 4096
 export const MEDIA_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const
-// B1 服务端解析真实时长：仅支持可解析容器的 WebM/MP4；MP3 无可靠容器时长，从白名单移除。
-export const MEDIA_VOICE_MIME = ['audio/webm', 'audio/mp4'] as const
+// B1 服务端解析真实时长：仅支持可解析容器的 WebM/MP4/WAV；MP3 无可靠容器时长，从白名单移除。
+// WAV（#359 3b）：微信 RecorderManager 的原生输出之一（真机与开发者工具均可），
+// RIFF 头里有 fmt.byteRate 与 data.size，服务端可精确解析时长——这是它比 aac/mp3 适合进
+// 白名单的原因（aac 的 ADTS 裸流没有可靠容器头）。
+export const MEDIA_VOICE_MIME = ['audio/webm', 'audio/mp4', 'audio/wav'] as const
 export type MediaKind = z.infer<typeof mediaKindSchema>
 
 export const mediaPresignInputSchema = z.strictObject({
