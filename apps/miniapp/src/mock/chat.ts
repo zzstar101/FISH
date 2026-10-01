@@ -46,6 +46,13 @@ type MessageSpec = {
    * 重试后由页面本地清除（不写回 fixture）。
    */
   sendFail?: boolean
+  /**
+   * #359 3c：这条消息引用了本会话里**第几条**消息（1 基，按 `messages` 数组下标）。
+   * 写成序号而不是 id：id 由 `mockPublicId('msg', …)` 在投影时生成，spec 里拿不到。
+   */
+  replyToIndex?: number
+  /** #359 3c：演示一条「已撤回」的消息（撤回碑） */
+  recalled?: boolean
 }
 
 type ConversationSpec = {
@@ -87,6 +94,15 @@ const SPECS: ConversationSpec[] = [
         content: JSON.stringify({ type: 'tx.proposal', amountCents: 15000 }),
         agoMs: 20 * MIN,
       },
+      // #359 3c 演示样例：一条引用（引第 4 条「155 自提可以」）、一条已撤回
+      {
+        senderId: 'u-xiaobei',
+        type: 'TEXT',
+        content: '那就 155 吧，我这就过去',
+        replyToIndex: 4,
+        agoMs: 6 * MIN,
+      },
+      { senderId: 'u-alan', type: 'TEXT', content: '打错了，忽略', agoMs: 4 * MIN, recalled: true },
       {
         senderId: 'u-xiaobei',
         type: 'TEXT',
@@ -599,14 +615,20 @@ export const CONVERSATIONS: MockConversation[] = SPECS.map((spec) => {
 export const MESSAGES: MockMessage[] = SPECS.flatMap((spec) =>
   spec.messages.flatMap((message, index) => {
     if (message.media) return []
+    const messageIdOf = (i: number) =>
+      mockPublicId('msg', `${spec.id}-m${String(i + 1).padStart(2, '0')}`)
     return [
       {
-        id: mockPublicId('msg', `${spec.id}-m${String(index + 1).padStart(2, '0')}`),
+        id: messageIdOf(index),
         conversationId: mockPublicId('cnv', spec.id),
         senderId: message.senderId === null ? null : mockPublicId('usr', message.senderId),
         type: message.type,
         content: message.content,
         createdAt: isoAgo(message.agoMs),
+        // #359 3c：spec 里写的是「第几条」，投影时换成真正的消息 id
+        replyToId:
+          message.replyToIndex === undefined ? undefined : messageIdOf(message.replyToIndex - 1),
+        recalled: message.recalled ?? false,
       },
     ]
   }),

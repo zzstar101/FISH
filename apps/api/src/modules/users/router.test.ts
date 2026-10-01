@@ -15,9 +15,12 @@ const profile: PublicUserProfile = {
   nickname: '林一',
   avatarUrl: null,
   authStatus: 'VERIFIED',
+  signature: null,
   joinedDays: 19,
   activeCount: 3,
   soldCount: 1,
+  // #359 第五点：在线态是公开资料的必填字段，响应里原样透出
+  presence: { online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' },
 }
 
 const card: ListingCard = {
