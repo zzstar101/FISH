@@ -3,6 +3,7 @@ import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
+import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
 import { and, desc, eq, gte, ne, sql } from 'drizzle-orm'
 import type { ListingCardSource } from '../listings/card'
@@ -129,28 +130,37 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
     },
 
     async listWishMatches(wishId, limit) {
+      // innerJoin users（#191）：匹配卡片要带卖家公开子集，`seller_id` 外键保证行存在，
+      // PK join 1:1，不影响 Top-N 截断。
+      // drizzle 的 select 嵌套只支持一层：listing 列平铺在顶层，seller 单独一层，
+      // 返回前再组装回 `ListingCardSource`。
       const rows = await db
         .select({
           matchId: matches.id,
           score: matches.score,
           createdAt: matches.createdAt,
           coverObjectKey,
-          listing: {
-            id: listings.id,
-            listingNo: listings.listingNo,
-            title: listings.title,
-            priceCents: listings.priceCents,
-            category: listings.category,
-            condition: listings.condition,
-            status: listings.status,
-            urgent: listings.urgent,
-            negotiable: listings.negotiable,
-            free: listings.free,
-            createdAt: listings.createdAt,
+          id: listings.id,
+          listingNo: listings.listingNo,
+          title: listings.title,
+          priceCents: listings.priceCents,
+          category: listings.category,
+          condition: listings.condition,
+          status: listings.status,
+          urgent: listings.urgent,
+          negotiable: listings.negotiable,
+          free: listings.free,
+          listingCreatedAt: listings.createdAt,
+          seller: {
+            id: users.id,
+            nickname: users.nickname,
+            avatarUrl: users.avatarUrl,
+            authStatus: users.authStatus,
           },
         })
         .from(matches)
         .innerJoin(listings, eq(listings.id, matches.listingId))
+        .innerJoin(users, eq(users.id, listings.sellerId))
         .innerJoin(wishes, eq(wishes.id, matches.wishId))
         .where(
           and(
@@ -166,7 +176,26 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
         .orderBy(desc(matches.score), desc(matches.id))
         .limit(limit)
 
-      return rows.map((row) => ({ ...row, coverObjectKey: row.coverObjectKey ?? null }))
+      return rows.map((row) => ({
+        matchId: row.matchId,
+        score: row.score,
+        createdAt: row.createdAt,
+        coverObjectKey: row.coverObjectKey ?? null,
+        listing: {
+          id: row.id,
+          listingNo: row.listingNo,
+          title: row.title,
+          priceCents: row.priceCents,
+          category: row.category,
+          condition: row.condition,
+          status: row.status,
+          urgent: row.urgent,
+          negotiable: row.negotiable,
+          free: row.free,
+          createdAt: row.listingCreatedAt,
+          seller: row.seller,
+        },
+      }))
     },
 
     async countListingMatches(listingId) {

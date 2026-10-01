@@ -7,10 +7,11 @@
  *
  * ## 写进契约的隐私边界（本 Issue 的验收核心）
  *
- * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / joinedDays / activeCount /
- * soldCount / presence` 八个字段（`presence` 是 #359 第五点新增的在线态，见
- * `UserPresenceSchema` 的 Owner 拍板记录）。以下字段**在任何情况下都不得出现在响应里**
- * （不是"当前没有数据所以为空"，而是**契约里根本没有这个字段**）：
+ * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / signature / joinedDays /
+ * activeCount / soldCount / presence` 九个字段（`signature` 是 #179 新增的个性签名，
+ * `presence` 是 #359 第五点新增的在线态，见 `UserPresenceSchema` 的 Owner 拍板记录）。
+ * 以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以为空"，而是**契约里
+ * 根本没有这个字段**）：
  *
  * - `studentNo`（学号即账号）、`campusEmail`（校园认证绑定）、`passwordHash`、`role`
  *   —— 表里有，但永远不进公开 DTO；
@@ -20,7 +21,10 @@
  *   `phoneBound` / `maskedPhone`），公开 DTO 两者皆不含。
  * - `goodRate`（好评率）：仓库没有 reviews / ratings 表，**没有真实口径**，不编造。
  *   `listing-detail` 对卖家好评率已经是「契约没有 → 传 null → 整行不渲染」的同款处理。
- * - `following`（是否已关注）：没有 follows 表，关注关系未拆 Domain，#122 明确不做。
+ * - `following`（是否已关注）：关注关系已按 #188 拆成独立的 follows Domain
+ *   （`@fish/contracts/follows/schema`），但它**仍然不属于这份匿名公开读模型** ——
+ *   关注状态随「看的人是谁」而变，塞进来就等于让一个匿名端点带视角，与 #122
+ *   「同一响应给所有人」的口径冲突。本人视角走 `GET /users/:userId/follow`。
  *
  * `joinedAt` 也不出：它和 `joinedDays` 是同一事实的两种表达，两个字段必然漂移。
  * 口径由服务端固定，端上不再自己算（见 `joinedDays` 注释）。
@@ -89,6 +93,13 @@ export const PublicUserProfileSchema = z.object({
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
   authStatus: AuthStatusSchema,
+  /**
+   * 个性签名（#179）：用户主动公开的自我介绍，`null` = 未填写或已清空。
+   * 服务端存 trim 后的原文（可能多行），展示层自行取首行。
+   * 这是用户自填的自述内容，不是平台侧资料——不属于下方「任何情况下不得出现」
+   * 的隐私清单；该清单（学号 / 邮箱 / 手机号 / role / 评价 / 关注）不变。
+   */
+  signature: z.string().nullable(),
   /**
    * 加入天数（服务端算，下限 1）。
    *

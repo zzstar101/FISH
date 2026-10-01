@@ -1,5 +1,6 @@
 import {
   type ConversationDto,
+  type ConversationLastMessageType,
   type ConversationListQuery,
   type ConversationListResponse,
   type ConversationUnreadCount,
@@ -84,8 +85,9 @@ function toConversationDto(
     counterpartLastReadAt: readAtIso(row, viewerId, 'counterpart'),
     lastMessage: row.lastMessage
       ? {
-          // MEDIA 也是合法摘要类型（#67 第四步）：content 由 store 翻成 `[图片]`/`[语音]`。
-          type: row.lastMessage.type as 'TEXT' | 'SYSTEM' | 'MEDIA',
+          // 摘要类型直接取契约枚举：MEDIA（#67）的 content 由 store 翻成 `[图片]`/`[语音]`，
+          // LISTING（#359）翻成 `[商品]`。不再手写联合字面量，避免下次扩类型时这里漂移。
+          type: row.lastMessage.type as ConversationLastMessageType,
           content: row.lastMessage.content,
           senderId: row.lastMessage.senderId
             ? encodePublicId(PUBLIC_ID_PREFIX.user, row.lastMessage.senderId)

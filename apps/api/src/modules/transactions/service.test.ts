@@ -6,7 +6,11 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 const internalTx = (id: string) => decodePublicId(PUBLIC_ID_PREFIX.transaction, id)
 
 import { MemoryMessageStore } from '../messages/memory-store.fixture'
-import { createTransactionService, TransactionServiceError } from './service'
+import {
+  createTransactionService,
+  type TransactionNotifier,
+  TransactionServiceError,
+} from './service'
 import type {
   ConversationLookup,
   MeetupConsumeInput,
@@ -303,14 +307,19 @@ async function build() {
     publicUrl: (key: string) => `https://cdn.test/${key}`,
   }
   const systemEvents: string[] = []
+  /** 任务一 #89：交易进展通知的 spy（服务约定「动作成功后调用、收件人是对方」） */
+  const notifications: Parameters<TransactionNotifier>[0][] = []
   const service = createTransactionService({
     store,
     messages,
     storage,
     meetupSecret: 'test-meetup-secret',
     onSystemMessage: (_p, message) => systemEvents.push(message.content),
+    notify: (input) => {
+      notifications.push(input)
+    },
   })
-  return { store, service, messages, systemEvents }
+  return { store, service, messages, systemEvents, notifications }
 }
 
 describe('transaction service: propose / reject / accept', () => {
@@ -414,6 +423,136 @@ describe('transaction service: propose / reject / accept', () => {
     const message = await service.reject(seller, { conversationId: conversationA })
     expect(JSON.parse(message.content).type).toBe('tx.rejected')
     expect(store.rows).toHaveLength(0)
+  })
+})
+
+describe('transaction service: 交易进展通知（任务一 #89）', () => {
+  test('propose 通知卖家 PROPOSED（无交易 id）；accept 通知买家 ACCEPTED（带交易 id）', async () => {
+    const { service, notifications } = await build()
+    await service.propose(buyer, { conversationId: conversationA, amountCents: 16000 })
+    expect(notifications).toEqual([
+      { userId: seller, event: 'PROPOSED', conversationId: conversationA, listingId: listingA },
+    ])
+
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    expect(notifications[1]).toEqual({
+      userId: buyer,
+      event: 'ACCEPTED',
+      conversationId: conversationA,
+      listingId: listingA,
+      transactionId: internalTx(dto.id),
+    })
+  })
+
+  test('首次确认通知对方 CONFIRMED；对侧补确认后，先确认方收到 COMPLETED', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    notifications.length = 0
+    const txId = internalTx(dto.id)
+
+    await service.confirm(buyer, txId)
+    expect(notifications).toEqual([
+      {
+        userId: seller,
+        event: 'CONFIRMED',
+        conversationId: conversationA,
+        listingId: listingA,
+        transactionId: txId,
+      },
+    ])
+
+    await service.confirm(seller, txId)
+    expect(notifications[1]).toEqual({
+      userId: buyer,
+      event: 'COMPLETED',
+      conversationId: conversationA,
+      listingId: listingA,
+      transactionId: txId,
+    })
+  })
+
+  test('cancel 通知对方 CANCELLED；失败的动作（403/404/409）不发通知', async () => {
+    const { service, notifications, store } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    notifications.length = 0
+    const txId = internalTx(dto.id)
+
+    // 外人取消 → 404，不给任何一方发通知
+    expect(service.cancel(outsider, txId)).rejects.toMatchObject({ status: 404 })
+    expect(notifications).toEqual([])
+
+    await service.cancel(buyer, txId)
+    expect(notifications).toEqual([
+      {
+        userId: seller,
+        event: 'CANCELLED',
+        conversationId: conversationA,
+        listingId: listingA,
+        transactionId: txId,
+      },
+    ])
+    expect(store.rows[0]?.status).toBe('CANCELLED')
+  })
+
+  /*
+   * 幂等重放：store 对 no-op 也返回 ok（COMPLETED 上重复确认 / CANCELLED 上重复取消），
+   * 而客户端明确会重试（面交页 `retryConfirm`、PC 订单详情响应丢失后再点）。无脑发通知
+   * 会让同一进展反复推送并污染未读角标 —— 这里钉住「状态没变就不发」。
+   */
+  test('重复确认 / 重复取消都不再发第二条通知', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    const txId = internalTx(dto.id)
+
+    // 同一侧连点两次 confirm：第二次没有任何新进展，对方不该再收到一条
+    await service.confirm(buyer, txId)
+    notifications.length = 0
+    await service.confirm(buyer, txId)
+    await service.confirm(buyer, txId)
+    expect(notifications).toEqual([])
+
+    // 对侧补确认 → COMPLETED（买方收到）；完成后重复 confirm 仍是 COMPLETED，不再发
+    await service.confirm(seller, txId)
+    expect(notifications.map((n) => n.event)).toEqual(['COMPLETED'])
+    notifications.length = 0
+    await service.confirm(seller, txId)
+    expect(notifications).toEqual([])
+  })
+
+  /*
+   * 与上一条互补的一半：判据比的是**对方视角的事件**，所以「重放方是对侧」才是真正
+   * 走到那条分支的路径 —— 上一条重放的是同一侧（`before` 仍是 null，靠的是另一个
+   * 条件挡下）。这里买家确认后卖家连点两次，第二次必须静默。
+   */
+  test('对方已确认、我连点两次确认：只有第一次告知买家，第二次静默', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    const txId = internalTx(dto.id)
+    notifications.length = 0
+
+    await service.confirm(buyer, txId)
+    expect(notifications.map((n) => n.event)).toEqual(['CONFIRMED'])
+    notifications.length = 0
+
+    await service.confirm(seller, txId)
+    expect(notifications.map((n) => n.event)).toEqual(['COMPLETED'])
+    notifications.length = 0
+    await service.confirm(seller, txId)
+    expect(notifications).toEqual([])
+  })
+
+  test('重复取消不发第二条（首次取消仍发对方）', async () => {
+    const { service, notifications } = await build()
+    const dto = await service.accept(seller, { conversationId: conversationA, amountCents: 15000 })
+    notifications.length = 0
+    const txId = internalTx(dto.id)
+
+    await service.cancel(buyer, txId)
+    expect(notifications.map((n) => n.event)).toEqual(['CANCELLED'])
+    notifications.length = 0
+    await service.cancel(buyer, txId)
+    await service.cancel(seller, txId)
+    expect(notifications).toEqual([])
   })
 })
 
@@ -856,11 +995,12 @@ describe('transaction service: meetup token (#70)', () => {
   })
 
   test('买家先单侧 confirm，核销即第二侧确认事件 → 交易直接 COMPLETED（审查 F1）', async () => {
-    const { service, txId } = await buildWithPendingTx()
+    const { service, notifications, txId } = await buildWithPendingTx()
     // 买家在订单里先点了单侧确认：交易仍停 PENDING_MEETUP
     await service.confirm(buyer, txId)
     expect((await service.getTransaction(buyer, txId)).status).toBe('PENDING_MEETUP')
     const token = await service.issueMeetupToken(seller, txId)
+    notifications.length = 0
     await service.redeemMeetupToken(buyer, txId, {
       qrToken: parseMeetupQrPayload(token.qrPayload)?.token ?? '',
     })
@@ -868,6 +1008,35 @@ describe('transaction service: meetup token (#70)', () => {
     const dto = await service.getTransaction(buyer, txId)
     expect(dto.status).toBe('COMPLETED')
     expect(dto.completedAt).not.toBeNull()
+
+    /*
+     * 成交通知只有核销这一条路能发出：客户端随后的 confirm 在 COMPLETED 上是幂等
+     * 重放、`eventKnownToCounterpart` 前后相同、按设计静默。核销不发，卖家就永远
+     * 收不到「交易已完成」。
+     */
+    expect(notifications).toEqual([
+      {
+        userId: seller,
+        event: 'COMPLETED',
+        conversationId: conversationA,
+        listingId: listingA,
+        transactionId: txId,
+      },
+    ])
+    // 客户端紧随其后的 confirm 不再重复通知
+    notifications.length = 0
+    await service.confirm(buyer, txId)
+    expect(notifications).toEqual([])
+  })
+
+  test('买家未先确认时核销只盖卖家确认、交易仍 PENDING → 不发成交通知', async () => {
+    const { service, notifications, txId } = await buildWithPendingTx()
+    const token = await service.issueMeetupToken(seller, txId)
+    notifications.length = 0
+    await service.verifyMeetupCode(buyer, txId, { code: token.code })
+    expect((await service.getTransaction(buyer, txId)).status).toBe('PENDING_MEETUP')
+    // 核销是卖家自己那一侧的确认，对方（买家）没有任何新进展可学
+    expect(notifications).toEqual([])
   })
 
   test('status 响应含消费人与时间（CONSUMED 派生）', async () => {

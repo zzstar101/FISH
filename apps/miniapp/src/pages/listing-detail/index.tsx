@@ -47,7 +47,7 @@ import {
   type MockComment,
   type MockListing,
 } from '@/mock/api'
-import { findUser, ME as mockMe } from '@/mock/users'
+import { ME as mockMe } from '@/mock/users'
 import {
   type ActionTask,
   beginActionTask,
@@ -1437,13 +1437,13 @@ export default function ListingDetail() {
                     key={item.id}
                     listing={item}
                     /*
-                      卖家用**这张卡自己的** sellerId 查，不能用 `data.seller`。
+                      卖家用**这张卡自己内嵌的** seller，不能用 `data.seller`。
                       `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
                       把当前卖家挂上去就是给别人的商品捏造了一个卖家。
-                      真实数据下 `item.sellerId` 是空串哨兵 → `findUser` 给 null → 整行不渲染；
-                      mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
+                      #191 起契约卡片内嵌 `seller`（`toMockListing` 同源投影）：
+                      真实数据下是这张卡的卖家真值；老 mock 记录缺席时是 null → 整行不渲染。
                     */
-                    seller={findUser(item.sellerId)}
+                    seller={item.seller}
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
@@ -1453,8 +1453,8 @@ export default function ListingDetail() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
-                    seller={findUser(item.sellerId)}
+                    /* 同左列：用卡片自己内嵌的 seller，不用当前商品的卖家 */
+                    seller={item.seller}
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}

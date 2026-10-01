@@ -8,8 +8,9 @@
  * → 底部输入栏（语音切换 + 自动长高输入框 + 「+」+ 发送）→ 展开的面板。
  *
  * 与 1版稿的差异（#89 接真实接口时删掉的契约外展示件）：认证徽章（契约无
- * `authStatus`）、每条消息的「已读」标记（实时契约无已读回执）、`tx.completed`
- * 评价卡（交易域无该事件）。媒体气泡样式保留给 #67，见文件中部的标注。
+ * `authStatus`）、`tx.completed` 评价卡（交易域无该事件）。「每条消息的已读标记」
+ * 当年照 #149 未合入删掉，#359 四 已用 `counterpartLastReadAt` 接回（`.conv__rd`）。
+ * 媒体气泡样式保留给 #67，见文件中部的标注。
  * 尺寸口径见 1版稿（`D:\Downloads\1改\小程序1版conversation.html`）。
  *
  * 页面根节点是 100vh 的纵向 flex：页头固定、消息区滚动、输入栏吸底。
@@ -246,6 +247,85 @@
   height: 30px;
 }
 
+/**
+ * LISTING 消息卡（#359）：消息流里的商品卡。版式取头卡 `.conv__pcard` 的缩小版
+ * （同一圆角/描边/灰底语言，宽度受气泡列约束，不再占满头部整行）。
+ */
+.conv__lcard {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 400px;
+  max-width: 100%;
+  padding: 14px;
+  border-radius: 24px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.conv__lcard-thumb {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 auto;
+  border-radius: 18px;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.conv__lcard-img {
+  width: 100%;
+  height: 100%;
+}
+
+.conv__lcard-ph {
+  width: 44px;
+  height: 44px;
+}
+
+.conv__lcard-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__lcard-title {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.35;
+  @include ellipsis;
+}
+
+.conv__lcard-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 21px;
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 金额一律红（与头卡 `.conv__pcard-price` 同一 --price 口径） */
+.conv__lcard-price {
+  color: var(--price);
+  font-weight: 700;
+}
+
+.conv__lcard-caret {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
 /* ---------------------------------------------------------------- 消息流 */
 
 .conv__scroll {
@@ -444,9 +524,117 @@
   color: var(--muted-2);
 }
 
+/* ------------------------------------------------- 长按菜单 / 引用 / 撤回（#359 3c） */
+
+/*
+ * 长按菜单用微信原生 `Taro.showActionSheet`，没有自绘弹层，因此这里没有菜单样式。
+ * 本节只有三块：气泡内摘引、输入栏上方的引用栏、撤回碑。
+ */
+
+/* 气泡内的摘引（稿子 .quote）：左侧竖线 + 单行截断的摘引文案，点它定位原消息 */
+.conv__quote {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 4px 0 4px 16px;
+  margin-bottom: 10px;
+  border-left: 5px solid var(--accent-mid);
+  border-radius: 8px;
+
+  /* 我方气泡是渐变底，竖线与文字都要换成白色系才看得清 */
+  &.is-mine {
+    border-left-color: rgba(255, 255, 255, 0.72);
+  }
+}
+
+.conv__quote-tx {
+  flex: 1;
+  min-width: 0;
+  font-size: 22px;
+  line-height: 1.4;
+  color: var(--muted-2);
+  @include ellipsis;
+
+  .conv__quote.is-mine & {
+    color: rgba(255, 255, 255, 0.86);
+  }
+}
+
+/* 撤回碑（稿子 .recalled）：灰底小胶囊，体积与 SYSTEM 胶囊一致但不占整行 */
+.conv__recalled {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 10px 22px;
+  border-radius: var(--r-pill);
+  background: var(--ink-weak);
+}
+
+.conv__recalled-tx {
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* 引用栏：吸在输入行上方，左侧竖线 + 摘引 + 右侧取消 */
+.conv__replybar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: var(--ice);
+  border-left: 5px solid var(--accent-mid);
+}
+
+.conv__replybar-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__replybar-tx {
+  display: block;
+  font-size: 23px;
+  line-height: 1.4;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.conv__replybar-cancel {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conv__replybar-ic {
+  width: 30px;
+  height: 30px;
+  opacity: 0.6;
+}
+
+/* 撤回路上的那条气泡：整块压暗，视觉上告知「正在撤回」 */
+.conv__bubble.is-busy {
+  opacity: 0.55;
+}
+
 .conv__rd {
-  color: var(--brand-deep);
+  color: var(--ink);
   font-weight: 600;
+}
+
+/* 未读红、已读黑（#359 四）：只挂在我发出的气泡的时间后面，判据见 view.ts 的 messageReadLabel */
+.conv__rd.is-unread {
+  /*
+    用 `--danger-ink` 而不是 `--danger`（#359 四 审查回合）：这是 20rpx（10pt）的文字，
+    底色是 `--bg`（#f7faff），`--danger`（#ff5f6d）对比度只有 2.82:1，连 AA-large 的
+    3:1 都不到；`--danger-ink`（#974457）是 6.12:1。同文件的 `.conv__retry` 也用的是 ink 版。
+  */
+  color: var(--danger-ink);
 }
 
 /* 失败重试胶囊：高 24pt，与媒体的上传失败共用 */
@@ -471,12 +659,6 @@
 
 /* ---------------------------------------------------------------- 图片气泡 */
 
-/*
- * ⚠️ 本段（图片气泡 / 语音气泡）当前**没有 JSX 使用**：媒体消息属于 #67，
- * 本轮只把「发图 / 发语音」的入口改成明确提示，没有伪造本地媒体消息。
- * 样式按设计稿保留在原处，等 #67 落地时直接接上，不必再从 git 历史里捞。
- */
-
 /* 稿子 .bubble.is-media：图满铺气泡，不留内衬也不描边，圆角由气泡裁 */
 .conv__bubble--media {
   padding: 0;
@@ -499,7 +681,7 @@
   height: 100%;
 }
 
-/* 上传中：右下角深色底盘 + conic-gradient 环形进度（进度值由 JS 给 style） */
+/* 上传中：右下角深色底盘 + 环形指示（进度值由 JS 给 style） */
 .conv__prog {
   position: absolute;
   right: 12px;
@@ -517,6 +699,24 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
+}
+
+/*
+  上传中的环：直传走 `Taro.request`（presign + PUT），而 `RequestTask` 上没有
+  `onProgressUpdate`（只有 `Taro.uploadFile` 的 `UploadTask` 有，但它的 multipart
+  请求体过不了 MinIO 的 presigned PUT）。所以这里给的是**不定量**的旋转指示，
+  不假装一个百分比。
+*/
+.conv__ring.is-spin {
+  border: 4px solid rgba(255, 255, 255, 0.28);
+  border-top-color: var(--surface);
+  animation: conv-ring-spin 0.9s linear infinite;
+}
+
+@keyframes conv-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 上传失败：左上角 `!` 角标。图满铺后角标必须在图内（12px），否则被 overflow 裁掉 */
@@ -544,6 +744,15 @@
   align-items: center;
   gap: 18px;
   padding: 18px 24px;
+}
+
+/*
+  语音气泡里的失败角标（#364 审查）：图片那枚绝对定位贴在照片左上角，而语音气泡的
+  左上被播放钮占着（贴上去会盖住它），所以这里让它回到文档流、跟时长排在同一行。
+*/
+.conv__bubble--voice .conv__failmark {
+  position: static;
+  flex: 0 0 auto;
 }
 
 .conv__play {
@@ -763,6 +972,12 @@
   justify-content: center;
 
   &:active {
+    background: var(--accent-weak);
+  }
+
+  /* 正在录音：与「键被按住」同一视觉语言（`:active` 覆盖的是按压瞬间，
+     `is-on` 覆盖的是「已经起录、手指还按着」这一段） */
+  &.is-on {
     background: var(--accent-weak);
   }
 }

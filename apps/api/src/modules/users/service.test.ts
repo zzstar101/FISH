@@ -25,6 +25,7 @@ function userRow(overrides: Partial<PublicUserRow> = {}): PublicUserRow {
     nickname: '林一',
     avatarUrl: null,
     authStatus: 'VERIFIED',
+    signature: null,
     createdAt: new Date('2026-09-01T00:00:00.000Z'),
     ...overrides,
   }
@@ -45,6 +46,8 @@ function listingRow(overrides: Partial<PublicListingRow> = {}): PublicListingRow
     createdAt: new Date('2026-09-10T02:00:00.000Z'),
     createdAtCursor: '2026-09-10T02:00:00.000000Z',
     coverObjectKey: null,
+    // #191：卡片卖家公开子集（他人主页在售的卖家即主页用户），join users 同源带出。
+    seller: { id: USER_ID, nickname: '林一', avatarUrl: null, authStatus: 'VERIFIED' },
     ...overrides,
   }
 }
@@ -109,6 +112,7 @@ describe('公开资料', () => {
       'joinedDays',
       'nickname',
       'presence',
+      'signature',
       'soldCount',
     ])
   })
@@ -128,6 +132,18 @@ describe('公开资料', () => {
 
     expect(profile.presence).toEqual({ online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' })
     expect(asked).toEqual([USER_ID])
+  })
+
+  test('签名（#179）：行里的 signature 原样进公开 DTO', async () => {
+    const filled = await service(
+      fakeStore({ user: userRow({ signature: '面交优先' }) }),
+    ).getPublicProfile(USER_ID)
+    expect(filled.signature).toBe('面交优先')
+
+    const empty = await service(fakeStore({ user: userRow({ signature: null }) })).getPublicProfile(
+      USER_ID,
+    )
+    expect(empty.signature).toBeNull()
   })
 
   test('把统计与加入天数一起组装进响应', async () => {

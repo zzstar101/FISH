@@ -92,6 +92,8 @@ function toPublicProfile(
     // 不让一个人的脏头像把整页打成 500（与 comments 的 `toAuthor` 同一取舍）。
     avatarUrl: publicAvatarUrl(row.avatarUrl),
     authStatus: row.authStatus,
+    // #179：用户自填的自我介绍（DB 列由 #287 批量迁移落库），`null` = 未填写或已清空
+    signature: row.signature,
     joinedDays: joinedDaysOf(row.createdAt, now),
     activeCount: stats.activeListings,
     soldCount: stats.soldCount,

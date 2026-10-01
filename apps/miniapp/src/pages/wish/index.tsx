@@ -392,9 +392,7 @@ export default function Wish() {
                     <Image className="wishempty__ic" src={ICONS.starAccent} mode="aspectFit" />
                   </View>
                   <Text className="wishempty__title">这个筛选下还没有愿望</Text>
-                  <Text className="wishempty__text">
-                    换个状态看看，或者直接许一个愿 —— 卖家看到你的需求就会来找你
-                  </Text>
+                  <Text className="wishempty__text">换个筛选条件，或点右上角「我要许愿」</Text>
                 </View>
               ) : (
                 <View className="wish__list">
@@ -410,8 +408,11 @@ export default function Wish() {
                     // 门禁抽成纯函数（`list-state.ts`）：终态不给死链接、失败不静默、
                     // 0 命中仍给提示。判定与测试都在那里。
                     const hitLink = wishHitLink(wish, hitList)
+                    // 整卡随状态变色：许愿中且确有命中 → 绿卡；许愿中无命中 → 白卡；终态 → 灰卡
+                    const cardTone =
+                      wish.status === 'ACTIVE' ? (hitCount > 0 ? ' mw--hit' : '') : ' mw--dim'
                     return (
-                      <View key={wish.id} className="mw">
+                      <View key={wish.id} className={`mw${cardTone}`}>
                         <View className="mw__top">
                           <View className="mw__main">
                             <Text className="mw__time">{wish.timeLabel}许下</Text>
@@ -544,15 +545,6 @@ export default function Wish() {
                     </View>
                   </View>
                 ))}
-                {/* k-匿名说明：池子只输出聚合数字，永不输出 user_id（稿的 .knote） */}
-                <View className="knote">
-                  <Text className="knote__line">
-                    {`k-匿名 · HAVING count(DISTINCT user_id) >= ${POOL_MIN_COUNT}`}
-                  </Text>
-                  <Text className="knote__line">
-                    只输出聚合数字，永不输出 user_id 或任何个人字段
-                  </Text>
-                </View>
               </View>
             )}
           </>

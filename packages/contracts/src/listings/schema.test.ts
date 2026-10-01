@@ -271,6 +271,41 @@ describe('ListingCardSchema', () => {
       false,
     )
   })
+
+  // #191：seller 只收公开四字段。老客户端 mock 记录可以省略（API 卡片恒带，见契约注释）；
+  // 多余字段（如 role / campus）被剥离，不能借卡片把非公开列带出服务端。
+  test('seller 是可选的公开子集：缺席合法、四字段合法、多余字段剥离', () => {
+    expect(ListingCardSchema.safeParse(card).success).toBe(true)
+    expect(
+      ListingCardSchema.safeParse({
+        ...card,
+        seller: { id: USER_ID, nickname: '阿岚', avatarUrl: null, authStatus: 'VERIFIED' },
+      }).success,
+    ).toBe(true)
+
+    const parsed = ListingCardSchema.parse({
+      ...card,
+      seller: {
+        id: USER_ID,
+        nickname: '阿岚',
+        avatarUrl: null,
+        authStatus: 'VERIFIED',
+        role: 'ADMIN',
+      },
+    })
+    expect(parsed.seller).toEqual({
+      id: USER_ID,
+      nickname: '阿岚',
+      avatarUrl: null,
+      authStatus: 'VERIFIED',
+    })
+    expect(Object.keys(parsed.seller ?? {}).sort()).toEqual([
+      'authStatus',
+      'avatarUrl',
+      'id',
+      'nickname',
+    ])
+  })
 })
 
 describe('UploadPresignRequestSchema', () => {

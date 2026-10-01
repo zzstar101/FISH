@@ -102,6 +102,8 @@ describe('realtime router (integration)', () => {
           sender: null,
           type: 'SYSTEM',
           content: 'hi',
+          recalledAt: null,
+          replyTo: null,
           createdAt: '2026-09-12T10:00:00.000Z',
         },
       })
