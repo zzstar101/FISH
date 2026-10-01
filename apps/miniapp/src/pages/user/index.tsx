@@ -12,6 +12,8 @@ import NavBar from '@/components/nav-bar'
 import { useAuth } from '@/features/auth/store'
 import { loadPublicUserHome, MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { fetchFollowState, setFollow } from '@/features/following/api'
+import { usePresenceNow } from '@/features/presence/use-presence-now'
+import { presenceView } from '@/features/presence/view'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { cancellable } from '@/lib/cancellable'
@@ -277,6 +279,20 @@ export default function UserHome() {
   )
 
   const verified = profile?.authStatus === 'VERIFIED'
+
+  /**
+   * 在线态（#359 第五点）：头像右侧那一列的昵称行下方。
+   *
+   * 判据走 `features/presence/view`（三处展示位共用）：服务端的 `online` 加上端上按同一
+   * TTL 的本地过期 —— 本页进页只拉一次资料，不做过期处理的话，几分钟前拿到的
+   * 「在线」会一直挂在屏幕上。`profile` 还没到时不渲染（骨架屏阶段没有在线态可说）。
+   *
+   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页没有任何轮询能带来重渲染，
+   * 直接用 `Date.now()` 只在资料到位那一帧求值一次，那段本地过期永远不会被触发。
+   * 该 hook 不发请求，页面被盖住时停表。
+   */
+  const presenceNow = usePresenceNow()
+  const presence = profile ? presenceView(profile.presence, presenceNow) : null
 
   /**
    * 列表终点判定（纯函数，用例见 `tests/user-list-end.test.ts`）。
@@ -589,6 +605,15 @@ export default function UserHome() {
                         </View>
                       ) : null}
                     </View>
+                    {/* 在线态（#359 第五点）：头像右边这一列的第二行。绿点 + 文案；
+                        「多久没上线」由 `presenceView` 折算成「12 分钟前活跃」这类相对时间。
+                        拿不到在线态时整块不渲染（不画一个假的「离线」）。 */}
+                    {presence ? (
+                      <View className={`uhome__presence${presence.online ? ' is-online' : ''}`}>
+                        <View className="uhome__presence-dot" />
+                        <Text className="uhome__presence-tx">{presence.text}</Text>
+                      </View>
+                    ) : null}
                   </View>
                   {/* 关注按钮（稿 `.btn-follow`）：**头像行内第三格**，昵称块右侧 ——
                       稿的 `.profile` 是 `头像 | 昵称块 | 关注钮` 三格 flex，签名不在这一行里。

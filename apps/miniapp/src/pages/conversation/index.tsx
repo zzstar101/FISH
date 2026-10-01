@@ -40,6 +40,7 @@ import {
   voiceError,
 } from '@/features/chat/media-api'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
+import { presenceView } from '@/features/presence/view'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
@@ -47,6 +48,7 @@ import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
 import {
+  applyPresencePoll,
   applyReadPoll,
   applyRecalled,
   beginSend,
@@ -60,6 +62,7 @@ import {
   initialDeferredReload,
   isCurrentPlayRequest,
   isLatestPageLoad,
+  isLatestPresencePoll,
   isStaleMediaIdentity,
   isStaleMediaTask,
   keepRecalledTombstones,
@@ -110,7 +113,7 @@ import './index.scss'
  *    （#67 的范围）。其中「每条消息的已读标记」当年是照 #149 未合入删掉的（理由已过期），
  *    #359 四 用契约的 `counterpartLastReadAt` 把它接回来 —— 判据见 `./view` 的
  *    `messageReadLabel`，只标我发出的气泡。读位由进页 / 从子页返回 / 点重试，以及本页的
- *    **读位轮询**（`READ_POLL_MS`，只补这一个字段、不 bump epoch、不重发已读）刷新；
+ *    **详情轮询**（`DETAIL_POLL_MS`，只补读位与在线态、不 bump epoch、不重发已读）刷新；
  *    `conversation.read` 的实时接收仍要等小程序实时客户端合入（#213→#220 链）。
  *    原先注释把「发送落定后的静默补刷」当常规刷新时机是错的：那条路径只在「发送未落定
  *    就离开本页、再回来」时才发生（见 `./view` 的 `shouldFlushDeferredReload`）。
@@ -154,12 +157,17 @@ const WAVE_BARS = [14, 24, 36, 20, 40, 28, 16, 32, 22, 12, 26, 18].map((height, 
 const EMPTY_IDS: ReadonlySet<string> = new Set()
 
 /**
- * 读位补刷周期（#359 四 审查回合）。
+ * 详情轮询周期（#359 四 的读位 + #359 第五点 的在线态）。
  *
- * 取 20s：这是「对方读没读」这种状态的合理粒度（用户不会盯着一个标签等秒级精确），
- * 又与 `GET /conversations/:id` 的既有刷新节奏同量级 —— 一次详情请求，成本可忽略。
+ * 取 20s：这是「对方读没读」「对方在不在线」这类状态的合理粒度（用户不会盯着一个标签
+ * 等秒级精确），又与 `GET /conversations/:id` 的既有刷新节奏同量级 —— 一次详情请求，
+ * 成本可忽略。20s 也与服务的在线窗口（`PRESENCE_ONLINE_TTL_MS = 60s`）成比例：最坏
+ * 情况下「对方断线」要等 TTL + 一跳才在端上体现（约 80s）。
+ *
+ * **两个字段共用一条**（#376 收口，Owner 决策）：它们同源（同一份会话详情）、同周期、
+ * 同守卫，拆成两条 20s 轮询只会让同一端点每 20s 被请求两次，且两条的守卫还不一致。
  */
-const READ_POLL_MS = 20_000
+const DETAIL_POLL_MS = 20_000
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -271,6 +279,18 @@ export default function Conversation() {
    * 只有 `[conversationId]`，直接闭包读 `messages` 会永远拿到首帧的空数组。
    */
   const messagesRef = useRef<MessageDto[]>([])
+  /**
+   * 在线态轮询的启停把手（#376 审查回合，P3）：`useDidHide` 要能**真的**把表停掉 ——
+   * 只在 tick 里判 `visibleRef` 是空转（定时器照常每 20s 走一圈），页面被盖住期间白烧唤醒。
+   * effect 建立 / 收回把手，`useDidShow` / `useDidHide` 与卸载都从同一个把手进出。
+   */
+  const detailPollRef = useRef<{ start: () => void; stop: () => void } | null>(null)
+  /**
+   * 在线态轮询的请求序号（#376 审查回合，P3）：每跳自增，落地时只认最新一次。
+   * 判据见 `./view` 的 `isLatestPresencePoll`（`applyPresencePoll` 是 last-write-wins，
+   * 不设序号时先发的旧快照会盖掉后发的新结论）。
+   */
+  const presenceSeq = useRef(0)
   /** 媒体那条流的 id 快照来源（silent 合并要用，同 `messagesRef` 的理由） */
   const mediaRef = useRef<MediaMessageDto[]>([])
   /** 在途媒体（`useDidShow` 判「有在途发送」时要把上传中的媒体也算上） */
@@ -502,38 +522,6 @@ export default function Conversation() {
   }, [authStatus, userId, load])
 
   /**
-   * 读位补刷（#359 四 审查回合）。
-   *
-   * 为什么必须有：端上没有「实时」——小程序没有实时客户端，`conversation.read` 帧没人接，
-   * 而 `load()` 的触发点只有进页 / 从子页返回 / 点重试。用户盯着屏幕时读位永远不会更新，
-   * 红「未读」会一直红到离开再回来，看起来就是坏的。
-   *
-   * 只做一件事：拉一次详情、只把 `counterpartLastReadAt` 写回（`applyReadPoll` 还会挡住
-   * 乱序的更旧读位）。不 bump epoch（否则在途发送的响应会被判过期丢弃）、不重发已读上报
-   * （那是「用户真的看到了首屏」才该做的副作用）、不动消息流与游标。
-   *
-   * 页面不可见时不发请求（`visibleRef` 由 useDidShow / useDidHide 维护）。
-   *
-   * 落地时还要过**代次闸**（#359 四 审查回合二）：这条轮询同样可能在换账号 / 换会话 /
-   * 整页重拉的途中落地，而 `applyReadPoll` 取的是「更晚的那份」——上一代视角的读位一旦
-   * 写进去会被钉住，直到下一次整页重拉才自愈。判据与 `load` / `doSend` 同一道
-   * （`current !== epoch.current`）。
-   */
-  useEffect(() => {
-    if (authStatus !== 'authed' || userId === null || !conversationId) return undefined
-    const timer = setInterval(() => {
-      if (!visibleRef.current) return
-      const current = epoch.current
-      void loadConversation(conversationId).then((detail) => {
-        if (!visibleRef.current || detail.status !== 'ok') return
-        if (current !== epoch.current) return
-        setConversation((prev) => (prev === null ? prev : applyReadPoll(prev, detail.conversation)))
-      })
-    }, READ_POLL_MS)
-    return () => clearInterval(timer)
-  }, [authStatus, userId, conversationId])
-
-  /**
    * 从子页返回（商品详情 / 交易码页）时重拉：那边可能改了商品 / 交易状态，
    * 本页的会话详情与历史都是账号作用域的快照，回来就过期。
    *
@@ -567,6 +555,8 @@ export default function Conversation() {
   pendingMediaRef.current = pendingMedia
   useDidShow(() => {
     visibleRef.current = true
+    // 回到本页：把在线态的轮询表续上（隐藏时真的停掉了，见 useDidHide）
+    detailPollRef.current?.start()
     /**
      * 「有在途发送」把媒体也算上：上传中的媒体与发送中的文本是同一个危害 ——
      * 此刻重拉会把 `epoch` +1，在途的直传 / create 响应被判过期，乐观气泡永远停在
@@ -592,6 +582,8 @@ export default function Conversation() {
   })
   useDidHide(() => {
     visibleRef.current = false
+    // 页面被盖住：在线态已经不显示了，把轮询停掉（不再让定时器在后台空转每一跳）
+    detailPollRef.current?.stop()
     /**
      * 切后台就放弃这次录音：`RecorderManager` 在后台可能被系统掐掉，`onStop` 不一定
      * 回来；留着 `recordingRef` 会让回到前台后按不下去（判定里它非空）。
@@ -620,6 +612,7 @@ export default function Conversation() {
     }
   }, [])
 
+  /**
   /**
    * 把服务端媒体的字节拉到本地临时文件（验收⑤：不能拼公开对象存储地址，
    * `<Image>` / `innerAudioContext` 也带不了 Cookie，只能走带 header 的 `downloadFile`）。
@@ -675,6 +668,78 @@ export default function Conversation() {
         })
     }
   }, [authStatus, userId, conversationId, media, rememberPath])
+
+  /**
+   * 详情轮询（#359 四 的读位 + #359 第五点 的在线态，Owner 决策合并成一条）。
+   *
+   * 为什么必须有：端上没有「实时」——小程序没有实时客户端（#213→#220 链未合入 main），
+   * `conversation.read` 与 `presence.changed` 两条帧都没人接；而 `load()` 的触发点只有
+   * 进页 / 从子页返回 / 点重试。用户盯着屏幕时读位与在线态永远不会更新，红「未读」一直
+   * 红到离开再回来、绿点也一直挂着，看起来就是坏的。
+   *
+   * 只做一件事：拉一次详情、只把 `counterpartLastReadAt` 与 `counterpartPresence` 写回
+   * —— 不碰消息流与分页游标、不 bump epoch（否则在途发送的响应会被判过期丢弃）、不重发
+   * 已读上报（那是「用户真的看到了首屏」才该做的副作用）。
+   *
+   * 判据：只在「已登录 + 详情已就绪」时挂表；每跳还要过三道守卫 —— 页面可见性 / 存活
+   * （`aliveRef`）、加载代次（换会话 / 换账号 / 整页重拉都 +1）、以及本跳的**请求序号**
+   * （同一代次内乱序回来的旧快照不许盖掉新结论，见 `isLatestPresencePoll`）。读位另有
+   * 一道数值兜底（`applyReadPoll` 只取更晚的那份）。
+   *
+   * 页面被盖住（`useDidHide`）时**真的把表停掉**，不是让定时器空转着每跳判一次可见性；
+   * 回到本页（`useDidShow`）再续上（#376 审查回合，P3）。
+   *
+   * 有了实时客户端之后这里应当整块换成事件订阅；在那之前，它是「读位推进」与「断线后
+   * 转为离线」在端上唯一能被看见的路径（服务端按 TTL 判定，最迟 `DETAIL_POLL_MS` 一跳内
+   * 体现）。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || convState !== 'ok') return
+    /** 本轮的定时器；`null` 表示表停着（页面隐藏 / effect 已收回） */
+    let timer: ReturnType<typeof setInterval> | null = null
+    const stop = () => {
+      if (timer === null) return
+      clearInterval(timer)
+      timer = null
+    }
+    const start = () => {
+      if (timer !== null) return
+      timer = setInterval(() => {
+        if (!visibleRef.current || !aliveRef.current) return
+        const current = epoch.current
+        presenceSeq.current += 1
+        const seq = presenceSeq.current
+        void loadConversation(conversationId).then((detail) => {
+          if (detail.status !== 'ok') return
+          if (
+            !isLatestPresencePoll({
+              seq,
+              epoch: current,
+              latestSeq: presenceSeq.current,
+              latestEpoch: epoch.current,
+            })
+          ) {
+            return
+          }
+          setConversation((prev) =>
+            prev === null
+              ? prev
+              : applyPresencePoll(applyReadPoll(prev, detail.conversation), detail.conversation),
+          )
+        })
+      }, DETAIL_POLL_MS)
+    }
+    detailPollRef.current = { start, stop }
+    /**
+     * 依赖变化会让 effect 重跑，但**页面被盖住时它仍是挂着的**：这时不许把表重新走起来，
+     * 否则「隐藏即停表」会被一次无关的状态变化作废。启动交给 didShow。
+     */
+    if (visibleRef.current) start()
+    return () => {
+      stop()
+      detailPollRef.current = null
+    }
+  }, [authStatus, userId, convState, conversationId])
 
   /**
    * 「加载更早的消息 / 媒体」：契约的 `before` / `cursor` 游标原样回传，拼接在已有数据之前。
@@ -1614,6 +1679,14 @@ export default function Conversation() {
   const listing = conversation.listing
   const now = Date.now()
   /**
+  /**
+   * 对方的在线态（#359 第五点）：顶部栏昵称旁边。
+   *
+   * 判据走三处展示位共用的 `features/presence/view`（服务端判定 + 端上按同一 TTL 过期）；
+   * 本页每 `DETAIL_POLL_MS` 重拉一次详情，所以「对方断线」会在一跳内翻成离线文案。
+   */
+  const counterpartPresence = presenceView(conversation.counterpartPresence, now)
+  /**
    * 日期分隔条看**已加载的第一条**（分页后它会跟着变早），没有消息时退回会话的最后活跃时间。
    *
    * 第一条可能是文本也可能是媒体（两条流已合成），所以按 `kind` 取各自的 `createdAt`；
@@ -1766,6 +1839,14 @@ export default function Conversation() {
           <View className="conv__title">
             <View className="conv__title-in" style={{ maxWidth: `${titleMaxWidth}px` }}>
               <Text className="conv__title-nm">{counterpart.nickname}</Text>
+              {/* 在线态（#359 第五点）：顶部栏用户名隔壁。绿点 + 文案；离线时说
+                  「多久没上线」（`12 分钟前活跃`），拿不到在线态时整块不渲染。 */}
+              {counterpartPresence ? (
+                <View className={`conv__presence${counterpartPresence.online ? ' is-online' : ''}`}>
+                  <View className="conv__presence-dot" />
+                  <Text className="conv__presence-tx">{counterpartPresence.text}</Text>
+                </View>
+              ) : null}
             </View>
           </View>
         </View>

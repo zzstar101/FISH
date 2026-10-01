@@ -22,6 +22,7 @@
  *    `listing-thumb.tsx` 用 id 散列定占位色同源。
  */
 import type { ListingCard, ListingCondition, ListingDetail } from '@fish/contracts/listings/schema'
+import type { UserPresence } from '@fish/contracts/users/schema'
 import { AVATAR_BLOCKS, LISTING_BLOCKS } from '@/mock/blocks'
 import type { ImageRatio, MockListing, MockUser } from '@/mock/types'
 
@@ -152,8 +153,16 @@ export function toMockListings(cards: ListingCard[], now: number = Date.now()): 
  * `goodRate` 契约里没有、全仓也没有评价数据源 —— 恒 `null`，由页面不渲染。
  * `soldCount` 由调用方从公开资料端点（`GET /users/:id/public`）取来传进来，
  * 取不到就是 `null`（页面已有 `null` 守卫）。
+ *
+ * `presence`（#359 第五点）与 `soldCount` **同一个来源、同一次请求**：详情页的
+ * `loadListingDetail` 本来就要拉公开资料拿「卖出 N 件」，在线态就在那份响应里。
+ * 不填（undefined）即「拿不到」，页面整块不渲染 —— 与 `soldCount` 的 null 守卫同款。
  */
-export function toMockSeller(detail: ListingDetail, soldCount: number | null = null): MockUser {
+export function toMockSeller(
+  detail: ListingDetail,
+  soldCount: number | null = null,
+  presence: UserPresence | null = null,
+): MockUser {
   return {
     id: detail.seller.id,
     nickname: detail.seller.nickname,
@@ -164,6 +173,7 @@ export function toMockSeller(detail: ListingDetail, soldCount: number | null = n
     soldCount,
     // 契约无这一项，且没有真实口径（无评价表）：不编百分比
     goodRate: null,
+    presence,
   }
 }
 

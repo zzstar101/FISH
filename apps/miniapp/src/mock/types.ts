@@ -40,6 +40,7 @@ import type {
 } from '@fish/contracts/listings/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import type { TransactionStatus, TransactionUser } from '@fish/contracts/transactions/schema'
+import type { UserPresence } from '@fish/contracts/users/schema'
 import type { WishStatus } from '@fish/contracts/wishes/schema'
 
 /* ---------------------------------------------------------------- 用户 */
@@ -60,6 +61,17 @@ export type MockUser = {
    */
   soldCount: number | null
   goodRate: number | null
+  /**
+   * 在线态（#359 第五点）：商品详情页的卖家行要显示它。
+   *
+   * 数据源不是 `ListingDetail`（`ListingSellerSchema` 里没有这个字段），而是详情页**已经**
+   * 并行拉的公开资料（`GET /users/:id/public` 的 `presence`）—— 与「卖出 N 件」同一个
+   * 请求，不多打一次接口。
+   *
+   * 可选：mock fixture 里没有在线态这个概念（`mock/users.ts` 的 USERS 不填它），
+   * 缺席即「拿不到」，页面整块不渲染 —— 与本文件其它「契约没有就给 null」同款口径。
+   */
+  presence?: UserPresence | null
 }
 
 /* ---------------------------------------------------------------- 商品 */

@@ -108,6 +108,8 @@ describe('chat error helpers', () => {
             coverUrl: null,
           },
           counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+          // #359 第五点：会话 DTO 的必填字段（本端暂不渲染在线态，但响应必须能过契约解析）
+          counterpartPresence: { online: false, lastActiveAt: null },
           unreadCount: 0,
           counterpartLastReadAt: null,
           lastMessage: null,

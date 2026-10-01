@@ -123,6 +123,42 @@ describe('conversations store (integration)', () => {
     }
   })
 
+  /**
+   * #359 第五点：`presence.changed` 的广播范围必须收口在「与该用户有会话的其它用户」。
+   * 用一对全新的用户做隔离，避免被本文件其它用例造出来的会话污染。
+   */
+  test('listCounterpartUserIds 只给有会话的对方：去重、不含自己、无会话为空', async () => {
+    const a = newId()
+    const b = newId()
+    const lonely = newId()
+    const listing1 = newId()
+    const listing2 = newId()
+    for (const [i, uid] of [a, b, lonely].entries()) {
+      await db.execute(sql`
+        INSERT INTO users (id, student_no, password_hash, nickname)
+        VALUES (${uid}, ${`presence${process.pid}_${i}`}, 'test-hash', '在线态测试')
+      `)
+    }
+    await seedListing(listing1, b, 'presence 商品 1')
+    await seedListing(listing2, b, 'presence 商品 2')
+    try {
+      // 同一对买卖家的两条会话（不同商品）：对方只应出现一次
+      await store.insertIfAbsent(listing1, a, b)
+      await store.insertIfAbsent(listing2, a, b)
+
+      expect(await store.listCounterpartUserIds(a)).toEqual([b])
+      expect(await store.listCounterpartUserIds(b)).toEqual([a])
+      // 从没建过会话的用户：空数组（不是 null，也不是全站用户）
+      expect(await store.listCounterpartUserIds(lonely)).toEqual([])
+    } finally {
+      await db.execute(sql`
+        DELETE FROM conversations WHERE listing_id IN (${listing1}, ${listing2})
+      `)
+      await db.execute(sql`DELETE FROM listings WHERE id IN (${listing1}, ${listing2})`)
+      await db.execute(sql`DELETE FROM users WHERE id IN (${a}, ${b}, ${lonely})`)
+    }
+  })
+
   test('findDetail returns role data for participants and null for outsiders', async () => {
     const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
     if (!conversationId) throw new Error('unreachable')

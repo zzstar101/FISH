@@ -303,6 +303,9 @@ describe('messageDtoSchema', () => {
 })
 
 describe('conversationDtoSchema', () => {
+  /** #359 第五点：会话对面的在线态。`online` 恒非空对象，`lastActiveAt` 可空。 */
+  const presence = { online: true, lastActiveAt: '2026-09-12T10:00:00.000Z' }
+
   test('parses a full dto with nullable avatar/cover and iso dates', () => {
     const dto = {
       id: ids.conversation,
@@ -320,6 +323,7 @@ describe('conversationDtoSchema', () => {
         nickname: '买家小明',
         avatarUrl: 'https://cdn.example.com/a.png',
       },
+      counterpartPresence: presence,
       unreadCount: 2,
       counterpartLastReadAt: '2026-09-12T09:30:00.000Z',
       lastMessage: {
@@ -382,6 +386,7 @@ describe('conversationDtoSchema', () => {
         nickname: '买家小明',
         avatarUrl: null,
       },
+      counterpartPresence: presence,
       unreadCount: 0,
       counterpartLastReadAt: null,
       lastMessage: null,
@@ -409,6 +414,7 @@ describe('conversationDtoSchema', () => {
         nickname: '买家小明',
         avatarUrl: null,
       },
+      counterpartPresence: presence,
       unreadCount: 0,
       counterpartLastReadAt: null,
       lastMessage: null,
@@ -435,6 +441,17 @@ describe('conversationDtoSchema', () => {
     // 前端把「对方没读过」与「服务端没说」当成同一件事。
     expect(
       conversationDtoSchema.safeParse({ ...base, counterpartLastReadAt: undefined }).success,
+    ).toBe(false)
+    // `counterpartPresence`（#359 第五点）同款：缺字段 = 老服务端，必须在解析处炸掉，
+    // 而不是让端上把「拿不到在线态」画成「离线」。
+    expect(
+      conversationDtoSchema.safeParse({ ...base, counterpartPresence: undefined }).success,
+    ).toBe(false)
+    expect(
+      conversationDtoSchema.safeParse({
+        ...base,
+        counterpartPresence: { online: true },
+      }).success,
     ).toBe(false)
   })
 })
@@ -479,6 +496,25 @@ describe('realtime events', () => {
       realtimeServerEventSchema.safeParse({
         type: 'conversation.read',
         conversationId: '1d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f',
+      }).success,
+    ).toBe(false)
+  })
+
+  test('discriminates presence.changed（#359 第五点：推给对方，只推「变在线」）', () => {
+    const parsed = realtimeServerEventSchema.parse({
+      type: 'presence.changed',
+      userId: ids.user,
+      presence: { online: true, lastActiveAt: '2026-09-12T10:05:00.000Z' },
+    })
+    expect(parsed.type).toBe('presence.changed')
+    expect(parsed.type === 'presence.changed' && parsed.presence.online).toBe(true)
+    // userId 与 presence 都是必填：少了就不知道「谁的在线态变了 / 变成了什么」
+    expect(realtimeServerEventSchema.safeParse({ type: 'presence.changed' }).success).toBe(false)
+    expect(
+      realtimeServerEventSchema.safeParse({
+        type: 'presence.changed',
+        userId: ids.user,
+        presence: { online: 'yes' },
       }).success,
     ).toBe(false)
   })

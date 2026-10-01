@@ -33,7 +33,7 @@ import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { TransactionRole } from '@fish/contracts/transactions/schema'
-import type { PublicUserProfile } from '@fish/contracts/users/schema'
+import type { PublicUserProfile, UserPresence } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
 import { isApiError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
@@ -256,8 +256,7 @@ export async function loadListingDetail(
     // 失败降级成「没有相似推荐 / 不展示卖出件数」，但要留痕 —— 静默吞掉会让契约解析漂移
     // 看起来像「这个分类恰好没有同类商品」或「这个卖家恰好没卖过东西」。
     //
-    // 卖家公开资料只为了「卖出 N 件」这一个数：详情契约的 `ListingSellerSchema` 里没有它
-    // （只有 id / nickname / avatarUrl / authStatus），所以走 #122 的公开端点。
+    // 卖家公开资料一次拿两样：卖出件数，以及在线态（#359 第五点，详情页卖家行要显示）。
     // 认证状态**不**从这里取：详情响应本身就带真值，不必多一次请求去问同一件事。
     const [similar, sellerProfile] = await Promise.all([
       fetchSimilarListings(detail.category, detail.id).catch((error) => {
@@ -265,11 +264,15 @@ export async function loadListingDetail(
         return []
       }),
       fetchPublicUserProfile(detail.seller.id).catch((error) => {
-        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数', error)
+        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数与在线态', error)
         return null
       }),
     ])
-    const seller: MockUser = toMockSeller(detail, sellerProfile?.soldCount ?? null)
+    const seller: MockUser = toMockSeller(
+      detail,
+      sellerProfile?.soldCount ?? null,
+      sellerProfile?.presence ?? null,
+    )
     // 先按列表卡投影一次拿到公共字段（角标 / 比例 / 相对时间），再补详情独有的几项。
     // 不用 `[0]!`：空数组断言会掩盖投影层的 bug，这里显式兜底。
     const [base] = toMockListings([detail], now)
@@ -410,6 +413,30 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
  * 所以要显式补齐而不是直接断言成 `ConversationDto`（断言的失败方式是运行期拿到
  * `undefined`，而不是编译期报错）。
  */
+/**
+ * 演示构建的「对方在线态」（#359 第五点，Owner 决策）。
+ *
+ * fixture 里没有活动登记表这个事实，但**不能**给 `{ online: false, lastActiveAt: null }`
+ * —— 那是**权威的「离线」**（服务端答了、只是没有活动记录；真实链路上必须如实渲染），
+ * 演示里会让每个会话恒显「离线」，微信开发者工具的门禁看不到在线档。这里按会话 id
+ * 稳定地分两档：一半「在线」、一半「12 分钟前活跃」，两档都能在端上看到。
+ *
+ * 时刻一律**相对当下**算，不写固定时间戳：固定值会随时间漂成假话（写死的「5 分钟前
+ * 活跃」过两天就是谎话）。在线档给 30s 前的活动，落在 `PRESENCE_ONLINE_TTL_MS` 窗口内。
+ *
+ * 注意「拿不到」是另一回事 —— 那是 `null`，由端上整块不渲染（见 `features/presence/view`）。
+ */
+function demoCounterpartPresence(seed: string): UserPresence {
+  let hash = 0
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0
+  }
+  const now = Date.now()
+  return hash % 2 === 0
+    ? { online: true, lastActiveAt: new Date(now - 30_000).toISOString() }
+    : { online: false, lastActiveAt: new Date(now - 12 * 60_000).toISOString() }
+}
+
 function toConversationDto(
   item: MockConversation,
   mockViewerId: Me['id'],
@@ -432,6 +459,8 @@ function toConversationDto(
       根本看不到，而端上门禁要求在开发者工具里逐页演示这个标签。
     */
     counterpartLastReadAt,
+    // 在线态（#359 第五点）：fixture 没有可投影的事实，走演示专用的稳定样值。
+    counterpartPresence: demoCounterpartPresence(item.id),
     lastMessage:
       DEMO_AUTH_ENABLED && lastMessage?.senderId === mockViewerId
         ? { ...lastMessage, senderId: DEMO_USER.id }

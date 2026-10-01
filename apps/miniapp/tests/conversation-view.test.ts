@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyPresencePoll,
   applyRecalled,
   beginSend,
   canRecallMessage,
@@ -13,6 +14,7 @@ import {
   initialDeferredReload,
   isCurrentPlayRequest,
   isFlushDue,
+  isLatestPresencePoll,
   isStaleMediaIdentity,
   isStaleMediaTask,
   keepRecalledTombstones,
@@ -121,6 +123,96 @@ describe('sortMessages —— 回到契约的 (createdAt, id) 升序', () => {
     const input = [msg('b', '2026-09-21T10:00:00.000Z'), msg('a', '2026-09-21T10:00:00.000Z')]
     expect(sortMessages(input).map((item) => item.id)).toEqual(['a', 'b'])
     expect(input.map((item) => item.id)).toEqual(['b', 'a'])
+  })
+})
+
+describe('applyPresencePoll —— 在线态轮询只写在线态（#359 第五点）', () => {
+  const dto = (overrides: Partial<ConversationDto> = {}): ConversationDto => ({
+    id: 'cnv_01jc000000e00800000000001a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    role: 'buyer',
+    listing: {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    counterpartPresence: { online: false, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    unreadCount: 1,
+    counterpartLastReadAt: null,
+    lastMessage: {
+      type: 'TEXT',
+      content: '在吗',
+      senderId: 'usr_01jc000000e00800000000000b',
+      createdAt: '2026-09-30T10:59:00.000Z',
+    },
+    lastMessageAt: '2026-09-30T10:59:00.000Z',
+    createdAt: '2026-09-30T10:00:00.000Z',
+    ...overrides,
+  })
+
+  test('把新拿到的在线态写回', () => {
+    const merged = applyPresencePoll(
+      dto(),
+      dto({ counterpartPresence: { online: true, lastActiveAt: '2026-09-30T12:00:00.000Z' } }),
+    )
+    expect(merged.counterpartPresence).toEqual({
+      online: true,
+      lastActiveAt: '2026-09-30T12:00:00.000Z',
+    })
+  })
+
+  test('轮询响应即使更旧，也不回退消息 / 未读 / 商品等字段', () => {
+    const current = dto({
+      unreadCount: 3,
+      lastMessage: {
+        type: 'TEXT',
+        content: '我刚发出去的',
+        senderId: 'usr_01jc000000e00800000000000a',
+        createdAt: '2026-09-30T12:00:00.000Z',
+      },
+      lastMessageAt: '2026-09-30T12:00:00.000Z',
+      listing: {
+        id: 'lst_01jc000000e00800000000000t',
+        title: '九成新自行车',
+        priceCents: 12000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+    })
+    // 这次轮询的响应是「刚发出消息之前」的快照
+    const stale = dto()
+
+    const merged = applyPresencePoll(current, stale)
+    expect(merged.unreadCount).toBe(3)
+    expect(merged.lastMessage?.content).toBe('我刚发出去的')
+    expect(merged.lastMessageAt).toBe('2026-09-30T12:00:00.000Z')
+    expect(merged.listing.status).toBe('RESERVED')
+    // 只有在线态取新值（这里恰好是同一份，重点是其余字段一个都没动）
+    expect(merged.counterpartPresence).toEqual(stale.counterpartPresence)
+  })
+})
+
+/**
+ * #376 审查回合：同一代次内两跳轮询的响应可能乱序回来，而 `applyPresencePoll` 是
+ * last-write-wins —— 守卫必须只让**最新一次发起**的那跳落地，否则刚点亮的绿点会被
+ * 先发后至的旧快照灭回去。
+ */
+describe('isLatestPresencePoll —— 在线态轮询乱序落地守卫（#359 第五点）', () => {
+  test('同一代次：只有序号最新的一跳落地（先发后至的旧快照被丢掉）', () => {
+    // 第 1 跳在第 2 跳之后才 resolve
+    expect(isLatestPresencePoll({ seq: 1, epoch: 7, latestSeq: 2, latestEpoch: 7 })).toBe(false)
+    expect(isLatestPresencePoll({ seq: 2, epoch: 7, latestSeq: 2, latestEpoch: 7 })).toBe(true)
+  })
+
+  test('代次变了（换账号 / 换会话 / 整页重拉）→ 一律不落地，即使序号恰好最新', () => {
+    expect(isLatestPresencePoll({ seq: 2, epoch: 6, latestSeq: 2, latestEpoch: 7 })).toBe(false)
+  })
+
+  test('序号与代次同时过期 → 不落地', () => {
+    expect(isLatestPresencePoll({ seq: 1, epoch: 6, latestSeq: 2, latestEpoch: 7 })).toBe(false)
   })
 })
 
