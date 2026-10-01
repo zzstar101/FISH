@@ -2,6 +2,9 @@ import type { Me } from '@fish/contracts/auth/user'
 import type {
   ConversationDto,
   ConversationListResponse,
+  MediaListResponse,
+  MediaMessageDto,
+  MediaPresignResponse,
   MessageDto,
   MessageListResponse,
 } from '@fish/contracts/chat/schema'
@@ -13,10 +16,13 @@ import {
   fetchConversation,
   fetchConversationPage,
   fetchConversationUnreadCount,
+  fetchMediaPage,
   fetchMessagePage,
   markConversationRead,
+  sendMediaObject,
   sendTextMessage,
 } from './api'
+import type { MediaUploadDraft } from './media'
 
 export const chatKeys = {
   all: () => ['pc', 'chat'] as const,
@@ -25,6 +31,8 @@ export const chatKeys = {
     ['pc', 'chat', 'conversation', ownerId, conversationId] as const,
   messages: (ownerId: string | null, conversationId: string) =>
     ['pc', 'chat', 'messages', ownerId, conversationId] as const,
+  media: (ownerId: string | null, conversationId: string) =>
+    ['pc', 'chat', 'media', ownerId, conversationId] as const,
   unreadCount: (ownerId: string | null) => ['pc', 'chat', 'unread-count', ownerId] as const,
 }
 
@@ -60,6 +68,21 @@ export function useMessageHistory(ownerId: string | null, conversationId: string
   return useInfiniteQuery({
     queryKey: chatKeys.messages(ownerId, conversationId),
     queryFn: ({ pageParam }) => fetchMessagePage(conversationId, pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: ownerId !== null,
+    staleTime: 15_000,
+  })
+}
+
+/**
+ * 媒体历史是**独立端点**（`GET /conversations/:id/media`，`/messages` 明确排除
+ * `type='MEDIA'`），分页语义与消息一致：游标由服务端下发，前端原样回传。
+ */
+export function useMediaHistory(ownerId: string | null, conversationId: string) {
+  return useInfiniteQuery({
+    queryKey: chatKeys.media(ownerId, conversationId),
+    queryFn: ({ pageParam }) => fetchMediaPage(conversationId, pageParam ?? undefined),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== null,
@@ -122,6 +145,28 @@ export type SendTextVariables = {
     content: string
     clientRequestId: string
   }
+}
+
+export type SendMediaVariables = {
+  conversationId: string
+  draft: MediaUploadDraft
+  /** 首次预签名结果；重试沿用同一个（objectKey 参与服务端幂等指纹）。 */
+  upload: MediaPresignResponse
+  clientRequestId: string
+}
+
+export function useSendMediaMessage(ownerId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId, draft, upload, clientRequestId }: SendMediaVariables) =>
+      sendMediaObject(conversationId, draft, upload, clientRequestId),
+    onSuccess: () => {
+      if (ownerId === null) return
+      // 与文本同一口径：媒体缓存由页面按历史查询状态决定是否写入，这里只失效列表面。
+      void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
+      void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
+    },
+  })
 }
 
 export function useSendTextMessage(ownerId: string | null) {
@@ -230,6 +275,95 @@ export function insertMessageIntoCache(
   )
 }
 
+/** 按 (createdAt, id) 排序，与文本消息同一口径（媒体 DTO 与文本消息共用 id 空间）。 */
+export function compareMediaMessages(a: MediaMessageDto, b: MediaMessageDto): number {
+  const byTime = Date.parse(a.createdAt) - Date.parse(b.createdAt)
+  if (byTime !== 0) return byTime
+  return a.id.localeCompare(b.id)
+}
+
+function sameMediaMessage(a: MediaMessageDto, b: MediaMessageDto): boolean {
+  return (
+    a.id === b.id &&
+    a.conversationId === b.conversationId &&
+    a.senderId === b.senderId &&
+    a.kind === b.kind &&
+    a.mediaId === b.mediaId &&
+    a.url === b.url &&
+    a.mimeType === b.mimeType &&
+    a.sizeBytes === b.sizeBytes &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.durationMs === b.durationMs &&
+    a.createdAt === b.createdAt
+  )
+}
+
+/**
+ * 把实时 / 发送返回的媒体合进无限查询缓存，语义与 `upsertMessagePage` 相同：
+ * 同 id 原位替换（幂等重试 / 实时与 HTTP 响应同时到达），否则插入最新页并重排。
+ */
+export function upsertMediaPage(
+  data: InfiniteData<MediaListResponse, string | null> | undefined,
+  media: MediaMessageDto,
+  conversationId: string,
+): InfiniteData<MediaListResponse, string | null> | undefined {
+  if (media.conversationId !== conversationId) return data
+  if (!data || data.pages.length === 0) {
+    return { pages: [{ items: [media], nextCursor: null }], pageParams: [null] }
+  }
+
+  let replaced = false
+  let identical = false
+  const pages = data.pages.map((page) => {
+    const index = page.items.findIndex((item) => item.id === media.id)
+    if (index < 0) return page
+    const existing = page.items[index]
+    if (existing && sameMediaMessage(existing, media)) {
+      identical = true
+      return page
+    }
+    replaced = true
+    const items = [...page.items]
+    items[index] = media
+    return { ...page, items }
+  })
+  if (replaced) return { ...data, pages }
+  if (identical) return data
+
+  const newest = pages[0]
+  if (!newest) return data
+  const items = [...newest.items, media].sort(compareMediaMessages)
+  return { ...data, pages: [{ ...newest, items }, ...pages.slice(1)] }
+}
+
+export function insertMediaIntoCache(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversationId: string,
+  media: MediaMessageDto,
+): void {
+  queryClient.setQueryData<InfiniteData<MediaListResponse, string | null>>(
+    chatKeys.media(ownerId, conversationId),
+    (data) => upsertMediaPage(data, media, conversationId),
+  )
+}
+
+/** 分页写回后重放本地实时媒体（与 `mergeMessagesIntoCache` 同一用途）。 */
+export function mergeMediaIntoCache(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversationId: string,
+  mediaList: MediaMessageDto[],
+): void {
+  if (mediaList.length === 0) return
+  queryClient.setQueryData<InfiniteData<MediaListResponse, string | null>>(
+    chatKeys.media(ownerId, conversationId),
+    (data) =>
+      mediaList.reduce((current, media) => upsertMediaPage(current, media, conversationId), data),
+  )
+}
+
 /**
  * 把一批本地实时 / 发送消息重新合进缓存。
  *
@@ -275,15 +409,33 @@ export async function refreshNewestMessages(
   )
 }
 
-/** 重连收口：详情走一次强校验，消息只补最新一页，未读数强制探一次。 */
+/**
+ * 重连时只补最新一页媒体：与 `refreshNewestMessages` 同一理由（保留 nextCursor，
+ * 不重拉已加载的更早分页，也不让在途分页把断线窗口的新媒体覆盖掉）。
+ */
+export async function refreshNewestMedia(
+  queryClient: QueryClient,
+  ownerId: string,
+  conversationId: string,
+): Promise<void> {
+  const page = await fetchMediaPage(conversationId)
+  await queryClient.cancelQueries({ queryKey: chatKeys.media(ownerId, conversationId) })
+  queryClient.setQueryData<InfiniteData<MediaListResponse, string | null>>(
+    chatKeys.media(ownerId, conversationId),
+    { pages: [page], pageParams: [null] },
+  )
+}
+
+/** 重连收口：详情走一次强校验，文本/媒体各补最新一页，未读数强制探一次。 */
 export async function refreshConversationOnReconnect(
   queryClient: QueryClient,
   ownerId: string,
   conversationId: string,
 ): Promise<void> {
   await queryClient.invalidateQueries({ queryKey: chatKeys.conversation(ownerId, conversationId) })
-  const [history, unread] = await Promise.allSettled([
+  const [history, media, unread] = await Promise.allSettled([
     refreshNewestMessages(queryClient, ownerId, conversationId),
+    refreshNewestMedia(queryClient, ownerId, conversationId),
     queryClient.fetchQuery({
       queryKey: chatKeys.unreadCount(ownerId),
       queryFn: fetchConversationUnreadCount,
@@ -291,6 +443,7 @@ export async function refreshConversationOnReconnect(
     }),
   ])
   if (history.status === 'rejected') throw history.reason
+  if (media.status === 'rejected') throw media.reason
   if (unread.status === 'rejected') throw unread.reason
 }
 
@@ -321,6 +474,18 @@ export function flattenMessagePages<TPageParam>(
 ): MessageDto[] {
   if (!data) return []
   const byId = new Map<string, MessageDto>()
+  for (const page of [...data.pages].reverse()) {
+    for (const item of page.items) byId.set(item.id, item)
+  }
+  return [...byId.values()]
+}
+
+/** 渲染用媒体时间序：与 `flattenMessagePages` 相同（升序拼接、同 id 只留最新页版本）。 */
+export function flattenMediaPages<TPageParam>(
+  data: InfiniteData<MediaListResponse, TPageParam> | undefined,
+): MediaMessageDto[] {
+  if (!data) return []
+  const byId = new Map<string, MediaMessageDto>()
   for (const page of [...data.pages].reverse()) {
     for (const item of page.items) byId.set(item.id, item)
   }
@@ -493,4 +658,5 @@ export function invalidateConversationDetail(
 ): void {
   void queryClient.invalidateQueries({ queryKey: chatKeys.conversation(ownerId, conversationId) })
   void queryClient.invalidateQueries({ queryKey: chatKeys.messages(ownerId, conversationId) })
+  void queryClient.invalidateQueries({ queryKey: chatKeys.media(ownerId, conversationId) })
 }
