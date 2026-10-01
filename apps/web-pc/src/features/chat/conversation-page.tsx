@@ -59,6 +59,7 @@ import {
   useSendMediaMessage,
   useSendTextMessage,
 } from './queries'
+import { INITIAL_READ_RECEIPT_STATE, onIncomingMessage, resolveReadReceipt } from './read-receipt'
 import { type ChatRealtimeStatus, useChatRealtime } from './realtime'
 import { buildTimeline, excludeCachedMedia, excludeCachedMessages } from './view'
 
@@ -133,6 +134,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const recoveryGenerationRef = useRef(0)
   historyErrorRef.current = history.isError
   mediaHistoryErrorRef.current = mediaHistory.isError
+  const readReceiptRef = useRef(INITIAL_READ_RECEIPT_STATE)
   const liveRef = useRef<{
     conversationId: string
     messages: Map<string, MessageDto>
@@ -140,6 +142,7 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   }>({ conversationId, messages: new Map(), media: new Map() })
   if (liveRef.current.conversationId !== conversationId) {
     liveRef.current = { conversationId, messages: new Map(), media: new Map() }
+    readReceiptRef.current = INITIAL_READ_RECEIPT_STATE
   }
   const mergeLiveRef = useRef<() => void>(() => {})
   mergeLiveRef.current = () => {
@@ -222,7 +225,9 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         if (event.conversationId === conversationId) {
           rememberMessage(event.message)
           if (event.message.senderId !== ownerId) {
-            markReadRef.current.mutate(conversationId)
+            const receipt = onIncomingMessage(document.visibilityState)
+            readReceiptRef.current = receipt.state
+            if (receipt.markRead) markReadRef.current.mutate(conversationId)
           }
         }
         invalidateConversationSurfaces(queryClient, ownerId)
@@ -255,9 +260,22 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   })
 
   useEffect(() => {
-    if (ownerId === null || conversation.data === undefined || conversation.data === null) return
-    if (conversation.data.unreadCount === 0) return
-    markReadRef.current.mutate(conversationId)
+    const current = conversation.data
+    if (ownerId === null || current === undefined || current === null) return
+
+    const applyReadReceipt = () => {
+      const receipt = resolveReadReceipt(
+        readReceiptRef.current,
+        document.visibilityState,
+        current.unreadCount > 0,
+      )
+      readReceiptRef.current = receipt.state
+      if (receipt.markRead) markReadRef.current.mutate(conversationId)
+    }
+
+    applyReadReceipt()
+    document.addEventListener('visibilitychange', applyReadReceipt)
+    return () => document.removeEventListener('visibilitychange', applyReadReceipt)
   }, [conversation.data, conversationId, ownerId])
 
   const lastTimelineId = timeline.at(-1)?.id ?? null

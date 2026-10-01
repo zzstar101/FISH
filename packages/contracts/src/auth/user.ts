@@ -31,6 +31,12 @@ export const MeSchema = z.object({
   phoneBound: z.boolean(),
   /** 脱敏手机号（`138****8000`）；未绑定为 `null`。 */
   maskedPhone: z.string().nullable(),
+  /**
+   * 个性签名（#179）：本人可见的自我介绍原文，`null` = 未填写或已清空。
+   * 服务端已 trim 归一化（空串不落库）；允许多行，展示层是否只取首行由客户端定
+   * （miniapp 的 `signatureFirstLine`）。修改走 `PATCH /profile` 的 `signature` 字段。
+   */
+  signature: z.string().nullable(),
 })
 
 export type Me = z.infer<typeof MeSchema>

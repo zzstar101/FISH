@@ -211,6 +211,85 @@
   height: 30px;
 }
 
+/**
+ * LISTING 消息卡（#359）：消息流里的商品卡。版式取头卡 `.conv__pcard` 的缩小版
+ * （同一圆角/描边/灰底语言，宽度受气泡列约束，不再占满头部整行）。
+ */
+.conv__lcard {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 400px;
+  max-width: 100%;
+  padding: 14px;
+  border-radius: 24px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.conv__lcard-thumb {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 auto;
+  border-radius: 18px;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.conv__lcard-img {
+  width: 100%;
+  height: 100%;
+}
+
+.conv__lcard-ph {
+  width: 44px;
+  height: 44px;
+}
+
+.conv__lcard-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__lcard-title {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.35;
+  @include ellipsis;
+}
+
+.conv__lcard-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 21px;
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 金额一律红（与头卡 `.conv__pcard-price` 同一 --price 口径） */
+.conv__lcard-price {
+  color: var(--price);
+  font-weight: 700;
+}
+
+.conv__lcard-caret {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
 /* ---------------------------------------------------------------- 消息流 */
 
 .conv__scroll {
@@ -436,12 +515,6 @@
 
 /* ---------------------------------------------------------------- 图片气泡 */
 
-/*
- * ⚠️ 本段（图片气泡 / 语音气泡）当前**没有 JSX 使用**：媒体消息属于 #67，
- * 本轮只把「发图 / 发语音」的入口改成明确提示，没有伪造本地媒体消息。
- * 样式按设计稿保留在原处，等 #67 落地时直接接上，不必再从 git 历史里捞。
- */
-
 /* 稿子 .bubble.is-media：图满铺气泡，不留内衬也不描边，圆角由气泡裁 */
 .conv__bubble--media {
   padding: 0;
@@ -464,7 +537,7 @@
   height: 100%;
 }
 
-/* 上传中：右下角深色底盘 + conic-gradient 环形进度（进度值由 JS 给 style） */
+/* 上传中：右下角深色底盘 + 环形指示（进度值由 JS 给 style） */
 .conv__prog {
   position: absolute;
   right: 12px;
@@ -482,6 +555,24 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
+}
+
+/*
+  上传中的环：直传走 `Taro.request`（presign + PUT），而 `RequestTask` 上没有
+  `onProgressUpdate`（只有 `Taro.uploadFile` 的 `UploadTask` 有，但它的 multipart
+  请求体过不了 MinIO 的 presigned PUT）。所以这里给的是**不定量**的旋转指示，
+  不假装一个百分比。
+*/
+.conv__ring.is-spin {
+  border: 4px solid rgba(255, 255, 255, 0.28);
+  border-top-color: var(--surface);
+  animation: conv-ring-spin 0.9s linear infinite;
+}
+
+@keyframes conv-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 上传失败：左上角 `!` 角标。图满铺后角标必须在图内（12px），否则被 overflow 裁掉 */
@@ -509,6 +600,15 @@
   align-items: center;
   gap: 18px;
   padding: 18px 24px;
+}
+
+/*
+  语音气泡里的失败角标（#364 审查）：图片那枚绝对定位贴在照片左上角，而语音气泡的
+  左上被播放钮占着（贴上去会盖住它），所以这里让它回到文档流、跟时长排在同一行。
+*/
+.conv__bubble--voice .conv__failmark {
+  position: static;
+  flex: 0 0 auto;
 }
 
 .conv__play {
@@ -728,6 +828,12 @@
   justify-content: center;
 
   &:active {
+    background: var(--accent-weak);
+  }
+
+  /* 正在录音：与「键被按住」同一视觉语言（`:active` 覆盖的是按压瞬间，
+     `is-on` 覆盖的是「已经起录、手指还按着」这一段） */
+  &.is-on {
     background: var(--accent-weak);
   }
 }

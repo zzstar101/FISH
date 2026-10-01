@@ -148,6 +148,30 @@ describe('message cache', () => {
     expect(upsertMessagePage(data, existing, 'cnv_01jc000000e00800000000001a')).toBe(data)
   })
 
+  test('replaces a LISTING message when only the listing projection changed', () => {
+    // 商品被下架 / 改价后重新拉到的那条：除 `listing` 外逐字段相同 —— 判成 identical
+    // 会让屏幕上一直留着旧卡片状态（#359 3a 审查回合）。
+    const base: MessageDto = {
+      ...message('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'),
+      type: 'LISTING',
+      content: 'lst_01jc000000e00800000000000t',
+    }
+    const card: NonNullable<MessageDto['listing']> = {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    }
+    const data = messageData([{ ...base, listing: card }])
+    const sold: MessageDto = { ...base, listing: { ...card, status: 'SOLD' } }
+
+    const next = upsertMessagePage(data, sold, 'cnv_01jc000000e00800000000001a')
+
+    expect(next).not.toBe(data)
+    expect(next?.pages[0]?.items[0]?.listing?.status).toBe('SOLD')
+  })
+
   test('rejects a message that belongs to another conversation', () => {
     const data = messageData([
       message('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'),
@@ -355,6 +379,7 @@ describe('conversation list cache', () => {
       verifiedAt: null,
       phoneBound: false,
       maskedPhone: null,
+      signature: null,
     }
     const ownerB: Me = { ...ownerA, id: 'usr_01jc000000e00800000000000e', nickname: '乙' }
     queryClient.setQueryData(AUTH_ME_QUERY_KEY, ownerA)

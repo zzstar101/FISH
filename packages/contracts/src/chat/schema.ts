@@ -10,7 +10,12 @@ import {
 
 /** Chat Domain Contract（Issue #9）。前端和 API 只依赖本目录的字段定义。 */
 
-export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM'])
+/**
+ * #359 起多一个 LISTING（商品卡）：`MessageDto.content` 存被分享商品的**公开 id**（`lst_…`，
+ * 引用而不是用户正文），可渲染字段由服务端富化的 `listing` 投射携带（前端零 N+1）。
+ * 媒体仍是独立通道（见下），不在本枚举内。
+ */
+export const messageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'LISTING'])
 export type MessageType = z.infer<typeof messageTypeSchema>
 
 /** #67 媒体消息不扩展旧 MessageDto，避免破坏现有文本/交易消息链路。 */
@@ -20,8 +25,11 @@ export const MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
 export const MEDIA_MAX_VOICE_DURATION_MS = 60_000
 export const MEDIA_MAX_IMAGE_DIMENSION = 4096
 export const MEDIA_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const
-// B1 服务端解析真实时长：仅支持可解析容器的 WebM/MP4；MP3 无可靠容器时长，从白名单移除。
-export const MEDIA_VOICE_MIME = ['audio/webm', 'audio/mp4'] as const
+// B1 服务端解析真实时长：仅支持可解析容器的 WebM/MP4/WAV；MP3 无可靠容器时长，从白名单移除。
+// WAV（#359 3b）：微信 RecorderManager 的原生输出之一（真机与开发者工具均可），
+// RIFF 头里有 fmt.byteRate 与 data.size，服务端可精确解析时长——这是它比 aac/mp3 适合进
+// 白名单的原因（aac 的 ADTS 裸流没有可靠容器头）。
+export const MEDIA_VOICE_MIME = ['audio/webm', 'audio/mp4', 'audio/wav'] as const
 export type MediaKind = z.infer<typeof mediaKindSchema>
 
 export const mediaPresignInputSchema = z.strictObject({
@@ -138,8 +146,10 @@ export type ConversationUser = z.infer<typeof conversationUserSchema>
  *
  * 媒体消息刻意不进 `MessageDto`（见文件顶部注释），但**必须**能作为会话行摘要出现：
  * 否则对方只发了图片/语音时，列表既没有预览、红点也不会亮（#67 第四步）。
+ * `LISTING`（#359）同理：正文是商品公开 id 不是可读文本，服务端把摘要翻成 `[商品]`
+ * （`conversationLastMessageSchema.content` 与 MEDIA 的 `[图片]`/`[语音]` 同一口径）。
  */
-export const conversationLastMessageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'MEDIA'])
+export const conversationLastMessageTypeSchema = z.enum(['TEXT', 'SYSTEM', 'MEDIA', 'LISTING'])
 export type ConversationLastMessageType = z.infer<typeof conversationLastMessageTypeSchema>
 
 /**
@@ -194,6 +204,15 @@ export const messageDtoSchema = z
     sender: conversationUserSchema.nullable(),
     type: messageTypeSchema,
     content: z.string(),
+    /**
+     * LISTING 消息（#359）的可渲染投射，由服务端在历史端点与 `message.new` 推送里**同源**
+     * 组装（前端拿它直接画卡片，零 N+1）：字段与会话头商品卡 `conversationListingSchema` 一致。
+     *
+     * TEXT / SYSTEM 恒 `null`；LISTING 的商品被物理删除后也为 `null`（客户端按失效卡渲染）。
+     * `.optional()` 沿袭 `listingNo` 先例（#191）：老客户端手里的 DTO 可以省字段，
+     * 服务端恒携带 —— 缺省与 `null` 同义。
+     */
+    listing: conversationListingSchema.nullable().optional(),
     createdAt: z.iso.datetime(),
   })
   // DB 的 CHECK 只保证「TEXT ⟹ sender_id 非空」；这里同步收紧到联合完整性，
@@ -212,8 +231,15 @@ export type MessageDto = z.infer<typeof messageDtoSchema>
 export const conversationCreateInputSchema = z.strictObject({ listingId: ListingIdSchema })
 export type ConversationCreateInput = z.infer<typeof conversationCreateInputSchema>
 
-/** P0 只经 HTTP 发 TEXT；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。 */
+/**
+ * TEXT 发送体；SYSTEM 由 #11 的交易流程在服务端写入，不接受客户端提交。
+ *
+ * `type` 可选：本端点在 #359 之前只收 `{ content }`，升级后的客户端可以显式带判别值
+ * `type: 'TEXT'`（与 LISTING 体同风格）。两种形态都接受，避免「加一种消息类型」变成
+ * 「所有 TEXT 发送方必须同步升级」的破坏性变更。
+ */
 export const messageSendInputSchema = z.strictObject({
+  type: z.literal('TEXT').optional(),
   content: z.string().trim().min(1, '消息不能为空').max(2000, '消息最多 2000 个字符'),
   /**
    * #67 发送幂等键：客户端为「一次新发送」生成的 UUID，重试同一条消息时**沿用同一个值**。
@@ -227,6 +253,34 @@ export const messageSendInputSchema = z.strictObject({
   clientRequestId: z.uuid().optional(),
 })
 export type MessageSendInput = z.infer<typeof messageSendInputSchema>
+
+/**
+ * LISTING（#359）发送体：分享一条商品卡消息。
+ *
+ * `listingId` 是商品的公开 id，落库进 `messages.content`；`type` 必填（新形态没有旧客户端
+ * 负担），让「文本 / 商品卡」在路由处一眼可辨。商品不存在 / 非在售 / 未过审（即公开不可见）
+ * → 404 `LISTING_NOT_FOUND`。
+ */
+export const listingMessageSendInputSchema = z.strictObject({
+  type: z.literal('LISTING'),
+  listingId: ListingIdSchema,
+  /** 幂等键语义与 TEXT 完全同源（同一 `sendKey` 通道，同键不同商品 → 409）。 */
+  clientRequestId: z.uuid().optional(),
+})
+export type ListingMessageSendInput = z.infer<typeof listingMessageSendInputSchema>
+
+/**
+ * `POST /conversations/:id/messages` 的请求体。
+ *
+ * 用 `z.union` 而不是 `z.discriminatedUnion`：TEXT 的 `type` 必须可选（见上），判别式联合
+ * 要求判别键在两侧都必填。两个成员都是 `.strict()` 且字段不重叠（`content` / `listingId`），
+ * 因此不存在歧义输入。
+ */
+export const messageSendBodySchema = z.union([
+  listingMessageSendInputSchema,
+  messageSendInputSchema,
+])
+export type MessageSendBody = z.infer<typeof messageSendBodySchema>
 
 export const conversationListQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
@@ -348,7 +402,7 @@ export type RealtimeClientEvent = z.infer<typeof realtimeClientEventSchema>
 export const ChatErrorCodeSchema = z.enum([
   /** 404：会话 id 不存在，或查看者不是会话双方（404 而非 403，不泄漏存在性）。 */
   'CONVERSATION_NOT_FOUND',
-  /** 404：创建会话时 listingId 不存在。 */
+  /** 404：创建会话时 listingId 不存在；#359 起也覆盖商品卡发送（商品不存在 / 非在售 / 未过审）。 */
   'LISTING_NOT_FOUND',
   /** 409：买家 = 卖家（与 DB CHECK conversations_buyer_id_differs_from_seller_id 同源）。 */
   'CANNOT_CHAT_WITH_SELF',
