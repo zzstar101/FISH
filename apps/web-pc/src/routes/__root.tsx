@@ -28,7 +28,7 @@ function RootLayout() {
 }
 
 /**
- * 登录 / 注册走独立页面；商品详情与**他人主页**是公开只读页
+ * 登录走独立页面（注册已下线，#391）；商品详情与**他人主页**是公开只读页
  * （T5 的匿名留言读取依赖前者；`USER_ROUTES` 两个端点都不挂 `requireAuth`，
  * 契约明确要求他人主页对未登录访客可读，依赖后者）。
  * 未匹配路径先渲染 PC 404，避免被登录守卫截走；其余路由统一进入登录守卫和 PC 外壳。
@@ -41,7 +41,7 @@ function RootChrome() {
     select: (state) => state.matches.some((match) => match._notFound),
   })
   const pathname = rawPathname.replace(/\/+$/, '') || '/'
-  const isAuthPage = pathname === '/login' || pathname === '/register'
+  const isAuthPage = pathname === '/login'
   const isPublicListing = Boolean(matchRoute({ to: '/listing/$listingId' }))
   const isPublicProfile = Boolean(matchRoute({ to: '/users/$userId' }))
 

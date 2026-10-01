@@ -54,6 +54,7 @@ function count(html: string, needle: string): number {
 
 describe('PC release route boundaries', () => {
   test('deep links resolve inside the PC route tree', () => {
+    expect(matchedRouteIds('/pc/login').at(-1)).toBe('/login')
     expect(matchedRouteIds('/pc/search?q=keyboard').at(-1)).toBe('/search')
     expect(matchedRouteIds('/pc/listing/lst_01jc000000e00800000000000t').at(-1)).toBe(
       '/listing/$listingId',
@@ -97,6 +98,24 @@ describe('PC release route boundaries', () => {
     expect(matches).toHaveLength(1)
     expect(matches[0]?.routeId).toBe('__root__')
     expect(matches[0]?._notFound).toBe(true)
+  })
+
+  test('the retired register route no longer resolves', () => {
+    const router = routerAt('/pc/register')
+    const location = router.parseLocation(router.history.location)
+    const matches = router.matchRoutes(location)
+
+    expect(matches).toHaveLength(1)
+    expect(matches[0]?._notFound).toBe(true)
+  })
+
+  test('login page offers the scan panel and nothing else', async () => {
+    const html = await renderAt('/pc/login', null)
+
+    expect(html).toContain('欢迎回来')
+    expect(html).toContain('正在生成登录二维码')
+    expect(html).not.toContain('账号密码')
+    expect(html).not.toContain('注册')
   })
 
   test('root route keeps provider, error and not-found boundaries wired', () => {

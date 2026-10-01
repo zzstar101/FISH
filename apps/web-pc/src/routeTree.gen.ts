@@ -17,7 +17,6 @@ import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
-import { Route as RegisterRouteImport } from './routes/register'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as VerifyRouteImport } from './routes/verify'
@@ -67,11 +66,6 @@ const ProfileRoute = ProfileRouteImport.update({
 const PublishRoute = PublishRouteImport.update({
   id: '/publish',
   path: '/publish',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const RegisterRoute = RegisterRouteImport.update({
-  id: '/register',
-  path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReportsRoute = ReportsRouteImport.update({
@@ -134,7 +128,6 @@ export interface FileRoutesByFullPath {
   '/orders': typeof OrdersRouteWithChildren
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
@@ -153,7 +146,6 @@ export interface FileRoutesByTo {
   '/notifications': typeof NotificationsRoute
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
@@ -175,7 +167,6 @@ export interface FileRoutesById {
   '/orders': typeof OrdersRouteWithChildren
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
@@ -198,7 +189,6 @@ export interface FileRouteTypes {
     | '/orders'
     | '/profile'
     | '/publish'
-    | '/register'
     | '/reports'
     | '/search'
     | '/verify'
@@ -217,7 +207,6 @@ export interface FileRouteTypes {
     | '/notifications'
     | '/profile'
     | '/publish'
-    | '/register'
     | '/reports'
     | '/search'
     | '/verify'
@@ -238,7 +227,6 @@ export interface FileRouteTypes {
     | '/orders'
     | '/profile'
     | '/publish'
-    | '/register'
     | '/reports'
     | '/search'
     | '/verify'
@@ -260,7 +248,6 @@ export interface RootRouteChildren {
   OrdersRoute: typeof OrdersRouteWithChildren
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
-  RegisterRoute: typeof RegisterRoute
   ReportsRoute: typeof ReportsRoute
   SearchRoute: typeof SearchRoute
   VerifyRoute: typeof VerifyRoute
@@ -325,13 +312,6 @@ declare module '@tanstack/react-router' {
       path: '/publish'
       fullPath: '/publish'
       preLoaderRoute: typeof PublishRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/register': {
-      id: '/register'
-      path: '/register'
-      fullPath: '/register'
-      preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reports': {
@@ -443,7 +423,6 @@ const rootRouteChildren: RootRouteChildren = {
   OrdersRoute: OrdersRouteWithChildren,
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,
-  RegisterRoute: RegisterRoute,
   ReportsRoute: ReportsRoute,
   SearchRoute: SearchRoute,
   VerifyRoute: VerifyRoute,

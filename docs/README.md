@@ -14,6 +14,7 @@
 | [design/issue-89-web-pc-t9-wish-match.md](design/issue-89-web-pc-t9-wish-match.md) | PC Web T9：许愿墙与匹配 |
 | [design/issue-89-web-pc-t10-release-hardening.md](design/issue-89-web-pc-t10-release-hardening.md) | PC Web T10：发布收口与运行验收 |
 | [design/issue-89-web-pc-t10-id-inventory.md](design/issue-89-web-pc-t10-id-inventory.md) | PC Web T10：#217 ID 边界冻结检查表 |
+| [design/issue-391-web-pc-auth-wechat-only.md](design/issue-391-web-pc-auth-wechat-only.md) | #391 PC Web 登录改为仅微信扫码：移除账号密码登录与注册页 |
 | [deployment.md](deployment.md) | 生产部署手册（Ubuntu + Bun 直跑，不用 Docker）：依赖安装、环境变量、systemd、反代与 HTTPS、发布/回滚、备份与硬约束 |
 | [dev-db-isolation.md](dev-db-isolation.md) | 并行 worktree 独立开发数据库：`scripts/dev-db.ts`（`db:dev up/url/drop/list`）的库命名规则、建库/迁移/清理三步、独立容器指向与三条禁令 |
 | [testing.md](testing.md) | 测试与验证口径：验证顺序、命令与前置条件、`--isolate` 语义、Bun 版本口径、CI 门禁结构与 `.env.example` 逐键核对结论 |
