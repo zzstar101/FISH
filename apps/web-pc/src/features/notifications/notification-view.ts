@@ -62,14 +62,36 @@ export function notificationCopy(item: NotificationDto): {
        * 只给一个「审核未通过」标记，既没有未通过原因、也不给编辑入口（`BLOCKED` 的
        * `actionEnabled` / `editEnabled` 都是 `false`）。写「查看原因并编辑重发」会把用户
        * 送到一个什么都没有的页面 —— 小程序端那句成立，是因为那边两样都有。
+       *
+       * `outcome` 契约里可选（历史行 / 脏 payload 读不到）：缺省或非法值**不能**落进
+       * 「未通过」分支，那等于替服务端宣布商品被拒审。只有明确的 `REJECTED` 才这么说。
        */
-      return item.payload.outcome === 'APPROVED'
-        ? { emoji: '✅', title: '商品审核通过', description: '你的闲置已重新上架可见。' }
-        : { emoji: '⚠️', title: '商品未通过审核', description: '到「我的发布」可以看到这条商品。' }
+      switch (item.payload.outcome) {
+        case 'APPROVED':
+          return { emoji: '✅', title: '商品审核通过', description: '你的闲置已重新上架可见。' }
+        case 'REJECTED':
+          return {
+            emoji: '⚠️',
+            title: '商品未通过审核',
+            description: '到「我的发布」可以看到这条商品。',
+          }
+        default:
+          return {
+            emoji: '🔔',
+            title: '商品审核有更新',
+            description: '到「我的发布」可以看到这条商品。',
+          }
+      }
     case 'ACCOUNT':
-      return item.payload.outcome === 'APPROVED'
-        ? { emoji: '🎓', title: '校园认证通过', description: '已完成校园认证。' }
-        : { emoji: '⚠️', title: '校园认证未通过', description: '可以重新提交验证。' }
+      // 同 MODERATION：缺省 / 非法 `outcome` 只给中性结果，不谎称认证未通过。
+      switch (item.payload.outcome) {
+        case 'APPROVED':
+          return { emoji: '🎓', title: '校园认证通过', description: '已完成校园认证。' }
+        case 'REJECTED':
+          return { emoji: '⚠️', title: '校园认证未通过', description: '可以重新提交验证。' }
+        default:
+          return { emoji: '🔔', title: '认证结果有更新', description: '可以到认证页查看当前状态。' }
+      }
   }
 }
 

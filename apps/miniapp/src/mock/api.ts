@@ -436,21 +436,38 @@ function decorateNotification(
   }
   if (item.type === 'MODERATION') {
     // 审核结果：跳「我的发布」看详情（Owner 口径：MODERATION → 我的发布）。
-    const approved = item.payload.outcome === 'APPROVED'
+    // `outcome` 在契约里是**可选**的（历史行 / 脏 payload 读不到：见
+    // `notifications/schema.ts` 的 `notificationOutcomeSchema`）。缺省或非法值
+    // **绝不能**落进「未通过」分支 —— 那等于替服务端宣布商品被拒审。三态处理：
+    // 只有明确的 `REJECTED` 才说未通过，读到什么都认不出来时给中性文案。
+    const outcome = item.payload.outcome
+    const approved = outcome === 'APPROVED'
+    const rejected = outcome === 'REJECTED'
     return {
       ...item,
-      title: approved ? '商品审核通过' : '商品未通过审核',
-      description: approved ? '你的闲置已重新上架可见' : '到「我的发布」查看原因并编辑重发',
+      title: approved ? '商品审核通过' : rejected ? '商品未通过审核' : '商品审核有更新',
+      description: approved
+        ? '你的闲置已重新上架可见'
+        : rejected
+          ? '到「我的发布」查看原因并编辑重发'
+          : '到「我的发布」查看这条商品的当前状态',
       tone: approved ? 'mint' : 'warn',
       target: { kind: 'mylist' },
     }
   }
   if (item.type === 'ACCOUNT') {
-    const approved = item.payload.outcome === 'APPROVED'
+    // 同 MODERATION：缺省 / 非法 `outcome` 不得渲染成「未通过」，只给中性结果文案。
+    const outcome = item.payload.outcome
+    const approved = outcome === 'APPROVED'
+    const rejected = outcome === 'REJECTED'
     return {
       ...item,
       title: item.payload.subject === 'VERIFICATION' ? '校园认证' : '账号通知',
-      description: approved ? '校园认证通过，享受认证用户权益' : '校园认证未通过，可重新验证',
+      description: approved
+        ? '校园认证通过，享受认证用户权益'
+        : rejected
+          ? '校园认证未通过，可重新验证'
+          : '认证结果有更新，可到认证页查看',
       tone: approved ? 'mint' : 'warn',
       target: item.payload.subject === 'VERIFICATION' ? { kind: 'verify' } : null,
     }

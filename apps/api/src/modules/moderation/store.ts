@@ -155,11 +155,11 @@ export function createSqlModerationStore(
       await tx.execute(sql`
         INSERT INTO listing_moderation_records
           (id, listing_id, seller_id, action, title_snapshot, description_snapshot,
-           decision, matched_rules, matched_terms_masked, rule_version)
+           decision, matched_rules, matched_terms_masked, rule_version, provider)
         VALUES (${manualRecordId}, ${record.listing_id}, ${record.seller_id}, 'MANUAL_DECISION',
                 ${record.title_snapshot}, ${record.description_snapshot},
                 ${input.decision}::moderation_decision, ${jsonParam([])}, ${jsonParam([])},
-                ${record.rule_version})
+                ${record.rule_version}, 'MANUAL')
       `)
       await tx.insert(jobs).values({
         id: newId(),

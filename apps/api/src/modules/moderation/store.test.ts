@@ -9,7 +9,7 @@ import { notifications } from '@fish/db/schema/notifications'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { eq, sql } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 import { createListingMediaSettlement } from '../uploads/listing-media-settlement'
 import { listingReviewMediaPrefix } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -184,6 +184,44 @@ test('人工决策同事务写 MODERATION 通知（任务一 #89）：放行 APP
     const written = await db.select().from(notifications).where(eq(notifications.userId, sellerId))
     expect(written).toHaveLength(1)
     expect(written[0]?.payload).toEqual({ listingId, outcome: 'REJECTED' })
+  })
+})
+
+/**
+ * #228 §6：人工改判是「provider 维度」的一种（`MANUAL`），必须能与机器结论、以及 #228 之前的
+ * 历史行区分开 —— 这条断言在补写 provider 之前会失败（那时恒为 NULL）。
+ */
+test('人工改判落库带 provider=MANUAL，且不伪造 provider 的 label/score', async () => {
+  await withReviewListing(async ({ listingId, recordId }) => {
+    const store = createSqlModerationStore(db)
+
+    const result = await db.transaction((tx) =>
+      store.decideWithin(tx, { recordId, decision: 'ALLOW', reason: '人工放行' }),
+    )
+    expect(result.kind).toBe('applied')
+
+    const rows = await db
+      .select({
+        provider: listingModerationRecords.provider,
+        providerRequestId: listingModerationRecords.providerRequestId,
+        suggestion: listingModerationRecords.suggestion,
+        label: listingModerationRecords.label,
+        subLabel: listingModerationRecords.subLabel,
+        score: listingModerationRecords.score,
+      })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.action, 'MANUAL_DECISION'))
+      .orderBy(desc(listingModerationRecords.createdAt))
+      .limit(1)
+
+    expect(rows[0]).toEqual({
+      provider: 'MANUAL',
+      providerRequestId: null,
+      suggestion: null,
+      label: null,
+      subLabel: null,
+      score: null,
+    })
   })
 })
 

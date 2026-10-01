@@ -92,6 +92,20 @@ describe('notification view', () => {
   })
 
   /*
+   * `outcome` 在契约里是**可选**字段（历史行 / 脏 payload 读不到）。只有明确的
+   * `REJECTED` 才允许说「未通过」—— 否则缺省值会被渲染成一次并不存在的拒审。
+   */
+  test('outcome 缺席时不渲染成「未通过」', () => {
+    expect(notificationCopy(item({ listingId: 'l1' }, 'MODERATION')).title).toBe('商品审核有更新')
+    expect(notificationCopy(item({ listingId: 'l1' }, 'MODERATION')).description).toContain(
+      '我的发布',
+    )
+    expect(notificationCopy(item({ subject: 'VERIFICATION' }, 'ACCOUNT')).title).toBe(
+      '认证结果有更新',
+    )
+  })
+
+  /*
    * TX 的 `event` 是「谁在什么时候学到什么」的唯一信息源：不说事件的话，六种进展
    * （等接受 / 已接受 / 被拒 / 对方已确认 / 已完成 / 已取消）在列表上长得一模一样。
    * `event` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，不留空行。

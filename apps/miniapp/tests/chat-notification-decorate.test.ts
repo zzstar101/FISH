@@ -74,6 +74,26 @@ describe('decorateNotifications —— 任务一的三类通知', () => {
     expect(approved?.tone).toBe('mint')
   })
 
+  test('缺省 outcome 不渲染成「未通过」：只有明确 REJECTED 才算拒绝', () => {
+    // 契约里 `outcome` 是**可选**的（`notificationOutcomeSchema.optional()`）：历史行 /
+    // 脏 payload 读不到它。把「读不到」渲染成「商品未通过审核」等于替服务端宣布拒审，
+    // 而用户看到的可能只是一条旧数据 —— 这条断言锁住三态分支。
+    const [moderation, account] = decorateNotifications(
+      [
+        dto({ type: 'MODERATION', payload: { listingId } }),
+        dto({ type: 'ACCOUNT', payload: { subject: 'VERIFICATION' } }),
+      ],
+      null,
+    )
+    expect(moderation?.title).toBe('商品审核有更新')
+    expect(moderation?.title).not.toBe('商品未通过审核')
+    expect(moderation?.target).toEqual({ kind: 'mylist' })
+    expect(account?.title).not.toBe('校园认证未通过')
+    expect(account?.description).not.toBe('校园认证未通过，可重新验证')
+    expect(moderation?.description.length).toBeGreaterThan(0)
+    expect(account?.description.length).toBeGreaterThan(0)
+  })
+
   test('ACCOUNT 跳校园认证页', () => {
     const [account] = decorateNotifications(
       [dto({ type: 'ACCOUNT', payload: { subject: 'VERIFICATION', outcome: 'APPROVED' } })],

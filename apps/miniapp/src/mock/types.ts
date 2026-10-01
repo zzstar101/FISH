@@ -97,6 +97,13 @@ export type MockListing = {
   spec: string
   sellerId: string
   /**
+   * 卖家公开资料（#191）：真实数据下来自契约卡片的 `seller`（公开四字段：
+   * id / nickname / avatarUrl / authStatus），mock fixture 用 `getUser(sellerId)` 的演示用户。
+   * `null` = 本卡片没有卖家信息（契约 seller 缺席，如老客户端 mock 记录），
+   * 页面据此整行不渲染 —— 不编造卖家（`features/listing/adapt.ts` 铁律 2）。
+   */
+  seller: MockUser | null
+  /**
    * mock 专属：浏览量 / 想要数 —— **契约没有这两个计数**（不在 `ListingCardSchema` 里），
    * 所以真实接口给不出来，只能是 `null`。
    *
