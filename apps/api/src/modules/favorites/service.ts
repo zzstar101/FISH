@@ -37,7 +37,7 @@ export class FavoriteServiceError extends Error {
 const listingNotFound = () =>
   new FavoriteServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
 
-/** 非法游标 → 422（与 listings feed / 关注列表同一结论），不做"宽容解析"。 */
+/** 非法游标 → 422（与 listings feed 同一结论），不做"宽容解析"。 */
 const invalidCursor = () =>
   new FavoriteServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
     { field: 'cursor', message: 'cursor 无效' },

@@ -48,7 +48,8 @@ export interface FavoriteRow extends ListingCardSource {
  */
 export interface FavoriteListingState {
   status: ListingCard['status']
-  moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW' | null
+  /** 与契约 / DB 同源，不另写一份枚举联合（增删枚举值时这里跟着编译报错）。 */
+  moderationStatus: ListingCard['moderationStatus']
   governanceDelistedAt: Date | null
   sellerId: string
 }

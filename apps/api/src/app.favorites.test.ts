@@ -65,7 +65,8 @@ let signUpSerial = 0
 
 async function signUp(): Promise<string> {
   // 学号在库里唯一：每个用例都要一个新账号，否则第二次注册会撞唯一约束。
-  const studentNo = `2021${String(process.pid).slice(-4)}${String(signUpSerial++).padStart(4, '0')}`
+  // pid 段必须补足 4 位：`StudentNoSchema` 是 `/^\d{12}$/`，pid 只有 3 位时整串会少一位 → 422。
+  const studentNo = `2021${String(process.pid % 10000).padStart(4, '0')}${String(signUpSerial++).padStart(4, '0')}`
   const response = await app.request('/auth/register', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

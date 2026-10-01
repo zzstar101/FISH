@@ -40,7 +40,7 @@ export type FavoriteItem = z.infer<typeof FavoriteItemSchema>
  *
  * 只接受 `limit` / `cursor`：用户 id 由登录态决定，端上无法指定别人的收藏夹，
  * 所以是 `strictObject` 而不是「多传就忽略」—— 多传未知参数报 422，把越权尝试暴露出来。
- * `limit` 边界与公开 Feed / 关注列表逐字相同：默认 20、上限 50。
+ * `limit` 边界与公开 Feed 逐字相同：默认 20、上限 50。
  */
 export const MyFavoritesQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
