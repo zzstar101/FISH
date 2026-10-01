@@ -244,6 +244,9 @@ export async function pruneStaleEmbeddings(
  * 比较**必须按毫秒截断**：实体 `updated_at` 由 `now()` 写入（微秒精度），而版本号经应用侧
  * `Date`（毫秒）往返——handler 写 `source_updated_at` 时已被截断。直接等值比较会让几乎所有向量
  * 都判定为过期（只有恰好落在毫秒边界上才相等）。
+ *
+ * #323 R2 的兴趣聚合用的是同一套判据，但它必须**逐行**在 JS 里判（见 `user-interest-store.ts`：
+ * 只有逐行比较才能把"向量过期"与"根本没向量"分开计数），所以这里仍是本文件私有。
  */
 function freshListingsEmbedding(): SQL {
   return sql`date_trunc('milliseconds', ${embeddings.sourceUpdatedAt}) = date_trunc('milliseconds', ${listings.updatedAt})`
