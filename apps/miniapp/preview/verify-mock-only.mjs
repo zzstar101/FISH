@@ -47,6 +47,8 @@ const ROUTES = [
   '/pages/listing-detail/index?id=l-001',
   '/pages/listing-detail/index?id=l-014',
   '/pages/conversation/index?id=c-001',
+  // 发送商品选择页（#359）：读路径走公开在售端点（已接接口），进 WIRED
+  '/pages/send-listing/index?id=c-001',
   '/pages/conversation/index?id=c-006',
   '/pages/watchers/index',
   '/pages/comments/index',
@@ -92,6 +94,8 @@ const WIRED = [
   '/pages/listing-detail/index',
   '/pages/chat/index',
   '/pages/profile/index',
+  // 发送商品选择页（#359）：读路径接 GET /users/:id/listings，发送接 POST messages
+  '/pages/send-listing/index',
   '/pages/wish/index',
   '/pages/wish-publish/index',
   '/pages/match/index',

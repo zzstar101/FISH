@@ -97,11 +97,40 @@ export async function fetchMessagePage(
   return messageListResponseSchema.parse(payload)
 }
 
-/** 发一条文本消息（201，响应体 MessageDto） */
+/**
+ * 发一条文本消息（201，响应体 MessageDto）。
+ *
+ * 发送体**不带** `type` 判别值：契约里 TEXT 的 `type` 是可选的，而「不带」在
+ * 「已升级的 API」与「还没升到 #366 的旧 API」上都合法（旧契约是 strictObject，
+ * 多带一个 `type` 反而 422）。小程序发版有审核滞后，这条差异是真实存在的窗口。
+ */
 export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
     body: { content },
+  })
+  return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 发一张商品卡消息（#359；201，响应体 MessageDto）。
+ *
+ * `listingId` 是被分享商品的公开 id；可渲染的卡片数据由响应里的 `listing` 投射携带
+ * （服务端富化，与会话头商品卡同源）。商品不存在或非在售 → 404 LISTING_NOT_FOUND。
+ *
+ * `clientRequestId` 是**必填**的幂等键（`@/lib/uuid` 的 `randomUuidV4`）：
+ * 服务端以 `(senderId, conversationId, clientRequestId)` 去重，同键同商品重放既有那条，
+ * 同键换商品才 409 `IDEMPOTENCY_KEY_REUSED`。**重试必须复用同一个键**，否则超时重试会
+ * 真落两张卡（见 `pages/send-listing` 的 `sendKeyFor`）。
+ */
+export async function sendListingMessage(
+  conversationId: string,
+  listingId: string,
+  clientRequestId: string,
+): Promise<MessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
+    method: 'POST',
+    body: { type: 'LISTING', listingId, clientRequestId },
   })
   return messageDtoSchema.parse(payload)
 }

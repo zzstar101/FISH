@@ -462,13 +462,15 @@ export default function Conversation() {
     void Taro.navigateTo({ url: '/pages/transaction-meetup/index' })
   }
 
-  /** 「+」面板的三格：图片 / 拍照属于 #67；商品卡片是另一件事，文案不能混为一谈 */
+  /** 「+」面板的三格：商品卡进发送选择页（#359）；图片 / 拍照仍属 #67 的媒体通道 */
   const panelAction = (key: (typeof PANEL_TILES)[number]['key']) => {
     setPanelOpen(false)
-    void Taro.showToast({
-      title: key === 'product' ? '商品卡片待接入' : MEDIA_PENDING_TIP,
-      icon: 'none',
-    })
+    if (key === 'product') {
+      if (!conversationId) return
+      void Taro.navigateTo({ url: `/pages/send-listing/index?id=${conversationId}` })
+      return
+    }
+    void Taro.showToast({ title: MEDIA_PENDING_TIP, icon: 'none' })
   }
 
   /**
@@ -618,6 +620,76 @@ export default function Conversation() {
     )
   }
 
+  /**
+   * LISTING 消息（#359）：服务端富化的商品卡（缩略图 + 标题 + 价格），点击进商品详情。
+   * `listing` 投射为 null（商品被并发删除的脏数据）时退化成灰气泡占位，不给点击——
+   * 与「正文是引用不是文本」的语义一致，宁可少一个可点目标也不画一张空卡。
+   *
+   * 已下架的卡也不给点击入口：详情对「非商品卖家的 OFFLINE / 未过审」一律 404
+   * （`listings/service.ts` 的 `loadDetail` 判的是 `sellerId !== viewerId`）。
+   * 判据**不能**用「这条卡是不是我发的」：分享页两侧都能选（我的宝贝 / TA的宝贝），
+   * 同一会话里买卖双方都可能发一张**别人的**卡 —— 买家把卖家商品卡发进来，商品下架后
+   * 这条仍是 `isMine`，可买家并不是卖家，点进去必然 404。而投射里没有 `sellerId`
+   * （`conversationListingSchema` 只有 id / title / priceCents / status / coverUrl），
+   * 判不出「我是不是这件商品的卖家」，所以取保守口径：已下架一律不给入口。
+   * 读侧不对 LISTING 做可见性过滤，这类卡会长期留在历史里。
+   */
+  const renderListing = (message: MessageDto) => {
+    const mine = message.senderId === me?.id
+    const card = message.listing
+    const canOpen = card !== null && card !== undefined && card.status !== 'OFFLINE'
+    return (
+      <View
+        key={message.id}
+        id={`e-${message.id}`}
+        className={`conv__row${mine ? ' is-mine' : ''}`}
+      >
+        {renderAvatar(mine)}
+        <View className="conv__col">
+          {card ? (
+            <View
+              className="conv__lcard"
+              onClick={
+                canOpen
+                  ? () => void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${card.id}` })
+                  : undefined
+              }
+            >
+              <View className="conv__lcard-thumb">
+                {card.coverUrl ? (
+                  <Image className="conv__lcard-img" src={card.coverUrl} mode="aspectFill" />
+                ) : (
+                  <Image className="conv__lcard-ph" src={ICONS.imageMuted} mode="aspectFit" />
+                )}
+              </View>
+              <View className="conv__lcard-main">
+                <Text className="conv__lcard-title">{card.title}</Text>
+                <Text className="conv__lcard-meta num">
+                  {`¥`}
+                  <Text className="conv__lcard-price">{formatAmount(card.priceCents)}</Text>
+                  {` · ${listingStatusText(card.status)}`}
+                </Text>
+              </View>
+              {/* 不可点的卡不给「可以点进去」的箭头（#359 3a 审查回合） */}
+              {canOpen ? (
+                <Image
+                  className="conv__lcard-caret"
+                  src={ICONS.chevronRightMuted}
+                  mode="aspectFit"
+                />
+              ) : null}
+            </View>
+          ) : (
+            <View className="conv__bubble">
+              <Text className="conv__bubble-tx">[商品]</Text>
+            </View>
+          )}
+          <Text className="conv__time num">{clockTime(message.createdAt)}</Text>
+        </View>
+      </View>
+    )
+  }
+
   const statusLabel = listingStatusText(listing.status)
 
   return (
@@ -723,6 +795,7 @@ export default function Conversation() {
 
                 const message = entry.message
                 if (message.type === 'SYSTEM') return renderSystem(message)
+                if (message.type === 'LISTING') return renderListing(message)
 
                 const mine = message.senderId === me?.id
                 return (
