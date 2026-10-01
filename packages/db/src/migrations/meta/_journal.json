@@ -274,6 +274,13 @@
       "when": 1790863221338,
       "tag": "20261001220021_wandering_killer_shrike",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790863545880,
+      "tag": "20261001220545_loud_leader",
+      "breakpoints": true
     }
   ]
 }

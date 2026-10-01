@@ -1,4 +1,5 @@
 import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
+import type { RecommendationSource } from '@fish/contracts/recommendation/schema'
 import {
   RECOMMENDATION_MAX_POSITION,
   RecommendationSourceSchema,
@@ -30,7 +31,11 @@ export function readAnonymousSessionId(c: Context): string | null {
 
 export interface RecommendationContext {
   requestId: string | null
-  source: 'fresh' | 'popular' | 'semantic' | 'wish' | 'follow' | 'similar' | 'explore' | null
+  /**
+   * 用契约的 `RecommendationSource` 而不是手抄一份字面量联合：R3 往枚举里加了 `category`，
+   * 手抄的副本当场就编译不过（TS2322）——通道集合每扩一次都要在两处改，迟早漏一处。
+   */
+  source: RecommendationSource | null
   position: number | null
 }
 
