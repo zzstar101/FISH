@@ -13,6 +13,7 @@ import { matches } from './schema/matches'
 import { messages } from './schema/messages'
 import { notifications } from './schema/notifications'
 import { transactions } from './schema/transactions'
+import { userInterestProfiles } from './schema/user-interest-profiles'
 import { users } from './schema/users'
 import { wishes } from './schema/wishes'
 import { DEMO_PASSWORD, seed } from './seed'
@@ -62,6 +63,7 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       transactions,
       notifications,
       jobs,
+      userInterestProfiles,
     })) {
       counts[name] = await scratch.$count(table)
     }
@@ -86,6 +88,9 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       transactions: 2,
       notifications: 0,
       jobs: 1,
+      // #323 R2：兴趣画像由 worker 的 REFRESH_USER_INTEREST job 从真实行为聚合产出，
+      // seed 不预置（假向量/假画像落进 seed 库比空表更误导，同 embeddings 的取舍）。
+      userInterestProfiles: 0,
     })
 
     const originalNumbers = await scratch

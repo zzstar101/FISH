@@ -28,10 +28,13 @@ import ProductCard from '@/components/product-card'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
 import { createConversation } from '@/features/chat/api'
+import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+import { usePresenceNow } from '@/features/presence/use-presence-now'
+import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
@@ -46,7 +49,7 @@ import {
   type MockComment,
   type MockListing,
 } from '@/mock/api'
-import { findUser, ME as mockMe } from '@/mock/users'
+import { ME as mockMe } from '@/mock/users'
 import {
   type ActionTask,
   beginActionTask,
@@ -306,7 +309,16 @@ export default function ListingDetail() {
   const [data, setData] = useState<ListingDetailView | null>(null)
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
+  /**
+   * 心形的收藏态。契约的 `ListingCardSchema` 与详情投影**都不带**收藏标记，所以只能问
+   * `GET /listings/:id/favorite`（见下面的 effect）。
+   *
+   * 瀑布流卡片不能这么做（一屏二三十张就是二三十个请求），那边是**长按时才问一次**，
+   * 见 `components/product-card`；本页一次只展示一件商品，多这一个请求是划算的。
+   */
   const [faved, setFaved] = useState(false)
+  /** 心形的写在途：挡住连点，避免同一件商品被写两遍 */
+  const [favoriteBusy, setFavoriteBusy] = useState(false)
   /**
    * 「同类推荐」里本机已隐藏的 id：进页读一次本地名单，之后由卡片菜单的 `onDislike` 累加。
    * 卡片自己也会隐藏（它读同一份名单），但**页面这份列表**也得跟着少一条 ——
@@ -502,6 +514,69 @@ export default function ListingDetail() {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
   }
 
+  /**
+   * 读一次心形的真实收藏态。
+   *
+   * 依赖 `authStatus` 与 `userId`：匿名进来时先不问（该端点挂 `requireAuth`，问了必然 401），
+   * 等登录态解析成 `authed` 再问；**换账号**（`userId` 变）也要重问 ——
+   * `clearedPrivateScope` 在渲染期把 `faved` 清成 `false`，那是「不属于新账号」的复位，
+   * 不等于「新账号没收藏过这件」。
+   *
+   * 读失败（网络 / 未登录）**不报错、也不拦页面**：心形不是这一页的主内容，保持未选中即可，
+   * 真点下去时由写接口给出准确结论。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null) {
+      setFaved(false)
+      return
+    }
+    let live = true
+    void fetchFavoriteState(id)
+      .then((state) => {
+        if (live) setFaved(state.favorited)
+      })
+      .catch(() => {
+        // 见上：读不到就保持未选中
+      })
+    return () => {
+      live = false
+    }
+  }, [id, authStatus, userId])
+
+  /**
+   * 心形：真写 `POST|DELETE /listings/:id/favorite`（幂等，见 `@/features/favorites/api`）。
+   *
+   * 匿名点击**不发请求**（必然 401），直接提示去登录 —— 与「聊一聊」同一口径。
+   * **以服务端返回为准**：本地不先翻转（`faved` 只在响应落地时改），
+   * 所以写失败时心形不会假装变过。
+   */
+  const toggleFavorite = () => {
+    if (favoriteBusy) return
+    if (authStatus !== 'authed') {
+      void Taro.showToast({ title: '请先登录后再收藏', icon: 'none' })
+      return
+    }
+    setFavoriteBusy(true)
+    void setFavorite(id, !faved)
+      .then((state) => {
+        setFaved(state.favorited)
+      })
+      .catch((error: unknown) => {
+        // 写路径上的 404 只有一个含义：这件东西已经不在货架上了（见 `favorites/api`）
+        if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') {
+          void Taro.showToast({ title: '这件宝贝已经下架或卖掉了', icon: 'none' })
+          return
+        }
+        void Taro.showToast({
+          title: isUnauthenticatedError(error) ? '请先登录后再收藏' : '收藏没成功，请重试',
+          icon: 'none',
+        })
+      })
+      .finally(() => {
+        setFavoriteBusy(false)
+      })
+  }
+
   const load = () => {
     loadSeqRef.current += 1
     const seq = loadSeqRef.current
@@ -667,6 +742,21 @@ export default function ListingDetail() {
           data.listing.governanceDelisted === true,
         )
       : null
+
+  /**
+   * 卖家在线态（#359 第五点）：卖家行里、头像右侧那一列的昵称行。
+   *
+   * 数据来自详情页**并行拉取**的公开资料（见 `features/fetchers.ts` 的 `loadListingDetail`，
+   * 「卖出 N 件」与在线态同一次请求），没有额外接口；拿不到（fixture 兜底 / 那次请求失败）
+   * 时 `data.seller.presence` 为 null → 整块不渲染，不画一个假的「离线」。
+   * 判据与文案走三处展示位共用的 `features/presence/view`。
+   *
+   * 「现在」走 `usePresenceNow`（#376 审查回合）：本页只在进页拉一次详情，没有任何
+   * 轮询能带来重渲染，直接用 `Date.now()` 等于把 TTL 过期判据冻在首帧。该 hook 不发
+   * 请求，页面被盖住（例如跳去看会话）时停表。
+   */
+  const sellerPresenceNow = usePresenceNow()
+  const sellerPresence = data ? presenceView(data.seller.presence, sellerPresenceNow) : null
 
   /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
@@ -1264,6 +1354,18 @@ export default function ListingDetail() {
                     {data.seller.authStatus === 'VERIFIED' ? (
                       <Image className="detail__stick" src={ICONS.checkMuted} mode="aspectFit" />
                     ) : null}
+                    {/* 在线态（#359 第五点）：昵称行里紧挨昵称（认证勾之后）、头像右侧的
+                        同一条水平线上（与稿 `.seller .nm` 的排布一致，右侧那个独立槽位是
+                        「进TA主页」）。
+                        绿点 + 文案（离线时说「多久没上线」，见 features/presence/view）。 */}
+                    {sellerPresence ? (
+                      <View
+                        className={`detail__presence${sellerPresence.online ? ' is-online' : ''}`}
+                      >
+                        <View className="detail__presence-dot" />
+                        <Text className="detail__presence-tx">{sellerPresence.text}</Text>
+                      </View>
+                    ) : null}
                   </View>
                   {/*
                   卖出件数与好评率契约里没有（见 mock/types.ts 的 MockUser 注释）。
@@ -1434,13 +1536,13 @@ export default function ListingDetail() {
                       key={item.id}
                       listing={item}
                       /*
-                        卖家用**这张卡自己的** sellerId 查，不能用 `data.seller`。
+                        卖家用**这张卡自己内嵌的** seller，不能用 `data.seller`。
                         `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
                         把当前卖家挂上去就是给别人的商品捏造了一个卖家。
-                        真实数据下 `item.sellerId` 是空串哨兵 → `findUser` 给 null → 整行不渲染；
-                        mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
+                        #191 起契约卡片内嵌 `seller`（`toMockListing` 同源投影）：
+                        真实数据下是这张卡的卖家真值；老 mock 记录缺席时是 null → 整行不渲染。
                       */
-                      seller={findUser(item.sellerId)}
+                      seller={item.seller}
                       imageHeight={RATIO_HEIGHT[item.ratio]}
                       /* 卡片就地不渲染；页面这份名单管跨页同步与「还有没有内容可推荐」 */
                       hidden={hiddenSimilar.includes(item.id)}
@@ -1453,8 +1555,8 @@ export default function ListingDetail() {
                     <ProductCard
                       key={item.id}
                       listing={item}
-                      /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
-                      seller={findUser(item.sellerId)}
+                      /* 同左列：用卡片自己内嵌的 seller，不用当前商品的卖家 */
+                      seller={item.seller}
                       imageHeight={RATIO_HEIGHT[item.ratio]}
                       hidden={hiddenSimilar.includes(item.id)}
                       onDislike={() => setHiddenSimilar((prev) => [...prev, item.id])}
@@ -1507,10 +1609,7 @@ export default function ListingDetail() {
           </View>
         ) : (
           <>
-            <View
-              className={`detail__fav${faved ? ' is-on' : ''}`}
-              onClick={() => setFaved((prev) => !prev)}
-            >
+            <View className={`detail__fav${faved ? ' is-on' : ''}`} onClick={toggleFavorite}>
               <Image
                 className="detail__fav-img"
                 src={faved ? ICONS.heartOn : ICONS.heartMuted}

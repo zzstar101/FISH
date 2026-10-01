@@ -74,7 +74,8 @@ describe('菜单属于卡片：任何页面都不需要接长按回调', () => {
   test('卡片自己弹原生菜单，两个选项就是收藏与不感兴趣', async () => {
     const menu = flat(await cardSlice('const handleLongPress =', HIDDEN_GATE))
     expect(menu).toContain('Taro.showActionSheet({')
-    expect(menu).toContain("faved ? '取消收藏' : '收藏'")
+    // 菜单文案按**问到的真实收藏态**说，不是按本地名单说
+    expect(menu).toContain("current ? '取消收藏' : '收藏'")
     expect(menu).toContain("'不感兴趣'")
   })
 
@@ -140,41 +141,58 @@ describe('「不感兴趣」的通用几步留在卡片里（三页共用同一�
       '卡片自己那份隐藏态必须是 state（否则长按当场摘不掉卡）',
     ).toBeGreaterThanOrEqual(0)
     expect(ownHidden).toBeLessThan(gate)
-    const faved = source.indexOf(
-      'const [faved, setFaved] = useState(() => isListingFaved(listing.id))',
-    )
-    expect(faved).toBeGreaterThanOrEqual(0)
+    const faved = source.indexOf('const [faved, setFaved] = useState(false)')
+    expect(faved, '收藏态必须是 state（否则菜单与心形读不到写回的值）').toBeGreaterThanOrEqual(0)
     expect(faved).toBeLessThan(gate)
   })
 })
 
-describe('「收藏」写本机名单并把状态回写给菜单', () => {
-  test('按落盘结果回写 state，并如实报 FAVORITE / UNFAVORITE', async () => {
-    const favorite = flat(await cardSlice('const handleFavorite =', 'const handleDislike ='))
-    expect(favorite).toContain('setListingFavorite(listing.id, !faved)')
-    expect(favorite).toContain('setFaved(next)')
-    expect(favorite).toContain("next ? 'FAVORITE' : 'UNFAVORITE'")
-    // 收藏没有写端点：文案不能说成「已存到服务端」
-    expect(favorite).toContain('本机')
+describe('「收藏」走真实服务端接口（#397 范围 A：不留第二份收藏真值）', () => {
+  test('长按先问一次真实收藏态；问不到也要把菜单弹出来', async () => {
+    const menu = flat(await cardSlice('const handleLongPress =', HIDDEN_GATE))
+    expect(menu).toContain('fetchFavoriteState(listing.id)')
+    /*
+      读失败（断网 / 会话过期）不能让整个菜单哑掉 —— 那会把同一张表里的「不感兴趣」
+      一起废掉。所以 catch 里必须落回一个**可用**的 `current`，再照常弹菜单。
+    */
+    expect(menu).toContain('current = false')
+    expect(menu).toContain('Taro.showActionSheet({')
+  })
 
-    // 顺序：先落名单拿到真值，再切 state、再发事件（反了就变成「按意图报」）
-    const written = favorite.indexOf('setListingFavorite(')
-    expect(written).toBeLessThan(favorite.indexOf('setFaved(next)'))
+  test('写入用幂等的 setFavorite，并以服务端返回为准回写 state', async () => {
+    const favorite = flat(await cardSlice('const handleFavorite =', 'const handleDislike ='))
+    expect(favorite).toContain('setFavorite(listing.id, !current)')
+    expect(favorite).toContain('setFaved(state.favorited)')
+    expect(favorite).toContain("state.favorited ? 'FAVORITE' : 'UNFAVORITE'")
+    /*
+      三条顺序都要钉住：
+      1) `setFavorite(` 在 `setFaved(` 之前 —— 反了就是「本地先翻转」，写失败时心形已经变过了
+      2) 埋点在写成功之后 —— 失败也报 FAVORITE / UNFAVORITE 就是与事实不符
+      3) 失败文案走 `favoriteFailureText` —— 它把 LISTING_NOT_FOUND 翻成人话
+    */
+    const written = favorite.indexOf('setFavorite(')
+    expect(written).toBeGreaterThanOrEqual(0)
+    expect(written).toBeLessThan(favorite.indexOf('setFaved(state.favorited)'))
     expect(written).toBeLessThan(favorite.indexOf('trackRecommendationEvent('))
+    expect(favorite).toContain('favoriteFailureText(caught)')
   })
 
-  test('存储没写进去时如实提示，且不发与事实不符的事件', async () => {
-    const favorite = flat(await cardSlice('const handleFavorite =', 'const handleDislike ='))
-    // 落盘状态与点击前一样 = 这次没成：必须有一条提前返回的如实分支
-    expect(favorite).toContain('if (next === faved)')
-    expect(favorite).toContain('没保存成功')
-    // 那条分支必须在 setFaved / 埋点**之前**返回，不能先报喜再回头说没成
-    expect(favorite.indexOf('没保存成功')).toBeLessThan(favorite.indexOf('setFaved(next)'))
-    expect(favorite.indexOf('return')).toBeLessThan(favorite.indexOf('trackRecommendationEvent('))
+  test('卡片与详情页都不再读本机收藏名单（收藏真值只剩服务端一份）', async () => {
+    for (const source of [code(await cardSource()), code(await detailSource())]) {
+      expect(source).not.toContain('isListingFaved')
+      expect(source).not.toContain('setListingFavorite')
+      expect(source).not.toContain('favorites/local')
+    }
   })
 
-  test('初始收藏态从本地名单读（否则离开再回来菜单又说「收藏」）', async () => {
-    expect(code(await cardSource())).toContain('useState(() => isListingFaved(listing.id))')
+  test('初始收藏态是「还没问过」，不是「从本机名单读的结果」', async () => {
+    const source = code(await cardSource())
+    /*
+      `faved === false` 有两种含义（没收藏 / 还没问过），所以必须多一个 `favoriteKnown`：
+      没有它，第一次长按会跳过询问、直接把「收藏」当成事实。
+    */
+    expect(source).toContain('const [faved, setFaved] = useState(false)')
+    expect(source).toContain('const [favoriteKnown, setFavoriteKnown] = useState(false)')
   })
 })
 
@@ -258,10 +276,16 @@ describe('三个复用页面都按本机名单隐藏，且都不靠删列表项�
   })
 })
 
-describe('「我的收藏」页的文案不能与本机收藏互相打脸', () => {
-  test('真实构建不再说「现在收藏不了」（卡片菜单已经能收藏，只是只落本机）', async () => {
+describe('「我的收藏」页不再自称「还没接后端」（#394 端点已上线）', () => {
+  test('空态说的是「你还没有收藏」，而不是「服务端还没有接口」', async () => {
     const source = flat(code(await favoritesListSource()))
-    expect(source).not.toContain('现在收藏不了')
-    expect(source).toContain('这台设备')
+    /*
+      端点上线后这两句都成了假话，而且方向最坏：用户明明收藏过，页面却告诉他
+      「只记在这台设备上 / 服务端还没有接口」，等于把服务端那份收藏说成不存在。
+    */
+    expect(source).not.toContain('还没接后端')
+    expect(source).not.toContain('这台设备')
+    expect(source).not.toContain('没有收藏接口')
+    expect(source).toContain('还没有收藏的宝贝')
   })
 })

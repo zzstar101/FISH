@@ -6,6 +6,8 @@ import type { ProfileResponse } from '@fish/contracts/profile/schema'
 import { WishIdSchema } from '@fish/contracts/system/public-id'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import type { TransactionDto } from '@fish/contracts/transactions/schema'
+import { USER_ROUTES } from '@fish/contracts/users/routes'
+import type { PublicUserProfile } from '@fish/contracts/users/schema'
 import { WISH_ROUTES } from '@fish/contracts/wishes/routes'
 import { createDb, type Db } from '@fish/db/client'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
@@ -228,6 +230,9 @@ type RealtimeFrame = {
   /** `conversation.read`：谁的读位被推进、推进到哪一刻 */
   readerId?: string
   readAt?: string
+  /** `presence.changed`（#359 第五点）：谁的在线态变成了什么 */
+  userId?: string
+  presence?: { online: boolean; lastActiveAt: string | null }
 }
 
 /**
@@ -468,6 +473,78 @@ describe('marketplace flow 双账号验收（#42）', () => {
 
   test('WS：未认证的 upgrade 被拒，连接不会建立（契约语义②）', async () => {
     await expect(connectRealtime()).rejects.toThrow('WebSocket 连接失败')
+  })
+
+  /**
+   * #359 第五点：HTTP 读模型这一侧的链路 —— 已认证请求即「在线证据」，
+   * 会话详情（对方视角）与公开主页（匿名可读）必须读到同一个判定。
+   */
+  test('HTTP：一次已认证活动让对方在会话详情与公开主页都读到「在线」', async () => {
+    // 买家的任意一次已认证请求都算活动（这里就是拉一次会话列表）
+    expect((await api(CHAT_ROUTES.base, { cookie: buyerCookie })).status).toBe(200)
+
+    const sellerView = await json<ConversationDto>(
+      await api(CHAT_ROUTES.detail(conversationId), { cookie: sellerCookie }),
+    )
+    const buyerUserId = encodePublicId(PUBLIC_ID_PREFIX.user, await userIdOf(BUYER_NO))
+    expect(sellerView.counterpart.id).toBe(buyerUserId)
+    expect(sellerView.counterpartPresence.online).toBe(true)
+
+    // 公开主页匿名可读（#122 的口径），同一份在线态在这里也要成立
+    const profile = await json<PublicUserProfile>(await api(USER_ROUTES.publicProfile(buyerUserId)))
+    expect(profile.presence.online).toBe(true)
+    expect(profile.presence.lastActiveAt).not.toBeNull()
+  })
+
+  /**
+   * #359 第五点：在线态的实时事件与广播范围。
+   *
+   * 用一枚**全新账号**当探针 —— `presence.changed` 只在「离线 → 在线」的转变上推一次，
+   * 而本文件前面的用例早把三个老账号的在线态点着了，拿老账号测不出转变。
+   *
+   * 探针与会话对方的那条会话**用 SQL 直接建**：建会话是一次已认证请求，走 HTTP 会让
+   * 「变在线」的转变提前发生在连 WS 之前（事件不重放，之后就观测不到了）。
+   * 于是探针在本文件里第一次已认证活动就是这次 WS 握手。
+   */
+  test('WS：presence.changed 推给有会话的对方，不泄漏给无会话的人', async () => {
+    const probeNo = '202199000004'
+    const probeCookie = await register(probeNo, '在线态探针')
+    const probeId = await userIdOf(probeNo)
+    const probeUserId = encodePublicId(PUBLIC_ID_PREFIX.user, probeId)
+    const probeConversation = '01990000-0000-7000-8000-0000000000c9'
+    await db.execute(sql`
+      INSERT INTO conversations (id, listing_id, buyer_id, seller_id)
+      VALUES (${probeConversation}, ${listingId}, ${probeId}, ${await userIdOf(SELLER_NO)})
+    `)
+
+    const seller = await connectRealtime(sellerCookie) // 与探针有会话 → 应当收到
+    const outsider = await connectRealtime(outsiderCookie) // 与探针无会话 → 收不到
+    const probe = await connectRealtime(probeCookie)
+    try {
+      await waitFor(
+        () =>
+          seller.frames.some(
+            (frame) => frame.type === 'presence.changed' && frame.userId === probeUserId,
+          ),
+        '卖家连接收到探针的 presence.changed',
+      )
+      const frame = seller.frames.find(
+        (item) => item.type === 'presence.changed' && item.userId === probeUserId,
+      )
+      expect(frame?.presence).toEqual({ online: true, lastActiveAt: expect.any(String) })
+
+      // 广播范围收口：无会话的人拿不到**这一条**（他确实连着，不是"没连上"的同义反复）
+      expect(
+        outsider.frames.filter(
+          (item) => item.type === 'presence.changed' && item.userId === probeUserId,
+        ),
+      ).toHaveLength(0)
+      expect(outsider.socket.readyState).toBe(WebSocket.OPEN)
+    } finally {
+      seller.socket.close()
+      outsider.socket.close()
+      probe.socket.close()
+    }
   })
 
   test('断线重连：重连后既能看到断线期间的消息，也能收到新推送', async () => {

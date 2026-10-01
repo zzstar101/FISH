@@ -25,9 +25,15 @@ import { apiRequest } from '@/lib/request'
 import { assertUploadActive } from './active'
 import { isChooseMediaCancel } from './choose-error'
 import { type AllowedImageMime, mimeFromPath } from './mime'
+import { PHOTO_SOURCE_OPTIONS, type PhotoSource, photoSourceFromTapIndex } from './photo-source'
 
-/** 直传超时：5MB 弱网首包可能很慢，比普通请求的 15s 宽。 */
-const UPLOAD_TIMEOUT_MS = 60_000
+/**
+ * 直传超时：5MB 弱网首包可能很慢，比普通请求的 15s 宽。
+ *
+ * 导出给识图查询图上传复用（`features/visual-search/api.ts`）：两处都是"读本地文件 → PUT 直传"，
+ * 同一条链路该有同一个超时口径。
+ */
+export const UPLOAD_TIMEOUT_MS = 60_000
 
 /** 与契约同源的大小上限：超了直接给文案，不打 API。 */
 export function validatePickedSize(sizeBytes: number): string | null {
@@ -46,6 +52,34 @@ export type PickResult = {
   photos: PickedPhoto[]
   /** 被本地校验挡下的原因（只保留最后一条），`null` = 全部通过 */
   rejected: string | null
+}
+
+/** 平台选图 API 给出的文件：两个 API 的字段名不同（`tempFilePath` vs `path`），这里先归一。 */
+type PickedFile = { path: string; size: number }
+
+/**
+ * 逐张本地校验：只保留白名单格式与大小内的，不合规的回报原因。
+ *
+ * 两个选图入口（`chooseMedia` / `chooseMessageFile`）共用这一步 —— 校验口径只有一份，
+ * 否则「相册能过、聊天记录过不了」这类差异会变成用户眼里的玄学。
+ */
+function collectPhotos(files: PickedFile[]): PickResult {
+  const photos: PickedPhoto[] = []
+  let rejected: string | null = null
+  for (const file of files) {
+    const mime = mimeFromPath(file.path)
+    if (!mime) {
+      rejected = '仅支持 JPG / PNG / WebP 图片'
+      continue
+    }
+    const tooBig = validatePickedSize(file.size)
+    if (tooBig) {
+      rejected = tooBig
+      continue
+    }
+    photos.push({ path: file.path, mime, sizeBytes: file.size })
+  }
+  return { photos, rejected }
 }
 
 /**
@@ -73,22 +107,78 @@ export async function pickPhotos(limit: number): Promise<PickResult> {
     throw new Error('无法选择图片，请检查相册/相机权限后重试')
   }
 
-  const photos: PickedPhoto[] = []
-  let rejected: string | null = null
-  for (const file of result.tempFiles) {
-    const mime = mimeFromPath(file.tempFilePath)
-    if (!mime) {
-      rejected = '仅支持 JPG / PNG / WebP 图片'
-      continue
+  return collectPhotos(
+    result.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size })),
+  )
+}
+
+/**
+ * 按来源取一张图（**不弹来源弹窗**）：相册走 `chooseMedia`、聊天记录走 `chooseMessageFile`。
+ *
+ * 识图入口页把这两个来源做成两个直点的按钮（相机由页面自己开，见 `pages/scan-vision`），
+ * 所以取图腿按来源单独暴露；`pickPhotoFromSource` 只是「弹一次两项弹窗再调它」的包装。
+ *
+ * **取消**返回空结果、不报错：取消是正常路径。权限被拒与平台失败抛出可展示的错误，
+ * 由调用方提示并让用户重试。
+ */
+export async function pickPhotoOfSource(source: PhotoSource): Promise<PickResult> {
+  if (source === 'chat') {
+    let result: Taro.chooseMessageFile.SuccessCallbackResult
+    try {
+      // `type: 'image'` 已经在平台侧过滤过一遍；本地仍按同一套白名单与大小复核
+      result = await Taro.chooseMessageFile({ count: 1, type: 'image' })
+    } catch (error) {
+      if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+      throw new Error('无法从聊天记录选择图片，请重试')
     }
-    const tooBig = validatePickedSize(file.size)
-    if (tooBig) {
-      rejected = tooBig
-      continue
-    }
-    photos.push({ path: file.tempFilePath, mime, sizeBytes: file.size })
+    return collectPhotos(result.tempFiles.map((file) => ({ path: file.path, size: file.size })))
   }
-  return { photos, rejected }
+
+  let result: Taro.chooseMedia.SuccessCallbackResult
+  try {
+    result = await Taro.chooseMedia({
+      count: 1,
+      mediaType: ['image'],
+      sourceType: ['album'],
+      // compressed：iOS 相册原图常是 HEIC，压缩后通常是 JPG，能直接过契约白名单
+      sizeType: ['compressed'],
+    })
+  } catch (error) {
+    if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+    throw new Error('无法选择图片，请检查相册权限后重试')
+  }
+  return collectPhotos(
+    result.tempFiles.map((file) => ({ path: file.tempFilePath, size: file.size })),
+  )
+}
+
+/**
+ * 单张取图：先弹**来源弹窗**（从相册选择 / 从聊天会话选择），再调对应的微信原生取图 API。
+ * 搜索页的识图按钮与结果页的「换图」用它 —— 这两处没有相机，取图只可能来自这两个来源。
+ *
+ * **拍摄不在这里**（Owner 2026-09-29）：识图入口页自己开着相机、自己出快门，
+ * 原生面板里再放一个「拍摄」就是同一个能力两条路。
+ *
+ * **取消**（弹窗取消 / 面板取消）统一返回空结果、不报错：取消是正常路径。
+ * 权限被拒与平台失败照旧抛出可展示的错误，由调用方提示并让用户重试 —— 包括来源弹窗
+ * 自身的失败：这里**不能**把 `showActionSheet` 的 reject 一律当成取消，那正是
+ * `./choose-error` 记录过的那类回归（用户点了按钮「什么都没发生」）。
+ */
+export async function pickPhotoFromSource(): Promise<PickResult> {
+  let tapIndex: number
+  try {
+    const picked = await Taro.showActionSheet({ itemList: [...PHOTO_SOURCE_OPTIONS] })
+    tapIndex = picked.tapIndex
+  } catch (error) {
+    // 只吞「用户取消 / 点蒙层」，其余（已有模态浮层、基础库异常…）冒泡给页面提示
+    if (isChooseMediaCancel(error)) return { photos: [], rejected: null }
+    throw new Error('无法打开取图方式选择，请重试')
+  }
+  const source: PhotoSource | null = photoSourceFromTapIndex(tapIndex)
+  // 越界（理论上不可达）：与取消同一处置，不把一次平台抖动变成用户可见的报错
+  if (source === null) return { photos: [], rejected: null }
+
+  return pickPhotoOfSource(source)
 }
 
 /**
@@ -113,8 +203,11 @@ function toArrayBuffer(data: unknown): ArrayBuffer | null {
  * 优先异步 `readFile`（**不传 encoding**：传 utf8 会把二进制读坏），
  * 失败或拿到的不是二进制时退到 `readFileSync` —— 开发工具与真机上
  * 「异步读临时文件偶发失败」是已知现象，同步读能兜住同一次上传。
+ *
+ * 导出给识图查询图上传复用（`features/visual-search/api.ts`）：realm 判据（`toArrayBuffer`）
+ * 是踩过坑的，两处各写一份迟早漂移。
  */
-function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
+export function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const fs = Taro.getFileSystemManager()
 
@@ -155,6 +248,25 @@ function readFileBuffer(filePath: string): Promise<ArrayBuffer> {
       readSync()
     }
   })
+}
+
+/**
+ * 读本地文件大小（`Bytes`）。`getImageInfo` / `chooseMedia` 拿不到大小时用它兜底，
+ * 也是识图页「相机拍照后」取大小时的唯一来源（`takePhoto` 只给路径，不给 size）。
+ *
+ * 同步优先、异步兜底：与 `readFileBuffer` 同一取舍（开发者工具与真机上都出现过
+ * 「异步读临时文件偶发失败」）。取不到返回 `0`，由调用方按「未知大小」处理 ——
+ * 上传前服务端还会按真实字节复核，本地这个数只用于预检文案。
+ */
+export function readFileSize(filePath: string): number {
+  try {
+    const stats = Taro.getFileSystemManager().statSync(filePath)
+    const size = (stats as { size?: unknown }).size
+    return typeof size === 'number' ? size : 0
+  } catch (error) {
+    console.error('[upload] statSync 失败', error)
+    return 0
+  }
 }
 
 /**

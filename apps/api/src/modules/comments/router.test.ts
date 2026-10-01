@@ -32,6 +32,9 @@ function fakeService(overrides: Partial<CommentService> = {}): CommentService {
     listComments: async () => ({ items: [dto], nextCursor: null }),
     createComment: async () => dto,
     createReply: async () => dto,
+    // #195 的本人作用域两条：本文件只覆盖留言区的老行为，给最小实现。
+    listMine: async () => ({ items: [], nextCursor: null, total: 0 }),
+    deleteMine: async () => ({ deleted: 0 }),
     ...overrides,
   }
 }

@@ -100,8 +100,8 @@
   align-items: center;
   gap: 16px;
   /* 不换行：稿 `.pname .nm` 是 nowrap + 省略号，整行永远一行高。
-     `wrap` 会让长昵称 + 徽章在关注钮（演示构建下常驻约 130px）挤占宽度时折到
-     第二行，头像行高度随昵称长度变化 —— 页头跟着跳。 */
+     `wrap` 会让长昵称 + 徽章在关注钮（#188 起真实钮，已登录且非本人主页时常驻）挤占
+     宽度时折到第二行，头像行高度随昵称长度变化 —— 页头跟着跳。 */
   flex-wrap: nowrap;
 }
 
@@ -110,6 +110,41 @@
   font-weight: 600;
   color: var(--fg);
   @include ellipsis;
+}
+
+/*
+ * 在线态（#359 第五点）：头像右侧那一列的昵称行下方，一行「绿点 + 文案」。
+ *
+ * 绿点用系统成功色 `--ok`（认证徽章的描边同款），离线态压成中性灰 `--muted`：
+ * 在线/离线只靠颜色区分（形状一致），文案已经把「多久没上线」说清楚了。
+ * 字号比昵称小一档（21px = 稿 10.5pt），与 `.uhome__badge` 同一档。
+ */
+.uhome__presence {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.uhome__presence-dot {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.uhome__presence.is-online .uhome__presence-dot {
+  background: var(--ok);
+}
+
+.uhome__presence-tx {
+  font-size: 21px;
+  color: var(--muted);
+}
+
+.uhome__presence.is-online .uhome__presence-tx {
+  color: var(--ok-ink);
 }
 
 /*
@@ -145,12 +180,13 @@
 }
 
 /*
- * 关注按钮（稿 `.btn-follow`，头像行第三格 32pt 胶囊）：**纯演示三态**（无后端）。
+ * 关注按钮（稿 `.btn-follow`，头像行第三格 32pt 胶囊）：**真实三态（#188）**，数据面是
+ * `GET|POST|DELETE /users/:userId/follow`。
  * - 默认：品牌渐变底白字 + plus 图标；
  * - `--on`：浅强调底 + 品牌深字 + check 图标；
  * - `--busy`：浅灰底灰字 + 转圈（稿 `.btn-follow .spin-mini`）。
  * border 常驻透明，三态高度不跳（稿注释同款取舍）。
- * 生产构建下整颗按钮不渲染（见 index.tsx `showFollowBtn`）。
+ * 只在「已登录且非本人主页」时渲染；状态读到之前用 `.uhome__follow-skel` 占位。
  */
 .uhome__follow {
   flex: 0 0 auto;
@@ -168,6 +204,19 @@
   font-size: 26px; /* 稿 13pt ×2 */
   font-weight: 600;
   box-shadow: var(--shadow-btn);
+}
+
+/*
+ * 关注钮占位（#188）：与 `.uhome__follow` 同高同圆角，宽度对齐**最宽态**「已关注 + check」
+ * —— padding 28×2 + icon 28 + gap 10 + 3 字 ×26 + border 2×2 = 176px。窄了会让昵称区
+ * 在状态到位时抖一下（`.uhome__nameRow` 是 nowrap，宽度变化直接改省略号位置）。
+ */
+.uhome__follow-skel {
+  flex: 0 0 auto;
+  width: 176px;
+  height: 64px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
 }
 
 .uhome__follow-ic {

@@ -26,7 +26,6 @@ import {
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
-import { findUser } from '@/mock/users'
 import { applyLoadResult, homeListState } from './list-state'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
 import './index.scss'
@@ -529,7 +528,7 @@ export default function Home() {
                 <ProductCard
                   key={item.id}
                   listing={item}
-                  seller={findUser(item.sellerId)}
+                  seller={item.seller}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                   // 推荐归因随卡片带进详情页（R1 §3.5）；分类列表里为 null
                   attribution={attributionOf(item.id)}
@@ -545,7 +544,7 @@ export default function Home() {
                 <ProductCard
                   key={item.id}
                   listing={item}
-                  seller={findUser(item.sellerId)}
+                  seller={item.seller}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                   attribution={attributionOf(item.id)}
                   onOpen={() => impressions.markOpened(item.id)}

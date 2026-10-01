@@ -17,14 +17,16 @@ import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
-import { Route as RegisterRouteImport } from './routes/register'
+import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as SearchRouteImport } from './routes/search'
+import { Route as VerifyRouteImport } from './routes/verify'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as ListingListingIdRouteImport } from './routes/listing.$listingId'
 import { Route as MessagesIndexRouteImport } from './routes/messages.index'
 import { Route as MessagesConversationIdRouteImport } from './routes/messages.$conversationId'
 import { Route as OrdersIndexRouteImport } from './routes/orders.index'
 import { Route as OrdersTransactionIdRouteImport } from './routes/orders.$transactionId'
+import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -66,14 +68,19 @@ const PublishRoute = PublishRouteImport.update({
   path: '/publish',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RegisterRoute = RegisterRouteImport.update({
-  id: '/register',
-  path: '/register',
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VerifyRoute = VerifyRouteImport.update({
+  id: '/verify',
+  path: '/verify',
   getParentRoute: () => rootRouteImport,
 } as any)
 const WishRoute = WishRouteImport.update({
@@ -106,6 +113,11 @@ const OrdersTransactionIdRoute = OrdersTransactionIdRouteImport.update({
   path: '/$transactionId',
   getParentRoute: () => OrdersRoute,
 } as any)
+const UsersUserIdRoute = UsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -116,12 +128,14 @@ export interface FileRoutesByFullPath {
   '/orders': typeof OrdersRouteWithChildren
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
+  '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
 }
@@ -132,12 +146,14 @@ export interface FileRoutesByTo {
   '/notifications': typeof NotificationsRoute
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
+  '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
 }
@@ -151,12 +167,14 @@ export interface FileRoutesById {
   '/orders': typeof OrdersRouteWithChildren
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
+  '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
 }
@@ -171,12 +189,14 @@ export interface FileRouteTypes {
     | '/orders'
     | '/profile'
     | '/publish'
-    | '/register'
+    | '/reports'
     | '/search'
+    | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages/'
     | '/orders/'
   fileRoutesByTo: FileRoutesByTo
@@ -187,12 +207,14 @@ export interface FileRouteTypes {
     | '/notifications'
     | '/profile'
     | '/publish'
-    | '/register'
+    | '/reports'
     | '/search'
+    | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages'
     | '/orders'
   id:
@@ -205,12 +227,14 @@ export interface FileRouteTypes {
     | '/orders'
     | '/profile'
     | '/publish'
-    | '/register'
+    | '/reports'
     | '/search'
+    | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages/'
     | '/orders/'
   fileRoutesById: FileRoutesById
@@ -224,10 +248,12 @@ export interface RootRouteChildren {
   OrdersRoute: typeof OrdersRouteWithChildren
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
-  RegisterRoute: typeof RegisterRoute
+  ReportsRoute: typeof ReportsRoute
   SearchRoute: typeof SearchRoute
+  VerifyRoute: typeof VerifyRoute
   WishRoute: typeof WishRoute
   ListingListingIdRoute: typeof ListingListingIdRoute
+  UsersUserIdRoute: typeof UsersUserIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -288,11 +314,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PublishRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/register': {
-      id: '/register'
-      path: '/register'
-      fullPath: '/register'
-      preLoaderRoute: typeof RegisterRouteImport
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/search': {
@@ -300,6 +326,13 @@ declare module '@tanstack/react-router' {
       path: '/search'
       fullPath: '/search'
       preLoaderRoute: typeof SearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/verify': {
+      id: '/verify'
+      path: '/verify'
+      fullPath: '/verify'
+      preLoaderRoute: typeof VerifyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/wish': {
@@ -344,6 +377,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrdersTransactionIdRouteImport
       parentRoute: typeof OrdersRoute
     }
+    '/users/$userId': {
+      id: '/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/users/$userId'
+      preLoaderRoute: typeof UsersUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -383,10 +423,12 @@ const rootRouteChildren: RootRouteChildren = {
   OrdersRoute: OrdersRouteWithChildren,
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,
-  RegisterRoute: RegisterRoute,
+  ReportsRoute: ReportsRoute,
   SearchRoute: SearchRoute,
+  VerifyRoute: VerifyRoute,
   WishRoute: WishRoute,
   ListingListingIdRoute: ListingListingIdRoute,
+  UsersUserIdRoute: UsersUserIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

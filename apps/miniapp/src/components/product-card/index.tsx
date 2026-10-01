@@ -9,15 +9,21 @@
  * 传长按回调 —— 否则「搜索页和相似推荐位没有长按」这类缺口只能靠每个页面记得接一遍。
  * 页面只按需接两个钩子做自己才做得了的账：`hidden`（页面那份跨页的隐藏名单，决定这张卡还画不画）
  * 与 `onDislike`（首页要结算曝光计时、把 id 记进页面名单）。
+ *
+ * 两项的**存储位置不同**，这也决定了它们各自能许诺什么：**收藏是真服务端状态**
+ * （`GET|POST|DELETE /listings/:id/favorite`，见 `@/features/favorites/api`），
+ * 所以只在写成功后报成功；**「不感兴趣」至今只有本机隐藏名单**（R1 没有服务端隐藏接口，
+ * 见 `recommendation/hidden`），所以它当场生效、当场就在本地报。
  */
 import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
-import { isListingFaved, setListingFavorite } from '@/features/favorites/local'
+import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { buildListingDetailUrl, type FeedAttribution } from '@/features/recommendation/attribution'
 import { hideListing, readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
+import { isApiError } from '@/lib/request'
 import { conditionLabel, formatAmount } from '@/mock/api'
 import type { MockListing, MockUser } from '@/mock/types'
 import './index.scss'
@@ -26,14 +32,29 @@ import './index.scss'
 const MENU_FAVORITE = 0
 const MENU_DISLIKE = 1
 
+/**
+ * 收藏写失败时给用户的那句话。
+ *
+ * `LISTING_NOT_FOUND`（404）在**写**路径上只有一个含义：这件东西已经不在货架上了
+ * （契约把「不存在 / 不可见 / 已不在售」合并成同码，正是为了不给商品 id 空间留探针，
+ * 见 `packages/contracts/src/favorites/schema.ts`）。所以这一支直接说「已下架或卖掉了」，
+ * 而不是把服务端那句通用文案丢给用户。其余（含未登录 401）照服务端文案走 ——
+ * 它会说清楚是没登录还是别的。
+ */
+function favoriteFailureText(caught: unknown): string {
+  if (isApiError(caught)) {
+    return caught.code === 'LISTING_NOT_FOUND' ? '这件宝贝已经下架或卖掉了' : caught.message
+  }
+  return '操作没成功，请重试'
+}
+
 type ProductCardProps = {
   listing: MockListing
   /**
-   * 卖家。**可为 `null`**：契约的 `ListingCard` 没有卖家字段
-   * （`packages/contracts/src/listings/schema.ts` 只给了 id/title/price/…），
-   * 真实接口的列表卡因此拿不到卖家。此时整行不渲染 ——
-   * 不编一个卖家出来（`mock/users.ts` 的 `getUser` 会对未知 id 兜底到某个真实演示用户，
-   * 所以调用方必须用 `findUser` 并把 `null` 原样传进来）。
+   * 卖家。**可为 `null`**：#191 起契约卡片内嵌 `seller`（公开四字段），调用方传
+   * `listing.seller` 即真值；契约 `seller` 缺席的老 mock 记录是 `null`，
+   * 此时整行不渲染 —— 不编一个卖家出来（`mock/users.ts` 的 `getUser` 会对未知 id
+   * 兜底到某个真实演示用户，绝不能把卡片卖家喂给它）。
    */
   seller: MockUser | null
   /** 图片区高度（rpx），由瀑布流按列宽 × 比例算好后传入 */
@@ -79,7 +100,23 @@ export default function ProductCard({
    * 「没有页面级名单的调用方」与「长按当场」——进页时的兜底也读它，所以两者都不算多余。
    */
   const [ownHidden, setOwnHidden] = useState(() => readHiddenListingIds().includes(listing.id))
-  const [faved, setFaved] = useState(() => isListingFaved(listing.id))
+
+  /**
+   * 这张卡的收藏态。
+   *
+   * **不在 mount 时拉**：卡片是瀑布流里的一行，一屏就是二三十张 —— 逐个问
+   * `GET /listings/:id/favorite` 就是二三十个请求，而契约里没有「批量查收藏态」的端点
+   * （`ListingCardSchema` 没有收藏标记，见 `packages/contracts/src/listings/schema.ts`）。
+   * 所以只在用户**真的长按了这张卡**时问一次，之后记住（`favoriteKnown`）。
+   *
+   * `favoriteKnown` 与 `faved` 分开：`faved === false` 既可能是「服务端说没收藏」，
+   * 也可能是「还没问过」。菜单文案上两者一样（都显示「收藏」），但**写**的时候必须知道
+   * 自己在翻转什么 —— 混成一个字段就会把「没问过」当成「没收藏」。
+   */
+  const [faved, setFaved] = useState(false)
+  const [favoriteKnown, setFavoriteKnown] = useState(false)
+  /** 写请求在途：挡住长按连点，避免同一张卡被写两遍 */
+  const [favoriteBusy, setFavoriteBusy] = useState(false)
 
   /**
    * 长按之后微信仍会补一次 tap：不拦住的话菜单刚关，人就跳进详情页了。
@@ -99,34 +136,45 @@ export default function ProductCard({
   }
 
   /**
-   * 收藏 / 取消收藏。
-   *
-   * 先写本机名单，**按落盘结果**回报：`setListingFavorite` 返回的是写完重读的真实状态，
-   * 存储写失败时它与点击前一样 —— 那种情况下如实说「没保存成功」，不把没存上的说成存上了，
-   * 也不发一条与事实不符的 FAVORITE / UNFAVORITE。名单是「这台设备认不认这个状态」的真值
-   * （菜单文案读它），事件是给服务端的原料 —— 收藏没有写端点（见 `features/favorites/local`），
-   * `FAVORITE` / `UNFAVORITE` 本来就是客户端上报的两类，所以这里如实报，但**不**说成
-   * 「已经存到服务端了」。
+   * 卖家行是卡片内的**独立点击区**（#191 验收：点击进入正确公开主页）：
+   * 拦下冒泡，同一次点击只进卖家主页、不进商品详情。
+   * Taro 合成事件的 `stopPropagation` 在运行时阻断冒泡，效果等同小程序的 catch 语义。
+   * 根节点的 `handleOpen` 不会触发。
    */
-  const handleFavorite = () => {
-    const next = setListingFavorite(listing.id, !faved)
-    if (next === faved) {
-      void Taro.showToast({
-        title: faved ? '取消收藏没保存成功，请重试' : '收藏没保存成功，请重试',
-        icon: 'none',
+  const handleOpenSeller = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation()
+    if (!seller) return
+    void Taro.navigateTo({ url: `/pages/user/index?id=${seller.id}` })
+  }
+
+  /**
+   * 收藏 / 取消收藏。`current` 是长按那一刻菜单上呈现的状态（见 `handleLongPress`）。
+   *
+   * **以服务端返回为准**：`setFavorite` 是幂等写（POST / DELETE 指定目标状态，不读-改-写），
+   * 回包里就是写完之后的关系。本地**不先翻转** —— 本地翻转在幂等写 + 并发下会显示成与库里
+   * 相反的状态，而这一屏没有别的地方会把它纠正回来。
+   *
+   * 行为事件 `FAVORITE` / `UNFAVORITE` 只在**写成功后**发：写失败还发事件，等于给推荐
+   * 喂了一条没发生过的行为。
+   */
+  const handleFavorite = async (current: boolean) => {
+    if (favoriteBusy) return
+    setFavoriteBusy(true)
+    try {
+      const state = await setFavorite(listing.id, !current)
+      setFaved(state.favorited)
+      setFavoriteKnown(true)
+      trackRecommendationEvent({
+        listingId: listing.id,
+        eventType: state.favorited ? 'FAVORITE' : 'UNFAVORITE',
+        attribution,
       })
-      return
+      void Taro.showToast({ title: state.favorited ? '已收藏' : '已取消收藏', icon: 'none' })
+    } catch (caught) {
+      void Taro.showToast({ title: favoriteFailureText(caught), icon: 'none' })
+    } finally {
+      setFavoriteBusy(false)
     }
-    setFaved(next)
-    trackRecommendationEvent({
-      listingId: listing.id,
-      eventType: next ? 'FAVORITE' : 'UNFAVORITE',
-      attribution,
-    })
-    void Taro.showToast({
-      title: next ? '已收藏到本机（收藏接口未上线）' : '已取消收藏',
-      icon: 'none',
-    })
   }
 
   /**
@@ -151,10 +199,24 @@ export default function ProductCard({
     // 先合上「吃掉下一次 tap」的开关：菜单弹出与关闭之间隔着好几帧，事后再设就晚了
     swallowNextTapRef.current = true
 
+    // 菜单第一项的文案要读服务端真值：还没问过这张卡就先问一次
+    let current = faved
+    if (!favoriteKnown && !favoriteBusy) {
+      try {
+        current = (await fetchFavoriteState(listing.id)).favorited
+        setFaved(current)
+        setFavoriteKnown(true)
+      } catch {
+        // 读不到（未登录 / 网络）**不该让菜单弹不出来** —— 那会把「不感兴趣」一起废掉。
+        // 按「未收藏」呈现；真点下去时由写接口给出准确结论，写失败会如实报错。
+        current = false
+      }
+    }
+
     let tapIndex: number
     try {
       const result = await Taro.showActionSheet({
-        itemList: [faved ? '取消收藏' : '收藏', '不感兴趣'],
+        itemList: [current ? '取消收藏' : '收藏', '不感兴趣'],
       })
       tapIndex = result.tapIndex
     } catch {
@@ -162,7 +224,7 @@ export default function ProductCard({
       return
     }
 
-    if (tapIndex === MENU_FAVORITE) handleFavorite()
+    if (tapIndex === MENU_FAVORITE) await handleFavorite(current)
     else if (tapIndex === MENU_DISLIKE) handleDislike()
   }
 
@@ -205,11 +267,12 @@ export default function ProductCard({
         </View>
 
         {/*
-          卖家行整行依赖 seller：真实列表卡没有卖家字段，传进来就是 null。
+          卖家行整行依赖 seller：契约 `seller` 缺席的老 mock 记录传进来是 null。
           此时不渲染这一行，而不是显示一个占位名 —— 卡片下方留白比假人诚实。
+          有卖家时整行可点：进 TA 的公开主页（详情页顶部卖家卡同一跳转口径）。
         */}
         {seller ? (
-          <View className="pcard__seller">
+          <View className="pcard__seller" onClick={handleOpenSeller}>
             <Image className="pcard__avatar" src={seller.avatarUrl} mode="aspectFill" />
             <Text className="pcard__who">{seller.nickname}</Text>
             {verified ? (

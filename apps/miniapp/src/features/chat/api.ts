@@ -11,10 +11,14 @@ import {
   type ConversationListResponse,
   conversationDtoSchema,
   conversationListResponseSchema,
+  type ImageMediaMessageInput,
+  type MediaMessageDto,
   type MessageDto,
   type MessageListResponse,
+  mediaMessageDtoSchema,
   messageDtoSchema,
   messageListResponseSchema,
+  type VoiceMediaMessageInput,
 } from '@fish/contracts/chat/schema'
 import { NOTIFICATION_ROUTES } from '@fish/contracts/notifications/routes'
 import {
@@ -97,11 +101,88 @@ export async function fetchMessagePage(
   return messageListResponseSchema.parse(payload)
 }
 
-/** 发一条文本消息（201，响应体 MessageDto） */
-export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
+/**
+ * 发一条文本消息（201，响应体 MessageDto）。
+ *
+ * `replyToId` 是**被引用消息的公开 id**（#359 3c）：带上它就发一条「引用消息」，
+ * 服务端在响应与历史里回同一份 `replyTo` 摘引投射。目标不可引用（不存在 / 跨会话 /
+ * SYSTEM / 已撤回）→ 422 `MESSAGE_REPLY_INVALID`。
+ *
+ * 发送体**不带** `type` 判别值：契约里 TEXT 的 `type` 是可选的，而「不带」在
+ * 「已升级的 API」与「还没升到 #366 的旧 API」上都合法（旧契约是 strictObject，
+ * 多带一个 `type` 反而 422）。小程序发版有审核滞后，这条差异是真实存在的窗口。
+ */
+export async function sendMessage(
+  conversationId: string,
+  content: string,
+  replyToId?: string,
+): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
-    body: { content },
+    body: { content, replyToId },
+  })
+  return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 撤回自己发的一条消息（#359 3c；204 无响应体）。
+ *
+ * `messageId` 是**公开 id**。窗口 `MESSAGE_RECALL_WINDOW_MS`（2 分钟）内、仅发送者本人；
+ * 对已撤回消息幂等（重复调用同样 204）。失败三档：404 `MESSAGE_NOT_FOUND`、
+ * 403 `MESSAGE_RECALL_FORBIDDEN`、409 `MESSAGE_RECALL_WINDOW_EXCEEDED`。
+ */
+export async function recallMessage(conversationId: string, messageId: string): Promise<void> {
+  await apiRequest(CHAT_ROUTES.recall(conversationId, messageId), { method: 'POST' })
+}
+
+/**
+ * 创建一条图片媒体消息（201，响应体 `MediaMessageDto`）。
+ *
+ * 媒体**刻意不并进 `MessageDto`**（契约文件顶部注释）：它是独立 DTO、独立端点、独立实时
+ * 事件。`clientRequestId` 是 #67 幂等键，语义同文本消息：新发送生成、重试沿用同一个。
+ */
+export async function createImageMessage(
+  conversationId: string,
+  input: Omit<ImageMediaMessageInput, 'kind'>,
+): Promise<MediaMessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.media(conversationId), {
+    method: 'POST',
+    body: { kind: 'IMAGE', ...input },
+  })
+  return mediaMessageDtoSchema.parse(payload)
+}
+
+/** 创建一条语音媒体消息（同 `createImageMessage`，`durationMs` 由服务端按字节重解析）。 */
+export async function createVoiceMessage(
+  conversationId: string,
+  input: Omit<VoiceMediaMessageInput, 'kind'>,
+): Promise<MediaMessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.media(conversationId), {
+    method: 'POST',
+    body: { kind: 'VOICE', ...input },
+  })
+  return mediaMessageDtoSchema.parse(payload)
+}
+
+/**
+ * 发一张商品卡消息（#359；201，响应体 MessageDto）。
+ *
+ * `listingId` 是被分享商品的公开 id；可渲染的卡片数据由响应里的 `listing` 投射携带
+ * （服务端富化，与会话头商品卡同源）。商品不存在或非在售 → 404 LISTING_NOT_FOUND。
+ *
+ * `clientRequestId` 是**必填**的幂等键（`@/lib/uuid` 的 `randomUuidV4`）：
+ * 服务端以 `(senderId, conversationId, clientRequestId)` 去重，同键同商品重放既有那条，
+ * 同键换商品才 409 `IDEMPOTENCY_KEY_REUSED`。**重试必须复用同一个键**，否则超时重试会
+ * 真落两张卡（见 `pages/send-listing` 的 `sendKeyFor`）。
+ */
+export async function sendListingMessage(
+  conversationId: string,
+  listingId: string,
+  clientRequestId: string,
+): Promise<MessageDto> {
+  const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
+    method: 'POST',
+    body: { type: 'LISTING', listingId, clientRequestId },
   })
   return messageDtoSchema.parse(payload)
 }

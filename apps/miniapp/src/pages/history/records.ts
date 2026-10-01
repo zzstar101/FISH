@@ -198,9 +198,13 @@ export function emptyKindOf(demo: boolean, cleared: boolean): EmptyKind {
 /**
  * 三种空态的文案（**每档 × 每种来由各一支**）。
  *
- * `noBackend` 说的是「后端还没有这条数据」而不是「你还没有浏览记录 / 没有收藏」：
- * 后者是我们**不知道**的事，写成事实就是假话 —— 这与 `components/load-error` 和空态
- * 之间那条界线同一口径（「加载不出来」≠「恰好没有内容」）。
+ * `noBackend` 说的是「这一档还读不到服务端数据」（后端还没有这条数据 / 这一页还没接上），
+ * 而不是「你还没有浏览记录 / 没有收藏」：后者是我们**不知道**的事，写成事实就是假话 ——
+ * 这与 `components/load-error` 和空态之间那条界线同一口径（「加载不出来」≠「恰好没有内容」）。
+ *
+ * ⚠️ 收藏那一支（#397）：收藏接口已上线（#394），小程序也有了真读它的「我的收藏」页，
+ * 所以这里**不能**再写「服务端还没有收藏接口 / 只记在这台设备上」—— 两句现在都是假话。
+ * 本页的收藏档还没接端点，如实说「这一页还没接」，并把用户引到能看的那个页面。
  */
 export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   if (kind === 'cleared') {
@@ -252,8 +256,8 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   }
   if (tab === 'favs') {
     return {
-      title: '收藏还没有后端接口',
-      text: '服务端还没有收藏接口。你在卡片上收藏的商品只记在这台设备上，所以这里暂时没有内容可看。',
+      title: '这一页还没接后端',
+      text: '收藏接口已经上线，只是这一页还没接上 —— 你的收藏在「我的收藏」页可以看。',
       action: '去逛逛',
     }
   }

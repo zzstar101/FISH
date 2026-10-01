@@ -123,6 +123,42 @@ describe('conversations store (integration)', () => {
     }
   })
 
+  /**
+   * #359 第五点：`presence.changed` 的广播范围必须收口在「与该用户有会话的其它用户」。
+   * 用一对全新的用户做隔离，避免被本文件其它用例造出来的会话污染。
+   */
+  test('listCounterpartUserIds 只给有会话的对方：去重、不含自己、无会话为空', async () => {
+    const a = newId()
+    const b = newId()
+    const lonely = newId()
+    const listing1 = newId()
+    const listing2 = newId()
+    for (const [i, uid] of [a, b, lonely].entries()) {
+      await db.execute(sql`
+        INSERT INTO users (id, student_no, password_hash, nickname)
+        VALUES (${uid}, ${`presence${process.pid}_${i}`}, 'test-hash', '在线态测试')
+      `)
+    }
+    await seedListing(listing1, b, 'presence 商品 1')
+    await seedListing(listing2, b, 'presence 商品 2')
+    try {
+      // 同一对买卖家的两条会话（不同商品）：对方只应出现一次
+      await store.insertIfAbsent(listing1, a, b)
+      await store.insertIfAbsent(listing2, a, b)
+
+      expect(await store.listCounterpartUserIds(a)).toEqual([b])
+      expect(await store.listCounterpartUserIds(b)).toEqual([a])
+      // 从没建过会话的用户：空数组（不是 null，也不是全站用户）
+      expect(await store.listCounterpartUserIds(lonely)).toEqual([])
+    } finally {
+      await db.execute(sql`
+        DELETE FROM conversations WHERE listing_id IN (${listing1}, ${listing2})
+      `)
+      await db.execute(sql`DELETE FROM listings WHERE id IN (${listing1}, ${listing2})`)
+      await db.execute(sql`DELETE FROM users WHERE id IN (${a}, ${b}, ${lonely})`)
+    }
+  })
+
   test('findDetail returns role data for participants and null for outsiders', async () => {
     const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
     if (!conversationId) throw new Error('unreachable')
@@ -184,6 +220,35 @@ describe('conversations store (integration)', () => {
     expect(afterRead?.unreadCount).toBe(0)
     // 卖家的未读不受买家标记影响（买家消息 + SYSTEM，共 2 条）
     expect((await store.findDetail(conversationId, seller))?.unreadCount).toBe(2)
+  })
+
+  test('LISTING 消息（#359）摘要翻成 `[商品]` 且计入未读', async () => {
+    const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
+    if (!conversationId) throw new Error('unreachable')
+    const beforeBuyer = await store.findDetail(conversationId, buyer)
+    const beforeSeller = await store.findDetail(conversationId, seller)
+    if (!beforeBuyer || !beforeSeller) throw new Error('unreachable')
+
+    // content 落的是商品公开 id（引用不是可读文本）——列表行必须由服务端翻成 `[商品]`，
+    // 否则会话页会显示一串 `lst_…`。未读谓词不看 type，所以它天然计入未读。
+    await db.execute(sql`
+      INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
+        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'LISTING', 'lst_01jc000000e00800000000000t',
+         now() + interval '1 second')
+    `)
+
+    const buyerView = await store.findDetail(conversationId, buyer)
+    expect(buyerView?.lastMessage).toMatchObject({
+      type: 'LISTING',
+      content: '[商品]',
+      senderId: seller,
+    })
+    expect(buyerView?.unreadCount).toBe(beforeBuyer.unreadCount + 1)
+
+    const sellerView = await store.findDetail(conversationId, seller)
+    expect(sellerView?.lastMessage).toMatchObject({ type: 'LISTING', content: '[商品]' })
+    // 自己发的商品卡对**对方**计未读：卖家视角这条不算，但摘要同样要能出。
+    expect(sellerView?.unreadCount).toBe(beforeSeller.unreadCount)
   })
 
   test('markRead returns null for a non-participant', async () => {
@@ -391,4 +456,22 @@ describe('conversations store (integration)', () => {
     // 更晚的读位（T2）必须先提交，且不被后提交的 T1 回写覆盖。
     expect(finalReadAt).toBe(t2ReadAt)
   })
+})
+
+// #359 3c：撤回后列表行摘要不能继续显示原文（recalled_at 只标记不删正文，读侧必须自己收敛）。
+test('撤回的消息在会话行摘要里显示为「消息已撤回」，不再泄漏原文', async () => {
+  const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
+  if (!conversationId) throw new Error('unreachable')
+
+  const messageId = crypto.randomUUID()
+  await db.execute(sql`
+    INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at)
+    VALUES (${messageId}, ${conversationId}, ${seller}, 'TEXT', '这句要撤回', now() + interval '10 minutes')
+  `)
+  const before = await store.findDetail(conversationId, buyer)
+  expect(before?.lastMessage).toMatchObject({ content: '这句要撤回' })
+
+  await db.execute(sql`UPDATE messages SET recalled_at = now() WHERE id = ${messageId}`)
+  const after = await store.findDetail(conversationId, buyer)
+  expect(after?.lastMessage).toMatchObject({ content: '[消息已撤回]', senderId: seller })
 })

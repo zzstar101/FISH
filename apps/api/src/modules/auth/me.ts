@@ -26,5 +26,7 @@ export function toMe(row: UserRow): Me {
     verifiedAt: row.verifiedAt?.toISOString() ?? null,
     phoneBound: row.phone !== null,
     maskedPhone: row.phone ? maskPhone(row.phone) : null,
+    // #179：个性签名（DB 列由 #287 批量迁移落库），可空 = 未填写或已清空
+    signature: row.signature ?? null,
   }
 }

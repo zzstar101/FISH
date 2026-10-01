@@ -1,6 +1,7 @@
 import { describe, expect, setSystemTime, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../listings/cursor'
+import type { PresenceReader } from '../presence/presence'
 import { createPublicUserService, PublicUserServiceError } from './service'
 import type {
   PublicListingCursor,
@@ -24,6 +25,7 @@ function userRow(overrides: Partial<PublicUserRow> = {}): PublicUserRow {
     nickname: '林一',
     avatarUrl: null,
     authStatus: 'VERIFIED',
+    signature: null,
     createdAt: new Date('2026-09-01T00:00:00.000Z'),
     ...overrides,
   }
@@ -44,6 +46,8 @@ function listingRow(overrides: Partial<PublicListingRow> = {}): PublicListingRow
     createdAt: new Date('2026-09-10T02:00:00.000Z'),
     createdAtCursor: '2026-09-10T02:00:00.000000Z',
     coverObjectKey: null,
+    // #191：卡片卖家公开子集（他人主页在售的卖家即主页用户），join users 同源带出。
+    seller: { id: USER_ID, nickname: '林一', avatarUrl: null, authStatus: 'VERIFIED' },
     ...overrides,
   }
 }
@@ -78,8 +82,16 @@ function fakeStore(
   }
 }
 
-function service(store: PublicUserStore) {
-  return createPublicUserService({ store, storage })
+/**
+ * 在线态读模型（#359 第五点）。默认「从未活动」（离线、无 lastActiveAt）；
+ * 需要断言在线形状的用例注入自己的 reader。
+ */
+const offlinePresence: PresenceReader = {
+  presenceOf: () => ({ online: false, lastActiveAt: null }),
+}
+
+function service(store: PublicUserStore, presence: PresenceReader = offlinePresence) {
+  return createPublicUserService({ store, storage, presence })
 }
 
 /** 捕捉抛出的 PublicUserServiceError，断言不成立时给出可读失败。 */
@@ -89,7 +101,7 @@ function catchError(error: unknown): PublicUserServiceError {
 }
 
 describe('公开资料', () => {
-  test('DTO 的键集合恰好是契约里的七个字段（不多一个）', async () => {
+  test('DTO 的键集合恰好是契约里的八个字段（不多一个）', async () => {
     const profile = await service(fakeStore()).getPublicProfile(USER_ID)
 
     expect(Object.keys(profile).sort()).toEqual([
@@ -99,8 +111,39 @@ describe('公开资料', () => {
       'id',
       'joinedDays',
       'nickname',
+      'presence',
+      'signature',
       'soldCount',
     ])
+  })
+
+  /**
+   * #359 第五点：他人主页的在线态来自进程内活动登记表。这条用例锁两件事：
+   * ① 值是登记表读出来的（不是恒 false 的占位）；② 查的是**被看的那个用户**。
+   */
+  test('presence 取自登记表，且查的是被看的用户', async () => {
+    const asked: string[] = []
+    const profile = await service(fakeStore(), {
+      presenceOf: (userId) => {
+        asked.push(userId)
+        return { online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' }
+      },
+    }).getPublicProfile(USER_ID)
+
+    expect(profile.presence).toEqual({ online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' })
+    expect(asked).toEqual([USER_ID])
+  })
+
+  test('签名（#179）：行里的 signature 原样进公开 DTO', async () => {
+    const filled = await service(
+      fakeStore({ user: userRow({ signature: '面交优先' }) }),
+    ).getPublicProfile(USER_ID)
+    expect(filled.signature).toBe('面交优先')
+
+    const empty = await service(fakeStore({ user: userRow({ signature: null }) })).getPublicProfile(
+      USER_ID,
+    )
+    expect(empty.signature).toBeNull()
   })
 
   test('把统计与加入天数一起组装进响应', async () => {

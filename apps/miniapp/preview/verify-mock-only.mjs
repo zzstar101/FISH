@@ -12,6 +12,8 @@
  * 消息页是「读 + 写」：通知列表（GET /notifications）与切进「通知」tab 的逐条已读
  * 回写（POST /notifications/:id/read）。许愿页是「读 + 写」：GET /wishes、
  * GET /wishes/pool、GET /matches?wishId=、POST /wishes/:id/close；发布页 POST /wishes。
+ * 我的关注页（#188）是「读 + 写」：GET /me/following 分页列表，行内取关走
+ * DELETE /users/:userId/follow（预览外壳里本页走演示分支，不真的发请求）。
  *
  * 其余页面（出物 / 会话 …）：仍必须**零业务请求** ——
  * 它们的写操作与状态机尚未接接口，一旦偷偷发起请求就说明回退路径被绕过了。
@@ -45,6 +47,8 @@ const ROUTES = [
   '/pages/listing-detail/index?id=l-001',
   '/pages/listing-detail/index?id=l-014',
   '/pages/conversation/index?id=c-001',
+  // 发送商品选择页（#359）：读路径走公开在售端点（已接接口），进 WIRED
+  '/pages/send-listing/index?id=c-001',
   '/pages/conversation/index?id=c-006',
   '/pages/watchers/index',
   '/pages/comments/index',
@@ -60,6 +64,12 @@ const ROUTES = [
   // 举报用户页 / 我的举报同样零业务请求（用户页与列表页在本分支）
   '/pages/report-user/index',
   '/pages/my-reports/index',
+  // 识图结果页（#324）：不带 `visualObjectKey` 进页 = 参数丢失态，本页只画空态、
+  // 一个请求都不发（因此**不进** WIRED）。带参数时才会打 `POST /visual-search`，
+  // 那条腿要真实后端，在微信开发者工具里验（见 docs/miniapp-dev-workflow.md）。
+  '/pages/vision-result/index',
+  // 识图入口页（#324）：取图走原生面板、点了才上传，本脚本只加载路由、不做交互
+  '/pages/scan-vision/index',
 ]
 
 /**
@@ -90,11 +100,15 @@ const WIRED = [
   '/pages/listing-detail/index',
   '/pages/chat/index',
   '/pages/profile/index',
+  // 发送商品选择页（#359）：读路径接 GET /users/:id/listings，发送接 POST messages
+  '/pages/send-listing/index',
   '/pages/wish/index',
   '/pages/wish-publish/index',
   '/pages/match/index',
   '/pages/orders-buy/index',
   '/pages/orders-sell/index',
+  // 我的关注（#188）：真实构建走 GET /me/following，属已接接口页
+  '/pages/following/index',
 ]
 
 /** 后端地址：已接接口的页面只允许请求它，发往别处仍算越界 */
