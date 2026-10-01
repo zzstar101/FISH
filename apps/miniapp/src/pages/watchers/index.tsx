@@ -49,9 +49,18 @@ export default function Watchers() {
    * `scrollIntoView` 锚点（同 `pages/user`、`pages/conversation` 的内滚口径）。
    */
   const [showTop, setShowTop] = useState(false)
+  /**
+   * 顶栏两态（#386 批次 2）：返回键常驻吸顶，滚过阈值后玻璃底 + 标题「想要的人」
+   * 浮现在返回键隔壁（Owner 2026-10-01 拍板，同 `pages/settings`）。
+   * 滚动流来自内滚 ScrollView 的 `onScroll`（见上），阈值 40 设备 px 与
+   * `pages/user` 的 `GLASS_AT` 同值；与回顶判定共用同一次回调。
+   */
+  const REVEAL_AT = 40
+  const [revealed, setRevealed] = useState(false)
   const onScroll = useCallback((e: { detail: ScrollViewProps.onScrollDetail }) => {
     // `onScroll` 的 `scrollTop` 是设备 px，与共享组件阈值同口径（不 ×2）
     setShowTop(e.detail.scrollTop > BACK_TOP_THRESHOLD)
+    setRevealed(e.detail.scrollTop > REVEAL_AT)
   }, [])
   /**
    * `scrollIntoView` 的值不变时原生层不会重滚，所以备两个同位的锚点交替指 ——
@@ -164,7 +173,7 @@ export default function Watchers() {
   return (
     <View className="wt">
       <View className="wt__bg" />
-      <NavBar title="想要的人" />
+      <NavBar fixed glass={revealed} title={revealed ? '想要的人' : undefined} />
       <View className="wt__head">
         <Text className="wt__kicker num">我的发布 · 想要的人</Text>
         <Text className="wt__title">想要的人</Text>

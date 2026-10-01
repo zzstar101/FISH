@@ -19,7 +19,6 @@ import {
 import { followingStatsOf } from '@/features/following/stats'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { cancellable } from '@/lib/cancellable'
-import { readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
 /**
@@ -92,13 +91,6 @@ export default function Following() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
-
-  /**
-   * 顶栏栅格（状态栏高 / 内容行高）。**必须来自 `lib/nav-metrics` 的运行时反推**，
-   * 不能照抄稿的固定值：真机上胶囊位置逐机不同，稿里那个是画出来的假胶囊。
-   * 只用它给居中标题定「与胶囊同行」的那条水平带（见下方 `center` 的说明）。
-   */
-  const metrics = useMemo(() => readNavMetrics(), [])
 
   const [tab, setTab] = useState<FollowingTab>('people')
   /**
@@ -217,40 +209,20 @@ export default function Following() {
     <View className="fw">
       <View className="fw__bg" />
 
-      {/* 顶栏主行 + 两档 tab 副行：同一块玻璃，钉在顶部（见下方 TopBar 的说明） */}
+      {/*
+        顶栏主行 + 两档 tab 副行：同一块玻璃，钉在顶部。
+
+        标题改走 `title` / `titleEm`（#386 批次 2，Owner 拍板对齐 history 的左对齐版式）：
+        「我的」黑 + 「关注」品牌色，紧随返回钮 —— 原先为屏幕居中抄的那份绝对定位
+        中槽 hack（fw__navtitle）随之拆除。同款居中写法仍在 mylist / comments（该页
+        也待收编）。
+      */}
       <TopBar
         variant="glass"
         spacer
         back
-        center={
-          /*
-            标题走**中槽**而不是 `title` / `titleEm` 两个 prop：那两个 prop 渲染出的
-            标题是**紧随返回钮左对齐**的（`.topbar__row` 是普通 flex），而稿的
-            `.mp-title{left:50%;translate(-50%,-50%)}` 要求**屏幕水平居中**。
-
-            中槽本身也不够：`.topbar__center` 是 `flex: 1 1 auto`，它的可用区间是
-            「返回钮右侧 → 胶囊避让区左侧」，实测 375pt 屏上是 [64px, 266px]，
-            在其中居中会落在 165px 而不是屏幕中线 187.5px，肉眼能看出偏左。
-            所以这里把它**绝对定位到整条栏的中线**（`.topbar` 是 `position: fixed`，
-            天然是绝对定位后代的包含块），左右 `top` / `height` 由组件同一套运行时
-            栅格给出：`top` = 状态栏高、`height` = 内容行高，于是标题在**胶囊那一行**
-            垂直居中（与返回钮同一水平中线），不会跟着整条栏变高一起下偏。
-
-            这两个是组件按设备反推出来的**设备 px**，必须走行内（pxtransform 只处理
-            样式表；内联 px 原样下发）—— 与 `lib/nav-metrics` 的口径一致。
-          */
-          <View
-            className="fw__navtitle"
-            style={{
-              top: `${metrics.statusBarHeight}px`,
-              height: `${metrics.contentHeight}px`,
-            }}
-          >
-            <Text>我的</Text>
-            {/* 稿 `.mp-title .hl{color:var(--brand)}`：尾段走品牌色 */}
-            <Text className="fw__navtitle-em">关注</Text>
-          </View>
-        }
+        title="我的"
+        titleEm="关注"
         below={
           <View className="fw__tabs">
             {TABS.map((item) => (

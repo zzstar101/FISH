@@ -38,45 +38,7 @@
   @include page-hero(560px, 64px);
 }
 
-/* ---------------------------------------------------------------- 顶栏（主行标题 + tab 副行） */
-
-/**
- * 居中标题：稿 `.mp-title{left:50%;translate(-50%,-50%)}`。
- *
- * 走 `top-bar` 的**中槽**（组件没有 `titleAlign`，`title` prop 渲染出来的是紧随返回钮
- * 左对齐的一行），但中槽的可用区间只是「返回钮右侧 → 胶囊避让区左侧」，在它里面居中
- * 会明显偏左。所以这里把标题**绝对定位到整条栏的中线**：`top-bar` 的容器是
- * `position: fixed`，天然是绝对定位后代的包含块，`left:0;right:0` 就是整屏宽。
- *
- * `top` / `height` 由页面行内下发（状态栏高 / 内容行高，来自 `lib/nav-metrics` 的运行时
- * 反推），于是标题落在**胶囊那一行**里垂直居中、与返回钮同一水平中线 —— 不会跟着整条栏
- * 变高一起往下偏。左右各留 110px：长标题不压到返回钮（同 `components/nav-bar` 的
- * `.navfloat__title--center`）。
- *
- * 不接收点击：它盖在玻璃栏上，没有任何交互，`pointer-events: none` 让这一层彻底穿透。
- */
-.fw__navtitle {
-  position: absolute;
-  left: 0;
-  right: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 110px;
-  font-size: 34px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1;
-  color: var(--fg);
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-/* 标题尾段的品牌色（稿 `.mp-title .hl{color:var(--brand)}`） */
-.fw__navtitle-em {
-  color: var(--brand);
-}
-
+/* ---------------------------------------- 顶栏（tab 副行） */
 /* 副行占位：`top-bar` 的 `spacer` 只含主行，tab 行这一截页面自己补。
    20（上衬）+ 68（tab 高）+ 8（下衬）= 96rpx —— 与 `.fw__tabs` 的 padding 逐项对应，
    也与 `pages/chat` 的 `.chat__header-gap` / `pages/history` 的 `.hist__header-gap`

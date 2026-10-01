@@ -1,5 +1,5 @@
 import { Image, Input, ScrollView, Text, Textarea, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
+import Taro, { usePageScroll } from '@tarojs/taro'
 import { useRef, useState } from 'react'
 import { HOME_CATEGORY_ICONS } from '@/assets/home-icons'
 import { ICONS } from '@/assets/lib-icons'
@@ -38,6 +38,15 @@ type FieldErrors = {
 }
 
 export default function WishPublish() {
+  /**
+   * 顶栏两态（#386 批次 2）：返回键常驻吸顶，滚过阈值后玻璃底 + 标题「许个愿」
+   * 浮现在返回键隔壁（Owner 2026-10-01 拍板，同 `pages/settings`）。
+   * 表单不长，多数时候停在阈值之前 —— 玻璃底只在真的滚起来后出现。
+   * 阈值 40 设备 px，与 `pages/user` 的 `GLASS_AT` 同值。
+   */
+  const REVEAL_AT = 40
+  const [revealed, setRevealed] = useState(false)
+  usePageScroll(({ scrollTop }) => setRevealed(scrollTop > REVEAL_AT))
   // 发布是登录态写操作（POST /wishes 挂 requireAuth）；二级页由守卫 redirectTo 登录页
   const authStatus = useAuthGuard()
   const [keyword, setKeyword] = useState('')
@@ -126,7 +135,7 @@ export default function WishPublish() {
     <View className="wp">
       <View className="wp__topbg" />
 
-      <NavBar title="许个愿" />
+      <NavBar fixed glass={revealed} title={revealed ? '许个愿' : undefined} />
 
       <View className="wp__body">
         {/* ---------------- 想要什么 ---------------- */}

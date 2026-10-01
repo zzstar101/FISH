@@ -38,10 +38,38 @@
  * 168px 与同族的 mylist / settings / verify / match 同值（都是「漂浮导航 + 页内首块内容」）；
  * `watchers` 那页是 164px，与本页不同族，别拿它当基准。
  */
+/* 顶栏（#386 批次 2）换 `top-bar` glass + `spacer` 后，主行高度由占位块承担，
+   这里只留 24px 呼吸位（原 168px 是给漂浮导航留的，已随迁移退役）。 */
 .cmt__head {
   position: relative;
   z-index: 1;
-  padding: 168px 40px 0;
+  padding: 24px 40px 0;
+}
+
+/**
+ * 居中标题（`top-bar` 中槽里的绝对定位元素，与 mylist / following 同一套写法）：
+ * 左右拉满整条栏再 `justify-content: center` —— 中槽本身只占「返回钮右侧 →
+ * 胶囊避让区左侧」，直接居中会偏左。上下由页面按运行时栅格行内下发（见 tsx）。
+ */
+.cmt__navtitle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 110px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--fg);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.cmt__navtitle-em {
+  color: var(--brand);
 }
 
 /* ---- 分段胶囊：三段互斥（全部 = 商品留言 ∪ 交易评价），所以摆计数 ---- */

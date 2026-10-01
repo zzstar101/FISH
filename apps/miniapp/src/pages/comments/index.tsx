@@ -1,11 +1,11 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
-import NavBar from '@/components/nav-bar'
+import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { loadMyComments } from '@/features/comments/load'
@@ -23,6 +23,7 @@ import {
   viewTargetOf,
 } from '@/features/comments/mine'
 import { formatAmount } from '@/lib/money'
+import { readNavMetrics } from '@/lib/nav-metrics'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 import './index.scss'
 
@@ -69,6 +70,12 @@ export default function MyComments() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
+  /**
+   * 顶栏栅格（状态栏高 / 内容行高），给居中标题定「与胶囊同行」的那条水平带。
+   * **必须来自 `lib/nav-metrics` 的运行时反推**，不能照抄稿的固定值：真机上胶囊
+   * 位置逐机不同，稿里那个是画出来的假胶囊。
+   */
+  const metrics = useMemo(() => readNavMetrics(), [])
 
   const [items, setItems] = useState<MyComment[]>([])
   const [demo, setDemo] = useState(false)
@@ -245,8 +252,35 @@ export default function MyComments() {
     <View className="cmt">
       <View className="cmt__bg" />
 
-      {/* 导航条右侧没有页面级动作（删除长在每一行上），标题居中 */}
-      <NavBar title="我的评论" titleAlign="center" />
+      {/*
+        顶栏统一（#386 批次 2，Owner 拍板「跟订单两页一样」）：`components/top-bar` 的
+        glass 变体 —— 返回钮 + 居中双色标题「我的|评论」，内容从玻璃底下滚过；
+        `spacer` 占住主行高度，原先给漂浮导航留的 168px 头衬随之退役（见 scss）。
+        右侧没有页面级动作（删除长在每一行上）。
+
+        标题走**中槽 + 绝对定位到整栏中线**（与 mylist / following 的既有写法同一套）：
+        `title` prop 渲染出的标题紧随返回钮左对齐，而这一版要求屏幕水平居中。组件层
+        已在 PR #388 里补了 `titleAlign="center"`，本批基于 main 时它还没合入 ——
+        #388 合入后把这里与 mylist / following 一起收编成一行 prop。
+      */}
+      <TopBar
+        variant="glass"
+        spacer
+        back
+        center={
+          <View
+            className="cmt__navtitle"
+            style={{
+              top: `${metrics.statusBarHeight}px`,
+              height: `${metrics.contentHeight}px`,
+            }}
+          >
+            <Text>我的</Text>
+            {/* 稿 `.mp-title .hl{color:var(--brand)}`：尾段走品牌色 */}
+            <Text className="cmt__navtitle-em">评论</Text>
+          </View>
+        }
+      />
 
       {/*
         分段胶囊**只在演示构建里有**（`demo`）。
