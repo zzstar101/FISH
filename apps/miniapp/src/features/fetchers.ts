@@ -631,11 +631,12 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       wishes: profile.wishes.map(toMockWish),
       pendingMeetup: profile.transactions.filter((tx) => tx.status === 'PENDING_MEETUP').length,
       orderCount: profile.transactions.length,
-      // 收藏 / 足迹 / 关注没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
+      // 关注（#188）有端点：`stats.followingCount` 与「我的关注」列表同源（同一张表同一方向）。
+      followCount: profile.stats.followingCount,
+      // 收藏 / 足迹仍没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
       // 「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
       favoritesCount: null,
       historyCount: null,
-      followCount: null,
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
@@ -657,10 +658,11 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * 演示构建的个人中心 fixture：与 `mock/account.ts` 的演示账号同一套数据
  * （我的发布 / 愿望 / 买卖直接取该账号的既有 fixture），
  * 保证「我的」页的角标数字与 mylist / orders 页看到的计数一致。
- * 收藏 / 足迹 / 关注没有 fixture 来源，按稿给演示数字（8 / 24 / 5）。
+ * 收藏 / 足迹没有 fixture 来源，按稿给演示数字（8 / 24）；关注沿用设计稿的 5 人，
+ * 与 `features/following/demo.ts` 的演示名单条数对齐（数字栏 5、点进去 5 人）。
  *
  * ⚠️ 只走**失败回退**这条路：`TARO_APP_MOCK=1` 但本机真起了后端时，走的是成功路径，
- * 这三格是 `null` → 页面显示 `—`（演示数字不覆盖真实结果）。
+ * 收藏 / 足迹是 `null` → 页面显示 `—`，关注是服务端真值（演示数字不覆盖真实结果）。
  */
 function demoProfile(): ProfileView {
   const wishes = myWishes()
@@ -670,6 +672,8 @@ function demoProfile(): ProfileView {
       activeListings: myListingCounts().sale,
       activeWishes: wishes.length,
       completedTransactions: TRANSACTIONS.filter((tx) => tx.status === 'COMPLETED').length,
+      // 与 `features/following/demo.ts` 的演示名单条数一致（方案 §2.3：数字栏与列表不能自相矛盾）
+      followingCount: 5,
     },
     listings: MY_LISTINGS.map((item) => item.listing),
     wishes,

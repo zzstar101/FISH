@@ -423,6 +423,16 @@ unset TENCENT_CLOUD_SECRET_ID TENCENT_CLOUD_SECRET_KEY
   各一），会作为审核结果的 `policyVersion` 记录，便于事后按策略回溯。
 - 日志只允许出现腾讯 `RequestId`：Secret 与完整私密文本（含图片字节）都不进日志。密钥随 §10 备份
   的 `config-*.tar.gz` 进备份，泄漏处置与其它 API 密钥同口径。
+- **接线面（#228）**：商品**文本**（title / description）在 `POST /listings` 与 `PATCH /listings/:id`
+  的**事务外**走 TMS，判定与 `listing_moderation_records` 的 provider 元数据一一对应；商品**图片**在
+  `POST /uploads/confirm` 走 IMS 并先固化到不可覆盖的 final 键（#286）。`local` transport 下文本仍按
+  本地词表判定、图片恒为 REVIEW（进人工队列），仅供开发/测试。
+- **监控**：审核不可用时接口返回 **503 `CONTENT_MODERATION_UNAVAILABLE`** 且**不落库**（CREATE 不建商品、
+  UPDATE 不改旧内容、图片 confirm 不标可引用）——这是设计上的 fail-closed，不是故障降级。按 5xx 比例
+  与 `reason=timeout|network|throttled|upstream_error` 日志告警；持续 503 时先查腾讯云侧配额/密钥。
+- **回滚**：审核链路没有独立开关，回滚就是回滚 API 代码（§7.3）。注意 `CONTENT_MODERATION_TRANSPORT`
+  仍必须保留为 `tencent`：回滚到只认 `local` 的旧版本会因 `NODE_ENV` 未设置而**不会**被护栏拦截，
+  等于静默退回本地词表——因此回滚窗口内要么保持新版本，要么显式接受这一降级。
 - `local` 的生产禁令**依赖 `NODE_ENV=production`**，而本仓库部署路径当前不设置 `NODE_ENV`（§5.1 的
   systemd 单元只有 `EnvironmentFile`）。因此生产务必按上面的脚本写 `tencent`，不要指望那道护栏兜底；
   该前提与既有的 `WECHAT_TRANSPORT=stub` 护栏相同，是否在部署侧统一补 `NODE_ENV` 由 Owner 决定
