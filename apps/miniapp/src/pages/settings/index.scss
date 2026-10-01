@@ -133,6 +133,29 @@
   }
 }
 
+/**
+ * 手机号行（#204）是微信 `open-type="getPhoneNumber"` 的**原生 button**，
+ * 必须清掉 button 的默认外观（背景 / 行高 / 字号 / `::after` 描边）才能与上面几行 View 齐平
+ * ——同 `profile-edit` 的头像钮。`disabled` 是绑定在飞时的原生闸门，不能让它把整行变灰。
+ */
+.st__row--btn {
+  background: transparent;
+  border-radius: 0;
+  font-size: inherit;
+  line-height: normal;
+  color: inherit;
+
+  &::after {
+    border: none;
+  }
+
+  &[disabled] {
+    background: transparent;
+    color: inherit;
+    opacity: 1;
+  }
+}
+
 .st__ric {
   @include row-icon;
 }

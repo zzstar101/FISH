@@ -9,6 +9,7 @@
  * 这里只做「发请求 + 用契约 schema 收口」，不吞错误码：
  * 哪些码该翻成什么文案，是 UI 的事（见 `./store` 与登录页）。
  */
+import { type PhoneBindResponse, PhoneBindResponseSchema } from '@fish/contracts/auth/phone'
 import { AuthResponseSchema } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
 import { WechatSessionResponseSchema } from '@fish/contracts/auth/wechat'
@@ -53,4 +54,20 @@ export async function wechatSignIn(code: string): Promise<Me> {
  */
 export async function confirmScanTicket(ticket: string): Promise<void> {
   await apiRequest(`/auth/wechat/scan/ticket/${ticket}/confirm`, { method: 'POST' })
+}
+
+/**
+ * 绑定手机号（#204）：把 `<button open-type="getPhoneNumber">` 给的**一次性 code** 交给服务端。
+ *
+ * 冻结项（`packages/contracts/src/auth/phone.ts`）：端上只上报 `code`，不上报也不接受明文
+ * 手机号 / `encryptedData` / `iv` / `cloudID`——格式正确不是归属证明，只有服务端与微信换回来的
+ * 号码才可信。响应只回派生态 `phoneBound` / `maskedPhone`，明文不出服务端。
+ *
+ * 错误码原样透出，由页面翻译（见 `./phone-messages`）：422 `PHONE_CODE_INVALID` 要重新触发
+ * 授权拿新 code，502 `PHONE_UPSTREAM_UNAVAILABLE` 重试同一枚 code 无意义，503 `WECHAT_DISABLED`
+ * 是后端未开通。本端点只追加绑定，失败不影响已有会话（后端保证）。
+ */
+export async function bindPhone(code: string): Promise<PhoneBindResponse> {
+  const payload = await apiRequest('/auth/phone/bind', { method: 'POST', body: { code } })
+  return PhoneBindResponseSchema.parse(payload)
 }

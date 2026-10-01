@@ -1,10 +1,13 @@
-import { Image, Text, View } from '@tarojs/components'
+import { Button, Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
+import { bindPhone } from '@/features/auth/api'
 import { useAuthGuard } from '@/features/auth/guard'
-import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
+import { phoneBindFailureMessage } from '@/features/auth/phone-messages'
+import { applyPhone, clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
+import { isApiError } from '@/lib/request'
 import { APP_BUILD, APP_VERSION, settings, themeOptions } from '@/mock/api'
 import type { ThemeMode } from '@/mock/types'
 import './index.scss'
@@ -21,7 +24,20 @@ import './index.scss'
  *
  * **账号信息与退出登录是真实登录态**：账号行读 `features/auth/store` 的当前用户，
  * 退出走 `POST /auth/logout` 并清本地会话（原先两处都是占位）。
+ *
+ * **手机号绑定（#204）**接在账号组：`open-type="getPhoneNumber"` 的原生按钮触发微信授权，
+ * 端上只把一次性的 `code` 交给 `POST /auth/phone/bind`，服务端换号后回掩码
+ * （明文不出服务端，见 `packages/contracts/src/auth/phone.ts`）。
+ * ⚠️ 入口位置（放在账号组）是本次实现选的落点，**待 Owner 确认**。
  */
+
+/**
+ * `onGetPhoneNumber` 的 `detail` 在 Taro 类型里是笼统事件，这里收窄成微信实际给的字段。
+ *
+ * 用户拒绝授权时微信**不给 `code`**，只回 `errMsg`（`getPhoneNumber:fail user deny`）——
+ * 所以「有没有 code」就是「用户同不同意」的判据，不要拿 `errMsg` 文本做匹配。
+ */
+type GetPhoneNumberEvent = { detail?: { code?: string } }
 
 export default function Settings() {
   // 设置页展示的是账号信息，未登录不该停留在这里（守卫只管跳转，页面继续渲染）
@@ -44,8 +60,11 @@ export default function Settings() {
   const [notifyNews, setNotifyNews] = useState(initial.notifyNews)
   const [logoutOpen, setLogoutOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  /** 手机号绑定在飞：原生授权回调可能被连点触发多轮，这里只放行一轮 */
+  const [bindingPhone, setBindingPhone] = useState(false)
 
   const themeLabel = themeOptions.find((item) => item.key === theme)?.label ?? '跟随系统'
+  const phoneLabel = bindingPhone ? '绑定中…' : (user?.maskedPhone ?? '未绑定')
 
   /** 偏好项落本地存储（真实实现再同步后端） */
   const persist = (patch: Record<string, unknown>) => {
@@ -59,6 +78,45 @@ export default function Settings() {
   }
 
   const toast = (title: string) => void Taro.showToast({ title, icon: 'none' })
+
+  /**
+   * 手机号绑定（#204）。四种情形各有明确行为：
+   *
+   * - **用户拒绝授权**：微信不给 `code`，这不是错误，给一句中性提示，不弹错误、不发请求；
+   * - **重复点击**：在飞时直接返回（`disabled` 是原生层的第一道闸，这里再兜一道，
+   *   因为回调可能在 state 更新落盘前连来两次）；
+   * - **未登录**：守卫会跳登录页，这里不发请求（后端也必然 401）；
+   * - **失败**：按契约错误码翻译文案（见 `phone-messages`），422 引导重新授权、
+   *   502 引导稍后再试，两者不能混成一句。
+   *
+   * 迟到的响应由 `applyPhone(ownerId, …)` 兜底：发起后退出 / 换号的话，结果不会写进新账号。
+   */
+  const onGetPhoneNumber = (event: GetPhoneNumberEvent) => {
+    const code = event.detail?.code
+    if (!code) {
+      toast('已取消手机号授权')
+      return
+    }
+    if (bindingPhone) return
+    const ownerId = user?.id
+    if (!ownerId) return
+
+    setBindingPhone(true)
+    void (async () => {
+      try {
+        applyPhone(ownerId, await bindPhone(code))
+        void Taro.showToast({ title: '手机号已绑定', icon: 'success' })
+      } catch (error) {
+        toast(
+          phoneBindFailureMessage(
+            isApiError(error) ? { code: error.code, message: error.message } : null,
+          ),
+        )
+      } finally {
+        setBindingPhone(false)
+      }
+    })()
+  }
 
   const onLogout = () => {
     if (loggingOut) return
@@ -124,6 +182,21 @@ export default function Settings() {
             <Text className="st__rvalue">{verified ? '已验证' : '去验证'}</Text>
             <View className="st__arrow" />
           </View>
+
+          {/* 手机号（#204）：微信原生授权钮，点击即拉起 `getPhoneNumber`；不需要跳到独立页面 */}
+          <Button
+            className="st__row st__row--btn"
+            openType="getPhoneNumber"
+            disabled={bindingPhone}
+            onGetPhoneNumber={onGetPhoneNumber}
+          >
+            <View className="st__ric">
+              <Image className="st__ric-ic" src={ICONS.card} mode="aspectFit" />
+            </View>
+            <Text className="st__rlabel">手机号</Text>
+            <Text className="st__rvalue">{phoneLabel}</Text>
+            <View className="st__arrow" />
+          </Button>
         </View>
 
         {/* ============================ 通用 ============================ */}
