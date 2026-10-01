@@ -8,6 +8,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import {
   ChevronRight,
   Clock,
+  Flag,
   HandCoins,
   Home,
   Images,
@@ -24,6 +25,8 @@ import { useAuth } from '../auth/auth-provider'
 import { describeCreateConversationFailure } from '../chat/api'
 import { useCreateConversation } from '../chat/queries'
 import { useDetailTracking } from '../recommendation/use-detail-tracking'
+import { ReportEntry } from '../reports/report-entry'
+import { canReportUser } from '../reports/view'
 import { BuyDialog } from './buy-dialog'
 import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
@@ -187,10 +190,24 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               ) : null}
             </div>
 
-            <p className="mt-5 flex items-center gap-1.5 text-ink-3 text-xs">
-              <Clock className="size-3.5" />
-              {formatRelativeTimeAt(item.createdAt)}发布
-            </p>
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <p className="flex items-center gap-1.5 text-ink-3 text-xs">
+                <Clock className="size-3.5" />
+                {formatRelativeTimeAt(item.createdAt)}发布
+              </p>
+              {/* 自己的商品不给自己举报入口：没有治理意义，只会产生无用的举报单。 */}
+              {item.isOwner ? null : (
+                <ReportEntry
+                  className="text-ink-3"
+                  size="sm"
+                  target={{ type: 'LISTING', id: item.id, label: item.title }}
+                  variant="ghost"
+                >
+                  <Flag className="size-3.5" />
+                  举报商品
+                </ReportEntry>
+              )}
+            </div>
           </Card>
 
           <Card className="gap-0 border border-line p-6">
@@ -215,6 +232,21 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                 </div>
               </div>
             </div>
+            {/* 不能举报自己（服务端对 `USER` 目标 = 本人直接 422 `REPORT_SELF_TARGET`），
+                所以卖家就是自己时不给这个入口。 */}
+            {canReportUser(viewerId, item.seller.id) ? (
+              <div className="mt-4 flex justify-end">
+                <ReportEntry
+                  className="text-ink-3"
+                  size="sm"
+                  target={{ type: 'USER', id: item.seller.id, label: item.seller.nickname }}
+                  variant="ghost"
+                >
+                  <Flag className="size-3.5" />
+                  举报该用户
+                </ReportEntry>
+              </div>
+            ) : null}
             {item.isOwner ? (
               <p className="mt-5 rounded-xl bg-brand-soft px-3 py-2.5 text-brand text-sm">
                 这是你发布的商品

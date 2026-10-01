@@ -8,11 +8,12 @@ import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowLeft, ImagePlus, Mic, Send, Square } from 'lucide-react'
+import { ArrowLeft, Flag, ImagePlus, Mic, Send, Square } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { useAuth } from '../auth/auth-provider'
+import { ReportEntry } from '../reports/report-entry'
 import { presignMediaUpload } from './api'
 import {
   describeImageDimensionRejection,
@@ -529,7 +530,22 @@ export function ConversationPage({ conversationId }: { conversationId: string })
             </p>
           </div>
         </div>
-        <RealtimeStatus status={realtimeStatus} />
+        <div className="flex items-center gap-3">
+          <ReportEntry
+            className="text-ink-3"
+            size="sm"
+            target={{
+              type: 'USER',
+              id: item.counterpart.id,
+              label: item.counterpart.nickname,
+            }}
+            variant="ghost"
+          >
+            <Flag className="size-3.5" />
+            举报该用户
+          </ReportEntry>
+          <RealtimeStatus status={realtimeStatus} />
+        </div>
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_320px] items-start gap-5">
