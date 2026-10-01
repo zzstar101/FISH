@@ -10,8 +10,10 @@ import { useOrderList } from '@/features/transaction/useOrderList'
 /**
  * 我卖出的（订单页拆成的两页之一，另一页是 `pages/orders-buy`）。
  *
- * 与「我买到的」唯一的结构差异就是视角：卡尾主按钮的文案由 `role` 决定
- * （卖家「打开交易码」，买家「打开二维码」），在 `components/order-list` 里按 `item.role` 分。
+ * 与「我买到的」唯一的结构差异就是视角：标题传「我卖出的」（顶栏居中双色），卡尾
+ * 主按钮的文案由 `role` 决定（卖家「打开交易码」，买家「打开二维码」），在
+ * `components/order-list` 里按 `item.role` 分。顶部区域统一进自绘顶栏（#386 第一批），
+ * 原先的微信原生导航栏已撤。
  *
  * 加载触发的口径（#89 审查收口）见 `pages/orders-buy`：请求由登录态与身份驱动、
  * `unknown → authed` 自动补首载、从面交页返回 `useDidShow` 重拉。
@@ -61,6 +63,8 @@ export default function OrdersSell() {
 
   return (
     <OrderList
+      title="我"
+      titleEm="卖出的"
       items={items}
       loading={loading}
       failed={failed}
