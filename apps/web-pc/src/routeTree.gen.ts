@@ -26,6 +26,7 @@ import { Route as MessagesIndexRouteImport } from './routes/messages.index'
 import { Route as MessagesConversationIdRouteImport } from './routes/messages.$conversationId'
 import { Route as OrdersIndexRouteImport } from './routes/orders.index'
 import { Route as OrdersTransactionIdRouteImport } from './routes/orders.$transactionId'
+import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -112,6 +113,11 @@ const OrdersTransactionIdRoute = OrdersTransactionIdRouteImport.update({
   path: '/$transactionId',
   getParentRoute: () => OrdersRoute,
 } as any)
+const UsersUserIdRoute = UsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
 }
@@ -146,6 +153,7 @@ export interface FileRoutesByTo {
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
 }
@@ -166,6 +174,7 @@ export interface FileRoutesById {
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
 }
@@ -187,6 +196,7 @@ export interface FileRouteTypes {
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages/'
     | '/orders/'
   fileRoutesByTo: FileRoutesByTo
@@ -204,6 +214,7 @@ export interface FileRouteTypes {
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages'
     | '/orders'
   id:
@@ -223,6 +234,7 @@ export interface FileRouteTypes {
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages/'
     | '/orders/'
   fileRoutesById: FileRoutesById
@@ -241,6 +253,7 @@ export interface RootRouteChildren {
   SearchRoute: typeof SearchRoute
   WishRoute: typeof WishRoute
   ListingListingIdRoute: typeof ListingListingIdRoute
+  UsersUserIdRoute: typeof UsersUserIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -364,6 +377,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrdersTransactionIdRouteImport
       parentRoute: typeof OrdersRoute
     }
+    '/users/$userId': {
+      id: '/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/users/$userId'
+      preLoaderRoute: typeof UsersUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -408,6 +428,7 @@ const rootRouteChildren: RootRouteChildren = {
   SearchRoute: SearchRoute,
   WishRoute: WishRoute,
   ListingListingIdRoute: ListingListingIdRoute,
+  UsersUserIdRoute: UsersUserIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -212,13 +212,18 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
           <Card className="gap-0 border border-line p-6">
             <h2 className="font-semibold text-base">卖家</h2>
-            <div className="mt-4 flex items-center gap-3">
+            {/* 可点进他人主页：公开资料与 TA 的在售商品（匿名也能看）。 */}
+            <Link
+              className="mt-4 flex items-center gap-3 rounded-xl p-1.5 transition-colors hover:bg-surface-2"
+              params={{ userId: item.seller.id }}
+              to="/users/$userId"
+            >
               <UserAvatar
                 avatarUrl={item.seller.avatarUrl}
                 emoji={item.seller.nickname.slice(0, 1)}
                 size="lg"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{item.seller.nickname}</p>
                 <div className="mt-1.5">
                   {item.seller.authStatus === 'VERIFIED' ? (
@@ -231,7 +236,8 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   )}
                 </div>
               </div>
-            </div>
+              <ChevronRight className="size-4 shrink-0 text-ink-3" />
+            </Link>
             {/* 不能举报自己（服务端对 `USER` 目标 = 本人直接 422 `REPORT_SELF_TARGET`），
                 所以卖家就是自己时不给这个入口。 */}
             {canReportUser(viewerId, item.seller.id) ? (
