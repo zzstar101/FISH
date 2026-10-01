@@ -269,9 +269,15 @@ export default function Settings() {
         </View>
 
         {/* ============================ 关于 ============================ */}
+        {/* 四行都接上了真实页面（未定内容页面，实际内容由 zzstar 决策）。
+            「关于鱼小应」与「我的 → 关于与版本」是同一个页面的两个入口名 ——
+            口径不一致这件事稿里已标出，等 Owner 统一后再改文案，本次不动。 */}
         <Text className="st__grouplabel">关于</Text>
         <View className="st__group">
-          <View className="st__row" onClick={() => toast('意见反馈待接入')}>
+          <View
+            className="st__row"
+            onClick={() => void Taro.navigateTo({ url: '/pages/feedback/index' })}
+          >
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.feedback} mode="aspectFit" />
             </View>
@@ -279,7 +285,10 @@ export default function Settings() {
             <View className="st__arrow" />
           </View>
 
-          <View className="st__row" onClick={() => toast(`鱼小应 v${APP_VERSION}`)}>
+          <View
+            className="st__row"
+            onClick={() => void Taro.navigateTo({ url: '/pages/about/index' })}
+          >
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.app} mode="aspectFit" />
             </View>
@@ -288,7 +297,10 @@ export default function Settings() {
             <View className="st__arrow" />
           </View>
 
-          <View className="st__row" onClick={() => toast('用户协议待接入')}>
+          <View
+            className="st__row"
+            onClick={() => void Taro.navigateTo({ url: '/pages/terms/index' })}
+          >
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.docInk} mode="aspectFit" />
             </View>
@@ -296,7 +308,10 @@ export default function Settings() {
             <View className="st__arrow" />
           </View>
 
-          <View className="st__row" onClick={() => toast('隐私政策待接入')}>
+          <View
+            className="st__row"
+            onClick={() => void Taro.navigateTo({ url: '/pages/privacy/index' })}
+          >
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.docInk} mode="aspectFit" />
             </View>

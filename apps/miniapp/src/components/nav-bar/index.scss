@@ -167,3 +167,29 @@
 .navfloat--glass .navfloat__btn {
   border-color: rgba(23, 35, 61, 0.2);
 }
+
+/*
+ * 栏下沿的阅读进度条（`progress` 传入时才渲染；稿 `.progress`）。
+ *
+ * 稿里它是 `.mp-nav` 的 `bottom:-1px` 子元素、高 2pt —— 也就是**压在栏底边上**。
+ * 这里照同一关系落地：父级 `.navfloat` 自己就是定位上下文（两个变体分别是
+ * `absolute` / `fixed`），所以 `bottom: 0` 就是栏的底边，页面不需要知道栏有多高。
+ *
+ * 2pt → `4px`（本目录 px = 设计稿 pt × 2，见 DESIGN.md §1）。
+ * `pointer-events: none` 继承自 `.navfloat` 的基类，进度条不挡点击。
+ */
+.navfloat__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  overflow: hidden;
+}
+
+/* 品牌渐变填充，宽度由组件行内按 0–1 换算成百分比下发（稿 `transition:width .12s linear`） */
+.navfloat__progress-bar {
+  height: 100%;
+  background: var(--grad-brand);
+  transition: width 0.12s linear;
+}

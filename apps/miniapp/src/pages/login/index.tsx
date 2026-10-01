@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
@@ -9,6 +9,7 @@ import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { confirmBackTicket } from '@/features/auth/login-continue'
 import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
 import { signInWithWechat, useAuth } from '@/features/auth/store'
+import { applyConsent, takeConsent } from '@/features/legal/entry'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import './index.scss'
@@ -58,6 +59,24 @@ export default function Login() {
    * 所以这里默认 `true`，但**允许取消**，且取消后不允许登录 —— 勾选框要真的有意义。
    */
   const [agreed, setAgreed] = useState(true)
+
+  /**
+   * 从法务页返回时兑现同意条上的决定（见 `features/legal/entry.ts`）。
+   *
+   * 协议链带 `?from=login` 进法务页，那边点「同意并继续」/「不同意」会 `markConsent(...)`
+   * 再返回；不在这里消费的话两个方向都会说谎：
+   * - 点「不同意」回来勾选仍是勾上的、照样能一键登录 → 那句「未同意，无法继续使用」是假的；
+   * - 先取消勾选、再进协议页点「同意并继续」，回来勾选仍是空的、CTA 仍禁用 → 用户刚按过
+   *   「同意」，界面却否认。
+   *
+   * `takeConsent()` 取走即清，所以之后每次正常返回本页不会反复改动用户的勾选。
+   */
+  useDidShow(() => {
+    // 决定在**事件回调里**先取出来，不放进 setState 的 updater：
+    // updater 必须是纯函数（StrictMode 下会被调用两次），在里面消费一次性信号会取不到第二次
+    const decision = takeConsent()
+    setAgreed((prev) => applyConsent(decision, prev))
+  })
 
   const { status } = useAuth()
 
@@ -174,12 +193,15 @@ export default function Login() {
                 {/*
                   链接必须吃掉冒泡：父级是「勾选框」的 onClick，不拦截的话点协议会顺手
                   把默认勾选翻成未勾（然后点登录只得到「请先阅读并同意」的提示）。
+
+                  带 `?from=login`：法务页据此显示吸底同意条（稿状态 02）——
+                  从设置页进来是纯阅读，不该再点一次「同意」（稿取舍 ⑦）。
                 */}
                 <Text
                   className="login__lk"
                   onClick={(event) => {
                     event.stopPropagation()
-                    toast('用户协议待接入')
+                    void Taro.navigateTo({ url: '/pages/terms/index?from=login' })
                   }}
                 >
                   《用户协议》
@@ -189,7 +211,7 @@ export default function Login() {
                   className="login__lk"
                   onClick={(event) => {
                     event.stopPropagation()
-                    toast('隐私政策待接入')
+                    void Taro.navigateTo({ url: '/pages/privacy/index?from=login' })
                   }}
                 >
                   《隐私政策》

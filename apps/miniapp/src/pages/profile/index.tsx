@@ -43,6 +43,10 @@ import './index.scss'
  * **退出登录**与设置页同一套两步走：先 `revokeServerSession()` 把服务端会话注销
  * （失败要告知，否则用户以为退了、会话其实还有效），再 `clearLocalSession()`
  * 广播 `anonymous`，本页随之切到未登录形态。
+ *
+ * 「帮助与设置」里的**意见反馈**与**关于与版本**两行已接上真实页面
+ * （`pages/feedback` / `pages/about`，两者都是未定内容页面，实际内容由 zzstar 决策）；
+ * 「联系客服」仍无落地页，点击按 toast 处理。
  */
 
 /**
@@ -442,9 +446,21 @@ export default function Profile() {
       icon: ICONS.settingsMuted,
       url: '/pages/settings/index',
     },
-    { key: 'feedback', title: '意见反馈', sub: '提交建议与问题反馈', icon: ICONS.feedbackMuted },
+    {
+      key: 'feedback',
+      title: '意见反馈',
+      sub: '提交建议与问题反馈',
+      icon: ICONS.feedbackMuted,
+      url: '/pages/feedback/index',
+    },
     { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.serviceMuted },
-    { key: 'about', title: '关于与版本', sub: '版本信息与用户协议', icon: ICONS.infoMuted },
+    {
+      key: 'about',
+      title: '关于与版本',
+      sub: '版本信息与用户协议',
+      icon: ICONS.infoMuted,
+      url: '/pages/about/index',
+    },
   ]
 
   /**
