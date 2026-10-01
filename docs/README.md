@@ -15,11 +15,14 @@
 | [design/issue-89-web-pc-t10-release-hardening.md](design/issue-89-web-pc-t10-release-hardening.md) | PC Web T10：发布收口与运行验收 |
 | [design/issue-89-web-pc-t10-id-inventory.md](design/issue-89-web-pc-t10-id-inventory.md) | PC Web T10：#217 ID 边界冻结检查表 |
 | [deployment.md](deployment.md) | 生产部署手册（Ubuntu + Bun 直跑，不用 Docker）：依赖安装、环境变量、systemd、反代与 HTTPS、发布/回滚、备份与硬约束 |
+| [dev-db-isolation.md](dev-db-isolation.md) | 并行 worktree 独立开发数据库：`scripts/dev-db.ts`（`db:dev up/url/drop/list`）的库命名规则、建库/迁移/清理三步、独立容器指向与三条禁令 |
+| [testing.md](testing.md) | 测试与验证口径：验证顺序、命令与前置条件、`--isolate` 语义、Bun 版本口径、CI 门禁结构与 `.env.example` 逐键核对结论 |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | 文件所有权、分支与提交规范、PR 要求、Contract 流程、DB CHANGE REQUEST |
 | [../AGENTS.md](../AGENTS.md) | 给 AI agent 的命令、编码铁律、范围与实现纪律、对抗性审查流程 |
 | [../README.md](../README.md) | 最小启动路径与常用命令 |
 | [design/issue-147-transaction-invariants.md](design/issue-147-transaction-invariants.md) | #147 交易 / 面交剩余项设计方案（两个 PR 的切分、不变量清单、验证门禁） |
 | [design/issue-323-r1-event-tracking.md](design/issue-323-r1-event-tracking.md) | #323 R1 行为埋点与推荐归因契约（事件/表/索引、接口、幂等与拒收口径、隐私与保留策略、R1 的验证） |
+| [design/issue-74-watchers-definition.md](design/issue-74-watchers-definition.md) | #74「谁想要」（Watchers）来源定义冻结：来源 / 去重 / 权限 / 隐私 / 与 Wish·Match·收藏·关注的关系 / 计数口径，及与现有实现的核对记录 |
 
 ## 关于文档职责
 

@@ -1,5 +1,5 @@
 {
-  "id": "ba77298f-11e1-45d1-8c51-261b96be156c",
+  "id": "f6ab3fca-fdc0-431c-b70a-2e255bf8cde1",
   "prevId": "f168ffad-109c-45bb-b30a-bac84acf2786",
   "version": "7",
   "dialect": "postgresql",
@@ -2487,6 +2487,42 @@
           "primaryKey": false,
           "notNull": false
         },
+        "provider": {
+          "name": "provider",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_request_id": {
+          "name": "provider_request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "suggestion": {
+          "name": "suggestion",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sub_label": {
+          "name": "sub_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "score": {
+          "name": "score",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -2527,7 +2563,20 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "listing_moderation_records_provider_known": {
+          "name": "listing_moderation_records_provider_known",
+          "value": "\"listing_moderation_records\".\"provider\" IS NULL OR \"listing_moderation_records\".\"provider\" IN ('LOCAL', 'TENCENT_TMS', 'TENCENT_IMS', 'MANUAL')"
+        },
+        "listing_moderation_records_suggestion_known": {
+          "name": "listing_moderation_records_suggestion_known",
+          "value": "\"listing_moderation_records\".\"suggestion\" IS NULL OR \"listing_moderation_records\".\"suggestion\" IN ('Pass', 'Review', 'Block')"
+        },
+        "listing_moderation_records_score_range": {
+          "name": "listing_moderation_records_score_range",
+          "value": "\"listing_moderation_records\".\"score\" IS NULL OR (\"listing_moderation_records\".\"score\" >= 0 AND \"listing_moderation_records\".\"score\" <= 100)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.recommendation_requests": {
@@ -4762,8 +4811,7 @@
       "values": [
         "TEXT",
         "SYSTEM",
-        "MEDIA",
-        "LISTING"
+        "MEDIA"
       ]
     },
     "public.recommendation_event_type": {

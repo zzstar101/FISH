@@ -243,6 +243,7 @@ describe('GET /me', () => {
       'maskedPhone',
       'nickname',
       'phoneBound',
+      'signature',
       'verifiedAt',
     ])
     // 「不公开完整学号」的硬断言：学号、哈希、列名都不允许出现在响应里
