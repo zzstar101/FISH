@@ -1,7 +1,7 @@
 /**
  * Favorite Domain 路由常量（Issue #190）。
  *
- * 这些是 **API 侧路径**（根级），与 `follows/routes.ts` / `users/routes.ts` 同口径：
+ * 这些是 **API 侧路径**（根级），与 `users/routes.ts` 同口径：
  * 前端 typed client 与 API router 共用本文件，禁止在别处硬编码这些路径。
  *
  * 两条路径都**没有匿名分支**：收藏是「我」与某件商品之间的关系，

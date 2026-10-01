@@ -25,7 +25,7 @@ export type FavoritesRouterOptions = {
 /**
  * 路径参数必须是规范的商品 Public ID。非法输入与不存在同码 404（`LISTING_NOT_FOUND`）：
  * 不给「格式错」与「不存在」留可区分的响应，否则这条登录可达的路径就成了一份商品 id 空间探针
- * （与 `listings/router.ts` / `follows/router.ts` 同一取舍）。
+ * （与 `listings/router.ts` 同一取舍）。
  */
 function requireListingId(c: FavoriteContext): string | null {
   const parsed = ListingIdSchema.safeParse(c.req.param('listingId'))
@@ -61,7 +61,7 @@ export function createFavoritesRouter({ service, getUserId }: FavoritesRouterOpt
   // （两个端点分属 `/me/...` 与 `/listings/...`，没有共同前缀），而 Hono 的 `app.route('/',
   // sub)` 会把 sub 的 `use('*')` 提升成**父 app 的全局中间件** —— 结果是每个请求
   // （连 `/health` 也是）都先过一道 401。逐路径挂既保留了「漏挂守卫就失败关闭」的兜底，
-  // 又不会越界（与 `follows/router.ts` 同一处踩坑记录）。
+  // 又不会越界。
   const requireViewer = async (c: FavoriteContext, next: () => Promise<void>) => {
     const userId = getUserId(c)
     // `UNAUTHENTICATED` 与 auth 的 requireAuth 同码：前端只有这一个「跳登录」信号。

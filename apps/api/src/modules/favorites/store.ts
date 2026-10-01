@@ -23,9 +23,10 @@ import type { FavoritesCursor } from './cursor'
  * ## 排序与索引
  *
  * `(favorites.created_at DESC, listings.id DESC)`：`favorites_user_id_created_at_id_idx`
- * 覆盖 `(user_id, created_at)` 前缀，末列的 tie-break 用**商品 id**（见 `./cursor` 的理由）。
- * 同一 `created_at` 的分组通常极小，末列排序代价可忽略；顺序是全序（`(user_id, listing_id)`
- * 唯一），所以 `(created_at, listing_id)` 游标不重不漏。
+ * 的第三列是 `favorites.id`，所以这个索引**只覆盖 `(user_id, created_at)` 前缀**，
+ * 末列的 tie-break（商品 id）是在同 `created_at` 的分组内现排的 —— 分组通常极小，代价可忽略，
+ * 但别把它读成"索引已覆盖全部排序列"。顺序是全序（`(user_id, listing_id)` 唯一），
+ * 所以 `(created_at, listing_id)` 游标不重不漏。
  */
 
 /** 收藏列表的一行：卡片源 + 封面键 + 两个时间戳（对外一个、构造游标一个）。 */
@@ -37,10 +38,19 @@ export interface FavoriteRow extends ListingCardSource {
   favoritedAtCursor: string
 }
 
-/** 商品当前的「能不能被收藏」状态：只有 `ACTIVE` 且未被治理下架才可以。 */
+/**
+ * 商品状态投影：够服务层判「能不能收藏」与「能不能被当前浏览者看到」两件事。
+ *
+ * 为什么要有 `sellerId` / `moderationStatus`：详情页的可见性判据是
+ * 「`status !== OFFLINE` 且审核通过，或者是卖家本人」（`listings/service.ts` 的 `loadDetail`）。
+ * 读收藏态必须沿用**同一个**判据，否则要么读不到 SOLD/RESERVED 商品的状态，
+ * 要么给「某个 id 是否存在且下架」留出探针。
+ */
 export interface FavoriteListingState {
   status: ListingCard['status']
+  moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW' | null
   governanceDelistedAt: Date | null
+  sellerId: string
 }
 
 export interface FavoriteStore {
@@ -77,7 +87,12 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
   return {
     async listingState(listingId) {
       const rows = await db
-        .select({ status: listings.status, governanceDelistedAt: listings.governanceDelistedAt })
+        .select({
+          status: listings.status,
+          moderationStatus: listings.moderationStatus,
+          governanceDelistedAt: listings.governanceDelistedAt,
+          sellerId: listings.sellerId,
+        })
         .from(listings)
         .where(eq(listings.id, listingId))
         .limit(1)
@@ -125,7 +140,7 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
           .innerJoin(listings, eq(listings.id, favorites.listingId))
           .where(and(...conditions))
           .orderBy(desc(favorites.createdAt), desc(listings.id))
-          // 多取一行用于判断"还有没有下一页"，返回前丢掉（与 listings feed / follows 同款）。
+          // 多取一行用于判断"还有没有下一页"，返回前丢掉（与 listings feed 同款）。
           .limit(limit + 1)
       )
     },

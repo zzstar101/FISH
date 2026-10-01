@@ -190,10 +190,12 @@ describe('favorite store (integration)', () => {
     expect(row?.favoritedAtCursor).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
   })
 
-  test('listingState 回商品状态与治理下架时间，不存在回 null', async () => {
+  test('listingState 回商品状态、审核态、治理下架时间与卖家，不存在回 null', async () => {
     expect(await store.listingState(listingA)).toEqual({
       status: 'ACTIVE',
+      moderationStatus: 'APPROVED',
       governanceDelistedAt: null,
+      sellerId: seller,
     })
     expect(await store.listingState('01990000-0000-7000-8000-0000000000ff')).toBeNull()
   })

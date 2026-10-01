@@ -89,6 +89,14 @@ export const FavoriteErrorCodeSchema = z.enum([
    * 三种原因合并成同码同文案，与 `listings` 域的 `LISTING_NOT_FOUND`
    * （「商品不存在或不可见」）同一取舍：这条路径任何登录用户都能稳定触发，
    * 区分「格式错」「不存在」「已下架」等于给出一份商品 id 空间的探针。
+   *
+   * 三条路径的触发条件**不同**（各自的口径见 `apps/api/src/modules/favorites/service.ts`）：
+   * - `POST`（收藏）：商品必须存在、`ACTIVE`、且未被平台下架 —— 只有货架上的东西能收藏；
+   * - `GET`（读状态）：镜像商品详情页的可见性（`SOLD` / `RESERVED` 的详情页是公开可读的，
+   *   它们的收藏态必须读得到）；
+   * - `DELETE`（取消）：**不判商品状态、也不查商品是否存在**，无条件幂等 ——
+   *   失效条目最需要被清掉，且不查就不给 id 存在性留探针。
+   *   因此 `DELETE` 只在路径参数不是规范商品 ID 时才回这个码。
    */
   'LISTING_NOT_FOUND',
 ])

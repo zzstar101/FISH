@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { createFavoriteService, FavoriteServiceError } from './service'
-import type { FavoriteRow, FavoriteStore } from './store'
+import type { FavoriteListingState, FavoriteRow, FavoriteStore } from './store'
 
 const listingId = '01990000-0000-7000-8000-0000000000b1'
 const viewer = '01990000-0000-7000-8000-0000000000a1'
+const seller = '01990000-0000-7000-8000-0000000000a3'
 
 const storage = { publicUrl: (key: string) => `https://cdn.example/${key}` }
 
@@ -27,10 +28,20 @@ function row(overrides: Partial<FavoriteRow> = {}): FavoriteRow {
   }
 }
 
+function listingState(overrides: Partial<FavoriteListingState> = {}): FavoriteListingState {
+  return {
+    status: 'ACTIVE',
+    moderationStatus: 'APPROVED',
+    governanceDelistedAt: null,
+    sellerId: seller,
+    ...overrides,
+  }
+}
+
 /** 只覆盖用到的行为，未用到的方法给能通过的最小实现。 */
 function fakeStore(overrides: Partial<FavoriteStore> = {}): FavoriteStore {
   return {
-    listingState: async () => ({ status: 'ACTIVE', governanceDelistedAt: null }),
+    listingState: async () => listingState(),
     isFavorited: async () => false,
     listFavorites: async () => [],
     totalFavorites: async () => 0,
@@ -44,7 +55,7 @@ function serviceWith(overrides: Partial<FavoriteStore> = {}) {
   return createFavoriteService({ store: fakeStore(overrides), storage })
 }
 
-/** 断言「同码同文案的 404」：非法 / 不存在 / 不可见 / 不在售都必须落在这里。 */
+/** 断言「同码同文案的 404」：不存在 / 不可见 / 不在售都必须落在这里。 */
 async function expectListingNotFound(run: () => Promise<unknown>): Promise<void> {
   try {
     await run()
@@ -57,43 +68,97 @@ async function expectListingNotFound(run: () => Promise<unknown>): Promise<void>
   throw new Error('期望抛 LISTING_NOT_FOUND，但没有抛')
 }
 
-describe('favorite service — 可见性判据（三条路径共用）', () => {
-  test('ACTIVE 且未被治理下架的商品可读可写', async () => {
+describe('favorite service — 收藏（POST）只允许在售商品', () => {
+  test('ACTIVE 且未被治理下架时可以收藏', async () => {
     const service = serviceWith()
-    expect(await service.getState(viewer, listingId)).toEqual({ favorited: false })
     expect(await service.favorite(viewer, listingId)).toEqual({ favorited: true })
-    expect(await service.unfavorite(viewer, listingId)).toEqual({ favorited: false })
   })
 
-  test('不存在、不在售、被平台下架一律 404 同码（不给 id / 治理状态留探针）', async () => {
+  test('不存在、不在售、被平台下架一律 404，且一次都不写库', async () => {
     for (const state of [
       null,
-      { status: 'OFFLINE' as const, governanceDelistedAt: null },
-      { status: 'SOLD' as const, governanceDelistedAt: null },
-      { status: 'RESERVED' as const, governanceDelistedAt: null },
-      { status: 'ACTIVE' as const, governanceDelistedAt: new Date('2026-09-12T00:00:00.000Z') },
+      listingState({ status: 'OFFLINE' }),
+      listingState({ status: 'SOLD' }),
+      listingState({ status: 'RESERVED' }),
+      listingState({ governanceDelistedAt: new Date('2026-09-12T00:00:00.000Z') }),
     ]) {
-      const service = serviceWith({ listingState: async () => state })
-      await expectListingNotFound(() => service.getState(viewer, listingId))
+      let writes = 0
+      const service = serviceWith({
+        listingState: async () => state,
+        addFavorite: async () => {
+          writes += 1
+        },
+      })
       await expectListingNotFound(() => service.favorite(viewer, listingId))
-      await expectListingNotFound(() => service.unfavorite(viewer, listingId))
+      expect(writes).toBe(0)
+    }
+  })
+})
+
+describe('favorite service — 读状态（GET）镜像详情页可见性', () => {
+  test('在售、已售、已预定都能读到真实状态（这些商品的详情页是公开可读的）', async () => {
+    for (const status of ['ACTIVE', 'SOLD', 'RESERVED'] as const) {
+      const service = serviceWith({
+        listingState: async () => listingState({ status }),
+        isFavorited: async () => true,
+      })
+      expect(await service.getState(viewer, listingId)).toEqual({ favorited: true })
     }
   })
 
-  test('判据不通过时一次都不写库', async () => {
-    let writes = 0
+  test('下架或未过审：非卖家 404，卖家本人仍可读', async () => {
+    for (const state of [
+      listingState({ status: 'OFFLINE' }),
+      listingState({ moderationStatus: 'BLOCKED' }),
+      listingState({ moderationStatus: 'REVIEW' }),
+      listingState({ moderationStatus: null }),
+    ]) {
+      const service = serviceWith({ listingState: async () => state })
+      await expectListingNotFound(() => service.getState(viewer, listingId))
+      // 卖家本人能打开自己的商品详情页，收藏态也就不该对他 404。
+      expect(await service.getState(seller, listingId)).toEqual({ favorited: false })
+    }
+  })
+
+  test('商品不存在 404', async () => {
+    await expectListingNotFound(() =>
+      serviceWith({ listingState: async () => null }).getState(viewer, listingId),
+    )
+  })
+})
+
+describe('favorite service — 取消收藏（DELETE）无条件幂等', () => {
+  test('失效条目（已售 / 已下架 / 被平台下架）必须能取消掉', async () => {
+    // 这是列表里最常见的一类：收藏之后商品卖掉了或下架了。取消不掉等于收藏夹只能进不能出。
+    for (const state of [
+      listingState({ status: 'SOLD' }),
+      listingState({ status: 'OFFLINE' }),
+      listingState({ status: 'RESERVED' }),
+      listingState({ governanceDelistedAt: new Date('2026-09-12T00:00:00.000Z') }),
+      null, // 商品已不存在
+    ]) {
+      let removed = 0
+      const service = serviceWith({
+        listingState: async () => state,
+        removeFavorite: async () => {
+          removed += 1
+        },
+      })
+      expect(await service.unfavorite(viewer, listingId)).toEqual({ favorited: false })
+      expect(removed).toBe(1)
+    }
+  })
+
+  test('不查商品状态：连 listingState 都不读（不给 id 存在性留探针）', async () => {
+    let reads = 0
     const service = serviceWith({
-      listingState: async () => ({ status: 'SOLD', governanceDelistedAt: null }),
-      addFavorite: async () => {
-        writes += 1
-      },
-      removeFavorite: async () => {
-        writes += 1
+      listingState: async () => {
+        reads += 1
+        return listingState()
       },
     })
-    await expectListingNotFound(() => service.favorite(viewer, listingId))
-    await expectListingNotFound(() => service.unfavorite(viewer, listingId))
-    expect(writes).toBe(0)
+    expect(await service.unfavorite(viewer, listingId)).toEqual({ favorited: false })
+    expect(reads).toBe(0)
   })
 })
 
@@ -123,7 +188,6 @@ describe('favorite service — 列表与分页', () => {
 
     expect(page.items).toHaveLength(1)
     expect(page.nextCursor).not.toBeNull()
-    // 游标指回本页最后一行（微秒精度），下一页从这里继续。
     expect(page.total).toBe(2)
   })
 
