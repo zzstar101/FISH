@@ -18,6 +18,7 @@ import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as ListingListingIdRouteImport } from './routes/listing.$listingId'
@@ -72,6 +73,11 @@ const RegisterRoute = RegisterRouteImport.update({
   path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -181,6 +190,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/reports'
     | '/search'
     | '/wish'
     | '/listing/$listingId'
@@ -198,6 +208,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/reports'
     | '/search'
     | '/wish'
     | '/listing/$listingId'
@@ -217,6 +228,7 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/reports'
     | '/search'
     | '/wish'
     | '/listing/$listingId'
@@ -237,6 +249,7 @@ export interface RootRouteChildren {
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
   RegisterRoute: typeof RegisterRoute
+  ReportsRoute: typeof ReportsRoute
   SearchRoute: typeof SearchRoute
   WishRoute: typeof WishRoute
   ListingListingIdRoute: typeof ListingListingIdRoute
@@ -306,6 +319,13 @@ declare module '@tanstack/react-router' {
       path: '/register'
       fullPath: '/register'
       preLoaderRoute: typeof RegisterRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/search': {
@@ -404,6 +424,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,
   RegisterRoute: RegisterRoute,
+  ReportsRoute: ReportsRoute,
   SearchRoute: SearchRoute,
   WishRoute: WishRoute,
   ListingListingIdRoute: ListingListingIdRoute,

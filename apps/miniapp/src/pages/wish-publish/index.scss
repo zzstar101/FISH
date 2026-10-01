@@ -3,8 +3,8 @@
 /**
  * 我要许愿（二级页）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 结构：冰蓝页头 → 漂浮返回钮 + 标题「许个愿」→ 表单（关键词 / 分类 / 预算 /
- * 描述 / 匹配偏好 / 契约约束说明）→ 吸底操作条（取消 + 发布愿望）。
+ * 结构：冰蓝页头 → 吸顶玻璃栏（`nav-bar` 的 glass 变体，fixed + 居中标题）→
+ * 表单（关键词 / 分类 / 预算 / 描述 / 匹配偏好）→ 吸底操作条（取消 + 发布愿望）。
  *
  * 二级页**不加底栏留白**（非 Tab 页不渲染悬浮 TabBar），底部只让出吸底操作条。
  */
@@ -19,7 +19,7 @@
   @include page-hero(300px, 64px);
 }
 
-/* 内容区：左右 40px（设计稿全页左右各 20pt）；顶部 168px 让开漂浮导航栏
+/* 内容区：左右 40px（设计稿全页左右各 20pt）；顶部 168px 让开吸顶玻璃栏
    （与 match / mylist / orders 等二级页同值）；底部让出吸底操作条 + 安全区 */
 .wp__body {
   position: relative;
@@ -39,7 +39,7 @@
   }
 }
 
-/* 标签行：左标签 + 右说明（字段名与字数/长度约束） */
+/* 标签行：左标签 + 右侧说明（如具体要求的字数计数） */
 .wp__frow {
   display: flex;
   align-items: baseline;
@@ -75,7 +75,8 @@
   box-sizing: border-box;
   border-radius: 24px;
   background: var(--ice);
-  border: 2px solid transparent;
+  /* 常显描边：--ice 底与页面底色相近，靠边框划界（聚焦态暂无 JS 跟踪，不加） */
+  border: 2px solid var(--border);
   font-size: 28px;
   color: var(--fg);
 
@@ -88,6 +89,11 @@
     background: var(--danger-weak);
     border-color: var(--danger);
   }
+}
+
+/* 金额输入：数字与全站价格同色（--danger 红） */
+.wp__input--money {
+  color: var(--danger);
 }
 
 /* Textarea 多行文本：贴左上排、超宽自动换行 */
@@ -226,32 +232,6 @@
 
 .wp__track.is-on .wp__knob {
   transform: translateX(40px);
-}
-
-/* ─────────────────────────── 契约约束说明 ─────────────────────────── */
-
-.wp__note {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 32px;
-  padding: 24px 26px;
-  border-radius: 28px;
-  background: var(--accent-weak);
-  border: 2px dashed var(--accent-mid);
-  font-size: 23px;
-  line-height: 1.7;
-  color: var(--muted-2);
-}
-
-.wp__note-hd {
-  display: block;
-  font-weight: 600;
-  color: var(--brand);
-}
-
-.wp__note-line {
-  display: block;
 }
 
 /* ─────────────────────────── 吸底操作条 ─────────────────────────── */

@@ -17,6 +17,7 @@ const ME: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 /**

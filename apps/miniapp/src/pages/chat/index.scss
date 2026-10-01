@@ -188,23 +188,39 @@
   height: 100%;
 }
 
-/* 未读角标：设计稿 --badge 红底（#fa5151），1版稿移到圆形头像右上 */
+/*
+ * 未读角标：设计稿 --badge 红底（#fa5151），1版稿移到圆形头像右上。
+ * Owner 2026-09-29 端上定版：**正圆**（不再按位数拉长的胶囊），字号与圆同大 ——
+ * 内径 = 38 − 两侧各 4 的描边 = 30，所以单数字用 30px 撑满整圆。
+ *
+ * 多位数必须缩字号：等宽数字宽约 0.6em，30px 字号下两位数就是 36px > 内径 30px，
+ * 会被 `overflow: hidden` 裁掉一半（`99+` 更宽）。`is-multi` 按位数降到 20px
+ * （两/三位均 ≤ 内径），圆心与单数字一致。
+ */
 .chat__bdg {
   position: absolute;
   top: -10px;
   right: -10px;
-  min-width: 38px;
+  box-sizing: border-box;
+  width: 38px;
   height: 38px;
-  padding: 0 10px;
-  border-radius: var(--r-pill);
+  border-radius: 50%;
   background: #fa5151;
   border: 4px solid var(--bg);
   color: #fff;
-  font-size: 21px;
+  font-size: 30px;
+  line-height: 1;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+
+  /* 两位数 / `99+`：缩到 20px（三位宽 36px，仍在 38px 盒内不裁字） */
+  &.is-multi {
+    font-size: 20px;
+    letter-spacing: -1px;
+  }
 }
 
 /* 中列：名字+胶囊 / 预览 / 时间，三行纵向（1版稿 .corp） */
@@ -229,8 +245,54 @@
   @include ellipsis;
 }
 
-/* 状态胶囊（1版稿 .cname .st）已随「契约里没有分类 / 状态字段」一起删掉：
-   `ConversationDto` 只有 `listing.status` 与最后一条消息，推不出「待面交 / 已完成」。 */
+/*
+ * 状态胶囊（1版稿 `.cname .st`，任务一 #89 恢复）：昵称后的交易进度。
+ * 数据源是交易域（`features/chat/capsule.ts`），不是 `listing.status` —— 商品状态
+ * 是整个商品的、多个买家共用，别家成交会让你的会话行误报。
+ *
+ * 配色照 Owner 2026-09-29 端上定版：绿=已完成、黄=待面交、蓝=待同意/等对方、
+ * 浅底灰=已取消。**刻意不复用订单页的 `status-pill`**（那套是实心深底
+ * `--brand-deep` / `--muted-2`），本页要浅底彩字。蓝/灰两档的字色取 1版稿
+ * `color-mix(in oklab, …)` 的预计算值，与 `_token-vars.scss` 既有派生令牌同一算法。
+ */
+.chat__pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: var(--r-pill);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1.55;
+  white-space: nowrap;
+
+  /* 已完成：绿（--ok-weak 底 + --ok-ink 字，与命中卡的绿同族） */
+  &.is-ok {
+    background: var(--ok-weak);
+    color: var(--ok-ink);
+  }
+
+  /* 待面交：黄（--warn 系，与「审核中 / 待面交」提示同一套语义色） */
+  &.is-warn {
+    background: var(--warn-weak);
+    color: var(--warn-ink);
+  }
+
+  /* 待同意 / 待对方确认：品牌蓝浅底（稿 `.st` 的 --brand 12% 底 + 84% 字色） */
+  &.is-pending {
+    background: #e8f1ff;
+    color: #3b74dd;
+  }
+
+  /* 已取消：极浅底 + 灰字（稿 `.st.done`，--bg 底 + muted 82% 字色） */
+  &.is-plain {
+    background: var(--bg);
+    color: #5f6e8a;
+  }
+}
 
 .chat__msg {
   font-size: 25px;

@@ -15,6 +15,7 @@ const USER: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 function routerAt(entry: string) {

@@ -13,6 +13,7 @@ import { useAuth } from '../auth/auth-provider'
 import type { MyListingStatusFilter } from './api'
 import { listingActionError } from './api'
 import { EditListingDialog } from './edit-listing-dialog'
+import { PendingSection } from './pending-section'
 import { useMyListings, useSetListingStatus } from './queries'
 
 const STATUS_TABS: ReadonlyArray<{ value: MyListingStatusFilter; label: string }> = [
@@ -66,6 +67,8 @@ function MyListContent({ ownerId }: { ownerId: string }) {
         </div>
         <p className="text-ink-3 text-xs">真实 API · 最多显示 50 条</p>
       </div>
+
+      <PendingSection ownerId={ownerId} />
 
       <div className="flex flex-wrap gap-2">
         {STATUS_TABS.map((tab) => {

@@ -12,9 +12,12 @@ const profile = {
   nickname: '阿岚',
   avatarUrl: null,
   authStatus: 'UNVERIFIED',
+  signature: null,
   joinedDays: 3,
   activeCount: 2,
   soldCount: 1,
+  // 在线态（#359 第五点）在公开 DTO 里是必填：本用例不关心，给「离线」这一档。
+  presence: { online: false, lastActiveAt: null },
 } as const
 
 const card = {

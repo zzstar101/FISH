@@ -32,7 +32,8 @@
     "db:migrate": "bun run --filter '@fish/db' migrate",
     "db:seed": "bun run --filter '@fish/db' seed",
     "db:promote": "bun run --filter '@fish/db' promote",
-    "db:studio": "bun run --filter '@fish/db' studio"
+    "db:studio": "bun run --filter '@fish/db' studio",
+    "db:dev": "bun run scripts/dev-db.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",
