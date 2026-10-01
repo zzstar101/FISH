@@ -4,12 +4,12 @@
  * 订单列表（`pages/orders-buy` 与 `pages/orders-sell` 共用的 `components/order-list`）。
  * 尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  *
- * 结构：状态筛选胶囊 → 区块标题行 + 排序开关 → 订单卡列表 → 到底提示；
- * 外加骨架屏、两支空态、错误态、回到顶部钮。
+ * 结构：玻璃顶栏（返回 + 居中双色标题，副行是 4 段状态分段）→ 区块标题行 + 排序开关
+ * → 订单卡列表 → 到底提示；外加骨架屏、两支空态、错误态、回到顶部钮。
  *
- * **没有页头**：两页改用微信原生导航栏当顶部（`index.config.ts` 的
- * `navigationStyle: 'default'`），所以原来的渐变页头 / 统计行 / 视角分段整块去掉了 ——
- * 视角由页面本身决定（两页各一个视角），笔数由 4 个 tab 上的计数承担。
+ * **顶部区域（#386 第一批）**：与「我的发布」同款 —— `components/top-bar` 的 glass
+ * 变体，分段进它的 `below` 槽与主行连成**同一块玻璃**；原先的微信原生导航栏撤掉，
+ * 视角由页面传进来的标题表达，笔数由 4 段分段上的计数承担。
  *
  * 块名沿用 `.orders__`（订单页的块名）：组件只是把样式从页面里挪出来给两页共用，
  * 换名字对观感没有收益，只会把 diff 撑大。
@@ -26,46 +26,78 @@
   padding-bottom: calc(52px + env(safe-area-inset-bottom));
 }
 
-/* ---------------------------------------------------------- 状态筛选胶囊 */
+/* ------------------------------------------------- 顶栏副行：4 段状态分段 */
 
+/**
+ * 分段控件挂在 `top-bar` 的 `below` 槽里，与主行**共用同一块玻璃** —— 所以底与描边
+ * 由 `.topbar--glass` 铺在整块容器上，本块只给内边距与排列（自带 `border-bottom`
+ * 会在玻璃底边再压一道线）。规格与「我的发布」的分段（`.ml__segwrap` / `.ml__seg`）
+ * 同款。
+ */
 .orders__filters {
-  position: relative;
-  z-index: 1;
-  white-space: nowrap;
-  padding-top: 28px;
+  padding: 24px 40px 8px;
 }
 
+/**
+ * 分段轨道：白底 + 卡片阴影。44pt 轨道 / 36pt 胶囊（88px / 72px）。
+ *
+ * 描边用 `inset box-shadow` 而不是 `border`：`border` 要吃掉 2×2px 的盒模型高度，
+ * 里面的胶囊就只有 34pt 高，而规格是 36pt。等分用 `flex: 1 1 0` 而不是写死列数：
+ * 分段数由 `STATUS_TABS` 决定，宽度跟着它走（4 段放得下，不再横向滚动）。
+ */
 .orders__filters-inner {
-  display: inline-flex;
-  gap: 16px;
-  padding: 0 40px;
+  display: flex;
+  gap: 8px;
+  height: 88px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 2px var(--border),
+    var(--shadow-card);
 }
 
 .orders__pill {
-  display: inline-flex;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
   align-items: center;
-  flex: 0 0 auto;
-  height: 68px;
-  padding: 0 28px;
+  justify-content: center;
+  gap: 8px;
   border-radius: var(--r-pill);
-  background: var(--surface);
-  border: 2px solid var(--border);
-  font-size: 25px;
+  font-size: 26px;
   font-weight: 600;
   color: var(--muted-2);
+  white-space: nowrap;
 
   &.is-on {
     background: var(--ink);
-    border-color: var(--ink);
     color: #fff;
   }
 }
 
+/* 计数：等宽字体、比标签弱一档（与 `.ml__seg-n` 同款） */
 .orders__pill-cnt {
-  margin-left: 8px;
-  font-size: 21px; /* 10.5pt，比标签（12.5pt）小一档 */
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
   font-weight: 400;
-  opacity: 0.75;
+  opacity: 0.9;
+}
+
+/* 选中段的计数不再压暗 */
+.orders__pill.is-on .orders__pill-cnt {
+  opacity: 1;
+}
+
+/**
+ * 副行占位：`top-bar` 的 `spacer` 只含主行，分段这一截组件自己补。
+ * 24（上衬）+ 88（分段高）+ 8（下衬）= 120px —— 与 `.orders__filters` 的 padding
+ * 逐项对应：改 `.orders__filters` 的 padding 或分段高度，必须同步改这里，否则内容
+ * 会被副行压住、或顶部空出一截。
+ */
+.orders__header-gap {
+  height: 120px;
 }
 
 /* 列表不完整时的那句实话（翻页到上限 / 服务端游标没前进）：只在这一种情况下出现 */

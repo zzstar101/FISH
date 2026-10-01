@@ -5,10 +5,11 @@ import { jobs } from '@fish/db/schema/jobs'
 import { listingMediaObjects } from '@fish/db/schema/listing-media'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { listingModerationRecords } from '@fish/db/schema/moderation'
+import { notifications } from '@fish/db/schema/notifications'
 import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { eq, sql } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 import { createListingMediaSettlement } from '../uploads/listing-media-settlement'
 import { listingReviewMediaPrefix } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -142,6 +143,85 @@ test('人工放行在 listings 更新之后调用图片结算钩子，参数为 
       moderationStatus: 'APPROVED',
     })
     expect(await moderationActions(listingId)).toEqual(['CREATE:REVIEW', 'MANUAL_DECISION:ALLOW'])
+  })
+})
+
+test('人工决策同事务写 MODERATION 通知（任务一 #89）：放行 APPROVED / 下架 REJECTED', async () => {
+  // 放行：通知卖家 outcome=APPROVED，payload 带 listingId（读侧转公开 TypeID）
+  await withReviewListing(async ({ sellerId, listingId, recordId }) => {
+    const store = createSqlModerationStore(db)
+    const result = await db.transaction((tx) =>
+      store.decideWithin(tx, { recordId, decision: 'ALLOW', reason: '人工放行' }),
+    )
+    expect(result.kind).toBe('applied')
+    const rows = await db.select().from(notifications).where(eq(notifications.userId, sellerId))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.type).toBe('MODERATION')
+    expect(rows[0]?.payload).toEqual({ listingId, outcome: 'APPROVED' })
+  })
+
+  // 下架：outcome=REJECTED；决策回滚（结算失败）时通知必须随之消失 —— 同一事务
+  await withReviewListing(async ({ sellerId, listingId, recordId }) => {
+    const store = createSqlModerationStore(db, {
+      settleListingMedia: async () => {
+        throw new Error('对象存储不可用')
+      },
+    })
+    await expect(
+      db.transaction((tx) =>
+        store.decideWithin(tx, { recordId, decision: 'BLOCK', reason: '违规下架' }),
+      ),
+    ).rejects.toThrow('对象存储不可用')
+    const rows = await db.select().from(notifications).where(eq(notifications.userId, sellerId))
+    expect(rows).toHaveLength(0)
+
+    // 重放一次成功路径，确认 REJECTED 形状
+    const retry = createSqlModerationStore(db)
+    const applied = await db.transaction((tx) =>
+      retry.decideWithin(tx, { recordId, decision: 'BLOCK', reason: '违规下架' }),
+    )
+    expect(applied.kind).toBe('applied')
+    const written = await db.select().from(notifications).where(eq(notifications.userId, sellerId))
+    expect(written).toHaveLength(1)
+    expect(written[0]?.payload).toEqual({ listingId, outcome: 'REJECTED' })
+  })
+})
+
+/**
+ * #228 §6：人工改判是「provider 维度」的一种（`MANUAL`），必须能与机器结论、以及 #228 之前的
+ * 历史行区分开 —— 这条断言在补写 provider 之前会失败（那时恒为 NULL）。
+ */
+test('人工改判落库带 provider=MANUAL，且不伪造 provider 的 label/score', async () => {
+  await withReviewListing(async ({ listingId, recordId }) => {
+    const store = createSqlModerationStore(db)
+
+    const result = await db.transaction((tx) =>
+      store.decideWithin(tx, { recordId, decision: 'ALLOW', reason: '人工放行' }),
+    )
+    expect(result.kind).toBe('applied')
+
+    const rows = await db
+      .select({
+        provider: listingModerationRecords.provider,
+        providerRequestId: listingModerationRecords.providerRequestId,
+        suggestion: listingModerationRecords.suggestion,
+        label: listingModerationRecords.label,
+        subLabel: listingModerationRecords.subLabel,
+        score: listingModerationRecords.score,
+      })
+      .from(listingModerationRecords)
+      .where(eq(listingModerationRecords.action, 'MANUAL_DECISION'))
+      .orderBy(desc(listingModerationRecords.createdAt))
+      .limit(1)
+
+    expect(rows[0]).toEqual({
+      provider: 'MANUAL',
+      providerRequestId: null,
+      suggestion: null,
+      label: null,
+      subLabel: null,
+      score: null,
+    })
   })
 })
 

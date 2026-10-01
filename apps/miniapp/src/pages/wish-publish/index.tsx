@@ -25,12 +25,12 @@ import './index.scss'
  * 提交走真实接口 `POST /wishes`（`features/wish/api.ts`）：**不回退 mock**，
  * 服务端错误（409 上限 / 400 校验）按服务端给的中文原样提示。
  * 页面上的本地校验只为更快反馈，真实判定仍在服务端。
+ *
+ * 曾在页面上展示、现只留在这里的两条服务端事实（前端无分支依赖，
+ * 真源 `apps/api/src/modules/wishes/service.ts`）：同 keyword+category
+ * `DUPLICATE_WINDOW_MS`（5 秒）内软幂等返回已有记录；提交成功后投递
+ * MATCH_WISH job，匹配由 Worker 异步完成。
  */
-
-/** 契约约束文案里的两个后端常量：契约未导出，真源是
- *  `apps/api/src/modules/wishes/service.ts`（`ACTIVE_WISH_LIMIT` / `DUPLICATE_WINDOW_MS`） */
-const ACTIVE_WISH_LIMIT = 10
-const DUPLICATE_WINDOW_SECONDS = 5
 
 type FieldErrors = {
   keyword?: string
@@ -75,7 +75,7 @@ export default function WishPublish() {
      */
     const keywordLength = [...trimmed].length
     if (keywordLength < 2 || keywordLength > 30) {
-      next.keyword = 'keyword 需要 2–30 个字符'
+      next.keyword = '关键词需要 2–30 个字'
     } else if (!/[^\s\p{P}]/u.test(trimmed)) {
       next.keyword = '关键词不能只有空白或标点'
     }
@@ -84,11 +84,11 @@ export default function WishPublish() {
     const minYuan = budgetMin.trim() === '' ? 0 : Number(budgetMin.trim())
     const maxYuan = Number(budgetMax.trim())
     if (!Number.isInteger(minYuan) || minYuan < 0) {
-      next.budget = 'budgetMinCents 必须是非负整数'
+      next.budget = '最低价需为 0 或正整数'
     } else if (!Number.isInteger(maxYuan) || maxYuan <= 0) {
-      next.budget = 'budgetMaxCents 必须是正整数'
+      next.budget = '最高价需为正整数'
     } else if (maxYuan < minYuan) {
-      next.budget = 'budgetMaxCents 必须 ≥ budgetMinCents'
+      next.budget = '最高价不能低于最低价'
     }
 
     setErrors(next)
@@ -126,7 +126,11 @@ export default function WishPublish() {
     <View className="wp">
       <View className="wp__topbg" />
 
-      <NavBar title="许个愿" />
+      {/*
+        二级页拍板形态（`docs/` 顶栏玻璃底统一）：`NavBar glass` —— fixed 吸顶玻璃底 +
+        居中标题；「许个愿」无干净语义切点，整题黑色（不强拆双色）。
+      */}
+      <NavBar title="许个愿" glass titleAlign="center" />
 
       <View className="wp__body">
         {/* ---------------- 想要什么 ---------------- */}
@@ -135,7 +139,6 @@ export default function WishPublish() {
             <Text className="wp__label">
               想要什么 <Text className="wp__req">*</Text>
             </Text>
-            <Text className="wp__fhint">keyword · 2–30 字</Text>
           </View>
           <Input
             className={`wp__input${errors.keyword ? ' is-err' : ''}`}
@@ -158,7 +161,6 @@ export default function WishPublish() {
             <Text className="wp__label">
               哪一类 <Text className="wp__req">*</Text>
             </Text>
-            <Text className="wp__fhint">category · 8 枚举</Text>
           </View>
           <ScrollView className="wp__cats" scrollX enableFlex>
             <View className="wp__cats-inner">
@@ -182,21 +184,20 @@ export default function WishPublish() {
             <Text className="wp__label">
               预算区间 <Text className="wp__req">*</Text>
             </Text>
-            <Text className="wp__fhint">元 · 提交时 ×100 → Cents</Text>
           </View>
           <View className="wp__row2">
             <Input
-              className={`wp__input${errors.budget ? ' is-err' : ''}`}
+              className={`wp__input wp__input--money${errors.budget ? ' is-err' : ''}`}
               value={budgetMin}
               type="number"
-              placeholder="最低 ¥（可空＝0）"
+              placeholder="最低价（选填）"
               onInput={(event) => setBudgetMin(event.detail.value)}
             />
             <Input
-              className={`wp__input${errors.budget ? ' is-err' : ''}`}
+              className={`wp__input wp__input--money${errors.budget ? ' is-err' : ''}`}
               value={budgetMax}
               type="number"
-              placeholder="最高 ¥"
+              placeholder="最高价"
               onInput={(event) => setBudgetMax(event.detail.value)}
             />
           </View>
@@ -212,7 +213,7 @@ export default function WishPublish() {
         <View className="wp__field">
           <View className="wp__frow">
             <Text className="wp__label">具体要求</Text>
-            <Text className="wp__fhint">{`description · 选填 ≤500 字（${description.length}）`}</Text>
+            <Text className="wp__fhint">{`${description.length}/500`}</Text>
           </View>
           <Textarea
             className="wp__input wp__input--area"
@@ -228,7 +229,6 @@ export default function WishPublish() {
         <View className="wp__field">
           <View className="wp__frow">
             <Text className="wp__label">匹配偏好</Text>
-            <Text className="wp__fhint">acceptSimilar · 默认 true</Text>
           </View>
           <View className="wp__sw">
             <View className="wp__sw-tx">
@@ -242,19 +242,6 @@ export default function WishPublish() {
               <View className="wp__knob" />
             </View>
           </View>
-        </View>
-
-        {/* ---------------- 契约约束说明 ---------------- */}
-        <View className="wp__note">
-          <Text className="wp__note-hd">契约约束（服务端会二次校验）</Text>
-          <Text className="wp__note-line">{`· 同时 ACTIVE 的心愿最多 ${ACTIVE_WISH_LIMIT} 条，超出返回 409`}</Text>
-          <Text className="wp__note-line">
-            {`· ${DUPLICATE_WINDOW_SECONDS} 秒内重复提交同 keyword+category 会返回已有记录（软幂等）`}
-          </Text>
-          <Text className="wp__note-line">· keyword 服务端会 trim + 转小写后入库</Text>
-          <Text className="wp__note-line">
-            · 提交成功后投递 MATCH_WISH job，匹配由 Worker 异步完成
-          </Text>
         </View>
       </View>
 
