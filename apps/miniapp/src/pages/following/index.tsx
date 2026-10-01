@@ -58,8 +58,8 @@ import './index.scss'
  *
  * 稿的 `.pagehead`（导航 + 两档 tab）在**滚动容器之外**，天然不随内容滚；真机上是页面级
  * 滚动，要同一个观感就得把这两行钉住。所以顶栏用一级页的 `top-bar`（`fixed` + 玻璃底 +
- * `below` 副行 + `spacer` 占位），而不是二级页的漂浮 `nav-bar`。标题的居中做法见
- * `center` 那一段（组件没有 `titleAlign`，得页面自己绝对定位到整条栏的中线）。
+ * `below` 副行 + `spacer` 占位），而不是二级页的漂浮 `nav-bar`。标题走 `title` /
+ * `titleEm` 左对齐双色分字（#386 批次 2，Owner 拍板对齐 history，原居中 hack 已拆）。
  */
 
 /** 两档下划线 tab：关注的人 / 关注动态（稿决策②） */
