@@ -1,5 +1,11 @@
 import { MessageIdempotencyConflictError, type MessageSendKey } from './idempotency'
-import type { ConversationParticipant, MessageRow, MessageStore } from './store'
+import type {
+  ConversationParticipant,
+  ListingBrief,
+  MessageRow,
+  MessageStore,
+  ReplyTargetRow,
+} from './store'
 
 /**
  * `MessageStore` 的内存替身（测试专用）。
@@ -27,6 +33,8 @@ export class MemoryMessageStore implements MessageStore {
     ],
   ])
   messages: MessageRow[] = []
+  /** LISTING 消息富化用的商品读数（#359）；测试按需预置，缺省为空 = 商品不存在。 */
+  listings = new Map<string, ListingBrief>()
   private seq = 0
 
   /** #67 幂等键 → 已落库消息与指纹（与 SQL 的部分唯一索引同语义）。 */
@@ -64,6 +72,44 @@ export class MemoryMessageStore implements MessageStore {
     senderId: string,
     content: string,
     key?: MessageSendKey | null,
+    replyToId?: string | null,
+  ) {
+    return this.insert(conversationId, senderId, 'TEXT', content, key, replyToId)
+  }
+
+  async insertListing(
+    conversationId: string,
+    senderId: string,
+    listingPublicId: string,
+    key?: MessageSendKey | null,
+  ) {
+    return this.insert(conversationId, senderId, 'LISTING', listingPublicId, key)
+  }
+
+  async findMessageByRequestKey(conversationId: string, senderId: string, key: MessageSendKey) {
+    const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
+    return existing
+      ? { row: existing.row, hashMatches: existing.requestHash === key.requestHash }
+      : null
+  }
+
+  async findListingBriefs(ids: string[]) {
+    const briefs = new Map<string, ListingBrief>()
+    for (const id of ids) {
+      const brief = this.listings.get(id)
+      if (brief) briefs.set(id, brief)
+    }
+    return briefs
+  }
+
+  /** TEXT / LISTING 共用的插入路径，与 SQL store 的 `insertUserMessage` 同语义。 */
+  private insert(
+    conversationId: string,
+    senderId: string,
+    type: 'TEXT' | 'LISTING',
+    content: string,
+    key?: MessageSendKey | null,
+    replyToId?: string | null,
   ) {
     if (key) {
       const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
@@ -77,8 +123,10 @@ export class MemoryMessageStore implements MessageStore {
       id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: conversationId,
       sender_id: senderId,
-      type: 'TEXT',
+      type,
       content,
+      reply_to_id: replyToId ?? null,
+      recalled_at: null,
       created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
       sender_nickname: senderId === MEMORY_BUYER_ID ? '买家' : '卖家',
       sender_avatar_url: null,
@@ -93,6 +141,51 @@ export class MemoryMessageStore implements MessageStore {
     return row
   }
 
+  /** 幂等键快速路径（只读）：与 SQL store 的 `findByRequestKey` 同语义。 */
+  async findByRequestKey(conversationId: string, senderId: string, key: MessageSendKey) {
+    const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
+    if (!existing) return null
+    return { row: existing.row, matchedHash: existing.requestHash === key.requestHash }
+  }
+
+  async findReplyTargets(ids: string[]) {
+    const map = new Map<string, ReplyTargetRow>()
+    for (const row of this.messages) {
+      if (!ids.includes(row.id)) continue
+      map.set(row.id, {
+        id: row.id,
+        conversation_id: row.conversation_id,
+        sender_id: row.sender_id,
+        type: row.type,
+        content: row.content,
+        recalled_at: row.recalled_at ?? null,
+      })
+    }
+    return map
+  }
+
+  /** 时间基准：测试里 created_at 是第 seq 秒，窗口判定用「当前 seq 秒 - created_at」。 */
+  recallNow: Date = new Date('2026-09-12T10:00:09.000000Z')
+
+  async recall(
+    conversationId: string,
+    messageId: string,
+    userId: string,
+    windowMs: number,
+  ): Promise<MessageRow | 'not-found' | 'forbidden' | 'window-exceeded'> {
+    const row = this.messages.find(
+      (item) => item.id === messageId && item.conversation_id === conversationId,
+    )
+    if (!row) return 'not-found'
+    if (row.sender_id !== userId) return 'forbidden'
+    const created = new Date(row.created_at as Date | string).getTime()
+    if (!row.recalled_at && this.recallNow.getTime() - created > windowMs) {
+      return 'window-exceeded'
+    }
+    row.recalled_at = row.recalled_at ?? this.recallNow
+    return row
+  }
+
   async insertSystem(conversationId: string, content: string) {
     const row: MessageRow = {
       id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
@@ -100,6 +193,8 @@ export class MemoryMessageStore implements MessageStore {
       sender_id: null,
       type: 'SYSTEM',
       content,
+      reply_to_id: null,
+      recalled_at: null,
       created_at: new Date(`2026-09-12T10:00:0${this.seq}.000000Z`),
       sender_nickname: null,
       sender_avatar_url: null,

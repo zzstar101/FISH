@@ -442,6 +442,19 @@ describe('meetup token store (integration, #70)', () => {
       listing: '01990000-0000-7000-8000-0000000000cd',
       conversation: '01990000-0000-7000-8000-0000000000e5',
     },
+    // #297 DELETE 故障注入：三条终态路径各一组独立场景
+    faultCancel: {
+      listing: '01990000-0000-7000-8000-0000000000ce',
+      conversation: '01990000-0000-7000-8000-0000000000e6',
+    },
+    faultConfirm: {
+      listing: '01990000-0000-7000-8000-0000000000cf',
+      conversation: '01990000-0000-7000-8000-0000000000e7',
+    },
+    faultConsume: {
+      listing: '01990000-0000-7000-8000-0000000000d0',
+      conversation: '01990000-0000-7000-8000-0000000000e8',
+    },
   } as const
 
   const TOKEN_HASH = 'a'.repeat(64)
@@ -805,5 +818,183 @@ describe('meetup token store (integration, #70)', () => {
       600,
     )
     expect(counted?.failedAttempts).toBe(1)
+  })
+
+  // #297 故障注入基座：BEFORE DELETE 触发器抛异常，等价于「DELETE 语句失败」。
+  // FOR EACH ROW 语义下 DELETE 命中 0 行不触发——每个注入用例必须先造出凭证行。
+  const TOKEN_DELETE_FAULT_MESSAGE = '#297 故障注入：DELETE 被阻止'
+  async function injectTokenDeleteFailure(): Promise<void> {
+    // 函数体是美元引号字符串（对驱动是整体字面量），异常文案直接写死在里面；
+    // 消息常量同时供 rejects.toThrow 匹配。
+    await db.execute(sql`
+      CREATE OR REPLACE FUNCTION test_raise_on_token_delete() RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION '#297 故障注入：DELETE 被阻止';
+      END;
+      $$ LANGUAGE plpgsql
+    `)
+    await db.execute(sql`
+      CREATE TRIGGER test_block_token_delete
+      BEFORE DELETE ON transaction_meetup_tokens
+      FOR EACH ROW EXECUTE FUNCTION test_raise_on_token_delete()
+    `)
+  }
+  async function removeTokenDeleteFailure(): Promise<void> {
+    // 用例失败也不能毒化后续用例：调用方负责 try/finally。
+    await db.execute(
+      sql`DROP TRIGGER IF EXISTS test_block_token_delete ON transaction_meetup_tokens`,
+    )
+    await db.execute(sql`DROP FUNCTION IF EXISTS test_raise_on_token_delete()`)
+  }
+
+  /** 断言 promise 以注入的 DELETE 失败告终：触发器文案可能被 drizzle 包在 cause 链里。 */
+  async function expectTokenDeleteFault(promise: Promise<unknown>): Promise<void> {
+    const error = await promise.then(
+      () => null,
+      (e: unknown) => e,
+    )
+    if (error === null) throw new Error('操作应当因注入的 DELETE 失败而异常')
+    let cur: unknown = error
+    while (cur instanceof Error) {
+      if (cur.message.includes(TOKEN_DELETE_FAULT_MESSAGE)) return
+      cur = (cur as { cause?: unknown }).cause
+    }
+    throw new Error(`失败原因不是注入的 DELETE 故障：${String(error)}`)
+  }
+
+  /**
+   * #297 终态一致性不变量：按交易的实际状态统一断言——
+   * status ∈ {CANCELLED, COMPLETED} ⇒ transaction_meetup_tokens 无该行；
+   * COMPLETED ⇒ completed_at 非空 且 listing SOLD（governance_delisted_at 非空的
+   * 治理下架例外除外，口径同 store.ts 的终态 CASE）。返回实际终态供后续断言。
+   */
+  async function assertTerminalConsistency(txId: string): Promise<'CANCELLED' | 'COMPLETED'> {
+    const row = rows(
+      await db.execute(sql`
+        SELECT t.status::text AS status, l.status::text AS listing_status,
+               l.governance_delisted_at
+        FROM transactions t JOIN listings l ON l.id = t.listing_id
+        WHERE t.id = ${txId}
+      `),
+    )[0] as
+      | { status: string; listing_status: string; governance_delisted_at: Date | null }
+      | undefined
+    expect(row).toBeDefined()
+    if (row === undefined) throw new Error('unreachable')
+    expect(['CANCELLED', 'COMPLETED']).toContain(row.status)
+    // 终态销毁：无论 CANCELLED 还是 COMPLETED，凭证行都不允许幸存。
+    expect(await store.findMeetupToken(txId)).toBeNull()
+    if (row.status === 'COMPLETED') {
+      const completedAt = rows(
+        await db.execute(sql`
+          SELECT completed_at FROM transactions WHERE id = ${txId}
+        `),
+      )[0] as { completed_at: Date | null }
+      expect(completedAt.completed_at).not.toBeNull()
+      if (row.governance_delisted_at === null) {
+        expect(row.listing_status).toBe('SOLD')
+      }
+    }
+    return row.status as 'CANCELLED' | 'COMPLETED'
+  }
+
+  /**
+   * 断言注入后的回滚现场：终态操作以异常失败，且已经执行的状态更新全部随事务回滚。
+   * 这是「DELETE 独立语句在同一事务内 ⇒ 失败即整体回滚」的运行时证据——
+   * 既有断言全部只看最终行状态，无法区分「同事务回滚」与「恰好没执行」（EPIC #147/#76）。
+   */
+  async function assertRolledBackToPending(txId: string): Promise<void> {
+    const row = rows(
+      await db.execute(sql`
+        SELECT t.status::text AS status, t.completed_at, t.cancelled_at, t.seller_confirmed_at,
+               l.status::text AS listing_status
+        FROM transactions t JOIN listings l ON l.id = t.listing_id
+        WHERE t.id = ${txId}
+      `),
+    )[0] as {
+      status: string
+      completed_at: Date | null
+      cancelled_at: Date | null
+      seller_confirmed_at: Date | null
+      listing_status: string
+    }
+    expect(row.status).toBe('PENDING_MEETUP')
+    expect(row.completed_at).toBeNull()
+    expect(row.cancelled_at).toBeNull()
+    expect(row.seller_confirmed_at).toBeNull()
+    expect(row.listing_status).toBe('RESERVED')
+    // 凭证行仍在：DELETE 失败 ⇒ 行未删除；后续重试还能用同一张码。
+    expect(await store.findMeetupToken(txId)).not.toBeNull()
+  }
+
+  test('#297 故障注入：cancel 的凭证 DELETE 失败 ⇒ 状态更新整体回滚（仍 PENDING_MEETUP）', async () => {
+    const txId = await createPendingTx(scenarios.faultCancel)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+    })
+
+    await injectTokenDeleteFailure()
+    try {
+      await expectTokenDeleteFault(store.cancel(txId, buyer1))
+      await assertRolledBackToPending(txId)
+    } finally {
+      await removeTokenDeleteFailure()
+    }
+
+    // 注入移除后同一操作成功，且满足终态一致性不变量（助手路径 1/3）。
+    expect((await store.cancel(txId, buyer1)).kind).toBe('ok')
+    expect(await assertTerminalConsistency(txId)).toBe('CANCELLED')
+  })
+
+  test('#297 故障注入：confirm 完成分支的凭证 DELETE 失败 ⇒ COMPLETED 推进整体回滚', async () => {
+    const txId = await createPendingTx(scenarios.faultConfirm)
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+    })
+
+    await injectTokenDeleteFailure()
+    try {
+      // 买家侧先单侧确认成功（独立事务，不受注入影响）；卖家侧确认凑齐双侧 →
+      // 完成分支的 DELETE 撞触发器，整个完成事务（COMPLETED + listing SOLD + 删凭证）回滚。
+      expect((await store.confirm(txId, buyer1, 'buyer')).kind).toBe('ok')
+      await expectTokenDeleteFault(store.confirm(txId, seller, 'seller'))
+      await assertRolledBackToPending(txId)
+    } finally {
+      await removeTokenDeleteFailure()
+    }
+
+    expect((await store.confirm(txId, seller, 'seller')).kind).toBe('ok')
+    expect(await assertTerminalConsistency(txId)).toBe('COMPLETED')
+  })
+
+  test('#297 故障注入：核销完成分支的凭证 DELETE 失败 ⇒ 盖章/推进/删码整体回滚', async () => {
+    const txId = await createPendingTx(scenarios.faultConsume)
+    // 买家已单侧确认（#11）：核销（= 卖家出示码 + 条件更新盖章）凑齐双侧 → 完成分支。
+    expect((await store.confirm(txId, buyer1, 'buyer')).kind).toBe('ok')
+    await store.upsertMeetupToken(txId, {
+      tokenHash: TOKEN_HASH,
+      codeHash: CODE_HASH,
+      issuedBy: seller,
+    })
+
+    await injectTokenDeleteFailure()
+    try {
+      await expectTokenDeleteFault(
+        store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH }),
+      )
+      // 卖家侧盖章也在被回滚的事务里：seller_confirmed_at 必须回到 NULL。
+      await assertRolledBackToPending(txId)
+    } finally {
+      await removeTokenDeleteFailure()
+    }
+
+    expect(
+      (await store.consumeMeetupToken(txId, buyer1, { kind: 'code', hash: CODE_HASH })).kind,
+    ).toBe('ok')
+    expect(await assertTerminalConsistency(txId)).toBe('COMPLETED')
   })
 })

@@ -59,6 +59,7 @@ const userA: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 const userB: Me = { ...userA, id: 'usr_01jc000000e00800000000000b', nickname: 'B' }
 

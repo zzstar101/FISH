@@ -2,6 +2,7 @@ import { Checkbox } from '@fish/ui/checkbox'
 import { Label } from '@fish/ui/label'
 import { createFileRoute } from '@tanstack/react-router'
 import { useLayoutEffect, useState } from 'react'
+import { INITIAL_LOGIN_AGREEMENT_ACCEPTED } from '../features/auth/agreement'
 import { AuthPageShell } from '../features/auth/form'
 import { ScanLoginPanel } from '../features/auth/scan-login'
 import { createAuthSubmissionGate } from '../features/auth/submission-gate'
@@ -22,7 +23,7 @@ export const Route = createFileRoute('/login')({
  */
 function LoginPage() {
   const { redirect } = Route.useSearch()
-  const [agreed, setAgreed] = useState(true)
+  const [agreed, setAgreed] = useState(INITIAL_LOGIN_AGREEMENT_ACCEPTED)
   const [submitting, setSubmitting] = useState(false)
   const [submissionGate] = useState(() => createAuthSubmissionGate(setSubmitting))
   const target = sanitizeRedirect(redirect)

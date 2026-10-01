@@ -22,14 +22,22 @@ export type AuthVariables = { userId: string; me: Me }
 export function createRequireAuth(deps: {
   cookie: SessionCookie
   service: AuthService
+  /**
+   * 已认证用户的「心跳」回调（#359 第五点）：在线态的口径是「最近一次已认证活动」，
+   * 而这条中间件是**全部**已认证 HTTP 请求的唯一入口，所以在这里记时刻。
+   * 拿不到身份（401）不回调 —— 没登录的请求不构成任何人的在线证据。
+   */
+  onAuthenticated?: (userId: string) => void
 }): MiddlewareHandler<{ Variables: AuthVariables }> {
   return async (c, next) => {
     const token = deps.cookie.read(c)
     const me = token ? await deps.service.loadMe(token) : null
     if (!me) return c.json(errorBody('UNAUTHENTICATED', '请先登录'), 401)
 
-    c.set('userId', decodePublicId(PUBLIC_ID_PREFIX.user, me.id))
+    const userId = decodePublicId(PUBLIC_ID_PREFIX.user, me.id)
+    c.set('userId', userId)
     c.set('me', me)
+    deps.onAuthenticated?.(userId)
     await next()
   }
 }

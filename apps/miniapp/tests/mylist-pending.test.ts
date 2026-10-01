@@ -32,6 +32,8 @@ function conversation(over: Partial<ConversationDto> = {}): ConversationDto {
       coverUrl: null,
     },
     counterpart: { id: 'u-buyer', nickname: '林知遥', avatarUrl: null },
+    // 契约必填（#359 第五点）；这里取「从未活动过」这一档，用例不关心在线态
+    counterpartPresence: { online: false, lastActiveAt: null },
     unreadCount: 0,
     counterpartLastReadAt: null,
     lastMessage: null,
