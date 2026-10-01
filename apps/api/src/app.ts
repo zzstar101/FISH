@@ -3,6 +3,7 @@ import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import type { UserPresence } from '@fish/contracts/users/schema'
+import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
 import type {
   AiPolishEnv,
@@ -10,9 +11,12 @@ import type {
   MailTransportEnv,
   MeetupTokenEnv,
   ServerEnv,
+  VisualEmbeddingEnv,
+  VisualParseEnv,
 } from '@fish/shared/env'
 import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -83,6 +87,12 @@ import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createUsersRouter } from './modules/users/router'
 import { createPublicUserService } from './modules/users/service'
 import { createSqlPublicUserStore } from './modules/users/store'
+import { createVisualParser } from './modules/visual-search/parse'
+import { createVisualSearchRateLimiter } from './modules/visual-search/rate-limit'
+import { createVisualSearchRouter } from './modules/visual-search/router'
+import { createVisualSearchService } from './modules/visual-search/service'
+import { createVisualSearchStore } from './modules/visual-search/store'
+import { createVisualSearchSubjectResolver } from './modules/visual-search/subject'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
 import { createWishesRouterFromDb } from './modules/wishes/router'
 import { API_VERSION } from './version'
@@ -137,6 +147,17 @@ export function createApp(
    * 审核通过（生产由 index.ts 显式传入；local 在生产直接启动失败，见 `@fish/shared/env`）。
    */
   moderationEnv: ContentModerationEnv = { transport: 'local' },
+  /**
+   * 视觉向量化配置（#324 M3）。`index.ts` 用 `loadVisualEmbeddingEnv()` 做启动期校验后传入；
+   * 默认 `stub` 只服务测试与本机，**生产不可能静默降级**——`loadVisualEmbeddingEnv()` 在
+   * `NODE_ENV=production` 遇到 stub 会直接抛错（与 worker 的 `EMBEDDING_TRANSPORT` 同一取舍）。
+   */
+  visualEmbeddingEnv: VisualEmbeddingEnv = { transport: 'stub' },
+  /**
+   * OCR/VLM 语义解析（#324 M5）。默认 `off` = 只走图片向量与结构化信号，不产生第二次上游调用、
+   * 也不把查询图再发一次；开启后文本路才参与召回（见 `visual-search/parse.ts` 的 fail-open）。
+   */
+  visualParseEnv: VisualParseEnv = { transport: 'off' },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -309,6 +330,48 @@ export function createApp(
       requireAuth: auth.requireAuth,
       service: uploadService,
       guard: restrictionGuard,
+    }),
+  )
+
+  // 拍照识图搜索（#324 M4）：两个端点都**匿名可用**（Q6=B），所以整条不挂 requireAuth，
+  // 只做可选身份解析（登录按 userId 计配额，匿名按会话 + 出口 IP 两条都算）。
+  //
+  // 视觉向量化 provider 在这里装配一次：查询图要现场向量化，而列表侧（worker 的
+  // VISUAL_EMBED_LISTING 回填）用的是**同一个** `VISUAL_EMBEDDING_MODEL`——两边的向量只有
+  // 同模型同维度才能互相比较，所以模型名必须来自同一处配置而不是各自写死。
+  //
+  // 存储实例**另建一个**（复用同一个 S3 客户端）：查询图是私有临时对象，presign 有效期按
+  // `VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS`（300s）缩短，比商品图 staging 的 600s 更短；
+  // 而 `expiresInSeconds` 是实例级配置，改共享实例会连带改掉商品图上传的窗口。
+  const visualStorage = createBunS3MediaStorage({
+    client: new Bun.S3Client({
+      accessKeyId: env.S3_ACCESS_KEY_ID,
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      bucket: env.S3_BUCKET,
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+    }),
+    publicUrlBase: env.S3_PUBLIC_URL,
+    expiresInSeconds: VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS,
+  })
+  const visualEmbeddingProvider = createVisualEmbeddingProvider(visualEmbeddingEnv)
+  const visualSearchService = createVisualSearchService({
+    store: createVisualSearchStore(db),
+    storage: visualStorage,
+    provider: visualEmbeddingProvider,
+    parser: createVisualParser(visualParseEnv),
+    rateLimiter: createVisualSearchRateLimiter(db),
+  })
+  app.route(
+    '/visual-search',
+    createVisualSearchRouter({
+      service: visualSearchService,
+      // 复用面交码那把 API-only 密钥做匿名主体的 HMAC：领域分隔（session / ip）在 scope 前缀里做，
+      // 不为一个派生值再引入一份新配置。
+      subjects: createVisualSearchSubjectResolver(meetupEnv.MEETUP_TOKEN_SECRET),
+      resolveViewerId: auth.resolveViewerId,
+      resolveClientIp: (c) =>
+        trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
     }),
   )
 

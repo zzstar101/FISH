@@ -15,7 +15,13 @@ import { primaryKey, timestamps } from './common'
 export const jobStatusEnum = pgEnum('job_status', ['PENDING', 'RUNNING', 'DONE', 'FAILED'])
 
 /** job 类型跨 Owner 增长，用 text + TS 收窄，避免每加一类都要改 migration。 */
-export type JobType = 'MATCH_LISTING' | 'MATCH_WISH' | 'EMBED_LISTING' | 'EMBED_WISH'
+export type JobType =
+  | 'MATCH_LISTING'
+  | 'MATCH_WISH'
+  | 'EMBED_LISTING'
+  | 'EMBED_WISH'
+  /** #324 M8：为 Listing 封面生成视觉向量（回填与"换图后重算"共用同一种 job）。 */
+  | 'VISUAL_EMBED_LISTING'
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' })
 
@@ -69,5 +75,10 @@ export const jobs = pgTable(
     uniqueIndex('jobs_embed_wish_wish_id_uidx')
       .on(sql`(${table.payload}->>'wishId')`)
       .where(sql`${table.type} = 'EMBED_WISH' AND ${table.status} = 'PENDING'`),
+    // #324 M8：视觉回填的幂等键，形状与 EMBED_LISTING 完全一致（只锁待执行那一条）。
+    // 封面被换掉时"再投一条"是必须能成功的——所以不能把 DONE 行也纳入唯一键。
+    uniqueIndex('jobs_visual_embed_listing_listing_id_pending_uidx')
+      .on(sql`(${table.payload}->>'listingId')`)
+      .where(sql`${table.type} = 'VISUAL_EMBED_LISTING' AND ${table.status} = 'PENDING'`),
   ],
 )

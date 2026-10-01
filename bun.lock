@@ -18,6 +18,7 @@
         "@fish/contracts": "workspace:*",
         "@fish/db": "workspace:*",
         "@fish/shared": "workspace:*",
+        "@fish/visual-embedding": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.13.7",
         "tencentcloud-sdk-nodejs-ims": "^4.1.311",
@@ -88,6 +89,7 @@
         "@fish/contracts": "workspace:*",
         "@fish/db": "workspace:*",
         "@fish/shared": "workspace:*",
+        "@fish/visual-embedding": "workspace:*",
         "drizzle-orm": "^0.45.2",
       },
     },
@@ -137,6 +139,15 @@
       },
       "peerDependencies": {
         "react": "^19.3.0",
+      },
+    },
+    "packages/visual-embedding": {
+      "name": "@fish/visual-embedding",
+      "version": "0.0.0",
+      "dependencies": {
+        "@fish/contracts": "workspace:*",
+        "@fish/db": "workspace:*",
+        "@fish/shared": "workspace:*",
       },
     },
   },
@@ -458,6 +469,8 @@
     "@fish/shared": ["@fish/shared@workspace:packages/shared"],
 
     "@fish/ui": ["@fish/ui@workspace:packages/ui"],
+
+    "@fish/visual-embedding": ["@fish/visual-embedding@workspace:packages/visual-embedding"],
 
     "@fish/web-pc": ["@fish/web-pc@workspace:apps/web-pc"],
 
