@@ -165,11 +165,13 @@ describe('app 级接线：本人留言读 + 删除', () => {
       )
     ).json()) as { id: string }
     await app.request(`/comments/${top.id}/replies`, json({ content: '我自己的回复' }, cookie))
-    // 别人的回复：级联删除会连它一起删掉，但它从来不在「我的留言」总数里。
+    // 别人的回复：级联删除会连它一起删掉。它**不计入我的总数**，但计入**对方**的总数
+    // —— 回复也属于作者自己的留言列表。
     await app.request(`/comments/${top.id}/replies`, json({ content: '别人的回复' }, other))
 
-    // 我的总数 = 顶层 1 + 我自己的回复 1 = 2。
+    // 我的总数 = 顶层 1 + 我自己的回复 1 = 2；对方的总数 = 他写的那条回复 = 1。
     expect((await listMine(cookie)).body.total).toBe(2)
+    expect((await listMine(other)).body.total).toBe(1)
 
     const removed = await app.request(`/comments/${top.id}`, {
       method: 'DELETE',
@@ -179,7 +181,8 @@ describe('app 级接线：本人留言读 + 删除', () => {
     expect(await removed.json()).toEqual({ deleted: 3 })
     // 而我的总数只减 2 —— 端上**不能**拿 `deleted` 去减，否则会漂成负数。
     expect((await listMine(cookie)).body.total).toBe(0)
-    // 对方的列表全程不受影响（他写的回复被级联删了，但那不是他的「留言」计数口径之外的事）
+    // 跨账号影响是**真实存在**的：级联把别人写的回复也删了，对方的总数同样从 1 掉到 0。
+    // 这是「删自己的留言会连带影响别人的列表」这个语义的固定点，如实断言，不用注释带过。
     expect((await listMine(other)).body.total).toBe(0)
   })
 
