@@ -1,6 +1,6 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll, usePullDownRefresh } from '@tarojs/taro'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -23,7 +23,6 @@ import {
 } from '@/features/following/load'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { cancellable } from '@/lib/cancellable'
-import { readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import './index.scss'
 
@@ -55,8 +54,15 @@ import './index.scss'
  *
  * ## 「关注动态」是状态页
  *
- * 没有动态流的数据源。这一档如实写成「未上线」状态页，**不编一屏假动态**（稿决策③）。
- * 稿里第三档「兴趣圈」已被 Owner 删除（决策④），不恢复。
+ * 没有动态流的数据源（没有 follows 表就没有动态）。这一档如实写成「未上线」状态页，
+ * **不编一屏假动态**（稿决策③）。稿里第三档「兴趣圈」已被 Owner 删除（决策④），不恢复。
+ *
+ * ## 顶栏吸顶（`components/top-bar` 的 glass 变体）
+ *
+ * 稿的 `.pagehead`（导航 + 两档 tab）在**滚动容器之外**，天然不随内容滚；真机上是页面级
+ * 滚动，要同一个观感就得把这两行钉住。所以顶栏用一级页的 `top-bar`（`fixed` + 玻璃底 +
+ * `below` 副行 + `spacer` 占位），而不是二级页的漂浮 `nav-bar`。标题走 `title` /
+ * `titleEm` 左对齐双色分字（#386 批次 2，Owner 拍板对齐 history，原居中 hack 已拆）。
  */
 
 /** 两档下划线 tab：关注的人 / 关注动态（稿决策②） */
@@ -80,12 +86,6 @@ export default function Following() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
-
-  /**
-   * 顶栏栅格（状态栏高 / 内容行高）。**必须来自 `lib/nav-metrics` 的运行时反推**，
-   * 不能照抄稿的固定值：真机上胶囊位置逐机不同。
-   */
-  const metrics = useMemo(() => readNavMetrics(), [])
 
   const [tab, setTab] = useState<FollowingTab>('people')
   const [load, setLoad] = useState<FollowingLoad>({ kind: 'loading' })
@@ -300,23 +300,20 @@ export default function Following() {
     <View className="fw">
       <View className="fw__bg" />
 
-      {/* 顶栏主行 + 两档 tab 副行：同一块玻璃，钉在顶部 */}
+      {/*
+        顶栏主行 + 两档 tab 副行：同一块玻璃，钉在顶部。
+
+        标题改走 `title` / `titleEm`（#386 批次 2，Owner 拍板对齐 history 的左对齐版式）：
+        「我的」黑 + 「关注」品牌色，紧随返回钮 —— 原先为屏幕居中抄的那份绝对定位
+        中槽 hack（fw__navtitle）随之拆除。同款居中写法仍在 mylist / comments（该页
+        也待收编）。
+      */}
       <TopBar
         variant="glass"
         spacer
         back
-        center={
-          <View
-            className="fw__navtitle"
-            style={{
-              top: `${metrics.statusBarHeight}px`,
-              height: `${metrics.contentHeight}px`,
-            }}
-          >
-            <Text>我的</Text>
-            <Text className="fw__navtitle-em">关注</Text>
-          </View>
-        }
+        title="我的"
+        titleEm="关注"
         below={
           <View className="fw__tabs">
             {TABS.map((item) => (

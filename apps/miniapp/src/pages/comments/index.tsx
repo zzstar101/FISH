@@ -1,11 +1,11 @@
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
-import NavBar from '@/components/nav-bar'
+import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { loadMyComments } from '@/features/comments/load'
@@ -23,6 +23,7 @@ import {
   viewTargetOf,
 } from '@/features/comments/mine'
 import { formatAmount } from '@/lib/money'
+import { readNavMetrics } from '@/lib/nav-metrics'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 import './index.scss'
 
@@ -69,6 +70,12 @@ export default function MyComments() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
+  /**
+   * 顶栏栅格（状态栏高 / 内容行高），给居中标题定「与胶囊同行」的那条水平带。
+   * **必须来自 `lib/nav-metrics` 的运行时反推**，不能照抄稿的固定值：真机上胶囊
+   * 位置逐机不同，稿里那个是画出来的假胶囊。
+   */
+  const metrics = useMemo(() => readNavMetrics(), [])
 
   const [items, setItems] = useState<MyComment[]>([])
   const [demo, setDemo] = useState(false)
@@ -245,8 +252,58 @@ export default function MyComments() {
     <View className="cmt">
       <View className="cmt__bg" />
 
-      {/* 导航条右侧没有页面级动作（删除长在每一行上），标题居中 */}
-      <NavBar title="我的评论" titleAlign="center" />
+      {/*
+        顶栏统一（#386 批次 2，Owner 拍板「跟订单两页一样」）：`components/top-bar` 的
+        glass 变体 —— 返回钮 + 居中双色标题「我的|评论」，内容从玻璃底下滚过；
+        `spacer` 占住主行高度，原先给漂浮导航留的 168px 头衬随之退役（见 scss）。
+        右侧没有页面级动作（删除长在每一行上）。
+
+        标题走**中槽 + 绝对定位到整栏中线**（与 mylist / following 的既有写法同一套）：
+        `title` prop 渲染出的标题紧随返回钮左对齐，而这一版要求屏幕水平居中。组件层
+        已在 PR #388 里补了 `titleAlign="center"`，本批基于 main 时它还没合入 ——
+        #388 合入后把这里与 mylist / following 一起收编成一行 prop。
+      */}
+      <TopBar
+        variant="glass"
+        spacer
+        back
+        center={
+          <View
+            className="cmt__navtitle"
+            style={{
+              top: `${metrics.statusBarHeight}px`,
+              height: `${metrics.contentHeight}px`,
+            }}
+          >
+            <Text>我的</Text>
+            {/* 稿 `.mp-title .hl{color:var(--brand)}`：尾段走品牌色 */}
+            <Text className="cmt__navtitle-em">评论</Text>
+          </View>
+        }
+        below={
+          /* 分段进 `below` 槽与主行连成同一块玻璃（Owner 2026-10-01 拍板「tab 栏也要
+             吸顶」，订单两页同款）；只按 `demo` 显隐，理由见上面那段说明。 */
+          demo ? (
+            <View className="cmt__segwrap">
+              <View className="cmt__seg">
+                {SEGMENTS.map((seg) => {
+                  const on = seg.key === segment
+                  return (
+                    <View
+                      key={seg.key}
+                      className={`cmt__seg-item${on ? ' is-on' : ''}`}
+                      onClick={() => setSegment(seg.key)}
+                    >
+                      <Text>{seg.label}</Text>
+                      <Text className="cmt__seg-n num">{counts[seg.key]}</Text>
+                    </View>
+                  )
+                })}
+              </View>
+            </View>
+          ) : undefined
+        }
+      />
 
       {/*
         分段胶囊**只在演示构建里有**（`demo`）。
@@ -260,31 +317,18 @@ export default function MyComments() {
         任何门禁）。两页取舍不同，因为那边的分段切完至少会换一套空态文案、这边不会。
         别拿这句当先例引用。
 
-        `.cmt__head` 本身**始终渲染**：它的 `padding-top: 168px` 是给漂浮导航条留的
-        顶栏高度，拿掉整块会让空态钻到返回钮与标题下面。
+        分段胶囊挂在 `top-bar` 的 `below` 槽里（吸顶玻璃的一部分），整体只按 `demo`
+        显隐；真实构建下副行为空、顶栏只剩主行。
 
         ⚠️ 将来聚合端点落地时**不要照抄 `demo` 这个条件**：那时 `demo` 是 `false`
         而页面有真数据，分段的显隐该改判「有没有可筛的东西」（即真实结果非空）。
       */}
-      <View className="cmt__head">
-        {demo ? (
-          <View className="cmt__seg">
-            {SEGMENTS.map((seg) => {
-              const on = seg.key === segment
-              return (
-                <View
-                  key={seg.key}
-                  className={`cmt__seg-item${on ? ' is-on' : ''}`}
-                  onClick={() => setSegment(seg.key)}
-                >
-                  <Text>{seg.label}</Text>
-                  <Text className="cmt__seg-n num">{counts[seg.key]}</Text>
-                </View>
-              )
-            })}
-          </View>
-        ) : null}
-      </View>
+      {/*
+        副行占位：`spacer` 只含主行。演示构建多一条分段行（24 上衬 + 88 分段 + 8 下衬
+        = 120px，与 `.cmt__segwrap` 的 padding 逐项对应——改它或分段高度必须同步这里）；
+        真实构建没有分段，只留 24px 呼吸位。
+      */}
+      <View className={demo ? 'cmt__header-gap is-demo' : 'cmt__header-gap'} />
 
       <View className="cmt__body">
         {loading ? (

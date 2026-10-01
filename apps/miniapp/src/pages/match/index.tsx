@@ -71,7 +71,17 @@ export default function Match() {
   const [wish, setWish] = useState<MockWish | null>(null)
   /** 回到顶部钮（共享组件）：滚过一屏浮现 */
   const [showTop, setShowTop] = useState(false)
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+  /**
+   * 顶栏两态（#386 批次 2）：返回键常驻吸顶，滚过阈值后玻璃底 + 标题「匹配结果」
+   * 浮现在返回键隔壁（Owner 2026-10-01 拍板，同 `pages/settings`）。
+   * 阈值 40 设备 px，与 `pages/user` 的 `GLASS_AT` 同值；与回顶判定共用同一次滚动回调。
+   */
+  const REVEAL_AT = 40
+  const [revealed, setRevealed] = useState(false)
+  usePageScroll(({ scrollTop }) => {
+    setShowTop(scrollTop > BACK_TOP_THRESHOLD)
+    setRevealed(scrollTop > REVEAL_AT)
+  })
   const backToTop = () => {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
   }
@@ -297,7 +307,7 @@ export default function Match() {
     <View className="match">
       <View className="match__bg" />
 
-      <NavBar title="匹配结果" />
+      <NavBar fixed glass={revealed} title={revealed ? '匹配结果' : undefined} />
 
       <View className="match__head">
         <Text className="match__title">匹配结果</Text>
