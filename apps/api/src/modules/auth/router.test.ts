@@ -1159,6 +1159,184 @@ describe('POST /auth/phone/bind（#86 C：手机号绑定 stub）', () => {
   })
 })
 
+describe('POST /auth/phone/bind（#204：WECHAT_TRANSPORT=live 真实换取）', () => {
+  const originalFetch = globalThis.fetch
+
+  /**
+   * **每个用例一个新 app**：`access_token` 缓存挂在 auth 模块实例上，跨用例复用同一个 app
+   * 会让上一个用例取到的凭证漏到下一个用例，把「凭证失效后是否真的重新取」测成假象。
+   */
+  function createLiveApp() {
+    return createApp(
+      { ...loadServerEnv(), DATABASE_URL: scratchUrl },
+      undefined,
+      undefined,
+      undefined,
+      {
+        transport: 'live',
+        appid: 'wx-live-test',
+        appSecret: 'secret-live-test',
+        qrEnvVersion: 'release',
+      },
+    )
+  }
+
+  type LiveApp = ReturnType<typeof createLiveApp>
+
+  /** 注册 + 登录一个用户，取回可用于 liveApp 的会话 cookie（两个 app 共用同一个 scratch 库）。 */
+  async function cookieFor(studentNo: string): Promise<string> {
+    await register({ studentNo, nickname: `live-${studentNo.slice(-3)}` })
+    return sessionCookie(await login(studentNo))
+  }
+
+  const okPhone = (purePhoneNumber = '13800138000') =>
+    new Response(JSON.stringify({ errcode: 0, errmsg: 'ok', phone_info: { purePhoneNumber } }), {
+      status: 200,
+    })
+
+  /**
+   * 把微信两个上游都接到可控桩上：`stable_token` 与 `getuserphonenumber`。
+   * 未预期的上游请求直接抛错——静默返回空响应会把「根本没调对接口」变成一次假绿灯。
+   */
+  function stubWechat(phone: () => Response | Promise<Response>) {
+    let tokenCalls = 0
+    globalThis.fetch = (async (input: unknown) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/cgi-bin/stable_token')) {
+        tokenCalls += 1
+        return new Response(
+          JSON.stringify({ access_token: `tok-${tokenCalls}`, expires_in: 7200 }),
+          { status: 200 },
+        )
+      }
+      if (path.endsWith('/wxa/business/getuserphonenumber')) return phone()
+      throw new Error(`未预期的上游请求：${path}`)
+    }) as unknown as typeof fetch
+    return () => tokenCalls
+  }
+
+  async function bindOnLive(app: LiveApp, cookie: string, code: string) {
+    return app.request('/auth/phone/bind', postWith(cookie, { code }))
+  }
+
+  async function meOnLive(app: LiveApp, cookie: string) {
+    const res = await app.request('/me', withCookie(cookie))
+    return AuthResponseSchema.parse(await res.json()).user
+  }
+
+  test('live 换取成功：200 出脱敏号，/me 出 phoneBound + maskedPhone，响应不含明文', async () => {
+    const app = createLiveApp()
+    const cookie = await cookieFor('202101000301')
+    stubWechat(() => okPhone())
+    try {
+      const res = await bindOnLive(app, cookie, 'wx-phone-code')
+      expect(res.status).toBe(200)
+      const text = await res.text()
+      expect(JSON.parse(text)).toEqual({ phoneBound: true, maskedPhone: '138****8000' })
+      expect(text).not.toContain('13800138000')
+
+      const me = await meOnLive(app, cookie)
+      expect(me.phoneBound).toBe(true)
+      expect(me.maskedPhone).toBe('138****8000')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('code 无效（40029）：422 PHONE_CODE_INVALID，不写库', async () => {
+    const app = createLiveApp()
+    const cookie = await cookieFor('202101000302')
+    stubWechat(() => new Response(JSON.stringify({ errcode: 40029, errmsg: 'invalid code' })))
+    try {
+      const res = await bindOnLive(app, cookie, 'stale-code')
+      expect(res.status).toBe(422)
+      expect(await res.json()).toMatchObject({ error: { code: 'PHONE_CODE_INVALID' } })
+      expect((await meOnLive(app, cookie)).phoneBound).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('平台侧故障（45011 频控）：502 PHONE_UPSTREAM_UNAVAILABLE，不伪造成 422 用户错误', async () => {
+    const app = createLiveApp()
+    const cookie = await cookieFor('202101000303')
+    stubWechat(
+      () =>
+        new Response(
+          JSON.stringify({ errcode: 45011, errmsg: 'api freq out of limit secret-leak' }),
+        ),
+    )
+    try {
+      const res = await bindOnLive(app, cookie, 'ok-code')
+      expect(res.status).toBe(502)
+      const text = await res.text()
+      expect(JSON.parse(text)).toMatchObject({ error: { code: 'PHONE_UPSTREAM_UNAVAILABLE' } })
+      // 上游原文（含 errmsg）不进响应体。
+      expect(text).not.toContain('secret-leak')
+      expect((await meOnLive(app, cookie)).phoneBound).toBe(false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('上游不可达：502 而不是 422；已有会话不被破坏', async () => {
+    const app = createLiveApp()
+    const cookie = await cookieFor('202101000304')
+    stubWechat(() => {
+      throw new Error('ECONNREFUSED secret-live-test')
+    })
+    try {
+      const res = await bindOnLive(app, cookie, 'ok-code')
+      expect(res.status).toBe(502)
+      const text = await res.text()
+      expect(JSON.parse(text)).toMatchObject({ error: { code: 'PHONE_UPSTREAM_UNAVAILABLE' } })
+      expect(text).not.toContain('secret-live-test')
+
+      // 绑定失败不得破坏有效 FISH 会话（#204 安全冻结项）。
+      const meRes = await app.request('/me', withCookie(cookie))
+      expect(meRes.status).toBe(200)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('凭证失效后重新取凭证：同一进程第二次绑定仍成功（取码与手机号共用一份缓存）', async () => {
+    const app = createLiveApp()
+    const cookie = await cookieFor('202101000305')
+    let tokenCalls = 0
+    let phoneCalls = 0
+    globalThis.fetch = (async (input: unknown) => {
+      const path = new URL(String(input)).pathname
+      if (path.endsWith('/cgi-bin/stable_token')) {
+        tokenCalls += 1
+        return new Response(
+          JSON.stringify({ access_token: `tok-${tokenCalls}`, expires_in: 7200 }),
+          { status: 200 },
+        )
+      }
+      phoneCalls += 1
+      // 第一次回「凭证失效」，第二次成功：证明 40001 确实把缓存丢了。
+      return phoneCalls === 1
+        ? new Response(JSON.stringify({ errcode: 40001, errmsg: 'invalid credential' }))
+        : okPhone('13900139000')
+    }) as unknown as typeof fetch
+
+    try {
+      expect((await bindOnLive(app, cookie, 'c1')).status).toBe(502)
+      // 第一次调用只取了一次凭证。
+      expect(tokenCalls).toBe(1)
+
+      const second = await bindOnLive(app, cookie, 'c2')
+      expect(second.status).toBe(200)
+      expect(await second.json()).toEqual({ phoneBound: true, maskedPhone: '139****9000' })
+      // 缓存被丢弃，第二次必须重新取凭证。
+      expect(tokenCalls).toBe(2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
 describe('WECHAT_TRANSPORT=off（#86 评审 P1：stub 与生产隔离）', () => {
   // 不传 wechatEnv = 默认 off：登录 / 绑定入口显式 503，不静默降级 stub。
   const offApp = createApp(

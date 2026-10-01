@@ -27,6 +27,12 @@ import { createWechatAccessTokenService, WechatPlatformError } from '../wechat/a
 import { AuthError } from './errors'
 import { maskPhone } from './me'
 import { type AuthVariables, createRequireAuth } from './middleware'
+import {
+  createLivePhoneResolver,
+  createStubPhoneResolver,
+  PhoneResolveError,
+  type PhoneResolver,
+} from './phone-resolver'
 import { createScanTicketRateLimiter } from './scan-rate-limit'
 import { createScanTicketService } from './scan-service'
 import { createAuthService } from './service'
@@ -105,26 +111,37 @@ export function createAuthModule(options: {
           provider: wechatProvider,
         })
       : null
-  // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
-  const phoneResolver: ((code: string) => string) | null =
-    options.wechat.transport === 'stub' ? (code) => code.trim() : null
-
   /**
-   * 微信平台侧能力（#197）：**整个进程只在这里创建一份**缓存与刷新循环。
+   * 微信平台侧能力（#197 取码 / #204 手机号换取）：**整个进程只在这里创建一份**
+   * `access_token` 缓存与刷新循环。
+   *
+   * `access_token` 是 appid 级的全局单例资源，`invalidate` 也只认自己那份缓存——
+   * 两个客户端各建一套，就会各自拿着一份「已被对方丢弃」的死凭证重试到本地过期。
+   * 所以 `tokens` 在装配层建一次，取码与手机号换取都从它取。
+   *
    * 只有 `live` 才构造——`off` 显式 503、`stub` 生成不了真码（出码为 null，由端上走
-   * 开发者工具），两者都不该去调上游。将来 #204 的手机号换取复用同一个 `tokens` 实例。
+   * 开发者工具）、手机号走 stub 明文语义，两者都不该去调上游。
    */
-  const wechatPlatform: { codes: WechatMiniappCodeClient } | null =
+  const wechatTokens =
     options.wechat.transport === 'live'
-      ? {
-          codes: createWechatMiniappCodeClient({
-            tokens: createWechatAccessTokenService({
-              appid: options.wechat.appid,
-              appSecret: options.wechat.appSecret,
-            }),
-          }),
-        }
+      ? createWechatAccessTokenService({
+          appid: options.wechat.appid,
+          appSecret: options.wechat.appSecret,
+        })
       : null
+  const wechatPlatform: { codes: WechatMiniappCodeClient } | null =
+    wechatTokens !== null
+      ? { codes: createWechatMiniappCodeClient({ tokens: wechatTokens }) }
+      : null
+
+  // 手机号解析与微信登录共用同一 transport（真实接入两者都依赖同一 AppSecret 凭据）。
+  // `off` 下保持 null，绑定入口在 handler 顶部显式 503；`live` 复用上面那份 tokens。
+  const phoneResolver: PhoneResolver | null =
+    options.wechat.transport === 'stub'
+      ? createStubPhoneResolver()
+      : wechatTokens !== null
+        ? createLivePhoneResolver({ tokens: wechatTokens })
+        : null
   const scanTickets = createScanTicketService({ db: options.db, sessions: wechatSessions })
   const scanTicketLimiter = createScanTicketRateLimiter()
 
@@ -165,19 +182,22 @@ export function createAuthModule(options: {
       )
 
     try {
-      // stub：phone code 即明文手机号（getPhoneNumber 真实接入需要企业主体 + AppSecret，
-      // 到位后在 resolver 内调 phonenumber.getPhoneNumber，绑定语义不变）。
-      // off / live 下 phoneResolver 为 null：live 的解析器接入前，绑定入口显式 503，
-      // 绝不把「格式正确的 code」当成已验证的手机号（格式正确 ≠ 持有该号码）。
-      const phone = phoneResolver(parsed.data.code)
-      if (!/^1\d{10}$/.test(phone)) {
-        return c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效'), 422)
-      }
+      // stub：phone code 即明文手机号。live：真实 `getuserphonenumber` 换取，见 phone-resolver。
+      // off 下 phoneResolver 为 null，上面已 503——绝不把「格式正确的 code」当成已验证的手机号
+      // （格式正确 ≠ 持有该号码）。
+      const phone = await phoneResolver.resolve(parsed.data.code)
       await service.bindPhone(c.get('userId'), phone)
       return c.json(
         PhoneBindResponseSchema.parse({ phoneBound: true, maskedPhone: maskPhone(phone) }),
       )
     } catch (error) {
+      // 上游故障与用户 code 错误分开：把「平台不可用」报成 422 PHONE_CODE_INVALID 会让用户
+      // 反复重试同一个必然失败的 code（#204 冻结项：不把全部故障伪装成用户 code 错误）。
+      if (error instanceof PhoneResolveError) {
+        return error.failure === 'code_invalid'
+          ? c.json(errorBody('PHONE_CODE_INVALID', '手机号授权凭证无效或已过期'), 422)
+          : c.json(errorBody('PHONE_UPSTREAM_UNAVAILABLE', '手机号服务暂时不可用，请稍后再试'), 502)
+      }
       return toErrorResponse(c, error)
     }
   })

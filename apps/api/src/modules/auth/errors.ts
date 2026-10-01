@@ -10,7 +10,8 @@ import type { AuthErrorCodeAll } from '@fish/contracts/auth/verification'
  * 状态码取值覆盖三个子域中**经 AuthError 抛出**的那些：#197 的扫码登录需要 404
  * （票据无效，四种原因刻意合并）与 502（平台取码失败），它们必须能走同一条通道，
  * 否则「映射只有一处」的约束会被绕过。仍由 router 直接返回、不经 AuthError 的有
- * `VALIDATION_FAILED`(422)、`WECHAT_DISABLED`(503)、`PHONE_CODE_INVALID`(422)。
+ * `VALIDATION_FAILED`(422)、`WECHAT_DISABLED`(503)、`PHONE_CODE_INVALID`(422)、
+ * `PHONE_UPSTREAM_UNAVAILABLE`(502，#204：上游故障与用户 code 错误必须分开报)。
  */
 export class AuthError extends Error {
   constructor(
