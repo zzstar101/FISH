@@ -442,6 +442,8 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
+        storage,
         projectContent: projectSystemContent,
         onMessageCreated: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {

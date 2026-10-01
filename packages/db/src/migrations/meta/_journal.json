@@ -246,6 +246,13 @@
       "when": 1790842514024,
       "tag": "20261001161514_mighty_madame_web",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790857004439,
+      "tag": "20261001201644_parched_emma_frost",
+      "breakpoints": true
     }
   ]
 }
