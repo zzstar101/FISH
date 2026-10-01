@@ -1,0 +1,170 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 识图入口页。深色底与扫码家族另外两页同一套（`--fg` 打底、返回钮与标题对齐微信胶囊、
+ * 取图框两轴居中，于是 `ScanTabs` 组件自己钉的 `50% + 300px` 正好落在框下缘下方 40px），
+ * 差异是**没有相机层**：取图走 `chooseMedia` 的原生面板（见 `index.tsx` 的说明）。
+ *
+ * 竖直几何按稿子的 375×667 基线排：取图框 500×520 居中 → 切换钮（组件内定位）→
+ * 说明文案 → 主按钮 → 隐私口径。再矮的屏（<667）会让最后两行贴底，与扫码家族
+ * 同一取舍（`pages/scan/index.scss` 的取景框几何也是按这条基线反推的）。
+ */
+
+.scanvis {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--fg);
+}
+
+/* ------------------------------------------------------------ 顶部 */
+
+.scanvis__back {
+  position: absolute;
+  left: 32px;
+  z-index: 5;
+  transform: translateY(-50%);
+  @include float-btn(72px);
+}
+
+.scanvis__back-chevron {
+  width: 18px;
+  height: 18px;
+  border-left: 4px solid var(--fg);
+  border-bottom: 4px solid var(--fg);
+  border-radius: 2px;
+  transform: rotate(45deg);
+  margin-left: 6px;
+}
+
+.scanvis__title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--surface);
+}
+
+/* --------------------------------------------------------- 取图提示框 */
+
+.scanvis__frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: 500px;
+  height: 520px;
+  margin: -260px 0 0 -250px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed rgba(255, 255, 255, 0.22);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.scanvis__frame-hint {
+  font-size: 26px;
+  letter-spacing: 0.02em;
+  color: var(--on-dark);
+}
+
+/* 四角标记：与扫一扫页取景框同一套角标语言（只描两边、贴住框角） */
+.scanvis__cnr {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border: 4px solid var(--surface);
+  opacity: 0.9;
+}
+
+.scanvis__cnr--tl {
+  left: -2px;
+  top: -2px;
+  border-right: 0;
+  border-bottom: 0;
+  border-top-left-radius: 28px;
+}
+
+.scanvis__cnr--tr {
+  right: -2px;
+  top: -2px;
+  border-left: 0;
+  border-bottom: 0;
+  border-top-right-radius: 28px;
+}
+
+.scanvis__cnr--bl {
+  left: -2px;
+  bottom: -2px;
+  border-right: 0;
+  border-top: 0;
+  border-bottom-left-radius: 28px;
+}
+
+.scanvis__cnr--br {
+  right: -2px;
+  bottom: -2px;
+  border-left: 0;
+  border-top: 0;
+  border-bottom-right-radius: 28px;
+}
+
+/* --------------------------------------------------------- 文案与主按钮 */
+
+.scanvis__lead {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 372px);
+  z-index: 2;
+  text-align: center;
+  font-size: 26px;
+  color: var(--on-dark);
+}
+
+.scanvis__cta {
+  position: absolute;
+  left: 64px;
+  right: 64px;
+  top: calc(50% + 424px);
+  z-index: 2;
+  height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 28px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  @include pressable;
+
+  &.is-busy {
+    opacity: 0.72;
+  }
+}
+
+.scanvis__notes {
+  position: absolute;
+  left: 48px;
+  right: 48px;
+  top: calc(50% + 560px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.scanvis__note {
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--on-dark);
+}
