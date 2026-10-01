@@ -20,6 +20,7 @@
 | [../README.md](../README.md) | 最小启动路径与常用命令 |
 | [design/issue-147-transaction-invariants.md](design/issue-147-transaction-invariants.md) | #147 交易 / 面交剩余项设计方案（两个 PR 的切分、不变量清单、验证门禁） |
 | [design/issue-323-r1-event-tracking.md](design/issue-323-r1-event-tracking.md) | #323 R1 行为埋点与推荐归因契约（事件/表/索引、接口、幂等与拒收口径、隐私与保留策略、R1 的验证） |
+| [design/issue-74-watchers-definition.md](design/issue-74-watchers-definition.md) | #74「谁想要」（Watchers）来源定义冻结：来源 / 去重 / 权限 / 隐私 / 与 Wish·Match·收藏·关注的关系 / 计数口径，及与现有实现的核对记录 |
 
 ## 关于文档职责
 
