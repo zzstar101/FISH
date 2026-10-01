@@ -369,9 +369,9 @@ export default function Feedback() {
         </View>
         <Text className="fb__title">告诉我们哪里不对</Text>
         <Text className="fb__sub">
-          你的反馈我们
-          <Text className="fb__strong fb__strong--fg">会逐条阅读</Text>
-          。需要向你了解情况时，我们会通过你留下的联系方式与你联系。
+          反馈内容当前
+          <Text className="fb__strong fb__strong--fg">保存在这台设备上</Text>
+          ，不会上传；反馈通道接入后，我们会逐条阅读，并通过你留下的联系方式与你联系。
         </Text>
       </View>
 
