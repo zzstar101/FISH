@@ -7,6 +7,7 @@ import { Link } from '@tanstack/react-router'
 import {
   ChevronRight,
   CircleDollarSign,
+  Flag,
   Heart,
   PackageCheck,
   PackageOpen,
@@ -17,7 +18,6 @@ import {
 import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
 import { useLogout } from '../auth/queries'
-import { markExplicitLogout } from '../auth/remembered-credentials'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 
@@ -46,8 +46,6 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
     setLogoutError(null)
     try {
       await logout.mutateAsync()
-      // 登出会整页跳到 /pc/login；不打抑制标志，自动登录会把用户立刻签回去。
-      markExplicitLogout()
       window.location.assign('/pc/login')
     } catch {
       setLogoutError('退出登录失败，请稍后重试')
@@ -76,11 +74,21 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2.5">
               <h2 className="truncate font-semibold text-2xl">{user.nickname}</h2>
-              {user.authStatus === 'VERIFIED' ? (
-                <Badge variant="success">已认证</Badge>
-              ) : (
-                <Badge variant="secondary">未认证</Badge>
-              )}
+              {/* 徽章本身就是认证入口（#380）：未认证时点它去 /verify 完成教育邮箱验证。 */}
+              <Link
+                aria-label={user.authStatus === 'VERIFIED' ? '查看校园认证' : '去完成校园认证'}
+                className="inline-flex items-center gap-1"
+                to="/verify"
+              >
+                {user.authStatus === 'VERIFIED' ? (
+                  <Badge variant="success">已认证</Badge>
+                ) : (
+                  <Badge shape="pill" variant="secondary">
+                    未认证 · 去认证
+                  </Badge>
+                )}
+                <ChevronRight className="size-3.5 text-ink-3" />
+              </Link>
             </div>
             <p className="mt-2 text-ink-3 text-sm">
               {user.phoneBound ? `手机号 ${user.maskedPhone ?? '已绑定'}` : '未绑定手机号'}
@@ -132,6 +140,23 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           to="/wish"
         />
       </section>
+
+      <Link to="/reports">
+        <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-xl bg-surface-2 text-brand">
+                <Flag className="size-5" />
+              </span>
+              <div>
+                <h2 className="font-semibold">我的举报</h2>
+                <p className="mt-0.5 text-ink-3 text-sm">查看你提交过的举报与处理进度</p>
+              </div>
+            </div>
+            <ChevronRight className="size-4 shrink-0 text-ink-3" />
+          </div>
+        </Card>
+      </Link>
 
       <Card className="gap-0 border border-line p-6">
         <div className="flex items-center justify-between gap-4">

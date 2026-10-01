@@ -1,1 +1,0 @@
-ALTER TABLE "visual_search_attempts" ADD CONSTRAINT "visual_search_attempts_subject_type_allowed" CHECK ("visual_search_attempts"."subject_type" in ('user', 'ip', 'session'));

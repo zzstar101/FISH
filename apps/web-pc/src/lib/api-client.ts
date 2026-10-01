@@ -22,14 +22,14 @@ export class ApiError extends Error {
 
 /**
  * 契约冻结的「跳登录」判据：**401 且 code 为 `UNAUTHENTICATED`**。
- * 裸 401 不算 —— `/auth/login` 的 401 是 `INVALID_CREDENTIALS`，属于登录表单的行内错误。
+ * 裸 401 不算 —— 带业务错误码的 401（例如 `INVALID_CREDENTIALS`）属于页面内错误，不是「未登录」。
  */
 export function isUnauthenticatedError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 401 && error.code === 'UNAUTHENTICATED'
 }
 
 /**
- * 统一请求入口。只接受相对路径（`/auth/login` 这样、不含 `/api` 前缀），
+ * 统一请求入口。只接受相对路径（`/me` 这样、不含 `/api` 前缀），
  * 对外拼成 `/api/...`，由 Vite 代理去掉前缀转发到 API（architecture.md §5.1）。
  *
  * 同源部署，cookie 自动携带，因此不需要 `credentials`。

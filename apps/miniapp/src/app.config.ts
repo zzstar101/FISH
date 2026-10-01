@@ -10,6 +10,7 @@ export default defineAppConfig({
     'pages/search/index',
     'pages/listing-detail/index',
     'pages/conversation/index',
+    'pages/send-listing/index',
     'pages/orders-buy/index',
     'pages/orders-sell/index',
     'pages/transaction-meetup/index',

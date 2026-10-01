@@ -372,11 +372,14 @@ describe('createVisualSearchStore', () => {
   })
 
   test('loadListings 只返回公开可见商品，且字段齐全可喂给 ListingCardSource', async () => {
+    // 卖家显式指定，才能断言 `seller` 子集真的来自 join 而不是常量。
+    const seller = await createUser()
     const visible = await createListing({
       title: '在售可见商品',
       priceCents: 2599,
       urgent: true,
       negotiable: true,
+      sellerId: seller,
     })
     const sold = await createListing({ status: 'SOLD' })
     const review = await createListing({ moderationStatus: 'REVIEW' })
@@ -398,6 +401,12 @@ describe('createVisualSearchStore', () => {
       negotiable: true,
       free: false,
       createdAt: expect.any(Date),
+      seller: {
+        id: seller,
+        nickname: '视觉搜索 store 测试',
+        avatarUrl: null,
+        authStatus: 'UNVERIFIED',
+      },
     })
 
     // 真的喂给下游映射函数：字段缺失/类型不对会让 ListingCardSchema 解析失败返回 null。
