@@ -1,4 +1,6 @@
 import type { Me } from '@fish/contracts/auth/user'
+import type { MessageDto } from '@fish/contracts/chat/schema'
+import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import {
   type ListingDetail,
@@ -17,6 +19,12 @@ import {
 } from '@fish/contracts/profile/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
+  type MeetupTokenResponse,
+  type MeetupTokenStatusResponse,
+  type MeetupVerificationResponse,
+  meetupTokenResponseSchema,
+  meetupTokenStatusResponseSchema,
+  meetupVerificationResponseSchema,
   type TransactionDto,
   type TransactionListResponse,
   type TransactionRole,
@@ -131,6 +139,105 @@ export async function cancelTransaction(id: string): Promise<TransactionDto> {
   return transactionDtoSchema.parse(
     await apiRequest(TRANSACTION_ROUTES.cancel(id), { method: 'POST' }),
   )
+}
+
+/**
+ * 卖家接受提案：**唯一会创建交易行的端点**。
+ *
+ * 金额取提案消息里的值（提案不落库，服务端无处可读，所以由端上重传）。
+ * 409 `LISTING_NOT_ACTIVE` 覆盖「输给并发买家」与「商品已非 ACTIVE」两种情形，
+ * 且**不得**直译成「接受失败」——响应丢失后重试收到 409 时，交易可能已在上一次创建；
+ * 调用方须以会话内 `tx.accepted` 或 `GET /transactions` 为准（契约注释同源）。
+ */
+export async function acceptTransaction(
+  conversationId: string,
+  amountCents: number,
+): Promise<TransactionDto> {
+  return transactionDtoSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.accept, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, amountCents }),
+    }),
+  )
+}
+
+/** 卖家拒绝提案：只往会话写一条 `tx.rejected`，商品留在在售。 */
+export async function rejectProposal(conversationId: string): Promise<MessageDto> {
+  return messageDtoSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.reject, {
+      method: 'POST',
+      body: JSON.stringify({ conversationId }),
+    }),
+  )
+}
+
+/**
+ * 卖家取本单面交码。
+ *
+ * 契约是**幂等「确保并读取」**：同一笔交易恒定同一枚码，重复调用不换码
+ * （只清失败计数与锁定），所以「重新取码」按钮不需要禁用态。
+ * 明文码（`code` / `qrPayload`）只在这个响应里出现，状态端点不返回。
+ */
+export async function issueMeetupToken(id: string): Promise<MeetupTokenResponse> {
+  return meetupTokenResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.issueMeetupToken(id), { method: 'POST' }),
+  )
+}
+
+/** 凭证状态：`NONE` / `ISSUED` / `CONSUMED`（含消费方与时间，不含明文码）。 */
+export async function fetchMeetupTokenStatus(id: string): Promise<MeetupTokenStatusResponse> {
+  return meetupTokenStatusResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.meetupTokenStatus(id)),
+  )
+}
+
+/** 用二维码载荷核销；`qrToken` 由 `parseMeetupQrPayload` 从载荷里取出。 */
+export async function redeemMeetupToken(
+  id: string,
+  qrToken: string,
+): Promise<MeetupVerificationResponse> {
+  return meetupVerificationResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.redeemMeetupToken(id), {
+      method: 'POST',
+      body: JSON.stringify({ qrToken }),
+    }),
+  )
+}
+
+/** 用 6 位手动码核销。 */
+export async function verifyMeetupCode(
+  id: string,
+  code: string,
+): Promise<MeetupVerificationResponse> {
+  return meetupVerificationResponseSchema.parse(
+    await apiRequest(TRANSACTION_ROUTES.verifyMeetupCode(id), {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+  )
+}
+
+/**
+ * 处理提案（同意 / 拒绝）失败的可执行分支。
+ *
+ * `LISTING_NOT_ACTIVE` 的文案**刻意不断言「这次没成功」**：契约明确该码在重试场景下
+ * 也可能意味着交易已经创建，所以只说事实（商品已不在售）并要求刷新，
+ * 由服务端状态而不是这次响应来决定结论。
+ */
+export function proposalDecisionError(error: unknown): { message: string; refresh: boolean } {
+  if (error instanceof ApiError) {
+    if (error.code === 'LISTING_NOT_ACTIVE') {
+      return { message: '商品已不在售，可能已被他人拍下或已同意过一笔，正在刷新', refresh: true }
+    }
+    if (error.code === 'NOT_CONVERSATION_SELLER') {
+      return { message: '只有卖家可以处理这笔申请', refresh: false }
+    }
+    if (error.code === 'CONVERSATION_NOT_FOUND') {
+      return { message: '会话不存在或不可访问，正在刷新', refresh: true }
+    }
+    return { message: error.message, refresh: false }
+  }
+  return { message: '操作失败，请重试', refresh: false }
 }
 
 /** 商品上下架失败的可执行分支：状态漂移必须刷新，而不是把失败当成功。 */

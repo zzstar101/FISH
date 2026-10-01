@@ -23,6 +23,8 @@ const ME: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  // #179 起 `Me` 多了个性签名：本用例不关心，给 null。
+  signature: null,
 }
 
 async function renderProfile(user: Me): Promise<string> {

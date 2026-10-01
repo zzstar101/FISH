@@ -10,9 +10,11 @@ import { ListingThumb } from '../../components/listing-thumb'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
+import { WatchersDialog } from '../watchers/watchers-dialog'
 import type { MyListingStatusFilter } from './api'
 import { listingActionError } from './api'
 import { EditListingDialog } from './edit-listing-dialog'
+import { PendingSection } from './pending-section'
 import { useMyListings, useSetListingStatus } from './queries'
 
 const STATUS_TABS: ReadonlyArray<{ value: MyListingStatusFilter; label: string }> = [
@@ -40,6 +42,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
   const [status, setStatus] = useState<MyListingStatusFilter>('ALL')
   const [notice, setNotice] = useState<string | null>(null)
   const [editing, setEditing] = useState<ListingCard | null>(null)
+  const [watching, setWatching] = useState<ListingCard | null>(null)
   const listings = useMyListings(ownerId, status)
   const setStatusMutation = useSetListingStatus(ownerId)
 
@@ -66,6 +69,8 @@ function MyListContent({ ownerId }: { ownerId: string }) {
         </div>
         <p className="text-ink-3 text-xs">真实 API · 最多显示 50 条</p>
       </div>
+
+      <PendingSection ownerId={ownerId} />
 
       <div className="flex flex-wrap gap-2">
         {STATUS_TABS.map((tab) => {
@@ -161,6 +166,9 @@ function MyListContent({ ownerId }: { ownerId: string }) {
                       ¥{(item.priceCents / 100).toFixed(2)}
                     </p>
                     <div className="flex items-center gap-2">
+                      <Button onClick={() => setWatching(item)} size="sm" variant="outline">
+                        谁想要
+                      </Button>
                       {editEnabled ? (
                         <Button onClick={() => setEditing(item)} size="sm" variant="outline">
                           编辑
@@ -205,6 +213,10 @@ function MyListContent({ ownerId }: { ownerId: string }) {
           open
           ownerId={ownerId}
         />
+      ) : null}
+
+      {watching !== null ? (
+        <WatchersDialog key={watching.id} listing={watching} onClose={() => setWatching(null)} />
       ) : null}
     </div>
   )

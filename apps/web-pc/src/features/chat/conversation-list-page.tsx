@@ -35,7 +35,16 @@ export function ConversationListPage() {
   useChatRealtime(ownerId, {
     onEvent: (event) => {
       if (ownerId === null) return
-      if (event.type === 'message.new' || event.type === 'conversation.read') {
+      /*
+        `message.recalled`（#359 3c）走同一条路：撤回后服务端不再下发正文，列表行摘要也从
+        原文变成 `[消息已撤回]`，所以**必须重取**。不处理它的话，撤回的消息会一直以原文留在
+        列表行上（`staleTime` 15s 且关闭了窗口聚焦重取，不重取不会自己更新）。
+      */
+      if (
+        event.type === 'message.new' ||
+        event.type === 'conversation.read' ||
+        event.type === 'message.recalled'
+      ) {
         invalidateConversationDetail(queryClient, ownerId, event.conversationId)
         invalidateConversationSurfaces(queryClient, ownerId)
       }

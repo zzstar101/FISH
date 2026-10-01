@@ -18,6 +18,7 @@ import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as VerifyRouteImport } from './routes/verify'
 import { Route as WishRouteImport } from './routes/wish'
@@ -26,6 +27,7 @@ import { Route as MessagesIndexRouteImport } from './routes/messages.index'
 import { Route as MessagesConversationIdRouteImport } from './routes/messages.$conversationId'
 import { Route as OrdersIndexRouteImport } from './routes/orders.index'
 import { Route as OrdersTransactionIdRouteImport } from './routes/orders.$transactionId'
+import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -72,6 +74,11 @@ const RegisterRoute = RegisterRouteImport.update({
   path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ReportsRoute = ReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
@@ -112,6 +119,11 @@ const OrdersTransactionIdRoute = OrdersTransactionIdRouteImport.update({
   path: '/$transactionId',
   getParentRoute: () => OrdersRoute,
 } as any)
+const UsersUserIdRoute = UsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -123,12 +135,14 @@ export interface FileRoutesByFullPath {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
 }
@@ -140,12 +154,14 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
 }
@@ -160,12 +176,14 @@ export interface FileRoutesById {
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
   '/register': typeof RegisterRoute
+  '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
 }
@@ -181,12 +199,14 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/reports'
     | '/search'
     | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages/'
     | '/orders/'
   fileRoutesByTo: FileRoutesByTo
@@ -198,12 +218,14 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/reports'
     | '/search'
     | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages'
     | '/orders'
   id:
@@ -217,12 +239,14 @@ export interface FileRouteTypes {
     | '/profile'
     | '/publish'
     | '/register'
+    | '/reports'
     | '/search'
     | '/verify'
     | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
+    | '/users/$userId'
     | '/messages/'
     | '/orders/'
   fileRoutesById: FileRoutesById
@@ -237,10 +261,12 @@ export interface RootRouteChildren {
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
   RegisterRoute: typeof RegisterRoute
+  ReportsRoute: typeof ReportsRoute
   SearchRoute: typeof SearchRoute
   VerifyRoute: typeof VerifyRoute
   WishRoute: typeof WishRoute
   ListingListingIdRoute: typeof ListingListingIdRoute
+  UsersUserIdRoute: typeof UsersUserIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -308,6 +334,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reports': {
+      id: '/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof ReportsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/search': {
       id: '/search'
       path: '/search'
@@ -364,6 +397,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrdersTransactionIdRouteImport
       parentRoute: typeof OrdersRoute
     }
+    '/users/$userId': {
+      id: '/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/users/$userId'
+      preLoaderRoute: typeof UsersUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -404,10 +444,12 @@ const rootRouteChildren: RootRouteChildren = {
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,
   RegisterRoute: RegisterRoute,
+  ReportsRoute: ReportsRoute,
   SearchRoute: SearchRoute,
   VerifyRoute: VerifyRoute,
   WishRoute: WishRoute,
   ListingListingIdRoute: ListingListingIdRoute,
+  UsersUserIdRoute: UsersUserIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
