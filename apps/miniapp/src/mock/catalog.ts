@@ -1,6 +1,7 @@
 import { productImage } from './images'
 import { mockPublicId } from './public-id'
 import type { ImageRatio, ListingCategory, ListingCondition, MockListing } from './types'
+import { getUser } from './users'
 
 /**
  * 商品 fixture：24 条，与 `D:\FISH\mock-images` 的 24 组图一一对应
@@ -859,6 +860,8 @@ export const LISTINGS: MockListing[] = SPECS.map((spec, index) => {
     description: spec.description,
     spec: spec.spec,
     sellerId: spec.sellerId,
+    // 演示模式的卖家：mock 用户本身是明示的演示数据，与真实接口的 `card.seller` 同一口径。
+    seller: getUser(spec.sellerId),
     views: spec.views,
     wants: spec.wants,
     createdHoursAgo: spec.hoursAgo,

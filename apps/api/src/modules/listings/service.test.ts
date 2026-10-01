@@ -9,6 +9,7 @@ import {
 import type { ModerationDecision } from '../moderation/types'
 import type { ConfirmedImageLookup } from '../uploads/media-objects'
 import type { MediaStorage } from '../uploads/storage'
+import type { ListingCardSeller } from './card'
 import { encodeCursor } from './cursor'
 import { createListingService, ListingServiceError } from './service'
 import type {
@@ -77,9 +78,26 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
 
 const CREATED_AT_CURSOR = '2026-09-12T03:40:10.000000Z'
 
-/** store 的 feed 行现在多带一个微秒精度的 `createdAtCursor`（游标用）。 */
-function feedEntry(listing: ListingRow, coverObjectKey: string | null) {
-  return { listing, createdAtCursor: CREATED_AT_CURSOR, coverObjectKey }
+/** #191：feed 行 join users 带出的卖家公开投影源列（与 `store.listFeed` 的 select 同形状）。 */
+const FEED_SELLER: ListingCardSeller = {
+  id: SELLER_ID,
+  nickname: '阿岚',
+  avatarUrl: null,
+  authStatus: 'VERIFIED',
+}
+
+/** store 的 feed 行现在多带一个微秒精度的 `createdAtCursor`（游标用）与卖家公开投影源列（#191）。 */
+function feedEntry(
+  listing: ListingRow,
+  coverObjectKey: string | null,
+  seller: Partial<ListingCardSeller> = {},
+) {
+  return {
+    listing,
+    createdAtCursor: CREATED_AT_CURSOR,
+    coverObjectKey,
+    seller: { ...FEED_SELLER, ...seller },
+  }
 }
 
 function imageRow(sortOrder: number, objectKey: string): ListingImageRow {
@@ -283,6 +301,29 @@ describe('listFeed', () => {
     const response = await service.listFeed(null, feedQuery())
     expect(response.nextCursor).toBeNull()
     expect(response.items[0]?.coverUrl).toBeNull()
+  })
+
+  // #191：卡片内嵌卖家公开子集——join 结果同源投影，匿名读与本人视角都带；
+  // id 编码成 usr_ 公开前缀，nickname / authStatus 取真实列，头像脏值经 publicAvatarUrl 降级。
+  test('embeds the public seller subset on every card, including anonymous reads', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async () => [
+          feedEntry(listingRow({ sellerId: SELLER_ID }), null, {
+            avatarUrl: 'https://cdn.test/avatars/legacy/a.jpg',
+          }),
+        ],
+      }),
+    })
+
+    const response = await service.listFeed(null, feedQuery())
+    expect(response.items[0]?.seller).toEqual({
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID),
+      nickname: '阿岚',
+      avatarUrl: 'https://cdn.test/avatars/legacy/a.jpg',
+      authStatus: 'VERIFIED',
+    })
   })
 
   // 决策 C：一条脏数据不该让整个首页 500。

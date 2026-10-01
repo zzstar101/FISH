@@ -32,6 +32,7 @@ import { isLegacyListingKey } from '../uploads/legacy-url'
 import { type ConfirmedImageLookup, effectiveModerationDecision } from '../uploads/media-objects'
 import { isListingReviewMediaKey, listingReviewMediaPrefix } from '../uploads/review-media'
 import { isListingMediaStagingKey, isPublicListingKey, type MediaStorage } from '../uploads/storage'
+import type { ListingCardSeller } from './card'
 import { toListingCard } from './card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from './cursor'
 import type {
@@ -218,12 +219,15 @@ export function createListingService(deps: {
   function toCard(
     listing: ListingRow,
     coverObjectKey: string | null,
+    seller: ListingCardSeller,
     moderationStatus: ListingModerationStatus | null = null,
     governanceDelisted: boolean | null = null,
     moderationReason: string | null = null,
   ): ListingCard | null {
+    // `ListingRow` 不带卖家列；feed 的 join 结果里单独取（见 `store.listFeed`），
+    // 与 matching / profile / users 三处经 `ListingCardSource.seller` 同一形状。
     return toListingCard(
-      listing,
+      { ...listing, seller },
       coverObjectKey,
       storage,
       moderationStatus,
@@ -547,6 +551,7 @@ export function createListingService(deps: {
         const card = toCard(
           entry.listing,
           entry.coverObjectKey,
+          entry.seller,
           ownSellerQuery ? entry.listing.moderationStatus : null,
           ownSellerQuery ? entry.listing.governanceDelistedAt !== null : null,
           ownSellerQuery && entry.listing.moderationStatus === 'BLOCKED'
