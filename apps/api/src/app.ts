@@ -61,6 +61,7 @@ import { createContentModerationProvider } from './modules/moderation/providers/
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
+import { writeNotification } from './modules/notifications/writer'
 import { createProfileRouter } from './modules/profile/router'
 import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
@@ -483,6 +484,24 @@ export function createApp(
             conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, message.conversation_id),
             message: toMessageDto(message),
           })
+        },
+        // 交易进展通知（任务一 #89）：fire-and-forget，失败不影响交易响应。
+        // payload 存裸 UUID（与 worker 的 MATCH 写入同一形态），读侧转公开 TypeID。
+        notify: async (input) => {
+          try {
+            await writeNotification(db, {
+              userId: input.userId,
+              type: 'TX',
+              payload: {
+                event: input.event,
+                conversationId: input.conversationId,
+                listingId: input.listingId,
+                ...(input.transactionId ? { transactionId: input.transactionId } : {}),
+              },
+            })
+          } catch (error) {
+            console.warn('[api] 交易通知写入失败（不影响交易）', error)
+          }
         },
       }),
       requireAuth: auth.requireAuth,
