@@ -190,6 +190,23 @@ describe('favorite store (integration)', () => {
     expect(row?.favoritedAtCursor).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
   })
 
+  test('卖家公开子集随行取出（#191：卡片源必有 seller，且只有四个公开字段）', async () => {
+    const [row] = await store.listFavorites(me, 1, null)
+    // 这里仍是库内原始 uuid，`usr_` 前缀由 `toListingCard` 在出网时编码。
+    expect(row?.seller.id).toBe(seller)
+    expect(row?.seller.nickname).toBe('收藏测试')
+    expect(row?.seller.avatarUrl).toBeNull()
+    expect(row?.seller.authStatus).toBe('UNVERIFIED')
+    // 关键回归护栏：投影只允许这四个字段。少一个则卡片渲染不出来，
+    // 多一个就是学号 / 密码哈希 / 邮箱从卖家列表往外漏。
+    expect(Object.keys(row?.seller ?? {}).sort()).toEqual([
+      'authStatus',
+      'avatarUrl',
+      'id',
+      'nickname',
+    ])
+  })
+
   test('listingState 回商品状态、审核态、治理下架时间与卖家，不存在回 null', async () => {
     expect(await store.listingState(listingA)).toEqual({
       status: 'ACTIVE',

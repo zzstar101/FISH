@@ -21,6 +21,8 @@ function row(overrides: Partial<FavoriteRow> = {}): FavoriteRow {
     negotiable: true,
     free: false,
     createdAt: new Date('2026-09-12T01:00:00.000Z'),
+    // 卖家公开子集（#191）：卡片源自 #344 起 `seller` 必填，fake 行也必须给。
+    seller: { id: seller, nickname: '卖家', avatarUrl: null, authStatus: 'VERIFIED' },
     coverObjectKey: null,
     favoritedAt: '2026-09-12T03:00:00.123Z',
     favoritedAtCursor: '2026-09-12T03:00:00.123456Z',
@@ -81,6 +83,25 @@ describe('favorite service — 收藏（POST）只允许在售商品', () => {
       listingState({ status: 'SOLD' }),
       listingState({ status: 'RESERVED' }),
       listingState({ governanceDelistedAt: new Date('2026-09-12T00:00:00.000Z') }),
+    ]) {
+      let writes = 0
+      const service = serviceWith({
+        listingState: async () => state,
+        addFavorite: async () => {
+          writes += 1
+        },
+      })
+      await expectListingNotFound(() => service.favorite(viewer, listingId))
+      expect(writes).toBe(0)
+    }
+  })
+
+  test('审核中 / 未过审（REVIEW / BLOCKED）一律 404，且一次都不写库', async () => {
+    // `ACTIVE` 只说明没被下架：`REVIEW` / `BLOCKED` 的条目对非卖家**不可见**（详情页 404）。
+    // 放行这条登录可达的写路径，等于给出「某个 id 是否存在且正在审核」的探针。
+    for (const state of [
+      listingState({ moderationStatus: 'REVIEW' }),
+      listingState({ moderationStatus: 'BLOCKED' }),
     ]) {
       let writes = 0
       const service = serviceWith({
@@ -177,6 +198,21 @@ describe('favorite service — 列表与分页', () => {
     expect(page.items[0]?.listing.moderationStatus).toBeNull()
     expect(page.items[0]?.listing.governanceDelisted).toBeNull()
     expect(page.items[0]?.listing.coverUrl).toBe('https://cdn.example/listings/u/1.png')
+    // 卖家公开子集（#191）：收藏列表的卡片与 feed / 详情同一形状，必须带出卖家；
+    // 公开 id 是 TypeID 编码（`usr_` 前缀 + Crockford base32，不是裸 uuid），
+    // 且只有四个公开字段 —— 教育邮箱 / 学号 / 手机号 / role 一律不进列表投影。
+    const cardSeller = page.items[0]?.listing.seller
+    expect(cardSeller?.id.startsWith('usr_')).toBe(true)
+    expect(cardSeller?.id).not.toContain('01990000-0000-7000-8000-0000000000a3')
+    expect(cardSeller?.nickname).toBe('卖家')
+    expect(cardSeller?.avatarUrl).toBeNull()
+    expect(cardSeller?.authStatus).toBe('VERIFIED')
+    expect(Object.keys(cardSeller ?? {}).sort()).toEqual([
+      'authStatus',
+      'avatarUrl',
+      'id',
+      'nickname',
+    ])
   })
 
   test('多取的那一行只用来判「还有下一页」，不进响应', async () => {

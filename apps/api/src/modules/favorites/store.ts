@@ -2,6 +2,7 @@ import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
 import { favorites } from '@fish/db/schema/favorites'
 import { listings } from '@fish/db/schema/listings'
+import { users } from '@fish/db/schema/users'
 import { and, desc, eq, lt, or, type SQL, sql } from 'drizzle-orm'
 import type { ListingCardSource } from '../listings/card'
 import type { FavoritesCursor } from './cursor'
@@ -127,6 +128,16 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
             negotiable: listings.negotiable,
             free: listings.free,
             createdAt: listings.createdAt,
+            // 卖家公开子集（#191 的 `ListingCardSource.seller`，本 PR 补齐）：与 feed / 详情
+            // 同一 inner join 同源投影 —— 收藏列表里的卡片也要能直接渲染卖家（昵称 / 头像 /
+            // 认证态），不逐卡补查。`listings.seller_id` 外键保证行存在，PK join 是 1:1，
+            // 不影响分页、游标与排序。
+            seller: {
+              id: users.id,
+              nickname: users.nickname,
+              avatarUrl: users.avatarUrl,
+              authStatus: users.authStatus,
+            },
             // 封面只认 `sort_order = 0`（#6 契约 §1：下标即 sortOrder，0 才是封面），
             // 与 listings feed / matching / profile 同一口径；取不到就是 null，不用更大的序号顶替。
             coverObjectKey: sql<
@@ -139,6 +150,7 @@ export function createSqlFavoriteStore(db: Db): FavoriteStore {
           })
           .from(favorites)
           .innerJoin(listings, eq(listings.id, favorites.listingId))
+          .innerJoin(users, eq(users.id, listings.sellerId))
           .where(and(...conditions))
           .orderBy(desc(favorites.createdAt), desc(listings.id))
           // 多取一行用于判断"还有没有下一页"，返回前丢掉（与 listings feed 同款）。

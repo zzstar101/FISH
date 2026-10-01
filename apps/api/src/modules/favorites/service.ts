@@ -72,12 +72,17 @@ export function createFavoriteService({
   storage: Pick<MediaStorage, 'publicUrl'>
 }): FavoriteService {
   /**
-   * **收藏**（POST）的判据：商品存在、在售（`ACTIVE`）、且未被平台下架。
+   * **收藏**（POST）的判据：商品存在、在售（`ACTIVE`）、审核通过（`APPROVED`）、
+   * 且未被平台下架。
    *
    * 为什么只有收藏要这么严：它问的是「我现在能不能收藏这件东西」，而只有摆在货架上的
    * 商品才有这个语义。已收藏的条目**不因商品状态变化而失效** —— 售出 / 下架之后它仍在
    * 列表里（`facts` 见契约 `FavoriteItemSchema` 的注释），所以读状态与取消收藏用的是
    * 另外两条更宽的判据，见下面两个函数。
+   *
+   * 审核态必须判：`ACTIVE` 只说明商品没被下架，`REVIEW` / `REJECTED` 的条目对非卖家
+   * **根本不可见**（详情页 404）。放行这条登录可达的写路径，等于给出「某个 id 是否存在
+   * 且正在审核」的探针 —— 收藏成功即泄漏其存在。
    *
    * 刻意的竞态窗口：判定与写入之间不加锁，所以「刚下架的商品被收藏成功」是可能的。
    * 后果只是列表里多一条立刻失效的条目，无数据损坏 —— 不为它引入事务。
@@ -86,6 +91,7 @@ export function createFavoriteService({
     const state = await store.listingState(listingId)
     if (state === null) throw listingNotFound()
     if (state.status !== 'ACTIVE') throw listingNotFound()
+    if (state.moderationStatus !== 'APPROVED') throw listingNotFound()
     if (state.governanceDelistedAt !== null) throw listingNotFound()
   }
 
