@@ -10,9 +10,7 @@
  */
 import { WishIdSchema } from '@fish/contracts/system/public-id'
 import { isApiError } from '@/lib/request'
-import type { MockUser, MockWish, MockWishPoolItem } from '@/mock/types'
-import { toMockSeller } from '../listing/adapt'
-import { fetchListingDetail } from '../listing/api'
+import type { MockWish, MockWishPoolItem } from '@/mock/types'
 import { reportFailure } from '../load-failure'
 import { type MatchView, toWishHit, type WishHit } from '../match/adapt'
 import { fetchWishMatches } from '../match/api'
@@ -110,9 +108,9 @@ export type WishMatchResult =
  * `total` 与 `items.length` 都回传：页面计数用 `total`（契约明确两者不该互相推导，
  * 见 `matching/schema.ts` 的 `WishMatchListResponseSchema`）。
  *
- * 卖家：契约的 `WishMatchItem` 只有 `ListingCard`（无 `sellerId`、无 `seller`），
- * 所以逐条拉 `GET /listings/:id` 取详情里的 seller。补不到就是 `null`，页面不渲染
- * 卖家那一格 —— 不编造卖家。请求数与命中条数同阶（上限 50，通常个位数）。
+ * 卖家：#191 起契约卡片内嵌 `seller`（公开四字段），`MatchView.seller` 直接取自
+ * 命中卡片的投影，不再逐条拉 `GET /listings/:id`。卡片没带卖家（老 mock 记录）就是
+ * `null`，页面不渲染卖家那一格 —— 不编造卖家。
  */
 export async function loadWishMatches(wishId: string): Promise<WishMatchResult> {
   // 契约的 wishId 是规范 wsh_。非法 id 先在客户端挡掉：两个请求并行时，`/wishes/:id` 会返
@@ -121,29 +119,19 @@ export async function loadWishMatches(wishId: string): Promise<WishMatchResult> 
   if (!WishIdSchema.safeParse(wishId).success) return { status: 'notFound' }
   try {
     const [wish, list] = await Promise.all([fetchWish(wishId), fetchWishMatches(wishId)])
-    const hits = list.items.map((item) => toWishHit(item, wishId))
-    const sellers = await Promise.all(hits.map((hit) => fetchHitSeller(hit.listing.id)))
     return {
       status: 'ok',
       wish: toMockWish(wish),
       total: list.total,
-      items: hits.map((hit, index) => ({ ...hit, seller: sellers[index] ?? null })),
+      items: list.items.map((item) => {
+        const hit = toWishHit(item, wishId)
+        return { ...hit, seller: hit.listing.seller }
+      }),
     }
   } catch (error) {
     if (isApiError(error) && error.status === 403) return { status: 'forbidden' }
     if (isApiError(error) && error.status === 404) return { status: 'notFound' }
     reportFailure('匹配结果', error, false)
     return { status: 'failed' }
-  }
-}
-
-/** 命中商品的卖家：拿不到（网络失败 / 商品已删 / 已下架）就返回 `null`，由页面不渲染。 */
-async function fetchHitSeller(listingId: string): Promise<MockUser | null> {
-  try {
-    const detail = await fetchListingDetail(listingId)
-    return detail === null ? null : toMockSeller(detail)
-  } catch (error) {
-    console.warn(`[miniapp] 命中商品卖家获取失败（listingId=${listingId}）`, error)
-    return null
   }
 }

@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
+  PRESENCE_ONLINE_TTL_MS,
   PublicUserListingsQuerySchema,
   PublicUserProfileSchema,
   UserErrorCodeSchema,
+  UserPresenceSchema,
 } from './schema'
 
 const USER_ID = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-00000000000a')
@@ -14,9 +16,11 @@ function profile(overrides: Record<string, unknown> = {}) {
     nickname: '阿岚',
     avatarUrl: null,
     authStatus: 'VERIFIED',
+    signature: null,
     joinedDays: 12,
     activeCount: 3,
     soldCount: 1,
+    presence: { online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' },
     ...overrides,
   }
 }
@@ -60,8 +64,45 @@ describe('PublicUserProfileSchema', () => {
       'id',
       'joinedDays',
       'nickname',
+      'presence',
+      'signature',
       'soldCount',
     ])
+  })
+
+  /**
+   * 在线态（#359 第五点）是公开读模型的一部分（Owner 拍板给他人看），但它**不可缺**：
+   * 老服务端漏字段时必须在解析处炸掉，否则端上会把「拿不到」画成「离线」。
+   */
+  test('presence 必填且形状受约束', () => {
+    expect(PublicUserProfileSchema.safeParse(profile({ presence: undefined })).success).toBe(false)
+    expect(PublicUserProfileSchema.safeParse(profile({ presence: { online: true } })).success).toBe(
+      false,
+    )
+    // 从未活动过：lastActiveAt 为 null 是合法值（不是「字段缺失」）
+    expect(
+      PublicUserProfileSchema.safeParse(
+        profile({ presence: { online: false, lastActiveAt: null } }),
+      ).success,
+    ).toBe(true)
+  })
+})
+
+describe('UserPresenceSchema', () => {
+  test('接受在线 / 离线两种合法形状；拒非法 ISO 与非布尔 online', () => {
+    expect(UserPresenceSchema.parse({ online: true, lastActiveAt: null }).online).toBe(true)
+    expect(
+      UserPresenceSchema.parse({ online: false, lastActiveAt: '2026-09-30T09:00:00.000Z' })
+        .lastActiveAt,
+    ).toBe('2026-09-30T09:00:00.000Z')
+    expect(UserPresenceSchema.safeParse({ online: 1, lastActiveAt: null }).success).toBe(false)
+    expect(UserPresenceSchema.safeParse({ online: false, lastActiveAt: '昨天' }).success).toBe(
+      false,
+    )
+  })
+
+  test('在线窗口与服务端同一常量（客户端本地过期必须同源）', () => {
+    expect(PRESENCE_ONLINE_TTL_MS).toBe(60_000)
   })
 })
 

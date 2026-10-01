@@ -29,32 +29,65 @@
   @include page-hero(320px, 64px);
 }
 
-/* ---------------------------------------------------------------- 页头 */
-
-/*
- * 标题在 `components/nav-bar`（**居中**：导航条右侧没有页面级动作，见页面文件头）。
- * 这一块**始终渲染**（分段胶囊只在其内部按 `demo` 显隐），因为 `padding-top` 是给
- * 漂浮导航条留的顶栏高度，拿掉整块空态会钻到返回钮与标题下面。
- * 168px 与同族的 mylist / settings / verify / match 同值（都是「漂浮导航 + 页内首块内容」）；
- * `watchers` 那页是 164px，与本页不同族，别拿它当基准。
+/**
+ * 顶栏副行：分段挂在 `top-bar` 的 `below` 槽里，与主行**共用同一块玻璃** —— 底与
+ * 描边由 `.topbar--glass` 铺在整块容器上，本块只给内边距与排列。规格与订单两页 /
+ * 我的发布的分段同款（白底轨道 + inset 描边 + 卡片阴影，44pt 轨道 / 36pt 胶囊）。
  */
-.cmt__head {
-  position: relative;
-  z-index: 1;
-  padding: 168px 40px 0;
+.cmt__segwrap {
+  padding: 24px 40px 8px;
 }
 
-/* ---- 分段胶囊：三段互斥（全部 = 商品留言 ∪ 交易评价），所以摆计数 ---- */
+/**
+ * 副行占位（tsx 里按 `demo` 二态）：演示构建多一条分段行，24 + 88 + 8 = 120px，
+ * 与 `.cmt__segwrap` 的 padding 逐项对应——改它或分段高度必须同步这里；
+ * 真实构建没有分段，只留 24px 呼吸位。
+ */
+.cmt__header-gap {
+  height: 24px;
+}
 
+.cmt__header-gap.is-demo {
+  height: 120px;
+}
+
+/**
+ * 居中标题（`top-bar` 中槽里的绝对定位元素，与 mylist / following 同一套写法）：
+ * 左右拉满整条栏再 `justify-content: center` —— 中槽本身只占「返回钮右侧 →
+ * 胶囊避让区左侧」，直接居中会偏左。上下由页面按运行时栅格行内下发（见 tsx）。
+ */
+.cmt__navtitle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 110px;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--fg);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.cmt__navtitle-em {
+  color: var(--brand);
+}
+
+/* 分段轨道：三段互斥（全部 = 商品留言 ∪ 交易评价），所以摆计数 */
 .cmt__seg {
   display: flex;
   gap: 8px;
   height: 88px;
   padding: 8px;
-  margin-top: 20px;
   border-radius: var(--r-pill);
-  background: var(--ice);
-  border: 2px solid var(--border);
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 2px var(--border),
+    var(--shadow-card);
   box-sizing: border-box;
 }
 

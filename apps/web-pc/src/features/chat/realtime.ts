@@ -1,8 +1,20 @@
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
-import { type RealtimeServerEvent, realtimeServerEventSchema } from '@fish/contracts/chat/schema'
+import {
+  type MediaRealtimeEvent,
+  mediaRealtimeEventSchema,
+  type RealtimeServerEvent,
+  realtimeServerEventSchema,
+} from '@fish/contracts/chat/schema'
 import { useEffect, useRef, useState } from 'react'
 
 export type ChatRealtimeStatus = 'connecting' | 'open' | 'reconnecting' | 'closed'
+
+/**
+ * 连接上可能到达的两类事件：#9 的旧版事件，以及 #67 独立的 `media.new`。
+ * 后者刻意不并入 `realtimeServerEventSchema`（兼容未接入媒体的旧客户端），
+ * 因此前端也必须两条 schema 都试，否则媒体推送会被静默丢弃。
+ */
+export type ChatRealtimeEvent = RealtimeServerEvent | MediaRealtimeEvent
 
 export type RealtimeSocket = {
   send(data: string): void
@@ -23,7 +35,7 @@ export type RealtimeTimers = {
 export type ChatRealtimeOptions = {
   url?: string
   createSocket?: (url: string) => RealtimeSocket
-  onEvent: (event: RealtimeServerEvent) => void
+  onEvent: (event: ChatRealtimeEvent) => void
   onOpen?: () => void
   onDisconnected?: () => void
   onStatusChange?: (status: ChatRealtimeStatus) => void
@@ -47,11 +59,14 @@ function defaultRealtimeUrl(): string {
   return `${protocol}//${window.location.host}${REALTIME_WS_PATH}`
 }
 
-export function parseRealtimeEvent(raw: unknown): RealtimeServerEvent | null {
+export function parseRealtimeEvent(raw: unknown): ChatRealtimeEvent | null {
   if (typeof raw !== 'string') return null
   try {
-    const parsed = realtimeServerEventSchema.safeParse(JSON.parse(raw))
-    return parsed.success ? parsed.data : null
+    const payload: unknown = JSON.parse(raw)
+    const legacy = realtimeServerEventSchema.safeParse(payload)
+    if (legacy.success) return legacy.data
+    const media = mediaRealtimeEventSchema.safeParse(payload)
+    return media.success ? media.data : null
   } catch {
     return null
   }
@@ -224,7 +239,7 @@ export class ChatRealtime {
 }
 
 export type ChatRealtimeHandlers = {
-  onEvent: (event: RealtimeServerEvent) => void
+  onEvent: (event: ChatRealtimeEvent) => void
   /** 每次成功建立连接都会调用；首次连接用于补上「HTTP 快照后、WS 建立前」的窗口。 */
   onOpen?: () => void
   /** 连接断开时调用；用于触发一次受鉴权 HTTP 探针，让全局 401 收口。 */

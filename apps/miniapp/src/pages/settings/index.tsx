@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
+import Taro, { usePageScroll } from '@tarojs/taro'
 import { useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
@@ -45,6 +45,16 @@ export default function Settings() {
   const [logoutOpen, setLogoutOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
 
+  /**
+   * 顶栏两态（#386 批次 2）：返回键常驻吸顶，滚过阈值后玻璃底 + 标题「设置」浮现
+   * （在返回键隔壁，Owner 2026-10-01 拍板「就像商品详情页一样」）。
+   * 阈值取 40 设备 px，与 `pages/user` 的 `GLASS_AT` 同值 —— 都在页头大标题滚进
+   * 导航行前后触发，不到一屏就想露出玻璃底会让它常亮、失去「浮现」的语义。
+   */
+  const REVEAL_AT = 40
+  const [revealed, setRevealed] = useState(false)
+  usePageScroll(({ scrollTop }) => setRevealed(scrollTop > REVEAL_AT))
+
   const themeLabel = themeOptions.find((item) => item.key === theme)?.label ?? '跟随系统'
 
   /** 偏好项落本地存储（真实实现再同步后端） */
@@ -87,7 +97,7 @@ export default function Settings() {
     <View className="st">
       <View className="st__bg" />
 
-      <NavBar />
+      <NavBar fixed glass={revealed} title={revealed ? '设置' : undefined} />
 
       <View className="st__head">
         <Text className="st__title">设置</Text>

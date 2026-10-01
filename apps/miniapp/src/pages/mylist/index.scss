@@ -287,7 +287,10 @@
   font-size: 30px;
   font-weight: 700;
   line-height: 1;
-  color: var(--price);
+  /* 卡片价格标红（Owner 2026-10-01）：与首页商品卡（product-card）同用 --danger，
+     不用蓝的 --price —— 别看着「其他卡都是蓝的」把它改回去。
+     确认弹层里的 .ml__dlg-price 维持 --price，未在本次范围内 */
+  color: var(--danger);
 }
 
 /**

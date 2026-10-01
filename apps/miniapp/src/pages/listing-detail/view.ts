@@ -381,8 +381,9 @@ export function consumeDeferredReload(state: DeferredReload): DeferredReload {
  * 带着 A 的 `isOwner=true`，B 接着看同一份快照就会拿到上一任账号的视角。本地比对
  * 每帧用当前 `userId` 重算，换号即刻切底栏 —— 与 `watchers` 页的
  * `listing.isOwner && seller.id === userId` 是同一类双保险，这里快照可能陈旧，所以
- * 只信本地比对。匿名（`userId = null`）永远走买家形态；列表卡的 `NO_SELLER` 空串
- * 哨兵也要判否 —— 空串与空串「相等」会把「没有卖家」读成「我就是卖家」。
+ * 只信本地比对。匿名（`userId = null`）永远走买家形态；契约 `seller` 缺席的老 mock
+ * 记录的 `NO_SELLER` 空串哨兵也要判否 —— 空串与空串「相等」会把「没有卖家」读成
+ * 「我就是卖家」。
  */
 export function isOwnListing(sellerId: string, userId: string | null): boolean {
   return userId !== null && userId !== '' && sellerId === userId
