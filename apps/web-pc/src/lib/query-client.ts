@@ -4,12 +4,12 @@ import { ApiError, isUnauthenticatedError } from './api-client'
 import { currentHref } from './redirect'
 import { currentSessionGeneration, resetPcSessionIfCurrent } from './session-cache'
 
-/** 应用内部路径（去掉 router basepath 与尾斜杠），用于比较登录 / 注册页。 */
+/** 应用内部路径（去掉 router basepath 与尾斜杠），用于比较登录页。 */
 function currentAppPathname(): string {
   return window.location.pathname.replace(/^\/pc(?=\/|$)/, '').replace(/\/+$/, '') || '/'
 }
 
-const AUTH_PAGES = new Set(['/login', '/register'])
+const AUTH_PAGES = new Set(['/login'])
 
 /**
  * 全局 401 收口：任何 query / mutation 拿到 `401 + UNAUTHENTICATED`

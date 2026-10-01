@@ -22,6 +22,7 @@ const me: Me = {
   verifiedAt: '2026-09-12T00:00:00.000Z',
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 const storage: MediaStorage = {
@@ -87,6 +88,8 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   free: false,
   createdAt: new Date('2026-09-12T01:00:00.000Z'),
   coverObjectKey: 'covers/a.jpg',
+  // #191：卡片卖家公开子集（本人视角 = 查看者自己），join users 同源带出。
+  seller: { id: USER_ID, nickname: '小明', avatarUrl: null, authStatus: 'VERIFIED' },
   ...overrides,
 })
 
@@ -128,13 +131,21 @@ const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransacti
 })
 
 class MemoryProfileStore implements ProfileStore {
-  statsRow: ProfileStatsRow = { activeListings: 1, activeWishes: 1, completedTransactions: 1 }
+  statsRow: ProfileStatsRow = {
+    activeListings: 1,
+    activeWishes: 1,
+    completedTransactions: 1,
+    followingCount: 2,
+  }
   lastStatsUserId: string | null = null
   listings: ProfileListingRow[] = [listingRow()]
   wishes: ProfileWishRow[] = [wishRow()]
   transactions: ProfileTransactionRow[] = [txRow()]
   /** `updateUser` 收到的最后一次写入（写用例断言「只写了该写的列」）。 */
-  updated: { userId: string; patch: { nickname?: string; avatarUrl?: string } } | null = null
+  updated: {
+    userId: string
+    patch: { nickname?: string; avatarUrl?: string; signature?: string | null }
+  } | null = null
   /** 覆盖 `updateUser` 的返回行；null 模拟「认证与写入之间账号被删」。 */
   updateResult: UserRow | null | undefined = undefined
 
@@ -172,7 +183,12 @@ describe('profile service: getProfile', () => {
 
     expect(store.lastStatsUserId).toBe(USER_ID)
     expect(profile.user).toEqual(me) // user 块原样来自 requireAuth 的 Me
-    expect(profile.stats).toEqual({ activeListings: 1, activeWishes: 1, completedTransactions: 1 })
+    expect(profile.stats).toEqual({
+      activeListings: 1,
+      activeWishes: 1,
+      completedTransactions: 1,
+      followingCount: 2,
+    })
     // 商品卡：封面 objectKey 经 storage 拼 URL；本人可见 OFFLINE
     expect(profile.listings[0]?.coverUrl).toBe('https://cdn.test/covers/a.jpg')
     expect(profile.listings[0]?.status).toBe('OFFLINE')
@@ -269,6 +285,30 @@ describe('profile service: updateProfile（#86 B：编辑资料）', () => {
     expect(uploads.calls).toEqual([])
     expect(user.nickname).toBe('新名字')
     expect(user.avatarUrl).toBeNull()
+  })
+
+  test('签名（#179）：原文落库、空白串归一化为 null（清空）', async () => {
+    const store = new MemoryProfileStore()
+    const user = await createService(store).updateProfile(me, {
+      signature: '  面交优先，可小刀  ',
+    })
+
+    expect(store.updated?.patch).toEqual({ signature: '面交优先，可小刀' })
+    expect(user.signature).toBe('面交优先，可小刀')
+  })
+
+  test('签名（#179）：只传空白 = 清空，patch.signature 是 null', async () => {
+    const store = new MemoryProfileStore()
+    const user = await createService(store).updateProfile(me, { signature: '   ' })
+
+    expect(store.updated?.patch).toEqual({ signature: null })
+    expect(user.signature).toBeNull()
+  })
+
+  test('签名（#179）：不传 signature 就不碰该列', async () => {
+    const store = new MemoryProfileStore()
+    await createService(store).updateProfile(me, { nickname: '新名字' })
+    expect(Object.hasOwn(store.updated?.patch ?? {}, 'signature')).toBe(false)
   })
 
   test('只改头像：objectKey 交给上传域 confirm，落库的是它给的绝对 URL', async () => {

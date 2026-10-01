@@ -799,6 +799,54 @@ function findBoxInRange(
 }
 
 /**
+ * WAV（RIFF）真实时长：#359 3b 起微信 `RecorderManager` 的原生输出之一。
+ *
+ * 结构：`RIFF <size> WAVE` 后跟一串 chunk（id(4) + size(4 LE) + data，奇数长度补 1 字节
+ * 对齐）。时长 = `data.size / fmt.byteRate`，两者都在头部、不需要看到文件末尾；
+ * 但**必须逐 chunk 走**：`fmt ` 与 `data` 的顺序没有规范保证，写死偏移会把
+ * 带 `LIST`/`fact` chunk 的录音解析错。
+ *
+ * 与 WebM/MP4 解析同一取舍：任何结构问题（截断、`fmt ` 重复、byteRate=0、
+ * `bitsPerSample=0`）一律返回 null，由 service 报 422，不猜时长。
+ */
+function wavDuration(bytes: Uint8Array): ProbedDuration | null {
+  if (bytes.length < 12) return null
+  if (ascii(bytes, 0, 4) !== 'RIFF' || ascii(bytes, 8, 4) !== 'WAVE') return null
+  const riffSize = u32le(bytes, 4)
+  // 声明的 RIFF 尺寸不能超过实际字节（截断的上传对象按无效处理）；0 是合法的"未知尺寸"。
+  if (riffSize !== 0 && riffSize + 8 > bytes.length) return null
+
+  let byteRate: number | null = null
+  let dataSize: number | null = null
+  let pos = 12
+  while (pos + 8 <= bytes.length) {
+    const id = ascii(bytes, pos, 4)
+    const size = u32le(bytes, pos + 4)
+    const dataStart = pos + 8
+    const dataEnd = dataStart + size
+    // 溢出 / 超出实际字节：截断对象（合法上传会被 oss 完整落盘，这里只拦损坏数据）
+    if (!Number.isSafeInteger(dataEnd) || dataEnd > bytes.length) return null
+
+    if (id === 'fmt ') {
+      if (byteRate !== null) return null // 重复 fmt：结构非法
+      if (size < 16) return null
+      const bitsPerSample = u16le(bytes, dataStart + 14)
+      if (bitsPerSample === 0) return null
+      byteRate = u32le(bytes, dataStart + 8)
+      if (byteRate <= 0) return null
+    } else if (id === 'data') {
+      if (dataSize !== null) return null // 重复 data：结构非法
+      dataSize = size
+    }
+    // chunk 数据按偶数对齐（size 为奇数时有一个 pad 字节）
+    pos = dataEnd + (size % 2)
+  }
+
+  if (byteRate === null || dataSize === null || dataSize <= 0) return null
+  return { durationMs: Math.round((dataSize / byteRate) * 1000) }
+}
+
+/**
  * 语音真实时长。
  *
  * `bytes` 必须是**完整对象**：WebM 的 `Duration` 缺失 fallback 与 MP4 的 `moov` 位置
@@ -807,5 +855,6 @@ function findBoxInRange(
 export function probeVoiceDuration(bytes: Uint8Array, mimeType: string): ProbedDuration | null {
   if (mimeType === 'audio/webm') return webmDuration(bytes)
   if (mimeType === 'audio/mp4') return mp4Duration(bytes)
+  if (mimeType === 'audio/wav') return wavDuration(bytes)
   return null
 }

@@ -1,9 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
-import { MessageIdempotencyConflictError, messageSendKey, textRequestHash } from './idempotency'
+import {
+  listingRequestHash,
+  MessageIdempotencyConflictError,
+  messageSendKey,
+  textRequestHash,
+} from './idempotency'
 import { createSqlMessageStore } from './store'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -269,5 +275,84 @@ describe('messages store (integration)', () => {
     expect(store.insertText(conversationA, buyer, 'B', second)).rejects.toBeInstanceOf(
       MessageIdempotencyConflictError,
     )
+  })
+})
+
+describe('messages store: LISTING（#359 商品卡）', () => {
+  const listingPublicId = encodePublicId(PUBLIC_ID_PREFIX.listing, listingA)
+  const unknownListingId = '01990000-0000-7000-8000-0000000000b9'
+
+  test('findListingBriefs 批量取投射：0 号图作封面、无图商品为 null、未知名不出现', async () => {
+    // 两张图：只有 sort_order = 0 是封面（#6 契约「下标即 sortOrder」）。JOIN 条件里已收窄，
+    // 所以多图商品不会把结果行放大成多条。
+    await db.execute(sql`
+      INSERT INTO listing_images (id, listing_id, object_key, sort_order)
+      VALUES (gen_random_uuid(), ${listingA}, 'listings/covers/k380-0.webp', 0),
+             (gen_random_uuid(), ${listingA}, 'listings/covers/k380-1.webp', 1)
+    `)
+    const briefs = await store.findListingBriefs([listingA, unknownListingId])
+    expect(briefs.size).toBe(1)
+    expect(briefs.get(listingA)).toMatchObject({
+      id: listingA,
+      title: 'K380',
+      priceCents: 16000,
+      status: 'ACTIVE',
+      moderationStatus: 'APPROVED',
+      coverObjectKey: 'listings/covers/k380-0.webp',
+    })
+    expect(briefs.has(unknownListingId)).toBe(false)
+    expect(await store.findListingBriefs([])).toEqual(new Map())
+  })
+
+  test('insertListing 落 type=LISTING、content 存商品公开 id，并 bump 会话排序键', async () => {
+    const lastMessageAtMs = async () => {
+      const result = await db.execute(
+        sql`SELECT last_message_at FROM conversations WHERE id = ${conversationA}`,
+      )
+      const row = (Array.isArray(result) ? result[0] : (result as { rows: unknown[] }).rows[0]) as {
+        last_message_at: Date | string
+      }
+      return new Date(row.last_message_at).getTime()
+    }
+
+    const before = await lastMessageAtMs()
+    const inserted = await store.insertListing(conversationA, buyer, listingPublicId)
+    expect(inserted.type).toBe('LISTING')
+    expect(inserted.sender_id).toBe(buyer)
+    // content 是引用不是可读文本：原样落库，不被 trim / 投射改写。
+    expect(inserted.content).toBe(listingPublicId)
+    expect(inserted.sender_nickname).toBe('消息测试')
+    // 与 insertText 同一 bump 语义：GREATEST(旧值, 本条 created_at)，只前进不回退。
+    expect(await lastMessageAtMs()).toBe(Math.max(before, new Date(inserted.created_at).getTime()))
+  })
+
+  test('insertListing 与 insertText 共用同一幂等键空间：同键同商品重放，换商品冲突', async () => {
+    const key = messageSendKey(
+      '01990000-0000-7000-8000-0000000000e9',
+      listingRequestHash(listingPublicId),
+    )
+    if (!key) throw new Error('unreachable')
+
+    const first = await store.insertListing(conversationA, seller, listingPublicId, key)
+    const retry = await store.insertListing(conversationA, seller, listingPublicId, key)
+    expect(retry.id).toBe(first.id)
+
+    const countResult = await db.execute(
+      sql`SELECT count(*)::int AS count FROM messages
+          WHERE conversation_id = ${conversationA} AND sender_id = ${seller}
+            AND client_request_id = ${key.clientRequestId}`,
+    )
+    const countRow = (
+      Array.isArray(countResult) ? countResult[0] : (countResult as { rows: unknown[] }).rows[0]
+    ) as { count: number }
+    expect(countRow.count).toBe(1)
+
+    // 同一个键换一个商品：指纹不同 → 幂等键复用，而不是静默落第二行。
+    const otherPublicId = encodePublicId(PUBLIC_ID_PREFIX.listing, unknownListingId)
+    const otherKey = messageSendKey(key.clientRequestId, listingRequestHash(otherPublicId))
+    if (!otherKey) throw new Error('unreachable')
+    expect(
+      store.insertListing(conversationA, seller, otherPublicId, otherKey),
+    ).rejects.toBeInstanceOf(MessageIdempotencyConflictError)
   })
 })

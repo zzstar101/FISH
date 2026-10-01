@@ -32,10 +32,7 @@
  *    「读不到」当成「没有提案」，否则在等的商品会被显示成在售。
  */
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
-import {
-  type TransactionSystemEvent,
-  transactionSystemEventSchema,
-} from '@fish/contracts/transactions/schema'
+import { lastTxSignalOf, type TxSignal, txEventOfContent } from '@/features/transaction/tx-signal'
 
 /** 会话列表最多翻几页（4 × 50 = 200 条会话）；防游标异常死循环，与 `fetchMyListings` 同一用途 */
 const MAX_CONVERSATION_PAGES = 4
@@ -66,35 +63,8 @@ export type PendingIndex = {
   failed: boolean
 }
 
-type TxSignal = { event: TransactionSystemEvent; createdAt: string }
-
-/** 一条 SYSTEM 消息的 content 是不是交易事件（`tx.*`）；不是就返回 null */
-function txEventOfContent(content: string): TransactionSystemEvent | null {
-  try {
-    const parsed = transactionSystemEventSchema.safeParse(JSON.parse(content))
-    return parsed.success ? parsed.data : null
-  } catch {
-    // 非 JSON 的 SYSTEM 消息（例如认证通知）：按普通文本看待
-    return null
-  }
-}
-
-/** 一条消息是不是交易 SYSTEM 事件；不是就返回 null（TEXT / 其它系统消息） */
-function txSignalOf(message: MessageDto): TxSignal | null {
-  if (message.type !== 'SYSTEM') return null
-  const event = txEventOfContent(message.content)
-  return event ? { event, createdAt: message.createdAt } : null
-}
-
-/** 会话里**最后一个**交易事件；一个都没有则 null。消息按 `(createdAt, id)` 升序返回，顺序扫即可 */
-export function lastTxSignalOf(messages: readonly MessageDto[]): TxSignal | null {
-  let found: TxSignal | null = null
-  for (const message of messages) {
-    const signal = txSignalOf(message)
-    if (signal) found = signal
-  }
-  return found
-}
+/** 交易事件的解析与「最后一个事件」的扫描在 `@/features/transaction/tx-signal`（与消息页胶囊同源） */
+export { lastTxSignalOf }
 
 /**
  * 会话行自带的 `lastMessage` 已经够用时的**短路**（省掉一次消息页请求）：

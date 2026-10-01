@@ -12,8 +12,8 @@ import { users } from './users'
  * 「父留言的 parent_id 必须为 NULL」需要跨行断言，CHECK 表达不了；DB 侧只保证
  * 被引用的留言真实存在（外键）与删除级联。
  *
- * 不可变行：只有 `created_at`，没有 `updated_at`（留言不支持编辑，Issue §五 明确
- * 删除 / 点赞都在范围外）。
+ * 不可变行：只有 `created_at`，没有 `updated_at`（留言不支持编辑；#111 §五 曾把删除列为范围外，
+ * **#195 已把「本人可删除自己的留言」纳入范围**，点赞仍在外）。
  */
 export const comments = pgTable(
   'comments',
@@ -43,5 +43,8 @@ export const comments = pgTable(
       table.id,
     ),
     index('comments_parent_id_created_at_id_idx').on(table.parentId, table.createdAt, table.id),
+    // 「我发过的留言」（#195）：按作者聚合，`ORDER BY created_at DESC, id DESC`。
+    // 不能靠遍历自己的商品再逐件查留言 —— 那会漏掉「在别人商品下的留言」并形成 N+1。
+    index('comments_author_id_created_at_id_idx').on(table.authorId, table.createdAt, table.id),
   ],
 )

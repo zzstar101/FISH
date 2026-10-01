@@ -345,7 +345,7 @@ export default function Verify() {
     return (
       <View className="verify">
         <View className="verify__bg" />
-        <NavBar />
+        <NavBar fixed />
 
         <View className="verify__content">
           <View className="verify__okwrap">
@@ -424,7 +424,7 @@ export default function Verify() {
   return (
     <View className="verify">
       <View className="verify__bg" />
-      <NavBar />
+      <NavBar fixed />
 
       <View className="verify__head">
         <Text className="verify__title">

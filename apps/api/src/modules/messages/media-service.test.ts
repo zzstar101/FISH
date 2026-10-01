@@ -36,6 +36,8 @@ function row(input: MediaMessageInput): MediaRow {
     width: 'width' in input ? input.width : null,
     height: 'height' in input ? input.height : null,
     duration_ms: 'durationMs' in input ? input.durationMs : null,
+    recalled_at: null,
+    reply_to_id: null,
     created_at: '2026-09-14T12:00:00.000Z',
     created_at_iso: '2026-09-14T12:00:00.000000Z',
   }
@@ -56,6 +58,7 @@ function setup(
     find: async () => row(image),
     // 默认无幂等命中：既有用例都不带 clientRequestId，快速路径不会触发。
     findByRequestKey: async () => null,
+    findReplyTargets: async () => new Map(),
     ...overrides,
   }
   const storage: MediaStorage = {

@@ -2,7 +2,7 @@
  * 只接受规范化为 `/pc` 下的站内绝对路径，挡掉 absolute URL、protocol-relative
  * URL 和 `/pc/../admin` 这类规范化后会逃出 PC 应用的路径。
  *
- * 登录 / 注册页不允许作为回跳目标：否则登录成功后可能再次落回登录页。
+ * 登录页不允许作为回跳目标：否则登录成功后可能再次落回登录页。
  */
 export function sanitizeRedirect(value: unknown): string {
   if (typeof value !== 'string') return '/pc/'
@@ -20,7 +20,7 @@ export function sanitizeRedirect(value: unknown): string {
   const isPcPath = canonicalPath === '/pc' || canonicalPath.startsWith('/pc/')
   if (!isPcPath) return '/pc/'
   if (canonicalPath === '/pc') return `/pc/${url.search}${url.hash}`
-  if (canonicalPath === '/pc/login' || canonicalPath === '/pc/register') return '/pc/'
+  if (canonicalPath === '/pc/login') return '/pc/'
 
   return `${url.pathname}${url.search}${url.hash}`
 }

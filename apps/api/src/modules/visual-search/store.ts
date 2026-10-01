@@ -1,6 +1,7 @@
 import type { Db } from '@fish/db/client'
 import { favorites } from '@fish/db/schema/favorites'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { users } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import {
   topKSimilarListingsByVisual,
@@ -164,6 +165,8 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
 
       // 可见性**再判一次**：召回与取卡片之间隔着一次向量化调用（可能是一秒级），
       // 期间卖家完全可能把商品下架/编辑到重新待审。召回时过滤过不代表现在仍然可见。
+      // innerJoin users（#344）：卡片必须带卖家公开子集，与公开 feed / 详情同一口径；
+      // `seller_id` 外键保证行存在，PK join 是 1:1，不影响召回与取卡片。
       const rows = await db
         .select({
           id: listings.id,
@@ -177,8 +180,15 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
           negotiable: listings.negotiable,
           free: listings.free,
           createdAt: listings.createdAt,
+          seller: {
+            id: users.id,
+            nickname: users.nickname,
+            avatarUrl: users.avatarUrl,
+            authStatus: users.authStatus,
+          },
         })
         .from(listings)
+        .innerJoin(users, eq(users.id, listings.sellerId))
         .where(and(inArray(listings.id, listingIds), publicListingVisibility()))
 
       for (const row of rows) result.set(row.id, row)
