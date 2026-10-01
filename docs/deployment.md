@@ -647,7 +647,7 @@ sudo systemctl restart fish-api fish-worker
 ```
 
 **不要在生产跑 `bun run db:seed`。** 它会 `TRUNCATE` 全部业务表，而它的守卫只检查连接串的
-hostname（`packages/db/src/seed.ts:284-291`）——生产库正好是 `127.0.0.1`，守卫会**放行**。
+hostname（`packages/db/src/seed.ts:405-411`）——生产库正好是 `127.0.0.1`，守卫会**放行**。
 
 ### 7.2 日常发布
 
@@ -825,7 +825,7 @@ sudo journalctl -u fish-api --since '-5 min' --no-pager | grep '环境变量校�
    - 不要在部署机上跑 `bun test`、`bun run core:smoke` 或 `bun run dev:worker`。
    - 需要扩容时必须先把回收语义换成 `locked_at` + 续租（代码改动，另开 Issue）。
 2. **`/api` 前缀只在反代层剥**。API 路由是根级的；反代若把 `/api/health` 原样转过去就是 404。
-3. **`db:seed` 的守卫只看 hostname**（`packages/db/src/seed.ts:284`）。同机部署恒为 `127.0.0.1`，
+3. **`db:seed` 的守卫只看 hostname**（`packages/db/src/seed.ts:405-408`）。同机部署恒为 `127.0.0.1`，
    守卫不拦，生产禁用。
 4. **`S3_ENDPOINT` / `S3_PUBLIC_URL` 必须同时对“服务端”与“浏览器”可达**：
    - 图片是**客户端直传**：`presign` 返回的 URL 由 `Bun.S3Client` 按 `S3_ENDPOINT` 的 host 签名
