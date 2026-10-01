@@ -86,7 +86,17 @@ async function listMine(cookie: string) {
     body: (await response.json()) as {
       items: {
         comment: { id: string; listingId: string; parentId: string | null }
-        listing: { id: string; moderationStatus: string | null }
+        listing: {
+          id: string
+          moderationStatus: string | null
+          /** #191 的卡片卖家公开子集（与 `ListingCardSchema.seller` 同口径，契约里可选）。 */
+          seller?: {
+            id: string
+            nickname: string
+            avatarUrl: string | null
+            authStatus: string
+          }
+        }
       }[]
       nextCursor: string | null
       total: number
