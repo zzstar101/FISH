@@ -59,6 +59,20 @@ export function NotificationsPage() {
       return
     }
 
+    // TX / MODERATION 直接跳（会话与「我的发布」都是静态路由，不需要先确认存在）；
+    // 只有商品目标要先确认还在架上，避免跳进一个已下架/已删的详情页。
+    if (target.kind === 'conversation') {
+      await navigate({
+        to: '/messages/$conversationId',
+        params: { conversationId: target.conversationId },
+      })
+      return
+    }
+    if (target.kind === 'mylist') {
+      await navigate({ to: '/mylist' })
+      return
+    }
+
     await openListingTarget(target, epoch)
   }
 

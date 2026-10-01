@@ -138,10 +138,50 @@ function toIso(value: Date | string | null): string | null {
   return value == null ? null : new Date(value).toISOString()
 }
 
+/**
+ * 确认类动作下，**对方视角**能收到的交易事件；没有新东西可说时返回 null。
+ *
+ * - 交易已 `COMPLETED` → 对方看到的是「交易已完成」（谁是最后确认的一方都一样）；
+ * - 仍在 `PENDING_MEETUP`：我方这一侧还没确认 → 对方没有任何新进展（null）；
+ *   我方已确认 → 对方学到的是「对方已确认」（`CONFIRMED`）。
+ *
+ * `confirm` 用它比动作前后：相同就不发通知（no-op 重放不发），不同才发。
+ *
+ * 由「我方刚盖章」推出来的，因此只覆盖 `confirm` 这条路径：`CONFIRMED` 必然发给
+ * 尚未确认的那一方，而卖家那一侧的确认另有来源（核销展示码，`consumeMeetup`），
+ * 它的 `COMPLETED` 由那里直接发（见 `consumeMeetup` 的注释）—— 两边合起来才是
+ * 完整的「谁在什么时候学到什么」，不要在别处假定 `CONFIRMED` 也会发给卖家。
+ */
+function eventKnownToCounterpart(
+  status: string,
+  myConfirmedAt: Date | string | null,
+): 'CONFIRMED' | 'COMPLETED' | 'CANCELLED' | null {
+  if (status === 'COMPLETED') return 'COMPLETED'
+  if (status === 'CANCELLED') return 'CANCELLED'
+  return myConfirmedAt === null ? null : 'CONFIRMED'
+}
+
 export type TxSideEffect = (
   participants: { buyerId: string; sellerId: string },
   message: MessageRow,
 ) => void
+
+/**
+ * 交易事件通知（任务一 #89：交易进展通知的产生点）。
+ *
+ * 服务在动作**成功后**调用，收件人是动作的对方（发起方不给自己发：PROPOSED 发卖家、
+ * ACCEPTED / REJECTED 发买家、CONFIRMED / COMPLETED / CANCELLED 发对方）。
+ * 实现方负责落 notifications 表并**自吞错误** —— 通知是旁路，失败不得影响交易响应，
+ * 也不允许留下 unhandled rejection（见 app.ts 的注入实现）。
+ */
+export type TransactionNotifier = (input: {
+  userId: string
+  event: 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED'
+  conversationId: string
+  listingId: string
+  /** PROPOSED 阶段提案不落表，没有交易 id；其余事件都有。 */
+  transactionId?: string
+}) => void
 
 export interface TransactionService {
   /** 响应是写入的 SYSTEM 消息（契约 MessageDto，camelCase）。 */
@@ -212,12 +252,15 @@ export function createTransactionService({
   meetupSecret,
   /** SYSTEM 消息写入后回调（实时推送）；推送失败不得影响响应。 */
   onSystemMessage,
+  /** 交易事件通知（任务一）；实现自吞错误，见 `TransactionNotifier`。 */
+  notify,
 }: {
   store: TransactionStore
   messages: MessageStore
   storage: MediaStorage
   meetupSecret: string
   onSystemMessage?: TxSideEffect
+  notify?: TransactionNotifier
 }): TransactionService {
   const meetupCrypto = new MeetupTokenCrypto(meetupSecret)
   async function writeSystem(
@@ -289,6 +332,25 @@ export function createTransactionService({
       throw error
     }
     if (result.kind === 'ok') {
+      /*
+       * 核销盖的是**卖家自己**的面交确认（出示码就是他的同意），所以卖家不需要
+       * 「对方已确认」这种通知。但买家先单侧确认过时，本次核销就是第二侧确认事件，
+       * 交易在同一事务里直接 COMPLETED —— 这条 `COMPLETED` 只有这里能发：
+       * 客户端随后的 `confirm` 在 COMPLETED 上是幂等重放，`eventKnownToCounterpart`
+       * 前后相同、按设计不发（见 `confirm` 的注释），不发就等于卖家永远不知道成交了。
+       *
+       * 重读一次交易（非热路径）：`result.row` 是凭证行，不带交易状态。
+       */
+      const after = await store.findById(id)
+      if (after?.status === 'COMPLETED') {
+        notify?.({
+          userId: row.seller_id,
+          event: 'COMPLETED',
+          conversationId: row.conversation_id,
+          listingId: row.listing_id,
+          transactionId: id,
+        })
+      }
       return meetupVerificationResponseSchema.parse({
         transactionId: encodePublicId(PUBLIC_ID_PREFIX.transaction, id),
         verified: true,
@@ -336,12 +398,22 @@ export function createTransactionService({
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
-      return toMessageDto(
-        await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+      const message = await writeSystem(
+        { buyerId: brief.buyerId, sellerId: brief.sellerId },
+        brief.id,
+        {
           type: 'tx.proposal',
           amountCents: input.amountCents,
-        }),
+        },
       )
+      // 提案不落表，收件人卖家拿不到「可跳的交易」——通知只带会话/商品。
+      notify?.({
+        userId: brief.sellerId,
+        event: 'PROPOSED',
+        conversationId: brief.id,
+        listingId: brief.listingId,
+      })
+      return toMessageDto(message)
     },
 
     async reject(userId, input) {
@@ -355,11 +427,20 @@ export function createTransactionService({
           '只有卖家可以拒绝交易确认',
         )
       }
-      return toMessageDto(
-        await writeSystem({ buyerId: brief.buyerId, sellerId: brief.sellerId }, brief.id, {
+      const message = await writeSystem(
+        { buyerId: brief.buyerId, sellerId: brief.sellerId },
+        brief.id,
+        {
           type: 'tx.rejected',
-        }),
+        },
       )
+      notify?.({
+        userId: brief.buyerId,
+        event: 'REJECTED',
+        conversationId: brief.id,
+        listingId: brief.listingId,
+      })
+      return toMessageDto(message)
     },
 
     async accept(userId, input) {
@@ -390,6 +471,13 @@ export function createTransactionService({
 
       // 消息已随交易落库，这里只负责推给在线端（落库失败则根本走不到这一步）。
       onSystemMessage?.({ buyerId: brief.buyerId, sellerId: brief.sellerId }, result.message)
+      notify?.({
+        userId: brief.buyerId,
+        event: 'ACCEPTED',
+        conversationId: brief.id,
+        listingId: brief.listingId,
+        transactionId: result.row.id,
+      })
       // 刚建的行 FK 必然齐备；拿不到摘要属于不可达防御分支。此刻交易已创建且
       // listing 已锁定、SYSTEM 消息已推送——不能复用 409 业务码（会诱导客户端把
       // "实际已成功"当失败重试），交给 onError 统一成 500 INTERNAL_ERROR。
@@ -443,12 +531,46 @@ export function createTransactionService({
         throw notFound()
       }
       const role = existing.buyer_id === userId ? 'buyer' : 'seller'
+      /*
+       * 动作**前**对方已经知道什么，必须在 `store.confirm` 之前读出来：store 的
+       * 内存实现会原地改 `rows` 里的行对象，`existing` 与返回值可能别名同一个对象，
+       * 动作后再读会拿到新状态（真 SQL 实现回的是新行，但这里不能依赖实现差异）。
+       */
+      const recipient = existing.buyer_id === userId ? existing.seller_id : existing.buyer_id
+      const myPriorConfirmedAt =
+        role === 'buyer' ? existing.buyer_confirmed_at : existing.seller_confirmed_at
+      const before = eventKnownToCounterpart(existing.status, myPriorConfirmedAt)
+
       const result = await store.confirm(id, userId, role)
       if (result.kind === 'cancelled') {
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '交易已取消，无法确认')
       }
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
+
+      /*
+       * 只在「对方真的能学到新东西」时才发通知。
+       *
+       * store 对 no-op 也返回 `ok`：COMPLETED 上重复确认走幂等分支（`store.ts` 的
+       * `kind: 'ok'` 注释），同侧在 PENDING_MEETUP 上重复确认会重新 `now()` 盖章 ——
+       * 两者都是「状态没变」，但客户端明确会重试（面交页的 `retryConfirm`、PC 订单详情
+       * 响应丢失后再点）。无脑发通知会让同一进展反复推送「对方已确认面交」并污染未读角标。
+       *
+       * 判据是**对方视角的事件**在动作前后是否相同；相同就不发。收件人始终是对方
+       * （发起方自己刚做完这个动作，不需要再被告知一遍）。
+       */
+      const myNewConfirmedAt =
+        role === 'buyer' ? result.row.buyer_confirmed_at : result.row.seller_confirmed_at
+      const after = eventKnownToCounterpart(result.row.status, myNewConfirmedAt)
+      if (after !== null && after !== before) {
+        notify?.({
+          userId: recipient,
+          event: after,
+          conversationId: existing.conversation_id,
+          listingId: existing.listing_id,
+          transactionId: existing.id,
+        })
+      }
       return dto
     },
 
@@ -458,6 +580,8 @@ export function createTransactionService({
       if (!existing || (existing.buyer_id !== userId && existing.seller_id !== userId)) {
         throw notFound()
       }
+      // 同 confirm：动作前的状态要先读出来（内存 store 会原地改行对象）
+      const wasCancelled = existing.status === 'CANCELLED'
       const result = await store.cancel(id, userId)
       if (result.kind === 'not-cancellable') {
         throw new TransactionServiceError(409, 'TRANSACTION_NOT_IN_PENDING', '已完成的交易不可取消')
@@ -465,6 +589,16 @@ export function createTransactionService({
       if (result.kind !== 'ok') throw notFound()
       const [dto] = await toDtos(store, storage, [result.row], userId)
       if (!dto) throw notFound()
+      // 已经是 CANCELLED 的重复取消（store 幂等返回现状）不再发第二条通知，理由同 confirm。
+      if (!wasCancelled) {
+        notify?.({
+          userId: existing.buyer_id === userId ? existing.seller_id : existing.buyer_id,
+          event: 'CANCELLED',
+          conversationId: existing.conversation_id,
+          listingId: existing.listing_id,
+          transactionId: existing.id,
+        })
+      }
       return dto
     },
 

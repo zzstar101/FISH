@@ -35,4 +35,5 @@ export const DEMO_USER: Me = {
   verifiedAt: '2026-01-01T00:00:00.000Z',
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }

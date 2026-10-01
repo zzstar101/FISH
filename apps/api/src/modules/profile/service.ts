@@ -109,8 +109,14 @@ export function createProfileService({
 
     async updateProfile(me, input) {
       const userId = decodePublicId(PUBLIC_ID_PREFIX.user, me.id)
-      const patch: { nickname?: string; avatarUrl?: string } = {}
+      const patch: { nickname?: string; avatarUrl?: string; signature?: string | null } = {}
       if (input.nickname !== undefined) patch.nickname = input.nickname
+      // #179：trim 归一化在**写边界**做（service 自足，不依赖 router 层先 parse）；
+      // 空白 = 清空 → 落 null（与「从未填写」同态）
+      if (input.signature !== undefined) {
+        const trimmed = input.signature.trim()
+        patch.signature = trimmed.length === 0 ? null : trimmed
+      }
       if (input.avatarObjectKey !== undefined) {
         // 复用上传域的 confirm，而不是自己再写一遍前缀 / stat / mime 校验：
         // 发布商品与改头像的失败码与文案必须是同一套（IMAGE_REFERENCE_INVALID /

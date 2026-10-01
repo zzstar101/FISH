@@ -6,6 +6,7 @@ import {
 } from '@fish/contracts/auth/verification'
 import type { Db } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
+import { writeNotification } from '../notifications/writer'
 import { isUniqueViolation } from './unique'
 import type { EmailVerificationProvider } from './verification-provider'
 import {
@@ -108,7 +109,7 @@ export function createVerificationService(deps: {
         )
       }
 
-      return deps.db
+      const status = await deps.db
         .transaction(async (tx) => {
           const bound = await store.bindEmailAndVerify(tx, userId, input.email)
           if (bound === 'EMAIL_TAKEN') {
@@ -133,6 +134,19 @@ export function createVerificationService(deps: {
           }
           throw error
         })
+
+      // 认证成功 → ACCOUNT 通知（任务一 #89，账号类目前唯一产生点）。用户自己刚完成
+      // 验证，这条通知的价值是进「通知」流留档；写入失败只影响通知列表，不影响认证结果。
+      try {
+        await writeNotification(deps.db, {
+          userId,
+          type: 'ACCOUNT',
+          payload: { subject: 'VERIFICATION', outcome: 'APPROVED' },
+        })
+      } catch (error) {
+        console.warn('[api] 认证通知写入失败（不影响认证结果）', error)
+      }
+      return status
     },
 
     async status(userId: string): Promise<VerificationStatus> {

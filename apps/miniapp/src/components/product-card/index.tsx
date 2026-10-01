@@ -17,11 +17,10 @@ import './index.scss'
 type ProductCardProps = {
   listing: MockListing
   /**
-   * 卖家。**可为 `null`**：契约的 `ListingCard` 没有卖家字段
-   * （`packages/contracts/src/listings/schema.ts` 只给了 id/title/price/…），
-   * 真实接口的列表卡因此拿不到卖家。此时整行不渲染 ——
-   * 不编一个卖家出来（`mock/users.ts` 的 `getUser` 会对未知 id 兜底到某个真实演示用户，
-   * 所以调用方必须用 `findUser` 并把 `null` 原样传进来）。
+   * 卖家。**可为 `null`**：#191 起契约卡片内嵌 `seller`（公开四字段），调用方传
+   * `listing.seller` 即真值；契约 `seller` 缺席的老 mock 记录是 `null`，
+   * 此时整行不渲染 —— 不编一个卖家出来（`mock/users.ts` 的 `getUser` 会对未知 id
+   * 兜底到某个真实演示用户，绝不能把卡片卖家喂给它）。
    */
   seller: MockUser | null
   /** 图片区高度（rpx），由瀑布流按列宽 × 比例算好后传入 */
@@ -72,6 +71,18 @@ export default function ProductCard({
     void Taro.navigateTo({ url: buildListingDetailUrl(listing.id, attribution) })
   }
 
+  /**
+   * 卖家行是卡片内的**独立点击区**（#191 验收：点击进入正确公开主页）：
+   * 拦下冒泡，同一次点击只进卖家主页、不进商品详情。
+   * Taro 合成事件的 `stopPropagation` 在运行时阻断冒泡，效果等同小程序的 catch 语义。
+   * 根节点的 `handleOpen` 不会触发。
+   */
+  const handleOpenSeller = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation()
+    if (!seller) return
+    void Taro.navigateTo({ url: `/pages/user/index?id=${seller.id}` })
+  }
+
   return (
     <View
       className="pcard"
@@ -108,11 +119,12 @@ export default function ProductCard({
         </View>
 
         {/*
-          卖家行整行依赖 seller：真实列表卡没有卖家字段，传进来就是 null。
+          卖家行整行依赖 seller：契约 `seller` 缺席的老 mock 记录传进来是 null。
           此时不渲染这一行，而不是显示一个占位名 —— 卡片下方留白比假人诚实。
+          有卖家时整行可点：进 TA 的公开主页（详情页顶部卖家卡同一跳转口径）。
         */}
         {seller ? (
-          <View className="pcard__seller">
+          <View className="pcard__seller" onClick={handleOpenSeller}>
             <Image className="pcard__avatar" src={seller.avatarUrl} mode="aspectFill" />
             <Text className="pcard__who">{seller.nickname}</Text>
             {verified ? (
