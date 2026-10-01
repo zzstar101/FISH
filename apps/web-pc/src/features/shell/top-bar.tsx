@@ -1,5 +1,6 @@
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
+import { LiquidGlassLayer } from '@fish/ui/liquid-glass'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Bell, MessageCircle, Plus, Search } from 'lucide-react'
@@ -22,12 +23,35 @@ export function TopBar() {
   }
 
   return (
-    <header className="sticky top-0 z-30 h-16 border-line border-b bg-surface/95 backdrop-blur">
+    /*
+     * 液态玻璃顶栏。原来的 `bg-surface/95 backdrop-blur` 必须去掉：`backdrop-filter`
+     * 会让这里变成 backdrop root，把 <LiquidGlassLayer/> 的折射直接压没（磨砂改由
+     * 它自己的 warp 提供）。`sticky z-30` 同时负责建层叠上下文，让 warp 的
+     * z-index:-1 老实待在玻璃内部。见 styles.css 的 .pc-glass。
+     *
+     * 磨砂用组件默认值（blurAmount 0.375 → 24px），**不调薄**：顶栏是 sticky 的，
+     * 商品卡会从它底下滚过去，正是 liquid-glass.tsx 里「14px 挡不住位移、会把文字拖进
+     * 边缘像鬼影」那个实测场景。玻璃要透得好看的地方在侧栏（见 side-nav）。
+     *
+     * 白度定 /85、而不是更透，是因为**顶栏下面有内容滚过**：文字对比度下限由这层白度
+     * 决定，最坏背衬是商品卡里偏暗的照片（理论下限是纯黑）。按最坏情况倒推——ink-2 要
+     * 满足 AA 4.5:1 需要合成底色 ≥ #d9d9d9，即 0.85 × 255 ≈ 217。
+     * 这里踩过一次：先写成 /72，只按「背后是静止水层」测到 2.98 就收了，漏掉滚动工况；
+     * /72 下副标题（当时用 --color-ink-3）在暗照片上会掉到 2.3 左右。
+     *
+     * 副标题同时从 --color-ink-3 换成 --color-ink-2：半透明玻璃面上不该放 muted 文字。
+     * 实测（1440x900、静止水层背衬）品牌字 --color-ink 12.2、图标与副标题 --color-ink-2
+     * 约 6.0；纯黑背衬下 ink-2 仍在 4.5 以上。
+     * `saturation` 从默认 180 收到 120 —— 180 会把水层的青放大到蓝通道接近饱和
+     * （实测底色 rgb(200,230,253)），亮度掉下来。
+     */
+    <header className="pc-glass sticky top-0 z-30 h-16 border-b border-white/55 bg-white/85">
+      <LiquidGlassLayer saturation={120} />
       <div className="mx-auto flex h-full max-w-[1600px] items-center gap-7 px-8">
         <Link className="flex min-w-[220px] items-center gap-2.5" to="/">
           <img alt="鱼小应" className="size-8 object-contain" src="/pc/brand-fish.png" />
           <span className="font-bold text-[17px] tracking-[-0.02em]">鱼小应</span>
-          <span className="text-ink-3 text-xs">广应科校内二手</span>
+          <span className="text-ink-2 text-xs">广应科校内二手</span>
         </Link>
 
         <form className="flex max-w-[640px] flex-1" onSubmit={submit}>
