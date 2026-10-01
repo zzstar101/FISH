@@ -33,6 +33,12 @@ import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
 import { createChatWatchersRouter } from './modules/conversations/watchers-router'
 import { createChatWatchersService } from './modules/conversations/watchers-service'
+import { createFavoritesRouter } from './modules/favorites/router'
+import { createFavoriteService } from './modules/favorites/service'
+import { createSqlFavoriteStore } from './modules/favorites/store'
+import { createFollowsRouter } from './modules/follows/router'
+import { createFollowService } from './modules/follows/service'
+import { createSqlFollowStore } from './modules/follows/store'
 import { createRestrictionGuard } from './modules/governance/guard'
 import { createGovernanceService } from './modules/governance/service'
 import { createSqlGovernanceStore } from './modules/governance/store'
@@ -55,6 +61,7 @@ import { createContentModerationProvider } from './modules/moderation/providers/
 import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
+import { writeNotification } from './modules/notifications/writer'
 import { createProfileRouter } from './modules/profile/router'
 import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
@@ -210,6 +217,12 @@ export function createApp(
     store: createSqlListingStore(db),
     storage,
     mediaObjects,
+    // #228：Listing 文本审核走同一份 moderation env（`CONTENT_MODERATION_TRANSPORT=local|tencent`，
+    // production 缺腾讯配置时由 env 层 fail-fast）。`loadImage` 不会被调用——图片审核在 uploads 的
+    // confirm 里（#286），listings 只用 `moderateText`。
+    moderationProvider: createContentModerationProvider(moderationEnv, {
+      loadImage: () => Promise.reject(new Error('listings 不使用图片审核')),
+    }),
   })
   app.route(
     '/listings',
@@ -265,13 +278,15 @@ export function createApp(
     }),
   )
 
-  // 留言 / 评论（#111）：挂根路径，因为三个端点跨 `/listings/:id/comments` 与
-  // `/comments/:id/replies`（路径常量在 `@fish/contracts/comments/routes`）。
-  // 读接口匿名可用、写接口逐路由挂 requireAuth（与 listings 同一分界）。
+  // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
+  // `/comments/:id/replies`、`/comments/:id`（DELETE）与 `/me/comments`（路径常量在
+  // `@fish/contracts/comments/routes`）。读接口匿名可用、写与本人作用域逐路由挂 requireAuth
+  // （与 listings 同一分界）；`storage` 复用同一实例 —— 本人留言列表里的商品卡片封面
+  // 与 feed / 详情必须同一套拼法。
   app.route(
     '/',
     createCommentsRouter({
-      service: createCommentService({ store: createSqlCommentStore(db) }),
+      service: createCommentService({ store: createSqlCommentStore(db), storage }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
       recorder: recommendationRecorder,
@@ -287,6 +302,36 @@ export function createApp(
     '/',
     createUsersRouter({
       service: createPublicUserService({ store: createSqlPublicUserStore(db), storage }),
+    }),
+  )
+
+  // 收藏关系（#190）：`GET /me/favorites` 与 `GET|POST|DELETE /listings/:listingId/favorite`。
+  // 本域**没有匿名路径**（收藏是「我」与某件商品之间的关系，浏览者是谁决定看得到哪一份数据），
+  // 所以两条路径整挂 requireAuth；router 内部还兜一层失败关闭（拿不到可信 userId → 401）。
+  // 只读写 `favorites` / `listings` / `listing_images` 表，不调用其他 Domain API
+  // （与 profile / users 同一取舍）；`storage` 复用同一实例 —— 收藏列表里的卡片封面
+  // 与 feed / 详情必须同一套拼法。挂根路径，因为两个端点分属 `/me/...` 与 `/listings/...`。
+  app.use('/me/favorites', auth.requireAuth)
+  app.use('/listings/:listingId/favorite', auth.requireAuth)
+  app.route(
+    '/',
+    createFavoritesRouter({
+      service: createFavoriteService({ store: createSqlFavoriteStore(db), storage }),
+      getUserId: (c) => c.get('userId'),
+    }),
+  )
+
+  // 关注关系（#188）：`GET /me/following` 与 `GET|POST|DELETE /users/:userId/follow`。
+  // 本域**没有匿名路径**（关注关系是「我」与某个人的有向边），所以两条路径整挂 requireAuth；
+  // router 内部还兜一层失败关闭（拿不到可信 userId → 401）。只读写 `follows` / `users` 表，
+  // 不调用其他 Domain API（与 profile / users 同一取舍）。
+  app.use('/me/following', auth.requireAuth)
+  app.use('/users/:userId/follow', auth.requireAuth)
+  app.route(
+    '/',
+    createFollowsRouter({
+      service: createFollowService({ store: createSqlFollowStore(db) }),
+      getUserId: (c) => c.get('userId'),
     }),
   )
 
@@ -397,12 +442,24 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
+        storage,
         projectContent: projectSystemContent,
         onMessageCreated: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',
             conversationId: message.conversationId,
             message,
+          })
+        },
+        // #359 3c 撤回：落库成功后推给会话双方（同一人多连接也要同步）。
+        onMessageRecalled: (participants, event) => {
+          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+            type: 'message.recalled',
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            recalledAt: event.recalledAt,
+            recalledBy: event.recalledBy,
           })
         },
       }),
@@ -439,6 +496,24 @@ export function createApp(
             conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, message.conversation_id),
             message: toMessageDto(message),
           })
+        },
+        // 交易进展通知（任务一 #89）：fire-and-forget，失败不影响交易响应。
+        // payload 存裸 UUID（与 worker 的 MATCH 写入同一形态），读侧转公开 TypeID。
+        notify: async (input) => {
+          try {
+            await writeNotification(db, {
+              userId: input.userId,
+              type: 'TX',
+              payload: {
+                event: input.event,
+                conversationId: input.conversationId,
+                listingId: input.listingId,
+                ...(input.transactionId ? { transactionId: input.transactionId } : {}),
+              },
+            })
+          } catch (error) {
+            console.warn('[api] 交易通知写入失败（不影响交易）', error)
+          }
         },
       }),
       requireAuth: auth.requireAuth,

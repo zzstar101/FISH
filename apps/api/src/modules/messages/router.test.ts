@@ -5,6 +5,7 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 const CONVERSATION = '01930000-0000-7000-8000-0000000000c1'
 const conversationPath = `/conversations/${encodePublicId(PUBLIC_ID_PREFIX.conversation, CONVERSATION)}/messages`
 const sender = encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a1')
+const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, '01930000-0000-7000-8000-0000000000b1')
 
 import { Hono } from 'hono'
 import { allowRestrictionGuard } from '../governance/testing'
@@ -18,12 +19,16 @@ const message: MessageDto = {
   sender: { id: sender, nickname: '买家', avatarUrl: null },
   type: 'TEXT',
   content: '还在吗',
+  recalledAt: null,
+  replyTo: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 
 const service: MessageService = {
   listMessages: async () => ({ items: [message], nextCursor: null }),
   sendTextMessage: async () => message,
+  recallMessage: async () => undefined,
+  sendListingMessage: async () => message,
 }
 
 function buildApp(overrides: Partial<MessageService> = {}) {
@@ -169,6 +174,96 @@ describe('messages router', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ content: 'hi', clientRequestId: 'not-a-uuid' }),
+    })
+    expect(response.status).toBe(422)
+    expect(called).toBe(false)
+  })
+
+  /* #359：同一个端点按判别值分流到商品卡发送，TEXT 的两种旧形态都保持不变。 */
+  test('POST /:id/messages 按 type=LISTING 分流到 sendListingMessage（201）', async () => {
+    const listingCard: MessageDto = {
+      ...message,
+      type: 'LISTING',
+      content: listingId,
+      listing: {
+        id: listingId,
+        title: 'K380 键盘',
+        priceCents: 16000,
+        status: 'ACTIVE',
+        coverUrl: null,
+      },
+    }
+    let seen: unknown
+    const app = buildApp({
+      sendListingMessage: async (_userId, _conversationId, input) => {
+        seen = input
+        return listingCard
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        type: 'LISTING',
+        listingId,
+        clientRequestId: '01990000-0000-7000-8000-0000000000f4',
+      }),
+    })
+    expect(response.status).toBe(201)
+    expect(seen).toEqual({
+      type: 'LISTING',
+      listingId,
+      clientRequestId: '01990000-0000-7000-8000-0000000000f4',
+    })
+    expect(await response.json()).toEqual(listingCard)
+  })
+
+  test('POST /:id/messages 仍接受不带判别值的 TEXT 体（旧客户端零升级）', async () => {
+    let seen: unknown
+    const app = buildApp({
+      sendTextMessage: async (_userId, _conversationId, input) => {
+        seen = input
+        return message
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'hi' }),
+    })
+    expect(response.status).toBe(201)
+    expect(seen).toEqual({ content: 'hi' })
+  })
+
+  test('POST /:id/messages 接受显式 type=TEXT（与 LISTING 同风格的判别式调用方）', async () => {
+    let seen: unknown
+    const app = buildApp({
+      sendTextMessage: async (_userId, _conversationId, input) => {
+        seen = input
+        return message
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'TEXT', content: 'hi' }),
+    })
+    expect(response.status).toBe(201)
+    expect(seen).toEqual({ type: 'TEXT', content: 'hi' })
+  })
+
+  test('POST /:id/messages rejects a LISTING body without listingId with 422', async () => {
+    let called = false
+    const app = buildApp({
+      sendListingMessage: async () => {
+        called = true
+        return message
+      },
+    })
+    const response = await app.request(conversationPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'LISTING' }),
     })
     expect(response.status).toBe(422)
     expect(called).toBe(false)
