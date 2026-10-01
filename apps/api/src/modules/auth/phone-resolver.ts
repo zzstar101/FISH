@@ -144,7 +144,8 @@ export function createLivePhoneResolver(deps: {
         )
       }
 
-      // `errcode` 的三种形态分开处理，与 `wechat-platform.ts` 同一口径：
+      // `errcode` 的三种形态分开处理（原则与 `wechat-platform.ts` 一致——只信任整数 `errcode`；
+      // 那边只在失败路径读它，所以没有「缺失」这一支，不能照搬）：
       // - **缺失**：按成功形状继续，交给下面的 phone_info 校验兜底；
       // - **存在但非整数**（`"0"` / `1.5` / `null`）：畸形响应，fail closed —— 既不当成功去读
       //   phone_info，也不把可控文本拼进会进日志的 message；
