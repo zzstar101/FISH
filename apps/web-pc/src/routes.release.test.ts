@@ -15,6 +15,7 @@ const USER: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 function routerAt(entry: string) {
@@ -57,12 +58,35 @@ describe('PC release route boundaries', () => {
     expect(matchedRouteIds('/pc/listing/lst_01jc000000e00800000000000t').at(-1)).toBe(
       '/listing/$listingId',
     )
+    // 他人主页与商品详情同为免登录公开页（`__root.tsx` 的白名单），
+    // basepath + 动态段组合别在这里被改坏。
+    expect(matchedRouteIds('/pc/users/usr_01jc000000e00800000000000c').at(-1)).toBe(
+      '/users/$userId',
+    )
     expect(matchedRouteIds('/pc/messages/cnv_01jc000000e00800000000001a').at(-1)).toBe(
       '/messages/$conversationId',
     )
     expect(matchedRouteIds('/pc/orders/txn_01jc000000e00800000000004t').at(-1)).toBe(
       '/orders/$transactionId',
     )
+  })
+
+  /**
+   * 他人主页与商品详情一样是**免登录公开页**：`__root.tsx` 的白名单漏掉它，
+   * 匿名访客就会被 `RequireAuth` 弹去登录 —— 而契约明确要求这两个端点匿名可读。
+   * 断言页面本体渲染出来了：走登录守卫时渲染的是 `Navigate`，看不到这行加载态。
+   */
+  test('the public user profile renders for an anonymous visitor', async () => {
+    const html = await renderAt('/pc/users/usr_01jc000000e00800000000000c', null).catch(
+      (error: unknown) => {
+        // 白名单被摘掉时 `RequireAuth` 会走 `currentHref()`，在 SSR 下抛 `window is not defined`。
+        // 原始报错指向环境，容易被误读成「测试坏了」，换成能说明问题的信息。
+        throw new Error(
+          `匿名渲染他人主页失败 —— 多半是 /users/$userId 从 __root.tsx 的免登录白名单里掉了。\n原因：${String(error)}`,
+        )
+      },
+    )
+    expect(html).toContain('正在加载用户资料')
   })
 
   test('unknown /pc paths resolve to the root not-found boundary', () => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import brandWordmark from '@/assets/brand/brand-wordmark.png'
 import { ICONS } from '@/assets/lib-icons'
+import NavBar from '@/components/nav-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { confirmBackTicket } from '@/features/auth/login-continue'
 import { wechatLoginFailureMessage } from '@/features/auth/login-messages'
@@ -144,6 +145,10 @@ export default function Login() {
   return (
     <View className="login">
       <View className="login__bg" />
+
+      {/* 左上角返回钮（#386 批次 2，Owner 2026-10-01 拍板）：漂浮玻璃圆钮，
+          与 settings 等二级页同款；登录页没有页栈时可退到首页（组件内置兜底）。 */}
+      <NavBar />
 
       <View className="login__body" style={{ paddingTop: `${navHeight}px` }}>
         {/* ---- 品牌区（稿：mark / wordmark 两张图 + tagline） ---- */}

@@ -5,6 +5,8 @@ import { CommentServiceError, createCommentService } from './service'
 import type { CommentCursor, CommentRow, CommentStore } from './store'
 
 const SELLER_ID = '01930000-0000-7000-8000-00000000000a'
+/** 只取 `publicUrl`：「公开 URL 怎么拼」只有一个实现（#6 契约 §7.8）。 */
+const storage = { publicUrl: (key: string) => `https://cdn.example/${key}` }
 const BUYER_ID = '01930000-0000-7000-8000-00000000000b'
 const LISTING_ID = '01930000-0000-7000-8000-000000000011'
 const COMMENT_ID = '01930000-0000-7000-8000-000000000021'
@@ -43,6 +45,19 @@ function fakeStore(
   return {
     inserts,
     listCursors,
+    // #195 的四个方法：本文件只覆盖留言读写的老行为，给不会被执行到的最小实现。
+    async listByAuthor() {
+      return []
+    },
+    async countByAuthor() {
+      return 0
+    },
+    async countReplies() {
+      return 0
+    },
+    async deleteOwn() {
+      return 0
+    },
     async findListingSellerId() {
       return options.sellerId === undefined ? SELLER_ID : options.sellerId
     },
@@ -84,7 +99,7 @@ describe('comment service — list', () => {
       topLevel: [row()],
       replies: [row({ id: REPLY_ID, parentId: COMMENT_ID, authorId: SELLER_ID })],
     })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     const result = await service.listComments(LISTING_ID, { limit: 20 })
     expect(result.items[0]?.isSeller).toBe(false)
@@ -94,7 +109,7 @@ describe('comment service — list', () => {
 
   test('404s when the listing does not exist', async () => {
     const store = fakeStore({ sellerId: null })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(service.listComments(LISTING_ID, { limit: 20 })).rejects.toMatchObject({
       status: 404,
@@ -109,7 +124,7 @@ describe('comment service — list', () => {
         row({ id: REPLY_ID, createdAtCursor: '2026-09-12T03:00:00.000000Z' }),
       ],
     })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     const result = await service.listComments(LISTING_ID, { limit: 1 })
     expect(result.items).toHaveLength(1)
@@ -119,7 +134,7 @@ describe('comment service — list', () => {
 
   test('rejects a malformed cursor with 422 instead of letting it reach SQL', async () => {
     const store = fakeStore()
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(
       service.listComments(LISTING_ID, { limit: 20, cursor: 'forged' }),
@@ -130,7 +145,7 @@ describe('comment service — list', () => {
   // 否则分页会静默从头开始。
   test('forwards a valid decoded cursor to the store', async () => {
     const store = fakeStore()
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
     const cursor = encodeCommentCursor({
       createdAt: '2026-09-12T03:40:10.123456Z',
       id: COMMENT_ID,
@@ -146,7 +161,7 @@ describe('comment service — list', () => {
 describe('comment service — write', () => {
   test('rejects blocked content without inserting', async () => {
     const store = fakeStore()
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(
       service.createComment(BUYER_ID, LISTING_ID, { content: '我有毒品要卖' }),
@@ -156,7 +171,7 @@ describe('comment service — write', () => {
 
   test('404s a write to a listing that does not exist', async () => {
     const store = fakeStore({ sellerId: null })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(
       service.createComment(BUYER_ID, LISTING_ID, { content: '还在吗' }),
@@ -179,7 +194,7 @@ describe('comment service — write', () => {
         cause: Object.assign(new Error('violates foreign key constraint'), { errno: '23503' }),
       })
     }
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(
       service.createComment(BUYER_ID, LISTING_ID, { content: '还在吗' }),
@@ -188,7 +203,7 @@ describe('comment service — write', () => {
 
   test('creates a top-level comment and returns it with isSeller=false', async () => {
     const store = fakeStore()
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     const dto = await service.createComment(BUYER_ID, LISTING_ID, { content: ' 还在吗 ' })
     expect(dto.content).toBe('还在吗')
@@ -198,7 +213,7 @@ describe('comment service — write', () => {
 
   test('rejects replying to a reply (one level only)', async () => {
     const store = fakeStore({ byId: { [REPLY_ID]: row({ id: REPLY_ID, parentId: COMMENT_ID }) } })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(
       service.createReply(BUYER_ID, REPLY_ID, { content: '再回一层' }),
@@ -208,7 +223,7 @@ describe('comment service — write', () => {
 
   test('404s a reply to a comment that does not exist', async () => {
     const store = fakeStore({ byId: {} })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     await expect(
       service.createReply(BUYER_ID, REPLY_ID, { content: '还在吗' }),
@@ -217,7 +232,7 @@ describe('comment service — write', () => {
 
   test('replies inherit the parent listing and are marked isSeller for the seller', async () => {
     const store = fakeStore({ byId: { [COMMENT_ID]: row({ id: COMMENT_ID, parentId: null }) } })
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     const dto = await service.createReply(SELLER_ID, COMMENT_ID, { content: '还在的' })
     expect(dto.listingId).toBe(encodePublicId(PUBLIC_ID_PREFIX.listing, LISTING_ID))
