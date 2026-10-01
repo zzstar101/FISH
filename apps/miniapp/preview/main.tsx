@@ -25,6 +25,7 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/search/index': () => import('@/pages/search/index'),
   '/pages/listing-detail/index': () => import('@/pages/listing-detail/index'),
   '/pages/conversation/index': () => import('@/pages/conversation/index'),
+  '/pages/send-listing/index': () => import('@/pages/send-listing/index'),
   '/pages/orders-buy/index': () => import('@/pages/orders-buy/index'),
   '/pages/orders-sell/index': () => import('@/pages/orders-sell/index'),
   '/pages/transaction-meetup/index': () => import('@/pages/transaction-meetup/index'),
@@ -40,11 +41,18 @@ const PAGES: Record<string, () => Promise<{ default: ComponentType }>> = {
   '/pages/favorites/index': () => import('@/pages/favorites/index'),
   '/pages/scan/index': () => import('@/pages/scan/index'),
   '/pages/scan-pr/index': () => import('@/pages/scan-pr/index'),
+  '/pages/scan-vision/index': () => import('@/pages/scan-vision/index'),
+  '/pages/vision-result/index': () => import('@/pages/vision-result/index'),
   '/pages/following/index': () => import('@/pages/following/index'),
   '/pages/history/index': () => import('@/pages/history/index'),
   '/pages/report-listing/index': () => import('@/pages/report-listing/index'),
   '/pages/report-user/index': () => import('@/pages/report-user/index'),
   '/pages/my-reports/index': () => import('@/pages/my-reports/index'),
+  // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）
+  '/pages/about/index': () => import('@/pages/about/index'),
+  '/pages/terms/index': () => import('@/pages/terms/index'),
+  '/pages/privacy/index': () => import('@/pages/privacy/index'),
+  '/pages/feedback/index': () => import('@/pages/feedback/index'),
 }
 
 /** 与 app.config.ts 的 tabBar.list 一致：这些路由在真机上会多渲染一层自定义 TabBar */

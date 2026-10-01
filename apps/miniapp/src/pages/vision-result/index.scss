@@ -1,0 +1,549 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 识图结果页 —— **全屏查询图 + 底部可拖拽面板**（Owner 2026-09-30 按参考图定版）。
+ * 尺寸 = 设计稿 pt × 2（SCSS 里的 px 会被 Taro pxtransform 换算成 rpx）。
+ *
+ * 结构：`.vres__stage`（铺满屏的查询图，含状态栏那一截）+ 顶部漂浮返回钮/标题 +
+ * `.vres__sheet`（结果面板：把手区 → 查询图与结论 → 统计 → 排序胶囊 → 内层滚动结果区）。
+ *
+ * **面板的几何由 `features/visual-search/sheet.ts` 算好、行内下发**（设备 px，不参与 rpx 缩放）：
+ * 高度固定为「打开高度」，收起靠 `translateY` 下移 —— 改高度会让内层瀑布流每帧重新布局，
+ * 拖动时明显掉帧。
+ *
+ * **页面根节点不写 `overflow`**（仓库铁律：写了页面自身就成了滚动容器，fixed/sticky 退化）；
+ * 本页的滚动发生在面板内的 `ScrollView` 里，页面本身不滚。
+ */
+
+.vres {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: var(--fg);
+}
+
+/* ------------------------------------------------------------ 背景：查询图 */
+
+.vres__stage {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.vres__photo {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/** 两条路都拿不到图时的占位：深色底 + 一句说明（不画裂图） */
+.vres__photo-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--fg);
+}
+
+.vres__photo-ph-text {
+  font-size: 26px;
+  letter-spacing: 0.08em;
+  color: var(--on-dark-track);
+}
+
+/**
+ * 这次取框的那一块：框内保持原亮度、框外整体压暗（`box-shadow` 的 9999px 扩散就是遮罩，
+ * 与识图入口页取框态同一手法）。参考图②的「整张照片 + 框住主体」。
+ */
+.vres__frame {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  border: 4px solid var(--surface);
+  border-radius: 12px;
+  box-shadow: 0 0 0 9999px rgba(23, 35, 61, 0.42);
+}
+
+/* ------------------------------------------------------------ 顶部漂浮层 */
+
+.vres__back {
+  position: absolute;
+  left: 32px;
+  z-index: 5;
+  transform: translateY(-50%);
+  @include float-btn(72px);
+}
+
+.vres__back-chevron {
+  width: 18px;
+  height: 18px;
+  border-left: 4px solid var(--fg);
+  border-bottom: 4px solid var(--fg);
+  border-radius: 2px;
+  transform: rotate(45deg);
+  margin-left: 6px;
+}
+
+.vres__title {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  transform: translateY(-50%);
+  text-align: center;
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--surface);
+}
+
+/* ------------------------------------------------------------ 底部结果面板 */
+
+/**
+ * 面板：**高度 = 打开高度**（行内下发），收起靠 `translateY` 下移。
+ *
+ * `transition` 只在非拖动状态生效（`.is-dragging` 关掉）—— 拖动时若还带过渡，
+ * 面板会「追不上手指」，手感发飘。
+ */
+.vres__sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  background: var(--surface);
+  border-radius: 40px 40px 0 0;
+  box-shadow: 0 -12px 40px -20px rgba(23, 35, 61, 0.6);
+  transition: transform 0.26s cubic-bezier(0.33, 1, 0.68, 1);
+  will-change: transform;
+
+  &.is-dragging {
+    transition: none;
+  }
+}
+
+/** 把手区：整套拖动都挂在这一块（下面是滚动列表，不能抢手势） */
+.vres__grabwrap {
+  flex: 0 0 auto;
+  padding: 18px 32px 10px;
+  text-align: center;
+}
+
+.vres__grab {
+  width: 80px;
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--accent-mid);
+  margin: 0 auto;
+}
+
+/** 收起态那句提示（告诉用户这里还有东西、上滑能拉起来） */
+.vres__hint {
+  display: block;
+  margin-top: 12px;
+  font-size: 24px;
+  color: var(--muted-2);
+}
+
+/* ---- 查询图 + 识别结论 + 重拍 ---- */
+
+.vres__qhead {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px 32px 0;
+}
+
+.vres__qthumb {
+  flex: 0 0 auto;
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+}
+
+.vres__qthumb-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.vres__qthumb-ph {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+}
+
+.vres__qmain {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vres__qtitle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.vres__qcat {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.vres__qname {
+  min-width: 0;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.vres__qsub {
+  display: block;
+  margin-top: 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  line-height: 1.3;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+/**
+ * 重拍：视觉高 64px（32pt），**命中区补偿**在包裹层上做。
+ *
+ * 稿的说明要求把 32pt 的视觉高撑到 44pt 命中区，而外层容器（`.vres__qhead`）的 gap 属于布局、
+ * 不会扩大子元素的点击区域；按钮自己加透明 padding 又会顶破 84px 的查询图缩略图那一行。
+ * 所以把 `onClick` 挂在 88px（= 44pt）的包裹层上，胶囊保持 64px 的视觉高。
+ */
+.vres__retake-hit {
+  flex: 0 0 auto;
+  height: 88px;
+  display: flex;
+  align-items: center;
+}
+
+.vres__retake {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 24px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+  font-size: 24px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &:active {
+    border-color: var(--line);
+    background: var(--accent-weak);
+  }
+
+  &.is-busy {
+    opacity: 0.72;
+  }
+}
+
+.vres__retake-ic {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+}
+
+/* ---- 统计行：在售同款 | 价格区间 ---- */
+
+.vres__stats {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+  padding: 20px 32px 0;
+  color: var(--muted-2);
+}
+
+.vres__stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.vres__stat-k {
+  font-size: 23px;
+}
+
+.vres__stat-v {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+
+  &.vres__stat-v--price {
+    color: var(--price);
+  }
+}
+
+.vres__stat-em {
+  font-size: 21px;
+  font-weight: 600;
+  color: var(--muted-2);
+  margin-left: 2px;
+}
+
+.vres__stat-dash {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.vres__stat-sep {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 2px;
+  height: 22px;
+  background: var(--accent-mid);
+}
+
+/* ---- 排序胶囊 ---- */
+
+.vres__filters {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 32px 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.vres__fchip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 28px;
+  border-radius: var(--r-pill);
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+  font-size: 25px;
+  font-weight: 500;
+
+  &.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--surface);
+    font-weight: 600;
+  }
+}
+
+.vres__fsort {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.vres__fsort-img {
+  width: 18px;
+  height: 18px;
+}
+
+/* ---- 结果区：面板内滚动 ---- */
+
+/**
+ * 面板内滚动区。`flex: 1 + min-height: 0` 是必须的：flex 子项默认 `min-height: auto`，
+ * 不加这一条时内容会把面板顶高（面板高度是行内固定的，于是内容溢出到屏幕外）。
+ */
+.vres__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+}
+.vres__body {
+  padding: 0 32px 40px;
+}
+
+/* 瀑布流容器与首页 / 搜索页同一套（左右内边距与面板一致、列间距 20px） */
+.waterfall {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.waterfall__col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ------------------------------------------------------------ 骨架屏 */
+
+.vres__skel {
+  overflow: hidden;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: var(--r-card);
+}
+
+.vres__skel-ph {
+  width: 100%;
+  background: var(--accent-faint);
+}
+
+.vres__skel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px 22px;
+}
+
+.vres__skel-bar {
+  @include skeleton(20px, 88%);
+
+  &.vres__skel-bar--short {
+    width: 56%;
+  }
+}
+
+/* ------------------------------------------------------------ 失败态 */
+
+.vres__err {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 40px 40px 0;
+}
+
+.vres__err-disc {
+  width: 120px;
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--warn-weak);
+  margin-bottom: 28px;
+}
+
+.vres__err-ic {
+  width: 52px;
+  height: 52px;
+}
+
+.vres__err-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.vres__err-text {
+  margin-top: 12px;
+  max-width: 464px;
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.vres__err-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 440px;
+  margin-top: 36px;
+}
+
+/* ------------------------------------------------------------ 主 / 次按钮 */
+
+.vres__btn-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 96px;
+  border-radius: 48px;
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+  @include pressable;
+
+  &:active {
+    opacity: 0.9;
+  }
+}
+
+.vres__btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 92px;
+  border-radius: 46px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--fg);
+  font-size: 29px;
+  font-weight: 600;
+
+  &:active {
+    border-color: var(--line);
+    background: var(--accent-weak);
+  }
+
+  &.is-busy {
+    opacity: 0.72;
+  }
+}
+
+/** 空态里的次按钮：与 EmptyState 的内容同宽居中，不占满整屏 */
+.vres__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.vres__btn-ghost--narrow {
+  width: 440px;
+  max-width: calc(100% - 80px);
+  margin-top: 8px;
+}
+
+.vres__btn-ic {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}

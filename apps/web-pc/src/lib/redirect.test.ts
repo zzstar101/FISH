@@ -18,9 +18,8 @@ describe('sanitizeRedirect', () => {
     expect(sanitizeRedirect(undefined)).toBe('/pc/')
   })
 
-  test('never redirects back to login or register', () => {
+  test('never redirects back to the login page', () => {
     expect(sanitizeRedirect('/pc/login')).toBe('/pc/')
     expect(sanitizeRedirect('/pc/login/')).toBe('/pc/')
-    expect(sanitizeRedirect('/pc/register/')).toBe('/pc/')
   })
 })

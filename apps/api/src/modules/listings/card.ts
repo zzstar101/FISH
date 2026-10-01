@@ -4,7 +4,19 @@ import {
   type ListingModerationStatus,
 } from '@fish/contracts/listings/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
+
+/**
+ * 卖家公开投影的**源列**（#191）：调用方只要 SELECT 出这四列就能用。
+ * 对外形状（公开 id、头像 URL 降级）由 `toListingCard` 统一负责，别处不得各写一份。
+ */
+export type ListingCardSeller = {
+  id: string
+  nickname: string
+  avatarUrl: string | null
+  authStatus: 'UNVERIFIED' | 'VERIFIED'
+}
 
 /**
  * `listings` 行 → 契约卡片。放在这里而不是 `service.ts` 内部，是因为 #8 的 `/matches`
@@ -25,6 +37,12 @@ export type ListingCardSource = {
   negotiable: boolean
   free: boolean
   createdAt: Date
+  /**
+   * 卖家公开子集（#191）：经 join（feed / 匹配 / 他人主页在售）或本人行（个人中心）同源带出，
+   * **不逐卡补查**。契约 `seller` 是 optional 只为老客户端 mock 记录——API 卡片恒带
+   * （`users` 无注销类列，`seller_id` 外键保证行存在），见契约注释。
+   */
+  seller: ListingCardSeller
 }
 /**
  * 决策 C（Issue #6）：读响应校验失败**不 500**，记日志后跳过该条——一条脏数据不该让整个列表打不开。
@@ -58,6 +76,14 @@ export function toListingCard(
     free: listing.free,
     coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
     createdAt: listing.createdAt.toISOString(),
+    // 卖家公开子集（#191）：与详情的 `toSeller` 同一口径——公开 id 前缀 usr_、
+    // 头像经 `publicAvatarUrl`（库里的历史脏值降级 null，不让一个脏头像打挂整页）。
+    seller: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, listing.seller.id),
+      nickname: listing.seller.nickname,
+      avatarUrl: publicAvatarUrl(listing.seller.avatarUrl),
+      authStatus: listing.seller.authStatus,
+    },
     moderationStatus,
     governanceDelisted,
     moderationReason,

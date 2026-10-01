@@ -1,0 +1,166 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 关于与版本（稿 `小程序1版关于与版本.html`）。
+ *
+ * 尺寸 = 稿内 pt × 2（DESIGN.md §1：本目录 SCSS 的 px 会被 Taro 转成 rpx）。
+ * 卡片与列表行**复用仓库既有的 `group-card` / `group-row` / `row-icon`**
+ * —— 稿自己也写了「与设置页的列表行同一套语言」，抄一份必然与设置页漂移。
+ */
+
+.ab {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------------------------------------------------------- 品牌区 */
+
+/*
+ * 稿 `.about-head`：冰蓝渐变 + 32pt 下圆角 + 一道极轻的投影（把渐变块与下面的白卡分开），
+ * 压住漂浮导航。顶部让位由组件行内给（设备 px，走不了样式表），这里只留左右与底部内边距。
+ *
+ * 投影取稿内字面值 ×2：`0 10px 24px -22px rgba(23,35,61,.55)` → `0 20px 48px -44px`。
+ * 令牌里没有这一档（`--shadow-card` 更大且带品牌蓝），与同批 `pages/feedback/index.scss`
+ * 的页头投影同一写法。
+ */
+.ab__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 40px 56px;
+  background: var(--grad-page);
+  border-radius: 0 0 64px 64px;
+  box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
+  text-align: center;
+}
+
+/* 品牌标记：稿里是 76pt 渐变方块 + 「鱼」字占位，落地换成真实资产（宽度按原图比例） */
+.ab__mark {
+  width: 250px;
+  height: 152px;
+  margin-top: 60px;
+}
+
+.ab__name-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-top: 32px;
+}
+
+.ab__name {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+/* 稿 `.brand-name em`：等宽 + 宽字距的拉丁字标 */
+.ab__name-en {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--brand-deep);
+}
+
+.ab__slogan {
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 卡片与行 */
+
+/*
+ * 稿 `.card`：白卡 + 描边 + 柔和投影，卡片之间 12pt。用共享 mixin 而不是抄一份 ——
+ * `group-card` 的圆角是 `--r-card`(18pt)，与稿的 20pt 差 2pt，属同一视觉档位，
+ * 与设置页保持一致更重要（稿取舍 ① 的原话）。
+ */
+.ab__card {
+  @include group-card;
+  margin: 36px 40px 0;
+
+  & + & {
+    margin-top: 24px;
+  }
+}
+
+.ab__row {
+  @include group-row;
+  min-height: 108px;
+
+  /* 可跳转行才有按下态（待定行不是控件，不该有反馈） */
+  &.is-act:active {
+    background: var(--accent-weak);
+  }
+}
+
+.ab__row-ic {
+  @include row-icon;
+}
+
+.ab__row-ic-img {
+  width: 32px;
+  height: 32px;
+}
+
+.ab__row-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.ab__row-val {
+  flex: 0 0 auto;
+  font-size: 26px;
+  color: var(--muted-2);
+  letter-spacing: 0.01em;
+}
+
+.ab__row-chev {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+/*
+ * 稿 `.row-tag`：行尾等宽「待定」。**代替 chevron** —— 画了箭头却点不动，
+ * 比不画箭头更让人困惑（稿的条目口径 ③）。
+ */
+.ab__row-tag {
+  flex: 0 0 auto;
+  font-size: 21px;
+  letter-spacing: 0.04em;
+  color: var(--warn-ink);
+}
+
+/* 待填占位：虚线 + 警示色（稿 `.ph`，与法务两页同一口径） */
+.ab__ph {
+  padding-bottom: 2px;
+  font-weight: 600;
+  color: var(--warn-ink);
+  border-bottom: 3px dashed var(--warn);
+}
+
+/* ---------------------------------------------------------------- 页脚 */
+
+/* 稿 `.pagefoot{margin-top:auto}`：页短时把版权行顶到屏底 */
+.ab__foot {
+  margin-top: auto;
+  padding: 56px 40px calc(32px + env(safe-area-inset-bottom));
+  text-align: center;
+}
+
+.ab__foot-copy {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  line-height: 1.9;
+  color: var(--muted);
+}

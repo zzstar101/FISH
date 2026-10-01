@@ -286,10 +286,26 @@ export type EmbeddingEnv =
   | { transport: 'stub' }
   | { transport: 'live'; baseUrl: string; apiKey: string; model: string }
 
-export function loadEmbeddingEnv(
-  source: Record<string, string | undefined> = process.env,
-  nodeEnv: string | undefined = source.NODE_ENV,
-): EmbeddingEnv {
+/**
+ * `EMBEDDING_TRANSPORT=stub` 时 `embeddings.model` 里写的模型名（#322 M1）。
+ *
+ * 定义在**共享包**而不是 worker 的 stub provider 里，是因为 R3 起有两个进程要认同一个名字：
+ * worker 写向量、api 按 `model` 过滤向量（`loadRecommendationEmbeddingModel`）。名字一旦两边
+ * 各写一份，本地开发会出现"worker 写 `stub-deterministic-v1`、api 查 `stub`"这种什么都召回
+ * 不到、却又不报错的组合。worker 侧 `providers/stub.ts` 仍 re-export 这个名字，调用方不用改。
+ */
+export const STUB_EMBEDDING_MODEL = 'stub-deterministic-v1'
+
+/**
+ * `EMBEDDING_TRANSPORT` 的取用与护栏，两个加载器共用一份判定。
+ *
+ * 单独抽出来是为了让"生产禁止 stub"这条护栏只有一个实现：`loadEmbeddingEnv`（worker）与
+ * `loadRecommendationEmbeddingModel`（api）如果各写一遍，早晚会有一边漏掉。
+ */
+function resolveEmbeddingTransport(
+  source: Record<string, string | undefined>,
+  nodeEnv: string | undefined,
+): 'stub' | 'live' {
   const transport = source.EMBEDDING_TRANSPORT
   if (transport === 'stub') {
     // 与 `WECHAT_TRANSPORT=stub` / `CONTENT_MODERATION_TRANSPORT=local` 同一护栏，
@@ -299,26 +315,164 @@ export function loadEmbeddingEnv(
         '环境变量校验失败：生产环境（NODE_ENV=production）禁止 EMBEDDING_TRANSPORT=stub（确定性假向量会产生看似合理的语义召回）',
       )
     }
+    return 'stub'
+  }
+  if (transport === 'live') {
+    return 'live'
+  }
+  throw new Error(
+    '环境变量校验失败：EMBEDDING_TRANSPORT 必须显式设置为 stub 或 live（无默认值，不允许静默回退）',
+  )
+}
+
+export function loadEmbeddingEnv(
+  source: Record<string, string | undefined> = process.env,
+  nodeEnv: string | undefined = source.NODE_ENV,
+): EmbeddingEnv {
+  const transport = resolveEmbeddingTransport(source, nodeEnv)
+  if (transport === 'stub') {
+    return { transport: 'stub' }
+  }
+  const baseUrl = source.EMBEDDING_BASE_URL?.trim()
+  const apiKey = source.EMBEDDING_API_KEY?.trim()
+  const model = source.EMBEDDING_MODEL?.trim()
+  if (!baseUrl || !apiKey || !model) {
+    // 点名「缺了哪一个」，而不是只说「三个都要配」。
+    const missing = [
+      !baseUrl ? 'EMBEDDING_BASE_URL' : null,
+      !apiKey ? 'EMBEDDING_API_KEY' : null,
+      !model ? 'EMBEDDING_MODEL' : null,
+    ].filter((name): name is string => name !== null)
+    throw new Error(
+      `环境变量校验失败：EMBEDDING_TRANSPORT=live 缺少 ${missing.join(' / ')}。三项配置都必须提供：EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL`,
+    )
+  }
+  return { transport: 'live', baseUrl, apiKey, model }
+}
+
+/**
+ * 读侧（api）需要的 embedding 配置（#323 R3）：**只要模型名**，不碰上游密钥。
+ *
+ * 为什么 api 需要它：R3 的语义召回要拿"当前写入向量用的模型"去过滤 `embeddings`，否则
+ * 换过模型之后库里的老向量会被当成有效候选。判断这件事只需要 `EMBEDDING_MODEL`。
+ *
+ * 为什么单独开一个加载器而不是复用 `loadEmbeddingEnv`：后者对 `live` 强制要求
+ * `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY`，api 进程根本不用这两个值。复用会把上游密钥
+ * 变成 api 的启动依赖——为了读一个模型名而让密钥扩散到不需要它的进程，是与
+ * `AI_POLISH_*` / `TENCENT_CLOUD_*` 拆分原则相反的做法。
+ *
+ * 与 worker 一致：`EMBEDDING_TRANSPORT` 无默认值，生产禁止 `stub`；错误信息只报变量名、不回显值。
+ */
+export type RecommendationEmbeddingModelEnv = { model: string }
+
+export function loadRecommendationEmbeddingModel(
+  source: Record<string, string | undefined> = process.env,
+  nodeEnv: string | undefined = source.NODE_ENV,
+): RecommendationEmbeddingModelEnv {
+  const transport = resolveEmbeddingTransport(source, nodeEnv)
+  if (transport === 'stub') {
+    return { model: STUB_EMBEDDING_MODEL }
+  }
+  const model = source.EMBEDDING_MODEL?.trim()
+  if (!model) {
+    throw new Error(
+      '环境变量校验失败：EMBEDDING_TRANSPORT=live 缺少 EMBEDDING_MODEL（api 只用它按 model 过滤向量，不需要 EMBEDDING_BASE_URL / EMBEDDING_API_KEY）',
+    )
+  }
+  return { model }
+}
+
+/**
+ * 视觉向量配置（#324 M1/M8）——**API 与 worker 都要**。
+ *
+ * 与上面 `EMBEDDING_*`「worker 专属」的取舍刻意不同，理由是调用时机：
+ * 商品的封面向量可以在后台慢慢回填（worker），但**查询图的向量必须在搜索请求里当场算出来**
+ * （查询图只活 15 分钟，为它投一条 job 再等 worker 轮询会让首屏延迟不可控）。所以
+ * 上游密钥必须同时存在于 API 进程。这扩大了密钥的可见范围，是 #324 明确的取舍：
+ * 换来的是"拍照 → 结果"这条主链路不依赖队列延迟。`.env.example` 与 PR 描述里都写明了。
+ *
+ * `VISUAL_EMBEDDING_TRANSPORT` **无默认值**（与 EMBEDDING_TRANSPORT 同一护栏）：
+ * - `stub`：进程内确定性向量，只允许显式开发/测试使用，`NODE_ENV=production` 下启动失败；
+ * - `live`：真实上游，三项配置缺一即失败。
+ *
+ * 维度不在这里配置：迁移里的列是 `vector(1024)`，维度是**编译期常量**
+ * （`VISUAL_EMBEDDING_DIMENSIONS`）。所以 `VISUAL_EMBEDDING_MODEL` 必须支持 1024 维
+ * （`qwen3-vl-embedding` / `tongyi-embedding-vision-plus-2026-03-06` 等），
+ * 不支持的模型会在第一次调用时以"维度不符"失败，而不是悄悄写进一个对不上的列。
+ */
+export type VisualEmbeddingEnv =
+  | { transport: 'stub' }
+  | { transport: 'live'; baseUrl: string; apiKey: string; model: string }
+
+export function loadVisualEmbeddingEnv(
+  source: Record<string, string | undefined> = process.env,
+  nodeEnv: string | undefined = source.NODE_ENV,
+): VisualEmbeddingEnv {
+  const transport = source.VISUAL_EMBEDDING_TRANSPORT
+  if (transport === 'stub') {
+    if (nodeEnv?.trim().toLowerCase() === 'production') {
+      throw new Error(
+        '环境变量校验失败：生产环境（NODE_ENV=production）禁止 VISUAL_EMBEDDING_TRANSPORT=stub（确定性假向量会产生看似合理的图片召回）',
+      )
+    }
     return { transport: 'stub' }
   }
   if (transport === 'live') {
-    const baseUrl = source.EMBEDDING_BASE_URL?.trim()
-    const apiKey = source.EMBEDDING_API_KEY?.trim()
-    const model = source.EMBEDDING_MODEL?.trim()
+    const baseUrl = source.VISUAL_EMBEDDING_BASE_URL?.trim()
+    const apiKey = source.VISUAL_EMBEDDING_API_KEY?.trim()
+    const model = source.VISUAL_EMBEDDING_MODEL?.trim()
     if (!baseUrl || !apiKey || !model) {
-      // 点名「缺了哪一个」，而不是只说「三个都要配」。
       const missing = [
-        !baseUrl ? 'EMBEDDING_BASE_URL' : null,
-        !apiKey ? 'EMBEDDING_API_KEY' : null,
-        !model ? 'EMBEDDING_MODEL' : null,
+        !baseUrl ? 'VISUAL_EMBEDDING_BASE_URL' : null,
+        !apiKey ? 'VISUAL_EMBEDDING_API_KEY' : null,
+        !model ? 'VISUAL_EMBEDDING_MODEL' : null,
       ].filter((name): name is string => name !== null)
       throw new Error(
-        `环境变量校验失败：EMBEDDING_TRANSPORT=live 缺少 ${missing.join(' / ')}。三项配置都必须提供：EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL`,
+        `环境变量校验失败：VISUAL_EMBEDDING_TRANSPORT=live 缺少 ${missing.join(' / ')}。三项配置都必须提供：VISUAL_EMBEDDING_BASE_URL / VISUAL_EMBEDDING_API_KEY / VISUAL_EMBEDDING_MODEL`,
       )
     }
     return { transport: 'live', baseUrl, apiKey, model }
   }
   throw new Error(
-    '环境变量校验失败：EMBEDDING_TRANSPORT 必须显式设置为 stub 或 live（无默认值，不允许静默回退）',
+    '环境变量校验失败：VISUAL_EMBEDDING_TRANSPORT 必须显式设置为 stub 或 live（无默认值，不允许静默回退）',
   )
+}
+
+/**
+ * 查询图的语义解析（#324 M5，OCR/VLM）配置。
+ *
+ * - `off`：**不做**语义解析。搜索退化为"纯视觉召回 + 结构化信号"（freshness / popularity），
+ *   没有文本路加权。这是 CI 与本机默认：整条链路不出网、不需要多模态理解模型的额度。
+ *   注意这里的 `off` 与 `EMBEDDING_TRANSPORT=stub` 性质不同——它不产生"看似合理的假结果"，
+ *   只是少做一步可选增强，所以**有默认值**（未设置即 off），不需要每个部署显式声明。
+ * - `live`：调用 OpenAI 兼容的 `chat/completions`（百炼为
+ *   `https://dashscope.aliyuncs.com/compatible-mode/v1`），模型返回严格 JSON。
+ *   缺任何一项配置就在启动期失败，而不是等第一次搜索才发现解析永远为空。
+ */
+export type VisualParseEnv =
+  | { transport: 'off' }
+  | { transport: 'live'; baseUrl: string; apiKey: string; model: string }
+
+export function loadVisualParseEnv(
+  source: Record<string, string | undefined> = process.env,
+): VisualParseEnv {
+  const transport = source.VISUAL_PARSE_TRANSPORT?.trim() || 'off'
+  if (transport === 'off') return { transport: 'off' }
+  if (transport === 'live') {
+    const baseUrl = source.VISUAL_PARSE_BASE_URL?.trim()
+    const apiKey = source.VISUAL_PARSE_API_KEY?.trim()
+    const model = source.VISUAL_PARSE_MODEL?.trim()
+    if (!baseUrl || !apiKey || !model) {
+      const missing = [
+        !baseUrl ? 'VISUAL_PARSE_BASE_URL' : null,
+        !apiKey ? 'VISUAL_PARSE_API_KEY' : null,
+        !model ? 'VISUAL_PARSE_MODEL' : null,
+      ].filter((name): name is string => name !== null)
+      throw new Error(
+        `环境变量校验失败：VISUAL_PARSE_TRANSPORT=live 缺少 ${missing.join(' / ')}。三项配置都必须提供：VISUAL_PARSE_BASE_URL / VISUAL_PARSE_API_KEY / VISUAL_PARSE_MODEL`,
+      )
+    }
+    return { transport: 'live', baseUrl, apiKey, model }
+  }
+  throw new Error('环境变量校验失败：VISUAL_PARSE_TRANSPORT 只能是 off 或 live（未设置视为 off）')
 }

@@ -12,7 +12,7 @@
  *
  * 品牌蓝 #5f82c5（Logo 鱼/强调唯一主色），蓝色明度梯度：
  * #4a6bae(100%) → #5f82c5(80%) → #8aa8d6(60%) → #a9bee2(40%) → #dce5f2(20%) → #f0f3f8(10%)。
- * 中性色：墨灰 #2d3138 标题 / #5a5f6a 次级 / 中灰 #8b909b 弱化，背景云灰白 #f3f4f6。
+ * 中性色：墨灰 #2d3138 标题 / #5a5f6a 次级 / 中灰 #666b76 弱化，背景云灰白 #f3f4f6。
  * 功能色（成功 / 警告 / 危险）不参与换色。
  *
  * `static` 是必须的：Tailwind v4 默认只输出被工具类引用到的令牌变量，而 shadcn/ui
@@ -35,7 +35,14 @@
 
   --color-ink: #2d3138;
   --color-ink-2: #5a5f6a;
-  --color-ink-3: #8b909b;
+  /*
+   * 弱化文字。它当**正文**用（卡片 meta、时间戳、计数、表单 placeholder），不是纯装饰，
+   * 因此必须在所有实际背衬上满足 WCAG AA 正文的 4.5:1（实测值，由 `styles.test.ts` 守卫）：
+   * 白卡 5.34:1 / 页面底色 #f3f4f6 4.86:1 / --color-surface-2 4.80:1 /
+   * --color-brand-soft #e7edf6 4.54:1（最坏处，AI 润色候选面板里的脱敏说明）。
+   * 原值 #8b909b 只有 2.91:1，不要再往回调浅。
+   */
+  --color-ink-3: #666b76;
 
   --color-line: #dce5f2;
 
@@ -143,6 +150,179 @@
 
   body {
     background-color: var(--color-bg);
+    /*
+     * 「深水层」：外壳背景主题（登录后主体）。视觉立意是「水下」——
+     * 气泡、斜射的光柱、水底的光池、自上而下由亮入深的水柱。
+     *
+     * 这一层是给液态玻璃用的衬底：玻璃要「像玻璃」，背后必须有**带边缘**的东西可折射
+     * （见 packages/ui/src/liquid-glass.tsx）。平滑的渐变撑不起玻璃——模糊一条平滑渐变
+     * 等于没模糊。这也是为什么背景必须和玻璃控件一起做，而不是只做其中一个。
+     *
+     * 层次（z 由下到上）：
+     *   1. 这里：body 上的深水层，fixed，全视口
+     *   2. 顶栏 / 侧栏：液态玻璃（真折射），压在深水层上
+     *   3. 正文：白卡直接浮在深水层上（白卡在冷蓝底上的分离度比原来在灰底上更好）
+     *
+     * 正文不再单独抬一层，因此深水层的亮度必须自己守住底线。这一层是按 --color-ink-3 的
+     * **旧值** #8b909b 设计的：它在原来的 #f3f4f6 上只有 2.91:1，本就低于 AA 的 4.5:1
+     * （存量问题，页面上确实用它渲染「广应科校内 · 刚刚发布的闲置」）。该令牌已由 #362
+     * 提到 #666b76（同样浅背衬上 ≥4.5:1，见 `src/styles.test.ts` 的守卫），下面这些档位
+     * 因此有了富余；这里**刻意保留原来的浅档** —— 那是已验收的观感，不属本次改造范围。
+     * 基底与光柱仍取浅档、气泡只放在左带与顶带（≥1280px 下左带 ≤18%，那是侧栏与页边所在）。
+     *
+     * fixed：深水层是「环境」不是页面元素，不随内容滚动，条带的停靠也因此能按视口算。
+     * 代价是 <1280px（body 有 min-width:1280px、会横向滚动）时水层只铺满视口宽，
+     * 右侧露出的部分回落成 --color-bg；本端定位就是 ≥1280 的 PC 视口，这里接受该边界。
+     * 不做动效：这是长时间阅读商品流的工作面，脉动的背景只会干扰阅读。
+     *
+     * 下面所有「实测」数字都在 1440x900 视口下取得。
+     */
+    background-image:
+      /*
+       * 气泡：水层里「有边缘」的东西，是整张底的关键。
+       *
+       * 这里踩过两个坑，都写在注释里免得后人再踩：
+       *
+       * 1. 最初只放宽而柔的斜向光柱，开/关液态玻璃几乎看不出差别 —— **模糊一条平滑渐变
+       *    等于没模糊，位移一条平滑渐变也等于没位移**。玻璃要看得见，背后必须有带边缘的
+       *    结构供它抹开与错位。所以气泡的重点不在「画圆」，而在 88%→94% 那一小段：
+       *    它把圆做出可见的**边缘环**。半径取 70–150px，是因为 warp 的磨砂有 15px 左右。
+       *
+       * 2. 第一版把气泡放在 16% 31%，半径 98px 直接伸进正文列（内容从 x≈296 起），
+       *    正好压在 muted 文字那一行 —— 按当时旧令牌 #8b909b 实测只有 1.90。现在所有气泡
+       *    都收进**无文字区**：左带（x ≤ 18%，≥1280px 下内容列从 22.8% 起）、顶带与底带。
+       *    青色 alpha 也压到预算内（见下方水柱基底的说明）。
+       */
+        radial-gradient(
+          circle 150px at 5% 13%,
+          rgba(255, 255, 255, 0.5) 0%,
+          rgba(255, 255, 255, 0.16) 66%,
+          rgba(150, 214, 230, 0.3) 80%,
+          rgba(255, 255, 255, 0.72) 90%,
+          rgba(255, 255, 255, 0.34) 97%,
+          transparent 100%
+        ),
+        radial-gradient(
+          circle 98px at 11% 30%,
+          rgba(255, 255, 255, 0.46) 0%,
+          rgba(255, 255, 255, 0.14) 66%,
+          rgba(150, 214, 230, 0.26) 80%,
+          rgba(255, 255, 255, 0.66) 90%,
+          rgba(255, 255, 255, 0.3) 97%,
+          transparent 100%
+        ),
+        radial-gradient(
+          circle 64px at 3% 48%,
+          rgba(255, 255, 255, 0.44) 0%,
+          rgba(255, 255, 255, 0.12) 66%,
+          rgba(150, 214, 230, 0.22) 80%,
+          rgba(255, 255, 255, 0.6) 90%,
+          rgba(255, 255, 255, 0.26) 97%,
+          transparent 100%
+        ),
+        radial-gradient(
+          circle 128px at 8% 85%,
+          rgba(255, 255, 255, 0.46) 0%,
+          rgba(255, 255, 255, 0.12) 66%,
+          rgba(150, 214, 230, 0.24) 80%,
+          rgba(255, 255, 255, 0.64) 90%,
+          rgba(255, 255, 255, 0.28) 97%,
+          transparent 100%
+        ),
+        radial-gradient(
+          circle 92px at 46% -3%,
+          rgba(255, 255, 255, 0.44) 0%,
+          rgba(255, 255, 255, 0.12) 66%,
+          rgba(150, 214, 230, 0.22) 80%,
+          rgba(255, 255, 255, 0.6) 90%,
+          rgba(255, 255, 255, 0.26) 97%,
+          transparent 100%
+        ),
+        radial-gradient(
+          circle 112px at 80% 97%,
+          rgba(255, 255, 255, 0.4) 0%,
+          rgba(255, 255, 255, 0.1) 66%,
+          rgba(150, 214, 230, 0.08) 80%,
+          rgba(255, 255, 255, 0.54) 90%,
+          rgba(255, 255, 255, 0.22) 97%,
+          transparent 100%
+        ),
+        /*
+       * 光柱：水下的斜射光。同样用「短距离双停靠」做出可见边缘。alpha 压得比气泡低，
+       * 因为它斜穿整个正文列，会扫过落在水层上的文字。
+       */
+        linear-gradient(
+          103deg,
+          transparent 9%,
+          rgba(255, 255, 255, 0.34) 17%,
+          rgba(255, 255, 255, 0.46) 20%,
+          transparent 29%
+        ),
+        linear-gradient(
+          103deg,
+          transparent 37%,
+          rgba(255, 255, 255, 0.3) 46%,
+          rgba(255, 255, 255, 0.42) 50%,
+          transparent 59%
+        ),
+        linear-gradient(
+          103deg,
+          transparent 65%,
+          rgba(255, 255, 255, 0.28) 73%,
+          rgba(255, 255, 255, 0.4) 77%,
+          transparent 85%
+        ),
+        /*
+       * 顶带：压在玻璃顶栏底下的一块冷色，让玻璃有东西可折射。
+       *
+       * **停靠必须用 px，不能用 %。** 这里踩过坑：`background-attachment: fixed` 下百分比是
+       * 视口高度的百分比，而顶栏（h-16=64px）与内容起点（64px + py-7 的 28px = 92px）是固定
+       * 像素。第一版用 %，在 1440x900 下看着没问题，但视口一高就出界 —— 1200px 高时 13% = 156px，
+       * 淡出线直接越过 y=92，把落在那一带的 muted 文字压到 2.7-2.9（详情页面包屑、发布页
+       * 与消息页的说明都在那一带）。改成 px 后与视口高无关。
+       *
+       * 峰值 alpha 只到 0.42，是被顶栏文字的对比度倒推的：顶栏压在这块带上，透过那层
+       * /85 的白玻璃，带越深、顶栏上 --color-ink-2 的文字越暗（最坏背衬还要算上滚过顶栏
+       * 底下的暗色商品图，见 top-bar.tsx）。
+       */
+        linear-gradient(
+          180deg,
+          rgba(146, 198, 226, 0.42) 0px,
+          rgba(150, 202, 226, 0.38) 58px,
+          rgba(184, 216, 236, 0.16) 66px,
+          transparent 76px
+        ),
+        /*
+       * 左侧带：侧栏列。正文列左界是固定像素（px-8 的 32 + 侧栏 232 + gap-7 的 28 = 292px），
+       * 所以这里同样用 px 停靠、在 286px 处收干净，保证在**本端支持范围（≥1280px）**内不渗进
+       * 正文列左缘。<1280px 时 body 会横向滚动、fixed 层不随内容移动，这条带会落到正文列上 ——
+       * 这是 fixed 方案的已知边界，已单开 #357 跟踪。
+       * 比顶带浅一档：导航文字直接落在玻璃上，底下太浓会把 --color-ink-2 的标签压到 4.5 以下。
+       */
+        linear-gradient(
+          90deg,
+          rgba(150, 202, 226, 0.5) 0px,
+          rgba(170, 212, 232, 0.3) 90px,
+          rgba(200, 226, 242, 0.1) 190px,
+          transparent 286px
+        ),
+        /* 水底光池：用白而不是青 —— 亮池抬高亮度，等于把对比度预算还回来 */
+        radial-gradient(74% 52% at 82% 104%, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.3) 62%, transparent 78%),
+        /*
+       * 水面冷雾。锚点刻意放到页面左缘外（-2%）：原来的 8% 让它的半径伸进内容列，
+       * 把 y 92-160 那一带（多个页面放 muted 文字的地方）压到 2.84-2.90，已收回。
+       */
+        radial-gradient(38% 52% at -2% -6%, rgba(178, 202, 240, 0.45), transparent 72%),
+        /*
+       * 水柱基底。当初的上限是被对比度倒推出来的：--color-ink-3 旧值 #8b909b 在原来的
+       * #f3f4f6 上只有 2.91:1（存量问题），所以整条渐变里最暗的一点也只到 #edf6fd ——
+       * 当时实测 2.93，全程不低于现状。令牌已由 #362 提到 #666b76，这条上限随之解除；
+       * 渐变维持原值（已验收的观感）。原则不变：要更深先动令牌，不在这一层偷偷压暗。
+       */
+        linear-gradient(180deg, #f6fbfe 0%, #f2f9fe 40%, #eff7fd 72%, #edf6fd 100%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    background-size: cover;
     color: var(--color-ink);
     font-family: var(--font-sans);
   }
@@ -185,6 +365,47 @@
 @layer base {
   body:not(.auth-glass-body) {
     min-width: 1280px;
+  }
+}
+
+/*
+ * 液态玻璃外壳（顶栏 / 侧栏）的「玻璃本体」。
+ *
+ * 折射材质由 packages/ui/src/liquid-glass.tsx 的 <LiquidGlassLayer/> 提供（真折射：
+ * feTurbulence 生成噪声图 + 三次 feDisplacementMap 位移 + 边缘色散）。这里只管表面：
+ * 半透明白、上下缘的偏移内阴影、贴边亮线与投影。
+ *
+ * 三条硬约束（破一条折射就静默失效，来自该组件的文档）：
+ * 1. 表面上不能出现 isolation / opacity<1 / filter / will-change:opacity —— 它们会把表面
+ *    变成 backdrop root，warp 的 backdrop-filter 就只能采样表面内部的东西。所以层叠上下文
+ *    靠 position + z-index 建立，**这里不加 isolate**，外壳根节点同样不加。
+ * 2. 表面上原有的 backdrop-blur 必须拿掉：同上，它也是 backdrop root 的成因。磨砂交给
+ *    warp 自己去做（它的 backdrop-filter 就是主效果）。
+ * 3. warp 的 filter def 必须是它的兄弟节点 —— 由 <LiquidGlassLayer/> 内部保证。
+ *
+ * 白度刻意比 packages/ui 里那个移动端版本的 `bg-white/25` 高得多：那个浮在浅色页面上、
+ * 底下只有图标；这里的玻璃面上直接落着品牌字与导航文字，透过来的必须是「很白的玻璃」。
+ * 顶栏尤其吃紧——它下面还有商品卡滚过，白度直接决定文字对比度下限，推导见 top-bar.tsx。
+ */
+/*
+ * 玻璃本体：只给一层贴边亮线与投影，`position` / `z-index` / 背景色都留给使用方用 Tailwind
+ * 声明（顶栏 `sticky z-30 bg-white/85`、侧栏 `relative z-0 bg-white/60`）。两个原因：
+ *
+ * 1. 放在 `@layer components` 里，而不是写成未分层规则。未分层规则优先级高于任何 @layer，
+ *    会把组件上的 `sticky`（顶栏失去吸顶）、`z-30`（不再压住内容）以及各自的 `bg-*` 透明度
+ *    静默盖掉；放进 components 层后，Tailwind 的 utilities 层（在它之后）可以正常覆盖。
+ * 2. `position` + `z-index` 恰好是这条路上唯一安全的建上下文方式：isolate 会毁掉折射。
+ *
+ * 白度必须留在使用方：两者的约束不同。顶栏的半透明玻璃上有它自己的文字，而它下面还有
+ * 内容滚过，白度就是文字对比度的下限，按最坏背衬倒推成 /85（推导见 top-bar.tsx）。
+ * 侧栏的导航文字也在玻璃上，但底下只有稳定不动的水层，可以略透（/60）。
+ */
+@layer components {
+  .pc-glass {
+    box-shadow:
+      inset 1px 1.5px 0 -1px rgba(255, 255, 255, 0.85),
+      inset -1px -1px 0 -1px rgba(255, 255, 255, 0.5),
+      0 10px 30px rgba(24, 62, 96, 0.12);
   }
 }
 
@@ -501,206 +722,6 @@ body.auth-glass-body {
   }
   .glass-chip {
     display: none;
-  }
-}
-
-/* Registration shares the bright glass language, with its own welcome composition. */
-.auth-register-page {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(430px, 0.72fr);
-}
-.register-visual {
-  background: linear-gradient(135deg, #fff8ef 0%, #eaf7f5 45%, #dceef7 100%);
-}
-.register-form-panel {
-  min-height: 100dvh;
-  background:
-    radial-gradient(circle at 90% 14%, rgba(255, 222, 178, 0.5), transparent 34%),
-    radial-gradient(circle at 4% 88%, rgba(194, 222, 250, 0.42), transparent 38%), #f4f9f9;
-  backdrop-filter: blur(24px);
-}
-.register-ribbon {
-  position: absolute;
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  border-radius: 999px;
-  pointer-events: none;
-}
-.register-ribbon-one {
-  width: 580px;
-  height: 180px;
-  top: 19%;
-  right: -12%;
-  transform: rotate(-18deg);
-  background: rgba(255, 255, 255, 0.24);
-  box-shadow: inset 0 0 0 18px rgba(255, 255, 255, 0.12);
-}
-.register-ribbon-two {
-  width: 430px;
-  height: 130px;
-  top: 26%;
-  right: 2%;
-  transform: rotate(-18deg);
-  background: rgba(232, 190, 139, 0.12);
-}
-.register-scene {
-  position: absolute;
-  width: 340px;
-  height: 280px;
-  top: 8%;
-  right: 7%;
-  pointer-events: none;
-}
-.register-scene-card {
-  position: absolute;
-  z-index: 2;
-  top: 55px;
-  left: 56px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 210px;
-  padding: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: 24px;
-  color: #23667b;
-  background: rgba(255, 255, 255, 0.52);
-  box-shadow:
-    0 25px 50px rgba(85, 139, 150, 0.16),
-    inset 0 1px rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(22px);
-  transform: rotate(5deg);
-}
-.register-scene-card span {
-  color: #ec9a71;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-}
-.register-scene-card strong {
-  font-size: 22px;
-  letter-spacing: -0.05em;
-}
-.register-scene-card small {
-  color: #6f8e98;
-  font-size: 11px;
-}
-.register-scene-bubble {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(1px);
-  background: radial-gradient(
-    circle at 30% 25%,
-    rgba(255, 255, 255, 0.98),
-    rgba(202, 236, 231, 0.55) 50%,
-    rgba(117, 194, 207, 0.14) 75%,
-    transparent 76%
-  );
-  box-shadow: 0 18px 40px rgba(78, 159, 170, 0.16);
-}
-.register-scene-bubble-one {
-  width: 92px;
-  height: 92px;
-  top: 0;
-  right: 20px;
-}
-.register-scene-bubble-two {
-  width: 54px;
-  height: 54px;
-  bottom: 18px;
-  left: 0;
-  background: radial-gradient(
-    circle at 30% 25%,
-    rgba(255, 255, 255, 0.95),
-    rgba(249, 212, 179, 0.5) 52%,
-    transparent 74%
-  );
-}
-.register-step {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 9px;
-  padding: 12px 13px;
-  border: 1px solid rgba(255, 255, 255, 0.75);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.36);
-  backdrop-filter: blur(14px);
-}
-.register-step span {
-  grid-row: span 2;
-  color: #e89b73;
-  font-size: 12px;
-  font-weight: 700;
-}
-.register-step strong {
-  color: #456f7e;
-  font-size: 12px;
-}
-.register-step small {
-  margin-top: 3px;
-  color: #7e9ba4;
-  font-size: 10px;
-  line-height: 1.4;
-}
-.register-glass-card {
-  position: relative;
-  padding: clamp(30px, 3.6vw, 58px);
-  border: 1px solid rgba(255, 255, 255, 0.92);
-  border-radius: 34px;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.87), rgba(255, 255, 255, 0.58));
-  box-shadow:
-    0 30px 80px rgba(55, 112, 137, 0.12),
-    inset 0 1px rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(30px) saturate(1.25);
-}
-.register-glass-card::before {
-  content: "";
-  position: absolute;
-  inset: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  border-radius: 27px;
-  pointer-events: none;
-}
-@media (max-width: 900px) {
-  .auth-register-page {
-    grid-template-columns: 1fr;
-  }
-  .register-visual {
-    min-height: 580px;
-    padding: 32px;
-  }
-  .register-form-panel {
-    min-height: auto;
-    padding: 48px 24px;
-  }
-  .register-scene {
-    right: 1%;
-    transform: scale(0.68);
-    transform-origin: top right;
-  }
-}
-@media (max-width: 520px) {
-  .register-visual {
-    min-height: 620px;
-    padding: 24px;
-  }
-  .register-scene {
-    opacity: 0.5;
-    right: -18%;
-    top: 2%;
-    transform: scale(0.5);
-  }
-  .register-step {
-    padding: 10px 8px;
-  }
-  .register-step small {
-    display: none;
-  }
-  .register-form-panel {
-    padding: 28px 16px 48px;
-  }
-  .register-glass-card {
-    padding: 28px 24px;
-    border-radius: 26px;
   }
 }
 

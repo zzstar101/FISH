@@ -1,0 +1,809 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 法务长文档（用户协议 / 隐私政策）共用样式。
+ *
+ * 尺寸来源：两份静态稿的 `<style>` 块。稿画在 390pt 画布上、单位是 pt，
+ * 而本目录 SCSS 的 `px` 会被 Taro 转成 `rpx`（`designWidth: 750`），
+ * 所以 **SCSS 数值 = 稿内 pt 数值 × 2**（DESIGN.md §1）。稿里的 `1px` 描边
+ * 同理写成 `2px`（→ 2rpx 发丝线）。
+ *
+ * 配色一律走令牌（`styles/_token-vars.scss`），没有新造色值。
+ *
+ * ## 低于 44pt 的可点区域（**按稿保留，未做热区补偿** —— 需 Owner 认可）
+ *
+ * `apps/miniapp/待设计页面.md:175`：「所有可点区域**视觉高度 ≥ 44pt**（设计稿数值）。
+ * 小于这个值时，请在说明里注明"热区补偿"」。本页有四处低于该阈值，数值**逐条来自稿**：
+ *
+ * | 控件 | 视觉高度 | 稿内出处 |
+ * | --- | --- | --- |
+ * | 目录条目 `.ld__toc-item` | 自身 padding 上下各 9pt + 内容行 ≈ 33pt | `.toc-item{padding:9pt 0}` |
+ * | 吸底「不同意」`.ld__agree-no` | 38pt | `.btn-ghost{height:38pt}` |
+ * | 页脚互链胶囊 `.ld__foot-link` | 34pt | `.doc-links a{height:34pt}` |
+ * | 抽屉关闭钮 `.ld__sheet-close` | 28pt | `.sheet-close{28pt 见方}` |
+ *
+ * **这里没有做任何补偿**，所以不能说"热区被撑大了"：相邻元素之间的 `gap` 与父级 `padding`
+ * 都不属于子元素的命中盒，点在间隙上命中的是父容器（这些父容器没有 `onClick`），
+ * 命中区就等于控件自身高度。要补偿只能抬高控件本身，那会改掉稿的版式 —— 属 Owner 决策项。
+ * 本次**新增**的目录抽屉入口 `.ld__toc-hd` 不在此列（已给 88px = 44pt）。
+ *
+ * ## 已知的图标色偏（记录，不修）
+ *
+ * 稿的图标是内联 SVG 描边、走 `currentColor`，所以能被 `color` 染色；仓内 `ICONS` 是固定色
+ * PNG，**不能染色**（`assets/lib-icons.ts` 是图标唯一出口，换图要走生成器）。因此这两处
+ * 与稿有可见色差，属已知取舍：
+ * - 文档头 kicker 图标：稿是 `.doc-kicker{color:--brand-deep}`，`docInk` 实测 #3E4B66、
+ *   `safeAccent` 实测 #4285FF —— 都比 `--brand-deep`(#396FD4) 偏灰或偏亮；
+ * - 若将来要严格对齐，需要往图标生成器里加一个 brand-deep 变体，而不是在本文件里调色。
+ *
+ * ## 为什么这么多 `display: block`
+ *
+ * 稿是 HTML：标题、段落、列表项都是**块级**元素，垂直外边距天然生效。小程序里
+ * `<Text>` 默认是 `display: inline`，而**行内元素的 `margin-top` / `margin-bottom` 不生效** ——
+ * 段间距会整片消失（正文看着糊成一坨）。所以凡是靠 margin 拉开间距的 `Text`
+ * 都显式给 `display: block`（仓库既有页面同一做法，见 `pages/settings/index.scss`）。
+ */
+
+.ld {
+  position: relative;
+  min-height: 100vh;
+  /*
+   * 刻意**不写 `overflow`**：写了根节点自己就成了滚动容器，`pageScrollTo` 与
+   * 页面级 `usePageScroll` 会一起失效（同 `pages/favorites/index.scss` 的说明）。
+   * 顶部让位（固定玻璃栏的高度）由组件行内 `padding-top` 给：那是**设备 px**，
+   * 不能写进样式表（会被 pxtransform 当 rpx 缩小一倍）。
+   */
+}
+
+/* 正文容器：稿 `.doc{padding:18pt 20pt 30pt}` */
+.ld__doc {
+  padding: 36px 40px 60px;
+}
+
+/*
+ * 吸底同意条出现时正文要让出条高。稿实测条高 154px，给了 180pt(=360px) 的下内边距
+ * —— 最后一屏才不会被压在条底下（稿 `content.style.paddingBottom` 的同一取舍）。
+ */
+.ld__doc.is-entry {
+  padding-bottom: 360px;
+}
+
+/* ---------------------------------------------------------------- 文档头 */
+
+.ld__head {
+  padding-bottom: 32px;
+  border-bottom: 2px solid var(--border);
+}
+
+/* 稿 `.doc-kicker`：等宽小字 + 品牌深蓝，正文标题上方的一行分类标记 */
+.ld__kicker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 21px;
+  letter-spacing: 0.1em;
+  color: var(--brand-deep);
+  text-transform: uppercase;
+}
+
+.ld__kicker-ic {
+  width: 26px;
+  height: 26px;
+}
+
+.ld__title {
+  display: block;
+  margin-top: 18px;
+  font-size: 48px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  color: var(--fg);
+}
+
+/* 稿 `.doc-meta`：版本 / 更新日期 / 生效日期，等宽小字横向排布 */
+.ld__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin-top: 20px;
+}
+
+.ld__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 22px;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 行内标记 */
+
+/*
+ * 加粗片段（稿 `<strong>`）。基类只给字重：**颜色按上下文决定** ——
+ * 稿里 `.notlist strong` 只加粗不改色（保持成功色）、`.callout p strong` 同理（保持警示色），
+ * 其余六处的 `<strong>` 才转 `--fg`。一刀切换成 `--fg` 会把这两块的语义色吃掉。
+ *
+ * `:not(.ld__ph)` 不是洁癖：稿第 11.2 条是 `<strong>… <span class="ph">运营者全称</span> …</strong>`
+ * —— 一个片段**同时**是加粗与待填占位。没有这个排除项，上面那组 0-2-0 的上下文规则会盖掉
+ * `.ld__ph` 的 0-1-0 警示色，占位提示**静默消失**（虚线还在，但字色与正文一样，看不出没定稿）。
+ */
+.ld__b {
+  font-weight: 600;
+}
+
+.ld__clause-tx .ld__b:not(.ld__ph),
+.ld__sub-tx .ld__b:not(.ld__ph),
+.ld__key-tx .ld__b:not(.ld__ph),
+.ld__item-use .ld__b:not(.ld__ph),
+.ld__brief-lead .ld__b:not(.ld__ph),
+.ld__brief-li-tx .ld__b:not(.ld__ph) {
+  color: var(--fg);
+}
+
+/* 等宽说明片段（稿 `<em>`）：本地存储 key、「何时收集」这类需要与正文区分的内容 */
+.ld__em {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-style: normal;
+}
+
+.ld__item-name .ld__em {
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--brand-deep);
+}
+
+.ld__item-use .ld__em {
+  font-size: 21px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+/*
+ * 待填占位（稿 `.ph`）：虚线 + 警示色。**上线前必须替换**（运营者全称 / 联系邮箱 /
+ * 联系地址 / 更新与生效日期）。行内元素的下边框在 WebView 里会画在文字下沿，
+ * 所以补 `padding-bottom` 让虚线与字形拉开一点，别贴着笔画。
+ */
+.ld__ph {
+  padding-bottom: 2px;
+  font-weight: 600;
+  color: var(--warn-ink);
+  border-bottom: 3px dashed var(--warn);
+}
+
+/* ---------------------------------------------------------------- 一句话摘要卡（隐私政策） */
+
+/* 稿 `.brief`：浅蓝底 + 品牌浅描边，压在文档头下方 */
+.ld__brief {
+  margin-top: 32px;
+  padding: 28px;
+  border-radius: 36px;
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+}
+
+.ld__brief-hd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.ld__brief-hd-ic {
+  width: 32px;
+  height: 32px;
+}
+
+.ld__brief-lead {
+  display: block;
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.8;
+  color: var(--muted-2);
+}
+
+.ld__brief-ul {
+  margin-top: 20px;
+}
+
+.ld__brief-li {
+  display: flex;
+  gap: 14px;
+
+  & + & {
+    margin-top: 14px;
+  }
+}
+
+.ld__brief-li-ic {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin-top: 7px;
+}
+
+.ld__brief-li-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 24px;
+  line-height: 1.7;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 重要提示块（用户协议） */
+
+.ld__callout {
+  margin-top: 32px;
+  padding: 28px 28px 30px;
+  border-radius: 36px;
+  background: var(--warn-weak);
+  border: 2px solid var(--warn-line);
+}
+
+.ld__callout-hd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 27px;
+  font-weight: 600;
+  color: var(--warn-ink);
+}
+
+.ld__callout-hd-ic {
+  width: 32px;
+  height: 32px;
+}
+
+.ld__callout-tx {
+  display: block;
+  margin-top: 16px;
+  font-size: 25px;
+  line-height: 1.8;
+  color: var(--warn-ink);
+}
+
+/* ---------------------------------------------------------------- 目录卡 */
+
+.ld__toc {
+  margin-top: 36px;
+  padding: 28px 28px 16px;
+  border-radius: 36px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+/*
+ * 标题行同时是**目录抽屉的入口**：稿里抽屉只由机身外的演示控制条打开，屏内没有入口，
+ * 落地必须补一个 —— 点这一行拉开抽屉（章节条目在卡内与抽屉里都能直接跳章）。
+ *
+ * 这一行是**本次实现新增的控件**，所以它自己必须满足 `apps/miniapp/待设计页面.md:175`
+ * 「所有可点区域视觉高度 ≥ 44pt」：给 `min-height: 88px`（= 44pt × 2）并把图标/文字居中。
+ */
+.ld__toc-hd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 88px;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--fg);
+
+  &:active {
+    opacity: 0.7;
+  }
+}
+
+.ld__toc-hd-ic {
+  width: 32px;
+  height: 32px;
+}
+
+.ld__toc-hd-cnt {
+  margin-left: auto;
+  font-size: 21px;
+  font-weight: 400;
+  color: var(--muted-2);
+}
+
+.ld__toc-list {
+  margin-top: 12px;
+}
+
+.ld__toc-item {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 0;
+  border-bottom: 2px solid var(--border);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.ld__toc-no {
+  flex: 0 0 auto;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.ld__toc-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 25px;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.ld__toc-chev {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+}
+
+/* ---------------------------------------------------------------- 章 */
+
+/* 稿 `.sec{padding-top:22pt}`：章与章之间靠这一档留白分隔 */
+.ld__sec {
+  padding-top: 44px;
+}
+
+.ld__sec-hd {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+.ld__sec-num {
+  flex: 0 0 auto;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.ld__sec-title {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.5;
+  color: var(--fg);
+}
+
+/*
+ * 条款行：编号单独成列（稿取舍 ②）。编号进正文的话，长句换行后编号与文字对不齐，
+ * 一份 12 章的文档会很难定位。
+ */
+.ld__clause {
+  display: flex;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.ld__clause-no {
+  flex: 0 0 60px;
+  padding-top: 7px;
+  font-size: 23px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ld__clause-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26px;
+  line-height: 1.85;
+  color: var(--muted-2);
+}
+
+/* 稿 `.sub`：禁止事项 / 联系方式这类编号子项 */
+.ld__sub {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.ld__sub-no {
+  flex: 0 0 44px;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.ld__sub-tx {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 25px;
+  line-height: 1.8;
+  color: var(--muted-2);
+}
+
+/* 稿 `.key`：左竖线强调块（免责、平台角色、注销这类要单独跳出来的条款） */
+.ld__key {
+  margin-top: 20px;
+  padding: 22px 24px;
+  border-left: 6px solid var(--brand);
+  border-radius: 0 24px 24px 0;
+  background: var(--accent-weak);
+}
+
+.ld__key-tx {
+  display: block;
+  font-size: 26px;
+  line-height: 1.85;
+  color: var(--muted-2);
+}
+
+/* ---------------------------------------------------------------- 信息清单 */
+
+/*
+ * 稿取舍 ③：**不用四列表格** —— 390pt 画布扣掉 gutter 只剩 350pt，四列每列不足 90pt，
+ * 中文两字就换行。改成「信息项 + 必要性标签 + 用途」三段式，与小程序列表页同一套语言。
+ */
+.ld__list {
+  margin-top: 24px;
+  border-radius: 36px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.ld__list-hd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 26px;
+  background: var(--accent-weak);
+  border-bottom: 2px solid var(--accent-mid);
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.ld__list-hd-ic {
+  width: 30px;
+  height: 30px;
+}
+
+.ld__item {
+  padding: 22px 26px;
+  border-bottom: 2px solid var(--border);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.ld__item-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ld__item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ld__item-use {
+  display: block;
+  margin-top: 10px;
+  font-size: 24px;
+  line-height: 1.75;
+  color: var(--muted-2);
+}
+
+/* 必要性标签（稿 `.tag` 四档色调） */
+.ld__tag {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ld__tag--on {
+  background: var(--accent-weak);
+  border: 2px solid var(--accent-mid);
+  color: var(--brand-deep);
+}
+
+.ld__tag--opt {
+  background: var(--ink-weak);
+  color: var(--muted-2);
+}
+
+.ld__tag--off {
+  background: var(--ok-weak);
+  border: 2px solid var(--ok-line);
+  color: var(--ok-ink);
+}
+
+.ld__tag--note {
+  background: var(--warn-weak);
+  border: 2px solid var(--warn-line);
+  color: var(--warn-ink);
+}
+
+/* 「我们不会收集这些」（稿 `.notlist`，成功色；注意这里的加粗**不改色**） */
+.ld__notlist {
+  margin-top: 20px;
+  padding: 24px;
+  border-radius: 28px;
+  background: var(--ok-weak);
+  border: 2px solid var(--ok-line);
+}
+
+.ld__notlist-hd {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--ok-ink);
+}
+
+.ld__notlist-hd-ic {
+  width: 30px;
+  height: 30px;
+}
+
+.ld__notlist-tx {
+  display: block;
+  margin-top: 14px;
+  font-size: 24px;
+  line-height: 1.8;
+  color: var(--ok-ink);
+}
+
+/* ---------------------------------------------------------------- 页脚 */
+
+.ld__foot {
+  margin-top: 56px;
+  padding-top: 32px;
+  border-top: 2px solid var(--border);
+}
+
+.ld__foot-line {
+  display: block;
+  font-size: 22px;
+  line-height: 1.9;
+  color: var(--muted-2);
+}
+
+.ld__foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+/* 稿 `.doc-links a`：描边胶囊互链（《隐私政策》↔《用户协议》、意见反馈） */
+.ld__foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 68px;
+  padding: 0 26px;
+  border-radius: var(--r-pill);
+  border: 2px solid var(--border);
+  background: var(--surface);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--brand-deep);
+
+  &:active {
+    border-color: var(--line);
+    background: var(--accent-weak);
+  }
+}
+
+.ld__foot-link-ic {
+  width: 28px;
+  height: 28px;
+}
+
+/* ---------------------------------------------------------------- 吸底同意条 */
+
+/*
+ * 只在从登录/注册流程进入时渲染（稿状态 02）。材质用 `--glass-strong`
+ * —— 稿里的 `--glass` 在仓内就对应这一枚（`_token-vars.scss` 的注释写明了）。
+ */
+.ld__agree {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  padding: 24px 40px calc(48px + env(safe-area-inset-bottom));
+  background: var(--glass-strong);
+  border-top: 2px solid var(--border);
+  box-shadow: 0 -24px 64px -48px rgba(23, 35, 61, 0.5);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  animation: ld-agree-in 0.26s cubic-bezier(0.32, 0.72, 0.35, 1);
+}
+
+@keyframes ld-agree-in {
+  from {
+    transform: translateY(110%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.ld__agree-note {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+  font-size: 23px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.ld__agree-note-ic {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+}
+
+/*
+ * 吸底同意条的两个按钮**照稿给显式值**，不用 `btn-brand` / `btn-ghost` 两个通用 mixin。
+ *
+ * 稿（`小程序1版用户协议.html` 的 `.btn-primary` / `.btn-ghost`）与 mixin 差三处，且都不是细节：
+ * 1. 圆角：稿 999 胶囊，mixin 是 28px 圆角矩形（`DESIGN.md` §3 明确「胶囊 / 按钮 / 标签 = 999」）；
+ * 2. 高度：稿 46pt / 38pt（92px / 76px），mixin 两个都是 96px；
+ * 3. **「不同意」在稿里没有边框也没有底色**（只有 `--muted-2` 字色），mixin 会给它 2px 描边 +
+ *    白底 + `--fg` 字色 —— 主/次层级会反转，而这一屏正是「从登录流程进入」的验收状态。
+ */
+.ld__agree-ok {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 92px;
+  border-radius: var(--r-pill);
+  background: var(--grad-brand);
+  color: var(--surface);
+  font-size: 30px;
+  font-weight: 600;
+  box-shadow: var(--shadow-btn);
+
+  &:active {
+    transform: translateY(2px);
+  }
+}
+
+.ld__agree-ok-ic {
+  width: 34px;
+  height: 34px;
+}
+
+.ld__agree-no {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 16px;
+  height: 76px;
+  border-radius: var(--r-pill);
+  font-size: 25px;
+  font-weight: 600;
+  color: var(--muted-2);
+
+  &:active {
+    color: var(--fg);
+    background: var(--ink-weak);
+  }
+}
+
+/* ---------------------------------------------------------------- 目录抽屉 */
+
+.ld__scrim {
+  @include scrim;
+}
+
+/*
+ * `@include sheet` 给的上圆角是 `--r-hero`(64px)，稿这里是 24pt = 48px；同批的
+ * `pages/feedback` 弹层对同一个 mixin 也做了同样的覆盖 —— 两页的抽屉圆角要一致。
+ */
+.ld__sheet {
+  @include sheet;
+  border-radius: 48px 48px 0 0;
+  max-height: 74%;
+  display: flex;
+  flex-direction: column;
+  animation: ld-sheet-in 0.28s cubic-bezier(0.32, 0.72, 0.35, 1);
+}
+
+@keyframes ld-sheet-in {
+  from {
+    transform: translateY(110%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.ld__sheet-grip {
+  flex: 0 0 auto;
+  width: 76px;
+  height: 8px;
+  margin: 20px auto 0;
+  border-radius: var(--r-pill);
+  background: var(--accent-mid);
+}
+
+.ld__sheet-hd {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 40px 20px;
+}
+
+.ld__sheet-hd-ic {
+  width: 32px;
+  height: 32px;
+}
+
+.ld__sheet-title {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ld__sheet-cnt {
+  margin-left: auto;
+  font-size: 21px;
+  color: var(--muted-2);
+}
+
+.ld__sheet-close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.ld__sheet-close-ic {
+  width: 32px;
+  height: 32px;
+}
+
+/*
+ * 抽屉内可滚（稿 `.sheet-body`）：12 章竖排约 520pt，抽屉放得下但要能滚。
+ *
+ * 下内边距留 0：`@include sheet` 已经给容器 `padding-bottom: calc(48px + safe-area)`
+ * —— 稿的 24pt(=48px) 就是这一档，这里再给 24px 等于叠成 96px。
+ */
+.ld__sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 40px;
+}

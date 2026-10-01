@@ -39,10 +39,28 @@ type NavBarProps = {
    * （数值与 `components/top-bar` 的 `.topbar--glass` 同一套材质）。
    */
   glass?: boolean
+  /**
+   * 返回钮常驻吸顶：`position: fixed` 钉在屏顶，底色仍透明（玻璃与否仍由 `glass` 决定）。
+   *
+   * 基类是 `position: absolute` —— 返回钮会跟着内容滚走。设置 / 匹配 / 想要的人 /
+   * 许个愿这批页要的是「返回键先钉住，滚动后玻璃底和标题才浮现」：
+   * `fixed` + `glass={滚动驱动}` + `title={滚动驱动}` 三件套（user 页 glassOn 的同款思路，
+   * 区别只是未滚动时钮也钉住而不是滚走）。
+   */
+  fixed?: boolean
   /** 返回钮右侧的自定义动作区 */
   actions?: ReactNode
   /** 覆盖返回行为（默认 navigateBack，无上一页时 reLaunch 到首页） */
   onBack?: () => void
+  /**
+   * 栏下沿的阅读进度（0–1，稿 `.progress`）：**不传就不渲染**，既有调用方逐像素不变。
+   *
+   * 长文档页（用户协议 / 隐私政策）用 —— 稿的取舍是「长文档最缺的是还剩多少，
+   * 比页码便宜且不占高度」。进度条画在栏的底边上，所以由本组件承担而不是页面自绘：
+   * 页面对这条栏的真实高度（状态栏 + 内边距 + 钮高，且内联 px 与 rpx 混算）没有可靠口径，
+   * 自绘必然在部分机型上错位。
+   */
+  progress?: number
 }
 
 export default function NavBar({
@@ -50,8 +68,10 @@ export default function NavBar({
   title,
   titleAlign = 'start',
   glass = false,
+  fixed = false,
   actions,
   onBack,
+  progress,
 }: NavBarProps) {
   const statusBarHeight = (() => {
     try {
@@ -86,9 +106,19 @@ export default function NavBar({
 
   const titleClass = `navfloat__title${titleAlign === 'center' ? ' navfloat__title--center' : ''}`
 
+  /**
+   * 进度条宽度用**百分比**行内下发：百分比不是长度单位，pxtransform 不参与，也不会被
+   * 当成设备 px 误算（这正是本文件里唯一安全的行内写法）。夹到 [0,1] 是防页面算出
+   * 负数或 >1（弱网下测量值可能滞后一帧）。
+   */
+  const progressWidth =
+    typeof progress === 'number'
+      ? `${Math.round(Math.min(1, Math.max(0, progress)) * 10000) / 100}%`
+      : null
+
   return (
     <View
-      className={`navfloat${glass ? ' navfloat--glass' : ''}`}
+      className={`navfloat${fixed ? ' navfloat--fixed' : ''}${glass ? ' navfloat--glass' : ''}`}
       style={{ paddingTop: `${statusBarHeight}px` }}
     >
       {back ? (
@@ -110,6 +140,11 @@ export default function NavBar({
         )
       ) : null}
       {actions ? <View className="navfloat__actions">{actions}</View> : null}
+      {progressWidth === null ? null : (
+        <View className="navfloat__progress">
+          <View className="navfloat__progress-bar" style={{ width: progressWidth }} />
+        </View>
+      )}
     </View>
   )
 }

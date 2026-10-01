@@ -143,6 +143,16 @@
 }
 
 /*
+ * 返回钮常驻吸顶（`fixed` prop）：钉在屏顶但底色透明，玻璃与否交给 `glass` 变体。
+ * 与 `.navfloat--glass` 组合时这里是冗余声明（glass 也是 fixed），单独使用时它就是
+ * 「透明的钉住导航」—— 滚动前只看得见返回钮，滚动后由页面把 `glass` / `title` 打开。
+ * z-index 沿用基类的 20：与玻璃变体同一层级，弹层（50/60）仍压得住它。
+ */
+.navfloat--fixed {
+  position: fixed;
+}
+
+/*
  * 玻璃底之上，白钮几乎融进底色：实测钮填充 ≈250–255、底 ≈243，只差十余级，
  * 缩略图里只剩那个箭头看得见。补一道极浅的墨色描边把圆形勾出来。
  *
@@ -156,4 +166,30 @@
  */
 .navfloat--glass .navfloat__btn {
   border-color: rgba(23, 35, 61, 0.2);
+}
+
+/*
+ * 栏下沿的阅读进度条（`progress` 传入时才渲染；稿 `.progress`）。
+ *
+ * 稿里它是 `.mp-nav` 的 `bottom:-1px` 子元素、高 2pt —— 也就是**压在栏底边上**。
+ * 这里照同一关系落地：父级 `.navfloat` 自己就是定位上下文（两个变体分别是
+ * `absolute` / `fixed`），所以 `bottom: 0` 就是栏的底边，页面不需要知道栏有多高。
+ *
+ * 2pt → `4px`（本目录 px = 设计稿 pt × 2，见 DESIGN.md §1）。
+ * `pointer-events: none` 继承自 `.navfloat` 的基类，进度条不挡点击。
+ */
+.navfloat__progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  overflow: hidden;
+}
+
+/* 品牌渐变填充，宽度由组件行内按 0–1 换算成百分比下发（稿 `transition:width .12s linear`） */
+.navfloat__progress-bar {
+  height: 100%;
+  background: var(--grad-brand);
+  transition: width 0.12s linear;
 }

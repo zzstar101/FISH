@@ -17,9 +17,8 @@ import ProductCard from '@/components/product-card'
 import TopBar from '@/components/top-bar'
 import { loadCategoryListings, loadHomeFeed } from '@/features/fetchers'
 import type { FeedAttribution } from '@/features/recommendation/attribution'
-import { hideListing, readHiddenListingIds } from '@/features/recommendation/hidden'
+import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { flushRecommendationQueue } from '@/features/recommendation/queue'
-import { trackRecommendationEvent } from '@/features/recommendation/track'
 import {
   type FeedTrackingContext,
   useFeedImpressions,
@@ -27,7 +26,6 @@ import {
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
-import { findUser } from '@/mock/users'
 import { applyLoadResult, homeListState } from './list-state'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
 import './index.scss'
@@ -72,6 +70,19 @@ export default function Home() {
   const [loadedFor, setLoadedFor] = useState<ListingCategory | 'ALL' | null>(null)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态，不显示空态、更不显示演示数据 */
   const [failed, setFailed] = useState(false)
+
+  /**
+   * 本机「不感兴趣」名单：进页读一次，`useDidShow` 每次回到本页再读一次。
+   *
+   * 为什么要重读：名单是**跨页**的 —— 在商品详情页的「同类推荐」里隐藏了 B，返回首页时
+   * 首页的 `items`（当初加载时就过滤过一次）里 B 还在。卡片只靠自己 mount 时读一次名单，
+   * 是发现不了这件事的；页面这份 state 一变，卡片就会跟着不渲染（见 `components/product-card`
+   * 的 `hidden` 入参）。
+   */
+  const [hiddenIds, setHiddenIds] = useState<readonly string[]>(() => readHiddenListingIds())
+  /** `hiddenIds` 的镜像：`useDidShow` 的回调是常驻闭包，要读「上一轮已经隐藏了哪些」 */
+  const hiddenIdsRef = useRef<readonly string[]>(hiddenIds)
+  hiddenIdsRef.current = hiddenIds
 
   /**
    * 当前分类。`ALL` = 首页的「推荐」，不是契约里的枚举值。
@@ -119,36 +130,23 @@ export default function Home() {
   }
 
   /**
-   * 长按卡片 →「不感兴趣」。
+   * 卡片菜单里点了「不感兴趣」之后的**页面**账。
    *
-   * R1 **没有**服务端隐藏接口（见 `recommendation/hidden`）：发一条 HIDE、立刻把卡片从列表
-   * 移除、把 id 记进本地名单，三步都在本地完成。所以隐藏是立刻生效的，不需要等接口回来
-   * ——也就不会出现「点了没反应」这种最容易被读成坏了的状态。
+   * 通用那几件事（弹菜单、发 HIDE、记本地隐藏名单、把卡片自己摘掉）都在卡片里
+   * （`components/product-card`）—— 首页 / 搜索 / 相似推荐三处复用同一张卡，行为必须一致，
+   * 所以不再由各页面各接一遍长按回调。这里只留两件只有页面才知道的事：
+   *
+   * 1. 先结算它的曝光计时：卡片马上要被移除，留着计时器会在它消失之后补发一条曝光。
+   *    结算原因传 `dismissed` —— 菜单这次交互被卡片吃掉了紧随的 tap（`swallowNextTapRef`），
+   *    `markOpened` 根本没跑过；按默认的「离开视口」结算会把这不足 1s 的停留
+   *    再记一条 QUICK_SKIP，等于把一次明确表态说成「没看上就划过去了」。
+   * 2. 把 id 记进 `hiddenIds`：卡片据此就地不渲染，而**不从 `items` 里删**。
+   *    删了会重新分列（`splitColumns` 按 index 奇偶），它后面的每张卡都会换列 ——
+   *    跨父节点移动在 React 里就是卸载重挂（图片重载、状态重来），用户看到的是整屏跳一下。
    */
-  const onHideListing = async (item: MockListing) => {
-    let confirmed = false
-    try {
-      const result = await Taro.showActionSheet({ itemList: ['不感兴趣'] })
-      confirmed = result.tapIndex === 0
-    } catch {
-      // 用户点了取消 / 蒙层：`showActionSheet` 以 reject 收场，这不是错误
-      return
-    }
-    if (!confirmed) return
-    trackRecommendationEvent({
-      listingId: item.id,
-      eventType: 'HIDE',
-      attribution: attributionOf(item.id),
-    })
-    hideListing(item.id)
-    /*
-      先结算它的曝光计时：卡片马上要被移除，留着计时器会在它消失之后补发一条曝光。
-      结算原因传 `dismissed` —— 长按「不感兴趣」时这次 tap 被卡片吃掉（`swallowNextTapRef`），
-      `markOpened` 根本没跑过；按默认的「离开视口」结算会把这不足 1s 的停留
-      再记一条 QUICK_SKIP，等于把一次明确表态说成「没看上就划过去了」。
-    */
+  const onDislikeListing = (item: MockListing) => {
     impressions.settleListing(item.id, 'dismissed')
-    setItems((prev) => prev.filter((row) => row.id !== item.id))
+    setHiddenIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
   }
 
   const load = async (next: ListingCategory | 'ALL') => {
@@ -195,9 +193,23 @@ export default function Home() {
     void load('ALL')
   })
 
-  // 回到这个页面时补一次冲刷：队列里攒着的事件不该等到下一个 15s 定时器（见 `recommendation/queue`）
   useDidShow(() => {
+    // 回到这个页面时补一次冲刷：队列里攒着的事件不该等到下一个 15s 定时器（见 `recommendation/queue`）
     void flushRecommendationQueue()
+    /*
+      本机隐藏名单是跨页的：别的页面刚隐藏的商品要在这里跟着消失（见 `hiddenIds`）。
+
+      **新增的那些要先结算曝光计时**：`useDidShow` 会把可见段的计时重新武装，而这些卡片马上
+      会因为 `hidden` 变成真而卸载 —— 不结算就会为一张已经不在屏幕、且刚被用户明确表态的卡
+      补发一条 IMPRESSION。原因传 `dismissed`，与菜单里那次表态同一个口径。
+      判定放在 updater 外面：state updater 必须是纯函数。
+    */
+    const next = readHiddenListingIds()
+    const known = hiddenIdsRef.current
+    for (const id of next) {
+      if (!known.includes(id)) impressions.settleListing(id, 'dismissed')
+    }
+    setHiddenIds(next)
   })
 
   // 下拉刷新重拉**当前分类**：在「教材书籍」里下拉刷新却跳回「推荐」，
@@ -209,6 +221,17 @@ export default function Home() {
   const [left, right] = useMemo(() => splitColumns(items), [items])
 
   /**
+   * 屏幕上真能看到的件数：`items` 减去本机隐藏的。
+   *
+   * 隐藏的列表项**不从 `items` 里删**（删了后面的卡会重新分列并重挂载，见 `onDislikeListing`），
+   * 所以空态判定必须读这个数 —— 读 `items.length` 的话，全部隐藏完时既没有卡片、也没有文案。
+   */
+  const visibleCount = useMemo(
+    () => items.filter((item) => !hiddenIds.includes(item.id)).length,
+    [items, hiddenIds],
+  )
+
+  /**
    * 商品区渲染形态：error / skeleton / empty / list。
    *
    * 判定是纯函数（`./list-state.ts`，带用例）：`loadedFor !== category` 时屏幕上的
@@ -217,7 +240,7 @@ export default function Home() {
    * 以及加载失败作废后的重试在途。这几种情况都给骨架屏：既不能继续展示上一个
    * 分类的商品（旧数据冒充新分类），也不能显示空态（「没货」是成功后的结论）。
    */
-  const listState = homeListState({ loadedFor, category, failed, itemCount: items.length })
+  const listState = homeListState({ loadedFor, category, failed, itemCount: visibleCount })
 
   const goSearch = () => {
     void Taro.navigateTo({ url: '/pages/search/index' })
@@ -483,9 +506,20 @@ export default function Home() {
             </View>
           </View>
         ) : listState === 'empty' ? (
+          /*
+            两种「空」不是一回事：`items` 空 = 这个分类确实没货；`items` 非空而可见数为 0 =
+            用户自己把它们逐张标了「不感兴趣」。后者说成「这个分类还没有闲置」是把自己的
+            操作结果说成事实缺失（搜索页同款处理见 `pages/search`）。
+          */
           <View className="home__empty">
-            <Text className="home__empty-title">这个分类还没有闲置</Text>
-            <Text className="home__empty-text">换个分类看看，或到许愿墙发一条心愿</Text>
+            <Text className="home__empty-title">
+              {items.length === 0 ? '这个分类还没有闲置' : '这些商品都不感兴趣了'}
+            </Text>
+            <Text className="home__empty-text">
+              {items.length === 0
+                ? '换个分类看看，或到许愿墙发一条心愿'
+                : '这个分类的闲置都被你标过「不感兴趣」，换个分类看看'}
+            </Text>
           </View>
         ) : (
           <View className="waterfall">
@@ -494,13 +528,14 @@ export default function Home() {
                 <ProductCard
                   key={item.id}
                   listing={item}
-                  seller={findUser(item.sellerId)}
+                  seller={item.seller}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                   // 推荐归因随卡片带进详情页（R1 §3.5）；分类列表里为 null
                   attribution={attributionOf(item.id)}
                   // 点开前先记下「这张卡被点开过」：快速划过的判定要求「未点开」
                   onOpen={() => impressions.markOpened(item.id)}
-                  onLongPress={() => void onHideListing(item)}
+                  hidden={hiddenIds.includes(item.id)}
+                  onDislike={() => onDislikeListing(item)}
                 />
               ))}
             </View>
@@ -509,11 +544,12 @@ export default function Home() {
                 <ProductCard
                   key={item.id}
                   listing={item}
-                  seller={findUser(item.sellerId)}
+                  seller={item.seller}
                   imageHeight={RATIO_HEIGHT[item.ratio]}
                   attribution={attributionOf(item.id)}
                   onOpen={() => impressions.markOpened(item.id)}
-                  onLongPress={() => void onHideListing(item)}
+                  hidden={hiddenIds.includes(item.id)}
+                  onDislike={() => onDislikeListing(item)}
                 />
               ))}
             </View>

@@ -25,7 +25,10 @@ export function useHomeFeed() {
   })
 }
 
-export function useListingSearch(filters: ListingSearchFilters) {
+export function useListingSearch(
+  filters: ListingSearchFilters,
+  options: { enabled?: boolean } = {},
+) {
   return useInfiniteQuery({
     queryKey: ['pc', 'listings', 'search', filters],
     queryFn: ({ pageParam }) =>
@@ -33,5 +36,8 @@ export function useListingSearch(filters: ListingSearchFilters) {
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     staleTime: 30_000,
+    // 编号精确查询（#382）期间必须关掉关键词请求：输入是编号时不把编号当关键词模糊搜。
+    // enabled 不进 queryKey——它只控制发不发请求，关键词/筛选不变时缓存仍是同一条。
+    enabled: options.enabled ?? true,
   })
 }

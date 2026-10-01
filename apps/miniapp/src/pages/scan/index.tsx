@@ -1,8 +1,7 @@
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
-import { Camera, Image, Text, View } from '@tarojs/components'
+import { Camera, Text, View } from '@tarojs/components'
 import Taro, { useDidShow } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
-import { ICONS } from '@/assets/lib-icons'
 import ScanTabs from '@/components/scan-tabs'
 import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -33,21 +32,17 @@ import './index.scss'
  *   即拦住后续触发），本页没有下游 navigateTo，不需要交易码页的 processing 锁。
  * - 「重新对准」回到取景后，同一枚码会再次触发分派并再次落面板 —— 与交易码页
  *   「重新扫」的语义一致，不算重试风暴。
- * - 相机权限被拒 → 「去设置 / 返回」弹窗；其余相机错误 → 硬件条目。分类判据
- *   优先取 `getSetting` 的确定性结果，`onError` 的 errMsg 只做兜底。
+ * - 相机权限被拒 / 其余相机错误都**不再弹阻断弹窗**（Owner 2026-09-29：弹窗老是挡住操作）——
+ *   取景层就地换成一句说明 + 一个「去设置」，底部三段切换钮照常可用。
  */
 
-/** 结果反馈的原因条目与面板文案（渲染结构对齐 `pages/scan-pr` 的结果面板）。 */
+/**
+ * 结果反馈的原因条目与面板文案（渲染结构对齐 `pages/scan-pr` 的结果面板）。
+ *
+ * 原「硬件（设备没有可用摄像头）」一条随「无相机弹窗下线」一起删掉了（Owner 2026-09-29）：
+ * 相机不可用现在只在取景层就地说明，不再走结果面板。
+ */
 const REASONS = [
-  {
-    key: 'no-camera',
-    pipe: '硬件',
-    pipeCls: 'is-warn',
-    title: '设备没有可用摄像头',
-    desc: '相机被占用或本机不支持，请稍后再试。',
-    action: 'back',
-    actionLabel: '返回',
-  },
   {
     key: 'is-txn',
     pipe: '交易码',
@@ -68,27 +63,20 @@ const REASONS = [
   },
 ] as const
 
-/** 面板标题按原因区分：is-txn / unsupported 是「扫到了但打不开」，不是扫码失败。 */
+/** 面板标题按原因区分：两条都是「扫到了但打不开」，不是扫码失败。 */
 const SHEET_COPY: Record<ReasonKey, { title: string; sub: string }> = {
-  'no-camera': { title: '扫码没成功', sub: '按原因给不同出口，不让用户卡在同一个按钮上' },
   'is-txn': { title: '扫到了交易码', sub: '换到「交易码」页就能继续' },
   unsupported: { title: '这个码暂不支持打开', sub: '识别成功了，但这里还没有对应的打开方式' },
 }
 
-type Mode = 'viewfinder' | 'denied' | 'errors'
+type Mode = 'viewfinder' | 'errors'
 
 type ReasonKey = (typeof REASONS)[number]['key']
 
 type ReasonAction = (typeof REASONS)[number]['action']
 
-/** 相机错误事件 detail：微信只在 errMsg / errSubMsg 里给字符串 */
-type CameraErrorDetail = { errMsg?: string; errSubMsg?: string }
-
 /** onScanCode 事件 detail（weapp 的识别结果在 result 字段） */
 type ScanCodeDetail = { result?: string }
-
-/** 相机错误 errMsg 命中即视为「用户拒绝授权」，其余按硬件失败处理 */
-const AUTH_DENY_PATTERN = /auth|deny|permission|权限/i
 
 /** 扫码结果的分派（纯逻辑，交易码形状 gate 复用 contracts 的唯一出口）。
  * 相机对识别不出的画面不触发 onScanCode，本页没有「解析失败」分支；
@@ -105,7 +93,7 @@ export default function ScanQr() {
   /** 相机实例序号：作为 key，换号即整体重挂（报错恢复 / 回前台防预览冻结） */
   const [cameraEpoch, setCameraEpoch] = useState(0)
   /** 「扫码没成功」面板当前展示的原因（进入面板时一定带一个） */
-  const [failureKey, setFailureKey] = useState<ReasonKey>('no-camera')
+  const [failureKey, setFailureKey] = useState<ReasonKey>('unsupported')
 
   // 返回钮与标题的垂直位置跟微信原生胶囊对齐（设备 px，内联下发，不参与 rpx 缩放）
   const nav = useMemo(() => readNavMetrics(), [])
@@ -118,24 +106,17 @@ export default function ScanQr() {
 
   /**
    * 复核相机权限（页面显示 / 从设置页回来时走）。
-   * `getSetting` 只返回**已请求过**的权限：`false` = 明确拒绝 → 无权限弹窗；
+   * `getSetting` 只返回**已请求过**的权限：`false` = 明确拒绝 → 取景层出说明（**不弹窗**）；
    * `true` 或未出现 = 已授权 / 从未询问 → 挂相机。
    */
   const syncCameraState = () => {
     void Taro.getSetting()
       .then((res) => {
-        if (res.authSetting['scope.camera'] === false) {
-          setCameraOn(false)
-          setMode('denied')
-          return
-        }
-        setCameraOn(true)
-        setMode((prev) => (prev === 'denied' ? 'viewfinder' : prev))
+        setCameraOn(res.authSetting['scope.camera'] !== false)
       })
       .catch(() => {
         // getSetting 失败：仍尝试挂相机，授权结果交给 onError 兜底
         setCameraOn(true)
-        setMode((prev) => (prev === 'denied' ? 'viewfinder' : prev))
       })
   }
 
@@ -144,23 +125,11 @@ export default function ScanQr() {
   })
 
   /**
-   * 相机层错误：优先用 `getSetting` 的确定性结果分类——`scope.camera === false`
-   * 即「用户拒绝授权」，权限仍在则按硬件失败（被占用 / 无相机）处理。
+   * 相机层错误：**不再弹阻断弹窗**（Owner 2026-09-29）—— 权限被拒与硬件失败都只把取景层
+   * 换成一句说明（`cameraOn=false`），底部三段切换钮照常可用。
    */
-  const handleCameraError = (event: { detail?: CameraErrorDetail }) => {
-    const message = `${event.detail?.errMsg ?? ''} ${event.detail?.errSubMsg ?? ''}`
-    const toDenied = () => {
-      setCameraOn(false)
-      setMode('denied')
-    }
-    const toHardware = () => {
-      setCameraOn(false)
-      setFailureKey('no-camera')
-      setMode('errors')
-    }
-    void Taro.getSetting()
-      .then((res) => (res.authSetting['scope.camera'] === false ? toDenied() : toHardware()))
-      .catch(() => (AUTH_DENY_PATTERN.test(message) ? toDenied() : toHardware()))
+  const handleCameraError = () => {
+    setCameraOn(false)
   }
 
   /** 扫码结果入口：分派只落结果面板，不在本页做任何下游导航。 */
@@ -170,14 +139,14 @@ export default function ScanQr() {
     setMode('errors')
   }
 
+  /** 从设置页回来：授权了就重挂相机；仍未授权就继续留在「相机不可用」的就地说明上。 */
   const openSetting = () => {
     void Taro.openSetting({})
       .then((res) => {
         if (res.authSetting['scope.camera']) {
           setCameraOn(true)
-          setMode('viewfinder')
+          setCameraEpoch((n) => n + 1)
         }
-        // 仍未授权：停在无权限弹窗，等下次进设置
       })
       .catch(() => undefined)
   }
@@ -189,10 +158,6 @@ export default function ScanQr() {
   }
 
   const handleReasonAction = (action: ReasonAction) => {
-    if (action === 'back') {
-      goBack()
-      return
-    }
     if (action === 'code') {
       void Taro.redirectTo({ url: SCAN_CODE_PAGE }).catch(() => {
         void Taro.showToast({ title: '页面打开失败，请重试', icon: 'none' })
@@ -226,26 +191,32 @@ export default function ScanQr() {
         )}
       </View>
 
-      {/* 遮罩四块；「无权限」时整屏压暗 */}
-      {mode === 'denied' ? (
-        <View className="scanqr__mask scanqr__mask--full" />
-      ) : (
-        <>
-          <View className="scanqr__mask scanqr__mask--t" />
-          <View className="scanqr__mask scanqr__mask--b" />
-          <View className="scanqr__mask scanqr__mask--l" />
-          <View className="scanqr__mask scanqr__mask--r" />
-        </>
-      )}
+      {/* 遮罩四块：相机不可用时照常保留（不再整屏压暗 + 弹窗） */}
+      <View className="scanqr__mask scanqr__mask--t" />
+      <View className="scanqr__mask scanqr__mask--b" />
+      <View className="scanqr__mask scanqr__mask--l" />
+      <View className="scanqr__mask scanqr__mask--r" />
 
-      {/* 取景框：仅取景 / 错误列表时可见 */}
-      {mode === 'denied' ? null : (
-        <View className={`scanqr__window${mode === 'viewfinder' ? '' : ' is-dim'}`}>
-          {mode === 'viewfinder' ? <View className="scanqr__scanline" /> : null}
-          <View className="scanqr__cnr scanqr__cnr--tl" />
-          <View className="scanqr__cnr scanqr__cnr--tr" />
-          <View className="scanqr__cnr scanqr__cnr--bl" />
-          <View className="scanqr__cnr scanqr__cnr--br" />
+      {/* 取景框：恒可见 */}
+      <View className={`scanqr__window${mode === 'viewfinder' ? '' : ' is-dim'}`}>
+        {mode === 'viewfinder' ? <View className="scanqr__scanline" /> : null}
+        <View className="scanqr__cnr scanqr__cnr--tl" />
+        <View className="scanqr__cnr scanqr__cnr--tr" />
+        <View className="scanqr__cnr scanqr__cnr--bl" />
+        <View className="scanqr__cnr scanqr__cnr--br" />
+      </View>
+
+      {/*
+        相机不可用：**不弹阻断弹窗**（Owner 2026-09-29）—— 就地说明 + 「去设置」，
+        底部三段切换钮照常可用，用户随时能切到「识图」或「交易码」。
+      */}
+      {cameraOn ? null : (
+        <View className="scanqr__noCam">
+          <Text className="scanqr__noCam-title">相机不可用</Text>
+          <Text className="scanqr__noCam-text">可以去「设置」允许使用相机，或切到其他入口</Text>
+          <View className="scanqr__noCam-btn" onClick={openSetting}>
+            <Text>去设置</Text>
+          </View>
         </View>
       )}
 
@@ -274,30 +245,6 @@ export default function ScanQr() {
 
       {/* ---------------- 底部：扫码家族切换钮（仅取景态） ---------------- */}
       {mode === 'viewfinder' ? <ScanTabs active="scan" /> : null}
-
-      {/* ---------------- 无相机权限 ---------------- */}
-      {mode === 'denied' ? (
-        <>
-          <View className="scanqr__scrim scanqr__scrim--full" />
-          <View className="scanqr__cdialog">
-            <View className="scanqr__cdisc">
-              <Image className="scanqr__cdisc-ic" src={ICONS.cameraOff} mode="aspectFit" />
-            </View>
-            <Text className="scanqr__cdialog-title">没有相机权限</Text>
-            <Text className="scanqr__cdialog-text">
-              去「设置」允许使用相机后即可扫码。也可以先返回，之后再来。
-            </Text>
-            <View className="scanqr__cacts">
-              <View className="scanqr__btn-main scanqr__btn-main--flat" onClick={openSetting}>
-                <Text>去设置</Text>
-              </View>
-              <View className="scanqr__btn-ghost" onClick={goBack}>
-                <Text>返回</Text>
-              </View>
-            </View>
-          </View>
-        </>
-      ) : null}
 
       {/* ---- 「扫码没成功」结果反馈（只显示当前原因；可关闭，不挡演示） ---- */}
       {mode === 'errors' ? (
