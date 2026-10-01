@@ -189,6 +189,13 @@ test('listActiveListings 只出 ACTIVE + APPROVED，时间倒序，且与 stats 
       expect(rows.every((row) => row.status === 'ACTIVE')).toBe(true)
       expect(rows.every((row) => /^[1-9][0-9]{11}$/.test(row.listingNo.toString()))).toBe(true)
       expect((await store.stats(sellerId)).activeListings).toBe(rows.length)
+      // #191：卡片卖家公开子集随 join users 带出——卖家即本主页用户（真实昵称、UNVERIFIED 默认值）。
+      expect(rows[0]?.seller).toEqual({
+        id: sellerId,
+        nickname: '卖家',
+        avatarUrl: null,
+        authStatus: 'UNVERIFIED',
+      })
     },
   )
 })

@@ -213,6 +213,12 @@ export function createApp(
     store: createSqlListingStore(db),
     storage,
     mediaObjects,
+    // #228：Listing 文本审核走同一份 moderation env（`CONTENT_MODERATION_TRANSPORT=local|tencent`，
+    // production 缺腾讯配置时由 env 层 fail-fast）。`loadImage` 不会被调用——图片审核在 uploads 的
+    // confirm 里（#286），listings 只用 `moderateText`。
+    moderationProvider: createContentModerationProvider(moderationEnv, {
+      loadImage: () => Promise.reject(new Error('listings 不使用图片审核')),
+    }),
   })
   app.route(
     '/listings',

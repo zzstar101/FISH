@@ -3,6 +3,7 @@ import type { Db } from '@fish/db/client'
 import { users } from '@fish/db/schema/users'
 import { eq, sql } from 'drizzle-orm'
 import type { UserRow } from '../auth/me'
+import type { ListingCardSeller } from '../listings/card'
 
 /** 我发布的商品行（含封面 objectKey；URL 由共享映射 listings/card 拼）。 */
 export interface ProfileListingRow {
@@ -18,6 +19,8 @@ export interface ProfileListingRow {
   free: boolean
   createdAt: Date
   coverObjectKey: string | null
+  /** 卖家公开投影源列（#191）：本人视角的卖家恒是查看者自己，join users 同源带出。 */
+  seller: ListingCardSeller
 }
 
 /** 我的愿望行：形状对齐 wishes 模块的 WishRow（复用其导出的 toWishDto，避免映射漂移）。 */
@@ -126,14 +129,19 @@ export function createSqlProfileStore(db: Db): ProfileStore {
       // 本人视角：不筛 status（OFFLINE/RESERVED/SOLD 都是自己可见的）。
       // 封面只认 `sort_order = 0`（#6 契约 §1：下标即 sortOrder，0 才是封面），与 listings
       // feed / matching / 本文件其它查询同一口径（#40/F3）。
+      // INNER JOIN users（#191）：卡片要带卖家公开子集（本人视角的卖家就是查看者自己），
+      // 与 feed / matching / 他人主页在售同一来源，不另造第二份投影。
       const result = await db.execute(sql`
         SELECT l.id, l.listing_no, l.title, l.price_cents, l.category::text AS category,
                l.condition::text AS condition, l.status::text AS status,
                l.urgent, l.negotiable, l.free, l.created_at,
                (SELECT li.object_key FROM listing_images li
                  WHERE li.listing_id = l.id AND li.sort_order = 0 LIMIT 1)
-                 AS cover_object_key
+                 AS cover_object_key,
+               u.id AS seller_id, u.nickname AS seller_nickname,
+               u.avatar_url AS seller_avatar_url, u.auth_status::text AS seller_auth_status
         FROM listings l
+        INNER JOIN users u ON u.id = l.seller_id
         WHERE l.seller_id = ${userId}
         ORDER BY l.created_at DESC, l.id DESC
         LIMIT ${limit}
@@ -152,6 +160,12 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         // 裸 SQL 的时间戳按仓库统一口径写成 `Date | string` 再归一：不靠驱动的返回类型假设。
         createdAt: new Date(row.created_at as string | Date),
         coverObjectKey: (row.cover_object_key as string | null) ?? null,
+        seller: {
+          id: row.seller_id as string,
+          nickname: row.seller_nickname as string,
+          avatarUrl: (row.seller_avatar_url as string | null) ?? null,
+          authStatus: row.seller_auth_status as ProfileListingRow['seller']['authStatus'],
+        },
       }))
     },
 

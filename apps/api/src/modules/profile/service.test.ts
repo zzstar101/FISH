@@ -87,6 +87,8 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   free: false,
   createdAt: new Date('2026-09-12T01:00:00.000Z'),
   coverObjectKey: 'covers/a.jpg',
+  // #191：卡片卖家公开子集（本人视角 = 查看者自己），join users 同源带出。
+  seller: { id: USER_ID, nickname: '小明', avatarUrl: null, authStatus: 'VERIFIED' },
   ...overrides,
 })
 

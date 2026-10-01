@@ -111,6 +111,13 @@ describe('profile store (integration)', () => {
     // listingB 只有 2 号图 → 封面判 null；listingA 有 0 号图 → 取 0 号（不是序号最大的那张）
     expect(rows[0]?.coverObjectKey).toBeNull()
     expect(rows[1]?.coverObjectKey).toBe('listings/a/0.jpg')
+    // #191：卡片卖家公开子集随 JOIN users 带出——本人视角的卖家就是查看者自己。
+    expect(rows[0]?.seller).toEqual({
+      id: me,
+      nickname: '个人中心测试',
+      avatarUrl: null,
+      authStatus: 'UNVERIFIED',
+    })
   })
 
   test('ownListings does not include other users listings (只返回本人可见数据)', async () => {

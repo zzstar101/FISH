@@ -446,6 +446,44 @@ async function meetupTokenRowCount(db: Db, transactionId: string): Promise<numbe
   return [...rows][0]?.n ?? 0
 }
 
+/**
+ * #297 终态一致性不变量：终态交易必须无凭证行，且 status / 时间戳 / listing 三方一致
+ * （COMPLETED ⇒ completed_at 非空 + listing SOLD，治理下架例外除外；CANCELLED ⇒
+ * cancelled_at 非空）。与 store.test.ts 的 assertTerminalConsistency 同一口径。
+ */
+async function assertTerminalTokenConsistency(
+  db: Db,
+  transactionPublicId: string,
+  expected: 'CANCELLED' | 'COMPLETED',
+): Promise<void> {
+  assertEqual(await meetupTokenRowCount(db, transactionPublicId), 0, `${expected} 后凭证行已删除`)
+  const rows = await db.execute<{
+    status: string
+    completed: boolean
+    cancelled: boolean
+    listing_status: string
+    governance_delisted: boolean
+  }>(sql`
+    select t.status::text as status,
+           (t.completed_at is not null) as completed,
+           (t.cancelled_at is not null) as cancelled,
+           l.status::text as listing_status,
+           (l.governance_delisted_at is not null) as governance_delisted
+    from transactions t join listings l on l.id = t.listing_id
+    where t.id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionPublicId)}
+  `)
+  const row = [...rows][0]
+  if (row === undefined) {
+    throw new Error(`✗ [${step}] 终态交易存在｜实得：${JSON.stringify({ transactionPublicId })}`)
+  }
+  assertEqual(row.status, expected, `交易状态应为 ${expected}`)
+  assertEqual(row.completed, expected === 'COMPLETED', 'completed_at 与状态一致')
+  assertEqual(row.cancelled, expected === 'CANCELLED', 'cancelled_at 与状态一致')
+  if (expected === 'COMPLETED' && !row.governance_delisted) {
+    assertEqual(row.listing_status, 'SOLD', 'COMPLETED ⇒ listing SOLD（治理下架例外除外）')
+  }
+}
+
 async function notificationCount(db: Db, listingId: string, wishId: string): Promise<number> {
   const rows = await db
     .select({ n: sql<number>`count(*)::int` })
@@ -1450,6 +1488,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(cancelledResponse.status, 200, '买家取消 → 200')
     assertEqual((await readJson(cancelledResponse)).status, 'CANCELLED', '取消后交易为 CANCELLED')
     assertEqual(await meetupTokenRowCount(db, cancelledId), 0, 'CANCELLED 后凭证行已删除')
+    await assertTerminalTokenConsistency(db, cancelledId, 'CANCELLED')
 
     const cancelAfterTerminal = await postJson(
       base,
@@ -1603,6 +1642,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual((await readJson(buyerConfirm)).status, 'COMPLETED', '买家确认后双侧齐 → COMPLETED')
 
     assertEqual(await meetupTokenRowCount(db, transactionId), 0, 'COMPLETED 后凭证行已删除')
+    await assertTerminalTokenConsistency(db, transactionId, 'COMPLETED')
 
     const afterTerminal = await issue()
     assertEqual(afterTerminal.status, 409, '终态后取码 → 409')
