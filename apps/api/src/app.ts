@@ -33,6 +33,9 @@ import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
 import { createChatWatchersRouter } from './modules/conversations/watchers-router'
 import { createChatWatchersService } from './modules/conversations/watchers-service'
+import { createFavoritesRouter } from './modules/favorites/router'
+import { createFavoriteService } from './modules/favorites/service'
+import { createSqlFavoriteStore } from './modules/favorites/store'
 import { createFollowsRouter } from './modules/follows/router'
 import { createFollowService } from './modules/follows/service'
 import { createSqlFollowStore } from './modules/follows/store'
@@ -298,6 +301,22 @@ export function createApp(
     '/',
     createUsersRouter({
       service: createPublicUserService({ store: createSqlPublicUserStore(db), storage }),
+    }),
+  )
+
+  // 收藏关系（#190）：`GET /me/favorites` 与 `GET|POST|DELETE /listings/:listingId/favorite`。
+  // 本域**没有匿名路径**（收藏是「我」与某件商品之间的关系，浏览者是谁决定看得到哪一份数据），
+  // 所以两条路径整挂 requireAuth；router 内部还兜一层失败关闭（拿不到可信 userId → 401）。
+  // 只读写 `favorites` / `listings` / `listing_images` 表，不调用其他 Domain API
+  // （与 profile / users 同一取舍）；`storage` 复用同一实例 —— 收藏列表里的卡片封面
+  // 与 feed / 详情必须同一套拼法。挂根路径，因为两个端点分属 `/me/...` 与 `/listings/...`。
+  app.use('/me/favorites', auth.requireAuth)
+  app.use('/listings/:listingId/favorite', auth.requireAuth)
+  app.route(
+    '/',
+    createFavoritesRouter({
+      service: createFavoriteService({ store: createSqlFavoriteStore(db), storage }),
+      getUserId: (c) => c.get('userId'),
     }),
   )
 
