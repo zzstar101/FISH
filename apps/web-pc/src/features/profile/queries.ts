@@ -1,20 +1,30 @@
+import type { ListingStatus } from '@fish/contracts/listings/schema'
+import type { ListingId } from '@fish/contracts/system/public-id'
 import type { QueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
+import { fetchConversationPage, fetchMessagePage } from '../chat/api'
 import { listingDetailQueryKey } from '../listing-detail/queries'
 import {
+  acceptTransaction,
   cancelTransaction,
   confirmTransaction,
+  fetchMeetupTokenStatus,
   fetchMyListings,
   fetchProfile,
   fetchTransaction,
   fetchTransactions,
+  issueMeetupToken,
   type MyListingStatusFilter,
   type OrderStatusFilter,
+  redeemMeetupToken,
+  rejectProposal,
   setListingStatus,
   updateListing,
   updateProfile,
+  verifyMeetupCode,
 } from './api'
+import { loadPendingIndex, type PendingIndex } from './pending'
 
 export const profileKeys = {
   all: () => ['pc', 'profile'] as const,
@@ -25,6 +35,9 @@ export const profileKeys = {
     ['pc', 'profile', 'orders', ownerId, role, status] as const,
   order: (ownerId: string, transactionId: string) =>
     ['pc', 'profile', 'order', ownerId, transactionId] as const,
+  pending: (ownerId: string) => ['pc', 'profile', 'pending', ownerId] as const,
+  meetupToken: (ownerId: string, transactionId: string) =>
+    ['pc', 'profile', 'meetup-token', ownerId, transactionId] as const,
 }
 
 type SessionMutationContext = { generation: number }
@@ -55,6 +68,10 @@ function invalidateListingViews(queryClient: QueryClient): void {
 
 function invalidateChatSurfaces(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['pc', 'chat'] })
+}
+
+function invalidatePending(queryClient: QueryClient, ownerId: string): void {
+  void queryClient.invalidateQueries({ queryKey: profileKeys.pending(ownerId) })
 }
 
 export function invalidateTransactionSurfaces(queryClient: QueryClient, ownerId: string): void {
@@ -170,4 +187,163 @@ export function useConfirmTransaction(ownerId: string) {
 
 export function useCancelTransaction(ownerId: string) {
   return useTransactionMutation(ownerId, cancelTransaction)
+}
+
+const EMPTY_PENDING: PendingIndex = {
+  proposals: new Map(),
+  complete: true,
+  failed: false,
+}
+
+/**
+ * 卖家侧「谁在等我点头」的推导（口径见 `./pending` 文件头）。
+ *
+ * 商品**状态一并交给推导**（见 `./pending` 的 `ACTIONABLE_STATUSES`），这里不做筛选：
+ * 服务端对接受与拒绝的要求不对称 —— 接受要求商品仍 `ACTIVE`，拒绝不看商品状态 ——
+ * 所以「哪些状态还能处理」这件事只有推导侧一个地方说了算。
+ *
+ * id 全集独立取一次，不跟着「我的发布」当前标签页走：标签页可能停在「已下架 / 已预定」。
+ */
+export function usePendingProposals(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useQuery({
+    queryKey: profileKeys.pending(ownerId),
+    queryFn: async () => {
+      /*
+       * 按 `ACTIVE` / `OFFLINE` 分别取再合并，**不用**单次 `status=ALL`：
+       * 列表接口只回首页 `limit=50` 且按创建时间倒序，`ALL` 下较新的 SOLD/OFFLINE
+       * 会把较老的 ACTIVE 挤出首页 —— 那些商品查不到状态就会被推导整条跳过，
+       * 正好复现「卖家看不到在等的申请」。分开取让每个状态各自拥有 50 个名额。
+       * 单状态超过 50 件时仍会漏（与「我的发布」同一上限，见 pending.ts 边界 6）。
+       */
+      const [active, offline] = await Promise.all([
+        queryClient.fetchQuery({
+          queryKey: profileKeys.listings(ownerId, 'ACTIVE'),
+          queryFn: () => fetchMyListings(ownerId, 'ACTIVE'),
+          staleTime: 15_000,
+        }),
+        queryClient.fetchQuery({
+          queryKey: profileKeys.listings(ownerId, 'OFFLINE'),
+          queryFn: () => fetchMyListings(ownerId, 'OFFLINE'),
+          staleTime: 15_000,
+        }),
+      ])
+      const byId = new Map<ListingId, ListingStatus>([
+        ...active.items.map((item) => [item.id, item.status] as const),
+        ...offline.items.map((item) => [item.id, item.status] as const),
+      ])
+      if (byId.size === 0) return EMPTY_PENDING
+      return loadPendingIndex(byId, fetchConversationPage, fetchMessagePage)
+    },
+    enabled: ownerId !== '',
+    staleTime: 15_000,
+  })
+}
+
+export type ProposalDecisionVariables = { conversationId: string; amountCents: number }
+
+/**
+ * 同意提案：唯一创建交易行的写操作。
+ *
+ * 成功后商品转 `RESERVED`，因此除了交易面还要失效待确认推导 —— 这一件不该再出现在
+ * 「待确认」里，其余买家留在会话里的 `tx.proposal` 也不再有可操作性。
+ */
+export function useAcceptProposal(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId, amountCents }: ProposalDecisionVariables) =>
+      acceptTransaction(conversationId, amountCents),
+    onMutate: captureSession,
+    onSuccess: (transaction, _variables, context) => {
+      if (!isSessionCurrent(context)) return
+      queryClient.setQueryData(profileKeys.order(ownerId, transaction.id), transaction)
+      invalidateTransactionSurfaces(queryClient, ownerId)
+      invalidatePending(queryClient, ownerId)
+    },
+  })
+}
+
+/** 拒绝提案：只写一条 `tx.rejected`，商品留在在售，所以只失效会话面与推导。 */
+export function useRejectProposal(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId }: ProposalDecisionVariables) => rejectProposal(conversationId),
+    onMutate: captureSession,
+    onSuccess: (_message, _variables, context) => {
+      if (!isSessionCurrent(context)) return
+      invalidateChatSurfaces(queryClient)
+      invalidatePending(queryClient, ownerId)
+    },
+  })
+}
+
+/**
+ * 面交凭证状态（不含明文码）。
+ *
+ * `enabled` 由页面按「交易处于 PENDING_MEETUP」给：终态订单不该再去问凭证，
+ * 免得给只读页面拉出一个永远不会有值的请求。
+ */
+export function useMeetupTokenStatus(ownerId: string, transactionId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: profileKeys.meetupToken(ownerId, transactionId),
+    queryFn: () => fetchMeetupTokenStatus(transactionId),
+    enabled: enabled && ownerId !== '' && transactionId !== '',
+    staleTime: 15_000,
+  })
+}
+
+function invalidateMeetupToken(
+  queryClient: QueryClient,
+  ownerId: string,
+  transactionId: string,
+): void {
+  void queryClient.invalidateQueries({
+    queryKey: profileKeys.meetupToken(ownerId, transactionId),
+  })
+}
+
+/**
+ * 卖家取码。幂等「确保并读取」，所以重取不会换码；成功后只失效凭证状态
+ * （明文码由调用方留在组件状态里，不进缓存 —— 缓存会被 devtools / 序列化带出去）。
+ */
+export function useIssueMeetupToken(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (transactionId: string) => issueMeetupToken(transactionId),
+    onMutate: captureSession,
+    onSuccess: (_token, transactionId, context) => {
+      if (!isSessionCurrent(context)) return
+      invalidateMeetupToken(queryClient, ownerId, transactionId)
+    },
+  })
+}
+
+export type RedeemVariables = {
+  transactionId: string
+  input: { kind: 'code'; code: string } | { kind: 'qr'; token: string }
+}
+
+/**
+ * 核销（6 位码或二维码载荷）。
+ *
+ * 成功只代表「凭证已消费」，交易仍是 `PENDING_MEETUP` —— 契约用
+ * `nextAction: 'CONFIRM_DELIVERY'` 表达下一步是双方各确认一次，页面据此引导到
+ * 已有的「确认完成面交」，这里不替它推进终态。
+ */
+export function useRedeemMeetupToken(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ transactionId, input }: RedeemVariables) =>
+      input.kind === 'code'
+        ? verifyMeetupCode(transactionId, input.code)
+        : redeemMeetupToken(transactionId, input.token),
+    onMutate: captureSession,
+    onSuccess: (_verification, variables, context) => {
+      if (!isSessionCurrent(context)) return
+      invalidateMeetupToken(queryClient, ownerId, variables.transactionId)
+      void queryClient.invalidateQueries({
+        queryKey: profileKeys.order(ownerId, variables.transactionId),
+      })
+    },
+  })
 }

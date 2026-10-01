@@ -19,6 +19,7 @@ import {
   fetchMediaPage,
   fetchMessagePage,
   markConversationRead,
+  proposeTransaction,
   sendMediaObject,
   sendTextMessage,
 } from './api'
@@ -182,6 +183,31 @@ export function useSendTextMessage(ownerId: string | null) {
       // 否则会把可重试的 error 状态改成 success。
       void queryClient.invalidateQueries({ queryKey: chatKeys.conversations(ownerId) })
       void queryClient.invalidateQueries({ queryKey: chatKeys.unreadCount(ownerId) })
+    },
+  })
+}
+
+export type ProposeVariables = { conversationId: string; amountCents: number }
+
+/**
+ * 买家发起交易确认（`POST /transactions/proposals`）。
+ *
+ * 与发消息同口径：**不往消息缓存写伪页**，只失效相关查询，由服务端确认后再取。
+ * 调用方（商品详情）在成功后导航进会话，历史会重新拉一遍，提案那条 SYSTEM 消息随之出现。
+ *
+ * 提案不改商品状态（仍是 `ACTIVE`），因此这里不失效商品详情；接受才改状态。
+ */
+export function useProposeTransaction(ownerId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId, amountCents }: ProposeVariables) =>
+      proposeTransaction(conversationId, amountCents),
+    onSuccess: (_message, variables) => {
+      if (ownerId === null) return
+      invalidateConversationSurfaces(queryClient, ownerId)
+      void queryClient.invalidateQueries({
+        queryKey: chatKeys.messages(ownerId, variables.conversationId),
+      })
     },
   })
 }

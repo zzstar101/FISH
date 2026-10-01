@@ -5,7 +5,15 @@ import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronRight, Clock, Home, Images, MessageCircle, ShieldCheck } from 'lucide-react'
+import {
+  ChevronRight,
+  Clock,
+  HandCoins,
+  Home,
+  Images,
+  MessageCircle,
+  ShieldCheck,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { PriceText } from '../../components/price-text'
 import { ApiError } from '../../lib/api-client'
@@ -16,6 +24,7 @@ import { useAuth } from '../auth/auth-provider'
 import { describeCreateConversationFailure } from '../chat/api'
 import { useCreateConversation } from '../chat/queries'
 import { useDetailTracking } from '../recommendation/use-detail-tracking'
+import { BuyDialog } from './buy-dialog'
 import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
 import { useListingDetail } from './queries'
@@ -38,6 +47,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const createConversation = useCreateConversation()
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)
+  const [buyOpen, setBuyOpen] = useState(false)
   const viewerRef = useRef(viewerId)
   const resetViewerRef = useRef(viewerId)
   viewerRef.current = viewerId
@@ -47,6 +57,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     resetViewerRef.current = viewerId
     setChatError(null)
     setChatUnavailable(false)
+    setBuyOpen(false)
   }, [viewerId])
 
   function handleChat() {
@@ -234,15 +245,22 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   </Link>
                 </Button>
               ) : (
-                <Button
-                  className="mt-5 w-full"
-                  disabled={createConversation.isPending}
-                  onClick={handleChat}
-                  type="button"
-                >
-                  <MessageCircle className="size-4" />
-                  {createConversation.isPending ? '正在建立会话…' : '聊一聊'}
-                </Button>
+                <div className="mt-5 space-y-3">
+                  <Button className="w-full" onClick={() => setBuyOpen(true)} type="button">
+                    <HandCoins className="size-4" />
+                    我想要
+                  </Button>
+                  <Button
+                    className="w-full"
+                    disabled={createConversation.isPending}
+                    onClick={handleChat}
+                    type="button"
+                    variant="outline"
+                  >
+                    <MessageCircle className="size-4" />
+                    {createConversation.isPending ? '正在建立会话…' : '聊一聊'}
+                  </Button>
+                </div>
               )
             ) : null}
             {chatError !== null ? <p className="mt-3 text-danger text-xs">{chatError}</p> : null}
@@ -252,6 +270,19 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
           </Card>
         </aside>
       </div>
+
+      {me !== null ? (
+        <BuyDialog
+          free={item.free}
+          listingId={item.id}
+          onListingStale={() => void detail.refetch()}
+          onOpenChange={setBuyOpen}
+          open={buyOpen}
+          ownerId={me.id}
+          priceCents={item.priceCents}
+          title={item.title}
+        />
+      ) : null}
     </div>
   )
 }
