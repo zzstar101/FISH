@@ -17,7 +17,6 @@ import {
 import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
 import { useLogout } from '../auth/queries'
-import { markExplicitLogout } from '../auth/remembered-credentials'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 
@@ -46,8 +45,6 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
     setLogoutError(null)
     try {
       await logout.mutateAsync()
-      // 登出会整页跳到 /pc/login；不打抑制标志，自动登录会把用户立刻签回去。
-      markExplicitLogout()
       window.location.assign('/pc/login')
     } catch {
       setLogoutError('退出登录失败，请稍后重试')

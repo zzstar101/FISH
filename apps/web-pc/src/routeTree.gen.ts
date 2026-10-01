@@ -17,7 +17,6 @@ import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as OrdersRouteImport } from './routes/orders'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PublishRouteImport } from './routes/publish'
-import { Route as RegisterRouteImport } from './routes/register'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as ListingListingIdRouteImport } from './routes/listing.$listingId'
@@ -66,11 +65,6 @@ const PublishRoute = PublishRouteImport.update({
   path: '/publish',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RegisterRoute = RegisterRouteImport.update({
-  id: '/register',
-  path: '/register',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const SearchRoute = SearchRouteImport.update({
   id: '/search',
   path: '/search',
@@ -116,7 +110,6 @@ export interface FileRoutesByFullPath {
   '/orders': typeof OrdersRouteWithChildren
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -132,7 +125,6 @@ export interface FileRoutesByTo {
   '/notifications': typeof NotificationsRoute
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -151,7 +143,6 @@ export interface FileRoutesById {
   '/orders': typeof OrdersRouteWithChildren
   '/profile': typeof ProfileRoute
   '/publish': typeof PublishRoute
-  '/register': typeof RegisterRoute
   '/search': typeof SearchRoute
   '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
@@ -171,7 +162,6 @@ export interface FileRouteTypes {
     | '/orders'
     | '/profile'
     | '/publish'
-    | '/register'
     | '/search'
     | '/wish'
     | '/listing/$listingId'
@@ -187,7 +177,6 @@ export interface FileRouteTypes {
     | '/notifications'
     | '/profile'
     | '/publish'
-    | '/register'
     | '/search'
     | '/wish'
     | '/listing/$listingId'
@@ -205,7 +194,6 @@ export interface FileRouteTypes {
     | '/orders'
     | '/profile'
     | '/publish'
-    | '/register'
     | '/search'
     | '/wish'
     | '/listing/$listingId'
@@ -224,7 +212,6 @@ export interface RootRouteChildren {
   OrdersRoute: typeof OrdersRouteWithChildren
   ProfileRoute: typeof ProfileRoute
   PublishRoute: typeof PublishRoute
-  RegisterRoute: typeof RegisterRoute
   SearchRoute: typeof SearchRoute
   WishRoute: typeof WishRoute
   ListingListingIdRoute: typeof ListingListingIdRoute
@@ -286,13 +273,6 @@ declare module '@tanstack/react-router' {
       path: '/publish'
       fullPath: '/publish'
       preLoaderRoute: typeof PublishRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/register': {
-      id: '/register'
-      path: '/register'
-      fullPath: '/register'
-      preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/search': {
@@ -383,7 +363,6 @@ const rootRouteChildren: RootRouteChildren = {
   OrdersRoute: OrdersRouteWithChildren,
   ProfileRoute: ProfileRoute,
   PublishRoute: PublishRoute,
-  RegisterRoute: RegisterRoute,
   SearchRoute: SearchRoute,
   WishRoute: WishRoute,
   ListingListingIdRoute: ListingListingIdRoute,

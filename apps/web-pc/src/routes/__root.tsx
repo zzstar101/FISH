@@ -28,7 +28,7 @@ function RootLayout() {
 }
 
 /**
- * 登录 / 注册走独立页面；商品详情是公开只读页（T5 的匿名留言读取依赖它）。
+ * 登录走独立页面；商品详情是公开只读页（T5 的匿名留言读取依赖它）。
  * 未匹配路径先渲染 PC 404，避免被登录守卫截走；其余路由统一进入登录守卫和 PC 外壳。
  * `useLocation()` 返回的是去掉 basepath 的内部路径；这里去掉尾斜杠后再比较。
  */
@@ -39,7 +39,7 @@ function RootChrome() {
     select: (state) => state.matches.some((match) => match._notFound),
   })
   const pathname = rawPathname.replace(/\/+$/, '') || '/'
-  const isAuthPage = pathname === '/login' || pathname === '/register'
+  const isAuthPage = pathname === '/login'
   const isPublicListing = Boolean(matchRoute({ to: '/listing/$listingId' }))
 
   if (isNotFound) {
