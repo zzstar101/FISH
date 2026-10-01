@@ -82,10 +82,19 @@ export function createAuthModule(options: {
    * 测试里可以注入固定值；拿不到时退化为同一个「未知」桶（宁可少放行，也不放开）。
    */
   clientIp?: (request: Request) => string | null
+  /**
+   * 已认证活动的回调（#359 第五点：在线态 = 最近一次已认证活动 + TTL）。
+   * 装配层传 presence 登记表的 `touch`；不传则在线态无来源（测试 / 无 presence 的装配）。
+   */
+  onAuthenticated?: (userId: string) => void
 }) {
   const cookie = createSessionCookie(options.secureCookie)
   const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
-  const requireAuth = createRequireAuth({ cookie, service })
+  const requireAuth = createRequireAuth({
+    cookie,
+    service,
+    onAuthenticated: options.onAuthenticated,
+  })
   const wechatSessions = createSessions(options.db)
   // provider 只在 stub / live 下构造；off 下保持 null，两个入口在 handler 顶部显式 503。
   const wechatProvider: WechatIdentityProvider | null =
@@ -390,7 +399,13 @@ export function createAuthModule(options: {
     const token = cookie.read(c)
     if (!token) return null
     const me = await service.loadMe(token)
-    return me ? decodePublicId(PUBLIC_ID_PREFIX.user, me.id) : null
+    if (!me) return null
+    const userId = decodePublicId(PUBLIC_ID_PREFIX.user, me.id)
+    // 可选身份的读路径（listings / recommendations）也构成「在线证据」#359 第五点：
+    // 匿名浏览商品的登录用户没有走 requireAuth，不在这里记时刻的话，「在商品详情页
+    // 停留的人」会被判成离线 —— 而商品详情页正是要显示卖家在线态的那一屏。
+    options.onAuthenticated?.(userId)
+    return userId
   }
 
   return { router, requireAuth, meHandler, resolveViewerId }

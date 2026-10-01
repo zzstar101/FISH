@@ -54,6 +54,8 @@ function conversation(over: {
     },
     unreadCount: 0,
     counterpartLastReadAt: null,
+    // 在线态（#359 第五点）在契约里是必填兄弟字段：本用例不关心，给「离线」这一档。
+    counterpartPresence: { online: false, lastActiveAt: null },
     lastMessage: over.lastMessage ?? lastMessage({ type: 'tx.proposal', amountCents: 11000 }),
     lastMessageAt: '2026-01-02T00:00:00.000Z',
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -78,6 +80,9 @@ function systemMessage(
     type: 'SYSTEM',
     content: typeof content === 'string' ? content : JSON.stringify(content),
     createdAt,
+    // #359 3c 起契约必填：SYSTEM 消息既不可撤回也不带引用。
+    recalledAt: null,
+    replyTo: null,
   }
 }
 

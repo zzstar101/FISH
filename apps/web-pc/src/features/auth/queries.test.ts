@@ -17,6 +17,7 @@ const oldUser: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 const newUser: Me = {
   ...oldUser,

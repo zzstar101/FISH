@@ -160,15 +160,17 @@ bun run core:smoke   # 核心主链端到端（自建 scratch 库 + 真实 API/W
 | 命令 | 说明 |
 | --- | --- |
 | `bun run dev` | 并行启动各应用（API / Worker / PC Web） |
-| `bun run dev:web-pc` · `dev:api` · `dev:worker` | 分别启动对应应用 |
+| `bun run dev:web-pc` · `dev:api` · `dev:worker` · `dev:miniapp` | 分别启动对应应用（小程序走 Taro dev:weapp） |
 | `bun run typecheck` | 全仓 TypeScript 类型检查 |
 | `bun run lint` / `bun run format` | Biome 检查 / 格式化 |
 | `bun test --isolate` | 全仓测试（部分集成测试需要 Postgres 已启动并完成 `db:migrate`；`--isolate` 让每个测试文件拿到独立的全局对象与模块注册表） |
-| `bun run build` / `bun run build:web-pc` | 全仓构建 / 仅构建 PC Web |
+| `bun run build` / `build:web-pc` / `build:miniapp` | 全仓构建 / 仅构建 PC Web / 仅构建小程序 |
 | `bun run ws:smoke` | WebSocket 连通性冒烟 |
 | `bun run core:smoke` | 核心主链端到端冒烟（`-- --runs=5` 连跑 5 轮；失败默认保留 scratch 库与 MinIO 对象供事后查证，`-- --clean` 改为失败也清理） |
+| `bun run rank:compare` | 推荐排序离线对比脚本（#322 M3：v1 / semantic-only / hybrid 权重组评估，不改生产行为） |
 | `bun run db:up` / `db:down` | 启动 / 停止本地依赖 |
 | `bun run db:generate` / `db:migrate` / `db:studio` | Drizzle 迁移与调试 |
+| `bun run db:promote` | 受控管理员提升（按显式学号提升为 `ADMIN` 并写审计；#73） |
 | `bun run db:seed` | 写入演示数据（**会先清空业务表**，仅允许本地数据库） |
 
 ### 端口

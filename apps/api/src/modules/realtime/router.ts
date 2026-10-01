@@ -30,6 +30,14 @@ export type RealtimeRouterOptions = {
     createEvents: (c: Context) => WsEventHandlers,
     // biome-ignore lint/suspicious/noConfusingVoidType: hono 的 MiddlewareHandler 返回类型就是 Promise<Response | void>
   ) => (c: Context, next: () => Promise<void>) => Promise<Response | void>
+  /**
+   * 保活帧的心跳回调（#359 第五点：在线态 = 最近一次已认证活动 + TTL）。
+   *
+   * upgrade 握手本身已经走 `resolveUserId`（= `auth.resolveViewerId`）记过一次活动，
+   * 但长连接活着时没有 HTTP 请求，只有 20s 一次的 ping —— 不在这里续命，一个安静
+   * 挂着 WebSocket 的用户会在 TTL 到期后被判成离线。装配层传 presence 的 `touch`。
+   */
+  onHeartbeat?: (userId: string) => void
 }
 
 /**
@@ -53,6 +61,8 @@ export function createRealtimeRouter(options: RealtimeRouterOptions) {
     onMessage(_event: { data: unknown }, ws: WsLike) {
       const parsed = realtimeClientEventSchema.safeParse(parseJson(_event.data))
       if (parsed.success && parsed.data.type === 'ping') {
+        // 续在线态：长连接的心跳就是「这个人还在」的证据（见 onHeartbeat 注释）。
+        options.onHeartbeat?.(c.get('userId') as string)
         ws.send(JSON.stringify({ type: 'pong' }))
       }
     },

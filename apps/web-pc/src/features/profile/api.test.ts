@@ -208,6 +208,9 @@ describe('proposal decisions', () => {
         type: 'SYSTEM',
         content: JSON.stringify({ type: 'tx.rejected' }),
         createdAt: '2026-01-02T00:00:00.000Z',
+        // #359 3c 起契约必填：SYSTEM 消息既不可撤回也不带引用。
+        recalledAt: null,
+        replyTo: null,
       })
     }) as unknown as typeof fetch
 

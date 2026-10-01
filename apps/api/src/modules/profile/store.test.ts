@@ -78,6 +78,12 @@ beforeAll(async () => {
       (${txA}, '01990000-0000-7000-8000-0000000000b3', ${me}, ${other}, 10000, 'COMPLETED', now()),
       (${txB}, ${listingA}, ${other}, ${me}, 16000, 'PENDING_MEETUP', NULL)
   `)
+  // #188：followingCount 只数「我关注的人」这个方向；other 关注我不进这个数。
+  await db.execute(sql`
+    INSERT INTO follows (id, follower_id, following_id) VALUES
+      ('01990000-0000-7000-8000-0000000000f1', ${me}, ${other}),
+      ('01990000-0000-7000-8000-0000000000f2', ${other}, ${me})
+  `)
 })
 
 afterAll(async () => {
@@ -93,6 +99,7 @@ describe('profile store (integration)', () => {
       activeListings: 1, // listingA ACTIVE；listingB OFFLINE 不计
       activeWishes: 1,
       completedTransactions: 1, // txA COMPLETED；txB PENDING 不计
+      followingCount: 1, // 我关注 other；反向那条（other 关注我）不计
     })
   })
 
@@ -104,6 +111,13 @@ describe('profile store (integration)', () => {
     // listingB 只有 2 号图 → 封面判 null；listingA 有 0 号图 → 取 0 号（不是序号最大的那张）
     expect(rows[0]?.coverObjectKey).toBeNull()
     expect(rows[1]?.coverObjectKey).toBe('listings/a/0.jpg')
+    // #191：卡片卖家公开子集随 JOIN users 带出——本人视角的卖家就是查看者自己。
+    expect(rows[0]?.seller).toEqual({
+      id: me,
+      nickname: '个人中心测试',
+      avatarUrl: null,
+      authStatus: 'UNVERIFIED',
+    })
   })
 
   test('ownListings does not include other users listings (只返回本人可见数据)', async () => {
