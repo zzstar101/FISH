@@ -246,11 +246,23 @@ async function cmdDrop(cli: Cli): Promise<void> {
   // 校验先于连接：非法库名在此处退出，不发送任何 SQL
   const dbName = assertSafeDbName(cli.dbNameOverride ?? devDbName(wt.worktree, wt.branch), 'drop')
   const sql = await connectAdmin(cli.adminUrl)
+  const lockKey = advisoryLockKey(dbName)
   try {
-    await sql.unsafe(`drop database if exists ${quoteIdent(dbName)} with (force)`)
-    console.log(`[dev-db] 已删除 ${dbName}`)
-  } catch (err) {
-    fail(`删库失败：${pgMessage(err)}`)
+    /*
+     * 与 `up` 共用同一把按库名的会话级 advisory lock。`drop … with (force)` 会强踢目标库上的
+     * 所有会话；若此刻并发的 `up` 正在同一个库上跑迁移，迁移就会被拦腰掐断，留下半迁移的库。
+     * 先取锁再删，删除要么整段发生在 `up` 之前，要么等 `up` 的「建库 + 迁移」整段做完 ——
+     * 与 `up` 的串行化语义对称。
+     */
+    await sql`select pg_advisory_lock(${lockKey}::bigint)`
+    try {
+      await sql.unsafe(`drop database if exists ${quoteIdent(dbName)} with (force)`)
+      console.log(`[dev-db] 已删除 ${dbName}`)
+    } catch (err) {
+      fail(`删库失败：${pgMessage(err)}`)
+    } finally {
+      await sql`select pg_advisory_unlock(${lockKey}::bigint)`.catch(() => undefined)
+    }
   } finally {
     await sql.end()
   }

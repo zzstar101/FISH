@@ -53,6 +53,8 @@ bun run db:dev up --admin-url postgres://fish:fish@localhost:55432/postgres
 
 只兜住建库那一步是不够的——实测两个 `up` 会同时进入迁移步骤并撞在 `pg_namespace` 的唯一约束上，所以锁覆盖的是整段而不只是 `create database`。
 
+`drop` 取的是**同一把**锁：`drop database ... with (force)` 会强踢目标库上的所有会话，若并发的 `up` 正在这个库上迁移，就会被拦腰掐断、留下半迁移的库。取锁后删除要么整段发生在 `up` 之前，要么等 `up` 的「建库 + 迁移」整段做完，因此 `up` 与 `drop` 之间也是串行的。
+
 **不同 worktree 之间不需要锁**：库名由 worktree 路径派生，互相不重叠，可以真正并行。
 
 ## 三条禁令
