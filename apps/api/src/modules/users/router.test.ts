@@ -15,6 +15,7 @@ const profile: PublicUserProfile = {
   nickname: '林一',
   avatarUrl: null,
   authStatus: 'VERIFIED',
+  signature: null,
   joinedDays: 19,
   activeCount: 3,
   soldCount: 1,
