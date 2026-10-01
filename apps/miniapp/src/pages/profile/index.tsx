@@ -365,8 +365,9 @@ export default function Profile() {
   /**
    * 数字栏（Owner 修订：只摆数字不摆图标）。
    *
-   * **`null` = 系统不知道 → 显示 `—`**，四格一律同口径：收藏 / 足迹 / 关注没有数据源
-   * （契约无端点），真实构建恒为 `null`；愿望数来自 `stats.activeWishes`，但
+   * **`null` = 系统不知道 → 显示 `—`**，四格一律同口径：收藏 / 足迹仍没有数据源
+   * （契约无端点），真实构建恒为 `null`；关注自 #188 起取 `stats.followingCount`
+   * （与「我的关注」列表同表同向）；愿望数来自 `stats.activeWishes`，但
    * **没拿到 profile 时也是 `null` 而不是 0**（`realCounts` 的未知态口径）。
    */
   const STAT_CELLS: StatCell[] = [
