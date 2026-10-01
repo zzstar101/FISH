@@ -39,6 +39,15 @@ type NavBarProps = {
    * （数值与 `components/top-bar` 的 `.topbar--glass` 同一套材质）。
    */
   glass?: boolean
+  /**
+   * 返回钮常驻吸顶：`position: fixed` 钉在屏顶，底色仍透明（玻璃与否仍由 `glass` 决定）。
+   *
+   * 基类是 `position: absolute` —— 返回钮会跟着内容滚走。设置 / 匹配 / 想要的人 /
+   * 许个愿这批页要的是「返回键先钉住，滚动后玻璃底和标题才浮现」：
+   * `fixed` + `glass={滚动驱动}` + `title={滚动驱动}` 三件套（user 页 glassOn 的同款思路，
+   * 区别只是未滚动时钮也钉住而不是滚走）。
+   */
+  fixed?: boolean
   /** 返回钮右侧的自定义动作区 */
   actions?: ReactNode
   /** 覆盖返回行为（默认 navigateBack，无上一页时 reLaunch 到首页） */
@@ -50,6 +59,7 @@ export default function NavBar({
   title,
   titleAlign = 'start',
   glass = false,
+  fixed = false,
   actions,
   onBack,
 }: NavBarProps) {
@@ -88,7 +98,7 @@ export default function NavBar({
 
   return (
     <View
-      className={`navfloat${glass ? ' navfloat--glass' : ''}`}
+      className={`navfloat${fixed ? ' navfloat--fixed' : ''}${glass ? ' navfloat--glass' : ''}`}
       style={{ paddingTop: `${statusBarHeight}px` }}
     >
       {back ? (

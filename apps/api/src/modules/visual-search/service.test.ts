@@ -101,6 +101,13 @@ function listingSource(id: string, overrides: Partial<ListingCardSource> = {}): 
     negotiable: false,
     free: false,
     createdAt: new Date('2026-05-01T00:00:00.000Z'),
+    // 卡片必带卖家公开子集（#344）：同样要求 v7 形状的 UUID，否则 `encodePublicId` 会拒绝。
+    seller: {
+      id: '0197f0a1-0000-7000-8000-0000000000ff',
+      nickname: '视觉搜索卖家',
+      avatarUrl: null,
+      authStatus: 'UNVERIFIED',
+    },
     ...overrides,
   }
 }

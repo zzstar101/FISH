@@ -38,7 +38,7 @@ function isTicketConflictError(error: unknown): boolean {
 function scanFailureMessage(error: unknown, stage: 'create' | 'status' | 'exchange'): string {
   if (error instanceof ApiError) {
     if (error.code === 'WECHAT_DISABLED') {
-      return '微信扫码登录暂不可用，请改用账号密码登录'
+      return '微信扫码登录暂不可用，请稍后再试'
     }
     if (error.code === 'WECHAT_QR_UNAVAILABLE') {
       return '暂时无法生成登录二维码，请稍后重试'

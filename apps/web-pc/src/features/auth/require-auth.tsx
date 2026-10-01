@@ -1,6 +1,6 @@
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Navigate } from '@tanstack/react-router'
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from './auth-provider'
 
@@ -16,7 +16,8 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     )
   }
 
-  if (error) {
+  // 已有可用身份时的后台重验失败不卸载页面；错误只在还没有身份结果时升级为错误页。
+  if (error && me === null) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-bg">
         <ErrorState message="登录状态加载失败" onRetry={refetch} />
@@ -28,5 +29,6 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     return <Navigate replace search={{ redirect: currentHref() }} to="/login" />
   }
 
-  return <>{children}</>
+  // 身份真的变了才重挂载业务视图：同账号的后台重验保留页面状态，换号则清掉旧账号状态。
+  return <Fragment key={me.id}>{children}</Fragment>
 }

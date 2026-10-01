@@ -1,9 +1,10 @@
-import { Image, ScrollView, Text, View } from '@tarojs/components'
+import { Image, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
+import TopBar from '@/components/top-bar'
 import type { OrderCardView } from '@/features/transaction/adapt'
 import { countsOf, type StatusKey, shownOf } from '@/features/transaction/useOrderList'
 import { formatAmount } from '@/mock/api'
@@ -12,10 +13,16 @@ import './index.scss'
 /**
  * 订单列表本体（`pages/orders-buy` 与 `pages/orders-sell` 共用）。
  *
- * 两页只有「视角」不同（我买到的 / 我卖出的），其余完全一样：4 个状态 tab、
- * 区块标题行 + 排序开关、订单卡、骨架屏、两支空态、到底提示、回到顶部钮。
- * 页面只负责 Taro 的页面级 hook（登录守卫、首次加载、下拉刷新、滚动）与数据，
- * 这里负责筛选/排序这两项纯 UI 状态与全部渲染。
+ * 两页只有「视角」不同（标题与列表数据的 `role`），其余完全一样：玻璃顶栏 +
+ * 4 个状态 tab、区块标题行 + 排序开关、订单卡、骨架屏、两支空态、到底提示、
+ * 回到顶部钮。页面只负责 Taro 的页面级 hook（登录守卫、首次加载、下拉刷新、
+ * 滚动）与数据，这里负责筛选/排序这两项纯 UI 状态与全部渲染。
+ *
+ * **顶部区域（#386 第一批）**：与「我的发布」同款 —— `components/top-bar` 的 glass
+ * 变体（返回钮 + 居中双色标题，`titleAlign="center"` 由组件下发），4 个状态 tab 进
+ * 顶栏副行（`below` 槽）与主行连成**同一块玻璃**，列表从玻璃底下滚过。原先两页的
+ * 微信原生导航栏已撤（页面 config 不再覆盖 `navigationStyle`），视角由页面传进来的
+ * 标题表达。TopBar 放在组件里而不是两个页面里：两页顶部完全一致，改一处两页生效。
  *
  * **样式块名仍是 `.orders__`**（订单页的块名）：组件只是把它从页面里挪出来给两页共用，
  * 换名字对观感没有收益，只会把 diff 撑大。见 `index.scss` 的文件头。
@@ -57,6 +64,9 @@ const STATUS_META: Record<
 }
 
 type Props = {
+  /** 顶栏标题的黑色前段与品牌色尾段：两页各传自己的视角词（我 + 买到的 / 卖出的） */
+  title: string
+  titleEm: string
   items: OrderCardView[]
   loading: boolean
   /**
@@ -71,7 +81,16 @@ type Props = {
   onRetry: () => void
 }
 
-export default function OrderList({ items, loading, failed, truncated, showTop, onRetry }: Props) {
+export default function OrderList({
+  title,
+  titleEm,
+  items,
+  loading,
+  failed,
+  truncated,
+  showTop,
+  onRetry,
+}: Props) {
   const [status, setStatus] = useState<StatusKey>('ALL')
   const [sortDesc, setSortDesc] = useState(true)
 
@@ -85,6 +104,16 @@ export default function OrderList({ items, loading, failed, truncated, showTop, 
    */
   const showCounts = !loading && !truncated && items.length > 0
   const emptyRole = items.length === 0
+
+  /**
+   * 切状态分段：回到列表顶部（与 mylist 的 pickSegment / history 的 pickTab 同一口径）。
+   * 分段挪进固定顶栏后，列表滚到多深都能直接切 —— 换段等于换了一份列表，
+   * 停在上一段的滚动位置会落在新列表的尾部或半空。
+   */
+  const pickStatus = (key: StatusKey) => {
+    setStatus(key)
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
+  }
 
   /**
    * 「查看会话」跳的是**这一笔**的会话，而不是同商品其他买家的会话 —— 这是本页的验收要点。
@@ -118,24 +147,43 @@ export default function OrderList({ items, loading, failed, truncated, showTop, 
 
   return (
     <View className="orders">
-      <ScrollView className="orders__filters" scrollX enableFlex>
-        <View className="orders__filters-inner">
-          {STATUS_TABS.map((tab) => (
-            <View
-              key={tab.key}
-              // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child）
-              className={`orders__pill orders__pill--${tab.key}${
-                tab.key === status ? ' is-on' : ''
-              }`}
-              onClick={() => setStatus(tab.key)}
-            >
-              <Text>{tab.label}</Text>
-              {/* 计数跟着正在显示的那份列表走：加载中 / 列表不完整时不显示数字 */}
-              {showCounts ? <Text className="orders__pill-cnt num">{counts[tab.key]}</Text> : null}
+      {/*
+        两级顶栏合一（与 pages/mylist 同款）：一级栏 = 返回 + 居中双色标题 + 微信胶囊，
+        二级栏 = 4 段状态分段；两栏一起钉在屏顶、都不参与滚动，列表从玻璃底下滚过。
+        右侧避让（原生胶囊）由组件按运行时读到的胶囊位置下发，这里不管。
+      */}
+      <TopBar
+        variant="glass"
+        spacer
+        back
+        titleAlign="center"
+        title={title}
+        titleEm={titleEm}
+        below={
+          <View className="orders__filters">
+            <View className="orders__filters-inner">
+              {STATUS_TABS.map((tab) => (
+                <View
+                  key={tab.key}
+                  // `--${key}` 修饰类供端上自动化定位（automator 选择器不支持 :nth-child）
+                  className={`orders__pill orders__pill--${tab.key}${
+                    tab.key === status ? ' is-on' : ''
+                  }`}
+                  onClick={() => pickStatus(tab.key)}
+                >
+                  <Text>{tab.label}</Text>
+                  {/* 计数跟着正在显示的那份列表走：加载中 / 列表不完整时不显示数字 */}
+                  {showCounts ? (
+                    <Text className="orders__pill-cnt num">{counts[tab.key]}</Text>
+                  ) : null}
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
-      </ScrollView>
+          </View>
+        }
+      />
+      {/* 副行占位：组件的 `spacer` 只含主行，分段这一截页面自补（见 index.scss） */}
+      <View className="orders__header-gap" />
 
       {/*
         列表不完整时才说的那句实话：翻页到上限或服务端游标没前进时，这份列表不是全部，

@@ -26,7 +26,6 @@ import {
   searchFilters,
   searchPlaceholder,
 } from '@/mock/api'
-import { findUser } from '@/mock/users'
 import './index.scss'
 
 /** 结果瀑布流列宽（设计值 = 2×pt）：750 - 左右各 40 - 列间距 24，再除以 2 */
@@ -395,7 +394,7 @@ export default function Search() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={findUser(item.sellerId)}
+                    seller={item.seller}
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}
@@ -405,7 +404,7 @@ export default function Search() {
                   <ProductCard
                     key={item.id}
                     listing={item}
-                    seller={findUser(item.sellerId)}
+                    seller={item.seller}
                     imageHeight={RATIO_HEIGHT[item.ratio]}
                   />
                 ))}

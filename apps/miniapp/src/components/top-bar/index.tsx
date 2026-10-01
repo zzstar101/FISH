@@ -1,10 +1,11 @@
 /**
- * 固定顶部栏（一级页面专用）。
+ * 固定顶部栏（一级页面 + 统一后的二级页顶部，见 `titleAlign`）。
  *
  * **为什么不复用 `@/components/nav-bar`**：那个组件是二级页面用的**漂浮导航**
- * （`position: absolute` + 圆形玻璃返回钮，浮在内容之上），被 8 个页面引用
- * （match / mylist / settings / transaction-meetup / user / verify / watchers / wish-publish
- * —— 订单页拆成 `orders-buy` / `orders-sell` 后改用微信原生导航栏，不再引用它）。
+ * （`position: absolute` + 圆形玻璃返回钮，浮在内容之上），被 match / settings /
+ * transaction-meetup / user / verify / watchers / wish-publish 等页面引用；
+ * 订单两页一度改用微信原生导航栏，#386 第一批起它们的顶部也由本组件承担，
+ * 同样不引用 `nav-bar`。
  * 一级页面要的是另一种东西：**固定（`fixed`）+ 一级标题**，内容从它下方滚过。
  * 两种职责混进一个组件，任何一边的改动都会牵动另一边 —— 所以这里独立成组件，
  * `nav-bar` 保持原样、零改动。
@@ -31,6 +32,12 @@ type TopBarProps = {
   title?: string
   /** 标题里走品牌色的尾段 */
   titleEm?: string
+  /**
+   * 标题对齐：`start`（默认）紧随返回钮左对齐；`center` 绝对定位到整条栏的中线
+   * （二级页规格，2026-09-25 顶栏统一拍板）。此前这一形态只能在页面里手抄绝对定位
+   * hack（mylist / following 各一份），收进组件后新页直接传参，老页后续批次迁移。
+   */
+  titleAlign?: 'start' | 'center'
   /** 是否显示返回钮 */
   back?: boolean
   /** 覆盖返回行为（默认 navigateBack，无上一页时回首页） */
@@ -61,6 +68,7 @@ type TopBarProps = {
 export default function TopBar({
   title,
   titleEm,
+  titleAlign = 'start',
   back = false,
   onBack,
   left,
@@ -111,10 +119,31 @@ export default function TopBar({
                 </View>
               ) : null}
               {title ? (
-                <Text className="topbar__title">
-                  {title}
-                  {titleEm ? <Text className="topbar__em">{titleEm}</Text> : null}
-                </Text>
+                titleAlign === 'center' ? (
+                  /*
+                    居中标题：`.topbar__row` 是普通 flex、标题紧随返回钮左对齐，中槽又只占
+                    「返回钮右侧 → 胶囊避让区左侧」，在其中居中会偏左 —— 所以绝对定位到
+                    整条栏的中线（`.topbar` 是 `position: fixed`，天然是绝对定位后代的
+                    包含块）。`top` / `height` 用同一套运行时栅格：标题在**胶囊那一行**
+                    垂直居中，与返回钮同一水平中线，不跟着整条栏变高一起下偏。
+                    这两个是设备 px，必须走行内（pxtransform 只处理样式表；内联 px 原样下发）。
+                  */
+                  <View
+                    className="topbar__title topbar__title--center"
+                    style={{
+                      top: `${metrics.statusBarHeight}px`,
+                      height: `${metrics.contentHeight}px`,
+                    }}
+                  >
+                    <Text>{title}</Text>
+                    {titleEm ? <Text className="topbar__em">{titleEm}</Text> : null}
+                  </View>
+                ) : (
+                  <Text className="topbar__title">
+                    {title}
+                    {titleEm ? <Text className="topbar__em">{titleEm}</Text> : null}
+                  </Text>
+                )
               ) : null}
             </>
           )}

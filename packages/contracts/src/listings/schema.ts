@@ -194,6 +194,19 @@ export const ListingCardSchema = z.object({
   coverUrl: z.url().nullable(),
   createdAt: z.iso.datetime(),
   /**
+   * 卡片内嵌的卖家公开子集（#191），与详情的 `seller`（`ListingSellerSchema`）**同一口径**：
+   * 只有 `id / nickname / avatarUrl / authStatus` 四个公开字段——教育邮箱、学号、手机号、
+   * role、密码与微信平台标识一律不进列表投影（#122 的「不泄漏靠没查」同一取向），
+   * 且 #86 后没有 campus。
+   *
+   * **空值策略**：API 卡片**恒带**卖家——`users` 表没有注销 / 删除 / 禁用类列，
+   * `listings.seller_id` 外键保证卖家行存在，服务端以 inner join 同源投影（不逐卡补查）。
+   * 因此 `null` 不是「卖家已注销」——那个状态当前不存在；字段缺席只表示
+   * 「本记录没有卖家信息」（老客户端 mock 记录，与 `listingNo` 的 optional 同一先例）。
+   * 客户端不得为缺席编造占位身份。
+   */
+  seller: ListingSellerSchema.optional(),
+  /**
    * 仅**卖家本人**视角非 `null`（公开 Feed / 他人视角恒 `null`，见 `ListingModerationStatusSchema`）。
    * 客户端据此把审核中的商品显示成「审核中」，而不是 `OFFLINE`（已下架）。
    */

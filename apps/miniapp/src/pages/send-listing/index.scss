@@ -1,0 +1,194 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 发送商品选择页（#359）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 结构：吸顶玻璃顶栏（`top-bar` glass：裸返回钮 + 居中两段式标题）→ 两档下划线 tab
+ * （我的宝贝 / TA的宝贝，与 `pages/chat` 的 `.chat__tab`、`pages/following` 的
+ * `.fw__tab` 同一套观感）→ 标题搜索框 → 商品行列表（缩略图 + 标题 + 红价 + 发送钮）。
+ *
+ * 页面根节点不写 overflow：页面级滚动交给根 ScrollView（`.sl__list`），
+ * tab 行与搜索行固定在玻璃顶栏之下不随内容滚。
+ */
+
+.sl {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--ice);
+}
+
+.sl__body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 0 40px;
+}
+
+/* ------------------------------------------------------------------- tabs */
+
+.sl__tabs {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 40px 8px;
+}
+
+/* 纯文字 tab：选中加粗 + 品牌渐变下划线（`.fw__tab` 同款） */
+.sl__tab {
+  position: relative;
+  flex: 0 0 auto;
+  height: 68px;
+  padding: 0 24px;
+  color: var(--muted);
+  font-size: 28px;
+  transition: color 0.18s;
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 8px;
+    height: 4px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background 0.18s;
+  }
+
+  &.is-on {
+    color: var(--fg);
+    font-weight: 600;
+
+    &::after {
+      background: var(--grad-brand);
+    }
+  }
+}
+
+/* ----------------------------------------------------------------- 搜索框 */
+
+.sl__search {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 8px 40px 20px;
+  padding: 0 24px;
+  height: 72px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 2px solid var(--border);
+}
+
+.sl__search-ic {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+}
+
+.sl__search-in {
+  flex: 1;
+  height: 100%;
+  font-size: 26px;
+  color: var(--ink);
+}
+
+.sl__search-ph {
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------- 商品行 */
+
+.sl__list {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 0; /* flex 子项撑满剩余高度的 ScrollView 需要 0 高度基准（内容才可滚） */
+  padding: 0 40px calc(40px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+}
+
+.sl__row {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border-radius: 28px;
+  background: var(--card);
+  border: 2px solid var(--border);
+}
+
+.sl__row-cover {
+  width: 120px;
+  height: 120px;
+  flex: 0 0 auto;
+  border-radius: 20px;
+  background: var(--ice);
+}
+
+.sl__row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 单行省略（设计稿口径：标题只摆一行） */
+.sl__row-title {
+  color: var(--ink);
+  font-size: 28px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 金额一律红（与商品卡价格同一 --danger 口径） */
+.sl__row-price {
+  color: var(--danger);
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.sl__row-send {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  padding: 0 32px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 26px;
+  font-weight: 600;
+  background: var(--grad-brand);
+  opacity: 1;
+  transition: opacity 0.18s;
+
+  /* 在飞锁：整行按钮只锁当前商品这一颗，其它行仍可点 */
+  &.is-busy {
+    opacity: 0.55;
+  }
+}
+
+/* ------------------------------------------------------------ 居中提示态 */
+
+.sl__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 120px 40px;
+}
+
+.sl__center-tx {
+  color: var(--muted);
+  font-size: 26px;
+  text-align: center;
+}
