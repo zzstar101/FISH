@@ -15,6 +15,7 @@ import {
   invalidateSearchTasks,
   isSearchTaskCurrent,
 } from '@/features/listing/search-task'
+import { startVisualSearch } from '@/features/visual-search/start'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
 import {
@@ -72,6 +73,8 @@ export default function Search() {
   const [history, setHistory] = useState<string[]>(defaultSearchHistory)
   const [loading, setLoading] = useState(false)
   const [panelOpen, setPanelOpen] = useState(initialKeyword.length === 0)
+  /** 识图按钮的上传在途：防连点（原生取图面板是模态的，上传腿不是） */
+  const [visionBusy, setVisionBusy] = useState(false)
   /** 真实接口失败且没有回退 mock（生产口径）：显示错误态而不是「没找到」 */
   const [failed, setFailed] = useState(false)
   /**
@@ -196,6 +199,28 @@ export default function Search() {
     if (submitted) void run(submitted, next)
   }
 
+  /**
+   * 识图（#324）：拍 / 选一张图 → 上传查询图 → 跳识图结果页。
+   *
+   * 与识图入口页（`pages/scan-vision`）共用同一条链，见 `features/visual-search/start.ts`。
+   * 本页**不动**自己的关键词状态：识图是另一条检索路径，结果渲染在独立的结果页
+   * （`pages/vision-result`），不是本页的结果列表 —— 混进本页会让「已提交的关键词」
+   * 与「这一批图搜出来的结果」对不上。
+   *
+   * 作废在途的文本搜索挂在 `onPicked`（取图成功、即将上传那一刻）：提前作废的话，
+   * 用户点开弹窗又取消就会白丢一次本来能成的搜索，而 `run()` 的迟到守卫会跳过
+   * `setLoading(false)` —— 本页在 `loading` 期间不渲染任何占位，结果是一片空白。
+   */
+  const visionSearch = async () => {
+    if (visionBusy) return
+    setVisionBusy(true)
+    try {
+      await startVisualSearch({ onPicked: () => invalidateSearchTasks(taskLog) })
+    } finally {
+      setVisionBusy(false)
+    }
+  }
+
   useLoad(() => {
     if (initialKeyword) void run(initialKeyword, '综合')
   })
@@ -239,6 +264,18 @@ export default function Search() {
                 <Image className="search__clear-img" src={ICONS.closeInk} mode="aspectFit" />
               </View>
             ) : null}
+            {/*
+              识图按钮：与首页搜索框左侧那枚相机图标同一个能力（#324），这里补在输入框右端 ——
+              搜索页是「已经在搜索里」的场景，用户在这里更可能想换一种输入方式（拍/选图）。
+              点它走与识图入口页同一条链（来源弹窗 → 上传 → 结果页），见
+              `features/visual-search/start.ts`。上传在途时按钮压暗防连点。
+            */}
+            <View
+              className={`search__vision${visionBusy ? ' is-busy' : ''}`}
+              onClick={visionSearch}
+            >
+              <Image className="search__vision-ic" src={ICONS.camera} mode="aspectFit" />
+            </View>
             <View className="search__submit" onClick={submit}>
               <Text>搜索</Text>
             </View>

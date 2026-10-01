@@ -1,5 +1,5 @@
 /**
- * 识图搜索的接口调用（#324 后端契约；本分支只用上传腿，搜索腿在分支 2）。
+ * 识图搜索的接口调用（#324 后端契约）：上传查询图 + 拿识别结果。
  *
  * 与发布页图片上传（`features/upload/api.ts`）**刻意不同**：查询图是 presign → 直传两步，
  * **没有 confirm**。原因在服务端：确认"这次上传算不算数"不是一次 HEAD 复核，而是搜索时
@@ -13,6 +13,8 @@ import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import {
   MAX_VISUAL_QUERY_IMAGE_BYTES,
   VisualQueryUploadResponseSchema,
+  type VisualSearchResponse,
+  VisualSearchResponseSchema,
 } from '@fish/contracts/visual/schema'
 import Taro from '@tarojs/taro'
 import { assertUploadActive } from '@/features/upload/active'
@@ -22,12 +24,13 @@ import { type VisualSearchFailure, visualSearchFailureMessage } from './messages
 import { adoptVisualSearchSessionId, ensureVisualSearchSessionId } from './session'
 
 /**
- * 上传端点。视觉域契约目前只冻结了 schema（`packages/contracts/src/visual/schema.ts`）、
+ * 两个端点。视觉域契约目前只冻结了 schema（`packages/contracts/src/visual/schema.ts`）、
  * 没有 route 常量，服务端也是字面量注册：`apps/api/src/modules/visual-search/router.ts` 的
- * `router.post('/uploads')` 挂在 `apps/api/src/app.ts:319` 的 `/visual-search` 上。
- * 所以路径在这里收口一处（分支 2 的搜索腿同样收在这里），等契约补上 `VISUAL_ROUTES` 再换。
+ * `router.post('/uploads')` 与 `router.post('/')` 挂在 `apps/api/src/app.ts` 的
+ * `/visual-search` 上。所以路径在这里收口一处，等契约补上 `VISUAL_ROUTES` 再换。
  */
 export const VISUAL_QUERY_UPLOAD_PATH = '/visual-search/uploads'
+export const VISUAL_SEARCH_PATH = '/visual-search'
 
 /**
  * 上传一张查询图，返回可直接拿去搜索的 `objectKey`。
@@ -88,6 +91,29 @@ function toFailure(error: unknown): VisualSearchFailure | null {
   // 所以带空码走 `./messages` 的透传分支
   if (error instanceof Error && error.message) return { code: '', message: error.message }
   return null
+}
+
+/**
+ * 用已上传的查询图发起一次识图搜索。
+ *
+ * 与上传**必须带同一个匿名会话**（`./session`）：服务端按主体校验 `objectKey` 归属，
+ * 换了 id 会直接 400「查询图不可用」。这里再 `ensureVisualSearchSessionId()` 一次是刻意的 ——
+ * 上传腿可能采纳过服务端回写的 id，两次取值因此总是取到「当下这一份」。
+ *
+ * 失败一律抛出 `ApiError`（契约的 5 个错误码之一），由调用方用 `visualSearchErrorMessage`
+ * 翻成文案；本函数**不做**演示兜底 —— 识图是真实上游调用，编不出结果。
+ */
+export async function searchByVisualQuery(
+  objectKey: string,
+  isActive?: () => boolean,
+): Promise<VisualSearchResponse> {
+  assertUploadActive(isActive)
+  const { data } = await apiRequestWithMeta(VISUAL_SEARCH_PATH, {
+    method: 'POST',
+    body: { objectKey },
+    headers: { [RECOMMENDATION_HEADERS.sessionId]: ensureVisualSearchSessionId() },
+  })
+  return VisualSearchResponseSchema.parse(data)
 }
 
 /** 页面直接用这个：收窄 + 文案一步到位 */
