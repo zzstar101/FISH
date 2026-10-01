@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyRecalled,
   beginSend,
+  canRecallMessage,
   canRetry,
   canRetryMedia,
   clearDeferredReload,
@@ -13,16 +15,23 @@ import {
   isFlushDue,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  keepRecalledTombstones,
   listingStatusText,
+  localReplyExcerpt,
+  MESSAGE_ACTION_LABEL,
   mergePushedMedia,
   mergeRefreshedMedia,
   mergeTimeline,
+  messageActions,
   type PendingMedia,
   type PendingMessage,
   parseTxEvent,
   planMediaLoad,
+  REPLY_DROPPED_TIP,
+  recallFailureText,
   resetDeferredReload,
   settleSend,
+  shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
@@ -671,5 +680,267 @@ describe('isCurrentPlayRequest —— 迟到的语音下载不许落地（#67 �
         { token: 2, cookie: task.cookie, userId: task.userId, alive: true },
       ),
     ).toBe(false)
+  })
+})
+
+/**
+ * 长按菜单 / 引用 / 撤回（#359 3c）。
+ *
+ * 锁的是「哪些动作该出现、哪些不该」这条判据 —— 它是页面里唯一决定「用户能不能撤回
+ * 别人的消息」的地方，写错会直接变成越权入口（服务端仍会拦，但界面不该给）。
+ */
+describe('messageActions / canRecallMessage —— 长按菜单能做什么（#359 3c）', () => {
+  const WINDOW = 120_000
+  const NOW = Date.parse('2026-09-21T10:00:00.000Z')
+  const ME = 'usr_01jc000000e0080000000000a1'
+
+  const text = (over: Partial<MessageDto> = {}): MessageDto => ({
+    id: 'msg_01jc000000e0080000000000d1',
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: ME,
+    sender: { id: ME, nickname: '我', avatarUrl: null },
+    type: 'TEXT',
+    content: '在的',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T09:59:30.000Z',
+    ...over,
+  })
+
+  test('自己的未撤回 TEXT：复制 / 引用 / 撤回三项齐全', () => {
+    expect(messageActions(text(), ME, NOW, WINDOW)).toEqual(['copy', 'reply', 'recall'])
+  })
+
+  test('对方发的：没有撤回项（界面不给越权入口）', () => {
+    expect(messageActions(text({ senderId: 'usr_x' }), ME, NOW, WINDOW)).toEqual(['copy', 'reply'])
+  })
+
+  test('超出 2 分钟窗口：撤回项消失，复制与引用仍在', () => {
+    const old = text({ createdAt: '2026-09-21T09:57:00.000Z' })
+    expect(canRecallMessage(old, ME, NOW, WINDOW)).toBe(false)
+    expect(messageActions(old, ME, NOW, WINDOW)).toEqual(['copy', 'reply'])
+  })
+
+  test('窗口边界（恰好 120s）仍可撤回，多 1ms 即不可', () => {
+    expect(canRecallMessage(text({ createdAt: '2026-09-21T09:58:00.000Z' }), ME, NOW, WINDOW)).toBe(
+      true,
+    )
+    expect(canRecallMessage(text({ createdAt: '2026-09-21T09:57:59.999Z' }), ME, NOW, WINDOW)).toBe(
+      false,
+    )
+  })
+
+  test('已撤回的：只剩撤回碑，没有复制 / 引用 / 撤回任何一项', () => {
+    const recalled = text({ content: '', recalledAt: '2026-09-21T09:59:40.000Z' })
+    expect(messageActions(recalled, ME, NOW, WINDOW)).toEqual([])
+  })
+
+  test('SYSTEM 消息不给任何动作（交易事实不是用户消息）', () => {
+    const system = text({ type: 'SYSTEM', senderId: null, sender: null })
+    expect(messageActions(system, ME, NOW, WINDOW)).toEqual([])
+  })
+
+  /*
+    商品卡（LISTING）与媒体（MEDIA）的菜单口径不在这里测：本分支的契约里
+    `messageTypeSchema` 只有 TEXT / SYSTEM（LISTING 在 #366/#363、媒体在 #364 上，
+    都还没合入），构造那种 DTO 会是类型错误。等它们合入后按同一组断言补
+    「无正文可复制 → 只给引用与撤回」—— 已记在 #359 的合流清单里。
+  */
+
+  test('未登录（meId 为 null）：撤回入口消失，本地动作仍在', () => {
+    // 复制 / 引用不依赖身份（纯本地动作），撤回必须依赖「是不是我发的」——
+    // 身份缺失时不能凭空给出撤回入口。
+    expect(messageActions(text(), null, NOW, WINDOW)).toEqual(['copy', 'reply'])
+    expect(canRecallMessage(text(), null, NOW, WINDOW)).toBe(false)
+  })
+
+  test('时间戳解析不了：不误判成「在窗口内」', () => {
+    expect(canRecallMessage(text({ createdAt: 'not-a-date' }), ME, NOW, WINDOW)).toBe(false)
+  })
+
+  test('每个动作都有中文文案（菜单不会出现空行）', () => {
+    for (const action of ['copy', 'reply', 'recall'] as const) {
+      expect(MESSAGE_ACTION_LABEL[action].length).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('localReplyExcerpt —— 本地摘引文案（与服务端 replyExcerpt 同口径）', () => {
+  const base = {
+    id: 'msg_01jc000000e0080000000000d1',
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: 'usr_x',
+    sender: { id: 'usr_x', nickname: 'A', avatarUrl: null },
+    type: 'TEXT' as const,
+    content: '在的',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+  }
+
+  test('普通文本原样；首尾空白先 trim', () => {
+    expect(localReplyExcerpt({ ...base, content: '  在的  ' })).toBe('在的')
+  })
+
+  test('超长截断到 120 字含省略号（契约 excerpt 的 max）', () => {
+    const long = 'a'.repeat(200)
+    expect(localReplyExcerpt({ ...base, content: long })).toBe(`${'a'.repeat(119)}…`)
+    expect(localReplyExcerpt({ ...base, content: long }).length).toBe(120)
+  })
+
+  test('空正文与已撤回各给占位，不画空引用条', () => {
+    expect(localReplyExcerpt({ ...base, content: '   ' })).toBe('[消息]')
+    expect(
+      localReplyExcerpt({ ...base, content: '', recalledAt: '2026-09-21T10:00:00.000Z' }),
+    ).toBe('[消息已撤回]')
+  })
+})
+
+describe('applyRecalled —— 撤回落地（#359 3c）', () => {
+  const make = (id: string): MessageDto => ({
+    id,
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: 'usr_01jc000000e0080000000000a1',
+    sender: { id: 'usr_01jc000000e0080000000000a1', nickname: '我', avatarUrl: null },
+    type: 'TEXT',
+    content: '发错了',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+  })
+
+  test('目标那条正文清空并落 recalledAt，其余不动', () => {
+    const items = [make('m1'), make('m2')]
+    const out = applyRecalled(items, 'm1', '2026-09-21T10:00:05.000Z')
+    expect(out[0]).toMatchObject({ id: 'm1', content: '', recalledAt: '2026-09-21T10:00:05.000Z' })
+    expect(out[1]).toEqual(items[1])
+  })
+
+  test('不改动入参数组（避免原地改 state 里那份）', () => {
+    const items = [make('m1')]
+    applyRecalled(items, 'm1', '2026-09-21T10:00:05.000Z')
+    expect(items[0]?.content).toBe('发错了')
+    expect(items[0]?.recalledAt).toBeNull()
+  })
+
+  test('id 不存在时原样返回，不误伤别的消息', () => {
+    const items = [make('m1')]
+    expect(applyRecalled(items, 'nope', '2026-09-21T10:00:05.000Z')).toEqual(items)
+  })
+})
+
+describe('recallFailureText —— 撤回失败的三档文案', () => {
+  test('超窗 / 越权 / 不存在各有说法', () => {
+    expect(recallFailureText('MESSAGE_RECALL_WINDOW_EXCEEDED')).toBe('超过 2 分钟，不能撤回了')
+    expect(recallFailureText('MESSAGE_RECALL_FORBIDDEN')).toBe('只能撤回自己发的消息')
+    expect(recallFailureText('MESSAGE_NOT_FOUND')).toBe('消息已不存在')
+  })
+
+  test('其它错误码与缺省走通用文案（不泄漏服务端原文）', () => {
+    expect(recallFailureText('INTERNAL_ERROR')).toBe('撤回失败，请重试')
+    expect(recallFailureText(undefined)).toBe('撤回失败，请重试')
+  })
+})
+
+/**
+ * `doRecall` 的 epoch 契约（#365 审查 P1）。
+ *
+ * 组件里的 `doRecall` 刻意**不设** epoch 守卫，原因写在 `index.tsx` 的注释里：撤回在途
+ * 最长 15s，期间任何一次 `load()` 都会 `epoch + 1`，按 epoch 判过期会让「撤回成功后本地
+ * 不落碑」+「`recallingId` 永久锁死」同时发生。页面组件没有渲染测试基建，所以把这条
+ * 不变式锚在 `applyRecalled` 上：它**只按 id 命中**，换账号后 `messages` 已清空，
+ * 陈旧响应改不到任何行 —— 这正是「不设守卫也安全」的依据。
+ */
+describe('applyRecalled 的跨账号安全性（doRecall 不设 epoch 守卫的依据）', () => {
+  const msg = (id: string, senderId: string): MessageDto => ({
+    id,
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId,
+    sender: { id: senderId, nickname: 'A', avatarUrl: null },
+    type: 'TEXT',
+    content: 'x',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+  })
+
+  test('id 不在流里时逐条原样返回（换账号后清空 → 陈旧撤回改不到新账号的消息）', () => {
+    const other = [msg('m-b', 'usr_b'), msg('m-c', 'usr_b')]
+    const out = applyRecalled(other, 'm-a', '2026-09-21T10:00:05.000Z')
+    expect(out).toEqual(other)
+  })
+
+  test('只改命中 id 的那一条，同会话其它消息（含同发送者）不动', () => {
+    const items = [msg('m-a', 'usr_a'), msg('m-b', 'usr_a')]
+    const out = applyRecalled(items, 'm-a', '2026-09-21T10:00:05.000Z')
+    expect(out[0]?.recalledAt).toBe('2026-09-21T10:00:05.000Z')
+    expect(out[1]).toEqual(items[1])
+  })
+})
+
+/**
+ * 撤回不可回退（#359 3c 审查回合）。
+ *
+ * 服务端的 `recalled_at` 是单调的，所以「本地已落碑、刚回来的快照却没撤回」只可能是快照更早
+ * —— 而撤回在途 15s 内任何一次 `load()` 都可能带回这种快照（整页重拉与 silent 补刷都算）。
+ */
+describe('keepRecalledTombstones —— 旧快照不能把撤回碑写回正文', () => {
+  const msg = (over: Partial<MessageDto> = {}): MessageDto => ({
+    id: 'msg_01jc000000e0080000000000e1',
+    conversationId: 'cnv_01jc000000e0080000000000c1',
+    senderId: 'usr_01jc000000e0080000000000a1',
+    sender: { id: 'usr_01jc000000e0080000000000a1', nickname: '我', avatarUrl: null },
+    type: 'TEXT',
+    content: '撤回前的正文',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-09-21T10:00:00.000Z',
+    ...over,
+  })
+  const RECALLED_AT = '2026-09-21T10:00:05.000Z'
+
+  test('本地已落碑 + 快照说没撤回 → 保住撤回碑（正文清空、撤回时刻保留）', () => {
+    const local = [msg({ content: '', recalledAt: RECALLED_AT })]
+    const stale = [msg({ content: '撤回前的正文', recalledAt: null })]
+
+    const out = keepRecalledTombstones(local, stale)
+
+    expect(out).toHaveLength(1)
+    expect(out[0]?.recalledAt).toBe(RECALLED_AT)
+    expect(out[0]?.content).toBe('')
+  })
+
+  test('快照自己也带撤回时原样采信（权威值可由它推进）', () => {
+    const local = [msg({ content: '', recalledAt: RECALLED_AT })]
+    const fresh = [msg({ content: '', recalledAt: '2026-09-21T10:00:09.000Z' })]
+    expect(keepRecalledTombstones(local, fresh)[0]?.recalledAt).toBe('2026-09-21T10:00:09.000Z')
+  })
+
+  test('没有本地撤回记录时不改任何一条（新消息、顺序修正照常生效）', () => {
+    const incoming = [msg(), msg({ id: 'msg_01jc000000e0080000000000e2', content: '对方刚发的' })]
+    expect(keepRecalledTombstones([], incoming)).toEqual(incoming)
+  })
+
+  test('快照里的别条消息不受影响', () => {
+    const local = [msg({ content: '', recalledAt: RECALLED_AT })]
+    const other = msg({ id: 'msg_01jc000000e0080000000000e3', content: '别的' })
+    const out = keepRecalledTombstones(local, [msg(), other])
+    expect(out[1]).toEqual(other)
+  })
+})
+
+/**
+ * 引用失效的善后（#359 3c 审查回合）：422 `MESSAGE_REPLY_INVALID` 时若不摘掉引用，
+ * `retry` 会原样把同一个 `replyTo` 再发一次 —— 每次重试必然 422，成为死循环气泡。
+ */
+describe('shouldDropReplyOnSendFailure —— 引用失效必须摘掉引用再重试', () => {
+  test('只有 MESSAGE_REPLY_INVALID 摘引用', () => {
+    expect(shouldDropReplyOnSendFailure('MESSAGE_REPLY_INVALID')).toBe(true)
+    expect(shouldDropReplyOnSendFailure('IDEMPOTENCY_KEY_REUSED')).toBe(false)
+    expect(shouldDropReplyOnSendFailure(undefined)).toBe(false)
+  })
+
+  test('提示文案非空（用户得知道引用为什么没了）', () => {
+    expect(REPLY_DROPPED_TIP.length).toBeGreaterThan(0)
   })
 })

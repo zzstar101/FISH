@@ -46,6 +46,8 @@ const validMessageEvent = {
     sender: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
     type: 'TEXT',
     content: '在吗',
+    recalledAt: null,
+    replyTo: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   },
 } satisfies RealtimeServerEvent
@@ -66,6 +68,8 @@ const validMediaEvent = {
     width: 800,
     height: 600,
     durationMs: null,
+    recalledAt: null,
+    replyTo: null,
     createdAt: '2026-01-01T00:00:01.000Z',
   },
 } satisfies MediaRealtimeEvent

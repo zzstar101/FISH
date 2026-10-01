@@ -13,10 +13,25 @@ export interface MessageRow {
   sender_id: string | null
   type: string
   content: string
+  /** #359 3c 引用的被引用消息 id；无引用为 null。 */
+  reply_to_id?: string | null
+  /** #359 3c 撤回时间；未撤回为 null。 */
+  recalled_at?: Date | string | null
   created_at: Date | string
   /** join 出的发送者公开信息；SYSTEM 消息为 null。仅 listByConversation 填充。 */
   sender_nickname?: string | null
   sender_avatar_url?: string | null
+}
+
+/** 引用块投射需要的被引用行（#359 3c）。 */
+export interface ReplyTargetRow {
+  id: string
+  /** 引用目标必须与本会话一致（跨会话 id 不可引用，也不泄漏存在性）。 */
+  conversation_id: string
+  sender_id: string | null
+  type: string
+  content: string
+  recalled_at: Date | string | null
 }
 
 /** 会话参与者的最小投影（权限判定用）。 */
@@ -51,7 +66,41 @@ export interface MessageStore {
     senderId: string,
     content: string,
     key?: MessageSendKey | null,
+    replyToId?: string | null,
   ): Promise<MessageRow>
+  /**
+   * 按内部 uuid 批量取引用块投射需要的行（#359 3c）。缺失的 id 不在返回 Map 里
+   * （行被并发删除），调用方按「引用已失效」渲染。
+   */
+  findReplyTargets(ids: string[]): Promise<Map<string, ReplyTargetRow>>
+  /**
+   * 幂等键查询（**只读、不在事务内**）：命中时返回既有行与指纹是否一致。
+   *
+   * service 在**引用目标校验之前**调它，让「第一次已落库、响应丢了」的重试直接重放既有行
+   * —— 否则那条重试会因为「被引用消息此刻已撤回」撞 422，而消息其实早就发出去了
+   * （媒体域 `media-store.ts` 的 `findByRequestKey` 是同一套快速路径）。
+   *
+   * 这只是**快速路径**，不是去重的权威判据：真正的串行化仍由 `insertText` 事务内的
+   * advisory lock + 查重承担（本查询命中不了未提交的并发行）。
+   */
+  findByRequestKey(
+    conversationId: string,
+    senderId: string,
+    key: MessageSendKey,
+  ): Promise<{ row: MessageRow; matchedHash: boolean } | null>
+  /**
+   * 撤回（#359 3c）：把 `recalled_at` 从 NULL 单调推进为 now，返回撤回后的行。
+   *
+   * 返回 `'not-found'`：消息不在本会话；`'forbidden'`：不是发送者（含 SYSTEM，
+   * 它的 sender_id 为 NULL）；`'window-exceeded'`：超出窗口。已撤回的行**幂等返回**，
+   * 不刷新时间戳（重复点撤回不该把「撤回时刻」往后挪）。
+   */
+  recall(
+    conversationId: string,
+    messageId: string,
+    userId: string,
+    windowMs: number,
+  ): Promise<MessageRow | 'not-found' | 'forbidden' | 'window-exceeded'>
   /**
    * 插入 LISTING 消息（#359 商品卡）并 bump 会话的 `last_message_at`：与 `insertText`
    * 同一事务结构、同一幂等语义（同键同指纹 → 重放，同键不同指纹 → 冲突）。
@@ -116,6 +165,8 @@ function toRow(row: Record<string, unknown>): MessageRow {
     sender_id: (row.sender_id as string | null) ?? null,
     type: row.type as string,
     content: row.content as string,
+    reply_to_id: (row.reply_to_id as string | null) ?? null,
+    recalled_at: (row.recalled_at as Date | string | null) ?? null,
     created_at: row.created_at as Date | string,
     sender_nickname: (row.sender_nickname as string | null) ?? null,
     sender_avatar_url: (row.sender_avatar_url as string | null) ?? null,
@@ -136,6 +187,7 @@ async function findByRequestKey(
 ): Promise<{ row: Record<string, unknown>; hashMatches: boolean } | null> {
   const result = await executor.execute(sql`
     SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
+           m.reply_to_id, m.recalled_at,
            u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
            (m.client_request_hash = ${key.requestHash}) AS hash_matches
     FROM messages m
@@ -187,6 +239,7 @@ export function createSqlMessageStore(db: Db): MessageStore {
         : sql``
       const result = await db.execute(sql`
         SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
+               m.reply_to_id, m.recalled_at,
                u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
         FROM messages m
         LEFT JOIN users u ON u.id = m.sender_id
@@ -210,8 +263,8 @@ export function createSqlMessageStore(db: Db): MessageStore {
      * 幂等键路径：先拿该键的 advisory lock 再查重，两个并发同键请求因此串行 —— 第二个
      * 读到第一个已提交的行并直接返回，不会撞唯一索引变成 500。
      */
-    async insertText(conversationId, senderId, content, key) {
-      return insertUserMessage(db, conversationId, senderId, 'TEXT', content, key)
+    async insertText(conversationId, senderId, content, key, replyToId) {
+      return insertUserMessage(db, conversationId, senderId, 'TEXT', content, key, replyToId)
     },
 
     async insertListing(conversationId, senderId, listingPublicId, key) {
@@ -249,6 +302,88 @@ export function createSqlMessageStore(db: Db): MessageStore {
       return found ? { row: toRow(found.row), hashMatches: found.hashMatches } : null
     },
 
+    async findByRequestKey(conversationId, senderId, key) {
+      const result = await db.execute(sql`
+        SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
+               m.reply_to_id, m.recalled_at,
+               u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
+               (m.client_request_hash = ${key.requestHash}) AS hash_matches
+        FROM messages m
+        LEFT JOIN users u ON u.id = m.sender_id
+        WHERE m.conversation_id = ${conversationId}::uuid
+          AND m.sender_id = ${senderId}::uuid
+          AND m.client_request_id = ${key.clientRequestId}
+      `)
+      const row = rowsOf(result)[0]
+      return row ? { row: toRow(row), matchedHash: row.hash_matches === true } : null
+    },
+
+    async findReplyTargets(ids) {
+      const map = new Map<string, ReplyTargetRow>()
+      if (ids.length === 0) return map
+      const result = await db.execute(sql`
+        SELECT id, conversation_id, sender_id, type::text, content, recalled_at
+        FROM messages
+        WHERE id IN (${sql.join(
+          ids.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      `)
+      for (const row of rowsOf(result)) {
+        map.set(row.id as string, {
+          id: row.id as string,
+          conversation_id: row.conversation_id as string,
+          sender_id: (row.sender_id as string | null) ?? null,
+          type: row.type as string,
+          content: row.content as string,
+          recalled_at: (row.recalled_at as Date | string | null) ?? null,
+        })
+      }
+      return map
+    },
+
+    async recall(conversationId, messageId, userId, windowMs) {
+      /*
+       * 单语句完成「校验 + 推进」，避免「读出来再写回去」的竞态：
+       * - 目标行必须在本会话（`conversation_id`）——跨会话的合法 id 一律 not-found，
+       *   不泄漏其它会话的消息是否存在；
+       * - 只有发送者本人可撤回（`sender_id = userId`；SYSTEM 的 sender_id 为 NULL，
+       *   条件天然不成立，落进 forbidden）；
+       * - 窗口按**数据库时钟**判（`clock_timestamp() - created_at`），不信客户端时间；
+       * - `recalled_at = COALESCE(recalled_at, now())`：已撤回的行幂等命中原值，
+       *   重复点撤回不会把「撤回时刻」往后挪。
+       * 找不到行时 `RETURNING` 为空，再用一条只读查询区分 not-found / forbidden /
+       * window-exceeded，把错误码说清楚。
+       */
+      const updated = await db.execute(sql`
+        UPDATE messages SET recalled_at = COALESCE(recalled_at, now())
+        WHERE id = ${messageId}::uuid
+          AND conversation_id = ${conversationId}::uuid
+          AND sender_id = ${userId}::uuid
+          AND (
+            recalled_at IS NOT NULL
+            OR clock_timestamp() - created_at <= make_interval(secs => ${windowMs / 1000})
+          )
+        RETURNING id, conversation_id, sender_id, type::text, content, created_at,
+                  reply_to_id, recalled_at
+      `)
+      const row = rowsOf(updated)[0]
+      if (row) return toRow(row)
+
+      const probe = await db.execute(sql`
+        SELECT sender_id, recalled_at,
+               (clock_timestamp() - created_at) > make_interval(secs => ${windowMs / 1000})
+                 AS outside_window
+        FROM messages
+        WHERE id = ${messageId}::uuid AND conversation_id = ${conversationId}::uuid
+      `)
+      const target = rowsOf(probe)[0]
+      if (!target) return 'not-found'
+      if (target.sender_id !== userId) return 'forbidden'
+      if (target.outside_window === true) return 'window-exceeded'
+      return 'not-found'
+    },
+
     async insertSystem(conversationId, content) {
       // 与 insertText 同构，仅 sender 为 NULL（DB CHECK 只约束 TEXT 必须有发送者）。
       return db.transaction((tx) => insertSystemWithin(tx, conversationId, content))
@@ -270,6 +405,7 @@ async function insertUserMessage(
   type: 'TEXT' | 'LISTING',
   content: string,
   key?: MessageSendKey | null,
+  replyToId?: string | null,
 ): Promise<MessageRow> {
   return db.transaction(async (tx) => {
     if (key) {
@@ -283,12 +419,15 @@ async function insertUserMessage(
     const result = await tx.execute(sql`
       WITH msg AS (
         INSERT INTO messages
-          (id, conversation_id, sender_id, type, content, client_request_id, client_request_hash)
+          (id, conversation_id, sender_id, type, content, client_request_id,
+           client_request_hash, reply_to_id)
         VALUES (
           ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, ${type}, ${content},
-          ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null}
+          ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null},
+          ${replyToId ?? null}::uuid
         )
-        RETURNING id, conversation_id, sender_id, type::text, content, created_at
+        RETURNING id, conversation_id, sender_id, type::text, content, created_at,
+                  reply_to_id, recalled_at
       ), bump AS (
         UPDATE conversations c SET
           last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),

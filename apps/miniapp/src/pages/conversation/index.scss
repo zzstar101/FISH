@@ -488,6 +488,104 @@
   color: var(--muted-2);
 }
 
+/* ------------------------------------------------- 长按菜单 / 引用 / 撤回（#359 3c） */
+
+/*
+ * 长按菜单用微信原生 `Taro.showActionSheet`，没有自绘弹层，因此这里没有菜单样式。
+ * 本节只有三块：气泡内摘引、输入栏上方的引用栏、撤回碑。
+ */
+
+/* 气泡内的摘引（稿子 .quote）：左侧竖线 + 单行截断的摘引文案，点它定位原消息 */
+.conv__quote {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 4px 0 4px 16px;
+  margin-bottom: 10px;
+  border-left: 5px solid var(--accent-mid);
+  border-radius: 8px;
+
+  /* 我方气泡是渐变底，竖线与文字都要换成白色系才看得清 */
+  &.is-mine {
+    border-left-color: rgba(255, 255, 255, 0.72);
+  }
+}
+
+.conv__quote-tx {
+  flex: 1;
+  min-width: 0;
+  font-size: 22px;
+  line-height: 1.4;
+  color: var(--muted-2);
+  @include ellipsis;
+
+  .conv__quote.is-mine & {
+    color: rgba(255, 255, 255, 0.86);
+  }
+}
+
+/* 撤回碑（稿子 .recalled）：灰底小胶囊，体积与 SYSTEM 胶囊一致但不占整行 */
+.conv__recalled {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 10px 22px;
+  border-radius: var(--r-pill);
+  background: var(--ink-weak);
+}
+
+.conv__recalled-tx {
+  font-size: 22px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* 引用栏：吸在输入行上方，左侧竖线 + 摘引 + 右侧取消 */
+.conv__replybar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 20px;
+  background: var(--ice);
+  border-left: 5px solid var(--accent-mid);
+}
+
+.conv__replybar-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__replybar-tx {
+  display: block;
+  font-size: 23px;
+  line-height: 1.4;
+  color: var(--muted-2);
+  @include ellipsis;
+}
+
+.conv__replybar-cancel {
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conv__replybar-ic {
+  width: 30px;
+  height: 30px;
+  opacity: 0.6;
+}
+
+/* 撤回路上的那条气泡：整块压暗，视觉上告知「正在撤回」 */
+.conv__bubble.is-busy {
+  opacity: 0.55;
+}
+
 .conv__rd {
   color: var(--brand-deep);
   font-weight: 600;

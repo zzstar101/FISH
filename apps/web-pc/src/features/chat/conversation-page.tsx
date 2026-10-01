@@ -46,6 +46,7 @@ import {
   flattenMessagePages,
   insertMediaIntoCache,
   insertMessageIntoCache,
+  invalidateConversationDetail,
   invalidateConversationSurfaces,
   isMessageRead,
   mergeMediaIntoCache,
@@ -245,6 +246,24 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       }
       if (event.type === 'conversation.read') {
         applyReadEventToCache(queryClient, ownerId, event)
+        invalidateConversationSurfaces(queryClient, ownerId)
+        return
+      }
+      /*
+        撤回（#359 3c）：**必须重取历史**。服务端撤回后不再下发正文，但本页缓存里那条仍是
+        撤回前的快照，而 `message.recalled` 只带 messageId 与 recalledAt —— 光靠它无法把
+        气泡翻成撤回碑（气泡渲染读的是缓存里的 DTO）。重取一次历史/详情即可拿到
+        `recalledAt`，气泡随之变成撤回碑。
+      */
+      if (event.type === 'message.recalled') {
+        if (event.conversationId === conversationId) {
+          invalidateConversationDetail(queryClient, ownerId, conversationId)
+        }
+        /*
+          别的会话里的撤回也要刷新列表（#359 3c 审查回合）：那条会话行的摘要会翻成
+          「[消息已撤回]」，而列表只是 staleTime 15s 的普通查询，不主动失效就会一直
+          显示撤回前的原文。与 `message.new` 同款处理（那个分支无条件失效）。
+        */
         invalidateConversationSurfaces(queryClient, ownerId)
       }
     },

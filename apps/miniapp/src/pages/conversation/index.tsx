@@ -1,4 +1,9 @@
-import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import {
+  type ConversationDto,
+  MESSAGE_RECALL_WINDOW_MS,
+  type MediaMessageDto,
+  type MessageDto,
+} from '@fish/contracts/chat/schema'
 import { Image, ScrollView, Text, Textarea, View } from '@tarojs/components'
 import Taro, { useDidHide, useDidShow, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -12,6 +17,7 @@ import {
   createImageMessage,
   createVoiceMessage,
   markConversationRead,
+  recallMessage,
   sendMessage,
 } from '@/features/chat/api'
 import {
@@ -36,10 +42,12 @@ import {
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
 import {
+  applyRecalled,
   beginSend,
   type ChatEntry,
   canRetry,
@@ -53,21 +61,29 @@ import {
   isLatestPageLoad,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  keepRecalledTombstones,
   listingStatusText,
+  localReplyExcerpt,
+  MESSAGE_ACTION_LABEL,
   type MediaTaskBinding,
   type MediaTaskIdentity,
+  type MessageAction,
   mergePushedMedia,
   mergeRefreshedMedia,
   mergeRefreshedMessages,
   mergeTimeline,
+  messageActions,
   type PendingMedia,
   type PendingMediaDraft,
   type PendingMessage,
   parseTxEvent,
   planMediaLoad,
+  REPLY_DROPPED_TIP,
+  recallFailureText,
   resetDeferredReload,
   resolveConvState,
   settleSend,
+  shouldDropReplyOnSendFailure,
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
@@ -154,6 +170,22 @@ export default function Conversation() {
   const [panelOpen, setPanelOpen] = useState(false)
   /** 语音输入态：输入框换成「按住 说话」 */
   const [voiceMode, setVoiceMode] = useState(false)
+  /**
+   * 正在引用的消息（#359 3c）：非 null 时输入栏上方显示引用栏，发出的消息带摘引。
+   * 存整条 DTO 而不是只存 id：引用栏要显示摘引文案，而服务端的 `replyTo` 投射只挂在
+   * 「已发出的那条消息」上，被引用的原消息本身没有这个字段。
+   */
+  const [replyTarget, setReplyTarget] = useState<MessageDto | null>(null)
+  /** 撤回在途的消息 id：一条一把锁，防止连点重复 POST（服务端虽幂等，但没必要发两次） */
+  const [recallingId, setRecallingId] = useState<string | null>(null)
+  /**
+   * 「点摘引跳过去」的目标 DOM id（null = 跟随最新）。
+   *
+   * 与「打开即看最新」的 `tailId` 共用 ScrollView 的 `scrollIntoView`。`tail` 记下**设它时**
+   * 的尾行 id：新消息一落地尾行就变，比对不上时目标自动失效、回到跟随最新（否则页面会
+   * 永久停在被引用那条上，之后的消息看起来像「没进来」）。
+   */
+  const [jumpTo, setJumpTo] = useState<{ id: string; tail: string } | null>(null)
   /**
    * 媒体历史（#67 第四步）：与文本是**两条独立分页流**（独立 DTO / 独立端点 / 独立
    * 实时事件），渲染前要按 `(createdAt, id)` 合成一条时间线。
@@ -272,6 +304,8 @@ export default function Conversation() {
     setPending([])
     setPanelOpen(false)
     setVoiceMode(false)
+    setReplyTarget(null)
+    setRecallingId(null)
     setMedia([])
     setMediaCursor(null)
     setPendingMedia([])
@@ -381,9 +415,16 @@ export default function Conversation() {
              * silent 刷新**合并**而不是替换（#186 P2-1）：它带回来的快照可能早于
              * 本次刷新期间才发送成功的那条消息，无条件 `setMessages(page.items)`
              * 会把那条刚确认的消息抹掉。非 silent 是整页重拉，直接替换。
+             *
+             * 两条路径都要过 `keepRecalledTombstones`（#359 3c 审查回合）：撤回在途
+             * 15s 内任何一次 `load()` 都可能带着「撤回前」的快照回来，把刚落地的
+             * 撤回碑写回正文。判据与理由见 `./view`。
              */
             setMessages((prev) =>
-              baseIds === null ? page.items : mergeRefreshedMessages(prev, page.items, baseIds),
+              keepRecalledTombstones(
+                prev,
+                baseIds === null ? page.items : mergeRefreshedMessages(prev, page.items, baseIds),
+              ),
             )
             setNextCursor(page.nextCursor)
             setMsgState(page.failed ? 'failed' : 'ok')
@@ -659,8 +700,15 @@ export default function Conversation() {
    * 落定先过 `settleSend`（陈旧 epoch 的落定原样返回，不会污染当前 epoch 的计数），
    * 再由 `shouldFlushDeferredReload` 判「是否该补且真的能发」。补的那一次走
    * `load({ silent: true })`：后台刷新不闪骨架，失败也不盖掉失败气泡与它的重试。
+   *
+   * `reply`（#359 3c）是本次要引用的消息；重试时沿用失败气泡里记下的那份，
+   * 而不是读当时的 `replyTarget` state —— 用户可能已经取消引用栏了。
    */
-  const doSend = (text: string, pendingId?: string) => {
+  const doSend = (
+    text: string,
+    pendingId?: string,
+    reply?: { id: string; excerpt: string } | null,
+  ) => {
     // 新气泡才需要新序号；重试沿用原来的临时 id（赋值不能塞进表达式，见 noAssignInExpressions）
     let id = pendingId
     if (!id) {
@@ -672,9 +720,9 @@ export default function Conversation() {
     setPending((prev) =>
       pendingId
         ? prev.map((item) => (item.id === id ? { ...item, status: 'sending' } : item))
-        : [...prev, { id, content: text, status: 'sending' }],
+        : [...prev, { id, content: text, status: 'sending', replyTo: reply ?? null }],
     )
-    void sendMessage(conversationId, text)
+    void sendMessage(conversationId, text, reply?.id)
       .then((message) => {
         if (current !== epoch.current) return
         setPending((prev) => prev.filter((item) => item.id !== id))
@@ -687,9 +735,21 @@ export default function Conversation() {
       .catch((error) => {
         if (current !== epoch.current) return
         console.warn('[miniapp] 发送消息失败', error)
+        const code = isApiError(error) ? error.code : undefined
+        /**
+         * 引用失效（422 `MESSAGE_REPLY_INVALID`）必须把这条气泡的引用摘掉：
+         * `retry` 会把 `item.replyTo` 原样传回来，不摘就是每次重试必然 422 的死循环。
+         * 判据见 `./view` 的 `shouldDropReplyOnSendFailure`。
+         */
+        const dropReply = shouldDropReplyOnSendFailure(code)
         setPending((prev) =>
-          prev.map((item) => (item.id === id ? { ...item, status: 'failed' } : item)),
+          prev.map((item) =>
+            item.id === id
+              ? { ...item, status: 'failed', replyTo: dropReply ? null : item.replyTo }
+              : item,
+          ),
         )
+        if (dropReply) void Taro.showToast({ title: REPLY_DROPPED_TIP, icon: 'none' })
       })
       .finally(() => {
         deferredRef.current = settleSend(deferredRef.current, current)
@@ -720,12 +780,17 @@ export default function Conversation() {
     const text = inputValue.trim()
     if (!text || !canSend) return
     setInputValue('')
-    doSend(text)
+    // 引用只跟着这一条发出：发完立刻收起引用栏（下一条默认不引用，与微信一致）
+    const reply = replyTarget
+      ? { id: replyTarget.id, excerpt: localReplyExcerpt(replyTarget) }
+      : null
+    setReplyTarget(null)
+    doSend(text, undefined, reply)
   }
 
   const retry = (item: PendingMessage) => {
     if (!canRetry(item)) return
-    doSend(item.content, item.id)
+    doSend(item.content, item.id, item.replyTo ?? null)
   }
 
   /**
@@ -1275,6 +1340,91 @@ export default function Conversation() {
     setVoiceMode(!voiceMode)
   }
 
+  /**
+   * 长按气泡（#359 3c）：按 `messageActions` 给出可用动作，用微信原生 `showActionSheet`
+   * 呈现（与「我的发布」重命名/下架同一入口，不另造自绘弹层）。
+   *
+   * 取消（点遮罩 / 取消）会让 `showActionSheet` reject —— 那不是错误，静默收场。
+   */
+  const onLongPressMessage = async (message: MessageDto) => {
+    const actions = messageActions(message, userId, Date.now(), MESSAGE_RECALL_WINDOW_MS)
+    if (actions.length === 0) return
+    let picked: MessageAction | null = null
+    try {
+      const result = await Taro.showActionSheet({
+        itemList: actions.map((action) => MESSAGE_ACTION_LABEL[action]),
+      })
+      picked = actions[result.tapIndex] ?? null
+    } catch {
+      return
+    }
+    if (picked === 'copy') {
+      void Taro.setClipboardData({ data: message.content }).catch((error) => {
+        // 复制失败此前完全没有处理（unhandled rejection + 界面无反馈）。
+        console.warn('[miniapp] 复制消息失败', error)
+        void Taro.showToast({ title: '复制失败', icon: 'none' })
+      })
+      return
+    }
+    if (picked === 'reply') {
+      setReplyTarget(message)
+      return
+    }
+    if (picked === 'recall') await doRecall(message)
+  }
+
+  /**
+   * 撤回一条自己发的消息。成功后**本地同步翻成撤回碑**（不等下一次刷新）：服务端随后
+   * 也会推 `message.recalled`，但实时客户端还没接（在未合入的 #213→#220 链上），
+   * 所以这里以 HTTP 204 为准落地，保证「点了就变」。
+   *
+   * ⚠️ 这里**不设 epoch 守卫**（与 `doSend` 不同）。撤回的在途期最长 15s，期间任何一次
+   * `load()` 都会 `epoch + 1`（从子页返回、或上一次发送落定后的补刷新），若按 epoch 判过期：
+   * - 成功路径被跳过 → 服务端已撤回、屏幕上正文照旧（在途快照还会把它覆盖回来）；
+   * - `finally` 里的解锁被跳过 → `recallingId` 永久停在那个 id 上，此后每次撤回都撞
+   *   `if (recallingId) return`，**弹了菜单、点了撤回、什么也不发生**，只能退出页面重进。
+   *
+   * 不设守卫是安全的：`applyRecalled` 只按 id 改命中的那一条，换账号时 `messages` 已被
+   * 清空（改不到任何行），而消息 id 全局唯一、不可能落在新账号的会话里。
+   * 锁在 `finally` 里**无条件**释放 —— 单条在途由 `if (recallingId) return` 保证，
+   * 不会有第二次撤回并发进来抢这个槽位。
+   */
+  const doRecall = async (message: MessageDto) => {
+    if (recallingId) return
+    setRecallingId(message.id)
+    try {
+      await recallMessage(conversationId, message.id)
+      setMessages((prev) => applyRecalled(prev, message.id, new Date().toISOString()))
+      // 撤回的正是正在引用的那条：引用栏里的摘引已经失效，收起它
+      setReplyTarget((prev) => (prev?.id === message.id ? null : prev))
+    } catch (error) {
+      console.warn('[miniapp] 撤回消息失败', error)
+      void Taro.showToast({
+        title: recallFailureText(isApiError(error) ? error.code : undefined),
+        icon: 'none',
+      })
+    } finally {
+      setRecallingId(null)
+    }
+  }
+
+  /**
+   * 点气泡里的摘引：滚到被引用那条（页内定位，不重新拉取）。
+   *
+   * `tail` 记下此刻的尾行 id（见 `jumpTo` 的说明）：新消息一到尾行变化，目标即失效。
+   *
+   * 目标不在**已加载**的消息里时不能装作没事（#359 3c 审查回合）：被引用的那条可能落在
+   * 更早的分页里（本页不做无限滚动，更早一页要用户自己点「加载更早的消息」），此时
+   * `scrollIntoView` 拿到一个不存在的 id 会静默什么都不做 —— 用户点了没反应、也没有提示。
+   */
+  const locateMessage = (messageId: string) => {
+    if (!messages.some((item) => item.id === messageId)) {
+      void Taro.showToast({ title: '引用的消息在更早的记录里', icon: 'none' })
+      return
+    }
+    setJumpTo({ id: `e-${messageId}`, tail: tailId })
+  }
+
   /** 「+」开合面板：开面板时退回键盘态 */
   const togglePanel = () => {
     if (!panelOpen) {
@@ -1350,6 +1500,16 @@ export default function Conversation() {
   // polyfill，旧 JSCore 上会直接 `is not a function`（review #117 第 2 条）
   const tail = entries.length > 0 ? entries[entries.length - 1] : undefined
   const tailId = tail ? `e-${tail.keyId}` : ''
+
+  /**
+   * 新消息落地就放弃「跳去看摘引」的目标，回到跟随最新。
+   *
+   * 不做成 `useEffect(() => setJumpTo(''), [tailId])`：那样要先渲染一帧旧目标再纠正，
+   * 且 biome 的 `useExhaustiveDependencies` 会把 `tailId` 判成多余依赖（`setJumpTo` 是
+   * 稳定引用）。这里把「跳转目标」与「设它时的 tailId」绑成一个值，渲染期直接比对 ——
+   * tail 一变，目标自动失效，无需任何副作用。
+   */
+  const scrollTarget = jumpTo && jumpTo.tail === tailId ? jumpTo.id : tailId
 
   /**
    * DOM 那一次**只给预览（h5）用**：预览桩把 scrollIntoView 透传成普通属性、
@@ -1586,8 +1746,13 @@ export default function Conversation() {
         </View>
       </View>
 
-      {/* 消息流：打开即停在最新（底部） */}
-      <ScrollView className="conv__scroll" scrollY scrollIntoView={tailId} scrollWithAnimation>
+      {/* 消息流：打开即停在最新（底部）；点摘引时临时改跳到被引用那条 */}
+      <ScrollView
+        className="conv__scroll"
+        scrollY
+        scrollIntoView={scrollTarget}
+        scrollWithAnimation
+      >
         <View className="conv__list">
           {/* 更早一页：文本与媒体两条流各有游标，任一还有更早就给入口（#67 N3） */}
           {hasEarlierPage(nextCursor, mediaCursor) || earlierFailed ? (
@@ -1626,6 +1791,14 @@ export default function Conversation() {
                       {renderAvatar(true)}
                       <View className="conv__col">
                         <View className={`conv__bubble is-mine${failed ? ' is-failed' : ''}`}>
+                          {/* 引用摘引（#359 3c）：服务端投射回来之前先用本地那份 */}
+                          {entry.pending.replyTo ? (
+                            <View className="conv__quote is-mine">
+                              <Text className="conv__quote-tx">
+                                {entry.pending.replyTo.excerpt}
+                              </Text>
+                            </View>
+                          ) : null}
                           <Text className="conv__bubble-tx">{entry.pending.content}</Text>
                         </View>
                         {failed ? (
@@ -1740,6 +1913,8 @@ export default function Conversation() {
                 if (message.type === 'LISTING') return renderListing(message)
 
                 const mine = message.senderId === me?.id
+                /** 撤回碑（#359 3c）：双方一致、刷新后一致 —— 正文已由服务端清空 */
+                const recalled = message.recalledAt !== null
                 return (
                   <View
                     key={message.id}
@@ -1748,9 +1923,31 @@ export default function Conversation() {
                   >
                     {renderAvatar(mine)}
                     <View className="conv__col">
-                      <View className={`conv__bubble${mine ? ' is-mine' : ''}`}>
-                        <Text className="conv__bubble-tx">{message.content}</Text>
-                      </View>
+                      {recalled ? (
+                        <View className="conv__recalled">
+                          <Text className="conv__recalled-tx">
+                            {mine ? '你撤回了一条消息' : '对方撤回了一条消息'}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View
+                          className={`conv__bubble${mine ? ' is-mine' : ''}${
+                            recallingId === message.id ? ' is-busy' : ''
+                          }`}
+                          onLongPress={() => void onLongPressMessage(message)}
+                        >
+                          {/* 摘引（#359 3c）：点它定位到被引用的原消息 */}
+                          {message.replyTo ? (
+                            <View
+                              className={`conv__quote${mine ? ' is-mine' : ''}`}
+                              onClick={() => locateMessage(message.replyTo?.id ?? '')}
+                            >
+                              <Text className="conv__quote-tx">{message.replyTo.excerpt}</Text>
+                            </View>
+                          ) : null}
+                          <Text className="conv__bubble-tx">{message.content}</Text>
+                        </View>
+                      )}
                       <Text className="conv__time num">{clockTime(message.createdAt)}</Text>
                     </View>
                   </View>
@@ -1773,6 +1970,17 @@ export default function Conversation() {
         空内容时「发送」置灰（稿子 .send.is-off）。
       */}
       <View className="conv__bar">
+        {/* 引用栏（#359 3c）：显示被引用消息的摘引与取消；发送后自动收起 */}
+        {replyTarget ? (
+          <View className="conv__replybar">
+            <View className="conv__replybar-main">
+              <Text className="conv__replybar-tx">{localReplyExcerpt(replyTarget)}</Text>
+            </View>
+            <View className="conv__replybar-cancel" onClick={() => setReplyTarget(null)}>
+              <Image className="conv__replybar-ic" src={ICONS.closeInk} mode="aspectFit" />
+            </View>
+          </View>
+        ) : null}
         <View className="conv__bar-row">
           {/*
             这颗钮是**两态开关**，图标要跟着态走：键盘态显示话筒（点了进语音），

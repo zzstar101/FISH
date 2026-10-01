@@ -26,6 +26,8 @@ function mediaMessage(id: MediaMessageDto['id']): MediaMessageDto {
     width: null,
     height: null,
     durationMs: 1_500,
+    recalledAt: null,
+    replyTo: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   }
 }
@@ -38,6 +40,8 @@ function message(id: MessageDto['id'], content: string): MessageDto {
     sender: { id: 'usr_01jc000000e00800000000000a', nickname: '阿岚', avatarUrl: null },
     type: 'TEXT',
     content,
+    recalledAt: null,
+    replyTo: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   }
 }

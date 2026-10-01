@@ -19,12 +19,15 @@ const message: MessageDto = {
   sender: { id: sender, nickname: '买家', avatarUrl: null },
   type: 'TEXT',
   content: '还在吗',
+  recalledAt: null,
+  replyTo: null,
   createdAt: '2026-09-12T10:00:00.000Z',
 }
 
 const service: MessageService = {
   listMessages: async () => ({ items: [message], nextCursor: null }),
   sendTextMessage: async () => message,
+  recallMessage: async () => undefined,
   sendListingMessage: async () => message,
 }
 

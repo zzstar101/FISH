@@ -44,6 +44,8 @@ function message(id: MessageDto['id'], createdAt: string, content: string = id):
     sender,
     type: 'TEXT',
     content,
+    recalledAt: null,
+    replyTo: null,
     createdAt,
   }
 }
@@ -95,6 +97,8 @@ function media(
     width: kind === 'IMAGE' ? 1_200 : null,
     height: kind === 'IMAGE' ? 900 : null,
     durationMs: kind === 'VOICE' ? 2_000 : null,
+    recalledAt: null,
+    replyTo: null,
     createdAt,
   }
 }

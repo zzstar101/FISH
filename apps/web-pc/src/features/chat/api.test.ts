@@ -37,6 +37,8 @@ const mediaDto: MediaMessageDto = {
   width: 800,
   height: 600,
   durationMs: null,
+  recalledAt: null,
+  replyTo: null,
   createdAt: '2026-01-01T00:00:00.000Z',
 }
 

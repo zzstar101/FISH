@@ -104,16 +104,35 @@ export async function fetchMessagePage(
 /**
  * 发一条文本消息（201，响应体 MessageDto）。
  *
+ * `replyToId` 是**被引用消息的公开 id**（#359 3c）：带上它就发一条「引用消息」，
+ * 服务端在响应与历史里回同一份 `replyTo` 摘引投射。目标不可引用（不存在 / 跨会话 /
+ * SYSTEM / 已撤回）→ 422 `MESSAGE_REPLY_INVALID`。
+ *
  * 发送体**不带** `type` 判别值：契约里 TEXT 的 `type` 是可选的，而「不带」在
  * 「已升级的 API」与「还没升到 #366 的旧 API」上都合法（旧契约是 strictObject，
  * 多带一个 `type` 反而 422）。小程序发版有审核滞后，这条差异是真实存在的窗口。
  */
-export async function sendMessage(conversationId: string, content: string): Promise<MessageDto> {
+export async function sendMessage(
+  conversationId: string,
+  content: string,
+  replyToId?: string,
+): Promise<MessageDto> {
   const payload = await apiRequest(CHAT_ROUTES.messages(conversationId), {
     method: 'POST',
-    body: { content },
+    body: { content, replyToId },
   })
   return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 撤回自己发的一条消息（#359 3c；204 无响应体）。
+ *
+ * `messageId` 是**公开 id**。窗口 `MESSAGE_RECALL_WINDOW_MS`（2 分钟）内、仅发送者本人；
+ * 对已撤回消息幂等（重复调用同样 204）。失败三档：404 `MESSAGE_NOT_FOUND`、
+ * 403 `MESSAGE_RECALL_FORBIDDEN`、409 `MESSAGE_RECALL_WINDOW_EXCEEDED`。
+ */
+export async function recallMessage(conversationId: string, messageId: string): Promise<void> {
+  await apiRequest(CHAT_ROUTES.recall(conversationId, messageId), { method: 'POST' })
 }
 
 /**

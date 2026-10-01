@@ -229,6 +229,8 @@ describe('messageDtoSchema', () => {
   const base = {
     id: ids.message,
     conversationId: ids.conversation,
+    recalledAt: null,
+    replyTo: null,
     content: 'hello',
     createdAt: '2026-09-12T00:00:00.000Z',
   }
@@ -449,6 +451,8 @@ describe('realtime events', () => {
         sender: null,
         type: 'SYSTEM',
         content: 'hi',
+        recalledAt: null,
+        replyTo: null,
         createdAt: '2026-09-12T00:00:00.000Z',
       },
     }
