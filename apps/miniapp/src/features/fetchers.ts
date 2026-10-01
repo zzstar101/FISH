@@ -394,7 +394,7 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
        */
       items: mockConversations()
         .filter((item) => item.kind !== 'system')
-        .map((item) => toConversationDto(item, mockViewerId)),
+        .map((item) => toConversationDto(item, mockViewerId, null)),
       // fixture 没有分页
       nextCursor: null,
       failed: false,
@@ -410,7 +410,11 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
  * 所以要显式补齐而不是直接断言成 `ConversationDto`（断言的失败方式是运行期拿到
  * `undefined`，而不是编译期报错）。
  */
-function toConversationDto(item: MockConversation, mockViewerId: Me['id']): ConversationDto {
+function toConversationDto(
+  item: MockConversation,
+  mockViewerId: Me['id'],
+  counterpartLastReadAt: string | null,
+): ConversationDto {
   // 演示登录与 fixture 的「我」使用不同 ID；摘要必须与历史消息的 senderId 同步投影。
   const lastMessage = item.lastMessage
   return {
@@ -421,9 +425,13 @@ function toConversationDto(item: MockConversation, mockViewerId: Me['id']): Conv
     // 多出来的 mock 专属 authStatus 结构上可赋给 ConversationUser，不需要逐字段重建
     counterpart: item.counterpart,
     unreadCount: item.unreadCount,
-    // fixture 没有「对方读到哪」这个概念（每个会话只有一条本地读位），给 null：
-    // 逐条「已读」的渲染在 Step 3 接 `conversation.read` 时才用得上
-    counterpartLastReadAt: null,
+    /*
+      读位由调用方给（#359 四 审查回合）：列表行不显示逐条已读标签，给 null 即可；
+      详情回退要用 `demoCounterpartLastReadAt` 从 fixture 的消息流里算一个确定性的值 ——
+      全给 null 的话演示构建里**每条**我发的消息都是红「未读」，「已读」这一档在端上
+      根本看不到，而端上门禁要求在开发者工具里逐页演示这个标签。
+    */
+    counterpartLastReadAt,
     lastMessage:
       DEMO_AUTH_ENABLED && lastMessage?.senderId === mockViewerId
         ? { ...lastMessage, senderId: DEMO_USER.id }
@@ -449,10 +457,44 @@ export async function loadConversation(conversationId: string): Promise<LoadedCo
     if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
     const { conversation: mockConversation, ME: mockMe, mockPublicId } = await import('@/mock/api')
     const found = mockConversation(conversationId)
-    return found
-      ? { status: 'ok', conversation: toConversationDto(found, mockPublicId('usr', mockMe.id)) }
-      : { status: 'missing' }
+    if (!found) return { status: 'missing' }
+    /*
+      详情回退顺手把「对方读位」算出来（#359 四 审查回合）：读位是逐条已读标签唯一的
+      数据来源，fixture 里没有这个事实 —— 不补的话演示构建全屏红字、看不到「已读」。
+      取值口径见 `demoCounterpartLastReadAt`（fixture 没有分页，一份消息就够）。
+    */
+    const { messages: mockMessages } = await import('@/mock/api')
+    return {
+      status: 'ok',
+      conversation: toConversationDto(
+        found,
+        mockPublicId('usr', mockMe.id),
+        demoCounterpartLastReadAt(mockMessages(conversationId), found.counterpart.id),
+      ),
+    }
   }
+}
+
+/**
+ * 演示构建的「对方读位」（#359 四 审查回合）。
+ *
+ * fixture 里没有「对方读到哪」这个事实，原先一律给 `null` —— 于是演示构建里**每条**我发的
+ * 消息都是红「未读」，「已读」这一档在端上根本看不到，而端上门禁要求在微信开发者工具里
+ * 逐页演示这个标签。
+ *
+ * 这里取「**倒数第二条**自己发的消息」时刻：最后一条自己发的因此落在读位之后显示「未读」，
+ * 更早的都显示「已读」—— 一次演示两种状态都能看到。取的是 fixture 自己的时间（不掺
+ * `Date.now()`），所以同一份数据每次进来都一样。
+ */
+export function demoCounterpartLastReadAt(
+  items: readonly MockMessage[],
+  counterpartPublicId: string,
+): string | null {
+  const mine = items.filter(
+    (item) => item.senderId !== null && item.senderId !== counterpartPublicId,
+  )
+  const secondLast = mine.length >= 2 ? mine[mine.length - 2] : undefined
+  return secondLast?.createdAt ?? null
 }
 
 /** 一页历史消息的加载结果：`nextCursor === null` 表示已到最早一页 */

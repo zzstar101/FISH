@@ -23,6 +23,7 @@ import {
   mergeRefreshedMedia,
   mergeTimeline,
   messageActions,
+  messageReadLabel,
   type PendingMedia,
   type PendingMessage,
   parseTxEvent,
@@ -150,6 +151,39 @@ describe('dayLabelOf —— 日期分隔条', () => {
 
   test('解析不了 → 空串', () => {
     expect(dayLabelOf('not-a-date', NOW)).toBe('')
+  })
+})
+
+describe('messageReadLabel —— 我发出的消息按对方读位标已读 / 未读（#359 四）', () => {
+  const SENT = '2026-09-21T10:00:00.000Z'
+  const mine = (createdAt: string, counterpartLastReadAt: string | null) =>
+    messageReadLabel({ mine: true, createdAt, counterpartLastReadAt })
+
+  test('对方读位 >= 这条的发出时刻 → 已读（含恰好相等）', () => {
+    expect(mine(SENT, SENT)).toBe('已读')
+    expect(mine(SENT, '2026-09-21T10:00:01.000Z')).toBe('已读')
+  })
+
+  test('对方读位停在这条之前 → 未读', () => {
+    expect(mine(SENT, '2026-09-21T09:59:59.000Z')).toBe('未读')
+  })
+
+  test('对方从未读过（null）→ 未读', () => {
+    expect(mine(SENT, null)).toBe('未读')
+  })
+
+  test('对方发来的消息不标（我自己的读位不在契约里，Owner 拍板只标我发出的）', () => {
+    expect(
+      messageReadLabel({ mine: false, createdAt: SENT, counterpartLastReadAt: SENT }),
+    ).toBeNull()
+    expect(
+      messageReadLabel({ mine: false, createdAt: SENT, counterpartLastReadAt: null }),
+    ).toBeNull()
+  })
+
+  test('时间戳解析不了 → 未读：不把没把握的读回执说成已读', () => {
+    expect(mine('not-a-date', SENT)).toBe('未读')
+    expect(mine(SENT, 'not-a-date')).toBe('未读')
   })
 })
 

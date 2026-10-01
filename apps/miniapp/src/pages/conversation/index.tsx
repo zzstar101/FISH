@@ -47,6 +47,7 @@ import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
 import {
+  applyReadPoll,
   applyRecalled,
   beginSend,
   type ChatEntry,
@@ -73,6 +74,7 @@ import {
   mergeRefreshedMessages,
   mergeTimeline,
   messageActions,
+  messageReadLabel,
   type PendingMedia,
   type PendingMediaDraft,
   type PendingMessage,
@@ -104,8 +106,14 @@ import './index.scss'
  * 3. 发送是**真实落库**：本地乐观气泡在成功后被服务端返回的那条替换（按 id 去重，
  *    实时推送送来的同一条不会重复），失败留在原地给重试 —— 不再有「假装成功」的态；
  * 4. 删除契约里不存在的展示件：认证徽章（`conversationUserSchema` 无 `authStatus`）、
- *    每条消息的「已读」标记（实时契约没有已读回执，见 #149）、`tx.completed` 评价卡
- *    （交易域没有这个事件）。
+ *    `tx.completed` 评价卡（交易域没有这个事件）、以及媒体消息与上传/播放的本地模拟
+ *    （#67 的范围）。其中「每条消息的已读标记」当年是照 #149 未合入删掉的（理由已过期），
+ *    #359 四 用契约的 `counterpartLastReadAt` 把它接回来 —— 判据见 `./view` 的
+ *    `messageReadLabel`，只标我发出的气泡。读位由进页 / 从子页返回 / 点重试，以及本页的
+ *    **读位轮询**（`READ_POLL_MS`，只补这一个字段、不 bump epoch、不重发已读）刷新；
+ *    `conversation.read` 的实时接收仍要等小程序实时客户端合入（#213→#220 链）。
+ *    原先注释把「发送落定后的静默补刷」当常规刷新时机是错的：那条路径只在「发送未落定
+ *    就离开本页、再回来」时才发生（见 `./view` 的 `shouldFlushDeferredReload`）。
  * 5. **媒体（#359 3b）**：图片 / 拍照 / 语音走 `features/chat/media-api` 的真实链路
  *    （`presign → 直传 PUT → create`），与文本合成**一条**时间线。
  *
@@ -144,6 +152,14 @@ const WAVE_BARS = [14, 24, 36, 20, 40, 28, 16, 32, 22, 12, 26, 18].map((height, 
  * 抽成常量而不是每处 `new Set()`：语义是「没有需要特殊保留的 id」。
  */
 const EMPTY_IDS: ReadonlySet<string> = new Set()
+
+/**
+ * 读位补刷周期（#359 四 审查回合）。
+ *
+ * 取 20s：这是「对方读没读」这种状态的合理粒度（用户不会盯着一个标签等秒级精确），
+ * 又与 `GET /conversations/:id` 的既有刷新节奏同量级 —— 一次详情请求，成本可忽略。
+ */
+const READ_POLL_MS = 20_000
 
 export default function Conversation() {
   const authStatus = useAuthGuard()
@@ -484,6 +500,38 @@ export default function Conversation() {
     if (authStatus !== 'authed' || userId === null) return
     load()
   }, [authStatus, userId, load])
+
+  /**
+   * 读位补刷（#359 四 审查回合）。
+   *
+   * 为什么必须有：端上没有「实时」——小程序没有实时客户端，`conversation.read` 帧没人接，
+   * 而 `load()` 的触发点只有进页 / 从子页返回 / 点重试。用户盯着屏幕时读位永远不会更新，
+   * 红「未读」会一直红到离开再回来，看起来就是坏的。
+   *
+   * 只做一件事：拉一次详情、只把 `counterpartLastReadAt` 写回（`applyReadPoll` 还会挡住
+   * 乱序的更旧读位）。不 bump epoch（否则在途发送的响应会被判过期丢弃）、不重发已读上报
+   * （那是「用户真的看到了首屏」才该做的副作用）、不动消息流与游标。
+   *
+   * 页面不可见时不发请求（`visibleRef` 由 useDidShow / useDidHide 维护）。
+   *
+   * 落地时还要过**代次闸**（#359 四 审查回合二）：这条轮询同样可能在换账号 / 换会话 /
+   * 整页重拉的途中落地，而 `applyReadPoll` 取的是「更晚的那份」——上一代视角的读位一旦
+   * 写进去会被钉住，直到下一次整页重拉才自愈。判据与 `load` / `doSend` 同一道
+   * （`current !== epoch.current`）。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || !conversationId) return undefined
+    const timer = setInterval(() => {
+      if (!visibleRef.current) return
+      const current = epoch.current
+      void loadConversation(conversationId).then((detail) => {
+        if (!visibleRef.current || detail.status !== 'ok') return
+        if (current !== epoch.current) return
+        setConversation((prev) => (prev === null ? prev : applyReadPoll(prev, detail.conversation)))
+      })
+    }, READ_POLL_MS)
+    return () => clearInterval(timer)
+  }, [authStatus, userId, conversationId])
 
   /**
    * 从子页返回（商品详情 / 交易码页）时重拉：那边可能改了商品 / 交易状态，
@@ -1913,6 +1961,15 @@ export default function Conversation() {
                 if (message.type === 'LISTING') return renderListing(message)
 
                 const mine = message.senderId === me?.id
+                /**
+                 * 逐条读位（#359 四）：只对我发出的消息判，对方发来的为 null 不渲染。
+                 * 读位来自详情的 `counterpartLastReadAt`，所以它随 `load` 一起刷新。
+                 */
+                const readLabel = messageReadLabel({
+                  mine,
+                  createdAt: message.createdAt,
+                  counterpartLastReadAt: conversation.counterpartLastReadAt,
+                })
                 /** 撤回碑（#359 3c）：双方一致、刷新后一致 —— 正文已由服务端清空 */
                 const recalled = message.recalledAt !== null
                 return (
@@ -1948,7 +2005,14 @@ export default function Conversation() {
                           <Text className="conv__bubble-tx">{message.content}</Text>
                         </View>
                       )}
-                      <Text className="conv__time num">{clockTime(message.createdAt)}</Text>
+                      <Text className="conv__time num">
+                        {clockTime(message.createdAt)}
+                        {readLabel ? (
+                          <Text className={`conv__rd${readLabel === '未读' ? ' is-unread' : ''}`}>
+                            {` · ${readLabel}`}
+                          </Text>
+                        ) : null}
+                      </Text>
                     </View>
                   </View>
                 )
