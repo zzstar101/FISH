@@ -11,6 +11,7 @@ const newUser: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 const originalWindow = globalThis.window

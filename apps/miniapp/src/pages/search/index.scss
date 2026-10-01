@@ -97,6 +97,35 @@
   }
 }
 
+/*
+ * 识图按钮（#324）：与首页搜索框左侧那枚相机图标同一个能力，这里收在输入框右端、
+ * 「搜索」钮之前 —— 用户已经在搜索场景里，更可能想换一种输入方式（拍 / 选图）。
+ * 命中区 56px（28pt）：胶囊高 64px，纵向正好吃满；图标 32px。
+ */
+.search__vision {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+
+  &:active {
+    background: var(--accent-weak);
+  }
+
+  /* 上传在途：压暗给反馈（真正的防连点由页面的 `visionBusy` 判据负责） */
+  &.is-busy {
+    opacity: 0.5;
+  }
+}
+
+.search__vision-ic {
+  width: 32px;
+  height: 32px;
+}
+
 /* ---- 建议面板 ---- */
 .search__panel {
   padding: 12px 40px 16px;

@@ -40,6 +40,12 @@ env:
   # #322 M1：embedding transport 无默认值，缺配置 worker 启动即失败。CI 不出网、不持有上游密钥，
   # 一律 stub（进程内确定性向量）；live 分支只由单测以假 fetch 覆盖。
   EMBEDDING_TRANSPORT: stub
+  # #324：#324 的视觉向量化 transport 同样无默认值，缺配置 API/worker 启动即失败。
+  # CI 不出网、不持有上游密钥，一律 stub；live（百炼多模态）只由单测以假 fetch 覆盖——
+  # 真实出域的 smoke 由开发者在**本机**用 DASHSCOPE_API_KEY 跑，不放 CI。
+  VISUAL_EMBEDDING_TRANSPORT: stub
+  # #324 M5：CI 不做 OCR/VLM 解析（=不设置即 off），保持"不出网"这条线不被新功能绕过。
+  # VISUAL_PARSE_TRANSPORT 保持未设置。
 
 jobs:
   # 唯一总是运行的作业之一：算出「这次改了什么」。

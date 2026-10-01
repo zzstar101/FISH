@@ -1,0 +1,17 @@
+{
+  "name": "@fish/visual-embedding",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fish/contracts": "workspace:*",
+    "@fish/db": "workspace:*",
+    "@fish/shared": "workspace:*"
+  }
+}

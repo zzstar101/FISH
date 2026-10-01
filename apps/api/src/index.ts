@@ -4,6 +4,8 @@ import {
   loadMailTransportEnv,
   loadMeetupTokenEnv,
   loadServerEnv,
+  loadVisualEmbeddingEnv,
+  loadVisualParseEnv,
   loadWechatEnv,
 } from '@fish/shared/env'
 import { createApp } from './app'
@@ -23,6 +25,12 @@ const wechatEnv = loadWechatEnv()
 // 内容安全审核配置（#228）：transport 无默认值，生产禁 local；缺腾讯配置启动即失败。
 // #286 起该配置被真正消费：图片 confirm 会用它构造 provider 做内容审核并固化 final 对象。
 const moderationEnv = loadContentModerationEnv()
+// 拍照识图搜索的视觉向量化（#324 M3）：transport 无默认值（stub/live），生产禁 stub；
+// live 时 baseUrl / apiKey / model 缺一即启动失败。stub 只给本机与测试用。
+const visualEmbeddingEnv = loadVisualEmbeddingEnv()
+// OCR/VLM 语义解析（#324 M5）：未设置即 `off`——只做图片向量召回，不产生第二次上游调用，
+// 也就不会把查询图再发一次。开启（live）后文本路才参与召回。
+const visualParseEnv = loadVisualParseEnv()
 
 // 假数据可见性第三件（设计 §8.2）：stub 时在启动日志里明确警告，避免部署方以为在跑真模型。
 if (aiEnv.transport === 'stub') {
@@ -56,6 +64,8 @@ const app = createApp(
     trustedProxyIp: proxyIp,
   },
   moderationEnv,
+  visualEmbeddingEnv,
+  visualParseEnv,
 )
 
 server = Bun.serve({

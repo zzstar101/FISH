@@ -10,10 +10,11 @@ import { useOrderList } from '@/features/transaction/useOrderList'
 /**
  * 我买到的（订单页拆成的两页之一，另一页是 `pages/orders-sell`）。
  *
- * 拆分原因与形态（Owner 定版）：顶部改用**微信原生导航栏**（`index.config.ts` 的
- * `navigationStyle: 'default'`），标题就是「我买到的」；页内只保留 4 个状态 tab
- * （全部 / 待面交 / 已完成 / 已取消）+ 下面原有的区块标题行、排序开关、订单卡与到底提示。
- * 两个视角是两个页面，入口在「我的」页。
+ * 形态（Owner 定版）：两个视角是两个页面，入口在「我的」页；标题就是视角本身。
+ * 顶部区域统一进自绘顶栏（#386 第一批）：`components/order-list` 渲染与「我的发布」
+ * 同款的玻璃顶栏（返回 + 居中双色标题「我买到的」），4 个状态 tab 在顶栏副行；
+ * 页内保留区块标题行、排序开关、订单卡与到底提示。原先的微信原生导航栏已撤
+ * （`index.config.ts` 不再覆盖 `navigationStyle`）。
  *
  * 页面只负责 Taro 的**页面级 hook**（登录守卫、加载触发、下拉刷新、页面滚动）与数据；
  * 筛选、排序与全部渲染在共用的 `components/order-list` 里。
@@ -75,6 +76,8 @@ export default function OrdersBuy() {
 
   return (
     <OrderList
+      title="我"
+      titleEm="买到的"
       items={items}
       loading={loading}
       failed={failed}
