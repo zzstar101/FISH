@@ -4,6 +4,7 @@ import type { Db } from '@fish/db/client'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { and, desc, eq, inArray, lt, or, type SQL, sql } from 'drizzle-orm'
+import type { ListingCardSeller } from '../listings/card'
 
 /**
  * 公开用户读模型的持久化（Issue #122）。
@@ -23,12 +24,14 @@ import { and, desc, eq, inArray, lt, or, type SQL, sql } from 'drizzle-orm'
  * feed / 详情一致。
  */
 
-/** 公开用户行：**只有**这五列，其余列连查都不查。 */
+/** 公开用户行：**只有**这几列，其余列连查都不查。 */
 export interface PublicUserRow {
   id: string
   nickname: string
   avatarUrl: string | null
   authStatus: PublicUserProfile['authStatus']
+  /** 个性签名（#179）：用户自填的自我介绍，`null` = 未填写或已清空。 */
+  signature: string | null
   /** 加入时间（服务端据此算 `joinedDays`，不把时间戳本身发给客户端）。 */
   createdAt: Date
 }
@@ -56,6 +59,8 @@ export interface PublicListingRow {
   /** 微秒精度的 `created_at` 文本，仅用于构造游标（JS `Date` 只有毫秒，翻页会漏行）。 */
   createdAtCursor: string
   coverObjectKey: string | null
+  /** 卖家公开投影源列（#191）：inner join users 同源带出（在售列表的卖家即本主页用户）。 */
+  seller: ListingCardSeller
 }
 
 /** 游标在 store 层是**已解码**结构；合法性由 service 校验后才走到这里。 */
@@ -107,6 +112,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
           nickname: users.nickname,
           avatarUrl: users.avatarUrl,
           authStatus: users.authStatus,
+          signature: users.signature,
           createdAt: users.createdAt,
         })
         .from(users)
@@ -145,6 +151,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
       ]
       if (cursor) conditions.push(cursorCondition(cursor))
 
+      // innerJoin users（#191）：卡片要带卖家公开子集；`seller_id` 外键保证行存在，PK join 1:1。
       const rows = await db
         .select({
           id: listings.id,
@@ -159,8 +166,15 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
           free: listings.free,
           createdAt: listings.createdAt,
           createdAtCursor: sql<string>`to_char(${listings.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+          seller: {
+            id: users.id,
+            nickname: users.nickname,
+            avatarUrl: users.avatarUrl,
+            authStatus: users.authStatus,
+          },
         })
         .from(listings)
+        .innerJoin(users, eq(users.id, listings.sellerId))
         .where(and(...conditions))
         .orderBy(desc(listings.createdAt), desc(listings.id))
         // 多取一行用于判断"还有没有下一页"，返回前丢掉（与 listings feed 同款）。

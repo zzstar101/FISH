@@ -33,6 +33,9 @@ import { createConversationService } from './modules/conversations/service'
 import { createSqlConversationStore } from './modules/conversations/store'
 import { createChatWatchersRouter } from './modules/conversations/watchers-router'
 import { createChatWatchersService } from './modules/conversations/watchers-service'
+import { createFollowsRouter } from './modules/follows/router'
+import { createFollowService } from './modules/follows/service'
+import { createSqlFollowStore } from './modules/follows/store'
 import { createRestrictionGuard } from './modules/governance/guard'
 import { createGovernanceService } from './modules/governance/service'
 import { createSqlGovernanceStore } from './modules/governance/store'
@@ -210,6 +213,12 @@ export function createApp(
     store: createSqlListingStore(db),
     storage,
     mediaObjects,
+    // #228：Listing 文本审核走同一份 moderation env（`CONTENT_MODERATION_TRANSPORT=local|tencent`，
+    // production 缺腾讯配置时由 env 层 fail-fast）。`loadImage` 不会被调用——图片审核在 uploads 的
+    // confirm 里（#286），listings 只用 `moderateText`。
+    moderationProvider: createContentModerationProvider(moderationEnv, {
+      loadImage: () => Promise.reject(new Error('listings 不使用图片审核')),
+    }),
   })
   app.route(
     '/listings',
@@ -289,6 +298,20 @@ export function createApp(
     '/',
     createUsersRouter({
       service: createPublicUserService({ store: createSqlPublicUserStore(db), storage }),
+    }),
+  )
+
+  // 关注关系（#188）：`GET /me/following` 与 `GET|POST|DELETE /users/:userId/follow`。
+  // 本域**没有匿名路径**（关注关系是「我」与某个人的有向边），所以两条路径整挂 requireAuth；
+  // router 内部还兜一层失败关闭（拿不到可信 userId → 401）。只读写 `follows` / `users` 表，
+  // 不调用其他 Domain API（与 profile / users 同一取舍）。
+  app.use('/me/following', auth.requireAuth)
+  app.use('/users/:userId/follow', auth.requireAuth)
+  app.route(
+    '/',
+    createFollowsRouter({
+      service: createFollowService({ store: createSqlFollowStore(db) }),
+      getUserId: (c) => c.get('userId'),
     }),
   )
 

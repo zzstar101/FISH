@@ -15,6 +15,7 @@ const oldUser: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 test('重验身份期间已缓存的旧账号详情不能继续渲染', async () => {

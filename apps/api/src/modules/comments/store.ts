@@ -121,6 +121,16 @@ const myCommentColumns = {
   negotiable: listings.negotiable,
   free: listings.free,
   createdAt: listings.createdAt,
+  // 卖家公开子集（#191 的 `ListingCardSource.seller`，本 PR 补齐）：与 feed / 详情 / 收藏
+  // 同一 inner join 同源投影 —— 「我发过的留言」里每张卡片也要能直接渲染卖家（昵称 / 头像 /
+  // 认证态），不逐卡补查。`listings.seller_id` 外键保证行存在，PK join 是 1:1，
+  // 不影响分页、游标与排序。
+  seller: {
+    id: users.id,
+    nickname: users.nickname,
+    avatarUrl: users.avatarUrl,
+    authStatus: users.authStatus,
+  },
   coverObjectKey: sql<
     string | null
   >`(SELECT li.object_key FROM listing_images li WHERE li.listing_id = ${listings.id} AND li.sort_order = 0 LIMIT 1)`,
@@ -204,6 +214,7 @@ export function createSqlCommentStore(db: Db): CommentStore {
         .select(myCommentColumns)
         .from(comments)
         .innerJoin(listings, eq(listings.id, comments.listingId))
+        .innerJoin(users, eq(users.id, listings.sellerId))
         .where(and(...conditions))
         .orderBy(desc(comments.createdAt), desc(comments.id))
         .limit(limit)

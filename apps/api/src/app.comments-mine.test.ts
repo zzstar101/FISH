@@ -130,6 +130,18 @@ describe('app 级接线：本人留言读 + 删除', () => {
     // 内嵌商品卡片（公开投影：审核态不透出），端上不必逐条回查详情
     expect(item?.listing.id).toBe(listingPublicId)
     expect(item?.listing.moderationStatus).toBeNull()
+    // 卖家公开子集（#191）：卡片必须带 seller，端上才能直接渲染卖家而不再回查。
+    // 只允许四个公开字段 —— 多一个就是学号 / 密码哈希 / 邮箱从卡片往外漏。
+    const cardSeller = item?.listing.seller
+    expect(cardSeller?.id.startsWith('usr_')).toBe(true)
+    expect(cardSeller?.nickname).toBe('留言验收卖家')
+    expect(cardSeller?.avatarUrl).toBeNull()
+    expect(Object.keys(cardSeller ?? {}).sort()).toEqual([
+      'authStatus',
+      'avatarUrl',
+      'id',
+      'nickname',
+    ])
     expect(item?.comment.listingId).toBe(listingPublicId)
     expect(item?.comment.parentId).toBeNull()
 
