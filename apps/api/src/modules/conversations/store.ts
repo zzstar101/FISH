@@ -107,12 +107,16 @@ function asDate(value: unknown): Date | string | null {
  * `[图片]`/`[语音]`——契约 `conversationLastMessageSchema` 明确 MEDIA 的 content
  * 就是可读文案。`message_media` 缺失（不该发生的脏数据）时退回 `[媒体]`。
  *
+ * LISTING（#359）同理但要**先判 type**：它的 `content` 是商品公开 id（`lst_…`），
+ * 原样下发会在列表行里显示一串 id —— 契约明确该类型的 content 是可读文案 `[商品]`。
+ *
  * 撤回（#359 3c）**优先于**上面所有分支：`recalled_at` 只标记不删正文（审计），
  * 照常读 `content` 会让撤回的话原样留在列表行上 —— 撤回就没意义了。文案与
  * `apps/api/src/modules/messages/reply.ts` 的 `[消息已撤回]` 同口径。
  */
 function lastMessageContent(row: Record<string, unknown>): string {
   if (row.last_message_recalled_at) return '[消息已撤回]'
+  if (row.last_message_type === 'LISTING') return '[商品]'
   const mediaKind = row.last_message_media_kind as string | null
   if (!mediaKind) return row.last_message_content as string
   if (mediaKind === 'IMAGE') return '[图片]'

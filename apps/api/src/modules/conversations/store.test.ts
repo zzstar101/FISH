@@ -186,6 +186,35 @@ describe('conversations store (integration)', () => {
     expect((await store.findDetail(conversationId, seller))?.unreadCount).toBe(2)
   })
 
+  test('LISTING 消息（#359）摘要翻成 `[商品]` 且计入未读', async () => {
+    const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
+    if (!conversationId) throw new Error('unreachable')
+    const beforeBuyer = await store.findDetail(conversationId, buyer)
+    const beforeSeller = await store.findDetail(conversationId, seller)
+    if (!beforeBuyer || !beforeSeller) throw new Error('unreachable')
+
+    // content 落的是商品公开 id（引用不是可读文本）——列表行必须由服务端翻成 `[商品]`，
+    // 否则会话页会显示一串 `lst_…`。未读谓词不看 type，所以它天然计入未读。
+    await db.execute(sql`
+      INSERT INTO messages (id, conversation_id, sender_id, type, content, created_at) VALUES
+        (${crypto.randomUUID()}, ${conversationId}, ${seller}, 'LISTING', 'lst_01jc000000e00800000000000t',
+         now() + interval '1 second')
+    `)
+
+    const buyerView = await store.findDetail(conversationId, buyer)
+    expect(buyerView?.lastMessage).toMatchObject({
+      type: 'LISTING',
+      content: '[商品]',
+      senderId: seller,
+    })
+    expect(buyerView?.unreadCount).toBe(beforeBuyer.unreadCount + 1)
+
+    const sellerView = await store.findDetail(conversationId, seller)
+    expect(sellerView?.lastMessage).toMatchObject({ type: 'LISTING', content: '[商品]' })
+    // 自己发的商品卡对**对方**计未读：卖家视角这条不算，但摘要同样要能出。
+    expect(sellerView?.unreadCount).toBe(beforeSeller.unreadCount)
+  })
+
   test('markRead returns null for a non-participant', async () => {
     const conversationId = await store.findIdByListingAndBuyer(listingA, buyer)
     if (!conversationId) throw new Error('unreachable')

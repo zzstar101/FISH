@@ -1,22 +1,32 @@
 import { describe, expect, test } from 'bun:test'
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
   applyRecalled,
   beginSend,
   canRecallMessage,
   canRetry,
+  canRetryMedia,
   clearDeferredReload,
   deferReload,
+  hasEarlierPage,
   initialDeferredReload,
+  isCurrentPlayRequest,
   isFlushDue,
+  isStaleMediaIdentity,
+  isStaleMediaTask,
   keepRecalledTombstones,
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
+  mergePushedMedia,
+  mergeRefreshedMedia,
+  mergeTimeline,
   messageActions,
+  type PendingMedia,
   type PendingMessage,
   parseTxEvent,
+  planMediaLoad,
   REPLY_DROPPED_TIP,
   recallFailureText,
   resetDeferredReload,
@@ -25,6 +35,7 @@ import {
   shouldFlushDeferredReload,
   shouldReloadOnShow,
   sortMessages,
+  startMediaRetry,
   systemPillText,
 } from '../src/pages/conversation/view'
 
@@ -316,6 +327,359 @@ describe('shouldFlushDeferredReload —— 到点之后「真的能发」才补�
     expect(shouldFlushDeferredReload({ ...base, authed: false })).toBe(false)
     expect(shouldFlushDeferredReload({ ...base, hasUserId: false })).toBe(false)
     expect(shouldFlushDeferredReload({ ...base, visible: false })).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ 媒体（#359 3b） */
+
+/** 一条文本消息的最小合法形状（本文件的用例只关心 id / createdAt 与渲染判定） */
+const text = (id: string, createdAt: string): MessageDto => ({
+  id,
+  conversationId: 'c-1',
+  senderId: 'u-1',
+  sender: { id: 'u-1', nickname: '我', avatarUrl: null },
+  type: 'TEXT',
+  content: id,
+  createdAt,
+})
+
+/** 一张图片媒体（`MediaMessageDto` 是独立 DTO，不与 `MessageDto` 共用形状） */
+const picture = (id: string, createdAt: string): MediaMessageDto => ({
+  id,
+  conversationId: 'c-1',
+  senderId: 'u-1',
+  kind: 'IMAGE',
+  mediaId: `media-${id}`,
+  url: `/api/conversations/c-1/media/media-${id}`,
+  mimeType: 'image/jpeg',
+  sizeBytes: 1024,
+  width: 800,
+  height: 600,
+  durationMs: null,
+  createdAt,
+})
+
+describe('mergeTimeline —— 文本与媒体合成一条升序时间线', () => {
+  test('两条流交错时按时间排回去，而不是「先文本后媒体」', () => {
+    const entries = mergeTimeline(
+      [text('t1', '2026-09-21T10:00:00.000Z'), text('t3', '2026-09-21T10:00:02.000Z')],
+      [picture('m2', '2026-09-21T10:00:01.000Z')],
+    )
+    expect(entries.map((entry) => entry.keyId)).toEqual(['t1', 'm2', 't3'])
+    expect(entries.map((entry) => entry.kind)).toEqual(['message', 'media', 'message'])
+  })
+
+  test('同一毫秒用 id 定序（与 sortMessages 同一口径，不引入新的不稳定来源）', () => {
+    const entries = mergeTimeline(
+      [text('b', '2026-09-21T10:00:00.000Z')],
+      [picture('a', '2026-09-21T10:00:00.000Z')],
+    )
+    expect(entries.map((entry) => entry.keyId)).toEqual(['a', 'b'])
+  })
+
+  test('另一条流为空时也保留这一条（不会因为「没有文本」就丢掉媒体）', () => {
+    expect(mergeTimeline([], [picture('m1', '2026-09-21T10:00:00.000Z')])).toHaveLength(1)
+    expect(mergeTimeline([text('t1', '2026-09-21T10:00:00.000Z')], [])).toHaveLength(1)
+  })
+
+  test('不改动入参数组', () => {
+    const messages = [
+      text('t2', '2026-09-21T10:00:02.000Z'),
+      text('t1', '2026-09-21T10:00:00.000Z'),
+    ]
+    mergeTimeline(messages, [])
+    expect(messages.map((item) => item.id)).toEqual(['t2', 't1'])
+  })
+})
+
+describe('mergePushedMedia —— 实时推送的媒体并入媒体流（#67 第四步）', () => {
+  test('推送乱序到达时按 (createdAt, id) 排回去', () => {
+    const merged = mergePushedMedia(
+      [picture('m3', '2026-09-21T10:00:02.000Z')],
+      picture('m1', '2026-09-21T10:00:00.000Z'),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1', 'm3'])
+  })
+
+  test('重复推送同一条（推送不保证不重）不产生第二条，且返回原数组本身', () => {
+    const previous = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    expect(mergePushedMedia(previous, picture('m1', '2026-09-21T10:00:00.000Z'))).toBe(previous)
+  })
+
+  test('同一毫秒用 id 定序', () => {
+    const merged = mergePushedMedia(
+      [picture('b', '2026-09-21T10:00:00.000Z')],
+      picture('a', '2026-09-21T10:00:00.000Z'),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('mergeRefreshedMedia —— 后台刷新落地时不抹掉刷新期间发出的媒体', () => {
+  test('baseIds 之外、incoming 里也没有的本地新增被保留（与 mergeRefreshedMessages 对称）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('m1', '2026-09-21T10:00:00.000Z'), picture('m2', '2026-09-21T10:00:05.000Z')],
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      new Set(['m1']),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1', 'm2'])
+  })
+
+  test('incoming 已经有的 id 不重复（服务端回包与本地乐观条目会撞上）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      new Set(),
+    )
+    expect(merged.map((item) => item.id)).toEqual(['m1'])
+  })
+
+  test('baseIds 之内的旧条目以服务端快照为准（本地那份不再保留）', () => {
+    const merged = mergeRefreshedMedia(
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+      [],
+      new Set(['m1']),
+    )
+    expect(merged).toEqual([])
+  })
+})
+
+describe('canRetryMedia —— 上传失败才可重试', () => {
+  const pendingImage = (status: 'uploading' | 'failed'): PendingMedia => ({
+    kind: 'IMAGE',
+    clientRequestId: 'req-1',
+    path: 'wxfile://tmp/photo.jpg',
+    image: { mime: 'image/jpeg', width: 800, height: 600, sizeBytes: 1024 },
+    id: 'local-1',
+    uploaded: null,
+    status,
+  })
+
+  test('failed 可以重试；uploading 不能（否则同一条媒体会被投两次）', () => {
+    expect(canRetryMedia(pendingImage('failed'))).toBe(true)
+    expect(canRetryMedia(pendingImage('uploading'))).toBe(false)
+  })
+})
+
+describe('hasEarlierPage —— 文本游标到底不再挡住媒体历史（#67 N3）', () => {
+  test('两条流都到底才没有更早的了', () => {
+    expect(hasEarlierPage(null, null)).toBe(false)
+  })
+
+  test('文本还有更早的一页：要翻', () => {
+    expect(hasEarlierPage('c-text', null)).toBe(true)
+  })
+
+  test('文本到底、媒体还有历史：仍然要翻（修复前按钮会消失）', () => {
+    expect(hasEarlierPage(null, 'c-media')).toBe(true)
+  })
+
+  test('两条都还有：照常翻', () => {
+    expect(hasEarlierPage('c-text', 'c-media')).toBe(true)
+  })
+})
+
+describe('startMediaRetry —— 重试期间切回上传中（#67 N4）', () => {
+  const uploadedImage = {
+    kind: 'IMAGE' as const,
+    objectKey: 'chat-media/c/u/p.png',
+    contentType: 'image/png',
+    sizeBytes: 1024,
+    width: 800,
+    height: 600,
+  }
+  const pendingImage = (status: 'uploading' | 'failed'): PendingMedia => ({
+    kind: 'IMAGE',
+    clientRequestId: 'req-1',
+    path: 'wxfile://tmp/photo.jpg',
+    image: { mime: 'image/jpeg', width: 800, height: 600, sizeBytes: 1024 },
+    id: 'local-1',
+    uploaded: uploadedImage,
+    status,
+  })
+
+  test('失败态重试后不再是失败态，重试按钮随之消失', () => {
+    const retried = startMediaRetry(pendingImage('failed'))
+    expect(retried.status).toBe('uploading')
+    expect(canRetryMedia(retried)).toBe(false)
+    // 只改状态：重试只重发 create，`uploaded` 必须原样带着（否则指纹变化 → 409）
+    expect(retried.uploaded).toEqual(uploadedImage)
+  })
+})
+
+describe('isStaleMediaTask —— 媒体发送任务绑定发起时的会话（#67 N2）', () => {
+  const binding = { epoch: 3, cookie: 'fish_session=aaa' }
+
+  test('代次与 cookie 都没变：还是这份任务的', () => {
+    expect(isStaleMediaTask(binding, { epoch: 3, cookie: 'fish_session=aaa' })).toBe(false)
+  })
+
+  test('整页重拉 / 身份清场推进了代次：判旧', () => {
+    expect(isStaleMediaTask(binding, { epoch: 4, cookie: 'fish_session=aaa' })).toBe(true)
+  })
+
+  test('只换了账号、代次没动（直接换 storage 会话）：也必须判旧', () => {
+    expect(isStaleMediaTask(binding, { epoch: 3, cookie: 'fish_session=bbb' })).toBe(true)
+  })
+
+  test('退出登录（cookie 变空）：判旧', () => {
+    expect(isStaleMediaTask(binding, { epoch: 3, cookie: '' })).toBe(true)
+  })
+})
+
+describe('isStaleMediaIdentity —— 选图 / 录音 / 点开媒体的身份判据（#364 审查）', () => {
+  const identity = { cookie: 'fish_session=aaa', userId: 'user-a' }
+
+  test('身份没变就不判旧：整页重拉推进的只是 epoch，不是换人', () => {
+    // 修复前这几处用的是 `isStaleMediaTask(task, { epoch, cookie })`：用户选图 / 录音
+    // 期间任何一次 `load()`（切后台回来、发送落定后的补刷新）都会把 epoch 推走，
+    // 于是「选了图 / 录了音，什么都没发生」——素材被静默丢掉。
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: 'user-a' })).toBe(
+      false,
+    )
+  })
+
+  test('与新判据的差别就是修复点：同一个身份下 epoch 被推进，旧的 isStaleMediaTask 会判旧', () => {
+    // 左边这条正是修复前的行为（发送链仍在用 `isStaleMediaTask`，那里 epoch 有意义）；
+    // 选图 / 录音 / 点开媒体换成右边这条判据后，整页重拉不再丢掉用户已经拿到的东西。
+    expect(
+      isStaleMediaTask(
+        { epoch: 3, cookie: 'fish_session=aaa' },
+        {
+          epoch: 4,
+          cookie: 'fish_session=aaa',
+        },
+      ),
+    ).toBe(true)
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: 'user-a' })).toBe(
+      false,
+    )
+  })
+
+  test('换了账号（userId 变了）：判旧', () => {
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: 'user-b' })).toBe(
+      true,
+    )
+  })
+
+  test('直接换 storage 会话（userId 没变、cookie 变了）：也要判旧', () => {
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=bbb', userId: 'user-a' })).toBe(
+      true,
+    )
+  })
+
+  test('退出登录（userId 变 null / cookie 变空）：判旧', () => {
+    expect(isStaleMediaIdentity(identity, { cookie: 'fish_session=aaa', userId: null })).toBe(true)
+    expect(isStaleMediaIdentity(identity, { cookie: '', userId: 'user-a' })).toBe(true)
+    // 反向同理：未登录时起的任务遇上登录，也不是同一个身份
+    expect(
+      isStaleMediaIdentity(
+        { cookie: 'fish_session=aaa', userId: null },
+        { cookie: 'fish_session=aaa', userId: 'user-a' },
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('planMediaLoad —— 缓存命中要回填本页路径（#67 复查 #222）', () => {
+  test('第一次进会话：模块缓存还空 → 去下载', () => {
+    expect(planMediaLoad({ cached: null, downloading: false })).toEqual({ kind: 'download' })
+  })
+
+  test('第一次成功显示 → 退出 → 重新进入：命中缓存必须 reuse 并把路径带回来', () => {
+    // 第一次进：走下载，成功后写进模块缓存 + 本页 localPaths
+    expect(planMediaLoad({ cached: null, downloading: false })).toEqual({ kind: 'download' })
+    // 退出会话：页面级 localPaths 随组件一起被重建为空，模块级缓存还在。
+    // 修复前这里直接 `continue`，渲染只读 localPaths → 图片退化成占位块，
+    // 而且缓存命中把下载也挡住了，永远不会自愈。
+    expect(planMediaLoad({ cached: 'wxfile://tmp/a.png', downloading: false })).toEqual({
+      kind: 'reuse',
+      path: 'wxfile://tmp/a.png',
+    })
+  })
+
+  test('同一条媒体正在下载：跳过，不并发重复下载', () => {
+    expect(planMediaLoad({ cached: null, downloading: true })).toEqual({ kind: 'skip' })
+  })
+
+  test('缓存命中优先于「下载中」：已经有路径就不必等那次下载', () => {
+    expect(planMediaLoad({ cached: 'wxfile://tmp/a.png', downloading: true })).toEqual({
+      kind: 'reuse',
+      path: 'wxfile://tmp/a.png',
+    })
+  })
+})
+
+describe('isCurrentPlayRequest —— 迟到的语音下载不许落地（#67 复查 #222）', () => {
+  const task = { cookie: 'fish_session=aaa', userId: 'user-a' }
+  const request = { token: 7, task }
+
+  test('当前有效：还活着、还是同一次点击、还是同一个身份（整页重拉不算换人）', () => {
+    // #364 审查：`epoch` 会被任何一次整页重拉推进（切后台回来、发送落定后的补刷新），
+    // 但它**不代表换人** —— 用户点开一段语音、下载还没回来时正好赶上一次重拉，旧实现
+    // 把 epoch 也当身份，于是既不预览也不提示（点了没反应）。判据里没有 epoch 这一项。
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        cookie: 'fish_session=aaa',
+        userId: 'user-a',
+        alive: true,
+      }),
+    ).toBe(true)
+  })
+
+  test('点播放 → 下载挂起 → 换了账号：下载回来不许出声、不许回填缓存', () => {
+    // 直接换 storage 会话（userId 没动）也要拦住：缓存里是上一个身份的私有媒体临时文件
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        cookie: 'fish_session=bbb',
+        userId: 'user-a',
+        alive: true,
+      }),
+    ).toBe(false)
+    // 退出登录（cookie 与 userId 一起没了）
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        cookie: '',
+        userId: null,
+        alive: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('点播放 → 下载挂起 → 离开会话页：下载回来不许出声', () => {
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 7,
+        cookie: 'fish_session=aaa',
+        userId: 'user-a',
+        alive: false,
+      }),
+    ).toBe(false)
+  })
+
+  test('下载期间用户又点了别的语音：旧的那次不再抢当前播放', () => {
+    expect(
+      isCurrentPlayRequest(request, {
+        token: 8,
+        cookie: 'fish_session=aaa',
+        userId: 'user-a',
+        alive: true,
+      }),
+    ).toBe(false)
+  })
+
+  test('只看 playingId 不够：令牌不同就必须判旧（迟到的回调读到的是别人的答案）', () => {
+    // 这条断言的含义是：即使身份没变（cookie / userId 都一样），
+    // 只要播放请求序号被后来的点击推进过，旧回调就不能落地。
+    expect(
+      isCurrentPlayRequest(
+        { token: 1, task },
+        { token: 2, cookie: task.cookie, userId: task.userId, alive: true },
+      ),
+    ).toBe(false)
   })
 })
 

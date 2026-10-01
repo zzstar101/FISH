@@ -12,6 +12,7 @@ const oldUser: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 describe('profile query cache scope', () => {

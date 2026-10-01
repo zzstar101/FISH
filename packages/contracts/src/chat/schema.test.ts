@@ -20,8 +20,10 @@ import {
   conversationLastMessageSchema,
   conversationListQuerySchema,
   imageMediaMessageInputSchema,
+  listingMessageSendInputSchema,
   messageDtoSchema,
   messageListQuerySchema,
+  messageSendBodySchema,
   messageSendInputSchema,
   messageTypeSchema,
   realtimeClientEventSchema,
@@ -71,8 +73,23 @@ describe('messageSendInputSchema', () => {
     expect(messageSendInputSchema.safeParse({ content: 'a'.repeat(2001) }).success).toBe(false)
   })
 
-  test('rejects extra fields (strict)', () => {
-    expect(messageSendInputSchema.safeParse({ content: 'hi', type: 'TEXT' }).success).toBe(false)
+  test('rejects unknown extra fields (strict)', () => {
+    expect(
+      messageSendInputSchema.safeParse({ content: 'hi', listingId: ids.listing }).success,
+    ).toBe(false)
+    expect(messageSendInputSchema.safeParse({ content: 'hi', body: 'x' }).success).toBe(false)
+  })
+
+  // #359：TEXT 体可以显式带判别值（与 LISTING 体同风格），旧的无判别值形态继续可用。
+  test('accepts an explicit type=TEXT discriminator', () => {
+    expect(messageSendInputSchema.parse({ type: 'TEXT', content: 'hi' })).toEqual({
+      type: 'TEXT',
+      content: 'hi',
+    })
+  })
+
+  test('rejects type=LISTING on the TEXT body', () => {
+    expect(messageSendInputSchema.safeParse({ type: 'LISTING', content: 'hi' }).success).toBe(false)
   })
 
   test('accepts an optional uuid clientRequestId and omits it when absent', () => {
@@ -88,6 +105,54 @@ describe('messageSendInputSchema', () => {
     expect(
       messageSendInputSchema.safeParse({ content: 'hi', clientRequestId: 'req-1' }).success,
     ).toBe(false)
+  })
+})
+
+describe('listingMessageSendInputSchema / messageSendBodySchema（#359 商品卡）', () => {
+  test('accepts a listingId and an optional uuid clientRequestId', () => {
+    const clientRequestId = '0d7c1f28-2b0f-4a4e-9d1a-3f5b6c7d8e9f'
+    expect(
+      listingMessageSendInputSchema.parse({ type: 'LISTING', listingId: ids.listing }),
+    ).toEqual({
+      type: 'LISTING',
+      listingId: ids.listing,
+    })
+    expect(
+      messageSendBodySchema.parse({
+        type: 'LISTING',
+        listingId: ids.listing,
+        clientRequestId,
+      }),
+    ).toEqual({ type: 'LISTING', listingId: ids.listing, clientRequestId })
+  })
+
+  test('rejects a LISTING body without listingId, a bad listingId, or extra fields', () => {
+    expect(messageSendBodySchema.safeParse({ type: 'LISTING' }).success).toBe(false)
+    expect(
+      messageSendBodySchema.safeParse({ type: 'LISTING', listingId: 'not-a-public-id' }).success,
+    ).toBe(false)
+    expect(
+      messageSendBodySchema.safeParse({ type: 'LISTING', listingId: ids.listing, content: 'x' })
+        .success,
+    ).toBe(false)
+    expect(
+      messageSendBodySchema.safeParse({ type: 'LISTING', listingId: ids.conversation }).success,
+    ).toBe(false)
+  })
+
+  test('TEXT 与 LISTING 两种体都能过同一个联合（含旧的无判别值形态）', () => {
+    expect(messageSendBodySchema.parse({ content: 'hi' })).toEqual({ content: 'hi' })
+    expect(messageSendBodySchema.parse({ type: 'TEXT', content: 'hi' })).toEqual({
+      type: 'TEXT',
+      content: 'hi',
+    })
+    expect(messageSendBodySchema.parse({ type: 'LISTING', listingId: ids.listing })).toEqual({
+      type: 'LISTING',
+      listingId: ids.listing,
+    })
+    // 两者都不满足时（如空的枚举判别值）不被任一成员接受。
+    expect(messageSendBodySchema.safeParse({ type: 'LISTING' }).success).toBe(false)
+    expect(messageSendBodySchema.safeParse({}).success).toBe(false)
   })
 })
 
@@ -189,6 +254,52 @@ describe('messageDtoSchema', () => {
     const dto = { ...base, senderId: null, sender: null, type: 'SYSTEM' }
     expect(messageDtoSchema.parse(dto).senderId).toBeNull()
   })
+
+  test('parses a LISTING message carrying the enriched listing projection（#359）', () => {
+    const dto = {
+      ...base,
+      senderId: ids.user,
+      sender: { id: ids.user, nickname: 'A', avatarUrl: null },
+      type: 'LISTING',
+      content: ids.listing,
+      listing: {
+        id: ids.listing,
+        title: 'K380 键盘',
+        priceCents: 16000,
+        status: 'ACTIVE',
+        coverUrl: null,
+      },
+    }
+    const parsed = messageDtoSchema.parse(dto)
+    expect(parsed.type).toBe('LISTING')
+    expect(parsed.content).toBe(ids.listing)
+    expect(parsed.listing?.title).toBe('K380 键盘')
+  })
+
+  test('listing 可缺省（老客户端 fixture）且可为 null；未知状态仍被拒', () => {
+    const text = {
+      ...base,
+      senderId: ids.user,
+      sender: { id: ids.user, nickname: 'A', avatarUrl: null },
+      type: 'TEXT' as const,
+    }
+    // 缺省即 undefined（`.optional()`），与 null 同义：TEXT / SYSTEM 不携带商品投射。
+    expect(messageDtoSchema.parse(text).listing).toBeUndefined()
+    expect(messageDtoSchema.parse({ ...text, listing: null }).listing).toBeNull()
+    expect(
+      messageDtoSchema.safeParse({
+        ...text,
+        type: 'LISTING',
+        listing: {
+          id: ids.listing,
+          title: 'x',
+          priceCents: 1,
+          status: 'DELETED',
+          coverUrl: null,
+        },
+      }).success,
+    ).toBe(false)
+  })
 })
 
 describe('conversationDtoSchema', () => {
@@ -239,6 +350,19 @@ describe('conversationDtoSchema', () => {
     expect(parsed.content).toBe('[图片]')
     // 媒体正文依然不进消息流：MessageDto 只认 TEXT/SYSTEM
     expect(messageTypeSchema.safeParse('MEDIA').success).toBe(false)
+  })
+
+  test('lastMessage 允许 LISTING：content 是服务端翻好的 `[商品]`（#359）', () => {
+    const parsed = conversationLastMessageSchema.parse({
+      type: 'LISTING',
+      content: '[商品]',
+      senderId: ids.user,
+      createdAt: '2026-09-12T10:00:00.000Z',
+    })
+    expect(parsed.type).toBe('LISTING')
+    expect(parsed.content).toBe('[商品]')
+    // 商品卡的正文（公开 id）不进 messages 流以外的地方，也不该成为摘要文案。
+    expect(messageTypeSchema.parse('LISTING')).toBe('LISTING')
   })
 
   test('parses a conversation with no messages yet (lastMessage null)', () => {

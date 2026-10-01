@@ -1,4 +1,4 @@
-import { messageListQuerySchema, messageSendInputSchema } from '@fish/contracts/chat/schema'
+import { messageListQuerySchema, messageSendBodySchema } from '@fish/contracts/chat/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import { ConversationIdSchema, MessageIdSchema } from '@fish/contracts/system/public-id'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -74,7 +74,8 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
   app.post('/:id/messages', requireAuth, guard.write, async (c) => {
     const id = parseConversationId(c.req.param('id') ?? '')
     if (!id) return conversationNotFound(c)
-    const parsed = messageSendInputSchema.safeParse(await c.req.json().catch(() => null))
+    // 请求体是 TEXT / LISTING 的联合（#359）；两者都是 strictObject 且字段不重叠，无歧义。
+    const parsed = messageSendBodySchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) {
       return c.json(
         errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
@@ -82,7 +83,12 @@ export function createMessagesRouter({ service, requireAuth, guard }: MessagesRo
       )
     }
     try {
-      return c.json(await service.sendTextMessage(c.get('userId'), id, parsed.data), 201)
+      return c.json(
+        parsed.data.type === 'LISTING'
+          ? await service.sendListingMessage(c.get('userId'), id, parsed.data)
+          : await service.sendTextMessage(c.get('userId'), id, parsed.data),
+        201,
+      )
     } catch (error) {
       return toErrorResponse(c, error)
     }

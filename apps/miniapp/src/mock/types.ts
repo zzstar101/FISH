@@ -97,6 +97,13 @@ export type MockListing = {
   spec: string
   sellerId: string
   /**
+   * 卖家公开资料（#191）：真实数据下来自契约卡片的 `seller`（公开四字段：
+   * id / nickname / avatarUrl / authStatus），mock fixture 用 `getUser(sellerId)` 的演示用户。
+   * `null` = 本卡片没有卖家信息（契约 seller 缺席，如老客户端 mock 记录），
+   * 页面据此整行不渲染 —— 不编造卖家（`features/listing/adapt.ts` 铁律 2）。
+   */
+  seller: MockUser | null
+  /**
    * mock 专属：浏览量 / 想要数 —— **契约没有这两个计数**（不在 `ListingCardSchema` 里），
    * 所以真实接口给不出来，只能是 `null`。
    *
@@ -429,8 +436,18 @@ export type { NotificationDto }
 export type MockNotification = NotificationDto & {
   title: string
   description: string
-  /** 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读） */
-  target: { kind: 'listing'; listingId: string } | { kind: 'wish'; wishId: string } | null
+  /**
+   * 跳转目标；`null` = 这条通知没有可跳的地方（只标记已读）。
+   * `conversation` = 会话详情（TX 进展都在会话里）、`mylist` = 我的发布（审核结果）、
+   * `verify` = 校园认证页（认证结果）。
+   */
+  target:
+    | { kind: 'listing'; listingId: string }
+    | { kind: 'wish'; wishId: string }
+    | { kind: 'conversation'; conversationId: string }
+    | { kind: 'mylist' }
+    | { kind: 'verify' }
+    | null
   /** 视觉语气：命中成功 / 需要留意 */
   tone: 'mint' | 'warn'
 }

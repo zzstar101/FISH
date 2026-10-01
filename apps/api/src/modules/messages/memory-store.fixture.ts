@@ -1,5 +1,11 @@
 import { MessageIdempotencyConflictError, type MessageSendKey } from './idempotency'
-import type { ConversationParticipant, MessageRow, MessageStore, ReplyTargetRow } from './store'
+import type {
+  ConversationParticipant,
+  ListingBrief,
+  MessageRow,
+  MessageStore,
+  ReplyTargetRow,
+} from './store'
 
 /**
  * `MessageStore` 的内存替身（测试专用）。
@@ -27,6 +33,8 @@ export class MemoryMessageStore implements MessageStore {
     ],
   ])
   messages: MessageRow[] = []
+  /** LISTING 消息富化用的商品读数（#359）；测试按需预置，缺省为空 = 商品不存在。 */
+  listings = new Map<string, ListingBrief>()
   private seq = 0
 
   /** #67 幂等键 → 已落库消息与指纹（与 SQL 的部分唯一索引同语义）。 */
@@ -66,6 +74,43 @@ export class MemoryMessageStore implements MessageStore {
     key?: MessageSendKey | null,
     replyToId?: string | null,
   ) {
+    return this.insert(conversationId, senderId, 'TEXT', content, key, replyToId)
+  }
+
+  async insertListing(
+    conversationId: string,
+    senderId: string,
+    listingPublicId: string,
+    key?: MessageSendKey | null,
+  ) {
+    return this.insert(conversationId, senderId, 'LISTING', listingPublicId, key)
+  }
+
+  async findMessageByRequestKey(conversationId: string, senderId: string, key: MessageSendKey) {
+    const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
+    return existing
+      ? { row: existing.row, hashMatches: existing.requestHash === key.requestHash }
+      : null
+  }
+
+  async findListingBriefs(ids: string[]) {
+    const briefs = new Map<string, ListingBrief>()
+    for (const id of ids) {
+      const brief = this.listings.get(id)
+      if (brief) briefs.set(id, brief)
+    }
+    return briefs
+  }
+
+  /** TEXT / LISTING 共用的插入路径，与 SQL store 的 `insertUserMessage` 同语义。 */
+  private insert(
+    conversationId: string,
+    senderId: string,
+    type: 'TEXT' | 'LISTING',
+    content: string,
+    key?: MessageSendKey | null,
+    replyToId?: string | null,
+  ) {
     if (key) {
       const existing = this.requestKeys.get(requestKeyOf(senderId, conversationId, key))
       if (existing) {
@@ -78,7 +123,7 @@ export class MemoryMessageStore implements MessageStore {
       id: `01930000-0000-7000-8000-${String(++this.seq).padStart(12, '0')}`,
       conversation_id: conversationId,
       sender_id: senderId,
-      type: 'TEXT',
+      type,
       content,
       reply_to_id: replyToId ?? null,
       recalled_at: null,

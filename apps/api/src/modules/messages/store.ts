@@ -102,10 +102,52 @@ export interface MessageStore {
     windowMs: number,
   ): Promise<MessageRow | 'not-found' | 'forbidden' | 'window-exceeded'>
   /**
+   * 插入 LISTING 消息（#359 商品卡）并 bump 会话的 `last_message_at`：与 `insertText`
+   * 同一事务结构、同一幂等语义（同键同指纹 → 重放，同键不同指纹 → 冲突）。
+   *
+   * `content` 存商品的**公开 id**：它是引用不是用户正文，因此不参与 SYSTEM 的内容投射。
+   */
+  insertListing(
+    conversationId: string,
+    senderId: string,
+    listingPublicId: string,
+    key?: MessageSendKey | null,
+  ): Promise<MessageRow>
+  /**
+   * 按内部 uuid 批量取 LISTING 消息富化用的商品最小投射（#359）；缺失的 id 不出现在返回
+   * Map 里（调用方按「商品已被删除」处理）。一次查询覆盖整页，避免按条 N+1。
+   */
+  findListingBriefs(ids: string[]): Promise<Map<string, ListingBrief>>
+  /**
+   * 幂等键的**只读**查询（#359）：发送前先看这个键是否已经落过消息，好在校验商品可见性
+   * **之前**给出「重放 / 409」的结论 —— 否则「同一个键换了商品」会被 404 抢先，
+   * 「商品已下架后的重试」也会错误地报 404 而不是重放既有消息。
+   *
+   * 真正的并发安全仍由 `insertText` / `insertListing` 在事务内的 advisory lock + 查重兜住；
+   * 这里只是决定错误顺序，不承担去重职责。
+   */
+  findMessageByRequestKey(
+    conversationId: string,
+    senderId: string,
+    key: MessageSendKey,
+  ): Promise<{ row: MessageRow; hashMatches: boolean } | null>
+  /**
    * 服务端写入 SYSTEM 消息（#11 的交易提案/接受/拒绝）：无发送者，事务内 bump
    * last_message_at。不对客户端暴露——只有同属服务端的 domain 模块调用。
    */
   insertSystem(conversationId: string, content: string): Promise<MessageRow>
+}
+
+/** LISTING 消息卡片投射所需的最小行（#359）；两个状态列的取值域由契约收窄。 */
+export interface ListingBrief {
+  id: string
+  title: string
+  priceCents: number
+  status: string
+  /** 公开可见性的第二道闸（与 feed / 公开在售列表同口径，见 users/store.ts 的在售统计）。 */
+  moderationStatus: string | null
+  /** 封面 objectKey；无图商品为 null（URL 由 service 经注入的 MediaStorage 拼）。 */
+  coverObjectKey: string | null
 }
 
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -138,12 +180,12 @@ function toRow(row: Record<string, unknown>): MessageRow {
  * 指纹在 SQL 里比较而不是取回 JS，省一次往返也少一个时序窗口。
  */
 async function findByRequestKey(
-  tx: MessageTx,
+  executor: Pick<Db, 'execute'>,
   conversationId: string,
   senderId: string,
   key: MessageSendKey,
 ): Promise<{ row: Record<string, unknown>; hashMatches: boolean } | null> {
-  const result = await tx.execute(sql`
+  const result = await executor.execute(sql`
     SELECT m.id, m.conversation_id, m.sender_id, m.type::text, m.content, m.created_at,
            m.reply_to_id, m.recalled_at,
            u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url,
@@ -222,40 +264,42 @@ export function createSqlMessageStore(db: Db): MessageStore {
      * 读到第一个已提交的行并直接返回，不会撞唯一索引变成 500。
      */
     async insertText(conversationId, senderId, content, key, replyToId) {
-      return db.transaction(async (tx) => {
-        if (key) {
-          await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
-          const existing = await findByRequestKey(tx, conversationId, senderId, key)
-          if (existing) {
-            if (existing.hashMatches) return toRow(existing.row)
-            throw new MessageIdempotencyConflictError(key.clientRequestId)
-          }
-        }
-        const result = await tx.execute(sql`
-          WITH msg AS (
-            INSERT INTO messages
-              (id, conversation_id, sender_id, type, content, client_request_id,
-               client_request_hash, reply_to_id)
-            VALUES (
-              ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, 'TEXT', ${content},
-              ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null},
-              ${replyToId ?? null}::uuid
-            )
-            RETURNING id, conversation_id, sender_id, type::text, content, created_at,
-                      reply_to_id, recalled_at
-          ), bump AS (
-            UPDATE conversations c SET
-              last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),
-              updated_at = now()
-            FROM msg WHERE c.id = msg.conversation_id
-          )
-          SELECT msg.*, u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
-          FROM msg LEFT JOIN users u ON u.id = msg.sender_id
-        `)
-        const row = rowsOf(result)[0]
-        if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
-        return toRow(row)
-      })
+      return insertUserMessage(db, conversationId, senderId, 'TEXT', content, key, replyToId)
+    },
+
+    async insertListing(conversationId, senderId, listingPublicId, key) {
+      return insertUserMessage(db, conversationId, senderId, 'LISTING', listingPublicId, key)
+    },
+
+    async findListingBriefs(ids) {
+      const briefs = new Map<string, ListingBrief>()
+      if (ids.length === 0) return briefs
+      const result = await db.execute(sql`
+        SELECT l.id, l.title, l.price_cents, l.status::text, l.moderation_status::text,
+               li.object_key AS cover_object_key
+        FROM listings l
+        LEFT JOIN listing_images li ON li.listing_id = l.id AND li.sort_order = 0
+        WHERE l.id IN (${sql.join(
+          ids.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )})
+      `)
+      for (const row of rowsOf(result)) {
+        briefs.set(row.id as string, {
+          id: row.id as string,
+          title: row.title as string,
+          priceCents: Number(row.price_cents),
+          status: row.status as string,
+          moderationStatus: (row.moderation_status as string | null) ?? null,
+          coverObjectKey: (row.cover_object_key as string | null) ?? null,
+        })
+      }
+      return briefs
+    },
+
+    async findMessageByRequestKey(conversationId, senderId, key) {
+      const found = await findByRequestKey(db, conversationId, senderId, key)
+      return found ? { row: toRow(found.row), hashMatches: found.hashMatches } : null
     },
 
     async findByRequestKey(conversationId, senderId, key) {
@@ -345,6 +389,58 @@ export function createSqlMessageStore(db: Db): MessageStore {
       return db.transaction((tx) => insertSystemWithin(tx, conversationId, content))
     },
   }
+}
+
+/**
+ * 用户发出的消息（TEXT / LISTING，#359）共用的插入路径。
+ *
+ * 两者的事务结构、幂等语义（advisory lock → 查重 → 插入）、`last_message_at` bump 完全一致，
+ * 只有 `type` 与 content 的语义不同（用户正文 vs 商品引用）。抽出来是为了让 #359 不必复制
+ * 一份带幂等的 SQL —— 复制品一旦漂移，两条通道的「重试 / 幂等键复用」行为就会分叉。
+ */
+async function insertUserMessage(
+  db: Db,
+  conversationId: string,
+  senderId: string,
+  type: 'TEXT' | 'LISTING',
+  content: string,
+  key?: MessageSendKey | null,
+  replyToId?: string | null,
+): Promise<MessageRow> {
+  return db.transaction(async (tx) => {
+    if (key) {
+      await tx.execute(sendKeyLockQuery(conversationId, senderId, key.clientRequestId))
+      const existing = await findByRequestKey(tx, conversationId, senderId, key)
+      if (existing) {
+        if (existing.hashMatches) return toRow(existing.row)
+        throw new MessageIdempotencyConflictError(key.clientRequestId)
+      }
+    }
+    const result = await tx.execute(sql`
+      WITH msg AS (
+        INSERT INTO messages
+          (id, conversation_id, sender_id, type, content, client_request_id,
+           client_request_hash, reply_to_id)
+        VALUES (
+          ${newId()}, ${conversationId}::uuid, ${senderId}::uuid, ${type}, ${content},
+          ${key?.clientRequestId ?? null}, ${key?.requestHash ?? null},
+          ${replyToId ?? null}::uuid
+        )
+        RETURNING id, conversation_id, sender_id, type::text, content, created_at,
+                  reply_to_id, recalled_at
+      ), bump AS (
+        UPDATE conversations c SET
+          last_message_at = GREATEST(c.last_message_at, (SELECT created_at FROM msg)),
+          updated_at = now()
+        FROM msg WHERE c.id = msg.conversation_id
+      )
+      SELECT msg.*, u.nickname AS sender_nickname, u.avatar_url AS sender_avatar_url
+      FROM msg LEFT JOIN users u ON u.id = msg.sender_id
+    `)
+    const row = rowsOf(result)[0]
+    if (!row) throw new Error('消息插入失败：会话可能已被并发删除')
+    return toRow(row)
+  })
 }
 
 /**

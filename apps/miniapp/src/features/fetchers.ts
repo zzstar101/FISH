@@ -507,6 +507,66 @@ export async function loadMessagePage(
   }
 }
 
+/* ------------------------------------------------ 发送商品选择页（#359） */
+
+/** 发送商品选择页某一侧（我的 / TA 的）在售商品的加载结果 */
+export type LoadedListingCandidates = {
+  items: MockListing[]
+  failed: boolean
+  /** 服务端还有下一页：本页不做无限滚动，只用来如实提示「只展示了前 N 件」 */
+  hasMore: boolean
+}
+
+async function loadListingCandidates(
+  userId: string,
+  demoFallback: () => Promise<MockListing[]>,
+): Promise<LoadedListingCandidates> {
+  try {
+    const page = await fetchPublicUserListings(userId)
+    // 404（用户不存在）按失败处理：会话对方的用户必然存在，走到这里只可能是环境/网络问题。
+    if (page === null) return { items: [], failed: true, hasMore: false }
+    return { items: toMockListings(page.items), failed: false, hasMore: page.nextCursor !== null }
+  } catch (error) {
+    reportFailure('发送商品选择页', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)
+    if (!MOCK_FALLBACK_ENABLED || !DEMO_AUTH_ENABLED) {
+      return { items: [], failed: true, hasMore: false }
+    }
+    // 回退是整份 fixture，没有「下一页」这回事。
+    return { items: await demoFallback(), failed: false, hasMore: false }
+  }
+}
+
+/**
+ * 「TA的宝贝」tab：对方卖家的在售商品（与 他人主页/发送页 同一公开读端点）。
+ *
+ * 演示回退必须先把**公开 id 反查回 fixture 键**：会话里的 `counterpart.id` 是
+ * `mockPublicId('usr', …)` 生成的 `usr_…`，而 fixture 的 `sellerId` 是原始键（`u-…`），
+ * 直接按公开 id 过滤恒为空 —— 表现是「TA 暂无在售商品」的假空态，而初始 tab 恰好是这一侧
+ * （买家进页面默认看对方）。`mock/users.ts` 的 `getUser` 是同一套反查。
+ */
+export function loadCounterpartListings(userId: string): Promise<LoadedListingCandidates> {
+  return loadListingCandidates(userId, async () => {
+    const { userListings } = await import('@/mock/api')
+    const { USERS } = await import('@/mock/users')
+    const { mockPublicId } = await import('@/mock/public-id')
+    const raw = USERS.find((user) => mockPublicId('usr', user.id) === userId)
+    // 与真实端点同口径：只给在售。
+    return raw ? userListings(raw.id).filter((item) => item.status === 'ACTIVE') : []
+  })
+}
+
+/**
+ * 「我的宝贝」tab：我在售的商品。
+ * 演示身份（`DEMO_USER`）与 fixture 的「我」不同 ID，回退不能按 id 查——直接取
+ * fixture 里「我」的在售列表（与会话详情回退把 viewer 投影成当前身份的同一取舍）。
+ */
+export function loadMyListings(meId: string): Promise<LoadedListingCandidates> {
+  return loadListingCandidates(meId, async () => {
+    const { myListings } = await import('@/mock/api')
+    return myListings().filter((item) => item.status === 'ACTIVE')
+  })
+}
+
 /** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
 type ViewerLike = { id: Me['id']; nickname: string; avatarUrl: string | null }
 
@@ -568,6 +628,8 @@ function toMessageDto(
     content: item.recalled ? '' : item.content,
     // fixture 没有「撤回时刻」这个概念，用占位时间戳表达「已撤回」这一个事实
     recalledAt: item.recalled ? item.createdAt : null,
+    // 演示 fixture 不做商品卡投射（富化只在服务端），与契约的可选字段一致
+    listing: null,
     replyTo,
     createdAt: item.createdAt,
   }
@@ -672,11 +734,12 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       wishes: profile.wishes.map(toMockWish),
       pendingMeetup: profile.transactions.filter((tx) => tx.status === 'PENDING_MEETUP').length,
       orderCount: profile.transactions.length,
-      // 收藏 / 足迹 / 关注没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
+      // 关注（#188）有端点：`stats.followingCount` 与「我的关注」列表同源（同一张表同一方向）。
+      followCount: profile.stats.followingCount,
+      // 收藏 / 足迹仍没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
       // 「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
       favoritesCount: null,
       historyCount: null,
-      followCount: null,
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
@@ -698,10 +761,11 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * 演示构建的个人中心 fixture：与 `mock/account.ts` 的演示账号同一套数据
  * （我的发布 / 愿望 / 买卖直接取该账号的既有 fixture），
  * 保证「我的」页的角标数字与 mylist / orders 页看到的计数一致。
- * 收藏 / 足迹 / 关注没有 fixture 来源，按稿给演示数字（8 / 24 / 5）。
+ * 收藏 / 足迹没有 fixture 来源，按稿给演示数字（8 / 24）；关注沿用设计稿的 5 人，
+ * 与 `features/following/demo.ts` 的演示名单条数对齐（数字栏 5、点进去 5 人）。
  *
  * ⚠️ 只走**失败回退**这条路：`TARO_APP_MOCK=1` 但本机真起了后端时，走的是成功路径，
- * 这三格是 `null` → 页面显示 `—`（演示数字不覆盖真实结果）。
+ * 收藏 / 足迹是 `null` → 页面显示 `—`，关注是服务端真值（演示数字不覆盖真实结果）。
  */
 function demoProfile(): ProfileView {
   const wishes = myWishes()
@@ -711,6 +775,8 @@ function demoProfile(): ProfileView {
       activeListings: myListingCounts().sale,
       activeWishes: wishes.length,
       completedTransactions: TRANSACTIONS.filter((tx) => tx.status === 'COMPLETED').length,
+      // 与 `features/following/demo.ts` 的演示名单条数一致（方案 §2.3：数字栏与列表不能自相矛盾）
+      followingCount: 5,
     },
     listings: MY_LISTINGS.map((item) => item.listing),
     wishes,

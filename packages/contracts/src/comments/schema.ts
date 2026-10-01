@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { ListingCardSchema } from '../listings/schema'
 import {
   ListingIdSchema,
   CommentIdSchema as PublicCommentIdSchema,
@@ -156,3 +157,94 @@ export const CommentErrorCodeSchema = z.enum([
 ])
 
 export type CommentErrorCode = z.infer<typeof CommentErrorCodeSchema>
+
+// ---------------------------------------------------------------------------
+// 「我发过的留言」（#195）
+// ---------------------------------------------------------------------------
+
+/**
+ * 「我发过的留言」里的一条。**刻意不复用 `CommentDtoSchema`**：
+ *
+ * - `author` 恒为本人（响应只可能是自己的留言），带上它等于让每次响应重复同一份数据；
+ * - `replies` 是商品详情页的读模型（顶层留言各带其回复）。这里是**扁平的本人时间线**，
+ *   一条回复就是一行，逐行拼 `replies` 只会制造 N+1；
+ * - `isSeller` 是「留言区里的卖家标签」，本人时间线上没有这个语义。
+ *
+ * `parentId` 非空表示这是一条回复。**不承诺父留言还在**：父留言被作者删除时回复会被级联删掉
+ * （见 `routes.ts` 的 `comment` 注释），但列表里仍可能读到「父行已被别的路径清理」的历史行，
+ * 因此端上只把它当标记用，不要据此再发一次请求去取父留言。
+ */
+export const MyCommentSchema = z.object({
+  id: PublicCommentIdSchema,
+  listingId: ListingIdSchema,
+  parentId: PublicCommentIdSchema.nullable(),
+  content: CommentContentSchema,
+  createdAt: z.iso.datetime(),
+})
+
+export type MyComment = z.infer<typeof MyCommentSchema>
+
+/**
+ * 一行 = 留言 + 它所在的商品卡片（公开投影）。
+ *
+ * 卡片由服务端一次 join 出来（复用 `listings/card.ts` 的共享投影），端上不必逐条回查详情 ——
+ * 也不能靠遍历自己的商品再查留言来拼，那会漏掉「在别人商品下的留言」。
+ * `moderationStatus` / `governanceDelisted` 恒为 `null`：这是买家视角的公开信息。
+ */
+export const MyCommentItemSchema = z.object({
+  comment: MyCommentSchema,
+  listing: ListingCardSchema,
+})
+
+export type MyCommentItem = z.infer<typeof MyCommentItemSchema>
+
+/** 与商品留言列表同口径：`limit` 默认 20、上限 50；`cursor` 不透明，前端只原样回传。
+ *
+ * PR1 只接**商品留言**这一个来源。Owner 冻结的目标形状是「单端点 + `kind` 过滤」
+ * （`all | comment | review`）：`kind` 与 `all = 留言 ∪ 评价` 的跨表合并游标随 PR2 的评价
+ * 来源一起补，届时是**加一个可选参数 + 放宽 `items` 为判别联合**的向后兼容增量
+ * （当前无外部消费者）。所以本 PR 刻意**不预置** `kind=review`：返回空等于把「我们还没有
+ * 这条数据源」说成「你没有评价」。
+ */
+export const MyCommentsQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().min(1).optional(),
+})
+
+export type MyCommentsQuery = z.infer<typeof MyCommentsQuerySchema>
+
+/**
+ * 本人留言列表响应。
+ *
+ * `total` 是**全量**条数（服务端 COUNT，与列表同一张表、同一个作者条件）：
+ * 「我的评论页」的分段胶囊要显示条数，分页列表拿不出全量 —— 旁路再发一个 count 请求
+ * 只会让两个数字有机会不一致。
+ */
+export const MyCommentsResponseSchema = z.object({
+  items: z.array(MyCommentItemSchema),
+  nextCursor: z.string().nullable(),
+  total: z.number().int().nonnegative(),
+})
+
+export type MyCommentsResponse = z.infer<typeof MyCommentsResponseSchema>
+
+/**
+ * 删除留言的响应：`deleted` 是**本次实际删除的 DB 行数**，含被级联删掉的回复
+ * ——**不论那些回复是谁写的**。
+ *
+ * ⚠️ 端上**不得**用它调整「我发过的留言」的总数。`MyCommentsResponse.total` 只数**本人**
+ * 写的行，而别人的回复被级联删掉时 `deleted` 会大于本人减少的条数，拿它去减本人计数会漂移
+ * （我的顶层留言下有 2 条他人回复时：本人总数只该减 1，`deleted` 却是 3）。本人总数一律以
+ * **重新拉取的 `total`** 为准。
+ *
+ * 为什么仍然回一个数而不是 204：让「本次真的删掉了东西」有可核对的证据，而不是只能相信
+ * 这一次 200。重复删除返回 `{ deleted: 0 }`（幂等，不是错误）。
+ *
+ * `deleted` 是**尽力而为的近似值**：级联行数与删除是两次独立往返，两步之间并发新增/删除
+ * 回复会让它差 1。不为它引入事务 —— 它不参与任何鉴权，也不参与任何计数口径。
+ */
+export const CommentDeleteResponseSchema = z.object({
+  deleted: z.number().int().nonnegative(),
+})
+
+export type CommentDeleteResponse = z.infer<typeof CommentDeleteResponseSchema>
