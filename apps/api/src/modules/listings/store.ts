@@ -103,13 +103,7 @@ export type CreateListingRecord = {
   moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
   moderationReason?: string | null
   moderationRuleVersion?: string | null
-  moderation?: {
-    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
-    matchedRules: string[]
-    matchedTermsMasked: string[]
-    ruleVersion: string
-    priorListingStatus?: ListingStatus | null
-  }
+  moderation?: Omit<ModerationPlan, 'title' | 'description'>
 }
 
 export type UpdateListingFields = {
@@ -183,7 +177,20 @@ export type ListingUpdatePlan =
     }
   | { kind: 'blocked'; moderation: ModerationPlan }
 
-type ModerationPlan = {
+/**
+ * #228 §6：审核记录里的 provider 元数据。人工改判写 `MANUAL`；#228 之前的历史行为 NULL。
+ * 只供审计与人工复核，**不向普通用户暴露**（`ruleVersion` 复用为策略版本：本地规则版本 / 腾讯 BizType）。
+ */
+export type ModerationTrace = {
+  provider: string | null
+  providerRequestId: string | null
+  suggestion: string | null
+  label: string | null
+  subLabel: string | null
+  score: number | null
+}
+
+type ModerationPlan = ModerationTrace & {
   title: string
   description: string
   decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
@@ -206,6 +213,11 @@ export type ListingUpdateResult =
   | { kind: 'governance-blocked' }
   /** 内容被阻断：商品未改动，但审计记录已在**同一事务内**落库（见 `ListingUpdatePlan`）。 */
   | { kind: 'rejected' }
+  /**
+   * #228 CAS：锁内读到的行与 service 在事务外审核时依据的 `expected` 不一致（标题/描述/审核态/图片组
+   * 被并发改过）。旧审核结论一律作废，由 service 重新读、重新算、**重新审核**。
+   */
+  | { kind: 'conflict' }
 
 export interface ListingStore {
   /** 只认迁移时记录的本人旧 ID；旧对象键不得被其它用户冒用。 */
@@ -251,11 +263,27 @@ export interface ListingStore {
    * `write` 写商品（可带审核审计与图片替换），`blocked` 只写审计、不写商品。两种情形都在**同一个
    * 锁内事务**内落库 —— 这样 `titleSnapshot` 一定对应被拒的那一行，中途失败也不会只剩半条。
    * 抛异常则整个事务回滚。
+   *
+   * **#228 调用方约定**：`apply` 里不许发网络请求。文本审核必须在事务外做完再带进 `apply`；
+   * 本方法负责「比对 `expected` → 写库」这一小段，锁内不再等外部服务。
    */
   updateListingAtomic(input: {
     id: string
     sellerId: string
     objectKeys?: string[]
+    /**
+     * #228：service 在**事务外**审核时依据的那份内容。锁内重读后先比对，不一致直接返回
+     * `conflict`——事务外的 provider 结论只对这份内容有效，绝不能套到并发改过的新内容上。
+     *
+     * 省略 = 调用方声明「本次写入没有依赖事务外审核结论」（store 单测等）；**凡是带
+     * `moderation` 的生产写入，listings service 都必须传**，否则并发 PATCH 会用旧结论覆盖新内容。
+     */
+    expected?: {
+      title: string
+      description: string
+      moderationStatus: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+      objectKeys: readonly string[]
+    }
     apply: (
       input: {
         id: string
@@ -265,6 +293,21 @@ export interface ListingStore {
       current: ListingUpdateTarget,
     ) => ListingUpdatePlan | Promise<ListingUpdatePlan>
   }): Promise<ListingUpdateResult>
+
+  /**
+   * #228：**不加锁**读一份编辑快照（当前行 + 图片组 + 审核中商品的 pending 归属）。
+   * 事务外审核基于它；写回时把它当 `expected` 交给 `updateListingAtomic` 做 CAS 比对。
+   */
+  getUpdateSnapshot(input: {
+    id: string
+    sellerId: string
+  }): Promise<
+    | { kind: 'ok'; row: ListingUpdateTarget }
+    | { kind: 'not-found' }
+    | { kind: 'not-owner' }
+    | { kind: 'locked' }
+    | { kind: 'governance-blocked' }
+  >
 
   /**
    * 只从 `from` 迁到 `to`；返回是否真的改了行（并发下可能已被别人改走）。
@@ -300,18 +343,20 @@ export interface ListingStore {
     { kind: 'deleted' } | { kind: 'not-found' } | { kind: 'not-owner' } | { kind: 'not-deletable' }
   >
 
-  recordModeration?(input: {
-    listingId?: string
-    sellerId: string
-    action: 'CREATE' | 'UPDATE'
-    title: string
-    description: string
-    decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
-    matchedRules: string[]
-    matchedTermsMasked: string[]
-    ruleVersion: string
-    priorListingStatus?: ListingStatus | null
-  }): Promise<void>
+  recordModeration?(
+    input: {
+      listingId?: string
+      sellerId: string
+      action: 'CREATE' | 'UPDATE'
+      title: string
+      description: string
+      decision: 'ALLOW' | 'BLOCK' | 'REVIEW'
+      matchedRules: string[]
+      matchedTermsMasked: string[]
+      ruleVersion: string
+      priorListingStatus?: ListingStatus | null
+    } & ModerationTrace,
+  ): Promise<void>
 }
 
 /** 新商品默认落 `ACTIVE`。 */
@@ -340,6 +385,93 @@ const EDITABLE_COLUMNS = {
   moderationStatus: listings.moderationStatus,
   governanceDelistedAt: listings.governanceDelistedAt,
 } as const
+
+/** 审核记录里 provider 元数据列的公共部分（#228 §6）。 */
+function moderationTraceColumns(trace: ModerationTrace) {
+  return {
+    provider: trace.provider,
+    providerRequestId: trace.providerRequestId,
+    suggestion: trace.suggestion,
+    label: trace.label,
+    subLabel: trace.subLabel,
+    score: trace.score,
+  }
+}
+
+/** 图片键组的顺序敏感比较：CAS 的 `expected.objectKeys` 就是按 `sort_order` 读出来的。 */
+function sameObjectKeyList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((key, index) => key === b[index])
+}
+
+type UpdateReadExecutor = Pick<Db, 'select' | 'execute'>
+
+/**
+ * #228：读一份编辑快照（当前行 + 图片组 + 审核中商品的 pending 归属）。
+ *
+ * `lock: true` 时走 `SELECT ... FOR UPDATE`，用于**写回**那一刻的复核；`lock: false` 时是事务外的
+ * 只读快照，供 provider 审核使用。两条路径共用同一份读取逻辑，避免「审核依据」与「写回校验」
+ * 读出的字段集合出现漂移。
+ */
+async function readUpdateTarget(
+  exec: UpdateReadExecutor,
+  input: { id: string; sellerId: string },
+  options: { lock: boolean },
+): Promise<
+  | { kind: 'ok'; row: ListingUpdateTarget }
+  | { kind: 'not-found' }
+  | { kind: 'not-owner' }
+  | { kind: 'locked' }
+  | { kind: 'governance-blocked' }
+> {
+  const base = exec.select(EDITABLE_COLUMNS).from(listings).where(eq(listings.id, input.id))
+  const current = options.lock ? await base.for('update').limit(1) : await base.limit(1)
+
+  const row = current[0]
+  if (!row) return { kind: 'not-found' as const }
+  if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
+  if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
+  // 与管理员下架串行：写回前再查一次，卖家的 PATCH 不能清除治理标记。
+  if (row.governanceDelistedAt) return { kind: 'governance-blocked' as const }
+
+  const storedImages = await exec
+    .select({ objectKey: listingImages.objectKey })
+    .from(listingImages)
+    .where(eq(listingImages.listingId, input.id))
+    .orderBy(asc(listingImages.sortOrder))
+
+  let target: ListingUpdateTarget = {
+    ...row,
+    objectKeys: storedImages.map((image) => image.objectKey),
+  }
+  if (row.moderationStatus === 'REVIEW') {
+    const pendingRoot = await exec.execute(sql`
+      SELECT action, prior_listing_status::text AS prior_listing_status
+      FROM listing_moderation_records
+      WHERE listing_id = ${input.id}
+        AND decision = 'REVIEW'
+        AND created_at > COALESCE(
+          (
+            SELECT MAX(created_at)
+            FROM listing_moderation_records
+            WHERE listing_id = ${input.id}
+              AND action = 'MANUAL_DECISION'
+          ),
+          '-infinity'::timestamptz
+        )
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `)
+    const root = rowsOf(pendingRoot)[0]
+    target = {
+      ...target,
+      pendingReviewAction:
+        root?.action === 'CREATE' || root?.action === 'UPDATE' ? root.action : undefined,
+      pendingReviewPriorStatus: (root?.prior_listing_status as ListingStatus | null) ?? null,
+    }
+  }
+
+  return { kind: 'ok' as const, row: target }
+}
 
 export function createSqlListingStore(db: Db): ListingStore {
   return {
@@ -425,6 +557,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             matchedTermsMasked: jsonParam(record.moderation.matchedTermsMasked),
             ruleVersion: record.moderation.ruleVersion,
             priorListingStatus: record.moderation.priorListingStatus ?? null,
+            ...moderationTraceColumns(record.moderation),
           })
         }
 
@@ -577,60 +710,21 @@ export function createSqlListingStore(db: Db): ListingStore {
 
     async updateListingAtomic(input) {
       return db.transaction(async (tx) => {
-        // 先锁行再读："读当前行 → 合并 → 审核 → UPDATE" 必须落在同一快照上。
-        // 没有这个锁时，两个并发 PATCH 会各自读到旧行、各自算审核结论，后提交的那个把
-        // `moderation_status` 写回 APPROVED，留下"待审内容 + APPROVED"（评审 blocker 1）。
-        const current = await tx
-          .select(EDITABLE_COLUMNS)
-          .from(listings)
-          .where(eq(listings.id, input.id))
-          .for('update')
-          .limit(1)
+        // #228：锁内只做「复核 + 写库」。`apply` 里的审核结论是 service 在**事务外**算好的，
+        // 因此这里必须先确认锁内这一行仍然是当时被审的那一份内容（CAS），否则旧结论作废。
+        const read = await readUpdateTarget(tx, input, { lock: true })
+        if (read.kind !== 'ok') return read
+        const updateTarget = read.row
 
-        const row = current[0]
-        if (!row) return { kind: 'not-found' as const }
-        if (row.sellerId !== input.sellerId) return { kind: 'not-owner' as const }
-        if (LOCKED_LISTING_STATUSES.includes(row.status)) return { kind: 'locked' as const }
-        // 与管理员下架串行：锁内检查，卖家的 PATCH 不能清除治理标记。
-        if (row.governanceDelistedAt) return { kind: 'governance-blocked' as const }
-
-        // 图片组与商品行在**同一个锁内快照**里读：service 在事务外算出的图片结论只对"当时那几张图"
-        // 有效，锁内这次读取让 `apply` 能发现"图片已被并发替换"，从而不会拿旧结论写回状态。
-        const storedImages = await tx
-          .select({ objectKey: listingImages.objectKey })
-          .from(listingImages)
-          .where(eq(listingImages.listingId, input.id))
-          .orderBy(asc(listingImages.sortOrder))
-
-        let updateTarget: ListingUpdateTarget = {
-          ...row,
-          objectKeys: storedImages.map((image) => image.objectKey),
-        }
-        if (row.moderationStatus === 'REVIEW') {
-          const pendingRoot = await tx.execute(sql`
-            SELECT action, prior_listing_status::text AS prior_listing_status
-            FROM listing_moderation_records
-            WHERE listing_id = ${input.id}
-              AND decision = 'REVIEW'
-              AND created_at > COALESCE(
-                (
-                  SELECT MAX(created_at)
-                  FROM listing_moderation_records
-                  WHERE listing_id = ${input.id}
-                    AND action = 'MANUAL_DECISION'
-                ),
-                '-infinity'::timestamptz
-              )
-            ORDER BY created_at ASC, id ASC
-            LIMIT 1
-          `)
-          const root = rowsOf(pendingRoot)[0]
-          updateTarget = {
-            ...updateTarget,
-            pendingReviewAction:
-              root?.action === 'CREATE' || root?.action === 'UPDATE' ? root.action : undefined,
-            pendingReviewPriorStatus: (root?.prior_listing_status as ListingStatus | null) ?? null,
-          }
+        const expected = input.expected
+        if (
+          expected !== undefined &&
+          (updateTarget.title !== expected.title ||
+            updateTarget.description !== expected.description ||
+            updateTarget.moderationStatus !== expected.moderationStatus ||
+            !sameObjectKeyList(updateTarget.objectKeys, expected.objectKeys))
+        ) {
+          return { kind: 'conflict' as const }
         }
 
         const plan = await input.apply(input, updateTarget)
@@ -647,6 +741,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
             ruleVersion: plan.moderation.ruleVersion,
             priorListingStatus: plan.moderation.priorListingStatus ?? null,
+            ...moderationTraceColumns(plan.moderation),
           })
           return { kind: 'rejected' as const }
         }
@@ -683,6 +778,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             matchedTermsMasked: jsonParam(plan.moderation.matchedTermsMasked),
             ruleVersion: plan.moderation.ruleVersion,
             priorListingStatus: plan.moderation.priorListingStatus ?? null,
+            ...moderationTraceColumns(plan.moderation),
           })
         }
 
@@ -701,6 +797,10 @@ export function createSqlListingStore(db: Db): ListingStore {
       })
     },
 
+    async getUpdateSnapshot(input) {
+      return readUpdateTarget(db, input, { lock: false })
+    },
+
     async recordModeration(input) {
       await db.insert(listingModerationRecords).values({
         listingId: input.listingId,
@@ -714,6 +814,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         matchedTermsMasked: jsonParam(input.matchedTermsMasked),
         ruleVersion: input.ruleVersion,
         priorListingStatus: input.priorListingStatus ?? null,
+        ...moderationTraceColumns(input),
       })
     },
 
