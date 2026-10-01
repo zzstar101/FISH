@@ -5,7 +5,16 @@ import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronRight, Clock, Home, Images, MessageCircle, ShieldCheck } from 'lucide-react'
+import {
+  ChevronRight,
+  Clock,
+  Flag,
+  HandCoins,
+  Home,
+  Images,
+  MessageCircle,
+  ShieldCheck,
+} from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { PriceText } from '../../components/price-text'
 import { ApiError } from '../../lib/api-client'
@@ -16,6 +25,9 @@ import { useAuth } from '../auth/auth-provider'
 import { describeCreateConversationFailure } from '../chat/api'
 import { useCreateConversation } from '../chat/queries'
 import { useDetailTracking } from '../recommendation/use-detail-tracking'
+import { ReportEntry } from '../reports/report-entry'
+import { canReportUser } from '../reports/view'
+import { BuyDialog } from './buy-dialog'
 import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
 import { ListingNoLine } from './listing-no-line'
@@ -39,6 +51,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const createConversation = useCreateConversation()
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)
+  const [buyOpen, setBuyOpen] = useState(false)
   const viewerRef = useRef(viewerId)
   const resetViewerRef = useRef(viewerId)
   viewerRef.current = viewerId
@@ -48,6 +61,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     resetViewerRef.current = viewerId
     setChatError(null)
     setChatUnavailable(false)
+    setBuyOpen(false)
   }, [viewerId])
 
   function handleChat() {
@@ -177,10 +191,24 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               ) : null}
             </div>
 
-            <p className="mt-5 flex items-center gap-1.5 text-ink-3 text-xs">
-              <Clock className="size-3.5" />
-              {formatRelativeTimeAt(item.createdAt)}发布
-            </p>
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <p className="flex items-center gap-1.5 text-ink-3 text-xs">
+                <Clock className="size-3.5" />
+                {formatRelativeTimeAt(item.createdAt)}发布
+              </p>
+              {/* 自己的商品不给自己举报入口：没有治理意义，只会产生无用的举报单。 */}
+              {item.isOwner ? null : (
+                <ReportEntry
+                  className="text-ink-3"
+                  size="sm"
+                  target={{ type: 'LISTING', id: item.id, label: item.title }}
+                  variant="ghost"
+                >
+                  <Flag className="size-3.5" />
+                  举报商品
+                </ReportEntry>
+              )}
+            </div>
 
             {item.listingNo !== undefined ? (
               // 公开编号（#382）：给人看的引用，可复制后直接在搜索框精确命中；内部 ID 不外显。
@@ -190,13 +218,18 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
 
           <Card className="gap-0 border border-line p-6">
             <h2 className="font-semibold text-base">卖家</h2>
-            <div className="mt-4 flex items-center gap-3">
+            {/* 可点进他人主页：公开资料与 TA 的在售商品（匿名也能看）。 */}
+            <Link
+              className="mt-4 flex items-center gap-3 rounded-xl p-1.5 transition-colors hover:bg-surface-2"
+              params={{ userId: item.seller.id }}
+              to="/users/$userId"
+            >
               <UserAvatar
                 avatarUrl={item.seller.avatarUrl}
                 emoji={item.seller.nickname.slice(0, 1)}
                 size="lg"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{item.seller.nickname}</p>
                 <div className="mt-1.5">
                   {item.seller.authStatus === 'VERIFIED' ? (
@@ -209,7 +242,23 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   )}
                 </div>
               </div>
-            </div>
+              <ChevronRight className="size-4 shrink-0 text-ink-3" />
+            </Link>
+            {/* 不能举报自己（服务端对 `USER` 目标 = 本人直接 422 `REPORT_SELF_TARGET`），
+                所以卖家就是自己时不给这个入口。 */}
+            {canReportUser(viewerId, item.seller.id) ? (
+              <div className="mt-4 flex justify-end">
+                <ReportEntry
+                  className="text-ink-3"
+                  size="sm"
+                  target={{ type: 'USER', id: item.seller.id, label: item.seller.nickname }}
+                  variant="ghost"
+                >
+                  <Flag className="size-3.5" />
+                  举报该用户
+                </ReportEntry>
+              </div>
+            ) : null}
             {item.isOwner ? (
               <p className="mt-5 rounded-xl bg-brand-soft px-3 py-2.5 text-brand text-sm">
                 这是你发布的商品
@@ -240,15 +289,22 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   </Link>
                 </Button>
               ) : (
-                <Button
-                  className="mt-5 w-full"
-                  disabled={createConversation.isPending}
-                  onClick={handleChat}
-                  type="button"
-                >
-                  <MessageCircle className="size-4" />
-                  {createConversation.isPending ? '正在建立会话…' : '聊一聊'}
-                </Button>
+                <div className="mt-5 space-y-3">
+                  <Button className="w-full" onClick={() => setBuyOpen(true)} type="button">
+                    <HandCoins className="size-4" />
+                    我想要
+                  </Button>
+                  <Button
+                    className="w-full"
+                    disabled={createConversation.isPending}
+                    onClick={handleChat}
+                    type="button"
+                    variant="outline"
+                  >
+                    <MessageCircle className="size-4" />
+                    {createConversation.isPending ? '正在建立会话…' : '聊一聊'}
+                  </Button>
+                </div>
               )
             ) : null}
             {chatError !== null ? <p className="mt-3 text-danger text-xs">{chatError}</p> : null}
@@ -258,6 +314,19 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
           </Card>
         </aside>
       </div>
+
+      {me !== null ? (
+        <BuyDialog
+          free={item.free}
+          listingId={item.id}
+          onListingStale={() => void detail.refetch()}
+          onOpenChange={setBuyOpen}
+          open={buyOpen}
+          ownerId={me.id}
+          priceCents={item.priceCents}
+          title={item.title}
+        />
+      ) : null}
     </div>
   )
 }

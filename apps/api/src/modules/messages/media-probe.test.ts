@@ -857,3 +857,106 @@ describe('probeVoiceDuration', () => {
     expect(probeVoiceDuration(bytes(1, 2, 3), 'audio/mp4')).toBeNull()
   })
 })
+
+/** RIFF chunk：id(4) + size(4 LE) + data，奇数长度补 pad。 */
+function wavChunk(id: string, data: number[]): number[] {
+  const size = data.length
+  const head = [
+    ...id.split('').map((c) => c.charCodeAt(0)),
+    size & 0xff,
+    (size >>> 8) & 0xff,
+    (size >>> 16) & 0xff,
+    (size >>> 24) & 0xff,
+  ]
+  return size % 2 === 0 ? [...head, ...data] : [...head, ...data, 0]
+}
+
+function wavFile(chunks: number[][]): Uint8Array {
+  const body = chunks.flat()
+  const riffSize = 4 + body.length // 'WAVE' + chunks
+  return new Uint8Array([
+    0x52,
+    0x49,
+    0x46,
+    0x46, // RIFF
+    riffSize & 0xff,
+    (riffSize >>> 8) & 0xff,
+    (riffSize >>> 16) & 0xff,
+    (riffSize >>> 24) & 0xff,
+    0x57,
+    0x41,
+    0x56,
+    0x45, // WAVE
+    ...body,
+  ])
+}
+
+const fmtChunk = (byteRate: number, bitsPerSample = 16): number[] =>
+  wavChunk('fmt ', [
+    1,
+    0, // PCM
+    1,
+    0, // channels
+    8000 & 0xff,
+    (8000 >>> 8) & 0xff, // sampleRate
+    0,
+    0,
+    byteRate & 0xff,
+    (byteRate >>> 8) & 0xff,
+    (byteRate >>> 16) & 0xff,
+    (byteRate >>> 24) & 0xff,
+    2,
+    0, // blockAlign
+    bitsPerSample & 0xff,
+    (bitsPerSample >>> 8) & 0xff,
+  ])
+
+describe('probeVoiceDuration: WAV（#359 3b）', () => {
+  test('时长 = data.size / fmt.byteRate', () => {
+    // 16000 B/s × 3.5s = 56000 字节
+    const wav = wavFile([fmtChunk(16000), wavChunk('data', new Array(56000).fill(0))])
+    expect(probeVoiceDuration(wav, 'audio/wav')).toEqual({ durationMs: 3500 })
+  })
+
+  test('chunk 顺序不固定：data 在前也能解析（逐 chunk 走而不是写死偏移）', () => {
+    const wav = wavFile([wavChunk('data', new Array(8000).fill(0)), fmtChunk(8000)])
+    expect(probeVoiceDuration(wav, 'audio/wav')).toEqual({ durationMs: 1000 })
+  })
+
+  test('忽略未知 chunk（LIST/fact），奇数长度按 pad 对齐', () => {
+    const wav = wavFile([
+      wavChunk('LIST', [1, 2, 3]), // 奇数长度 → 有 pad
+      fmtChunk(8000),
+      wavChunk('fact', [0, 0, 0, 1]),
+      wavChunk('data', new Array(16000).fill(0)),
+    ])
+    expect(probeVoiceDuration(wav, 'audio/wav')).toEqual({ durationMs: 2000 })
+  })
+
+  test('结构非法一律 null：截断 / 重复 fmt / byteRate=0 / bitsPerSample=0', () => {
+    const good = wavFile([fmtChunk(8000), wavChunk('data', new Array(8000).fill(0))])
+    expect(probeVoiceDuration(good.slice(0, good.length - 10), 'audio/wav')).toBeNull()
+    expect(
+      probeVoiceDuration(
+        wavFile([fmtChunk(8000), fmtChunk(8000), wavChunk('data', [1, 2])]),
+        'audio/wav',
+      ),
+    ).toBeNull()
+    expect(
+      probeVoiceDuration(
+        wavFile([fmtChunk(0), wavChunk('data', new Array(800).fill(0))]),
+        'audio/wav',
+      ),
+    ).toBeNull()
+    expect(
+      probeVoiceDuration(
+        wavFile([fmtChunk(8000, 0), wavChunk('data', new Array(800).fill(0))]),
+        'audio/wav',
+      ),
+    ).toBeNull()
+  })
+
+  test('不是 RIFF/WAVE 的字节 → null（不误判其它容器）', () => {
+    expect(probeVoiceDuration(bytes(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), 'audio/wav')).toBeNull()
+  })
+})
