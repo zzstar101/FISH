@@ -17,9 +17,16 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { aggregateModerationDecision } from '../moderation/providers/types'
-import { createModerationService, type ModerationService } from '../moderation/service'
-import type { ModerationDecision, ModerationField, ModerationResult } from '../moderation/types'
+import { createLocalContentModerationProvider } from '../moderation/providers/local'
+import {
+  aggregateModerationDecision,
+  ContentModerationError,
+  type ContentModerationProvider,
+  type FieldModerationResult,
+  moderationErrorResponse,
+  type TextModerationResult,
+} from '../moderation/providers/types'
+import type { ModerationDecision, ModerationField } from '../moderation/types'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isLegacyListingKey } from '../uploads/legacy-url'
 import { type ConfirmedImageLookup, effectiveModerationDecision } from '../uploads/media-objects'
@@ -35,6 +42,7 @@ import type {
   ListingState,
   ListingStore,
   ListingUpdateResult,
+  ModerationTrace,
 } from './store'
 import { LOCKED_LISTING_STATUSES } from './store'
 
@@ -44,7 +52,7 @@ import { LOCKED_LISTING_STATUSES } from './store'
  */
 export class ListingServiceError extends Error {
   constructor(
-    readonly status: 403 | 404 | 409 | 422,
+    readonly status: 400 | 403 | 404 | 409 | 422 | 503,
     readonly code: ListingErrorCode | 'VALIDATION_FAILED',
     message: string,
     readonly details?: ApiErrorDetail[],
@@ -56,6 +64,12 @@ export class ListingServiceError extends Error {
 
 /** 与 #7 已合并的实现同一个窗口（apps/api/src/modules/wishes/service.ts）。 */
 const DUPLICATE_WINDOW_MS = 5_000
+
+/**
+ * #228：UPDATE 的 CAS 冲突重试上限。每次重试都要**重新调 provider**（内容可能已经变了），
+ * 因此必须有界；到顶就返回 409 让客户端重试，绝不把旧审核结论写回去。
+ */
+const UPDATE_REVIEW_ATTEMPTS = 3
 
 const OFFLINE: ListingStatusValue = 'OFFLINE'
 const ACTIVE: ListingStatusValue = 'ACTIVE'
@@ -128,14 +142,48 @@ export function createListingService(deps: {
    * 被拒（fail closed，见 `assertUsableObjectKeys`）。历史遗留键（裸 UUID 前缀）不受影响。
    */
   mediaObjects?: ConfirmedImageLookup
-  moderation?: ModerationService
+  /**
+   * #228：文本审核 provider。app.ts 按 `CONTENT_MODERATION_TRANSPORT` 注入（local / tencent）；
+   * 缺省用**本地 provider**（复用同一份词表，与旧同步实现行为一致），生产由 env 保证不会落到 local。
+   */
+  moderationProvider?: ContentModerationProvider
   /** 可注入时钟：去重窗口的边界断言不需要 sleep。 */
   now?: () => Date
 }): ListingService {
   const { store, storage } = deps
   const mediaObjects = deps.mediaObjects ?? NO_CONFIRMED_IMAGES
-  const moderation = deps.moderation ?? createModerationService()
+  const moderationProvider = deps.moderationProvider ?? createLocalContentModerationProvider()
   const now = deps.now ?? (() => new Date())
+
+  /**
+   * #228：文本审核。provider 异常一律 fail-closed：转成 400/503，**绝不返回 ALLOW**。
+   * 本地 provider 走同一接口，因此开发/测试行为与旧同步词表一致。
+   */
+  async function moderateListingText(input: {
+    dataId: string
+    title: string
+    description: string
+  }): Promise<TextModerationResult> {
+    try {
+      return await moderationProvider.moderateText({
+        dataId: input.dataId,
+        fields: [
+          { field: 'title', value: input.title },
+          { field: 'description', value: input.description },
+        ],
+      })
+    } catch (error) {
+      if (error instanceof ContentModerationError) {
+        const mapped = moderationErrorResponse(error)
+        throw new ListingServiceError(
+          mapped.status,
+          mapped.code,
+          mapped.status === 400 ? '内容不符合审核要求' : '内容安全审核服务暂不可用，请稍后重试',
+        )
+      }
+      throw error
+    }
+  }
 
   function notFound(): ListingServiceError {
     return new ListingServiceError(404, 'LISTING_NOT_FOUND', '商品不存在或不可见')
@@ -523,7 +571,11 @@ export function createListingService(deps: {
     },
 
     async createListing(userId, input) {
-      const moderationResult = moderation.moderate({
+      // #228：文本审核走异步 provider（腾讯 TMS / 本地词表），**在事务外**完成。
+      // `dataId` 用本次要落库的商品公开 id，便于按业务对象追溯上游 RequestId。
+      const listingId = newId()
+      const moderationResult = await moderateListingText({
+        dataId: encodePublicId(PUBLIC_ID_PREFIX.listing, listingId),
         title: input.title,
         description: input.description,
       })
@@ -539,7 +591,7 @@ export function createListingService(deps: {
           422,
           'LISTING_CONTENT_BLOCKED',
           '商品内容未通过审核',
-          moderationBlockDetails(moderationResult),
+          moderationBlockDetailsOf(moderationResult),
         )
       }
 
@@ -555,7 +607,6 @@ export function createListingService(deps: {
         ])
       }
 
-      const listingId = newId()
       const result = await store.createListingAtomic({
         id: listingId,
         sellerId: userId,
@@ -570,14 +621,18 @@ export function createListingService(deps: {
         objectKeys: input.objectKeys,
         duplicateWindowStart: new Date(now().getTime() - DUPLICATE_WINDOW_MS),
         moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
-        moderationReason: moderationResult.reasonCode,
-        moderationRuleVersion: moderationResult.ruleVersion,
+        // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228 §6）。
+        moderationReason: moderationReasonCodeFor(decision),
+        moderationRuleVersion: moderationResult.policyVersion,
         moderation: {
           // 落库的结论是**整条商品**的结论（可能由某张 REVIEW 图抬上来），不只是文本那一档。
           decision,
-          matchedRules: moderationResult.matches.map((match) => match.ruleCode),
-          matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
-          ruleVersion: moderationResult.ruleVersion,
+          // 本地词表时代的命中规则/脱敏词条对腾讯 provider 没有对应物：审计改看下面这组
+          // provider 字段（#228 §6），这里保持空数组（列本身 NOT NULL）。
+          matchedRules: [],
+          matchedTermsMasked: [],
+          ruleVersion: moderationResult.policyVersion,
+          ...moderationTraceOf(moderationResult),
           priorListingStatus: decision === 'REVIEW' ? 'ACTIVE' : null,
         },
       })
@@ -606,95 +661,123 @@ export function createListingService(deps: {
         ? await assertUsableObjectKeys(userId, input.objectKeys, storedKeySet)
         : await imageDecisionsOfStoredKeys(userId, storedKeys)
 
-      // "读当前行 → 合并最终内容 → 审核 → UPDATE + moderation record" 全部在同一个事务内，
-      // 且当前行由 `SELECT ... FOR UPDATE` 锁住（store.updateListingAtomic）。把审核放在事务外
-      // 会留下并发窗口：两个 PATCH 各自基于旧快照算结论，后提交的把 moderation_status 写回
-      // APPROVED，最终出现"待审内容 + APPROVED"。
-      let result: ListingUpdateResult
+      // #228：`SELECT ... FOR UPDATE` 里**不能发网络请求**（provider 是外部调用）。所以把
+      // 「读快照 → 合并 → 审核」放在事务外，锁内只做 CAS 复核 + 写库：写回时 `expected` 与锁内
+      // 那一行不一致（标题/描述/审核态/图片组被并发改过）就返回 `conflict`，这里重读重算重审。
+      let result: ListingUpdateResult | undefined
       // `apply` 在锁内算出的字段级原因要等事务返回后才能抛；`rejected` 只带一个 kind，
       // 所以在这里接一下（不落库：命中词本身不进任何持久化或响应）。
       let blockedDetails: ApiErrorDetail[] | undefined
-      try {
-        result = await store.updateListingAtomic({
-          id,
-          sellerId: userId,
-          ...(input.objectKeys ? { objectKeys: input.objectKeys } : {}),
-          apply: (_input, current) => {
-            // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
-            // 只给 priceCents 时也要看库里当前的 free。
-            const finalFree = input.free ?? current.free
-            const finalPrice = input.priceCents ?? current.priceCents
-            if (finalFree && finalPrice !== 0) {
-              throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
-                { field: 'priceCents', message: '0 元送时价格必须为 0' },
-              ])
-            }
+      for (let attempt = 0; attempt < UPDATE_REVIEW_ATTEMPTS; attempt += 1) {
+        const snapshot = await store.getUpdateSnapshot({ id, sellerId: userId })
+        if (snapshot.kind !== 'ok') {
+          result = snapshot
+          break
+        }
+        const reviewed = snapshot.row
 
-            const finalTitle = input.title ?? current.title
-            const finalDescription = input.description ?? current.description
-            const moderationResult = moderation.moderate({
-              title: finalTitle,
-              description: finalDescription,
-            })
-            // 图片组在事务外读、在锁内写：中间可能被另一个 PATCH 整组替换（`storedKeys` 已经不是锁内这
-            // 一行的图片）。这时旧结论不再成立，按最保守的 REVIEW 处理 —— 宁可让管理员再看一眼，也不
-            // 能把"未审核图片 + APPROVED"写回库里（`current.objectKeys` 就是锁内读到的那一组）。
-            const imagesReplacedConcurrently =
-              input.objectKeys === undefined && !sameObjectKeys(current.objectKeys, storedKeys)
-            // 与 create 同一口径：图片结论与文本结论取最严一档（ALLOW < REVIEW < BLOCK）。
-            // 图片侧给不出 BLOCK（BLOCK 的图不固化、确认表里没有它的键），所以下面的阻断细节
-            // 仍然只可能来自文本。
-            const decision = aggregateModerationDecision([
-              moderationResult.decision,
-              ...imageDecisions,
-              ...(imagesReplacedConcurrently ? (['REVIEW'] as const) : []),
-            ])
-            // 阻断：只写审计（由 store 在**同一锁内事务**完成），不写商品。
-            const moderationPlan = {
-              title: finalTitle,
-              description: finalDescription,
-              decision,
-              matchedRules: moderationResult.matches.map((match) => match.ruleCode),
-              matchedTermsMasked: moderationResult.matches.map((match) => match.maskedTerm),
-              ruleVersion: moderationResult.ruleVersion,
-              priorListingStatus:
-                decision === 'REVIEW'
-                  ? current.pendingReviewAction === 'CREATE'
-                    ? 'ACTIVE'
-                    : (current.pendingReviewPriorStatus ?? current.status)
-                  : null,
-            }
-            if (decision === 'BLOCK') {
-              blockedDetails = moderationBlockDetails(moderationResult)
-              return { kind: 'blocked' as const, moderation: moderationPlan }
-            }
-
-            // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
-            // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
-            const { objectKeys: _objectKeys, ...fields } = input
-            return {
-              kind: 'write' as const,
-              fields: {
-                ...fields,
-                moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
-                moderationReason: moderationResult.reasonCode,
-                moderationRuleVersion: moderationResult.ruleVersion,
-                moderatedAt: new Date(),
-                ...(decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
-              },
-              moderation: moderationPlan,
-            }
-          },
-        })
-      } catch (error) {
-        // 最终状态仍由 DB 的 `listings_free_price_cents_zero` 兜底（契约 §7.1）：锁内校验已经
-        // 排除了并发 PATCH 竞态，但如果将来出现绕过 service 的写入方，仍然要报 422 而不是 500。
-        if (isFreePriceConstraintViolation(error)) {
+        // 部分更新下 `free ⟹ priceCents === 0` 要按**合并后的最终状态**判定（契约 §7.1）：
+        // 只给 priceCents 时也要看库里当前的 free。
+        const finalFree = input.free ?? reviewed.free
+        const finalPrice = input.priceCents ?? reviewed.priceCents
+        if (finalFree && finalPrice !== 0) {
           throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
             { field: 'priceCents', message: '0 元送时价格必须为 0' },
           ])
         }
-        throw error
+
+        const finalTitle = input.title ?? reviewed.title
+        const finalDescription = input.description ?? reviewed.description
+        // 事务外审核：provider 失败一律 fail-closed（`moderateListingText` 抛 400/503）。
+        const moderationResult = await moderateListingText({
+          dataId: encodePublicId(PUBLIC_ID_PREFIX.listing, id),
+          title: finalTitle,
+          description: finalDescription,
+        })
+        // 图片组在事务外读、在锁内写：中间可能被另一个 PATCH 整组替换（`storedKeys` 已经不是这一
+        // 行的图片）。这时旧结论不再成立，按最保守的 REVIEW 处理 —— 宁可让管理员再看一眼，也不
+        // 能把"未审核图片 + APPROVED"写回库里。
+        const imagesReplacedConcurrently =
+          input.objectKeys === undefined && !sameObjectKeys(reviewed.objectKeys, storedKeys)
+        // 与 create 同一口径：图片结论与文本结论取最严一档（ALLOW < REVIEW < BLOCK）。
+        const decision = aggregateModerationDecision([
+          moderationResult.decision,
+          ...imageDecisions,
+          ...(imagesReplacedConcurrently ? (['REVIEW'] as const) : []),
+        ])
+        const trace = moderationTraceOf(moderationResult)
+
+        try {
+          result = await store.updateListingAtomic({
+            id,
+            sellerId: userId,
+            ...(input.objectKeys ? { objectKeys: input.objectKeys } : {}),
+            // CAS 依据：锁内这一行必须还是刚才被审的那一份内容。
+            expected: {
+              title: reviewed.title,
+              description: reviewed.description,
+              moderationStatus: reviewed.moderationStatus,
+              objectKeys: reviewed.objectKeys,
+            },
+            apply: (_input, current) => {
+              // 阻断：只写审计（由 store 在**同一锁内事务**完成），不写商品。
+              const moderationPlan = {
+                title: finalTitle,
+                description: finalDescription,
+                decision,
+                // 本地词表时代的命中规则/脱敏词条对腾讯 provider 没有对应物：审计改看下面这组
+                // provider 字段（#228 §6），这里保持空数组（列本身 NOT NULL）。
+                matchedRules: [],
+                matchedTermsMasked: [],
+                ruleVersion: moderationResult.policyVersion,
+                ...trace,
+                priorListingStatus:
+                  decision === 'REVIEW'
+                    ? current.pendingReviewAction === 'CREATE'
+                      ? 'ACTIVE'
+                      : (current.pendingReviewPriorStatus ?? current.status)
+                    : null,
+              }
+              if (decision === 'BLOCK') {
+                blockedDetails = moderationBlockDetailsOf(moderationResult)
+                return { kind: 'blocked' as const, moderation: moderationPlan }
+              }
+
+              // `objectKeys` 必须从 `fields` 里剔除：它不是 `listings` 的列，混进 `set()` 会让
+              // drizzle 生成不存在的列名（而且图片替换要走自己的删+插路径）。
+              const { objectKeys: _objectKeys, ...fields } = input
+              return {
+                kind: 'write' as const,
+                fields: {
+                  ...fields,
+                  moderationStatus: decision === 'REVIEW' ? 'REVIEW' : 'APPROVED',
+                  // 对外只给既有安全码，绝不透出腾讯 Label/Score/命中策略（#228 §6）。
+                  moderationReason: moderationReasonCodeFor(decision),
+                  moderationRuleVersion: moderationResult.policyVersion,
+                  moderatedAt: new Date(),
+                  ...(decision === 'REVIEW' ? { status: 'OFFLINE' as const } : {}),
+                },
+                moderation: moderationPlan,
+              }
+            },
+          })
+        } catch (error) {
+          // 最终状态仍由 DB 的 `listings_free_price_cents_zero` 兜底（契约 §7.1）：锁内校验已经
+          // 排除了并发 PATCH 竞态，但如果将来出现绕过 service 的写入方，仍然要报 422 而不是 500。
+          if (isFreePriceConstraintViolation(error)) {
+            throw new ListingServiceError(422, 'VALIDATION_FAILED', '0 元送时价格必须为 0', [
+              { field: 'priceCents', message: '0 元送时价格必须为 0' },
+            ])
+          }
+          throw error
+        }
+
+        // CAS 冲突：审核依据的那份内容已经不是锁内这一份，重读、重算、**重审**。
+        if (result.kind !== 'conflict') break
+      }
+      if (result === undefined || result.kind === 'conflict') {
+        // 连续 N 次都撞车：并发写太频繁，明确让客户端重试，而不是把旧审核结论写回去。
+        throw new ListingServiceError(409, 'LISTING_NOT_EDITABLE', '商品正在被并发修改，请重试')
       }
 
       if (result.kind === 'rejected') {
@@ -774,7 +857,7 @@ async function recordModeration(
     action: 'CREATE' | 'UPDATE'
     title: string
     description: string
-    result: ModerationResult
+    result: TextModerationResult
   },
 ): Promise<void> {
   await store.recordModeration?.({
@@ -784,10 +867,42 @@ async function recordModeration(
     title: input.title,
     description: input.description,
     decision: input.result.decision,
-    matchedRules: input.result.matches.map((match) => match.ruleCode),
-    matchedTermsMasked: input.result.matches.map((match) => match.maskedTerm),
-    ruleVersion: input.result.ruleVersion,
+    // provider 结果里没有本地词表的命中规则/脱敏词条；审计看下面的 provider 字段（#228 §6）。
+    matchedRules: [],
+    matchedTermsMasked: [],
+    ruleVersion: input.result.policyVersion,
+    ...moderationTraceOf(input.result),
   })
+}
+
+/** #228：provider 结果里风险最高的那个字段（审计字段取它的 label/subLabel/score/requestId）。 */
+function tracedField(result: TextModerationResult): FieldModerationResult | null {
+  return (
+    result.fields.find((field) => field.decision === 'BLOCK') ??
+    result.fields.find((field) => field.decision === 'REVIEW') ??
+    result.fields[0] ??
+    null
+  )
+}
+
+/** provider 结果 → 审核记录里的可追溯字段（#228 §6）。 */
+function moderationTraceOf(result: TextModerationResult): ModerationTrace {
+  const field = tracedField(result)
+  return {
+    provider: result.provider,
+    providerRequestId: field?.requestId ?? null,
+    suggestion: result.suggestion,
+    label: field?.label ?? null,
+    subLabel: field?.subLabel ?? null,
+    score: field?.score ?? null,
+  }
+}
+
+/** 对外只给**既有安全码**（客户端已能翻译），绝不透出腾讯 Label/Score/命中策略（#228 §6）。 */
+function moderationReasonCodeFor(decision: ModerationDecision): string | null {
+  if (decision === 'BLOCK') return 'PROHIBITED_CONTENT'
+  if (decision === 'REVIEW') return 'CONTENT_REQUIRES_REVIEW'
+  return null
 }
 
 /**
@@ -813,10 +928,12 @@ const MODERATION_FIELD_LABEL: Record<ModerationField, string> = {
   description: '描述',
 }
 
-function moderationBlockDetails(result: ModerationResult): ApiErrorDetail[] | undefined {
+function moderationBlockDetailsOf(result: TextModerationResult): ApiErrorDetail[] | undefined {
+  // 只认**文本**被判 BLOCK 的字段。结论由图片抬升到 BLOCK 时（例如库内某张图已被人工结算为
+  // BLOCK）文本其实干净，把 title/description 说成「包含禁止发布的内容」是误导（#228 复审 F1）。
   const fields = [
     ...new Set(
-      result.matches.filter((match) => match.decision === 'BLOCK').map((match) => match.field),
+      result.fields.filter((field) => field.decision === 'BLOCK').map((field) => field.field),
     ),
   ]
   if (fields.length === 0) return undefined
