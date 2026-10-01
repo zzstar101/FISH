@@ -342,6 +342,7 @@ describe('conversation list cache', () => {
       verifiedAt: null,
       phoneBound: false,
       maskedPhone: null,
+      signature: null,
     }
     const ownerB: Me = { ...ownerA, id: 'usr_01jc000000e00800000000000e', nickname: '乙' }
     queryClient.setQueryData(AUTH_ME_QUERY_KEY, ownerA)
