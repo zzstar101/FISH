@@ -198,7 +198,14 @@ export const MyCommentItemSchema = z.object({
 
 export type MyCommentItem = z.infer<typeof MyCommentItemSchema>
 
-/** 与商品留言列表同口径：`limit` 默认 20、上限 50；`cursor` 不透明，前端只原样回传。 */
+/** 与商品留言列表同口径：`limit` 默认 20、上限 50；`cursor` 不透明，前端只原样回传。
+ *
+ * PR1 只接**商品留言**这一个来源。Owner 冻结的目标形状是「单端点 + `kind` 过滤」
+ * （`all | comment | review`）：`kind` 与 `all = 留言 ∪ 评价` 的跨表合并游标随 PR2 的评价
+ * 来源一起补，届时是**加一个可选参数 + 放宽 `items` 为判别联合**的向后兼容增量
+ * （当前无外部消费者）。所以本 PR 刻意**不预置** `kind=review`：返回空等于把「我们还没有
+ * 这条数据源」说成「你没有评价」。
+ */
 export const MyCommentsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().min(1).optional(),
@@ -222,11 +229,19 @@ export const MyCommentsResponseSchema = z.object({
 export type MyCommentsResponse = z.infer<typeof MyCommentsResponseSchema>
 
 /**
- * 删除留言的响应：`deleted` 是**本次实际删除的条数**，含被级联删除的回复。
+ * 删除留言的响应：`deleted` 是**本次实际删除的 DB 行数**，含被级联删掉的回复
+ * ——**不论那些回复是谁写的**。
  *
- * 为什么不是 204：端上要按真实结果修计数。删一条带 3 条回复的顶层留言实际少 4 行，
- * 本地假设「少一条」会让页面上的段计数立刻对不上，而它自己无从知道级联了几条。
- * 重复删除返回 `{ deleted: 0 }`（幂等，不是错误）。
+ * ⚠️ 端上**不得**用它调整「我发过的留言」的总数。`MyCommentsResponse.total` 只数**本人**
+ * 写的行，而别人的回复被级联删掉时 `deleted` 会大于本人减少的条数，拿它去减本人计数会漂移
+ * （我的顶层留言下有 2 条他人回复时：本人总数只该减 1，`deleted` 却是 3）。本人总数一律以
+ * **重新拉取的 `total`** 为准。
+ *
+ * 为什么仍然回一个数而不是 204：让「本次真的删掉了东西」有可核对的证据，而不是只能相信
+ * 这一次 200。重复删除返回 `{ deleted: 0 }`（幂等，不是错误）。
+ *
+ * `deleted` 是**尽力而为的近似值**：级联行数与删除是两次独立往返，两步之间并发新增/删除
+ * 回复会让它差 1。不为它引入事务 —— 它不参与任何鉴权，也不参与任何计数口径。
  */
 export const CommentDeleteResponseSchema = z.object({
   deleted: z.number().int().nonnegative(),

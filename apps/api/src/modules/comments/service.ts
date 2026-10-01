@@ -10,6 +10,7 @@ import {
   type CommentReply,
   CommentReplySchema,
   type MyCommentItem,
+  MyCommentItemSchema,
   type MyCommentsQuery,
   type MyCommentsResponse,
   MyCommentsResponseSchema,
@@ -55,9 +56,14 @@ export interface CommentService {
   /**
    * 删除自己的留言（#195）。
    *
-   * - 别人的留言 → 404 `COMMENT_NOT_FOUND`，与「不存在」同码同文案（403 等于确认它存在且是别人的）；
-   * - 已经删过 / 从来不存在的 → `{ deleted: 0 }`，**幂等成功**而不是错误；
-   * - 删顶层留言会级联删掉其回复，`deleted` 回**实际条数**（含级联），端上据此正确减计数。
+   * - **存在但不是本人的** → 404 `COMMENT_NOT_FOUND`（403 会确认「它存在且是别人的」）；
+   * - **不存在 / 已经被删过** → `{ deleted: 0 }`，**幂等成功**而不是错误。
+   *
+   *   这两条**不是同码**：留言 id 本来就能通过匿名 `GET /listings/:id/comments` 公开枚举，
+   *   所以这里不做「不泄漏存在性」的混淆取舍 —— 404 只表示「存在，但不是你的」。
+   * - 删顶层留言会级联删掉其回复，`deleted` 回**实际删除的 DB 行数**（含他人写的回复），
+   *   且是尽力而为的近似值；端上**不得**用它减「我发过的留言」总数，
+   *   见 `CommentDeleteResponseSchema` 的注释。
    */
   deleteMine(userId: string, commentId: string): Promise<CommentDeleteResponse>
 }
@@ -89,7 +95,9 @@ function toMyCommentItem(
   const listing = toListingCard(row, row.coverObjectKey, storage)
   if (listing === null) return null
 
-  return {
+  // 与 `listComments` 同款（决策 C）：**逐条**校验，脏行记日志后跳过，而不是让一条越界数据
+  // （例如 `content` 超过契约上限的历史行）把整页 parse 失败成 500。
+  const parsed = MyCommentItemSchema.safeParse({
     comment: {
       id: encodePublicId(PUBLIC_ID_PREFIX.comment, row.commentId),
       listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.id),
@@ -101,7 +109,12 @@ function toMyCommentItem(
       createdAt: row.commentCreatedAt,
     },
     listing,
+  })
+  if (!parsed.success) {
+    console.error('[comments] 跳过无法映射为契约的本人留言', row.commentId, parsed.error.message)
+    return null
   }
+  return parsed.data
 }
 
 /** 回复 DTO：`replies` 恒为空数组（契约只嵌套一层，`CommentReplySchema` 强制）。 */
@@ -329,11 +342,13 @@ export function createCommentService(deps: {
       const row = await store.findById(commentId)
       // 不存在（含「自己刚删过」）→ 幂等成功：不报错，也不假装删掉了东西。
       if (row === null) return { deleted: 0 }
-      // 不是自己的 → 与「不存在」同码同文案，不泄漏存在性（403 会确认它存在且是别人的）。
+      // 存在但不是本人的 → 404（403 会确认「它存在且是别人的」）。注意这与上一条**不同码**：
+      // 留言 id 可由匿名接口公开枚举，这里不做存在性混淆，404 的语义就是「不是你的」。
       if (row.authorId !== userId) throw commentNotFound()
 
-      // 级联删掉的回复不出现在 `DELETE ... RETURNING` 里，先数一遍再删：
-      // 响应要回**真实**删除条数，端上据此减计数而不是本地假设「只少一条」。
+      // 级联删掉的回复不出现在 `DELETE ... RETURNING` 里，先数一遍再删。
+      // 两次往返之间无锁：`deleted` 因此是**尽力而为的近似值**（差 1 的量级），
+      // 它不参与鉴权也不参与计数口径，不值得为它引入事务。
       const replies = row.parentId === null ? await store.countReplies(commentId) : 0
       const deleted = await store.deleteOwn(userId, commentId)
       // 并发下被人抢先删掉 → 0，仍然是幂等语义。

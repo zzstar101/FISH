@@ -154,31 +154,68 @@ describe('app 级接线：本人留言读 + 删除', () => {
     expect(await again.json()).toEqual({ deleted: 0 })
   })
 
-  test('删顶层留言回报真实条数（含被级联删掉的回复）', async () => {
+  test('删顶层留言：`deleted` 是 DB 行数（含他人回复），不参与「我的留言」总数', async () => {
     const cookie = await signUp()
-    const topId = (async () => {
-      const response = await app.request(
+    const other = await signUp()
+
+    const top = (await (
+      await app.request(
         `/listings/${listingPublicId}/comments`,
         json({ content: '顶层留言' }, cookie),
       )
-      return ((await response.json()) as { id: string }).id
-    })()
-    const parentId = await topId
-    await app.request(`/comments/${parentId}/replies`, json({ content: '第一条回复' }, cookie))
-    await app.request(`/comments/${parentId}/replies`, json({ content: '第二条回复' }, cookie))
+    ).json()) as { id: string }
+    await app.request(`/comments/${top.id}/replies`, json({ content: '我自己的回复' }, cookie))
+    // 别人的回复：级联删除会连它一起删掉，但它从来不在「我的留言」总数里。
+    await app.request(`/comments/${top.id}/replies`, json({ content: '别人的回复' }, other))
 
-    expect((await listMine(cookie)).body.total).toBe(3)
+    // 我的总数 = 顶层 1 + 我自己的回复 1 = 2。
+    expect((await listMine(cookie)).body.total).toBe(2)
 
-    const removed = await app.request(`/comments/${parentId}`, {
+    const removed = await app.request(`/comments/${top.id}`, {
       method: 'DELETE',
       headers: { cookie },
     })
-    // 1 条父留言 + 2 条被级联删掉的回复：端上据此正确减计数，而不是本地假设「少一条」。
+    // DB 行数：1 条父留言 + 2 条回复（其中一条是别人的）。
     expect(await removed.json()).toEqual({ deleted: 3 })
+    // 而我的总数只减 2 —— 端上**不能**拿 `deleted` 去减，否则会漂成负数。
     expect((await listMine(cookie)).body.total).toBe(0)
+    // 对方的列表全程不受影响（他写的回复被级联删了，但那不是他的「留言」计数口径之外的事）
+    expect((await listMine(other)).body.total).toBe(0)
   })
 
-  test('别人的留言删不掉：404 同码，不泄漏存在性', async () => {
+  test('分页完整性：逐页拉到 nextCursor 为 null，各页互不相交且并集等于全量', async () => {
+    const cookie = await signUp()
+    for (let i = 0; i < 5; i += 1) {
+      await app.request(
+        `/listings/${listingPublicId}/comments`,
+        json({ content: `留言 ${i}` }, cookie),
+      )
+    }
+
+    const seen: string[] = []
+    let cursor: string | null = null
+    for (let page = 0; page < 10; page += 1) {
+      const url = `/me/comments?limit=2${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`
+      const response = await app.request(url, { headers: { cookie } })
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as {
+        items: { comment: { id: string } }[]
+        nextCursor: string | null
+        total: number
+      }
+      expect(body.total).toBe(5)
+      for (const item of body.items) seen.push(item.comment.id)
+      cursor = body.nextCursor
+      if (cursor === null) break
+    }
+
+    // 不重不漏：5 条各自恰好出现一次，且页码收敛（nextCursor 最终为 null）。
+    expect(cursor).toBeNull()
+    expect(seen).toHaveLength(5)
+    expect(new Set(seen).size).toBe(5)
+  })
+
+  test('别人的留言删不掉：404（语义是「存在但不是本人的」，不是「不存在」）', async () => {
     const owner = await signUp()
     const intruder = await signUp()
     const created = await app.request(

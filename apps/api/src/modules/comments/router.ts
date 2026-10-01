@@ -171,7 +171,8 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
   // 删除是写操作，过与发留言同一道 `guard.write`（受限账号不能靠删除绕过限制）。
   router.delete(COMMENT_PATH, options.requireAuth, options.guard.write, async (c) => {
     const commentId = requireResourceId(c, 'commentId')
-    // 非法 id 与「不存在」同码 404：不给「格式错」与「不存在」留可区分的响应。
+    // 非法 id 直接 404（与既有留言路由同口径）：避免非 uuid 绑到 uuid 列后抛驱动错误变 500。
+    // 注意 service 里「不存在」走的是 200 `{deleted: 0}`（幂等），404 只表示「存在但不是你的」。
     if (!commentId) return c.json(errorBody('COMMENT_NOT_FOUND', '留言不存在'), 404)
 
     try {
