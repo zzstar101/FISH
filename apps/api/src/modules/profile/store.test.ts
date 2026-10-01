@@ -78,6 +78,12 @@ beforeAll(async () => {
       (${txA}, '01990000-0000-7000-8000-0000000000b3', ${me}, ${other}, 10000, 'COMPLETED', now()),
       (${txB}, ${listingA}, ${other}, ${me}, 16000, 'PENDING_MEETUP', NULL)
   `)
+  // #188：followingCount 只数「我关注的人」这个方向；other 关注我不进这个数。
+  await db.execute(sql`
+    INSERT INTO follows (id, follower_id, following_id) VALUES
+      ('01990000-0000-7000-8000-0000000000f1', ${me}, ${other}),
+      ('01990000-0000-7000-8000-0000000000f2', ${other}, ${me})
+  `)
 })
 
 afterAll(async () => {
@@ -93,6 +99,7 @@ describe('profile store (integration)', () => {
       activeListings: 1, // listingA ACTIVE；listingB OFFLINE 不计
       activeWishes: 1,
       completedTransactions: 1, // txA COMPLETED；txB PENDING 不计
+      followingCount: 1, // 我关注 other；反向那条（other 关注我）不计
     })
   })
 
