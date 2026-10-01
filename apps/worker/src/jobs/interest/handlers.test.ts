@@ -308,6 +308,51 @@ describe('refreshUserInterestProfile', () => {
     expect(dot(row?.embedding ?? [], Y)).toBeCloseTo(1, 6)
   })
 
+  test('版本号取「读完数据之后」：读得更晚的慢 job 不会被更早的结果挡掉', async () => {
+    const userId = await createUser()
+    const sellerId = await createUser()
+    const now = new Date()
+    const listing = await listingWithVector(sellerId, X)
+    await addEvent({
+      userId,
+      listingId: listing.id,
+      eventType: 'FAVORITE',
+      occurredAt: new Date(now.getTime() - HOUR),
+    })
+
+    // 另一个 job 在 T1 先写完了：它的入口比本次晚，但读到的是更旧的数据。
+    const earlier = new Date(now.getTime() + MINUTE)
+    await saveUserInterestProfile(db, {
+      userId,
+      model: MODEL,
+      dimensions: EMBEDDING_DIMENSIONS,
+      strategyVersion: INTEREST_STRATEGY_VERSION,
+      embedding: Y,
+      actionCount: 7,
+      windowStartedAt: interestLookbackStart(earlier),
+      computedAt: earlier,
+    })
+
+    /*
+     * 本次 job：`now`（衰减基准）仍是更早的 T0，但数据是 T2 才读完的。
+     * `computedAt` 必须取 T2 —— 取 T0（旧写法：函数入口）会被 T1 那份挡成 `superseded`，
+     * 于是库里一直留着一份**证据更旧**的画像，直到用户下一条行为才被纠正。
+     */
+    const readDone = new Date(now.getTime() + HOUR)
+    const result = await refreshUserInterestProfile(db, {
+      userId,
+      embeddingModel: MODEL,
+      now,
+      clock: () => readDone,
+    })
+
+    expect(result.status).toBe('saved')
+    const row = await findUserInterestProfile(db, { userId, model: MODEL })
+    expect(row?.computedAt.getTime()).toBe(readDone.getTime())
+    expect(row?.actionCount).toBe(1)
+    expect(dot(row?.embedding ?? [], X)).toBeCloseTo(1, 6)
+  })
+
   test('窗口内已无可用向量 → 删掉旧行（cleared），读取返回 null', async () => {
     const userId = await createUser()
     const sellerId = await createUser()

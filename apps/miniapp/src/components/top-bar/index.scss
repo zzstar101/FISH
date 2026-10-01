@@ -49,6 +49,29 @@
   color: var(--brand);
 }
 
+/*
+ * 居中标题（`titleAlign="center"`，二级页规格）。字体沿用 `.topbar__title`，
+ * 这里只补定位：绝对定位到整条栏的中线，而不是 `.topbar__row` 的 flex 流 ——
+ * 行是「返回钮 + 标题」左对齐排布，中槽又只占「返回钮右侧 → 胶囊避让区左侧」，
+ * 在其中居中会偏左。上下（top / height）由组件按运行时栅格行内下发，
+ * 标题与原生胶囊同行居中。
+ */
+.topbar__title--center {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 字号取 34px（17pt，iOS 原生导航标题档）——与既有两份页面级居中标题
+     （mylist / following 的手抄版）同值；要整体统一成 35px 时随迁移批次一起改 */
+  font-size: 34px;
+  /* 左右让出返回钮与胶囊，标题长了也不压到它们身上 */
+  padding: 0 110px;
+  /* 纯展示：点击穿过它落到下层，不挡住栏内其它可点内容 */
+  pointer-events: none;
+}
+
 /* 中槽：搜索胶囊、搜索页输入框这类要吃掉剩余宽度的内容 */
 .topbar__center {
   flex: 1 1 auto;

@@ -1,4 +1,5 @@
-import type { MessageDto } from '@fish/contracts/chat/schema'
+import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import { MEDIA_MAX_VOICE_DURATION_MS } from '@fish/contracts/chat/schema'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -7,34 +8,71 @@ import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowLeft, Send } from 'lucide-react'
+import { ArrowLeft, Flag, ImagePlus, Mic, Send, Square } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { useAuth } from '../auth/auth-provider'
-import { MessageBubble, PendingMessageBubble } from './message-bubble'
+import { ReportEntry } from '../reports/report-entry'
+import { presignMediaUpload } from './api'
 import {
+  describeImageDimensionRejection,
+  describeMediaFileRejection,
+  describeVoiceDurationRejection,
+  IMAGE_FILE_ACCEPT,
+  type MediaUploadDraft,
+  probeImageSize,
+  resolveMediaContentType,
+  startVoiceRecording,
+  type VoiceRecorder,
+} from './media'
+import {
+  MediaBubble,
+  MessageBubble,
+  PendingMediaBubble,
+  PendingMessageBubble,
+} from './message-bubble'
+import {
+  createMediaOutboxMessage,
   createOutboxMessage,
+  dispatchMediaOutboxSend,
   dispatchOutboxSend,
   type OutboxMessage,
+  removeOutboxMessage,
   resetOutboxForRetry,
 } from './outbox'
 import {
   applyReadEventToCache,
+  flattenMediaPages,
   flattenMessagePages,
+  insertMediaIntoCache,
   insertMessageIntoCache,
+  invalidateConversationDetail,
   invalidateConversationSurfaces,
   isMessageRead,
+  mergeMediaIntoCache,
   mergeMessagesIntoCache,
   probeChatSession,
   refreshConversationOnReconnect,
   useConversation,
   useMarkConversationRead,
+  useMediaHistory,
   useMessageHistory,
+  useSendMediaMessage,
   useSendTextMessage,
 } from './queries'
+import { INITIAL_READ_RECEIPT_STATE, onIncomingMessage, resolveReadReceipt } from './read-receipt'
 import { type ChatRealtimeStatus, useChatRealtime } from './realtime'
-import { excludeCachedMessages } from './view'
+import { buildTimeline, excludeCachedMedia, excludeCachedMessages } from './view'
+
+/** 服务端硬上限 60s；提前 5s 自动收尾，避免录到一半被 422 拒掉。 */
+const VOICE_AUTO_STOP_MS = MEDIA_MAX_VOICE_DURATION_MS - 5_000
+
+/** 媒体 DTO 没有 sender 摘要，读位只按 createdAt 与对方读位比较（与文本同一口径）。 */
+function isMediaRead(media: MediaMessageDto, counterpartLastReadAt: string | null): boolean {
+  if (counterpartLastReadAt === null) return false
+  return Date.parse(media.createdAt) <= Date.parse(counterpartLastReadAt)
+}
 
 const STATUS_LABEL: Record<ListingStatus, string> = {
   ACTIVE: '在售',
@@ -69,26 +107,44 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const queryClient = useQueryClient()
   const conversation = useConversation(ownerId, conversationId)
   const history = useMessageHistory(ownerId, conversationId)
+  const mediaHistory = useMediaHistory(ownerId, conversationId)
   const markRead = useMarkConversationRead(ownerId)
   const sendMessage = useSendTextMessage(ownerId)
+  const sendMedia = useSendMediaMessage(ownerId)
   const [draft, setDraft] = useState('')
   const [outbox, setOutbox] = useState<OutboxMessage[]>([])
+  const [mediaError, setMediaError] = useState<string | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [voiceStarting, setVoiceStarting] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
   const [localMessages, setLocalMessages] = useState<MessageDto[]>([])
+  const [localMedia, setLocalMedia] = useState<MediaMessageDto[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const recorderRef = useRef<VoiceRecorder | null>(null)
+  const recordStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mediaPreviewUrlsRef = useRef(new Map<string, string>())
+  const mountedRef = useRef(true)
   const markReadRef = useRef(markRead)
   markReadRef.current = markRead
   const sendRef = useRef(sendMessage)
   sendRef.current = sendMessage
+  const sendMediaRef = useRef(sendMedia)
+  sendMediaRef.current = sendMedia
   const historyErrorRef = useRef(false)
+  const mediaHistoryErrorRef = useRef(false)
   const recoveryGenerationRef = useRef(0)
   historyErrorRef.current = history.isError
-  const liveRef = useRef<{ conversationId: string; messages: Map<string, MessageDto> }>({
-    conversationId,
-    messages: new Map(),
-  })
+  mediaHistoryErrorRef.current = mediaHistory.isError
+  const readReceiptRef = useRef(INITIAL_READ_RECEIPT_STATE)
+  const liveRef = useRef<{
+    conversationId: string
+    messages: Map<string, MessageDto>
+    media: Map<string, MediaMessageDto>
+  }>({ conversationId, messages: new Map(), media: new Map() })
   if (liveRef.current.conversationId !== conversationId) {
-    liveRef.current = { conversationId, messages: new Map() }
+    liveRef.current = { conversationId, messages: new Map(), media: new Map() }
+    readReceiptRef.current = INITIAL_READ_RECEIPT_STATE
   }
   const mergeLiveRef = useRef<() => void>(() => {})
   mergeLiveRef.current = () => {
@@ -96,18 +152,72 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     mergeMessagesIntoCache(queryClient, ownerId, conversationId, [
       ...liveRef.current.messages.values(),
     ])
+    mergeMediaIntoCache(queryClient, ownerId, conversationId, [...liveRef.current.media.values()])
   }
   useEffect(() => {
     if (history.isFetching || history.isError) return
     mergeLiveRef.current()
     setLocalMessages([])
   }, [history.isFetching, history.isError])
+  useEffect(() => {
+    if (mediaHistory.isFetching || mediaHistory.isError) return
+    mergeLiveRef.current()
+    setLocalMedia([])
+  }, [mediaHistory.isFetching, mediaHistory.isError])
+
+  // 本地预览用的 object URL 只属于 outbox：条目离场后（effect 在提交之后跑）再 revoke，
+  // 避免气泡还在 DOM 里时被回收。
+  useEffect(() => {
+    const registry = mediaPreviewUrlsRef.current
+    for (const item of outbox) {
+      if (item.kind === 'MEDIA' && !registry.has(item.clientRequestId)) {
+        registry.set(item.clientRequestId, item.previewUrl)
+      }
+    }
+    for (const [clientRequestId, url] of registry) {
+      if (!outbox.some((item) => item.clientRequestId === clientRequestId)) {
+        URL.revokeObjectURL(url)
+        registry.delete(clientRequestId)
+      }
+    }
+  }, [outbox])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+  useEffect(
+    () => () => {
+      if (recordStopTimerRef.current !== null) clearTimeout(recordStopTimerRef.current)
+      recorderRef.current?.cancel()
+      recorderRef.current = null
+      for (const url of mediaPreviewUrlsRef.current.values()) URL.revokeObjectURL(url)
+      mediaPreviewUrlsRef.current.clear()
+    },
+    [],
+  )
 
   const messages = useMemo(() => flattenMessagePages(history.data), [history.data])
+  const mediaMessages = useMemo(() => flattenMediaPages(mediaHistory.data), [mediaHistory.data])
   const visibleLocalMessages = useMemo(
     () => excludeCachedMessages(localMessages, messages),
     [localMessages, messages],
   )
+  const visibleLocalMedia = useMemo(
+    () => excludeCachedMedia(localMedia, mediaMessages),
+    [localMedia, mediaMessages],
+  )
+  // 文本与媒体来自两个端点 / 两条实时通道，渲染前必须按 (createdAt, id) 归并成一条时间线。
+  const timeline = useMemo(
+    () =>
+      buildTimeline(
+        [...messages, ...visibleLocalMessages],
+        [...mediaMessages, ...visibleLocalMedia],
+      ),
+    [messages, visibleLocalMessages, mediaMessages, visibleLocalMedia],
+  )
+  const hasOlderPages = history.hasNextPage || mediaHistory.hasNextPage
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
 
   const realtimeStatus = useChatRealtime(ownerId, {
@@ -117,6 +227,18 @@ export function ConversationPage({ conversationId }: { conversationId: string })
         if (event.conversationId === conversationId) {
           rememberMessage(event.message)
           if (event.message.senderId !== ownerId) {
+            const receipt = onIncomingMessage(document.visibilityState)
+            readReceiptRef.current = receipt.state
+            if (receipt.markRead) markReadRef.current.mutate(conversationId)
+          }
+        }
+        invalidateConversationSurfaces(queryClient, ownerId)
+        return
+      }
+      if (event.type === 'media.new') {
+        if (event.conversationId === conversationId) {
+          rememberMedia(event.media)
+          if (event.media.senderId !== ownerId) {
             markReadRef.current.mutate(conversationId)
           }
         }
@@ -125,6 +247,24 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       }
       if (event.type === 'conversation.read') {
         applyReadEventToCache(queryClient, ownerId, event)
+        invalidateConversationSurfaces(queryClient, ownerId)
+        return
+      }
+      /*
+        撤回（#359 3c）：**必须重取历史**。服务端撤回后不再下发正文，但本页缓存里那条仍是
+        撤回前的快照，而 `message.recalled` 只带 messageId 与 recalledAt —— 光靠它无法把
+        气泡翻成撤回碑（气泡渲染读的是缓存里的 DTO）。重取一次历史/详情即可拿到
+        `recalledAt`，气泡随之变成撤回碑。
+      */
+      if (event.type === 'message.recalled') {
+        if (event.conversationId === conversationId) {
+          invalidateConversationDetail(queryClient, ownerId, conversationId)
+        }
+        /*
+          别的会话里的撤回也要刷新列表（#359 3c 审查回合）：那条会话行的摘要会翻成
+          「[消息已撤回]」，而列表只是 staleTime 15s 的普通查询，不主动失效就会一直
+          显示撤回前的原文。与 `message.new` 同款处理（那个分支无条件失效）。
+        */
         invalidateConversationSurfaces(queryClient, ownerId)
       }
     },
@@ -140,13 +280,26 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   })
 
   useEffect(() => {
-    if (ownerId === null || conversation.data === undefined || conversation.data === null) return
-    if (conversation.data.unreadCount === 0) return
-    markReadRef.current.mutate(conversationId)
+    const current = conversation.data
+    if (ownerId === null || current === undefined || current === null) return
+
+    const applyReadReceipt = () => {
+      const receipt = resolveReadReceipt(
+        readReceiptRef.current,
+        document.visibilityState,
+        current.unreadCount > 0,
+      )
+      readReceiptRef.current = receipt.state
+      if (receipt.markRead) markReadRef.current.mutate(conversationId)
+    }
+
+    applyReadReceipt()
+    document.addEventListener('visibilitychange', applyReadReceipt)
+    return () => document.removeEventListener('visibilitychange', applyReadReceipt)
   }, [conversation.data, conversationId, ownerId])
 
-  const lastMessageId = messages.at(-1)?.id ?? null
-  const scrollSignal = `${conversationId}:${lastMessageId ?? ''}:${outbox.length}`
+  const lastTimelineId = timeline.at(-1)?.id ?? null
+  const scrollSignal = `${conversationId}:${lastTimelineId ?? ''}:${outbox.length}`
   useEffect(() => {
     const node = scrollRef.current
     if (node === null || scrollSignal.length === 0) return
@@ -168,6 +321,20 @@ export function ConversationPage({ conversationId }: { conversationId: string })
     insertMessageIntoCache(queryClient, ownerId, conversationId, message)
   }
 
+  function rememberMedia(media: MediaMessageDto) {
+    if (ownerId === null) return
+    liveRef.current.media.set(media.id, media)
+    // 与文本同一理由：历史处于错误态时不能写伪页，媒体留在 liveRef 等补拉成功再合并。
+    if (mediaHistoryErrorRef.current) {
+      if (mediaMessages.some((item) => item.id === media.id)) return
+      setLocalMedia((current) =>
+        current.some((item) => item.id === media.id) ? current : [...current, media],
+      )
+      return
+    }
+    insertMediaIntoCache(queryClient, ownerId, conversationId, media)
+  }
+
   function recoverAfterReconnect() {
     if (ownerId === null) return
     const generation = recoveryGenerationRef.current + 1
@@ -186,6 +353,17 @@ export function ConversationPage({ conversationId }: { conversationId: string })
 
   function dispatch(item: OutboxMessage) {
     if (ownerId === null) return
+    if (item.kind === 'MEDIA') {
+      void dispatchMediaOutboxSend({
+        item,
+        conversationId,
+        mutation: sendMediaRef.current,
+        presign: presignMediaUpload,
+        setOutbox,
+        onSent: rememberMedia,
+      })
+      return
+    }
     void dispatchOutboxSend({
       item,
       conversationId,
@@ -193,6 +371,10 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       setOutbox,
       onSent: rememberMessage,
     })
+  }
+
+  function dismissOutbox(clientRequestId: string) {
+    setOutbox((current) => removeOutboxMessage(current, clientRequestId))
   }
 
   // 按钮、Enter、重试同一套规则：允许排队连发，每条各自结算（见 dispatchOutboxSend），
@@ -216,6 +398,93 @@ export function ConversationPage({ conversationId }: { conversationId: string })
       event.preventDefault()
       submit()
     }
+  }
+
+  function enqueueMedia(draft: MediaUploadDraft, previewUrl: string) {
+    const item = createMediaOutboxMessage(draft, previewUrl)
+    setOutbox((current) => [...current, item])
+    dispatch(item)
+  }
+
+  /** 选图：客户端初筛（mime/体积/尺寸）不过就不进 outbox，直接给可读反馈。 */
+  async function pickImageFile(file: File) {
+    const fileError = describeMediaFileRejection('IMAGE', file)
+    if (fileError !== null) {
+      setMediaError(fileError)
+      return
+    }
+    // 与服务端同一份 MIME 口径（浏览器不给 MIME 时按扩展名回退）。
+    const contentType = resolveMediaContentType('IMAGE', file)
+    const size = contentType === null ? null : await probeImageSize(file, contentType)
+    if (size === null) {
+      setMediaError('无法读取图片尺寸，请换一张')
+      return
+    }
+    const dimensionError = describeImageDimensionRejection(size.width, size.height)
+    if (dimensionError !== null) {
+      setMediaError(dimensionError)
+      return
+    }
+    setMediaError(null)
+    enqueueMedia(
+      { kind: 'IMAGE', file, width: size.width, height: size.height },
+      URL.createObjectURL(file),
+    )
+  }
+
+  async function toggleRecording() {
+    // 授权弹窗期间按钮还在，再点一次会开出第二条录音；用 voiceStarting 挡掉。
+    if (voiceStarting) return
+    if (recording) {
+      await finishRecording()
+      return
+    }
+    setVoiceStarting(true)
+    try {
+      const recorder = await startVoiceRecording()
+      // 授权/初始化期间可能已切会话（会话页按账号+会话 id 重挂载）：立即释放，别留下常亮麦克风。
+      if (!mountedRef.current) {
+        recorder.cancel()
+        return
+      }
+      recorderRef.current = recorder
+      setRecording(true)
+      setMediaError(null)
+      recordStopTimerRef.current = setTimeout(() => void finishRecording(), VOICE_AUTO_STOP_MS)
+    } catch (error) {
+      setMediaError(error instanceof Error ? error.message : '无法开始录音，请检查麦克风权限')
+    } finally {
+      setVoiceStarting(false)
+    }
+  }
+
+  async function finishRecording() {
+    if (recordStopTimerRef.current !== null) {
+      clearTimeout(recordStopTimerRef.current)
+      recordStopTimerRef.current = null
+    }
+    const recorder = recorderRef.current
+    recorderRef.current = null
+    setRecording(false)
+    if (recorder === null) return
+    try {
+      const { file, durationMs } = await recorder.stop()
+      const rejected =
+        describeMediaFileRejection('VOICE', file) ?? describeVoiceDurationRejection(durationMs)
+      if (rejected !== null) {
+        setMediaError(rejected)
+        return
+      }
+      setMediaError(null)
+      enqueueMedia({ kind: 'VOICE', file, durationMs }, URL.createObjectURL(file))
+    } catch {
+      setMediaError('录音失败，请重试')
+    }
+  }
+
+  function loadOlderPages() {
+    if (history.hasNextPage) void history.fetchNextPage()
+    if (mediaHistory.hasNextPage) void mediaHistory.fetchNextPage()
   }
 
   if (conversation.isPending) return <LoadingState label="正在加载会话…" />
@@ -261,7 +530,22 @@ export function ConversationPage({ conversationId }: { conversationId: string })
             </p>
           </div>
         </div>
-        <RealtimeStatus status={realtimeStatus} />
+        <div className="flex items-center gap-3">
+          <ReportEntry
+            className="text-ink-3"
+            size="sm"
+            target={{
+              type: 'USER',
+              id: item.counterpart.id,
+              label: item.counterpart.nickname,
+            }}
+            variant="ghost"
+          >
+            <Flag className="size-3.5" />
+            举报该用户
+          </ReportEntry>
+          <RealtimeStatus status={realtimeStatus} />
+        </div>
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_320px] items-start gap-5">
@@ -318,55 +602,101 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                   />
                 </div>
               ) : null}
-              {history.isSuccess && history.hasNextPage ? (
+              {mediaHistory.isError ? (
+                <div className="mb-4">
+                  <ErrorState
+                    message="媒体消息加载失败"
+                    onRetry={() => void mediaHistory.refetch()}
+                  />
+                </div>
+              ) : null}
+              {hasOlderPages ? (
                 <div className="mb-4 flex justify-center">
                   <Button
-                    disabled={history.isFetchingNextPage}
-                    onClick={() => void history.fetchNextPage()}
+                    disabled={history.isFetchingNextPage || mediaHistory.isFetchingNextPage}
+                    onClick={loadOlderPages}
                     size="sm"
                     variant="outline"
                   >
-                    {history.isFetchingNextPage ? '正在加载…' : '加载更早消息'}
+                    {history.isFetchingNextPage || mediaHistory.isFetchingNextPage
+                      ? '正在加载…'
+                      : '加载更早消息'}
                   </Button>
                 </div>
               ) : null}
-              {history.isSuccess && messages.length === 0 ? (
+              {history.isSuccess && mediaHistory.isSuccess && timeline.length === 0 ? (
                 <p className="py-10 text-center text-ink-3 text-sm">还没有消息，发一条打个招呼吧</p>
               ) : null}
               <div className="space-y-4">
-                {messages.map((message) => (
-                  <MessageBubble
-                    isMine={message.senderId === ownerId}
-                    isRead={isMessageRead(message, counterpartLastReadAt)}
-                    key={message.id}
-                    message={message}
-                  />
-                ))}
-                {visibleLocalMessages.map((message) => (
-                  <MessageBubble
-                    isMine={message.senderId === ownerId}
-                    isRead={isMessageRead(message, counterpartLastReadAt)}
-                    key={`local-${message.id}`}
-                    message={message}
-                  />
-                ))}
-                {outbox.map((entry) => (
-                  <PendingMessageBubble
-                    item={entry}
-                    key={entry.clientRequestId}
-                    onDismiss={() =>
-                      setOutbox((current) =>
-                        current.filter((item) => item.clientRequestId !== entry.clientRequestId),
-                      )
-                    }
-                    onRetry={() => retry(entry)}
-                  />
-                ))}
+                {timeline.map((entry) =>
+                  entry.kind === 'message' ? (
+                    <MessageBubble
+                      isMine={entry.message.senderId === ownerId}
+                      isRead={isMessageRead(entry.message, counterpartLastReadAt)}
+                      key={`message-${entry.id}`}
+                      message={entry.message}
+                    />
+                  ) : (
+                    <MediaBubble
+                      isMine={entry.media.senderId === ownerId}
+                      isRead={isMediaRead(entry.media, counterpartLastReadAt)}
+                      key={`media-${entry.id}`}
+                      media={entry.media}
+                    />
+                  ),
+                )}
+                {outbox.map((entry) =>
+                  entry.kind === 'MEDIA' ? (
+                    <PendingMediaBubble
+                      item={entry}
+                      key={entry.clientRequestId}
+                      onDismiss={() => dismissOutbox(entry.clientRequestId)}
+                      onRetry={() => retry(entry)}
+                    />
+                  ) : (
+                    <PendingMessageBubble
+                      item={entry}
+                      key={entry.clientRequestId}
+                      onDismiss={() => dismissOutbox(entry.clientRequestId)}
+                      onRetry={() => retry(entry)}
+                    />
+                  ),
+                )}
               </div>
             </div>
 
             <div className="border-line border-t p-4">
               <div className="flex items-end gap-3">
+                <input
+                  accept={IMAGE_FILE_ACCEPT}
+                  className="sr-only"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (file !== undefined) void pickImageFile(file)
+                  }}
+                  ref={imageInputRef}
+                  type="file"
+                />
+                <Button
+                  aria-label="发送图片"
+                  className="h-11 w-11"
+                  onClick={() => imageInputRef.current?.click()}
+                  type="button"
+                  variant="outline"
+                >
+                  <ImagePlus className="size-4" />
+                </Button>
+                <Button
+                  aria-label={recording ? '结束录音并发送' : '录制语音'}
+                  className={`h-11 w-11 ${recording ? 'animate-pulse' : ''}`}
+                  disabled={voiceStarting}
+                  onClick={() => void toggleRecording()}
+                  type="button"
+                  variant={recording ? 'default' : 'outline'}
+                >
+                  {recording ? <Square className="size-4" /> : <Mic className="size-4" />}
+                </Button>
                 <Textarea
                   aria-label="消息内容"
                   className="max-h-[160px] min-h-[44px] flex-1 resize-none"
@@ -386,6 +716,16 @@ export function ConversationPage({ conversationId }: { conversationId: string })
                   发送
                 </Button>
               </div>
+              {recording ? (
+                <p className="mt-2 text-danger text-xs" role="status">
+                  正在录音…再次点击麦克风结束并发送（最长 60 秒）
+                </p>
+              ) : null}
+              {mediaError !== null ? (
+                <p className="mt-2 text-danger text-xs" role="alert">
+                  {mediaError}
+                </p>
+              ) : null}
               <p className="mt-2 text-right text-ink-3 text-xs">{draft.length}/2000</p>
             </div>
           </div>

@@ -247,9 +247,13 @@ export type SaveUserInterestProfileInput = {
   actionCount: number
   windowStartedAt: Date
   /**
-   * **读取行为数据那一刻**的时刻（不是算完之后），用作 CAS 版本号：
-   * 一次读完数据才开始算的 job，若期间有更晚的 job 写入，它的 `computed_at` 更小，
-   * 晚到时会被静默丢弃。与 #322 `saveEmbedding` 的 `source_updated_at` 同一手法。
+   * **读完行为数据那一刻**的时刻，用作 CAS 版本号：既不是函数入口、也不是算完之后。
+   *
+   * 三个阶段各自都会错：取在入口，会让"入口早、却晚才真正读到数据"的 job 拿到更旧的版本号，
+   * 被读到更旧数据的 job 挡住（`superseded`），库里停在证据更旧的那份画像上；取在算完，
+   * 会让"读得早、算得慢"的 job 拿到更晚的版本号，反而覆盖掉更新数据算出来的画像。
+   * 只有读返回这一瞬间与数据快照的新旧同序。与 #322 `saveEmbedding` 的
+   * `source_updated_at` 同一手法。
    */
   computedAt: Date
 }

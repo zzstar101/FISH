@@ -26,13 +26,15 @@
     "ws:smoke": "bun run scripts/ws-smoke.ts",
     "core:smoke": "bun run apps/api/scripts/core-smoke.ts",
     "rank:compare": "bun run apps/worker/scripts/rank-compare.ts",
+    "visual:backfill": "bun run apps/worker/scripts/visual-backfill.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:generate": "bun run --filter '@fish/db' generate",
     "db:migrate": "bun run --filter '@fish/db' migrate",
     "db:seed": "bun run --filter '@fish/db' seed",
     "db:promote": "bun run --filter '@fish/db' promote",
-    "db:studio": "bun run --filter '@fish/db' studio"
+    "db:studio": "bun run --filter '@fish/db' studio",
+    "db:dev": "bun run scripts/dev-db.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.13",

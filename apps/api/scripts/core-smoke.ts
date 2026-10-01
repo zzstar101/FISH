@@ -63,6 +63,7 @@ import {
 import { RECOMMENDATION_STRATEGY_VERSION_NONE } from '@fish/contracts/recommendation/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
+import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
@@ -74,10 +75,13 @@ import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
+import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import { wishes } from '@fish/db/schema/wishes'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, eq, sql } from 'drizzle-orm'
+import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/enqueue'
 import { MEETUP_TOKEN_MAX_ATTEMPTS } from '../src/modules/transactions/service'
+import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-limit'
 
 // ---------------------------------------------------------------------------
 // 常量与断言工具
@@ -99,6 +103,14 @@ const JPEG = Buffer.from(
  * 用来验证"同一个 staging 键被 PUT 成别的内容后，旧审核结论不会被复用"（#286 验收）。
  */
 const OVERWRITE_JPEG = Buffer.concat([JPEG, Buffer.from([0xff, 0xd9])])
+
+/**
+ * 反例字节：只有 UTF-8 文本，没有任何已支持图片的魔术字节（#324 负例断言用它）。
+ *
+ * 它会被 PUT 到一个**合法 presign 出来的** `visual-search/` 键上，用来钉住"服务端不信任客户端
+ * 声明的 `contentType`，要靠自己嗅探字节判定图片"——否则非图片输入会一路走到向量化那一步。
+ */
+const NOT_IMAGE_BYTES = Buffer.from('这不是一张图片：只有 UTF-8 文本字节，没有图片魔术字节。')
 
 /**
  * #43 链路商品的字段。抽成常量是为了让「人工队列商品」和「链路商品」共用同一份事实，只在
@@ -238,6 +250,21 @@ const patchJson = (base: string, path: string, body: unknown, cookie?: Cookie) =
 
 const get = (base: string, path: string, cookie?: Cookie) =>
   fetch(new URL(path, base), cookie ? { headers: { cookie } } : {})
+
+/**
+ * 带匿名会话头的 POST（#324 拍照识图）。
+ *
+ * 上传时服务端会补发一个匿名会话 id 并在响应头回写；**后续的搜索必须带上同一个 id**，
+ * 否则服务端会把它当成另一个主体，查询图不归它所有，搜索会以 400 拒绝。
+ */
+const anonymousPostJson = (base: string, path: string, body: unknown, sessionId: string) =>
+  fetch(new URL(path, base), {
+    ...jsonInit('POST', body),
+    headers: {
+      'content-type': 'application/json',
+      [RECOMMENDATION_HEADERS.sessionId]: sessionId,
+    },
+  })
 
 async function register(base: string, serial: number): Promise<Cookie> {
   const response = await postJson(base, '/auth/register', {
@@ -397,6 +424,21 @@ async function embeddingRow(db: Db, column: 'listingId' | 'wishId', id: string) 
   return rows[0] ?? null
 }
 
+/**
+ * 读某商品当前的视觉向量行（#324 smoke 专用）。
+ *
+ * 与 `embeddingRow` 同一纪律：先整行读出来、拿 `model` 再按 model 用，不把 provider 的模型名
+ * 硬编码进 smoke（`VISUAL_EMBEDDING_TRANSPORT` 换实现时模型名就会变）。
+ */
+async function visualEmbeddingRow(db: Db, listingId: string) {
+  const rows = await db
+    .select()
+    .from(listingVisualEmbeddings)
+    .where(eq(listingVisualEmbeddings.listingId, listingId))
+    .limit(1)
+  return rows[0] ?? null
+}
+
 /** `/matches` 响应里是否存在某个分数的条目（用于卖家侧可能有多条的情形）。 */
 function hasScore(response: Record<string, unknown>, score: number): boolean {
   const items = response.items
@@ -444,6 +486,44 @@ async function meetupTokenRowCount(db: Db, transactionId: string): Promise<numbe
     where transaction_id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionId)}
   `)
   return [...rows][0]?.n ?? 0
+}
+
+/**
+ * #297 终态一致性不变量：终态交易必须无凭证行，且 status / 时间戳 / listing 三方一致
+ * （COMPLETED ⇒ completed_at 非空 + listing SOLD，治理下架例外除外；CANCELLED ⇒
+ * cancelled_at 非空）。与 store.test.ts 的 assertTerminalConsistency 同一口径。
+ */
+async function assertTerminalTokenConsistency(
+  db: Db,
+  transactionPublicId: string,
+  expected: 'CANCELLED' | 'COMPLETED',
+): Promise<void> {
+  assertEqual(await meetupTokenRowCount(db, transactionPublicId), 0, `${expected} 后凭证行已删除`)
+  const rows = await db.execute<{
+    status: string
+    completed: boolean
+    cancelled: boolean
+    listing_status: string
+    governance_delisted: boolean
+  }>(sql`
+    select t.status::text as status,
+           (t.completed_at is not null) as completed,
+           (t.cancelled_at is not null) as cancelled,
+           l.status::text as listing_status,
+           (l.governance_delisted_at is not null) as governance_delisted
+    from transactions t join listings l on l.id = t.listing_id
+    where t.id = ${decodePublicId(PUBLIC_ID_PREFIX.transaction, transactionPublicId)}
+  `)
+  const row = [...rows][0]
+  if (row === undefined) {
+    throw new Error(`✗ [${step}] 终态交易存在｜实得：${JSON.stringify({ transactionPublicId })}`)
+  }
+  assertEqual(row.status, expected, `交易状态应为 ${expected}`)
+  assertEqual(row.completed, expected === 'COMPLETED', 'completed_at 与状态一致')
+  assertEqual(row.cancelled, expected === 'CANCELLED', 'cancelled_at 与状态一致')
+  if (expected === 'COMPLETED' && !row.governance_delisted) {
+    assertEqual(row.listing_status, 'SOLD', 'COMPLETED ⇒ listing SOLD（治理下架例外除外）')
+  }
 }
 
 async function notificationCount(db: Db, listingId: string, wishId: string): Promise<number> {
@@ -499,7 +579,10 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
   step = '建库'
   console.log(`\n[core-smoke] ===== 第 ${runIndex} 轮：${dbName} =====`)
 
-  const dbEnv = { ...env, DATABASE_URL: dbUrl }
+  // `VISUAL_EMBEDDING_TRANSPORT` 没有默认值，缺配置 API / Worker 启动即失败。拍照识图要求
+  // provider 确定性、不出网（#324）：显式 pin 成 stub，不依赖调用方 `.env`（本机的 live 配置
+  // 不漏进子进程）。stub 与其它 dev transport 一样，生产环境由 loader 直接拒绝。
+  const dbEnv = { ...env, DATABASE_URL: dbUrl, VISUAL_EMBEDDING_TRANSPORT: 'stub' }
   // MinIO 不是 scratch 的：记下本轮上传的对象，成功时删掉（否则 `--runs=5` 会在桶里累积垃圾）；
   // 失败时默认保留，好让现场可复查。用数组而不是单个变量：上传点以后可能不止一处。
   const uploadedObjectKeys: string[] = []
@@ -1314,6 +1397,167 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     )
     assert(hasScore(semanticListingSide, 85), '卖家侧同样看得到这一对（两个方向口径一致）')
 
+    // 7.6 #324 拍照识图：查询图 presign → 私有 PUT → POST /visual-search → 结果列表命中链路商品
+    step = '拍照识图'
+    section('拍照识图：查询图 → 私有 presign PUT → 向量召回 → 结果列表')
+    // 前置：链路商品（唯一一条带真实封面字节、且 ACTIVE + APPROVED 的商品）必须已有本模型的
+    // 视觉向量行。这里直接调用 Worker 的 `enqueueVisualEmbedJob`（回填 runner 用的同一个入口），
+    // 而不是等回填：回填的触发时刻由 Worker 的 60s maintenance 间隔决定，等它就是把这条链路
+    // 变成时间竞态；直接投递 + 有界等待才是确定性的。返回值不能当断言——同一商品可能已经有一条
+    // 待跑任务，`ON CONFLICT DO NOTHING` 会让这里返回 false，但那条任务照样会跑到并写库。
+    await enqueueVisualEmbedJob(db, listingId)
+    await waitEmbedJob(db, 'VISUAL_EMBED_LISTING', 'listingId', listingId)
+
+    // 视觉向量的新鲜度判据是**封面对象键**（不是实体版本号，见 visual-embedding-store 文件头）：
+    // 商品改价 / 上下架都不会让向量失效，所以只需确认 `source_object_key` 就是当前封面键。
+    const visualEmbedding = await visualEmbeddingRow(db, listingId)
+    assert(
+      visualEmbedding !== null && visualEmbedding.sourceObjectKey === approvedKey,
+      '链路商品已写入视觉向量行（source_object_key = 当前封面）',
+      { row: visualEmbedding, approvedKey },
+    )
+    if (!visualEmbedding) throw new Error('视觉向量行缺失')
+
+    // 用**匿名**身份搜索，而不是卖家自己：登录用户的视觉召回会排除调用者自己发布的商品
+    // （并行改动），用卖家 cookie 搜自己发布的商品必然查不到。匿名同时验证了"拍照识图允许未登录"。
+    const visualUploadResponse = await postJson(base, '/visual-search/uploads', {
+      contentType: 'image/jpeg',
+      sizeBytes: JPEG.length,
+    })
+    assertEqual(visualUploadResponse.status, 200, 'POST /visual-search/uploads（匿名）→ 200')
+    // 服务端发现匿名请求没带会话 id 时会补发一个并回写；搜索必须复用同一个会话（见 anonymousPostJson）。
+    const anonymousSessionId = visualUploadResponse.headers.get(RECOMMENDATION_HEADERS.sessionId)
+    assert(anonymousSessionId !== null, '匿名上传回写 x-anonymous-session-id')
+    if (!anonymousSessionId) throw new Error('匿名会话 id 缺失')
+    const visualUpload = await readJson(visualUploadResponse)
+    const queryObjectKey = String(visualUpload.objectKey)
+    assert(
+      queryObjectKey.startsWith('visual-search/'),
+      '查询图键在 visual-search/ 私有命名空间',
+      queryObjectKey,
+    )
+    uploadedObjectKeys.push(queryObjectKey)
+
+    // 查询图是私有对象：它不在 S3 匿名读白名单里，直读必须失败（与 staging 键同一条桶策略）。
+    const queryAnonymousRead = await fetch(`${env.S3_PUBLIC_URL}/${queryObjectKey}`)
+    assertEqual(queryAnonymousRead.status, 403, '查询图键匿名直读 → 403')
+
+    const visualPut = await fetch(String(visualUpload.url), {
+      method: 'PUT',
+      body: JPEG,
+      headers: { 'content-type': 'image/jpeg' },
+    })
+    assert(visualPut.ok, `presigned PUT 查询图 → ${visualPut.status}`)
+    await visualPut.arrayBuffer()
+
+    const visualSearchResponse = await anonymousPostJson(
+      base,
+      '/visual-search',
+      { objectKey: queryObjectKey },
+      anonymousSessionId,
+    )
+    assertEqual(
+      visualSearchResponse.status,
+      200,
+      'POST /visual-search（查询图 = 商品封面字节）→ 200',
+    )
+    const visualSearch = await readJson(visualSearchResponse)
+    assertEqual(
+      String(visualSearch.embeddingModel),
+      visualEmbedding.model,
+      '响应用的就是写库的那个模型（读侧按 model 过滤，不混模型）',
+    )
+    assertEqual(
+      String(visualSearch.strategyVersion),
+      VISUAL_SEARCH_STRATEGY_VERSION,
+      '响应带视觉排序策略版本',
+    )
+    // stub 的性质：同一字节 + 同一 mime ⇒ 向量逐位相同 ⇒ 余弦距离 0，所以链路商品必须排第一。
+    const visualItems = visualSearch.items
+    assert(Array.isArray(visualItems) && visualItems.length > 0, '结果列表非空')
+    if (!Array.isArray(visualItems)) throw new Error('items 不是数组')
+    const visualItemIds = visualItems.map((item) =>
+      typeof item === 'object' && item !== null ? String((item as Record<string, unknown>).id) : '',
+    )
+    assert(visualItemIds.includes(listingPublicId), '结果列表包含链路商品', visualItemIds)
+    assertEqual(visualItemIds[0], listingPublicId, '逐位相同的向量 ⇒ 链路商品排 Top-1')
+
+    // 反例：合法 presign 键 + 非图片字节 ⇒ 400 VISUAL_SEARCH_IMAGE_INVALID（服务端靠嗅探字节拒绝，
+    // 而不是相信客户端声明的 contentType）。这一条同样走真实 presign → PUT。
+    const badUploadResponse = await anonymousPostJson(
+      base,
+      '/visual-search/uploads',
+      { contentType: 'image/jpeg', sizeBytes: NOT_IMAGE_BYTES.length },
+      anonymousSessionId,
+    )
+    assertEqual(badUploadResponse.status, 200, 'POST /visual-search/uploads（反例）→ 200')
+    const badUpload = await readJson(badUploadResponse)
+    const badObjectKey = String(badUpload.objectKey)
+    uploadedObjectKeys.push(badObjectKey)
+    const badPut = await fetch(String(badUpload.url), {
+      method: 'PUT',
+      body: NOT_IMAGE_BYTES,
+      headers: { 'content-type': 'image/jpeg' },
+    })
+    assert(badPut.ok, `presigned PUT 非图片字节 → ${badPut.status}`)
+    await badPut.arrayBuffer()
+
+    const badSearchResponse = await anonymousPostJson(
+      base,
+      '/visual-search',
+      { objectKey: badObjectKey },
+      anonymousSessionId,
+    )
+    assertEqual(badSearchResponse.status, 400, '非图片字节 → 400')
+    assertEqual(
+      String(((await readJson(badSearchResponse)).error as { code: string }).code),
+      'VISUAL_SEARCH_IMAGE_INVALID',
+      '错误码 = VISUAL_SEARCH_IMAGE_INVALID',
+    )
+
+    // 7.7 #324 M2 / Q6=B 匿名限流：伪造转发头 + 不带会话头是两轮评审都复现过的绕过路径
+    // （修复前 25/25 全 200：每请求新签一个会话 ⇒ 每请求一份新额度，IP 又归因不到 ⇒ 两个桶都是空的）。
+    // 这里用真实 HTTP 复现同一手法，钉住「第 21 次一定被拒」。固定一个伪造的 X-Forwarded-For 而**不带**
+    // 匿名会话头：无可信代理时它归因不到任何 IP，必须落共享兜底桶（fail-closed）；配了可信代理时它被
+    // 归因成一个固定桶。两种情况都恰好放行 cap 次，所以断言与部署配置无关。
+    step = '拍照识图限流'
+    section('拍照识图：匿名限流不可被伪造转发头绕过')
+    let forgedAllowed = 0
+    let forgedThrottled = 0
+    let throttledRetryAfter: string | null = null
+    let throttledCode: string | null = null
+    for (let i = 0; i < VISUAL_SEARCH_MAX_ATTEMPTS + 5; i++) {
+      const response = await fetch(new URL('/visual-search/uploads', base), {
+        ...jsonInit('POST', { contentType: 'image/png', sizeBytes: JPEG.length }),
+        headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.7' },
+      })
+      if (response.status === 200) {
+        forgedAllowed += 1
+        await response.arrayBuffer()
+        continue
+      }
+      if (response.status === 429) {
+        forgedThrottled += 1
+        // 首个 429 的响应体只能读一次：在这里就地读，避免循环后再读触发 "Body already used"。
+        if (throttledCode === null) {
+          throttledRetryAfter = response.headers.get('retry-after')
+          throttledCode = String(((await readJson(response)).error as { code: string }).code)
+        } else {
+          await response.arrayBuffer()
+        }
+        continue
+      }
+      await response.arrayBuffer()
+    }
+    assertEqual(
+      forgedAllowed,
+      VISUAL_SEARCH_MAX_ATTEMPTS,
+      `伪造转发头 + 无会话头：恰好放行 ${VISUAL_SEARCH_MAX_ATTEMPTS} 次`,
+    )
+    assertEqual(forgedThrottled, 5, '超出的请求全部 429（新签会话不再等于新额度）')
+    assert(throttledRetryAfter !== null, '429 带 Retry-After 头', throttledRetryAfter)
+    assertEqual(throttledCode, 'VISUAL_SEARCH_RATE_LIMITED', '错误码 = VISUAL_SEARCH_RATE_LIMITED')
+
     // 8. 重启恢复·口径 1：worker 停机期间投递的 job，重启后继续
     step = '重启恢复（停机积压）'
     section('重启恢复 ①：停机期间投递的 PENDING job')
@@ -1450,6 +1694,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(cancelledResponse.status, 200, '买家取消 → 200')
     assertEqual((await readJson(cancelledResponse)).status, 'CANCELLED', '取消后交易为 CANCELLED')
     assertEqual(await meetupTokenRowCount(db, cancelledId), 0, 'CANCELLED 后凭证行已删除')
+    await assertTerminalTokenConsistency(db, cancelledId, 'CANCELLED')
 
     const cancelAfterTerminal = await postJson(
       base,
@@ -1603,6 +1848,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual((await readJson(buyerConfirm)).status, 'COMPLETED', '买家确认后双侧齐 → COMPLETED')
 
     assertEqual(await meetupTokenRowCount(db, transactionId), 0, 'COMPLETED 后凭证行已删除')
+    await assertTerminalTokenConsistency(db, transactionId, 'COMPLETED')
 
     const afterTerminal = await issue()
     assertEqual(afterTerminal.status, 409, '终态后取码 → 409')

@@ -14,7 +14,8 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
  *    （不能把演示数据伪装成真实愿望或命中）；
  * 2. **命中的来源**：只对 `ACTIVE && matchCount > 0` 的愿望逐条拉
  *    `/matches?wishId=`，且单条失败不拖垮整页（卡片保留契约计数、不编排行）；
- * 3. **卖家**：`/matches` 不返回卖家，逐条拉详情补；补不到是 `null`，
+ * 3. **卖家**：#191 起 `/matches` 卡片内嵌 `seller`（公开四字段），`MatchView.seller`
+ *    直接取自卡片，不再逐条拉详情；卡片缺席 seller 时是 `null`（不编造）。
  *    404 是「不存在」（notFound）、403 是「不是你的愿望」（forbidden），网络失败才是 failed。
  *
  * 替换的是 `@/lib/request` 的 `apiRequest`（只此一处），**不**替换 `features/wish/api`
@@ -166,7 +167,7 @@ function wish(partial: Partial<WishDto> & { id: string }): WishDto {
   }
 }
 
-function card(id: string): ListingCard {
+function card(id: string, seller: ListingCard['seller'] = undefined): ListingCard {
   return {
     id,
     title: `商品 ${id.slice(0, 4)}`,
@@ -179,6 +180,8 @@ function card(id: string): ListingCard {
     free: false,
     coverUrl: null,
     createdAt: '2026-09-01T00:00:00.000Z',
+    // #191：卡片内嵌卖家公开子集（API 卡片恒带）；缺省 = 老客户端 mock 记录的缺席形态
+    ...(seller ? { seller } : {}),
     // 卡片契约要求这个字段（`.nullable()`，不是 optional）：公开视角恒 null
     moderationStatus: null,
   }
@@ -200,8 +203,12 @@ function detail(id: string, nickname: string): ListingDetail {
   }
 }
 
-function matched(id: string, listingId: string): WishMatchItem {
-  return { id, score: 88, createdAt: '2026-09-01T00:00:00.000Z', listing: card(listingId) }
+function matched(
+  id: string,
+  listingId: string,
+  seller: ListingCard['seller'] = undefined,
+): WishMatchItem {
+  return { id, score: 88, createdAt: '2026-09-01T00:00:00.000Z', listing: card(listingId, seller) }
 }
 
 /** 找出发往某路径的调用（`method` 省略 = 只看路径） */
@@ -300,10 +307,19 @@ describe('loadWishes —— 我的愿望 + 愿望池 + 命中', () => {
 })
 
 describe('loadWishMatches —— 匹配结果 + 逐条补卖家', () => {
-  test('成功：命中映射带上 wishId，卖家从商品详情补上，请求参数按契约', async () => {
+  test('成功：命中映射带上 wishId，卖家取自卡片内嵌 seller（#191 起不再逐条拉详情）', async () => {
     wishById.set(WISH_ID, wish({ id: WISH_ID, matchCount: 1 }))
-    matchLists.set(WISH_ID, { total: 1, items: [matched(MATCH_ID, LISTING_ID)] })
-    detailImpl = (id) => Promise.resolve(detail(id, '买家甲'))
+    matchLists.set(WISH_ID, {
+      total: 1,
+      items: [
+        matched(MATCH_ID, LISTING_ID, {
+          id: SELLER_ID,
+          nickname: '买家甲',
+          avatarUrl: null,
+          authStatus: 'VERIFIED',
+        }),
+      ],
+    })
 
     const result = await loadWishMatches(WISH_ID)
     expect(result.status).toBe('ok')
@@ -315,8 +331,9 @@ describe('loadWishMatches —— 匹配结果 + 逐条补卖家', () => {
     expect(result.items[0]?.match.wishId).toBe(WISH_ID)
     expect(result.items[0]?.listing.id).toBe(LISTING_ID)
     expect(result.items[0]?.seller?.nickname).toBe('买家甲')
-    expect(detailCalls).toEqual([LISTING_ID])
-    // 目标走详情端点，匹配走 /matches?wishId=&limit=
+    // 卖家来自 /matches 卡片本身：一个详情请求都不该再发（不制造 N+1）
+    expect(detailCalls).toEqual([])
+    // 匹配走 /matches?wishId=&limit=
     expect(callsTo(WISH_ROUTES.detail(WISH_ID))).toHaveLength(1)
     expect(callsTo(MATCHING_ROUTES.base).at(0)?.query).toEqual({ wishId: WISH_ID, limit: 50 })
   })
@@ -334,14 +351,20 @@ describe('loadWishMatches —— 匹配结果 + 逐条补卖家', () => {
     expect(result.items).toHaveLength(1)
   })
 
-  test('补卖家失败：该行 seller 为 null（不编造），其余照常补上', async () => {
+  test('卡片 seller 缺席：该行 seller 为 null（不编造），其余行照常带上', async () => {
     wishById.set(WISH_ID, wish({ id: WISH_ID }))
     matchLists.set(WISH_ID, {
       total: 2,
-      items: [matched(MATCH_ID, LISTING_ID), matched(MATCH_ID_2, OTHER_LISTING_ID)],
+      items: [
+        matched(MATCH_ID, LISTING_ID),
+        matched(MATCH_ID_2, OTHER_LISTING_ID, {
+          id: SELLER_ID,
+          nickname: '买家乙',
+          avatarUrl: null,
+          authStatus: 'UNVERIFIED',
+        }),
+      ],
     })
-    detailImpl = (id) =>
-      id === LISTING_ID ? Promise.reject(new Error('boom')) : Promise.resolve(detail(id, '买家乙'))
 
     const result = await loadWishMatches(WISH_ID)
     expect(result.status).toBe('ok')
