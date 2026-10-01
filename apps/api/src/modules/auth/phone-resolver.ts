@@ -144,23 +144,34 @@ export function createLivePhoneResolver(deps: {
         )
       }
 
-      // `errcode` 非整数一律按失败处理（fail closed）：既不当作成功去读 phone_info，
-      // 也不把可控文本拼进会进日志的 message。
-      const errcode =
-        typeof body.errcode === 'number' && Number.isInteger(body.errcode)
-          ? body.errcode
-          : undefined
-      if (errcode !== undefined && errcode !== 0) {
-        // 凭证失效（40001 / 40014 / 42001）先丢掉**这一个** token，否则会拿着死凭证
-        // 一直重试到本地 expiresAt。传 token 而不是无条件清：并发下另一个请求可能
-        // 已经刷出了新凭证（见 access-token 的 invalidate 语义）。
-        if (isInvalidAccessTokenErrcode(errcode)) deps.tokens.invalidate(token)
-        // 40029 code 无效 / 40163 code 已被使用——**唯一**判给用户的分支。
-        if (errcode === 40029 || errcode === 40163) {
-          throw new PhoneResolveError(`getuserphonenumber errcode=${errcode}`, 'code_invalid')
+      // `errcode` 的三种形态分开处理，与 `wechat-platform.ts` 同一口径：
+      // - **缺失**：按成功形状继续，交给下面的 phone_info 校验兜底；
+      // - **存在但非整数**（`"0"` / `1.5` / `null`）：畸形响应，fail closed —— 既不当成功去读
+      //   phone_info，也不把可控文本拼进会进日志的 message；
+      // - **存在且为整数**：非 0 即失败（上游从不发 `errcode: 0` 以外表示成功的值）。
+      const rawErrcode = body.errcode
+      if (rawErrcode !== undefined) {
+        if (typeof rawErrcode !== 'number' || !Number.isInteger(rawErrcode)) {
+          throw new PhoneResolveError(
+            'getuserphonenumber 响应的 errcode 格式非法',
+            'upstream_unavailable',
+          )
         }
-        // 其余（45011 频控、-1 系统繁忙、48001 接口未授权……）都是平台侧，不是用户输入的问题。
-        throw new PhoneResolveError(`getuserphonenumber errcode=${errcode}`, 'upstream_unavailable')
+        if (rawErrcode !== 0) {
+          // 凭证失效（40001 / 40014 / 42001）先丢掉**这一个** token，否则会拿着死凭证
+          // 一直重试到本地 expiresAt。传 token 而不是无条件清：并发下另一个请求可能
+          // 已经刷出了新凭证（见 access-token 的 invalidate 语义）。
+          if (isInvalidAccessTokenErrcode(rawErrcode)) deps.tokens.invalidate(token)
+          // 40029 code 无效 / 40163 code 已被使用——**唯一**判给用户的分支。
+          if (rawErrcode === 40029 || rawErrcode === 40163) {
+            throw new PhoneResolveError(`getuserphonenumber errcode=${rawErrcode}`, 'code_invalid')
+          }
+          // 其余（45011 频控、-1 系统繁忙、48001 接口未授权……）都是平台侧，不是用户输入的问题。
+          throw new PhoneResolveError(
+            `getuserphonenumber errcode=${rawErrcode}`,
+            'upstream_unavailable',
+          )
+        }
       }
       if (!res.ok) {
         throw new PhoneResolveError(`getuserphonenumber HTTP ${res.status}`, 'upstream_unavailable')

@@ -71,7 +71,7 @@ describe('设置页手机号入口：接线', () => {
     expect(source).toContain('onGetPhoneNumber={onGetPhoneNumber}')
   })
 
-  test('拒绝授权（微信不给 code）不发起请求，只给中性提示', async () => {
+  test('没有 code 时不发起请求，且不武断说成「已取消」（平台失败同样没有 code）', async () => {
     const source = await read('../src/pages/settings/index.tsx')
     const rejectGuard = source.indexOf('if (!code)')
     const request = source.indexOf('bindPhone(code)')
@@ -79,6 +79,9 @@ describe('设置页手机号入口：接线', () => {
     expect(request).toBeGreaterThan(-1)
     // 拒绝分支必须在发请求之前 return —— 顺序反了就成了「不给 code 也照发」
     expect(rejectGuard).toBeLessThan(request)
+    // `getPhoneNumber:fail no permission`（手机号能力未开通，正是 Issue 的外部前置）
+    // 同样拿不到 code；报成「用户已取消」会把要暴露的问题藏起来。
+    expect(source).not.toContain('已取消')
   })
 
   test('ownerId 在**发请求之前**捕获，并传给 applyPhone（换号后迟到响应不写新账号）', async () => {

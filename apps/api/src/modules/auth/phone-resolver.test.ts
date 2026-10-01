@@ -154,6 +154,23 @@ describe('createLivePhoneResolver：平台侧故障 → 一律 upstream_unavaila
     }
   })
 
+  test('errcode 存在但非整数（"0" / 1.5 / null / true）→ fail closed，不当作成功', async () => {
+    for (const errcode of ['0', 1.5, null, true]) {
+      const { service } = tokenService()
+      const { impl } = phoneFetch(
+        () =>
+          new Response(
+            JSON.stringify({ errcode, phone_info: { purePhoneNumber: '13800138000' } }),
+            { status: 200 },
+          ),
+      )
+      const resolver = createLivePhoneResolver({ tokens: service, fetchImpl: impl })
+      // 号码字段本身是合法的，但 errcode 畸形就不能认成功——否则网关上的一段脏 JSON
+      // 会被直接当成「用户确实持有这个号码」。
+      expect((await failureOf(() => resolver.resolve('code'))).failure).toBe('upstream_unavailable')
+    }
+  })
+
   test('HTTP 非 2xx → upstream_unavailable', async () => {
     const { service } = tokenService()
     const { impl } = phoneFetch(() => new Response('<html>502 Bad Gateway</html>', { status: 502 }))

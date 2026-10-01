@@ -56,8 +56,17 @@ export const AuthErrorCodeSchema = z.enum([
    * 端上据此引导「微信登录暂不可用」，而不是当作登录失败无限重试。
    */
   'WECHAT_DISABLED',
-  /** #86 C：phone code 解析失败（stub 下即「不是 11 位手机号」）。422。 */
+  /** #86 C：phone code 解析失败（stub 下即「不是 11 位手机号」，live 下 40029 / 40163）。422。 */
   'PHONE_CODE_INVALID',
+  /**
+   * #204：手机号换取的上游故障——凭证失效（已顺手丢弃缓存）/ 超时 / 不可达 / 响应畸形 /
+   * 其它 errcode（频控、系统繁忙、接口未授权……）。502。
+   *
+   * 与 422 `PHONE_CODE_INVALID` 的分工是 #204 的冻结项：**不把平台故障伪装成用户 code 错误**，
+   * 否则用户会对着一个必然失败的上游反复重试同一枚 code。取值同时被
+   * `@fish/contracts/auth/phone` 的 `PhoneErrorCodeSchema` 收窄（派生自本联合，不另立一份字面量）。
+   */
+  'PHONE_UPSTREAM_UNAVAILABLE',
   /** #86 C：手机号已被其他账号绑定（唯一索引兜底并发换绑）。409。 */
   'PHONE_ALREADY_BOUND',
 ])

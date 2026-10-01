@@ -33,9 +33,6 @@ import './index.scss'
 
 /**
  * `onGetPhoneNumber` 的 `detail` 在 Taro 类型里是笼统事件，这里收窄成微信实际给的字段。
- *
- * 用户拒绝授权时微信**不给 `code`**，只回 `errMsg`（`getPhoneNumber:fail user deny`）——
- * 所以「有没有 code」就是「用户同不同意」的判据，不要拿 `errMsg` 文本做匹配。
  */
 type GetPhoneNumberEvent = { detail?: { code?: string } }
 
@@ -82,7 +79,11 @@ export default function Settings() {
   /**
    * 手机号绑定（#204）。四种情形各有明确行为：
    *
-   * - **用户拒绝授权**：微信不给 `code`，这不是错误，给一句中性提示，不弹错误、不发请求；
+   * - **没有 `code`**：可能是用户主动拒绝（`getPhoneNumber:fail user deny`），也可能是
+   *   平台侧失败（`fail no permission`——手机号能力未开通 / 未授权本小程序，正是 Issue 的
+   *   外部前置）。两者都拿不到 code，**不做 errMsg 文本匹配**：靠文本区分，一旦微信改了
+   *   措辞就会把平台故障说成「用户已取消」，反而把要暴露的问题藏起来。给一句两者都成立的
+   *   中性提示，且不发请求；
    * - **重复点击**：在飞时直接返回（`disabled` 是原生层的第一道闸，这里再兜一道，
    *   因为回调可能在 state 更新落盘前连来两次）；
    * - **未登录**：守卫会跳登录页，这里不发请求（后端也必然 401）；
@@ -94,7 +95,7 @@ export default function Settings() {
   const onGetPhoneNumber = (event: GetPhoneNumberEvent) => {
     const code = event.detail?.code
     if (!code) {
-      toast('已取消手机号授权')
+      toast('未能获取手机号，请重试')
       return
     }
     if (bindingPhone) return
