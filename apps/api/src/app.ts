@@ -265,13 +265,15 @@ export function createApp(
     }),
   )
 
-  // 留言 / 评论（#111）：挂根路径，因为三个端点跨 `/listings/:id/comments` 与
-  // `/comments/:id/replies`（路径常量在 `@fish/contracts/comments/routes`）。
-  // 读接口匿名可用、写接口逐路由挂 requireAuth（与 listings 同一分界）。
+  // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
+  // `/comments/:id/replies`、`/comments/:id`（DELETE）与 `/me/comments`（路径常量在
+  // `@fish/contracts/comments/routes`）。读接口匿名可用、写与本人作用域逐路由挂 requireAuth
+  // （与 listings 同一分界）；`storage` 复用同一实例 —— 本人留言列表里的商品卡片封面
+  // 与 feed / 详情必须同一套拼法。
   app.route(
     '/',
     createCommentsRouter({
-      service: createCommentService({ store: createSqlCommentStore(db) }),
+      service: createCommentService({ store: createSqlCommentStore(db), storage }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
       recorder: recommendationRecorder,

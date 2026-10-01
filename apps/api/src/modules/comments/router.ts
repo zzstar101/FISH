@@ -3,6 +3,7 @@ import {
   CommentCreateInputSchema,
   CommentIdSchema,
   CommentListQuerySchema,
+  MyCommentsQuerySchema,
 } from '@fish/contracts/comments/schema'
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import { ListingIdSchema } from '@fish/contracts/system/public-id'
@@ -73,6 +74,9 @@ function toErrorResponse(c: Context, error: unknown): Response {
  */
 const LISTING_COMMENTS_PATH = COMMENT_ROUTES.ofListing(':listingId')
 const COMMENT_REPLIES_PATH = COMMENT_ROUTES.repliesOf(':commentId')
+/** 「我发过的留言」（#195）与删除某条留言：都要求登录（本人作用域）。 */
+const MY_COMMENTS_PATH = COMMENT_ROUTES.myComments
+const COMMENT_PATH = COMMENT_ROUTES.comment(':commentId')
 
 /**
  * 留言 router。
@@ -145,6 +149,33 @@ export function createCommentsRouter(options: CommentsRouterOptions) {
         })
       }
       return c.json(reply, 201)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // —— 本人作用域（#195）：读我发过的留言、删自己的留言。两条都要求登录 ——
+  // 作者由可信 context 决定，不接受 `authorId` 查询参数（放开它等于把「谁在哪儿说了什么」
+  // 变成可枚举的公开数据）；`MyCommentsQuerySchema` 是 `strictObject`，多传即 422。
+  router.get(MY_COMMENTS_PATH, options.requireAuth, async (c) => {
+    const parsed = MyCommentsQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+
+    try {
+      return c.json(await service.listMine(c.get('userId'), parsed.data), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // 删除是写操作，过与发留言同一道 `guard.write`（受限账号不能靠删除绕过限制）。
+  router.delete(COMMENT_PATH, options.requireAuth, options.guard.write, async (c) => {
+    const commentId = requireResourceId(c, 'commentId')
+    // 非法 id 与「不存在」同码 404：不给「格式错」与「不存在」留可区分的响应。
+    if (!commentId) return c.json(errorBody('COMMENT_NOT_FOUND', '留言不存在'), 404)
+
+    try {
+      return c.json(await service.deleteMine(c.get('userId'), commentId), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
