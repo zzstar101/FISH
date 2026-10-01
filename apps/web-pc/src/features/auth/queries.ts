@@ -1,4 +1,3 @@
-import type { LoginRequest, RegisterRequest } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
 import type { QueryClient } from '@tanstack/react-query'
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,7 +9,7 @@ import {
   resetPcSessionIfCurrent,
 } from '../../lib/session-cache'
 import { syncRecommendationViewer } from '../recommendation/queue'
-import { fetchMe, login, logout, register } from './api'
+import { fetchMe, logout } from './api'
 
 export const authKeys = {
   me: () => AUTH_ME_QUERY_KEY,
@@ -82,24 +81,6 @@ export const meQueryOptions = (queryClient: QueryClient) =>
 export function useMe() {
   const queryClient = useQueryClient()
   return useQuery(meQueryOptions(queryClient))
-}
-
-export function useLogin() {
-  const queryClient = useQueryClient()
-  // 登录响应就是 Me，直接写进缓存；先清旧账号命名空间再落新用户（T3）。
-  return useMutation({
-    mutationFn: (input: LoginRequest) => login(input),
-    onSuccess: (user) => resetPcSession(queryClient, user),
-  })
-}
-
-export function useRegister() {
-  const queryClient = useQueryClient()
-  // 注册即登录，同 useLogin。
-  return useMutation({
-    mutationFn: (input: RegisterRequest) => register(input),
-    onSuccess: (user) => resetPcSession(queryClient, user),
-  })
 }
 
 export function useLogout() {

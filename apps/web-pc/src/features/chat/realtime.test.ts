@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import type { RealtimeServerEvent } from '@fish/contracts/chat/schema'
+import type { MediaRealtimeEvent, RealtimeServerEvent } from '@fish/contracts/chat/schema'
 import {
   ChatRealtime,
+  type ChatRealtimeEvent,
   type ChatRealtimeStatus,
   parseRealtimeEvent,
   type RealtimeSocket,
@@ -45,9 +46,33 @@ const validMessageEvent = {
     sender: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
     type: 'TEXT',
     content: '在吗',
+    recalledAt: null,
+    replyTo: null,
     createdAt: '2026-01-01T00:00:00.000Z',
   },
 } satisfies RealtimeServerEvent
+
+/** #67 媒体事件是独立 schema，不并入 realtimeServerEventSchema。 */
+const validMediaEvent = {
+  type: 'media.new',
+  conversationId: 'cnv_01jc000000e00800000000001a',
+  media: {
+    id: 'msg_01jc000000e00800000000001s',
+    conversationId: 'cnv_01jc000000e00800000000001a',
+    senderId: 'usr_01jc000000e00800000000000b',
+    kind: 'IMAGE',
+    mediaId: 'med_01jc000000e00800000000002b',
+    url: '/api/conversations/cnv_01jc000000e00800000000001a/media/med_01jc000000e00800000000002b',
+    mimeType: 'image/png',
+    sizeBytes: 2_048,
+    width: 800,
+    height: 600,
+    durationMs: null,
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-01-01T00:00:01.000Z',
+  },
+} satisfies MediaRealtimeEvent
 
 describe('realtime frame parsing', () => {
   test('accepts contract events and ignores malformed frames', () => {
@@ -56,6 +81,16 @@ describe('realtime frame parsing', () => {
     expect(parseRealtimeEvent('not-json')).toBeNull()
     expect(parseRealtimeEvent(JSON.stringify({ type: 'unknown' }))).toBeNull()
     expect(parseRealtimeEvent(new ArrayBuffer(0))).toBeNull()
+  })
+
+  test('accepts the standalone media.new event instead of dropping it', () => {
+    expect(parseRealtimeEvent(JSON.stringify(validMediaEvent))).toEqual(validMediaEvent)
+    // 形状不合契约的媒体帧仍然丢弃，不能把半截 DTO 塞进缓存。
+    expect(
+      parseRealtimeEvent(
+        JSON.stringify({ ...validMediaEvent, media: { ...validMediaEvent.media, kind: 'FILE' } }),
+      ),
+    ).toBeNull()
   })
 })
 
@@ -78,7 +113,7 @@ describe('reconnectDelay', () => {
 describe('ChatRealtime', () => {
   test('forwards parsed events, ignores pong/invalid frames, and stops cleanly', () => {
     const sockets: FakeSocket[] = []
-    const events: RealtimeServerEvent[] = []
+    const events: ChatRealtimeEvent[] = []
     const statuses: ChatRealtimeStatus[] = []
     const realtime = new ChatRealtime({
       url: 'ws://test/ws/chat',
@@ -105,14 +140,15 @@ describe('ChatRealtime', () => {
     expect(events).toEqual([])
 
     sockets[0]?.message(JSON.stringify(validMessageEvent))
-    expect(events).toEqual([validMessageEvent])
+    sockets[0]?.message(JSON.stringify(validMediaEvent))
+    expect(events).toEqual([validMessageEvent, validMediaEvent])
 
     realtime.stop()
     expect(sockets[0]?.closed).toBe(true)
     expect(statuses.at(-1)).toBe('closed')
 
     sockets[0]?.message(JSON.stringify(validMessageEvent))
-    expect(events).toEqual([validMessageEvent])
+    expect(events).toEqual([validMessageEvent, validMediaEvent])
   })
 
   test('reconnects after a close with the injected timer', () => {

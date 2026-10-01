@@ -11,16 +11,18 @@
  *
  * 1. **绝不编造业务数据。** `views` / `wants` / `originalPriceCents` / `spec` 契约没有，
  *    一律 `null`。页面已做 null 守卫，不渲染比渲染一个假数字诚实。
- * 2. **绝不编造卖家。** 契约的 `ListingCard` 没有卖家字段。调用方拿到的 `sellerId`
- *    是**空串**，表示「本卡片没有卖家信息」，页面据此不渲染卖家行。
- *    这一条尤其要紧：`mock/users.ts` 的 `getUser()` 对未知 id **回退到 `USERS[0]`**，
- *    所以若把空串喂给 `getUser`，页面上会出现一个**完全捏造的卖家**（还带认证勾）。
+ * 2. **绝不编造卖家。** #191 起契约卡片带 `seller`（公开四字段），用它投影成真值；
+ *    字段缺席（老客户端 mock 记录）时 `sellerId` 是**空串**哨兵 `NO_SELLER`、`seller` 是
+ *    `null`，页面据此不渲染卖家行。这一条尤其要紧：`mock/users.ts` 的 `getUser()` 对未知 id
+ *    **回退到 `USERS[0]`**，所以绝不能把卡片的卖家喂给 `getUser` —— 那会渲染出一个
+ *    **完全捏造的卖家**（还带认证勾）。
  * 3. **纯排版量可以派生。** `ratio`（图片高度档位）纯粹是排版，与商品属性无关：
  *    真实数据没有比例字段，用 `id` 的稳定散列取档，保证瀑布流仍然错落且同一 id 永不抖动。
  *    这与 `features/listing/view.ts` 的 `imageHeightOf` 同一取舍，也与 Web 端
  *    `listing-thumb.tsx` 用 id 散列定占位色同源。
  */
 import type { ListingCard, ListingCondition, ListingDetail } from '@fish/contracts/listings/schema'
+import type { UserPresence } from '@fish/contracts/users/schema'
 import { AVATAR_BLOCKS, LISTING_BLOCKS } from '@/mock/blocks'
 import type { ImageRatio, MockListing, MockUser } from '@/mock/types'
 
@@ -68,6 +70,25 @@ function hoursAgo(iso: string, now: number): number {
 }
 
 /**
+ * 契约卡片的卖家（#191）→ `MockUser`。只带公开四字段的真值；
+ * `soldCount` / `goodRate` 契约没有、全仓也没有评价数据源 —— 恒 `null`，由页面不渲染。
+ * 卖家缺席（契约 `seller` 缺席的老 mock 记录）返回 `null`，页面整行不渲染。
+ */
+export function toMockCardSeller(card: ListingCard): MockUser | null {
+  if (!card.seller) return null
+  return {
+    id: card.seller.id,
+    nickname: card.seller.nickname,
+    // 契约的 `avatarUrl` 可为 null。缺图给一张**通用占位色块**（复用 mock 既有的
+    // `AVATAR_BLOCKS`）：占位图是「这张图没有」的呈现，不是编造这个人的身份。
+    avatarUrl: card.seller.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
+    authStatus: card.seller.authStatus,
+    soldCount: null,
+    goodRate: null,
+  }
+}
+
+/**
  * 无图商品的兜底色块由 `resolveCover` 之外的调用方处理：这里保持 `coverUrl` 原样
  * （契约允许 `null`），页面已有 `null` 处理路径。
  */
@@ -97,8 +118,10 @@ export function toMockListing(card: ListingCard, now: number = Date.now()): Mock
     description: '',
     // 契约无规格行
     spec: '',
-    // 空串 = 本卡片没有卖家信息（见文件头铁律 2）
-    sellerId: NO_SELLER,
+    // 空串 = 本卡片没有卖家信息（见文件头铁律 2）；有卖家时是真值（#191）
+    sellerId: card.seller?.id ?? NO_SELLER,
+    // 卖家公开资料：契约 `seller` 同源投影，缺席为 null（页面不渲染卖家行）
+    seller: toMockCardSeller(card),
     // 契约无这两个计数 —— 不编数字
     views: null,
     wants: null,
@@ -130,8 +153,16 @@ export function toMockListings(cards: ListingCard[], now: number = Date.now()): 
  * `goodRate` 契约里没有、全仓也没有评价数据源 —— 恒 `null`，由页面不渲染。
  * `soldCount` 由调用方从公开资料端点（`GET /users/:id/public`）取来传进来，
  * 取不到就是 `null`（页面已有 `null` 守卫）。
+ *
+ * `presence`（#359 第五点）与 `soldCount` **同一个来源、同一次请求**：详情页的
+ * `loadListingDetail` 本来就要拉公开资料拿「卖出 N 件」，在线态就在那份响应里。
+ * 不填（undefined）即「拿不到」，页面整块不渲染 —— 与 `soldCount` 的 null 守卫同款。
  */
-export function toMockSeller(detail: ListingDetail, soldCount: number | null = null): MockUser {
+export function toMockSeller(
+  detail: ListingDetail,
+  soldCount: number | null = null,
+  presence: UserPresence | null = null,
+): MockUser {
   return {
     id: detail.seller.id,
     nickname: detail.seller.nickname,
@@ -142,6 +173,7 @@ export function toMockSeller(detail: ListingDetail, soldCount: number | null = n
     soldCount,
     // 契约无这一项，且没有真实口径（无评价表）：不编百分比
     goodRate: null,
+    presence,
   }
 }
 

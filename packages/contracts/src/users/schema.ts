@@ -7,9 +7,11 @@
  *
  * ## 写进契约的隐私边界（本 Issue 的验收核心）
  *
- * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / joinedDays / activeCount /
- * soldCount` 七个字段。以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以
- * 为空"，而是**契约里根本没有这个字段**）：
+ * 公开 DTO **只有** `id / nickname / avatarUrl / authStatus / signature / joinedDays /
+ * activeCount / soldCount / presence` 九个字段（`signature` 是 #179 新增的个性签名，
+ * `presence` 是 #359 第五点新增的在线态，见 `UserPresenceSchema` 的 Owner 拍板记录）。
+ * 以下字段**在任何情况下都不得出现在响应里**（不是"当前没有数据所以为空"，而是**契约里
+ * 根本没有这个字段**）：
  *
  * - `studentNo`（学号即账号）、`campusEmail`（校园认证绑定）、`passwordHash`、`role`
  *   —— 表里有，但永远不进公开 DTO；
@@ -19,7 +21,10 @@
  *   `phoneBound` / `maskedPhone`），公开 DTO 两者皆不含。
  * - `goodRate`（好评率）：仓库没有 reviews / ratings 表，**没有真实口径**，不编造。
  *   `listing-detail` 对卖家好评率已经是「契约没有 → 传 null → 整行不渲染」的同款处理。
- * - `following`（是否已关注）：没有 follows 表，关注关系未拆 Domain，#122 明确不做。
+ * - `following`（是否已关注）：关注关系已按 #188 拆成独立的 follows Domain
+ *   （`@fish/contracts/follows/schema`），但它**仍然不属于这份匿名公开读模型** ——
+ *   关注状态随「看的人是谁」而变，塞进来就等于让一个匿名端点带视角，与 #122
+ *   「同一响应给所有人」的口径冲突。本人视角走 `GET /users/:userId/follow`。
  *
  * `joinedAt` 也不出：它和 `joinedDays` 是同一事实的两种表达，两个字段必然漂移。
  * 口径由服务端固定，端上不再自己算（见 `joinedDays` 注释）。
@@ -42,6 +47,42 @@ export const PublicUserIdSchema = UserIdSchema
 export type PublicUserId = z.infer<typeof PublicUserIdSchema>
 
 /**
+ * 在线判定窗口（#359 第五点）：`now - lastActiveAt < PRESENCE_ONLINE_TTL_MS` 即在线。
+ *
+ * 服务端按它算 `UserPresence.online`；**客户端也拿同一个常量**把在线态在本地过期
+ * （实时事件只在「变在线」时推，见 `chat/schema.ts` 的 `presence.changed`），
+ * 两端的窗口必须同源，否则会出现「服务端说离线、客户端还画着绿点」。
+ */
+export const PRESENCE_ONLINE_TTL_MS = 60_000
+
+/**
+ * 用户在线态（#359 第五点）。
+ *
+ * 口径：**已认证活动 + TTL**，不是「WebSocket 连接还在不在」—— 小程序端当前没有
+ * 实时客户端（#213→#220 链未合入 main），若只认 WS 连接，端上永远没有人在线。
+ * 所以服务端把「最近一次已认证活动」（HTTP 请求或 WS 心跳）记进进程内的登记表，
+ * `online = 最近活动在 TTL 窗口内`。
+ *
+ * 两个字段的取值语义：
+ * - `online`：服务端**读取这一刻**的判定结果（活动窗口内）；
+ * - `lastActiveAt`：最后一次已认证活动的时刻（ISO，**在线时也照给**，客户端据此
+ *   在本地越过 TTL 后自行翻成离线）；服务端自本次进程启动以来没见过该用户活动时为
+ *   `null`（进程重启会丢掉登记表，见 `apps/api/src/modules/presence/presence.ts`），
+ *   此时客户端的降级文案是「离线」，不编造一个「最后活跃」时刻。
+ *
+ * 隐私边界（Owner 2026-09-30 拍板）：在线态**给他人看**——他人主页与商品详情的卖家行
+ * 都要显示（#359 第五点的三处展示位）。因此它是公开读模型的一部分，匿名访客也能读到。
+ * 这一条是产品决策，不是实现泄漏；若要收回到「仅登录用户可见」，改动点是服务端在
+ * 匿名视角把 `presence` 恒置 `{ online: false, lastActiveAt: null }` 并同步本注释。
+ */
+export const UserPresenceSchema = z.object({
+  online: z.boolean(),
+  lastActiveAt: z.iso.datetime().nullable(),
+})
+
+export type UserPresence = z.infer<typeof UserPresenceSchema>
+
+/**
  * 公开用户资料。
  *
  * `avatarUrl` 与 `MeSchema` 同口径用 `z.url().nullable()`：库里是**无约束 text**，
@@ -52,6 +93,13 @@ export const PublicUserProfileSchema = z.object({
   nickname: z.string(),
   avatarUrl: z.url().nullable(),
   authStatus: AuthStatusSchema,
+  /**
+   * 个性签名（#179）：用户主动公开的自我介绍，`null` = 未填写或已清空。
+   * 服务端存 trim 后的原文（可能多行），展示层自行取首行。
+   * 这是用户自填的自述内容，不是平台侧资料——不属于下方「任何情况下不得出现」
+   * 的隐私清单；该清单（学号 / 邮箱 / 手机号 / role / 评价 / 关注）不变。
+   */
+  signature: z.string().nullable(),
   /**
    * 加入天数（服务端算，下限 1）。
    *
@@ -74,6 +122,13 @@ export const PublicUserProfileSchema = z.object({
    * 这里是**成交数**。页面上写「卖出」就该用这个。
    */
   soldCount: z.number().int().nonnegative(),
+  /**
+   * 在线态（#359 第五点）。他人主页的头像右侧要显示它；商品详情页的卖家行复用同一个
+   * 端点（`GET /users/:id/public`）拿到的这份值，因此两屏不可能各说各话。
+   *
+   * 公开可见是刻意的（见 `UserPresenceSchema` 的隐私边界注记）。
+   */
+  presence: UserPresenceSchema,
 })
 
 export type PublicUserProfile = z.infer<typeof PublicUserProfileSchema>

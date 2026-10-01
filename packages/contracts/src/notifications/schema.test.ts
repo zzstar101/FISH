@@ -75,11 +75,49 @@ describe('notificationDtoSchema', () => {
     )
   })
 
-  // P0 值域只有 MATCH，且 store 的 type 谓词直接取 `notificationTypeSchema.options`：
-  // 这里钉住「枚举外的 type 不可表示」。P1 加降价通知时应扩枚举，而不是放宽这条校验。
-  test('rejects a type outside the P0 enum', () => {
-    expect(notificationTypeSchema.options).toEqual(['MATCH'])
+  // 值集钉在契约里（store 的 type 谓词直接取 `notificationTypeSchema.options`）：
+  // 加类型时扩枚举，而不是放宽这条校验。
+  test('rejects a type outside the enum', () => {
+    expect(notificationTypeSchema.options).toEqual(['MATCH', 'TX', 'MODERATION', 'ACCOUNT'])
     expect(notificationDtoSchema.safeParse({ ...validDto, type: 'PRICE_DROP' }).success).toBe(false)
+  })
+})
+
+describe('notificationPayloadSchema（TX / MODERATION / ACCOUNT）', () => {
+  const transactionId = encodePublicId(PUBLIC_ID_PREFIX.transaction, UUID)
+  const conversationId = encodePublicId(PUBLIC_ID_PREFIX.conversation, UUID)
+
+  test('accepts a TX payload with event and optional ids', () => {
+    expect(
+      notificationPayloadSchema.parse({
+        event: 'PROPOSED',
+        conversationId,
+        listingId,
+      }),
+    ).toEqual({ event: 'PROPOSED', conversationId, listingId })
+    expect(
+      notificationPayloadSchema.parse({ event: 'COMPLETED', transactionId, conversationId }),
+    ).toEqual({ event: 'COMPLETED', transactionId, conversationId })
+  })
+
+  test('rejects an unknown TX event, outcome or subject value', () => {
+    for (const payload of [
+      { event: 'PRICE_DROP' },
+      { outcome: 'PENDING' },
+      { subject: 'PASSWORD' },
+    ]) {
+      expect(notificationPayloadSchema.safeParse(payload).success).toBe(false)
+    }
+  })
+
+  test('accepts MODERATION / ACCOUNT payloads keyed by outcome', () => {
+    expect(notificationPayloadSchema.parse({ listingId, outcome: 'APPROVED' })).toEqual({
+      listingId,
+      outcome: 'APPROVED',
+    })
+    expect(
+      notificationPayloadSchema.parse({ subject: 'VERIFICATION', outcome: 'REJECTED' }),
+    ).toEqual({ subject: 'VERIFICATION', outcome: 'REJECTED' })
   })
 })
 

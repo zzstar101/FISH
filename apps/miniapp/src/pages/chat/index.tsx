@@ -1,4 +1,5 @@
 import type { ConversationDto } from '@fish/contracts/chat/schema'
+import type { TransactionDto, TransactionSystemEvent } from '@fish/contracts/transactions/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -9,9 +10,16 @@ import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
-import { markConversationRead } from '@/features/chat/api'
+import { fetchMessagePage, markConversationRead } from '@/features/chat/api'
+import {
+  capsuleFor,
+  lastEventOfMessages,
+  needsProposalScan,
+  transactionsByConversation,
+} from '@/features/chat/capsule'
 import { clearUnread, publishUnread } from '@/features/chat/unread'
 import { loadConversations, loadNotifications, markNotificationsRead } from '@/features/fetchers'
+import { fetchAllTransactions } from '@/features/transaction/api'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import type { MockNotification } from '@/mock/types'
 import { badgeText, chatListState, conversationTimeLabel, previewOf } from './list-view'
@@ -25,8 +33,9 @@ import './index.scss'
  * （会话严格是 (商品, 买家×卖家) 一对一），客户端无从派生 —— 留着就是在发明语义。
  * 「通知」本来就是独立于会话的真实数据（#23/#129），不需要一行假会话当入口。
  *
- * 同理删掉了契约里不存在的展示件：认证徽章（`conversationUserSchema` 无 `authStatus`）、
- * 状态胶囊（无 `tag`）。会话行的相对时间由 `lastMessageAt` 现算（见 `./list-view`）。
+ * 同理删掉了契约里不存在的展示件：认证徽章（`conversationUserSchema` 无 `authStatus`）。
+ * 状态胶囊（无 `tag`）后来由任务一按交易域恢复了，见 `features/chat/capsule.ts`。
+ * 会话行的相对时间由 `lastMessageAt` 现算（见 `./list-view`）。
  */
 
 /** 1版稿筛选纯文字 Tab（顺序：全部 / 通知；「通知」页内直显通知列表） */
@@ -36,6 +45,16 @@ const FILTERS: { key: ChatFilter; label: string }[] = [
   { key: 'all', label: '全部' },
   { key: 'system', label: '通知' },
 ]
+
+/**
+ * 一次进页最多拉多少个会话的消息页来判提案（见 `scanProposals`）。
+ *
+ * 上限的推导：消息页请求只在「最近的会话里有人提案、且之后有人回过话」时才发，
+ * 这类会话在首屏（50 条）里通常个位数；同时它挡住了最坏情形 —— 一个从没提案、
+ * 只闲聊的账号，刷一次消息页不该发出 50 个请求。超出的会话按「不知道」处理
+ * （不显示胶囊）。与「我的发布」的 `MAX_PROPOSAL_SCANS` 同一量级。
+ */
+const MAX_PROPOSAL_SCANS = 12
 
 /**
  * 通知的语气 → 图标（原 `pages/notifications` 的映射随页面并入）。文案与跳转目标
@@ -86,6 +105,21 @@ export default function Chat() {
   /** 真实接口失败且没有回退 mock（生产口径）：「通知」tab 显示错误态而不是空态 */
   const [notifsFailed, setNotifsFailed] = useState(false)
   /**
+   * 交易行快照（#89 状态胶囊）：`conversationId → TransactionDto`，买卖双角色各取完
+   * 一份合成。**失败静默降级成空映射（不显示胶囊）**，不打错误态 —— 胶囊是列表的
+   * 增强信息，交易域挂了不该连会话都看不到。
+   */
+  const [txMap, setTxMap] = useState<Map<string, TransactionDto>>(new Map())
+  /**
+   * 提案扫描结果（#89）：`conversationId → 最后一个 tx.* 事件`。
+   *
+   * 只有 `needsProposalScan` 判为「光看 `lastMessage` 不够」的会话才在这里有条目：
+   * 买家提过案、之后有人回了句话（TEXT / 媒体 / 非交易 SYSTEM），提案仍在等点头 ——
+   * 只认 `lastMessage` 会让胶囊凭空消失（与「我的发布」的「待确认」段同一口径）。
+   * 扫描有请求上限（`MAX_PROPOSAL_SCANS`）：超出的会话按「不知道」处理，不显示胶囊。
+   */
+  const [txSignals, setTxSignals] = useState<Map<string, TransactionSystemEvent | null>>(new Map())
+  /**
    * 通知的已读口径：**切进「通知」tab 即视为看过**（Owner 拍板），未读角标随之清零，
    * 同时把当前已加载的未读条目逐条真实标记已读（声明式 effect，见下方「已读回写」）——
    * 服务端与本地同源后，重进页面 / 重启未读不再复活。
@@ -129,7 +163,64 @@ export default function Chat() {
     setNotifsReady(false)
     setNotifsFailed(false)
     setNotifsViewed(false)
+    setTxMap(new Map())
+    setTxSignals(new Map())
   }
+
+  /**
+   * 提案扫描（#89）：对「光看 `lastMessage` 判不出」的会话拉一页消息，取最后一个
+   * `tx.*` 事件。**只在这批会话里扫，且有请求上限**——从会话页返回时每次都要跑，
+   * 无上限地拉几百个会话的消息页会把返回路径拖成秒级。
+   *
+   * 结果按 `(会话 id, lastMessageAt)` 缓存：`lastMessageAt` 没动就说明这个会话没有
+   * 新消息、结论不变，重复进页（切 Tab / 从会话页返回）不再发请求 —— 否则每次返回
+   * 都要重拉十几个会话的消息页。有新消息时 `lastMessageAt` 必然变化（新消息会更新它），
+   * 缓存自动失效。
+   *
+   * 失败与超限都按「不知道」处理（该会话不显示胶囊），不打断会话列表渲染 ——
+   * 胶囊是列表的增强信息。`lastMessage` 已经是 `tx.*` 的会话零成本短路，不进扫描。
+   */
+  const proposalCache = useRef(
+    new Map<string, { at: string; event: TransactionSystemEvent | null }>(),
+  )
+  const scanProposals = useCallback(
+    async (list: ConversationDto[], txSnapshot: Map<string, TransactionDto>, epoch: number) => {
+      const pending: string[] = []
+      const found = new Map<string, TransactionSystemEvent | null>()
+      for (const item of list) {
+        if (pending.length >= MAX_PROPOSAL_SCANS) break
+        if (!needsProposalScan(item, txSnapshot)) continue
+        const cached = proposalCache.current.get(item.id)
+        if (cached && cached.at === item.lastMessageAt) {
+          found.set(item.id, cached.event)
+          continue
+        }
+        pending.push(item.id)
+      }
+      if (pending.length === 0) {
+        if (epoch === listEpoch.current) setTxSignals(found)
+        return
+      }
+      const results = await Promise.allSettled(
+        pending.map((id) => fetchMessagePage(id).then((page) => page.items)),
+      )
+      if (epoch !== listEpoch.current) return
+      results.forEach((result, index) => {
+        const id = pending[index]
+        if (id === undefined) return
+        // 单条读不到：按「不知道」处理（不显示胶囊），不把「读不到」当成「没有提案」
+        const event = result.status === 'fulfilled' ? lastEventOfMessages(result.value) : null
+        found.set(id, event)
+        // 只在真的读到结果时写缓存；读失败下次仍要重试
+        if (result.status === 'fulfilled') {
+          const at = list.find((item) => item.id === id)?.lastMessageAt
+          if (at !== undefined) proposalCache.current.set(id, { at, event })
+        }
+      })
+      setTxSignals(found)
+    },
+    [],
+  )
 
   /**
    * 会话列表加载。重试钮、进页、以及从会话页返回（`useDidShow`）都走这里。
@@ -144,6 +235,29 @@ export default function Chat() {
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
     // 「更早的会话没加载出来」，而那一次翻页根本没发生过。
     setLoadMoreFailed(false)
+    // 交易快照与会话同一轮刷新（同一代次守卫）：从会话页返回时面交确认可能刚发生，
+    // 胶囊必须跟着重算；「加载更多」不重拉（早前会话的交易在首屏快照里已就位）。
+    const txLoaded = Promise.all([fetchAllTransactions('buyer'), fetchAllTransactions('seller')])
+      .then(([buyer, seller]) => {
+        if (epoch !== listEpoch.current) return null
+        const map = transactionsByConversation(buyer.items, seller.items)
+        setTxMap(map)
+        /*
+         * 列表被截断（翻页到 `MAX_PAGES` 上限，或服务端游标没前进）时，未取到的那部分
+         * 会话**静默没有胶囊**。胶囊是增强信息、不报错，但要在控制台留痕 ——
+         * 否则「几百笔交易之后的会话一律没有胶囊」会被当成胶囊功能坏了。
+         */
+        if (buyer.truncated || seller.truncated) {
+          console.warn('[miniapp] 交易列表被截断，超出部分的会话不显示交易胶囊')
+        }
+        return map
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 交易快照加载失败，本屏不显示交易胶囊', error)
+        if (epoch !== listEpoch.current) return null
+        setTxMap(new Map())
+        return new Map<string, TransactionDto>()
+      })
     void loadConversations()
       .then(({ items: list, nextCursor: cursor, failed: nextFailed }) => {
         if (epoch !== listEpoch.current) return
@@ -151,6 +265,11 @@ export default function Chat() {
         setListNextCursor(cursor)
         setFailed(nextFailed)
         setReady(true)
+        // 提案扫描要等交易快照：有交易行的会话不必扫（状态机只看交易行）。
+        void txLoaded.then((map) => {
+          if (!map || epoch !== listEpoch.current) return
+          void scanProposals(list, map, epoch)
+        })
       })
       .catch((error) => {
         // 取数层自己吞了接口失败，这里兜的是「回退 mock 的动态 import 也失败」：
@@ -162,7 +281,7 @@ export default function Chat() {
         setFailed(true)
         setReady(true)
       })
-  }, [])
+  }, [scanProposals])
 
   /**
    * 「加载更多会话」：契约按 `lastMessageAt` 降序 + 游标分页，游标原样回传。
@@ -415,6 +534,18 @@ export default function Chat() {
       void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.target.listingId}` })
       return
     }
+    if (item.target?.kind === 'conversation') {
+      void Taro.navigateTo({ url: `/pages/conversation/index?id=${item.target.conversationId}` })
+      return
+    }
+    if (item.target?.kind === 'mylist') {
+      void Taro.navigateTo({ url: '/pages/mylist/index' })
+      return
+    }
+    if (item.target?.kind === 'verify') {
+      void Taro.navigateTo({ url: '/pages/verify/index' })
+      return
+    }
     if (item.target?.kind === 'wish') void Taro.switchTab({ url: '/pages/wish/index' })
   }
 
@@ -552,6 +683,8 @@ export default function Chat() {
               /** 直接消费契约 `ConversationDto.counterpart`，不拿 id 自己查表 */
               const user = item.counterpart
               const unread = item.unreadCount
+              /** 交易进度胶囊（#89）：数据源与状态机见 `features/chat/capsule.ts` */
+              const capsule = capsuleFor(item, txMap, txSignals)
 
               return (
                 <View
@@ -569,12 +702,20 @@ export default function Chat() {
                         mode="aspectFill"
                       />
                     </View>
-                    {unread > 0 ? <Text className="chat__bdg num">{badgeText(unread)}</Text> : null}
+                    {unread > 0 ? (
+                      // 两位数与 `99+` 要缩字号才不裁字（见 index.scss 的 .is-multi）
+                      <Text className={`chat__bdg num${unread > 9 ? ' is-multi' : ''}`}>
+                        {badgeText(unread)}
+                      </Text>
+                    ) : null}
                   </View>
 
                   <View className="chat__corp">
                     <View className="chat__corp-top">
                       <Text className="chat__nm-tx">{user.nickname}</Text>
+                      {capsule ? (
+                        <Text className={`chat__pill ${capsule.cls}`}>{capsule.label}</Text>
+                      ) : null}
                     </View>
                     <Text className="chat__msg">{previewOf(item)}</Text>
                     {/* 1版稿时间在第三行（消息下方），不再是行右上角 */}

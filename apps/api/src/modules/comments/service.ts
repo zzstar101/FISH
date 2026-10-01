@@ -1,6 +1,7 @@
 import {
   type CommentAuthor,
   type CommentCreateInput,
+  type CommentDeleteResponse,
   type CommentDto,
   CommentDtoSchema,
   type CommentErrorCode,
@@ -8,14 +9,21 @@ import {
   type CommentListResponse,
   type CommentReply,
   CommentReplySchema,
+  type MyCommentItem,
+  MyCommentItemSchema,
+  type MyCommentsQuery,
+  type MyCommentsResponse,
+  MyCommentsResponseSchema,
 } from '@fish/contracts/comments/schema'
 import type { ApiErrorDetail, SystemErrorCode } from '@fish/contracts/system/error'
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { toListingCard } from '../listings/card'
 import { createModerationService, type ModerationService } from '../moderation/service'
 import { publicAvatarUrl } from '../uploads/avatar-url'
+import type { MediaStorage } from '../uploads/storage'
 import { decodeCommentCursor, encodeCommentCursor } from './cursor'
-import type { CommentRow, CommentStore } from './store'
+import type { CommentRow, CommentStore, MyCommentRow } from './store'
 
 /**
  * 留言业务失败 → HTTP 语义。
@@ -43,6 +51,21 @@ export interface CommentService {
   listComments(listingId: string, query: CommentListQuery): Promise<CommentListResponse>
   createComment(userId: string, listingId: string, input: CommentCreateInput): Promise<CommentDto>
   createReply(userId: string, commentId: string, input: CommentCreateInput): Promise<CommentDto>
+  /** 「我发过的留言」（#195）：**本人作用域**，作者由路由从可信 context 取，不接受请求参数。 */
+  listMine(userId: string, query: MyCommentsQuery): Promise<MyCommentsResponse>
+  /**
+   * 删除自己的留言（#195）。
+   *
+   * - **存在但不是本人的** → 404 `COMMENT_NOT_FOUND`（403 会确认「它存在且是别人的」）；
+   * - **不存在 / 已经被删过** → `{ deleted: 0 }`，**幂等成功**而不是错误。
+   *
+   *   这两条**不是同码**：留言 id 本来就能通过匿名 `GET /listings/:id/comments` 公开枚举，
+   *   所以这里不做「不泄漏存在性」的混淆取舍 —— 404 只表示「存在，但不是你的」。
+   * - 删顶层留言会级联删掉其回复，`deleted` 回**实际删除的 DB 行数**（含他人写的回复），
+   *   且是尽力而为的近似值；端上**不得**用它减「我发过的留言」总数，
+   *   见 `CommentDeleteResponseSchema` 的注释。
+   */
+  deleteMine(userId: string, commentId: string): Promise<CommentDeleteResponse>
 }
 
 /**
@@ -56,6 +79,42 @@ function toAuthor(row: CommentRow): CommentAuthor {
     nickname: row.authorNickname,
     avatarUrl: publicAvatarUrl(row.authorAvatarUrl),
   }
+}
+
+/**
+ * 「我发过的留言」一行 → 契约项（#195）。
+ *
+ * 卡片交给共享投影 `toListingCard`，且**不传**审核态三参数 —— 收藏/留言列表都是买家视角，
+ * `moderationStatus` / `governanceDelisted` 恒为 `null`。
+ * 组装失败（脏行）返回 `null`，由调用方跳过，不让一条脏数据把整页打不开（决策 C）。
+ */
+function toMyCommentItem(
+  row: MyCommentRow,
+  storage: Pick<MediaStorage, 'publicUrl'>,
+): MyCommentItem | null {
+  const listing = toListingCard(row, row.coverObjectKey, storage)
+  if (listing === null) return null
+
+  // 与 `listComments` 同款（决策 C）：**逐条**校验，脏行记日志后跳过，而不是让一条越界数据
+  // （例如 `content` 超过契约上限的历史行）把整页 parse 失败成 500。
+  const parsed = MyCommentItemSchema.safeParse({
+    comment: {
+      id: encodePublicId(PUBLIC_ID_PREFIX.comment, row.commentId),
+      listingId: encodePublicId(PUBLIC_ID_PREFIX.listing, row.id),
+      parentId:
+        row.commentParentId === null
+          ? null
+          : encodePublicId(PUBLIC_ID_PREFIX.comment, row.commentParentId),
+      content: row.commentContent,
+      createdAt: row.commentCreatedAt,
+    },
+    listing,
+  })
+  if (!parsed.success) {
+    console.error('[comments] 跳过无法映射为契约的本人留言', row.commentId, parsed.error.message)
+    return null
+  }
+  return parsed.data
 }
 
 /** 回复 DTO：`replies` 恒为空数组（契约只嵌套一层，`CommentReplySchema` 强制）。 */
@@ -95,8 +154,10 @@ function toTopLevelDto(
 export function createCommentService(deps: {
   store: CommentStore
   moderation?: ModerationService
+  /** 只取 `publicUrl`：「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。 */
+  storage: Pick<MediaStorage, 'publicUrl'>
 }): CommentService {
-  const { store } = deps
+  const { store, storage } = deps
   const moderation = deps.moderation ?? createModerationService()
 
   /**
@@ -244,6 +305,55 @@ export function createCommentService(deps: {
       const dto = row ? toReplyDto(row, sellerId) : null
       if (!dto) throw new CommentServiceError(404, 'COMMENT_NOT_FOUND', '留言不存在')
       return dto
+    },
+
+    async listMine(userId, query) {
+      const cursor = query.cursor === undefined ? null : decodeCommentCursor(query.cursor)
+      // 非法游标 → 422（不宽容解析：被当成合法起点会让列表静默错乱）。
+      if (query.cursor !== undefined && cursor === null) {
+        throw new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
+          { field: 'cursor', message: 'cursor 无效' },
+        ])
+      }
+
+      const [rows, total] = await Promise.all([
+        // 与 listTopLevel 同款：多取一行判 hasMore，返回前丢掉。
+        store.listByAuthor(userId, query.limit + 1, cursor),
+        store.countByAuthor(userId),
+      ])
+
+      const hasMore = rows.length > query.limit
+      const page = hasMore ? rows.slice(0, query.limit) : rows
+      const last = page.at(-1)
+
+      return MyCommentsResponseSchema.parse({
+        items: page
+          .map((row) => toMyCommentItem(row, storage))
+          .filter((item): item is MyCommentItem => item !== null),
+        nextCursor:
+          hasMore && last
+            ? encodeCommentCursor({ createdAt: last.commentCreatedAtCursor, id: last.commentId })
+            : null,
+        total,
+      })
+    },
+
+    async deleteMine(userId, commentId) {
+      const row = await store.findById(commentId)
+      // 不存在（含「自己刚删过」）→ 幂等成功：不报错，也不假装删掉了东西。
+      if (row === null) return { deleted: 0 }
+      // 存在但不是本人的 → 404（403 会确认「它存在且是别人的」）。注意这与上一条**不同码**：
+      // 留言 id 可由匿名接口公开枚举，这里不做存在性混淆，404 的语义就是「不是你的」。
+      if (row.authorId !== userId) throw commentNotFound()
+
+      // 级联删掉的回复不出现在 `DELETE ... RETURNING` 里，先数一遍再删。
+      // 两次往返之间无锁：`deleted` 因此是**尽力而为的近似值**（差 1 的量级），
+      // 它不参与鉴权也不参与计数口径，不值得为它引入事务。
+      const replies = row.parentId === null ? await store.countReplies(commentId) : 0
+      const deleted = await store.deleteOwn(userId, commentId)
+      // 并发下被人抢先删掉 → 0，仍然是幂等语义。
+      if (deleted === 0) return { deleted: 0 }
+      return { deleted: deleted + replies }
     },
   }
 }
