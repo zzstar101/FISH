@@ -2,9 +2,10 @@
  * 固定顶部栏（一级页面 + 统一后的二级页顶部，见 `titleAlign`）。
  *
  * **为什么不复用 `@/components/nav-bar`**：那个组件是二级页面用的**漂浮导航**
- * （`position: absolute` + 圆形玻璃返回钮，浮在内容之上），被 8 个页面引用
- * （match / mylist / settings / transaction-meetup / user / verify / watchers / wish-publish
- * —— 订单页拆成 `orders-buy` / `orders-sell` 后改用微信原生导航栏，不再引用它）。
+ * （`position: absolute` + 圆形玻璃返回钮，浮在内容之上），被 match / settings /
+ * transaction-meetup / user / verify / watchers / wish-publish 等页面引用；
+ * 订单两页一度改用微信原生导航栏，#386 第一批起它们的顶部也由本组件承担，
+ * 同样不引用 `nav-bar`。
  * 一级页面要的是另一种东西：**固定（`fixed`）+ 一级标题**，内容从它下方滚过。
  * 两种职责混进一个组件，任何一边的改动都会牵动另一边 —— 所以这里独立成组件，
  * `nav-bar` 保持原样、零改动。

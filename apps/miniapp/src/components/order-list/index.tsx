@@ -106,6 +106,16 @@ export default function OrderList({
   const emptyRole = items.length === 0
 
   /**
+   * 切状态分段：回到列表顶部（与 mylist 的 pickSegment / history 的 pickTab 同一口径）。
+   * 分段挪进固定顶栏后，列表滚到多深都能直接切 —— 换段等于换了一份列表，
+   * 停在上一段的滚动位置会落在新列表的尾部或半空。
+   */
+  const pickStatus = (key: StatusKey) => {
+    setStatus(key)
+    void Taro.pageScrollTo({ scrollTop: 0, duration: 0 })
+  }
+
+  /**
    * 「查看会话」跳的是**这一笔**的会话，而不是同商品其他买家的会话 —— 这是本页的验收要点。
    * 真实数据直接消费契约的 `conversationId`；mock 回退里按 (listingId, 对方) 解析，
    * 解析不到（投影层给 `null`）按「目标已失效」提示。
@@ -159,7 +169,7 @@ export default function OrderList({
                   className={`orders__pill orders__pill--${tab.key}${
                     tab.key === status ? ' is-on' : ''
                   }`}
-                  onClick={() => setStatus(tab.key)}
+                  onClick={() => pickStatus(tab.key)}
                 >
                   <Text>{tab.label}</Text>
                   {/* 计数跟着正在显示的那份列表走：加载中 / 列表不完整时不显示数字 */}

@@ -63,6 +63,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 字号取 34px（17pt，iOS 原生导航标题档）——与既有两份页面级居中标题
+     （mylist / following 的手抄版）同值；要整体统一成 35px 时随迁移批次一起改 */
+  font-size: 34px;
   /* 左右让出返回钮与胶囊，标题长了也不压到它们身上 */
   padding: 0 110px;
   /* 纯展示：点击穿过它落到下层，不挡住栏内其它可点内容 */
