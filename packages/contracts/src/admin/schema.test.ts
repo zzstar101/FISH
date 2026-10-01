@@ -55,6 +55,7 @@ describe('AdminMeResponseSchema', () => {
         verifiedAt: '2026-09-12T03:40:10.000Z',
         phoneBound: false,
         maskedPhone: null,
+        signature: null,
         role: 'ADMIN',
       },
       capabilities: ['USERS_READ', 'LISTINGS_READ', 'OVERVIEW_READ', 'AUDIT_LOGS_READ'],

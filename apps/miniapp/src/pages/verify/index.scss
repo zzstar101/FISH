@@ -14,7 +14,9 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 60px;
+  /* 底部只留安全区：内容块自己垂直居中（见 .verify__content），不再垫 60px 硬留白
+     —— Owner 2026-10-01 拍板「底部留白太多」。 */
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .verify__bg {
@@ -57,7 +59,11 @@
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  padding: 32px 40px 0;
+  /* 内容在剩余空间里**垂直居中**（#386 批次 2，Owner 拍板「内容居中、不需要下滑」，
+     版式对齐 login-confirm 的干净一屏）：已认证态整页居中，未认证态在页头之下居中；
+     内容真的超高时根节点的 min-height 让页面照常长高，居中退化为顶格。 */
+  justify-content: center;
+  padding: 32px 40px 24px;
 }
 
 /* ---- 未认证说明卡（稿 01 帧 .vcard：白卡 + 圆盘 + 黄胶囊） ---- */

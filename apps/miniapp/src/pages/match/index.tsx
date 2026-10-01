@@ -71,7 +71,17 @@ export default function Match() {
   const [wish, setWish] = useState<MockWish | null>(null)
   /** 回到顶部钮（共享组件）：滚过一屏浮现 */
   const [showTop, setShowTop] = useState(false)
-  usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
+  /**
+   * 顶栏两态（#386 批次 2）：返回键常驻吸顶，滚过阈值后玻璃底 + 标题「匹配结果」
+   * 浮现在返回键隔壁（Owner 2026-10-01 拍板，同 `pages/settings`）。
+   * 阈值 40 设备 px，与 `pages/user` 的 `GLASS_AT` 同值；与回顶判定共用同一次滚动回调。
+   */
+  const REVEAL_AT = 40
+  const [revealed, setRevealed] = useState(false)
+  usePageScroll(({ scrollTop }) => {
+    setShowTop(scrollTop > BACK_TOP_THRESHOLD)
+    setRevealed(scrollTop > REVEAL_AT)
+  })
   const backToTop = () => {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
   }
@@ -297,7 +307,7 @@ export default function Match() {
     <View className="match">
       <View className="match__bg" />
 
-      <NavBar title="匹配结果" />
+      <NavBar fixed glass={revealed} title={revealed ? '匹配结果' : undefined} />
 
       <View className="match__head">
         <Text className="match__title">匹配结果</Text>
@@ -413,11 +423,20 @@ export default function Match() {
                       ¥{formatAmount(view.listing.priceCents)}
                     </Text>
                     {/*
-                      卖家不在 `/matches` 的响应里（`WishMatchItem` 只有 ListingCard），
-                      由 `loadWishMatches` 逐条拉商品详情补；补不到就是 `null` —— 不编造卖家。
+                      #191 起卖家取自命中卡片内嵌的 `seller`（`loadWishMatches` 直接投影，
+                      不再逐条拉详情补）；缺席为 `null` 不渲染 —— 不编造卖家。
+                      昵称可点：进 TA 的公开主页（与商品卡卖家行同一跳转口径）。
                     */}
                     {view.seller ? (
-                      <Text className="match__rseller">{view.seller.nickname}</Text>
+                      <Text
+                        className="match__rseller"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void Taro.navigateTo({ url: `/pages/user/index?id=${view.seller?.id}` })
+                        }}
+                      >
+                        {view.seller.nickname}
+                      </Text>
                     ) : null}
                   </View>
 

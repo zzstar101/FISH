@@ -129,6 +129,13 @@ test('wish 侧：排除 OFFLINE 商品（items 与 total 都不算它），否�
       response.items.every((item) => /^[1-9][0-9]{11}$/.test(item.listing.listingNo ?? '')),
     ).toBe(true)
     expect(response.items[0]?.listing.coverUrl).toBeNull()
+    // #191：卡片内嵌卖家公开子集——join users 同源带出（store 的手写行重组由此钉住）。
+    expect(response.items[0]?.listing.seller).toEqual({
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, otherId),
+      nickname: '匹配读路径测试',
+      avatarUrl: null,
+      authStatus: 'UNVERIFIED',
+    })
   })
 })
 

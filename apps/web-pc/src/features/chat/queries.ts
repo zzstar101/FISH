@@ -128,6 +128,8 @@ export function useSendTextMessage(ownerId: string | null) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ conversationId, input }: SendTextVariables) =>
+      // 契约里 TEXT 的 `type` 是可选的：不带判别值在「已升级的 API」与「还没升到
+      // #366 的旧 API」上都合法（旧契约是 strictObject，多带一个 `type` 反而 422）。
       sendTextMessage(conversationId, input),
     onSuccess: () => {
       if (ownerId === null) return
@@ -152,6 +154,24 @@ export function compareMessages(a: MessageDto, b: MessageDto): number {
  * 服务端按升序返回，第一页是最新页；新消息只可能进入第一页。若该 id 已存在
  * （重试命中、实时推送与 HTTP 响应同时到达）则原位替换，不重复插入。
  */
+/**
+ * 两条 LISTING 消息的富化投射是否一致（#359）。
+ *
+ * 必须逐字段比：`listing` 是**每次响应新构造的对象**（`toListingCard`），引用比较恒为
+ * 不等；而漏掉这个字段会让「同一条消息、只有商品投射变了」（商品被下架 / 改价后重新拉
+ * 到的那条）被判成 identical 而不替换 —— 屏幕上留着旧的卡片状态。
+ */
+function sameListing(a: MessageDto['listing'], b: MessageDto['listing']): boolean {
+  if (!a || !b) return !a && !b
+  return (
+    a.id === b.id &&
+    a.title === b.title &&
+    a.priceCents === b.priceCents &&
+    a.status === b.status &&
+    a.coverUrl === b.coverUrl
+  )
+}
+
 function sameMessage(a: MessageDto, b: MessageDto): boolean {
   return (
     a.id === b.id &&
@@ -159,6 +179,7 @@ function sameMessage(a: MessageDto, b: MessageDto): boolean {
     a.senderId === b.senderId &&
     a.type === b.type &&
     a.content === b.content &&
+    sameListing(a.listing, b.listing) &&
     a.createdAt === b.createdAt
   )
 }

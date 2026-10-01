@@ -23,9 +23,13 @@ mock.module('@/features/chat/api', () => ({
   fetchConversations: unavailable,
 }))
 
-const { loadConversations, loadConversation, loadMessagePage } = await import(
-  '../src/features/fetchers'
-)
+const {
+  loadConversations,
+  loadConversation,
+  loadMessagePage,
+  loadCounterpartListings,
+  loadMyListings,
+} = await import('../src/features/fetchers')
 const { DEMO_USER } = await import('../src/features/auth/demo')
 const { mockPublicId } = await import('../src/mock/public-id')
 
@@ -65,4 +69,27 @@ test('演示身份的最后一条消息发送者在摘要、详情与历史中�
   expect(detail.conversation.lastMessage?.senderId).toBe(DEMO_USER.id)
   const last = history.items.find((message) => message.createdAt === row?.lastMessage?.createdAt)
   expect(last?.senderId).toBe(DEMO_USER.id)
+})
+
+test('发送商品选择页：两侧回退都按同一套公开 ID 空间查，不是假空态', async () => {
+  // 会话里的 counterpart.id 是 `usr_…`（mockPublicId），fixture 的 sellerId 是原始键；
+  // 回退若直接拿公开 id 去比原始键，恒为空 —— 表现就是「TA 暂无在售商品」的假空态，
+  // 而买家进页面默认看的就是这一侧。
+  const id = mockPublicId('cnv', 'c-001')
+  const row = (await loadConversations()).items.find((item) => item.id === id)
+  expect(row).toBeDefined()
+  const counterpartId = row?.counterpart.id ?? ''
+  expect(counterpartId.startsWith('usr_')).toBe(true)
+
+  const theirs = await loadCounterpartListings(counterpartId)
+  expect(theirs.failed).toBe(false)
+  expect(theirs.items.length).toBeGreaterThan(0)
+  // 与真实端点同口径：只给在售
+  expect(theirs.items.every((item) => item.status === 'ACTIVE')).toBe(true)
+  // 回退是整份 fixture，没有「下一页」
+  expect(theirs.hasMore).toBe(false)
+
+  const mine = await loadMyListings(DEMO_USER.id)
+  expect(mine.failed).toBe(false)
+  expect(mine.items.length).toBeGreaterThan(0)
 })

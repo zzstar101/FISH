@@ -211,6 +211,85 @@
   height: 30px;
 }
 
+/**
+ * LISTING 消息卡（#359）：消息流里的商品卡。版式取头卡 `.conv__pcard` 的缩小版
+ * （同一圆角/描边/灰底语言，宽度受气泡列约束，不再占满头部整行）。
+ */
+.conv__lcard {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 400px;
+  max-width: 100%;
+  padding: 14px;
+  border-radius: 24px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  box-shadow: var(--shadow-card);
+
+  &:active {
+    border-color: var(--line);
+  }
+}
+
+.conv__lcard-thumb {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 auto;
+  border-radius: 18px;
+  background: var(--grad-ph);
+  border: 2px solid var(--accent-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.conv__lcard-img {
+  width: 100%;
+  height: 100%;
+}
+
+.conv__lcard-ph {
+  width: 44px;
+  height: 44px;
+}
+
+.conv__lcard-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.conv__lcard-title {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.35;
+  @include ellipsis;
+}
+
+.conv__lcard-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 21px;
+  color: var(--muted-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 金额一律红（与头卡 `.conv__pcard-price` 同一 --price 口径） */
+.conv__lcard-price {
+  color: var(--price);
+  font-weight: 700;
+}
+
+.conv__lcard-caret {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+}
+
 /* ---------------------------------------------------------------- 消息流 */
 
 .conv__scroll {
