@@ -5,11 +5,12 @@ import brandLockup from '@/assets/brand/brand-lockup.png'
 import { ICONS } from '@/assets/lib-icons'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { loadProfile, type ProfileView } from '@/features/fetchers'
+import { updateProfile } from '@/features/profile/api'
 import { realCounts } from '@/features/profile/counts'
-import { readSignature, saveSignature } from '@/features/profile/signature'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { acceptsRefreshedProfile, isLatestLoad, isNotOlderThan, shouldRefreshOnShow } from './view'
 import './index.scss'
@@ -32,9 +33,9 @@ import './index.scss'
  * 圆点不显示），不回退 mock（演示构建的回退口径见 fetchers `loadProfile` 的 catch）。
  *
  * **已经 Owner 确认的取舍**：
- * - 签名行**可编辑**（2026-09-20 拍板）：点击弹输入框、真实输入并保存到本机
- *   （契约暂无签字段，见 `features/profile/signature.ts`）；只展示**首行**，过长由
- *   省略号收尾，未设置过时显示「设置个性签名」占位；
+ * - 签名行**可编辑**（2026-09-20 拍板）：点击弹输入框、真实输入并保存到服务端
+ *   （#179：`PATCH /profile` 的 `signature` 字段，以服务端成功为准）；只展示**首行**，
+ *   过长由省略号收尾，未设置过时显示「设置个性签名」占位；
  * - 「编辑个人资料」「隐私」两行不渲染：编辑入口已挂在头像 / 昵称上（见上），
  *   隐私入口在设置页里；
  * - 稿里的「清除演示数据」行不渲染：本地没有任何演示数据存储可清。
@@ -248,26 +249,27 @@ export default function Profile() {
   const verified = user?.authStatus === 'VERIFIED'
 
   /**
-   * 个性签名（本机存储，见 `features/profile/signature.ts`）。
+   * 个性签名（#179）：服务端真值为准（`Me.signature`，PATCH 响应 / GET /profile 同源）。
    *
-   * **渲染期同步读**（`readSignature` 是同步的本地读，很便宜）：放 effect 里读会让
-   * 已设置签名的用户每次进本页先看到一帧「设置个性签名」占位、再跳成真实签名。
-   * 身份（`user?.id`）一变就地重读 —— 换账号不能把上一个账号的签名继续显示在新账号
-   * 名下（与 `loadProfile` 的 cancellable 防串号同一个理由）。
+   * `savedSig` 只做**本次会话内保存成功后的即时反馈**（免等下一次 /profile 轮询）：
+   * 按账号 id 分键，换账号后旧保存值自动失效（forUser 不匹配 → 落回服务端数据），
+   * 旧账号的成功/失败不会污染新账号 —— 与 `loadProfile` 的 cancellable 防串号同一取向。
    */
-  const [sig, setSig] = useState<{ forUser: string | null; text: string | null }>(() => ({
-    forUser: user?.id ?? null,
-    text: user?.id ? readSignature(user.id) : null,
+  const [savedSig, setSavedSig] = useState<{ forUser: string | null; text: string | null }>(() => ({
+    forUser: null,
+    text: null,
   }))
   const userId = user?.id ?? null
-  if (sig.forUser !== userId) {
-    setSig({ forUser: userId, text: userId ? readSignature(userId) : null })
-  }
-  const signature = sig.text
+  const signature = savedSig.forUser === userId ? savedSig.text : (user?.signature ?? null)
 
-  /** 编辑签名：弹输入框 → 存本机 → 重读展示；空输入 = 清除，回到「设置个性签名」 */
+  /**
+   * 编辑签名：弹输入框 → `PATCH /profile`（服务端成功为准，失败可重试、不先宣称成功）；
+   * 空输入 = 清空（服务端归一化为 null）。响应回来时若已换号/退出（userIdRef 变了），
+   * 不应用结果、不弹成功 —— 旧账号的写入任务就此作废。
+   */
   const editSignature = () => {
     if (!userId) return
+    const ownerId = userId
     void (async () => {
       let res: EditableModalResult
       try {
@@ -293,12 +295,18 @@ export default function Profile() {
         toast('当前微信版本不支持编辑个性签名')
         return
       }
-      if (!saveSignature(userId, res.content)) {
-        toast('保存失败，请重试')
-        return
+      try {
+        const updated = await updateProfile({ signature: res.content })
+        // 已换号 / 已退出：这次写入任务作废，结果不属于当前页面身份
+        if (userIdRef.current !== ownerId) return
+        setSavedSig({ forUser: ownerId, text: updated.signature })
+        toast('已保存')
+      } catch (error) {
+        if (userIdRef.current !== ownerId) return
+        // 服务端错误信封的 message 可读（如「请求参数不合法」），但未必定位到字段；
+        // 其余（网络等）按通用失败提示 —— 都可重试
+        toast(isApiError(error) ? error.message : '保存失败，请重试')
       }
-      setSig({ forUser: userId, text: readSignature(userId) })
-      toast('已保存')
     })()
   }
 

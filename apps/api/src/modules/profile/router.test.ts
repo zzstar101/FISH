@@ -17,6 +17,7 @@ const profile = {
     verifiedAt: '2026-09-12T00:00:00.000Z',
     phoneBound: false,
     maskedPhone: null,
+    signature: null,
   },
   stats: { activeListings: 1, activeWishes: 1, completedTransactions: 1, followingCount: 2 },
   listings: [],

@@ -14,6 +14,7 @@ function profile(overrides: Record<string, unknown> = {}) {
     nickname: '阿岚',
     avatarUrl: null,
     authStatus: 'VERIFIED',
+    signature: null,
     joinedDays: 12,
     activeCount: 3,
     soldCount: 1,
@@ -60,6 +61,7 @@ describe('PublicUserProfileSchema', () => {
       'id',
       'joinedDays',
       'nickname',
+      'signature',
       'soldCount',
     ])
   })

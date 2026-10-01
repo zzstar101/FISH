@@ -10,6 +10,7 @@ const me = {
   verifiedAt: '2026-09-12T00:00:00.000Z',
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 const listingCard = {
@@ -128,7 +129,28 @@ describe('profileUpdateRequestSchema（#86 B：编辑资料）', () => {
   test('空对象被拒（没有语义的写入）', () => {
     const parsed = profileUpdateRequestSchema.safeParse({})
     expect(parsed.success).toBe(false)
-    expect(parsed.error?.issues[0]?.message).toBe('nickname 与 avatarObjectKey 至少要提供一项')
+    expect(parsed.error?.issues[0]?.message).toBe(
+      'nickname 与 avatarObjectKey 与 signature 至少要提供一项',
+    )
+  })
+
+  test('签名（#179）：trim 归一化、允许换行、200 字上限、空串 = 清空', () => {
+    expect(profileUpdateRequestSchema.parse({ signature: '  面交优先  ' }).signature).toBe(
+      '面交优先',
+    )
+    expect(profileUpdateRequestSchema.parse({ signature: '第一行\n第二行' }).signature).toBe(
+      '第一行\n第二行',
+    )
+    // 空串合法（= 清空）：契约只做 trim，不设最短长度；归一化落 null 由服务端做
+    expect(profileUpdateRequestSchema.parse({ signature: '   ' }).signature).toBe('')
+    expect(profileUpdateRequestSchema.safeParse({ signature: '鱼'.repeat(201) }).success).toBe(
+      false,
+    )
+    expect(profileUpdateRequestSchema.safeParse({ signature: '鱼'.repeat(200) }).success).toBe(true)
+  })
+
+  test('只改签名也满足「至少一项」refine', () => {
+    expect(profileUpdateRequestSchema.parse({ signature: '你好' })).toEqual({ signature: '你好' })
   })
 
   test('未知字段被拒，而不是静默丢弃（strictObject）', () => {
