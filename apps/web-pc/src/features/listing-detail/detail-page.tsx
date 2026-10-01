@@ -30,6 +30,7 @@ import { canReportUser } from '../reports/view'
 import { BuyDialog } from './buy-dialog'
 import { CommentsSection } from './comments-section'
 import { ListingGallery } from './listing-gallery'
+import { ListingNoLine } from './listing-no-line'
 import { useListingDetail } from './queries'
 
 const STATUS_LABEL: Record<ListingStatus, string | null> = {
@@ -208,6 +209,11 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                 </ReportEntry>
               )}
             </div>
+
+            {item.listingNo !== undefined ? (
+              // 公开编号（#382）：给人看的引用，可复制后直接在搜索框精确命中；内部 ID 不外显。
+              <ListingNoLine listingNo={item.listingNo} />
+            ) : null}
           </Card>
 
           <Card className="gap-0 border border-line p-6">
