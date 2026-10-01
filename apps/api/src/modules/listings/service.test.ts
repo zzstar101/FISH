@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingFeedQuery, ListingStatus } from '@fish/contracts/listings/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  ContentModerationError,
+  type ContentModerationProvider,
+  type TextModerationResult,
+} from '../moderation/providers/types'
 import type { ModerationDecision } from '../moderation/types'
 import type { ConfirmedImageLookup } from '../uploads/media-objects'
 import type { MediaStorage } from '../uploads/storage'
+import type { ListingCardSeller } from './card'
 import { encodeCursor } from './cursor'
 import { createListingService, ListingServiceError } from './service'
 import type {
@@ -72,9 +78,26 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
 
 const CREATED_AT_CURSOR = '2026-09-12T03:40:10.000000Z'
 
-/** store 的 feed 行现在多带一个微秒精度的 `createdAtCursor`（游标用）。 */
-function feedEntry(listing: ListingRow, coverObjectKey: string | null) {
-  return { listing, createdAtCursor: CREATED_AT_CURSOR, coverObjectKey }
+/** #191：feed 行 join users 带出的卖家公开投影源列（与 `store.listFeed` 的 select 同形状）。 */
+const FEED_SELLER: ListingCardSeller = {
+  id: SELLER_ID,
+  nickname: '阿岚',
+  avatarUrl: null,
+  authStatus: 'VERIFIED',
+}
+
+/** store 的 feed 行现在多带一个微秒精度的 `createdAtCursor`（游标用）与卖家公开投影源列（#191）。 */
+function feedEntry(
+  listing: ListingRow,
+  coverObjectKey: string | null,
+  seller: Partial<ListingCardSeller> = {},
+) {
+  return {
+    listing,
+    createdAtCursor: CREATED_AT_CURSOR,
+    coverObjectKey,
+    seller: { ...FEED_SELLER, ...seller },
+  }
 }
 
 function imageRow(sortOrder: number, objectKey: string): ListingImageRow {
@@ -126,6 +149,8 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
     }),
     listImageKeys: async () => [],
     listFeed: async () => [],
+    // #228：service 先读事务外快照再审核；假 store 让快照与锁内行一致（CAS 因此总能通过）。
+    getUpdateSnapshot: async () => ({ kind: 'ok', row: updateTarget() }),
     updateListingAtomic: async (input) => {
       input.apply(input, updateTarget())
       return { kind: 'updated' }
@@ -276,6 +301,29 @@ describe('listFeed', () => {
     const response = await service.listFeed(null, feedQuery())
     expect(response.nextCursor).toBeNull()
     expect(response.items[0]?.coverUrl).toBeNull()
+  })
+
+  // #191：卡片内嵌卖家公开子集——join 结果同源投影，匿名读与本人视角都带；
+  // id 编码成 usr_ 公开前缀，nickname / authStatus 取真实列，头像脏值经 publicAvatarUrl 降级。
+  test('embeds the public seller subset on every card, including anonymous reads', async () => {
+    const service = createListingService({
+      storage: fakeStorage(),
+      store: fakeStore({
+        listFeed: async () => [
+          feedEntry(listingRow({ sellerId: SELLER_ID }), null, {
+            avatarUrl: 'https://cdn.test/avatars/legacy/a.jpg',
+          }),
+        ],
+      }),
+    })
+
+    const response = await service.listFeed(null, feedQuery())
+    expect(response.items[0]?.seller).toEqual({
+      id: encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID),
+      nickname: '阿岚',
+      avatarUrl: 'https://cdn.test/avatars/legacy/a.jpg',
+      authStatus: 'VERIFIED',
+    })
   })
 
   // 决策 C：一条脏数据不该让整个首页 500。
@@ -915,7 +963,11 @@ describe('updateListing', () => {
     const freeListing = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        // 合并校验在 `apply` 里抛：store 的回调在真实实现中也会把它带出事务。
+        // #228：合并校验基于**事务外快照**（真实 store 里锁内行必须与它一致）。
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ priceCents: 0, free: true }),
+        }),
         updateListingAtomic: async (input) => {
           input.apply(input, updateTarget({ priceCents: 0, free: true }))
           return { kind: 'updated' }
@@ -1036,20 +1088,23 @@ describe('updateListing', () => {
     ).toBe(404)
   })
 
-  // 回归（评审 blocker 1 的 service 一半）：审核必须跑在**锁内读到的那一行**上。
-  // store 把当前行交给 `apply`，service 必须用它的 title/description 去合并 —— 而不是任何
-  // 事务外的预读。这里让锁内的行已经是"待审内容 + REVIEW"，断言只改价格的 PATCH 也会
-  // 重新产出 REVIEW（而不是写回 APPROVED）。真正的行锁行为由 store.test.ts 的真库并发用例覆盖。
-  test('re-moderates against the row handed over by the locked transaction', async () => {
+  // #228：审核在**事务外**跑（provider 是网络调用），依据 `getUpdateSnapshot` 读到的快照；
+  // 锁内行由 store 用 CAS 复核（不一致就 conflict，由 service 重读重审）。
+  // 这里让快照本身就是"待审内容 + REVIEW"，断言只改价格的 PATCH 也会重新产出 REVIEW
+  // （而不是写回 APPROVED）。锁与 CAS 的真库行为由 store.test.ts 覆盖。
+  test('re-moderates against the snapshot read outside the transaction', async () => {
     const plans: (UpdateListingFields | undefined)[] = []
+    const reviewed = updateTarget({
+      title: '加微信联系',
+      moderationStatus: 'REVIEW',
+      status: 'OFFLINE',
+    })
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
+        getUpdateSnapshot: async () => ({ kind: 'ok', row: reviewed }),
         updateListingAtomic: async (input) => {
-          const plan = await input.apply(
-            input,
-            updateTarget({ title: '加微信联系', moderationStatus: 'REVIEW', status: 'OFFLINE' }),
-          )
+          const plan = await input.apply(input, reviewed)
           if (plan.kind === 'write') plans.push(plan.fields)
           return { kind: 'updated' }
         },
@@ -1260,6 +1315,10 @@ describe('image confirmation', () => {
       mediaObjects: images,
       store: fakeStore({
         listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
           if (plan.kind === 'write') plans.push(plan.fields)
@@ -1284,6 +1343,10 @@ describe('image confirmation', () => {
       mediaObjects: images,
       store: fakeStore({
         listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
           if (plan.kind === 'write') plans.push(plan.fields)
@@ -1306,6 +1369,10 @@ describe('image confirmation', () => {
       mediaObjects: fakeImages([{ finalKey: CONFIRMED_KEY, decision: 'REVIEW', settled: 'BLOCK' }]),
       store: fakeStore({
         listImageKeys: async () => [CONFIRMED_KEY],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [CONFIRMED_KEY] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [CONFIRMED_KEY] }))
           planKinds.push(plan.kind)
@@ -1320,6 +1387,8 @@ describe('image confirmation', () => {
 
     expect(planKinds).toEqual(['blocked'])
     expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    // #228 复审 F1：文本是干净的，BLOCK 来自图片 —— 不能把 title/description 说成违规。
+    expect(error.details).toBeUndefined()
   })
 
   // 存量图：新形态键但确认表里没有记录（#286 之前上传、或迁移前就存在的图）。编辑保存不能因此被拒。
@@ -1352,6 +1421,10 @@ describe('image confirmation', () => {
       mediaObjects: images,
       store: fakeStore({
         listImageKeys: async () => [legacyKey],
+        getUpdateSnapshot: async () => ({
+          kind: 'ok',
+          row: updateTarget({ objectKeys: [legacyKey] }),
+        }),
         updateListingAtomic: async (input) => {
           const plan = await input.apply(input, updateTarget({ objectKeys: [legacyKey] }))
           if (plan.kind === 'write') plans.push(plan.fields)
@@ -1612,5 +1685,281 @@ describe('deleteListing', () => {
     const error = await expectServiceError(() => service.deleteListing(SELLER_ID, LISTING_ID))
     expect(error.status).toBe(409)
     expect(error.code).toBe('LISTING_NOT_DELETABLE')
+  })
+})
+
+// —— #228：文本审核 provider 接线（事务外审核 / fail-closed / CAS 重审）——
+
+/** 可控 provider：按调用次序返回结果或抛错，并记录每次入参。 */
+function fakeProvider(steps: Array<TextModerationResult | Error>): {
+  provider: ContentModerationProvider
+  calls: Array<{ dataId: string; fields: { field: string; value: string }[] }>
+} {
+  const calls: Array<{ dataId: string; fields: { field: string; value: string }[] }> = []
+  let index = 0
+  return {
+    calls,
+    provider: {
+      transport: 'tencent',
+      async moderateText(input) {
+        calls.push({
+          dataId: input.dataId,
+          fields: input.fields.map((field) => ({ field: field.field, value: field.value })),
+        })
+        const step = steps[Math.min(index, steps.length - 1)]
+        index += 1
+        if (step === undefined) throw new Error('fakeProvider 没有下一步')
+        if (step instanceof Error) throw step
+        return step
+      },
+      moderateImage: () => Promise.reject(new Error('listings 不审图片')),
+    },
+  }
+}
+
+/** 腾讯风格的文本结果（默认全字段 Pass）。 */
+function textResult(overrides: Partial<TextModerationResult> = {}): TextModerationResult {
+  return {
+    provider: 'TENCENT_TMS',
+    transport: 'tencent',
+    dataId: 'lst_test',
+    policyVersion: 'biz-228',
+    decision: 'ALLOW',
+    suggestion: 'Pass',
+    fields: [
+      {
+        field: 'title',
+        decision: 'ALLOW',
+        suggestion: 'Pass',
+        label: null,
+        subLabel: null,
+        score: null,
+        requestId: 'req-title',
+      },
+      {
+        field: 'description',
+        decision: 'ALLOW',
+        suggestion: 'Pass',
+        label: null,
+        subLabel: null,
+        score: null,
+        requestId: 'req-desc',
+      },
+    ],
+    ...overrides,
+  }
+}
+
+function blockedTextResult(): TextModerationResult {
+  const base = textResult()
+  return {
+    ...base,
+    decision: 'BLOCK',
+    suggestion: 'Block',
+    fields: [
+      {
+        ...base.fields[0]!,
+        decision: 'BLOCK',
+        suggestion: 'Block',
+        label: 'Ad',
+        subLabel: 'AdLaw',
+        score: 99,
+      },
+      base.fields[1]!,
+    ],
+  }
+}
+
+describe('文本审核 provider 接线（#228）', () => {
+  test('CREATE：ALLOW 建为 APPROVED，并把腾讯结论写进审核记录', async () => {
+    const fake = fakeProvider([textResult()])
+    const created: CreateListingRecord[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async (record) => {
+          created.push(record)
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    await service.createListing(SELLER_ID, validCreate)
+
+    expect(created[0]?.moderationStatus).toBe('APPROVED')
+    expect(created[0]?.moderation).toMatchObject({
+      decision: 'ALLOW',
+      provider: 'TENCENT_TMS',
+      suggestion: 'Pass',
+      providerRequestId: 'req-title',
+      ruleVersion: 'biz-228',
+    })
+    expect(fake.calls[0]?.fields).toEqual([
+      { field: 'title', value: validCreate.title },
+      { field: 'description', value: validCreate.description },
+    ])
+  })
+
+  test('CREATE：REVIEW 落 REVIEW（不进公开 Feed）', async () => {
+    const fake = fakeProvider([{ ...textResult(), decision: 'REVIEW', suggestion: 'Review' }])
+    const created: CreateListingRecord[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async (record) => {
+          created.push(record)
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    await service.createListing(SELLER_ID, validCreate)
+
+    expect(created[0]?.moderationStatus).toBe('REVIEW')
+    expect(created[0]?.moderationReason).toBe('CONTENT_REQUIRES_REVIEW')
+  })
+
+  test('CREATE：BLOCK 报字段级错误且不泄漏腾讯 Label/策略', async () => {
+    const fake = fakeProvider([blockedTextResult()])
+    const recorded: Array<Record<string, unknown>> = []
+    let createdCalls = 0
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async () => {
+          createdCalls += 1
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+        recordModeration: async (input) => {
+          recorded.push(input as unknown as Record<string, unknown>)
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() => service.createListing(SELLER_ID, validCreate))
+
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('LISTING_CONTENT_BLOCKED')
+    expect(error.details?.[0]?.field).toBe('title')
+    // 阻断文案只有安全话术：不含 label/subLabel/命中词。
+    expect(JSON.stringify(error.details)).not.toContain('AdLaw')
+    expect(createdCalls).toBe(0)
+    // 审计仍记录 provider 元数据（#228 §6），供人工复核与调参。
+    expect(recorded[0]).toMatchObject({
+      action: 'CREATE',
+      decision: 'BLOCK',
+      provider: 'TENCENT_TMS',
+      providerRequestId: 'req-title',
+      suggestion: 'Block',
+      label: 'Ad',
+      subLabel: 'AdLaw',
+      score: 99,
+      ruleVersion: 'biz-228',
+    })
+  })
+
+  test('CREATE：provider 不可用时 fail-closed（503，且不落库）', async () => {
+    const fake = fakeProvider([new ContentModerationError({ reason: 'timeout' })])
+    let createdCalls = 0
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        createListingAtomic: async () => {
+          createdCalls += 1
+          return { kind: 'created', listingId: LISTING_ID }
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() => service.createListing(SELLER_ID, validCreate))
+
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
+    expect(createdCalls).toBe(0)
+  })
+
+  test('UPDATE：provider 不可用时不改旧内容（503）', async () => {
+    const fake = fakeProvider([new ContentModerationError({ reason: 'upstream_error' })])
+    let updateCalls = 0
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        updateListingAtomic: async () => {
+          updateCalls += 1
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { title: '新标题' }),
+    )
+
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('CONTENT_MODERATION_UNAVAILABLE')
+    expect(updateCalls).toBe(0)
+  })
+
+  test('UPDATE：CAS 冲突后重读并重新审核，最终按新内容写回', async () => {
+    const fake = fakeProvider([textResult(), textResult()])
+    const snapshots = [
+      updateTarget({ title: '原标题' }),
+      updateTarget({ title: '被并发改过的标题' }),
+    ]
+    let snapshotCalls = 0
+    const received: UpdateListingFields[] = []
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        getUpdateSnapshot: async () => {
+          const row = snapshots[Math.min(snapshotCalls, snapshots.length - 1)]
+          snapshotCalls += 1
+          return { kind: 'ok', row: row! }
+        },
+        updateListingAtomic: async (input) => {
+          if (snapshotCalls === 1) return { kind: 'conflict' }
+          const plan = await input.apply(
+            input,
+            input.expected ? updateTarget({ title: input.expected.title }) : updateTarget(),
+          )
+          if (plan.kind === 'write') received.push(plan.fields)
+          return { kind: 'updated' }
+        },
+      }),
+    })
+
+    await service.updateListing(SELLER_ID, LISTING_ID, { priceCents: 15000 })
+
+    // 两次快照 = 一次冲突后重读；两次审核 = 旧结论绝不套到新内容上。
+    expect(snapshotCalls).toBe(2)
+    expect(fake.calls).toHaveLength(2)
+    expect(fake.calls[0]?.fields[0]?.value).toBe('原标题')
+    expect(fake.calls[1]?.fields[0]?.value).toBe('被并发改过的标题')
+    expect(received[0]?.title).toBeUndefined()
+  })
+
+  test('UPDATE：连续冲突到上限时报 409，不写旧审核结论', async () => {
+    const fake = fakeProvider([textResult()])
+    const service = createListingService({
+      storage: fakeStorage(),
+      moderationProvider: fake.provider,
+      store: fakeStore({
+        updateListingAtomic: async () => ({ kind: 'conflict' }),
+      }),
+    })
+
+    const error = await expectServiceError(() =>
+      service.updateListing(SELLER_ID, LISTING_ID, { title: '新标题' }),
+    )
+
+    expect(error.status).toBe(409)
+    expect(error.code).toBe('LISTING_NOT_EDITABLE')
+    expect(fake.calls).toHaveLength(3)
   })
 })
