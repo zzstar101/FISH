@@ -409,6 +409,69 @@ function decorateNotification(
     }
   }
   // 契约 P0 只有 MATCH；#14 扩 type 时在这里加分支，页面不用动。
+  if (item.type === 'TX') {
+    // 收件人由产生点决定（契约注释）：事件即隐含视角，文案按事件写死对谁说。
+    const conversationId = item.payload.conversationId
+    return {
+      ...item,
+      title: '交易进展',
+      description:
+        item.payload.event === 'PROPOSED'
+          ? '买家发起了交易确认，等你接受'
+          : item.payload.event === 'ACCEPTED'
+            ? '卖家接受了你的交易确认，去安排面交吧'
+            : item.payload.event === 'REJECTED'
+              ? '卖家拒绝了你的交易确认'
+              : item.payload.event === 'CONFIRMED'
+                ? '对方已确认面交，等你确认'
+                : item.payload.event === 'COMPLETED'
+                  ? '交易已完成'
+                  : item.payload.event === 'CANCELLED'
+                    ? '交易已取消'
+                    : '',
+      tone:
+        item.payload.event === 'ACCEPTED' || item.payload.event === 'COMPLETED' ? 'mint' : 'warn',
+      target: conversationId ? { kind: 'conversation', conversationId } : null,
+    }
+  }
+  if (item.type === 'MODERATION') {
+    // 审核结果：跳「我的发布」看详情（Owner 口径：MODERATION → 我的发布）。
+    // `outcome` 在契约里是**可选**的（历史行 / 脏 payload 读不到：见
+    // `notifications/schema.ts` 的 `notificationOutcomeSchema`）。缺省或非法值
+    // **绝不能**落进「未通过」分支 —— 那等于替服务端宣布商品被拒审。三态处理：
+    // 只有明确的 `REJECTED` 才说未通过，读到什么都认不出来时给中性文案。
+    const outcome = item.payload.outcome
+    const approved = outcome === 'APPROVED'
+    const rejected = outcome === 'REJECTED'
+    return {
+      ...item,
+      title: approved ? '商品审核通过' : rejected ? '商品未通过审核' : '商品审核有更新',
+      description: approved
+        ? '你的闲置已重新上架可见'
+        : rejected
+          ? '到「我的发布」查看原因并编辑重发'
+          : '到「我的发布」查看这条商品的当前状态',
+      tone: approved ? 'mint' : 'warn',
+      target: { kind: 'mylist' },
+    }
+  }
+  if (item.type === 'ACCOUNT') {
+    // 同 MODERATION：缺省 / 非法 `outcome` 不得渲染成「未通过」，只给中性结果文案。
+    const outcome = item.payload.outcome
+    const approved = outcome === 'APPROVED'
+    const rejected = outcome === 'REJECTED'
+    return {
+      ...item,
+      title: item.payload.subject === 'VERIFICATION' ? '校园认证' : '账号通知',
+      description: approved
+        ? '校园认证通过，享受认证用户权益'
+        : rejected
+          ? '校园认证未通过，可重新验证'
+          : '认证结果有更新，可到认证页查看',
+      tone: approved ? 'mint' : 'warn',
+      target: item.payload.subject === 'VERIFICATION' ? { kind: 'verify' } : null,
+    }
+  }
   return { ...item, title: '新通知', description: '', tone: 'warn', target: null }
 }
 

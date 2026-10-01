@@ -199,6 +199,15 @@
   position: relative;
 }
 
+/* 真实头像：**独占整圆**，首字不渲染在上面（把人脸压一个字母是错的） */
+.fw__av-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
 /* 演示色块：绝对定位铺满整圆，让首字能压在上面 */
 .fw__av-img {
   position: absolute;
@@ -295,6 +304,31 @@
     background: var(--accent-weak);
     color: var(--brand-deep);
   }
+
+  /* 取关在飞：置灰并挡住重复点击（`manageRelation` 也会 return，双保险） */
+  &.is-busy {
+    opacity: 0.55;
+    pointer-events: none;
+  }
+}
+
+/* ---------------------------------------------------------------- 分页脚 */
+
+/* 「加载更多」/ 这一页失败重试：居中一颗胶囊（与 `pages/chat` 的 `.chat__more` 同款） */
+.fw__more {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  padding: 20px 0 8px;
+}
+
+.fw__more-btn {
+  padding: 12px 32px;
+  border-radius: var(--r-pill);
+  background: var(--accent-faint);
+  font-size: 23px;
+  color: var(--muted-2);
 }
 
 /* ---------------------------------------------------------------- 隐私说明 */

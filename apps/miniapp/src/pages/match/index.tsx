@@ -423,11 +423,20 @@ export default function Match() {
                       ¥{formatAmount(view.listing.priceCents)}
                     </Text>
                     {/*
-                      卖家不在 `/matches` 的响应里（`WishMatchItem` 只有 ListingCard），
-                      由 `loadWishMatches` 逐条拉商品详情补；补不到就是 `null` —— 不编造卖家。
+                      #191 起卖家取自命中卡片内嵌的 `seller`（`loadWishMatches` 直接投影，
+                      不再逐条拉详情补）；缺席为 `null` 不渲染 —— 不编造卖家。
+                      昵称可点：进 TA 的公开主页（与商品卡卖家行同一跳转口径）。
                     */}
                     {view.seller ? (
-                      <Text className="match__rseller">{view.seller.nickname}</Text>
+                      <Text
+                        className="match__rseller"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void Taro.navigateTo({ url: `/pages/user/index?id=${view.seller?.id}` })
+                        }}
+                      >
+                        {view.seller.nickname}
+                      </Text>
                     ) : null}
                   </View>
 

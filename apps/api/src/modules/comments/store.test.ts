@@ -18,6 +18,8 @@ if (!databaseUrl) {
 
 const db = createDb(databaseUrl)
 const store = createSqlCommentStore(db)
+/** 只取 `publicUrl`：「公开 URL 怎么拼」只有一个实现（#6 契约 §7.8）。 */
+const storage = { publicUrl: (key: string) => `https://cdn.example/${key}` }
 
 let seq = 0
 const uniqueStudentNo = () => `comment-${Date.now()}-${seq++}`
@@ -123,7 +125,7 @@ test('回复只挂在对应父留言下，并按时间正序返回', async () =>
 
 test('isSeller 由服务端按 listing.sellerId 判定，回复继承父留言所属商品', async () => {
   await withFixture(async ({ sellerId, buyerId, listingId }) => {
-    const service = createCommentService({ store })
+    const service = createCommentService({ storage, store })
 
     const created = await service.createComment(buyerId, listingId, { content: '还在吗' })
     expect(created.isSeller).toBe(false)

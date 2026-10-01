@@ -290,14 +290,16 @@
 .fav__cur {
   font-size: 22px;
   font-weight: 700;
-  color: var(--price);
+  /* 卡片价格标红（Owner 2026-10-01）：与首页商品卡（product-card）同用 --danger，
+     不用蓝的 --price —— 别看着「其他卡都是蓝的」把它改回去 */
+  color: var(--danger);
 }
 
 .fav__amt {
   font-size: 30px;
   font-weight: 700;
   line-height: 1;
-  color: var(--price);
+  color: var(--danger);
 }
 
 /* 动作**竖排**：750rpx 帧里两个按钮横排要吃掉 270rpx，标题列会窄到逐字换行 */
