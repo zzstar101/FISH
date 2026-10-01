@@ -300,7 +300,9 @@
   font-size: 42px;
   font-weight: 700;
   line-height: 1;
-  color: var(--price);
+  /* 卡片价格标红（Owner 2026-10-01）：与首页商品卡（product-card）同用 --danger，
+     不用蓝的 --price —— 别看着「其他卡都是蓝的」把它改回去 */
+  color: var(--danger);
   letter-spacing: -0.01em;
 }
 
