@@ -24,12 +24,14 @@ import type { ListingCardSeller } from '../listings/card'
  * feed / 详情一致。
  */
 
-/** 公开用户行：**只有**这五列，其余列连查都不查。 */
+/** 公开用户行：**只有**这几列，其余列连查都不查。 */
 export interface PublicUserRow {
   id: string
   nickname: string
   avatarUrl: string | null
   authStatus: PublicUserProfile['authStatus']
+  /** 个性签名（#179）：用户自填的自我介绍，`null` = 未填写或已清空。 */
+  signature: string | null
   /** 加入时间（服务端据此算 `joinedDays`，不把时间戳本身发给客户端）。 */
   createdAt: Date
 }
@@ -110,6 +112,7 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
           nickname: users.nickname,
           avatarUrl: users.avatarUrl,
           authStatus: users.authStatus,
+          signature: users.signature,
           createdAt: users.createdAt,
         })
         .from(users)

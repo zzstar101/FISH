@@ -116,6 +116,7 @@ test('findPublicUser 只 SELECT 公开列，不返回任何私有列', async () 
       'createdAt',
       'id',
       'nickname',
+      'signature',
     ])
   })
 })
