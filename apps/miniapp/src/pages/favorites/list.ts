@@ -266,7 +266,12 @@ export type EmptyCopy = {
  * **两种构建的文案不同，且都不能自相矛盾**：
  * - 演示构建（`demo = true`）照稿的 `EMPTY` 表，说的是「你还没收藏 / 没有失效的」；
  * - 真实构建照方案 §2.1：收藏没有后端，所以**不能说成「你恰好没有收藏」** ——
- *   那会让用户以为自己的收藏丢了。要如实说这是缺口（收藏不了，也就没有可看的）。
+ *   那会让用户以为自己的收藏丢了。要如实说这是缺口。
+ *
+ * 2026-09 起还有一层：瀑布流卡片的长按菜单**已经能收藏了**，但只落本机名单
+ * （`features/favorites/local`）。所以这里再写「现在收藏不了」就成了假话 ——
+ * 用户刚在卡片上看到「已收藏到本机」，进这页被告知收藏不了，两句里必有一句是错的。
+ * 现在说的是「服务端还没有，卡片上收的只在本机、这页看不到」。
  */
 export function emptyCopy(segment: FavoriteSegment, demo: boolean): EmptyCopy {
   if (demo) {
@@ -289,15 +294,15 @@ export function emptyCopy(segment: FavoriteSegment, demo: boolean): EmptyCopy {
   return segment === 'sale'
     ? {
         icon: 'heart',
-        title: '收藏功能还没有后端',
-        text: '服务端还没有收藏表与接口，所以现在收藏不了，也就还没有有效宝贝。',
+        title: '收藏还没接后端',
+        text: '服务端还没有收藏接口。你在卡片上收藏的商品只记在这台设备上，这一页暂时看不到它们。',
         actionLabel: '去逛逛',
         action: 'browse',
       }
     : {
         icon: 'box',
-        title: '收藏功能还没有后端',
-        text: '服务端还没有收藏表与接口。等收藏能用之后，被下架或卖掉的宝贝会收在这里。',
+        title: '收藏还没接后端',
+        text: '服务端还没有收藏接口，所以还没有失效的收藏可看。',
         actionLabel: '回有效宝贝',
         action: 'backToSale',
       }

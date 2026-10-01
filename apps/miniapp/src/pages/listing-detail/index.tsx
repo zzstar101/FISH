@@ -33,6 +33,7 @@ import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
+import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -306,6 +307,14 @@ export default function ListingDetail() {
   const [loadState, setLoadState] = useState<LoadState>('loading')
   const [slide, setSlide] = useState(0)
   const [faved, setFaved] = useState(false)
+  /**
+   * 「同类推荐」里本机已隐藏的 id：进页读一次本地名单，之后由卡片菜单的 `onDislike` 累加。
+   * 卡片自己也会隐藏（它读同一份名单），但**页面这份列表**也得跟着少一条 ——
+   * 否则全部隐藏完时，「同类推荐」会剩一个只有标题的空区块。
+   */
+  const [hiddenSimilar, setHiddenSimilar] = useState<readonly string[]>(() =>
+    readHiddenListingIds(),
+  )
   /** 「立即购买」是否已确认过：确认一次就进入「待店家确认」终态（账号私有，换号清场） */
   const [buyRequested, setBuyRequested] = useState(false)
   /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」；账号私有，换号清场） */
@@ -604,11 +613,26 @@ export default function ListingDetail() {
     // 首次 show 与 `useLoad` 的首屏加载是同一次进入，跳过免得双发
     const firstShow = firstShowRef.current
     firstShowRef.current = false
+    // 本机隐藏名单是跨页的：别的页面刚隐藏的商品要在这里跟着消失（见 `hiddenSimilar`）
+    setHiddenSimilar(readHiddenListingIds())
     if (!shouldRefreshOnShow(firstShow)) return
     requestRefresh()
   })
 
-  const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(data?.similar ?? []), [data])
+  /*
+    「同类推荐」是复用首页那张瀑布流卡的第三处（首页 / 搜索 / 这里）。
+
+    **分列按服务端那份原列表**（`data.similar`），隐藏只让对应的那张卡自己不渲染：
+    先过滤再分列的话，隐藏一件会让它后面每张卡换列（`splitColumns` 按 index 奇偶），
+    跨父节点移动 = React 卸载重挂（图片重载），用户看到整片跳一下。
+    `visibleSimilarCount` 只为「还有没有内容可推荐」这一件事服务（空区块不该只剩标题）。
+  */
+  const similarAll = useMemo(() => data?.similar ?? [], [data])
+  const [leftSimilar, rightSimilar] = useMemo(() => splitColumns(similarAll), [similarAll])
+  const visibleSimilarCount = useMemo(
+    () => similarAll.filter((item) => !hiddenSimilar.includes(item.id)).length,
+    [similarAll, hiddenSimilar],
+  )
 
   /**
    * 卖家视角（Owner 2026-09-27 拍板）：当前账号是这件商品的卖家时，底部栏换成
@@ -1393,45 +1417,53 @@ export default function ListingDetail() {
           </View>
 
           {/* ---------------------------------------------------- 同类推荐 */}
-          <View className="detail__similar">
-            <View className="detail__seclabel">
-              <Image className="detail__seclabel-img" src={ICONS.category} mode="aspectFit" />
-              <Text>同类推荐</Text>
-            </View>
+          {/* 一件能推的都没有时整块不渲染：只剩一个「同类推荐」标题是空壳 */}
+          {visibleSimilarCount === 0 ? null : (
+            <View className="detail__similar">
+              <View className="detail__seclabel">
+                <Image className="detail__seclabel-img" src={ICONS.category} mode="aspectFit" />
+                <Text>同类推荐</Text>
+              </View>
 
-            <View className="detail__waterfall">
-              <View className="detail__wf-col">
-                {/* 卡片自带点击 → `navigateTo('/pages/listing-detail/index?id=' + id)`，
-                    这里不再包一层 onClick，避免同一次点击 push 两次路由 */}
-                {leftSimilar.map((item) => (
-                  <ProductCard
-                    key={item.id}
-                    listing={item}
-                    /*
-                      卖家用**这张卡自己的** sellerId 查，不能用 `data.seller`。
-                      `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
-                      把当前卖家挂上去就是给别人的商品捏造了一个卖家。
-                      真实数据下 `item.sellerId` 是空串哨兵 → `findUser` 给 null → 整行不渲染；
-                      mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
-                    */
-                    seller={findUser(item.sellerId)}
-                    imageHeight={RATIO_HEIGHT[item.ratio]}
-                  />
-                ))}
-              </View>
-              <View className="detail__wf-col">
-                {rightSimilar.map((item) => (
-                  <ProductCard
-                    key={item.id}
-                    listing={item}
-                    /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
-                    seller={findUser(item.sellerId)}
-                    imageHeight={RATIO_HEIGHT[item.ratio]}
-                  />
-                ))}
+              <View className="detail__waterfall">
+                <View className="detail__wf-col">
+                  {/* 卡片自带点击 → `navigateTo('/pages/listing-detail/index?id=' + id)`，
+                      这里不再包一层 onClick，避免同一次点击 push 两次路由 */}
+                  {leftSimilar.map((item) => (
+                    <ProductCard
+                      key={item.id}
+                      listing={item}
+                      /*
+                        卖家用**这张卡自己的** sellerId 查，不能用 `data.seller`。
+                        `data.seller` 是**当前这件商品**的卖家；相似推荐是别人的商品，
+                        把当前卖家挂上去就是给别人的商品捏造了一个卖家。
+                        真实数据下 `item.sellerId` 是空串哨兵 → `findUser` 给 null → 整行不渲染；
+                        mock 数据下每件相似商品本来就带自己的 sellerId，这里比原来更准确。
+                      */
+                      seller={findUser(item.sellerId)}
+                      imageHeight={RATIO_HEIGHT[item.ratio]}
+                      /* 卡片就地不渲染；页面这份名单管跨页同步与「还有没有内容可推荐」 */
+                      hidden={hiddenSimilar.includes(item.id)}
+                      onDislike={() => setHiddenSimilar((prev) => [...prev, item.id])}
+                    />
+                  ))}
+                </View>
+                <View className="detail__wf-col">
+                  {rightSimilar.map((item) => (
+                    <ProductCard
+                      key={item.id}
+                      listing={item}
+                      /* 同左列：用卡片自己的 sellerId，不用当前商品的卖家 */
+                      seller={findUser(item.sellerId)}
+                      imageHeight={RATIO_HEIGHT[item.ratio]}
+                      hidden={hiddenSimilar.includes(item.id)}
+                      onDislike={() => setHiddenSimilar((prev) => [...prev, item.id])}
+                    />
+                  ))}
+                </View>
               </View>
             </View>
-          </View>
+          )}
         </>
       ) : (
         /* 仍在加载：骨架屏。这个分支只应在 loadState === 'loading' 时到达 ——

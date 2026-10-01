@@ -1,5 +1,5 @@
 import { Image, Input, Text, View } from '@tarojs/components'
-import Taro, { useLoad, usePageScroll, useRouter } from '@tarojs/taro'
+import Taro, { useDidShow, useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -15,6 +15,7 @@ import {
   invalidateSearchTasks,
   isSearchTaskCurrent,
 } from '@/features/listing/search-task'
+import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
 import {
@@ -63,6 +64,14 @@ export default function Search() {
   /** 已提交的关键词；为空时显示建议面板（搜索历史 + 热门搜索） */
   const [submitted, setSubmitted] = useState(initialKeyword)
   const [results, setResults] = useState<MockListing[]>([])
+  /**
+   * 本机「不感兴趣」名单：进页读一次，每次搜索与每次回到本页再读一次。
+   *
+   * 为什么页面也要存一份：名单是**跨页**的 —— 在首页或详情页的「同类推荐」里隐藏了商品，
+   * 回到搜索页时 `results` 里它还在（结果是当初加载的）。页面这份 state 一变，卡片就会
+   * 跟着不渲染（见 `components/product-card` 的 `hidden` 入参），计数与空态也一起对上。
+   */
+  const [hiddenIds, setHiddenIds] = useState<readonly string[]>(() => readHiddenListingIds())
   /** 回到顶部钮（共享组件）：滚过一屏浮现 */
   const [showTop, setShowTop] = useState(false)
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
@@ -155,6 +164,14 @@ export default function Search() {
     // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch
     const { items: list, failed: nextFailed } = await loadSearch(term, nextSort)
     if (!isSearchTaskCurrent(taskLog, startedAt)) return
+    /*
+      「不感兴趣」的本地名单**不在这里从 `results` 里删**（R1 没有服务端隐藏接口，见
+      `recommendation/hidden`）：瀑布流按 index 奇偶分列（`splitColumns`），删一条会让它
+      后面的每张卡换列 —— 跨父节点移动在 React 里就是卸载重挂（图片重载、状态重来），
+      用户看到的是整屏跳一下。卡片自己会就地不渲染，这里只留一份 id 把计数说对（`shownCount`）。
+      每次搜索重读一次名单：期间可能在别的页面隐藏过东西。
+    */
+    setHiddenIds(readHiddenListingIds())
     setResults(list)
     setFailed(nextFailed)
     setSubmitted(term)
@@ -201,12 +218,26 @@ export default function Search() {
     if (initialKeyword) void run(initialKeyword, '综合')
   })
 
+  // 回到本页再读一次本机名单：期间可能在别的页面（首页 / 详情页同类推荐）隐藏过东西
+  useDidShow(() => {
+    setHiddenIds(readHiddenListingIds())
+  })
+
   /** 卸载：作废在途任务，免得离页后迟到的编号命中仍然 navigateTo 出详情页 */
   useEffect(() => {
     return () => invalidateSearchTasks(taskLog)
   }, [])
 
   const [left, right] = useMemo(() => splitColumns(results), [results])
+
+  /** 屏幕上真能看到的条数：`results` 里减掉本机隐藏的（空态判定读它，不读 `results.length`） */
+  const shownCount = useMemo(
+    () => results.filter((item) => !hiddenIds.includes(item.id)).length,
+    [results, hiddenIds],
+  )
+
+  /** 本机隐藏掉的条数：计数行据实说明「找到 N 件，其中 M 件已隐藏」，不把两件事混成一个数 */
+  const hiddenCount = results.length - shownCount
 
   /** 已提交的是 12 位编号：排序筛选与「为你找到 N 件」都无意义（命中只有唯一一件） */
   const isNumber = isListingNumberQuery(submitted)
@@ -320,11 +351,16 @@ export default function Search() {
 
           {/* 结果计数不能早于结果本身：否则请求途中会先显示「为你找到 0 件」；
               失败时也不显示，免得把「没加载出来」说成「一件都没有」 */}
+          {/* 计数报**搜索结果**（服务端给的条数），本机隐藏的另说一句 —— 两件事实都不含糊 */}
           {loading || failed || isNumber ? null : (
             <View className="search__meta">
               <Text>为你找到</Text>
               <Text className="search__meta-num num">{results.length}</Text>
-              <Text>{`件「${submitted}」相关闲置`}</Text>
+              <Text>
+                {`件「${submitted}」相关闲置${
+                  hiddenCount === 0 ? '' : `（已隐藏 ${hiddenCount} 件）`
+                }`}
+              </Text>
             </View>
           )}
 
@@ -351,6 +387,17 @@ export default function Search() {
               actionText="去许愿墙发心愿"
               onAction={() => void Taro.switchTab({ url: '/pages/wish/index' })}
             />
+          ) : !loading && shownCount === 0 ? (
+            /*
+              搜到了商品、但本机把它们全标了「不感兴趣」。这不是「没找到」——说成没找到
+              等于把用户自己的操作结果说成事实缺失，还把人往许愿墙引。
+            */
+            <EmptyState
+              title="这些商品都不感兴趣了"
+              text="搜到的闲置都被你标过「不感兴趣」，所以这里不显示了。换几个关键词试试。"
+              actionText="换个关键词"
+              onAction={() => clearInput()}
+            />
           ) : (
             <View className="waterfall">
               <View className="waterfall__col">
@@ -360,6 +407,9 @@ export default function Search() {
                     listing={item}
                     seller={findUser(item.sellerId)}
                     imageHeight={RATIO_HEIGHT[item.ratio]}
+                    /* 卡片自己会隐藏；页面这份名单管的是跨页同步与计数（不删 `results`，避免换列） */
+                    hidden={hiddenIds.includes(item.id)}
+                    onDislike={() => setHiddenIds((prev) => [...prev, item.id])}
                   />
                 ))}
               </View>
@@ -370,6 +420,8 @@ export default function Search() {
                     listing={item}
                     seller={findUser(item.sellerId)}
                     imageHeight={RATIO_HEIGHT[item.ratio]}
+                    hidden={hiddenIds.includes(item.id)}
+                    onDislike={() => setHiddenIds((prev) => [...prev, item.id])}
                   />
                 ))}
               </View>

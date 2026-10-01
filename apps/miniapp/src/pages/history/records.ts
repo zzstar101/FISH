@@ -252,8 +252,8 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   }
   if (tab === 'favs') {
     return {
-      title: '收藏功能还没有后端',
-      text: '收藏的接口还没做，所以这里暂时没有内容可看；上线后逛首页点一下 ♡ 就会收在这里。',
+      title: '收藏还没有后端接口',
+      text: '服务端还没有收藏接口。你在卡片上收藏的商品只记在这台设备上，所以这里暂时没有内容可看。',
       action: '去逛逛',
     }
   }
