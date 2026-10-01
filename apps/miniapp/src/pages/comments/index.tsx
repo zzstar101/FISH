@@ -280,6 +280,29 @@ export default function MyComments() {
             <Text className="cmt__navtitle-em">评论</Text>
           </View>
         }
+        below={
+          /* 分段进 `below` 槽与主行连成同一块玻璃（Owner 2026-10-01 拍板「tab 栏也要
+             吸顶」，订单两页同款）；只按 `demo` 显隐，理由见上面那段说明。 */
+          demo ? (
+            <View className="cmt__segwrap">
+              <View className="cmt__seg">
+                {SEGMENTS.map((seg) => {
+                  const on = seg.key === segment
+                  return (
+                    <View
+                      key={seg.key}
+                      className={`cmt__seg-item${on ? ' is-on' : ''}`}
+                      onClick={() => setSegment(seg.key)}
+                    >
+                      <Text>{seg.label}</Text>
+                      <Text className="cmt__seg-n num">{counts[seg.key]}</Text>
+                    </View>
+                  )
+                })}
+              </View>
+            </View>
+          ) : undefined
+        }
       />
 
       {/*
@@ -294,31 +317,18 @@ export default function MyComments() {
         任何门禁）。两页取舍不同，因为那边的分段切完至少会换一套空态文案、这边不会。
         别拿这句当先例引用。
 
-        `.cmt__head` 本身**始终渲染**（分段胶囊只在其内部按 `demo` 显隐）：顶栏换
-        `top-bar` glass + `spacer` 后，主行高度由占位块承担，这里只留 24px 呼吸位。
+        分段胶囊挂在 `top-bar` 的 `below` 槽里（吸顶玻璃的一部分），整体只按 `demo`
+        显隐；真实构建下副行为空、顶栏只剩主行。
 
         ⚠️ 将来聚合端点落地时**不要照抄 `demo` 这个条件**：那时 `demo` 是 `false`
         而页面有真数据，分段的显隐该改判「有没有可筛的东西」（即真实结果非空）。
       */}
-      <View className="cmt__head">
-        {demo ? (
-          <View className="cmt__seg">
-            {SEGMENTS.map((seg) => {
-              const on = seg.key === segment
-              return (
-                <View
-                  key={seg.key}
-                  className={`cmt__seg-item${on ? ' is-on' : ''}`}
-                  onClick={() => setSegment(seg.key)}
-                >
-                  <Text>{seg.label}</Text>
-                  <Text className="cmt__seg-n num">{counts[seg.key]}</Text>
-                </View>
-              )
-            })}
-          </View>
-        ) : null}
-      </View>
+      {/*
+        副行占位：`spacer` 只含主行。演示构建多一条分段行（24 上衬 + 88 分段 + 8 下衬
+        = 120px，与 `.cmt__segwrap` 的 padding 逐项对应——改它或分段高度必须同步这里）；
+        真实构建没有分段，只留 24px 呼吸位。
+      */}
+      <View className={demo ? 'cmt__header-gap is-demo' : 'cmt__header-gap'} />
 
       <View className="cmt__body">
         {loading ? (

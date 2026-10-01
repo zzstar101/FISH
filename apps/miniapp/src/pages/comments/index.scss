@@ -29,16 +29,26 @@
   @include page-hero(320px, 64px);
 }
 
-/* ---------------------------------------------------------------- 页头 */
-
-/*
- * 页头只装演示构建的分段胶囊（真实构建是空块，只留呼吸位）—— 分段胶囊只在其内部
- * 按 `demo` 显隐，始终渲染这一块是为了给两种构建都垫出同一个 24px 顶距。
+/**
+ * 顶栏副行：分段挂在 `top-bar` 的 `below` 槽里，与主行**共用同一块玻璃** —— 底与
+ * 描边由 `.topbar--glass` 铺在整块容器上，本块只给内边距与排列。规格与订单两页 /
+ * 我的发布的分段同款（白底轨道 + inset 描边 + 卡片阴影，44pt 轨道 / 36pt 胶囊）。
  */
-.cmt__head {
-  position: relative;
-  z-index: 1;
-  padding: 24px 40px 0;
+.cmt__segwrap {
+  padding: 24px 40px 8px;
+}
+
+/**
+ * 副行占位（tsx 里按 `demo` 二态）：演示构建多一条分段行，24 + 88 + 8 = 120px，
+ * 与 `.cmt__segwrap` 的 padding 逐项对应——改它或分段高度必须同步这里；
+ * 真实构建没有分段，只留 24px 呼吸位。
+ */
+.cmt__header-gap {
+  height: 24px;
+}
+
+.cmt__header-gap.is-demo {
+  height: 120px;
 }
 
 /**
@@ -67,17 +77,17 @@
   color: var(--brand);
 }
 
-/* ---- 分段胶囊：三段互斥（全部 = 商品留言 ∪ 交易评价），所以摆计数 ---- */
-
+/* 分段轨道：三段互斥（全部 = 商品留言 ∪ 交易评价），所以摆计数 */
 .cmt__seg {
   display: flex;
   gap: 8px;
   height: 88px;
   padding: 8px;
-  margin-top: 20px;
   border-radius: var(--r-pill);
-  background: var(--ice);
-  border: 2px solid var(--border);
+  background: var(--surface);
+  box-shadow:
+    inset 0 0 0 2px var(--border),
+    var(--shadow-card);
   box-sizing: border-box;
 }
 
