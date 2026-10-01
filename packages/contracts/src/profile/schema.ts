@@ -61,6 +61,13 @@ export const profileStatsSchema = z.object({
   activeWishes: z.number().int().nonnegative(),
   /** 完成交易数（买卖两个角色合并计）。 */
   completedTransactions: z.number().int().nonnegative(),
+  /**
+   * 我关注的人数（`follows.follower_id = 我`，#188）。
+   *
+   * 与「我的关注」列表同源（同一张表、同一个方向）：数字栏写「关注 N」而点进去是另一个
+   * 数就是错的。这里只放**关注**方向——粉丝数与互粉数没有对应的数字栏，接口出现前不加字段。
+   */
+  followingCount: z.number().int().nonnegative(),
   // 「买入 / 卖出条数」刻意不设计数：由前端对 transactions[] 按 role 分组得到。
   // 该列表封顶 100（见 profileResponseSchema 注释），计数在封顶内准确——超出属于
   // demo 数据量之外的规模，届时应扩独立分页端点而不是在 stats 里加 COUNT。

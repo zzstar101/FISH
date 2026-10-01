@@ -87,6 +87,8 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   free: false,
   createdAt: new Date('2026-09-12T01:00:00.000Z'),
   coverObjectKey: 'covers/a.jpg',
+  // #191：卡片卖家公开子集（本人视角 = 查看者自己），join users 同源带出。
+  seller: { id: USER_ID, nickname: '小明', avatarUrl: null, authStatus: 'VERIFIED' },
   ...overrides,
 })
 
@@ -128,7 +130,12 @@ const txRow = (overrides: Partial<ProfileTransactionRow> = {}): ProfileTransacti
 })
 
 class MemoryProfileStore implements ProfileStore {
-  statsRow: ProfileStatsRow = { activeListings: 1, activeWishes: 1, completedTransactions: 1 }
+  statsRow: ProfileStatsRow = {
+    activeListings: 1,
+    activeWishes: 1,
+    completedTransactions: 1,
+    followingCount: 2,
+  }
   lastStatsUserId: string | null = null
   listings: ProfileListingRow[] = [listingRow()]
   wishes: ProfileWishRow[] = [wishRow()]
@@ -172,7 +179,12 @@ describe('profile service: getProfile', () => {
 
     expect(store.lastStatsUserId).toBe(USER_ID)
     expect(profile.user).toEqual(me) // user 块原样来自 requireAuth 的 Me
-    expect(profile.stats).toEqual({ activeListings: 1, activeWishes: 1, completedTransactions: 1 })
+    expect(profile.stats).toEqual({
+      activeListings: 1,
+      activeWishes: 1,
+      completedTransactions: 1,
+      followingCount: 2,
+    })
     // 商品卡：封面 objectKey 经 storage 拼 URL；本人可见 OFFLINE
     expect(profile.listings[0]?.coverUrl).toBe('https://cdn.test/covers/a.jpg')
     expect(profile.listings[0]?.status).toBe('OFFLINE')

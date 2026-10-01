@@ -65,7 +65,7 @@ const transaction = {
 
 const profile = {
   user: me,
-  stats: { activeListings: 1, activeWishes: 1, completedTransactions: 1 },
+  stats: { activeListings: 1, activeWishes: 1, completedTransactions: 1, followingCount: 2 },
   listings: [listingCard],
   wishes: [wish],
   transactions: [transaction],
@@ -75,7 +75,12 @@ describe('profileResponseSchema', () => {
   test('parses the full aggregate', () => {
     const parsed = profileResponseSchema.parse(profile)
     expect(parsed.user.authStatus).toBe('VERIFIED')
-    expect(parsed.stats).toEqual({ activeListings: 1, activeWishes: 1, completedTransactions: 1 })
+    expect(parsed.stats).toEqual({
+      activeListings: 1,
+      activeWishes: 1,
+      completedTransactions: 1,
+      followingCount: 2,
+    })
     // 本人视角的商品可以是非在售状态（listings 契约的 ListingStatusSchema 收窄）
     expect(parsed.listings[0]?.status).toBe('OFFLINE')
     expect(parsed.wishes[0]?.matchCount).toBe(2)
