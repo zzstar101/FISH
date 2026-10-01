@@ -12,6 +12,7 @@
     "@fish/contracts": "workspace:*",
     "@fish/db": "workspace:*",
     "@fish/shared": "workspace:*",
+    "@fish/visual-embedding": "workspace:*",
     "drizzle-orm": "^0.45.2"
   }
 }

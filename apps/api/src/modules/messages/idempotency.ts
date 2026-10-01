@@ -39,6 +39,16 @@ export function textRequestHash(content: string): string {
 }
 
 /**
+ * LISTING（#359）的指纹 = 被分享商品的**公开 id**（与落库的 `content` 同一值）。
+ *
+ * 重试同一条商品卡 → 同一指纹 → 重放既有消息；同一个 `clientRequestId` 换了商品 →
+ * 不同指纹 → 409，与 TEXT 的语义完全同源。
+ */
+export function listingRequestHash(listingPublicId: string): string {
+  return sha256Hex(join(['listing', listingPublicId]))
+}
+
+/**
  * MEDIA 指纹基于**客户端预签名 key**（重试时不变）与声明的元数据。
  *
  * 服务端写入的快照 key 每次重试都会新生成，不能参与指纹，否则同一请求的两次尝试

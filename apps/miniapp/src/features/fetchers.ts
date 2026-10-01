@@ -33,7 +33,7 @@ import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
 import type { ListingCategory, ListingSort } from '@fish/contracts/listings/schema'
 import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { TransactionRole } from '@fish/contracts/transactions/schema'
-import type { PublicUserProfile } from '@fish/contracts/users/schema'
+import type { PublicUserProfile, UserPresence } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
 import { isApiError } from '@/lib/request'
 import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
@@ -256,8 +256,7 @@ export async function loadListingDetail(
     // 失败降级成「没有相似推荐 / 不展示卖出件数」，但要留痕 —— 静默吞掉会让契约解析漂移
     // 看起来像「这个分类恰好没有同类商品」或「这个卖家恰好没卖过东西」。
     //
-    // 卖家公开资料只为了「卖出 N 件」这一个数：详情契约的 `ListingSellerSchema` 里没有它
-    // （只有 id / nickname / avatarUrl / authStatus），所以走 #122 的公开端点。
+    // 卖家公开资料一次拿两样：卖出件数，以及在线态（#359 第五点，详情页卖家行要显示）。
     // 认证状态**不**从这里取：详情响应本身就带真值，不必多一次请求去问同一件事。
     const [similar, sellerProfile] = await Promise.all([
       fetchSimilarListings(detail.category, detail.id).catch((error) => {
@@ -265,11 +264,15 @@ export async function loadListingDetail(
         return []
       }),
       fetchPublicUserProfile(detail.seller.id).catch((error) => {
-        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数', error)
+        console.warn('[miniapp] 卖家公开资料获取失败，本次不展示卖出件数与在线态', error)
         return null
       }),
     ])
-    const seller: MockUser = toMockSeller(detail, sellerProfile?.soldCount ?? null)
+    const seller: MockUser = toMockSeller(
+      detail,
+      sellerProfile?.soldCount ?? null,
+      sellerProfile?.presence ?? null,
+    )
     // 先按列表卡投影一次拿到公共字段（角标 / 比例 / 相对时间），再补详情独有的几项。
     // 不用 `[0]!`：空数组断言会掩盖投影层的 bug，这里显式兜底。
     const [base] = toMockListings([detail], now)
@@ -394,7 +397,7 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
        */
       items: mockConversations()
         .filter((item) => item.kind !== 'system')
-        .map((item) => toConversationDto(item, mockViewerId)),
+        .map((item) => toConversationDto(item, mockViewerId, null)),
       // fixture 没有分页
       nextCursor: null,
       failed: false,
@@ -410,7 +413,35 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
  * 所以要显式补齐而不是直接断言成 `ConversationDto`（断言的失败方式是运行期拿到
  * `undefined`，而不是编译期报错）。
  */
-function toConversationDto(item: MockConversation, mockViewerId: Me['id']): ConversationDto {
+/**
+ * 演示构建的「对方在线态」（#359 第五点，Owner 决策）。
+ *
+ * fixture 里没有活动登记表这个事实，但**不能**给 `{ online: false, lastActiveAt: null }`
+ * —— 那是**权威的「离线」**（服务端答了、只是没有活动记录；真实链路上必须如实渲染），
+ * 演示里会让每个会话恒显「离线」，微信开发者工具的门禁看不到在线档。这里按会话 id
+ * 稳定地分两档：一半「在线」、一半「12 分钟前活跃」，两档都能在端上看到。
+ *
+ * 时刻一律**相对当下**算，不写固定时间戳：固定值会随时间漂成假话（写死的「5 分钟前
+ * 活跃」过两天就是谎话）。在线档给 30s 前的活动，落在 `PRESENCE_ONLINE_TTL_MS` 窗口内。
+ *
+ * 注意「拿不到」是另一回事 —— 那是 `null`，由端上整块不渲染（见 `features/presence/view`）。
+ */
+function demoCounterpartPresence(seed: string): UserPresence {
+  let hash = 0
+  for (let i = 0; i < seed.length; i += 1) {
+    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0
+  }
+  const now = Date.now()
+  return hash % 2 === 0
+    ? { online: true, lastActiveAt: new Date(now - 30_000).toISOString() }
+    : { online: false, lastActiveAt: new Date(now - 12 * 60_000).toISOString() }
+}
+
+function toConversationDto(
+  item: MockConversation,
+  mockViewerId: Me['id'],
+  counterpartLastReadAt: string | null,
+): ConversationDto {
   // 演示登录与 fixture 的「我」使用不同 ID；摘要必须与历史消息的 senderId 同步投影。
   const lastMessage = item.lastMessage
   return {
@@ -421,9 +452,15 @@ function toConversationDto(item: MockConversation, mockViewerId: Me['id']): Conv
     // 多出来的 mock 专属 authStatus 结构上可赋给 ConversationUser，不需要逐字段重建
     counterpart: item.counterpart,
     unreadCount: item.unreadCount,
-    // fixture 没有「对方读到哪」这个概念（每个会话只有一条本地读位），给 null：
-    // 逐条「已读」的渲染在 Step 3 接 `conversation.read` 时才用得上
-    counterpartLastReadAt: null,
+    /*
+      读位由调用方给（#359 四 审查回合）：列表行不显示逐条已读标签，给 null 即可；
+      详情回退要用 `demoCounterpartLastReadAt` 从 fixture 的消息流里算一个确定性的值 ——
+      全给 null 的话演示构建里**每条**我发的消息都是红「未读」，「已读」这一档在端上
+      根本看不到，而端上门禁要求在开发者工具里逐页演示这个标签。
+    */
+    counterpartLastReadAt,
+    // 在线态（#359 第五点）：fixture 没有可投影的事实，走演示专用的稳定样值。
+    counterpartPresence: demoCounterpartPresence(item.id),
     lastMessage:
       DEMO_AUTH_ENABLED && lastMessage?.senderId === mockViewerId
         ? { ...lastMessage, senderId: DEMO_USER.id }
@@ -449,10 +486,44 @@ export async function loadConversation(conversationId: string): Promise<LoadedCo
     if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
     const { conversation: mockConversation, ME: mockMe, mockPublicId } = await import('@/mock/api')
     const found = mockConversation(conversationId)
-    return found
-      ? { status: 'ok', conversation: toConversationDto(found, mockPublicId('usr', mockMe.id)) }
-      : { status: 'missing' }
+    if (!found) return { status: 'missing' }
+    /*
+      详情回退顺手把「对方读位」算出来（#359 四 审查回合）：读位是逐条已读标签唯一的
+      数据来源，fixture 里没有这个事实 —— 不补的话演示构建全屏红字、看不到「已读」。
+      取值口径见 `demoCounterpartLastReadAt`（fixture 没有分页，一份消息就够）。
+    */
+    const { messages: mockMessages } = await import('@/mock/api')
+    return {
+      status: 'ok',
+      conversation: toConversationDto(
+        found,
+        mockPublicId('usr', mockMe.id),
+        demoCounterpartLastReadAt(mockMessages(conversationId), found.counterpart.id),
+      ),
+    }
   }
+}
+
+/**
+ * 演示构建的「对方读位」（#359 四 审查回合）。
+ *
+ * fixture 里没有「对方读到哪」这个事实，原先一律给 `null` —— 于是演示构建里**每条**我发的
+ * 消息都是红「未读」，「已读」这一档在端上根本看不到，而端上门禁要求在微信开发者工具里
+ * 逐页演示这个标签。
+ *
+ * 这里取「**倒数第二条**自己发的消息」时刻：最后一条自己发的因此落在读位之后显示「未读」，
+ * 更早的都显示「已读」—— 一次演示两种状态都能看到。取的是 fixture 自己的时间（不掺
+ * `Date.now()`），所以同一份数据每次进来都一样。
+ */
+export function demoCounterpartLastReadAt(
+  items: readonly MockMessage[],
+  counterpartPublicId: string,
+): string | null {
+  const mine = items.filter(
+    (item) => item.senderId !== null && item.senderId !== counterpartPublicId,
+  )
+  const secondLast = mine.length >= 2 ? mine[mine.length - 2] : undefined
+  return secondLast?.createdAt ?? null
 }
 
 /** 一页历史消息的加载结果：`nextCursor === null` 表示已到最早一页 */
@@ -497,12 +568,74 @@ export async function loadMessagePage(
      * 发送者对齐到当前身份，否则 fixture 里「我」发的消息会画到对方那一侧。
      */
     const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : { ...mockMe, id: mockPublicId('usr', mockMe.id) }
+    const rows = mockMessages(conversationId)
     return {
-      items: mockMessages(conversationId).map((item) => toMessageDto(item, found, viewer)),
+      // 传整份 fixture：引用摘引要在同一批里找被引用那条（#359 3c）
+      items: rows.map((item) => toMessageDto(item, found, viewer, rows)),
       nextCursor: null,
       failed: false,
     }
   }
+}
+
+/* ------------------------------------------------ 发送商品选择页（#359） */
+
+/** 发送商品选择页某一侧（我的 / TA 的）在售商品的加载结果 */
+export type LoadedListingCandidates = {
+  items: MockListing[]
+  failed: boolean
+  /** 服务端还有下一页：本页不做无限滚动，只用来如实提示「只展示了前 N 件」 */
+  hasMore: boolean
+}
+
+async function loadListingCandidates(
+  userId: string,
+  demoFallback: () => Promise<MockListing[]>,
+): Promise<LoadedListingCandidates> {
+  try {
+    const page = await fetchPublicUserListings(userId)
+    // 404（用户不存在）按失败处理：会话对方的用户必然存在，走到这里只可能是环境/网络问题。
+    if (page === null) return { items: [], failed: true, hasMore: false }
+    return { items: toMockListings(page.items), failed: false, hasMore: page.nextCursor !== null }
+  } catch (error) {
+    reportFailure('发送商品选择页', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)
+    if (!MOCK_FALLBACK_ENABLED || !DEMO_AUTH_ENABLED) {
+      return { items: [], failed: true, hasMore: false }
+    }
+    // 回退是整份 fixture，没有「下一页」这回事。
+    return { items: await demoFallback(), failed: false, hasMore: false }
+  }
+}
+
+/**
+ * 「TA的宝贝」tab：对方卖家的在售商品（与 他人主页/发送页 同一公开读端点）。
+ *
+ * 演示回退必须先把**公开 id 反查回 fixture 键**：会话里的 `counterpart.id` 是
+ * `mockPublicId('usr', …)` 生成的 `usr_…`，而 fixture 的 `sellerId` 是原始键（`u-…`），
+ * 直接按公开 id 过滤恒为空 —— 表现是「TA 暂无在售商品」的假空态，而初始 tab 恰好是这一侧
+ * （买家进页面默认看对方）。`mock/users.ts` 的 `getUser` 是同一套反查。
+ */
+export function loadCounterpartListings(userId: string): Promise<LoadedListingCandidates> {
+  return loadListingCandidates(userId, async () => {
+    const { userListings } = await import('@/mock/api')
+    const { USERS } = await import('@/mock/users')
+    const { mockPublicId } = await import('@/mock/public-id')
+    const raw = USERS.find((user) => mockPublicId('usr', user.id) === userId)
+    // 与真实端点同口径：只给在售。
+    return raw ? userListings(raw.id).filter((item) => item.status === 'ACTIVE') : []
+  })
+}
+
+/**
+ * 「我的宝贝」tab：我在售的商品。
+ * 演示身份（`DEMO_USER`）与 fixture 的「我」不同 ID，回退不能按 id 查——直接取
+ * fixture 里「我」的在售列表（与会话详情回退把 viewer 投影成当前身份的同一取舍）。
+ */
+export function loadMyListings(meId: string): Promise<LoadedListingCandidates> {
+  return loadListingCandidates(meId, async () => {
+    const { myListings } = await import('@/mock/api')
+    return myListings().filter((item) => item.status === 'ACTIVE')
+  })
 }
 
 /** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
@@ -515,11 +648,15 @@ type ViewerLike = { id: Me['id']; nickname: string; avatarUrl: string | null }
  * `messageDtoSchema` 的 refine 同源），而 fixture 只存 `senderId`，
  * 所以要按「这条是不是对方发的」补出 `sender`。`senderId` 也要一起对齐到
  * `viewer`（见调用点的说明）。
+ *
+ * #359 3c：`replyTo` 与 `recalledAt` 同样按契约语义补出来 —— 撤回的消息正文清空
+ * （服务端也不下发），引用则按 `replyToId` 从同一份 fixture 里合成摘引。
  */
 function toMessageDto(
   item: MockMessage,
   conversation: MockConversation,
   viewer: ViewerLike,
+  all: readonly MockMessage[] = [],
 ): MessageDto {
   const fromCounterpart = item.senderId !== null && item.senderId === conversation.counterpart.id
   const senderId = item.senderId === null ? null : fromCounterpart ? item.senderId : viewer.id
@@ -533,15 +670,52 @@ function toMessageDto(
             avatarUrl: conversation.counterpart.avatarUrl,
           }
         : { id: viewer.id, nickname: viewer.nickname, avatarUrl: viewer.avatarUrl }
+  /**
+   * #359 3c：被引用那条在本会话里的投影（用于合成摘引）。只在这里用，不递归 ——
+   * 被引用消息自己的 `replyTo` 恒为空，避免「引用链」在演示数据里无限展开。
+   */
+  const replied = item.replyToId
+    ? all.find((candidate) => candidate.id === item.replyToId)
+    : undefined
+  const replyTo = replied
+    ? {
+        id: replied.id,
+        senderId:
+          replied.senderId === null
+            ? null
+            : replied.senderId === conversation.counterpart.id
+              ? conversation.counterpart.id
+              : viewer.id,
+        excerpt: toReplyExcerpt(replied),
+      }
+    : null
   return {
     id: item.id,
     conversationId: item.conversationId,
     senderId,
     sender,
     type: item.type,
-    content: item.content,
+    // 撤回后正文不再下发（服务端同口径）：演示态也清空，两档画同一个撤回碑。
+    content: item.recalled ? '' : item.content,
+    // fixture 没有「撤回时刻」这个概念，用占位时间戳表达「已撤回」这一个事实
+    recalledAt: item.recalled ? item.createdAt : null,
+    // 演示 fixture 不做商品卡投射（富化只在服务端），与契约的可选字段一致
+    listing: null,
+    replyTo,
     createdAt: item.createdAt,
   }
+}
+
+/**
+ * 演示消息的摘引文案。口径与服务端 `replyExcerpt`
+ * （`apps/api/src/modules/messages/reply.ts`）一致：已撤回 `[消息已撤回]`、
+ * 空文本 `[消息]`、超长截断到 120 字含省略号。
+ */
+function toReplyExcerpt(item: MockMessage): string {
+  if (item.recalled) return '[消息已撤回]'
+  const text = item.content.trim()
+  if (text.length === 0) return '[消息]'
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text
 }
 
 /* --------------------------------------------------------------- 订单 */

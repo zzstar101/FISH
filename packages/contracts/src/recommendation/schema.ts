@@ -53,12 +53,18 @@ export type RecommendationEventType = z.infer<typeof RecommendationEventTypeSche
 /**
  * 召回通道。R1 的 Feed 是 `newest` 透传，只有 `fresh`；其余是 R3 多路召回的目标通道，
  * 现在就把枚举冻结，避免 R3 改契约。
+ *
+ * `category` 是 R3 补的一个值（Issue #323 M2 的第 5 路：按最近行为的类目分布补候选）。
+ * R1 冻结枚举时漏了它，但**没有复用 `semantic` 或 `popular`**：R6 要按通道分账（哪一路带来了
+ * 详情 / 收藏 / 成交），把"向量召回"与"类目兜底"记成同一个标签就再也拆不开，而这两个机制在
+ * semantic 不可用时恰好一个死一个活，是最需要分开看的一对。
  */
 export const RecommendationSourceSchema = z.enum([
   'fresh',
   'popular',
   'semantic',
   'wish',
+  'category',
   'follow',
   'similar',
   'explore',

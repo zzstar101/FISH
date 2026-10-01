@@ -7,10 +7,12 @@ import {
   type PublicUserProfile,
   PublicUserProfileSchema,
   type UserErrorCode,
+  type UserPresence,
 } from '@fish/contracts/users/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { toListingCard } from '../listings/card'
 import { decodeCursor, encodeCursor, isCursorTimestamp } from '../listings/cursor'
+import type { PresenceReader } from '../presence/presence'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
 import type {
@@ -70,14 +72,18 @@ function joinedDaysOf(createdAt: Date, now: Date): number {
 /**
  * 公开资料 DTO：**逐字段组装**，不是 `{...row}`。
  *
- * 显式列出七个字段而不是展开行对象，是为了让"多一个字段"必须写进这行字面量——
+ * 显式列出全部字段而不是展开行对象，是为了让"多一个字段"必须写进这行字面量——
  * 展开式组装会在有人给 `PublicUserRow` 加列时**静默**把新列带进公开响应。
  * 最后再 `parse` 一次，把契约漂移（例如 `auth_status` 出现第三个值）挡在出站前。
+ *
+ * `presence`（#359 第五点）不来自 `row`（那是 DB 列）而来自进程内的在线态登记表，
+ * 是**这个用户此刻**的判定结果，所以由调用方传入读模型而不是在这里现查。
  */
 function toPublicProfile(
   row: PublicUserRow,
   stats: PublicUserStatsRow,
   now: Date,
+  presence: UserPresence,
 ): PublicUserProfile {
   return PublicUserProfileSchema.parse({
     id: encodePublicId(PUBLIC_ID_PREFIX.user, row.id),
@@ -91,6 +97,7 @@ function toPublicProfile(
     joinedDays: joinedDaysOf(row.createdAt, now),
     activeCount: stats.activeListings,
     soldCount: stats.soldCount,
+    presence,
   })
 }
 
@@ -106,8 +113,13 @@ export function createPublicUserService(options: {
   store: PublicUserStore
   /** 只取 `publicUrl`：「公开 URL 怎么拼」全仓只有一个实现（#6 契约 §7.8）。 */
   storage: Pick<MediaStorage, 'publicUrl'>
+  /**
+   * 在线态读模型（#359 第五点）。**必填**：`PublicUserProfileSchema.presence` 是必填字段，
+   * 给默认值会把漏接线伪装成「TA 恰好离线」（与 conversations 服务的同一取舍）。
+   */
+  presence: PresenceReader
 }): PublicUserService {
-  const { store, storage } = options
+  const { store, storage, presence } = options
 
   /** 游标解码 + 值域校验；不合法一律 422（与 feed 的 `decodeFeedCursor` 同款）。 */
   function decodeListingCursor(raw: string): PublicListingCursor {
@@ -130,7 +142,12 @@ export function createPublicUserService(options: {
       const row = await store.findPublicUser(userId)
       if (!row) throw userNotFound()
 
-      return toPublicProfile(row, await store.stats(userId), new Date())
+      return toPublicProfile(
+        row,
+        await store.stats(userId),
+        new Date(),
+        presence.presenceOf(row.id),
+      )
     },
 
     async listActiveListings(userId, query) {

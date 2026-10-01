@@ -2,6 +2,8 @@ import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
+import type { UserPresence } from '@fish/contracts/users/schema'
+import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
 import type {
   AiPolishEnv,
@@ -9,9 +11,12 @@ import type {
   MailTransportEnv,
   MeetupTokenEnv,
   ServerEnv,
+  VisualEmbeddingEnv,
+  VisualParseEnv,
 } from '@fish/shared/env'
 import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -62,12 +67,14 @@ import { createNotificationsRouter } from './modules/notifications/router'
 import { createNotificationService } from './modules/notifications/service'
 import { createSqlNotificationStore } from './modules/notifications/store'
 import { writeNotification } from './modules/notifications/writer'
+import { createPresenceRegistry } from './modules/presence/presence'
 import { createProfileRouter } from './modules/profile/router'
 import { createProfileService } from './modules/profile/service'
 import { createSqlProfileStore } from './modules/profile/store'
 import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
+import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
@@ -81,6 +88,12 @@ import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createUsersRouter } from './modules/users/router'
 import { createPublicUserService } from './modules/users/service'
 import { createSqlPublicUserStore } from './modules/users/store'
+import { createVisualParser } from './modules/visual-search/parse'
+import { createVisualSearchRateLimiter } from './modules/visual-search/rate-limit'
+import { createVisualSearchRouter } from './modules/visual-search/router'
+import { createVisualSearchService } from './modules/visual-search/service'
+import { createVisualSearchStore } from './modules/visual-search/store'
+import { createVisualSearchSubjectResolver } from './modules/visual-search/subject'
 import { createDbWishMatchQueue } from './modules/wishes/match-queue'
 import { createWishesRouterFromDb } from './modules/wishes/router'
 import { API_VERSION } from './version'
@@ -135,6 +148,17 @@ export function createApp(
    * 审核通过（生产由 index.ts 显式传入；local 在生产直接启动失败，见 `@fish/shared/env`）。
    */
   moderationEnv: ContentModerationEnv = { transport: 'local' },
+  /**
+   * 视觉向量化配置（#324 M3）。`index.ts` 用 `loadVisualEmbeddingEnv()` 做启动期校验后传入；
+   * 默认 `stub` 只服务测试与本机，**生产不可能静默降级**——`loadVisualEmbeddingEnv()` 在
+   * `NODE_ENV=production` 遇到 stub 会直接抛错（与 worker 的 `EMBEDDING_TRANSPORT` 同一取舍）。
+   */
+  visualEmbeddingEnv: VisualEmbeddingEnv = { transport: 'stub' },
+  /**
+   * OCR/VLM 语义解析（#324 M5）。默认 `off` = 只走图片向量与结构化信号，不产生第二次上游调用、
+   * 也不把查询图再发一次；开启后文本路才参与召回（见 `visual-search/parse.ts` 的 fail-open）。
+   */
+  visualParseEnv: VisualParseEnv = { transport: 'off' },
 ) {
   const db = createDb(env.DATABASE_URL)
   const app = new Hono()
@@ -150,6 +174,36 @@ export function createApp(
   const governanceStore = createSqlGovernanceStore(db)
   const guardDb = createDb(env.DATABASE_URL, { max: 4 })
   const restrictionGuard = createRestrictionGuard({ store: createSqlGovernanceStore(guardDb) })
+
+  // 在线态登记表（#359 第五点）：进程内单例，口径是「最近一次已认证活动 + TTL」。
+  // 它必须**早于 auth 创建**——auth 的 requireAuth / resolveViewerId 是全部已认证请求的
+  // 入口，在那里记心跳（见 middleware.ts 的 onAuthenticated）。
+  //
+  // `broadcastPresence` 是**函数声明**（会被提升）：它引用的 `conversationStore` 与 `hub`
+  // 在下面的聊天模块里才创建。函数体只在请求到来时执行，那时两者早已初始化 ——
+  // 这不是"用到未初始化的 const"，而是"晚于声明的调用点"。
+  async function broadcastPresence(userId: string, presence: UserPresence): Promise<void> {
+    try {
+      const counterparts = await conversationStore.listCounterpartUserIds(userId)
+      if (counterparts.length === 0) return
+      hub.pushToUsers(counterparts, {
+        type: 'presence.changed',
+        userId: encodePublicId(PUBLIC_ID_PREFIX.user, userId),
+        presence,
+      })
+    } catch (error) {
+      // 广播失败不得影响用户这次请求（与 message.new 的推送同一取舍）：只留痕。
+      console.warn('[api] presence.changed 广播失败', describeError(error))
+    }
+  }
+
+  const presence = createPresenceRegistry({
+    onChange: (userId, snapshot) => {
+      // 只在「离线 → 在线」时回调（见 presence.ts）；这里 fire-and-forget，
+      // 查询广播目标与推送都在下一个微任务里完成，不阻塞这次请求。
+      void broadcastPresence(userId, snapshot)
+    },
+  })
 
   // 认证模块的装配在 modules/auth 内，这里只负责接线（#3；#68 改为邮箱验证码子域）。
   // secureCookie 由 WEB_ORIGIN 的 scheme 推导：本地 http 加 Secure 会让 cookie 直接失效。
@@ -177,6 +231,8 @@ export function createApp(
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
     guard: restrictionGuard,
+    // 在线态心跳（#359 第五点）：已认证 HTTP 请求 / 可选身份读路径都算一次活动。
+    onAuthenticated: (userId) => presence.touch(userId),
     clientIp: (request) =>
       trustedClientIp(request, lookupNetwork.peerIp(request), lookupNetwork.trustedProxyIp),
   })
@@ -247,6 +303,9 @@ export function createApp(
   const recommendationService = createRecommendationService({
     store: createSqlRecommendationStore(db),
     listings: listingService,
+    // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
+    // （画像只给登录用户，匿名行为不投 job）。
+    interest: createDbInterestRefreshQueue(db),
   })
   const recommendationRecorder = createRecommendationDomainRecorder(recommendationService)
   app.route(
@@ -278,6 +337,48 @@ export function createApp(
     }),
   )
 
+  // 拍照识图搜索（#324 M4）：两个端点都**匿名可用**（Q6=B），所以整条不挂 requireAuth，
+  // 只做可选身份解析（登录按 userId 计配额，匿名按会话 + 出口 IP 两条都算）。
+  //
+  // 视觉向量化 provider 在这里装配一次：查询图要现场向量化，而列表侧（worker 的
+  // VISUAL_EMBED_LISTING 回填）用的是**同一个** `VISUAL_EMBEDDING_MODEL`——两边的向量只有
+  // 同模型同维度才能互相比较，所以模型名必须来自同一处配置而不是各自写死。
+  //
+  // 存储实例**另建一个**（复用同一个 S3 客户端）：查询图是私有临时对象，presign 有效期按
+  // `VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS`（300s）缩短，比商品图 staging 的 600s 更短；
+  // 而 `expiresInSeconds` 是实例级配置，改共享实例会连带改掉商品图上传的窗口。
+  const visualStorage = createBunS3MediaStorage({
+    client: new Bun.S3Client({
+      accessKeyId: env.S3_ACCESS_KEY_ID,
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      bucket: env.S3_BUCKET,
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+    }),
+    publicUrlBase: env.S3_PUBLIC_URL,
+    expiresInSeconds: VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS,
+  })
+  const visualEmbeddingProvider = createVisualEmbeddingProvider(visualEmbeddingEnv)
+  const visualSearchService = createVisualSearchService({
+    store: createVisualSearchStore(db),
+    storage: visualStorage,
+    provider: visualEmbeddingProvider,
+    parser: createVisualParser(visualParseEnv),
+    rateLimiter: createVisualSearchRateLimiter(db),
+  })
+  app.route(
+    '/visual-search',
+    createVisualSearchRouter({
+      service: visualSearchService,
+      // 复用面交码那把 API-only 密钥做匿名主体的 HMAC：领域分隔（session / ip）在 scope 前缀里做，
+      // 不为一个派生值再引入一份新配置。
+      subjects: createVisualSearchSubjectResolver(meetupEnv.MEETUP_TOKEN_SECRET),
+      resolveViewerId: auth.resolveViewerId,
+      resolveClientIp: (c) =>
+        trustedClientIp(c.req.raw, lookupNetwork.peerIp(c.req.raw), lookupNetwork.trustedProxyIp),
+    }),
+  )
+
   // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
   // `/comments/:id/replies`、`/comments/:id`（DELETE）与 `/me/comments`（路径常量在
   // `@fish/contracts/comments/routes`）。读接口匿名可用、写与本人作用域逐路由挂 requireAuth
@@ -301,7 +402,11 @@ export function createApp(
   app.route(
     '/',
     createUsersRouter({
-      service: createPublicUserService({ store: createSqlPublicUserStore(db), storage }),
+      service: createPublicUserService({
+        store: createSqlPublicUserStore(db),
+        storage,
+        presence,
+      }),
     }),
   )
 
@@ -392,6 +497,8 @@ export function createApp(
       service: createConversationService({
         store: conversationStore,
         storage,
+        // 对方的在线态由进程内登记表直接读（#359 第五点），与公开资料的 presence 同源。
+        presence,
         projectContent: projectSystemContent,
         // 读位推进后推给会话双方的全部在线连接（#149）：与 message.new 同一通道，
         // 客户端按 readerId 区分「自己读的」与「对方读的」。
@@ -442,12 +549,24 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
+        storage,
         projectContent: projectSystemContent,
         onMessageCreated: (participants, message) => {
           hub.pushToUsers([participants.buyerId, participants.sellerId], {
             type: 'message.new',
             conversationId: message.conversationId,
             message,
+          })
+        },
+        // #359 3c 撤回：落库成功后推给会话双方（同一人多连接也要同步）。
+        onMessageRecalled: (participants, event) => {
+          hub.pushToUsers([participants.buyerId, participants.sellerId], {
+            type: 'message.recalled',
+            conversationId: event.conversationId,
+            messageId: event.messageId,
+            recalledAt: event.recalledAt,
+            recalledBy: event.recalledBy,
           })
         },
       }),
@@ -463,6 +582,9 @@ export function createApp(
     createRealtimeRouter({
       hub,
       resolveUserId: auth.resolveViewerId,
+      // 长连接的心跳续在线态（#359 第五点）：安静挂着的 WebSocket 没有 HTTP 请求，
+      // 不靠 20s 一次的 ping 续命的话，TTL 一过就会被判成离线。
+      onHeartbeat: (userId) => presence.touch(userId),
       upgradeWebSocket,
     }),
   )

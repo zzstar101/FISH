@@ -1,6 +1,7 @@
 import { describe, expect, setSystemTime, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { decodeCursor, encodeCursor } from '../listings/cursor'
+import type { PresenceReader } from '../presence/presence'
 import { createPublicUserService, PublicUserServiceError } from './service'
 import type {
   PublicListingCursor,
@@ -81,8 +82,16 @@ function fakeStore(
   }
 }
 
-function service(store: PublicUserStore) {
-  return createPublicUserService({ store, storage })
+/**
+ * 在线态读模型（#359 第五点）。默认「从未活动」（离线、无 lastActiveAt）；
+ * 需要断言在线形状的用例注入自己的 reader。
+ */
+const offlinePresence: PresenceReader = {
+  presenceOf: () => ({ online: false, lastActiveAt: null }),
+}
+
+function service(store: PublicUserStore, presence: PresenceReader = offlinePresence) {
+  return createPublicUserService({ store, storage, presence })
 }
 
 /** 捕捉抛出的 PublicUserServiceError，断言不成立时给出可读失败。 */
@@ -102,9 +111,27 @@ describe('公开资料', () => {
       'id',
       'joinedDays',
       'nickname',
+      'presence',
       'signature',
       'soldCount',
     ])
+  })
+
+  /**
+   * #359 第五点：他人主页的在线态来自进程内活动登记表。这条用例锁两件事：
+   * ① 值是登记表读出来的（不是恒 false 的占位）；② 查的是**被看的那个用户**。
+   */
+  test('presence 取自登记表，且查的是被看的用户', async () => {
+    const asked: string[] = []
+    const profile = await service(fakeStore(), {
+      presenceOf: (userId) => {
+        asked.push(userId)
+        return { online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' }
+      },
+    }).getPublicProfile(USER_ID)
+
+    expect(profile.presence).toEqual({ online: true, lastActiveAt: '2026-09-30T09:00:00.000Z' })
+    expect(asked).toEqual([USER_ID])
   })
 
   test('签名（#179）：行里的 signature 原样进公开 DTO', async () => {

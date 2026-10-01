@@ -40,6 +40,7 @@ import type {
 } from '@fish/contracts/listings/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import type { TransactionStatus, TransactionUser } from '@fish/contracts/transactions/schema'
+import type { UserPresence } from '@fish/contracts/users/schema'
 import type { WishStatus } from '@fish/contracts/wishes/schema'
 
 /* ---------------------------------------------------------------- 用户 */
@@ -60,6 +61,17 @@ export type MockUser = {
    */
   soldCount: number | null
   goodRate: number | null
+  /**
+   * 在线态（#359 第五点）：商品详情页的卖家行要显示它。
+   *
+   * 数据源不是 `ListingDetail`（`ListingSellerSchema` 里没有这个字段），而是详情页**已经**
+   * 并行拉的公开资料（`GET /users/:id/public` 的 `presence`）—— 与「卖出 N 件」同一个
+   * 请求，不多打一次接口。
+   *
+   * 可选：mock fixture 里没有在线态这个概念（`mock/users.ts` 的 USERS 不填它），
+   * 缺席即「拿不到」，页面整块不渲染 —— 与本文件其它「契约没有就给 null」同款口径。
+   */
+  presence?: UserPresence | null
 }
 
 /* ---------------------------------------------------------------- 商品 */
@@ -241,6 +253,20 @@ export type MockMessage = {
   type: MessageType
   content: string
   createdAt: string
+  /**
+   * #359 3c 演示扩展：这条消息引用了哪一条（被引用消息的 id）。
+   *
+   * 契约里引用投射（`replyTo`）由**服务端**组装，fixture 只记关系，`fetchers` 的
+   * `toMessageDto` 再按它合成投射 —— 与会话详情「服务端组装读模型」的既有取舍同源。
+   */
+  replyToId?: MessageDto['id']
+  /**
+   * #359 3c 演示扩展：已撤回的演示消息（撤回碑）。
+   *
+   * 契约里撤回后正文不再下发，所以 fixture 里这类消息的 `content` 会被投影清空
+   * （见 `toMessageDto`）—— 演示态与真实态画同一个撤回碑。
+   */
+  recalled?: boolean
 }
 
 /** 媒体消息种类（D2 会话页新增） */

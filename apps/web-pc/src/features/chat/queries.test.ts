@@ -3,6 +3,8 @@ import type { Me } from '@fish/contracts/auth/user'
 import type {
   ConversationDto,
   ConversationListResponse,
+  MediaListResponse,
+  MediaMessageDto,
   MessageDto,
   MessageListResponse,
 } from '@fish/contracts/chat/schema'
@@ -11,15 +13,20 @@ import { AUTH_ME_QUERY_KEY } from '../../lib/session-cache'
 import {
   applyReadEventToCache,
   chatKeys,
+  flattenMediaPages,
   flattenMessagePages,
+  insertMediaIntoCache,
   insertMessageIntoCache,
   isMessageRead,
   mergeConversationDto,
   mergeConversationReadMarker,
+  mergeMediaIntoCache,
   mergeMessagesIntoCache,
+  refreshNewestMedia,
   refreshNewestMessages,
   updateConversationForOwner,
   updateConversationPage,
+  upsertMediaPage,
   upsertMessagePage,
 } from './queries'
 
@@ -37,6 +44,8 @@ function message(id: MessageDto['id'], createdAt: string, content: string = id):
     sender,
     type: 'TEXT',
     content,
+    recalledAt: null,
+    replyTo: null,
     createdAt,
   }
 }
@@ -54,6 +63,8 @@ function conversation(counterpartLastReadAt: string | null): ConversationDto {
       coverUrl: null,
     },
     counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    // #359 第五点：会话 DTO 的必填字段（本端暂不渲染在线态，但类型必须完整）
+    counterpartPresence: { online: false, lastActiveAt: null },
     unreadCount: 1,
     counterpartLastReadAt,
     lastMessage: null,
@@ -64,6 +75,38 @@ function conversation(counterpartLastReadAt: string | null): ConversationDto {
 
 function messageData(items: MessageDto[]): {
   pages: MessageListResponse[]
+  pageParams: Array<string | null>
+} {
+  return { pages: [{ items, nextCursor: null }], pageParams: [null] }
+}
+
+const CONVERSATION = 'cnv_01jc000000e00800000000001a'
+
+function media(
+  id: MediaMessageDto['id'],
+  createdAt: string,
+  kind: MediaMessageDto['kind'] = 'IMAGE',
+): MediaMessageDto {
+  return {
+    id,
+    conversationId: CONVERSATION,
+    senderId: sender.id,
+    kind,
+    mediaId: 'med_01jc000000e00800000000002a',
+    url: `/api/conversations/${CONVERSATION}/media/med_01jc000000e00800000000002a`,
+    mimeType: kind === 'IMAGE' ? 'image/png' : 'audio/webm',
+    sizeBytes: 1_024,
+    width: kind === 'IMAGE' ? 1_200 : null,
+    height: kind === 'IMAGE' ? 900 : null,
+    durationMs: kind === 'VOICE' ? 2_000 : null,
+    recalledAt: null,
+    replyTo: null,
+    createdAt,
+  }
+}
+
+function mediaData(items: MediaMessageDto[]): {
+  pages: MediaListResponse[]
   pageParams: Array<string | null>
 } {
   return { pages: [{ items, nextCursor: null }], pageParams: [null] }
@@ -109,6 +152,30 @@ describe('message cache', () => {
     const data = messageData([existing])
 
     expect(upsertMessagePage(data, existing, 'cnv_01jc000000e00800000000001a')).toBe(data)
+  })
+
+  test('replaces a LISTING message when only the listing projection changed', () => {
+    // 商品被下架 / 改价后重新拉到的那条：除 `listing` 外逐字段相同 —— 判成 identical
+    // 会让屏幕上一直留着旧卡片状态（#359 3a 审查回合）。
+    const base: MessageDto = {
+      ...message('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'),
+      type: 'LISTING',
+      content: 'lst_01jc000000e00800000000000t',
+    }
+    const card: NonNullable<MessageDto['listing']> = {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    }
+    const data = messageData([{ ...base, listing: card }])
+    const sold: MessageDto = { ...base, listing: { ...card, status: 'SOLD' } }
+
+    const next = upsertMessagePage(data, sold, 'cnv_01jc000000e00800000000001a')
+
+    expect(next).not.toBe(data)
+    expect(next?.pages[0]?.items[0]?.listing?.status).toBe('SOLD')
   })
 
   test('rejects a message that belongs to another conversation', () => {
@@ -466,5 +533,149 @@ describe('read receipt cache', () => {
     expect(
       isMessageRead(message('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'), null),
     ).toBe(false)
+  })
+})
+
+describe('media cache', () => {
+  test('dedupes media by server id and replaces the existing row', () => {
+    const data = mediaData([
+      media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'),
+      media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:01.000Z'),
+    ])
+    const next = upsertMediaPage(
+      data,
+      { ...media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'), sizeBytes: 9_999 },
+      CONVERSATION,
+    )
+
+    expect(next?.pages[0]?.items.map((item) => item.id)).toEqual([
+      'msg_01jc000000e00800000000001v',
+      'msg_01jc000000e00800000000001w',
+    ])
+    expect(next?.pages[0]?.items[0]?.sizeBytes).toBe(9_999)
+  })
+
+  test('returns the same cache object when the media is already identical', () => {
+    const existing = media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z')
+    const data = mediaData([existing])
+
+    expect(upsertMediaPage(data, existing, CONVERSATION)).toBe(data)
+  })
+
+  test('inserts new media into the newest page and keeps ascending order', () => {
+    const data = mediaData([media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z')])
+    const next = upsertMediaPage(
+      data,
+      media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:02.000Z', 'VOICE'),
+      CONVERSATION,
+    )
+
+    expect(next?.pages[0]?.items.map((item) => item.id)).toEqual([
+      'msg_01jc000000e00800000000001v',
+      'msg_01jc000000e00800000000001w',
+    ])
+  })
+
+  test('rejects media that belongs to another conversation', () => {
+    const data = mediaData([media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z')])
+    const foreign: MediaMessageDto = {
+      ...media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:02.000Z'),
+      conversationId: 'cnv_01jc000000e00800000000001b',
+    }
+
+    expect(upsertMediaPage(data, foreign, CONVERSATION)).toBe(data)
+  })
+
+  test('seeds a media cache when none exists', () => {
+    const queryClient = new QueryClient()
+    insertMediaIntoCache(
+      queryClient,
+      'me',
+      CONVERSATION,
+      media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'),
+    )
+
+    expect(
+      queryClient
+        .getQueryData<{ pages: MediaListResponse[] }>(chatKeys.media('me', CONVERSATION))
+        ?.pages[0]?.items.map((item) => item.id),
+    ).toEqual(['msg_01jc000000e00800000000001v'])
+  })
+
+  test('re-merges live media after a pagination write', () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(
+      chatKeys.media('me', CONVERSATION),
+      mediaData([media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z')]),
+    )
+
+    mergeMediaIntoCache(queryClient, 'me', CONVERSATION, [
+      media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:02.000Z'),
+      // 实时与发送响应同时到达的同一 id 只落一条。
+      media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:02.000Z'),
+    ])
+
+    expect(
+      queryClient
+        .getQueryData<{ pages: MediaListResponse[] }>(chatKeys.media('me', CONVERSATION))
+        ?.pages[0]?.items.map((item) => item.id),
+    ).toEqual(['msg_01jc000000e00800000000001v', 'msg_01jc000000e00800000000001w'])
+  })
+
+  test('flattens older media pages before the newest page and dedupes ids', () => {
+    const older: MediaListResponse = {
+      items: [media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z')],
+      nextCursor: 'msg_01jc000000e00800000000001v',
+    }
+    const newest: MediaListResponse = {
+      items: [
+        media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:02.000Z', 'VOICE'),
+        // 分页时服务端会重发已实时落过的那条，按 id 只保留一份。
+        media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z'),
+      ],
+      nextCursor: null,
+    }
+
+    expect(
+      flattenMediaPages({
+        pages: [newest, older],
+        pageParams: [null, 'msg_01jc000000e00800000000001v'],
+      }).map((item) => item.id),
+    ).toEqual(['msg_01jc000000e00800000000001v', 'msg_01jc000000e00800000000001w'])
+    expect(flattenMediaPages(undefined)).toEqual([])
+  })
+
+  test('replaces loaded media pages with the newest page on reconnect', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          items: [media('msg_01jc000000e00800000000001w', '2026-01-01T00:00:02.000Z', 'VOICE')],
+          nextCursor: 'msg_01jc000000e00800000000001w',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof fetch
+    try {
+      const queryClient = new QueryClient()
+      queryClient.setQueryData(
+        chatKeys.media('me', CONVERSATION),
+        mediaData([media('msg_01jc000000e00800000000001v', '2026-01-01T00:00:00.000Z')]),
+      )
+
+      await refreshNewestMedia(queryClient, 'me', CONVERSATION)
+
+      const data = queryClient.getQueryData<{
+        pages: MediaListResponse[]
+        pageParams: Array<string | null>
+      }>(chatKeys.media('me', CONVERSATION))
+      expect(data?.pages).toHaveLength(1)
+      expect(data?.pages[0]?.items.map((item) => item.id)).toEqual([
+        'msg_01jc000000e00800000000001w',
+      ])
+      expect(data?.pages[0]?.nextCursor).toBe('msg_01jc000000e00800000000001w')
+      expect(data?.pageParams).toEqual([null])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

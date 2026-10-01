@@ -13,6 +13,7 @@ import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type ListingService, ListingServiceError } from '../listings/service'
 import type { RecommendationContext } from './context'
 import { decodeRecommendationCursor, encodeRecommendationCursor } from './cursor'
+import type { InterestRefreshQueue } from './interest-queue'
 import type {
   RecommendationEventRecord,
   RecommendationRequestRow,
@@ -106,8 +107,31 @@ export function createRecommendationService(deps: {
   store: RecommendationStore
   /** 复用确定性 Feed 的读路径：R1 不重写列表查询，只把结果包上推荐上下文。 */
   listings: Pick<ListingService, 'listFeed'>
+  /**
+   * 长期画像重算的投递口（#323 R2）。登录用户的行为一落库就投一条 `REFRESH_USER_INTEREST`；
+   * 匿名行为不投（长期画像只给登录用户），session 画像由 api 请求时实时算、不落库。
+   */
+  interest: InterestRefreshQueue
 }): RecommendationService {
-  const { store, listings } = deps
+  const { store, listings, interest } = deps
+
+  /**
+   * 投递长期画像重算。**失败不能让行为写入变成 500**：事件已经落库，客户端重试也只会撞
+   * `event_id` 唯一索引；投递失败时这个用户的画像停在旧数据上，由 R6 的补算兜住，而不是把
+   * "埋点投递不上"变成用户可见的失败（埋点是旁路，与 `recordDomainEvent` 的取舍一致）。
+   *
+   * 去重后逐个投：一条批量事件里同一用户的多次行为（一屏曝光 + 一次点开）只需一次重算，
+   * 而 `jobs` 的部分唯一索引本来也只允许一条待跑 job。
+   */
+  async function enqueueInterestRefresh(userIds: Iterable<string>): Promise<void> {
+    for (const userId of userIds) {
+      try {
+        await interest.enqueue(userId)
+      } catch (error) {
+        console.error('[recommendation] 兴趣画像重算投递失败', { userId }, error)
+      }
+    }
+  }
 
   return {
     async startFeed({ viewerId, anonymousSessionId, limit, cursor }) {
@@ -282,6 +306,16 @@ export function createRecommendationService(deps: {
         })
       }
 
+      // 长期画像的重算入口：**只看这次落库行为里的登录用户**。匿名会话的行为不投 job——
+      // 长期画像只给登录用户（R2 决策），给匿名会话建长期画像等于凭空造一条跨设备身份。
+      await enqueueInterestRefresh(
+        new Set(
+          accepted
+            .map((record) => record.userId)
+            .filter((userId): userId is string => userId !== null),
+        ),
+      )
+
       return {
         accepted: inserted,
         // 撞唯一索引 = 客户端重试，是正常结果，不是错误。
@@ -337,6 +371,13 @@ export function createRecommendationService(deps: {
             occurredAt: occurredAt ?? new Date(),
           },
         ])
+
+        // 强正反馈（收藏/发起会话/下单/成交）是画像里权重最高的一批行为，写入后必须立刻触发重算：
+        // 靠"下一条客户端行为"来带动重算会让最强的信号迟迟不生效（用户成交后可能几小时不再刷首页）。
+        // 归因缺失（`userId === null`）时没有长期画像可重算，跳过。
+        if (userId !== null) {
+          await enqueueInterestRefresh([userId])
+        }
       } catch (error) {
         // 埋点是旁路：写失败绝不能把用户已经成功的评论/下单变成 500。
         console.error('[recommendation] 领域事件写入失败', { eventType, listingId }, error)

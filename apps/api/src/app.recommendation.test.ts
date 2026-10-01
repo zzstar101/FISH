@@ -1,5 +1,8 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import type { RecommendationEventType } from '@fish/contracts/recommendation/schema'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import type {
+  RecommendationEventInput,
+  RecommendationEventType,
+} from '@fish/contracts/recommendation/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { listings } from '@fish/db/schema/listings'
@@ -8,9 +11,11 @@ import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
+import { createRecommendationService } from './modules/recommendation/service'
+import { createSqlRecommendationStore } from './modules/recommendation/store'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -851,5 +856,247 @@ describe('recommendation ingest 契约 (#323 R1)', () => {
       rejected: 0,
     })
     expect(await eventsFor(listingId, 'IMPRESSION')).toHaveLength(1)
+  })
+})
+
+describe('recommendation interest refresh enqueue (#323 R2)', () => {
+  /**
+   * 直接看原始 jsonb 而不是 drizzle 的 `.select()`：`jsonb_typeof` 能区分"对象"与"被双序列化
+   * 成的字符串标量"。后者会让消费方的 `payload->>'userId'` 恒为 NULL，而部分唯一索引同时失效
+   * ——两件事都会静默发生，只有回库看才知道。
+   */
+  async function interestJobs(userId: string): Promise<{ status: string; kind: string }[]> {
+    const rows = await db.execute(sql`
+      select status, jsonb_typeof(payload) as kind
+      from jobs
+      where type = 'REFRESH_USER_INTEREST'
+        and payload->>'userId' = ${userId}
+      order by created_at, id
+    `)
+    return [...rows] as { status: string; kind: string }[]
+  }
+
+  /** 以该身份取一次 Feed，并回传归属于他的 requestId（归因身份以请求行为真值）。 */
+  async function feedFor(headers: Record<string, string>): Promise<FeedBody> {
+    const response = await app.request('/recommendations/feed?limit=1', { headers })
+    expect(response.status).toBe(200)
+    return (await response.json()) as FeedBody
+  }
+
+  /**
+   * 该 job 类型在当前 scratch 库里的总行数（不按 userId 收口）。
+   *
+   * 用于断言"这次请求没有新增任何长期画像 job"：只看 `payload->>'userId' is null` 是不够的，
+   * `{"userId": null}` 与"payload 被双序列化成字符串标量"都会让 `->>'userId'` 返回 SQL NULL，
+   * 恰好放过它要防的那个 bug。
+   */
+  async function countInterestJobs(): Promise<number> {
+    const rows = await db.execute(sql`
+      select count(*)::int as n from jobs where type = 'REFRESH_USER_INTEREST'
+    `)
+    return Number(rows[0]?.n ?? 0)
+  }
+
+  const detailView = (
+    feed: FeedBody,
+    listingId: string,
+    extra: Record<string, unknown> = {},
+  ): { events: unknown[] } => ({
+    events: [
+      {
+        eventId: newId(),
+        requestId: feed.requestId,
+        listingId,
+        eventType: 'DETAIL_VIEW' as RecommendationEventType,
+        position: 0,
+        occurredAt: new Date().toISOString(),
+        ...extra,
+      },
+    ],
+  })
+
+  test('登录用户的行为落库 → 投递一条长期画像重算 job', async () => {
+    const buyer = await registerUser('41')
+    const seller = await registerUser('42')
+    await createListing(seller.id, '画像投递验收商品')
+
+    const feed = await feedFor({ cookie: buyer.cookie })
+    const listingId = feed.items[0]?.id as string
+
+    const response = await app.request(
+      '/recommendations/events',
+      post(detailView(feed, listingId), { cookie: buyer.cookie }),
+    )
+    expect(response.status).toBe(202)
+    expect((await response.json()) as unknown).toMatchObject({ accepted: 1, rejected: 0 })
+
+    // 落库的是 PENDING job、payload 是 jsonb 对象、userId 就是行为归属的那个账号。
+    expect(await interestJobs(buyer.id)).toEqual([{ status: 'PENDING', kind: 'object' }])
+  })
+
+  test('同一用户连续两次行为只留一条待跑 job（幂等键 = 用户 + PENDING）', async () => {
+    const buyer = await registerUser('43')
+    const seller = await registerUser('44')
+    await createListing(seller.id, '画像投递去重验收商品')
+
+    for (let round = 0; round < 2; round += 1) {
+      const feed = await feedFor({ cookie: buyer.cookie })
+      const listingId = feed.items[0]?.id as string
+      const response = await app.request(
+        '/recommendations/events',
+        post(detailView(feed, listingId), { cookie: buyer.cookie }),
+      )
+      expect(response.status).toBe(202)
+      expect((await response.json()) as unknown).toMatchObject({ accepted: 1 })
+    }
+
+    expect(await interestJobs(buyer.id)).toEqual([{ status: 'PENDING', kind: 'object' }])
+  })
+
+  test('匿名会话的行为不投递长期画像 job（长期画像只给登录用户）', async () => {
+    const sessionId = newId()
+    const seller = await registerUser('45')
+    await createListing(seller.id, '匿名画像不投递验收商品')
+
+    const feed = await feedFor({ [SESSION_HEADER]: sessionId })
+    const listingId = feed.items[0]?.id as string
+    const jobsBefore = await countInterestJobs()
+
+    const response = await app.request(
+      '/recommendations/events',
+      post(detailView(feed, listingId, { anonymousSessionId: sessionId }), {
+        [SESSION_HEADER]: sessionId,
+      }),
+    )
+    expect(response.status).toBe(202)
+    expect((await response.json()) as unknown).toMatchObject({ accepted: 1, rejected: 0 })
+
+    // 事件本身必须落库（匿名行为照样是 session 画像的输入），只是不投 job。
+    const rows = await db
+      .select()
+      .from(recommendationEvents)
+      .where(eq(recommendationEvents.requestId, feed.requestId))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.userId).toBeNull()
+
+    // 总行数一行都不能多（比"没有 userId 为 null 的行"更强：那种写法对
+    // `{"userId": null}` 与"payload 被双序列化成字符串标量"同样假绿）。
+    expect(await countInterestJobs()).toBe(jobsBefore)
+
+    // 库里已有的长期画像 job 必须都是"jsonb 对象 + 非空 userId"，否则上面那条总行数断言
+    // 就是在一个坏掉的写入路径上做计数。
+    const malformed = await db.execute(sql`
+      select count(*)::int as n from jobs
+      where type = 'REFRESH_USER_INTEREST'
+        and (jsonb_typeof(payload) <> 'object' or payload->>'userId' is null)
+    `)
+    expect(Number(malformed[0]?.n ?? 0)).toBe(0)
+  })
+
+  test('服务端确证的强正反馈（新建会话 CHAT_START）也触发重算投递', async () => {
+    const seller = await registerUser('46')
+    const buyer = await registerUser('47')
+    const listingId = await createListing(seller.id, '强反馈投递验收商品')
+
+    const created = await app.request(
+      '/conversations',
+      post({ listingId }, { cookie: buyer.cookie }),
+    )
+    expect(created.status).toBe(201)
+
+    // 这条事件不是走 ingest，而是服务端确证写路径（recordDomainEvent）——
+    // 强正反馈比一次浏览更值得立刻重算，两条路径都必须投递。
+    expect(await interestJobs(buyer.id)).toEqual([{ status: 'PENDING', kind: 'object' }])
+  })
+
+  test('幂等键已被占用时 events 依然 202，事件照常落库（ON CONFLICT DO NOTHING）', async () => {
+    const buyer = await registerUser('48')
+    const seller = await registerUser('49')
+    await createListing(seller.id, '投递幂等冲突验收商品')
+
+    const feed = await feedFor({ cookie: buyer.cookie })
+    const listingId = feed.items[0]?.id as string
+
+    // 先手工占掉幂等键：真实投递会被 ON CONFLICT DO NOTHING 吃掉，但请求必须照常成功。
+    await db.execute(sql`
+      INSERT INTO jobs (id, type, status, payload)
+      VALUES (${newId()}, 'REFRESH_USER_INTEREST', 'PENDING', ${JSON.stringify({ userId: buyer.id })}::text::jsonb)
+    `)
+
+    const response = await app.request(
+      '/recommendations/events',
+      post(detailView(feed, listingId), { cookie: buyer.cookie }),
+    )
+    expect(response.status).toBe(202)
+    expect((await response.json()) as unknown).toMatchObject({ accepted: 1, rejected: 0 })
+
+    const rows = await db
+      .select()
+      .from(recommendationEvents)
+      .where(eq(recommendationEvents.requestId, feed.requestId))
+    expect(rows).toHaveLength(1)
+    expect(await interestJobs(buyer.id)).toEqual([{ status: 'PENDING', kind: 'object' }])
+  })
+
+  test('投递口真的抛错时 ingest 不失败：事件照常落库，只记一条日志', async () => {
+    const buyer = await registerUser('52')
+    const seller = await registerUser('53')
+    await createListing(seller.id, '投递异常降级验收商品')
+
+    const feed = await feedFor({ cookie: buyer.cookie })
+    // 从 JSON 回读的公开 id 只是 `string`，而 `RecommendationEventInput.listingId` 是品牌类型
+    // （`lst_${string}`）：这里显式收口，与路由层用同一个契约类型对齐。
+    const listingId = feed.items[0]?.id as RecommendationEventInput['listingId']
+
+    /*
+     * 直接装配服务，只把投递口换成"一定抛错"的实现：app 的装配没有注入点，而这条降级路径的
+     * 真实性靠"其余依赖都是真的"来保证（真 store、真 scratch 库、真事件表）。
+     * 上一个用例（幂等键冲突）测的是 `ON CONFLICT DO NOTHING`，不是这条 try/catch。
+     */
+    const service = createRecommendationService({
+      store: createSqlRecommendationStore(db),
+      listings: {
+        listFeed: async () => {
+          throw new Error('本用例只走 ingest，不调用 startFeed')
+        },
+      },
+      interest: {
+        enqueue: async () => {
+          throw new Error('模拟 jobs 表不可用')
+        },
+      },
+    })
+
+    const events: RecommendationEventInput[] = [
+      {
+        eventId: newId(),
+        requestId: feed.requestId,
+        listingId,
+        eventType: 'DETAIL_VIEW',
+        position: 0,
+        occurredAt: new Date().toISOString(),
+      },
+    ]
+
+    // `mockRestore()` 会一并清掉调用记录，所以先把次数记下来再还原（还原放在 finally 里，
+    // 断言失败也不会把 spy 泄漏给后面的用例）。
+    let loggedCalls = 0
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {})
+    const result = await service.ingest({ viewerId: buyer.id, events }).finally(() => {
+      loggedCalls = errorSpy.mock.calls.length
+      errorSpy.mockRestore()
+    })
+
+    expect(result).toMatchObject({ accepted: 1, duplicates: 0, rejected: 0 })
+    // 投递失败必须留下可观测的痕迹（R6 靠它做告警），且每个用户只记一次。
+    expect(loggedCalls).toBe(1)
+
+    // 事件必须已经落库：埋点是旁路，投递不上不能让客户端收到 5xx、更不能丢事件。
+    const rows = await db
+      .select()
+      .from(recommendationEvents)
+      .where(eq(recommendationEvents.requestId, feed.requestId))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.userId).toBe(buyer.id)
   })
 })

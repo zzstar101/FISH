@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, lt, ne, type SQL, sql } from 'drizzle-orm'
 import type { Db } from './client'
 import { newId } from './ids'
 import { embeddings } from './schema/embeddings'
@@ -244,6 +244,9 @@ export async function pruneStaleEmbeddings(
  * 比较**必须按毫秒截断**：实体 `updated_at` 由 `now()` 写入（微秒精度），而版本号经应用侧
  * `Date`（毫秒）往返——handler 写 `source_updated_at` 时已被截断。直接等值比较会让几乎所有向量
  * 都判定为过期（只有恰好落在毫秒边界上才相等）。
+ *
+ * #323 R2 的兴趣聚合用的是同一套判据，但它必须**逐行**在 JS 里判（见 `user-interest-store.ts`：
+ * 只有逐行比较才能把"向量过期"与"根本没向量"分开计数），所以这里仍是本文件私有。
  */
 function freshListingsEmbedding(): SQL {
   return sql`date_trunc('milliseconds', ${embeddings.sourceUpdatedAt}) = date_trunc('milliseconds', ${listings.updatedAt})`
@@ -294,16 +297,21 @@ export async function topKSimilarListings(
 ): Promise<SimilarCandidate[]> {
   const vector = JSON.stringify(query.vector)
 
-  return db
-    .select({
-      id: listings.id,
-      distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
-    })
-    .from(embeddings)
-    .innerJoin(listings, eq(listings.id, embeddings.listingId))
-    .where(and(eq(embeddings.model, query.model), freshListingsEmbedding(), query.filter))
-    .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`)
-    .limit(query.limit)
+  return (
+    db
+      .select({
+        id: listings.id,
+        distance: sql<number>`${embeddings.embedding} <=> ${vector}::vector`,
+      })
+      .from(embeddings)
+      .innerJoin(listings, eq(listings.id, embeddings.listingId))
+      .where(and(eq(embeddings.model, query.model), freshListingsEmbedding(), query.filter))
+      // 距离并列时用 `id` 兜底：`<=>` 只有一个排序键，并列的行谁进 Top-K 会取决于物理返回顺序，
+      // 于是"同输入 ⇒ 同候选集"（#323 验收项 9）在并列边界上不成立。加上次键后 LIMIT K 的结果
+      // 由数据决定，与插入顺序 / 页填充 / vacuum 时机无关。
+      .orderBy(sql`${embeddings.embedding} <=> ${vector}::vector`, asc(listings.id))
+      .limit(query.limit)
+  )
 }
 
 /** 语义召回：与目标**商品**最相近的前 `limit` 条愿望（`topKSimilarListings` 的镜像）。 */

@@ -28,7 +28,13 @@ export function homeListState(input: {
   category: ListingCategory | 'ALL'
   /** 当前这次加载是否失败（生产口径：真实接口挂且没有 mock 回退） */
   failed: boolean
-  /** 已成功上屏的商品数 */
+  /**
+   * **屏幕上真能看到的**商品数：成功上屏的列表减去本机「不感兴趣」隐藏的那些。
+   *
+   * 不传 `items.length`：隐藏的列表项不从 `items` 里删（删了会让后面的卡片重新分列并重挂载），
+   * 由卡片就地不渲染。传原长度的话，全部隐藏完时 `itemCount > 0` 恒成立 —— 于是既不走空态、
+   * 也画不出任何卡片，商品区变成一块没有任何说明的白板。
+   */
   itemCount: number
 }): HomeListState {
   if (input.failed) return 'error'
