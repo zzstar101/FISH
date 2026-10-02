@@ -28,7 +28,7 @@ import {
 } from '@/features/visual-search/sheet'
 import { startVisualSearch } from '@/features/visual-search/start'
 import { formatAmount } from '@/lib/money'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
 import { searchFilters } from '@/mock/api'
@@ -113,6 +113,7 @@ export default function VisionResult() {
   const [retaking, setRetaking] = useState(false)
 
   const nav = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(nav.capsuleHeight)
   /**
    * 面板可用的屏高（设备 px）。用 `windowHeight + statusBarHeight`：面板从**屏幕底**升起、
    * 背景图也铺满整屏（含状态栏那一截），所以要按整屏高算比例，而不是可用区高度。
@@ -363,10 +364,13 @@ export default function VisionResult() {
       {/* ---------------- 顶部：返回 + 标题（对齐右侧微信原生胶囊的中线） ---------------- */}
       <View
         className="vres__back"
-        style={{ top: `${nav.statusBarHeight + nav.contentHeight / 2}px` }}
+        style={{
+          top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
+          ...backGeo.btnStyle,
+        }}
         onClick={() => void Taro.navigateBack()}
       >
-        <View className="vres__back-chevron" />
+        <View className="vres__back-chevron" style={backGeo.chevronStyle} />
       </View>
       <Text
         className="vres__title"

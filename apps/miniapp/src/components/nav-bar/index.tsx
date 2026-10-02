@@ -9,6 +9,8 @@
 import { Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import type { ReactNode } from 'react'
+import { useMemo } from 'react'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
 type NavBarProps = {
@@ -50,7 +52,11 @@ type NavBarProps = {
   fixed?: boolean
   /** 返回钮右侧的自定义动作区 */
   actions?: ReactNode
-  /** 覆盖返回行为（默认 navigateBack，无上一页时 reLaunch 到首页） */
+  /**
+   * 覆盖返回行为。默认：有上一页 `navigateBack`；页面栈为空（冷启动分享 / 扫码直入）
+   * 兜底回**语义父级 tab** —— 本组件默认首页，语义父级不是首页的页面用它覆盖
+   * （如登录页回「我的」）。
+   */
   onBack?: () => void
   /**
    * 栏下沿的阅读进度（0–1，稿 `.progress`）：**不传就不渲染**，既有调用方逐像素不变。
@@ -73,13 +79,10 @@ export default function NavBar({
   onBack,
   progress,
 }: NavBarProps) {
-  const statusBarHeight = (() => {
-    try {
-      return Taro.getWindowInfo().statusBarHeight ?? 20
-    } catch {
-      return 20
-    }
-  })()
+  // 栏位几何统一走 readNavMetrics：返回钮与右侧微信原生胶囊**等高、同一行居中**
+  // （2026-10-02 拍板），行顶 = 状态栏 + 胶囊上留白，不再写死 padding。
+  const metrics = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(metrics.capsuleHeight)
 
   const handleBack = () => {
     if (onBack) {
@@ -90,19 +93,29 @@ export default function NavBar({
     if (pages.length > 1) {
       void Taro.navigateBack()
     } else {
+      // 兜底回**语义父级 tab**（2026-10-02 拍板）：页面栈为空只发生在冷启动经
+      // 分享卡片 / 扫码直入二级页，此时回本组件的语义父级 —— 首页。语义父级
+      // 不是首页的页面（会话页 → 消息、编辑资料 → 我的）由页面经 `onBack` 自行覆盖。
       void Taro.switchTab({ url: '/pages/home/index' })
     }
   }
 
   /**
-   * 居中标题的垂直位置：`.navfloat` 的 `padding-top` 是行内 px（状态栏高度），
-   * 绝对定位的**参照是 padding box（含状态栏）**，所以只要把状态栏高度原样给它，
-   * 标题框就正好落在返回钮那一行里（框高 72rpx 由 SCSS 给，与返回钮同高）。
+   * 居中标题的垂直位置：`.navfloat` 的 `padding-top` 是行内 px（状态栏 + 胶囊上留白），
+   * 绝对定位的**参照是 padding box（含状态栏）**，所以标题框 top 也要用同一原点
+   * （状态栏 + 胶囊上留白）、框高用胶囊高 —— 与返回钮**同一行、同高、同轴**，
+   * 而返回钮已与原生胶囊等高对齐。
    *
-   * **不要在行内加「返回钮半高」**：那是 72rpx 的一半，而内联 px 不会被 pxtransform
-   * 换算（见 `src/lib/nav-metrics.ts`），混算会让标题整行下移约 16px。
+   * 这三个值都是设备 px，必须行内下发（pxtransform 只处理样式表；内联 px 原样下发）。
+   * **不要在行内混样式表值**：混算曾让标题整行下移约 16px（见 `src/lib/nav-metrics.ts`）。
    */
-  const centerTitleStyle = titleAlign === 'center' ? { top: `${statusBarHeight}px` } : undefined
+  const centerTitleStyle =
+    titleAlign === 'center'
+      ? {
+          top: `${metrics.statusBarHeight + metrics.capsuleGap}px`,
+          height: `${metrics.capsuleHeight}px`,
+        }
+      : undefined
 
   const titleClass = `navfloat__title${titleAlign === 'center' ? ' navfloat__title--center' : ''}`
 
@@ -119,14 +132,14 @@ export default function NavBar({
   return (
     <View
       className={`navfloat${fixed ? ' navfloat--fixed' : ''}${glass ? ' navfloat--glass' : ''}`}
-      style={{ paddingTop: `${statusBarHeight}px` }}
+      style={{ paddingTop: `${metrics.statusBarHeight + metrics.capsuleGap}px` }}
     >
       {back ? (
-        <View className="navfloat__btn" onClick={handleBack}>
-          <View className="navfloat__chevron" />
+        <View className="navfloat__btn" style={backGeo.btnStyle} onClick={handleBack}>
+          <View className="navfloat__chevron" style={backGeo.chevronStyle} />
         </View>
       ) : (
-        <View className="navfloat__spacer" />
+        <View className="navfloat__spacer" style={backGeo.btnStyle} />
       )}
       {title ? (
         typeof title === 'string' ? (

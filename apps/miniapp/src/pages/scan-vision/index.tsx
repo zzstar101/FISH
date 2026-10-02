@@ -18,7 +18,7 @@ import {
 } from '@/features/visual-search/crop'
 import { stashVisualShot } from '@/features/visual-search/handoff'
 import { submitVisualQuery } from '@/features/visual-search/start'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
 /**
@@ -66,6 +66,7 @@ export default function ScanVision() {
 
   // 返回钮与标题的垂直位置跟微信原生胶囊对齐（设备 px，内联下发，不参与 rpx 缩放）
   const nav = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(nav.capsuleHeight)
 
   const goBack = () => {
     const pages = Taro.getCurrentPages()
@@ -305,10 +306,13 @@ export default function ScanVision() {
       {/* ---------------- 顶部：返回 + 标题（对齐右侧微信原生胶囊的中线） ---------------- */}
       <View
         className="scanvis__back"
-        style={{ top: `${nav.statusBarHeight + nav.contentHeight / 2}px` }}
+        style={{
+          top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
+          ...backGeo.btnStyle,
+        }}
         onClick={goBack}
       >
-        <View className="scanvis__back-chevron" />
+        <View className="scanvis__back-chevron" style={backGeo.chevronStyle} />
       </View>
       <Text
         className="scanvis__title"
