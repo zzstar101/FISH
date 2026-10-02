@@ -149,7 +149,7 @@ export default function Chat() {
    * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `items` / `notifs`
    * 都是上一个账号的视角，必须在**同一个 commit 内**换成空值。
    * 写成 effect 里 setState 不行 —— 那要到下一帧才生效，兄弟 effect
-   * （发布快照 / 已读回写）在本帧仍读到旧值：轻则把上个账号的已读视角发进全局
+   * （发布快照）在本帧仍读到旧值：轻则把上个账号的已读视角发进全局
    * 快照（新账号的红点被误熄），重则拿新账号的 cookie 去 POST 上个账号的通知 id。
    */
   const identity = authedUser?.id ?? null

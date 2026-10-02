@@ -151,6 +151,22 @@ export default function CustomTabBar() {
   const userId = user?.id ?? null
 
   /**
+   * 换账号时**在渲染期**把徽标清空（`adjust-state-during-render`，与
+   * `pages/chat/index.tsx` 的身份重置同一写法）。
+   *
+   * 为什么不能只靠下面的 effect：新账号的快照还没到手时（`unread` 仍是上一个账号的
+   * 那份、或 `hydrateUnread` 失败后发的是两项 `null`），`unreadBadgeText` 的「保持上一帧」
+   * 会把**上一个账号的未读数**原样留在屏幕上 —— 点进去是另一个账号的未读，等于报错数。
+   * 数字比原来的小圆点更容易被当成具体事实，所以这里必须清零，让下面的 effect 从
+   * 新账号的快照重新算。
+   */
+  const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  if (prevUserId !== userId) {
+    setPrevUserId(userId)
+    setBadge(null)
+  }
+
+  /**
    * 演示 / 开发构建（本地没有后端）的红点兜底。排除系统会话 —— 它的未读由「通知」
    * 承载，两边都算会重复计。
    *
