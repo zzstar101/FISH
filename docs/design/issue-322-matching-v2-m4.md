@@ -210,7 +210,8 @@ triggerP95Ms: 50, triggerRows: 100000, needsAnn: true }`。
 
 live 实测（seed 后 4 个 ACTIVE listing + 2 个 ACTIVE wish；真跑的原始输出
 `.m4-evidence/backfill-fresh.log`，复算时先 `DELETE FROM embeddings` 清空向量行再跑；`--dry-run`
-那一行的原始输出是 `.m4-evidence/backfill-dry-run.log`）：
+那一行的原始输出是 `.m4-evidence/backfill-dry-run.log`；**rebase 到 `origin/main` 之后的同一套复跑**
+是 1148 ms / 32 ms，见 §8）：
 
 | 场景 | 结果 |
 |---|---|
@@ -565,7 +566,7 @@ stdout 一条都没有）、`verify-reviewfix4-full.log`（全量复跑）；**�
 "v1 → v2"实证）、`worker-upgrade-run.log`（同一轮的 worker 日志全文）、`verify-scope5-full.log`
 （全量复跑），以及 `core-smoke-scope5.log`——那是**失败**的一次：demo 段曾把终态钉成 v2，实际是
 v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）；**rebase 到 `origin/main = 0b8ab72e` 之后**
-重跑/新增的是 `backfill-rebase-run1.log` / `backfill-rebase-run2.log`（§6 的 live 表：首跑 6 条请求、
+重跑/新增的是 `backfill-rebase-run1.log` / `backfill-rebase-run2.log`（§8 的 rebase 复跑段：首跑 6 条请求、
 立刻重跑 0 条请求）、`worker-rebase-run.log`（§8 的 worker live 全文）、`core-smoke-rebase.log`
 （266 断言 / 28110 ms，§6.1 与 §10）、`obs-summary-rebase.log` 与 `obs-summary-rebase2.log`（§7 的 live
 块，前后两次快照）、`verify-rebase-full.log`（§10 的全量 3278 pass / 313 文件 / 64.89 s）、
