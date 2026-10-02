@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { decodeCommentCursor, encodeCommentCursor } from './cursor'
+import { decodeCommentCursor, decodeMyCommentsCursor, encodeCommentCursor } from './cursor'
 
 const ID = '01930000-0000-7000-8000-000000000021'
+const REVIEW_ID = '01930000-0000-7000-8000-0000000000b1'
 
 describe('comment cursor', () => {
   test('round-trips a microsecond timestamp cursor', () => {
@@ -44,5 +45,52 @@ describe('comment cursor', () => {
       ).toString('base64url')
       expect(decodeCommentCursor(forged)).toBeNull()
     }
+  })
+})
+
+describe('my-comments cursor（#195 PR2：来源感知 + PR1 旧游标兼容）', () => {
+  const TS = '2026-09-12T03:40:10.123456Z'
+
+  test('PR1 旧游标（无 source 字段）按 comment 解释：kind=comment|all 可用', () => {
+    // PR1 的 encodeCommentCursor 签出的就是这种两字段格式
+    const legacy = Buffer.from(
+      JSON.stringify({ createdAt: TS, id: encodePublicId(PUBLIC_ID_PREFIX.comment, ID) }),
+    ).toString('base64url')
+    const decoded = decodeMyCommentsCursor(legacy, 'comment')
+    expect(decoded).toEqual({ createdAt: TS, id: ID, source: 'comment' })
+    expect(decodeMyCommentsCursor(legacy, 'all')?.source).toBe('comment')
+  })
+
+  test('PR1 旧游标在 kind=review 下被拒（评价页不认留言游标）', () => {
+    const legacy = Buffer.from(
+      JSON.stringify({ createdAt: TS, id: encodePublicId(PUBLIC_ID_PREFIX.comment, ID) }),
+    ).toString('base64url')
+    expect(decodeMyCommentsCursor(legacy, 'review')).toBeNull()
+  })
+
+  test('review 游标按 rvw_ 前缀校验与解码；错源游标拒绝', () => {
+    const encoded = encodeCommentCursor({ createdAt: TS, id: REVIEW_ID }, 'review')
+    expect(decodeMyCommentsCursor(encoded, 'review')).toEqual({
+      createdAt: TS,
+      id: REVIEW_ID,
+      source: 'review',
+    })
+    expect(decodeMyCommentsCursor(encoded, 'comment')).toBeNull()
+    // cmt_ 前缀的 id 冒充 review 游标 → 前缀校验挡下
+    const forged = Buffer.from(
+      JSON.stringify({
+        createdAt: TS,
+        id: encodePublicId(PUBLIC_ID_PREFIX.comment, ID),
+        source: 'review',
+      }),
+    ).toString('base64url')
+    expect(decodeMyCommentsCursor(forged, 'all')).toBeNull()
+  })
+
+  test('未知 source 值一律 null（不宽容解析）', () => {
+    const forged = Buffer.from(JSON.stringify({ createdAt: TS, id: ID, source: 'wish' })).toString(
+      'base64url',
+    )
+    expect(decodeMyCommentsCursor(forged, 'all')).toBeNull()
   })
 })
