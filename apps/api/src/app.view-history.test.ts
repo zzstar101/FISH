@@ -215,6 +215,34 @@ describe('view history API (#415 M1)', () => {
     expect(body.error.code).toBe('UNAUTHENTICATED')
   })
 
+  test('他人读不到我的足迹，也清不掉我的行', async () => {
+    const seller = await registerUser('13')
+    const owner = await registerUser('14')
+    const stranger = await registerUser('15')
+    const listing = await createListing(seller.id, '隔离验收商品')
+
+    await postDetailView({
+      listingPublicId: listing,
+      occurredAt: '2026-10-01T09:00:00.000Z',
+      cookie: owner.cookie,
+    })
+
+    // 越权读：看不到别人的行，total 也不泄漏。
+    const strangerView = await getViewHistory(stranger.cookie)
+    expect(strangerView.status).toBe(200)
+    expect(strangerView.body.items).toEqual([])
+    expect(strangerView.body.total).toBe(0)
+
+    // 越权清：清空只作用于自己，别人的行一条不动。
+    await app.request('/me/view-history', {
+      method: 'DELETE',
+      headers: { cookie: stranger.cookie },
+    })
+    const ownerView = await getViewHistory(owner.cookie)
+    expect(ownerView.body.total).toBe(1)
+    expect(ownerView.body.items[0]?.listing.id).toBe(listing)
+  })
+
   test('分页：游标翻页不重不漏，非法游标 422', async () => {
     const seller = await registerUser('07')
     const viewer = await registerUser('08')

@@ -80,8 +80,8 @@ describe('cleanupExpiredViewHistory', () => {
       { userId: user, listingId: listingIds[3] as string, lastViewedAt: insideWindow },
     ])
 
-    // 一轮只删 2 条：清理是后台杂务，不扫全表。
-    const first = await cleanupExpiredViewHistory({ db, now: NOW, limit: 2 })
+    // maxRounds=1 + limit=2：单轮只删 2 条（封顶生效，不长时间占连接）。
+    const first = await cleanupExpiredViewHistory({ db, now: NOW, limit: 2, maxRounds: 1 })
     expect(first).toEqual({ scanned: 2, deleted: 2 })
 
     // 窗口内的行一条都不能少。
@@ -105,5 +105,24 @@ describe('cleanupExpiredViewHistory', () => {
       .from(listingViewHistory)
       .where(eq(listingViewHistory.userId, user))
     expect(Number(total[0]?.count)).toBe(1)
+  })
+
+  test('单次运行内循环追平：limit=1 也能把 3 条过期行一次清完', async () => {
+    await db.delete(listingViewHistory).where(eq(listingViewHistory.userId, user))
+    await db.insert(listingViewHistory).values([
+      { userId: user, listingId: listingIds[0] as string, lastViewedAt: outsideWindow },
+      { userId: user, listingId: listingIds[1] as string, lastViewedAt: outsideWindow },
+      { userId: user, listingId: listingIds[2] as string, lastViewedAt: outsideWindow },
+    ])
+
+    // 清理每小时才跑一次：单批 500 行的稳态会追不上，所以一轮内要循环到追平。
+    const result = await cleanupExpiredViewHistory({ db, now: NOW, limit: 1 })
+    expect(result).toEqual({ scanned: 3, deleted: 3 })
+
+    const total = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(listingViewHistory)
+      .where(eq(listingViewHistory.userId, user))
+    expect(Number(total[0]?.count)).toBe(0)
   })
 })

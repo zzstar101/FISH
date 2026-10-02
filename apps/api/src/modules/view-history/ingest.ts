@@ -74,9 +74,16 @@ export async function recordViewHistoryWith(
   records: readonly ViewHistoryRecord[],
 ): Promise<void> {
   if (records.length === 0) return
+  // 稳定排序再写：两个并发批次若含重叠商品而顺序相反，会对同样的行以相反顺序加锁，
+  // PostgreSQL 可能判死锁（整个 POST /recommendations/events 变偶发 500）。按
+  // `(userId, listingId)` 排序让所有事务的加锁顺序一致，代价是 O(n log n)（n ≤ 50）。
+  const ordered = [...records].sort((left, right) => {
+    const byUser = left.userId.localeCompare(right.userId)
+    return byUser !== 0 ? byUser : left.listingId.localeCompare(right.listingId)
+  })
   await executor
     .insert(listingViewHistory)
-    .values(records.map((record) => ({ ...record, lastViewedAt: record.viewedAt })))
+    .values(ordered.map((record) => ({ ...record, lastViewedAt: record.viewedAt })))
     .onConflictDoUpdate({
       target: [listingViewHistory.userId, listingViewHistory.listingId],
       set: {

@@ -44,7 +44,6 @@ const AT = {
 } as const
 
 const WINDOW_START = new Date('2026-08-20T00:00:00.000000Z')
-const WINDOW_END = new Date('2026-10-12T00:00:00.000000Z')
 
 beforeAll(async () => {
   await admin.$client.unsafe(`drop database if exists "${scratchDatabase}" with (force)`)
@@ -173,6 +172,35 @@ describe('view history store (integration)', () => {
       WINDOW_START,
     )
     expect(second.map((row) => row.id)).toEqual([listingC])
+  })
+
+  test('同一时刻的 tie-break：last_viewed_at 完全相等时按商品 id 兜底，翻页不重不漏', async () => {
+    await store.clearViewHistory(me)
+    // 两行时刻**完全相同**：排序只能靠 `listings.id DESC` 的 tie-break 分支，
+    // 游标的第二个 or 分支（同时间戳比 id）也才会被走到。
+    await db.execute(sql`
+      INSERT INTO listing_view_history (user_id, listing_id, last_viewed_at)
+      VALUES (${me}, ${listingB}, '2026-09-12T04:00:00.000000Z'::timestamptz),
+             (${me}, ${listingC}, '2026-09-12T04:00:00.000000Z'::timestamptz)
+    `)
+
+    const first = await store.listViewHistory(me, 1, null, WINDOW_START)
+    expect(first[0]?.id).toBe(listingC)
+
+    const boundary = first[0]
+    if (!boundary) throw new Error('第一页应有 1 行')
+    const second = await store.listViewHistory(
+      me,
+      1,
+      { viewedAt: boundary.viewedAtCursor, listingId: boundary.id },
+      WINDOW_START,
+    )
+
+    // 并集不重不漏（方向取反会让第二页重复 listingC 或整页丢掉 listingB）。
+    expect([...first.slice(0, 1), ...second.slice(0, 1)].map((row) => row.id)).toEqual([
+      listingC,
+      listingB,
+    ])
   })
 
   test('清空只删本人足迹，返回行数且幂等', async () => {
