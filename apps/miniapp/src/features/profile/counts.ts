@@ -16,6 +16,10 @@
 export type ProfileCounts = {
   orderCount: number
   stats: { activeWishes: number; activeListings: number }
+  /** 卖家视角待面交笔数（`ProfileView.pendingMeetupSell`） */
+  pendingMeetupSell: number
+  /** 买家视角待面交笔数（`ProfileView.pendingMeetupBuy`） */
+  pendingMeetupBuy: number
 }
 
 export type RealCounts = {
@@ -25,6 +29,10 @@ export type RealCounts = {
   orderCount: number | null
   /** 图标栏「在售」的角标 */
   activeListings: number | null
+  /** 图标栏「卖出」格的待面交角标（#431 任务二） */
+  pendingMeetupSell: number | null
+  /** 图标栏「买入」格的待面交角标（#431 任务二） */
+  pendingMeetupBuy: number | null
 }
 
 export function realCounts(profile: ProfileCounts | null): RealCounts {
@@ -32,5 +40,7 @@ export function realCounts(profile: ProfileCounts | null): RealCounts {
     activeWishes: profile?.stats.activeWishes ?? null,
     orderCount: profile?.orderCount ?? null,
     activeListings: profile?.stats.activeListings ?? null,
+    pendingMeetupSell: profile?.pendingMeetupSell ?? null,
+    pendingMeetupBuy: profile?.pendingMeetupBuy ?? null,
   }
 }

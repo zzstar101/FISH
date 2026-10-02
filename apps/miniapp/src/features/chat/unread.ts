@@ -36,9 +36,10 @@ export type UnreadSnapshot = {
    */
   conversations: number | null
   /**
-   * 通知未读数（Chat 页「通知」tab 角标同源：切进 tab 即 0）；
+   * 通知未读数（Chat 页「通知」tab 胶囊同源：#431 任务二起逐条点击才已读，
+   * 随逐条已读递减）；
    * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算
-   * （不是拿 fixture 顶替），与页内角标同口径：那时页内也是 0。
+   * （不是拿 fixture 顶替），与页内胶囊同口径：那时页内也是 0。
    */
   notifications: number | null
 }
@@ -47,26 +48,28 @@ let snapshot: UnreadSnapshot | null = null
 const listeners = new Set<() => void>()
 
 /**
- * 底栏「消息」红点该不该亮。
+ * 底栏「消息」徽标（#431 任务二：品牌蓝小圆点 → 红色数字胶囊）该显示什么。
  *
- * 规则（也是「不知道」这个态存在的意义）：
- * 1. 只要有任何一项**已知**未读 > 0 → 亮；
- * 2. 两项都已知且都是 0 → 熄；
- * 3. 有分量「不知道」且没有已知未读 → **保持上一帧**，不下「没有未读」这个结论。
+ * 规则（与原 `badgeShouldLight` 同一条「不知道」哲学，从亮灭推广到数字）：
+ * 1. 任何一项**已知**未读 > 0 → 显示已知分量之和（`99+` 封顶；未知分量按 0 计 ——
+ *    已知的未读是事实，先如实显示，不能因为另一项「不知道」就把已知未读藏掉）；
+ * 2. 两项都已知且和为 0 → 不显示（`null`）；
+ * 3. 和为 0 但有分量「不知道」→ **保持上一帧**，不下「没有未读」的结论。
  *
- * 第 3 条是关键：接口失败 / 列表还没到手时如果按 0 算，一颗本来亮着的点会莫名其妙
- * 熄掉，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
+ * 第 3 条是关键：接口失败 / 列表还没到手时如果按 0 算，一枚本来亮着的徽标会莫名
+ * 消失，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
  * 抽成纯函数是为了它能被单测锁住（底栏组件本身没有渲染测试基建）。
  */
-export function badgeShouldLight(input: {
+export function unreadBadgeText(input: {
   conversations: number | null
   notifications: number | null
-  /** 上一帧的红点状态 */
-  previous: boolean
-}): boolean {
-  if ((input.conversations ?? 0) > 0 || (input.notifications ?? 0) > 0) return true
+  /** 上一帧的徽标文案；不显示时为 `null` */
+  previous: string | null
+}): string | null {
+  const knownSum = (input.conversations ?? 0) + (input.notifications ?? 0)
+  if (knownSum > 0) return knownSum > 99 ? '99+' : String(knownSum)
   const unknown = input.conversations === null || input.notifications === null
-  return unknown ? input.previous : false
+  return unknown ? input.previous : null
 }
 
 function subscribe(listener: () => void): () => void {

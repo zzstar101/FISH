@@ -23,8 +23,9 @@ mock.module('@/features/chat/api', () => ({
   fetchConversationUnreadCount: () => convResult(),
 }))
 
-const { badgeShouldLight, clearUnread, hydrateUnread, publishUnread, unreadSnapshot } =
-  await import('../src/features/chat/unread')
+const { clearUnread, hydrateUnread, publishUnread, unreadBadgeText, unreadSnapshot } = await import(
+  '../src/features/chat/unread'
+)
 
 /** store 是模块级单例：每个用例前把内部快照清掉，避免互相污染 */
 beforeEach(() => {
@@ -153,27 +154,30 @@ describe('未读快照 · 冷启动补数', () => {
   })
 })
 
-describe('未读快照 · 底栏红点判定', () => {
-  test('任何一项已知未读 > 0 → 亮', () => {
-    expect(badgeShouldLight({ conversations: 1, notifications: 0, previous: false })).toBe(true)
-    expect(badgeShouldLight({ conversations: 0, notifications: 3, previous: false })).toBe(true)
-    expect(badgeShouldLight({ conversations: null, notifications: 2, previous: false })).toBe(true)
+describe('未读快照 · 底栏徽标文案（#431 任务二：蓝点 → 数字胶囊）', () => {
+  test('任何一项已知未读 > 0 → 显示已知分量之和（未知分量按 0 计）', () => {
+    expect(unreadBadgeText({ conversations: 1, notifications: 0, previous: null })).toBe('1')
+    expect(unreadBadgeText({ conversations: 0, notifications: 3, previous: null })).toBe('3')
+    // 会话未知但通知有 2 条已知未读：已知的是事实，先如实显示，不能藏掉
+    expect(unreadBadgeText({ conversations: null, notifications: 2, previous: null })).toBe('2')
+    // 合计两位数 → 胶囊档的数字原样透出（形状由渲染层按位数决定）
+    expect(unreadBadgeText({ conversations: 12, notifications: 8, previous: null })).toBe('20')
   })
 
-  test('两项都已知且都是 0 → 熄', () => {
-    expect(badgeShouldLight({ conversations: 0, notifications: 0, previous: true })).toBe(false)
+  test('合计封顶：> 99 显示 99+', () => {
+    expect(unreadBadgeText({ conversations: 60, notifications: 60, previous: null })).toBe('99+')
   })
 
-  test('有分量「不知道」且没有已知未读 → 保持上一帧，不熄掉已知的红点', () => {
-    // 这是 `null` 存在的意义：接口失败时按 0 算，会把用户真实存在的未读红点熄掉
-    expect(badgeShouldLight({ conversations: null, notifications: 0, previous: true })).toBe(true)
-    expect(badgeShouldLight({ conversations: 0, notifications: null, previous: true })).toBe(true)
-    expect(badgeShouldLight({ conversations: null, notifications: null, previous: true })).toBe(
-      true,
-    )
-    // 上一帧本来就是熄的，也不该因为「不知道」而无中生有
-    expect(badgeShouldLight({ conversations: null, notifications: null, previous: false })).toBe(
-      false,
-    )
+  test('两项都已知且都是 0 → 不显示（null）', () => {
+    expect(unreadBadgeText({ conversations: 0, notifications: 0, previous: '5' })).toBeNull()
+  })
+
+  test('有分量「不知道」且没有已知未读 → 保持上一帧，不熄掉已知的徽标', () => {
+    // 这是 `null` 存在的意义：接口失败时按 0 算，会把用户真实存在的未读徽标熄掉
+    expect(unreadBadgeText({ conversations: null, notifications: 0, previous: '5' })).toBe('5')
+    expect(unreadBadgeText({ conversations: 0, notifications: null, previous: '5' })).toBe('5')
+    expect(unreadBadgeText({ conversations: null, notifications: null, previous: '5' })).toBe('5')
+    // 上一帧本来就是隐藏的，也不该因为「不知道」而无中生有
+    expect(unreadBadgeText({ conversations: null, notifications: null, previous: null })).toBeNull()
   })
 })
