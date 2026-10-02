@@ -647,11 +647,6 @@ export function ConversationPage({ conversationId }: { conversationId: string })
               {history.isSuccess && mediaHistory.isSuccess && timeline.length === 0 ? (
                 <p className="py-10 text-center text-ink-3 text-sm">还没有消息，发一条打个招呼吧</p>
               ) : null}
-              {recallError !== null ? (
-                <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
-                  {recallError}
-                </p>
-              ) : null}
               <div className="space-y-4">
                 {timeline.map((entry) =>
                   entry.kind === 'message' ? (
@@ -767,6 +762,15 @@ export function ConversationPage({ conversationId }: { conversationId: string })
               {mediaError !== null ? (
                 <p className="mt-2 text-danger text-xs" role="alert">
                   {mediaError}
+                </p>
+              ) : null}
+              {/*
+                撤回失败提示放在**输入区上方**（与 mediaError 同位），不放滚动区顶部：
+                会话较长时用户停在底部操作，顶部的提示在视口之外，等于没有反馈。
+              */}
+              {recallError !== null ? (
+                <p className="mt-2 text-danger text-xs" role="alert">
+                  {recallError}
                 </p>
               ) : null}
               <p className="mt-2 text-right text-ink-3 text-xs">{draft.length}/2000</p>

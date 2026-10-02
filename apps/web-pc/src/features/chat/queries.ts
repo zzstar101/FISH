@@ -213,7 +213,6 @@ export function useProposeTransaction(ownerId: string | null) {
   })
 }
 
-/** 按 (createdAt, id) 排序，与服务端消息顺序口径一致。 */
 export type RecallVariables = { conversationId: string; messageId: string }
 
 /**
@@ -286,6 +285,25 @@ function sameMessage(a: MessageDto, b: MessageDto): boolean {
   )
 }
 
+/**
+ * 撤回是**单调**的：一条消息在缓存里已经是撤回态之后，不允许再用「撤回前」的快照把它写回去。
+ *
+ * 为什么必须挡：撤回成功后本页会重取历史拿到撤回 DTO，但 `mergeLiveRef`（历史落回非
+ * fetching 时跑，`conversation-page.tsx`）会把 `liveRef` 里**撤回前的旧快照**再 upsert 回来 ——
+ * 服务端撤回后文本 `content` 变 `''`、媒体 `url` 变 `''`，与旧快照逐字段不等，于是旧快照赢、
+ * 撤回碑被写回正文，撤回按钮也会重新出现。自己刚发的消息必在 liveRef 里（outbox 发出时记入），
+ * 所以缺这道闸时「撤回后看到撤回碑」在本会话内基本不成立。
+ *
+ * 小程序侧的同类保护见 `apps/miniapp/src/pages/conversation/view.ts` 的 `keepRecalledTombstones`。
+ * 反向（撤回态 → 撤回态、未撤回 → 撤回）一律放行：撤回不能被「撤回」，没有回退的需求。
+ */
+function isRecalledRollback(
+  existing: { recalledAt: string | null },
+  incoming: { recalledAt: string | null },
+): boolean {
+  return existing.recalledAt !== null && incoming.recalledAt === null
+}
+
 export function upsertMessagePage(
   data: InfiniteData<MessageListResponse, string | null> | undefined,
   message: MessageDto,
@@ -302,7 +320,7 @@ export function upsertMessagePage(
     const index = page.items.findIndex((item) => item.id === message.id)
     if (index < 0) return page
     const existing = page.items[index]
-    if (existing && sameMessage(existing, message)) {
+    if (existing && (sameMessage(existing, message) || isRecalledRollback(existing, message))) {
       identical = true
       return page
     }
@@ -376,7 +394,7 @@ export function upsertMediaPage(
     const index = page.items.findIndex((item) => item.id === media.id)
     if (index < 0) return page
     const existing = page.items[index]
-    if (existing && sameMediaMessage(existing, media)) {
+    if (existing && (sameMediaMessage(existing, media) || isRecalledRollback(existing, media))) {
       identical = true
       return page
     }
