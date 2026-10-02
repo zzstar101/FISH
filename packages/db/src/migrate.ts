@@ -5,6 +5,13 @@ import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { backfillIds } from './backfill-ids'
 import { createDb } from './client'
+import {
+  type AppliedMigrationRow,
+  blockingDrift,
+  findJournalDrift,
+  formatJournalDrift,
+  type JournalEntryRef,
+} from './journal-alignment'
 import { rekeyLegacyIds } from './rekey-ids'
 
 const folder = join(import.meta.dir, 'migrations')
@@ -105,6 +112,60 @@ async function recognizeLegacyGovernance(
 }
 
 /**
+ * 把 journal 条目补上各自的 hash。实测 `Bun.CryptoHasher.hash('sha256', <迁移 .sql 原文>)`
+ * 与 drizzle 写进 `drizzle.__drizzle_migrations.hash` 的值一致（#401 修复时 36 条逐一命中）。
+ */
+async function loadJournalEntryRefs(journal: Journal): Promise<JournalEntryRef[]> {
+  const refs: JournalEntryRef[] = []
+  for (const entry of journal.entries) {
+    const migrationSql = await Bun.file(join(folder, `${entry.tag}.sql`)).text()
+    refs.push({
+      tag: entry.tag,
+      when: entry.when,
+      hash: Bun.CryptoHasher.hash('sha256', migrationSql, 'hex'),
+    })
+  }
+  return refs
+}
+
+/**
+ * 跑 drizzle 之前的**簿记对齐**校验（#429）。
+ *
+ * drizzle 0.45 不比对 hash、只按水位判重放，所以一条「内容早已应用、但簿记顺序错位」的迁移
+ * 会被重放并炸出没有信息量的驱动错误（#401 实测 `enum label "LISTING" already exists`）。
+ * 这里把它换成说清「哪条、为什么、怎么改」的失败。
+ *
+ * 只对 replay-hazard 抛错；另两类只告警（判据与理由见 `./journal-alignment` 的文件头）。
+ */
+async function assertJournalAlignment(
+  db: ReturnType<typeof createDb>,
+  journal: Journal,
+): Promise<void> {
+  const exists = rowsOf(
+    await db.execute(sql`SELECT to_regclass('drizzle.__drizzle_migrations') AS name`),
+  )[0]
+  // 全新库没有簿记表：没有水位，谈不上漂移。
+  if (!exists?.name) return
+
+  const rows = rowsOf(
+    await db.execute(sql`SELECT hash, created_at FROM drizzle.__drizzle_migrations`),
+  )
+  const applied: AppliedMigrationRow[] = rows.map((row) => ({
+    hash: String(row.hash),
+    createdAt: Number(row.created_at),
+  }))
+  const drift = findJournalDrift(await loadJournalEntryRefs(journal), applied)
+  if (drift.length === 0) return
+
+  if (blockingDrift(drift).length > 0) {
+    throw new Error(
+      `迁移簿记与 journal 不对齐，已在跑 drizzle 之前停止\n${formatJournalDrift(drift)}`,
+    )
+  }
+  console.warn(formatJournalDrift(drift))
+}
+
+/**
  * Drizzle's plain migrate command applies every SQL file at once. This wrapper runs
  * exactly the generated nullable schema phase first, then an idempotent Bun backfill,
  * and finally all remaining generated migrations. No generated file is modified.
@@ -124,6 +185,7 @@ export async function migrateWithBackfill(databaseUrl: string): Promise<void> {
   const staging = await mkdtemp(join(tmpdir(), 'fish-217-migrate-'))
   const db = createDb(databaseUrl)
   try {
+    await assertJournalAlignment(db, journal)
     const legacy = await hasLegacyGovernance(db)
     await mkdir(join(staging, 'meta'))
     const throughConstraints = journal.entries.slice(0, constraintPhase + 1)
