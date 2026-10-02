@@ -7,8 +7,8 @@ import { useClearViewHistory, useMyViewHistory } from './queries'
  * 我的浏览记录（`/history`）。
  *
  * 路由不在 `__root.tsx` 的免登录白名单里，由 `RequireAuth` 守卫（未登录跳登录并回跳）；
- * 这里的 `me` 兜底与个人中心同款。换账号时按 `me.id` 重挂载：查询键虽然不带 ownerId，
- * 但页面内的一次性状态（清空失败文案）不该跨账号复用。
+ * 这里的 `me` 兜底与个人中心同款。查询键已带 ownerId（第二道隔离），按 `me.id` 重挂载
+ * 是为了页面内的一次性状态（清空失败文案）不跨账号复用。
  */
 export function HistoryPage() {
   const { me } = useAuth()
@@ -46,14 +46,17 @@ function HistoryContent({ ownerId }: { ownerId: string }) {
       <HistoryView
         clearFailure={clearFailure}
         clearing={clear.isPending}
-        error={history.isError}
+        // 首屏失败与翻页失败分开：翻页失败保留已加载列表、行内重试（与 chat 会话列表同款）。
+        error={history.isError && !history.isFetchNextPageError}
         hasNextPage={history.hasNextPage}
         items={items}
         loading={history.isPending}
         loadingMore={history.isFetchingNextPage}
+        nextPageError={history.isFetchNextPageError}
         onClear={handleClear}
         onLoadMore={() => void history.fetchNextPage()}
         onRetry={() => void history.refetch()}
+        onRetryNextPage={() => void history.fetchNextPage()}
       />
     </div>
   )

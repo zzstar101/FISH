@@ -8,6 +8,15 @@ import {
   localDayKey,
 } from './view'
 
+/**
+ * 钉死时区再断言字面量结果：GitHub runner 默认 UTC，如果只在"本机是 UTC+8"的假设下
+ * 现算期望值，实现误用 `getUTCDate` 之类的 UTC getter 在 CI 上也测不出来。
+ * Bun 在运行时读取 `process.env.TZ`（实测：设 Asia/Shanghai 后 getDate() 从 1 变 2），
+ * 且 `--isolate` 下每个测试文件有独立的 global/env 快照（实测同进程但不共享 env），
+ * TZ 不会泄漏到其它文件。
+ */
+process.env.TZ = 'Asia/Shanghai'
+
 function item(viewedAt: string, title = '商品'): ViewHistoryItem {
   return {
     listing: {
@@ -29,14 +38,12 @@ function item(viewedAt: string, title = '商品'): ViewHistoryItem {
 }
 
 describe('localDayKey', () => {
-  test('UTC 时间戳按本地日换算', () => {
-    // 本地时区（UTC+8）下 2026-10-01T18:30Z 属于 10 月 2 日。
-    const key = localDayKey('2026-10-01T18:30:00.000Z')
-    expect(key).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    const expected = new Date('2026-10-01T18:30:00.000Z')
-    expect(key).toBe(
-      `${expected.getFullYear()}-${String(expected.getMonth() + 1).padStart(2, '0')}-${String(expected.getDate()).padStart(2, '0')}`,
-    )
+  test('UTC 时间戳按本地日换算（钉死 Asia/Shanghai）', () => {
+    // 2026-10-01T18:30Z 在 UTC+8 下是 10 月 2 日 02:30 —— 必须换算，不能照抄 UTC 日。
+    expect(localDayKey('2026-10-01T18:30:00.000Z')).toBe('2026-10-02')
+    // 同一天的 UTC 边界：15:59Z 仍是 10-01，16:00Z 起进入 10-02。
+    expect(localDayKey('2026-10-01T15:59:59.999Z')).toBe('2026-10-01')
+    expect(localDayKey('2026-10-01T16:00:00.000Z')).toBe('2026-10-02')
   })
 })
 

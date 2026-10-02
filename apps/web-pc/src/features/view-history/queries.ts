@@ -2,10 +2,15 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { currentSessionGeneration } from '../../lib/session-cache'
 import { clearMyViewHistory, fetchMyViewHistory } from './api'
 
+/**
+ * 缓存键带 `ownerId`（与 wish / chat / profile 同一口径）：换账号时即使漏了全局 reset，
+ * 不同 owner 的键也不相等，读不到别人的缓存。`resetPcSession` 的 `['pc']` 全量清理
+ * 仍是第一道防线，这里是第二道。
+ */
 export const viewHistoryKeys = {
   all: () => ['pc', 'view-history'] as const,
-  list: () => [...viewHistoryKeys.all(), 'list'] as const,
-  total: () => [...viewHistoryKeys.all(), 'total'] as const,
+  list: (ownerId: string) => [...viewHistoryKeys.all(), 'list', ownerId] as const,
+  total: (ownerId: string) => [...viewHistoryKeys.all(), 'total', ownerId] as const,
 }
 
 /**
@@ -14,7 +19,7 @@ export const viewHistoryKeys = {
  */
 export function useMyViewHistory(ownerId: string) {
   return useInfiniteQuery({
-    queryKey: viewHistoryKeys.list(),
+    queryKey: viewHistoryKeys.list(ownerId),
     queryFn: ({ pageParam }) => fetchMyViewHistory({ limit: 20, cursor: pageParam ?? undefined }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -29,7 +34,7 @@ export function useMyViewHistory(ownerId: string) {
  */
 export function useViewHistoryTotal(ownerId: string) {
   return useQuery({
-    queryKey: viewHistoryKeys.total(),
+    queryKey: viewHistoryKeys.total(ownerId),
     queryFn: () => fetchMyViewHistory({ limit: 1 }),
     enabled: ownerId !== '',
     select: (data) => data.total,
@@ -41,7 +46,8 @@ type SessionMutationContext = { generation: number }
 
 /**
  * 清空：成功后以服务端为准——列表与计数全部失效重拉（不本地清数组），
- * 失败由调用方展示文案，列表保持原样。会话代际守卫沿用 favorites / follows 模式。
+ * 失败由调用方展示文案，列表保持原样。会话代际守卫沿用 chat / wish 的 mutation 模式
+ * （`captureSession` → `onSuccess` 里比对 `currentSessionGeneration()`）。
  */
 export function useClearViewHistory() {
   const queryClient = useQueryClient()
@@ -50,8 +56,7 @@ export function useClearViewHistory() {
     onMutate: (): SessionMutationContext => ({ generation: currentSessionGeneration() }),
     onSuccess: (_result, _variables, context) => {
       if (context === undefined || context.generation !== currentSessionGeneration()) return
-      void queryClient.invalidateQueries({ queryKey: viewHistoryKeys.list() })
-      void queryClient.invalidateQueries({ queryKey: viewHistoryKeys.total() })
+      void queryClient.invalidateQueries({ queryKey: viewHistoryKeys.all() })
     },
   })
 }

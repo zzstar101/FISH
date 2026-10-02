@@ -6,13 +6,30 @@ import type { HistoryViewProps } from './history-view'
 
 /**
  * 行内有 `Link`，静态渲染下没有 router context 会炸，换成普通 `<a>`（与仓库其它页面测试同款桩法）。
+ * `params` 要插值进 href：否则「已下架不给可点入口」这类断言会因桩永远不输出商品 id 而假通过。
  */
 mock.module('@tanstack/react-router', () => ({
-  Link: ({ to, children, ...rest }: { to: string; children?: ReactNode }) =>
-    createElement('a', { href: to, ...rest }, children),
+  Link: ({
+    to,
+    params,
+    children,
+    ...rest
+  }: {
+    to: string
+    params?: Record<string, string>
+    children?: ReactNode
+  }) => {
+    let href = to
+    for (const [key, value] of Object.entries(params ?? {})) {
+      href = href.replace(`$${key}`, String(value))
+    }
+    return createElement('a', { href, ...rest }, children)
+  },
 }))
 
 const { HistoryView } = await import('./history-view')
+
+const LISTING_ID = 'lst_01jc000000e00800000000000k'
 
 function item(
   viewedAt: string,
@@ -20,7 +37,7 @@ function item(
 ): ViewHistoryItem {
   return {
     listing: {
-      id: 'lst_01jc000000e00800000000000k',
+      id: LISTING_ID,
       title: '高等数学上册',
       priceCents: 2000,
       category: 'BOOKS',
@@ -48,10 +65,12 @@ const BASE: HistoryViewProps = {
   items: [item(TODAY_ISO)],
   hasNextPage: false,
   loadingMore: false,
+  nextPageError: false,
   clearing: false,
   clearFailure: null,
   onRetry: () => undefined,
   onLoadMore: () => undefined,
+  onRetryNextPage: () => undefined,
   onClear: () => undefined,
   now: NOW,
 }
@@ -65,19 +84,28 @@ function textOf(html: string): string {
 }
 
 describe('HistoryView', () => {
-  test('按天分组：今天/昨天两个标题，组内渲染商品与状态徽标', () => {
+  test('按天分组：今天/昨天各有一个分组标题，组内渲染商品与状态徽标', () => {
     const html = render({
+      // 商品标题刻意不含「今天/昨天」字样，避免分组表头缺失时被标题"顶上"而假通过。
       items: [
-        item(TODAY_ISO, { title: '今天看的' }),
-        item(YESTERDAY_ISO, { title: '昨天看的', status: 'SOLD' }),
+        item(TODAY_ISO, { title: '甲商品' }),
+        item(YESTERDAY_ISO, { title: '乙商品', status: 'SOLD' }),
       ],
     })
 
-    expect(html).toContain('今天')
-    expect(html).toContain('昨天')
-    expect(html).toContain('今天看的')
-    expect(html).toContain('昨天看的')
+    expect(html).toContain('>今天</h2>')
+    expect(html).toContain('>昨天</h2>')
+    expect(html).toContain('甲商品')
+    expect(html).toContain('乙商品')
     expect(html).toContain('已售出')
+  })
+
+  test('已下架不给可点入口，已售出仍可进详情（详情页公开可读）', () => {
+    const offline = render({ items: [item(TODAY_ISO, { status: 'OFFLINE' })] })
+    expect(offline).not.toContain(`/listing/${LISTING_ID}`)
+
+    const sold = render({ items: [item(TODAY_ISO, { status: 'SOLD' })] })
+    expect(sold).toContain(`/listing/${LISTING_ID}`)
   })
 
   test('失效商品保留展示：下架/售出条目仍在列表里', () => {
@@ -122,6 +150,14 @@ describe('HistoryView', () => {
   test('还有下一页时给「加载更多」，加载中禁用', () => {
     expect(render({ hasNextPage: true })).toContain('加载更多')
     expect(render({ hasNextPage: true, loadingMore: true })).toContain('正在加载…')
+  })
+
+  test('翻页失败：保留已加载列表 + 行内重试，不整页替换、不显示「加载更多」', () => {
+    const html = render({ hasNextPage: true, nextPageError: true })
+
+    expect(html).toContain('更多浏览记录加载失败')
+    expect(html).toContain('高等数学上册')
+    expect(html).not.toContain('加载更多')
   })
 
   test('底部保留期说明与契约窗口一致（30 天）', () => {

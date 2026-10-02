@@ -12,16 +12,20 @@ import { groupHistoryByDay, historyDayLabel, historyStatusView } from './view'
 
 export type HistoryViewProps = {
   loading: boolean
+  /** 首屏失败（整体错误态）；「加载更多」失败走 `nextPageError`，不整页替换。 */
   error: boolean
   items: ViewHistoryItem[]
   hasNextPage: boolean
   loadingMore: boolean
+  /** 翻页失败：保留已加载列表，行内给重试；不整页替换（与 chat 会话列表同款）。 */
+  nextPageError: boolean
   /** 正在清空（按钮禁用 + 文案）。 */
   clearing: boolean
   /** 清空失败文案：失败时列表保持原样，只多一行错误提示。 */
   clearFailure: string | null
   onRetry: () => void
   onLoadMore: () => void
+  onRetryNextPage: () => void
   onClear: () => void
   /** 分组标题的"今天/昨天"基准，注入以便测试确定化。 */
   now?: Date
@@ -29,9 +33,23 @@ export type HistoryViewProps = {
 
 function HistoryRow({ item }: { item: ViewHistoryItem }) {
   const status = historyStatusView(item.listing.status)
+  // 已下架（OFFLINE）商品的详情页对非卖家是 404（`listings/service.ts` 的可见性判据），
+  // 不给必然失败的入口（与 `chat/message-bubble.tsx` 的「已下架不给可点入口」同一约定）。
+  // 已售出 / 已预定的详情公开可读，照常可点。
+  const canOpen = item.listing.status !== 'OFFLINE'
   return (
     <Card className="flex items-center gap-4 border border-line p-4">
-      <Link params={{ listingId: item.listing.id }} to="/listing/$listingId">
+      {canOpen ? (
+        <Link params={{ listingId: item.listing.id }} to="/listing/$listingId">
+          <ListingThumb
+            alt={item.listing.title}
+            className="size-16 rounded-xl"
+            coverUrl={item.listing.coverUrl}
+            emojiClassName="text-2xl"
+            listingId={item.listing.id}
+          />
+        </Link>
+      ) : (
         <ListingThumb
           alt={item.listing.title}
           className="size-16 rounded-xl"
@@ -39,19 +57,23 @@ function HistoryRow({ item }: { item: ViewHistoryItem }) {
           emojiClassName="text-2xl"
           listingId={item.listing.id}
         />
-      </Link>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <Badge variant={status.variant}>{status.label}</Badge>
           <span className="text-ink-3 text-xs">{formatRelativeTimeAt(item.viewedAt)}看过</span>
         </div>
-        <Link
-          className="mt-1.5 block truncate font-medium text-sm hover:text-brand"
-          params={{ listingId: item.listing.id }}
-          to="/listing/$listingId"
-        >
-          {item.listing.title}
-        </Link>
+        {canOpen ? (
+          <Link
+            className="mt-1.5 block truncate font-medium text-sm hover:text-brand"
+            params={{ listingId: item.listing.id }}
+            to="/listing/$listingId"
+          >
+            {item.listing.title}
+          </Link>
+        ) : (
+          <p className="mt-1.5 truncate font-medium text-ink-3 text-sm">{item.listing.title}</p>
+        )}
         <PriceText cents={item.listing.priceCents} className="mt-1 font-semibold text-[15px]" />
       </div>
     </Card>
@@ -104,7 +126,11 @@ export function HistoryView(props: HistoryViewProps) {
         </section>
       ))}
 
-      {props.hasNextPage ? (
+      {props.nextPageError ? (
+        <ErrorState message="更多浏览记录加载失败" onRetry={props.onRetryNextPage} />
+      ) : null}
+
+      {props.hasNextPage && !props.nextPageError ? (
         <div className="flex justify-center">
           <Button disabled={props.loadingMore} onClick={props.onLoadMore} variant="outline">
             {props.loadingMore ? <Loader2 className="size-4 animate-spin" /> : null}
