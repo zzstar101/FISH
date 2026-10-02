@@ -334,13 +334,12 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
 }
 
 /**
- * 把**当前已加载**的未读通知逐条真实标记已读（Owner 拍板口径：切进「通知」tab
- * 即视为已读，tab 红点随之消除）。
+ * 把给出的未读通知逐条真实标记已读（#431 任务二：**逐条点击**才置读，
+ * 不再是「切进通知 tab 即整表已读」）。
  *
  * 只对调用方给出的条目逐条调幂等 `POST /notifications/:id/read` —— 契约没有
- * mark-all-read 端点，客户端不假设有。返回**标记成功**的 id 集合，页面只把
- * 成功条目的本地 `readAt` 补上；失败的条目保持未读，等列表下次变化
- * （错误态的重试钮成功 / 页面实例重建）再试。
+ * mark-all-read 端点，客户端不假设有。返回**标记成功**的 id 集合：调用方（chat 页）
+ * 先乐观置读，拿到这里的结果后只对**未成功**的条目回滚成未读。
  *
  * 演示 / 开发构建（`MOCK_FALLBACK_ENABLED`）的兜底口径见 `mergeMarkReadResults`：
  * 只有**整批都因后端不可达而失败**才按演示口径视为全部已读，真实的接口错误
