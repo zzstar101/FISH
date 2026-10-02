@@ -233,7 +233,7 @@ describe('historyDaysOf —— 按本地日分组', () => {
 })
 
 describe('mergeHistoryItems —— 翻页合并按 id 去重', () => {
-  const first = item(at(2026, 11, 2, 10), { id: LISTING_ID })
+  const first = item(at(2026, 11, 2, 11), { id: LISTING_ID })
   const second = item(at(2026, 11, 2, 9), { id: OTHER_LISTING_ID })
 
   test('两页无重叠：顺序 = 先上一页、再下一页', () => {
@@ -241,9 +241,10 @@ describe('mergeHistoryItems —— 翻页合并按 id 去重', () => {
     expect(merged.map((row) => row.listing.id)).toEqual([LISTING_ID, OTHER_LISTING_ID])
   })
 
-  test('后一页重复带回上一页已有的行：只保留先出现的那条（较新的 viewedAt）', () => {
-    // 模拟并发写入：同一件商品又被看了一次，服务端把它 upsert 到头部，翻页时重复下发
-    const refreshedSameId = item(at(2026, 11, 2, 11), { id: LISTING_ID })
+  test('后一页重复带回上一页已有的行：只保留先出现的那条', () => {
+    // 模拟并发写入后的重复下发：上一页里那行是较新的（11 点），后一页又带回同一件商品的旧行（10 点）。
+    // 服务端按 last_viewed_at DESC 下发，「先出现」即较新的一条 —— 去重保留它。
+    const refreshedSameId = item(at(2026, 11, 2, 10), { id: LISTING_ID })
     const merged = mergeHistoryItems([first], [refreshedSameId, second])
 
     expect(merged.map((row) => row.listing.id)).toEqual([LISTING_ID, OTHER_LISTING_ID])
