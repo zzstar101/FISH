@@ -793,7 +793,8 @@ export type ProfileView = {
  * （全量计数，不是这一页的长度；与历史页列表同一张表、同一个 30 天窗口）。
  *
  * **单独 catch**：这一格读不到只该显示 `—`，不能把整个「我的」页拖成失败态 ——
- * 先例 `loadListingDetail` 里相似推荐 / 卖家资料的降级口径。
+ * 先例 `loadListingDetail` 里相似推荐 / 卖家资料的降级口径。所以它返回的 Promise
+ * **永不 reject**，可以安全地与其他请求并行 `Promise.all`。
  */
 async function viewHistoryTotal(): Promise<number | null> {
   try {
@@ -807,15 +808,18 @@ async function viewHistoryTotal(): Promise<number | null> {
 
 export async function loadProfile(now: number = Date.now()): Promise<ProfileView | null> {
   try {
-    // 收藏计数与收藏列表同源（#190 验收）：`GET /me/favorites` 回包的全量 total，
-    // 与 profile 并行拉（count 只读 1 行）。它失败**不算 profile 失败** ——
-    // 计数是辅助数字，兜底成 `null` 让页面显示 `—`，不把「读不到」画成 0，
-    // 也不让一个辅助请求把整页个人中心拖进错误态。
-    const favoritesTotal = fetchMyFavoritesTotal().catch(() => null)
-    // 足迹计数同理（#415 M1）：`viewHistoryTotal()` 自己吞掉失败返回 `null`，
-    // 同样在 `fetchProfile()` **之前**发出，三个请求并行，不让首屏多等一个 RTT。
-    const historyTotal = viewHistoryTotal()
-    const profile = await fetchProfile()
+    /*
+      三个请求**并行**：收藏（#190）与足迹（#415 M1）计数各只占数字栏一格，串行 await
+      会让「我的」页首屏多等一个 RTT（单个请求超时上限 15s）。两个辅助计数**各自失败
+      各自 `null`**（`fetchMyFavoritesTotal` 的 catch 与 `viewHistoryTotal` 的内部 catch，
+      后者返回的 Promise 永不 reject），所以 `Promise.all` 只有 `fetchProfile` 会 reject
+      —— 失败仍走下面的统一回退路径，一个辅助请求不拖死整页，也不拖死另一个计数。
+    */
+    const [profile, favoritesCount, historyCount] = await Promise.all([
+      fetchProfile(),
+      fetchMyFavoritesTotal().catch(() => null),
+      viewHistoryTotal(),
+    ])
     return {
       user: profile.user,
       stats: profile.stats,
@@ -828,8 +832,8 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       // 收藏（#190）：与「我的收藏」列表同源的全量 total；足迹（#415 M1）：与历史页列表
       // 同源（同一张表、同一个 30 天窗口）的 total。两个辅助计数**各自失败各自 `null`**，
       // 互不拖死：这里的 0 不是「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实。
-      favoritesCount: await favoritesTotal,
-      historyCount: await historyTotal,
+      favoritesCount,
+      historyCount,
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
