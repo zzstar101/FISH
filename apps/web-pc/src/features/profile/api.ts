@@ -259,22 +259,20 @@ export function proposalDecisionError(error: unknown): { message: string; refres
 /**
  * 删除商品失败的可执行分支。
  *
- * `LISTING_NOT_DELETABLE` **直接用服务端文案**：服务端那句（「只有未通过审核且没有交易记录的商品
- * 可以删除」）已经是给人看的一句话，端上改写只会丢信息。三种失败都要求刷新列表 ——
- * 该码既可能来自「本来就不能删」，也可能来自「刚被并发买家拍下」这类漂移。
+ * **文案一律用服务端原文**（403 / 404 / 409 都透传）：服务端那几句
+ * （「只有未通过审核且没有交易记录的商品可以删除」/「只能操作自己的商品」）已经是
+ * 给人看的一句话，端上按错误码改写只会丢信息，还会与服务端文案悄悄漂移。
+ *
+ * `refresh` 只对三个已知失败码为真 —— 它们既可能来自「本来就不能删」，
+ * 也可能来自「刚被并发买家拍下」这类漂移，结论要由服务端状态给。
  */
 export function listingDeleteError(error: unknown): { message: string; refresh: boolean } {
   if (error instanceof ApiError) {
-    if (error.code === 'LISTING_NOT_DELETABLE') {
-      return { message: error.message, refresh: true }
-    }
-    if (error.code === 'NOT_LISTING_OWNER') {
-      return { message: '只能删除自己的商品，正在刷新', refresh: true }
-    }
-    if (error.code === 'LISTING_NOT_FOUND') {
-      return { message: '商品不存在或已被删除，正在刷新', refresh: true }
-    }
-    return { message: error.message, refresh: false }
+    const refresh =
+      error.code === 'LISTING_NOT_DELETABLE' ||
+      error.code === 'NOT_LISTING_OWNER' ||
+      error.code === 'LISTING_NOT_FOUND'
+    return { message: error.message, refresh }
   }
   return { message: '删除失败，请稍后重试', refresh: false }
 }

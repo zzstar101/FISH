@@ -71,6 +71,15 @@ function invalidateChatSurfaces(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: ['pc', 'chat'] })
 }
 
+/**
+ * 愿望域。`useMyListingsForMatches`（愿望发布页的商品选择器）取的是**同一份「我的发布」**，
+ * 却有自己的 query key 与 30s staleTime —— 删掉商品后不失效，选择器里会留下一条
+ * 点进去必然 404 的选项。
+ */
+function invalidateWishSurfaces(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'wish'] })
+}
+
 function invalidatePending(queryClient: QueryClient, ownerId: string): void {
   void queryClient.invalidateQueries({ queryKey: profileKeys.pending(ownerId) })
 }
@@ -188,6 +197,7 @@ export function useDeleteListing(ownerId: string) {
       invalidateListingViews(queryClient)
       invalidateChatSurfaces(queryClient)
       invalidatePending(queryClient, ownerId)
+      invalidateWishSurfaces(queryClient)
     },
   })
 }

@@ -170,7 +170,7 @@ describe('profile api errors', () => {
   })
 
   test('delete failures surface the server wording and never claim success', () => {
-    // 409 直接用服务端那句（「只有未通过审核且没有交易记录的商品可以删除」），端上不改写
+    // 文案一律用服务端原文（验收标准要求 403 / 404 / 409 都透传），端上不改写
     expect(
       listingDeleteError(
         new ApiError('LISTING_NOT_DELETABLE', 409, '只有未通过审核且没有交易记录的商品可以删除'),
@@ -179,11 +179,16 @@ describe('profile api errors', () => {
 
     expect(
       listingDeleteError(new ApiError('NOT_LISTING_OWNER', 403, '只能操作自己的商品')),
-    ).toEqual({ message: '只能删除自己的商品，正在刷新', refresh: true })
+    ).toEqual({ message: '只能操作自己的商品', refresh: true })
 
-    expect(listingDeleteError(new ApiError('LISTING_NOT_FOUND', 404, '商品不存在'))).toEqual({
-      message: '商品不存在或已被删除，正在刷新',
-      refresh: true,
+    expect(
+      listingDeleteError(new ApiError('LISTING_NOT_FOUND', 404, '商品不存在或不可见')),
+    ).toEqual({ message: '商品不存在或不可见', refresh: true })
+
+    // 其它 ApiError 同样透传，但不强制刷新（例如 401 交给全局登录收口）
+    expect(listingDeleteError(new ApiError('UNAUTHENTICATED', 401, '未登录'))).toEqual({
+      message: '未登录',
+      refresh: false,
     })
 
     expect(listingDeleteError(new Error('network'))).toEqual({
