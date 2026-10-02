@@ -35,6 +35,7 @@ import {
   historyDaysOf,
   loadingTextOf,
   MESSAGE_KIND_LABEL,
+  mergeHistoryItems,
   NO_BACKEND_REFRESH_TIP,
   NOTHING_CLEARED,
   noteOf,
@@ -191,6 +192,15 @@ export default function History() {
   const pendingFirst = useRef<(() => void) | null>(null)
   const pendingMore = useRef<(() => void) | null>(null)
   /**
+   * 这一轮 effect 重跑是不是**下拉刷新**发起的（由 `usePullDownRefresh` 置位）。
+   *
+   * 取消在飞请求时要收原生下拉指示器，但**刷新不能收**：刷新是「旧的一轮取消、新的一轮
+   * 接力」，指示器应当一直转到新结果落地（新一轮的 then / catch 会收）。所以 effect 的
+   * cleanup 只在标记为假时收指示器 —— 切档 / 换号 / 卸载这些**没有接力**的取消路径
+   * 才不会留下一个空转的圈。
+   */
+  const refreshPending = useRef(false)
+  /**
    * 换账号 / 退出时的**渲染期重置**（与 `pages/mylist` 同款写法）：
    * 「清空过」与真实浏览档的列表都是上一个账号的视角，必须在**同一帧内**清掉 ——
    * 否则新账号一进来会先画一帧「这个账号已经清空了」的空列表 / 上一个账号的足迹。
@@ -277,10 +287,19 @@ export default function History() {
    * 重拉时迟到结果一律丢弃（渲染期重置已经把手里的列表清干净）。
    */
   useEffect(() => {
-    if (demo || tab !== 'history') return
+    // 先读走「下拉刷新」标记（上一轮的 cleanup 已据它决定放行指示器），本次分支一律从零开始
+    refreshPending.current = false
+    if (demo) return
+    if (tab !== 'history') {
+      // 切走浏览档：在飞的取数已被上一轮 cleanup 取消，没有新一轮会来收指示器，这里补收
+      void Taro.stopPullDownRefresh()
+      return
+    }
     if (authStatus !== 'authed' || userId === null) {
-      // 未登录 / 登录态未就绪时守卫在跳转，别把骨架屏一直挂着（登录态就绪后本 effect 会重跑）
+      // 未登录 / 登录态未就绪时守卫在跳转，别把骨架屏一直挂着（登录态就绪后本 effect 会重跑）；
+      // 换号 / 退出的取消路径同理：没有接力的一轮，指示器在这里收掉
       setRealLoading(false)
+      void Taro.stopPullDownRefresh()
       return
     }
 
@@ -338,6 +357,12 @@ export default function History() {
       // 离开浏览档 / 卸载时由 effect 生命周期统一收掉在飞的「加载更多」
       pendingMore.current?.()
       pendingMore.current = null
+      /*
+        这一轮不是「下拉刷新接力」的取消（切档 / 换号 / 卸载）：没有任何新一轮会来收
+        原生指示器，必须在这里收掉，否则会出现「列表已经不转了、顶部还在转」。
+        是刷新接力时标记为真 → 放行，交给新一轮的结果落地时收。
+      */
+      if (!refreshPending.current) void Taro.stopPullDownRefresh()
     }
   }, [demo, tab, authStatus, userId, reloadToken])
 
@@ -405,7 +430,13 @@ export default function History() {
    * 收藏 / 留言两档如实说明，不假装刷新成功。
    */
   usePullDownRefresh(() => {
-    if (demo || (tab === 'history' && authStatus === 'authed' && userId !== null)) {
+    if (demo) {
+      setReloadToken((token) => token + 1)
+      return
+    }
+    if (tab === 'history' && authStatus === 'authed' && userId !== null) {
+      // 标记「这一轮是刷新发起的」：effect 的 cleanup 据此放行原生指示器（新一轮会自己收）
+      refreshPending.current = true
       setReloadToken((token) => token + 1)
       return
     }
@@ -416,8 +447,9 @@ export default function History() {
   /**
    * 「加载更多」：游标翻页（真实浏览档）。`nextCursor` 是不透明串，原样回传。
    *
-   * 追加的一页必须与已有 `items` **合并后重新分组**：同一天可能横跨两页，
-   * 直接拼 `days` 会让同一天出现两组、还会撞 `key={day.date}`。
+   * 追加的一页必须与已有 `items` **按 id 去重后合并、再重新分组**：同一天可能横跨两页，
+   * 直接拼 `days` 会让同一天出现两组、还会撞 `key={day.date}`；而并发写入下后一页可能
+   * 重复带回上一页给过的行，不去重就会出现同一件商品两张格（`mergeHistoryItems`）。
    */
   const loadMore = () => {
     const current = realHistory
@@ -436,7 +468,7 @@ export default function History() {
         if (load.isCancelled() || page === null) return
         setRealHistory((prev) => {
           if (prev === null || prev.ownerId !== forUserId) return prev
-          const items = [...prev.items, ...page.items]
+          const items = mergeHistoryItems(prev.items, page.items)
           return {
             ...prev,
             items,
@@ -497,6 +529,8 @@ export default function History() {
         setRealCleared(true)
         setRealLoading(false)
         setLoadingMore(false)
+        // 清空也作废了在飞的取数：没有结果会来收原生指示器（刷新中清空也走这条），这里收掉
+        void Taro.stopPullDownRefresh()
         toast(clearDoneOf(tab))
       } catch (error) {
         toast(error instanceof Error && error.message ? error.message : '清空失败，请重试')
