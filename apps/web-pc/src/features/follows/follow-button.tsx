@@ -1,5 +1,5 @@
 import { Button } from '@fish/ui/button'
-import { UserRoundPlus } from 'lucide-react'
+import { UserRoundCheck, UserRoundPlus } from 'lucide-react'
 
 /** 关注态读取的几种结果（来自 `useFollowState` 的 outcome）。 */
 export type FollowReadState = 'loading' | 'following' | 'notFollowing' | 'notFound' | 'unknown'
@@ -70,7 +70,11 @@ export function FollowButtonView({
         type="button"
         variant={state.followed ? 'secondary' : 'default'}
       >
-        <UserRoundPlus className="size-4" />
+        {state.followed ? (
+          <UserRoundCheck className="size-4" />
+        ) : (
+          <UserRoundPlus className="size-4" />
+        )}
         {state.label}
       </Button>
       {mutual ? (

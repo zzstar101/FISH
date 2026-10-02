@@ -72,6 +72,22 @@ describe('fetchFollowState', () => {
     expect(await fetchFollowState(userId)).toEqual({ kind: 'failed', message: '服务异常' })
   })
 
+  test('401 UNAUTHENTICATED 原样抛出，交给全站 401 收口跳登录', async () => {
+    globalThis.fetch = mock(async () =>
+      Response.json({ error: { code: 'UNAUTHENTICATED', message: '请先登录' } }, { status: 401 }),
+    ) as unknown as typeof fetch
+
+    await expect(fetchFollowState(userId)).rejects.toThrow('请先登录')
+  })
+
+  test('裸 401（业务错误码）不算未登录，仍收口成 failed', async () => {
+    globalThis.fetch = mock(async () =>
+      Response.json({ error: { code: 'SESSION_EXPIRED', message: '会话已过期' } }, { status: 401 }),
+    ) as unknown as typeof fetch
+
+    expect(await fetchFollowState(userId)).toEqual({ kind: 'failed', message: '会话已过期' })
+  })
+
   test('非规范 ID 直接 notFound，不发请求', async () => {
     expect(await fetchFollowState('not-an-id')).toEqual({ kind: 'notFound' })
   })
@@ -104,6 +120,15 @@ describe('writes', () => {
     ) as unknown as typeof fetch
 
     expect(await requestFollow(userId)).toEqual({ kind: 'failed', message: '不能关注自己' })
+  })
+
+  test('写请求遇到 401 UNAUTHENTICATED 原样抛出，交给全站 401 收口', async () => {
+    globalThis.fetch = mock(async () =>
+      Response.json({ error: { code: 'UNAUTHENTICATED', message: '请先登录' } }, { status: 401 }),
+    ) as unknown as typeof fetch
+
+    await expect(requestFollow(userId)).rejects.toThrow('请先登录')
+    await expect(requestUnfollow(userId)).rejects.toThrow('请先登录')
   })
 })
 

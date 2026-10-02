@@ -66,10 +66,20 @@ mock.module('../listings/listing-card', () => ({
     createElement('a', { href: `/pc/listing/${item.id}` }, item.title),
 }))
 
-/** 同上：页面自己的「去个人中心」也是一个 `Link`，静态渲染下换成普通 `<a>`。 */
+/**
+ * 同上：页面自己的「去个人中心」「登录后关注」也是 `Link`，静态渲染下换成普通 `<a>`。
+ * `search` 里的 redirect 回跳参数落成 data 属性，供「保留回跳」的断言读取。
+ */
 mock.module('@tanstack/react-router', () => ({
-  Link: ({ to, children, ...rest }: { to: string; children?: ReactNode }) =>
-    createElement('a', { href: to, ...rest }, children),
+  Link: ({
+    to,
+    search,
+    children,
+  }: {
+    to: string
+    search?: { redirect?: string }
+    children?: ReactNode
+  }) => createElement('a', { 'data-redirect': search?.redirect, href: to }, children),
 }))
 
 const { UserProfilePage } = await import('./user-profile-page')
@@ -180,6 +190,8 @@ describe('UserProfilePage', () => {
     const html = render(null)
 
     expect(html).toContain('登录后关注')
+    // 验收标准「保留回跳」：登录链接必须带着当前页地址。
+    expect(html).toContain(`data-redirect="/pc/users/${USER_ID}"`)
     expect(followStateEnabled).toBe(false)
     expect(html).not.toContain('>已关注<')
   })

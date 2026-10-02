@@ -6,7 +6,7 @@ import {
   MyFollowingResponseSchema,
 } from '@fish/contracts/follows/schema'
 import { UserIdSchema } from '@fish/contracts/system/public-id'
-import { ApiError, apiRequest } from '../../lib/api-client'
+import { ApiError, apiRequest, isUnauthenticatedError } from '../../lib/api-client'
 
 /** 关注列表每页条数：契约默认 20、上限 50，端上取默认。 */
 export const FOLLOWING_PAGE_LIMIT = 20
@@ -43,6 +43,8 @@ function followErrorText(error: unknown): string {
 /**
  * 读与某人的关注状态。404 USER_NOT_FOUND 单独成 `notFound`（降级「无法关注」），
  * 与网络/服务端失败分开——后者保留重试，两种都不能让按钮假装成未关注可点。
+ * 401 UNAUTHENTICATED 原样抛出，交给全站 401 收口（queryCache onError 跳登录带回跳），
+ * 与 /following 列表的行为保持一致。
  */
 export async function fetchFollowState(userId: string): Promise<FollowStateOutcome> {
   const path = followRelationPath(userId)
@@ -51,6 +53,7 @@ export async function fetchFollowState(userId: string): Promise<FollowStateOutco
     const state = FollowStateSchema.parse(await apiRequest(path))
     return { kind: 'loaded', following: state.following, mutual: state.mutual }
   } catch (error) {
+    if (isUnauthenticatedError(error)) throw error
     if (error instanceof ApiError && error.status === 404 && error.code === 'USER_NOT_FOUND') {
       return { kind: 'notFound' }
     }
@@ -65,6 +68,7 @@ export type FollowWriteResult =
 /**
  * 关注/取关的失败都走这里：调用方以服务端结果为准，失败不改本地状态。
  * `CANNOT_FOLLOW_SELF`（422）也会落到 `failed`（端上不渲染自关注钮，这条是兜底）。
+ * 401 UNAUTHENTICATED 原样抛出，交给全站 401 收口（mutationCache onError 跳登录带回跳）。
  */
 async function writeFollow(userId: string, method: 'POST' | 'DELETE'): Promise<FollowWriteResult> {
   const path = followRelationPath(userId)
@@ -73,6 +77,7 @@ async function writeFollow(userId: string, method: 'POST' | 'DELETE'): Promise<F
     const state: FollowState = FollowStateSchema.parse(await apiRequest(path, { method }))
     return { kind: 'written', following: state.following, mutual: state.mutual }
   } catch (error) {
+    if (isUnauthenticatedError(error)) throw error
     return { kind: 'failed', message: followErrorText(error) }
   }
 }
