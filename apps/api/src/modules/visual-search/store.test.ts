@@ -477,4 +477,32 @@ describe('createVisualSearchStore', () => {
       }),
     ).toBeNull()
   })
+
+  test('soldPriceStats 只统计同类目 + SOLD + APPROVED，且均价是数字而不是 numeric 字符串', async () => {
+    // 统计是全表聚合，无法在共享库上断言绝对值；改用"插入前后差值"这种与库内既有数据无关的断言。
+    const category = 'SPORTS' as const
+    const soldPrice = 4321
+
+    const before = await store.soldPriceStats(category)
+
+    await createListing({ category, priceCents: soldPrice, status: 'SOLD' })
+    // 三条反例：未成交、审核中、被拒——都不该进统计（可见性谓词与召回逐条对齐）。
+    await createListing({ category, priceCents: 9999, status: 'ACTIVE' })
+    await createListing({ category, priceCents: 9999, status: 'SOLD', moderationStatus: 'REVIEW' })
+    await createListing({ category, priceCents: 9999, status: 'SOLD', moderationStatus: 'BLOCKED' })
+
+    const after = await store.soldPriceStats(category)
+
+    expect(after.soldSampleCount).toBe(before.soldSampleCount + 1)
+    // 回归护栏：`avg(integer)` 是 numeric，Bun 的 SQL 驱动会映射成字符串，`Math.round` 会得到 NaN。
+    expect(typeof after.soldAvgPriceCents).toBe('number')
+    if (before.soldAvgPriceCents === null) {
+      // 此前没有任何样本 ⇒ 现在只有刚插入的这条。
+      expect(after.soldAvgPriceCents).toBe(soldPrice)
+    } else {
+      const expected =
+        (before.soldAvgPriceCents * before.soldSampleCount + soldPrice) / after.soldSampleCount
+      expect(after.soldAvgPriceCents).toBeCloseTo(expected, 6)
+    }
+  })
 })
