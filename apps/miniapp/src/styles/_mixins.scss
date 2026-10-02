@@ -35,9 +35,39 @@
   }
 }
 
-/* 品牌渐变主按钮 */
-@mixin btn-brand {
+/*
+ * 红色数字徽标（#431 任务一 Owner 定版）：红底白字，压在图标 / 玻璃上都能读清。
+ * 形状两档，由调用方模板按位数挂 `is-multi`：
+ * - 1 位数字 = **正圆**（min-width = 高，单数字不撑宽）；
+ * - 2 位数字（含 `99+`）= **胶囊**（高度不变、水平内边距撑宽）。
+ * 圆角统一 999px：正圆时被 CSS 钳到半圆、胶囊时是全圆端 —— 一条规则覆盖两档。
+ * $ring 传分隔环宽度（压在图标上的实例给 4px 白环；贴文字的传 0）。
+ * 数字居中走 flex + line-height 1（与 Owner 定版的 chat__bdg 同一构造）。
+ */
+@mixin num-badge($size: 32px, $font: 24px, $ring: 0) {
+  box-sizing: border-box;
+  min-width: $size;
+  height: $size;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: $font;
+  font-weight: 700;
+  line-height: 1;
+  @if $ring > 0 {
+    box-shadow: 0 0 0 $ring var(--surface);
+  }
+
+  &.is-multi {
+    padding: 0 $size * 0.3;
+  }
+}
+
+/* 品牌渐变主按钮 */
+@mixin btn-brand {  display: flex;
   align-items: center;
   justify-content: center;
   gap: 14px;

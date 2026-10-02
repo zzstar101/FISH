@@ -19,7 +19,7 @@ import Taro from '@tarojs/taro'
 import { useEffect, useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
-import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
+import { hydrateUnread, unreadBadgeText, useUnreadSnapshot } from '@/features/chat/unread'
 import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
 import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import { conversations, unreadNotificationCount } from '@/mock/api'
@@ -136,7 +136,8 @@ const TAB_SLOT_RPX = 130.8
 
 export default function CustomTabBar() {
   const [active, setActive] = useState<TabKey>(() => currentTabKey())
-  const [dot, setDot] = useState(false)
+  /** 「消息」tab 的未读徽标文案（#431 任务二：蓝点 → 红色数字胶囊）；`null` = 不显示 */
+  const [badge, setBadge] = useState<string | null>(null)
   const { status: authStatus, user } = useAuth()
   /** 消息页发布的未读快照（见 `features/chat/unread.ts`）；没进过消息页时为 null */
   const unread = useUnreadSnapshot()
@@ -183,37 +184,43 @@ export default function CustomTabBar() {
   }, [authStatus, userId, demoUnread])
 
   useEffect(() => {
-    // 未登录不亮红点：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上
+    // 未登录不显示徽标：未读数只能来自已登录账号，匿名时亮起等于在「我的」登录引导卡上
     // 展示别人的未读。
     if (authStatus !== 'authed' || !userId) {
-      setDot(false)
+      setBadge(null)
       return
     }
-    // 未读消息 + 未读通知的合计，决定消息 tab 的小红点。
-    // 优先用本次账号的快照 —— 页内「进会话 / 看过通知」清掉的未读，红点同步消除。
+    // 未读消息 + 未读通知的合计，决定消息 tab 的数字胶囊。
+    // 优先用本次账号的快照 —— 页内「进会话 / 逐条已读通知」清掉的未读，徽标同步递减。
     // 快照按账号校验：Chat 页实例被销毁（守卫 reLaunch 兜底重开整栈）时没人清快照，
-    // 不带归属校验就会拿上一个账号的已读视角熄掉新账号的红点。
+    // 不带归属校验就会拿上一个账号的已读视角熄掉新账号的徽标。
     //
-    // 判定走 `badgeShouldLight`（纯函数、有用例）：任何一项为 `null`（「不知道」：
+    // 判定走 `unreadBadgeText`（纯函数、有用例）：有分量 `null`（「不知道」：
     // 列表未就绪 / 加载失败 / 真实接口不可达）时**不下「没有未读」的结论、保持上一帧** ——
-    // 否则一颗本来亮着的点会莫名熄灭，而用户其实还有未读。
+    // 否则一枚本来亮着的徽标会莫名消失，而用户其实还有未读。
     if (unread && unread.ownerId === userId) {
-      setDot(
-        badgeShouldLight({
+      setBadge(
+        unreadBadgeText({
           conversations: unread.conversations,
           notifications: unread.notifications,
-          previous: dot,
+          previous: badge,
         }),
       )
       return
     }
     // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持 fixture 现算
     // 口径，真实构建保持上一帧 —— 等 `hydrateUnread` 的真实结果落地再决定，
-    // 不能用 fixture 先亮一颗再说，也不能因为「还没到」就把已知的红点熄掉。
+    // 不能用 fixture 先亮一个数再说，也不能因为「还没到」就把已知的徽标熄掉。
     if (!demoUnread) return
     const fallback = demoUnread()
-    setDot(fallback.conversations + fallback.notifications > 0)
-  }, [authStatus, userId, unread, demoUnread, dot])
+    setBadge(
+      unreadBadgeText({
+        conversations: fallback.conversations,
+        notifications: fallback.notifications,
+        previous: badge,
+      }),
+    )
+  }, [authStatus, userId, unread, demoUnread, badge])
 
   // 选中态同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
   // 复用实例不重新渲染，靠广播是它唯一能感知「我又被显示」的机会。
@@ -285,7 +292,13 @@ export default function CustomTabBar() {
           >
             <View className="tabbar__icon">
               <Image className="tabbar__img" src={on ? item.iconOn : item.icon} mode="aspectFit" />
-              {item.key === 'chat' && dot ? <View className="tabbar__dot" /> : null}
+              {item.key === 'chat' && badge ? (
+                // 未读数字胶囊（#431 任务二）：1 位 = 正圆、2 位（含 99+）= 胶囊，
+                // 形状规则见 index.scss 的 num-badge
+                <View className={`tabbar__n num${badge.length > 1 ? ' is-multi' : ''}`}>
+                  {badge}
+                </View>
+              ) : null}
             </View>
             <Text className="tabbar__label">{item.label}</Text>
           </View>

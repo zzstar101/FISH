@@ -83,12 +83,13 @@
   }
 }
 
-/* 计数：等宽字体品牌色（「全部」挂会话总数；「交易 / 许愿」挂分类未读和；「通知」挂通知未读数） */
+/*
+ * 未读徽标（#431 任务二）：原品牌蓝数字字体换成红底白字徽标（形状规则见
+ * `styles/_mixins` 的 num-badge：1 位 = 正圆、2 位含 99+ = 胶囊，位数类由 tsx 挂）。
+ * 「全部」= 会话未读数和；「通知」= 通知未读数 —— 胶囊数据一律未读口径。
+ */
 .chat__tab-n {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--brand);
+  @include num-badge(30px, 20px);
 }
 
 /* 右：全部已读小圆钮。图标 = Owner 提供的食盒图去底两色（accent / muted），
@@ -382,8 +383,8 @@
 
 /**
  * 原 `pages/notifications` 的列表样式随页面并入这里（页面已删除）。页外壳 / 页头 /
- * 「全部已读」钮不再需要；「切进 tab 即全部置读」（见 chat/index.tsx 的 `notifsViewed`），
- * 未读加粗、未读圆点与 is-unread 冷底也不再出现，一并删去。
+ * 「全部已读」钮不再需要。#431 任务二起未读态回归：未读条目图标右上挂红点
+ * （`.notif__dot`，点击条目才消）。
  * 类名保持 `notif__` 前缀：weapp 页面样式按页隔离，与 chat 自身的类不冲突。
  * 尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
  */
@@ -411,6 +412,7 @@
 }
 
 .notif__ic {
+  position: relative;
   flex: 0 0 auto;
   width: 68px;
   height: 68px;
@@ -425,6 +427,19 @@
 .notif__ic-img {
   width: 38px;
   height: 38px;
+}
+
+/* 未读红点（#431 任务二）：未读通知挂在图标右上，点击条目即消失（服务端 readAt 权威） */
+.notif__dot {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 3px solid var(--bg);
 }
 
 .notif__body {

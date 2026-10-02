@@ -781,8 +781,10 @@ export type ProfileView = {
   stats: ProfileStats
   listings: MockListing[]
   wishes: MockWish[]
-  /** 待面交笔数（设计稿「待面交 N」入口文案） */
-  pendingMeetup: number
+  /** 待面交笔数 —— 卖家视角（图标栏「卖出」格徽标，#431 任务二） */
+  pendingMeetupSell: number
+  /** 待面交笔数 —— 买家视角（图标栏「买入」格徽标，#431 任务二） */
+  pendingMeetupBuy: number
   /** 全部买卖笔数 */
   orderCount: number
   /**
@@ -803,7 +805,14 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       stats: profile.stats,
       listings: toMockListings(profile.listings, now),
       wishes: profile.wishes.map(toMockWish),
-      pendingMeetup: profile.transactions.filter((tx) => tx.status === 'PENDING_MEETUP').length,
+      // 待面交按 role 拆两份（#431 任务二：「卖出」「买入」格各挂各的）。
+      // 契约刻意不给买卖条数、由前端按 role 分组（profile/schema.ts 的冻结结论），同口径派生。
+      pendingMeetupSell: profile.transactions.filter(
+        (tx) => tx.role === 'seller' && tx.status === 'PENDING_MEETUP',
+      ).length,
+      pendingMeetupBuy: profile.transactions.filter(
+        (tx) => tx.role === 'buyer' && tx.status === 'PENDING_MEETUP',
+      ).length,
       orderCount: profile.transactions.length,
       // 关注（#188）有端点：`stats.followingCount` 与「我的关注」列表同源（同一张表同一方向）。
       followCount: profile.stats.followingCount,
@@ -851,7 +860,12 @@ function demoProfile(): ProfileView {
     },
     listings: MY_LISTINGS.map((item) => item.listing),
     wishes,
-    pendingMeetup: TRANSACTIONS.filter((tx) => tx.status === 'PENDING_MEETUP').length,
+    pendingMeetupSell: TRANSACTIONS.filter(
+      (tx) => tx.role === 'seller' && tx.status === 'PENDING_MEETUP',
+    ).length,
+    pendingMeetupBuy: TRANSACTIONS.filter(
+      (tx) => tx.role === 'buyer' && tx.status === 'PENDING_MEETUP',
+    ).length,
     orderCount: TRANSACTIONS.length,
     favoritesCount: 8,
     historyCount: 24,

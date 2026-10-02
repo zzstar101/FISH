@@ -119,13 +119,6 @@ export default function Chat() {
    * 扫描有请求上限（`MAX_PROPOSAL_SCANS`）：超出的会话按「不知道」处理，不显示胶囊。
    */
   const [txSignals, setTxSignals] = useState<Map<string, TransactionSystemEvent | null>>(new Map())
-  /**
-   * 通知的已读口径：**切进「通知」tab 即视为看过**（Owner 拍板），未读角标随之清零，
-   * 同时把当前已加载的未读条目逐条真实标记已读（声明式 effect，见下方「已读回写」）——
-   * 服务端与本地同源后，重进页面 / 重启未读不再复活。
-   * 原「全部已读」按钮因此没有存在的必要（后端本就没有 mark-all-read 端点）。
-   */
-  const [notifsViewed, setNotifsViewed] = useState(false)
 
   /**
    * 加载代次：并发加载（快速换账号 / 连点重试）时只有最后一次的响应落地。
@@ -138,8 +131,8 @@ export default function Chat() {
 
   /**
    * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
-   * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `items` / `notifs` /
-   * `notifsViewed` 都是上一个账号的视角，必须在**同一个 commit 内**换成空值。
+   * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `items` / `notifs`
+   * 都是上一个账号的视角，必须在**同一个 commit 内**换成空值。
    * 写成 effect 里 setState 不行 —— 那要到下一帧才生效，兄弟 effect
    * （发布快照 / 已读回写）在本帧仍读到旧值：轻则把上个账号的已读视角发进全局
    * 快照（新账号的红点被误熄），重则拿新账号的 cookie 去 POST 上个账号的通知 id。
@@ -162,7 +155,6 @@ export default function Chat() {
     setNotifs([])
     setNotifsReady(false)
     setNotifsFailed(false)
-    setNotifsViewed(false)
     setTxMap(new Map())
     setTxSignals(new Map())
   }
@@ -386,18 +378,16 @@ export default function Chat() {
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   /**
-   * 通知未读数（#23 `GET /notifications/unread-count` 的语义）：切进「通知」tab 即清零。
+   * 通知未读数（#23 `GET /notifications/unread-count` 的语义）。#431 任务二起
+   * **逐条点击才已读**（见 `openNotif`）：进「通知」tab 不再整表清零，此数随
+   * 逐条已读递减，页内胶囊与底栏徽标同步。
    *
    * 列表**未就绪 / 加载失败**时是「不知道」——记 0（不显示通知侧的未读），不拿 mock
    * fixture 计数顶替：那会与底栏的快照口径分叉（底栏对这些状态按「无已知未读」算），
    * 也会把「不知道」画成一个具体的数字。
    */
   const unreadNotifications =
-    notifsReady && !notifsFailed
-      ? notifsViewed
-        ? 0
-        : notifs.filter((item) => item.readAt === null).length
-      : 0
+    notifsReady && !notifsFailed ? notifs.filter((item) => item.readAt === null).length : 0
 
   /**
    * 会话区的渲染形态。判定抽在 `./list-view` 里（纯函数 + 用例）：这里只把三个
@@ -409,8 +399,9 @@ export default function Chat() {
   const unreadItems = useMemo(() => items.filter((item) => item.unreadCount > 0), [items])
 
   /**
-   * 会话未读条数和：底栏「消息」红点的会话部分。真实数据里没有「系统会话」
-   * （契约的会话就是买卖双方一对一），所以直接全量求和，不需要排除项。
+   * 会话未读条数和：底栏「消息」徽标与会话行「全部」tab 徽标的会话部分（#431 任务二）。
+   * 真实数据里没有「系统会话」（契约的会话就是买卖双方一对一），所以直接全量求和，
+   * 不需要排除项。
    */
   const conversationUnread = useMemo(
     () => items.reduce((sum, item) => sum + item.unreadCount, 0),
@@ -418,7 +409,7 @@ export default function Chat() {
   )
 
   /**
-   * 未读快照发布：底栏「消息」红点与页内角标同源（见 `features/chat/unread.ts`）。
+   * 未读快照发布：底栏「消息」徽标与页内角标同源（见 `features/chat/unread.ts`）。
    *
    * `conversations` 与 `notifications` 在「不知道」（列表未就绪 / 加载失败）时都发
    * `null`，底栏按「无已知未读」算 —— 与页内同口径。会话这一项尤其不要发 0：
@@ -442,39 +433,6 @@ export default function Chat() {
     conversationUnread,
     unreadNotifications,
   ])
-
-  /**
-   * 已读回写是**声明式**的：只要「通知」tab 被看过（`notifsViewed`，粘性状态）
-   * 且列表已就绪，就把当前已加载的未读条目逐条真实标记已读
-   * （幂等 `POST /notifications/:id/read`）。门禁用 `notifsViewed` 而**不是**
-   * `filter === 'system'`：弱网下「点进 tab → 列表还没到就切回其它 tab」的列表
-   * 到达时已不在通知 tab，用当前 tab 当门禁就会一条都不标，而角标已按已读清零 ——
-   * 页内与服务端分叉，重进页面未读"复活"。
-   *
-   * 只标已加载的条目（契约无 mark-all-read）。门禁必须含 `authed`：登出后才
-   * resolve 的迟到列表不能以匿名身份发 N 个必然 401 的 POST。回写结果同样要过
-   * 代次守卫：换账号 / 列表重载之后迟到的响应不得写进当前列表（mock / 演示构建里
-   * 各账号的 fixture id 相同，串号会确定性地发生）。成功的条目把本地 `readAt`
-   * 补上；失败的保持未读 —— 本批只要有一条成功，列表变化会立刻再跑一轮
-   * （待标条数单调递减，有界），整批失败则等列表下次变化（错误态的重试钮成功 /
-   * 页面实例重建）再试。
-   */
-  useEffect(() => {
-    if (authStatus !== 'authed' || !notifsViewed || !notifsReady) return
-    const pending = notifs.filter((item) => item.readAt === null)
-    if (pending.length === 0) return
-    const epoch = notifEpoch.current
-    void markNotificationsRead(pending).then((markedIds) => {
-      if (epoch !== notifEpoch.current || markedIds.size === 0) return
-      setNotifs((prev) =>
-        prev.map((item) =>
-          item.readAt === null && markedIds.has(item.id)
-            ? { ...item, readAt: new Date().toISOString() }
-            : item,
-        ),
-      )
-    })
-  }, [authStatus, notifsViewed, notifs, notifsReady])
 
   /**
    * 「全部已读」= 逐条真实 `POST /conversations/:id/read`（契约没有 mark-all-read 端点）。
@@ -522,14 +480,31 @@ export default function Chat() {
     void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
   }
 
-  /** tab 切换：进「通知」tab 即视为已读（角标清零；真实 mark-read 由上方 effect 声明式补标） */
+  /** tab 切换：#431 任务二起进「通知」tab 不再整表清零 —— 未读逐条点击才消（见 `openNotif`） */
   const chooseFilter = (key: ChatFilter) => {
     setFilter(key)
-    if (key === 'system') setNotifsViewed(true)
   }
 
-  /** 通知条目点击：只负责按 `target` 跳转（清零是 tab 级的，见 `chooseFilter`） */
+  /**
+   * 通知条目点击（#431 任务二）：**红点随点击消失** —— 未读条目先乐观置已读（本地
+   * `readAt` 立即落位，页内胶囊 / 底栏徽标同步递减），再幂等
+   * `POST /notifications/:id/read` 落服务端；回写失败的条目回滚回未读（红点复现），
+   * 服务端没记上就不冒充已读。跳转行为不变（按 `target` 分派）。
+   */
   const openNotif = (item: MockNotification) => {
+    if (item.readAt === null) {
+      const epoch = notifEpoch.current
+      const readAt = new Date().toISOString()
+      setNotifs((prev) =>
+        prev.map((n) => (n.id === item.id && n.readAt === null ? { ...n, readAt } : n)),
+      )
+      void markNotificationsRead([item]).then((markedIds) => {
+        if (epoch !== notifEpoch.current || markedIds.has(item.id)) return
+        setNotifs((prev) =>
+          prev.map((n) => (n.id === item.id && n.readAt === readAt ? { ...n, readAt: null } : n)),
+        )
+      })
+    }
     if (item.target?.kind === 'listing') {
       void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.target.listingId}` })
       return
@@ -602,8 +577,11 @@ export default function Chat() {
             <View className="chat__tabs">
               {FILTERS.map((item) => {
                 const on = item.key === filter
-                /** 各 tab 的数字：「全部」挂会话总数；「通知」挂通知未读数（#23，切进 tab 即清零） */
-                const tabBadge = item.key === 'all' ? items.length : unreadNotifications
+                /**
+                 * 各 tab 的徽标数（#431 任务二：胶囊数据一律未读口径）——
+                 * 「全部」挂会话未读数和（原为会话总数）；「通知」挂通知未读数（#23 语义不变）
+                 */
+                const tabBadge = item.key === 'all' ? conversationUnread : unreadNotifications
                 return (
                   <View
                     key={item.key}
@@ -613,7 +591,10 @@ export default function Chat() {
                   >
                     <Text>{item.label}</Text>
                     {tabBadge > 0 ? (
-                      <Text className="chat__tab-n num">{badgeText(tabBadge)}</Text>
+                      // 2 位以上转胶囊（形状规则见 index.scss 的 num-badge）
+                      <Text className={`chat__tab-n num${tabBadge > 9 ? ' is-multi' : ''}`}>
+                        {badgeText(tabBadge)}
+                      </Text>
                     ) : null}
                   </View>
                 )
@@ -644,6 +625,8 @@ export default function Chat() {
               <View key={item.id} className="notif__item" onClick={() => openNotif(item)}>
                 <View className="notif__ic">
                   <Image className="notif__ic-img" src={TONE_ICON[item.tone]} mode="aspectFit" />
+                  {/* 未读红点（#431 任务二）：`readAt` 权威，点击条目即消失 */}
+                  {item.readAt === null ? <View className="notif__dot" /> : null}
                 </View>
                 <View className="notif__body">
                   <Text className="notif__body-title">{item.title}</Text>
