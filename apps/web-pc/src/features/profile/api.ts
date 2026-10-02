@@ -102,6 +102,22 @@ export async function setListingStatus(
   return ListingDetailSchema.parse(await apiRequest(path, { method: 'POST' }))
 }
 
+/**
+ * 物理删除商品：成功是 204 无响应体（`apiRequest` 对 204 回 `null`）。
+ *
+ * **不是「下架」的别名** —— 下架可重新上架，删除不可恢复。
+ * **也不是任意商品都能删**：服务端只放行「未过审且没有交易记录」的商品
+ * （判据见 `apps/api/src/modules/listings/service.ts` 的 `deleteListing`），
+ * 其余一律 409 `LISTING_NOT_DELETABLE`。端上按 `isDeletableListing` 预筛，
+ * 但「有没有交易记录」是客户端看不到的那一条，仍可能 409 —— 失败必须透传，不能当成功。
+ *
+ * 路径复用 `LISTING_ROUTES.detail(id)`：`LISTING_ROUTES` 没有单独的 delete 常量，
+ * 小程序侧同样是 `detail(id)` + DELETE（`apps/miniapp/src/features/listing/api.ts`）。
+ */
+export async function deleteListing(id: string): Promise<void> {
+  await apiRequest(LISTING_ROUTES.detail(id), { method: 'DELETE' })
+}
+
 export async function fetchTransactions(query: {
   role?: TransactionRole
   status?: OrderStatusFilter
@@ -238,6 +254,29 @@ export function proposalDecisionError(error: unknown): { message: string; refres
     return { message: error.message, refresh: false }
   }
   return { message: '操作失败，请重试', refresh: false }
+}
+
+/**
+ * 删除商品失败的可执行分支。
+ *
+ * `LISTING_NOT_DELETABLE` **直接用服务端文案**：服务端那句（「只有未通过审核且没有交易记录的商品
+ * 可以删除」）已经是给人看的一句话，端上改写只会丢信息。三种失败都要求刷新列表 ——
+ * 该码既可能来自「本来就不能删」，也可能来自「刚被并发买家拍下」这类漂移。
+ */
+export function listingDeleteError(error: unknown): { message: string; refresh: boolean } {
+  if (error instanceof ApiError) {
+    if (error.code === 'LISTING_NOT_DELETABLE') {
+      return { message: error.message, refresh: true }
+    }
+    if (error.code === 'NOT_LISTING_OWNER') {
+      return { message: '只能删除自己的商品，正在刷新', refresh: true }
+    }
+    if (error.code === 'LISTING_NOT_FOUND') {
+      return { message: '商品不存在或已被删除，正在刷新', refresh: true }
+    }
+    return { message: error.message, refresh: false }
+  }
+  return { message: '删除失败，请稍后重试', refresh: false }
 }
 
 /** 商品上下架失败的可执行分支：状态漂移必须刷新，而不是把失败当成功。 */

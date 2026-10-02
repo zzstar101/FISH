@@ -2,10 +2,12 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { ApiError } from '../../lib/api-client'
 import {
   acceptTransaction,
+  deleteListing,
   fetchMeetupTokenStatus,
   fetchTransaction,
   issueMeetupToken,
   listingActionError,
+  listingDeleteError,
   myListingsPath,
   profileUpdateErrorView,
   proposalDecisionError,
@@ -123,6 +125,20 @@ describe('profile api paths', () => {
       '/transactions?limit=50&role=seller&cursor=next',
     )
   })
+
+  test('listing delete sends DELETE /listings/:id and tolerates the 204', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({ url, method: init?.method ?? 'GET' })
+      // 删除成功是 204 无响应体：解析路径必须容得下空 body。
+      return new Response(null, { status: 204 })
+    }) as unknown as typeof fetch
+
+    await expect(deleteListing(LISTING_ID)).resolves.toBeUndefined()
+
+    expect(calls).toEqual([{ url: `/api/listings/${LISTING_ID}`, method: 'DELETE' }])
+  })
 })
 
 describe('profile api errors', () => {
@@ -150,6 +166,29 @@ describe('profile api errors', () => {
     ).toEqual({
       message: '订单状态已变化，正在刷新最新状态',
       refresh: true,
+    })
+  })
+
+  test('delete failures surface the server wording and never claim success', () => {
+    // 409 直接用服务端那句（「只有未通过审核且没有交易记录的商品可以删除」），端上不改写
+    expect(
+      listingDeleteError(
+        new ApiError('LISTING_NOT_DELETABLE', 409, '只有未通过审核且没有交易记录的商品可以删除'),
+      ),
+    ).toEqual({ message: '只有未通过审核且没有交易记录的商品可以删除', refresh: true })
+
+    expect(
+      listingDeleteError(new ApiError('NOT_LISTING_OWNER', 403, '只能操作自己的商品')),
+    ).toEqual({ message: '只能删除自己的商品，正在刷新', refresh: true })
+
+    expect(listingDeleteError(new ApiError('LISTING_NOT_FOUND', 404, '商品不存在'))).toEqual({
+      message: '商品不存在或已被删除，正在刷新',
+      refresh: true,
+    })
+
+    expect(listingDeleteError(new Error('network'))).toEqual({
+      message: '删除失败，请稍后重试',
+      refresh: false,
     })
   })
 

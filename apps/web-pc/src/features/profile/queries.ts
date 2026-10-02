@@ -9,6 +9,7 @@ import {
   acceptTransaction,
   cancelTransaction,
   confirmTransaction,
+  deleteListing,
   fetchMeetupTokenStatus,
   fetchMyListings,
   fetchProfile,
@@ -161,6 +162,32 @@ export function useSetListingStatus(ownerId: string) {
       invalidateListingLists(queryClient, ownerId)
       invalidateListingViews(queryClient)
       invalidateChatSurfaces(queryClient)
+    },
+  })
+}
+
+/**
+ * 删除商品。**不是「下架」** —— 下架可重新上架，删除不可恢复。
+ *
+ * 成功后详情缓存要**移除而不是覆盖**：商品行已经不存在，`GET /listings/:id` 之后只会 404，
+ * 留一份旧详情会让「返回该商品详情页」闪出一条已删除的商品。
+ *
+ * 待确认推导也要失效：提案不落库、只是会话里的 SYSTEM 消息，所以一条挂着提案的商品
+ * 可能满足删除条件（无交易记录）—— 不失效的话「待确认」里会留下一条点不动的幽灵申请。
+ */
+export function useDeleteListing(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: deleteListing,
+    onMutate: captureSession,
+    onSuccess: (_result, id, context) => {
+      if (!isSessionCurrent(context)) return
+      queryClient.removeQueries({ queryKey: listingDetailQueryKey(id, ownerId) })
+      invalidateProfileSummary(queryClient, ownerId)
+      invalidateListingLists(queryClient, ownerId)
+      invalidateListingViews(queryClient)
+      invalidateChatSurfaces(queryClient)
+      invalidatePending(queryClient, ownerId)
     },
   })
 }
