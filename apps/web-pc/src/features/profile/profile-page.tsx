@@ -14,6 +14,7 @@ import {
   Pencil,
   ShoppingBag,
   Tags,
+  UsersRound,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
@@ -101,7 +102,7 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
         </div>
       </Card>
 
-      <section aria-label="我的统计" className="grid grid-cols-3 gap-4">
+      <section aria-label="我的统计" className="grid grid-cols-4 gap-4">
         <StatCard icon={PackageOpen} label="在售商品" value={stats.activeListings} to="/mylist" />
         <StatCard icon={Heart} label="活跃愿望" value={stats.activeWishes} to="/wish" />
         <StatCard
@@ -110,6 +111,7 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           value={stats.completedTransactions}
           to="/orders"
         />
+        <StatCard icon={UsersRound} label="关注" to="/following" value={stats.followingCount} />
       </section>
 
       <section className="grid grid-cols-2 gap-4">
@@ -189,7 +191,7 @@ function StatCard({
   icon: typeof PackageOpen
   label: string
   value: number
-  to: '/mylist' | '/wish' | '/orders'
+  to: '/mylist' | '/wish' | '/orders' | '/following'
 }) {
   return (
     <Link to={to}>

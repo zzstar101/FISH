@@ -1,12 +1,13 @@
 import { LiquidGlassLayer } from '@fish/ui/liquid-glass'
 import { Link } from '@tanstack/react-router'
-import { Compass, Heart, Home, MessageCircle, Search, UserRound } from 'lucide-react'
+import { Compass, Heart, Home, MessageCircle, Search, UserRound, UsersRound } from 'lucide-react'
 
 const NAV_ITEMS = [
   { to: '/', label: '首页', Icon: Home, exact: true },
   { to: '/search', label: '搜索', Icon: Search, exact: false },
   { to: '/wish', label: '许愿墙', Icon: Heart, exact: false },
   { to: '/messages', label: '消息', Icon: MessageCircle, exact: false },
+  { to: '/following', label: '关注', Icon: UsersRound, exact: false },
   { to: '/profile', label: '我的', Icon: UserRound, exact: false },
 ] as const
 
@@ -55,7 +56,7 @@ export function SideNav() {
         <p className="mt-2 text-ink-2 text-xs leading-5">
           当前已接通登录、PC Web
           外壳、首页商品流、搜索筛选、商品详情、消息中心、发布、通知、个人中心与订单、许愿墙与匹配、
-          他人主页、举报与我的举报。
+          我的关注、他人主页、举报与我的举报。
         </p>
       </div>
     </aside>
