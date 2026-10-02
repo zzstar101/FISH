@@ -372,27 +372,41 @@
   height: 60px;
 }
 
-/* 右上角数量圆点（Owner 修订）：红底白字的小圆点，纯 --danger 不压棕，
-   白环让它压在蓝色图标上也读得清；超过 99 显示 99+（见 index.tsx） */
+/*
+ * 右上角数量徽标（#431 任务一 Owner 定版）：红底白字，纯 --danger 不压棕，
+ * 白环让它压在蓝色图标上也读得清；超过 99 显示 99+（见 index.tsx）。
+ *
+ * 形状两档，由 tsx 按位数挂 `is-multi`：
+ * - 1 位数字 = **正圆**（宽=高、50% 圆角）；
+ * - 2 位数字（含 `99+`）= **胶囊**（高度不变，水平内边距撑宽、全圆角）。
+ * 旧版 `min-width + padding 0 6` 会拉出 36×30 的椭圆（两位数时直边只剩几像素），
+ * 已废。数字居中走 flex（与 Owner 2026-09-29 定版的 `chat__bdg` 同一构造：
+ * line-height 1 + 等宽字体，比例 24/32 ≈ 30/38）。
+ */
 .profile__cell-dot {
   position: absolute;
-  top: -10px;
-  right: -12px;
-  min-width: 30px;
-  height: 30px;
-  padding: 0 6px;
+  top: -12px;
+  right: -14px;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r-pill);
+  border-radius: 50%;
   background: var(--danger);
   color: #fff;
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.01em;
-  box-sizing: border-box;
   box-shadow: 0 0 0 4px var(--surface);
+
+  &.is-multi {
+    width: auto;
+    min-width: 32px;
+    padding: 0 10px;
+    border-radius: 32px;
+  }
 }
 
 .profile__cell-label {
