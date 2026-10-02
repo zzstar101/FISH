@@ -107,7 +107,8 @@ export async function findEmbedding(
  * （handler 记为 `stale`），而不是当成写入成功。
  *
  * **但这层 CAS 不是"旧 job 永不覆盖新 embedding"的充分条件**（#328 复审 blocker）：版本号来自
- * 应用侧 `new Date()`（JS `Date` 只有**毫秒**分辨率），同一毫秒内的两次内容更新会拿到**完全相同**
+ * 数据库 `now()`（M4 时钟修复后全仓统一写入点；`timestamptz` 只到**毫秒**分辨率，且同一事务内
+ * 是冻结的），同一毫秒内的两次内容更新会拿到**完全相同**
  * 的版本号，此时 `excluded >= embeddings` 恒成立，晚到的旧写入照样能覆盖新内容。把条件改成
  * 严格 `>` 也不对——同一毫秒的**新**内容反而会写不进去。真正的先后判定必须靠"内容指纹是否仍是
  * 当前内容"，由调用方在**同一条事务里锁住实体行**复检（见
@@ -134,12 +135,14 @@ export async function saveEmbedding(
 
   // `updated_at` 必须显式写：`$onUpdate` 只挂在 drizzle 的 `.update()` 上，onConflict 的
   // `set` 走的是原始 insert 路径（与 `apps/worker/src/jobs/queue.ts` 的 settle 同一注意点）。
+  // 取 `now()`（DB 钟）而不是 `new Date()`：本文件所有版本比较都建立在"同一口钟"上，
+  // 混用应用钟会让刚写入的 `updated_at` 反而小于库里的旧值（见 `schema/common.ts` 的说明）。
   const patch = {
     dimensions: input.dimensions,
     contentHash: input.contentHash,
     embedding: input.embedding,
     sourceUpdatedAt: input.sourceUpdatedAt,
-    updatedAt: new Date(),
+    updatedAt: sql`now()`,
   }
 
   // CAS 条件里必须用 `excluded`（本次要写入的那一行）与目标表列比较：`DO UPDATE ... WHERE`
@@ -199,7 +202,8 @@ export async function hasEmbeddingFromOtherModel(
 /**
  * 内容一变就让旧向量立即不可召回（#333 复审 blocker 的**主判据**）。
  *
- * **为什么不能用时间戳证明新鲜**：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），
+ * **为什么不能用时间戳证明新鲜**：实体 `updated_at` 由数据库 `now()` 写入（M4 时钟修复后全仓统一；
+ * 毫秒分辨率，且同一事务内冻结），
  * 同一毫秒内的两次编辑会得到完全相同的版本号——#328 的并发用例已经证明"不同内容可以有相同的
  * `updatedAt`"。时间戳相等推不出内容相同，所以候选侧需要一个**按内容**的判据。
  *
@@ -426,7 +430,7 @@ export async function refreshEmbeddingSourceVersion(
 ): Promise<boolean> {
   const rows = await db
     .update(embeddings)
-    .set({ sourceUpdatedAt: input.sourceUpdatedAt, updatedAt: new Date() })
+    .set({ sourceUpdatedAt: input.sourceUpdatedAt, updatedAt: sql`now()` })
     .where(
       and(
         entityFilter(input.entity),

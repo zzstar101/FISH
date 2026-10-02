@@ -580,14 +580,12 @@ async function priorListingStatus(
  * 治理动作是**待审商品转 APPROVED 的唯一入口**（`moderation_status` 变化后匹配才允许进入
  * 链路），所以这里必须带上 `EMBED_LISTING`：否则审核通过的商品永远不会生成向量，
  * M2 的语义召回对它直接失效。
+ *
+ * **顺序即语义（#322 M4）**：`EMBED_LISTING` 在前、`MATCH_LISTING` 在后，理由与
+ * `enqueueListingJobsWith` 一致（同事务 `run_at` 相同 ⇒ 领取序 = `newId()` 序 = 插入序；
+ * 反序会让首轮 MATCH 跑在向量落库前、永久落 v1）。
  */
 async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
-  await executor.insert(jobs).values({
-    id: newId(),
-    type: 'MATCH_LISTING',
-    payload: jsonParam({ listingId }),
-  })
-
   await executor
     .insert(jobs)
     .values({
@@ -596,6 +594,12 @@ async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: strin
       payload: jsonParam({ listingId }),
     })
     .onConflictDoNothing()
+
+  await executor.insert(jobs).values({
+    id: newId(),
+    type: 'MATCH_LISTING',
+    payload: jsonParam({ listingId }),
+  })
 }
 
 /**

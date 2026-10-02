@@ -748,7 +748,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
         const rows = await tx
           .update(listings)
-          .set({ ...plan.fields, updatedAt: new Date() })
+          .set({ ...plan.fields, updatedAt: sql`now()` })
           .where(eq(listings.id, input.id))
           .returning({ id: listings.id })
         if (rows.length === 0) return { kind: 'not-found' as const }
@@ -822,7 +822,7 @@ export function createSqlListingStore(db: Db): ListingStore {
       return db.transaction(async (tx) => {
         const rows = await tx
           .update(listings)
-          .set({ status: input.to, updatedAt: new Date() })
+          .set({ status: input.to, updatedAt: sql`now()` })
           .where(
             and(
               eq(listings.id, input.id),
@@ -942,8 +942,9 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 /**
  * 内容一变就让该商品已有的向量行当场失效（#322 M2 复审 blocker）。
  *
- * 为什么不能只靠时间戳：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），同一毫秒内
- * 的两次编辑内容不同却版本相同——时间戳相等推不出内容相同（#328 的并发用例已确立）。所以判据
+ * 为什么不能只靠时间戳：实体 `updated_at` 是毫秒分辨率（数据库 `now()`，见
+ * `packages/db/src/schema/common.ts`），同一毫秒内的两次编辑内容不同却版本相同——时间戳相等
+ * 推不出内容相同（#328 的并发用例已确立）。所以判据
  * 必须是**内容**：用当前字段重算指纹，删掉指纹不符的向量行（`pruneStaleEmbeddings`）。
  *
  * 调用点全部与实体改动同事务，于是"写提交"与"旧向量不可召回"是同一个原子事件，不依赖 worker
@@ -974,10 +975,18 @@ async function invalidateStaleEmbeddingWith(
 }
 
 /**
- * 写 `MATCH_LISTING` + `EMBED_LISTING` 两条 job（#322 M1 起成对投递）。
+ * 写 `EMBED_LISTING` + `MATCH_LISTING` 两条 job（#322 M1 起成对投递）。
  *
  * 为什么成对：`EMBED_LISTING` 的输入（标题/描述/分类）与 `MATCH_LISTING` 的打分输入是同一批字段，
  * 凡是要重算匹配的写操作，语义向量同样可能过期；分两处投递迟早会漏掉一边。
+ *
+ * **顺序即语义（#322 M4）**：`EMBED_LISTING` 必须排在 `MATCH_LISTING` **前面**。队列按
+ * `(run_at, id)` 领取（`claimNext`），同一事务里两行的 `run_at` 都是事务时间（同一个 `now()`），
+ * `id` 是 `newId()` = `Bun.randomUUIDv7()`（同毫秒单调递增，实测 20 万次调用零逆序）⇒
+ * 「插入序 = id 序 = 领取序」是确定的。反过来把 MATCH 排前面就等于：第一轮 MATCH 跑在向量落库前，
+ * 引擎按 M2 降级契约落一条 `ranking_version = 1` 的行，而 `EMBED_*` 跑完不会回头重投 MATCH
+ * （`apps/worker/src/jobs/embedding/handlers.ts` 没有这个副作用）⇒ 该实体**永久**停在 v1，
+ * 直到下一次编辑。这不是风格问题。
  *
  * #322 M2 复审起，投递前先在同一执行器（调用点的事务）里失效旧内容向量：见
  * `invalidateStaleEmbeddingWith()`。
@@ -997,12 +1006,6 @@ async function enqueueListingJobsWith(
 ): Promise<void> {
   await invalidateStaleEmbeddingWith(executor, listingId)
 
-  await executor.insert(jobs).values({
-    id: newId(),
-    type: 'MATCH_LISTING',
-    payload: jsonParam({ listingId }),
-  })
-
   await executor
     .insert(jobs)
     .values({
@@ -1011,4 +1014,10 @@ async function enqueueListingJobsWith(
       payload: jsonParam({ listingId }),
     })
     .onConflictDoNothing()
+
+  await executor.insert(jobs).values({
+    id: newId(),
+    type: 'MATCH_LISTING',
+    payload: jsonParam({ listingId }),
+  })
 }

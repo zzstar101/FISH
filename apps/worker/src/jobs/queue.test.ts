@@ -250,7 +250,7 @@ async function withRunningJob(
 
 test('启动回收把未达上限的 RUNNING job 放回 PENDING，之后可被重新领取并跑完', async () => {
   await withRunningJob({ attempts: 1 }, async (jobId, queue, isolated) => {
-    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 1, failed: 0 })
+    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 1, failed: 0, failedIds: [] })
     // `locked_at` 必须一起清掉：这行已经不再被任何 worker 持有。
     expect(await jobRow(jobId, isolated)).toMatchObject({
       status: 'PENDING',
@@ -272,7 +272,13 @@ test('启动回收把未达上限的 RUNNING job 放回 PENDING，之后可被�
 
 test('启动回收把已达上限的 RUNNING job 直接置 FAILED，并写明原因', async () => {
   await withRunningJob({ attempts: DEFAULT_MAX_ATTEMPTS }, async (jobId, queue, isolated) => {
-    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 0, failed: 1 })
+    // `failedIds` 是给调用方补投用的（`index.ts` → `jobs/embedding/requeue.ts`）：只有 id，
+    // 才能对"启动时被判死的行"做和主循环 `FAILED` 一样的事后处理。
+    expect(await queue.recoverStaleClaims()).toEqual({
+      requeued: 0,
+      failed: 1,
+      failedIds: [jobId],
+    })
     // `locked_at` 同样要清：已 FAILED 的行不应看起来“还被持有”。
     expect(await jobRow(jobId, isolated)).toMatchObject({
       status: 'FAILED',
@@ -282,7 +288,7 @@ test('启动回收把已达上限的 RUNNING job 直接置 FAILED，并写明原
     })
 
     // 已经不是 RUNNING，再回收一次不会把它拉回队列（也不会重复计数到 failed）。
-    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 0, failed: 0 })
+    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 0, failed: 0, failedIds: [] })
     expect(await jobRow(jobId, isolated)).toMatchObject({
       status: 'FAILED',
       attempts: DEFAULT_MAX_ATTEMPTS,
@@ -318,6 +324,7 @@ test('启动回收只动 RUNNING 行，不碰 PENDING / DONE', async () => {
     expect(await createJobQueue(isolated, { handlers: {} }).recoverStaleClaims()).toEqual({
       requeued: 0,
       failed: 0,
+      failedIds: [],
     })
     expect(await jobRow(pendingId, isolated)).toMatchObject({ status: 'PENDING', attempts: 1 })
     expect(await jobRow(doneId, isolated)).toMatchObject({ status: 'DONE', attempts: 1 })

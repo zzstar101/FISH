@@ -65,6 +65,9 @@ test('成功路径：POST 到 baseUrl 去尾斜杠 + /embeddings，body 带 mode
   expect(JSON.parse(String(request?.init?.body))).toEqual({
     model: 'live-model-v1',
     input: ['苹果降噪耳机', 'AirPods Pro 2'],
+    // #322 M4：显式要维度。省掉它时兼容端点会按模型默认返回（百炼 v4 = 1024），
+    // 请求 200 但每条向量都在 readEmbeddings 判 dimension_mismatch。
+    dimensions: EMBEDDING_DIMENSIONS,
   })
   // 超时必须显式挂在请求上，否则一个卡住的上游会占住 worker 的整个轮询循环。
   expect(request?.init?.signal).toBeInstanceOf(AbortSignal)

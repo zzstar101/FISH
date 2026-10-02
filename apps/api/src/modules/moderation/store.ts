@@ -161,6 +161,22 @@ export function createSqlModerationStore(
                 ${input.decision}::moderation_decision, ${jsonParam([])}, ${jsonParam([])},
                 ${record.rule_version}, 'MANUAL')
       `)
+      // 人工放行同样要刷新语义向量（#322 M1）：这是待审商品进入匹配链路的入口之一，
+      // 与 `governance` / `listings store` 的成对投递保持同一条规则。
+      // `ON CONFLICT DO NOTHING` 对应 `EMBED_LISTING` 的部分唯一索引（待跑时再投不算错误）。
+      //
+      // **顺序即语义（#322 M4）**：`EMBED_LISTING` 必须先于 `MATCH_LISTING` 插入。同事务里两条
+      // job 的 `run_at` 相同，队列按 `(run_at, id)` 领取，而 `id = newId()` 同毫秒单调递增 ⇒
+      // 领取序 = 插入序。反序会让首轮 MATCH 跑在向量落库前、按 M2 降级契约永久落 v1。
+      await tx
+        .insert(jobs)
+        .values({
+          id: newId(),
+          type: 'EMBED_LISTING',
+          payload: jsonParam({ listingId: String(record.listing_id) }),
+        })
+        .onConflictDoNothing()
+
       await tx.insert(jobs).values({
         id: newId(),
         type: 'MATCH_LISTING',
@@ -180,18 +196,6 @@ export function createSqlModerationStore(
           outcome: input.decision === 'ALLOW' ? 'APPROVED' : 'REJECTED',
         }),
       })
-
-      // 人工放行同样要刷新语义向量（#322 M1）：这是待审商品进入匹配链路的入口之一，
-      // 与 `governance` / `listings store` 的成对投递保持同一条规则。
-      // `ON CONFLICT DO NOTHING` 对应 `EMBED_LISTING` 的部分唯一索引（待跑时再投不算错误）。
-      await tx
-        .insert(jobs)
-        .values({
-          id: newId(),
-          type: 'EMBED_LISTING',
-          payload: jsonParam({ listingId: String(record.listing_id) }),
-        })
-        .onConflictDoNothing()
 
       return {
         kind: 'applied',

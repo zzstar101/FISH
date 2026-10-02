@@ -8,12 +8,14 @@ import {
 import { createDb } from '@fish/db/client'
 import { findEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
 import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
+import { jobs } from '@fish/db/schema/jobs'
 import { listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
-import { eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { InvalidJobPayloadError } from '../invalid-payload-error'
 import { createEmbedJobHandlers, type EmbedRunResult } from './handlers'
 import { createStubEmbeddingProvider, STUB_EMBEDDING_MODEL } from './providers/stub'
@@ -26,9 +28,23 @@ if (!databaseUrl) {
 
 const db = createDb(databaseUrl)
 const createdUserIds: string[] = []
+/** 供 afterAll 清掉本文件产生的 `MATCH_*` job（#322 M4 复审修复起，EMBED handler 会补投）。 */
+const createdListingIds: string[] = []
+const createdWishIds: string[] = []
 
 afterAll(async () => {
   // 删掉自己造的行：`wishes` / `listings` 上的 embeddings 由 ON DELETE CASCADE 带走。
+  // `jobs` 没有到业务表的外键（payload 是 jsonb），必须按 payload 里的实体 id 自己删：
+  // 留下的 PENDING 行会被**别的测试文件**的 `claimNext` 领走（队列不按类型过滤），
+  // 让那些用例拿到一条不是自己投的 job。
+  for (const id of createdListingIds) {
+    await db.execute(
+      sql`DELETE FROM jobs WHERE type = 'MATCH_LISTING' AND payload->>'listingId' = ${id}`,
+    )
+  }
+  for (const id of createdWishIds) {
+    await db.execute(sql`DELETE FROM jobs WHERE type = 'MATCH_WISH' AND payload->>'wishId' = ${id}`)
+  }
   if (createdUserIds.length > 0) {
     await db.delete(wishes).where(inArray(wishes.userId, createdUserIds))
     await db.delete(listings).where(inArray(listings.sellerId, createdUserIds))
@@ -78,6 +94,7 @@ async function createListing(
     condition: 'GOOD',
     ...overrides,
   })
+  createdListingIds.push(id)
   return id
 }
 
@@ -92,6 +109,7 @@ async function createWish(overrides: Partial<typeof wishes.$inferInsert> = {}): 
     budgetMaxCents: 150000,
     ...overrides,
   })
+  createdWishIds.push(id)
   return id
 }
 
@@ -236,8 +254,9 @@ describe('EMBED_LISTING', () => {
     const first = await handlers.EMBED_LISTING({ listingId })
     const before = await findEmbedding(db, entity, STUB_EMBEDDING_MODEL)
 
-    // 改价：不碰 embedding 文本，但会把 listings.updated_at 推进。显式给一个未来的时间戳是为了
-    // 不受毫秒粒度影响（`$onUpdate` 不会覆盖显式传入的 updatedAt）。
+    // 改价：不碰 embedding 文本，但会把 listings.updated_at 推进。这里显式给一个未来时间戳，
+    // 让"版本确实往前走了"与毫秒粒度、时钟偏差都无关（`$onUpdate` 不会覆盖显式传入的 updatedAt；
+    // 不显式传时 `$onUpdate(() => sql`now()`)` 写的是数据库钟，见 `packages/db/src/schema/common.ts`）。
     const bumped = new Date(Date.now() + 1000)
     await db
       .update(listings)
@@ -476,5 +495,98 @@ describe('EMBED_WISH', () => {
     expect(second.status).toBe('generated')
     expect(second.contentHash).not.toBe(first.contentHash)
     expect(await db.$count(embeddings, eq(embeddings.wishId, wishId))).toBe(1)
+  })
+})
+
+/**
+ * #322 M4 复审修复：API 侧"成对投递"（`EMBED_*` 在前）只保证**入队时刻**的顺序，
+ * `queue.ts` 的 `settle()`（非致命失败）与 `recoverStaleClaims()`（`kill -9` 回收）都会把
+ * `run_at` 推到队尾，于是 `MATCH_*` 可能先跑：那一轮走 `v1-fallback`、补投 `EMBED_*`，
+ * 而 `EMBED_*` 跑完之后没有任何东西会再触发匹配——那一对就**永久停在 v1**。
+ *
+ * 修法：`EMBED_*` 确认向量新鲜后在结算前补投同实体的 `MATCH_*`（`../matching/enqueue.ts`）。
+ */
+describe('EMBED_* 补投 MATCH_*（#322 M4 复审修复：入队序 ≠ 执行序）', () => {
+  async function matchJobs(
+    type: 'MATCH_LISTING' | 'MATCH_WISH',
+    id: string,
+  ): Promise<Array<{ id: string; status: string }>> {
+    const entityKey =
+      type === 'MATCH_LISTING'
+        ? sql`${jobs.payload}->>'listingId'`
+        : sql`${jobs.payload}->>'wishId'`
+    return db
+      .select({ id: jobs.id, status: jobs.status })
+      .from(jobs)
+      .where(and(eq(jobs.type, type), sql`${entityKey} = ${id}`))
+  }
+
+  test('EMBED_LISTING 生成向量后补投一条 PENDING 的 MATCH_LISTING', async () => {
+    const listingId = await createListing()
+    const handlers = createEmbedJobHandlers(db, stub)
+
+    expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('generated')
+
+    const rows = await matchJobs('MATCH_LISTING', listingId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.status).toBe('PENDING')
+  })
+
+  test('EMBED_WISH 同理：补投的是 MATCH_WISH，不串到 listing 侧', async () => {
+    const wishId = await createWish()
+    const handlers = createEmbedJobHandlers(db, stub)
+
+    expect((await handlers.EMBED_WISH({ wishId })).status).toBe('generated')
+
+    const rows = await matchJobs('MATCH_WISH', wishId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.status).toBe('PENDING')
+    expect(await matchJobs('MATCH_LISTING', wishId)).toHaveLength(0)
+  })
+
+  test('已有 PENDING 的 MATCH_LISTING 时不重复投（编辑路径不会平白多跑一轮匹配）', async () => {
+    const listingId = await createListing()
+    const existing = newId()
+    await db.insert(jobs).values({
+      id: existing,
+      type: 'MATCH_LISTING',
+      payload: jsonParam({ listingId }),
+      status: 'PENDING',
+    })
+    const handlers = createEmbedJobHandlers(db, stub)
+
+    // 第二次是 `unchanged`（指纹一致、没调 provider），补投条件与"调没调 provider"无关。
+    expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('generated')
+    expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('unchanged')
+
+    const rows = await matchJobs('MATCH_LISTING', listingId)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.id).toBe(existing)
+  })
+
+  test('MATCH_LISTING 已 DONE（匹配先跑完）时补投一条新的：这一对不会永久停在 v1', async () => {
+    const listingId = await createListing()
+    await db.insert(jobs).values({
+      id: newId(),
+      type: 'MATCH_LISTING',
+      payload: jsonParam({ listingId }),
+      status: 'DONE',
+    })
+    const handlers = createEmbedJobHandlers(db, stub)
+
+    await handlers.EMBED_LISTING({ listingId })
+
+    const rows = await matchJobs('MATCH_LISTING', listingId)
+    expect(rows).toHaveLength(2)
+    expect(rows.filter((row) => row.status === 'PENDING')).toHaveLength(1)
+  })
+
+  test('实体不存在（missing）时不补投：没有向量可用，补了只会空转', async () => {
+    const listingId = newId()
+    const handlers = createEmbedJobHandlers(db, stub)
+
+    expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('missing')
+
+    expect(await matchJobs('MATCH_LISTING', listingId)).toHaveLength(0)
   })
 })

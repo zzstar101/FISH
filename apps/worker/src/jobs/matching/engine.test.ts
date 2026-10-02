@@ -821,9 +821,12 @@ describe('向量召回（#322 M2）', () => {
       expect(fitted.created).toBe(1)
       const rows = await matchRows(listingId, wishIds[matchingIndex] as string)
       expect(rows).toHaveLength(1)
-      // v2 hybrid 口径（#322 M3）：这个候选是最远的第 K+1 个（angle = 0.51 ⇒ cos ≈ 0.8727
-      // ⇒ 语义分 83），分类 / 词法 / 价格全中 ⇒ 0.30*83 + 0.32*100 + 0.15*100 + 0.23*100 = 95。
-      expect(rows[0]?.score).toBe(95)
+      // v2 hybrid 口径（#322 M4 重标定锚点）：这个候选是最远的第 K+1 个（angle = 0.51
+      // ⇒ cos ≈ 0.8727 ⇒ 已越过 CEILING 0.70，语义分饱和到 100），分类 / 词法 / 价格全中
+      // ⇒ 0.30*100 + 0.32*100 + 0.15*100 + 0.23*100 = 100。
+      // 注：M3 的 0.5/0.95 锚点下这里语义分只有 83（总分 95）；0.42/0.70 把 0.87 判为"完全相似"，
+      // 这正是 M4 用 57 条实测 cos（真匹配中位 ≈ 0.64）重标定的直接后果。
+      expect(rows[0]?.score).toBe(100)
     })
   })
 })
@@ -852,6 +855,8 @@ describe('候选向量新鲜度（#322 M3 评审 blocker）', () => {
       expect(before?.semanticScore).toBe(100)
 
       // 编辑候选（愿望）但**不重算向量**：库里那条向量对应的是旧内容，不再是当前版本。
+      // `updated_at` 由 `$onUpdate(() => sql`now()`)` 取数据库钟（见 `packages/db/src/schema/common.ts`），
+      // 版本必然不小于插入时写入的值，因此不需要在测试里手动推进时间戳。
       await db
         .update(wishes)
         .set({ keyword: `${keyword}-改过` })
@@ -891,6 +896,9 @@ describe('候选向量新鲜度（#322 M3 评审 blocker）', () => {
       await embedListing(listingId, axisVector(0))
       // 先写向量、再编辑候选 ⇒ 库里那条向量对应的是旧内容。
       await embedWish(wishId, axisVector(0))
+      // 先写向量、再编辑候选 ⇒ 库里那条向量对应的是旧内容。`updated_at` 由数据库钟推进
+      // （`$onUpdate(() => sql`now()`)`，见 `packages/db/src/schema/common.ts`）：插入与更新同源，
+      // 编辑后的版本一定不小于插入时的值，下面的重算不会被 `saveEmbedding` 的 CAS 静默丢弃。
       await db
         .update(wishes)
         .set({ keyword: `${keyword}-改过` })

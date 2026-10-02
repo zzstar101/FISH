@@ -29,8 +29,11 @@ class MemoryWishStore implements WishStore {
     ) {
       return { kind: 'active-limit' as const }
     }
-    this.rows.push({ ...row })
-    return { kind: 'created' as const, row: { ...row } }
+    // 真实 store 的 `updated_at` 由数据库 `now()` 生成（`INSERT ... now()`，见 `store.ts` 的
+    // `NewWishRow` 说明），内存替身在这里补上"数据库生成"的那一半。
+    const created: WishRow = { ...row, updated_at: new Date() }
+    this.rows.push(created)
+    return { kind: 'created' as const, row: { ...created } }
   }
 
   async findById(id: string) {
@@ -48,7 +51,7 @@ class MemoryWishStore implements WishStore {
     }
   }
 
-  async update(id: string, fields: EditableWishFields, updatedAt: Date) {
+  async update(id: string, fields: EditableWishFields) {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
     Object.assign(row, {
@@ -58,16 +61,18 @@ class MemoryWishStore implements WishStore {
       ...(fields.budgetMaxCents === undefined ? {} : { budget_max_cents: fields.budgetMaxCents }),
       ...(fields.description === undefined ? {} : { description: fields.description }),
       ...(fields.acceptSimilar === undefined ? {} : { accept_similar: fields.acceptSimilar }),
-      updated_at: updatedAt,
+      // 真实 store 的 `updated_at` 由数据库 `now()` 写（`$onUpdate`，见 packages/db/src/schema/common.ts），
+      // 内存替身只要求"推进"这个语义。
+      updated_at: new Date(),
     })
     return { ...row }
   }
 
-  async updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED', updatedAt: Date) {
+  async updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED') {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
     row.status = status
-    row.updated_at = updatedAt
+    row.updated_at = new Date()
     return { ...row }
   }
 

@@ -22,6 +22,7 @@ import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { wishes } from '@fish/db/schema/wishes'
 import { and, eq, inArray, ne, type SQL, sql } from 'drizzle-orm'
+import { elapsedMs } from '../../log'
 import { enqueueEmbedJob } from '../embedding/enqueue'
 import { type MatchListingFacts, scoreMatch } from './scoring'
 
@@ -68,11 +69,13 @@ export type MatchRecall = 'vector-topk' | 'v1-fallback'
  */
 export type MatchFallbackReason = 'missing' | 'stale' | 'model-mismatch'
 
-/** 本轮的召回结果（`MatchRunResult` 的三个可观测字段，也是 M4 指标的雏形）。 */
+/** 本轮的召回结果（`MatchRunResult` 的可观测字段，也是 M4 指标的雏形）。 */
 type RecallOutcome = {
   recall: MatchRecall | null
   fallbackReason: MatchFallbackReason | null
   vectorCandidates: number
+  /** 向量 Top-K 那一次查询的耗时（ms）；退化时 0。M4 用它复核 ANN 触发条件（p95 > 50ms）。 */
+  topKLatencyMs: number
 }
 
 export type MatchRunResult = {
@@ -95,6 +98,11 @@ export type MatchRunResult = {
   fallbackReason: MatchFallbackReason | null
   /** 向量召回收到的候选条数（退化时为 0）。 */
   vectorCandidates: number
+  /**
+   * 向量 Top-K 查询的耗时（ms，含回表前的候选查询）；`recall === 'v1-fallback'` 时为 0。
+   * #322 M4 的观测项：ANN（HNSW）的触发条件是 p95 > 50ms 或带向量实体 > 10 万行。
+   */
+  topKLatencyMs: number
 }
 
 /*
@@ -212,6 +220,7 @@ const skipped = (reason: MatchSkipReason): MatchRunResult => ({
   recall: null,
   fallbackReason: null,
   vectorCandidates: 0,
+  topKLatencyMs: 0,
 })
 
 /**
@@ -499,16 +508,19 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       let recall: MatchRecall
       let fallbackReason: MatchFallbackReason | null = null
       let vectorCandidates = 0
+      let topKLatencyMs = 0
       /** 候选 id → 原始 cosine（`1 - 距离`）；只放"真的算得出相似度"的那些对。 */
       const similarities = new Map<string, number>()
 
       if (targetVector.status === 'ready') {
+        const topKStartedAt = Bun.nanoseconds()
         const similar = await topKSimilarWishes(db, {
           model: embeddingModel,
           vector: targetVector.embedding,
           limit: MATCH_SEMANTIC_TOP_K,
           filter: narrowing,
         })
+        topKLatencyMs = elapsedMs(topKStartedAt)
         vectorCandidates = similar.length
         for (const row of similar) similarities.set(row.id, 1 - row.distance)
         const ids = similar.map((row) => row.id)
@@ -569,7 +581,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       return applyTargets(
         listingTarget,
         targets,
-        { recall, fallbackReason, vectorCandidates },
+        { recall, fallbackReason, vectorCandidates, topKLatencyMs },
         similarities,
       )
     },
@@ -611,16 +623,19 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       let recall: MatchRecall
       let fallbackReason: MatchFallbackReason | null = null
       let vectorCandidates = 0
+      let topKLatencyMs = 0
       /** 候选 id → 原始 cosine（`1 - 距离`），与 listing 方向同一口径。 */
       const similarities = new Map<string, number>()
 
       if (targetVector.status === 'ready') {
+        const topKStartedAt = Bun.nanoseconds()
         const similar = await topKSimilarListings(db, {
           model: embeddingModel,
           vector: targetVector.embedding,
           limit: MATCH_SEMANTIC_TOP_K,
           filter: narrowing,
         })
+        topKLatencyMs = elapsedMs(topKStartedAt)
         vectorCandidates = similar.length
         for (const row of similar) similarities.set(row.id, 1 - row.distance)
         const ids = similar.map((row) => row.id)
@@ -720,6 +735,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         recall,
         fallbackReason,
         vectorCandidates,
+        topKLatencyMs,
       })
     },
   }

@@ -20,6 +20,15 @@ export interface WishRow {
   match_count?: number
 }
 
+/**
+ * 新建愿望的入参：`updated_at` 由数据库 `now()` 生成（见 `packages/db/src/schema/common.ts`
+ * 的时钟说明——`updated_at` 是 #322 的向量新鲜度版本号，必须与 DB 同源）。
+ *
+ * `created_at` 仍由调用方给：它只用于软幂等窗口（`created_at >= createdAfter`）与展示，两侧
+ * 都是应用钟，且测试靠回拨它把行挪到窗口外（`store.test.ts` 的 `oldRow`）。
+ */
+export type NewWishRow = Omit<WishRow, 'updated_at'>
+
 export interface PoolRow {
   keyword: string
   category: string
@@ -43,7 +52,7 @@ export type CreateWishResult =
 
 export interface WishStore {
   createOrGetRecent(
-    row: WishRow,
+    row: NewWishRow,
     activeLimit: number,
     createdAfter: Date,
   ): Promise<CreateWishResult>
@@ -52,12 +61,8 @@ export interface WishStore {
     userId: string,
     filter: { status?: WishStatus; limit: number; offset: number },
   ): Promise<{ rows: WishRow[]; total: number }>
-  update(id: string, fields: EditableWishFields, updatedAt: Date): Promise<WishRow | null>
-  updateStatusIfActive(
-    id: string,
-    status: 'CLOSED' | 'FULFILLED',
-    updatedAt: Date,
-  ): Promise<WishRow | null>
+  update(id: string, fields: EditableWishFields): Promise<WishRow | null>
+  updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED'): Promise<WishRow | null>
   aggregatePool(minCount: number, limit: number): Promise<PoolRow[]>
 }
 
@@ -118,27 +123,37 @@ export function createSqlWishStore(db: Db): WishStore {
           return { kind: 'active-limit' } as const
         }
 
-        // 愿望与 MATCH_WISH job 用同一条语句写入（数据修改型 CTE，PG 保证必执行）：
-        // 任一步失败整体回滚，不产生"愿望已落库但没有 job"的孤儿行。
+        // 愿望与首批 job 在同一个事务里写：任一步失败整体回滚，不产生"愿望已落库但没有 job"
+        // 的孤儿行。**从 #322 M4 起不再是"一条 CTE"而是三句**——为的是让 job 的插入顺序显式可读，
+        // 事务边界不变（都在这一个 `db.transaction` 里），回滚语义一个字节不动。
+        //
+        // **顺序即语义（#322 M4）**：必须先投 `EMBED_WISH`、再投 `MATCH_WISH`。队列按 `(run_at, id)`
+        // 领取，而 `run_at` 缺省取事务时间、`id = newId() = Bun.randomUUIDv7()`（同毫秒单调递增）
+        // ⇒ 后一句插入的 job 两项都更大，先领到的一定是 `EMBED_WISH`。反序（含旧版把 MATCH_WISH
+        // 写在前面）会让首轮 MATCH 跑在愿望自身向量落库之前：引擎按 M2 降级契约把该愿望的**所有**
+        // match 行落成 `ranking_version = 1`，而 `EMBED_WISH` 跑完不会回头重投 MATCH ⇒ 新建愿望
+        // 会永久停在 v1，直到被编辑。
         const created = firstWishRow(
           await tx.execute(sql`
-          WITH inserted AS (
-            INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
-                                description, accept_similar, status, created_at, updated_at)
-            VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
-                    ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
-                    ${row.created_at}, ${row.updated_at})
-            RETURNING *
-          ), match_job AS (
-            INSERT INTO jobs (id, type, payload)
-            SELECT ${newId()}, 'MATCH_WISH', jsonb_build_object('wishId', inserted.id::text)
-            FROM inserted
-            RETURNING id
-          )
-          SELECT * FROM inserted
+          INSERT INTO wishes (id, user_id, keyword, category, budget_min_cents, budget_max_cents,
+                              description, accept_similar, status, created_at, updated_at)
+          VALUES (${row.id}, ${row.user_id}, ${row.keyword}, ${row.category}, ${row.budget_min_cents},
+                  ${row.budget_max_cents}, ${row.description}, ${row.accept_similar}, ${row.status},
+                  ${row.created_at}, now())
+          RETURNING *
         `),
         )
         if (!created) throw new Error('创建愿望后未返回记录')
+
+        await tx.execute(sql`
+          INSERT INTO jobs (id, type, payload)
+          VALUES (${newId()}, 'EMBED_WISH', jsonb_build_object('wishId', ${created.id}::text))
+        `)
+        await tx.execute(sql`
+          INSERT INTO jobs (id, type, payload)
+          VALUES (${newId()}, 'MATCH_WISH', jsonb_build_object('wishId', ${created.id}::text))
+        `)
+
         return { kind: 'created', row: created } as const
       })
     },
@@ -171,7 +186,7 @@ export function createSqlWishStore(db: Db): WishStore {
       }
     },
 
-    async update(id, fields, updatedAt) {
+    async update(id, fields) {
       const sets: (SQL | undefined)[] = [
         fields.keyword !== undefined ? sql`keyword = ${fields.keyword}` : undefined,
         fields.category !== undefined ? sql`category = ${fields.category}` : undefined,
@@ -185,7 +200,7 @@ export function createSqlWishStore(db: Db): WishStore {
         fields.acceptSimilar !== undefined
           ? sql`accept_similar = ${fields.acceptSimilar}`
           : undefined,
-        sql`updated_at = ${updatedAt}`,
+        sql`updated_at = now()`,
       ]
       return firstWishRow(
         await db.execute(sql`
@@ -199,10 +214,10 @@ export function createSqlWishStore(db: Db): WishStore {
       )
     },
 
-    async updateStatusIfActive(id, status, updatedAt) {
+    async updateStatusIfActive(id, status) {
       return firstWishRow(
         await db.execute(sql`
-        UPDATE wishes SET status = ${status}, updated_at = ${updatedAt}
+        UPDATE wishes SET status = ${status}, updated_at = now()
         WHERE id = ${id} AND status = 'ACTIVE'
         RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
       `),

@@ -99,7 +99,7 @@ export function createWishService({
     if (current === target) return toWishDto(wish)
     if (current !== 'ACTIVE') throw new WishServiceError(409, '愿望已经处于终态')
 
-    const updated = await store.updateStatusIfActive(id, target, new Date())
+    const updated = await store.updateStatusIfActive(id, target)
     if (updated) {
       invalidatePoolCache()
       return toWishDto(updated)
@@ -128,7 +128,6 @@ export function createWishService({
           accept_similar: parsed.acceptSimilar,
           status: 'ACTIVE',
           created_at: now,
-          updated_at: now,
         },
         ACTIVE_WISH_LIMIT,
         new Date(now.getTime() - DUPLICATE_WINDOW_MS),
@@ -180,7 +179,7 @@ export function createWishService({
         description: mergedDescription ?? undefined,
         acceptSimilar: patch.acceptSimilar ?? wish.accept_similar,
       })
-      const updated = await store.update(id, toEditableFields(patch), new Date())
+      const updated = await store.update(id, toEditableFields(patch))
       if (updated) {
         invalidatePoolCache()
         // #322 M1：编辑愿望此前**不投递任何 job**，于是改完 keyword/description/category 既不重算

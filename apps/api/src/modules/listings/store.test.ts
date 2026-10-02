@@ -183,10 +183,18 @@ test('发布在世界内写入商品、有序图片与 MATCH_LISTING job', async
       .select({ type: jobs.type, payload: jobs.payload, status: jobs.status })
       .from(jobs)
       .where(sql`${jobs.payload}->>'listingId' = ${input.id}`)
+      // 用队列自己的领取键排序：`(run_at, id)`（见 `apps/worker/src/jobs/queue.ts` 的 `claimNext`）。
+      // 注意它等价的是**入队时刻**的领取序：非致命失败重试或 `kill -9` 回收会把 `run_at` 推后
+      // （M4 §6.1 末尾），此后执行序可能反转。
+      .orderBy(jobs.runAt, jobs.id)
     // #322 M1：一次成功创建投两条 job——v1 的匹配重算 + 语义向量刷新（成对投递，避免漏掉一边）。
     expect(queued).toHaveLength(2)
     expect(queued.map((job) => job.type).sort()).toEqual(['EMBED_LISTING', 'MATCH_LISTING'])
     expect(queued.every((job) => job.status === 'PENDING')).toBe(true)
+    // #322 M4 顺序不变量：EMBED_LISTING 必须在**入队序**里排在 MATCH_LISTING 前面（同事务、run_at
+    // 相同，所以首轮领取序 = 入队序）。反序会让首轮 MATCH 跑在向量落库之前，引擎按 M2 降级契约落
+    // `ranking_version = 1`。重试/回收会推后 `run_at`，那种反转是已知边界（M4 §6.1 末尾）。
+    expect(queued.map((job) => job.type)).toEqual(['EMBED_LISTING', 'MATCH_LISTING'])
   })
 })
 

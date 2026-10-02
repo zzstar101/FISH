@@ -51,7 +51,7 @@ export function parseJobPayload(raw: unknown): unknown {
  * bun-sql 的 `execute` 在不同版本下返回数组或 `{ rows }`，两种都接住
  * （与 `apps/api/src/modules/wishes/store.ts:61-67` 同一取舍）。
  */
-function toRows(result: unknown): Record<string, unknown>[] {
+export function toRows(result: unknown): Record<string, unknown>[] {
   if (Array.isArray(result)) return result as Record<string, unknown>[]
   if (result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows)) {
     return (result as { rows: Record<string, unknown>[] }).rows
@@ -67,6 +67,14 @@ export type RecoveredClaims = {
   requeued: number
   /** `attempts` 已达上限、直接置 `FAILED` 的条数。 */
   failed: number
+  /**
+   * 被直接置 `FAILED` 的行 id（与 `failed` 同序同长）。
+   *
+   * 给调用方"对这些终结失败做点事后处理"用：`index.ts` 拿它去补投一条延迟的 `EMBED_*`
+   * （见 `jobs/embedding/requeue.ts`）——没有这个列表，启动回收判死的行就和"3 次失败后无补投"
+   * 一样没人管，而这两条路径产生的是同一种终态。
+   */
+  failedIds: string[]
 }
 
 export type JobQueue = {
@@ -183,7 +191,11 @@ export function createJobQueue(
         `),
       )
 
-      return { requeued: requeued.length, failed: failed.length }
+      return {
+        requeued: requeued.length,
+        failed: failed.length,
+        failedIds: failed.map((row) => String(row.id)),
+      }
     })
   }
 
