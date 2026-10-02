@@ -588,7 +588,7 @@ export default function Profile() {
       <View className="profile__cell-tile">
         <Image className="profile__cell-ic" src={cell.icon} mode="aspectFit" />
         {cell.count && cell.count > 0 ? (
-          // 1 位数字 = 正圆；2 位（含 99+）= 胶囊（#431 任务一），位数决定形状类
+          // 单数字（≤9）= 正圆；两位数与 99+ = 胶囊（#431 任务一），形状类跟着值分档
           <View className={`profile__cell-dot num${cell.count > 9 ? ' is-multi' : ''}`}>
             {cell.count > 99 ? '99+' : cell.count}
           </View>
