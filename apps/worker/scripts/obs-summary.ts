@@ -126,8 +126,13 @@ function defaultModel(source: Record<string, string | undefined>): string | null
 
 /**
  * 每类实体的覆盖率：分母是 ACTIVE 实体（listing 侧还要求审核通过），分子分别是"随便哪个模型有向量"
- * （诊断口径）与"有**指定模型**的**新鲜**向量"（与读路径同口径的三道闸门：模型 + 毫秒级版本号 +
- * 维度 + 内容指纹）。新鲜判据按模型分别算，所以下面按模型再报一次。
+ * （诊断口径）与"有**指定模型**的**新鲜**向量"（四道闸门：模型 + 毫秒级版本号 + 维度 + 内容指纹）。
+ * 新鲜判据按模型分别算，所以下面按模型再报一次。
+ *
+ * ⚠️ 分子是**保守下界**，不是"读路径实际会召回的数量"：读路径两侧的判据并不相同——候选侧
+ * （`freshListingsEmbedding()` / `freshWishesEmbedding()`）只比模型 + 毫秒级版本号，目标侧
+ * （`engine.ts` 的 dimensions/contentHash 闸门）只比维度 + 指纹。这里取的是**两者的交集**，
+ * 比任何一侧都严；所以 `withFreshVector` 偏低（少报）而不是偏高。
  *
  * 内容指纹那一腿由 `embeddingContentHashSql()` 在 SQL 里复刻 TS 侧的文本构造（#322 M4 复审修复：
  * 范围外发现 #5——此前只比版本号，报出来的是上界）。
@@ -142,7 +147,8 @@ async function entityCoverage(
   // 版本号那道闸门与读路径逐字一致（`freshListingsEmbedding()` / `freshWishesEmbedding()`）。
   const versionFresh = sql`date_trunc('milliseconds', e.source_updated_at) = date_trunc('milliseconds', t.updated_at)
                             AND e.dimensions = ${EMBEDDING_DIMENSIONS}`
-  // 加上 `contentHash` 那一腿后才是**精确**的"可召回"；只算版本号是上界（`withVersionFreshVector`）。
+  // 加上 `contentHash` 那一腿后是**两侧闸门的交集**（见上面函数注释：保守下界）；只算版本号是上界
+  // （`withVersionFreshVector`）。
   const fresh = sql`${versionFresh} AND e.content_hash = ${embeddingContentHashSql(kind, sql`t`)}`
   // "能成为候选"的实体谓词也要与读路径一致：listing 侧除了 ACTIVE 还要求
   // `moderation_status = 'APPROVED'`（`engine.ts` 的 `creatable()` / `visibleToWishOwner()`），
@@ -279,7 +285,8 @@ async function main(): Promise<void> {
     listings: {
       active: toNumber(listingsCoverage.active),
       withAnyVector: toNumber(listingsCoverage.with_any_vector),
-      // 上界口径（只比模型 + 毫秒级版本号 + 维度）；`withFreshVector` 是精确口径（多一比内容指纹）。
+      // 上界口径（只比模型 + 毫秒级版本号 + 维度）；`withFreshVector` 多比一腿内容指纹，是
+      // 两侧闸门的交集 ⇒ 保守下界（少报），不是"读路径实际召回数"。
       withVersionFreshVector: toNumber(listingsCoverage.with_version_fresh_vector),
       withFreshVector: toNumber(listingsCoverage.with_fresh_vector),
     },

@@ -53,7 +53,7 @@ M4 要回答四个问题，每个问题都必须有**可复算的证据文件**�
 | 位置 | 改动 |
 |---|---|
 | `apps/worker/src/log.ts`（新增） | 结构化观测出口：一条事件 = 一行 JSON；私密文本只以 `contentHashOf()` 指纹 + 长度出现，**不写用户文本与向量** |
-| `apps/worker/src/index.ts` | 事件接线：`worker.started` / `worker.recovered` / `job.settled`（带 model、rankingVersion、`MatchRunResult`），把 provider 的 `embed.request` 与 handler 的 `embed.entity` 输出到 stdout/stderr |
+| `apps/worker/src/index.ts` | 事件接线：`worker.started` / `worker.recovered` / `job.settled`（带 model、rankingVersion、`MatchRunResult`，`worker.started` 另带 #324 视觉 provider 的 transport / model / dimensions），把 provider 的 `embed.request` 与 handler 的 `embed.entity` 输出到 stdout/stderr |
 | `apps/worker/src/jobs/embedding/handlers.ts` | 每个实体一行 `embed.entity`（`generated` / `unchanged` / `stale` / `missing`） |
 | `apps/worker/src/jobs/embedding/providers/live.ts` | 显式发 `dimensions`（端点默认 1024，与迁移的 `vector(1536)` 不符）；`onRequest` 观测回调（条数/尝试/耗时/分类/上游 status） |
 | `apps/worker/src/jobs/matching/engine.ts` | `MatchRunResult` 增加 `topKLatencyMs`（§5 的 ANN 触发条件的观测项） |
@@ -71,8 +71,8 @@ M3 的 `0.5/0.95` 来自**人工给定的** cosine 估计值（M3 §7 口径说�
 **0.274–0.819**，真匹配 p50 只有 **0.639**、无关对最高也能到 **0.716**。旧刻度把 cos **0.566–0.713**
 的真匹配压成 semanticScore **15–47**（×0.30 权重只加 4.5–14 分），18 条"标签=匹配"的对因此总分只有
 **34–69**（其中 14 条落在 60–69、4 条不到 60）；旧锚点下 v1 口径只在其中 2 条上会建行，其余 16 条
-v1 也判否（v1 = 0.35×category + 0.30×keyword + 0.35×price，且不限分类时把 category 权重按比例摊给
-其余两项），所以这批漏判不是 v2 独有的。
+v1 也判否（v1 = 0.35×category + 0.35×keyword + 0.30×price，见 `apps/worker/src/jobs/matching/scoring.ts:20`
+的 `WEIGHTS_V1`；不限分类时把 category 权重按比例摊给其余两项），所以这批漏判不是 v2 独有的。
 
 ### 3.2 标定集
 
@@ -163,7 +163,10 @@ primary key, embedding vector(1536))` 只填向量（不碰任何业务表、零
 `--source=auto|real|synthetic`（默认 `auto`）：表里 `dimensions = 1536` 的真实向量够最大档就用真实语料，
 否则用合成随机向量并在事件里标 `source`；`--source=real` 在真实行不足时直接 exit 2（提示先跑
 `embed:backfill`）。**下表是合成随机向量的结果**——随机向量的 HNSW 邻域结构与真实分布不同，
-recall 损失只能在真实分布上量，所以本机 live 库只有 6 条真实向量，只够跑 `--source=real --sizes=6`。
+recall 损失只能在真实分布上量，所以本机 live 库只有 6 条真实向量，只够跑 `--source=real --sizes=6`
+（实证 `.m4-evidence/ann-probe-real.log`：`source:"real"`、`realEmbeddingRows 6`、
+`realEmbeddingModels 1`、无索引 p50 0.076 / p95 0.148 ms、`needsAnn:false` —— 6 行的延迟没有参考价值，
+这里只证明 `real` 档能跑通且数字可复算）。
 
 | 行数 | 无索引 p50 / p95 | HNSW p50 / p95 |
 |---|---|---|
@@ -225,25 +228,30 @@ live 实测（seed 后 4 个 ACTIVE listing + 2 个 ACTIVE wish；真跑的原�
 
 修法：全部投递点统一为 EMBED 在前，并把这条不变量写进代码注释。下面是全仓 `insert(jobs)` /
 `INSERT INTO jobs` 的**生产**投递点全集（种子数据、`core:smoke`、`embed:backfill` 属于测试/运维脚本，
-不是生产投递；`enqueue.ts` 只投 `EMBED_*`，不存在 `MATCH_*` 旁路）：
+不是生产投递；`embedding/enqueue.ts` 只投 `EMBED_*`）。rebase 到 `origin/main = 0b8ab72e` 之后其余
+domain 各自只投**单一**类型，不参与这条成对不变量：`apps/api/src/modules/recommendation/interest-queue.ts:40`
+投 `REFRESH_USER_INTEREST`（#323 R2）、`apps/worker/src/jobs/visual-embedding/enqueue.ts:43` 投
+`VISUAL_EMBED_*`（#324）；`apps/worker/src/jobs/matching/enqueue.ts:52` 只投 `MATCH_*`，且只在
+`EMBED_*` 结算成功之后调用（就是本节末尾那条补投修复，不存在"先 MATCH 后 EMBED"的旁路）：
 
 | 位置 | 说明 |
 |---|---|
-| `apps/api/src/modules/listings/store.ts:889-909` | `enqueueListingJobsWith`：发布 / 编辑 / 重新上架（调用点 `:439/447/685/728`） |
+| `apps/api/src/modules/listings/store.ts:1003-1026` | `enqueueListingJobsWith`：发布 / 编辑 / 重新上架（调用点 `:575/583/794/842`） |
 | `apps/api/src/modules/governance/service.ts:588-603` | `enqueueListingJobs`：下架（`:306`）/ 重新上架（`:397`）走这条 helper——原先顺序颠倒的正是这里，不是审核入口 |
 | `apps/api/src/modules/moderation/store.ts:170-183` | 人工放行（待审 → APPROVED）是待审商品进入匹配链路的唯一入口，自己有独立的一对 insert（EMBED_LISTING → MATCH_LISTING；其中 `EMBED_LISTING` 带 `ON CONFLICT DO NOTHING`，`MATCH_LISTING` 没有——该类型没有 partial unique index） |
 | `apps/api/src/modules/wishes/store.ts:148-155` | 创建路径改为同事务三条语句（不再是一条 CTE），顺序 EMBED_WISH → MATCH_WISH |
 | `apps/api/src/modules/wishes/match-queue.ts:89-105` | 编辑 / 状态变更路径同一不变量 |
 
 回归断言落在 `apps/api/src/modules/listings/store.test.ts:189,197`、`apps/api/src/modules/wishes/store.test.ts:112,115`
-（创建路径）与 `:148,151`（编辑路径）、`apps/api/src/modules/moderation/store.test.ts:233`：不只断言"两行 job 存在"，
+（创建路径）与 `:148,151`（编辑路径）、`apps/api/src/modules/moderation/store.test.ts:313`：不只断言"两行 job 存在"，
 而是**按队列自己的领取键（`(run_at, id)`）排序**断言谁先被领取（`ORDER BY type` 或对着结果 `.sort()`
 ——如 `listings/store.test.ts:192`——只能把两行排出来，不代表执行顺序）。
 
 **这条不变量的边界（第四轮审查 F1，major）→ M4 已修**：入队序正确 **≠** 执行序正确。`run_at` 是
-退避字段（`packages/db/src/schema/jobs.ts:36-37`），非致命失败重试（`apps/worker/src/jobs/queue.ts:137`
-`run_at = now()`）与 `kill -9` 后的僵死回收（`:171` 同）都会把它推后，而领取序是
-`ORDER BY run_at, id`（`:107`）——一次 EMBED 非致命失败或进程被强杀，同实体的 `MATCH_*` 就会先被领取，
+退避字段（`packages/db/src/schema/jobs.ts:48`），非致命失败重试（`apps/worker/src/jobs/queue.ts:145`
+`run_at = now()`）与 `kill -9` 后的僵死回收（`:179` 改回 `PENDING`、`:187` 超额度转 `FAILED`，两处都
+`run_at = now()`）都会把它推后，而领取序是 `ORDER BY run_at, id`（`:115`）——一次 EMBED 非致命失败或
+进程被强杀，同实体的 `MATCH_*` 就会先被领取，
 `engine.ts:401` 判目标向量 stale ⇒ `recall = 'v1-fallback'`（`:536-538` / wish 侧 `:649-651`），
 只补投 `EMBED_*`、**不重投 `MATCH_*`** ⇒ 该对停在 v1。
 
@@ -257,11 +265,12 @@ EMBED 的），所以必须显式 `NOT EXISTS` 去重；并发窗口最坏多一
 补投发生在 EMBED job 结算**之前**，所以新 `MATCH_*` 的 `(run_at, id)` 必然晚于本次 EMBED。
 `stale` / `missing` 不补投——那两种情况下向量没有变新，补投就是"MATCH → 补投 EMBED → MATCH"空转。
 
-**端到端证据**（`.m4-evidence/core-smoke-scope5b.log`，`bun run core:smoke` 236 断言全绿 / 29.1 s /
-exit 0）：seed 只投的那条 `MATCH_LISTING`（`recall: "v1-fallback"`, `fallbackReason: "missing"`,
-`created: 1`）→ `EMBED_LISTING` `status: "generated"` → **第二条 `MATCH_LISTING`**（除了这次修复没有
-任何东西会投它）`recall: "vector-topk"`, `fallbackReason: null`, `created: 0`。smoke 的断言是
-"`MATCH_LISTING` 行数 ≥ 2 + `EMBED_LISTING` 行数 > 0"。
+**端到端证据**（`.m4-evidence/core-smoke-rebase.log`，rebase 到 `origin/main` 后 `bun run core:smoke`
+**266 断言全绿 / 28110 ms / exit 0**；rebase 前同一条链在 `core-smoke-scope5b.log` 里是 236 断言 /
+29.1 s，main 的新用例加了 30 项断言）：seed 只投的那条 `MATCH_LISTING`（`recall: "v1-fallback"`,
+`fallbackReason: "missing"`, `created: 1`）→ `EMBED_LISTING` `status: "generated"` → **第二条
+`MATCH_LISTING`**（除了这次修复没有任何东西会投它）`recall: "vector-topk"`, `fallbackReason: null`,
+`created: 0`。smoke 的断言是"`MATCH_LISTING` 行数 ≥ 2 + `EMBED_LISTING` 行数 > 0"。
 
 **还剩一半的不对称（别读成"已经全修"）**：补投只覆盖**目标实体自己的**向量。一条 match 要升到 v2
 需要**两侧都有新鲜向量**：`MATCH_LISTING` 的候选来自 `topKSimilarWishes()`（只返回有新鲜向量的愿望），
@@ -274,7 +283,8 @@ semantic NULL / ranking_version 1`）后只补 wish 侧，`embed.backfill.summar
 同一行变成 `score 93 / semantic_score 77 / ranking_version 2`。
 
 上面四个回归断言断的仍然只是**入队时刻**的 `(run_at, id)` 序（回归断言无法覆盖"重试/回收之后"的
-执行序；那一段由 `handlers.test.ts` 新增的 5 个补投用例 + `core:smoke` 的端到端断言覆盖）。
+执行序；那一段由 `handlers.test.ts` 新增的 6 个补投用例——`generated` / `unchanged` / 已 `DONE` 补投、
+wish 侧不串号、`missing` 与 `stale` 都不补投——加 `core:smoke` 的端到端断言覆盖）。
 
 ## 7. 可观测：`obs:summary`
 
@@ -295,10 +305,16 @@ semantic NULL / ranking_version 1`）后只补 wish 侧，`embed.backfill.summar
 - **覆盖率的分母谓词与读路径一致**：可见性用 `status = 'ACTIVE'`，**listing 侧另加
   `moderation_status = 'APPROVED'`**（`engine.ts` 的 `creatable()` / `visibleToWishOwner()`）；
   少了这一项就会把永远不会成为候选的实体算进分母，报出偏低的覆盖率。
-- **覆盖率的新鲜谓词现在复刻读路径的三条闸门**：`date_trunc('milliseconds', e.source_updated_at) =
+- **覆盖率的新鲜谓词是读路径两侧闸门的交集**：`date_trunc('milliseconds', e.source_updated_at) =
   date_trunc('milliseconds', t.updated_at)`、`e.dimensions = EMBEDDING_DIMENSIONS`、以及
-  `e.content_hash = <SQL 里算出来的指纹>`。前两条对应 `engine.ts:401` 对目标向量的前两个判据；第三条
-  由新增的 `apps/worker/src/jobs/embedding/content-hash-sql.ts` 在 SQL 侧复刻 TS 的
+  `e.content_hash = <SQL 里算出来的指纹>`（模型那道闸门由 `--model` / 分组维度提供）。
+  ⚠️ 读路径两侧判据**不同**：目标侧是 `engine.ts:401` 的 `row.dimensions !== EMBEDDING_DIMENSIONS ||
+  row.contentHash !== contentHashOf(text)`（维度 + 指纹，**不比版本号**），候选侧是
+  `packages/db/src/embedding-store.ts:252-254` 的 `freshListingsEmbedding()` / `freshWishesEmbedding()`
+  （模型 + 毫秒级版本号，**不比 dimensions / content_hash**）。这里报的是**两者的交集** ⇒ 比任何一侧
+  都严，`withFreshVector` **偏低（少报）**，不是"读路径实际召回数"；只算后两条的
+  `withVersionFreshVector` 才是上界。
+  指纹那一腿由新增的 `apps/worker/src/jobs/embedding/content-hash-sql.ts` 在 SQL 侧复刻 TS 的
   `contentHashOf(build*EmbeddingText(...))`：
   `encode(sha256(convert_to('v1:' || concat_ws(E'\n', '标签: ' || nullif(btrim(regexp_replace(列, E'\r\n?', E'\n', 'g'), <JS 空白集>), ''), …), 'UTF8')), 'hex')`。
   归一化必须逐字符对齐 `String.prototype.trim()`：Postgres 的 `btrim(x)` 默认只去 U+0020，所以显式
@@ -310,7 +326,7 @@ semantic NULL / ranking_version 1`）后只补 wish 侧，`embed.backfill.summar
   残余风险：任何**没列进上面空白集**的 Unicode 空白字符会让 SQL 侧少 trim 一点——要修就往
   `normalizedSql()` 单点定义的 `JS_TRIM_CHARS` 里加字符。
 - **新鲜覆盖率还要按 model 作用域**：读路径取候选时带 `eq(embeddings.model, query.model)`
-  （`packages/db/src/embedding-store.ts:306/322`），所以 `withFreshVector` 也必须加 `e.model = <model>`；
+  （`packages/db/src/embedding-store.ts:312/332`），所以 `withFreshVector` 也必须加 `e.model = <model>`；
   只有 `withAnyVector` 是"任意模型的向量都算"的诊断口径。否则换过模型之后会报出"假新鲜"
   （旧模型的向量对上版本号，读路径根本取不到）。
 - **job 耗时含排队等待**：`extract(epoch FROM (updated_at - created_at)) * 1000` 是从入队到落库的
@@ -323,19 +339,28 @@ semantic NULL / ranking_version 1`）后只补 wish 侧，`embed.backfill.summar
   引擎把它放进 `MatchRunResult` 后只由 `job.settled` 打出，`obs:summary` 聚合不到——要复核 §5 的
   ANN 触发条件，得 grep worker 日志里的 `job.settled`。
 
-live 实测（M4 live 环境，见 §8；能佐证**当前**事件形状的原始输出是
-`.m4-evidence/obs-summary-scope5.log`——`obs-summary.ts` 在审查修复中陆续加了 `dimensions` /
-`withVersionFreshVector` / 内容指纹腿等字段，`obs-summary-final.log` 是加指纹腿**之前**那版，
-`.m4-evidence/verify-clockfix-live.log` 的 obs 段更早，只用来看当时的覆盖率与分数）：
+live 实测（M4 live 环境，见 §8；rebase 到 `origin/main = 0b8ab72e` 之后重跑的原始输出是
+`.m4-evidence/obs-summary-rebase.log`（worker 起停中途）与 `.m4-evidence/obs-summary-rebase2.log`
+（这一轮把队列领完后的终态）；`.m4-evidence/obs-summary-scope5.log` 是 rebase 前那次的同一口径快照，
+`obs-summary-final.log` 是加指纹腿**之前**那版，`.m4-evidence/verify-clockfix-live.log` 的 obs 段更早，
+只用来看当时的覆盖率与分数）：
 
 ```
 obs.embeddings : listings {active 4, withAnyVector 4, withVersionFreshVector 4, withFreshVector 4},
                  wishes {2, 2, 2, 2}；model text-embedding-v4 / dimensions 1536 / vectorRows 6 / freshVectors 6
 obs.matches    : rankingVersion 2 → rows 2, semanticNull 0, semanticFilled 2, score 85 / 89 / 93
-obs.jobs       : EMBED_LISTING 27 + EMBED_WISH 2 + MATCH_LISTING 54 + MATCH_WISH 8 全 DONE
-                 （retried 0, withError 0；这一轮起停 worker 把历史 PENDING 都领完了，所以没有 PENDING 行）
-obs.summary    : failedJobs 0, failedRate 0（分母 settledJobs 91 = jobRows 91）, rankingVersion1Rows 0, rankingVersion2Rows 2
+obs.jobs       : EMBED_LISTING 46 + EMBED_WISH 6 + MATCH_LISTING 62 + MATCH_WISH 10，全部 DONE
+                 （retried 0, withError 0, 无 PENDING）；另有 3 条 VISUAL_EMBED_LISTING FAILED（见下）
+obs.summary    : jobRows 127 = settledJobs 127, failedJobs 3, failedRate 0.0236,
+                 rankingVersion1Rows 0, rankingVersion2Rows 2
 ```
+
+那 3 条 `VISUAL_EMBED_LISTING FAILED` **不是 M4 的问题**：它们是 rebase 带进来的 #324 视觉向量链路
+（`attempts = 3`、`last_error = EmbeddingProviderError: 封面对象读取失败（listings/seed-{textbook,monitor,k380}/0.jpg）`）
+——本机 MinIO 里没有这些 seed 封面对象，而 stub transport 仍要先把图读出来。同一库在 worker 起停
+**中途**的快照 `.m4-evidence/obs-summary-rebase.log` 是 `jobRows 118 / settledJobs 100 / failedJobs 0 /
+failedRate 0`，可见那 3 条失败全部来自视觉链路，与 M4 的 EMBED/MATCH 四类 job 无关（它们 retried 0）。
+M4 自己的失败率口径没有变化：`failedRate` 的分母仍是已结算 job。
 
 （重标定前同一套观测是 `score 71 / 75 / 79`，M4 参数生效后升到 `85 / 89 / 93`——两行 v2 都是
 "关键词精确命中 + 预算内 + 语义高"的对，锚点拉低后语义项从 15–47 分升到 60+，总分随之抬升。
@@ -345,7 +370,8 @@ obs.summary    : failedJobs 0, failedRate 0（分母 settledJobs 91 = jobRows 91
 另注：`obs:summary` 读的是**当前库**，所以本机反复跑 smoke / 全量测试 / 短暂起 worker 之后会看到新的
 `PENDING` 行（例如 `.m4-evidence/obs-summary-final.log` 里是 5 行 `EMBED_LISTING` + 14 行
 `MATCH_LISTING` + 2 行 `MATCH_WISH` PENDING）。这不是故障：本机没有常驻 worker 去领取它们。
-看覆盖率与 `matches` 分布不受影响。）
+看覆盖率与 `matches` 分布不受影响；rebase 后那一轮 worker 把队列领完了，所以
+`.m4-evidence/obs-summary-rebase2.log` 里 PENDING = 0。）
 
 ### 7.1 worker 侧的观测接线
 
@@ -361,7 +387,7 @@ obs.summary    : failedJobs 0, failedRate 0（分母 settledJobs 91 = jobRows 91
 
 | 事件 | 出处 | 用途 |
 |---|---|---|
-| `worker.started` | `apps/worker/src/index.ts` | 一次记录 pollInterval / transport / model / dimensions / rankingVersion |
+| `worker.started` | `apps/worker/src/index.ts` | 一次记录 pollInterval / transport / model / dimensions / rankingVersion；#324 之后同一事件还带 `visualTransport` / `visualModel` / `visualDimensions`（原来那三行 `console.log` 启动横幅并入这一行） |
 | `worker.recovered` | 同上 | 僵死 job 回收（requeued / failed） |
 | `embed.retry` | 同上（`scheduleRetryFor`） | 一条 `EMBED_*` 结算成 `FAILED`（或启动回收判死）后的**有界补投**决定：`scheduled` / `reason`（`budget-exhausted` / `already-pending` / `bad-payload` / …）/ `failedInWindow` / `delayMs`；统一走 stderr（见 §12 的"3 次失败后无补投"） |
 | `job.settled` | 同上 | 每个 job 一行：job 类型 / 状态 / 耗时 / `MatchRunResult`（含 recall、fallbackReason、vectorCandidates、topKLatencyMs、matched、downgraded） |
@@ -385,7 +411,10 @@ obs.summary    : failedJobs 0, failedRate 0（分母 settledJobs 91 = jobRows 91
 
 - **环境**：隔离库 `fish_322_m4`。共享库 `fish` 的迁移 journal 血统不一致（`db:migrate` 报
   `relation "favorites" already exists`，42P07），与其它 worktree 同惯例各用隔离库；`.env` 指向它，
-  `db:migrate` + `db:seed` 均成功。
+  `db:migrate` + `db:seed` 均成功。rebase 到 `origin/main` 后 main 的 #324 要求**显式**给
+  `VISUAL_EMBEDDING_TRANSPORT`（`packages/shared/src/env.ts:436`：不给就 `环境变量校验失败`，不允许静默
+  回退），本 worktree 只验 #322 M4，所以在 `.env`（gitignored）里设 `VISUAL_EMBEDDING_TRANSPORT=stub`；
+  worker 启动事件里随之多出 `visualTransport / visualModel / visualDimensions` 三个字段。
 - **worker live**：`worker.started = { pollIntervalMs: 1000, transport: "live",
   model: "text-embedding-v4", dimensions: 1536, rankingVersion: 2 }`。`dimensions: 1536` 是
   `EMBEDDING_DIMENSIONS`（`packages/db/src/schema/embeddings.ts:24`）随请求传上去的结果——**v4 的
@@ -398,6 +427,14 @@ obs.summary    : failedJobs 0, failedRate 0（分母 settledJobs 91 = jobRows 91
 - **时钟修复后的复验**（同一份 `.m4-evidence/verify-clockfix-live.log`）：`embed:backfill`
   `generated 0 / unchanged 6 / matched 6`（41 ms，**0 次 provider 请求**）；worker live 仍报
   `dimensions: 1536` / `rankingVersion: 2`，状态全 `DONE`；`obs:summary` 见 §7。
+- **rebase 后复跑**（`origin/main = 0b8ab72e` 之上）：`embed:backfill` 先清空 `embeddings`
+  （`DELETE 6`）再跑 = `.m4-evidence/backfill-rebase-run1.log`（`targets 6` /
+  `{generated:6, unchanged:0, stale:0, missing:0, failed:0, matched:6}` / 1148 ms / 6 次
+  `embed.request`），立刻重跑 = `.m4-evidence/backfill-rebase-run2.log`（`{generated:0, unchanged:6,
+  matched:6}` / 32 ms / **0 次 `embed.request`**）；worker = `.m4-evidence/worker-rebase-run.log`，
+  1 条 `worker.started`（含视觉三字段）、16 条 `embed.entity`、24 条 `job.settled` 全 `DONE`
+  （13 EMBED_LISTING + 3 EMBED_WISH + 6 MATCH_LISTING + 2 MATCH_WISH），其中 6 条 MATCH 走
+  `recall: "vector-topk"`。
 - **反序投递**：seed 产生的历史行先是 v1（`obs.matches` 里 v1 行 > 0），`embed:backfill` +
   worker 跑完后 `rankingVersion1Rows = 0`，即历史实体确实被提升到 v2。
 - **密钥**：只从 `.env`（gitignored，`.gitignore:6-7`）读取；日志只打 model / dimensions / 耗时，
@@ -409,14 +446,14 @@ obs.summary    : failedJobs 0, failedRate 0（分母 settledJobs 91 = jobRows 91
 「顺手修根因」。
 
 **现象**：三条"编辑后重算"的用例确定性变红——`apps/worker/src/jobs/embedding/handlers.test.ts`
-的 `EMBED_LISTING > 编辑 title/description 后重算`（`:219`）与 `EMBED_WISH > 编辑 keyword 后重算`
-（`:476`）都拿到 `stale`（期望 `generated`），`packages/db/src/embeddings.test.ts:732`
-（`refreshEmbeddingSourceVersion` 的版本推进守卫）同样失败。
+的 `EMBED_LISTING > 编辑 title/description 后重算`（测试声明在 `:223`）与 `EMBED_WISH > 编辑 keyword
+后重算`（`:485`）都拿到 `stale`（期望 `generated`），`packages/db/src/embeddings.test.ts:706`
+（`refreshEmbeddingSourceVersion` 的版本推进守卫，失败断言落在 `:732` 的 `.toBe(true)`）同样失败。
 
 **根因**：`packages/db/src/schema/common.ts` 的 `updatedAt` 是"插入用 DB 钟
 （`defaultNow()`）、更新用应用钟（`$onUpdate(() => new Date())`）"。实测本机容器 Postgres 比宿主
 快 **42–52 ms**，于是"编辑后的 `updated_at`"可能**小于**已经存下的 `source_updated_at`；而
-`packages/db/src/embedding-store.ts:149` 的守卫是
+`packages/db/src/embedding-store.ts:150` 的守卫是
 `DO UPDATE ... WHERE excluded."source_updated_at" >= embeddings.source_updated_at`，
 条件为假时 Postgres **静默不写、不报错**，`saveEmbedding` 只返回 `rows.length > 0`（= false），
 handler 于是把一次合法重算当成"旧 job 晚到"而返回 `stale`。在高负载机器上测时曾伪装成时序抖动，
@@ -464,10 +501,10 @@ Top-K 硬边界期望值（95 → 100，锚点变更的直接后果）保留。
 | live provider smoke | ✅ | §8：worker live 6 job 全 DONE；脚本 live 6/6 |
 | 性能 / recall 对照 | ✅ | §4 recall@K 表、§5 ANN 对照表（固定 seed 可复算） |
 | `bun run typecheck` | ✅ | 8 个包 exit 0 |
-| `bun run lint` | ✅ | `Checked 832 files. No fixes applied.` |
-| `bun test --isolate` | ✅ | **2371 pass / 0 fail / 8622 断言 / 231 文件 / 156.54 s**（范围外发现修复后复跑，`verify-scope5-full.log`；第五轮审查修复后是 2344 / 229 文件，`verify-reviewfix4-full.log`，本机负载下 182 s；此前三次全绿分别 52.00 s / 52.61 s / 85.05 s，见 `verify-reviewfix3-full.log` / `verify-reviewfix2-full2.log` / `verify-reviewfix-final3.log`） |
+| `bun run lint` | ✅ | `Checked 1044 files. No fixes applied.`（rebase 到 `origin/main = 0b8ab72e` 之后；两条 warning 来自 main 已有文件：`apps/api/src/modules/listings/service.test.ts` 的 3 处 `noNonNullAssertion`、`apps/api/src/modules/moderation/store.test.ts:195` 的 `noUnusedFunctionParameters`，Biome 判为 warning、exit 0） |
+| `bun test --isolate` | ✅ | 最近一次 **3279 pass / 0 fail / 11305 断言 / 313 文件 / 115.86 s**（第七轮审查修复后，`.m4-evidence/verify-rebase2-full.log`，本机负载偏高；比上一轮只多了 `handlers.test.ts` 的 `stale` 不补投用例）；rebase 到 `origin/main = 0b8ab72e` 后是 **3278 / 0 / 11303 / 313 文件 / 64.89 s**（`verify-rebase-full.log`）；旧基线上范围外发现修复后是 2371 / 231 文件 / 156.54 s（`verify-scope5-full.log`）；第五轮审查修复后 2344 / 229 文件（`verify-reviewfix4-full.log`，本机负载下 182 s）；此前三次全绿分别 52.00 s / 52.61 s / 85.05 s，见 `verify-reviewfix3-full.log` / `verify-reviewfix2-full2.log` / `verify-reviewfix-final3.log`） |
 | Worker + API 真实 DB 集成测试 | ✅ | 用隔离库 `fish_322_m4` 跑 worker live + backfill + obs |
-| core smoke 覆盖一条语义匹配链 | ✅ | `bun run core:smoke` live 全绿（最近一次 `.m4-evidence/core-smoke-scope5b.log` = 236 断言 / 29.1 s / exit 0，含 §6.1 的补投端到端断言）；语义链在 M4 加了"等创建路径的 `MATCH_WISH` 结算"这一步（见 §6.1），第三轮审查后该等待改成"必须全 `DONE`，出现 `FAILED` 直接判失败" |
+| core smoke 覆盖一条语义匹配链 | ✅ | `bun run core:smoke` live 全绿（最近一次 `.m4-evidence/core-smoke-rebase.log` = **266 断言 / 28110 ms / exit 0**，rebase 到 `origin/main` 后；rebase 前是 `core-smoke-scope5b.log` 236 断言 / 29.1 s，main 新增用例多了 30 项断言。两次都含 §6.1 的补投端到端断言）；语义链在 M4 加了"等创建路径的 `MATCH_WISH` 结算"这一步（见 §6.1），第三轮审查后该等待改成"必须全 `DONE`，出现 `FAILED` 直接判失败" |
 | production provider 最小 live smoke（密钥不进日志） | ✅ | §8：本机用 `.env` 里的百炼 key 跑 backfill / worker live；证据日志 grep 密钥值 = **0 命中** |
 
 （说明：全量测试在本机 **load average > 20** 时偶发 5 s hook/用例超时——本轮撞到过三次，
@@ -527,8 +564,15 @@ stdout 一条都没有）、`verify-reviewfix4-full.log`（全量复跑）；**�
 （§7 的 live 块：含内容指纹腿与 `withVersionFreshVector`）、`backfill-v1-to-v2.log`（§6.1 / §12 的
 "v1 → v2"实证）、`worker-upgrade-run.log`（同一轮的 worker 日志全文）、`verify-scope5-full.log`
 （全量复跑），以及 `core-smoke-scope5.log`——那是**失败**的一次：demo 段曾把终态钉成 v2，实际是
-v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）；另有过程诊断输出 `embed-eval.log`、
-`embed-eval-fixture.log`、`recall-diagnostic.log`。
+v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）；**rebase 到 `origin/main = 0b8ab72e` 之后**
+重跑/新增的是 `backfill-rebase-run1.log` / `backfill-rebase-run2.log`（§6 的 live 表：首跑 6 条请求、
+立刻重跑 0 条请求）、`worker-rebase-run.log`（§8 的 worker live 全文）、`core-smoke-rebase.log`
+（266 断言 / 28110 ms，§6.1 与 §10）、`obs-summary-rebase.log` 与 `obs-summary-rebase2.log`（§7 的 live
+块，前后两次快照）、`verify-rebase-full.log`（§10 的全量 3278 pass / 313 文件 / 64.89 s）、
+`ann-probe-real.log`（§5 / §12 的 `--source=real` 档位：`source:"real"`、`realEmbeddingRows 6`、
+`realEmbeddingModels 1`、p50 0.076 / p95 0.148 ms、`needsAnn:false`）、
+`verify-rebase2-full.log`（§10 的全量 3279 pass / 313 文件 / 115.86 s，第七轮审查修复后）；
+另有过程诊断输出 `embed-eval.log`、`embed-eval-fixture.log`、`recall-diagnostic.log`。
 这些文件是**本机复算留痕**，是否随 PR 提交由 Owner 决定。
 
 ## 12. 已知问题与范围外发现
@@ -549,13 +593,16 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
      的 `scheduleFailedEmbedRetry()`（额度 3 条 / 24 h 窗口 / `run_at = now() + 60 s` /
      `NOT EXISTS PENDING` 去重 / 坏 payload 不补投），由 `apps/worker/src/index.ts` 在
      `FAILED` 结算与启动回收两处触发，决定写进 stderr 的 `embed.retry` 事件；8 个用例见
-     `requeue.test.ts`。**没有动队列退避**（`queue.ts:130` 与 `docs/architecture.md:150` 的
-     "重试：不退避"是 M2 冻结协议）；
+     `requeue.test.ts`。**没有动队列退避**（`queue.ts:138` 的"重试不引入退避"注释与 `:145` 的
+     `SET ... run_at = now()`，以及 `docs/architecture.md:150` 的"重试：不退避"，都是 M2 冻结协议）；
   4. **`ann:probe` 用合成随机向量**：新增 `--source=auto|real|synthetic`（默认 `auto`：真实向量够就
      `real`），`real` 时用 `ann_seed` 临时表按固定 `row_number()` 取语料（不重复用同一条，避免 recall
      虚高），真实行不足时直接 exit 2 并提示先跑 `embed:backfill`。本机 live 库只有 6 条真实向量，
-     所以 `real` 只跑到 `--sizes=6`（`source:"real"`、p50 0.042 ms / p95 0.085 ms、`--no-index`）；
-     §5 的 1 万–10 万行数字仍是**合成向量**下的结果；
+     所以 `real` 只跑到 `--sizes=6`（实证 `.m4-evidence/ann-probe-real.log`：`source:"real"`、
+     `realEmbeddingRows 6`、`realEmbeddingModels 1`、p50 **0.076** ms / p95 **0.148** ms、`--no-index`、
+     `needsAnn:false`；探针里已注明 `realEmbeddingRows` 是"维度匹配"的**超集**，不区分模型、不排除
+     版本号落后的行，只用于判"够不够跑 real 档"与 `needsAnn` 的行数腿，偏保守）；§5 的 1 万–10 万行
+     数字仍是**合成向量**下的结果；
   5. **`obs:summary` 的覆盖率缺 `contentHash` 腿**（第四轮审查 F3，minor）：新增
      `apps/worker/src/jobs/embedding/content-hash-sql.ts` 在 SQL 侧复刻 TS 指纹，`withVersionFreshVector`
      作为诊断对照；对拍见 §7。

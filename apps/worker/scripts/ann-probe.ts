@@ -198,6 +198,9 @@ async function main(): Promise<void> {
   )
 
   // 真实语料只认维度匹配的行：读路径本身有维度闸门，不同维度的向量也不该混进同一个 `vector(N)` 列。
+  // ⚠️ 这是**超集**：不区分 model、不排除版本号已落后的行（读路径候选侧只召回新鲜行）。所以
+  // `realEmbeddingRows` 只用来判"够不够跑 real 档"与 `needsAnn` 的行数腿 —— 偏严（保守），
+  // 不代表读路径真能召回这么多行。
   const [realRows] = rowsOf<{ total: unknown; models: unknown }>(
     await db.execute(sql`
       SELECT count(*) AS total, count(DISTINCT model) AS models

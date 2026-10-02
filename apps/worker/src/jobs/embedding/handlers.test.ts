@@ -589,4 +589,26 @@ describe('EMBED_* 补投 MATCH_*（#322 M4 复审修复：入队序 ≠ 执行�
 
     expect(await matchJobs('MATCH_LISTING', listingId)).toHaveLength(0)
   })
+
+  test('生成期间实体被改（stale）时不补投：向量没写进去，补投只会空转', async () => {
+    const listingId = await createListing()
+    // `provider.embed()` 发生在 handler"读实体"之后、"写向量"的事务之前：在这里改标题，
+    // 事务内的指纹复检就会发现内容已变 ⇒ `saveEmbedding` 不被调用、返回 `stale`。
+    const racer: EmbeddingProvider = {
+      model: stub.model,
+      dimensions: stub.dimensions,
+      async embed(texts) {
+        await db
+          .update(listings)
+          .set({ title: 'K380 机械键盘（生成期间被改）' })
+          .where(eq(listings.id, listingId))
+        return stub.embed(texts)
+      },
+    }
+    const handlers = createEmbedJobHandlers(db, racer)
+
+    expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('stale')
+
+    expect(await matchJobs('MATCH_LISTING', listingId)).toHaveLength(0)
+  })
 })

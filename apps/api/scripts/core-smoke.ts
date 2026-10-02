@@ -786,7 +786,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assertEqual(
       topScore(demoWishSide, 'demo /matches?wishId='),
       seededMatch.score,
-      'demo 读接口分数 = 引擎写入的（v2）分数',
+      'demo 读接口分数 = 引擎写入的分数（这一对终态是 v1，版本见上方断言）',
     )
 
     // 发布与建愿望的 job 投递断言要在**停机态**下做：worker 在跑时，job 可能在脚本读库前就被
