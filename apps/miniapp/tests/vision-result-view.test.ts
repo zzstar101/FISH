@@ -2,10 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import { VISUAL_SEARCH_SORTS, VISUAL_SOLD_AVG_MIN_SAMPLES } from '@fish/contracts/visual/schema'
 import {
+  activeVisualSort,
+  DEFAULT_VISUAL_SORT,
   queryCardCopy,
   resultStats,
   soldAvgText,
   VISUAL_SORT_OPTIONS,
+  visualSortQuery,
 } from '@/pages/vision-result/view'
 
 /**
@@ -123,6 +126,36 @@ describe('VISUAL_SORT_OPTIONS', () => {
     const labels = VISUAL_SORT_OPTIONS.map((option) => option.label)
     expect(new Set(labels).size).toBe(labels.length)
     expect(labels.every((label) => label.length > 0)).toBe(true)
+  })
+})
+
+describe('visualSortQuery / activeVisualSort', () => {
+  test('一档都没点过（null）：请求体里整个 sort 键都不出现', () => {
+    const body = visualSortQuery(null)
+    expect('sort' in body).toBe(false)
+    expect(Object.keys(body)).toHaveLength(0)
+    // 序列化后的形状就是老客户端 / M9 回放脚本的形状
+    expect(JSON.stringify(body)).toBe('{}')
+  })
+
+  test('点过档：原样带上契约 sort 码', () => {
+    for (const sort of VISUAL_SEARCH_SORTS) {
+      expect(visualSortQuery(sort)).toEqual({ sort })
+    }
+  })
+
+  test('生效档：没点过时 = 契约缺省档，胶囊因此仍有一项是亮的', () => {
+    const optionSorts = VISUAL_SORT_OPTIONS.map((option) => option.sort)
+    expect(optionSorts).toContain(DEFAULT_VISUAL_SORT)
+    expect(activeVisualSort(null)).toBe(DEFAULT_VISUAL_SORT)
+    for (const sort of VISUAL_SEARCH_SORTS) {
+      expect(activeVisualSort(sort)).toBe(sort)
+    }
+  })
+
+  test('「没点过」与「显式点了缺省档」是两种请求形状', () => {
+    expect(visualSortQuery(null)).not.toEqual(visualSortQuery(DEFAULT_VISUAL_SORT))
+    expect(activeVisualSort(null)).toBe(activeVisualSort(DEFAULT_VISUAL_SORT))
   })
 })
 

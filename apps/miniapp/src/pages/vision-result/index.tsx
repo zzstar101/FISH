@@ -36,7 +36,14 @@ import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
 import type { MockListing } from '@/mock/types'
-import { queryCardCopy, resultStats, soldAvgText, VISUAL_SORT_OPTIONS } from './view'
+import {
+  activeVisualSort,
+  queryCardCopy,
+  resultStats,
+  soldAvgText,
+  VISUAL_SORT_OPTIONS,
+  visualSortQuery,
+} from './view'
 import './index.scss'
 
 /**
@@ -115,11 +122,16 @@ export default function VisionResult() {
   /** 契约 `stats`（类目行情）：与 items 独立，没有结果也可能有；空结果时服务端给 `null` 均价 */
   const [soldStats, setSoldStats] = useState<VisualSearchStats | null>(null)
   /**
-   * 当前排序档位（契约 `sort` 码，不是中文标签）。
+   * 用户点过的排序档（契约 `sort` 码，不是中文标签）；`null` = **一档都没点过**。
    *
-   * 初值 `relevance` = 服务端缺省；切档由 `changeSort` 重新发请求，**不在本地重排** item 顺序。
+   * 初值刻意是 `null` 而不是 `'relevance'`：契约里 `sort` 是可选的，没点过档时请求体
+   * 整个键都不该出现（`visualSortQuery` 负责把 `null` 变成 `{}`）。展示上仍然要有
+   * 一项是亮的，那个「生效档」由 `activeVisualSort` 补成服务端缺省的 `relevance`。
+   * 切档由 `changeSort` 重新发请求，**不在本地重排** item 顺序。
    */
-  const [sort, setSort] = useState<VisualSearchSort>('relevance')
+  const [sort, setSort] = useState<VisualSearchSort | null>(null)
+  /** 生效档：没点过时 = 服务端缺省的 `relevance`，胶囊高亮与同档判定都用它 */
+  const activeSort = activeVisualSort(sort)
   const [retaking, setRetaking] = useState(false)
 
   const nav = useMemo(() => readNavMetrics(), [])
@@ -165,7 +177,7 @@ export default function VisionResult() {
    * `setSort` 之后的 state（那是异步的，直接读会读到上一次的值）。排序发生在服务端
    * **截断到 30 条之前**，所以每一档拿到的都是「全局前 30 条」，这里拿到什么顺序就渲染什么。
    */
-  const search = async (next: VisualSearchSort = sort): Promise<void> => {
+  const search = async (next: VisualSearchSort | null = sort): Promise<void> => {
     const startedAt = beginSearchTask(taskLog.current)
     setLoading(true)
     setFailed(false)
@@ -173,7 +185,7 @@ export default function VisionResult() {
     setItems([])
     setSoldStats(null)
     try {
-      const result = await searchByVisualQuery(objectKey, { sort: next })
+      const result = await searchByVisualQuery(objectKey, visualSortQuery(next))
       // 迟到的响应不得写回：页面已重开一次检索 / 已切档 / 已卸载
       if (!isSearchTaskCurrent(taskLog.current, startedAt)) return
       /*
@@ -182,7 +194,7 @@ export default function VisionResult() {
         时客户端日志里必须有 strategyVersion / embeddingModel）。
       */
       console.debug(
-        `[miniapp] 识图完成 queryId=${result.queryId} strategy=${result.strategyVersion} model=${result.embeddingModel} sort=${next}`,
+        `[miniapp] 识图完成 queryId=${result.queryId} strategy=${result.strategyVersion} model=${result.embeddingModel} sort=${activeVisualSort(next)}`,
       )
       setInterpretation(result.interpretation)
       setItems(result.items)
@@ -206,7 +218,8 @@ export default function VisionResult() {
    * 迟到的响应被 `isSearchTaskCurrent` 拦掉。
    */
   const changeSort = (next: VisualSearchSort) => {
-    if (next === sort) return
+    // 与**生效档**比：没点过档时「综合」已经是生效档，再点它是空操作
+    if (next === activeSort) return
     setSort(next)
     void search(next)
   }
@@ -520,7 +533,7 @@ export default function VisionResult() {
                 {VISUAL_SORT_OPTIONS.map((option) => (
                   <View
                     key={option.sort}
-                    className={`vres__fchip${option.sort === sort ? ' is-on' : ''}`}
+                    className={`vres__fchip${option.sort === activeSort ? ' is-on' : ''}`}
                     onClick={() => changeSort(option.sort)}
                   >
                     <Text>{option.label}</Text>

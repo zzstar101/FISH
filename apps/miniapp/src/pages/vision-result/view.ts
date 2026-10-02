@@ -141,6 +141,33 @@ export const VISUAL_SORT_OPTIONS: readonly VisualSortOption[] = VISUAL_SEARCH_SO
   sort,
 }))
 
+/** 契约里的缺省排序档：请求体不带 `sort` 时由服务端用它兜底。 */
+export const DEFAULT_VISUAL_SORT: VisualSearchSort = 'relevance'
+
+/**
+ * 当前**生效**的排序档（胶囊高亮、同档不重发的判定都用它）。
+ *
+ * 用户一档都没点过时页面 state 是 `null`，生效档就是服务端缺省的 `relevance`：
+ * 胶囊必须有一项是亮的，但这一档**不能**被写进请求体（见 `visualSortQuery`）——
+ * 「没点过」与「点了综合」是两种不同的请求形状。
+ */
+export function activeVisualSort(sort: VisualSearchSort | null): VisualSearchSort {
+  return sort ?? DEFAULT_VISUAL_SORT
+}
+
+/**
+ * 请求体里的排序字段：**没点过档时整个键都不出现**。
+ *
+ * 契约里 `sort` 是可选的（`VisualSortSchema.optional()`，缺省由服务端 `input.sort ?? 'relevance'`
+ * 补），所以「用户没点过任何档」的正确请求是 `{ objectKey }` 而不是
+ * `{ objectKey, sort: 'relevance' }`：后者会让服务端与回放日志以为客户端显式选过档，
+ * 也让老客户端 / M9 脚本的同形状假设失效。返回 `{}` 而不是 `{ sort: undefined }`：
+ * 少一个键最稳，不依赖某条序列化路径把 `undefined` 丢掉。
+ */
+export function visualSortQuery(sort: VisualSearchSort | null): { sort?: VisualSearchSort } {
+  return sort === null ? {} : { sort }
+}
+
 /**
  * 「同类成交均价」的展示值：`¥X · N 件`，样本不足或服务端没给均价时为 `null`（页面渲染 `—`）。
  *
