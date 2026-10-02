@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
 import type { CancelFailure, FavoriteRow } from './favorites-view'
 import { FavoritesPageView } from './favorites-view'
-import { useFavoritesTotal, useMyFavorites, useUnfavoriteMutation } from './queries'
+import { useMyFavorites, useUnfavoriteMutation } from './queries'
 
 export function FavoritesPage() {
   const { me } = useAuth()
@@ -13,10 +13,12 @@ export function FavoritesPage() {
 function FavoritesContent({ ownerId }: { ownerId: string }) {
   const [cancelFailure, setCancelFailure] = useState<CancelFailure>(null)
   const favorites = useMyFavorites(ownerId)
-  const totalQuery = useFavoritesTotal(ownerId)
+  // total 直接取列表响应自带的全量计数（每页都带），不再单独发一次 GET。
+  // 个人中心没有列表查询，那里的计数才走 useFavoritesTotal。
   const unfavorite = useUnfavoriteMutation()
 
   const items: FavoriteRow[] = favorites.data?.pages.flatMap((page) => page.items) ?? []
+  const total = favorites.data?.pages[0]?.total ?? null
 
   function handleCancel(listingId: string) {
     setCancelFailure(null)
@@ -48,7 +50,7 @@ function FavoritesContent({ ownerId }: { ownerId: string }) {
         onCancel={handleCancel}
         onLoadMore={() => void favorites.fetchNextPage()}
         onRetry={() => void favorites.refetch()}
-        total={totalQuery.isError ? null : (totalQuery.data ?? null)}
+        total={total}
       />
     </div>
   )

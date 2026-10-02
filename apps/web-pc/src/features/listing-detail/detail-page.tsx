@@ -317,7 +317,10 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
                   <FavoriteButtonView
                     onToggle={handleFavoriteToggle}
                     state={favoriteButtonState({
-                      errorMessage: null,
+                      errorMessage:
+                        favoriteStateQuery.data?.kind === 'failed'
+                          ? favoriteStateQuery.data.message
+                          : null,
                       pending: favoritePending,
                       read: favoriteRead,
                       status: item.status,
