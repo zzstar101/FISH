@@ -1,5 +1,5 @@
 import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
-import { MEDIA_MAX_VOICE_DURATION_MS } from '@fish/contracts/chat/schema'
+import { MEDIA_MAX_VOICE_DURATION_MS, MESSAGE_RECALL_WINDOW_MS } from '@fish/contracts/chat/schema'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -14,7 +14,7 @@ import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { useAuth } from '../auth/auth-provider'
 import { ReportEntry } from '../reports/report-entry'
-import { presignMediaUpload } from './api'
+import { describeRecallFailure, presignMediaUpload } from './api'
 import {
   describeImageDimensionRejection,
   describeMediaFileRejection,
@@ -58,12 +58,13 @@ import {
   useMarkConversationRead,
   useMediaHistory,
   useMessageHistory,
+  useRecallMessage,
   useSendMediaMessage,
   useSendTextMessage,
 } from './queries'
 import { INITIAL_READ_RECEIPT_STATE, onIncomingMessage, resolveReadReceipt } from './read-receipt'
 import { type ChatRealtimeStatus, useChatRealtime } from './realtime'
-import { buildTimeline, excludeCachedMedia, excludeCachedMessages } from './view'
+import { buildTimeline, canRecallMessage, excludeCachedMedia, excludeCachedMessages } from './view'
 
 /** 服务端硬上限 60s；提前 5s 自动收尾，避免录到一半被 422 拒掉。 */
 const VOICE_AUTO_STOP_MS = MEDIA_MAX_VOICE_DURATION_MS - 5_000
@@ -111,9 +112,11 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   const markRead = useMarkConversationRead(ownerId)
   const sendMessage = useSendTextMessage(ownerId)
   const sendMedia = useSendMediaMessage(ownerId)
+  const recallMutation = useRecallMessage(ownerId)
   const [draft, setDraft] = useState('')
   const [outbox, setOutbox] = useState<OutboxMessage[]>([])
   const [mediaError, setMediaError] = useState<string | null>(null)
+  const [recallError, setRecallError] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [voiceStarting, setVoiceStarting] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
@@ -219,6 +222,23 @@ export function ConversationPage({ conversationId }: { conversationId: string })
   )
   const hasOlderPages = history.hasNextPage || mediaHistory.hasNextPage
   const counterpartLastReadAt = conversation.data?.counterpartLastReadAt ?? null
+
+  /** 撤回在途的消息 id：一条一把锁，防止连点重复 POST（服务端虽幂等，但没必要发两次）。 */
+  const recallingId = recallMutation.isPending
+    ? (recallMutation.variables?.messageId ?? null)
+    : null
+
+  /**
+   * 撤回一条自己发的消息。成功后由 `useRecallMessage` 重取历史 —— 缓存里那条仍是撤回前的
+   * 快照，本地改写没有权威依据（服务端撤回后不再下发正文/媒体 url）。失败透传服务端文案。
+   */
+  function recall(messageId: string) {
+    setRecallError(null)
+    recallMutation.mutate(
+      { conversationId, messageId },
+      { onError: (error) => setRecallError(describeRecallFailure(error)) },
+    )
+  }
 
   const realtimeStatus = useChatRealtime(ownerId, {
     onEvent: (event) => {
@@ -627,21 +647,44 @@ export function ConversationPage({ conversationId }: { conversationId: string })
               {history.isSuccess && mediaHistory.isSuccess && timeline.length === 0 ? (
                 <p className="py-10 text-center text-ink-3 text-sm">还没有消息，发一条打个招呼吧</p>
               ) : null}
+              {recallError !== null ? (
+                <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
+                  {recallError}
+                </p>
+              ) : null}
               <div className="space-y-4">
                 {timeline.map((entry) =>
                   entry.kind === 'message' ? (
                     <MessageBubble
+                      canRecall={
+                        canRecallMessage(
+                          entry.message,
+                          ownerId,
+                          Date.now(),
+                          MESSAGE_RECALL_WINDOW_MS,
+                        ) && recallingId !== entry.message.id
+                      }
                       isMine={entry.message.senderId === ownerId}
                       isRead={isMessageRead(entry.message, counterpartLastReadAt)}
                       key={`message-${entry.id}`}
                       message={entry.message}
+                      onRecall={() => recall(entry.message.id)}
                     />
                   ) : (
                     <MediaBubble
+                      canRecall={
+                        canRecallMessage(
+                          entry.media,
+                          ownerId,
+                          Date.now(),
+                          MESSAGE_RECALL_WINDOW_MS,
+                        ) && recallingId !== entry.media.id
+                      }
                       isMine={entry.media.senderId === ownerId}
                       isRead={isMediaRead(entry.media, counterpartLastReadAt)}
                       key={`media-${entry.id}`}
                       media={entry.media}
+                      onRecall={() => recall(entry.media.id)}
                     />
                   ),
                 )}

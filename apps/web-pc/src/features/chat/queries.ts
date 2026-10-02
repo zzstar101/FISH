@@ -20,6 +20,7 @@ import {
   fetchMessagePage,
   markConversationRead,
   proposeTransaction,
+  recallMessage,
   sendMediaObject,
   sendTextMessage,
 } from './api'
@@ -207,6 +208,36 @@ export function useProposeTransaction(ownerId: string | null) {
       invalidateConversationSurfaces(queryClient, ownerId)
       void queryClient.invalidateQueries({
         queryKey: chatKeys.messages(ownerId, variables.conversationId),
+      })
+    },
+  })
+}
+
+/** 按 (createdAt, id) 排序，与服务端消息顺序口径一致。 */
+export type RecallVariables = { conversationId: string; messageId: string }
+
+/**
+ * 撤回自己发的一条消息（#359 3c）。
+ *
+ * 成功后**必须重取历史**，不能本地把那条改写成撤回碑：服务端撤回后不再下发正文 /
+ * 媒体 url，而缓存里那条仍是**撤回前的快照**，气泡渲染读的就是缓存里的 DTO。
+ * 这与实时分支 `message.recalled` 的处理同口径（`conversation-page.tsx`）。
+ *
+ * 文本与媒体是两条独立的历史查询，都要失效 —— 撤回对两类消息都可用。
+ */
+export function useRecallMessage(ownerId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ conversationId, messageId }: RecallVariables) =>
+      recallMessage(conversationId, messageId),
+    onSuccess: (_result, variables) => {
+      if (ownerId === null) return
+      invalidateConversationSurfaces(queryClient, ownerId)
+      void queryClient.invalidateQueries({
+        queryKey: chatKeys.messages(ownerId, variables.conversationId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: chatKeys.media(ownerId, variables.conversationId),
       })
     },
   })
