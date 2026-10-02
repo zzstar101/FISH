@@ -10,6 +10,7 @@ import {
   Clock,
   Flag,
   HandCoins,
+  Heart,
   Home,
   Images,
   MessageCircle,
@@ -24,11 +25,14 @@ import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
 import { describeCreateConversationFailure } from '../chat/api'
 import { useCreateConversation } from '../chat/queries'
+import { useFavoriteMutation, useFavoriteState, useUnfavoriteMutation } from '../favorites/queries'
 import { useDetailTracking } from '../recommendation/use-detail-tracking'
 import { ReportEntry } from '../reports/report-entry'
 import { canReportUser } from '../reports/view'
 import { BuyDialog } from './buy-dialog'
 import { CommentsSection } from './comments-section'
+import type { FavoriteReadState } from './favorite-button'
+import { FavoriteButtonView, favoriteButtonState } from './favorite-button'
 import { ListingGallery } from './listing-gallery'
 import { ListingNoLine } from './listing-no-line'
 import { useListingDetail } from './queries'
@@ -52,6 +56,13 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   const [chatError, setChatError] = useState<string | null>(null)
   const [chatUnavailable, setChatUnavailable] = useState(false)
   const [buyOpen, setBuyOpen] = useState(false)
+  // 收藏态以服务端为准：读用 GET 的真实结果，写成功后写缓存的是服务端返回值，
+  // 失败只显示错误文本、绝不本地翻转（#193 并入 #190 的用户可见要求）。
+  const favoriteStateQuery = useFavoriteState(listingId, viewerId)
+  const favoriteMutation = useFavoriteMutation()
+  const unfavoriteMutation = useUnfavoriteMutation()
+  const [favoriteError, setFavoriteError] = useState<string | null>(null)
+  const favoritePending = favoriteMutation.isPending || unfavoriteMutation.isPending
   const viewerRef = useRef(viewerId)
   const resetViewerRef = useRef(viewerId)
   viewerRef.current = viewerId
@@ -62,6 +73,7 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     setChatError(null)
     setChatUnavailable(false)
     setBuyOpen(false)
+    setFavoriteError(null)
   }, [viewerId])
 
   function handleChat() {
@@ -90,6 +102,20 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
     )
   }
 
+  /** 已收藏 → 取消（DELETE 无条件幂等）；未收藏 → 收藏（POST 仅在售可点，按钮已禁用兜底）。 */
+  function handleFavoriteToggle() {
+    if (viewerId === null) return
+    const data = favoriteStateQuery.data
+    if (data === undefined || data.kind !== 'loaded') return
+    setFavoriteError(null)
+    const mutate = data.favorited ? unfavoriteMutation : favoriteMutation
+    mutate.mutate(listingId, {
+      onSuccess: (result) => {
+        if (result.kind === 'failed') setFavoriteError(result.message)
+      },
+    })
+  }
+
   if (detail.isPending) return <LoadingState label="正在加载商品详情…" />
 
   if (detail.isError) {
@@ -115,6 +141,16 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
   }
 
   const item = detail.data
+  const favoriteRead: FavoriteReadState =
+    favoriteStateQuery.data === undefined
+      ? 'loading'
+      : favoriteStateQuery.data.kind === 'loaded'
+        ? favoriteStateQuery.data.favorited
+          ? 'favorited'
+          : 'notFavorited'
+        : favoriteStateQuery.data.kind === 'notFound'
+          ? 'notFound'
+          : 'unknown'
   const moderationLabel =
     item.moderationStatus === 'REVIEW'
       ? '审核中'
@@ -263,6 +299,35 @@ export function ListingDetailPage({ listingId }: { listingId: string }) {
               <p className="mt-5 rounded-xl bg-brand-soft px-3 py-2.5 text-brand text-sm">
                 这是你发布的商品
               </p>
+            ) : null}
+
+            {!item.isOwner ? (
+              isInitializing || (authError !== null && authError !== undefined) ? null : me ===
+                null ? (
+                item.status === 'ACTIVE' ? (
+                  <Button asChild className="mt-5 w-full" variant="outline">
+                    <Link search={{ redirect: currentHref() }} to="/login">
+                      <Heart className="size-4" />
+                      登录后收藏
+                    </Link>
+                  </Button>
+                ) : null
+              ) : (
+                <div className="mt-5">
+                  <FavoriteButtonView
+                    onToggle={handleFavoriteToggle}
+                    state={favoriteButtonState({
+                      errorMessage: null,
+                      pending: favoritePending,
+                      read: favoriteRead,
+                      status: item.status,
+                    })}
+                  />
+                  {favoriteError !== null ? (
+                    <p className="mt-2 text-danger text-xs">{favoriteError}</p>
+                  ) : null}
+                </div>
+              )
             ) : null}
 
             {!item.isOwner && item.status === 'ACTIVE' && !chatUnavailable ? (
