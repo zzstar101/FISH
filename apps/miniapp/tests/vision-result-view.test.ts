@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import type { ListingCard } from '@fish/contracts/listings/schema'
-import { queryCardCopy, resultStats, sortResults } from '@/pages/vision-result/view'
+import { VISUAL_SEARCH_SORTS, VISUAL_SOLD_AVG_MIN_SAMPLES } from '@fish/contracts/visual/schema'
+import {
+  queryCardCopy,
+  resultStats,
+  soldAvgText,
+  VISUAL_SORT_OPTIONS,
+} from '@/pages/vision-result/view'
 
 /**
  * 识图结果页的派生判据（设计稿 01–05 的状态覆盖）。
@@ -10,8 +16,9 @@ import { queryCardCopy, resultStats, sortResults } from '@/pages/vision-result/v
  *    没有型号 / 品牌 —— 后者若直接渲染 `text` 会挤成一行，也不该编造「型号」；
  * 2. **两段统计**：识别中 / 空结果时价格区间必须是 `null`（页面渲染 `—`），
  *    把空结果写成「¥0–¥0」是把「没找到」说成「免费」；
- * 3. **排序**：「综合」必须原样返回**同一个数组实例**（那是服务端的混合排序结果），
- *    本地再排一次就是降级；其余三档不能改动入参数组。
+ * 3. **排序与行情都不在客户端算**：五档标签必须与契约 `VISUAL_SEARCH_SORTS` 逐项对齐
+ *    （这里是整套映射唯一的「期望值」副本，源码里不许再有第二份数组），
+ *    成交均价则必须在样本不足时退化成 `—`（把 2 件样本的均价当行情展示是错的口径）。
  */
 function card(overrides: Partial<ListingCard> = {}): ListingCard {
   return {
@@ -96,37 +103,55 @@ describe('resultStats', () => {
   })
 })
 
-describe('sortResults', () => {
-  test('综合：原样返回同一个数组实例（服务端顺序，不本地重排）', () => {
-    const items = [card({ id: 'a' }), card({ id: 'b' })]
-    expect(sortResults(items, '综合')).toBe(items)
+describe('VISUAL_SORT_OPTIONS', () => {
+  test('与契约 VISUAL_SEARCH_SORTS 同源同序（契约加档时这里必须动）', () => {
+    expect(VISUAL_SORT_OPTIONS.map((option) => option.sort)).toEqual([...VISUAL_SEARCH_SORTS])
   })
 
-  test('最新：按发布时间倒序，且不改动入参', () => {
-    const older = card({ id: 'old', createdAt: '2026-09-01T00:00:00.000Z' })
-    const newer = card({ id: 'new', createdAt: '2026-09-20T00:00:00.000Z' })
-    const items = [older, newer]
-    expect(sortResults(items, '最新').map((item) => item.id)).toEqual(['new', 'old'])
-    expect(items.map((item) => item.id)).toEqual(['old', 'new'])
+  test('五档中文标签逐项对齐（错位 / 漏档都会失败）', () => {
+    const labels = Object.fromEntries(VISUAL_SORT_OPTIONS.map((o) => [o.sort, o.label]))
+    expect(labels).toEqual({
+      relevance: '综合',
+      popular: '热销',
+      newest: '最新',
+      price_asc: '价格',
+      condition: '成色',
+    })
   })
 
-  test('价格：从低到高', () => {
-    const items = [card({ id: 'hi', priceCents: 9000 }), card({ id: 'lo', priceCents: 100 })]
-    expect(sortResults(items, '价格').map((item) => item.id)).toEqual(['lo', 'hi'])
+  test('标签两两不同（避免两档抄成同一个词）', () => {
+    const labels = VISUAL_SORT_OPTIONS.map((option) => option.label)
+    expect(new Set(labels).size).toBe(labels.length)
+    expect(labels.every((label) => label.length > 0)).toBe(true)
+  })
+})
+
+describe('soldAvgText', () => {
+  test(`样本少于 ${VISUAL_SOLD_AVG_MIN_SAMPLES} 件：给 null（页面显示 —）`, () => {
+    expect(soldAvgText({ soldAvgPriceCents: 4500, soldSampleCount: 2 })).toBeNull()
+    expect(soldAvgText({ soldAvgPriceCents: 4500, soldSampleCount: 0 })).toBeNull()
   })
 
-  test('成色：全新 → 九成新 → 八成新 → 七成新', () => {
-    const items = [
-      card({ id: 'fair', condition: 'FAIR' }),
-      card({ id: 'new', condition: 'NEW' }),
-      card({ id: 'good', condition: 'GOOD' }),
-      card({ id: 'like', condition: 'LIKE_NEW' }),
-    ]
-    expect(sortResults(items, '成色').map((item) => item.id)).toEqual([
-      'new',
-      'like',
-      'good',
-      'fair',
-    ])
+  test(`恰好 ${VISUAL_SOLD_AVG_MIN_SAMPLES} 件：开始展示`, () => {
+    expect(soldAvgText({ soldAvgPriceCents: 4500, soldSampleCount: 3 })).toBe('¥45 · 3 件')
+  })
+
+  test('样本够但服务端没给均价（null）：仍然给 null，不兜底成 ¥0', () => {
+    expect(soldAvgText({ soldAvgPriceCents: null, soldSampleCount: 9 })).toBeNull()
+  })
+
+  test('文案口径：千分位 + 币种 + 样本数', () => {
+    expect(soldAvgText({ soldAvgPriceCents: 123456, soldSampleCount: 12 })).toBe(
+      '¥1,234.56 · 12 件',
+    )
+  })
+
+  test('阈值取自契约常量（不抄字面量 3）', () => {
+    expect(
+      soldAvgText({ soldAvgPriceCents: 100, soldSampleCount: VISUAL_SOLD_AVG_MIN_SAMPLES - 1 }),
+    ).toBeNull()
+    expect(
+      soldAvgText({ soldAvgPriceCents: 100, soldSampleCount: VISUAL_SOLD_AVG_MIN_SAMPLES }),
+    ).toBe(`¥1 · ${VISUAL_SOLD_AVG_MIN_SAMPLES} 件`)
   })
 })

@@ -15,6 +15,7 @@ import {
   VisualQueryUploadResponseSchema,
   type VisualSearchResponse,
   VisualSearchResponseSchema,
+  type VisualSearchSort,
 } from '@fish/contracts/visual/schema'
 import Taro from '@tarojs/taro'
 import { assertUploadActive } from '@/features/upload/active'
@@ -94,23 +95,42 @@ function toFailure(error: unknown): VisualSearchFailure | null {
 }
 
 /**
+ * 检索的两个可选旋钮。收成选项对象而不是继续加位置参数：`isActive` 已经是第二个位置参数，
+ * 再插一个 `sort` 就得让调用方写 `searchByVisualQuery(key, undefined, 'newest')`。
+ * 本函数在仓库里只有结果页一个调用方，改签名不会漏掉谁。
+ */
+export type VisualSearchQueryOptions = {
+  /** 调用方的在途判据（换号 / 卸载后中止；同 `uploadVisualQueryImage`） */
+  isActive?: () => boolean
+  /**
+   * 排序档位。**缺省不发这个字段**：契约 `sort` 是可选、缺省语义 `relevance`，
+   * 服务端补缺省值（`packages/contracts/src/visual/schema.ts` 的注释）。
+   */
+  sort?: VisualSearchSort
+}
+
+/**
  * 用已上传的查询图发起一次识图搜索。
  *
  * 与上传**必须带同一个匿名会话**（`./session`）：服务端按主体校验 `objectKey` 归属，
  * 换了 id 会直接 400「查询图不可用」。这里再 `ensureVisualSearchSessionId()` 一次是刻意的 ——
  * 上传腿可能采纳过服务端回写的 id，两次取值因此总是取到「当下这一份」。
  *
+ * `sort` 在**服务端截断到 30 条之前**生效（`apps/api/src/modules/visual-search/service.ts`），
+ * 所以这里发出去的档位就是「全局前 30 条」的档位，客户端不再对结果本地重排。
+ *
  * 失败一律抛出 `ApiError`（契约的 5 个错误码之一），由调用方用 `visualSearchErrorMessage`
  * 翻成文案；本函数**不做**演示兜底 —— 识图是真实上游调用，编不出结果。
  */
 export async function searchByVisualQuery(
   objectKey: string,
-  isActive?: () => boolean,
+  options: VisualSearchQueryOptions = {},
 ): Promise<VisualSearchResponse> {
-  assertUploadActive(isActive)
+  assertUploadActive(options.isActive)
   const { data } = await apiRequestWithMeta(VISUAL_SEARCH_PATH, {
     method: 'POST',
-    body: { objectKey },
+    // 缺省档位不占请求体的位置：契约的 `strictObject` 只认这两个键，而服务端补 `relevance`
+    body: options.sort === undefined ? { objectKey } : { objectKey, sort: options.sort },
     headers: { [RECOMMENDATION_HEADERS.sessionId]: ensureVisualSearchSessionId() },
   })
   return VisualSearchResponseSchema.parse(data)

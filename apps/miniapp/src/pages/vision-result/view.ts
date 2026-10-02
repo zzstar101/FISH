@@ -1,24 +1,27 @@
 /**
  * 识图结果页的**派生逻辑**（Taro-free，可单测）。
  *
- * 三块：查询图卡的识别结论文案、两段统计行、「排序胶囊 → 结果顺序」。
- * 抽出来的理由同仓内其它 `view.ts`：这些判据写进页面组件就没人能钉住，
- * 而它们都有「看起来对、实际错」的写法（比如把「识别中」的统计位写成 0 件）。
+ * 三块：查询图卡的识别结论文案、统计行（在售同款 / 价格区间 / 同类成交均价）、
+ * 排序胶囊「中文标签 ↔ 契约 sort 码」的映射。抽出来的理由同仓内其它 `view.ts`：
+ * 这些判据写进页面组件就没人能钉住，而它们都有「看起来对、实际错」的写法
+ * （比如把「识别中」的统计位写成 0 件、把 2 件样本的均价当成行情）。
  *
- * **排序是客户端做的**：契约 `VisualSearchRequestSchema` 只有 `objectKey`
- * （`packages/contracts/src/visual/schema.ts`），没有排序参数 —— 服务端按混合权重
- * 排好序返回。所以除「综合」（= 服务端顺序）外，其余三档都是对**已返回的那一批**
- * （服务端 `VISUAL_RESULT_LIMIT` = 30 条上限）重排，不改变召回范围。这是当前契约下的
- * 上限，不假装是服务端排序。
+ * **排序是服务端做的**（#324 M6）：契约 `VisualSearchRequestSchema` 带**可选** `sort`
+ * （`packages/contracts/src/visual/schema.ts`），服务端在**截断到 30 条之前**排序 ——
+ * 「最新 / 最便宜」是全局前 30 条，不是对已返回那 30 条的本地重排。
+ * 所以本文件**没有任何本地重排**：页面切档 = 换一个 sort 码重新请求，
+ * 「综合」就是缺省 `relevance`。
  */
-import type {
-  ListingCard,
-  ListingCategory,
-  ListingCondition,
-} from '@fish/contracts/listings/schema'
-import type { VisualInterpretation } from '@fish/contracts/visual/schema'
+import type { ListingCard, ListingCategory } from '@fish/contracts/listings/schema'
+import {
+  VISUAL_SEARCH_SORTS,
+  VISUAL_SOLD_AVG_MIN_SAMPLES,
+  type VisualInterpretation,
+  type VisualSearchSort,
+  type VisualSearchStats,
+} from '@fish/contracts/visual/schema'
+import { formatAmount } from '@/lib/money'
 import { categoryLabel } from '@/mock/api'
-import type { SearchFilter } from '@/mock/types'
 
 /** 查询图卡的文案（稿 01 的默认态 / 05 的 `interpretation === null` 变体）。 */
 export type QueryCardCopy = {
@@ -41,7 +44,6 @@ const NO_INTERPRETATION: QueryCardCopy = {
  * 分类中文名。
  *
  * **直接用 `mock/api.ts` 的 `categoryLabel`**（而不是自己再抄一份 8 项中文表）：
- * 同页已经在 import 同一个模块的 `searchFilters`（排序胶囊与搜索页同源），
  * 另抄一份只会多出一个「同值不同源」的漂移点 —— 分类口径变化时两边不会一起动。
  *
  * `mock/` 是 Taro-free 的纯数据模块（`git grep @tarojs apps/miniapp/src/mock` 无命中），
@@ -79,7 +81,13 @@ export function queryCardCopy(interpretation: VisualInterpretation | null): Quer
   return { category, title, subtitle }
 }
 
-/** 两段统计行（稿 03 里空态写 `0 件`、价格区间给 `—`）。 */
+/**
+ * 本次结果的两个统计（稿 03 里空态写 `0 件`、价格区间给 `—`）。
+ *
+ * 只有「在售同款 / 价格区间」——它们是从**本次返回的 items** 派生的。
+ * 「同类成交均价」不在里面：它来自契约 `stats`（服务端按解析出的类目查库），
+ * 与本次结果无关（没有结果也可能有行情），见 `soldAvgText`。
+ */
 export type ResultStats = {
   count: number
   /** 价格区间（分）；空结果时为 `null`，页面渲染成 `—` */
@@ -99,38 +107,53 @@ export function resultStats(items: ListingCard[]): ResultStats {
   return { count: items.length, priceMinCents: min, priceMaxCents: max }
 }
 
-/** 成色档位（数字越小越新），「成色」排序用。 */
-const CONDITION_RANK: Record<ListingCondition, number> = {
-  NEW: 0,
-  LIKE_NEW: 1,
-  GOOD: 2,
-  FAIR: 3,
+/**
+ * 排序胶囊的中文标签。
+ *
+ * `Record<VisualSearchSort, string>` 而不是 `{ label, sort }[]` 字面量数组：
+ * 契约给 `VISUAL_SEARCH_SORTS` 加第六档时，这里**编译期**就缺一个键而报错，
+ * 不会静默少一档；数组字面量抄一份则两边各自漂移（这正是本页旧的
+ * 「综合/最新/价格/成色」四档与契约五档对不上的原因）。
+ */
+const SORT_LABEL: Record<VisualSearchSort, string> = {
+  relevance: '综合',
+  popular: '热销',
+  newest: '最新',
+  price_asc: '价格',
+  condition: '成色',
 }
 
-/** 时间戳；解析不出来按 0（排在最后），不让脏值把整次排序打乱 */
-function timeOf(iso: string): number {
-  const at = Date.parse(iso)
-  return Number.isFinite(at) ? at : 0
+/** 排序胶囊的一项：展示用中文标签 + 请求体里的契约 sort 码 */
+export type VisualSortOption = {
+  label: string
+  sort: VisualSearchSort
 }
 
 /**
- * 按当前胶囊重排结果。
+ * 五档排序胶囊（顺序 = 契约 `VISUAL_SEARCH_SORTS` 的顺序，不另抄一份数组）。
  *
- * `综合` 原样返回**同一个数组实例**：那是服务端的混合排序结果（M6 的权重算出来的），
- * 任何本地重排都是对它的一次降级 —— 复制一份反而会让「有没有动过」看不出来。
- * 其余三档返回新数组，不改原数组。
+ * **本页自己持有这五档**，不复用搜索页的 `SEARCH_FILTERS`：那是文本搜索的四档
+ * （没有「热销」，多一个搜索页的语义），两个页面共用一份必然把识图的档位
+ * 削回文本搜索的口径。
  */
-export function sortResults(items: ListingCard[], filter: SearchFilter): ListingCard[] {
-  if (filter === '综合') return items
-  const sorted = [...items]
-  if (filter === '最新') {
-    sorted.sort((left, right) => timeOf(right.createdAt) - timeOf(left.createdAt))
-    return sorted
-  }
-  if (filter === '价格') {
-    sorted.sort((left, right) => left.priceCents - right.priceCents)
-    return sorted
-  }
-  sorted.sort((left, right) => CONDITION_RANK[left.condition] - CONDITION_RANK[right.condition])
-  return sorted
+export const VISUAL_SORT_OPTIONS: readonly VisualSortOption[] = VISUAL_SEARCH_SORTS.map((sort) => ({
+  label: SORT_LABEL[sort],
+  sort,
+}))
+
+/**
+ * 「同类成交均价」的展示值：`¥X · N 件`，样本不足或服务端没给均价时为 `null`（页面渲染 `—`）。
+ *
+ * 两个条件都判：
+ * 1. `soldSampleCount < VISUAL_SOLD_AVG_MIN_SAMPLES` —— 阈值本身锁在服务端
+ *    （契约注释：少于 3 件的「均价」不是行情），客户端这里只是把「样本不足」显式化成
+ *    页面上的 `—`，**不自己拿样本价去算一个均价**；
+ * 2. `soldAvgPriceCents === null` —— 服务端已经判过阈值，客户端不替它兜底成 0。
+ *
+ * 文案口径与统计行一致：label 由页面渲染成「同类成交均价」，值就是这里的 `¥X · N 件`。
+ */
+export function soldAvgText(stats: VisualSearchStats): string | null {
+  if (stats.soldSampleCount < VISUAL_SOLD_AVG_MIN_SAMPLES) return null
+  if (stats.soldAvgPriceCents === null) return null
+  return `¥${formatAmount(stats.soldAvgPriceCents)} · ${stats.soldSampleCount} 件`
 }
