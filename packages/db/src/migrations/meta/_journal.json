@@ -281,6 +281,13 @@
       "when": 1790863545880,
       "tag": "20261001220545_loud_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790931559387,
+      "tag": "20261002165919_perfect_scorpion",
+      "breakpoints": true
     }
   ]
 }
