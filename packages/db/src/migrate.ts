@@ -135,11 +135,14 @@ async function loadJournalEntryRefs(journal: Journal): Promise<JournalEntryRef[]
  * 会被重放并炸出没有信息量的驱动错误（#401 实测 `enum label "LISTING" already exists`）。
  * 这里把它换成说清「哪条、为什么、怎么改」的失败。
  *
- * 只对 replay-hazard 抛错；另两类只告警（判据与理由见 `./journal-alignment` 的文件头）。
+ * 只对 replay-hazard 抛错；另几类只告警（判据与理由见 `./journal-alignment` 的文件头）。
+ *
+ * `entries` 由调用方传入而不是在这里读文件：这样判据的两半（取 journal / 比对库内簿记）
+ * 各有单一职责，DB 这一半也能用打桩的 `db` 单测（含「有 hazard 则抛、只有告警则不抛」）。
  */
-async function assertJournalAlignment(
-  db: ReturnType<typeof createDb>,
-  journal: Journal,
+export async function assertJournalAlignment(
+  db: Pick<ReturnType<typeof createDb>, 'execute'>,
+  entries: readonly JournalEntryRef[],
 ): Promise<void> {
   const exists = rowsOf(
     await db.execute(sql`SELECT to_regclass('drizzle.__drizzle_migrations') AS name`),
@@ -154,7 +157,7 @@ async function assertJournalAlignment(
     hash: String(row.hash),
     createdAt: Number(row.created_at),
   }))
-  const drift = findJournalDrift(await loadJournalEntryRefs(journal), applied)
+  const drift = findJournalDrift(entries, applied)
   if (drift.length === 0) return
 
   if (blockingDrift(drift).length > 0) {
@@ -185,7 +188,7 @@ export async function migrateWithBackfill(databaseUrl: string): Promise<void> {
   const staging = await mkdtemp(join(tmpdir(), 'fish-217-migrate-'))
   const db = createDb(databaseUrl)
   try {
-    await assertJournalAlignment(db, journal)
+    await assertJournalAlignment(db, await loadJournalEntryRefs(journal))
     const legacy = await hasLegacyGovernance(db)
     await mkdir(join(staging, 'meta'))
     const throughConstraints = journal.entries.slice(0, constraintPhase + 1)

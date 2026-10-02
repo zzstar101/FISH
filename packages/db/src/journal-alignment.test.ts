@@ -101,3 +101,38 @@ test('#429 告警类也会被渲染出来（不能静默吞掉）', () => {
   expect(text).toContain('静默漏迁移')
   expect(text).toContain(hash('z').slice(0, 12))
 })
+
+test('#429 两条条目同 hash 时不误报阻断（hash 是唯一凭据，撞 hash 时分不清是哪条）', () => {
+  // 同一个 hash 出现在两条条目里：库里有这个 hash、且靠后那条 when 高于水位。
+  // 此时无法断定「库里那条属于哪一条条目」，拦下 migrate 比漏报更糟 → 降级为告警。
+  const drift = findJournalDrift(
+    [entry('0001_a', 200, hash('a')), entry('0002_b', 300, hash('a'))],
+    [{ hash: hash('a'), createdAt: 200 }],
+  )
+
+  expect(drift).toEqual([
+    { kind: 'ambiguous-hash', tag: '0002_b', when: 300, watermark: 200, hash: hash('a') },
+  ])
+  expect(blockingDrift(drift)).toEqual([])
+})
+
+test('#429 同 hash 的两条里靠前那条不适用（when <= 水位）时也不算漂移', () => {
+  const drift = findJournalDrift(
+    [entry('0001_a', 200, hash('a')), entry('0002_b', 300, hash('a'))],
+    [
+      { hash: hash('a'), createdAt: 200 },
+      { hash: hash('a'), createdAt: 300 },
+    ],
+  )
+  expect(drift).toEqual([])
+})
+
+test('#429 修法给完整 hash 与可直接粘的定位 SQL', () => {
+  const text = formatJournalDrift([
+    { kind: 'replay-hazard', tag: '0002_parched', when: 300, watermark: 200, hash: hash('b') },
+  ])
+
+  expect(text).toContain(hash('b'))
+  expect(text).toContain(`WHERE hash = '${hash('b')}'`)
+  expect(text).toContain('UPDATE drizzle.__drizzle_migrations SET created_at = 300')
+})

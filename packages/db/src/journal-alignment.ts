@@ -19,13 +19,25 @@
  *
  * - **replay-hazard**：某条 journal 条目 `when > watermark`，但它的 hash **已在库内**
  *   —— 这就是 #401 的形状，drizzle 下一步必然重放它。**唯一阻断项**。
+ * - **ambiguous-hash**：该 hash 对应**多条** journal 条目（两条迁移内容字节相同），
+ *   光凭 hash 分不清库里的记录属于哪一条。不阻断（见下）。
  * - **skipped-entry**：某条条目 `when <= watermark`，但 hash **不在**库内 —— 它已落在水位之下，
  *   drizzle **永远不会**再补它（静默漏迁移）。只告警。
  * - **stale-row**：库内某行的 hash 不属于任何 journal 条目 —— 迁移文件被删/改名，而库里记着它。
  *   只告警。
  *
- * 只有第一类阻断：它当下就会让 migrate 崩且崩得没有信息量；另两类不阻断是为了**不误伤**
+ * 只有 replay-hazard 阻断：它当下就会让 migrate 崩且崩得没有信息量；另几类不阻断是为了**不误伤**
  * （尤其 #73 遗留库要走 `recognizeLegacyGovernance` 那条路径）。
+ *
+ * `ambiguous-hash` 之所以不阻断：hash 是「已应用」的**唯一凭据**，撞 hash 时我们分不清库里那条
+ * 记录属于哪一条条目 —— 据它拦下一次本可正常前进的 migrate，比漏报更糟。它降级为告警，由人判断。
+ *
+ * ## 已知盲区（别把本模块当成「42710 全覆盖」）
+ *
+ * 若某条迁移的内容**已应用但库里根本没有它的行**（hash 不在库内）且 `when > watermark`，
+ * 本模块**没有凭据可用**，drizzle 仍会重放它并抛出裸的 42710/42701 —— #401 修复过程中
+ * `gray_triathlon` 就是这一种（列已存在、簿记无行）。这段盲区只能靠人核对 schema，
+ * 或者让迁移 SQL 自身幂等（`IF NOT EXISTS`）；本模块**刻意不扩大判据**去猜。
  */
 
 /** journal 条目里本模块需要的三个字段。 */
@@ -36,6 +48,7 @@ export type AppliedMigrationRow = { hash: string; createdAt: number }
 
 export type JournalDrift =
   | { kind: 'replay-hazard'; tag: string; when: number; watermark: number; hash: string }
+  | { kind: 'ambiguous-hash'; tag: string; when: number; watermark: number; hash: string }
   | { kind: 'skipped-entry'; tag: string; when: number; watermark: number }
   | { kind: 'stale-row'; hash: string; createdAt: number }
 
@@ -54,12 +67,17 @@ export function findJournalDrift(
   const appliedHashes = new Set(applied.map((row) => row.hash))
   const journalHashes = new Set(entries.map((entry) => entry.hash))
 
+  // 同一个 hash 出现在多条条目里时，光凭 hash 分不清库里的记录属于哪一条。
+  const hashCounts = new Map<string, number>()
+  for (const entry of entries) hashCounts.set(entry.hash, (hashCounts.get(entry.hash) ?? 0) + 1)
+
   const drift: JournalDrift[] = []
   for (const entry of entries) {
     if (entry.when > watermark) {
       if (appliedHashes.has(entry.hash)) {
+        const ambiguous = (hashCounts.get(entry.hash) ?? 0) > 1
         drift.push({
-          kind: 'replay-hazard',
+          kind: ambiguous ? 'ambiguous-hash' : 'replay-hazard',
           tag: entry.tag,
           when: entry.when,
           watermark,
@@ -81,7 +99,7 @@ export function findJournalDrift(
   return drift
 }
 
-/** 只有 replay-hazard 阻断；另两类只告警（理由见文件头）。 */
+/** 只有 replay-hazard 阻断；另几类只告警（理由见文件头）。 */
 export function blockingDrift(drift: readonly JournalDrift[]): JournalDrift[] {
   return drift.filter((item) => item.kind === 'replay-hazard')
 }
@@ -91,7 +109,8 @@ export function blockingDrift(drift: readonly JournalDrift[]): JournalDrift[] {
  *
  * 失败信息是这条校验的全部价值所在：它替换掉的是一个没有信息量的驱动错误
  * （#401 里人只能看到 `enum label "LISTING" already exists`），所以必须点名
- * 「哪条迁移、水位多少、为什么会重放、怎么改」，而不是一句 `assert failed`。
+ * 「哪条迁移、水位多少、为什么会重放、改哪一行为什么值」—— 修法给**完整 hash**，
+ * 让人能直接粘一条定位 SQL，而不是自己拼前缀匹配。
  */
 export function formatJournalDrift(drift: readonly JournalDrift[]): string {
   const lines: string[] = []
@@ -102,9 +121,18 @@ export function formatJournalDrift(drift: readonly JournalDrift[]): string {
           `但它的内容早已应用（hash ${item.hash.slice(0, 12)}… 已在 drizzle.__drizzle_migrations）。`,
         '[db] drizzle 0.45 不比对 hash，只按水位判重放 —— 它会把这条迁移再跑一遍，' +
           '并以 42710/42701 这类「对象已存在」的驱动错误收场。',
-        `[db] 修法：把该行的 created_at 订正为 journal 的 when（${item.when}）；` +
-          '若某条迁移的内容已应用但库里根本没有它的行，则补记一行 created_at = when。' +
-          '改共享库前先 pg_dump 备份，逐条核对对象与迁移定义一致后再动手（见 issue #401 的修复记录）。',
+        '[db] 修法（先 pg_dump 备份，再逐条核对对象与迁移定义一致）：',
+        '[db]   UPDATE drizzle.__drizzle_migrations SET created_at = ' +
+          `${item.when} WHERE hash = '${item.hash}';`,
+        '[db] 若某条迁移的内容已应用但库里根本没有它的行，则补记一行 created_at = when' +
+          '（见 issue #401 的修复记录）。',
+      )
+    }
+    if (item.kind === 'ambiguous-hash') {
+      lines.push(
+        `[db] 告警：\`${item.tag}\`（when=${item.when}）与另一条 journal 条目的内容字节相同` +
+          `（hash ${item.hash.slice(0, 12)}… 重复），光凭 hash 分不清库内记录属于哪一条。` +
+          '不阻断，请人工核对。',
       )
     }
     if (item.kind === 'skipped-entry') {
