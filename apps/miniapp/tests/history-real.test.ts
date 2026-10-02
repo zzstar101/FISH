@@ -37,13 +37,14 @@ mock.module('@/lib/request', () => ({
 }))
 
 const { clearMyViewHistory, fetchMyViewHistory } = await import('../src/features/view-history/api')
-const { canClearTab, goneLabelOf, historyDaysOf, recordCellOf } = await import(
+const { canClearTab, goneLabelOf, historyDaysOf, mergeHistoryItems, recordCellOf } = await import(
   '../src/pages/history/records'
 )
 const { toFavoriteItems } = await import('../src/pages/favorites/list')
 
 const uuid = (n: number) => `01930000-0000-7000-8000-${n.toString(16).padStart(12, '0')}`
 const LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, uuid(11))
+const OTHER_LISTING_ID = encodePublicId(PUBLIC_ID_PREFIX.listing, uuid(12))
 
 function card(over: Partial<ListingCard> = {}): ListingCard {
   return {
@@ -228,6 +229,34 @@ describe('historyDaysOf —— 按本地日分组', () => {
     const items = [item(at(2026, 11, 2, 10))]
     historyDaysOf(items, now)
     expect(items).toHaveLength(1)
+  })
+})
+
+describe('mergeHistoryItems —— 翻页合并按 id 去重', () => {
+  const first = item(at(2026, 11, 2, 10), { id: LISTING_ID })
+  const second = item(at(2026, 11, 2, 9), { id: OTHER_LISTING_ID })
+
+  test('两页无重叠：顺序 = 先上一页、再下一页', () => {
+    const merged = mergeHistoryItems([first], [second])
+    expect(merged.map((row) => row.listing.id)).toEqual([LISTING_ID, OTHER_LISTING_ID])
+  })
+
+  test('后一页重复带回上一页已有的行：只保留先出现的那条（较新的 viewedAt）', () => {
+    // 模拟并发写入：同一件商品又被看了一次，服务端把它 upsert 到头部，翻页时重复下发
+    const refreshedSameId = item(at(2026, 11, 2, 11), { id: LISTING_ID })
+    const merged = mergeHistoryItems([first], [refreshedSameId, second])
+
+    expect(merged.map((row) => row.listing.id)).toEqual([LISTING_ID, OTHER_LISTING_ID])
+    // 保留的是**先出现**的那条（它在上一页里，viewedAt 较新），不是后一页那条
+    expect(merged[0]?.viewedAt).toBe(first.viewedAt)
+  })
+
+  test('不就地改输入，且空页合并是恒等', () => {
+    const prev = [first]
+    const merged = mergeHistoryItems(prev, [])
+    expect(merged).toEqual(prev)
+    expect(merged).not.toBe(prev)
+    expect(prev).toHaveLength(1)
   })
 })
 

@@ -189,6 +189,16 @@ describe('空态：三种来由不能混成一句', () => {
       expect(copy.action).toBe('去逛逛')
     }
     /*
+      留言档（#405 审查回合）：`GET /me/comments` 已上线（#195 PR1），原来那句
+      「契约里没有『按作者取留言』的接口」已经是假话 —— 与本页收藏档同一口径，
+      如实说「这一页还没接」。
+    */
+    const msgs = emptyCopyOf('msgs', 'noBackend')
+    expect(msgs.title).toBe('这一页还没接后端')
+    expect(msgs.text).not.toContain('契约')
+    expect(msgs.text).not.toContain('按作者')
+    expect(msgs.text).toContain('已经上线')
+    /*
       浏览档的 `noBackend` 随 #415 M1 退役：`GET /me/view-history` 已上线，
       真实构建里「接口成功但列表为空」就是「你还没有浏览过」—— 再说「浏览足迹还没有后端」
       就是假话。页面已改用 `demoEmpty` 那一支，这里同时锁住两支文案一致。

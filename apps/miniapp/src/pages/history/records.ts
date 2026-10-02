@@ -196,6 +196,29 @@ export function historyDaysOf(items: readonly ViewHistoryItem[], now: number): H
   return days
 }
 
+/**
+ * 合并「加载更多」取回的一页：按 `listing.id` 去重，**保留先出现的那条**
+ * （服务端按 `last_viewed_at DESC` 下发，先出现 = 较新的 `viewedAt`）。
+ *
+ * 为什么要去重：契约是 `(user, listing)` 唯一 + 游标分页，正常不会重复；但翻页与
+ * 并发写入（同一件商品又被看了一次、行被 upsert 到列表头部）重叠时，后一页可能把
+ * 上一页已经给过的行再带回来一次 —— 不去重就会出现两张同 `id` 的格子（React key 撞车，
+ * 视觉上也是同一件商品出现两遍）。
+ */
+export function mergeHistoryItems(
+  prev: readonly ViewHistoryItem[],
+  next: readonly ViewHistoryItem[],
+): ViewHistoryItem[] {
+  const seen = new Set(prev.map((item) => item.listing.id))
+  const merged = [...prev]
+  for (const item of next) {
+    if (seen.has(item.listing.id)) continue
+    seen.add(item.listing.id)
+    merged.push(item)
+  }
+  return merged
+}
+
 /* ---------------------------------------------------------------- 顶部动作（清空） */
 
 /**
@@ -281,7 +304,9 @@ export function emptyKindOf(demo: boolean, cleared: boolean): EmptyKind {
  * ⚠️ 收藏那一支（#397）：收藏接口已上线（#394），小程序也有了真读它的「我的收藏」页，
  * 所以这里**不能再写**「服务端还没有收藏接口 / 只记在这台设备上」—— 两句现在都是假话。
  * 本页的收藏档还没接端点，如实说「这一页还没接」，并把用户引到能看的那个页面。
- * 浏览档同理（#415 M1 后 `noBackend` 已退役，那一支与 `demoEmpty` 同文案）。
+ * 浏览档同理（#415 M1 后 `noBackend` 已退役，那一支与 `demoEmpty` 同文案）；
+ * 留言档同理（`GET /me/comments` 已上线 #195 PR1，原来说「契约里没有按作者取留言的
+ * 接口」已过期，同样改成「这一页还没接」）。
  */
 export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   if (kind === 'cleared') {
@@ -344,9 +369,14 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
       action: '去逛逛',
     }
   }
+  /*
+    留言档的 `noBackend` 文案（#405 审查回合）：`GET /me/comments` 已上线（#195 PR1，
+    含商品留言），原来说「契约里没有『按作者取留言』的接口」已经是假话。本页这一档还没接
+    （端上聚合页在 #405），按收藏档同一口径如实说「这一页还没接」。
+  */
   return {
-    title: '留言汇总还没有后端',
-    text: '契约里没有「按作者取留言」的接口，所以这里暂时没有内容可看；上线后你发过的商品留言与交易评价都会收在这里。',
+    title: '这一页还没接后端',
+    text: '留言接口已经上线，只是这一页还没接上 —— 你发过的商品留言之后会收在这里。',
     action: '去逛逛',
   }
 }
