@@ -1,3 +1,4 @@
+import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -5,11 +6,13 @@ import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
+import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
+import { clearMyViewHistory, fetchMyViewHistory } from '@/features/view-history/api'
 import { cancellable } from '@/lib/cancellable'
 import { formatAmount } from '@/lib/money'
 import {
@@ -17,16 +20,19 @@ import {
   blockUrlOf,
   CLEAR_LABEL,
   type ClearedState,
-  canClear,
+  canClearTab,
   clearBlockedOf,
   clearDoneOf,
   clearedOf,
   DEMO_OPEN_TIP,
   type DemoRecords,
+  type EmptyKind,
   emptyCopyOf,
   emptyKindOf,
   fetchDemoRecords,
+  type HistoryDay,
   type HistoryTab,
+  historyDaysOf,
   loadingTextOf,
   MESSAGE_KIND_LABEL,
   NO_BACKEND_REFRESH_TIP,
@@ -52,53 +58,45 @@ import './index.scss'
  * 下拉刷新用微信原生（`index.config.ts` 的 `enablePullDownRefresh` + 本页的
  * `usePullDownRefresh`，先例 `pages/orders-buy`），**不手写假 refresher**。
  *
- * ## ⚠️ 三类数据后端一条都没有（本轮最关键的口径）
+ * ## 三档数据源现状（2026-10 核对）
  *
- * | 能力 | 契约现状 | 证据 |
+ * | 能力 | 现状 | 证据 |
  * | --- | --- | --- |
- * | 浏览足迹 | ❌ 无该域（无表、无端点） | `packages/contracts/src/` 下无 footprint / view_history |
- * | 收藏 | ❌ 契约无、API 无模块（DB 侧只有表） | `packages/contracts` / `apps/api` 无 favorites 域；`packages/db/src/schema/favorites.ts` 有表无端点 |
- * | 「我发过的留言」聚合 | ❌ 只有**按商品**取留言的那一条路由 | `packages/contracts/src/comments/routes.ts` 的 `COMMENT_ROUTES`；`comments/schema.ts` 的 `CommentListQuerySchema` 只有 `limit` / `cursor`，**没有 author 过滤** |
+ * | 浏览足迹 | ✅ 已接（#415 M1） | `GET /me/view-history` → `@/features/view-history/api`；按日分组 + 游标分页 + 真实清空 |
+ * | 收藏 | ⚠️ 端点与端上「我的收藏」页都已上线（#394），**本页这一档还没接** | `@/features/favorites/api` 的 `fetchMyFavorites`；本档仍是缺口空态（不在本任务范围） |
+ * | 「我发过的留言」聚合 | ⚠️ `GET /me/comments` 已上线（#195，PR1 只含商品留言）；端上聚合页在 #405（PR）；**本页这一档还没接** | `packages/contracts/src/comments/routes.ts` 的 `myComments` |
  * | 交易评价 / 评分 | ❌ 交易域无 review / rating 字段 | `packages/contracts/src/transactions/schema.ts` 里 `review` / `rating` 零命中（「我留言的」这一档里的**交易评价**那 4 条同样是演示数据） |
- * | 清空 / 取消收藏 / 删留言（写端点） | ❌ 一个都没有 | 全 API 无 `.delete(` 路由；契约里可写的只有 listings 的 offline/online、wishes 的 close/fulfill、notifications 的 markRead |
  *
  * 因此：
- * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）三档一律**空态 + 一句如实的缺口说明**
- *   （`emptyCopyOf(tab, 'noBackend')`），不是假列表、也不是错误态 —— 本页一个业务请求都不发，
- *   没有「加载失败」可言；
+ * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）浏览档读真接口；收藏 / 留言两档
+ *   仍是空态 + 一句如实的缺口说明（`emptyCopyOf(tab, 'noBackend')`），不是假列表；
  * - **演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，两个开关的口径与
- *   「我的」页回退口径一致）才摆演示数据；
+ *   「我的」页回退口径一致）三档都摆演示数据；
  * - **不做 N+1 拼装**（不遍历自己的商品逐个拉 `GET /listings/:id/comments` 过滤作者来假装
  *   汇总 —— 那既慢又不完整）。
  *
- * ## 「清空」到底清掉了什么（Owner 2026-09-23 要求它「不能光是样子」）
+ * ## 「清空」清掉了什么
  *
- * 三档的写端点一个都没有（清空足迹 / 取消收藏 / 删留言，证据同上），所以**没有服务端可写**。
- * 做法是：**演示构建**下清掉的就是本页自己那份演示记录 —— 点完列表真的空了、并切到
- * 「已清空」空态（不是同一个「你还没有记录」），下拉刷新之后仍然为空
- * （`applyCleared` 按渲染期派生，不在取数里改数据）。
- * **真实构建**下没有记录可清、也没有端点，于是只给一句说明、不做任何本地翻转。
+ * - **真实构建 · 浏览档**：`DELETE /me/view-history`（幂等）—— 成功后以服务端为准：
+ *   本地列表清空并切到「已清空」空态；失败只 toast 服务端文案、**不做任何本地翻转**；
+ *   下拉刷新重取第一页仍是空（服务端那份记录已经删了）。
+ * - **真实构建 · 收藏 / 留言档**：没有「清空我这一档」的写端点（收藏只有单品取消、
+ *   留言只有单条删除），只给一句说明（`clearBlockedOf`），不做本地翻转。
+ * - **演示构建**：清掉的就是本页自己那份演示记录 —— 点完列表真的空了、并切到
+ *   「已清空」空态，下拉刷新之后仍然为空（`applyCleared` 按渲染期派生，不在取数里改数据）。
  *
- * ⚠️ **两条已知且刻意接受的边界**（Owner 2026-09-23 已确认口径）：
- * 1. **离开页面再进来会回到清空前** —— 标记只在页面实例内，**不落本机存储**：
- *    写端点一落地，真实数据就由服务端说了算，这时把演示期的「清过了」永久留在
- *    设备上会让用户再也看不到这一页。演示数据本来就是临时的。
- * 2. 本页**不摆「这是演示数据」的门牌**（说明条按 Owner 要求去掉），静态看上去与
- *    真实页面无异 —— 一切按上线版来，数据准确性等到后端对齐时统一处理。
- *
- * ## 后端对齐之后这一页会怎么变（写在代码里，免得后来人不知道往哪收）
- *
- * - 三档各自接真实端点；**没有数据的档就如实显示「无记录」空态**（`noBackend` 那三支
- *    改措辞即可），条数按服务端给的算，数不准的地方（`—`）跟着真实值走；
- * - 「清空」从「清演示数组」改成真实写：有端点就真发，成功后再由服务端返回的列表刷新；
- * - 那三支 `noBackend` 空态与「清空只在演示构建生效」的分支同时删除，
- *    本文件头这张缺口表也一并删掉。
+ * ⚠️ **一条已知且刻意接受的边界**（Owner 2026-09-23 已确认口径）：**演示构建**下
+ * 离开页面再进来会回到清空前 —— 标记只在页面实例内，**不落本机存储**：真实数据由服务端
+ * 说了算（真实浏览档已是这样），把演示期的「清过了」永久留在设备上会让用户再也看不到
+ * 这一页。演示数据本来就是临时的；本页也**不摆「这是演示数据」的门牌**（说明条按 Owner
+ * 要求去掉），静态看上去与真实页面无异。
  *
  * ## 账号作用域
  *
- * 演示取数包在 `@/lib/cancellable` 里（先例 `pages/profile` / `pages/orders-buy`）：
- * 换账号 / 退出时 effect 重跑即取消上一轮，迟到结果按 `null` 丢弃。
- * 「清空过哪几档」在换账号时**渲染期重置**（与 `pages/mylist` 同款）。
+ * 取数（演示三档与真实浏览档）都包在 `@/lib/cancellable` 里（先例 `pages/profile` /
+ * `pages/orders-buy`）：换账号 / 退出时 effect 重跑即取消上一轮，迟到结果按 `null` 丢弃。
+ * 「清空过哪几档」（演示）与真实浏览档的列表在换账号时**渲染期重置**
+ * （与 `pages/mylist` 同款）。
  */
 
 /**
@@ -109,6 +107,22 @@ const EMPTY_ICON: Record<HistoryTab, string> = {
   history: ICONS.clockMuted,
   favs: ICONS.heartMuted,
   msgs: ICONS.commentMuted,
+}
+
+/**
+ * 真实构建 · 浏览档的取数结果。
+ *
+ * `items` 与 `days` 都存：`days` 是上屏的分组视图；「加载更多」追加一页时必须先把
+ * **累计的原始 items** 重新分组（同一天可能横跨两页，直接拼 `days` 会让同一天出现两组、
+ * 还会撞 React 的 `key={day.date}`）。`total` 是服务端 30 天窗口内的**全量**计数，
+ * 与「我的」页数字栏同源。
+ */
+type RealHistory = {
+  ownerId: string
+  items: ViewHistoryItem[]
+  days: HistoryDay[]
+  nextCursor: string | null
+  total: number
 }
 
 export default function History() {
@@ -123,11 +137,26 @@ export default function History() {
 
   const [tab, setTab] = useState<HistoryTab>('history')
   const [data, setData] = useState<DemoRecords | null>(null)
-  /** 真实构建从不进加载态（没有任何可等的请求），否则会永远停在骨架屏上 */
+  /** 演示构建的首屏加载态（真实构建这一支不用它，走下面的 `realLoading`） */
   const [loading, setLoading] = useState(demo)
   const [showTop, setShowTop] = useState(false)
-  /** 重拉（下拉刷新）：自增即驱动下面的 effect */
+  /** 重拉（下拉刷新）：自增即驱动下面的 effect（演示与真实浏览档共用同一个 token） */
   const [reloadToken, setReloadToken] = useState(0)
+
+  /**
+   * 真实构建 · 浏览档的取数结果（演示构建恒为 null；收藏 / 留言两档不接真接口）。
+   * `ownerId` 与 `DemoRecords.ownerId` 同一用意：只收当前账号的结果。
+   */
+  const [realHistory, setRealHistory] = useState<RealHistory | null>(null)
+  /** 真实浏览档首屏在途。初值 `!demo`：真实构建进来第一帧就该是骨架屏，不能闪一帧空态 */
+  const [realLoading, setRealLoading] = useState(!demo)
+  /** 真实浏览档这次没读出来（只在手里没有数据时上屏错误态，见 `realFailed`） */
+  const [realFetchFailed, setRealFetchFailed] = useState(false)
+  /** 本页面实例内清空过（只用于空态文案：清过 vs 本来就没有） */
+  const [realCleared, setRealCleared] = useState(false)
+  /** 「加载更多」在途：换按钮文案 + 挡住连点 */
+  const [loadingMore, setLoadingMore] = useState(false)
+
   /**
    * 「清空过哪几档」。三个布尔量，**只活在本次页面实例内**。
    *
@@ -145,15 +174,43 @@ export default function History() {
     ownerId: null,
   })
   /**
-   * 换账号 / 退出时的**渲染期重置**（与 `pages/mylist` 同款写法）：
-   * 「清空过」是上一个账号的视角，必须在**同一帧内**清掉 —— 否则新账号一进来
-   * 会先画一帧「这个账号已经清空了」的空列表。写成 effect 里 setState 不行，
-   * 那要到下一帧才生效。
+   * 真实浏览档 `realHistory` 的镜像。effect 里判断「这次是首次加载还是刷新 / 切回浏览档」
+   * 用它，理由同下面的 `dataRef`（状态进依赖数组会让 effect 自己再触发一轮）。
+   * 只在第一页取数落地时更新：它服务的是**账号归属**判断，不必逐页镜像（翻页只会追加）。
    */
-  const [prevClearedUser, setPrevClearedUser] = useState<string | null>(userId)
-  if (prevClearedUser !== userId) {
-    setPrevClearedUser(userId)
+  const realRef = useRef<RealHistory | null>(null)
+  /**
+   * 在飞的真实请求（首屏 / 加载更多）的取消句柄。
+   *
+   * 两处必须能显式取消，否则结果会交叉追加：
+   * 1. 刷新 / 切档 / 换账号 / 卸载 → effect 重跑时作废在飞的**加载更多**（旧游标的那一页
+   *    若在刷新之后落地，会与新的第一页重复追加）；
+   * 2. 清空成功 → 作废在飞的**首屏**（清空前发出的 GET 若在 DELETE 之后落地，
+   *    会把已经清掉的列表又画回来）。
+   */
+  const pendingFirst = useRef<(() => void) | null>(null)
+  const pendingMore = useRef<(() => void) | null>(null)
+  /**
+   * 换账号 / 退出时的**渲染期重置**（与 `pages/mylist` 同款写法）：
+   * 「清空过」与真实浏览档的列表都是上一个账号的视角，必须在**同一帧内**清掉 ——
+   * 否则新账号一进来会先画一帧「这个账号已经清空了」的空列表 / 上一个账号的足迹。
+   * 写成 effect 里 setState 不行，那要到下一帧才生效。
+   */
+  const [prevScopeUser, setPrevScopeUser] = useState<string | null>(userId)
+  if (prevScopeUser !== userId) {
+    setPrevScopeUser(userId)
     setClearedState({ ...NOTHING_CLEARED, ownerId: null })
+    // 上一个账号的在飞请求当场作废（effect 的 cleanup 也会取消，这里同步再兜一道）
+    pendingFirst.current?.()
+    pendingMore.current?.()
+    pendingFirst.current = null
+    pendingMore.current = null
+    realRef.current = null
+    setRealHistory(null)
+    setRealFetchFailed(false)
+    setRealCleared(false)
+    setLoadingMore(false)
+    setRealLoading(!demo)
   }
   /**
    * `data` 的镜像。effect 里要判断「手里这份数据是不是当前账号的」来决定
@@ -163,6 +220,10 @@ export default function History() {
   const dataRef = useRef<DemoRecords | null>(null)
 
   useEffect(() => {
+    // 真实构建这一支完全不动：不取演示数据、不碰加载态（浏览档的真实取数在下面的 effect；
+    // 这里若照旧 `setLoading(false)` + `stopPullDownRefresh`，会把真实下拉刷新的指示器提前收掉）
+    if (!demo) return
+
     const previous = dataRef.current
     /**
      * 这次 effect 是不是**下拉刷新**：`reloadToken > 0` 且手里这份数据仍属于当前账号。
@@ -178,8 +239,8 @@ export default function History() {
       setData(null)
     }
 
-    if (!demo || authStatus !== 'authed' || userId === null) {
-      // 真实构建没有可等的请求；未登录 / 登录态未就绪时守卫在跳转，这里也不该亮骨架屏
+    if (authStatus !== 'authed' || userId === null) {
+      // 未登录 / 登录态未就绪时守卫在跳转，这里也不该亮骨架屏
       setLoading(false)
       // 上一轮挂着的指示器在这里收掉，不能留一个一直转的圈
       void Taro.stopPullDownRefresh()
@@ -208,6 +269,78 @@ export default function History() {
     return load.cancel
   }, [demo, authStatus, userId, reloadToken])
 
+  /**
+   * 真实构建 · 浏览档取数（#415 M1）。
+   *
+   * 只在「真实构建 + 当前档是浏览 + 已登录」时发请求；演示构建与另两档完全保持现状。
+   * 与演示 effect 同一套账号作用域口径：`cancellable` + `ownerId` 校验，换账号 / 退出 /
+   * 重拉时迟到结果一律丢弃（渲染期重置已经把手里的列表清干净）。
+   */
+  useEffect(() => {
+    if (demo || tab !== 'history') return
+    if (authStatus !== 'authed' || userId === null) {
+      // 未登录 / 登录态未就绪时守卫在跳转，别把骨架屏一直挂着（登录态就绪后本 effect 会重跑）
+      setRealLoading(false)
+      return
+    }
+
+    const previous = realRef.current
+    const sameOwner = previous !== null && previous.ownerId === userId
+    /**
+     * 下拉刷新（`reloadToken` 自增）且手里已有当前账号的列表 → 保留列表（系统已经拉出原生
+     * 指示器，再换成骨架屏只会让用户丢掉阅读位置，先例 `useOrderList` 的 `keepList`）；
+     * 首次进入 / 换账号 / 切档重取才计一次在途 —— 有数据时上面那支也不会画骨架屏。
+     */
+    const isRefresh = reloadToken > 0 && sameOwner
+    if (!isRefresh) setRealLoading(true)
+    setRealFetchFailed(false)
+    // 在飞的「加载更多」作废：旧游标那一页若在新第一页之后落地，会重复追加同一批行
+    pendingMore.current?.()
+    pendingMore.current = null
+    setLoadingMore(false)
+
+    const forUserId = userId
+    const load = cancellable(
+      async () => ({ ownerId: forUserId, page: await fetchMyViewHistory() }),
+      (next) => next.ownerId === forUserId,
+    )
+    pendingFirst.current = load.cancel
+    void load.promise
+      .then((next) => {
+        // 被取消（换账号 / 退出 / 重拉 / 清空）时 next 为 null：整份结果一律不动
+        if (!next) return
+        const record: RealHistory = {
+          ownerId: next.ownerId,
+          items: next.page.items,
+          days: historyDaysOf(next.page.items, Date.now()),
+          nextCursor: next.page.nextCursor,
+          total: next.page.total,
+        }
+        realRef.current = record
+        setRealHistory(record)
+        setRealLoading(false)
+        setLoadingMore(false)
+        // 原生下拉指示器在本次结果落地时收起
+        void Taro.stopPullDownRefresh()
+      })
+      .catch((error: unknown) => {
+        // 取消不是失败：新一轮取数已经接管状态，什么都不改
+        if (load.isCancelled()) return
+        console.warn('[miniapp] 浏览记录读取失败', error)
+        setRealLoading(false)
+        setRealFetchFailed(true)
+        // 手里已有的列表保留（刷新失败不该把读到的东西抹掉）；没有数据时才上错误态
+        void Taro.stopPullDownRefresh()
+      })
+    return () => {
+      load.cancel()
+      pendingFirst.current = null
+      // 离开浏览档 / 卸载时由 effect 生命周期统一收掉在飞的「加载更多」
+      pendingMore.current?.()
+      pendingMore.current = null
+    }
+  }, [demo, tab, authStatus, userId, reloadToken])
+
   /** 当前账号的「已清空」标记（账号对不上时是「都没清过」） */
   const cleared = useMemo(() => clearedOf(clearedState, userId), [clearedState, userId])
   /** 当前档位的记录是否已被清空 */
@@ -220,7 +353,8 @@ export default function History() {
    * 整份覆盖回满列表 —— 用户会看到「刚清空的东西自己长回来」。
    */
   const shown = useMemo(() => (data === null ? null : applyCleared(data, cleared)), [data, cleared])
-  const days = shown?.days ?? []
+  /** 当前档上屏的浏览记录：真实构建走真接口的结果，演示构建走演示数据（其余档恒空） */
+  const days = !demo && tab === 'history' ? (realHistory?.days ?? []) : (shown?.days ?? [])
   const favs = shown?.favs ?? []
   const msgs = shown?.msgs ?? []
 
@@ -232,8 +366,28 @@ export default function History() {
         ? favs.length
         : msgs.length
 
-  /** 骨架屏只在「还没有数据」时顶替内容（下拉刷新保留了列表，不换骨架屏） */
-  const pending = loading && data === null
+  /**
+   * 骨架屏只在「还没有数据」时顶替内容（下拉刷新保留了列表，不换骨架屏）。
+   * 真实构建的浏览档由 `realLoading` 驱动；另两档没有请求，恒不亮骨架屏。
+   */
+  const pending = demo
+    ? loading && data === null
+    : tab === 'history' && realLoading && realHistory === null
+
+  /** 真实浏览档读失败且手里没有数据：上错误态（**不能**用空态冒充「你没有记录」） */
+  const realFailed = !demo && tab === 'history' && realFetchFailed && realHistory === null
+
+  /**
+   * 空态的来由。真实浏览档不再有 `noBackend`：接口已上线，列表为空就是**真的没有记录**
+   * （`demoEmpty` 那支文案「还没有浏览记录」），本实例里清过则说「已清空」。
+   * 收藏 / 留言两档保持原判据。
+   */
+  const emptyKind: EmptyKind =
+    !demo && tab === 'history'
+      ? realCleared
+        ? 'cleared'
+        : 'demoEmpty'
+      : emptyKindOf(demo, isCleared)
 
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
@@ -247,17 +401,59 @@ export default function History() {
 
   /**
    * 下拉刷新：微信原生指示器（`index.config.ts` 的 `enablePullDownRefresh`）。
-   * 演示构建重拉一遍演示数据（指示器在结果落地时收起，见上面的 effect）；
-   * 真实构建没有任何后端可问 —— 如实说明，不假装刷新成功。
+   * 演示构建重拉一遍演示数据；真实构建只有浏览档有后端可刷（重取第一页），
+   * 收藏 / 留言两档如实说明，不假装刷新成功。
    */
   usePullDownRefresh(() => {
-    if (!demo) {
-      toast(NO_BACKEND_REFRESH_TIP)
-      void Taro.stopPullDownRefresh()
+    if (demo || (tab === 'history' && authStatus === 'authed' && userId !== null)) {
+      setReloadToken((token) => token + 1)
       return
     }
-    setReloadToken((token) => token + 1)
+    toast(NO_BACKEND_REFRESH_TIP)
+    void Taro.stopPullDownRefresh()
   })
+
+  /**
+   * 「加载更多」：游标翻页（真实浏览档）。`nextCursor` 是不透明串，原样回传。
+   *
+   * 追加的一页必须与已有 `items` **合并后重新分组**：同一天可能横跨两页，
+   * 直接拼 `days` 会让同一天出现两组、还会撞 `key={day.date}`。
+   */
+  const loadMore = () => {
+    const current = realHistory
+    if (loadingMore || current === null || current.nextCursor === null) return
+    const forUserId = current.ownerId
+    setLoadingMore(true)
+    const load = cancellable(
+      () => fetchMyViewHistory({ cursor: current.nextCursor ?? undefined }),
+      () => true,
+    )
+    pendingMore.current = load.cancel
+    void load.promise
+      .then((page) => {
+        // 被取消（刷新 / 切档 / 换账号 / 清空）或换过账号：整页结果丢弃
+        // （下面的 updater 还会再核对一次 ownerId）
+        if (load.isCancelled() || page === null) return
+        setRealHistory((prev) => {
+          if (prev === null || prev.ownerId !== forUserId) return prev
+          const items = [...prev.items, ...page.items]
+          return {
+            ...prev,
+            items,
+            days: historyDaysOf(items, Date.now()),
+            nextCursor: page.nextCursor,
+            total: page.total,
+          }
+        })
+        setLoadingMore(false)
+      })
+      .catch((error: unknown) => {
+        if (load.isCancelled()) return
+        console.warn('[miniapp] 浏览记录加载更多失败', error)
+        setLoadingMore(false)
+        toast('没加载出来，请重试')
+      })
+  }
 
   /**
    * 顶栏右端「清空」。
@@ -265,16 +461,47 @@ export default function History() {
    * **演示构建**：清掉当前档的演示记录 —— 列表当场变空、并切到「已清空」空态
    * （`clearedState` 一变，上面那份 `shown` 就跟着空），下拉刷新之后也仍然是空的。
    * **离开页面再进来会回到清空前**（标记只在本次页面实例内，理由见 `clearedState` 的注释）。
-   * **真实构建**：没有记录可清、后端也没有清空 / 取消收藏 / 删留言的端点
-   * （证据见文件头），只给一句说明，不做任何本地翻转。
+   * **真实构建**：只有浏览档能清（`canClearTab`）—— 真发 `DELETE /me/view-history`，
+   * 成功后以服务端为准（本地列表清空 + 「已清空」空态）；失败只 toast 服务端文案，
+   * **不做任何本地翻转**。收藏 / 留言两档没有清空端点，只给说明。
    */
   const clearTab = () => {
-    if (!canClear(demo) || userId === null) {
+    if (userId === null || !canClearTab(demo, tab)) {
       toast(clearBlockedOf(tab))
       return
     }
-    setClearedState((prev) => withCleared(prev, userId, tab))
-    toast(clearDoneOf(tab))
+    // 演示构建：清掉本页自己那份演示记录（列表当场变空 + 切到「已清空」空态）
+    if (demo) {
+      setClearedState((prev) => withCleared(prev, userId, tab))
+      toast(clearDoneOf(tab))
+      return
+    }
+    /*
+      真实构建只有浏览档能走到这里（`canClearTab`）：真发 `DELETE /me/view-history`。
+      成功以服务端为准 —— 本地列表清空 + 切「已清空」空态（下拉刷新重取第一页仍是空）；
+      失败只 toast 服务端文案，**不做任何本地翻转**（本地删几行再回滚是假接线，
+      会让用户以为删成功了）。
+    */
+    void (async () => {
+      try {
+        await clearMyViewHistory()
+        // 清空前发出的 GET / 加载更多若在 DELETE 之后落地，会把已清掉的列表又画回来 ——
+        // 先显式作废在飞请求，再以服务端为准把本地置空。
+        pendingFirst.current?.()
+        pendingMore.current?.()
+        pendingFirst.current = null
+        pendingMore.current = null
+        realRef.current = null
+        setRealHistory(null)
+        setRealFetchFailed(false)
+        setRealCleared(true)
+        setRealLoading(false)
+        setLoadingMore(false)
+        toast(clearDoneOf(tab))
+      } catch (error) {
+        toast(error instanceof Error && error.message ? error.message : '清空失败，请重试')
+      }
+    })()
   }
 
   /** 切档位：回到顶部（否则从长列表切到短列表会停在半空） */
@@ -284,19 +511,33 @@ export default function History() {
   }
 
   /**
-   * 格子 / 留言行：演示 id 在库里不存在，跳过去必然 404 —— 给明确的演示说明，
+   * 演示格 / 留言行：演示 id 在库里不存在，跳过去必然 404 —— 给明确的演示说明，
    * 不假装跳转成功，也不跳到必然 404 的页面（方案 §2.3）。
    */
-  const openRecord = () => {
+  const openDemoRecord = () => {
     toast(DEMO_OPEN_TIP)
+  }
+
+  /**
+   * 真实浏览档的格子：进真实商品详情。
+   *
+   * 失效件与收藏页同口径（`pages/favorites` 的 `openItem`）：详情页对已下架 / 已卖掉的商品
+   * 仍是「还能买」的口吻，与格上的角标自相矛盾 —— 所以只 toast 失效原因，不跳。
+   */
+  const openRealRecord = (item: RecordCell) => {
+    if (item.gone) {
+      toast(`这件宝贝${item.gone}了`)
+      return
+    }
+    void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.id}` })
   }
 
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
   /** 三列格（全部浏览 / 我收藏的共用）：方形色块 + 品类小字 + 失效遮罩 + 格下价格 */
-  const renderCell = (item: RecordCell) => (
+  const renderCell = (item: RecordCell, onOpen: (cell: RecordCell) => void) => (
     <View key={item.id} className="hist__cell">
-      <View className={`hist__thumb${item.gone ? ' is-gone' : ''}`} onClick={openRecord}>
+      <View className={`hist__thumb${item.gone ? ' is-gone' : ''}`} onClick={() => onOpen(item)}>
         <Image className="hist__thumb-img" src={blockUrlOf(item.category)} mode="aspectFill" />
         <Text className="hist__ttag">{shortLabelOf(item.category)}</Text>
         {item.gone ? <Text className="hist__tgone">{item.gone}</Text> : null}
@@ -402,18 +643,28 @@ export default function History() {
               <Text>{loadingTextOf(tab)}</Text>
             </View>
           </>
+        ) : realFailed ? (
+          /*
+            真实浏览档读失败：**不能用空态冒充** —— 空列表是「你真的没有浏览记录」，
+            读失败是「这次没读到」；混在一起会让用户以为自己的足迹丢了。给重试出口。
+          */
+          <LoadError
+            title="浏览记录没读出来"
+            text="检查网络后重试"
+            onRetry={() => setReloadToken((token) => token + 1)}
+          />
         ) : shownCount === 0 ? (
           /*
-            空态三种来由分开说（`emptyKindOf`）：
-            - 真实构建 → 「后端还没有这条数据」（不是「你恰好没有记录」）；
-            - 演示构建没清过 → 恰好没有记录；
-            - 演示构建刚清过 → 「已清空」。第三种若复用第一种，
-              用户会看到「我明明清空的，怎么说是没有后端」。
+            空态按来由分开说（`emptyKind`）：
+            - 真实浏览档没清过 → 「还没有浏览记录」（接口已上线，空就是真的空）；
+            - 真实浏览档刚清过 → 「已清空」；
+            - 真实收藏 / 留言档 → 「这一页还没接」（不是「你恰好没有记录」）；
+            - 演示构建没清过 → 恰好没有记录；刚清过 → 「已清空」。
           */
           <EmptyState
-            title={emptyCopyOf(tab, emptyKindOf(demo, isCleared)).title}
-            text={emptyCopyOf(tab, emptyKindOf(demo, isCleared)).text}
-            actionText={emptyCopyOf(tab, emptyKindOf(demo, isCleared)).action}
+            title={emptyCopyOf(tab, emptyKind).title}
+            text={emptyCopyOf(tab, emptyKind).text}
+            actionText={emptyCopyOf(tab, emptyKind).action}
             onAction={() => void Taro.switchTab({ url: '/pages/home/index' })}
             icon={EMPTY_ICON[tab]}
           />
@@ -427,14 +678,21 @@ export default function History() {
                       <Text className="hist__gdate">{day.date}</Text>
                       <Text className="hist__gcount">{`${day.items.length} 件`}</Text>
                     </View>
-                    <View className="hist__grid">{day.items.map(renderCell)}</View>
+                    <View className="hist__grid">
+                      {day.items.map((item) =>
+                        renderCell(item, realHistory === null ? openDemoRecord : openRealRecord),
+                      )}
+                    </View>
                   </View>
                 ))
               : null}
 
             {tab === 'favs' ? (
-              /* 我收藏的：三列格（失效角标与收藏页同源，稿决策⑥） */
-              <View className="hist__grid">{favs.map(renderCell)}</View>
+              /* 我收藏的：三列格（失效角标与收藏页同源，稿决策⑥）——本页这一档还没接真接口，
+                 能渲染出来的只有演示行，所以点击走演示说明 */
+              <View className="hist__grid">
+                {favs.map((item) => renderCell(item, openDemoRecord))}
+              </View>
             ) : null}
 
             {tab === 'msgs' ? (
@@ -442,7 +700,7 @@ export default function History() {
                  刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。 */
               <View className="hist__rows">
                 {msgs.map((item) => (
-                  <View key={item.id} className="hist__row" onClick={openRecord}>
+                  <View key={item.id} className="hist__row" onClick={openDemoRecord}>
                     <View className="hist__rthumb">
                       <Image
                         className="hist__rthumb-img"
@@ -469,12 +727,26 @@ export default function History() {
             {/* 底部说明：只有浏览档有（收藏档原有一条「已降价」说明，角标删了之后不成立） */}
             {noteOf(tab) ? <Text className="hist__note">{noteOf(tab)}</Text> : null}
 
-            {/* 到底提示：列表非空才渲染（空态与骨架屏下都不该出现） */}
-            <View className="hist__tail">
-              <View className="hist__tail-line" />
-              <Text className="hist__tail-tx num">{tailTextOf(tab, shownCount)}</Text>
-              <View className="hist__tail-line" />
-            </View>
+            {/*
+              分页脚：真实浏览档还有下一页（`nextCursor !== null`）就给「加载更多」（在途禁用），
+              到底（或演示 / 另两档没有分页这回事）才显示现有的「已显示全部」。
+              真实浏览档的数取服务端 `total`（与「我的」页数字栏同源）；演示 / 另两档用本地条数。
+            */}
+            {tab === 'history' && realHistory !== null && realHistory.nextCursor !== null ? (
+              <View className="hist__tail" onClick={loadMore}>
+                <View className="hist__tail-line" />
+                <Text className="hist__tail-tx num">{loadingMore ? '加载中…' : '加载更多'}</Text>
+                <View className="hist__tail-line" />
+              </View>
+            ) : (
+              <View className="hist__tail">
+                <View className="hist__tail-line" />
+                <Text className="hist__tail-tx num">
+                  {tailTextOf(tab, realHistory === null ? shownCount : realHistory.total)}
+                </Text>
+                <View className="hist__tail-line" />
+              </View>
+            )}
           </View>
         )}
       </View>
