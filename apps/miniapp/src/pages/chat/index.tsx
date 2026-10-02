@@ -130,6 +130,14 @@ export default function Chat() {
   const notifEpoch = useRef(0)
 
   /**
+   * 正在回写的通知 id（#431 任务二）。同一条在途时再点一次**不再发第二个请求** ——
+   * 两次点击各带自己的 `readAt` 时间戳，第一个请求失败时的回滚只认自己那个戳，
+   * 就会把第二个请求已经成功的结果又抹回未读（服务端已读、红点复现）。
+   * 一条同时只有一个在途请求，回滚就唯一。
+   */
+  const notifReadInFlight = useRef<Set<string>>(new Set())
+
+  /**
    * 身份切换时的**渲染期重置**（adjust-state-during-render，React 官方推荐的
    * 「存上一帧信息」写法）：Tab 页实例跨登录态存活，`filter` / `items` / `notifs`
    * 都是上一个账号的视角，必须在**同一个 commit 内**换成空值。
@@ -145,6 +153,8 @@ export default function Chat() {
     // 不能放进 effect —— 那之间夹着微任务窗口，上一个账号的响应会写进刚清空的 state
     listEpoch.current += 1
     notifEpoch.current += 1
+    // 在途已读回写登记一并作废：新账号点到同一条 id 时不该被上一个账号的在途请求挡住
+    notifReadInFlight.current.clear()
     setFilter('all')
     setItems([])
     setReady(false)
@@ -490,15 +500,21 @@ export default function Chat() {
    * `readAt` 立即落位，页内胶囊 / 底栏徽标同步递减），再幂等
    * `POST /notifications/:id/read` 落服务端；回写失败的条目回滚回未读（红点复现），
    * 服务端没记上就不冒充已读。跳转行为不变（按 `target` 分派）。
+   *
+   * 同一条已在回写中时跳过重复请求（见 `notifReadInFlight`）：两次点击各带各的
+   * `readAt`，第一次失败的回滚会把第二次已成功的结果抹回未读。
    */
   const openNotif = (item: MockNotification) => {
-    if (item.readAt === null) {
+    if (item.readAt === null && !notifReadInFlight.current.has(item.id)) {
       const epoch = notifEpoch.current
       const readAt = new Date().toISOString()
+      notifReadInFlight.current.add(item.id)
       setNotifs((prev) =>
         prev.map((n) => (n.id === item.id && n.readAt === null ? { ...n, readAt } : n)),
       )
       void markNotificationsRead([item]).then((markedIds) => {
+        notifReadInFlight.current.delete(item.id)
+        // 身份已换（epoch 变了）时连回滚都不做：这份结果属于上一个账号的列表
         if (epoch !== notifEpoch.current || markedIds.has(item.id)) return
         setNotifs((prev) =>
           prev.map((n) => (n.id === item.id && n.readAt === readAt ? { ...n, readAt: null } : n)),
