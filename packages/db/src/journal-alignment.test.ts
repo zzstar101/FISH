@@ -42,7 +42,14 @@ test('#429 #401 的形状：when 高于水位但内容早已应用 → replay-ha
   )
 
   expect(drift).toEqual([
-    { kind: 'replay-hazard', tag: '0002_parched', when: 300, watermark: 200, hash: hash('b') },
+    {
+      kind: 'replay-hazard',
+      tag: '0002_parched',
+      when: 300,
+      watermark: 200,
+      hash: hash('b'),
+      hashEntries: 1,
+    },
   ])
   expect(blockingDrift(drift)).toHaveLength(1)
 })
@@ -79,7 +86,14 @@ test('#429 库内有 journal 不认识的 hash → stale-row，只告警不阻�
 
 test('#429 失败信息点名 tag / 水位 / hash 前缀 / 修法，而不是一句 assert failed', () => {
   const text = formatJournalDrift([
-    { kind: 'replay-hazard', tag: '0002_parched', when: 300, watermark: 200, hash: hash('b') },
+    {
+      kind: 'replay-hazard',
+      tag: '0002_parched',
+      when: 300,
+      watermark: 200,
+      hash: hash('b'),
+      hashEntries: 1,
+    },
   ])
 
   expect(text).toContain('0002_parched')
@@ -102,21 +116,32 @@ test('#429 告警类也会被渲染出来（不能静默吞掉）', () => {
   expect(text).toContain(hash('z').slice(0, 12))
 })
 
-test('#429 两条条目同 hash 时不误报阻断（hash 是唯一凭据，撞 hash 时分不清是哪条）', () => {
-  // 同一个 hash 出现在两条条目里：库里有这个 hash、且靠后那条 when 高于水位。
-  // 此时无法断定「库里那条属于哪一条条目」，拦下 migrate 比漏报更糟 → 降级为告警。
+test('#429 hash 撞车不构成例外：内容重复的条目高于水位时照常阻断，只是点名重复次数', () => {
+  // 曾想把它降级为告警（理由：库内那行未必属于本条）。但 drizzle 按 `when > watermark`
+  // 判重放、**根本不看 hash**，所以本条照样会被重放 —— 降级等于把 42710/42701 放回去。
   const drift = findJournalDrift(
     [entry('0001_a', 200, hash('a')), entry('0002_b', 300, hash('a'))],
     [{ hash: hash('a'), createdAt: 200 }],
   )
 
   expect(drift).toEqual([
-    { kind: 'ambiguous-hash', tag: '0002_b', when: 300, watermark: 200, hash: hash('a') },
+    {
+      kind: 'replay-hazard',
+      tag: '0002_b',
+      when: 300,
+      watermark: 200,
+      hash: hash('a'),
+      hashEntries: 2,
+    },
   ])
-  expect(blockingDrift(drift)).toEqual([])
+  expect(blockingDrift(drift)).toHaveLength(1)
+
+  const text = formatJournalDrift(drift)
+  expect(text).toContain('出现 2 次')
+  expect(text).toContain('不看 hash')
 })
 
-test('#429 同 hash 的两条里靠前那条不适用（when <= 水位）时也不算漂移', () => {
+test('#429 撞 hash 但两条都已落在水位之下 → 零漂移', () => {
   const drift = findJournalDrift(
     [entry('0001_a', 200, hash('a')), entry('0002_b', 300, hash('a'))],
     [
@@ -129,7 +154,14 @@ test('#429 同 hash 的两条里靠前那条不适用（when <= 水位）时也�
 
 test('#429 修法给完整 hash 与可直接粘的定位 SQL', () => {
   const text = formatJournalDrift([
-    { kind: 'replay-hazard', tag: '0002_parched', when: 300, watermark: 200, hash: hash('b') },
+    {
+      kind: 'replay-hazard',
+      tag: '0002_parched',
+      when: 300,
+      watermark: 200,
+      hash: hash('b'),
+      hashEntries: 1,
+    },
   ])
 
   expect(text).toContain(hash('b'))

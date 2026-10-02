@@ -104,7 +104,8 @@ test('#429 对齐库：两次查询都走完且不抛', async () => {
 const databaseUrl = process.env.DATABASE_URL
 const scratchDatabase = `fish_journal_guard_test_${process.pid}`
 const scratchUrl = (() => {
-  const url = new URL(databaseUrl ?? '')
+  if (!databaseUrl) throw new Error('需要 DATABASE_URL：先 bun run db:up && bun run db:migrate')
+  const url = new URL(databaseUrl)
   url.pathname = `/${scratchDatabase}`
   return url.toString()
 })()
