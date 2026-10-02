@@ -43,6 +43,7 @@ import { newId } from '@fish/db/ids'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
+import { visualSearchAttempts } from '@fish/db/schema/visual-search-attempts'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv, loadVisualEmbeddingEnv, type ServerEnv } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -52,10 +53,13 @@ import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/en
 import { createVisualEmbedJobHandlers } from '../../worker/src/jobs/visual-embedding/handlers'
 import { createWorkerMediaStorage } from '../../worker/src/media-storage'
 import { createBunS3MediaStorage } from '../src/modules/uploads/storage'
-import { latencyPercentile } from '../src/modules/visual-search/eval/metrics'
+import { emptyResultRate, latencyPercentile } from '../src/modules/visual-search/eval/metrics'
 import { createVisualParser } from '../src/modules/visual-search/parse'
 import { VISUAL_RECALL_LIMIT, VISUAL_RESULT_LIMIT } from '../src/modules/visual-search/ranking'
-import { createVisualSearchRateLimiter } from '../src/modules/visual-search/rate-limit'
+import {
+  createVisualSearchRateLimiter,
+  type VisualSearchAttemptSubject,
+} from '../src/modules/visual-search/rate-limit'
 import {
   createVisualSearchService,
   type VisualSearchService,
@@ -78,6 +82,21 @@ const PRODUCT_BYTES = JPEG
 /** 另一张合法但不同的图：用于验证"字节不同则向量不同"。 */
 const OTHER_BYTES = Buffer.from(
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKg//2Q==',
+  'base64',
+)
+/**
+ * **真正的无关查询图**：与 `PRODUCT_BYTES`、`OTHER_BYTES` 都不同的第三张 1×1 合法 JPEG。
+ *
+ * 为什么必须单独有一份：这一腿的"无关图片查询"原先用的是 `OTHER_BYTES`，而 `OTHER_BYTES`
+ * 恰好就是 `decoy` 的封面字节（见下方 `visual.write(decoyKey, OTHER_BYTES)`）——也就是说那条
+ * "无关图片查询"其实是 decoy 的**同字节查询**，它命中 decoy 是设计使然，证明不了任何事。
+ *
+ * 这份字节是在只改 `PRODUCT_BYTES` 最后几个扫描数据字节的候选里挑出来的：stub provider
+ * （`sha256(mime + bytes)` 的 4 位十六进制分块）下它与 `PRODUCT_BYTES`、`OTHER_BYTES`
+ * 的余弦相似度**都恰好是 0**，所以"无关"这件事在 stub 空间里是可判定的、不是碰巧。
+ */
+const UNRELATED_BYTES = Buffer.from(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKgH/2Q==',
   'base64',
 )
 /**
@@ -194,6 +213,16 @@ type FixtureListing = {
   status: 'ACTIVE' | 'OFFLINE'
   moderationStatus: 'APPROVED' | 'BLOCKED'
   favoriteHint: string
+  /**
+   * 相对"现在"往前推多少天写 `listings.created_at`。
+   *
+   * 为什么必须可控：`scoreVisualCandidate` 里 freshness（权重 0.1）与 popularity（0.05）
+   * 是**并列分数的裁决者**。stub 下"无关查询图"对两件可见商品的余弦相似度都是 0，
+   * 名次完全由这两项决定；若 4 件商品都在同一毫秒插入，freshness 并列、收藏都是 0，
+   * "第 1 名是谁"就变成实现细节而不是可断言的期望。把 decoy 写新一点，
+   * 名次才有确定性依据（见下面"名次断言"一节）。
+   */
+  ageDays: number
 }
 
 type SeedListingInput = {
@@ -219,6 +248,7 @@ async function seedListing(input: SeedListingInput): Promise<FixtureListing> {
     condition: 'GOOD',
     status: spec.status,
     moderationStatus: spec.moderationStatus,
+    createdAt: new Date(Date.now() - spec.ageDays * 86_400_000),
   })
   const objectKey = listingObjectKey(
     encodePublicId(PUBLIC_ID_PREFIX.user, sellerId),
@@ -273,12 +303,24 @@ type VisualMediaWriter = { write(key: string, bytes: Uint8Array): Promise<void> 
 // 度量
 // ---------------------------------------------------------------------------
 
+/**
+ * 一次查询的**期望**。做成判别联合而不是第一版的 `expectedListingId: string | null`：
+ * `null` 那个写法正是"恒真断言"的来源（负样本分支退化成 `!internalIds.includes('')`，
+ * 见 `runQuery` 里的注释）。负样本必须显式给出"不能排第一"的那条商品，断言才有地方挂。
+ *
+ * - `must-hit`：目标商品必须出现在结果里（同字节查询，stub 与 live 都成立）。
+ * - `must-not-be-first`：目标商品**不能是第 1 名**（无关查询）。
+ */
+type QueryExpectation =
+  | { kind: 'must-hit'; listingId: string }
+  | { kind: 'must-not-be-first'; listingId: string }
+
 type SearchRun = {
   label: string
   latencyMs: number
   itemCount: number
-  /** 期望命中的商品 id；`null` = 这一条**本就该落空**（负样本）。 */
-  expectedListingId: string | null
+  /** 这一条查询的期望；`printRunTable` 与断言都从这里读，避免两处口径漂移。 */
+  expect: QueryExpectation
   hit: boolean
   empty: boolean
   /** 4xx / 503 这一类"没跑成"的结果：不计入延迟分位与空结果率，单独数。 */
@@ -290,11 +332,16 @@ type SearchRun = {
   internalIds: string[]
 }
 
+/** 第 1 名的内部 id（结果为空时 `null`）。名次断言的唯一读法，避免各处写 `internalIds[0] ?? null`。 */
+function topInternalIdOf(run: SearchRun): string | null {
+  return run.internalIds[0] ?? null
+}
+
 function printRunTable(runs: SearchRun[]): void {
   console.log('| 样本 | 期望 | 实得条数 | 第 1 名 | 判定 | 延迟 |')
   console.log('| --- | --- | --- | --- | --- | --- |')
   for (const run of runs) {
-    const expect = run.expectedListingId === null ? '不命中目标' : '命中目标'
+    const expect = run.expect.kind === 'must-hit' ? '命中目标' : '目标不得第 1 名'
     const verdict = run.failed
       ? `✗ 请求失败（${run.failureCode ?? '未知'}）`
       : run.hit
@@ -390,6 +437,7 @@ try {
       status: 'ACTIVE',
       moderationStatus: 'APPROVED',
       favoriteHint: '与查询图字节相同的在售商品',
+      ageDays: 30,
     },
   })
   const offlineTwin = await seedListing({
@@ -402,6 +450,7 @@ try {
       status: 'OFFLINE',
       moderationStatus: 'APPROVED',
       favoriteHint: '同字节但已下架，必须被可见性过滤掉',
+      ageDays: 30,
     },
   })
   const blockedTwin = await seedListing({
@@ -414,6 +463,7 @@ try {
       status: 'ACTIVE',
       moderationStatus: 'BLOCKED',
       favoriteHint: '同字节但在售未过审，必须被可见性过滤掉',
+      ageDays: 30,
     },
   })
   const decoy = await seedListing({
@@ -426,6 +476,7 @@ try {
       status: 'ACTIVE',
       moderationStatus: 'APPROVED',
       favoriteHint: '不同字节的无关在售商品',
+      ageDays: 1,
     },
   })
   // `decoy` 的封面换成另一张图，确保它与查询图**不是**同一个对象键、字节也不同。
@@ -469,18 +520,29 @@ try {
   // 匿名主体键必须满足 `SUBJECT_PATTERN`（`/^[A-Za-z0-9_-]{1,64}$/`，**不含点**），
   // 因为 `search` 会核对 `visualQueryImageSubject(objectKey) === subject.key.subjectKey`。
   const subjectKey = newId().replaceAll('-', '')
+  // `attempts` **不能是空数组**：`createVisualSearchRateLimiter().consume([])` 在第一行就
+  // `return`（`rate-limit.ts` 的 `if (subjects.length === 0) return`），空数组等于限流根本没跑。
+  // 这里给两个主体，与真实匿名请求一致（`subject.ts` 的解析器同时按 session 与 ip 计数）；
+  // 本腿一共 8 次 search ⇒ 每个主体 8 行，远低于 `VISUAL_SEARCH_MAX_ATTEMPTS = 20`，不会误触。
+  const attemptSubjects: VisualSearchAttemptSubject[] = [
+    { subjectType: 'session', subjectKey },
+    { subjectType: 'ip', subjectKey: `eval${subjectKey}` },
+  ]
   const subject: ResolvedVisualSearchSubject = {
     key: { subjectType: 'session', subjectKey },
-    attempts: [],
+    attempts: attemptSubjects,
     issuedSessionId: null,
   }
   console.log(`- 匿名主体键：${subjectKey}（无点，满足 SUBJECT_PATTERN）`)
+  console.log(
+    `- 限流主体：${attemptSubjects.map((item) => item.subjectType).join(' + ')}（与真实匿名请求一致）`,
+  )
 
   /** 写查询图对象 → 注册进 visual_query_images → 调 search。**只传 objectKey**。 */
   async function runQuery(input: {
     label: string
     bytes: Uint8Array
-    expectedListingId: string | null
+    expect: QueryExpectation
   }): Promise<SearchRun> {
     const objectKey = `visual-search/${subjectKey}/${newId().replaceAll('-', '')}.jpg`
     await visual.write(objectKey, input.bytes)
@@ -501,10 +563,18 @@ try {
       // 响应里是**公开 ID**（`lst_…`），库里是 UUIDv7；比较前必须解码，否则恒不相等。
       const internalIds = items.map((item) => decodePublicId(PUBLIC_ID_PREFIX.listing, item.id))
       const topId = items[0]?.id ?? null
+      // **负样本分支不能恒真**。第一版写的是
+      // `!internalIds.includes(input.expectedListingId ?? '')`：`expectedListingId` 为 null 时
+      // 退化成 `!internalIds.includes('')`，而 `decodePublicId` 只返回规范 UUIDv7 或抛错、
+      // 从不返回 `''`，所以那条断言**永远为 true**。
+      // 现在的负样本判据是"目标不是第 1 名"（`must-not-be-first`），它是**能**为 false 的：
+      // 把查询字节换成目标的封面字节就会 false——自证就是这么做的。
+      // 为什么不用"目标不在结果里"：召回没有相似度下限，库里只要有可见向量，
+      // target + decoy 两件必然全被带回，那种断言在当前数据下**不可能**失败，才是恒真的。
       const hit =
-        input.expectedListingId === null
-          ? !internalIds.includes(input.expectedListingId ?? '')
-          : internalIds.includes(input.expectedListingId)
+        input.expect.kind === 'must-not-be-first'
+          ? internalIds[0] !== input.expect.listingId
+          : internalIds.includes(input.expect.listingId)
       assertEqual(
         response?.strategyVersion,
         VISUAL_SEARCH_STRATEGY_VERSION,
@@ -515,11 +585,23 @@ try {
         provider.model,
         `${input.label}：embeddingModel = 写库那个模型`,
       )
+      // 结果条数必须同时受"召回上限"与"返回上限"约束。第一版完全没比对这两条，
+      // 于是"某个改动让召回退化成不带 limit 的全表扫描"在报告里看不出来。
+      assert(
+        items.length <= VISUAL_RESULT_LIMIT,
+        `${input.label}：结果条数 ≤ VISUAL_RESULT_LIMIT(${VISUAL_RESULT_LIMIT})`,
+        { items: items.length },
+      )
+      assert(
+        items.length <= VISUAL_RECALL_LIMIT,
+        `${input.label}：结果条数 ≤ VISUAL_RECALL_LIMIT(${VISUAL_RECALL_LIMIT})`,
+        { items: items.length },
+      )
       return {
         label: input.label,
         latencyMs,
         itemCount: items.length,
-        expectedListingId: input.expectedListingId,
+        expect: input.expect,
         hit,
         empty: items.length === 0,
         failed: false,
@@ -535,7 +617,7 @@ try {
           label: input.label,
           latencyMs,
           itemCount: 0,
-          expectedListingId: input.expectedListingId,
+          expect: input.expect,
           hit: false,
           empty: error.code === 'VISUAL_SEARCH_NO_EMBEDDING',
           failed: true,
@@ -558,14 +640,16 @@ try {
       await runQuery({
         label: `同字节查询 #${round + 1}`,
         bytes: PRODUCT_BYTES,
-        expectedListingId: target.id,
+        expect: { kind: 'must-hit', listingId: target.id },
       }),
     )
     runs.push(
       await runQuery({
         label: `无关图片查询 #${round + 1}`,
-        bytes: OTHER_BYTES,
-        expectedListingId: null,
+        // **不是** `OTHER_BYTES`：那份字节正是 decoy 的封面（见上面 `visual.write(decoyKey, …)`），
+        // 用它当"无关查询"其实是在做 decoy 的同字节查询，命中 decoy 是设计使然。
+        bytes: UNRELATED_BYTES,
+        expect: { kind: 'must-not-be-first', listingId: target.id },
       }),
     )
   }
@@ -573,7 +657,7 @@ try {
   const nonImageRun = await runQuery({
     label: '非图片字节查询',
     bytes: RANDOM_BYTES,
-    expectedListingId: null,
+    expect: { kind: 'must-not-be-first', listingId: target.id },
   })
 
   printRunTable([...runs, nonImageRun])
@@ -581,15 +665,35 @@ try {
 
   const positive = runs.filter((run) => run.label.startsWith('同字节'))
   const unrelated = runs.filter((run) => run.label.startsWith('无关图片'))
+
+  // 前置守卫：无关查询图必须与**库内每一份封面字节**都不同。
+  // 这条直接对应第一版的实测反证（"无关查询"用的就是 decoy 的封面字节）。
+  // 它同时也是"这条断言能失败"的自证入口：把 `UNRELATED_BYTES` 换回 `OTHER_BYTES` 就会红。
+  const coverBytes = [PRODUCT_BYTES, OTHER_BYTES]
+  assert(
+    coverBytes.every((cover) => !cover.equals(UNRELATED_BYTES)),
+    '无关查询图的字节与库内任何封面都不同（不是某件商品的同字节查询）',
+    { covers: coverBytes.length, bytes: UNRELATED_BYTES.length },
+  )
+  assert(
+    !UNRELATED_BYTES.equals(RANDOM_BYTES),
+    '无关查询图与非图片字节也不是同一份（否则会变成在验 422，而不是在验无关查询）',
+  )
+
   assert(
     positive.every((run) => run.hit && !run.failed),
-    '同字节查询全部命中目标商品（stub 下确定性）',
+    '同字节查询全部命中目标商品（stub 与 live 都成立：同字节 ⇒ 同向量 ⇒ 距离 0）',
     positive.map((run) => ({ label: run.label, hit: run.hit, items: run.itemCount })),
   )
   assert(
     unrelated.every((run) => run.hit && !run.failed && run.itemCount > 0),
-    '无关图片查询按"未命中目标"口径通过（它仍会返回最近的 N 条，见下方 ⚠️）',
-    unrelated.map((run) => ({ label: run.label, items: run.itemCount, top: run.topId })),
+    '无关图片查询：目标**不是第 1 名**（不是"目标不在结果里"——理由见 runQuery 的注释）',
+    unrelated.map((run) => ({
+      label: run.label,
+      items: run.itemCount,
+      top: run.topId,
+      topInternal: topInternalIdOf(run),
+    })),
   )
   assertEqual(
     nonImageRun.failureCode,
@@ -602,7 +706,7 @@ try {
   const visibilityRun = await runQuery({
     label: '可见性查询（同字节）',
     bytes: PRODUCT_BYTES,
-    expectedListingId: target.id,
+    expect: { kind: 'must-hit', listingId: target.id },
   })
   const visibleIds = new Set(visibilityRun.internalIds)
   assert(visibilityRun.hit, '可见性查询命中目标（同字节的同款在售商品）', {
@@ -621,26 +725,91 @@ try {
     decoy: decoy.id,
   })
 
+  // -------------------------------------------------------------------------
+  // 名次断言（第一版完全缺失：`topId` 只打印、从不与期望比较）
+  // -------------------------------------------------------------------------
+  step = '名次断言'
+  section('名次断言（只在 transport=stub 下判定）')
+  console.log(
+    `- 为什么只在 stub 下判：stub 的图片向量由字节决定，库内每一份封面字节都在本脚本手里，` +
+      `所以"同字节查询第 1 名 = 目标""无关查询第 1 名 = 更'新鲜'的在售干扰项"都是**可判定**的。` +
+      `live 下这两张 1×1 JPEG 在真实模型眼里几乎同向（实测 6 条查询的第 1 名全是 decoy，` +
+      `连同字节查询也被 decoy 顶到第 2），名次由模型先验而不是排序逻辑决定——` +
+      `把它写成断言只会让这条腿在换模型时随机变红。live 只打印实得名次。`,
+  )
+  if (transport === 'stub') {
+    assert(
+      positive.every((run) => topInternalIdOf(run) === target.id),
+      'stub：同字节查询的第 1 名 = 目标商品',
+      positive.map((run) => ({ label: run.label, top: topInternalIdOf(run), target: target.id })),
+    )
+    assert(
+      unrelated.every((run) => topInternalIdOf(run) === decoy.id),
+      'stub：无关查询的第 1 名 = 更新的在售干扰项（target 30 天前、decoy 1 天前，视觉分都是 0）',
+      unrelated.map((run) => ({ label: run.label, top: topInternalIdOf(run), decoy: decoy.id })),
+    )
+    assert(topInternalIdOf(visibilityRun) === target.id, 'stub：可见性查询的第 1 名 = 目标商品', {
+      top: topInternalIdOf(visibilityRun),
+      target: target.id,
+    })
+  } else {
+    console.log(
+      `- live 实测第 1 名（仅记录，不判定）：同字节 = ${positive
+        .map((run) => run.topId)
+        .join('、')}；无关 = ${unrelated.map((run) => run.topId).join('、')}；` +
+        `可见性 = ${visibilityRun.topId}`,
+    )
+  }
+
+  // -------------------------------------------------------------------------
+  // 限流：证明 attempts 真的被 consume，而不是空数组空转
+  // -------------------------------------------------------------------------
+  step = '限流'
+  section('限流确实执行了（不是 `consume([])` 的空转）')
+  const issuedSearches = runs.length + 2 // 主样本集 + 非图片查询 + 可见性查询
+  const attemptRows = await db
+    .select({ id: visualSearchAttempts.id, subjectKey: visualSearchAttempts.subjectKey })
+    .from(visualSearchAttempts)
+  // scratch 库是本次现建的，除了这条腿没有别的写入者，所以全表行数就是本腿的行数。
+  const sessionRows = attemptRows.filter((row) => row.subjectKey === subjectKey).length
+  assert(
+    sessionRows === issuedSearches &&
+      attemptRows.length === issuedSearches * attemptSubjects.length,
+    `限流插入行数 = 请求数 × 主体数（期望 session ${issuedSearches} 行 / 全表 ${issuedSearches * attemptSubjects.length} 行）`,
+    {
+      sessionRows,
+      total: attemptRows.length,
+      issuedSearches,
+      subjects: attemptSubjects.length,
+    },
+  )
+
   step = '汇总'
   section(`汇总（transport=${transport}，scratch 库 ${database}）`)
-  const allRuns = [...runs, nonImageRun]
+  // `visibilityRun` 也真的发出了一次 search，必须计入请求数与延迟分位。
+  const allRuns = [...runs, nonImageRun, visibilityRun]
   const usable = searchableRuns(allRuns)
   const rejected = allRuns.filter((run) => run.failed)
   const emptyCount = usable.filter((run) => run.empty).length
   const latencies = usable.map((run) => run.latencyMs)
   const p50 = latencyPercentile(latencies, 0.5)
   const p95 = latencyPercentile(latencies, 0.95)
-  const hitCount = allRuns.filter((run) => run.hit).length
+  // "符合预期"要把**按预期被拒**也算进去：非图片查询的期望就是被 422 挡下，
+  // 把它算成"不符合预期"会让这一行永远差 1（第一版打印 6/7 就是这么来的）。
+  const expectedRejected = rejected.filter(
+    (run) => run.failureCode === 'VISUAL_SEARCH_IMAGE_INVALID',
+  ).length
+  const hitCount = usable.filter((run) => run.hit).length
   console.log(`| 指标 | 值 |`)
   console.log(`| --- | --- |`)
   console.log(`| transport | ${transport} |`)
   console.log(`| provider model | ${provider.model} |`)
   console.log(`| 请求数 | ${allRuns.length} |`)
-  console.log(`| 符合预期数 | ${hitCount}/${allRuns.length} |`)
+  console.log(`| 符合预期数 | ${hitCount + expectedRejected}/${allRuns.length} |`)
   console.log(`| 空结果数（2xx 但 items = 0） | ${emptyCount} |`)
-  console.log(
-    `| empty-result rate（只算成功返回的请求） | ${fixed(emptyCount / Math.max(usable.length, 1))} |`,
-  )
+  // 调被测函数，不复制公式：内联 `emptyCount / Math.max(usable.length, 1)` 会让
+  // `metrics.emptyResultRate` 变成"只在单测里跑过的死代码"。
+  console.log(`| empty-result rate（只算成功返回的请求） | ${fixed(emptyResultRate(usable))} |`)
   console.log(`| 被拒请求数（4xx/503，不计入延迟） | ${rejected.length} |`)
   console.log(`| p50 延迟 | ${ms(p50)} |`)
   console.log(`| p95 延迟 | ${ms(p95)} |`)

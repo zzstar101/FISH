@@ -33,16 +33,30 @@ import type { VisualInterpretation } from '@fish/contracts/visual/schema'
  *   通用关键词撞上的无关品类、以及根本解析不出文本的查询（此时文本路完全失去判别力）。
  * - `hybrid` 应当同时避开这两类失误——这就是它存在的唯一理由，也是本 Issue 要验证的命题。
  *
+ * ## 样本由两部分组成：初版 12 条 + 对抗性审查 B1 补齐的 9 条
+ *
+ * 初版 12 条按"两路各自的失误模式"设计；复查时发现 Issue #324 M9 点名的若干**图像质量维度**
+ * 在 fixture 里一条样本都没有（`grep` 结果：背景 0、多物体 0、模糊 0、低光 0、截图 0、
+ * 同品牌 0、同色 0），另有三个维度只有名义覆盖（同款不同角度 / 同型号不同背景 /
+ * 同色不同物体）。补齐的 9 条用 `scenario` 打标，并由 `REQUIRED_SCENARIOS` +
+ * `assertFixtureIntegrity` 保证"每个点名维度至少有一条样本"——删掉会在加载期抛错。
+ * 其中 `exact-parse-failed` 还补上了 `interpretation = null`（解析完全失败）这条从未被采样的路径。
+ *
  * ## 当前的实测结果（改样本前先读这段）
  *
- * `bun run visual:eval` 在 12 条样本上得到：**首选与人工判断一致率** visual-only 10/12、
- * text-only 12/12、hybrid 12/12；**排序倒置数**（至少一条不相关项压过相关项）
- * 分别是 3 / 2 / 1 条。也就是说：hybrid 的优势是**真实但很小**——它只在"倒置"这一项上
- * 严格胜出（1 < 2 < 3），首选命中与 text-only 打平，
- * 而 `Recall@5` / `Recall@10` / `Top-5 人工相关率` 三路**完全一样**
+ * `bun run visual:eval` 在 21 条样本上得到：**首选与人工判断一致率** visual-only 12/21、
+ * text-only 19/21、hybrid 21/21；**排序倒置数**（至少一条不相关项压过相关项）
+ * 分别是 9 / 5 / 3 条；MRR 0.833 / 0.976 / 1.000，NDCG@10 0.855 / 0.959 / 0.993。
+ * 也就是说：hybrid 的优势是**真实但很窄**——它同时赢了"首选命中"与"排序倒置"两项，
+ * 但 `Recall@5` / `Recall@10` / `Top-5 人工相关率` 三路**完全一样**
  * （候选池每样本只有 4–5 条，Top-5 覆盖全池；Recall 的分母是标注出的相关项，
- * 只要不漏就都是 1.000）。这不是脚本的缺陷，而是这个 fixture 分辨率的真实上限——
- * 想知道线上召回率与空结果率，必须跑 `visual:eval:db`。
+ * 只要不漏就都是 1.000；Top-5 相关率只取决于池子成分，与排序无关）。这不是脚本的缺陷，
+ * 而是这个 fixture 分辨率的真实上限——想知道线上召回率与空结果率，必须跑 `visual:eval:db`。
+ *
+ * 补进来的 9 条把 visual-only 的优势削得很明显（它在这 9 条里只赢了 2 条）：背景复杂、
+ * 多物体、模糊低光、截图、同品牌不同品类、同色不同物体这六个场景**都会让纯视觉排序首选错位**，
+ * 同款不同角度则相反——文本路因为"照片里没有字"把真同款排到池底，只有视觉路能救。
+ * 这正是 hybrid 存在的理由：两路的失误模式不重叠。
  *
  * 第一版 fixture 只有 3–4 个候选、且每条样本的相关项视觉分都比不相关项高，
  * 于是三路指标全部饱和；这不是"评测通过"，是"评测失效"。改动样本时请守住这条：
@@ -110,8 +124,51 @@ export type VisualEvalRelevance = 0 | 1 | 2
  */
 export type VisualEvalSampleClass = 'exact' | 'variant' | 'category-mismatch' | 'unrelated'
 
+/**
+ * 样本**场景标签**。比 `sampleClass` 细一层：`sampleClass` 说"这条是正/难/负样本"，
+ * `scenario` 说"它到底在考哪一种真实场景"。
+ *
+ * 存在的理由是可核查的**覆盖面**。Issue #324 M9 点名的图像质量维度（背景复杂 / 多物体 /
+ * 模糊低光 / 截图非实拍 / 同品牌不同品类）以及三个此前只有名义覆盖的维度
+ * （同款不同角度 / 同型号不同背景 / 同色不同物体）如果只写在 rationale 的散文里，
+ * 下一次改样本就可能把它们悄悄删掉，而指标不会有任何变化。这里给每个场景一个稳定标签，
+ * 并由 `required-scenario` 那条完整性断言保证"每个必需场景至少有一条样本"——
+ * 删掉样本会在模块加载期**直接抛错**。
+ *
+ * 与 `sampleClass` 正交：同一条样本只属于一个 `sampleClass`，但"同品牌不同品类"这种陷阱
+ * 在标注上既可能是 `category-mismatch`（分类不同），也可能是 `unrelated`。
+ *
+ * 前 9 个是 `REQUIRED_SCENARIOS`（必需覆盖）；其余是既有样本的描述性标签，不参与覆盖断言。
+ */
+export type VisualEvalScenario =
+  // —— Issue #324 M9 点名的维度（必需覆盖，见 REQUIRED_SCENARIOS） ——
+  | 'complex-background' // 背景复杂：桌面/杂物占了大半画面
+  | 'multiple-objects' // 一张图里多个物体，查询只指向其中一个
+  | 'blurry-low-light' // 模糊 / 低光：查询图本身质量差
+  | 'screenshot-not-photo' // 截图而非实拍：带 UI/文字的电商页截图
+  | 'same-brand-different-category' // 同品牌不同品类（视觉同族，品类不符）
+  | 'same-model-different-angle' // 同一件东西换个角度重拍
+  | 'same-model-different-background' // 同型号换背景重拍
+  | 'same-color-different-object' // 同颜色但完全不同的物体
+  | 'parse-failed' // 语义解析完全失败（`interpretation = null`）
+  // —— 既有 12 条样本的场景标签（描述性，不参与覆盖断言） ——
+  | 'packaging-trap'
+  | 'accessory-trap'
+  | 'same-series-older-model'
+  | 'same-model-different-color'
+  | 'same-series-different-volume'
+  | 'reordered-pool-smoke'
+  | 'no-text-in-image'
+  | 'negative-pool'
+  | 'same-category-negative'
+  | 'text-only-failure'
+  | 'broad-keyword-query'
+  | 'multi-exact-recall'
+
 export type VisualEvalSample = {
   id: string
+  /** 这条样本考的是哪种真实场景（覆盖断言按它检查，见 `REQUIRED_SCENARIOS`）。 */
+  scenario: VisualEvalScenario
   sampleClass: VisualEvalSampleClass
   /**
    * 查询图的解析结果（M5）。`null` = 没解析出文本 / 解析被关掉（`VISUAL_PARSE_TRANSPORT=off`）。
@@ -530,7 +587,366 @@ const negBoxTextMatch = candidate({
 })
 
 // ---------------------------------------------------------------------------
-// fixture 本体：12 条样本
+// 复查补齐（#324 M9 对抗性审查 B1）：图像质量维度 / 同品牌 / 同色 / 同款不同角度
+//
+// 这一组候选**只服务于下面 9 条新样本**，刻意不复用旧池里的常数：旧池那些候选的分数
+// 已经在 12 条样本的 rationale 里被引用（"实测：visual-only = …"），改一个数就会让文档撒谎。
+// 新样本要的是"同一个物件、不同拍摄条件"的对照，用一套独立常数最不容易互相污染。
+// ---------------------------------------------------------------------------
+
+// --- 同款不同角度：同一副 AirPods，换个角度重拍 -----------------------------
+
+/**
+ * 同一副 AirPods Pro 2，换一个角度重拍（例如把耳机盒立起来）。
+ * 物件相同 ⇒ 图片路给高分（0.95）；这个角度拍不到可读型号文字 ⇒ 文本路几乎没有证据（0.25）。
+ */
+const airpodsAngleShot = candidate({
+  listingId: 'airpods-angle-shot',
+  title: 'AirPods Pro 2 白色（换个角度实拍）',
+  category: 'DIGITAL',
+  priceCents: 115000,
+  visualScore: 0.95,
+  textScore: 0.25,
+  condition: 'LIKE_NEW',
+  ageDays: 6,
+  favoriteCount: 4,
+})
+
+/** 同款但另一副（正脸平铺照）：图片分略低，标题里型号齐全 ⇒ 文本分更高。 */
+const airpodsColorShot = candidate({
+  listingId: 'airpods-color-shot',
+  title: 'AirPods Pro 2 白色 国行 全套',
+  category: 'DIGITAL',
+  priceCents: 118000,
+  visualScore: 0.8,
+  textScore: 0.45,
+  ageDays: 9,
+  favoriteCount: 6,
+})
+
+const airpodsOlderShot = candidate({
+  listingId: 'airpods-older-shot',
+  title: 'AirPods 3 白色 无降噪',
+  category: 'DIGITAL',
+  priceCents: 62000,
+  visualScore: 0.78,
+  textScore: 0.4,
+  ageDays: 45,
+  favoriteCount: 14,
+})
+
+// --- 同型号不同背景：同一台 K380，换到窗台/木桌 -----------------------------
+
+/**
+ * **同一型号** K380，只是换了个背景（窗台 + 木桌 + 绿植）。
+ * 背景占了画面大半 ⇒ 图片路的分被摊薄（0.80）；型号文字对得上 ⇒ 文本路很高（0.90）。
+ */
+const kbdSameModelNewBg = candidate({
+  listingId: 'kbd-same-model-new-bg',
+  title: '罗技 K380 无线键盘 深灰',
+  category: 'DIGITAL',
+  priceCents: 12500,
+  visualScore: 0.8,
+  textScore: 0.9,
+  ageDays: 4,
+  favoriteCount: 5,
+})
+
+/** 另一个型号（K480）在纯色背景下的棚拍：图片路觉得"更像查询图"，型号其实不同。 */
+const kbdOtherModelCleanBg = candidate({
+  listingId: 'kbd-other-model-clean-bg',
+  title: '罗技 K480 键盘 白色',
+  category: 'DIGITAL',
+  priceCents: 9000,
+  visualScore: 0.9,
+  textScore: 0.45,
+  ageDays: 10,
+  favoriteCount: 9,
+})
+
+// --- 背景复杂：同款教材放在凌乱桌面上 ---------------------------------------
+
+/** 同款《高等数学 上册》，但查询图/商品图都是"凌乱书桌"：封面被杂物遮住大半 ⇒ 视觉分只有 0.72。 */
+const bookClutteredReal = candidate({
+  listingId: 'book-cluttered-real',
+  title: '高等数学 上册 第七版 同济大学',
+  category: 'BOOKS',
+  priceCents: 2500,
+  visualScore: 0.72,
+  textScore: 0.92,
+  ageDays: 5,
+  favoriteCount: 8,
+})
+
+/** 另一本书，但它是**纯色封面棚拍**：背景干净 ⇒ 图片路反而给 0.85。 */
+const bookCleanOtherSubject = candidate({
+  listingId: 'book-clean-other-subject',
+  title: '线性代数 第六版 同济大学',
+  category: 'BOOKS',
+  priceCents: 1500,
+  visualScore: 0.85,
+  textScore: 0.45,
+  ageDays: 12,
+  favoriteCount: 6,
+})
+
+/** 同系列下册，干净实拍：相关（rel=1）但不是查询的那一册。 */
+const bookCleanSameSeries = candidate({
+  listingId: 'book-clean-same-series',
+  title: '高等数学 下册 第七版 同济大学',
+  category: 'BOOKS',
+  priceCents: 2200,
+  visualScore: 0.8,
+  textScore: 0.85,
+  ageDays: 20,
+  favoriteCount: 3,
+})
+
+// --- 多物体：一张桌上同时有键盘和鼠标 ---------------------------------------
+
+/** 查询想找的键盘：它在这张"多物体"照片里也在，但不是画面主体 ⇒ 视觉分 0.88。 */
+const kbdRealMulti = candidate({
+  listingId: 'kbd-real-multi',
+  title: '罗技 K380 无线键盘 深灰',
+  category: 'DIGITAL',
+  priceCents: 12500,
+  visualScore: 0.88,
+  textScore: 0.9,
+  ageDays: 7,
+  favoriteCount: 10,
+})
+
+/** 同一张照片里**最显眼**的那只鼠标：视觉分 0.93 全场最高，但它不是用户要找的东西。 */
+const mouseProminentMulti = candidate({
+  listingId: 'mouse-prominent-multi',
+  title: '罗技 M330 静音无线鼠标（静音款）',
+  category: 'DIGITAL',
+  priceCents: 6900,
+  visualScore: 0.93,
+  textScore: 0.1,
+  ageDays: 15,
+  favoriteCount: 25,
+})
+
+const kbdOtherModelMulti = candidate({
+  listingId: 'kbd-other-model-multi',
+  title: '罗技 K480 键盘 白色',
+  category: 'DIGITAL',
+  priceCents: 9000,
+  visualScore: 0.82,
+  textScore: 0.5,
+  ageDays: 20,
+  favoriteCount: 6,
+})
+
+// --- 模糊 / 低光：查询图本身拍糊了 ------------------------------------------
+
+/** 真机 C270，但查询图是低光 + 手抖：图片路只敢给 0.55。 */
+const camBlurryReal = candidate({
+  listingId: 'cam-blurry-real',
+  title: '罗技 C270 网络摄像头（几乎全新）',
+  category: 'DIGITAL',
+  priceCents: 15900,
+  visualScore: 0.55,
+  textScore: 0.88,
+  condition: 'LIKE_NEW',
+  ageDays: 4,
+  favoriteCount: 6,
+})
+
+/** 一张**清晰**的棚拍图，但拍的根本不是 C270：图片路被"清晰度"骗到 0.72。 */
+const camCrispUnrelated = candidate({
+  listingId: 'cam-crisp-unrelated',
+  title: '罗技 C920 高清摄像头（另一款）',
+  category: 'DIGITAL',
+  priceCents: 29900,
+  visualScore: 0.72,
+  textScore: 0.2,
+  ageDays: 10,
+  favoriteCount: 12,
+})
+
+const camOldVariantLow = candidate({
+  listingId: 'cam-old-variant-low',
+  title: '罗技 C270i 摄像头 720p（老款）',
+  category: 'DIGITAL',
+  priceCents: 9900,
+  visualScore: 0.6,
+  textScore: 0.7,
+  condition: 'FAIR',
+  ageDays: 60,
+  favoriteCount: 2,
+})
+
+// --- 截图而非实拍：查询图是电商详情页截图 -----------------------------------
+
+/** 真同款，但查询图是**电商详情页截图**（带价格条/按钮/白底排版）⇒ 视觉分被 UI 拉低到 0.66。 */
+const airpodsWhiteScreenshot = candidate({
+  listingId: 'airpods-white-screenshot',
+  title: 'AirPods Pro 2 白色 国行',
+  category: 'DIGITAL',
+  priceCents: 118000,
+  visualScore: 0.66,
+  textScore: 0.82,
+  condition: 'LIKE_NEW',
+  ageDays: 6,
+  favoriteCount: 9,
+})
+
+const airpodsBlackScreenshot = candidate({
+  listingId: 'airpods-black-screenshot',
+  title: 'AirPods Pro 2 黑色 保护壳套装',
+  category: 'DIGITAL',
+  priceCents: 105000,
+  visualScore: 0.64,
+  textScore: 0.6,
+  ageDays: 9,
+  favoriteCount: 6,
+})
+
+/** 白底平铺的商品图：和"截图"的白底排版最像 ⇒ 视觉分 0.74，但它只是配件（OTHER）。 */
+const ipadCaseScreenshot = candidate({
+  listingId: 'ipad-case-screenshot',
+  title: 'iPad 保护壳 11 英寸 通用',
+  category: 'OTHER',
+  priceCents: 2900,
+  visualScore: 0.74,
+  textScore: 0.4,
+  ageDays: 17,
+  favoriteCount: 4,
+})
+
+// --- 同品牌不同品类：小米 -----------------------------------------------
+
+/** 查询要找的小米移动电源（同品牌同品类）。 */
+const miPowerBankOwn = candidate({
+  listingId: 'mi-powerbank-own',
+  title: '小米移动电源 3 10000mAh',
+  category: 'DIGITAL',
+  priceCents: 6900,
+  visualScore: 0.75,
+  textScore: 0.8,
+  ageDays: 6,
+  favoriteCount: 21,
+})
+
+/** **同品牌不同品类**：小米米家台灯。白色极简外观与充电宝同族 ⇒ 图片路给 0.86（全场最高），品类却是 DAILY。 */
+const miLampSameBrand = candidate({
+  listingId: 'mi-lamp-same-brand',
+  title: '小米米家台灯 Lite 白色',
+  category: 'DAILY',
+  priceCents: 7900,
+  visualScore: 0.86,
+  textScore: 0.55,
+  ageDays: 9,
+  favoriteCount: 12,
+})
+
+const miBandOwn = candidate({
+  listingId: 'mi-band-own',
+  title: '小米手环 8 NFC 版',
+  category: 'DIGITAL',
+  priceCents: 15900,
+  visualScore: 0.52,
+  textScore: 0.47,
+  ageDays: 27,
+  favoriteCount: 8,
+})
+
+// --- 同颜色但不同物体：全是白色 -------------------------------------------
+
+/** 查询要找的白色 AirPods Pro 2。 */
+const airpodsWhiteColor = candidate({
+  listingId: 'airpods-white-color',
+  title: 'AirPods Pro 2 白色 国行',
+  category: 'DIGITAL',
+  priceCents: 118000,
+  visualScore: 0.85,
+  textScore: 0.88,
+  condition: 'LIKE_NEW',
+  ageDays: 7,
+  favoriteCount: 11,
+})
+
+/** **同颜色但完全不同的物体**：白色静音鼠标。颜色/材质/白底都像 ⇒ 图片路 0.90 反超真同款。 */
+const whiteMouseColor = candidate({
+  listingId: 'white-mouse-color',
+  title: '罗技 M330 静音无线鼠标 白色',
+  category: 'DIGITAL',
+  priceCents: 6900,
+  visualScore: 0.9,
+  textScore: 0.3,
+  ageDays: 5,
+  favoriteCount: 6,
+})
+
+const airpodsBlackColor = candidate({
+  listingId: 'airpods-black-color',
+  title: 'AirPods Pro 2 黑色 保护壳套装',
+  category: 'DIGITAL',
+  priceCents: 105000,
+  visualScore: 0.8,
+  textScore: 0.6,
+  ageDays: 9,
+  favoriteCount: 6,
+})
+
+/** 另一个"白"：白色保温杯（DAILY）。 */
+const whiteBottleColor = candidate({
+  listingId: 'white-bottle-color',
+  title: '白色保温杯 500ml 不锈钢',
+  category: 'DAILY',
+  priceCents: 4900,
+  visualScore: 0.7,
+  textScore: 0.15,
+  ageDays: 20,
+  favoriteCount: 4,
+})
+
+// --- 解析完全失败：interpretation = null ----------------------------------
+
+/**
+ * 这一组的 `textScore` **全是 `null`**，这是刻意的：`interpretation = null` 表示 M5 一行文本
+ * 都没解析出来（`VISUAL_PARSE_TRANSPORT=off`、或图里根本没有可读文字），生产链路上
+ * `visualTextQueryOf(interpretation) === null` ⇒ **文本路根本不会发起**。
+ * 所以这里的 `null` 不是"文本分是 0"，而是"这一路不存在"。
+ */
+const parseFailedReal = candidate({
+  listingId: 'parse-failed-real',
+  title: '罗技 K380 无线键盘 深灰',
+  category: 'DIGITAL',
+  priceCents: 12500,
+  visualScore: 0.96,
+  textScore: null,
+  ageDays: 12,
+  favoriteCount: 20,
+})
+
+const parseFailedOtherModel = candidate({
+  listingId: 'parse-failed-other-model',
+  title: '罗技 K480 键盘 白色',
+  category: 'DIGITAL',
+  priceCents: 9000,
+  visualScore: 0.82,
+  textScore: null,
+  ageDays: 15,
+  favoriteCount: 9,
+})
+
+/** 高热度无关项：文本路完全没有证据时，它靠 popularity 挤到第一。 */
+const parseFailedHotMouse = candidate({
+  listingId: 'parse-failed-hot-mouse',
+  title: '罗技 M330 静音无线鼠标（静音款）',
+  category: 'DIGITAL',
+  priceCents: 6900,
+  visualScore: 0.62,
+  textScore: null,
+  ageDays: 5,
+  favoriteCount: 80,
+})
+
+// ---------------------------------------------------------------------------
+// fixture 本体：21 条样本
 // ---------------------------------------------------------------------------
 
 export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
@@ -539,6 +955,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   // -------------------------------------------------------------------------
   {
     id: 'mismatch-camera-box',
+    scenario: 'packaging-trap',
     sampleClass: 'category-mismatch',
     query: {
       interpretation: { category: 'DIGITAL', brand: '罗技', model: 'C270', keywords: ['摄像头'] },
@@ -560,6 +977,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'mismatch-ipad-accessories',
+    scenario: 'accessory-trap',
     sampleClass: 'category-mismatch',
     query: { interpretation: { category: 'DIGITAL', keywords: ['iPad'], text: 'iPad' } },
     candidates: [ipadCase, ipadFilm, ipadTablet, ipadPencil],
@@ -583,6 +1001,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   // -------------------------------------------------------------------------
   {
     id: 'variant-mx-model',
+    scenario: 'same-series-older-model',
     sampleClass: 'variant',
     query: { interpretation: { category: 'DIGITAL', brand: '罗技', model: 'MX Master 3S' } },
     candidates: [mx3old, mx3s, mxAnywhere, miBand],
@@ -605,6 +1024,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'variant-airpods-color',
+    scenario: 'same-model-different-color',
     sampleClass: 'variant',
     query: {
       interpretation: { category: 'DIGITAL', model: 'AirPods Pro 2', text: 'AirPods Pro 2 白色' },
@@ -625,6 +1045,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'variant-books-volume',
+    scenario: 'same-series-different-volume',
     sampleClass: 'variant',
     query: {
       interpretation: {
@@ -654,6 +1075,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   // -------------------------------------------------------------------------
   {
     id: 'exact-camera-reorder',
+    scenario: 'reordered-pool-smoke',
     sampleClass: 'exact',
     query: { interpretation: { category: 'DIGITAL', brand: '罗技', model: 'C270' } },
     candidates: [camUnrelated, camOldVariant, camRealB, camRealA],
@@ -673,6 +1095,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'exact-keyboard-no-text',
+    scenario: 'no-text-in-image',
     sampleClass: 'exact',
     query: { interpretation: { category: 'DIGITAL', brand: '罗技', model: 'K380' } },
     candidates: [kbdRealA, kbdRealB, kbdOtherModel, kbdMouseDistractor],
@@ -697,6 +1120,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   // -------------------------------------------------------------------------
   {
     id: 'unrelated-camera-pool',
+    scenario: 'negative-pool',
     sampleClass: 'unrelated',
     query: { interpretation: { category: 'DIGITAL', brand: '罗技', model: 'C270' } },
     candidates: [camUnrelated, negRacket, negBike, negCameraNew, camRealA],
@@ -717,6 +1141,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'unrelated-same-category',
+    scenario: 'same-category-negative',
     sampleClass: 'unrelated',
     query: { interpretation: { category: 'DIGITAL', model: 'MX Master 3S' } },
     candidates: [miBand, negRacket, negBike, mx3s, mx3old],
@@ -736,6 +1161,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'unrelated-text-match-box',
+    scenario: 'text-only-failure',
     sampleClass: 'unrelated',
     query: { interpretation: { category: 'DIGITAL', brand: '罗技', model: 'C270' } },
     candidates: [negBoxTextMatch, negRacket, bookOtherSubject, camRealA, negCameraNew],
@@ -756,6 +1182,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'unrelated-same-category-noise',
+    scenario: 'broad-keyword-query',
     sampleClass: 'unrelated',
     query: { interpretation: { category: 'DIGITAL', keywords: ['数码', '闲置'] } },
     candidates: [miPowerBank, miBand, negTextbook, negBike, negCameraNew],
@@ -775,6 +1202,7 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
   },
   {
     id: 'exact-camera-clean',
+    scenario: 'multi-exact-recall',
     sampleClass: 'exact',
     query: { interpretation: { category: 'DIGITAL', model: 'C270', keywords: ['摄像头'] } },
     candidates: [camRealA, camRealB, camOldVariant, negCameraNew, camBoxOnly],
@@ -792,6 +1220,243 @@ export const VISUAL_EVAL_FIXTURE: VisualEvalSample[] = [
       'hybrid = 真机 A 0.896 > 全新 0.871 > 真机 B 0.842 > 盒 0.701 > 旧款 0.628 ⇒ 盒被压到第 4。' +
       '注意 hybrid 的排序里旧款落在了盒子后面：旧款 200 天前发布、0 收藏，freshness 与 popularity 把它拖到 0.628；这是**刻意的取舍暴露**——一条真正相关（rel=1）的候选被一个不相关项反超。它记录为已知偏差，不修排序公式（要修得动 freshness 权重，那是产品口径）。',
   },
+
+  // -------------------------------------------------------------------------
+  // 复查补齐（#324 M9 对抗性审查 B1）：同款不同角度 / 同型号不同背景
+  // -------------------------------------------------------------------------
+  {
+    id: 'exact-airpods-same-angle',
+    scenario: 'same-model-different-angle',
+    sampleClass: 'exact',
+    query: { interpretation: { category: 'DIGITAL', keywords: ['白色', '耳机'] } },
+    candidates: [airpodsAngleShot, airpodsColorShot, airpodsOlderShot, miBand],
+    relevance: relevanceOf([
+      [airpodsAngleShot, 2],
+      [airpodsColorShot, 1],
+      [airpodsOlderShot, 1],
+      [miBand, 0],
+    ]),
+    rationale:
+      '**同一件东西换个角度重拍**（B1 补：旧样本 `variant-airpods-color` 只建模了颜色差，而且把差异放在 textScore 上，视觉路没有对应的"同物不同角度"样本）。' +
+      '`airpods-angle-shot` 与查询图是同一副 AirPods Pro 2，只是立起来拍：图片路给 0.95（物件相同），' +
+      '但这个角度拍不到可读的型号文字 ⇒ textScore 只有 0.25。' +
+      '实测：visual-only = 角度 0.8801 > 平铺 0.7634 > 老款 0.7082 > 手环 0.5132 ⇒ 首选正确；' +
+      'text-only = 平铺 0.2191 > 手环 0.1972 > 老款 0.1769 > **角度 0.1730（最后一名）** ⇒ **首选错位**：文本路因为"照片里没有字"把真正的同款排到了池底；' +
+      'hybrid = 角度 0.7721 > 平铺 0.7362 > 老款 0.6904 > 手环 0.5776 ⇒ 纠正。' +
+      '标 2 给角度、标 1 给另外两副：角度那条是同一副耳机，平铺那条是同款但不是同一副（二手交易里"同一副"意味着成色与来源已知），老款是 AirPods 3。' +
+      '这条的意义：图片路的判别力**恰恰来自"是不是同一个物体"**，而文本路对"没有文字的角度照"完全失明——hybrid 必须靠视觉把这一票拿回来。',
+  },
+  {
+    id: 'exact-keyboard-different-background',
+    scenario: 'same-model-different-background',
+    sampleClass: 'exact',
+    query: {
+      interpretation: { category: 'DIGITAL', brand: '罗技', model: 'K380', keywords: ['键盘'] },
+    },
+    candidates: [kbdSameModelNewBg, kbdOtherModelCleanBg, kbdMouseDistractor, bookOtherSubject],
+    relevance: relevanceOf([
+      [kbdSameModelNewBg, 2],
+      [kbdOtherModelCleanBg, 1],
+      [kbdMouseDistractor, 0],
+      [bookOtherSubject, 0],
+    ]),
+    rationale:
+      '**同一型号、不同背景**（B1 补：旧样本 `exact-keyboard-no-text` 的维度是"查询图里没有文字"，不是背景）。' +
+      '同一台 K380 换到窗台/木桌上重拍：背景占了画面大半，图片路的分被摊薄到 0.80；' +
+      '而另一型号 K480 是纯色棚拍，图片路给到 0.90——**背景干净不等于"更像"**。' +
+      '实测：visual-only = K480 0.8490 > K380 0.7749 > 线代 0.6166 > 鼠标 0.6149 ⇒ **首选错位**（型号错了）；' +
+      'text-only = K380 0.3337 > 线代 0.2492 > K480 0.2257 > 鼠标 0.1055 ⇒ 纠正；' +
+      'hybrid = K380 0.8337 > K480 0.7919 > 鼠标 0.5497 > 线代 0.5168 ⇒ 纠正（K380 领先 0.0418）。' +
+      '标 2 给 K380、标 1 给 K480：型号不同就是不同的东西，但同品牌同品类仍算"相关"。' +
+      '注意 text-only 里出现**一次倒置**：rel=0 的线代（0.2492）压过 rel=1 的 K480（0.2257）——纯文本路在"书名 vs 键盘型号"上没有可比性。',
+  },
+
+  // -------------------------------------------------------------------------
+  // 复查补齐（#324 M9 对抗性审查 B1）：图像质量维度
+  // -------------------------------------------------------------------------
+  {
+    id: 'quality-complex-background',
+    scenario: 'complex-background',
+    sampleClass: 'exact',
+    query: {
+      interpretation: { category: 'BOOKS', text: '高等数学 上册 第七版', keywords: ['高等数学'] },
+    },
+    candidates: [bookClutteredReal, bookCleanOtherSubject, bookCleanSameSeries, negRacket],
+    relevance: relevanceOf([
+      [bookClutteredReal, 2],
+      [bookCleanOtherSubject, 0],
+      [bookCleanSameSeries, 1],
+      [negRacket, 0],
+    ]),
+    rationale:
+      '**背景复杂**（B1 补：Issue #324 M9 点名维度之一）。同款《高等数学 上册》拍在凌乱书桌上，封面被杂物遮掉大半 ⇒ 图片路只给 0.72；' +
+      '另一本《线性代数》是纯色封面棚拍 ⇒ 图片路 0.85。' +
+      '实测：visual-only = 线代 0.7935 > 下册 0.7238 > **上册 0.7217（第 3）** > 球拍 0.1866 ⇒ **首选错位**，而且真同款被压到第三；' +
+      'text-only = 上册 0.3448 > 下册 0.2829 > 线代 0.2127 > 球拍 0.0780 ⇒ 纠正；' +
+      'hybrid = 上册 0.8031 > 下册 0.7905 > 线代 0.7558 > 球拍 0.1213 ⇒ 纠正（上册只领先下册 0.0126）。' +
+      '标 0 给线代：不同科目的教材，拍它没有用。' +
+      '这条是"图像质量维度会直接吃掉视觉路判别力"的证据：**背景越干净 ≠ 越像**，纯视觉排序在这里把真同款排到了第 3。',
+  },
+  {
+    id: 'quality-multiple-objects',
+    scenario: 'multiple-objects',
+    sampleClass: 'exact',
+    query: { interpretation: { category: 'DIGITAL', model: 'K380', keywords: ['键盘'] } },
+    candidates: [kbdRealMulti, mouseProminentMulti, kbdOtherModelMulti, miBand],
+    relevance: relevanceOf([
+      [kbdRealMulti, 2],
+      [mouseProminentMulti, 0],
+      [kbdOtherModelMulti, 1],
+      [miBand, 0],
+    ]),
+    rationale:
+      '**一张图里多个物体**（B1 补：Issue #324 M9 点名维度之一）。用户拍了一张"桌上有键盘也有鼠标"的照片来找键盘。' +
+      '鼠标在画面里最显眼 ⇒ 图片路 0.93（全场最高）；键盘虽然也在图里但不是主体 ⇒ 0.88。' +
+      '实测：visual-only = 鼠标 0.9011 > 键盘 0.8463 > K480 0.7508 > 手环 0.5132 ⇒ **首选错位**（把画面主体当成了查询意图）；' +
+      'text-only = 键盘 0.3413 > K480 0.2094 > 手环 0.1972 > 鼠标 0.1655 ⇒ 纠正；' +
+      'hybrid = 键盘 0.8801 > 鼠标 0.7557 > K480 0.7380 > 手环 0.5776 ⇒ 首选纠正，但**鼠标（rel=0）仍然排在第 2**，压过 rel=1 的 K480 ⇒ 一次倒置。' +
+      '标 0 给鼠标：它是同一张照片里最显眼的东西，却不是用户要找的东西。' +
+      '这条钉住的是"多物体查询图"这个真实场景：视觉相似度的分母是整张图，而用户问的是图里的**某一个**物体。',
+  },
+  {
+    id: 'quality-blurry-low-light',
+    scenario: 'blurry-low-light',
+    sampleClass: 'exact',
+    query: { interpretation: { category: 'DIGITAL', brand: '罗技', model: 'C270' } },
+    candidates: [camBlurryReal, camCrispUnrelated, camOldVariantLow, camUnrelated],
+    relevance: relevanceOf([
+      [camBlurryReal, 2],
+      [camCrispUnrelated, 0],
+      [camOldVariantLow, 1],
+      [camUnrelated, 0],
+    ]),
+    rationale:
+      '**模糊 / 低光**（B1 补：Issue #324 M9 点名维度之一）。查询图是低光 + 手抖拍的真机 C270，图片路只敢给 0.55；' +
+      '另一条是**清晰**棚拍的 C920（另一款摄像头），图片路被"清晰度"骗到 0.72。' +
+      '实测：visual-only = C920 0.7221 > C270 0.5864 > C270i 0.5077 > 教材 0.2383 ⇒ **首选错位**；' +
+      'text-only = C270 0.3320 > C270i 0.2000 > C920 0.1757 > 教材 0.1234 ⇒ 纠正；' +
+      'hybrid = C270 0.7072 > C920 0.6594 > C270i 0.6200 > 教材 0.1749 ⇒ 首选纠正，但 C920（rel=0）仍排第 2，压过 rel=1 的 C270i ⇒ 一次倒置。' +
+      '标 0 给 C920：它是另一个型号，"拍得清楚"不构成相关性。' +
+      '这条的意义：低光/模糊会**同时**压低所有候选的视觉分，但压得最狠的恰恰是真同款（它本来最像），' +
+      '于是"图拍糊了"在纯视觉排序里会伪装成"这条不像"——hybrid 靠文本路才救回来。',
+  },
+  {
+    id: 'quality-screenshot-not-photo',
+    scenario: 'screenshot-not-photo',
+    sampleClass: 'exact',
+    query: {
+      interpretation: { category: 'DIGITAL', model: 'AirPods Pro 2', keywords: ['耳机'] },
+    },
+    candidates: [airpodsWhiteScreenshot, airpodsBlackScreenshot, ipadCaseScreenshot, negTextbook],
+    relevance: relevanceOf([
+      [airpodsWhiteScreenshot, 2],
+      [airpodsBlackScreenshot, 1],
+      [ipadCaseScreenshot, 0],
+      [negTextbook, 0],
+    ]),
+    rationale:
+      '**截图而非实拍**（B1 补：Issue #324 M9 点名维度之一）。查询图不是实物照，而是电商详情页截图（白底排版 + 价格条 + 按钮）。' +
+      '真同款的视觉分因此被 UI 拉低到 0.66；一条白底平铺的 iPad 保护壳（OTHER）反而更像"截图"的排版 ⇒ 0.74。' +
+      '实测：visual-only = 保护壳 0.6885 > 白 AirPods 0.6762 > 黑 AirPods 0.6403 > 教材 0.2690 ⇒ **首选错位**（只差 0.0123）；' +
+      'text-only = 白 0.3218 > 黑 0.2544 > 保护壳 0.1853 > 教材 0.1281 ⇒ 纠正；' +
+      'hybrid = 白 0.7536 > 黑 0.6862 > 保护壳 0.5275 > 教材 0.1989 ⇒ 纠正。' +
+      '标 0 给保护壳：它是配件且品类不同（OTHER）。' +
+      '这条钉住的是"截图"这个真实入口（用户从别的 App 截图来搜）：截图带的是**版面特征**，不是商品特征。',
+  },
+
+  // -------------------------------------------------------------------------
+  // 复查补齐（#324 M9 对抗性审查 B1）：同品牌不同品类 / 同色不同物 / 解析失败
+  // -------------------------------------------------------------------------
+  {
+    id: 'brand-same-brand-different-category',
+    scenario: 'same-brand-different-category',
+    sampleClass: 'category-mismatch',
+    query: {
+      interpretation: { category: 'DIGITAL', brand: '小米', keywords: ['充电宝', '移动电源'] },
+    },
+    candidates: [miPowerBankOwn, miLampSameBrand, miBandOwn, negTextbook],
+    relevance: relevanceOf([
+      [miPowerBankOwn, 2],
+      [miLampSameBrand, 0],
+      [miBandOwn, 0],
+      [negTextbook, 0],
+    ]),
+    rationale:
+      '**同品牌不同品类**（B1 补：Issue #324 M9 点名维度之一）。查询要找小米移动电源，池里放了一盏小米米家台灯：' +
+      '白色极简外观与充电宝是同一套设计语言 ⇒ 图片路给 0.86（全场最高），但它的品类是 DAILY（解析出的是 DIGITAL）。' +
+      '实测：visual-only = 台灯 0.8327 > 充电宝 0.7878 > 手环 0.5132 > 教材 0.2690 ⇒ **首选错位**；' +
+      'text-only = 充电宝 0.3495 > 台灯 0.2603 > 手环 0.1972 > 教材 0.1281 ⇒ 纠正；' +
+      'hybrid = 充电宝 0.8221 > 台灯 0.6512 > 手环 0.5776 > 教材 0.1989 ⇒ 纠正（台灯被 categoryScore=0 砍掉那 0.15 权重）。' +
+      '标 0 给台灯：品牌相同不是相关性，"同一套工业设计"恰恰是最容易骗到多模态模型的东西。' +
+      '这条专门抓"把 brand 当强信号"的实现错误——解析出 `brand: 小米` 时，一个把品牌加成加进分数的实现会直接把台灯抬到第一。',
+  },
+  {
+    id: 'unrelated-same-color-different-object',
+    scenario: 'same-color-different-object',
+    sampleClass: 'unrelated',
+    query: {
+      interpretation: { category: 'DIGITAL', model: 'AirPods Pro 2', keywords: ['白色'] },
+    },
+    candidates: [airpodsWhiteColor, whiteMouseColor, airpodsBlackColor, whiteBottleColor],
+    relevance: relevanceOf([
+      [airpodsWhiteColor, 2],
+      [whiteMouseColor, 0],
+      [airpodsBlackColor, 1],
+      [whiteBottleColor, 0],
+    ]),
+    rationale:
+      '**同颜色但不同物体**（B1 补：旧样本 `unrelated-same-category` 是"同品类异商品"，颜色这一维没有被建模）。' +
+      '池里全是白色的东西：真同款白色 AirPods、白色静音鼠标、白色保温杯。颜色/材质/白底都像 ⇒ 图片路给鼠标 0.90，反超真同款的 0.85。' +
+      '实测：visual-only = 鼠标 0.8524 > AirPods 0.8270 > 黑 AirPods 0.7634 > 保温杯 0.6508 ⇒ **首选错位**；' +
+      'text-only = AirPods 0.3395 > 黑 0.2544 > 鼠标 0.1930 > 保温杯 0.1212 ⇒ 纠正；' +
+      'hybrid = AirPods 0.8636 > 黑 0.7662 > 鼠标 0.7641 > 保温杯 0.4530 ⇒ 纠正，但**黑 AirPods 只领先白色鼠标 0.0021**——这是本 fixture 里最脆的一次翻盘。' +
+      '标 0 给鼠标与保温杯：颜色不是物体。标 1 给黑色同款：型号相同、颜色不同（与 `variant-airpods-color` 同一口径）。' +
+      '这条把"颜色"从文字属性（`variant-airpods-color` 里颜色写在查询文字里）变成了**纯视觉陷阱**：图里颜色对得上，但东西完全不对。',
+  },
+  {
+    id: 'exact-parse-failed',
+    scenario: 'parse-failed',
+    sampleClass: 'exact',
+    query: { interpretation: null },
+    candidates: [parseFailedReal, parseFailedOtherModel, parseFailedHotMouse, negRacket],
+    relevance: relevanceOf([
+      [parseFailedReal, 2],
+      [parseFailedOtherModel, 1],
+      [parseFailedHotMouse, 0],
+      [negRacket, 0],
+    ]),
+    rationale:
+      '**语义解析完全失败**（B1 补：既有 12 条样本的 `query.interpretation` 全部非 null，离线腿从来没采样过这条路径）。' +
+      '`interpretation = null` 在生产链路上有两个后果，这条样本把两个都钉住：' +
+      '① `visualTextQueryOf(null) === null` ⇒ 文本路**根本不发起**（不是"文本分是 0"），所以池里所有候选的 `textScore` 都是 `null`（表示"这一路不存在"）；' +
+      '② 解析不出分类 ⇒ `categoryScore` 整项剔除。' +
+      '实测：visual-only = 真机 0.9320 > K480 0.7742 > 鼠标 0.6909 > 球拍 0.1866 ⇒ 首选正确；' +
+      'text-only = **鼠标 0.1636（rel=0）** > 真机 0.1480 > K480 0.1097 > 球拍 0.0780 ⇒ **首选错位**：文本路失去全部判别力后只剩 freshness + popularity，' +
+      '一条 5 天前发布、80 收藏的高热度鼠标爬到了真同款前面；' +
+      'hybrid = 真机 0.9320 > K480 0.7742 > 鼠标 0.6909 > 球拍 0.1866 ⇒ 纠正。' +
+      '**hybrid 的分数与 visual-only 逐位相同**（0.9320 / 0.7742 / 0.6909 / 0.1866）：文本项与分类项都被剔除，hybrid 退化成纯视觉排序。' +
+      '这不是巧合而是实现不变量：`rankSample` 在 `visualTextQueryOf(interpretation) === null` 时必须把 `textScore` 传 `null`（而不是 `?? 0`），' +
+      '否则会以 0.2 的权重给所有候选同时减去一个 0 分项——顺序不变，但"hybrid 在解析失败时退化成 visual-only"这个性质就再也测不出来了。' +
+      '标 1 给 K480：同品牌同品类，型号不同。',
+  },
+]
+
+/**
+ * **必需覆盖**的场景（#324 M9 点名的图像质量维度 + 三个此前只有名义覆盖的维度）。
+ *
+ * 这份清单是"样本类别的可执行规格"：`assertFixtureIntegrity` 会断言每个场景至少有一条样本。
+ * 加维度时先加到这里，再加样本——反过来（只加样本）会让下一个人无从知道哪些维度是**承诺过**的。
+ */
+export const REQUIRED_SCENARIOS: readonly VisualEvalScenario[] = [
+  'complex-background',
+  'multiple-objects',
+  'blurry-low-light',
+  'screenshot-not-photo',
+  'same-brand-different-category',
+  'same-model-different-angle',
+  'same-model-different-background',
+  'same-color-different-object',
+  'parse-failed',
 ]
 
 /**
@@ -841,6 +1506,13 @@ function assertFixtureIntegrity(samples: readonly VisualEvalSample[]): void {
   for (const sampleClass of ['exact', 'variant', 'category-mismatch', 'unrelated'] as const) {
     if (!samples.some((sample) => sample.sampleClass === sampleClass)) {
       throw new Error(`VISUAL_EVAL_FIXTURE 缺少 ${sampleClass} 类样本`)
+    }
+  }
+  // 必需场景覆盖（#324 M9 对抗性审查 B1）：这些维度必须**始终**至少有一条样本承载，
+  // 否则"补过样本"只存在于 git 历史里，下一个人删掉它不会有任何反馈。
+  for (const scenario of REQUIRED_SCENARIOS) {
+    if (!samples.some((sample) => sample.scenario === scenario)) {
+      throw new Error(`VISUAL_EVAL_FIXTURE 缺少必需场景 ${scenario} 的样本`)
     }
   }
 }

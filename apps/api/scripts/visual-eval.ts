@@ -26,8 +26,11 @@
 // - `text-only`：只给 `textScore`。**不是**把 `visualScore` 置 null（它的类型不允许），
 //   而是置 0——所以要读懂它的绝对分：它衡量"只看文本证据能把什么排上来"，
 //   `visualScore = 0` 是所有候选取值相同的常量项，按权重均摊后不改变相对顺序。
-// - `hybrid`：生产配置，`visualScore` + `textScore`（无文本证据的样本按 null 走）
-//   + `categoryScore`（解析分类与候选分类一致 = 1 / 不一致 = 0 / 没解析出分类 = null）。
+// - `hybrid`：生产配置，`visualScore` + `textScore` + `categoryScore`（解析分类与候选分类
+//   一致 = 1 / 不一致 = 0 / 没解析出分类 = null）。**门控与生产一致**：只有
+//   `visualTextQueryOf(interpretation) !== null`（文本路真的会发起）时才把 `textScore`
+//   计入，否则整项连同 0.2 的权重一起剔除——所以 `interpretation = null` 的样本上
+//   hybrid 会**逐位退化成 visual-only**（见 `exact-parse-failed`）。
 // ---------------------------------------------------------------------------
 
 import { VISUAL_RANKING_WEIGHTS } from '@fish/contracts/visual/ranking'
@@ -35,7 +38,11 @@ import type {
   VisualEvalRelevance,
   VisualEvalSample,
 } from '../src/modules/visual-search/eval/fixture'
-import { REFERENCE_NOW, VISUAL_EVAL_FIXTURE } from '../src/modules/visual-search/eval/fixture'
+import {
+  REFERENCE_NOW,
+  REQUIRED_SCENARIOS,
+  VISUAL_EVAL_FIXTURE,
+} from '../src/modules/visual-search/eval/fixture'
 import {
   emptyResultRate,
   latencyPercentile,
@@ -44,6 +51,7 @@ import {
   recallAtK,
   topKRelevanceRate,
 } from '../src/modules/visual-search/eval/metrics'
+import { visualTextQueryOf } from '../src/modules/visual-search/parse'
 import {
   freshnessScore,
   popularityScore,
@@ -83,15 +91,25 @@ function categoryScoreOf(sample: VisualEvalSample, category: string): number | n
  * 排序键与生产的 `service.ts` 完全同构：**分数降序 → visualScore 降序 → id 升序**。
  * 前两级在 fixture 里几乎不会并列，第三级是为了让本脚本在并列时也**完全可复现**
  * （不依赖 `Array.prototype.sort` 的实现细节）。
+ *
+ * `hybrid` 的 `textScore` 口径与生产严格一致：只有 `visualTextQueryOf(interpretation)` 非 `null`
+ * （即文本路**真的会发起**）时才取候选的 `textScore`；否则传 `null`，让 `scoreVisualCandidate`
+ * 把它**连同 0.2 的权重一起剔除**。写成 `candidate.textScore ?? 0` 是错的——那会以 0.2 的权重
+ * 给所有候选同时减去一个 0 分项：顺序不变，但"解析完全失败 ⇒ hybrid 退化成 visual-only"
+ * 这个性质就再也测不出来了（`exact-parse-failed` 正是靠它把两者钉成逐位相等）。
+ *
+ * `text-only` 刻意**不做**这层门控：它是"只信文本路"的**反事实基准**，按定义就把
+ * `visualScore` 置 0（见文件头），所有候选该项相同，均摊后不影响相对顺序。
  */
 function rankSample(sample: VisualEvalSample, path: EvalPath): RankedCandidate[] {
+  const hasTextQuery = visualTextQueryOf(sample.query.interpretation) !== null
   return sample.candidates
     .map((candidate) => {
       const freshness = freshnessScore(candidate.createdAt, NOW)
       const popularity = popularityScore(candidate.favoriteCount)
       const breakdown = scoreVisualCandidate({
         visualScore: path === 'text-only' ? 0 : candidate.visualScore,
-        textScore: path === 'visual-only' ? null : (candidate.textScore ?? 0),
+        textScore: path === 'visual-only' || !hasTextQuery ? null : (candidate.textScore ?? 0),
         categoryScore: path === 'hybrid' ? categoryScoreOf(sample, candidate.category) : null,
         freshnessScore: freshness,
         popularityScore: popularity,
@@ -335,6 +353,38 @@ function agreementByClassTable(): string[] {
   return lines
 }
 
+/**
+ * 场景覆盖表（#324 M9 对抗性审查 B1 的**可核查回执**）。
+ *
+ * `sampleClass` 只有四类，看不出"Issue 点名的那些维度到底有没有样本"：背景复杂 / 多物体 /
+ * 模糊低光 / 截图而非实拍 / 同品牌不同品类，以及此前只有名义覆盖的同款不同角度 /
+ * 同型号不同背景 / 同色不同物体，还有解析完全失败（`interpretation = null`）。
+ * 这张表按 `scenario` 聚合，并列出每一路上"首选命中 / 该类样本数"。
+ *
+ * 覆盖本身由 `fixture.ts` 加载期的 `REQUIRED_SCENARIOS` 断言保证；这里只是把保证打印出来。
+ */
+function scenarioCoverageTable(): string[] {
+  const scenarios = [...new Set(OUTCOMES.map((outcome) => outcome.sample.scenario))]
+  const lines = [
+    `| 场景 | Issue 点名 | 样本数 | ${PATHS.join(' | ')} |`,
+    `| --- | --- | --- | ${PATHS.map(() => '---').join(' | ')} |`,
+  ]
+  for (const scenario of scenarios) {
+    const group = OUTCOMES.filter((outcome) => outcome.sample.scenario === scenario)
+    const cells = PATHS.map((path) => {
+      let hit = 0
+      for (const outcome of group) {
+        const best = humanTopRelevance(outcome.sample)
+        if ((outcome.ranked[path][0]?.relevance ?? 0) === best) hit += 1
+      }
+      return `${hit}/${group.length}`
+    })
+    const required = REQUIRED_SCENARIOS.includes(scenario) ? '★' : ''
+    lines.push(`| \`${scenario}\` | ${required} | ${group.length} | ${cells.join(' | ')} |`)
+  }
+  return lines
+}
+
 // ---------------------------------------------------------------------------
 // 报告
 // ---------------------------------------------------------------------------
@@ -392,6 +442,21 @@ console.log('')
 console.log('### 按样本类别拆开（首选命中数 / 该类样本数）')
 console.log('')
 console.log(agreementByClassTable().join('\n'))
+console.log('')
+console.log('### 按场景拆开（★ = Issue #324 M9 点名维度，缺一条 fixture 会加载即抛）')
+console.log('')
+console.log(scenarioCoverageTable().join('\n'))
+console.log('')
+{
+  const missing = REQUIRED_SCENARIOS.filter(
+    (scenario) => !OUTCOMES.some((outcome) => outcome.sample.scenario === scenario),
+  )
+  console.log(
+    missing.length === 0
+      ? `- ✅ ${REQUIRED_SCENARIOS.length} 个 Issue 点名场景全部有样本承载（断言见 \`assertFixtureIntegrity\`）。`
+      : `- ❌ 缺少必需场景：${missing.join('、')}`,
+  )
+}
 console.log('')
 
 console.log('## 三、逐样本排序结果')
