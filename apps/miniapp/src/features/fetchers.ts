@@ -804,7 +804,8 @@ export type ProfileView = {
  * （全量计数，不是这一页的长度；与历史页列表同一张表、同一个 30 天窗口）。
  *
  * **单独 catch**：这一格读不到只该显示 `—`，不能把整个「我的」页拖成失败态 ——
- * 先例 `loadListingDetail` 里相似推荐 / 卖家资料的降级口径。
+ * 先例 `loadListingDetail` 里相似推荐 / 卖家资料的降级口径。所以它返回的 Promise
+ * **永不 reject**，可以安全地与其他请求并行 `Promise.all`。
  */
 async function viewHistoryTotal(): Promise<number | null> {
   try {
@@ -818,7 +819,12 @@ async function viewHistoryTotal(): Promise<number | null> {
 
 export async function loadProfile(now: number = Date.now()): Promise<ProfileView | null> {
   try {
-    const profile = await fetchProfile()
+    /*
+      两个请求**并行**：足迹计数只是数字栏四格中的一格，串行 await 会让「我的」页首屏
+      多等一个 RTT（单个请求超时上限 15s）。`viewHistoryTotal` 自己吞掉失败返回 null，
+      所以 `Promise.all` 只有 `fetchProfile` 会 reject —— 失败仍走下面的统一回退路径。
+    */
+    const [profile, historyCount] = await Promise.all([fetchProfile(), viewHistoryTotal()])
     return {
       user: profile.user,
       stats: profile.stats,
@@ -833,9 +839,8 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       // （收藏自己的端点已上线 #394，接这一格是收藏域的后续任务。）
       favoritesCount: null,
       // 浏览足迹（#415 M1）有端点：与历史页列表同源（同一张表、同一个 30 天窗口的 total）。
-      // 这个请求失败时 `viewHistoryTotal` 自己吞掉返回 null → 页面显示 `—`，
-      // 不影响本函数其余字段的成功路径。
-      historyCount: await viewHistoryTotal(),
+      // 这个请求失败时 `viewHistoryTotal` 自己吞掉返回 null → 页面显示 `—`，不影响其余字段。
+      historyCount,
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
