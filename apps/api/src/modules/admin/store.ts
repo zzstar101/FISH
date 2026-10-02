@@ -6,12 +6,16 @@ import type {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
+import { RECOMMENDATION_STRATEGY_VERSION_NONE } from '@fish/contracts/recommendation/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { adminAuditLogs } from '@fish/db/schema/admin'
 import { userRestrictions } from '@fish/db/schema/governance'
 import { listingImages, listings } from '@fish/db/schema/listings'
+import { recommendationEvents } from '@fish/db/schema/recommendation-events'
+import { recommendationRequestItems } from '@fish/db/schema/recommendation-request-items'
+import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import { reports } from '@fish/db/schema/reports'
 import { sessions } from '@fish/db/schema/sessions'
 import { transactions } from '@fish/db/schema/transactions'
@@ -187,6 +191,37 @@ export interface OverviewRow {
   activeRestrictions: number
 }
 
+/**
+ * 推荐指标（#323 R6）的**原始计数**行：一个窗口内的所有数据库侧计数。
+ *
+ * 这里只出计数、不出比率：比率的分母口径（0/0 → `null`）是契约层的事，放在 service 里算，
+ * SQL 保持"数数"这一件事。所有计数的窗口口径见设计 §6.2 / §6.3。
+ */
+export interface RecommendationMetricsRow {
+  /** `recommendation_requests.requested_at ∈ 窗口` 的请求数（请求轴）。 */
+  feedRequests: number
+  /** 其中 `strategy_version = 'rec-v1-none'` 的降级透传请求数。 */
+  degradedFeedRequests: number
+  /** 其中走了排序的请求数（`strategy_version <> 'rec-v1-none'`）——空快照率的分母。 */
+  rankedFeedRequests: number
+  /** 排序请求里快照 0 行的数量（`emptyRankedFeedRate` 的分子）。 */
+  emptyRankedFeedRequests: number
+  /** 窗口内快照行总数（`repeatedExposureRate` 以它作分母）。 */
+  snapshotItems: number
+  /** 快照里去重的 `(身份, 商品)` 对数（`repeatedExposureRate` 的分子）。 */
+  snapshotDistinctPairs: number
+  /** 事件轴窗口内按类型统计的**带归因**事件数（`request_id IS NOT NULL`）。 */
+  attributedEventCounts: ReadonlyMap<string, number>
+  /** 归因曝光总数（`IMPRESSION` + 窗口 + 有归因）；也是卖家集中度与陈旧率的分母。 */
+  attributedImpressions: number
+  /** 曝光最集中的单个卖家拿到的归因曝光数。 */
+  topSellerExposures: number
+  /** 曝光最集中的前 10 个卖家合计的归因曝光数。 */
+  top10SellerExposures: number
+  /** 归因曝光中商品**当前** `status <> 'ACTIVE'`（SOLD / RESERVED / OFFLINE）的数量。 */
+  staleListingExposures: number
+}
+
 export type ListUsersCriteria = {
   q: string | undefined
   authStatus: AuthStatus | undefined
@@ -282,6 +317,14 @@ export interface AdminStore {
     images: ListingImageRow[]
   } | null>
   getOverview(): Promise<OverviewRow>
+  /**
+   * 推荐漏斗 / guardrail 的数据库侧计数（#323 R6）：窗口由 service 按 `window` 档位算好后传入
+   * （左闭右开），store 不认 `24h` 这类字面量。
+   */
+  getRecommendationMetrics(criteria: {
+    since: Date
+    until: Date
+  }): Promise<RecommendationMetricsRow>
   listAuditLogs(criteria: ListAuditLogsCriteria): Promise<AuditLogRow[]>
   resolveLegacyAuditId(table: string, oldId: string): Promise<string | null>
   listModerationQueue(criteria: ListModerationQueueCriteria): Promise<ModerationQueueRow[]>
@@ -620,6 +663,87 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         pendingReports: Number(row.pending_reports),
         reportsLast7d: Number(row.reports_last_7d),
         activeRestrictions: Number(row.active_restrictions),
+      }
+    },
+
+    async getRecommendationMetrics({ since, until }) {
+      // 三段查询而不是一个大 SQL：请求侧聚合、事件按类型分桶、卖家集中度各成一块，
+      // 比在一条 SELECT 里塞 12 个子查询好读也好改；admin 读路径对往返次数不敏感。
+      const requestResult = await db.execute(sql`
+        SELECT
+          (SELECT count(*)::int FROM ${recommendationRequests}
+            WHERE requested_at >= ${since} AND requested_at < ${until})              AS feed_requests,
+          (SELECT count(*)::int FROM ${recommendationRequests}
+            WHERE requested_at >= ${since} AND requested_at < ${until}
+              AND strategy_version = ${RECOMMENDATION_STRATEGY_VERSION_NONE})        AS degraded_feed_requests,
+          (SELECT count(*)::int FROM ${recommendationRequests}
+            WHERE requested_at >= ${since} AND requested_at < ${until}
+              AND strategy_version <> ${RECOMMENDATION_STRATEGY_VERSION_NONE})       AS ranked_feed_requests,
+          (SELECT count(*)::int FROM ${recommendationRequests} r
+            WHERE r.requested_at >= ${since} AND r.requested_at < ${until}
+              AND r.strategy_version <> ${RECOMMENDATION_STRATEGY_VERSION_NONE}
+              AND NOT EXISTS (
+                SELECT 1 FROM ${recommendationRequestItems} i WHERE i.request_id = r.id
+              ))                                                                    AS empty_ranked_feed_requests,
+          (SELECT count(*)::int FROM ${recommendationRequestItems} i
+            JOIN ${recommendationRequests} r ON r.id = i.request_id
+            WHERE r.requested_at >= ${since} AND r.requested_at < ${until})          AS snapshot_items,
+          (SELECT count(DISTINCT (COALESCE(r.user_id::text, r.anonymous_session_id::text), i.listing_id::text))::int
+            FROM ${recommendationRequestItems} i
+            JOIN ${recommendationRequests} r ON r.id = i.request_id
+            WHERE r.requested_at >= ${since} AND r.requested_at < ${until})          AS snapshot_distinct_pairs
+      `)
+      const requestRow = rowsOf(requestResult)[0]
+      if (!requestRow) throw new Error('推荐指标查询未返回行')
+
+      // 事件按类型分桶：0 行的类型在 map 里缺席，service 侧统一按 0 处理。
+      const eventResult = await db.execute(sql`
+        SELECT event_type::text AS event_type, count(*)::int AS event_count
+        FROM ${recommendationEvents}
+        WHERE request_id IS NOT NULL
+          AND occurred_at >= ${since} AND occurred_at < ${until}
+        GROUP BY event_type
+      `)
+      const attributedEventCounts = new Map<string, number>()
+      for (const row of rowsOf(eventResult)) {
+        attributedEventCounts.set(String(row.event_type), Number(row.event_count))
+      }
+
+      // 卖家集中度与陈旧曝光都建立在"归因曝光"这一张中间表上，只扫一遍事件表。
+      const exposureResult = await db.execute(sql`
+        WITH attributed AS (
+          SELECT l.seller_id AS seller_id, l.status::text AS status
+          FROM ${recommendationEvents} e
+          JOIN ${listings} l ON l.id = e.listing_id
+          WHERE e.event_type = 'IMPRESSION' AND e.request_id IS NOT NULL
+            AND e.occurred_at >= ${since} AND e.occurred_at < ${until}
+        ),
+        by_seller AS (
+          SELECT seller_id, count(*)::int AS exposures FROM attributed GROUP BY seller_id
+        )
+        SELECT
+          COALESCE((SELECT sum(exposures) FROM by_seller), 0)::int                    AS total_exposures,
+          COALESCE((SELECT max(exposures) FROM by_seller), 0)::int                    AS top_seller_exposures,
+          COALESCE((SELECT sum(exposures) FROM (
+            SELECT exposures FROM by_seller ORDER BY exposures DESC, seller_id LIMIT 10
+          ) top_sellers), 0)::int                                                    AS top10_seller_exposures,
+          (SELECT count(*)::int FROM attributed WHERE status <> 'ACTIVE')             AS stale_listing_exposures
+      `)
+      const exposureRow = rowsOf(exposureResult)[0]
+      if (!exposureRow) throw new Error('推荐曝光分布查询未返回行')
+
+      return {
+        feedRequests: Number(requestRow.feed_requests),
+        degradedFeedRequests: Number(requestRow.degraded_feed_requests),
+        rankedFeedRequests: Number(requestRow.ranked_feed_requests),
+        emptyRankedFeedRequests: Number(requestRow.empty_ranked_feed_requests),
+        snapshotItems: Number(requestRow.snapshot_items),
+        snapshotDistinctPairs: Number(requestRow.snapshot_distinct_pairs),
+        attributedEventCounts,
+        attributedImpressions: Number(exposureRow.total_exposures),
+        topSellerExposures: Number(exposureRow.top_seller_exposures),
+        top10SellerExposures: Number(exposureRow.top10_seller_exposures),
+        staleListingExposures: Number(exposureRow.stale_listing_exposures),
       }
     },
 

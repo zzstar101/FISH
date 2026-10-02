@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { RecommendationMetricsSchema } from '@fish/contracts/admin/recommendation-metrics'
+import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import { INTEREST_STRATEGY_VERSION } from '@fish/contracts/recommendation/interest'
 import {
   composeRecommendationStrategyVersion,
@@ -7,6 +9,7 @@ import {
 } from '@fish/contracts/recommendation/rank'
 import { RECALL_STRATEGY_VERSION } from '@fish/contracts/recommendation/recall'
 import {
+  RECOMMENDATION_RATE_LIMITED,
   RECOMMENDATION_STRATEGY_VERSION_NONE,
   type RecommendationEventInput,
   type RecommendationEventType,
@@ -17,6 +20,7 @@ import { listings } from '@fish/db/schema/listings'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
 import { recommendationRequestItems } from '@fish/db/schema/recommendation-request-items'
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
+import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
@@ -1657,5 +1661,105 @@ describe('recommendation interest refresh enqueue (#323 R2)', () => {
       .where(eq(recommendationEvents.requestId, feed.requestId))
     expect(rows).toHaveLength(1)
     expect(rows[0]?.userId).toBe(buyer.id)
+  })
+})
+
+describe('recommendation 限流与进程内计数 (#323 R6 PR-2)', () => {
+  /**
+   * 限流是"撞到之后的样子"才值得断言：默认容量（埋点 120 / Feed 60）要发上百个请求才 429，
+   * 所以这里用环境变量把两份令牌桶压到 2 / 1 —— `loadRecommendationRateLimitEnv()` 读的是
+   * `createApp` 调用那一刻的 `process.env`，因此可以在用例内造第二个 app 实例。
+   *
+   * 用独立 app 而不是改模块级 `app` 的配置：模块级实例被前面所有 describe 共用，
+   * 把它的埋点桶打空会让后续用例收到 429，测试顺序一变就成片失败。
+   */
+  test('埋点超容量 429（带 Retry-After 与结构化剩余秒数），Feed 同样受限，计数进 admin 指标', async () => {
+    const savedEnv = new Map<string, string | undefined>()
+    const overrides: Record<string, string> = {
+      RECOMMENDATION_EVENT_RATE_LIMIT_CAPACITY: '2',
+      RECOMMENDATION_EVENT_RATE_LIMIT_REFILL_PER_SECOND: '1',
+      RECOMMENDATION_FEED_RATE_LIMIT_CAPACITY: '1',
+      // Feed 桶补得极慢：否则第一个请求只要耗时超过 1s，第二个请求就又拿到令牌，断言会随机变红。
+      RECOMMENDATION_FEED_RATE_LIMIT_REFILL_PER_SECOND: '0.001',
+    }
+    for (const name of Object.keys(overrides)) savedEnv.set(name, process.env[name])
+    for (const [name, value] of Object.entries(overrides)) process.env[name] = value
+
+    try {
+      const adminUser = await registerUser('70')
+      await db.update(users).set({ role: 'ADMIN' }).where(eq(users.id, adminUser.id))
+      const limitedApp = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
+      const headers = { cookie: adminUser.cookie }
+      const listingId = await createListing(adminUser.id, '限流验收商品')
+      const batch = (eventType: RecommendationEventType) =>
+        post(
+          {
+            events: [
+              {
+                eventId: crypto.randomUUID(),
+                listingId,
+                eventType,
+                occurredAt: new Date().toISOString(),
+              },
+            ],
+          },
+          headers,
+        )
+
+      // 第 1 批：客户端伪报服务端确证行为（CHAT_START）。这是"契约合法、语义非法"，
+      // 依旧是 R1 冻结的 202 + rejected —— 限流改不了响应形状，只改"还没进业务就被挡下"的部分。
+      const rejected = await limitedApp.request('/recommendations/events', batch('CHAT_START'))
+      expect(rejected.status).toBe(202)
+      expect(await rejected.json()).toMatchObject({ accepted: 0, duplicates: 0, rejected: 1 })
+
+      // 第 2 批用掉最后一个令牌，第 3 批必须被挡下（容量 2，且 1s 才补 1 个令牌）。
+      const acceptedAgain = await limitedApp.request(
+        '/recommendations/events',
+        batch('DETAIL_VIEW'),
+      )
+      expect(acceptedAgain.status).toBe(202)
+
+      const limited = await limitedApp.request('/recommendations/events', batch('DETAIL_VIEW'))
+      expect(limited.status).toBe(429)
+      const retryAfterSeconds = Number(limited.headers.get('retry-after'))
+      expect(Number.isInteger(retryAfterSeconds)).toBe(true)
+      expect(retryAfterSeconds).toBeGreaterThanOrEqual(1)
+      // 头与响应体必须给同一个数：客户端拿头做倒计时、拿体做文案，两者漂移会让倒计时骗人。
+      expect(await limited.json()).toMatchObject({
+        error: { code: RECOMMENDATION_RATE_LIMITED, retryAfterSeconds },
+      })
+
+      // Feed 也参与限流（§8.1）：不限 Feed 等于给脚本留一条"免费取号"的通道。
+      const firstFeed = await limitedApp.request('/recommendations/feed?limit=1', { headers })
+      expect(firstFeed.status).toBe(200)
+      const secondFeed = await limitedApp.request('/recommendations/feed?limit=1', { headers })
+      expect(secondFeed.status).toBe(429)
+      expect(await secondFeed.json()).toMatchObject({
+        error: { code: RECOMMENDATION_RATE_LIMITED },
+      })
+
+      // 这个 200 同时是一道回归护栏：文件里靠前的用例造出了 detailViews(9) > impressions(6)
+      // 的数据（`DETAIL_VIEW` 只要点进详情就上报，`IMPRESSION` 有可见性门槛），
+      // 契约给 `*Rate` 加了 `max(1)` 的话这里就是 500 —— 漏斗是各自独立上报的事件计数，不是嵌套集合。
+      const metricsResponse = await limitedApp.request(
+        `${ADMIN_ROUTES.recommendationMetrics}?window=24h`,
+        { headers },
+      )
+      expect(metricsResponse.status).toBe(200)
+      const metrics = RecommendationMetricsSchema.parse(await metricsResponse.json())
+
+      expect(metrics.funnel.feedRequests).toBeGreaterThanOrEqual(1)
+      // 进程内计数：这个 app 实例上刚好被挡了 2 次（埋点 1 次 + Feed 1 次）。
+      expect(metrics.guardrails.rateLimitedRequests).toBe(2)
+      expect(metrics.guardrails.eventRejectionReasons.serverConfirmedEventType).toBe(1)
+      // 两批都是 accepted 非空且写入成功 ⇒ 失败率是 0（而不是 null：有尝试就一定算得出比率）。
+      expect(metrics.guardrails.eventWriteFailureRate).toBe(0)
+      expect(metrics.latency.find((row) => row.metric === 'feed')?.count).toBeGreaterThanOrEqual(1)
+    } finally {
+      for (const [name, value] of savedEnv) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
   })
 })

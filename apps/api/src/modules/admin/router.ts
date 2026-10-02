@@ -1,3 +1,4 @@
+import { RecommendationMetricsQuerySchema } from '@fish/contracts/admin/recommendation-metrics'
 import {
   AdminAuditLogsQuerySchema,
   AdminListingsQuerySchema,
@@ -217,6 +218,19 @@ export function createAdminRouter(options: AdminRouterOptions) {
   router.get('/overview', async (c) => {
     try {
       return c.json(await service.getOverview(), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // 推荐指标（#323 R6）：只读聚合端点，窗口是白名单枚举（非法值 → 422）。
+  // 注册位置与 `/overview` 相邻；路径不含参数段，与任何 `:id` 路由都不冲突。
+  router.get('/recommendations/metrics', async (c) => {
+    const parsed = RecommendationMetricsQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+
+    try {
+      return c.json(await service.getRecommendationMetrics(parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

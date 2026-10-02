@@ -24,6 +24,14 @@ export const ADMIN_ROUTES = {
   listingDetail: (listingId: string) => `/admin/listings/${listingId}`,
   /** GET 平台概览：固定口径聚合指标。 */
   overview: '/admin/overview',
+  /**
+   * GET 推荐漏斗 / guardrail / 延迟指标（#323 R6）：只读，`window=24h|7d|30d`。
+   *
+   * 与 `/overview` 分开而不是塞进去：overview 是平台经营口径（用户 / 商品 / 交易），
+   * 本端点整块属于推荐域，窗口与保留期都跟着 `recommendation_*` 三张表走；混在一起会让
+   * overview 的每一次口径变更都牵扯推荐指标（反之亦然）。
+   */
+  recommendationMetrics: '/admin/recommendations/metrics',
   /** GET 审计日志（只读，默认最新优先）。 */
   auditLogs: '/admin/audit-logs',
   /** GET 待人工审核队列。 */

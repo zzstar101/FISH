@@ -1,3 +1,4 @@
+import { RECOMMENDATION_CLEANUP_INTERVAL_MS } from '@fish/contracts/recommendation/observability'
 import { createDb } from '@fish/db/client'
 import { loadEmbeddingEnv, loadServerEnv, loadVisualEmbeddingEnv } from '@fish/shared/env'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
@@ -8,6 +9,7 @@ import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
+import { cleanupExpiredRecommendationData } from './jobs/recommendation/cleanup'
 import { createVisualBackfillRunner } from './jobs/visual-embedding/backfill'
 import { cleanupExpiredVisualQueryImages } from './jobs/visual-embedding/cleanup'
 import {
@@ -107,6 +109,39 @@ async function runVisualMaintenance(now: Date): Promise<void> {
   }
 }
 
+/** 周期性保留期清理（#323 R6 §7）：删 90 天前的推荐上下文与 180 天前的埋点。 */
+async function runRecommendationCleanup(now: Date): Promise<void> {
+  try {
+    const result = await cleanupExpiredRecommendationData({ db, now })
+    if (result.deletedRequestItems + result.deletedRequests + result.deletedEvents > 0) {
+      console.log(
+        `[worker] 推荐数据清理：快照 ${result.deletedRequestItems} / 请求 ${result.deletedRequests} / 事件 ${result.deletedEvents}（${result.batches} 批）`,
+      )
+    }
+  } catch (error) {
+    // 与视觉维护同一语义：一轮失败只记日志，下一轮自然重试（删除幂等）。
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[worker] 推荐数据清理失败：${detail}`)
+  }
+}
+
+/**
+ * 周期任务表（#323 R6 §7.1，**已确认**）：把原先单个 `lastMaintenanceAt` 换成一张小表。
+ *
+ * 理由：再来第三个定时任务时不必继续堆 `if`，且「首次循环立即跑一轮」（`lastRunAt = 0`）的既有
+ * 行为可以逐项保留。每项自己吞异常——一个任务失败不该让另一个任务也停摆。
+ */
+type MaintenanceSchedule = {
+  intervalMs: number
+  lastRunAt: number
+  run: (now: Date) => Promise<void>
+}
+
+const SCHEDULES: MaintenanceSchedule[] = [
+  { intervalMs: VISUAL_MAINTENANCE_INTERVAL_MS, lastRunAt: 0, run: runVisualMaintenance },
+  { intervalMs: RECOMMENDATION_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runRecommendationCleanup },
+]
+
 // 启动时回收上一次进程留下的僵死领取（`status = 'RUNNING'`）：`kill -9` 会让正在执行的 job
 // 永远停在 RUNNING，没有这一步它不会再有第二次机会。
 const recovered = await queue.recoverStaleClaims()
@@ -117,8 +152,6 @@ if (recovered.requeued > 0 || recovered.failed > 0) {
 }
 
 console.log(`[worker] started (poll interval ${POLL_INTERVAL_MS}ms)`)
-
-let lastMaintenanceAt = 0
 
 for (;;) {
   const outcome = await queue.runOnce()
@@ -131,12 +164,13 @@ for (;;) {
     else console.error(line)
   }
 
-  // 首次循环立即跑一轮（`lastMaintenanceAt = 0`）：启动就能补上历史数据的视觉向量，
+  // 首次循环立即跑一轮（每项 `lastRunAt = 0`）：启动就能补上历史数据的视觉向量与过期推荐数据，
   // 不必等一个完整间隔。
   const now = performance.now()
-  if (now - lastMaintenanceAt >= VISUAL_MAINTENANCE_INTERVAL_MS) {
-    lastMaintenanceAt = now
-    await runVisualMaintenance(new Date())
+  for (const schedule of SCHEDULES) {
+    if (now - schedule.lastRunAt < schedule.intervalMs) continue
+    schedule.lastRunAt = now
+    await schedule.run(new Date())
   }
 
   await Bun.sleep(POLL_INTERVAL_MS)
