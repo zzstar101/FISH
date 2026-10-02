@@ -1,25 +1,26 @@
 /**
- * 「历史浏览」的数据口径与文案（**纯逻辑，无 Taro / 无请求**，供 `tests/history-records.test.ts` 直接 import）。
+ * 「历史浏览」的数据口径与文案（**纯逻辑，无 Taro / 无请求**，供 `tests/history-records.test.ts` /
+ * `tests/history-real.test.ts` 直接 import）。
  *
- * ## 为什么整页的数据都在这里
+ * ## 三档的数据源现状（2026-10 核对）
  *
- * 本页三档数据**后端一条都没有**（已核验的契约事实，见仓库外的
- * `D:\FISH\四页面并行-收藏历史评论关注.md` §2.1）：
- *
- * | 能力 | 契约现状 | 证据 |
+ * | 能力 | 现状 | 证据 |
  * | --- | --- | --- |
- * | 浏览足迹 | ❌ 全仓无 footprint / view_history 表与端点 | `packages/contracts/src/` 无该域 |
- * | 收藏 | ❌ 契约无、API 无模块（DB 侧只有表） | `packages/contracts` / `apps/api` 无 favorites 域；`packages/db/src/schema/favorites.ts` 有表无端点 |
- * | 「我发过的留言」聚合 | ❌ 留言只有**按商品**取的那条路由 | `packages/contracts/src/comments/routes.ts` 的 `COMMENT_ROUTES`；`comments/schema.ts` 的 `CommentListQuerySchema` 只有 `limit` / `cursor`，没有 author 过滤 |
+ * | 浏览足迹 | ✅ 已接（#415 M1） | `packages/contracts/src/view-history/` 的 GET / DELETE `/me/view-history`；本模块的 `goneLabelOf` / `recordCellOf` / `historyDaysOf` 是它的纯适配层 |
+ * | 收藏 | ⚠️ 端点与端上「我的收藏」页都已上线（#394），**本页这一档还没接** | `@/features/favorites/api` 的 `fetchMyFavorites`；本页收藏档仍走演示数据 / 缺口空态 |
+ * | 「我发过的留言」聚合 | ⚠️ `GET /me/comments` 已上线（#195，PR1 只含商品留言）；端上聚合页在 #405（PR）；**本页这一档还没接** | `packages/contracts/src/comments/routes.ts` 的 `myComments` |
  *
  * 所以本模块里的 `DEMO_*` 只服务**演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，
- * 见 `index.tsx`）：真实构建三档一律渲染空态 + 如实的缺口说明，**不摆这些数据**。
+ * 见 `index.tsx`）：真实构建下浏览档读真接口，收藏 / 留言两档仍渲染如实的缺口空态
+ * （「这一页还没接」），**不摆这些演示数据**。
  *
  * ## 条数必须与「我的」页数字栏对得上
  *
  * `features/fetchers.ts` 的 `demoProfile()` 给的是收藏 8 / 足迹 24 / 关注 5，
  * 本模块的演示条数照稿就是 24（4 天 × 6 件）/ 8 / 8 —— 否则演示时会出现
  * 「数字栏写 8、点进来 5 件」这种自相矛盾。`tests/history-records.test.ts` 锁住这三个数。
+ * **真实构建**下「我的」页的足迹数读 `GET /me/view-history` 的 `total`
+ * （`features/fetchers.ts` 的 `loadProfile`），与本页列表同源。
  *
  * ## 演示数据下**不做**的两件事
  *
@@ -27,10 +28,12 @@
  *    「我发过的留言」汇总 —— 它既慢又不完整（漏掉我在别人商品下的留言），比空态更糟。
  * 2. **不假装服务端写成功**：顶部「清空」在**演示构建**下清掉的是本页自己的演示数组
  *    （页面上那份记录真的没了、并切到「已清空」空态），不涉及任何服务端写；
- *    **真实构建**下没有记录可清、写端点也不存在，于是只给一句说明、不做本地翻转 ——
- *    见 `canClear` / `clearBlockedOf`。
+ *    **真实构建**下浏览档的清空是**真写**（`DELETE /me/view-history`，见
+ *    `@/features/view-history/api`），以服务端为准；收藏 / 留言两档没有写端点，
+ *    只给一句说明、不做本地翻转 —— 见 `canClearTab` / `clearBlockedOf`。
  */
-import type { ListingCategory } from '@fish/contracts/listings/schema'
+import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
+import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 
 /* ---------------------------------------------------------------- 档位 */
@@ -123,6 +126,76 @@ export function blockUrlOf(category: ListingCategory): string {
   return (LISTING_BLOCKS[category] ?? FALLBACK_BLOCK)[0]
 }
 
+/* ---------------------------------------------------------------- 真实数据适配（#415 M1） */
+
+/**
+ * 商品状态 → 失效角标。**与收藏页同源**（`pages/favorites/list.ts` 的 `toFavoriteItems`）：
+ * `OFFLINE` → 「已下架」、`SOLD` → 「已卖掉」；`ACTIVE` / `RESERVED`（已预定）都还在货架上，
+ * 不进失效档 —— 同一件商品在历史页与收藏页的角标必须一致。
+ */
+export function goneLabelOf(status: ListingStatus): GoneLabel | null {
+  if (status === 'OFFLINE') return '已下架'
+  if (status === 'SOLD') return '已卖掉'
+  return null
+}
+
+/**
+ * 契约的一行浏览记录 → 本页三列格。缩略图仍是分类色块（`blockUrlOf`，不引入真实封面，
+ * 保持稿面版式）—— 契约的 `coverUrl` 留给后续换真封面时再接。
+ */
+export function recordCellOf(item: ViewHistoryItem): RecordCell {
+  const { listing } = item
+  return {
+    id: listing.id,
+    category: listing.category,
+    title: listing.title,
+    priceCents: listing.priceCents,
+    gone: goneLabelOf(listing.status),
+  }
+}
+
+/** 本地日历日的键（`2026-10-02`）；跨时区比较必须按**本地日**，不能用 UTC。 */
+function localDayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+}
+
+/** 组标题：今天 / 昨天 / M月D日（跨年带年份）。 */
+function dayLabelOf(date: Date, now: Date): string {
+  const key = localDayKey(date)
+  if (key === localDayKey(now)) return '今天'
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (key === localDayKey(yesterday)) return '昨天'
+  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日`
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+/**
+ * 契约的一页浏览记录 → 按**本地日**分组。
+ *
+ * - 日期取 `viewedAt`（稿决策⑦：日期来自足迹记录，不是商品发布时间）；
+ * - 组内保持输入顺序（服务端已按 `last_viewed_at DESC` 下发，不再二次排序）；
+ * - 同一天只出一组，跨页拼接时也要先合并成一份 `items` 再调本函数（见 `index.tsx` 的
+ *   `loadMore`），否则同一天会被切成两组、React 的 `key={day.date}` 还会撞车。
+ */
+export function historyDaysOf(items: readonly ViewHistoryItem[], now: number): HistoryDay[] {
+  const nowDate = new Date(now)
+  const days: HistoryDay[] = []
+  let current: HistoryDay | null = null
+  let currentKey: string | null = null
+  for (const item of items) {
+    const viewed = new Date(item.viewedAt)
+    const key = localDayKey(viewed)
+    if (current === null || key !== currentKey) {
+      current = { date: dayLabelOf(viewed, nowDate), items: [] }
+      currentKey = key
+      days.push(current)
+    }
+    current.items.push(recordCellOf(item))
+  }
+  return days
+}
+
 /* ---------------------------------------------------------------- 顶部动作（清空） */
 
 /**
@@ -143,9 +216,9 @@ const RECORD_NAME: Record<HistoryTab, string> = {
 /**
  * 清空成功了。
  *
- * ⚠️ 这个动作**只在演示构建下真的清**（见 `canClear` 的说明）：被清掉的是本页自己的
- * 演示数据，不是「假装删掉了服务端的记录」—— 清完列表真的空了、并切到「已清空」空态，
- * 所以这句话说的是事实。
+ * 演示构建下清掉的是本页自己的演示数据（不是「假装删掉了服务端的记录」—— 清完列表真的
+ * 空了、并切到「已清空」空态）；真实构建下浏览档是**真写** `DELETE /me/view-history`，
+ * 这句话在服务端回 `deleted` 之后才说（见 `index.tsx` 的 `clearTab`）。
  */
 export function clearDoneOf(tab: HistoryTab): string {
   return `已清空${RECORD_NAME[tab]}`
@@ -154,9 +227,9 @@ export function clearDoneOf(tab: HistoryTab): string {
 /**
  * 清空暂时做不了。
  *
- * **真实构建**（没有演示数据）三档都没有可清的记录，而写操作后端三个端点一个都没有
- * （清空浏览足迹 / 取消收藏 / 删留言 —— 证据见文件头），所以这里只给说明、**不做任何
- * 本地状态翻转**（本地删掉几行再回滚是假接线，会让用户以为删成功了）。
+ * **真实构建**下收藏 / 留言两档没有写端点（收藏只有**单品**取消 `/listings/:id/favorite`、
+ * 留言只有**单条**删除 `/comments/:id`，都不是「清空我这一档」的语义），所以这里只给说明、
+ * **不做任何本地状态翻转**（本地删掉几行再回滚是假接线，会让用户以为删成功了）。
  * 这与 Owner 的「如果是因为后端没有的原因就保持不变」是同一口径。
  */
 export function clearBlockedOf(tab: HistoryTab): string {
@@ -166,12 +239,14 @@ export function clearBlockedOf(tab: HistoryTab): string {
 /**
  * 这一档能不能真的清。
  *
- * `true` 只在**演示构建**下成立：那份「记录」就是本页从 `records.ts` 读进来的演示数组，
- * 清空它 = 把页面上显示的这份数据真的去掉（列表变空 + 切到「已清空」空态），
- * 不需要也没有假装服务端写成功。真实构建下没有任何记录可清，恒 `false`。
+ * - **演示构建**：三档都能清 —— 那份「记录」就是本页从 `records.ts` 读进来的演示数组，
+ *   清空它 = 把页面上显示的这份数据真的去掉（列表变空 + 切到「已清空」空态）。
+ * - **真实构建**：只有浏览档能清 —— `DELETE /me/view-history` 已上线（#415 M1），
+ *   清的是服务端那份记录，以服务端返回为准；收藏 / 留言两档的「清空」写端点仍不存在，
+ *   由页面走 `clearBlockedOf` 的说明，不做本地翻转。
  */
-export function canClear(demo: boolean): boolean {
-  return demo
+export function canClearTab(demo: boolean, tab: HistoryTab): boolean {
+  return demo || tab === 'history'
 }
 
 /* ---------------------------------------------------------------- 空态 / 加载 / 说明 */
@@ -190,7 +265,8 @@ export type EmptyCopy = { title: string; text: string; action: string }
 export type EmptyKind = 'noBackend' | 'demoEmpty' | 'cleared'
 
 export function emptyKindOf(demo: boolean, cleared: boolean): EmptyKind {
-  // 清空只可能发生在演示构建里；真到了「清过」这一态，它比其它两种解释都更具体
+  // 传进来的 cleared 只可能是演示构建的清空标记（真实浏览档的清空以服务端为准，
+  // 页面单独判定，不走这里）；真到了「清过」这一态，它比其它两种解释都更具体
   if (cleared) return 'cleared'
   return demo ? 'demoEmpty' : 'noBackend'
 }
@@ -203,8 +279,9 @@ export function emptyKindOf(demo: boolean, cleared: boolean): EmptyKind {
  * 这与 `components/load-error` 和空态之间那条界线同一口径（「加载不出来」≠「恰好没有内容」）。
  *
  * ⚠️ 收藏那一支（#397）：收藏接口已上线（#394），小程序也有了真读它的「我的收藏」页，
- * 所以这里**不能**再写「服务端还没有收藏接口 / 只记在这台设备上」—— 两句现在都是假话。
+ * 所以这里**不能再写**「服务端还没有收藏接口 / 只记在这台设备上」—— 两句现在都是假话。
  * 本页的收藏档还没接端点，如实说「这一页还没接」，并把用户引到能看的那个页面。
+ * 浏览档同理（#415 M1 后 `noBackend` 已退役，那一支与 `demoEmpty` 同文案）。
  */
 export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   if (kind === 'cleared') {
@@ -248,9 +325,15 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   }
 
   if (tab === 'history') {
+    /*
+      浏览档的 `noBackend` 文案随 #415 M1 退役：`GET /me/view-history` 已上线，真实构建里
+      「接口成功但列表为空」确实等于「你还没有浏览过」，页面已改用 `demoEmpty` 那一支
+      （见 `index.tsx` 的 `emptyKind`）。这里仍与 `demoEmpty` 保持**同一句话**，
+      免得哪天有人再走回这一支时又说出「浏览足迹还没有后端」这种现在已经是假话的文案。
+    */
     return {
-      title: '浏览足迹还没有后端',
-      text: '记录浏览足迹的接口还没做，所以这里暂时没有内容可看；上线后看过的商品会按天收在这里。',
+      title: '还没有浏览记录',
+      text: '看过的商品会按天收在这里，方便回头再找',
       action: '去逛逛',
     }
   }
@@ -699,7 +782,8 @@ export function withCleared(state: ClearedState, userId: string, tab: HistoryTab
  * 是空的 —— 若刷新把数据变回来，用户会看到「刚清空的东西自己长回来」，比不做清空更糟。
  * 所以在**渲染期**用这份标记过滤（不改 `fetchDemoRecords` 的返回值），刷新后自然仍然为空。
  *
- * **真实构建下 `cleared` 恒为全 false**（`canClear` 为假、清不掉），这个函数是恒等变换。
+ * **真实构建下 `cleared` 恒为全 false**（演示清空之外没有别的写入者，`canClearTab` 对
+ * 收藏 / 留言为假；真实浏览档的清空直接以服务端为准、不走这份标记），这个函数是恒等变换。
  */
 export function applyCleared(records: DemoRecords, cleared: ClearedMap): DemoRecords {
   if (!cleared.history && !cleared.favs && !cleared.msgs) return records
