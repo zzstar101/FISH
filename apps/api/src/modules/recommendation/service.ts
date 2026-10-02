@@ -1,4 +1,17 @@
 import {
+  INTEREST_STRATEGY_VERSION,
+  interestLookbackStart,
+} from '@fish/contracts/recommendation/interest'
+import {
+  composeRecommendationStrategyVersion,
+  RANK_NEGATIVE_FEEDBACK_EVENT_TYPES,
+  RANK_STRATEGY_VERSION,
+  RECOMMENDATION_SNAPSHOT_MAX_ITEMS,
+  RECOMMENDATION_STRATEGY_VERSION_RULE,
+} from '@fish/contracts/recommendation/rank'
+import { RECALL_STRATEGY_VERSION } from '@fish/contracts/recommendation/recall'
+import {
+  RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES,
   RECOMMENDATION_SERVER_CONFIRMED_EVENT_TYPES,
   RECOMMENDATION_STRATEGY_VERSION_NONE,
   type RecommendationEventIngestResponse,
@@ -13,9 +26,15 @@ import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { type ListingService, ListingServiceError } from '../listings/service'
 import type { RecommendationContext } from './context'
 import { decodeRecommendationCursor, encodeRecommendationCursor } from './cursor'
+import { resolveRecommendationIdentity } from './identity'
 import type { InterestRefreshQueue } from './interest-queue'
+import { buildNegativeFeedbackSignals, type NegativeFeedbackSignals } from './rank/feedback'
+import { rerankCandidates } from './rank/rerank'
+import { type ScoredCandidate, scoreCandidates } from './rank/score'
+import type { RecommendationRecall } from './recall/service'
 import type {
   RecommendationEventRecord,
+  RecommendationRequestItemRecord,
   RecommendationRequestRow,
   RecommendationStore,
 } from './store'
@@ -23,8 +42,8 @@ import type {
 /**
  * 推荐模块的错误：路由层把它映射成 `errorBody(code, message, details)` + HTTP status。
  *
- * 只暴露 `VALIDATION_FAILED`（422）：R1 的失败面只有"游标不可用"与"契约校验失败"，
- * 两者对客户端都是同一类处置（丢掉游标重开一次推荐请求）。
+ * 只暴露 `VALIDATION_FAILED`（422）：对客户端而言"游标不可用"与"契约校验失败"是同一类处置
+ * （丢掉游标重开一次推荐请求）。
  *
  * `status` 必须是**字面量联合**（而不是 `number`）：Hono 的 `c.json(body, status)` 只接受
  * `ContentfulStatusCode`，宽化成 `number` 会直接在路由层编译失败。
@@ -103,17 +122,30 @@ function ownsRequest(
   return row.anonymousSessionId === anonymousSessionId
 }
 
+/** `(requestId, listingId)` 复合键：同一商品可能出现在多次请求里，键必须带上请求。 */
+function attributionKey(requestId: string, listingId: string): string {
+  return `${requestId}:${listingId}`
+}
+
 export function createRecommendationService(deps: {
   store: RecommendationStore
-  /** 复用确定性 Feed 的读路径：R1 不重写列表查询，只把结果包上推荐上下文。 */
-  listings: Pick<ListingService, 'listFeed'>
+  /**
+   * 复用确定性 Feed 的读路径：R1 不重写列表查询。R4 起多了一个 `listCardsByIds` —— 排序结果的
+   * 顺序由推荐层决定，商品层因此需要"给我这几件的卡片"这条读路径。
+   */
+  listings: Pick<ListingService, 'listFeed' | 'listCardsByIds'>
+  /** 多路召回（R3）。整层不抛错的约定由它自己保证，这里仍然兜一层。 */
+  recall: RecommendationRecall
   /**
    * 长期画像重算的投递口（#323 R2）。登录用户的行为一落库就投一条 `REFRESH_USER_INTEREST`；
    * 匿名行为不投（长期画像只给登录用户），session 画像由 api 请求时实时算、不落库。
    */
   interest: InterestRefreshQueue
+  /** 便于测试注入固定时钟；缺省取系统时间。 */
+  clock?: () => Date
 }): RecommendationService {
-  const { store, listings, interest } = deps
+  const { store, listings, recall, interest } = deps
+  const clock = deps.clock ?? (() => new Date())
 
   /**
    * 投递长期画像重算。**失败不能让行为写入变成 500**：事件已经落库，客户端重试也只会撞
@@ -133,67 +165,253 @@ export function createRecommendationService(deps: {
     }
   }
 
+  /**
+   * 降级路径 & R1 旧游标的翻页路径：直接把商品 Feed 的 `newest` 页包上推荐上下文。
+   *
+   * 内层商品游标由 listings 层校验（`listings/service.ts` 的 `decodeFeedCursor`）：坏游标在那里
+   * 抛 `ListingServiceError(VALIDATION_FAILED)`。推荐层必须把这条 422 语义接下来，否则它会冒到
+   * `app.onError`（只处理 HTTPException）变成 500 —— 同一个坏游标在 `GET /listings` 是 422。
+   */
+  async function serveByNewest(input: {
+    viewerId: string | null
+    requestId: string
+    strategyVersion: string
+    limit: number
+    listingCursor?: string
+  }): Promise<RecommendationFeedResponse> {
+    let page: Awaited<ReturnType<typeof listings.listFeed>>
+    try {
+      page = await listings.listFeed(input.viewerId, {
+        sort: 'newest',
+        limit: input.limit,
+        ...(input.listingCursor === undefined ? {} : { cursor: input.listingCursor }),
+      })
+    } catch (error) {
+      if (error instanceof ListingServiceError && error.code === 'VALIDATION_FAILED') {
+        throw invalidCursor()
+      }
+      throw error
+    }
+
+    return RecommendationFeedResponseSchema.parse({
+      requestId: input.requestId,
+      strategyVersion: input.strategyVersion,
+      items: page.items,
+      nextCursor:
+        page.nextCursor === null
+          ? null
+          : encodeRecommendationCursor({
+              kind: 'passthrough',
+              listingCursor: page.nextCursor,
+              requestId: input.requestId,
+            }),
+    })
+  }
+
+  /** 读排序用的负反馈信号；失败返回 `null`（`negativeFeedback` 进明细的 `missing`，不是 0）。 */
+  async function loadNegativeFeedback(
+    viewerId: string | null,
+    sessionId: string,
+    now: Date,
+  ): Promise<NegativeFeedbackSignals | null> {
+    const identity = resolveRecommendationIdentity({
+      userId: viewerId,
+      anonymousSessionId: sessionId,
+    })
+    // 无身份 = 冷启动，没有"这个人的负反馈"可言：空信号是**已知的** 0，不是未知。
+    if (identity === null) return buildNegativeFeedbackSignals({ events: [], now })
+    try {
+      const events = await store.findNegativeFeedbackEvents({
+        identity,
+        // 复用 R2 的长期回看窗口（180 天）+ 长期半衰期（14 天）：负反馈是"态度"，不是瞬时状态。
+        since: interestLookbackStart(now),
+        eventTypes: RANK_NEGATIVE_FEEDBACK_EVENT_TYPES,
+      })
+      return buildNegativeFeedbackSignals({ events, now })
+    } catch (error) {
+      console.warn('[recommendation] 负反馈读取失败，本次排序缺少 negativeFeedback 特征：', error)
+      return null
+    }
+  }
+
+  /**
+   * 首次请求：召回 → 规则排序 → 重排 → 落快照 → 返回第一页。
+   *
+   * **快照的顺序按"真正发出去的卡片"编号**：`listCardsByIds` 是可见性的最终真值，它可能丢掉
+   * 在召回之后、发卡片之前被下架的商品。丢掉的那几条从快照里移除，其余位置顺延 —— 否则客户端
+   * 数出来的第 N 位与服务端记下的第 N 位会错开，归因真值当场失效。
+   */
+  async function createRankedFeed(input: {
+    viewerId: string | null
+    sessionId: string
+    limit: number
+  }): Promise<RecommendationFeedResponse> {
+    const requestId = newId()
+    const now = clock()
+
+    let scored: ScoredCandidate[] = []
+    let feedback: NegativeFeedbackSignals | null = null
+    try {
+      const recalled = await recall.recall({
+        userId: input.viewerId,
+        anonymousSessionId: input.sessionId,
+      })
+      feedback = await loadNegativeFeedback(input.viewerId, input.sessionId, now)
+      scored = scoreCandidates({ candidates: recalled.candidates, feedback })
+    } catch (error) {
+      // 召回层自己保证不抛；这一层是纵深防御 —— 首页不能因为推荐管线里任何一处没守约而 500。
+      console.warn('[recommendation] 召回/排序失败，本次 Feed 降级为 newest 透传：', error)
+      scored = []
+    }
+
+    if (scored.length === 0) {
+      // 冷启动（新用户、空库）或整条管线失败：退化成 R1 行为（newest + `rec-v1-none`），并且
+      // **不写快照** —— 翻页继续走商品游标，语义与 R1 完全一致。
+      const request = await store.createRequest({
+        id: requestId,
+        userId: input.viewerId,
+        anonymousSessionId: input.sessionId,
+        strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
+      })
+      return serveByNewest({
+        viewerId: input.viewerId,
+        requestId: request.id,
+        strategyVersion: request.strategyVersion,
+        limit: input.limit,
+      })
+    }
+
+    const reranked = rerankCandidates({
+      scored,
+      hiddenListingIds: feedback?.hiddenListingIds ?? new Set(),
+      // 探索打散用 requestId 当种子：同一请求可重放，不同请求看到不同的探索位。
+      seed: requestId,
+      limit: RECOMMENDATION_SNAPSHOT_MAX_ITEMS,
+    })
+
+    const ordered = reranked.items
+    const pageIds = ordered.slice(0, input.limit).map((item) => item.candidate.listingId)
+    // `listCardsByIds` 按传入顺序返回，查不到的 id 不出现 ⇒ key 顺序就是真正发出去的商品顺序。
+    const cards = await listings.listCardsByIds(input.viewerId, pageIds)
+    const servedIds = [...cards.keys()]
+    const orderedById = new Map(ordered.map((item) => [item.candidate.listingId, item]))
+
+    const snapshotIds = [
+      ...servedIds,
+      ...ordered.slice(pageIds.length).map((item) => item.candidate.listingId),
+    ]
+
+    const strategyVersion = composeRecommendationStrategyVersion([
+      RECOMMENDATION_STRATEGY_VERSION_RULE,
+      INTEREST_STRATEGY_VERSION,
+      RECALL_STRATEGY_VERSION,
+      RANK_STRATEGY_VERSION,
+    ])
+
+    const request = await store.createRequest({
+      id: requestId,
+      userId: input.viewerId,
+      anonymousSessionId: input.sessionId,
+      strategyVersion,
+    })
+
+    const rows = buildSnapshotRows(request.id, snapshotIds, orderedById)
+    let nextCursor: string | null = null
+    try {
+      await store.insertRequestItems(rows)
+      if (servedIds.length < rows.length) {
+        nextCursor = encodeRecommendationCursor({
+          kind: 'snapshot',
+          requestId: request.id,
+          offset: servedIds.length,
+        })
+      }
+    } catch (error) {
+      // 快照写不进去 ⇒ 后续页拿不到稳定的顺序真值。宁可这一轮只能看第一页（`nextCursor=null`），
+      // 也不要发一个会让第 2 页顺序错乱、归因全错的游标。
+      console.error('[recommendation] 推荐快照写入失败，本次不提供后续页游标', error)
+    }
+
+    return RecommendationFeedResponseSchema.parse({
+      requestId: request.id,
+      strategyVersion: request.strategyVersion,
+      items: [...cards.values()],
+      nextCursor,
+    })
+  }
+
+  /** 快照页：顺序已经冻结，翻页只是切片（不重跑召回/排序，否则同一批商品会重复或漏掉）。 */
+  async function serveFromSnapshot(input: {
+    viewerId: string | null
+    row: RecommendationRequestRow
+    offset: number
+    limit: number
+  }): Promise<RecommendationFeedResponse> {
+    const items = await store.findRequestItems(input.row.id)
+    const slice = items.slice(input.offset, input.offset + input.limit)
+    const cards = await listings.listCardsByIds(
+      input.viewerId,
+      slice.map((item) => item.listingId),
+    )
+    // offset 前进的是**快照行数**而不是返回的卡片数：被跳过的行不应再被翻到。
+    const nextOffset = input.offset + slice.length
+
+    return RecommendationFeedResponseSchema.parse({
+      requestId: input.row.id,
+      strategyVersion: input.row.strategyVersion,
+      items: [...cards.values()],
+      nextCursor:
+        nextOffset < items.length
+          ? encodeRecommendationCursor({
+              kind: 'snapshot',
+              requestId: input.row.id,
+              offset: nextOffset,
+            })
+          : null,
+    })
+  }
+
   return {
     async startFeed({ viewerId, anonymousSessionId, limit, cursor }) {
       const issuedAnonymousSessionId = anonymousSessionId ?? newId()
       const sessionId = anonymousSessionId ?? issuedAnonymousSessionId
-
-      let request: RecommendationRequestRow
-      let listingCursor: string | undefined
+      const issued = anonymousSessionId === null ? issuedAnonymousSessionId : null
 
       if (cursor === undefined) {
-        request = await store.createRequest({
-          userId: viewerId,
-          anonymousSessionId: sessionId,
-          strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
-        })
-      } else {
-        const decoded = decodeRecommendationCursor(cursor)
-        if (!decoded) throw invalidCursor()
-
-        const [row] = await store.findRequests([decoded.requestId])
-        if (!row || !ownsRequest(row, viewerId, sessionId)) throw invalidCursor()
-
-        // 翻页复用**原请求行**：不新建 request，否则同一次滚动会被拆成两次推荐请求，
-        // 客户端算出的 position 会从 0 重来，曝光序号在服务端出现重复。
-        request = row
-        listingCursor = decoded.listingCursor
-      }
-
-      // 内层商品游标由 listings 层校验（`listings/service.ts` 的 `decodeFeedCursor`）：坏游标在那里
-      // 抛 `ListingServiceError(VALIDATION_FAILED)`。推荐层必须把这条 422 语义接下来，否则它会冒到
-      // `app.onError`（只处理 HTTPException）变成 500 —— 同一个坏游标在 `GET /listings` 是 422。
-      let page: Awaited<ReturnType<typeof listings.listFeed>>
-      try {
-        page = await listings.listFeed(viewerId, {
-          sort: 'newest',
-          limit,
-          ...(listingCursor === undefined ? {} : { cursor: listingCursor }),
-        })
-      } catch (error) {
-        if (error instanceof ListingServiceError && error.code === 'VALIDATION_FAILED') {
-          throw invalidCursor()
+        return {
+          response: await createRankedFeed({ viewerId, sessionId, limit }),
+          issuedAnonymousSessionId: issued,
         }
-        throw error
       }
 
-      const response = RecommendationFeedResponseSchema.parse({
-        requestId: request.id,
-        strategyVersion: request.strategyVersion,
-        items: page.items,
-        nextCursor:
-          page.nextCursor === null
-            ? null
-            : encodeRecommendationCursor({
-                listingCursor: page.nextCursor,
-                requestId: request.id,
-              }),
-      })
+      const decoded = decodeRecommendationCursor(cursor)
+      if (decoded === null) throw invalidCursor()
 
-      return {
-        response,
-        issuedAnonymousSessionId: anonymousSessionId === null ? issuedAnonymousSessionId : null,
-      }
+      const [row] = await store.findRequests([decoded.requestId])
+      if (row === undefined || !ownsRequest(row, viewerId, sessionId)) throw invalidCursor()
+
+      // 游标形状必须与请求行当时实际走的策略匹配。否则客户端只要自造一个
+      // `{requestId, listingCursor}`，就能把一次**排序**请求变成 newest 透传：发出去的卡片没有快照行，
+      // 它们随后的曝光会被归因层按 `attribution_not_found` 拒收 —— 用户侧表现为数据丢失。
+      // 反向同理：`rec-v1-none` 的请求没有快照，snapshot 游标只会翻出空页。
+      // 旧版（R1–R3）游标对应的请求行版本恒为 `rec-v1-none`（见 §7.1），所以这条校验不误伤在途游标。
+      const degraded = row.strategyVersion === RECOMMENDATION_STRATEGY_VERSION_NONE
+      if (degraded !== (decoded.kind === 'passthrough')) throw invalidCursor()
+
+      // 翻页复用**原请求行**：不新建 request，否则同一次滚动会被拆成两次推荐请求，
+      // 客户端算出的 position 会从 0 重来，曝光序号在服务端出现重复。
+      const response =
+        decoded.kind === 'snapshot'
+          ? await serveFromSnapshot({ viewerId, row, offset: decoded.offset, limit })
+          : await serveByNewest({
+              viewerId,
+              requestId: row.id,
+              strategyVersion: row.strategyVersion,
+              limit,
+              listingCursor: decoded.listingCursor,
+            })
+
+      return { response, issuedAnonymousSessionId: issued }
     },
 
     async ingest({ viewerId, events }) {
@@ -213,12 +431,25 @@ export function createRecommendationService(deps: {
       ]
 
       // 批量预取：单条事件一次查询会在 50 条批量下变成 100 次往返。
-      const [existingListingIds, requestRows] = await Promise.all([
+      const [existingListingIds, requestRows, attributions] = await Promise.all([
         store.findExistingListingIds([...new Set(listingIds)]),
         store.findRequests(requestIds),
+        // 归因只可能命中 `(requestId, listingId)` 这两个键，所以把本批的商品 id 一起下推：
+        // 不过滤就得把每个请求的整份快照（最坏 50 × 200 行）都拉回来再在内存里挑。
+        store.findRequestItemAttribution({
+          requestIds,
+          listingIds: [...new Set(listingIds)],
+        }),
       ])
       const knownListings = new Set(existingListingIds)
       const requestsById = new Map(requestRows.map((row) => [row.id, row]))
+      // 服务端归因真值：排序模式下 position/source 只认快照，客户端上报一律作废。
+      const attributionByKey = new Map(
+        attributions.map((row) => [
+          attributionKey(row.requestId, row.listingId),
+          { position: row.position, source: row.primarySource },
+        ]),
+      )
 
       const accepted: RecommendationEventRecord[] = []
       const rejectedReasons = new Map<string, number>()
@@ -262,6 +493,10 @@ export function createRecommendationService(deps: {
         let anonymousSessionId = event.anonymousSessionId?.toLowerCase() ?? null
         const requestId = event.requestId?.toLowerCase() ?? null
 
+        // position / source 只在有 requestId 时才有语义：脱离推荐请求的"第 3 位"是噪声。
+        let position: number | null = null
+        let source: RecommendationEventRecord['source'] = null
+
         if (requestId !== null) {
           const row = requestsById.get(requestId)
           if (!row) {
@@ -276,6 +511,30 @@ export function createRecommendationService(deps: {
           // 反过来登录用户的请求也不会因为丢了会话标识而变成匿名行为。
           userId = row.userId
           anonymousSessionId = row.anonymousSessionId
+
+          // `rec-v1-none` = R1 的 newest 透传（没有快照）：沿用 R1 口径，客户端上报的 position
+          // 就是唯一可用信息，source 缺省补 `fresh`。
+          if (row.strategyVersion === RECOMMENDATION_STRATEGY_VERSION_NONE) {
+            position = event.position ?? null
+            source = event.source ?? 'fresh'
+          } else {
+            // 排序模式：命中快照才认这条曝光/行为，位置与通道以服务端当时返回的为准。
+            const hit = attributionByKey.get(attributionKey(requestId, listingId))
+            if (hit !== undefined) {
+              position = hit.position
+              source = hit.source
+            } else if (
+              (RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES as readonly string[]).includes(
+                event.eventType,
+              )
+            ) {
+              // `IMPRESSION` / `QUICK_SKIP` 在库里被 CHECK 约束要求"必须带 position"，而排序模式
+              // 下拿不到快照行就意味着服务端无法证明这条曝光真的发生过 —— 直接拒收，而不是写一条
+              // 会撞 CHECK 让整批 INSERT 失败（连带把同批其它合法事件一起丢掉的）记录。
+              reject('attribution_not_found')
+              return
+            }
+          }
         }
 
         accepted.push({
@@ -285,12 +544,8 @@ export function createRecommendationService(deps: {
           requestId,
           listingId,
           eventType: event.eventType,
-          // position / source 只在有 requestId 时才有语义：脱离推荐请求的"第 3 位"是噪声。
-          position: requestId === null ? null : (event.position ?? null),
-          // R1 的 Feed 是 `newest` 透传，只有 `fresh` 一条召回通道，所以客户端不带 source 时
-          // 由服务端补上真值——**客户端不该猜召回通道**，那是服务端的知识：R3 起多路召回时
-          // 通道映射由 Feed 侧记录（服务端知道每件商品来自哪一路），客户端仍然不需要改。
-          source: requestId === null ? null : (event.source ?? 'fresh'),
+          position,
+          source,
           metadata: event.metadata ?? {},
           occurredAt: new Date(occurredAt),
         })
@@ -347,6 +602,8 @@ export function createRecommendationService(deps: {
         let requestId: string | null = null
         let userId = viewerId
         let sessionId = anonymousSessionId
+        let position: number | null = null
+        let source: RecommendationEventRecord['source'] = null
 
         if (context.requestId !== null) {
           const [row] = await store.findRequests([context.requestId])
@@ -354,6 +611,21 @@ export function createRecommendationService(deps: {
             requestId = row.id
             userId = row.userId
             sessionId = row.anonymousSessionId
+
+            if (row.strategyVersion === RECOMMENDATION_STRATEGY_VERSION_NONE) {
+              position = context.position
+              source = context.source
+            } else {
+              // 排序模式：客户端带来的归因头只是**待校验的声明**，以快照为准。查不到就退化成
+              // 无归因（而不是相信客户端）—— 这正是 R1 起推迟的"服务端曝光归因真值"。
+              const items = await store.findRequestItemAttribution({
+                requestIds: [row.id],
+                listingIds: [listingId],
+              })
+              const hit = items.find((item) => item.listingId === listingId)
+              position = hit?.position ?? null
+              source = hit?.primarySource ?? null
+            }
           }
         }
 
@@ -365,8 +637,8 @@ export function createRecommendationService(deps: {
             requestId,
             listingId,
             eventType,
-            position: requestId === null ? null : context.position,
-            source: requestId === null ? null : context.source,
+            position,
+            source,
             metadata: {},
             occurredAt: occurredAt ?? new Date(),
           },
@@ -384,4 +656,30 @@ export function createRecommendationService(deps: {
       }
     },
   }
+}
+
+/** 把重排后的顺序写成快照行；`position` 用输出下标，保证与发出去的顺序一一对应。 */
+function buildSnapshotRows(
+  requestId: string,
+  listingIds: readonly string[],
+  orderedById: ReadonlyMap<string, ScoredCandidate>,
+): RecommendationRequestItemRecord[] {
+  const rows: RecommendationRequestItemRecord[] = []
+  for (const listingId of listingIds) {
+    const item = orderedById.get(listingId)
+    if (item === undefined) continue
+    // `recallSources` 由 R3 保证按通道优先级有序，`[0]` 即 primarySource。
+    const primarySource = item.candidate.recallSources[0]
+    if (primarySource === undefined) continue
+    rows.push({
+      requestId,
+      position: rows.length,
+      listingId,
+      primarySource,
+      sources: [...item.candidate.recallSources],
+      rankScore: item.rankScore,
+      rankBreakdown: item.breakdown,
+    })
+  }
+  return rows
 }
