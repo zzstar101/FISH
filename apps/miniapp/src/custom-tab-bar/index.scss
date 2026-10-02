@@ -138,14 +138,16 @@
   height: 48px;
 }
 
-.tabbar__dot {
+/*
+ * 「消息」tab 的未读徽标（#431 任务二）：原品牌蓝小圆点 → 红色数字胶囊，
+ * 形状规则见 `styles/_mixins` 的 num-badge（1 位 = 正圆、2 位含 99+ = 胶囊）。
+ * 白环让它压在图标上也读得清。文案与亮灭口径在 tsx（`unreadBadgeText`）。
+ */
+.tabbar__n {
   position: absolute;
-  top: 8px;
-  left: 32px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--brand);
+  top: -8px;
+  right: -12px;
+  @include num-badge(30px, 20px, $ring: 4px);
 }
 
 .tabbar__label {

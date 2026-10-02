@@ -183,7 +183,8 @@ export function demoProfileFixtures(): {
   saleCount: number
   completedCount: number
   listings: MockListing[]
-  pendingMeetupCount: number
+  pendingMeetupSell: number
+  pendingMeetupBuy: number
   orderCount: number
 } {
   const wishes = myWishes()
@@ -192,7 +193,12 @@ export function demoProfileFixtures(): {
     saleCount: myListingCounts().sale,
     completedCount: TRANSACTIONS.filter((tx) => tx.status === 'COMPLETED').length,
     listings: MY_LISTINGS.map((item) => item.listing),
-    pendingMeetupCount: TRANSACTIONS.filter((tx) => tx.status === 'PENDING_MEETUP').length,
+    pendingMeetupSell: TRANSACTIONS.filter(
+      (tx) => tx.role === 'seller' && tx.status === 'PENDING_MEETUP',
+    ).length,
+    pendingMeetupBuy: TRANSACTIONS.filter(
+      (tx) => tx.role === 'buyer' && tx.status === 'PENDING_MEETUP',
+    ).length,
     orderCount: TRANSACTIONS.length,
   }
 }
