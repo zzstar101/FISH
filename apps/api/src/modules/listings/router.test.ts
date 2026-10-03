@@ -42,6 +42,7 @@ const detail = {
 function fakeService(overrides: Partial<ListingService> = {}): ListingService {
   return {
     listFeed: async () => ({ items: [], nextCursor: null }),
+    listCardsByIds: async () => new Map(),
     getDetail: async () => detail,
     createListing: async () => ({ created: true, detail }),
     updateListing: async () => detail,

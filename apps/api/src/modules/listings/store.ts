@@ -9,6 +9,7 @@ import { pruneStaleEmbeddings } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { newListingNo } from '@fish/db/listing-no'
+import { visibleListingConditions } from '@fish/db/recall-store'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
@@ -84,6 +85,12 @@ export type FeedEntry = {
   coverObjectKey: string | null
   /** 卖家公开投影源列（#191）：inner join users 同页带出，不逐卡补查。 */
   seller: ListingCardSeller
+}
+
+/** `findCardsByIds` 的过滤口径。 */
+export type FeedCardsByIdsCriteria = {
+  /** 浏览者；非 null 时排除其自己发布的商品（与公开 Feed 一致）。 */
+  viewerUserId: string | null
 }
 
 export type CreateListingRecord = {
@@ -249,6 +256,17 @@ export interface ListingStore {
   findState(id: string): Promise<ListingState | null>
 
   listFeed(criteria: FeedCriteria): Promise<FeedEntry[]>
+
+  /**
+   * 按 id 批量取**公开可见**的卡片投影（#323 R4）。
+   *
+   * 存在的理由：推荐 Feed 的顺序来自排序层（不是 SQL 的 `ORDER BY`），商品层因此需要一个
+   * "给我这几件的卡片"读路径。`listFeed` 做不到这件事 —— 它只能按销量/价格/时间排序后翻页。
+   *
+   * **返回顺序不保证与 `ids` 一致**（调用方按自己的顺序重排）；不可见/不存在的 id 直接不出现，
+   * 让调用方按"缺行即不可见"处理，而不是拿到一张已经下架商品的卡片。
+   */
+  findCardsByIds(ids: string[], criteria: FeedCardsByIdsCriteria): Promise<FeedEntry[]>
 
   /**
    * 编辑商品。改到行时**在同一事务内**投一条 `MATCH_LISTING`（契约 §7.13：标题/描述 → keyword、
@@ -708,6 +726,46 @@ export function createSqlListingStore(db: Db): ListingStore {
       }))
     },
 
+    async findCardsByIds(ids, criteria) {
+      if (ids.length === 0) return []
+
+      const rows = await db
+        .select({
+          listing: listings,
+          createdAtCursor: sql<string>`to_char(${listings.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+          seller: {
+            id: users.id,
+            nickname: users.nickname,
+            avatarUrl: users.avatarUrl,
+            authStatus: users.authStatus,
+          },
+        })
+        .from(listings)
+        .innerJoin(users, eq(users.id, listings.sellerId))
+        // 可见性谓词复用 `@fish/db/recall-store` 的唯一一份定义：召回时复核过的可见性，在这里
+        // 是**再次**生效而不是被信任 —— 候选集与真正发出去的卡片之间隔着排序耗时，这中间商品
+        // 可能已被下架或治理删除。
+        .where(and(inArray(listings.id, ids), ...visibleListingConditions(criteria.viewerUserId)))
+        .orderBy(desc(listings.createdAt), desc(listings.id))
+
+      if (rows.length === 0) return []
+
+      const pageIds = rows.map((row) => row.listing.id)
+      const covers = await db
+        .select({ listingId: listingImages.listingId, objectKey: listingImages.objectKey })
+        .from(listingImages)
+        .where(and(inArray(listingImages.listingId, pageIds), eq(listingImages.sortOrder, 0)))
+
+      const coverByListing = new Map(covers.map((cover) => [cover.listingId, cover.objectKey]))
+
+      return rows.map((row) => ({
+        listing: row.listing,
+        createdAtCursor: row.createdAtCursor,
+        coverObjectKey: coverByListing.get(row.listing.id) ?? null,
+        seller: row.seller,
+      }))
+    },
+
     async updateListingAtomic(input) {
       return db.transaction(async (tx) => {
         // #228：锁内只做「复核 + 写库」。`apply` 里的审核结论是 service 在**事务外**算好的，
@@ -748,7 +806,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
         const rows = await tx
           .update(listings)
-          .set({ ...plan.fields, updatedAt: new Date() })
+          .set({ ...plan.fields, updatedAt: sql`clock_timestamp()` })
           .where(eq(listings.id, input.id))
           .returning({ id: listings.id })
         if (rows.length === 0) return { kind: 'not-found' as const }
@@ -822,7 +880,7 @@ export function createSqlListingStore(db: Db): ListingStore {
       return db.transaction(async (tx) => {
         const rows = await tx
           .update(listings)
-          .set({ status: input.to, updatedAt: new Date() })
+          .set({ status: input.to, updatedAt: sql`clock_timestamp()` })
           .where(
             and(
               eq(listings.id, input.id),
@@ -942,8 +1000,9 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 /**
  * 内容一变就让该商品已有的向量行当场失效（#322 M2 复审 blocker）。
  *
- * 为什么不能只靠时间戳：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），同一毫秒内
- * 的两次编辑内容不同却版本相同——时间戳相等推不出内容相同（#328 的并发用例已确立）。所以判据
+ * 为什么不能只靠时间戳：DB 更新取 clock_timestamp()（见 schema/common.ts），经 JS Date
+ * 往返仅保留毫秒。同一毫秒内的两次编辑内容不同却版本相同——时间戳相等
+ * 推不出内容相同（#328 的并发用例已确立）。所以判据
  * 必须是**内容**：用当前字段重算指纹，删掉指纹不符的向量行（`pruneStaleEmbeddings`）。
  *
  * 调用点全部与实体改动同事务，于是"写提交"与"旧向量不可召回"是同一个原子事件，不依赖 worker
@@ -974,10 +1033,18 @@ async function invalidateStaleEmbeddingWith(
 }
 
 /**
- * 写 `MATCH_LISTING` + `EMBED_LISTING` 两条 job（#322 M1 起成对投递）。
+ * 写 `EMBED_LISTING` + `MATCH_LISTING` 两条 job（#322 M1 起成对投递）。
  *
  * 为什么成对：`EMBED_LISTING` 的输入（标题/描述/分类）与 `MATCH_LISTING` 的打分输入是同一批字段，
  * 凡是要重算匹配的写操作，语义向量同样可能过期；分两处投递迟早会漏掉一边。
+ *
+ * **顺序即语义（#322 M4）**：`EMBED_LISTING` 必须排在 `MATCH_LISTING` **前面**。队列按
+ * `(run_at, id)` 领取（`claimNext`），同一事务里两行的 `run_at` 都是事务时间（同一个 `now()`），
+ * `id` 是 `newId()` = `Bun.randomUUIDv7()`（同毫秒单调递增，实测 20 万次调用零逆序）⇒
+ * 「插入序 = id 序 = 领取序」是确定的。反过来把 MATCH 排前面就等于：第一轮 MATCH 跑在向量落库前，
+ * 引擎按 M2 降级契约落一条 `ranking_version = 1` 的行，而 `EMBED_*` 跑完不会回头重投 MATCH
+ * （`apps/worker/src/jobs/embedding/handlers.ts` 没有这个副作用）⇒ 该实体**永久**停在 v1，
+ * 直到下一次编辑。这不是风格问题。
  *
  * #322 M2 复审起，投递前先在同一执行器（调用点的事务）里失效旧内容向量：见
  * `invalidateStaleEmbeddingWith()`。
@@ -997,12 +1064,6 @@ async function enqueueListingJobsWith(
 ): Promise<void> {
   await invalidateStaleEmbeddingWith(executor, listingId)
 
-  await executor.insert(jobs).values({
-    id: newId(),
-    type: 'MATCH_LISTING',
-    payload: jsonParam({ listingId }),
-  })
-
   await executor
     .insert(jobs)
     .values({
@@ -1011,4 +1072,10 @@ async function enqueueListingJobsWith(
       payload: jsonParam({ listingId }),
     })
     .onConflictDoNothing()
+
+  await executor.insert(jobs).values({
+    id: newId(),
+    type: 'MATCH_LISTING',
+    payload: jsonParam({ listingId }),
+  })
 }

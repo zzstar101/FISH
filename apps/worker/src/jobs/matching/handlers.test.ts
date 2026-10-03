@@ -29,10 +29,12 @@ describe('createMatchJobHandlers', () => {
       created: 0,
       downgraded: 0,
       skipped: 'target-missing' as const,
-      // #322 M2：没跑召回时三个召回字段都是"无"（区别于"跑了但退化为 v1"）。
+      // #322 M2：没跑召回时召回字段都是"无"（区别于"跑了但退化为 v1"）。
       recall: null,
       fallbackReason: null,
       vectorCandidates: 0,
+      // #322 M4：Top-K 耗时也是召回结果的一部分，没跑召回就是 0。
+      topKLatencyMs: 0,
     }
     expect(await handlers.MATCH_LISTING({ listingId: newId() })).toEqual(expected)
     expect(await handlers.MATCH_WISH({ wishId: newId() })).toEqual(expected)

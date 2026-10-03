@@ -3,8 +3,9 @@ import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import type { JobType } from '@fish/db/schema/jobs'
 import { jobs } from '@fish/db/schema/jobs'
-import { sql } from 'drizzle-orm'
+import { DrizzleQueryError, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { logErrorEvent } from '../log'
 import { createJobQueue, DEFAULT_MAX_ATTEMPTS, parseJobPayload, STALE_CLAIM_ERROR } from './queue'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -168,6 +169,49 @@ test('失败且未达上限时回到 PENDING，达到上限后 FAILED', async ()
   })
 })
 
+test('runOnce 在类型信息尚在时脱敏 DB 错误，存储和 Worker 的 job.settled 日志均无 SQL 参数', async () => {
+  const failing = createJobQueue(db, {
+    handlers: {
+      MATCH_LISTING: async () => {
+        throw new DrizzleQueryError(
+          'INSERT PRIVATE_QUERY',
+          ['PRIVATE_DESCRIPTION', '[0.25,-0.5]'],
+          Object.assign(new Error('PRIVATE_DETAIL'), { code: '23514' }),
+        )
+      },
+    },
+    isFatalError: () => true,
+  })
+  await withJob(async (_queue, jobId) => {
+    const outcome = await failing.runOnce()
+    expect(outcome?.id).toBe(jobId)
+    expect(outcome?.status).toBe('FAILED')
+    const lines: string[] = []
+    const originalError = console.error
+    try {
+      console.error = (...args: unknown[]) => {
+        lines.push(args.map(String).join(' '))
+      }
+      logErrorEvent({
+        event: 'job.settled',
+        jobId: outcome?.id,
+        status: outcome?.status,
+        lastError: outcome?.lastError,
+      })
+    } finally {
+      console.error = originalError
+    }
+    const persisted = (await jobRow(jobId))?.lastError ?? ''
+    for (const value of [persisted, lines.join('\n')]) {
+      expect(value).toContain('23514')
+      expect(value).not.toContain('PRIVATE_QUERY')
+      expect(value).not.toContain('PRIVATE_DESCRIPTION')
+      expect(value).not.toContain('[0.25,-0.5]')
+      expect(value).not.toContain('PRIVATE_DETAIL')
+    }
+  })
+})
+
 test('坏 payload（fatal）不重试，直接 FAILED', async () => {
   const queue = createJobQueue(db, {
     handlers: {
@@ -250,7 +294,7 @@ async function withRunningJob(
 
 test('启动回收把未达上限的 RUNNING job 放回 PENDING，之后可被重新领取并跑完', async () => {
   await withRunningJob({ attempts: 1 }, async (jobId, queue, isolated) => {
-    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 1, failed: 0 })
+    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 1, failed: 0, failedIds: [] })
     // `locked_at` 必须一起清掉：这行已经不再被任何 worker 持有。
     expect(await jobRow(jobId, isolated)).toMatchObject({
       status: 'PENDING',
@@ -272,7 +316,13 @@ test('启动回收把未达上限的 RUNNING job 放回 PENDING，之后可被�
 
 test('启动回收把已达上限的 RUNNING job 直接置 FAILED，并写明原因', async () => {
   await withRunningJob({ attempts: DEFAULT_MAX_ATTEMPTS }, async (jobId, queue, isolated) => {
-    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 0, failed: 1 })
+    // `failedIds` 是给调用方补投用的（`index.ts` → `jobs/embedding/requeue.ts`）：只有 id，
+    // 才能对"启动时被判死的行"做和主循环 `FAILED` 一样的事后处理。
+    expect(await queue.recoverStaleClaims()).toEqual({
+      requeued: 0,
+      failed: 1,
+      failedIds: [jobId],
+    })
     // `locked_at` 同样要清：已 FAILED 的行不应看起来“还被持有”。
     expect(await jobRow(jobId, isolated)).toMatchObject({
       status: 'FAILED',
@@ -282,7 +332,7 @@ test('启动回收把已达上限的 RUNNING job 直接置 FAILED，并写明原
     })
 
     // 已经不是 RUNNING，再回收一次不会把它拉回队列（也不会重复计数到 failed）。
-    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 0, failed: 0 })
+    expect(await queue.recoverStaleClaims()).toEqual({ requeued: 0, failed: 0, failedIds: [] })
     expect(await jobRow(jobId, isolated)).toMatchObject({
       status: 'FAILED',
       attempts: DEFAULT_MAX_ATTEMPTS,
@@ -318,6 +368,7 @@ test('启动回收只动 RUNNING 行，不碰 PENDING / DONE', async () => {
     expect(await createJobQueue(isolated, { handlers: {} }).recoverStaleClaims()).toEqual({
       requeued: 0,
       failed: 0,
+      failedIds: [],
     })
     expect(await jobRow(pendingId, isolated)).toMatchObject({ status: 'PENDING', attempts: 1 })
     expect(await jobRow(doneId, isolated)).toMatchObject({ status: 'DONE', attempts: 1 })

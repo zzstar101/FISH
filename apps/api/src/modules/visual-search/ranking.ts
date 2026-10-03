@@ -1,10 +1,13 @@
+import type { ListingCard } from '@fish/contracts/listings/schema'
 import {
+  VISUAL_CONDITION_RANK,
   VISUAL_FRESHNESS_HALF_LIFE_DAYS,
   VISUAL_POPULARITY_SATURATION,
   VISUAL_RANKING_WEIGHTS,
   VISUAL_SEARCH_STRATEGY_VERSION,
   type VisualScoreBreakdown,
 } from '@fish/contracts/visual/ranking'
+import type { VisualSearchSort } from '@fish/contracts/visual/schema'
 
 /**
  * 混合排序（#324 M6）：把两路召回的距离与结构化信号合成一个分数。
@@ -95,4 +98,86 @@ export function scoreVisualCandidate(input: VisualCandidateScoreInput): VisualSc
     popularityScore: input.popularityScore,
     strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
   }
+}
+
+/**
+ * 参与排序的候选：**混排之后、截断之前**的条目形状。
+ *
+ * 只声明排序真正读到的字段（而不是把 service 里的整个中间结构搬过来），
+ * 这样这个纯函数不会被"多带了一个字段"之类的无关改动牵动。
+ */
+export type VisualScoredCandidate = {
+  card: ListingCard
+  ranking: VisualScoreBreakdown
+  /** 想要数（来自 `loadListingSignals`），`popular` 档的排序键。 */
+  favoriteCount: number
+}
+
+/**
+ * 五档服务端排序（#324 M6）。
+ *
+ * 纯函数：无 IO、无时钟、不修改入参，返回新数组。必须在 `.slice(0, LIMIT)` **之前**调用——
+ * 否则"最新"只会重排已经截断的前 30 条，而不是全局最新的 30 条。
+ *
+ * 每一档在各自的排序键之后，都统一落到「混合分降序 → 图片相似度降序 → 公开 id 升序」：
+ * 排序键是产品口径；中间那层是 M6 之前的既有口径（见 `compareByScoreThenVisualThenId`），
+ * 最后一层是**确定性**——同输入必须同输出，否则同一个查询两次会给出不同顺序，
+ * 而客户端会把它当成"结果变了"。
+ *
+ * 排序键只影响呈现顺序、不参与 `scoreVisualCandidate`，所以不触碰
+ * `VISUAL_RANKING_WEIGHTS`，也不递增 `VISUAL_SEARCH_STRATEGY_VERSION`。
+ */
+export function orderVisualCandidates<T extends VisualScoredCandidate>(
+  candidates: readonly T[],
+  sort: VisualSearchSort,
+): T[] {
+  return [...candidates].sort((left, right) => {
+    const primary = compareBySortKey(left, right, sort)
+    if (primary !== 0) return primary
+    return compareByScoreThenVisualThenId(left, right)
+  })
+}
+
+/** 各档的排序键。`relevance` 没有额外键：它的排序键就是下面的统一兜底。 */
+function compareBySortKey(
+  left: VisualScoredCandidate,
+  right: VisualScoredCandidate,
+  sort: VisualSearchSort,
+): number {
+  switch (sort) {
+    case 'relevance':
+      return 0
+    case 'popular':
+      return right.favoriteCount - left.favoriteCount
+    case 'newest':
+      return Date.parse(right.card.createdAt) - Date.parse(left.card.createdAt)
+    case 'price_asc':
+      return left.card.priceCents - right.card.priceCents
+    case 'condition':
+      return (
+        VISUAL_CONDITION_RANK[left.card.condition] - VISUAL_CONDITION_RANK[right.card.condition]
+      )
+  }
+}
+
+/**
+ * 统一兜底：混合分降序 → 图片相似度降序 → 公开 id 升序。
+ *
+ * 中间那层是 M6 之前 `service.ts` 里就有的口径，原文注释：「同分先看图片相似度：纯文本命中的
+ * 候选（visualScore = 0）排在有图片证据的之后。」`relevance` 档的排序键为空、全部候选都落到
+ * 这里，所以这一层对缺省档就是实际生效的次级键；删掉它等于把同分排序退化成「按随机 id」。
+ *
+ * `id` 是公开 ID，天然唯一且稳定，保证同输入同输出。
+ */
+function compareByScoreThenVisualThenId(
+  left: VisualScoredCandidate,
+  right: VisualScoredCandidate,
+): number {
+  if (right.ranking.score !== left.ranking.score) {
+    return right.ranking.score - left.ranking.score
+  }
+  if (right.ranking.visualScore !== left.ranking.visualScore) {
+    return right.ranking.visualScore - left.ranking.visualScore
+  }
+  return left.card.id.localeCompare(right.card.id)
 }
