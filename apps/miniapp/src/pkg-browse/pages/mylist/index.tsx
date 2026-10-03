@@ -443,7 +443,7 @@ export default function MyList() {
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
   const awaitingIds = useMemo(() => new Set(pending.proposals.keys()), [pending])
-  const counts = countBySegment(cards, awaitingIds)
+  const counts = useMemo(() => countBySegment(cards, awaitingIds), [cards, awaitingIds])
   /**
    * 首屏（还没有任何卡片）的加载中：稿 ④ 帧的骨架态不给分段计数。
    * 刷新失败但列表还在时照常给数字 —— 它们描述的正是屏幕上这份列表。
@@ -465,71 +465,75 @@ export default function MyList() {
   const showCounts =
     !firstLoading && !truncated && countsReliable && !(failed && cards.length === 0)
 
-  const rows: Row[] = cards.map((card) => {
-    /*
-     * `awaiting` **只对 `ACTIVE` 成立**：买家提案只检查商品是 `ACTIVE`
-     * （`transactions/service.ts` 的 `propose`），所以两个买家能同时对同一件商品提案。
-     * 卖家同意其中一个之后商品变 `RESERVED`，**输的那个买家的 `tx.proposal` 还留在会话里**
-     * —— 它仍是那条会话的最后一个交易事件。
-     *
-     * 若不加这个条件，那件已同意的商品会被读成「还有人在等」：胶囊翻回「待确认」、
-     * 卡片上摆着输家的名字与 同意 / 拒绝 两个按下去必然 409（商品已非 `ACTIVE`）的按钮，
-     * 而真正的事实「已同意 · 等面交」被顶掉。
-     */
-    const awaiting = card.status === 'ACTIVE' && awaitingIds.has(card.id)
-    const key = segmentOf(card, awaiting)
-    // 只有「待确认」段可能带提案：`RESERVED`（已同意）有会话但没有在等的提案
-    const proposal = key === 'pending' ? (pending.proposals.get(card.id) ?? null) : null
-    /*
-     * 审核子状态**只在「审核」段带值**（`segmentOf` 只在 `REVIEW` / `BLOCKED` 时给出这一段，
-     * 所以这里不会出现「review 段却是 null」）。其它段一律 null —— 让「审核」这个事实
-     * 只从一个地方流出来，卡片胶囊、锁定说明、动作按钮三处都读它，不会各判各的。
-     */
-    const moderation =
-      key === 'review' ? (card.moderationStatus === 'BLOCKED' ? 'BLOCKED' : 'REVIEW') : null
-    /*
-     * 治理下架与「不过审」在库里同形（`OFFLINE` + `BLOCKED`），只能靠契约的
-     * `governanceDelisted` 分开 —— 两者的出路不同（找平台 vs 改内容重审），
-     * 而且治理下架的编辑 / 重新上架 / 删除在服务端一律 409，不给它任何按钮。
-     */
-    const governanceDelisted = card.governanceDelisted === true
-    return {
-      listing: toMockListing(card),
-      segment: key,
-      statusLabel: cardLabel(key, awaiting, moderation, governanceDelisted),
-      pillClass: pillClassOf(key, moderation, governanceDelisted),
-      moderation,
-      governanceDelisted,
-      // 三个动作的判据都来自 `list.ts` 的纯函数（可测），不在这里各写一份条件
-      canEdit: canEdit(key, moderation, governanceDelisted),
-      canOffline: canOffline(key, governanceDelisted),
-      canDelete: canDelete(key, moderation, governanceDelisted),
-      /*
-       * 未通过原因：只在「不过审」这一种子状态给。`REVIEW` 是"还没结论"，摆一条原因会让卖家
-       * 以为已经判了、跑去改一个没问题的字段；平台下架的原因归平台说（卡片上是锁定说明）。
-       */
-      rejection: moderation === 'BLOCKED' ? rejectionNote(card.moderationReason) : null,
-      // 审核段（审核中 / 不过审）没有详情页可看（见 Row.canOpenDetail）
-      canOpenDetail: key !== 'review',
-      /*
-       * 会话 id **只给「待确认」段**（见下）：
-       *
-       * - 有提案 → 提案所在的那条会话（精确，就是卖家要点头的那条）；
-       * - 没提案（`RESERVED`，已同意待面交）→ 退到「这件商品最新的一条卖家侧会话」，
-       *   它是手里最接近成交那条的候选；
-       * - **已售出不给**：成交的会话 id 只存在于交易域（`TransactionDto.conversationId`，
-       *   订单页拿得到、本页拿不到）。`conversationIds` 给的是「最新一条卖家侧会话」，
-       *   对一件已成交商品来说那可能是**另一个还在还价的买家** —— 跳过去就是把错的会话
-       *   当成成交记录摆给卖家看。所以这一段的「查看会话」落到消息 Tab 的会话列表。
-       */
-      conversationId:
-        key === 'pending'
-          ? (proposal?.conversationId ?? pending.conversationIds.get(card.id) ?? '')
-          : '',
-      proposal,
-    }
-  })
-  const shown = rows.filter((row) => row.segment === segment)
+  const rows: Row[] = useMemo(
+    () =>
+      cards.map((card) => {
+        /*
+         * `awaiting` **只对 `ACTIVE` 成立**：买家提案只检查商品是 `ACTIVE`
+         * （`transactions/service.ts` 的 `propose`），所以两个买家能同时对同一件商品提案。
+         * 卖家同意其中一个之后商品变 `RESERVED`，**输的那个买家的 `tx.proposal` 还留在会话里**
+         * —— 它仍是那条会话的最后一个交易事件。
+         *
+         * 若不加这个条件，那件已同意的商品会被读成「还有人在等」：胶囊翻回「待确认」、
+         * 卡片上摆着输家的名字与 同意 / 拒绝 两个按下去必然 409（商品已非 `ACTIVE`）的按钮，
+         * 而真正的事实「已同意 · 等面交」被顶掉。
+         */
+        const awaiting = card.status === 'ACTIVE' && awaitingIds.has(card.id)
+        const key = segmentOf(card, awaiting)
+        // 只有「待确认」段可能带提案：`RESERVED`（已同意）有会话但没有在等的提案
+        const proposal = key === 'pending' ? (pending.proposals.get(card.id) ?? null) : null
+        /*
+         * 审核子状态**只在「审核」段带值**（`segmentOf` 只在 `REVIEW` / `BLOCKED` 时给出这一段，
+         * 所以这里不会出现「review 段却是 null」）。其它段一律 null —— 让「审核」这个事实
+         * 只从一个地方流出来，卡片胶囊、锁定说明、动作按钮三处都读它，不会各判各的。
+         */
+        const moderation =
+          key === 'review' ? (card.moderationStatus === 'BLOCKED' ? 'BLOCKED' : 'REVIEW') : null
+        /*
+         * 治理下架与「不过审」在库里同形（`OFFLINE` + `BLOCKED`），只能靠契约的
+         * `governanceDelisted` 分开 —— 两者的出路不同（找平台 vs 改内容重审），
+         * 而且治理下架的编辑 / 重新上架 / 删除在服务端一律 409，不给它任何按钮。
+         */
+        const governanceDelisted = card.governanceDelisted === true
+        return {
+          listing: toMockListing(card),
+          segment: key,
+          statusLabel: cardLabel(key, awaiting, moderation, governanceDelisted),
+          pillClass: pillClassOf(key, moderation, governanceDelisted),
+          moderation,
+          governanceDelisted,
+          // 三个动作的判据都来自 `list.ts` 的纯函数（可测），不在这里各写一份条件
+          canEdit: canEdit(key, moderation, governanceDelisted),
+          canOffline: canOffline(key, governanceDelisted),
+          canDelete: canDelete(key, moderation, governanceDelisted),
+          /*
+           * 未通过原因：只在「不过审」这一种子状态给。`REVIEW` 是"还没结论"，摆一条原因会让卖家
+           * 以为已经判了、跑去改一个没问题的字段；平台下架的原因归平台说（卡片上是锁定说明）。
+           */
+          rejection: moderation === 'BLOCKED' ? rejectionNote(card.moderationReason) : null,
+          // 审核段（审核中 / 不过审）没有详情页可看（见 Row.canOpenDetail）
+          canOpenDetail: key !== 'review',
+          /*
+           * 会话 id **只给「待确认」段**（见下）：
+           *
+           * - 有提案 → 提案所在的那条会话（精确，就是卖家要点头的那条）；
+           * - 没提案（`RESERVED`，已同意待面交）→ 退到「这件商品最新的一条卖家侧会话」，
+           *   它是手里最接近成交那条的候选；
+           * - **已售出不给**：成交的会话 id 只存在于交易域（`TransactionDto.conversationId`，
+           *   订单页拿得到、本页拿不到）。`conversationIds` 给的是「最新一条卖家侧会话」，
+           *   对一件已成交商品来说那可能是**另一个还在还价的买家** —— 跳过去就是把错的会话
+           *   当成成交记录摆给卖家看。所以这一段的「查看会话」落到消息 Tab 的会话列表。
+           */
+          conversationId:
+            key === 'pending'
+              ? (proposal?.conversationId ?? pending.conversationIds.get(card.id) ?? '')
+              : '',
+          proposal,
+        }
+      }),
+    [cards, awaitingIds, pending],
+  )
+  const shown = useMemo(() => rows.filter((row) => row.segment === segment), [rows, segment])
 
   /**
    * 本屏的「现在」取一次，逐行复用。
