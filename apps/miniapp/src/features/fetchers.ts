@@ -55,6 +55,7 @@ import {
   markNotificationRead,
 } from './chat/api'
 import { mergeMarkReadResults } from './chat/notif-read'
+import { fetchMyFavoritesTotal } from './favorites/api'
 import { toMockListing, toMockListings, toMockSeller } from './listing/adapt'
 import {
   fetchCategoryListings,
@@ -786,9 +787,9 @@ export type ProfileView = {
   /** 全部买卖笔数 */
   orderCount: number
   /**
-   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。**契约没有这三个端点**，功能未上线 ——
-   * 真实构建给 `null`（页面显示 `—`，不把「系统不知道」画成 0）；演示构建给演示数字
-   * （「我的」页 4 格栏按稿只摆数字不摆图标）。
+   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。收藏（#190）与关注（#188）有端点，取真实值；
+   * 足迹契约仍没有端点，真实构建给 `null`（页面显示 `—`，不把「系统不知道」画成 0）；
+   * 演示构建给演示数字（「我的」页 4 格栏按稿只摆数字不摆图标）。
    */
   favoritesCount: number | null
   historyCount: number | null
@@ -797,6 +798,11 @@ export type ProfileView = {
 
 export async function loadProfile(now: number = Date.now()): Promise<ProfileView | null> {
   try {
+    // 收藏计数与收藏列表同源（#190 验收）：`GET /me/favorites` 回包的全量 total，
+    // 与 profile 并行拉（count 只读 1 行）。它失败**不算 profile 失败** ——
+    // 计数是辅助数字，兜底成 `null` 让页面显示 `—`，不把「读不到」画成 0，
+    // 也不让一个辅助请求把整页个人中心拖进错误态。
+    const favoritesTotal = fetchMyFavoritesTotal().catch(() => null)
     const profile = await fetchProfile()
     return {
       user: profile.user,
@@ -807,9 +813,9 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       orderCount: profile.transactions.length,
       // 关注（#188）有端点：`stats.followingCount` 与「我的关注」列表同源（同一张表同一方向）。
       followCount: profile.stats.followingCount,
-      // 收藏 / 足迹仍没有端点：给 `null`（页面显示 `—`）—— 这里的 0 不是
-      // 「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
-      favoritesCount: null,
+      // 收藏（#190）：与「我的收藏」列表同源的全量 total；足迹仍没有端点，给 `null` ——
+      // 这里的 0 不是「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
+      favoritesCount: await favoritesTotal,
       historyCount: null,
     }
   } catch (error) {
@@ -834,9 +840,10 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * 保证「我的」页的角标数字与 mylist / orders 页看到的计数一致。
  * 收藏 / 足迹没有 fixture 来源，按稿给演示数字（8 / 24）；关注沿用设计稿的 5 人，
  * 与 `features/following/demo.ts` 的演示名单条数对齐（数字栏 5、点进去 5 人）。
+ * （收藏档的演示口径还要与「我的收藏」页 fixture 对上，见 `pages/favorites/list.ts`。）
  *
  * ⚠️ 只走**失败回退**这条路：`TARO_APP_MOCK=1` 但本机真起了后端时，走的是成功路径，
- * 收藏 / 足迹是 `null` → 页面显示 `—`，关注是服务端真值（演示数字不覆盖真实结果）。
+ * 足迹是 `null` → 页面显示 `—`，收藏 / 关注是服务端真值（演示数字不覆盖真实结果）。
  */
 function demoProfile(): ProfileView {
   const wishes = myWishes()
