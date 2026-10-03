@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { MockSettings } from '../src/mock/types'
 import {
   COMMENT_POLICIES,
+  NOTIFY_KEYS,
   parseStoredPrefs,
   readStoredPrefs,
-  SETTINGS_STORAGE_KEY,
 } from '../src/pages/settings/preferences'
 
 /**
@@ -84,8 +84,11 @@ describe('parseStoredPrefs —— 存量盖在默认值上', () => {
 })
 
 describe('与页面共享的常量', () => {
-  test('存储键锁死，persist 与读回不能各写各的', () => {
-    expect(SETTINGS_STORAGE_KEY).toBe('fish:settings')
+  test('通知明细行的存储键 = MockSettings 的 notify* 字段，写（页面行配置）读（白名单）两侧同源', () => {
+    expect(NOTIFY_KEYS).toEqual(['notifyChat', 'notifyWish', 'notifyDeal', 'notifyNews'])
+    for (const key of NOTIFY_KEYS) {
+      expect(readStoredPrefs({ [key]: false })).toEqual({ [key]: false })
+    }
   })
 
   test('留言口径三档与页面 ActionSheet 同源，顺序错 = 档位错乱', () => {

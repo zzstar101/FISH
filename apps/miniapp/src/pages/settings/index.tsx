@@ -7,6 +7,7 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { APP_BUILD, APP_VERSION, settings, themeOptions } from '@/mock/api'
 import type { MockSettings, ThemeMode } from '@/mock/types'
+import type { NotifyKey } from './preferences'
 import {
   COMMENT_POLICIES,
   parseStoredPrefs,
@@ -36,6 +37,15 @@ const readStorage = (): unknown => {
   } catch {
     return null
   }
+}
+
+/** 通知明细行配置：`key` 就是存储键（`NotifyKey` 对 `MockSettings` 的 notify* 字段锁定） */
+type NotifyRow = {
+  key: NotifyKey
+  label: string
+  value: boolean
+  set: (value: boolean) => void
+  icon: string
 }
 
 export default function Settings() {
@@ -109,6 +119,38 @@ export default function Settings() {
       clearLocalSession()
     })()
   }
+
+  /** key 即存储键（NotifyKey），persist 与读回白名单同源 —— 写 'chat' 这类错键就是从这来的 */
+  const notifyRows: NotifyRow[] = [
+    {
+      key: 'notifyChat',
+      label: '新消息',
+      value: notifyChat,
+      set: setNotifyChat,
+      icon: ICONS.chatInk,
+    },
+    {
+      key: 'notifyWish',
+      label: '许愿命中',
+      value: notifyWish,
+      set: setNotifyWish,
+      icon: ICONS.heartOn,
+    },
+    {
+      key: 'notifyDeal',
+      label: '交易提醒',
+      value: notifyDeal,
+      set: setNotifyDeal,
+      icon: ICONS.orderMuted,
+    },
+    {
+      key: 'notifyNews',
+      label: '活动与公告',
+      value: notifyNews,
+      set: setNotifyNews,
+      icon: ICONS.feedback,
+    },
+  ]
 
   return (
     <View className="st">
@@ -209,36 +251,7 @@ export default function Settings() {
         {/* ---- 通知明细（展开后才出现，对应设计稿第 02 帧） ---- */}
         <View className="st__grouplabel">通知设置</View>
         <View className="st__group">
-          {[
-            {
-              key: 'chat',
-              label: '新消息',
-              value: notifyChat,
-              set: setNotifyChat,
-              icon: ICONS.chatInk,
-            },
-            {
-              key: 'wish',
-              label: '许愿命中',
-              value: notifyWish,
-              set: setNotifyWish,
-              icon: ICONS.heartOn,
-            },
-            {
-              key: 'deal',
-              label: '交易提醒',
-              value: notifyDeal,
-              set: setNotifyDeal,
-              icon: ICONS.orderMuted,
-            },
-            {
-              key: 'news',
-              label: '活动与公告',
-              value: notifyNews,
-              set: setNotifyNews,
-              icon: ICONS.feedback,
-            },
-          ].map((item) => (
+          {notifyRows.map((item) => (
             <View key={item.key} className="st__row">
               <View className="st__ric">
                 <Image className="st__ric-ic" src={item.icon} mode="aspectFit" />

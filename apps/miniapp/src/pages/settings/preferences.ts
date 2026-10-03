@@ -21,7 +21,22 @@ const THEME_KEYS: readonly ThemeMode[] = ['system', 'light', 'dark']
 export const COMMENT_POLICIES = ['已认证用户', '所有人', '仅好友'] as const
 
 /** 从存储读出的合法偏好（只含认得出的键） */
-export type StoredPrefs = Partial<MockSettings>
+type StoredPrefs = Partial<MockSettings>
+
+/**
+ * 通知明细四行的存储键 = `MockSettings` 的 notify* 字段。
+ *
+ * 页面的明细行、本模块的读回白名单共用这一份；`satisfies` 对契约字段锁定，
+ * 改名/删字段即编译错，写读两侧不可能再各写各的。
+ */
+export const NOTIFY_KEYS = [
+  'notifyChat',
+  'notifyWish',
+  'notifyDeal',
+  'notifyNews',
+] as const satisfies readonly (keyof MockSettings)[]
+
+export type NotifyKey = (typeof NOTIFY_KEYS)[number]
 
 const isThemeMode = (value: unknown): value is ThemeMode =>
   typeof value === 'string' && (THEME_KEYS as readonly string[]).includes(value)
@@ -49,7 +64,7 @@ export function readStoredPrefs(raw: unknown): StoredPrefs {
   const stored = source as Record<string, unknown>
   const prefs: StoredPrefs = {}
   if (isThemeMode(stored.theme)) prefs.theme = stored.theme
-  for (const key of ['notifyChat', 'notifyWish', 'notifyDeal', 'notifyNews'] as const) {
+  for (const key of NOTIFY_KEYS) {
     const value: unknown = stored[key]
     if (typeof value === 'boolean') prefs[key] = value
   }
