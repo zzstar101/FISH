@@ -20,11 +20,11 @@ function MyCommentsContent({ ownerId }: { ownerId: string }) {
   const active = kind === 'comment' ? commentList : reviewList
   const items = active.data?.pages.flatMap((page) => page.items) ?? []
 
-  const countOf = (failed: boolean, total: number | undefined): number | null =>
-    failed ? null : (total ?? null)
+  // 计数只认「第一页是否到手」：首屏失败时 `data` 为空 → 未知（—）；
+  // 翻页失败不影响第一页的 total，计数必须继续保留，不能因为 `isError` 就清零。
   const counts: SegmentCounts = {
-    comment: countOf(commentList.isError, commentList.data?.pages[0]?.total),
-    review: countOf(reviewList.isError, reviewList.data?.pages[0]?.total),
+    comment: commentList.data?.pages[0]?.total ?? null,
+    review: reviewList.data?.pages[0]?.total ?? null,
   }
 
   return (
