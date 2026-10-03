@@ -26,6 +26,8 @@
     "ws:smoke": "bun run scripts/ws-smoke.ts",
     "core:smoke": "bun run apps/api/scripts/core-smoke.ts",
     "rank:compare": "bun run apps/worker/scripts/rank-compare.ts",
+    "rank:eval": "bun run apps/worker/scripts/rank-eval.ts",
+    "recommendation:cleanup": "bun run apps/worker/scripts/recommendation-cleanup.ts",
     "visual:backfill": "bun run apps/worker/scripts/visual-backfill.ts",
     "visual:eval": "bun run apps/api/scripts/visual-eval.ts",
     "visual:eval:db": "bun run apps/api/scripts/visual-eval-db.ts",

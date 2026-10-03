@@ -45,6 +45,7 @@
  * - MinIO 不是 scratch 的：脚本成功时删掉本轮上传的对象，否则 `--runs=5` 会在桶里累积垃圾
  *   （失败时默认保留，见上面的清理策略）。
  */
+import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import {
   buildListingEmbeddingText,
@@ -67,6 +68,7 @@ import {
   RECOMMENDATION_HEADERS,
   RECOMMENDATION_ROUTES,
 } from '@fish/contracts/recommendation/routes'
+import { RECOMMENDATION_RATE_LIMITED } from '@fish/contracts/recommendation/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
@@ -347,6 +349,42 @@ async function runRootScript(script: string, overrides: Record<string, string>):
   })
   const code = await child.exited
   if (code !== 0) throw new Error(`✗ [${step}] bun run ${script} 退出码 ${code}`)
+}
+
+/**
+ * 跑根脚本并解析它的 `--json` 输出（#323 R6 的 `recommendation:cleanup`）。
+ *
+ * 与 `runRootScript` 分开是因为这里必须 `pipe` 而不能 `inherit`：验收断言要读脚本**自己的**
+ * 输出（`mode` / 三类行数 / `batches`），不是只看退出码。参数走 `bun run <script> -- <args>`，
+ * 少一层 `--` 时 bun 会把 `--dry-run` 当成自己的旗标吞掉。
+ */
+async function runRootScriptJson(
+  script: string,
+  args: string[],
+  overrides: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const child = Bun.spawn(['bun', 'run', script, '--', ...args], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, ...overrides },
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+  })
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  if (code !== 0) {
+    throw new Error(
+      `✗ [${step}] bun run ${script} ${args.join(' ')} 退出码 ${code}｜stderr：${stderr.trim()}`,
+    )
+  }
+  try {
+    return JSON.parse(stdout) as Record<string, unknown>
+  } catch {
+    throw new Error(`✗ [${step}] bun run ${script} 的 stdout 不是 JSON：${stdout.trim()}`)
+  }
 }
 
 async function waitFor(
@@ -1221,6 +1259,158 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       null,
       '匿名流量的 DETAIL_VIEW 不挂 user_id',
     )
+
+    // R6 读面验收（#323 R6）：admin 只读聚合端点把上面刚写下的这一轮真实流量读回来——
+    // 1 次 Feed 请求 + 1 条快照 + 2 条归因事件。这里刻意用真库真进程，因为「请求侧聚合 /
+    // 事件侧 GROUP BY / 曝光分布 CTE」三段 SQL 只有真库能证；纯函数测试证不了它们。
+    step = 'R6 指标端点（admin 聚合读面）'
+    section('R6 指标端点：GET /admin/recommendations/metrics')
+    const adminSerial = 90
+    const adminStudentNo = `2021000000${String(adminSerial).padStart(2, '0')}`
+    await register(base, adminSerial)
+    // 经真实注册口建号后手动提权（同 admin/router.test.ts 的做法）：requireAdmin 只查角色。
+    await db.update(users).set({ role: 'ADMIN' }).where(eq(users.studentNo, adminStudentNo))
+    const adminCookie = await login(base, adminStudentNo)
+
+    const metricsPath = ADMIN_ROUTES.recommendationMetrics
+    assertEqual(
+      (await get(base, metricsPath)).status,
+      401,
+      '匿名 GET /admin/recommendations/metrics → 401',
+    )
+    assertEqual(
+      (await get(base, metricsPath, buyer)).status,
+      403,
+      '普通用户 GET /admin/recommendations/metrics → 403',
+    )
+    assertEqual(
+      (await get(base, `${metricsPath}?window=1d`, adminCookie)).status,
+      422,
+      '非法 window=1d → 422（strictObject 只认 24h/7d/30d）',
+    )
+
+    const metricsResponse = await get(base, `${metricsPath}?window=24h`, adminCookie)
+    assertEqual(metricsResponse.status, 200, '管理员 GET /admin/recommendations/metrics → 200')
+    const metrics = await readJson(metricsResponse)
+    assertEqual(metrics.window, '24h', 'window 原样回显')
+    const metricsFunnel = metrics.funnel as Record<string, unknown>
+    const metricsGuardrails = metrics.guardrails as Record<string, unknown>
+    assert(
+      Number(metricsFunnel.feedRequests) >= 1,
+      '窗口内至少 1 次 Feed 请求（本次匿名 Feed 被算进请求轴）',
+      metricsFunnel,
+    )
+    assert(
+      Number(metricsFunnel.impressions) >= 1,
+      '窗口内至少 1 条归因曝光（本次 IMPRESSION 被算进事件轴）',
+      metricsFunnel,
+    )
+    assertEqual(
+      metricsGuardrails.rateLimitedRequests,
+      0,
+      '读到指标这一刻本轮流量还没撞到限流阈值，所以是 0（429 在下一小节造出来）',
+    )
+    assert(
+      metricsGuardrails.eventWriteFailureRate === null ||
+        typeof metricsGuardrails.eventWriteFailureRate === 'number',
+      'eventWriteFailureRate 是数字或 null（分母 0 → null，不是 0）',
+      metricsGuardrails.eventWriteFailureRate,
+    )
+    const metricsLatency = metrics.latency as { metric: string; count: number }[]
+    const feedLatency = metricsLatency.find((row) => row.metric === 'feed')
+    assert(
+      (feedLatency?.count ?? 0) >= 1,
+      '延迟里有 feed 采样点（同一进程内环形直方图，重启归零）',
+      metricsLatency,
+    )
+    assert(
+      typeof metrics.generatedAt === 'string' && typeof metrics.processStartedAt === 'string',
+      'generatedAt / processStartedAt 都是时间串',
+      { generatedAt: metrics.generatedAt, processStartedAt: metrics.processStartedAt },
+    )
+
+    // R6 写面验收（#323 R6 PR-2）：埋点限流。真实进程 + 真库才证得动——令牌桶在 router 层，
+    // 而"429 之后还能不能读到计数"要跨两个 HTTP 请求看同一个进程的计数。
+    step = 'R6 埋点限流（429）'
+    section('R6 埋点限流：POST /recommendations/events')
+    // 不带会话头 ⇒ 匿名主体的键只剩"未归因 IP"共享桶（本地无可信代理，任何转发头都被丢弃）。
+    // 这是最容易泄露的路径（新签会话不等于新额度），所以拿它当验收主体。
+    const missingListingPublicId = encodePublicId(PUBLIC_ID_PREFIX.listing, newId())
+    let rateLimitedStatus = 0
+    let rateLimitedRetryAfter: string | null = null
+    let rateLimitedBody: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const response = await postJson(base, RECOMMENDATION_ROUTES.events, {
+        events: [
+          {
+            eventId: crypto.randomUUID(),
+            // 用不存在的商品：能过契约校验（公开 id 形状合法），但会被服务端按"商品不存在"拒收，
+            // 不往库里灌上百行垃圾。限流发生在业务之前，被拒收与否不影响令牌消耗。
+            listingId: missingListingPublicId,
+            eventType: 'DETAIL_VIEW',
+            occurredAt: new Date().toISOString(),
+          },
+        ],
+      })
+      if (response.status === 429) {
+        rateLimitedStatus = response.status
+        rateLimitedRetryAfter = response.headers.get('retry-after')
+        rateLimitedBody = await readJson(response)
+        break
+      }
+      assertEqual(
+        response.status,
+        202,
+        `限流阈值前的第 ${attempt + 1} 次匿名埋点应 202（容量 120，最多试 200 次）`,
+      )
+    }
+    assert(rateLimitedStatus === 429, '连续匿名埋点最终被 429 挡下', rateLimitedStatus)
+    assert(rateLimitedRetryAfter !== null, '429 带 Retry-After 头', rateLimitedRetryAfter)
+    const rateLimitedError = (rateLimitedBody.error ?? {}) as Record<string, unknown>
+    assertEqual(
+      rateLimitedError.code,
+      RECOMMENDATION_RATE_LIMITED,
+      '429 错误码是契约里的 RECOMMENDATION_RATE_LIMITED',
+    )
+    assert(
+      Number(rateLimitedError.retryAfterSeconds) === Number(rateLimitedRetryAfter),
+      '响应体的 retryAfterSeconds 与 Retry-After 头一致（否则端上倒计时会骗人）',
+      { header: rateLimitedRetryAfter, body: rateLimitedError.retryAfterSeconds },
+    )
+
+    const afterThrottle = await readJson(await get(base, `${metricsPath}?window=24h`, adminCookie))
+    const afterGuardrails = afterThrottle.guardrails as Record<string, unknown>
+    assert(
+      Number(afterGuardrails.rateLimitedRequests) >= 1,
+      '同一进程的 admin 指标记下了刚才的 429（进程内计数，重启归零）',
+      afterGuardrails.rateLimitedRequests,
+    )
+    const rejectionReasons = afterGuardrails.eventRejectionReasons as Record<string, unknown>
+    assertEqual(
+      Object.keys(rejectionReasons).sort().join(','),
+      'attributionNotFound,identityMismatch,listingNotFound,occurredAtOutOfRange,serverConfirmedEventType',
+      '拒收原因 5 个桶齐全（第 5 桶"客户端伪报服务端确证行为"是真实拒绝分支）',
+    )
+
+    // ④ 保留期清理（#323 R6 §7）：走文档化的根脚本、`--dry-run` 形态——它必须"能安全接进 CI"，
+    // 即只数不删；真删路径由 cleanup.test.ts 的集成用例与 worker 定时任务覆盖。
+    step = 'R6 保留期清理（dry-run）'
+    section('R6 保留期清理：bun run recommendation:cleanup --once --dry-run --json')
+    const cleanupDryRun = await runRootScriptJson(
+      'recommendation:cleanup',
+      ['--once', '--dry-run', '--json'],
+      { DATABASE_URL: dbUrl },
+    )
+    assertEqual(cleanupDryRun.mode, 'dry-run', '--dry-run 时 mode 回显 dry-run')
+    for (const key of ['deletedRequestItems', 'deletedRequests', 'deletedEvents', 'batches']) {
+      const value = cleanupDryRun[key]
+      assert(
+        typeof value === 'number' && Number.isInteger(value) && value >= 0,
+        `dry-run 输出的 ${key} 是非负整数`,
+        value,
+      )
+    }
+    assertEqual(cleanupDryRun.batches, 0, 'dry-run 不进删除循环（batches = 0）⇒ 一行都没删')
 
     // 归因链小节到此结束：把 `step` 复位，否则紧接的 MATCH_LISTING 断言失败会被误报成这一步。
     step = stepBeforeRecommendation

@@ -56,6 +56,7 @@ import {
   type SessionCategoryWeight,
 } from '@fish/db/recall-store'
 import { findUserInterestProfile } from '@fish/db/user-interest-store'
+import type { LatencyRecorder } from '../../../observability/latency'
 import { type RecommendationIdentityInput, resolveRecommendationIdentity } from '../identity'
 import { readSessionInterest } from '../interest'
 import { mergeRecallCandidates } from './merge'
@@ -85,6 +86,8 @@ export type RecommendationRecallDeps = {
    */
   embeddingModel: string | null
   clock?: () => Date
+  /** 进程内延迟采样（#323 R6 §6.4）；**可选**，只用于 pgvector 单次查询耗时。 */
+  latency?: LatencyRecorder
 }
 
 export interface RecommendationRecall {
@@ -257,13 +260,20 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
         const interestVector = combined
         channels.push(
           await runChannel('semantic', async () => {
-            const rows = await findSemanticRecallCandidates(deps.db, {
-              vector: interestVector,
-              model,
-              limit: RECALL_CHANNEL_LIMITS.semantic,
-              viewerUserId,
-            })
-            return rows.map((row) => ({ listingId: row.listingId, score: row.semanticScore }))
+            // pgvector 检索的唯一入口（#323 R6 §6.4）：失败也要采样——通道故障时
+            // 延迟分布里"没有样本"会被误读成"没查询"，而实际是查询超时/报错。
+            const startedAt = performance.now()
+            try {
+              const rows = await findSemanticRecallCandidates(deps.db, {
+                vector: interestVector,
+                model,
+                limit: RECALL_CHANNEL_LIMITS.semantic,
+                viewerUserId,
+              })
+              return rows.map((row) => ({ listingId: row.listingId, score: row.semanticScore }))
+            } finally {
+              deps.latency?.observe('pgvector', performance.now() - startedAt)
+            }
           }),
         )
       }

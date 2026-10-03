@@ -1,4 +1,5 @@
 import { RANKING_VERSION } from '@fish/contracts/matching/schema'
+import { RECOMMENDATION_CLEANUP_INTERVAL_MS } from '@fish/contracts/recommendation/observability'
 import { createDb } from '@fish/db/client'
 import { loadEmbeddingEnv, loadServerEnv, loadVisualEmbeddingEnv } from '@fish/shared/env'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
@@ -10,6 +11,7 @@ import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
+import { cleanupExpiredRecommendationData } from './jobs/recommendation/cleanup'
 import { cleanupExpiredViewHistory } from './jobs/view-history/cleanup'
 import { createVisualBackfillRunner } from './jobs/visual-embedding/backfill'
 import { cleanupExpiredVisualQueryImages } from './jobs/visual-embedding/cleanup'
@@ -149,6 +151,42 @@ const runVisualMaintenance = createVisualMaintenance({
   cleanup: (now) => cleanupExpiredVisualQueryImages({ db, storage: mediaStorage, now }),
 })
 
+/** 周期性保留期清理（#323 R6 §7）：删 90 天前的推荐上下文与 180 天前的埋点。 */
+async function runRecommendationCleanup(now: Date): Promise<void> {
+  try {
+    const result = await cleanupExpiredRecommendationData({ db, now })
+    if (result.deletedRequestItems + result.deletedRequests + result.deletedEvents > 0) {
+      console.log(
+        `[worker] 推荐数据清理：快照 ${result.deletedRequestItems} / 请求 ${result.deletedRequests} / 事件 ${result.deletedEvents}（${result.batches} 批）`,
+      )
+    }
+  } catch (error) {
+    // 与视觉维护同一语义：一轮失败只记日志，下一轮自然重试（删除幂等）。
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[worker] 推荐数据清理失败：${detail}`)
+  }
+}
+
+/**
+ * 周期任务表（#323 R6 §7.1，**已确认**）：把原先单个 `lastMaintenanceAt` 换成一张小表。
+ *
+ * 理由：再来第三个定时任务时不必继续堆 `if`，且「首次循环立即跑一轮」（`lastRunAt = 0`）的既有
+ * 行为可以逐项保留。每项自己吞异常——一个任务失败不该让另一个任务也停摆。
+ *
+ * #418 的浏览足迹清理（30 天保留期，小时级）也并入这张表，不再单留 `lastViewHistoryCleanupAt`。
+ */
+type MaintenanceSchedule = {
+  intervalMs: number
+  lastRunAt: number
+  run: (now: Date) => Promise<void>
+}
+
+const SCHEDULES: MaintenanceSchedule[] = [
+  { intervalMs: VISUAL_MAINTENANCE_INTERVAL_MS, lastRunAt: 0, run: runVisualMaintenance },
+  { intervalMs: RECOMMENDATION_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runRecommendationCleanup },
+  { intervalMs: VIEW_HISTORY_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runViewHistoryCleanup },
+]
+
 /**
  * `EMBED_*` 终结失败后的有界补投（#322 M4 复审修复，范围外发现 #2）。
  *
@@ -190,8 +228,7 @@ for (const failedId of recovered.failedIds) {
   await scheduleRetryFor(failedId)
 }
 
-let lastMaintenanceAt = 0
-let lastViewHistoryCleanupAt = 0
+console.log(`[worker] started (poll interval ${POLL_INTERVAL_MS}ms)`)
 
 for (;;) {
   const startedAt = Bun.nanoseconds()
@@ -215,19 +252,13 @@ for (;;) {
     if (outcome.status === 'FAILED') await scheduleRetryFor(outcome.id)
   }
 
-  // 首次循环立即跑一轮（`lastMaintenanceAt = 0`）：启动就能补上历史数据的视觉向量，
-  // 不必等一个完整间隔。
+  // 首次循环立即跑一轮（每项 `lastRunAt = 0`）：启动就能补上历史数据的视觉向量、过期推荐数据
+  // 与过期浏览足迹，不必等一个完整间隔。
   const now = performance.now()
-  if (now - lastMaintenanceAt >= VISUAL_MAINTENANCE_INTERVAL_MS) {
-    lastMaintenanceAt = now
-    await runVisualMaintenance(new Date())
-  }
-
-  // 浏览足迹清理（#415 M1）：保留期 30 天，小时级足够——它只是"把过期行删掉"，
-  // 读接口自己已经按 30 天窗口过滤，晚删一会儿不会让用户看到过期记录。
-  if (now - lastViewHistoryCleanupAt >= VIEW_HISTORY_CLEANUP_INTERVAL_MS) {
-    lastViewHistoryCleanupAt = now
-    await runViewHistoryCleanup(new Date())
+  for (const schedule of SCHEDULES) {
+    if (now - schedule.lastRunAt < schedule.intervalMs) continue
+    schedule.lastRunAt = now
+    await schedule.run(new Date())
   }
 
   await Bun.sleep(POLL_INTERVAL_MS)
