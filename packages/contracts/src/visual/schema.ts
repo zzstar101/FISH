@@ -83,11 +83,39 @@ export const VisualQueryUploadResponseSchema = z.strictObject({
 export type VisualQueryUploadResponse = z.infer<typeof VisualQueryUploadResponseSchema>
 
 /**
+ * 排序档位（#324 M6）。
+ *
+ * 服务端在**截断前**排序，所以客户端拿到的 30 条就是该档位的全局前 30 条，
+ * 而不是"对已返回的 30 条本地重排"。
+ *
+ * 五个档位只改**呈现顺序**、不改分数，因此既不进 `VISUAL_RANKING_WEIGHTS`，
+ * 也不递增 `VISUAL_SEARCH_STRATEGY_VERSION`。中文标签（综合/热销/最新/价格/成色）
+ * 留在客户端映射：契约只认稳定标识符，改文案不该是破坏性变更。
+ */
+export const VISUAL_SEARCH_SORTS = [
+  'relevance',
+  'popular',
+  'newest',
+  'price_asc',
+  'condition',
+] as const
+
+export const VisualSearchSortSchema = z.enum(VISUAL_SEARCH_SORTS)
+
+export type VisualSearchSort = z.infer<typeof VisualSearchSortSchema>
+
+/**
  * 搜索请求只接受**已上传**的 `objectKey`，不接受 multipart：
  * 上传与搜索分开，才能让"上传失败"和"识别失败"有各自的错误码与重试语义。
  */
 export const VisualSearchRequestSchema = z.strictObject({
   objectKey: z.string().min(1).max(512),
+  /**
+   * 缺省 = `relevance`。刻意 `.optional()` 而不是 `.default('relevance')`：
+   * 老客户端与并行开发的 M9 回放脚本仍在发 `{ objectKey }`，带默认值会让解析结果类型
+   * 在类型层上把它变成必填，等于用类型把老调用方证伪。缺省值由服务端补。
+   */
+  sort: VisualSearchSortSchema.optional(),
 })
 
 /**
@@ -107,6 +135,43 @@ export const VisualInterpretationSchema = z.strictObject({
 export type VisualInterpretation = z.infer<typeof VisualInterpretationSchema>
 
 /**
+ * 结果项（#324 M6）：卡片 +「N 人想要」。
+ *
+ * 想要数放在卡片**外层**而不是 `ListingCardSchema` 上：它是搜索结果的语境信号，
+ * 公开 Feed / 详情今天并不投影它；塞进 `ListingCard` 会让每个列表查询都被迫多查一次收藏表。
+ */
+export const VisualSearchResultItemSchema = ListingCardSchema.extend({
+  /** 想要数（收藏数）。由候选信号批量查出，不逐条补查。 */
+  favoriteCount: z.number().int().nonnegative(),
+})
+
+export type VisualSearchResultItem = z.infer<typeof VisualSearchResultItemSchema>
+
+/**
+ * 判定「成交均价」是否可信的最小样本数（#324 M6）。
+ *
+ * 少于这个数就不给均价：2 件商品的"均价"不是行情，而是一个会让卖家按错误价格定价的数字。
+ * 阈值锁在服务端，客户端各判一次就会各漂一次。
+ */
+export const VISUAL_SOLD_AVG_MIN_SAMPLES = 3
+
+/**
+ * 成交均价统计（#324 M6）。
+ *
+ * 口径：**解析出的类目**下 `status = 'SOLD'` 商品的 `priceCents` 平均值。不走 transactions 表、
+ * 不加时间窗口——这个数字回答的是"这个类目大概卖多少钱"，不是某一笔成交的复盘。
+ *
+ * 样本不足时 `soldAvgPriceCents = null`，但 `soldSampleCount` 仍如实返回：
+ * 客户端要能显示"样本不足（2 件）"，而不是把它当成"没有统计"。
+ */
+export const VisualSearchStatsSchema = z.strictObject({
+  soldAvgPriceCents: z.number().int().nonnegative().nullable(),
+  soldSampleCount: z.number().int().nonnegative(),
+})
+
+export type VisualSearchStats = z.infer<typeof VisualSearchStatsSchema>
+
+/**
  * 搜索响应。**不暴露** score / distance / 各分项：内部打分是排序实现，一旦进契约就
  * 变成前端可依赖的接口，调权重就成了破坏性变更。
  *
@@ -118,7 +183,9 @@ export const VisualSearchResponseSchema = z.strictObject({
   interpretation: VisualInterpretationSchema.nullable(),
   strategyVersion: z.string().min(1),
   embeddingModel: z.string().min(1),
-  items: z.array(ListingCardSchema),
+  items: z.array(VisualSearchResultItemSchema),
+  /** 类目行情（成交均价）。与 `items` 独立：没有结果也可能有行情，反之亦然。 */
+  stats: VisualSearchStatsSchema,
 })
 
 export type VisualSearchResponse = z.infer<typeof VisualSearchResponseSchema>
