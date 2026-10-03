@@ -17,6 +17,7 @@ import type {
 import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
+import { STUB_VISUAL_EMBEDDING_MODEL } from '@fish/visual-embedding/providers/stub'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -75,6 +76,7 @@ import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
 import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
+import { createRecommendationRecall } from './modules/recommendation/recall/service'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
@@ -300,9 +302,18 @@ export function createApp(
   //
   // 实例只建一次：服务端确证行为的埋点（评论 / 会话 / 交易）复用同一个 recorder，
   // 各业务模块只依赖那个窄接口，不需要知道推荐模块的 store 与召回。
+  //
+  // 语义召回按 `listing_visual_embeddings.model` 过滤，模型名必须与 worker 回填
+  // （`VISUAL_EMBED_LISTING` handler 写的 `provider.model`）**完全一致**：两个进程读同一份
+  // `VISUAL_EMBEDDING_*`，而 `stub` 传输写的是包里的确定性模型名（不是空值）。取错名字不会报错，
+  // 只会让语义通道永远过滤不到向量（表现成"召回总是空"），所以这里从同一个常量推导。
+  const recallEmbeddingModel =
+    visualEmbeddingEnv.transport === 'live' ? visualEmbeddingEnv.model : STUB_VISUAL_EMBEDDING_MODEL
   const recommendationService = createRecommendationService({
     store: createSqlRecommendationStore(db),
     listings: listingService,
+    // 多路召回（R3）：六路各自降级、整体不抛，因此 Feed 不需要为它准备 500 分支。
+    recall: createRecommendationRecall({ db, embeddingModel: recallEmbeddingModel }),
     // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
     // （画像只给登录用户，匿名行为不投 job）。
     interest: createDbInterestRefreshQueue(db),
@@ -423,6 +434,9 @@ export function createApp(
     createFavoritesRouter({
       service: createFavoriteService({ store: createSqlFavoriteStore(db), storage }),
       getUserId: (c) => c.get('userId'),
+      // #323 R4 决策 6：`FAVORITE` / `UNFAVORITE` 的服务端真值来源。客户端上报会随断网重试整批丢，
+      // 而这两个事件分别是权重表里最强的正信号与负反馈特征之一。
+      recorder: recommendationRecorder,
     }),
   )
 

@@ -308,6 +308,27 @@ describe('orderVisualCandidates', () => {
     }
   })
 
+  test('混合分并列时先看图片相似度：有图片证据的排在纯文本命中之前', () => {
+    // 纯文本命中的候选 visualScore = 0（M6 之前的既有口径），同分时必须排在后面。
+    // 少了这一层，同分排序会落到公开 id 上，而公开 id 是随机的——同一个查询两次会给出不同顺序。
+    const withVisualScore = (seq: number, visualScore: number): VisualScoredCandidate => ({
+      card: makeCard(seq),
+      ranking: { ...scoreBreakdown(0.5), visualScore },
+      favoriteCount: 7,
+    })
+
+    const tied = [withVisualScore(1, 0), withVisualScore(2, 0.9), withVisualScore(3, 0.4)]
+
+    for (const { sort } of SORT_EXPECTATIONS) {
+      expect(labelsOf(orderVisualCandidates(tied, sort))).toEqual(['商品-2', '商品-3', '商品-1'])
+      expect(labelsOf(orderVisualCandidates([...tied].reverse(), sort))).toEqual([
+        '商品-2',
+        '商品-3',
+        '商品-1',
+      ])
+    }
+  })
+
   test('不修改入参：返回新数组，入参顺序与元素内容都不变', () => {
     const input = sortFixtureCandidates()
     const snapshot = input.map((entry) => ({

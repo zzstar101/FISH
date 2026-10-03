@@ -21,7 +21,9 @@ import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
 import { listings } from '@fish/db/schema/listings'
 import { wishes } from '@fish/db/schema/wishes'
 import { eq } from 'drizzle-orm'
+import { elapsedMs } from '../../log'
 import { InvalidJobPayloadError } from '../invalid-payload-error'
+import { enqueueMatchJob } from '../matching/enqueue'
 
 /**
  * embedding 生成 handler（#322 M1）。
@@ -62,6 +64,29 @@ export type EmbedRunResult = {
 export type EmbedJobHandlers = {
   [EMBED_JOB_TYPES.listing]: (payload: unknown) => Promise<EmbedRunResult>
   [EMBED_JOB_TYPES.wish]: (payload: unknown) => Promise<EmbedRunResult>
+}
+
+/**
+ * 实体级观测事件（#322 M4）：一次 `generateEntityEmbedding` 一行。`status === 'unchanged'`
+ * 就是**内容指纹命中**（没调 provider、没计费），所以 content-hash 命中率可以直接数这个事件。
+ * 只带长度与指纹，不带 embedding 文本（见 `../../log` 的硬约束）。
+ */
+export type EmbedEntityEvent = {
+  event: 'embed.entity'
+  entityKind: 'listing' | 'wish'
+  entityId: string
+  model: string
+  /** `failed` = provider 或写库抛错，事件发完错误继续冒泡给队列。 */
+  status: EmbedRunResult['status'] | 'failed'
+  contentHash: string | null
+  /** 参与本次生成的 embedding 文本长度；实体不存在时为 `null`。 */
+  contentChars: number | null
+  durationMs: number
+}
+
+/** 观测选项；不传 = 不观测（测试与一次性脚本可以裸用）。 */
+export type EmbedJobOptions = {
+  onEvent?: (event: EmbedEntityEvent) => void
 }
 
 /** 一次"读实体内容"的结果：embedding 文本（由实体字段构造）+ 读到那一刻的实体版本。 */
@@ -145,17 +170,20 @@ function assertVector(vector: number[] | undefined): number[] {
  * 版本号取的是**复检那一刻**读到的 `updated_at`：内容没变而实体版本前进了（例如只改了价格）
  * 时，向量本身仍然正确，跟着前进的版本号也不会让读侧把它误判成过期。
  */
-async function generate(
+async function generateOnce(
   db: Db,
   provider: EmbeddingProvider,
   entity: EmbeddingEntity,
   read: EntityReader,
-): Promise<EmbedRunResult> {
+): Promise<{ result: EmbedRunResult; contentChars: number | null }> {
   assertDimensions(provider.dimensions, `provider ${provider.model} 声明的维度不符`)
 
   const initial = await read(db, false)
   if (initial === null) {
-    return { entity: entity.kind, status: 'missing', model: provider.model, contentHash: null }
+    return {
+      result: { entity: entity.kind, status: 'missing', model: provider.model, contentHash: null },
+      contentChars: null,
+    }
   }
 
   const contentHash = contentHashOf(initial.text)
@@ -177,7 +205,10 @@ async function generate(
       contentHash,
       sourceUpdatedAt: initial.updatedAt,
     })
-    return { entity: entity.kind, status: 'unchanged', model: provider.model, contentHash }
+    return {
+      result: { entity: entity.kind, status: 'unchanged', model: provider.model, contentHash },
+      contentChars: initial.text.length,
+    }
   }
 
   const [vector] = await provider.embed([initial.text])
@@ -200,10 +231,84 @@ async function generate(
     return written ? 'generated' : 'stale'
   })
 
-  return { entity: entity.kind, status: outcome, model: provider.model, contentHash }
+  return {
+    result: { entity: entity.kind, status: outcome, model: provider.model, contentHash },
+    contentChars: initial.text.length,
+  }
 }
 
-export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): EmbedJobHandlers {
+/**
+ * 读实体当前内容 → 生成向量 → 原子写入，并上报一条 `embed.entity` 事件（#322 M4）。
+ *
+ * **job handler 与 backfill 脚本共用这一个实现**：backfill 走的是与生产完全相同的
+ * 指纹比对 / 原子复检 / 失败 fail-closed 路径，不是一个"只写向量的简化版"。
+ */
+export async function generateEntityEmbedding(
+  db: Db,
+  provider: EmbeddingProvider,
+  entity: EmbeddingEntity,
+  options: EmbedJobOptions = {},
+): Promise<EmbedRunResult> {
+  const startedAt = Bun.nanoseconds()
+  const read: EntityReader =
+    entity.kind === 'listing'
+      ? (executor, lock) => readListing(executor, entity.id, lock)
+      : (executor, lock) => readWish(executor, entity.id, lock)
+
+  try {
+    const { result, contentChars } = await generateOnce(db, provider, entity, read)
+    options.onEvent?.({
+      event: 'embed.entity',
+      entityKind: entity.kind,
+      entityId: entity.id,
+      model: provider.model,
+      status: result.status,
+      contentHash: result.contentHash,
+      contentChars,
+      durationMs: elapsedMs(startedAt),
+    })
+    return result
+  } catch (error) {
+    // 失败也上报（backfill 的失败计数靠它），但错误照旧冒泡：这里只观测，不吞异常。
+    options.onEvent?.({
+      event: 'embed.entity',
+      entityKind: entity.kind,
+      entityId: entity.id,
+      model: provider.model,
+      status: 'failed',
+      contentHash: null,
+      contentChars: null,
+      durationMs: elapsedMs(startedAt),
+    })
+    throw error
+  }
+}
+
+export function createEmbedJobHandlers(
+  db: Db,
+  provider: EmbeddingProvider,
+  options: EmbedJobOptions = {},
+): EmbedJobHandlers {
+  /**
+   * 生成向量，并在**向量已确认新鲜**时补投一条同实体的 `MATCH_*`（#322 M4 复审修复）。
+   *
+   * 补的是"入队序 ≠ 执行序"漏掉的那一半：`MATCH_*` 先跑时会走 `v1-fallback` 并补投 `EMBED_*`，
+   * 但 `EMBED_*` 跑完不会再触发匹配，那一对就永久停在 v1。这里在 `EMBED_*` **结算之前**插入
+   * `MATCH_*`，所以它的 `(run_at, id)` 必然晚于本次 `EMBED_*`；而它跑时向量已新鲜 ⇒ 走
+   * `vector-topk`、不再补投 `EMBED_*` ⇒ 链条终止。详见 `../matching/enqueue.ts`。
+   *
+   * 只在 `generated` / `unchanged` 时补投：`stale` 表示实体在 provider 调用期间又变了（那次编辑
+   * 自己会投 `EMBED_*`，由它负责补投），`missing` 则根本没有向量可用——这两种情况补投都会变成
+   * "匹配 → 补投 EMBED → 匹配"的空转。
+   */
+  async function generateAndResumeMatching(entity: EmbeddingEntity): Promise<EmbedRunResult> {
+    const result = await generateEntityEmbedding(db, provider, entity, options)
+    if (result.status === 'generated' || result.status === 'unchanged') {
+      await enqueueMatchJob(db, entity)
+    }
+    return result
+  }
+
   return {
     [EMBED_JOB_TYPES.listing]: async (payload) => {
       const parsed = EmbedListingJobPayloadSchema.safeParse(payload)
@@ -211,10 +316,7 @@ export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): Emb
         throw new InvalidJobPayloadError(EMBED_JOB_TYPES.listing, parsed.error.message)
       }
 
-      const listingId = parsed.data.listingId
-      return generate(db, provider, { kind: 'listing', id: listingId }, (executor, lock) =>
-        readListing(executor, listingId, lock),
-      )
+      return generateAndResumeMatching({ kind: 'listing', id: parsed.data.listingId })
     },
 
     [EMBED_JOB_TYPES.wish]: async (payload) => {
@@ -223,10 +325,7 @@ export function createEmbedJobHandlers(db: Db, provider: EmbeddingProvider): Emb
         throw new InvalidJobPayloadError(EMBED_JOB_TYPES.wish, parsed.error.message)
       }
 
-      const wishId = parsed.data.wishId
-      return generate(db, provider, { kind: 'wish', id: wishId }, (executor, lock) =>
-        readWish(executor, wishId, lock),
-      )
+      return generateAndResumeMatching({ kind: 'wish', id: parsed.data.wishId })
     },
   }
 }

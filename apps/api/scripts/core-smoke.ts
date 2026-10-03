@@ -56,11 +56,17 @@ import {
   RANKING_VERSION,
   RANKING_VERSION_V1,
 } from '@fish/contracts/matching/schema'
+import { INTEREST_STRATEGY_VERSION } from '@fish/contracts/recommendation/interest'
+import {
+  composeRecommendationStrategyVersion,
+  RANK_STRATEGY_VERSION,
+  RECOMMENDATION_STRATEGY_VERSION_RULE,
+} from '@fish/contracts/recommendation/rank'
+import { RECALL_STRATEGY_VERSION } from '@fish/contracts/recommendation/recall'
 import {
   RECOMMENDATION_HEADERS,
   RECOMMENDATION_ROUTES,
 } from '@fish/contracts/recommendation/routes'
-import { RECOMMENDATION_STRATEGY_VERSION_NONE } from '@fish/contracts/recommendation/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
@@ -80,13 +86,14 @@ import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
+import { recommendationRequestItems } from '@fish/db/schema/recommendation-request-items'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import { wishes } from '@fish/db/schema/wishes'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/enqueue'
 import { MEETUP_TOKEN_MAX_ATTEMPTS } from '../src/modules/transactions/service'
 import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-limit'
@@ -136,6 +143,19 @@ const CHAIN_LISTING_FIELDS = {
   negotiable: false,
   free: false,
 } as const
+
+/**
+ * R4 起推荐 Feed 的策略版本是「生效的每一段策略」拼成的复合串（#323 R4 §策略版本）。
+ *
+ * 从契约常量拼而不是抄字面量：任何一段策略升级都该让这条断言跟着变，抄死字符串只会让
+ * smoke 变成"改了版本号就得改脚本"的告示牌。
+ */
+const RANKED_STRATEGY_VERSION = composeRecommendationStrategyVersion([
+  RECOMMENDATION_STRATEGY_VERSION_RULE,
+  INTEREST_STRATEGY_VERSION,
+  RECALL_STRATEGY_VERSION,
+  RANK_STRATEGY_VERSION,
+])
 
 let checks = 0
 /**
@@ -424,6 +444,32 @@ async function waitEmbedJob(db: Db, type: string, key: string, value: string): P
 }
 
 /**
+ * 等某实体的某类 job **全部结算**（全部 DONE，且至少有一条）（#322 M4）。
+ * 出现 FAILED 直接判 smoke 失败——"有 job 在跑"与"这一轮跑成功过"是两件事，不能混。
+ *
+ * 为什么需要：`EMBED_*` 必须先于 `MATCH_*` 投递（M4 的顺序不变量），所以创建愿望会在同一事务里
+ * 排下 `EMBED_WISH` → `MATCH_WISH`。只等 EMBED 跑完时，那条 `MATCH_WISH` 可能仍是 PENDING，
+ * 占着 `jobs_match_wish_wish_id_pending_uidx`；此时直接投本节自己的 `MATCH_WISH` 会撞部分唯一索引
+ * （23505）、并且"不建 Match"的断言也是空的（那一轮 MATCH 还没跑）。先等它结算，两件事一起解决。
+ */
+async function waitJobsSettled(db: Db, type: string, key: string, value: string): Promise<void> {
+  await waitFor(`${type}（${value}）全部结算`, async () => {
+    const rows = await jobRows(db, type, key, value)
+    if (rows.length === 0) return false
+    // FAILED 不算"结算成功"：若创建路径那条 MATCH_WISH 失败，紧随的"不建 Match"断言会因为
+    // 根本没有成功的一轮 MATCH 而退化成空断言。这里直接把 smoke 判失败（`waitFor` 不吞异常）。
+    const failed = rows.find((row) => row.status === 'FAILED')
+    if (failed) {
+      throw new Error(
+        `✗ [${step}] ${type}（${value}）有 FAILED job（id=${failed.id}，attempts=${failed.attempts}）：${failed.lastError ?? '无 last_error'}`,
+      )
+    }
+    return rows.every((row) => row.status === 'DONE')
+  })
+  ok(`${type} 全部结算`)
+}
+
+/**
  * 读某实体当前的向量行（#322 smoke 专用）。
  *
  * 直接读整行、先拿 `model` 再按 model 使用，避免把 provider 的模型名硬编码进 smoke
@@ -706,30 +752,51 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     // 2. Demo 高分样例必须由引擎真实产出（seed 不再预写结果）
     step = 'Demo 样例'
-    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 降级口径）')
+    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 语义口径）')
     startWorker()
     ok('Worker 已启动')
     await waitJob(db, seededJob.id, 'DONE')
+    /*
+     * seed 按 #43 契约**只投一条 MATCH_LISTING**、不投 EMBED_*，所以第一轮匹配时商品还没有向量
+     * ⇒ 走 M2 的降级契约（v1 口径、补投 EMBED_LISTING）。
+     *
+     * #322 M4 复审修复：`EMBED_*` 在结算前补投一条同实体的 `MATCH_*`（入队序 ≠ 执行序），
+     * 所以这里能等到三条 job 全部结算，并断言那条 MATCH_LISTING 真的被重算过一遍
+     * （worker 日志里是 `recall: "vector-topk"`）。
+     *
+     * 但 demo 这一对**终态仍是 v1**：v2 打分要求**两侧都有新鲜向量**，而 seed 只投 MATCH_LISTING
+     * ⇒ 引擎只补投**目标实体**（商品）的 EMBED_LISTING，愿望那一侧始终没有向量（没有 MATCH_WISH
+     * job、seed 也不投 EMBED_WISH）。重算时候选里只剩"并回的已有行"，`similarity === undefined`
+     * ⇒ 走 v1 分支（`semantic_score = NULL`、`ranking_version = 1`、权重 0.35/0.35/0.30）= 100 分。
+     * v2 的端到端升级路径由后面的"语义召回 / 降级恢复"段覆盖（那里商品与愿望都经 API 创建、两侧都有向量）。
+     * v1 降级口径本身由 `apps/worker/src/jobs/matching/engine.test.ts` 覆盖；smoke 只钉端到端结果。
+     *
+     * 先等 EMBED_LISTING、再等 MATCH_LISTING：补投的 MATCH 是在 EMBED 结算**之前**插入的，
+     * 所以"EMBED 全部 DONE"成立时那条 MATCH 必然已经存在，不存在漏等的窗口。
+     */
+    await waitJobsSettled(db, 'EMBED_LISTING', 'listingId', seedListing.id)
+    await waitJobsSettled(db, 'MATCH_LISTING', 'listingId', seedListing.id)
     const seededMatch = await matchRow(db, seedListing.id, seedWish.id)
     assert(seededMatch !== null, 'Worker 用真实打分生成了 demo 的 match 行')
     if (!seededMatch) throw new Error('demo match 缺失')
-    assertEqual(seededMatch.score, 100, 'demo 样例总分 = 100')
     assertEqual(seededMatch.categoryScore, 100, 'demo 样例分类分 = 100')
     assertEqual(seededMatch.keywordScore, 100, 'demo 样例关键词分 = 100')
     assertEqual(seededMatch.priceScore, 100, 'demo 样例价格分 = 100')
-    // #322 M2 的降级契约在真实链路上的证据：seed 按 #43 契约**只投一条 MATCH_LISTING**、不投
-    // EMBED_*，所以愿望这一侧没有向量 ⇒ 本轮按 v1 口径打分（semantic_score 落 NULL、
-    // ranking_version = 1、分数是 0.35/0.35/0.30 的 #8 算法），同时补投目标实体的 EMBED_LISTING。
-    // v2（hybrid + semantic_score）由本文件后面的「语义链」一节在同一套 API/Worker/DB 上验证。
     assertEqual(
       seededMatch.rankingVersion,
       RANKING_VERSION_V1,
-      'demo 行是 v1 退化口径（愿望没有向量）',
+      'demo 行终态是 v1 降级口径（愿望侧没有向量）',
     )
-    assertEqual(seededMatch.semanticScore, null, 'v1 行的 semantic_score 落 NULL，不伪造语义分')
+    assert(seededMatch.semanticScore === null, 'v1 行的 semantic_score 是 NULL')
+    assertEqual(seededMatch.score, 100, 'demo 样例总分 = 100（v1 权重 0.35/0.35/0.30）')
+    const demoMatchJobs = await jobRows(db, 'MATCH_LISTING', 'listingId', seedListing.id)
+    assert(
+      demoMatchJobs.length >= 2,
+      `降级后 EMBED 结算补投了 MATCH_LISTING（否则目标向量永远补不上）：实际 ${demoMatchJobs.length} 条`,
+    )
     assert(
       (await jobRows(db, 'EMBED_LISTING', 'listingId', seedListing.id)).length > 0,
-      '降级时补投了 EMBED_LISTING（否则这一对永远停在 v1）',
+      '降级时补投了 EMBED_LISTING',
     )
     assertEqual(
       await notificationCount(db, seedListing.id, seedWish.id),
@@ -746,7 +813,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       ),
     )
     assertEqual(total(demoWishSide, 'demo /matches?wishId='), 1, 'demo 买家能读到“愿望成真”')
-    assertEqual(topScore(demoWishSide, 'demo /matches?wishId='), 100, 'demo 读接口分数 = 100')
+    assertEqual(
+      topScore(demoWishSide, 'demo /matches?wishId='),
+      seededMatch.score,
+      'demo 读接口分数 = 引擎写入的分数（这一对终态是 v1，版本见上方断言）',
+    )
 
     // 发布与建愿望的 job 投递断言要在**停机态**下做：worker 在跑时，job 可能在脚本读库前就被
     // 领取成 RUNNING，硬断言 PENDING 会变成竞态（“连跑 5 次”会偶发失败）。
@@ -980,32 +1051,81 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assert(typeof coverUrl === 'string', '详情返回可用的 coverUrl')
     assertEqual((await fetch(String(coverUrl))).status, 200, '封面 URL 匿名 → 200')
 
-    // 推荐归因链（#323 R1 验收）：一次推荐请求 → 曝光 → 开详情，事件必须能按
-    // `requestId` / `position` 归因回**同一次**推荐请求。R1 的 Feed 是 newest 透传
-    // （`strategy_version = rec-v1-none`），这里用匿名会话真打一次 Feed，取首张卡发
-    // IMPRESSION + DETAIL_VIEW，再回库里核对归因字段（客户端上报的四类"服务端确证事件"
-    // 由业务写路径产生，不在这一步里造）。
+    // 推荐排序与归因真值（#323 R4/R5 验收）：R4 起 Feed 由「多路召回 → 排序 → 重排 → 落快照」
+    // 产出，`strategy_version` 是复合串；归因的**唯一真值来源是服务端快照**
+    // （`recommendation_request_items`），客户端上报的 position/source 一律不可信。
+    // 这里真打一次 Feed，故意上报**错的** position/source，再回库里核对落库值 = 快照真值；
+    // 并用快照游标翻第二页，验证"同一 requestId、与首页不重复、服务端只按快照切"。
     const stepBeforeRecommendation = step
-    step = '推荐归因链（request → IMPRESSION → DETAIL_VIEW）'
-    section('推荐归因链：request → IMPRESSION → DETAIL_VIEW')
+    step = '推荐排序与归因真值（快照 → 翻页 → IMPRESSION/DETAIL_VIEW）'
+    section('推荐排序与归因真值：快照 → 翻页 → IMPRESSION/DETAIL_VIEW')
     const anonSessionId = crypto.randomUUID()
-    const feedResponse = await fetch(new URL(`${RECOMMENDATION_ROUTES.feed}?limit=5`, base), {
+    const feedResponse = await fetch(new URL(`${RECOMMENDATION_ROUTES.feed}?limit=2`, base), {
       headers: { [RECOMMENDATION_HEADERS.sessionId]: anonSessionId },
     })
     assertEqual(feedResponse.status, 200, '匿名 GET /recommendations/feed → 200')
     const feed = await readJson(feedResponse)
     assertEqual(
       feed.strategyVersion,
-      RECOMMENDATION_STRATEGY_VERSION_NONE,
-      'R1 推荐策略版本 = rec-v1-none',
+      RANKED_STRATEGY_VERSION,
+      'R4 推荐策略版本 = 排序/重排复合串（不是 rec-v1-none 透传）',
     )
     const feedItems = feed.items as { id: string }[]
-    assert(feedItems.length > 0, '推荐 Feed 至少返回一张卡')
+    assertEqual(feedItems.length, 2, 'limit=2 的首页返回两张卡')
     const feedListingPublicId = String(feedItems[0]?.id)
     const feedListingId = decodePublicId(PUBLIC_ID_PREFIX.listing, feedListingPublicId)
     const requestId = String(feed.requestId)
     const occurredAt = new Date().toISOString()
 
+    const snapshot = await db
+      .select({
+        position: recommendationRequestItems.position,
+        listingId: recommendationRequestItems.listingId,
+        primarySource: recommendationRequestItems.primarySource,
+      })
+      .from(recommendationRequestItems)
+      .where(eq(recommendationRequestItems.requestId, requestId))
+      .orderBy(asc(recommendationRequestItems.position))
+    assert(snapshot.length > feedItems.length, '快照长于首页（还有下一页可翻）', {
+      snapshot: snapshot.length,
+      page: feedItems.length,
+    })
+    assertEqual(
+      snapshot
+        .map((row, index) => (row.position === index ? 'ok' : `bad:${row.position}`))
+        .join(','),
+      snapshot.map(() => 'ok').join(','),
+      '快照 position 从 0 连续编号',
+    )
+    const truth = snapshot[0]
+    if (!truth) throw new Error('快照缺 position = 0 的行')
+    assertEqual(truth.listingId, feedListingId, '首页第一张卡就是快照 position = 0 的商品')
+    assert(typeof feed.nextCursor === 'string', '快照还有剩余条目 → 必须给出游标')
+
+    const secondResponse = await fetch(
+      new URL(
+        `${RECOMMENDATION_ROUTES.feed}?limit=2&cursor=${encodeURIComponent(String(feed.nextCursor))}`,
+        base,
+      ),
+      { headers: { [RECOMMENDATION_HEADERS.sessionId]: anonSessionId } },
+    )
+    assertEqual(secondResponse.status, 200, '带快照游标翻第二页 → 200')
+    const second = await readJson(secondResponse)
+    const secondItems = second.items as { id: string }[]
+    assertEqual(second.requestId, requestId, '翻页复用同一个 requestId')
+    assert(secondItems.length > 0, '第二页至少返回一张卡')
+    assert(
+      !secondItems.some((item) => feedItems.some((first) => first.id === item.id)),
+      '第二页与首页没有任何重复卡片',
+      { first: feedItems, second: secondItems },
+    )
+    assertEqual(
+      String(secondItems[0]?.id),
+      encodePublicId(PUBLIC_ID_PREFIX.listing, String(snapshot[2]?.listingId)),
+      '第二页第一张卡 = 快照 position = 2 的商品（服务端按快照切，不看客户端）',
+    )
+
+    // 上报**假**的 position = 7 / source = semantic：落库必须是快照真值。
     const impressionResponse = await postJson(base, RECOMMENDATION_ROUTES.events, {
       events: [
         {
@@ -1013,7 +1133,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
           requestId,
           listingId: feedListingPublicId,
           eventType: 'IMPRESSION',
-          position: 0,
+          position: 7,
+          source: 'semantic',
           anonymousSessionId: anonSessionId,
           occurredAt,
           metadata: { visibleRatio: 1, durationMs: 1_500 },
@@ -1034,7 +1155,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
           requestId,
           listingId: feedListingPublicId,
           eventType: 'DETAIL_VIEW',
-          position: 0,
+          position: 7,
+          source: 'semantic',
           anonymousSessionId: anonSessionId,
           occurredAt,
         },
@@ -1052,6 +1174,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
         eventType: recommendationEvents.eventType,
         requestId: recommendationEvents.requestId,
         position: recommendationEvents.position,
+        source: recommendationEvents.source,
         userId: recommendationEvents.userId,
       })
       .from(recommendationEvents)
@@ -1068,8 +1191,26 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       'DETAIL_VIEW,IMPRESSION',
       '库里两条事件都归因到同一次 request（IMPRESSION + DETAIL_VIEW）',
     )
-    assertEqual(attributedByType.get('IMPRESSION')?.position, 0, 'IMPRESSION 记录了 position = 0')
-    assertEqual(attributedByType.get('DETAIL_VIEW')?.position, 0, 'DETAIL_VIEW 记录了 position = 0')
+    assertEqual(
+      attributedByType.get('IMPRESSION')?.position,
+      truth.position,
+      'IMPRESSION 落库 position = 快照真值（客户端上报的 7 被丢弃）',
+    )
+    assertEqual(
+      attributedByType.get('IMPRESSION')?.source,
+      truth.primarySource,
+      'IMPRESSION 落库 source = 快照真值（客户端上报的 semantic 被丢弃）',
+    )
+    assertEqual(
+      attributedByType.get('DETAIL_VIEW')?.position,
+      truth.position,
+      'DETAIL_VIEW 落库 position = 快照真值（客户端上报的 7 被丢弃）',
+    )
+    assertEqual(
+      attributedByType.get('DETAIL_VIEW')?.source,
+      truth.primarySource,
+      'DETAIL_VIEW 落库 source = 快照真值（客户端上报的 semantic 被丢弃）',
+    )
     assertEqual(
       attributedByType.get('IMPRESSION')?.userId,
       null,
@@ -1317,8 +1458,13 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const semanticWishId = decodePublicId(PUBLIC_ID_PREFIX.wish, semanticWishPublicId)
 
     await waitEmbedJob(db, 'EMBED_WISH', 'wishId', semanticWishId)
-    // 结构分不够：分类 100 + 价格 100 + 关键词 0 ⇒ v1 = 0.35×100 + 0.30×100 = 65，
-    // v2 = 0.32×100 + 0.23×100 + 0.30×0 = 55，都低于阈值 70 ⇒ 不建行。
+    // #322 M4：EMBED_WISH 先于 MATCH_WISH 投递，所以 EMBED 跑完时创建路径那条 MATCH_WISH 可能仍是
+    // PENDING。先等它结算：既避免本节自己投 MATCH_WISH 时撞 pending 部分唯一索引（23505），也让紧接着
+    // 的「不建 Match」断言真的跑在一轮完整的 MATCH 上（否则那轮还没跑，断言是空的）。
+    await waitJobsSettled(db, 'MATCH_WISH', 'wishId', semanticWishId)
+    // 结构分不够：分类 100 + 价格 100 + 关键词 0。v2 = 0.32×100 + 0.23×100 + 0.30×semantic
+    // = 55 + 0.30×semantic，要过阈值 70 需 semantic ≥ 50（#322 M4 锚点 0.42/0.70 ⇒ cos ≥ 0.56）；
+    // 这条样本的文本与该商品语义不可比，所以不建行。v1 同口径 = 0.35×100 + 0.30×100 = 65，同样过不了。
     assertEqual(
       await matchCount(db, listingId, semanticWishId),
       0,
@@ -1530,10 +1676,10 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     //
     // 为什么需要"对照商品"：本链路只有链路商品一条有本模型的视觉向量，单条结果的任何顺序都是同一个
     // 顺序，断言会退化成恒真。这里再用**同一份封面字节**直插两条对照商品（同字节 + 同 mime ⇒ stub
-    // 向量逐位相同 ⇒ 距离 0 ⇒ 三条同分），于是顺序只由排序键决定；三条在价格 / 成色 / 收藏数 /
-    // 发布时间上两两不同，且五档算出来的相对顺序**互不相同**——否则某一档的断言会被另一档顺带满足，
-    // 把两条实现交换也测不出来。走 DB 直插而不是 POST /listings：后者会连带投出 MATCH_LISTING 与
-    // 通知，污染后面"重启恢复"那几步对 job / match 的计数。
+    // 向量逐位相同 ⇒ 视觉相似度三者并列），于是顺序只由排序键与混合分决定；三条在价格 / 成色 /
+    // 收藏数 / 发布时间上两两不同，且五档算出来的相对顺序**互不相同**——否则某一档的断言会被另一档
+    // 顺带满足，把两条实现交换也测不出来。走 DB 直插而不是 POST /listings：后者会连带投出
+    // MATCH_LISTING 与通知，污染后面"重启恢复"那几步对 job / match 的计数。
     step = '拍照识图排序与统计'
     section('拍照识图：五档服务端排序、想要数、成交均价')
 

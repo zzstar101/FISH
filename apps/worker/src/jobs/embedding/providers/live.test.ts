@@ -65,6 +65,9 @@ test('成功路径：POST 到 baseUrl 去尾斜杠 + /embeddings，body 带 mode
   expect(JSON.parse(String(request?.init?.body))).toEqual({
     model: 'live-model-v1',
     input: ['苹果降噪耳机', 'AirPods Pro 2'],
+    // #322 M4：显式要维度。省掉它时兼容端点会按模型默认返回（百炼 v4 = 1024），
+    // 请求 200 但每条向量都在 readEmbeddings 判 dimension_mismatch。
+    dimensions: EMBEDDING_DIMENSIONS,
   })
   // 超时必须显式挂在请求上，否则一个卡住的上游会占住 worker 的整个轮询循环。
   expect(request?.init?.signal).toBeInstanceOf(AbortSignal)
@@ -169,6 +172,23 @@ test('响应不是合法 JSON / 不是对象 / 条数不符都算 invalid_respon
     // 返回形状不对时重发同样会拿到同样的响应，只请求一次。
     expect(captured).toHaveLength(1)
   }
+})
+
+test('每次实际请求（包括重试）都先经过 admission，拒绝后不出网也不重试', async () => {
+  let admissions = 0
+  const exhausted = new Error('test request budget exhausted')
+  const captured = stubFetch(() => new Response('unavailable', { status: 503 }))
+  const provider = createLiveEmbeddingProvider({
+    ...config,
+    beforeRequest: async () => {
+      admissions += 1
+      if (admissions > 1) throw exhausted
+    },
+  })
+
+  await expect(provider.embed(['x'])).rejects.toBe(exhausted)
+  expect(admissions).toBe(2)
+  expect(captured).toHaveLength(1)
 })
 
 test('维度不符与 NaN 各自失败，绝不返回"看起来合法"的向量，且都不重试', async () => {
