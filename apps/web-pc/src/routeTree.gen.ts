@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CommentsRouteImport } from './routes/comments'
 import { Route as FavoritesRouteImport } from './routes/favorites'
 import { Route as FollowingRouteImport } from './routes/following'
 import { Route as HistoryRouteImport } from './routes/history'
@@ -34,6 +35,11 @@ import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CommentsRoute = CommentsRouteImport.update({
+  id: '/comments',
+  path: '/comments',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FavoritesRoute = FavoritesRouteImport.update({
@@ -139,6 +145,7 @@ const UsersUserIdRoute = UsersUserIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
   '/history': typeof HistoryRoute
@@ -162,6 +169,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
   '/history': typeof HistoryRoute
@@ -184,6 +192,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
   '/history': typeof HistoryRoute
@@ -209,6 +218,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/comments'
     | '/favorites'
     | '/following'
     | '/history'
@@ -232,6 +242,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/comments'
     | '/favorites'
     | '/following'
     | '/history'
@@ -253,6 +264,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/comments'
     | '/favorites'
     | '/following'
     | '/history'
@@ -277,6 +289,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CommentsRoute: typeof CommentsRoute
   FavoritesRoute: typeof FavoritesRoute
   FollowingRoute: typeof FollowingRoute
   HistoryRoute: typeof HistoryRoute
@@ -302,6 +315,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/comments': {
+      id: '/comments'
+      path: '/comments'
+      fullPath: '/comments'
+      preLoaderRoute: typeof CommentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/favorites': {
@@ -476,6 +496,7 @@ const OrdersRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CommentsRoute: CommentsRoute,
   FavoritesRoute: FavoritesRoute,
   FollowingRoute: FollowingRoute,
   HistoryRoute: HistoryRoute,
