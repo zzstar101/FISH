@@ -371,8 +371,19 @@ export default function Sell() {
    * 创建时抓到的 `?id=`（Tab 页正常进不来，但一旦来了就永远是那个旧值）。
    * 若先看 `routeId`，从「我的发布」点「再次上架」会掉进**另一件商品的编辑态**，
    * 而且那份 prefill 草稿被静默丢掉。
+   *
+   * **审核尾页只保留一次**：`pendingReviewId` 的整页「已提交，正在审核」只在提交后、
+   * 用户没离开过本页的这段停留里可见；本页是隐藏 Tab 页且实例常驻，不清的话微信
+   * 热启动恢复栈顶后「从哪里打开都在尾页」。所以 onShow 先把它重置回初始表单
+   * —— 放在 handoff 分支**之前**，同一次 show 里来了 prefill / edit 交接时，
+   * 交接在重置后的表单上接管，「再次上架 / 编辑」的预填不受影响。
+   * 已知例外：实例带 `?id=` 创建的演示兼容路径（生产导航不带参进出物页，见上），
+   * routeId 是创建时的旧值，reset 后下一次 show 仍会按它重进编辑态；要关掉这个
+   * 口子得让 routeId 消费一次即弃，超出本次范围。
    */
   const syncEditTarget = () => {
+    if (pendingReviewId !== null) resetForm()
+
     const handoff = takeSellHandoff()
 
     if (handoff?.kind === 'prefill') {
