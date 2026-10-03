@@ -35,7 +35,7 @@
 | --- | --- |
 | 补 seed 的「待面交 + 已签发凭证」样例数据 | #176 定的是「取码即创建、一单一码」，seed 预写凭证等于造第二份真相；且 `packages/db/src/seed.test.ts:74-88` 的计数断言会连带扩散 |
 | 重构 `core-smoke.ts` 的 34KB 基建 | AGENTS §4 最小改动；本次只是复用既有 scratch 库 / 真 API / HTTP 助手 |
-| 清理 `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx:218` 的「过期」字样 | 那处指 epoch 代次（语义正确），不是 `MEETUP_TOKEN_EXPIRED` 残留 |
+| 清理 `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx` 里的「过期」字样 | 该文件里两处「过期」（「渲染期同步自增代次」注释、持锁代次的「在途」注释）都指 epoch 代次（语义正确），不是 `MEETUP_TOKEN_EXPIRED` 残留 |
 | 客户端串号类问题的 smoke 覆盖 | 属页面生命周期，`core:smoke` 测不到；由 #170 与真机清单承担 |
 | 关闭 #147 | Done 列表里还有「交易状态机与订单数据一致」这类长期项 |
 
@@ -45,9 +45,9 @@
 
 | 项 | 事实 | 位置 |
 | --- | --- | --- |
-| P2-1 竞态 | `verify` 内层 `catch` 无差别 `setConfirmPending(true)`，把 409 `TRANSACTION_NOT_IN_PENDING` 也当成「confirm 网络失败」，页面会停在「还差最后一步确认」；`retryConfirm` 对同一错误有专门分支（重拉终态 + `setConfirmPending(false)`） | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx:320,327,331` 与 `:377,388` |
-| P2-2 双击 | 防重复提交只判 React state `submitting`，同一 tick 两次点击都能通过（`is-off` 只是样式） | 同上 `:305`、`:840-844` |
-| P3 | `:118` 注释残留「码错误 / 过期 / 已被使用 / 次数过多」，运行时已无 `MEETUP_TOKEN_EXPIRED` | 同上 `:118` |
+| P2-1 竞态 | `verify` 内层 `catch` 无差别 `setConfirmPending(true)`，把 409 `TRANSACTION_NOT_IN_PENDING` 也当成「confirm 网络失败」，页面会停在「还差最后一步确认」；`retryConfirm` 对同一错误有专门分支（重拉终态 + `setConfirmPending(false)`） | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx` 的 `verify` 内层 `catch`（`setConfirmPending(true)`）与 `retryConfirm` 的错误分支 |
+| P2-2 双击 | 防重复提交只判 React state `submitting`，同一 tick 两次点击都能通过（`is-off` 只是样式） | 同上：`submitting` state 与其消费点（`canSubmit`、主按钮 `is-off` 样式） |
+| P3 | 手动输入错误提示的注释残留「码错误 / 已被使用 / 次数过多」，运行时已无 `MEETUP_TOKEN_EXPIRED` | 同上：「手动输入的错误提示」state 注释 |
 | seed 不变量（已有） | scratch 库跑 seed，断言 3 会话 / 2 交易 + 每笔交易按三元组 join 得到会话 | `packages/db/src/seed.test.ts:74,76,85-93` |
 | smoke 缺口 | `core-smoke` 的 11 个步骤（干净环境 / 启动 / Demo 样例 / 上传发布 / Wish 匹配 / 幂等 / 编辑重算 / 上下架 / 重启恢复 ×2 / 坏 payload）**没有任何交易与面交场景** —— **已由 §4 消除**（PR #181 追加「交易与面交」步骤，代码内序号 `// 11.`） | `apps/api/scripts/core-smoke.ts:411-792` |
 | 面交语义 | 取码幂等且每次复位 `failed_attempts` / `locked_until`（卖家重取是现场解锁的唯一路径）；连错 5 次锁 10 分钟；终态 409 | `apps/api/src/modules/transactions/store.ts:132-133`、`service.ts:51-53,219-245` |

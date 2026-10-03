@@ -142,7 +142,12 @@ export default defineConfig<'webpack5'>(async (merge) => {
      *   本身就是一份值得尊重的上游证据。
      *
      * 1.0% 的体积换一份说不清的风险不划算，等有真机全交互验证的渠道再谈。
-     * 复核方式：把下面 12 项开关加回 `terser.config.compress` 重跑构建，差值是 16 KB 量级。
+     * 复核方式：把下面这 12 项加回 `terser.config.compress` 重跑构建，差值是 16 KB 量级
+     * （Taro 默认关掉的 17 项里，`arrows` / `switches` / `toplevel` / `typeofs` /
+     * `directives` 未试）：
+     * `collapse_vars`、`comparisons`、`computed_props`、`hoist_funs`、`hoist_props`、
+     * `hoist_vars`、`inline`、`loops`、`negate_iife`、`properties`、`reduce_funcs`、
+     * `reduce_vars`。
      *
      * ## csso：只开两个无损的结构化优化
      *
