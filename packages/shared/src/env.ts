@@ -383,6 +383,54 @@ export function loadRecommendationEmbeddingModel(
 }
 
 /**
+ * 埋点 / Feed 限流阈值的**可选覆盖**（#323 R6 §8.1）。
+ *
+ * 默认值不在这里：它属于契约（`RECOMMENDATION_EVENT_RATE_LIMIT` / `RECOMMENDATION_FEED_RATE_LIMIT`，
+ * `packages/contracts/src/recommendation/observability.ts`），因为 worker、CLI 与文档都要读同一份数字。
+ * 而 `packages/shared` **不能** import `@fish/contracts`（方向是 shared ← contracts，反过来成环），
+ * 所以这里只回答"有没有覆盖值"：未配置 → `null`，由 API 侧 `?? 默认值` 合并。
+ *
+ * 非法值（0、负数、非数字）**直接抛**而不是回退默认：配错限流阈值属于"以为限住了其实没限"，
+ * 静默回退会让这种误配一直活着。错误信息只报变量名，不回显值。
+ */
+export type RecommendationRateLimitEnv = {
+  eventCapacity: number | null
+  eventRefillPerSecond: number | null
+  feedCapacity: number | null
+  feedRefillPerSecond: number | null
+}
+
+function readPositiveNumber(
+  source: Record<string, string | undefined>,
+  name: string,
+): number | null {
+  const raw = source[name]?.trim()
+  if (!raw) return null
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`环境变量校验失败：${name} 必须是正数（当前值不合法）`)
+  }
+  return value
+}
+
+export function loadRecommendationRateLimitEnv(
+  source: Record<string, string | undefined> = process.env,
+): RecommendationRateLimitEnv {
+  return {
+    eventCapacity: readPositiveNumber(source, 'RECOMMENDATION_EVENT_RATE_LIMIT_CAPACITY'),
+    eventRefillPerSecond: readPositiveNumber(
+      source,
+      'RECOMMENDATION_EVENT_RATE_LIMIT_REFILL_PER_SECOND',
+    ),
+    feedCapacity: readPositiveNumber(source, 'RECOMMENDATION_FEED_RATE_LIMIT_CAPACITY'),
+    feedRefillPerSecond: readPositiveNumber(
+      source,
+      'RECOMMENDATION_FEED_RATE_LIMIT_REFILL_PER_SECOND',
+    ),
+  }
+}
+
+/**
  * 视觉向量配置（#324 M1/M8）——**API 与 worker 都要**。
  *
  * 与上面 `EMBEDDING_*`「worker 专属」的取舍刻意不同，理由是调用时机：

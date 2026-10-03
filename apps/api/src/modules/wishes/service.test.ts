@@ -29,8 +29,11 @@ class MemoryWishStore implements WishStore {
     ) {
       return { kind: 'active-limit' as const }
     }
-    this.rows.push({ ...row })
-    return { kind: 'created' as const, row: { ...row } }
+    // 真实 store 的 `updated_at` 由数据库 `now()` 生成（`INSERT ... now()`，见 `store.ts` 的
+    // `NewWishRow` 说明），内存替身在这里补上"数据库生成"的那一半。
+    const created: WishRow = { ...row, updated_at: new Date() }
+    this.rows.push(created)
+    return { kind: 'created' as const, row: { ...created } }
   }
 
   async findById(id: string) {
@@ -48,7 +51,7 @@ class MemoryWishStore implements WishStore {
     }
   }
 
-  async update(id: string, fields: EditableWishFields, updatedAt: Date) {
+  async update(id: string, fields: EditableWishFields) {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
     Object.assign(row, {
@@ -58,16 +61,18 @@ class MemoryWishStore implements WishStore {
       ...(fields.budgetMaxCents === undefined ? {} : { budget_max_cents: fields.budgetMaxCents }),
       ...(fields.description === undefined ? {} : { description: fields.description }),
       ...(fields.acceptSimilar === undefined ? {} : { accept_similar: fields.acceptSimilar }),
-      updated_at: updatedAt,
+      // 真实 store 的 `updated_at` 由数据库 `now()` 写（`$onUpdate`，见 packages/db/src/schema/common.ts），
+      // 内存替身只要求"推进"这个语义。
+      updated_at: new Date(),
     })
     return { ...row }
   }
 
-  async updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED', updatedAt: Date) {
+  async updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED') {
     const row = this.rows.find((item) => item.id === id && item.status === 'ACTIVE')
     if (!row) return null
     row.status = status
-    row.updated_at = updatedAt
+    row.updated_at = new Date()
     return { ...row }
   }
 
@@ -174,6 +179,57 @@ describe('wish service', () => {
     await expect(service.closeWish(userA, internalWish(fulfilled.id))).rejects.toMatchObject(
       new WishServiceError(409, '愿望已经处于终态'),
     )
+  })
+
+  test('关闭/完成愿望时补投向量刷新：状态流转推进实体版本后，向量行不得被判过期', async () => {
+    const { service, queued } = setup()
+    const closed = await service.createWish(userA, createInput)
+    const fulfilled = await service.createWish(userA, { ...createInput, keyword: '耳机' })
+    queued.length = 0
+
+    await service.closeWish(userA, internalWish(closed.id))
+    // 重复关闭不写状态，但仍须补投：上一次状态写入的投递可能失败（状态已提交、客户端重试）。
+    await service.closeWish(userA, internalWish(closed.id))
+    await service.fulfillWish(userA, internalWish(fulfilled.id))
+
+    expect(queued).toEqual([
+      internalWish(closed.id),
+      internalWish(closed.id),
+      internalWish(fulfilled.id),
+    ])
+    // 没有状态流转（下面这条已处于终态且与目标不同）不得凭空补投。
+    await expect(service.closeWish(userA, internalWish(fulfilled.id))).rejects.toMatchObject(
+      new WishServiceError(409, '愿望已经处于终态'),
+    )
+    expect(queued).toHaveLength(3)
+  })
+
+  test('并发竞态输家返回目标态时同样补投：这是一次成功返回，客户端不会重试', async () => {
+    // 模拟竞态：另一个连接（或同一次提交的重试）先把状态写成目标态，本次条件更新因此落空。
+    class RacingWishStore extends MemoryWishStore {
+      override async updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED') {
+        const row = this.rows.find((item) => item.id === id)
+        if (!row) return null
+        row.status = status
+        row.updated_at = new Date()
+        return null
+      }
+    }
+    const store = new RacingWishStore()
+    const queued: string[] = []
+    const service = createWishService({
+      store,
+      matchQueue: {
+        enqueue: async (id) => {
+          queued.push(id)
+        },
+      },
+    })
+    const wish = await service.createWish(userA, createInput)
+    queued.length = 0
+
+    expect((await service.closeWish(userA, internalWish(wish.id))).status).toBe('CLOSED')
+    expect(queued).toEqual([internalWish(wish.id)])
   })
 
   test('validates a partial update against the existing budget range', async () => {

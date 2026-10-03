@@ -272,6 +272,18 @@ export type RecommendationEventIngestResponse = z.infer<
 export const RECOMMENDATION_STRATEGY_VERSION_NONE = 'rec-v1-none'
 
 /**
+ * 埋点/Feed 被限流时的错误码（#323 R6，`errorBody` 的 `code` 是普通字符串，不为此新增枚举）。
+ *
+ * **不复用 auth 的 `RATE_LIMITED`**：`apps/api/src/modules/ai/service.ts:125` 已写下这条纪律——
+ * "429 不复用 `RATE_LIMITED`：语义不同的拒绝共用一个码，客户端就给不出正确文案与倒计时"。
+ * 既有先例是 `VISUAL_SEARCH_RATE_LIMITED` / `LISTING_LOOKUP_RATE_LIMITED`。
+ *
+ * 429 的响应体里带 `retryAfterSeconds`（`errorBody` 的第四个参数）与 `Retry-After` 头，
+ * 所以客户端能给出"请 N 秒后再试"，而不是把限流与"登录失效"混成一句文案。
+ */
+export const RECOMMENDATION_RATE_LIMITED = 'RECOMMENDATION_RATE_LIMITED'
+
+/**
  * 推荐 Feed 的查询参数。**不接受 `sort` / `q` / `category`**：推荐入口不是查询接口，
  * 参数一旦长成 `GET /listings` 的复制品，两者迟早被合并（Issue #323 §M7 明确不合并）。
  */

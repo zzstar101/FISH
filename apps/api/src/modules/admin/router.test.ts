@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { RecommendationMetricsSchema } from '@fish/contracts/admin/recommendation-metrics'
 import { ADMIN_ROUTES as PUBLIC_ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import {
   AdminAuditLogPageSchema,
@@ -225,6 +226,7 @@ describe('Admin HTTP 权限边界（设计 §3.2）', () => {
       ADMIN_ROUTES.me,
       ADMIN_ROUTES.users,
       ADMIN_ROUTES.overview,
+      ADMIN_ROUTES.recommendationMetrics,
       ADMIN_ROUTES.auditLogs,
       ADMIN_ROUTES.moderationQueue,
       ADMIN_ROUTES.transactions,
@@ -508,6 +510,69 @@ describe('Admin 查询端到端', () => {
     const body = AdminOverviewSchema.parse(await res.json())
     expect(body.totalUsers).toBe(2)
     expect(body.activeListings).toBe(1)
+  })
+
+  // #323 R6：推荐指标端点（只读聚合）。这个 scratch 库里没有推荐请求/事件/快照，
+  // 所以它同时是"空库"用例：计数 0、比率全 null、延迟三项齐全但 count=0。
+  test('GET /admin/recommendations/metrics 空库返回 0 计数与 null 比率', async () => {
+    const res = await app.request(ADMIN_ROUTES.recommendationMetrics, {
+      headers: { cookie: adminCookie },
+    })
+    expect(res.status).toBe(200)
+    const body = RecommendationMetricsSchema.parse(await res.json())
+    expect(body.window).toBe('24h')
+    expect(body.funnel).toMatchObject({
+      feedRequests: 0,
+      degradedFeedRequests: 0,
+      impressions: 0,
+      impressionToDetailRate: null,
+      transactionToPurchaseRate: null,
+    })
+    expect(body.guardrails).toMatchObject({
+      emptyRankedFeedRate: null,
+      repeatedExposureRate: null,
+      topSellerExposureShare: null,
+      eventWriteFailureRate: null,
+      rateLimitedRequests: 0,
+      eventRejectionReasons: {
+        attributionNotFound: 0,
+        identityMismatch: 0,
+        listingNotFound: 0,
+        occurredAtOutOfRange: 0,
+        serverConfirmedEventType: 0,
+      },
+    })
+    expect(body.latency.map((row) => row.metric).sort()).toEqual(['events', 'feed', 'pgvector'])
+    for (const row of body.latency) {
+      expect(row.count).toBe(0)
+      expect(row.p50Ms).toBeNull()
+      expect(row.p95Ms).toBeNull()
+      expect(row.p99Ms).toBeNull()
+      expect(row.maxMs).toBeNull()
+    }
+    expect(new Date(body.generatedAt).getTime()).toBeLessThanOrEqual(Date.now())
+    expect(new Date(body.processStartedAt).getTime()).toBeLessThanOrEqual(Date.now())
+  })
+
+  test('GET /admin/recommendations/metrics 接受三个窗口档位', async () => {
+    for (const window of ['24h', '7d', '30d'] as const) {
+      const res = await app.request(`${ADMIN_ROUTES.recommendationMetrics}?window=${window}`, {
+        headers: { cookie: adminCookie },
+      })
+      expect(res.status).toBe(200)
+      expect(RecommendationMetricsSchema.parse(await res.json()).window).toBe(window)
+    }
+  })
+
+  test('GET /admin/recommendations/metrics 非法窗口 → 422 VALIDATION_FAILED', async () => {
+    for (const query of ['?window=1d', '?window=', '?window=7d&extra=1']) {
+      const res = await app.request(`${ADMIN_ROUTES.recommendationMetrics}${query}`, {
+        headers: { cookie: adminCookie },
+      })
+      expect(res.status).toBe(422)
+      const body = (await res.json()) as { error: { code: string } }
+      expect(body.error.code).toBe('VALIDATION_FAILED')
+    }
   })
 
   test('GET /admin/audit-logs lists ADMIN_PROMOTED entries with actor and snapshots', async () => {

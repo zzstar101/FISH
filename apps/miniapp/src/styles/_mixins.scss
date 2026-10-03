@@ -315,11 +315,14 @@
   overflow: hidden;
 }
 
-/* 悬浮圆形玻璃钮（返回/刷新/扫码等，设计稿 36pt） */
-@mixin float-btn($size: 72px) {
-  width: $size;
-  height: $size;
+/*
+ * 悬浮圆形玻璃钮（返回/刷新/扫码等）。
+ * 尺寸不在这里写死：返回钮与右侧微信原生胶囊等高（2026-10-02 拍板），胶囊高每台
+ * 机型不同，只能由调用方按 `readNavMetrics` 行内下发；这里只管材质。
+ */
+@mixin float-btn {
   flex: 0 0 auto;
+  box-sizing: border-box;
   border-radius: 50%;
   display: flex;
   align-items: center;

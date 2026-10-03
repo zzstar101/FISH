@@ -45,6 +45,7 @@
  * - MinIO 不是 scratch 的：脚本成功时删掉本轮上传的对象，否则 `--runs=5` 会在桶里累积垃圾
  *   （失败时默认保留，见上面的清理策略）。
  */
+import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
 import { CHAT_ROUTES } from '@fish/contracts/chat/routes'
 import {
   buildListingEmbeddingText,
@@ -67,15 +68,23 @@ import {
   RECOMMENDATION_HEADERS,
   RECOMMENDATION_ROUTES,
 } from '@fish/contracts/recommendation/routes'
+import { RECOMMENDATION_RATE_LIMITED } from '@fish/contracts/recommendation/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
+import {
+  VISUAL_SEARCH_SORTS,
+  VISUAL_SOLD_AVG_MIN_SAMPLES,
+  VisualInterpretationSchema,
+  type VisualSearchSort,
+} from '@fish/contracts/visual/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
+import { favorites } from '@fish/db/schema/favorites'
 import { jobs } from '@fish/db/schema/jobs'
-import { listings } from '@fish/db/schema/listings'
+import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
@@ -84,6 +93,7 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import { wishes } from '@fish/db/schema/wishes'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/enqueue'
@@ -97,6 +107,8 @@ import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-li
 const PASSWORD = 'fish123456'
 /** seed 里 demo 买家的学号（README「演示账号」）。 */
 const DEMO_BUYER_STUDENT_NO = '202101000002'
+/** seed 里第三个演示账号：想要数要两条不同用户的行（`unique(user_id, listing_id)` 不允许同一人重复收藏）。 */
+const DEMO_BUYER_C_STUDENT_NO = '202101000003'
 const REPO_ROOT = Bun.fileURLToPath(new URL('../../../', import.meta.url))
 
 /** 1×1 JPEG（合法 SOI/EOI）。用它走真实的 presign → PUT → 匿名 GET 字节回环。 */
@@ -339,6 +351,42 @@ async function runRootScript(script: string, overrides: Record<string, string>):
   if (code !== 0) throw new Error(`✗ [${step}] bun run ${script} 退出码 ${code}`)
 }
 
+/**
+ * 跑根脚本并解析它的 `--json` 输出（#323 R6 的 `recommendation:cleanup`）。
+ *
+ * 与 `runRootScript` 分开是因为这里必须 `pipe` 而不能 `inherit`：验收断言要读脚本**自己的**
+ * 输出（`mode` / 三类行数 / `batches`），不是只看退出码。参数走 `bun run <script> -- <args>`，
+ * 少一层 `--` 时 bun 会把 `--dry-run` 当成自己的旗标吞掉。
+ */
+async function runRootScriptJson(
+  script: string,
+  args: string[],
+  overrides: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const child = Bun.spawn(['bun', 'run', script, '--', ...args], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, ...overrides },
+    stdout: 'pipe',
+    stderr: 'pipe',
+    stdin: 'ignore',
+  })
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  if (code !== 0) {
+    throw new Error(
+      `✗ [${step}] bun run ${script} ${args.join(' ')} 退出码 ${code}｜stderr：${stderr.trim()}`,
+    )
+  }
+  try {
+    return JSON.parse(stdout) as Record<string, unknown>
+  } catch {
+    throw new Error(`✗ [${step}] bun run ${script} 的 stdout 不是 JSON：${stdout.trim()}`)
+  }
+}
+
 async function waitFor(
   label: string,
   predicate: () => Promise<boolean>,
@@ -431,6 +479,32 @@ async function waitEmbedJob(db: Db, type: string, key: string, value: string): P
     (await jobRows(db, type, key, value)).some((row) => row.status === 'DONE'),
   )
   ok(`${type} 已有 DONE`)
+}
+
+/**
+ * 等某实体的某类 job **全部结算**（全部 DONE，且至少有一条）（#322 M4）。
+ * 出现 FAILED 直接判 smoke 失败——"有 job 在跑"与"这一轮跑成功过"是两件事，不能混。
+ *
+ * 为什么需要：`EMBED_*` 必须先于 `MATCH_*` 投递（M4 的顺序不变量），所以创建愿望会在同一事务里
+ * 排下 `EMBED_WISH` → `MATCH_WISH`。只等 EMBED 跑完时，那条 `MATCH_WISH` 可能仍是 PENDING，
+ * 占着 `jobs_match_wish_wish_id_pending_uidx`；此时直接投本节自己的 `MATCH_WISH` 会撞部分唯一索引
+ * （23505）、并且"不建 Match"的断言也是空的（那一轮 MATCH 还没跑）。先等它结算，两件事一起解决。
+ */
+async function waitJobsSettled(db: Db, type: string, key: string, value: string): Promise<void> {
+  await waitFor(`${type}（${value}）全部结算`, async () => {
+    const rows = await jobRows(db, type, key, value)
+    if (rows.length === 0) return false
+    // FAILED 不算"结算成功"：若创建路径那条 MATCH_WISH 失败，紧随的"不建 Match"断言会因为
+    // 根本没有成功的一轮 MATCH 而退化成空断言。这里直接把 smoke 判失败（`waitFor` 不吞异常）。
+    const failed = rows.find((row) => row.status === 'FAILED')
+    if (failed) {
+      throw new Error(
+        `✗ [${step}] ${type}（${value}）有 FAILED job（id=${failed.id}，attempts=${failed.attempts}）：${failed.lastError ?? '无 last_error'}`,
+      )
+    }
+    return rows.every((row) => row.status === 'DONE')
+  })
+  ok(`${type} 全部结算`)
 }
 
 /**
@@ -716,30 +790,51 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     // 2. Demo 高分样例必须由引擎真实产出（seed 不再预写结果）
     step = 'Demo 样例'
-    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 降级口径）')
+    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 语义口径）')
     startWorker()
     ok('Worker 已启动')
     await waitJob(db, seededJob.id, 'DONE')
+    /*
+     * seed 按 #43 契约**只投一条 MATCH_LISTING**、不投 EMBED_*，所以第一轮匹配时商品还没有向量
+     * ⇒ 走 M2 的降级契约（v1 口径、补投 EMBED_LISTING）。
+     *
+     * #322 M4 复审修复：`EMBED_*` 在结算前补投一条同实体的 `MATCH_*`（入队序 ≠ 执行序），
+     * 所以这里能等到三条 job 全部结算，并断言那条 MATCH_LISTING 真的被重算过一遍
+     * （worker 日志里是 `recall: "vector-topk"`）。
+     *
+     * 但 demo 这一对**终态仍是 v1**：v2 打分要求**两侧都有新鲜向量**，而 seed 只投 MATCH_LISTING
+     * ⇒ 引擎只补投**目标实体**（商品）的 EMBED_LISTING，愿望那一侧始终没有向量（没有 MATCH_WISH
+     * job、seed 也不投 EMBED_WISH）。重算时候选里只剩"并回的已有行"，`similarity === undefined`
+     * ⇒ 走 v1 分支（`semantic_score = NULL`、`ranking_version = 1`、权重 0.35/0.35/0.30）= 100 分。
+     * v2 的端到端升级路径由后面的"语义召回 / 降级恢复"段覆盖（那里商品与愿望都经 API 创建、两侧都有向量）。
+     * v1 降级口径本身由 `apps/worker/src/jobs/matching/engine.test.ts` 覆盖；smoke 只钉端到端结果。
+     *
+     * 先等 EMBED_LISTING、再等 MATCH_LISTING：补投的 MATCH 是在 EMBED 结算**之前**插入的，
+     * 所以"EMBED 全部 DONE"成立时那条 MATCH 必然已经存在，不存在漏等的窗口。
+     */
+    await waitJobsSettled(db, 'EMBED_LISTING', 'listingId', seedListing.id)
+    await waitJobsSettled(db, 'MATCH_LISTING', 'listingId', seedListing.id)
     const seededMatch = await matchRow(db, seedListing.id, seedWish.id)
     assert(seededMatch !== null, 'Worker 用真实打分生成了 demo 的 match 行')
     if (!seededMatch) throw new Error('demo match 缺失')
-    assertEqual(seededMatch.score, 100, 'demo 样例总分 = 100')
     assertEqual(seededMatch.categoryScore, 100, 'demo 样例分类分 = 100')
     assertEqual(seededMatch.keywordScore, 100, 'demo 样例关键词分 = 100')
     assertEqual(seededMatch.priceScore, 100, 'demo 样例价格分 = 100')
-    // #322 M2 的降级契约在真实链路上的证据：seed 按 #43 契约**只投一条 MATCH_LISTING**、不投
-    // EMBED_*，所以愿望这一侧没有向量 ⇒ 本轮按 v1 口径打分（semantic_score 落 NULL、
-    // ranking_version = 1、分数是 0.35/0.35/0.30 的 #8 算法），同时补投目标实体的 EMBED_LISTING。
-    // v2（hybrid + semantic_score）由本文件后面的「语义链」一节在同一套 API/Worker/DB 上验证。
     assertEqual(
       seededMatch.rankingVersion,
       RANKING_VERSION_V1,
-      'demo 行是 v1 退化口径（愿望没有向量）',
+      'demo 行终态是 v1 降级口径（愿望侧没有向量）',
     )
-    assertEqual(seededMatch.semanticScore, null, 'v1 行的 semantic_score 落 NULL，不伪造语义分')
+    assert(seededMatch.semanticScore === null, 'v1 行的 semantic_score 是 NULL')
+    assertEqual(seededMatch.score, 100, 'demo 样例总分 = 100（v1 权重 0.35/0.35/0.30）')
+    const demoMatchJobs = await jobRows(db, 'MATCH_LISTING', 'listingId', seedListing.id)
+    assert(
+      demoMatchJobs.length >= 2,
+      `降级后 EMBED 结算补投了 MATCH_LISTING（否则目标向量永远补不上）：实际 ${demoMatchJobs.length} 条`,
+    )
     assert(
       (await jobRows(db, 'EMBED_LISTING', 'listingId', seedListing.id)).length > 0,
-      '降级时补投了 EMBED_LISTING（否则这一对永远停在 v1）',
+      '降级时补投了 EMBED_LISTING',
     )
     assertEqual(
       await notificationCount(db, seedListing.id, seedWish.id),
@@ -756,7 +851,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       ),
     )
     assertEqual(total(demoWishSide, 'demo /matches?wishId='), 1, 'demo 买家能读到“愿望成真”')
-    assertEqual(topScore(demoWishSide, 'demo /matches?wishId='), 100, 'demo 读接口分数 = 100')
+    assertEqual(
+      topScore(demoWishSide, 'demo /matches?wishId='),
+      seededMatch.score,
+      'demo 读接口分数 = 引擎写入的分数（这一对终态是 v1，版本见上方断言）',
+    )
 
     // 发布与建愿望的 job 投递断言要在**停机态**下做：worker 在跑时，job 可能在脚本读库前就被
     // 领取成 RUNNING，硬断言 PENDING 会变成竞态（“连跑 5 次”会偶发失败）。
@@ -1161,6 +1260,158 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '匿名流量的 DETAIL_VIEW 不挂 user_id',
     )
 
+    // R6 读面验收（#323 R6）：admin 只读聚合端点把上面刚写下的这一轮真实流量读回来——
+    // 1 次 Feed 请求 + 1 条快照 + 2 条归因事件。这里刻意用真库真进程，因为「请求侧聚合 /
+    // 事件侧 GROUP BY / 曝光分布 CTE」三段 SQL 只有真库能证；纯函数测试证不了它们。
+    step = 'R6 指标端点（admin 聚合读面）'
+    section('R6 指标端点：GET /admin/recommendations/metrics')
+    const adminSerial = 90
+    const adminStudentNo = `2021000000${String(adminSerial).padStart(2, '0')}`
+    await register(base, adminSerial)
+    // 经真实注册口建号后手动提权（同 admin/router.test.ts 的做法）：requireAdmin 只查角色。
+    await db.update(users).set({ role: 'ADMIN' }).where(eq(users.studentNo, adminStudentNo))
+    const adminCookie = await login(base, adminStudentNo)
+
+    const metricsPath = ADMIN_ROUTES.recommendationMetrics
+    assertEqual(
+      (await get(base, metricsPath)).status,
+      401,
+      '匿名 GET /admin/recommendations/metrics → 401',
+    )
+    assertEqual(
+      (await get(base, metricsPath, buyer)).status,
+      403,
+      '普通用户 GET /admin/recommendations/metrics → 403',
+    )
+    assertEqual(
+      (await get(base, `${metricsPath}?window=1d`, adminCookie)).status,
+      422,
+      '非法 window=1d → 422（strictObject 只认 24h/7d/30d）',
+    )
+
+    const metricsResponse = await get(base, `${metricsPath}?window=24h`, adminCookie)
+    assertEqual(metricsResponse.status, 200, '管理员 GET /admin/recommendations/metrics → 200')
+    const metrics = await readJson(metricsResponse)
+    assertEqual(metrics.window, '24h', 'window 原样回显')
+    const metricsFunnel = metrics.funnel as Record<string, unknown>
+    const metricsGuardrails = metrics.guardrails as Record<string, unknown>
+    assert(
+      Number(metricsFunnel.feedRequests) >= 1,
+      '窗口内至少 1 次 Feed 请求（本次匿名 Feed 被算进请求轴）',
+      metricsFunnel,
+    )
+    assert(
+      Number(metricsFunnel.impressions) >= 1,
+      '窗口内至少 1 条归因曝光（本次 IMPRESSION 被算进事件轴）',
+      metricsFunnel,
+    )
+    assertEqual(
+      metricsGuardrails.rateLimitedRequests,
+      0,
+      '读到指标这一刻本轮流量还没撞到限流阈值，所以是 0（429 在下一小节造出来）',
+    )
+    assert(
+      metricsGuardrails.eventWriteFailureRate === null ||
+        typeof metricsGuardrails.eventWriteFailureRate === 'number',
+      'eventWriteFailureRate 是数字或 null（分母 0 → null，不是 0）',
+      metricsGuardrails.eventWriteFailureRate,
+    )
+    const metricsLatency = metrics.latency as { metric: string; count: number }[]
+    const feedLatency = metricsLatency.find((row) => row.metric === 'feed')
+    assert(
+      (feedLatency?.count ?? 0) >= 1,
+      '延迟里有 feed 采样点（同一进程内环形直方图，重启归零）',
+      metricsLatency,
+    )
+    assert(
+      typeof metrics.generatedAt === 'string' && typeof metrics.processStartedAt === 'string',
+      'generatedAt / processStartedAt 都是时间串',
+      { generatedAt: metrics.generatedAt, processStartedAt: metrics.processStartedAt },
+    )
+
+    // R6 写面验收（#323 R6 PR-2）：埋点限流。真实进程 + 真库才证得动——令牌桶在 router 层，
+    // 而"429 之后还能不能读到计数"要跨两个 HTTP 请求看同一个进程的计数。
+    step = 'R6 埋点限流（429）'
+    section('R6 埋点限流：POST /recommendations/events')
+    // 不带会话头 ⇒ 匿名主体的键只剩"未归因 IP"共享桶（本地无可信代理，任何转发头都被丢弃）。
+    // 这是最容易泄露的路径（新签会话不等于新额度），所以拿它当验收主体。
+    const missingListingPublicId = encodePublicId(PUBLIC_ID_PREFIX.listing, newId())
+    let rateLimitedStatus = 0
+    let rateLimitedRetryAfter: string | null = null
+    let rateLimitedBody: Record<string, unknown> = {}
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const response = await postJson(base, RECOMMENDATION_ROUTES.events, {
+        events: [
+          {
+            eventId: crypto.randomUUID(),
+            // 用不存在的商品：能过契约校验（公开 id 形状合法），但会被服务端按"商品不存在"拒收，
+            // 不往库里灌上百行垃圾。限流发生在业务之前，被拒收与否不影响令牌消耗。
+            listingId: missingListingPublicId,
+            eventType: 'DETAIL_VIEW',
+            occurredAt: new Date().toISOString(),
+          },
+        ],
+      })
+      if (response.status === 429) {
+        rateLimitedStatus = response.status
+        rateLimitedRetryAfter = response.headers.get('retry-after')
+        rateLimitedBody = await readJson(response)
+        break
+      }
+      assertEqual(
+        response.status,
+        202,
+        `限流阈值前的第 ${attempt + 1} 次匿名埋点应 202（容量 120，最多试 200 次）`,
+      )
+    }
+    assert(rateLimitedStatus === 429, '连续匿名埋点最终被 429 挡下', rateLimitedStatus)
+    assert(rateLimitedRetryAfter !== null, '429 带 Retry-After 头', rateLimitedRetryAfter)
+    const rateLimitedError = (rateLimitedBody.error ?? {}) as Record<string, unknown>
+    assertEqual(
+      rateLimitedError.code,
+      RECOMMENDATION_RATE_LIMITED,
+      '429 错误码是契约里的 RECOMMENDATION_RATE_LIMITED',
+    )
+    assert(
+      Number(rateLimitedError.retryAfterSeconds) === Number(rateLimitedRetryAfter),
+      '响应体的 retryAfterSeconds 与 Retry-After 头一致（否则端上倒计时会骗人）',
+      { header: rateLimitedRetryAfter, body: rateLimitedError.retryAfterSeconds },
+    )
+
+    const afterThrottle = await readJson(await get(base, `${metricsPath}?window=24h`, adminCookie))
+    const afterGuardrails = afterThrottle.guardrails as Record<string, unknown>
+    assert(
+      Number(afterGuardrails.rateLimitedRequests) >= 1,
+      '同一进程的 admin 指标记下了刚才的 429（进程内计数，重启归零）',
+      afterGuardrails.rateLimitedRequests,
+    )
+    const rejectionReasons = afterGuardrails.eventRejectionReasons as Record<string, unknown>
+    assertEqual(
+      Object.keys(rejectionReasons).sort().join(','),
+      'attributionNotFound,identityMismatch,listingNotFound,occurredAtOutOfRange,serverConfirmedEventType',
+      '拒收原因 5 个桶齐全（第 5 桶"客户端伪报服务端确证行为"是真实拒绝分支）',
+    )
+
+    // ④ 保留期清理（#323 R6 §7）：走文档化的根脚本、`--dry-run` 形态——它必须"能安全接进 CI"，
+    // 即只数不删；真删路径由 cleanup.test.ts 的集成用例与 worker 定时任务覆盖。
+    step = 'R6 保留期清理（dry-run）'
+    section('R6 保留期清理：bun run recommendation:cleanup --once --dry-run --json')
+    const cleanupDryRun = await runRootScriptJson(
+      'recommendation:cleanup',
+      ['--once', '--dry-run', '--json'],
+      { DATABASE_URL: dbUrl },
+    )
+    assertEqual(cleanupDryRun.mode, 'dry-run', '--dry-run 时 mode 回显 dry-run')
+    for (const key of ['deletedRequestItems', 'deletedRequests', 'deletedEvents', 'batches']) {
+      const value = cleanupDryRun[key]
+      assert(
+        typeof value === 'number' && Number.isInteger(value) && value >= 0,
+        `dry-run 输出的 ${key} 是非负整数`,
+        value,
+      )
+    }
+    assertEqual(cleanupDryRun.batches, 0, 'dry-run 不进删除循环（batches = 0）⇒ 一行都没删')
+
     // 归因链小节到此结束：把 `step` 复位，否则紧接的 MATCH_LISTING 断言失败会被误报成这一步。
     step = stepBeforeRecommendation
 
@@ -1397,8 +1648,13 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const semanticWishId = decodePublicId(PUBLIC_ID_PREFIX.wish, semanticWishPublicId)
 
     await waitEmbedJob(db, 'EMBED_WISH', 'wishId', semanticWishId)
-    // 结构分不够：分类 100 + 价格 100 + 关键词 0 ⇒ v1 = 0.35×100 + 0.30×100 = 65，
-    // v2 = 0.32×100 + 0.23×100 + 0.30×0 = 55，都低于阈值 70 ⇒ 不建行。
+    // #322 M4：EMBED_WISH 先于 MATCH_WISH 投递，所以 EMBED 跑完时创建路径那条 MATCH_WISH 可能仍是
+    // PENDING。先等它结算：既避免本节自己投 MATCH_WISH 时撞 pending 部分唯一索引（23505），也让紧接着
+    // 的「不建 Match」断言真的跑在一轮完整的 MATCH 上（否则那轮还没跑，断言是空的）。
+    await waitJobsSettled(db, 'MATCH_WISH', 'wishId', semanticWishId)
+    // 结构分不够：分类 100 + 价格 100 + 关键词 0。v2 = 0.32×100 + 0.23×100 + 0.30×semantic
+    // = 55 + 0.30×semantic，要过阈值 70 需 semantic ≥ 50（#322 M4 锚点 0.42/0.70 ⇒ cos ≥ 0.56）；
+    // 这条样本的文本与该商品语义不可比，所以不建行。v1 同口径 = 0.35×100 + 0.30×100 = 65，同样过不了。
     assertEqual(
       await matchCount(db, listingId, semanticWishId),
       0,
@@ -1605,7 +1861,193 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '错误码 = VISUAL_SEARCH_IMAGE_INVALID',
     )
 
-    // 7.7 #324 M2 / Q6=B 匿名限流：伪造转发头 + 不带会话头是两轮评审都复现过的绕过路径
+    // 7.7 #324 M6 服务端排序 / 想要数 / 成交均价：结果页那三块数据必须由服务端给出，而不是端上对
+    // 已返回的 30 条本地重排。
+    //
+    // 为什么需要"对照商品"：本链路只有链路商品一条有本模型的视觉向量，单条结果的任何顺序都是同一个
+    // 顺序，断言会退化成恒真。这里再用**同一份封面字节**直插两条对照商品（同字节 + 同 mime ⇒ stub
+    // 向量逐位相同 ⇒ 视觉相似度三者并列），于是顺序只由排序键与混合分决定；三条在价格 / 成色 /
+    // 收藏数 / 发布时间上两两不同，且五档算出来的相对顺序**互不相同**——否则某一档的断言会被另一档
+    // 顺带满足，把两条实现交换也测不出来。走 DB 直插而不是 POST /listings：后者会连带投出
+    // MATCH_LISTING 与通知，污染后面"重启恢复"那几步对 job / match 的计数。
+    step = '拍照识图排序与统计'
+    section('拍照识图：五档服务端排序、想要数、成交均价')
+
+    const twinSellerId = decodePublicId(PUBLIC_ID_PREFIX.user, approvedSellerPublicId)
+    // A：成色最好（NEW）、第二便宜、第二新，0 条收藏；B：最便宜、LIKE_NEW、最旧，2 条收藏；
+    // 链路商品 C：最贵、GOOD、最新，1 条收藏。收藏数 0 / 1 / 2 两两不同，`popular` 才有唯一顺序。
+    const twinFixtures = [
+      {
+        role: 'A',
+        priceCents: 9000,
+        condition: 'NEW',
+        createdAt: new Date('2020-01-01T00:00:00.000Z'),
+      },
+      {
+        role: 'B',
+        priceCents: 5000,
+        condition: 'LIKE_NEW',
+        createdAt: new Date('2019-01-01T00:00:00.000Z'),
+      },
+    ] as const
+
+    const twinPublicIds: string[] = []
+    for (const fixture of twinFixtures) {
+      const twinId = newId()
+      await db.insert(listings).values({
+        id: twinId,
+        listingNo: await reserveTestListingNo(db, twinId),
+        sellerId: twinSellerId,
+        title: CHAIN_LISTING_FIELDS.title,
+        description: CHAIN_LISTING_FIELDS.description,
+        priceCents: fixture.priceCents,
+        category: CHAIN_LISTING_FIELDS.category,
+        condition: fixture.condition,
+        status: 'ACTIVE',
+        moderationStatus: 'APPROVED',
+        createdAt: fixture.createdAt,
+      })
+      // 封面复用链路商品那张已 APPROVED 的图：stub 的向量只由字节 + mime 决定，同字节才同分。
+      await db
+        .insert(listingImages)
+        .values({ listingId: twinId, objectKey: approvedKey, sortOrder: 0 })
+      await enqueueVisualEmbedJob(db, twinId)
+      await waitEmbedJob(db, 'VISUAL_EMBED_LISTING', 'listingId', twinId)
+      twinPublicIds.push(encodePublicId(PUBLIC_ID_PREFIX.listing, twinId))
+    }
+    const [twinAPublicId, twinBPublicId] = twinPublicIds
+    if (!twinAPublicId || !twinBPublicId) throw new Error('对照商品未插入成功')
+    const twinBId = decodePublicId(PUBLIC_ID_PREFIX.listing, twinBPublicId)
+
+    // 想要数：B 收两条（要两个不同用户），C 收一条，A 零条。
+    const buyerC = (
+      await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.studentNo, DEMO_BUYER_C_STUDENT_NO))
+        .limit(1)
+    )[0]
+    if (!buyerC) throw new Error('seed 里没有 demo 买家 C')
+    await db
+      .insert(favorites)
+      .values([
+        { userId: demoBuyer.id, listingId },
+        { userId: demoBuyer.id, listingId: twinBId },
+        { userId: buyerC.id, listingId: twinBId },
+      ])
+      .onConflictDoNothing()
+
+    const searchWithSort = async (sort?: VisualSearchSort) => {
+      const response = await anonymousPostJson(
+        base,
+        '/visual-search',
+        sort === undefined ? { objectKey: queryObjectKey } : { objectKey: queryObjectKey, sort },
+        anonymousSessionId,
+      )
+      assertEqual(response.status, 200, `POST /visual-search（sort=${sort ?? '缺省'}）→ 200`)
+      return await readJson(response)
+    }
+
+    const knownIds = [listingPublicId, twinAPublicId, twinBPublicId]
+    /** 只留三条已知候选的相对顺序：其余候选（如果有）不参与断言，避免依赖无关数据。 */
+    const orderOfKnown = (body: Record<string, unknown>): string[] => {
+      const items = body.items
+      if (!Array.isArray(items)) throw new Error('items 不是数组')
+      return items
+        .map((item) =>
+          typeof item === 'object' && item !== null
+            ? String((item as Record<string, unknown>).id)
+            : '',
+        )
+        .filter((id) => knownIds.includes(id))
+    }
+
+    // 缺省 sort（老客户端与并行开发的 M9 脚本都只发 objectKey）必须等价于 relevance。
+    const defaultBody = await searchWithSort(undefined)
+    const relevanceOrder = [listingPublicId, twinBPublicId, twinAPublicId]
+    const expectedOrders: { sort: VisualSearchSort; order: string[] }[] = [
+      { sort: 'relevance', order: relevanceOrder },
+      { sort: 'popular', order: [twinBPublicId, listingPublicId, twinAPublicId] },
+      { sort: 'newest', order: [listingPublicId, twinAPublicId, twinBPublicId] },
+      { sort: 'price_asc', order: [twinBPublicId, twinAPublicId, listingPublicId] },
+      { sort: 'condition', order: [twinAPublicId, twinBPublicId, listingPublicId] },
+    ]
+    assertEqual(
+      expectedOrders.map((entry) => entry.sort).join(','),
+      VISUAL_SEARCH_SORTS.join(','),
+      '五档排序在断言表里都覆盖到',
+    )
+    assertEqual(
+      orderOfKnown(defaultBody).join(','),
+      relevanceOrder.join(','),
+      '缺省 sort 等价于 relevance',
+    )
+    for (const { sort, order } of expectedOrders) {
+      const body = await searchWithSort(sort)
+      assertEqual(orderOfKnown(body).join(','), order.join(','), `sort=${sort} 的相对顺序`)
+    }
+
+    // 想要数：逐条与 favorites 表独立复算的行数比对；再钉住两条非零值——否则"全部为 0"会让逐条
+    // 比对一起"一致"地通过，漏掉 loadListingSignals 根本没查收藏表的情形。
+    const favoriteRows = await db
+      .select({ listingId: favorites.listingId, count: sql<number>`count(*)::int` })
+      .from(favorites)
+      .groupBy(favorites.listingId)
+    const favoriteByListing = new Map(favoriteRows.map((row) => [row.listingId, row.count]))
+    assertEqual(favoriteByListing.get(listingId), 1, '链路商品的收藏行数 = 1')
+    assertEqual(favoriteByListing.get(twinBId), 2, '对照商品 B 的收藏行数 = 2')
+    const defaultItems = defaultBody.items
+    assert(Array.isArray(defaultItems), '结果列表是数组')
+    if (!Array.isArray(defaultItems)) throw new Error('items 不是数组')
+    for (const item of defaultItems as Record<string, unknown>[]) {
+      const itemId = decodePublicId(PUBLIC_ID_PREFIX.listing, String(item.id))
+      assertEqual(
+        item.favoriteCount,
+        favoriteByListing.get(itemId) ?? 0,
+        `想要数与 favorites 表行数一致（${String(item.id)}）`,
+      )
+    }
+
+    // 成交均价：口径是"解析出的类目下 status = SOLD 的均价"，而本 smoke 的语义解析 transport 是 off
+    // （`createVisualParser` 在 off 下直接返回 null），所以实际走的是"没有类目 ⇒ 不查库、返回空统计"
+    // 这一支；解析出类目时用独立 SQL 复算一遍，让这条腿不依赖 transport 的取值。带类目时的阈值与
+    // 四舍五入另有 service.test.ts（stub store）与 store.test.ts（真库 avg + SOLD 谓词）覆盖。
+    const stats = defaultBody.stats as
+      | { soldAvgPriceCents: number | null; soldSampleCount: number }
+      | undefined
+    assert(stats !== undefined && stats !== null, '响应带 stats 字段')
+    const parsedInterpretation = VisualInterpretationSchema.safeParse(defaultBody.interpretation)
+    const parsedCategory = parsedInterpretation.success
+      ? parsedInterpretation.data.category
+      : undefined
+    if (parsedCategory === undefined) {
+      assertEqual(stats?.soldAvgPriceCents, null, '没有解析出类目 ⇒ 成交均价为 null（不查库）')
+      assertEqual(stats?.soldSampleCount, 0, '没有解析出类目 ⇒ 样本数为 0')
+    } else {
+      const soldRows = await db
+        .select({
+          avg: sql<number | null>`avg(${listings.priceCents})::float8`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(listings)
+        .where(
+          and(
+            eq(listings.category, parsedCategory),
+            eq(listings.status, 'SOLD'),
+            eq(listings.moderationStatus, 'APPROVED'),
+          ),
+        )
+      const soldCount = soldRows[0]?.count ?? 0
+      const soldAvg = soldRows[0]?.avg ?? null
+      assertEqual(stats?.soldSampleCount, soldCount, '样本数与同类目 SOLD 行数一致')
+      assertEqual(
+        stats?.soldAvgPriceCents,
+        soldCount < VISUAL_SOLD_AVG_MIN_SAMPLES || soldAvg === null ? null : Math.round(soldAvg),
+        '成交均价与独立 SQL 复算一致（含最小样本阈值）',
+      )
+    }
+
+    // 7.8 #324 M2 / Q6=B 匿名限流：伪造转发头 + 不带会话头是两轮评审都复现过的绕过路径
     // （修复前 25/25 全 200：每请求新签一个会话 ⇒ 每请求一份新额度，IP 又归因不到 ⇒ 两个桶都是空的）。
     // 这里用真实 HTTP 复现同一手法，钉住「第 21 次一定被拒」。固定一个伪造的 X-Forwarded-For 而**不带**
     // 匿名会话头：无可信代理时它归因不到任何 IP，必须落共享兜底桶（fail-closed）；配了可信代理时它被

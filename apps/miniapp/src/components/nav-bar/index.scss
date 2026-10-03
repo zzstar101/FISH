@@ -2,7 +2,8 @@
 
 /**
  * 漂浮导航栏：只有返回钮/动作钮是实体，其余区域透明可穿透（pointer-events: none）。
- * 设计稿：36pt 圆形，白 82% 玻璃底 + 1px 白描边 + 极轻投影。
+ * 白 82% 玻璃底 + 1px 白描边 + 极轻投影；钮径不再用稿子的 36pt 固定档 ——
+ * 与右侧微信原生胶囊**等高**（2026-10-02 拍板），由组件按运行时胶囊矩形行内下发。
  */
 .navfloat {
   position: absolute;
@@ -13,7 +14,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 32px 0;
+  /* 上内边距（状态栏 + 胶囊上留白）由组件行内下发（设备相关，样式表写不出） */
+  padding: 0 32px;
   pointer-events: none;
   /* 稿 `.mp-nav{transition:background .22s,box-shadow .22s,border-color .22s}` —— 玻璃底
      进出都要过渡，所以写在基类上（只写在 `.navfloat--glass` 里就只有「进入」会动、
@@ -24,9 +26,9 @@
     box-shadow 0.22s;
 }
 
+/* 占位（back=false 时）与返回钮同尺寸：行内按胶囊高下发 */
 .navfloat__spacer {
-  width: 72px;
-  height: 72px;
+  flex: 0 0 auto;
 }
 
 /*
@@ -48,11 +50,10 @@
 /*
  * 居中标题（稿 `.mp-title`）：整行绝对定位 + flex 居中，与返回钮**同一水平中线**。
  *
- * 高度必须写成 rpx（72px → 72rpx，与 `.navfloat__btn` 同高），只有状态栏高度由组件
- * 行内以 **px** 给。两者单位不能混：`statusBarHeight` 来自 `getWindowInfo()`，是设备
- * CSS px；而 72rpx 在 390pt 屏上只有约 39px。早先写成行内 `statusBarHeight + 36px`
- * 是把「72rpx 的一半」当成了「36px」，实测标题中心比返回钮低 16px（返回钮中心 67、
- * 标题 83）。规则见 `src/lib/nav-metrics.ts`：pxtransform 只处理样式表，内联 px 原样下发。
+ * top（状态栏 + 胶囊上留白）与 height（胶囊高）由组件行内以 **px** 给 —— 与返回钮
+ * 同一原点、同一高度，而返回钮已与原生胶囊等高对齐。单位不能混：行内 px 原样下发、
+ * 样式表 px 会被 pxtransform ×2（见 `src/lib/nav-metrics.ts`）。早先混算曾让标题
+ * 整行下移约 16px。
  *
  * 左右留 110px 内边距，避免长标题压到返回钮。
  *
@@ -67,7 +68,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 72px;
   padding: 0 110px;
   flex: 0 1 auto;
   margin-left: 0;
@@ -91,10 +91,10 @@
   pointer-events: auto;
 }
 
+/* 尺寸（胶囊等高）由组件行内下发，这里只留材质 */
 .navfloat__btn {
   pointer-events: auto;
-  width: 72px;
-  height: 72px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -111,20 +111,19 @@
   }
 }
 
+/* 箭头几何（边长 / 描边宽 / 旋转补偿）同样由组件按胶囊高等比行内下发，这里只留颜色 */
 .navfloat__chevron {
-  width: 22px;
-  height: 22px;
-  border-left: 4px solid var(--fg);
-  border-bottom: 4px solid var(--fg);
-  border-radius: 2px;
-  transform: translateX(4px) rotate(45deg);
+  border-left-style: solid;
+  border-left-color: var(--fg);
+  border-bottom-style: solid;
+  border-bottom-color: var(--fg);
 }
 
 /*
  * 变体：吸顶玻璃底（`glass` 显式开启）。
  *
  * `position: fixed` 让返回钮与标题在长页面上**钉住**，内容从玻璃底下滚过。
- * 底与描边铺满整条（`padding-top` 由组件行内给成状态栏高度），所以状态栏那一段
+ * 底与描边铺满整条（`padding-top` 由组件行内给成状态栏 + 胶囊上留白），所以状态栏那一段
  * 也是一块完整玻璃，不会露出页头颜色。
  *
  * 材质与 `components/top-bar` 的 `.topbar--glass` 取同一组值（同色同模糊同发丝线），

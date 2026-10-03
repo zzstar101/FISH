@@ -54,7 +54,7 @@ export const RANKING_VERSION_V1 = 1
 export const RANKING_VERSION = 2
 
 /**
- * 语义分归一化的分段线性锚点（#322 M3）：把 cosine 相似度映射到 0–100。
+ * 语义分归一化的分段线性锚点（#322 M3 冻结，M4 用真实 cosine 重标定）。
  *
  * `semanticScore = clamp((similarity - FLOOR) / (CEILING - FLOOR), 0, 1) × 100`
  *
@@ -62,13 +62,20 @@ export const RANKING_VERSION = 2
  * 相似度集中在 0.6–0.95，直接映射会把所有对压进 60–98 这一段、失去区分度；锚点把"语义上
  * 确实相关"的区间拉开，同时让"无关但 cosine 略正"的对落到 0。
  *
- * 这两个数是**证据项**：M3 用标注 fixture（人工给定 cosine）校准后冻结；改动它们等于改排序，
- * 必须带 fixture 对照与 Top-K 排名证据。`stub` provider 的余弦尺度与真实模型不可比
+ * **M4 重标定（2026-09-29）**：M3 的 0.5 / 0.95 来自人工给定的 cosine 估计值，不是真模型的
+ * 尺度。M4 用 57 条冻结标注对（`apps/worker/src/jobs/matching/calibration-pairs.ts`）跑真实
+ * `text-embedding-v4` 实测：真实 cosine 全部落在 0.274–0.819（无关对最高 0.716、真匹配 p50
+ * 0.639），旧刻度把 0.566–0.713 的真匹配压成 semanticScore 15–47（×0.3 权重只加 4.5–14 分），
+ * 18 条"标签=匹配"的对总分只有 34–69（其中 14 条落在 60–69）。重标定为 0.42 / 0.70 后，
+ * 同一批对的一致度从 39/57 升到 53/57（`bun run embed:eval -- --sections=calibration` 可复算）。
+ *
+ * 这两个数是**证据项**：改动它们等于改排序，必须带 `--sections=calibration`（冻结标签一致度）
+ * 与 `--sections=fit`（网格搜索对照）的证据。`stub` provider 的余弦尺度与真实模型不可比
  * （实测 seed 相关对 0.33–0.49），所以 stub 环境下语义项通常为 0——见
- * `docs/design/issue-322-matching-v2-m3.md` §锚点校准，不要为了 stub 调这两个数。
+ * `docs/design/issue-322-matching-v2-m4.md` §锚点重标定，不要为了 stub 调这两个数。
  */
-export const SEMANTIC_SCORE_FLOOR = 0.5
-export const SEMANTIC_SCORE_CEILING = 0.95
+export const SEMANTIC_SCORE_FLOOR = 0.42
+export const SEMANTIC_SCORE_CEILING = 0.7
 
 // ---------------------------------------------------------------------------
 // 读模型

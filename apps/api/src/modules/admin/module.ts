@@ -1,5 +1,6 @@
 import type { Db } from '@fish/db/client'
 import type { MiddlewareHandler } from 'hono'
+import type { LatencyRecorder } from '../../observability/latency'
 import type { AuthVariables } from '../auth/middleware'
 import type { RestrictionGuard } from '../governance/guard'
 import type { GovernanceService } from '../governance/service'
@@ -11,7 +12,7 @@ import { createListingMediaSettlement } from '../uploads/listing-media-settlemen
 import type { MediaStorage } from '../uploads/storage'
 import { createRequireAdmin } from './middleware'
 import { createAdminRouter } from './router'
-import { createAdminService } from './service'
+import { createAdminService, type RecommendationProcessMetrics } from './service'
 import { createSqlAdminStore } from './store'
 
 /**
@@ -30,6 +31,14 @@ export function createAdminModule(options: {
   requireAuth: MiddlewareHandler<{ Variables: AuthVariables }>
   governance: GovernanceService
   guard: RestrictionGuard
+  /**
+   * 进程内延迟采样（#323 R6）：与推荐 router 共用 `app.ts` 创建的**同一个**实例——
+   * 写侧记样本、读侧出分位数。缺省时 admin service 自建空实例（测试场景）。
+   */
+  latency?: LatencyRecorder
+  /** 推荐埋点的进程内计数（#323 R6，PR-2 注入）：传**读取函数**（`() => recorder.snapshot()`），
+   * 而不是启动时的一份快照——否则端点会永远返回 0。 */
+  recommendationProcessMetrics?: () => RecommendationProcessMetrics
 }) {
   // #286 复审 blocker 1：管理员对 REVIEW 商品的 ALLOW/BLOCK 必须同时结算它引用的审核中图片，
   // 否则人工放行会被卖家下一次「不改图」的文本编辑重新压回人工队列。钩子从 uploads 域注入，
@@ -42,7 +51,12 @@ export function createAdminModule(options: {
   const reportStore = createSqlReportStore(options.db)
   const reportsService = createReportService(reportStore)
   const router = createAdminRouter({
-    service: createAdminService({ store, storage: options.storage }),
+    service: createAdminService({
+      store,
+      storage: options.storage,
+      latency: options.latency,
+      recommendationProcessMetrics: options.recommendationProcessMetrics,
+    }),
     reportsService,
     requireAuth: options.requireAuth,
     requireAdmin,

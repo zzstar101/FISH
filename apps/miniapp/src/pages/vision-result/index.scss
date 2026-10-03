@@ -76,17 +76,14 @@
   left: 32px;
   z-index: 5;
   transform: translateY(-50%);
-  @include float-btn(72px);
+  @include float-btn;
 }
 
 .vres__back-chevron {
-  width: 18px;
-  height: 18px;
-  border-left: 4px solid var(--fg);
-  border-bottom: 4px solid var(--fg);
-  border-radius: 2px;
-  transform: rotate(45deg);
-  margin-left: 6px;
+  border-left-style: solid;
+  border-left-color: var(--fg);
+  border-bottom-style: solid;
+  border-bottom-color: var(--fg);
 }
 
 .vres__title {
@@ -287,6 +284,12 @@
   gap: 20px;
   padding: 20px 32px 0;
   color: var(--muted-2);
+}
+
+/* 行情行（同类成交均价）单独占第二行：三枚 stat 一行放不下（见 index.tsx 的注释），
+   与上一行的间距比默认 20px 小 —— 两行同属一组统计，视觉上不该被拉成两块 */
+.vres__stats--market {
+  padding-top: 8px;
 }
 
 .vres__stat {

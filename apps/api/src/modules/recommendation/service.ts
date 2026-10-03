@@ -2,6 +2,7 @@ import {
   INTEREST_STRATEGY_VERSION,
   interestLookbackStart,
 } from '@fish/contracts/recommendation/interest'
+import { RECOMMENDATION_EVENT_RETENTION_DAYS } from '@fish/contracts/recommendation/observability'
 import {
   composeRecommendationStrategyVersion,
   RANK_NEGATIVE_FEEDBACK_EVENT_TYPES,
@@ -23,6 +24,10 @@ import {
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import { newId } from '@fish/db/ids'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type {
+  RecommendationProcessMetricsRecorder,
+  RecommendationRejectionReason,
+} from '../../observability/recommendation-metrics'
 import { type ListingService, ListingServiceError } from '../listings/service'
 import type { RecommendationContext } from './context'
 import { decodeRecommendationCursor, encodeRecommendationCursor } from './cursor'
@@ -96,7 +101,38 @@ export interface RecommendationService {
 const MAX_CLOCK_SKEW_MS = 10 * 60 * 1_000
 
 /** 事件保留期（#323 §M0 retention 决定）：早于保留期的补发没有价值，直接拒收。 */
-const EVENT_RETENTION_MS = 180 * 24 * 60 * 60 * 1_000
+const EVENT_RETENTION_MS = RECOMMENDATION_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1_000
+
+/**
+ * 埋点批里的**内部**拒收原因（与 R1 起的服务端日志一字不差）。
+ *
+ * 与对外的 `RecommendationRejectionReason` 是 7 → 5 的关系，映射写在 `REJECTION_REASON_METRIC`：
+ * 用 `satisfies Record<RecommendationRejection, ...>` 让"新增一个拒收分支却忘了分类"变成编译错误
+ * ——拒收原因只写日志（不进响应体）时漏一个没人会发现，但指标上少一列就是"某类伪造流量隐形"。
+ */
+type RecommendationRejection =
+  | 'server_confirmed_event_type'
+  | 'listing_not_found'
+  | 'occurred_at_in_future'
+  | 'occurred_at_too_old'
+  | 'request_not_found'
+  | 'identity_mismatch'
+  | 'attribution_not_found'
+
+/**
+ * 内部原因 → 对外计数桶。合并理由见 `observability/recommendation-metrics.ts` 的注释：
+ * `request_not_found` 与 `attribution_not_found` 对运维是同一件事；`server_confirmed_event_type`
+ * 单列，因为"客户端在伪造只能由服务端确认的成交/开聊"是刷量信号里最有信息量的一类。
+ */
+const REJECTION_REASON_METRIC = {
+  server_confirmed_event_type: 'serverConfirmedEventType',
+  listing_not_found: 'listingNotFound',
+  occurred_at_in_future: 'occurredAtOutOfRange',
+  occurred_at_too_old: 'occurredAtOutOfRange',
+  request_not_found: 'attributionNotFound',
+  identity_mismatch: 'identityMismatch',
+  attribution_not_found: 'attributionNotFound',
+} as const satisfies Record<RecommendationRejection, RecommendationRejectionReason>
 
 function invalidCursor(): RecommendationServiceError {
   return new RecommendationServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
@@ -143,8 +179,15 @@ export function createRecommendationService(deps: {
   interest: InterestRefreshQueue
   /** 便于测试注入固定时钟；缺省取系统时间。 */
   clock?: () => Date
+  /**
+   * 进程内计数（#323 R6 §6.3）：事件批写入的尝试/失败、被拒收的原因分布。
+   *
+   * 由 `app.ts` 注入同一个实例（admin service 读它）。缺省不计数——只影响可观测性，
+   * 不影响任何写入语义。
+   */
+  metrics?: RecommendationProcessMetricsRecorder
 }): RecommendationService {
-  const { store, listings, recall, interest } = deps
+  const { store, listings, recall, interest, metrics } = deps
   const clock = deps.clock ?? (() => new Date())
 
   /**
@@ -488,8 +531,9 @@ export function createRecommendationService(deps: {
 
       const accepted: RecommendationEventRecord[] = []
       const rejectedReasons = new Map<string, number>()
-      const reject = (reason: string) => {
+      const reject = (reason: RecommendationRejection) => {
         rejectedReasons.set(reason, (rejectedReasons.get(reason) ?? 0) + 1)
+        metrics?.recordEventRejection(REJECTION_REASON_METRIC[reason])
       }
 
       events.forEach((event, index) => {
@@ -586,7 +630,19 @@ export function createRecommendationService(deps: {
         })
       })
 
-      const inserted = await store.insertEvents(accepted)
+      // 写入尝试/失败**以批为单位**（与契约的 `eventWriteFailureRate` 同量纲）：整批被拒收时
+      // 没有发生任何写入，不记尝试——否则"全是伪造事件"的批会把失败率的分母撑大、把真实故障冲淡。
+      let inserted = 0
+      if (accepted.length > 0) {
+        metrics?.recordEventWriteAttempt()
+        try {
+          inserted = await store.insertEvents(accepted)
+        } catch (error) {
+          metrics?.recordEventWriteFailure()
+          // 写入失败是 500 级故障：不能吞掉（客户端重试才是正确处置），只是同时计进指标。
+          throw error
+        }
+      }
       const rejected = events.length - accepted.length
       if (rejected > 0) {
         // 原因只写日志：客户端对这些原因无能为力，重试也不会变好。
@@ -664,20 +720,26 @@ export function createRecommendationService(deps: {
           }
         }
 
-        await store.insertEvents([
-          {
-            eventId: newId(),
-            userId,
-            anonymousSessionId: sessionId,
-            requestId,
-            listingId,
-            eventType,
-            position,
-            source,
-            metadata: {},
-            occurredAt: occurredAt ?? new Date(),
-          },
-        ])
+        metrics?.recordEventWriteAttempt()
+        try {
+          await store.insertEvents([
+            {
+              eventId: newId(),
+              userId,
+              anonymousSessionId: sessionId,
+              requestId,
+              listingId,
+              eventType,
+              position,
+              source,
+              metadata: {},
+              occurredAt: occurredAt ?? new Date(),
+            },
+          ])
+        } catch (error) {
+          metrics?.recordEventWriteFailure()
+          throw error
+        }
 
         // 强正反馈（收藏/发起会话/下单/成交）是画像里权重最高的一批行为，写入后必须立刻触发重算：
         // 靠"下一条客户端行为"来带动重算会让最强的信号迟迟不生效（用户成交后可能几小时不再刷首页）。

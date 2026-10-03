@@ -1,19 +1,26 @@
+import { RANKING_VERSION } from '@fish/contracts/matching/schema'
+import { RECOMMENDATION_CLEANUP_INTERVAL_MS } from '@fish/contracts/recommendation/observability'
 import { createDb } from '@fish/db/client'
 import { loadEmbeddingEnv, loadServerEnv, loadVisualEmbeddingEnv } from '@fish/shared/env'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
 import { sql } from 'drizzle-orm'
 import { createEmbedJobHandlers } from './jobs/embedding/handlers'
 import { createEmbeddingProvider } from './jobs/embedding/providers'
+import { scheduleFailedEmbedRetry } from './jobs/embedding/requeue'
 import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
+import { cleanupExpiredRecommendationData } from './jobs/recommendation/cleanup'
+import { cleanupExpiredViewHistory } from './jobs/view-history/cleanup'
 import { createVisualBackfillRunner } from './jobs/visual-embedding/backfill'
 import { cleanupExpiredVisualQueryImages } from './jobs/visual-embedding/cleanup'
 import {
   createVisualEmbedJobHandlers,
   VisualSourceImageError,
 } from './jobs/visual-embedding/handlers'
+import { createVisualMaintenance } from './jobs/visual-embedding/maintenance'
+import { elapsedMs, logErrorEvent, logEvent } from './log'
 import { createWorkerMediaStorage } from './media-storage'
 
 const POLL_INTERVAL_MS = 1000
@@ -25,13 +32,41 @@ const POLL_INTERVAL_MS = 1000
  */
 const VISUAL_MAINTENANCE_INTERVAL_MS = 60_000
 
+/**
+ * 浏览足迹清理（#415 M1）的间隔。
+ *
+ * 保留期是 30 天，小时级清理足够；它只删窗口外的行，读接口本来就按 30 天过滤，
+ * 晚删一会儿不会让用户看到过期记录。
+ */
+const VIEW_HISTORY_CLEANUP_INTERVAL_MS = 3_600_000
+
 const env = loadServerEnv()
 const db = createDb(env.DATABASE_URL)
 
 // embedding provider 在启动期装配：`EMBEDDING_TRANSPORT` 没有默认值，配错/没配在这里就失败，
 // 而不是等第一条 EMBED_* job 跑起来才发疯（那时已经在库里留下状态）。
 const embeddingEnv = loadEmbeddingEnv()
-const embeddingProvider = createEmbeddingProvider(embeddingEnv)
+
+/**
+ * 观测接线（#322 M4）：provider 每次上游请求一行 `embed.request`，handler 每个实体一行
+ * `embed.entity`（`unchanged` 即内容指纹命中）。事件里只有计数/耗时/分类/模型名，没有请求文本
+ * 与向量（见 `./log` 的硬约束）。
+ *
+ * 分流：`outcome !== 'ok'`（`retryable` / `fatal`）是失败事件，走 stderr——否则只收 stderr 的
+ * 告警系统完全看不到上游请求失败（`log.ts` 头注释的"正常事件 stdout、失败事件 stderr"）。
+ */
+const embeddingProvider = createEmbeddingProvider(embeddingEnv, {
+  onRequest: (event) => {
+    const line = {
+      event: 'embed.request',
+      model: embeddingProvider.model,
+      transport: embeddingEnv.transport,
+      ...event,
+    }
+    if (event.outcome === 'ok') logEvent(line)
+    else logErrorEvent(line)
+  },
+})
 
 // 视觉 provider 同一理由在启动期装配（#324 M3）。`VISUAL_EMBEDDING_TRANSPORT` 同样没有默认值。
 const visualEmbeddingEnv = loadVisualEmbeddingEnv()
@@ -54,13 +89,17 @@ const mediaStorage = createWorkerMediaStorage(
 
 // 启动自检：连不上 Postgres 立即失败，而不是空转。
 await db.execute(sql`select 1`)
-console.log('[worker] postgres connection ok')
-console.log(
-  `[worker] embedding provider: ${embeddingProvider.model} (${embeddingProvider.dimensions}d, transport=${embeddingEnv.transport})`,
-)
-console.log(
-  `[worker] visual embedding provider: ${visualEmbeddingProvider.model} (${visualEmbeddingProvider.dimensions}d, transport=${visualEmbeddingEnv.transport})`,
-)
+logEvent({
+  event: 'worker.started',
+  pollIntervalMs: POLL_INTERVAL_MS,
+  transport: embeddingEnv.transport,
+  model: embeddingProvider.model,
+  dimensions: embeddingProvider.dimensions,
+  rankingVersion: RANKING_VERSION,
+  visualTransport: visualEmbeddingEnv.transport,
+  visualModel: visualEmbeddingProvider.model,
+  visualDimensions: visualEmbeddingProvider.dimensions,
+})
 
 /**
  * job 类型 → handler。匹配域（#8）与 embedding 域（#322 M1）、视觉回填域（#324 M8）各一张表
@@ -72,7 +111,11 @@ const queue = createJobQueue(db, {
     // 匹配引擎必须显式拿到"本进程用的是哪个模型"：读向量与召回都按它过滤，绝不从表里随便取一行
     // （#322 M1 §11.6）。换模型 = 换这里的 provider，向量由 M4 的 backfill 重建。
     ...createMatchJobHandlers(db, { embeddingModel: embeddingProvider.model }),
-    ...createEmbedJobHandlers(db, embeddingProvider),
+    ...createEmbedJobHandlers(db, embeddingProvider, {
+      // 失败态的 `embed.entity`（handler 先发事件再 rethrow）必须走 stderr——与 `job.settled`
+      // 的失败分支同一约定（`log.ts` 头注释："正常事件 stdout、失败事件 stderr"）。
+      onEvent: (event) => (event.status === 'failed' ? logErrorEvent(event) : logEvent(event)),
+    }),
     // 长期兴趣画像（#323 R2）同样要显式拿到模型：聚合只吃当前模型的向量，换模型后由 backfill 重建。
     ...createInterestJobHandlers(db, { embeddingModel: embeddingProvider.model }),
     ...createVisualEmbedJobHandlers(db, visualEmbeddingProvider, mediaStorage),
@@ -89,54 +132,133 @@ const visualBackfill = createVisualBackfillRunner({
   model: visualEmbeddingProvider.model,
 })
 
-async function runVisualMaintenance(now: Date): Promise<void> {
+/** 周期性清理 30 天前的浏览足迹（#415 M1）。失败只记日志，不影响主循环。 */
+async function runViewHistoryCleanup(now: Date): Promise<void> {
   try {
-    const backfill = await visualBackfill.runPass()
-    if (backfill.enqueued > 0) {
-      console.log(`[worker] 视觉回填投递 ${backfill.enqueued} 条`)
-    }
-    const cleanup = await cleanupExpiredVisualQueryImages({ db, storage: mediaStorage, now })
+    const cleanup = await cleanupExpiredViewHistory({ db, now })
     if (cleanup.deleted > 0) {
-      console.log(`[worker] 清理到期查询图 ${cleanup.deleted} 个`)
+      console.log(`[worker] 清理过期浏览足迹 ${cleanup.deleted} 行`)
     }
   } catch (error) {
-    // 维护失败不能把 worker 主循环带走：回填游标留在内存里、清理按 expires_at 升序重来，
-    // 下一轮会自然重新捡起同一批。
     const detail = error instanceof Error ? error.message : String(error)
-    console.error(`[worker] 视觉维护失败：${detail}`)
+    console.error(`[worker] 浏览足迹清理失败：${detail}`)
   }
+}
+
+// 失败上报只写脱敏摘要（`errorMessage()`），理由见 `./jobs/visual-embedding/maintenance` 头注释。
+const runVisualMaintenance = createVisualMaintenance({
+  backfill: () => visualBackfill.runPass(),
+  cleanup: (now) => cleanupExpiredVisualQueryImages({ db, storage: mediaStorage, now }),
+})
+
+/** 周期性保留期清理（#323 R6 §7）：删 90 天前的推荐上下文与 180 天前的埋点。 */
+async function runRecommendationCleanup(now: Date): Promise<void> {
+  try {
+    const result = await cleanupExpiredRecommendationData({ db, now })
+    if (result.deletedRequestItems + result.deletedRequests + result.deletedEvents > 0) {
+      console.log(
+        `[worker] 推荐数据清理：快照 ${result.deletedRequestItems} / 请求 ${result.deletedRequests} / 事件 ${result.deletedEvents}（${result.batches} 批）`,
+      )
+    }
+  } catch (error) {
+    // 与视觉维护同一语义：一轮失败只记日志，下一轮自然重试（删除幂等）。
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[worker] 推荐数据清理失败：${detail}`)
+  }
+}
+
+/**
+ * 周期任务表（#323 R6 §7.1，**已确认**）：把原先单个 `lastMaintenanceAt` 换成一张小表。
+ *
+ * 理由：再来第三个定时任务时不必继续堆 `if`，且「首次循环立即跑一轮」（`lastRunAt = 0`）的既有
+ * 行为可以逐项保留。每项自己吞异常——一个任务失败不该让另一个任务也停摆。
+ *
+ * #418 的浏览足迹清理（30 天保留期，小时级）也并入这张表，不再单留 `lastViewHistoryCleanupAt`。
+ */
+type MaintenanceSchedule = {
+  intervalMs: number
+  lastRunAt: number
+  run: (now: Date) => Promise<void>
+}
+
+const SCHEDULES: MaintenanceSchedule[] = [
+  { intervalMs: VISUAL_MAINTENANCE_INTERVAL_MS, lastRunAt: 0, run: runVisualMaintenance },
+  { intervalMs: RECOMMENDATION_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runRecommendationCleanup },
+  { intervalMs: VIEW_HISTORY_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runViewHistoryCleanup },
+]
+
+/**
+ * `EMBED_*` 终结失败后的有界补投（#322 M4 复审修复，范围外发现 #2）。
+ *
+ * 两类终态都走这里：主循环里 `runOnce()` 结算出的 `FAILED`，以及启动回收直接判死的行
+ * （`recoverStaleClaims()` 的 `failedIds`）。队列本身不认识业务类型，所以"失败了要不要再排一条"
+ * 只能由调用方决定；策略与额度见 `jobs/embedding/requeue.ts`。
+ *
+ * 事件一律走 stderr：它描述的是"某个 job 已经失败"的后续处理（`scheduled === false` 时就等于
+ * 一条"不再自动重试"的告警），只收 stderr 的告警系统应该看得到。
+ */
+async function scheduleRetryFor(jobId: string): Promise<void> {
+  const retry = await scheduleFailedEmbedRetry(db, jobId)
+  if (retry.reason === 'not-embed' || retry.reason === 'not-failed') return
+  logErrorEvent({
+    event: 'embed.retry',
+    jobId,
+    jobType: retry.type,
+    entityKey: retry.entityKey,
+    entityId: retry.entityId,
+    failedInWindow: retry.failedInWindow,
+    scheduled: retry.scheduled,
+    reason: retry.reason,
+    delayMs: retry.delayMs,
+  })
 }
 
 // 启动时回收上一次进程留下的僵死领取（`status = 'RUNNING'`）：`kill -9` 会让正在执行的 job
 // 永远停在 RUNNING，没有这一步它不会再有第二次机会。
 const recovered = await queue.recoverStaleClaims()
 if (recovered.requeued > 0 || recovered.failed > 0) {
-  console.log(
-    `[worker] 回收僵死 job：${recovered.requeued} 条重新入队，${recovered.failed} 条超上限置 FAILED`,
-  )
+  logEvent({
+    event: 'worker.recovered',
+    requeued: recovered.requeued,
+    failed: recovered.failed,
+  })
+}
+// 回收时被判死的行（`attempts` 已达上限）同样需要补投机会，否则那次 `kill -9` 就等于"永久不再试"。
+for (const failedId of recovered.failedIds) {
+  await scheduleRetryFor(failedId)
 }
 
 console.log(`[worker] started (poll interval ${POLL_INTERVAL_MS}ms)`)
 
-let lastMaintenanceAt = 0
-
 for (;;) {
+  const startedAt = Bun.nanoseconds()
   const outcome = await queue.runOnce()
   if (outcome) {
-    const detail = outcome.lastError
-      ? `：${outcome.lastError}`
-      : ` ${JSON.stringify(outcome.result)}`
-    const line = `[worker] ${outcome.type} ${outcome.status}${detail}`
-    if (outcome.status === 'DONE') console.log(line)
-    else console.error(line)
+    // 每个 job 一行 JSON：`result` 就是 handler 的返回值（MATCH_* 是 MatchRunResult，
+    // 带 recall / fallbackReason / vectorCandidates / topKLatencyMs / matched / downgraded）。
+    const event = {
+      event: 'job.settled',
+      jobId: outcome.id,
+      jobType: outcome.type,
+      status: outcome.status,
+      durationMs: elapsedMs(startedAt),
+      model: embeddingProvider.model,
+      rankingVersion: RANKING_VERSION,
+      result: outcome.result ?? null,
+      lastError: outcome.lastError ?? null,
+    }
+    if (outcome.status === 'DONE') logEvent(event)
+    else logErrorEvent(event)
+    if (outcome.status === 'FAILED') await scheduleRetryFor(outcome.id)
   }
 
-  // 首次循环立即跑一轮（`lastMaintenanceAt = 0`）：启动就能补上历史数据的视觉向量，
-  // 不必等一个完整间隔。
+  // 首次循环立即跑一轮（每项 `lastRunAt = 0`）：启动就能补上历史数据的视觉向量、过期推荐数据
+  // 与过期浏览足迹，不必等一个完整间隔。
   const now = performance.now()
-  if (now - lastMaintenanceAt >= VISUAL_MAINTENANCE_INTERVAL_MS) {
-    lastMaintenanceAt = now
-    await runVisualMaintenance(new Date())
+  for (const schedule of SCHEDULES) {
+    if (now - schedule.lastRunAt < schedule.intervalMs) continue
+    schedule.lastRunAt = now
+    await schedule.run(new Date())
   }
 
   await Bun.sleep(POLL_INTERVAL_MS)
