@@ -653,11 +653,14 @@ decode(cursor)
    `{items, summary: {inputCount, droppedHidden, droppedOverflow, relaxations}}`（§6 只写了
    `{items, relaxations, droppedHidden}`）。`summary` 全部是**观测用的计数**，调用方只用 `items`；
    收紧成子对象是为了让"重排做了什么"在日志/排查时一眼可见，不影响任何排序决策。
-6. **`recallSources[0]` 是快照构造的隐式前提**：`buildSnapshotRows` 在
-   `candidate.recallSources[0] === undefined` 时 `continue`（跳过该行）。若这种候选恰好已在
-   `servedIds` 里，就会出现"卡片发出去了但没有快照行 + 游标 offset 多跳一行"的错位。
-   当前**不可达**：`recall/merge.ts` 的合并去重保证每条候选至少一个召回来源
-   （`rank/rerank.ts` 也按此写注释）。这是一条需要保持的不变量，不是可选的优化。
+6. **`recallSources[0]` 是快照构造的隐式前提，已由 service 兜住**（本轮对抗性审查发现 2）：
+   `buildSnapshotRows`（`service.ts:697-712`）在 `candidate.recallSources[0] === undefined` 时
+   `continue`（跳过该行）。旧写法若这种候选恰好已在 `servedIds` 里，就会出现"卡片发出去了但没有
+   快照行 + 游标 offset 多跳一行"的错位。现在 `startFeed` 在**选片时就把它们滤掉**
+   （`service.ts:313-317` 过滤 `pageIds` 后再查可见性），于是「发出去的卡片」与「快照行」严格同集合：
+   没有归因真值的候选宁可不发，而不是发出去等曝光落进 `attribution_not_found`。
+   `recall/merge.ts` 的合并去重本就保证每条候选至少一个召回来源，所以这是 fail-closed 的防御，
+   正常路径行为不变。这是一条需要保持的不变量，不是可选的优化。
 
 ---
 
@@ -925,10 +928,10 @@ HIDE 在任何权重判断之前就进 `hiddenListingIds`（权重为 0 也仍�
 | 8 | 自造 `{requestId, listingCursor}` 可让**排序模式**请求走 newest 透传，那页卡片没有快照行、后续曝光被 `attribution_not_found` 拒收 | **已修**：`service.ts` 的 `startFeed` 加形状守卫 `if (degraded !== (decoded.kind === 'passthrough')) throw invalidCursor()`，双向生效；§7.4 补该段与「旧游标行版本恒为 `rec-v1-none`」的兼容性论证；补集成用例（伪造 passthrough 必须是**合法**内层游标，否则断言证明不了守卫——实测去掉守卫后该用例报 `Expected: 422 / Received: 200`） |
 | 9 | `packages/contracts/src/recommendation/rank.ts:45-47` 注释写「43 个字符」，实测 41 | **已修**（注释与 §9 都改成 41） |
 
-另有一条**隐式不变量**（当前不可达）：若某条候选的 `recallSources[0]` 为 undefined，
-`buildSnapshotRows` 会 `continue`，而它若已在 `servedIds` 里就会出现「发出的卡没有快照行 +
-游标 offset 多跳一行」。`recall/merge.ts` 的去重保证 `recallSources` 非空，故不可达；
-已作为「必须保持的不变量」写进 §7.6 第 6 条。
+另有一条**不变量**（曾标注"当前不可达"，本轮改为由实现兜住）：若某条候选的
+`recallSources[0]` 为 undefined，`buildSnapshotRows` 会 `continue`；而它若已在 `servedIds` 里
+就会出现「发出的卡没有快照行 + 游标 offset 多跳一行」。**已修**：`startFeed` 在选片时先滤掉
+这类候选（`service.ts:313-317`），发出的卡片与快照行同集合。§7.6 第 6 条已同步。
 
 审查提出的「风格 / 口味」建议（`rank/score.ts:89` 的 `as` 断言、`rank/rerank.ts:129` 的
 `relaxations` 初值字面量、`ingest` 拒收只写日志）**均不采纳**：前者符合 AGENTS.md（不是 `any`），
@@ -957,3 +960,35 @@ mutation 得到的 200 反证）；「降级透传路径的坏内层游标 → 4
 （HEAD 版 `service.ts:166-178` 有逐字相同的 `ListingServiceError → invalidCursor()` 捕获，本次只是
 搬进 `serveByNewest`），只算**回归护栏**、不计入新增覆盖（§10.2 的 ⑩ 已按此口径描述）。
 
+
+### 12.4 第三轮审查（修复后的对抗性审查，AGENTS.md §7）
+
+按 §7 要求，在「请求行 + 快照原子写入」（N10）落地并推送后又开了一个**全新子代理**做对抗性审查
+（只给改动范围与 5 条必须满足的需求，不给思路、可疑点、既有结论；全程只读，worktree
+`git status --porcelain` 为空，自建 scratch 库 `fish_adv_review` 用完即 `DROP`，所有变异都在 `/tmp`
+副本里做）。**结论：无 P0 / P1 / P2**；2 条 P2、1 条 P3、3 条 info。
+
+它把「冲突整笔回滚」这条假设**在真库上实测**了 9 项（`Bun.sql` 的 `SQL.begin` + 本模块的
+`db.transaction`）：事务内 throw → 请求行 0；重复 `position` → unique violation 且请求行 0 / 快照行 0；
+失败事务不污染连接池；未提交时本事务可见 1、另一条连接可见 0、提交后可见 1；`max:2` 下 12 笔并发
+冲突事务全部 rolled-back 且不留行；真 `store.createRequestWithItems` + 重复 position / 不存在的
+listingId（FK 违例）都 reject 且请求行 0。它还**证伪性验证**了本轮新增/改动的测试：
+换回旧 `service.ts`+`store.ts` → 「快照写不进去 → 整笔降级」用例红；把 `db.transaction` 换成两条
+独立 insert → 「冲突整笔回滚」用例红；删掉游标形状守卫 → 2 例红。游标 × `strategyVersion` 守卫
+被穷举后判定**完备**。
+
+| # | 审查发现 | 处置 |
+| --- | --- | --- |
+| 1 | **排序成功但整页被负反馈清空**时会落一条 0 快照行的 ranked 请求行（`rank/rerank.ts:129-131` 的 `target = Math.max(Math.min(200, pool.length), 0)` + `store.ts` 的 `records.length === 0` 早退），生产可达、零测试覆盖 | **口径保留，不改行为**：该页 `items` 为空 ⇒ 没有卡片要归因、也没有曝光会丢，不触犯「context 与真值不一致」；`store.ts` 的 `createRequestWithItems` 注释与本节 §7.6 第 4 条旁的 `empty_ranked_feed_requests` 说明都把它当作**R6 的观测信号**（"候选全被过滤掉时只落请求行"）。要改的是 R6 指标怎么读这一形状，不是这里 |
+| 2 | `buildSnapshotRows` 在 `candidate.recallSources[0] === undefined` 时静默跳行，而该候选可能已被 `listCardsByIds` 返回 ⇒ 卡片发出去、快照无行、该卡曝光被 `attribution_not_found` 静默拒收；`recallSources: []` 全仓零覆盖 | **已修（fail-closed）**：`startFeed` 在选片阶段先滤掉无 primary source 的候选（`service.ts:313-317`），发出的卡片与快照行严格同集合。出厂 recall 不可达（`recall/merge.ts:122-123`/`:133` 保证非空），故属防御性收紧；补集成用例「候选没有归因来源时宁可不发」（实测把该过滤撤掉 → 用例红） |
+| 3 | `position` 的"全局位次"在跳行处被压缩（`service.ts` 旧 `position: rows.length`），与 schema 注释「0 起、跨页连续、与事件 position 同口径」不符 | **已随 #2 消解**：第一屏不再有被跳过的候选占位问题；快照行本身位置仍连续（`position = rows.length` 天然致密） |
+| 4 | 快照行 `listing_id` 的 `ON DELETE CASCADE` 意味着任何 listings 硬删都会裁剪已发出的快照行 ⇒ 归因真值消失 | **info，不改**：生产 listings 无硬删路径（只有 status）；已作为将来 fail-closed 的注意事项记录 |
+| 5 | 文档/注释引用的 R6 指标 `empty_ranked_feed_requests` 在**本 PR 代码里不存在**（属 #425） | **info，不改**：本 PR 只负责让 ranked 行不再因「写失败」产生孤儿；指标实现归 #425 |
+
+### 12.5 本轮新增/变更的测试
+
+| 用例 | 位置 | 证伪性 |
+| --- | --- | --- |
+| 快照写不进去 → 整笔请求降级（不返回查不到快照的 ranked requestId） | `apps/api/src/app.recommendation.test.ts` | 换回旧 `service.ts`+`store.ts` → 红（实测 37 pass / 1 fail） |
+| 候选没有归因来源时宁可不发 | 同上 | 撤掉 `pageIds` 过滤 → 红（实测 `listCardsByIds` 收到 2 个 id） |
+| 快照冲突时整笔事务回滚：不留下没有快照的请求行 | `apps/api/src/modules/recommendation/store.test.ts` | `db.transaction` → 两条独立 insert → 红（残留 `{strategyVersion:'rank-v1'}` 请求行） |

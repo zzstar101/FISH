@@ -306,7 +306,14 @@ export function createRecommendationService(deps: {
     })
 
     const ordered = reranked.items
-    const pageIds = ordered.slice(0, input.limit).map((item) => item.candidate.listingId)
+    // 没有 primary source（`recallSources` 为空）的候选**不能发出去**：R4 起 position/source 只信
+    // 服务端快照，而快照行必须有 primary source ⇒ 这种卡片在库里没有真值，交出去等于让它的曝光被
+    // `attribution_not_found` 静默拒收。出厂 recall 不会产出空 `recallSources`，这里 fail-closed
+    // 只是让「发出去的卡片」与「快照行」严格同集合。
+    const pageIds = ordered
+      .slice(0, input.limit)
+      .filter((item) => item.candidate.recallSources[0] !== undefined)
+      .map((item) => item.candidate.listingId)
     // `listCardsByIds` 按传入顺序返回，查不到的 id 不出现 ⇒ key 顺序就是真正发出去的商品顺序。
     const cards = await listings.listCardsByIds(input.viewerId, pageIds)
     const servedIds = [...cards.keys()]
@@ -314,7 +321,8 @@ export function createRecommendationService(deps: {
 
     const snapshotIds = [
       ...servedIds,
-      ...ordered.slice(pageIds.length).map((item) => item.candidate.listingId),
+      // 尾页按下标 `input.limit` 切：`pageIds` 可能因上面的过滤而短于 `input.limit`。
+      ...ordered.slice(input.limit).map((item) => item.candidate.listingId),
     ]
 
     const strategyVersion = composeRecommendationStrategyVersion([

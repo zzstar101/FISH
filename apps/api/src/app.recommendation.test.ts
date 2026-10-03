@@ -5,7 +5,7 @@ import {
   RANK_STRATEGY_VERSION,
   RECOMMENDATION_STRATEGY_VERSION_RULE,
 } from '@fish/contracts/recommendation/rank'
-import { RECALL_STRATEGY_VERSION } from '@fish/contracts/recommendation/recall'
+import { RECALL_STRATEGY_VERSION, type RecallChannel } from '@fish/contracts/recommendation/recall'
 import {
   RECOMMENDATION_STRATEGY_VERSION_NONE,
   type RecommendationEventInput,
@@ -656,6 +656,54 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
         ),
       )
     expect(orphans).toEqual([])
+  })
+
+  test('候选没有归因来源时宁可不发：不会把写不出快照行的卡片交给客户端', async () => {
+    const sessionId = newId()
+    const attributableId = newId()
+    const noSourceId = newId()
+    const requestedPages: string[][] = []
+    const candidate = (listingId: string, recallSources: readonly RecallChannel[]) => ({
+      listingId,
+      sellerId: newId(),
+      category: 'OTHER',
+      recallSources: [...recallSources],
+      semanticScore: null,
+      wishScore: null,
+      popularity: null,
+      userCategoryAffinity: null,
+      freshness: 1,
+      createdAt: new Date(),
+      alreadySeenCount: null,
+      sellerExposure: 0,
+    })
+    const service = createRecommendationService({
+      store: createSqlRecommendationStore(db),
+      listings: {
+        listFeed: async () => ({ items: [], nextCursor: null }),
+        listCardsByIds: async (_viewerId, ids) => {
+          requestedPages.push([...ids])
+          return new Map()
+        },
+      },
+      recall: {
+        recall: async () => ({
+          strategyVersion: 'recall-v1',
+          candidates: [candidate(attributableId, ['fresh']), candidate(noSourceId, [])],
+          channels: [],
+          interest: { session: false, longTerm: false, combined: false },
+          mergeDegradedReason: null,
+        }),
+      },
+      interest: { enqueue: async () => {} },
+    })
+
+    await service.startFeed({ viewerId: null, anonymousSessionId: sessionId, limit: 20 })
+
+    // R4 起 position/source 只信服务端快照，而快照行必须有 primary source ⇒ `recallSources`
+    // 为空的候选在库里没有归因真值。把它交给客户端，它的曝光就会被 `attribution_not_found`
+    // 静默拒收（页面正常、数据一行不剩），所以它连可见性查询都不该进。
+    expect(requestedPages).toEqual([[attributableId]])
   })
 
   test('第一页写快照、第二页按快照切片：position 连续、不重不漏、requestId 复用', async () => {
