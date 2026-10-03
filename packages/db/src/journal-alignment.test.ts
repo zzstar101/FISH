@@ -49,6 +49,8 @@ test('#429 #401 的形状：when 高于水位但内容早已应用 → replay-ha
       watermark: 200,
       hash: hash('b'),
       hashEntries: 1,
+      appliedRows: 1,
+      swallowedPending: [],
     },
   ])
   expect(blockingDrift(drift)).toHaveLength(1)
@@ -93,6 +95,8 @@ test('#429 失败信息点名 tag / 水位 / hash 前缀 / 修法，而不是一
       watermark: 200,
       hash: hash('b'),
       hashEntries: 1,
+      appliedRows: 1,
+      swallowedPending: [],
     },
   ])
 
@@ -132,6 +136,8 @@ test('#429 hash 撞车不构成例外：内容重复的条目高于水位时照�
       watermark: 200,
       hash: hash('a'),
       hashEntries: 2,
+      appliedRows: 1,
+      swallowedPending: [],
     },
   ])
   expect(blockingDrift(drift)).toHaveLength(1)
@@ -152,19 +158,72 @@ test('#429 撞 hash 但两条都已落在水位之下 → 零漂移', () => {
   expect(drift).toEqual([])
 })
 
-test('#429 修法给完整 hash 与可直接粘的定位 SQL', () => {
-  const text = formatJournalDrift([
-    {
-      kind: 'replay-hazard',
-      tag: '0002_parched',
-      when: 300,
-      watermark: 200,
-      hash: hash('b'),
-      hashEntries: 1,
-    },
+test('#429 两项前置检查都通过时才给出可执行的 UPDATE（并保留只读核对）', () => {
+  // 水位 100；只有 `0002_b`（when=200）高于水位且已应用（簿记时间错位）——
+  // `(水位, 200]` 之间没有待应用条目，库内该 hash 也只有一行。
+  const drift = findJournalDrift(
+    [entry('0001_a', 100, hash('a')), entry('0002_b', 200, hash('b'))],
+    [
+      { hash: hash('a'), createdAt: 100 },
+      { hash: hash('b'), createdAt: 50 },
+    ],
+  )
+  const hazard = drift[0]
+  if (hazard?.kind !== 'replay-hazard') throw new Error('应判为 replay-hazard')
+  expect(hazard.swallowedPending).toEqual([])
+  expect(hazard.appliedRows).toBe(1)
+
+  const text = formatJournalDrift(drift)
+  // 只读定位 SQL 给**完整 hash**，让人能直接粘而不是自己拼前缀匹配。
+  expect(text).toContain(
+    `SELECT hash, created_at FROM drizzle.__drizzle_migrations WHERE hash = '${hash('b')}';`,
+  )
+  expect(text).toContain('UPDATE drizzle.__drizzle_migrations SET created_at = 200')
+})
+
+test('#429 复审反例：抬水位会沉掉中间未应用的迁移 → 指引不得给出任何 UPDATE', () => {
+  // 水位 100；`0002_b`（when=120）还没应用；`0003_c`（when=150）早已应用、簿记停在 100。
+  // 按旧指引把 c 的 created_at 改成 150 ⇒ 水位跳到 150 ⇒ b 从此永远不会执行（永久漏迁移）。
+  const entries = [
+    entry('0001_a', 100, hash('a')),
+    entry('0002_b', 120, hash('b')),
+    entry('0003_c', 150, hash('c')),
+  ]
+  const drift = findJournalDrift(entries, [
+    { hash: hash('a'), createdAt: 100 },
+    { hash: hash('c'), createdAt: 100 },
   ])
 
-  expect(text).toContain(hash('b'))
-  expect(text).toContain(`WHERE hash = '${hash('b')}'`)
-  expect(text).toContain('UPDATE drizzle.__drizzle_migrations SET created_at = 300')
+  const hazard = drift[0]
+  if (hazard?.kind !== 'replay-hazard') throw new Error('应判为 replay-hazard')
+  expect(hazard.tag).toBe('0003_c')
+  expect(hazard.swallowedPending).toEqual([{ tag: '0002_b', when: 120 }])
+
+  const text = formatJournalDrift(drift)
+  // 既要点名会被沉掉的是哪条，也不能出现任何可照抄的 UPDATE。
+  expect(text).toContain('0002_b')
+  expect(text).toContain('when=120')
+  expect(text).not.toContain('UPDATE drizzle.__drizzle_migrations')
+  // 该告警仍然阻断：drizzle 下一步必然重放 0003_c。
+  expect(blockingDrift(drift)).toHaveLength(1)
+})
+
+test('#429 库内同 hash 多行时不得给出按 hash 定位的 UPDATE', () => {
+  // `WHERE hash = …` 会一次改掉两行簿记，而只凭 hash 分不清哪一行属于本条。
+  const drift = findJournalDrift(
+    [entry('0001_a', 100, hash('a')), entry('0002_b', 200, hash('b'))],
+    [
+      { hash: hash('a'), createdAt: 100 },
+      { hash: hash('b'), createdAt: 50 },
+      { hash: hash('b'), createdAt: 60 },
+    ],
+  )
+
+  const hazard = drift[0]
+  if (hazard?.kind !== 'replay-hazard') throw new Error('应判为 replay-hazard')
+  expect(hazard.appliedRows).toBe(2)
+
+  const text = formatJournalDrift(drift)
+  expect(text).not.toContain('UPDATE drizzle.__drizzle_migrations')
+  expect(text).toContain('有 2 行')
 })
