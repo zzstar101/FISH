@@ -82,7 +82,9 @@ test('#429 库内有 journal 不认识的 hash → stale-row，只告警不阻�
     ],
   )
 
-  expect(drift).toEqual([{ kind: 'stale-row', hash: hash('z'), createdAt: 50 }])
+  expect(drift).toEqual([
+    { kind: 'stale-row', hash: hash('z'), createdAt: 50, aboveJournal: false },
+  ])
   expect(blockingDrift(drift)).toEqual([])
 })
 
@@ -112,7 +114,7 @@ test('#429 失败信息点名 tag / 水位 / hash 前缀 / 修法，而不是一
 test('#429 告警类也会被渲染出来（不能静默吞掉）', () => {
   const text = formatJournalDrift([
     { kind: 'skipped-entry', tag: '0002_b', when: 200, watermark: 300 },
-    { kind: 'stale-row', hash: hash('z'), createdAt: 50 },
+    { kind: 'stale-row', hash: hash('z'), createdAt: 50, aboveJournal: false },
   ])
 
   expect(text).toContain('0002_b')
@@ -226,4 +228,87 @@ test('#429 库内同 hash 多行时不得给出按 hash 定位的 UPDATE', () =>
   const text = formatJournalDrift(drift)
   expect(text).not.toContain('UPDATE drizzle.__drizzle_migrations')
   expect(text).toContain('有 2 行')
+})
+
+test('#429 对抗审查 F1：库内有 created_at IS NULL 的行 → drizzle 水位被读成 0，整份 journal 重放', () => {
+  // drizzle 把 `order by created_at desc limit 1` 的**首行**当水位；Postgres 在 DESC 下是
+  // NULLS FIRST，所以首行是 NULL 行、`Number(null) = 0` ⇒ 每条 `when > 0` 都成立 ⇒ 全量重放。
+  // 用 `Math.max` 算水位会忽略 NULL、报「零漂移」—— 守卫在最需要它的场景里静默放行。
+  const drift = findJournalDrift(
+    [entry('0001_a', 100, hash('a')), entry('0002_b', 200, hash('b'))],
+    [
+      { hash: hash('a'), createdAt: 100 },
+      { hash: hash('b'), createdAt: 200 },
+      { hash: hash('z'), createdAt: null },
+    ],
+  )
+
+  expect(drift).toEqual([{ kind: 'null-bookkeeping', nullRows: 1, journalEntries: 2 }])
+  expect(blockingDrift(drift)).toHaveLength(1)
+
+  const text = formatJournalDrift(drift)
+  expect(text).toContain('created_at IS NULL')
+  expect(text).toContain('全部重放')
+  expect(text).toContain('42710')
+  expect(text).not.toContain('UPDATE drizzle.__drizzle_migrations')
+})
+
+test('#429 对抗审查 F2：陈旧行的 created_at 高于整份 journal → 从此一条都不执行，必须阻断', () => {
+  // drizzle 的水位高于每一条 when，`when > 水位` 恒为假 ⇒ 一条都不执行，而且 db:migrate 仍打印成功。
+  const drift = findJournalDrift(
+    [entry('0001_a', 100, hash('a')), entry('0002_b', 200, hash('b'))],
+    [
+      { hash: hash('a'), createdAt: 100 },
+      { hash: hash('b'), createdAt: 200 },
+      { hash: hash('ghost'), createdAt: 999 },
+    ],
+  )
+
+  expect(drift).toEqual([
+    { kind: 'stale-row', hash: hash('ghost'), createdAt: 999, aboveJournal: true },
+  ])
+  expect(blockingDrift(drift)).toHaveLength(1)
+
+  const text = formatJournalDrift(drift)
+  expect(text).toContain('一条迁移都不会执行')
+})
+
+test('#429 对抗审查 F3：指引不得把「hash 不在库内」断言成「尚未应用」', () => {
+  const drift = findJournalDrift(
+    [
+      entry('0001_a', 100, hash('a')),
+      entry('0002_b', 120, hash('b')),
+      entry('0003_c', 150, hash('c')),
+    ],
+    [
+      { hash: hash('a'), createdAt: 100 },
+      { hash: hash('c'), createdAt: 100 },
+    ],
+  )
+
+  const text = formatJournalDrift(drift)
+  // 内容已应用、只是簿记缺行（#401 的 `gray_triathlon`）在「hash 不在库内」里分不出来，
+  // 断言成「尚未应用」会让操作者把一条已应用的迁移重跑一遍。
+  expect(text).not.toContain('尚未应用')
+  expect(text).toContain('不等于')
+  // 这些 .sql 没有 BEGIN/COMMIT，`psql -f` 逐语句自动提交 ⇒ 必须在报错前拦住，提示单事务。
+  expect(text).toContain('BEGIN/COMMIT')
+  expect(text).toContain('psql -1')
+  expect(text).not.toContain('UPDATE drizzle.__drizzle_migrations')
+})
+
+test('#429 对抗审查 F4：#73 遗留库不得把生成阶段之前的条目报成「静默漏迁移」', () => {
+  const drift = findJournalDrift(
+    [entry('0001_old', 100, hash('a')), entry('0020_first_generated', 200, hash('b'))],
+    [{ hash: hash('b'), createdAt: 200 }],
+  )
+  // 生成阶段之前的条目没有簿记行：遗留库里这是既有形状（内容由 legacy 路径建立）。
+  expect(drift).toEqual([{ kind: 'skipped-entry', tag: '0001_old', when: 100, watermark: 200 }])
+
+  const legacyText = formatJournalDrift(drift, { legacyPreMigrationWhen: 200 })
+  expect(legacyText).not.toContain('静默漏迁移')
+  expect(legacyText).toContain('#73 遗留库')
+
+  // 非遗留库照旧逐条告警。
+  expect(formatJournalDrift(drift)).toContain('静默漏迁移')
 })

@@ -135,7 +135,9 @@ async function loadJournalEntryRefs(journal: Journal): Promise<JournalEntryRef[]
  * 会被重放并炸出没有信息量的驱动错误（#401 实测 `enum label "LISTING" already exists`）。
  * 这里把它换成说清「哪条、为什么、怎么改」的失败。
  *
- * 只对 replay-hazard 抛错；另几类只告警（判据与理由见 `./journal-alignment` 的文件头）。
+ * 阻断项：replay-hazard（drizzle 下一步必崩）、`created_at IS NULL` 的簿记行（水位被读成 0 ⇒ 整份
+ * journal 重放）、以及 `created_at` 高于整份 journal 的陈旧行（drizzle 从此一条都不执行）。
+ * 另几类只告警（判据与理由见 `./journal-alignment` 的文件头）。
  *
  * `entries` 由调用方传入而不是在这里读文件：这样判据的两半（取 journal / 比对库内簿记）
  * 各有单一职责，DB 这一半也能用打桩的 `db` 单测（含「有 hazard 则抛、只有告警则不抛」）。
@@ -143,6 +145,7 @@ async function loadJournalEntryRefs(journal: Journal): Promise<JournalEntryRef[]
 export async function assertJournalAlignment(
   db: Pick<ReturnType<typeof createDb>, 'execute'>,
   entries: readonly JournalEntryRef[],
+  options: { legacyPreMigrationWhen?: number } = {},
 ): Promise<void> {
   const exists = rowsOf(
     await db.execute(sql`SELECT to_regclass('drizzle.__drizzle_migrations') AS name`),
@@ -155,17 +158,19 @@ export async function assertJournalAlignment(
   )
   const applied: AppliedMigrationRow[] = rows.map((row) => ({
     hash: String(row.hash),
-    createdAt: Number(row.created_at),
+    // bigint 列由驱动返回 **string**；NULL 必须保留成 null 而不是折叠成 0 —— drizzle 在 NULL 首行时
+    // 读到的就是 `Number(null) = 0`，两者要能区分（判据见 `./journal-alignment`）。
+    createdAt: row.created_at === null ? null : Number(row.created_at),
   }))
   const drift = findJournalDrift(entries, applied)
   if (drift.length === 0) return
 
   if (blockingDrift(drift).length > 0) {
     throw new Error(
-      `迁移簿记与 journal 不对齐，已在跑 drizzle 之前停止\n${formatJournalDrift(drift)}`,
+      `迁移簿记与 journal 不对齐，已在跑 drizzle 之前停止\n${formatJournalDrift(drift, options)}`,
     )
   }
-  console.warn(formatJournalDrift(drift))
+  console.warn(formatJournalDrift(drift, options))
 }
 
 /**
@@ -188,8 +193,12 @@ export async function migrateWithBackfill(databaseUrl: string): Promise<void> {
   const staging = await mkdtemp(join(tmpdir(), 'fish-217-migrate-'))
   const db = createDb(databaseUrl)
   try {
-    await assertJournalAlignment(db, await loadJournalEntryRefs(journal))
     const legacy = await hasLegacyGovernance(db)
+    // 守卫放在 legacy 判定**之后**：只有知道这是 #73 遗留库，才能把「生成阶段之前那些条目没有簿记行」
+    // 讲成该路径的既有形状，而不是十几行假的「静默漏迁移」告警（那会把真正的漂移埋掉）。
+    await assertJournalAlignment(db, await loadJournalEntryRefs(journal), {
+      legacyPreMigrationWhen: legacy ? journal.entries[firstPhase]?.when : undefined,
+    })
     await mkdir(join(staging, 'meta'))
     const throughConstraints = journal.entries.slice(0, constraintPhase + 1)
     // 复制而不是软链：Windows 上创建符号链接需要开发者模式或管理员权限，普通终端里

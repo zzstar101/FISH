@@ -87,11 +87,42 @@ test('#429 全新库（没有簿记表）直接返回，不多查一次也不报
   expect(calls).toBe(1)
 })
 
-test('#429 对齐库：两次查询都走完且不抛', async () => {
+test('#429 对齐库：两次查询都走完、不抛，也不打任何告警（空漂移要早退）', async () => {
   const entries: JournalEntryRef[] = [{ tag: '0001_a', when: 100, hash: hash('a') }]
   const db = stubDb([BOOKKEEPING_TABLE, [{ hash: hash('a'), created_at: 100 }]])
 
-  await expect(assertJournalAlignment(db, entries)).resolves.toBeUndefined()
+  const warned: string[] = []
+  const original = console.warn
+  console.warn = (...args: unknown[]) => warned.push(args.join(' '))
+  try {
+    await expect(assertJournalAlignment(db, entries)).resolves.toBeUndefined()
+  } finally {
+    console.warn = original
+  }
+  // 去掉 `if (drift.length === 0) return` 会走到 `console.warn('')` —— 只多一个空行，没有别的症状。
+  expect(warned).toEqual([])
+})
+
+test('#429 对抗审查 F1：库内有 created_at IS NULL 的行 → 在跑 drizzle 之前阻断', async () => {
+  // 水位被 drizzle 读成 `Number(null) = 0`（DESC + NULLS FIRST 取到 NULL 首行）⇒ 整份 journal 重放。
+  // 这条同时钉住 `created_at === null ? null : Number(...)` 那半：把它写成 `Number(row.created_at)`
+  // 就会得到 0，`null-bookkeeping` 判据不再成立、本用例不再抛错。
+  const entries: JournalEntryRef[] = [{ tag: '0001_a', when: 100, hash: hash('a') }]
+  const db = stubDb([
+    BOOKKEEPING_TABLE,
+    [
+      { hash: hash('a'), created_at: '100' },
+      { hash: hash('z'), created_at: null },
+    ],
+  ])
+
+  const error = await assertJournalAlignment(db, entries).then(
+    () => null,
+    (thrown: unknown) => thrown as Error,
+  )
+  expect(error).not.toBeNull()
+  expect(error?.message).toContain('created_at IS NULL')
+  expect(error?.message).toContain('在跑 drizzle 之前停止')
 })
 
 /**
