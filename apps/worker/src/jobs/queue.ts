@@ -1,5 +1,6 @@
 import type { Db } from '@fish/db/client'
 import { sql } from 'drizzle-orm'
+import { errorMessage } from '../log'
 
 /**
  * job 队列的领取与结算（`#2` 冻结的协议见 `packages/db/src/schema/jobs.ts:14-17`）。
@@ -218,7 +219,9 @@ export function createJobQueue(
         await settle(job.id, 'DONE', null)
         return { id: job.id, type: job.type, status: 'DONE', lastError: null, result }
       } catch (error) {
-        const lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+        // 在错误类型/参数信息尚在时脱敏，落库后的字符串会直接进入 Worker job.settled 日志。
+        const lastError =
+          error instanceof Error ? `${error.name}: ${errorMessage(error)}` : errorMessage(error)
         const fatal = (deps.isFatalError?.(error) ?? false) || job.attempts >= maxAttempts
         await settle(job.id, fatal ? 'FAILED' : 'PENDING', lastError)
         return { id: job.id, type: job.type, status: fatal ? 'FAILED' : 'PENDING', lastError }

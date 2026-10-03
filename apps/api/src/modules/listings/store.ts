@@ -748,7 +748,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
         const rows = await tx
           .update(listings)
-          .set({ ...plan.fields, updatedAt: sql`now()` })
+          .set({ ...plan.fields, updatedAt: sql`clock_timestamp()` })
           .where(eq(listings.id, input.id))
           .returning({ id: listings.id })
         if (rows.length === 0) return { kind: 'not-found' as const }
@@ -822,7 +822,7 @@ export function createSqlListingStore(db: Db): ListingStore {
       return db.transaction(async (tx) => {
         const rows = await tx
           .update(listings)
-          .set({ status: input.to, updatedAt: sql`now()` })
+          .set({ status: input.to, updatedAt: sql`clock_timestamp()` })
           .where(
             and(
               eq(listings.id, input.id),
@@ -942,8 +942,8 @@ function cursorSql(criteria: FeedCriteria): SQL | undefined {
 /**
  * 内容一变就让该商品已有的向量行当场失效（#322 M2 复审 blocker）。
  *
- * 为什么不能只靠时间戳：实体 `updated_at` 是毫秒分辨率（数据库 `now()`，见
- * `packages/db/src/schema/common.ts`），同一毫秒内的两次编辑内容不同却版本相同——时间戳相等
+ * 为什么不能只靠时间戳：DB 更新取 clock_timestamp()（见 schema/common.ts），经 JS Date
+ * 往返仅保留毫秒。同一毫秒内的两次编辑内容不同却版本相同——时间戳相等
  * 推不出内容相同（#328 的并发用例已确立）。所以判据
  * 必须是**内容**：用当前字段重算指纹，删掉指纹不符的向量行（`pruneStaleEmbeddings`）。
  *

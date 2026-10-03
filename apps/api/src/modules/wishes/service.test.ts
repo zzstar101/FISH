@@ -181,6 +181,57 @@ describe('wish service', () => {
     )
   })
 
+  test('关闭/完成愿望时补投向量刷新：状态流转推进实体版本后，向量行不得被判过期', async () => {
+    const { service, queued } = setup()
+    const closed = await service.createWish(userA, createInput)
+    const fulfilled = await service.createWish(userA, { ...createInput, keyword: '耳机' })
+    queued.length = 0
+
+    await service.closeWish(userA, internalWish(closed.id))
+    // 重复关闭不写状态，但仍须补投：上一次状态写入的投递可能失败（状态已提交、客户端重试）。
+    await service.closeWish(userA, internalWish(closed.id))
+    await service.fulfillWish(userA, internalWish(fulfilled.id))
+
+    expect(queued).toEqual([
+      internalWish(closed.id),
+      internalWish(closed.id),
+      internalWish(fulfilled.id),
+    ])
+    // 没有状态流转（下面这条已处于终态且与目标不同）不得凭空补投。
+    await expect(service.closeWish(userA, internalWish(fulfilled.id))).rejects.toMatchObject(
+      new WishServiceError(409, '愿望已经处于终态'),
+    )
+    expect(queued).toHaveLength(3)
+  })
+
+  test('并发竞态输家返回目标态时同样补投：这是一次成功返回，客户端不会重试', async () => {
+    // 模拟竞态：另一个连接（或同一次提交的重试）先把状态写成目标态，本次条件更新因此落空。
+    class RacingWishStore extends MemoryWishStore {
+      override async updateStatusIfActive(id: string, status: 'CLOSED' | 'FULFILLED') {
+        const row = this.rows.find((item) => item.id === id)
+        if (!row) return null
+        row.status = status
+        row.updated_at = new Date()
+        return null
+      }
+    }
+    const store = new RacingWishStore()
+    const queued: string[] = []
+    const service = createWishService({
+      store,
+      matchQueue: {
+        enqueue: async (id) => {
+          queued.push(id)
+        },
+      },
+    })
+    const wish = await service.createWish(userA, createInput)
+    queued.length = 0
+
+    expect((await service.closeWish(userA, internalWish(wish.id))).status).toBe('CLOSED')
+    expect(queued).toEqual([internalWish(wish.id)])
+  })
+
   test('validates a partial update against the existing budget range', async () => {
     const { service } = setup()
     const wish = await service.createWish(userA, createInput)

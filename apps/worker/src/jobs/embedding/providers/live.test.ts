@@ -174,6 +174,23 @@ test('响应不是合法 JSON / 不是对象 / 条数不符都算 invalid_respon
   }
 })
 
+test('每次实际请求（包括重试）都先经过 admission，拒绝后不出网也不重试', async () => {
+  let admissions = 0
+  const exhausted = new Error('test request budget exhausted')
+  const captured = stubFetch(() => new Response('unavailable', { status: 503 }))
+  const provider = createLiveEmbeddingProvider({
+    ...config,
+    beforeRequest: async () => {
+      admissions += 1
+      if (admissions > 1) throw exhausted
+    },
+  })
+
+  await expect(provider.embed(['x'])).rejects.toBe(exhausted)
+  expect(admissions).toBe(2)
+  expect(captured).toHaveLength(1)
+})
+
 test('维度不符与 NaN 各自失败，绝不返回"看起来合法"的向量，且都不重试', async () => {
   const shortCaptured = stubFetch(() => jsonResponse({ data: [{ embedding: [1, 2, 3] }] }))
   const shortProvider = createLiveEmbeddingProvider(config)

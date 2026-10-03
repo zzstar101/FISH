@@ -36,7 +36,7 @@ import { loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { embeddingContentHashSql } from '../src/jobs/embedding/content-hash-sql'
 import { STUB_EMBEDDING_MODEL } from '../src/jobs/embedding/providers/stub'
-import { logEvent } from '../src/log'
+import { errorMessage, logErrorEvent, logEvent } from '../src/log'
 
 /** `db.execute()` 在不同驱动下可能是数组或 `{ rows }`（与 `jobs/queue.ts` 的 `toRows` 同口径）。 */
 function rowsOf<T>(result: unknown): T[] {
@@ -380,5 +380,6 @@ try {
     console.error('用法：bun run obs:summary -- [--model=<name>]')
     process.exit(2)
   }
-  throw error
+  logErrorEvent({ event: 'obs.failed', error: errorMessage(error) })
+  process.exitCode = 1
 }

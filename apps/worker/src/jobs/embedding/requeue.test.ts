@@ -16,17 +16,35 @@ const db = createDb(databaseUrl)
  * 留下的 `PENDING` 行会被**别的测试文件**的 `claimNext` 领走（队列不按类型过滤）。
  */
 const createdJobIds: string[] = []
+const createdEntityIds = new Set<string>()
 
-afterAll(async () => {
+async function cleanupTestJobs(): Promise<void> {
+  const filters: ReturnType<typeof sql>[] = []
   if (createdJobIds.length > 0) {
-    await db.execute(
-      sql`DELETE FROM jobs WHERE id IN (${sql.join(
+    filters.push(
+      sql`id IN (${sql.join(
         createdJobIds.map((id) => sql`${id}`),
         sql`, `,
       )})`,
     )
   }
-  await db.$client.close()
+  if (createdEntityIds.size > 0) {
+    const owned = sql.join(
+      [...createdEntityIds].map((id) => sql`${id}`),
+      sql`, `,
+    )
+    filters.push(sql`payload->>'listingId' IN (${owned})`, sql`payload->>'wishId' IN (${owned})`)
+  }
+  if (filters.length > 0)
+    await db.execute(sql`DELETE FROM jobs WHERE ${sql.join(filters, sql` OR `)}`)
+}
+
+afterAll(async () => {
+  try {
+    await cleanupTestJobs()
+  } finally {
+    await db.$client.close()
+  }
 })
 
 /**
@@ -44,6 +62,10 @@ async function insertJob(fields: {
 }): Promise<string> {
   const id = newId()
   createdJobIds.push(id)
+  for (const key of ['listingId', 'wishId']) {
+    const entityId = fields.payload[key]
+    if (typeof entityId === 'string') createdEntityIds.add(entityId)
+  }
   const ageSec = (fields.ageMs ?? 0) / 1000
   await db.execute(sql`
     INSERT INTO jobs (id, type, payload, status, attempts, last_error, run_at, updated_at)
@@ -244,5 +266,20 @@ describe('scheduleFailedEmbedRetry：终结失败后的有界补投', () => {
     expect(newJobId).not.toBe(failed)
     expect(await jobRow(failed)).toMatchObject({ status: 'FAILED' })
     expect(await jobRow(newJobId)).toMatchObject({ status: 'PENDING', attempts: 0 })
+  })
+
+  test('测试清理覆盖生产函数补投的新 job，而不只删除原始失败行', async () => {
+    const listingId = newId()
+    const failed = await insertJob({
+      type: 'EMBED_LISTING',
+      payload: { listingId },
+      status: 'FAILED',
+    })
+    expect((await scheduleFailedEmbedRetry(db, failed)).scheduled).toBe(true)
+    await cleanupTestJobs()
+    const remaining = await db.execute(
+      sql`SELECT id FROM jobs WHERE payload->>'listingId' = ${listingId}`,
+    )
+    expect([...remaining]).toHaveLength(0)
   })
 })

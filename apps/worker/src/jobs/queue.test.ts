@@ -3,8 +3,9 @@ import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import type { JobType } from '@fish/db/schema/jobs'
 import { jobs } from '@fish/db/schema/jobs'
-import { sql } from 'drizzle-orm'
+import { DrizzleQueryError, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { logErrorEvent } from '../log'
 import { createJobQueue, DEFAULT_MAX_ATTEMPTS, parseJobPayload, STALE_CLAIM_ERROR } from './queue'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -165,6 +166,49 @@ test('失败且未达上限时回到 PENDING，达到上限后 FAILED', async ()
       attempts: 3,
       lastError: 'Error: boom',
     })
+  })
+})
+
+test('runOnce 在类型信息尚在时脱敏 DB 错误，存储和 Worker 的 job.settled 日志均无 SQL 参数', async () => {
+  const failing = createJobQueue(db, {
+    handlers: {
+      MATCH_LISTING: async () => {
+        throw new DrizzleQueryError(
+          'INSERT PRIVATE_QUERY',
+          ['PRIVATE_DESCRIPTION', '[0.25,-0.5]'],
+          Object.assign(new Error('PRIVATE_DETAIL'), { code: '23514' }),
+        )
+      },
+    },
+    isFatalError: () => true,
+  })
+  await withJob(async (_queue, jobId) => {
+    const outcome = await failing.runOnce()
+    expect(outcome?.id).toBe(jobId)
+    expect(outcome?.status).toBe('FAILED')
+    const lines: string[] = []
+    const originalError = console.error
+    try {
+      console.error = (...args: unknown[]) => {
+        lines.push(args.map(String).join(' '))
+      }
+      logErrorEvent({
+        event: 'job.settled',
+        jobId: outcome?.id,
+        status: outcome?.status,
+        lastError: outcome?.lastError,
+      })
+    } finally {
+      console.error = originalError
+    }
+    const persisted = (await jobRow(jobId))?.lastError ?? ''
+    for (const value of [persisted, lines.join('\n')]) {
+      expect(value).toContain('23514')
+      expect(value).not.toContain('PRIVATE_QUERY')
+      expect(value).not.toContain('PRIVATE_DESCRIPTION')
+      expect(value).not.toContain('[0.25,-0.5]')
+      expect(value).not.toContain('PRIVATE_DETAIL')
+    }
   })
 })
 

@@ -8,18 +8,19 @@
 
 ## 0. Owner 看这里
 
-1. **四个脚本**（`embed:backfill` / `obs:summary` / `ann:probe` / `embed:eval`）只做批量重建、聚合
-   观测与离线对照；除 §9 的时钟修复外**不改任何运行时行为**，全部逻辑放在 `apps/worker/scripts/`。
+1. **四个运维脚本**（`embed:backfill` / `obs:summary` / `ann:probe` / `embed:eval`）负责回填、聚合与对照；
+   本阶段也包含运行时观测、参数标定、EMBED 结算后补投、时钟及显式约束门禁，不能声称只改脚本。
 2. **参数在真模型尺度上重标定**：锚点 `0.5/0.95 → 0.42/0.70`，外加两处门禁口径（不限分类不再摊薄
    结构证据、`acceptSimilar=false` 只认关键词）。权重（S4）与阈值 70 **不动**。依据是 57 条冻结标注对
    的实测 cosine，一致度 `39/57 → 53/57`。
 3. **时钟根因修复**（跨范围，Owner 明确要求顺手做）：`updated_at` 的写入从"插入 DB 钟 / 更新应用钟"
-   统一为 DB `now()`。这是 §9 的独立一节，因为它改的是全仓库的写路径，不是匹配域内部。
-4. **ANN 复核结论：当前不建索引**。判据是 **p95 > 50 ms 或带向量实体 > ~10 万行**，而本机合成语料下
-   **1 万行的 exact scan p95 就已经是 58.6 ms（越线）**，10 万行 p95 = 1.06 s；所以"什么时候必须建"
-   有明确数字，但**触发线不是行数**。当前真实向量只有 6 行，复算命令与完整表格见 §5。
-5. **4 条已知偏差**（标签之间自相冲突，无法同时满足）在标定集里显式标成 `knownDivergence`，
-   `--sections=calibration` 会把它们单独计数，不混进一致度。
+   更新版本改取 DB `clock_timestamp()`（插入默认不变），避免事务开始顺序与取得行锁顺序反转。
+   详见 §9；队列 `run_at` 的调度协议不变。
+4. **ANN 复核结论：当前不建生产索引**。旧合成语料每批重复一条向量，其曲线已撤回；§5 是逐行独立
+   采样且验证 distinct 数量后的新探针，1 万行 exact p95=102.017ms。触发线仍为 p95>50ms 或约10万行；
+   合成语料不是生产语料，HNSW recall/计划必须一起报告，不能只看延迟。
+5. **完整 57 条主指标：53/57，FP=3、FN=1**。四条是当前算法错误，不是标签矛盾，不从分母排除。
+   旧冻结实现的N验证达门禁，但最终审查BLOCK后再次修复；当前实现需新独立验证与fresh复审，见 §13。
 
 ## 1. 目标与非目标
 
@@ -108,7 +109,7 @@ v1 也判否（v1 = 0.35×category + 0.35×keyword + 0.30×price，见 `apps/wor
 | 口径 | 一致度 | 备注 |
 |---|---|---|
 | M3 参数（基线） | 39/57（0.684） | 误判全是漏判（18 条假阴性、0 假阳性） |
-| **M4 参数** | **53/57（0.930）** | 53 条可调行 **53/53**；M3 的 12 条 fixture 仍 12/12 |
+| **M4 参数** | **53/57（0.930）** | FP=3、FN=1；人估 cosine 的 M3 打分 fixture 仍12/12，不等于 live 质量12/12 |
 | v1 口径对照 | 37/57（0.649） | `--sections=calibration` 内的 v1 对照 |
 | 网格搜索（`--sections=fit`） | 122,880 组候选 | 网格最优 = `floor .25 / ceiling .60` + 权重重排 `{.20,.30,.20,.30}` + 阈值 75 → 同样 53/57（但 fp 3 / fn 1） |
 
@@ -119,8 +120,8 @@ v1 也判否（v1 = 0.35×category + 0.35×keyword + 0.30×price，见 `apps/wor
 `{.20,.30,.20,.30}` + 阈值 75 + `keyword-only`）也是 53/57（fp 3 / fn 1）；两者的 4 条残差
 **都是 §3.5 那 4 条 `knownDivergence`**，只是分数不同（当前常量 57/81/85/75，网格点
 70/80/80/80）。既然一致度相同，Owner 选改动面更小的前者——只改 §3.3 那三处，不碰权重与阈值。
-（`--sections=calibration` 把 4 条 divergence 剔除后，53 条可调行是 **53/53**、
-`liveAgreementRateAdjustable = 1`；两个口径的差异只是"要不要把标签互斥的行算作错误"。）
+所有57条均计入主指标，包括4条错误；不再输出排除后的全对口径。
+这是已参与调参的标定集，不能据其一致度证明独立泛化质量。
 
 分离度证据：真匹配 p25 = 0.6124，无关对最大 = 0.7156，**separation = −0.283** —— cosine 单独
 无法分开这两类，这正是不把 semantic 当唯一分数的实测依据（M3 §6 的设计原则 3 在这里被数据确认）。
@@ -128,18 +129,17 @@ v1 也判否（v1 = 0.35×category + 0.35×keyword + 0.30×price，见 `apps/wor
 floor 的语义被一并量化：`floorMisfires = 0`（没有任何"建议匹配"的对低于 floor）、
 `floorLeaks = 20`（floor 只保证"明显无关的不进来"，不负责判否——判否由阈值 70 与结构项负责）。
 
-### 3.5 4 条已知偏差（`knownDivergence`）
+### 3.5 4 条已知算法错误（保留历史标注名 `knownDivergence`）
 
-| 样本 | cos | M4 分数 | 冻结标签 | 为什么无法同时满足 |
+| 样本 | cos | M4 分数 | 冻结标签 | 错误 |
 |---|---|---|---|---|
-| `any-category-similar-true` | .4327 | 57 | 匹配 | 同口径下"分类不符 + 关键词命中"的对分数更高（81），分数必然落 70 以下 |
-| `cal-bound-k580-keyboard` | .6647 | 81 | 不匹配 | 与 `k380-synonym-same-category`（.646，匹配）尺度重叠 |
-| `cal-bound-airpods3` | .7156 | 85 | 不匹配 | 与 `cal-syn-pillow`（.713，匹配）cos 几乎相同 |
-| `cal-bound-powerbank-charger` | .605 | 75 | 不匹配 | 与 `cal-syn-airpods`（.566，匹配）只差 0.04 |
+| `any-category-similar-true` | .4327 | 57 | 匹配 | 假阴性：现有分数未召回应匹配的商品 |
+| `cal-bound-k580-keyboard` | .6647 | 81 | 不匹配 | 假阳性：未满足机械键盘需求 |
+| `cal-bound-airpods3` | .7156 | 85 | 不匹配 | 假阳性：缺少明确需要的降噪功能 |
+| `cal-bound-powerbank-charger` | .605 | 75 | 不匹配 | 假阳性：相关用途被误当成所需商品 |
 
-这 4 条的证据是**互斥**的：任意一组参数都不可能同时把它们和参照对判对。处理方式是显式标注
-（`CalibrationRow.knownDivergence`）+ 文档留痕，而不是为了让数字好看去改标签。`--sections=calibration`
-把它们计入 `knownDivergenceMisses`（恰 4 条），一致度只在 53 条 `adjustableRows` 上统计。
+这些是当前模型/特征的能力限制，不是人工标签矛盾，也不是证明所有算法都无解。
+标签不改、样本不删。calibration 主报告保留57条，直接输出 falsePositiveIds/falseNegativeIds 与计数。
 
 ## 4. 召回面：`MATCH_SEMANTIC_TOP_K` 重估
 
@@ -157,48 +157,50 @@ floor 的语义被一并量化：`floorMisfires = 0`（没有任何"建议匹配
 
 ## 5. ANN（HNSW）决策复核
 
-`bun run ann:probe -- --sizes=10000,50000,100000 --queries=5 --k=50`：临时表 `ann_probe(id bigint
-primary key, embedding vector(1536))` 只填向量（不碰任何业务表、零迁移），用
-`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` 取真实执行时间；测完索引后 **DROP INDEX** 再测下一档。
-`--source=auto|real|synthetic`（默认 `auto`）：表里 `dimensions = 1536` 的真实向量够最大档就用真实语料，
-否则用合成随机向量并在事件里标 `source`；`--source=real` 在真实行不足时直接 exit 2（提示先跑
-`embed:backfill`）。**下表是合成随机向量的结果**——随机向量的 HNSW 邻域结构与真实分布不同，
-recall 损失只能在真实分布上量，所以本机 live 库只有 6 条真实向量，只够跑 `--source=real --sizes=6`
-（实证 `.m4-evidence/ann-probe-real.log`：`source:"real"`、`realEmbeddingRows 6`、
-`realEmbeddingModels 1`、无索引 p50 0.076 / p95 0.148 ms、`needsAnn:false` —— 6 行的延迟没有参考价值，
-这里只证明 `real` 档能跑通且数字可复算）。
+**旧1万/5万/10万行曲线撤回**：原 synthetic SQL 的非关联 scalar subquery 被一次求值，每批大量行
+共用向量，不能按独立随机分布解释旧延迟/HNSW收益。原日志保留，不作为当前性能证据。
 
-| 行数 | 无索引 p50 / p95 | HNSW p50 / p95 |
-|---|---|---|
-| 10,000 | 48.96 / 58.57 ms | 0.28 / 0.62 ms |
-| 50,000 | 228.51 / 291.57 ms | 0.32 / 3.14 ms |
-| 100,000 | 457.48 / 1064.76 ms | 0.31 / 1.54 ms |
+修复为维度窗依赖外层行号 g 的逐行采样。每档先执行 count(*) 与 count(DISTINCT embedding::text)，
+synthetic 不全 distinct 即停止；事件 ann.probe.corpus 只报告计数，不记录向量。
+测完每档删除索引，再进入下一档无索引测量；索引存在不代表使用索引，计划和 indexUsed 同时报告。
 
-`ann.probe.summary` = `{ largestRows: 100000, largestP50Ms: 457.476, largestP95Ms: 1064.759,
-triggerP95Ms: 50, triggerRows: 100000, needsAnn: true }`。
+本轮命令（隔离 scratch、零HTTP请求）：
+`bun run ann:probe --source=synthetic --sizes=1000,5000,10000 --queries=5 --k=50`。
+用 EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) 测量临时 vector(1536) 表；每档 distinct 数与行数相等。
 
-**决策：M4 不建生产索引。** 理由：①触发条件是 p95 > 50 ms **或**带向量实体 > ~10 万行（M2 §ANN），
-而当前真实向量 = 6 行；②按本机合成语料，**1 万行（p95 58.57 ms）就已经越过触发线**，10 万行 p95 =
-1.06 s —— 所以"什么时候必须建"有明确数字，但**触发线是延迟不是行数**，说"10 万行才越线"是错的；
-③合成随机向量的 1536 维分布与真实 embedding 的簇结构不可比（真实向量的簇更集中，精确扫描的
-排序代价通常更高），HNSW 在真实数据上的 recall 损失也需要在真实规模上复测——M4 只负责把触发条件
-与复算命令固化下来。
+| 行数 | 无索引 p50 / p95 (ms) | 有索引 p50 / p95 (ms) | 有索引实际计划 | recall@50 |
+|---|---|---|---|---|
+| 1,000 | 6.533 / 8.531 | 3.155 / 3.461 | Seq Scan + Sort，未用HNSW | 1.00 |
+| 5,000 | 31.399 / 41.194 | 9.034 / 10.545 | HNSW Index Scan | 0.86 |
+| 10,000 | 71.684 / 102.017 | 11.168 / 13.499 | HNSW Index Scan | 0.80 |
 
-> 探针实现里踩过的坑：第一版在每个尺寸测完索引后**没有删索引**，导致下一次"无索引"测量实际走
-> Index Scan（报 0.42 / 0.32 ms，比 1 万行的无索引结果还快）。现在每次 indexed 测量后强制
-> `DROP INDEX IF EXISTS ann_probe_hnsw`，上表是修正后的数据。
+证据：`.m4-evidence/ann-review-fixed.log`。这些是合成语料、单个语料内查询向量的5次计时；
+不是5个独立需求查询，也不是生产结构化过滤链。第一档差异不能归因于HNSW，可能反映缓存/本机噪声。
+索引采用库默认建图参数，临时会话 ef_search=max(40,K)=50（候选宽度不能小于K），两档均实际返回50行。
+recall 是对该语料该查询的 exact Top-K id 集交集比例；这不是语义标签一致度，也不是生产参数建议。
+
+source=auto/real/synthetic 行为不变：real 不足报错，不重复采样同一行，但真实内容可能有重复向量，
+因此也报告 distinct。旧6条 live 向量的 real 探针只证明通路，不能拿其亚毫秒数字推断生产规模。
+
+**决策仍为不建生产索引**：当前没有达到真实量级的结构化链性能/recall证据，合成数据也观察到召回损失。
+触发线 p95>50ms 或约10万向量仅用于提示复评；1万行合成 exact 越线，不代表当前生产已越线。
+达到真实规模后，需按当前模型、合法候选分布与新鲜度规则重测，再选参数并由Owner裁决。
 
 ## 6. backfill：批量重建
 
 `bun run embed:backfill [-- --entity=listing|wish|both] [--limit=N] [--concurrency=N]
-[--model=<name>] [--purge-other-models] [--dry-run]`
+[--model=<name>] [--requests-per-second=N] [--dry-run]`
+
+旧模型向量必须保留；脚本已移除 purge 开关。切换和回滚均须执行
+[模型切换 runbook](issue-322-matching-v2-cutover.md)，只改配置或只补向量不算完成。
 
 - 复用生产 job 的 `generateEntityEmbedding()`，所以不存在"脚本口径 / job 口径"两套文本构造或指纹；
 - 取数谓词与读路径的候选条件一致：两类都要求 `status = 'ACTIVE'`，**listing 侧另要求
   `moderation_status = 'APPROVED'`**（对应 `engine.ts` 的 `creatable()` / `visibleToWishOwner()`）。
   不筛这一项就是给永远不会成为候选的实体付费调 provider；按 `created_at, id` 排序，`--limit`
   是**每类**上限，`--concurrency` 上限 4；
-- 幂等：指纹命中的实体报 `unchanged`，不投 `EMBED_*`，因此不会重复计费；
+- 幂等：指纹命中的实体报 `unchanged`，不重复生成向量；默认最多每秒启动1次HTTP请求，provider内部重试也计入，
+  并发默认1/上限4，不攒突发额度；`--requests-per-second` 可显式调整；
 - 投递顺序：同一事务里 EMBED 先于 MATCH 入队（`run_at` 相同、`newId()` 是 UUIDv7 ⇒ 领取序 = 插入序）。
   **这条只覆盖入队时刻**：非致命失败重试与 `kill -9` 回收都会把该行 `run_at` 推到 `now()`，此后
   执行序可能反转。反转的后果由 **EMBED 结算后补投同实体 `MATCH_*`** 兜住（§6.1 末尾），所以最坏
@@ -441,7 +443,7 @@ M4 自己的失败率口径没有变化：`failedRate` 的分母仍是已结算 
 - **密钥**：只从 `.env`（gitignored，`.gitignore:6-7`）读取；日志只打 model / dimensions / 耗时，
   不打 key、不打向量。
 
-## 9. 时钟根因修复：`updated_at` 统一为数据库 `now()`
+## 9. 时钟根因修复：更新版本使用数据库 `clock_timestamp()`
 
 这一节不是 M4 的验收项，而是做 M4 时被全量测试抓出来的跨范围根因。Owner 看过证据后要求
 「顺手修根因」。
@@ -460,15 +462,33 @@ M4 自己的失败率口径没有变化：`failedRate` 的分母仍是已结算 
 handler 于是把一次合法重算当成"旧 job 晚到"而返回 `stale`。在高负载机器上测时曾伪装成时序抖动，
 但最小复现（`insert` 用 DB 钟 → `update` 用应用钟 → delta = −38 ms ⇒ CAS 拒绝）证明它是确定性的。
 
-**修法**：把 `updated_at` 的**所有**写入点改成数据库 `now()`，取消跨时钟比较：
+**最终修法**：更新版本使用 DB `clock_timestamp()`，同时避免跨时钟比较和冻结事务开始时间导致的倒退。
+插入 `defaultNow()` 不变；其它业务事件时刻与队列调度不调整：
 
 | 位置 | 改动 |
 |---|---|
-| `packages/db/src/schema/common.ts` | `$onUpdate(() => new Date())` → `$onUpdate(() => sql\`now()\`)` |
-| `packages/db/src/embedding-store.ts` | onConflict patch 与 `refreshEmbeddingSourceVersion` 的 `updatedAt` → `sql\`now()\`` |
-| `apps/api/src/modules/listings/store.ts` | 编辑与 `setStatus` 两处 → `sql\`now()\`` |
-| `apps/api/src/modules/wishes/store.ts` | `update` / `updateStatusIfActive` 去掉 `updatedAt: Date` 参数，SQL 里写 `now()` |
-| `apps/api/src/modules/governance/store.ts` | `liftActiveRestrictions` 的 `updated_at = now()`（`lifted_at` 仍是调用方给的审计时间戳） |
+| `packages/db/src/schema/common.ts` | `$onUpdate` 更新取 `sql\`clock_timestamp()\``；插入默认不变 |
+| `packages/db/src/embedding-store.ts` | onConflict/refresh 的元数据 updatedAt 同样取实际求值时间 |
+| `apps/api/src/modules/listings/store.ts` | 编辑与 setStatus 两处取 clock_timestamp() |
+| `apps/api/src/modules/wishes/store.ts` | update/updateStatusIfActive 的 updated_at 取 clock_timestamp() |
+| `apps/api/src/modules/governance/service.ts`、`moderation/store.ts` | Listing 更新版本取 clock_timestamp()，业务事件时刻保持原语义 |
+| `apps/api/src/modules/transactions/store.ts` | accept / cancel / confirm 完成 / 核销完成四条路径里的 listing 状态更新取 clock_timestamp()（`transactions.updated_at`、`completed_at`、`cancelled_at` 等业务时刻保持原语义） |
+| `apps/api/src/modules/governance/store.ts` | restriction 审计时刻不属于 embedding 实体版本，保持原语义 |
+
+**状态漂移的向量版本补投（同批修复）**：`listings.updated_at` 一前进，
+`freshListingsEmbedding()`（`packages/db/src/embedding-store.ts:256`）的毫秒等值新鲜度谓词就会把旧
+向量行判成"不新鲜"，该商品随之掉出语义召回的候选集合；而 `apps/worker/src/jobs/matching/engine.ts:415`
+的 `loadTargetVector` 按**内容指纹**判过期，所以只改状态（不进 embedding 文本）的写入永远不会触发
+重嵌。此前 transactions 的 accept / cancel / confirm 完成 / 核销完成四条路径都只 bump `updated_at`
+且不投 job，于是商品一被接受 / 取消 / 售出就**永久**退回 v1 召回（`ranking_version = 1`），直到内容
+被编辑。修法：四条路径在同一个事务里补投 `EMBED_LISTING`（`apps/api/src/modules/transactions/store.ts`
+的 `enqueueListingEmbedding()`，`ON CONFLICT DO NOTHING` 复用 `EMBED_LISTING` 的部分唯一索引）；
+handler 发现内容指纹未变时走 `unchanged` 并调 `refreshEmbeddingSourceVersion()` 把向量行的版本标记
+推进到实体当前版本（`apps/worker/src/jobs/embedding/handlers.ts`，不调 provider、不重复计费）。
+不连投 `MATCH_LISTING`：商品状态不是匹配输入，引擎求值时按状态过闸。
+新回归：`apps/api/src/modules/transactions/store.test.ts` 的
+`#322 M4：状态流转补投 EMBED_LISTING（向量版本跟上实体版本）` 两条用例（accept/cancel；
+双侧确认置 SOLD），修复前 **2 fail / 0 pass**，修复后 **2 pass**。
 
 随之修正的陈旧口径注释：`apps/api/src/modules/listings/store.ts`（内容指纹判据的说明）、
 `apps/api/src/modules/wishes/match-queue.ts`、`packages/db/scripts/utc8-timestamp-prefix.ts`、
@@ -480,20 +500,19 @@ handler 于是把一次合法重算当成"旧 job 晚到"而返回 `stale`。在
   `createOrGetRecent()` 的入参改为 `NewWishRow = Omit<WishRow, 'updated_at'>`，`updated_at` 由 DB
   生成，**`created_at` 仍由调用方给**——`store.test.ts` 靠回拨 `created_at` 60 s 来走出软幂等窗口，
   这个能力不能丢。
-- 不变式变成"同一实体后写版本 ≥ 先写版本"（同源时钟 + `now()` 单调）。比较精度仍是**毫秒截断**
-  （M3 §13 口径不变）。
-- `now()` 是**事务开始时间**，所以同一事务内对同一行的两次更新仍会得到相同 `updated_at`。
-  这不会重新引入 #333 第二轮的问题，因为**主判据仍是内容指纹**（M2 `prune-on-write`），
-  `fresh*Embedding()` 只是纵深防御（M3 §13.1）。
-- 为什么不改 CAS 判据去比 `content_hash`：CAS 的职责只是防"旧 job 晚到覆盖新向量"，时钟同源即可
-  解决；改判据会扩大爆炸半径（同一个函数被 handler、backfill、`refreshEmbeddingSourceVersion`
-  三处调用）。
+- `now()` 是事务开始时间，不能证明写入序单调。两连接回归构造 A 先开始、B 先写并刷新 source version、
+  A 后取得行锁只改价：旧写法导致 source version 永久无法回退，候选一直消失；实际求值时间避免这个路径。
+- transactions 的 listing 状态更新（accept / cancel / confirm 完成 / 核销完成）此前既写 `now()`、
+  也不投 EMBED job：现在同样取 `clock_timestamp()` 并按上一段补投（fresh 对抗审查的 MAJOR 3）。
+- 比较仍按毫秒截断。时钟不是严格递增 revision，同毫秒更新/时钟校正仍有边界；旧内容的最终防线是
+  锁实体行后的 content hash 复检与写路径 prune，而不是仅靠时间戳。
+- 不改 CAS、refresh 的单向守卫或队列 run_at。新回归验证两次 unchanged、不重复生成向量且候选仍可召回。
 
 **回归证据**：三条红用例恢复 green；`apps/worker/src/jobs/matching/engine.test.ts` 里 M3 评审期间
 临时加的 `updatedAt: new Date(Date.now() + 1000)` workaround 已回退（根因修好后不再需要），M3 的
 Top-K 硬边界期望值（95 → 100，锚点变更的直接后果）保留。
 
-## 10. 验收清单映射（Issue #322「测试 / 验收」的 M4 相关项）
+## 10. 历史基线验收记录（不代表本轮收尾全部通过，当前门禁见 §13）
 
 | 验收项 | 状态 | 证据 |
 |---|---|---|
@@ -512,8 +531,7 @@ Top-K 硬边界期望值（95 → 100，锚点变更的直接后果）保留。
 不同文件、每次都不一样，且失败文件单独复跑全绿：`engine.test.ts` 25/25 ×2、迁移/seed/auth/
 wishes 五个文件 61/61。第三次最极端（`verify-reviewfix2-full.log`，load ≈ 118）：28 个失败全是
 5 s 超时，还级联出一次 `ERR_POSTGRES_CONNECTION_CLOSED` 与遗留测试库 `..._test_61926`（已 DROP），
-负载回落到数十后同一条命令 2344 pass / 0 fail（`verify-reviewfix2-full2.log`，52.61 s）。超时不是
-断言失败，也不归因于本 diff——本 diff 的改动只落在脚本与文档，脚本侧由 `core:smoke` / live 复算覆盖。）
+负载回落到数十后同一条命令 2344 pass / 0 fail（`verify-reviewfix2-full2.log`，52.61 s）。这些是历史过程记录，不可因此忽略失败或宣称与diff无关；本轮包含运行时改动，任何验证失败都须定位并重跑。）
 
 M3 §10 交接的 7 项：
 
@@ -537,8 +555,9 @@ bun run db:up && bun run db:migrate && bun run db:seed   # 隔离库需先把 DA
 bun run typecheck && bun run lint && bun test --isolate
 
 bun run rank:compare                                     # 权重对照（不出网、不需要 DB）
-bun run embed:eval -- --sections=fixture,anchors,recall,calibration,fit
-bun run ann:probe -- --sizes=10000,50000,100000 --queries=5 --k=50   # 加 --source=real 只用真实向量
+# 历史5000条recall记录不在本轮出网授权内，不运行默认全段评估。
+# 新独立验证需先确认标签，并由预算受控的验证脚本执行。
+bun run ann:probe --source=synthetic --sizes=1000,5000,10000 --queries=5 --k=50
 bun run embed:backfill -- --dry-run
 bun run embed:backfill
 bun run obs:summary                                      # 也可 -- --model=<name> 指定模型
@@ -549,7 +568,7 @@ bun run core:smoke
 `embed-eval-calibration.log`、`embed-eval-fit.log`、`embed-eval-recall.log`、`embed-eval-final.log`、
 `verify-final.log`、`verify-clockfix-2.log`（时钟修复后的全量测试）、`verify-clockfix-live.log`
 （时钟修复后的 live 复验），以及审查修复后的复算：`embed-eval-calibration-final.log`
-（含 `knownDivergenceRows`）、`embed-eval-fit-final.log`、`core-smoke-fix.log`（live 连跑 2 次）、
+（旧格式，保留用于复查，不作排除分母依据）、`embed-eval-fit-final.log`、`core-smoke-fix.log`（live 连跑 2 次）、
 `obs-summary-final.log`、`rank-compare-final.log`、`verify-reviewfix-final.log`、
 `verify-reviewfix-final2.log`、`verify-reviewfix-final3.log`（load 回落后全绿那次 = §10 引用的 2344/0）；
 第三轮审查修复后重跑的是 `backfill-fresh.log`（先清空 `embeddings` 再跑的首跑 + 重跑，§6 的表）、
@@ -578,9 +597,9 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
 
 ## 12. 已知问题与范围外发现
 
-- **4 条 `knownDivergence`**（§3.5）：标签互斥，不可能同时满足；已标注，不藏。
-- **`floorLeaks = 20`**：新锚点把 0.42–0.70 拉满，更多"弱相关"对会拿到非零语义分。但没有引入假阳性
-  （`floorMisfires = 0`，且一致度里 0 假阳性），因为判否由结构项 + 阈值 70 负责。
+- **4 条已知算法误判**（§3.5）：FP=3、FN=1，全部计入57条主分母；历史字段名不用于豁免。
+- **`floorLeaks = 20`**：更多弱相关对拿到非零语义分；floorMisfires=0 仅描述低于floor的漏召回，
+  不代表没有假阳性。完整标定结果为53/57，不宣称排除后全对。
 - **stub 环境的语义分恒 0**：stub 的余弦尺度（seed 相关对 0.33–0.49）与真实模型不可比。CI 不受影响，
   因为 S4 的结构权重和恰好 0.70（M3 §7）。
 - **范围外发现（Owner 要求修，见 §12.1）**：下列 5 条在 M4 收尾时一并修掉了，`core:smoke` /
@@ -602,8 +621,8 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
      所以 `real` 只跑到 `--sizes=6`（实证 `.m4-evidence/ann-probe-real.log`：`source:"real"`、
      `realEmbeddingRows 6`、`realEmbeddingModels 1`、p50 **0.076** ms / p95 **0.148** ms、`--no-index`、
      `needsAnn:false`；探针里已注明 `realEmbeddingRows` 是"维度匹配"的**超集**，不区分模型、不排除
-     版本号落后的行，只用于判"够不够跑 real 档"与 `needsAnn` 的行数腿，偏保守）；§5 的 1 万–10 万行
-     数字仍是**合成向量**下的结果；
+     版本号落后的行，只用于判"够不够跑 real 档"与 `needsAnn` 的行数腿，偏保守）；旧1万–10万行
+     合成曲线已撤回，修正后1千/5千/1万行结果见§5；
   5. **`obs:summary` 的覆盖率缺 `contentHash` 腿**（第四轮审查 F3，minor）：新增
      `apps/worker/src/jobs/embedding/content-hash-sql.ts` 在 SQL 侧复刻 TS 指纹，`withVersionFreshVector`
      作为诊断对照；对拍见 §7。
@@ -619,3 +638,251 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
   `embed:backfill` 产生，引擎不会为候选侧补投。
 - **失败补投只有日志**：`embed.retry` 是 stderr 事件，额度用尽（同一实体 24 h 内 3 条）后 job 停在
   `FAILED` 终态，没有告警通道，需要人看日志。
+
+## 13. 本轮收尾状态：最终审查BLOCK，当前修复版本需新独立验证
+
+（本节记录的是**当时**状态；其后经第二轮、第三轮 fresh 审查修复，并已完成 O 组 live 测量，最终状态见 §16 与 §17。）
+
+- Owner 确认“明确冲突才拦截，未知沿用hybrid”；本地门禁与解释边界见
+  [constraint gate](issue-322-matching-v2-constraint-gate.md)。不调整权重/阈值，不加商品/品牌补丁。
+- 新鲜度时钟倒退、未知陈述误杀、完整质量报告、保留旧模型及ANN重复语料均有新增回归。
+  修复前5条失败；第三轮小修复后约束/引擎定向35/35，新增独立fixture/脚本定向6/6，最新全量3306/3306（317文件）。
+  脚本strict类型检查/全仓typecheck/lint均exit 0，API+Worker的stub core smoke 266断言通过；工程证据与独立live质量分开报告。
+- 五轮fresh审查均为BLOCK，不宣称通过。标题无条件肯定已移除，标题/描述共享完整声明语法；复合标题不解析时退为unknown。
+  标题作用范围与复合命名退化均有回归，原误杀修复前失败；修复后约束/引擎定向38/38，全仓类型/lint及stub core smoke 266断言通过。
+  脚本strict检查完整命令与明确退出码在`.m4-evidence/review-5-script-typecheck.log`。实现已改变，最终fresh复审与新独立门禁仍需完成。第三轮无问号疑问助词也已修复。第二轮三条发现均有修复前失败、修复后通过的回归：
+  疑问不能截取“不是”当否定；queue.runOnce须在类型信息尚在时脱敏；补投测试须清理实际插入的新任务。
+- Drizzle错误message含SQL/params，脚本采用安全errorMessage；常驻Worker的真实路径现由queue在落last_error前调用它，
+  再将安全字符串传给job.settled。runOnce→存储→日志回归验证私密参数不泄露，不能仅凭logger单测宣称全链安全。
+- requeue测试按本文件唯一实体ID及初始job ID清理，包含生产函数补投的任务；不改生产补投接口。
+- H01–H24 是修复回归集，缓存回归22/24（FP=H17/FN=H07）明确标记非独立。完整57条历史标定集53/57（FP=3/FN=1）。
+- [N01–N24 新独立样本](issue-322-matching-v2-holdout-2.md) 在Owner明确回复“确认”后冻结，未据结果修算法/改标签。
+  `bun run embed:holdout --independent` 在旧冻结实现实测hybrid **23/24**、同组v1 **18/24**、semantic-only **17/24**；FP=N24、FN=0。
+  全部24条保留，两方向一致，全部vector recall；分类/预算负例以及v1/hybrid两方向的状态/审核/自己商品8个探针均无硬规则违反。
+  N24仍是兼容性误匹配（cosine .717785，score 85，constraint=unknown），不豁免，也不宣称任意兼容性推理可靠。
+  第四、五轮审查后实现已修改，上述结果只证明冻结旧实现，不作为修复版本的独立通过证据；原结果保留，不重写通过状态。
+  [O01–O24](issue-322-matching-v2-holdout-3.md)的O16标签已按本轮审查与Owner裁决从“否”纠正为“是（unknown放行）”（口径13是/11否，输入与算法未动）；当时尚未测量，**其后已于 2026-10-03 测量并通过（hybrid 23/24、v1 18/24、FP=O24、已知分歧=O16），见 §17**。
+- 当时本次独立live请求5次，累计**10/200**；修复回归、ANN和stub core smoke不新增出网请求，不操作生产库。
+  冻结记录与完整结果在 `.m4-evidence/holdout-independent-{freeze,result}.json`，执行记录在 `holdout-independent.log`。
+  O 组测量又用 5 次（见 §17），累计 **15/200**。
+- 切换/回滚必须执行[runbook](issue-322-matching-v2-cutover.md)，双侧补齐及结算验证不能省略。
+  尚未提交/推送/合并本轮改动，也不关闭Issue。
+
+## 14. 本轮 fresh 对抗审查的修复与最终工程验证
+
+审查结论：**BLOCK**，可执行发现已全部处置；实现随之改变，因此最终 fresh 复审与新独立 live 质量门禁仍需重跑，**不报告就绪**。
+（本节数字是**当时**状态；其后又经第二轮 fresh 审查修复，最新数字见 §15。）
+
+已修：
+1. **O16 标签（BLOCKER）**：冻结实现的完整分句口径下“不要有线的”判 unknown，而 O16 结构分项
+   kw/cat/price 全 100 = 0.32+0.15+0.23 = 70 = `MATCH_SCORE_THRESHOLD`，任何语义分都过线 ⇒
+   原“否”标签是确定性错配。我独立复算 24 条的结构下限（semantic=0）确认 O16 是唯一结构性错配。
+   Owner 裁决改为“是（unknown 放行）”，与 O07 同口径；`holdout-3.md` 口径改 13 是 / 11 否，
+   `independent-holdout-o-fixture.ts` 与转写测试同步，输入与算法未动。
+2. **`log.ts` SQLSTATE 丢失（MAJOR）**：真实 Bun 驱动错误把 SQLSTATE 放 `errno`
+   （`code = 'ERR_POSTGRES_SERVER_ERROR'`）。改为 `errno` 优先、兼容 pg 风格 `code`
+   （分支上已提交的 `queue.test.ts:206` 要求能取到 `23514`），并排除带数字 `errno`/`syscall`/`path`
+   的 Node 系统错误。`log.test.ts` 用真实形状重写，新增 pg 风格与 EPERM 两条。
+3. **`log.ts` fail-open（MINOR）**：裸驱动错误原会回传 `error.message`，把绑定参数值写进
+   `job.last_error`（实测 `invalid input syntax for type integer: "PRIVATE_WISH_TEXT"`）。
+   现默认拒绝，只回 `database query failed` 或 `database query failed (SQLSTATE XXXXX)`。
+4. **transactions 时钟残留 + 状态漂移新鲜度缺口（MAJOR）**：见 §9 新增行与“状态漂移的向量版本补投”段。
+   accept / cancel / confirm 完成 / 核销完成四条路径改 `clock_timestamp()` 并同事务补投 `EMBED_LISTING`；
+   新回归 `apps/api/src/modules/transactions/store.test.ts` 修复前 2 fail / 修复后 2 pass。
+
+最终工程验证（本机 scratch 库，0 次 live 请求，HTTP 预算仍为 10/200）：
+- `bun test --isolate`：**3312 pass / 0 fail / 11534 expect / 318 文件**（149.42s）。
+- `bun run typecheck`：9 个包 exit 0。
+- `bun run lint`：Checked 1055 files / 4 warnings（来自 main 既有文件）/ exit 0。
+- `EMBEDDING_TRANSPORT=stub bun run core:smoke`：266 断言通过（26858ms）。
+- 日志：`.m4-evidence/verify-m4-final2-full.log`。
+
+仍未通过 / 仍未做：
+- 最终 fresh 对抗复审（实现已改变，必须重跑）。
+- 新独立 live 质量门禁：O01–O24 未测量（已获批 5 次 HTTP）。
+- `.m4-evidence/` 被 gitignore，N 组 23/24 与本轮日志无法从干净 checkout 复现，只有文档记录；
+  `holdout-independent-freeze.json` 冻的是旧实现哈希（`2525d827…` ≠ 当前 `606aec56…`），
+  O 组改用独立文件 `holdout-independent-o-freeze.json` 冻结当前实现。
+- 尚未提交/推送/合并本轮改动。
+
+## 15. 第二轮 fresh 对抗审查的修复与最终工程验证
+
+审查结论：**BLOCK**，可执行发现已全部处置（F1–F6；F3 经 Owner 裁决）；实现再次改变，因此最终 fresh 复审与 O 组 live 门禁仍需重跑，**不报告就绪**。
+
+已修：
+1. **F1 MAJOR（日志脱敏漏点）**：`apps/worker/src/index.ts` 的视觉维护 catch 原用
+   `error instanceof Error ? error.message : String(error)`，而该 catch 包住会查 DB 的
+   `visualBackfill.runPass()` 与 `cleanupExpiredVisualQueryImages()` ⇒ 真实 drizzle 错误的 SQL 文本与绑定参数值原样进 stderr
+   （实测形状 `message: "Failed query: select $1::int\nparams: PRIVATE_VALUE"`、`cause.errno: "22P02"`）。
+   该文件顶层有副作用（建队列、`recoverStaleClaims`、主循环），无法被测试 import，故把维护逻辑抽到
+   `apps/worker/src/jobs/visual-embedding/maintenance.ts` 的 `createVisualMaintenance()`，失败上报改 `errorMessage()`；
+   `index.ts` 只保留 `const runVisualMaintenance = createVisualMaintenance({...})`，主循环调用点未动。
+   新回归 `apps/worker/src/jobs/visual-embedding/maintenance.test.ts`（4 test / 13 expect）：
+   失败前把上报改回 `error.message` → **2 pass / 2 fail**，失败断言收到的字面值含
+   `Failed query: delete from media_objects where id = $1` 与 `params: PRIVATE_MEDIA_ID`；修复后 4 pass。
+2. **F2 MEDIUM（愿望侧状态漂移）**：`apps/api/src/modules/wishes/store.ts:217` 的 `updateStatusIfActive` 取
+   `clock_timestamp()` 推进实体版本，但唯一调用点 `transition`（`apps/api/src/modules/wishes/service.ts`）不投 job；
+   实测 `similarWishesByIds` 由 1 条变 0 条而行仍在 ⇒ 需求 2 的不变式不成立。
+   已修：`transition()` 在成功分支与“已经是目标态”分支都补投 `matchQueue.enqueue(id)`
+   （成对投 EMBED_WISH + MATCH_WISH；对非 ACTIVE 愿望 `engine.ts:611` 会 `skipped('target-not-active')`，不写匹配行）。
+   诚实边界：四个匹配读接口与 `narrowedWishes` 都只看 `status='ACTIVE'`，终态愿望今天本就不会再被匹配，
+   所以这不是用户可见回归，而是**不变式缺口**（`matchListing` 既有行重算走无 status 谓词的 `similarWishesByIds`，只会剩结构分）。
+   新回归在 `apps/api/src/modules/wishes/service.test.ts`：去掉两处补投 → **8 pass / 1 fail**；修复后 **9 pass / 0 fail / 24 expect**。
+3. **F3 MEDIUM（口径分歧）**：O16 由“否”改为“是”后，`falsePositiveIds = hybridMatch && !expected` 会让这条已知错配
+   在唯一剩下的独立 live 门禁里永久消失，还计入 `hybridAgreements` 分子。Owner 裁决**维持“是（unknown 放行）”并显式披露**：
+   `independent-holdout-o-fixture.ts` 新增 `INDEPENDENT_HOLDOUT_O_KNOWN_DIVERGENCES = ['O16']`，
+   `embed-holdout.ts` 把它写进 `summary.knownDivergenceIds`（随 `holdout.summary` 日志与 result JSON 输出），
+   [holdout-3](issue-322-matching-v2-holdout-3.md) 验收口径写明这是 Owner 裁决显式披露的已知口径分歧；
+   验收仍为 hybrid≥22/24 且 FP≤1（O16 不计入 FP），但**不得把它汇报成“0 条假阳性”**。
+4. **F4 LOW（证据可复现）**：全量验证日志此前未固定传输方式（`.env` 是 live）。本轮起证据命令一律
+   `EMBEDDING_TRANSPORT=stub bun test --isolate`，并把命令头写进日志（`verify-m4-final3-full.log`、`verify-m4-final4-full.log`）。
+5. **F5 LOW（口径表述）**：审查报告认为 v1 基线不含门禁，经核代码**不成立**：v1 与 hybrid 都走
+   `scoreConstrainedMatch`（`engine.ts:449` 商品方向、`:725` 愿望方向；`similarity` 缺失即 `null` 走 v1 分支），
+   门禁两侧生效，判定是严格大于（`embed-holdout.ts` `hybridAgreements > v1Agreements`）；
+   只有结果行的诊断字段 `v1Score` 不含门禁。[holdout-2](issue-322-matching-v2-holdout-2.md) 早已写明“同组v1正确（同一约束门禁，真实fallback落库）”，
+   holdout-3 验收口径已补写同口径机制与严格大于。
+6. **F6 LOW（结果可核对）**：`embed-holdout.ts` 原先只在独立验证时才计算 6 个算法文件哈希。现改成任何运行都算，
+   并把 `algorithmHashes` 写进 result JSON ⇒ 单看结果文件即可判断跑的是哪份实现（冻结对象字段未变，N 组冻结比较仍通过）。
+
+范围外只报告、未修（本 PR 未触碰这两个文件，按 AGENTS.md 不在本 Issue 顺手改）：
+- `apps/api/src/app.ts:110-125` 的 `describeError` 取 `error.message.split('\n')[0]`，由 `:678` 输出 ⇒ drizzle 首行
+  `Failed query: <SQL>` 会进日志（绑定参数因只取首行被截掉）。
+- `apps/api/src/modules/recommendation/service.ts:131,:383` 直接 `console.error(..., error)` 打印整个错误对象。
+若把需求 3 按“任何一条日志行都不得含 SQL 文本”字面执行，这两处尚未达成；是否开 Issue 由 Owner 决定。
+
+最终工程验证（本机 scratch 库，0 次 live 请求，HTTP 预算仍为 10/200）：
+- `EMBEDDING_TRANSPORT=stub bun test --isolate`：**3318 pass / 0 fail / 11553 expect / 319 文件**（199.64s）。
+- `bun run typecheck`：9 个包 exit 0。
+- `bun run lint`：Checked 1057 files / 4 warnings（来自 main 既有文件）/ exit 0。
+- `EMBEDDING_TRANSPORT=stub bun run core:smoke`：266 断言通过（47532ms）。
+- 日志：`.m4-evidence/verify-m4-final4-full.log`（首轮 pin stub 为 `verify-m4-final3-full.log`）。
+
+仍未通过 / 仍未做：
+- 最终 fresh 对抗复审（本轮修复后实现已再次改变）。
+- O01–O24 live 质量门禁未测量（已获批 5 次 HTTP；`--independent-o` 用独立冻结文件 `holdout-independent-o-freeze.json`）。
+- `.m4-evidence/` 被 gitignore，live 证据无法从干净 checkout 复现；上述两处范围外日志泄漏未修。
+- 尚未提交/推送/合并本轮改动。
+
+## 16. 第三轮（增量）fresh 对抗审查的修复与最终工程验证
+
+审查范围只有本轮 delta 的 9 个文件，结论 **BLOCK**：只有 1 条可执行发现（F1），另有 2 条文档/口径缺口与 2 条 INFO 级注释口径问题。全部已处置；F4 类"其他 `now()` 写入点"按 AGENTS.md 只报告不修。
+
+已修：
+1. **F1（需求 2 不变式，LOW–MEDIUM）**：`apps/api/src/modules/wishes/service.ts` 的并发竞态分支
+   `if (rowStatus(concurrent) === target) return toWishDto(concurrent)` 是一次**成功返回**（客户端不会重试），
+   但没有补投向量刷新。若赢家写入状态后 `enqueue` 抛错或进程崩溃，这条愿望的向量行
+   `source_updated_at` 就永久停在旧版本（`freshWishesEmbedding()` 要求毫秒等值），且如 §15 所述
+   没有任何后续请求会修它 —— 与第 115-120 行修掉的是同一类问题。已在该分支 return 前加
+   `await refreshVectorAfterTransition(id)`。
+   新回归 `apps/api/src/modules/wishes/service.test.ts`：`并发竞态输家返回目标态时同样补投……`
+   （`RacingWishStore` 覆写 `updateStatusIfActive` 把行改成目标态后返回 `null`，模拟另一连接先提交）。
+   失败前证据：把该分支还原成单行 → 该文件 **9 pass / 1 fail**（`Expected -3 / Received +1`）；修复后
+   三个定向文件 **16 pass / 0 fail / 44 expect**。
+2. **F5（注释口径，INFO）**：`refreshVectorAfterTransition` 的注释原文称终态愿望"永久掉出语义候选"，
+   高估了用户可见影响。已改为如实边界：向量行确实会掉出 `similarWishesByIds`（唯一调用点 `engine.ts:568`），
+   但终态愿望本就被 `creatable()`（`engine.ts:584-596`）排除 ⇒ 这是**不变式与 `obs:summary` 新鲜度可观测性**的缺口，
+   不是用户可见召回回归；并写明投递在状态写入之后、不假装原子、重试与并发分支都会补投。
+3. **F2（验收口径透明，LOW）**：脚本 `passed`（`embed-holdout.ts:408-417`，进程退出码同源）除四条已批准口径外
+   还要求 `summary.allVectorRecall`、`summary.hardRuleProbeControlValid`、`summary.hardRuleProbeViolations === 0`，
+   而三份文档此前对这些字段零命中 ⇒ 门禁可能 exit 1 而"已批准口径全过"。
+   [holdout-3](issue-322-matching-v2-holdout-3.md) 验收口径已逐项补写这三项的语义
+   （并说明 `hardRuleProbeViolations` 与 `hardRuleViolationIds` 是不同字段），声明文档口径与脚本判定以该节为准。
+4. **F3（证据可复现，LOW）**：[holdout-3](issue-322-matching-v2-holdout-3.md) 记录的执行命令改为
+   `EMBEDDING_TRANSPORT=live EMBEDDING_MODEL=text-embedding-v4 bun run embed:holdout --independent-o`，
+   并说明为什么必须显式写前缀（`.env` 被 gitignore、`.env.example` 是 `stub`，干净 checkout 下会在
+   `embed-holdout.ts:121-123` 中止；脚本自身拒绝非 live，所以产出的证据一定是 live）。
+5. **F2 后半（冻结覆盖面）**：`embed-holdout.ts` 的 `algorithmFiles` 由 6 个扩到 **9 个**，加入
+   `apps/worker/src/jobs/embedding/handlers.ts`、`apps/api/src/modules/wishes/match-queue.ts`、
+   `packages/db/src/schema/common.ts` ⇒ 冻结记录现在也能发现后续对 M4 向量新鲜度修复的改动。
+   （N 组冻结比较本就因 `constraints.ts` 哈希变化而失败，多这几项不改变该结论；O 组冻结尚未创建。）
+
+只报告未修（均非本轮 delta 引入，且本 PR 未触碰这些文件）：
+- `apps/api/src/modules/wishes/store.ts:142` 的 `createWish` INSERT 仍用 `now()` 写 `updated_at`：
+  新行不存在版本倒退、等价 schema `defaultNow()`，且 EMBED_WISH 同事务投递 ⇒ 无新鲜度回归。
+- 同类 `now()` 写入点（都不是 embedding 实体、按 §9 保持原语义）：`apps/api/src/modules/messages/store.ts:434,:478`、
+  `apps/api/src/modules/messages/media-store.ts:241`、`apps/api/scripts/core-smoke.ts:1422`。
+- §15 已列的两处范围外日志泄漏（`apps/api/src/app.ts:110-125`、`apps/api/src/modules/recommendation/service.ts:131,:383`）不变。
+
+审查者独立复算并认可的（可引用）：需求 1 的脱敏修复**承重且 red-before-fix**（回退成 `error.message` → 2 pass / 2 fail，
+泄漏原文含 `Failed query: select $1::int` 与 `params: PRIVATE_WISH_TEXT`）；`index.ts` 维护抽取忠实
+（唯一行为差异是改用 `errorMessage`）；需求 4 只有 `contradicted` 归零、唯一入口 `engine.ts:449`/`:725`；
+需求 2 商品侧 `listings/store.ts:816` 同事务；O 组 fixture 与文档逐字段一致且 `holdout-independent-o-{freeze,result}.json`
+**不存在** ⇒ 标签未因任何测量结果改动。
+
+最终工程验证（本机 scratch 库，0 次 live 请求，HTTP 预算仍为 10/200；命令头 pin `EMBEDDING_TRANSPORT=stub`）：
+- `EMBEDDING_TRANSPORT=stub bun test --isolate`：**3319 pass / 0 fail / 11555 expect / 319 文件**（185.90s），exit 0。
+- `bun run typecheck`：9 个包 exit 0。
+- `EMBEDDING_TRANSPORT=stub bun run core:smoke`：266 断言通过（31967ms），exit 0。
+- `bun run lint`：**Checked 1057 files / 4 warnings（全部来自 main 既有文件）/ exit 0**。
+  工程注意：`bun run lint` 的第一次运行（与并行审查子代理同时）曾报 2 个 format error，来源是该子代理留在仓库内的
+  临时探针目录 `apps/worker/.verify-scratch-red/`（不是本改动）；它清理后复跑即上表结果。
+  教训：**并行子代理的仓库内 scratch 会污染 lint/全量测试证据**，验证必须在所有写者退出后重跑。
+  本节的数字来自所有写者退出后的最后一次全量运行（`date: 2026-10-03T15:21:03+08:00`，日志头部含当时 `git status --short`）。
+- 日志：`.m4-evidence/verify-m4-final6-full.log`。
+
+### 16.1 第三轮窄口径验证（子代理 `00af54f7`，只审本轮 4 个文件）
+
+结论：**无 blocker**。它独立复核了并发分支修复的完整性（`transition()` 恰有 3 个成功 `return` —— `service.ts:127`/`:136`/`:147`，
+各自紧邻 `:126`/`:135`/`:146` 的补投；其余 `return` 全是 throw ⇒ 无漏投成功路径）、重复投递无害
+（`enqueue` 先按内容指纹 prune、两条 INSERT 都 `ON CONFLICT DO NOTHING`；非 ACTIVE 愿望的 `MATCH_WISH` 被
+`engine.ts:611`（愿望方向）/`:494`（商品方向）跳过）、新测试在去掉那一行后确实变红（9 pass / 1 fail），
+以及 freeze 校验发生在 `CREATE DATABASE`（`:206`）与首次 `provider.embed()`（`:299`）之前。
+
+它提出的 3 条（全部已处置）：
+1. **[holdout-3](issue-322-matching-v2-holdout-3.md) 验收口径的项数与指代错误**：原文写"上面四条 + 三项 = **7 项**"，
+   而脚本 `passed`（`embed-holdout.ts:408-417`）是 **9 个 `&&` 条件**（第一条验收口径本身含 6 个判定）。
+   已改为逐条列出这 9 项并修正指代 —— 这正是 R5 要禁的口径漂移。
+2. **过期行号**：原文引 `embed-holdout.ts:403-412`（`passed` 实际在 `:408-417`）。已改（holdout-3、本文件、constraint-gate 三处）。
+3. **`algorithmFiles` 不是严格超集**：原 9 个文件未含真正产出被测量向量的
+   `apps/worker/src/jobs/embedding/providers/index.ts`、`providers/live.ts`，以及 `packages/db/src/schema/embeddings.ts`。
+   已扩到 **12 个**（残留风险：日后在 `live.ts` 加归一化这类不改 model/dimensions/text 的变换会让 O 组静默漂移）。
+   它同时确认：旧 N 组冻结的 `algorithmHashes` 恰是旧 6 个键 ⇒ 现在重跑 `--independent` 会硬抛"独立集冻结记录不一致，未出网"，
+   与"旧 N 结果不用于当前版本验收"自洽；O 组 freeze/result 均尚不存在，将首次冻结。
+
+它未能验证（如实计入）：freeze 不一致时的抛错未实跑（需 live，被硬约束禁止）、O 组 live 门禁本体、真实上游行为。
+
+仍未通过 / 仍未做：
+- O01–O24 live 质量门禁**已于 2026-10-03 测量并通过**（5 次 HTTP，累计 15/200），见 §17；以上“仍未做”仅指本节当时状态。
+- `.m4-evidence/` 被 gitignore，live 证据无法从干净 checkout 复现；三处范围外日志/`now()` 位点未修。
+- 尚未提交/推送/合并本轮改动。
+
+## 17. O 组（O01–O24）live 质量门禁：已测量并通过
+
+Owner 批准的 5 次 live 请求已于 2026-10-03 执行完毕（累计 **15/200**）；实现与标签在此前已冻结，测量后未再改动。
+
+命令与证据：
+- `EMBEDDING_TRANSPORT=live EMBEDDING_MODEL=text-embedding-v4 bun run embed:holdout --independent-o`（真实 `text-embedding-v4` / 1536 维；传输显式固定，不依赖 gitignored 的 `.env` 默认值）。
+- 冻结（在**任何建库与出网之前**写入）：`.m4-evidence/holdout-independent-o-freeze.json` —— 24 条样本 + `inputHash 7b927f0517df576041d2f5d964d4827a526eac2002c2feedf464ccafd8db8f1f` + 12 个算法文件哈希。
+- 结果：`.m4-evidence/holdout-independent-o-result.json` —— 其 `inputHash` 与 `algorithmHashes` 与 freeze **逐字段相同**。
+- 进程输出：`.m4-evidence/holdout-o-live.log`；通过后 scratch 库 `fish322_holdout_1791012360760_1324` 已 DROP（既有 N 组留存库未动）。
+- 预算文件：`{"requests":15,"limit":200}`。
+
+门禁结果：`passed = true`，进程 exit 0。
+
+| 指标 | 实测 | 阈值 | 结论 |
+| --- | --- | --- | --- |
+| hybrid 一致 | **23/24** | ≥22 | 通过 |
+| 同组 v1 一致 | **18/24** | 严格小于 hybrid | 通过（23 > 18） |
+| FP | **1**（O24） | ≤1 | 通过 |
+| FN | 0 | — | 通过 |
+| 两方向不一致 | 0 | 0 | 通过 |
+| 硬规则违反（`hardRuleViolationIds`） | 0 | 0 | 通过 |
+| 硬规则探针 | `hardRuleProbeViolations=0`、`hardRuleProbeControlValid=true` | 0 / true | 通过 |
+| 向量召回 | `allVectorRecall=true`（24 条两方向都走 `vector-topk`） | true | 通过 |
+| 已知口径分歧（不计入 FP） | `knownDivergenceIds=["O16"]` | 显式披露 | 已披露 |
+
+诚实口径（两条必须一起汇报，逐条细节见 [holdout-3](issue-322-matching-v2-holdout-3.md) 的“测量结果”节）：
+1. **O24 是真实假阳性**：cos 0.7007 → 语义分 100、总分 85；愿望“必须支持华为平板”被落成 `unknown`
+   （约束门禁未识别该需求谓词），而结构分项本身已达 70，因此过线。它与 N 组的 N24 同类，
+   本组 FP 上限（≤1）因此被占满。
+2. **O16 是已披露的已知分歧**：按标签它计入 23/24；按严格读法它是错配 ⇒ 严格口径下为 **22/24**。
+   汇报**不得**写成“FP=1 且无已知分歧”。
+
+语义召回的边际：O03/O04/O05/O06/O08/O11 六条（关键词分 0、v1 裸结构分 65 < 70，故 v1 漏判）由语义分
+（cos 0.616–0.729）推到总分 76–85 而判中 —— 这是 v2 相对同组 v1 的主要增益（18 → 23）。
+正确拒绝侧：O13/O21 语义分 0（总分 55）、O19（cos 0.493）/O20（0.433）/O23（0.570）均在阈值下；
+O14/O15/O23 结构层 `eligible=false`；O17/O18/O22 命中 `contradicted` 被归零。
+
+结论：O 组独立 live 门禁**通过**，且是在冻结实现上一次性测得（未因结果改标签、删样本或调参）。
+仍如实保留的缺口：`.m4-evidence/` 被 gitignore ⇒ live 证据无法从干净 checkout 复现（指纹已记入文档与结果文件）；
+§15/§16 列出的范围外日志与 `now()` 位点未修（本 PR 未触碰那些文件）。

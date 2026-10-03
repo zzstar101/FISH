@@ -90,25 +90,61 @@ export function createWishService({
     return wish
   }
 
+  /**
+   * 状态流转后补投一次向量刷新（#322 M4 复审修复）。
+   *
+   * `updateStatusIfActive` 取 `clock_timestamp()`，即状态流转同样推进实体版本；而语义召回的
+   * 新鲜度谓词要求向量行的 `source_updated_at` 与实体版本**毫秒级相等**
+   * （`packages/db/src/embedding-store.ts` 的 `freshWishesEmbedding()`）。内容没变时
+   * `EMBED_WISH` 走 handler 的 `unchanged` 分支，只把向量行的版本标记推进到实体当前版本，
+   * **不重复调用 provider**。漏掉这一步，向量行会永久停在旧版本、掉出 `similarWishesByIds`
+   * 的候选（该查询无状态谓词，`engine.ts` 商品方向的既有行补算走它），重算也只剩结构分。
+   * 诚实边界：终态愿望本来就被 `creatable()` 排除在可见匹配之外，所以这不是用户可见的召回
+   * 回归，而是**不变式与新鲜度可观测性的缺口**（`obs:summary` 的 fresh 计数会一直显示它不新鲜）。
+   *
+   * 复用 `enqueue()` 的成对投递：`MATCH_WISH` 对非 ACTIVE 愿望会 `skipped('target-not-active')`
+   * （`apps/worker/src/jobs/matching/engine.ts`），不写任何匹配行，所以这里不必再造一条只投
+   * EMBED 的路径。
+   *
+   * 投递在状态写入之后（与 `createWish`/`updateWish` 一样不假装原子）：投递失败会抛错，但状态
+   * 已提交，客户端重试会走 `current === target` 分支再补投一次。并发竞态的“输家”也会走到
+   * 目标态分支（见下方 `rowStatus(concurrent) === target`），那里同样要补投——否则赢家的投递
+   * 若失败，就没有任何一次请求会再修它。
+   */
+  const refreshVectorAfterTransition = (id: string) => matchQueue.enqueue(id)
+
   const transition = async (userId: string, id: string, target: 'CLOSED' | 'FULFILLED') => {
     const wish = await store.findById(id)
     if (!wish) throw new WishServiceError(404, '愿望不存在')
     if (wish.user_id !== userId) throw new WishServiceError(403, '无权操作该愿望')
 
     const current = rowStatus(wish)
-    if (current === target) return toWishDto(wish)
+    if (current === target) {
+      // 已经是目标态：不再写状态，但仍要补投——上一次状态写入的投递可能失败过（状态已提交，
+      // 而客户端重试会走到这个分支），漏掉它就等于向量行永久停在旧版本。
+      await refreshVectorAfterTransition(id)
+      return toWishDto(wish)
+    }
     if (current !== 'ACTIVE') throw new WishServiceError(409, '愿望已经处于终态')
 
     const updated = await store.updateStatusIfActive(id, target)
     if (updated) {
       invalidatePoolCache()
+      // 先失效缓存再投递，与 `createWish`/`updateWish` 同一顺序。
+      await refreshVectorAfterTransition(id)
       return toWishDto(updated)
     }
 
     const concurrent = await store.findById(id)
     if (!concurrent) throw new WishServiceError(404, '愿望不存在')
     if (concurrent.user_id !== userId) throw new WishServiceError(403, '无权操作该愿望')
-    if (rowStatus(concurrent) === target) return toWishDto(concurrent)
+    if (rowStatus(concurrent) === target) {
+      // 并发竞态里我们输给了另一个写入者（或同一次提交的重试）：状态已是目标态、条件更新落空。
+      // 这是一次成功返回，客户端不会重试，所以必须在这里补投——否则赢家的投递若失败，就没有
+      // 任何后续请求会修这条向量行。
+      await refreshVectorAfterTransition(id)
+      return toWishDto(concurrent)
+    }
     throw new WishServiceError(409, '愿望已经处于终态')
   }
 

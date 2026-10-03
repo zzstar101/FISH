@@ -569,6 +569,62 @@ async function embedJobs(kind: 'listing' | 'wish', id: string) {
     .where(sql`${jobs.payload}->>${sql.raw(`'${key}'`)} = ${id}`)
 }
 
+describe('显式约束门禁', () => {
+  test('fallback 两方向都阻止冲突新匹配；编辑后降级既有高分且不重复通知', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword, {
+        title: keyword,
+        description: '是电缆，长度一米，外皮完整。',
+      })
+      const wishId = await createWish(buyerId, keyword, { description: '不要电缆' })
+      await engine.matchWish(wishId)
+      await engine.matchListing(listingId)
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(0)
+
+      await db.update(wishes).set({ description: null }).where(eq(wishes.id, wishId))
+      await engine.matchWish(wishId)
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+
+      await db.update(wishes).set({ description: '不接受电缆' }).where(eq(wishes.id, wishId))
+      await engine.matchListing(listingId)
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(0)
+      await engine.matchWish(wishId)
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(0)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+    })
+  })
+
+  test('vector 两方向冲突不放行；未知与普通偏好不抑制原 hybrid', async () => {
+    await withFixture(async ({ sellerId, buyerId }) => {
+      const keyword = uniqueKeyword()
+      const listingId = await createListing(sellerId, keyword, {
+        title: keyword,
+        description: '是电缆',
+      })
+      const wishId = await createWish(buyerId, keyword, { description: '不要电缆' })
+      await embedListing(listingId, axisVector(0))
+      await embedWish(wishId, axisVector(0))
+      expect((await engine.matchWish(wishId)).recall).toBe('vector-topk')
+      expect((await engine.matchListing(listingId)).recall).toBe('vector-topk')
+      expect(await matchRows(listingId, wishId)).toHaveLength(0)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(0)
+
+      await db
+        .update(wishes)
+        .set({ description: '必须支持未知协议，蓝色最好' })
+        .where(eq(wishes.id, wishId))
+      await embedWish(wishId, axisVector(0))
+      await engine.matchListing(listingId)
+      await engine.matchWish(wishId)
+      expect((await matchRows(listingId, wishId))[0]?.score).toBe(100)
+      expect(await matchNotifications(buyerId, wishId)).toHaveLength(1)
+    })
+  })
+})
+
 describe('向量召回（#322 M2）', () => {
   test('目标向量就绪：走 vector-topk，语义分参与打分并落库', async () => {
     await withFixture(async ({ sellerId, buyerId }) => {

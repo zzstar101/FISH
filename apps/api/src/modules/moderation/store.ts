@@ -138,7 +138,7 @@ export function createSqlModerationStore(
             moderation_rule_version = ${record.rule_version},
             moderated_at = now(),
             status = ${listingStatus}::listing_status,
-            updated_at = now()
+            updated_at = clock_timestamp()
         WHERE id = ${record.listing_id}
       `)
 

@@ -9,8 +9,8 @@
 //     （Issue 明确要求"重建完成后可触发 match 重算"，不允许要求人工逐条编辑）；
 //   * **可断点续跑**：内容指纹命中（`unchanged`）的实体不重复调 provider / 不重复计费，
 //     所以中断后直接重跑同一批即可（不建 checkpoint 表）；
-//   * **有速率 / 并发上限**：默认并发 1、上限 4（上游限流 + "同一 DB 同时只能跑一个 worker"
-//     两条约束下的保守值；每个实体=1 次请求，批量大小 1，天然不超过上游每请求行数上限）。
+//   * **有速率 / 并发上限**：默认并发 1、上限 4；默认每秒启动最多 1 次上游 HTTP 请求，
+//     provider 内部重试计入限速，不积攒突发额度，内容指纹命中不占请求额度。
 //
 // 运行（仓库根目录）：
 //   bun run embed:backfill -- --entity=listing --limit=100
@@ -21,12 +21,12 @@
 //   --entity=listing|wish|both   默认 both
 //   --limit=N                    每类最多处理 N 条（按 created_at, id 升序；默认不限）
 //   --concurrency=N              并发数，默认 1，上限 4
+//   --requests-per-second=N      有限正数，默认 1（同一进程内包含所有重试）
 //   --model=<name>               覆盖 `EMBEDDING_MODEL`（只在 live transport 生效）
-//   --purge-other-models         每个实体写入成功后删除它**其它 model** 的向量行（换模型重建用；
-//                                默认保留旧模型的行，以便"改回 EMBEDDING_MODEL"即可回滚）
 //   --dry-run                    只统计将要处理多少条，不调 provider、不写库
 //
-// 换模型 = 改 `EMBEDDING_MODEL` + 跑本脚本（可选 `--model=` 覆盖，只影响本脚本）。
+// 换模型必须暂停 Worker、保留旧向量、双侧回填并验证重算；回滚也要补齐旧模型的新鲜向量。
+// 完整切换/回滚门禁见 docs/design/issue-322-matching-v2-cutover.md。
 // 注意：脚本直接往 jobs 表投 MATCH_*，不 import `apps/api` 的队列封装——worker 不依赖 api 包；
 // 投递形状与 `apps/api/src/modules/wishes/match-queue.ts` / `jobs/embedding/enqueue.ts` 保持一致
 // （`::text::jsonb` 双转型，见 enqueue.ts 的注释）。
@@ -36,13 +36,13 @@ import { MATCH_JOB_TYPES } from '@fish/contracts/matching/jobs'
 import type { Db } from '@fish/db/client'
 import { createDb } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
-import { embeddings } from '@fish/db/schema/embeddings'
 import { listings } from '@fish/db/schema/listings'
 import { wishes } from '@fish/db/schema/wishes'
 import { loadEmbeddingEnv, loadServerEnv } from '@fish/shared/env'
-import { and, asc, eq, ne, sql } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { generateEntityEmbedding } from '../src/jobs/embedding/handlers'
 import { createEmbeddingProvider } from '../src/jobs/embedding/providers'
+import { createEmbeddingRequestGate } from '../src/jobs/embedding/providers/request-gate'
 import { elapsedMs, errorMessage, logErrorEvent, logEvent } from '../src/log'
 
 /** 并发上限：超过它对上游限流没有好处，只会让失败重试更密集。 */
@@ -56,9 +56,9 @@ type BackfillOptions = {
   entity: EntityScope
   limit: number | null
   concurrency: number
+  requestsPerSecond: number
   model: string | null
   dryRun: boolean
-  purgeOtherModels: boolean
 }
 
 type BackfillTarget = { kind: 'listing' | 'wish'; id: string }
@@ -79,16 +79,14 @@ function parseArgs(argv: string[]): BackfillOptions {
     entity: 'both',
     limit: null,
     concurrency: 1,
+    requestsPerSecond: 1,
     model: null,
     dryRun: false,
-    purgeOtherModels: false,
   }
 
   for (const arg of argv) {
     if (arg === '--dry-run') {
       options.dryRun = true
-    } else if (arg === '--purge-other-models') {
-      options.purgeOtherModels = true
     } else if (arg.startsWith('--entity=')) {
       const value = arg.slice('--entity='.length)
       if (value !== 'listing' && value !== 'wish' && value !== 'both') {
@@ -109,6 +107,12 @@ function parseArgs(argv: string[]): BackfillOptions {
         1,
         MAX_CONCURRENCY,
       )
+    } else if (arg.startsWith('--requests-per-second=')) {
+      const value = Number(arg.slice('--requests-per-second='.length))
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new UsageError('--requests-per-second 必须为有限正数')
+      }
+      options.requestsPerSecond = value
     } else if (arg.startsWith('--model=')) {
       const value = arg.slice('--model='.length)
       if (value.length === 0) throw new UsageError('--model 不能为空')
@@ -191,18 +195,6 @@ async function enqueueMatchJob(db: Db, target: BackfillTarget): Promise<void> {
   `)
 }
 
-/** 换模型重建时清掉该实体其它模型的向量行（默认不做，见文件头 `--purge-other-models`）。 */
-async function purgeOtherModels(db: Db, target: BackfillTarget, keepModel: string): Promise<void> {
-  await db
-    .delete(embeddings)
-    .where(
-      and(
-        eq(target.kind === 'listing' ? embeddings.listingId : embeddings.wishId, target.id),
-        ne(embeddings.model, keepModel),
-      ),
-    )
-}
-
 /** 固定并发数的任务池：不引依赖，`--concurrency=1` 时就是顺序执行。 */
 async function mapWithConcurrency<T>(
   items: T[],
@@ -240,12 +232,14 @@ async function main(): Promise<void> {
   const env = loadServerEnv()
   const embeddingEnv = loadEmbeddingEnv()
 
+  const gate = createEmbeddingRequestGate({ requestsPerSecond: options.requestsPerSecond })
   // `--model` 只对 live 有意义（stub 的模型名是编译期常量），因此只在 live 分支覆盖。
   const provider = createEmbeddingProvider(
     embeddingEnv.transport === 'live' && options.model !== null
       ? { ...embeddingEnv, model: options.model }
       : embeddingEnv,
     {
+      beforeRequest: gate.beforeRequest,
       onRequest: (event) => {
         const line = { event: 'embed.request', model: provider.model, ...event }
         // 与 worker 运行时同一约定：失败分类（retryable / fatal）走 stderr（`src/log.ts`）。
@@ -272,7 +266,7 @@ async function main(): Promise<void> {
     entity: options.entity,
     limit: options.limit,
     concurrency: options.concurrency,
-    purgeOtherModels: options.purgeOtherModels,
+    requestsPerSecond: options.requestsPerSecond,
     dryRun: options.dryRun,
     targets: targets.length,
   })
@@ -322,7 +316,6 @@ async function main(): Promise<void> {
       // `stale`（生成期间被编辑，本次结果被更新的内容取代）与 `missing`（实体已删）都不投匹配——
       // 前者由那次编辑自己投的 job 负责，后者没有可重算的目标。
       if (result.status === 'generated' || result.status === 'unchanged') {
-        if (options.purgeOtherModels) await purgeOtherModels(db, target, provider.model)
         await enqueueMatchJob(db, target)
         counts.matched += 1
       }
@@ -358,6 +351,8 @@ async function main(): Promise<void> {
     concurrency: options.concurrency,
     targets: targets.length,
     counts,
+    requestsPerSecond: options.requestsPerSecond,
+    httpRequests: gate.requests,
     durationMs: elapsedMs(startedAt),
   })
 
@@ -371,8 +366,10 @@ try {
   if (error instanceof UsageError) {
     console.error(`${error.message}\n`)
     console.error('用法：bun run embed:backfill -- [--entity=listing|wish|both] [--limit=N]')
-    console.error('      [--concurrency=1..4] [--model=<name>] [--purge-other-models] [--dry-run]')
+    console.error('      [--concurrency=1..4] [--requests-per-second=N] [--model=<name>]')
+    console.error('      [--dry-run]')
     process.exit(2)
   }
-  throw error
+  logErrorEvent({ event: 'embed.backfill.failed', error: errorMessage(error) })
+  process.exitCode = 1
 }

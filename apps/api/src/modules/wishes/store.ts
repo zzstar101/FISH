@@ -200,7 +200,7 @@ export function createSqlWishStore(db: Db): WishStore {
         fields.acceptSimilar !== undefined
           ? sql`accept_similar = ${fields.acceptSimilar}`
           : undefined,
-        sql`updated_at = now()`,
+        sql`updated_at = clock_timestamp()`,
       ]
       return firstWishRow(
         await db.execute(sql`
@@ -217,7 +217,7 @@ export function createSqlWishStore(db: Db): WishStore {
     async updateStatusIfActive(id, status) {
       return firstWishRow(
         await db.execute(sql`
-        UPDATE wishes SET status = ${status}, updated_at = now()
+        UPDATE wishes SET status = ${status}, updated_at = clock_timestamp()
         WHERE id = ${id} AND status = 'ACTIVE'
         RETURNING *, (SELECT count(*)::int FROM matches m WHERE m.wish_id = wishes.id) AS match_count
       `),

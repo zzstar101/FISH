@@ -14,8 +14,8 @@
 //     （避免把"人估"和"实测"混在一起——M3 踩过的就是这个坑）。
 //
 // 标签冻结后，参数修改的验收 = `--sections=calibration` 的一致度（现为 53/57，M3 旧参数 39/57）。
-// 剩余 4 条标了 `knownDivergence`：结构特征相同而标签相反的可证冲突，或实测 cos 与标签相反，
-// 参数不可弥补——它们不计入"参数一致度"，但标签一条都没改（见 M4 文档 §已知分歧）。
+// 剩余 4 条是当前算法的已知误判（历史标注字段名 knownDivergence），不是标签矛盾。
+// 全部 57 条保留在主分母，直接报告完整 FP/FN；标注不用于排除失败行。
 //
 // 九类样本沿用 M3 的 `RankingSampleClass`，另加三类 M3 没覆盖的：
 //   * `unlimited-category`：愿望不限分类（`category = null`，权重会按三维归一化）；
@@ -42,10 +42,8 @@ export type CalibrationPair = {
   /** 边界样本：需要 Owner 明确裁决（实现方给出倾向与理由，但不默认它正确）。 */
   needsOwnerDecision?: boolean
   /**
-   * 已裁决、但**锚点/权重/阈值无法满足**的分歧：标签保留 Owner 的裁决，只是这条不参与
-   * "参数一致度"的判定。写的是"为什么这不是参数问题"（可证的结构特征冲突或实测 cos 与
-   * 标签相反），不是"我们放弃这条"。全部 4 条，见 `docs/design/issue-322-matching-v2-m4.md`
-   * §已知分歧。
+   * 当前算法的已知误判说明，保留历史字段名；不改变 Owner 标签，不排除任何样本。
+   * 这是现有特征/模型的能力限制，不是证明人工标签矛盾或所有算法都无解。
    */
   knownDivergence?: string
   rationale: string
@@ -660,7 +658,7 @@ const NEW_PAIRS: CalibrationPair[] = [
     proposedExpectMatch: false,
     needsOwnerDecision: true,
     knownDivergence:
-      'Owner 已裁决"不匹配"，但实测 cos = 0.665（同分类、预算内、词法 0 命中），与 cal-syn-pillow（0.713、裁决为匹配）的结构特征几乎相同 ⇒ 锚点/权重/阈值无法把两者分开。',
+      '已知假阳性：薄膜键盘没有满足机械键盘需求，当前语义/结构分数却放行；该错误完整计入质量指标。',
     rationale:
       '同品牌不同型号：K580 是薄膜键盘，愿望要的是“机械键盘”。我方倾向不匹配（品类不同），但“同品牌键盘”是否算可接受替代品应由 Owner 定。',
   },
@@ -677,7 +675,7 @@ const NEW_PAIRS: CalibrationPair[] = [
     proposedExpectMatch: false,
     needsOwnerDecision: true,
     knownDivergence:
-      'Owner 已裁决"不匹配"，但实测 cos = 0.716 是整张表最高之一（同分类、预算内），与 cal-syn-pillow（0.713、裁决为匹配）方向相反、数值几乎相同 ⇒ 参数不可分。',
+      '已知假阳性：缺少主动降噪功能，当前模型仍给出高相似度；这不是人工标签矛盾，错误完整计入质量指标。',
     rationale:
       '同品牌不同型号：AirPods 3 无主动降噪，愿望明确要降噪。我方倾向不匹配（关键功能不同），请 Owner 确认。',
   },
@@ -689,7 +687,7 @@ const NEW_PAIRS: CalibrationPair[] = [
     proposedExpectMatch: false,
     needsOwnerDecision: true,
     knownDivergence:
-      'Owner 已裁决"不匹配"，但实测 cos = 0.605 高于 cal-syn-airpods（0.566、裁决为匹配）⇒ 参数不可分（这是"同一对结构特征、标签相反"的可证冲突）。',
+      '已知假阳性：充电宝与充电器用途相关但不是所需商品，现有特征不足以区分；错误完整计入质量指标。',
     rationale:
       '相关但不同商品：充电宝 vs 充电器。语义相近、同分类、预算内，但产品不是同一个东西；请 Owner 定这条线。',
   },
@@ -702,10 +700,10 @@ const fromFixture: CalibrationRow[] = RANKING_FIXTURE.map((sample) => ({
   wish: sample.wish,
   proposedExpectMatch: sample.expectMatch,
   // M3 人估 cos = 0.9，实测 0.433：真实模型认为这对"不限分类的相似愿望 ↔ 商品"只是弱相关，
-  // 而 Owner 的裁决是"该匹配"。标签保留，分歧记录在案（任何锚点组合都够不到 70 分）。
+  // 而 Owner 的标签是"该匹配"。保留标签并将当前漏匹配计入质量指标。
   knownDivergence:
     sample.id === 'any-category-similar-true'
-      ? 'Owner 裁决"匹配"，但实测 cos = 0.433 是整张表最低的真匹配（M3 人估 0.9）⇒ 真实模型认为它不相似，与标签相反的模型证据，参数不可弥补。'
+      ? '已知假阴性：实测 cos = 0.433，当前得分未达阈值；标签保持匹配，完整计入质量指标。'
       : undefined,
   rationale: sample.rationale,
   source: 'm3-fixture',

@@ -32,7 +32,7 @@ import { createDb } from '@fish/db/client'
 import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
 import { loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
-import { logEvent } from '../src/log'
+import { errorMessage, logErrorEvent, logEvent } from '../src/log'
 
 const DEFAULT_SIZES = [10_000, 50_000, 100_000]
 const DEFAULT_QUERIES = 5
@@ -155,6 +155,7 @@ type Measurement = {
   p50: number
   p95: number
   planLines: string[]
+  recallAtK?: number
 }
 
 async function measure(
@@ -268,24 +269,46 @@ async function main(): Promise<void> {
         JOIN ann_seed AS seed ON seed.rn = g
       `)
     } else {
-      // 合成随机向量：`array_agg(random())` 直接 cast 成 vector，不经过 JS（10 万行 × 1536 维）。
+      // 内层维度窗显式依赖外层 g，每行重新采样；非关联 scalar subquery 会被 InitPlan 只计算一次。
       await db.execute(sql`
         INSERT INTO ann_probe (id, embedding)
-        SELECT g, (SELECT array_agg(random()) FROM generate_series(1, ${EMBEDDING_DIMENSIONS}))::vector
+        SELECT g, ARRAY(SELECT random() FROM generate_series(g, g + ${EMBEDDING_DIMENSIONS} - 1))::vector
         FROM generate_series(${inserted + 1}, ${size}) AS g
       `)
     }
+    const [diversity] = rowsOf<{ total: number; distinct: number }>(
+      await db.execute(sql`
+      SELECT count(*)::int AS total, count(DISTINCT embedding::text)::int AS distinct FROM ann_probe
+    `),
+    )
+    if (
+      !diversity ||
+      diversity.total !== size ||
+      (source === 'synthetic' && diversity.distinct !== size)
+    ) {
+      throw new Error('ANN 语料数量/合成向量多样性不符合预期，停止测量')
+    }
+    logEvent({
+      event: 'ann.probe.corpus',
+      source,
+      rowCount: diversity.total,
+      distinctVectors: diversity.distinct,
+    })
     inserted = size
     await db.execute(sql`ANALYZE ann_probe`)
 
-    // 查询向量取表里的第一条：真实语料下它就是**语料内的**向量，与生产一致（引擎用目标实体自己的
-    // 向量查询，该向量本身也在表里），不是特意构造的"表外"查询。
+    // 取语料内第一条作为固定计时锚点；不是独立需求查询，也不代表生产对向实体的向量分布。
+    // 多次计时重用同一锚点，recall 是该查询的 exact Top-K 对照，不是语义标签一致度。
     const vectorRows = rowsOf<{ vec: string }>(
       await db.execute(sql`SELECT embedding::text AS vec FROM ann_probe LIMIT 1`),
     )
     const queryVector = vectorRows[0]?.vec
     if (queryVector === undefined) throw new Error('临时表里没有向量可用于查询')
 
+    const topKQuery = sql`SELECT id::text AS id FROM ann_probe ORDER BY embedding <=> ${queryVector}::vector LIMIT ${options.k}`
+    const exactIds = new Set(
+      rowsOf<{ id: string }>(await db.execute(topKQuery)).map((row) => row.id),
+    )
     const withoutIndex = await measure(db, 'none', size, options.k, options.queries, queryVector)
     measurements.push(withoutIndex)
     logEvent({
@@ -304,7 +327,15 @@ async function main(): Promise<void> {
           'CREATE INDEX IF NOT EXISTS ann_probe_hnsw ON ann_probe USING hnsw (embedding vector_cosine_ops)',
         ),
       )
+      // 确保候选宽度不小于 K；这是临时探针会话配置，不是生产参数推荐。
+      const efSearch = Math.max(40, options.k)
+      await db.execute(sql.raw(`SET hnsw.ef_search = ${efSearch}`))
+      const indexedIds = rowsOf<{ id: string }>(await db.execute(topKQuery)).map((row) => row.id)
+      if (indexedIds.length !== exactIds.size) throw new Error('ANN 对照没有返回相同的 Top-K 行数')
+      const recallAtK =
+        exactIds.size === 0 ? 1 : indexedIds.filter((id) => exactIds.has(id)).length / exactIds.size
       const withIndex = await measure(db, 'hnsw', size, options.k, options.queries, queryVector)
+      withIndex.recallAtK = recallAtK
       measurements.push(withIndex)
       logEvent({
         event: 'ann.probe.measured',
@@ -314,6 +345,10 @@ async function main(): Promise<void> {
         p95Ms: withIndex.p95,
         runs: withIndex.executionMs,
         plan: withIndex.planLines,
+        indexUsed: withIndex.planLines.some((line) => line.includes('Index Scan')),
+        efSearch,
+        returned: indexedIds.length,
+        recallAtK,
       })
       // 关键：量完就删掉索引。否则**下一个尺寸**的"无索引"测量实际上走的是索引——
       // 本脚本第一版就踩了这个坑（5 万行的 exact scan 报到 0.42ms，计划里却是 Index Scan）。
@@ -323,8 +358,7 @@ async function main(): Promise<void> {
 
   // 收尾：把"该不该建 HNSW"的判据直接算出来（触发条件：p95 > 50ms 或 > 10 万行）。
   // `triggerP95Ms` / `triggerRows` 是**约定阈值**（M2 记录 + Issue 提到的量级），**不是实测结果**；
-  // 实测值都在 `measurements` 里。注意：本机合成语料下 10_000 行的 exact scan p95 就已经越过
-  // 50ms 触发线（见 M4 文档 §5），所以"10 万行才触发"的说法不成立——判据是 p95，不是行数。
+  // 实测值都在 measurements 里。合成语料越线只提示复评，不能代替生产结构化路径的量级证据。
   const largestExact = measurements.filter((m) => m.index === 'none').at(-1)
   logEvent({
     event: 'ann.probe.summary',
@@ -342,6 +376,8 @@ async function main(): Promise<void> {
       index: m.index,
       p50Ms: m.p50,
       p95Ms: m.p95,
+      recallAtK: m.recallAtK ?? null,
+      indexUsed: m.planLines.some((line) => line.includes('Index Scan')),
     })),
   })
 }
@@ -356,5 +392,6 @@ try {
     )
     process.exit(2)
   }
-  throw error
+  logErrorEvent({ event: 'ann.probe.failed', error: errorMessage(error) })
+  process.exitCode = 1
 }

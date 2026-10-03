@@ -29,6 +29,7 @@
     "visual:backfill": "bun run apps/worker/scripts/visual-backfill.ts",
     "embed:backfill": "bun run apps/worker/scripts/backfill-embeddings.ts",
     "embed:eval": "bun run apps/worker/scripts/embed-eval.ts",
+    "embed:holdout": "bun run apps/worker/scripts/embed-holdout.ts",
     "obs:summary": "bun run apps/worker/scripts/obs-summary.ts",
     "ann:probe": "bun run apps/worker/scripts/ann-probe.ts",
     "db:up": "docker compose up -d",

@@ -24,7 +24,8 @@ import { wishes } from '@fish/db/schema/wishes'
 import { and, eq, inArray, ne, type SQL, sql } from 'drizzle-orm'
 import { elapsedMs } from '../../log'
 import { enqueueEmbedJob } from '../embedding/enqueue'
-import { type MatchListingFacts, scoreMatch } from './scoring'
+import { CONSTRAINT_POLICY_VERSION, scoreConstrainedMatch } from './constraints'
+import type { MatchListingFacts, scoreMatch } from './scoring'
 
 /**
  * Match Engine（Issue #8 契约评论 §3；#322 M2 起先做语义召回）。
@@ -103,6 +104,8 @@ export type MatchRunResult = {
    * #322 M4 的观测项：ANN（HNSW）的触发条件是 p95 > 50ms 或带向量实体 > 10 万行。
    */
   topKLatencyMs: number
+  /** 只含聚合计数，不泄露原文；未知不影响匹配，冲突归零。 */
+  constraints?: { policyVersion: number; rejected: number; unknown: number }
 }
 
 /*
@@ -129,6 +132,7 @@ type WishTarget = {
   id: string
   userId: string
   keyword: string
+  description: string | null
   status: typeof wishes.$inferSelect.status
   category: ListingCategory | null
   budgetMaxCents: number | null
@@ -209,7 +213,16 @@ const ok = (
   created: number,
   downgraded: number,
   recall: RecallOutcome,
-): MatchRunResult => ({ evaluated, matched, created, downgraded, skipped: null, ...recall })
+  constraints?: MatchRunResult['constraints'],
+): MatchRunResult => ({
+  evaluated,
+  matched,
+  created,
+  downgraded,
+  skipped: null,
+  ...recall,
+  ...(constraints ? { constraints } : {}),
+})
 
 const skipped = (reason: MatchSkipReason): MatchRunResult => ({
   evaluated: 0,
@@ -233,6 +246,7 @@ const WISH_COLUMNS = {
   id: wishes.id,
   userId: wishes.userId,
   keyword: wishes.keyword,
+  description: wishes.description,
   status: wishes.status,
   category: wishes.category,
   budgetMaxCents: wishes.budgetMaxCents,
@@ -427,14 +441,16 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
     let matched = 0
     let created = 0
     let downgraded = 0
+    const constraints = { policyVersion: CONSTRAINT_POLICY_VERSION, rejected: 0, unknown: 0 }
 
     await db.transaction(async (tx) => {
       for (const { wish, hadRow, creatable: canCreate } of targets.values()) {
         const similarity = similarities.get(wish.id)
-        const breakdown = scoreMatch(
+        const breakdown = scoreConstrainedMatch(
           listingFacts,
           {
             keyword: wish.keyword,
+            description: wish.description,
             category: wish.category,
             budgetMaxCents: wish.budgetMaxCents,
             acceptSimilar: wish.acceptSimilar,
@@ -442,6 +458,8 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
           // 拿不到 cosine 的对走 v1 分支（`semantic_score = NULL`、`ranking_version = 1`）。
           similarity === undefined ? null : { similarity },
         )
+        if (breakdown.constraint.state === 'contradicted') constraints.rejected += 1
+        if (breakdown.constraint.state === 'unknown') constraints.unknown += 1
         // `qualifies` 只决定"能不能新建这一对"；计数按**读接口会不会展示**（可见性）来分。
         const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD
         const outcome = await persist(tx, {
@@ -462,7 +480,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       }
     })
 
-    return ok(targets.size, matched, created, downgraded, recall)
+    return ok(targets.size, matched, created, downgraded, recall, constraints)
   }
 
   return {
@@ -596,6 +614,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         id: wish.id,
         userId: wish.userId,
         keyword: wish.keyword,
+        description: wish.description,
         status: wish.status,
         category: wish.category,
         budgetMaxCents: wish.budgetMaxCents,
@@ -689,6 +708,7 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
 
       const wishFacts = {
         keyword: wish.keyword,
+        description: wish.description,
         category: wish.category,
         budgetMaxCents: wish.budgetMaxCents,
         acceptSimilar: wish.acceptSimilar,
@@ -697,11 +717,12 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
       let matched = 0
       let created = 0
       let downgraded = 0
+      const constraints = { policyVersion: CONSTRAINT_POLICY_VERSION, rejected: 0, unknown: 0 }
 
       await db.transaction(async (tx) => {
         for (const { listing, hadRow, creatable: canCreate } of targets.values()) {
           const similarity = similarities.get(listing.id)
-          const breakdown = scoreMatch(
+          const breakdown = scoreConstrainedMatch(
             {
               title: listing.title,
               description: listing.description,
@@ -712,6 +733,8 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
             // 拿不到 cosine 的对走 v1 分支（该商品没有本模型的向量）。
             similarity === undefined ? null : { similarity },
           )
+          if (breakdown.constraint.state === 'contradicted') constraints.rejected += 1
+          if (breakdown.constraint.state === 'unknown') constraints.unknown += 1
           // `qualifies` 管新建；计数按 `matchWish` 对应的读接口（`/matches?wishId=`，wish 侧镜像）。
           const qualifies = canCreate && breakdown.score >= MATCH_SCORE_THRESHOLD
           const outcome = await persist(tx, {
@@ -731,12 +754,19 @@ export function createMatchEngine(db: Db, options: MatchEngineOptions): MatchEng
         }
       })
 
-      return ok(targets.size, matched, created, downgraded, {
-        recall,
-        fallbackReason,
-        vectorCandidates,
-        topKLatencyMs,
-      })
+      return ok(
+        targets.size,
+        matched,
+        created,
+        downgraded,
+        {
+          recall,
+          fallbackReason,
+          vectorCandidates,
+          topKLatencyMs,
+        },
+        constraints,
+      )
     },
   }
 }

@@ -26,20 +26,18 @@ export const createdAt = () => timestamptz('created_at').notNull().defaultNow()
 /**
  * app 侧维护（不建 PG trigger）；只在所有写入都经 Drizzle 的前提下成立。
  *
- * **时刻一律取数据库时钟（`now()`），不取应用进程时钟**：#322 把 `updated_at` 当版本号用
- * （`embeddings.source_updated_at` 直接取它，写入时走 CAS `excluded.source_updated_at >= 现存`）。
- * 插入用 `defaultNow()`（DB 钟）、更新用 `new Date()`（应用钟）时，只要两个钟有偏差，刚编辑过的行
- * 就会带上比"编辑前"更小的版本号，CAS 会**静默丢弃**这次重算（`saveEmbedding` 返回 false ⇒
- * handler 报 `stale`，实体永久停在过期向量）。实测本机 Docker 容器钟比宿主快 42–52ms，最小复现：
- * insert(DB now)=…164ms、update(app clock)=…126ms、delta=−38ms ⇒ REJECT。时钟同源后
- * "后写的版本不小于先写的版本"才成立（`apps/worker/src/jobs/matching/engine.test.ts` 与
- * `apps/worker/src/jobs/embedding/handlers.test.ts` 的编辑-重算用例即覆盖这条不变式）。
+ * #322 把 updated_at 复制为 embedding 的 source version。更新取数据库实际求值时间
+ * clock_timestamp()，既不混用应用钟，也不使用冻结在事务开始时的 now()：先开始的事务可能后取得
+ * 行锁，若它写入 now()，版本会倒退，unchanged 向量的单向 refresh 会拒绝推进并永久退出候选。
+ * 插入的 defaultNow() 不变（没有既有版本），不改 schema 默认值或历史迁移。
+ * 时间戳仍不是严格递增 revision（同毫秒/时钟校正均有边界）；旧内容的最终防线是实体行锁和
+ * content hash 复检，不能仅用时间戳判定内容先后。两连接晚写价格更新回归覆盖事务开始顺序反转。
  */
 export const updatedAt = () =>
   timestamptz('updated_at')
     .notNull()
     .defaultNow()
-    .$onUpdate(() => sql`now()`)
+    .$onUpdate(() => sql`clock_timestamp()`)
 
 /** 可变行使用。不可变行（messages / listing_images）只取 `createdAt()`。 */
 export const timestamps = () => ({ createdAt: createdAt(), updatedAt: updatedAt() })

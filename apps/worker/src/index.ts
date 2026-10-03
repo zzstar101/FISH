@@ -16,6 +16,7 @@ import {
   createVisualEmbedJobHandlers,
   VisualSourceImageError,
 } from './jobs/visual-embedding/handlers'
+import { createVisualMaintenance } from './jobs/visual-embedding/maintenance'
 import { elapsedMs, logErrorEvent, logEvent } from './log'
 import { createWorkerMediaStorage } from './media-storage'
 
@@ -120,23 +121,11 @@ const visualBackfill = createVisualBackfillRunner({
   model: visualEmbeddingProvider.model,
 })
 
-async function runVisualMaintenance(now: Date): Promise<void> {
-  try {
-    const backfill = await visualBackfill.runPass()
-    if (backfill.enqueued > 0) {
-      console.log(`[worker] 视觉回填投递 ${backfill.enqueued} 条`)
-    }
-    const cleanup = await cleanupExpiredVisualQueryImages({ db, storage: mediaStorage, now })
-    if (cleanup.deleted > 0) {
-      console.log(`[worker] 清理到期查询图 ${cleanup.deleted} 个`)
-    }
-  } catch (error) {
-    // 维护失败不能把 worker 主循环带走：回填游标留在内存里、清理按 expires_at 升序重来，
-    // 下一轮会自然重新捡起同一批。
-    const detail = error instanceof Error ? error.message : String(error)
-    console.error(`[worker] 视觉维护失败：${detail}`)
-  }
-}
+// 失败上报只写脱敏摘要（`errorMessage()`），理由见 `./jobs/visual-embedding/maintenance` 头注释。
+const runVisualMaintenance = createVisualMaintenance({
+  backfill: () => visualBackfill.runPass(),
+  cleanup: (now) => cleanupExpiredVisualQueryImages({ db, storage: mediaStorage, now }),
+})
 
 /**
  * `EMBED_*` 终结失败后的有界补投（#322 M4 复审修复，范围外发现 #2）。

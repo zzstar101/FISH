@@ -292,7 +292,7 @@ export function createGovernanceService(options: {
         const updated = await tx.execute(sql`
           UPDATE listings
           SET status = 'OFFLINE', moderation_status = 'BLOCKED',
-              governance_delisted_at = now(), updated_at = now()
+              governance_delisted_at = now(), updated_at = clock_timestamp()
           WHERE id = ${listingId} AND moderation_status = 'APPROVED'
           RETURNING ${LISTING_STATE_COLUMNS}
         `)
@@ -385,7 +385,7 @@ export function createGovernanceService(options: {
           UPDATE listings
           SET status = ${restoredStatus}::listing_status,
               moderation_status = ${prior.moderationStatus}::listing_moderation_status,
-              governance_delisted_at = NULL, moderated_at = now(), updated_at = now()
+              governance_delisted_at = NULL, moderated_at = now(), updated_at = clock_timestamp()
           WHERE id = ${listingId} AND governance_delisted_at IS NOT NULL
           RETURNING ${LISTING_STATE_COLUMNS}
         `)

@@ -30,6 +30,8 @@ export type LiveEmbeddingConfig = {
   baseUrl: string
   apiKey: string
   model: string
+  /** 每个实际 HTTP attempt 的 admission；拒绝时 fail-closed，不进入网络重试。 */
+  beforeRequest?: () => Promise<void>
   /** 退避基数覆盖，只给测试把等待压到 0 用；生产不传。 */
   retryDelayMs?: number
   /**
@@ -178,6 +180,8 @@ export function createLiveEmbeddingProvider(config: LiveEmbeddingConfig): Embedd
 
     async embed(texts) {
       for (let attempt = 1; ; attempt += 1) {
+        // 在 retry catch 外等待 admission：预算/限速配置错误不应触发上游重试。
+        await config.beforeRequest?.()
         const startedAt = Bun.nanoseconds()
         try {
           const vectors = await requestEmbeddings(config, endpoint, texts)

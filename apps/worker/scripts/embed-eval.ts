@@ -55,7 +55,7 @@ import {
   scoreMatchWithWeights,
   WEIGHTS_V2,
 } from '../src/jobs/matching/scoring'
-import { elapsedMs, errorMessage, logEvent } from '../src/log'
+import { elapsedMs, errorMessage, logErrorEvent, logEvent } from '../src/log'
 
 /** 上游批量上限（百炼 text-embedding-v4：10 行/请求）。 */
 const MAX_TEXTS_PER_REQUEST = 10
@@ -929,10 +929,9 @@ async function evalCalibration(provider: EmbeddingProvider): Promise<void> {
   let m3Rows = 0
   let floorMisfires = 0
   let floorLeaks = 0
-  // 参数一致度的"可满足子集"：排除已裁决但参数不可弥补的 knownDivergence 行（标签不改）。
-  let liveAgreementsAdjustable = 0
-  let adjustableRows = 0
-  const knownDivergenceMisses: string[] = []
+  // 全部标签计入主分母；已知错误只作标注，不排除，也不称为标签矛盾。
+  const falsePositiveIds: string[] = []
+  const falseNegativeIds: string[] = []
   const rows: Record<string, unknown>[] = []
   const liveSimilarities: number[] = []
   const trueSimilarities: number[] = []
@@ -948,14 +947,8 @@ async function evalCalibration(provider: EmbeddingProvider): Promise<void> {
     const agrees = liveMatch === row.proposedExpectMatch
     if (agrees) liveAgreements += 1
     if (v1Match === row.proposedExpectMatch) v1Agreements += 1
-    if (row.knownDivergence === undefined) {
-      adjustableRows += 1
-      if (agrees) liveAgreementsAdjustable += 1
-    } else if (!agrees) {
-      knownDivergenceMisses.push(
-        `${row.id}(cos=${round(liveSimilarity)},score=${liveScore.score},expect=${row.proposedExpectMatch})`,
-      )
-    }
+    if (liveMatch && !row.proposedExpectMatch) falsePositiveIds.push(row.id)
+    if (!liveMatch && row.proposedExpectMatch) falseNegativeIds.push(row.id)
 
     liveSimilarities.push(liveSimilarity)
     if (row.proposedExpectMatch) {
@@ -1024,12 +1017,10 @@ async function evalCalibration(provider: EmbeddingProvider): Promise<void> {
     liveAgreementRate: round(liveAgreements / CALIBRATION_ROWS.length, 3),
     v1AgreementRate: round(v1Agreements / CALIBRATION_ROWS.length, 3),
     m3AgreementRate: m3Rows === 0 ? null : round(m3Agreements / m3Rows, 3),
-    adjustableRows,
-    liveAgreementsAdjustable,
-    liveAgreementRateAdjustable:
-      adjustableRows === 0 ? null : round(liveAgreementsAdjustable / adjustableRows, 3),
-    knownDivergenceRows: CALIBRATION_ROWS.length - adjustableRows,
-    knownDivergenceMisses,
+    falsePositives: falsePositiveIds.length,
+    falseNegatives: falseNegativeIds.length,
+    falsePositiveIds,
+    falseNegativeIds,
     floorMisfires,
     floorLeaks,
     liveSimilarityDistribution: distribution(liveSimilarities),
@@ -1393,5 +1384,6 @@ try {
     )
     process.exit(2)
   }
-  throw error
+  logErrorEvent({ event: 'eval.failed', error: errorMessage(error) })
+  process.exitCode = 1
 }

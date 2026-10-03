@@ -6,7 +6,7 @@ import {
   contentHashOf,
 } from '@fish/contracts/embedding/text'
 import { createDb } from '@fish/db/client'
-import { findEmbedding } from '@fish/db/embedding-store'
+import { findEmbedding, topKSimilarListings } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
@@ -256,7 +256,7 @@ describe('EMBED_LISTING', () => {
 
     // 改价：不碰 embedding 文本，但会把 listings.updated_at 推进。这里显式给一个未来时间戳，
     // 让"版本确实往前走了"与毫秒粒度、时钟偏差都无关（`$onUpdate` 不会覆盖显式传入的 updatedAt；
-    // 不显式传时 `$onUpdate(() => sql`now()`)` 写的是数据库钟，见 `packages/db/src/schema/common.ts`）。
+    // 不显式传时 `$onUpdate(() => sql`clock_timestamp()`)` 写的是数据库实际求值时间，见 `packages/db/src/schema/common.ts`）。
     const bumped = new Date(Date.now() + 1000)
     await db
       .update(listings)
@@ -274,6 +274,62 @@ describe('EMBED_LISTING', () => {
     // 但版本标记必须跟上实体：否则候选侧的新鲜度检查会把这条仍然正确的向量判成过期，
     // 这一对就再也进不了语义召回（#322 M3 评审 blocker）。
     expect(after?.sourceUpdatedAt.getTime()).toBe(bumped.getTime())
+  })
+
+  test('事务开始早但写入晚：价格更新版本不倒退，重复 EMBED 后仍可作为向量候选', async () => {
+    const listingId = await createListing()
+    const wrapped = counting(stub)
+    const handlers = createEmbedJobHandlers(db, wrapped.provider)
+    await handlers.EMBED_LISTING({ listingId })
+    let markStarted = () => {}
+    let allowWrite = () => {}
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const writeGate = new Promise<void>((resolve) => {
+      allowWrite = resolve
+    })
+    const earlyTransaction = db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT now()`)
+      markStarted()
+      await writeGate
+      await tx
+        .select({ id: listings.id })
+        .from(listings)
+        .where(eq(listings.id, listingId))
+        .for('update')
+      await tx.update(listings).set({ priceCents: 14000 }).where(eq(listings.id, listingId))
+    })
+    try {
+      await Promise.race([started, earlyTransaction])
+      await Bun.sleep(10)
+      const [laterUpdate] = await db
+        .update(listings)
+        .set({ priceCents: 15000 })
+        .where(eq(listings.id, listingId))
+        .returning({ updatedAt: listings.updatedAt })
+      if (!laterUpdate) throw new Error('价格更新未返回实体')
+      await handlers.EMBED_LISTING({ listingId })
+      await Bun.sleep(10)
+      allowWrite()
+      await earlyTransaction
+      expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('unchanged')
+      expect((await handlers.EMBED_LISTING({ listingId })).status).toBe('unchanged')
+      const row = await findEmbedding(db, { kind: 'listing', id: listingId }, stub.model)
+      if (!row) throw new Error('缺少向量')
+      const candidates = await topKSimilarListings(db, {
+        model: stub.model,
+        vector: row.embedding,
+        limit: 1,
+        filter: eq(listings.id, listingId),
+      })
+      expect(candidates.map((candidate) => candidate.id)).toEqual([listingId])
+      expect(row.sourceUpdatedAt.getTime()).toBeGreaterThanOrEqual(laterUpdate.updatedAt.getTime())
+      expect(wrapped.calls()).toBe(1)
+    } finally {
+      allowWrite()
+      await earlyTransaction
+    }
   })
 
   test('并发：旧 job 卡在 provider 期间实体被编辑，晚到的旧结果不覆盖新内容向量（#322 验收）', async () => {
@@ -309,7 +365,7 @@ describe('EMBED_LISTING', () => {
   })
 
   test('并发：两次编辑落在同一毫秒（updated_at 完全相同）时，晚到的旧结果也不覆盖新内容（#328 复审 blocker）', async () => {
-    // 版本号来自应用侧 `Date`（毫秒分辨率）：这里刻意让"旧内容"和"新内容"拿到**完全相同**的
+    // JS Date 往返只能保留毫秒：这里显式让"旧内容"和"新内容"拿到**完全相同**的
     // updated_at，于是写入条件里的
     // `excluded.source_updated_at >= embeddings.source_updated_at` 恒成立——单靠它挡不住旧写入。
     // 真正兜住的是 provider 返回后的原子复检（锁实体行 + 用当前内容重算指纹）。
