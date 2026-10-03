@@ -9,7 +9,6 @@ const sharedRequire = createRequire(resolve(sharedRoot, 'package.json'))
 const typeidRequire = createRequire(sharedRequire.resolve('typeid-js'))
 const miniappRequire = createRequire(resolve(__dirname, '../package.json'))
 const runtimeRequire = createRequire(miniappRequire.resolve('@tarojs/runtime'))
-
 // https://docs.taro.zone/docs/config
 export default defineConfig<'webpack5'>(async (merge) => {
   const baseConfig: UserConfigExport<'webpack5'> = {
@@ -88,6 +87,43 @@ export default defineConfig<'webpack5'>(async (merge) => {
     cache: {
       enable: false,
     },
+    /**
+     * 构建期压缩。Taro 的默认预设把 terser 的 compress 能力显式关掉了 16 项
+     * （`@tarojs/webpack5-runner/dist/webpack/MiniBaseConfig.js` 的 defaultTerserOptions），
+     * 这里按 terser 自己的默认值恢复，但保留三条不能动的：
+     *   - `toplevel: false`：小程序模块被包在 `define(...)` 工厂里，压掉顶层声明会破坏工厂契约；
+     *   - `directives: false`：会吞掉 `"use strict"`；
+     *   - `arrows: false` + `ecma: 5`：产物必须是 ES5（构建末尾有 `ES5 syntax verified` 门禁）。
+     */
+    terser: {
+      config: {
+        compress: {
+          collapse_vars: true,
+          comparisons: true,
+          computed_props: true,
+          hoist_props: true,
+          inline: true,
+          loops: true,
+          negate_iife: true,
+          properties: true,
+          reduce_funcs: true,
+          reduce_vars: true,
+          switches: true,
+          typeofs: true,
+        },
+      },
+    },
+    /**
+     * CSS 压缩同理：csso 的默认预设把 5 个开关全关了
+     * （`@tarojs/webpack5-runner/dist/webpack/BaseConfig.js` 的 defaultOption），只留语法级压缩。
+     * `mergeRules`（合并相邻同声明规则）与 `minifySelectors`（选择器最简化）都是无损结构化优化。
+     */
+    csso: {
+      config: {
+        mergeRules: true,
+        minifySelectors: true,
+      },
+    },
     mini: {
       // monorepo：@fish/* 通过 workspace:* 链接，package.json 的 exports 直接指向 src/*.ts。
       // webpack 默认不编译 node_modules 下的文件，一旦有代码「值导入」契约（纯类型引用会在 babel
@@ -112,6 +148,16 @@ export default defineConfig<'webpack5'>(async (merge) => {
           // 其 exports 不暴露 package.json，只能解析主入口再取目录。
           dirname(miniappRequire.resolve('qrcode-generator')),
         ],
+      },
+      /**
+       * 图片不再无条件 base64 内联。Taro 默认 `limit` 走 IMAGE_LIMIT = 2 KiB
+       * （`@tarojs/runner-utils/dist/constant.js`），小于 2 KiB 的图会被塞进 JS；
+       * base64 比原始字节多约 33%（实测图标源 76,614 B → data URI 102,389 B）。
+       * `limit: true` = maxSize 0 = 全部落盘成独立文件
+       * （`@tarojs/webpack5-runner/dist/utils/webpack.js#getAssetsMaxSize`），主包净省约 25 KiB。
+       */
+      imageUrlLoaderOption: {
+        limit: true,
       },
       postcss: {
         pxtransform: {
