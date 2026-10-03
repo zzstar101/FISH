@@ -23,6 +23,7 @@ import {
   type FeedTrackingContext,
   useFeedImpressions,
 } from '@/features/recommendation/use-impressions'
+import { startVisualSearch } from '@/features/visual-search/start'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
 import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
@@ -246,6 +247,37 @@ export default function Home() {
     void Taro.navigateTo({ url: '/pages/search/index' })
   }
 
+  /** 识图（相机热区）的上传在途：防连点（原生取图面板是模态的，上传腿不是），与搜索页同一个口径 */
+  const [visionBusy, setVisionBusy] = useState(false)
+
+  /**
+   * 识图（#324）：相机图标走独立命中区，进入与搜索页识图按钮同一条链
+   * （`features/visual-search/start.ts`：来源弹窗 → 上传 → 跳识图结果页）。
+   *
+   * 本页没有文字搜索任务日志，所以不传 `onPicked` —— 不为对称硬造一个「作废在途任务」的回调。
+   */
+  const visionSearch = async () => {
+    if (visionBusy) return
+    setVisionBusy(true)
+    try {
+      await startVisualSearch()
+    } finally {
+      setVisionBusy(false)
+    }
+  }
+
+  /**
+   * 相机热区嵌在整条搜索胶囊里，必须**先掐掉冒泡**：否则同一次点击还会触发胶囊的
+   * `goSearch`，用户在识图的同时又被推去文字搜索页。Taro 合成事件的 `stopPropagation`
+   * 在运行时阻断冒泡，效果等同小程序的 catch 语义（同 `components/product-card` 的卖家行）。
+   *
+   * 拦冒泡放在 `visionBusy` 守卫**之前**：连点被挡下的那几次也得拦住，不能漏进文字搜索。
+   */
+  const onCameraTap = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation()
+    void visionSearch()
+  }
+
   /**
    * 分类切换：**在原地换一批商品**，不跳页。
    *
@@ -420,7 +452,13 @@ export default function Home() {
         }
         center={
           <View className="home__search" onClick={goSearch}>
-            <Image className="home__search-cam" src={ICONS.camera} mode="aspectFit" />
+            {/*
+              相机图标是胶囊内的**独立命中区**（#324）：点它进识图，点胶囊其余位置
+              （占位文案 / 右侧放大镜）仍走 `goSearch` 进文字搜索。
+            */}
+            <View className="home__search-cam-hit" onClick={onCameraTap}>
+              <Image className="home__search-cam" src={ICONS.camera} mode="aspectFit" />
+            </View>
             <Text className="home__search-ph">搜「键盘」「考研教材」</Text>
             <Image className="home__search-icon" src={ICONS.search} mode="aspectFit" />
           </View>

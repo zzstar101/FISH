@@ -17,6 +17,7 @@ import type {
 import { loadAiPolishEnv, loadMeetupTokenEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
+import { STUB_VISUAL_EMBEDDING_MODEL } from '@fish/visual-embedding/providers/stub'
 import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -75,9 +76,13 @@ import { createConnectionHub } from './modules/realtime/hub'
 import { createRealtimeRouter } from './modules/realtime/router'
 import { createRecommendationDomainRecorder } from './modules/recommendation/domain-events'
 import { createDbInterestRefreshQueue } from './modules/recommendation/interest-queue'
+import { createRecommendationRecall } from './modules/recommendation/recall/service'
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
+import { createTransactionReviewsRouter } from './modules/transaction-reviews/router'
+import { createTransactionReviewService } from './modules/transaction-reviews/service'
+import { createSqlTransactionReviewStore } from './modules/transaction-reviews/store'
 import { createTransactionsRouter } from './modules/transactions/router'
 import { createTransactionService } from './modules/transactions/service'
 import { createSqlTransactionStore } from './modules/transactions/store'
@@ -300,9 +305,18 @@ export function createApp(
   //
   // 实例只建一次：服务端确证行为的埋点（评论 / 会话 / 交易）复用同一个 recorder，
   // 各业务模块只依赖那个窄接口，不需要知道推荐模块的 store 与召回。
+  //
+  // 语义召回按 `listing_visual_embeddings.model` 过滤，模型名必须与 worker 回填
+  // （`VISUAL_EMBED_LISTING` handler 写的 `provider.model`）**完全一致**：两个进程读同一份
+  // `VISUAL_EMBEDDING_*`，而 `stub` 传输写的是包里的确定性模型名（不是空值）。取错名字不会报错，
+  // 只会让语义通道永远过滤不到向量（表现成"召回总是空"），所以这里从同一个常量推导。
+  const recallEmbeddingModel =
+    visualEmbeddingEnv.transport === 'live' ? visualEmbeddingEnv.model : STUB_VISUAL_EMBEDDING_MODEL
   const recommendationService = createRecommendationService({
     store: createSqlRecommendationStore(db),
     listings: listingService,
+    // 多路召回（R3）：六路各自降级、整体不抛，因此 Feed 不需要为它准备 500 分支。
+    recall: createRecommendationRecall({ db, embeddingModel: recallEmbeddingModel }),
     // 长期画像重算的出队口：行为一落库就投 `REFRESH_USER_INTEREST`，由 worker 全量重算
     // （画像只给登录用户，匿名行为不投 job）。
     interest: createDbInterestRefreshQueue(db),
@@ -379,15 +393,27 @@ export function createApp(
     }),
   )
 
+  // 交易评价 service（#195 PR2）：一个实例两处用 —— 评价边 router 直接挂，
+  // comments 的 `/me/comments?kind=review|all` 借道它读评价时间线。
+  const transactionReviewService = createTransactionReviewService({
+    store: createSqlTransactionReviewStore(db),
+    storage,
+  })
+
   // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
   // `/comments/:id/replies`、`/comments/:id`（DELETE）与 `/me/comments`（路径常量在
   // `@fish/contracts/comments/routes`）。读接口匿名可用、写与本人作用域逐路由挂 requireAuth
   // （与 listings 同一分界）；`storage` 复用同一实例 —— 本人留言列表里的商品卡片封面
-  // 与 feed / 详情必须同一套拼法。
+  // 与 feed / 详情必须同一套拼法。`/me/comments` 的 `kind=review|all`（#195 PR2）借道
+  // 评价域 service（装配在下面），comments 自己不摸评价表。
   app.route(
     '/',
     createCommentsRouter({
-      service: createCommentService({ store: createSqlCommentStore(db), storage }),
+      service: createCommentService({
+        store: createSqlCommentStore(db),
+        storage,
+        reviews: transactionReviewService,
+      }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
       recorder: recommendationRecorder,
@@ -422,6 +448,26 @@ export function createApp(
     '/',
     createFavoritesRouter({
       service: createFavoriteService({ store: createSqlFavoriteStore(db), storage }),
+      getUserId: (c) => c.get('userId'),
+      // #323 R4 决策 6：`FAVORITE` / `UNFAVORITE` 的服务端真值来源。客户端上报会随断网重试整批丢，
+      // 而这两个事件分别是权重表里最强的正信号与负反馈特征之一。
+      recorder: recommendationRecorder,
+    }),
+  )
+
+  // 交易评价（#195 PR2）：`GET|POST|DELETE /transactions/:transactionId/review`（(我, 交易)
+  // 这条边的三个方法）与 `GET /transactions/:transactionId/reviews`（两方评价对账）。
+  // 本域**没有匿名路径**（评价是交易双方的私有成交证据，非参与者 404 不泄漏存在性），
+  // 两条路径整挂 requireAuth；router 内部还兜一层失败关闭。只读写
+  // `transaction_reviews` / `transaction_review_images` / `transactions` 表
+  // （与 profile / favorites 同一取舍）；`storage` 复用同一实例 —— 配图 URL 与其它域同拼法。
+  // 挂根路径：两个 pattern 都比 transactions router 的 `/transactions/:id` 多一段，不会截胡。
+  app.use('/transactions/:transactionId/review', auth.requireAuth)
+  app.use('/transactions/:transactionId/reviews', auth.requireAuth)
+  app.route(
+    '/',
+    createTransactionReviewsRouter({
+      service: transactionReviewService,
       getUserId: (c) => c.get('userId'),
     }),
   )

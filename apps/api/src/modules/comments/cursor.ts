@@ -9,14 +9,29 @@
  * 会让人看到静默错乱的列表，比直接报错难查。
  */
 import { CommentCursorTimestampSchema, CommentIdSchema } from '@fish/contracts/comments/schema'
+import { ReviewIdSchema } from '@fish/contracts/system/public-id'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { CommentCursor } from './store'
 
-export function encodeCommentCursor(cursor: CommentCursor): string {
+/**
+ * 「我发过的」时间线的来源档位（#195 PR2）：游标里带 `source`，因为合并时间线的
+ * 下一页可能从另一张表取行 —— id 前缀（`cmt_` / `rvw_`）必须按来源校验与解码。
+ * PR1 时代签出的旧游标没有 `source`，按 `comment` 解释（那些游标只可能来自留言页）。
+ */
+export type MyCommentsCursorSource = 'comment' | 'review'
+
+export function encodeCommentCursor(
+  cursor: CommentCursor,
+  source: MyCommentsCursorSource = 'comment',
+): string {
   return Buffer.from(
     JSON.stringify({
       ...cursor,
-      id: encodePublicId(PUBLIC_ID_PREFIX.comment, cursor.id),
+      source,
+      id: encodePublicId(
+        source === 'review' ? PUBLIC_ID_PREFIX.review : PUBLIC_ID_PREFIX.comment,
+        cursor.id,
+      ),
     }),
     'utf8',
   ).toString('base64url')
@@ -41,4 +56,47 @@ export function decodeCommentCursor(raw: string): CommentCursor | null {
   }
 
   return { createdAt, id: decodePublicId(PUBLIC_ID_PREFIX.comment, id) }
+}
+
+/**
+ * 「我发过的」时间线（`GET /me/comments`）的游标解码：按 `kind` 校验来源。
+ *
+ * - `kind=comment` 只认留言游标（含 PR1 旧游标），`kind=review` 只认评价游标 ——
+ *   拿错来源的游标翻页等于在错误的表里 seek，宁可 422 也不静默错乱；
+ * - `kind=all` 两种都认（合并时间线的翻页游标由上一页最后一行的来源决定）。
+ *
+ * 返回的 `id` 已解码为 uuid，`source` 告诉调用方去哪张表 seek。
+ */
+export function decodeMyCommentsCursor(
+  raw: string,
+  kind: 'all' | 'comment' | 'review',
+): { createdAt: string; id: string; source: MyCommentsCursorSource } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+
+  const { createdAt, id, source: rawSource } = parsed as Record<string, unknown>
+
+  // 来源判定：缺 `source` 的是 PR1 旧游标（只可能来自留言页，kind=review 直接拒）。
+  if (rawSource === undefined) {
+    if (kind === 'review') return null
+  } else if (rawSource === 'comment' || rawSource === 'review') {
+    if (kind !== 'all' && kind !== rawSource) return null
+  } else {
+    return null
+  }
+  const source: MyCommentsCursorSource = rawSource === undefined ? 'comment' : rawSource
+
+  if (typeof id !== 'string' || typeof createdAt !== 'string') return null
+  if (!CommentCursorTimestampSchema.safeParse(createdAt).success) return null
+
+  const idSchema = source === 'review' ? ReviewIdSchema : CommentIdSchema
+  if (!idSchema.safeParse(id).success) return null
+  const prefix = source === 'review' ? PUBLIC_ID_PREFIX.review : PUBLIC_ID_PREFIX.comment
+
+  return { createdAt, id: decodePublicId(prefix, id), source }
 }

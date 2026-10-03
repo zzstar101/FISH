@@ -237,6 +237,28 @@ export function isConversationNotFound(error: unknown): boolean {
   )
 }
 
+/**
+ * 撤回自己发的一条消息（#359 3c）：**204 无响应体**。
+ *
+ * 窗口 `MESSAGE_RECALL_WINDOW_MS`（2 分钟，按**数据库时钟**判）、仅发送者本人；
+ * 对已撤回消息**幂等**（重复调用同样 204）。失败三档：
+ * 404 `MESSAGE_NOT_FOUND`、403 `MESSAGE_RECALL_FORBIDDEN`、409 `MESSAGE_RECALL_WINDOW_EXCEEDED`。
+ */
+export async function recallMessage(conversationId: string, messageId: string): Promise<void> {
+  await apiRequest(CHAT_ROUTES.recall(conversationId, messageId), { method: 'POST' })
+}
+
+/**
+ * 撤回失败的展示文案：**用服务端原文**（与商品删除 #421、留言删除 #423 同一取向）。
+ *
+ * 三档原文本身就把话说清了（`apps/api/src/modules/messages/service.ts`）：
+ * 「超出可撤回时间」/「只能撤回自己发送的消息」/「消息不存在」—— 端上再改写只会丢信息。
+ */
+export function describeRecallFailure(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  return '撤回失败，请重试'
+}
+
 /** 发起会话失败的展示文案；自聊由调用方决定隐藏入口。 */
 export function describeCreateConversationFailure(error: unknown): string {
   if (error instanceof ApiError) {

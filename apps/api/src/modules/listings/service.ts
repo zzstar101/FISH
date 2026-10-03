@@ -81,6 +81,16 @@ type ListingFeedCriteria = Omit<ListingFeedQuery, 'sellerId'> & { sellerId?: str
 
 export interface ListingService {
   listFeed(viewerId: string | null, query: ListingFeedCriteria): Promise<ListingFeedResponse>
+  /**
+   * 按 id 批量取**公开可见**的卡片（#323 R4 推荐 Feed 的读路径）。
+   *
+   * 返回 `Map<listingId, card>`，**插入顺序与 `ids` 一致**（推荐顺序由排序层给出，不是 SQL 的
+   * `ORDER BY`）。用 `Map` 而不是数组，是因为调用方同时需要"顺序"（快照 position 必须与返回值
+   * 下标一致）和"哪些 id 没回来"（此刻已不可见的商品要从快照里剔除、后续位置顺延）；不可见或不
+   * 存在的 id 被静默跳过，所以调用方不该假设"返回条数 = 请求条数"。视角固定为公开 Feed：不带
+   * 审核态 / 治理标记 / 未通过原因（那些只有卖家查自己才给，见 `listFeed`）。
+   */
+  listCardsByIds(viewerId: string | null, ids: string[]): Promise<Map<string, ListingCard>>
   getDetail(viewerId: string | null, id: string): Promise<ListingDetail>
   createListing(
     userId: string,
@@ -569,6 +579,24 @@ export function createListingService(deps: {
           : null
 
       return ListingFeedResponseSchema.parse({ items, nextCursor })
+    },
+
+    async listCardsByIds(viewerId, ids) {
+      if (ids.length === 0) return new Map<string, ListingCard>()
+
+      const entries = await store.findCardsByIds(ids, { viewerUserId: viewerId })
+      const byId = new Map(entries.map((entry) => [entry.listing.id, entry]))
+
+      const cards = new Map<string, ListingCard>()
+      // 按**调用方给的顺序**（推荐排序结果）输出，不是 DB 返回顺序：快照里的 position 必须与这里
+      // 的插入顺序一致，否则服务端归因真值就错了。查不到的 id 跳过（此刻已不可见）。
+      for (const id of ids) {
+        const entry = byId.get(id)
+        if (entry === undefined) continue
+        const card = toCard(entry.listing, entry.coverObjectKey, entry.seller)
+        if (card) cards.set(id, card)
+      }
+      return cards
     },
 
     getDetail(viewerId, id) {

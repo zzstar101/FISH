@@ -2,9 +2,15 @@
  * 愿望 → 匹配的解耦层（Issue #7 设计方案 §5）。
  * matching 模块与 worker 归 Dev A；本模块只投递事件。
  *
- * #322 M1 起 `enqueue` 投**两条** job：`MATCH_WISH`（v1 重算）与 `EMBED_WISH`（语义向量刷新）。
+ * #322 M1 起 `enqueue` 投**两条** job：`EMBED_WISH`（语义向量刷新）与 `MATCH_WISH`（重算）。
  * 两者成对投递的理由与商品侧一致：愿望的 keyword/description/category 同时是打分输入与向量输入，
  * 分两处投递迟早会漏掉一边。
+ *
+ * **顺序即语义（#322 M4）**：`EMBED_WISH` 必须排在 `MATCH_WISH` **前面**。队列按 `(run_at, id)`
+ * 领取，同一事务（这里两条 INSERT 在同一连接上顺序执行、`run_at` 都取事务时间）里
+ * `id = newId() = Bun.randomUUIDv7()` 同毫秒单调递增 ⇒「插入序 = id 序 = 领取序」是确定的。
+ * 反序就等于：第一轮 MATCH 跑在向量落库之前，引擎按 M2 降级契约落 `ranking_version = 1` 的行，
+ * 而 `EMBED_WISH` 跑完不会回头重投 MATCH ⇒ 该愿望**永久**停在 v1，直到下一次编辑。
  */
 import { buildWishEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
 import type { Db } from '@fish/db/client'
@@ -29,8 +35,9 @@ export function createNoopWishMatchQueue(): WishMatchQueue {
 /**
  * 内容一变就让该愿望已有的向量行当场失效（#322 M2 复审 blocker）。
  *
- * 为什么不能只靠时间戳：实体 `updated_at` 由应用侧 `new Date()` 写入（毫秒分辨率），同一毫秒内
- * 的两次编辑内容不同却版本相同——时间戳相等推不出内容相同（#328 的并发用例已确立）。所以判据
+ * 为什么不能只靠时间戳：实体 `updated_at` 是毫秒分辨率（数据库 `now()`，见
+ * `packages/db/src/schema/common.ts`），同一毫秒内的两次编辑内容不同却版本相同——时间戳相等
+ * 推不出内容相同（#328 的并发用例已确立）。所以判据
  * 必须是**内容**：用当前字段重算指纹，删掉指纹不符的向量行（`pruneStaleEmbeddings`）。
  *
  * 位置说明：愿望的写路径本身**不是事务化的**（`apps/api/src/modules/wishes/store.ts` 的 `update`
@@ -75,6 +82,16 @@ export function createDbWishMatchQueue(db: Db): WishMatchQueue {
       // #322 M2 复审：先失效旧内容向量，再投递（理由见 invalidateStaleEmbedding）。
       await invalidateStaleEmbedding(db, wishId)
 
+      // #322 M1：先投 EMBED_WISH（顺序理由见文件头注释），同样用 `::text::jsonb` 两段转型
+      //（理由见下面的 ⚠️）。它的唯一键是 (payload->>'wishId') WHERE type='EMBED_WISH'
+      // AND status='PENDING'——与 MATCH_WISH 那条"终身一条"刻意不同：已有待跑任务时 DO NOTHING
+      // 即可，而任务跑完（DONE/FAILED）后再次编辑会真正插进一条新的，向量因此不会永久停在旧内容上。
+      await db.execute(sql`
+        INSERT INTO jobs (id, type, payload)
+        VALUES (${newId()}, 'EMBED_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
+        ON CONFLICT DO NOTHING
+      `)
+
       // 幂等：jobs_match_wish_wish_id_pending_uidx（(payload->>'wishId') 的 partial unique index，
       // 谓词是 type='MATCH_WISH' AND status='PENDING'）保证同一愿望至多一条**待跑**的 MATCH_WISH job；
       // 重复请求/重放被 DB 原子地忽略，而前一次投递真正失败（没插进去）时这里会补上一条。
@@ -84,16 +101,6 @@ export function createDbWishMatchQueue(db: Db): WishMatchQueue {
       await db.execute(sql`
         INSERT INTO jobs (id, type, payload)
         VALUES (${newId()}, 'MATCH_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
-        ON CONFLICT DO NOTHING
-      `)
-
-      // #322 M1：同一入口投 EMBED_WISH，同样用 `::text::jsonb` 两段转型（理由见上面的 ⚠️）。
-      // 它的唯一键是 (payload->>'wishId') WHERE type='EMBED_WISH' AND status='PENDING'——
-      // 与 MATCH_WISH 那条"终身一条"刻意不同：已有待跑任务时 DO NOTHING 即可，而任务跑完
-      // （DONE/FAILED）后再次编辑会真正插进一条新的，向量因此不会永久停在旧内容上。
-      await db.execute(sql`
-        INSERT INTO jobs (id, type, payload)
-        VALUES (${newId()}, 'EMBED_WISH', ${JSON.stringify({ wishId })}::text::jsonb)
         ON CONFLICT DO NOTHING
       `)
     },
