@@ -189,7 +189,7 @@ export function createSqlGovernanceStore(_db: Db): GovernanceStore {
       const result = await tx.execute(sql`
         UPDATE user_restrictions
         SET status = 'LIFTED', lifted_at = ${input.liftedAt}, lifted_by = ${input.actorUserId},
-            updated_at = ${input.liftedAt}
+            updated_at = now()
         WHERE user_id = ${input.userId}
           AND ${ACTIVE_RESTRICTION_WHERE}
         RETURNING ${RESTRICTION_COLUMNS}

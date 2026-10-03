@@ -434,6 +434,32 @@ async function waitEmbedJob(db: Db, type: string, key: string, value: string): P
 }
 
 /**
+ * 等某实体的某类 job **全部结算**（全部 DONE，且至少有一条）（#322 M4）。
+ * 出现 FAILED 直接判 smoke 失败——"有 job 在跑"与"这一轮跑成功过"是两件事，不能混。
+ *
+ * 为什么需要：`EMBED_*` 必须先于 `MATCH_*` 投递（M4 的顺序不变量），所以创建愿望会在同一事务里
+ * 排下 `EMBED_WISH` → `MATCH_WISH`。只等 EMBED 跑完时，那条 `MATCH_WISH` 可能仍是 PENDING，
+ * 占着 `jobs_match_wish_wish_id_pending_uidx`；此时直接投本节自己的 `MATCH_WISH` 会撞部分唯一索引
+ * （23505）、并且"不建 Match"的断言也是空的（那一轮 MATCH 还没跑）。先等它结算，两件事一起解决。
+ */
+async function waitJobsSettled(db: Db, type: string, key: string, value: string): Promise<void> {
+  await waitFor(`${type}（${value}）全部结算`, async () => {
+    const rows = await jobRows(db, type, key, value)
+    if (rows.length === 0) return false
+    // FAILED 不算"结算成功"：若创建路径那条 MATCH_WISH 失败，紧随的"不建 Match"断言会因为
+    // 根本没有成功的一轮 MATCH 而退化成空断言。这里直接把 smoke 判失败（`waitFor` 不吞异常）。
+    const failed = rows.find((row) => row.status === 'FAILED')
+    if (failed) {
+      throw new Error(
+        `✗ [${step}] ${type}（${value}）有 FAILED job（id=${failed.id}，attempts=${failed.attempts}）：${failed.lastError ?? '无 last_error'}`,
+      )
+    }
+    return rows.every((row) => row.status === 'DONE')
+  })
+  ok(`${type} 全部结算`)
+}
+
+/**
  * 读某实体当前的向量行（#322 smoke 专用）。
  *
  * 直接读整行、先拿 `model` 再按 model 使用，避免把 provider 的模型名硬编码进 smoke
@@ -716,30 +742,51 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
 
     // 2. Demo 高分样例必须由引擎真实产出（seed 不再预写结果）
     step = 'Demo 样例'
-    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 降级口径）')
+    section('Demo 高分样例：机械键盘 ≤¥200 ↔ K380 ¥160（#322 语义口径）')
     startWorker()
     ok('Worker 已启动')
     await waitJob(db, seededJob.id, 'DONE')
+    /*
+     * seed 按 #43 契约**只投一条 MATCH_LISTING**、不投 EMBED_*，所以第一轮匹配时商品还没有向量
+     * ⇒ 走 M2 的降级契约（v1 口径、补投 EMBED_LISTING）。
+     *
+     * #322 M4 复审修复：`EMBED_*` 在结算前补投一条同实体的 `MATCH_*`（入队序 ≠ 执行序），
+     * 所以这里能等到三条 job 全部结算，并断言那条 MATCH_LISTING 真的被重算过一遍
+     * （worker 日志里是 `recall: "vector-topk"`）。
+     *
+     * 但 demo 这一对**终态仍是 v1**：v2 打分要求**两侧都有新鲜向量**，而 seed 只投 MATCH_LISTING
+     * ⇒ 引擎只补投**目标实体**（商品）的 EMBED_LISTING，愿望那一侧始终没有向量（没有 MATCH_WISH
+     * job、seed 也不投 EMBED_WISH）。重算时候选里只剩"并回的已有行"，`similarity === undefined`
+     * ⇒ 走 v1 分支（`semantic_score = NULL`、`ranking_version = 1`、权重 0.35/0.35/0.30）= 100 分。
+     * v2 的端到端升级路径由后面的"语义召回 / 降级恢复"段覆盖（那里商品与愿望都经 API 创建、两侧都有向量）。
+     * v1 降级口径本身由 `apps/worker/src/jobs/matching/engine.test.ts` 覆盖；smoke 只钉端到端结果。
+     *
+     * 先等 EMBED_LISTING、再等 MATCH_LISTING：补投的 MATCH 是在 EMBED 结算**之前**插入的，
+     * 所以"EMBED 全部 DONE"成立时那条 MATCH 必然已经存在，不存在漏等的窗口。
+     */
+    await waitJobsSettled(db, 'EMBED_LISTING', 'listingId', seedListing.id)
+    await waitJobsSettled(db, 'MATCH_LISTING', 'listingId', seedListing.id)
     const seededMatch = await matchRow(db, seedListing.id, seedWish.id)
     assert(seededMatch !== null, 'Worker 用真实打分生成了 demo 的 match 行')
     if (!seededMatch) throw new Error('demo match 缺失')
-    assertEqual(seededMatch.score, 100, 'demo 样例总分 = 100')
     assertEqual(seededMatch.categoryScore, 100, 'demo 样例分类分 = 100')
     assertEqual(seededMatch.keywordScore, 100, 'demo 样例关键词分 = 100')
     assertEqual(seededMatch.priceScore, 100, 'demo 样例价格分 = 100')
-    // #322 M2 的降级契约在真实链路上的证据：seed 按 #43 契约**只投一条 MATCH_LISTING**、不投
-    // EMBED_*，所以愿望这一侧没有向量 ⇒ 本轮按 v1 口径打分（semantic_score 落 NULL、
-    // ranking_version = 1、分数是 0.35/0.35/0.30 的 #8 算法），同时补投目标实体的 EMBED_LISTING。
-    // v2（hybrid + semantic_score）由本文件后面的「语义链」一节在同一套 API/Worker/DB 上验证。
     assertEqual(
       seededMatch.rankingVersion,
       RANKING_VERSION_V1,
-      'demo 行是 v1 退化口径（愿望没有向量）',
+      'demo 行终态是 v1 降级口径（愿望侧没有向量）',
     )
-    assertEqual(seededMatch.semanticScore, null, 'v1 行的 semantic_score 落 NULL，不伪造语义分')
+    assert(seededMatch.semanticScore === null, 'v1 行的 semantic_score 是 NULL')
+    assertEqual(seededMatch.score, 100, 'demo 样例总分 = 100（v1 权重 0.35/0.35/0.30）')
+    const demoMatchJobs = await jobRows(db, 'MATCH_LISTING', 'listingId', seedListing.id)
+    assert(
+      demoMatchJobs.length >= 2,
+      `降级后 EMBED 结算补投了 MATCH_LISTING（否则目标向量永远补不上）：实际 ${demoMatchJobs.length} 条`,
+    )
     assert(
       (await jobRows(db, 'EMBED_LISTING', 'listingId', seedListing.id)).length > 0,
-      '降级时补投了 EMBED_LISTING（否则这一对永远停在 v1）',
+      '降级时补投了 EMBED_LISTING',
     )
     assertEqual(
       await notificationCount(db, seedListing.id, seedWish.id),
@@ -756,7 +803,11 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       ),
     )
     assertEqual(total(demoWishSide, 'demo /matches?wishId='), 1, 'demo 买家能读到“愿望成真”')
-    assertEqual(topScore(demoWishSide, 'demo /matches?wishId='), 100, 'demo 读接口分数 = 100')
+    assertEqual(
+      topScore(demoWishSide, 'demo /matches?wishId='),
+      seededMatch.score,
+      'demo 读接口分数 = 引擎写入的分数（这一对终态是 v1，版本见上方断言）',
+    )
 
     // 发布与建愿望的 job 投递断言要在**停机态**下做：worker 在跑时，job 可能在脚本读库前就被
     // 领取成 RUNNING，硬断言 PENDING 会变成竞态（“连跑 5 次”会偶发失败）。
@@ -1397,8 +1448,13 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     const semanticWishId = decodePublicId(PUBLIC_ID_PREFIX.wish, semanticWishPublicId)
 
     await waitEmbedJob(db, 'EMBED_WISH', 'wishId', semanticWishId)
-    // 结构分不够：分类 100 + 价格 100 + 关键词 0 ⇒ v1 = 0.35×100 + 0.30×100 = 65，
-    // v2 = 0.32×100 + 0.23×100 + 0.30×0 = 55，都低于阈值 70 ⇒ 不建行。
+    // #322 M4：EMBED_WISH 先于 MATCH_WISH 投递，所以 EMBED 跑完时创建路径那条 MATCH_WISH 可能仍是
+    // PENDING。先等它结算：既避免本节自己投 MATCH_WISH 时撞 pending 部分唯一索引（23505），也让紧接着
+    // 的「不建 Match」断言真的跑在一轮完整的 MATCH 上（否则那轮还没跑，断言是空的）。
+    await waitJobsSettled(db, 'MATCH_WISH', 'wishId', semanticWishId)
+    // 结构分不够：分类 100 + 价格 100 + 关键词 0。v2 = 0.32×100 + 0.23×100 + 0.30×semantic
+    // = 55 + 0.30×semantic，要过阈值 70 需 semantic ≥ 50（#322 M4 锚点 0.42/0.70 ⇒ cos ≥ 0.56）；
+    // 这条样本的文本与该商品语义不可比，所以不建行。v1 同口径 = 0.35×100 + 0.30×100 = 65，同样过不了。
     assertEqual(
       await matchCount(db, listingId, semanticWishId),
       0,
