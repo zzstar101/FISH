@@ -1,14 +1,17 @@
 /**
- * 头像 / 昵称编辑的纯逻辑（#86 B 线）。
+ * 头像 / 昵称 / 个性签名编辑的纯逻辑（#86 B 线；签名 #179）。
  *
  * 这里**不 import Taro**：页面负责平台层（`chooseAvatar` 回调、`getImageInfo`、读文件大小），
- * 本模块只做三件能在 bun 里直接测的事 —— 判 mime、校验昵称、决定这次要不要发请求。
+ * 本模块只做能在 bun 里直接测的事 —— 判 mime、校验昵称、决定这次要不要发请求。
  */
 import type { ProfileUpdateRequest } from '@fish/contracts/profile/schema'
 import { type AllowedImageMime, mimeFromPath } from '@/features/upload/mime'
 
 /** 契约 `NicknameSchema` = trim 后 1–20 字；前端只做预检，服务端才是权威。 */
 export const NICKNAME_MAX = 20
+
+/** 契约 `SignatureSchema` = trim 后最多 200 字（空串 = 清空）；maxlength 兜住输入，超不出服务端。 */
+export const SIGNATURE_MAX = 200
 
 /**
  * 微信 `getImageInfo` 回的图片格式 → 契约白名单 mime。
@@ -45,16 +48,25 @@ export function nicknameError(value: string): string | null {
  * 这次保存要发什么。
  *
  * - 昵称 trim 后与当前一致就不带它；没选新头像（`avatarObjectKey` 为 `null`）也不带它；
- * - 两者都没有 → 返回 `null`：页面提示「没有需要保存的修改」，而不是发一个**必然 422**
+ * - 签名 trim 后与当前一致（当前 `null` 视为 `''`）就不带它 —— 服务端把空串归一化落
+ *   `null`（契约 `SignatureSchema`），所以「清空」只在原值非空时才需要发 `''`；
+ * - 三者都没有 → 返回 `null`：页面提示「没有需要保存的修改」，而不是发一个**必然 422**
  *   的空对象（契约 `profileUpdateRequestSchema` 明确拒绝空对象）。
  */
 export function profileUpdateBody(
   originalNickname: string,
-  draft: { nickname: string; avatarObjectKey: string | null },
+  originalSignature: string | null,
+  draft: { nickname: string; signature: string; avatarObjectKey: string | null },
 ): ProfileUpdateRequest | null {
   const body: ProfileUpdateRequest = {}
   const nickname = draft.nickname.trim()
   if (nickname !== originalNickname) body.nickname = nickname
   if (draft.avatarObjectKey) body.avatarObjectKey = draft.avatarObjectKey
-  return body.nickname === undefined && body.avatarObjectKey === undefined ? null : body
+  const signature = draft.signature.trim()
+  if (signature !== (originalSignature ?? '')) body.signature = signature
+  return body.nickname === undefined &&
+    body.avatarObjectKey === undefined &&
+    body.signature === undefined
+    ? null
+    : body
 }

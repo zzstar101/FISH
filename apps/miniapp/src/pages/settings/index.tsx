@@ -108,7 +108,10 @@ export default function Settings() {
         {/* ============================ 账号 ============================ */}
         <Text className="st__grouplabel">账号</Text>
         <View className="st__group">
-          <View className="st__acct" onClick={() => toast('编辑资料待接入')}>
+          <View
+            className="st__acct"
+            onClick={() => void Taro.navigateTo({ url: '/pages/profile-edit/index' })}
+          >
             <View className="st__av">
               <Text className="st__av-tx">{nickname.slice(0, 1)}</Text>
               {verified ? (
