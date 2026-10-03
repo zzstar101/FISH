@@ -87,6 +87,17 @@ async function createRequest(strategyVersion = 'rank-v1'): Promise<string> {
   return id
 }
 
+/** 生产路径只有这一种写法：请求行与快照**一次事务**写入。 */
+async function createWithItems(
+  requestId: string,
+  records: RecommendationRequestItemRecord[],
+): Promise<void> {
+  await store.createRequestWithItems(
+    { id: requestId, userId: null, anonymousSessionId: newId(), strategyVersion: 'rank-v1' },
+    records,
+  )
+}
+
 function item(
   requestId: string,
   position: number,
@@ -125,9 +136,9 @@ describe('recommendation store — 请求上下文 (#323 R4)', () => {
 
 describe('recommendation store — 快照与归因真值 (#323 R4/R5)', () => {
   test('快照按 position 写入，findRequestItems 按 position 升序返回', async () => {
-    const requestId = await createRequest()
+    const requestId = newId()
     // 故意乱序写入：翻页按 offset 切片，顺序只能由读路径自己保证。
-    await store.insertRequestItems([
+    await createWithItems(requestId, [
       item(requestId, 2, {
         listingId: listingIdAt(2),
         primarySource: 'popular',
@@ -163,28 +174,33 @@ describe('recommendation store — 快照与归因真值 (#323 R4/R5)', () => {
     expect(rows[2]?.sources).toEqual(['popular', 'explore'])
     expect(rows[2]?.rankScore).toBe(0.7)
 
-    // 空数组是 no-op，不是「发一条空 INSERT」。
-    await store.insertRequestItems([])
-    expect(await store.findRequestItems(requestId)).toHaveLength(3)
+    // 空快照不是「发一条空 INSERT」：只落请求行，位置真值为空。
+    const empty = newId()
+    await createWithItems(empty, [])
+    expect(await store.findRequestItems(empty)).toEqual([])
 
     // 别的请求的快照不串味。
     expect(await store.findRequestItems(newId())).toEqual([])
   })
 
-  test('同一次请求重复写同一 position 直接报错，不静默吞掉', async () => {
-    const requestId = await createRequest()
-    await store.insertRequestItems([item(requestId, 0)])
-    await expect(store.insertRequestItems([item(requestId, 1)])).resolves.toBeUndefined()
+  test('快照冲突时整笔事务回滚：不留下没有快照的请求行', async () => {
+    // 同一请求里两个 position 相同 → `(request_id, position)` 唯一索引报错（刻意不用
+    // `onConflictDoNothing`，静默吞掉会让"快照没写对"变成看不见的错误）。它与请求行同在一笔
+    // 事务里，所以失败必须把请求行一起撤掉：留下它就是一条**服务端没有归因真值**的 ranked 请求
+    // —— 客户端照它上报曝光会全部落进 `attribution_not_found`，R6 还会报成
+    // `empty_ranked_feed_requests`。
+    const requestId = newId()
+    await expect(
+      createWithItems(requestId, [item(requestId, 1), item(requestId, 1)]),
+    ).rejects.toThrow()
 
-    // `(request_id, position)` 唯一索引再来一次 → 报错。静默吞掉会让「快照没写对」变成看不见
-    // 的错误，所以这里不用 `onConflictDoNothing`；service 侧把它降级成 nextCursor=null。
-    await expect(store.insertRequestItems([item(requestId, 1)])).rejects.toThrow()
-    expect(await store.findRequestItems(requestId)).toHaveLength(2)
+    expect(await store.findRequests([requestId])).toEqual([])
+    expect(await store.findRequestItems(requestId)).toEqual([])
   })
 
   test('rank_breakdown 以 JSON 对象落库（jsonParam 防止 drizzle 双次 stringify）', async () => {
-    const requestId = await createRequest()
-    await store.insertRequestItems([
+    const requestId = newId()
+    await createWithItems(requestId, [
       item(requestId, 0, {
         rankBreakdown: {
           semantic: { normalized: 1, weight: 0.35, contribution: 0.35 },
@@ -208,11 +224,13 @@ describe('recommendation store — 快照与归因真值 (#323 R4/R5)', () => {
   })
 
   test('findRequestItemAttribution 一次取多次请求的归因真值，键是 (requestId, listingId)', async () => {
-    const first = await createRequest()
-    const second = await createRequest()
-    await store.insertRequestItems([
+    const first = newId()
+    const second = newId()
+    await createWithItems(first, [
       item(first, 0, { listingId: listingIdAt(0), primarySource: 'fresh' }),
       item(first, 1, { listingId: listingIdAt(1), primarySource: 'semantic' }),
+    ])
+    await createWithItems(second, [
       item(second, 0, { listingId: listingIdAt(0), primarySource: 'popular' }),
     ])
 

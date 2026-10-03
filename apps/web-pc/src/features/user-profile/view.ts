@@ -17,7 +17,8 @@ export function isUserNotFound(error: unknown): boolean {
  * 主页上展示的三个统计，来源是 `PublicUserProfileSchema` 的 `joinedDays / activeCount / soldCount`。
  *
  * 契约的公开 DTO 只有七个字段，**没有**好评率 / 关注数 / 成交金额：
- * 仓库没有 reviews 表、关注关系未拆 Domain（见 `users/schema.ts` 文件头），
+ * 仓库没有 reviews 表；关注数按视角单独放在 follows Domain（#188，`GET /me/following`
+ * 与 `/users/:userId/follow`），不属于这份「同一响应给所有人」的匿名公开读模型，
  * 所以这里不编造任何额外指标。
  */
 export function profileStats(

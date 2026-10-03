@@ -5,6 +5,7 @@ import { ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import {
+  Bookmark,
   ChevronRight,
   CircleDollarSign,
   Flag,
@@ -14,10 +15,12 @@ import {
   Pencil,
   ShoppingBag,
   Tags,
+  UsersRound,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
 import { useLogout } from '../auth/queries'
+import { useFavoritesTotal } from '../favorites/queries'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 
@@ -30,6 +33,9 @@ export function ProfilePage() {
 function ProfileContent({ ownerId }: { ownerId: string }) {
   const { me } = useAuth()
   const profile = useProfile(ownerId)
+  // 收藏计数与收藏列表同源：读 `GET /me/favorites` 的全量 total，读不到显示未知而非 0
+  // （不用 profileStats.favoriteCount——#190 已冻结不加字段，也保证两个数字同表同向）。
+  const favoritesTotal = useFavoritesTotal(ownerId)
   const logout = useLogout()
   const [editOpen, setEditOpen] = useState(false)
   const [logoutError, setLogoutError] = useState<string | null>(null)
@@ -101,7 +107,7 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
         </div>
       </Card>
 
-      <section aria-label="我的统计" className="grid grid-cols-3 gap-4">
+      <section aria-label="我的统计" className="grid grid-cols-5 gap-4">
         <StatCard icon={PackageOpen} label="在售商品" value={stats.activeListings} to="/mylist" />
         <StatCard icon={Heart} label="活跃愿望" value={stats.activeWishes} to="/wish" />
         <StatCard
@@ -110,6 +116,13 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           value={stats.completedTransactions}
           to="/orders"
         />
+        <StatCard
+          icon={Bookmark}
+          label="收藏"
+          to="/favorites"
+          value={favoritesTotal.isError ? '未知' : (favoritesTotal.data ?? '未知')}
+        />
+        <StatCard icon={UsersRound} label="关注" to="/following" value={stats.followingCount} />
       </section>
 
       <section className="grid grid-cols-2 gap-4">
@@ -188,8 +201,8 @@ function StatCard({
 }: {
   icon: typeof PackageOpen
   label: string
-  value: number
-  to: '/mylist' | '/wish' | '/orders'
+  value: number | string
+  to: '/mylist' | '/wish' | '/orders' | '/favorites' | '/following'
 }) {
   return (
     <Link to={to}>

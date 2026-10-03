@@ -7,7 +7,7 @@ import {
   RANK_STRATEGY_VERSION,
   RECOMMENDATION_STRATEGY_VERSION_RULE,
 } from '@fish/contracts/recommendation/rank'
-import { RECALL_STRATEGY_VERSION } from '@fish/contracts/recommendation/recall'
+import { RECALL_STRATEGY_VERSION, type RecallChannel } from '@fish/contracts/recommendation/recall'
 import {
   RECOMMENDATION_RATE_LIMITED,
   RECOMMENDATION_STRATEGY_VERSION_NONE,
@@ -24,7 +24,7 @@ import { users } from '@fish/db/schema/users'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
 import { ListingServiceError } from './modules/listings/service'
@@ -584,6 +584,201 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
 
     // 降级不写快照：写了的话第二页会按快照切片，而第一页其实是 newest 页 —— 顺序当场错位。
     expect(await snapshotOf(page.response.requestId)).toHaveLength(0)
+  })
+
+  test('快照写不进去 → 整笔请求降级：不返回一个查不到快照的 ranked requestId', async () => {
+    const sessionId = newId()
+    const listingId = newId()
+    const service = createRecommendationService({
+      // 只替换「请求行 + 快照」这一次原子写，其余依赖都是真的（真 store、真 scratch 库）：
+      // 失败形状与线上一致，降级后的请求行也必须真的落库。
+      store: {
+        ...createSqlRecommendationStore(db),
+        createRequestWithItems: async () => {
+          throw new Error('模拟快照写入失败')
+        },
+      },
+      listings: {
+        listFeed: async () => ({ items: [], nextCursor: 'inner-listing-cursor' }),
+        // 可见性真值返回空 Map ≠ 没有候选：快照仍要按重排结果编号，所以原子写照样会走到。
+        listCardsByIds: async () => new Map(),
+      },
+      recall: {
+        recall: async () => ({
+          strategyVersion: 'recall-v1',
+          candidates: [
+            {
+              listingId,
+              sellerId: newId(),
+              category: 'OTHER',
+              recallSources: ['fresh'],
+              semanticScore: null,
+              wishScore: null,
+              popularity: null,
+              userCategoryAffinity: null,
+              freshness: 1,
+              createdAt: new Date(),
+              alreadySeenCount: null,
+              sellerExposure: 0,
+            },
+          ],
+          channels: [],
+          interest: { session: false, longTerm: false, combined: false },
+          mergeDegradedReason: null,
+        }),
+      },
+      interest: { enqueue: async () => {} },
+    })
+
+    const page = await service.startFeed({
+      viewerId: null,
+      anonymousSessionId: sessionId,
+      limit: 20,
+    })
+
+    // 返给客户端的上下文必须**有服务端归因真值**。R4 起 position/source 只信快照，所以把那个
+    // 写不进快照的 ranked requestId 交出去，等于让客户端照它上报的整页曝光全部落进
+    // `attribution_not_found` 被静默拒收 —— 页面看着正常，数据一行不剩。
+    expect(page.response.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+    expect(page.response.nextCursor).not.toBeNull()
+
+    const [row] = await db
+      .select()
+      .from(recommendationRequests)
+      .where(eq(recommendationRequests.id, page.response.requestId))
+    expect(row?.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+
+    // 库里也不能留下任何一条没有快照的 ranked 请求行：R6 的 `empty_ranked_feed_requests`
+    // 会把它报成数据质量异常，而它其实是「写失败」而不是「确实没有可发的推荐」。
+    const orphans = await db
+      .select({ id: recommendationRequests.id })
+      .from(recommendationRequests)
+      .where(
+        and(
+          eq(recommendationRequests.anonymousSessionId, sessionId),
+          ne(recommendationRequests.strategyVersion, RECOMMENDATION_STRATEGY_VERSION_NONE),
+        ),
+      )
+    expect(orphans).toEqual([])
+  })
+
+  test('候选没有归因来源时宁可不发：不会把写不出快照行的卡片交给客户端', async () => {
+    const sessionId = newId()
+    const attributableId = newId()
+    const noSourceId = newId()
+    const requestedPages: string[][] = []
+    const candidate = (listingId: string, recallSources: readonly RecallChannel[]) => ({
+      listingId,
+      sellerId: newId(),
+      category: 'OTHER' as const,
+      recallSources: [...recallSources],
+      semanticScore: null,
+      wishScore: null,
+      popularity: null,
+      userCategoryAffinity: null,
+      freshness: 1,
+      createdAt: new Date(),
+      alreadySeenCount: null,
+      sellerExposure: 0,
+    })
+    const service = createRecommendationService({
+      store: createSqlRecommendationStore(db),
+      listings: {
+        listFeed: async () => ({ items: [], nextCursor: null }),
+        listCardsByIds: async (_viewerId, ids) => {
+          requestedPages.push([...ids])
+          return new Map()
+        },
+      },
+      recall: {
+        recall: async () => ({
+          strategyVersion: 'recall-v1',
+          candidates: [candidate(attributableId, ['fresh']), candidate(noSourceId, [])],
+          channels: [],
+          interest: { session: false, longTerm: false, combined: false },
+          mergeDegradedReason: null,
+        }),
+      },
+      interest: { enqueue: async () => {} },
+    })
+
+    await service.startFeed({ viewerId: null, anonymousSessionId: sessionId, limit: 20 })
+
+    // R4 起 position/source 只信服务端快照，而快照行必须有 primary source ⇒ `recallSources`
+    // 为空的候选在库里没有归因真值。把它交给客户端，它的曝光就会被 `attribution_not_found`
+    // 静默拒收（页面正常、数据一行不剩），所以它连可见性查询都不该进。
+    expect(requestedPages).toEqual([[attributableId]])
+  })
+
+  test('首页就把快照取完时不给游标：不会让客户端翻出一页空的', async () => {
+    // 快照行的 `listing_id` 有外键 ⇒ 候选必须是真实存在的商品（本用例要真写快照）。
+    const seller = await registerUser('69')
+    const publicIds = [
+      await createListing(seller.id, '游标守卫商品 1'),
+      await createListing(seller.id, '游标守卫商品 2'),
+    ]
+    const listingIds = publicIds.map((id) => decodePublicId(PUBLIC_ID_PREFIX.listing, id))
+    const candidate = (listingId: string) => ({
+      listingId,
+      sellerId: newId(),
+      category: 'OTHER' as const,
+      recallSources: ['fresh'] as RecallChannel[],
+      semanticScore: null,
+      wishScore: null,
+      popularity: null,
+      userCategoryAffinity: null,
+      freshness: 1,
+      createdAt: new Date(),
+      alreadySeenCount: null,
+      sellerExposure: 0,
+    })
+    const service = createRecommendationService({
+      store: createSqlRecommendationStore(db),
+      listings: {
+        listFeed: async () => ({ items: [], nextCursor: null }),
+        listCardsByIds: async (_viewerId, ids) =>
+          new Map(
+            ids.map((id) => [
+              id,
+              {
+                id: encodePublicId(PUBLIC_ID_PREFIX.listing, id),
+                title: '游标守卫商品',
+                priceCents: 100,
+                category: 'OTHER' as const,
+                condition: 'GOOD' as const,
+                status: 'ACTIVE' as const,
+                urgent: false,
+                negotiable: false,
+                free: false,
+                coverUrl: null,
+                moderationStatus: null,
+                createdAt: new Date().toISOString(),
+              },
+            ]),
+          ),
+      },
+      recall: {
+        recall: async () => ({
+          strategyVersion: 'recall-v1',
+          candidates: listingIds.map(candidate),
+          channels: [],
+          interest: { session: false, longTerm: false, combined: false },
+          mergeDegradedReason: null,
+        }),
+      },
+      interest: { enqueue: async () => {} },
+    })
+
+    const page = await service.startFeed({
+      viewerId: null,
+      anonymousSessionId: newId(),
+      limit: 20,
+    })
+
+    // 候选池比 limit 小 ⇒ 第一屏（`servedIds`）就已经是整份快照：此时再给 `offset === rows.length`
+    // 的游标，客户端翻第二页只会拿到空 `items`，而它指向的快照行并不存在。
+    expect(page.response.items).toHaveLength(listingIds.length)
+    expect(page.response.nextCursor).toBeNull()
   })
 
   test('第一页写快照、第二页按快照切片：position 连续、不重不漏、requestId 复用', async () => {

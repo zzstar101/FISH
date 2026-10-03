@@ -17,7 +17,7 @@ import { presenceView } from '@/features/presence/view'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { cancellable } from '@/lib/cancellable'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import { formatAmount, type MockListing } from '@/mock/api'
 import { userListEnd } from './list-end'
@@ -153,6 +153,9 @@ export default function UserHome() {
    */
   const navMetrics = useMemo(() => readNavMetrics(), [])
   const navTotalHeight = navMetrics.totalHeight
+  // 举报钮与返回钮同规格：与微信胶囊等高（2026-10-02 拍板），否则它会把 navfloat
+  // 的 flex 行撑高，把返回钮拖离胶囊中线。
+  const backGeo = backButtonGeometry(navMetrics.capsuleHeight)
   /**
    * 身份区顶到导航条以下的距离，**设备 px**（行内 px 不经 pxtransform，见 `nav-metrics.ts`）。
    *
@@ -503,10 +506,22 @@ export default function UserHome() {
     profile && !isSelf ? (
       <View
         className={`uhome__navreport${glassOn ? ' is-glass' : ''}`}
-        style={{ marginRight: `${navReportGap}px` }}
+        style={{
+          marginRight: `${navReportGap}px`,
+          ...backGeo.btnStyle,
+        }}
         onClick={goReport}
       >
-        <Image className="uhome__navreport-ic" src={ICONS.shieldLine} mode="aspectFit" />
+        {/* 位图图标随胶囊等高的钮等比缩放（原 72px 钮配 38px 图标） */}
+        <Image
+          className="uhome__navreport-ic"
+          src={ICONS.shieldLine}
+          mode="aspectFit"
+          style={{
+            width: `${Math.round(backGeo.size * (38 / 72))}px`,
+            height: `${Math.round(backGeo.size * (38 / 72))}px`,
+          }}
+        />
       </View>
     ) : null
 

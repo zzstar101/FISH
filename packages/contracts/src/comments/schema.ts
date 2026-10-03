@@ -5,6 +5,7 @@ import {
   CommentIdSchema as PublicCommentIdSchema,
   UserIdSchema,
 } from '../system/public-id'
+import { TransactionReviewItemSchema } from '../transaction-reviews/schema'
 
 /**
  * Comment Domain Contract（Issue #111）。
@@ -198,17 +199,27 @@ export const MyCommentItemSchema = z.object({
 
 export type MyCommentItem = z.infer<typeof MyCommentItemSchema>
 
+/**
+ * 「我发过的」来源档位（#195 PR2 起）。
+ *
+ * - `comment`（默认）：只接商品留言 —— 与 PR1 行为完全一致，老调用方不传 `kind` 不变；
+ * - `review`：只接交易评价；
+ * - `all`：留言 ∪ 评价，按 `(created_at DESC, id DESC)` 跨两表合并，一页内两种行都可能出现。
+ */
+export const MyCommentsKindSchema = z.enum(['all', 'comment', 'review'])
+export type MyCommentsKind = z.infer<typeof MyCommentsKindSchema>
+
 /** 与商品留言列表同口径：`limit` 默认 20、上限 50；`cursor` 不透明，前端只原样回传。
  *
- * PR1 只接**商品留言**这一个来源。Owner 冻结的目标形状是「单端点 + `kind` 过滤」
- * （`all | comment | review`）：`kind` 与 `all = 留言 ∪ 评价` 的跨表合并游标随 PR2 的评价
- * 来源一起补，届时是**加一个可选参数 + 放宽 `items` 为判别联合**的向后兼容增量
- * （当前无外部消费者）。所以本 PR 刻意**不预置** `kind=review`：返回空等于把「我们还没有
- * 这条数据源」说成「你没有评价」。
+ * Owner 冻结的目标形状是「单端点 + `kind` 过滤」，PR2（#195）把 `kind` 与评价来源补齐：
+ * `items` 因此放宽为**判别联合**（留言行有 `comment` 键、评价行有 `review` 键，形状互斥）。
+ * 默认 `comment` 保证 PR1 时代的调用方行为与解析不变；评价行内嵌查看者视角的订单 DTO
+ * （真实 `transactionId` / `listingId`），端上行点击进订单或商品详情，不靠标题猜 ID。
  */
 export const MyCommentsQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().min(1).optional(),
+  kind: MyCommentsKindSchema.default('comment'),
 })
 
 export type MyCommentsQuery = z.infer<typeof MyCommentsQuerySchema>
@@ -216,12 +227,15 @@ export type MyCommentsQuery = z.infer<typeof MyCommentsQuerySchema>
 /**
  * 本人留言列表响应。
  *
- * `total` 是**全量**条数（服务端 COUNT，与列表同一张表、同一个作者条件）：
+ * `total` 是**全量**条数（服务端 COUNT，与列表同源、同一作者条件、**同一 `kind` 口径**）：
  * 「我的评论页」的分段胶囊要显示条数，分页列表拿不出全量 —— 旁路再发一个 count 请求
- * 只会让两个数字有机会不一致。
+ * 只会让两个数字有机会不一致。`kind=all` 时 `total = 留言数 + 评价数`。
+ *
+ * `items` 是判别联合：留言行 `{ comment, listing }`、评价行 `{ review, transaction }`，
+ * 端上按键分流渲染（评价行才有星级）。`nextCursor` 跨两表稳定：`all` 翻页不会重复或跳项。
  */
 export const MyCommentsResponseSchema = z.object({
-  items: z.array(MyCommentItemSchema),
+  items: z.array(z.union([MyCommentItemSchema, TransactionReviewItemSchema])),
   nextCursor: z.string().nullable(),
   total: z.number().int().nonnegative(),
 })

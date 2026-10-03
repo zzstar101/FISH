@@ -1,5 +1,7 @@
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
+import { jobs } from '@fish/db/schema/jobs'
 import { sql } from 'drizzle-orm'
 import { insertSystemWithin, type MessageRow } from '../messages/store'
 
@@ -261,6 +263,31 @@ function isUniqueViolation(error: unknown): boolean {
   return isUniqueViolation(err.cause)
 }
 
+/**
+ * 状态流转会推进 `listings.updated_at`，而语义召回的候选新鲜度谓词要求向量行的
+ * `source_updated_at` 与实体 `updated_at` 毫秒级相等（`packages/db/src/embedding-store.ts` 的
+ * `freshListingsEmbedding()`）。所以每次状态写入都必须补投 `EMBED_LISTING`：内容没变时 handler
+ * 走 `unchanged` 分支，只把向量行的版本标记推进到实体当前版本，**不重复调用 provider**
+ * （见 `apps/worker/src/jobs/embedding/handlers.ts` 的 `generateOnce`）。
+ * 没有这一步，商品一旦 RESERVED→CANCELLED→ACTIVE 就静默掉出语义召回、退回 v1。
+ *
+ * 为什么不连 `MATCH_LISTING` 一起投（与 listings / governance 的「成对投递」规则不同）：
+ * 状态不是匹配输入，引擎在求值那一刻按 listing 状态过闸；这里要修的只是"状态一动向量就判过期"，
+ * 顺带重跑匹配会改变既有商品匹配行的写入时机，超出本轮范围。
+ *
+ * `payload` 必须经 `jsonParam()`（裸对象会被 stringify 两次，`payload->>'listingId'` 恒为 NULL）；
+ * `EMBED_LISTING` 的唯一索引是部分索引（`status='PENDING'`），已有待跑 job 时冲突不是错误。
+ */
+async function enqueueListingEmbedding(
+  executor: Pick<Db, 'insert'>,
+  listingId: string,
+): Promise<void> {
+  await executor
+    .insert(jobs)
+    .values({ id: newId(), type: 'EMBED_LISTING', payload: jsonParam({ listingId }) })
+    .onConflictDoNothing()
+}
+
 export function createSqlTransactionStore(db: Db): TransactionStore {
   return {
     async findConversation(conversationId, viewerId) {
@@ -340,11 +367,12 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架。
         // ② 部分唯一索引 transactions_listing_id_live_uq 兜底同一 listing 的第二笔 live 交易。
         const lock = await tx.execute(sql`
-          UPDATE listings SET status = 'RESERVED', updated_at = now()
+          UPDATE listings SET status = 'RESERVED', updated_at = clock_timestamp()
           WHERE id = ${brief.listingId} AND status = 'ACTIVE'
           RETURNING id
         `)
         if (rowsOf(lock).length === 0) return { kind: 'listing-not-active' }
+        await enqueueListingEmbedding(tx, brief.listingId)
 
         const insert = await tx
           .execute(sql`
@@ -491,7 +519,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
               UPDATE listings l SET
                 status = CASE WHEN l.governance_delisted_at IS NULL THEN 'SOLD'::listing_status
                               ELSE l.status END,
-                updated_at = now()
+                updated_at = clock_timestamp()
               FROM txn WHERE l.id = txn.listing_id
             )
             SELECT txn.*, c.id AS conversation_id
@@ -502,6 +530,8 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
           `)
           const doneRow = rowsOf(done)[0]
           if (doneRow) {
+            // 商品状态在本次事务里漂移到 SOLD：向量行要跟上版本，否则被新鲜度谓词判过期。
+            await enqueueListingEmbedding(tx, doneRow.listing_id as string)
             // #147 终态销毁：凭证随交易同事务删除，COMPLETED 后旧码不可再用。
             // 必须是独立语句（不能塞进上面 CTE）：本事务自开头就持有交易行锁，
             // 与 cancel 同款论证见 cancel 内注释——READ COMMITTED 下同一条 CTE 里
@@ -530,7 +560,7 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
             UPDATE listings l SET
               status = CASE WHEN l.governance_delisted_at IS NULL THEN 'ACTIVE'::listing_status
                             ELSE l.status END,
-              updated_at = now()
+              updated_at = clock_timestamp()
             FROM txn WHERE l.id = txn.listing_id
           )
           SELECT txn.*, c.id AS conversation_id
@@ -541,6 +571,9 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
         `)
         const row = rowsOf(cancelled)[0]
         if (row) {
+          // 取消会把商品退回 ACTIVE（或治理下架期间保留原状态），版本随之前进：
+          // 补投 EMBED_LISTING 让向量行的版本标记跟上，否则它会被判过期、掉出语义召回。
+          await enqueueListingEmbedding(tx, row.listing_id as string)
           // #147 终态销毁：凭证随交易同事务删除，CANCELLED 后旧码不可再用。
           // 必须是独立语句（不能塞进上面 CTE 的 token 分支）：READ COMMITTED 下，
           // 同一条 CTE 里 DELETE 对非目标表（这里即凭证表）用**语句开头**的快照，
@@ -682,17 +715,20 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
                 AND buyer_confirmed_at IS NOT NULL AND seller_confirmed_at IS NOT NULL
               RETURNING id, listing_id
             ), listing AS (
-              UPDATE listings l SET status = 'SOLD', updated_at = now()
+              UPDATE listings l SET status = 'SOLD', updated_at = clock_timestamp()
               FROM txn WHERE l.id = txn.listing_id
             )
-            SELECT id FROM txn
+            SELECT id, listing_id FROM txn
           `)
           // #147 终态销毁：推进 COMPLETED 的同事务删除凭证行。独立语句而不是上面的
           // CTE token 分支，理由与 cancel / confirm 相同（READ COMMITTED 快照论证见
           // cancel 内注释）；本事务自开头就持有交易行锁，issue 的 FOR UPDATE 拿不到
           // 交易行锁，不存在「DELETE 之后凭证复活」的一方。交易未推进（0 行）时
           // 凭证保留（仍是当前有效凭证），所以只在这里删。
-          if (rowsOf(finished).length > 0) {
+          const finishedRow = rowsOf(finished)[0]
+          if (finishedRow) {
+            // 同 confirm 的合并语义：商品转 SOLD 的版本前进要补投 EMBED_LISTING。
+            await enqueueListingEmbedding(tx, finishedRow.listing_id as string)
             await tx.execute(
               sql`DELETE FROM transaction_meetup_tokens WHERE transaction_id = ${transactionId}`,
             )

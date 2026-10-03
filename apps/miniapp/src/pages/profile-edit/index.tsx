@@ -29,7 +29,7 @@ import {
   type SessionKey,
 } from '@/features/profile/save'
 import { type PickedPhoto, uploadListingImage, validatePickedSize } from '@/features/upload/api'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { ensurePrivacyAuthorized } from '@/lib/privacy'
 import { isApiError } from '@/lib/request'
 import './index.scss'
@@ -82,6 +82,7 @@ export default function ProfileEdit() {
   useAuthGuard()
   const { user: owner } = useAuth()
   const nav = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(nav.capsuleHeight)
 
   const [nickname, setNickname] = useState(() => owner?.nickname ?? '')
   /** 本次选中的本地临时头像（仅预览） */
@@ -209,10 +210,22 @@ export default function ProfileEdit() {
       <View className="pe__body" style={{ paddingTop: `${nav.totalHeight}px` }}>
         <View
           className="pe__back"
-          style={{ top: `${nav.statusBarHeight + nav.contentHeight / 2}px` }}
+          style={{
+            top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
+            ...backGeo.btnStyle,
+          }}
           onClick={goBack}
         >
-          <Image className="pe__back-ic" src={ICONS.backInk} mode="aspectFit" />
+          {/* 位图箭头随胶囊等高的钮等比缩放（原 72px 钮配 40px 图标） */}
+          <Image
+            className="pe__back-ic"
+            src={ICONS.backInk}
+            mode="aspectFit"
+            style={{
+              width: `${Math.round(backGeo.size * (40 / 72))}px`,
+              height: `${Math.round(backGeo.size * (40 / 72))}px`,
+            }}
+          />
         </View>
 
         <View className="pe__avatar-wrap">

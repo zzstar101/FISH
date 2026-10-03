@@ -37,6 +37,25 @@ mock.module('./queries', () => ({
   },
 }))
 
+/** 关注态同理钉死：页面要锁的是「本人不发查询」「未登录给登录入口」这两条**页面自己的**判断。 */
+let followStateResult: Record<string, unknown>
+let followStateEnabled: boolean | null = null
+
+mock.module('../follows/queries', () => ({
+  useFollowState: (_userId: string, enabled: boolean) => {
+    followStateEnabled = enabled
+    return followStateResult
+  },
+  useFollowMutation: () => ({ isPending: false, mutate: () => undefined, variables: null }),
+  useUnfollowMutation: () => ({ isPending: false, mutate: () => undefined, variables: null }),
+}))
+
+/** 「登录后关注」在渲染期读 `window.location` 拼回跳；静态渲染没有 window，钉死一个值。 */
+mock.module('../../lib/redirect', () => ({
+  currentHref: () => `/pc/users/${USER_ID}`,
+  sanitizeRedirect: (value: unknown) => value,
+}))
+
 /**
  * 卡片本身在别处有自己的测试；这里只关心页面**把在售条目传下去了**。
  * 真卡片内部用 `Link`，静态渲染时没有 router context 会炸（`router.isServer`），
@@ -47,10 +66,20 @@ mock.module('../listings/listing-card', () => ({
     createElement('a', { href: `/pc/listing/${item.id}` }, item.title),
 }))
 
-/** 同上：页面自己的「去个人中心」也是一个 `Link`，静态渲染下换成普通 `<a>`。 */
+/**
+ * 同上：页面自己的「去个人中心」「登录后关注」也是 `Link`，静态渲染下换成普通 `<a>`。
+ * `search` 里的 redirect 回跳参数落成 data 属性，供「保留回跳」的断言读取。
+ */
 mock.module('@tanstack/react-router', () => ({
-  Link: ({ to, children, ...rest }: { to: string; children?: ReactNode }) =>
-    createElement('a', { href: to, ...rest }, children),
+  Link: ({
+    to,
+    search,
+    children,
+  }: {
+    to: string
+    search?: { redirect?: string }
+    children?: ReactNode
+  }) => createElement('a', { 'data-redirect': search?.redirect, href: to }, children),
 }))
 
 const { UserProfilePage } = await import('./user-profile-page')
@@ -96,7 +125,7 @@ function idleListings(overrides: Record<string, unknown> = {}): Record<string, u
   }
 }
 
-function render(me: Me = ME): string {
+function render(me: Me | null = ME): string {
   const client = new QueryClient()
   client.setQueryData(AUTH_ME_QUERY_KEY, me)
   return renderToStaticMarkup(
@@ -110,6 +139,8 @@ function render(me: Me = ME): string {
 
 beforeEach(() => {
   listingsEnabled = null
+  followStateEnabled = null
+  followStateResult = { data: undefined }
 })
 
 describe('UserProfilePage', () => {
@@ -126,6 +157,7 @@ describe('UserProfilePage', () => {
       isPending: false,
       isSuccess: true,
     })
+    followStateResult = { data: { kind: 'loaded', following: true, mutual: false } }
 
     const html = render()
 
@@ -139,6 +171,46 @@ describe('UserProfilePage', () => {
     // 看的是别人的主页，不该出现「自己的公开主页」那条提示。
     expect(html).not.toContain('这是你的公开主页')
     expect(listingsEnabled).toBe(true)
+    // 登录用户看别人主页：发关注态查询，渲染真实的关注钮（默认态未关注）。
+    expect(followStateEnabled).toBe(true)
+    expect(html).toContain('已关注')
+  })
+
+  /** 未登录访客：不发关注态查询，给「登录后关注」入口而不是可点的假按钮。 */
+  test('a guest gets a 登录后关注 entry and never queries the follow state', () => {
+    profileResult = {
+      data: PROFILE,
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    listingsResult = idleListings()
+
+    const html = render(null)
+
+    expect(html).toContain('登录后关注')
+    // 验收标准「保留回跳」：登录链接必须带着当前页地址。
+    expect(html).toContain(`data-redirect="/pc/users/${USER_ID}"`)
+    expect(followStateEnabled).toBe(false)
+    expect(html).not.toContain('>已关注<')
+  })
+
+  /** 互相关注由服务端算好随响应给出，页面只渲染、不重算。 */
+  test('renders the mutual hint from the server state', () => {
+    profileResult = {
+      data: PROFILE,
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    listingsResult = idleListings()
+    followStateResult = { data: { kind: 'loaded', following: true, mutual: true } }
+
+    const html = render()
+
+    expect(html).toContain('你们互相关注')
   })
 
   /** 验收标准「访问自己主页时的表现明确」：明确的表现就是这条提示 + 回个人中心的出口。 */

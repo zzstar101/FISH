@@ -52,11 +52,27 @@ export async function setFavorite(listingId: string, favorited: boolean): Promis
  * 拉一页我的收藏。
  *
  * `cursor` 是不透明串，只能原样回传上一页的 `nextCursor`（契约禁止前端解析或构造）；
- * 传 `undefined` 即从第一页开始。
+ * 传 `undefined` 即从第一页开始。`limit` 供只要计数的调用方压到 1（见下个函数）。
  */
-export async function fetchMyFavorites(cursor?: string): Promise<MyFavoritesResponse> {
+export async function fetchMyFavorites(
+  cursor?: string,
+  limit: number = PAGE_SIZE,
+): Promise<MyFavoritesResponse> {
   const payload = await apiRequest(FAVORITE_ROUTES.myFavorites, {
-    query: { limit: PAGE_SIZE, cursor },
+    query: { limit, cursor },
   })
   return MyFavoritesResponseSchema.parse(payload)
+}
+
+/**
+ * 我的收藏总数（「我的」页数字栏）：与收藏列表**同源** —— 同一个端点回包里的全量
+ * `total`（服务端 COUNT，不是这一页的长度）。`profileStats` 不加 `favoriteCount`
+ * 是 #190 冻结的口径，两个数字各算各的就会出现「数字栏 8、点进去 6 件」。
+ *
+ * `limit=1` 只要计数不取行；调用方（`features/fetchers` 的 `loadProfile`）对失败
+ * 自行兜底成 `null` —— 计数是辅助数字，读不到显示 `—`，不能连累整页 profile。
+ */
+export async function fetchMyFavoritesTotal(): Promise<number> {
+  const page = await fetchMyFavorites(undefined, 1)
+  return page.total
 }

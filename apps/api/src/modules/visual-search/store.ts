@@ -1,3 +1,4 @@
+import type { ListingCategory } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
 import { favorites } from '@fish/db/schema/favorites'
 import { listingImages, listings } from '@fish/db/schema/listings'
@@ -37,7 +38,18 @@ import type { ListingCardSource } from '../listings/card'
  * 商品建向量（包括未过审的），可见性只在这里把关——这样审核状态变化后不必重算向量。
  */
 function publicListingVisibility() {
-  return and(eq(listings.status, 'ACTIVE'), eq(listings.moderationStatus, 'APPROVED'))
+  return and(eq(listings.status, 'ACTIVE'), publicModerationVisibility())
+}
+
+/**
+ * 公开可见的**审核态**谓词（与 `status` 正交）：召回与成交均价统计共用同一份。
+ *
+ * 抽出来是因为两者的 `status` 口径**必然**不同（召回 `ACTIVE`、成交统计 `SOLD`），
+ * 而审核态必须逐条一致。如果各写一遍，迟早会出现"能被搜到但不计入均价"（或反之）的商品，
+ * 这种漂移不会有任何测试报警——它只是让统计数字悄悄偏掉。
+ */
+function publicModerationVisibility() {
+  return eq(listings.moderationStatus, 'APPROVED')
 }
 
 /**
@@ -64,6 +76,12 @@ export type VisualListingSignals = {
   listingId: string
   coverObjectKey: string | null
   favoriteCount: number
+}
+
+export type VisualSoldPriceStats = {
+  /** 已成交商品的均价（分）；没有样本时为 `null`。四舍五入与最小样本阈值判定在 service 层。 */
+  soldAvgPriceCents: number | null
+  soldSampleCount: number
 }
 
 export type VisualSearchStore = {
@@ -93,6 +111,13 @@ export type VisualSearchStore = {
   loadListingSignals(listingIds: string[]): Promise<Map<string, VisualListingSignals>>
   /** 批量取卡片所需的商品列（已再套一次可见性过滤，见实现注释）。 */
   loadListings(listingIds: string[]): Promise<Map<string, ListingCardSource>>
+  /**
+   * 解析出的类目下已成交商品的均价与样本数（#324 M6）。
+   *
+   * 口径：`status = 'SOLD'` 的 `priceCents` 平均，**不走 transactions 表、不加时间窗口**。
+   * 可见性谓词与召回共用 `publicModerationVisibility()`，只把 `status` 从 `ACTIVE` 换成 `SOLD`。
+   */
+  soldPriceStats(category: ListingCategory): Promise<VisualSoldPriceStats>
 }
 
 export function createVisualSearchStore(db: Db): VisualSearchStore {
@@ -193,6 +218,33 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
 
       for (const row of rows) result.set(row.id, row)
       return result
+    },
+
+    async soldPriceStats(category) {
+      // `avg(...)::float8`：`avg(integer)` 在 PG 里是 `numeric`，Bun 的 SQL 驱动会把它映射成
+      // **字符串**（保精度），下游 `Math.round` 会得到 NaN。统计口径只到"分"，float8 足够。
+      const rows = await db
+        .select({
+          soldAvgPriceCents: sql<number | null>`avg(${listings.priceCents})::float8`,
+          soldSampleCount: sql<number>`count(*)::int`,
+        })
+        .from(listings)
+        .where(
+          and(
+            eq(listings.category, category),
+            eq(listings.status, 'SOLD'),
+            publicModerationVisibility(),
+          ),
+        )
+
+      const row = rows[0]
+      return {
+        soldAvgPriceCents:
+          row?.soldAvgPriceCents === null || row?.soldAvgPriceCents === undefined
+            ? null
+            : Number(row.soldAvgPriceCents),
+        soldSampleCount: Number(row?.soldSampleCount ?? 0),
+      }
     },
   }
 }
