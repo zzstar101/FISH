@@ -6,6 +6,8 @@
  * 改权重 = 改 version：M9 的离线对比要能把两次不同权重的结果区分开，否则回放毫无意义。
  */
 
+import type { ListingCondition } from '../listings/schema'
+
 /**
  * 排序策略版本。写入每次响应的 `strategyVersion` 与运行日志。
  *
@@ -46,6 +48,20 @@ export const VISUAL_FRESHNESS_HALF_LIFE_DAYS = 30
  * 用饱和而不是除以最大值：最大值随查询结果集变化，会让"同一件商品在不同查询里热度不同"。
  */
 export const VISUAL_POPULARITY_SATURATION = 20
+
+/**
+ * 成色排序序（#324 M6「成色」档）。
+ *
+ * 挂在 `ListingConditionSchema` 的推断类型上而不是重写一份字符串字面量：
+ * 成色枚举新增一个值而这里漏配，typecheck 会当场报缺键，而不是悄悄把它排到最后。
+ * 值本身（NEW 最前）是产品口径：越新的成色越该被先看到。
+ */
+export const VISUAL_CONDITION_RANK: Record<ListingCondition, number> = {
+  NEW: 0,
+  LIKE_NEW: 1,
+  GOOD: 2,
+  FAIR: 3,
+}
 
 /**
  * 每条候选的分数明细。**不进契约**（内部排序实现），只在服务端日志/测试里使用。

@@ -105,6 +105,22 @@ describe('mergeRecallCandidates', () => {
     expect(candidate.alreadySeenCount).toBe(0)
   })
 
+  test('曝光计数整体未知（null）时 alreadySeenCount 保持 null，不伪装成 0', () => {
+    const candidates = mergeRecallCandidates({
+      channels: [channel('fresh', [{ listingId: 'a' }])],
+      visible: [listing('a', 'seller-1', 'BOOKS')],
+      impressions: null,
+      categoryAffinity: new Map(),
+      now: NOW,
+    })
+
+    const candidate = candidates[0]
+    if (!candidate) throw new Error('候选丢失')
+    // "查询挂了"（未知）与"确实没曝光过"（0）必须在候选上就可区分：R4 的 repeatedExposure 靠它
+    // 决定是"不加惩罚"还是"按 0 参与打分"（R3 §9 待办①）。
+    expect(candidate.alreadySeenCount).toBeNull()
+  })
+
   test('freshness 按半衰期折半，未来时间戳钳到 1', () => {
     expect(freshnessOf(new Date(NOW.getTime()), NOW)).toBe(1)
     expect(freshnessOf(new Date(NOW.getTime() - RECALL_FRESHNESS_HALF_LIFE_MS), NOW)).toBeCloseTo(
