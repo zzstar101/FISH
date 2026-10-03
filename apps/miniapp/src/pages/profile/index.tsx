@@ -3,10 +3,16 @@ import Taro, { useDidShow } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import brandLockup from '@/assets/brand/brand-lockup.png'
 import { ICONS } from '@/assets/lib-icons'
-import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
+import {
+  applyProfile,
+  clearLocalSession,
+  revokeServerSession,
+  useAuth,
+} from '@/features/auth/store'
 import { loadProfile, type ProfileView } from '@/features/fetchers'
 import { updateProfile } from '@/features/profile/api'
 import { realCounts } from '@/features/profile/counts'
+import { reconcileSavedSignature } from '@/features/profile/signature-cache'
 import { signatureFirstLine } from '@/features/profile/signature-text'
 import { cancellable } from '@/lib/cancellable'
 import { readNavMetrics } from '@/lib/nav-metrics'
@@ -258,6 +264,10 @@ export default function Profile() {
    * `savedSig` 只做**本次会话内保存成功后的即时反馈**（免等下一次 /profile 轮询）：
    * 按账号 id 分键，换账号后旧保存值自动失效（forUser 不匹配 → 落回服务端数据），
    * 旧账号的成功/失败不会污染新账号 —— 与 `loadProfile` 的 cancellable 防串号同一取向。
+   *
+   * 签名现在有**两个写入者**（本页内联弹窗 + 编辑资料页）：后者保存成功只广播 store，
+   * 所以 store 一变就要调和一次（见下方 effect 与 `features/profile/signature-cache`），
+   * 否则缓存会永久压住新签名，弹窗还会把旧值原样写回服务端。
    */
   const [savedSig, setSavedSig] = useState<{ forUser: string | null; text: string | null }>(() => ({
     forUser: null,
@@ -265,6 +275,11 @@ export default function Profile() {
   }))
   const userId = user?.id ?? null
   const signature = savedSig.forUser === userId ? savedSig.text : (user?.signature ?? null)
+
+  useEffect(() => {
+    if (!authUser) return
+    setSavedSig((prev) => reconcileSavedSignature(prev, authUser))
+  }, [authUser])
 
   /**
    * 编辑签名：弹输入框 → `PATCH /profile`（服务端成功为准，失败可重试、不先宣称成功）；
@@ -304,6 +319,9 @@ export default function Profile() {
         // 已换号 / 已退出：这次写入任务作废，结果不属于当前页面身份
         if (userIdRef.current !== ownerId) return
         setSavedSig({ forUser: ownerId, text: updated.signature })
+        // store 里的 `Me.signature` 也同步掉：编辑资料页（pages/profile-edit）的
+        // 初值读的是 store，不同步的话它会展示保存前的旧签名
+        applyProfile(ownerId, { signature: updated.signature })
         toast('已保存')
       } catch (error) {
         if (userIdRef.current !== ownerId) return
@@ -657,7 +675,8 @@ export default function Profile() {
                 />
               </View>
             </View>
-            {/* 签名行（3版稿 .psig）：**点击可编辑**，值存本机（契约暂无签字段）。
+            {/* 签名行（3版稿 .psig）：**点击可编辑**，真值在服务端（`PATCH /profile` 的
+                `signature` 字段），本页弹窗保存成功后即时回显。
                 只展示**首行** —— 多行输入的其余行不显示，过长由 CSS 省略号收尾；
                 没设置过渲染占位文案（`.is-ph`）。
                 ⚠️ 他人视角的用户主页（页面尚未落地）要按同一口径只显首行，并额外给一个

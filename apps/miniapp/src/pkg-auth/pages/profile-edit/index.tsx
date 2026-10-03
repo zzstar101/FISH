@@ -1,5 +1,5 @@
 /**
- * 编辑资料（#86 B 线）：改微信头像与昵称。
+ * 编辑资料（#86 B 线；签名 #179）：改微信头像、昵称与个性签名。
  *
  * 头像只能走微信还开放的 `open-type="chooseAvatar"`（`getUserInfo` / `getUserProfile`
  * 已分别于 2021-04-13 / 2022-10-25 下线），昵称走 `<input type="nickname">`；
@@ -7,20 +7,21 @@
  *   头像：选文件 → presign → 直传对象存储 → confirm（复用 `uploadListingImage`）
  *         → `PATCH /profile { avatarObjectKey }`（服务端只认本账号前缀的 objectKey）
  *   昵称：直接 `PATCH /profile { nickname }`，不碰上传域
+ *   签名：直接 `PATCH /profile { signature }`（多行允许、空串 = 清空，服务端归一化 null）
  *
  * 本页不做「未完成态强制补全」（Owner 裁定）：微信用户建号时带占位昵称，改不改由用户自己决定。
  *
  * 隐私前置（外部、代码改不了）：小程序要在「mp 后台 → 设置 → 服务内容声明 → 用户隐私保护指引」
  * 里声明头像等收集类型；没声明时微信不做隐私检查，声明了才会弹授权弹窗（见 `@/lib/privacy`）。
  */
-import { Button, Image, Input, Text, View } from '@tarojs/components'
+import { Button, Image, Input, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuthGuard } from '@/features/auth/guard'
 import { applyProfile, useAuth } from '@/features/auth/store'
 import { updateProfile } from '@/features/profile/api'
-import { avatarMime, NICKNAME_MAX } from '@/features/profile/avatar'
+import { avatarMime, NICKNAME_MAX, SIGNATURE_MAX } from '@/features/profile/avatar'
 import {
   advanceSession,
   isTicketCurrent,
@@ -85,6 +86,8 @@ export default function ProfileEdit() {
   const backGeo = backButtonGeometry(nav.capsuleHeight)
 
   const [nickname, setNickname] = useState(() => owner?.nickname ?? '')
+  /** 个性签名草稿：服务端真值（`Me.signature`，`null` = 未填写）进编辑器就是空串 */
+  const [signature, setSignature] = useState(() => owner?.signature ?? '')
   /** 本次选中的本地临时头像（仅预览） */
   const [avatarPath, setAvatarPath] = useState<string | null>(null)
   /** 上面那张临时头像上传成功后的 objectKey；换了头像就作废 */
@@ -95,6 +98,7 @@ export default function ProfileEdit() {
   const busy = phase !== 'idle'
   const ownerId = owner?.id ?? null
   const ownerNickname = owner?.nickname ?? null
+  const ownerSignature = owner?.signature ?? null
 
   /**
    * 会话代次（#86 B 线复评 P1）：换号 / 登出 / 卸载都会让它前进，从而作废在途的保存任务。
@@ -118,11 +122,12 @@ export default function ProfileEdit() {
   useEffect(() => {
     if (ownerId === null || ownerNickname === null) return
     setNickname(ownerNickname)
+    setSignature(ownerSignature ?? '')
     setAvatarPath(null)
     setUploaded(null)
     // 换号时把阶段收回：上一轮任务的进度条属于上一个账号（它自己回来时已是 aborted）
     setPhase('idle')
-  }, [ownerId, ownerNickname])
+  }, [ownerId, ownerNickname, ownerSignature])
 
   // `chooseAvatar` 是隐私接口：进页面先把授权问掉，别等用户点头像那一下才失败（#86 B）
   useEffect(() => {
@@ -159,7 +164,8 @@ export default function ProfileEdit() {
         ticket,
         ownerId: owner.id,
         ownerNickname: owner.nickname,
-        draft: { nickname, avatarPath, uploaded },
+        ownerSignature: owner.signature,
+        draft: { nickname, signature, avatarPath, uploaded },
       },
       {
         readAvatarPhoto,
@@ -176,7 +182,11 @@ export default function ProfileEdit() {
 
     if (result.kind === 'saved') {
       // 会话里的 user 是全局单例（「我的」页也在读），改完立刻广播，返回即是新值
-      applyProfile(result.ownerId, { nickname: result.nickname, avatarUrl: result.avatarUrl })
+      applyProfile(result.ownerId, {
+        nickname: result.nickname,
+        avatarUrl: result.avatarUrl,
+        signature: result.signature,
+      })
       void Taro.showToast({ title: '已保存', icon: 'success' })
       goBack()
     } else if (result.kind === 'no-change') {
@@ -273,6 +283,22 @@ export default function ProfileEdit() {
             ) : (
               <Text className="pe__help">1–{NICKNAME_MAX} 个字，公开显示</Text>
             )}
+          </View>
+
+          <View className="pe__field">
+            <Text className="pe__label">个性签名</Text>
+            <View className="pe__input pe__input--area">
+              <Textarea
+                className="pe__val pe__val--area"
+                maxlength={SIGNATURE_MAX}
+                value={signature}
+                disabled={busy}
+                placeholder="设置个性签名"
+                placeholderClass="pe__ph"
+                onInput={(event) => setSignature(event.detail.value)}
+              />
+            </View>
+            <Text className="pe__help">最多 {SIGNATURE_MAX} 个字，公开显示在个人主页</Text>
           </View>
         </View>
 

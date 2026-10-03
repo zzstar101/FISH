@@ -147,6 +147,11 @@
   gap: 12px;
 }
 
+/* 卡内第二个字段（个性签名）与上一个字段拉开一档 */
+.pe__field + .pe__field {
+  margin-top: 32px;
+}
+
 .pe__label {
   font-size: var(--fs-body);
   line-height: 1.5;
@@ -175,6 +180,18 @@
   min-width: 0;
   font-size: var(--fs-title);
   color: var(--fg);
+}
+
+/* 签名是多行输入：外框不再定高居中，输入框自身给三行高度、内部滚动 */
+.pe__input--area {
+  height: auto;
+  padding: 20px 24px;
+  align-items: flex-start;
+}
+
+.pe__val--area {
+  height: 168px;
+  line-height: 1.5;
 }
 
 .pe__ph {

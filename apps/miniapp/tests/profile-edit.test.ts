@@ -65,28 +65,92 @@ describe('nicknameError —— 前端预检，服务端才是权威', () => {
 
 describe('profileUpdateBody —— 没改动就别发必然 422 的空对象', () => {
   test('昵称与头像都没变 → null（页面提示「没有需要保存的修改」）', () => {
-    expect(profileUpdateBody('小明', { nickname: '小明', avatarObjectKey: null })).toBeNull()
+    expect(
+      profileUpdateBody('小明', null, { nickname: '小明', signature: '', avatarObjectKey: null }),
+    ).toBeNull()
   })
 
   test('昵称只是首尾多空格 → 也算没改', () => {
-    expect(profileUpdateBody('小明', { nickname: ' 小明 ', avatarObjectKey: null })).toBeNull()
+    expect(
+      profileUpdateBody('小明', null, { nickname: ' 小明 ', signature: '', avatarObjectKey: null }),
+    ).toBeNull()
   })
 
   test('只改昵称 → 只带 nickname（trim 后提交）', () => {
-    expect(profileUpdateBody('小明', { nickname: ' 小红 ', avatarObjectKey: null })).toEqual({
-      nickname: '小红',
-    })
+    expect(
+      profileUpdateBody('小明', null, { nickname: ' 小红 ', signature: '', avatarObjectKey: null }),
+    ).toEqual({ nickname: '小红' })
   })
 
   test('只换头像 → 只带 avatarObjectKey', () => {
     expect(
-      profileUpdateBody('小明', { nickname: '小明', avatarObjectKey: 'listings/u1/a.jpg' }),
+      profileUpdateBody('小明', null, {
+        nickname: '小明',
+        signature: '',
+        avatarObjectKey: 'listings/u1/a.jpg',
+      }),
     ).toEqual({ avatarObjectKey: 'listings/u1/a.jpg' })
   })
 
   test('两样都改 → 两个字段一起带', () => {
     expect(
-      profileUpdateBody('小明', { nickname: '小红', avatarObjectKey: 'listings/u1/a.jpg' }),
+      profileUpdateBody('小明', null, {
+        nickname: '小红',
+        signature: '',
+        avatarObjectKey: 'listings/u1/a.jpg',
+      }),
     ).toEqual({ nickname: '小红', avatarObjectKey: 'listings/u1/a.jpg' })
+  })
+})
+
+describe('profileUpdateBody 的签名段（#179：空串 = 清空，服务端归一化 null）', () => {
+  test('原来没签名、输入纯空白 → 仍是什么都没改', () => {
+    expect(
+      profileUpdateBody('小明', null, {
+        nickname: '小明',
+        signature: '   ',
+        avatarObjectKey: null,
+      }),
+    ).toBeNull()
+  })
+
+  test('签名只是首尾空白差异 → 算没改（服务端存的就是 trim 后的）', () => {
+    expect(
+      profileUpdateBody('小明', '好好学习', {
+        nickname: '小明',
+        signature: ' 好好学习 ',
+        avatarObjectKey: null,
+      }),
+    ).toBeNull()
+  })
+
+  test('原来有签名、输入空白 → 发空串表示清空', () => {
+    expect(
+      profileUpdateBody('小明', '好好学习', {
+        nickname: '小明',
+        signature: '  ',
+        avatarObjectKey: null,
+      }),
+    ).toEqual({ signature: '' })
+  })
+
+  test('只改签名 → 只带 signature（trim 后提交，多行原样保留）', () => {
+    expect(
+      profileUpdateBody('小明', null, {
+        nickname: '小明',
+        signature: ' 第一行\n第二行 ',
+        avatarObjectKey: null,
+      }),
+    ).toEqual({ signature: '第一行\n第二行' })
+  })
+
+  test('签名与昵称一起改 → 两个字段一起带', () => {
+    expect(
+      profileUpdateBody('小明', null, {
+        nickname: '小红',
+        signature: '新签名',
+        avatarObjectKey: null,
+      }),
+    ).toEqual({ nickname: '小红', signature: '新签名' })
   })
 })

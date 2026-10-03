@@ -49,6 +49,8 @@ export function isTicketCurrent(ticket: SaveTicket, key: SessionKey): boolean {
 /** 本次保存要用的草稿（页面 state 的快照）。 */
 export type ProfileDraft = {
   nickname: string
+  /** 个性签名原文（多行允许）；trim 后与当前一致就不发 */
+  signature: string
   /** 本次选中的本地临时头像（仅预览）；没选就是 `null` */
   avatarPath: string | null
   /** 上一次上传成功的 `objectKey`；换过头像就作废 */
@@ -72,7 +74,13 @@ export type SaveDeps = {
 
 export type SaveOutcome =
   /** 落库成功；`ownerId` 是**发起任务那个**账号，页面据此广播 */
-  | { kind: 'saved'; ownerId: string; nickname: string; avatarUrl: string | null }
+  | {
+      kind: 'saved'
+      ownerId: string
+      nickname: string
+      avatarUrl: string | null
+      signature: string | null
+    }
   /** 会话已变 / 页面已卸载：没 PATCH、没弹成功、没导航 */
   | { kind: 'aborted' }
   /** 没有需要保存的修改 */
@@ -87,7 +95,14 @@ export type SaveOutcome =
  * 也不要把阶段收回 `idle`（换号那条路径由页面的身份清场 effect 负责复位）。
  */
 export async function runProfileSave(
-  input: { ticket: SaveTicket; ownerId: string; ownerNickname: string; draft: ProfileDraft },
+  input: {
+    ticket: SaveTicket
+    ownerId: string
+    ownerNickname: string
+    /** 开任务那一刻服务端的签名真值（store 里的 `Me.signature`），用于判「没改就不发」 */
+    ownerSignature: string | null
+    draft: ProfileDraft
+  },
   deps: SaveDeps,
 ): Promise<SaveOutcome> {
   const alive = () => isTicketCurrent(input.ticket, deps.session())
@@ -102,11 +117,12 @@ export async function runProfileSave(
       : null
   const needsUpload = input.draft.avatarPath !== null && readyObjectKey === null
 
-  const unchanged =
-    profileUpdateBody(input.ownerNickname, {
-      nickname: input.draft.nickname,
-      avatarObjectKey: readyObjectKey,
-    }) === null
+  const draftBody = {
+    nickname: input.draft.nickname,
+    signature: input.draft.signature,
+    avatarObjectKey: readyObjectKey,
+  }
+  const unchanged = profileUpdateBody(input.ownerNickname, input.ownerSignature, draftBody) === null
   if (unchanged && !needsUpload) return { kind: 'no-change' }
 
   try {
@@ -121,8 +137,8 @@ export async function runProfileSave(
     }
 
     deps.onPhase('saving')
-    const body = profileUpdateBody(input.ownerNickname, {
-      nickname: input.draft.nickname,
+    const body = profileUpdateBody(input.ownerNickname, input.ownerSignature, {
+      ...draftBody,
       avatarObjectKey: objectKey,
     })
     if (body === null) return { kind: 'no-change' }
@@ -136,6 +152,7 @@ export async function runProfileSave(
       ownerId: input.ownerId,
       nickname: updated.nickname,
       avatarUrl: updated.avatarUrl,
+      signature: updated.signature,
     }
   } catch (error) {
     // 迟到的失败也不该给新账号弹旧账号的错误
