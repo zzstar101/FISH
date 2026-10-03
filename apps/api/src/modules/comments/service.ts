@@ -16,13 +16,16 @@ import {
   MyCommentsResponseSchema,
 } from '@fish/contracts/comments/schema'
 import type { ApiErrorDetail, SystemErrorCode } from '@fish/contracts/system/error'
+import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/schema'
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { toListingCard } from '../listings/card'
 import { createModerationService, type ModerationService } from '../moderation/service'
+import { toTransactionReviewItem } from '../transaction-reviews/service'
+import type { ReviewTimelineRow } from '../transaction-reviews/store'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
-import { decodeCommentCursor, encodeCommentCursor } from './cursor'
+import { decodeCommentCursor, decodeMyCommentsCursor, encodeCommentCursor } from './cursor'
 import type { CommentRow, CommentStore, MyCommentRow } from './store'
 
 /**
@@ -151,14 +154,45 @@ function toTopLevelDto(
   return parsed.success ? parsed.data : null
 }
 
+/**
+ * 「我发过的」时间线的评价来源（#195 PR2）：app.ts 装配 transaction-reviews service，
+ * comments 只借道它的 `listMine` / `listMineRows`，不自己摸评价表
+ * （评价的参与者/状态校验与 DTO 映射只有一份实现）。
+ */
+export interface CommentReviewsSource {
+  listMine(
+    userId: string,
+    query: { limit: number; cursor: { createdAt: string; id: string } | null },
+  ): Promise<MyCommentsResponse>
+  listMineRows(
+    userId: string,
+    query: { limit: number; cursor: { createdAt: string; id: string } | null },
+  ): Promise<{ rows: ReviewTimelineRow[]; total: number }>
+}
+
 export function createCommentService(deps: {
   store: CommentStore
   moderation?: ModerationService
   /** 只取 `publicUrl`：「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。 */
   storage: Pick<MediaStorage, 'publicUrl'>
+  /** 评价来源（#195 PR2）。`kind=comment` 不需要它；`kind=review|all` 未装配时按装配 bug 抛错。 */
+  reviews?: CommentReviewsSource
 }): CommentService {
   const { store, storage } = deps
   const moderation = deps.moderation ?? createModerationService()
+
+  function invalidCursor(): CommentServiceError {
+    return new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
+      { field: 'cursor', message: 'cursor 无效' },
+    ])
+  }
+
+  function requireReviewSource(): CommentReviewsSource {
+    if (!deps.reviews) {
+      throw new Error('comments listMine kind=review|all 需要装配 reviews 依赖（app.ts）')
+    }
+    return deps.reviews
+  }
 
   /**
    * 正文敏感词校验。
@@ -308,33 +342,103 @@ export function createCommentService(deps: {
     },
 
     async listMine(userId, query) {
-      const cursor = query.cursor === undefined ? null : decodeCommentCursor(query.cursor)
-      // 非法游标 → 422（不宽容解析：被当成合法起点会让列表静默错乱）。
-      if (query.cursor !== undefined && cursor === null) {
-        throw new CommentServiceError(422, 'VALIDATION_FAILED', 'cursor 无效', [
-          { field: 'cursor', message: 'cursor 无效' },
-        ])
+      // —— kind=review：整页来自评价表，借道注入的 reviews 源（app.ts 装配 transaction-reviews
+      // service；未装配就请求评价档是装配 bug，直接抛给 onError，不静默当空列表）。
+      if (query.kind === 'review') {
+        const reviews = requireReviewSource()
+        const cursor =
+          query.cursor === undefined ? null : decodeMyCommentsCursor(query.cursor, 'review')
+        if (query.cursor !== undefined && cursor === null) {
+          throw invalidCursor()
+        }
+        return reviews.listMine(userId, {
+          limit: query.limit,
+          cursor: cursor ? { createdAt: cursor.createdAt, id: cursor.id } : null,
+        })
       }
 
+      // —— kind=comment | all：留言侧 seek。游标按 kind 校验来源（拿评价游标翻留言页 → 422）。
+      const cursor =
+        query.cursor === undefined ? null : decodeMyCommentsCursor(query.cursor, query.kind)
+      // 非法游标 → 422（不宽容解析：被当成合法起点会让列表静默错乱）。
+      if (query.cursor !== undefined && cursor === null) {
+        throw invalidCursor()
+      }
+
+      const seek = cursor ? { createdAt: cursor.createdAt, id: cursor.id } : null
       const [rows, total] = await Promise.all([
         // 与 listTopLevel 同款：多取一行判 hasMore，返回前丢掉。
-        store.listByAuthor(userId, query.limit + 1, cursor),
+        store.listByAuthor(userId, query.limit + 1, seek),
         store.countByAuthor(userId),
       ])
 
-      const hasMore = rows.length > query.limit
-      const page = hasMore ? rows.slice(0, query.limit) : rows
+      // —— kind=comment：PR1 行为原样（单表，items 全是留言行，旧游标兼容不变）。
+      if (query.kind === 'comment') {
+        const hasMore = rows.length > query.limit
+        const page = hasMore ? rows.slice(0, query.limit) : rows
+        const last = page.at(-1)
+        return MyCommentsResponseSchema.parse({
+          items: page
+            .map((row) => toMyCommentItem(row, storage))
+            .filter((item): item is MyCommentItem => item !== null),
+          nextCursor:
+            hasMore && last
+              ? encodeCommentCursor({ createdAt: last.commentCreatedAtCursor, id: last.commentId })
+              : null,
+          total,
+        })
+      }
+
+      // —— kind=all：留言 ∪ 评价，跨两表按 `(created_at DESC, id DESC)` 归并。
+      // 两张表的 seek 条件同为 `(created_at, id) < 游标`（与归并顺序同向，翻页不重不漏）；
+      // uuid 文本序 = PG 的 uuid 字节序（定长小写十六进制），JS 归并的 tie-break 与 SQL 一致。
+      const reviews = requireReviewSource()
+      const reviewPage = await reviews.listMineRows(userId, {
+        limit: query.limit + 1,
+        cursor: seek,
+      })
+      const merged = [
+        ...rows.map((row) => ({
+          source: 'comment' as const,
+          createdAt: row.commentCreatedAtCursor,
+          id: row.commentId,
+          commentRow: row,
+        })),
+        ...reviewPage.rows.map((row) => ({
+          source: 'review' as const,
+          createdAt: row.createdAtCursor,
+          id: row.id,
+          reviewRow: row,
+        })),
+      ].sort((a, b) => {
+        if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1
+        return a.id < b.id ? 1 : -1
+      })
+
+      const hasMore = merged.length > query.limit
+      const page = hasMore ? merged.slice(0, query.limit) : merged
       const last = page.at(-1)
 
+      const items: (MyCommentItem | TransactionReviewItem)[] = []
+      for (const entry of page) {
+        if (entry.source === 'comment') {
+          const item = toMyCommentItem(entry.commentRow, storage)
+          if (item) items.push(item)
+        } else {
+          const item = toTransactionReviewItem(entry.reviewRow, userId, storage)
+          if (item) items.push(item)
+        }
+      }
+
       return MyCommentsResponseSchema.parse({
-        items: page
-          .map((row) => toMyCommentItem(row, storage))
-          .filter((item): item is MyCommentItem => item !== null),
+        items,
+        // 游标带来源：下一页据此在正确的表里 seek（decodeMyCommentsCursor 校验）。
         nextCursor:
           hasMore && last
-            ? encodeCommentCursor({ createdAt: last.commentCreatedAtCursor, id: last.commentId })
+            ? encodeCommentCursor({ createdAt: last.createdAt, id: last.id }, last.source)
             : null,
-        total,
+        // kind=all 的全量条数 = 留言数 + 评价数（两个 COUNT 各自同表同作者条件）。
+        total: total + reviewPage.total,
       })
     },
 

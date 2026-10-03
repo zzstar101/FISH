@@ -80,6 +80,9 @@ import { createRecommendationRecall } from './modules/recommendation/recall/serv
 import { createRecommendationRouter } from './modules/recommendation/router'
 import { createRecommendationService } from './modules/recommendation/service'
 import { createSqlRecommendationStore } from './modules/recommendation/store'
+import { createTransactionReviewsRouter } from './modules/transaction-reviews/router'
+import { createTransactionReviewService } from './modules/transaction-reviews/service'
+import { createSqlTransactionReviewStore } from './modules/transaction-reviews/store'
 import { createTransactionsRouter } from './modules/transactions/router'
 import { createTransactionService } from './modules/transactions/service'
 import { createSqlTransactionStore } from './modules/transactions/store'
@@ -390,15 +393,27 @@ export function createApp(
     }),
   )
 
+  // 交易评价 service（#195 PR2）：一个实例两处用 —— 评价边 router 直接挂，
+  // comments 的 `/me/comments?kind=review|all` 借道它读评价时间线。
+  const transactionReviewService = createTransactionReviewService({
+    store: createSqlTransactionReviewStore(db),
+    storage,
+  })
+
   // 留言 / 评论（#111、#195）：挂根路径，因为端点跨 `/listings/:id/comments`、
   // `/comments/:id/replies`、`/comments/:id`（DELETE）与 `/me/comments`（路径常量在
   // `@fish/contracts/comments/routes`）。读接口匿名可用、写与本人作用域逐路由挂 requireAuth
   // （与 listings 同一分界）；`storage` 复用同一实例 —— 本人留言列表里的商品卡片封面
-  // 与 feed / 详情必须同一套拼法。
+  // 与 feed / 详情必须同一套拼法。`/me/comments` 的 `kind=review|all`（#195 PR2）借道
+  // 评价域 service（装配在下面），comments 自己不摸评价表。
   app.route(
     '/',
     createCommentsRouter({
-      service: createCommentService({ store: createSqlCommentStore(db), storage }),
+      service: createCommentService({
+        store: createSqlCommentStore(db),
+        storage,
+        reviews: transactionReviewService,
+      }),
       requireAuth: auth.requireAuth,
       guard: restrictionGuard,
       recorder: recommendationRecorder,
@@ -437,6 +452,23 @@ export function createApp(
       // #323 R4 决策 6：`FAVORITE` / `UNFAVORITE` 的服务端真值来源。客户端上报会随断网重试整批丢，
       // 而这两个事件分别是权重表里最强的正信号与负反馈特征之一。
       recorder: recommendationRecorder,
+    }),
+  )
+
+  // 交易评价（#195 PR2）：`GET|POST|DELETE /transactions/:transactionId/review`（(我, 交易)
+  // 这条边的三个方法）与 `GET /transactions/:transactionId/reviews`（两方评价对账）。
+  // 本域**没有匿名路径**（评价是交易双方的私有成交证据，非参与者 404 不泄漏存在性），
+  // 两条路径整挂 requireAuth；router 内部还兜一层失败关闭。只读写
+  // `transaction_reviews` / `transaction_review_images` / `transactions` 表
+  // （与 profile / favorites 同一取舍）；`storage` 复用同一实例 —— 配图 URL 与其它域同拼法。
+  // 挂根路径：两个 pattern 都比 transactions router 的 `/transactions/:id` 多一段，不会截胡。
+  app.use('/transactions/:transactionId/review', auth.requireAuth)
+  app.use('/transactions/:transactionId/reviews', auth.requireAuth)
+  app.route(
+    '/',
+    createTransactionReviewsRouter({
+      service: transactionReviewService,
+      getUserId: (c) => c.get('userId'),
     }),
   )
 
