@@ -14,6 +14,7 @@ import { recommendationRequestItems } from '@fish/db/schema/recommendation-reque
 import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import type { InterestIdentity } from '@fish/db/user-interest-store'
 import { and, asc, eq, inArray } from 'drizzle-orm'
+import { recordViewHistoryWith, viewRecordsFromEvents } from '../view-history/ingest'
 
 /** 一次推荐请求的上下文行。`id` 就是响应里的 `requestId`。 */
 export interface RecommendationRequestRow {
@@ -205,30 +206,37 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
 
     async insertEvents(records) {
       if (records.length === 0) return 0
-      const inserted = await db
-        .insert(recommendationEvents)
-        .values(
-          records.map((record) => ({
-            eventId: record.eventId,
-            userId: record.userId,
-            anonymousSessionId: record.anonymousSessionId,
-            requestId: record.requestId,
-            listingId: record.listingId,
-            eventType: record.eventType,
-            position: record.position,
-            source: record.source,
-            // jsonb 必须过 `jsonParam`：裸对象在 drizzle 0.45 + bun-sql 下会被 stringify 两次，
-            // 落库变成 JSON 字符串（`payload->>'x'` 恒为 NULL，见 packages/db/src/json.ts）。
-            metadata: jsonParam(record.metadata),
-            occurredAt: record.occurredAt,
-          })),
-        )
-        // 不指定 target：表上有三条唯一索引（event_id、曝光类 (request_id,listing_id,event_type)、
-        // 商品级 PURCHASE），冲突任何一个都该当"重复上报"静默吞掉并计入 duplicates。
-        // PostgreSQL 的 ON CONFLICT 一次只能推断一个仲裁者，所以这里必须留空。
-        .onConflictDoNothing()
-        .returning({ id: recommendationEvents.id })
-      return inserted.length
+      // 浏览足迹（#415 M1）与事件**同一事务**：只认登录用户的 DETAIL_VIEW，
+      // 不允许出现"事件落库了、足迹没写"的中间态。触发复用本端点，端上零新增调用；
+      // 过滤/归并/`GREATEST` 语义都在 view-history/ingest.ts 里，这里只负责事务边界。
+      const viewRecords = viewRecordsFromEvents(records)
+      return db.transaction(async (tx) => {
+        const inserted = await tx
+          .insert(recommendationEvents)
+          .values(
+            records.map((record) => ({
+              eventId: record.eventId,
+              userId: record.userId,
+              anonymousSessionId: record.anonymousSessionId,
+              requestId: record.requestId,
+              listingId: record.listingId,
+              eventType: record.eventType,
+              position: record.position,
+              source: record.source,
+              // jsonb 必须过 `jsonParam`：裸对象在 drizzle 0.45 + bun-sql 下会被 stringify 两次，
+              // 落库变成 JSON 字符串（`payload->>'x'` 恒为 NULL，见 packages/db/src/json.ts）。
+              metadata: jsonParam(record.metadata),
+              occurredAt: record.occurredAt,
+            })),
+          )
+          // 不指定 target：表上有三条唯一索引（event_id、曝光类 (request_id,listing_id,event_type)、
+          // 商品级 PURCHASE），冲突任何一个都该当"重复上报"静默吞掉并计入 duplicates。
+          // PostgreSQL 的 ON CONFLICT 一次只能推断一个仲裁者，所以这里必须留空。
+          .onConflictDoNothing()
+          .returning({ id: recommendationEvents.id })
+        await recordViewHistoryWith(tx, viewRecords)
+        return inserted.length
+      })
     },
 
     async hasListingEvent(listingId, eventType) {

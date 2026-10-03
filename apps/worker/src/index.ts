@@ -10,6 +10,7 @@ import { createInterestJobHandlers } from './jobs/interest/handlers'
 import { InvalidJobPayloadError } from './jobs/invalid-payload-error'
 import { createMatchJobHandlers } from './jobs/matching/handlers'
 import { createJobQueue } from './jobs/queue'
+import { cleanupExpiredViewHistory } from './jobs/view-history/cleanup'
 import { createVisualBackfillRunner } from './jobs/visual-embedding/backfill'
 import { cleanupExpiredVisualQueryImages } from './jobs/visual-embedding/cleanup'
 import {
@@ -28,6 +29,14 @@ const POLL_INTERVAL_MS = 1000
  * 15 分钟——一分钟一轮已经远快于 TTL 的量级，也就谈不上"过期的图被多留了一会儿"。
  */
 const VISUAL_MAINTENANCE_INTERVAL_MS = 60_000
+
+/**
+ * 浏览足迹清理（#415 M1）的间隔。
+ *
+ * 保留期是 30 天，小时级清理足够；它只删窗口外的行，读接口本来就按 30 天过滤，
+ * 晚删一会儿不会让用户看到过期记录。
+ */
+const VIEW_HISTORY_CLEANUP_INTERVAL_MS = 3_600_000
 
 const env = loadServerEnv()
 const db = createDb(env.DATABASE_URL)
@@ -121,6 +130,19 @@ const visualBackfill = createVisualBackfillRunner({
   model: visualEmbeddingProvider.model,
 })
 
+/** 周期性清理 30 天前的浏览足迹（#415 M1）。失败只记日志，不影响主循环。 */
+async function runViewHistoryCleanup(now: Date): Promise<void> {
+  try {
+    const cleanup = await cleanupExpiredViewHistory({ db, now })
+    if (cleanup.deleted > 0) {
+      console.log(`[worker] 清理过期浏览足迹 ${cleanup.deleted} 行`)
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[worker] 浏览足迹清理失败：${detail}`)
+  }
+}
+
 // 失败上报只写脱敏摘要（`errorMessage()`），理由见 `./jobs/visual-embedding/maintenance` 头注释。
 const runVisualMaintenance = createVisualMaintenance({
   backfill: () => visualBackfill.runPass(),
@@ -169,6 +191,7 @@ for (const failedId of recovered.failedIds) {
 }
 
 let lastMaintenanceAt = 0
+let lastViewHistoryCleanupAt = 0
 
 for (;;) {
   const startedAt = Bun.nanoseconds()
@@ -198,6 +221,13 @@ for (;;) {
   if (now - lastMaintenanceAt >= VISUAL_MAINTENANCE_INTERVAL_MS) {
     lastMaintenanceAt = now
     await runVisualMaintenance(new Date())
+  }
+
+  // 浏览足迹清理（#415 M1）：保留期 30 天，小时级足够——它只是"把过期行删掉"，
+  // 读接口自己已经按 30 天窗口过滤，晚删一会儿不会让用户看到过期记录。
+  if (now - lastViewHistoryCleanupAt >= VIEW_HISTORY_CLEANUP_INTERVAL_MS) {
+    lastViewHistoryCleanupAt = now
+    await runViewHistoryCleanup(new Date())
   }
 
   await Bun.sleep(POLL_INTERVAL_MS)

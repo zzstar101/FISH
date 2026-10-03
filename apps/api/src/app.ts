@@ -3,6 +3,7 @@ import { RECOMMENDATION_HEADERS } from '@fish/contracts/recommendation/routes'
 import { errorBody } from '@fish/contracts/system/error'
 import { HealthResponseSchema } from '@fish/contracts/system/health'
 import type { UserPresence } from '@fish/contracts/users/schema'
+import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import { VISUAL_QUERY_PRESIGN_EXPIRES_SECONDS } from '@fish/contracts/visual/schema'
 import { createDb } from '@fish/db/client'
 import type {
@@ -93,6 +94,9 @@ import { createBunS3MediaStorage } from './modules/uploads/storage'
 import { createUsersRouter } from './modules/users/router'
 import { createPublicUserService } from './modules/users/service'
 import { createSqlPublicUserStore } from './modules/users/store'
+import { createViewHistoryRouter } from './modules/view-history/router'
+import { createViewHistoryService } from './modules/view-history/service'
+import { createSqlViewHistoryStore } from './modules/view-history/store'
 import { createVisualParser } from './modules/visual-search/parse'
 import { createVisualSearchRateLimiter } from './modules/visual-search/rate-limit'
 import { createVisualSearchRouter } from './modules/visual-search/router'
@@ -482,6 +486,20 @@ export function createApp(
     '/',
     createFollowsRouter({
       service: createFollowService({ store: createSqlFollowStore(db) }),
+      getUserId: (c) => c.get('userId'),
+    }),
+  )
+
+  // 浏览记录（#415 M1）：`GET|DELETE /me/view-history`。本域没有匿名路径（记录是「我」的
+  // 资产），整挂 requireAuth，router 内部再兜一层失败关闭。只读写 `listing_view_history` /
+  // `listings` / `listing_images` / `users` 表；写入不在这里 —— 由 `POST /recommendations/events`
+  // 的 DETAIL_VIEW 在事件落库的同一事务里 upsert（view-history/ingest.ts），端上零新增调用。
+  // storage 复用同一实例：卡片封面与 feed / 详情必须同一套拼法。
+  app.use(VIEW_HISTORY_ROUTES.myViewHistory, auth.requireAuth)
+  app.route(
+    '/',
+    createViewHistoryRouter({
+      service: createViewHistoryService({ store: createSqlViewHistoryStore(db), storage }),
       getUserId: (c) => c.get('userId'),
     }),
   )

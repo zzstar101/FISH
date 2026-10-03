@@ -29,6 +29,7 @@ import { transactionMeetupTokens, transactions } from './schema/transactions'
 import { userInterestProfiles } from './schema/user-interest-profiles'
 import { users, wechatIdentities } from './schema/users'
 import { campusEmailVerifications } from './schema/verifications'
+import { listingViewHistory } from './schema/view-history'
 import { listingVisualEmbeddings } from './schema/visual-embeddings'
 import { visualQueryImages } from './schema/visual-query-images'
 import { visualSearchAttempts } from './schema/visual-search-attempts'
@@ -118,11 +119,12 @@ export async function seed(tx: SeedTx): Promise<void> {
   // （#323 R4，引用 recommendation_requests 与 listings）/ `user_interest_profiles`
   // （#323 R2，引用 users，ON DELETE CASCADE）/ `login_tickets`
   // （#197，引用 users）/ `listing_visual_embeddings`（#324 M3，引用 listings，ON DELETE CASCADE）
+  // / `listing_view_history`（#415 M1，引用 users 与 listings，ON DELETE CASCADE）
   // 必须在内；`visual_query_images` 与 `visual_search_attempts`（#324 M2）没有外键，
   // 但同属业务数据，一并清空才算"干净的一轮"。
   // 漏掉会让 seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}`,
   )
 
   const now = new Date()
