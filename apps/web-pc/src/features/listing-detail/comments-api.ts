@@ -1,6 +1,8 @@
 import { COMMENT_ROUTES } from '@fish/contracts/comments/routes'
 import {
   CommentCreateInputSchema,
+  type CommentDeleteResponse,
+  CommentDeleteResponseSchema,
   type CommentDto,
   CommentDtoSchema,
   type CommentListResponse,
@@ -50,6 +52,22 @@ export async function createReply(commentId: string, content: string): Promise<C
   )
 }
 
+/**
+ * 删除自己的一条留言；删顶层留言会**级联带走它下面的回复**（不论回复是谁写的）。
+ *
+ * `deleted` 是「本次实际删掉的 DB 行数」——**不要**拿它去减「我发过的留言」计数：
+ * 别人的回复被级联删掉时它会大于本人减少的条数（契约 `CommentDeleteResponseSchema` 写明）。
+ *
+ * 失败与幂等的分工（照抄服务端 `deleteMine`）：
+ * - 不存在 / 已被自己删过 → 200 `{ deleted: 0 }`，**幂等成功**，不是错误；
+ * - 存在但不是本人的 → 404 `COMMENT_NOT_FOUND`，**只表示这一件事**。
+ */
+export async function deleteComment(commentId: string): Promise<CommentDeleteResponse> {
+  return CommentDeleteResponseSchema.parse(
+    await apiRequest(COMMENT_ROUTES.comment(commentId), { method: 'DELETE' }),
+  )
+}
+
 /** 留言写失败的展示文案：不把未知错误伪装成成功。 */
 export function describeCommentFailure(error: unknown): string {
   if (error instanceof ApiError) {
@@ -59,4 +77,17 @@ export function describeCommentFailure(error: unknown): string {
     if (error.code === 'VALIDATION_FAILED') return '留言内容不合法'
   }
   return '提交失败，请重试'
+}
+
+/**
+ * 删除失败的展示文案：**用服务端原文**（与商品删除 #421 同一取向），未知错误不伪装成成功。
+ *
+ * 404 `COMMENT_NOT_FOUND` 的语义就是「存在但不是本人的」—— 服务端**不做**存在性混淆：
+ * 留言 id 本就能由匿名接口枚举，混淆没有收益，所以 404 与「不存在」**不同码**
+ * （不存在走的是 200 `{ deleted: 0 }`，见 `apps/api/src/modules/comments/service.ts` 的 `deleteMine`）。
+ * 同理端上也不需要另编一句更含蓄的话。
+ */
+export function describeCommentDeleteFailure(error: unknown): string {
+  if (error instanceof ApiError) return error.message
+  return '删除失败，请重试'
 }
