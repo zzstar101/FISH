@@ -21,7 +21,37 @@ const THEME_KEYS: readonly ThemeMode[] = ['system', 'light', 'dark']
 export const COMMENT_POLICIES = ['已认证用户', '所有人', '仅好友'] as const
 
 /** 从存储读出的合法偏好（只含认得出的键） */
-export type StoredPrefs = Partial<MockSettings>
+type StoredPrefs = Partial<MockSettings>
+
+/**
+ * 通知明细四行的存储键 = `MockSettings` 的 notify* 字段。
+ *
+ * 页面的明细行、本模块的读回白名单共用这一份；`satisfies` 对契约字段锁定，
+ * 改名/删字段即编译错，写读两侧不可能再各写各的。
+ */
+export const NOTIFY_KEYS = [
+  'notifyChat',
+  'notifyWish',
+  'notifyDeal',
+  'notifyNews',
+] as const satisfies readonly (keyof MockSettings)[]
+
+export type NotifyKey = (typeof NOTIFY_KEYS)[number]
+
+/**
+ * 旧版设置页的短键（`'chat'` 等）→ 现行 `notify*` 字段。
+ *
+ * 旧实现 `persist({ [item.key]: !item.value })` 里的 `item.key` 曾经就是这些短键，
+ * 已在用户本机存下；只认新键会让老用户升级后 4 个通知项**回默认**，且下一次
+ * `persist()` 的 base（即本函数的返回值）不含短键、写入时把它们彻底冲掉。
+ * 读回时新键优先、旧键兜底，读出即是新形态，写回自然完成替换。
+ */
+export const legacyNotifyKeys: Record<NotifyKey, string> = {
+  notifyChat: 'chat',
+  notifyWish: 'wish',
+  notifyDeal: 'deal',
+  notifyNews: 'news',
+}
 
 const isThemeMode = (value: unknown): value is ThemeMode =>
   typeof value === 'string' && (THEME_KEYS as readonly string[]).includes(value)
@@ -49,8 +79,9 @@ export function readStoredPrefs(raw: unknown): StoredPrefs {
   const stored = source as Record<string, unknown>
   const prefs: StoredPrefs = {}
   if (isThemeMode(stored.theme)) prefs.theme = stored.theme
-  for (const key of ['notifyChat', 'notifyWish', 'notifyDeal', 'notifyNews'] as const) {
-    const value: unknown = stored[key]
+  for (const key of NOTIFY_KEYS) {
+    // 新键优先、旧短键兜底；`??` 只兜 null/undefined，新键存了非 boolean 值算损坏、按字段丢
+    const value: unknown = stored[key] ?? stored[legacyNotifyKeys[key]]
     if (typeof value === 'boolean') prefs[key] = value
   }
   if (isCommentPolicy(stored.commentPolicy)) prefs.commentPolicy = stored.commentPolicy

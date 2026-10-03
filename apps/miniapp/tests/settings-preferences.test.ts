@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { MockSettings } from '../src/mock/types'
 import {
   COMMENT_POLICIES,
+  NOTIFY_KEYS,
   parseStoredPrefs,
   readStoredPrefs,
-  SETTINGS_STORAGE_KEY,
 } from '../src/pkg-auth/pages/settings/preferences'
 
 /**
@@ -61,6 +61,37 @@ describe('readStoredPrefs —— 存储原始值 → 合法偏好', () => {
   })
 })
 
+describe('readStoredPrefs —— 旧版短键兜底（老用户升级不丢通知偏好）', () => {
+  test('只有旧短键：4 个通知项都按新形态读回', () => {
+    expect(readStoredPrefs({ chat: false, wish: true, deal: false, news: true })).toEqual({
+      notifyChat: false,
+      notifyWish: true,
+      notifyDeal: false,
+      notifyNews: true,
+    })
+  })
+
+  test('新旧键同时存在且冲突：新键胜，旧键不覆盖', () => {
+    expect(
+      readStoredPrefs({ notifyChat: true, chat: false, notifyNews: false, news: true }),
+    ).toEqual({ notifyChat: true, notifyNews: false })
+  })
+
+  test('旧短键值不是 boolean：丢该字段，其余字段照收', () => {
+    expect(readStoredPrefs({ chat: 'yes', wish: 1, deal: false, news: true })).toEqual({
+      notifyDeal: false,
+      notifyNews: true,
+    })
+    expect(readStoredPrefs({ theme: 'dark', chat: 'yes' })).toEqual({ theme: 'dark' })
+  })
+
+  test('混合形态：部分新键 + 部分旧键，各自对上自己那一项', () => {
+    expect(readStoredPrefs({ notifyChat: false, theme: 'light', deal: true, news: false })).toEqual(
+      { theme: 'light', notifyChat: false, notifyDeal: true, notifyNews: false },
+    )
+  })
+})
+
 describe('parseStoredPrefs —— 存量盖在默认值上', () => {
   test('没存过 = 默认值原样', () => {
     expect(parseStoredPrefs(null, DEFAULTS)).toEqual(DEFAULTS)
@@ -84,8 +115,11 @@ describe('parseStoredPrefs —— 存量盖在默认值上', () => {
 })
 
 describe('与页面共享的常量', () => {
-  test('存储键锁死，persist 与读回不能各写各的', () => {
-    expect(SETTINGS_STORAGE_KEY).toBe('fish:settings')
+  test('通知明细行的存储键 = MockSettings 的 notify* 字段，写（页面行配置）读（白名单）两侧同源', () => {
+    expect(NOTIFY_KEYS).toEqual(['notifyChat', 'notifyWish', 'notifyDeal', 'notifyNews'])
+    for (const key of NOTIFY_KEYS) {
+      expect(readStoredPrefs({ [key]: false })).toEqual({ [key]: false })
+    }
   })
 
   test('留言口径三档与页面 ActionSheet 同源，顺序错 = 档位错乱', () => {
