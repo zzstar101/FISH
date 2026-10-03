@@ -1,17 +1,24 @@
 import { describe, expect, test } from 'bun:test'
+import type { ListingCard, ListingCondition } from '@fish/contracts/listings/schema'
 import {
+  VISUAL_CONDITION_RANK,
   VISUAL_FRESHNESS_HALF_LIFE_DAYS,
   VISUAL_POPULARITY_SATURATION,
   VISUAL_RANKING_WEIGHTS,
   VISUAL_SEARCH_STRATEGY_VERSION,
+  type VisualScoreBreakdown,
 } from '@fish/contracts/visual/ranking'
+import { VISUAL_SEARCH_SORTS, type VisualSearchSort } from '@fish/contracts/visual/schema'
+import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   freshnessScore,
+  orderVisualCandidates,
   popularityScore,
   scoreVisualCandidate,
   similarityFromCosineDistance,
   VISUAL_RECALL_LIMIT,
   VISUAL_RESULT_LIMIT,
+  type VisualScoredCandidate,
 } from './ranking'
 
 /**
@@ -149,5 +156,198 @@ describe('召回与结果上限', () => {
   test('召回上限不小于结果上限（重排要有余量）', () => {
     expect(VISUAL_RECALL_LIMIT).toBeGreaterThanOrEqual(VISUAL_RESULT_LIMIT)
     expect(VISUAL_RESULT_LIMIT).toBeGreaterThan(0)
+  })
+})
+
+/** 排序测试的卡片夹具：只关心排序真正读到的列，其余用合法默认值填满。 */
+function makeCard(seq: number, overrides: Partial<ListingCard> = {}): ListingCard {
+  return {
+    // 公开 id 必须是规范 UUIDv7 编码（`encodePublicId` 会当场拒绝 v4），
+    // 尾号递增保证 `localeCompare` 序与 seq 序一致，兜底断言才可读。
+    id: encodePublicId(
+      PUBLIC_ID_PREFIX.listing,
+      `0197f0a1-0000-7000-8000-${seq.toString().padStart(12, '0')}`,
+    ),
+    title: `商品-${seq}`,
+    priceCents: 1000,
+    category: 'BOOKS',
+    condition: 'GOOD',
+    status: 'ACTIVE',
+    urgent: false,
+    negotiable: false,
+    free: false,
+    coverUrl: null,
+    createdAt: '2026-05-01T00:00:00.000Z',
+    moderationStatus: null,
+    ...overrides,
+  }
+}
+
+function scoreBreakdown(score: number): VisualScoreBreakdown {
+  return {
+    score,
+    visualScore: score,
+    textScore: null,
+    categoryScore: null,
+    freshnessScore: 1,
+    popularityScore: 1,
+    strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
+  }
+}
+
+/**
+ * 五档排序（#324 M6）的表驱动夹具。
+ *
+ * 五档的期望顺序**故意互不相同**：某一档的排序键若写错/漏了 case，会退回统一兜底
+ * （score 降序），而 `relevance` 的期望恰好就是 score 降序——只有每档期望各不相同，
+ * "写错一档"才会被断言抓住，而不是恰好通过。
+ *
+ * `title` 不参与任何排序键，这里借它当断言的可读标签，省掉一张 id→标签对照表。
+ */
+type SortFixture = {
+  label: string
+  score: number
+  favoriteCount: number
+  createdAt: string
+  priceCents: number
+  condition: ListingCondition
+}
+
+const SORT_FIXTURES: SortFixture[] = [
+  {
+    label: 'a',
+    score: 0.9,
+    favoriteCount: 1,
+    createdAt: '2026-05-01T00:00:00.000Z',
+    priceCents: 3000,
+    condition: 'FAIR',
+  },
+  {
+    label: 'b',
+    score: 0.5,
+    favoriteCount: 5,
+    createdAt: '2026-05-20T00:00:00.000Z',
+    priceCents: 1000,
+    condition: 'LIKE_NEW',
+  },
+  {
+    label: 'c',
+    score: 0.7,
+    favoriteCount: 3,
+    createdAt: '2026-05-10T00:00:00.000Z',
+    priceCents: 2000,
+    condition: 'NEW',
+  },
+  {
+    label: 'd',
+    score: 0.3,
+    favoriteCount: 5,
+    createdAt: '2026-04-01T00:00:00.000Z',
+    priceCents: 500,
+    condition: 'GOOD',
+  },
+]
+
+const SORT_EXPECTATIONS: Array<{ sort: VisualSearchSort; expected: string[] }> = [
+  // relevance 的排序键就是统一兜底：混合分降序。
+  { sort: 'relevance', expected: ['a', 'c', 'b', 'd'] },
+  // b/d 想要数并列（5），由兜底的分数分出先后。
+  { sort: 'popular', expected: ['b', 'd', 'c', 'a'] },
+  { sort: 'newest', expected: ['b', 'c', 'a', 'd'] },
+  { sort: 'price_asc', expected: ['d', 'b', 'c', 'a'] },
+  // NEW(0) → LIKE_NEW(1) → GOOD(2) → FAIR(3)。
+  { sort: 'condition', expected: ['c', 'b', 'd', 'a'] },
+]
+
+function sortFixtureCandidates(): VisualScoredCandidate[] {
+  return SORT_FIXTURES.map((fixture, index) => ({
+    card: makeCard(index + 1, {
+      title: fixture.label,
+      createdAt: fixture.createdAt,
+      priceCents: fixture.priceCents,
+      condition: fixture.condition,
+    }),
+    ranking: scoreBreakdown(fixture.score),
+    favoriteCount: fixture.favoriteCount,
+  }))
+}
+
+function labelsOf(candidates: readonly VisualScoredCandidate[]): string[] {
+  return candidates.map((entry) => entry.card.title)
+}
+
+describe('orderVisualCandidates', () => {
+  for (const { sort, expected } of SORT_EXPECTATIONS) {
+    test(`${sort} 档按自己的排序键定序`, () => {
+      expect(labelsOf(orderVisualCandidates(sortFixtureCandidates(), sort))).toEqual(expected)
+    })
+  }
+
+  test('表驱动覆盖契约里的全部排序档（新增一档必须同时补用例）', () => {
+    expect(SORT_EXPECTATIONS.map((entry) => entry.sort).sort()).toEqual(
+      [...VISUAL_SEARCH_SORTS].sort(),
+    )
+  })
+
+  test('成色序常量与契约一致（NEW 最前，FAIR 最后）', () => {
+    expect(VISUAL_CONDITION_RANK).toEqual({ NEW: 0, LIKE_NEW: 1, GOOD: 2, FAIR: 3 })
+  })
+
+  test('全部排序键并列时输出确定：入参乱序也给同一结果，且落到 id 升序', () => {
+    const tied = [1, 2, 3].map((seq) => ({
+      card: makeCard(seq),
+      ranking: scoreBreakdown(0.5),
+      favoriteCount: 7,
+    }))
+
+    for (const { sort } of SORT_EXPECTATIONS) {
+      const forward = orderVisualCandidates(tied, sort)
+      const reversed = orderVisualCandidates([...tied].reverse(), sort)
+      expect(labelsOf(forward)).toEqual(['商品-1', '商品-2', '商品-3'])
+      expect(labelsOf(reversed)).toEqual(labelsOf(forward))
+    }
+  })
+
+  test('混合分并列时先看图片相似度：有图片证据的排在纯文本命中之前', () => {
+    // 纯文本命中的候选 visualScore = 0（M6 之前的既有口径），同分时必须排在后面。
+    // 少了这一层，同分排序会落到公开 id 上，而公开 id 是随机的——同一个查询两次会给出不同顺序。
+    const withVisualScore = (seq: number, visualScore: number): VisualScoredCandidate => ({
+      card: makeCard(seq),
+      ranking: { ...scoreBreakdown(0.5), visualScore },
+      favoriteCount: 7,
+    })
+
+    const tied = [withVisualScore(1, 0), withVisualScore(2, 0.9), withVisualScore(3, 0.4)]
+
+    for (const { sort } of SORT_EXPECTATIONS) {
+      expect(labelsOf(orderVisualCandidates(tied, sort))).toEqual(['商品-2', '商品-3', '商品-1'])
+      expect(labelsOf(orderVisualCandidates([...tied].reverse(), sort))).toEqual([
+        '商品-2',
+        '商品-3',
+        '商品-1',
+      ])
+    }
+  })
+
+  test('不修改入参：返回新数组，入参顺序与元素内容都不变', () => {
+    const input = sortFixtureCandidates()
+    const snapshot = input.map((entry) => ({
+      id: entry.card.id,
+      favoriteCount: entry.favoriteCount,
+      score: entry.ranking.score,
+    }))
+
+    const output = orderVisualCandidates(input, 'price_asc')
+
+    expect(output).not.toBe(input)
+    expect(output).toHaveLength(input.length)
+    expect(labelsOf(input)).toEqual(['a', 'b', 'c', 'd'])
+    expect(
+      input.map((entry) => ({
+        id: entry.card.id,
+        favoriteCount: entry.favoriteCount,
+        score: entry.ranking.score,
+      })),
+    ).toEqual(snapshot)
   })
 })

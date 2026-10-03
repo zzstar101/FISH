@@ -70,12 +70,19 @@ import {
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
+import {
+  VISUAL_SEARCH_SORTS,
+  VISUAL_SOLD_AVG_MIN_SAMPLES,
+  VisualInterpretationSchema,
+  type VisualSearchSort,
+} from '@fish/contracts/visual/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { EMBEDDING_DIMENSIONS, embeddings } from '@fish/db/schema/embeddings'
+import { favorites } from '@fish/db/schema/favorites'
 import { jobs } from '@fish/db/schema/jobs'
-import { listings } from '@fish/db/schema/listings'
+import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
@@ -84,6 +91,7 @@ import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import { wishes } from '@fish/db/schema/wishes'
+import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { and, asc, eq, sql } from 'drizzle-orm'
 import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/enqueue'
@@ -97,6 +105,8 @@ import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-li
 const PASSWORD = 'fish123456'
 /** seed 里 demo 买家的学号（README「演示账号」）。 */
 const DEMO_BUYER_STUDENT_NO = '202101000002'
+/** seed 里第三个演示账号：想要数要两条不同用户的行（`unique(user_id, listing_id)` 不允许同一人重复收藏）。 */
+const DEMO_BUYER_C_STUDENT_NO = '202101000003'
 const REPO_ROOT = Bun.fileURLToPath(new URL('../../../', import.meta.url))
 
 /** 1×1 JPEG（合法 SOI/EOI）。用它走真实的 presign → PUT → 匿名 GET 字节回环。 */
@@ -1661,7 +1671,193 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '错误码 = VISUAL_SEARCH_IMAGE_INVALID',
     )
 
-    // 7.7 #324 M2 / Q6=B 匿名限流：伪造转发头 + 不带会话头是两轮评审都复现过的绕过路径
+    // 7.7 #324 M6 服务端排序 / 想要数 / 成交均价：结果页那三块数据必须由服务端给出，而不是端上对
+    // 已返回的 30 条本地重排。
+    //
+    // 为什么需要"对照商品"：本链路只有链路商品一条有本模型的视觉向量，单条结果的任何顺序都是同一个
+    // 顺序，断言会退化成恒真。这里再用**同一份封面字节**直插两条对照商品（同字节 + 同 mime ⇒ stub
+    // 向量逐位相同 ⇒ 视觉相似度三者并列），于是顺序只由排序键与混合分决定；三条在价格 / 成色 /
+    // 收藏数 / 发布时间上两两不同，且五档算出来的相对顺序**互不相同**——否则某一档的断言会被另一档
+    // 顺带满足，把两条实现交换也测不出来。走 DB 直插而不是 POST /listings：后者会连带投出
+    // MATCH_LISTING 与通知，污染后面"重启恢复"那几步对 job / match 的计数。
+    step = '拍照识图排序与统计'
+    section('拍照识图：五档服务端排序、想要数、成交均价')
+
+    const twinSellerId = decodePublicId(PUBLIC_ID_PREFIX.user, approvedSellerPublicId)
+    // A：成色最好（NEW）、第二便宜、第二新，0 条收藏；B：最便宜、LIKE_NEW、最旧，2 条收藏；
+    // 链路商品 C：最贵、GOOD、最新，1 条收藏。收藏数 0 / 1 / 2 两两不同，`popular` 才有唯一顺序。
+    const twinFixtures = [
+      {
+        role: 'A',
+        priceCents: 9000,
+        condition: 'NEW',
+        createdAt: new Date('2020-01-01T00:00:00.000Z'),
+      },
+      {
+        role: 'B',
+        priceCents: 5000,
+        condition: 'LIKE_NEW',
+        createdAt: new Date('2019-01-01T00:00:00.000Z'),
+      },
+    ] as const
+
+    const twinPublicIds: string[] = []
+    for (const fixture of twinFixtures) {
+      const twinId = newId()
+      await db.insert(listings).values({
+        id: twinId,
+        listingNo: await reserveTestListingNo(db, twinId),
+        sellerId: twinSellerId,
+        title: CHAIN_LISTING_FIELDS.title,
+        description: CHAIN_LISTING_FIELDS.description,
+        priceCents: fixture.priceCents,
+        category: CHAIN_LISTING_FIELDS.category,
+        condition: fixture.condition,
+        status: 'ACTIVE',
+        moderationStatus: 'APPROVED',
+        createdAt: fixture.createdAt,
+      })
+      // 封面复用链路商品那张已 APPROVED 的图：stub 的向量只由字节 + mime 决定，同字节才同分。
+      await db
+        .insert(listingImages)
+        .values({ listingId: twinId, objectKey: approvedKey, sortOrder: 0 })
+      await enqueueVisualEmbedJob(db, twinId)
+      await waitEmbedJob(db, 'VISUAL_EMBED_LISTING', 'listingId', twinId)
+      twinPublicIds.push(encodePublicId(PUBLIC_ID_PREFIX.listing, twinId))
+    }
+    const [twinAPublicId, twinBPublicId] = twinPublicIds
+    if (!twinAPublicId || !twinBPublicId) throw new Error('对照商品未插入成功')
+    const twinBId = decodePublicId(PUBLIC_ID_PREFIX.listing, twinBPublicId)
+
+    // 想要数：B 收两条（要两个不同用户），C 收一条，A 零条。
+    const buyerC = (
+      await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.studentNo, DEMO_BUYER_C_STUDENT_NO))
+        .limit(1)
+    )[0]
+    if (!buyerC) throw new Error('seed 里没有 demo 买家 C')
+    await db
+      .insert(favorites)
+      .values([
+        { userId: demoBuyer.id, listingId },
+        { userId: demoBuyer.id, listingId: twinBId },
+        { userId: buyerC.id, listingId: twinBId },
+      ])
+      .onConflictDoNothing()
+
+    const searchWithSort = async (sort?: VisualSearchSort) => {
+      const response = await anonymousPostJson(
+        base,
+        '/visual-search',
+        sort === undefined ? { objectKey: queryObjectKey } : { objectKey: queryObjectKey, sort },
+        anonymousSessionId,
+      )
+      assertEqual(response.status, 200, `POST /visual-search（sort=${sort ?? '缺省'}）→ 200`)
+      return await readJson(response)
+    }
+
+    const knownIds = [listingPublicId, twinAPublicId, twinBPublicId]
+    /** 只留三条已知候选的相对顺序：其余候选（如果有）不参与断言，避免依赖无关数据。 */
+    const orderOfKnown = (body: Record<string, unknown>): string[] => {
+      const items = body.items
+      if (!Array.isArray(items)) throw new Error('items 不是数组')
+      return items
+        .map((item) =>
+          typeof item === 'object' && item !== null
+            ? String((item as Record<string, unknown>).id)
+            : '',
+        )
+        .filter((id) => knownIds.includes(id))
+    }
+
+    // 缺省 sort（老客户端与并行开发的 M9 脚本都只发 objectKey）必须等价于 relevance。
+    const defaultBody = await searchWithSort(undefined)
+    const relevanceOrder = [listingPublicId, twinBPublicId, twinAPublicId]
+    const expectedOrders: { sort: VisualSearchSort; order: string[] }[] = [
+      { sort: 'relevance', order: relevanceOrder },
+      { sort: 'popular', order: [twinBPublicId, listingPublicId, twinAPublicId] },
+      { sort: 'newest', order: [listingPublicId, twinAPublicId, twinBPublicId] },
+      { sort: 'price_asc', order: [twinBPublicId, twinAPublicId, listingPublicId] },
+      { sort: 'condition', order: [twinAPublicId, twinBPublicId, listingPublicId] },
+    ]
+    assertEqual(
+      expectedOrders.map((entry) => entry.sort).join(','),
+      VISUAL_SEARCH_SORTS.join(','),
+      '五档排序在断言表里都覆盖到',
+    )
+    assertEqual(
+      orderOfKnown(defaultBody).join(','),
+      relevanceOrder.join(','),
+      '缺省 sort 等价于 relevance',
+    )
+    for (const { sort, order } of expectedOrders) {
+      const body = await searchWithSort(sort)
+      assertEqual(orderOfKnown(body).join(','), order.join(','), `sort=${sort} 的相对顺序`)
+    }
+
+    // 想要数：逐条与 favorites 表独立复算的行数比对；再钉住两条非零值——否则"全部为 0"会让逐条
+    // 比对一起"一致"地通过，漏掉 loadListingSignals 根本没查收藏表的情形。
+    const favoriteRows = await db
+      .select({ listingId: favorites.listingId, count: sql<number>`count(*)::int` })
+      .from(favorites)
+      .groupBy(favorites.listingId)
+    const favoriteByListing = new Map(favoriteRows.map((row) => [row.listingId, row.count]))
+    assertEqual(favoriteByListing.get(listingId), 1, '链路商品的收藏行数 = 1')
+    assertEqual(favoriteByListing.get(twinBId), 2, '对照商品 B 的收藏行数 = 2')
+    const defaultItems = defaultBody.items
+    assert(Array.isArray(defaultItems), '结果列表是数组')
+    if (!Array.isArray(defaultItems)) throw new Error('items 不是数组')
+    for (const item of defaultItems as Record<string, unknown>[]) {
+      const itemId = decodePublicId(PUBLIC_ID_PREFIX.listing, String(item.id))
+      assertEqual(
+        item.favoriteCount,
+        favoriteByListing.get(itemId) ?? 0,
+        `想要数与 favorites 表行数一致（${String(item.id)}）`,
+      )
+    }
+
+    // 成交均价：口径是"解析出的类目下 status = SOLD 的均价"，而本 smoke 的语义解析 transport 是 off
+    // （`createVisualParser` 在 off 下直接返回 null），所以实际走的是"没有类目 ⇒ 不查库、返回空统计"
+    // 这一支；解析出类目时用独立 SQL 复算一遍，让这条腿不依赖 transport 的取值。带类目时的阈值与
+    // 四舍五入另有 service.test.ts（stub store）与 store.test.ts（真库 avg + SOLD 谓词）覆盖。
+    const stats = defaultBody.stats as
+      | { soldAvgPriceCents: number | null; soldSampleCount: number }
+      | undefined
+    assert(stats !== undefined && stats !== null, '响应带 stats 字段')
+    const parsedInterpretation = VisualInterpretationSchema.safeParse(defaultBody.interpretation)
+    const parsedCategory = parsedInterpretation.success
+      ? parsedInterpretation.data.category
+      : undefined
+    if (parsedCategory === undefined) {
+      assertEqual(stats?.soldAvgPriceCents, null, '没有解析出类目 ⇒ 成交均价为 null（不查库）')
+      assertEqual(stats?.soldSampleCount, 0, '没有解析出类目 ⇒ 样本数为 0')
+    } else {
+      const soldRows = await db
+        .select({
+          avg: sql<number | null>`avg(${listings.priceCents})::float8`,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(listings)
+        .where(
+          and(
+            eq(listings.category, parsedCategory),
+            eq(listings.status, 'SOLD'),
+            eq(listings.moderationStatus, 'APPROVED'),
+          ),
+        )
+      const soldCount = soldRows[0]?.count ?? 0
+      const soldAvg = soldRows[0]?.avg ?? null
+      assertEqual(stats?.soldSampleCount, soldCount, '样本数与同类目 SOLD 行数一致')
+      assertEqual(
+        stats?.soldAvgPriceCents,
+        soldCount < VISUAL_SOLD_AVG_MIN_SAMPLES || soldAvg === null ? null : Math.round(soldAvg),
+        '成交均价与独立 SQL 复算一致（含最小样本阈值）',
+      )
+    }
+
+    // 7.8 #324 M2 / Q6=B 匿名限流：伪造转发头 + 不带会话头是两轮评审都复现过的绕过路径
     // （修复前 25/25 全 200：每请求新签一个会话 ⇒ 每请求一份新额度，IP 又归因不到 ⇒ 两个桶都是空的）。
     // 这里用真实 HTTP 复现同一手法，钉住「第 21 次一定被拒」。固定一个伪造的 X-Forwarded-For 而**不带**
     // 匿名会话头：无可信代理时它归因不到任何 IP，必须落共享兜底桶（fail-closed）；配了可信代理时它被
