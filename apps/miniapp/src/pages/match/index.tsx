@@ -1,3 +1,4 @@
+import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, usePageScroll, useRouter } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -12,7 +13,7 @@ import { createConversation } from '@/features/chat/api'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
 import { formatAmount } from '@/lib/money'
-import { MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
+import type { MockWish } from '@/mock/api'
 import {
   type ChatTask,
   canLoad,

@@ -55,6 +55,7 @@ import {
   demoViewer,
   demoViewerId,
 } from '@/features/mock-fallback'
+import { decorateNotifications } from '@/features/notifications/decorate'
 import { isApiError } from '@/lib/request'
 import type { ListingDetailView } from '@/mock/api'
 import type {
@@ -334,7 +335,6 @@ export type LoadedNotifications = { items: MockNotification[]; failed: boolean }
 export async function loadNotifications(): Promise<LoadedNotifications> {
   try {
     const items = await fetchNotifications()
-    const { decorateNotifications } = await import('@/mock/api')
     // 传 `null`：真实通知只有 payload 里的 listingId，**没有查标题的能力**
     // （契约不返回文案，也没有按 id 批量查商品的端点）。给个「查不到」就当
     // 「已下架」是错的，所以这里只出通用文案 + 保留跳转目标。

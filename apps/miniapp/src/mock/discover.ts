@@ -1,7 +1,7 @@
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
 import { getListing, LISTING_BY_ID } from './catalog'
 import { mockPublicId } from './public-id'
-import type { HotSearchItem, MockComment, SearchFilter } from './types'
+import type { MockComment } from './types'
 import { WISHES } from './wishes'
 
 const HOUR = 3600 * 1000
@@ -127,30 +127,14 @@ export const NOTIFICATIONS: NotificationDto[] = [
 
 /* ------------------------------------------------------------------ 搜索 */
 
-export const HOT_SEARCHES: HotSearchItem[] = [
-  { term: '考研教材', count: 1284 },
-  { term: '机械键盘', count: 976 },
-  { term: '山地车', count: 812 },
-  { term: 'Kindle', count: 604 },
-  { term: '羽毛球拍', count: 537 },
-  { term: '宿舍台灯', count: 449 },
-  { term: '民谣吉他', count: 318 },
-  { term: '无线鼠标', count: 276 },
-]
-
-/** 默认搜索历史（真实实现应持久化到 storage，这里给初始值） */
-export const DEFAULT_SEARCH_HISTORY: string[] = [
-  '机械键盘',
-  '考研教材',
-  '山地车',
-  'Kindle',
-  '羽毛球拍',
-  '台灯',
-]
-
-export const SEARCH_FILTERS: SearchFilter[] = ['综合', '最新', '价格', '成色']
-
-export const SEARCH_PLACEHOLDER = '搜索「机械键盘」「考研教材」'
+// 搜索页默认文案已挪到 `@/lib/search-defaults`（页面运行期常量，不是演示数据；
+// 页面不该为了几行文案静态 import 整包 fixture）。这里 re-export 保持既有路径。
+export {
+  DEFAULT_SEARCH_HISTORY,
+  HOT_SEARCHES,
+  SEARCH_FILTERS,
+  SEARCH_PLACEHOLDER,
+} from '@/lib/search-defaults'
 
 /** 校验用：确保 fixture 里的 listingId 都真实存在（防止改数据时留下悬空引用） */
 export function assertFixtures(): string[] {

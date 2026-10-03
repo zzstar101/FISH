@@ -6,7 +6,7 @@ import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
-import { settings, themeOptions } from '@/mock/api'
+import { settings, themeOptions } from '@/lib/settings-defaults'
 import type { ThemeMode } from '@/mock/types'
 import './index.scss'
 

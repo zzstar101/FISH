@@ -19,7 +19,12 @@ import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { startVisualSearch } from '@/features/visual-search/start'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
-import { defaultSearchHistory, hotSearches, searchFilters, searchPlaceholder } from '@/mock/api'
+import {
+  defaultSearchHistory,
+  hotSearches,
+  searchFilters,
+  searchPlaceholder,
+} from '@/lib/search-defaults'
 import type { MockListing, SearchFilter } from '@/mock/types'
 import './index.scss'
 
