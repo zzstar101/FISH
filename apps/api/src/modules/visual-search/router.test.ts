@@ -35,6 +35,7 @@ const searchResponse: VisualSearchResponse = {
   strategyVersion: 'visual-search-v1',
   embeddingModel: 'stub-visual-embedding',
   items: [],
+  stats: { soldAvgPriceCents: null, soldSampleCount: 0 },
 }
 
 function fakeService(overrides: Partial<VisualSearchService> = {}): VisualSearchService {
@@ -159,6 +160,58 @@ describe('POST /visual-search', () => {
     expect(res.status).toBe(200)
     expect(VisualSearchResponseSchema.safeParse(await res.json()).success).toBe(true)
   })
+
+  test('sort 缺省可解析（老客户端只发 objectKey），且不凭空造出一个 sort', async () => {
+    const seen: Array<{ objectKey: string; sort?: string }> = []
+    const app = buildApp({
+      service: fakeService({
+        search: async (_subject, input) => {
+          seen.push(input)
+          return searchResponse
+        },
+      }),
+    })
+
+    const res = await app.request('/visual-search', json(validSearchBody))
+
+    expect(res.status).toBe(200)
+    expect(seen).toEqual([{ objectKey: OBJECT_KEY }])
+  })
+
+  test('sort 原样透传给 service（排序档不在路由层解释）', async () => {
+    const seen: Array<{ objectKey: string; sort?: string }> = []
+    const app = buildApp({
+      service: fakeService({
+        search: async (_subject, input) => {
+          seen.push(input)
+          return searchResponse
+        },
+      }),
+    })
+
+    const res = await app.request('/visual-search', json({ ...validSearchBody, sort: 'price_asc' }))
+
+    expect(res.status).toBe(200)
+    expect(seen).toEqual([{ objectKey: OBJECT_KEY, sort: 'price_asc' }])
+  })
+
+  const invalidSearchBodies = [
+    ['sort 不在枚举内', { objectKey: OBJECT_KEY, sort: 'cheapest' }],
+    ['多余字段（strictObject）', { objectKey: OBJECT_KEY, sort: 'popular', extra: true }],
+    ['缺 objectKey', { sort: 'popular' }],
+  ] as const
+
+  for (const [name, body] of invalidSearchBodies) {
+    test(`非法请求体（${name}）回 422 VALIDATION_FAILED`, async () => {
+      const app = buildApp()
+      const res = await app.request('/visual-search', json(body))
+
+      expect(res.status).toBe(422)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'VALIDATION_FAILED',
+      )
+    })
+  }
 
   const serviceErrorCases = [
     [400, 'VISUAL_SEARCH_IMAGE_INVALID'],

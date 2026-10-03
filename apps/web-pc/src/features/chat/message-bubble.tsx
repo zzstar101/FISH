@@ -78,14 +78,37 @@ function ListingBubble({ listing }: { listing: ConversationListing | null | unde
   return <div className={cardClass}>{card}</div>
 }
 
+/**
+ * 时间戳旁的「撤回」入口：**悬停（或键盘聚焦）时才显形** —— #424 定的 PC 交互口径。
+ * 只在自己消息的窗口内渲染（判据见 `./view` 的 `canRecallMessage`）。
+ *
+ * 用 opacity 而不是 `hidden`：控件始终留在可聚焦序列里，键盘用户 tab 得到，
+ * 屏幕阅读器也照常读到（纯 `hidden` 会把这条路一起关掉）。
+ */
+function RecallButton({ onRecall }: { onRecall: () => void }) {
+  return (
+    <button
+      className="opacity-0 transition-opacity hover:text-danger hover:underline focus-visible:opacity-100 group-hover:opacity-100"
+      onClick={onRecall}
+      type="button"
+    >
+      撤回
+    </button>
+  )
+}
+
 export function MessageBubble({
   message,
   isMine,
   isRead,
+  canRecall,
+  onRecall,
 }: {
   message: MessageDto
   isMine: boolean
   isRead: boolean
+  canRecall: boolean
+  onRecall: () => void
 }) {
   if (message.type === 'SYSTEM') {
     return (
@@ -121,7 +144,7 @@ export function MessageBubble({
           size="sm"
         />
       )}
-      <div className={`flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+      <div className={`group flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
         {isMine ? null : <p className="mb-1 text-ink-3 text-xs">{senderName}</p>}
         {message.type === 'LISTING' ? (
           <ListingBubble listing={message.listing} />
@@ -139,6 +162,7 @@ export function MessageBubble({
         <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-3">
           <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
           {isMine && isRead ? <span>已读</span> : null}
+          {canRecall ? <RecallButton onRecall={onRecall} /> : null}
         </div>
       </div>
     </div>
@@ -154,18 +178,36 @@ export function MediaBubble({
   media,
   isMine,
   isRead,
+  canRecall,
+  onRecall,
 }: {
   media: MediaMessageDto
   isMine: boolean
   isRead: boolean
+  canRecall: boolean
+  onRecall: () => void
 }) {
+  /*
+    媒体撤回碑：服务端撤回媒体后 `url` 是**空串**（`media-service.ts` 对 recalled 行清空
+    媒体负载），照常渲染只会在页面上留一张破图。文案与文本消息的撤回碑一致。
+  */
+  if (media.recalledAt !== null) {
+    return (
+      <div className="my-3 flex justify-center">
+        <span className="rounded-full bg-surface-2 px-3.5 py-1.5 text-center text-ink-3 text-xs leading-5">
+          {isMine ? '你撤回了一条消息' : '对方撤回了一条消息'}
+        </span>
+      </div>
+    )
+  }
   return (
     <div className={`flex gap-2.5 ${isMine ? 'justify-end' : 'justify-start'}`}>
-      <div className={`flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+      <div className={`group flex max-w-[70%] flex-col ${isMine ? 'items-end' : 'items-start'}`}>
         {media.kind === 'IMAGE' ? <ImageBubble media={media} /> : <VoiceBubble media={media} />}
         <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-3">
           <time dateTime={media.createdAt}>{formatMessageTime(media.createdAt)}</time>
           {isMine && isRead ? <span>已读</span> : null}
+          {canRecall ? <RecallButton onRecall={onRecall} /> : null}
         </div>
       </div>
     </div>

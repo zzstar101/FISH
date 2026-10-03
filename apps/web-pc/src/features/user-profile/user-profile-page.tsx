@@ -4,8 +4,12 @@ import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
-import { Loader2, ShieldCheck } from 'lucide-react'
+import { Loader2, ShieldCheck, UserRoundPlus } from 'lucide-react'
+import { useState } from 'react'
+import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
+import { FollowButtonView, followButtonState } from '../follows/follow-button'
+import { useFollowMutation, useFollowState, useUnfollowMutation } from '../follows/queries'
 import { PcListingCard } from '../listings/listing-card'
 import { usePublicProfile, useUserActiveListings } from './queries'
 import { isUserNotFound, profileStats } from './view'
@@ -17,12 +21,32 @@ import { isUserNotFound, profileStats } from './view'
  * 访客也可读（`USER_ROUTES` 两个端点都不挂 `requireAuth`）。
  */
 export function UserProfilePage({ userId }: { userId: string }) {
-  const { me } = useAuth()
+  const { me, isInitializing } = useAuth()
   const profile = usePublicProfile(userId)
   // 资料没拿到之前不查在售：契约对不存在的用户返回 404 而不是空列表，
   // 并发发出会先闪一下「TA 暂无在售商品」再被覆盖。
   const listings = useUserActiveListings(userId, profile.isSuccess)
   const items = listings.data?.pages.flatMap((page) => page.items) ?? []
+
+  // 关注态以服务端为准：读用 GET 的真实结果，写成功后写缓存的是服务端返回值，
+  // 失败只显示错误文本、绝不本地翻转。未登录与本人都不发这条查询。
+  const followState = useFollowState(userId, me?.id !== undefined && me.id !== userId)
+  const followMutation = useFollowMutation()
+  const unfollowMutation = useUnfollowMutation()
+  const [followError, setFollowError] = useState<string | null>(null)
+
+  /** 已关注 → 取关（DELETE 幂等）；未关注 → 关注（POST 幂等）。 */
+  function handleFollowToggle() {
+    const data = followState.data
+    if (data === undefined || data.kind !== 'loaded') return
+    setFollowError(null)
+    const mutate = data.following ? unfollowMutation : followMutation
+    mutate.mutate(userId, {
+      onSuccess: (result) => {
+        if (result.kind === 'failed') setFollowError(result.message)
+      },
+    })
+  }
 
   if (profile.isPending) return <LoadingState label="正在加载用户资料…" />
 
@@ -75,7 +99,37 @@ export function UserProfilePage({ userId }: { userId: string }) {
             <Button asChild variant="outline">
               <Link to="/profile">这是你的公开主页 · 去个人中心</Link>
             </Button>
-          ) : null}
+          ) : isInitializing ? null : me === null ? (
+            <Button asChild variant="outline">
+              <Link search={{ redirect: currentHref() }} to="/login">
+                <UserRoundPlus className="size-4" />
+                登录后关注
+              </Link>
+            </Button>
+          ) : (
+            <div>
+              <FollowButtonView
+                mutual={followState.data?.kind === 'loaded' ? followState.data.mutual : false}
+                onToggle={handleFollowToggle}
+                state={followButtonState({
+                  errorMessage:
+                    followState.data?.kind === 'failed' ? followState.data.message : null,
+                  pending: followMutation.isPending || unfollowMutation.isPending,
+                  read:
+                    followState.data === undefined
+                      ? 'loading'
+                      : followState.data.kind === 'loaded'
+                        ? followState.data.following
+                          ? 'following'
+                          : 'notFollowing'
+                        : followState.data.kind === 'notFound'
+                          ? 'notFound'
+                          : 'unknown',
+                })}
+              />
+              {followError !== null ? <p className="text-danger text-xs">{followError}</p> : null}
+            </div>
+          )}
         </div>
       </Card>
 

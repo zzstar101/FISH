@@ -42,7 +42,7 @@ import {
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { formatAmount } from '@/lib/money'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
@@ -370,6 +370,23 @@ export default function Conversation() {
   }
 
   const metrics = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(metrics.capsuleHeight)
+
+  /**
+   * 裸箭头（稿 `.mp-back`，无圆底；形态按 2026-10-02 拍板保留）：箭头是唯一视觉
+   * 主体，比例沿用原 60px 热区配 24px 箭头的 0.4，随「热区 = 胶囊高」等比缩放。
+   */
+  const bareChevronStyle = useMemo(() => {
+    const chevron = Math.round(backGeo.size * 0.4)
+    return {
+      width: `${chevron}px`,
+      height: `${chevron}px`,
+      borderLeftWidth: `${Math.max(2, Math.round(backGeo.size * (5 / 60)))}px`,
+      borderBottomWidth: `${Math.max(2, Math.round(backGeo.size * (5 / 60)))}px`,
+      borderRadius: '1px',
+      transform: `translateX(${Math.round((chevron / 6) * 2) / 2}px) rotate(45deg)`,
+    }
+  }, [backGeo.size])
 
   /** 标题可用宽度：两侧都按胶囊避让宽收（返回钮比胶囊窄，对称约束天然覆盖） */
   const titleMaxWidth = useMemo(() => {
@@ -1572,7 +1589,8 @@ export default function Conversation() {
   }
 
   /**
-   * 返回：有上一页就回退，否则回消息 Tab（Tab 页不能 navigateBack 跨栈）。
+   * 返回：有上一页就回退；页面栈为空（冷启动分享 / 扫码直入）兜底回**语义父级
+   * tab** —— 消息页（2026-10-02 拍板的兜底规则，Tab 页不能 navigateBack 跨栈）。
    * 与 `components/nav-bar` / 商品详情页同一行为；本页页头是页面自己的
    * 渐变头（稿子 `.chathead`），不再用漂浮导航组件。
    */
@@ -1832,11 +1850,31 @@ export default function Conversation() {
         状态栏高度用内联 px（设备相关，不走 rpx），导航行高 88rpx 与商品详情页一致。
       */}
       <View className="conv__head" style={{ paddingTop: `${metrics.statusBarHeight}px` }}>
-        <View className="conv__navrow">
-          <View className="conv__back" onClick={handleBack}>
-            <View className="conv__chevron" />
+        {/*
+          导航行几何与 `components/top-bar` 同构（行内下发，见 index.scss）：
+          返回钮在胶囊那一段里居中，与右侧原生胶囊同轴。
+        */}
+        <View
+          className="conv__navrow"
+          style={{
+            height: `${metrics.totalHeight - metrics.statusBarHeight}px`,
+            paddingBottom: `${metrics.totalHeight - metrics.statusBarHeight - metrics.contentHeight}px`,
+          }}
+        >
+          <View className="conv__back" style={backGeo.btnStyle} onClick={handleBack}>
+            <View className="conv__chevron" style={bareChevronStyle} />
           </View>
-          <View className="conv__title">
+          {/*
+            标题框与返回钮同段：bottom 收掉行高的「补下方」部分，让标题也在胶囊
+            那一段（contentHeight）里居中 —— 否则标题中心比胶囊低 2px（整 44pt 行
+            的中心 ≠ 胶囊段中心）。
+          */}
+          <View
+            className="conv__title"
+            style={{
+              bottom: `${metrics.totalHeight - metrics.statusBarHeight - metrics.contentHeight}px`,
+            }}
+          >
             <View className="conv__title-in" style={{ maxWidth: `${titleMaxWidth}px` }}>
               <Text className="conv__title-nm">{counterpart.nickname}</Text>
               {/* 在线态（#359 第五点）：顶部栏用户名隔壁。绿点 + 文案；离线时说
