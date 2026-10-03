@@ -7,7 +7,8 @@
       "!**/dist",
       "!**/src/routeTree.gen.ts",
       "!packages/db/src/migrations",
-      "!**/.robobun/evidence"
+      "!**/.robobun/evidence",
+      "!**/.m4-evidence"
     ]
   },
   "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },

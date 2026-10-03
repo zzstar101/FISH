@@ -177,14 +177,15 @@ describe('scoreMatch（v2 hybrid：语义分参与）', () => {
     expect(breakdown.score).toBeGreaterThanOrEqual(70)
   })
 
-  test('不限分类：四路权重按 semantic+keyword+price 三项归一化', () => {
+  test('不限分类：M4 起分类分项按 100 计（约束天然满足，不再摊薄结构证据）', () => {
     const breakdown = scoreMatch(
       seedListing,
       { keyword: '机械键盘', category: null, budgetMaxCents: 20000, acceptSimilar: true },
       { similarity: SEMANTIC_SCORE_CEILING },
     )
-    expect(breakdown.categoryScore).toBe(0)
-    // (0.30×100 + 0.15×100 + 0.23×100) / 0.68 = 100
+    expect(breakdown.categoryScore).toBe(100)
+    // 0.30×100 + 0.32×100 + 0.15×100 + 0.23×100 = 100（M3 的 renormalize 口径下同为 100，
+    // 差别在"关键词没命中"的对上：那时 satisfied 仍保留 0.32×100 的分类分）。
     expect(breakdown.score).toBe(100)
   })
 
@@ -205,19 +206,40 @@ describe('scoreMatch（v2 hybrid：语义分参与）', () => {
     const gated = scoreMatch(seedListing, strict, { similarity: SEMANTIC_SCORE_CEILING })
     expect(gated.keywordScore).toBe(0)
     expect(gated.semanticScore).toBe(0)
-    // (0.30×0 + 0.15×0 + 0.23×100) / 0.68 = 33.8 → 34
-    expect(gated.score).toBe(34)
+    // 0.32×100（不限分类按 100）+ 0.23×100 = 55
+    expect(gated.score).toBe(55)
 
-    // 同一对换成"接受相似品"：语义正常计权 → 78，差异可验证。
+    // 同一对换成"接受相似品"：语义正常计权 → 85，差异可验证。
     const loose = scoreMatch(
       seedListing,
       { ...strict, acceptSimilar: true },
       { similarity: SEMANTIC_SCORE_CEILING },
     )
     expect(loose.semanticScore).toBe(100)
-    // (0.30×100 + 0.23×100) / 0.68 = 77.9 → 78
-    expect(loose.score).toBe(78)
+    // 0.30×100 + 0.32×100 + 0.23×100 = 85
+    expect(loose.score).toBe(85)
     expect(loose.score).toBeGreaterThan(gated.score)
+  })
+
+  /**
+   * M4 把门禁从 `keyword-or-category` 收紧到 `keyword-only`：分类等值在"同分类不同产品"时恒成立
+   * （校园二手场景里 DIGITAL 下既有键盘也有耳机），把它当结构支撑等于让开关形同虚设。
+   *
+   * 这里用与 K380 **分类相同**（DIGITAL）、词法 0 命中的愿望：收紧前语义会被放行到 85 分，
+   * 收紧后语义记 0、只剩分类与价格 = 55 分（`cal-acceptfalse-tent` 就是这一类）。
+   */
+  test('acceptSimilar=false：分类命中不算结构支撑，语义不得单独成立', () => {
+    const breakdown = scoreMatch(
+      seedListing,
+      { keyword: '显示器', category: 'DIGITAL', budgetMaxCents: 20000, acceptSimilar: false },
+      { similarity: SEMANTIC_SCORE_CEILING },
+    )
+    expect(breakdown.categoryScore).toBe(100)
+    expect(breakdown.keywordScore).toBe(0)
+    expect(breakdown.semanticScore).toBe(0)
+    // 0.32×100 + 0.23×100 = 55 < 70
+    expect(breakdown.score).toBe(55)
+    expect(breakdown.score).toBeLessThan(70)
   })
 
   test('acceptSimilar=false 但有结构支撑（关键词命中）时语义照常计权', () => {

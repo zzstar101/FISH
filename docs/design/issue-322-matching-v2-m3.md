@@ -98,6 +98,13 @@ scoreMatch(listing, wish, semantic: { similarity } | null)
   （除以三者权重和），与 v1 对 category 的处理方式一致。
 - 分数仍是 0..100 整数，`Math.round` 一次（与 v1 相同的收敛方式）。
 
+> **M4 修订（已完成，本节上面的公式是 M3 口径）**：锚点按真实 `text-embedding-v4` 分布重标定为
+> `SEMANTIC_SCORE_FLOOR = 0.42` / `CEILING = 0.70`；`nullCategoryMode` 从 `renormalize` 改成
+> `'satisfied'`（"不限分类"不再摊薄结构证据，生效分类分按满分计入），`acceptSimilarGate` 从
+> `keyword-or-category` 改成 `'keyword-only'`。`WEIGHTS_V2`（S4 = 0.30/0.32/0.15/0.23）与
+> `MATCH_SCORE_THRESHOLD = 70` 未动。逐样本分数与一致度见
+> `docs/design/issue-322-matching-v2-m4.md` §3。
+
 ## 5. `acceptSimilar` 门禁（Q2）
 
 ```ts
@@ -180,6 +187,12 @@ semanticAllowed = wish.acceptSimilar || keywordScore > 0 || categoryScore > 0
   相似度时权重如何决定判定"。因此本阶段冻结的是**算法口径**（四路权重、锚点、门禁、阈值），
   **不是**对真实模型语义质量的验证——12/12 是"fixture 与人工判断一致"，不等于"真实 provider 下
   的中文同义/品牌型号样本也 12/12"。真实分布的校准（含锚点 `0.5/0.95` 与 K）属 M4 live 验证。
+- **M4 参数修订（已实施，整体质量仍待独立验证）**：上表 **S4 列的分数是旧锚点 `0.5/0.95` 下的值**，只用于比较权重方案，
+  不代表现行排序。M4 用 57 条冻结标注对在真实 `text-embedding-v4` 上重标定，锚点改为 `0.42/0.70`，
+  并调整两处门禁口径（`nullCategoryMode: 'satisfied'`、`acceptSimilarGate: 'keyword-only'`）；
+  **权重 S4 与阈值 70 不变**。新口径下的一致度（39/57 → 53/57）与逐样本分数见
+  `docs/design/issue-322-matching-v2-m4.md` §3，复算：
+  `bun run embed:eval -- --sections=calibration`（需 live provider）/ `bun run rank:compare`。
 
 ## 8. 可观测（Q8/Q9）
 
@@ -220,6 +233,17 @@ semanticAllowed = wish.acceptSimilar || keywordScore > 0 || categoryScore > 0
 7. 聚合观测：embedding 请求数/失败率/latency、content-hash 命中率、Top-K latency、hybrid
    matched/downgraded 计数、每次运行所用 model/ranking_version。
 
+> **历史M4记录（当前收尾状态见 M4 §13）**：以下结果不代表已通过新的独立质量门禁。1 ✅（recall@10–200 全 1.0、
+> 正确对最差排名 3 ⇒ 保留 `MATCH_SEMANTIC_TOP_K = 50`）；2 ✅（当前不建 HNSW，触发条件实测固化为
+> p95 > 50 ms 或 ~10 万行向量；旧重复向量曲线已撤回，新逐行独立采样与recall见M4 §5）；
+> 3 已标定（锚点 `0.42/0.70`，完整57条为53/57，FP=3/FN=1；不排除错误行，新独立验证未完成）；
+> 4 ✅（`bun run embed:backfill`，live 6 实体 + 幂等重跑 0 provider 请求）；5 ✅ **条件式**：seed 契约
+> 仍未动，`embed:backfill`（默认 `--entity=both`）把两侧向量补齐后该对才升到 v2——只补商品侧不够，
+> v2 要求两侧都有新鲜向量（M4 §6.1 末尾，实证 `.m4-evidence/backfill-v1-to-v2.log`）；6 ✅ 已修：M4 新增
+> 有界补投 `apps/worker/src/jobs/embedding/requeue.ts`（额度 3 条 / 24 h / 60 s 延后 / `NOT EXISTS
+> PENDING` 去重），`apps/worker/src/index.ts` 在 `FAILED` 结算与启动回收两处触发，决定写进 stderr 的
+> `embed.retry` 事件；7 ✅（`bun run obs:summary`，四组事件）。
+
 ## 11. 本地验证命令
 
 ```bash
@@ -231,6 +255,10 @@ bun test apps/worker/src/jobs/matching     # 打分 + 召回 + 落库断言
 bun run rank:compare                       # 权重对照（不出网、不需要 DB）
 bun run core:smoke                         # 端到端（含语义链一节）
 ```
+
+M4 追加的复算命令（`bun run embed:backfill` / `obs:summary` / `ann:probe` /
+`embed:eval -- --sections=calibration,recall,fit`）与证据文件清单见
+`docs/design/issue-322-matching-v2-m4.md` §11。
 
 ## 12. stacked PR 与合并顺序
 
@@ -275,6 +303,11 @@ cosine，**都没有验证向量是否对应当前实体内容**。后果有三�
 同一毫秒内的两次编辑内容不同、版本号却完全相同，旧向量仍会被判成新鲜。这一条在 #333 的第二轮复审里
 被指出，修法落在 M2 分支（`prune-on-write`：写路径删掉 `content_hash` 与当前指纹不符的行，
 `pruneStaleEmbeddings()`），本 PR rebase 后即继承：
+
+> **M4 修订**：插入仍 defaultNow()，更新版本取 DB clock_timestamp()，不用事务开始时间保证写入序。
+> 上面“应用侧 new Date()”是历史描述；**本节的结论不变**——主判据仍是内容指纹，版本号只是纵深防御。跨时钟比较带来的另一个
+> 后果（编辑后 `updated_at` 可能小于已存 `source_updated_at`，导致合法重算被 CAS 静默丢弃）也已一并
+> 修掉，见 `docs/design/issue-322-matching-v2-m4.md` §9。
 
 - **主判据**：写路径内容指纹失效（"行还在"⇒"描述的是当前内容"）；
 - **本 PR 的 `fresh*Embedding()` 谓词与 `similar*ByIds` 的 `where`**：降级为纵深防御，兜住"某写路径

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
+import { jobs } from '@fish/db/schema/jobs'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
@@ -382,6 +383,73 @@ describe('transactions store (integration)', () => {
     expect((await store.listingBriefs([])).size).toBe(0)
     expect((await store.userBriefs([])).size).toBe(0)
     expect(users.has('01990000-0000-7000-8000-0000000000ff')).toBe(false)
+  })
+})
+
+describe('#322 M4：状态流转补投 EMBED_LISTING（向量版本跟上实体版本）', () => {
+  // 自带 listing / 会话 fixture：上面的用例把 listingA 留成 RESERVED、listingB 留成 SOLD，
+  // 这里不能复用它们的状态。
+  const listingC = '01990000-0000-7000-8000-0000000000b8'
+  const conversationC = '01990000-0000-7000-8000-0000000000f1'
+  const listingD = '01990000-0000-7000-8000-0000000000b9'
+  const conversationD = '01990000-0000-7000-8000-0000000000f2'
+
+  /** 待跑的 EMBED_LISTING job：`payload->>'listingId'` 就是入队契约里的实体键。 */
+  async function pendingEmbedJobs(listingId: string): Promise<string[]> {
+    const queued = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        sql`${jobs.payload}->>'listingId' = ${listingId}
+            AND ${jobs.type} = 'EMBED_LISTING'
+            AND ${jobs.status} = 'PENDING'`,
+      )
+    return queued.map((row) => row.id)
+  }
+
+  async function listingStatus(listingId: string): Promise<string> {
+    const row = rows(
+      await db.execute(sql`SELECT status::text AS status FROM listings WHERE id = ${listingId}`),
+    )[0] as { status: string }
+    return row.status
+  }
+
+  test('accept / cancel 都补投：商品版本前进时向量行必须能跟上', async () => {
+    await seedListing(listingC)
+    await seedConversation(conversationC, listingC, buyer1)
+    expect(await pendingEmbedJobs(listingC)).toHaveLength(0)
+
+    const brief = await store.findConversation(conversationC, buyer1)
+    if (brief.kind !== 'ok') throw new Error('unreachable')
+    const accepted = await store.accept(brief.brief, 1000, acceptSystemContent)
+    if (accepted.kind !== 'created') throw new Error('unreachable')
+    expect(await listingStatus(listingC)).toBe('RESERVED')
+    // 状态不是 embedding 文本的输入，但它让实体版本前进：不补投就会让这条商品掉出
+    // 新鲜向量召回（`packages/db/src/embedding-store.ts` 的毫秒等值新鲜度谓词）。
+    expect(await pendingEmbedJobs(listingC)).toHaveLength(1)
+
+    const cancelled = await store.cancel(accepted.row.id, buyer1)
+    expect(cancelled.kind).toBe('ok')
+    expect(await listingStatus(listingC)).toBe('ACTIVE')
+    // 仍是 1 条：`ON CONFLICT DO NOTHING` 把 cancel 的补投并进那条还没跑的 PENDING job，
+    // 而它执行时读到的是实体**当前**状态，所以断言的是"补投路径执行了"而不是"重复入队"。
+    expect(await pendingEmbedJobs(listingC)).toHaveLength(1)
+  })
+
+  test('双侧确认把商品置 SOLD 时补投 EMBED_LISTING', async () => {
+    await seedListing(listingD)
+    await seedConversation(conversationD, listingD, buyer2)
+    const brief = await store.findConversation(conversationD, buyer2)
+    if (brief.kind !== 'ok') throw new Error('unreachable')
+    const accepted = await store.accept(brief.brief, 1000, acceptSystemContent)
+    if (accepted.kind !== 'created') throw new Error('unreachable')
+
+    expect((await store.confirm(accepted.row.id, buyer2, 'buyer')).kind).toBe('ok')
+    const done = await store.confirm(accepted.row.id, seller, 'seller')
+    if (done.kind !== 'ok') throw new Error('unreachable')
+    expect(done.row.status).toBe('COMPLETED')
+    expect(await listingStatus(listingD)).toBe('SOLD')
+    expect(await pendingEmbedJobs(listingD)).toHaveLength(1)
   })
 })
 
