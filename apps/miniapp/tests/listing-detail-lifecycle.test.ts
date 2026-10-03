@@ -957,9 +957,9 @@ describe('详情页接线（#170 判据 C/D）', () => {
     expect(block).toContain('requestRefresh()')
   })
 
-  test('翻页：追加前确认读取世代没被重试 / 刷新顶掉', async () => {
+  test('「加载更多」：追加前确认读取世代没被重试 / 刷新顶掉', async () => {
     const block = await pageSlice(
-      'const toggleComments = async () => {',
+      'const loadMoreComments = async () => {',
       'const listing = data?.listing',
     )
     expect(block).toContain('const seq = loadSeqRef.current')

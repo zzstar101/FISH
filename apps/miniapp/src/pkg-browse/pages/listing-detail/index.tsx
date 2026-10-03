@@ -334,8 +334,10 @@ export default function ListingDetail() {
   const [comments, setComments] = useState<CommentNode[]>([])
   /** 留言列表的下一页游标；`null` = 没有更多（或还没加载完 / 退了 mock）。 */
   const [commentsCursor, setCommentsCursor] = useState<string | null>(null)
-  /** 展开时拉取下一页的重入守卫（ref：state 更新是异步的，连点两次会都读到 false）。 */
+  /** 「加载更多」的重入守卫（ref：state 更新是异步的，连点两次会都读到 false）。 */
   const loadingMoreRef = useRef(false)
+  /** 「加载更多」在飞：把文字链换成「正在加载…」（`following` / `chat` 的页脚同款口径）。 */
+  const [loadingMore, setLoadingMore] = useState(false)
   /** 组件是否还挂着；卸载后不再 setState（翻页是多次 await，中途离开页面很常见）。 */
   const mountedRef = useRef(true)
   const [commentInput, setCommentInput] = useState('')
@@ -1116,45 +1118,45 @@ export default function ListingDetail() {
   /**
    * 展开 / 收起留言。
    *
-   * 展开时若还有下一页（`commentsCursor`），把剩余页全部拉完再展示：稿子写的是
-   * 「查看全部 N 条」，只展示第一页却说「全部」就是在编计数。
+   * 展开只揭示**已经取到**的那一页；后面还有多少由列表底部的「加载更多」按需取。
+   * 旧实现在这里串行把剩余页拉满（最多 20 页 × 50 条）再一次 `setComments` 推入 ——
+   * 真机上单次 setData 1000 条会明显卡，且用户没翻到底也付了全部流量。
    */
-  const toggleComments = async () => {
-    if (commentsOpen) {
-      setCommentsOpen(false)
-      return
-    }
-    setCommentsOpen(true)
-    let cursor = commentsCursor
-    // 用 ref 而非 state 做重入守卫：state 更新是异步的，连点两次时两次都会读到 `false`。
+  const toggleComments = () => {
+    setCommentsOpen((prev) => !prev)
+  }
+
+  /**
+   * 「加载更多」：点一次取**下一页**并追加，不做自动无限滚动。
+   *
+   * - 重入守卫用 ref：`loadingMore` state 更新是异步的，连点两次会都读到旧值，
+   *   两次请求各自 append 就会把同一页留言叠两遍。
+   * - 追加前确认读取世代没被重试 / 返回刷新顶掉：翻页途中若有重来过，这一批是按旧列表
+   *   （旧游标）拼的，落进去同样会重复。
+   * - 失败只留痕、不收起列表：游标原样不动（一条也没追加），用户再点一次就是重试。
+   *   旧实现是「展开即一次拉完」，失败只能整块收起来重来。
+   * - `commentsCursor` 为 `null` = 已到末页，按钮随之消失（本页没有「没有更多」文案，
+   *   也就不新造）。
+   */
+  const loadMoreComments = async () => {
+    const cursor = commentsCursor
     if (!cursor || loadingMoreRef.current) return
 
     loadingMoreRef.current = true
-    // 先在局部累积、成功后一次性 setComments：中途失败重试若逐页 append，
-    // 会把上一次已追加的页再追加一遍（重复留言）。
-    const more: CommentNode[] = []
-    // 记住出发时的读取世代：翻页途中若有重试或返回刷新重来过，这一批就是按旧列表
-    // （旧游标）拼的，追加进去会把同一页留言重复一遍
+    setLoadingMore(true)
+    // 记住出发时的读取世代
     const seq = loadSeqRef.current
     try {
-      // 上游页码上限兜底：游标是服务端给的不透明串，服务端 bug 不能让这里转死循环。
-      // 上限 20 页 × 单页 50 = 1000 条，远超设计稿需求。
-      for (let pageCount = 0; cursor && pageCount < 20; pageCount += 1) {
-        const page = await fetchComments(id, cursor)
-        more.push(...page.items.map(dtoToNode))
-        cursor = page.nextCursor
-      }
+      const page = await fetchComments(id, cursor)
       if (!mountedRef.current) return
       if (!isLatestLoad(seq, loadSeqRef.current)) return
-      setComments((prev) => [...prev, ...more])
-      setCommentsCursor(cursor)
+      setComments((prev) => [...prev, ...page.items.map(dtoToNode)])
+      setCommentsCursor(page.nextCursor)
     } catch (error) {
-      // 未成功翻完就保持原游标（此时一条也没追加）；收起留言行，
-      // 让下一次点击重新进“展开并继续拉取”，而不是先关一次再展开。
       logCommentFailure('更多留言', error)
-      if (mountedRef.current) setCommentsOpen(false)
     } finally {
       loadingMoreRef.current = false
+      if (mountedRef.current) setLoadingMore(false)
     }
   }
 
@@ -1508,6 +1510,16 @@ export default function ListingDetail() {
                       </View>
                     ))}
                   </View>
+
+                  {/* 分页脚：点一次取下一页（`commentsCursor` 为 `null` = 已到底，按钮消失）。
+                      复用「查看全部 / 收起」那款文字链样式，不新增视觉。 */}
+                  {commentsOpen && commentsCursor ? (
+                    <View className="detail__cmt-more" onClick={() => void loadMoreComments()}>
+                      <Text className="detail__cmt-more-text">
+                        {loadingMore ? '正在加载…' : '加载更多'}
+                      </Text>
+                    </View>
+                  ) : null}
 
                   {/* 计数按**顶层**留言算（稿子的 topCmts 口径），嵌套回复不计数。
                       `commentsCursor` 非空 = 还有下一页未拉，此时加 `+` 不把“已知条数”
