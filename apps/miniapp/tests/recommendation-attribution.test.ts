@@ -87,13 +87,13 @@ describe('越界 pos 的后果（契约层面）', () => {
 describe('buildListingDetailUrl', () => {
   test('没有归因只带 id', () => {
     expect(buildListingDetailUrl(LISTING_ID, null)).toBe(
-      `/pages/listing-detail/index?id=${LISTING_ID}`,
+      `/pkg-browse/pages/listing-detail/index?id=${LISTING_ID}`,
     )
   })
 
   test('带归因时 position 0 也要带上（真值判断会把它丢掉）', () => {
     expect(buildListingDetailUrl(LISTING_ID, { requestId: REQUEST_ID, position: 0 })).toBe(
-      `/pages/listing-detail/index?id=${LISTING_ID}&rid=${REQUEST_ID}&pos=0`,
+      `/pkg-browse/pages/listing-detail/index?id=${LISTING_ID}&rid=${REQUEST_ID}&pos=0`,
     )
   })
 })

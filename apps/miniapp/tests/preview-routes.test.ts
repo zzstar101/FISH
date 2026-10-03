@@ -10,6 +10,9 @@ import { describe, expect, test } from 'bun:test'
  * 为什么按文本解析而不是 import：`preview/main.tsx` 在模块顶层就 `createRoot(...)`，
  * 并且 `app.config.ts` 依赖 Taro 的编译期全局 `defineAppConfig`，两者都不能在 bun 里 import。
  * （同样的做法见 `tests/verify-messages.test.ts` 对页面接线的断言。）
+ *
+ * 分包化之后页面清单分两处：主包 `pages`（5 个 tab 页）与 `subPackages`（6 个分包，
+ * 页面路径相对各自 `root`）。这里两处都解析，拼成完整路由再与预览壳比对。
  */
 
 /** 取 `anchor` 之后第一个 `= {` 到下一个行首 `}` 之间的内容。 */
@@ -30,18 +33,48 @@ function arrayLiteralAfter(source: string, anchor: string): string {
   return source.slice(open, close)
 }
 
+/** 取 `anchor` 之后第一个 `open` 到与之配对的 `close` 之间的内容（按层数配对）。 */
+function balancedAfter(source: string, anchor: string, open: string, close: string): string {
+  const at = source.indexOf(anchor)
+  const start = at === -1 ? -1 : source.indexOf(open, at)
+  if (at === -1 || start === -1) throw new Error(`解析失败：${anchor}`)
+  let depth = 0
+  for (let i = start; i < source.length; i++) {
+    const c = source[i]
+    if (c === open) depth++
+    else if (c === close) {
+      depth--
+      if (depth === 0) return source.slice(start + 1, i)
+    }
+  }
+  throw new Error(`括号不配对：${anchor}`)
+}
+
 /** 抽块里的页面路由字符串；`app.config.ts` 不带前导 `/`，这里统一补上。 */
 function pageRoutes(block: string): string[] {
-  return [...block.matchAll(/'(\/?pages\/[^']+)'/g)].map((match) => {
+  return [...block.matchAll(/'(\/?(?:pkg-[a-z]+\/)?pages\/[^']+)'/g)].map((match) => {
     const route = match[1] ?? ''
     return route.startsWith('/') ? route : `/${route}`
   })
 }
 
+/** 抽 `subPackages` 里的完整路由：`root` + 相对该 root 的页面路径。 */
+function subPackageRoutes(source: string): string[] {
+  const body = balancedAfter(source, 'subPackages: [', '[', ']')
+  const routes: string[] = []
+  for (const block of body.matchAll(/root:\s*'([^']+)'[\s\S]*?pages:\s*\[([\s\S]*?)\]/g)) {
+    const root = block[1] ?? ''
+    for (const page of block[2]?.matchAll(/'([^']+)'/g) ?? []) routes.push(`/${root}/${page[1]}`)
+  }
+  return routes
+}
+
 const miniappRoot = new URL('..', import.meta.url)
-const appPages = pageRoutes(
-  arrayLiteralAfter(await Bun.file(new URL('src/app.config.ts', miniappRoot)).text(), 'pages: ['),
-)
+const appSource = await Bun.file(new URL('src/app.config.ts', miniappRoot)).text()
+const appPages = [
+  ...pageRoutes(arrayLiteralAfter(appSource, 'pages: [')),
+  ...subPackageRoutes(appSource),
+]
 const previewPages = pageRoutes(
   objectLiteralAfter(
     await Bun.file(new URL('preview/main.tsx', miniappRoot)).text(),
@@ -51,7 +84,8 @@ const previewPages = pageRoutes(
 
 describe('H5 预览路由表 vs app.config 页面清单', () => {
   test('解析器没取空：两边都解析出了完整清单', () => {
-    expect(appPages.length).toBeGreaterThanOrEqual(20)
+    // 5 个主包 tab 页 + 32 个分包页
+    expect(appPages.length).toBe(37)
     expect(previewPages.length).toBe(appPages.length)
   })
 
@@ -60,7 +94,7 @@ describe('H5 预览路由表 vs app.config 页面清单', () => {
   })
 
   test('本次新增的资料编辑页确实在预览壳里（P2 的原漏项）', () => {
-    expect(appPages).toContain('/pages/profile-edit/index')
-    expect(previewPages).toContain('/pages/profile-edit/index')
+    expect(appPages).toContain('/pkg-auth/pages/profile-edit/index')
+    expect(previewPages).toContain('/pkg-auth/pages/profile-edit/index')
   })
 })

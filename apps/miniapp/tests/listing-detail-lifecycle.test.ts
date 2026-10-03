@@ -29,7 +29,7 @@ import {
   shouldReleaseOfflineTask,
   shouldSurfaceStaleAuthFailure,
   type WriteTask,
-} from '../src/pages/listing-detail/view'
+} from '../src/pkg-browse/pages/listing-detail/view'
 
 /**
  * 商品详情页账号作用域与返回同步判据的回归（#170 判据 C/D）。
@@ -758,7 +758,9 @@ describe('详情页底栏动作的账号作用域（#236 复查 P2）', () => {
 
 /** 取 `index.tsx` 里 `from` 到其后第一个 `to` 之间的源码 */
 async function source(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/listing-detail/index.tsx', import.meta.url)).text()
+  return await Bun.file(
+    new URL('../src/pkg-browse/pages/listing-detail/index.tsx', import.meta.url),
+  ).text()
 }
 
 async function pageSlice(from: string, to: string): Promise<string> {

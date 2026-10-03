@@ -54,7 +54,9 @@ describe('visionResultPageUrl', () => {
 
   test('结果页已在 app.config.ts 注册（没注册时 navigateTo 只在运行时失败）', async () => {
     const config = await Bun.file(new URL('../src/app.config.ts', import.meta.url)).text()
-    // 配置里写的是不带前导斜杠的页面路径（`'pages/vision-result/index'`）
-    expect(config).toContain(`'${VISION_RESULT_PAGE.slice(1)}'`)
+    // 分包后分两段写：`root: 'pkg-vision'` + 相对 root 的页面路径（不带前导斜杠）
+    const [root, ...rest] = VISION_RESULT_PAGE.slice(1).split('/')
+    const block = config.match(new RegExp(`root: '${root}'[\\s\\S]*?pages: \\[([\\s\\S]*?)\\]`))
+    expect(block?.[1]).toContain(`'${rest.join('/')}'`)
   })
 })

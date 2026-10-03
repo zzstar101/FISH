@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { sendFailureText, sendKeyFor, shouldDropSendKey } from '../src/pages/send-listing/view'
+import {
+  sendFailureText,
+  sendKeyFor,
+  shouldDropSendKey,
+} from '../src/pkg-trade/pages/send-listing/view'
 
 /**
  * #359 3a 审查回合：这两件事决定「幂等键重试不重复落库；同键不同商品 → 409」这条验收

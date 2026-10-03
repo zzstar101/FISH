@@ -245,7 +245,7 @@ export default function Home() {
   const listState = homeListState({ loadedFor, category, failed, itemCount: visibleCount })
 
   const goSearch = () => {
-    void Taro.navigateTo({ url: '/pages/search/index' })
+    void Taro.navigateTo({ url: '/pkg-browse/pages/search/index' })
   }
 
   /** 识图（相机热区）的上传在途：防连点（原生取图面板是模态的，上传腿不是），与搜索页同一个口径 */

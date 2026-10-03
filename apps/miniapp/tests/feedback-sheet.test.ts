@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { SHEET_BODY, sheetVariant } from '../src/pages/feedback/sheet'
+import { SHEET_BODY, sheetVariant } from '../src/pkg-legal/pages/feedback/sheet'
 
 /**
  * 反馈结果弹层的档位与正文。

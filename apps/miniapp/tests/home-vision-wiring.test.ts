@@ -79,7 +79,7 @@ describe('相机热区：先掐冒泡，再启动识图', () => {
     expect(source).toContain('<Image className="home__search-cam"')
     // 文字区那条腿没被顺手改掉
     const goSearch = await slice('const goSearch = ', 'const visionSearch = ')
-    expect(goSearch).toContain("Taro.navigateTo({ url: '/pages/search/index' })")
+    expect(goSearch).toContain("Taro.navigateTo({ url: '/pkg-browse/pages/search/index' })")
   })
 
   test('onCameraTap 用的结构化类型（避开 any），且不吞掉 stopPropagation', async () => {

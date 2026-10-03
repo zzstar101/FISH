@@ -19,7 +19,7 @@ import { describe, expect, test } from 'bun:test'
  */
 
 const page = (): Promise<string> =>
-  Bun.file(new URL('../src/pages/mylist/index.tsx', import.meta.url)).text()
+  Bun.file(new URL('../src/pkg-browse/pages/mylist/index.tsx', import.meta.url)).text()
 
 /** 取两个标记之间的源码片段（按出现顺序），找不到就抛 —— 让断言失败指向「结构变了」 */
 function sliceBetween(code: string, startMarker: string, endMarker: string): string {

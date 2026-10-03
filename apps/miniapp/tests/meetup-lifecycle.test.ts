@@ -10,7 +10,7 @@ import {
   type SubmitLock,
   sequenceSuperseded,
   showSync,
-} from '../src/pages/transaction-meetup/view'
+} from '../src/pkg-trade/pages/transaction-meetup/view'
 
 /**
  * transaction-meetup 页的时序回归（#147 P2 与 #170 D 的判据层）。

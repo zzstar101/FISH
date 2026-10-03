@@ -125,15 +125,15 @@ export default function OrderList({
       void Taro.showToast({ title: '这笔交易的会话已失效', icon: 'none' })
       return
     }
-    void Taro.navigateTo({ url: `/pages/conversation/index?id=${item.conversationId}` })
+    void Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${item.conversationId}` })
   }
 
   const openMeetup = (item: OrderCardView) => {
-    void Taro.navigateTo({ url: `/pages/transaction-meetup/index?id=${item.id}` })
+    void Taro.navigateTo({ url: `/pkg-trade/pages/transaction-meetup/index?id=${item.id}` })
   }
 
   const openListing = (item: OrderCardView) => {
-    void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.listingId}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.listingId}` })
   }
 
   /** 评价：契约里没有评价 / 评分域（`packages/contracts/src/` 只有 comments），纯占位 */

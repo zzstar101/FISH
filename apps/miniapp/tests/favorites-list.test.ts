@@ -11,7 +11,7 @@ import {
   itemsOf,
   loadDemoFavorites,
   toFavoriteItems,
-} from '../src/pages/favorites/list'
+} from '../src/pkg-browse/pages/favorites/list'
 
 /**
  * 「我的收藏」的纯逻辑（分段 / 空态文案 / 演示条数）。

@@ -88,7 +88,9 @@ function HitRow({ view }: { view: WishHit }) {
   return (
     <View
       className="wishhit"
-      onClick={() => void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })}
+      onClick={() =>
+        void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${listing.id}` })
+      }
     >
       <View className="wishhit__thumb">
         <Image className="wishhit__img" src={listing.coverUrl} mode="aspectFill" />
@@ -191,7 +193,7 @@ export default function Wish() {
 
   const goSearch = (keyword: string) => {
     // 搜索页读的是 `q`（`pages/search/index.tsx`），不是稿里的 `kw`
-    void Taro.navigateTo({ url: `/pages/search/index?q=${encodeURIComponent(keyword)}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/search/index?q=${encodeURIComponent(keyword)}` })
   }
 
   const closeWish = async (wish: MockWish) => {
@@ -327,7 +329,9 @@ export default function Wish() {
               {tab === 'mine' ? (
                 <View
                   className="wish__new"
-                  onClick={() => void Taro.navigateTo({ url: '/pages/wish-publish/index' })}
+                  onClick={() =>
+                    void Taro.navigateTo({ url: '/pkg-social/pages/wish-publish/index' })
+                  }
                 >
                   {/*
                 加号用 `plusLine`（本地补画的那枚线稿加号），不要用 `plus` ——
@@ -450,7 +454,9 @@ export default function Wish() {
                                 return
                               }
                               if (hitLink !== 'linked') return
-                              void Taro.navigateTo({ url: `/pages/match/index?wishId=${wish.id}` })
+                              void Taro.navigateTo({
+                                url: `/pkg-browse/pages/match/index?wishId=${wish.id}`,
+                              })
                             }}
                           >
                             {`${hitCount} 件闲置命中${hitLink === 'linked' ? ' ›' : ''}`}

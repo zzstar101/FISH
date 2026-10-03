@@ -6,7 +6,7 @@ import {
   isTaskCurrent,
   ownerChanged,
   type VerifyTask,
-} from '../src/pages/verify/view'
+} from '../src/pkg-auth/pages/verify/view'
 
 /**
  * verify 页账号作用域判据的回归（#170 判据 A/B/C）。
@@ -251,7 +251,9 @@ describe('verify 页 owner/epoch 交错', () => {
 
 /** 取 `index.tsx` 里 `from` 到其后第一个 `to` 之间的源码 */
 async function pageSlice(from: string, to: string): Promise<string> {
-  const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+  const code = await Bun.file(
+    new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+  ).text()
   const start = code.indexOf(from)
   expect(start).toBeGreaterThanOrEqual(0)
   const end = code.indexOf(to, start)
@@ -289,12 +291,16 @@ describe('verify 页接线 —— 判据真的接在页面上', () => {
   })
 
   test('卸载 effect 让代次前进，作废在途的发码 / 验码', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     expect(code).toMatch(/return \(\) => \{\s*epochRef\.current \+= 1\s*\}/)
   })
 
   test('状态加载走 canLoadStatus 门禁：unknown 不发，且不再在 effect 里无条件清 status', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     expect(code).toContain("if (!canLoadStatus(authStatus === 'authed', userId)) return")
     // 修复前是 `if (authStatus !== 'authed' || !userId) return` + effect 顶部 `setStatus(null)`
     expect(code).not.toMatch(/authStatus !== 'authed' \|\| !userId/)
@@ -302,7 +308,9 @@ describe('verify 页接线 —— 判据真的接在页面上', () => {
   })
 
   test('发码 / 验码的成功与失败都在落地前确认任务仍有效', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     // 成功分支：发码推进阶段、验码写 status，各自前面都要有守卫
     expect(code).toMatch(/if \(!taskAlive\(task\)\) return\s*\n\s*setStage\('code'\)/)
     expect(code).toMatch(/if \(!taskAlive\(task\)\) return\s*\n\s*setStatus\(next\)/)
@@ -312,7 +320,9 @@ describe('verify 页接线 —— 判据真的接在页面上', () => {
   })
 
   test('finally 只解自己那一轮的锁：旧的 finally 不许无条件解锁', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     expect(code).not.toMatch(/\} finally \{\s*(sendingRef|submittingRef)\.current = false/)
     expect(code).toMatch(
       /\} finally \{\s*(?:\/\/[^\n]*\n\s*)*if \(taskAlive\(task\)\) \{\s*sendingRef\.current = false/,
@@ -323,7 +333,9 @@ describe('verify 页接线 —— 判据真的接在页面上', () => {
   })
 
   test('ALREADY_VERIFIED 收敛的第二个在途窗口也要确认任务', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     expect(code.match(/&& taskAlive\(task\)/g) ?? []).toHaveLength(2)
   })
 })
