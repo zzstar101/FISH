@@ -47,7 +47,7 @@
   height: 100%;
   border: 0;
   background: transparent;
-  font-size: 28px;
+  font-size: var(--fs-body);
   color: var(--fg);
   @include ellipsis;
 }
@@ -208,7 +208,7 @@
 }
 
 .search__hist-empty {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   color: var(--muted);
 }
 

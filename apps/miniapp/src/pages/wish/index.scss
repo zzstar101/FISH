@@ -47,7 +47,7 @@
   height: 68px;
   padding: 0 24px;
   color: var(--muted);
-  font-size: 28px;
+  font-size: var(--fs-body);
   transition: color 0.18s;
 
   &::after {
@@ -117,7 +117,7 @@
    flex 会把它压到最小内容宽度 —— 中文会退化成「一列一个字」竖排（实测踩到） */
 .hot__title {
   flex: 0 0 auto;
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -215,7 +215,7 @@
   margin-top: 8px;
   padding: 14px 0 10px;
   border-top: 2px solid var(--border);
-  font-size: 23px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--brand);
 
@@ -244,7 +244,7 @@
 
 .wish__sec-title {
   flex: 0 0 auto;
-  font-size: 36px;
+  font-size: var(--fs-h3);
   font-weight: 600;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -271,7 +271,7 @@
   border-radius: var(--r-pill);
   background: var(--ink);
   color: #fff;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   font-weight: 500;
 
   &:active {
@@ -427,7 +427,7 @@
   align-items: center;
   gap: 12px;
   margin-top: 6px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 
@@ -466,7 +466,7 @@
 .mw__hits {
   flex: 0 0 auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 
   &.is-hit {
@@ -535,7 +535,7 @@
 
 .wishhit__title {
   display: block;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   @include ellipsis;
 }
@@ -619,7 +619,7 @@
 
 .mw__act-off {
   flex: 0 0 auto;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--danger);
 
@@ -659,7 +659,7 @@
   align-items: center;
   gap: 12px;
   margin-top: 6px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted);
 }
 
@@ -679,7 +679,7 @@
   border-radius: var(--r-pill);
   background: var(--lav-weak);
   color: var(--lav);
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
 }
 
@@ -705,7 +705,7 @@
 .pool__want {
   flex: 0 0 auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -753,13 +753,13 @@
 }
 
 .wishempty__title {
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
 .wishempty__text {
   margin-top: 12px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.65;
   color: var(--muted);
 }

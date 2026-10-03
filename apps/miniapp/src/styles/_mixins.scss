@@ -45,7 +45,7 @@
   border-radius: 28px;
   background: var(--grad-brand);
   color: #fff;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 }
@@ -61,7 +61,7 @@
   border: 2px solid var(--border);
   background: var(--surface);
   color: var(--fg);
-  font-size: 30px;
+  font-size: var(--fs-title);
 }
 
 /* 玻璃层：必须自带不透明兜底底，Android 不支持 backdrop-filter 时不至于透明穿帮 */

@@ -115,7 +115,7 @@
 }
 
 .cmt__seg-n {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 400;
   opacity: 0.9;
 }
@@ -158,7 +158,7 @@
 
 .cmt__demo-tx {
   flex: 1;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   line-height: 1.7;
   color: var(--muted-2);
 }
@@ -228,7 +228,7 @@
 }
 
 .cmt__title {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   line-height: 1.35;
   color: var(--fg);
@@ -248,7 +248,7 @@
 }
 
 .cmt__amt {
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 700;
   line-height: 1;
   color: var(--price);
@@ -274,7 +274,7 @@
   border-radius: var(--r-pill);
   border: 2px solid var(--border);
   background: var(--surface);
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--fg);
   white-space: nowrap;
@@ -308,7 +308,7 @@
 }
 
 .cmt__ctext {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--fg);
   @include clamp(2);
@@ -319,7 +319,7 @@
   align-items: center;
   gap: 16px;
   margin-top: 12px;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -369,7 +369,7 @@
 .cmt__to {
   flex: 0 1 auto;
   min-width: 0;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
   @include ellipsis;
 }
@@ -423,7 +423,7 @@
 
 .cmt__tail-tx {
   flex: 0 0 auto;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
   white-space: nowrap;
 }

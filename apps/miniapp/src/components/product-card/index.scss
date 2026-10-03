@@ -41,7 +41,7 @@
   background: rgba(233, 247, 255, 0.92);
   color: var(--price);
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   line-height: 42px;
 }
@@ -76,7 +76,7 @@
   background: rgba(25, 230, 255, 0.34);
   color: var(--fg);
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 700;
   line-height: 1.5;
 }
@@ -111,7 +111,7 @@
 .pcard__want {
   color: var(--muted);
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   white-space: nowrap;
 }
 

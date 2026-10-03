@@ -108,14 +108,14 @@
 }
 
 .scanqr__noCam-title {
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--surface);
 }
 
 .scanqr__noCam-text {
   margin-top: 14px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--on-dark);
 }
@@ -253,14 +253,14 @@
 }
 
 .scanqr__hint-title {
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--surface);
 }
 
 .scanqr__hint-text {
   margin-top: 14px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--on-dark);
 }
@@ -289,7 +289,7 @@
 .scanqr__sheet-title {
   display: block;
   margin-top: 24px;
-  font-size: 36px;
+  font-size: var(--fs-h3);
   font-weight: 600;
   text-align: center;
   color: var(--fg);
@@ -303,7 +303,7 @@
 .scanqr__sheet-sub {
   display: block;
   margin-top: 14px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   text-align: center;
   color: var(--muted-2);
@@ -403,7 +403,7 @@
 .scanqr__fd {
   display: block;
   margin-top: 8px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted-2);
 }

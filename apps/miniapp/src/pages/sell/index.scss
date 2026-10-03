@@ -50,7 +50,7 @@
 }
 
 .sell__title {
-  font-size: 54px;
+  font-size: var(--fs-h1);
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1.14;
@@ -90,14 +90,14 @@
 
 .sell__alert-title {
   display: block;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
 .sell__alert-desc {
   display: block;
   margin-top: 8px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
 }
 
@@ -245,19 +245,19 @@
 }
 
 .sell__label {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--muted-2);
 }
 
 .sell__fhint {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
 /* 必填但还没填：用危险色提示（填了之后转回灰） */
 .sell__freq {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 
   &.is-req {
@@ -271,7 +271,7 @@
   border-radius: 24px;
   background: var(--ice);
   border: 2px solid transparent;
-  font-size: 28px;
+  font-size: var(--fs-body);
   color: var(--fg);
 
   &::placeholder {
@@ -311,7 +311,7 @@
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
   color: var(--brand-deep-2);
-  font-size: 23px;
+  font-size: var(--fs-xs);
   font-weight: 600;
 
   /* 生成中：降透明度，避免连点 */
@@ -356,7 +356,7 @@
 .sell__err-tx {
   flex: 1;
   min-width: 0;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.65;
 }
 
@@ -399,7 +399,7 @@
 }
 
 .sell__pnote {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   line-height: 1.6;
   color: var(--muted-2);
 }
@@ -458,7 +458,7 @@
 
 .sell__swlab {
   display: block;
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--fg);
 }
@@ -466,7 +466,7 @@
 .sell__swdesc {
   display: block;
   margin-top: 6px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.5;
   color: var(--muted-2);
 }
@@ -566,7 +566,7 @@
 
 .sell__badge-title {
   display: block;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   line-height: 1.4;
   color: var(--fg);
@@ -576,7 +576,7 @@
 .sell__badge-price {
   display: block;
   margin-top: 10px;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 700;
   color: var(--price);
 }
@@ -621,7 +621,7 @@
   background: var(--surface);
   border: 2px solid var(--border);
   color: var(--fg);
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 
@@ -631,7 +631,7 @@
 }
 
 .sell__submit-text {
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: #fff;
 }
@@ -692,7 +692,7 @@
 }
 
 .sell__sheet-stub-tx {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--warn-ink);
 }
@@ -700,7 +700,7 @@
 .sell__sheet-sub {
   display: block;
   margin-top: 12px;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -716,7 +716,7 @@
 .sell__sheet-fail-detail {
   display: block;
   margin-top: 10px;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -790,7 +790,7 @@
 .sell__origin-t {
   display: block;
   margin-top: 10px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
   color: var(--muted-2);
   @include clamp(3);
@@ -848,7 +848,7 @@
   border-radius: 44px;
   background: var(--brand-deep);
   color: var(--surface);
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
 }
 

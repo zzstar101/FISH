@@ -62,7 +62,7 @@
   align-items: center;
   gap: 12px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.1em;
   color: var(--brand-deep);
   text-transform: uppercase;
@@ -85,7 +85,7 @@
 .rpu__sub {
   display: block;
   margin-top: 16px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
   color: var(--muted-2);
 }
@@ -112,7 +112,7 @@
 }
 
 .rpu__card-h2 {
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--fg);
   flex: 0 0 auto;
@@ -128,14 +128,14 @@
 .rpu__opt {
   margin-left: auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
 .rpu__card-sub {
   display: block;
   margin-top: 10px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.65;
   color: var(--muted);
 }
@@ -266,7 +266,7 @@
 /* 行内错误（选中类型后消失） */
 .rpu__err {
   margin-top: 16px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--danger-ink);
 }
@@ -314,7 +314,7 @@
 .rpu__count {
   margin-left: auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -334,7 +334,7 @@
 
 .rpu__note-tx {
   flex: 1 1 auto;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.7;
   color: var(--muted-2);
 }
@@ -348,7 +348,7 @@
   border-radius: 999px;
   background: var(--grad-brand);
   color: var(--surface);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
   transition:
@@ -371,7 +371,7 @@
   margin-top: 24px;
   text-align: center;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -409,7 +409,7 @@
 .rpu__hero-s {
   display: block;
   margin-top: 12px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.75;
   color: var(--muted-2);
 }
@@ -475,7 +475,7 @@
 .rpu__banner-s {
   display: block;
   margin-top: 8px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.7;
 }
 
@@ -510,7 +510,7 @@
 .rpu__kv-v {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
   color: var(--fg);
   word-break: break-all;
@@ -523,7 +523,7 @@
 .rpu__rtag {
   display: inline-flex;
   align-items: center;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--brand-deep);
   background: var(--accent-weak);
@@ -549,7 +549,7 @@
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
   color: var(--brand-deep);
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
 
   &:active {
@@ -573,7 +573,7 @@
   border-radius: 999px;
   background: var(--grad-brand);
   color: var(--surface);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 

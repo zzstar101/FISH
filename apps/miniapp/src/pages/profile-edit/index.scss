@@ -147,7 +147,7 @@
 }
 
 .pe__label {
-  font-size: 28px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   color: var(--muted-2);
 }
@@ -172,12 +172,12 @@
 .pe__val {
   flex: 1;
   min-width: 0;
-  font-size: 30px;
+  font-size: var(--fs-title);
   color: var(--fg);
 }
 
 .pe__ph {
-  font-size: 30px;
+  font-size: var(--fs-title);
   color: var(--muted);
 }
 

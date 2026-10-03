@@ -80,7 +80,7 @@
 /* 计数：等宽字体、比标签弱一档（与 `.ml__seg-n` 同款） */
 .orders__pill-cnt {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 400;
   opacity: 0.9;
 }
@@ -104,7 +104,7 @@
 .orders__partial {
   display: block;
   padding: 24px 40px 0;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -121,7 +121,7 @@
 }
 
 .orders__sec-title {
-  font-size: 36px;
+  font-size: var(--fs-h3);
   font-weight: 600;
   letter-spacing: -0.005em;
   color: var(--fg);
@@ -132,7 +132,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -193,7 +193,7 @@
 }
 
 .orders__av-tx {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--brand-deep-2);
 }
@@ -292,12 +292,12 @@
 }
 
 .orders__olabel {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
 .orders__amount {
-  font-size: 42px;
+  font-size: var(--fs-h2);
   font-weight: 700;
   line-height: 1;
   /* 卡片价格标红（Owner 2026-10-01）：与首页商品卡（product-card）同用 --danger，
@@ -321,7 +321,7 @@
 
 .orders__note {
   margin-right: auto;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -406,14 +406,14 @@
 
 .orders__empty-title {
   margin-top: 32px;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--fg);
 }
 
 .orders__empty-text {
   margin-top: 12px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
   color: var(--muted-2);
 }
@@ -428,7 +428,7 @@
   border-radius: 48px;
   background: var(--grad-brand);
   color: #fff;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 }
@@ -450,7 +450,7 @@
 
 .orders__end-text {
   flex: 0 0 auto;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
   white-space: nowrap;
 }
@@ -530,7 +530,7 @@
   justify-content: center;
   gap: 16px;
   margin-top: 36px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted-2);
 }
 
