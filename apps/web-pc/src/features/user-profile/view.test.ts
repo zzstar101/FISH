@@ -22,7 +22,7 @@ describe('isUserNotFound', () => {
 describe('profileStats', () => {
   /**
    * 契约的公开 DTO 有九个字段（含 #179 的 `signature` 与 #359 第五点的 `presence`），且**没有**好评率 / 关注数 ——
-   * 仓库没有 reviews 表、关注关系未拆 Domain（见 `users/schema.ts` 文件头）。
+   * 仓库没有 reviews 表；关注数在 follows Domain（#188），按视角单独提供、不进匿名公开读模型。
    * 这里锁住「页面上只出这三个统计」，任何编造指标加进来都会让这条断言失败。
    */
   test('exposes exactly the three contract-backed stats', () => {
