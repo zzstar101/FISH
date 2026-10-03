@@ -20,7 +20,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
-import { MOCK_FALLBACK_ENABLED } from '@/features/fetchers'
+// 只为一个构建期常量就静态 import `@/features/fetchers`（718 行 / 32KB，且它静态
+// import 了 `@/mock/account`）会把整张取数 barrel 拖进底栏——而底栏在**每个** Tab 页
+// 都会渲染，属于冷启动必经路径。常量真源本来就在 `features/load-failure.ts`。
+import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'

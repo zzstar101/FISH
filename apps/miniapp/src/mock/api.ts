@@ -10,7 +10,16 @@
 
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { NotificationDto } from '@fish/contracts/notifications/schema'
-import type { WishCategory } from '@fish/contracts/wishes/schema'
+// 纯展示文案（分类/成色）已挪到 `@/lib/listing-labels`，金额格式化已挪到 `@/lib/money`：
+// 真实页面不该为了几张映射表 / 一个纯函数静态 import 整包 fixture。这里 re-export，
+// 既有 `@/mock/api` 的 import 路径不受影响。
+import {
+  CATEGORY_LABEL,
+  categoryLabel,
+  conditionLabel,
+  HOME_CATEGORIES,
+  WISH_CATEGORIES,
+} from '@/lib/listing-labels'
 import { formatAmount, formatYuan } from '@/lib/money'
 import {
   APP_BUILD,
@@ -112,53 +121,23 @@ function normalize(text: string): string {
   return text.toLowerCase().trim()
 }
 
-const CATEGORY_LABEL: Record<ListingCategory, string> = {
-  DIGITAL: '数码电子',
-  BOOKS: '教材书籍',
-  BEAUTY: '美妆洗护',
-  DAILY: '宿舍好物',
-  SPORTS: '运动户外',
-  APPAREL: '服饰鞋包',
-  TRANSPORT: '代步出行',
-  OTHER: '其他闲置',
-}
-
-/** 设计稿顶部横滑分类（第一项是「推荐」= 全部） */
-export const HOME_CATEGORIES: { key: ListingCategory | 'ALL'; label: string }[] = [
-  { key: 'ALL', label: '推荐' },
-  { key: 'BOOKS', label: '教材书籍' },
-  { key: 'DIGITAL', label: '数码电子' },
-  { key: 'TRANSPORT', label: '代步出行' },
-  { key: 'DAILY', label: '宿舍好物' },
-  { key: 'SPORTS', label: '运动户外' },
-  { key: 'APPAREL', label: '服饰鞋包' },
-  { key: 'BEAUTY', label: '美妆洗护' },
-  { key: 'OTHER', label: '其他闲置' },
-]
-
-export function categoryLabel(category: ListingCategory): string {
-  return CATEGORY_LABEL[category]
-}
-
-export function conditionLabel(condition: MockListing['condition']): string {
-  switch (condition) {
-    case 'NEW':
-      return '全新'
-    case 'LIKE_NEW':
-      return '九成新'
-    case 'GOOD':
-      return '八成新'
-    default:
-      return '七成新'
-  }
-}
-
 /**
+ * 分类 / 成色文案：实现在 `@/lib/listing-labels`（纯常量与纯函数，零 fixture 依赖），
+ * 这里 re-export 保持既有 import 路径。文件内部仍直接用 `CATEGORY_LABEL`（见下方检索）。
+ *
  * 金额格式化：实现已挪到 `@/lib/money`（真实页面不该为了一个纯函数静态 import
  * 整包 fixture，见该文件说明）。这里 re-export，既有 `@/mock/api` 的 import 路径
  * 与文件内部的调用都不受影响。
  */
-export { formatAmount, formatYuan }
+export {
+  CATEGORY_LABEL,
+  categoryLabel,
+  conditionLabel,
+  formatAmount,
+  formatYuan,
+  HOME_CATEGORIES,
+  WISH_CATEGORIES,
+}
 
 /* ------------------------------------------------------------------ 商品 */
 
@@ -308,17 +287,6 @@ export function suggestTerms(keyword: string): string[] {
  * 类型取契约的 `WishCategory` 而不是 `ListingCategory`：两者当前逐值相同，
  * 但语义上「许愿的分类」以 `wishes/schema.ts` 为准（那边注释也说以后会合并成共享枚举）。
  */
-export const WISH_CATEGORIES: WishCategory[] = [
-  'DIGITAL',
-  'BOOKS',
-  'BEAUTY',
-  'DAILY',
-  'SPORTS',
-  'APPAREL',
-  'TRANSPORT',
-  'OTHER',
-]
-
 export function myWishes(): MockWish[] {
   return WISHES.filter((wish) => wish.userId === ME.id)
 }

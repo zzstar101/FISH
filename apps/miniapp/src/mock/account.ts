@@ -497,5 +497,6 @@ export const THEME_OPTIONS: { key: MockSettings['theme']; label: string; desc: s
   { key: 'dark', label: '暗色', desc: '始终使用深色主题，夜间浏览更省电' },
 ]
 
-export const APP_VERSION = '1.4.0'
-export const APP_BUILD = '20260916'
+// 版本元信息已挪到 `@/lib/app-meta`（真实常量，不是演示数据；「关于」页与设置页
+// 不该为了两个字符串静态 import 整包 fixture）。这里 re-export 保持既有路径。
+export { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
