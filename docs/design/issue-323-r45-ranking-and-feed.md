@@ -963,12 +963,18 @@ mutation 得到的 200 反证）；「降级透传路径的坏内层游标 → 4
 
 ### 12.4 第三轮审查（修复后的对抗性审查，AGENTS.md §7）
 
-按 §7 要求，在「请求行 + 快照原子写入」（N10）落地并推送后又开了一个**全新子代理**做对抗性审查
-（只给改动范围与 5 条必须满足的需求，不给思路、可疑点、既有结论；全程只读，worktree
-`git status --porcelain` 为空，自建 scratch 库 `fish_adv_review` 用完即 `DROP`，所有变异都在 `/tmp`
-副本里做）。**结论：无 P0 / P1 / P2**；2 条 P2、1 条 P3、3 条 info。
+按 §7 要求，在「请求行 + 快照原子写入」（N10）落地并推送后，**又开了两个全新子代理**各自独立做
+对抗性审查（都只给改动范围与 5 条必须满足的需求，不给思路、可疑点、既有结论；全程只读，各自
+worktree `git status --porcelain` 为空，各自自建 scratch 库 `fish_adv_review` / `fish_adv_407` 用完即
+`DROP`，所有变异都在 `/tmp` 副本里做）。**两份报告的结论都是：无 P0 / P1 / P2。**
 
-它把「冲突整笔回滚」这条假设**在真库上实测**了 9 项（`Bun.sql` 的 `SQL.begin` + 本模块的
+- 第一份（审 `88cdf901`）：2 条 P2、1 条 P3、3 条 info —— 下表第 1–5 行。
+- 第二份（同一提交独立复现，审查期间 HEAD 前进到 `45738f36`）：1 条 low + 4 条 info —— 下表第 6–9 行。
+  它独立复现了第一份的「无 primary source 的候选被发出却写不出快照行」，并在 `bd07e3bf` 落地后
+  **单独实测确认修复有效**且被新用例钉住（撤掉过滤 → 该用例红）；另用 11 项变异逐条验证 5 条需求，
+  并做真库并发实验（40 路混合成功/失败、同 requestId 20 路、同 session 12 路）0 违规。
+
+第一份把「冲突整笔回滚」这条假设**在真库上实测**了 9 项（`Bun.sql` 的 `SQL.begin` + 本模块的
 `db.transaction`）：事务内 throw → 请求行 0；重复 `position` → unique violation 且请求行 0 / 快照行 0；
 失败事务不污染连接池；未提交时本事务可见 1、另一条连接可见 0、提交后可见 1；`max:2` 下 12 笔并发
 冲突事务全部 rolled-back 且不留行；真 `store.createRequestWithItems` + 重复 position / 不存在的
@@ -984,6 +990,10 @@ listingId（FK 违例）都 reject 且请求行 0。它还**证伪性验证**了
 | 3 | `position` 的"全局位次"在跳行处被压缩（`service.ts` 旧 `position: rows.length`），与 schema 注释「0 起、跨页连续、与事件 position 同口径」不符 | **已随 #2 消解**：第一屏不再有被跳过的候选占位问题；快照行本身位置仍连续（`position = rows.length` 天然致密） |
 | 4 | 快照行 `listing_id` 的 `ON DELETE CASCADE` 意味着任何 listings 硬删都会裁剪已发出的快照行 ⇒ 归因真值消失 | **info，不改**：生产 listings 无硬删路径（只有 status）；已作为将来 fail-closed 的注意事项记录 |
 | 5 | 文档/注释引用的 R6 指标 `empty_ranked_feed_requests` 在**本 PR 代码里不存在**（属 #425） | **info，不改**：本 PR 只负责让 ranked 行不再因「写失败」产生孤儿；指标实现归 #425 |
+| 6 | `nextCursor` 守卫 `servedIds.length < rows.length`（`service.ts:361-368`）**无测试钉住**：把它改成恒 `true` 后目标测试文件仍全绿；失效形态只是让客户端多翻一页空的 | **已补测试**（low，但确实可执行）：新增「首页就把快照取完时不给游标」，候选池小于 `limit` 时第一屏就是整份快照 ⇒ 断言 `nextCursor === null`；把守卫改成恒 `true` → 该用例红（实测 0 pass / 1 fail） |
+| 7 | 降级路径的归因是**客户端断言**：`service.ts:552-554` 对 `rec-v1-none` 请求行照收客户端上报的 `position`/`source`（实测谎报 `position=999` / `source='semantic'` 被原样落库）；本次把「快照写失败」从 500 改成走这条路 ⇒ 失败时归因保真度由服务端真值降为客户端断言 | **info，口径保留**：这是 R1 既有口径（§8 表格第 2 行），需求 1 仍满足（能查到归因行、不被静默拒收）；只记录「降级页的归因是断言而非真值」 |
+| 8 | 非原子端口 `createRequest`（`store.ts:167`）在原子写落地后仍公开且不限制 `strategyVersion`，当前唯一调用点是 `service.ts:224`（恒 `rec-v1-none`） | **info，不改**：降级路径必须能单独落请求行；将来若有调用方拿它写 ranked 版本行才会绕过原子不变式 |
+| 9 | 「先 `slice` 再 `filter`」会让不可归因候选白占首页一个名额（`limit=3` 且首位候选无 `recallSources` → 只发 2 张） | **info，不改**：出厂 recall 不会产出这种候选（`recall/merge.ts:133` 恒写 `recallSources:[channel.channel]`），实际不可见；改成「先 filter 再 slice」会改变候选选择语义，收益为零 |
 
 ### 12.5 本轮新增/变更的测试
 
@@ -992,3 +1002,4 @@ listingId（FK 违例）都 reject 且请求行 0。它还**证伪性验证**了
 | 快照写不进去 → 整笔请求降级（不返回查不到快照的 ranked requestId） | `apps/api/src/app.recommendation.test.ts` | 换回旧 `service.ts`+`store.ts` → 红（实测 37 pass / 1 fail） |
 | 候选没有归因来源时宁可不发 | 同上 | 撤掉 `pageIds` 过滤 → 红（实测 `listCardsByIds` 收到 2 个 id） |
 | 快照冲突时整笔事务回滚：不留下没有快照的请求行 | `apps/api/src/modules/recommendation/store.test.ts` | `db.transaction` → 两条独立 insert → 红（残留 `{strategyVersion:'rank-v1'}` 请求行） |
+| 首页就把快照取完时不给游标 | `apps/api/src/app.recommendation.test.ts` | `nextCursor` 守卫 `servedIds.length < rows.length` 改成恒 `true` → 红（实测 0 pass / 1 fail） |

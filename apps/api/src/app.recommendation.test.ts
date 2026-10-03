@@ -706,6 +706,77 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
     expect(requestedPages).toEqual([[attributableId]])
   })
 
+  test('首页就把快照取完时不给游标：不会让客户端翻出一页空的', async () => {
+    // 快照行的 `listing_id` 有外键 ⇒ 候选必须是真实存在的商品（本用例要真写快照）。
+    const seller = await registerUser('69')
+    const publicIds = [
+      await createListing(seller.id, '游标守卫商品 1'),
+      await createListing(seller.id, '游标守卫商品 2'),
+    ]
+    const listingIds = publicIds.map((id) => decodePublicId(PUBLIC_ID_PREFIX.listing, id))
+    const candidate = (listingId: string) => ({
+      listingId,
+      sellerId: newId(),
+      category: 'OTHER' as const,
+      recallSources: ['fresh'] as RecallChannel[],
+      semanticScore: null,
+      wishScore: null,
+      popularity: null,
+      userCategoryAffinity: null,
+      freshness: 1,
+      createdAt: new Date(),
+      alreadySeenCount: null,
+      sellerExposure: 0,
+    })
+    const service = createRecommendationService({
+      store: createSqlRecommendationStore(db),
+      listings: {
+        listFeed: async () => ({ items: [], nextCursor: null }),
+        listCardsByIds: async (_viewerId, ids) =>
+          new Map(
+            ids.map((id) => [
+              id,
+              {
+                id: encodePublicId(PUBLIC_ID_PREFIX.listing, id),
+                title: '游标守卫商品',
+                priceCents: 100,
+                category: 'OTHER' as const,
+                condition: 'GOOD' as const,
+                status: 'ACTIVE' as const,
+                urgent: false,
+                negotiable: false,
+                free: false,
+                coverUrl: null,
+                moderationStatus: null,
+                createdAt: new Date().toISOString(),
+              },
+            ]),
+          ),
+      },
+      recall: {
+        recall: async () => ({
+          strategyVersion: 'recall-v1',
+          candidates: listingIds.map(candidate),
+          channels: [],
+          interest: { session: false, longTerm: false, combined: false },
+          mergeDegradedReason: null,
+        }),
+      },
+      interest: { enqueue: async () => {} },
+    })
+
+    const page = await service.startFeed({
+      viewerId: null,
+      anonymousSessionId: newId(),
+      limit: 20,
+    })
+
+    // 候选池比 limit 小 ⇒ 第一屏（`servedIds`）就已经是整份快照：此时再给 `offset === rows.length`
+    // 的游标，客户端翻第二页只会拿到空 `items`，而它指向的快照行并不存在。
+    expect(page.response.items).toHaveLength(listingIds.length)
+    expect(page.response.nextCursor).toBeNull()
+  })
+
   test('第一页写快照、第二页按快照切片：position 连续、不重不漏、requestId 复用', async () => {
     const seller = await registerUser('61')
     for (let index = 0; index < 5; index += 1) {
