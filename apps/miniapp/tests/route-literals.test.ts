@@ -11,8 +11,10 @@ import path from 'node:path'
  * 这条测试把「代码里出现的每一个页面路由」与「`app.config.ts` 声明的页面清单」
  * 对起来，另外校验声明过的页面在磁盘上真有对应目录。
  *
- * 动态拼接的路由（`` `/pages/${name}/index` ``）不在本测试覆盖范围内 —— 本仓当前
- * 没有这种写法（见本次改动报告）。
+ * 动态拼接的路由（例：`` `/pkg-trade/pages/${page}/index` ``）单靠上面那条正则是
+ * 抓不到的（模板串里有 `${}`）。而分包化最危险的回归形状恰恰在这里：拼接时漏掉
+ * 分包 root 会**静默**跳转失败，lint / typecheck / 其它测试全绿。所以动态模板由
+ * 下面 `DYNAMIC_ROUTE_TEMPLATES` 白名单钉住（逐字比对 + 落点校验）。
  */
 
 const miniappRoot = new URL('..', import.meta.url)
@@ -160,6 +162,29 @@ function codeMask(src: string): boolean[] {
 /** `'…/pages/<page>/index'`（含模板串里写死的部分）；捕获组 2 是整个字面量内容。 */
 const ROUTE_LITERAL = /(['"`])(\/?(?:pkg-[a-z]+\/)?pages\/[a-z0-9-]+\/index)([?#][^'"`\n]*)?\1/g
 
+/** 模板串里带动态段（`${…}`）的页面路由；捕获组 1 是模板串的全部内容。 */
+const DYNAMIC_ROUTE_TEMPLATE = /`([^`]*\/pages\/\$\{[^`]*)`/g
+
+/**
+ * 动态拼接路由的**白名单**。
+ *
+ * `ROUTE_LITERAL` 抓不到 `${}`，所以这类模板串必须逐字点名，并列出它所有可能的落点：
+ * 漏掉分包 root（分包后 `/pages/<page>/index` 已不存在）不会有任何编译期报错，只会
+ * 让点击静默失效 —— 破坏性实验证明过旧正则对这类改动 0 fail。
+ *
+ * 新增或改写动态路由必须同步更新本表（否则第一条测试失败）；
+ * `candidates` 里每个落点都要在 `app.config.ts` 声明且磁盘上有 `index.tsx`。
+ */
+const DYNAMIC_ROUTE_TEMPLATES = [
+  {
+    // `page` 取自同文件的 `record.target === 'LISTING' ? 'report-listing' : 'report-user'`
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 这里要的是模板串的**内容**（逐字比对用），不是插值
+    literal: '/pkg-trade/pages/${page}/index?reportId=${encodeURIComponent(record.id)}',
+    file: 'src/pkg-trade/pages/my-reports/index.tsx',
+    candidates: ['/pkg-trade/pages/report-listing/index', '/pkg-trade/pages/report-user/index'],
+  },
+] as const
+
 /** 把字面量内容规整成带前导 `/` 的完整路由（丢掉 query / hash）。 */
 function normalizeRoute(literal: string): string {
   const route = literal.split(/[?#]/)[0] ?? literal
@@ -204,6 +229,7 @@ function collectFiles(dir: string, acc: string[] = []): string[] {
 }
 
 const scanned: { file: string; line: number; route: string }[] = []
+const dynamicTemplates: { file: string; line: number; literal: string }[] = []
 for (const dir of SCAN_DIRS) {
   for (const file of collectFiles(new URL(dir, miniappRoot).pathname)) {
     const rel = toPosix(path.relative(miniappRoot.pathname, file))
@@ -219,6 +245,15 @@ for (const dir of SCAN_DIRS) {
         file: rel,
         line: src.slice(0, at).split('\n').length,
         route: normalizeRoute(literal),
+      })
+    }
+    for (const match of src.matchAll(DYNAMIC_ROUTE_TEMPLATE)) {
+      const at = match.index ?? 0
+      if (mask[at] === false) continue
+      dynamicTemplates.push({
+        file: rel,
+        line: src.slice(0, at).split('\n').length,
+        literal: match[1] ?? '',
       })
     }
   }
@@ -238,15 +273,45 @@ describe('路由字面量守卫（分包后）', () => {
     expect(missing.map((m) => `${m.file}:${m.line} → ${m.route}`)).toEqual([])
   })
 
-  test('app.config.ts 声明的每个页面在磁盘上都有对应目录', () => {
-    const missing = declared.filter((d) => {
-      const abs = path.join(miniappRoot.pathname, d.dir)
-      try {
-        return !statSync(abs).isDirectory()
-      } catch {
-        return true
+  test('app.config.ts 声明的每个页面在磁盘上都有对应的 index.tsx 与 index.config.ts', () => {
+    const missing: string[] = []
+    for (const d of declared) {
+      for (const name of ['index.tsx', 'index.config.ts']) {
+        try {
+          if (!statSync(path.join(miniappRoot.pathname, d.dir, name)).isFile()) {
+            missing.push(`${d.route} → 缺 ${name}`)
+          }
+        } catch {
+          missing.push(`${d.route} → 缺 ${name}`)
+        }
       }
-    })
-    expect(missing.map((m) => `${m.route} → ${m.dir}`)).toEqual([])
+    }
+    expect(missing).toEqual([])
+  })
+
+  test('动态拼接路由模板与白名单逐字对应（漏掉分包 root 会在这里失败）', () => {
+    const found = dynamicTemplates.map((d) => `${d.file}|${d.literal}`).sort()
+    const allowed = DYNAMIC_ROUTE_TEMPLATES.map((d) => `${d.file}|${d.literal}`).sort()
+    expect(found).toEqual(allowed)
+  })
+
+  test('动态路由模板的每个落点都在 app.config.ts 声明且页面文件存在', () => {
+    const problems: string[] = []
+    for (const template of DYNAMIC_ROUTE_TEMPLATES) {
+      for (const route of template.candidates) {
+        if (!declaredRouteSet.has(route)) {
+          problems.push(`${template.literal} → ${route} 未在 app.config.ts 声明`)
+        }
+        const dir = path.join(miniappRoot.pathname, 'src', path.posix.dirname(route.slice(1)))
+        for (const name of ['index.tsx', 'index.config.ts']) {
+          try {
+            if (!statSync(path.join(dir, name)).isFile()) problems.push(`${route} → 缺 ${name}`)
+          } catch {
+            problems.push(`${route} → 缺 ${name}`)
+          }
+        }
+      }
+    }
+    expect(problems).toEqual([])
   })
 })

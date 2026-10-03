@@ -15,11 +15,17 @@ import { describe, expect, test } from 'bun:test'
  *
  * ## 已知豁免（遗留，非本次范围）
  *
- * `@/mock/{blocks,images,sell,users}` 还有一批**先于本任务存在**的值导入，分散在
- * 其它分支正在迁移的页面里。它们不 import `catalog`/`account`/`chat`/`discover`，
- * 因此不把「ThinkPad X280」那一片 fixture 拖进包。这里把它们逐条登记为豁免：
- * **新增**任何 `@/mock/*` 值导入（哪怕落在已豁免的文件里、换了个 specifier）都会失败。
- * 清掉这些遗留项后，直接把对应条目从 `LEGACY_MOCK_VALUE_IMPORTS` 删掉即可。
+ * `@/mock/{blocks,images,sell}` 还有一批**先于本任务存在**的值导入，分散在其它
+ * 页面里（`blocks` 占位骨架、`images` 演示图、`sell` AI 文案候选）。它们不
+ * import `catalog`/`account`/`chat`/`discover`，因此不把「ThinkPad X280」那一片
+ * fixture 拖进包。这里把它们逐条登记为豁免：**新增**任何 `@/mock/*` 值导入
+ * （哪怕落在已豁免的文件里、换了个 specifier）都会失败。清掉这些遗留项后，
+ * 直接把对应条目从 `LEGACY_LEAF_MOCK_MODULES` 删掉即可。
+ *
+ * `@/mock/users` 曾经也在这张表里 —— 详情页只要一个演示用户 id，却把整份
+ * `USERS` fixture（昵称、认证态、成交量）拖进了生产包。该常量已搬到
+ * `@/lib/demo-user-id`，豁免随之撤销：现在**任何**模块再值导入 `@/mock/users`
+ * 都会让本测试失败。
  */
 
 const SRC = new URL('../src/', import.meta.url)
@@ -32,20 +38,15 @@ const MOCK_LAYER_EXEMPT = new Set([
 
 /**
  * 遗留的 fixture **叶子**模块：mock 层之外还有一批**先于本任务存在**的值导入
- * （`blocks` 占位骨架、`images` 演示图、`sell` AI 文案候选、`users` 演示用户）。
+ * （`blocks` 占位骨架、`images` 演示图、`sell` AI 文案候选）。
  * 它们都不 import `catalog` / `account` / `chat` / `discover`，不会把 `@/mock/api`
  * 那一片拖进生产包，所以这里放行。
  *
- * 按 **specifier** 而不是文件路径豁免：另一个并行分支正在把页面搬进
- * `src/pkg-<area>/pages` 下，文件路径会变、specifier 不会 —— 按路径写会在合并时误报。
- * 除这四个之外，任何 `@/mock/*` 的值导入（无论出现在哪个文件）都会失败。
+ * 按 **specifier** 而不是文件路径豁免：页面会被搬进 `src/pkg-<area>/pages` 下，
+ * 文件路径会变、specifier 不会 —— 按路径写会在搬目录时误报。
+ * 除这三个之外，任何 `@/mock/*` 的值导入（无论出现在哪个文件）都会失败。
  */
-const LEGACY_LEAF_MOCK_MODULES = new Set([
-  '@/mock/blocks',
-  '@/mock/images',
-  '@/mock/sell',
-  '@/mock/users',
-])
+const LEGACY_LEAF_MOCK_MODULES = new Set(['@/mock/blocks', '@/mock/images', '@/mock/sell'])
 
 /** `@/mock/api` 那一片 fixture（整包被 scope-hoisting 合并的根）。 */
 const FIXTURE_CLUSTER = [
@@ -118,6 +119,11 @@ describe('mock fixture 生产包边界', () => {
   test('@/mock/api 的转储模块（catalog/account/chat/discover 等）只被 mock 层引用', async () => {
     const hits = await scanMockValueImports()
     expect(hits.filter((hit) => FIXTURE_CLUSTER.includes(hit.specifier))).toEqual([])
+  })
+
+  test('没有任何模块运行期 import @/mock/users（整份用户 fixture 靠一个 id 进包）', async () => {
+    const hits = await scanMockValueImports()
+    expect(hits.filter((hit) => hit.specifier === '@/mock/users')).toEqual([])
   })
 
   test('生产模块 notifications/decorate.ts 零 fixture 运行期依赖', async () => {

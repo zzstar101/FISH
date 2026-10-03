@@ -3,9 +3,15 @@
  *
  * `apps/miniapp/config/index.ts` 在 `__ALLOW_MOCK_FALLBACK__` 为假时（即
  * `TARO_APP_MOCK !== '1'` 且 `NODE_ENV !== 'development'`）把精确路径
- * `@/features/mock-fallback` alias 到本文件，于是整包演示 fixture 根本不进生产包的
- * 模块图（`mock/catalog.ts` / `chat.ts` / `account.ts` / `users.ts` / `wishes.ts` /
- * `discover.ts` 全部消失）。
+ * `@/features/mock-fallback` alias 到本文件，于是 `src/mock/*` 里那片被本文件
+ * 静态引用的 fixture（`mock/api` 及其 `catalog.ts` / `chat.ts` / `account.ts` /
+ * `users.ts` / `wishes.ts` / `discover.ts`）不进生产包的模块图。
+ *
+ * **边界（别把话说满）**：`src/mock` 下还有三个**叶子**模块因为 mock 层之外的
+ * 调用点而留在包里 —— `blocks.ts`（占位骨架，`features/listing/adapt.ts` 等）、
+ * `images.ts`（演示图，`pages/sell/index.tsx`）、`sell.ts`（AI 候选文案，
+ * `features/ai/api.ts`）。它们是先于本改动存在的遗留项，由
+ * `apps/miniapp/tests/mock-boundary.test.ts` 逐条登记并守住。
  *
  * ## 为什么是「抛错」而不是「返回空数组」
  *

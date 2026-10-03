@@ -35,10 +35,16 @@ export default defineConfig<'webpack5'>(async (merge) => {
      * 演示兜底 fixture 的构建期切分，见 `src/features/mock-fallback.ts` 的文件头。
      *
      * `allowMockFallback` 为假时，把**精确路径** `@/features/mock-fallback` 指向零
-     * `@/mock/*` 依赖的桩文件，于是整包演示 fixture（catalog / chat / account /
-     * users / wishes / discover）根本不进生产包的模块图 —— 它们此前被
-     * `features/fetchers.ts` 与 `custom-tab-bar/index.tsx` 的静态 import 拖进首屏
+     * `@/mock/*` 依赖的桩文件，于是整片演示 fixture（`mock/api` 及其 catalog /
+     * chat / account / users / wishes / discover）根本不进生产包的模块图 —— 它们此前
+     * 被 `features/fetchers.ts` 与 `custom-tab-bar/index.tsx` 的静态 import 拖进首屏
      * chunk 并在冷启动时求值（实测占首屏 JS 求值的约 90%）。
+     *
+     * **边界（别把话说满）**：仍有三个 fixture **叶子**模块被 mock 层之外的调用点
+     * 静态引用，因此仍在产物里 —— `@/mock/blocks`（占位骨架，`features/listing/adapt.ts`
+     * 等 5 处）、`@/mock/images`（演示图，`pages/sell/index.tsx`）、`@/mock/sell`
+     * （AI 润色候选，`features/ai/api.ts`）。它们不 import `mock/api` 那一片，属于
+     * 先于本改动存在的遗留项，由 `tests/mock-boundary.test.ts` 逐条登记并守住。
      *
      * ⚠️ **键序是语义的一部分**：`enhanced-resolve` 的 alias 按声明顺序匹配
      * （`AliasUtils.js` 的 `forEachBail`），前缀别名 `'@'` 会先把
@@ -121,35 +127,29 @@ export default defineConfig<'webpack5'>(async (merge) => {
       enable: false,
     },
     /**
-     * 构建期压缩。Taro 的默认预设把 terser 的 compress 能力显式关掉了 16 项
-     * （`@tarojs/webpack5-runner/dist/webpack/MiniBaseConfig.js` 的 defaultTerserOptions），
-     * 这里按 terser 自己的默认值恢复，但保留三条不能动的：
-     *   - `toplevel: false`：小程序模块被包在 `define(...)` 工厂里，压掉顶层声明会破坏工厂契约；
-     *   - `directives: false`：会吞掉 `"use strict"`；
-     *   - `arrows: false` + `ecma: 5`：产物必须是 ES5（构建末尾有 `ES5 syntax verified` 门禁）。
-     */
-    terser: {
-      config: {
-        compress: {
-          collapse_vars: true,
-          comparisons: true,
-          computed_props: true,
-          hoist_props: true,
-          inline: true,
-          loops: true,
-          negate_iife: true,
-          properties: true,
-          reduce_funcs: true,
-          reduce_vars: true,
-          switches: true,
-          typeofs: true,
-        },
-      },
-    },
-    /**
-     * CSS 压缩同理：csso 的默认预设把 5 个开关全关了
-     * （`@tarojs/webpack5-runner/dist/webpack/BaseConfig.js` 的 defaultOption），只留语法级压缩。
-     * `mergeRules`（合并相邻同声明规则）与 `minifySelectors`（选择器最简化）都是无损结构化优化。
+     * ## terser：刻意保持 Taro 默认值（不做覆盖）
+     *
+     * `MiniBaseConfig.js` 的 defaultTerserOptions 关掉了 17 项 compress pass。
+     * 试过恢复其中 12 项，结论是**不做**：
+     *
+     * - **收益小**：A/B 实测（`rm -rf dist` 后同参数各构建一次）dist
+     *   1,660,132 → 1,643,691 B，即 **16,441 B / 1.0%**；
+     * - **风险不可验证**：这些 pass 会在 `define(...)` 工厂作用域里做跨语句 /
+     *   跨函数的数据流改写（`reduce_vars` / `reduce_funcs` / `inline` /
+     *   `collapse_vars` / `hoist_props`），而构建末尾的 `ES5 syntax verified`
+     *   只查**语法**、不查语义；DevTools 里跑通 37 个路由的渲染，不等于覆盖了
+     *   表单提交、聊天发送、上传等交互路径。Taro 为小程序 target 主动关掉它们，
+     *   本身就是一份值得尊重的上游证据。
+     *
+     * 1.0% 的体积换一份说不清的风险不划算，等有真机全交互验证的渠道再谈。
+     * 复核方式：把下面 12 项开关加回 `terser.config.compress` 重跑构建，差值是 16 KB 量级。
+     *
+     * ## csso：只开两个无损的结构化优化
+     *
+     * csso 的默认预设把 5 个开关全关了
+     * （`@tarojs/webpack5-runner/dist/webpack/BaseConfig.js` 的 defaultOption）。
+     * `mergeRules`（合并相邻同声明规则）与 `minifySelectors`（选择器最简化）都不改变
+     * 声明语义，实测省 2.5 KB —— 相对安全，保留。
      */
     csso: {
       config: {

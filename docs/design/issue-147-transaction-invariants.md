@@ -35,7 +35,7 @@
 | --- | --- |
 | 补 seed 的「待面交 + 已签发凭证」样例数据 | #176 定的是「取码即创建、一单一码」，seed 预写凭证等于造第二份真相；且 `packages/db/src/seed.test.ts:74-88` 的计数断言会连带扩散 |
 | 重构 `core-smoke.ts` 的 34KB 基建 | AGENTS §4 最小改动；本次只是复用既有 scratch 库 / 真 API / HTTP 助手 |
-| 清理 `apps/miniapp/src/pages/transaction-meetup/index.tsx:218` 的「过期」字样 | 那处指 epoch 代次（语义正确），不是 `MEETUP_TOKEN_EXPIRED` 残留 |
+| 清理 `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx:218` 的「过期」字样 | 那处指 epoch 代次（语义正确），不是 `MEETUP_TOKEN_EXPIRED` 残留 |
 | 客户端串号类问题的 smoke 覆盖 | 属页面生命周期，`core:smoke` 测不到；由 #170 与真机清单承担 |
 | 关闭 #147 | Done 列表里还有「交易状态机与订单数据一致」这类长期项 |
 
@@ -45,7 +45,7 @@
 
 | 项 | 事实 | 位置 |
 | --- | --- | --- |
-| P2-1 竞态 | `verify` 内层 `catch` 无差别 `setConfirmPending(true)`，把 409 `TRANSACTION_NOT_IN_PENDING` 也当成「confirm 网络失败」，页面会停在「还差最后一步确认」；`retryConfirm` 对同一错误有专门分支（重拉终态 + `setConfirmPending(false)`） | `apps/miniapp/src/pages/transaction-meetup/index.tsx:320,327,331` 与 `:377,388` |
+| P2-1 竞态 | `verify` 内层 `catch` 无差别 `setConfirmPending(true)`，把 409 `TRANSACTION_NOT_IN_PENDING` 也当成「confirm 网络失败」，页面会停在「还差最后一步确认」；`retryConfirm` 对同一错误有专门分支（重拉终态 + `setConfirmPending(false)`） | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx:320,327,331` 与 `:377,388` |
 | P2-2 双击 | 防重复提交只判 React state `submitting`，同一 tick 两次点击都能通过（`is-off` 只是样式） | 同上 `:305`、`:840-844` |
 | P3 | `:118` 注释残留「码错误 / 过期 / 已被使用 / 次数过多」，运行时已无 `MEETUP_TOKEN_EXPIRED` | 同上 `:118` |
 | seed 不变量（已有） | scratch 库跑 seed，断言 3 会话 / 2 交易 + 每笔交易按三元组 join 得到会话 | `packages/db/src/seed.test.ts:74,76,85-93` |
@@ -60,7 +60,7 @@
 | PR | 分支 | 改动范围 | 前置 | 顺序 |
 | --- | --- | --- | --- | --- |
 | PR-1 工程 | `feat/147-tx-smoke-invariants` | `apps/api/scripts/core-smoke.ts`、`.github/workflows/ci.yml`、`docs/README.md`、`docs/design/issue-147-transaction-invariants.md` | 无（不碰 `apps/miniapp`，不受小程序串行门禁约束） | 已实现（PR #181） |
-| PR-2 页面 | `feat/miniapp-meetup-confirm-race` | `apps/miniapp/src/pages/transaction-meetup/**`、`apps/miniapp/tests/**` | #177 `feat/miniapp-verify-redesign` 合入 | 后做 |
+| PR-2 页面 | `feat/miniapp-meetup-confirm-race` | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/**`、`apps/miniapp/tests/**` | #177 `feat/miniapp-verify-redesign` 合入 | 后做 |
 
 两个 PR 均 **Refs #147**（只引用、不关闭，见 Q6 与 §10）；均从最新 `main` 切出。
 

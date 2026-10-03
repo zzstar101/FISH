@@ -39,13 +39,13 @@ import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
+import { CURRENT_USER_ID } from '@/lib/demo-user-id'
 import { categoryLabel, conditionLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import type { ListingDetailView } from '@/mock/api'
 import type { MockComment, MockListing } from '@/mock/types'
-import { ME as mockMe } from '@/mock/users'
 import {
   type ActionTask,
   beginActionTask,
@@ -712,9 +712,12 @@ export default function ListingDetail() {
    * 换号不用清场就会自动切回买家形态。非在售（本人可见的 OFFLINE / SOLD /
    * RESERVED）不渲染操作钮，整条换成状态行。
    *
-   * 归属比对用的「当前用户」在演示档下要换成 mock 世界的「我」（`mock/users` 的
-   * `ME.id = 'u-alan'`）：演示登录态是 `DEMO_USER` 的 uuid，而 fixture 商品的
-   * sellerId 全是 `u-*` —— 拿 uuid 比对永远不相等，卖家视角在演示构建里永远出不来。
+   * 归属比对用的「当前用户」在演示档下要换成 mock 世界的「我」（`@/lib/demo-user-id`
+   * 的 `CURRENT_USER_ID = 'u-alan'`，与 `mock/users` 的 `ME.id` 同源）：演示登录态是
+   * `DEMO_USER` 的 uuid，而 fixture 商品的 sellerId 全是 `u-*` —— 拿 uuid 比对永远
+   * 不相等，卖家视角在演示构建里永远出不来。常量取自 `@/lib/demo-user-id` 而非
+   * `@/mock/users` 是为了不把整份用户 fixture 拖进生产包（`@/mock/users` 顶层构造
+   * `USERS`/`USER_BY_ID`），两者取值由 re-export 保证不会漂移。
    * 真实构建 `DEMO_AUTH_ENABLED` 是编译常量 `false`，走真实会话 id。
    *
    * 边界：`TARO_APP_MOCK=1` 但本机 API 可达时详情走真接口（sellerId 是真实 uuid），
@@ -724,7 +727,7 @@ export default function ListingDetail() {
    * 退出登录后 `userId` 为 `null` 时**不许**回落到钉死的演示账号：本页不挂登录守卫，
    * 那会让匿名态渲染出卖家底栏，「匿名永远是买家形态」的判据当场破掉。
    */
-  const ownerViewUserId = DEMO_AUTH_ENABLED && userId !== null ? mockMe.id : userId
+  const ownerViewUserId = DEMO_AUTH_ENABLED && userId !== null ? CURRENT_USER_ID : userId
   const ownListing = data !== null && isOwnListing(data.listing.sellerId, ownerViewUserId)
   /*
    * 状态行要读审核态与治理标记：它们只在**卖家本人视角**非 null（契约如是说），

@@ -77,6 +77,11 @@ describe('页面接线', () => {
     const code = await Bun.file(
       new URL('../src/pkg-browse/pages/listing-detail/index.tsx', import.meta.url),
     ).text()
-    expect(code).toContain('DEMO_AUTH_ENABLED && userId !== null ? mockMe.id : userId')
+    expect(code).toContain('DEMO_AUTH_ENABLED && userId !== null ? CURRENT_USER_ID : userId')
+    // 常量必须来自叶子模块 `@/lib/demo-user-id`：改成从 `@/mock/users` 取（历史写法
+    // 是 `ME as mockMe`）会把整份 `USERS` fixture 拖进生产包 —— 包体守卫在
+    // `tests/mock-boundary.test.ts`，这里只钉住本页的接线。
+    expect(code).toContain("from '@/lib/demo-user-id'")
+    expect(code).not.toContain("from '@/mock/users'")
   })
 })

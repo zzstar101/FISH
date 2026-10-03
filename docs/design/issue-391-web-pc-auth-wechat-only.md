@@ -20,7 +20,7 @@ PC 站当前提供两种登录方式：**微信扫码**与**账号密码**。产
 | 注册页：学号 + 密码 + 昵称，注册即登录 | `routes/register.tsx:12` |
 | 扫码四端点契约 | `packages/contracts/src/auth/scan.ts` |
 | PC 扫码客户端 | `features/auth/scan-api.ts`、`scan-login.tsx` |
-| 小程序确认页 | `apps/miniapp/src/pages/login-confirm/` |
+| 小程序确认页 | `apps/miniapp/src/pkg-auth/pages/login-confirm/` |
 | 密码端点 | `apps/api/src/modules/auth/router.ts:314`（`/login`）、`:297`（`/register`） |
 | 扫码前提：小程序侧已有 FISH 会话 | `POST /auth/wechat/scan/ticket/:ticket/confirm` 需 cookie |
 | 新账号由小程序微信登录自动创建 | `apps/api/src/modules/auth/wechat-service.ts:184` |
