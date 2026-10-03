@@ -1394,3 +1394,91 @@ test('updateListingAtomic 用 expected 做 CAS：内容变过就 conflict 且不
     expect(count[0]?.n).toBe('1')
   })
 })
+
+/**
+ * `findCardsByIds` 是 #323 R4 推荐 Feed 新增的读路径：排序结果的顺序由推荐层给出，商品层
+ * 只负责"给我这几件的卡片"。它同时是**可见性的最后一道闸**——候选集与真正发出去的卡片之间
+ * 隔着排序耗时，这中间商品可能已被下架、被审核拦下或被治理下架。
+ */
+describe('findCardsByIds（#323 R4 按 id 取卡的读路径）', () => {
+  async function insertListing(
+    sellerId: string,
+    input: {
+      status?: 'ACTIVE' | 'OFFLINE'
+      moderationStatus?: 'APPROVED' | 'BLOCKED' | 'REVIEW'
+      governanceDelistedAt?: Date | null
+    } = {},
+  ): Promise<string> {
+    const id = newId()
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: '按 id 取卡商品',
+      description: '推荐读路径测试',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: input.status ?? 'ACTIVE',
+      moderationStatus: input.moderationStatus ?? 'APPROVED',
+      ...(input.governanceDelistedAt === undefined
+        ? {}
+        : { governanceDelistedAt: input.governanceDelistedAt }),
+    })
+    return id
+  }
+
+  test('只回可见商品：下架 / 未过审 / 治理下架 / 不存在 的 id 全部被跳过', async () => {
+    await withSeller(async (sellerId) => {
+      const visible = await insertListing(sellerId)
+      const offline = await insertListing(sellerId, { status: 'OFFLINE' })
+      const blocked = await insertListing(sellerId, { moderationStatus: 'BLOCKED' })
+      const review = await insertListing(sellerId, { moderationStatus: 'REVIEW' })
+      const delisted = await insertListing(sellerId, {
+        moderationStatus: 'BLOCKED',
+        governanceDelistedAt: new Date(),
+      })
+
+      const entries = await store.findCardsByIds(
+        [visible, offline, blocked, review, delisted, newId()],
+        { viewerUserId: null },
+      )
+
+      // 一次查询就把六种形态判完：调用方（推荐 service）据此把不可见的商品从快照里剔除、
+      // 让后续 position 顺延 —— 漏一种形态就会发出"服务端认为不可见"的卡片。
+      expect(entries.map((entry) => entry.listing.id)).toEqual([visible])
+    })
+  })
+
+  test('浏览者视角排除自己的商品（与公开 Feed 同一口径）', async () => {
+    await withSeller(async (sellerId, otherSellerId) => {
+      const mine = await insertListing(sellerId)
+      const theirs = await insertListing(otherSellerId)
+
+      const asSeller = await store.findCardsByIds([mine, theirs], { viewerUserId: sellerId })
+      expect(asSeller.map((entry) => entry.listing.id)).toEqual([theirs])
+
+      const anonymous = await store.findCardsByIds([mine, theirs], { viewerUserId: null })
+      expect(anonymous.map((entry) => entry.listing.id).sort()).toEqual([mine, theirs].sort())
+    })
+  })
+
+  test('回带卡片投影需要的卖家公开字段与封面键', async () => {
+    await withSeller(async (sellerId) => {
+      const input = record(sellerId, { objectKeys: [`listings/${sellerId}/cover.jpg`] })
+      await store.createListingAtomic(input)
+
+      const [entry] = await store.findCardsByIds([input.id], { viewerUserId: null })
+      expect(entry?.listing.title).toBe('集成测试商品')
+      expect(entry?.seller.id).toBe(sellerId)
+      expect(entry?.seller.nickname).toBe('集成测试')
+      expect(entry?.coverObjectKey).toBe(`listings/${sellerId}/cover.jpg`)
+      // 游标键也要有：卡片投影之外，列表读路径复用同一个 `FeedEntry` 形状。
+      expect(typeof entry?.createdAtCursor).toBe('string')
+    })
+  })
+
+  test('空 id 列表直接回空数组（不为了让 SQL 报错而发一次 in () 查询）', async () => {
+    expect(await store.findCardsByIds([], { viewerUserId: null })).toEqual([])
+  })
+})
