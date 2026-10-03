@@ -5,6 +5,7 @@ import { ListingIdSchema } from '@fish/contracts/system/public-id'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { Context } from 'hono'
 import { Hono } from 'hono'
+import type { RecommendationDomainRecorder } from '../recommendation/domain-events'
 import { type FavoriteService, FavoriteServiceError } from './service'
 
 type FavoriteVariables = { userId: string }
@@ -20,6 +21,15 @@ export type FavoritesRouterOptions = {
    * 这里的兜底保证漏挂守卫时**失败关闭**（401），而不是把匿名请求当成本人。
    */
   getUserId: FavoriteUserIdResolver
+  /**
+   * 服务端确证行为的埋点口（#323 R4）：`FAVORITE` = +4 是权重表里最强的正信号，而这两个端点
+   * 是它**唯一**的服务端真值来源 —— `POST /recommendations/events` 只认客户端上报，收藏断网
+   * 重试就会整批丢。可选依赖：不传就完全不埋点（测试与不关心推荐的装配不必构造它）。
+   *
+   * 埋点是旁路：`RecommendationDomainRecorder.record` 内部已吞掉全部异常，`await` 它不会把
+   * 已成功的收藏变成 500。
+   */
+  recorder?: RecommendationDomainRecorder
 }
 
 /**
@@ -52,7 +62,7 @@ const listingNotFoundResponse = (c: FavoriteContext) =>
 const MY_FAVORITES_PATH = FAVORITE_ROUTES.myFavorites
 const RELATION_PATH = FAVORITE_ROUTES.favoriteRelation(':listingId')
 
-export function createFavoritesRouter({ service, getUserId }: FavoritesRouterOptions) {
+export function createFavoritesRouter({ service, getUserId, recorder }: FavoritesRouterOptions) {
   const router = new Hono<{ Variables: FavoriteVariables }>()
 
   // 本域**没有匿名路径**：收藏是「我」与某件商品之间的关系，浏览者是谁决定了看得到哪一份数据。
@@ -105,7 +115,15 @@ export function createFavoritesRouter({ service, getUserId }: FavoritesRouterOpt
     if (listingId === null) return listingNotFoundResponse(c)
 
     try {
-      return c.json(await service.favorite(c.get('userId'), listingId), 200)
+      const state = await service.favorite(c.get('userId'), listingId)
+      // 归因上下文（requestId / position / source）从推荐头里读，由 recorder 自己解析。
+      // 重复收藏（本来就已收藏）也会记一条：`favorites` 的唯一索引让写入幂等，但接口没有把
+      // "这次是否真的新建了关系"暴露出来，而收藏是用户主动动作、重复量有界，不值得为它把
+      // 收藏 store 的返回类型改宽（§11 已知边界）。
+      if (recorder) {
+        await recorder.record(c, { viewerId: c.get('userId'), listingId, eventType: 'FAVORITE' })
+      }
+      return c.json(state, 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
@@ -116,7 +134,12 @@ export function createFavoritesRouter({ service, getUserId }: FavoritesRouterOpt
     if (listingId === null) return listingNotFoundResponse(c)
 
     try {
-      return c.json(await service.unfavorite(c.get('userId'), listingId), 200)
+      const state = await service.unfavorite(c.get('userId'), listingId)
+      // `UNFAVORITE` 是负反馈特征（R4）的三个输入之一，且只能在"取消"这个动作上产生。
+      if (recorder) {
+        await recorder.record(c, { viewerId: c.get('userId'), listingId, eventType: 'UNFAVORITE' })
+      }
+      return c.json(state, 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }

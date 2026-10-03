@@ -149,6 +149,7 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
     }),
     listImageKeys: async () => [],
     listFeed: async () => [],
+    findCardsByIds: async () => [],
     // #228：service 先读事务外快照再审核；假 store 让快照与锁内行一致（CAS 因此总能通过）。
     getUpdateSnapshot: async () => ({ kind: 'ok', row: updateTarget() }),
     updateListingAtomic: async (input) => {

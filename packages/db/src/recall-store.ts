@@ -37,7 +37,7 @@ type ListingCategory = (typeof listingCategoryEnum.enumValues)[number]
  * 所以 `status='ACTIVE'` 已经覆盖它；这里再写一次 `governance_delisted_at IS NULL` 是纵深防御：
  * 一旦将来某条路径只打标记不改状态，"治理下架立即消失"（Issue #323 M3）不能靠一条隐式约定撑着。
  */
-function visibleListingConditions(viewerUserId: string | null): SQL[] {
+export function visibleListingConditions(viewerUserId: string | null): SQL[] {
   return [
     eq(listings.status, 'ACTIVE'),
     eq(listings.moderationStatus, 'APPROVED'),
@@ -539,4 +539,79 @@ export async function countListingImpressions(
     .groupBy(recommendationEvents.listingId)
 
   return rows.map((row) => ({ listingId: row.listingId, count: Number(row.count) }))
+}
+
+/* ------------------------------------------------------- negative feedback */
+
+export type NegativeFeedbackEvent = {
+  listingId: string
+  category: ListingCategory
+  sellerId: string
+  eventType: RecommendationEventType
+  occurredAt: Date
+}
+
+/**
+ * 某身份在时间窗内的**负反馈原始事件**（#323 R4 的 `negativeFeedbackPenalty` 输入）。
+ *
+ * 返回原始行而不是聚合值：负反馈有**两个作用面**——listing 级硬排除（"这件我不要了"）与
+ * 类目/卖家级软惩罚（"这类/这家我不想看了"）——同一条事件同时贡献两者。聚合在这里做掉任一个，
+ * 调用方就得再查一次才能拿到另一个。
+ *
+ * 与 `countListingImpressions` 的三点一致与一点不同：
+ *
+ * - **一致**：身份谓词（匿名分支必须 `user_id IS NULL`）、不加商品白名单（负反馈是"这个人讨厌
+ *   什么"，不可能由候选集反推）、放在本文件（与召回/排序喂候选级统计的查询同族）。
+ * - **不同**：**带时间窗**（`since`）。曝光次数关心"累计发生过多少次"，负反馈关心"现在还讨厌吗"，
+ *   所以用 R2 长期画像的口径（180 天窗 + 14 天半衰期）。衰减**不在本层做**：它是纯计算，
+ *   放契约层才能离线 fixture 回放（`RANK_NEGATIVE_FEEDBACK_WEIGHTS` + `INTEREST_HALF_LIFE_MS`）。
+ *
+ * `innerJoin listings` 取类目与卖家：`recommendation_events.listing_id` 是 `ON DELETE CASCADE`，
+ * 商品被删时事件本身也没了，所以不会出现孤儿事件、不会丢行。
+ * 索引 `recommendation_events_{user_id,session_id}_occurred_at_idx` 已覆盖该谓词，不另加索引。
+ */
+export async function findNegativeFeedbackEvents(
+  db: Db,
+  input: {
+    identity: { kind: 'user'; id: string } | { kind: 'anonymous'; id: string }
+    since: Date
+    /** 触发负反馈的事件类型（权重与硬排除口径由调用方决定）。 */
+    eventTypes: readonly RecommendationEventType[]
+  },
+): Promise<NegativeFeedbackEvent[]> {
+  if (input.eventTypes.length === 0) return []
+
+  const identityFilter =
+    input.identity.kind === 'user'
+      ? eq(recommendationEvents.userId, input.identity.id)
+      : and(
+          eq(recommendationEvents.anonymousSessionId, input.identity.id),
+          isNull(recommendationEvents.userId),
+        )
+
+  const rows = await db
+    .select({
+      listingId: recommendationEvents.listingId,
+      eventType: recommendationEvents.eventType,
+      occurredAt: recommendationEvents.occurredAt,
+      category: listings.category,
+      sellerId: listings.sellerId,
+    })
+    .from(recommendationEvents)
+    .innerJoin(listings, eq(listings.id, recommendationEvents.listingId))
+    .where(
+      and(
+        identityFilter,
+        gte(recommendationEvents.occurredAt, input.since),
+        inArray(recommendationEvents.eventType, [...input.eventTypes]),
+      ),
+    )
+
+  return rows.map((row) => ({
+    listingId: row.listingId,
+    category: row.category,
+    sellerId: row.sellerId,
+    eventType: row.eventType,
+    occurredAt: row.occurredAt,
+  }))
 }

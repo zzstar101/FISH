@@ -23,7 +23,8 @@
  *    所以**任意**模块实例的 `restoreNativeToISOString()` 都能还原到原生实现。
  * 2. **不要依赖 `toISOString()` 的生成期默认值**：它同时改写了 `Date.prototype.toJSON`，
  *    schema 里若写 `.default(new Date())`，生成的 SQL 会嵌入 +8h 的字面量。时间戳列继续用
- *    `$onUpdate(() => new Date())` 这类运行时钩子（见 `src/schema/common.ts`）。
+ *    `$onUpdate(() => sql\`now()\`)` 这类运行时钩子（见 `src/schema/common.ts`；`now()` 由数据库求值，
+ *    既不经过 `Date.prototype.toJSON`，也让所有写入共用同一口时钟）。
  */
 const UTC8_OFFSET_MS = 8 * 60 * 60 * 1000
 /**
