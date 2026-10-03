@@ -9,6 +9,7 @@ import { pruneStaleEmbeddings } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { newListingNo } from '@fish/db/listing-no'
+import { visibleListingConditions } from '@fish/db/recall-store'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingNumbers } from '@fish/db/schema/listing-numbers'
 import { listingImages, listings } from '@fish/db/schema/listings'
@@ -84,6 +85,12 @@ export type FeedEntry = {
   coverObjectKey: string | null
   /** 卖家公开投影源列（#191）：inner join users 同页带出，不逐卡补查。 */
   seller: ListingCardSeller
+}
+
+/** `findCardsByIds` 的过滤口径。 */
+export type FeedCardsByIdsCriteria = {
+  /** 浏览者；非 null 时排除其自己发布的商品（与公开 Feed 一致）。 */
+  viewerUserId: string | null
 }
 
 export type CreateListingRecord = {
@@ -249,6 +256,17 @@ export interface ListingStore {
   findState(id: string): Promise<ListingState | null>
 
   listFeed(criteria: FeedCriteria): Promise<FeedEntry[]>
+
+  /**
+   * 按 id 批量取**公开可见**的卡片投影（#323 R4）。
+   *
+   * 存在的理由：推荐 Feed 的顺序来自排序层（不是 SQL 的 `ORDER BY`），商品层因此需要一个
+   * "给我这几件的卡片"读路径。`listFeed` 做不到这件事 —— 它只能按销量/价格/时间排序后翻页。
+   *
+   * **返回顺序不保证与 `ids` 一致**（调用方按自己的顺序重排）；不可见/不存在的 id 直接不出现，
+   * 让调用方按"缺行即不可见"处理，而不是拿到一张已经下架商品的卡片。
+   */
+  findCardsByIds(ids: string[], criteria: FeedCardsByIdsCriteria): Promise<FeedEntry[]>
 
   /**
    * 编辑商品。改到行时**在同一事务内**投一条 `MATCH_LISTING`（契约 §7.13：标题/描述 → keyword、
@@ -692,6 +710,46 @@ export function createSqlListingStore(db: Db): ListingStore {
 
       // 封面单独查一次而不是 join：一页最多 50 条、封面最多 50 张，
       // 比让每行都带出 9 张图的行放大便宜得多。
+      const pageIds = rows.map((row) => row.listing.id)
+      const covers = await db
+        .select({ listingId: listingImages.listingId, objectKey: listingImages.objectKey })
+        .from(listingImages)
+        .where(and(inArray(listingImages.listingId, pageIds), eq(listingImages.sortOrder, 0)))
+
+      const coverByListing = new Map(covers.map((cover) => [cover.listingId, cover.objectKey]))
+
+      return rows.map((row) => ({
+        listing: row.listing,
+        createdAtCursor: row.createdAtCursor,
+        coverObjectKey: coverByListing.get(row.listing.id) ?? null,
+        seller: row.seller,
+      }))
+    },
+
+    async findCardsByIds(ids, criteria) {
+      if (ids.length === 0) return []
+
+      const rows = await db
+        .select({
+          listing: listings,
+          createdAtCursor: sql<string>`to_char(${listings.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+          seller: {
+            id: users.id,
+            nickname: users.nickname,
+            avatarUrl: users.avatarUrl,
+            authStatus: users.authStatus,
+          },
+        })
+        .from(listings)
+        .innerJoin(users, eq(users.id, listings.sellerId))
+        // 可见性谓词复用 `@fish/db/recall-store` 的唯一一份定义：召回时复核过的可见性，在这里
+        // 是**再次**生效而不是被信任 —— 候选集与真正发出去的卡片之间隔着排序耗时，这中间商品
+        // 可能已被下架或治理删除。
+        .where(and(inArray(listings.id, ids), ...visibleListingConditions(criteria.viewerUserId)))
+        .orderBy(desc(listings.createdAt), desc(listings.id))
+
+      if (rows.length === 0) return []
+
       const pageIds = rows.map((row) => row.listing.id)
       const covers = await db
         .select({ listingId: listingImages.listingId, objectKey: listingImages.objectKey })

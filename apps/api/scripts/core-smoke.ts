@@ -56,11 +56,17 @@ import {
   RANKING_VERSION,
   RANKING_VERSION_V1,
 } from '@fish/contracts/matching/schema'
+import { INTEREST_STRATEGY_VERSION } from '@fish/contracts/recommendation/interest'
+import {
+  composeRecommendationStrategyVersion,
+  RANK_STRATEGY_VERSION,
+  RECOMMENDATION_STRATEGY_VERSION_RULE,
+} from '@fish/contracts/recommendation/rank'
+import { RECALL_STRATEGY_VERSION } from '@fish/contracts/recommendation/recall'
 import {
   RECOMMENDATION_HEADERS,
   RECOMMENDATION_ROUTES,
 } from '@fish/contracts/recommendation/routes'
-import { RECOMMENDATION_STRATEGY_VERSION_NONE } from '@fish/contracts/recommendation/schema'
 import { parseMeetupQrPayload } from '@fish/contracts/transactions/meetup-qr'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
@@ -73,12 +79,13 @@ import { listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { notifications } from '@fish/db/schema/notifications'
 import { recommendationEvents } from '@fish/db/schema/recommendation-events'
+import { recommendationRequestItems } from '@fish/db/schema/recommendation-request-items'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { listingVisualEmbeddings } from '@fish/db/schema/visual-embeddings'
 import { wishes } from '@fish/db/schema/wishes'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 import { enqueueVisualEmbedJob } from '../../worker/src/jobs/visual-embedding/enqueue'
 import { MEETUP_TOKEN_MAX_ATTEMPTS } from '../src/modules/transactions/service'
 import { VISUAL_SEARCH_MAX_ATTEMPTS } from '../src/modules/visual-search/rate-limit'
@@ -126,6 +133,19 @@ const CHAIN_LISTING_FIELDS = {
   negotiable: false,
   free: false,
 } as const
+
+/**
+ * R4 起推荐 Feed 的策略版本是「生效的每一段策略」拼成的复合串（#323 R4 §策略版本）。
+ *
+ * 从契约常量拼而不是抄字面量：任何一段策略升级都该让这条断言跟着变，抄死字符串只会让
+ * smoke 变成"改了版本号就得改脚本"的告示牌。
+ */
+const RANKED_STRATEGY_VERSION = composeRecommendationStrategyVersion([
+  RECOMMENDATION_STRATEGY_VERSION_RULE,
+  INTEREST_STRATEGY_VERSION,
+  RECALL_STRATEGY_VERSION,
+  RANK_STRATEGY_VERSION,
+])
 
 let checks = 0
 /**
@@ -1021,32 +1041,81 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     assert(typeof coverUrl === 'string', '详情返回可用的 coverUrl')
     assertEqual((await fetch(String(coverUrl))).status, 200, '封面 URL 匿名 → 200')
 
-    // 推荐归因链（#323 R1 验收）：一次推荐请求 → 曝光 → 开详情，事件必须能按
-    // `requestId` / `position` 归因回**同一次**推荐请求。R1 的 Feed 是 newest 透传
-    // （`strategy_version = rec-v1-none`），这里用匿名会话真打一次 Feed，取首张卡发
-    // IMPRESSION + DETAIL_VIEW，再回库里核对归因字段（客户端上报的四类"服务端确证事件"
-    // 由业务写路径产生，不在这一步里造）。
+    // 推荐排序与归因真值（#323 R4/R5 验收）：R4 起 Feed 由「多路召回 → 排序 → 重排 → 落快照」
+    // 产出，`strategy_version` 是复合串；归因的**唯一真值来源是服务端快照**
+    // （`recommendation_request_items`），客户端上报的 position/source 一律不可信。
+    // 这里真打一次 Feed，故意上报**错的** position/source，再回库里核对落库值 = 快照真值；
+    // 并用快照游标翻第二页，验证"同一 requestId、与首页不重复、服务端只按快照切"。
     const stepBeforeRecommendation = step
-    step = '推荐归因链（request → IMPRESSION → DETAIL_VIEW）'
-    section('推荐归因链：request → IMPRESSION → DETAIL_VIEW')
+    step = '推荐排序与归因真值（快照 → 翻页 → IMPRESSION/DETAIL_VIEW）'
+    section('推荐排序与归因真值：快照 → 翻页 → IMPRESSION/DETAIL_VIEW')
     const anonSessionId = crypto.randomUUID()
-    const feedResponse = await fetch(new URL(`${RECOMMENDATION_ROUTES.feed}?limit=5`, base), {
+    const feedResponse = await fetch(new URL(`${RECOMMENDATION_ROUTES.feed}?limit=2`, base), {
       headers: { [RECOMMENDATION_HEADERS.sessionId]: anonSessionId },
     })
     assertEqual(feedResponse.status, 200, '匿名 GET /recommendations/feed → 200')
     const feed = await readJson(feedResponse)
     assertEqual(
       feed.strategyVersion,
-      RECOMMENDATION_STRATEGY_VERSION_NONE,
-      'R1 推荐策略版本 = rec-v1-none',
+      RANKED_STRATEGY_VERSION,
+      'R4 推荐策略版本 = 排序/重排复合串（不是 rec-v1-none 透传）',
     )
     const feedItems = feed.items as { id: string }[]
-    assert(feedItems.length > 0, '推荐 Feed 至少返回一张卡')
+    assertEqual(feedItems.length, 2, 'limit=2 的首页返回两张卡')
     const feedListingPublicId = String(feedItems[0]?.id)
     const feedListingId = decodePublicId(PUBLIC_ID_PREFIX.listing, feedListingPublicId)
     const requestId = String(feed.requestId)
     const occurredAt = new Date().toISOString()
 
+    const snapshot = await db
+      .select({
+        position: recommendationRequestItems.position,
+        listingId: recommendationRequestItems.listingId,
+        primarySource: recommendationRequestItems.primarySource,
+      })
+      .from(recommendationRequestItems)
+      .where(eq(recommendationRequestItems.requestId, requestId))
+      .orderBy(asc(recommendationRequestItems.position))
+    assert(snapshot.length > feedItems.length, '快照长于首页（还有下一页可翻）', {
+      snapshot: snapshot.length,
+      page: feedItems.length,
+    })
+    assertEqual(
+      snapshot
+        .map((row, index) => (row.position === index ? 'ok' : `bad:${row.position}`))
+        .join(','),
+      snapshot.map(() => 'ok').join(','),
+      '快照 position 从 0 连续编号',
+    )
+    const truth = snapshot[0]
+    if (!truth) throw new Error('快照缺 position = 0 的行')
+    assertEqual(truth.listingId, feedListingId, '首页第一张卡就是快照 position = 0 的商品')
+    assert(typeof feed.nextCursor === 'string', '快照还有剩余条目 → 必须给出游标')
+
+    const secondResponse = await fetch(
+      new URL(
+        `${RECOMMENDATION_ROUTES.feed}?limit=2&cursor=${encodeURIComponent(String(feed.nextCursor))}`,
+        base,
+      ),
+      { headers: { [RECOMMENDATION_HEADERS.sessionId]: anonSessionId } },
+    )
+    assertEqual(secondResponse.status, 200, '带快照游标翻第二页 → 200')
+    const second = await readJson(secondResponse)
+    const secondItems = second.items as { id: string }[]
+    assertEqual(second.requestId, requestId, '翻页复用同一个 requestId')
+    assert(secondItems.length > 0, '第二页至少返回一张卡')
+    assert(
+      !secondItems.some((item) => feedItems.some((first) => first.id === item.id)),
+      '第二页与首页没有任何重复卡片',
+      { first: feedItems, second: secondItems },
+    )
+    assertEqual(
+      String(secondItems[0]?.id),
+      encodePublicId(PUBLIC_ID_PREFIX.listing, String(snapshot[2]?.listingId)),
+      '第二页第一张卡 = 快照 position = 2 的商品（服务端按快照切，不看客户端）',
+    )
+
+    // 上报**假**的 position = 7 / source = semantic：落库必须是快照真值。
     const impressionResponse = await postJson(base, RECOMMENDATION_ROUTES.events, {
       events: [
         {
@@ -1054,7 +1123,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
           requestId,
           listingId: feedListingPublicId,
           eventType: 'IMPRESSION',
-          position: 0,
+          position: 7,
+          source: 'semantic',
           anonymousSessionId: anonSessionId,
           occurredAt,
           metadata: { visibleRatio: 1, durationMs: 1_500 },
@@ -1075,7 +1145,8 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
           requestId,
           listingId: feedListingPublicId,
           eventType: 'DETAIL_VIEW',
-          position: 0,
+          position: 7,
+          source: 'semantic',
           anonymousSessionId: anonSessionId,
           occurredAt,
         },
@@ -1093,6 +1164,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
         eventType: recommendationEvents.eventType,
         requestId: recommendationEvents.requestId,
         position: recommendationEvents.position,
+        source: recommendationEvents.source,
         userId: recommendationEvents.userId,
       })
       .from(recommendationEvents)
@@ -1109,8 +1181,26 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       'DETAIL_VIEW,IMPRESSION',
       '库里两条事件都归因到同一次 request（IMPRESSION + DETAIL_VIEW）',
     )
-    assertEqual(attributedByType.get('IMPRESSION')?.position, 0, 'IMPRESSION 记录了 position = 0')
-    assertEqual(attributedByType.get('DETAIL_VIEW')?.position, 0, 'DETAIL_VIEW 记录了 position = 0')
+    assertEqual(
+      attributedByType.get('IMPRESSION')?.position,
+      truth.position,
+      'IMPRESSION 落库 position = 快照真值（客户端上报的 7 被丢弃）',
+    )
+    assertEqual(
+      attributedByType.get('IMPRESSION')?.source,
+      truth.primarySource,
+      'IMPRESSION 落库 source = 快照真值（客户端上报的 semantic 被丢弃）',
+    )
+    assertEqual(
+      attributedByType.get('DETAIL_VIEW')?.position,
+      truth.position,
+      'DETAIL_VIEW 落库 position = 快照真值（客户端上报的 7 被丢弃）',
+    )
+    assertEqual(
+      attributedByType.get('DETAIL_VIEW')?.source,
+      truth.primarySource,
+      'DETAIL_VIEW 落库 source = 快照真值（客户端上报的 semantic 被丢弃）',
+    )
     assertEqual(
       attributedByType.get('IMPRESSION')?.userId,
       null,
