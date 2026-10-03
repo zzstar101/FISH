@@ -679,3 +679,45 @@ describe('media cache', () => {
     }
   })
 })
+
+describe('撤回是单调的（#424）', () => {
+  const ID = 'msg_01jc000000e00800000000001v'
+  const RECALLED_AT = '2026-01-01T00:00:30.000Z'
+
+  test('缓存里已是撤回态时，撤回前的旧快照不得把正文写回去', () => {
+    // 服务端撤回后文本 content 变空串；旧快照与它逐字段不等，没有这道闸时旧快照会赢
+    const recalled = {
+      ...message(ID, '2026-01-01T00:00:00.000Z'),
+      content: '',
+      recalledAt: RECALLED_AT,
+    }
+    const stale = message(ID, '2026-01-01T00:00:00.000Z')
+    const data = messageData([recalled])
+
+    const next = upsertMessagePage(data, stale, CONVERSATION)
+    expect(next?.pages[0]?.items[0]?.recalledAt).toBe(RECALLED_AT)
+    expect(next?.pages[0]?.items[0]?.content).toBe('')
+  })
+
+  test('媒体同理：撤回后的空 url 不被撤回前的 url 覆盖', () => {
+    const recalled = { ...media(ID, '2026-01-01T00:00:00.000Z'), url: '', recalledAt: RECALLED_AT }
+    const stale = media(ID, '2026-01-01T00:00:00.000Z')
+
+    const next = upsertMediaPage(mediaData([recalled]), stale, CONVERSATION)
+    expect(next?.pages[0]?.items[0]?.recalledAt).toBe(RECALLED_AT)
+    expect(next?.pages[0]?.items[0]?.url).toBe('')
+  })
+
+  test('反向不挡：撤回态可以覆盖未撤回态（撤回本身要能落地）', () => {
+    const stale = message(ID, '2026-01-01T00:00:00.000Z')
+    const recalled = {
+      ...message(ID, '2026-01-01T00:00:00.000Z'),
+      content: '',
+      recalledAt: RECALLED_AT,
+    }
+
+    const next = upsertMessagePage(messageData([stale]), recalled, CONVERSATION)
+    expect(next?.pages[0]?.items[0]?.recalledAt).toBe(RECALLED_AT)
+    expect(next?.pages[0]?.items[0]?.content).toBe('')
+  })
+})

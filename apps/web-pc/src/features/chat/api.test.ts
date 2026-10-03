@@ -6,6 +6,7 @@ import {
   createConversation,
   describeCreateConversationFailure,
   describeProposeFailure,
+  describeRecallFailure,
   describeSendFailure,
   fetchMediaPage,
   isConversationNotFound,
@@ -13,6 +14,7 @@ import {
   mediaListPath,
   messageListPath,
   proposeTransaction,
+  recallMessage,
   sendMediaMessage,
 } from './api'
 import type { MediaUploadDraft } from './media'
@@ -361,5 +363,48 @@ describe('proposeTransaction', () => {
       message: '发起交易确认失败，请重试',
       refresh: false,
     })
+  })
+})
+
+describe('recallMessage', () => {
+  const MESSAGE_ID = 'msg_01jc000000e00800000000001v'
+
+  test('posts to the recall route and tolerates the 204', async () => {
+    const originalFetch = globalThis.fetch
+    const calls: Array<{ url: string; method: string }> = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      calls.push({ url, method: init?.method ?? 'GET' })
+      // 撤回成功是 204 无响应体：解析路径必须容得下空 body。
+      return new Response(null, { status: 204 })
+    }) as unknown as typeof fetch
+    try {
+      await expect(recallMessage(CONVERSATION_ID, MESSAGE_ID)).resolves.toBeUndefined()
+      expect(calls).toEqual([
+        {
+          url: `/api/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}/recall`,
+          method: 'POST',
+        },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe('describeRecallFailure', () => {
+  test('透传服务端原文，三档各说各的', () => {
+    expect(describeRecallFailure(new ApiError('MESSAGE_NOT_FOUND', 404, '消息不存在'))).toBe(
+      '消息不存在',
+    )
+    expect(
+      describeRecallFailure(
+        new ApiError('MESSAGE_RECALL_FORBIDDEN', 403, '只能撤回自己发送的消息'),
+      ),
+    ).toBe('只能撤回自己发送的消息')
+    expect(
+      describeRecallFailure(new ApiError('MESSAGE_RECALL_WINDOW_EXCEEDED', 409, '超出可撤回时间')),
+    ).toBe('超出可撤回时间')
+    expect(describeRecallFailure(new Error('network'))).toBe('撤回失败，请重试')
   })
 })
