@@ -4,6 +4,7 @@ import type { VisualEmbeddingProvider } from '@fish/contracts/visual/provider'
 import {
   MAX_VISUAL_QUERY_IMAGE_BYTES,
   VISUAL_QUERY_IMAGE_TTL_SECONDS,
+  VISUAL_SOLD_AVG_MIN_SAMPLES,
   type VisualInterpretation,
   type VisualSearchErrorCode,
   visualQueryImageKey,
@@ -19,7 +20,12 @@ import {
   type VisualSearchServiceErrorStatus,
   type VisualSearchStorage,
 } from './service'
-import type { VisualListingSignals, VisualSearchCandidate, VisualSearchStore } from './store'
+import type {
+  VisualListingSignals,
+  VisualSearchCandidate,
+  VisualSearchStore,
+  VisualSoldPriceStats,
+} from './store'
 import type { ResolvedVisualSearchSubject } from './subject'
 
 /**
@@ -123,6 +129,8 @@ type HarnessState = {
   embedImage: () => Promise<number[]>
   embedText: (text: string) => Promise<number[]>
   interpretation: VisualInterpretation | null
+  /** `soldPriceStats` 的假返回值；`calls.soldStatsCategories` 记录它是否真的被问到。 */
+  soldStats: VisualSoldPriceStats
 }
 
 type Harness = {
@@ -136,6 +144,7 @@ type Harness = {
     parsed: number
     embeddedImages: number
     embeddedTexts: string[]
+    soldStatsCategories: string[]
   }
 }
 
@@ -151,6 +160,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     embedImage: async () => vectorOf(1),
     embedText: async () => textVector(),
     interpretation: null,
+    soldStats: { soldAvgPriceCents: null, soldSampleCount: 0 },
     ...overrides,
   }
 
@@ -162,6 +172,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     parsed: 0,
     embeddedImages: 0,
     embeddedTexts: [],
+    soldStatsCategories: [],
   }
 
   const storage: VisualSearchStorage = {
@@ -235,6 +246,10 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
         if (listingIds.includes(listing.id)) rows.set(listing.id, listing)
       }
       return rows
+    },
+    async soldPriceStats(category) {
+      calls.soldStatsCategories.push(category)
+      return state.soldStats
     },
   }
 
@@ -685,5 +700,108 @@ describe('search 的排序与截断', () => {
 
     expect(result.items[0]?.id).not.toBe(result.items[1]?.id)
     expect(result.items.length).toBe(2)
+  })
+})
+
+describe('search 的排序档', () => {
+  test('sort=price_asc 在截断之前排序：拿到全局最便宜的 30 条，而不是重排前 30 条', async () => {
+    const total = VISUAL_RESULT_LIMIT + 10
+    // 价格与相似度反向：越相似越贵。于是"不带排序时入选的前 30 条"恰好是最贵的 30 条。
+    const listings = Array.from({ length: total }, (_, index) =>
+      listingSource(listingId(index), { priceCents: (total - index) * 100 }),
+    )
+    const { service } = createHarness({
+      listings,
+      recall: () =>
+        listings.map((listing, index) => ({ listingId: listing.id, distance: index / 100 })),
+    })
+
+    const result = await service.search(subject(), {
+      objectKey: queryObjectKey(),
+      sort: 'price_asc',
+    })
+
+    expect(result.items.length).toBe(VISUAL_RESULT_LIMIT)
+    // 最便宜的在 index = total - 1（相似度最低），它只有"先排序再截断"才可能出现在结果里。
+    expect(result.items[0]?.priceCents).toBe(100)
+    expect(result.items[result.items.length - 1]?.priceCents).toBe(VISUAL_RESULT_LIMIT * 100)
+  })
+
+  test('sort=popular 真的改变顺序：按想要数降序，并把想要数带进结果项', async () => {
+    const liked = listingSource(listingId(1))
+    const quiet = listingSource(listingId(2))
+    const favoriteCounts = new Map<string, number>([[liked.id, 9]])
+    const { service } = createHarness({
+      listings: [liked, quiet],
+      favoriteCounts,
+      // 相似度是反向的：只看 relevance，quiet 才是第一名。
+      recall: () => [
+        { listingId: quiet.id, distance: 0.1 },
+        { listingId: liked.id, distance: 0.9 },
+      ],
+    })
+
+    const byRelevance = await service.search(subject(), { objectKey: queryObjectKey() })
+    const byPopular = await service.search(subject(), {
+      objectKey: queryObjectKey(),
+      sort: 'popular',
+    })
+
+    expect(byRelevance.items[0]?.title).toBe(quiet.title)
+    expect(byPopular.items[0]?.title).toBe(liked.title)
+    expect(byPopular.items.map((item) => item.favoriteCount)).toEqual([9, 0])
+  })
+})
+
+describe('search 的成交均价统计', () => {
+  test('没解析出类目时给空统计，并且根本不查库', async () => {
+    const { service, calls } = createHarness({ interpretation: null })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.stats).toEqual({ soldAvgPriceCents: null, soldSampleCount: 0 })
+    expect(calls.soldStatsCategories).toEqual([])
+  })
+
+  test('样本不足阈值时均价为 null，但仍返回真实样本数（客户端要能说"样本不足"）', async () => {
+    const belowThreshold = VISUAL_SOLD_AVG_MIN_SAMPLES - 1
+    const { service, calls } = createHarness({
+      interpretation: { category: 'BOOKS' },
+      soldStats: { soldAvgPriceCents: 1234, soldSampleCount: belowThreshold },
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.stats).toEqual({ soldAvgPriceCents: null, soldSampleCount: belowThreshold })
+    // 统计口径跟着解析出的类目走，不是"全局均价"。
+    expect(calls.soldStatsCategories).toEqual(['BOOKS'])
+  })
+
+  test('样本达到阈值时返回四舍五入的均价（阈值判定锁在服务端）', async () => {
+    const { service } = createHarness({
+      interpretation: { category: 'DIGITAL' },
+      soldStats: {
+        soldAvgPriceCents: 1234.6,
+        soldSampleCount: VISUAL_SOLD_AVG_MIN_SAMPLES,
+      },
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.stats).toEqual({
+      soldAvgPriceCents: 1235,
+      soldSampleCount: VISUAL_SOLD_AVG_MIN_SAMPLES,
+    })
+  })
+
+  test('样本足够但均价缺失（防御）时仍是 null，不把 null 变成 0', async () => {
+    const { service } = createHarness({
+      interpretation: { category: 'BOOKS' },
+      soldStats: { soldAvgPriceCents: null, soldSampleCount: VISUAL_SOLD_AVG_MIN_SAMPLES },
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.stats.soldAvgPriceCents).toBeNull()
   })
 })
