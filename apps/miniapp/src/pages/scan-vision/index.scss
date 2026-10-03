@@ -78,17 +78,14 @@
   left: 32px;
   z-index: 5;
   transform: translateY(-50%);
-  @include float-btn(72px);
+  @include float-btn;
 }
 
 .scanvis__back-chevron {
-  width: 18px;
-  height: 18px;
-  border-left: 4px solid var(--fg);
-  border-bottom: 4px solid var(--fg);
-  border-radius: 2px;
-  transform: rotate(45deg);
-  margin-left: 6px;
+  border-left-style: solid;
+  border-left-color: var(--fg);
+  border-bottom-style: solid;
+  border-bottom-color: var(--fg);
 }
 
 .scanvis__title {

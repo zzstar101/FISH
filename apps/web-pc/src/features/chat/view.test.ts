@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import {
   buildTimeline,
+  canRecallMessage,
   excludeCachedMedia,
   excludeCachedMessages,
   formatMessageTime,
@@ -139,5 +140,43 @@ describe('media history dedupe', () => {
       'msg_01jc000000e00800000000001v',
     ])
     expect(excludeCachedMedia([], history)).toEqual([])
+  })
+})
+
+describe('canRecallMessage', () => {
+  const ME = 'usr_01jc000000e00800000000000a'
+  const OTHER = 'usr_01jc000000e00800000000000b'
+  const WINDOW = 120_000
+  const CREATED = '2026-01-01T00:00:00.000Z'
+  const AT = Date.parse(CREATED)
+
+  function target(overrides: Partial<MessageDto> = {}): MessageDto {
+    return { ...textMessage('msg_01jc000000e00800000000001v', CREATED), ...overrides }
+  }
+
+  test('自己的、未撤回的、窗口内的消息可撤回（边界含等于）', () => {
+    expect(canRecallMessage(target(), ME, AT + 60_000, WINDOW)).toBe(true)
+    expect(canRecallMessage(target(), ME, AT + WINDOW, WINDOW)).toBe(true)
+    expect(canRecallMessage(target(), ME, AT + WINDOW + 1, WINDOW)).toBe(false)
+  })
+
+  test('别人的消息、以及会话未恢复时都不可撤回', () => {
+    expect(canRecallMessage(target({ senderId: OTHER }), ME, AT, WINDOW)).toBe(false)
+    expect(canRecallMessage(target(), null, AT, WINDOW)).toBe(false)
+  })
+
+  test('已撤回的消息不再给撤回入口', () => {
+    expect(canRecallMessage(target({ recalledAt: CREATED }), ME, AT, WINDOW)).toBe(false)
+  })
+
+  test('createdAt 解析不了时保守给 false —— 不给一个必然失败的入口', () => {
+    expect(canRecallMessage(target({ createdAt: 'not-a-date' }), ME, AT, WINDOW)).toBe(false)
+  })
+
+  test('媒体消息共用同一判据', () => {
+    const media = mediaMessage('msg_01jc000000e00800000000001v', CREATED)
+    expect(canRecallMessage(media, ME, AT + 1_000, WINDOW)).toBe(true)
+    expect(canRecallMessage({ ...media, recalledAt: CREATED }, ME, AT + 1_000, WINDOW)).toBe(false)
+    expect(canRecallMessage(media, OTHER, AT + 1_000, WINDOW)).toBe(false)
   })
 })

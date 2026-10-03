@@ -10,6 +10,8 @@ export const PUBLIC_ID_PREFIX = {
   message: 'msg',
   transaction: 'txn',
   comment: 'cmt',
+  /** 交易评价（#195 PR2）。资源是 (我, 交易) 这条边，评价行本身也有公开 ID。 */
+  review: 'rvw',
   notification: 'ntf',
   report: 'rpt',
   userRestriction: 'rst',

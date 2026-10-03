@@ -22,7 +22,7 @@
 import { Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { type ReactNode, useMemo } from 'react'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
 type TopBarVariant = 'plain' | 'glass'
@@ -40,7 +40,11 @@ type TopBarProps = {
   titleAlign?: 'start' | 'center'
   /** 是否显示返回钮 */
   back?: boolean
-  /** 覆盖返回行为（默认 navigateBack，无上一页时回首页） */
+  /**
+   * 覆盖返回行为。默认：有上一页 `navigateBack`；页面栈为空（冷启动分享 / 扫码直入）
+   * 兜底回**语义父级 tab** —— 本组件默认首页，语义父级不是首页的页面用它覆盖
+   * （如会话页回消息、编辑资料回「我的」）。
+   */
   onBack?: () => void
   /** 左槽：给了就整体替代「返回钮 + 标题」（首页的品牌 logo 走这里） */
   left?: ReactNode
@@ -79,6 +83,7 @@ export default function TopBar({
   spacer = false,
 }: TopBarProps) {
   const metrics = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(metrics.capsuleHeight)
 
   const handleBack = () => {
     if (onBack) {
@@ -89,6 +94,9 @@ export default function TopBar({
     if (pages.length > 1) {
       void Taro.navigateBack()
     } else {
+      // 兜底回**语义父级 tab**（2026-10-02 拍板）：页面栈为空只发生在冷启动经
+      // 分享卡片 / 扫码直入二级页，此时回本组件的语义父级 —— 首页。语义父级
+      // 不是首页的页面（会话页 → 消息、编辑资料 → 我的）由页面经 `onBack` 自行覆盖。
       void Taro.switchTab({ url: '/pages/home/index' })
     }
   }
@@ -114,8 +122,14 @@ export default function TopBar({
           {left ?? (
             <>
               {back ? (
-                <View className="topbar__back" onClick={handleBack}>
-                  <View className="topbar__chevron" />
+                /*
+                  返回钮与右侧微信原生胶囊**等高、同一行居中**（2026-10-02 拍板）：
+                  钮径 = 运行时胶囊高（`readNavMetrics` 按机型反推），行本身已与胶囊
+                  同行，flex 垂直居中即与胶囊同轴。尺寸是设备 px，必须行内下发
+                  （pxtransform 只处理样式表；内联 px 原样下发）。
+                */
+                <View className="topbar__back" style={backGeo.btnStyle} onClick={handleBack}>
+                  <View className="topbar__chevron" style={backGeo.chevronStyle} />
                 </View>
               ) : null}
               {title ? (

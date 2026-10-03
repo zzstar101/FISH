@@ -36,6 +36,53 @@ export type RankingWeights = {
 }
 
 /**
+ * 打分参数（#322 M4）：把"锚点 + 不限分类口径 + acceptSimilar 门禁口径"抽成可注入参数，
+ * 好让 `rank:compare` / `embed:eval --sections=fit` 用**生产的同一份代码**复算候选参数，
+ * 而不是在校准脚本里再写一套公式。
+ *
+ * 默认值 = 当前生产行为（`DEFAULT_SCORING_PARAMS`），所以 `scoreMatch()` 的调用方零漂移；
+ * M4 重标定只改这里的默认值，不改任何公式。
+ */
+export type ScoringParams = {
+  semanticFloor: number
+  semanticCeiling: number
+  /**
+   * `wish.category === null`（不限分类）时的口径：
+   *   * `renormalize`：跳过 category 分项、把它的权重摊到其余三项（M3 冻结行为）；
+   *   * `satisfied`：分类约束天然满足，category 分项按 100 计（结构证据不再被摊薄）。
+   */
+  nullCategoryMode: 'renormalize' | 'satisfied'
+  /**
+   * `acceptSimilar = false` 的门禁口径：
+   *   * `keyword-or-category`：关键词命中 > 0 **或**分类精确命中即可让语义参与（M3 冻结行为）；
+   *   * `keyword-only`：只有关键词命中才让语义参与（分类等值不算"结构证据"）。
+   */
+  acceptSimilarGate: 'keyword-or-category' | 'keyword-only'
+}
+
+/**
+ * M4 重标定后的生产参数（2026-09-26，57 条冻结标注对上 53/57 一致，M3 旧参数 39/57）。
+ *
+ * 三处改动的证据都在 `bun run embed:eval`（§calibration 冻结标签一致度 + §fit 网格搜索）：
+ *   1. 锚点 `0.42 / 0.70`（契约常量，理由见那里的注释）；
+ *   2. `nullCategoryMode: 'satisfied'`：修掉 v2 相对 v1 的**回退**——不限分类的愿望在
+ *      `renormalize` 下被摊薄，`cal-unlimited-phone`（关键词"手机"精确命中 + 预算内）v1 = 100
+ *      分而 v2 只有 58 分（低于阈值），"语义接入反而让本来能成的对失配"；
+ *   3. `acceptSimilarGate: 'keyword-only'`：M3 的口径让"分类命中"也算结构支撑，
+ *      `cal-acceptfalse-tent` / `cal-acceptfalse-guitar`（分类相同、词法 0 命中、只有语义接近）
+ *      被放行到 74–76 分，与 #322 验收"不能仅凭高语义跨产品召回"直接冲突。
+ *
+ * 阈值 `MATCH_SCORE_THRESHOLD = 70` 与权重 `WEIGHTS_V2`（S4）**未变**：网格搜索里它们不是
+ * 瓶颈（平顶上最好的候选换权重也只多 0 条），改它们等于把 M3 的排名表全部作废。
+ */
+export const DEFAULT_SCORING_PARAMS = {
+  semanticFloor: SEMANTIC_SCORE_FLOOR,
+  semanticCeiling: SEMANTIC_SCORE_CEILING,
+  nullCategoryMode: 'satisfied',
+  acceptSimilarGate: 'keyword-only',
+} as const satisfies ScoringParams
+
+/**
  * M3 的权重对照组（`bun run rank:compare` 可复算，设计文档 §权重冻结有排名表）。
  *
  * S1/S2/S3 是 grilling 时先定的三组候选；跑完人工标注 fixture（12 条，覆盖 Issue 点名的
@@ -175,23 +222,39 @@ export function categoryScore(
  * 直接把 [-1, 1] 线性铺到 0–100 会让真实 embedding 的所有对挤进 60–98，失去区分度。
  * 低于 FLOOR 一律 0（"没有语义相关性"），高于 CEILING 一律 100。
  */
-export function normalizeSimilarity(similarity: number): number {
-  const span = SEMANTIC_SCORE_CEILING - SEMANTIC_SCORE_FLOOR
-  const ratio = (similarity - SEMANTIC_SCORE_FLOOR) / span
+export function normalizeSimilarity(
+  similarity: number,
+  floor: number = SEMANTIC_SCORE_FLOOR,
+  ceiling: number = SEMANTIC_SCORE_CEILING,
+): number {
+  const span = ceiling - floor
+  const ratio = (similarity - floor) / span
   return Math.round(Math.min(1, Math.max(0, ratio)) * 100)
 }
 
 /**
- * `acceptSimilar = false` 的门禁（#322 M3）：语义**不能单独**把一对变成有效匹配。
+ * `acceptSimilar = false` 的门禁（#322 M3 引入，M4 收紧口径）：语义**不能单独**把一对变成有效匹配。
  *
- * 结构上有真实支撑（关键词命中 > 0 或分类精确命中）时才让语义分项参与；否则这一对的语义分记 0
+ * 结构上有真实支撑（默认口径 `keyword-only` = 关键词命中 > 0；M3 的 `keyword-or-category`
+ * 把"分类精确命中"也算支撑）时才让语义分项参与；否则这一对的语义分记 0
  * ——注意是"记 0"而不是"剔掉语义项再归一化"：后者会让同一对在两种状态下用两套权重，
  * 分数不可比（见设计文档 §acceptSimilar）。
  *
- * 这条规则只拦"仅凭高语义跨产品召回"：v1 今天能成的对（关键词或分类命中）不受影响。
+ * M4 收紧到 `keyword-only` 的理由：分类等值在"同分类但不同产品"时恒成立（校园二手场景里
+ * DIGITAL 下既有键盘也有耳机），把它当结构支撑等于让 `acceptSimilar = false` 形同虚设——
+ * 57 条冻结标注对里 `cal-acceptfalse-tent` / `cal-acceptfalse-guitar` 就是这么被放行到
+ * 74–76 分的，与 #322 验收"不能仅凭高语义跨产品召回"冲突。
+ *
+ * 这条规则只拦"仅凭高语义跨产品召回"：v1 今天能成的对（关键词或分类命中）在 v2 下不受影响。
  */
-function semanticAllowed(wish: MatchWishFacts, keyword: number, category: number): boolean {
+function semanticAllowed(
+  wish: MatchWishFacts,
+  keyword: number,
+  category: number,
+  params: ScoringParams,
+): boolean {
   if (wish.acceptSimilar) return true
+  if (params.acceptSimilarGate === 'keyword-only') return keyword > 0
   return keyword > 0 || category > 0
 }
 
@@ -204,21 +267,28 @@ function semanticAllowed(wish: MatchWishFacts, keyword: number, category: number
  *
  * **v2 分支**（`semantic !== null`）：四路权重（`weights`，默认 `WEIGHTS_V2`），
  * `semanticScore` 为归一化后的 0–100 整数、`rankingVersion = 2`；`acceptSimilar = false` 且
- * 关键词与分类都没命中时语义分记 0。
+ * 关键词没命中（默认口径）时语义分记 0。
  *
- * **`wish.category IS NULL`（不限分类）**：跳过 category 分项并把权重归一化
- * （v1 `(0.35·kw + 0.30·price) / 0.65`；v2 同规则推广到四路：`(w·sem + w·kw + w·price) / (三项和)`）。
- * 记 0 分而不是归一化的话，"不限分类"的愿望最高只能拿 65 分，永远够不到 70 阈值。
+ * **`wish.category IS NULL`（不限分类）**：M4 起默认 `satisfied` —— 分类约束天然满足，
+ * category 分项按 100 计入四路加权和（"不限分类"不再因为分项记 0 而被摊薄）。M3 的
+ * `renormalize`（跳过 category 分项、把权重摊到其余三项）保留为可选口径，只用于对照实验：
+ * 它会让不限分类的愿望系统性低分——`cal-unlimited-phone` 在 v1 拿 100 分、在 v2
+ * `renormalize` 下只有 58 分，即"语义接入后本来能成的对反而失配"。v1 分支（`semantic === null`）
+ * 保持 #8 冻结的 renormalize 规则不变。
  */
 export function scoreMatchWithWeights(
   listing: MatchListingFacts,
   wish: MatchWishFacts,
   semantic: MatchSemanticInput | null,
   weights: RankingWeights,
+  params: ScoringParams = DEFAULT_SCORING_PARAMS,
 ): MatchScoreBreakdown {
   const keyword = keywordScore(listing, wish.keyword)
   const price = priceScore(listing, wish.budgetMaxCents)
   const category = categoryScore(listing, wish.category)
+  // 不限分类的两种口径：`satisfied` 时分类项按 100 计入（约束天然满足），否则按实际值 0。
+  const effectiveCategory =
+    wish.category === null && params.nullCategoryMode === 'satisfied' ? 100 : category
 
   if (semantic === null) {
     const raw =
@@ -236,21 +306,25 @@ export function scoreMatchWithWeights(
     }
   }
 
-  const semanticRaw = normalizeSimilarity(semantic.similarity)
-  const semanticScore = semanticAllowed(wish, keyword, category) ? semanticRaw : 0
+  const semanticRaw = normalizeSimilarity(
+    semantic.similarity,
+    params.semanticFloor,
+    params.semanticCeiling,
+  )
+  const semanticScore = semanticAllowed(wish, keyword, category, params) ? semanticRaw : 0
 
   const raw =
-    wish.category === null
+    wish.category === null && params.nullCategoryMode === 'renormalize'
       ? (weights.semantic * semanticScore + weights.keyword * keyword + weights.price * price) /
         (weights.semantic + weights.keyword + weights.price)
       : weights.semantic * semanticScore +
-        weights.category * category +
+        weights.category * effectiveCategory +
         weights.keyword * keyword +
         weights.price * price
 
   return {
     score: Math.round(raw),
-    categoryScore: category,
+    categoryScore: effectiveCategory,
     keywordScore: keyword,
     priceScore: price,
     semanticScore,

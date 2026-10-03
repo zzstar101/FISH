@@ -106,12 +106,12 @@
 
 /*
  * 返回钮：与 nav-bar 的漂浮钮同形态（白玻璃圆钮），但这里在栏的出流内。
- * 尺寸 32pt = 64px，与设计稿搜索页 `.back-btn` 的 `64rpx` 一致。
+ * 尺寸不再用稿子的固定档（32pt）：与右侧微信原生胶囊**等高**（2026-10-02 拍板），
+ * 直径由组件按运行时胶囊矩形行内下发 —— 胶囊高每台机型不同，样式表写不出通用值。
  */
 .topbar__back {
   flex: 0 0 auto;
-  width: 64px;
-  height: 64px;
+  box-sizing: border-box;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -128,11 +128,10 @@
   }
 }
 
+/* 箭头几何（边长 / 描边宽 / 旋转补偿）同样由组件按胶囊高等比行内下发，这里只留颜色 */
 .topbar__chevron {
-  width: 18px;
-  height: 18px;
-  border-left: 4px solid var(--fg);
-  border-bottom: 4px solid var(--fg);
-  border-radius: 2px;
-  transform: translateX(3px) rotate(45deg);
+  border-left-style: solid;
+  border-left-color: var(--fg);
+  border-bottom-style: solid;
+  border-bottom-color: var(--fg);
 }

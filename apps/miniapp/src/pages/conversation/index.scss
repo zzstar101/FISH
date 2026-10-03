@@ -60,19 +60,20 @@
   box-shadow: 0 20px 48px -44px rgba(23, 35, 61, 0.55);
 }
 
-/* 导航行：返回钮在流内，标题绝对居中；状态栏高度由页面用内联 px 补 */
+/* 导航行：返回钮在流内，标题绝对居中；行几何由页面行内下发（同 top-bar 同构） */
 .conv__navrow {
   position: relative;
-  height: 88px; /* 44pt：原生导航栏行高（与商品详情页同一口径） */
+  box-sizing: border-box;
   padding-left: 20px;
   display: flex;
   align-items: center;
 }
 
-/* 返回钮：稿子 .mp-back 是裸箭头（按下才浮白底），给 60px 圆形热区 */
+/*
+ * 返回钮：稿子 .mp-back 是裸箭头（按下才浮白底），形态保留（2026-10-02 拍板）。
+ * 热区与右侧微信原生胶囊等高（由页面行内下发），不再用固定 60px。
+ */
 .conv__back {
-  width: 60px;
-  height: 60px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -84,13 +85,12 @@
   }
 }
 
+/* 箭头几何（裸箭头 0.4 比例）由页面行内下发，这里只留颜色 */
 .conv__chevron {
-  width: 24px;
-  height: 24px;
-  border-left: 5px solid var(--fg);
-  border-bottom: 5px solid var(--fg);
-  border-radius: 2px;
-  transform: translateX(4px) rotate(45deg);
+  border-left-style: solid;
+  border-left-color: var(--fg);
+  border-bottom-style: solid;
+  border-bottom-color: var(--fg);
 }
 
 /* 标题：整行绝对居中（盖在返回钮之上但不可点击），宽度两侧避让胶囊（内联 maxWidth） */

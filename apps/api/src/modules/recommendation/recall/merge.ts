@@ -33,8 +33,14 @@ export type VisibleListing = {
 export type MergeRecallCandidatesInput = {
   channels: readonly ChannelRecall[]
   visible: readonly VisibleListing[]
-  /** listingId → 该身份历史 IMPRESSION 次数（`countListingImpressions`）。 */
-  impressions: ReadonlyMap<string, number>
+  /**
+   * listingId → 该身份历史 IMPRESSION 次数（`countListingImpressions`）。
+   *
+   * `null` = **未知**（曝光计数查询失败）：它与"空 Map"（问过了，确实一次都没有）是两件事。
+   * 合并层只负责透传这个区别，判断交给排序层——`null` 时 `repeatedExposure` 进 `missing` 且不加
+   * 惩罚，空 Map 时是"确定 0"（R3 §9 待办①）。
+   */
+  impressions: ReadonlyMap<string, number> | null
   /** 类目 → 会话类目亲和（已归一化到 0–1，`findSessionCategoryWeights` 的产出）。 */
   categoryAffinity: ReadonlyMap<string, number>
   now: Date
@@ -131,7 +137,9 @@ export function mergeRecallCandidates(input: MergeRecallCandidatesInput): Recall
         userCategoryAffinity: input.categoryAffinity.get(listing.category) ?? null,
         freshness: freshnessOf(listing.createdAt, input.now),
         createdAt: listing.createdAt,
-        alreadySeenCount: input.impressions.get(raw.listingId) ?? 0,
+        // 查不到 = 0（问过了确实没有）；整体未知（null）= 保持 null —— 排序层要区分这两者。
+        alreadySeenCount:
+          input.impressions === null ? null : (input.impressions.get(raw.listingId) ?? 0),
         sellerExposure: 0,
       }
       applyChannelFeature(candidate, channel.channel, raw.score)
