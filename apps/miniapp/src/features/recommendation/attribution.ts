@@ -27,7 +27,7 @@ export function buildListingDetailUrl(
   listingId: string,
   attribution: FeedAttribution | null,
 ): string {
-  const base = `/pages/listing-detail/index?id=${encodeURIComponent(listingId)}`
+  const base = `/pkg-browse/pages/listing-detail/index?id=${encodeURIComponent(listingId)}`
   if (!attribution) return base
   const requestId = encodeURIComponent(attribution.requestId)
   return `${base}&${REQUEST_ID_PARAM}=${requestId}&${POSITION_PARAM}=${attribution.position}`

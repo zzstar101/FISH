@@ -332,10 +332,10 @@ export default function Profile() {
   }
 
   /** 认证胶囊：进校园认证页（已认证看状态，未认证去认证） */
-  const openVerify = () => void Taro.navigateTo({ url: '/pages/verify/index' })
+  const openVerify = () => void Taro.navigateTo({ url: '/pkg-auth/pages/verify/index' })
 
   /** 头像 / 昵称：进编辑资料页（#86 B） */
-  const openEditProfile = () => void Taro.navigateTo({ url: '/pages/profile-edit/index' })
+  const openEditProfile = () => void Taro.navigateTo({ url: '/pkg-auth/pages/profile-edit/index' })
 
   /** 退出登录：确认后先注销服务端会话、再清本地（顺序说明见文件头） */
   const onLogout = () => {
@@ -379,19 +379,19 @@ export default function Profile() {
     {
       key: 'favorites',
       label: '我的收藏',
-      url: '/pages/favorites/index',
+      url: '/pkg-browse/pages/favorites/index',
       count: profile?.favoritesCount ?? null,
     },
     {
       key: 'history',
       label: '历史浏览',
-      url: '/pages/history/index',
+      url: '/pkg-browse/pages/history/index',
       count: profile?.historyCount ?? null,
     },
     {
       key: 'follow',
       label: '我的关注',
-      url: '/pages/following/index',
+      url: '/pkg-browse/pages/following/index',
       count: profile?.followCount ?? null,
     },
     {
@@ -418,21 +418,41 @@ export default function Profile() {
       key: 'onsale',
       label: '在售',
       icon: ICONS.profileOnsale,
-      url: '/pages/mylist/index',
+      url: '/pkg-browse/pages/mylist/index',
       count: counts.activeListings ?? undefined,
     },
     // 订单页已按视角拆成两页：卖出 / 买入 各落对应那页（原「全部订单」格已由「我的举报」接替，
     // 订单仍可经 卖出 / 买入 两格到达）
-    { key: 'sold', label: '卖出', icon: ICONS.profileSold, url: '/pages/orders-sell/index' },
-    { key: 'bought', label: '买入', icon: ICONS.profileBought, url: '/pages/orders-buy/index' },
+    {
+      key: 'sold',
+      label: '卖出',
+      icon: ICONS.profileSold,
+      url: '/pkg-trade/pages/orders-sell/index',
+    },
+    {
+      key: 'bought',
+      label: '买入',
+      icon: ICONS.profileBought,
+      url: '/pkg-trade/pages/orders-buy/index',
+    },
     // 「评价」= 我发过的评论（商品留言 + 交易评价）。该页没有聚合端点：
     // 真实构建下是空态 + 缺口说明，见 pages/comments 的文件头。
-    { key: 'review', label: '评价', icon: ICONS.profileReview, url: '/pages/comments/index' },
+    {
+      key: 'review',
+      label: '评价',
+      icon: ICONS.profileReview,
+      url: '/pkg-browse/pages/comments/index',
+    },
     // #252：举报（Owner 2026-09-26：取代「全部订单」格、五列排最后、盾牌图标；
     // 图标用 safeAccent 与格子家族同色 —— shieldLine 是浅灰蓝，混进品牌蓝的格子
     // 里发灰）。提交入口在商品详情 / 他人主页；真实构建下列表是缺口空态
     // （举报后端未上线），见 pages/my-reports 的文件头。
-    { key: 'reports', label: '举报', icon: ICONS.safeAccent, url: '/pages/my-reports/index' },
+    {
+      key: 'reports',
+      label: '举报',
+      icon: ICONS.safeAccent,
+      url: '/pkg-trade/pages/my-reports/index',
+    },
   ]
 
   /**
@@ -445,14 +465,14 @@ export default function Profile() {
       title: '设置',
       sub: '通知提醒与账号安全',
       icon: ICONS.settingsMuted,
-      url: '/pages/settings/index',
+      url: '/pkg-auth/pages/settings/index',
     },
     {
       key: 'feedback',
       title: '意见反馈',
       sub: '提交建议与问题反馈',
       icon: ICONS.feedbackMuted,
-      url: '/pages/feedback/index',
+      url: '/pkg-legal/pages/feedback/index',
     },
     { key: 'service', title: '联系客服', sub: '在线客服与常见问题', icon: ICONS.serviceMuted },
     {
@@ -460,7 +480,7 @@ export default function Profile() {
       title: '关于与版本',
       sub: '版本信息与用户协议',
       icon: ICONS.infoMuted,
-      url: '/pages/about/index',
+      url: '/pkg-legal/pages/about/index',
     },
   ]
 
@@ -529,7 +549,7 @@ export default function Profile() {
             </Text>
             <View
               className="profile__guest-btn"
-              onClick={() => void Taro.navigateTo({ url: '/pages/login/index' })}
+              onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/login/index' })}
             >
               {/* 登录页只剩微信一条路，没有「注册」这个独立动作可点了（#198 审查 P2-2） */}
               <Text>去登录</Text>
@@ -652,7 +672,7 @@ export default function Profile() {
           {/* 扫码：与头像同一行对齐（撑满头像高度让图标与头像同心），直通扫码页 */}
           <View
             className="profile__scanbtn"
-            onClick={() => void Taro.navigateTo({ url: '/pages/scan-pr/index' })}
+            onClick={() => void Taro.navigateTo({ url: '/pkg-vision/pages/scan-pr/index' })}
           >
             <Image className="profile__scanbtn-ic" src={ICONS.scanAccent} mode="aspectFit" />
           </View>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { userListEnd } from '../src/pages/user/list-end'
+import { userListEnd } from '../src/pkg-browse/pages/user/list-end'
 
 /**
  * 他人主页「列表终点提示」的判定（#178 审查收口）。
@@ -48,7 +48,7 @@ describe('userListEnd —— 列表终点判定', () => {
  * 上面的用例照样全绿。本仓 `tests/` 没有 Taro 组件渲染基建，只能读源码断言。
  */
 describe('user 页面接线', () => {
-  const source = Bun.file(new URL('../src/pages/user/index.tsx', import.meta.url)).text()
+  const source = Bun.file(new URL('../src/pkg-browse/pages/user/index.tsx', import.meta.url)).text()
 
   test('终点提示由 userListEnd 判定，两个信号都传进判定', async () => {
     const code = await source

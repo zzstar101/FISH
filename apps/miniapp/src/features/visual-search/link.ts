@@ -26,7 +26,7 @@ export const VISUAL_QUERY_OBJECT_KEY_PARAM = 'visualObjectKey'
 export const VISUAL_QUERY_LOCAL_PATH_PARAM = 'visualQueryPath'
 
 /** 识图结果页路由 */
-export const VISION_RESULT_PAGE = '/pages/vision-result/index'
+export const VISION_RESULT_PAGE = '/pkg-vision/pages/vision-result/index'
 
 /** 带着查询图跳结果页的 URL */
 export function visionResultPageUrl(objectKey: string, localPath?: string): string {

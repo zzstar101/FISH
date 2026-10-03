@@ -9,7 +9,7 @@ import {
   soldAvgText,
   VISUAL_SORT_OPTIONS,
   visualSortQuery,
-} from '@/pages/vision-result/view'
+} from '@/pkg-vision/pages/vision-result/view'
 
 /**
  * 识图结果页的派生判据（设计稿 01–05 的状态覆盖）。

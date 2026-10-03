@@ -19,7 +19,9 @@ function code(source: string): string {
 
 async function pageSource(): Promise<string> {
   return code(
-    await Bun.file(new URL('../src/pages/vision-result/index.tsx', import.meta.url)).text(),
+    await Bun.file(
+      new URL('../src/pkg-vision/pages/vision-result/index.tsx', import.meta.url),
+    ).text(),
   )
 }
 

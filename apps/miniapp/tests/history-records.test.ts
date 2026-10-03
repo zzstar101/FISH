@@ -17,7 +17,7 @@ import {
   TABS,
   tailTextOf,
   withCleared,
-} from '../src/pages/history/records'
+} from '../src/pkg-browse/pages/history/records'
 
 /**
  * 「历史浏览」的数据口径（本轮三类数据后端一条都没有，见 records.ts 文件头）。

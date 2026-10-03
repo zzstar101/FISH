@@ -440,7 +440,7 @@ export default function Sell() {
    */
   const goDetail = (id: string) => {
     resetForm()
-    void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${id}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${id}` })
   }
 
   /**
@@ -861,7 +861,7 @@ export default function Sell() {
             <View
               className="sell__submit"
               onClick={() => {
-                void Taro.navigateTo({ url: '/pages/mylist/index' })
+                void Taro.navigateTo({ url: '/pkg-browse/pages/mylist/index' })
               }}
             >
               <Text className="sell__submit-text">去「我的发布」看看</Text>

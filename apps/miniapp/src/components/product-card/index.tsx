@@ -145,7 +145,7 @@ export default function ProductCard({
   const handleOpenSeller = (event: { stopPropagation: () => void }) => {
     event.stopPropagation()
     if (!seller) return
-    void Taro.navigateTo({ url: `/pages/user/index?id=${seller.id}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/user/index?id=${seller.id}` })
   }
 
   /**
