@@ -24,6 +24,45 @@ export type NavMetrics = {
   capsuleInset: number
   /** 整条栏占用的高度（状态栏 + 内容行） */
   totalHeight: number
+  /** 微信原生胶囊的真实高度（设备 px）；取不到时用典型值兜底 */
+  capsuleHeight: number
+  /** 胶囊顶部距状态栏的留白（设备 px），上下对称 */
+  capsuleGap: number
+}
+
+/**
+ * 左上角返回钮的规格（2026-10-02 拍板）：**与右侧微信原生胶囊等高、同一行居中**。
+ *
+ * 不再沿用设计稿的两档固定值（漂浮钮 36pt / 栏内钮 32pt）—— 那两档与胶囊都不严格
+ * 等高（iPhone 胶囊 32pt，安卓机型各异），只有按运行时胶囊矩形下发行内 px 才能在
+ * 所有机型上精确等高对齐。箭头按 0.28 钮径比（延续 64px 钮配 18px 箭头的原比例）。
+ */
+const BACK_BTN_CHEVRON_RATIO = 0.28
+/** 描边随钮径等比（原 64px 钮 4px 描边） */
+const BACK_BTN_CHEVRON_BORDER_RATIO = 4 / 64
+
+export function backButtonGeometry(capsuleHeight: number) {
+  const size = Math.round(capsuleHeight)
+  const chevron = Math.round(size * BACK_BTN_CHEVRON_RATIO)
+  const chevronBorder = Math.max(2, Math.round(size * BACK_BTN_CHEVRON_BORDER_RATIO))
+  const chevronShift = Math.round((chevron / 6) * 2) / 2
+  return {
+    size,
+    chevron,
+    chevronBorder,
+    chevronShift,
+    /** 返回钮的行内 style（width/height，设备 px） */
+    btnStyle: { width: `${size}px`, height: `${size}px` },
+    /** 标准圆钮内 CSS 箭头的行内 style（几何随胶囊高等比） */
+    chevronStyle: {
+      width: `${chevron}px`,
+      height: `${chevron}px`,
+      borderLeftWidth: `${chevronBorder}px`,
+      borderBottomWidth: `${chevronBorder}px`,
+      borderRadius: '1px',
+      transform: `translateX(${chevronShift}px) rotate(45deg)`,
+    },
+  }
 }
 
 /**
@@ -41,6 +80,10 @@ export type NavMetrics = {
 const DESIGN_CONTENT_HEIGHT = 44
 const FALLBACK_CAPSULE_INSET = 106
 const FALLBACK_STATUS_BAR = 20
+/** 取不到胶囊矩形时的典型胶囊高（iPhone 机型实测档） */
+const FALLBACK_CAPSULE_HEIGHT = 32
+/** 取不到时按 44pt 行高对称推：上下留白 (44 − 32) / 2 */
+const FALLBACK_CAPSULE_GAP = (DESIGN_CONTENT_HEIGHT - FALLBACK_CAPSULE_HEIGHT) / 2
 
 export function readNavMetrics(): NavMetrics {
   try {
@@ -50,8 +93,9 @@ export function readNavMetrics(): NavMetrics {
     let menu: { top: number; height: number; left: number } | null = null
     try {
       const rect = Taro.getMenuButtonBoundingClientRect()
-      // h5 / 部分环境返回全 0 的矩形，这种要当「取不到」处理，否则行高会算成 0
-      if (rect && rect.height > 0 && rect.left > 0) menu = rect
+      // h5 / 部分环境返回全 0 的矩形，这种要当「取不到」处理，否则行高会算成 0；
+      // 高度小得离谱（<24）的矩形同样不可信 —— 按它下发行内尺寸会画出退化箭头
+      if (rect && rect.height > 0 && rect.height >= 24 && rect.left > 0) menu = rect
     } catch {
       menu = null
     }
@@ -62,6 +106,8 @@ export function readNavMetrics(): NavMetrics {
         contentHeight: DESIGN_CONTENT_HEIGHT,
         capsuleInset: FALLBACK_CAPSULE_INSET,
         totalHeight: statusBarHeight + DESIGN_CONTENT_HEIGHT,
+        capsuleHeight: FALLBACK_CAPSULE_HEIGHT,
+        capsuleGap: FALLBACK_CAPSULE_GAP,
       }
     }
 
@@ -76,6 +122,8 @@ export function readNavMetrics(): NavMetrics {
       contentHeight,
       capsuleInset,
       totalHeight: statusBarHeight + Math.max(contentHeight, DESIGN_CONTENT_HEIGHT),
+      capsuleHeight: Math.round(menu.height),
+      capsuleGap: gap,
     }
   } catch {
     return {
@@ -83,6 +131,8 @@ export function readNavMetrics(): NavMetrics {
       contentHeight: DESIGN_CONTENT_HEIGHT,
       capsuleInset: FALLBACK_CAPSULE_INSET,
       totalHeight: FALLBACK_STATUS_BAR + DESIGN_CONTENT_HEIGHT,
+      capsuleHeight: FALLBACK_CAPSULE_HEIGHT,
+      capsuleGap: FALLBACK_CAPSULE_GAP,
     }
   }
 }

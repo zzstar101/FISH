@@ -52,16 +52,22 @@
 .detail__navrow {
   display: flex;
   align-items: center;
-  /* 稿子 `.mp-nav{height:calc(88 * var(--rpx));padding-inline:calc(20 * var(--rpx))}` */
-  height: 88px;
+  /*
+   * 行几何与 `components/top-bar` 同构，由页面行内下发（状态栏相关，样式表写不出）：
+   * 行总高 = totalHeight − statusBarHeight，多出胶囊行的部分 padding-bottom 补在
+   * 下方，返回钮在胶囊那一段里居中。原稿固定 88px（44pt）在部分机型上与胶囊错位。
+   */
+  box-sizing: border-box;
   padding: 0 20px;
 }
 
-/* 返回钮：稿子 `.glass` = 64rpx 圆形，白玻璃底 + 白描边 + 极轻投影 */
+/*
+ * 返回钮：白玻璃圆钮 + 白描边 + 极轻投影。尺寸不再用稿子的 64rpx 固定档 ——
+ * 与右侧微信原生胶囊等高（2026-10-02 拍板），由页面按运行时胶囊矩形行内下发。
+ */
 .detail__back {
-  width: 64px;
-  height: 64px;
   flex: 0 0 auto;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -81,13 +87,12 @@
 }
 
 /* 箭头用两条边框拼（与 `components/nav-bar` 同一形态），随钮一起缩到 20rpx */
+/* 箭头几何（边长 / 描边宽 / 旋转补偿）由页面按胶囊高等比行内下发，这里只留颜色 */
 .detail__chevron {
-  width: 20px;
-  height: 20px;
-  border-left: 4px solid var(--fg);
-  border-bottom: 4px solid var(--fg);
-  border-radius: 2px;
-  transform: translateX(3px) rotate(45deg);
+  border-left-style: solid;
+  border-left-color: var(--fg);
+  border-bottom-style: solid;
+  border-bottom-color: var(--fg);
 }
 
 /*
