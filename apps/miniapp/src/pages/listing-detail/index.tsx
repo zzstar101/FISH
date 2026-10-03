@@ -39,16 +39,12 @@ import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
+import { categoryLabel, conditionLabel } from '@/lib/listing-labels'
+import { formatAmount } from '@/lib/money'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
-import {
-  categoryLabel,
-  conditionLabel,
-  formatAmount,
-  type ListingDetailView,
-  type MockComment,
-  type MockListing,
-} from '@/mock/api'
+import type { ListingDetailView } from '@/mock/api'
+import type { MockComment, MockListing } from '@/mock/types'
 import { ME as mockMe } from '@/mock/users'
 import {
   type ActionTask,

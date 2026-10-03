@@ -24,9 +24,10 @@ import {
   useFeedImpressions,
 } from '@/features/recommendation/use-impressions'
 import { startVisualSearch } from '@/features/visual-search/start'
+import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
+import type { ListingCategory, MockListing } from '@/mock/types'
 import { applyLoadResult, homeListState } from './list-state'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
 import './index.scss'

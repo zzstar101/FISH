@@ -11,7 +11,8 @@ import { useAuth } from '@/features/auth/store'
 import { createConversation } from '@/features/chat/api'
 import { loadWishMatches } from '@/features/fetchers'
 import type { MatchView } from '@/features/match/adapt'
-import { formatAmount, MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
+import { formatAmount } from '@/lib/money'
+import { MATCH_SCORE_THRESHOLD, type MockWish } from '@/mock/api'
 import {
   type ChatTask,
   canLoad,

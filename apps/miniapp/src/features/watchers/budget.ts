@@ -8,9 +8,9 @@
  * 已注销记录恰好填了 300 元，所以这个 bug 现在看不见，真实数据一到就会露出来）。
  *
  * 抽成纯函数后，「已注销」与「正常」两种行状态共用同一条口径，也能直接被单元测试锁住。
- * 金额格式化复用 mock 数据层的 `formatAmount`，与商品价格、预算中位数保持同一口径。
+ * 金额格式化复用 `@/lib/money` 的 `formatAmount`，与商品价格、预算中位数保持同一口径。
  */
-import { formatAmount } from '@/mock/api'
+import { formatAmount } from '@/lib/money'
 
 /** 预算展示文案：`null` → 「未填预算」，`0` → 「预算 ¥0」，正数 → 「预算 ¥X」 */
 export function watcherBudgetLabel(budgetCents: number | null): string {

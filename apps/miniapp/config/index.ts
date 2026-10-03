@@ -11,6 +11,15 @@ const miniappRequire = createRequire(resolve(__dirname, '../package.json'))
 const runtimeRequire = createRequire(miniappRequire.resolve('@tarojs/runtime'))
 // https://docs.taro.zone/docs/config
 export default defineConfig<'webpack5'>(async (merge) => {
+  /**
+   * 演示兜底开关的**构建期**口径，与下面 `defineConstants.__ALLOW_MOCK_FALLBACK__` 用的是
+   * 同一个表达式（那处一字未动）：`TARO_APP_MOCK=1` 的本地演示、以及
+   * `NODE_ENV=development` 的 dev 构建都要保留 fixture 兜底；其余（含
+   * `bun run build:weapp`）一律切掉。
+   */
+  const allowMockFallback =
+    process.env.TARO_APP_MOCK === '1' || process.env.NODE_ENV === 'development'
+
   const baseConfig: UserConfigExport<'webpack5'> = {
     projectName: 'fish-miniapp',
     designWidth: 750,
@@ -22,7 +31,31 @@ export default defineConfig<'webpack5'>(async (merge) => {
     },
     sourceRoot: 'src',
     outputRoot: 'dist',
+    /**
+     * 演示兜底 fixture 的构建期切分，见 `src/features/mock-fallback.ts` 的文件头。
+     *
+     * `allowMockFallback` 为假时，把**精确路径** `@/features/mock-fallback` 指向零
+     * `@/mock/*` 依赖的桩文件，于是整包演示 fixture（catalog / chat / account /
+     * users / wishes / discover）根本不进生产包的模块图 —— 它们此前被
+     * `features/fetchers.ts` 与 `custom-tab-bar/index.tsx` 的静态 import 拖进首屏
+     * chunk 并在冷启动时求值（实测占首屏 JS 求值的约 90%）。
+     *
+     * ⚠️ **键序是语义的一部分**：`enhanced-resolve` 的 alias 按声明顺序匹配
+     * （`AliasUtils.js` 的 `forEachBail`），前缀别名 `'@'` 会先把
+     * `@/features/mock-fallback` 整个吃掉。所以这个精确别名必须写在 `'@'` **之前**；
+     * Taro 的 `MiniCombination#getAlias` 用 `Object.assign` 合并，保留用户键序。
+     * 生效与否以构建产物的 grep 为准，不能只看这段配置。
+     */
     alias: {
+      ...(allowMockFallback
+        ? {}
+        : {
+            '@/features/mock-fallback': resolve(
+              __dirname,
+              '..',
+              'src/features/mock-fallback.prod.ts',
+            ),
+          }),
       '@': resolve(__dirname, '..', 'src'),
     },
     /**

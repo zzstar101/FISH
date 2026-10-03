@@ -4,8 +4,8 @@ import { useMemo } from 'react'
 import brandMark from '@/assets/brand/brand-mark.png'
 import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
+import { APP_VERSION } from '@/lib/app-meta'
 import { readNavMetrics } from '@/lib/nav-metrics'
-import { APP_VERSION } from '@/mock/api'
 import './index.scss'
 
 /**

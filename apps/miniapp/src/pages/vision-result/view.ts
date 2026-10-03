@@ -20,8 +20,8 @@ import {
   type VisualSearchSort,
   type VisualSearchStats,
 } from '@fish/contracts/visual/schema'
+import { categoryLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
-import { categoryLabel } from '@/mock/api'
 
 /** 查询图卡的文案（稿 01 的默认态 / 05 的 `interpretation === null` 变体）。 */
 export type QueryCardCopy = {

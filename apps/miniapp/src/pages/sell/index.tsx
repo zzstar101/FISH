@@ -18,9 +18,9 @@ import { createListing, fetchListingDetail, updateListing } from '@/features/lis
 import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
 import { pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
+import { categoryLabel } from '@/lib/listing-labels'
 import { isApiError } from '@/lib/request'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import { categoryLabel } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import {
   parsePriceToCents,

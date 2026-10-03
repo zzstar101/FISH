@@ -8,8 +8,9 @@ import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { createWish } from '@/features/wish/api'
 import { markWishesDirty } from '@/features/wish/refresh'
+import { categoryLabel, WISH_CATEGORIES } from '@/lib/listing-labels'
 import { isApiError } from '@/lib/request'
-import { categoryLabel, type MockWish, WISH_CATEGORIES } from '@/mock/api'
+import type { MockWish } from '@/mock/types'
 import './index.scss'
 
 /**

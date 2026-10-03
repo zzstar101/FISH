@@ -7,7 +7,7 @@ import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import type { OrderCardView } from '@/features/transaction/adapt'
 import { countsOf, type StatusKey, shownOf } from '@/features/transaction/useOrderList'
-import { formatAmount } from '@/mock/api'
+import { formatAmount } from '@/lib/money'
 import './index.scss'
 
 /**

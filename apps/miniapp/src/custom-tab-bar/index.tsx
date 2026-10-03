@@ -20,12 +20,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import { useAuth } from '@/features/auth/store'
 import { badgeShouldLight, hydrateUnread, useUnreadSnapshot } from '@/features/chat/unread'
-// 只为一个构建期常量就静态 import `@/features/fetchers`（718 行 / 32KB，且它静态
-// import 了 `@/mock/account`）会把整张取数 barrel 拖进底栏——而底栏在**每个** Tab 页
-// 都会渲染，属于冷启动必经路径。常量真源本来就在 `features/load-failure.ts`。
+// 只为一个构建期常量就静态 import `@/features/fetchers`（900+ 行的取数 barrel）
+// 会把整张取数图拖进底栏——而底栏在**每个** Tab 页都会渲染，属于冷启动必经路径。
+// 常量真源本来就在 `features/load-failure.ts`。
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
+// 演示兜底的 fixture 取值走 `mock-fallback`：生产构建由 `config/index.ts` 的 alias
+// 换成零 `@/mock/*` 依赖的桩，fixture 子图不进底栏（底栏在每个 Tab 页都渲染）。
+import { demoTabbarUnread } from '@/features/mock-fallback'
 import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
-import { conversations, unreadNotificationCount } from '@/mock/api'
 import './index.scss'
 
 type TabKey = 'home' | 'wish' | 'sell' | 'chat' | 'profile'
@@ -155,18 +157,7 @@ export default function CustomTabBar() {
    * 不能用 fixture 先亮一颗点进去什么都没有的幽灵红点。兜底由这里注入而不是
    * `features/chat/unread` 内判断构建开关 —— store 不该知道 fixture 的存在。
    */
-  const demoUnread = useMemo(
-    () =>
-      MOCK_FALLBACK_ENABLED
-        ? () => ({
-            conversations: conversations()
-              .filter((item) => item.kind !== 'system')
-              .reduce((sum, item) => sum + item.unreadCount, 0),
-            notifications: unreadNotificationCount(),
-          })
-        : undefined,
-    [],
-  )
+  const demoUnread = useMemo(() => (MOCK_FALLBACK_ENABLED ? demoTabbarUnread : undefined), [])
 
   /**
    * 冷启动补快照（#129 review P1；#89 收口会话未读那一分量）。

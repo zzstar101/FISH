@@ -13,17 +13,11 @@ import { loadWishes, WISH_HIT_ROWS, type WishHitList } from '@/features/fetchers
 import type { WishHit } from '@/features/match/adapt'
 import { closeWish as closeWishApi } from '@/features/wish/api'
 import { consumeWishesDirty } from '@/features/wish/refresh'
+import { categoryLabel, WISH_CATEGORIES } from '@/lib/listing-labels'
+import { formatAmount, formatYuan } from '@/lib/money'
 import { isApiError } from '@/lib/request'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import {
-  categoryLabel,
-  formatAmount,
-  formatYuan,
-  type MockWish,
-  type MockWishPoolItem,
-  POOL_MIN_COUNT,
-  WISH_CATEGORIES,
-} from '@/mock/api'
+import { type MockWish, type MockWishPoolItem, POOL_MIN_COUNT } from '@/mock/api'
 import { wishHitLink } from './list-state'
 import './index.scss'
 

@@ -19,14 +19,8 @@ import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { startVisualSearch } from '@/features/visual-search/start'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
-import {
-  defaultSearchHistory,
-  hotSearches,
-  type MockListing,
-  type SearchFilter,
-  searchFilters,
-  searchPlaceholder,
-} from '@/mock/api'
+import { defaultSearchHistory, hotSearches, searchFilters, searchPlaceholder } from '@/mock/api'
+import type { MockListing, SearchFilter } from '@/mock/types'
 import './index.scss'
 
 /** 结果瀑布流列宽（设计值 = 2×pt）：750 - 左右各 40 - 列间距 24，再除以 2 */

@@ -24,10 +24,10 @@ import {
 import { requestSellEdit, requestSellPrefill } from '@/features/listing/edit-target'
 import { rejectionNote } from '@/features/listing/moderation-reason'
 import { acceptTransaction, rejectProposal } from '@/features/transaction/api'
+import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { relativeTimeOf } from '@/lib/time'
-import { formatAmount } from '@/mock/api'
 import type { MockListing } from '@/mock/types'
 import {
   canDelete,
