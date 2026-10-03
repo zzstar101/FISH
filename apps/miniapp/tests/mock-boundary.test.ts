@@ -8,25 +8,34 @@ import path from 'node:path'
  *
  * 演示 fixture（`src/mock/*`）一旦被**任何**运行期模块静态 import，webpack 的
  * scope-hoisting 就会把整片 fixture 合并进生产包 —— 首屏求值可以被 alias 切掉，
- * 包体却瘦不下来。所以「除 mock 层与 `mock-fallback` 外，没有运行期依赖 `@/mock/*`」
- * 必须是一条**测试钉住的不变式**，而不是靠人肉 grep。
+ * 包体却瘦不下来。所以「除 mock 层、`mock-fallback` 与下面登记的**三个遗留叶子**外，
+ * 没有运行期依赖 `@/mock/*`」必须是一条**测试钉住的不变式**，而不是靠人肉 grep。
  *
  * `import type` / `import { type X }` 会被 TS 擦除，不构成运行期依赖，**不算违规**
- * （`@/mock/types` 是纯类型模块，页面大量这样用）。
+ * （`@/mock/types` 是纯类型模块，页面大量这样用）。类型位置的 `typeof import('…')`
+ * 同理 —— 它有专门的跳过分支。
  *
  * ## 本测试实际覆盖什么（别把话说满）
  *
- * 覆盖三类**值**依赖，且相对路径与 `@/mock/*` 别名一视同仁：
- * ① `import … from`（含多行）/ `export … from`；② 副作用 `import '…'`；
- * ③ `await import('…')` 形式的动态 import。
- * **不覆盖**：`require()`（本仓小程序端不使用）、`jest.mock` 之类的测试期注入、
- * 运行时字符串拼接出来的模块路径。
+ * 判定在**去注释、且能区分「字符串内容」与「代码」**的文本上做（`lexSource`），
+ * 相对路径与 `@/mock/*` 别名一视同仁：
+ * ① `import … from` / `export … from`（含多行，**不跨语句**：`export type X = …` 之后
+ * 那条 import 不会被前一条吞掉）；② 副作用 `import '…'`；③ `import(…)`（单双引号或
+ * 反引号、可跨行）；④ `require('…')`（本仓小程序端未用，顺手拦）。
+ * 字符串里写着的 import 源码片段、`.d.ts` 里的类型导入，都不算运行期依赖。
  *
- * 扫描对象是 `src/**`（含 `tests/`、`preview/` 之外的源码树），**跳过** `src/mock/**`
- * 本身（它就是要消费 fixture 的那一层）与 `features/mock-fallback.ts`。跳过
- * `src/mock/**` 曾留下一个洞：留在生产包里的叶子（`mock/blocks` 等）自己再 import
- * `mock/users`，就会把整份 `USERS` 拖回包里而没人拦 —— 现在由「叶子传递闭包」那条
- * 测试专门守住。
+ * **已知盲区（写在这里，别指望它守住）**：
+ * - 运行期拼出来的模块路径（`` import(`@/mock/${name}`) ``）；
+ * - 整个 import 表达式位于模板串 `${…}` 插值内部（`lexSource` 把插值当代码，但嵌套
+ *   在模板串里的 import 不做特殊识别）；
+ * - `jest.mock` 之类的测试期注入（小程序端不用）。
+ *
+ * 扫描对象是 `src/**`（`tests/`、`preview/` 不在其下），**跳过** `src/mock/**`
+ * 本身（它就是要消费 fixture 的那一层）、`features/mock-fallback.ts` 与 `.d.ts`
+ * （`.d.ts` 的 import 只能是类型用途）。跳过 `src/mock/**` 曾留下一个洞：留在生产包里的
+ * 叶子（`mock/blocks` 等）自己再 import `mock/users`，就会把整份 `USERS` 拖回包里而
+ * 没人拦 —— 现在由「叶子传递闭包」那条测试专门守住（闭包复用同一套判定，所以上面
+ * ①②③④ 的盲区对它同样成立）。
  *
  * ## 仍然留在生产包里的演示数据（已知，非本测试范围）
  *
@@ -95,60 +104,99 @@ function isTypeOnly(clause: string): boolean {
 }
 
 /**
- * 把注释换成空格，字符串原样保留。
+ * 词法扫描：把注释换成空格，并标出哪些字符是**字符串/模板串内容**。
  *
- * 扫描必须在**无注释**的文本上做：注释里写 `await import('@/mock/users')` 举例
- * （本仓文档注释习惯带反例）不能被当成真依赖，反过来也不能漏掉真代码。
+ * 为什么两件事都要做：
+ * - 注释里写 `await import('@/mock/users')` 举例（本仓文档注释习惯带反例）不能被当成
+ *   真依赖，反过来也不能漏掉真代码；
+ * - 字符串里出现的 import 源码片段（`` const snippet = `import { USERS } from '@/mock/users'` ``）
+ *   不是依赖，但字符串**结尾**不能靠「看到引号就跳过」来处理 —— import 的说明符本身
+ *   也是字符串，所以这里只**标记**不删除，由调用方按位置判断。
+ *
+ * 返回的 `code` 与输入等长（逐字符替换），因此下标可以直接当源码偏移用。
+ * 模板串里的 `${ … }` 是代码，用栈记回来（`}` 收尾后继续当字符串标记）。
  */
-function stripComments(source: string): string {
+function lexSource(source: string): { code: string; inString: boolean[] } {
+  const inString = new Array<boolean>(source.length).fill(false)
   let out = ''
   let i = 0
   let state: 'code' | 'line' | 'block' | 'single' | 'double' | 'template' = 'code'
+  /** 每个未闭合的模板串插值：`braces` 是插值内部的 `{}` 深度。 */
+  const interpolation: { braces: number }[] = []
+  const emit = (text: string, marked: boolean) => {
+    for (const char of text) {
+      out += char
+      if (marked) inString[out.length - 1] = true
+    }
+  }
   while (i < source.length) {
-    const char = source[i]
+    const char = source[i] ?? ''
     const next = source[i + 1]
     if (state === 'code') {
       if (char === '/' && next === '/') {
         state = 'line'
-        out += '  '
+        emit('  ', false)
         i += 2
         continue
       }
       if (char === '/' && next === '*') {
         state = 'block'
-        out += '  '
+        emit('  ', false)
         i += 2
         continue
+      }
+      if (interpolation.length > 0) {
+        const frame = interpolation[interpolation.length - 1]
+        if (frame !== undefined) {
+          if (char === '{') frame.braces += 1
+          else if (char === '}') {
+            if (frame.braces === 0) {
+              interpolation.pop()
+              state = 'template'
+              emit(char, true)
+              i += 1
+              continue
+            }
+            frame.braces -= 1
+          }
+        }
       }
       if (char === "'") state = 'single'
       else if (char === '"') state = 'double'
       else if (char === '`') state = 'template'
-      out += char
+      emit(char, false)
       i += 1
       continue
     }
     if (state === 'line') {
       if (char === '\n') {
         state = 'code'
-        out += char
-      } else out += ' '
+        emit(char, false)
+      } else emit(' ', false)
       i += 1
       continue
     }
     if (state === 'block') {
       if (char === '*' && next === '/') {
         state = 'code'
-        out += '  '
+        emit('  ', false)
         i += 2
         continue
       }
-      out += char === '\n' ? '\n' : ' '
+      emit(char === '\n' ? '\n' : ' ', false)
       i += 1
       continue
     }
-    // 字符串内部：转义跳过，遇同类引号回到 code。
+    // 字符串 / 模板串内部：转义跳过，遇同类引号回到 code，`${` 进入插值。
     if (char === '\\') {
-      out += char + (next ?? '')
+      emit(char + (next ?? ''), true)
+      i += 2
+      continue
+    }
+    if (state === 'template' && char === '$' && next === '{') {
+      interpolation.push({ braces: 0 })
+      state = 'code'
+      emit('${', true)
       i += 2
       continue
     }
@@ -159,10 +207,10 @@ function stripComments(source: string): string {
     ) {
       state = 'code'
     }
-    out += char
+    emit(char, true)
     i += 1
   }
-  return out
+  return { code: out, inString }
 }
 
 /**
@@ -184,23 +232,50 @@ function resolveMockId(specifier: string, fromFile: string): string | null {
   return null
 }
 
+/** `inString[from, to)` 里有没有字符串内容。 */
+function rangeHasString(inString: boolean[], from: number, to: number): boolean {
+  for (let k = from; k < to; k++) if (inString[k] === true) return true
+  return false
+}
+
 /** 抽出一个源码文件里所有**运行期**（非 import type）依赖的 `@/mock/*` 规范 id。 */
 function mockValueImports(source: string, fromFile: string): string[] {
-  const code = stripComments(source)
+  const { code, inString } = lexSource(source)
   const found: string[] = []
-  const push = (specifier: string) => {
+  const push = (specifier: string | undefined) => {
+    if (specifier === undefined) return
     const id = resolveMockId(specifier, fromFile)
     if (id !== null) found.push(id)
   }
-  // 只认「行首（允许缩进）就是 import/export」的语句；`[\s\S]*?` 允许跨行到 `from`。
-  const withFrom = /^[ \t]*(?:import|export)\b([\s\S]*?)from[ \t]*['"]([^'"]+)['"]/gm
+  // 只认「行首（允许缩进）就是 import/export」的语句。两道约束：
+  // - 说明符允许跨行（`import {\n  A,\n} from '…'`）；
+  // - **不跨语句**：`export type X = …` 这种自己没 `from` 的声明，不能越过下一行的
+  //   `import … from` 去认领它的 `from`。旧写法 `([\s\S]*?)` 会这么干，把后一条**真值**
+  //   导入整段当成 type-only 丢掉 —— 独立审查在真实文件 `src/mock/sell.ts`（首行就是
+  //   `export type PolishCandidate = {`）上实测过这条失效。
+  const withFrom =
+    /^[ \t]*(?:import|export)\b((?:(?!\n[ \t]*(?:import|export)\b)[\s\S])*?)from[ \t]*['"]([^'"]+)['"]/gm
   const sideEffect = /^[ \t]*import[ \t]*['"]([^'"]+)['"]/gm
-  const dynamic = /\bimport[ \t]*\([ \t]*['"]([^'"]+)['"][ \t]*\)/g
+  // 动态 import：引号或反引号、说明符可跨行；`require(…)` 顺手一起拦。
+  const dynamic = /\b(?:import|require)\s*\(\s*[`'"]([^`'"]+)[`'"]\s*\)/g
   for (const match of code.matchAll(withFrom)) {
-    if (!isTypeOnly(match[1])) push(match[2])
+    const at = match.index ?? 0
+    if (inString[at] === true) continue
+    // 语句头里混进字符串 ⇒ 这一行其实是字符串/模板串内容
+    // （`` const s = `import { USERS } from '@/mock/users'` ``），不是依赖。
+    if (rangeHasString(inString, at, at + match[0].indexOf('from'))) continue
+    if (!isTypeOnly(match[1] ?? '')) push(match[2])
   }
-  for (const match of code.matchAll(sideEffect)) push(match[1])
-  for (const match of code.matchAll(dynamic)) push(match[1])
+  for (const match of code.matchAll(sideEffect)) {
+    if (inString[match.index ?? 0] !== true) push(match[1])
+  }
+  for (const match of code.matchAll(dynamic)) {
+    const at = match.index ?? 0
+    if (inString[at] === true) continue
+    // 类型位置：`typeof import('…')` 会被 TS 擦除，不是运行期依赖。
+    if (/\btypeof\s*$/.test(code.slice(Math.max(0, at - 16), at))) continue
+    push(match[1])
+  }
   return found
 }
 
@@ -212,6 +287,8 @@ async function scanMockValueImports(): Promise<{ file: string; specifier: string
   const glob = new Bun.Glob('**/*.{ts,tsx}')
   const hits: { file: string; specifier: string }[] = []
   for await (const file of glob.scan({ cwd: SRC.pathname, onlyFiles: true })) {
+    // `.d.ts` 里的 import 只能是类型用途（`Bun.Glob('**/*.{ts,tsx}')` 会匹配到它们）。
+    if (file.endsWith('.d.ts')) continue
     if (file.startsWith('mock/') || MOCK_LAYER_EXEMPT.has(file)) continue
     for (const specifier of mockValueImports(await readSource(file), file)) {
       hits.push({ file, specifier })
@@ -237,7 +314,10 @@ async function leafFixtureClosure(): Promise<{
     const id = queue.pop()
     if (id === undefined || reached.has(id)) continue
     reached.add(id)
-    const file = `${id.slice('@/'.length)}.ts`
+    const base = id.slice('@/'.length)
+    const ts = `${base}.ts`
+    // 叶子既可能是 `.ts` 也可能是 `.tsx`；写死 `.ts` 会在改成组件文件时 ENOENT。
+    const file = (await Bun.file(new URL(ts, SRC)).exists()) ? ts : `${base}.tsx`
     const source = await readSource(file)
     for (const next of mockValueImports(source, file)) {
       if (FIXTURE_CLUSTER.includes(next)) offenders.push({ from: id, to: next })
@@ -307,6 +387,25 @@ describe('mock fixture 生产包边界', () => {
     expect(mockValueImports("const m = await import('@/mock/users')\n", at)).toEqual([
       '@/mock/users',
     ])
+    // 反引号 / 跨行 / require 的写法也要认（审查实测旧正则全漏）
+    expect(mockValueImports('const m = await import(`@/mock/users`)\n', at)).toEqual([
+      '@/mock/users',
+    ])
+    expect(mockValueImports("const m = await import(\n  '@/mock/users'\n)\n", at)).toEqual([
+      '@/mock/users',
+    ])
+    expect(mockValueImports("const m = require('@/mock/users')\n", at)).toEqual(['@/mock/users'])
+    // 语句边界：自己没 `from` 的 `export type …` 不能越过下一行的真 import
+    // （审查在真实文件 `src/mock/sell.ts` 上实测旧正则会把这条真值导入整段丢掉）
+    expect(
+      mockValueImports("export type Probe = string\nimport { A } from '@/mock/users'\n", at),
+    ).toEqual(['@/mock/users'])
+    // 类型位置不是运行期依赖
+    expect(mockValueImports("type M = typeof import('@/mock/users')\n", at)).toEqual([])
+    // 字符串里写着的 import 源码片段不是依赖
+    expect(
+      mockValueImports("export const s = `import { USERS } from '@/mock/users'`\n", at),
+    ).toEqual([])
     // 注释里的示例不算
     expect(mockValueImports("// import { A } from '@/mock/blocks'\n", at)).toEqual([])
     expect(mockValueImports("/* await import('@/mock/users') */\n", at)).toEqual([])

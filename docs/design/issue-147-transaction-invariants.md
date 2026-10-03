@@ -1,6 +1,6 @@
 # #147 交易、订单与面交凭证 — 剩余项设计方案
 
-> 状态：**方案已确认（Owner 逐条拍板），本文不含实现代码**。工程侧（PR-1）已实现并随 PR #181 提审；页面侧（PR-2）待 #177 合入后启动。
+> 状态：**方案已确认（Owner 逐条拍板），本文不含实现代码**。工程侧（PR-1）已实现并随 PR #181 提审；**页面侧（PR-2）已由 PR #209（提交 `41f39c69`，2026-09-25）实现并合入 `origin/main`** —— 因此本文 §2 / §3 / §5 里「待做」的措辞是**决策时快照**，实现细节以代码为准（本节状态行与 §0 / §2 / §5 已按此标注）。
 > 关联：Refs [#147](https://github.com/zzstar101/FISH/issues/147)（需求载体；只引用、不关闭，见 §10） ｜ 前置已落地：[#169](https://github.com/zzstar101/FISH/issues/169)（长期凭证 + 终态同事务销毁）、[#176](https://github.com/zzstar101/FISH/issues/176)（一单一码 + 幂等取码）、[#167](https://github.com/zzstar101/FISH/issues/167)（Orders 真实列表）、[#168](https://github.com/zzstar101/FISH/issues/168)（Meetup UI 与身份守卫） ｜ 基线校准：[#183](https://github.com/zzstar101/FISH/issues/183)（#76 flake 修复：三处终态 DELETE 拆出 CTE、改为同一事务的独立语句，本文 §4.2 的结构描述与行号据此更新）
 > 记录人：Coast-87（本机） ｜ 日期：2026-09-22 ｜ 更新：2026-09-23（#183 合入后校准）
 > **行号基线**：`origin/main = ad38862`（2026-09-23，`#183` 合入后）。本文引用的代码行号以此为准；#183 改写了 `store.ts` 三处终态 DELETE 的形态与行号，本文引用已按新基线逐条核对。
@@ -10,13 +10,13 @@
 
 ## 0. Owner 看这里
 
-一句话：#147 的尾巴分工程侧与页面侧 —— 工程侧（交易/面交流程不变量进 CI）已由 PR #181 实现并提审；页面侧还剩两个客户端正确性 bug、一处注释残留与真机回归没做（真机回归由 Owner 按 §6 执行），按 `docs/miniapp-dev-workflow.md` §2 的串行门禁排成**一个页面 PR（等 #177 合入）**。
+一句话：#147 的尾巴分工程侧与页面侧 —— 工程侧（交易/面交流程不变量进 CI）已由 PR #181 实现并提审；页面侧的两个客户端正确性 bug 已由 PR #209（`41f39c69`）实现并合入 `origin/main`（其中 §5.3 那处注释改动**未采纳**，理由见 §1 非目标行）；页面侧只剩真机回归没做（由 Owner 按 §6 执行）。
 
 需要你本人做的三件事：
 
-1. **PR-2 的微信开发者工具演示 + 你确认可行后才允许提交**（`docs/miniapp-dev-workflow.md` 硬门禁）。
+1. **PR-2 的微信开发者工具演示 + 你确认可行后才允许提交**（`docs/miniapp-dev-workflow.md` 硬门禁）—— 已随 PR #209 完成。
 2. **真机回归**：§6 的五条清单由你在微信开发者工具 / 真机上执行。
-3. **PR-2 的排期取决于 #177 何时合入**——`docs/miniapp-dev-workflow.md` §2 是串行门禁，`feat/miniapp-verify-redesign` 未落地前不开新页面分支。
+3. **PR-2 的排期取决于 #177 何时合入**——`docs/miniapp-dev-workflow.md` §2 是串行门禁，`feat/miniapp-verify-redesign` 未落地前不开新页面分支 —— #177 已合入，PR-2 已由 #209 落地，本条已消解。
 
 ---
 
@@ -45,9 +45,9 @@
 
 | 项 | 事实 | 位置 |
 | --- | --- | --- |
-| P2-1 竞态 | `verify` 内层 `catch` 无差别 `setConfirmPending(true)`，把 409 `TRANSACTION_NOT_IN_PENDING` 也当成「confirm 网络失败」，页面会停在「还差最后一步确认」；`retryConfirm` 对同一错误有专门分支（重拉终态 + `setConfirmPending(false)`） | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx` 的 `verify` 内层 `catch`（`setConfirmPending(true)`）与 `retryConfirm` 的错误分支 |
-| P2-2 双击 | 防重复提交只判 React state `submitting`，同一 tick 两次点击都能通过（`is-off` 只是样式） | 同上：`submitting` state 与其消费点（`canSubmit`、主按钮 `is-off` 样式） |
-| P3 | 手动输入错误提示的注释残留「码错误 / 已被使用 / 次数过多」，运行时已无 `MEETUP_TOKEN_EXPIRED` | 同上：「手动输入的错误提示」state 注释 |
+| P2-1 竞态 | **已实现（PR #209）**。决策时事实：`verify` 内层 `catch` 无差别 `setConfirmPending(true)`，把 409 `TRANSACTION_NOT_IN_PENDING` 也当成「confirm 网络失败」，页面会停在「还差最后一步确认」；`retryConfirm` 对同一错误有专门分支（重拉终态 + `setConfirmPending(false)`）。现状：两处都走 `classifyConfirmFailure`，`terminal` 分支重拉终态并 `setConfirmPending(false)` | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx` 的 `verify` 内层 `catch`（`setConfirmPending(true)`）与 `retryConfirm` 的错误分支 |
+| P2-2 双击 | **已实现（PR #209）**。决策时事实：防重复提交只判 React state `submitting`，同一 tick 两次点击都能通过（`is-off` 只是样式）。现状：`submitLock` ref + `canAcquire` / `releaseLock`（带 epoch）守住重入，`submitting` 只作渲染态 | 同上：`submitting` state 与其消费点（`canSubmit`、主按钮 `is-off` 样式） |
+| P3 | **未采纳（理由见 §1 非目标行）**：手动输入错误提示的注释残留「码错误 / 已被使用 / 次数过多」，运行时已无 `MEETUP_TOKEN_EXPIRED`；但该文件两处「过期」字样都指 epoch 代次（语义正确），故不改 | 同上：「手动输入的错误提示」state 注释 |
 | seed 不变量（已有） | scratch 库跑 seed，断言 3 会话 / 2 交易 + 每笔交易按三元组 join 得到会话 | `packages/db/src/seed.test.ts:74,76,85-93` |
 | smoke 缺口 | `core-smoke` 的 11 个步骤（干净环境 / 启动 / Demo 样例 / 上传发布 / Wish 匹配 / 幂等 / 编辑重算 / 上下架 / 重启恢复 ×2 / 坏 payload）**没有任何交易与面交场景** —— **已由 §4 消除**（PR #181 追加「交易与面交」步骤，代码内序号 `// 11.`） | `apps/api/scripts/core-smoke.ts:411-792` |
 | 面交语义 | 取码幂等且每次复位 `failed_attempts` / `locked_until`（卖家重取是现场解锁的唯一路径）；连错 5 次锁 10 分钟；终态 409 | `apps/api/src/modules/transactions/store.ts:132-133`、`service.ts:51-53,219-245` |
@@ -60,7 +60,7 @@
 | PR | 分支 | 改动范围 | 前置 | 顺序 |
 | --- | --- | --- | --- | --- |
 | PR-1 工程 | `feat/147-tx-smoke-invariants` | `apps/api/scripts/core-smoke.ts`、`.github/workflows/ci.yml`、`docs/README.md`、`docs/design/issue-147-transaction-invariants.md` | 无（不碰 `apps/miniapp`，不受小程序串行门禁约束） | 已实现（PR #181） |
-| PR-2 页面 | `feat/miniapp-meetup-confirm-race` | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/**`、`apps/miniapp/tests/**` | #177 `feat/miniapp-verify-redesign` 合入 | 后做 |
+| PR-2 页面 | `feat/miniapp-meetup-confirm-race` | `apps/miniapp/src/pkg-trade/pages/transaction-meetup/**`、`apps/miniapp/tests/**` | #177 `feat/miniapp-verify-redesign` 合入 | 已实现（PR #209，`41f39c69`） |
 
 两个 PR 均 **Refs #147**（只引用、不关闭，见 Q6 与 §10）；均从最新 `main` 切出。
 
@@ -100,7 +100,9 @@
 
 ## 5. PR-2：面交页 P2 / P3
 
-### 5.1 P2-1 —— 抽共享判定，消除两处漂移
+> **实现状态**：本节方案已由 PR #209（`41f39c69`）落地（§5.3 除外，未采纳，见下）。下面各小节引用的**行号是决策基线的快照**（`ad38862` 时期），与当前代码行号不再对应；要核对请按小节里的符号描述（函数名 / state 名）搜索。
+
+### 5.1 P2-1 —— 抽共享判定，消除两处漂移（已实现：PR #209）
 
 在 `apps/miniapp/src/features/transaction/` 新增纯函数（命名待实现时定，如 `classifyConfirmFailure(error): 'terminal' | 'retryable'`），`verify` 内层 catch（`:327`）与 `retryConfirm` catch（`:388`）都走它：
 
@@ -109,17 +111,17 @@
 
 只共享「confirm 调用 + 结果落地」这一段；`settle()` 最短展示时长与 `setFxPhase` 动效不动。
 
-### 5.2 P2-2 —— 同步 ref 锁
+### 5.2 P2-2 —— 同步 ref 锁（已实现：PR #209）
 
 新增 `createSubmitLock()`（纯逻辑、无 Taro 依赖），`verify`（`:305`）与 `retryConfirm`（`:378`）入口同步 `tryAcquire()`，`finally` `release()`。
 
 **关键**：必须在身份切换重置块（`:215-234`）里一并 `release()`。那里现在只复位了 `submitting` state（`:231`），ref 不复位会让换账号后的新账号被上一账号的锁卡死——等于用一个新 bug 换掉旧 bug。
 
-### 5.3 P3
+### 5.3 P3（未采纳）
 
-只改 `:118` 注释，删掉「过期」字样；`:218` 保留。
+原方案是「只改 `:118` 注释，删掉「过期」字样；`:218` 保留」。**未采纳**：该文件里两处「过期」（「渲染期同步自增代次」注释、持锁代次的「在途」注释）都指 epoch 代次，语义正确，删掉反而丢掉代次语义的说明 —— 与 §1 非目标行的结论一致。（§1 与本节原先互相矛盾，已统一。）
 
-### 5.4 单测
+### 5.4 单测（已实现：PR #209，见 `apps/miniapp/tests/meetup-lifecycle.test.ts`、`apps/miniapp/tests/login-confirm-view.test.ts`）
 
 在 `apps/miniapp/tests/` 新增两个测试文件，按 `order-list-state.test.ts` 的既有写法（先 `mock.module('@tarojs/taro', ...)` 再动态 `import`，避免真 Taro 在 Bun 下抛错）：
 
@@ -158,7 +160,7 @@
 ## 8. 风险与已知偏差
 
 - **R1（需知情）**：两个 P2 的修复都**写不出「跑旧实现会红」的用例**——旧逻辑埋在页面组件内部、当前不可测。按仓库先例（`apps/miniapp/tests/order-list-state.test.ts` 注释：「判定抽成纯函数锁住组合；组件接线靠 code review 保证」）改为「抽纯函数 + 单测」，与 AGENTS §5 的字面要求存在偏差。
-- **R2**：PR-2 的排期完全取决于 #177 何时合入；#177 未落地前不动 `apps/miniapp`。
+- **R2（已消解）**：PR-2 的排期取决于 #177 何时合入；#177 未落地前不动 `apps/miniapp`。现状：#177 已合入，PR-2 已由 #209（`41f39c69`）落地。
 - **R3**：`core-smoke` 新增步骤会把主链 listing 推到 SOLD。因为它位于最后一步，当前不影响任何断言；但**将来若有步骤追加到它之后**，必须注意该 listing 已不可用。
 
 ---

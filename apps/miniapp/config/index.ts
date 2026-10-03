@@ -154,7 +154,8 @@ export default defineConfig<'webpack5'>(async (merge) => {
      * csso 的默认预设把 5 个开关全关了
      * （`@tarojs/webpack5-runner/dist/webpack/BaseConfig.js` 的 defaultOption）。
      * `mergeRules`（合并相邻同声明规则）与 `minifySelectors`（选择器最简化）都不改变
-     * 声明语义，实测省 2.5 KB —— 相对安全，保留。
+     * 声明语义，同一台机器上 A/B 构建（同一提交、只切这两个开关）实测省 2.5 KB —— 相对
+     * 安全，保留。这是那次对比的数字，不是稳定收益，换机器 / 换依赖后不必复现。
      */
     csso: {
       config: {
