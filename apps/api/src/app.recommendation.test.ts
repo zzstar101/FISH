@@ -666,7 +666,7 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
     const candidate = (listingId: string, recallSources: readonly RecallChannel[]) => ({
       listingId,
       sellerId: newId(),
-      category: 'OTHER',
+      category: 'OTHER' as const,
       recallSources: [...recallSources],
       semanticScore: null,
       wishScore: null,
