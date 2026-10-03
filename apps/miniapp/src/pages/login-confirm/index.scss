@@ -76,7 +76,7 @@
 
 .lc__sub {
   margin-top: 16px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
   color: var(--muted-2);
 }
@@ -133,7 +133,7 @@
   border-radius: 48px;
   background: var(--grad-brand);
   color: var(--surface);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 

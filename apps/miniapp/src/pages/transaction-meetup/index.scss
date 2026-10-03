@@ -50,7 +50,7 @@
 .meetup__statusnote {
   margin-left: auto;
   min-width: 0;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
   @include ellipsis;
 }
@@ -59,7 +59,7 @@
   @include status-pill;
   height: 46px;
   padding: 0 22px;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
 }
 
 /* ---- 商品摘要卡 ---- */
@@ -109,14 +109,14 @@
 }
 
 .meetup__deal-sub {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
   @include ellipsis;
 }
 
 .meetup__deal-amount {
   flex: 0 0 auto;
-  font-size: 42px;
+  font-size: var(--fs-h2);
   font-weight: 700;
   color: var(--price);
 }
@@ -134,13 +134,13 @@
 }
 
 .meetup__sec-title {
-  font-size: 36px;
+  font-size: var(--fs-h3);
   font-weight: 600;
   color: var(--fg);
 }
 
 .meetup__sec-note {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -181,7 +181,7 @@
 
 .meetup__code-ttl {
   margin-top: 20px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted-2);
 }
 
@@ -221,7 +221,7 @@
 }
 
 .meetup__qr-cap {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   color: var(--muted-2);
 }
 
@@ -250,7 +250,7 @@
 .meetup__notice-tx {
   flex: 1;
   min-width: 0;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted-2);
 }
@@ -264,7 +264,7 @@
   align-items: center;
   gap: 16px;
   margin: 28px 40px 8px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted-2);
 }
 
@@ -293,7 +293,7 @@
   z-index: 1;
   display: block;
   padding: 16px 40px 0;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted-2);
 }
@@ -380,7 +380,7 @@
 .meetup__err-tx {
   flex: 1;
   min-width: 0;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--danger-ink);
 }
@@ -390,7 +390,7 @@
   z-index: 1;
   display: block;
   padding: 20px 40px 0;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--ok-ink);
 }
 
@@ -474,7 +474,7 @@
 
 .meetup__varcard-text {
   margin-top: 14px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.65;
   color: var(--muted-2);
 }
@@ -586,7 +586,7 @@
 .meetup__suc-text {
   margin-top: 16px;
   max-width: 540px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
   color: var(--muted-2);
 }
@@ -636,13 +636,13 @@
 }
 
 .meetup__sum-sub {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
 .meetup__sum-amount {
   flex: 0 0 auto;
-  font-size: 42px;
+  font-size: var(--fs-h2);
   font-weight: 700;
   color: var(--price);
 }
@@ -653,7 +653,7 @@
   display: block;
   margin: 28px 40px 0;
   text-align: center;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -748,7 +748,7 @@
   gap: 14px;
   height: 96px;
   border-radius: 48px;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
@@ -765,7 +765,7 @@
   height: 96px;
   padding: 0 44px;
   border-radius: 48px;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 

@@ -160,7 +160,7 @@
 }
 
 .home__cat-label {
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.1;
   color: var(--fg);
   white-space: nowrap;
@@ -246,7 +246,7 @@
 }
 
 .home__catnav-label {
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.1;
   color: var(--muted);
   white-space: nowrap;

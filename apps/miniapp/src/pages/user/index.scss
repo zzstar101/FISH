@@ -139,7 +139,7 @@
 }
 
 .uhome__presence-tx {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -165,7 +165,7 @@
   background: var(--accent-weak);
   border: 2px solid var(--accent-mid);
   color: var(--brand-deep);
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   flex: 0 0 auto;
 }
@@ -271,7 +271,7 @@
 
 .uhome__psign-txt {
   display: block;
-  font-size: 25px; /* 稿 12.5pt ×2 */
+  font-size: var(--fs-sm); /* 稿 12.5pt ×2 */
   line-height: 1.55;
   color: var(--muted-2);
   overflow: hidden;
@@ -363,13 +363,13 @@
 }
 
 .uhome__sect-title {
-  font-size: 36px;
+  font-size: var(--fs-h3);
   font-weight: 600;
   color: var(--fg);
 }
 
 .uhome__sect-cnt {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -441,7 +441,7 @@
 }
 
 .uhome__ptitle {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   line-height: 1.35;
   color: var(--fg);
@@ -456,7 +456,7 @@
 }
 
 .uhome__pprice {
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 700;
   line-height: 1;
   color: var(--price);
@@ -476,7 +476,7 @@
 }
 
 .uhome__pwant {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -488,7 +488,7 @@
 }
 
 .uhome__ptime {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -509,7 +509,7 @@
 }
 
 .uhome__list-end-txt {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
   white-space: nowrap;
 }
@@ -542,7 +542,7 @@
 
 .uhome__empty-title {
   margin-top: 28px;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--fg);
 }

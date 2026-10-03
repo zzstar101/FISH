@@ -68,7 +68,7 @@
 
 .ab__slogan {
   margin-top: 16px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   color: var(--muted-2);
 }
@@ -136,7 +136,7 @@
  */
 .ab__row-tag {
   flex: 0 0 auto;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.04em;
   color: var(--warn-ink);
 }
@@ -160,7 +160,7 @@
 
 .ab__foot-copy {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   line-height: 1.9;
   color: var(--muted);
 }

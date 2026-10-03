@@ -60,7 +60,7 @@
   align-items: center;
   gap: 12px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.1em;
   color: var(--brand-deep);
   text-transform: uppercase;
@@ -83,7 +83,7 @@
 .fb__sub {
   display: block;
   margin-top: 16px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.7;
   color: var(--muted-2);
 }
@@ -109,7 +109,7 @@
   border-radius: 28px;
   background: var(--warn-weak);
   border: 2px solid var(--warn-line);
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--warn-ink);
 }
@@ -127,7 +127,7 @@
 
 .fb__draft-clear {
   flex: 0 0 auto;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   color: var(--warn-ink);
   text-decoration: underline;
@@ -168,7 +168,7 @@
 
 .fb__card-h2 {
   flex: 0 0 auto;
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--fg);
 }
@@ -183,14 +183,14 @@
 .fb__opt {
   margin-left: auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
 .fb__card-sub {
   display: block;
   margin-top: 10px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.65;
   color: var(--muted);
 }
@@ -214,7 +214,7 @@
   border-radius: 999px;
   border: 2px solid var(--border);
   background: var(--surface);
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--muted-2);
   white-space: nowrap;
@@ -248,7 +248,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--danger-ink);
 }
@@ -308,7 +308,7 @@
 .fb__count {
   margin-left: auto;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 
   /* 超过 500 字：计数转警示色（提交会被拦住） */
@@ -359,7 +359,7 @@
   margin: 4px 0 28px;
   display: flex;
   gap: 14px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.7;
   color: var(--muted-2);
 }
@@ -393,7 +393,7 @@
   border-radius: 999px;
   background: var(--grad-brand);
   color: var(--surface);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
   transition:
@@ -423,7 +423,7 @@
   margin-top: 24px;
   text-align: center;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -484,7 +484,7 @@
   display: block;
   margin-top: 16px;
   text-align: center;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.75;
   color: var(--muted-2);
 }
@@ -513,7 +513,7 @@
 
 .fb__mail-em {
   display: block;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -521,7 +521,7 @@
   display: block;
   margin-top: 4px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--brand-deep);
   word-break: break-all;

@@ -60,7 +60,7 @@
 }
 
 .scanvis__noCam-title {
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   color: var(--on-dark);
 }
@@ -408,7 +408,7 @@
   border-radius: 48px;
   border: 2px solid rgba(255, 255, 255, 0.6);
   color: var(--surface);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
 }
 
@@ -421,7 +421,7 @@
   border-radius: 48px;
   background: var(--grad-brand);
   color: var(--surface);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   @include pressable;
 

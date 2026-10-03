@@ -229,7 +229,7 @@
 }
 
 .profile__auth-txt {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   color: var(--brand-deep);
   white-space: nowrap;
@@ -265,7 +265,7 @@
 }
 
 .profile__sig-txt {
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: #36435d; /* 稿 .psig：muted 34% + --fg，预计算 */
   white-space: nowrap;
   overflow: hidden;
@@ -396,7 +396,7 @@
 }
 
 .profile__cell-label {
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted-2);
   white-space: nowrap;
 }
@@ -406,7 +406,7 @@
   display: block;
   padding: 22px 40px 20px;
   background: rgba(23, 35, 61, 0.03); /* 稿 .rowlabel：fg 3% + surface，比 --ink-weak 淡一半 */
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--muted-2);
@@ -467,7 +467,7 @@
 }
 
 .profile__row-title {
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 500;
   color: var(--fg);
 }
@@ -504,7 +504,7 @@
 
 .profile__footer-copy {
   margin-top: 12px;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -564,7 +564,7 @@
   border-radius: 44px;
   background: var(--grad-brand);
   color: #fff;
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-btn);
 

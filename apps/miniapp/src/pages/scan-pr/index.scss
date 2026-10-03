@@ -114,14 +114,14 @@
 }
 
 .scan__noCam-title {
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--surface);
 }
 
 .scan__noCam-text {
   margin-top: 14px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--on-dark);
 }
@@ -257,14 +257,14 @@
 }
 
 .scan__hint-title {
-  font-size: 28px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--surface);
 }
 
 .scan__hint-text {
   margin-top: 14px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--on-dark);
 }
@@ -286,7 +286,7 @@
   border-radius: 48px;
   background: var(--surface);
   color: var(--fg);
-  font-size: 30px;
+  font-size: var(--fs-title);
   font-weight: 600;
   box-shadow: var(--shadow-card);
 }
@@ -320,7 +320,7 @@
 .scan__sheet-title {
   display: block;
   margin-top: 24px;
-  font-size: 36px;
+  font-size: var(--fs-h3);
   font-weight: 600;
   text-align: center;
   color: var(--fg);
@@ -334,7 +334,7 @@
 .scan__sheet-sub {
   display: block;
   margin-top: 14px;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   text-align: center;
   color: var(--muted-2);
@@ -429,7 +429,7 @@
   margin-top: 28px;
   padding-top: 24px;
   border-top: 2px solid var(--accent-faint);
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted-2);
 }
@@ -500,7 +500,7 @@
 .scan__fd {
   display: block;
   margin-top: 8px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   line-height: 1.6;
   color: var(--muted-2);
 }

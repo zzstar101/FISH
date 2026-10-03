@@ -74,7 +74,7 @@
   height: 68px;
   padding: 0 24px;
   color: var(--muted);
-  font-size: 28px;
+  font-size: var(--fs-body);
   transition: color 0.18s;
 
   &::after {
@@ -172,7 +172,7 @@
 /* 日期来自**足迹记录**（稿决策⑦），不是商品发布时间 */
 .hist__gdate {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--muted-2);
@@ -180,7 +180,7 @@
 
 .hist__gcount {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -357,7 +357,7 @@
 .hist__rtitle {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 25px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--fg);
   @include ellipsis;
@@ -387,7 +387,7 @@
 
 /* 我写的那句话：2 行截断 */
 .hist__rtext {
-  font-size: 25px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--fg);
   @include clamp(2);
@@ -395,7 +395,7 @@
 
 .hist__rtime {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted);
 }
 
@@ -405,7 +405,7 @@
 .hist__note {
   display: block;
   margin: 36px 40px 0;
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   line-height: 1.6;
   color: var(--muted);
   text-align: center;
@@ -428,7 +428,7 @@
 }
 
 .hist__tail-tx {
-  font-size: 21px;
+  font-size: var(--fs-2xs);
   color: var(--muted-2);
 }
 
@@ -446,7 +446,7 @@
   justify-content: center;
   gap: 16px;
   margin-top: 36px;
-  font-size: 23px;
+  font-size: var(--fs-xs);
   color: var(--muted-2);
 }
 
