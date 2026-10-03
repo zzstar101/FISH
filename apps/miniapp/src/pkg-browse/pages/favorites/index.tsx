@@ -526,7 +526,12 @@ export default function Favorites() {
                       </View>
 
                       <View className="fav__thumb" onClick={() => onRowTap(item)}>
-                        <Image className="fav__thumb-img" src={item.coverUrl} mode="aspectFill" />
+                        <Image
+                          className="fav__thumb-img"
+                          src={item.coverUrl}
+                          mode="aspectFill"
+                          lazyLoad
+                        />
                         <Text className="fav__thumb-cat">{item.categoryText}</Text>
                         {gone ? <Text className="fav__thumb-mk">{item.goneReason}</Text> : null}
                       </View>

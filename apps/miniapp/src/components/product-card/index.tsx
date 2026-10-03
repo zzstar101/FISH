@@ -246,7 +246,7 @@ export default function ProductCard({
       onLongPress={() => void handleLongPress()}
     >
       <View className="pcard__ph" style={{ height: `${imageHeight}rpx` }}>
-        <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" />
+        <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" lazyLoad />
         {listing.badge ? <Text className="pcard__badge">{listing.badge}</Text> : null}
       </View>
 

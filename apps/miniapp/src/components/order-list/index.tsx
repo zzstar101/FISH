@@ -305,6 +305,7 @@ export default function OrderList({
                           className="orders__thumb-img"
                           src={item.listing.coverUrl}
                           mode="aspectFill"
+                          lazyLoad
                         />
                       ) : null}
                     </View>

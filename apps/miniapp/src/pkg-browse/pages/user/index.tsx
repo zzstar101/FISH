@@ -255,7 +255,7 @@ export default function UserHome() {
       }
     >
       <View className="uhome__img">
-        <Image className="uhome__img-real" src={item.coverUrl} mode="aspectFill" />
+        <Image className="uhome__img-real" src={item.coverUrl} mode="aspectFill" lazyLoad />
         {item.free ? (
           <Text className="uhome__corner uhome__corner--free">0 元送</Text>
         ) : item.urgent ? (

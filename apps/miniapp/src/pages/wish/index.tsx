@@ -94,7 +94,7 @@ function HitRow({ view }: { view: WishHit }) {
       }
     >
       <View className="wishhit__thumb">
-        <Image className="wishhit__img" src={listing.coverUrl} mode="aspectFill" />
+        <Image className="wishhit__img" src={listing.coverUrl} mode="aspectFill" lazyLoad />
       </View>
       <View className="wishhit__main">
         <Text className="wishhit__title">{listing.title}</Text>
