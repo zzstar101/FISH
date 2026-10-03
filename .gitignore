@@ -22,3 +22,7 @@ apps/api/src/modules/auth/.test-outbox-*/
 # 不能被 `git add -A` 顺手带进仓库）
 output/
 business-plan/
+
+# #322 M4 的本地复算证据（日志/标注表，见 docs/design/issue-322-matching-v2-m4.md §11）：
+# 体积大且含本机数据，留在本地；需要随 PR 交付时用 `git add -f`。
+.m4-evidence/

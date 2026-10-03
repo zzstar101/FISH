@@ -37,7 +37,12 @@ const service: WishService = {
 
 const emptyStore = {} as WishStore
 const creatingStore = Object.assign({} as WishStore, {
-  createOrGetRecent: async (row: WishRow) => ({ kind: 'created' as const, row }),
+  // `updated_at` 由数据库 `now()` 生成（见 `apps/api/src/modules/wishes/store.ts` 的 `NewWishRow`），
+  // 这个替身补上同一语义，否则 DTO 映射会拿到 `undefined`。
+  createOrGetRecent: async (row: WishRow) => ({
+    kind: 'created' as const,
+    row: { ...row, updated_at: new Date() },
+  }),
 })
 const matchQueue = { enqueue: async () => undefined }
 const root = new Hono<{ Variables: { userId: string } }>()

@@ -12,6 +12,7 @@ import {
   MATCH_SCORE_THRESHOLD,
   RANKING_VERSION,
   RANKING_VERSION_V1,
+  SEMANTIC_SCORE_CEILING,
   SEMANTIC_SCORE_FLOOR,
 } from '@fish/contracts/matching/schema'
 import { RANKING_FIXTURE, type RankingSample } from './ranking-fixture'
@@ -58,15 +59,21 @@ describe('冻结权重（S4）下每条样本的判定与人工判断一致', ()
     test(`${sample.id}（${sample.sampleClass}）`, () => {
       const breakdown = scoreMatch(sample.listing, sample.wish, { similarity: sample.similarity })
       expect(breakdown.rankingVersion).toBe(RANKING_VERSION)
-      // acceptSimilar=false 的"语义不能单独成立"门禁只在该对没有任何非语义支撑时把语义分记 0。
-      const hasNonSemanticSupport =
-        sample.wish.acceptSimilar || breakdown.keywordScore > 0 || breakdown.categoryScore > 0
+      // acceptSimilar=false 的"语义不能单独成立"门禁（M4 口径：只有关键词命中才算结构支撑）
+      // 只在该对没有关键词支撑时把语义分记 0。
+      const hasNonSemanticSupport = sample.wish.acceptSimilar || breakdown.keywordScore > 0
       expect(breakdown.semanticScore).toBe(
         hasNonSemanticSupport ? normalizeSimilarity(sample.similarity) : 0,
       )
       expect(breakdown.score >= MATCH_SCORE_THRESHOLD).toBe(sample.expectMatch)
     })
   }
+
+  test('锚点与阈值被冻结（M4 重标定值；改动必须带 calibration/fit 证据）', () => {
+    expect(MATCH_SCORE_THRESHOLD).toBe(70)
+    expect(SEMANTIC_SCORE_FLOOR).toBe(0.42)
+    expect(SEMANTIC_SCORE_CEILING).toBe(0.7)
+  })
 
   test('12/12 一致 ⇒ 阈值 70 不需要改（改阈值必须重跑本 fixture 并给出证据）', () => {
     expect(MATCH_SCORE_THRESHOLD).toBe(70)
@@ -164,15 +171,19 @@ describe('结构化硬约束不被语义绕过', () => {
 })
 
 describe('对照组与人工判断的偏差被冻结（改权重会立刻在这里报出差异）', () => {
+  /**
+   * M4 重标定后重算的偏差表（口径 = 新锚点 0.42/0.70 + `satisfied` + `keyword-only`）。
+   *
+   * 与 M3 表（`docs/design/issue-322-matching-v2-m3.md` §权重冻结）的差别是**锚点变了**：
+   * 新锚点下真实相似度 0.88–0.93 会饱和到语义满分，三组对照的差异因此收敛到唯一一条——
+   * `keyboard-books-category-mismatch`（分类不符 + 关键词命中 + 高语义）。S4 是唯一把
+   * "分类不符时结构权重和 + 语义独立分项"压在阈值以下的组合（0.30×100 + 0.32×0 + 0.15×100
+   * + 0.23×100 = 68 < 70；S1 = 75、S2 = 70、S3 = 75），所以权重仍然冻结在 S4。
+   */
   const EXPECTED_DIVERGENCES: Record<keyof typeof SEMANTIC_WEIGHT_CANDIDATES, string[]> = {
-    S1: ['keyboard-books-category-mismatch', 'any-category-similar-true', 'any-category-synonym'],
-    S2: [
-      'k380-synonym-same-category',
-      'airpods-brand-model',
-      'any-category-similar-true',
-      'any-category-synonym',
-    ],
-    S3: ['keyboard-books-category-mismatch', 'any-category-synonym'],
+    S1: ['keyboard-books-category-mismatch'],
+    S2: ['keyboard-books-category-mismatch'],
+    S3: ['keyboard-books-category-mismatch'],
     S4: [],
   }
 

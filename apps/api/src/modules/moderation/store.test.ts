@@ -300,6 +300,17 @@ test('未注入结算钩子时决策行为不变（无图片链路的调用方�
       status: 'ACTIVE',
       moderationStatus: 'APPROVED',
     })
+
+    // #322 M4 顺序不变量：人工放行是待审商品进入匹配链路的入口，投递必须 EMBED_LISTING 在前、
+    // MATCH_LISTING 在后。按队列自己的领取键 `(run_at, id)` 排序（见 `claimNext`），断的是**入队时刻**
+    // 的领取序（同事务、run_at 相同）；反序会让首轮 MATCH 跑在向量落库前。重试/回收推后 `run_at`
+    // 之后的执行序反转是已知边界（M4 §6.1 末尾）。
+    const queued = await db
+      .select({ type: jobs.type })
+      .from(jobs)
+      .where(sql`${jobs.payload}->>'listingId' = ${listingId}`)
+      .orderBy(jobs.runAt, jobs.id)
+    expect(queued.map((row) => row.type)).toEqual(['EMBED_LISTING', 'MATCH_LISTING'])
   })
 })
 
