@@ -289,6 +289,12 @@
   color: var(--muted-2);
 }
 
+/* 行情行（同类成交均价）单独占第二行：三枚 stat 一行放不下（见 index.tsx 的注释），
+   与上一行的间距比默认 20px 小 —— 两行同属一组统计，视觉上不该被拉成两块 */
+.vres__stats--market {
+  padding-top: 8px;
+}
+
 .vres__stat {
   display: inline-flex;
   align-items: baseline;

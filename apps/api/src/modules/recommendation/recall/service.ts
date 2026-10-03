@@ -55,7 +55,8 @@ import {
   findWishRecallCandidates,
   type SessionCategoryWeight,
 } from '@fish/db/recall-store'
-import { findUserInterestProfile, type InterestIdentity } from '@fish/db/user-interest-store'
+import { findUserInterestProfile } from '@fish/db/user-interest-store'
+import { type RecommendationIdentityInput, resolveRecommendationIdentity } from '../identity'
 import { readSessionInterest } from '../interest'
 import { mergeRecallCandidates } from './merge'
 import type {
@@ -67,12 +68,11 @@ import type {
   RecallResult,
 } from './types'
 
-export type RecommendationRecallInput = {
-  /** 已登录用户（token 真值）。 */
-  userId: string | null
-  /** 匿名会话 id（客户端自述，仅用于把同一会话的行为串起来）。 */
-  anonymousSessionId: string | null
-}
+/**
+ * 输入的身份字段与排序层共用同一口径（`../identity`）：R4 起负反馈查询也按这条规则解析身份，
+ * 各写一份必然漂移。
+ */
+export type RecommendationRecallInput = RecommendationIdentityInput
 
 export type RecommendationRecallDeps = {
   db: Db
@@ -89,12 +89,6 @@ export type RecommendationRecallDeps = {
 
 export interface RecommendationRecall {
   recall(input: RecommendationRecallInput): Promise<RecallResult>
-}
-
-function resolveIdentity(input: RecommendationRecallInput): InterestIdentity | null {
-  if (input.userId !== null) return { kind: 'user', id: input.userId }
-  if (input.anonymousSessionId !== null) return { kind: 'anonymous', id: input.anonymousSessionId }
-  return null
 }
 
 /** 跑一路，失败即降级（不抛）。 */
@@ -135,7 +129,7 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
     async recall(input) {
       const now = deps.clock?.() ?? new Date()
       const viewerUserId = input.userId
-      const identity = resolveIdentity(input)
+      const identity = resolveRecommendationIdentity(input)
       const model = deps.embeddingModel
 
       /**
@@ -357,14 +351,18 @@ export function createRecommendationRecall(deps: RecommendationRecallDeps): Reco
         }
       }
 
-      const impressions = new Map<string, number>()
+      // `null` = 未知（查询失败）；空 Map = 问过了确实没有。两者在排序层含义不同，别合并。
+      let impressions: Map<string, number> | null = new Map<string, number>()
       if (identity !== null && listingIds.length > 0 && !visibilityFailed) {
         try {
           const rows = await countListingImpressions(deps.db, { listingIds, identity })
           for (const row of rows) impressions.set(row.listingId, row.count)
         } catch (error) {
-          // 曝光计数失败只损失 `alreadySeenCount`（R3 无消费方），不改变可见性，因此不清空候选。
-          console.warn('[recommendation] 曝光次数读取失败，alreadySeenCount 记为 0：', error)
+          // 曝光计数失败 ⇒ 每条候选的 `alreadySeenCount` 都是**未知**（`null`），不是 0：
+          // "查询挂了"和"确实没重复曝光过"在排序层是两件事（R3 §9 待办①）。整份计数置 null，
+          // merge 层据此透传。可见性不受影响，因此不清空候选。
+          console.warn('[recommendation] 曝光次数读取失败，alreadySeenCount 记为未知：', error)
+          impressions = null
           mergeDegradedReason = 'provider_error'
         }
       }

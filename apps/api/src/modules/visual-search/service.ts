@@ -6,6 +6,7 @@ import {
   MAX_VISUAL_QUERY_IMAGE_BYTES,
   MAX_VISUAL_QUERY_IMAGE_PIXELS,
   VISUAL_QUERY_IMAGE_TTL_SECONDS,
+  VISUAL_SOLD_AVG_MIN_SAMPLES,
   type VisualInterpretation,
   type VisualQueryImageMime,
   type VisualQueryUploadResponse,
@@ -13,6 +14,8 @@ import {
   type VisualSearchErrorCode,
   type VisualSearchResponse,
   VisualSearchResponseSchema,
+  type VisualSearchSort,
+  type VisualSearchStats,
   visualQueryImageKey,
   visualQueryImageSubject,
 } from '@fish/contracts/visual/schema'
@@ -23,6 +26,7 @@ import { probeImage } from '../messages/media-probe'
 import { type VisualParser, visualTextQueryOf } from './parse'
 import {
   freshnessScore,
+  orderVisualCandidates,
   popularityScore,
   scoreVisualCandidate,
   similarityFromCosineDistance,
@@ -30,7 +34,7 @@ import {
   VISUAL_RESULT_LIMIT,
 } from './ranking'
 import type { VisualSearchRateLimiter } from './rate-limit'
-import type { VisualSearchStore } from './store'
+import type { VisualSearchStore, VisualSoldPriceStats } from './store'
 import type { ResolvedVisualSearchSubject } from './subject'
 
 /**
@@ -93,7 +97,7 @@ export type VisualSearchService = {
   ): Promise<VisualQueryUploadResponse>
   search(
     subject: ResolvedVisualSearchSubject,
-    input: { objectKey: string },
+    input: { objectKey: string; sort?: VisualSearchSort },
   ): Promise<VisualSearchResponse>
 }
 
@@ -108,6 +112,24 @@ type SearchCandidate = {
   listingId: string
   visualScore: number
   textScore: number | null
+}
+
+/**
+ * 把 store 的原始均值/样本数翻译成契约里的成交统计（#324 M6）。
+ *
+ * 最小样本阈值与四舍五入都锁在服务端：这是**服务端口径**，客户端不该各判一次，
+ * 否则改阈值就得同时发客户端版本。样本不足时给 `null` 但**保留真实样本数**——
+ * 客户端才能显示"样本不足（2 件）"，而不是一片空白。
+ */
+function soldPriceStatsOf(stats: VisualSoldPriceStats): VisualSearchStats {
+  const tooFewSamples = stats.soldSampleCount < VISUAL_SOLD_AVG_MIN_SAMPLES
+  return {
+    soldAvgPriceCents:
+      stats.soldAvgPriceCents === null || tooFewSamples
+        ? null
+        : Math.round(stats.soldAvgPriceCents),
+    soldSampleCount: stats.soldSampleCount,
+  }
 }
 
 export function createVisualSearchService(deps: {
@@ -282,13 +304,18 @@ export function createVisualSearchService(deps: {
       }
 
       const listingIds = [...candidates.keys()]
-      const [signals, listingRows] = await Promise.all([
+      const category = interpretation?.category
+      const [signals, listingRows, soldStats] = await Promise.all([
         store.loadListingSignals(listingIds),
         store.loadListings(listingIds),
+        // 没有解析出类目就没有统计口径：不查库，直接空统计（阈值判定在服务端，客户端不重复判断）。
+        category === undefined
+          ? Promise.resolve<VisualSoldPriceStats>({ soldAvgPriceCents: null, soldSampleCount: 0 })
+          : store.soldPriceStats(category),
       ])
 
-      const ranked = listingIds
-        .flatMap((listingId) => {
+      const items = orderVisualCandidates(
+        listingIds.flatMap((listingId) => {
           const listing = listingRows.get(listingId)
           const signal = signals.get(listingId)
           const candidate = candidates.get(listingId)
@@ -312,28 +339,22 @@ export function createVisualSearchService(deps: {
           const card = toListingCard(listing, signal.coverObjectKey, storage)
           if (!card) return []
 
-          return [{ card, ranking, candidate }]
-        })
-        .sort((left, right) => {
-          if (right.ranking.score !== left.ranking.score) {
-            return right.ranking.score - left.ranking.score
-          }
-          // 同分先看图片相似度：纯文本命中的候选（visualScore = 0）排在有图片证据的之后。
-          if (right.candidate.visualScore !== left.candidate.visualScore) {
-            return right.candidate.visualScore - left.candidate.visualScore
-          }
-          // 最后用 id 兜底，保证同分排序稳定（否则同一查询两次可能给出不同顺序）。
-          return left.card.id.localeCompare(right.card.id)
-        })
+          return [{ card, ranking, favoriteCount: signal.favoriteCount }]
+        }),
+        // 缺省 `relevance`：老客户端与 M9 脚本不发 sort，行为必须与 M6 之前一致。
+        input.sort ?? 'relevance',
+      )
+        // **先排序再截断**：反过来"最新/最便宜"只会重排已截断的前 30 条，而不是全局前 30 条。
         .slice(0, VISUAL_RESULT_LIMIT)
-        .map((entry) => entry.card)
+        .map((entry) => ({ ...entry.card, favoriteCount: entry.favoriteCount }))
 
       return VisualSearchResponseSchema.parse({
         queryId: queryImage.id,
         interpretation,
         strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
         embeddingModel: provider.model,
-        items: ranked,
+        items,
+        stats: soldPriceStatsOf(soldStats),
       })
     },
   }

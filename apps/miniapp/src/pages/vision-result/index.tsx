@@ -1,4 +1,8 @@
-import type { ListingCard } from '@fish/contracts/listings/schema'
+import type {
+  VisualSearchResultItem,
+  VisualSearchSort,
+  VisualSearchStats,
+} from '@fish/contracts/visual/schema'
 import { Image, ScrollView, Text, View } from '@tarojs/components'
 import Taro, { useLoad, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -31,9 +35,15 @@ import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
-import { searchFilters } from '@/mock/api'
-import type { MockListing, SearchFilter } from '@/mock/types'
-import { queryCardCopy, resultStats, sortResults } from './view'
+import type { MockListing } from '@/mock/types'
+import {
+  activeVisualSort,
+  queryCardCopy,
+  resultStats,
+  soldAvgText,
+  VISUAL_SORT_OPTIONS,
+  visualSortQuery,
+} from './view'
 import './index.scss'
 
 /**
@@ -55,13 +65,13 @@ import './index.scss'
  * 合成层，且收起/展开都能用 CSS 过渡衔接。几何与手势判据全在
  * `features/visual-search/sheet.ts`（纯逻辑、有单测）。
  *
- * ## 三件稿/参考图里有、契约里没有的东西（都不画）
+ * ## 排序 / 成交均价 / 想要数（#324 M6 起都是服务端真值）
  *
- * | 参考图里 | 为什么不画 |
- * | --- | --- |
- * | 成交均价 / 热销 / 品牌筛选 | 契约的搜索请求只有 `objectKey`，没有排序与筛选参数 —— 除「综合」外的三档都是**对已返回那一批**（服务端上限 30 条）本地重排，见 `./view.ts` |
- * | 卡片上的「N 人想要」「包邮」 | `ListingCard` 没有这两个字段（`features/listing/adapt.ts` 把 `wants` 置 `null`） |
- * | 「个人闲置」标签 | FISH 没有个人 / 商家之分 |
+ * 排序胶囊是**五档**（`./view.ts` 的 `VISUAL_SORT_OPTIONS`），切档 = 换一个契约 `sort` 码
+ * **重新请求**（服务端在截断到 30 条之前排序，见 `features/visual-search/api.ts`），
+ * 本页不做任何本地重排；「同类成交均价」取自响应的 `stats`；卡片上的「N 人想要」
+ * 取自结果项外挂的 `favoriteCount`。仍然不画的是「包邮」与「个人闲置」——
+ * 契约里没有这两个事实（FISH 也没有个人 / 商家之分）。
  *
  * 未登录不分叉：识图**匿名可用**（契约 Q6=B），本页不挂登录守卫，也不请求 `GET /me`。
  */
@@ -108,8 +118,20 @@ export default function VisionResult() {
   const [failed, setFailed] = useState(false)
   const [failedText, setFailedText] = useState('')
   const [interpretation, setInterpretation] = useState<Parameters<typeof queryCardCopy>[0]>(null)
-  const [items, setItems] = useState<ListingCard[]>([])
-  const [filter, setFilter] = useState<SearchFilter>('综合')
+  const [items, setItems] = useState<VisualSearchResultItem[]>([])
+  /** 契约 `stats`（类目行情）：与 items 独立，没有结果也可能有；空结果时服务端给 `null` 均价 */
+  const [soldStats, setSoldStats] = useState<VisualSearchStats | null>(null)
+  /**
+   * 用户点过的排序档（契约 `sort` 码，不是中文标签）；`null` = **一档都没点过**。
+   *
+   * 初值刻意是 `null` 而不是 `'relevance'`：契约里 `sort` 是可选的，没点过档时请求体
+   * 整个键都不该出现（`visualSortQuery` 负责把 `null` 变成 `{}`）。展示上仍然要有
+   * 一项是亮的，那个「生效档」由 `activeVisualSort` 补成服务端缺省的 `relevance`。
+   * 切档由 `changeSort` 重新发请求，**不在本地重排** item 顺序。
+   */
+  const [sort, setSort] = useState<VisualSearchSort | null>(null)
+  /** 生效档：没点过时 = 服务端缺省的 `relevance`，胶囊高亮与同档判定都用它 */
+  const activeSort = activeVisualSort(sort)
   const [retaking, setRetaking] = useState(false)
 
   const nav = useMemo(() => readNavMetrics(), [])
@@ -148,16 +170,23 @@ export default function VisionResult() {
   /** 没有查询图（参数丢了 / 被手改 URL）：不静默转普通搜索，直接说清楚 */
   const missingQuery = objectKey === ''
 
-  /** 发起一次检索（进页一次、失败后重试一次）。 */
-  const search = async (): Promise<void> => {
+  /**
+   * 发起一次检索（进页一次、切档一次、失败后重试一次）。
+   *
+   * `next` 是该次请求要用的排序档位，缺省沿用当前档 —— 调用方**显式传**新档，不依赖
+   * `setSort` 之后的 state（那是异步的，直接读会读到上一次的值）。排序发生在服务端
+   * **截断到 30 条之前**，所以每一档拿到的都是「全局前 30 条」，这里拿到什么顺序就渲染什么。
+   */
+  const search = async (next: VisualSearchSort | null = sort): Promise<void> => {
     const startedAt = beginSearchTask(taskLog.current)
     setLoading(true)
     setFailed(false)
     setFailedText('')
     setItems([])
+    setSoldStats(null)
     try {
-      const result = await searchByVisualQuery(objectKey)
-      // 迟到的响应不得写回：页面已重开一次检索 / 已卸载
+      const result = await searchByVisualQuery(objectKey, visualSortQuery(next))
+      // 迟到的响应不得写回：页面已重开一次检索 / 已切档 / 已卸载
       if (!isSearchTaskCurrent(taskLog.current, startedAt)) return
       /*
         契约要求客户端**记录**这三个值（`packages/contracts/src/visual/schema.ts` 的
@@ -165,10 +194,11 @@ export default function VisionResult() {
         时客户端日志里必须有 strategyVersion / embeddingModel）。
       */
       console.debug(
-        `[miniapp] 识图完成 queryId=${result.queryId} strategy=${result.strategyVersion} model=${result.embeddingModel}`,
+        `[miniapp] 识图完成 queryId=${result.queryId} strategy=${result.strategyVersion} model=${result.embeddingModel} sort=${activeVisualSort(next)}`,
       )
       setInterpretation(result.interpretation)
       setItems(result.items)
+      setSoldStats(result.stats)
       setLoading(false)
     } catch (error) {
       if (!isSearchTaskCurrent(taskLog.current, startedAt)) return
@@ -178,6 +208,20 @@ export default function VisionResult() {
       // 契约错误码留在日志里：排查「这个用户为什么看到失败」时光有文案不够
       if (isApiError(error)) console.warn('[miniapp] 识图搜索失败', error.code, error.message)
     }
+  }
+
+  /**
+   * 切排序档：**重新向服务端要一次**（服务端在截断 30 条之前排序）。
+   *
+   * 同档重复点不重发 —— 胶囊紧贴滚动区上方，误触很容易，重复请求既浪费又会让列表白闪一次
+   * 骨架。切档期间不拦 `loading` 中的再次切换：`beginSearchTask` 会作废在途那一次，
+   * 迟到的响应被 `isSearchTaskCurrent` 拦掉。
+   */
+  const changeSort = (next: VisualSearchSort) => {
+    // 与**生效档**比：没点过档时「综合」已经是生效档，再点它是空操作
+    if (next === activeSort) return
+    setSort(next)
+    void search(next)
   }
 
   useLoad(() => {
@@ -290,16 +334,21 @@ export default function VisionResult() {
   }, [loading, failed, failedText, interpretation])
 
   const stats = useMemo(() => resultStats(items), [items])
+  /**
+   * 两列瀑布流：**按服务端返回的顺序**直接切奇偶，不再本地重排。
+   *
+   * 契约保证每一档排序都带统一 tie-break（`score` 降序 → `id` 升序，见
+   * `apps/api/src/modules/visual-search/service.ts`），所以顺序是稳定的、翻页也不会抖。
+   */
   const [left, right] = useMemo(() => {
-    const ordered = sortResults(items, filter)
-    const leftCol: ListingCard[] = []
-    const rightCol: ListingCard[] = []
-    ordered.forEach((item, index) => {
+    const leftCol: VisualSearchResultItem[] = []
+    const rightCol: VisualSearchResultItem[] = []
+    items.forEach((item, index) => {
       if (index % 2 === 0) leftCol.push(item)
       else rightCol.push(item)
     })
     return [leftCol, rightCol]
-  }, [items, filter])
+  }, [items])
 
   /** 统计位：识别中 / 失败 / 没带图时给 `—`，绝不写成「0 件」 */
   const statsPending = loading || failed || missingQuery
@@ -308,6 +357,14 @@ export default function VisionResult() {
     if (stats.priceMinCents === stats.priceMaxCents) return `¥${formatAmount(stats.priceMinCents)}`
     return `¥${formatAmount(stats.priceMinCents)}–¥${formatAmount(stats.priceMaxCents)}`
   }, [stats])
+  /**
+   * 同类成交均价文案（`null` = 样本不足 3 条，渲染成 `—`）。
+   *
+   * 两个数据源各管一半：样本数不足由**服务端**判（`soldAvgPriceCents` 给 `null`），
+   * 客户端再判一次 `soldSampleCount < VISUAL_SOLD_AVG_MIN_SAMPLES` —— 服务端换实现时
+   * 客户端也不会把「2 件样本的均价」当成行情展示。口径与阈值都从契约取，不抄字面量。
+   */
+  const soldAvg = useMemo(() => (soldStats === null ? null : soldAvgText(soldStats)), [soldStats])
 
   /** 面板收起时那句提示：告诉用户这里还有东西，以及怎么拉起来 */
   const collapsedHint = statsPending
@@ -454,17 +511,33 @@ export default function VisionResult() {
               </View>
             </View>
 
-            {/* ---- 排序胶囊：只在有结果时可点（空态 / 失败态排序没有对象） ---- */}
+            {/*
+              行情行单独占一行：三枚 stat 一行放不下（750 − 面板左右各 32 = 686rpx，
+              三组「标签 + 数值」实测约 800rpx），挤在一行会把「价格区间」截断。
+              样本 < 3 时契约的 `soldAvgPriceCents` 是 null，这里与「价格区间」同一款 `—`。
+            */}
+            <View className="vres__stats vres__stats--market">
+              <View className="vres__stat">
+                <Text className="vres__stat-k">同类成交均价</Text>
+                {soldAvg === null ? (
+                  <Text className="vres__stat-dash">—</Text>
+                ) : (
+                  <Text className="vres__stat-v vres__stat-v--price num">{soldAvg}</Text>
+                )}
+              </View>
+            </View>
+
+            {/* ---- 排序胶囊：五档，切档 = 重新请求（只在有结果时可点，空态 / 失败态没有对象） ---- */}
             {!statsPending && items.length > 0 ? (
               <View className="vres__filters">
-                {searchFilters.map((item) => (
+                {VISUAL_SORT_OPTIONS.map((option) => (
                   <View
-                    key={item}
-                    className={`vres__fchip${item === filter ? ' is-on' : ''}`}
-                    onClick={() => setFilter(item)}
+                    key={option.sort}
+                    className={`vres__fchip${option.sort === activeSort ? ' is-on' : ''}`}
+                    onClick={() => changeSort(option.sort)}
                   >
-                    <Text>{item}</Text>
-                    {item === '价格' ? (
+                    <Text>{option.label}</Text>
+                    {option.sort === 'price_asc' ? (
                       <View className="vres__fsort">
                         <Image
                           className="vres__fsort-img"
@@ -573,12 +646,15 @@ export default function VisionResult() {
 /**
  * 一张结果卡。
  *
- * `seller` 恒传 `null`：契约的 `ListingCard` **没有卖家字段**（`ListingCardSchema`），
- * 真实数据下列表卡拿不到卖家 —— `ProductCard` 会整行不渲染，而不是编一个卖家出来
- * （`features/listing/adapt.ts` 的铁律 2）。收藏 / 想要计数同理，由 `toMockListing` 置 `null`。
+ * `seller` 恒传 `null`：本页不渲染卖家行（契约的 `ListingCardSchema.seller` 是可选的，
+ * `toMockListing` 也已经把它投影进 `listing`，这里只是不展示）。
+ * 「N 人想要」相反：契约把 `favoriteCount` 挂在**结果项外层**
+ * （`VisualSearchResultItemSchema = ListingCardSchema.extend({ favoriteCount })`），
+ * 它是真值，经 `toMockListing` 的第三参透到卡片上（`ProductCard` 自带 null 守卫，
+ * `wants === null` 时整行不渲染）。
  */
-function ResultCard({ card }: { card: ListingCard }) {
-  const listing = useMemo(() => toMockListing(card), [card])
+function ResultCard({ card }: { card: VisualSearchResultItem }) {
+  const listing = useMemo(() => toMockListing(card, undefined, card.favoriteCount), [card])
   return <ProductCard listing={listing} seller={null} imageHeight={RATIO_HEIGHT[listing.ratio]} />
 }
 
