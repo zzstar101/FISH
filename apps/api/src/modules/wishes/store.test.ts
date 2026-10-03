@@ -101,6 +101,19 @@ describe('wishes store (integration)', () => {
     expect(created.kind).toBe('created')
     if (created.kind !== 'created') return
 
+    // #322 M4 顺序不变量：创建路径也必须先投 EMBED_WISH、后投 MATCH_WISH。按队列自己的领取键
+    // `(run_at, id)`（见 `claimNext`）排序，断的是**入队时刻**的领取序（同事务、run_at 相同）——反序会让
+    // 新建愿望的首轮 MATCH 拿不到自己的向量，按 M2 降级契约把所有 match 行落成 v1 且永不重算。
+    // 重试/回收推后 `run_at` 之后的执行序反转是已知边界（M4 §6.1 末尾）。
+    const createdJobs = rows(
+      await db.execute(sql`
+        SELECT type FROM jobs
+        WHERE payload->>'wishId' = ${created.row.id}
+        ORDER BY run_at, id
+      `),
+    )
+    expect(createdJobs.map((row) => row.type)).toEqual(['EMBED_WISH', 'MATCH_WISH'])
+
     const replay = await store.createOrGetRecent(
       baseRow({ id: crypto.randomUUID() }),
       10,
@@ -124,6 +137,18 @@ describe('wishes store (integration)', () => {
     expect(queued.map((row) => row.type)).toEqual(['EMBED_WISH', 'MATCH_WISH'])
     expect(queued.map((row) => row.status)).toEqual(['PENDING', 'PENDING'])
     for (const row of queued) expect(row.payload).toEqual({ wishId })
+
+    // #322 M4 顺序不变量：上面的 `ORDER BY type` 只是把两行排出来，**不代表**执行顺序。入队时刻的领取序
+    // 由队列的领取键 `(run_at, id)` 决定（见 `claimNext`），这里按它再查一次：EMBED_WISH 必须排在前面。
+    // （重试/回收把 `run_at` 推后之后的执行序反转是已知边界，见 M4 §6.1 末尾。）
+    const claimOrder = rows(
+      await db.execute(sql`
+        SELECT type FROM jobs
+        WHERE payload->>'wishId' = ${wishId}
+        ORDER BY run_at, id
+      `),
+    )
+    expect(claimOrder.map((row) => row.type)).toEqual(['EMBED_WISH', 'MATCH_WISH'])
 
     // 幂等：重复投递同一 wishId 不再新增 job（重放只补投真正缺失的那条）。
     await matchQueue.enqueue(wishId)
@@ -162,7 +187,7 @@ describe('wishes store (integration)', () => {
 
     // 编辑内容后走写路径的投递入口（service 的顺序就是 update 之后 enqueue）：旧向量当场消失，
     // 不必等 worker 跑到 EMBED_WISH——这是"按内容失效"而不是"等向量重算"的关键差别。
-    await store.update(wishId, { description: '新描述：语义完全变了' }, new Date())
+    await store.update(wishId, { description: '新描述：语义完全变了' })
     await matchQueue.enqueue(wishId)
     expect(await findEmbedding(db, { kind: 'wish', id: wishId }, EMBEDDING_MODEL)).toBeNull()
 
@@ -184,7 +209,8 @@ describe('wishes store (integration)', () => {
   })
 
   test('rolls back the wish when the MATCH_WISH job insert fails', async () => {
-    // 反向用例：愿望与 job 是同一语句，job 失败必须整体回滚，不能留下没有 job 的愿望。
+    // 反向用例：愿望与 job 在同一个事务里写（#322 M4 起是三句语句、不再是单条 CTE），
+    // 后一句 job 失败必须整体回滚，不能留下没有 job 的愿望。
     await db.execute(
       sql`ALTER TABLE jobs ADD CONSTRAINT tmp_reject_match_wish CHECK (type <> 'MATCH_WISH') NOT VALID`,
     )
@@ -225,7 +251,7 @@ describe('wishes store (integration)', () => {
     expect(own?.match_count).toBe(2)
 
     // 编辑/关闭的 UPDATE RETURNING 也要带上真实 matchCount，而不是兜底 0
-    const updated = await store.update(wish.id, { keyword: '考研教材' }, new Date())
+    const updated = await store.update(wish.id, { keyword: '考研教材' })
     expect(updated?.match_count).toBe(2)
 
     // 软幂等重复创建返回的是同一行，matchCount 同样不能回退成 0
@@ -237,7 +263,7 @@ describe('wishes store (integration)', () => {
     expect(replay.kind).toBe('duplicate')
     if (replay.kind === 'duplicate') expect(replay.row.match_count).toBe(2)
 
-    const closed = await store.updateStatusIfActive(wish.id, 'CLOSED', new Date())
+    const closed = await store.updateStatusIfActive(wish.id, 'CLOSED')
     expect(closed?.match_count).toBe(2)
   })
 

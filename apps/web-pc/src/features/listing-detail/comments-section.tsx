@@ -1,4 +1,14 @@
 import type { CommentDto, CommentReply } from '@fish/contracts/comments/schema'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@fish/ui/alert-dialog'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -11,8 +21,29 @@ import { useEffect, useRef, useState } from 'react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
-import { describeCommentFailure } from './comments-api'
-import { useCommentList, useCreateComment, useCreateReply } from './comments-queries'
+import { describeCommentDeleteFailure, describeCommentFailure } from './comments-api'
+import {
+  useCommentList,
+  useCreateComment,
+  useCreateReply,
+  useDeleteComment,
+} from './comments-queries'
+
+/** 删除确认弹窗的目标：只留 id 与类型，正文不进组件状态。 */
+type DeleteTarget = { id: string; kind: 'comment' | 'reply' }
+
+/**
+ * 这条留言（或回复）是否归当前访客所有 —— 决定要不要给「删除」入口。
+ *
+ * 只比**公开 id**：`CommentAuthor.id` 与 `Me.id` 都是 `usr_` 公开 id（契约同一编码），
+ * 不要拿 nickname 这类可变展示字段去猜归属。
+ */
+export function canDeleteComment(
+  entry: { author: { id: string } },
+  viewerId: string | null,
+): boolean {
+  return viewerId !== null && entry.author.id === viewerId
+}
 
 function SellerBadge() {
   return (
@@ -73,7 +104,15 @@ function CommentComposer({
   )
 }
 
-function ReplyRow({ reply }: { reply: CommentReply }) {
+function ReplyRow({
+  reply,
+  canDelete,
+  onDelete,
+}: {
+  reply: CommentReply
+  canDelete: boolean
+  onDelete: () => void
+}) {
   return (
     <div className="flex gap-3">
       <UserAvatar
@@ -88,6 +127,16 @@ function ReplyRow({ reply }: { reply: CommentReply }) {
           <time className="text-ink-3 text-xs" dateTime={reply.createdAt}>
             {formatRelativeTimeAt(reply.createdAt)}
           </time>
+          {canDelete ? (
+            <button
+              aria-label={`删除 ${reply.author.nickname} 的回复`}
+              className="text-ink-3 text-xs hover:text-danger hover:underline"
+              onClick={onDelete}
+              type="button"
+            >
+              删除
+            </button>
+          ) : null}
         </div>
         <p className="mt-1.5 whitespace-pre-wrap text-ink-2 text-sm leading-6">{reply.content}</p>
       </div>
@@ -98,6 +147,7 @@ function ReplyRow({ reply }: { reply: CommentReply }) {
 function CommentRow({
   comment,
   canReply,
+  viewerId,
   authResolved,
   replyOpen,
   replyDraft,
@@ -107,9 +157,12 @@ function CommentRow({
   onCancelReply,
   onChangeReply,
   onSubmitReply,
+  onDelete,
+  onDeleteReply,
 }: {
   comment: CommentDto
   canReply: boolean
+  viewerId: string | null
   authResolved: boolean
   replyOpen: boolean
   replyDraft: string
@@ -119,6 +172,8 @@ function CommentRow({
   onCancelReply: () => void
   onChangeReply: (value: string) => void
   onSubmitReply: () => void
+  onDelete: () => void
+  onDeleteReply: (reply: CommentReply) => void
 }) {
   return (
     <div className="py-5">
@@ -146,12 +201,27 @@ function CommentRow({
               回复
             </button>
             <span className="text-ink-3">{comment.replies.length} 条回复</span>
+            {canDeleteComment(comment, viewerId) ? (
+              <button
+                aria-label={`删除 ${comment.author.nickname} 的留言`}
+                className="text-ink-3 hover:text-danger hover:underline"
+                onClick={onDelete}
+                type="button"
+              >
+                删除
+              </button>
+            ) : null}
           </div>
 
           {comment.replies.length > 0 ? (
             <div className="mt-4 space-y-3 border-line border-l-2 pl-4">
               {comment.replies.map((reply) => (
-                <ReplyRow key={reply.id} reply={reply} />
+                <ReplyRow
+                  canDelete={canDeleteComment(reply, viewerId)}
+                  key={reply.id}
+                  onDelete={() => onDeleteReply(reply)}
+                  reply={reply}
+                />
               ))}
             </div>
           ) : null}
@@ -179,11 +249,14 @@ export function CommentsSection({ listingId }: { listingId: string }) {
   const comments = useCommentList(listingId)
   const createComment = useCreateComment(listingId)
   const createReply = useCreateReply(listingId)
+  const deleteComment = useDeleteComment(listingId)
   const [commentDraft, setCommentDraft] = useState('')
   const [commentError, setCommentError] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<string | null>(null)
   const [replyDraft, setReplyDraft] = useState('')
   const [replyError, setReplyError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const viewerId = me?.id ?? null
   const viewerRef = useRef(viewerId)
   const resetViewerRef = useRef(viewerId)
@@ -197,6 +270,8 @@ export function CommentsSection({ listingId }: { listingId: string }) {
     setReplyTo(null)
     setReplyDraft('')
     setReplyError(null)
+    setDeleteTarget(null)
+    setDeleteError(null)
   }, [viewerId])
 
   const items = comments.data?.pages.flatMap((page) => page.items) ?? []
@@ -252,6 +327,24 @@ export function CommentsSection({ listingId }: { listingId: string }) {
     )
   }
 
+  /**
+   * 确认删除。**先关弹窗再发请求**，失败时把服务端文案落到区块顶部的提示条：
+   * 弹窗关掉后错误仍可见，也不会因为重开弹窗而丢失。
+   */
+  function confirmDelete() {
+    if (deleteTarget === null) return
+    const target = deleteTarget
+    const submittedBy = viewerId
+    setDeleteError(null)
+    setDeleteTarget(null)
+    deleteComment.mutate(target.id, {
+      onError: (error) => {
+        if (viewerRef.current !== submittedBy) return
+        setDeleteError(describeCommentDeleteFailure(error))
+      },
+    })
+  }
+
   return (
     <Card className="gap-0 border border-line p-6">
       <div className="flex items-end justify-between gap-4">
@@ -299,6 +392,12 @@ export function CommentsSection({ listingId }: { listingId: string }) {
         />
       ) : null}
 
+      {deleteError !== null ? (
+        <p className="mt-4 rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
+          {deleteError}
+        </p>
+      ) : null}
+
       {comments.isPending ? <LoadingState label="正在加载留言…" /> : null}
       {comments.isError && !comments.isFetchNextPageError ? (
         <ErrorState message="留言加载失败" onRetry={() => void comments.refetch()} />
@@ -321,12 +420,15 @@ export function CommentsSection({ listingId }: { listingId: string }) {
                 setReplyError(null)
               }}
               onChangeReply={setReplyDraft}
+              onDelete={() => setDeleteTarget({ id: comment.id, kind: 'comment' })}
+              onDeleteReply={(reply) => setDeleteTarget({ id: reply.id, kind: 'reply' })}
               onSubmitReply={() => submitReply(comment.id)}
               replyDraft={replyDraft}
               replyError={replyError}
               authResolved={authResolved}
               replyOpen={replyTo === comment.id}
               replyPending={createReply.isPending}
+              viewerId={viewerId}
             />
           ))}
         </div>
@@ -345,6 +447,34 @@ export function CommentsSection({ listingId }: { listingId: string }) {
             {comments.isFetchingNextPage ? '正在加载…' : '加载更多留言'}
           </Button>
         </div>
+      ) : null}
+
+      {deleteTarget !== null ? (
+        <AlertDialog
+          onOpenChange={(open) => {
+            if (!open) setDeleteTarget(null)
+          }}
+          open
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {deleteTarget.kind === 'comment' ? '删除这条留言？' : '删除这条回复？'}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteTarget.kind === 'comment'
+                  ? '删除不可恢复，这条留言下面的回复也会一并删除。'
+                  : '删除不可恢复。'}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmDelete} variant="destructive">
+                确认删除
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       ) : null}
     </Card>
   )

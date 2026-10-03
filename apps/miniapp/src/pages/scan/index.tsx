@@ -4,7 +4,7 @@ import Taro, { useDidShow } from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import ScanTabs from '@/components/scan-tabs'
 import { SCAN_CODE_PAGE } from '@/components/scan-tabs/tabs'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
 /**
@@ -97,6 +97,7 @@ export default function ScanQr() {
 
   // 返回钮与标题的垂直位置跟微信原生胶囊对齐（设备 px，内联下发，不参与 rpx 缩放）
   const nav = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(nav.capsuleHeight)
 
   const goBack = () => {
     const pages = Taro.getCurrentPages()
@@ -223,10 +224,13 @@ export default function ScanQr() {
       {/* ------- 顶部：返回 + 标题（垂直对齐右侧微信原生胶囊的中线） ------- */}
       <View
         className="scanqr__back"
-        style={{ top: `${nav.statusBarHeight + nav.contentHeight / 2}px` }}
+        style={{
+          top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
+          ...backGeo.btnStyle,
+        }}
         onClick={goBack}
       >
-        <View className="scanqr__back-chevron" />
+        <View className="scanqr__back-chevron" style={backGeo.chevronStyle} />
       </View>
       <Text
         className="scanqr__topbar-title"

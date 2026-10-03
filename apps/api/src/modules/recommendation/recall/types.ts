@@ -66,7 +66,13 @@ export type RecallCandidate = {
   userCategoryAffinity: number | null
   freshness: number
   createdAt: Date
-  alreadySeenCount: number
+  /**
+   * 该用户看过这件商品的次数；`null` = **未知**（曝光计数查询失败，或无身份）。
+   *
+   * R3 时这里写死 `number` 且失败退化成 0，等于把"不知道"谎报成"没看过"—— R4 的排序把它当
+   * 惩罚项用，两种含义会直接改变排序结果，因此必须区分（R3 §9 待办①）。
+   */
+  alreadySeenCount: number | null
   sellerExposure: number
 }
 
@@ -86,7 +92,8 @@ export type RecallResult = {
   /**
    * 合并阶段的降级原因，`null` = 正常。两种情形：
    * - 最终可见性复核失败 ⇒ `candidates` 为空（没有"此刻可见"的真值就不输出候选）；
-   * - 曝光次数读取失败 ⇒ `candidates` 照常返回，只是 `alreadySeenCount` 全为 0。
+   * - 曝光次数读取失败 ⇒ `candidates` 照常返回，只是 `alreadySeenCount` 全为 `null`（未知，
+   *   不是 0 —— 排序层据此把 `repeatedExposure` 记入 `missing`，而不是当"确实没看过"加满分）。
    * 两者都归 `provider_error`，但后果不同，因此调用方要按 `candidates` 是否为空一起判读。
    */
   mergeDegradedReason: RecallDegradeReason | null

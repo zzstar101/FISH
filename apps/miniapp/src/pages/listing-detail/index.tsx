@@ -39,7 +39,7 @@ import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
-import { readNavMetrics } from '@/lib/nav-metrics'
+import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
   categoryLabel,
@@ -468,6 +468,7 @@ export default function ListingDetail() {
   useListingDetailTracking(data?.listing.id ?? null, attribution)
 
   const metrics = useMemo(() => readNavMetrics(), [])
+  const backGeo = backButtonGeometry(metrics.capsuleHeight)
 
   /**
    * 玻璃顶栏的触发阈值（设备 px）。
@@ -1200,9 +1201,20 @@ export default function ListingDetail() {
         className={`detail__nav${navSolid ? ' is-solid' : ''}`}
         style={{ paddingTop: `${metrics.statusBarHeight}px` }}
       >
-        <View className="detail__navrow">
-          <View className="detail__back" onClick={handleBack}>
-            <View className="detail__chevron" />
+        {/*
+          行几何与 `components/top-bar` 同构：行总高 = totalHeight，多出胶囊行的
+          部分 padding-bottom 补在下方 —— 返回钮在胶囊那一段（contentHeight）里
+          居中，与右侧原生胶囊**等高、同轴**（2026-10-02 拍板）。
+        */}
+        <View
+          className="detail__navrow"
+          style={{
+            height: `${metrics.totalHeight - metrics.statusBarHeight}px`,
+            paddingBottom: `${metrics.totalHeight - metrics.statusBarHeight - metrics.contentHeight}px`,
+          }}
+        >
+          <View className="detail__back" style={backGeo.btnStyle} onClick={handleBack}>
+            <View className="detail__chevron" style={backGeo.chevronStyle} />
           </View>
         </View>
       </View>

@@ -1,4 +1,14 @@
 import type { ListingCard, ListingStatus } from '@fish/contracts/listings/schema'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@fish/ui/alert-dialog'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
@@ -13,10 +23,10 @@ import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
 import { WatchersDialog } from '../watchers/watchers-dialog'
 import type { MyListingStatusFilter } from './api'
-import { listingActionError } from './api'
+import { listingActionError, listingDeleteError } from './api'
 import { EditListingDialog } from './edit-listing-dialog'
 import { PendingSection } from './pending-section'
-import { useMyListings, useSetListingStatus } from './queries'
+import { useDeleteListing, useMyListings, useSetListingStatus } from './queries'
 
 const STATUS_TABS: ReadonlyArray<{ value: MyListingStatusFilter; label: string }> = [
   { value: 'ALL', label: '全部' },
@@ -44,8 +54,10 @@ function MyListContent({ ownerId }: { ownerId: string }) {
   const [notice, setNotice] = useState<string | null>(null)
   const [editing, setEditing] = useState<ListingCard | null>(null)
   const [watching, setWatching] = useState<ListingCard | null>(null)
+  const [deleting, setDeleting] = useState<ListingCard | null>(null)
   const listings = useMyListings(ownerId, status)
   const setStatusMutation = useSetListingStatus(ownerId)
+  const deleteMutation = useDeleteListing(ownerId)
 
   async function toggle(item: ListingCard) {
     const target = item.status === 'ACTIVE' ? 'OFFLINE' : 'ACTIVE'
@@ -56,6 +68,19 @@ function MyListContent({ ownerId }: { ownerId: string }) {
       const view = listingActionError(error)
       setNotice(view.message)
       if (view.refresh) await listings.refetch()
+    }
+  }
+
+  async function remove(item: ListingCard) {
+    setNotice(null)
+    try {
+      await deleteMutation.mutateAsync(item.id)
+    } catch (error) {
+      const view = listingDeleteError(error)
+      setNotice(view.message)
+      if (view.refresh) await listings.refetch()
+    } finally {
+      setDeleting(null)
     }
   }
 
@@ -133,6 +158,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
               (item.status === 'ACTIVE' || item.status === 'OFFLINE')
             const pending =
               setStatusMutation.isPending && setStatusMutation.variables?.id === item.id
+            const deletePending = deleteMutation.isPending && deleteMutation.variables === item.id
 
             return (
               <article className="flex items-center gap-5 p-5" key={item.id}>
@@ -184,6 +210,17 @@ function MyListContent({ ownerId }: { ownerId: string }) {
                           {item.status === 'ACTIVE' ? '下架' : '重新上架'}
                         </Button>
                       ) : null}
+                      {isDeletableListing(item) ? (
+                        <Button
+                          disabled={deletePending}
+                          onClick={() => setDeleting(item)}
+                          size="sm"
+                          variant="destructive"
+                        >
+                          {deletePending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                          删除
+                        </Button>
+                      ) : null}
                       {!actionEnabled && !editEnabled ? (
                         <span className="text-ink-3 text-xs">
                           {item.moderationStatus === 'REVIEW'
@@ -217,6 +254,30 @@ function MyListContent({ ownerId }: { ownerId: string }) {
       {watching !== null ? (
         <WatchersDialog key={watching.id} listing={watching} onClose={() => setWatching(null)} />
       ) : null}
+
+      {deleting !== null ? (
+        <AlertDialog
+          onOpenChange={(open) => {
+            if (!open) setDeleting(null)
+          }}
+          open
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>删除「{deleting.title}」？</AlertDialogTitle>
+              <AlertDialogDescription>
+                删除不可恢复：商品、图片、评论与相关会话会一并清除。只是暂时不想卖请用「下架」，下架后还能重新上架。
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>取消</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void remove(deleting)} variant="destructive">
+                确认删除
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      ) : null}
     </div>
   )
 }
@@ -224,6 +285,25 @@ function MyListContent({ ownerId }: { ownerId: string }) {
 /** 我的发布卡片价格：复用全站 `PriceText`，0 元显示「免费送」而不是 `¥0.00`。 */
 export function MyListingPrice({ cents }: { cents: number }) {
   return <PriceText cents={cents} className="font-bold text-xl" />
+}
+
+/**
+ * 是否可删，与服务端 `store.deleteListingAtomic` 的判定一一对应：
+ * `status === 'OFFLINE'` 且 `moderationStatus === 'BLOCKED'` 且**非治理下架**。
+ *
+ * `governanceDelisted` 必须参与判断：治理下架与「内容不过审」在库里的形态完全相同
+ * （都是 `OFFLINE` + `BLOCKED`），只看 `moderationStatus` 会让平台下架的商品也顶着
+ * 「不过审」摆一个按下去必然 409 的按钮（契约 `ListingCardSchema` 已就这一坑预警）。
+ *
+ * **「有没有交易记录」这一条客户端看不到** —— 满足上面三条仍可能被服务端 409
+ * `LISTING_NOT_DELETABLE` 拒绝，所以调用方必须把失败透传，不能预先当成功。
+ */
+export function isDeletableListing(item: ListingCard): boolean {
+  return (
+    item.status === 'OFFLINE' &&
+    item.moderationStatus === 'BLOCKED' &&
+    item.governanceDelisted !== true
+  )
 }
 
 function listingStatusView(item: ListingCard): {
