@@ -11,6 +11,7 @@ import {
   Flag,
   Heart,
   History,
+  MessageSquare,
   PackageCheck,
   PackageOpen,
   Pencil,
@@ -166,6 +167,23 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           to="/wish"
         />
       </section>
+
+      <Link to="/comments">
+        <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-xl bg-surface-2 text-brand">
+                <MessageSquare className="size-5" />
+              </span>
+              <div>
+                <h2 className="font-semibold">我的评论</h2>
+                <p className="mt-0.5 text-ink-3 text-sm">查看你发过的商品留言与交易评价</p>
+              </div>
+            </div>
+            <ChevronRight className="size-4 shrink-0 text-ink-3" />
+          </div>
+        </Card>
+      </Link>
 
       <Link to="/reports">
         <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
