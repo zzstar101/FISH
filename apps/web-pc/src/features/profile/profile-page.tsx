@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   Flag,
   Heart,
+  History,
   PackageCheck,
   PackageOpen,
   Pencil,
@@ -21,6 +22,8 @@ import { useState } from 'react'
 import { useAuth } from '../auth/auth-provider'
 import { useLogout } from '../auth/queries'
 import { useFavoritesTotal } from '../favorites/queries'
+import { useViewHistoryTotal } from '../view-history/queries'
+import { historyCountLabel } from '../view-history/view'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 
@@ -36,6 +39,8 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
   // 收藏计数与收藏列表同源：读 `GET /me/favorites` 的全量 total，读不到显示未知而非 0
   // （不用 profileStats.favoriteCount——#190 已冻结不加字段，也保证两个数字同表同向）。
   const favoritesTotal = useFavoritesTotal(ownerId)
+  // 足迹计数与浏览记录列表同源（`GET /me/view-history` 的 total），不用旁路 count。
+  const viewHistoryTotal = useViewHistoryTotal(ownerId)
   const logout = useLogout()
   const [editOpen, setEditOpen] = useState(false)
   const [logoutError, setLogoutError] = useState<string | null>(null)
@@ -107,7 +112,7 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
         </div>
       </Card>
 
-      <section aria-label="我的统计" className="grid grid-cols-5 gap-4">
+      <section aria-label="我的统计" className="grid grid-cols-6 gap-4">
         <StatCard icon={PackageOpen} label="在售商品" value={stats.activeListings} to="/mylist" />
         <StatCard icon={Heart} label="活跃愿望" value={stats.activeWishes} to="/wish" />
         <StatCard
@@ -123,6 +128,14 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
           value={favoritesTotal.isError ? '未知' : (favoritesTotal.data ?? '未知')}
         />
         <StatCard icon={UsersRound} label="关注" to="/following" value={stats.followingCount} />
+        <StatCard
+          icon={History}
+          label="足迹"
+          // 与浏览记录列表同源（`GET /me/view-history` 的 total，同一张表同一个 30 天窗口）；
+          // 读不到显示「未知」而不是 0 —— 0 是"确实没看过"，与"不知道"是两件事。
+          value={historyCountLabel(viewHistoryTotal.data, viewHistoryTotal.isError)}
+          to="/history"
+        />
       </section>
 
       <section className="grid grid-cols-2 gap-4">
@@ -202,7 +215,7 @@ function StatCard({
   icon: typeof PackageOpen
   label: string
   value: number | string
-  to: '/mylist' | '/wish' | '/orders' | '/favorites' | '/following'
+  to: '/mylist' | '/wish' | '/orders' | '/favorites' | '/following' | '/history'
 }) {
   return (
     <Link to={to}>

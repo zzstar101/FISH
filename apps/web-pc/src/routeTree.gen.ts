@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as FavoritesRouteImport } from './routes/favorites'
 import { Route as FollowingRouteImport } from './routes/following'
+import { Route as HistoryRouteImport } from './routes/history'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MessagesRouteImport } from './routes/messages'
 import { Route as MylistRouteImport } from './routes/mylist'
@@ -43,6 +44,11 @@ const FavoritesRoute = FavoritesRouteImport.update({
 const FollowingRoute = FollowingRouteImport.update({
   id: '/following',
   path: '/following',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HistoryRoute = HistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
+  '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
   '/messages': typeof MessagesRouteWithChildren
   '/mylist': typeof MylistRoute
@@ -157,6 +164,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
+  '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
   '/mylist': typeof MylistRoute
   '/notifications': typeof NotificationsRoute
@@ -178,6 +186,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
+  '/history': typeof HistoryRoute
   '/login': typeof LoginRoute
   '/messages': typeof MessagesRouteWithChildren
   '/mylist': typeof MylistRoute
@@ -202,6 +211,7 @@ export interface FileRouteTypes {
     | '/'
     | '/favorites'
     | '/following'
+    | '/history'
     | '/login'
     | '/messages'
     | '/mylist'
@@ -224,6 +234,7 @@ export interface FileRouteTypes {
     | '/'
     | '/favorites'
     | '/following'
+    | '/history'
     | '/login'
     | '/mylist'
     | '/notifications'
@@ -244,6 +255,7 @@ export interface FileRouteTypes {
     | '/'
     | '/favorites'
     | '/following'
+    | '/history'
     | '/login'
     | '/messages'
     | '/mylist'
@@ -267,6 +279,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   FavoritesRoute: typeof FavoritesRoute
   FollowingRoute: typeof FollowingRoute
+  HistoryRoute: typeof HistoryRoute
   LoginRoute: typeof LoginRoute
   MessagesRoute: typeof MessagesRouteWithChildren
   MylistRoute: typeof MylistRoute
@@ -303,6 +316,13 @@ declare module '@tanstack/react-router' {
       path: '/following'
       fullPath: '/following'
       preLoaderRoute: typeof FollowingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/history': {
+      id: '/history'
+      path: '/history'
+      fullPath: '/history'
+      preLoaderRoute: typeof HistoryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -458,6 +478,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   FavoritesRoute: FavoritesRoute,
   FollowingRoute: FollowingRoute,
+  HistoryRoute: HistoryRoute,
   LoginRoute: LoginRoute,
   MessagesRoute: MessagesRouteWithChildren,
   MylistRoute: MylistRoute,
