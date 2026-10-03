@@ -886,3 +886,21 @@ O14/O15/O23 结构层 `eligible=false`；O17/O18/O22 命中 `contradicted` 被�
 结论：O 组独立 live 门禁**通过**，且是在冻结实现上一次性测得（未因结果改标签、删样本或调参）。
 仍如实保留的缺口：`.m4-evidence/` 被 gitignore ⇒ live 证据无法从干净 checkout 复现（指纹已记入文档与结果文件）；
 §15/§16 列出的范围外日志与 `now()` 位点未修（本 PR 未触碰那些文件）。
+
+## 18. 报告不修：CI 的 `scripts` 过滤器是子串匹配
+
+推送后 CI 的 `unit-tests` 作业（**没有 postgres 服务**）报 2 个失败，全部落在
+`apps/worker/src/jobs/embedding/maintenance-cli.test.ts` 的 ANN 探针用例上（本地与 `db-tests` 作业都有真实
+pgvector 库，所以本地全量一直是绿的，这个缺陷在推送前不可见）。
+
+- 机制：该作业用 `bun test --isolate "${targets[@]}"`，其中 `targets` 含裸路径参数 `scripts`；**Bun 把位置参数当子串过滤器**，
+  因此任何路径里带 `scripts` 的测试文件都会被一起拉进这个无数据库的作业。
+  实测：`bun test --isolate scripts` 会同时运行 `scripts/ci-changes.test.ts`、`scripts/utc8-timestamp-prefix.test.ts`
+  与 `apps/worker/src/jobs/embedding/maintenance-scripts.test.ts`（后者的 ANN 用例要 spawn `ann-probe.ts` 建表/建索引）。
+- 本 PR 的处置（在范围内）：把该文件改名为 `maintenance-cli.test.ts`（并加注释说明原因）。改名后
+  `bun test --isolate scripts` 在无数据库时 **20 pass / 0 fail**（此前 23 pass / 2 fail），
+  文件本身在真实库下 **5 pass / 0 fail**，且仍由 `db-tests` 作业的 `apps/worker` 过滤器覆盖。
+- **不修的部分（报告给 Owner）**：`.github/workflows/ci.yml` 里 `targets+=(scripts)` 这个裸过滤器本身
+  仍会误吞未来任何名字带 `scripts` 的测试文件；把它改成路径锚定（例如 `./scripts`）属于 CI 基础设施改动，
+  不在本 Issue 范围。顺带记录：本地实测 `bun test --isolate ./scripts` 只会匹配到 `scripts/ci-changes.test.ts`（13 tests / 1 file），
+  会漏掉 `scripts/utc8-timestamp-prefix.test.ts`，所以该改法不能照抄，需要按 Bun 的过滤器语义另行验证。

@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test'
 
+// 文件名刻意不含 "scripts"：CI 的 unit-tests 作业用裸路径参数 `scripts` 当过滤器，而 Bun 是按子串匹配的，
+// 于是任何路径里带 "scripts" 的测试文件都会被拉进那个**没有数据库**的作业。本文件里的 ANN 探针用例
+// 需要真实 pgvector 数据库（spawn `ann-probe.ts` 建表/建索引），只在 db-tests 作业（带 postgres）与
+// 本地 `bun test --isolate apps/worker` 下运行。
 const repoRoot = Bun.fileURLToPath(new URL('../../../../../', import.meta.url))
 type Event = {
   event: string
