@@ -1,5 +1,10 @@
-import { type EmbeddingProvider, EmbeddingProviderError } from '@fish/contracts/embedding/provider'
+import {
+  type EmbeddingFailureReason,
+  type EmbeddingProvider,
+  EmbeddingProviderError,
+} from '@fish/contracts/embedding/provider'
 import { EMBEDDING_DIMENSIONS } from '@fish/db/schema/embeddings'
+import { elapsedMs } from '../../../log'
 
 /**
  * live provider（#322 M1）：OpenAI 兼容的 `/embeddings` 端点。
@@ -25,8 +30,30 @@ export type LiveEmbeddingConfig = {
   baseUrl: string
   apiKey: string
   model: string
+  /** 每个实际 HTTP attempt 的 admission；拒绝时 fail-closed，不进入网络重试。 */
+  beforeRequest?: () => Promise<void>
   /** 退避基数覆盖，只给测试把等待压到 0 用；生产不传。 */
   retryDelayMs?: number
+  /**
+   * 每次上游请求结束后的观测回调（#322 M4）。provider 只报**计数与耗时**：条数、尝试序号、
+   * 结果分类、失败原因、上游 status；请求文本与响应/向量都不进事件（见 `../../../log`）。
+   * 不传 = 不观测，所以 provider 本身仍然可以在测试里裸用。
+   */
+  onRequest?: (event: EmbeddingRequestEvent) => void
+}
+
+/** 一次上游请求的观测事件；一次 `embed()` 可能产生多条（重试）。 */
+export type EmbeddingRequestEvent = {
+  /** 第几次尝试（含首次），从 1 起。 */
+  attempt: number
+  durationMs: number
+  /** `ok` 成功；`retryable` 失败且会重试；`fatal` 失败且不再重试。 */
+  outcome: 'ok' | 'retryable' | 'fatal'
+  /** 失败分类（成功为 `null`）；`http_status` 时 `status` 才有值。 */
+  reason: EmbeddingFailureReason | null
+  status: number | null
+  /** 本次请求的文本条数。 */
+  texts: number
 }
 
 function isAbortError(error: unknown): boolean {
@@ -86,7 +113,16 @@ async function requestEmbeddings(
         'content-type': 'application/json',
         authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify({ model: config.model, input: texts }),
+      // `dimensions` 必须显式发（#322 M4）：多数兼容端点把维度做成可选参数，省略时按**模型默认**
+      // 返回（百炼 `text-embedding-v4` 默认 1024），于是每条都栽在 `readEmbeddings` 的
+      // `dimension_mismatch` 上——请求是 200、向量也"合法"，只是维度不是本服务的那一列。
+      // 这里直接发 `EMBEDDING_DIMENSIONS`（与 `vector(1536)` / CHECK 同一个常量），不做 env 可配：
+      // 列类型是编译期常量，可配维度只会造出"配置与列定义不一致"的死法。
+      body: JSON.stringify({
+        model: config.model,
+        input: texts,
+        dimensions: EMBEDDING_DIMENSIONS,
+      }),
       signal: AbortSignal.timeout(EMBEDDING_TIMEOUT_MS),
     })
   } catch (error) {
@@ -125,17 +161,54 @@ export function createLiveEmbeddingProvider(config: LiveEmbeddingConfig): Embedd
   const endpoint = `${config.baseUrl.replace(/\/+$/, '')}/embeddings`
   const retryDelayMs = config.retryDelayMs ?? EMBEDDING_RETRY_BASE_DELAY_MS
 
+  /**
+   * 观测回调**不得改变 provider 行为**（#322 M4 审查）：回调自己抛错只吞掉。
+   * 否则它会落进 `embed()` 的 catch —— 一次成功的上游请求被重新定性成 `fatal`、多发一条
+   * 误导性的失败事件、并把 job 判失败。回调由调用方装配（日志出口），它的异常由它自己负责。
+   */
+  const notify = (event: EmbeddingRequestEvent): void => {
+    try {
+      config.onRequest?.(event)
+    } catch {
+      // 刻意静默：观测坏掉不能影响传输。
+    }
+  }
+
   return {
     model: config.model,
     dimensions: EMBEDDING_DIMENSIONS,
 
     async embed(texts) {
       for (let attempt = 1; ; attempt += 1) {
+        // 在 retry catch 外等待 admission：预算/限速配置错误不应触发上游重试。
+        await config.beforeRequest?.()
+        const startedAt = Bun.nanoseconds()
         try {
-          return await requestEmbeddings(config, endpoint, texts)
+          const vectors = await requestEmbeddings(config, endpoint, texts)
+          notify({
+            attempt,
+            durationMs: elapsedMs(startedAt),
+            outcome: 'ok',
+            reason: null,
+            status: null,
+            texts: texts.length,
+          })
+          return vectors
         } catch (error) {
+          const failure = error instanceof EmbeddingProviderError ? error : null
+          const retryable = failure?.retryable ?? false
+          // 先按"这次到底会不会重试"定性再上报，免得日志里出现"重试了但其实已经放弃"的读数。
+          const willRetry = retryable && attempt < EMBEDDING_MAX_ATTEMPTS
+          notify({
+            attempt,
+            durationMs: elapsedMs(startedAt),
+            outcome: willRetry ? 'retryable' : 'fatal',
+            reason: failure?.reason ?? null,
+            status: failure?.status ?? null,
+            texts: texts.length,
+          })
           // 不可重试的失败（4xx / 非法响应 / 维度不符）直接冒泡：重发不会变好。
-          if (!(error instanceof EmbeddingProviderError) || !error.retryable) throw error
+          if (!retryable) throw error
           if (attempt >= EMBEDDING_MAX_ATTEMPTS) throw error
           // 指数退避；`Bun.sleep(0)` 也走同一路径，测试用 retryDelayMs: 0 不真的等。
           await Bun.sleep(retryDelayMs * 2 ** (attempt - 1))
