@@ -7,7 +7,13 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
 import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
 import { settings, themeOptions } from '@/lib/settings-defaults'
-import type { ThemeMode } from '@/mock/types'
+import type { MockSettings, ThemeMode } from '@/mock/types'
+import {
+  COMMENT_POLICIES,
+  parseStoredPrefs,
+  readStoredPrefs,
+  SETTINGS_STORAGE_KEY,
+} from './preferences'
 import './index.scss'
 
 /**
@@ -17,12 +23,21 @@ import './index.scss'
  * ——交付要求「危险操作与普通项视觉上必须分开」，所以它不放进任何分组。
  *
  * 主题模式做成可展开的选项列表（设计稿第 02 帧），其余开关即时切换。
- * 偏好项落本地（`Taro.setStorageSync`，`BLOCKED: #66`），不写后端；
- * 也不把各 Domain 的业务逻辑搬进来，这里只管偏好项。
+ * 偏好项落本地并在挂载时读回（`Taro.setStorageSync` / `getStorageSync`，
+ * `BLOCKED: #66`），不写后端；也不把各 Domain 的业务逻辑搬进来，这里只管偏好项。
  *
  * **账号信息与退出登录是真实登录态**：账号行读 `features/auth/store` 的当前用户，
  * 退出走 `POST /auth/logout` 并清本地会话（原先两处都是占位）。
  */
+
+/** `getStorageSync` 只能在端上跑；读取失败（低版本禁用存储等）视为「没存过」 */
+const readStorage = (): unknown => {
+  try {
+    return Taro.getStorageSync(SETTINGS_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
 
 export default function Settings() {
   // 设置页展示的是账号信息，未登录不该停留在这里（守卫只管跳转，页面继续渲染）
@@ -36,13 +51,16 @@ export default function Settings() {
    */
   const nickname = user?.nickname ?? '—'
   const verified = user?.authStatus === 'VERIFIED'
-  const initial = settings()
+  // 偏好初始值 = 默认值 + 本机存量（盖回去，重进页面不再重置）；
+  // 只在页面实例首次挂载时读一次存储，之后的改动都走 state + persist。
+  const [initial] = useState(() => parseStoredPrefs(readStorage(), settings()))
   const [theme, setTheme] = useState<ThemeMode>(initial.theme)
   const [themeOpen, setThemeOpen] = useState(false)
   const [notifyChat, setNotifyChat] = useState(initial.notifyChat)
   const [notifyWish, setNotifyWish] = useState(initial.notifyWish)
   const [notifyDeal, setNotifyDeal] = useState(initial.notifyDeal)
   const [notifyNews, setNotifyNews] = useState(initial.notifyNews)
+  const [commentPolicy, setCommentPolicy] = useState(initial.commentPolicy)
   const [logoutOpen, setLogoutOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -58,12 +76,11 @@ export default function Settings() {
 
   const themeLabel = themeOptions.find((item) => item.key === theme)?.label ?? '跟随系统'
 
-  /** 偏好项落本地存储（真实实现再同步后端） */
-  const persist = (patch: Record<string, unknown>) => {
+  /** 偏好项落本地存储（真实实现再同步后端）；存量要并回来，别把别的键冲掉 */
+  const persist = (patch: Partial<MockSettings>) => {
     try {
-      const current = Taro.getStorageSync('fish:settings') as Record<string, unknown> | ''
-      const base = current && typeof current === 'object' ? current : {}
-      Taro.setStorageSync('fish:settings', { ...base, ...patch })
+      const base = readStoredPrefs(Taro.getStorageSync(SETTINGS_STORAGE_KEY))
+      Taro.setStorageSync(SETTINGS_STORAGE_KEY, { ...base, ...patch })
     } catch {
       // 存储失败不影响页面交互，静默即可
     }
@@ -251,9 +268,10 @@ export default function Settings() {
             className="st__row"
             onClick={() =>
               void Taro.showActionSheet({
-                itemList: ['已认证用户', '所有人', '仅好友'],
+                itemList: [...COMMENT_POLICIES],
                 success: (res) => {
-                  const policy = ['已认证用户', '所有人', '仅好友'][res.tapIndex] ?? '已认证用户'
+                  const policy = COMMENT_POLICIES[res.tapIndex] ?? COMMENT_POLICIES[0]
+                  setCommentPolicy(policy)
                   persist({ commentPolicy: policy })
                   toast(`已设为「${policy}」`)
                 },
@@ -264,7 +282,7 @@ export default function Settings() {
               <Image className="st__ric-ic" src={ICONS.chatInk} mode="aspectFit" />
             </View>
             <Text className="st__rlabel">谁可以给我留言</Text>
-            <Text className="st__rvalue">{initial.commentPolicy}</Text>
+            <Text className="st__rvalue">{commentPolicy}</Text>
             <View className="st__arrow" />
           </View>
         </View>
