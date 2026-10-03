@@ -103,8 +103,30 @@ export interface RecommendationStore {
    */
   hasListingEvent(listingId: string, eventType: RecommendationEventType): Promise<boolean>
 
-  /** 写本次推荐的有序快照（服务端归因真值）。 */
-  insertRequestItems(records: RecommendationRequestItemRecord[]): Promise<void>
+  /**
+   * **一次事务**写完请求上下文与本次推荐的有序快照，返回请求行。
+   *
+   * 两者必须原子：`recommendation_request_items` 的契约是「快照行与请求行同生共死」。若请求行落库
+   * 而快照失败，服务端就会发出一个**自己没有归因真值**的 ranked `requestId` —— 客户端照它上报的
+   * 整页曝光在 R4 之后全部落进 `attribution_not_found` 被静默拒收（position/source 只信快照），
+   * R6 的 `empty_ranked_feed_requests` 还会把这条孤儿行报成数据质量异常。
+   *
+   * 所以不再提供「先建请求行、再单独插快照」的端口：唯一的生产写法只有这一种，失败即整笔回滚，
+   * 由调用方降级成 `rec-v1-none` 透传。
+   *
+   * `records` 允许为空：重排把候选全部过滤掉（例如全被负反馈隐藏）时，本次 ranked 请求确实没有
+   * 任何卡片，这时只落请求行 —— R6 的 `empty_ranked_feed_requests` 正是用来观测这种"排序成功
+   * 但一页为空"的。
+   */
+  createRequestWithItems(
+    input: {
+      id: string
+      userId: string | null
+      anonymousSessionId: string
+      strategyVersion: string
+    },
+    records: readonly RecommendationRequestItemRecord[],
+  ): Promise<RecommendationRequestRow>
 
   /** 按 position 升序取快照（翻页按 offset 切片）。 */
   findRequestItems(requestId: string): Promise<RecommendationRequestItemRow[]>
@@ -223,22 +245,43 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
       return row !== undefined
     },
 
-    async insertRequestItems(records) {
-      if (records.length === 0) return
-      // 不用 `onConflictDoNothing`：`(request_id, position)` 冲突只可能来自重复写同一次请求，
-      // 静默吞掉会让"快照没写对"变成一个看不见的错误。让它抛，由 service 降级成 nextCursor=null。
-      await db.insert(recommendationRequestItems).values(
-        records.map((record) => ({
-          requestId: record.requestId,
-          position: record.position,
-          listingId: record.listingId,
-          primarySource: record.primarySource,
-          sources: record.sources,
-          rankScore: record.rankScore,
-          // 同 `metadata`：jsonb 必须过 `jsonParam`，否则落库是 JSON 字符串。
-          rankBreakdown: jsonParam(record.rankBreakdown),
-        })),
-      )
+    async createRequestWithItems(input, records) {
+      // 请求行与快照行同生共死：`recommendation_request_items` 的外键就是按这个不变式建的。
+      return db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(recommendationRequests)
+          .values({
+            id: input.id,
+            userId: input.userId,
+            anonymousSessionId: input.anonymousSessionId,
+            strategyVersion: input.strategyVersion,
+          })
+          .returning({
+            id: recommendationRequests.id,
+            userId: recommendationRequests.userId,
+            anonymousSessionId: recommendationRequests.anonymousSessionId,
+            strategyVersion: recommendationRequests.strategyVersion,
+          })
+        if (!row) throw new Error('recommendation_requests 写入未返回行')
+        if (records.length === 0) return row
+
+        // 不用 `onConflictDoNothing`：`(request_id, position)` 冲突只可能来自重复写同一次请求，
+        // 静默吞掉会让"快照没写对"变成一个看不见的错误。让它抛，整笔事务回滚 ——
+        // 调用方据此降级，绝不会留下一条没有快照的 ranked 请求行。
+        await tx.insert(recommendationRequestItems).values(
+          records.map((record) => ({
+            requestId: record.requestId,
+            position: record.position,
+            listingId: record.listingId,
+            primarySource: record.primarySource,
+            sources: record.sources,
+            rankScore: record.rankScore,
+            // 同 `metadata`：jsonb 必须过 `jsonParam`，否则落库是 JSON 字符串。
+            rankBreakdown: jsonParam(record.rankBreakdown),
+          })),
+        )
+        return row
+      })
     },
 
     async findRequestItems(requestId) {

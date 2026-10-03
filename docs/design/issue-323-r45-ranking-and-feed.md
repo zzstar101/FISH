@@ -81,7 +81,7 @@ R3 交付了六路召回与候选合并，但**没有任何生产调用方**：`
 | N7 | 逐特征明细里**不存原始输入值**，改为顶层 `missing: RankFeatureKey[]` | D14 锁的形状是每键 `{normalized, weight, contribution}`；`missing` 数组比给每个特征加一个 `input` 字段小得多，又保住了"未知"与"0"的区别（R3 §9 待办①：`alreadySeenCount` 查询失败时静默变 0） |
 | N8 | 负反馈的时间窗与半衰期**复用 R2 口径**（`interestLookbackStart(now)` 180 天 + `INTEREST_HALF_LIFE_MS.longTerm`）；三项权重取 `|INTEREST_ACTION_WEIGHTS|` | 语义相同（个体负向态度）就不另立一张表；R3 的 Popular 之所以独立成表是因为它的语义（全站热度）不同 |
 | N9 | `resolveIdentity` 从 `recall/service.ts` 提到 `recommendation/identity.ts`，排序侧复用同一个 | 反馈查询与召回必须用同一套身份口径，各写一份必然漂移 |
-| N10 | 快照写入失败 → 记日志 + `nextCursor = null`，首页正常返回 | 与"埋点是旁路"同一取舍：已经取到的卡片不该因为写不成快照而变成错误页；代价是这次会话不能翻页 |
+| N10 | 快照写入失败 → 「请求行 + 快照」**整笔回滚**，本次请求降级为 `rec-v1-none` + newest 透传 | R4 起 `position`/`source` 只信服务端快照（N6），所以一个查不到快照的 ranked `requestId` 会让这一整页曝光在 `ingest` 里落进 `attribution_not_found` 被**静默拒收**——页面看着正常，数据一行不剩；R6 的 `empty_ranked_feed_requests` 还会把"写失败"报成"确实没有可发的推荐"。宁可降级：返回的上下文、实际投递的内容、库里的真值三者一致 |
 | N11 | `createRecommendationService` 增加可选 `clock?: () => Date` | 反馈衰减与 `freshness` 都依赖"现在"，不注入就无法写可复现的单测 |
 
 ---
@@ -284,8 +284,22 @@ createRequest(input: {
   strategyVersion: string
 }): Promise<RecommendationRequestRow>
 
-/** 写一页快照。`position` 由调用方给出，本层不重编号。 */
-insertRequestItems(records: RecommendationRequestItemRecord[]): Promise<void>
+/**
+ * 请求行 + 快照**一次事务写入**。`position` 由调用方给出，本层不重编号。
+ *
+ * 契约是「快照行与请求行同生共死」：快照写不进去就整笔回滚，绝不留下一条**没有归因真值**的
+ * ranked 请求行（客户端照它上报的曝光会全部落进 `attribution_not_found`）。`records` 允许为空
+ * —— 候选全被过滤掉时只落请求行，由 R6 的 `empty_ranked_feed_requests` 观测。
+ */
+createRequestWithItems(
+  input: {
+    id: string
+    userId: string | null
+    anonymousSessionId: string
+    strategyVersion: string
+  },
+  records: readonly RecommendationRequestItemRecord[],
+): Promise<RecommendationRequestRow>
 
 /** 按位次升序取**整份**快照（`requestId` 一条请求最多 200 行）。 */
 findRequestItems(requestId: string): Promise<RecommendationRequestItemRow[]>
@@ -302,8 +316,9 @@ findRequestItemAttribution(input: {
 }): Promise<{ requestId: string; listingId: string; position: number; primarySource: RecommendationSource }[]>
 ```
 
-**实现期细化**（与上面伪码的三处差异，见 §7.6）：`insertRequestItems` 返回 `void`（调用方不用
-"实际写入行数"，写了就是全写，冲突直接抛）；`findRequestItems` 不收 `offset`/`limit`，由服务层在
+**实现期细化**（与上面伪码的三处差异，见 §7.6）：`createRequestWithItems` 返回请求行（调用方拿
+它的 `strategyVersion` 回应，不再有"实际写入行数"这种东西——写了就是全写，冲突直接抛且整笔回滚）；
+`findRequestItems` 不收 `offset`/`limit`，由服务层在
 内存里 `slice`（上界 200 行，不值得再加一个查询形状）；`findRequestItemAttribution` 的
 `listingIds` 必须真下推 —— 否则最坏会把 50 个请求的整份快照（50 × 200 行）拉回来再在内存里挑。
 
@@ -526,9 +541,10 @@ sessionId = anonymousSessionId ?? newId(); issued = ...
 ⑤ cards   = await listings.listCardsByIds(viewerId, ordered.map(c => c.listingId))
             按 ordered 顺序重排，取不到卡片的（此刻已不可见）跳过          // N3
 ⑥ slice   = ordered 前 min(cards.length, limit) 条                       // N5：不补位
-⑦ request = store.createRequest({id: requestId, ..., strategyVersion: 复合串})
-⑧ try store.insertRequestItems(slice 的快照行) catch → 记日志 + nextCursor = null   // N10
-⑨ 响应：items = slice 的卡片；nextCursor = slice 长度 < limit 或已到上限
+⑦ request = store.createRequestWithItems({id: requestId, ..., strategyVersion: 复合串},
+                                          slice 的快照行)   // 请求行 + 快照一次事务写入
+            写失败 → 记日志 + 整个请求降级为 rec-v1-none newest 透传（不走 ⑧）   // N10
+⑧ 响应：items = slice 的卡片；nextCursor = slice 长度 < limit 或已到上限
          ? null : encode({kind:'snapshot', requestId, offset: slice.length})
 ```
 
@@ -540,16 +556,20 @@ RECALL_STRATEGY_VERSION, RANK_STRATEGY_VERSION])`。
 
 ### 7.3 降级（D8）
 
-降级只在 ①② 两步发生，之后的路径完全不变：
+降级在 ①② 两步发生（召回/排序不可用），以及 ⑦ 写快照失败时（N10）—— 两者共用同一条路径；
+一旦降级，之后的路径完全不变：
 
 ```
-recall 抛错 / RecallResult 不可用 → strategyVersion = rec-v1-none
+recall 抛错 / RecallResult 不可用 / 快照原子写失败 → strategyVersion = rec-v1-none
    page = await listings.listFeed(viewerId, {sort:'newest', limit, cursor?})   // 现有 R1 代码
-   request = store.createRequest({id: requestId, ..., strategyVersion: rec-v1-none})
+   request = store.createRequest({id: newId(), ..., strategyVersion: rec-v1-none})
    不写快照
    nextCursor = page.nextCursor === null ? null
               : encode({kind:'passthrough', requestId, listingCursor: page.nextCursor})
 ```
+
+- 降级路径**必须新建自己的请求行**，不能复用刚才那个 ranked `requestId`：那条 ranked 行要么
+  不存在（原子写回滚了），要么没有快照。把它交出去，客户端上报的曝光就查不到归因真值（N10）。
 
 - `listFeed` 抛 `ListingServiceError(VALIDATION_FAILED)` → 转 422（R1 已实现，保留）。
 - 反馈查询失败**不降级整条链**：只是这一页没有软惩罚（`hiddenListingIds` 为空）。
@@ -621,10 +641,14 @@ decode(cursor)
 3. **`createRequest` 必须自带 `id`**。DB 侧本来用 `default sql\`uuidv7()\`` 生成 id，但
    `requestId` 要在**排序之前**就作为重排的 `seed`（§6.3）用上，所以 N2 再往前挪一步：
    id 由服务端先生成 → 排序 → 才落请求行。
-4. **`insertRequestItems` 失败 → 记日志 + `nextCursor = null`**（N10 落地）。表上的
-   `recommendation_request_items_position_uq` 没有 upsert 语义（`insertRequestItems` 刻意
-   不加 `onConflictDoNothing`），重复写会抛 unique violation；service 不重试、也不吞掉
-   已发出的 `items` —— 首屏是有效的，只是这次不能翻页。
+4. **「请求行 + 快照」必须一次事务写入**（N10 落地）。表上的
+   `recommendation_request_items_position_uq` 没有 upsert 语义（刻意不加
+   `onConflictDoNothing`），重复写会抛 unique violation；此时**整笔回滚**，请求行也不留。
+   分成两次写会留下一条没有快照的 ranked 请求行 —— 那正是 N6 之后最坏的形状：客户端照它
+   上报的整页曝光全部落进 `attribution_not_found` 被静默拒收，R6 还会把它报成
+   `empty_ranked_feed_requests`（"写失败"被读成"确实没有可发的推荐"）。所以 service 既不重试，
+   也不返回半截 ranked 上下文，而是新建一条 `rec-v1-none` 行 + newest 透传：返回的上下文与
+   实际投递的内容一致，这一页的曝光照 R1 口径被原样接受。
 5. **`rerankCandidates` 的返回形状**：实现返回
    `{items, summary: {inputCount, droppedHidden, droppedOverflow, relaxations}}`（§6 只写了
    `{items, relaxations, droppedHidden}`）。`summary` 全部是**观测用的计数**，调用方只用 `items`；
@@ -702,9 +726,9 @@ decode(cursor)
 | score（纯） | 每个特征单独变化时 `rankScore` 单调；`semanticScore = -1` 被截断到 0；`wishScore = 100` → 1.0；`alreadySeenCount = null` → `missing` 含 `repeatedExposure` 且不加惩罚；同分时按 `listingId` 升序；同一输入两次调用结果完全相同 |
 | feedback（纯） | HIDE 进 `hiddenListingIds`；HIDE/UNFAVORITE/QUICK_SKIP 进类目与卖家计数；权重相对大小 `HIDE > UNFAVORITE > QUICK_SKIP`；衰减随时间单调下降；类目与卖家取 `max` 不叠加 |
 | rerank（纯） | 同卖家在间隔 2 位内不出现；任意连续 3 位同类目 ≤2；每 5 位至少 1 位 explore；全 explore 的候选集不因配额而重复；隐藏商品被丢弃且 `droppedHidden` 正确；约束不可满足时按 `explore → category → seller` 顺序松弛且计数正确；同一 `seed` 两次结果相同、不同 `seed` 的 explore 选择不同；`limit` 截断 |
-| store | `createRequest` 显式 id；`insertRequestItems` 批次写入与 `position` 唯一约束冲突行为（重复写同 `(requestId, position)` 直接抛）；`findRequestItems` 按 `position` 升序回整份快照（切片在服务层）；`findRequestItemAttribution` 的 `listingIds` 真的下推（只问某商品时不会回别的行）且只回批次内组合。注：空入参两条断言是**契约级**的（drizzle 对空数组本身也会生成 `false`，故它们不保护早返回——见 §12.3） |
+| store | `createRequest` 显式 id；`createRequestWithItems` 原子写入与**回滚**（同一请求里 `position` 重复 → 抛错，且请求行一并消失，不留孤儿 ranked 行）；`findRequestItems` 按 `position` 升序回整份快照（切片在服务层）；`findRequestItemAttribution` 的 `listingIds` 真的下推（只问某商品时不会回别的行）且只回批次内组合。注：空入参两条断言是**契约级**的（drizzle 对空数组本身也会生成 `false`，故它们不保护早返回——见 §12.3） |
 | listings store | `findCardsByIds` 复用公开可见性谓词（`ACTIVE` + `APPROVED` + 未治理下架 + 非本人），返回形状与 `listFeed` 一致 |
-| service | **修复前会失败**的用例：① 排序成功时 `strategyVersion` 是复合串且 `rec-v1-none` 不再出现；② 召回抛错 → 200 + `rec-v1-none` + 走 `newest`；③ 第一页写快照、第二页从快照切且 `position` 连续；④ 快照里已不可见的商品在第二页被跳过且不补位；⑤ ingest 带伪造的 `position` / `source` → 落库值等于快照值；⑥ 排序模式下未命中快照 → `position`/`source` 为 `null`；⑦ 透传模式下 `source` 仍补 `fresh`；⑧ 旧形状游标（`{listingCursor, requestId}`）继续可用；⑨ 游标形状与请求行策略不匹配 → 422（排序请求 + passthrough、降级请求 + snapshot 各一条）；⑩ 降级透传路径的坏内层游标 → 422 而不是 500（**回归护栏**：HEAD 已有同一捕获，本轮只是把它搬进 `serveByNewest`，不计入新增覆盖）；⑪ 降级请求（`rec-v1-none`）的服务端确证事件按上下文头落 `position`/`source`；⑫ 排序请求的服务端确证事件取**快照真值**、忽略伪造的上下文头（`recordDomainEvent` 的归因分支） |
+| service | **修复前会失败**的用例：① 排序成功时 `strategyVersion` 是复合串且 `rec-v1-none` 不再出现；② 召回抛错 → 200 + `rec-v1-none` + 走 `newest`；③ 第一页写快照、第二页从快照切且 `position` 连续；④ 快照里已不可见的商品在第二页被跳过且不补位；⑤ ingest 带伪造的 `position` / `source` → 落库值等于快照值；⑥ 排序模式下未命中快照 → `position`/`source` 为 `null`；⑦ 透传模式下 `source` 仍补 `fresh`；⑧ 旧形状游标（`{listingCursor, requestId}`）继续可用；⑨ 游标形状与请求行策略不匹配 → 422（排序请求 + passthrough、降级请求 + snapshot 各一条）；⑩ 降级透传路径的坏内层游标 → 422 而不是 500（**回归护栏**：HEAD 已有同一捕获，本轮只是把它搬进 `serveByNewest`，不计入新增覆盖）；⑪ 降级请求（`rec-v1-none`）的服务端确证事件按上下文头落 `position`/`source`；⑫ 排序请求的服务端确证事件取**快照真值**、忽略伪造的上下文头（`recordDomainEvent` 的归因分支）；⑬ 快照原子写失败 → 整笔降级（**修复前会失败**：旧实现只置 `nextCursor = null` 并照旧返回那个 ranked `requestId`）：响应 `strategyVersion` = `rec-v1-none`，降级请求行真的落库，且库里不留任何没有快照的 ranked 请求行 |
 | favorites | 收藏 / 取消收藏后 `recommendation_events` 出现 `FAVORITE` / `UNFAVORITE` 且带归因上下文；埋点写失败不影响收藏接口 200 |
 
 ### 10.3 运行时实跑
@@ -836,12 +860,13 @@ decode(cursor)
     只能回表过滤，索引扫描仍覆盖这些请求的整份快照（上界 50 × 200 = 10 000 行），下推省下的是
     返回行数（§4.2）。当前规模不值得加 `(request_id, listing_id)` 复合索引；若归因查询成为热点，
     加一条即可（纯读路径，无列语义变更）。
-15. **快照写失败后自造 `offset` 游标会拿到空页 200（不是 422）**：`createRankedFeed` 在
-    `insertRequestItems` 抛错时只置 `nextCursor = null`，请求行的 `strategyVersion` 仍是复合串；
-    客户端拿响应里的 `requestId` 自造 `{requestId, offset: 0}` 会通过形状守卫（版本确实是排序模式），
-    但快照里没有行 ⇒ `serveFromSnapshot` 回空页 200。无数据损坏（没有快照就没有归因真值，事件也
-    不会被误归因），但"服务端这次没能承诺序列"对客户端不可见；彻底修要给请求行加"快照是否写完"
-    的标记位（本轮不做）。
+15. **快照写失败后不再有"自造 `offset` 游标拿到空页 200"这条路**（本轮修复）：请求行与快照现在
+    一次事务写入，写失败整笔回滚，`createRankedFeed` 直接降级成 `rec-v1-none` + newest 透传。
+    于是响应里的 `requestId` 一定对应一条**有快照的 ranked 行**或一条 **`rec-v1-none` 行**：
+    前者自造 `{requestId, offset: 0}` 拿得到真实切片，后者会被形状守卫按 422 拒掉（降级请求只
+    接受 passthrough 游标）。修复前的情形是：`insertRequestItems` 抛错时只置 `nextCursor = null`，
+    请求行的 `strategyVersion` 仍是复合串 ⇒ 客户端自造 snapshot 游标会通过形状守卫却回空页 200，
+    而且这一整页的曝光归因全部丢失（这才是真正的损害，不只是"不能翻页"）。
 
 ---
 
@@ -892,7 +917,7 @@ HIDE 在任何权重判断之前就进 `hiddenListingIds`（权重为 0 也仍�
 | --- | --- | --- |
 | 1 | `findRequestItems(requestId)` 缺 `{offset, limit}` 下推（`apps/api/src/modules/recommendation/store.ts:231-244`），由 `service.ts:344-346` 内存切片补偿 | **不改代码**，属实现期细化，§4.2 与 §7.6 第 2 条已记录（快照 ≤200 行，内存切片可接受） |
 | 2 | `findRequestItemAttribution(requestIds)` 忽略 `listingIds`（`store.ts:246-257`），最坏 50×200 = 10000 行；且无测试 | **已修**：端口与实现改为 `{requestIds, listingIds}` 双条件下推（`store.ts`），`service.ts` 的 `ingest` 传去重后的 `listingIds`、`recordDomainEvent` 传 `{requestIds:[row.id], listingIds:[listingId]}`；`store.test.ts` 补「按商品收窄」与「空入参」用例 |
-| 3 | `insertRequestItems` 返回 `Promise<void>` 而 §4.2 写 `Promise<number>`（调用方不用返回值） | **只改文档**（§4.2 记录实际签名） |
+| 3 | `insertRequestItems` 返回 `Promise<void>` 而 §4.2 写 `Promise<number>`（调用方不用返回值） | **已随本轮修复消解**：该端口换成 `createRequestWithItems`（返回请求行、请求行与快照一次事务写入），§4.2 记录实际签名 |
 | 4 | `packages/db/src/schema/recommendation-request-items.ts:82` 把 `rank_breakdown` 放宽成 `Record<string, unknown>`，同段注释声称「写入方在 API 侧先过 zod 再落库」**不实**（全仓无 `RankScoreBreakdownSchema.parse`） | **已修注释**（说明本包不 import contracts、唯一写入方是 API 排序层、库层只保证 jsonb 对象且必须过 `jsonParam`）；类型放宽本身**保留**并在 §4.2 记录 |
 | 5 | `rank/rerank.ts:30-44` 返回 `{items, summary:{…}}` 而 §6 写 `{items, relaxations, droppedHidden}`（调用方只用 `items`） | **不改代码**，§7.6 第 5 条记录（`summary` 只用于观测） |
 | 6 | 首页只对 `ordered.slice(0, limit)` 取卡（`service.ts:293-302`）vs §7.2 步骤⑤字面 | **需求歧义**；§7.2 步骤⑥自注「N5 不补位」+ §7.4 支持实现读法，§7.6 第 1 条已记录 |
@@ -920,7 +945,7 @@ P3 处置完成并复验通过后，又开了一个**全新子代理**复审（�
 | --- | --- | --- |
 | 1 | **排序模式下 `recordDomainEvent` 的归因分支零覆盖**（`service.ts:618-628`）：把 `listingIds: [listingId]` 改成 `[]` 后 `app.recommendation.test.ts` 仍 36 pass / 0 fail | **已补测试**：「排序请求（rank-v1）的服务端确证事件取快照真值，忽略上下文头」——直接建排序请求行 + 快照行（`position: 5`、`primarySource: 'popular'`），收藏时故意上报 `x-recommendation-position: 999` / `x-recommendation-source: fresh`，断言落库 = 快照值；实测把该参数改回 `[]` → 该用例红（36 pass / 1 fail），还原后绿（37 pass） |
 | 2 | `store.ts:115-116` 注释称「两个条件都走 `_request_id_idx`（商品条件在索引内过滤）」**不成立**：`listing_id` 不在任何索引键里，商品条件只能回表过滤；`packages/db/src/schema/recommendation-request-items.ts:91-92` 有同样说法 | **已修两处注释**（改成"只有 `request_id` 有索引、商品条件回表过滤、被压下来的是返回行数而非扫描宽度"），索引缺口另写入 §4.2 与 §11 第 14 条 |
-| 3 | 排序请求若快照写失败（`service.ts` 只置 `nextCursor = null`，版本仍是复合串），客户端自造 `{requestId, offset: 0}` 会得**空页 200**（不是 422）；非本次引入 | **只记文档**：§11 第 15 条 |
+| 3 | 排序请求若快照写失败（`service.ts` 只置 `nextCursor = null`，版本仍是复合串），客户端自造 `{requestId, offset: 0}` 会得**空页 200**（不是 422）；非本次引入 | **本轮已修**：请求行 + 快照改成一次事务写入，失败整笔降级为 `rec-v1-none`（N10），那条空页 200 的路径不再存在；§11 第 15 条与 §7.6 第 4 条已同步 |
 | 4 | `inArray(col, [])` 在 drizzle 0.45.2 下生成 `false`（实测 `where (false and …)` → 0 行）⇒ `store.ts` 的空数组早返回冗余，其两条断言不可证伪 | **保留早返回**（省一次空查询），实现处注明"防御性 + drizzle 本身也会生成 `false`"；`store.test.ts` 的两条断言在 §10.2 记为**契约级**（不保护早返回） |
 
 复审同时**实证了改动的可证伪性**（都是 clone 内 mutation）：删形状守卫 → 新用例报

@@ -20,7 +20,7 @@ import { recommendationRequests } from '@fish/db/schema/recommendation-requests'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
 import { loadServerEnv } from '@fish/shared/env'
 import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createApp } from './app'
 import { ListingServiceError } from './modules/listings/service'
@@ -580,6 +580,82 @@ describe('recommendation ranked feed (#323 R4/R5)', () => {
 
     // 降级不写快照：写了的话第二页会按快照切片，而第一页其实是 newest 页 —— 顺序当场错位。
     expect(await snapshotOf(page.response.requestId)).toHaveLength(0)
+  })
+
+  test('快照写不进去 → 整笔请求降级：不返回一个查不到快照的 ranked requestId', async () => {
+    const sessionId = newId()
+    const listingId = newId()
+    const service = createRecommendationService({
+      // 只替换「请求行 + 快照」这一次原子写，其余依赖都是真的（真 store、真 scratch 库）：
+      // 失败形状与线上一致，降级后的请求行也必须真的落库。
+      store: {
+        ...createSqlRecommendationStore(db),
+        createRequestWithItems: async () => {
+          throw new Error('模拟快照写入失败')
+        },
+      },
+      listings: {
+        listFeed: async () => ({ items: [], nextCursor: 'inner-listing-cursor' }),
+        // 可见性真值返回空 Map ≠ 没有候选：快照仍要按重排结果编号，所以原子写照样会走到。
+        listCardsByIds: async () => new Map(),
+      },
+      recall: {
+        recall: async () => ({
+          strategyVersion: 'recall-v1',
+          candidates: [
+            {
+              listingId,
+              sellerId: newId(),
+              category: 'OTHER',
+              recallSources: ['fresh'],
+              semanticScore: null,
+              wishScore: null,
+              popularity: null,
+              userCategoryAffinity: null,
+              freshness: 1,
+              createdAt: new Date(),
+              alreadySeenCount: null,
+              sellerExposure: 0,
+            },
+          ],
+          channels: [],
+          interest: { session: false, longTerm: false, combined: false },
+          mergeDegradedReason: null,
+        }),
+      },
+      interest: { enqueue: async () => {} },
+    })
+
+    const page = await service.startFeed({
+      viewerId: null,
+      anonymousSessionId: sessionId,
+      limit: 20,
+    })
+
+    // 返给客户端的上下文必须**有服务端归因真值**。R4 起 position/source 只信快照，所以把那个
+    // 写不进快照的 ranked requestId 交出去，等于让客户端照它上报的整页曝光全部落进
+    // `attribution_not_found` 被静默拒收 —— 页面看着正常，数据一行不剩。
+    expect(page.response.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+    expect(page.response.nextCursor).not.toBeNull()
+
+    const [row] = await db
+      .select()
+      .from(recommendationRequests)
+      .where(eq(recommendationRequests.id, page.response.requestId))
+    expect(row?.strategyVersion).toBe(RECOMMENDATION_STRATEGY_VERSION_NONE)
+
+    // 库里也不能留下任何一条没有快照的 ranked 请求行：R6 的 `empty_ranked_feed_requests`
+    // 会把它报成数据质量异常，而它其实是「写失败」而不是「确实没有可发的推荐」。
+    const orphans = await db
+      .select({ id: recommendationRequests.id })
+      .from(recommendationRequests)
+      .where(
+        and(
+          eq(recommendationRequests.anonymousSessionId, sessionId),
+          ne(recommendationRequests.strategyVersion, RECOMMENDATION_STRATEGY_VERSION_NONE),
+        ),
+      )
+    expect(orphans).toEqual([])
   })
 
   test('第一页写快照、第二页按快照切片：position 连续、不重不漏、requestId 复用', async () => {

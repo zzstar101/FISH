@@ -208,6 +208,33 @@ export function createRecommendationService(deps: {
     })
   }
 
+  /**
+   * 降级路径：新建一条 `rec-v1-none` 请求行，再按 `newest` 透传一页。
+   *
+   * 冷启动/管线失败与「快照写不进去」共用它。共同点是**服务端没有可归因的排序真值**，所以返回的
+   * `requestId` 必须是这条 `rec-v1-none` 行：客户端按它上报的 `position`/`source` 走 R1 口径
+   * （`position ?? null`、`source ?? 'fresh'`）被原样接受，而不是拿着一个查不到快照的 ranked
+   * `requestId` 去撞 `attribution_not_found`（N10）。
+   */
+  async function serveDegradedFeed(input: {
+    viewerId: string | null
+    sessionId: string
+    limit: number
+  }): Promise<RecommendationFeedResponse> {
+    const request = await store.createRequest({
+      id: newId(),
+      userId: input.viewerId,
+      anonymousSessionId: input.sessionId,
+      strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
+    })
+    return serveByNewest({
+      viewerId: input.viewerId,
+      requestId: request.id,
+      strategyVersion: request.strategyVersion,
+      limit: input.limit,
+    })
+  }
+
   /** 读排序用的负反馈信号；失败返回 `null`（`negativeFeedback` 进明细的 `missing`，不是 0）。 */
   async function loadNegativeFeedback(
     viewerId: string | null,
@@ -267,18 +294,7 @@ export function createRecommendationService(deps: {
     if (scored.length === 0) {
       // 冷启动（新用户、空库）或整条管线失败：退化成 R1 行为（newest + `rec-v1-none`），并且
       // **不写快照** —— 翻页继续走商品游标，语义与 R1 完全一致。
-      const request = await store.createRequest({
-        id: requestId,
-        userId: input.viewerId,
-        anonymousSessionId: input.sessionId,
-        strategyVersion: RECOMMENDATION_STRATEGY_VERSION_NONE,
-      })
-      return serveByNewest({
-        viewerId: input.viewerId,
-        requestId: request.id,
-        strategyVersion: request.strategyVersion,
-        limit: input.limit,
-      })
+      return serveDegradedFeed(input)
     }
 
     const reranked = rerankCandidates({
@@ -308,29 +324,40 @@ export function createRecommendationService(deps: {
       RANK_STRATEGY_VERSION,
     ])
 
-    const request = await store.createRequest({
-      id: requestId,
-      userId: input.viewerId,
-      anonymousSessionId: input.sessionId,
-      strategyVersion,
-    })
+    const rows = buildSnapshotRows(requestId, snapshotIds, orderedById)
 
-    const rows = buildSnapshotRows(request.id, snapshotIds, orderedById)
-    let nextCursor: string | null = null
+    let request: RecommendationRequestRow
     try {
-      await store.insertRequestItems(rows)
-      if (servedIds.length < rows.length) {
-        nextCursor = encodeRecommendationCursor({
-          kind: 'snapshot',
-          requestId: request.id,
-          offset: servedIds.length,
-        })
-      }
+      // 请求行与快照**一次事务写入**：`recommendation_request_items` 的契约是「快照行与请求行
+      // 同生共死」。分成两次写会留下一条没有归因真值的 ranked 请求行 —— 那正是本次要修的洞。
+      request = await store.createRequestWithItems(
+        {
+          id: requestId,
+          userId: input.viewerId,
+          anonymousSessionId: input.sessionId,
+          strategyVersion,
+        },
+        rows,
+      )
     } catch (error) {
-      // 快照写不进去 ⇒ 后续页拿不到稳定的顺序真值。宁可这一轮只能看第一页（`nextCursor=null`），
-      // 也不要发一个会让第 2 页顺序错乱、归因全错的游标。
-      console.error('[recommendation] 推荐快照写入失败，本次不提供后续页游标', error)
+      // 快照写不进去 ⇒ 这个 ranked `requestId` 在服务端**没有任何归因真值**。照旧返回它的话，
+      // 客户端按它上报的整页曝光会全部落进 `attribution_not_found` 被静默拒收（R4 起
+      // position/source 只信快照），R6 的 `empty_ranked_feed_requests` 还会把这条孤儿行报成
+      // 数据质量异常。所以整个请求降级成 `rec-v1-none` + newest 透传：返回的上下文、实际投递的
+      // 内容、库里的真值三者一致（N10）。
+      console.error('[recommendation] 推荐快照写入失败，本次 Feed 降级为 newest 透传：', error)
+      return serveDegradedFeed(input)
     }
+
+    // 只有原子写成功才给后续页游标：快照不在，`offset` 就没有可解释的主体。
+    const nextCursor =
+      servedIds.length < rows.length
+        ? encodeRecommendationCursor({
+            kind: 'snapshot',
+            requestId: request.id,
+            offset: servedIds.length,
+          })
+        : null
 
     return RecommendationFeedResponseSchema.parse({
       requestId: request.id,
