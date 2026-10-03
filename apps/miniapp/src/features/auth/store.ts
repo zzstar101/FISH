@@ -153,16 +153,21 @@ export function applyVerification(
 }
 
 /**
- * 用一次**已经拿到权威结果**的编辑资料响应就地更新 store（#86 B：改昵称 / 换头像）。
+ * 用一次**已经拿到权威结果**的编辑资料响应就地更新 store（#86 B：改昵称 / 换头像；#179：改签名）。
  *
  * 与 `applyVerification` 同一套口径，`ownerId` 必须由调用方传发起请求时的账号：
  * 只判断「当前已登录」会把 A 的昵称/头像合并进 B 的 `user`（store 是全局单例，
  * B 会长期显示 A 的头像）。账号不是同一个就整个丢弃。
  *
- * 为什么不改成再打一次 `GET /me`：那次请求失败（超时 / 断网）会把刚保存成功的结果
- * 回滚成旧值，而 PATCH 的 200 本身已经是权威结果。
+ * 字段按需合并（只传改了的）：编辑资料页一次 PATCH 的响应三件都给就三件都并；
+ * 「我的」页的内联签名编辑只回签名，就只并签名。为什么不改成再打一次 `GET /me`：
+ * 那次请求失败（超时 / 断网）会把刚保存成功的结果回滚成旧值，而 PATCH 的 200
+ * 本身已经是权威结果。
  */
-export function applyProfile(ownerId: string, next: Pick<Me, 'nickname' | 'avatarUrl'>): void {
+export function applyProfile(
+  ownerId: string,
+  next: Partial<Pick<Me, 'nickname' | 'avatarUrl' | 'signature'>>,
+): void {
   if (snapshot.status !== 'authed' || snapshot.user?.id !== ownerId) return
   emit({ status: 'authed', user: { ...snapshot.user, ...next } })
 }
