@@ -36,14 +36,17 @@ function MyCommentsContent({ ownerId }: { ownerId: string }) {
       <MyCommentsPageView
         activeKind={kind}
         counts={counts}
-        error={active.isError}
+        // 首屏失败与翻页失败分开：翻页失败保留已加载列表、行内重试（与 view-history 同款）。
+        error={active.isError && !active.isFetchNextPageError}
         hasNextPage={active.hasNextPage}
         items={items}
         loading={active.isPending}
         loadingMore={active.isFetchingNextPage}
+        nextPageError={active.isFetchNextPageError}
         onKindChange={setKind}
         onLoadMore={() => void active.fetchNextPage()}
         onRetry={() => void active.refetch()}
+        onRetryNextPage={() => void active.fetchNextPage()}
       />
     </div>
   )

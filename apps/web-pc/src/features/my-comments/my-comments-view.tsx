@@ -24,12 +24,16 @@ export type MyCommentsViewProps = {
   activeKind: MyCommentsKind
   counts: SegmentCounts
   loading: boolean
+  /** 首屏失败（整体错误态）；「加载更多」失败走 `nextPageError`，不整页替换。 */
   error: boolean
   items: Array<MyCommentItem | TransactionReviewItem>
   hasNextPage: boolean
   loadingMore: boolean
+  /** 翻页失败：保留已加载列表，行内给重试；不整页替换（与 view-history 同款）。 */
+  nextPageError: boolean
   onKindChange: (kind: MyCommentsKind) => void
   onRetry: () => void
+  onRetryNextPage: () => void
   onLoadMore: () => void
 }
 
@@ -145,7 +149,7 @@ function EmptyHint({ kind }: { kind: MyCommentsKind }) {
 export function MyCommentsPageView(props: MyCommentsViewProps) {
   if (props.loading) return <LoadingState label="正在加载我的评论…" />
 
-  if (props.error && props.items.length === 0) {
+  if (props.error) {
     return <ErrorState message="我的评论加载失败" onRetry={props.onRetry} />
   }
 
@@ -184,20 +188,16 @@ export function MyCommentsPageView(props: MyCommentsViewProps) {
         </div>
       )}
 
-      {props.hasNextPage ? (
+      {props.nextPageError ? (
+        <ErrorState message="更多评论加载失败" onRetry={props.onRetryNextPage} />
+      ) : null}
+
+      {props.hasNextPage && !props.nextPageError ? (
         <div className="flex justify-center">
           <Button disabled={props.loadingMore} onClick={props.onLoadMore} variant="outline">
             {props.loadingMore ? '正在加载…' : '加载更多'}
           </Button>
         </div>
-      ) : null}
-      {props.error && props.items.length > 0 ? (
-        <p className="text-center text-danger text-xs">
-          加载更多失败，
-          <button className="font-medium hover:underline" onClick={props.onRetry} type="button">
-            重试
-          </button>
-        </p>
       ) : null}
     </div>
   )

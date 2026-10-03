@@ -1,6 +1,6 @@
 import type { MyCommentsKind } from '@fish/contracts/comments/schema'
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { fetchMyComments } from './api'
+import { fetchMyComments, MY_COMMENTS_PAGE_LIMIT } from './api'
 
 /**
  * 缓存键带 `ownerId`（与 view-history 同一口径）：换账号时即使漏了全局 reset，
@@ -22,7 +22,7 @@ export function useMyComments(ownerId: string, kind: MyCommentsKind) {
   return useInfiniteQuery({
     queryKey: myCommentsKeys.list(ownerId, kind),
     queryFn: ({ pageParam }) =>
-      fetchMyComments({ limit: 20, kind, cursor: pageParam ?? undefined }),
+      fetchMyComments({ limit: MY_COMMENTS_PAGE_LIMIT, kind, cursor: pageParam ?? undefined }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== '',

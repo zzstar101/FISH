@@ -103,8 +103,10 @@ function renderView(props: Partial<MyCommentsViewProps> = {}): string {
       items: [],
       hasNextPage: false,
       loadingMore: false,
+      nextPageError: false,
       onKindChange: () => {},
       onRetry: () => {},
+      onRetryNextPage: () => {},
       onLoadMore: () => {},
       ...props,
     }),
@@ -172,15 +174,20 @@ describe('MyCommentsPageView', () => {
     expect(reviewEmpty).toContain('去看订单')
   })
 
-  test('还有下一页时给加载更多；追加失败在已有内容下给重试行', () => {
+  test('还有下一页时给加载更多；翻页失败保留列表并行内重试', () => {
     expect(renderView({ hasNextPage: true })).toContain('加载更多')
     expect(
       renderView({ hasNextPage: true, loadingMore: true, items: [commentItemFixture()] }),
     ).toContain('正在加载…')
-    const paginatedError = renderView({ error: true, items: [commentItemFixture()] })
-    expect(textOf(paginatedError)).toContain('加载更多失败')
-    expect(textOf(paginatedError)).toContain('重试')
-    expect(textOf(paginatedError)).not.toContain('我的评论加载失败')
+    const nextPageError = renderView({
+      hasNextPage: true,
+      nextPageError: true,
+      items: [commentItemFixture()],
+    })
+    expect(textOf(nextPageError)).toContain('更多评论加载失败')
+    expect(textOf(nextPageError)).toContain('还在吗？想收')
+    expect(textOf(nextPageError)).not.toContain('加载更多')
+    expect(textOf(nextPageError)).not.toContain('我的评论加载失败')
   })
 })
 
