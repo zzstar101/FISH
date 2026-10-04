@@ -102,9 +102,9 @@ export const RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES = ['IMPRESSION', 'QUICK_
  *   1. 契约层：`listingId` 必须是规范公开 id（`PublicListingIdSchema` = `lst_` + UUIDv7），
  *      mock 商品的本地 id 在 422 就被拒（`schema.test.ts:150`）；
  *   2. 引用完整性：商品不在库里 → `listing_not_found`
- *      （`apps/api/src/modules/recommendation/service.ts`；`service.test.ts:131`）；
+ *      （`apps/api/src/modules/recommendation/service.ts`；`service.test.ts:135`）；
  *   3. 归因真值：`requestId` 指向的请求必须存在且归属同一身份 → `attribution_not_found` /
- *      `identity_mismatch`（`service.test.ts:162/175/194`），而 mock 回退路径拿不到真实 `requestId`；
+ *      `identity_mismatch`（`service.test.ts:166/179/198`），而 mock 回退路径拿不到真实 `requestId`；
  *   4. 本文件：`IMPRESSION` / `QUICK_SKIP` 必须带 `requestId` + `position`（`schema.test.ts:108/120`）。
  *   ⇒ fixture 流量要么进不来，要么退化成无归因事件、不进任何归因漏斗（漏斗只数
  *   `request_id IS NOT NULL`）。
@@ -112,14 +112,14 @@ export const RECOMMENDATION_FEED_ATTRIBUTED_EVENT_TYPES = ['IMPRESSION', 'QUICK_
  *   预览若指向同一个后端、用的是真客户端 + 真 `lst_` 商品 id + 真 `requestId` + 真会话，
  *   它的 `IMPRESSION` / `DETAIL_VIEW` 是完全可归因的，会进漏斗与 guardrail。要把它摘出来只能由
  *   客户端自报一个流量头，而服务端没有可信判据（不落 UA / IP，见 R1 §6；拿 UA 当排除依据等于给
- *   爬虫一个"声明自己是用户"的开关）。issue M0 要的是"**明确**是否排除"（`/tmp/i323.md:172`）、
- *   验收行是"fixture/dev 流量按规则隔离"（`:762-767`），为一条自报头改事件写入路径属于超范围
+ *   爬虫一个"声明自己是用户"的开关）。issue #323 的 M0 需求行是「明确 Bot / 开发预览 / fixture
+ *   流量是否排除」，验收行是「fixture/dev 流量按规则隔离」，为一条自报头改事件写入路径属于超范围
  *   （AGENTS §3/§4）。⇒ v1 口径：开发预览请指向本地 / 独立后端；指向共享后端时与真实流量不可
  *   区分，这是明确接受的数据边界。
  * - **Bot 流量 → 不排除，只在 guardrail 上可见。** R1 不落 UA / IP、也不做 UA 判定
  *   （`docs/design/issue-323-r1-event-tracking.md` §6）——写入路径上加 Bot 判据需要设备指纹，
  *   与"不落私有资料"的红线相邻，v1 明确不做。可见性由限流提供：被拒的请求计入
- *   `rateLimitedRequests`（`apps/api/src/modules/recommendation/router.ts:86`，
+ *   `rateLimitedRequests`（`apps/api/src/modules/recommendation/router.ts:96`，
  *   `apps/api/src/app.ts` 已接线）。
  */
 

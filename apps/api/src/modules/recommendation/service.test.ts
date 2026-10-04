@@ -461,4 +461,29 @@ describe('重复曝光冷却的服务层接线（#323 M6）', () => {
       warn.mockRestore()
     }
   })
+
+  test('全部候选都命中冷却 → 本次不冷却，Feed 不为空（空 ranked feed 会被记成线上故障）', async () => {
+    const first = newId()
+    const second = newId()
+    const cooling = (listingId: string): ExposureHistory => ({
+      listingId,
+      exposureCount: RANK_REPEATED_EXPOSURE_COOLDOWN_THRESHOLD,
+      lastExposedAt: new Date(NOW.getTime() - 60 * 60 * 1_000),
+      engagedCount: 0,
+    })
+    const { startFeed, snapshotRows } = createFeedService({
+      listingIds: [first, second],
+      history: [cooling(first), cooling(second)],
+    })
+
+    const page = await startFeed({ viewerId: null, anonymousSessionId: SESSION_ID, limit: 20 })
+
+    // M6 是**单品**冷却，不是整页清空：整页都命中时退化为不冷却，否则服务端会写出一条 0 快照行的
+    // ranked 请求，admin 的 `emptyRankedFeedRate` 会把它记成故障，而用户看到的是空白首页。
+    expect(page.response.items.map((item) => item.id)).toEqual([
+      encodePublicId(PUBLIC_ID_PREFIX.listing, first),
+      encodePublicId(PUBLIC_ID_PREFIX.listing, second),
+    ])
+    expect(snapshotRows().map((row) => row.listingId)).toEqual([first, second])
+  })
 })

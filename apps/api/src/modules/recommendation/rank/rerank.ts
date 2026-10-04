@@ -140,6 +140,7 @@ export function rerankCandidates(input: {
   /**
    * 处于重复曝光冷却（M6）的 listing。**先于三条约束**剔除，且命中
    * `RANK_COOLDOWN_EXEMPT_RECALL_SOURCE` 召回通道的不剔（M6「Wish 命中时允许重新进入」）。
+   * 若剔除后一条不剩，则**本次整体不冷却**（见下方 `skipCooldown` 的取舍说明）。
    *
    * 缺省为空集：调用方读取曝光历史失败时按 fail-open 处理（宁可多曝光，也不因查询故障惩罚
    * 用户），所以这里不需要默认的"拒绝"语义。
@@ -155,7 +156,12 @@ export function rerankCandidates(input: {
   // 自己的保证，调用方漏排时不会静默产出一个顺序错误的 Feed。
   const ordered = [...input.scored].sort(compareScoredCandidates)
   const afterHidden = ordered.filter((item) => !hidden.has(item.candidate.listingId))
-  const pool = afterHidden.filter((item) => !isCooling(item, cooldown))
+  const cooled = afterHidden.filter((item) => !isCooling(item, cooldown))
+  // 兜底：冷却把整页清空时，本次不冷却。M6 是**单品**冷却，不是整页清空 —— 而 `service` 的
+  // 降级判据（`scored.length === 0`）在冷却**之前**，这里若返回空 `items`，服务端仍会写一条
+  // 0 快照行的 ranked 请求，admin 的 `emptyRankedFeedRate` 会把它记成一次线上故障。宁可多曝光。
+  const skipCooldown = afterHidden.length > 0 && cooled.length === 0
+  const pool = skipCooldown ? afterHidden : cooled
   const relaxations: Record<RerankConstraint, number> = { seller: 0, category: 0, explore: 0 }
 
   const target = Math.max(Math.min(input.limit, pool.length), 0)
@@ -224,7 +230,7 @@ export function rerankCandidates(input: {
     summary: {
       inputCount: input.scored.length,
       droppedHidden: ordered.length - afterHidden.length,
-      droppedCooldown: afterHidden.length - pool.length,
+      droppedCooldown: skipCooldown ? 0 : afterHidden.length - cooled.length,
       droppedOverflow: pool.length - placed.length,
       relaxations,
     },

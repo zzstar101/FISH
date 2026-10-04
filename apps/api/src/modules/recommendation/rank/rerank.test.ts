@@ -458,4 +458,42 @@ describe('重复曝光冷却（M6）', () => {
     expect(ids(items)).toEqual(['a', 'b'])
     expect(summary.droppedCooldown).toBe(0)
   })
+
+  test('全部候选都在冷却集 → 本次不冷却：Feed 不为空、`droppedCooldown` 记 0、顺序与不冷却一致', () => {
+    const pool = ['a', 'b', 'c'].map((id, index) => scored({ listingId: id, rankScore: 3 - index }))
+    const baseline = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      seed: 's',
+      limit: 10,
+    })
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      cooldownListingIds: new Set(['a', 'b', 'c']),
+      seed: 's',
+      limit: 10,
+    })
+
+    // 兜底的方向与 service 的 fail-open 一致：宁可多曝光，也不产出空 Feed —— 服务端一旦写出
+    // 0 快照行的 ranked 请求，admin 的 `emptyRankedFeedRate` 就把它算成一次线上故障。
+    expect(ids(items)).toEqual(['a', 'b', 'c'])
+    expect(ids(items)).toEqual(ids(baseline.items))
+    expect(summary.droppedCooldown).toBe(0)
+    expect(summary.inputCount).toBe(3)
+  })
+
+  test('冷却只是剔掉一部分时仍然正常剔除（兜底不吞掉有效冷却）', () => {
+    const pool = ['a', 'b'].map((id, index) => scored({ listingId: id, rankScore: 2 - index }))
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      cooldownListingIds: new Set(['b']),
+      seed: 's',
+      limit: 10,
+    })
+
+    expect(ids(items)).toEqual(['a'])
+    expect(summary.droppedCooldown).toBe(1)
+  })
 })

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { INTEREST_ACTION_WEIGHTS } from './interest'
+import type { RecallChannel } from './recall'
 import type { RecommendationEventType } from './schema'
 
 /**
@@ -221,8 +222,11 @@ export const RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES = [
  *
  * 愿望匹配是用户自己表达过的明确需求，比"算法觉得他可能想看"强得多；用冷却把它压掉，用户会看到
  * "我明明想要这个，首页却从来不给我"。
+ *
+ * `satisfies RecallChannel`：通道改名（`RECALL_CHANNELS`）时这里必须跟着编译报错，不能留一个
+ * 永远匹配不上的字符串静默失效。
  */
-export const RANK_COOLDOWN_EXEMPT_RECALL_SOURCE = 'wish'
+export const RANK_COOLDOWN_EXEMPT_RECALL_SOURCE = 'wish' satisfies RecallChannel
 
 /**
  * 饱和变换：`value / (value + K)`，`value >= 0` 时值域 `[0, 1)`。

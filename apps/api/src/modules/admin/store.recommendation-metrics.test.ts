@@ -291,10 +291,17 @@ beforeAll(async () => {
   //
   // 三个**窗口内创建**的新商品（08:00）：
   //   n1 首次曝光 10:00（+2h）、首次意向 FAVORITE 11:30（+3.5h）、12:30 再曝光、13:00 成交
-  //   n2 首次曝光 11:00（+3h）、首次意向 CHAT_START 12:00（+4h）
+  //   n2 首次曝光 11:00（+3h）、11:15 有一条 grade 1 的 DETAIL_VIEW、首次意向 CHAT_START 12:00（+4h）
   //   n3 首次曝光 12:00（+4h）、09:30 有一条**无归因** FAVORITE（不算意向）
   // 外加窗口外创建的老商品 l3：14:00 曝光、15:00 成交（只进 exposuresBeforeSale）。
   // 同一商品在同一请求下只能有一条曝光（库级部分唯一索引），所以第二次曝光换一个请求。
+  //
+  // 另有两处是**回归钉子**（对抗性审查发现原夹具钉不住这两条 SQL 判据）：
+  //   - n1 成交（13:00）**之后**的 14:00 还有一条归因曝光 ⇒ 若 `AND a.occurred_at < p.sold_at`
+  //     被删掉，`exposuresBeforeSale` 会多算这一条，p90 从 2 变成 3；
+  //   - n2 在首次 grade ≥ 2 意向（CHAT_START 12:00）**之前** 11:15 有一条 grade 1 的 DETAIL_VIEW
+  //     ⇒ 若意向阈值从 `grade >= 2` 放宽成 `>= 1`，`firstPublishToFirstIntentHours` 的 median
+  //     从 3.5 变成 3.25（p90 从 4 变成 3.5）。
   // ---------------------------------------------------------------------------
   for (const [key, sellerId, status] of [
     ['n1', userAId, 'SOLD'],
@@ -332,6 +339,12 @@ beforeAll(async () => {
         strategyVersion: RANKED_VERSION,
         requestedAt: new Date('2026-01-20T12:15:00Z'),
       },
+      {
+        id: newId(),
+        userId: userAId,
+        strategyVersion: RANKED_VERSION,
+        requestedAt: new Date('2026-01-20T13:50:00Z'),
+      },
     ])
     .returning({ id: recommendationRequests.id, requestedAt: recommendationRequests.requestedAt })
   const lifecycleByTime = new Map(
@@ -339,7 +352,8 @@ beforeAll(async () => {
   )
   const w2 = lifecycleByTime.get('2026-01-20T07:00:00.000Z') ?? ''
   const w2b = lifecycleByTime.get('2026-01-20T12:15:00.000Z') ?? ''
-  if (!w2 || !w2b) throw new Error('缺少生命周期夹具请求')
+  const w2c = lifecycleByTime.get('2026-01-20T13:50:00.000Z') ?? ''
+  if (!w2 || !w2b || !w2c) throw new Error('缺少生命周期夹具请求')
 
   await db.insert(recommendationEvents).values([
     {
@@ -434,6 +448,28 @@ beforeAll(async () => {
       position: null,
       occurredAt: new Date('2026-01-20T15:00:00Z'),
     },
+    // 回归钉子 1：n1 在 13:00 成交**之后**的 14:00 仍被归因曝光（SOLD 商品还在被展示）。
+    // 它必须被 `AND a.occurred_at < p.sold_at` 排除，否则 `exposuresBeforeSale` 的 p90 会变成 3。
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n1,
+      eventType: 'IMPRESSION',
+      requestId: w2c,
+      position: 0,
+      occurredAt: new Date('2026-01-20T14:00:00Z'),
+    },
+    // 回归钉子 2：n2 的 grade 1 事件（DETAIL_VIEW 11:15）早于任何 grade ≥ 2 意向（CHAT_START 12:00）。
+    // 若"有效意向"阈值放宽成 `>= 1`，首次意向会提前到 11:15（+3.25h），median 不再是 3.5。
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n2,
+      eventType: 'DETAIL_VIEW',
+      requestId: w2,
+      position: 1,
+      occurredAt: new Date('2026-01-20T11:15:00Z'),
+    },
   ])
 })
 
@@ -514,10 +550,12 @@ describe('getRecommendationMetrics（#323 R6 SQL 口径）', () => {
       median: 3,
       p90: 4,
     })
-    // 首发 → 首意向：n1 +3.5h（FAVORITE）、n2 +4h（CHAT_START）；n3 那条 FAVORITE 没有归因，不算。
+    // 首发 → 首意向：n1 +3.5h（FAVORITE）、n2 +4h（CHAT_START）；n3 那条 FAVORITE 没有归因，不算；
+    // n2 的 DETAIL_VIEW（+3.25h）是 grade 1，被阈值排除（放宽成 `>= 1` 这条断言就会红）。
     // 最近秩中位数 = 第 ceil(0.5 * 2) = 1 个 = 3.5（线性插值会得 3.75，这条断言把口径钉死）。
     expect(row.lifecycle.firstPublishToFirstIntentHours).toEqual({ count: 2, median: 3.5, p90: 4 })
     // 成交前曝光：n1 = 2 条（10:00 / 12:30，都在 13:00 成交之前）、l3 = 1 条（14:00）。
+    // n1 在 14:00 还有一条**成交后**的曝光，必须被 `occurred_at < sold_at` 排除（删掉谓词 p90 会变 3）。
     // l3 的 created_at 在窗口外仍计入（这一项不看商品创建时刻）；最近秩中位数 = 1（插值会得 1.5）。
     expect(row.lifecycle.exposuresBeforeSale).toEqual({ count: 2, median: 1, p90: 2 })
   })
