@@ -92,4 +92,33 @@ describe('历史浏览：接线', () => {
     // 追加必须走去重合并（同一天跨页 + 并发写入下重复下发的行不能出现两张格）
     expect(updater).toContain('mergeHistoryItems(prev.items, page.items)')
   })
+
+  test('「已清空」标记按档位收口：清空浏览记录不能把收藏 / 留言档也说成已清空', async () => {
+    const code = await source()
+    const emptyKind = sliceFrom(code, 'const emptyKind: EmptyKind =', ')')
+
+    /*
+      真实构建只有浏览档能清（`canClearTab(false, tab) === false` 对收藏 / 留言成立），
+      `realCleared` 却是整页一个布尔量。不收口的话「清空浏览记录 → 切到空的收藏档」
+      会渲染成「收藏已清空」—— 用户根本没清过收藏，属于无中生有。
+    */
+    expect(emptyKind).toContain("realCleared && tab === 'history'")
+  })
+
+  test('收藏 / 留言两档各自取数：都走翻页取全，且带 ownerId 作用域校验', async () => {
+    const code = await source()
+    const effect = sliceFrom(
+      code,
+      '真实构建 · 收藏档 / 留言档取数',
+      '}, [demo, tab, authStatus, userId, reloadToken])',
+    )
+
+    // 两档分别打各自的读端点（不能只接一档、也不能用浏览档的端点顶替）
+    expect(effect).toContain('fetchMyFavorites(cursor)')
+    expect(effect).toContain("fetchMyComments({ kind: 'all', cursor })")
+    // 翻页取全：共用 `fetchAllPages`
+    expect(effect).toContain('fetchAllPages(')
+    // 迟到结果按 ownerId 丢弃（换号后旧账号那一档不能落到新账号上）
+    expect(effect).toContain('(next) => next.ownerId === forUserId')
+  })
 })

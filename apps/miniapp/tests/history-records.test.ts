@@ -177,59 +177,40 @@ describe('三档的文案', () => {
   })
 })
 
-describe('空态：三种来由不能混成一句', () => {
-  test('来由判定：清过 > 演示空 > 没有后端', () => {
-    expect(emptyKindOf(false, false)).toBe('noBackend')
-    expect(emptyKindOf(true, false)).toBe('demoEmpty')
-    expect(emptyKindOf(true, true)).toBe('cleared')
-    // 真实构建不可能「清过」（清不掉），但真传进来时也要说得比「没有后端」更具体
-    expect(emptyKindOf(false, true)).toBe('cleared')
+describe('空态：两种来由不能混成一句', () => {
+  test('来由判定：清过 > 本来就没有', () => {
+    expect(emptyKindOf(false)).toBe('empty')
+    expect(emptyKindOf(true)).toBe('cleared')
   })
 
-  test('真实构建的收藏 / 留言空态说「这一页还没接」；浏览档不再自称「没有后端」', () => {
-    for (const tab of ['favs', 'msgs'] as const) {
-      const copy = emptyCopyOf(tab, 'noBackend')
-      expect(copy.title).toContain('后端')
+  test('三档都接了真端点，空态一律说「还没有 X」，不再自称「没有后端」', () => {
+    /*
+      `noBackend`（「这一页还没接」）随三档全部接线整体退役：浏览档 #415 M1、
+      收藏档 #394、留言档 #195。真实构建里「接口成功但列表为空」就是你真的没有这条记录，
+      再说「这一页还没接后端」就是假话。
+    */
+    for (const tab of TAB_KEYS) {
+      const copy = emptyCopyOf(tab, 'empty')
+      expect(copy.title).toContain('还没有')
+      expect(copy.title).not.toContain('后端')
+      expect(copy.text).not.toContain('后端')
+      expect(copy.text).not.toContain('还没接')
       expect(copy.action).toBe('去逛逛')
     }
-    /*
-      留言档（#405 审查回合）：`GET /me/comments` 已上线（#195 PR1），原来那句
-      「契约里没有『按作者取留言』的接口」已经是假话 —— 与本页收藏档同一口径，
-      如实说「这一页还没接」。
-    */
-    const msgs = emptyCopyOf('msgs', 'noBackend')
-    expect(msgs.title).toBe('这一页还没接后端')
-    expect(msgs.text).not.toContain('契约')
-    expect(msgs.text).not.toContain('按作者')
-    expect(msgs.text).toContain('已经上线')
-    /*
-      浏览档的 `noBackend` 随 #415 M1 退役：`GET /me/view-history` 已上线，
-      真实构建里「接口成功但列表为空」就是「你还没有浏览过」—— 再说「浏览足迹还没有后端」
-      就是假话。页面已改用 `demoEmpty` 那一支，这里同时锁住两支文案一致。
-    */
-    const history = emptyCopyOf('history', 'noBackend')
-    expect(history.title).not.toContain('后端')
-    expect(history.title).toBe(emptyCopyOf('history', 'demoEmpty').title)
-    expect(history.text).toBe(emptyCopyOf('history', 'demoEmpty').text)
-  })
-
-  test('演示构建没清过时的空态说「还没有」，不提后端', () => {
-    for (const tab of TAB_KEYS) {
-      const copy = emptyCopyOf(tab, 'demoEmpty')
-      expect(copy.title).not.toContain('后端')
-      expect(copy.title).toContain('还没有')
-    }
+    // 三档各说各的记录名，不能共用一句
+    expect(emptyCopyOf('history', 'empty').title).toBe('还没有浏览记录')
+    expect(emptyCopyOf('favs', 'empty').title).toBe('还没有收藏的宝贝')
+    expect(emptyCopyOf('msgs', 'empty').title).toBe('还没有留过言')
   })
 
   test('清空之后的空态说「已清空」，与「还没有」区分开', () => {
     for (const tab of TAB_KEYS) {
       const cleared = emptyCopyOf(tab, 'cleared')
-      const empty = emptyCopyOf(tab, 'demoEmpty')
+      const empty = emptyCopyOf(tab, 'empty')
       expect(cleared.title).toContain('已清空')
-      // 三者互不相同：同一句话套三种来由，用户会以为清空没生效
+      // 两种来由互不相同：同一句话套两种来由，用户会以为清空没生效
       expect(cleared.title).not.toBe(empty.title)
       expect(cleared.text).not.toBe(empty.text)
-      expect(cleared.title).not.toBe(emptyCopyOf(tab, 'noBackend').title)
     }
   })
 })

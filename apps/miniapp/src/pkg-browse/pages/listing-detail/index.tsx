@@ -17,6 +17,7 @@
  */
 
 import type { CommentDto } from '@fish/contracts/comments/schema'
+import type { ListingMatchListResponse, WishSummary } from '@fish/contracts/matching/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -33,6 +34,7 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+import { fetchListingMatches } from '@/features/matching/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
@@ -98,6 +100,18 @@ const RATIO_HEIGHT: Record<MockListing['ratio'], number> = {
   '5x6': Math.round((COLUMN_WIDTH * 6) / 5),
   '3x4': Math.round((COLUMN_WIDTH * 4) / 3),
   '4x3': Math.round((COLUMN_WIDTH * 3) / 4),
+}
+
+/**
+ * 求购行的预算文案（`WishSummary` 的两个预算端点都可空，照抄 DB 真值）。
+ * 与许愿页 `budgetRange` 的「¥30–50」同款 en dash；两端都空 = 「预算不限」。
+ */
+function matchBudgetText(wish: WishSummary): string {
+  const { budgetMinCents, budgetMaxCents } = wish
+  if (budgetMinCents === null && budgetMaxCents === null) return '预算不限'
+  const min = budgetMinCents !== null ? `¥${formatAmount(budgetMinCents)}` : '…'
+  const max = budgetMaxCents !== null ? `¥${formatAmount(budgetMaxCents)}` : '…'
+  return `预算 ${min}–${max}`
 }
 
 /**
@@ -759,6 +773,33 @@ export default function ListingDetail() {
    */
   const sellerPresenceNow = usePresenceNow()
   const sellerPresence = data ? presenceView(data.seller.presence, sellerPresenceNow) : null
+
+  /**
+   * 「谁在求购」（#8 的 byListing 端点）：**卖家本人视角**的匹配愿望列表。
+   *
+   * 端点整挂 requireAuth 且服务端校验归属（非本人 403 `NOT_TARGET_OWNER`），所以只在
+   * `ownListing` 时发请求；它是本页的辅助区块 —— 拉不到（未登录 / 网络失败 / 商品被删）
+   * 就整块不渲染，不弹错误也不连累页面主体。`matches === null` 即「没有可展示的」。
+   */
+  const [matches, setMatches] = useState<ListingMatchListResponse | null>(null)
+  const matchListingId = data?.listing.id ?? null
+  useEffect(() => {
+    if (!ownListing || matchListingId === null) return
+    let stale = false
+    setMatches(null)
+    fetchListingMatches(matchListingId)
+      .then((result) => {
+        if (!stale) setMatches(result)
+      })
+      .catch((caught: unknown) => {
+        console.debug('[miniapp] 谁在求购读不到，隐藏区块', caught)
+      })
+    return () => {
+      stale = true
+    }
+    // 依赖商品 id 而不是 `data` 对象引用：返回本页的静默刷新会换 `data` 引用但商品没变，
+    // 以引用为依赖会每次返回都白打一发匹配请求
+  }, [ownListing, matchListingId])
 
   /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
@@ -1426,6 +1467,41 @@ export default function ListingDetail() {
                 </View>
               </View>
             </View>
+
+            {/* ---------------------------------------------------- 谁在求购 */}
+            {/*
+              卖家视角专属（#8 byListing）：谁求购过跟我这件商品匹配的愿望。
+              `matches === null`（非本人 / 拉取失败）或没人求购时整块不渲染 ——
+              只剩一个标题的空壳区块比没有区块更奇怪。行点击去搜索页搜该关键词
+              （与许愿页「按关键词搜索」同一跳转口径）。
+            */}
+            {ownListing && matches !== null && matches.items.length > 0 ? (
+              <View className="detail__matches">
+                <View className="detail__seclabel">
+                  <Image className="detail__seclabel-img" src={ICONS.heartMuted} mode="aspectFit" />
+                  <Text>{`谁在求购 · ${matches.total}`}</Text>
+                </View>
+                <View className="detail__match-list">
+                  {matches.items.map((match) => (
+                    <View
+                      key={match.id}
+                      className="detail__match"
+                      onClick={() =>
+                        void Taro.navigateTo({
+                          url: `/pkg-browse/pages/search/index?q=${encodeURIComponent(match.wish.keyword)}`,
+                        })
+                      }
+                    >
+                      <View className="detail__match-main">
+                        <Text className="detail__match-kw">{match.wish.keyword}</Text>
+                        <Text className="detail__match-sub">{matchBudgetText(match.wish)}</Text>
+                      </View>
+                      <Text className="detail__match-score num">{`${match.score}%`}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
 
             {/* ---------------------------------------------------- 留言 */}
             <View className="detail__comments">

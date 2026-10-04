@@ -742,6 +742,61 @@
   flex: 0 0 auto;
 }
 
+/*
+ * 「谁在求购」（#8 byListing，卖家本人视角）：愿望行 = 关键词 + 预算 + 匹配度。
+ * 只在匹配结果非空时渲染（见页面：非本人 403 / 失败 / 无人求购都整块隐藏）。
+ */
+.detail__matches {
+  margin-top: 40px;
+}
+
+.detail__match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detail__match {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 22px 24px;
+  border-radius: 24px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.detail__match-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.detail__match-kw {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.detail__match-sub {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+}
+
+.detail__match-score {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--brand);
+}
+
 .detail__waterfall {
   display: flex;
   align-items: flex-start;

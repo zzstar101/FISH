@@ -11,6 +11,8 @@ import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { fetchMyComments } from '@/features/comments/api'
+import { fetchMyFavorites } from '@/features/favorites/api'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { clearMyViewHistory, fetchMyViewHistory } from '@/features/view-history/api'
 import { cancellable } from '@/lib/cancellable'
@@ -29,17 +31,20 @@ import {
   type EmptyKind,
   emptyCopyOf,
   emptyKindOf,
+  favoriteCell,
   fetchDemoRecords,
   type HistoryDay,
   type HistoryTab,
   historyDaysOf,
   loadingTextOf,
   MESSAGE_KIND_LABEL,
+  type MessageRecord,
   mergeHistoryItems,
-  NO_BACKEND_REFRESH_TIP,
+  messageRow,
   NOTHING_CLEARED,
   noteOf,
   type RecordCell,
+  recordNameOf,
   shortLabelOf,
   TABS,
   tailTextOf,
@@ -126,6 +131,38 @@ type RealHistory = {
   total: number
 }
 
+/**
+ * 真实构建 · 收藏档 / 留言档的取数结果（**翻页取全**，与浏览档的增量「加载更多」不同）。
+ *
+ * 这两档没有「加载更多」按钮：底部的「已显示全部 N 件 / N 条」是**派生文案**，只有把游标
+ * 翻到底才说得出口（先例 `pkg-browse/pages/favorites` 的 `loadFavorites`）。翻不到底
+ * （`truncated`：撞上限或服务端游标没前进）就只报条数、不说「全部」。
+ */
+type RealList<T> = {
+  ownerId: string
+  rows: T[]
+  truncated: boolean
+}
+
+/** 翻页取全的上限。只兜「服务端一直回同一个 cursor」这类 bug，正常用户的量远小于它。 */
+const MAX_PAGES = 20
+
+async function fetchAllPages<T>(
+  fetchPage: (cursor?: string) => Promise<{ items: T[]; nextCursor: string | null }>,
+): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const response = await fetchPage(cursor)
+    items.push(...response.items)
+    if (response.nextCursor === null) return { items, truncated: false }
+    // 游标没前进 = 服务端在重复给同一页，再收会让列表翻倍、React 的 key 还会撞车
+    if (response.nextCursor === cursor) return { items, truncated: true }
+    cursor = response.nextCursor
+  }
+  return { items, truncated: true }
+}
+
 export default function History() {
   const authStatus = useAuthGuard()
   const userId = useAuth().user?.id ?? null
@@ -159,6 +196,13 @@ export default function History() {
   const [loadingMore, setLoadingMore] = useState(false)
 
   /**
+   * 真实构建 · 收藏档 / 留言档的取数结果（演示构建恒为 null）。
+   * `ownerId` 与 `RealHistory` 同一用意：只收当前账号的结果。
+   */
+  const [realFavs, setRealFavs] = useState<RealList<RecordCell> | null>(null)
+  const [realMsgs, setRealMsgs] = useState<RealList<MessageRecord> | null>(null)
+
+  /**
    * 「清空过哪几档」。三个布尔量，**只活在本次页面实例内**。
    *
    * ⚠️ 离开页面再进来就回到「没清过」—— 这是**已知且故意接受**的行为，不是漏做：
@@ -180,6 +224,9 @@ export default function History() {
    * 只在第一页取数落地时更新：它服务的是**账号归属**判断，不必逐页镜像（翻页只会追加）。
    */
   const realRef = useRef<RealHistory | null>(null)
+  /** 收藏档 / 留言档的镜像，理由同上（`truncated` 也照样存，切档重进时口径一致） */
+  const favsRef = useRef<RealList<RecordCell> | null>(null)
+  const msgsRef = useRef<RealList<MessageRecord> | null>(null)
   /**
    * 在飞的真实请求（首屏 / 加载更多）的取消句柄。
    *
@@ -220,6 +267,10 @@ export default function History() {
     setRealFetchFailed(false)
     setRealCleared(false)
     setLoadingMore(false)
+    favsRef.current = null
+    setRealFavs(null)
+    msgsRef.current = null
+    setRealMsgs(null)
     setRealLoading(!demo)
   }
   /**
@@ -366,9 +417,96 @@ export default function History() {
     }
   }, [demo, tab, authStatus, userId, reloadToken])
 
+  /**
+   * 真实构建 · 收藏档 / 留言档取数。
+   *
+   * 两条读端点早已上线（收藏 #394、`GET /me/comments` #195），但本页此前只把**浏览档**
+   * 接了真（#415 M1），另两档一律摆「这一页还没接」的缺口空态 —— 这里把它们接上。
+   *
+   * 与浏览档**分开一条 effect**：浏览档有自己的「加载更多」游标语义（增量追加 + 按天重新
+   * 分组），这两档是**翻页取全**（见 `RealList`），两套状态机混在一起只会互相干扰。
+   * 两者的账号作用域口径一致：`cancellable` + `ownerId` 校验，换账号 / 退出 / 重拉时
+   * 迟到的结果一律丢弃（渲染期重置已经把手里的列表清干净）。
+   */
+  useEffect(() => {
+    // 与浏览档同款：先读走「下拉刷新」标记，本次分支一律从零开始
+    refreshPending.current = false
+    if (demo) return
+    if (tab === 'history') return
+    if (authStatus !== 'authed' || userId === null) {
+      setRealLoading(false)
+      void Taro.stopPullDownRefresh()
+      return
+    }
+
+    const mirror = tab === 'favs' ? favsRef : msgsRef
+    const sameOwner = mirror.current !== null && mirror.current.ownerId === userId
+    /** 下拉刷新且手里已有当前账号的列表 → 保留列表，不换骨架屏（同浏览档的 `isRefresh`） */
+    const isRefresh = reloadToken > 0 && sameOwner
+    if (!isRefresh) setRealLoading(true)
+    setRealFetchFailed(false)
+
+    const forUserId = userId
+    const load = cancellable(
+      async () => {
+        if (tab === 'favs') {
+          const page = await fetchAllPages((cursor) => fetchMyFavorites(cursor))
+          return { ownerId: forUserId, kind: 'favs' as const, page }
+        }
+        const page = await fetchAllPages((cursor) => fetchMyComments({ kind: 'all', cursor }))
+        return { ownerId: forUserId, kind: 'msgs' as const, page }
+      },
+      (next) => next.ownerId === forUserId,
+    )
+    pendingFirst.current = load.cancel
+    void load.promise
+      .then((next) => {
+        // 被取消（换账号 / 退出 / 重拉）时 next 为 null：整份结果一律不动
+        if (!next) return
+        if (next.kind === 'favs') {
+          const record: RealList<RecordCell> = {
+            ownerId: next.ownerId,
+            rows: next.page.items.map(favoriteCell),
+            truncated: next.page.truncated,
+          }
+          favsRef.current = record
+          setRealFavs(record)
+        } else {
+          const nowMs = Date.now()
+          const record: RealList<MessageRecord> = {
+            ownerId: next.ownerId,
+            rows: next.page.items.map((row) => messageRow(row, nowMs)),
+            truncated: next.page.truncated,
+          }
+          msgsRef.current = record
+          setRealMsgs(record)
+        }
+        setRealLoading(false)
+        // 原生下拉指示器在本次结果落地时收起
+        void Taro.stopPullDownRefresh()
+      })
+      .catch((error: unknown) => {
+        // 取消不是失败：新一轮取数已经接管状态，什么都不改
+        if (load.isCancelled()) return
+        console.warn('[miniapp] 收藏 / 留言记录读取失败', error)
+        setRealLoading(false)
+        setRealFetchFailed(true)
+        // 手里已有的列表保留（刷新失败不该把读到的东西抹掉）
+        void Taro.stopPullDownRefresh()
+      })
+    return () => {
+      load.cancel()
+      pendingFirst.current = null
+      // 这一轮不是「下拉刷新接力」的取消（切档 / 换号 / 卸载）：没有新一轮会来收指示器
+      if (!refreshPending.current) void Taro.stopPullDownRefresh()
+    }
+  }, [demo, tab, authStatus, userId, reloadToken])
+
   /** 当前账号的「已清空」标记（账号对不上时是「都没清过」） */
-  const cleared = useMemo(() => clearedOf(clearedState, userId), [clearedState, userId])
-  /** 当前档位的记录是否已被清空 */
+  const cleared = useMemo(
+    () => clearedOf(clearedState, userId),
+    [clearedState, userId],
+  ) /** 当前档位的记录是否已被清空 */
   const isCleared = cleared[tab]
 
   /**
@@ -378,10 +516,10 @@ export default function History() {
    * 整份覆盖回满列表 —— 用户会看到「刚清空的东西自己长回来」。
    */
   const shown = useMemo(() => (data === null ? null : applyCleared(data, cleared)), [data, cleared])
-  /** 当前档上屏的浏览记录：真实构建走真接口的结果，演示构建走演示数据（其余档恒空） */
+  /** 当前档上屏的记录：真实构建走真接口的结果，演示构建走演示数据 */
   const days = !demo && tab === 'history' ? (realHistory?.days ?? []) : (shown?.days ?? [])
-  const favs = shown?.favs ?? []
-  const msgs = shown?.msgs ?? []
+  const favs = !demo && tab === 'favs' ? (realFavs?.rows ?? []) : (shown?.favs ?? [])
+  const msgs = !demo && tab === 'msgs' ? (realMsgs?.rows ?? []) : (shown?.msgs ?? [])
 
   /** 当前档位渲染出来的条目数：三档各自的列表长度现算（`history` 是**件数**不是天数） */
   const shownCount =
@@ -392,27 +530,46 @@ export default function History() {
         : msgs.length
 
   /**
-   * 骨架屏只在「还没有数据」时顶替内容（下拉刷新保留了列表，不换骨架屏）。
-   * 真实构建的浏览档由 `realLoading` 驱动；另两档没有请求，恒不亮骨架屏。
+   * 分页脚的两个输入：条数 + 是否**取全**。
+   *
+   * - 浏览档的数取服务端 `total`（与「我的」页数字栏同源）；还有下一页时走「加载更多」，
+   *   根本不会渲这句；
+   * - 收藏 / 留言档是翻页取全，取全了才说「已显示全部」，翻不到底（`truncated`）只报条数；
+   * - 演示构建用本地条数，恒算取全。
    */
-  const pending = demo
-    ? loading && data === null
-    : tab === 'history' && realLoading && realHistory === null
-
-  /** 真实浏览档读失败且手里没有数据：上错误态（**不能**用空态冒充「你没有记录」） */
-  const realFailed = !demo && tab === 'history' && realFetchFailed && realHistory === null
+  const currentRealList = tab === 'favs' ? realFavs : tab === 'msgs' ? realMsgs : null
+  const tailCount =
+    tab === 'history'
+      ? realHistory === null
+        ? shownCount
+        : realHistory.total
+      : (currentRealList?.rows.length ?? shownCount)
+  const tailTruncated = currentRealList?.truncated ?? false
 
   /**
-   * 空态的来由。真实浏览档不再有 `noBackend`：接口已上线，列表为空就是**真的没有记录**
-   * （`demoEmpty` 那支文案「还没有浏览记录」），本实例里清过则说「已清空」。
-   * 收藏 / 留言两档保持原判据。
+   * 骨架屏只在「还没有数据」时顶替内容（下拉刷新保留了列表，不换骨架屏）。
+   * 真实构建三档各自由 `realLoading` 驱动，判据是**当前档**手里还没有数据。
    */
-  const emptyKind: EmptyKind =
-    !demo && tab === 'history'
-      ? realCleared
-        ? 'cleared'
-        : 'demoEmpty'
-      : emptyKindOf(demo, isCleared)
+  const realEmptyNow =
+    tab === 'history'
+      ? realHistory === null
+      : tab === 'favs'
+        ? realFavs === null
+        : realMsgs === null
+  const pending = demo ? loading && data === null : realLoading && realEmptyNow
+
+  /** 真实当前档读失败且手里没有数据：上错误态（**不能**用空态冒充「你没有记录」） */
+  const realFailed = !demo && realFetchFailed && realEmptyNow
+
+  /**
+   * 空态的来由。三档都接了真端点，所以不再有 `noBackend` 这一支：接口成功但列表为空
+   * 就是**真的没有记录**，本实例里清过则说「已清空」。
+   *
+   * ⚠️ `realCleared` 是**浏览档专属**的标记（真实构建只有浏览档能清，见 `canClearTab`），
+   * 必须按 `tab === 'history'` 收口：否则「清空浏览记录 → 切到空的收藏档」会说出
+   * 「收藏已清空」—— 用户根本没清过收藏，这是无中生有。
+   */
+  const emptyKind: EmptyKind = emptyKindOf(demo ? isCleared : realCleared && tab === 'history')
 
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
 
@@ -426,21 +583,20 @@ export default function History() {
 
   /**
    * 下拉刷新：微信原生指示器（`index.config.ts` 的 `enablePullDownRefresh`）。
-   * 演示构建重拉一遍演示数据；真实构建只有浏览档有后端可刷（重取第一页），
-   * 收藏 / 留言两档如实说明，不假装刷新成功。
+   * 演示构建重拉一遍演示数据；真实构建**三档都能刷**（各自的读端点在，重取第一页）。
    */
   usePullDownRefresh(() => {
     if (demo) {
       setReloadToken((token) => token + 1)
       return
     }
-    if (tab === 'history' && authStatus === 'authed' && userId !== null) {
+    if (authStatus === 'authed' && userId !== null) {
       // 标记「这一轮是刷新发起的」：effect 的 cleanup 据此放行原生指示器（新一轮会自己收）
       refreshPending.current = true
       setReloadToken((token) => token + 1)
       return
     }
-    toast(NO_BACKEND_REFRESH_TIP)
+    // 未登录 / 登录态未就绪：守卫正在跳转，没有可拉的请求，收掉指示器即可
     void Taro.stopPullDownRefresh()
   })
 
@@ -566,6 +722,23 @@ export default function History() {
     void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.id}` })
   }
 
+  /**
+   * 真实留言行：按契约给的目标跳转（不靠标题猜 id）。
+   * 留言 → 商品详情；评价 → 那笔交易的面交页。演示行没有 `target`，走演示说明。
+   */
+  const openRealMsg = (item: MessageRecord) => {
+    const target = item.target
+    if (target === undefined) {
+      openDemoRecord()
+      return
+    }
+    if (target.kind === 'transaction') {
+      void Taro.navigateTo({ url: `/pkg-trade/pages/transaction-meetup/index?id=${target.id}` })
+      return
+    }
+    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${target.id}` })
+  }
+
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
   /** 三列格（全部浏览 / 我收藏的共用）：方形色块 + 品类小字 + 失效遮罩 + 格下价格 */
@@ -683,17 +856,14 @@ export default function History() {
             读失败是「这次没读到」；混在一起会让用户以为自己的足迹丢了。给重试出口。
           */
           <LoadError
-            title="浏览记录没读出来"
+            title={`${recordNameOf(tab)}没读出来`}
             text="检查网络后重试"
             onRetry={() => setReloadToken((token) => token + 1)}
           />
         ) : shownCount === 0 ? (
           /*
-            空态按来由分开说（`emptyKind`）：
-            - 真实浏览档没清过 → 「还没有浏览记录」（接口已上线，空就是真的空）；
-            - 真实浏览档刚清过 → 「已清空」；
-            - 真实收藏 / 留言档 → 「这一页还没接」（不是「你恰好没有记录」）；
-            - 演示构建没清过 → 恰好没有记录；刚清过 → 「已清空」。
+            空态按来由分开说（`emptyKind`）：三档都接了真端点，所以只有两种 ——
+            没清过 → 「还没有 X」（空就是真的空）；刚清过 → 「已清空」。
           */
           <EmptyState
             title={emptyCopyOf(tab, emptyKind).title}
@@ -722,26 +892,35 @@ export default function History() {
               : null}
 
             {tab === 'favs' ? (
-              /* 我收藏的：三列格（失效角标与收藏页同源，稿决策⑥）——本页这一档还没接真接口，
-                 能渲染出来的只有演示行，所以点击走演示说明 */
+              /* 我收藏的：三列格（失效角标与收藏页同源，稿决策⑥）。
+                 真实数据下点格进商品详情；演示行仍走演示说明 */
               <View className="hist__grid">
-                {favs.map((item) => renderCell(item, openDemoRecord))}
+                {favs.map((item) =>
+                  renderCell(item, realFavs === null ? openDemoRecord : openRealRecord),
+                )}
               </View>
             ) : null}
 
             {tab === 'msgs' ? (
               /* 我留言的：整宽行 —— 缩略图 + 标题 + 类型胶囊 + 我那句话（2 行）+ 时间。
-                 刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。 */
+                 刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。
+                 评价行没有品类（交易 DTO 内嵌的商品摘要不带分类）→ 不画品类小字、色块退 OTHER。 */
               <View className="hist__rows">
                 {msgs.map((item) => (
-                  <View key={item.id} className="hist__row" onClick={openDemoRecord}>
+                  <View
+                    key={item.id}
+                    className="hist__row"
+                    onClick={() => (realMsgs === null ? openDemoRecord() : openRealMsg(item))}
+                  >
                     <View className="hist__rthumb">
                       <Image
                         className="hist__rthumb-img"
-                        src={blockUrlOf(item.category)}
+                        src={blockUrlOf(item.category ?? 'OTHER')}
                         mode="aspectFill"
                       />
-                      <Text className="hist__rthumb-tag">{shortLabelOf(item.category)}</Text>
+                      {item.category === null ? null : (
+                        <Text className="hist__rthumb-tag">{shortLabelOf(item.category)}</Text>
+                      )}
                     </View>
                     <View className="hist__rmain">
                       <View className="hist__rtop">
@@ -763,8 +942,10 @@ export default function History() {
 
             {/*
               分页脚：真实浏览档还有下一页（`nextCursor !== null`）就给「加载更多」（在途禁用），
-              到底（或演示 / 另两档没有分页这回事）才显示现有的「已显示全部」。
-              真实浏览档的数取服务端 `total`（与「我的」页数字栏同源）；演示 / 另两档用本地条数。
+              到底（或演示）才显示现有的「已显示全部」。真实浏览档的数取服务端 `total`
+              （与「我的」页数字栏同源）；演示用本地条数。
+              收藏 / 留言两档是**翻页取全**，取全了才能说「已显示全部」；翻不到底
+              （`truncated`）只报条数 —— 说了「全部」而其实没取完就是假话。
             */}
             {tab === 'history' && realHistory !== null && realHistory.nextCursor !== null ? (
               <View className="hist__tail" onClick={loadMore}>
@@ -776,7 +957,7 @@ export default function History() {
               <View className="hist__tail">
                 <View className="hist__tail-line" />
                 <Text className="hist__tail-tx num">
-                  {tailTextOf(tab, realHistory === null ? shownCount : realHistory.total)}
+                  {tailTextOf(tab, tailCount, tailTruncated)}
                 </Text>
                 <View className="hist__tail-line" />
               </View>

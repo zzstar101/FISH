@@ -32,7 +32,10 @@
  *    `@/features/view-history/api`），以服务端为准；收藏 / 留言两档没有写端点，
  *    只给一句说明、不做本地翻转 —— 见 `canClearTab` / `clearBlockedOf`。
  */
+import type { MyCommentItem } from '@fish/contracts/comments/schema'
+import type { FavoriteItem } from '@fish/contracts/favorites/schema'
 import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
+import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/schema'
 import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 
@@ -80,15 +83,24 @@ export type HistoryDay = {
   items: RecordCell[]
 }
 
+/** 留言行的跳转目标（真实数据才有；演示 fixture 不带它 → 页面给演示说明 toast）。 */
+export type MessageTarget = { kind: 'listing' | 'transaction'; id: string }
+
 /** 我留言的：整宽行（刻意不显示价格，稿决策④） */
 export type MessageRecord = {
   id: string
-  category: ListingCategory
+  /**
+   * 品类。**评价行可能为 null**：交易 DTO 内嵌的商品摘要（`transactionListingSchema`）
+   * 没有分类字段 —— 为 null 时不画品类小字、色块退回 OTHER。
+   */
+  category: ListingCategory | null
   title: string
   kind: MessageKind
-  /** 我写的那句话 */
+  /** 我写的那句话。评价行可能是空串（「只打分没写字」是契约明说的正常形态） */
   text: string
   timeLabel: string
+  /** 跳转目标（真实数据才有）：留言 → 商品详情；评价 → 面交 / 订单页 */
+  target?: MessageTarget
 }
 
 /* ---------------------------------------------------------------- 展示用派生 */
@@ -219,6 +231,51 @@ export function mergeHistoryItems(
   return merged
 }
 
+/** 收藏一行 `{ listing, favoritedAt }` → 三列格（失效口径与足迹一致，稿决策⑥）。 */
+export function favoriteCell(item: FavoriteItem): RecordCell {
+  return {
+    id: item.listing.id,
+    category: item.listing.category,
+    title: item.listing.title,
+    priceCents: item.listing.priceCents,
+    gone: goneLabelOf(item.listing.status),
+  }
+}
+
+/**
+ * 「我留言的」一行：`/me/comments?kind=all` 的判别联合 → 整宽行。
+ *
+ * 刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。
+ * 留言行走 `item.listing`（服务端已 join 好商品卡片），评价行走
+ * `item.transaction.listing`（交易 DTO 内嵌的商品摘要，**没有分类字段** → `category: null`）。
+ */
+export function messageRow(
+  item: MyCommentItem | TransactionReviewItem,
+  nowMs: number,
+): MessageRecord {
+  const now = new Date(nowMs)
+  if ('comment' in item) {
+    return {
+      id: item.comment.id,
+      category: item.listing.category,
+      title: item.listing.title,
+      kind: 'comment',
+      text: item.comment.content,
+      timeLabel: dayLabelOf(new Date(item.comment.createdAt), now),
+      target: { kind: 'listing', id: item.comment.listingId },
+    }
+  }
+  return {
+    id: item.review.id,
+    category: null,
+    title: item.transaction.listing.title,
+    kind: 'review',
+    text: item.review.body ?? '',
+    timeLabel: dayLabelOf(new Date(item.review.createdAt), now),
+    target: { kind: 'transaction', id: item.transaction.id },
+  }
+}
+
 /* ---------------------------------------------------------------- 顶部动作（清空） */
 
 /**
@@ -277,36 +334,30 @@ export function canClearTab(demo: boolean, tab: HistoryTab): boolean {
 export type EmptyCopy = { title: string; text: string; action: string }
 
 /**
- * 空态的三种来由，**含义互不相同、必须分开说**：
+ * 空态的两种来由，**含义互不相同、必须分开说**：
  *
- * - `noBackend`：真实构建 —— 后端根本没有这条数据（不是「你恰好没有记录」）；
- * - `demoEmpty`：演示构建、还没清过 —— 演示口径下这份记录恰好是空的；
- * - `cleared`：演示构建、刚点了清空 —— 记录是**你刚清掉的**，不是「本来就没有」。
+ * - `empty`：这一档**真的没有记录**（真实构建下接口已上线，空就是真的空；演示口径同义）；
+ * - `cleared`：刚点了清空 —— 记录是**你刚清掉的**，不是「本来就没有」。
  *
- * 三种混成一句就会出现「我明明清空的，怎么说是没有后端」这种自相矛盾。
+ * 两种混成一句就会出现「我明明清空的，怎么说没有记录」这种自相矛盾。
+ *
+ * `noBackend`（「这一页还没接」）随三档全部接线而**整体退役**：#415 M1 之后浏览档接
+ * `GET /me/view-history`、收藏档接 `GET /me/favorites`（#394）、留言档接
+ * `GET /me/comments?kind=all`（#195）—— 三档都不再有「后端没有这条数据」的形态。
  */
-export type EmptyKind = 'noBackend' | 'demoEmpty' | 'cleared'
+export type EmptyKind = 'empty' | 'cleared'
 
-export function emptyKindOf(demo: boolean, cleared: boolean): EmptyKind {
-  // 传进来的 cleared 只可能是演示构建的清空标记（真实浏览档的清空以服务端为准，
-  // 页面单独判定，不走这里）；真到了「清过」这一态，它比其它两种解释都更具体
-  if (cleared) return 'cleared'
-  return demo ? 'demoEmpty' : 'noBackend'
+export function emptyKindOf(cleared: boolean): EmptyKind {
+  // 真到了「清过」这一态，它比「本来就没有」更具体
+  return cleared ? 'cleared' : 'empty'
 }
 
 /**
- * 三种空态的文案（**每档 × 每种来由各一支**）。
+ * 两种空态的文案（**每档 × 每种来由各一支**）。
  *
- * `noBackend` 说的是「这一档还读不到服务端数据」（后端还没有这条数据 / 这一页还没接上），
- * 而不是「你还没有浏览记录 / 没有收藏」：后者是我们**不知道**的事，写成事实就是假话 ——
- * 这与 `components/load-error` 和空态之间那条界线同一口径（「加载不出来」≠「恰好没有内容」）。
- *
- * ⚠️ 收藏那一支（#397）：收藏接口已上线（#394），小程序也有了真读它的「我的收藏」页，
- * 所以这里**不能再写**「服务端还没有收藏接口 / 只记在这台设备上」—— 两句现在都是假话。
- * 本页的收藏档还没接端点，如实说「这一页还没接」，并把用户引到能看的那个页面。
- * 浏览档同理（#415 M1 后 `noBackend` 已退役，那一支与 `demoEmpty` 同文案）；
- * 留言档同理（`GET /me/comments` 已上线 #195 PR1，原来说「契约里没有按作者取留言的
- * 接口」已过期，同样改成「这一页还没接」）。
+ * 三档现在都读真实端点，「接口成功但列表为空」= 你真的没有这条记录，所以文案
+ * 一律照实说（与 `components/load-error` 和空态之间那条界线同一口径：
+ * 「加载不出来」≠「恰好没有内容」，后者才是这里）。
  */
 export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   if (kind === 'cleared') {
@@ -327,35 +378,7 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
     }
   }
 
-  if (kind === 'demoEmpty') {
-    if (tab === 'history') {
-      return {
-        title: '还没有浏览记录',
-        text: '看过的商品会按天收在这里，方便回头再找',
-        action: '去逛逛',
-      }
-    }
-    if (tab === 'favs') {
-      return {
-        title: '还没有收藏的宝贝',
-        text: '逛首页看到喜欢的，点一下 ♡ 就会收在这里',
-        action: '去逛逛',
-      }
-    }
-    return {
-      title: '还没有留过言',
-      text: '在商品下留言、或交易完成后给对方评价，都会收在这里',
-      action: '去逛逛',
-    }
-  }
-
   if (tab === 'history') {
-    /*
-      浏览档的 `noBackend` 文案随 #415 M1 退役：`GET /me/view-history` 已上线，真实构建里
-      「接口成功但列表为空」确实等于「你还没有浏览过」，页面已改用 `demoEmpty` 那一支
-      （见 `index.tsx` 的 `emptyKind`）。这里仍与 `demoEmpty` 保持**同一句话**，
-      免得哪天有人再走回这一支时又说出「浏览足迹还没有后端」这种现在已经是假话的文案。
-    */
     return {
       title: '还没有浏览记录',
       text: '看过的商品会按天收在这里，方便回头再找',
@@ -364,19 +387,14 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   }
   if (tab === 'favs') {
     return {
-      title: '这一页还没接后端',
-      text: '收藏接口已经上线，只是这一页还没接上 —— 你的收藏在「我的收藏」页可以看。',
+      title: '还没有收藏的宝贝',
+      text: '逛首页看到喜欢的，点一下 ♡ 就会收在这里',
       action: '去逛逛',
     }
   }
-  /*
-    留言档的 `noBackend` 文案（#405 审查回合）：`GET /me/comments` 已上线（#195 PR1，
-    含商品留言），原来说「契约里没有『按作者取留言』的接口」已经是假话。本页这一档还没接
-    （端上聚合页在 #405），按收藏档同一口径如实说「这一页还没接」。
-  */
   return {
-    title: '这一页还没接后端',
-    text: '留言接口已经上线，只是这一页还没接上 —— 你发过的商品留言之后会收在这里。',
+    title: '还没有留过言',
+    text: '在商品下留言、或交易完成后给对方评价，都会收在这里',
     action: '去逛逛',
   }
 }
@@ -406,15 +424,19 @@ export function noteOf(tab: HistoryTab): string {
 }
 
 /** 到底提示（列表非空才渲染）：`已显示全部 24 件` / `… 8 条` */
-export function tailTextOf(tab: HistoryTab, count: number): string {
-  return `已显示全部 ${count} ${tab === 'msgs' ? '条' : '件'}`
+export function tailTextOf(tab: HistoryTab, count: number, truncated = false): string {
+  const unit = tab === 'msgs' ? '条' : '件'
+  // 没取全（撞翻页上限 / 服务端游标没前进）就不能说「全部」，只报条数
+  return truncated ? `已显示 ${count} ${unit}` : `已显示全部 ${count} ${unit}`
+}
+
+/** 三档的记录名（错误态 / 清空文案共用，只在这里写一遍） */
+export function recordNameOf(tab: HistoryTab): string {
+  return RECORD_NAME[tab]
 }
 
 /** 演示构建里点格子 / 留言行的说明（演示 id 在库里不存在，跳过去必然 404，不假装跳成功） */
 export const DEMO_OPEN_TIP = '演示数据，暂不能打开商品详情'
-
-/** 真实构建下拉刷新时的说明（一个后端接口都没有，没有任何东西可刷） */
-export const NO_BACKEND_REFRESH_TIP = '接口未接入，暂时没有可刷新的数据'
 
 /* ---------------------------------------------------------------- 演示数据（照稿） */
 

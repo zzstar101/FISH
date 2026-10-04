@@ -1,5 +1,5 @@
 import { Image, Text, View } from '@tarojs/components'
-import Taro, { usePageScroll, usePullDownRefresh } from '@tarojs/taro'
+import Taro, { usePageScroll, usePullDownRefresh, useReachBottom } from '@tarojs/taro'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import AuthRequired from '@/components/auth-required'
@@ -8,63 +8,70 @@ import EmptyState from '@/components/empty-state'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
-import { loadMyComments } from '@/features/comments/load'
+import { deleteMyComment, fetchMyComments } from '@/features/comments/api'
+import { DEMO_COMMENTS_ENABLED } from '@/features/comments/load'
 import {
   type CommentSegment,
   countBySegment,
+  DEMO_MY_COMMENTS,
   emptyStateOf,
   filterBySegment,
   kindLabel,
+  kindOfSegment,
   type MyComment,
-  NO_SOURCE_COPY,
+  type MyCommentDeleteRef,
+  ratingChipOf,
   SEGMENTS,
   shortCategoryLabel,
-  starSlots,
+  toMyCommentFromResponseItem,
   viewTargetOf,
 } from '@/features/comments/mine'
+import { deleteMyTransactionReview } from '@/features/transaction/api'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 import './index.scss'
 
 /**
- * 「我的评论」（`小程序1版comments.html`）。**整页没有任何可用端点**，本轮只做页面本身。
+ * 「我的评论」（`小程序1版comments.html`）。#195 接线：真实构建消费 `GET /me/comments`。
  *
- * ## 为什么是空态而不是假列表
+ * ## 数据流（真实构建）
  *
- * 「我发出去的话」在仓库里有两个来源，**两个都没有「我发过的」读路径**（完整证据见
- * `@/features/comments/mine` 的文件头）：商品留言只能按商品一条条读
- * （`CommentListQuerySchema` 没有 author 过滤），交易评价连事件本身都不存在。
- * 所以真实构建下这一页是**空态 + 如实说明缺的是哪一段能力**（`NO_SOURCE_COPY`），
- * 不是错误态、更不是编出来的列表 —— 也**不做**「遍历我的商品再逐条拉留言按作者过滤」
- * 那种 N+1 拼装：它既慢又漏掉我在别人商品下留的言，比空态更误导。
+ * 分段 = 契约的 `kind` 档位（全部 = `all` 跨表合并 / 商品留言 = `comment` / 交易评价 =
+ * `review`），一段一份游标分页列表，触底续页。胶囊计数来自服务端 `total`（同 kind
+ * 口径的**全量**数）：进页时用两个 `limit=1` 的探测请求拿「商品留言 / 交易评价」两个
+ * 总数，「全部」= 二者之和（契约保证 `kind=all` 的 `total` 就是这个和）；当前段的
+ * 响应回来后再以它的 `total` 为准校准。**不**用删除响应的 `deleted` 减计数 ——
+ * 那个数字含被级联的他人回复，减出来必漂（契约 `CommentDeleteResponseSchema` 的警告），
+ * 删除后一律重拉列表与探测。
  *
- * ## 演示构建（`TARO_APP_MOCK=1`）
+ * ## 演示构建
  *
- * 照稿摆 8 条演示数据（4 条商品留言 + 4 条交易评价），与稿的数据量一致；
- * 但**界面上必须能看出是演示数据**：分段栏下方有一条「演示数据」说明带。
- * 行上的动作也据此给说明 toast，而不是跳到必然 404 的详情页（演示 id 在库里不存在）。
- *
- * ⚠️ 这 8 条**不与「我的」页任何数字对齐**：`demoProfile()` 里没有评论 / 评价计数，
- * 「我的」页的「评价」格也不带 `count`（不出红点）。别把它当成跨页一致性要求。
+ * 两个开关都开（`features/comments/load`）才读 fixture，不发任何请求；界面上有
+ * 「演示数据」说明带，行的跳转/删除给说明 toast（演示 id 在库里不存在、也没有可写的端点）。
+ * 真实构建请求失败是**错误态 + 重试**，不回演示。
  *
  * ## 三段互斥 → 才给计数
  *
  * 全部 = 商品留言 ∪ 交易评价，三个数能互相对上，所以计数摆在胶囊上（与我的发布同一判据）。
- * **真实构建整条分段栏都不渲染**：没有数据源时「0」会把「系统不知道」说成「你没有评论」
- * （与「我的」页数字栏的 `—` 同一口径），而且三个分段点下去屏幕一字不变 —— 那是死控件。
  *
  * ## 删除长在每一行上，没有「管理」批量入口
  *
- * 评论是**逐条**的东西：要删的往往是某一条说错的话，批量选择反而要点两下。
- * 删除没有端点，点击给「待接入」说明，**不做本地假删除**（那会与真实数据不一致）。
+ * 评论是**逐条**的东西。留言删除会级联删掉它下面的回复（含别人的），评价删除撤掉
+ * 这条成交证据 —— 弹窗文案按行类型说清楚，不做本地假删除，成功后以服务端重拉为准。
  */
 
-/** 缩略图色块：分类基色取自 mock 的演示色块（由设计令牌派生，不是新增色值） */
+/** 缩略图：真实封面优先，无图（或演示行）退回分类基色块（色值来自 mock 的演示色块，不是新增色值） */
 function blockOf(category: MyComment['category']): string {
-  const set = LISTING_BLOCKS[category]
+  const set = category !== null ? LISTING_BLOCKS[category] : undefined
   return set?.[0] ?? (LISTING_BLOCKS.OTHER as [string, string, string])[0]
 }
+
+/** 三档评分胶囊的文案直接在渲染期取（`ratingChipOf`），这里只给它类型。 */
+type SegmentCounts = { all: number | null; listing: number | null; trade: number | null }
+
+const NO_COUNTS: SegmentCounts = { all: null, listing: null, trade: null }
 
 export default function MyComments() {
   const authStatus = useAuthGuard()
@@ -77,11 +84,35 @@ export default function MyComments() {
    */
   const metrics = useMemo(() => readNavMetrics(), [])
 
-  const [items, setItems] = useState<MyComment[]>([])
-  const [demo, setDemo] = useState(false)
-  const [loading, setLoading] = useState(true)
+  /** 演示构建整页读 fixture（口径见 `features/comments/load`），真实构建走接口。 */
+  const demo = DEMO_COMMENTS_ENABLED
+
+  const [items, setItems] = useState<MyComment[]>(demo ? DEMO_MY_COMMENTS : [])
+  const [loading, setLoading] = useState(!demo)
+  const [error, setError] = useState<string | null>(null)
   const [segment, setSegment] = useState<CommentSegment>('all')
+  /**
+   * 当前段的 ref：`usePullDownRefresh` / 删除回调都是**注册期一次**的闭包或跨帧回调，
+   * 直接读 `segment` 会拿到注册那一刻的旧值（切过段后刷新/删除就打错段）。
+   * 与本页 `authedRef` 同一手法。
+   */
+  const segmentRef = useRef<CommentSegment>('all')
+  segmentRef.current = segment
   const [showTop, setShowTop] = useState(false)
+
+  /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
+  const [cursor, setCursor] = useState<string | null>(null)
+  /**
+   * 续页在飞。**重入守卫必须走 ref**（`loadingMoreRef`）：state 更新要到下一帧才可读，
+   * 两个触底事件落进同一渲染帧时都会读到 `false`、各发一份同 cursor 的请求 ——
+   * 列表翻倍 + key 撞车（与 `pages/listing-detail` 的在飞锁同一教训）。state 只留给渲染。
+   */
+  const loadingMoreRef = useRef(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  /** 服务端三段计数（真实模式）；演示模式用 `countBySegment` 本地现算。 */
+  const [counts, setCounts] = useState<SegmentCounts>(NO_COUNTS)
+  /** 删除在飞行标记（行按钮转圈 / 挡连点）。 */
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   /**
    * 账号作用域：评论是「我发过的」，属于当前登录用户。
@@ -95,41 +126,115 @@ export default function MyComments() {
   if (prevUserId !== userId) {
     setPrevUserId(userId)
     loadEpoch.current += 1
-    setItems([])
-    setDemo(false)
-    setLoading(true)
+    setItems(demo ? DEMO_MY_COMMENTS : [])
+    setLoading(!demo)
+    setError(null)
+    setCursor(null)
+    setCounts(NO_COUNTS)
     setSegment('all')
   }
 
   /**
-   * 取数**只由登录态与身份驱动**（不在 `useLoad` 里抢跑）：冷启动 `authStatus` 还是
-   * `unknown` 时不该按未登录身份读一遍，`unknown → authed` 自然触发首次加载。
+   * 拉一段列表（第 1 页）。取数**只由登录态与身份驱动**（不在 `useLoad` 里抢跑）：
+   * 冷启动 `authStatus` 还是 `unknown` 时不该按未登录身份读一遍。
    *
-   * `silent` = 下拉刷新：系统已经拉出原生指示器，不把列表换成骨架屏（否则用户丢掉阅读位置）。
+   * 代次守卫：返回时若已不是最新一次（换账号 / 又一次刷新 / 已切到别的段），整批丢弃。
+   * `silent` = 下拉刷新：系统已拉出原生指示器，不把列表换成骨架屏（保住阅读位置）。
    */
-  const read = useCallback(async (silent = false) => {
-    // 本次读取的代次：返回时若已不是最新一次，整批结果丢弃（换账号 / 又一次刷新）
+  const read = useCallback(async (target: CommentSegment, silent = false) => {
     const epoch = ++loadEpoch.current
     if (!silent) setLoading(true)
-    const result = await loadMyComments()
-    if (epoch !== loadEpoch.current) return
-    setItems(result.items)
-    setDemo(result.demo)
-    setLoading(false)
+    setError(null)
+    try {
+      const response = await fetchMyComments({ kind: kindOfSegment(target) })
+      if (epoch !== loadEpoch.current) return
+      const nowMs = Date.now()
+      setItems(response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)))
+      setCursor(response.nextCursor)
+      setCounts((prev) => ({ ...prev, [target]: response.total }))
+      setLoading(false)
+    } catch (caught) {
+      if (epoch !== loadEpoch.current) return
+      setError(isApiError(caught) ? caught.message : '网络不太好，评论没读出来')
+      setLoading(false)
+    }
+  }, [])
+
+  /**
+   * 两段总数探测（`limit=1` 只要 `total`）。「全部」的计数 = 留言 + 评价 ——
+   * 这是契约对 `kind=all` 的 `total` 的保证，不是本页自己的算法。
+   * 计数是辅助数字：探测失败就摆没有数字的胶囊，不连累列表（与 profile 计数的 `—` 同口径）。
+   */
+  const probeCounts = useCallback(async () => {
+    try {
+      const [comments, reviews] = await Promise.all([
+        fetchMyComments({ kind: 'comment', limit: 1 }),
+        fetchMyComments({ kind: 'review', limit: 1 }),
+      ])
+      setCounts({
+        all: comments.total + reviews.total,
+        listing: comments.total,
+        trade: reviews.total,
+      })
+    } catch {
+      // 静默：列表自身失败已有错误态，这里只是数字缺失
+    }
   }, [])
 
   useEffect(() => {
+    if (demo) return
     if (authStatus !== 'authed' || userId === null) return
-    void read()
-  }, [authStatus, userId, read])
+    void read('all')
+    void probeCounts()
+    // `demo` 是构建期常量（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`），运行期不变，
+    // 不进依赖数组（Biome 会提示它多余）
+  }, [authStatus, userId, read, probeCounts])
+
+  /** 切段：重置到该段第 1 页。真实模式发请求（代次守卫丢弃在途的旧响应）。 */
+  const pickSegment = (key: CommentSegment) => {
+    if (key === segment) return
+    setSegment(key)
+    if (demo) return
+    void read(key)
+  }
+
+  /** 触底续页：只在「有游标、没在加载、当前没有错误/首次加载」时发。 */
+  const loadMore = async () => {
+    if (demo || loading || error !== null || loadingMoreRef.current || cursor === null) return
+    const epoch = loadEpoch.current
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    try {
+      const response = await fetchMyComments({ kind: kindOfSegment(segmentRef.current), cursor })
+      if (epoch !== loadEpoch.current) return
+      const nowMs = Date.now()
+      setItems((prev) => [
+        ...prev,
+        ...response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)),
+      ])
+      setCursor(response.nextCursor)
+      setCounts((prev) => ({ ...prev, [segmentRef.current]: response.total }))
+    } catch {
+      // 续页失败不打断已有列表，给一句可重试的提示（再触底会自动重发）
+      void Taro.showToast({ title: '加载更多没成功，再往下拉试试', icon: 'none' })
+    } finally {
+      // 无条件复位：切段/刷新/删除/换账号都会推进 loadEpoch 并丢弃这份迟到响应，
+      // 若只在代次相同时复位，一次错位就会让本页实例的触底续页永久失效
+      loadingMoreRef.current = false
+      setLoadingMore(false)
+    }
+  }
+
+  useReachBottom(() => {
+    void loadMore()
+  })
 
   /**
    * 下拉刷新也走同一个登录态门禁。
    *
    * `usePullDownRefresh` 注册在 `if (authStatus !== 'authed') return ...` **之前**
    * （Taro 的 hook 不能写在 early return 之后），所以未登录那一帧里用户仍可能下拉。
-   * 这时读一遍会把结果写进一个正在渲染 `AuthRequired` 的页面实例。刷新本身是幂等的、
-   * 值也一样，但「守卫在跳转、页面却在取数」是不该有的状态，所以显式拦掉 ——
+   * 这时读一遍会把请求发进一个正在渲染 `AuthRequired` 的页面实例，显式拦掉 ——
    * 与 `pages/orders-buy` 用 `authedRef` 拦 `useDidShow` 同一手法（回调闭包会过期，
    * 走 ref 读当前值）。
    */
@@ -137,11 +242,11 @@ export default function MyComments() {
   authedRef.current = authStatus === 'authed'
 
   usePullDownRefresh(() => {
-    if (!authedRef.current) {
+    if (demo || !authedRef.current) {
       void Taro.stopPullDownRefresh()
       return
     }
-    void read(true).then(() => Taro.stopPullDownRefresh())
+    void read(segmentRef.current, true).then(() => Taro.stopPullDownRefresh())
   })
 
   usePageScroll(({ scrollTop }) => setShowTop(scrollTop > BACK_TOP_THRESHOLD))
@@ -150,33 +255,62 @@ export default function MyComments() {
     void Taro.showToast({ title, icon: 'none' })
   }
 
-  const counts = countBySegment(items)
-  const rows = filterBySegment(items, segment)
+  const demoCounts = countBySegment(items)
+  const countOf = (key: CommentSegment): number | null => (demo ? demoCounts[key] : counts[key])
 
   /**
-   * 行上「查看商品 / 查看订单」。
-   *
-   * **跳不了的真实原因不是「演示数据不存在」**：`DEMO_MY_COMMENTS` 里有几条确实指向
-   * fixture 里真实存在的商品与成交（C05 → t-104、C06 → t-106、C01 → 索尼那件）。
-   * 真正的原因是**行模型里没有可跳转的 id** —— `MyComment` 只有评论自己的 `id`，
-   * 没有 `listingId` / `transactionId`（契约也没有「我发过的评论」读模型可参照，
-   * 见 `@/features/comments/mine` 的文件头）。拿不到目标 id 就没法跳，所以给说明 toast，
-   * 不假装跳成功、也不跳到一个猜出来的页面。
-   *
-   * ⚠️ 将来接线时**先给 `MyComment` 补上这两个 id**，再让这里真跳；不要因为看错了
-   * 上面那句老注释（曾写成「演示数据在库里不存在」）而以为只要换成真实数据就能跳。
+   * 行上「查看商品 / 查看订单」。真实行带 `targetId`（留言 = listingId、评价 = transactionId），
+   * 直接跳对应详情页；演示行没有可跳的 id，给说明 toast，不假装跳成功。
    */
   const openRow = (item: MyComment) => {
-    if (!demo) {
-      // 真实构建下这一行还不存在（一条评论都读不到），留一句兜底，避免将来接线时静默无响应
-      toast(`${viewTargetOf(item.kind)}待接入`)
+    if (item.targetId === null) {
+      toast(`演示数据：这条没有${viewTargetOf(item.kind)}的 id，暂不跳转`)
       return
     }
-    toast(`演示数据：这条没有${viewTargetOf(item.kind)}的 id，暂不跳转`)
+    if (item.kind === 'TRADE') {
+      void Taro.navigateTo({ url: `/pkg-trade/pages/transaction-meetup/index?id=${item.targetId}` })
+      return
+    }
+    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${item.targetId}` })
   }
 
-  /** 删除：没有端点，如实说明，不做本地假删除（与真实数据不一致） */
-  const removeRow = () => toast('删除评论功能待接入')
+  /**
+   * 删除：留言走 `DELETE /comments/:id`（会级联删掉它下面的回复），评价走评价边
+   * `DELETE /transactions/:id/review`。二级确认按行类型把后果说清楚；成功后**重拉**
+   * 当前列表与计数 —— 不用响应的 `deleted` 本地减（含级联的他人回复，减了必漂）。
+   */
+  const removeRow = (item: MyComment) => {
+    if (item.deleteRef === null) {
+      toast('演示数据：这条删除不了')
+      return
+    }
+    if (deletingId !== null) return
+    const ref: MyCommentDeleteRef = item.deleteRef
+    void Taro.showModal({
+      title: '删除这条评论？',
+      content:
+        ref.type === 'review'
+          ? '删除后这就是一条不存在的评价，对方订单里也不再显示，不可恢复。'
+          : '删除后它下面的回复也会一并删除，不可恢复。',
+      confirmColor: '#e5484d',
+    })
+      .then(async (result) => {
+        if (!result.confirm) return
+        setDeletingId(item.id)
+        try {
+          if (ref.type === 'review') await deleteMyTransactionReview(ref.transactionId)
+          else await deleteMyComment(ref.commentId)
+          toast('已删除')
+          await read(segmentRef.current)
+          void probeCounts()
+        } catch (caught) {
+          toast(isApiError(caught) ? caught.message : '删除没成功，请重试')
+        } finally {
+          setDeletingId(null)
+        }
+      })
+      .catch(() => {})
+  }
 
   const backToTop = () => {
     void Taro.pageScrollTo({ scrollTop: 0, duration: 300 })
@@ -185,17 +319,32 @@ export default function MyComments() {
   /** 未登录 / 登录态未就绪：守卫在跳转，这里同时**拦住渲染**，避免落地前先画一帧 */
   if (authStatus !== 'authed') return <AuthRequired restoring={authStatus === 'unknown'} />
 
-  const empty = demo ? emptyStateOf(segment) : NO_SOURCE_COPY
+  const rows = demo ? filterBySegment(items, segment) : items
+  const empty = emptyStateOf(segment)
+  const total = countOf(segment)
+  const tailText =
+    loadingMore || loading
+      ? null
+      : cursor === null || demo
+        ? `已显示全部 ${total ?? rows.length} 条`
+        : null
 
   const card = (item: MyComment) => {
     const trade = item.kind === 'TRADE'
-    const stars = starSlots(item.rating)
+    const chip = ratingChipOf(item.rating)
+    const deleting = deletingId === item.id
     return (
       <View key={item.id} className="cmt__item">
         <View className="cmt__row">
           <View className="cmt__thumb">
-            <Image className="cmt__thumb-img" src={blockOf(item.category)} mode="aspectFill" />
-            <Text className="cmt__thumb-tx">{shortCategoryLabel(item.category)}</Text>
+            <Image
+              className="cmt__thumb-img"
+              src={item.coverUrl ?? blockOf(item.category)}
+              mode="aspectFill"
+            />
+            {item.category !== null ? (
+              <Text className="cmt__thumb-tx">{shortCategoryLabel(item.category)}</Text>
+            ) : null}
           </View>
 
           <View className="cmt__main">
@@ -211,35 +360,27 @@ export default function MyComments() {
             <View className="cmt__abtn" onClick={() => openRow(item)}>
               <Text>{trade ? '查看订单' : '查看商品'}</Text>
             </View>
-            <View className="cmt__abtn cmt__abtn--danger" onClick={removeRow}>
-              <Text>删除</Text>
+            <View
+              className={`cmt__abtn cmt__abtn--danger${deleting ? ' is-busy' : ''}`}
+              onClick={() => removeRow(item)}
+            >
+              <Text>{deleting ? '删除中' : '删除'}</Text>
             </View>
           </View>
         </View>
 
-        {/* 卡底信息带：本页与收藏页唯一的差异处（品牌色竖条 + 我写的那句话 + 元信息） */}
+        {/* 卡底信息带：品牌色竖条 + 我写的那句话（可为空）+ 元信息 */}
         <View className="cmt__foot">
           <View className="cmt__bar" />
           <View className="cmt__fmain">
-            <Text className="cmt__ctext">{item.text}</Text>
+            {item.text !== '' ? <Text className="cmt__ctext">{item.text}</Text> : null}
             <View className="cmt__cmeta">
               <Text className={`cmt__kind${trade ? ' cmt__kind--trade' : ''}`}>
                 {kindLabel(item.kind)}
               </Text>
-              {/* @对方与星级**只有交易评价有**：商品留言在契约里没有评分、也没有对方字段 */}
+              {/* @对方与评分**只有交易评价有**：商品留言在契约里没有评分、也没有对方字段 */}
               {item.to ? <Text className="cmt__to num">{`@${item.to}`}</Text> : null}
-              {stars ? (
-                <View className="cmt__stars">
-                  {stars.map((slot) => (
-                    <Image
-                      key={slot.key}
-                      className="cmt__star"
-                      src={slot.filled ? ICONS.starAccent : ICONS.starLine}
-                      mode="aspectFit"
-                    />
-                  ))}
-                </View>
-              ) : null}
+              {chip ? <Text className={`cmt__rate ${chip.cls}`}>{chip.label}</Text> : null}
               <Text className="cmt__time num">{item.timeLabel}</Text>
             </View>
           </View>
@@ -253,15 +394,9 @@ export default function MyComments() {
       <View className="cmt__bg" />
 
       {/*
-        顶栏统一（#386 批次 2，Owner 拍板「跟订单两页一样」）：`components/top-bar` 的
-        glass 变体 —— 返回钮 + 居中双色标题「我的|评论」，内容从玻璃底下滚过；
-        `spacer` 占住主行高度，原先给漂浮导航留的 168px 头衬随之退役（见 scss）。
-        右侧没有页面级动作（删除长在每一行上）。
-
-        标题走**中槽 + 绝对定位到整栏中线**（与 mylist / following 的既有写法同一套）：
-        `title` prop 渲染出的标题紧随返回钮左对齐，而这一版要求屏幕水平居中。组件层
-        已在 PR #388 里补了 `titleAlign="center"`，本批基于 main 时它还没合入 ——
-        #388 合入后把这里与 mylist / following 一起收编成一行 prop。
+        顶栏统一（#386 批次 2）：`components/top-bar` 的 glass 变体 —— 返回钮 + 居中双色
+        标题「我的|评论」，内容从玻璃底下滚过；`spacer` 占住主行高度。右侧没有页面级动作
+        （删除长在每一行上）。分段进 `below` 槽与主行连成同一块玻璃（吸顶，订单两页同款）。
       */}
       <TopBar
         variant="glass"
@@ -281,54 +416,32 @@ export default function MyComments() {
           </View>
         }
         below={
-          /* 分段进 `below` 槽与主行连成同一块玻璃（Owner 2026-10-01 拍板「tab 栏也要
-             吸顶」，订单两页同款）；只按 `demo` 显隐，理由见上面那段说明。 */
-          demo ? (
-            <View className="cmt__segwrap">
-              <View className="cmt__seg">
-                {SEGMENTS.map((seg) => {
-                  const on = seg.key === segment
-                  return (
-                    <View
-                      key={seg.key}
-                      className={`cmt__seg-item${on ? ' is-on' : ''}`}
-                      onClick={() => setSegment(seg.key)}
-                    >
-                      <Text>{seg.label}</Text>
-                      <Text className="cmt__seg-n num">{counts[seg.key]}</Text>
-                    </View>
-                  )
-                })}
-              </View>
+          <View className="cmt__segwrap">
+            <View className="cmt__seg">
+              {SEGMENTS.map((seg) => {
+                const on = seg.key === segment
+                const n = countOf(seg.key)
+                return (
+                  <View
+                    key={seg.key}
+                    className={`cmt__seg-item${on ? ' is-on' : ''}`}
+                    onClick={() => pickSegment(seg.key)}
+                  >
+                    <Text>{seg.label}</Text>
+                    {n !== null ? <Text className="cmt__seg-n num">{n}</Text> : null}
+                  </View>
+                )
+              })}
             </View>
-          ) : undefined
+          </View>
         }
       />
 
       {/*
-        分段胶囊**只在演示构建里有**（`demo`）。
-
-        真实构建下这一页只有一句缺口说明（`NO_SOURCE_COPY`，与 `segment` 无关）、
-        计数也不渲染（见文件头），所以三个胶囊点下去只会换选中态、屏幕上一字不变 ——
-        那是一个「可点却完全无效」的控件，等于在暗示这里能按类型筛。
-
-        ⚠️ 这是**本页自己的**判据，不是「跟同族页面一样」：同一模板下的收藏页在同样
-        没有数据源的情况下是**常驻渲染**分段的（`pages/favorites` 的 `.fav__seg` 没有
-        任何门禁）。两页取舍不同，因为那边的分段切完至少会换一套空态文案、这边不会。
-        别拿这句当先例引用。
-
-        分段胶囊挂在 `top-bar` 的 `below` 槽里（吸顶玻璃的一部分），整体只按 `demo`
-        显隐；真实构建下副行为空、顶栏只剩主行。
-
-        ⚠️ 将来聚合端点落地时**不要照抄 `demo` 这个条件**：那时 `demo` 是 `false`
-        而页面有真数据，分段的显隐该改判「有没有可筛的东西」（即真实结果非空）。
+        分段胶囊在两种构建里都渲染：演示构建本地现算计数，真实构建是**真的**过滤器
+        （切段就是换一个 `kind` 重新请求），不再是 #196 时代「可点却无效」的死控件。
       */}
-      {/*
-        副行占位：`spacer` 只含主行。演示构建多一条分段行（24 上衬 + 88 分段 + 8 下衬
-        = 120px，与 `.cmt__segwrap` 的 padding 逐项对应——改它或分段高度必须同步这里）；
-        真实构建没有分段，只留 24px 呼吸位。
-      */}
-      <View className={demo ? 'cmt__header-gap is-demo' : 'cmt__header-gap'} />
+      <View className="cmt__header-gap is-demo" />
 
       <View className="cmt__body">
         {loading ? (
@@ -346,17 +459,25 @@ export default function MyComments() {
               </View>
             </View>
           ))
+        ) : error !== null ? (
+          /*
+            失败态**不能**用空态冒充：空是「你真的没有发过」，失败是「这次没读到」——
+            混在一起用户会以为自己的评论丢了（与收藏页同一口径）。
+          */
+          <EmptyState
+            title="评论没读出来"
+            text={error}
+            icon={ICONS.box}
+            actionText="重试"
+            onAction={() => void read(segment)}
+          />
         ) : (
           <>
-            {/*
-              演示数据说明带：这一页没有后端，摆的是 fixture —— 界面上必须能认出来。
-              真实构建下不会走到这里（那时 `items` 为空、`demo` 为 false）。
-            */}
             {demo ? (
               <View className="cmt__demo">
                 <Image className="cmt__demo-ic" src={ICONS.info} mode="aspectFit" />
                 <Text className="cmt__demo-tx">
-                  演示数据 · 「我发过的评论」还没有后端接口，下列内容仅供演示，与你的账号无关
+                  演示数据 · 下列内容来自本地演示库，与你的账号无关
                 </Text>
               </View>
             ) : null}
@@ -368,23 +489,24 @@ export default function MyComments() {
                 icon={ICONS.comment}
                 actionText={empty.action}
                 onAction={() => {
-                  // 真实构建只有一个空态（读不到任何评论），按钮是「去逛逛」—— 它就该去逛逛；
-                  // 演示构建的空态是分段的，「看全部评论」才切回「全部」段。
-                  if (!demo || segment === 'all') {
+                  // 「全部」段的空态是「去逛逛」；具体段的空态按钮切回「全部」段
+                  if (segment === 'all') {
                     void Taro.switchTab({ url: '/pages/home/index' })
                     return
                   }
-                  setSegment('all')
+                  pickSegment('all')
                 }}
               />
             ) : (
               <>
                 <View className="cmt__list">{rows.map(card)}</View>
-                <View className="cmt__tail">
-                  <View className="cmt__tail-line" />
-                  <Text className="cmt__tail-tx num">{`已显示全部 ${rows.length} 条`}</Text>
-                  <View className="cmt__tail-line" />
-                </View>
+                {tailText !== null ? (
+                  <View className="cmt__tail">
+                    <View className="cmt__tail-line" />
+                    <Text className="cmt__tail-tx num">{tailText}</Text>
+                    <View className="cmt__tail-line" />
+                  </View>
+                ) : null}
               </>
             )}
           </>
@@ -395,3 +517,5 @@ export default function MyComments() {
     </View>
   )
 }
+
+/* ------------------------------------------------------------ 本页小工具 */
