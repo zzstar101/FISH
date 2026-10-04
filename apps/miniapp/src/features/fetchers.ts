@@ -842,8 +842,15 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * 足迹是 `null` → 页面显示 `—`，收藏 / 关注是服务端真值（演示数字不覆盖真实结果）。
  */
 function demoProfile(): ProfileView {
-  const { wishes, saleCount, completedCount, listings, pendingMeetupSell, pendingMeetupBuy, orderCount } =
-    demoProfileFixtures()
+  const {
+    wishes,
+    saleCount,
+    completedCount,
+    listings,
+    pendingMeetupSell,
+    pendingMeetupBuy,
+    orderCount,
+  } = demoProfileFixtures()
   return {
     user: DEMO_USER,
     stats: {

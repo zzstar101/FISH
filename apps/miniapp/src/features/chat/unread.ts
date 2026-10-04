@@ -50,14 +50,16 @@ const listeners = new Set<() => void>()
 /**
  * 底栏「消息」徽标（#431 任务二：品牌蓝小圆点 → 红色数字胶囊）该显示什么。
  *
- * 规则（与原 `badgeShouldLight` 同一条「不知道」哲学，从亮灭推广到数字）：
- * 1. 任何一项**已知**未读 > 0 → 显示已知分量之和（`99+` 封顶；未知分量按 0 计 ——
- *    已知的未读是事实，先如实显示，不能因为另一项「不知道」就把已知未读藏掉）；
- * 2. 两项都已知且和为 0 → 不显示（`null`）；
- * 3. 和为 0 但有分量「不知道」→ **保持上一帧**，不下「没有未读」的结论。
+ * 规则（Owner 2026-10-04 裁决的口径）：
+ * 1. 两项都**已知** → 显示二者之和；和为 0 不显示（`null`）；`> 99` 显示 `99+`；
+ * 2. 任一项「不知道」（`null`）→ **保持上一帧**，既不下「没有未读」的结论，也**不**
+ *    拿已知那项冒充总数（`上一帧=7 / 会话未读=3 / 通知未读=null` 必须继续显示 `7`；
+ *    显示 `3` 是把用户真实存在的未读说小）；
+ * 3. 上一帧本来就是空的（`null`）且有一项「不知道」→ 退回**已知分量之和**：已知的
+ *    未读是事实，不能因为另一项超时就整场不亮；已知和为 0 时仍不显示。
  *
- * 第 3 条是关键：接口失败 / 列表还没到手时如果按 0 算，一枚本来亮着的徽标会莫名
- * 消失，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
+ * 第 2 条是关键：接口失败 / 列表还没到手时如果按 0 补齐去算精确数，一枚本来亮着的
+ * 徽标会莫名变小甚至消失，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
  * 抽成纯函数是为了它能被单测锁住（底栏组件本身没有渲染测试基建）。
  */
 export function unreadBadgeText(input: {
@@ -66,10 +68,18 @@ export function unreadBadgeText(input: {
   /** 上一帧的徽标文案；不显示时为 `null` */
   previous: string | null
 }): string | null {
-  const knownSum = (input.conversations ?? 0) + (input.notifications ?? 0)
-  if (knownSum > 0) return knownSum > 99 ? '99+' : String(knownSum)
-  const unknown = input.conversations === null || input.notifications === null
-  return unknown ? input.previous : null
+  const { conversations, notifications, previous } = input
+  // 任一分量「不知道」⇒ 总数不是事实，不能按 0 补齐算出精确数（那是把用户的未读说小）
+  if (conversations === null || notifications === null) {
+    if (previous !== null) return previous
+    // 上一帧本来就是隐藏的：退回已知和，免得一项超时就把真实存在的未读整场藏掉
+    const known = (conversations ?? 0) + (notifications ?? 0)
+    if (known <= 0) return null
+    return known > 99 ? '99+' : String(known)
+  }
+  const total = conversations + notifications
+  if (total === 0) return null
+  return total > 99 ? '99+' : String(total)
 }
 
 function subscribe(listener: () => void): () => void {

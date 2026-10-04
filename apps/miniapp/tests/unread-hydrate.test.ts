@@ -156,7 +156,7 @@ describe('未读快照 · 冷启动补数', () => {
 })
 
 describe('未读快照 · 底栏徽标文案（#431 任务二：蓝点 → 数字胶囊）', () => {
-  test('任何一项已知未读 > 0 → 显示已知分量之和（未知分量按 0 计）', () => {
+  test('两项都已知 → 显示二者之和（0 不显示、>99 封顶）', () => {
     expect(unreadBadgeText({ conversations: 1, notifications: 0, previous: null })).toBe('1')
     expect(unreadBadgeText({ conversations: 0, notifications: 3, previous: null })).toBe('3')
     // 会话未知但通知有 2 条已知未读：已知的是事实，先如实显示，不能藏掉
@@ -173,12 +173,25 @@ describe('未读快照 · 底栏徽标文案（#431 任务二：蓝点 → 数�
     expect(unreadBadgeText({ conversations: 0, notifications: 0, previous: '5' })).toBeNull()
   })
 
-  test('有分量「不知道」且没有已知未读 → 保持上一帧，不熄掉已知的徽标', () => {
-    // 这是 `null` 存在的意义：接口失败时按 0 算，会把用户真实存在的未读徽标熄掉
+  test('任一项「不知道」→ 保持上一帧，不用已知那项冒充总数', () => {
+    // 这是 `null` 存在的意义：接口失败时按 0 补齐算精确数，会把用户真实存在的未读说小
+    // （Owner 裁决的用例：上一帧 7 / 会话未读 3 / 通知未读 null ⇒ 必须继续显示 7）
+    expect(unreadBadgeText({ conversations: 3, notifications: null, previous: '7' })).toBe('7')
+    expect(unreadBadgeText({ conversations: null, notifications: 3, previous: '7' })).toBe('7')
     expect(unreadBadgeText({ conversations: null, notifications: 0, previous: '5' })).toBe('5')
     expect(unreadBadgeText({ conversations: 0, notifications: null, previous: '5' })).toBe('5')
     expect(unreadBadgeText({ conversations: null, notifications: null, previous: '5' })).toBe('5')
-    // 上一帧本来就是隐藏的，也不该因为「不知道」而无中生有
+    // 上一帧是 `99+` 时同样保持（不因为拿到一个较小的已知和就降级）
+    expect(unreadBadgeText({ conversations: 120, notifications: null, previous: '99+' })).toBe(
+      '99+',
+    )
+  })
+
+  test('上一帧本来就是隐藏的 → 退回已知分量之和（不能整场不亮）', () => {
+    expect(unreadBadgeText({ conversations: 3, notifications: null, previous: null })).toBe('3')
+    expect(unreadBadgeText({ conversations: null, notifications: 2, previous: null })).toBe('2')
+    // 已知和也是 0（或两项都不知道）→ 仍然不显示，不无中生有
+    expect(unreadBadgeText({ conversations: 0, notifications: null, previous: null })).toBeNull()
     expect(unreadBadgeText({ conversations: null, notifications: null, previous: null })).toBeNull()
   })
 })
