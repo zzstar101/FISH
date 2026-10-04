@@ -1153,10 +1153,14 @@ export default function ListingDetail() {
       if (!mountedRef.current) return
       if (!isLatestLoad(seq, loadSeqRef.current)) return
       const next = page.nextCursor
+      // 游标没前进 = 服务端在重复给同一页（`pkg-browse/pages/mylist/pending.ts:153` 同一判据）：
+      // 这一批就是刚才那批，append 上去只会多出一页重复行 —— 丢掉它、按末页收口，按钮随之下线。
+      if (next === cursor) {
+        setCommentsCursor(null)
+        return
+      }
       setComments((prev) => [...prev, ...page.items.map(dtoToNode)])
-      // 游标没前进 = 服务端在重复给同一页（`pkg-browse/pages/mylist/pending.ts:153`
-      // 同一判据）：再点下去只会把同一页一遍遍叠上来，直接当末页收口、按钮下线。
-      setCommentsCursor(next === cursor ? null : next)
+      setCommentsCursor(next)
     } catch (error) {
       logCommentFailure('更多留言', error)
     } finally {

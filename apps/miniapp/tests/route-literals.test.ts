@@ -38,8 +38,13 @@ import path from 'node:path'
  *   `DYNAMIC_ROUTE_TEMPLATE` 都硬要求前导 `/`。小程序路由不带前导 `/` 本身就是错的，
  *   而且一旦放宽，`path.join('src', 'pages/', name, 'index.tsx')` 这类**磁盘路径**
  *   会被全量误报（旧写法就是这个毛病，第五轮独立审查实测复现过
- *   `src/__probe__/probe.ts → pkg-browse/pages/`）。代价是极少数写成
- *   `'pages/foo/index'` 的拼接逃逸；
+ *   `src/__probe__/probe.ts → pkg-browse/pages/`）。代价是 **`'pages/foo'` /
+ *   `'pages/' + name` 这类不带前导 `/` 的写法逃逸**；注意 `'pages/foo/index'` 不在代价里
+ *   —— `ROUTE_LITERAL` 的前导 `/` 是可选 `\/?`，它照样被当完整路由检查（第六轮独立审查
+ *   实测：命中 1 次，不是逃逸）。
+ * - **模板串开头就是 `${` 的动态写法**（`` `${root}/pages/${page}/index` ``，根变量自带
+ *    `/`）：静态前缀为空，扫不出来。理由不是「路由不带前导 `/`」——小程序路由确实必须带，
+ *   但这里第一个字符是 `${`，静态文本里根本没有可判定的路由形状（磁盘路径也是这个形状）；
  * - **其它测试文件里的路由样本/反例**：这类文件必须整文件登记豁免
  *   （`ROUTE_SCAN_OPT_OUT` + 文件内的 `// route-guard: skip-file` 标记，两侧都要写）。
  *   注意豁免是**整文件**的：登记后四个扫描器（字面量 / 动态模板 / 拼接根 / 缺 index）
@@ -209,11 +214,14 @@ const ROUTE_LITERAL =
  * （没有拼接）。页面名字符集放宽到 `[A-Za-z0-9_-]`：`listingDetail` / `listing_detail`
  * 这种 typo 也必须被看见（旧写法 `[a-z0-9-]+` 直接当「不是路由」忽略）。
  *
- * 前导 `/` 或 `pkg-` 前缀二选一是刻意的：`'src/pages/foo'` 这类**磁盘路径**不该命中
- * （`path.join('src', 'pages/', name)` 也不再命中）。
+ * **前导 `/` 是硬要求**：`'src/pages/foo'`、`path.join('src', 'pkg-browse/pages/listing-detail',
+ * 'index.tsx')` 这类**磁盘路径字面量**不该命中 —— 第六轮独立审查实测，缺了这条约束时
+ * 不带前导 `/` 的 `pkg-<root>/pages/<page>` 分支会把磁盘路径误报成「缺 `/index` 的路由」。
+ * 代价是不带前导 `/` 的裸路由（`'pkg-browse/pages/foo'`）逃逸，与 `CONCAT_ROUTE_ROOT`
+ * 同一取舍，已登记在上面的盲区清单里。
  */
 const ROUTE_LITERAL_NO_INDEX =
-  /(['"`])((?:\/(?:pkg-[a-z]+\/)?pages|pkg-[a-z]+\/pages)\/[A-Za-z0-9_-]+)([?#][^'"`\n]*)?\1/g
+  /(['"`])((?:\/(?:pkg-[a-z]+\/)?pages)\/[A-Za-z0-9_-]+)([?#][^'"`\n]*)?\1/g
 
 /** 允许「看着像路由但缺 `/index`」的字面量（当前为空，见 `ROUTE_LITERAL_NO_INDEX`）。 */
 const ROUTE_LITERALS_WITHOUT_INDEX: string[] = []
@@ -612,6 +620,15 @@ describe('路由字面量守卫（分包后）', () => {
     // biome-ignore lint/suspicious/noTemplateCurlyInString: 样本要的是字面量 ${...} 文本
     const diskTemplate = '`src/${root}/pages/${page}/index.tsx`'
     expect([...diskTemplate.matchAll(DYNAMIC_ROUTE_TEMPLATE)].length).toBe(0)
+    // 第六轮审查 F-1：缺 `/index` 的扫描器同样只认带前导 `/` 的字面量，
+    // 否则 `path.join('src', 'pkg-browse/pages/listing-detail', 'index.tsx')` 这种
+    // 磁盘路径会被误报成「少了 /index 的路由」。
+    const diskNoIndex = "path.join('src', 'pkg-browse/pages/listing-detail', 'index.tsx')"
+    expect([...diskNoIndex.matchAll(ROUTE_LITERAL_NO_INDEX)].length).toBe(0)
+    // 对照：真·裸路由（带前导 `/`）仍然被看见 —— 收窄不能把功能一起收掉
+    expect([..."'/pkg-browse/pages/listing-detail'".matchAll(ROUTE_LITERAL_NO_INDEX)].length).toBe(
+      1,
+    )
   })
 
   test('扫描器自检：尾斜杠与拆两段写的路由既被看见、又不被误判（第四轮审查 F4/FP1）', () => {
