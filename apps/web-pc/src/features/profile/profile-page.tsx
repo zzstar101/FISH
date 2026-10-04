@@ -27,6 +27,7 @@ import { useViewHistoryTotal } from '../view-history/queries'
 import { historyCountLabel } from '../view-history/view'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
+import { signatureFirstLine } from './signature'
 
 export function ProfilePage() {
   const { me } = useAuth()
@@ -102,9 +103,11 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
                 <ChevronRight className="size-3.5 text-ink-3" />
               </Link>
             </div>
-            {/* 个性签名（#179）：空就不渲染，不留死占位。 */}
+            {/* 个性签名（#179）：空就不渲染，不留死占位；展示取首行，与小程序口径一致。 */}
             {user.signature ? (
-              <p className="mt-2 line-clamp-2 text-ink-2 text-sm">{user.signature}</p>
+              <p className="mt-2 line-clamp-2 text-ink-2 text-sm">
+                {signatureFirstLine(user.signature)}
+              </p>
             ) : null}
             <p className="mt-2 text-ink-3 text-sm">
               {user.phoneBound ? `手机号 ${user.maskedPhone ?? '已绑定'}` : '未绑定手机号'}

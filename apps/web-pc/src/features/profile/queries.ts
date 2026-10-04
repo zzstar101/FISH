@@ -1,6 +1,9 @@
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import type { ListingId } from '@fish/contracts/system/public-id'
-import type { TransactionReviewCreateInput } from '@fish/contracts/transaction-reviews/schema'
+import type {
+  TransactionReview,
+  TransactionReviewCreateInput,
+} from '@fish/contracts/transaction-reviews/schema'
 import type { QueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
@@ -244,9 +247,21 @@ export function useMyReview(ownerId: string, transactionId: string) {
 export type CreateReviewVariables = { transactionId: string; input: TransactionReviewCreateInput }
 
 /**
- * 写评价。成功后**写边缓存**（卡片立即翻已评态、不再依赖 refetch），
- * 并失效「我的评论」评价段 —— 新评价必须立刻出现在 /comments 列表里。
+ * 写评价成功后的缓存接线（抽成可独立驱动的接缝，手法同 verify 域的 applyVerificationResult）：
+ * 写边缓存让卡片立即翻已评态、不再依赖 refetch；失效「我的评论」评价段，
+ * 新评价必须立刻出现在 /comments 列表里。
  */
+export function applyReviewCreated(
+  queryClient: QueryClient,
+  ownerId: string,
+  transactionId: string,
+  review: TransactionReview,
+): void {
+  queryClient.setQueryData(profileKeys.review(ownerId, transactionId), review)
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'my-comments'] })
+}
+
+/** 写评价。**不可修改、不可重评** —— 重复提交由 409 在 api 层翻译，这里只管成功接线。 */
 export function useCreateReview(ownerId: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -255,8 +270,7 @@ export function useCreateReview(ownerId: string) {
     onMutate: captureSession,
     onSuccess: (review, variables, context) => {
       if (!isSessionCurrent(context)) return
-      queryClient.setQueryData(profileKeys.review(ownerId, variables.transactionId), review)
-      void queryClient.invalidateQueries({ queryKey: ['pc', 'my-comments'] })
+      applyReviewCreated(queryClient, ownerId, variables.transactionId, review)
     },
   })
 }

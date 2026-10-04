@@ -28,3 +28,11 @@ export function prepareSignatureInput(
   }
   return { status: 'ok', value: next }
 }
+
+/**
+ * 展示口径：**取首行**。契约允许换行存原文，小程序按 `signatureFirstLine` 只展示首行，
+ * PC 与它对齐 —— HTML 里直接渲染原文会把换行折叠成连排文字，两端看到的不是同一句话。
+ */
+export function signatureFirstLine(signature: string): string {
+  return signature.split('\n')[0] ?? ''
+}

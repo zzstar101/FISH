@@ -17,11 +17,13 @@ function renderView(overrides: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
     createElement(OrderReviewCardView, {
       loading: false,
+      error: false,
       review: null,
       submitting: false,
       errorMessage: null,
       dialogOpen: false,
       onDialogOpenChange: () => undefined,
+      onRetry: () => undefined,
       onSubmit: () => undefined,
       ...overrides,
     }),
@@ -31,6 +33,7 @@ function renderView(overrides: Record<string, unknown> = {}): string {
 function renderForm(overrides: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
     createElement(ReviewForm, {
+      errorMessage: null,
       onCancel: () => undefined,
       onSubmit: () => undefined,
       submitting: false,
@@ -43,6 +46,13 @@ describe('OrderReviewCardView 状态分支', () => {
   test('读取中给加载文案，不给写入口', () => {
     const html = renderView({ loading: true })
     expect(html).toContain('正在读取评价状态')
+    expect(html).not.toContain('写评价')
+  })
+
+  test('评价边读失败：状态未知 ≠ 没评过，给重试而不给写入口', () => {
+    const html = renderView({ error: true })
+    expect(html).toContain('评价状态读取失败')
+    expect(html).toContain('重试')
     expect(html).not.toContain('写评价')
   })
 
@@ -85,5 +95,11 @@ describe('ReviewForm', () => {
   test('提交中禁用两颗按钮', () => {
     const html = renderForm({ submitting: true })
     expect(html).toContain('正在提交…')
+  })
+
+  test('提交失败的文案渲染在弹窗内（模态遮罩外卡片上的 alert 用户看不见）', () => {
+    const html = renderForm({ errorMessage: '评语包含违规内容' })
+    expect(html).toContain('评语包含违规内容')
+    expect(html).toContain('role="alert"')
   })
 })

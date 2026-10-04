@@ -11,6 +11,7 @@ import { useAuth } from '../auth/auth-provider'
 import { FollowButtonView, followButtonState } from '../follows/follow-button'
 import { useFollowMutation, useFollowState, useUnfollowMutation } from '../follows/queries'
 import { PcListingCard } from '../listings/listing-card'
+import { signatureFirstLine } from '../profile/signature'
 import { usePublicProfile, useUserActiveListings } from './queries'
 import { isUserNotFound, profileStats } from './view'
 
@@ -85,9 +86,11 @@ export function UserProfilePage({ userId }: { userId: string }) {
                 <Badge variant="secondary">未认证</Badge>
               )}
             </div>
-            {/* 个性签名（#179 的公开投影）：空就不渲染，不留死占位。 */}
+            {/* 个性签名（#179 的公开投影）：空就不渲染；展示取首行，与小程序口径一致。 */}
             {user.signature ? (
-              <p className="mt-2 line-clamp-2 text-ink-2 text-sm">{user.signature}</p>
+              <p className="mt-2 line-clamp-2 text-ink-2 text-sm">
+                {signatureFirstLine(user.signature)}
+              </p>
             ) : null}
             {/* 契约的公开 DTO 九个字段（含 #179 的 signature），这里只出统计三样，不补编造指标。 */}
             <dl className="mt-4 flex gap-8">

@@ -25,11 +25,14 @@ import { useCreateReview, useMyReview } from './queries'
 
 export type OrderReviewCardViewProps = {
   loading: boolean
+  /** 评价边读失败（非 404，如 5xx/网络）：状态未知 ≠ 没评过，给重试而不是写入口。 */
+  error: boolean
   review: TransactionReview | null
   submitting: boolean
   errorMessage: string | null
   dialogOpen: boolean
   onDialogOpenChange: (open: boolean) => void
+  onRetry: () => void
   onSubmit: (input: TransactionReviewCreateInput) => void
 }
 
@@ -37,8 +40,12 @@ export type OrderReviewCardViewProps = {
  * 订单详情的「交易评价」卡（仅 COMPLETED 交易挂载，#445）。
  *
  * 防重复的**第一道闸是读边**：`GET /transactions/:id/review` 拿到已有评价就只读展示，
- * 不再给「写评价」入口；并发下的第二道闸是 POST 的 409 `TRANSACTION_REVIEW_EXISTS`
- * （容器层翻成 alreadyReviewed 后关弹窗、重读边）。评价不可修改，所以已评态没有编辑入口。
+ * 不再给「写评价」入口；读失败则状态未知，同样不给入口（不能把「不知道」渲染成「没评过」）。
+ * 并发下的第二道闸是 POST 的 409 `TRANSACTION_REVIEW_EXISTS`（容器层翻成 alreadyReviewed
+ * 后关弹窗、重读边）。评价不可修改，所以已评态没有编辑入口。
+ *
+ * 提交失败的文案**同时渲染在弹窗内**：radix 弹窗是模态遮罩，只写卡片体内的话
+ * 敏感词 422 这类弹窗保持打开的失败用户根本看不见。
  */
 export function OrderReviewCardView(props: OrderReviewCardViewProps) {
   return (
@@ -50,6 +57,13 @@ export function OrderReviewCardView(props: OrderReviewCardViewProps) {
 
       {props.loading ? (
         <p className="mt-4 text-ink-3 text-sm">正在读取评价状态…</p>
+      ) : props.error ? (
+        <div className="mt-4">
+          <p className="text-ink-3 text-sm">评价状态读取失败，暂时无法评价。</p>
+          <Button className="mt-3 w-full" onClick={props.onRetry} variant="outline">
+            重试
+          </Button>
+        </div>
       ) : props.review !== null ? (
         <div className="mt-4">
           <div className="flex items-center gap-2">
@@ -93,6 +107,7 @@ export function OrderReviewCardView(props: OrderReviewCardViewProps) {
             <DialogDescription>三档评分加可选评语；提交后不可修改。</DialogDescription>
           </DialogHeader>
           <ReviewForm
+            errorMessage={props.errorMessage}
             onCancel={() => props.onDialogOpenChange(false)}
             onSubmit={props.onSubmit}
             submitting={props.submitting}
@@ -108,10 +123,12 @@ export function OrderReviewCardView(props: OrderReviewCardViewProps) {
  * 评语 trim 后为空 = 只打分不写字（契约允许，落库为 null）。
  */
 export function ReviewForm({
+  errorMessage,
   onCancel,
   onSubmit,
   submitting,
 }: {
+  errorMessage: string | null
   onCancel: () => void
   onSubmit: (input: TransactionReviewCreateInput) => void
   submitting: boolean
@@ -161,6 +178,12 @@ export function ReviewForm({
         <p className="mt-2 text-ink-3 text-xs">最多 200 字；留空就是只打分不写字。</p>
       </div>
 
+      {errorMessage !== null ? (
+        <p className="rounded-xl bg-danger-soft px-3 py-2 text-danger text-sm" role="alert">
+          {errorMessage}
+        </p>
+      ) : null}
+
       <DialogFooter>
         <Button disabled={submitting} onClick={onCancel} type="button" variant="outline">
           取消
@@ -189,6 +212,12 @@ export function OrderReviewCard({
   const [dialogOpen, setDialogOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
+  /** 关弹窗（取消或提交成功）同时清错误残留，别让上一次的失败挂在卡片上。 */
+  function handleDialogOpenChange(open: boolean) {
+    setDialogOpen(open)
+    if (!open) setErrorMessage(null)
+  }
+
   async function handleSubmit(input: TransactionReviewCreateInput) {
     setErrorMessage(null)
     try {
@@ -208,9 +237,11 @@ export function OrderReviewCard({
   return (
     <OrderReviewCardView
       dialogOpen={dialogOpen}
+      error={review.isError}
       errorMessage={errorMessage}
       loading={review.isPending}
-      onDialogOpenChange={setDialogOpen}
+      onDialogOpenChange={handleDialogOpenChange}
+      onRetry={() => void review.refetch()}
       onSubmit={(input) => void handleSubmit(input)}
       review={review.data ?? null}
       submitting={createReview.isPending}
