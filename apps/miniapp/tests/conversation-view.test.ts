@@ -40,7 +40,7 @@ import {
   sortMessages,
   startMediaRetry,
   systemPillText,
-} from '../src/pages/conversation/view'
+} from '../src/pkg-social/pages/conversation/view'
 
 /**
  * 会话页（#89：历史 / 发送 / 已读接真实接口）的展示逻辑。

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { MessageDto } from '@fish/contracts/chat/schema'
-import { isLatestPageLoad, mergeRefreshedMessages } from '../src/pages/conversation/view'
+import { isLatestPageLoad, mergeRefreshedMessages } from '../src/pkg-social/pages/conversation/view'
 
 /**
  * 会话页两处竞态的回归（#186 审查要求：修复前必须失败、修复后必须通过）。

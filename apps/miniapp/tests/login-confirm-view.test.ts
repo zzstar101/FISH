@@ -4,7 +4,7 @@ import {
   DEMO_LOGIN_TICKET,
   parseLoginLaunch,
   resolveLoginLaunch,
-} from '../src/pages/login-confirm/view'
+} from '../src/pkg-auth/pages/login-confirm/view'
 
 /**
  * 扫码登录确认页的启动参数解析。

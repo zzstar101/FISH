@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'bun:test'
 
 async function source(): Promise<string> {
-  return Bun.file(new URL('../src/pages/following/index.tsx', import.meta.url)).text()
+  return Bun.file(new URL('../src/pkg-browse/pages/following/index.tsx', import.meta.url)).text()
 }
 
 /** 取 `start` 到其后第一次出现的 `end`（含 `end`）之间的片段 */

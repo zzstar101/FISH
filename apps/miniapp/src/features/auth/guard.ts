@@ -15,7 +15,7 @@ import Taro from '@tarojs/taro'
 import { useEffect } from 'react'
 import { type AuthStatus, bootstrapAuth, useAuth } from './store'
 
-const LOGIN_PAGE = '/pages/login/index'
+const LOGIN_PAGE = '/pkg-auth/pages/login/index'
 
 /** 页面在 TabBar 上时必须用 `navigateTo`（见文件头第 2 条） */
 type GuardOptions = {

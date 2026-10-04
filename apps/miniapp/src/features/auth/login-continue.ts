@@ -13,7 +13,7 @@
  */
 import { routeParam } from '@/lib/route-param'
 
-const LOGIN_CONFIRM_ROUTE = 'pages/login-confirm/index'
+const LOGIN_CONFIRM_ROUTE = 'pkg-auth/pages/login-confirm/index'
 
 export function confirmBackTicket(
   back: string | undefined,

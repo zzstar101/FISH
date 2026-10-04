@@ -3,7 +3,7 @@ import {
   FEEDBACK_TYPE_KEYS,
   isFeedbackTypeKey,
   parseFeedbackDraft,
-} from '../src/pages/feedback/draft'
+} from '../src/pkg-legal/pages/feedback/draft'
 
 /**
  * 意见反馈本机暂存的解析。

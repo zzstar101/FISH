@@ -24,9 +24,10 @@ import {
   useFeedImpressions,
 } from '@/features/recommendation/use-impressions'
 import { startVisualSearch } from '@/features/visual-search/start'
+import { HOME_CATEGORIES } from '@/lib/listing-labels'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import { HOME_CATEGORIES, type ListingCategory, type MockListing } from '@/mock/api'
+import type { ListingCategory, MockListing } from '@/mock/types'
 import { applyLoadResult, homeListState } from './list-state'
 import { CATEGORY_SCROLL_DURATION, NAV_SETTLE_MS, resolveCategorySettle } from './nav-settle'
 import './index.scss'
@@ -244,7 +245,7 @@ export default function Home() {
   const listState = homeListState({ loadedFor, category, failed, itemCount: visibleCount })
 
   const goSearch = () => {
-    void Taro.navigateTo({ url: '/pages/search/index' })
+    void Taro.navigateTo({ url: '/pkg-browse/pages/search/index' })
   }
 
   /** 识图（相机热区）的上传在途：防连点（原生取图面板是模态的，上传腿不是），与搜索页同一个口径 */

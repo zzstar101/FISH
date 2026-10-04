@@ -11,10 +11,10 @@
 export type ScanTabKey = 'scan' | 'vision' | 'code'
 
 /** 扫一扫页（通用二维码）；交易码页见 `pages/scan-pr`；识图页见 `pages/scan-vision`。 */
-export const SCAN_QR_PAGE = '/pages/scan/index'
-export const SCAN_CODE_PAGE = '/pages/scan-pr/index'
+export const SCAN_QR_PAGE = '/pkg-vision/pages/scan/index'
+export const SCAN_CODE_PAGE = '/pkg-vision/pages/scan-pr/index'
 /** 识图（拍照找同款）：入口页只做取图 + 上传查询图，结果由搜索页渲染。 */
-export const SCAN_VISION_PAGE = '/pages/scan-vision/index'
+export const SCAN_VISION_PAGE = '/pkg-vision/pages/scan-vision/index'
 
 export type ScanTabAction = { kind: 'redirect'; url: string } | { kind: 'toast'; title: string }
 

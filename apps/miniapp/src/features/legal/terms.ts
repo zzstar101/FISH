@@ -992,12 +992,12 @@ export const TERMS_DOC: LegalDoc = {
     {
       icon: 'safeAccent',
       label: '《隐私政策》',
-      page: '/pages/privacy/index',
+      page: '/pkg-legal/pages/privacy/index',
     },
     {
       icon: 'docInk',
       label: '意见反馈',
-      page: '/pages/feedback/index',
+      page: '/pkg-legal/pages/feedback/index',
     },
   ],
   agree: {

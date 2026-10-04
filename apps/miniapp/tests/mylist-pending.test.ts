@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MessageDto } from '@fish/contracts/chat/schema'
-import { lastTxSignalOf, loadPendingIndex } from '../src/pages/mylist/pending'
+import { lastTxSignalOf, loadPendingIndex } from '../src/pkg-browse/pages/mylist/pending'
 
 /**
  * 「我的发布 · 待确认」的推导：谁在等我点头。

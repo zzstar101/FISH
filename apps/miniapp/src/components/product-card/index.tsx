@@ -23,8 +23,9 @@ import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { buildListingDetailUrl, type FeedAttribution } from '@/features/recommendation/attribution'
 import { hideListing, readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
+import { conditionLabel } from '@/lib/listing-labels'
+import { formatAmount } from '@/lib/money'
 import { isApiError } from '@/lib/request'
-import { conditionLabel, formatAmount } from '@/mock/api'
 import type { MockListing, MockUser } from '@/mock/types'
 import './index.scss'
 
@@ -144,7 +145,7 @@ export default function ProductCard({
   const handleOpenSeller = (event: { stopPropagation: () => void }) => {
     event.stopPropagation()
     if (!seller) return
-    void Taro.navigateTo({ url: `/pages/user/index?id=${seller.id}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/user/index?id=${seller.id}` })
   }
 
   /**
@@ -245,7 +246,7 @@ export default function ProductCard({
       onLongPress={() => void handleLongPress()}
     >
       <View className="pcard__ph" style={{ height: `${imageHeight}rpx` }}>
-        <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" />
+        <Image className="pcard__img" src={listing.coverUrl} mode="aspectFill" lazyLoad />
         {listing.badge ? <Text className="pcard__badge">{listing.badge}</Text> : null}
       </View>
 

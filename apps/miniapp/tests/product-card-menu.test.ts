@@ -21,15 +21,19 @@ async function homeSource(): Promise<string> {
 }
 
 async function searchSource(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/search/index.tsx', import.meta.url)).text()
+  return await Bun.file(new URL('../src/pkg-browse/pages/search/index.tsx', import.meta.url)).text()
 }
 
 async function detailSource(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/listing-detail/index.tsx', import.meta.url)).text()
+  return await Bun.file(
+    new URL('../src/pkg-browse/pages/listing-detail/index.tsx', import.meta.url),
+  ).text()
 }
 
 async function favoritesListSource(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/favorites/list.ts', import.meta.url)).text()
+  return await Bun.file(
+    new URL('../src/pkg-browse/pages/favorites/list.ts', import.meta.url),
+  ).text()
 }
 
 /** 去掉注释后的源码：断言必须看**代码** */

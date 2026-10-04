@@ -98,7 +98,7 @@ function runClass(run: Run): string | undefined {
 }
 
 /** 法务文档之间互链的两个目标；只有它们需要继承「从登录流程进入」这个来源 */
-const LEGAL_PAGES = new Set(['/pages/terms/index', '/pages/privacy/index'])
+const LEGAL_PAGES = new Set(['/pkg-legal/pages/terms/index', '/pkg-legal/pages/privacy/index'])
 
 /**
  * 页脚互链的落点。

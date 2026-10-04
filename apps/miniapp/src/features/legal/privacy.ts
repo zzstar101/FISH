@@ -1760,12 +1760,12 @@ export const PRIVACY_DOC: LegalDoc = {
     {
       icon: 'docInk',
       label: '《用户协议》',
-      page: '/pages/terms/index',
+      page: '/pkg-legal/pages/terms/index',
     },
     {
       icon: 'editAccent',
       label: '意见反馈',
-      page: '/pages/feedback/index',
+      page: '/pkg-legal/pages/feedback/index',
     },
   ],
   agree: {

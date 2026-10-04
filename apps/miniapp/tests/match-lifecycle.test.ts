@@ -7,7 +7,7 @@ import {
   ownerChanged,
   shouldReleaseChatTask,
   shouldReloadOnShow,
-} from '../src/pages/match/view'
+} from '../src/pkg-browse/pages/match/view'
 
 /**
  * match 页 owner/epoch 交错的回归（#170 A/B/C/D 的判据层）。

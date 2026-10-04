@@ -1,45 +1,77 @@
 export default defineAppConfig({
+  // 主包只保留 5 个 tab 页（微信不允许 tab 页进分包），其余页面按业务域拆进 6 个分包。
+  // 分包根目录 = `src/pkg-<group>/`，页面在 `src/pkg-<group>/pages/<page>/`。
   pages: [
     'pages/home/index',
     'pages/wish/index',
-    'pages/wish-publish/index',
     'pages/sell/index',
     'pages/chat/index',
     'pages/profile/index',
-    'pages/profile-edit/index',
-    'pages/search/index',
-    'pages/listing-detail/index',
-    'pages/conversation/index',
-    'pages/send-listing/index',
-    'pages/orders-buy/index',
-    'pages/orders-sell/index',
-    'pages/transaction-meetup/index',
-    'pages/login/index',
-    'pages/login-confirm/index',
-    'pages/settings/index',
-    'pages/verify/index',
-    'pages/user/index',
-    'pages/match/index',
-    'pages/mylist/index',
-    'pages/watchers/index',
-    'pages/comments/index',
-    'pages/favorites/index',
-    'pages/scan/index',
-    'pages/scan-pr/index',
-    'pages/scan-vision/index',
-    'pages/vision-result/index',
-    'pages/following/index',
-    'pages/history/index',
-    'pages/report-listing/index',
-    'pages/report-user/index',
-    'pages/my-reports/index',
-    // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）：
-    // 关于与版本 / 用户协议 / 隐私政策 / 意见反馈 —— 一批一起落，入口在
-    // 「我的 → 帮助与设置」与设置页「关于」组，另由登录页协议勾选行带 `?from=login` 进入
-    'pages/about/index',
-    'pages/terms/index',
-    'pages/privacy/index',
-    'pages/feedback/index',
+  ],
+  lazyCodeLoading: 'requiredComponents',
+  subPackages: [
+    {
+      root: 'pkg-browse',
+      pages: [
+        'pages/listing-detail/index',
+        'pages/mylist/index',
+        'pages/match/index',
+        'pages/watchers/index',
+        'pages/comments/index',
+        'pages/favorites/index',
+        'pages/history/index',
+        'pages/search/index',
+        'pages/user/index',
+        'pages/following/index',
+      ],
+    },
+    {
+      root: 'pkg-trade',
+      pages: [
+        'pages/transaction-meetup/index',
+        'pages/report-listing/index',
+        'pages/report-user/index',
+        'pages/my-reports/index',
+        'pages/send-listing/index',
+        'pages/orders-buy/index',
+        'pages/orders-sell/index',
+      ],
+    },
+    {
+      // 静态法务与帮助页（未定内容页面，实际内容由 zzstar 决策）：
+      // 关于与版本 / 用户协议 / 隐私政策 / 意见反馈 —— 一批一起落，入口在
+      // 「我的 → 帮助与设置」与设置页「关于」组，另由登录页协议勾选行带 `?from=login` 进入
+      root: 'pkg-legal',
+      pages: [
+        'pages/privacy/index',
+        'pages/terms/index',
+        'pages/feedback/index',
+        'pages/about/index',
+      ],
+    },
+    {
+      root: 'pkg-social',
+      pages: ['pages/conversation/index', 'pages/wish-publish/index'],
+    },
+    {
+      root: 'pkg-auth',
+      pages: [
+        'pages/verify/index',
+        'pages/settings/index',
+        'pages/profile-edit/index',
+        'pages/login-confirm/index',
+        'pages/login/index',
+      ],
+    },
+    {
+      root: 'pkg-vision',
+      pages: [
+        'pages/vision-result/index',
+        'pages/scan-vision/index',
+        'pages/scan-pr/index',
+        'pages/scan/index',
+      ],
+    },
   ],
   window: {
     backgroundTextStyle: 'light',

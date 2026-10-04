@@ -21,9 +21,15 @@ import { describe, expect, test } from 'bun:test'
  * 断言切到**具体页面文件的这一行**，不查整份文件（整份文件的子串命中挡不住值被换回去）。
  */
 
-/** 取页面源码 */
+/**
+ * 取页面源码。
+ *
+ * Tab 页传 `<page>/…`（在主包 `src/pages/` 下）；分包页传 `pkg-<group>/pages/<page>/…`
+ * （`src/<root>/` 下，root 见 `app.config.ts` 的 `subPackages`）。
+ */
 async function pageSource(file: string): Promise<string> {
-  return await Bun.file(new URL(`../src/pages/${file}`, import.meta.url)).text()
+  const base = file.startsWith('pkg-') ? '../src/' : '../src/pages/'
+  return await Bun.file(new URL(`${base}${file}`, import.meta.url)).text()
 }
 
 /** 取页面里 `<BackTop ...>` 开标签的源码 */
@@ -152,15 +158,17 @@ describe('回顶钮 bottom：mylist 按本页 FAB 定位', () => {
       'pages/chat/index',
       'pages/profile/index',
     ])
-    expect(paths).not.toContain('pages/mylist/index')
+    expect(paths).not.toContain('pkg-browse/pages/mylist/index')
   })
 
   test('避让的是本页 `.ml__fab`：fab 距底 + fab 高 + 40rpx 缝', async () => {
-    const style = await Bun.file(new URL('../src/pages/mylist/index.scss', import.meta.url)).text()
+    const style = await Bun.file(
+      new URL('../src/pkg-browse/pages/mylist/index.scss', import.meta.url),
+    ).text()
     const fab = ruleBody(style, '.ml__fab')
     // 稿 `.totop` 的缝是 `var(--fab-b) + var(--fab-h) + 20px`，按本仓「pt × 2」= 40px
     const expected = px(fab, 'bottom') + px(fab, 'height') + 40
-    expect(await backTopBottom('mylist/index.tsx')).toBe(expected)
+    expect(await backTopBottom('pkg-browse/pages/mylist/index.tsx')).toBe(expected)
     // 底栏顶边（154）与本页无关：套过去会把按钮压到发布钮上
     const bar = await tabBarGeometry()
     expect(expected).not.toBe(Math.round(bar.bottom + bar.height + TAB_GAP))

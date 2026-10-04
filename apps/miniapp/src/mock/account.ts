@@ -16,7 +16,6 @@ import { AVATARS } from './images'
 import type {
   MockMeetupCode,
   MockMyListing,
-  MockSettings,
   MockTransaction,
   MockUserProfile,
   MockWatcher,
@@ -482,20 +481,9 @@ export function isEduEmail(email: string): boolean {
 
 /* ------------------------------------------------------------ 设置（B4） */
 
-export const SETTINGS: MockSettings = {
-  theme: 'system',
-  notifyChat: true,
-  notifyWish: true,
-  notifyDeal: true,
-  notifyNews: false,
-  commentPolicy: '已认证用户',
-}
-
-export const THEME_OPTIONS: { key: MockSettings['theme']; label: string; desc: string }[] = [
-  { key: 'system', label: '跟随系统', desc: '随手机「深色模式」设置自动切换' },
-  { key: 'light', label: '亮色', desc: '始终使用冰蓝亮色主题' },
-  { key: 'dark', label: '暗色', desc: '始终使用深色主题，夜间浏览更省电' },
-]
-
-export const APP_VERSION = '1.4.0'
-export const APP_BUILD = '20260916'
+// 版本元信息已挪到 `@/lib/app-meta`（真实常量，不是演示数据；「关于」页与设置页
+// 不该为了两个字符串静态 import 整包 fixture）。这里 re-export 保持既有路径。
+export { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
+// 设置默认值与主题选项已挪到 `@/lib/settings-defaults`（页面运行期常量，不是演示
+// 数据；设置页不该为了它们静态 import 整包 fixture）。这里 re-export 保持既有路径。
+export { SETTINGS, THEME_OPTIONS } from '@/lib/settings-defaults'

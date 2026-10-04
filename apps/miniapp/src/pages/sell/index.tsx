@@ -18,9 +18,9 @@ import { createListing, fetchListingDetail, updateListing } from '@/features/lis
 import { type SellDraft, takeSellHandoff } from '@/features/listing/edit-target'
 import { pickPhotos, uploadListingImage } from '@/features/upload/api'
 import { cancellable } from '@/lib/cancellable'
+import { categoryLabel } from '@/lib/listing-labels'
 import { isApiError } from '@/lib/request'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import { categoryLabel } from '@/mock/api'
 import { productImage } from '@/mock/images'
 import {
   parsePriceToCents,
@@ -440,7 +440,7 @@ export default function Sell() {
    */
   const goDetail = (id: string) => {
     resetForm()
-    void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${id}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${id}` })
   }
 
   /**
@@ -861,7 +861,7 @@ export default function Sell() {
             <View
               className="sell__submit"
               onClick={() => {
-                void Taro.navigateTo({ url: '/pages/mylist/index' })
+                void Taro.navigateTo({ url: '/pkg-browse/pages/mylist/index' })
               }}
             >
               <Text className="sell__submit-text">去「我的发布」看看</Text>

@@ -37,39 +37,39 @@ const HEIGHT = Number(args.get('height') ?? 812)
 const ROUTES = [
   '/pages/home/index',
   '/pages/wish/index',
-  '/pages/wish-publish/index',
-  '/pages/match/index',
+  '/pkg-social/pages/wish-publish/index',
+  '/pkg-browse/pages/match/index',
   '/pages/sell/index',
   '/pages/chat/index',
   '/pages/profile/index',
-  '/pages/search/index',
-  '/pages/search/index?q=键盘',
-  '/pages/listing-detail/index?id=l-001',
-  '/pages/listing-detail/index?id=l-014',
-  '/pages/conversation/index?id=c-001',
+  '/pkg-browse/pages/search/index',
+  '/pkg-browse/pages/search/index?q=键盘',
+  '/pkg-browse/pages/listing-detail/index?id=l-001',
+  '/pkg-browse/pages/listing-detail/index?id=l-014',
+  '/pkg-social/pages/conversation/index?id=c-001',
   // 发送商品选择页（#359）：读路径走公开在售端点（已接接口），进 WIRED
-  '/pages/send-listing/index?id=c-001',
-  '/pages/conversation/index?id=c-006',
-  '/pages/watchers/index',
-  '/pages/comments/index',
-  '/pages/favorites/index',
-  '/pages/orders-buy/index',
-  '/pages/orders-sell/index',
-  '/pages/following/index',
+  '/pkg-trade/pages/send-listing/index?id=c-001',
+  '/pkg-social/pages/conversation/index?id=c-006',
+  '/pkg-browse/pages/watchers/index',
+  '/pkg-browse/pages/comments/index',
+  '/pkg-browse/pages/favorites/index',
+  '/pkg-trade/pages/orders-buy/index',
+  '/pkg-trade/pages/orders-sell/index',
+  '/pkg-browse/pages/following/index',
   // 历史浏览：三类数据都没有端点，本页不发业务请求（因此**不进** WIRED）
-  '/pages/history/index',
+  '/pkg-browse/pages/history/index',
   // 举报商品页（#252）：后端未上线，`features/reports/load` 在非演示构建下直接回空列表、
   // 一个请求都不发，因此同样**不进** WIRED —— 一旦这里报出业务请求，说明隔离被绕过了
-  '/pages/report-listing/index',
+  '/pkg-trade/pages/report-listing/index',
   // 举报用户页 / 我的举报同样零业务请求（用户页与列表页在本分支）
-  '/pages/report-user/index',
-  '/pages/my-reports/index',
+  '/pkg-trade/pages/report-user/index',
+  '/pkg-trade/pages/my-reports/index',
   // 识图结果页（#324）：不带 `visualObjectKey` 进页 = 参数丢失态，本页只画空态、
   // 一个请求都不发（因此**不进** WIRED）。带参数时才会打 `POST /visual-search`，
   // 那条腿要真实后端，在微信开发者工具里验（见 docs/miniapp-dev-workflow.md）。
-  '/pages/vision-result/index',
+  '/pkg-vision/pages/vision-result/index',
   // 识图入口页（#324）：取图走原生面板、点了才上传，本脚本只加载路由、不做交互
-  '/pages/scan-vision/index',
+  '/pkg-vision/pages/scan-vision/index',
 ]
 
 /**
@@ -96,19 +96,19 @@ const DATA_HINT =
  */
 const WIRED = [
   '/pages/home/index',
-  '/pages/search/index',
-  '/pages/listing-detail/index',
+  '/pkg-browse/pages/search/index',
+  '/pkg-browse/pages/listing-detail/index',
   '/pages/chat/index',
   '/pages/profile/index',
   // 发送商品选择页（#359）：读路径接 GET /users/:id/listings，发送接 POST messages
-  '/pages/send-listing/index',
+  '/pkg-trade/pages/send-listing/index',
   '/pages/wish/index',
-  '/pages/wish-publish/index',
-  '/pages/match/index',
-  '/pages/orders-buy/index',
-  '/pages/orders-sell/index',
+  '/pkg-social/pages/wish-publish/index',
+  '/pkg-browse/pages/match/index',
+  '/pkg-trade/pages/orders-buy/index',
+  '/pkg-trade/pages/orders-sell/index',
   // 我的关注（#188）：真实构建走 GET /me/following，属已接接口页
-  '/pages/following/index',
+  '/pkg-browse/pages/following/index',
 ]
 
 /** 后端地址：已接接口的页面只允许请求它，发往别处仍算越界 */

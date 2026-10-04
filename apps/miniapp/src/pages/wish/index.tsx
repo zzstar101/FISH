@@ -13,17 +13,12 @@ import { loadWishes, WISH_HIT_ROWS, type WishHitList } from '@/features/fetchers
 import type { WishHit } from '@/features/match/adapt'
 import { closeWish as closeWishApi } from '@/features/wish/api'
 import { consumeWishesDirty } from '@/features/wish/refresh'
+import { categoryLabel, WISH_CATEGORIES } from '@/lib/listing-labels'
+import { formatAmount, formatYuan } from '@/lib/money'
 import { isApiError } from '@/lib/request'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import {
-  categoryLabel,
-  formatAmount,
-  formatYuan,
-  type MockWish,
-  type MockWishPoolItem,
-  POOL_MIN_COUNT,
-  WISH_CATEGORIES,
-} from '@/mock/api'
+import { POOL_MIN_COUNT } from '@/lib/wish-pool'
+import type { MockWish, MockWishPoolItem } from '@/mock/api'
 import { wishHitLink } from './list-state'
 import './index.scss'
 
@@ -94,10 +89,12 @@ function HitRow({ view }: { view: WishHit }) {
   return (
     <View
       className="wishhit"
-      onClick={() => void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${listing.id}` })}
+      onClick={() =>
+        void Taro.navigateTo({ url: `/pkg-browse/pages/listing-detail/index?id=${listing.id}` })
+      }
     >
       <View className="wishhit__thumb">
-        <Image className="wishhit__img" src={listing.coverUrl} mode="aspectFill" />
+        <Image className="wishhit__img" src={listing.coverUrl} mode="aspectFill" lazyLoad />
       </View>
       <View className="wishhit__main">
         <Text className="wishhit__title">{listing.title}</Text>
@@ -197,7 +194,7 @@ export default function Wish() {
 
   const goSearch = (keyword: string) => {
     // 搜索页读的是 `q`（`pages/search/index.tsx`），不是稿里的 `kw`
-    void Taro.navigateTo({ url: `/pages/search/index?q=${encodeURIComponent(keyword)}` })
+    void Taro.navigateTo({ url: `/pkg-browse/pages/search/index?q=${encodeURIComponent(keyword)}` })
   }
 
   const closeWish = async (wish: MockWish) => {
@@ -333,7 +330,9 @@ export default function Wish() {
               {tab === 'mine' ? (
                 <View
                   className="wish__new"
-                  onClick={() => void Taro.navigateTo({ url: '/pages/wish-publish/index' })}
+                  onClick={() =>
+                    void Taro.navigateTo({ url: '/pkg-social/pages/wish-publish/index' })
+                  }
                 >
                   {/*
                 加号用 `plusLine`（本地补画的那枚线稿加号），不要用 `plus` ——
@@ -456,7 +455,9 @@ export default function Wish() {
                                 return
                               }
                               if (hitLink !== 'linked') return
-                              void Taro.navigateTo({ url: `/pages/match/index?wishId=${wish.id}` })
+                              void Taro.navigateTo({
+                                url: `/pkg-browse/pages/match/index?wishId=${wish.id}`,
+                              })
                             }}
                           >
                             {`${hitCount} 件闲置命中${hitLink === 'linked' ? ' ›' : ''}`}

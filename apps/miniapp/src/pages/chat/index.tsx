@@ -519,7 +519,7 @@ export default function Chat() {
    * 角标随服务端的真实未读更新。
    */
   const openConversation = (id: string) => {
-    void Taro.navigateTo({ url: `/pages/conversation/index?id=${id}` })
+    void Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${id}` })
   }
 
   /** tab 切换：进「通知」tab 即视为已读（角标清零；真实 mark-read 由上方 effect 声明式补标） */
@@ -531,19 +531,23 @@ export default function Chat() {
   /** 通知条目点击：只负责按 `target` 跳转（清零是 tab 级的，见 `chooseFilter`） */
   const openNotif = (item: MockNotification) => {
     if (item.target?.kind === 'listing') {
-      void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.target.listingId}` })
+      void Taro.navigateTo({
+        url: `/pkg-browse/pages/listing-detail/index?id=${item.target.listingId}`,
+      })
       return
     }
     if (item.target?.kind === 'conversation') {
-      void Taro.navigateTo({ url: `/pages/conversation/index?id=${item.target.conversationId}` })
+      void Taro.navigateTo({
+        url: `/pkg-social/pages/conversation/index?id=${item.target.conversationId}`,
+      })
       return
     }
     if (item.target?.kind === 'mylist') {
-      void Taro.navigateTo({ url: '/pages/mylist/index' })
+      void Taro.navigateTo({ url: '/pkg-browse/pages/mylist/index' })
       return
     }
     if (item.target?.kind === 'verify') {
-      void Taro.navigateTo({ url: '/pages/verify/index' })
+      void Taro.navigateTo({ url: '/pkg-auth/pages/verify/index' })
       return
     }
     if (item.target?.kind === 'wish') void Taro.switchTab({ url: '/pages/wish/index' })

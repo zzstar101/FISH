@@ -80,7 +80,7 @@
 
 - `total` ≥ 当前页行数恒成立；空页也带回 total（`LEFT JOIN LATERAL` 的设计目的）；
 - 服务端测试钉住这条：`watchers-service.test.ts:33`（「人数来自全部会话而非当前页」）。
-- 展示口径：头部「共 N 人想要」用 `total`（小程序 `apps/miniapp/src/pages/watchers/` 已实现）；
+- 展示口径：头部「共 N 人想要」用 `total`（小程序 `apps/miniapp/src/pkg-browse/pages/watchers/` 已实现）；
   PC 端的展示细节属 #381（PR #384，未合入），合入时按本节口径复核，不预先当作事实。
 
 ## 7. 与现有实现不一致的待改项清单（只登记，不实现）
@@ -88,13 +88,13 @@
 核对范围（均在基线 `origin/main = b641fd7` 上）：`packages/contracts/src/chat/{routes,schema}.ts`、
 `apps/api/src/modules/conversations/{watchers-router,watchers-service,store}.ts` 及其测试、
 `packages/db/src/schema/conversations.ts`、`apps/api/src/modules/listings/store.ts`（商品删除）、
-小程序 `apps/miniapp/src/pages/watchers/`。
+小程序 `apps/miniapp/src/pkg-browse/pages/watchers/`。
 **PC 消费端（#381）未合入 main，不在本次核对范围内**；其 PR 合入时须按本文件逐节复核。
 
 **结论：未发现与上述冻结口径冲突的实现。** 两条实现事实如实登记（均不构成「待改」，
 但属于本定义依赖的持久化语义）：
 
-1. 小程序页（`apps/miniapp/src/pages/watchers/index.tsx:269,292`）只渲染 `user` + `startedAt`，
+1. 小程序页（`apps/miniapp/src/pkg-browse/pages/watchers/index.tsx:288,311`）只渲染 `user` + `startedAt`，
    未展示契约外字段；
 2. **会话可随商品删除被销毁**：`apps/api/src/modules/listings/store.ts:772-775`
    （`deleteListingAtomic`）在删除商品时清掉该商品的 `favorites` 与 `conversations`
@@ -112,5 +112,5 @@
 | `apps/api/src/modules/conversations/watchers-service.ts` | 卖家校验、404/403、投影与 `total` 组装 |
 | `apps/api/src/modules/conversations/store.ts:222-243` | 名单 + 同源 COUNT 的 SQL |
 | `apps/api/src/app.ts:367-373` | watchers router 装配（挂到站点根 `/`） |
-| `apps/miniapp/src/pages/watchers/` | 小程序消费端（已合入的参照实现） |
+| `apps/miniapp/src/pkg-browse/pages/watchers/` | 小程序消费端（已合入的参照实现） |
 | （#381，PR #384） | PC 消费端，**未合入 main**；合入时按本文件复核 |

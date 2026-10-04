@@ -96,7 +96,9 @@ describe('VERIFY_PRIVACY_*', () => {
   })
 
   test('页面接线：隐私卡取这三段常量，不再有硬编码的整句', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     expect(code).toContain('{VERIFY_PRIVACY_LEAD}')
     expect(code).toContain('{VERIFY_PRIVACY_EMPHASIS}')
     expect(code).toContain('{VERIFY_PRIVACY_TAIL}')
@@ -125,7 +127,9 @@ describe('认证说明的口径 —— 只说教育邮箱', () => {
   })
 
   test('页面接线：两处说明都取常量，稿的扩大解释不许回到 JSX', async () => {
-    const code = await Bun.file(new URL('../src/pages/verify/index.tsx', import.meta.url)).text()
+    const code = await Bun.file(
+      new URL('../src/pkg-auth/pages/verify/index.tsx', import.meta.url),
+    ).text()
     expect(code).toContain('{VERIFY_INTRO_DESC}')
     expect(code).toContain('{VERIFY_FOOTNOTE}')
     expect(code).not.toContain('验证在校身份')

@@ -12,7 +12,7 @@ import {
   SEGMENTS,
   segmentLabel,
   segmentOf,
-} from '../src/pages/mylist/list'
+} from '../src/pkg-browse/pages/mylist/list'
 
 /**
  * 「我的发布」分档与动作判据（#74 / #89 mylist 行真实接线；「审核」段见 Owner 2026-09-28 拍板）。

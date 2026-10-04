@@ -1,3 +1,4 @@
+import { CURRENT_USER_ID } from '@/lib/demo-user-id'
 import { AVATARS } from './images'
 import { mockPublicId } from './public-id'
 import type { MockUser } from './types'
@@ -8,9 +9,11 @@ import type { MockUser } from './types'
  * 202101000003 橙子（VERIFIED）。
  *
  * `CURRENT_USER_ID` 是「我」——设计稿视角下我是卖家（详情页有卖家卡片、
- * 消息页有买家来问），因此当前用户取阿岚。
+ * 消息页有买家来问），因此当前用户取阿岚。常量本身住在 `@/lib/demo-user-id`
+ * （详情页只取这一个值，不该把整份用户 fixture 拖进生产包），这里 re-export
+ * 保持对外形状不变。
  */
-export const CURRENT_USER_ID = 'u-alan'
+export { CURRENT_USER_ID }
 
 export const USERS: MockUser[] = [
   {

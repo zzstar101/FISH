@@ -17,11 +17,15 @@ import { describe, expect, test } from 'bun:test'
  */
 
 async function watchersSource(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/watchers/index.tsx', import.meta.url)).text()
+  return await Bun.file(
+    new URL('../src/pkg-browse/pages/watchers/index.tsx', import.meta.url),
+  ).text()
 }
 
 async function watchersStyle(): Promise<string> {
-  return await Bun.file(new URL('../src/pages/watchers/index.scss', import.meta.url)).text()
+  return await Bun.file(
+    new URL('../src/pkg-browse/pages/watchers/index.scss', import.meta.url),
+  ).text()
 }
 
 /**

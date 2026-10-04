@@ -35,9 +35,29 @@ import type { ProfileStats } from '@fish/contracts/profile/schema'
 import type { TransactionRole } from '@fish/contracts/transactions/schema'
 import type { PublicUserProfile, UserPresence } from '@fish/contracts/users/schema'
 import { DEMO_AUTH_ENABLED, DEMO_USER } from '@/features/auth/demo'
+// 必须写成 `@/features/mock-fallback` 这个**绝对**说明符：生产构建靠 config/index.ts 里
+// 同名 alias 把它换成不 import `@/mock/*` 的 prod 桩；改成相对路径会让 alias 失配、
+// 整包 fixture 重新回到首屏图（见 config/index.ts 的 alias 注释）。
+import {
+  demoCategoryListings,
+  demoConversation,
+  demoConversationFixtures,
+  demoHomeFeed,
+  demoListingDetail,
+  demoMessages,
+  demoMyListings,
+  demoNotifications,
+  demoOpenConversation,
+  demoOrderViews,
+  demoProfileFixtures,
+  demoSearchListings,
+  demoUserListingsByPublicId,
+  demoViewer,
+  demoViewerId,
+} from '@/features/mock-fallback'
+import { decorateNotifications } from '@/features/notifications/decorate'
 import { isApiError } from '@/lib/request'
-import { MY_LISTINGS, myListingCounts, TRANSACTIONS } from '@/mock/account'
-import { type ListingDetailView, myWishes } from '@/mock/api'
+import type { ListingDetailView } from '@/mock/api'
 import type {
   MockConversation,
   MockListing,
@@ -160,11 +180,9 @@ export async function loadHomeFeed(
   } catch (error) {
     reportFailure('首页 feed', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
-    const { fetchHomeFeed: mockFeed } = await import('@/mock/api')
     // 退 mock 没有服务端 requestId → 显式置 null，页面据此跳过曝光类事件
-    const result = await mockFeed({ category, limit: 40 })
     return {
-      items: result.items,
+      items: await demoHomeFeed(category),
       fromApi: false,
       failed: false,
       requestId: null,
@@ -192,8 +210,7 @@ export async function loadCategoryListings(
   } catch (error) {
     reportFailure('分类列表', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
-    const { fetchCategoryListings: mockCategory } = await import('@/mock/api')
-    return { items: await mockCategory(category), fromApi: false, failed: false }
+    return { items: await demoCategoryListings(category), fromApi: false, failed: false }
   }
 }
 
@@ -212,10 +229,8 @@ export async function loadSearch(
   } catch (error) {
     reportFailure('搜索', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], fromApi: false, failed: true }
-    const { searchListings: mockSearch } = await import('@/mock/api')
     // 参数类型与页面的筛选项同源（`SearchFilter`），不再用 `as never` 掩盖不匹配
-    const result = await mockSearch(keyword, sortLabel)
-    return { items: result.items, fromApi: false, failed: false }
+    return { items: await demoSearchListings(keyword, sortLabel), fromApi: false, failed: false }
   }
 }
 
@@ -301,8 +316,7 @@ export async function loadListingDetail(
   } catch (error) {
     reportFailure('商品详情', error)
     if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
-    const { fetchListingDetail: mockDetail } = await import('@/mock/api')
-    const view = await mockDetail(id)
+    const view = await demoListingDetail(id)
     return view ? { status: 'ok', view } : { status: 'notFound' }
   }
 }
@@ -321,7 +335,6 @@ export type LoadedNotifications = { items: MockNotification[]; failed: boolean }
 export async function loadNotifications(): Promise<LoadedNotifications> {
   try {
     const items = await fetchNotifications()
-    const { decorateNotifications } = await import('@/mock/api')
     // 传 `null`：真实通知只有 payload 里的 listingId，**没有查标题的能力**
     // （契约不返回文案，也没有按 id 批量查商品的端点）。给个「查不到」就当
     // 「已下架」是错的，所以这里只出通用文案 + 保留跳转目标。
@@ -329,8 +342,7 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
   } catch (error) {
     reportFailure('通知列表', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true }
-    const { notifications: mockNotifications } = await import('@/mock/api')
-    return { items: mockNotifications(), failed: false }
+    return { items: demoNotifications(), failed: false }
   }
 }
 
@@ -383,22 +395,17 @@ export async function loadConversations(cursor?: string): Promise<LoadedConversa
   } catch (error) {
     reportFailure('会话列表', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], nextCursor: null, failed: true }
-    const {
-      conversations: mockConversations,
-      ME: mockMe,
-      mockPublicId,
-    } = await import('@/mock/api')
-    const mockViewerId = mockPublicId('usr', mockMe.id)
+    const { items, viewerId } = demoConversationFixtures()
     return {
       /**
        * fixture 里的「系统会话」（`kind === 'system'`）是契约外的展示扩展：它不是
        * (商品, 买家×卖家) 的会话，`counterpart` 就是当前用户自己。本轮已按 Owner
        * 决策删掉系统会话行 —— 兜底里不滤掉它，就会在演示构建里以「和自己聊天的
        * 会话行」复活，而且与底栏兜底的口径分叉。
+       *
+       * 过滤已在 `demoConversationFixtures` 里做掉（底栏红点同一口径）。
        */
-      items: mockConversations()
-        .filter((item) => item.kind !== 'system')
-        .map((item) => toConversationDto(item, mockViewerId, null)),
+      items: items.map((item) => toConversationDto(item, viewerId, null)),
       // fixture 没有分页
       nextCursor: null,
       failed: false,
@@ -485,21 +492,19 @@ export async function loadConversation(conversationId: string): Promise<LoadedCo
     if (isApiError(error) && error.code === 'CONVERSATION_NOT_FOUND') return { status: 'missing' }
     reportFailure('会话详情', error)
     if (!MOCK_FALLBACK_ENABLED) return { status: 'failed' }
-    const { conversation: mockConversation, ME: mockMe, mockPublicId } = await import('@/mock/api')
-    const found = mockConversation(conversationId)
+    const found = demoConversation(conversationId)
     if (!found) return { status: 'missing' }
     /*
       详情回退顺手把「对方读位」算出来（#359 四 审查回合）：读位是逐条已读标签唯一的
       数据来源，fixture 里没有这个事实 —— 不补的话演示构建全屏红字、看不到「已读」。
       取值口径见 `demoCounterpartLastReadAt`（fixture 没有分页，一份消息就够）。
     */
-    const { messages: mockMessages } = await import('@/mock/api')
     return {
       status: 'ok',
       conversation: toConversationDto(
         found,
-        mockPublicId('usr', mockMe.id),
-        demoCounterpartLastReadAt(mockMessages(conversationId), found.counterpart.id),
+        demoViewerId(),
+        demoCounterpartLastReadAt(demoMessages(conversationId), found.counterpart.id),
       ),
     }
   }
@@ -555,21 +560,15 @@ export async function loadMessagePage(
        */
       return { items: [], nextCursor: null, failed: true }
     }
-    const {
-      conversation: mockConversation,
-      messages: mockMessages,
-      ME: mockMe,
-      mockPublicId,
-    } = await import('@/mock/api')
-    const found = mockConversation(conversationId)
+    const found = demoConversation(conversationId)
     if (!found) return { items: [], nextCursor: null, failed: false }
     /**
      * fixture 的「我」是 mock 的 `ME`（u-alan），而演示构建里当前登录身份是
      * `DEMO_USER`。契约的 `senderId` 决定气泡画在左边还是右边，所以要把非对方的
      * 发送者对齐到当前身份，否则 fixture 里「我」发的消息会画到对方那一侧。
      */
-    const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : { ...mockMe, id: mockPublicId('usr', mockMe.id) }
-    const rows = mockMessages(conversationId)
+    const viewer = DEMO_AUTH_ENABLED ? DEMO_USER : { ...demoViewer(), id: demoViewerId() }
+    const rows = demoMessages(conversationId)
     return {
       // 传整份 fixture：引用摘引要在同一批里找被引用那条（#359 3c）
       items: rows.map((item) => toMessageDto(item, found, viewer, rows)),
@@ -617,14 +616,7 @@ async function loadListingCandidates(
  * （买家进页面默认看对方）。`mock/users.ts` 的 `getUser` 是同一套反查。
  */
 export function loadCounterpartListings(userId: string): Promise<LoadedListingCandidates> {
-  return loadListingCandidates(userId, async () => {
-    const { userListings } = await import('@/mock/api')
-    const { USERS } = await import('@/mock/users')
-    const { mockPublicId } = await import('@/mock/public-id')
-    const raw = USERS.find((user) => mockPublicId('usr', user.id) === userId)
-    // 与真实端点同口径：只给在售。
-    return raw ? userListings(raw.id).filter((item) => item.status === 'ACTIVE') : []
-  })
+  return loadListingCandidates(userId, async () => demoUserListingsByPublicId(userId))
 }
 
 /**
@@ -633,10 +625,7 @@ export function loadCounterpartListings(userId: string): Promise<LoadedListingCa
  * fixture 里「我」的在售列表（与会话详情回退把 viewer 投影成当前身份的同一取舍）。
  */
 export function loadMyListings(meId: string): Promise<LoadedListingCandidates> {
-  return loadListingCandidates(meId, async () => {
-    const { myListings } = await import('@/mock/api')
-    return myListings().filter((item) => item.status === 'ACTIVE')
-  })
+  return loadListingCandidates(meId, async () => demoMyListings())
 }
 
 /** 消息发送者需要的最小面（`Me` 与 `MockUser` 都满足） */
@@ -754,10 +743,9 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
   } catch (error) {
     reportFailure('订单列表', error)
     if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true, truncated: false }
-    const { fetchOrders, openConversation } = await import('@/mock/api')
-    const views = await fetchOrders(role)
+    const views = await demoOrderViews(role)
     return {
-      items: views.map((view) => toOrderCardFromMock(view, openConversation)),
+      items: views.map((view) => toOrderCardFromMock(view, demoOpenConversation)),
       failed: false,
       truncated: false,
     }
@@ -846,20 +834,21 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * 足迹是 `null` → 页面显示 `—`，收藏 / 关注是服务端真值（演示数字不覆盖真实结果）。
  */
 function demoProfile(): ProfileView {
-  const wishes = myWishes()
+  const { wishes, saleCount, completedCount, listings, pendingMeetupCount, orderCount } =
+    demoProfileFixtures()
   return {
     user: DEMO_USER,
     stats: {
-      activeListings: myListingCounts().sale,
+      activeListings: saleCount,
       activeWishes: wishes.length,
-      completedTransactions: TRANSACTIONS.filter((tx) => tx.status === 'COMPLETED').length,
+      completedTransactions: completedCount,
       // 与 `features/following/demo.ts` 的演示名单条数一致（方案 §2.3：数字栏与列表不能自相矛盾）
       followingCount: 5,
     },
-    listings: MY_LISTINGS.map((item) => item.listing),
+    listings,
     wishes,
-    pendingMeetup: TRANSACTIONS.filter((tx) => tx.status === 'PENDING_MEETUP').length,
-    orderCount: TRANSACTIONS.length,
+    pendingMeetup: pendingMeetupCount,
+    orderCount,
     favoritesCount: 8,
     historyCount: 24,
     followCount: 5,

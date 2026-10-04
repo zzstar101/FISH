@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test'
 import type { ConversationDto } from '@fish/contracts/chat/schema'
-import { applyReadPoll, messageReadLabel } from '../src/pages/conversation/view'
+import { applyReadPoll, messageReadLabel } from '../src/pkg-social/pages/conversation/view'
 
 /**
  * 演示回退里的「对方读位」（#359 四 审查回合）。
