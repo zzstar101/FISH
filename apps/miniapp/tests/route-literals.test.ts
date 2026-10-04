@@ -33,10 +33,13 @@ import path from 'node:path'
  * - 用变量拼出来的根（`const root = pick(); root + name`）；
  * - 路径段之外的写法（`wx.navigateTo` 原生调用、`redirectTo` 的等价字符串）；
  * - `[A-Za-z0-9_-]` 之外的页面名（例如带 `.` 的），会被当成「不是路由」直接忽略；
- * - **无前导 `/`、又不带 `pkg-` 前缀的拼接根**（`'pages/' + name`）：`CONCAT_ROUTE_ROOT`
- *   刻意要求两者之一，否则 `path.join('src', 'pages/', name, 'index.tsx')` 这类**磁盘
- *   路径**会全被误报（旧写法就是这个毛病）。代价是极少数写成 `'pages/foo/index'`
- *   的拼接逃逸 —— 真机上小程序路由必须带前导 `/`，这种写法本身也是错的；
+ * - **不以 `/` 开头的拼接根 / 模板串**（`'pages/' + name`、`'pkg-browse/pages/' + name`、
+ *   `` `src/${root}/pages/${page}/index.tsx` ``）：`CONCAT_ROUTE_ROOT` 与
+ *   `DYNAMIC_ROUTE_TEMPLATE` 都硬要求前导 `/`。小程序路由不带前导 `/` 本身就是错的，
+ *   而且一旦放宽，`path.join('src', 'pages/', name, 'index.tsx')` 这类**磁盘路径**
+ *   会被全量误报（旧写法就是这个毛病，第五轮独立审查实测复现过
+ *   `src/__probe__/probe.ts → pkg-browse/pages/`）。代价是极少数写成
+ *   `'pages/foo/index'` 的拼接逃逸；
  * - **其它测试文件里的路由样本/反例**：这类文件必须整文件登记豁免
  *   （`ROUTE_SCAN_OPT_OUT` + 文件内的 `// route-guard: skip-file` 标记，两侧都要写）。
  *   注意豁免是**整文件**的：登记后四个扫描器（字面量 / 动态模板 / 拼接根 / 缺 index）
@@ -225,8 +228,11 @@ const ROUTE_LITERALS_WITHOUT_INDEX: string[] = []
  *   只是 query 动态、路径完全写死，那条由 `ROUTE_LITERAL` 覆盖（它的 `([?#]…)?` 后缀就是
  *   为这种写法准备的）。若这里也收，同一个模板会被两套规则重复判定，白名单会被迫列出
  *   几十条本质上是静态路由的条目。两个扫描器互补，由下面的自检测试钉住这个分工。
+ * - **模板串必须以 `/` 开头**（路由的硬要求），否则磁盘路径拼接
+ *   （`` `src/${root}/pages/${page}/index.tsx` ``）会被当成动态路由模板误报 ——
+ *   第五轮独立审查实测复现过，登记出口也救不了（candidates 只收合法路由）。
  */
-const DYNAMIC_ROUTE_TEMPLATE = /`([^`?#]*\/pages\/[^`?#]*\$\{[^`]*)`/g
+const DYNAMIC_ROUTE_TEMPLATE = /`(\/[^`?#]*\/pages\/[^`?#]*\$\{[^`]*)`/g
 
 /**
  * 用字符串拼接出来的路由根（例：`'/pkg-trade/pages/' + name + '/index'`）。
@@ -235,12 +241,13 @@ const DYNAMIC_ROUTE_TEMPLATE = /`([^`?#]*\/pages\/[^`?#]*\$\{[^`]*)`/g
  * 模板串正则（没有 `${}`）。当前仓库一处都没有，所以白名单为空；一旦有人这样写，
  * 这条守卫会失败并要求显式登记落点。
  *
- * 引号、反引号、带不带尾斜杠都要认（`` const ROOT = `/pkg-browse/pages/` ``、
- * `'/pkg-browse/pages' + '/' + name` 与 `'/pages/' + name` 是同一个坑的三种写法）。
- * 前导 `/` 或 `pkg-` 前缀二选一：`path.join('src', 'pages/', name)` 这种**磁盘路径**
- * 拼接不再命中（旧写法会把所有 `'pages/'` 都抓进来）。
+ * 引号、反引号、带不带尾斜杠都要认（`` const ROOT = `/pkg-browse/pages/` `` 与
+ * `'/pkg-browse/pages' + '/' + name` 是同一个坑的两种写法）。
+ * **前导 `/` 是硬要求**：小程序路由不带前导 `/` 本身就是错的，而一旦放宽，
+ * `path.join('src', 'pkg-browse/pages/', name)` 这类**磁盘路径**会被全量误报
+ * （第五轮独立审查实测复现过 `src/__probe__/probe.ts → pkg-browse/pages/`）。
  */
-const CONCAT_ROUTE_ROOT = /(['"`])((?:\/(?:pkg-[a-z]+\/)?pages|pkg-[a-z]+\/pages)\/?)\1/g
+const CONCAT_ROUTE_ROOT = /(['"`])((?:\/(?:pkg-[a-z]+\/)?pages)\/?)\1/g
 
 /** 允许以拼接形式出现的路由根（当前为空，见 `CONCAT_ROUTE_ROOT` 说明）。 */
 const CONCAT_ROUTE_ROOTS: string[] = []
@@ -598,6 +605,13 @@ describe('路由字面量守卫（分包后）', () => {
       '/pkg-browse/pages',
     ])
     expect([..."'pages/'".matchAll(CONCAT_ROUTE_ROOT)].length).toBe(0)
+    // 第五轮审查 F1：不带前导 `/` 的拼接**不是路由根** —— 否则磁盘路径全被误报
+    const diskConcat = "path.join('src', 'pkg-browse/pages/', name)"
+    expect([...diskConcat.matchAll(CONCAT_ROUTE_ROOT)].length).toBe(0)
+    // 第五轮审查 F2：磁盘路径模板也不是动态路由模板（登记出口只收合法路由，救不了它）
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 样本要的是字面量 ${...} 文本
+    const diskTemplate = '`src/${root}/pages/${page}/index.tsx`'
+    expect([...diskTemplate.matchAll(DYNAMIC_ROUTE_TEMPLATE)].length).toBe(0)
   })
 
   test('扫描器自检：尾斜杠与拆两段写的路由既被看见、又不被误判（第四轮审查 F4/FP1）', () => {

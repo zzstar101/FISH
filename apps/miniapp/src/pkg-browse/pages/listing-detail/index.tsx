@@ -1135,6 +1135,8 @@ export default function ListingDetail() {
    *   （旧游标）拼的，落进去同样会重复。
    * - 失败只留痕、不收起列表：游标原样不动（一条也没追加），用户再点一次就是重试。
    *   旧实现是「展开即一次拉完」，失败只能整块收起来重来。
+   * - 服务端若违约把同一个游标再发回来（新游标与出发时那个字符串相同），就按末页处理：
+   *   旧实现有 20 页上限兜底，这里没有循环可兜，只能靠这条判据止住重复追加。
    * - `commentsCursor` 为 `null` = 已到末页，按钮随之消失（本页没有「没有更多」文案，
    *   也就不新造）。
    */
@@ -1150,8 +1152,11 @@ export default function ListingDetail() {
       const page = await fetchComments(id, cursor)
       if (!mountedRef.current) return
       if (!isLatestLoad(seq, loadSeqRef.current)) return
+      const next = page.nextCursor
       setComments((prev) => [...prev, ...page.items.map(dtoToNode)])
-      setCommentsCursor(page.nextCursor)
+      // 游标没前进 = 服务端在重复给同一页（`pkg-browse/pages/mylist/pending.ts:153`
+      // 同一判据）：再点下去只会把同一页一遍遍叠上来，直接当末页收口、按钮下线。
+      setCommentsCursor(next === cursor ? null : next)
     } catch (error) {
       logCommentFailure('更多留言', error)
     } finally {

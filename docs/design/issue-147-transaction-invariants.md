@@ -107,7 +107,7 @@
 落在 `apps/miniapp/src/pkg-trade/pages/transaction-meetup/view.ts`：`export function classifyConfirmFailure(code: string | null): ConfirmFailure`（`view.ts:49`，`ConfirmFailure = 'terminal' | 'retry'` 定义在 `view.ts:39`）。`verify` 内层 catch（决策基线 `:327`）与 `retryConfirm` catch（决策基线 `:388`）都走它：
 
 - `terminal`（409 `TRANSACTION_NOT_IN_PENDING`）→ 重拉交易终态 + `setConfirmPending(false)` + 返回；
-- `retryable` → 维持既有语义（`verify` 侧 `setConfirmPending(true)`，`retryConfirm` 侧 toast）。
+- `'retry'` → 维持既有语义（`verify` 侧 `setConfirmPending(true)`，`retryConfirm` 侧 toast）。
 
 只共享「confirm 调用 + 结果落地」这一段；`settle()` 最短展示时长与 `setFxPhase` 动效不动。
 
@@ -115,7 +115,7 @@
 
 落在 `view.ts`：`export type SubmitLock = number | null`（`view.ts:14`，存的是**持锁操作链所属的账号代次**）、`export function canAcquire(holder: SubmitLock, epoch: number): boolean`（`view.ts:23`，`holder !== epoch`）、`export function releaseLock(holder: SubmitLock, epoch: number): SubmitLock`（`view.ts:34`，只有代次相符才置空）。`index.tsx` 侧是 `submitLock` ref（`index.tsx:164`）、`verify` 入口 `canAcquire`（`:364`）与 `finally` `releaseLock`（`:466`）、`retryConfirm` 的同一对（`:474` / `:505`）。
 
-**这里不是布尔锁，所以身份切换重置块刻意不复位它**：代次锁的语义是「谁持锁谁释放」——换账号时代次前进，`canAcquire(旧代次, 新代次)` 本来就为真，新账号不会被上一账号的锁卡住；旧链迟到的 `finally` 走 `releaseLock(新代次, 旧代次)` 也不会放掉别人的锁。若照本节早先的写法在重置块里无条件清空，等于把代次信息丢掉：清空后 `canAcquire(null, 旧代次)` 为真，仍在飞的旧链又能取锁，正是本方案要消除的重入。代码里这条决定写在 `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx:285-287`（「提交锁**不在这里清**」）。
+**这里不是布尔锁，所以身份切换重置块刻意不复位它**：代次锁的语义是「谁持锁谁释放」——换账号时代次前进，`canAcquire(旧代次, 新代次)` 本来就为真，新账号不会被上一账号的锁卡住；旧链迟到的 `finally` 走 `releaseLock(新代次, 旧代次)` 也不会放掉别人的锁。若照本节早先的写法在重置块里无条件清空，等于把代次信息丢掉：清空后 `canAcquire(null, 旧代次)` 为真，仍在飞的旧链又能取锁，正是本方案要消除的重入。代码里这条决定写在 `apps/miniapp/src/pkg-trade/pages/transaction-meetup/index.tsx:285-286`（「提交锁**不在这里清**」）。
 
 ### 5.3 P3（未采纳）
 
@@ -125,7 +125,7 @@
 
 在 `apps/miniapp/tests/` 新增两个测试文件，按 `order-list-state.test.ts` 的既有写法（先 `mock.module('@tarojs/taro', ...)` 再动态 `import`，避免真 Taro 在 Bun 下抛错）：
 
-- 判定函数：409 → `terminal`；网络错误 / 其它 API 错误 → `retryable`；
+- 判定函数：409 → `terminal`；网络错误 / 其它 API 错误 → `'retry'`；
 - 提交锁：同一 tick 两次 `canAcquire()` 只有一次通过；`releaseLock()` 后可再次获取。
 
 ### 5.5 流程门禁

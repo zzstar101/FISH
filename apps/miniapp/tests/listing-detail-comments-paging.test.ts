@@ -88,9 +88,13 @@ describe('详情页留言分页 · 「加载更多」一次一页', () => {
     expect(countOf(block, 'fetchComments(')).toBe(1)
     expect(block).toContain('const page = await fetchComments(id, cursor)')
     expect(block).toContain('setComments((prev) => [...prev, ...page.items.map(dtoToNode)])')
-    expect(block).toContain('setCommentsCursor(page.nextCursor)')
     // 上一页的游标换成服务端新给的（`null` = 到底，按钮随之下线）
-    expectBefore(block, 'fetchComments(id, cursor)', 'setCommentsCursor(page.nextCursor)')
+    expect(block).toContain('setCommentsCursor(next === cursor ? null : next)')
+    expectBefore(
+      block,
+      'fetchComments(id, cursor)',
+      'setCommentsCursor(next === cursor ? null : next)',
+    )
     // 旧实现的批量循环必须已经不在：留着就还是「一次拉满 20 页」
     expect(block).not.toContain('while (')
     expect(block).not.toContain('for (')
@@ -142,6 +146,20 @@ describe('详情页留言分页 · 「加载更多」一次一页', () => {
 })
 
 describe('详情页留言分页 · 末页后按钮消失', () => {
+  test('服务端把同一个游标再发回来时按末页收口（不会一遍遍叠同一页）', async () => {
+    const block = await pageSlice(
+      'const loadMoreComments = async () => {',
+      'const listing = data?.listing',
+    )
+
+    // 游标没前进 ⇒ 当末页（`next` 取自本页响应，判据与 mylist/pending.ts 一致）
+    expect(block).toContain('const next = page.nextCursor')
+    expect(block).toContain('setCommentsCursor(next === cursor ? null : next)')
+    expectBefore(block, 'const next = page.nextCursor', 'setCommentsCursor(')
+    // 无条件接管服务端游标的旧写法不能回来（服务端违约时会无限重复追加）
+    expect(block).not.toContain('setCommentsCursor(page.nextCursor)')
+  })
+
   test('按钮只在「已展开且还有下一页」时渲染 —— 游标为 null 即下线', async () => {
     const block = await pageSlice('{/* 分页脚', '{/* 计数按')
 
