@@ -32,6 +32,7 @@ const U1: Me = {
   verifiedAt: null,
   phoneBound: false,
   maskedPhone: null,
+  signature: null,
 }
 
 const OTHER_OWNER = '22222222-2222-4222-8222-222222222222'
@@ -90,7 +91,8 @@ function input(overrides: Partial<Parameters<typeof runProfileSave>[0]> = {}) {
     ticket: ticketOf({ ownerId: U1.id, epoch: 0 }),
     ownerId: U1.id,
     ownerNickname: U1.nickname,
-    draft: { nickname: '新昵称', avatarPath: PHOTO.path, uploaded: null },
+    ownerSignature: U1.signature,
+    draft: { nickname: '新昵称', signature: '', avatarPath: PHOTO.path, uploaded: null },
     ...overrides,
   }
 }
@@ -115,6 +117,7 @@ describe('runProfileSave：会话与代次', () => {
       ownerId: U1.id,
       nickname: '新昵称',
       avatarUrl: 'https://cdn/a.png',
+      signature: null,
     })
     expect(effects.phases).toEqual(['uploading', 'saving'])
     expect(effects.uploaded).toBe(1)
@@ -172,7 +175,7 @@ describe('runProfileSave：会话与代次', () => {
     const deps = makeDeps({ effects, session: () => key })
 
     const outcome = await runProfileSave(
-      input({ draft: { nickname: '新昵称', avatarPath: null, uploaded: null } }),
+      input({ draft: { nickname: '新昵称', signature: '', avatarPath: null, uploaded: null } }),
       deps,
     )
 
@@ -298,7 +301,7 @@ describe('runProfileSave：失败与短路', () => {
     const deps = makeDeps({ effects, session: () => key })
 
     const outcome = await runProfileSave(
-      input({ draft: { nickname: U1.nickname, avatarPath: null, uploaded: null } }),
+      input({ draft: { nickname: U1.nickname, signature: '', avatarPath: null, uploaded: null } }),
       deps,
     )
 
@@ -315,6 +318,7 @@ describe('runProfileSave：失败与短路', () => {
       input({
         draft: {
           nickname: U1.nickname,
+          signature: '',
           avatarPath: PHOTO.path,
           uploaded: { path: PHOTO.path, objectKey: OBJECT_KEY },
         },
@@ -327,6 +331,7 @@ describe('runProfileSave：失败与短路', () => {
       ownerId: U1.id,
       nickname: U1.nickname,
       avatarUrl: null,
+      signature: null,
     })
     expect(effects.uploaded).toBe(0)
     expect(effects.patched).toEqual([{ avatarObjectKey: OBJECT_KEY }])
@@ -342,6 +347,7 @@ describe('runProfileSave：失败与短路', () => {
       input({
         draft: {
           nickname: U1.nickname,
+          signature: '',
           avatarPath: newPath,
           uploaded: { path: PHOTO.path, objectKey: 'users/u1/avatar/old.png' },
         },
@@ -354,10 +360,59 @@ describe('runProfileSave：失败与短路', () => {
       ownerId: U1.id,
       nickname: U1.nickname,
       avatarUrl: null,
+      signature: null,
     })
     expect(effects.uploaded).toBe(1)
     expect(effects.uploadedKeys).toEqual([{ path: newPath, objectKey: OBJECT_KEY }])
     expect(effects.patched).toEqual([{ avatarObjectKey: OBJECT_KEY }])
+  })
+  test('只改签名：不发上传，PATCH 只带 signature，结果带回服务端真值', async () => {
+    const effects = makeEffects()
+    const key: SessionKey = { ownerId: U1.id, epoch: 0 }
+    const deps = makeDeps({
+      effects,
+      session: () => key,
+      patchProfile: async (body) => {
+        effects.patched.push(body)
+        return { ...U1, signature: body.signature ?? U1.signature }
+      },
+    })
+
+    const outcome = await runProfileSave(
+      input({
+        ownerSignature: U1.signature,
+        draft: { nickname: U1.nickname, signature: '新签名', avatarPath: null, uploaded: null },
+      }),
+      deps,
+    )
+
+    expect(outcome).toEqual({
+      kind: 'saved',
+      ownerId: U1.id,
+      nickname: U1.nickname,
+      avatarUrl: null,
+      signature: '新签名',
+    })
+    expect(effects.uploaded).toBe(0)
+    expect(effects.patched).toEqual([{ signature: '新签名' }])
+  })
+
+  test('签名 trim 后与当前一致：算没改，不发请求', async () => {
+    const effects = makeEffects()
+    const key: SessionKey = { ownerId: U1.id, epoch: 0 }
+    const deps = makeDeps({ effects, session: () => key })
+
+    const outcome = await runProfileSave(
+      input({
+        ownerSignature: '旧签名',
+        draft: { nickname: U1.nickname, signature: '  旧签名  ', avatarPath: null, uploaded: null },
+      }),
+      deps,
+    )
+
+    expect(outcome).toEqual({ kind: 'no-change' })
+    expect(effects.uploaded).toBe(0)
+    expect(effects.patched).toEqual([])
   })
 })
 
@@ -386,7 +441,7 @@ describe('会话代次本身', () => {
 describe('SaveOutcome 穷尽性', () => {
   test('每个分支都有 kind 判别字段', () => {
     const outcomes: SaveOutcome[] = [
-      { kind: 'saved', ownerId: U1.id, nickname: 'n', avatarUrl: null },
+      { kind: 'saved', ownerId: U1.id, nickname: 'n', avatarUrl: null, signature: null },
       { kind: 'aborted' },
       { kind: 'no-change' },
       { kind: 'nickname-invalid', message: '请输入昵称' },
