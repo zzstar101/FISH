@@ -17,6 +17,12 @@ import {
   profileResponseSchema,
   profileUpdateResponseSchema,
 } from '@fish/contracts/profile/schema'
+import { TRANSACTION_REVIEW_ROUTES } from '@fish/contracts/transaction-reviews/routes'
+import {
+  type TransactionReview,
+  type TransactionReviewCreateInput,
+  TransactionReviewResponseSchema,
+} from '@fish/contracts/transaction-reviews/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
   type MeetupTokenResponse,
@@ -37,7 +43,9 @@ import { ApiError, apiRequest } from '../../lib/api-client'
 export type MyListingStatusFilter = ListingStatus | 'ALL'
 export type OrderStatusFilter = TransactionStatus | 'ALL'
 
-export type ProfileFieldErrors = Partial<Record<'nickname' | 'avatarObjectKey', string>>
+export type ProfileFieldErrors = Partial<
+  Record<'nickname' | 'avatarObjectKey' | 'signature', string>
+>
 
 export function myListingsPath(
   sellerId: string,
@@ -188,6 +196,58 @@ export async function rejectProposal(conversationId: string): Promise<MessageDto
 }
 
 /**
+ * 「(我, 这笔交易)」的评价边读：没评过就是 404，返回 null 而不是错误。
+ *
+ * 404 有两种码且端上同态处理：`REVIEW_NOT_FOUND` 是常态（还没评）；
+ * `TRANSACTION_NOT_FOUND` 正常到不了（卡片只挂在已加载成功的订单详情上），
+ * 真出现时让后续 POST 去拿同一句话，不在这里伪造「没评过」以外的状态。
+ */
+export async function fetchMyReview(transactionId: string): Promise<TransactionReview | null> {
+  try {
+    return TransactionReviewResponseSchema.parse(
+      await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(transactionId)),
+    )
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
+}
+
+/**
+ * 写评价：三档评分 + 可空评语（#195 冻结口径）。**不可修改、不可重评** ——
+ * 重复提交由 409 `TRANSACTION_REVIEW_EXISTS` 挡（并发撞库唯一索引也归这里）。
+ */
+export async function createTransactionReview(
+  transactionId: string,
+  input: TransactionReviewCreateInput,
+): Promise<TransactionReview> {
+  return TransactionReviewResponseSchema.parse(
+    await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(transactionId), {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  )
+}
+
+/** 提交评价失败的可执行分支（错误码全集见契约 `TransactionReviewErrorCodeSchema`）。 */
+export function reviewSubmitError(error: unknown): {
+  message: string
+  alreadyReviewed: boolean
+  refresh: boolean
+} {
+  if (error instanceof ApiError) {
+    if (error.code === 'TRANSACTION_REVIEW_EXISTS') {
+      return { message: '你已评价过这笔交易', alreadyReviewed: true, refresh: false }
+    }
+    if (error.code === 'TRANSACTION_NOT_COMPLETED' || error.code === 'TRANSACTION_NOT_FOUND') {
+      return { message: error.message, alreadyReviewed: false, refresh: true }
+    }
+    return { message: error.message, alreadyReviewed: false, refresh: false }
+  }
+  return { message: '评价失败，请稍后重试', alreadyReviewed: false, refresh: false }
+}
+
+/**
  * 卖家取本单面交码。
  *
  * 契约是**幂等「确保并读取」**：同一笔交易恒定同一枚码，重复调用不换码
@@ -318,6 +378,7 @@ export function profileUpdateErrorView(error: unknown): {
       if (detail.field === 'avatarObjectKey' || detail.field === 'objectKey') {
         fields.avatarObjectKey = detail.message
       }
+      if (detail.field === 'signature') fields.signature = detail.message
     }
 
     if (error.code === 'IMAGE_REFERENCE_INVALID') {
