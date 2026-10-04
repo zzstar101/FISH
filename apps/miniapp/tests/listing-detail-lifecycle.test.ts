@@ -136,19 +136,24 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(ownerChanged('user-a', 'user-a')).toBe(false)
   })
 
-  test('清场只覆盖草稿、收藏与购买请求，公开快照不在其中', () => {
+  test('清场只覆盖草稿、收藏与购买流程，公开快照不在其中', () => {
     expect(clearedPrivateScope()).toEqual({
       commentInput: '',
       replyInput: '',
       replyTo: null,
       faved: false,
       buyRequested: false,
+      buyOpen: false,
+      buyAmount: '',
+      buyAmountError: null,
+      buySubmitError: null,
+      buyBusy: false,
       offlineConfirmOpen: false,
       offlineSubmit: 'idle',
     })
   })
 
-  test('换号后 A 的草稿、回复行、收藏心形与购买请求都不留在 B 的页面上', () => {
+  test('换号后 A 的草稿、回复行、收藏心形与购买流程都不留在 B 的页面上', () => {
     const p = page()
     switchOwner(p, 'user-a')
     p.commentInput = 'A 写到一半的留言'
@@ -156,6 +161,11 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     p.replyTo = 'c-1'
     p.faved = true
     p.buyRequested = true
+    p.buyOpen = true
+    p.buyAmount = '99.99'
+    p.buyAmountError = '请填写正确金额（最多两位小数）'
+    p.buySubmitError = '发起交易确认失败，请重试'
+    p.buyBusy = true
 
     switchOwner(p, 'user-b')
     expect(p.commentInput).toBe('')
@@ -163,6 +173,11 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(p.replyTo).toBeNull()
     expect(p.faved).toBe(false)
     expect(p.buyRequested).toBe(false)
+    expect(p.buyOpen).toBe(false)
+    expect(p.buyAmount).toBe('')
+    expect(p.buyAmountError).toBeNull()
+    expect(p.buySubmitError).toBeNull()
+    expect(p.buyBusy).toBe(false)
   })
 
   test('换号不动公开的商品快照与已发布留言', () => {
@@ -1034,9 +1049,10 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     expect(block).toContain('buyInFlightRef.current = null')
   })
 
-  test('立即购买：确认回写前先确认任务仍属于当前账号（清场挡不住迟到的回写）', async () => {
-    const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
-    expectBefore(block, 'const task = beginActionTask(', 'Taro.showModal(')
+  test('立即购买：两步写的每个 await 边界都先确认任务仍属于当前账号', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    // 令牌在发起前捕获：建会话（第一步写）之前必须已经铸好任务
+    expectBefore(block, 'const task = beginActionTask(', 'await createConversation(id)')
     expectBefore(
       block,
       'if (!isTaskLive(task, buyInFlightRef.current)) return',
@@ -1044,16 +1060,18 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     )
   })
 
-  test('立即购买：在飞时不再弹第二个确认框，且弹窗失败按「没确认」收尾', async () => {
-    const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
-    // 没有这把锁，连点会叠出多个 showModal
-    expect(block).toContain('if (buyRequested || buyInFlightRef.current !== null) return')
-    expectBefore(block, 'buyInFlightRef.current = task.token', 'Taro.showModal(')
-    // 老 Android 上点蒙层 / 卸载走 reject：不写终态、也不弹错，只留痕
-    const catchBlock = inner('.catch((error: unknown) => {', '.finally(release)')(block)
-    expect(catchBlock).toContain('按未确认处理')
+  test('立即购买：在飞时不重复发起、弹层不许关，迟到失败不写状态', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    // 没有这把锁，连点会叠出第二次两步写
+    expect(block).toContain(
+      'if (buyBusy || buyInFlightRef.current !== null || listing === undefined) return',
+    )
+    expectBefore(block, 'buyInFlightRef.current = task.token', 'await createConversation(id)')
+    // 迟到失败不写任何状态；例外是会话过期（401）仍要提示本人（同 confirmOffline 口径）
+    const catchBlock = inner('} catch (error) {', '} finally {')(block)
+    expect(catchBlock).toContain('if (!isTaskLive(task, buyInFlightRef.current)) {')
+    expect(catchBlock).toContain('shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error)')
     expect(catchBlock).not.toContain('setBuyRequested(true)')
-    expect(block).toContain('.finally(release)')
   })
 
   test('冷启动解析身份的豁免接在两个动作的守卫上（不是只写在注释里）', async () => {
@@ -1065,10 +1083,12 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     // 铸任务时必须把发起那一刻的登录态带上，否则「已确认匿名」也会被当成冷启动
     expect(await source()).toContain('authStatus,')
     // 两个动作都必须走这条守卫（漏一个就会「点了没反应」）：
-    // 「聊一聊」成功 / 失败两条链各一次，「立即购买」确认链一次
+    // 「聊一聊」成功 / 失败两条链各一次；「立即购买」确认链共四次 ——
+    // 两步写的每个 await 边界各一次（建会话后 / 提案后）、迟到失败守卫一次、
+    // finally 的清尾判活一次（先判再放锁，否则「正在发起…」会卡死）
     const code = await source()
     expect(code.match(/isTaskLive\(task, chatInFlightRef\.current\)/g)?.length).toBe(2)
-    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(1)
+    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(4)
   })
 })
 
