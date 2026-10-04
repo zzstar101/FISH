@@ -541,6 +541,79 @@ export async function countListingImpressions(
   return rows.map((row) => ({ listingId: row.listingId, count: Number(row.count) }))
 }
 
+export type ExposureHistory = {
+  listingId: string
+  /** 归因曝光（`IMPRESSION`）次数。 */
+  exposureCount: number
+  /** 最后一次归因曝光时间；一次都没曝光过时为 `null`。 */
+  lastExposedAt: Date | null
+  /** 归因互动（`engagementEventTypes`）次数。 */
+  engagedCount: number
+}
+
+/**
+ * 某个身份对这批商品的**曝光与互动历史聚合**（#323 M6 重复曝光冷却的输入）。
+ *
+ * 与 `countListingImpressions` 的三点一致、一点不同：
+ *
+ * - **一致**：身份谓词（匿名分支必须 `user_id IS NULL`）、同族放在本文件、`inArray(listingId)`
+ *   限定候选集（冷却只可能作用在本次候选上，没必要把全部历史捞回来）。
+ * - **不同**：`countListingImpressions` 只数曝光，这里一次查回三个聚合 —— 曝光次数、"最后一次
+ *   曝光"（冷却从它起算）、互动次数（有互动就解除冷却）。三次查询换成一条 `filter` 聚合，冷却
+ *   的判据才可能在一个时间点上自洽（见 `cooldownListingIds`）。
+ *
+ * 不加时间窗：与 `countListingImpressions` 同理，"反复曝光"没有自然下界，事件本身有 180 天保留
+ * 期。`engagementEventTypes` 由调用方给出（本包**不依赖 contracts**，与
+ * `findNegativeFeedbackEvents` 的 `eventTypes` 同法），**不得包含 `IMPRESSION`** —— 互动次数用
+ * `event_type <> 'IMPRESSION'` 统计。
+ */
+export async function findExposureHistory(
+  db: Db,
+  input: {
+    listingIds: readonly string[]
+    identity: { kind: 'user'; id: string } | { kind: 'anonymous'; id: string }
+    /** 解除冷却的互动事件类型（不含 `IMPRESSION`）。 */
+    engagementEventTypes: readonly RecommendationEventType[]
+  },
+): Promise<ExposureHistory[]> {
+  if (input.listingIds.length === 0) return []
+
+  const identityFilter =
+    input.identity.kind === 'user'
+      ? eq(recommendationEvents.userId, input.identity.id)
+      : and(
+          eq(recommendationEvents.anonymousSessionId, input.identity.id),
+          isNull(recommendationEvents.userId),
+        )
+
+  const rows = await db
+    .select({
+      listingId: recommendationEvents.listingId,
+      exposureCount: sql<number>`count(*) filter (where ${recommendationEvents.eventType} = 'IMPRESSION')::int`,
+      lastExposedAt: sql<Date | null>`max(${recommendationEvents.occurredAt}) filter (where ${recommendationEvents.eventType} = 'IMPRESSION')`,
+      engagedCount: sql<number>`count(*) filter (where ${recommendationEvents.eventType} <> 'IMPRESSION')::int`,
+    })
+    .from(recommendationEvents)
+    .where(
+      and(
+        identityFilter,
+        inArray(recommendationEvents.listingId, [...input.listingIds]),
+        inArray(recommendationEvents.eventType, [
+          'IMPRESSION',
+          ...new Set(input.engagementEventTypes),
+        ]),
+      ),
+    )
+    .groupBy(recommendationEvents.listingId)
+
+  return rows.map((row) => ({
+    listingId: row.listingId,
+    exposureCount: Number(row.exposureCount),
+    lastExposedAt: row.lastExposedAt === null ? null : new Date(row.lastExposedAt),
+    engagedCount: Number(row.engagedCount),
+  }))
+}
+
 /* ------------------------------------------------------- negative feedback */
 
 export type NegativeFeedbackEvent = {

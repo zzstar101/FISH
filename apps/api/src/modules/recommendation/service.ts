@@ -33,6 +33,7 @@ import type { RecommendationContext } from './context'
 import { decodeRecommendationCursor, encodeRecommendationCursor } from './cursor'
 import { resolveRecommendationIdentity } from './identity'
 import type { InterestRefreshQueue } from './interest-queue'
+import { cooldownListingIds } from './rank/cooldown'
 import { buildNegativeFeedbackSignals, type NegativeFeedbackSignals } from './rank/feedback'
 import { rerankCandidates } from './rank/rerank'
 import { type ScoredCandidate, scoreCandidates } from './rank/score'
@@ -305,6 +306,43 @@ export function createRecommendationService(deps: {
   }
 
   /**
+   * 这批候选里处于**重复曝光冷却**（M6）的商品集合。
+   *
+   * **fail-open**：查询/映射失败时返回**空集合** —— 宁可多曝光一轮，也不因一次查询故障把用户
+   * 已经看过的一批商品集体压掉。后者是静默的、用户无法申诉的惩罚（他会看到首页莫名少了一批
+   * 东西），前者只是轻微重复。这个取舍与 `loadNegativeFeedback` 的 fail-safe 方向相反，
+   * 因为两者失败的代价不同：负反馈读不到时给 0 惩罚相当于"不额外打压"，而冷却读不到时若给
+   * "全冷却"就是平白无故地硬排除。
+   *
+   * 没有身份（冷启动）时直接跳过，不查库。
+   */
+  async function loadCooldown(input: {
+    viewerId: string | null
+    sessionId: string
+    listingIds: readonly string[]
+    now: Date
+  }): Promise<ReadonlySet<string>> {
+    const identity = resolveRecommendationIdentity({
+      userId: input.viewerId,
+      anonymousSessionId: input.sessionId,
+    })
+    if (identity === null || input.listingIds.length === 0) return new Set()
+    try {
+      const history = await store.findExposureHistory({
+        listingIds: input.listingIds,
+        identity,
+      })
+      return cooldownListingIds({
+        history: new Map(history.map((entry) => [entry.listingId, entry])),
+        now: input.now,
+      })
+    } catch (error) {
+      console.warn('[recommendation] 曝光历史读取失败，本次不做重复曝光冷却：', error)
+      return new Set()
+    }
+  }
+
+  /**
    * 首次请求：召回 → 规则排序 → 重排 → 落快照 → 返回第一页。
    *
    * **快照的顺序按"真正发出去的卡片"编号**：`listCardsByIds` 是可见性的最终真值，它可能丢掉
@@ -340,9 +378,18 @@ export function createRecommendationService(deps: {
       return serveDegradedFeed(input)
     }
 
+    // 冷却在**重排之前**算：它是硬排除，不参与约束松弛谈判，也不该让被冷却的候选占掉 limit。
+    const cooldown = await loadCooldown({
+      viewerId: input.viewerId,
+      sessionId: input.sessionId,
+      listingIds: scored.map((item) => item.candidate.listingId),
+      now,
+    })
+
     const reranked = rerankCandidates({
       scored,
       hiddenListingIds: feedback?.hiddenListingIds ?? new Set(),
+      cooldownListingIds: cooldown,
       // 探索打散用 requestId 当种子：同一请求可重放，不同请求看到不同的探索位。
       seed: requestId,
       limit: RECOMMENDATION_SNAPSHOT_MAX_ITEMS,
@@ -536,6 +583,17 @@ export function createRecommendationService(deps: {
         metrics?.recordEventRejection(REJECTION_REASON_METRIC[reason])
       }
 
+      // 流量口径（#323 M0「明确 Bot / 开发预览 / fixture 流量是否排除」，详版见
+      // `@fish/contracts/recommendation/schema` 的同名注释）：**fixture 排除；Bot 不排除；
+      // 开发预览 v1 不作为独立流量源处理**。
+      // fixture 的"排除"不是下面某条分支的额外目的，而是这几道闸门的共同结果：
+      // mock 商品 id 过不了公开 id 契约、mock 商品不在库里（listing_not_found）、
+      // mock 回退没有真实 requestId（request_not_found / attribution_not_found）、
+      // 曝光与快速划过必须带 requestId + position。所以这里**不写**"是 fixture 就跳过"的分支——
+      // 那是一段永远不可达的死代码，且服务端没有可信的"什么算 fixture"判据。
+      // 开发预览不受上述闸门约束（真客户端 + 真 id + 真 requestId 时完全可归因），v1 不引入
+      // 客户端自报的流量头（属改写入路径的超范围变更）。
+      // Bot 同理不做 UA / IP 判定（R1 §6 明确不落 UA），只在 guardrail 的 rateLimitedRequests 上可见。
       events.forEach((event, index) => {
         // 服务端确证类事件（评论/会话/交易）不接受客户端上报：这个端点是匿名可写的，照收就等于
         // 任何人都能伪造 PURCHASE / CHAT_START 污染训练数据。这四类的真值只有服务端写路径

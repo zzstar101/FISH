@@ -36,10 +36,16 @@ let store: ReturnType<typeof createSqlAdminStore>
 
 const SINCE = new Date('2026-01-10T00:00:00Z')
 const UNTIL = new Date('2026-01-11T00:00:00Z')
+// 生命周期夹具（#323 M8）单独放第二个窗口：`getRecommendationMetrics` 的所有聚合都按
+// `occurred_at` / `created_at` / `requested_at` 切窗，换个窗口就不会动到上面那批断言。
+const SINCE2 = new Date('2026-01-20T00:00:00Z')
+const UNTIL2 = new Date('2026-01-21T00:00:00Z')
+const LIFECYCLE_CREATED_AT = new Date('2026-01-20T08:00:00Z')
 const RANKED_VERSION = 'rec-v1-rule+interest-v1+recall-v1+rank-v1'
 const DEGRADED_VERSION = 'rec-v1-none'
 
 const listingIds: Record<'l1' | 'l2' | 'l3', string> = { l1: '', l2: '', l3: '' }
+const lifecycleListingIds: Record<'n1' | 'n2' | 'n3', string> = { n1: '', n2: '', n3: '' }
 const requestIds: Record<
   'ranked' | 'degraded' | 'empty' | 'repeat' | 'before' | 'atUntil',
   string
@@ -279,6 +285,156 @@ beforeAll(async () => {
       occurredAt: UNTIL,
     },
   ])
+
+  // ---------------------------------------------------------------------------
+  // 生命周期夹具（#323 M8）：窗口 [SINCE2, UNTIL2)
+  //
+  // 三个**窗口内创建**的新商品（08:00）：
+  //   n1 首次曝光 10:00（+2h）、首次意向 FAVORITE 11:30（+3.5h）、12:30 再曝光、13:00 成交
+  //   n2 首次曝光 11:00（+3h）、首次意向 CHAT_START 12:00（+4h）
+  //   n3 首次曝光 12:00（+4h）、09:30 有一条**无归因** FAVORITE（不算意向）
+  // 外加窗口外创建的老商品 l3：14:00 曝光、15:00 成交（只进 exposuresBeforeSale）。
+  // 同一商品在同一请求下只能有一条曝光（库级部分唯一索引），所以第二次曝光换一个请求。
+  // ---------------------------------------------------------------------------
+  for (const [key, sellerId, status] of [
+    ['n1', userAId, 'SOLD'],
+    ['n2', userBId, 'ACTIVE'],
+    ['n3', userAId, 'ACTIVE'],
+  ] as const) {
+    const id = newId()
+    lifecycleListingIds[key] = id
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: `生命周期商品 ${key}`,
+      description: '生命周期测试',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status,
+      createdAt: LIFECYCLE_CREATED_AT,
+    })
+  }
+
+  const lifecycleRequests = await db
+    .insert(recommendationRequests)
+    .values([
+      {
+        id: newId(),
+        userId: userAId,
+        strategyVersion: RANKED_VERSION,
+        requestedAt: new Date('2026-01-20T07:00:00Z'),
+      },
+      {
+        id: newId(),
+        userId: userAId,
+        strategyVersion: RANKED_VERSION,
+        requestedAt: new Date('2026-01-20T12:15:00Z'),
+      },
+    ])
+    .returning({ id: recommendationRequests.id, requestedAt: recommendationRequests.requestedAt })
+  const lifecycleByTime = new Map(
+    lifecycleRequests.map((row) => [row.requestedAt.toISOString(), row.id]),
+  )
+  const w2 = lifecycleByTime.get('2026-01-20T07:00:00.000Z') ?? ''
+  const w2b = lifecycleByTime.get('2026-01-20T12:15:00.000Z') ?? ''
+  if (!w2 || !w2b) throw new Error('缺少生命周期夹具请求')
+
+  await db.insert(recommendationEvents).values([
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n1,
+      eventType: 'IMPRESSION',
+      requestId: w2,
+      position: 0,
+      occurredAt: new Date('2026-01-20T10:00:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n1,
+      eventType: 'FAVORITE',
+      requestId: w2,
+      position: 1,
+      occurredAt: new Date('2026-01-20T11:30:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n1,
+      eventType: 'IMPRESSION',
+      requestId: w2b,
+      position: 0,
+      occurredAt: new Date('2026-01-20T12:30:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n1,
+      eventType: 'PURCHASE',
+      requestId: w2b,
+      position: null,
+      occurredAt: new Date('2026-01-20T13:00:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n2,
+      eventType: 'IMPRESSION',
+      requestId: w2,
+      position: 1,
+      occurredAt: new Date('2026-01-20T11:00:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n2,
+      eventType: 'CHAT_START',
+      requestId: w2,
+      position: 1,
+      occurredAt: new Date('2026-01-20T12:00:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n3,
+      eventType: 'IMPRESSION',
+      requestId: w2,
+      position: 2,
+      occurredAt: new Date('2026-01-20T12:00:00Z'),
+    },
+    // 无归因的意向事件：不参与任何生命周期统计（若被算进来，n3 的首次意向会变成 1.5h）。
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n3,
+      eventType: 'FAVORITE',
+      requestId: null,
+      position: null,
+      occurredAt: new Date('2026-01-20T09:30:00Z'),
+    },
+    // 窗口外创建的老商品 l3：成交前的曝光只有 14:00 这一条。
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: listingIds.l3,
+      eventType: 'IMPRESSION',
+      requestId: w2b,
+      position: 1,
+      occurredAt: new Date('2026-01-20T14:00:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: listingIds.l3,
+      eventType: 'PURCHASE',
+      requestId: w2b,
+      position: null,
+      occurredAt: new Date('2026-01-20T15:00:00Z'),
+    },
+  ])
 })
 
 afterAll(async () => {
@@ -341,5 +497,45 @@ describe('getRecommendationMetrics（#323 R6 SQL 口径）', () => {
     expect(row.top10SellerExposures).toBe(0)
     expect(row.staleListingExposures).toBe(0)
     expect(row.attributedEventCounts.size).toBe(0)
+    // 生命周期三项的空样本是 `{ count: 0, median: null, p90: null }`，不是 0 小时。
+    expect(row.lifecycle).toEqual({
+      newListingTimeToFirstExposureHours: { count: 0, median: null, p90: null },
+      firstPublishToFirstIntentHours: { count: 0, median: null, p90: null },
+      exposuresBeforeSale: { count: 0, median: null, p90: null },
+    })
+  })
+
+  test('生命周期三项：只认窗口内带归因的事件，分位用 percentile_disc（最近秩、不插值）', async () => {
+    const row = await store.getRecommendationMetrics({ since: SINCE2, until: UNTIL2 })
+
+    // 新商品首次曝光：n1 +2h、n2 +3h、n3 +4h。
+    expect(row.lifecycle.newListingTimeToFirstExposureHours).toEqual({
+      count: 3,
+      median: 3,
+      p90: 4,
+    })
+    // 首发 → 首意向：n1 +3.5h（FAVORITE）、n2 +4h（CHAT_START）；n3 那条 FAVORITE 没有归因，不算。
+    // 最近秩中位数 = 第 ceil(0.5 * 2) = 1 个 = 3.5（线性插值会得 3.75，这条断言把口径钉死）。
+    expect(row.lifecycle.firstPublishToFirstIntentHours).toEqual({ count: 2, median: 3.5, p90: 4 })
+    // 成交前曝光：n1 = 2 条（10:00 / 12:30，都在 13:00 成交之前）、l3 = 1 条（14:00）。
+    // l3 的 created_at 在窗口外仍计入（这一项不看商品创建时刻）；最近秩中位数 = 1（插值会得 1.5）。
+    expect(row.lifecycle.exposuresBeforeSale).toEqual({ count: 2, median: 1, p90: 2 })
+  })
+
+  test('窗口内有归因曝光、但商品不是窗口内创建 → 前两项仍为空（只统计窗口内新建）', async () => {
+    const row = await store.getRecommendationMetrics({ since: SINCE, until: UNTIL })
+
+    // 窗口内有 3 条归因曝光，但 l1/l2/l3 的 created_at 都落在窗口之外 ⇒ 前两项没有样本。
+    expect(row.attributedImpressions).toBe(3)
+    expect(row.lifecycle.newListingTimeToFirstExposureHours).toEqual({
+      count: 0,
+      median: null,
+      p90: null,
+    })
+    expect(row.lifecycle.firstPublishToFirstIntentHours).toEqual({
+      count: 0,
+      median: null,
+      p90: null,
+    })
   })
 })

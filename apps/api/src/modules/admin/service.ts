@@ -568,6 +568,9 @@ export function createAdminService({
           chatToTransactionRate: ratio(transactions, chats),
           transactionToPurchaseRate: ratio(purchases, transactions),
         },
+        // 生命周期三项（M8）：store 已按契约 `RecommendationLifecycleSchema` 的结构返回
+        // （分位口径与离线评估 job 一致，空样本 `{ count: 0, median: null, p90: null }`），这里只透传。
+        lifecycle: row.lifecycle,
         guardrails: {
           emptyRankedFeedRate: ratio(row.emptyRankedFeedRequests, row.rankedFeedRequests),
           // 重复曝光 = 快照行里"同一个身份看过同一个商品"之外的份额（与离线评估 §5.4 同口径）。

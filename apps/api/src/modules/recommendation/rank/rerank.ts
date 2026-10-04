@@ -14,9 +14,14 @@
  * 约束冲突时按 `RERANK_RELAXATION_ORDER`（explore → category → seller）逐个放弃，并**计数**。
  * 选择"固定顺序"而不是"按分数权衡"是为了可复现：同样的候选集永远得到同样的结果，出问题可以
  * 精确复盘是哪一条约束被让掉了多少次。`seller` 放在最后放弃 —— 相邻同卖家是最刺眼的一种。
+ *
+ * 另有一条**不属于松弛阶梯**的硬排除：重复曝光冷却（M6）。它不参与约束冲突谈判（不能让掉，一
+ * 让就等于没做），被剔除的条数单独记在 `droppedCooldown`，与 `droppedHidden` 分开 —— 两者的
+ * 归因完全不同（用户明确隐藏 vs 反复推了没点）。
  */
 
 import {
+  RANK_COOLDOWN_EXEMPT_RECALL_SOURCE,
   RERANK_CATEGORY_MAX_IN_WINDOW,
   RERANK_CATEGORY_WINDOW,
   RERANK_EXPLORE_MIN_PER_WINDOW,
@@ -32,6 +37,8 @@ export type RerankSummary = {
   inputCount: number
   /** 因 listing 级硬排除（`RANK_HIDDEN_EVENT_TYPES`）被剔除的条数。 */
   droppedHidden: number
+  /** 因重复曝光冷却（M6）被剔除的条数（`wish` 召回豁免的不计在内）。 */
+  droppedCooldown: number
   /** 因超出 `limit` 未入选的条数。 */
   droppedOverflow: number
   /** 各约束被让掉的次数（诊断用；非零说明候选池结构有偏）。 */
@@ -44,6 +51,19 @@ export type RerankResult = {
 }
 
 const ALL_CONSTRAINTS: readonly RerankConstraint[] = ['seller', 'category', 'explore']
+
+const EMPTY_LISTING_IDS: ReadonlySet<string> = new Set()
+
+/**
+ * 该候选是否因重复曝光冷却被剔除（M6）。
+ *
+ * 豁免只看**召回通道**而不是"用户是否主动搜索"：`wish` 通道本身就意味着用户明确表达过这个需求
+ * （见 `RANK_COOLDOWN_EXEMPT_RECALL_SOURCE` 的注释），不需要重排层再判断别的信号。
+ */
+function isCooling(item: ScoredCandidate, cooldown: ReadonlySet<string>): boolean {
+  if (!cooldown.has(item.candidate.listingId)) return false
+  return !item.candidate.recallSources.includes(RANK_COOLDOWN_EXEMPT_RECALL_SOURCE)
+}
 
 /**
  * FNV-1a 32 位哈希。
@@ -117,15 +137,25 @@ function satisfiesAll(
 export function rerankCandidates(input: {
   scored: readonly ScoredCandidate[]
   hiddenListingIds: ReadonlySet<string>
+  /**
+   * 处于重复曝光冷却（M6）的 listing。**先于三条约束**剔除，且命中
+   * `RANK_COOLDOWN_EXEMPT_RECALL_SOURCE` 召回通道的不剔（M6「Wish 命中时允许重新进入」）。
+   *
+   * 缺省为空集：调用方读取曝光历史失败时按 fail-open 处理（宁可多曝光，也不因查询故障惩罚
+   * 用户），所以这里不需要默认的"拒绝"语义。
+   */
+  cooldownListingIds?: ReadonlySet<string>
   /** 打散种子（用 `requestId`）：同一请求可重放，不同请求看到不同的探索位。 */
   seed: string
   limit: number
 }): RerankResult {
   const hidden = new Set(input.hiddenListingIds)
+  const cooldown = input.cooldownListingIds ?? EMPTY_LISTING_IDS
   // 输入理论上已排序，这里再排一次：重排的正确性依赖"按分数从高到低"这个前提，把它变成函数
   // 自己的保证，调用方漏排时不会静默产出一个顺序错误的 Feed。
   const ordered = [...input.scored].sort(compareScoredCandidates)
-  const pool = ordered.filter((item) => !hidden.has(item.candidate.listingId))
+  const afterHidden = ordered.filter((item) => !hidden.has(item.candidate.listingId))
+  const pool = afterHidden.filter((item) => !isCooling(item, cooldown))
   const relaxations: Record<RerankConstraint, number> = { seller: 0, category: 0, explore: 0 }
 
   const target = Math.max(Math.min(input.limit, pool.length), 0)
@@ -193,7 +223,8 @@ export function rerankCandidates(input: {
     items: placed,
     summary: {
       inputCount: input.scored.length,
-      droppedHidden: input.scored.length - pool.length,
+      droppedHidden: ordered.length - afterHidden.length,
+      droppedCooldown: afterHidden.length - pool.length,
       droppedOverflow: pool.length - placed.length,
       relaxations,
     },

@@ -552,6 +552,12 @@ describe('Admin 查询端到端', () => {
     }
     expect(new Date(body.generatedAt).getTime()).toBeLessThanOrEqual(Date.now())
     expect(new Date(body.processStartedAt).getTime()).toBeLessThanOrEqual(Date.now())
+    // 生命周期三项（M8）走的是真库 SQL：空库里没有归因事件也没有窗口内创建的商品。
+    expect(body.lifecycle).toEqual({
+      newListingTimeToFirstExposureHours: { count: 0, median: null, p90: null },
+      firstPublishToFirstIntentHours: { count: 0, median: null, p90: null },
+      exposuresBeforeSale: { count: 0, median: null, p90: null },
+    })
   })
 
   test('GET /admin/recommendations/metrics 接受三个窗口档位', async () => {
