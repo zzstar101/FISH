@@ -41,7 +41,7 @@
 `fetch`、storage 或模块级单例，杜绝跨文件污染。权威入口两处，改口径必须同步：
 
 - `package.json:25`（`"test": "bun test --isolate"`，本地 `bun run test` 的实义）；
-- `.github/workflows/ci.yml:259-271`（db-tests 作业）与 `:289-303`（unit-tests 作业）的 Test 步骤。
+- `.github/workflows/ci.yml:274-286`（db-tests 作业）与 `:304-318`（unit-tests 作业）的 Test 步骤。
 
 ## 4. Bun 版本口径
 
@@ -49,23 +49,31 @@
 
 - `package.json:5`（`"packageManager": "bun@1.4.0"`）；
 - `package.json:7`（`"engines": { "bun": ">=1.4.0" }`）；
-- `.github/workflows/ci.yml` 每个作业的 setup-bun 步骤（`:72,110,167,284,316,341,380`，全部 `"1.4.0"`）。
+- `.github/workflows/ci.yml` 每个作业的 setup-bun 步骤（`:76,114,171,297,329,354,393`，全部 `"1.4.0"`）。
 
-## 5. CI 的实际门禁结构（`origin/main = b641fd7` 时点）
+## 5. CI 的实际门禁结构（`origin/main = 89a09401` + #406 第 3 项的新增步骤）
 
 作业按改动范围裁剪（`changes` 作业跑 `scripts/ci-changes.ts` 算范围；纯文档 PR 到 `changes`
 为止，不装依赖、不起容器、不跑测试）。作业清单与行号：
 
 | 作业 | 行号 | 内容 |
 | --- | --- | --- |
-| `changes` | `ci.yml:47` | 算改动范围，产出各作业开关 |
-| `static` | `ci.yml:100` | lockfile 源断言（拒镜像源污染）→ Install → Lint & format → Typecheck |
-| `db-tests` | `ci.yml:141` | 起 Postgres（+按需 MinIO）→ Migrate → Chat media smoke → `bun test --isolate` 受影响目录 |
-| `unit-tests` | `ci.yml:274` | 无服务依赖的单测（web-pc / miniapp / contracts / shared / scripts） |
-| `web-pc` | `ci.yml:306` | `Build PC web`（`:321`）+ `PC preview smoke`（`:325`，真实验证 `/pc` 308 与深链回退） |
-| `miniapp` | `ci.yml:331` | `Build Miniapp`（`:346`，Taro production 构建） |
-| `core-smoke` | `ci.yml:354` | 主链端到端（scratch 库 + 真实 API/Worker/MinIO） |
-| `ci` | `ci.yml:450` | 聚合结论（作业按范围 skip 是正常的） |
+| `changes` | `ci.yml:53` | 算改动范围，产出各作业开关 |
+| `static` | `ci.yml:106` | lockfile 源断言（拒镜像源污染）→ Install → Lint & format → Typecheck |
+| `db-tests` | `ci.yml:147` | 起 Postgres（+按需 MinIO）→ Migrate（`:257`）→ Chat media smoke（`:260`）→ **Visual search eval gates（`:269`，`bun run visual:eval`）** → `bun test --isolate` 受影响目录（`:274`） |
+| `unit-tests` | `ci.yml:289` | 无服务依赖的单测（web-pc / miniapp / contracts / shared / scripts） |
+| `web-pc` | `ci.yml:321` | `Build PC web`（`:336`）+ `PC preview smoke`（`:340`，真实验证 `/pc` 308 与深链回退） |
+| `miniapp` | `ci.yml:346` | `Build Miniapp`（`:361`，Taro production 构建） |
+| `core-smoke` | `ci.yml:369` | 主链端到端（scratch 库 + 真实 API/Worker/MinIO） |
+| `ci` | `ci.yml:465` | 聚合结论（作业按范围 skip 是正常的） |
+
+**行号基线的说明**：本节此前的行号基于 `b641fd7`，之后 CI 已多次改动（本例新增了一个步骤），
+所以按 `origin/main = 89a09401` + 本 PR 重新逐条核对；改 `ci.yml` 务必回来更新这张表。
+
+**评测门槛的位置与理由**（#406 第 3 项）：`bun run visual:eval`（离线三路评测腿）不出网、不连库、
+不需要任何服务，判据在 `apps/api/src/modules/visual-search/eval/gates.ts`（单测 `gates.test.ts` 喂退化输入
+证明它会红）。放在 `db-tests` 只是因为改 `apps/api/**` 时这个作业必定会跑
+（`scripts/ci-changes.ts` 的 `dbTests: api || worker || db`），不必为它再开一个 job。
 
 事实陈述（本卡时点）：CI **构建** PC Web（build + preview smoke）与 miniapp（Taro build）；
 `apps/web`（移动端 PWA）已随 #325 从仓库移除，不存在「未构建的 apps/web」这一缺口。
@@ -89,3 +97,26 @@ CI 不跑微信开发者工具级的小程序端上验证——那属 `docs/mini
 因此本卡**未改动 `.env.example`**（验收口径：只允许注释行或确实写错的键名；当前无此类问题）。
 新增环境变量时必须同步 `.env.example` 并在对应 `load*Env` 里显式校验——缺配置启动即失败，
 不静默降级（各 transport 的既有纪律）。
+
+## 7. seed 数据的三条隐性契约（#406 第 4 项）
+
+要让真实的 `POST /visual-search` 在本地演示数据上跑通，数据必须同时满足三条**不写在 schema 里**的
+契约。任一条违约时服务端只回 **500 `INTERNAL_ERROR`**，对客户端完全不可区分，所以在这里显式记下来：
+
+1. **listing id 必须是规范 UUIDv7**（版本位 `7`、变体位 `8|9|a|b`；正则 `packages/shared/src/public-id.ts:28` 的 `UUID_V7`），
+   否则 `encodePublicId`（`:30`）抛 `Public ID 只能编码规范 UUIDv7：<值>`。
+   `packages/db/src/seed.ts:45-67` 的固定 id 已满足（形如 `01930000-0000-7000-8000-…`）。
+2. **封面对象键必须匹配** `apps/api/src/modules/uploads/storage.ts:127` 的
+   `SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/`；
+   非 seed 键则必须匹配 `isPublicListingKey`（`:117`，即 `listings/{usr_…}/{med_…}.{ext}` 两段规范 TypeID）。
+   否则 `publicUrl()`（`:240`）抛 `公开媒体对象键不规范：<键>（期望 …）`。
+   `packages/db/src/seed.ts:257-262` 的 `listings/seed-*/0.jpg` 已满足。
+3. **`listing_visual_embeddings.source_object_key` 必须等于该 listing `listing_images.sort_order = 0` 的 `object_key`**
+   （`packages/db/src/visual-embedding-store.ts` 的 `freshVisualEmbedding()`）。seed 自己不写这张表——
+   它由 `bun run embed:backfill`（worker）按这条规则产出；封面变更会让旧向量行变 `stale`
+   （`apps/worker/src/jobs/visual-embedding/handlers.ts`）。
+
+自己加演示商品时三条要一起满足。**为什么没有在 `packages/db/src/seed.ts` 里做前置校验**：
+`@fish/db` 不依赖 `@fish/shared`（拿不到 `UUID_V7`），也拿不到 API 侧的 `SEED_LISTING_KEY`；
+在 seed 里校验要么引入反向依赖，要么复制一份正则（第二份真相，日后必然漂移）。
+所以本 PR 的选择是「把契约写进文档 + 让两处报错自带出错的键/值」，让 500 的日志本身可读。

@@ -28,7 +28,9 @@ export type PublicId<P extends PublicIdPrefix> = `${P}_${string}`
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 export function encodePublicId<P extends PublicIdPrefix>(prefix: P, uuid: string): PublicId<P> {
-  if (!UUID_V7.test(uuid)) throw new Error('Public ID 只能编码规范 UUIDv7')
+  // 带上出错的 uuid：本地 seed / 手写演示数据用 v4 或非规范 UUID 时，服务端只会把它包成
+  // 500 INTERNAL_ERROR（#406 第 4 项），日志里必须能看出是哪一个值违约。
+  if (!UUID_V7.test(uuid)) throw new Error(`Public ID 只能编码规范 UUIDv7：${JSON.stringify(uuid)}`)
   return TypeID.fromUUID(prefix, uuid).toString() as PublicId<P>
 }
 

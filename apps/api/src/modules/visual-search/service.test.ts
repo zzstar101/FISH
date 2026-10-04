@@ -145,6 +145,8 @@ type Harness = {
     embeddedImages: number
     embeddedTexts: string[]
     soldStatsCategories: string[]
+    /** 每次 `soldPriceStats` 收到的 `excludeSellerId`：证明服务端真的按请求者排除本人成交商品。 */
+    soldStatsExcludeSellerIds: Array<string | null | undefined>
   }
 }
 
@@ -173,6 +175,7 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
     embeddedImages: 0,
     embeddedTexts: [],
     soldStatsCategories: [],
+    soldStatsExcludeSellerIds: [],
   }
 
   const storage: VisualSearchStorage = {
@@ -247,8 +250,9 @@ function createHarness(overrides: Partial<HarnessState> = {}): Harness {
       }
       return rows
     },
-    async soldPriceStats(category) {
-      calls.soldStatsCategories.push(category)
+    async soldPriceStats(input) {
+      calls.soldStatsCategories.push(input.category)
+      calls.soldStatsExcludeSellerIds.push(input.excludeSellerId)
       return state.soldStats
     },
   }
@@ -476,6 +480,32 @@ describe('search 的召回与合并', () => {
 
     expect(result.items).toEqual([])
     expect(result.interpretation).toBeNull()
+  })
+
+  test('召回到的候选全部低于相似度下限 ⇒ 200 + 空 items，而不是把最近邻塞给用户（#406 第 6 项）', async () => {
+    const listing = listingSource(listingId(1))
+    // 距离 1.2 ⇒ 相似度 0.4，低于 VISUAL_RECALL_MIN_SIMILARITY（0.5 = 余弦正交）。
+    const { service, calls } = createHarness({
+      listings: [listing],
+      recall: () => [{ listingId: listing.id, distance: 1.2 }],
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(calls.recalls.length).toBe(1)
+    expect(result.items).toEqual([])
+  })
+
+  test('恰好等于下限（距离 1.0 ⇒ 相似度 0.5）仍然返回：下限是下界而不是"必须相似"', async () => {
+    const listing = listingSource(listingId(1))
+    const { service } = createHarness({
+      listings: [listing],
+      recall: () => [{ listingId: listing.id, distance: 1 }],
+    })
+
+    const result = await service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(result.items.map((item) => item.title)).toEqual([listing.title])
   })
 
   test('未解析出文本时只走图片路一次召回', async () => {
@@ -803,5 +833,26 @@ describe('search 的成交均价统计', () => {
     const result = await service.search(subject(), { objectKey: queryObjectKey() })
 
     expect(result.stats.soldAvgPriceCents).toBeNull()
+  })
+
+  test('已登录时把请求者 userId 传给统计做排除，匿名时不设排除目标（#406 第 2 项）', async () => {
+    const viewerId = listingId(9)
+    const authenticated: ResolvedVisualSearchSubject = {
+      key: { subjectType: 'user', subjectKey: viewerId },
+      attempts: [{ subjectType: 'user', subjectKey: viewerId }],
+      issuedSessionId: null,
+    }
+
+    const loggedIn = createHarness({ interpretation: { category: 'BOOKS' } })
+    await loggedIn.service.search(authenticated, { objectKey: queryObjectKey(viewerId) })
+
+    // 与召回侧同一个排除目标：本人已成交商品不进行情。
+    expect(loggedIn.calls.soldStatsExcludeSellerIds).toEqual([viewerId])
+
+    // 匿名主体的 subjectKey 是会话 HMAC（不是 userId）：没有可排除的主体。
+    const anonymous = createHarness({ interpretation: { category: 'BOOKS' } })
+    await anonymous.service.search(subject(), { objectKey: queryObjectKey() })
+
+    expect(anonymous.calls.soldStatsExcludeSellerIds).toEqual([null])
   })
 })

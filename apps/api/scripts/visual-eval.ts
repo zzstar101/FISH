@@ -15,7 +15,9 @@
 // 与 live 考核覆盖。
 //
 // 因此本脚本：**不连数据库、不出网、不需要任何环境变量**，只打印 Markdown 报告，
-// **不设通过门槛**（只评估，不改生产行为，不因指标低而失败退出）。
+// 并且**设通过门槛**（#406 第 3 项）：第五节的判据决定退出码，指标退化会让 CI 真的红。
+// 门槛本身是纯函数（`eval/gates.ts`，另有单测喂退化输入证明它会红），阈值与实测值的关系
+// 写在那个文件的头注释里——改 fixture 或改权重必须同步复核。
 //
 // 运行：bun run visual:eval
 //
@@ -43,6 +45,10 @@ import {
   REQUIRED_SCENARIOS,
   VISUAL_EVAL_FIXTURE,
 } from '../src/modules/visual-search/eval/fixture'
+import {
+  evaluateVisualEvalGates,
+  type VisualEvalPathMetrics,
+} from '../src/modules/visual-search/eval/gates'
 import {
   emptyResultRate,
   latencyPercentile,
@@ -401,7 +407,8 @@ console.log(
     .join('、')}`,
 )
 console.log(
-  '- 相似度来源：**人工给定**（见 fixture 头注释）。本脚本不出网、不连数据库、不设通过门槛。',
+  '- 相似度来源：**人工给定**（见 fixture 头注释）。本脚本不出网、不连数据库；' +
+    '通过门槛与回执见第五节（#406 第 3 项，这一节决定退出码）。',
 )
 console.log('')
 
@@ -492,4 +499,57 @@ const selfCheck = {
 }
 if (selfCheck.emptyResultRate !== 0 || selfCheck.p95Latency !== 0) {
   console.log(`> 内部自检异常：${JSON.stringify(selfCheck)}`)
+}
+
+// ---------------------------------------------------------------------------
+// 五、通过门槛（#406 第 3 项）
+//
+// 判据本身在 `src/modules/visual-search/eval/gates.ts`（纯函数，另有单测喂退化输入
+// 证明它会红）；这里只负责把本腿算出的指标喂进去、打印回执、用退出码让 CI 真的失败。
+// 这一节以前不存在，于是"指标退化"从来没有任何人会失败——报告再难看也是 exit 0。
+// ---------------------------------------------------------------------------
+
+const pathMetrics = Object.fromEntries(
+  PATHS.map((path) => [
+    path,
+    {
+      ...pathStats(path),
+      mrr: meanOf((outcome) => mrr(ids(outcome, path), outcome.sample.relevance)),
+      ndcgAt10: meanOf((outcome) => ndcgAtK(ids(outcome, path), outcome.sample.relevance, 10)),
+    } satisfies VisualEvalPathMetrics,
+  ]),
+) as Record<EvalPath, VisualEvalPathMetrics>
+
+const violations = evaluateVisualEvalGates({
+  sampleCount: OUTCOMES.length,
+  paths: pathMetrics,
+})
+
+console.log('')
+console.log('## 五、通过门槛（#406 第 3 项：这一节决定退出码）')
+console.log('')
+console.log('| 路 | MRR | NDCG@10 | 首选命中 | 排序倒置 |')
+console.log('| --- | --- | --- | --- | --- |')
+for (const path of PATHS) {
+  const metrics = pathMetrics[path]
+  console.log(
+    `| ${path} | ${fixed(metrics.mrr)} | ${fixed(metrics.ndcgAt10)} | ` +
+      `${metrics.hits}/${OUTCOMES.length} | ${metrics.inversions} |`,
+  )
+}
+console.log('')
+if (violations.length === 0) {
+  console.log(
+    '- ✅ 全部门槛通过：绝对下限，以及"hybrid 严格优于两条单路"（后者是 fixture 分辨力的可执行断言）。',
+  )
+} else {
+  for (const violation of violations) {
+    console.log(`- ❌ ${violation.gate}：${violation.detail}`)
+  }
+  console.log('')
+  console.log(
+    '- 门槛失败**不等于**实现错了：也可能是 fixture 或排序权重被有意改动。' +
+      '无论哪种都要在 PR 里说明理由，并同步复核 `src/modules/visual-search/eval/gates.ts` 的阈值表。',
+  )
+  process.exitCode = 1
 }

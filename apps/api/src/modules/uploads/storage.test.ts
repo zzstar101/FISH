@@ -220,6 +220,29 @@ test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代�
   expect(() => media.publicUrl(`listings/${USER_ID}/unknown.exe`)).toThrow()
 })
 
+// #406 第 4 项：seed 数据的三条隐性契约违约时，服务端只回 500 INTERNAL_ERROR，
+// 对客户端完全不可区分。所以这两条报错必须自带「出错的键」与「期望的形状」——
+// 否则排障只能从 500 反推是哪一个键违约。
+test('键形状违约的报错带上出错的键与两种合法形状（#406 第 4 项）', () => {
+  const media = createBunS3MediaStorage({
+    client: new Bun.S3Client({
+      endpoint: 'http://127.0.0.1:1',
+      region: 'us-east-1',
+      accessKeyId: 'test',
+      secretAccessKey: 'test',
+      bucket: 'fish',
+    }),
+    publicUrlBase: 'https://cdn.test/fish',
+  })
+  // 既不是公开键（两段规范 TypeID），也不是 seed 演示键：走 publicUrl 的最后一道分支。
+  expect(() => media.publicUrl('listings/unknown-slug/0.jpg')).toThrow(
+    'listings/unknown-slug/0.jpg',
+  )
+  expect(() => media.publicUrl('listings/unknown-slug/0.jpg')).toThrow('seed-')
+  // 连形状白名单都没过（键里有空格）：同样要指出是哪一个键。
+  expect(() => media.publicUrl('listings/seed k380/0.jpg')).toThrow('listings/seed k380/0.jpg')
+})
+
 // #286 复审 F4：审核中的私有快照不在匿名白名单里，只能拿到带过期时刻的签名代理 URL；
 // 没配代理时必须拒绝出图，而不是回落到公开桶地址（那会把未审内容放到匿名可读前缀）。
 test('审核中的图返回签名代理 URL；未配置代理时拒绝出图', () => {

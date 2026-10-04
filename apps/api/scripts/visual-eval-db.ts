@@ -37,7 +37,10 @@
  */
 
 import { VISUAL_EMBED_JOB_TYPES } from '@fish/contracts/visual/jobs'
-import { VISUAL_SEARCH_STRATEGY_VERSION } from '@fish/contracts/visual/ranking'
+import {
+  VISUAL_RECALL_MIN_SIMILARITY,
+  VISUAL_SEARCH_STRATEGY_VERSION,
+} from '@fish/contracts/visual/ranking'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { listingImages, listings } from '@fish/db/schema/listings'
@@ -815,10 +818,13 @@ try {
   console.log(`| p95 延迟 | ${ms(p95)} |`)
   console.log('')
   console.log(
-    `- ⚠️ **empty-result rate = 0 是产品行为，不是采样不足**：召回没有相似度下限，` +
-      `只要库里有向量，再无关的图也会返回最近的 ${VISUAL_RECALL_LIMIT} 条（上限 ${VISUAL_RESULT_LIMIT} 条）。` +
-      `所以"空结果率"在这条链路上只能被"零向量 / 零可见商品"触发，` +
-      `这本身是 #324 值得记一笔的产品问题（无关查询不会得到空列表，只会得到一堆低分结果）。`,
+    `- **empty-result rate 的含义在 #406 第 6 项之后变了**：召回现在先按 ` +
+      `\`VISUAL_RECALL_MIN_SIMILARITY = ${VISUAL_RECALL_MIN_SIMILARITY}\` 剔掉低于下限的候选` +
+      `（两路取更强；相似度 = 1 - distance/2，0.5 即余弦正交），低于下限直接判空，` +
+      `而不是把最近的 ${VISUAL_RECALL_LIMIT} 条（上限 ${VISUAL_RESULT_LIMIT} 条）低分结果塞给用户。` +
+      `所以这个数不再恒为 0：本腿的样本是刻意构造的无关图，正好用它量下限是否生效。` +
+      `（旧行为 v1 无下限，此值恒 0——那正是 #324 记下的产品问题。）` +
+      `注意 0 仍然可能出现在两种情况下：库里没有该模型向量（走 503 NO_EMBEDDING 的是另一支）或可见商品为零。`,
   )
   console.log(
     `- 被拒的 ${rejected.length} 条是**非图片字节**（422 VISUAL_SEARCH_IMAGE_INVALID）：` +
