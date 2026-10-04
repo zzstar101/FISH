@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
+import { getTableName, is } from 'drizzle-orm'
+import { PgTable } from 'drizzle-orm/pg-core'
 
 /**
  * #316 迁移 journal 一致性门禁：**纯文件断言，不连库、不读 `DATABASE_URL`**（与 #309 / PR #312 同源的兼容版）。
@@ -669,4 +671,71 @@ test('#316 遗留段冻结：接着手写 0026_xxx（idx 与位置恰好一致�
     '遗留序号段的末条 tag 是 `0026_hand_written`，应为 `0025_shallow_mimic`',
   )
   expect(messages).toContain('遗留序号 tag 共 27 条，应为 26 条')
+})
+
+/**
+ * #439：**最新快照必须覆盖 `src/schema` 里的每一张表。**
+ *
+ * 为什么要单开一条：本文件此前的断言全是「迁移文件之间自洽」（tag 唯一 / `when` 递增 / `.sql` ↔ journal /
+ * snapshot 链连续），断不出「快照内容落后于 schema」。而 drizzle-kit 算 diff 的基线恰恰是**最后一份快照**，
+ * 不是 schema —— `20261002165919_perfect_scorpion`（#418）的快照丢了 `recommendation_request_items`
+ * （#407 加的），于是 `db:generate` 把 `20261002123003_busy_lockheed` 的建表语句**字节等价**地又生成一遍
+ * （sha256 `881f7730…`），随即被 #429 的簿记守卫拦下：本地 `db:generate → db:migrate → db:seed`
+ * 全链路被 main 自己阻断。
+ *
+ * 只查单向（schema ⊆ 快照）：快照里有而 schema 里没有的表是**正常的**——迁移可以删表，
+ * 那样 schema 与快照的差集本来就不为空（本仓库目前没有 `DROP TABLE`）。
+ */
+async function schemaTableNames(folder: string): Promise<string[]> {
+  const names = new Set<string>()
+  for (const file of await listFileNames(folder, '*.ts')) {
+    if (file.endsWith('.test.ts')) continue
+    const module = (await import(join(folder, file))) as Record<string, unknown>
+    for (const value of Object.values(module)) {
+      if (is(value, PgTable)) names.add(`public.${getTableName(value)}`)
+    }
+  }
+  return [...names].sort()
+}
+
+/** 最新一份快照（journal 末条 tag 的**编号前缀**对应的 `meta/<前缀>_snapshot.json`）里的表键。 */
+async function latestSnapshotTableNames(folder: string): Promise<string[]> {
+  const journal = await readJson<Journal>(join(folder, metaFolderName, '_journal.json'))
+  const latest = journal.entries.at(-1)
+  if (latest === undefined) throw new Error('meta/_journal.json 没有任何条目')
+  const prefix = /^(\d+)_/.exec(latest.tag)?.[1]
+  if (prefix === undefined) throw new Error(`末条 tag \`${latest.tag}\` 没有编号前缀`)
+  const snapshot = await readJson<{ tables: Record<string, unknown> }>(
+    join(folder, metaFolderName, `${prefix}_snapshot.json`),
+  )
+  return Object.keys(snapshot.tables).sort()
+}
+
+/** 纯函数，便于在内存夹具上证明这条断言真的能红。 */
+function snapshotCoverageViolations(schemaTables: string[], snapshotTables: string[]): string[] {
+  const covered = new Set(snapshotTables)
+  return schemaTables
+    .filter((table) => !covered.has(table))
+    .map(
+      (table) =>
+        `最新快照缺少 schema 里的表 \`${table}\`：快照已落后于 schema，\`db:generate\` 会把早已合过的迁移重新生成一遍（#439）`,
+    )
+}
+
+test('#439 真实迁移目录：最新快照覆盖 schema 里的每一张表', async () => {
+  const schemaTables = await schemaTableNames(join(import.meta.dir, 'schema'))
+  const snapshotTables = await latestSnapshotTableNames(migrationsFolder)
+  // 防夹具读空导致「空断言全绿」。
+  expect(schemaTables.length).toBeGreaterThan(0)
+  expect(snapshotTables.length).toBeGreaterThan(0)
+  expect(snapshotCoverageViolations(schemaTables, snapshotTables)).toEqual([])
+})
+
+test('#439 #418 的形状：快照丢了前一条迁移新增的表必须报错', () => {
+  const messages = snapshotCoverageViolations(
+    ['public.listing_view_history', 'public.recommendation_request_items'],
+    ['public.listing_view_history'],
+  ).join('\n')
+  expect(messages).toContain('`public.recommendation_request_items`')
+  expect(messages).not.toContain('`public.listing_view_history`')
 })
