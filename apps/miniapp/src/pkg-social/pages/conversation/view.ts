@@ -1,4 +1,5 @@
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
+import type { UserPresence } from '@fish/contracts/users/schema'
 import type { AllowedImageMime } from '@/features/upload/mime'
 
 /**
@@ -107,6 +108,20 @@ export function applyReadPoll(
   next: ConversationDto,
 ): ConversationDto {
   const merged = laterReadMarker(conversation.counterpartLastReadAt, next.counterpartLastReadAt)
+  if (merged === conversation.counterpartLastReadAt) return conversation
+  return { ...conversation, counterpartLastReadAt: merged }
+}
+
+/**
+ * 实时推送的 `conversation.read` 落地：与 `applyReadPoll` 同一套判据，只是事件里
+ * 没有整份详情、只有推进到的时刻。取「更晚的那份」的原因不变 —— 读位在服务端单调
+ * 只前进，但推送与 20s 轮询可以乱序到达，先发的旧值不许把新读位打回去。
+ *
+ * 调用方先按 `readerId !== 我` 过滤（本人这次读操作不该被当成「对方已读」，
+ * 见 `chat/schema.ts` 的 `conversation.read` 注释），这里只管落地。
+ */
+export function applyReadEvent(conversation: ConversationDto, readAt: string): ConversationDto {
+  const merged = laterReadMarker(conversation.counterpartLastReadAt, readAt)
   if (merged === conversation.counterpartLastReadAt) return conversation
   return { ...conversation, counterpartLastReadAt: merged }
 }
@@ -374,6 +389,22 @@ export function mergePushedMedia(
 }
 
 /**
+ * 把一条**实时推送**的消息并入消息流（与 `mergePushedMedia` 同一手法，文本侧）。
+ *
+ * 去重的两个来源（#89 就埋了这条注释：服务端「先落库、再推送、再回 HTTP」）：
+ * - 自己这条的 HTTP 响应与实时推送赛跑，谁先到都只落一次；
+ * - 推送本身不保证不重。
+ *
+ * 推送到「已带本地撤回碑」的同一条时按 id 去重返回原数组 —— 碑优先于迟到的正文
+ * （与 `keepRecalledTombstones` 同一方向），服务端权威态由下一次刷新收口。
+ * 重复时返回原数组本身，让 React 省掉一次白重渲染。
+ */
+export function mergePushedMessage(previous: MessageDto[], message: MessageDto): MessageDto[] {
+  if (previous.some((item) => item.id === message.id)) return previous
+  return sortMessages([...previous, message])
+}
+
+/**
  * 后台刷新（silent）落地时把媒体快照合并回已有媒体流。
  *
  * 与 `mergeRefreshedMessages` 同一理由（见上方长注释）：媒体列表的响应同样可能
@@ -468,6 +499,23 @@ export function applyPresencePoll(
   incoming: ConversationDto,
 ): ConversationDto {
   return { ...previous, counterpartPresence: incoming.counterpartPresence }
+}
+
+/**
+ * 实时推送的 `presence.changed` 落地：只写**命中对方**的那次，其余字段不动
+ * （与 `applyPresencePoll` 的限定同一理由 —— 推送里没有整份详情，本来也写不了）。
+ *
+ * 不命中（别的用户上线，比如对方之外的会话对象）返回原引用，不白重渲染。
+ * 服务端只推「离线→在线」的转变；「在线→离线」由 20s 详情轮询按同一个 TTL
+ * （`PRESENCE_ONLINE_TTL_MS`）在本地过期 —— 两条路径缺一不可。
+ */
+export function applyPresenceEvent(
+  conversation: ConversationDto,
+  userId: string,
+  presence: UserPresence,
+): ConversationDto {
+  if (conversation.counterpart.id !== userId) return conversation
+  return { ...conversation, counterpartPresence: presence }
 }
 
 /**

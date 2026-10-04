@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyPresenceEvent,
   applyPresencePoll,
+  applyReadEvent,
   applyRecalled,
   beginSend,
   canRecallMessage,
@@ -22,6 +24,7 @@ import {
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
   mergePushedMedia,
+  mergePushedMessage,
   mergeRefreshedMedia,
   mergeTimeline,
   messageActions,
@@ -192,6 +195,79 @@ describe('applyPresencePoll —— 在线态轮询只写在线态（#359 第五�
     expect(merged.listing.status).toBe('RESERVED')
     // 只有在线态取新值（这里恰好是同一份，重点是其余字段一个都没动）
     expect(merged.counterpartPresence).toEqual(stale.counterpartPresence)
+  })
+})
+
+describe('applyReadEvent —— 实时推送的 conversation.read 落地', () => {
+  const dto = (counterpartLastReadAt: string | null): ConversationDto => ({
+    id: 'cnv_01jc000000e00800000000001a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    role: 'buyer',
+    listing: {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    counterpartPresence: { online: false, lastActiveAt: null },
+    unreadCount: 0,
+    counterpartLastReadAt,
+    lastMessage: null,
+    lastMessageAt: '2026-09-30T10:59:00.000Z',
+    createdAt: '2026-09-30T10:00:00.000Z',
+  })
+
+  test('推送推进对方的读位（「已读」标签翻绿）', () => {
+    const merged = applyReadEvent(dto(null), '2026-09-30T11:00:00.000Z')
+    expect(merged.counterpartLastReadAt).toBe('2026-09-30T11:00:00.000Z')
+  })
+
+  test('乱序的旧推送不把读位打回去（读位单调只前进）', () => {
+    const previous = dto('2026-09-30T12:00:00.000Z')
+    expect(applyReadEvent(previous, '2026-09-30T11:00:00.000Z')).toBe(previous)
+  })
+})
+
+describe('applyPresenceEvent —— 实时推送的 presence.changed 落地', () => {
+  const dto = (overrides: Partial<ConversationDto> = {}): ConversationDto => ({
+    id: 'cnv_01jc000000e00800000000001a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    role: 'buyer',
+    listing: {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    counterpartPresence: { online: false, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    unreadCount: 0,
+    counterpartLastReadAt: null,
+    lastMessage: null,
+    lastMessageAt: '2026-09-30T10:59:00.000Z',
+    createdAt: '2026-09-30T10:00:00.000Z',
+    ...overrides,
+  })
+
+  test('对方上线：只写 counterpartPresence，其余字段不动', () => {
+    const presence = { online: true, lastActiveAt: '2026-09-30T12:00:00.000Z' }
+    const merged = applyPresenceEvent(dto(), 'usr_01jc000000e00800000000000b', presence)
+    expect(merged.counterpartPresence).toEqual(presence)
+    expect(merged.unreadCount).toBe(0)
+    expect(merged.listing.status).toBe('ACTIVE')
+  })
+
+  test('别的用户上线（不是本会话对方）：原样返回，不白重渲染', () => {
+    const previous = dto()
+    expect(
+      applyPresenceEvent(previous, 'usr_01jc000000e00800000000009z', {
+        online: true,
+        lastActiveAt: '2026-09-30T12:00:00.000Z',
+      }),
+    ).toBe(previous)
   })
 })
 
@@ -538,6 +614,33 @@ describe('mergePushedMedia —— 实时推送的媒体并入媒体流（#67 第
       picture('a', '2026-09-21T10:00:00.000Z'),
     )
     expect(merged.map((item) => item.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('mergePushedMessage —— 实时推送的消息并入消息流', () => {
+  const text = (id: string, createdAt: string): MessageDto => ({
+    id,
+    conversationId: 'c-1',
+    senderId: 'u-2',
+    sender: { id: 'u-2', nickname: '小林', avatarUrl: null },
+    type: 'TEXT',
+    content: id,
+    recalledAt: null,
+    replyTo: null,
+    createdAt,
+  })
+
+  test('推送先于自己发送的 HTTP 响应到达时落一次，响应到了不再重复', () => {
+    // 服务端「先落库、再推送、再回 HTTP」：推送可能先到
+    const previous = [text('b', '2026-09-21T10:00:01.000Z')]
+    expect(
+      mergePushedMessage(previous, text('a', '2026-09-21T10:00:00.000Z')).map((i) => i.id),
+    ).toEqual(['a', 'b'])
+  })
+
+  test('重复推送 / 与已落库消息同 id 时返回原数组本身（碑优先于迟到的正文）', () => {
+    const previous = [text('a', '2026-09-21T10:00:00.000Z')]
+    expect(mergePushedMessage(previous, text('a', '2026-09-21T10:00:00.000Z'))).toBe(previous)
   })
 })
 

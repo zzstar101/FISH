@@ -1,0 +1,377 @@
+import { describe, expect, mock, test } from 'bun:test'
+import type { MediaRealtimeEvent, RealtimeServerEvent } from '@fish/contracts/chat/schema'
+import type {
+  ChatRealtimeEvent,
+  RealtimeSocket,
+  RealtimeTimers,
+} from '../src/features/chat/realtime'
+
+/**
+ * 会话实时通道客户端（`features/chat/realtime`）。
+ *
+ * 手法与 `chat-media-api.test.ts` 一致：`mock.module` 掉平台依赖（Taro / 会话 cookie）
+ * 之后再 `await import` 被测模块；socket 与定时器全部注入假件，驱动「建链 → 心跳 →
+ * pong 超时 → 断线退避重连」的完整时序，不依赖网络。被测的类本身不 import Taro
+ * 之外的任何运行时（默认工厂除外，测试不经过它）。
+ */
+
+mock.module('@tarojs/taro', () => ({ default: {} }))
+mock.module('@/lib/session', () => ({ sessionCookieHeader: () => 'fish_session=test' }))
+
+const { ChatRealtime, parseRealtimeEvent, realtimeUrl, reconnectDelay } = await import(
+  '../src/features/chat/realtime'
+)
+
+/** 按 Taro `SocketTask` 的注册式回调形状做的假 socket */
+class FakeSocket implements RealtimeSocket {
+  private readonly openHandlers: (() => void)[] = []
+  private readonly messageHandlers: ((data: unknown) => void)[] = []
+  private readonly closeHandlers: (() => void)[] = []
+  private readonly errorHandlers: (() => void)[] = []
+  readonly sent: string[] = []
+  closed = false
+
+  send(data: string): void {
+    this.sent.push(data)
+  }
+
+  close(): void {
+    this.closed = true
+    for (const handler of this.closeHandlers) handler()
+  }
+
+  onOpen(handler: () => void): void {
+    this.openHandlers.push(handler)
+  }
+
+  onMessage(handler: (data: unknown) => void): void {
+    this.messageHandlers.push(handler)
+  }
+
+  onClose(handler: () => void): void {
+    this.closeHandlers.push(handler)
+  }
+
+  onError(handler: () => void): void {
+    this.errorHandlers.push(handler)
+  }
+
+  open(): void {
+    for (const handler of this.openHandlers) handler()
+  }
+
+  message(data: unknown): void {
+    for (const handler of this.messageHandlers) handler(data)
+  }
+
+  fail(): void {
+    for (const handler of this.errorHandlers) handler()
+  }
+}
+
+const validMessageEvent = {
+  type: 'message.new',
+  conversationId: 'cnv_01jc000000e00800000000001a',
+  message: {
+    id: 'msg_01jc000000e00800000000001t',
+    conversationId: 'cnv_01jc000000e00800000000001a',
+    senderId: 'usr_01jc000000e00800000000000b',
+    sender: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    type: 'TEXT',
+    content: '在吗',
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+} satisfies RealtimeServerEvent
+
+/** #67 媒体事件是独立 schema，不并入 realtimeServerEventSchema。 */
+const validMediaEvent = {
+  type: 'media.new',
+  conversationId: 'cnv_01jc000000e00800000000001a',
+  media: {
+    id: 'msg_01jc000000e00800000000001s',
+    conversationId: 'cnv_01jc000000e00800000000001a',
+    senderId: 'usr_01jc000000e00800000000000b',
+    kind: 'IMAGE',
+    mediaId: 'med_01jc000000e00800000000002b',
+    url: '/api/conversations/cnv_01jc000000e00800000000001a/media/med_01jc000000e00800000000002b',
+    mimeType: 'image/png',
+    sizeBytes: 2_048,
+    width: 800,
+    height: 600,
+    durationMs: null,
+    recalledAt: null,
+    replyTo: null,
+    createdAt: '2026-01-01T00:00:01.000Z',
+  },
+} satisfies MediaRealtimeEvent
+
+describe('realtimeUrl —— 从 API 基地址推导 WS 地址', () => {
+  test('http → ws、https → wss，路径用契约常量，不加 /api 前缀', () => {
+    expect(realtimeUrl('http://localhost:3000')).toBe('ws://localhost:3000/ws/chat')
+    expect(realtimeUrl('https://api.example.com')).toBe('wss://api.example.com/ws/chat')
+  })
+})
+
+describe('realtime 帧解析', () => {
+  test('契约事件放行，畸形帧丢弃', () => {
+    expect(parseRealtimeEvent(JSON.stringify({ type: 'pong' }))).toEqual({ type: 'pong' })
+    expect(parseRealtimeEvent(JSON.stringify(validMessageEvent))).toEqual(validMessageEvent)
+    expect(parseRealtimeEvent('not-json')).toBeNull()
+    expect(parseRealtimeEvent(JSON.stringify({ type: 'unknown' }))).toBeNull()
+    expect(parseRealtimeEvent(new ArrayBuffer(0))).toBeNull()
+  })
+
+  test('独立的 media.new 要能解析，不能被旧版 schema 挡掉', () => {
+    expect(parseRealtimeEvent(JSON.stringify(validMediaEvent))).toEqual(validMediaEvent)
+    // 形状不合契约的媒体帧丢弃，不把半截 DTO 塞进消息流
+    expect(
+      parseRealtimeEvent(
+        JSON.stringify({ ...validMediaEvent, media: { ...validMediaEvent.media, kind: 'FILE' } }),
+      ),
+    ).toBeNull()
+  })
+})
+
+describe('reconnectDelay —— 封顶指数退避 + 抖动', () => {
+  test('与 web-pc 同一套口径', () => {
+    const random = () => 1
+    expect(reconnectDelay(0, { baseMs: 1_000, maxMs: 30_000, random })).toBe(1_000)
+    expect(reconnectDelay(3, { baseMs: 1_000, maxMs: 30_000, random })).toBe(8_000)
+    expect(reconnectDelay(10, { baseMs: 1_000, maxMs: 30_000, random })).toBe(30_000)
+    expect(reconnectDelay(0, { baseMs: 1_000, maxMs: 30_000, random: () => 0.5 })).toBe(750)
+  })
+})
+
+describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
+  /** 捕获 setTimeout 时刻与延时、setInterval 处理器的假定时器 */
+  const makeTimers = () => {
+    const scheduled: Array<{ handler: () => void; timeout: number }> = []
+    const intervals: Array<{ handler: () => void }> = []
+    const cleared: unknown[] = []
+    const timers: RealtimeTimers = {
+      setTimeout: (handler, timeout) => {
+        scheduled.push({ handler, timeout })
+        return scheduled.length
+      },
+      clearTimeout: (handle) => cleared.push(handle),
+      setInterval: (handler) => {
+        intervals.push({ handler })
+        return intervals.length
+      },
+      clearInterval: (handle) => cleared.push(handle),
+    }
+    return { timers, scheduled, intervals, cleared }
+  }
+
+  /** 建链是异步的（Taro.connectSocket 返回 Promise）：把微任务冲刷掉再断言 */
+  const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  test('建链带上 cookie，事件转发，pong 与坏帧不打扰调用方，stop 干净收场', async () => {
+    const sockets: FakeSocket[] = []
+    const factories: Array<{ url: string; cookie: string | undefined }> = []
+    const events: ChatRealtimeEvent[] = []
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: (url, cookie) => {
+        factories.push({ url, cookie })
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return Promise.resolve(socket)
+      },
+      getCookie: () => 'fish_session=abc',
+      onEvent: (event) => events.push(event),
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 60_000,
+    })
+
+    realtime.start()
+    await flush()
+    expect(factories).toEqual([{ url: 'ws://test/ws/chat', cookie: 'fish_session=abc' }])
+    expect(sockets).toHaveLength(1)
+
+    sockets[0]?.open()
+    sockets[0]?.message(JSON.stringify({ type: 'pong' }))
+    sockets[0]?.message('not-json')
+    expect(events).toEqual([])
+
+    sockets[0]?.message(JSON.stringify(validMessageEvent))
+    sockets[0]?.message(JSON.stringify(validMediaEvent))
+    expect(events).toEqual([validMessageEvent, validMediaEvent])
+
+    realtime.stop()
+    expect(sockets[0]?.closed).toBe(true)
+
+    // stop 之后迟到的帧不再进调用方
+    sockets[0]?.message(JSON.stringify(validMessageEvent))
+    expect(events).toEqual([validMessageEvent, validMediaEvent])
+  })
+
+  test('断开后按退避重连，重连时重读 cookie；stop 取消在途的重连', async () => {
+    const { timers, scheduled } = makeTimers()
+    const sockets: FakeSocket[] = []
+    const cookies: Array<string | undefined> = []
+    const cookiesGiven = ['fish_session=first', 'fish_session=second']
+    let cookieCalls = 0
+    let opens = 0
+    let disconnects = 0
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: (_url, cookie) => {
+        cookies.push(cookie)
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return Promise.resolve(socket)
+      },
+      // getCookie 在每次建链前调用（先于工厂）：第一次给 first，第二次给 second
+      getCookie: () => {
+        const value = cookiesGiven[Math.min(cookieCalls, cookiesGiven.length - 1)]
+        cookieCalls += 1
+        return value
+      },
+      onEvent: () => {},
+      onOpen: () => {
+        opens += 1
+      },
+      onDisconnected: () => {
+        disconnects += 1
+      },
+      timers,
+      reconnectBaseDelayMs: 100,
+      reconnectMaxDelayMs: 10_000,
+      random: () => 1,
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 60_000,
+    })
+
+    realtime.start()
+    await flush()
+    sockets[0]?.open()
+    expect(opens).toBe(1)
+
+    sockets[0]?.close()
+    expect(disconnects).toBe(1)
+    expect(scheduled).toHaveLength(1)
+    expect(scheduled[0]?.timeout).toBe(100)
+
+    scheduled[0]?.handler()
+    await flush()
+    expect(sockets).toHaveLength(2)
+    // 重连是重新建链：cookie 重读（拿到第二份）
+    expect(cookies[1]).toBe('fish_session=second')
+    sockets[1]?.open()
+    expect(opens).toBe(2)
+
+    sockets[1]?.close()
+    realtime.stop()
+    expect(scheduled).toHaveLength(2)
+    // stop 之后排定的重连不许再发
+    scheduled[1]?.handler()
+    await flush()
+    expect(sockets).toHaveLength(2)
+    expect(disconnects).toBe(2)
+  })
+
+  test('建链失败（网络不通 / 401 拒绝）与断开同一处理：退避重连', async () => {
+    const { timers, scheduled } = makeTimers()
+    let attempts = 0
+    let disconnects = 0
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () => {
+        attempts += 1
+        return Promise.reject(new Error('upgrade rejected'))
+      },
+      onEvent: () => {},
+      onDisconnected: () => {
+        disconnects += 1
+      },
+      timers,
+      reconnectBaseDelayMs: 100,
+      reconnectMaxDelayMs: 10_000,
+      random: () => 1,
+    })
+
+    realtime.start()
+    await flush()
+    expect(attempts).toBe(1)
+    expect(disconnects).toBe(1)
+    expect(scheduled).toHaveLength(1)
+    expect(scheduled[0]?.timeout).toBe(100)
+
+    realtime.stop()
+  })
+
+  test('心跳：到点发 ping；pong 清掉超时；pong 不到期就断开重连', async () => {
+    const { timers, scheduled, intervals } = makeTimers()
+    const sockets: FakeSocket[] = []
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () => {
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return Promise.resolve(socket)
+      },
+      onEvent: () => {},
+      timers,
+      heartbeatIntervalMs: 20_000,
+      heartbeatTimeoutMs: 10_000,
+      reconnectBaseDelayMs: 100,
+      reconnectMaxDelayMs: 10_000,
+      random: () => 1,
+    })
+
+    realtime.start()
+    await flush()
+    expect(intervals).toHaveLength(0)
+    sockets[0]?.open()
+    expect(intervals).toHaveLength(1)
+
+    const tick = intervals[0]?.handler
+    // 第一跳：发出 ping，排定 pong 超时
+    tick?.()
+    expect(sockets[0]?.sent).toEqual([JSON.stringify({ type: 'ping' })])
+    expect(scheduled).toHaveLength(1)
+    expect(scheduled[0]?.timeout).toBe(10_000)
+
+    // pong 到了：超时被清，下一跳继续发 ping
+    sockets[0]?.message(JSON.stringify({ type: 'pong' }))
+    tick?.()
+    expect(sockets[0]?.sent).toEqual([
+      JSON.stringify({ type: 'ping' }),
+      JSON.stringify({ type: 'ping' }),
+    ])
+    expect(scheduled).toHaveLength(2)
+
+    // pong 不到：超时触发 close → 断开重连
+    scheduled[1]?.handler()
+    expect(sockets[0]?.closed).toBe(true)
+    expect(scheduled).toHaveLength(3)
+    expect(scheduled[2]?.timeout).toBe(100)
+
+    realtime.stop()
+  })
+
+  test('stop 与新一轮建链之间的迟到建链结果被作废，不接线不重复', async () => {
+    const sockets: FakeSocket[] = []
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () => {
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return Promise.resolve(socket)
+      },
+      onEvent: () => {},
+    })
+
+    realtime.start()
+    realtime.stop()
+    await flush()
+    // 迟到的建链结果就地关掉，不产生任何可用的连接
+    expect(sockets).toHaveLength(1)
+    expect(sockets[0]?.closed).toBe(true)
+    // open 也不该触发任何回调路径（没有 attach 过）
+    expect(() => sockets[0]?.open()).not.toThrow()
+  })
+})
