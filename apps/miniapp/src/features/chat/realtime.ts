@@ -177,7 +177,10 @@ export class ChatRealtime {
   private connecting = false
   private hasOpened = false
   private reconnectAttempt = 0
-  /** 建链代次：`stop()` 或新一轮 `connect()` 都会 +1，迟到的那次建链结果据此作废 */
+  /**
+   * 建链代次：`stop()`、新一轮 `connect()`、以及**建链超时**都会 +1，迟到的那次建链结果
+   * 据此作废 —— 超时是主要来源（Promise 只是慢，之后仍会 settle）。
+   */
   private connectGen = 0
   private reconnectTimer: unknown = null
   private connectTimer: unknown = null
@@ -229,6 +232,12 @@ export class ChatRealtime {
     this.connectTimer = this.timers.setTimeout(() => {
       this.connectTimer = null
       if (this.stopped || gen !== this.connectGen || !this.connecting) return
+      /**
+       * 使这一代作废（第三轮审查）：Promise 只是「慢」的话，后面仍会 settle。不作废的话
+       * 迟到的 resolve 会因为 `gen === this.connectGen` 照常 `attach()`，与下面排出的
+       * 重连各建一条 socket —— 双连接，且旧的那条再没有人引用/关闭。
+       */
+      this.connectGen += 1
       this.connecting = false
       this.scheduleReconnect()
       this.options.onDisconnected?.()
@@ -236,7 +245,7 @@ export class ChatRealtime {
     createSocket(url, cookie)
       .then((socket) => {
         if (this.stopped || gen !== this.connectGen) {
-          // stop() 或新一轮建链已经发生：这条迟到的连接不该被任何人引用，就地关掉
+          // 这一代已作废（stop() / 新一轮建链 / 建链超时）：迟到的连接不该被任何人引用，就地关掉
           socket.close()
           return
         }

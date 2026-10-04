@@ -448,6 +448,106 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
     realtime.stop()
   })
 
+  test('建链超时后才 resolve 的旧 Promise 就地作废：立即 close、不 attach，只留重连那条', async () => {
+    const { timers, pending, intervals } = makeTimers()
+    const sockets: FakeSocket[] = []
+    /** 手动控制 settle：模拟「超时先到、Promise 迟到才 resolve」 */
+    const settle: Array<(socket: FakeSocket) => void> = []
+    let opens = 0
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () =>
+        new Promise<FakeSocket>((resolve) => {
+          const socket = new FakeSocket()
+          sockets.push(socket)
+          settle.push(resolve)
+        }),
+      onEvent: () => {},
+      onOpen: () => {
+        opens += 1
+      },
+      timers,
+      connectTimeoutMs: 5_000,
+      reconnectBaseDelayMs: 100,
+      reconnectMaxDelayMs: 10_000,
+      random: () => 1,
+    })
+
+    realtime.start()
+    await flush()
+    const first = sockets[0]
+    if (first === undefined) throw new Error('第一次建链没有发生')
+
+    // 超时先到：这一代作废，排一次退避重连
+    pending()[0]?.handler()
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
+
+    // 旧 Promise 赶在重连 timer 之前 resolve：必须立即关掉，不许 attach
+    settle[0]?.(first)
+    await flush()
+    expect(first.closed).toBe(true)
+    // 没 attach 过：open 不进任何回调路径，也不排心跳
+    first.open()
+    expect(opens).toBe(0)
+    expect(intervals).toHaveLength(0)
+
+    // 重连到点：只建这一条并正常接线
+    pending()[0]?.handler()
+    await flush()
+    // 超时那一代不许再建第二条：整个场景只该有「迟到的」与「重连的」两条
+    expect(sockets).toHaveLength(2)
+    const second = sockets[1]
+    if (second === undefined) throw new Error('重连没有建链')
+    settle[1]?.(second)
+    await flush()
+    second.open()
+    expect(opens).toBe(1)
+    expect(intervals).toHaveLength(1)
+    expect(second.closed).toBe(false)
+
+    realtime.stop()
+  })
+
+  test('建链超时后才 reject 的旧 Promise 不重复报断开、不重复排重连', async () => {
+    const { timers, pending } = makeTimers()
+    const rejectors: Array<(error: Error) => void> = []
+    let disconnects = 0
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () =>
+        new Promise<RealtimeSocket>((_resolve, reject) => {
+          rejectors.push(reject)
+        }),
+      onEvent: () => {},
+      onDisconnected: () => {
+        disconnects += 1
+      },
+      timers,
+      connectTimeoutMs: 5_000,
+      reconnectBaseDelayMs: 100,
+      reconnectMaxDelayMs: 10_000,
+      random: () => 1,
+    })
+
+    realtime.start()
+    await flush()
+    // 超时先到：报一次断开，排一次退避重连
+    pending()[0]?.handler()
+    expect(disconnects).toBe(1)
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
+
+    // 旧 Promise 迟到 reject：这一代已作废，不许再走一遍 catch 分支
+    rejectors[0]?.(new Error('upgrade rejected'))
+    await flush()
+    expect(disconnects).toBe(1)
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
+
+    realtime.stop()
+  })
+
   test('stop 与新一轮建链之间的迟到建链结果被作废，不接线不重复', async () => {
     const sockets: FakeSocket[] = []
     const realtime = new ChatRealtime({
