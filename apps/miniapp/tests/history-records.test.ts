@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
   applyCleared,
-  canClear,
   clearBlockedOf,
   clearDoneOf,
   clearedOf,
@@ -20,23 +19,26 @@ import {
 } from '../src/pkg-browse/pages/history/records'
 
 /**
- * 「历史浏览」的数据口径（本轮三类数据后端一条都没有，见 records.ts 文件头）。
- * 组件接线没有单测（本仓 tests/ 只有纯逻辑测试，无 Taro 组件渲染基建）。
+ * 「历史浏览」的数据口径（浏览档已接真接口 #415 M1；收藏 / 留言两档仍是演示 / 缺口空态，
+ * 见 records.ts 文件头）。组件接线没有单测（本仓 tests/ 只有纯逻辑测试，无 Taro 组件渲染基建）。
  *
  * 这里锁的是几件最容易做错的事：
  * 1. 失效角标在「全部浏览」与「我收藏的」两处一致（同一件商品不能一处说已下架、
  *    另一处还能买）；
- * 2. 空态三种来由**不能混成一句**：真实构建说「没有后端」、演示构建说「还没有记录」、
- *    清空之后说「已清空」—— 混了就会出现「我明明清空的，怎么说是没有后端」；
+ * 2. 空态三种来由**不能混成一句**：真实构建的收藏 / 留言说「这一页还没接」、演示构建说
+ *    「还没有记录」、清空之后说「已清空」—— 混了就会出现「我明明清空的，怎么说是没有后端」；
  * 3. 清空是**真的清**（演示构建）、只清当前档、刷新之后仍然是空的；
  * 4. 「清空过」是**账号作用域**的：换账号不能带着上一个账号的记忆。
  *
  * ⚠️ **「演示条数与『我的』页数字栏对齐」这条约束不在本文件**：
- * 那个数字的真源是 `features/fetchers.ts` 的 `demoProfile()`（收藏 8 / 足迹 24），
- * 它没有 export 且本轮白名单不允许改那个文件，所以这里只能锁「演示 fixture 自己的
- * 形状」（4 天 × 6 件 = 24 / 收藏 8 / 留言 8）—— 把 `demoProfile().historyCount`
- * 改成别的值，下面的用例**仍然会全绿**。真正的对齐靠改动两侧时人工比对，
- * 这里如实说明，不假装锁住了。
+ * 演示条数的真源是 `features/fetchers.ts` 的 `demoProfile()`（收藏 8 / 足迹 24），
+ * 它没有 export，所以这里只能锁「演示 fixture 自己的形状」（4 天 × 6 件 = 24 / 收藏 8 /
+ * 留言 8）。真实构建下「我的」页的足迹数走 `GET /me/view-history` 的 `total`（同一张表
+ * 同一个窗口），与历史页列表同源。这条链路分两层、别混：
+ * `history-real.test.ts` 只锁 `fetchMyViewHistory` 自身的请求构造（limit / cursor）与 zod 收口；
+ * 「`loadProfile` 把它接进数字栏」（`historyCount = total`、只读 1 行、失败只让本格显示 —）
+ * 由 `profile-favorites-count.test.ts` 覆盖。历史页组件（Taro 页面）本身的接线无自动化覆盖，
+ * 靠开发者工具验收。
  */
 describe('演示数据的形状（见文件头：与「我的」页的对齐不在这里锁）', () => {
   test('足迹 24 件 · 4 天', () => {
@@ -90,19 +92,12 @@ describe('失效角标：两处口径一致', () => {
   })
 })
 
-describe('清空：演示构建下是真的清，真实构建下只给说明', () => {
+describe('清空：演示构建三档都真清，账号作用域不串', () => {
   const records = (ownerId: string): DemoRecords => ({
     ownerId,
     days: DEMO_HISTORY,
     favs: DEMO_FAVS,
     msgs: DEMO_MESSAGES,
-  })
-
-  test('只有演示构建能清（真实构建没有记录可清、也没有写端点）', () => {
-    // 这一条锁的是 `canClear` 的**入参口径**（页面必须传 `demo`，不能传常量 true）。
-    // 页面有没有真的把 `demo` 传进来，单测覆盖不到 —— 那要靠 code review。
-    expect(canClear(true)).toBe(true)
-    expect(canClear(false)).toBe(false)
   })
 
   test('清掉某一档之后，那一档真的空了，另外两档不受影响', () => {
@@ -191,12 +186,31 @@ describe('空态：三种来由不能混成一句', () => {
     expect(emptyKindOf(false, true)).toBe('cleared')
   })
 
-  test('真实构建的空态说的是「没有后端」，不是「你没有内容」', () => {
-    for (const tab of TAB_KEYS) {
+  test('真实构建的收藏 / 留言空态说「这一页还没接」；浏览档不再自称「没有后端」', () => {
+    for (const tab of ['favs', 'msgs'] as const) {
       const copy = emptyCopyOf(tab, 'noBackend')
       expect(copy.title).toContain('后端')
       expect(copy.action).toBe('去逛逛')
     }
+    /*
+      留言档（#405 审查回合）：`GET /me/comments` 已上线（#195 PR1），原来那句
+      「契约里没有『按作者取留言』的接口」已经是假话 —— 与本页收藏档同一口径，
+      如实说「这一页还没接」。
+    */
+    const msgs = emptyCopyOf('msgs', 'noBackend')
+    expect(msgs.title).toBe('这一页还没接后端')
+    expect(msgs.text).not.toContain('契约')
+    expect(msgs.text).not.toContain('按作者')
+    expect(msgs.text).toContain('已经上线')
+    /*
+      浏览档的 `noBackend` 随 #415 M1 退役：`GET /me/view-history` 已上线，
+      真实构建里「接口成功但列表为空」就是「你还没有浏览过」—— 再说「浏览足迹还没有后端」
+      就是假话。页面已改用 `demoEmpty` 那一支，这里同时锁住两支文案一致。
+    */
+    const history = emptyCopyOf('history', 'noBackend')
+    expect(history.title).not.toContain('后端')
+    expect(history.title).toBe(emptyCopyOf('history', 'demoEmpty').title)
+    expect(history.text).toBe(emptyCopyOf('history', 'demoEmpty').text)
   })
 
   test('演示构建没清过时的空态说「还没有」，不提后端', () => {

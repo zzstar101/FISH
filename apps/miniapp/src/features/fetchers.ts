@@ -88,6 +88,7 @@ import { fetchProfile } from './profile/api'
 import { type OrderCardView, toOrderCard, toOrderCardFromMock } from './transaction/adapt'
 import { fetchAllTransactions } from './transaction/api'
 import { fetchPublicUserListings, fetchPublicUserProfile } from './user/api'
+import { fetchMyViewHistory } from './view-history/api'
 import { toMockWish } from './wish/adapt'
 
 /**
@@ -776,8 +777,11 @@ export type ProfileView = {
   /** 全部买卖笔数 */
   orderCount: number
   /**
-   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。收藏（#190）与关注（#188）有端点，取真实值；
-   * 足迹契约仍没有端点，真实构建给 `null`（页面显示 `—`，不把「系统不知道」画成 0）；
+   * 数字栏（收藏 / 浏览足迹 / 关注）的计数。
+   *
+   * - 关注（#188）、收藏（#190）与浏览足迹（#415 M1）都有端点：给服务端真值，
+   *   与各自的列表页同源；
+   * - 任何一项读不到一律 `null`（页面显示 `—`），**不把「系统不知道」画成 0**。
    * 演示构建给演示数字（「我的」页 4 格栏按稿只摆数字不摆图标）。
    */
   favoritesCount: number | null
@@ -785,14 +789,38 @@ export type ProfileView = {
   followCount: number | null
 }
 
+/**
+ * 「我的」页数字栏的浏览足迹数：`GET /me/view-history?limit=1` 的 `total`
+ * （全量计数，不是这一页的长度；与历史页列表同一张表、同一个 30 天窗口）。
+ *
+ * **单独 catch**：这一格读不到只该显示 `—`，不能把整个「我的」页拖成失败态 ——
+ * 先例 `loadListingDetail` 里相似推荐 / 卖家资料的降级口径。所以它返回的 Promise
+ * **永不 reject**，可以安全地与其他请求并行 `Promise.all`。
+ */
+async function viewHistoryTotal(): Promise<number | null> {
+  try {
+    const page = await fetchMyViewHistory({ limit: 1 })
+    return page.total
+  } catch (error) {
+    console.warn('[miniapp] 个人中心：浏览足迹计数获取失败，本次显示 —', error)
+    return null
+  }
+}
+
 export async function loadProfile(now: number = Date.now()): Promise<ProfileView | null> {
   try {
-    // 收藏计数与收藏列表同源（#190 验收）：`GET /me/favorites` 回包的全量 total，
-    // 与 profile 并行拉（count 只读 1 行）。它失败**不算 profile 失败** ——
-    // 计数是辅助数字，兜底成 `null` 让页面显示 `—`，不把「读不到」画成 0，
-    // 也不让一个辅助请求把整页个人中心拖进错误态。
-    const favoritesTotal = fetchMyFavoritesTotal().catch(() => null)
-    const profile = await fetchProfile()
+    /*
+      三个请求**并行**：收藏（#190）与足迹（#415 M1）计数各只占数字栏一格，串行 await
+      会让「我的」页首屏多等一个 RTT（单个请求超时上限 15s）。两个辅助计数**各自失败
+      各自 `null`**（`fetchMyFavoritesTotal` 的 catch 与 `viewHistoryTotal` 的内部 catch，
+      后者返回的 Promise 永不 reject），所以 `Promise.all` 只有 `fetchProfile` 会 reject
+      —— 失败仍走下面的统一回退路径，一个辅助请求不拖死整页，也不拖死另一个计数。
+    */
+    const [profile, favoritesCount, historyCount] = await Promise.all([
+      fetchProfile(),
+      fetchMyFavoritesTotal().catch(() => null),
+      viewHistoryTotal(),
+    ])
     return {
       user: profile.user,
       stats: profile.stats,
@@ -809,10 +837,11 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
       orderCount: profile.transactions.length,
       // 关注（#188）有端点：`stats.followingCount` 与「我的关注」列表同源（同一张表同一方向）。
       followCount: profile.stats.followingCount,
-      // 收藏（#190）：与「我的收藏」列表同源的全量 total；足迹仍没有端点，给 `null` ——
-      // 这里的 0 不是「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实
-      favoritesCount: await favoritesTotal,
-      historyCount: null,
+      // 收藏（#190）：与「我的收藏」列表同源的全量 total；足迹（#415 M1）：与历史页列表
+      // 同源（同一张表、同一个 30 天窗口）的 total。两个辅助计数**各自失败各自 `null`**，
+      // 互不拖死：这里的 0 不是「真实结果是 0」而是「系统不知道」，画成 0 等于把未知说成事实。
+      favoritesCount,
+      historyCount,
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
@@ -839,7 +868,8 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
  * （收藏档的演示口径还要与「我的收藏」页 fixture 对上，见 `pages/favorites/list.ts`。）
  *
  * ⚠️ 只走**失败回退**这条路：`TARO_APP_MOCK=1` 但本机真起了后端时，走的是成功路径，
- * 足迹是 `null` → 页面显示 `—`，收藏 / 关注是服务端真值（演示数字不覆盖真实结果）。
+ * 收藏 / 足迹 / 关注都是服务端真值（`fetchMyFavoritesTotal()` / `viewHistoryTotal()` /
+ * `stats.followingCount`），演示数字一律不覆盖真实结果。
  */
 function demoProfile(): ProfileView {
   const {

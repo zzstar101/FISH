@@ -58,9 +58,9 @@ import './index.scss'
 /**
  * 数字栏格子（3版稿 4 格栏改纯数字）。
  *
- * `count` 为 `null` = **系统不知道**（未登录 / 还没拿到 profile / 契约没有该端点），
- * 页面显示 `—`；只有真实拿到数字才显示数字。收藏（#190）与关注（#188）有数据源，
- * 足迹当前没有（见 `fetchers.ts` 的 `ProfileView`）。
+ * `count` 为 `null` = **系统不知道**（未登录 / 还没拿到 profile / 读不到该计数），
+ * 页面显示 `—`；只有真实拿到数字才显示数字。收藏（#190）、关注（#188）与足迹（本次
+ * 接 `GET /me/view-history` 的 `total`，见 `fetchers.ts` 的 `loadProfile`）都已有数据源。
  */
 type StatCell = {
   key: string
@@ -388,8 +388,9 @@ export default function Profile() {
    * 数字栏（Owner 修订：只摆数字不摆图标）。
    *
    * **`null` = 系统不知道 → 显示 `—`**，四格一律同口径：收藏自 #190 起与「我的收藏」
-   * 列表同源（`GET /me/favorites` 的全量 total，读不到仍是 `null`）；足迹仍没有数据源
-   * （契约无端点），真实构建恒为 `null`；关注自 #188 起取 `stats.followingCount`
+   * 列表同源（`GET /me/favorites` 的全量 total，读不到仍是 `null`）；足迹自本次起与
+   * 「历史浏览」列表同源（`GET /me/view-history` 的 `total`，只取 `limit=1`，读不到
+   * 仍是 `null`）；关注自 #188 起取 `stats.followingCount`
    * （与「我的关注」列表同表同向）；愿望数来自 `stats.activeWishes`，但
    * **没拿到 profile 时也是 `null` 而不是 0**（`realCounts` 的未知态口径）。
    */
