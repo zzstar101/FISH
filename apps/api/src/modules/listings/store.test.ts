@@ -103,7 +103,7 @@ async function withSeller(run: (sellerId: string, otherSellerId: string) => Prom
 
 async function insertListingWithTime(
   sellerId: string,
-  input: { createdAt: Date; priceCents: number; status?: 'ACTIVE' | 'OFFLINE' },
+  input: { createdAt: Date; priceCents: number; free?: boolean; status?: 'ACTIVE' | 'OFFLINE' },
 ): Promise<string> {
   const id = newId()
   await db.insert(listings).values({
@@ -116,6 +116,7 @@ async function insertListingWithTime(
     category: 'DIGITAL',
     condition: 'GOOD',
     status: input.status ?? 'ACTIVE',
+    free: input.free ?? false,
     createdAt: input.createdAt,
   })
   return id
@@ -383,6 +384,53 @@ test('feed 只返回请求的状态，并按 (createdAt, id) 翻页且不重不�
     expect(collected).toHaveLength(4)
     expect(new Set(collected).size).toBe(4)
     expect(collected).not.toContain(offlineId)
+  })
+})
+
+// #451 的口径回归：`free` 是独立布尔位，**不能用价格区间近似实现**。
+// 契约只约束 `free ⟹ priceCents = 0`，反向不成立 —— 发布端输入 `0` 但不勾「免费送」就能
+// 产生 `free = false && priceCents = 0` 的商品（`parsePriceToCents` 的正则接受 `"0"`）。
+// 若筛选按价格近似（例如 `priceMaxCents = 0`），这条零元但非免费的商品会被当成免费送。
+test('free 筛选只认 free 布尔位，不把 0 元但非免费的商品当成免费送', async () => {
+  await withSeller(async (sellerId) => {
+    const paidId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:00:00.000Z'),
+      priceCents: 800,
+    })
+    const zeroNotFreeId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:01:00.000Z'),
+      priceCents: 0,
+      free: false,
+    })
+    const freeId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:02:00.000Z'),
+      priceCents: 0,
+      free: true,
+    })
+
+    const feed = (free?: boolean) =>
+      store.listFeed({
+        limit: 50,
+        cursor: null,
+        sort: 'newest',
+        status: 'ACTIVE',
+        sellerId,
+        ...(free === undefined ? {} : { free }),
+      })
+
+    const onlyFree = (await feed(true)).map((row) => row.listing.id)
+    expect(onlyFree).toEqual([freeId])
+    // 关键断言：价格近似实现会把 zeroNotFreeId 一起返回
+    expect(onlyFree).not.toContain(zeroNotFreeId)
+    expect(onlyFree).not.toContain(paidId)
+
+    const onlyPaid = (await feed(false)).map((row) => row.listing.id)
+    expect(onlyPaid).toEqual(expect.arrayContaining([paidId, zeroNotFreeId]))
+    expect(onlyPaid).not.toContain(freeId)
+
+    // 缺省 = 不过滤（与 `free = false` 区分开）
+    const all = (await feed()).map((row) => row.listing.id)
+    expect(all).toEqual(expect.arrayContaining([paidId, zeroNotFreeId, freeId]))
   })
 })
 
