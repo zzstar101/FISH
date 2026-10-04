@@ -673,6 +673,11 @@ export default function Conversation() {
       userIdRef.current === userId &&
       !isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
     for (const item of media) {
+      /**
+       * 撤回碑没有字节可下（服务端撤回后 `url` 就是空的）：下载只会白跑一趟，
+       * 而渲染分支只画「撤回了一条消息」、不读 `localPaths`。
+       */
+      if (item.recalledAt !== null) continue
       // N1：媒体的身份是 `mediaId` —— 契约里 `id` 是**消息** id，鉴权代理端点收的也是
       // `mediaId`。缓存键同样用 `mediaId`，否则 `media-api` 的模块级 LRU 永远命不中，
       // 每次进页面都会把同一条媒体重新下载一遍。

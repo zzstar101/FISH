@@ -112,6 +112,11 @@ describe('realtimeUrl —— 从 API 基地址推导 WS 地址', () => {
     expect(realtimeUrl('http://localhost:3000')).toBe('ws://localhost:3000/ws/chat')
     expect(realtimeUrl('https://api.example.com')).toBe('wss://api.example.com/ws/chat')
   })
+
+  test('基地址带尾斜杠时归一，不拼出 //ws/chat', () => {
+    expect(realtimeUrl('http://localhost:3000/')).toBe('ws://localhost:3000/ws/chat')
+    expect(realtimeUrl('https://api.example.com///')).toBe('wss://api.example.com/ws/chat')
+  })
 })
 
 describe('realtime 帧解析', () => {
@@ -145,24 +150,44 @@ describe('reconnectDelay —— 封顶指数退避 + 抖动', () => {
 })
 
 describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
-  /** 捕获 setTimeout 时刻与延时、setInterval 处理器的假定时器 */
+  /**
+   * 假定时器：`clearTimeout` 真的把条目标成失效、触发过的也标成已用（真定时器就是这个
+   * 语义）。建链超时（`connectTimeoutMs`）会在每次 `connect()` 开头排一个、心跳每跳也
+   * 排一个 pong 超时，若只记不摘，「还剩几个待触发」的断言就会被这些已结束的条目带偏。
+   */
   const makeTimers = () => {
-    const scheduled: Array<{ handler: () => void; timeout: number }> = []
+    const entries: Array<{ handler: () => void; timeout: number; done: boolean }> = []
     const intervals: Array<{ handler: () => void }> = []
     const cleared: unknown[] = []
     const timers: RealtimeTimers = {
       setTimeout: (handler, timeout) => {
-        scheduled.push({ handler, timeout })
-        return scheduled.length
+        entries.push({ handler, timeout, done: false })
+        return entries.length
       },
-      clearTimeout: (handle) => cleared.push(handle),
+      clearTimeout: (handle) => {
+        cleared.push(handle)
+        if (typeof handle !== 'number') return
+        const entry = entries[handle - 1]
+        if (entry) entry.done = true
+      },
       setInterval: (handler) => {
         intervals.push({ handler })
         return intervals.length
       },
       clearInterval: (handle) => cleared.push(handle),
     }
-    return { timers, scheduled, intervals, cleared }
+    /** 还没触发、也没被取消的定时器（触发过的会自动出列） */
+    const pending = () =>
+      entries
+        .filter((entry) => !entry.done)
+        .map((entry) => ({
+          timeout: entry.timeout,
+          handler: () => {
+            entry.done = true
+            entry.handler()
+          },
+        }))
+    return { timers, pending, intervals, cleared }
   }
 
   /** 建链是异步的（Taro.connectSocket 返回 Promise）：把微任务冲刷掉再断言 */
@@ -209,7 +234,7 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
   })
 
   test('断开后按退避重连，重连时重读 cookie；stop 取消在途的重连', async () => {
-    const { timers, scheduled } = makeTimers()
+    const { timers, pending } = makeTimers()
     const sockets: FakeSocket[] = []
     const cookies: Array<string | undefined> = []
     const cookiesGiven = ['fish_session=first', 'fish_session=second']
@@ -252,10 +277,10 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
 
     sockets[0]?.close()
     expect(disconnects).toBe(1)
-    expect(scheduled).toHaveLength(1)
-    expect(scheduled[0]?.timeout).toBe(100)
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
 
-    scheduled[0]?.handler()
+    pending()[0]?.handler()
     await flush()
     expect(sockets).toHaveLength(2)
     // 重连是重新建链：cookie 重读（拿到第二份）
@@ -264,17 +289,18 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
     expect(opens).toBe(2)
 
     sockets[1]?.close()
+    // 先拿住在途的重连，再 stop：stop 之后那个 handler 不许再建链
+    const inFlight = pending()[0]
     realtime.stop()
-    expect(scheduled).toHaveLength(2)
-    // stop 之后排定的重连不许再发
-    scheduled[1]?.handler()
+    expect(pending()).toHaveLength(0)
+    inFlight?.handler()
     await flush()
     expect(sockets).toHaveLength(2)
     expect(disconnects).toBe(2)
   })
 
   test('建链失败（网络不通 / 401 拒绝）与断开同一处理：退避重连', async () => {
-    const { timers, scheduled } = makeTimers()
+    const { timers, pending } = makeTimers()
     let attempts = 0
     let disconnects = 0
     const realtime = new ChatRealtime({
@@ -297,14 +323,48 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
     await flush()
     expect(attempts).toBe(1)
     expect(disconnects).toBe(1)
-    expect(scheduled).toHaveLength(1)
-    expect(scheduled[0]?.timeout).toBe(100)
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
 
     realtime.stop()
   })
 
+  test('建链 Promise 迟迟不 settle 时按超时处理：不卡死在 connecting，退避重连', async () => {
+    const { timers, pending } = makeTimers()
+    let disconnects = 0
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      // 永不 settle：模拟平台没让 connectSocket 的 Promise 收口
+      createSocket: () => new Promise<never>(() => {}),
+      onEvent: () => {},
+      onDisconnected: () => {
+        disconnects += 1
+      },
+      timers,
+      connectTimeoutMs: 5_000,
+      reconnectBaseDelayMs: 100,
+      reconnectMaxDelayMs: 10_000,
+      random: () => 1,
+    })
+
+    realtime.start()
+    await flush()
+    // 建链超时排在待触发表里
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(5_000)
+
+    pending()[0]?.handler()
+    expect(disconnects).toBe(1)
+    // 超时后按「连不上」处理，排一次退避重连
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
+
+    realtime.stop()
+    expect(pending()).toHaveLength(0)
+  })
+
   test('心跳：到点发 ping；pong 清掉超时；pong 不到期就断开重连', async () => {
-    const { timers, scheduled, intervals } = makeTimers()
+    const { timers, pending, intervals } = makeTimers()
     const sockets: FakeSocket[] = []
     const realtime = new ChatRealtime({
       url: 'ws://test/ws/chat',
@@ -332,8 +392,8 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
     // 第一跳：发出 ping，排定 pong 超时
     tick?.()
     expect(sockets[0]?.sent).toEqual([JSON.stringify({ type: 'ping' })])
-    expect(scheduled).toHaveLength(1)
-    expect(scheduled[0]?.timeout).toBe(10_000)
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(10_000)
 
     // pong 到了：超时被清，下一跳继续发 ping
     sockets[0]?.message(JSON.stringify({ type: 'pong' }))
@@ -342,13 +402,48 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
       JSON.stringify({ type: 'ping' }),
       JSON.stringify({ type: 'ping' }),
     ])
-    expect(scheduled).toHaveLength(2)
+    expect(pending()).toHaveLength(1)
 
     // pong 不到：超时触发 close → 断开重连
-    scheduled[1]?.handler()
+    pending()[0]?.handler()
     expect(sockets[0]?.closed).toBe(true)
-    expect(scheduled).toHaveLength(3)
-    expect(scheduled[2]?.timeout).toBe(100)
+    expect(pending()).toHaveLength(1)
+    expect(pending()[0]?.timeout).toBe(100)
+
+    realtime.stop()
+  })
+
+  test('心跳 send 抛错时不当成致命：等下一跳（异常不冒泡）', async () => {
+    const { timers, intervals } = makeTimers()
+    const sockets: FakeSocket[] = []
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () => {
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return Promise.resolve(socket)
+      },
+      onEvent: () => {},
+      timers,
+      heartbeatIntervalMs: 20_000,
+      heartbeatTimeoutMs: 10_000,
+    })
+
+    realtime.start()
+    await flush()
+    sockets[0]?.open()
+    const broken = sockets[0]
+    if (broken !== undefined) {
+      broken.send = () => {
+        throw new Error('socket closing')
+      }
+    }
+    expect(() => intervals[0]?.handler()).not.toThrow()
+
+    // 后续换回正常 send：连接没被这次异常弄死，照常发心跳
+    if (broken !== undefined) broken.send = FakeSocket.prototype.send.bind(broken)
+    intervals[0]?.handler()
+    expect(broken?.sent).toEqual([JSON.stringify({ type: 'ping' })])
 
     realtime.stop()
   })

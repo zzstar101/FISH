@@ -76,6 +76,8 @@ export type ChatRealtimeOptions = {
   heartbeatTimeoutMs?: number
   reconnectBaseDelayMs?: number
   reconnectMaxDelayMs?: number
+  /** 建链超时：`connectSocket` 的 Promise 迟迟不 settle 时按「连不上」处理并退避重连 */
+  connectTimeoutMs?: number
   random?: () => number
   timers?: RealtimeTimers
 }
@@ -165,6 +167,7 @@ export class ChatRealtime {
   private readonly heartbeatTimeoutMs: number
   private readonly reconnectBaseDelayMs: number
   private readonly reconnectMaxDelayMs: number
+  private readonly connectTimeoutMs: number
   private readonly random: () => number
   private readonly timers: RealtimeTimers
   private socket: RealtimeSocket | null = null
@@ -177,6 +180,7 @@ export class ChatRealtime {
   /** 建链代次：`stop()` 或新一轮 `connect()` 都会 +1，迟到的那次建链结果据此作废 */
   private connectGen = 0
   private reconnectTimer: unknown = null
+  private connectTimer: unknown = null
   private heartbeatTimer: unknown = null
   private pongTimer: unknown = null
 
@@ -185,6 +189,7 @@ export class ChatRealtime {
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? 10_000
     this.reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? 1_000
     this.reconnectMaxDelayMs = options.reconnectMaxDelayMs ?? 30_000
+    this.connectTimeoutMs = options.connectTimeoutMs ?? 15_000
     this.random = options.random ?? Math.random
     this.timers = options.timers ?? defaultTimers
   }
@@ -200,6 +205,7 @@ export class ChatRealtime {
     this.connecting = false
     this.connectGen += 1
     this.clearReconnectTimer()
+    this.clearConnectTimer()
     this.clearHeartbeat()
     const socket = this.socket
     this.socket = null
@@ -215,6 +221,18 @@ export class ChatRealtime {
     const createSocket = this.options.createSocket ?? defaultCreateSocket
     const url = this.options.url ?? realtimeUrl()
     const cookie = (this.options.getCookie ?? sessionCookieHeader)()
+    /**
+     * 建链超时（第二轮审查）：`Taro.connectSocket` 返回的是 Promise，平台若因任何原因
+     * 没让它 settle（既没 resolve 也没 reject），客户端会永远停在 `connecting` ——
+     * `start()` 的重入挡板从此恒真，实时通道静默死亡且不会自愈。到时按「连不上」处理。
+     */
+    this.connectTimer = this.timers.setTimeout(() => {
+      this.connectTimer = null
+      if (this.stopped || gen !== this.connectGen || !this.connecting) return
+      this.connecting = false
+      this.scheduleReconnect()
+      this.options.onDisconnected?.()
+    }, this.connectTimeoutMs)
     createSocket(url, cookie)
       .then((socket) => {
         if (this.stopped || gen !== this.connectGen) {
@@ -222,11 +240,13 @@ export class ChatRealtime {
           socket.close()
           return
         }
+        this.clearConnectTimer()
         this.connecting = false
         this.attach(socket)
       })
       .catch(() => {
         if (this.stopped || gen !== this.connectGen) return
+        this.clearConnectTimer()
         this.connecting = false
         // 建链失败（网络不通 / 未登录被 401 拒绝）与连上后断开同一处理：退避重连
         this.scheduleReconnect()
@@ -341,6 +361,13 @@ export class ChatRealtime {
     if (this.reconnectTimer !== null) {
       this.timers.clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
+    }
+  }
+
+  private clearConnectTimer(): void {
+    if (this.connectTimer !== null) {
+      this.timers.clearTimeout(this.connectTimer)
+      this.connectTimer = null
     }
   }
 

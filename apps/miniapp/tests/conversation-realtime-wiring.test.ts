@@ -76,6 +76,29 @@ describe('#89 会话页实时通道 · 接线', () => {
     expect(recall).toContain('applyMediaRecalled(prev, event.messageId, event.recalledAt)')
   })
 
+  test('媒体气泡自己会渲染撤回碑（服务端撤回后 url 为空，不能画成空图）', async () => {
+    const code = await source()
+    const mediaBranch = code.indexOf("if (entry.kind === 'media')")
+    expect(mediaBranch).toBeGreaterThanOrEqual(0)
+    // `recalledAt` 判断必须早于取本地路径（下载路径）—— 否则撤回碑还会去读/下图
+    const tombstone = code.indexOf('item.recalledAt !== null', mediaBranch)
+    const downloadHint = code.indexOf('localPaths.get(item.mediaId)', mediaBranch)
+    expect(tombstone).toBeGreaterThanOrEqual(0)
+    expect(downloadHint).toBeGreaterThanOrEqual(0)
+    expect(tombstone).toBeLessThan(downloadHint)
+  })
+
+  test('撤回碑不参与自动下载（没有字节可下）', async () => {
+    const code = await source()
+    const downloadEffect = sliceFrom(
+      code,
+      'for (const item of media) {',
+      'const plan = planMediaLoad(',
+    )
+
+    expect(downloadEffect).toContain('if (item.recalledAt !== null) continue')
+  })
+
   test('对方消息到达时补一次已读上报，但页面不可见 / 自己发的 / 详情未就绪时不报', async () => {
     const code = await source()
     const body = sliceFrom(code, 'const markIncomingRead = (senderId', '  const realtimeEventRef')

@@ -384,8 +384,21 @@ export function mergePushedMedia(
   previous: MediaMessageDto[],
   media: MediaMessageDto,
 ): MediaMessageDto[] {
-  if (previous.some((item) => item.id === media.id)) return previous
-  return sortMessages([...previous, media])
+  const index = previous.findIndex((item) => item.id === media.id)
+  if (index === -1) return sortMessages([...previous, media])
+  const existing = previous[index]
+  if (existing === undefined) return previous
+  /**
+   * 与 `mergePushedMessage` 同一道「撤回必须前进」的闸（第二轮审查）：
+   * `media.new` 不只会推新消息 —— 服务端的媒体创建幂等重放（`media-service.ts` 的
+   * 快速路径）会拿**已撤回的那一行**重建 DTO 再推一次，那条带着 `recalledAt`。
+   * 只按 id 去重会把这次撤回态丢掉（虽然 `message.recalled` 通常会先到，但那是
+   * 两条独立事件，不构成保证）。
+   */
+  if (media.recalledAt === null || existing.recalledAt !== null) return previous
+  const next = [...previous]
+  next[index] = media
+  return next
 }
 
 /**
@@ -429,6 +442,9 @@ export function applyMediaRecalled(
   messageId: string,
   recalledAt: string,
 ): MediaMessageDto[] {
+  // 没有命中的条目时返回原引用：文本消息的撤回也会走到这里（撤回端点不分类型），
+  // 每次白建一个新数组会让依赖 `media` 的自动下载 effect 白跑一轮。
+  if (!items.some((item) => item.id === messageId && item.recalledAt === null)) return items
   return items.map((item) => (item.id === messageId ? { ...item, url: '', recalledAt } : item))
 }
 
@@ -458,10 +474,10 @@ export function keepRecalledMediaTombstones(
 }
 
 /**
- * 后台刷新（silent）落地时把媒体快照合并回已有媒体流。
+ * 刷新落地时把媒体快照合并回已有媒体流。
  *
  * 与 `mergeRefreshedMessages` 同一理由（见上方长注释）：媒体列表的响应同样可能
- * 早于「本次刷新期间才上传成功的那条媒体」，无条件覆盖会把刚发出去的照片抹掉。
+ * 早于「本次刷新期间才上传成功 / 才推送进来的那条媒体」，无条件覆盖会把刚发出去的照片抹掉。
  */
 export function mergeRefreshedMedia(
   previous: MediaMessageDto[],
@@ -479,13 +495,12 @@ export function mergeRefreshedMedia(
 }
 
 /**
- * 后台刷新（silent）落地时把新快照合并回已有消息流（#186 P2-1）。
+ * 刷新落地时把新快照合并回已有消息流（#186 P2-1；#89 起 silent 与整页重拉共用一条）。
  *
- * silent 刷新发起于用户没有请求刷新的时刻，**它带回来的快照可能早于本次刷新期间
- * 才发送成功的那条消息** —— HTTP 响应顺序无法保证：`POST /messages` 先落库并 resolve，
- * 补刷新的 `load({ silent: true })` 后到，手里却是发送之前的快照。此时无条件
- * `setMessages(page.items)` 会把那条已经确认的消息抹掉，用户看到自己刚发出去的话
- * 消失，下一次刷新又冒出来。
+ * 刷新的快照**可能早于本次刷新期间才落地的消息** —— HTTP 响应顺序无法保证：
+ * `POST /messages` 先落库并 resolve，补刷新的请求后到，手里却是发送之前的快照；
+ * 实时推送送来的对方消息同理。此时无条件 `setMessages(page.items)`
+ * 会把那条已经确认的消息抹掉，用户看到自己刚发出去的话消失，下一次刷新又冒出来。
  *
  * 合并规则（`baseIds` = 本次刷新**发起时**消息流里的 id 快照）：
  * - 以服务端快照为准：它可能包含对方刚发来的新消息，也可能修正本地顺序；
@@ -516,8 +531,8 @@ export function mergeRefreshedMessages(
  * （`UPDATE … SET recalled_at = COALESCE(recalled_at, now())`，只前进、永不清空），
  * 所以「本地已经落碑、刚回来的快照却说没撤回」只可能是**快照拍得比落碑更早**。
  * 而撤回在途最长 15s，期间任何一次 `load()`（从子页返回的整页重拉、上一次发送落定后的
- * silent 补刷）都可能带着撤回前的快照回来 —— 非 silent 直接 `setMessages(page.items)`
- * 会把正文写回去，用户看到「撤回成功了、一刷新又回来了」。
+ * silent 补刷）都可能带着撤回前的快照回来 —— 合并落地时正文会被写回去，
+ * 用户看到「撤回成功了、一刷新又回来了」。
  *
  * 落地口径：其余字段仍取快照那份（可能含对方刚发的新消息与顺序修正），只把
  * `content` 清空、`recalledAt` 取本地那个（服务端权威值会在下一次真实刷新时覆盖它）。
@@ -546,12 +561,28 @@ export function keepRecalledTombstones(
  * 屏幕上的状态**更旧**（这次请求发出之后用户刚发出一条消息、或刚推进过读位）。
  * 无条件 `setConversation(next)` 会让 `lastMessage` / `unreadCount` / `lastMessageAt`
  * 一起回退 —— 与 `mergeRefreshedMessages` 防的是同一类「陈旧快照覆盖新状态」。
+ *
+ * **在线态本身也可能更旧**（第二轮审查）：`presence.changed` 推送会在两跳轮询之间
+ * 把「刚刚活跃」的时刻往前推，而那一跳的响应可能是在推送**之前**拍的快照 ——
+ * 照单全收会让刚点亮的绿点灭回去（要等下一跳才纠正）。所以这里再比一次
+ * `lastActiveAt`：快照比屏幕上那份**更早**就丢弃（相等仍采信，那是 TTL 过期后
+ * 「在线 → 离线」的正常落点）。
  */
 export function applyPresencePoll(
   previous: ConversationDto,
   incoming: ConversationDto,
 ): ConversationDto {
+  if (isOlderPresence(incoming.counterpartPresence, previous.counterpartPresence)) return previous
   return { ...previous, counterpartPresence: incoming.counterpartPresence }
+}
+
+/** 候选的在线态是否比现有的更旧（只看 `lastActiveAt`，解析不了时不当「更旧」） */
+function isOlderPresence(candidate: UserPresence, current: UserPresence): boolean {
+  if (candidate.lastActiveAt === null || current.lastActiveAt === null) return false
+  const next = Date.parse(candidate.lastActiveAt)
+  const now = Date.parse(current.lastActiveAt)
+  if (Number.isNaN(next) || Number.isNaN(now)) return false
+  return next < now
 }
 
 /**
