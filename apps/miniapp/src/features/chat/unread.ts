@@ -30,15 +30,20 @@ export type UnreadSnapshot = {
    * 会话未读**条数和**（底栏「消息」红点用）。两个来源同源：Chat 页发布
    * `GET /conversations/unread-count` 的结果，冷启动由 `hydrateUnread` 拉同一个端点。
    *
-   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算。
+   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方**不得当成 0**，也不得
+   * 用另一项已知值冒充总数：底栏遇「不知道」保持上一帧（见 `unreadBadgeText`）。
    * 不能用 0 表达「不知道」：那会把上一份正确的快照覆盖成「没有未读」，用户明明
    * 还有未读、底栏那颗点却熄了。两个字段的「不知道」必须同一种表达。
    */
   conversations: number | null
   /**
-   * 通知未读数（Chat 页「通知」tab 角标同源：切进 tab 即 0）；
-   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算
-   * （不是拿 fixture 顶替），与页内角标同口径：那时页内也是 0。
+   * 通知未读数（Chat 页「通知」tab 胶囊同源：#431 任务二起逐条点击才已读，
+   * 随逐条已读递减）；
+   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方不得当成 0，也不得用
+   * fixture 顶替：底栏遇「不知道」保持上一帧。
+   *
+   * 注意**页内与底栏口径不同**：页内「通知」胶囊对同一状态显示 0（它只反映这一屏
+   * 拿到的事实），底栏则保持上一帧不熄灭（见 `pages/chat/index.tsx` 的说明）。
    */
   notifications: number | null
 }
@@ -47,26 +52,38 @@ let snapshot: UnreadSnapshot | null = null
 const listeners = new Set<() => void>()
 
 /**
- * 底栏「消息」红点该不该亮。
+ * 底栏「消息」徽标（#431 任务二：品牌蓝小圆点 → 红色数字胶囊）该显示什么。
  *
- * 规则（也是「不知道」这个态存在的意义）：
- * 1. 只要有任何一项**已知**未读 > 0 → 亮；
- * 2. 两项都已知且都是 0 → 熄；
- * 3. 有分量「不知道」且没有已知未读 → **保持上一帧**，不下「没有未读」这个结论。
+ * 规则（Owner 2026-10-04 裁决的口径）：
+ * 1. 两项都**已知** → 显示二者之和；和为 0 不显示（`null`）；`> 99` 显示 `99+`；
+ * 2. 任一项「不知道」（`null`）→ **保持上一帧**，既不下「没有未读」的结论，也**不**
+ *    拿已知那项冒充总数（`上一帧=7 / 会话未读=3 / 通知未读=null` 必须继续显示 `7`；
+ *    显示 `3` 是把用户真实存在的未读说小）；
+ * 3. 上一帧本来就是空的（`null`）且有一项「不知道」→ 退回**已知分量之和**：已知的
+ *    未读是事实，不能因为另一项超时就整场不亮；已知和为 0 时仍不显示。
  *
- * 第 3 条是关键：接口失败 / 列表还没到手时如果按 0 算，一颗本来亮着的点会莫名其妙
- * 熄掉，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
+ * 第 2 条是关键：接口失败 / 列表还没到手时如果按 0 补齐去算精确数，一枚本来亮着的
+ * 徽标会莫名变小甚至消失，而用户其实还有未读 —— 这与「没读到 ≠ 恰好没有」是同一条原则。
  * 抽成纯函数是为了它能被单测锁住（底栏组件本身没有渲染测试基建）。
  */
-export function badgeShouldLight(input: {
+export function unreadBadgeText(input: {
   conversations: number | null
   notifications: number | null
-  /** 上一帧的红点状态 */
-  previous: boolean
-}): boolean {
-  if ((input.conversations ?? 0) > 0 || (input.notifications ?? 0) > 0) return true
-  const unknown = input.conversations === null || input.notifications === null
-  return unknown ? input.previous : false
+  /** 上一帧的徽标文案；不显示时为 `null` */
+  previous: string | null
+}): string | null {
+  const { conversations, notifications, previous } = input
+  // 任一分量「不知道」⇒ 总数不是事实，不能按 0 补齐算出精确数（那是把用户的未读说小）
+  if (conversations === null || notifications === null) {
+    if (previous !== null) return previous
+    // 上一帧本来就是隐藏的：退回已知和，免得一项超时就把真实存在的未读整场藏掉
+    const known = (conversations ?? 0) + (notifications ?? 0)
+    if (known <= 0) return null
+    return known > 99 ? '99+' : String(known)
+  }
+  const total = conversations + notifications
+  if (total === 0) return null
+  return total > 99 ? '99+' : String(total)
 }
 
 function subscribe(listener: () => void): () => void {
@@ -147,7 +164,7 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 会话、不受列表翻页上限影响）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
- * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
+ * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏保持上一帧），
  *   **不回退 fixture** —— 拿 fixture 顶替真实值正是幽灵红点 / 漏亮红点的成因。
  *
  * 兜底由调用方注入而不是本模块内判断构建开关：store 不该知道 mock fixture 的存在，
@@ -182,7 +199,7 @@ export function hydrateUnread(
         notifications === null || conversations === null ? demoFallback?.() : undefined
       publishUnread({
         ownerId,
-        // 会话未读拿不到 = 「不知道」：真实构建发 null（底栏按无已知未读算），
+        // 会话未读拿不到 = 「不知道」：真实构建发 null（底栏保持上一帧），
         // 演示构建用兜底值。**不发 0** —— 0 是「确定没有未读」这个具体结论。
         conversations: conversations ?? fallback?.conversations ?? null,
         notifications: notifications ?? fallback?.notifications ?? null,

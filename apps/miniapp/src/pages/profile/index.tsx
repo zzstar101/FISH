@@ -405,9 +405,11 @@ export default function Profile() {
 
   /**
    * 图标栏（Owner 修订：右上角红色小圆点内显数量，纯 --danger）。
-   * 圆点等价于原数字角标的「有内容」信号：在售 = activeListings，> 0 才显示；
-   * 卖出 / 买入 / 评价 / 举报没有数据源，不出点（原「全部订单」格已由「举报」接替，
-   * `orderCount` 因此不再有消费者，见 `features/profile/counts`）。
+   * 圆点等价于原数字角标的「有内容」信号：在售 = activeListings，> 0 才显示。
+   * #431 任务二起「卖出」「买入」也挂徽标：各自视角的待面交（PENDING_MEETUP）笔数
+   * （与对应订单页的「待面交」筛选同口径）；「评价 / 举报」仍没有数据源，不出点
+   * （原「全部订单」格已由「举报」接替，`orderCount` 因此不再有消费者，
+   * 见 `features/profile/counts`）。
    *
    * `count` 为 `undefined` = **不知道** → 不出点：点表示「这里有东西」，
    * 未知时既不该凭空出点（假消息），也不该显示 0（那是「确实没有」，同样是假话）。
@@ -428,12 +430,14 @@ export default function Profile() {
       label: '卖出',
       icon: ICONS.profileSold,
       url: '/pkg-trade/pages/orders-sell/index',
+      count: counts.pendingMeetupSell ?? undefined,
     },
     {
       key: 'bought',
       label: '买入',
       icon: ICONS.profileBought,
       url: '/pkg-trade/pages/orders-buy/index',
+      count: counts.pendingMeetupBuy ?? undefined,
     },
     // 「评价」= 我发过的评论（商品留言 + 交易评价）。该页没有聚合端点：
     // 真实构建下是空态 + 缺口说明，见 pages/comments 的文件头。

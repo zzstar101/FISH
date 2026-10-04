@@ -373,42 +373,17 @@
 }
 
 /*
- * 右上角数量徽标（#431 任务一 Owner 定版）：红底白字，纯 --danger 不压棕，
- * 白环让它压在蓝色图标上也读得清；超过 99 显示 99+（见 index.tsx）。
- *
- * 形状两档，由 tsx 挂 `is-multi`（判据是**值 > 9**，不是「几位字符」：
- * `99+` 是三个字符，但和两位数同属胶囊档）：
- * - ≤ 9（单个数字）= **正圆**（宽=高、50% 圆角）；
- * - ≥ 10（含渲染成 `99+` 的）= **胶囊**（高度不变，水平内边距撑宽、全圆角）。
- * 旧版是 `min-width: 30px; height: 30px; padding: 0 6px` 的**短胶囊**：单数字时
- * 30×30 仍是圆，两位数被 padding 撑成 36×30、直边只剩几像素，看着像被压扁的椭圆，
- * 已废。数字居中走 flex + `line-height: 1`（与 Owner 2026-09-29 定版的 `chat__bdg`
- * 同一构造，比例 24/32 ≈ 30/38）。
+ * 右上角数量徽标（#431 任务一 Owner 定版，任务二起收编进共享 mixin）：
+ * 红底白字，纯 --danger 不压棕，白环让它压在蓝色图标上也读得清。
+ * 形状两档由 tsx 挂 `is-multi`（判据是**值 > 9**，不是「几位字符」：`99+` 是三个
+ * 字符，但和两位数同属胶囊档）：≤ 9 = 正圆、≥ 10（含 99+）= 胶囊；
+ * 规则本体见 `styles/_mixins` 的 `num-badge`。超过 99 显示 99+（见 index.tsx）。
  */
 .profile__cell-dot {
   position: absolute;
   top: -12px;
   right: -14px;
-  box-sizing: border-box;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--danger);
-  color: #fff;
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1;
-  box-shadow: 0 0 0 4px var(--surface);
-
-  &.is-multi {
-    width: auto;
-    min-width: 32px;
-    padding: 0 10px;
-    border-radius: 32px;
-  }
+  @include num-badge(32px, 24px, $ring: 4px);
 }
 
 .profile__cell-label {

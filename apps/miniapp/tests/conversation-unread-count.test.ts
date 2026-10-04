@@ -118,7 +118,7 @@ mock.module('@tarojs/taro', () => ({
 }))
 
 const { fetchConversationUnreadCount } = await import('@/features/chat/api')
-const { badgeShouldLight, clearUnread, hydrateUnread, unreadSnapshot } = await import(
+const { clearUnread, hydrateUnread, unreadBadgeText, unreadSnapshot } = await import(
   '@/features/chat/unread'
 )
 
@@ -183,14 +183,15 @@ describe('未读快照 · 冷启动走专用端点', () => {
     const snapshot = unreadSnapshot()
     expect(snapshot?.conversations).toBe(137)
     expect(snapshot?.conversations).toBeGreaterThan(50)
-    // 底栏红点判定拿到的也是这个数
+    // 底栏徽标拿到的也是这个数（#433 起判定换成 `unreadBadgeText`）：137 已超两位 ⇒
+    // 必为 `99+`；若退回首页求和（50）则只会显示 `50`，这条断言就会红。
     expect(
-      badgeShouldLight({
+      unreadBadgeText({
         conversations: snapshot?.conversations ?? null,
         notifications: snapshot?.notifications ?? null,
-        previous: false,
+        previous: null,
       }),
-    ).toBe(true)
+    ).toBe('99+')
     expect(listCalls()).toHaveLength(0)
   })
 
