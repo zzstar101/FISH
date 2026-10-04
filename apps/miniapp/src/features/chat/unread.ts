@@ -30,7 +30,8 @@ export type UnreadSnapshot = {
    * 会话未读**条数和**（底栏「消息」红点用）。两个来源同源：Chat 页发布
    * `GET /conversations/unread-count` 的结果，冷启动由 `hydrateUnread` 拉同一个端点。
    *
-   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算。
+   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方**不得当成 0**，也不得
+   * 用另一项已知值冒充总数：底栏遇「不知道」保持上一帧（见 `unreadBadgeText`）。
    * 不能用 0 表达「不知道」：那会把上一份正确的快照覆盖成「没有未读」，用户明明
    * 还有未读、底栏那颗点却熄了。两个字段的「不知道」必须同一种表达。
    */
@@ -38,8 +39,11 @@ export type UnreadSnapshot = {
   /**
    * 通知未读数（Chat 页「通知」tab 胶囊同源：#431 任务二起逐条点击才已读，
    * 随逐条已读递减）；
-   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算
-   * （不是拿 fixture 顶替），与页内胶囊同口径：那时页内也是 0。
+   * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方不得当成 0，也不得用
+   * fixture 顶替：底栏遇「不知道」保持上一帧。
+   *
+   * 注意**页内与底栏口径不同**：页内「通知」胶囊对同一状态显示 0（它只反映这一屏
+   * 拿到的事实），底栏则保持上一帧不熄灭（见 `pages/chat/index.tsx` 的说明）。
    */
   notifications: number | null
 }
@@ -160,7 +164,7 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 会话、不受列表翻页上限影响）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
- * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
+ * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏保持上一帧），
  *   **不回退 fixture** —— 拿 fixture 顶替真实值正是幽灵红点 / 漏亮红点的成因。
  *
  * 兜底由调用方注入而不是本模块内判断构建开关：store 不该知道 mock fixture 的存在，
@@ -195,7 +199,7 @@ export function hydrateUnread(
         notifications === null || conversations === null ? demoFallback?.() : undefined
       publishUnread({
         ownerId,
-        // 会话未读拿不到 = 「不知道」：真实构建发 null（底栏按无已知未读算），
+        // 会话未读拿不到 = 「不知道」：真实构建发 null（底栏保持上一帧），
         // 演示构建用兜底值。**不发 0** —— 0 是「确定没有未读」这个具体结论。
         conversations: conversations ?? fallback?.conversations ?? null,
         notifications: notifications ?? fallback?.notifications ?? null,

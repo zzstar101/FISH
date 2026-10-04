@@ -431,9 +431,11 @@ export default function Chat() {
    * **逐条点击才已读**（见 `openNotif`）：进「通知」tab 不再整表清零，此数随
    * 逐条已读递减，页内胶囊与底栏徽标同步。
    *
-   * 列表**未就绪 / 加载失败**时是「不知道」——记 0（不显示通知侧的未读），不拿 mock
-   * fixture 计数顶替：那会与底栏的快照口径分叉（底栏对这些状态按「无已知未读」算），
-   * 也会把「不知道」画成一个具体的数字。
+   * 列表**未就绪 / 加载失败**时是「不知道」——页内记 0（这一屏没有可显示的通知未读），
+   * 不拿 mock fixture 计数顶替：fixture 的数字与真实账号无关，会把「不知道」画成一个
+   * 具体的数字。注意底栏对同一状态**不是**记 0，而是保持上一帧（见下方发布 effect 与
+   * `features/chat/unread.ts` 的 `unreadBadgeText`）—— 页内只反映这一屏拿到的事实，
+   * 底栏还要避免误熄，两者口径不同是有意的。
    */
   const unreadNotifications =
     notifsReady && !notifsFailed ? notifs.filter((item) => item.readAt === null).length : 0
@@ -452,7 +454,9 @@ export default function Chat() {
    *
    * `conversations` 直接发 `loadConversationUnread` 落地的**端点值**（#291：不再对本页
    * 会话列表求和 —— 那只覆盖第一页）。`conversations` 与 `notifications` 在「不知道」
-   * （未取到 / 接口失败）时都是 `null`，底栏按「无已知未读」算 —— 与页内同口径。
+   * （未取到 / 接口失败）时都是 `null`，底栏遇「不知道」保持上一帧、不熄灭（见
+   * `features/chat/unread.ts` 的 `unreadBadgeText`）—— **与页内胶囊口径不同**：页内
+   * 对同一状态显示 0，底栏要避免误熄。
    * 会话这一项尤其不要发 0：没读到却发 0 会把上一份正确的快照覆盖掉，用户明明还有
    * 未读，那颗点却熄了。未登录不发（登出 / 换账号的清空在身份 effect）。
    */
@@ -630,7 +634,8 @@ export default function Chat() {
                 const on = item.key === filter
                 /**
                  * 各 tab 的徽标数（#431 任务二：胶囊数据一律未读口径）——
-                 * 「全部」挂会话未读数和（原为会话总数）；「通知」挂通知未读数（#23 语义不变）
+                 * 「全部」挂会话未读数和（原为会话总数，现取 #291 端点值；「不知道」
+                 * 记 `null` → 不显示胶囊）；「通知」挂通知未读数（#23 语义不变）
                  */
                 const tabBadge = item.key === 'all' ? conversationUnread : unreadNotifications
                 return (
@@ -641,7 +646,7 @@ export default function Chat() {
                     onClick={() => chooseFilter(item.key)}
                   >
                     <Text>{item.label}</Text>
-                    {tabBadge > 0 ? (
+                    {tabBadge !== null && tabBadge > 0 ? (
                       // 2 位以上转胶囊（形状规则见 index.scss 的 num-badge）
                       <Text className={`chat__tab-n num${tabBadge > 9 ? ' is-multi' : ''}`}>
                         {badgeText(tabBadge)}
