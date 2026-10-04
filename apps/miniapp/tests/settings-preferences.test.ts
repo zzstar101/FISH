@@ -90,6 +90,13 @@ describe('readStoredPrefs —— 旧版短键兜底（老用户升级不丢通�
       { theme: 'light', notifyChat: false, notifyDeal: true, notifyNews: false },
     )
   })
+
+  test('新键损坏（非 boolean）+ 旧短键合法：回落到旧短键，不把这一项一起丢', () => {
+    expect(readStoredPrefs({ notifyChat: 0, chat: true, notifyWish: 'yes', wish: false })).toEqual({
+      notifyChat: true,
+      notifyWish: false,
+    })
+  })
 })
 
 describe('parseStoredPrefs —— 存量盖在默认值上', () => {

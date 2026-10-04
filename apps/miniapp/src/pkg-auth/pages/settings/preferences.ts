@@ -80,8 +80,11 @@ export function readStoredPrefs(raw: unknown): StoredPrefs {
   const prefs: StoredPrefs = {}
   if (isThemeMode(stored.theme)) prefs.theme = stored.theme
   for (const key of NOTIFY_KEYS) {
-    // 新键优先、旧短键兜底；`??` 只兜 null/undefined，新键存了非 boolean 值算损坏、按字段丢
-    const value: unknown = stored[key] ?? stored[legacyNotifyKeys[key]]
+    // 新键优先、旧短键兜底。判据是「新键本身是不是一个 boolean」，不是 `??`：
+    // 新键存了损坏值（非 boolean）时应回落到仍然合法的旧短键，而不是把这一项一起丢；
+    // 也不能写成 `||`，那会把合法的新键 `false` 当成缺省、让旧短键把它顶掉。
+    const next: unknown = stored[key]
+    const value: unknown = typeof next === 'boolean' ? next : stored[legacyNotifyKeys[key]]
     if (typeof value === 'boolean') prefs[key] = value
   }
   if (isCommentPolicy(stored.commentPolicy)) prefs.commentPolicy = stored.commentPolicy
