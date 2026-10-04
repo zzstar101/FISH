@@ -102,6 +102,12 @@ export default function MyComments() {
 
   /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
   const [cursor, setCursor] = useState<string | null>(null)
+  /**
+   * 续页在飞。**重入守卫必须走 ref**（`loadingMoreRef`）：state 更新要到下一帧才可读，
+   * 两个触底事件落进同一渲染帧时都会读到 `false`、各发一份同 cursor 的请求 ——
+   * 列表翻倍 + key 撞车（与 `pages/listing-detail` 的在飞锁同一教训）。state 只留给渲染。
+   */
+  const loadingMoreRef = useRef(false)
   const [loadingMore, setLoadingMore] = useState(false)
   /** 服务端三段计数（真实模式）；演示模式用 `countBySegment` 本地现算。 */
   const [counts, setCounts] = useState<SegmentCounts>(NO_COUNTS)
@@ -194,11 +200,12 @@ export default function MyComments() {
 
   /** 触底续页：只在「有游标、没在加载、当前没有错误/首次加载」时发。 */
   const loadMore = async () => {
-    if (demo || loading || error !== null || loadingMore || cursor === null) return
+    if (demo || loading || error !== null || loadingMoreRef.current || cursor === null) return
     const epoch = loadEpoch.current
+    loadingMoreRef.current = true
     setLoadingMore(true)
     try {
-      const response = await fetchMyComments({ kind: kindOfSegment(segment), cursor })
+      const response = await fetchMyComments({ kind: kindOfSegment(segmentRef.current), cursor })
       if (epoch !== loadEpoch.current) return
       const nowMs = Date.now()
       setItems((prev) => [
@@ -206,12 +213,15 @@ export default function MyComments() {
         ...response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)),
       ])
       setCursor(response.nextCursor)
-      setCounts((prev) => ({ ...prev, [segment]: response.total }))
+      setCounts((prev) => ({ ...prev, [segmentRef.current]: response.total }))
     } catch {
       // 续页失败不打断已有列表，给一句可重试的提示（再触底会自动重发）
       void Taro.showToast({ title: '加载更多没成功，再往下拉试试', icon: 'none' })
     } finally {
-      if (epoch === loadEpoch.current) setLoadingMore(false)
+      // 无条件复位：切段/刷新/删除/换账号都会推进 loadEpoch 并丢弃这份迟到响应，
+      // 若只在代次相同时复位，一次错位就会让本页实例的触底续页永久失效
+      loadingMoreRef.current = false
+      setLoadingMore(false)
     }
   }
 

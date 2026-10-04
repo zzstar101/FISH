@@ -214,6 +214,8 @@ export default function OrderList({
     setReviewCheckingId(item.id)
     fetchMyTransactionReview(item.id)
       .then(() => {
+        // 已评过：把这张卡也转成「已评价」，别让用户对同一笔交易反复探测
+        setReviewedIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]))
         void Taro.showToast({ title: '这笔交易已经评价过了', icon: 'none' })
       })
       .catch((caught: unknown) => {

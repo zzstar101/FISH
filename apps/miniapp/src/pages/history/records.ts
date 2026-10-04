@@ -723,7 +723,7 @@ export const DEMO_MESSAGES: MessageRecord[] = [
 
 /** 演示构建里这一页「拿到」的三份数据 + 它们属于哪个账号 */
 export type DemoRecords = {
-  /** 数据属于哪个登录用户：换账号后迟到的结果必须被丢弃（见 `index.tsx` 的 `cancellable`） */
+  /** 数据属于哪个登录用户：换账号后迟到的结果必须被丢弃（判据在 `index.tsx` 的请求代次 + 身份比对） */
   ownerId: string
   days: HistoryDay[]
   favs: RecordCell[]

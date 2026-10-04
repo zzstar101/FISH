@@ -783,11 +783,12 @@ export default function ListingDetail() {
    * 就整块不渲染，不弹错误也不连累页面主体。`matches === null` 即「没有可展示的」。
    */
   const [matches, setMatches] = useState<ListingMatchListResponse | null>(null)
+  const matchListingId = data?.listing.id ?? null
   useEffect(() => {
-    if (!ownListing || data === null) return
+    if (!ownListing || matchListingId === null) return
     let stale = false
     setMatches(null)
-    fetchListingMatches(data.listing.id)
+    fetchListingMatches(matchListingId)
       .then((result) => {
         if (!stale) setMatches(result)
       })
@@ -797,7 +798,9 @@ export default function ListingDetail() {
     return () => {
       stale = true
     }
-  }, [ownListing, data])
+    // 依赖商品 id 而不是 `data` 对象引用：返回本页的静默刷新会换 `data` 引用但商品没变，
+    // 以引用为依赖会每次返回都白打一发匹配请求
+  }, [ownListing, matchListingId])
 
   /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
@@ -907,6 +910,11 @@ export default function ListingDetail() {
    */
   const buy = () => {
     if (buyRequested || buyInFlightRef.current !== null) return
+    // 详情没就位（骨架屏/失败态）不许发起：否则 amountCents 拿不到真值，
+    // 会往会话里写一条 ¥0 的交易提案（服务端不校验金额，0 元提案是合法写）。
+    // 金额在守卫处捕获：提案带的是「点下那一刻」的挂价，不随后续重载漂移。
+    if (loadState !== 'ok' || data === null) return
+    const amountCents = data.listing.priceCents
     actionSeqRef.current += 1
     const task = beginActionTask(
       epochRef.current,
@@ -933,7 +941,6 @@ export default function ListingDetail() {
           try {
             const conversation = await createConversation(id)
             if (!isTaskLive(task, buyInFlightRef.current)) return
-            const amountCents = data?.listing.priceCents ?? 0
             await proposeTransaction(conversation.id, amountCents)
             if (!isTaskLive(task, buyInFlightRef.current)) return
             setBuyRequested(true)
