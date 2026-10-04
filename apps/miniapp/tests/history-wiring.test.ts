@@ -121,4 +121,21 @@ describe('历史浏览：接线', () => {
     // 迟到结果按 ownerId 丢弃（换号后旧账号那一档不能落到新账号上）
     expect(effect).toContain('(next) => next.ownerId === forUserId')
   })
+
+  test('浏览档 effect 不抢收藏 / 留言档的刷新指示器', async () => {
+    const code = await source()
+    /*
+      两条 effect 依赖数组相同、浏览档那条先声明，所以它在「切走浏览档」分支里**先跑**。
+      若那里无条件 `stopPullDownRefresh()`，收藏 / 留言档下拉刷新时指示器会在请求发出前
+      就消失（那两档又不亮骨架屏）—— 用户看到的是「转圈一闪、列表静默换掉」的零反馈。
+      判据必须是「本轮是不是下拉刷新发起的」。
+    */
+    const skip = sliceFrom(
+      code,
+      '真实构建 · 浏览档取数',
+      '}, [demo, tab, authStatus, userId, reloadToken])',
+    )
+    expect(skip).toContain('const refreshRun = refreshPending.current')
+    expect(skip).toContain('if (!refreshRun) void Taro.stopPullDownRefresh()')
+  })
 })

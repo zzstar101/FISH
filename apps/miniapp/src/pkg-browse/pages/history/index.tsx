@@ -69,13 +69,13 @@ import './index.scss'
  * | 能力 | 现状 | 证据 |
  * | --- | --- | --- |
  * | 浏览足迹 | ✅ 已接（#415 M1） | `GET /me/view-history` → `@/features/view-history/api`；按日分组 + 游标分页 + 真实清空 |
- * | 收藏 | ⚠️ 端点与端上「我的收藏」页都已上线（#394），**本页这一档还没接** | `@/features/favorites/api` 的 `fetchMyFavorites`；本档仍是缺口空态（不在本任务范围） |
- * | 「我发过的留言」聚合 | ⚠️ `GET /me/comments` 已上线（#195，PR1 只含商品留言）；端上聚合页在 #405（PR）；**本页这一档还没接** | `packages/contracts/src/comments/routes.ts` 的 `myComments` |
- * | 交易评价 / 评分 | ❌ 交易域无 review / rating 字段 | `packages/contracts/src/transactions/schema.ts` 里 `review` / `rating` 零命中（「我留言的」这一档里的**交易评价**那 4 条同样是演示数据） |
+ * | 收藏 | ✅ 已接（#394 端点 + 本页接线） | `GET /me/favorites` → `@/features/favorites/api` 的 `fetchMyFavorites`；翻页取全 |
+ * | 「我发过的留言」聚合 | ✅ 已接（#195 端点 + 本页接线） | `GET /me/comments?kind=all` → `@/features/comments/api` 的 `fetchMyComments`；留言 ∪ 交易评价合并时间线，翻页取全 |
+ * | 交易评价 / 评分 | ✅ 已接 | `@fish/contracts/transaction-reviews`；`/me/comments?kind=all` 的评价行是 `TransactionReviewItem`（评价 + 查看者视角交易 DTO） |
  *
  * 因此：
- * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）浏览档读真接口；收藏 / 留言两档
- *   仍是空态 + 一句如实的缺口说明（`emptyCopyOf(tab, 'noBackend')`），不是假列表；
+ * - **真实构建**（`MOCK_FALLBACK_ENABLED === false`）三档都读真接口：浏览档走增量
+ *   「加载更多」，收藏 / 留言两档走**翻页取全**（取全才敢说「已显示全部」）；
  * - **演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，两个开关的口径与
  *   「我的」页回退口径一致）三档都摆演示数据；
  * - **不做 N+1 拼装**（不遍历自己的商品逐个拉 `GET /listings/:id/comments` 过滤作者来假装
@@ -182,15 +182,20 @@ export default function History() {
   const [reloadToken, setReloadToken] = useState(0)
 
   /**
-   * 真实构建 · 浏览档的取数结果（演示构建恒为 null；收藏 / 留言两档不接真接口）。
+   * 真实构建 · **浏览档**的取数结果（演示构建恒为 null；收藏 / 留言两档各有自己的
+   * `realFavs` / `realMsgs`，见下）。
    * `ownerId` 与 `DemoRecords.ownerId` 同一用意：只收当前账号的结果。
    */
   const [realHistory, setRealHistory] = useState<RealHistory | null>(null)
-  /** 真实浏览档首屏在途。初值 `!demo`：真实构建进来第一帧就该是骨架屏，不能闪一帧空态 */
+  /** 真实当前档首屏在途（**三档共用**）。初值 `!demo`：真实构建进来第一帧就该是骨架屏 */
   const [realLoading, setRealLoading] = useState(!demo)
-  /** 真实浏览档这次没读出来（只在手里没有数据时上屏错误态，见 `realFailed`） */
+  /** 真实当前档这次没读出来（只在手里没有数据时上屏错误态，见 `realFailed`） */
   const [realFetchFailed, setRealFetchFailed] = useState(false)
-  /** 本页面实例内清空过（只用于空态文案：清过 vs 本来就没有） */
+  /**
+   * 本页面实例内清空过**浏览记录**（只用于空态文案：清过 vs 本来就没有）。
+   * ⚠️ 这是**浏览档专属**标记（真实构建只有浏览档能清）—— 空态判定里必须按档位收口，
+   * 见 `emptyKind`。
+   */
   const [realCleared, setRealCleared] = useState(false)
   /** 「加载更多」在途：换按钮文案 + 挡住连点 */
   const [loadingMore, setLoadingMore] = useState(false)
@@ -338,12 +343,19 @@ export default function History() {
    * 重拉时迟到结果一律丢弃（渲染期重置已经把手里的列表清干净）。
    */
   useEffect(() => {
-    // 先读走「下拉刷新」标记（上一轮的 cleanup 已据它决定放行指示器），本次分支一律从零开始
+    // 本轮是不是下拉刷新发起的：上一轮的 cleanup 已经据它决定放行指示器，这里读走后清零
+    const refreshRun = refreshPending.current
     refreshPending.current = false
     if (demo) return
     if (tab !== 'history') {
-      // 切走浏览档：在飞的取数已被上一轮 cleanup 取消，没有新一轮会来收指示器，这里补收
-      void Taro.stopPullDownRefresh()
+      /*
+        切走浏览档：在飞的取数已被上一轮 cleanup 取消，没有新一轮会来收指示器，这里补收。
+
+        ⚠️ 但**下拉刷新**那一次不能收：收藏 / 留言档有自己的取数 effect（声明在本条之后，
+        同一次 commit 里最后跑），刷新时由它负责在结果落地时收。这里抢着收会让原生指示器
+        在请求发出之前就消失，那两档的刷新就变成「转圈一闪、列表静默换掉」的零反馈。
+      */
+      if (!refreshRun) void Taro.stopPullDownRefresh()
       return
     }
     if (authStatus !== 'authed' || userId === null) {
@@ -503,10 +515,8 @@ export default function History() {
   }, [demo, tab, authStatus, userId, reloadToken])
 
   /** 当前账号的「已清空」标记（账号对不上时是「都没清过」） */
-  const cleared = useMemo(
-    () => clearedOf(clearedState, userId),
-    [clearedState, userId],
-  ) /** 当前档位的记录是否已被清空 */
+  const cleared = useMemo(() => clearedOf(clearedState, userId), [clearedState, userId])
+  /** 当前档位的记录是否已被清空 */
   const isCleared = cleared[tab]
 
   /**

@@ -5,7 +5,12 @@
  * （服务端做归属校验，非本人 403、目标不存在 404）。
  */
 import { MATCHING_ROUTES } from '@fish/contracts/matching/routes'
-import { type WishMatchItem, WishMatchListResponseSchema } from '@fish/contracts/matching/schema'
+import {
+  type ListingMatchListResponse,
+  ListingMatchListResponseSchema,
+  type WishMatchItem,
+  WishMatchListResponseSchema,
+} from '@fish/contracts/matching/schema'
 import { apiRequest } from '@/lib/request'
 
 /** 契约 `MatchListQuerySchema` 的 `limit` 上限是 50。 */
@@ -31,4 +36,22 @@ export async function fetchWishMatches(
   // `total` 是库里阈值过滤后的真实条数；映射失败的卡片会被服务端跳过，两者可能不等
   // （契约明确前端不该互相推导），这里原样交给调用方。
   return { total: parsed.total, items: parsed.items }
+}
+
+/**
+ * 我的某件商品的匹配列表（「谁在求购」，服务端按 `score` 倒序）。
+ *
+ * 与 `fetchWishMatches` 同一套口径：`listingId` / `limit` 走 `apiRequest` 的 `query`
+ * （统一转义与拼串，不要手写 `?` / `&`），服务端校验归属，非本人 403 `NOT_TARGET_OWNER`。
+ *
+ * ⚠️ 返回的 `total` 是**阈值过滤后的全量条数**，与 `items.length` 不是一回事
+ * （`apps/api/src/modules/matching/service.ts` 明写前端不该互相推导）—— 页面要么只用
+ * `items`，要么把「共 N 位 / 显示前 M 位」如实说清。
+ */
+export async function fetchListingMatches(
+  listingId: string,
+  limit: number = MATCH_LIMIT_MAX,
+): Promise<ListingMatchListResponse> {
+  const payload = await apiRequest(MATCHING_ROUTES.base, { query: { listingId, limit } })
+  return ListingMatchListResponseSchema.parse(payload)
 }

@@ -129,9 +129,9 @@
 }
 
 /*
- * 演示数据说明带。这一页没有后端，演示构建摆的是 fixture —— 界面上必须能认出来。
- * 材质取仓库既有的中性玻璃令牌（`--glass-bg` + `--border`），不新造色值；
- * 真实构建下不会渲染（那时 `items` 为空）。
+ * 演示数据说明带。**演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）摆的是
+ * fixture —— 界面上必须能认出来。真实构建读 `GET /me/comments`，这一带不渲染。
+ * 材质取仓库既有的中性玻璃令牌（`--glass-bg` + `--border`），不新造色值。
  *
  * ⚠️ 与 `watchers` 的 `.wt__banner` **只是同族、不是同一套**：那边多一层
  * `backdrop-filter: blur(20px)`、圆角 30、留白 24、图标是品牌色圆底。

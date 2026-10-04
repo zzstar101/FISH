@@ -98,6 +98,15 @@ export default function MyComments() {
    */
   const segmentRef = useRef<CommentSegment>('all')
   segmentRef.current = segment
+  /**
+   * 当前账号的 ref（与 `segmentRef` 同一手法）。
+   *
+   * 列表有 `loadEpoch` 代次守卫，但**计数探测**（`probeCounts`）是一次性发出的聚合读，
+   * 回来时页面上可能已经换成另一个账号 —— 它没有自己的代次，只能比账号：拿 A 的 total
+   * 写进 B 的胶囊是跨账号串数据（只泄漏聚合数字，但口径与「换号整批丢弃」不符）。
+   */
+  const userIdRef = useRef<string | null>(userId)
+  userIdRef.current = userId
   const [showTop, setShowTop] = useState(false)
 
   /** 真实模式的续页游标（`nextCursor`；`null` = 到底了）。 */
@@ -166,11 +175,15 @@ export default function MyComments() {
    * 计数是辅助数字：探测失败就摆没有数字的胶囊，不连累列表（与 profile 计数的 `—` 同口径）。
    */
   const probeCounts = useCallback(async () => {
+    const owner = userIdRef.current
     try {
       const [comments, reviews] = await Promise.all([
         fetchMyComments({ kind: 'comment', limit: 1 }),
         fetchMyComments({ kind: 'review', limit: 1 }),
       ])
+      // 换号 / 退出：A 发出的探测不许落到 B 的页面上（列表那条链有 `loadEpoch`，
+      // 计数这条链此前没有守卫）
+      if (owner === null || userIdRef.current !== owner) return
       setCounts({
         all: comments.total + reviews.total,
         listing: comments.total,
@@ -517,5 +530,3 @@ export default function MyComments() {
     </View>
   )
 }
-
-/* ------------------------------------------------------------ 本页小工具 */

@@ -34,7 +34,7 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
-import { fetchListingMatches } from '@/features/matching/api'
+import { fetchListingMatches } from '@/features/match/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
@@ -1500,6 +1500,16 @@ export default function ListingDetail() {
                     </View>
                   ))}
                 </View>
+                {/*
+                  `total` 是阈值过滤后的**全量**条数，`items` 只是这一页（服务端默认 10 条）
+                  —— 契约明写两者不该互相推导。并排摆着「谁在求购 · 25」却只列 10 行，
+                  会被读成「这 25 位都在下面」，所以差额要如实说清。
+                */}
+                {matches.total > matches.items.length ? (
+                  <Text className="detail__match-sub">
+                    {`共 ${matches.total} 位，显示前 ${matches.items.length} 位`}
+                  </Text>
+                ) : null}
               </View>
             ) : null}
 

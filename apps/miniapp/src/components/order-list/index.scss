@@ -629,7 +629,7 @@
   font-weight: 600;
   color: var(--muted-2);
 
-  &.is-on.is-on {
+  &.is-on {
     &.orders__tier--positive {
       background: var(--ok-weak);
       border-color: var(--ok);
@@ -695,13 +695,9 @@
   background: var(--brand-deep);
   color: var(--surface);
 
-  /* 未选档位：降透明度示意不可点（点击由 `submitReview` 的守卫挡住） */
+  /* 未选档位：降透明度示意「还没选」，点下去由 `submitReview` 给一句提示 */
   &.is-off {
     opacity: 0.45;
-  }
-
-  &.is-busy {
-    opacity: 0.9;
   }
 }
 

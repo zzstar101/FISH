@@ -1,4 +1,7 @@
-import type { TransactionReviewRating } from '@fish/contracts/transaction-reviews/schema'
+import {
+  REVIEW_BODY_MAX,
+  type TransactionReviewRating,
+} from '@fish/contracts/transaction-reviews/schema'
 import { Image, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo, useState } from 'react'
@@ -76,9 +79,6 @@ const REVIEW_TIERS: { key: TransactionReviewRating; label: string }[] = [
   { key: 'NEUTRAL', label: '中评' },
   { key: 'NEGATIVE', label: '差评' },
 ]
-
-/** 评语上限，与契约 `REVIEW_BODY_MAX` 同源（页面输入框 maxlength） */
-const REVIEW_BODY_MAX = 200
 
 type Props = {
   /** 顶栏标题的黑色前段与品牌色尾段：两页各传自己的视角词（我 + 买到的 / 卖出的） */
@@ -235,7 +235,13 @@ export default function OrderList({
 
   /** 提交评价。评语 trim 后为空 = 「只打分没写字」（契约明说的正常形态），省略字段。 */
   const submitReview = () => {
-    if (reviewTarget === null || reviewTier === null || reviewBusy) return
+    if (reviewTarget === null || reviewBusy) return
+    // 没选档位：按钮只是降了透明度（`is-off`），点下去不能静默什么都不发生 ——
+    // 本页其它写操作都会给一句 toast，这里补齐同一口径
+    if (reviewTier === null) {
+      void Taro.showToast({ title: '请先选好评 / 中评 / 差评', icon: 'none' })
+      return
+    }
     setReviewBusy(true)
     const trimmed = reviewBody.trim()
     createTransactionReview(reviewTarget.id, {

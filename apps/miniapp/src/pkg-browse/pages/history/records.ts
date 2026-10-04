@@ -6,13 +6,12 @@
  *
  * | 能力 | 现状 | 证据 |
  * | --- | --- | --- |
- * | 浏览足迹 | ✅ 已接（#415 M1） | `packages/contracts/src/view-history/` 的 GET / DELETE `/me/view-history`；本模块的 `goneLabelOf` / `recordCellOf` / `historyDaysOf` 是它的纯适配层 |
- * | 收藏 | ⚠️ 端点与端上「我的收藏」页都已上线（#394），**本页这一档还没接** | `@/features/favorites/api` 的 `fetchMyFavorites`；本页收藏档仍走演示数据 / 缺口空态 |
- * | 「我发过的留言」聚合 | ⚠️ `GET /me/comments` 已上线（#195，PR1 只含商品留言）；端上聚合页在 #405（PR）；**本页这一档还没接** | `packages/contracts/src/comments/routes.ts` 的 `myComments` |
+ * | 浏览足迹 | ✅ 已接（#415 M1） | `packages/contracts/src/view-history/` 的 GET / DELETE `/me/view-history`；本模块的 `goneLabelOf` / `recordCellOf` / `historyDaysOf` / `mergeHistoryItems` 是它的纯适配层 |
+ * | 收藏 | ✅ 已接 | `GET /me/favorites` → `@/features/favorites/api`；本模块的 `favoriteCell` 是它的纯适配层（与足迹共用失效口径） |
+ * | 「我发过的留言」聚合 | ✅ 已接 | `GET /me/comments?kind=all` → `@/features/comments/api`；本模块的 `messageRow` 把留言 / 交易评价的判别联合适配成整宽行 |
  *
  * 所以本模块里的 `DEMO_*` 只服务**演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，
- * 见 `index.tsx`）：真实构建下浏览档读真接口，收藏 / 留言两档仍渲染如实的缺口空态
- * （「这一页还没接」），**不摆这些演示数据**。
+ * 见 `index.tsx`）：真实构建下三档都读真接口，**不摆这些演示数据**。
  *
  * ## 条数必须与「我的」页数字栏对得上
  *
