@@ -26,7 +26,8 @@ import { useAcceptProposal, useMyListings, usePendingProposals, useRejectProposa
 export function PendingSection({ ownerId }: { ownerId: string }) {
   const pending = usePendingProposals(ownerId)
   // 取全量：待确认的申请也可能挂在**已下架**的商品上（卖家收到申请后把它下架了），
-  // 那时仍需要标题来渲染这一行。与 `usePendingProposals` 共用同一个查询键。
+  // 那时仍需要标题来渲染这一行。#446 起 useMyListings 转 infinite 缓存（pages 形状），
+  // 待确认推导的真实数据源在 usePendingProposals 的独立 snapshot 键里，这里只做标题查找。
   const listings = useMyListings(ownerId, 'ALL')
   const accept = useAcceptProposal(ownerId)
   const reject = useRejectProposal(ownerId)

@@ -31,6 +31,7 @@ import { Route as MessagesConversationIdRouteImport } from './routes/messages.$c
 import { Route as OrdersIndexRouteImport } from './routes/orders.index'
 import { Route as OrdersTransactionIdRouteImport } from './routes/orders.$transactionId'
 import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
+import { Route as WishIndexRouteImport } from './routes/wish.index'
 import { Route as WishWishIdRouteImport } from './routes/wish.$wishId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -143,6 +144,11 @@ const UsersUserIdRoute = UsersUserIdRouteImport.update({
   path: '/users/$userId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WishIndexRoute = WishIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => WishRoute,
+} as any)
 const WishWishIdRoute = WishWishIdRouteImport.update({
   id: '/$wishId',
   path: '/$wishId',
@@ -173,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/wish/$wishId': typeof WishWishIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
+  '/wish/': typeof WishIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -188,7 +195,6 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
-  '/wish': typeof WishRouteWithChildren
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
@@ -196,6 +202,7 @@ export interface FileRoutesByTo {
   '/wish/$wishId': typeof WishWishIdRoute
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
+  '/wish': typeof WishIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -222,6 +229,7 @@ export interface FileRoutesById {
   '/wish/$wishId': typeof WishWishIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
+  '/wish/': typeof WishIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -249,6 +257,7 @@ export interface FileRouteTypes {
     | '/wish/$wishId'
     | '/messages/'
     | '/orders/'
+    | '/wish/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -264,7 +273,6 @@ export interface FileRouteTypes {
     | '/reports'
     | '/search'
     | '/verify'
-    | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
@@ -272,6 +280,7 @@ export interface FileRouteTypes {
     | '/wish/$wishId'
     | '/messages'
     | '/orders'
+    | '/wish'
   id:
     | '__root__'
     | '/'
@@ -297,6 +306,7 @@ export interface FileRouteTypes {
     | '/wish/$wishId'
     | '/messages/'
     | '/orders/'
+    | '/wish/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -476,6 +486,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UsersUserIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/wish/': {
+      id: '/wish/'
+      path: '/'
+      fullPath: '/wish/'
+      preLoaderRoute: typeof WishIndexRouteImport
+      parentRoute: typeof WishRoute
+    }
     '/wish/$wishId': {
       id: '/wish/$wishId'
       path: '/$wishId'
@@ -515,10 +532,12 @@ const OrdersRouteWithChildren =
 
 interface WishRouteChildren {
   WishWishIdRoute: typeof WishWishIdRoute
+  WishIndexRoute: typeof WishIndexRoute
 }
 
 const WishRouteChildren: WishRouteChildren = {
   WishWishIdRoute: WishWishIdRoute,
+  WishIndexRoute: WishIndexRoute,
 }
 
 const WishRouteWithChildren = WishRoute._addFileChildren(WishRouteChildren)

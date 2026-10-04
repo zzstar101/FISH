@@ -36,9 +36,7 @@ export type EditImageState = {
   added: EditNewImage[]
 }
 
-export function existingImagesFromDetail(
-  images: ReadonlyArray<ListingImage>,
-): EditExistingImage[] {
+export function existingImagesFromDetail(images: ReadonlyArray<ListingImage>): EditExistingImage[] {
   return images.map((image, index) => ({
     id: `existing-${index}`,
     url: image.url,

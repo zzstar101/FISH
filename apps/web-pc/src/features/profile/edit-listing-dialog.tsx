@@ -24,12 +24,13 @@ import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Switch } from '@fish/ui/switch'
 import { Textarea } from '@fish/ui/textarea'
 import { CircleAlert, ImagePlus, Loader2, X } from 'lucide-react'
-import { type ChangeEvent, useEffect, useId, useState } from 'react'
+import { type ChangeEvent, useEffect, useId, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api-client'
 import { CATEGORY_LABEL, CONDITION_LABEL } from '../../lib/labels'
 import { currentSessionGeneration } from '../../lib/session-cache'
 import { useListingDetail } from '../listing-detail/queries'
 import {
+  imagePreparationMessage,
   isPublishTaskCancelled,
   toUploadableFile,
   uploadListingImage,
@@ -104,13 +105,12 @@ export function EditListingDialog({
     setImages({ dirty: false, existing: existingImagesFromDetail(detail.data.images), added: [] })
   }, [detail.data, open])
 
+  // objectURL 簿记走 ref：卸载时统一回收，不依赖会过期的 state 闭包（审查轮 1 medium）。
+  // 现有图的 url 由服务端管，不归这里撤。
+  const previewUrlsRef = useRef<string[]>([])
   useEffect(
-    // 卸载（关闭弹窗）时统一回收新图预览的 objectURL；逐张移除的回收在 removeAdded 里做。
-    // 现有图的 url 由服务端管，不归这里撤。
     () => () => {
-      for (const image of images.added) {
-        if (image.previewUrl !== '') URL.revokeObjectURL(image.previewUrl)
-      }
+      for (const url of previewUrlsRef.current) URL.revokeObjectURL(url)
     },
     [],
   )
@@ -143,7 +143,10 @@ export function EditListingDialog({
   function removeAdded(id: string) {
     setImages((current) => {
       const target = current.added.find((image) => image.id === id)
-      if (target !== undefined && target.previewUrl !== '') URL.revokeObjectURL(target.previewUrl)
+      if (target !== undefined && target.previewUrl !== '') {
+        URL.revokeObjectURL(target.previewUrl)
+        previewUrlsRef.current = previewUrlsRef.current.filter((url) => url !== target.previewUrl)
+      }
       return { ...current, added: current.added.filter((image) => image.id !== id) }
     })
   }
@@ -163,25 +166,35 @@ export function EditListingDialog({
     for (const file of accepted) {
       const id = `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const previewUrl = URL.createObjectURL(file)
+      previewUrlsRef.current.push(previewUrl)
       setImages((current) => ({
         ...current,
         added: [...current.added, { id, previewUrl, objectKey: null, error: null }],
       }))
 
-      const invalid = validateImageFile(file)
-      if (invalid !== null) {
-        setImages((current) => ({
-          ...current,
-          added: current.added.map((image) =>
-            image.id === id ? { ...image, error: invalid } : image,
-          ),
-        }))
-        continue
-      }
-
       try {
+        // 与发布页同序：先 toUploadableFile（HEIC→JPG 转换），再对转换结果做格式/大小校验。
         const uploadable = await toUploadableFile(file)
-        if (uploadable === null) throw new Error('unreadable')
+        if (uploadable === null) {
+          setImages((current) => ({
+            ...current,
+            added: current.added.map((image) =>
+              image.id === id ? { ...image, error: imagePreparationMessage(file) } : image,
+            ),
+          }))
+          continue
+        }
+        const invalid = validateImageFile(uploadable)
+        if (invalid !== null) {
+          setImages((current) => ({
+            ...current,
+            added: current.added.map((image) =>
+              image.id === id ? { ...image, error: invalid } : image,
+            ),
+          }))
+          continue
+        }
+
         // 会话代次守卫：切号/登出后迟到的上传结果不再写回弹窗状态。
         const generation = currentSessionGeneration()
         const objectKey = await uploadListingImage(uploadable, {
