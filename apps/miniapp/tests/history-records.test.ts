@@ -34,7 +34,11 @@ import {
  * 演示条数的真源是 `features/fetchers.ts` 的 `demoProfile()`（收藏 8 / 足迹 24），
  * 它没有 export，所以这里只能锁「演示 fixture 自己的形状」（4 天 × 6 件 = 24 / 收藏 8 /
  * 留言 8）。真实构建下「我的」页的足迹数走 `GET /me/view-history` 的 `total`（同一张表
- * 同一个窗口），与历史页列表同源；那条链路由 `history-real.test.ts` 的 api 用例覆盖。
+ * 同一个窗口），与历史页列表同源。这条链路分两层、别混：
+ * `history-real.test.ts` 只锁 `fetchMyViewHistory` 自身的请求构造（limit / cursor）与 zod 收口；
+ * 「`loadProfile` 把它接进数字栏」（`historyCount = total`、只读 1 行、失败只让本格显示 —）
+ * 由 `profile-favorites-count.test.ts` 覆盖。历史页组件（Taro 页面）本身的接线无自动化覆盖，
+ * 靠开发者工具验收。
  */
 describe('演示数据的形状（见文件头：与「我的」页的对齐不在这里锁）', () => {
   test('足迹 24 件 · 4 天', () => {
