@@ -92,11 +92,13 @@ const defaultTimers: RealtimeTimers = {
  * 契约路径常量是根级路径，与 `lib/api-base.ts` 的拼接口径一致——不要再加 `/api`。
  */
 export function realtimeUrl(base: string = API_BASE): string {
-  const swapped = base.startsWith('https://')
-    ? `wss://${base.slice('https://'.length)}`
-    : base.startsWith('http://')
-      ? `ws://${base.slice('http://'.length)}`
-      : base
+  // 构建期注入的基地址可能带尾斜杠：不归一的话会拼出 `wss://host//ws/chat`
+  const trimmed = base.replace(/\/+$/, '')
+  const swapped = trimmed.startsWith('https://')
+    ? `wss://${trimmed.slice('https://'.length)}`
+    : trimmed.startsWith('http://')
+      ? `ws://${trimmed.slice('http://'.length)}`
+      : trimmed
   return `${swapped}${REALTIME_WS_PATH}`
 }
 
@@ -298,10 +300,24 @@ export class ChatRealtime {
     this.heartbeatTimer = this.timers.setInterval(() => {
       if (this.stopped || this.socket === null || this.status !== 'open') return
       if (this.pongTimer !== null) return
-      this.socket.send(JSON.stringify({ type: 'ping' }))
+      /**
+       * `send` / `close` 都可能抛（连接正在关闭时平台会 reject 这次调用）。心跳跑在
+       * `setInterval` 回调里，异常冒出去没有任何人接，只会污染宿主日志 —— 这里的语义
+       * 本就是「发不出去就等下一跳或让超时收口」，所以就地吞掉。
+       */
+      const socket = this.socket
+      try {
+        socket.send(JSON.stringify({ type: 'ping' }))
+      } catch {
+        return
+      }
       this.pongTimer = this.timers.setTimeout(() => {
         this.pongTimer = null
-        this.socket?.close()
+        try {
+          socket.close()
+        } catch {
+          // 已经关掉了：onClose 会照常把它从 this.socket 摘掉
+        }
       }, this.heartbeatTimeoutMs)
     }, this.heartbeatIntervalMs)
   }

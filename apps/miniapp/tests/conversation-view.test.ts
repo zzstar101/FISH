@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyMediaRecalled,
   applyPresenceEvent,
   applyPresencePoll,
   applyReadEvent,
@@ -19,6 +20,7 @@ import {
   isLatestPresencePoll,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  keepRecalledMediaTombstones,
   keepRecalledTombstones,
   listingStatusText,
   localReplyExcerpt,
@@ -558,7 +560,55 @@ const picture = (id: string, createdAt: string): MediaMessageDto => ({
   width: 800,
   height: 600,
   durationMs: null,
+  recalledAt: null,
+  replyTo: null,
   createdAt,
+})
+
+describe('applyMediaRecalled —— 撤回落到媒体那条流（#359 3c 媒体侧）', () => {
+  test('目标那条清空 url 并落 recalledAt，其余不动', () => {
+    const items = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    const merged = applyMediaRecalled(items, 'm1', '2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    // 撤回后不再下发字节：url 必须清掉，否则渲染还会去下载
+    expect(merged[0]?.url).toBe('')
+    // 不改动入参数组
+    expect(items[0]?.recalledAt).toBeNull()
+  })
+
+  test('id 不在流里时逐条原样返回（文本消息的撤回落到媒体流上无害）', () => {
+    const items = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    expect(applyMediaRecalled(items, 'msg-other', '2026-09-21T10:00:30.000Z')).toEqual(items)
+  })
+})
+
+describe('keepRecalledMediaTombstones —— 旧媒体快照不能把撤回碑写回正文', () => {
+  test('本地已落碑 + 快照说没撤回 → 保住碑（url 仍为空、撤回时刻保留）', () => {
+    const tombstone = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    const merged = keepRecalledMediaTombstones(
+      [tombstone],
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+    )
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.url).toBe('')
+  })
+
+  test('快照自己也带撤回时原样采信；没有本地撤回记录时不改任何一条', () => {
+    const recalled = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    expect(keepRecalledMediaTombstones([], [recalled])[0]?.recalledAt).toBe(
+      '2026-09-21T10:00:30.000Z',
+    )
+    const normal = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    expect(keepRecalledMediaTombstones([], normal)).toEqual(normal)
+  })
 })
 
 describe('mergeTimeline —— 文本与媒体合成一条升序时间线', () => {
@@ -638,9 +688,33 @@ describe('mergePushedMessage —— 实时推送的消息并入消息流', () =>
     ).toEqual(['a', 'b'])
   })
 
-  test('重复推送 / 与已落库消息同 id 时返回原数组本身（碑优先于迟到的正文）', () => {
+  test('同 id 的重复推送返回原数组本身（不白重渲染）', () => {
     const previous = [text('a', '2026-09-21T10:00:00.000Z')]
     expect(mergePushedMessage(previous, text('a', '2026-09-21T10:00:00.000Z'))).toBe(previous)
+  })
+
+  test('同 id 但推送带撤回时**前进**成撤回碑（不能按去重丢掉）', () => {
+    const previous = [text('a', '2026-09-21T10:00:00.000Z')]
+    const recalled = {
+      ...text('a', '2026-09-21T10:00:00.000Z'),
+      content: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    const merged = mergePushedMessage(previous, recalled)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.content).toBe('')
+  })
+
+  test('本地已是撤回碑时，迟到的「未撤回」快照不许把正文写回来', () => {
+    const tombstone = {
+      ...text('a', '2026-09-21T10:00:00.000Z'),
+      content: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    expect(mergePushedMessage([tombstone], text('a', '2026-09-21T10:00:00.000Z'))[0]).toBe(
+      tombstone,
+    )
   })
 })
 

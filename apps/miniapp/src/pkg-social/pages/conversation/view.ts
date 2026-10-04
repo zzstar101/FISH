@@ -395,13 +395,66 @@ export function mergePushedMedia(
  * - 自己这条的 HTTP 响应与实时推送赛跑，谁先到都只落一次；
  * - 推送本身不保证不重。
  *
- * 推送到「已带本地撤回碑」的同一条时按 id 去重返回原数组 —— 碑优先于迟到的正文
- * （与 `keepRecalledTombstones` 同一方向），服务端权威态由下一次刷新收口。
- * 重复时返回原数组本身，让 React 省掉一次白重渲染。
+ * **撤回必须前进**：同 id 已在流里、而推送这条带着 `recalledAt`（对方撤回了）时，
+ * 不能按「同 id 保留本地」丢掉 —— 那会让撤回碑永远不出现（本页没有别的刷新路径会
+ * 修好它：20s 详情轮询只补读位与在线态，不刷消息流）。其余情况返回原数组本身，
+ * 让 React 省掉一次白重渲染。
  */
 export function mergePushedMessage(previous: MessageDto[], message: MessageDto): MessageDto[] {
-  if (previous.some((item) => item.id === message.id)) return previous
-  return sortMessages([...previous, message])
+  const index = previous.findIndex((item) => item.id === message.id)
+  if (index === -1) return sortMessages([...previous, message])
+  const existing = previous[index]
+  if (existing === undefined) return previous
+  // 本地已是撤回碑 / 推送也没带撤回：无新信息，保持原引用
+  if (message.recalledAt === null || existing.recalledAt !== null) return previous
+  const next = [...previous]
+  next[index] = message
+  return next
+}
+
+/**
+ * 撤回落到**媒体**那条流（`message.recalled` 推送的媒体侧对应物）。
+ *
+ * 媒体与文本是两条独立的流（独立端点、独立游标、独立事件），而服务端撤回端点对
+ * TEXT / MEDIA 用的是同一张 `messages` 表、没有类型过滤（`messages/store.ts` 的
+ * `recall`），推送也只带 `messageId` —— 不落到这里的话，对方撤回一张图 / 一段语音时
+ * 小程序端的气泡纹丝不动（`applyRecalled` 只扫 `messages`），而且**刷新也修不回来**：
+ * 媒体渲染分支此前不看 `recalledAt`，服务端下发的空 url 仍会被画成占位块。
+ *
+ * 与服务端读侧同口径地清掉 `url`（撤回后不下发字节，客户端不该再去下载）；其余字段
+ * 留着不影响渲染 —— 撤回碑只读 `recalledAt` / `senderId`。
+ */
+export function applyMediaRecalled(
+  items: MediaMessageDto[],
+  messageId: string,
+  recalledAt: string,
+): MediaMessageDto[] {
+  return items.map((item) => (item.id === messageId ? { ...item, url: '', recalledAt } : item))
+}
+
+/**
+ * 撤回不可回退：快照里「还没撤回」的那条不能把本地刚落地的媒体撤回碑写回正文
+ * （`keepRecalledTombstones` 的媒体侧对应物）。
+ *
+ * 服务端的 `recalled_at` 同样是单调的（`UPDATE … SET recalled_at = COALESCE(...)`），
+ * 所以「本地已落碑、快照说没撤回」只可能是快照拍得更早。只保留 `recalledAt` 与空 url，
+ * 其余字段仍取快照那份（尺寸 / 时长等服务端权威值）。
+ */
+export function keepRecalledMediaTombstones(
+  previous: readonly MediaMessageDto[],
+  incoming: readonly MediaMessageDto[],
+): MediaMessageDto[] {
+  const recalled = new Map<string, MediaMessageDto>()
+  for (const item of previous) {
+    if (item.recalledAt !== null) recalled.set(item.id, item)
+  }
+  if (recalled.size === 0) return [...incoming]
+  return incoming.map((item) => {
+    if (item.recalledAt !== null) return item
+    const local = recalled.get(item.id)
+    if (!local) return item
+    return { ...item, url: '', recalledAt: local.recalledAt }
+  })
 }
 
 /**
