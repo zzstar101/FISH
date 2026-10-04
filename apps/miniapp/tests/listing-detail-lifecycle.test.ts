@@ -1074,6 +1074,78 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     expect(catchBlock).not.toContain('setBuyRequested(true)')
   })
 
+  test('立即购买：提交中弹层关不掉（蒙层与「再想想」都走 dismissBuy 的早退）', async () => {
+    // 需求「提交中弹层不许关」—— 只有 `dismissBuy` 在 `buyBusy` 时早退才成立；
+    // 蒙层与「再想想」两个入口都调它，所以钉住这一处即可
+    const dismiss = await pageSlice('const dismissBuy = () => {', 'const confirmBuy')
+    expect(dismiss).toContain('if (buyBusy) return')
+    expectBefore(dismiss, 'if (buyBusy) return', 'setBuyOpen(false)')
+    // 两个关闭入口都必须走它，不能自己 setBuyOpen(false)
+    const dialog = await pageSlice('{buyOpen ? (', '<BackTop show={showTop}')
+    expect(dialog).toContain('onClick={dismissBuy}')
+    expect(dialog).not.toContain('onClick={() => setBuyOpen(false)}')
+  })
+
+  test('立即购买：商品已不在售时走静默 refresh（不能用 load 把详情清空）', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    const catchBlock = inner('} catch (error) {', '} finally {')(block)
+    // 注释里为了解释「为什么不能用 load」正提到了它，断言前先剥掉注释只看代码
+    const code = catchBlock.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    /*
+      `describeProposeFailure` 对 `LISTING_NOT_ACTIVE` 给 `refresh: true`。
+      这一步必须走**静默**的 `refresh()`：`load()` 会先 `setData(null)` 回骨架屏，而弹层
+      摘要读的是实时 listing —— 重取期间会写出「挂价 ¥0」、确认钮也会因 listing 为
+      undefined 变成点了没反应（PC 的 `onListingStale → refetch()` 保留旧数据）。
+    */
+    expect(code).toContain('refresh()')
+    expect(code).not.toContain('load()')
+  })
+
+  test('立即购买：两步失败各用各的映射器（第一步不借用第二步的文案）', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    const catchBlock = inner('} catch (error) {', '} finally {')(block)
+    // 第二步之前先换档，第一步失败才不会被说成「发起交易确认失败」
+    expectBefore(block, "let step: 'conversation' | 'propose' = 'conversation'", "step = 'propose'")
+    expect(catchBlock).toContain('describeCreateConversationFailure(error)')
+    const stepOne = catchBlock.slice(
+      catchBlock.indexOf("if (step === 'conversation') {"),
+      catchBlock.indexOf('const failure = describeProposeFailure(error)'),
+    )
+    expect(stepOne).toContain('describeCreateConversationFailure(error)')
+    expect(stepOne).not.toContain('describeProposeFailure')
+  })
+
+  test('冷启动解析身份不清购买弹层（清了会把在飞的那次写的结果吞掉）', async () => {
+    /*
+      冷启动（null → id）走 `ownerChanged` 但**不走** `isOwnerSwitch`：那时弹层可能已经
+      打开、两步写正在飞（入口刻意放行 `unknown`，冷启动豁免会让它继续作数）。弹层状态若
+      在 `isOwnerSwitch` 之外复位，身份一解析就关层 + `buyBusy` 清零，而那次写还在飞 ——
+      它失败时错误会被写进一个已经关掉的弹层，用户什么都看不到。
+    */
+    const block = await pageSlice('if (ownerChanged(prevUserId, userId)) {', 'useEffect(')
+    // 购买弹层的复位必须落在 `cleared` 之后那个 `isOwnerSwitch` 块里（锁那块在它之前）
+    const start = block.indexOf(
+      'if (isOwnerSwitch(prevUserId)) {',
+      block.indexOf('const cleared = clearedPrivateScope()'),
+    )
+    expect(start).toBeGreaterThanOrEqual(0)
+    const end = block.indexOf('setOfflineConfirmOpen(cleared.offlineConfirmOpen)')
+    expect(end).toBeGreaterThan(start)
+    const switchOnly = block.slice(start, end)
+    for (const setter of [
+      'setBuyOpen(cleared.buyOpen)',
+      'setBuyAmount(cleared.buyAmount)',
+      'setBuyAmountError(cleared.buyAmountError)',
+      'setBuySubmitError(cleared.buySubmitError)',
+      'setBuyBusy(cleared.buyBusy)',
+    ]) {
+      expect(switchOnly).toContain(setter)
+    }
+    // 「待店家确认」终态仍按原来的（更宽的）口径清场：冷启动解析身份时它也确实该重置
+    expect(block).toContain('setBuyRequested(cleared.buyRequested)')
+    expect(switchOnly).not.toContain('setBuyRequested(cleared.buyRequested)')
+  })
+
   test('冷启动解析身份的豁免接在两个动作的守卫上（不是只写在注释里）', async () => {
     const block = await pageSlice('const isTaskLive = (task: ActionTask', 'const chatWithSeller')
     expect(block).toContain('isCurrentActionTask(task, {')

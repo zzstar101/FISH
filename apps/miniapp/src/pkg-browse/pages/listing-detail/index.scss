@@ -1094,12 +1094,18 @@
   box-sizing: border-box;
   font-size: 30px;
   color: var(--fg);
+}
 
-  /* 微信 Input 的禁用态不会自动降透明度，钉死一个可读的弱化态 */
-  &[disabled] {
-    color: var(--muted-2);
-    background: var(--ink-weak);
-  }
+/*
+  禁用态（免费送锁 0 / 提交中）走**包裹层 class**，不用 `.detail__buy-input[disabled]`：
+  Taro 生成的模板把 `disabled` 作为静态属性 + 数据绑定一起下发
+  （产物 `dist/base.wxml` 里是 `disabled="{{…}}"`），`disabled=false` 时属性依然在节点上，
+  属性选择器会把普通商品的金额框也画成灰底弱化态。与发布页同款先例：
+  `pages/sell/index.scss` 的 `.sell__price-row.is-off`。
+*/
+.detail__buy-field.is-off .detail__buy-input {
+  color: var(--muted-2);
+  background: var(--ink-weak);
 }
 
 .detail__buy-err {

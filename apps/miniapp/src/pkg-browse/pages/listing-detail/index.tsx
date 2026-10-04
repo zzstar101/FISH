@@ -27,7 +27,7 @@ import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
-import { createConversation } from '@/features/chat/api'
+import { createConversation, describeCreateConversationFailure } from '@/features/chat/api'
 import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
@@ -454,13 +454,20 @@ export default function ListingDetail() {
     setFaved(cleared.faved)
     // 购买请求是当前账号发出的：换号后「待店家确认」不属于下一个账号
     setBuyRequested(cleared.buyRequested)
-    // 购买确认弹层是买家视角的操作面板：草稿金额 / 错误 / 在飞态都是上一个账号的，
-    // 连层带态一起复位（与下面的下架确认卡同一理由）
-    setBuyOpen(cleared.buyOpen)
-    setBuyAmount(cleared.buyAmount)
-    setBuyAmountError(cleared.buyAmountError)
-    setBuySubmitError(cleared.buySubmitError)
-    setBuyBusy(cleared.buyBusy)
+    /*
+      购买确认弹层（草稿金额 / 两处错误 / 在飞态）**只在真换号时**复位。
+      冷启动解析身份（`null → id`）走 `ownerChanged` 但不走 `isOwnerSwitch`：那时弹层
+      可能已经打开、两步写正在飞（入口刻意放行 `unknown`，`isColdStartIdentityResolution`
+      也会让这次飞行继续作数）。放在这里之外复位，会让身份一解析就关层 + `buyBusy` 清零，
+      而那次写还在飞 —— 它若失败，文案会被写进一个已经关掉的弹层，用户什么都看不到。
+    */
+    if (isOwnerSwitch(prevUserId)) {
+      setBuyOpen(cleared.buyOpen)
+      setBuyAmount(cleared.buyAmount)
+      setBuyAmountError(cleared.buyAmountError)
+      setBuySubmitError(cleared.buySubmitError)
+      setBuyBusy(cleared.buyBusy)
+    }
     // 下架确认卡是卖家视角的操作面板：下一个账号未必还是这件商品的卖家，
     // 连卡带请求三态一起复位，别把 A 的「下架中」留给 B
     setOfflineConfirmOpen(cleared.offlineConfirmOpen)
@@ -937,9 +944,12 @@ export default function ListingDetail() {
     setBuyAmountError(null)
     setBuySubmitError(null)
     void (async () => {
+      // 两步失败的文案不同源（PC 同款分档）：进到第二步才换映射器
+      let step: 'conversation' | 'propose' = 'conversation'
       try {
         const conversation = await createConversation(id)
         if (!isTaskLive(task, buyInFlightRef.current)) return
+        step = 'propose'
         await proposeTransaction(conversation.id, cents)
         if (!isTaskLive(task, buyInFlightRef.current)) return
         // 成功：进「待店家确认」终态并跳会话页（对齐 PC buy-dialog 的成功去向）——
@@ -962,17 +972,25 @@ export default function ListingDetail() {
           setBuySubmitError('登录已过期，请重新登录')
           return
         }
-        if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') {
-          // 第一步（建会话）的商品校验失败：文案与 PC describeCreateConversationFailure 同款
-          setBuySubmitError('商品不存在或已下架')
+        if (step === 'conversation') {
+          // 第一步（建会话）失败：文案与 PC `describeCreateConversationFailure` 同款
+          setBuySubmitError(describeCreateConversationFailure(error))
           return
         }
         const failure = describeProposeFailure(error)
         setBuySubmitError(failure.message)
         if (failure.refresh) {
-          // 商品已不在售是状态漂移：**弹层留着**展示这条错误、页面在后台重取详情
-          //（PC onListingStale 同款 —— 关掉弹层用户只会看到一次无声的刷新）
-          load()
+          /*
+            商品已不在售是状态漂移：**弹层留着**展示这条错误、页面重取详情
+            （PC 的 `onListingStale` → `detail.refetch()` 同款）。
+
+            ⚠️ 必须走**静默**的 `refresh()`，不能走 `load()`：`load()` 会先
+            `setData(null)` 回骨架屏，而弹层的摘要读的是实时 listing —— 重取期间它
+            会对着用户写「挂价 ¥0」（真实挂价可能几百上千），确认钮也会因为
+            `listing === undefined` 变成点了没反应。`refresh()` 保留现有内容，
+            只有服务端明确说商品没了才切空态。
+          */
+          refresh()
         }
       } finally {
         // 先判再放锁：release 之后 `isTaskLive` 必为假，会把「正在发起…」永远卡住
@@ -1824,7 +1842,9 @@ export default function ListingDetail() {
                 {listing?.free ? ' · 免费送，金额固定为 0' : ''}
               </Text>
             </View>
-            <View className="detail__buy-field">
+            <View
+              className={`detail__buy-field${(listing?.free ?? false) || buyBusy ? ' is-off' : ''}`}
+            >
               <Text className="detail__buy-label">交易金额（元）</Text>
               <Input
                 className="detail__buy-input"

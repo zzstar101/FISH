@@ -27,7 +27,7 @@ import {
   notificationListResponseSchema,
   notificationUnreadCountSchema,
 } from '@fish/contracts/notifications/schema'
-import { apiRequest } from '@/lib/request'
+import { apiRequest, isApiError } from '@/lib/request'
 
 /** 契约里 limit 上限 50 */
 const CONVERSATION_LIMIT = 50
@@ -210,4 +210,18 @@ export async function fetchUnreadNotificationCount(): Promise<number> {
 /** 标记单条通知已读（幂等：已读再点仍是 200，且不改写首次已读时间） */
 export async function markNotificationRead(id: string): Promise<void> {
   await apiRequest(NOTIFICATION_ROUTES.markRead(id), { method: 'POST' })
+}
+
+/**
+ * **第一步**（建会话）失败的展示文案 —— 与 PC 站 `web-pc/src/features/chat/api.ts` 的
+ * `describeCreateConversationFailure` 同款：只认 `LISTING_NOT_FOUND`，其余（网络 / 未识别码）
+ * 一律「发起会话失败，请重试」。
+ *
+ * 与第二步的 `describeProposeFailure` **分开**：两步失败的原因集合不同，用第二步的映射器
+ * 兜第一步会把「会话建不起来」说成「发起交易确认失败」。自聊（`CANNOT_CHAT_WITH_SELF`）
+ * 由调用方隐藏入口，不在这里给文案。
+ */
+export function describeCreateConversationFailure(error: unknown): string {
+  if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') return '商品不存在或已下架'
+  return '发起会话失败，请重试'
 }
