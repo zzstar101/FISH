@@ -512,12 +512,24 @@ export default function Chat() {
     const epoch = listEpoch.current
     void Promise.allSettled(unreadItems.map((item) => markConversationRead(item.id))).then(
       (results) => {
-        if (epoch !== listEpoch.current) return
         const done = new Set(
           unreadItems
             .filter((_, index) => results[index]?.status === 'fulfilled')
             .map((item) => item.id),
         )
+        const missed = unreadItems.length - done.size
+        /*
+         * 反馈放在代次守卫**之前**：这批 POST 已经打到服务端并真的成功了，结论与用户
+         * 刚点的那次操作一致。守卫该拦的是「把结果写进已作废的 state」（换账号 / 重载
+         * 后迟到的回包），不该把 toast 一起吞掉 —— 否则用户点「全部已读」看不到任何
+         * 反馈，只能以为按钮坏了。代价：极端时序下（点击后恰好换账号）会给新账号弹一句
+         * 属于上一个账号操作的结果，但这句反馈描述的是**真实发生过**的服务端写结果。
+         */
+        void Taro.showToast({
+          title: missed === 0 ? '已全部标为已读' : `有 ${missed} 个会话标记失败，请重试`,
+          icon: 'none',
+        })
+        if (epoch !== listEpoch.current) return
         if (done.size > 0) {
           setItems((prev) =>
             prev.map((item) => (done.has(item.id) ? { ...item, unreadCount: 0 } : item)),
@@ -526,11 +538,6 @@ export default function Chat() {
           // 部分失败时端点会如实返回剩余的未读，所以照常重取。
           loadConversationUnread(epoch)
         }
-        const missed = unreadItems.length - done.size
-        void Taro.showToast({
-          title: missed === 0 ? '已全部标为已读' : `有 ${missed} 个会话标记失败，请重试`,
-          icon: 'none',
-        })
       },
     )
   }
