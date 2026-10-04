@@ -81,8 +81,9 @@ export async function updateProfile(input: ProfileUpdateRequest): Promise<Me> {
 export async function fetchMyListings(
   sellerId: string,
   status: MyListingStatusFilter = 'ALL',
+  cursor?: string,
 ): Promise<ListingFeedResponse> {
-  return ListingFeedResponseSchema.parse(await apiRequest(myListingsPath(sellerId, status)))
+  return ListingFeedResponseSchema.parse(await apiRequest(myListingsPath(sellerId, status, cursor)))
 }
 
 export async function updateListing(id: string, input: ListingUpdateInput): Promise<ListingDetail> {

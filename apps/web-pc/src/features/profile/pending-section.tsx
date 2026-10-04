@@ -140,7 +140,11 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
   // 空且无话可说就整段不渲染；刚做完决定时要留着把结果说完
   if (mode === 'hidden' || !proposals) return null
 
-  const cards = new Map(listings.data?.items.map((item) => [item.id, item]) ?? [])
+  // 标题查找表只求「已加载页」覆盖（infinite 缓存里已到手的部分）；
+  // 待确认推导的真实数据源是 usePendingProposals 的 snapshot 键，不在这里。
+  const cards = new Map(
+    listings.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item]) ?? [],
+  )
 
   return (
     <Card className="gap-0 border border-line p-0">

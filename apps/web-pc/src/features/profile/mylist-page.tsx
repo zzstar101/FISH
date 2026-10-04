@@ -56,6 +56,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
   const [watching, setWatching] = useState<ListingCard | null>(null)
   const [deleting, setDeleting] = useState<ListingCard | null>(null)
   const listings = useMyListings(ownerId, status)
+  const items = listings.data?.pages.flatMap((page) => page.items) ?? []
   const setStatusMutation = useSetListingStatus(ownerId)
   const deleteMutation = useDeleteListing(ownerId)
 
@@ -93,7 +94,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
             管理在售与已下架商品；交易中的商品不可手动上下架。
           </p>
         </div>
-        <p className="text-ink-3 text-xs">真实 API · 最多显示 50 条</p>
+        <p className="text-ink-3 text-xs">真实 API · 游标翻页</p>
       </div>
 
       <PendingSection ownerId={ownerId} />
@@ -132,7 +133,7 @@ function MyListContent({ ownerId }: { ownerId: string }) {
       {listings.isError ? (
         <ErrorState message="我的发布加载失败" onRetry={() => void listings.refetch()} />
       ) : null}
-      {listings.isSuccess && listings.data.items.length === 0 ? (
+      {listings.isSuccess && items.length === 0 ? (
         <EmptyState
           action={
             <Link
@@ -148,9 +149,9 @@ function MyListContent({ ownerId }: { ownerId: string }) {
         />
       ) : null}
 
-      {listings.data !== undefined && listings.data.items.length > 0 ? (
+      {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
-          {listings.data.items.map((item) => {
+          {items.map((item) => {
             const statusView = listingStatusView(item)
             const actionEnabled = item.moderationStatus === 'APPROVED' && statusView.actionable
             const editEnabled =
@@ -249,6 +250,23 @@ function MyListContent({ ownerId }: { ownerId: string }) {
           open
           ownerId={ownerId}
         />
+      ) : null}
+
+      {listings.hasNextPage ? (
+        <div className="flex justify-center">
+          <Button
+            disabled={listings.isFetchingNextPage}
+            onClick={() => void listings.fetchNextPage()}
+            variant="outline"
+          >
+            {listings.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+            {listings.isFetchingNextPage ? '正在加载…' : '加载更多'}
+          </Button>
+        </div>
+      ) : null}
+
+      {listings.isFetchNextPageError ? (
+        <ErrorState message="更多发布加载失败" onRetry={() => void listings.fetchNextPage()} />
       ) : null}
 
       {watching !== null ? (
