@@ -10,9 +10,12 @@ import {
  * 门槛本身的单测（#406 第 3 项）。
  *
  * 这里钉两件事：
- * 1. **当前 fixture 的实测值必须通过**——门槛表不是随手写的数字，它要与 fixture 的现状一致。
- *    数值来源：`bun run visual:eval` 在 21 条样本上的输出（MRR 0.833/0.976/1.000、
- *    NDCG@10 0.855/0.959/0.993、首选命中 12/19/21、排序倒置 9/5/3）。
+ * 1. **门槛表与当前实测值相容**：`current()` 是 `bun run visual:eval` 在 21 条样本上的输出
+ *    **手工抄录**（MRR 0.833/0.976/1.000、NDCG@10 0.855/0.959/0.993、首选命中 12/19/21、
+ *    排序倒置 9/5/3）。它**不**从 fixture 现算，所以它防的是"阈值表被改坏/与实测值脱节"，
+ *    **防不了 fixture 漂移**——fixture 一改这条用例照绿。fixture 漂移由 CI 的
+ *    `bun run visual:eval`（第五节门槛表决定退出码）与 `ranking.test.ts` 里那条从
+ *    `VISUAL_EVAL_FIXTURE` 现算的回归护栏负责。
  * 2. **退化输入必须真的被判红**——否则"门槛"只是打印出来好看。特别是"三路打平"这种
  *    最隐蔽的失效（报告全绿但 fixture 已经失去分辨力）。
  */
@@ -32,7 +35,7 @@ function gateNames(input: VisualEvalGateInput): string[] {
 }
 
 describe('evaluateVisualEvalGates', () => {
-  test('当前 fixture 的实测值全部通过', () => {
+  test('手工抄录的当前实测值不被门槛表判红', () => {
     expect(evaluateVisualEvalGates(current())).toEqual([])
   })
 

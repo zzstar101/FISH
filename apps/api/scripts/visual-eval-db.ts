@@ -688,9 +688,12 @@ try {
     '同字节查询全部命中目标商品（stub 与 live 都成立：同字节 ⇒ 同向量 ⇒ 距离 0）',
     positive.map((run) => ({ label: run.label, hit: run.hit, items: run.itemCount })),
   )
+  // 下限（#406 第 6 项）之后无关图**可以**返回空结果：旧断言里的 `itemCount > 0` 会把
+  // "下限生效"变成结构性不可观测（这条腿的 empty-result rate 于是永远恒 0）。
+  // 只保留"符合预期"这一条：空结果 = 没把任何低分候选塞给用户，同样满足"目标不是第 1 名"。
   assert(
-    unrelated.every((run) => run.hit && !run.failed && run.itemCount > 0),
-    '无关图片查询：目标**不是第 1 名**（不是"目标不在结果里"——理由见 runQuery 的注释）',
+    unrelated.every((run) => run.hit && !run.failed),
+    '无关图片查询：目标**不是第 1 名**（空结果也算符合——理由见 runQuery 的注释）',
     unrelated.map((run) => ({
       label: run.label,
       items: run.itemCount,
@@ -818,13 +821,17 @@ try {
   console.log(`| p95 延迟 | ${ms(p95)} |`)
   console.log('')
   console.log(
-    `- **empty-result rate 的含义在 #406 第 6 项之后变了**：召回现在先按 ` +
+    `- **这个数在 stub 下仍然是 0，但 0 的原因变了**（#406 第 6 项）：召回现在先按 ` +
       `\`VISUAL_RECALL_MIN_SIMILARITY = ${VISUAL_RECALL_MIN_SIMILARITY}\` 剔掉低于下限的候选` +
-      `（两路取更强；相似度 = 1 - distance/2，0.5 即余弦正交），低于下限直接判空，` +
-      `而不是把最近的 ${VISUAL_RECALL_LIMIT} 条（上限 ${VISUAL_RESULT_LIMIT} 条）低分结果塞给用户。` +
-      `所以这个数不再恒为 0：本腿的样本是刻意构造的无关图，正好用它量下限是否生效。` +
-      `（旧行为 v1 无下限，此值恒 0——那正是 #324 记下的产品问题。）` +
-      `注意 0 仍然可能出现在两种情况下：库里没有该模型向量（走 503 NO_EMBEDDING 的是另一支）或可见商品为零。`,
+      `（两路取更强；相似度 = 1 - distance/2，0.5 即余弦正交）。` +
+      `但 stub 的图片向量由字节决定，无关查询图与库内封面的余弦**恰好是 0**（见本文件顶部 stub 说明），` +
+      `映射成相似度**恰好 0.5**，而判据是 \`>=\` ⇒ 取等号 ⇒ 一条都不剔。` +
+      `⇒ **这条腿在 stub 下度量不了下限**：empty-result rate = 0 是"边界取等"的产物，不是"下限不存在"。` +
+      `live 传输下无关图的余弦通常为正（相似度落在 0.6~0.8），同样过线——` +
+      `下限真正的作用面是"两路都没有共同方向"（余弦 ≤ 0）的召回，那在真实语料上罕见，` +
+      `所以下限够不够严必须用 live 语料重标（契约注释已写明这个前提）。` +
+      `这条腿负责的是结构、可见性、错误码与延迟；无关查询的断言已不再要求"必须非空"，` +
+      `因此下限若真的剔空，这个数会如实变成非 0。`,
   )
   console.log(
     `- 被拒的 ${rejected.length} 条是**非图片字节**（422 VISUAL_SEARCH_IMAGE_INVALID）：` +

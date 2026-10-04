@@ -270,6 +270,14 @@ jobs:
         if: needs.changes.outputs.api == 'true'
         run: bun run visual:eval
 
+      # #406 第 3 项点名的脚本是**两个**：上面那条是离线门槛（纯函数、不出网、不连库），
+      # 这条是 DB 端到端腿（scratch 库 + MinIO + 真跑 provider，传输用 stub）。它自带 `assert`
+      # 与 `process.exitCode = 1`，所以断言失败在 CI 里会真的红。放在 `Migrate` 之后：
+      # 它需要一个已迁移的库来建自己的 scratch 库；MinIO 的启动与建桶已由上面的步骤完成。
+      - name: Visual search eval (db leg)
+        if: needs.changes.outputs.api == 'true'
+        run: bun run visual:eval:db
+
       # 只跑本次受影响的工作区；`--isolate` 与全量跑时一致（逐文件独立进程）。
       - name: Test
         run: |

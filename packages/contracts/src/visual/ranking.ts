@@ -38,6 +38,11 @@ export const VISUAL_SEARCH_STRATEGY_VERSION = 'visual-hybrid-v2'
  * （`relevance = 2` 的候选里最低的 `visualScore` 是 0.55），因此锁在 0.50。
  * 真实语料上的空结果率仍须用 `bun run visual:eval:db`（`--transport=live`）复核：
  * 这个常数是在人工给定的相似度上定的，不是真实 embedding 分布。
+ *
+ * **不要拿 `visual:eval:db` 的 empty-result rate 证明这个下限生效**：stub 传输下无关图与
+ * 库内封面的余弦恰好是 0，映射成相似度**恰好 0.5**，而判据是 `>=`（取等号）⇒ 一条都不剔。
+ * 该脚本在 stub 下量不到下限，它的 empty-result rate 仍是 0（脚本里的注释写明了机制）；
+ * 下限的行为由 `ranking.test.ts` / `service.test.ts` 的边界用例守着。
  */
 export const VISUAL_RECALL_MIN_SIMILARITY = 0.5
 

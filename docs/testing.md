@@ -41,7 +41,7 @@
 `fetch`、storage 或模块级单例，杜绝跨文件污染。权威入口两处，改口径必须同步：
 
 - `package.json:25`（`"test": "bun test --isolate"`，本地 `bun run test` 的实义）；
-- `.github/workflows/ci.yml:274-286`（db-tests 作业）与 `:304-318`（unit-tests 作业）的 Test 步骤。
+- `.github/workflows/ci.yml:282-294`（db-tests 作业）与 `:312-326`（unit-tests 作业）的 Test 步骤。
 
 ## 4. Bun 版本口径
 
@@ -49,7 +49,7 @@
 
 - `package.json:5`（`"packageManager": "bun@1.4.0"`）；
 - `package.json:7`（`"engines": { "bun": ">=1.4.0" }`）；
-- `.github/workflows/ci.yml` 每个作业的 setup-bun 步骤（`:76,114,171,297,329,354,393`，全部 `"1.4.0"`）。
+- `.github/workflows/ci.yml` 每个作业的 setup-bun 步骤（`:76,114,171,305,337,362,401`，全部 `"1.4.0"`）。
 
 ## 5. CI 的实际门禁结构（`origin/main = 89a09401` + #406 第 3 项的新增步骤）
 
@@ -58,22 +58,30 @@
 
 | 作业 | 行号 | 内容 |
 | --- | --- | --- |
-| `changes` | `ci.yml:53` | 算改动范围，产出各作业开关 |
-| `static` | `ci.yml:106` | lockfile 源断言（拒镜像源污染）→ Install → Lint & format → Typecheck |
-| `db-tests` | `ci.yml:147` | 起 Postgres（+按需 MinIO）→ Migrate（`:257`）→ Chat media smoke（`:260`）→ **Visual search eval gates（`:269`，`bun run visual:eval`）** → `bun test --isolate` 受影响目录（`:274`） |
-| `unit-tests` | `ci.yml:289` | 无服务依赖的单测（web-pc / miniapp / contracts / shared / scripts） |
-| `web-pc` | `ci.yml:321` | `Build PC web`（`:336`）+ `PC preview smoke`（`:340`，真实验证 `/pc` 308 与深链回退） |
-| `miniapp` | `ci.yml:346` | `Build Miniapp`（`:361`，Taro production 构建） |
-| `core-smoke` | `ci.yml:369` | 主链端到端（scratch 库 + 真实 API/Worker/MinIO） |
-| `ci` | `ci.yml:465` | 聚合结论（作业按范围 skip 是正常的） |
+| `changes` | `ci.yml:54` | 算改动范围，产出各作业开关 |
+| `static` | `ci.yml:107` | lockfile 源断言（拒镜像源污染）→ Install → Lint & format → Typecheck |
+| `db-tests` | `ci.yml:148` | 起 Postgres（+按需 MinIO）→ Migrate（`:257`）→ Chat media smoke（`:260`）→ **Visual search eval gates（`:269`，`bun run visual:eval`）** → **Visual search eval db leg（`:277`，`bun run visual:eval:db`）** → `bun test --isolate` 受影响目录（`:282`） |
+| `unit-tests` | `ci.yml:298` | 无服务依赖的单测（web-pc / miniapp / contracts / shared / scripts） |
+| `web-pc` | `ci.yml:330` | `Build PC web`（`:344`）+ `PC preview smoke`（`:348`，真实验证 `/pc` 308 与深链回退） |
+| `miniapp` | `ci.yml:355` | `Build Miniapp`（`:369`，Taro production 构建） |
+| `core-smoke` | `ci.yml:378` | 主链端到端（scratch 库 + 真实 API/Worker/MinIO） |
+| `ci` | `ci.yml:474` | 聚合结论（作业按范围 skip 是正常的） |
 
-**行号基线的说明**：本节此前的行号基于 `b641fd7`，之后 CI 已多次改动（本例新增了一个步骤），
+**行号基线的说明**：本节此前的行号基于 `b641fd7`，之后 CI 已多次改动（本例新增了两个步骤），
 所以按 `origin/main = 89a09401` + 本 PR 重新逐条核对；改 `ci.yml` 务必回来更新这张表。
 
-**评测门槛的位置与理由**（#406 第 3 项）：`bun run visual:eval`（离线三路评测腿）不出网、不连库、
-不需要任何服务，判据在 `apps/api/src/modules/visual-search/eval/gates.ts`（单测 `gates.test.ts` 喂退化输入
-证明它会红）。放在 `db-tests` 只是因为改 `apps/api/**` 时这个作业必定会跑
-（`scripts/ci-changes.ts` 的 `dbTests: api || worker || db`），不必为它再开一个 job。
+**评测门槛的位置与理由**（#406 第 3 项）：issue 点名的评测脚本是**两个**，CI 里两条腿都要跑：
+
+- `bun run visual:eval`（离线三路评测腿）不出网、不连库、不需要任何服务，判据在
+  `apps/api/src/modules/visual-search/eval/gates.ts`（单测 `gates.test.ts` 喂退化输入证明它会红）；
+- `bun run visual:eval:db`（DB 端到端腿）需要已迁移的库 + MinIO（都在这个作业里就位），
+  脚本自建 scratch 库、自带 `assert` 与 `process.exitCode = 1`，所以断言失败会真的红。
+
+两条都放在 `db-tests` 只是因为改 `apps/api/**` 时这个作业必定会跑
+（`scripts/ci-changes.ts` 的 `dbTests: api || worker || db`），不必为它们再开 job。
+注意 DB 腿的 `empty-result rate` **不能**用来证明召回下限生效（stub 下无关向量余弦恰为 0 ⇒
+相似度恰为下限 ⇒ 取等号保留，机制写在 `apps/api/scripts/visual-eval-db.ts` 的汇总注释里）；
+下限的行为由 `ranking.test.ts` / `service.test.ts` 的边界用例守着。
 
 事实陈述（本卡时点）：CI **构建** PC Web（build + preview smoke）与 miniapp（Taro build）；
 `apps/web`（移动端 PWA）已随 #325 从仓库移除，不存在「未构建的 apps/web」这一缺口。

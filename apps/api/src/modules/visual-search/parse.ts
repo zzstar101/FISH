@@ -101,14 +101,30 @@ function normalizeInterpretationPayload(payload: unknown): unknown {
   const source = payload as Record<string, unknown>
   if (!Array.isArray(source.text)) return payload
 
-  const text = source.text
+  const parts = source.text
+  const kept = parts
     .filter((part): part is string => typeof part === 'string')
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
-    .join(' ')
+
+  // 丢弃时留一条**只说条数、不带内容**的日志：`text: [null, 42]` 这类上游怪癖必须与"图里本来
+  // 就没有文字"在日志里可区分（否则就是 #406 第 1 项抱怨的静默降级换了个地方发生）。
+  // 不带内容是因为这段文字来自用户上传的图，属于用户内容。
+  if (kept.length < parts.length) {
+    console.warn(
+      `[visual-search] 语义解析 text 数组丢弃 ${parts.length - kept.length}/${parts.length} 项（非字符串或空白）`,
+    )
+  }
 
   const rest: Record<string, unknown> = { ...source }
   delete rest.text
+  const text = kept.join(' ')
+
+  // 一项不剩**且没有其它字段**时返回原 payload（即整段校验失败 → `null`），而不是返回 `{}`：
+  // `{}` 能过 `strictObject`（字段全 optional），于是响应里的 `interpretation` 会从 `null`
+  // 变成一个"什么都识别到了但都是空"的对象——那是本次归一化引入的、客户端可见的行为变化，
+  // 且与"没识别出任何东西"的语义不符。有其它字段时照常返回（那时 `{}` 不是结果）。
+  if (text.length === 0 && Object.keys(rest).length === 0) return payload
   return text.length > 0 ? { ...rest, text } : rest
 }
 

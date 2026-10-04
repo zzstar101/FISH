@@ -95,4 +95,30 @@ describe('createVisualParser 的解析结果归一', () => {
 
     expect(interpretation).toBeNull()
   })
+
+  test('数组项全被丢弃且没有其它字段时整体判失败（不是返回空对象）', async () => {
+    // 归一化前 `text: [null, 42]` 会整段校验失败 → `null`；归一化后必须保持同一个结果，
+    // 否则响应里的 `interpretation` 会从 `null` 变成一个字段全空的 `{}`（客户端可见的行为变化）。
+    const { interpretation } = await parseWith({ text: [null, 42] })
+
+    expect(interpretation).toBeNull()
+  })
+
+  test('丢弃数组项时留一条只说条数的日志（可与"图里没有文字"区分）', async () => {
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(' '))
+    }
+    try {
+      await parseWith({ text: ['EPSON', null, '   ', 'GD-420S'], category: 'DIGITAL' })
+    } finally {
+      console.warn = originalWarn
+    }
+
+    expect(warnings).toHaveLength(1)
+    // 只说条数：日志里不得出现识别出的文字内容（那是用户上传图片里的内容）。
+    expect(warnings[0]).toContain('丢弃 2/4 项')
+    expect(warnings[0]).not.toContain('EPSON')
+  })
 })
