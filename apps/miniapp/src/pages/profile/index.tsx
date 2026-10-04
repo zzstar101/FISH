@@ -609,7 +609,10 @@ export default function Profile() {
       <View className="profile__cell-tile">
         <Image className="profile__cell-ic" src={cell.icon} mode="aspectFit" />
         {cell.count && cell.count > 0 ? (
-          <View className="profile__cell-dot num">{cell.count > 99 ? '99+' : cell.count}</View>
+          // 单数字（≤9）= 正圆；两位数与 99+ = 胶囊（#431 任务一），形状类跟着值分档
+          <View className={`profile__cell-dot num${cell.count > 9 ? ' is-multi' : ''}`}>
+            {cell.count > 99 ? '99+' : cell.count}
+          </View>
         ) : null}
       </View>
       <Text className="profile__cell-label">{cell.label}</Text>
