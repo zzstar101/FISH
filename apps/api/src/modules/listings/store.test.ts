@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { buildListingEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
+import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { findEmbedding, saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
@@ -103,7 +104,13 @@ async function withSeller(run: (sellerId: string, otherSellerId: string) => Prom
 
 async function insertListingWithTime(
   sellerId: string,
-  input: { createdAt: Date; priceCents: number; free?: boolean; status?: 'ACTIVE' | 'OFFLINE' },
+  input: {
+    createdAt: Date
+    priceCents: number
+    category?: ListingCategory
+    free?: boolean
+    status?: 'ACTIVE' | 'OFFLINE'
+  },
 ): Promise<string> {
   const id = newId()
   await db.insert(listings).values({
@@ -113,7 +120,7 @@ async function insertListingWithTime(
     title: `分页商品 ${input.priceCents}`,
     description: '分页测试',
     priceCents: input.priceCents,
-    category: 'DIGITAL',
+    category: input.category ?? 'DIGITAL',
     condition: 'GOOD',
     status: input.status ?? 'ACTIVE',
     free: input.free ?? false,
@@ -431,6 +438,67 @@ test('free 筛选只认 free 布尔位，不把 0 元但非免费的商品当成
     // 缺省 = 不过滤（与 `free = false` 区分开）
     const all = (await feed()).map((row) => row.listing.id)
     expect(all).toEqual(expect.arrayContaining([paidId, zeroNotFreeId, freeId]))
+  })
+})
+
+// 验收原话：「free 与 category / q / sort / cursor 可组合，翻页不重不漏」。
+// 组合本身靠同一 conditions 数组做 AND；翻页游标是「上一页最后一行」的定位键，
+// 与 free 无关——但这个前提值得用一条用例钉住，否则将来把 free 挪到游标分支里就会静默漏项。
+test('free 与 category 组合，并与游标一起翻页且不重不漏', async () => {
+  await withSeller(async (sellerId) => {
+    const freeDigital = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T05:00:00.000Z'),
+      priceCents: 0,
+      free: true,
+    })
+    const freeBooks = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T05:01:00.000Z'),
+      priceCents: 0,
+      category: 'BOOKS',
+      free: true,
+    })
+    const paidDigital = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T05:02:00.000Z'),
+      priceCents: 900,
+    })
+
+    const scope = { status: 'ACTIVE', sellerId } as const
+
+    // 组合：free 与 category 同时生效（两个条件是 AND，不是覆盖）
+    const digitalFree = await store.listFeed({
+      limit: 50,
+      cursor: null,
+      sort: 'newest',
+      ...scope,
+      free: true,
+      category: 'DIGITAL',
+    })
+    expect(digitalFree.map((row) => row.listing.id)).toEqual([freeDigital])
+
+    // 翻页：limit=1 逼出游标（store 会多取一行做 lookahead）
+    const first = await store.listFeed({
+      limit: 1,
+      cursor: null,
+      sort: 'newest',
+      ...scope,
+      free: true,
+    })
+    const boundary = first[0]
+    expect(boundary?.listing.id).toBe(freeBooks)
+    if (boundary === undefined) throw new Error('limit=1 未返回边界行，无法翻页')
+
+    const second = await store.listFeed({
+      limit: 1,
+      cursor: { kind: 'newest', createdAt: boundary.createdAtCursor, id: boundary.listing.id },
+      sort: 'newest',
+      ...scope,
+      free: true,
+    })
+    expect(second.map((row) => row.listing.id)).toEqual([freeDigital])
+    // 不重不漏：两条免费商品各出现一次，付费的那条始终不出现
+    const seen = [...first.slice(0, 1), ...second].map((row) => row.listing.id)
+    expect(seen).toEqual([freeBooks, freeDigital])
+    expect(seen).not.toContain(paidDigital)
   })
 })
 
