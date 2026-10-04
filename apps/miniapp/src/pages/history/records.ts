@@ -1,36 +1,35 @@
 /**
- * 「历史浏览」的数据口径与文案（**纯逻辑，无 Taro / 无请求**，供 `tests/history-records.test.ts` 直接 import）。
+ * 「历史浏览」的数据口径与文案（纯逻辑与演示 fixture；真实取数在 `../features/*` 的
+ * api 模块，页面层只编排）。
  *
- * ## 为什么整页的数据都在这里
+ * ## 三档的数据源（#415 / #190 / #195 落地后的现状）
  *
- * 本页三档数据**后端一条都没有**（已核验的契约事实，见仓库外的
- * `D:\FISH\四页面并行-收藏历史评论关注.md` §2.1）：
- *
- * | 能力 | 契约现状 | 证据 |
+ * | 档 | 读端点 | 写端点 |
  * | --- | --- | --- |
- * | 浏览足迹 | ❌ 全仓无 footprint / view_history 表与端点 | `packages/contracts/src/` 无该域 |
- * | 收藏 | ❌ 契约无、API 无模块（DB 侧只有表） | `packages/contracts` / `apps/api` 无 favorites 域；`packages/db/src/schema/favorites.ts` 有表无端点 |
- * | 「我发过的留言」聚合 | ❌ 留言只有**按商品**取的那条路由 | `packages/contracts/src/comments/routes.ts` 的 `COMMENT_ROUTES`；`comments/schema.ts` 的 `CommentListQuerySchema` 只有 `limit` / `cursor`，没有 author 过滤 |
+ * | 全部浏览 | `GET /me/view-history`（30 天窗口，按最近浏览倒序） | `DELETE /me/view-history`（清空，幂等） |
+ * | 我收藏的 | `GET /me/favorites` | 无批量清空（只有逐条取消，在收藏页做） |
+ * | 我留言的 | `GET /me/comments?kind=all`（留言 ∪ 评价合并时间线） | 无批量清空（逐条删除在「我的评论」页做） |
  *
- * 所以本模块里的 `DEMO_*` 只服务**演示构建**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，
- * 见 `index.tsx`）：真实构建三档一律渲染空态 + 如实的缺口说明，**不摆这些数据**。
+ * 所以「清空」在真实构建只对**浏览档**成立；收藏 / 留言档没有批量写端点，
+ * 顶栏按钮只在该档隐藏（不是摆一个点了没反应的死按钮）。演示构建（双开关，
+ * 见 `index.tsx`）仍读下面的 `DEMO_*` fixture，清空语义照旧（清本页演示数组）。
  *
  * ## 条数必须与「我的」页数字栏对得上
  *
  * `features/fetchers.ts` 的 `demoProfile()` 给的是收藏 8 / 足迹 24 / 关注 5，
  * 本模块的演示条数照稿就是 24（4 天 × 6 件）/ 8 / 8 —— 否则演示时会出现
  * 「数字栏写 8、点进来 5 件」这种自相矛盾。`tests/history-records.test.ts` 锁住这三个数。
- *
- * ## 演示数据下**不做**的两件事
- *
- * 1. **不做 N+1 拼装**：不遍历自己的商品逐个拉 `GET /listings/:id/comments` 过滤作者来假装
- *    「我发过的留言」汇总 —— 它既慢又不完整（漏掉我在别人商品下的留言），比空态更糟。
- * 2. **不假装服务端写成功**：顶部「清空」在**演示构建**下清掉的是本页自己的演示数组
- *    （页面上那份记录真的没了、并切到「已清空」空态），不涉及任何服务端写；
- *    **真实构建**下没有记录可清、写端点也不存在，于是只给一句说明、不做本地翻转 ——
- *    见 `canClear` / `clearBlockedOf`。
+ * （真实构建的条数以服务端为准，与「我的」页的接真计数同源同值。）
  */
+import type {
+  FavoriteItem,
+} from '@fish/contracts/favorites/schema'
 import type { ListingCategory } from '@fish/contracts/listings/schema'
+import type { ListingStatus } from '@fish/contracts/listings/schema'
+import type { MyCommentItem } from '@fish/contracts/comments/schema'
+import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/schema'
+import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
+import { dayLabelOf } from '@/lib/time'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 
 /* ---------------------------------------------------------------- 档位 */
@@ -68,6 +67,8 @@ export type RecordCell = {
   priceCents: number
   /** 非 null 时缩略图压遮罩、边框降级 */
   gone: GoneLabel | null
+  /** 商品封面（真实数据才有；缺省退回品类色块 —— 演示 fixture 不带它） */
+  coverUrl?: string | null
 }
 
 /** 全部浏览：一天一组 */
@@ -77,15 +78,26 @@ export type HistoryDay = {
   items: RecordCell[]
 }
 
+/** 留言行的跳转目标（真实数据才有；演示 fixture 不带它 → 页面给演示说明 toast）。 */
+export type MessageTarget = { kind: 'listing' | 'transaction'; id: string }
+
 /** 我留言的：整宽行（刻意不显示价格，稿决策④） */
 export type MessageRecord = {
   id: string
-  category: ListingCategory
+  /**
+   * 品类。**评价行可能是 null**：交易 DTO 内嵌的商品摘要（`transactionListingSchema`）
+   * 没有分类字段 —— 为 null 时不画品类小字、色块退回 OTHER（有 `coverUrl` 时用封面）。
+   */
+  category: ListingCategory | null
   title: string
   kind: MessageKind
-  /** 我写的那句话 */
+  /** 我写的那句话。评价行可能是空串（「只打分没写字」是契约明说的正常形态）。 */
   text: string
   timeLabel: string
+  /** 商品封面（真实数据才有；缺省退回品类色块） */
+  coverUrl?: string | null
+  /** 跳转目标（真实数据才有）：留言 → 商品详情；评价 → 面交/订单页。 */
+  target?: MessageTarget
 }
 
 /* ---------------------------------------------------------------- 展示用派生 */
@@ -123,6 +135,110 @@ export function blockUrlOf(category: ListingCategory): string {
   return (LISTING_BLOCKS[category] ?? FALLBACK_BLOCK)[0]
 }
 
+/* ---------------------------------------------------------- 真实数据适配器 */
+
+/** 失效角标：与收藏页同一口径（OFFLINE = 已下架、SOLD = 已卖掉，其余在售）。 */
+export function goneLabelOf(status: ListingStatus): GoneLabel | null {
+  if (status === 'OFFLINE') return '已下架'
+  if (status === 'SOLD') return '已卖掉'
+  return null
+}
+
+/** 足迹一行 `{ listing, viewedAt }` → 三列格。 */
+export function viewHistoryCell(item: ViewHistoryItem): RecordCell {
+  return {
+    id: item.listing.id,
+    category: item.listing.category,
+    title: item.listing.title,
+    priceCents: item.listing.priceCents,
+    gone: goneLabelOf(item.listing.status),
+    coverUrl: item.listing.coverUrl,
+  }
+}
+
+/** 收藏一行 `{ listing, favoritedAt }` → 三列格（失效口径与足迹一致）。 */
+export function favoriteCell(item: FavoriteItem): RecordCell {
+  return {
+    id: item.listing.id,
+    category: item.listing.category,
+    title: item.listing.title,
+    priceCents: item.listing.priceCents,
+    gone: goneLabelOf(item.listing.status),
+    coverUrl: item.listing.coverUrl,
+  }
+}
+
+/**
+ * 「我留言的」一行：`/me/comments` 的判别联合 → 整宽行。
+ * 刻意**不显示价格**（稿决策④：这一档找的是「我当时说了什么」）。
+ */
+export function messageRow(
+  item: MyCommentItem | TransactionReviewItem,
+  nowMs: number,
+): MessageRecord {
+  if ('comment' in item) {
+    return {
+      id: item.comment.id,
+      category: item.listing.category,
+      title: item.listing.title,
+      kind: 'comment',
+      text: item.comment.content,
+      timeLabel: dayLabelOf(item.comment.createdAt, nowMs),
+      coverUrl: item.listing.coverUrl,
+      target: { kind: 'listing', id: item.comment.listingId },
+    }
+  }
+  return {
+    id: item.review.id,
+    category: null,
+    title: item.transaction.listing.title,
+    kind: 'review',
+    text: item.review.body ?? '',
+    timeLabel: dayLabelOf(item.review.createdAt, nowMs),
+    coverUrl: item.transaction.listing.coverUrl,
+    target: { kind: 'transaction', id: item.transaction.id },
+  }
+}
+
+/** 本地日期键（分组用，不渲染）。 */
+function dayKeyOf(iso: string): string {
+  const at = new Date(iso)
+  return `${at.getFullYear()}-${at.getMonth() + 1}-${at.getDate()}`
+}
+
+/** 分组条的日期文案：今天 / 昨天 / M 月 D 日（本地时区；不含时间）。 */
+function dayGroupLabel(iso: string, nowMs: number): string {
+  const at = new Date(iso)
+  const dayMs = 24 * 60 * 60 * 1000
+  const startOfDay = (ms: number) => new Date(ms).setHours(0, 0, 0, 0)
+  const diff = Math.round((startOfDay(nowMs) - startOfDay(at.getTime())) / dayMs)
+  if (diff <= 0) return '今天'
+  if (diff === 1) return '昨天'
+  return `${at.getMonth() + 1} 月 ${at.getDate()} 日`
+}
+
+/**
+ * 按浏览日分组（`HistoryDay.date` 在演示里是 ISO 日期、在真实数据里是「今天 / 昨天 /
+ * M 月 D 日」文案 —— 稿决策⑦：日期来自足迹记录，不是商品发布时间）。组内保持服务端
+ * 顺序（最近在前），组间按首次出现的顺序（服务端已按最近浏览倒序）。
+ */
+export function groupByDay(
+  rows: readonly (RecordCell & { viewedAt: string })[],
+  nowMs: number,
+): HistoryDay[] {
+  const groups = new Map<string, { label: string; items: RecordCell[] }>()
+  for (const row of rows) {
+    const key = dayKeyOf(row.viewedAt)
+    const found = groups.get(key)
+    if (found) {
+      found.items.push(row)
+      continue
+    }
+    groups.set(key, { label: dayGroupLabel(row.viewedAt, nowMs), items: [row] })
+  }
+  return Array.from(groups.values(), ({ label, items }) => ({ date: label, items }))
+}
+
 /* ---------------------------------------------------------------- 顶部动作（清空） */
 
 /**
@@ -154,24 +270,24 @@ export function clearDoneOf(tab: HistoryTab): string {
 /**
  * 清空暂时做不了。
  *
- * **真实构建**（没有演示数据）三档都没有可清的记录，而写操作后端三个端点一个都没有
- * （清空浏览足迹 / 取消收藏 / 删留言 —— 证据见文件头），所以这里只给说明、**不做任何
- * 本地状态翻转**（本地删掉几行再回滚是假接线，会让用户以为删成功了）。
- * 这与 Owner 的「如果是因为后端没有的原因就保持不变」是同一口径。
+ * 真实构建下「清空」只对浏览档成立（`DELETE /me/view-history`）；收藏 / 留言档没有
+ * 批量写端点，顶栏按钮在该档隐藏 —— 本函数只剩兜底用途（防御性调用），文案说清
+ * 「这一档暂时不能一键清空」，不做任何本地状态翻转（本地删掉几行是假接线）。
  */
 export function clearBlockedOf(tab: HistoryTab): string {
-  return `后端未开放，暂时不能清空${RECORD_NAME[tab]}`
+  return `这一档暂时不能一键清空${RECORD_NAME[tab]}`
 }
 
 /**
  * 这一档能不能真的清。
  *
- * `true` 只在**演示构建**下成立：那份「记录」就是本页从 `records.ts` 读进来的演示数组，
- * 清空它 = 把页面上显示的这份数据真的去掉（列表变空 + 切到「已清空」空态），
- * 不需要也没有假装服务端写成功。真实构建下没有任何记录可清，恒 `false`。
+ * - 演示构建：三档都行 —— 那份「记录」就是本页从 `records.ts` 读进来的演示数组，
+ *   清空它 = 把页面上显示的这份数据真的去掉（列表变空 + 切到「已清空」空态）。
+ * - 真实构建：只有浏览档有批量写端点（`DELETE /me/view-history`）；收藏 / 留言档
+ *   恒 `false`，顶栏按钮在该档直接隐藏。
  */
-export function canClear(demo: boolean): boolean {
-  return demo
+export function canClear(demo: boolean, tab: HistoryTab): boolean {
+  return demo || tab === 'history'
 }
 
 /* ---------------------------------------------------------------- 空态 / 加载 / 说明 */
@@ -179,32 +295,26 @@ export function canClear(demo: boolean): boolean {
 export type EmptyCopy = { title: string; text: string; action: string }
 
 /**
- * 空态的三种来由，**含义互不相同、必须分开说**：
+ * 空态的两种来由，**含义互不相同、必须分开说**：
  *
- * - `noBackend`：真实构建 —— 后端根本没有这条数据（不是「你恰好没有记录」）；
- * - `demoEmpty`：演示构建、还没清过 —— 演示口径下这份记录恰好是空的；
+ * - `empty`：这一档真的没有记录（演示与真实构建同义 —— 真实数据下空了就是真的没有；
+ *   #415/#190/#195 之前真实构建「后端没有这条数据」的那三支缺口说明已随接线删除）；
  * - `cleared`：演示构建、刚点了清空 —— 记录是**你刚清掉的**，不是「本来就没有」。
  *
- * 三种混成一句就会出现「我明明清空的，怎么说是没有后端」这种自相矛盾。
+ * 两种混成一句就会出现「我明明清空的，怎么说是没有记录」这种自相矛盾。
  */
-export type EmptyKind = 'noBackend' | 'demoEmpty' | 'cleared'
+export type EmptyKind = 'empty' | 'cleared'
 
-export function emptyKindOf(demo: boolean, cleared: boolean): EmptyKind {
-  // 清空只可能发生在演示构建里；真到了「清过」这一态，它比其它两种解释都更具体
-  if (cleared) return 'cleared'
-  return demo ? 'demoEmpty' : 'noBackend'
+export function emptyKindOf(cleared: boolean): EmptyKind {
+  // 「清过」这一态比「本来就没有」更具体，优先说它
+  return cleared ? 'cleared' : 'empty'
 }
 
 /**
- * 三种空态的文案（**每档 × 每种来由各一支**）。
+ * 两种空态的文案（**每档 × 每种来由各一支**）。
  *
- * `noBackend` 说的是「这一档还读不到服务端数据」（后端还没有这条数据 / 这一页还没接上），
- * 而不是「你还没有浏览记录 / 没有收藏」：后者是我们**不知道**的事，写成事实就是假话 ——
- * 这与 `components/load-error` 和空态之间那条界线同一口径（「加载不出来」≠「恰好没有内容」）。
- *
- * ⚠️ 收藏那一支（#397）：收藏接口已上线（#394），小程序也有了真读它的「我的收藏」页，
- * 所以这里**不能**再写「服务端还没有收藏接口 / 只记在这台设备上」—— 两句现在都是假话。
- * 本页的收藏档还没接端点，如实说「这一页还没接」，并把用户引到能看的那个页面。
+ * 「empty」说的是「这一档真的没有记录」（真实数据下空了就是真的没有 —— 早期版本
+ * 「后端还没有这条数据」的三支缺口说明已随 #415/#190/#195 接线删除）。
  */
 export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
   if (kind === 'cleared') {
@@ -225,45 +335,23 @@ export function emptyCopyOf(tab: HistoryTab, kind: EmptyKind): EmptyCopy {
     }
   }
 
-  if (kind === 'demoEmpty') {
-    if (tab === 'history') {
-      return {
-        title: '还没有浏览记录',
-        text: '看过的商品会按天收在这里，方便回头再找',
-        action: '去逛逛',
-      }
-    }
-    if (tab === 'favs') {
-      return {
-        title: '还没有收藏的宝贝',
-        text: '逛首页看到喜欢的，点一下 ♡ 就会收在这里',
-        action: '去逛逛',
-      }
-    }
-    return {
-      title: '还没有留过言',
-      text: '在商品下留言、或交易完成后给对方评价，都会收在这里',
-      action: '去逛逛',
-    }
-  }
-
   if (tab === 'history') {
     return {
-      title: '浏览足迹还没有后端',
-      text: '记录浏览足迹的接口还没做，所以这里暂时没有内容可看；上线后看过的商品会按天收在这里。',
+      title: '还没有浏览记录',
+      text: '看过的商品会按天收在这里，方便回头再找',
       action: '去逛逛',
     }
   }
   if (tab === 'favs') {
     return {
-      title: '这一页还没接后端',
-      text: '收藏接口已经上线，只是这一页还没接上 —— 你的收藏在「我的收藏」页可以看。',
+      title: '还没有收藏的宝贝',
+      text: '逛首页看到喜欢的，点一下 ♡ 就会收在这里',
       action: '去逛逛',
     }
   }
   return {
-    title: '留言汇总还没有后端',
-    text: '契约里没有「按作者取留言」的接口，所以这里暂时没有内容可看；上线后你发过的商品留言与交易评价都会收在这里。',
+    title: '还没有留过言',
+    text: '在商品下留言、或交易完成后给对方评价，都会收在这里',
     action: '去逛逛',
   }
 }
@@ -299,9 +387,6 @@ export function tailTextOf(tab: HistoryTab, count: number): string {
 
 /** 演示构建里点格子 / 留言行的说明（演示 id 在库里不存在，跳过去必然 404，不假装跳成功） */
 export const DEMO_OPEN_TIP = '演示数据，暂不能打开商品详情'
-
-/** 真实构建下拉刷新时的说明（一个后端接口都没有，没有任何东西可刷） */
-export const NO_BACKEND_REFRESH_TIP = '接口未接入，暂时没有可刷新的数据'
 
 /* ---------------------------------------------------------------- 演示数据（照稿） */
 

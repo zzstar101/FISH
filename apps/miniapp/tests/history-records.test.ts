@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import type { MyCommentItem } from '@fish/contracts/comments/schema'
+import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/schema'
+import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import {
   applyCleared,
   canClear,
@@ -11,25 +14,33 @@ import {
   type DemoRecords,
   emptyCopyOf,
   emptyKindOf,
+  favoriteCell,
+  goneLabelOf,
+  groupByDay,
+  messageRow,
   NOTHING_CLEARED,
   noteOf,
   TAB_KEYS,
   TABS,
   tailTextOf,
+  viewHistoryCell,
   withCleared,
 } from '../src/pages/history/records'
 
 /**
- * 「历史浏览」的数据口径（本轮三类数据后端一条都没有，见 records.ts 文件头）。
+ * 「历史浏览」的数据口径（#415/#190/#195 接线后：真实构建三档读真接口，见 records.ts 文件头）。
  * 组件接线没有单测（本仓 tests/ 只有纯逻辑测试，无 Taro 组件渲染基建）。
  *
  * 这里锁的是几件最容易做错的事：
  * 1. 失效角标在「全部浏览」与「我收藏的」两处一致（同一件商品不能一处说已下架、
- *    另一处还能买）；
- * 2. 空态三种来由**不能混成一句**：真实构建说「没有后端」、演示构建说「还没有记录」、
- *    清空之后说「已清空」—— 混了就会出现「我明明清空的，怎么说是没有后端」；
+ *    另一处还能买）；真实适配器的失效判据与演示 fixture 同源（`goneLabelOf`）；
+ * 2. 空态两种来由**不能混成一句**：「还没有记录」与「已清空」——
+ *    混了就会出现「我明明清空的，怎么说是没有记录」；
  * 3. 清空是**真的清**（演示构建）、只清当前档、刷新之后仍然是空的；
+ *    真实构建只有浏览档有批量写端点（`canClear` 的档位判据）；
  * 4. 「清空过」是**账号作用域**的：换账号不能带着上一个账号的记忆。
+ * 5. **真实数据适配器**：足迹/收藏的失效口径、留言行的跳转目标（留言 → 商品、
+ *    评价 → 交易）、评价行没有分类字段（null，不是编一个「其他」）。
  *
  * ⚠️ **「演示条数与『我的』页数字栏对齐」这条约束不在本文件**：
  * 那个数字的真源是 `features/fetchers.ts` 的 `demoProfile()`（收藏 8 / 足迹 24），
@@ -98,11 +109,13 @@ describe('清空：演示构建下是真的清，真实构建下只给说明', (
     msgs: DEMO_MESSAGES,
   })
 
-  test('只有演示构建能清（真实构建没有记录可清、也没有写端点）', () => {
-    // 这一条锁的是 `canClear` 的**入参口径**（页面必须传 `demo`，不能传常量 true）。
-    // 页面有没有真的把 `demo` 传进来，单测覆盖不到 —— 那要靠 code review。
-    expect(canClear(true)).toBe(true)
-    expect(canClear(false)).toBe(false)
+  test('演示构建三档都能清；真实构建只有浏览档能清（收藏/留言没有批量端点）', () => {
+    // 这一条锁的是 `canClear` 的**入参口径**（页面必须传 `demo` 与当前档，不能传常量）。
+    // 页面有没有真的把两个值传进来，单测覆盖不到 —— 那要靠 code review。
+    for (const tab of TAB_KEYS) expect(canClear(true, tab)).toBe(true)
+    expect(canClear(false, 'history')).toBe(true)
+    expect(canClear(false, 'favs')).toBe(false)
+    expect(canClear(false, 'msgs')).toBe(false)
   })
 
   test('清掉某一档之后，那一档真的空了，另外两档不受影响', () => {
@@ -154,10 +167,9 @@ describe('清空：演示构建下是真的清，真实构建下只给说明', (
     expect(clearDoneOf('favs')).toBe('已清空收藏')
     expect(clearDoneOf('msgs')).toBe('已清空留言')
 
-    // 真实构建的说明必须点出「后端未开放」，不能只说「清空失败」
+    // 做不了的说明要包含「清空」二字（兜底路径；真实构建下按钮在该档直接隐藏）
     for (const tab of TAB_KEYS) {
       const text = clearBlockedOf(tab)
-      expect(text).toContain('后端')
       expect(text).toContain('清空')
     }
   })
@@ -182,40 +194,155 @@ describe('三档的文案', () => {
   })
 })
 
-describe('空态：三种来由不能混成一句', () => {
-  test('来由判定：清过 > 演示空 > 没有后端', () => {
-    expect(emptyKindOf(false, false)).toBe('noBackend')
-    expect(emptyKindOf(true, false)).toBe('demoEmpty')
-    expect(emptyKindOf(true, true)).toBe('cleared')
-    // 真实构建不可能「清过」（清不掉），但真传进来时也要说得比「没有后端」更具体
-    expect(emptyKindOf(false, true)).toBe('cleared')
+describe('空态：两种来由不能混成一句', () => {
+  test('来由判定：清过 > 本来就没有（#415/#190/#195 后真实构建空了就是真的没有）', () => {
+    expect(emptyKindOf(false)).toBe('empty')
+    expect(emptyKindOf(true)).toBe('cleared')
   })
 
-  test('真实构建的空态说的是「没有后端」，不是「你没有内容」', () => {
+  test('「empty」空态说「还没有」，不提后端（缺口说明那三支已随接线删除）', () => {
     for (const tab of TAB_KEYS) {
-      const copy = emptyCopyOf(tab, 'noBackend')
-      expect(copy.title).toContain('后端')
-      expect(copy.action).toBe('去逛逛')
-    }
-  })
-
-  test('演示构建没清过时的空态说「还没有」，不提后端', () => {
-    for (const tab of TAB_KEYS) {
-      const copy = emptyCopyOf(tab, 'demoEmpty')
+      const copy = emptyCopyOf(tab, 'empty')
       expect(copy.title).not.toContain('后端')
       expect(copy.title).toContain('还没有')
+      expect(copy.action).toBe('去逛逛')
     }
   })
 
   test('清空之后的空态说「已清空」，与「还没有」区分开', () => {
     for (const tab of TAB_KEYS) {
       const cleared = emptyCopyOf(tab, 'cleared')
-      const empty = emptyCopyOf(tab, 'demoEmpty')
+      const empty = emptyCopyOf(tab, 'empty')
       expect(cleared.title).toContain('已清空')
-      // 三者互不相同：同一句话套三种来由，用户会以为清空没生效
+      // 两者互不相同：同一句话套两种来由，用户会以为清空没生效
       expect(cleared.title).not.toBe(empty.title)
       expect(cleared.text).not.toBe(empty.text)
-      expect(cleared.title).not.toBe(emptyCopyOf(tab, 'noBackend').title)
     }
+  })
+})
+
+describe('真实数据适配器（#415/#190/#195 接线）', () => {
+  /** 「现在」锚在本地正午，日期断言不依赖跑测试的机器时区（与 comments.test.ts 同一手法） */
+  const noon = new Date()
+  noon.setHours(12, 0, 0, 0)
+  const NOW_MS = noon.getTime()
+  const isoAgo = (ms: number) => new Date(NOW_MS - ms).toISOString()
+
+  const listingBase = {
+    id: 'l_01',
+    title: '测试商品',
+    priceCents: 4500,
+    category: 'DAILY',
+    condition: 'LIKE_NEW',
+    status: 'ACTIVE',
+    urgent: false,
+    negotiable: true,
+    free: false,
+    coverUrl: null,
+    createdAt: '2026-09-01T10:00:00+08:00',
+  } as const
+
+  test('失效角标：OFFLINE=已下架、SOLD=已卖掉、在售没有角标', () => {
+    expect(goneLabelOf('OFFLINE')).toBe('已下架')
+    expect(goneLabelOf('SOLD')).toBe('已卖掉')
+    expect(goneLabelOf('ACTIVE')).toBeNull()
+  })
+
+  test('足迹 / 收藏行：id、价格、失效角标来自商品卡', () => {
+    const viewItem = {
+      listing: { ...listingBase, status: 'SOLD' },
+      viewedAt: new Date(NOW_MS - 60 * 60 * 1000).toISOString(),
+    } as ViewHistoryItem
+    const cell = viewHistoryCell(viewItem)
+    expect(cell.id).toBe('l_01')
+    expect(cell.gone).toBe('已卖掉')
+    expect(cell.priceCents).toBe(4500)
+
+    const favItem = { listing: listingBase, favoritedAt: isoAgo(60 * 60 * 1000) }
+    expect(favoriteCell(favItem as never).gone).toBeNull()
+  })
+
+  test('留言行：商品留言跳商品、评价行跳交易且没有分类字段', () => {
+    const commentItem = {
+      comment: {
+        id: 'cmt_01',
+        listingId: 'l_01',
+        parentId: null,
+        content: '还在吗',
+        createdAt: isoAgo(30 * 60 * 1000),
+      },
+      listing: listingBase,
+    } as MyCommentItem
+    const commentRow = messageRow(commentItem, NOW_MS)
+    expect(commentRow.kind).toBe('comment')
+    expect(commentRow.target).toEqual({ kind: 'listing', id: 'l_01' })
+    expect(commentRow.category).toBe('DAILY')
+
+    const reviewItem = {
+      review: {
+        id: 'rvw_01',
+        transactionId: 'tx_01',
+        rating: 'POSITIVE',
+        body: null,
+        images: [],
+        createdAt: isoAgo(90 * 60 * 1000),
+      },
+      transaction: {
+        id: 'tx_01',
+        conversationId: 'cnv_01',
+        listingId: 'l_01',
+        buyerId: 'usr_a',
+        sellerId: 'usr_b',
+        role: 'buyer',
+        listing: {
+          id: 'l_01',
+          title: '测试商品',
+          priceCents: 4500,
+          status: 'SOLD',
+          coverUrl: null,
+        },
+        counterpart: { id: 'usr_b', nickname: '对方', avatarUrl: null },
+        amountCents: 4000,
+        status: 'COMPLETED',
+        buyerConfirmedAt: null,
+        sellerConfirmedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        createdAt: isoAgo(90 * 60 * 1000),
+        updatedAt: isoAgo(90 * 60 * 1000),
+      },
+    } as unknown as TransactionReviewItem
+    const reviewRow = messageRow(reviewItem, NOW_MS)
+    expect(reviewRow.kind).toBe('review')
+    // 评价行的跳转目标是那笔交易（面交/订单页），不是商品
+    expect(reviewRow.target).toEqual({ kind: 'transaction', id: 'tx_01' })
+    // 交易内嵌商品摘要没有分类字段：null（不是编一个「其他」）
+    expect(reviewRow.category).toBeNull()
+    // 只打分没写字 → 空串，页面整行不渲染文本
+    expect(reviewRow.text).toBe('')
+  })
+
+  test('按浏览日分组：同日合组、组内保持服务端顺序、标签是 今天/昨天/M 月 D 日', () => {
+    const cell = (id: string) => ({
+      id,
+      category: 'DAILY' as const,
+      title: id,
+      priceCents: 100,
+      gone: null,
+    })
+    const rows = [
+      { ...cell('a'), viewedAt: isoAgo(1 * 60 * 60 * 1000) },
+      { ...cell('b'), viewedAt: isoAgo(2 * 60 * 60 * 1000) },
+      { ...cell('c'), viewedAt: isoAgo(26 * 60 * 60 * 1000) },
+      { ...cell('d'), viewedAt: isoAgo(50 * 24 * 60 * 60 * 1000) },
+    ]
+    const days = groupByDay(rows, NOW_MS)
+    expect(days).toHaveLength(3)
+    // 组内顺序 = 服务端顺序（最近的在前）
+    expect(days[0]?.items.map((item) => item.id)).toEqual(['a', 'b'])
+    expect(days[0]?.date).toBe('今天')
+    expect(days[1]?.date).toBe('昨天')
+    // 更早的按本地日期给「M 月 D 日」（不写死月份，时区无关）
+    expect(days[2]?.date).toMatch(/^\d+ 月 \d+ 日$/)
   })
 })
