@@ -34,8 +34,10 @@ export const VISUAL_SEARCH_STRATEGY_VERSION = 'visual-hybrid-v2'
  * 21 条样本 / 89 条候选）：人工判定相关（`relevance >= 1`）的候选，两路取更强的那个
  * **最低 0.60**；不相关候选最高 0.96——两者重叠，所以这个下限**不可能**剔掉
  * "外形相似但语义不同"的陷阱样本（那是排序层的职责，也正是 hybrid 存在的理由），
- * 它只剔掉"两路都没有共同方向"的召回。抬到 0.60 以上会开始丢相关项
- * （`relevance = 2` 的候选里最低的 `visualScore` 是 0.55），因此锁在 0.50。
+ * 它只剔掉"两路都没有共同方向"的召回。抬到 0.60 以上会开始丢相关项——判据是两路取更强，
+ * 冻结 fixture 上的反事实实测：`<= 0.60` 一条相关候选都不丢，`0.61` 起丢第一条（`relevance = 1`
+ * 的 `mismatch-ipad-accessories/ipad-pencil`，两路取更强 = 0.60）；`relevance = 2` 的候选里
+ * 这个 max 的最低值是 0.78，所以锁在 0.50 是留了余量的保守取值。
  * 真实语料上的空结果率仍须用 `bun run visual:eval:db`（`--transport=live`）复核：
  * 这个常数是在人工给定的相似度上定的，不是真实 embedding 分布。
  *

@@ -750,8 +750,16 @@ try {
       positive.map((run) => ({ label: run.label, top: topInternalIdOf(run), target: target.id })),
     )
     assert(
-      unrelated.every((run) => topInternalIdOf(run) === decoy.id),
-      'stub：无关查询的第 1 名 = 更新的在售干扰项（target 30 天前、decoy 1 天前，视觉分都是 0）',
+      unrelated.every(
+        (run) =>
+          run.hit &&
+          !run.failed &&
+          // 下限（#406 第 6 项）之后"无关查询返回空"是**合法结果**（下限把候选全剔了）。
+          // 这里只要求"要么空、要么第 1 名是 decoy"：把空结果判成"名次回归"会让同一次运行
+          // 以 exit 1 结束、把两件不相干的事混进同一份报告。
+          (topInternalIdOf(run) === null || topInternalIdOf(run) === decoy.id),
+      ),
+      'stub：无关查询要么返回空（下限剔掉了全部候选），要么第 1 名 = 更新的在售干扰项（target 30 天前、decoy 1 天前，视觉分都是 0）',
       unrelated.map((run) => ({ label: run.label, top: topInternalIdOf(run), decoy: decoy.id })),
     )
     assert(topInternalIdOf(visibilityRun) === target.id, 'stub：可见性查询的第 1 名 = 目标商品', {
