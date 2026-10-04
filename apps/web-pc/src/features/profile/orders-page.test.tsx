@@ -20,7 +20,7 @@ const ME: Me = {
   signature: null,
 }
 
-function order(id: string, title: string): TransactionDto {
+function order(id: TransactionDto['id'], title: string): TransactionDto {
   return {
     id,
     conversationId: 'cnv_01jc000000e00800000000001a',

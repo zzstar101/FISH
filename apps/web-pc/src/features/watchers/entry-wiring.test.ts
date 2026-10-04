@@ -53,10 +53,11 @@ async function renderMyList(listings: ListingCard[]): Promise<string> {
 
   const queryClient = new QueryClient()
   queryClient.setQueryData(AUTH_ME_QUERY_KEY, ME)
-  // 我的发布读 profile 域的 listings 查询，不预置就只渲染加载态。
+  // 我的发布读 profile 域的 listings 查询（#446 起为 infinite 的 pages 形状），
+  // 不预置就只渲染加载态。
   queryClient.setQueryData(profileKeys.listings(ME.id, 'ALL'), {
-    items: listings,
-    nextCursor: null,
+    pages: [{ items: listings, nextCursor: null }],
+    pageParams: [null],
   })
 
   return renderToString(
