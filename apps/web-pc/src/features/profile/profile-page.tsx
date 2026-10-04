@@ -102,6 +102,10 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
                 <ChevronRight className="size-3.5 text-ink-3" />
               </Link>
             </div>
+            {/* 个性签名（#179）：空就不渲染，不留死占位。 */}
+            {user.signature ? (
+              <p className="mt-2 line-clamp-2 text-ink-2 text-sm">{user.signature}</p>
+            ) : null}
             <p className="mt-2 text-ink-3 text-sm">
               {user.phoneBound ? `手机号 ${user.maskedPhone ?? '已绑定'}` : '未绑定手机号'}
             </p>

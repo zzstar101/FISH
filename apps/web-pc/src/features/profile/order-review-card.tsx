@@ -128,7 +128,8 @@ export function ReviewForm({
 
   return (
     <form className="space-y-5" onSubmit={submit}>
-      <div aria-label="评分" className="flex gap-2" role="group">
+      <fieldset className="flex gap-2 border-0 p-0">
+        <legend className="sr-only">评分</legend>
         {RATING_OPTIONS.map((option) => {
           const active = option === rating
           return (
@@ -147,7 +148,7 @@ export function ReviewForm({
             </button>
           )
         })}
-      </div>
+      </fieldset>
 
       <div>
         <Textarea

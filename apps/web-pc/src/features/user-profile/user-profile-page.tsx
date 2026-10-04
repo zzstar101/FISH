@@ -85,7 +85,11 @@ export function UserProfilePage({ userId }: { userId: string }) {
                 <Badge variant="secondary">未认证</Badge>
               )}
             </div>
-            {/* 契约的公开 DTO 只有七个字段，这里只出其中三个统计，不补任何编造指标。 */}
+            {/* 个性签名（#179 的公开投影）：空就不渲染，不留死占位。 */}
+            {user.signature ? (
+              <p className="mt-2 line-clamp-2 text-ink-2 text-sm">{user.signature}</p>
+            ) : null}
+            {/* 契约的公开 DTO 九个字段（含 #179 的 signature），这里只出统计三样，不补编造指标。 */}
             <dl className="mt-4 flex gap-8">
               {profileStats(user).map((stat) => (
                 <div key={stat.label}>
