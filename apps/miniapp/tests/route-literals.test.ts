@@ -33,8 +33,15 @@ import path from 'node:path'
  * - 用变量拼出来的根（`const root = pick(); root + name`）；
  * - 路径段之外的写法（`wx.navigateTo` 原生调用、`redirectTo` 的等价字符串）；
  * - `[A-Za-z0-9_-]` 之外的页面名（例如带 `.` 的），会被当成「不是路由」直接忽略；
+ * - **无前导 `/`、又不带 `pkg-` 前缀的拼接根**（`'pages/' + name`）：`CONCAT_ROUTE_ROOT`
+ *   刻意要求两者之一，否则 `path.join('src', 'pages/', name, 'index.tsx')` 这类**磁盘
+ *   路径**会全被误报（旧写法就是这个毛病）。代价是极少数写成 `'pages/foo/index'`
+ *   的拼接逃逸 —— 真机上小程序路由必须带前导 `/`，这种写法本身也是错的；
  * - **其它测试文件里的路由样本/反例**：这类文件必须整文件登记豁免
  *   （`ROUTE_SCAN_OPT_OUT` + 文件内的 `// route-guard: skip-file` 标记，两侧都要写）。
+ *   注意豁免是**整文件**的：登记后四个扫描器（字面量 / 动态模板 / 拼接根 / 缺 index）
+ *   都不再看这个文件（早先只有动态与拼接两条跳过它，字面量仍扫 —— 那条路为了让
+ *   反例能被写进测试文件而被放弃）。
  */
 
 // route-guard: skip-file —— 本文件自己就是扫描器，正文里的样本与反例不是真实跳转。
@@ -180,8 +187,16 @@ function codeMask(src: string): boolean[] {
   return mask
 }
 
-/** `'…/pages/<page>/index'`（含模板串里写死的部分）；捕获组 2 是整个字面量内容。 */
-const ROUTE_LITERAL = /(['"`])(\/?(?:pkg-[a-z]+\/)?pages\/[A-Za-z0-9_-]+\/index)([?#][^'"`\n]*)?\1/g
+/**
+ * `'…/pages/<page>/index'`（含模板串里写死的部分）；捕获组 2 是整个字面量内容。
+ *
+ * `/index` 之后允许一个**可选尾斜杠**（`…/index/`）：`navigateTo({ url: '…/index/' })`
+ * 是同一页的等价写法，旧正则要求 `index` 后面紧跟 `?`/`#`/引号，于是带尾斜杠的写法
+ * （包括 `` `/pkg-browse/pages/x/index/?id=${id}` ``）会同时逃过本正则与动态模板正则。
+ * 捕获组 2 不含尾斜杠，所以取到的路由天然是规整形式。
+ */
+const ROUTE_LITERAL =
+  /(['"`])(\/?(?:pkg-[a-z]+\/)?pages\/[A-Za-z0-9_-]+\/index)\/?([?#][^'"`\n]*)?\1/g
 
 /**
  * 「看着像路由、但少了 `/index`」的裸字面量。
@@ -279,6 +294,19 @@ function normalizeRoute(literal: string): string {
   return route.startsWith('/') ? route : `/${route}`
 }
 
+/**
+ * 拆成两段写的完整路由：字面量之后紧跟 `+ '…index'`
+ * （例：`'/pkg-browse/pages/foo' + '/index'`）。
+ *
+ * 这种写法语义上是完整路由，不该被「缺 `/index`」那条规则收走 —— 否则它只有两条出路：
+ * 改代码迁就守卫，或往 `ROUTE_LITERALS_WITHOUT_INDEX` 里登记一条**明明不缺 index** 的
+ * 条目。判据只看紧邻的拼接片段，够用且不会放走真正缺 index 的裸字面量。
+ */
+function isSplitRouteContinuation(source: string, endAt: number): boolean {
+  const tail = source.slice(endAt, endAt + 40)
+  return /^\s*\+\s*(['"`])\/index\/?([?#][^'"`]*)?\1/.test(tail)
+}
+
 /** 从 `app.config.ts` 文本解析出所有完整路由与它们对应的磁盘目录。 */
 function declaredRoutes(source: string): { route: string; dir: string }[] {
   const out: { route: string; dir: string }[] = []
@@ -371,6 +399,10 @@ for (const dir of SCAN_DIRS) {
     for (const match of src.matchAll(ROUTE_LITERAL_NO_INDEX)) {
       const at = match.index ?? 0
       if (mask[at] === false) continue
+      // 拆成两段写的完整路由（`'/pkg-browse/pages/foo' + '/index'`）不是「缺 /index」：
+      // 紧接着的拼接片段把它补上了。旧写法把这种合法写法误报成缺 index，且没有出路
+      // （白名单为空时只能改代码迁就守卫）。
+      if (isSplitRouteContinuation(src, at + match[0].length)) continue
       noIndexLiterals.push({
         file: rel,
         line: src.slice(0, at).split('\n').length,
@@ -566,5 +598,56 @@ describe('路由字面量守卫（分包后）', () => {
       '/pkg-browse/pages',
     ])
     expect([..."'pages/'".matchAll(CONCAT_ROUTE_ROOT)].length).toBe(0)
+  })
+
+  test('扫描器自检：尾斜杠与拆两段写的路由既被看见、又不被误判（第四轮审查 F4/FP1）', () => {
+    // 尾斜杠的完整路由：同一页的等价写法，必须被字面量扫描接住并规整成不带尾斜杠的路由。
+    // 旧正则要求 `index` 后紧跟 `?`/`#`/引号，于是带尾斜杠的写法两边都逃。
+    const trailingSlash = "'/pkg-browse/pages/listing-detail/index/'"
+    expect([...trailingSlash.matchAll(ROUTE_LITERAL)].map((m) => m[2])).toEqual([
+      '/pkg-browse/pages/listing-detail/index',
+    ])
+    expect([...trailingSlash.matchAll(ROUTE_LITERAL_NO_INDEX)].length).toBe(0)
+    // 未声明的页面 + 尾斜杠：仍要被字面量扫描抓到，交给「必须在 app.config 声明」那条断言
+    expect([..."'/pkg-browse/pages/not-a-page/index/'".matchAll(ROUTE_LITERAL)].length).toBe(1)
+
+    // 尾斜杠 + 动态 query：归字面量扫描（不再两边都逃），动态模板扫描不重复收
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 样本要的是字面量 ${...} 文本
+    const trailingSlashQuery = '`/pkg-browse/pages/listing-detail/index/?id=${id}`'
+    expect([...trailingSlashQuery.matchAll(ROUTE_LITERAL)].map((m) => m[2])).toEqual([
+      '/pkg-browse/pages/listing-detail/index',
+    ])
+    expect([...trailingSlashQuery.matchAll(DYNAMIC_ROUTE_TEMPLATE)].length).toBe(0)
+
+    // 拆两段写的完整路由：正则单独看会命中「缺 index」，但紧邻的拼接片段补上了它
+    const splitRoute = "'/pkg-browse/pages/listing-detail' + '/index'"
+    const splitMatch = [...splitRoute.matchAll(ROUTE_LITERAL_NO_INDEX)][0]
+    expect(splitMatch?.[2]).toBe('/pkg-browse/pages/listing-detail')
+    expect(
+      isSplitRouteContinuation(
+        splitRoute,
+        (splitMatch?.index ?? 0) + (splitMatch?.[0].length ?? 0),
+      ),
+    ).toBe(true)
+    // 真的缺 index 的裸字面量不能被这条豁免放走
+    const bareRoute = "navigateTo({ url: '/pkg-browse/pages/listing-detail' })"
+    const bareMatch = [...bareRoute.matchAll(ROUTE_LITERAL_NO_INDEX)][0]
+    expect(bareMatch?.[2]).toBe('/pkg-browse/pages/listing-detail')
+    expect(
+      isSplitRouteContinuation(bareRoute, (bareMatch?.index ?? 0) + (bareMatch?.[0].length ?? 0)),
+    ).toBe(false)
+    // 拼接的尾巴不是 `/index`（`'/index2'` 这种 typo）不算补全：仍按「缺 index」报出来，
+    // 否则 `…listing-detail` + `'/index2'` 会两边都不管、真机静默跳失败。
+    const wrongTail = "'/pkg-browse/pages/listing-detail' + '/index2'"
+    const wrongMatch = [...wrongTail.matchAll(ROUTE_LITERAL_NO_INDEX)][0]
+    expect(
+      isSplitRouteContinuation(wrongTail, (wrongMatch?.index ?? 0) + (wrongMatch?.[0].length ?? 0)),
+    ).toBe(false)
+    // 带尾斜杠 / query 的补全仍算补全
+    const slashTail = "'/pkg-browse/pages/listing-detail' + '/index/'"
+    const slashMatch = [...slashTail.matchAll(ROUTE_LITERAL_NO_INDEX)][0]
+    expect(
+      isSplitRouteContinuation(slashTail, (slashMatch?.index ?? 0) + (slashMatch?.[0].length ?? 0)),
+    ).toBe(true)
   })
 })

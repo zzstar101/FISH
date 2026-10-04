@@ -20,15 +20,19 @@ import path from 'node:path'
  * 判定在**去注释、且能区分「字符串内容」与「代码」**的文本上做（`lexSource`），
  * 相对路径与 `@/mock/*` 别名一视同仁：
  * ① `import … from` / `export … from`（含多行，**不跨语句**：`export type X = …` 之后
- * 那条 import 不会被前一条吞掉）；② 副作用 `import '…'`；③ `import(…)`（单双引号或
- * 反引号、可跨行）；④ `require('…')`（本仓小程序端未用，顺手拦）。
+ * 那条 import 不会被前一条吞掉）；② 副作用 `import '…'`（说明符可换行）；③ `import(…)`
+ * （单双引号或反引号、可跨行、尾部允许尾逗号或 import attributes）；④ `require('…')`
+ * （本仓小程序端未用，顺手拦）。
  * 字符串里写着的 import 源码片段、`.d.ts` 里的类型导入，都不算运行期依赖。
+ * `` import(`@/mock/${name}`) `` 与「整条 import 写在模板串 `${…}` 插值里」都**会被拦**：
+ * 前者正则不解析 `${}`，把 `` `@/mock/${name}` `` 原文当说明符（非白名单即违规）；后者
+ * `lexSource` 把 `${` 之后当代码，`inString` 为 false。别把它们当盲区。
  *
  * **已知盲区（写在这里，别指望它守住）**：
- * - 运行期拼出来的模块路径（`` import(`@/mock/${name}`) ``）；
- * - 整个 import 表达式位于模板串 `${…}` 插值内部（`lexSource` 把插值当代码，但嵌套
- *   在模板串里的 import 不做特殊识别）；
- * - `jest.mock` 之类的测试期注入（小程序端不用）。
+ * - 说明符是**运行期拼出来的**：`import('@/mock/' + name)`、`import(name)`、
+ *   `const id = pick(); import(id)` —— 正则只能看见引号字面量；
+ * - `jest.mock` / `mock.module` 之类的测试期注入（小程序端不用）。
+ *   （这两条独立审查实测确认：`import('@/mock/' + n)` 与 `import(n)` 都漏。）
  *
  * 扫描对象是 `src/**`（`tests/`、`preview/` 不在其下），**跳过** `src/mock/**`
  * 本身（它就是要消费 fixture 的那一层）、`features/mock-fallback.ts` 与 `.d.ts`
@@ -255,9 +259,13 @@ function mockValueImports(source: string, fromFile: string): string[] {
   //   `export type PolishCandidate = {`）上实测过这条失效。
   const withFrom =
     /^[ \t]*(?:import|export)\b((?:(?!\n[ \t]*(?:import|export)\b)[\s\S])*?)from[ \t]*['"]([^'"]+)['"]/gm
-  const sideEffect = /^[ \t]*import[ \t]*['"]([^'"]+)['"]/gm
-  // 动态 import：引号或反引号、说明符可跨行；`require(…)` 顺手一起拦。
-  const dynamic = /\b(?:import|require)\s*\(\s*[`'"]([^`'"]+)[`'"]\s*\)/g
+  // 副作用导入允许说明符换行（`import\n  '@/mock/users'`）；注释已被 `lexSource` 换成空格，
+  // 所以注释里的 `import` 不会命中。
+  const sideEffect = /^[ \t]*import[ \t\r\n]+['"]([^'"]+)['"]/gm
+  // 动态 import：引号或反引号、说明符可跨行；尾部允许 `,`（尾逗号）或 import attributes
+  // （`import('…', { with: { type: 'json' } })`）—— 旧写法要求引号后紧跟 `)`，这几种都漏。
+  // `require(…)` 顺手一起拦。
+  const dynamic = /\b(?:import|require)\s*\(\s*[`'"]([^`'"]+)[`'"]\s*[,)]/g
   for (const match of code.matchAll(withFrom)) {
     const at = match.index ?? 0
     if (inString[at] === true) continue
@@ -402,6 +410,28 @@ describe('mock fixture 生产包边界', () => {
     ).toEqual(['@/mock/users'])
     // 类型位置不是运行期依赖
     expect(mockValueImports("type M = typeof import('@/mock/users')\n", at)).toEqual([])
+    // 第四轮审查 F8：尾逗号 / import attributes / 换行的副作用导入，旧正则全漏
+    expect(mockValueImports("const m = await import('@/mock/users',)\n", at)).toEqual([
+      '@/mock/users',
+    ])
+    expect(
+      mockValueImports("const m = await import('@/mock/users', { with: { type: 'json' } })\n", at),
+    ).toEqual(['@/mock/users'])
+    expect(mockValueImports("const m = require('@/mock/users',)\n", at)).toEqual(['@/mock/users'])
+    expect(mockValueImports("import\n  '@/mock/users'\n", at)).toEqual(['@/mock/users'])
+    // 审查实测确认为真盲区：说明符运行期拼出来时看不见（写进头部盲区清单，不假装能守住）
+    expect(mockValueImports("const m = await import('@/mock/' + name)\n", at)).toEqual([])
+    expect(mockValueImports('const m = await import(name)\n', at)).toEqual([])
+    // 头部说不算盲区的两条，用用例钉住（免得注释又写反）
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 样本要的是字面量 ${...} 文本
+    expect(mockValueImports('const m = await import(`@/mock/${name}`)\n', at)).toEqual([
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: 期望值同样是字面量文本
+      '@/mock/${name}',
+    ])
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: 样本要的是字面量 ${...} 文本
+    expect(mockValueImports("export const s = `${await import('@/mock/users')}`\n", at)).toEqual([
+      '@/mock/users',
+    ])
     // 字符串里写着的 import 源码片段不是依赖
     expect(
       mockValueImports("export const s = `import { USERS } from '@/mock/users'`\n", at),
