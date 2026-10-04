@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test'
  * 「真实有未读却不亮」或「没有未读却亮着幽灵红点」。
  *
  * 现在冷启动两项都走真实接口：`GET /notifications/unread-count` 与
- * `GET /conversations` 求和（`fetchConversationUnreadCount`，这里被顶替）。
+ * `GET /conversations/unread-count`（`fetchConversationUnreadCount`，这里被顶替；
+ * #291 起不再对会话列表第一页求和，端点级行为见 `conversation-unread-count.test.ts`）。
  * **真实构建下接口失败就发「不知道」，绝不回退 fixture**。
  *
  * 用 `mock.module` 顶替 API 层（与 `signature.test.ts` 顶替 Taro 同一手法）。

@@ -164,12 +164,13 @@ export default function CustomTabBar() {
    *
    * 底栏在每个 Tab 页都渲染，用户可能一次都不进消息页 —— 那时没有任何人发布快照。
    * 这里在「已登录 + 本次账号还没有快照」时补一次真实数据：
-   * `GET /notifications/unread-count` 与 `GET /conversations` 求和
+   * `GET /notifications/unread-count` 与 `GET /conversations/unread-count`
    * （`hydrateUnread` 内部按账号去重，多 Tab 实例只打一次）。
    *
    * 会话未读此前无论哪条路径都来自 fixture（#89 明写的既有债），于是底栏那颗点
    * 与「是否真的还有未读」毫无关系：通知未读为 0、接口失败时它照样亮，也从不随已读
-   * 熄灭。现在两项都是真值，真实接口失败即「不知道」。
+   * 熄灭。现在两项都是真值（#291 起会话未读走专用聚合端点，不再对列表首页求和），
+   * 真实接口失败即「不知道」。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || !userId) return
