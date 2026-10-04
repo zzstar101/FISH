@@ -302,7 +302,7 @@ wish 侧不串号、`missing` 与 `stale` 都不补投——加 `core:smoke` 的
 | `obs.embeddings` | 顶层 `model`；`coverage.{listings,wishes}` = `active` / `withAnyVector` / `withVersionFreshVector` / `withFreshVector`；`models[]` = 按 `(model, vector_dims(embedding))` 分组的 `model` / `dimensions` / `vectorRows` / `listingVectors` / `wishVectors` / `freshVectors` |
 | `obs.matches` | `byRankingVersion[]` = `rankingVersion` / `rows` / `semanticNull` / `semanticFilled` / `scoreMin` / `scoreP50` / `scoreMax` |
 | `obs.jobs` | `byTypeStatus[]` = `jobType` / `status` / `rows` / `retried`（`attempts > 1`）/ `withError`（`last_error IS NOT NULL`）/ `doneP50Ms` / `doneP95Ms`。**不含失败率**（在 `obs.summary`） |
-| `obs.retries` | `entities[]` = `jobType` / `entityKey`（`listingId` / `wishId`）/ `entityId` / `failedInWindow` / `pending`。**这是状态而不是流**：`embed.retry` 的 stderr 事件只记录"当时做了决定"，事后问不出"现在哪些实体已经不再自动重试"；`pending` 为 `false` 表示该实体连待跑的 `EMBED_*` 都没有了（自动路径彻底断掉）。出处 `listExhaustedEmbedRetries()`（`apps/worker/src/jobs/embedding/requeue.ts`），判据与补投路径复用同一组常量 |
+| `obs.retries` | `entities[]` = `jobType` / `entityKey`（`listingId` / `wishId`）/ `entityId` / `failedInWindow` / `pending`。**这是状态而不是流**：`embed.retry` 的 stderr 事件只记录"当时做了决定"，事后问不出"现在哪些实体已经不再自动重试"；`pending` 为 `false` 表示该实体**此刻**连待跑的 `EMBED_*` 都没有了（不等于"自动路径断掉"：编辑商品仍会无额度闸门地重投一条）。出处 `listExhaustedEmbedRetries()`（`apps/worker/src/jobs/embedding/requeue.ts`），判据与补投路径复用同一组常量 |
 | `obs.summary` | `model` / `modelCount` / `activeListings` / `freshListingVectors` / `activeWishes` / `freshWishVectors` / `matchRows` / `rankingVersion1Rows` / `rankingVersion2Rows` / `jobRows` / `settledJobs` / `failedJobs` / `exhaustedEmbedRetries` / `stuckEmbedRetries` / `failedRate` |
 
 四个实现口径必须写下来，否则指标会被误读：
@@ -342,7 +342,10 @@ wish 侧不串号、`missing` 与 `stale` 都不补投——加 `core:smoke` 的
   也一并输出，便于消费者自己核对分母）。
 - **`exhaustedEmbedRetries` / `stuckEmbedRetries` 是"额度用尽"的查询口径，不是告警通道**：
   前者 = 24 h 窗口内已有 `FAILED_EMBED_RETRY_LIMIT`（3）条 `FAILED` 的 `EMBED_*` 实体数，
-  后者 = 其中连待跑任务都没有、只能人工 `bun run embed:backfill` 的实体数（`stuck ⊆ exhausted`）。
+  后者 = 其中**此刻连待跑任务都没有**的实体数（`stuck ⊆ exhausted`）。注意 `stuck` **不等于**
+  "自动路径已断"：它只说"现在没有待跑的 `EMBED_*`"——编辑商品 / 治理动作会在同一事务里重投一条
+  `EMBED_LISTING`（`apps/api/src/modules/listings/store.ts` 等三处成对投递），那条路径没有额度闸门，
+  额度只约束 `scheduleFailedEmbedRetry()`。所以人工 `bun run embed:backfill` 是兜底而不是唯一出路。
   口径与 `scheduleFailedEmbedRetry()` 逐条对齐：只算 `EMBED_LISTING` / `EMBED_WISH`、窗口与上限
   复用同一组常量、`payload` 里没有实体键的行不分组。仓库里**没有**告警基建（无 metrics 服务、
   无外部通知），所以它把"需要人看日志"变成"可随时重跑、可聚合"，但**不等于**真正的告警通道。

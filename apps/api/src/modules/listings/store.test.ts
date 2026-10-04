@@ -868,7 +868,7 @@ async function settleMatchJobs(listingId: string): Promise<void> {
 
 // 回归：编辑改变打分输入（标题/描述/价格/分类），必须重算匹配；否则 matches 里那一对永远是旧分数。
 // #322 M4 尾项起 `MATCH_LISTING` 也有 partial unique index（`apps/api/src/modules/listings/store.ts`
-// 的投递带 `ON CONFLICT DO NOTHING`）：上一条还待跑时再编辑会被**复用**（那条 job 运行时重读
+// 的投递带 `ON CONFLICT … DO UPDATE`）：上一条还待跑时再编辑会被**复用**（那条 job 运行时重读
 // 实体现状），所以"编辑 → 再投一条"要看**被领走之后**的编辑。
 test('编辑商品投 MATCH_LISTING job：待跑期间复用同一条，领走后再编辑追加一条', async () => {
   await withSeller(async (sellerId) => {
@@ -915,6 +915,54 @@ test('下架与重新上架各投一条 MATCH_LISTING job（待跑期间复用�
       true,
     )
     expect(await matchJobsFor(created.listingId)).toHaveLength(2)
+  })
+})
+
+/**
+ * 回归（#457 三轮审查 P2-1）：投递**必须取走冲突行的行锁**，不能只 `DO NOTHING`。
+ *
+ * 待跑的 MATCH_LISTING 行在投递事务**提交前**就对 worker 可见（`queue.claimNext()` 在另一条
+ * 连接上跑单条 `… FOR UPDATE SKIP LOCKED`，而匹配引擎读实体不加锁）。若投递只 `DO NOTHING`，
+ * worker 能在提交前领走它、按**改动前**的状态算完：`target-not-active` 这类 `skipped` 是返回值、
+ * 不抛异常 ⇒ `queue.settle()` 照样结算 `DONE` 且不重试 ⇒ 本次编辑一次重算都没有。
+ * `DO UPDATE SET run_at = now()` 会把那一行锁到提交，`SKIP LOCKED` 只能跳过它。
+ *
+ * 断言就是 worker 的那条领取语句：在投递事务**还开着**时从另一条连接领，必须领不到。
+ */
+test('待跑 MATCH_LISTING 在投递事务提交前领不走（DO UPDATE 持锁）', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const enqueued = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+
+    const editing = db.transaction(async (tx) => {
+      // 事务句柄绑到 store 上：`tx` 是 `PgTransaction`，与本文件其余处一样按结构断言转换。
+      const txStore = createSqlListingStore(tx as unknown as Db)
+      await txStore.updateListingAtomic({
+        id: created.listingId,
+        sellerId,
+        apply: () => ({ kind: 'write' as const, fields: { priceCents: 31000 } }),
+      })
+      enqueued.resolve()
+      await release.promise
+    })
+    try {
+      await enqueued.promise
+
+      // worker 的领取语句：`skip locked` 跳过被本事务锁住的那一行。
+      const claimed = await db.execute<{ id: string }>(sql`
+        select id from jobs
+        where type = 'MATCH_LISTING' and status = 'PENDING'
+          and payload->>'listingId' = ${created.listingId}
+        for update skip locked
+      `)
+      // 修复前（投递只 `DO NOTHING`）这里是 1 行：worker 能在提交前领走它并按旧状态算完。
+      expect(claimed).toHaveLength(0)
+    } finally {
+      // 断言失败也要放行那个开着的事务，否则失败会表现成超时而不是断言。
+      release.resolve()
+      await editing
+    }
   })
 })
 

@@ -355,7 +355,8 @@ async function main(): Promise<void> {
       entityKey: row.entityKey,
       entityId: row.entityId,
       failedInWindow: row.failedInWindow,
-      // false = 该实体已无自动路径（没有待跑的 EMBED_*），只能人工 backfill。
+      // false = 此刻没有待跑的 EMBED_*；不代表自动路径已断——编辑商品会无配额限制地重投一条
+      // （`apps/api/src/modules/listings/store.ts` 的成对投递），人工 backfill 只是兜底。
       pending: row.pending,
     })),
   })

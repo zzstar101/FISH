@@ -1053,18 +1053,28 @@ async function invalidateStaleEmbeddingWith(
  * 落库成为「JSON 字符串套 JSON」，于是 `payload->>'listingId'` 在 SQL 层恒为 NULL，
  * #8 的 worker 就再也匹配不到这个商品（详见 `@fish/db/json` 的实测说明）。
  *
- * 两条 job 都带 `ON CONFLICT DO NOTHING`：`EMBED_LISTING` 与 `MATCH_LISTING` 都有**部分唯一索引**
- * （`(payload->>'listingId') WHERE type='…' AND status='PENDING'`；`MATCH_LISTING` 那条是 #322
- * M4 §12.1 缺口一的收口，见 `packages/db/src/schema/jobs.ts`），已有一条待跑时再投会撞唯一键——
- * 那不是错误，只是"这件事已经排好队了"。
+ * 两条 job 都撞**部分唯一索引**（`(payload->>'listingId') WHERE type='…' AND status='PENDING'`；
+ * `MATCH_LISTING` 那条是 #322 M4 §12.1 缺口一的收口，见 `packages/db/src/schema/jobs.ts`），
+ * 已有一条待跑时再投会撞唯一键——那不是错误，只是"这件事已经排好队了"。但两条的冲突动作
+ * **刻意不同**：
  *
- * 由此产生的语义（M4 尾项起）：**上一条还在队列里没被领走时再次编辑商品，不会追加新 job，
- * 而是复用它**。这不是丢事件——待跑的那条 job 运行时会重读实体现状（`matching/engine.ts`），
- * 复用它得到的匹配结果与"追加一条"完全相同；而 M4 之前 `MATCH_LISTING` 是裸插，每次编辑都会
- * 多堆一条幂等重算（并发窗口下还会出现同实体两条待跑行）。
+ * - `EMBED_LISTING` 用 `DO NOTHING`：它的处理器进事务第一件事就是 `for('update')` 锁实体行
+ *   （`apps/worker/src/jobs/embedding/handlers.ts`），本轮事务未提交时它读不到旧状态、会等锁，
+ *   所以"复用"不会让它按改动前的内容算。
+ * - `MATCH_LISTING` 用 `DO UPDATE`（把 `run_at` 推到本次投递时刻）：匹配引擎读实体**不加锁**
+ *   （`apps/worker/src/jobs/matching/engine.ts` 是裸 `select`），而待跑的那一行在**本事务提交前
+ *   就对 worker 可见**。若这里也用 `DO NOTHING`，worker 可以在 INSERT 与 COMMIT 之间领走它、
+ *   按改动前的状态算完并结算 `DONE`（`target-not-active` 这类 `skipped` 是返回值、不抛异常，
+ *   `queue.ts` 照样结算 DONE 且不重试）⇒ 本次状态变更**一次重算都没有**。`DO UPDATE` 会把
+ *   那一行锁到本事务提交，`FOR UPDATE SKIP LOCKED` 只能跳过它 ⇒ 提交后重新领取必然读到新状态。
+ *
+ * 由此产生的语义（M4 尾项起，冲突动作修正于 #457 三轮审查）：**上一条还在队列里没被领走时
+ * 再次编辑商品，不会追加新 job，而是复用它**。这不是丢事件——待跑的那条 job 运行时会重读
+ * 实体现状（`matching/engine.ts`），所以**提交之后**它与"追加一条"等价；而 M4 之前
+ * `MATCH_LISTING` 是裸插，每次编辑都会多堆一条幂等重算（并发窗口下还会出现同实体两条待跑行）。
  */
 async function enqueueListingJobsWith(
-  executor: Pick<Db, 'insert' | 'select' | 'delete'>,
+  executor: Pick<Db, 'insert' | 'select' | 'delete' | 'execute'>,
   listingId: string,
 ): Promise<void> {
   await invalidateStaleEmbeddingWith(executor, listingId)
@@ -1078,12 +1088,17 @@ async function enqueueListingJobsWith(
     })
     .onConflictDoNothing()
 
-  await executor
-    .insert(jobs)
-    .values({
-      id: newId(),
-      type: 'MATCH_LISTING',
-      payload: jsonParam({ listingId }),
-    })
-    .onConflictDoNothing()
+  // 裸 SQL 而不是 `.onConflictDoUpdate({ target: sql`(${jobs.payload}->>'listingId')` })`：
+  // drizzle-orm 0.45.2 的 pg 方言里 `IndexColumn = PgColumn`（不含 `SQL`），冲突目标逐列走
+  // `escapeName(getColumnCasing(it))`，传表达式会在运行期抛
+  // `TypeError: undefined is not an object (evaluating 'name.replace')`。`ON CONFLICT` 的目标
+  // 与谓词必须和 `jobs_match_listing_listing_id_pending_uidx` 逐字对应，PG 才肯用它做推理。
+  // `select …` 换成 `values …` 也一样；payload 的 `::text::jsonb` 两段转型见 `@fish/db/json`。
+  await executor.execute(sql`
+    INSERT INTO jobs (id, type, payload)
+    VALUES (${newId()}, 'MATCH_LISTING', ${JSON.stringify({ listingId })}::text::jsonb)
+    ON CONFLICT ((payload->>'listingId'))
+      WHERE type = 'MATCH_LISTING' AND status = 'PENDING'
+    DO UPDATE SET run_at = now()
+  `)
 }

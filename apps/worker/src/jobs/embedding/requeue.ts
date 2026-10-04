@@ -198,8 +198,11 @@ export type ExhaustedEmbedRetry = {
  * - 实体键按 `type` 决定（与 `embedEntityKey()` 同一张映射表），`payload` 里没有该键的行不参与分组
  *   （补投对它们只会再失败一次，见 `bad-payload`）；
  * - 窗口与上限直接复用上面两个常量，改额度不会让这个口径漂移；
- * - `pending` 是**附加信息**而不是过滤条件：额度用尽本身就是"这个实体已经烧完 24 小时配额"，
- *   但只有 `pending === false` 的那些才是"自动路径已断、只能人工 `embed:backfill`"。
+ * - `pending` 是**附加信息**而不是过滤条件：额度用尽本身只说明"这个实体在窗口内已经烧完自动补投
+ *   配额"；`pending === false` 进一步说明**此刻没有待跑的 `EMBED_*`**。它**不等于**"自动路径已断"：
+ *   编辑商品 / 治理动作会在同一事务里重投一条 `EMBED_LISTING`（`apps/api/src/modules/listings/store.ts`
+ *   等三处成对投递），那条路径**没有额度闸门**（额度只约束本文件的 `scheduleFailedEmbedRetry`）。
+ *   所以这个口径回答的是"现在没有待跑尝试"，人工 `embed:backfill` 是兜底而不是唯一出路。
  *
  * 仓库里没有告警基建（没有 metrics / 通知服务，见 `apps/worker/src/log.ts` 的约定），所以这里给的是
  * **可查询、可聚合的计数**，不等同于真正的告警通道。
