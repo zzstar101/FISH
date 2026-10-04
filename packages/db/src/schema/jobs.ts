@@ -67,6 +67,16 @@ export const jobs = pgTable(
     uniqueIndex('jobs_match_wish_wish_id_pending_uidx')
       .on(sql`(${table.payload}->>'wishId')`)
       .where(sql`${table.type} = 'MATCH_WISH' AND ${table.status} = 'PENDING'`),
+    /*
+     * #322 M4 §12.1 遗留缺口：`MATCH_LISTING` 此前**没有** partial unique index，投递侧只能靠
+     * `NOT EXISTS (… status = 'PENDING')` 去重（`apps/worker/src/jobs/matching/enqueue.ts`），
+     * 而 `NOT EXISTS` 在并发下不是原子的——两个插入者可能同时通过它，最坏多出一条**幂等**重算。
+     * 与 `MATCH_WISH` 同形（谓词必须带 `status = 'PENDING'`：`DONE` 行不能永久占位，否则
+     * "编辑商品 → 重算匹配"在第一次跑完之后就再也不触发）。
+     */
+    uniqueIndex('jobs_match_listing_listing_id_pending_uidx')
+      .on(sql`(${table.payload}->>'listingId')`)
+      .where(sql`${table.type} = 'MATCH_LISTING' AND ${table.status} = 'PENDING'`),
     // #322 M1：EMBED_* 的幂等键**只锁"待执行"那一行**（`status = 'PENDING'`），
     // 与上面 MATCH_WISH 的"实体终身一条"刻意不同：内容改动后必须能重新投递
     // （否则编辑永远不触发重新生成），而仍在队列里的那一条本来就会在运行时重读实体

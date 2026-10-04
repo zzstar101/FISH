@@ -163,7 +163,8 @@ export function createSqlModerationStore(
       `)
       // 人工放行同样要刷新语义向量（#322 M1）：这是待审商品进入匹配链路的入口之一，
       // 与 `governance` / `listings store` 的成对投递保持同一条规则。
-      // `ON CONFLICT DO NOTHING` 对应 `EMBED_LISTING` 的部分唯一索引（待跑时再投不算错误）。
+      // 两条 job 都带 `ON CONFLICT DO NOTHING`，对应各自的部分唯一索引（待跑时再投不算错误；
+      // `MATCH_LISTING` 那条是 #322 M4 尾项补齐的）。
       //
       // **顺序即语义（#322 M4）**：`EMBED_LISTING` 必须先于 `MATCH_LISTING` 插入。同事务里两条
       // job 的 `run_at` 相同，队列按 `(run_at, id)` 领取，而 `id = newId()` 同毫秒单调递增 ⇒
@@ -177,11 +178,14 @@ export function createSqlModerationStore(
         })
         .onConflictDoNothing()
 
-      await tx.insert(jobs).values({
-        id: newId(),
-        type: 'MATCH_LISTING',
-        payload: jsonParam({ listingId: String(record.listing_id) }),
-      })
+      await tx
+        .insert(jobs)
+        .values({
+          id: newId(),
+          type: 'MATCH_LISTING',
+          payload: jsonParam({ listingId: String(record.listing_id) }),
+        })
+        .onConflictDoNothing()
 
       // 审核出结果 → MODERATION 通知（任务一 #89）：与决策**同事务**落库，
       // 决策回滚则通知不存在；收件人是商品卖家，客户端按 outcome 渲染通过/未通过。

@@ -584,6 +584,10 @@ async function priorListingStatus(
  * **顺序即语义（#322 M4）**：`EMBED_LISTING` 在前、`MATCH_LISTING` 在后，理由与
  * `enqueueListingJobsWith` 一致（同事务 `run_at` 相同 ⇒ 领取序 = `newId()` 序 = 插入序；
  * 反序会让首轮 MATCH 跑在向量落库前、永久落 v1）。
+ *
+ * 两条都带 `ON CONFLICT DO NOTHING`：`MATCH_LISTING` 的部分唯一索引（#322 M4 尾项补齐）会吃掉
+ * "同一 listing 已有一条待跑 MATCH_LISTING"的重复投递——待跑的那条运行时重读实体现状，
+ * 复用它与追加一条等价。
  */
 async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
   await executor
@@ -595,11 +599,14 @@ async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: strin
     })
     .onConflictDoNothing()
 
-  await executor.insert(jobs).values({
-    id: newId(),
-    type: 'MATCH_LISTING',
-    payload: jsonParam({ listingId }),
-  })
+  await executor
+    .insert(jobs)
+    .values({
+      id: newId(),
+      type: 'MATCH_LISTING',
+      payload: jsonParam({ listingId }),
+    })
+    .onConflictDoNothing()
 }
 
 /**

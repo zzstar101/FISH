@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "jobs_match_listing_listing_id_pending_uidx" ON "jobs" USING btree (("payload"->>'listingId')) WHERE "jobs"."type" = 'MATCH_LISTING' AND "jobs"."status" = 'PENDING';

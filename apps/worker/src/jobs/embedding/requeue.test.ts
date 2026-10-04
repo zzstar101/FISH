@@ -2,7 +2,11 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { sql } from 'drizzle-orm'
-import { scheduleFailedEmbedRetry } from './requeue'
+import {
+  FAILED_EMBED_RETRY_LIMIT,
+  listExhaustedEmbedRetries,
+  scheduleFailedEmbedRetry,
+} from './requeue'
 
 // 与 packages/db 的集成测试同一约定：没有 DATABASE_URL 就明确失败，而不是静默跳过。
 const databaseUrl = process.env.DATABASE_URL
@@ -281,5 +285,109 @@ describe('scheduleFailedEmbedRetry：终结失败后的有界补投', () => {
       sql`SELECT id FROM jobs WHERE payload->>'listingId' = ${listingId}`,
     )
     expect([...remaining]).toHaveLength(0)
+  })
+})
+
+/**
+ * 缺口 #2 的告警/查询口径：`budget-exhausted` 只写一行 stderr 时，事后没人能回答"现在有哪些实体
+ * 已经不再自动重试了"。这一组用例钉住"额度用尽"这条判据可以被**反复查询**（且与补投路径同口径）。
+ */
+describe('listExhaustedEmbedRetries：额度用尽的实体（可查询的告警口径）', () => {
+  test('额度到顶的实体被列出，并区分是否还有待跑任务', async () => {
+    // 自动路径已断：3 条 FAILED、没有任何待跑任务。
+    const stuck = newId()
+    for (let i = 0; i < FAILED_EMBED_RETRY_LIMIT; i++) {
+      await insertJob({ type: 'EMBED_LISTING', payload: { listingId: stuck }, status: 'FAILED' })
+    }
+    // 额度也用尽，但用户又编辑了一次 ⇒ 还有待跑的 EMBED_LISTING（自动路径还没断）。
+    const stillQueued = newId()
+    for (let i = 0; i < FAILED_EMBED_RETRY_LIMIT; i++) {
+      await insertJob({
+        type: 'EMBED_LISTING',
+        payload: { listingId: stillQueued },
+        status: 'FAILED',
+      })
+    }
+    await insertJob({
+      type: 'EMBED_LISTING',
+      payload: { listingId: stillQueued },
+      status: 'PENDING',
+    })
+    // 没到顶：只有 2 条 FAILED。
+    const underBudget = newId()
+    await insertJob({
+      type: 'EMBED_LISTING',
+      payload: { listingId: underBudget },
+      status: 'FAILED',
+    })
+    await insertJob({
+      type: 'EMBED_LISTING',
+      payload: { listingId: underBudget },
+      status: 'FAILED',
+    })
+    // 愿望侧同一判据（实体键换成 wishId）。
+    const wish = newId()
+    for (let i = 0; i < FAILED_EMBED_RETRY_LIMIT; i++) {
+      await insertJob({ type: 'EMBED_WISH', payload: { wishId: wish }, status: 'FAILED' })
+    }
+
+    const byId = new Map(
+      (await listExhaustedEmbedRetries(db)).map((row) => [row.entityId, row] as const),
+    )
+
+    expect(byId.get(stuck)).toMatchObject({
+      type: 'EMBED_LISTING',
+      entityKey: 'listingId',
+      failedInWindow: FAILED_EMBED_RETRY_LIMIT,
+      pending: false,
+    })
+    expect(byId.get(stillQueued)).toMatchObject({
+      type: 'EMBED_LISTING',
+      entityKey: 'listingId',
+      failedInWindow: FAILED_EMBED_RETRY_LIMIT,
+      pending: true,
+    })
+    expect(byId.has(underBudget)).toBe(false)
+    expect(byId.get(wish)).toMatchObject({
+      type: 'EMBED_WISH',
+      entityKey: 'wishId',
+      failedInWindow: FAILED_EMBED_RETRY_LIMIT,
+      pending: false,
+    })
+  })
+
+  test('24 小时窗口外的旧失败不压额度，也不进告警口径', async () => {
+    const listingId = newId()
+    for (let i = 0; i < FAILED_EMBED_RETRY_LIMIT; i++) {
+      await insertJob({
+        type: 'EMBED_LISTING',
+        payload: { listingId },
+        status: 'FAILED',
+        ageMs: 25 * 60 * 60 * 1000,
+      })
+    }
+    const exhausted = await listExhaustedEmbedRetries(db)
+    expect(exhausted.some((row) => row.entityId === listingId)).toBe(false)
+  })
+
+  test('只有 FAILED 计入额度：DONE 的行不算失败次数', async () => {
+    const listingId = newId()
+    for (let i = 0; i < FAILED_EMBED_RETRY_LIMIT - 1; i++) {
+      await insertJob({ type: 'EMBED_LISTING', payload: { listingId }, status: 'FAILED' })
+    }
+    await insertJob({ type: 'EMBED_LISTING', payload: { listingId }, status: 'DONE' })
+    await insertJob({ type: 'EMBED_LISTING', payload: { listingId }, status: 'DONE' })
+
+    const exhausted = await listExhaustedEmbedRetries(db)
+    expect(exhausted.some((row) => row.entityId === listingId)).toBe(false)
+  })
+
+  test('MATCH_* 的失败不参与补投额度（与补投路径同一口径）', async () => {
+    const listingId = newId()
+    for (let i = 0; i < FAILED_EMBED_RETRY_LIMIT; i++) {
+      await insertJob({ type: 'MATCH_LISTING', payload: { listingId }, status: 'FAILED' })
+    }
+    const exhausted = await listExhaustedEmbedRetries(db)
+    expect(exhausted.some((row) => row.entityId === listingId)).toBe(false)
   })
 })

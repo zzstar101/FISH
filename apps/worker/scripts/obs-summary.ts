@@ -3,13 +3,15 @@
 //
 // 为什么需要它：进程内的 JSON 日志（`worker.started` / `embed.request` / `embed.entity` /
 // `job.settled`）回答的是"这一轮跑了什么"，而 Issue 的可观测性还要求能回答"现在库里整体是什么
-// 状态"——覆盖率、模型分布、ranking_version 分布、job 成功率与耗时。这些都能从
-// `embeddings` / `matches` / `jobs` 三张表直接算出来，因此不需要 metrics 基建、不需要新表。
+// 状态"——覆盖率、模型分布、ranking_version 分布、job 成功率与耗时、**补投额度已用尽的实体**。
+// 这些都能从 `embeddings` / `matches` / `jobs` 三张表直接算出来，因此不需要 metrics 基建、
+// 不需要新表。
 //
 // 分工（别在这里找进程内指标）：
-//   * 本脚本：DB 派生（覆盖率 / 模型分布 / ranking_version 分布 / job 成功率与耗时）；
+//   * 本脚本：DB 派生（覆盖率 / 模型分布 / ranking_version 分布 / job 成功率与耗时 /
+//     额度用尽的补投实体）；
 //   * worker 日志：单次运行（embedding 请求数与失败率、content-hash 命中率、Top-K 条数与
-//     延迟、matched/downgraded、model 与 ranking_version）。
+//     延迟、matched/downgraded、model 与 ranking_version，以及 `embed.retry` 的补投决定）。
 //
 // 运行（仓库根目录）：bun run obs:summary
 //       bun run apps/worker/scripts/obs-summary.ts -- --model=text-embedding-v4
@@ -36,6 +38,7 @@ import { loadServerEnv } from '@fish/shared/env'
 import { sql } from 'drizzle-orm'
 import { embeddingContentHashSql } from '../src/jobs/embedding/content-hash-sql'
 import { STUB_EMBEDDING_MODEL } from '../src/jobs/embedding/providers/stub'
+import { listExhaustedEmbedRetries } from '../src/jobs/embedding/requeue'
 import { errorMessage, logErrorEvent, logEvent } from '../src/log'
 
 /** `db.execute()` 在不同驱动下可能是数组或 `{ rows }`（与 `jobs/queue.ts` 的 `toRows` 同口径）。 */
@@ -280,6 +283,9 @@ async function main(): Promise<void> {
   const models = await embeddingModels(db)
   const matches = await matchDistribution(db)
   const jobs = await jobStats(db)
+  // #322 M4 §12.1 缺口 #2：额度用尽此前只有一行 stderr（`embed.retry`），事后查不到状态。
+  // 这里按同一判据（同一组常量）把它变成可查询/可聚合的明细与计数。
+  const exhaustedRetries = await listExhaustedEmbedRetries(db)
 
   const coverage = {
     listings: {
@@ -339,6 +345,21 @@ async function main(): Promise<void> {
     })),
   })
 
+  // 额度用尽的实体明细：`stderr` 的 `embed.retry`（`reason='budget-exhausted'`）是**事件**，
+  // 这一组是**状态**——可以随时重跑、可以按 `stuck` 聚合告警。给出实体 id 是为了让告警可操作
+  // （人工跑 `bun run embed:backfill`）；id 不是用户文本，符合 `src/log.ts` 的字段约束。
+  logEvent({
+    event: 'obs.retries',
+    entities: exhaustedRetries.map((row) => ({
+      jobType: row.type,
+      entityKey: row.entityKey,
+      entityId: row.entityId,
+      failedInWindow: row.failedInWindow,
+      // false = 该实体已无自动路径（没有待跑的 EMBED_*），只能人工 backfill。
+      pending: row.pending,
+    })),
+  })
+
   // 收尾一行"抬头数字"：覆盖不足与失败率一眼可见（不需要再去数上面的明细）。
   const failedJobs = jobs
     .filter((row) => row.status === 'FAILED')
@@ -368,6 +389,11 @@ async function main(): Promise<void> {
     jobRows,
     settledJobs,
     failedJobs,
+    // #322 M4 §12.1 缺口 #2：`EMBED_*` 补投额度（24 h 内 3 条 `FAILED`）用尽的实体数；
+    // `stuckEmbedRetries` 是其中**没有待跑任务**的（自动路径已断，需人工 `embed:backfill`）。
+    // 仓库没有告警基建，这两个计数是"可查询/可聚合"，不等同于真正的告警通道。
+    exhaustedEmbedRetries: exhaustedRetries.length,
+    stuckEmbedRetries: exhaustedRetries.filter((row) => !row.pending).length,
     failedRate: settledJobs === 0 ? null : failedJobs / settledJobs,
   })
 }

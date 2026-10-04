@@ -15,16 +15,13 @@
  * 这条新 job 在 `EMBED_*` 结算之前插入，所以它的 `(run_at, id)` 必然晚于那次 `EMBED_*`；
  * 而它跑的时候向量已经新鲜 ⇒ 走 `vector-topk`、不再补投 `EMBED_*` ⇒ 链条自行终止。
  *
- * **去重**：`MATCH_WISH` 有 partial unique index（`jobs_match_wish_wish_id_pending_uidx`），
- * `MATCH_LISTING` **没有**（`packages/db/src/schema/jobs.ts` 里只有 EMBED_LISTING / EMBED_WISH /
- * MATCH_WISH 三条）。所以这里用 `WHERE NOT EXISTS (… status = 'PENDING')` 显式去重，而不是只靠
- * `ON CONFLICT DO NOTHING`——常见路径上（编辑商品时 API 已投过 `MATCH_LISTING`，它还 PENDING）
- * 这条 INSERT 直接不插入，不会为每次编辑平白多出一轮匹配。
- *
- * 并发下两个插入者可能同时通过 `NOT EXISTS`（本仓约定同一数据库只跑一个 worker 进程，见
- * `recoverStaleClaims` 的注释）：最坏结果是同一实体多一条待跑的 `MATCH_*`，重算是幂等的，
- * 不会写出错误数据。要彻底关掉这个窗口，得给 `MATCH_LISTING` 也加 partial unique index
- * （需要一条 migration），不在本次修复范围内。
+ * **去重**：`MATCH_WISH` 和 `MATCH_LISTING` 都有 partial unique index
+ * （`jobs_match_wish_wish_id_pending_uidx` / `jobs_match_listing_listing_id_pending_uidx`；
+ * 后者是 #322 M4 §12.1 缺口一的收口，见 `packages/db/src/schema/jobs.ts`）。下面的
+ * `WHERE NOT EXISTS (… status = 'PENDING')` 保留为**廉价预过滤**：常见路径上（编辑商品时 API
+ * 已投过 `MATCH_LISTING`，它还 PENDING）这条 INSERT 直接不插入，不产生一次冲突。但
+ * `NOT EXISTS` 与 `INSERT` 之间没有锁，两个插入者可以同时通过它——原子性由索引 +
+ * `ON CONFLICT DO NOTHING` 保证，不再只靠 `NOT EXISTS`。
  */
 import { MATCH_JOB_TYPES } from '@fish/contracts/matching/jobs'
 import type { Db } from '@fish/db/client'

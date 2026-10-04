@@ -1053,10 +1053,15 @@ async function invalidateStaleEmbeddingWith(
  * 落库成为「JSON 字符串套 JSON」，于是 `payload->>'listingId'` 在 SQL 层恒为 NULL，
  * #8 的 worker 就再也匹配不到这个商品（详见 `@fish/db/json` 的实测说明）。
  *
- * `EMBED_LISTING` 带 `ON CONFLICT DO NOTHING`：它的唯一索引是**部分索引**
- * （`(payload->>'listingId') WHERE type='EMBED_LISTING' AND status='PENDING'`），
- * 已有一条待跑时再投会撞唯一键——那不是错误，只是"同一份内容已经排好队了"。
- * 反过来，`MATCH_LISTING` 保持原样（无唯一索引、也无冲突处理），v1 语义一个字节不动。
+ * 两条 job 都带 `ON CONFLICT DO NOTHING`：`EMBED_LISTING` 与 `MATCH_LISTING` 都有**部分唯一索引**
+ * （`(payload->>'listingId') WHERE type='…' AND status='PENDING'`；`MATCH_LISTING` 那条是 #322
+ * M4 §12.1 缺口一的收口，见 `packages/db/src/schema/jobs.ts`），已有一条待跑时再投会撞唯一键——
+ * 那不是错误，只是"这件事已经排好队了"。
+ *
+ * 由此产生的语义（M4 尾项起）：**上一条还在队列里没被领走时再次编辑商品，不会追加新 job，
+ * 而是复用它**。这不是丢事件——待跑的那条 job 运行时会重读实体现状（`matching/engine.ts`），
+ * 复用它得到的匹配结果与"追加一条"完全相同；而 M4 之前 `MATCH_LISTING` 是裸插，每次编辑都会
+ * 多堆一条幂等重算（并发窗口下还会出现同实体两条待跑行）。
  */
 async function enqueueListingJobsWith(
   executor: Pick<Db, 'insert' | 'select' | 'delete'>,
@@ -1073,9 +1078,12 @@ async function enqueueListingJobsWith(
     })
     .onConflictDoNothing()
 
-  await executor.insert(jobs).values({
-    id: newId(),
-    type: 'MATCH_LISTING',
-    payload: jsonParam({ listingId }),
-  })
+  await executor
+    .insert(jobs)
+    .values({
+      id: newId(),
+      type: 'MATCH_LISTING',
+      payload: jsonParam({ listingId }),
+    })
+    .onConflictDoNothing()
 }

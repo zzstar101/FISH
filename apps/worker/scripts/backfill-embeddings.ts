@@ -170,9 +170,10 @@ async function selectTargets(
 /**
  * 投一条 MATCH_* job，让该实体的匹配行按新向量重算。
  *
- * `MATCH_WISH` 有 `jobs_match_wish_wish_id_pending_uidx`（partial unique），`ON CONFLICT DO NOTHING`
- * 就够；`MATCH_LISTING` **没有**唯一索引（M2/M3 一直如此），重跑会堆 PENDING 行，所以先删同实体的
- * 待跑行再插一条。
+ * `MATCH_WISH` 有 `jobs_match_wish_wish_id_pending_uidx`，`MATCH_LISTING` 从 #322 M4 尾项起也有
+ * `jobs_match_listing_listing_id_pending_uidx`（都是 partial unique），所以 `ON CONFLICT DO NOTHING`
+ * 就够。listing 分支额外先删同实体的待跑行：这个脚本是**离线回填**，语义是"用新模型立刻重算一次"，
+ * 先把旧的待跑行挪开能让本次插入的 `run_at` 决定领取顺序（M4 之前没有唯一索引，先删是为了防堆行）。
  */
 async function enqueueMatchJob(db: Db, target: BackfillTarget): Promise<void> {
   if (target.kind === 'listing') {
@@ -184,6 +185,7 @@ async function enqueueMatchJob(db: Db, target: BackfillTarget): Promise<void> {
     await db.execute(sql`
       INSERT INTO jobs (id, type, payload)
       VALUES (${newId()}, ${MATCH_JOB_TYPES.listing}, ${JSON.stringify({ listingId: target.id })}::text::jsonb)
+      ON CONFLICT DO NOTHING
     `)
     return
   }
