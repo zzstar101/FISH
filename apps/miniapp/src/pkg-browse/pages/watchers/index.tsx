@@ -285,8 +285,24 @@ export default function Watchers() {
             ) : (
               <>
                 <View className="wt__list">
-                  {page.items.map(({ user, startedAt }) => (
-                    <View key={user.id} className="wt__row">
+                  {page.items.map(({ user, startedAt, conversationId }) => (
+                    /*
+                      整行可点 → 打开该买家与**这件商品**的会话。
+
+                      为什么行上就有会话 id：名单本身就是会话名单（一人一条，服务端按
+                      `(listing_id, buyer_id)` 唯一），所以契约直接给了 `conversationId`，
+                      不必再按「商品 + 买家」去会话列表里找。这与 #214 之前那一版凭空
+                      编一个「聊一聊」动作有本质区别 —— 那时点下去没有任何确定的目标。
+                    */
+                    <View
+                      key={user.id}
+                      className="wt__row"
+                      onClick={() =>
+                        void Taro.navigateTo({
+                          url: `/pkg-social/pages/conversation/index?id=${conversationId}`,
+                        })
+                      }
+                    >
                       <View className="wt__av">
                         {user.avatarUrl ? (
                           <Image className="wt__av-img" src={user.avatarUrl} mode="aspectFill" />
@@ -309,6 +325,12 @@ export default function Watchers() {
                           ) : null}
                         </View>
                         <Text className="wt__meta num">{dayLabelOf(startedAt, nowMs)}发起聊天</Text>
+                      </View>
+                      {/* 动作钮只是**视觉**提示：点区在整行（见上），这里不再挂第二个 handler
+                          —— 两个 handler 做同一件事时，点在钮上会触发两次跳转。 */}
+                      <View className="wt__act">
+                        <Image className="wt__act-ic" src={ICONS.chatWhite} mode="aspectFit" />
+                        <Text>聊一聊</Text>
                       </View>
                     </View>
                   ))}

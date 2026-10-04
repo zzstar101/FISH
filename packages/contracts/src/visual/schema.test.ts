@@ -11,7 +11,7 @@ import {
 } from './schema'
 
 /**
- * #324 M6 的契约面：排序档、结果项上的想要数、成交均价统计。
+ * #324 M6 的契约面：排序档、结果项上的收藏数、成交均价统计。
  *
  * 这些字段是**跨端协议**，所以用例锁的是"能不能解析/会不会被拒"，不是服务端算得对不对
  * （那是 apps/api 的 service/ranking 单测与 core smoke 的事）。
@@ -32,6 +32,7 @@ const listingCard = {
   coverUrl: null,
   createdAt: '2026-09-12T01:00:00.000Z',
   moderationStatus: null,
+  wants: 0,
 }
 
 const resultItem = { ...listingCard, favoriteCount: 7 }
@@ -78,12 +79,12 @@ describe('VisualSearchRequestSchema', () => {
 })
 
 describe('VisualSearchResultItemSchema', () => {
-  test('想要数必填，缺了就不是合法的结果项', () => {
+  test('收藏数必填，缺了就不是合法的结果项', () => {
     expect(VisualSearchResultItemSchema.safeParse(listingCard).success).toBe(false)
     expect(VisualSearchResultItemSchema.safeParse(resultItem).success).toBe(true)
   })
 
-  test('想要数必须是非负整数', () => {
+  test('收藏数必须是非负整数', () => {
     expect(
       VisualSearchResultItemSchema.safeParse({ ...resultItem, favoriteCount: 0 }).success,
     ).toBe(true)
@@ -142,7 +143,7 @@ describe('VisualSearchResponseSchema', () => {
     expect(VisualSearchResponseSchema.safeParse(withoutStats).success).toBe(false)
   })
 
-  test('items 里的每一项都必须带想要数', () => {
+  test('items 里的每一项都必须带收藏数', () => {
     expect(
       VisualSearchResponseSchema.safeParse({
         queryId: '44444444-4444-4444-8444-444444444444',

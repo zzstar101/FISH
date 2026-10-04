@@ -114,6 +114,8 @@ function listingSource(id: string, overrides: Partial<ListingCardSource> = {}): 
       avatarUrl: null,
       authStatus: 'UNVERIFIED',
     },
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，fake 行给 0（本用例不关心它）。
+    wants: 0,
     ...overrides,
   }
 }

@@ -37,6 +37,7 @@ const wishResponse: WishMatchListResponse = {
         coverUrl: null,
         createdAt: '2026-09-12T03:40:10.000Z',
         moderationStatus: null,
+        wants: 0,
       },
     },
   ],

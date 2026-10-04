@@ -213,6 +213,7 @@ describe('ListingDetailSchema', () => {
     coverUrl: null,
     createdAt: '2026-09-12T03:40:10.000Z',
     updatedAt: '2026-09-12T03:40:10.000Z',
+    wants: 0,
     images: [],
     seller: {
       id: USER_ID,
@@ -257,6 +258,7 @@ describe('ListingCardSchema', () => {
     coverUrl: null,
     createdAt: '2026-09-12T03:40:10.000Z',
     moderationStatus: null,
+    wants: 0,
   }
 
   test('rejects an unknown status (DRAFT does not exist in the state machine)', () => {

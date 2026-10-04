@@ -1,4 +1,5 @@
 import type { Db } from '@fish/db/client'
+import { listingWantsCount } from '@fish/db/listing-wants'
 import { listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
 import { listingViewHistory } from '@fish/db/schema/view-history'
@@ -92,6 +93,8 @@ export function createSqlViewHistoryStore(db: Db): ViewHistoryStore {
             coverObjectKey: sql<
               string | null
             >`(SELECT li.object_key FROM listing_images li WHERE li.listing_id = ${listings.id} AND li.sort_order = 0 LIMIT 1)`,
+            // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
+            wants: listingWantsCount(listings.id),
             // 毫秒给契约、微秒给游标：`last_viewed_at` 是 timestamptz（微秒），游标必须保留微秒
             // 才不重不漏；对外那个字段只需要毫秒（`z.iso.datetime()` 的形状）。
             viewedAt: sql<string>`to_char(${listingViewHistory.lastViewedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`,

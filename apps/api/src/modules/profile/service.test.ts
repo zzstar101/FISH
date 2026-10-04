@@ -90,6 +90,8 @@ const listingRow = (overrides: Partial<ProfileListingRow> = {}): ProfileListingR
   coverObjectKey: 'covers/a.jpg',
   // #191：卡片卖家公开子集（本人视角 = 查看者自己），join users 同源带出。
   seller: { id: USER_ID, nickname: '小明', avatarUrl: null, authStatus: 'VERIFIED' },
+  // 想要数（已建会话的买家数）：卡片契约的必填字段，fake 行给 0（本用例不关心它）。
+  wants: 0,
   ...overrides,
 })
 

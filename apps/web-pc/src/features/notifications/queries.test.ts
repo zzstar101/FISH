@@ -25,6 +25,7 @@ const listing: ListingDetail = {
   coverUrl: null,
   createdAt: '2026-09-26T00:00:00.000Z',
   moderationStatus: null,
+  wants: 0,
   description: '测试描述',
   images: [],
   seller: {

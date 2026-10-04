@@ -39,11 +39,14 @@ const BUYER = {
   authStatus: 'VERIFIED',
 } as const
 
+/** 该买家与这件商品的会话 id：契约 `chatWatchersResponseSchema.items[].conversationId`。 */
+const CONV = 'cnv_01jc000000e00800000000000c'
+
 test('名单行渲染契约给的字段：昵称 / 相对时间 / 认证徽章，不编造其它字段', () => {
   const html = render({
     state: 'ready',
     total: 1,
-    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z' }],
+    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z', conversationId: CONV }],
   })
 
   expect(html).toContain('小北')
@@ -60,7 +63,11 @@ test('未认证买家渲染成 secondary 徽章（与商品详情页同口径）
     state: 'ready',
     total: 1,
     items: [
-      { user: { ...BUYER, authStatus: 'UNVERIFIED' }, startedAt: '2026-09-30T10:00:00.000Z' },
+      {
+        user: { ...BUYER, authStatus: 'UNVERIFIED' },
+        startedAt: '2026-09-30T10:00:00.000Z',
+        conversationId: CONV,
+      },
     ],
   })
 
@@ -103,7 +110,7 @@ test('还有下一页时给「加载更多」；追加页失败时失败只属�
     state: 'ready',
     total: 40,
     hasNextPage: true,
-    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z' }],
+    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z', conversationId: CONV }],
   })
   expect(more).toContain('加载更多')
   expect(more).not.toContain('已显示全部')
@@ -112,7 +119,7 @@ test('还有下一页时给「加载更多」；追加页失败时失败只属�
     state: 'ready',
     total: 1,
     hasNextPage: false,
-    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z' }],
+    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z', conversationId: CONV }],
   })
   expect(done).toContain('已显示全部 1 人')
   expect(done).not.toContain('加载更多')
@@ -122,7 +129,7 @@ test('还有下一页时给「加载更多」；追加页失败时失败只属�
     total: 40,
     hasNextPage: true,
     nextPageFailed: true,
-    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z' }],
+    items: [{ user: BUYER, startedAt: '2026-09-30T10:00:00.000Z', conversationId: CONV }],
   })
   expect(failed).toContain('加载更多失败')
   expect(failed).toContain('小北')
