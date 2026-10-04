@@ -6,15 +6,15 @@ import AuthRequired from '@/components/auth-required'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
 import EmptyState from '@/components/empty-state'
 import TopBar from '@/components/top-bar'
-import { fetchMyFavorites } from '@/features/favorites/api'
-import { fetchMyComments } from '@/features/comments/api'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { fetchMyComments } from '@/features/comments/api'
+import { fetchMyFavorites } from '@/features/favorites/api'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { clearMyViewHistory, fetchMyViewHistory } from '@/features/view-history/api'
-import { isApiError } from '@/lib/request'
 import { formatAmount } from '@/lib/money'
+import { isApiError } from '@/lib/request'
 import {
   applyCleared,
   blockUrlOf,
@@ -28,23 +28,23 @@ import {
   type DemoRecords,
   emptyCopyOf,
   emptyKindOf,
+  favoriteCell,
   fetchDemoRecords,
+  groupByDay,
   type HistoryDay,
   type HistoryTab,
-  groupByDay,
   loadingTextOf,
   MESSAGE_KIND_LABEL,
   type MessageRecord,
+  messageRow,
   NOTHING_CLEARED,
   noteOf,
   type RecordCell,
   shortLabelOf,
   TABS,
   tailTextOf,
-  withCleared,
-  favoriteCell,
-  messageRow,
   viewHistoryCell,
+  withCleared,
 } from './records'
 import './index.scss'
 
@@ -124,9 +124,12 @@ async function fetchAllPages<T>(
 }
 
 /** 拉一档的全部记录（适配成页面行）。 */
-async function fetchRealRecords(
-  tab: HistoryTab,
-): Promise<{ truncated: boolean; days?: HistoryDay[]; favs?: RecordCell[]; msgs?: MessageRecord[] }> {
+async function fetchRealRecords(tab: HistoryTab): Promise<{
+  truncated: boolean
+  days?: HistoryDay[]
+  favs?: RecordCell[]
+  msgs?: MessageRecord[]
+}> {
   const nowMs = Date.now()
   if (tab === 'history') {
     const { items, truncated } = await fetchAllPages((cursor) => fetchMyViewHistory({ cursor }))
@@ -139,7 +142,7 @@ async function fetchRealRecords(
     }
   }
   if (tab === 'favs') {
-    const { items, truncated } = await fetchAllPages((cursor) => fetchMyFavorites({ cursor }))
+    const { items, truncated } = await fetchAllPages((cursor) => fetchMyFavorites(cursor))
     return { truncated, favs: items.map(favoriteCell) }
   }
   const { items, truncated } = await fetchAllPages((cursor) =>
@@ -236,10 +239,7 @@ export default function History() {
     }
 
     const forUserId = userId
-    void (demo
-      ? fetchDemoRecords(forUserId)
-      : fetchRealRecords(tab)
-    ).then(
+    void (demo ? fetchDemoRecords(forUserId) : fetchRealRecords(tab)).then(
       (next) => {
         if (reqId.current !== epoch || forUserId !== userId) return
         if (demo) {
@@ -286,7 +286,11 @@ export default function History() {
 
   /** 当前的真实数据是否已就位（决定骨架屏是否顶替内容） */
   const realReady =
-    tab === 'history' ? real.history !== null : tab === 'favs' ? real.favs !== null : real.msgs !== null
+    tab === 'history'
+      ? real.history !== null
+      : tab === 'favs'
+        ? real.favs !== null
+        : real.msgs !== null
   /** 骨架屏只在「还没有数据」时顶替内容（下拉刷新保留了列表，不换骨架屏） */
   const pending = loading && (demo ? data === null : !realReady)
 

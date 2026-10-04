@@ -21,12 +21,10 @@
  * 「数字栏写 8、点进来 5 件」这种自相矛盾。`tests/history-records.test.ts` 锁住这三个数。
  * （真实构建的条数以服务端为准，与「我的」页的接真计数同源同值。）
  */
-import type {
-  FavoriteItem,
-} from '@fish/contracts/favorites/schema'
-import type { ListingCategory } from '@fish/contracts/listings/schema'
-import type { ListingStatus } from '@fish/contracts/listings/schema'
+
 import type { MyCommentItem } from '@fish/contracts/comments/schema'
+import type { FavoriteItem } from '@fish/contracts/favorites/schema'
+import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
 import type { TransactionReviewItem } from '@fish/contracts/transaction-reviews/schema'
 import type { ViewHistoryItem } from '@fish/contracts/view-history/schema'
 import { dayLabelOf } from '@/lib/time'

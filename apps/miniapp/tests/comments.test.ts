@@ -82,7 +82,10 @@ describe('我的评论 · 分段口径', () => {
   })
 
   test('分段过滤：选「全部」不筛，选具体段只留那一段', () => {
-    const items = [comment({ id: 'a' }), comment({ id: 'b', kind: 'TRADE', rating: 'POSITIVE', to: '某人' })]
+    const items = [
+      comment({ id: 'a' }),
+      comment({ id: 'b', kind: 'TRADE', rating: 'POSITIVE', to: '某人' }),
+    ]
 
     expect(filterBySegment(items, 'all')).toHaveLength(2)
     expect(filterBySegment(items, 'listing').map((item) => item.id)).toEqual(['a'])
@@ -244,7 +247,9 @@ describe('我的评论 · 演示数据自洽', () => {
       // 色块：页面的 `blockOf` 拿 `LISTING_BLOCKS[category][0]`，缺键会静默退回 OTHER ——
       // 那会让这一条显示成「其他」的灰块，而品类小字仍写着真分类，自相矛盾。
       expect(LISTING_BLOCKS[item.category as NonNullable<MyComment['category']>]?.[0]).toBeString()
-      expect(shortCategoryLabel(item.category as NonNullable<MyComment['category']>)).toHaveLength(2)
+      expect(shortCategoryLabel(item.category as NonNullable<MyComment['category']>)).toHaveLength(
+        2,
+      )
       expect(item.title.length).toBeGreaterThan(0)
       expect(item.text.length).toBeGreaterThan(0)
       expect(item.timeLabel.length).toBeGreaterThan(0)

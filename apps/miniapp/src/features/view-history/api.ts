@@ -8,12 +8,13 @@
  *
  * 约定与 `features/favorites/api.ts` 一致：路径取契约常量，响应用 zod schema 收口。
  */
+
+import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import {
+  ClearViewHistoryResponseSchema,
   type MyViewHistoryResponse,
   MyViewHistoryResponseSchema,
-  ClearViewHistoryResponseSchema,
 } from '@fish/contracts/view-history/schema'
-import { VIEW_HISTORY_ROUTES } from '@fish/contracts/view-history/routes'
 import { apiRequest } from '@/lib/request'
 
 /** 一页的条数。与收藏 / 我的评论同档：默认 20（契约上限 50）。 */

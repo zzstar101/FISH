@@ -3,7 +3,8 @@
  *
  * 区块顺序与设计稿一一对应：
  *   吸顶导航（只有返回钮）→ 图集轮播（378pt，右下圆点）→ 价格区 → 描述段（+ 标签）
- *   → 卖家卡 → 留言区（输入条 + 顶层留言 + 嵌套回复）→ 同类推荐（首页瀑布流卡）→ 底部操作栏
+ *   → 卖家卡 → 谁在求购（卖家本人视角，#8 byListing）→ 留言区（输入条 + 顶层留言 + 嵌套回复）
+ *   → 同类推荐（首页瀑布流卡）→ 底部操作栏
  *
  * 数据走 `@/features/fetchers`（先试真实接口，不可用时内部回退 mock）；尺寸 = 设计稿 pt × 2
  * （见 apps/miniapp/DESIGN.md）。
@@ -17,6 +18,7 @@
  */
 
 import type { CommentDto } from '@fish/contracts/comments/schema'
+import type { ListingMatchListResponse, WishSummary } from '@fish/contracts/matching/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
 import Taro, { useDidShow, useLoad, usePageScroll, useRouter } from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -33,12 +35,14 @@ import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
 import { fetchComments, postComment, postReply } from '@/features/listing/comments'
 import { requestSellEdit } from '@/features/listing/edit-target'
+import { fetchListingMatches } from '@/features/matching/api'
 import { usePresenceNow } from '@/features/presence/use-presence-now'
 import { presenceView } from '@/features/presence/view'
 import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
+import { proposeTransaction } from '@/features/transaction/api'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
@@ -102,6 +106,18 @@ const RATIO_HEIGHT: Record<MockListing['ratio'], number> = {
   '5x6': Math.round((COLUMN_WIDTH * 6) / 5),
   '3x4': Math.round((COLUMN_WIDTH * 4) / 3),
   '4x3': Math.round((COLUMN_WIDTH * 3) / 4),
+}
+
+/**
+ * 求购行的预算文案（`WishSummary` 的两个预算端点都可空，照抄 DB 真值）。
+ * 与许愿页 `budgetRange` 的「¥30–50」同款 en dash；两端都空 = 「预算不限」。
+ */
+function matchBudgetText(wish: WishSummary): string {
+  const { budgetMinCents, budgetMaxCents } = wish
+  if (budgetMinCents === null && budgetMaxCents === null) return '预算不限'
+  const min = budgetMinCents !== null ? `¥${formatAmount(budgetMinCents)}` : '…'
+  const max = budgetMaxCents !== null ? `¥${formatAmount(budgetMaxCents)}` : '…'
+  return `预算 ${min}–${max}`
 }
 
 /**
@@ -760,6 +776,30 @@ export default function ListingDetail() {
   const sellerPresence = data ? presenceView(data.seller.presence, sellerPresenceNow) : null
 
   /**
+   * 「谁在求购」（#8 的 byListing 端点）：**卖家本人视角**的匹配愿望列表。
+   *
+   * 端点整挂 requireAuth 且服务端校验归属（非本人 403 `NOT_TARGET_OWNER`），所以只在
+   * `ownListing` 时发请求；它是本页的辅助区块 —— 拉不到（未登录 / 网络失败 / 商品被删）
+   * 就整块不渲染，不弹错误也不连累页面主体。`matches === null` 即「没有可展示的」。
+   */
+  const [matches, setMatches] = useState<ListingMatchListResponse | null>(null)
+  useEffect(() => {
+    if (!ownListing || data === null) return
+    let stale = false
+    setMatches(null)
+    fetchListingMatches(data.listing.id)
+      .then((result) => {
+        if (!stale) setMatches(result)
+      })
+      .catch((caught: unknown) => {
+        console.debug('[miniapp] 谁在求购读不到，隐藏区块', caught)
+      })
+    return () => {
+      stale = true
+    }
+  }, [ownListing, data])
+
+  /**
    * 返回：有上一页就回退，否则回首页 —— 与 `components/nav-bar` 同一行为。
    *
    * 本页不再用那个组件（它的钮是 `absolute`，会随内容滚走，且尺寸/留白与稿子不符），
@@ -846,13 +886,20 @@ export default function ListingDetail() {
   }
 
   /**
-   * 「立即购买」：微信原生 `showModal` 做二级确认，确认后进入「待店家确认」终态。
+   * 「立即购买」（#11 提案端点落地后的真接线）：微信原生 `showModal` 二级确认 →
+   * **两步写**（与 PC 站 buy-dialog 同一顺序）——
+   * 1. `POST /conversations` 建/取与卖家的会话（同一 (买家, 商品) 服务端复用既有会话）；
+   * 2. `POST /transactions/proposals` 往会话写一条 `tx.proposal` SYSTEM 消息（不建交易行、
+   *    不改商品状态；只有卖家接受才创建交易）。
+   * 成功后进「待店家确认」态并跳到会话页（买家能在会话里看到这条提案）。
    *
-   * 请求目前只落到本地状态：契约里还没有「向卖家发购买请求」的端点（下单域未开），
-   * 弹窗文案里的「发送请求」暂时没有真实接收方 —— 端点落地后在这里补真实调用。
+   * 提案的「防重复」由前端在飞锁负责（契约把这条交给前端）：`buyRequested` +
+   * `buyInFlightRef` 双保险。`amountCents` 带挂价（0 元送即 0）；成交价以卖家接受时
+   * 重传的值为准，本页不替卖家定价。
    *
    * 弹窗回调同样是迟到的异步回调：等待期间换号 / 卸载之后，「待店家确认」写的就是
-   * 别人的页面了。切号清场只清**已写下**的状态，挡不住清场之后的这次回写。
+   * 别人的页面了。切号清场只清**已写下**的状态，挡不住清场之后的这次回写
+   * （`isTaskLive` 判据，与「聊一聊」同一套）。
    *
    * 在飞锁与「聊一聊」同口径（另一把锁）：`showModal` 没回之前不再弹第二个，否则
    * 连点会叠出多个确认框；`fail`（老 Android 上点蒙层 / 页面卸载走 reject）按
@@ -868,24 +915,60 @@ export default function ListingDetail() {
       authStatus,
     )
     buyInFlightRef.current = task.token
+    /** 只释放自己的锁：换号后 B 重新发起时，A 的迟到收尾不能删掉 B 的标记 */
     const release = (): void => {
       if (!shouldReleaseActionTask(task, buyInFlightRef.current)) return
       buyInFlightRef.current = null
     }
     void Taro.showModal({
       title: '确定立即购买',
-      content: '请核实商品信息，确认后向卖家发送请求',
+      content: '确认后会给卖家发送交易确认，卖家同意才会生成订单并锁定商品。',
     })
       .then((result) => {
-        if (!result.confirm) return
-        if (!isTaskLive(task, buyInFlightRef.current)) return
-        setBuyRequested(true)
+        if (!result.confirm) {
+          release()
+          return
+        }
+        void (async () => {
+          try {
+            const conversation = await createConversation(id)
+            if (!isTaskLive(task, buyInFlightRef.current)) return
+            const amountCents = data?.listing.priceCents ?? 0
+            await proposeTransaction(conversation.id, amountCents)
+            if (!isTaskLive(task, buyInFlightRef.current)) return
+            setBuyRequested(true)
+            await Taro.navigateTo({ url: `/pages/conversation/index?id=${conversation.id}` })
+          } catch (error) {
+            // 旧任务的失败不能弹给新账号；例外是**会话过期**（401），失败的是本人 ——
+            // 静默吞掉等于「点了购买，什么都没发生」（与「聊一聊」同一口径）
+            if (!isTaskLive(task, buyInFlightRef.current)) {
+              if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
+                void Taro.showToast({ title: '请先登录后再购买', icon: 'none' })
+              }
+              return
+            }
+            // 商品已不是 ACTIVE（并发买家赢了 / 已下架）是**状态漂移**：提示后重取详情，
+            // 不能把过期页面留在原地（PC 站 buy-dialog 的 refresh 语义）
+            const staleListing = isApiError(error) && error.code === 'LISTING_NOT_ACTIVE'
+            void Taro.showToast(
+              staleListing
+                ? { title: '这件商品已被别人买走或已下架', icon: 'none' }
+                : {
+                    title: isApiError(error) ? error.message : '发起没成功，请重试',
+                    icon: 'none',
+                  },
+            )
+            if (staleListing) load()
+          } finally {
+            release()
+          }
+        })()
       })
       .catch((error: unknown) => {
         // 弹窗没完成（点蒙层 / 页面卸载 / 平台走 fail）就是「没确认」，留痕不打扰用户
         console.debug('[miniapp] 购买确认弹窗未完成，按未确认处理', error)
+        release()
       })
-      .finally(release)
   }
 
   /* ------------------------------------------------------ 卖家视角底栏动作 */
@@ -1414,6 +1497,41 @@ export default function ListingDetail() {
                 </View>
               </View>
             </View>
+
+            {/* ---------------------------------------------------- 谁在求购 */}
+            {/*
+              卖家视角专属（#8 byListing）：谁求购过跟我这件商品匹配的愿望。
+              `matches === null`（非本人 / 拉取失败）或没人求购时整块不渲染 ——
+              只剩一个标题的空壳区块比没有区块更奇怪。行点击去搜索页搜该关键词
+              （与许愿页「按关键词搜索」同一跳转口径）。
+            */}
+            {ownListing && matches !== null && matches.items.length > 0 ? (
+              <View className="detail__matches">
+                <View className="detail__seclabel">
+                  <Image className="detail__seclabel-img" src={ICONS.heartMuted} mode="aspectFit" />
+                  <Text>{`谁在求购 · ${matches.total}`}</Text>
+                </View>
+                <View className="detail__match-list">
+                  {matches.items.map((match) => (
+                    <View
+                      key={match.id}
+                      className="detail__match"
+                      onClick={() =>
+                        void Taro.navigateTo({
+                          url: `/pages/search/index?q=${encodeURIComponent(match.wish.keyword)}`,
+                        })
+                      }
+                    >
+                      <View className="detail__match-main">
+                        <Text className="detail__match-kw">{match.wish.keyword}</Text>
+                        <Text className="detail__match-sub">{matchBudgetText(match.wish)}</Text>
+                      </View>
+                      <Text className="detail__match-score num">{`${match.score}%`}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
 
             {/* ---------------------------------------------------- 留言 */}
             <View className="detail__comments">

@@ -27,9 +27,9 @@ import {
   viewTargetOf,
 } from '@/features/comments/mine'
 import { deleteMyTransactionReview } from '@/features/transaction/api'
-import { isApiError } from '@/lib/request'
 import { formatAmount } from '@/lib/money'
 import { readNavMetrics } from '@/lib/nav-metrics'
+import { isApiError } from '@/lib/request'
 import { LISTING_BLOCKS } from '@/mock/blocks'
 import './index.scss'
 
@@ -135,27 +135,24 @@ export default function MyComments() {
    * 代次守卫：返回时若已不是最新一次（换账号 / 又一次刷新 / 已切到别的段），整批丢弃。
    * `silent` = 下拉刷新：系统已拉出原生指示器，不把列表换成骨架屏（保住阅读位置）。
    */
-  const read = useCallback(
-    async (target: CommentSegment, silent = false) => {
-      const epoch = ++loadEpoch.current
-      if (!silent) setLoading(true)
-      setError(null)
-      try {
-        const response = await fetchMyComments({ kind: kindOfSegment(target) })
-        if (epoch !== loadEpoch.current) return
-        const nowMs = Date.now()
-        setItems(response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)))
-        setCursor(response.nextCursor)
-        setCounts((prev) => ({ ...prev, [target]: response.total }))
-        setLoading(false)
-      } catch (caught) {
-        if (epoch !== loadEpoch.current) return
-        setError(isApiError(caught) ? caught.message : '网络不太好，评论没读出来')
-        setLoading(false)
-      }
-    },
-    [],
-  )
+  const read = useCallback(async (target: CommentSegment, silent = false) => {
+    const epoch = ++loadEpoch.current
+    if (!silent) setLoading(true)
+    setError(null)
+    try {
+      const response = await fetchMyComments({ kind: kindOfSegment(target) })
+      if (epoch !== loadEpoch.current) return
+      const nowMs = Date.now()
+      setItems(response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)))
+      setCursor(response.nextCursor)
+      setCounts((prev) => ({ ...prev, [target]: response.total }))
+      setLoading(false)
+    } catch (caught) {
+      if (epoch !== loadEpoch.current) return
+      setError(isApiError(caught) ? caught.message : '网络不太好，评论没读出来')
+      setLoading(false)
+    }
+  }, [])
 
   /**
    * 两段总数探测（`limit=1` 只要 `total`）。「全部」的计数 = 留言 + 评价 ——
@@ -168,7 +165,11 @@ export default function MyComments() {
         fetchMyComments({ kind: 'comment', limit: 1 }),
         fetchMyComments({ kind: 'review', limit: 1 }),
       ])
-      setCounts({ all: comments.total + reviews.total, listing: comments.total, trade: reviews.total })
+      setCounts({
+        all: comments.total + reviews.total,
+        listing: comments.total,
+        trade: reviews.total,
+      })
     } catch {
       // 静默：列表自身失败已有错误态，这里只是数字缺失
     }
@@ -179,7 +180,9 @@ export default function MyComments() {
     if (authStatus !== 'authed' || userId === null) return
     void read('all')
     void probeCounts()
-  }, [demo, authStatus, userId, read, probeCounts])
+    // `demo` 是构建期常量（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`），运行期不变，
+    // 不进依赖数组（Biome 会提示它多余）
+  }, [authStatus, userId, read, probeCounts])
 
   /** 切段：重置到该段第 1 页。真实模式发请求（代次守卫丢弃在途的旧响应）。 */
   const pickSegment = (key: CommentSegment) => {
@@ -198,7 +201,10 @@ export default function MyComments() {
       const response = await fetchMyComments({ kind: kindOfSegment(segment), cursor })
       if (epoch !== loadEpoch.current) return
       const nowMs = Date.now()
-      setItems((prev) => [...prev, ...response.items.map((row) => toMyCommentFromResponseItem(row, nowMs))])
+      setItems((prev) => [
+        ...prev,
+        ...response.items.map((row) => toMyCommentFromResponseItem(row, nowMs)),
+      ])
       setCursor(response.nextCursor)
       setCounts((prev) => ({ ...prev, [segment]: response.total }))
     } catch {
@@ -240,8 +246,7 @@ export default function MyComments() {
   }
 
   const demoCounts = countBySegment(items)
-  const countOf = (key: CommentSegment): number | null =>
-    demo ? demoCounts[key] : counts[key]
+  const countOf = (key: CommentSegment): number | null => (demo ? demoCounts[key] : counts[key])
 
   /**
    * 行上「查看商品 / 查看订单」。真实行带 `targetId`（留言 = listingId、评价 = transactionId），
@@ -365,9 +370,7 @@ export default function MyComments() {
               </Text>
               {/* @对方与评分**只有交易评价有**：商品留言在契约里没有评分、也没有对方字段 */}
               {item.to ? <Text className="cmt__to num">{`@${item.to}`}</Text> : null}
-              {chip ? (
-                <Text className={`cmt__rate ${chip.cls}`}>{chip.label}</Text>
-              ) : null}
+              {chip ? <Text className={`cmt__rate ${chip.cls}`}>{chip.label}</Text> : null}
               <Text className="cmt__time num">{item.timeLabel}</Text>
             </View>
           </View>

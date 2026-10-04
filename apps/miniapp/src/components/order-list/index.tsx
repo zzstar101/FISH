@@ -1,4 +1,5 @@
-import { Image, Text, View } from '@tarojs/components'
+import type { TransactionReviewRating } from '@fish/contracts/transaction-reviews/schema'
+import { Image, Text, Textarea, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useMemo, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
@@ -6,7 +7,13 @@ import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import type { OrderCardView } from '@/features/transaction/adapt'
+import {
+  cancelTransaction,
+  createTransactionReview,
+  fetchMyTransactionReview,
+} from '@/features/transaction/api'
 import { countsOf, type StatusKey, shownOf } from '@/features/transaction/useOrderList'
+import { isApiError } from '@/lib/request'
 import { formatAmount } from '@/mock/api'
 import './index.scss'
 
@@ -63,6 +70,16 @@ const STATUS_META: Record<
   CANCELLED: { label: '已取消', cls: 'is-cancel', note: '取消交易', noteNoTime: '已取消交易' },
 }
 
+/** 评价的三档（#195 冻结口径：好评 / 中评 / 差评，不是 1–5 星） */
+const REVIEW_TIERS: { key: TransactionReviewRating; label: string }[] = [
+  { key: 'POSITIVE', label: '好评' },
+  { key: 'NEUTRAL', label: '中评' },
+  { key: 'NEGATIVE', label: '差评' },
+]
+
+/** 评语上限，与契约 `REVIEW_BODY_MAX` 同源（页面输入框 maxlength） */
+const REVIEW_BODY_MAX = 200
+
 type Props = {
   /** 顶栏标题的黑色前段与品牌色尾段：两页各传自己的视角词（我 + 买到的 / 卖出的） */
   title: string
@@ -79,6 +96,11 @@ type Props = {
   /** 回到顶部钮是否已浮现（由页面的 `usePageScroll` 驱动） */
   showTop: boolean
   onRetry: () => void
+  /**
+   * 卡上写操作（取消交易 / 提交评价）成功后的重拉：由页面把 `useOrderList` 的
+   * `reload` 传进来。不传则只做本地提示（组件在两个页面外不可复用，两页都会传）。
+   */
+  onRefresh?: () => void
 }
 
 export default function OrderList({
@@ -90,9 +112,24 @@ export default function OrderList({
   truncated,
   showTop,
   onRetry,
+  onRefresh,
 }: Props) {
   const [status, setStatus] = useState<StatusKey>('ALL')
   const [sortDesc, setSortDesc] = useState(true)
+
+  /* ------- 卡上写操作（#195 评价 + 取消交易）的在飞与弹层状态 ------- */
+
+  /** 取消交易在飞（挡连点；showModal 的确认回调是跨帧的，用状态而不是 ref 才能画出来） */
+  const [cancelBusyId, setCancelBusyId] = useState<string | null>(null)
+  /** 评价弹层的目标（null = 关闭） */
+  const [reviewTarget, setReviewTarget] = useState<OrderCardView | null>(null)
+  const [reviewTier, setReviewTier] = useState<TransactionReviewRating | null>(null)
+  const [reviewBody, setReviewBody] = useState('')
+  const [reviewBusy, setReviewBusy] = useState(false)
+  /** 本次会话里已提交过评价的交易（本地提示位；权威状态以点开时的 GET 评价边为准） */
+  const [reviewedIds, setReviewedIds] = useState<string[]>([])
+  /** 点「评价」后正在查评价边（挡连点） */
+  const [reviewCheckingId, setReviewCheckingId] = useState<string | null>(null)
 
   const counts = useMemo(() => countsOf(items), [items])
   const shown = useMemo(() => shownOf(items, status, sortDesc), [items, status, sortDesc])
@@ -136,9 +173,86 @@ export default function OrderList({
     void Taro.navigateTo({ url: `/pages/listing-detail/index?id=${item.listingId}` })
   }
 
-  /** 评价：契约里没有评价 / 评分域（`packages/contracts/src/` 只有 comments），纯占位 */
-  const reviewOrder = () => {
-    void Taro.showToast({ title: '评价待接入', icon: 'none' })
+  /**
+   * 「取消交易」：双方都可调，仅待面交（PENDING_MEETUP）的卡有这个钮。
+   * `POST /transactions/:id/cancel` 幂等（已取消的重复取消返回现状），COMPLETED 上 409。
+   * 二级确认后真发，成功后 `onRefresh` 重拉 —— 不本地翻转状态（服务端返回才是权威）。
+   */
+  const cancelOrder = (item: OrderCardView) => {
+    if (cancelBusyId !== null) return
+    void Taro.showModal({
+      title: '取消这笔交易？',
+      content: '取消后订单作废，商品回到在售；对方也会收到通知。',
+      confirmColor: '#e5484d',
+    })
+      .then(async (result) => {
+        if (!result.confirm) return
+        setCancelBusyId(item.id)
+        try {
+          await cancelTransaction(item.id)
+          void Taro.showToast({ title: '已取消交易', icon: 'none' })
+          onRefresh?.()
+        } catch (caught) {
+          void Taro.showToast({
+            title: isApiError(caught) ? caught.message : '取消没成功，请重试',
+            icon: 'none',
+          })
+        } finally {
+          setCancelBusyId(null)
+        }
+      })
+      .catch(() => {})
+  }
+
+  /**
+   * 「评价」：先读评价边 —— 已评过（200）就说明，不再弹层（评价不可修改，
+   * 重复提交会被 409 `TRANSACTION_REVIEW_EXISTS` 拒，与其撞墙不如先问）；
+   * 没有（404 `REVIEW_NOT_FOUND`）才弹评价卡。
+   */
+  const openReview = (item: OrderCardView) => {
+    if (reviewCheckingId !== null || reviewBusy) return
+    setReviewCheckingId(item.id)
+    fetchMyTransactionReview(item.id)
+      .then(() => {
+        void Taro.showToast({ title: '这笔交易已经评价过了', icon: 'none' })
+      })
+      .catch((caught: unknown) => {
+        if (isApiError(caught) && caught.code === 'REVIEW_NOT_FOUND') {
+          setReviewTier(null)
+          setReviewBody('')
+          setReviewTarget(item)
+          return
+        }
+        void Taro.showToast({
+          title: isApiError(caught) ? caught.message : '没读到评价状态，请重试',
+          icon: 'none',
+        })
+      })
+      .finally(() => setReviewCheckingId(null))
+  }
+
+  /** 提交评价。评语 trim 后为空 = 「只打分没写字」（契约明说的正常形态），省略字段。 */
+  const submitReview = () => {
+    if (reviewTarget === null || reviewTier === null || reviewBusy) return
+    setReviewBusy(true)
+    const trimmed = reviewBody.trim()
+    createTransactionReview(reviewTarget.id, {
+      rating: reviewTier,
+      ...(trimmed === '' ? {} : { body: trimmed }),
+    })
+      .then(() => {
+        void Taro.showToast({ title: '评价已提交', icon: 'none' })
+        setReviewedIds((prev) => [...prev, reviewTarget.id])
+        setReviewTarget(null)
+      })
+      .catch((caught: unknown) => {
+        // 422 REVIEW_CONTENT_BLOCKED / 409 已评过等服务端可读文案原样透出
+        void Taro.showToast({
+          title: isApiError(caught) ? caught.message : '提交没成功，请重试',
+          icon: 'none',
+        })
+      })
+      .finally(() => setReviewBusy(false))
   }
 
   const backToTop = () => {
@@ -329,6 +443,15 @@ export default function OrderList({
                           <Image className="orders__btn-ic" src={ICONS.chatInk} mode="aspectFit" />
                           <Text>查看会话</Text>
                         </View>
+                        {/* 取消是双方的动作，放次级危险位：真发 DELETE 语义的写端点前有二级确认 */}
+                        <View
+                          className={`orders__btn orders__btn--danger${
+                            cancelBusyId === item.id ? ' is-busy' : ''
+                          }`}
+                          onClick={() => cancelOrder(item)}
+                        >
+                          <Text>{cancelBusyId === item.id ? '取消中' : '取消交易'}</Text>
+                        </View>
                         {/* 两头的入口不一样：买家去扫卖家的码，卖家把自己的码亮给买家 */}
                         <View
                           className="orders__btn orders__btn--pri"
@@ -346,15 +469,23 @@ export default function OrderList({
                             ? `已于 ${item.settledDate} ${meta.note}`
                             : meta.noteNoTime}
                         </Text>
-                        {/* 只有已完成能评价（已取消没有可评价的成交） */}
+                        {/* 只有已完成能评价（已取消没有可评价的成交）；已评过转灰不可再点 */}
                         {item.status === 'COMPLETED' ? (
-                          <View className="orders__btn orders__btn--sec" onClick={reviewOrder}>
+                          <View
+                            className={`orders__btn orders__btn--sec${
+                              reviewedIds.includes(item.id) ? ' is-done' : ''
+                            }`}
+                            onClick={() => {
+                              if (reviewedIds.includes(item.id)) return
+                              openReview(item)
+                            }}
+                          >
                             <Image
                               className="orders__btn-ic"
                               src={ICONS.starAccent}
                               mode="aspectFit"
                             />
-                            <Text>评价</Text>
+                            <Text>{reviewedIds.includes(item.id) ? '已评价' : '评价'}</Text>
                           </View>
                         ) : null}
                         <View
@@ -371,6 +502,64 @@ export default function OrderList({
               )
             })
           : null}
+
+        {/*
+          评价卡（#195）：三档评分（好评/中评/差评，契约冻结口径）+ 可空评语。
+          先读评价边再弹（已评过 409 会被服务端拒，与其撞墙不如先问）；
+          提交成功后本地把该卡转「已评价」，权威状态以服务端为准。
+        */}
+        {reviewTarget !== null ? (
+          <>
+            <View
+              className="orders__scrim"
+              onClick={() => {
+                if (!reviewBusy) setReviewTarget(null)
+              }}
+            />
+            <View className="orders__dialog">
+              <Text className="orders__dlg-title">评价这笔交易</Text>
+              <Text className="orders__dlg-sub">{reviewTarget.listing.title}</Text>
+              <View className="orders__dlg-tiers">
+                {REVIEW_TIERS.map((tier) => (
+                  <View
+                    key={tier.key}
+                    className={`orders__tier orders__tier--${tier.key.toLowerCase()}${
+                      reviewTier === tier.key ? ' is-on' : ''
+                    }`}
+                    onClick={() => setReviewTier(tier.key)}
+                  >
+                    <Text>{tier.label}</Text>
+                  </View>
+                ))}
+              </View>
+              <View className="orders__dlg-bodywrap">
+                <Textarea
+                  className="orders__dlg-body"
+                  maxlength={REVIEW_BODY_MAX}
+                  placeholder="写点想说的（可不填，最多 200 字）"
+                  value={reviewBody}
+                  onInput={(event) => setReviewBody(event.detail.value)}
+                />
+              </View>
+              <View className="orders__dlg-acts">
+                <View
+                  className="orders__dlg-cancel"
+                  onClick={() => {
+                    if (!reviewBusy) setReviewTarget(null)
+                  }}
+                >
+                  <Text>再想想</Text>
+                </View>
+                <View
+                  className={`orders__dlg-ok${reviewTier === null ? ' is-off' : ''}`}
+                  onClick={submitReview}
+                >
+                  <Text>{reviewBusy ? '提交中…' : '提交评价'}</Text>
+                </View>
+              </View>
+            </View>
+          </>
+        ) : null}
 
         {/*
           到底提示：只在「这份列表确实是全部」时才有意义 —— 加载中 / 空列表 / 列表不完整都不显示。

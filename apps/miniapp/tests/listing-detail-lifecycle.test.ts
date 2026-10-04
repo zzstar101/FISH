@@ -1063,10 +1063,12 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     // 铸任务时必须把发起那一刻的登录态带上，否则「已确认匿名」也会被当成冷启动
     expect(await source()).toContain('authStatus,')
     // 两个动作都必须走这条守卫（漏一个就会「点了没反应」）：
-    // 「聊一聊」成功 / 失败两条链各一次，「立即购买」确认链一次
+    // 「聊一聊」成功 / 失败两条链各一次；「立即购买」#11 真接线后是
+    // 建会话 → 写提案 → 回写终态三段异步，每个 await 边界各一次（共 3 次）——
+    // 每段返回时账号都可能已切换，迟到的那段必须整条丢弃
     const code = await source()
     expect(code.match(/isTaskLive\(task, chatInFlightRef\.current\)/g)?.length).toBe(2)
-    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(1)
+    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(3)
   })
 })
 

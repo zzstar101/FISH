@@ -9,11 +9,12 @@
  * `query` 参数（会拼出 `?listingId=…?limit=10`）。`limit` 走服务端默认档 10，
  * 「谁在求购」的量级是个位数到几十，够用；要改上限时用 `&` 手工续在常量后面。
  */
+
+import { MATCHING_ROUTES } from '@fish/contracts/matching/routes'
 import {
   type ListingMatchListResponse,
   ListingMatchListResponseSchema,
 } from '@fish/contracts/matching/schema'
-import { MATCHING_ROUTES } from '@fish/contracts/matching/routes'
 import { apiRequest } from '@/lib/request'
 
 /** 我的一件商品的匹配愿望列表（谁在求购）。非本人调用 403。 */

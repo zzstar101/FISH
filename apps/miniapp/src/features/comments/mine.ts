@@ -25,15 +25,12 @@
  *
  * 本模块不 import 任何 Taro / fixture 模块（`dayLabelOf` 除外），`tests/comments.test.ts` 直接加载它。
  */
-import type {
-  MyCommentItem,
-  MyCommentsKind,
-} from '@fish/contracts/comments/schema'
+import type { MyCommentItem, MyCommentsKind } from '@fish/contracts/comments/schema'
+import type { ListingCategory } from '@fish/contracts/listings/schema'
 import type {
   TransactionReviewItem,
   TransactionReviewRating,
 } from '@fish/contracts/transaction-reviews/schema'
-import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { dayLabelOf } from '@/lib/time'
 
 /**
