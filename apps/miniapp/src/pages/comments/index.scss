@@ -282,6 +282,11 @@
   &--danger {
     border-color: var(--danger-line);
     color: var(--danger-ink);
+
+    /* 删除在飞：降透明度示意不可点（点击由页面 `deletingId` 锁挡住） */
+    &.is-busy {
+      opacity: 0.5;
+    }
   }
 }
 
@@ -375,28 +380,42 @@
 }
 
 /*
- * 星级只在交易评价行出现（商品留言在契约里就没有评分字段）。
+ * 评分胶囊：三档（好评 / 中评 / 差评），**只在交易评价行出现**（商品留言在契约里就
+ * 没有评分字段，`ratingChipOf(null)` 返回 null，这里整块不渲染）。
  *
- * ⚠️ **与稿有可见色差，是有意为之**：稿里 `.stars` 是 `color: var(--warn)`（琥珀 #FFB84D）
- * 的文字字形「★」。仓库铁律要求图标只从 `@/assets/lib-icons` 的 `ICONS` 取（PNG），
- * 而那里**没有琥珀色的星**：满格只有 `starAccent`（实为 `#4285FF` 品牌蓝）、
- * 空格只有 `starLine`（`#A8C5FA`）。新增一枚 `star-warn` 资源不在本页的文件白名单里，
- * 所以本轮先用现成的两枚 —— 结果是星是蓝的、不是稿里的琥珀。
- * 已作为「已知偏离」写进 PR 正文，等 Owner 定是补资源还是就这样。
- *
- * 内联字形（`<Text>★</Text>` 配 `color: var(--warn)`）能完全对上稿，但会绕过铁律、且
- * 字形随系统字体变，所以没走这条路。
+ * #195 把评分冻结成三档枚举而不是 1–5 星，#196 按稿画的五颗星在真实数据下没有出处
+ * （「好评」画成 5 星是把档位编造成分数），所以本版换成档位胶囊：三档用既有令牌的
+ * 红绿灯三色（ok / warn / danger），不新增色值。
  */
-.cmt__stars {
+.cmt__rate {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-}
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  font-size: 20px;
+  font-weight: 600;
+  white-space: nowrap;
 
-.cmt__star {
-  width: 22px;
-  height: 22px;
+  &.is-pos {
+    background: var(--ok-weak);
+    border-color: var(--ok-line);
+    color: var(--ok-ink);
+  }
+
+  &.is-mid {
+    background: var(--warn-weak);
+    border-color: var(--warn-line);
+    color: var(--warn-ink);
+  }
+
+  &.is-neg {
+    background: var(--danger-weak);
+    border-color: var(--danger-line);
+    color: var(--danger-ink);
+  }
 }
 
 /* 时间靠右顶格（等宽字体由元素上的 `.num` 类给，这里不重复声明 font-family） */
