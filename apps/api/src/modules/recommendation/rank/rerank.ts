@@ -160,6 +160,11 @@ export function rerankCandidates(input: {
   // 兜底：冷却把整页清空时，本次不冷却。M6 是**单品**冷却，不是整页清空 —— 而 `service` 的
   // 降级判据（`scored.length === 0`）在冷却**之前**，这里若返回空 `items`，服务端仍会写一条
   // 0 快照行的 ranked 请求，admin 的 `emptyRankedFeedRate` 会把它记成一次线上故障。宁可多曝光。
+  //
+  // `afterHidden.length > 0` 只是**防御性写法**（避免"没有候选却声称跳过了冷却"）：`afterHidden`
+  // 为空时两条分支等价（`pool` 都是 `[]`、`droppedCooldown` 都是 0）。另注意本兜底建在
+  // `afterHidden` 之上 —— "全部候选同时被 HIDE 与冷却"仍会是空页，那是既有 all-hidden 行为的
+  // 遗留，根治要挪到 `service` 层（页面为空则不写 ranked 请求），不在本次范围内。
   const skipCooldown = afterHidden.length > 0 && cooled.length === 0
   const pool = skipCooldown ? afterHidden : cooled
   const relaxations: Record<RerankConstraint, number> = { seller: 0, category: 0, explore: 0 }
