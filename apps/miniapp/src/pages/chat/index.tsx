@@ -10,7 +10,11 @@ import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
-import { fetchMessagePage, markConversationRead } from '@/features/chat/api'
+import {
+  fetchConversationUnreadCount,
+  fetchMessagePage,
+  markConversationRead,
+} from '@/features/chat/api'
 import {
   capsuleFor,
   lastEventOfMessages,
@@ -91,6 +95,17 @@ export default function Chat() {
   const [ready, setReady] = useState(false)
   /** 真实接口失败且没有回退 mock（生产口径）→ 错误态 + 重试，而不是空态 */
   const [failed, setFailed] = useState(false)
+  /**
+   * 会话未读**条数和**：底栏「消息」红点的会话分量（发布给 `features/chat/unread`）。
+   *
+   * 走专用端点 `GET /conversations/unread-count`（#291），不再对**本页**会话列表求和：
+   * 列表只有第一页（契约上限 50 条），会话多于 50 且更早那批里还有未读时会漏计 ——
+   * 红点时代只影响「亮不亮」，改成精确数字后就是用户可见的错误。
+   *
+   * `null` = 还不知道（未取到 / 接口失败）。**不发 0**：0 是「确定没有未读」这个
+   * 具体结论，拿它顶替会把上一份正确的快照覆盖掉。
+   */
+  const [conversationUnread, setConversationUnread] = useState<number | null>(null)
   /** 更早一页会话的游标；null = 已到最后一页 */
   const [listNextCursor, setListNextCursor] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -156,6 +171,8 @@ export default function Chat() {
     setItems([])
     setReady(false)
     setFailed(false)
+    // 未读总数属于上一个账号：先记「不知道」，别让它的红点挂在新账号上
+    setConversationUnread(null)
     setListNextCursor(null)
     setLoadingMore(false)
     setLoadMoreFailed(false)
@@ -223,6 +240,25 @@ export default function Chat() {
   )
 
   /**
+   * 会话未读总数（底栏红点的会话分量）。与列表**同一代次**守卫：换账号 / 重载之后
+   * 迟到的响应不得落地 —— 否则上一个账号的未读会写进新账号的快照。
+   *
+   * 失败即记「不知道」（`null`），**不回退 fixture、不拿 0 冒充**（见 state 处的注释）。
+   */
+  const loadConversationUnread = useCallback((epoch: number) => {
+    void fetchConversationUnreadCount()
+      .then((count) => {
+        if (epoch !== listEpoch.current) return
+        setConversationUnread(count)
+      })
+      .catch((error) => {
+        console.warn('[miniapp] 会话未读总数加载失败，底栏按「不知道」算', error)
+        if (epoch !== listEpoch.current) return
+        setConversationUnread(null)
+      })
+  }, [])
+
+  /**
    * 会话列表加载。重试钮、进页、以及从会话页返回（`useDidShow`）都走这里。
    *
    * 失败即清屏并进错误态（与首页 `applyLoadResult` 同一口径）：把上一批会话留在
@@ -230,6 +266,9 @@ export default function Chat() {
    */
   const reloadConversations = useCallback(() => {
     const epoch = ++listEpoch.current
+    // 未读总数与列表同轮刷新。它是**独立端点**的结果，与列表是否被截断到 50 条无关，
+    // 也不等列表 —— 列表失败时底栏红点仍应有真值。
+    loadConversationUnread(epoch)
     setLoadingMore(false)
     // 整页重载必须把「加载更多」的失败标记一起清掉：否则一次失败之后，任何一次
     // 成功的重载（useDidShow 从会话页返回 / 错误态重试）都会继续在尾部报一句
@@ -281,7 +320,7 @@ export default function Chat() {
         setFailed(true)
         setReady(true)
       })
-  }, [scanProposals])
+  }, [scanProposals, loadConversationUnread])
 
   /**
    * 「加载更多会话」：契约按 `lastMessageAt` 降序 + 游标分页，游标原样回传。
@@ -405,43 +444,26 @@ export default function Chat() {
    */
   const state = chatListState({ ready, failed, itemCount: items.length })
 
-  /** 未读会话（「全部已读」与底栏红点的操作对象） */
+  /** 未读会话（「全部已读」的操作对象） */
   const unreadItems = useMemo(() => items.filter((item) => item.unreadCount > 0), [items])
-
-  /**
-   * 会话未读条数和：底栏「消息」红点的会话部分。真实数据里没有「系统会话」
-   * （契约的会话就是买卖双方一对一），所以直接全量求和，不需要排除项。
-   */
-  const conversationUnread = useMemo(
-    () => items.reduce((sum, item) => sum + item.unreadCount, 0),
-    [items],
-  )
 
   /**
    * 未读快照发布：底栏「消息」红点与页内角标同源（见 `features/chat/unread.ts`）。
    *
-   * `conversations` 与 `notifications` 在「不知道」（列表未就绪 / 加载失败）时都发
-   * `null`，底栏按「无已知未读」算 —— 与页内同口径。会话这一项尤其不要发 0：
-   * 没读到却发 0 会把上一份正确的快照覆盖掉，用户明明还有未读，那颗点却熄了。
-   * 未登录不发（登出 / 换账号的清空在身份 effect）。
+   * `conversations` 直接发 `loadConversationUnread` 落地的**端点值**（#291：不再对本页
+   * 会话列表求和 —— 那只覆盖第一页）。`conversations` 与 `notifications` 在「不知道」
+   * （未取到 / 接口失败）时都是 `null`，底栏按「无已知未读」算 —— 与页内同口径。
+   * 会话这一项尤其不要发 0：没读到却发 0 会把上一份正确的快照覆盖掉，用户明明还有
+   * 未读，那颗点却熄了。未登录不发（登出 / 换账号的清空在身份 effect）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || !identity) return
     publishUnread({
       ownerId: identity,
-      conversations: ready && !failed ? conversationUnread : null,
+      conversations: conversationUnread,
       notifications: notifsReady && !notifsFailed ? unreadNotifications : null,
     })
-  }, [
-    authStatus,
-    identity,
-    ready,
-    failed,
-    notifsReady,
-    notifsFailed,
-    conversationUnread,
-    unreadNotifications,
-  ])
+  }, [authStatus, identity, conversationUnread, notifsReady, notifsFailed, unreadNotifications])
 
   /**
    * 已读回写是**声明式**的：只要「通知」tab 被看过（`notifsViewed`，粘性状态）
@@ -500,6 +522,9 @@ export default function Chat() {
           setItems((prev) =>
             prev.map((item) => (done.has(item.id) ? { ...item, unreadCount: 0 } : item)),
           )
+          // 未读总数以端点为准：本地角标清了，底栏那颗点也要跟着熄，不用等下次进页。
+          // 部分失败时端点会如实返回剩余的未读，所以照常重取。
+          loadConversationUnread(epoch)
         }
         const missed = unreadItems.length - done.size
         void Taro.showToast({

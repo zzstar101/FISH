@@ -12,9 +12,9 @@
  *
  * **冷启动**（#129 review 第二条 P1）：底栏是每个 Tab 页都渲染的，用户可能一次都没
  * 进过消息页，此时没有任何人 `publishUnread`。所以这里再提供 `hydrateUnread()` ——
- * 由底栏在「已登录 + 还没有本次账号的快照」时调一次真实 `GET /notifications/unread-count`
- * 来填快照；真实构建下**绝不回退 mock fixture**（fixture 的未读与真实账号无关，
- * 会造成「真实有未读却不亮」或「没有未读却亮着幽灵红点」两种错）。
+ * 由底栏在「已登录 + 还没有本次账号的快照」时各调一次真实 `GET /notifications/unread-count`
+ * 与 `GET /conversations/unread-count` 来填快照；真实构建下**绝不回退 mock fixture**
+ * （fixture 的未读与真实账号无关，会造成「真实有未读却不亮」或「没有未读却亮着幽灵红点」两种错）。
  */
 import { useSyncExternalStore } from 'react'
 import { fetchConversationUnreadCount, fetchUnreadNotificationCount } from '@/features/chat/api'
@@ -27,8 +27,8 @@ export type UnreadSnapshot = {
    */
   ownerId: string
   /**
-   * 会话未读**条数和**（Chat 页会话列表的口径）。两个来源同源：Chat 页发布自己
-   * 那份真实列表的求和，冷启动由 `hydrateUnread` 拉 `GET /conversations` 求和。
+   * 会话未读**条数和**（底栏「消息」红点用）。两个来源同源：Chat 页发布
+   * `GET /conversations/unread-count` 的结果，冷启动由 `hydrateUnread` 拉同一个端点。
    *
    * **`null` = 还不知道**（列表未就绪 / 加载失败）—— 订阅方按「无已知未读」算。
    * 不能用 0 表达「不知道」：那会把上一份正确的快照覆盖成「没有未读」，用户明明
@@ -143,8 +143,8 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 「没有未读却亮着幽灵红点」都会发生。
  *
  * 通知数走**真实** `GET /notifications/unread-count`；会话数走**真实**
- * `GET /conversations` 求和（`fetchConversationUnreadCount`，实现它是因为 #89 明写
- * 「接 `GET /conversations` 时必须一并收口会话未读这一分量」）。失败时：
+ * `GET /conversations/unread-count`（`fetchConversationUnreadCount`，服务端聚合全部
+ * 会话、不受列表翻页上限影响）。失败时：
  * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
  * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏按无已知未读算），
