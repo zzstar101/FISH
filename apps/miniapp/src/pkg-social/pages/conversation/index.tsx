@@ -39,6 +39,7 @@ import {
   type VoiceRecording,
   voiceError,
 } from '@/features/chat/media-api'
+import { ChatRealtime, type ChatRealtimeEvent } from '@/features/chat/realtime'
 import { loadConversation, loadMessagePage } from '@/features/fetchers'
 import { presenceView } from '@/features/presence/view'
 import { formatAmount } from '@/lib/money'
@@ -48,7 +49,10 @@ import { sessionCookieHeader } from '@/lib/session'
 import { clockTime, dayLabelOf } from '@/lib/time'
 import { randomUuidV4 } from '@/lib/uuid'
 import {
+  applyMediaRecalled,
+  applyPresenceEvent,
   applyPresencePoll,
+  applyReadEvent,
   applyReadPoll,
   applyRecalled,
   beginSend,
@@ -65,6 +69,7 @@ import {
   isLatestPresencePoll,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  keepRecalledMediaTombstones,
   keepRecalledTombstones,
   listingStatusText,
   localReplyExcerpt,
@@ -73,6 +78,7 @@ import {
   type MediaTaskIdentity,
   type MessageAction,
   mergePushedMedia,
+  mergePushedMessage,
   mergeRefreshedMedia,
   mergeRefreshedMessages,
   mergeTimeline,
@@ -112,9 +118,9 @@ import './index.scss'
  *    `tx.completed` 评价卡（交易域没有这个事件）、以及媒体消息与上传/播放的本地模拟
  *    （#67 的范围）。其中「每条消息的已读标记」当年是照 #149 未合入删掉的（理由已过期），
  *    #359 四 用契约的 `counterpartLastReadAt` 把它接回来 —— 判据见 `./view` 的
- *    `messageReadLabel`，只标我发出的气泡。读位由进页 / 从子页返回 / 点重试，以及本页的
- *    **详情轮询**（`DETAIL_POLL_MS`，只补读位与在线态、不 bump epoch、不重发已读）刷新；
- *    `conversation.read` 的实时接收仍要等小程序实时客户端合入（#213→#220 链）。
+ *    `messageReadLabel`，只标我发出的气泡。读位由进页 / 从子页返回 / 点重试、本页的
+ *    **详情轮询**（`DETAIL_POLL_MS`，只补读位与在线态、不 bump epoch、不重发已读），
+ *    以及 `conversation.read` 的**实时推送**（`features/chat/realtime`）刷新；
  *    原先注释把「发送落定后的静默补刷」当常规刷新时机是错的：那条路径只在「发送未落定
  *    就离开本页、再回来」时才发生（见 `./view` 的 `shouldFlushDeferredReload`）。
  * 5. **媒体（#359 3b）**：图片 / 拍照 / 语音走 `features/chat/media-api` 的真实链路
@@ -423,13 +429,18 @@ export default function Conversation() {
       const silent = options?.silent === true
       const current = ++epoch.current
       /**
-       * silent 刷新要先记下**发起时**的消息 id 快照：落地时用它把本次刷新期间才确认
-       * 落地的消息挑出来补回（见 `mergeRefreshedMessages`）。非 silent 是整页重拉，
-       * 以服务端快照为准即可。
+       * 刷新要先记下**发起时**的消息 id 快照：落地时用它把本次刷新期间才确认落地的
+       * 消息挑出来补回（见 `mergeRefreshedMessages`）。
+       *
+       * 这条**不再只属于 silent**（#89 实时通道）：推送随时可能落在一次非 silent 重拉的
+       * 在途期（最典型的是 `useDidShow` 从子页返回时的重拉），而历史快照可能拍在那条消息
+       * commit 之前 —— 整份替换会把它抹掉，且 20s 详情轮询不刷消息流，用户要等到下一次
+       * 重拉才看得见。`mergeRefreshedMessages` 的规则不变：基准集之内的旧条目仍以服务端
+       * 快照为准（翻过的更早一页照旧被丢弃），只有「发起之后才出现」的才补回。
        */
-      const baseIds = silent ? new Set(messagesRef.current.map((item) => item.id)) : null
+      const baseIds = new Set(messagesRef.current.map((item) => item.id))
       /** 媒体半边同理（见下）：silent 合并要按**发起时**的媒体 id 集做并集 */
-      const mediaBaseIds = silent ? new Set(mediaRef.current.map((item) => item.id)) : null
+      const mediaBaseIds = new Set(mediaRef.current.map((item) => item.id))
       /**
        * 上面刚把 epoch 推进，任何在途的「更早一页」就此判过期（它的守卫会挡住写入，
        * `finally` 也不会还锁 —— 见 `isLatestPageLoad`）。锁必须在这里主动收回，
@@ -465,19 +476,16 @@ export default function Conversation() {
           setConvState((prev) => resolveConvState(prev, detail.status, silent))
           if (!(silent && page.failed)) {
             /**
-             * silent 刷新**合并**而不是替换（#186 P2-1）：它带回来的快照可能早于
-             * 本次刷新期间才发送成功的那条消息，无条件 `setMessages(page.items)`
-             * 会把那条刚确认的消息抹掉。非 silent 是整页重拉，直接替换。
+             * 刷新**合并**而不是替换（#186 P2-1，实时通道后扩到非 silent）：它带回来的
+             * 快照可能早于本次刷新期间才落地的消息（发送确认、或实时推送进来的对方消息），
+             * 无条件 `setMessages(page.items)` 会把那条抹掉。
              *
              * 两条路径都要过 `keepRecalledTombstones`（#359 3c 审查回合）：撤回在途
              * 15s 内任何一次 `load()` 都可能带着「撤回前」的快照回来，把刚落地的
              * 撤回碑写回正文。判据与理由见 `./view`。
              */
             setMessages((prev) =>
-              keepRecalledTombstones(
-                prev,
-                baseIds === null ? page.items : mergeRefreshedMessages(prev, page.items, baseIds),
-              ),
+              keepRecalledTombstones(prev, mergeRefreshedMessages(prev, page.items, baseIds)),
             )
             setNextCursor(page.nextCursor)
             setMsgState(page.failed ? 'failed' : 'ok')
@@ -492,14 +500,15 @@ export default function Conversation() {
            * **失败一律不落地**（不只是 silent）：失败时 `loadMediaPage` 回的是
            * `{ items: [], nextCursor: null, failed: true }`，照常写入会把屏幕上已有的
            * 图片 / 语音**整批抹掉**、游标也一起清空 —— 而媒体没有自己的错误态，用户看到
-           * 的是「消息凭空少了」且无从重试（#359 3b 审查）。成功时 silent 仍走并集合并，
-           * 不一刀切替换。
+           * 的是「消息凭空少了」且无从重试（#359 3b 审查）。成功时走并集合并（与消息流
+           * 同理，非 silent 也要合并：推送可能在本次重拉在途期落进 `media`）。
            */
           if (!mediaPage.failed) {
             setMedia((prev) =>
-              mediaBaseIds === null
-                ? mediaPage.items
-                : mergeRefreshedMedia(prev, mediaPage.items, mediaBaseIds),
+              keepRecalledMediaTombstones(
+                prev,
+                mergeRefreshedMedia(prev, mediaPage.items, mediaBaseIds),
+              ),
             )
             setMediaCursor(mediaPage.nextCursor)
           }
@@ -513,8 +522,18 @@ export default function Conversation() {
            *
            * 必须再过一次 epoch 守卫：本 load 发起后、响应落地前若发生换账号，
            * 这里不能拿新账号的 cookie 去推旧账号会话的读位（跨账号副作用）。
+           *
+           * **页面不可见时不推**（#89 实时通道补的闸）：实时客户端在 `useDidHide` 后
+           * 仍然活着，断线重连的补刷（`onOpen` → 本函数）会在页面被盖住时跑一次，
+           * 无条件上报会把用户**根本没看到**的新消息清成已读。与 web-pc 的
+           * `read-receipt.ts` 同一口径：隐藏期的未读留给回到本页时的那次重拉（didShow）。
            */
-          if (current === epoch.current && detail.status === 'ok' && !page.failed) {
+          if (
+            current === epoch.current &&
+            detail.status === 'ok' &&
+            !page.failed &&
+            visibleRef.current
+          ) {
             void markConversationRead(conversationId).catch((error) =>
               console.warn('[miniapp] 标记会话已读失败', error),
             )
@@ -563,6 +582,8 @@ export default function Conversation() {
   const userIdRef = useRef<string | null>(null)
   const loadRef = useRef(load)
   const pendingRef = useRef<PendingMessage[]>([])
+  /** 实时补刷的门禁要读「当前详情态」：handler 每次渲染重建，读 ref 拿最新值 */
+  const convStateRef = useRef(convState)
   authedRef.current = authStatus === 'authed'
   userIdRef.current = userId
   loadRef.current = load
@@ -570,6 +591,7 @@ export default function Conversation() {
   messagesRef.current = messages
   mediaRef.current = media
   pendingMediaRef.current = pendingMedia
+  convStateRef.current = convState
   useDidShow(() => {
     visibleRef.current = true
     // 回到本页：把在线态的轮询表续上（隐藏时真的停掉了，见 useDidHide）
@@ -651,6 +673,11 @@ export default function Conversation() {
       userIdRef.current === userId &&
       !isStaleMediaTask(task, { epoch: epoch.current, cookie: sessionCookieHeader() ?? '' })
     for (const item of media) {
+      /**
+       * 撤回碑没有字节可下（服务端撤回后 `url` 就是空的）：下载只会白跑一趟，
+       * 而渲染分支只画「撤回了一条消息」、不读 `localPaths`。
+       */
+      if (item.recalledAt !== null) continue
       // N1：媒体的身份是 `mediaId` —— 契约里 `id` 是**消息** id，鉴权代理端点收的也是
       // `mediaId`。缓存键同样用 `mediaId`，否则 `media-api` 的模块级 LRU 永远命不中，
       // 每次进页面都会把同一条媒体重新下载一遍。
@@ -689,10 +716,11 @@ export default function Conversation() {
   /**
    * 详情轮询（#359 四 的读位 + #359 第五点 的在线态，Owner 决策合并成一条）。
    *
-   * 为什么必须有：端上没有「实时」——小程序没有实时客户端（#213→#220 链未合入 main），
-   * `conversation.read` 与 `presence.changed` 两条帧都没人接；而 `load()` 的触发点只有
-   * 进页 / 从子页返回 / 点重试。用户盯着屏幕时读位与在线态永远不会更新，红「未读」一直
-   * 红到离开再回来、绿点也一直挂着，看起来就是坏的。
+   * 实时客户端（下方 effect）接走 `conversation.read` / `presence.changed` 的推送之后，
+   * 这条轮询从「唯一路径」降级为**兜底**，但仍然不可删：
+   * - 服务端只推「离线→在线」的转变，「在线→离线」没有事件（TTL 到期的瞬间没有任何
+   *   请求），离线过期要靠这条轮询重拉详情、按同一个 `PRESENCE_ONLINE_TTL_MS` 体现；
+   * - WS 断开 / 重连的窗口里（推送不保证不漏），读位与在线态仍由它按 20s 收敛。
    *
    * 只做一件事：拉一次详情、只把 `counterpartLastReadAt` 与 `counterpartPresence` 写回
    * —— 不碰消息流与分页游标、不 bump epoch（否则在途发送的响应会被判过期丢弃）、不重发
@@ -705,10 +733,6 @@ export default function Conversation() {
    *
    * 页面被盖住（`useDidHide`）时**真的把表停掉**，不是让定时器空转着每跳判一次可见性；
    * 回到本页（`useDidShow`）再续上（#376 审查回合，P3）。
-   *
-   * 有了实时客户端之后这里应当整块换成事件订阅；在那之前，它是「读位推进」与「断线后
-   * 转为离线」在端上唯一能被看见的路径（服务端按 TTL 判定，最迟 `DETAIL_POLL_MS` 一跳内
-   * 体现）。
    */
   useEffect(() => {
     if (authStatus !== 'authed' || userId === null || convState !== 'ok') return
@@ -757,6 +781,138 @@ export default function Conversation() {
       detailPollRef.current = null
     }
   }, [authStatus, userId, convState, conversationId])
+
+  /**
+   * 实时收到**对方**消息时补一次已读上报（#89 实时通道）。
+   *
+   * 缺了这一步会出现「用户明明正看着，返回列表却还是红点」：本页的已读上报只在
+   * `load()` 里发，而详情轮询刻意不重发已读（那是「用户真的看到了首屏」的副作用），
+   * 实时推送本身又不会推进读位。判据与 web-pc 一致（`conversation-page.tsx` 的
+   * `onIncomingMessage`）：只对**别人发的**消息、且**页面可见**时上报 —— 页面被盖住
+   * （`useDidHide` 跳去了子页）时不许清未读，那些消息用户一条都没看到。
+   *
+   * 幂等：读位只前进，连发多条时多报几次无害；服务端会把 `conversation.read` 推给
+   * 双方，本页按 `readerId === 我` 过滤掉自己的回声。
+   */
+  const markIncomingRead = (senderId: string | null) => {
+    if (senderId === null || senderId === userIdRef.current) return
+    if (!visibleRef.current || !aliveRef.current) return
+    if (convStateRef.current !== 'ok') return
+    void markConversationRead(conversationId).catch((error) =>
+      console.warn('[miniapp] 实时消息标记已读失败', error),
+    )
+  }
+
+  /**
+   * 实时事件（`features/chat/realtime`）的落地。除 `presence.changed` 按用户推送外，
+   * 其余事件覆盖「我参与的全部会话」，本页只消费当前打开的这一条 —— 其它会话的
+   * 红点仍由 `features/chat/unread.ts` 的端点快照驱动，不在本页职责内（要做
+   * 「挂着会话页时别的会话亮红点」得先给未读 store 加事件源，另起一批）。
+   *
+   * 各事件复用发送/轮询路径已经锁过的合并语义（都有用例）：
+   * - `message.new` / `media.new` → `mergePushedMessage` / `mergePushedMedia`：
+   *   按 id 去重 + `(createdAt, id)` 定序。服务端「先落库、再推送、再回 HTTP」，
+   *   推送与自己发送的 HTTP 响应会赛跑，谁先到都只落一次；对方发来的还要补一次
+   *   已读上报（`markIncomingRead`）；
+   * - `conversation.read` → `applyReadEvent`：只推进对方的读位（`readerId` 是自己
+   *   的那次是本人在另一台设备的读回声，不碰本页的「已读」标签）；
+   * - `presence.changed` → `applyPresenceEvent`：只写命中对方的那次（其余字段不动，
+   *   推送里也没有整份详情可写）。下线仍由详情轮询按 TTL 过期，见上；
+   * - `message.recalled` → `applyRecalled` + `applyMediaRecalled`：与 `doRecall` 的
+   *   成功落地同一形态，幂等 —— 自己撤回时本地已先落碑，服务端的权威 `recalledAt`
+   *   再落一次无害；正在引用的那条被撤回时收起引用栏（与 `doRecall` 同一步）。
+   *   两条流都要落：撤回端点对 TEXT / MEDIA 没有类型过滤。
+   */
+  const realtimeEventRef = useRef<(event: ChatRealtimeEvent) => void>(() => {})
+  realtimeEventRef.current = (event) => {
+    // pong 在客户端内部就被心跳消费掉（`handleMessage`），这里到不了；
+    // 类型层也要先排除它 —— 它没有 `conversationId`，不过闸没法比。
+    if (event.type === 'pong') return
+    // presence.changed 是**按用户**推的（没有会话 id）：命中对方就写，别的用户上线不关本页事
+    if (event.type === 'presence.changed') {
+      setConversation((prev) =>
+        prev === null ? prev : applyPresenceEvent(prev, event.userId, event.presence),
+      )
+      return
+    }
+    // 其余四类都带会话 id：推送覆盖「我参与的全部会话」，本页只消费当前打开的这一条
+    if (event.conversationId !== conversationId) return
+    switch (event.type) {
+      case 'message.new':
+        setMessages((prev) => mergePushedMessage(prev, event.message))
+        markIncomingRead(event.message.senderId)
+        break
+      case 'media.new':
+        setMedia((prev) => mergePushedMedia(prev, event.media))
+        markIncomingRead(event.media.senderId)
+        break
+      case 'conversation.read':
+        if (event.readerId === userIdRef.current) break
+        setConversation((prev) => (prev === null ? prev : applyReadEvent(prev, event.readAt)))
+        break
+      case 'message.recalled':
+        setMessages((prev) => applyRecalled(prev, event.messageId, event.recalledAt))
+        // 媒体走独立一条流：撤回端点对 TEXT / MEDIA 没有类型过滤，图片 / 语音的撤回碑
+        // 必须同时落到 `media`（否则气泡纹丝不动，刷新也修不回来 —— 见 view 的说明）
+        setMedia((prev) => applyMediaRecalled(prev, event.messageId, event.recalledAt))
+        setReplyTarget((prev) => (prev?.id === event.messageId ? null : prev))
+        break
+    }
+  }
+
+  /**
+   * 连接建立（含断线重连后的每一次）的补刷。推送**不保证不漏**（契约冻结语义），
+   * 断线窗口里落库的消息必须用历史端点补回来，否则 WS 恢复后用户盯着屏幕、
+   * 断线期间的来话永远不会出现（20s 详情轮询只补读位与在线态，不刷消息流）。
+   *
+   * 走 silent：不闪骨架、失败不降级。两道闸：
+   * - 首屏还在 `loading` 时不补 —— 补刷会 bump epoch，把在飞的首屏 load 判过期；
+   *   补刷自己是 silent（失败不降级），首屏会卡在「正在加载」没有重试钮。这个窗口
+   *   由首屏自己的响应收口；真正要补的缺口（断线重连）发生在 ok 之后。
+   * - 有在途发送（含媒体上传）时**只记账不补** —— 与 `useDidShow` 的延后刷新
+   *   同一纪律，由落定后的 finally 补（`DeferredReload` 状态机）。
+   */
+  const realtimeOpenRef = useRef<() => void>(() => {})
+  realtimeOpenRef.current = () => {
+    if (convStateRef.current === 'loading') return
+    const sending =
+      pendingRef.current.some((item) => item.status === 'sending') ||
+      pendingMediaRef.current.some((item) => item.status === 'uploading')
+    if (sending) {
+      deferredRef.current = deferReload(deferredRef.current)
+      return
+    }
+    loadRef.current({ silent: true })
+  }
+
+  /**
+   * 连接生命周期：页面实例挂载期间保持**一条** `/ws/chat`（不是每个会话一条），
+   * 随登录态 / 账号重建 —— cookie 在建链那一刻重读，换号后旧连接必须让位
+   * （服务端按会话推「该账号参与的全部会话」，旧连接推的是 A 的消息流）。
+   *
+   * 事件分发有一道**身份闸**：建链那一刻记下属主账号，分发时账号已变（换号清场
+   * 把 state 清空、effect 清理还没跑到的窗口）就丢弃 —— 不然 A 的推送会落进
+   * B 刚清空的会话里。`onOpen` 的补刷同样要过闸：那是拿 A 的会话 cookie 在发请求。
+   *
+   * 静默失败是刻意的：后端不在 / 未登录被 401 拒绝时，客户端指数退避重连、
+   * 不弹提示 —— 页面退回「没有实时」的既有形态（详情轮询兜底），与 web-pc 同口径。
+   */
+  useEffect(() => {
+    if (authStatus !== 'authed' || userId === null || !conversationId) return undefined
+    const owner = userId
+    const client = new ChatRealtime({
+      onEvent: (event) => {
+        if (userIdRef.current !== owner) return
+        realtimeEventRef.current(event)
+      },
+      onOpen: () => {
+        if (userIdRef.current !== owner) return
+        realtimeOpenRef.current()
+      },
+    })
+    client.start()
+    return () => client.stop()
+  }, [authStatus, userId, conversationId])
 
   /**
    * 「加载更早的消息 / 媒体」：契约的 `before` / `cursor` 游标原样回传，拼接在已有数据之前。
@@ -1505,8 +1661,8 @@ export default function Conversation() {
 
   /**
    * 撤回一条自己发的消息。成功后**本地同步翻成撤回碑**（不等下一次刷新）：服务端随后
-   * 也会推 `message.recalled`，但实时客户端还没接（在未合入的 #213→#220 链上），
-   * 所以这里以 HTTP 204 为准落地，保证「点了就变」。
+   * 推的 `message.recalled` 会再落一次（幂等），但推送是「尽力而为」，这里以 HTTP 204
+   * 为准落地，保证「点了就变」。
    *
    * ⚠️ 这里**不设 epoch 守卫**（与 `doSend` 不同）。撤回的在途期最长 15s，期间任何一次
    * `load()` 都会 `epoch + 1`（从子页返回、或上一次发送落定后的补刷新），若按 epoch 判过期：
@@ -1993,6 +2149,30 @@ export default function Conversation() {
                 if (entry.kind === 'media') {
                   const item = entry.media
                   const mine = item.senderId === me?.id
+                  /**
+                   * 撤回碑（#359 3c 审查回合二的媒体侧补齐）：服务端撤回后下发的媒体 DTO
+                   * `url` 为空、尺寸/时长全 null（`media-service.ts` 的 `dto`），照常渲染会
+                   * 画出一张永远转圈的空图 / 时长兜底成 `1″` 的语音气泡。
+                   */
+                  if (item.recalledAt !== null) {
+                    return (
+                      <View
+                        key={entry.keyId}
+                        id={`e-${entry.keyId}`}
+                        className={`conv__row${mine ? ' is-mine' : ''}`}
+                      >
+                        {renderAvatar(mine)}
+                        <View className="conv__col">
+                          <View className="conv__recalled">
+                            <Text className="conv__recalled-tx">
+                              {mine ? '你撤回了一条消息' : '对方撤回了一条消息'}
+                            </Text>
+                          </View>
+                          <Text className="conv__time num">{clockTime(item.createdAt)}</Text>
+                        </View>
+                      </View>
+                    )
+                  }
                   // 图片必须用本地临时文件渲染：契约里的 url 是 Web 形态（带 /api 前缀），
                   // 小程序没有同源代理、<Image> 也带不了 Cookie（见 media-api.ts）
                   const local = item.kind === 'IMAGE' ? localPaths.get(item.mediaId) : undefined
