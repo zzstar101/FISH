@@ -31,7 +31,6 @@ import {
   meetupCodeOf,
   rotateMeetupCode,
   SETTINGS,
-  THEME_OPTIONS,
   TRANSACTION_BY_ID,
   TRANSACTIONS,
   transactionsOf,
@@ -505,7 +504,6 @@ export function settings(): MockSettings {
   return SETTINGS
 }
 
-export const themeOptions = THEME_OPTIONS
 export { APP_BUILD, APP_VERSION }
 
 export const allUsers: MockUser[] = USERS

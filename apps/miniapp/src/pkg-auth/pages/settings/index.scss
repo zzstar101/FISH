@@ -169,61 +169,6 @@
   border-radius: 2px;
   transform: rotate(45deg);
   transition: transform 0.18s ease;
-
-  &.is-open {
-    transform: rotate(135deg);
-  }
-}
-
-/* ---- 主题模式展开区 ---- */
-
-.st__opts {
-  border-top: 2px solid var(--accent-faint);
-}
-
-.st__opt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  min-height: 116px;
-  padding: 0 28px;
-
-  &:active {
-    background: var(--accent-weak);
-  }
-
-  &.is-on .st__rlabel {
-    color: var(--brand-deep);
-  }
-}
-
-.st__opt-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.st__odesc {
-  font-size: 22px;
-  color: var(--muted-2);
-}
-
-.st__radio {
-  flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: 4px solid var(--border);
-  box-sizing: border-box;
-
-  &.is-on {
-    border-color: var(--brand);
-    background: var(--brand);
-    box-shadow: inset 0 0 0 7px var(--surface);
-  }
 }
 
 /* ---- 开关 ---- */
