@@ -55,6 +55,16 @@ export type PrivateScope = {
   faved: boolean
   /** 「立即购买」已确认（「待店家确认」终态）：请求是当前账号发出的 */
   buyRequested: boolean
+  /** 「立即购买」确认弹层是否开着（买家视角；对齐 PC buy-dialog 的内容） */
+  buyOpen: boolean
+  /** 弹层金额输入框内容：默认带挂价、可改；免费送锁 `'0'` */
+  buyAmount: string
+  /** 弹层金额字段的本地校验错误文案 */
+  buyAmountError: string | null
+  /** 弹层提交失败的展示文案（弹层内展示，不用 toast） */
+  buySubmitError: string | null
+  /** 弹层提交在飞（确认钮转「正在发起…」，弹层不许关） */
+  buyBusy: boolean
   /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」的操作面板） */
   offlineConfirmOpen: boolean
   /** 下架确认卡按钮的三态：「确认下架 / 下架中 / 重试」（同我的发布页的 submit） */
@@ -77,6 +87,11 @@ export function clearedPrivateScope(): PrivateScope {
     replyTo: null,
     faved: false,
     buyRequested: false,
+    buyOpen: false,
+    buyAmount: '',
+    buyAmountError: null,
+    buySubmitError: null,
+    buyBusy: false,
     offlineConfirmOpen: false,
     offlineSubmit: 'idle',
   }

@@ -192,7 +192,7 @@ test('人工决策同事务写 MODERATION 通知（任务一 #89）：放行 APP
  * 历史行区分开 —— 这条断言在补写 provider 之前会失败（那时恒为 NULL）。
  */
 test('人工改判落库带 provider=MANUAL，且不伪造 provider 的 label/score', async () => {
-  await withReviewListing(async ({ listingId, recordId }) => {
+  await withReviewListing(async ({ listingId: _listingId, recordId }) => {
     const store = createSqlModerationStore(db)
 
     const result = await db.transaction((tx) =>

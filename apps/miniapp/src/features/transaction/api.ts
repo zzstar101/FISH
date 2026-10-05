@@ -34,7 +34,7 @@ import {
   transactionDtoSchema,
   transactionListResponseSchema,
 } from '@fish/contracts/transactions/schema'
-import { apiRequest } from '@/lib/request'
+import { apiRequest, isApiError } from '@/lib/request'
 
 /** 列表单页上限。契约 `transactionListQuerySchema.limit` 的上限是 50，超了被 422 拒掉。 */
 const PAGE_SIZE = 50
@@ -229,4 +229,56 @@ export async function createTransactionReview(
 export async function deleteMyTransactionReview(id: string): Promise<number> {
   const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id), { method: 'DELETE' })
   return TransactionReviewDeleteResponseSchema.parse(payload).deleted
+}
+
+/*
+ * ---- 买家发起提案（详情页「立即购买」确认弹层用；与上面卖家半边同一对端点） ----
+ *
+ * `POST /transactions/proposals` 往会话写一条 `tx.proposal` SYSTEM 消息，响应体就是那条
+ * 消息（与 `rejectProposal` 同形状）。商品在提案阶段仍是 `ACTIVE` —— 提案**不是商品状态**：
+ * 只有卖家接受（`acceptTransaction`）才创建交易行并把商品置 `RESERVED`。
+ *
+ * `amountCents` 是买家在弹层里填的成交价（默认带挂价、可改）；提案不落库、服务端无处可读，
+ * 卖家接受时以**卖家重传的值**为准（契约 `transactionAcceptInputSchema` 注释同源）。
+ * 服务端允许重复提案（不会为同一会话产生两笔有效交易，只是会话里多一条提案）；
+ * 小程序详情页的 `buyRequested` 只是**本页内存标记**（不落库），重进页面即复位、
+ * 可再次发起——所以确认一次后进「待店家确认」终态只是**页面跳转后的自然结果**，
+ * 不是服务端限制，也不是「重复提案暂无入口」（PC 站的入口同样不受限）。
+ */
+
+/** 买家发起交易确认（`POST /transactions/proposals`）。 */
+export async function proposeTransaction(
+  conversationId: string,
+  amountCents: number,
+): Promise<MessageDto> {
+  const payload = await apiRequest(TRANSACTION_ROUTES.proposals, {
+    method: 'POST',
+    body: { conversationId, amountCents },
+  })
+  return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 发起交易确认失败的展示文案（口径与 PC 站 `describeProposeFailure` 一致）。
+ *
+ * `LISTING_NOT_ACTIVE` 标 `refresh: true`：商品被他人拍下或已下架是**状态漂移**，
+ * 页面必须重新取详情，而不是把过期页面留在原地。
+ */
+export function describeProposeFailure(error: unknown): { message: string; refresh: boolean } {
+  if (isApiError(error)) {
+    if (error.code === 'LISTING_NOT_ACTIVE') {
+      return { message: '商品已不在售，可能已被他人拍下', refresh: true }
+    }
+    if (error.code === 'NOT_CONVERSATION_BUYER') {
+      return { message: '只有买家可以发起交易确认', refresh: false }
+    }
+    if (error.code === 'CONVERSATION_NOT_FOUND') {
+      return { message: '会话不存在或不可访问', refresh: false }
+    }
+    if (error.code === 'VALIDATION_FAILED') {
+      return { message: '金额不合法，请核对后重试', refresh: false }
+    }
+    return { message: error.message, refresh: false }
+  }
+  return { message: '发起交易确认失败，请重试', refresh: false }
 }
