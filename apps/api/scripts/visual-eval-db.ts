@@ -688,12 +688,18 @@ try {
     '同字节查询全部命中目标商品（stub 与 live 都成立：同字节 ⇒ 同向量 ⇒ 距离 0）',
     positive.map((run) => ({ label: run.label, hit: run.hit, items: run.itemCount })),
   )
-  // 下限（#406 第 6 项）之后无关图**可以**返回空结果：旧断言里的 `itemCount > 0` 会把
-  // "下限生效"变成结构性不可观测（这条腿的 empty-result rate 于是永远恒 0）。
-  // 只保留"符合预期"这一条：空结果 = 没把任何低分候选塞给用户，同样满足"目标不是第 1 名"。
+  // 无关图查询的"符合预期"判据**按 transport 分开**（#406 第 6 项）。两种口径都不能证明
+  // 下限生效（那件事只能靠 live 语料重标，见本文件末尾），但必须各按各的事实判：
+  // - stub：查询图与库内封面的余弦**恰好 0**（向量由字节决定）⇒ 相似度恰好 = 下限 0.5 ⇒
+  //   判据 `>=` 取等号 ⇒ 一条都不剔 ⇒ 无关查询**必定非空**。所以这里保留严格的 `itemCount > 0`：
+  //   放宽成 `hit` 会把"召回真的把候选剔空了"这类回归静默放过。
+  // - live：余弦通常为正，空结果只在"两路都没有共同方向"时出现，是合法结局；
+  //   这里允许空，否则一次合法剔空会被报成"名次回归"（与下面 stub 名次断言同一取舍）。
   assert(
-    unrelated.every((run) => run.hit && !run.failed),
-    '无关图片查询：目标**不是第 1 名**（空结果也算符合——理由见 runQuery 的注释）',
+    unrelated.every((run) => run.hit && !run.failed && (transport === 'live' || run.itemCount > 0)),
+    transport === 'stub'
+      ? 'stub：无关图片查询返回非空（stub 下余弦恰 0 ⇒ 相似度恰等于下限、取等号保留）且目标**不是第 1 名**'
+      : 'live：无关图片查询目标**不是第 1 名**（空结果也算符合——理由见 runQuery 的注释）',
     unrelated.map((run) => ({
       label: run.label,
       items: run.itemCount,
@@ -750,16 +756,9 @@ try {
       positive.map((run) => ({ label: run.label, top: topInternalIdOf(run), target: target.id })),
     )
     assert(
-      unrelated.every(
-        (run) =>
-          run.hit &&
-          !run.failed &&
-          // 下限（#406 第 6 项）之后"无关查询返回空"是**合法结果**（下限把候选全剔了）。
-          // 这里只要求"要么空、要么第 1 名是 decoy"：把空结果判成"名次回归"会让同一次运行
-          // 以 exit 1 结束、把两件不相干的事混进同一份报告。
-          (topInternalIdOf(run) === null || topInternalIdOf(run) === decoy.id),
-      ),
-      'stub：无关查询要么返回空（下限剔掉了全部候选），要么第 1 名 = 更新的在售干扰项（target 30 天前、decoy 1 天前，视觉分都是 0）',
+      unrelated.every((run) => run.hit && !run.failed && topInternalIdOf(run) === decoy.id),
+      'stub：无关查询第 1 名 = 更新的在售干扰项（target 30 天前、decoy 1 天前，视觉分都是 0）。' +
+        'stub 下余弦恰 0 ⇒ 相似度恰等于下限、`>=` 取等号保留 ⇒ 这里不会出现空结果，与上面那条 `itemCount > 0` 同源',
       unrelated.map((run) => ({ label: run.label, top: topInternalIdOf(run), decoy: decoy.id })),
     )
     assert(topInternalIdOf(visibilityRun) === target.id, 'stub：可见性查询的第 1 名 = 目标商品', {
@@ -838,8 +837,10 @@ try {
       `live 传输下无关图的余弦通常为正（相似度落在 0.6~0.8），同样过线——` +
       `下限真正的作用面是"两路都没有共同方向"（余弦 ≤ 0）的召回，那在真实语料上罕见，` +
       `所以下限够不够严必须用 live 语料重标（契约注释已写明这个前提）。` +
-      `这条腿负责的是结构、可见性、错误码与延迟；无关查询的断言已不再要求"必须非空"，` +
-      `因此下限若真的剔空，这个数会如实变成非 0。`,
+      `这条腿负责的是结构、可见性、错误码与延迟；无关查询的"符合预期"断言**按 transport 分开**：` +
+      `stub 下仍要求非空（所以这个 0 不是"放宽断言"换来的），live 下允许空、下限若真的剔空这个数会如实变成非 0。` +
+      `⇒ 无论哪种传输都**不能拿这个数证明下限生效**：这里落地的是机制（0.5 恰是余弦正交点），` +
+      `效果待 live 语料复核。`,
   )
   console.log(
     `- 被拒的 ${rejected.length} 条是**非图片字节**（422 VISUAL_SEARCH_IMAGE_INVALID）：` +
