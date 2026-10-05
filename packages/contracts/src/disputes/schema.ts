@@ -114,12 +114,14 @@ export type DisputeTransactionSummary = z.infer<typeof DisputeTransactionSummary
  *   `confirm` 对同一键幂等（重复确认返回既有行）。唯一键**不足以**保证字节不变 ——
  *   预签名 PUT 在有效期内仍可对同一 key 二次 PUT，所以 `confirm` 把确认时刻实读字节的
  *   sha256 写进 `content_digest`，读代理下发前重算比对，不一致即 404；
+ * - **写入方只有发起人**（plan §3/§4 冻结）：被诉方能看全部材料与结论，但不能补材料 ——
+ *   否则被诉方可以占用双方共享的 6 张额度；
  * - 对象写入的删除点只有 `confirm` 的失败回滚（校验失败或插行失败即删对象，不留无台账
- *   引用的孤儿字节；幂等命中既有行时不删）。本单不新增后台 GC：仓库现有四个私有前缀
- *   （`listing-media/`、`listing-review-media/`、`chat-media*`、`visual-search/` 的前缀）
- *   同样没有 GC，唯一例外是 `visual_query_images` 的到期清理。presign 后 PUT 但从不
- *   confirm 的键仍会残留（S3 预签名不支持 `content-length-range`），由运营侧按前缀清理，
- *   不引入本单之外的新机制。
+ *   引用的孤儿字节；幂等命中既有行时不删）。另外 `presign` 会数一次
+ *   `dispute-media/{dsp_}/{usr_}/` 前缀下的对象数，达到 6 就拒发上传地址 —— 所以
+ *   「只 presign + PUT、从不 confirm」也写不进第 7 个对象：配额是**存储侧**的，
+ *   不只数台账行。本单不新增后台 GC（仓库现有四个私有前缀同样没有 GC，唯一例外是
+ *   `visual_query_images` 的到期清理），残留对象由运营侧按前缀清理。
  */
 export const DisputeAttachmentSchema = z.object({
   id: MediaIdSchema,
@@ -319,7 +321,12 @@ export const AdminDisputeDetailSchema = z.object({
   item: AdminDisputeItemSchema,
   attachments: z.array(DisputeAttachmentSchema),
   evidence: z.array(DisputeEvidenceSchema),
-  /** 同一交易上的其他争议（含其他方向），只给主体不含附件。 */
+  /**
+   * 同一交易上的其他**未决**争议（含反方向），只给主体、不含附件，封顶 20 条。
+   *
+   * 已处理的同交易争议不进这里（与举报的 `listRelatedPending` 同一口径）；同交易争议
+   * 总数看 `item.disputeCount`，那个是全量计数，不受这里的 20 条上限影响。
+   */
   related: z.array(DisputeSchema),
 })
 export type AdminDisputeDetail = z.infer<typeof AdminDisputeDetailSchema>

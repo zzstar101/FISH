@@ -221,17 +221,22 @@ export interface DisputeStore {
   countAttachments(disputeId: string): Promise<number>
   listAttachments(disputeId: string): Promise<DisputeAttachmentRow[]>
   /**
-   * 插入附件行，数量上限在**同一事务内**判定。
+   * 插入附件行。数量上限与「争议仍是 PENDING」都在**同一事务的行锁内**判定。
    *
    * 先按 `object_key` 查既有行（重复确认必须仍然幂等，哪怕已到上限），再
-   * `SELECT … FROM disputes WHERE id = $1 FOR UPDATE` 锁住争议行，在锁内计数后插入。
-   * 不用「先 count 再 insert」也不用 `INSERT … SELECT … WHERE (SELECT count(*)) < n`：
-   * READ COMMITTED 下两条并发语句都可能看到 n-1 行，只有行锁能把它变成真上限（审查 P2-4）。
+   * `SELECT status FROM disputes WHERE id = $1 FOR UPDATE` 锁住争议行：
+   * - 锁内校验状态，否则「service 读到 PENDING → 等到 S3 读完字节时已被 resolve/withdraw」
+   *   会把附件写进终态争议（审查 P1-1）；
+   * - 锁内计数，不用「先 count 再 insert」，也不用 `INSERT … SELECT … WHERE (SELECT count(*)) < n`
+   *   —— READ COMMITTED 下两条并发语句都可能看到 n-1 行，只有行锁能把它变成真上限（审查 P2-4）。
    */
   insertAttachment(
     input: InsertAttachmentInput,
     limit: number,
-  ): Promise<{ kind: 'created' | 'duplicate' | 'limit'; attachmentId: string | null }>
+  ): Promise<{
+    kind: 'created' | 'duplicate' | 'limit' | 'not-found' | 'not-pending'
+    attachmentId: string | null
+  }>
   /** 从对象键反查附件（确认接口的幂等快速路径）。 */
   findAttachmentByObjectKey(objectKey: string): Promise<DisputeAttachmentRow | null>
   /** 从对象键解析出的 id 反查附件（同一张图重复确认时命中唯一键）。 */
@@ -251,11 +256,16 @@ export interface DisputeStore {
   findEvidenceCandidate(disputeId: string, messageId: string): Promise<EvidenceCandidateRow | null>
   /** 已建立的关联行（幂等重读用）。 */
   findEvidenceRow(disputeId: string, messageId: string): Promise<DisputeEvidenceRow | null>
-  insertEvidence(input: {
-    disputeId: string
-    messageId: string
-    addedBy: string
-  }): Promise<{ kind: 'created' | 'duplicate'; evidenceId: string }>
+  /**
+   * 写入关联行，与 `insertAttachment` 同样在行锁内校验争议状态。
+   *
+   * 证据落库前要先读消息、校验会话归属，中间同样有窗口；终态争议不能再加材料（审查 P1-1）。
+   * 重复关联靠 `(dispute_id, message_id)` 唯一键幂等。
+   */
+  insertEvidence(input: { disputeId: string; messageId: string; addedBy: string }): Promise<{
+    kind: 'created' | 'duplicate' | 'not-found' | 'not-pending'
+    evidenceId: string | null
+  }>
 
   /** 发起人撤回：条件更新，只有仍 PENDING 且发起人本人的行会被写。 */
   withdrawDispute(input: {
@@ -606,13 +616,20 @@ export function createSqlDisputeStore(
         if (existing) {
           return { kind: 'duplicate' as const, attachmentId: attachmentFromRow(existing).id }
         }
-        // 把争议行锁住，同一争议上的并发确认就被串行化；计数在锁内做，所以上限是真的上限
-        // （只靠 `INSERT … SELECT … WHERE (SELECT count(*)) < n` 在 READ COMMITTED 下
-        // 两个并发语句仍可能同时看到 n-1 行）。
-        const locked = await tx.execute(
-          sql`SELECT id FROM disputes WHERE id = ${input.disputeId} FOR UPDATE`,
-        )
-        if (!rowsOf(locked)[0]) return { kind: 'limit' as const, attachmentId: null }
+        // 把争议行锁住：同一争议上的并发确认被串行化，状态校验与计数都在锁内做 ——
+        // 计数靠行锁才是真上限（只靠 `INSERT … SELECT … WHERE (SELECT count(*)) < n` 在
+        // READ COMMITTED 下两个并发语句仍可能同时看到 n-1 行）。
+        const locked = rowsOf(
+          await tx.execute(
+            sql`SELECT status::text AS status FROM disputes WHERE id = ${input.disputeId} FOR UPDATE`,
+          ),
+        )[0]
+        if (!locked) return { kind: 'not-found' as const, attachmentId: null }
+        // service 里的 `requirePending` 读的是请求开始时的快照，读完字节可能已经过去几百毫秒，
+        // 期间管理员 resolve / 发起人 withdraw 都可能发生。终态争议不能再加材料，只能在这里拦。
+        if (String(locked.status) !== 'PENDING') {
+          return { kind: 'not-pending' as const, attachmentId: null }
+        }
         const counted = rowsOf(
           await tx.execute(
             sql`SELECT count(*)::int AS count FROM dispute_attachments WHERE dispute_id = ${input.disputeId}`,
@@ -706,6 +723,9 @@ export function createSqlDisputeStore(
         WHERE m.id = ${messageId}
           AND c.listing_id = t.listing_id
           AND c.buyer_id = t.buyer_id
+          -- plan §4 第 4 条：只有买卖双方或 SYSTEM 的消息能升格为证据。当前会话层已经限制了
+          -- 发送者（只有双方能发、SYSTEM 由服务端写），这里是纵深防御。
+          AND (m.sender_id IN (t.buyer_id, t.seller_id) OR m.sender_id IS NULL)
       `)
       const row = rowsOf(result)[0]
       if (!row) return null
@@ -738,17 +758,35 @@ export function createSqlDisputeStore(
     },
 
     async insertEvidence(input) {
-      const inserted = await db.execute(sql`
-        INSERT INTO dispute_evidence_messages (id, dispute_id, message_id, added_by)
-        VALUES (${newId()}, ${input.disputeId}, ${input.messageId}, ${input.addedBy})
-        ON CONFLICT (dispute_id, message_id) DO NOTHING
-        RETURNING id
-      `)
-      const row = rowsOf(inserted)[0]
-      if (row) return { kind: 'created' as const, evidenceId: String(row.id) }
-      const existing = await this.findEvidenceRow(input.disputeId, input.messageId)
-      if (!existing) throw new Error('证据重复但未找到既有行（唯一索引异常）')
-      return { kind: 'duplicate' as const, evidenceId: existing.id }
+      return await db.transaction(async (tx) => {
+        // 与附件同理：service 的 PENDING 判断是请求开始时的快照，读完消息、校验完会话归属之后
+        // 争议可能已被处理。终态争议不能再加材料，只能在行锁内拦（审查 P1-1）。
+        const locked = rowsOf(
+          await tx.execute(
+            sql`SELECT status::text AS status FROM disputes WHERE id = ${input.disputeId} FOR UPDATE`,
+          ),
+        )[0]
+        if (!locked) return { kind: 'not-found' as const, evidenceId: null }
+        if (String(locked.status) !== 'PENDING') {
+          return { kind: 'not-pending' as const, evidenceId: null }
+        }
+        const inserted = await tx.execute(sql`
+          INSERT INTO dispute_evidence_messages (id, dispute_id, message_id, added_by)
+          VALUES (${newId()}, ${input.disputeId}, ${input.messageId}, ${input.addedBy})
+          ON CONFLICT (dispute_id, message_id) DO NOTHING
+          RETURNING id
+        `)
+        const row = rowsOf(inserted)[0]
+        if (row) return { kind: 'created' as const, evidenceId: String(row.id) }
+        const existing = rowsOf(
+          await tx.execute(sql`
+            SELECT id FROM dispute_evidence_messages
+            WHERE dispute_id = ${input.disputeId} AND message_id = ${input.messageId}
+          `),
+        )[0]
+        if (!existing) throw new Error('证据重复但未找到既有行（唯一索引异常）')
+        return { kind: 'duplicate' as const, evidenceId: String(existing.id) }
+      })
     },
 
     async withdrawDispute(input) {

@@ -83,6 +83,18 @@ export interface MediaStorage {
   delete?(key: string): Promise<void>
 
   /**
+   * 统计某个**有界前缀**下的对象数（#465 新增，可选）。
+   *
+   * 争议附件的「每争议 ≤ 6 张」必须是**存储侧**配额：只数台账行挡不住「反复 presign + PUT、
+   * 从不 confirm」的路径 —— 那条路径不产生行，额度永远用不完，私有前缀可被单个账号无限填充
+   * （审查 P2-2）。所以签发上传地址前要数一次对象。
+   *
+   * 返回 `null` 表示**无法判定**（前缀形状不合法、列表失败、实现不支持）。这是成本配额而不是
+   * 安全边界（安全边界是私有前缀 + 授权读），列表失败不该让上传整体不可用，调用方据此放行。
+   */
+  countObjects?(prefix: string): Promise<number | null>
+
+  /**
    * 读响应里的客户端读取地址。
    *
    * - `listings/*`（公开固化）与 seed 插图 → 直链，与匿名读策略一致；
@@ -109,6 +121,14 @@ export type MediaIntegrity = { contentDigest: string }
 
 /** 契约 §2.7 冻结：前缀必须由服务端生成，且带上 userId 才能校验归属。 */
 export const DEFAULT_PRESIGN_EXPIRES_SECONDS = 600
+
+/**
+ * `countObjects` 一次最多数多少个键。
+ *
+ * 配额判断只关心「是否已到上限」（争议附件是 6 张），不需要精确总数，所以有界探测即可；
+ * 返回的因此是真实对象数的**下界**（最多数到 100 个）。
+ */
+const OBJECT_COUNT_PROBE_MAX_KEYS = 100
 
 /** objectKey 的长度上限：服务端生成的键远短于此，超长只可能是伪造输入。 */
 const MAX_OBJECT_KEY_LENGTH = 256
@@ -282,6 +302,24 @@ export function createBunS3MediaStorage(options: {
       assertSafeObjectKey(key)
       // Bun.S3Client.delete 对不存在的对象不抛错（S3 DELETE 本身幂等）。
       await client.delete(key)
+    },
+
+    async countObjects(prefix) {
+      // `list` 的 prefix 走查询串（不像 key 那样会被 `new URL()` 归一化 `..`），但仍然过一遍
+      // 同一个形状白名单：只允许统计规范前缀，传进来任意字符串一律拒绝。
+      const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix
+      if (!isSafeObjectKey(normalized)) return null
+      try {
+        // maxKeys 只取到配额上限之上一点：这里只关心「是否已满」，不需要完整列举。
+        const listed = await client.list({
+          prefix: `${normalized}/`,
+          maxKeys: OBJECT_COUNT_PROBE_MAX_KEYS,
+        })
+        return listed.keyCount ?? listed.contents?.length ?? 0
+      } catch {
+        // 列表失败（权限 / 网络 / 桶不可用）当作"无法判定"，由调用方按成本配额放行。
+        return null
+      }
     },
 
     publicUrl(key, integrity) {

@@ -196,7 +196,7 @@ export const disputeEvidenceMessages = pgTable(
     messageId: uuid('message_id')
       .notNull()
       .references(() => messages.id, { onDelete: 'cascade' }),
-    /** 谁关联的（发起人或被诉方）。 */
+    /** 谁关联的（只有发起人能补材料，见 `apps/api/src/modules/disputes/service.ts` 的 `requireInitiator`）。 */
     addedBy: uuid('added_by')
       .notNull()
       .references(() => users.id),

@@ -329,7 +329,7 @@ describe('争议闭环（#465）', () => {
     }
   })
 
-  test('外人不可枚举也不可操作：非参与人发起 / 读取 / 撤回都是 404', async () => {
+  test('外人不可枚举也不可操作：非参与人发起一律 404（读取 / 撤回的 404 见下方用例）', async () => {
     const create = await app.request(
       DISPUTE_ROUTES.create,
       postAs(strangerCookie, {
@@ -487,11 +487,21 @@ describe('争议闭环（#465）', () => {
     // SYSTEM 消息（无发送者）也可以作为证据。
     const system = await app.request(
       DISPUTE_ROUTES.evidenceMessages(disputeId),
-      postAs(sellerCookie, {
+      postAs(buyerCookie, {
         messageId: encodePublicId(PUBLIC_ID_PREFIX.message, SYSTEM_MESSAGE_ID),
       }),
     )
     expect(system.status).toBe(201)
+
+    // 被诉方（卖家）不能补材料：与「争议不存在」同码同文案，不泄漏存在性（plan §4 冻结口径）。
+    const respondent = await app.request(
+      DISPUTE_ROUTES.evidenceMessages(disputeId),
+      postAs(sellerCookie, {
+        messageId: encodePublicId(PUBLIC_ID_PREFIX.message, SYSTEM_MESSAGE_ID),
+      }),
+    )
+    expect(respondent.status).toBe(404)
+    expect((await errorOf(respondent)).code).toBe('DISPUTE_NOT_FOUND')
 
     const detail = await app.request(DISPUTE_ROUTES.detail(disputeId), {
       headers: { cookie: buyerCookie },
@@ -527,13 +537,28 @@ describe('争议闭环（#465）', () => {
     expect(notUploaded.status).toBe(422)
     expect((await errorOf(notUploaded)).code).toBe('DISPUTE_ATTACHMENT_INVALID')
 
-    // 卖家把买家生成的键登记到同一争议：uploader 段不是自己 → 422。
+    // 发起人（买家）拿别人的键来登记：uploader 段不是自己 → 422。
+    // 被诉方走不到这一步 —— 它在 requireInitiator 就被拦成 404（下一段单独断言）。
+    const foreignKey = `dispute-media/${disputeId}/${encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
     const foreign = await app.request(
       DISPUTE_ROUTES.attachmentConfirm(disputeId),
-      postAs(sellerCookie, { objectKey }),
+      postAs(buyerCookie, { objectKey: foreignKey }),
     )
     expect(foreign.status).toBe(422)
     expect((await errorOf(foreign)).code).toBe('DISPUTE_ATTACHMENT_INVALID')
+
+    // 被诉方（卖家）连补材料的入口都没有：presign / confirm 一律 404，与「争议不存在」同码。
+    const sellerPresign = await app.request(
+      DISPUTE_ROUTES.attachmentPresign(disputeId),
+      postAs(sellerCookie, { contentType: 'image/png', sizeBytes: PNG.length }),
+    )
+    expect(sellerPresign.status).toBe(404)
+    const sellerConfirm = await app.request(
+      DISPUTE_ROUTES.attachmentConfirm(disputeId),
+      postAs(sellerCookie, { objectKey }),
+    )
+    expect(sellerConfirm.status).toBe(404)
+    expect((await errorOf(sellerConfirm)).code).toBe('DISPUTE_NOT_FOUND')
 
     // 键的争议段与路径不一致：**路径用真实争议**（否则先被 requireVisible 404 挡下，
     // 这条断言就测不到归属闸门），键换成另一个争议的 dsp_。断言文案而不是只断言状态码：
@@ -910,5 +935,67 @@ describe('争议闭环（#465）', () => {
     // 事务回滚：争议行不存在，被诉方也没有多出一条通知。
     expect(await sellerPendingOnOpen()).toHaveLength(0)
     expect(await disputeNotifications()).toBe(notificationsBefore)
+  })
+
+  /**
+   * P1-1 的行锁证明：状态校验必须在**拿到行锁之后**读，而不是复用请求开始时的快照。
+   *
+   * 真实窗口是「service 读到 PENDING → 读 S3 字节（几百毫秒）→ 落库」，期间管理员可能已经
+   * resolve。这里不制造并发，而是直接把争议推到终态再调 store：若 store 只看行是否存在
+   * （修复前的写法），终态争议照样能写进附件与证据。
+   */
+  test('P1-1：终态争议在行锁内被拦下 —— resolve 之后附件与证据都写不进去', async () => {
+    const store = createSqlDisputeStore(scratch)
+    const created = await store.insertDispute({
+      transactionId: TX_CLOSED_ID,
+      initiatorId: SELLER_ID,
+      respondentId: BUYER_ID,
+      type: 'NOT_COMPLETED',
+      detailText: null,
+    })
+    expect(created.kind).toBe('created')
+    const disputeId = created.disputeId
+    const uploader = encodePublicId(PUBLIC_ID_PREFIX.user, SELLER_ID)
+
+    const attachmentInput = () => {
+      const mediaId = newId()
+      return {
+        id: mediaId,
+        disputeId,
+        uploaderId: SELLER_ID,
+        objectKey: `dispute-media/${disputeId}/${uploader}/${encodePublicId(PUBLIC_ID_PREFIX.media, mediaId)}.png`,
+        mimeType: 'image/png',
+        sizeBytes: 10,
+        width: 20,
+        height: 16,
+        contentDigest: contentDigestOf(new TextEncoder().encode('lock-fixture')),
+      }
+    }
+
+    // PENDING 时写得进（否则下面的 not-pending 可能只是「行不存在」）。
+    expect((await store.insertAttachment(attachmentInput(), 6)).kind).toBe('created')
+    expect(
+      (await store.insertEvidence({ disputeId, messageId: MESSAGE_ID, addedBy: SELLER_ID })).kind,
+    ).toBe('created')
+
+    expect(
+      await store.resolveDispute({
+        disputeId,
+        actorUserId: ADMIN_ID,
+        resolution: 'DISMISSED',
+        reason: '行锁测试',
+      }),
+    ).toBe('applied')
+
+    // 终态之后：附件与证据都在锁内被拒。
+    expect((await store.insertAttachment(attachmentInput(), 6)).kind).toBe('not-pending')
+    expect(
+      (await store.insertEvidence({ disputeId, messageId: SYSTEM_MESSAGE_ID, addedBy: SELLER_ID }))
+        .kind,
+    ).toBe('not-pending')
+
+    // 落库行数确实没有增加：1 条附件、1 条证据。
+    expect(await store.countAttachments(disputeId)).toBe(1)
+    expect(await store.countEvidence(disputeId)).toBe(1)
   })
 })

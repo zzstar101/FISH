@@ -164,7 +164,7 @@ test('并发 enqueueMatchJob：两个插入者同时通过 NOT EXISTS 也只留�
   expect(await pendingIds(db, listingId)).toHaveLength(1)
 })
 
-// 这条要跑两遍完整 migrator（43 条迁移 × 2 个阶段），并行跑全仓时 5 s 的默认上限不够。
+// 这条要跑两遍完整 migrator（阶段一 42 条 + 阶段二全量 45 条），并行跑全仓时 5 s 的默认上限不够。
 test('旧库已有重复待跑行时：迁移先清理重复行再建索引，随后重复插入被拒', async () => {
   const legacyFolder = await buildPreGapMigrationsFolder()
   const legacyDatabase = `fish_match_enqueue_legacy_${process.pid}`

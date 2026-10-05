@@ -562,13 +562,13 @@ test('附件确认：幂等路径发现对象已被替换 → 422，绝不把换
 
 test('附件确认：键属本人但行归别人（撞键）→ 422（附件已被占用）', async () => {
   // 键的上传者段必须是**当前请求者**（否则更早的归属闸门就拦下了），
-  // 但台账行属于买家 —— 这条路径守的是 findAttachmentById 命中时的行级核对。
-  const objectKey = `dispute-media/dsp_01jc000000e00800000000000a/usr_01jc000000e00800000000000e/med_01jc000000e00800000000000f.png`
+  // 但台账行记的是别人 —— 这条路径守的是 findAttachmentById 命中时的行级核对。
+  const objectKey = `dispute-media/dsp_01jc000000e00800000000000a/usr_01jc000000e00800000000000d/med_01jc000000e00800000000000f.png`
   const store = makeStore({
     findAttachmentById: mock(async () => ({
       id: ATTACHMENT_ID,
       disputeId: DISPUTE_ID,
-      uploaderId: BUYER_ID,
+      uploaderId: SELLER_ID,
       objectKey,
       mimeType: 'image/png',
       sizeBytes: PNG.length,
@@ -576,12 +576,10 @@ test('附件确认：键属本人但行归别人（撞键）→ 422（附件已�
       height: 16,
       contentDigest: DIGEST,
       createdAt: new Date(NOW - 1000),
-      uploaderNickname: '买家',
+      uploaderNickname: '卖家',
     })),
   })
-  const error = await rejects(
-    service(store).confirmAttachment(SELLER_ID, DISPUTE_ID, { objectKey }),
-  )
+  const error = await rejects(service(store).confirmAttachment(BUYER_ID, DISPUTE_ID, { objectKey }))
   expect(error.code).toBe('DISPUTE_ATTACHMENT_INVALID')
   expect(error.message).toBe('附件已被占用')
 })
@@ -614,6 +612,111 @@ test('附件确认：上限由 store 在锁内判定（kind=limit）→ 422，�
   expect(error.code).toBe('DISPUTE_ATTACHMENT_LIMIT')
   expect(error.status).toBe(422)
   expect(deleted).toEqual([objectKey])
+})
+
+test('只有发起人能补材料：被诉方 presign / confirm / 关联证据都 404（不泄漏存在性）', async () => {
+  const store = makeStore()
+  const calls = [
+    () =>
+      service(store).presignAttachment(SELLER_ID, DISPUTE_ID, {
+        contentType: 'image/png',
+        sizeBytes: PNG.length,
+      }),
+    () =>
+      service(store).confirmAttachment(SELLER_ID, DISPUTE_ID, {
+        objectKey: `dispute-media/dsp_01jc000000e00800000000000a/usr_01jc000000e00800000000000e/med_01jc000000e00800000000000f.png`,
+      }),
+    () => service(store).addEvidence(SELLER_ID, DISPUTE_ID, { messageId: MESSAGE_ID }),
+  ]
+  for (const call of calls) {
+    const error = await rejects(call())
+    expect(error.code).toBe('DISPUTE_NOT_FOUND')
+    expect(error.status).toBe(404)
+  }
+  expect(store.insertAttachment).not.toHaveBeenCalled()
+  expect(store.insertEvidence).not.toHaveBeenCalled()
+})
+
+test('附件 presign：配额数的是**对象**，只 presign + PUT、从不 confirm 也写不进第 7 个', async () => {
+  // 台账行数为 0（从没 confirm 过），但前缀下已经堆了 6 个对象 → 仍然拒发上传地址。
+  const store = makeStore({ countAttachments: mock(async () => 0) })
+  const error = await rejects(
+    service(store, makeStorage({ countObjects: mock(async () => 6) })).presignAttachment(
+      BUYER_ID,
+      DISPUTE_ID,
+      { contentType: 'image/png', sizeBytes: PNG.length },
+    ),
+  )
+  expect(error.code).toBe('DISPUTE_ATTACHMENT_LIMIT')
+  expect(error.status).toBe(422)
+})
+
+test('附件 presign：配额无法判定（列表失败 / 实现不支持）时放行，不把上传整体打死', async () => {
+  const store = makeStore({ countAttachments: mock(async () => 0) })
+  const undecidable = await service(
+    store,
+    makeStorage({ countObjects: mock(async () => null) }),
+  ).presignAttachment(BUYER_ID, DISPUTE_ID, { contentType: 'image/png', sizeBytes: PNG.length })
+  expect(undecidable.objectKey.startsWith('dispute-media/')).toBe(true)
+
+  // makeStorage 默认不带 countObjects（等价于实现不支持该可选方法）。
+  const unsupported = await service(store).presignAttachment(BUYER_ID, DISPUTE_ID, {
+    contentType: 'image/png',
+    sizeBytes: PNG.length,
+  })
+  expect(unsupported.objectKey.startsWith('dispute-media/')).toBe(true)
+})
+
+test('附件确认：写入前在行锁内发现争议已终态 → 409，且不留孤儿对象', async () => {
+  // service 的 requirePending 读的是请求开始时的快照；读完字节可能已过去几百毫秒，
+  // 期间管理员 resolve / 发起人 withdraw 都可能发生。真正的拦截在 store 的行锁内。
+  const objectKey = `dispute-media/dsp_01jc000000e00800000000000a/usr_01jc000000e00800000000000d/med_01jc000000e00800000000000f.png`
+  const deleted: string[] = []
+  const store = makeStore({
+    insertAttachment: mock(async () => ({ kind: 'not-pending' as const, attachmentId: null })),
+  })
+  const error = await rejects(
+    service(
+      store,
+      makeStorage({
+        delete: mock(async (key: string) => {
+          deleted.push(key)
+        }),
+      }),
+    ).confirmAttachment(BUYER_ID, DISPUTE_ID, { objectKey }),
+  )
+  expect(error.code).toBe('DISPUTE_NOT_PENDING')
+  expect(error.status).toBe(409)
+  expect(deleted).toEqual([objectKey])
+})
+
+test('附件确认：行锁内发现争议不存在 → 404', async () => {
+  const objectKey = `dispute-media/dsp_01jc000000e00800000000000a/usr_01jc000000e00800000000000d/med_01jc000000e00800000000000f.png`
+  const store = makeStore({
+    insertAttachment: mock(async () => ({ kind: 'not-found' as const, attachmentId: null })),
+  })
+  const error = await rejects(service(store).confirmAttachment(BUYER_ID, DISPUTE_ID, { objectKey }))
+  expect(error.code).toBe('DISPUTE_NOT_FOUND')
+})
+
+test('证据：写入前在行锁内发现争议已终态 → 409', async () => {
+  const store = makeStore({
+    findEvidenceCandidate: mock(async () => ({
+      messageId: MESSAGE_ID,
+      messageType: 'TEXT',
+      messageSenderId: SELLER_ID,
+      messageSenderNickname: '卖家',
+      messageContent: '货我已经寄出了',
+      messageRecalledAt: null,
+      messageCreatedAt: new Date(NOW - 1000),
+    })),
+    insertEvidence: mock(async () => ({ kind: 'not-pending' as const, evidenceId: null })),
+  })
+  const error = await rejects(
+    service(store).addEvidence(BUYER_ID, DISPUTE_ID, { messageId: MESSAGE_ID }),
+  )
+  expect(error.code).toBe('DISPUTE_NOT_PENDING')
+  expect(error.status).toBe(409)
 })
 
 test('证据：只接受本交易会话里的消息，否则 404（不泄漏别的会话是否存在）', async () => {

@@ -37,6 +37,7 @@ import { probeImage } from '../messages/media-probe'
 import {
   contentDigestOf,
   disputeMediaObjectKey,
+  disputeMediaPrefix,
   parseDisputeMediaKey,
 } from '../uploads/dispute-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -271,15 +272,24 @@ export function createDisputeService(options: {
     return row
   }
 
+  function notPending(): never {
+    throw new DisputeServiceError('DISPUTE_NOT_PENDING', 409, '争议已处理或已撤回，不能再补充材料')
+  }
+
   /** 附件与证据只允许在未决阶段追加：结论出来之后材料不再变化，避免事后翻案。 */
   function requirePending(row: DisputeJoinedRow): void {
-    if (row.dispute.status !== 'PENDING') {
-      throw new DisputeServiceError(
-        'DISPUTE_NOT_PENDING',
-        409,
-        '争议已处理或已撤回，不能再补充材料',
-      )
-    }
+    if (row.dispute.status !== 'PENDING') notPending()
+  }
+
+  /**
+   * 只有**发起人**能往争议里补材料（plan §3 presign 行、§4 校验链第 1 条冻结）。
+   *
+   * 被诉方能看到全部材料与结论，但写入面收在发起人一侧：否则被诉方可以占用双方共享的
+   * 6 张附件额度，把针对自己的争议塞满（审查 P2-1）。非发起人返回与「不存在」同码的 404，
+   * 不泄漏争议存在性。
+   */
+  function requireInitiator(row: DisputeJoinedRow, viewerId: string): void {
+    if (row.dispute.initiatorId !== viewerId) notFound()
   }
 
   function toAdminItem(row: DisputeAdminRow): AdminDisputeItem {
@@ -379,10 +389,26 @@ export function createDisputeService(options: {
 
     async presignAttachment(viewerId, disputeId, input) {
       const row = await requireVisible(disputeId, viewerId)
+      requireInitiator(row, viewerId)
       requirePending(row)
 
+      // 已确认的附件数（台账行）。
       const count = await store.countAttachments(disputeId)
       if (count >= MAX_DISPUTE_ATTACHMENTS) attachmentLimit()
+
+      // 存储侧配额（审查 P2-2）：只数台账行挡不住「反复 presign + PUT、从不 confirm」——
+      // 那条路径不产生行，额度永远用不完，私有前缀可被单账号无限填充。预签名只签
+      // 「本人 + 本争议」这一段前缀，所以数这段前缀下的对象数，就能把单个发起人能写进去的
+      // 对象真正卡在 6 个以内。`countObjects` 返回 null 表示无法判定（列表失败/实现不支持），
+      // 这是成本配额而不是安全边界，因此放行。
+      const outstanding = await storage.countObjects?.(disputeMediaPrefix(disputeId, viewerId))
+      if (
+        outstanding !== null &&
+        outstanding !== undefined &&
+        outstanding >= MAX_DISPUTE_ATTACHMENTS
+      ) {
+        attachmentLimit()
+      }
 
       // 键由服务端生成：第三段就是附件行主键，确认时能反解，天然幂等；扩展名由 mime 推导，
       // 绝不由客户端给。归属（disputeId + uploaderId）也直接编码在键里。
@@ -399,6 +425,7 @@ export function createDisputeService(options: {
 
     async confirmAttachment(viewerId, disputeId, input) {
       const row = await requireVisible(disputeId, viewerId)
+      requireInitiator(row, viewerId)
 
       // 键归属校验：键里的争议与上传者都必须是"这一次请求的这两个人"。外人拿到别人的键
       // 也不能把它登记到另一个争议上（键里的 disputeId 与路径不一致 → 422）。
@@ -464,6 +491,10 @@ export function createDisputeService(options: {
         )
 
         if (inserted.kind === 'limit') throw attachmentLimit()
+        // 锁内才发现争议已终态：`requirePending(row)` 读的是请求开始时的快照，而读完字节
+        // 可能已经过去几百毫秒。与 `requirePending` 同码，但拦截点在写入之前（审查 P1-1）。
+        if (inserted.kind === 'not-pending') notPending()
+        if (inserted.kind === 'not-found') notFound()
 
         const stored = await store.findAttachmentById(inserted.attachmentId ?? '')
         if (!stored) {
@@ -485,6 +516,7 @@ export function createDisputeService(options: {
 
     async addEvidence(viewerId, disputeId, input) {
       const row = await requireVisible(disputeId, viewerId)
+      requireInitiator(row, viewerId)
       requirePending(row)
 
       // 候选校验：消息必须属于**本争议交易推导出的那段会话**（`conversations` 的
@@ -503,6 +535,9 @@ export function createDisputeService(options: {
         messageId: input.messageId,
         addedBy: viewerId,
       })
+      // 读消息、校验会话归属之间同样有窗口，状态在写入前于行锁内复核（审查 P1-1）。
+      if (inserted.kind === 'not-pending') notPending()
+      if (inserted.kind === 'not-found') notFound()
       const stored = await store.findEvidenceRow(disputeId, input.messageId)
       if (!stored) throw new Error('证据写入后无法读回')
       return { evidence: toEvidenceDto(stored), created: inserted.kind === 'created' }
