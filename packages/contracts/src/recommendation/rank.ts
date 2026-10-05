@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { INTEREST_ACTION_WEIGHTS } from './interest'
+import type { RecallChannel } from './recall'
 import type { RecommendationEventType } from './schema'
 
 /**
@@ -167,6 +168,65 @@ export const RANK_NEGATIVE_FEEDBACK_EVENT_TYPES = [
 export const RANK_HIDDEN_EVENT_TYPES = [
   'HIDE',
 ] as const satisfies readonly RecommendationEventType[]
+
+/**
+ * 触发**重复曝光冷却**的归因曝光次数（M6「同一个商品反复曝光但用户持续不点：降权；达到阈值后
+ * 短期冷却」）。
+ *
+ * 软惩罚（`repeatedExposure` 特征）与冷却是两件事，不是同一个旋钮的两个档位：
+ *
+ * - 软惩罚回答"还值不值得排在前面"，只减分，永远排得出去（2 次半饱和 ⇒ 5 次时惩罚已近 0.71）；
+ * - 冷却回答"这一轮要不要干脆别发了"，是**硬排除**，且**会自己结束**（见
+ *   `RANK_REPEATED_EXPOSURE_COOLDOWN_MS`）。
+ *
+ * 3 次的依据：`RANK_REPEATED_EXPOSURE_HALF_SATURATION = 2` 时，2 次曝光的软惩罚已到 0.5，
+ * 但"曝过 2 次没点"在翻页场景里很常见（用户翻过一屏、没细看），把它硬排除会误伤；到 3 次还
+ * 一次都没点开，才够得上"反复推给他、他持续不点"。
+ */
+export const RANK_REPEATED_EXPOSURE_COOLDOWN_THRESHOLD = 3
+
+/**
+ * 冷却时长：自**最后一次归因曝光**起算 24 小时（M6 的"短期"）。
+ *
+ * 为什么从最后一次曝光起算而不是从"第一次达到阈值"起算：用户每被推一次就续期一次，这样"一直
+ * 在被推"的商品才会一直在冷却里；一旦停了 24 小时，说明它已经不在用户视野里，放出来重新试一次
+ * 比继续压着更有信息量。
+ *
+ * 24 小时是"一个自然日"：校园二手的浏览节奏按天走，短于一天会让当天晚些时候的翻页又看到同一件
+ * 商品（用户感知就是"它怎么又来了"），长于一天则会把真正可能被点开的商品压太久。
+ */
+export const RANK_REPEATED_EXPOSURE_COOLDOWN_MS = 24 * 60 * 60 * 1_000
+
+/**
+ * 冷却的**解除条件**之一：用户在窗口内对这件商品有过这些行为里的任何一个，就不算"持续不点"，
+ * 不适用冷却（`DETAIL_VIEW` 及以上）。
+ *
+ * 与 `RANK_EVAL_RELEVANCE_GRADES` 里分级 ≥ 1 的集合一致（`rank.test.ts` 有一条用例钉住这个
+ * 不变式）："用户点过"这件事在线上冷却与离线评估里必须是同一个集合，否则会出现"离线算他点过、
+ * 线上算他没点"这种两边都说自己对的漂移。
+ *
+ * 刻意**不**包含 `QUICK_SKIP`：那是"划过"，不是"点过"。
+ */
+export const RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES = [
+  'DETAIL_VIEW',
+  'FAVORITE',
+  'CHAT_START',
+  'COMMENT',
+  'TRANSACTION_START',
+  'PURCHASE',
+] as const satisfies readonly RecommendationEventType[]
+
+/**
+ * 冷却的**豁免条件**：命中 `wish` 召回通道的候选不进冷却（M6「用户主动再次搜索 / Wish 命中时
+ * 允许重新进入」）。
+ *
+ * 愿望匹配是用户自己表达过的明确需求，比"算法觉得他可能想看"强得多；用冷却把它压掉，用户会看到
+ * "我明明想要这个，首页却从来不给我"。
+ *
+ * `satisfies RecallChannel`：通道改名（`RECALL_CHANNELS`）时这里必须跟着编译报错，不能留一个
+ * 永远匹配不上的字符串静默失效。
+ */
+export const RANK_COOLDOWN_EXEMPT_RECALL_SOURCE = 'wish' satisfies RecallChannel
 
 /**
  * 饱和变换：`value / (value + K)`，`value >= 0` 时值域 `[0, 1)`。
