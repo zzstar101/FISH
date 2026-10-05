@@ -85,6 +85,24 @@ export function reportHandleError(error: unknown): AdminActionOutcome {
   return { message: '网络异常，请稍后重试', conflict: false }
 }
 
+/** 处理争议的失败文案。重复处理 / 已被撤回 → 409（无幂等键，状态机拒绝）。 */
+export function disputeResolveError(error: unknown): AdminActionOutcome {
+  if (isApiError(error)) {
+    switch (error.code) {
+      case 'DISPUTE_CONFLICT':
+      case 'DISPUTE_NOT_PENDING':
+        return { message: '该争议已被处理或已撤回，请刷新后重试', conflict: true }
+      case 'DISPUTE_NOT_FOUND':
+        return { message: '争议不存在或已被删除', conflict: false }
+      case 'VALIDATION_FAILED':
+        return { message: validationMessage(error), conflict: false }
+      default:
+        return { message: error.message, conflict: false }
+    }
+  }
+  return { message: '网络异常，请稍后重试', conflict: false }
+}
+
 /** 422 details 的第一条透传（服务端给了 field 级文案时优先用它）。 */
 function validationMessage(error: ApiError): string {
   const first = error.details?.[0]

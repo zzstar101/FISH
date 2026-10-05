@@ -1,4 +1,8 @@
-import type { AdminAuditLogEntry } from '@fish/contracts/admin/schema'
+import type {
+  AdminAuditAction,
+  AdminAuditLogEntry,
+  AdminAuditTargetType,
+} from '@fish/contracts/admin/schema'
 import { AdminAuditActionSchema, AdminAuditTargetTypeSchema } from '@fish/contracts/admin/schema'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
@@ -12,17 +16,8 @@ import { AUDIT_TARGET_TYPE_LABEL, auditActionLabel, formatAdminDateTime } from '
 
 export type AuditSearch = {
   actorId?: string
-  action?:
-    | 'ADMIN_PROMOTED'
-    | 'MODERATION_DECISION'
-    | 'REPORT_DECISION'
-    | 'LISTING_DELISTED'
-    | 'LISTING_RESTORED'
-    | 'USER_RESTRICTED'
-    | 'USER_RESTRICTION_LIFTED'
-    | 'USER_BANNED'
-    | 'USER_UNBANNED'
-  targetType?: 'USER' | 'LISTING' | 'MODERATION_RECORD' | 'REPORT' | 'USER_RESTRICTION'
+  action?: AdminAuditAction
+  targetType?: AdminAuditTargetType
   targetId?: string
   from?: string
   to?: string
@@ -71,6 +66,7 @@ export function AuditPage({ search }: { search: AuditSearch }) {
           options={[
             { value: 'MODERATION_DECISION', label: '审核决定' },
             { value: 'REPORT_DECISION', label: '举报处理' },
+            { value: 'DISPUTE_DECISION', label: '争议处理' },
             { value: 'LISTING_DELISTED', label: '下架' },
             { value: 'LISTING_RESTORED', label: '恢复' },
             { value: 'USER_RESTRICTED', label: '限制发布' },
@@ -86,6 +82,7 @@ export function AuditPage({ search }: { search: AuditSearch }) {
             { value: 'USER', label: '用户' },
             { value: 'LISTING', label: '商品' },
             { value: 'REPORT', label: '举报' },
+            { value: 'DISPUTE', label: '争议' },
             { value: 'MODERATION_RECORD', label: '审核记录' },
           ]}
           value={search.targetType}

@@ -5,6 +5,7 @@ import type {
   UserRole,
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
+import type { DisputeResolution, DisputeStatus, DisputeType } from '@fish/contracts/disputes/schema'
 import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
 import type { ModerationDecision } from '@fish/contracts/moderation/schema'
 import type { TransactionStatus } from '@fish/contracts/transactions/schema'
@@ -71,6 +72,7 @@ export const AUDIT_ACTION_META: Record<AdminAuditAction, string> = {
   ADMIN_PROMOTED: '提升管理员',
   MODERATION_DECISION: '人工审核决定',
   REPORT_DECISION: '举报处理',
+  DISPUTE_DECISION: '争议处理',
   LISTING_DELISTED: '下架商品',
   LISTING_RESTORED: '恢复商品',
   USER_RESTRICTED: '限制发布',
@@ -88,6 +90,7 @@ export const AUDIT_TARGET_TYPE_LABEL: Record<string, string> = {
   LISTING: '商品',
   MODERATION_RECORD: '审核记录',
   REPORT: '举报',
+  DISPUTE: '争议',
   USER_RESTRICTION: '限制记录',
 }
 
@@ -166,6 +169,39 @@ export function createIdempotencyKey(): string {
 }
 
 // ---------------------------------------------------------------------------
+// 交易争议（#465）
+// ---------------------------------------------------------------------------
+
+/** 争议状态机：`PENDING` 待处理，`RESOLVED` 管理员已给结论，`WITHDRAWN` 发起人已撤回。 */
+export const DISPUTE_STATUS_META: Record<DisputeStatus, { label: string; variant: BadgeVariant }> =
+  {
+    PENDING: { label: '待处理', variant: 'warn' },
+    RESOLVED: { label: '已处理', variant: 'success' },
+    WITHDRAWN: { label: '已撤回', variant: 'secondary' },
+  }
+
+/**
+ * 争议类型。刻意**不含**骚扰/威胁——那属于举报域，且争议结论不触发治理动作。
+ * 文案与 `apps/miniapp` 的用户侧表单保持一致口径（「商品与描述不符」等）。
+ */
+export const DISPUTE_TYPE_META: Record<DisputeType, { label: string }> = {
+  ITEM_MISMATCH: { label: '商品与描述不符' },
+  NOT_COMPLETED: { label: '交易未完成' },
+  PAYMENT_ISSUE: { label: '支付问题' },
+  OTHER: { label: '其他' },
+}
+
+/** 处理结论：只描述「本次反馈是否成立」，不等同于处罚。 */
+export const DISPUTE_RESOLUTION_META: Record<
+  DisputeResolution,
+  { label: string; variant: BadgeVariant }
+> = {
+  UPHELD: { label: '反馈成立', variant: 'success' },
+  DISMISSED: { label: '反馈不成立', variant: 'secondary' },
+  INCONCLUSIVE: { label: '无法认定', variant: 'warn' },
+}
+
+// ---------------------------------------------------------------------------
 // Record 索引在 noUncheckedIndexedAccess 下是 V | undefined：统一经函数回退，
 // 调用方不写 `?? 兜底`（契约枚举全覆盖的 Record 理论上不会 miss，回退只兜类型系统）。
 // ---------------------------------------------------------------------------
@@ -196,4 +232,16 @@ export function roleMeta(role: UserRole) {
 
 export function moderationProviderMeta(provider: AdminModerationProvider) {
   return MODERATION_PROVIDER_META[provider] ?? MODERATION_PROVIDER_META.LOCAL
+}
+
+export function disputeStatusMeta(status: DisputeStatus) {
+  return DISPUTE_STATUS_META[status] ?? DISPUTE_STATUS_META.PENDING
+}
+
+export function disputeResolutionMeta(resolution: DisputeResolution) {
+  return DISPUTE_RESOLUTION_META[resolution] ?? DISPUTE_RESOLUTION_META.INCONCLUSIVE
+}
+
+export function disputeTypeLabel(type: DisputeType): string {
+  return (DISPUTE_TYPE_META[type] ?? DISPUTE_TYPE_META.OTHER).label
 }

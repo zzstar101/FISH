@@ -28,6 +28,7 @@ import { Route as VerifyRouteImport } from './routes/verify'
 import { Route as WishRouteImport } from './routes/wish'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminAuditRouteImport } from './routes/admin.audit'
+import { Route as AdminDisputesRouteImport } from './routes/admin.disputes'
 import { Route as AdminListingsRouteImport } from './routes/admin.listings'
 import { Route as AdminMetricsRouteImport } from './routes/admin.metrics'
 import { Route as AdminModerationRouteImport } from './routes/admin.moderation'
@@ -43,6 +44,8 @@ import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 import { Route as WishIndexRouteImport } from './routes/wish.index'
 import { Route as WishWishIdRouteImport } from './routes/wish.$wishId'
 import { Route as AdminAuditIndexRouteImport } from './routes/admin.audit.index'
+import { Route as AdminDisputesIndexRouteImport } from './routes/admin.disputes.index'
+import { Route as AdminDisputesDisputeIdRouteImport } from './routes/admin.disputes.$disputeId'
 import { Route as AdminListingsIndexRouteImport } from './routes/admin.listings.index'
 import { Route as AdminListingsListingIdRouteImport } from './routes/admin.listings.$listingId'
 import { Route as AdminModerationIndexRouteImport } from './routes/admin.moderation.index'
@@ -148,6 +151,11 @@ const AdminAuditRoute = AdminAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminDisputesRoute = AdminDisputesRouteImport.update({
+  id: '/disputes',
+  path: '/disputes',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminListingsRoute = AdminListingsRouteImport.update({
   id: '/listings',
   path: '/listings',
@@ -223,6 +231,16 @@ const AdminAuditIndexRoute = AdminAuditIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminAuditRoute,
 } as any)
+const AdminDisputesIndexRoute = AdminDisputesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminDisputesRoute,
+} as any)
+const AdminDisputesDisputeIdRoute = AdminDisputesDisputeIdRouteImport.update({
+  id: '/$disputeId',
+  path: '/$disputeId',
+  getParentRoute: () => AdminDisputesRoute,
+} as any)
 const AdminListingsIndexRoute = AdminListingsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -288,6 +306,7 @@ export interface FileRoutesByFullPath {
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRouteWithChildren
   '/admin/audit': typeof AdminAuditRouteWithChildren
+  '/admin/disputes': typeof AdminDisputesRouteWithChildren
   '/admin/listings': typeof AdminListingsRouteWithChildren
   '/admin/metrics': typeof AdminMetricsRoute
   '/admin/moderation': typeof AdminModerationRouteWithChildren
@@ -303,11 +322,13 @@ export interface FileRoutesByFullPath {
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
   '/wish/': typeof WishIndexRoute
+  '/admin/disputes/$disputeId': typeof AdminDisputesDisputeIdRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit/': typeof AdminAuditIndexRoute
+  '/admin/disputes/': typeof AdminDisputesIndexRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
@@ -338,11 +359,13 @@ export interface FileRoutesByTo {
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
   '/wish': typeof WishIndexRoute
+  '/admin/disputes/$disputeId': typeof AdminDisputesDisputeIdRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit': typeof AdminAuditIndexRoute
+  '/admin/disputes': typeof AdminDisputesIndexRoute
   '/admin/listings': typeof AdminListingsIndexRoute
   '/admin/moderation': typeof AdminModerationIndexRoute
   '/admin/reports': typeof AdminReportsIndexRoute
@@ -369,6 +392,7 @@ export interface FileRoutesById {
   '/verify': typeof VerifyRoute
   '/wish': typeof WishRouteWithChildren
   '/admin/audit': typeof AdminAuditRouteWithChildren
+  '/admin/disputes': typeof AdminDisputesRouteWithChildren
   '/admin/listings': typeof AdminListingsRouteWithChildren
   '/admin/metrics': typeof AdminMetricsRoute
   '/admin/moderation': typeof AdminModerationRouteWithChildren
@@ -384,11 +408,13 @@ export interface FileRoutesById {
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
   '/wish/': typeof WishIndexRoute
+  '/admin/disputes/$disputeId': typeof AdminDisputesDisputeIdRoute
   '/admin/listings/$listingId': typeof AdminListingsListingIdRoute
   '/admin/moderation/$recordId': typeof AdminModerationRecordIdRoute
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit/': typeof AdminAuditIndexRoute
+  '/admin/disputes/': typeof AdminDisputesIndexRoute
   '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
@@ -416,6 +442,7 @@ export interface FileRouteTypes {
     | '/verify'
     | '/wish'
     | '/admin/audit'
+    | '/admin/disputes'
     | '/admin/listings'
     | '/admin/metrics'
     | '/admin/moderation'
@@ -431,11 +458,13 @@ export interface FileRouteTypes {
     | '/messages/'
     | '/orders/'
     | '/wish/'
+    | '/admin/disputes/$disputeId'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit/'
+    | '/admin/disputes/'
     | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
@@ -466,11 +495,13 @@ export interface FileRouteTypes {
     | '/messages'
     | '/orders'
     | '/wish'
+    | '/admin/disputes/$disputeId'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit'
+    | '/admin/disputes'
     | '/admin/listings'
     | '/admin/moderation'
     | '/admin/reports'
@@ -496,6 +527,7 @@ export interface FileRouteTypes {
     | '/verify'
     | '/wish'
     | '/admin/audit'
+    | '/admin/disputes'
     | '/admin/listings'
     | '/admin/metrics'
     | '/admin/moderation'
@@ -511,11 +543,13 @@ export interface FileRouteTypes {
     | '/messages/'
     | '/orders/'
     | '/wish/'
+    | '/admin/disputes/$disputeId'
     | '/admin/listings/$listingId'
     | '/admin/moderation/$recordId'
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit/'
+    | '/admin/disputes/'
     | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
@@ -680,6 +714,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/disputes': {
+      id: '/admin/disputes'
+      path: '/disputes'
+      fullPath: '/admin/disputes'
+      preLoaderRoute: typeof AdminDisputesRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/listings': {
       id: '/admin/listings'
       path: '/listings'
@@ -785,6 +826,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditIndexRouteImport
       parentRoute: typeof AdminAuditRoute
     }
+    '/admin/disputes/': {
+      id: '/admin/disputes/'
+      path: '/'
+      fullPath: '/admin/disputes/'
+      preLoaderRoute: typeof AdminDisputesIndexRouteImport
+      parentRoute: typeof AdminDisputesRoute
+    }
+    '/admin/disputes/$disputeId': {
+      id: '/admin/disputes/$disputeId'
+      path: '/$disputeId'
+      fullPath: '/admin/disputes/$disputeId'
+      preLoaderRoute: typeof AdminDisputesDisputeIdRouteImport
+      parentRoute: typeof AdminDisputesRoute
+    }
     '/admin/listings/': {
       id: '/admin/listings/'
       path: '/'
@@ -863,6 +918,20 @@ const AdminAuditRouteWithChildren = AdminAuditRoute._addFileChildren(
   AdminAuditRouteChildren,
 )
 
+interface AdminDisputesRouteChildren {
+  AdminDisputesDisputeIdRoute: typeof AdminDisputesDisputeIdRoute
+  AdminDisputesIndexRoute: typeof AdminDisputesIndexRoute
+}
+
+const AdminDisputesRouteChildren: AdminDisputesRouteChildren = {
+  AdminDisputesDisputeIdRoute: AdminDisputesDisputeIdRoute,
+  AdminDisputesIndexRoute: AdminDisputesIndexRoute,
+}
+
+const AdminDisputesRouteWithChildren = AdminDisputesRoute._addFileChildren(
+  AdminDisputesRouteChildren,
+)
+
 interface AdminListingsRouteChildren {
   AdminListingsListingIdRoute: typeof AdminListingsListingIdRoute
   AdminListingsIndexRoute: typeof AdminListingsIndexRoute
@@ -932,6 +1001,7 @@ const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
 
 interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRouteWithChildren
+  AdminDisputesRoute: typeof AdminDisputesRouteWithChildren
   AdminListingsRoute: typeof AdminListingsRouteWithChildren
   AdminMetricsRoute: typeof AdminMetricsRoute
   AdminModerationRoute: typeof AdminModerationRouteWithChildren
@@ -943,6 +1013,7 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRouteWithChildren,
+  AdminDisputesRoute: AdminDisputesRouteWithChildren,
   AdminListingsRoute: AdminListingsRouteWithChildren,
   AdminMetricsRoute: AdminMetricsRoute,
   AdminModerationRoute: AdminModerationRouteWithChildren,

@@ -124,9 +124,10 @@ describe('notification view', () => {
   })
 
   /*
-   * DISPUTE（#465）：PC 侧还没有争议页面（用户侧在小程序，管理端列表也还没有前端），
-   * 所以落点只能是「不跳」——不给一个点不动的入口。文案照 TX 的规矩按 `disputeEvent`
-   * 分岔：它是收件人唯一能知道发生了什么的信息源，缺席时退回通用句。
+   * DISPUTE（#465）：PC 侧没有当事人视角的争议页面（用户侧在小程序，`/admin/disputes`
+   * 是管理端、普通用户不可达），所以落点只能是「不跳」——不给一个点不动的入口。
+   * 文案照 TX 的规矩按 `disputeEvent` 分岔：它是收件人唯一能知道发生了什么的信息源，
+   * 缺席时退回通用句。`RESOLVED` 还要带上结论，否则当事人收不到处理结果。
    */
   test('DISPUTE 只陈述事件、不给死链接，事件缺席时退回通用句', () => {
     expect(notificationTarget(item({ disputeId: 'd1' }, 'DISPUTE'))).toEqual({ kind: 'none' })
@@ -138,13 +139,23 @@ describe('notification view', () => {
     expect(
       notificationCopy(item({ disputeId: 'd1', disputeEvent: 'WITHDRAWN' }, 'DISPUTE')).description,
     ).toBe('对方撤回了这笔交易的争议。')
-    expect(
-      notificationCopy(
-        item({ disputeId: 'd1', disputeEvent: 'RESOLVED', resolution: 'UPHELD' }, 'DISPUTE'),
-      ).description,
-    ).toBe('争议已处理，该结论为最终结论。')
     expect(notificationCopy(item({ disputeId: 'd1' }, 'DISPUTE')).description).toBe(
       '这笔交易的争议状态有变化。',
     )
+  })
+
+  test('DISPUTE 的 RESOLVED 通知带出结论，脏 payload 不猜结论', () => {
+    const resolved = (resolution?: 'UPHELD' | 'DISMISSED' | 'INCONCLUSIVE') =>
+      notificationCopy(item({ disputeId: 'd1', disputeEvent: 'RESOLVED', resolution }, 'DISPUTE'))
+        .description
+
+    expect(resolved('UPHELD')).toBe('平台已处理这笔交易的争议：认定反馈成立，该结论为最终结论。')
+    expect(resolved('DISMISSED')).toBe(
+      '平台已处理这笔交易的争议：认定反馈不成立，该结论为最终结论。',
+    )
+    expect(resolved('INCONCLUSIVE')).toBe(
+      '平台已处理这笔交易的争议：无法认定责任，该结论为最终结论。',
+    )
+    expect(resolved(undefined)).toBe('平台已处理这笔交易的争议：结论已记录，该结论为最终结论。')
   })
 })
