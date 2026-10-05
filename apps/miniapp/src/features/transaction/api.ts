@@ -13,6 +13,13 @@
  */
 
 import { type MessageDto, messageDtoSchema } from '@fish/contracts/chat/schema'
+import { TRANSACTION_REVIEW_ROUTES } from '@fish/contracts/transaction-reviews/routes'
+import {
+  type TransactionReview,
+  type TransactionReviewCreateInput,
+  TransactionReviewDeleteResponseSchema,
+  TransactionReviewResponseSchema,
+} from '@fish/contracts/transaction-reviews/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
   type MeetupTokenResponse,
@@ -27,7 +34,7 @@ import {
   transactionDtoSchema,
   transactionListResponseSchema,
 } from '@fish/contracts/transactions/schema'
-import { apiRequest } from '@/lib/request'
+import { apiRequest, isApiError } from '@/lib/request'
 
 /** 列表单页上限。契约 `transactionListQuerySchema.limit` 的上限是 50，超了被 422 拒掉。 */
 const PAGE_SIZE = 50
@@ -177,4 +184,101 @@ export async function acceptTransaction(
     body: { conversationId, amountCents },
   })
   return transactionDtoSchema.parse(payload)
+}
+
+/*
+ * ---- 取消交易（订单卡的写路径） ----
+ */
+
+/**
+ * 取消交易（`POST /transactions/:id/cancel`，双方都可调）。幂等：对已 `CANCELLED`
+ * 的重复取消返回现状（200）；`COMPLETED` 上 409 `TRANSACTION_NOT_IN_PENDING`。
+ */
+export async function cancelTransaction(id: string): Promise<TransactionDto> {
+  const payload = await apiRequest(TRANSACTION_ROUTES.cancel(id), { method: 'POST' })
+  return transactionDtoSchema.parse(payload)
+}
+
+/*
+ * ---- 交易评价边（#195 PR2：`/transactions/:id/review`，GET 读 / POST 建 / DELETE 删） ----
+ *
+ * 资源身份是 (transaction_id, author_id)，本人一笔最多一条，端上不必记住评价行的 id。
+ * 仅 `COMPLETED` 交易可评（409 `TRANSACTION_NOT_COMPLETED`）；重复提交 409
+ * `TRANSACTION_REVIEW_EXISTS`（POST 不静默吞）；评价不可修改、本人可物理删除（幂等）。
+ */
+
+/** 读我在一笔交易下的评价。没有时 404 `REVIEW_NOT_FOUND`（调用方按 `ApiError.code` 分支）。 */
+export async function fetchMyTransactionReview(id: string): Promise<TransactionReview> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id))
+  return TransactionReviewResponseSchema.parse(payload)
+}
+
+/** 创建我的评价（201）。重复评价 409 —— 不做本地「已评过」的猜测，以服务端为准。 */
+export async function createTransactionReview(
+  id: string,
+  input: TransactionReviewCreateInput,
+): Promise<TransactionReview> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id), {
+    method: 'POST',
+    body: input,
+  })
+  return TransactionReviewResponseSchema.parse(payload)
+}
+
+/** 删除我的评价。幂等：返回本次实际删除行数（0 = 本来就没有）。 */
+export async function deleteMyTransactionReview(id: string): Promise<number> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id), { method: 'DELETE' })
+  return TransactionReviewDeleteResponseSchema.parse(payload).deleted
+}
+
+/*
+ * ---- 买家发起提案（详情页「立即购买」确认弹层用；与上面卖家半边同一对端点） ----
+ *
+ * `POST /transactions/proposals` 往会话写一条 `tx.proposal` SYSTEM 消息，响应体就是那条
+ * 消息（与 `rejectProposal` 同形状）。商品在提案阶段仍是 `ACTIVE` —— 提案**不是商品状态**：
+ * 只有卖家接受（`acceptTransaction`）才创建交易行并把商品置 `RESERVED`。
+ *
+ * `amountCents` 是买家在弹层里填的成交价（默认带挂价、可改）；提案不落库、服务端无处可读，
+ * 卖家接受时以**卖家重传的值**为准（契约 `transactionAcceptInputSchema` 注释同源）。
+ * 服务端允许重复提案（不会为同一会话产生两笔有效交易，只是会话里多一条提案）；
+ * 小程序详情页的 `buyRequested` 只是**本页内存标记**（不落库），重进页面即复位、
+ * 可再次发起——所以确认一次后进「待店家确认」终态只是**页面跳转后的自然结果**，
+ * 不是服务端限制，也不是「重复提案暂无入口」（PC 站的入口同样不受限）。
+ */
+
+/** 买家发起交易确认（`POST /transactions/proposals`）。 */
+export async function proposeTransaction(
+  conversationId: string,
+  amountCents: number,
+): Promise<MessageDto> {
+  const payload = await apiRequest(TRANSACTION_ROUTES.proposals, {
+    method: 'POST',
+    body: { conversationId, amountCents },
+  })
+  return messageDtoSchema.parse(payload)
+}
+
+/**
+ * 发起交易确认失败的展示文案（口径与 PC 站 `describeProposeFailure` 一致）。
+ *
+ * `LISTING_NOT_ACTIVE` 标 `refresh: true`：商品被他人拍下或已下架是**状态漂移**，
+ * 页面必须重新取详情，而不是把过期页面留在原地。
+ */
+export function describeProposeFailure(error: unknown): { message: string; refresh: boolean } {
+  if (isApiError(error)) {
+    if (error.code === 'LISTING_NOT_ACTIVE') {
+      return { message: '商品已不在售，可能已被他人拍下', refresh: true }
+    }
+    if (error.code === 'NOT_CONVERSATION_BUYER') {
+      return { message: '只有买家可以发起交易确认', refresh: false }
+    }
+    if (error.code === 'CONVERSATION_NOT_FOUND') {
+      return { message: '会话不存在或不可访问', refresh: false }
+    }
+    if (error.code === 'VALIDATION_FAILED') {
+      return { message: '金额不合法，请核对后重试', refresh: false }
+    }
+    return { message: error.message, refresh: false }
+  }
+  return { message: '发起交易确认失败，请重试', refresh: false }
 }

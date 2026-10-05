@@ -1,6 +1,7 @@
 @use '@/styles/mixins' as *;
 
-/* C5 想要的人：沿用原页面冰蓝页头、商品摘要与列表卡片，只保留会话口径有据可依的字段。 */
+/* C5 想要的人：沿用原页面冰蓝页头、商品摘要与列表卡片；行上只保留会话口径有据可依的字段
+   （昵称 / 头像 / 认证态 / 发起聊天时间），动作钮是「打开这条会话」的视觉提示。 */
 .wt {
   position: relative;
   height: 100vh;
@@ -246,6 +247,30 @@
   font-size: 22px;
   line-height: 1.5;
   color: var(--muted-2);
+}
+
+/*
+  行尾动作钮「聊一聊」：实底主色胶囊，与我的发布的 `--primary` 动作同一套令牌。
+  它**不挂点击事件** —— 点区在整行（见 index.tsx），两个 handler 做同一件事会让
+  点在钮上时跳两次。`flex: 0 0 auto` 让昵称再长也挤不掉它（`.wt__name` 自带 ellipsis）。
+*/
+.wt__act {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 60px;
+  padding: 0 24px;
+  border-radius: 30px;
+  background: var(--brand-deep);
+  color: var(--surface);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.wt__act-ic {
+  width: 26px;
+  height: 26px;
 }
 
 .wt__empty {

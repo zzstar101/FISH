@@ -135,13 +135,17 @@ export const VisualInterpretationSchema = z.strictObject({
 export type VisualInterpretation = z.infer<typeof VisualInterpretationSchema>
 
 /**
- * 结果项（#324 M6）：卡片 +「N 人想要」。
+ * 结果项（#324 M6）：卡片 + 收藏数。
  *
- * 想要数放在卡片**外层**而不是 `ListingCardSchema` 上：它是搜索结果的语境信号，
- * 公开 Feed / 详情今天并不投影它；塞进 `ListingCard` 会让每个列表查询都被迫多查一次收藏表。
+ * **`favoriteCount` 是收藏数，不是「想要数」**（2026-10-04 澄清）：它由 `favorites` 表批量
+ * 聚合而来，只服务排序（`popularityScore`）。「想要」在 `ListingCardSchema.wants`
+ * （该商品已建会话的买家数），卡片本体上就有 —— 两者不可互换，识图结果页画的是后者。
+ *
+ * 它放在卡片**外层**而不并进 `ListingCardSchema`：这是本页的语境信号（排序输入），
+ * 公开 Feed / 详情不投影它；塞进 `ListingCard` 会让每个列表查询都被迫多查一次收藏表。
  */
 export const VisualSearchResultItemSchema = ListingCardSchema.extend({
-  /** 想要数（收藏数）。由候选信号批量查出，不逐条补查。 */
+  /** 收藏数（`favorites` 行数）。由候选信号批量查出，不逐条补查；不是「想要数」。 */
   favoriteCount: z.number().int().nonnegative(),
 })
 
@@ -160,6 +164,8 @@ export const VISUAL_SOLD_AVG_MIN_SAMPLES = 3
  *
  * 口径：**解析出的类目**下 `status = 'SOLD'` 商品的 `priceCents` 平均值。不走 transactions 表、
  * 不加时间窗口——这个数字回答的是"这个类目大概卖多少钱"，不是某一笔成交的复盘。
+ * 已登录请求者**自己**的已成交商品不计入（#406 第 2 项）：本人的成交价不该混进他正在参考的行情，
+ * 与召回侧"不返回本人商品"同一口径；匿名请求没有可排除的主体，口径不变。
  *
  * 样本不足时 `soldAvgPriceCents = null`，但 `soldSampleCount` 仍如实返回：
  * 客户端要能显示"样本不足（2 件）"，而不是把它当成"没有统计"。

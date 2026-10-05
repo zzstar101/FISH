@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import type { Me } from '@fish/contracts/auth/user'
+import type { TransactionReview } from '@fish/contracts/transaction-reviews/schema'
 import { QueryClient } from '@tanstack/react-query'
 import { resetPcSession } from '../../lib/session-cache'
-import { invalidateTransactionSurfaces, profileKeys } from './queries'
+import { applyReviewCreated, invalidateTransactionSurfaces, profileKeys } from './queries'
 
 const oldUser: Me = {
   id: 'usr_01jc000000e00800000000000a',
@@ -60,5 +61,41 @@ describe('profile query cache scope', () => {
 
     expect(queryClient.getQueryData(profileKeys.aggregate(oldUser.id))).toBeUndefined()
     expect(queryClient.getQueryData(profileKeys.orders(oldUser.id, 'buyer', 'ALL'))).toBeUndefined()
+  })
+})
+
+describe('applyReviewCreated（#445 提交成功 → 已评态的缓存接线）', () => {
+  const review: TransactionReview = {
+    id: 'rvw_01jc000000e00800000000000r',
+    transactionId: 'txn_01jc000000e00800000000004t',
+    rating: 'POSITIVE',
+    body: null,
+    images: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }
+
+  test('写评价边缓存（带 ownerId，卡片据此翻已评态）并失效我的评论评价段', async () => {
+    const queryClient = new QueryClient()
+    const commentsKey = ['pc', 'my-comments', 'list', oldUser.id, 'review'] as const
+    queryClient.setQueryData(commentsKey, { pages: [{ items: [], total: 0 }] })
+    queryClient.setQueryData(profileKeys.review(oldUser.id, 'txn_old'), 'stale')
+
+    applyReviewCreated(queryClient, oldUser.id, review.transactionId, review)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // bun-types 的 expect 泛型会从 getQueryData 的默认推断吃到 undefined，这里显式钉住读取类型。
+    const cached = queryClient.getQueryData<TransactionReview>(
+      profileKeys.review(oldUser.id, review.transactionId),
+    )
+    expect(cached).toEqual(review)
+    expect(queryClient.getQueryCache().find({ queryKey: commentsKey })?.state.isInvalidated).toBe(
+      true,
+    )
+    // 键带 ownerId：别的账号的同位评价缓存不许被串写。
+    expect(
+      queryClient.getQueryData(
+        profileKeys.review('usr_01jc000000e00800000000000z', review.transactionId),
+      ),
+    ).toBeUndefined()
   })
 })

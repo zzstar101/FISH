@@ -19,4 +19,13 @@ describe('listingFeedPath', () => {
   test('omits absent optional filters', () => {
     expect(listingFeedPath({ sort: 'newest' })).toBe('/listings?sort=newest')
   })
+
+  // #451：契约的 `free` 只接受 `true` / `false` 两个字面量（`z.enum(...)`），
+  // 拼成 `1` / `on` 之类会被 422 拒。
+  test('encodes the free filter as a literal', () => {
+    expect(listingFeedPath({ sort: 'newest', free: true })).toBe('/listings?free=true&sort=newest')
+    expect(listingFeedPath({ sort: 'newest', free: false })).toBe(
+      '/listings?free=false&sort=newest',
+    )
+  })
 })

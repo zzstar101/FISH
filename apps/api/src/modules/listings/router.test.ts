@@ -37,6 +37,7 @@ const detail = {
   },
   isOwner: false,
   moderationStatus: null,
+  wants: 0,
 } satisfies ListingDetail
 
 function fakeService(overrides: Partial<ListingService> = {}): ListingService {
@@ -219,6 +220,30 @@ describe('listings router — 读接口匿名可用', () => {
     const body = (await res.json()) as { error: { code: string; details?: { field: string }[] } }
     expect(body.error.code).toBe('VALIDATION_FAILED')
     expect(body.error.details?.[0]?.field).toBe('status')
+  })
+
+  // #451：`free` 必须在路由层被解析成布尔位再透传给 service。契约用的是
+  // `z.enum(['true','false']).transform(...)`；若被换成 `z.coerce.boolean()`，
+  // `?free=false` 会静默变成 true，筛选结果整体反转 —— 所以这里把两个字面量都钉住。
+  test('passes free through as a boolean and rejects non-literal values', async () => {
+    const seen: (boolean | undefined)[] = []
+    const app = buildApp({
+      authed: false,
+      service: fakeService({
+        listFeed: async (_viewerId, query) => {
+          seen.push(query.free)
+          return { items: [], nextCursor: null }
+        },
+      }),
+    })
+
+    expect((await app.request('/listings?free=true')).status).toBe(200)
+    expect((await app.request('/listings?free=false')).status).toBe(200)
+    expect(seen).toEqual([true, false])
+
+    // 非法值在契约层就被拒，不该到达 service
+    expect((await app.request('/listings?free=1')).status).toBe(422)
+    expect(seen).toHaveLength(2)
   })
 })
 

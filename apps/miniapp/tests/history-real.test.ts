@@ -37,9 +37,16 @@ mock.module('@/lib/request', () => ({
 }))
 
 const { clearMyViewHistory, fetchMyViewHistory } = await import('../src/features/view-history/api')
-const { canClearTab, goneLabelOf, historyDaysOf, mergeHistoryItems, recordCellOf } = await import(
-  '../src/pkg-browse/pages/history/records'
-)
+const {
+  canClearTab,
+  favoriteCell,
+  goneLabelOf,
+  historyDaysOf,
+  mergeHistoryItems,
+  messageRow,
+  recordCellOf,
+  tailTextOf,
+} = await import('../src/pkg-browse/pages/history/records')
 const { toFavoriteItems } = await import('../src/pkg-browse/pages/favorites/list')
 
 const uuid = (n: number) => `01930000-0000-7000-8000-${n.toString(16).padStart(12, '0')}`
@@ -60,6 +67,8 @@ function card(over: Partial<ListingCard> = {}): ListingCard {
     coverUrl: null,
     createdAt: '2026-09-01T00:00:00.000Z',
     moderationStatus: null,
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0（本用例不关心它）。
+    wants: 0,
     ...over,
   }
 }
@@ -272,5 +281,118 @@ describe('canClearTab —— 真实构建只放行浏览档', () => {
     expect(canClearTab(false, 'history')).toBe(true)
     expect(canClearTab(false, 'favs')).toBe(false)
     expect(canClearTab(false, 'msgs')).toBe(false)
+  })
+})
+
+describe('favoriteCell —— 收藏行 → 三列格', () => {
+  test('字段透传，失效口径与足迹同源（收藏页的角标一致）', () => {
+    const cell = favoriteCell({
+      listing: card({ title: '罗技鼠标', priceCents: 12800, category: 'DIGITAL', status: 'SOLD' }),
+      favoritedAt: '2026-09-20T02:00:00.000Z',
+    })
+    expect(cell).toEqual({
+      id: LISTING_ID,
+      category: 'DIGITAL',
+      title: '罗技鼠标',
+      priceCents: 12800,
+      gone: '已卖掉',
+    })
+  })
+})
+
+describe('messageRow —— 留言 / 评价行 → 整宽行', () => {
+  const now = new Date(2026, 10, 2, 12, 0).getTime()
+
+  test('留言行：取 comment.listing，跳转目标是商品详情', () => {
+    const row = messageRow(
+      {
+        comment: {
+          id: encodePublicId(PUBLIC_ID_PREFIX.comment, uuid(31)),
+          listingId: LISTING_ID,
+          parentId: null,
+          content: '还在吗',
+          createdAt: at(2026, 11, 2, 10),
+        },
+        listing: card({ title: '九成新山地车', category: 'SPORTS' }),
+      },
+      now,
+    )
+
+    expect(row).toEqual({
+      id: encodePublicId(PUBLIC_ID_PREFIX.comment, uuid(31)),
+      category: 'SPORTS',
+      title: '九成新山地车',
+      kind: 'comment',
+      text: '还在吗',
+      timeLabel: '今天',
+      target: { kind: 'listing', id: LISTING_ID },
+    })
+  })
+
+  test('评价行：交易内嵌的商品摘要没有分类 → category 为 null；跳转目标是那笔交易', () => {
+    const transactionId = encodePublicId(PUBLIC_ID_PREFIX.transaction, uuid(41))
+    const row = messageRow(
+      {
+        review: {
+          id: encodePublicId(PUBLIC_ID_PREFIX.review, uuid(42)),
+          transactionId,
+          rating: 'POSITIVE',
+          // 「只打分没写字」是契约明说的正常形态（`body` 可空）
+          body: null,
+          images: [],
+          createdAt: at(2026, 11, 1, 9),
+        },
+        transaction: {
+          id: transactionId,
+          conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, uuid(43)),
+          listingId: LISTING_ID,
+          buyerId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(44)),
+          sellerId: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(45)),
+          role: 'BUYER',
+          listing: {
+            id: LISTING_ID,
+            title: '九成新山地车',
+            priceCents: 38000,
+            status: 'SOLD',
+            coverUrl: null,
+          },
+          counterpart: {
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, uuid(45)),
+            nickname: '小林',
+            avatarUrl: null,
+          },
+          amountCents: 36000,
+          status: 'COMPLETED',
+          buyerConfirmedAt: null,
+          sellerConfirmedAt: null,
+          completedAt: at(2026, 11, 1, 8),
+          cancelledAt: null,
+          createdAt: at(2026, 10, 31, 8),
+          updatedAt: at(2026, 11, 1, 8),
+        },
+      },
+      now,
+    )
+
+    expect(row.category).toBeNull()
+    expect(row.title).toBe('九成新山地车')
+    expect(row.kind).toBe('review')
+    expect(row.text).toBe('')
+    expect(row.timeLabel).toBe('昨天')
+    expect(row.target).toEqual({ kind: 'transaction', id: transactionId })
+  })
+})
+
+describe('tailTextOf —— 取全才说「已显示全部」', () => {
+  test('翻页取全：说「已显示全部」，单位按档位（件 / 条）', () => {
+    expect(tailTextOf('history', 24)).toBe('已显示全部 24 件')
+    expect(tailTextOf('favs', 8)).toBe('已显示全部 8 件')
+    expect(tailTextOf('msgs', 3)).toBe('已显示全部 3 条')
+  })
+
+  test('没取全（撞翻页上限 / 游标没前进）：只说条数，不许说「全部」', () => {
+    expect(tailTextOf('favs', 400, true)).toBe('已显示 400 件')
+    expect(tailTextOf('favs', 400, true)).not.toContain('全部')
+    expect(tailTextOf('msgs', 400, true)).toBe('已显示 400 条')
   })
 })

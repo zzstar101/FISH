@@ -230,14 +230,16 @@ export function createListingService(deps: {
     listing: ListingRow,
     coverObjectKey: string | null,
     seller: ListingCardSeller,
+    wants: number,
     moderationStatus: ListingModerationStatus | null = null,
     governanceDelisted: boolean | null = null,
     moderationReason: string | null = null,
   ): ListingCard | null {
     // `ListingRow` 不带卖家列；feed 的 join 结果里单独取（见 `store.listFeed`），
     // 与 matching / profile / users 三处经 `ListingCardSource.seller` 同一形状。
+    // `wants` 同理：`listings` 表不存计数，由主查询带出来（见 store 里的 `listingWantsCount`）。
     return toListingCard(
-      { ...listing, seller },
+      { ...listing, seller, wants },
       coverObjectKey,
       storage,
       moderationStatus,
@@ -313,6 +315,7 @@ export function createListingService(deps: {
       authStatus: 'UNVERIFIED' | 'VERIFIED'
     }
     images: ListingImageRow[]
+    wants: number
     viewerId: string | null
   }): Promise<ListingDetail> {
     // 封面只认 0 号图（#6 契约 §1「下标即 sortOrder（0 = 封面）」），与 feed / profile /
@@ -336,6 +339,9 @@ export function createListingService(deps: {
       free: input.listing.free,
       coverUrl: cover ? storage.publicUrl(cover.objectKey) : null,
       createdAt: input.listing.createdAt.toISOString(),
+      // 想要数对**所有**视角都出（不像审核态那样只给本人）：它是公开的市场信号，
+      // 买家的详情页也要画「N 人想要」（见契约 `ListingCardSchema.wants`）。
+      wants: input.wants,
       description: input.listing.description,
       images: await toDetailImages(input.images, isOwner ? input.listing.sellerId : null),
       seller: toSeller(input.seller),
@@ -383,6 +389,7 @@ export function createListingService(deps: {
       listing: found.listing,
       seller: found.seller,
       images: found.images,
+      wants: found.wants,
       viewerId,
     })
   }
@@ -545,6 +552,7 @@ export function createListingService(deps: {
         category: query.category,
         priceMinCents: query.priceMinCents,
         priceMaxCents: query.priceMaxCents,
+        free: query.free,
         sellerId: query.sellerId,
         // 本人查询自己的商品时包含未通过审核的（REVIEW / BLOCKED），在前端展示"审核中"等状态；
         // 公开 Feed、匹配、他人详情继续严格过滤。此处 authorize 已达：query.sellerId !== viewerId 抛 403。
@@ -562,6 +570,7 @@ export function createListingService(deps: {
           entry.listing,
           entry.coverObjectKey,
           entry.seller,
+          entry.wants,
           ownSellerQuery ? entry.listing.moderationStatus : null,
           ownSellerQuery ? entry.listing.governanceDelistedAt !== null : null,
           ownSellerQuery && entry.listing.moderationStatus === 'BLOCKED'
@@ -593,7 +602,7 @@ export function createListingService(deps: {
       for (const id of ids) {
         const entry = byId.get(id)
         if (entry === undefined) continue
-        const card = toCard(entry.listing, entry.coverObjectKey, entry.seller)
+        const card = toCard(entry.listing, entry.coverObjectKey, entry.seller, entry.wants)
         if (card) cards.set(id, card)
       }
       return cards

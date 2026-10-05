@@ -40,6 +40,8 @@ export function createChatWatchersService(
             authStatus: row.authStatus,
           },
           startedAt: new Date(row.startedAt).toISOString(),
+          // 名单每一行都对应一条确定的会话（一人一条），卖家点名字就是打开它。
+          conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, row.conversationId),
         })),
         nextCursor:
           result.rows.length > query.limit && last

@@ -303,6 +303,13 @@ function toModerationRecord(row: ModerationDetailRow['record']) {
     matchedRules: row.matchedRules,
     matchedTermsMasked: row.matchedTermsMasked,
     ruleVersion: row.ruleVersion,
+    // #228 §6：上游可追溯字段。只走 Admin 读路径；卖家/公开响应不经过这里。
+    provider: row.provider,
+    providerRequestId: row.providerRequestId,
+    suggestion: row.suggestion,
+    label: row.label,
+    subLabel: row.subLabel,
+    score: row.score,
     createdAt: row.createdAt.toISOString(),
   })
 }

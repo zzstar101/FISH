@@ -40,6 +40,7 @@ const validListingCard = {
   coverUrl: null,
   createdAt: '2026-09-12T07:00:00.000Z',
   moderationStatus: null,
+  wants: 0,
 } as const
 
 describe('MatchListQuerySchema', () => {

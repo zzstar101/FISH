@@ -9,11 +9,11 @@
  *
  * ## 三条铁律
  *
- * 1. **绝不编造业务数据。** `views` / `originalPriceCents` / `spec` 契约没有，一律 `null`；
- *    `wants` 默认也是 `null`，但识图结果项的 `favoriteCount`（契约
- *    `VisualSearchResultItemSchema` 在卡片外挂的真实计数）由调用方经 `toMockListing` 的
- *    第三参**显式**传进来 —— 有真值才透传，拿不到仍是 `null`。
- *    页面已做 null 守卫，不渲染比渲染一个假数字诚实。
+ * 1. **绝不编造业务数据。** `views` / `originalPriceCents` / `spec` 契约没有，一律 `null`。
+ *    `wants` **取契约的 `card.wants`**（= 该商品已建会话的买家数，Owner 2026-10-04 拍板
+ *    商品卡上的「N 人想要」就取这个口径，与卖家在「想要的人」页看到的人数同源）；
+ *    契约现在恒给这个数，所以这里不再有「拿不到」的分支。页面仍保留 null 守卫 ——
+ *    手写的演示 fixture 与老客户端 mock 记录可以不带这个字段，缺席时不渲染比编一个 0 诚实。
  * 2. **绝不编造卖家。** #191 起契约卡片带 `seller`（公开四字段），用它投影成真值；
  *    字段缺席（老客户端 mock 记录）时 `sellerId` 是**空串**哨兵 `NO_SELLER`、`seller` 是
  *    `null`，页面据此不渲染卖家行。这一条尤其要紧：`mock/users.ts` 的 `getUser()` 对未知 id
@@ -95,17 +95,14 @@ export function toMockCardSeller(card: ListingCard): MockUser | null {
  * 无图商品的兜底色块由 `resolveCover` 之外的调用方处理：这里保持 `coverUrl` 原样
  * （契约允许 `null`），页面已有 `null` 处理路径。
  *
- * `wants` 是**向后兼容的**第三参：`views` 恒 `null`，但「想要数」在识图结果里有真值
- * （契约把 `favoriteCount` 挂在**卡片外层**，见 `VisualSearchResultItemSchema`）。
- * 不能把它并进 `now` 那个位置、也不改成选项对象 —— 现有调用方全按位置传 `now`
- * （`toMockListings`、`features/match/adapt.ts`、`pages/mylist`、`pages/vision-result`），
- * 加第三个可选参数是唯一不碰它们的写法。不传 = 照旧 `null`（不编造）。
+ * `wants` 直接取契约的 `card.wants`：全站**一个口径** —— 该商品已建立会话的买家数
+ * （`docs/design/issue-74-watchers-definition.md`），与卖家在「想要的人」页看到的
+ * `total` 同源。契约里没有第二个「想要数」，所以这里也不留覆盖参数：
+ * 识图结果项外层那个 `favoriteCount` 是**收藏数**（服务端算 `popularityScore` 用），
+ * 与「想要」是两个量，页面不拿它冒充（曾经这样画过，会让同一个标签在两个页面
+ * 表示两件事）。
  */
-export function toMockListing(
-  card: ListingCard,
-  now: number = Date.now(),
-  wants: number | null = null,
-): MockListing {
+export function toMockListing(card: ListingCard, now: number = Date.now()): MockListing {
   return {
     id: card.id,
     title: card.title,
@@ -135,10 +132,10 @@ export function toMockListing(
     sellerId: card.seller?.id ?? NO_SELLER,
     // 卖家公开资料：契约 `seller` 同源投影，缺席为 null（页面不渲染卖家行）
     seller: toMockCardSeller(card),
-    // 契约无这两个计数 —— 不编数字。`wants` 由调用方给真值时才透传（识图结果的
-    // `favoriteCount`，见函数头）；`views` 全仓没有数据源，恒 null
+    // 想要数：全站一个口径 —— 契约的 `card.wants`（已建会话的买家数）。
+    // `views` 全仓没有数据源（#192），恒 null。
     views: null,
-    wants,
+    wants: card.wants,
     // 卖家本人视角的两个内部状态：只在查自己时非 null（契约如是说），这里原样带过去，
     // 由「我的发布」判段与动作。公开 Feed / 他人视角拿到的是 null，页面据此按「已通过」渲染。
     moderationStatus: card.moderationStatus,

@@ -133,6 +133,13 @@ export interface ModerationRecordRow {
   matchedRules: string[]
   matchedTermsMasked: string[]
   ruleVersion: string
+  /** #228 §6 的上游可追溯字段；#228 之前的历史行为 null。 */
+  provider: string | null
+  providerRequestId: string | null
+  suggestion: string | null
+  label: string | null
+  subLabel: string | null
+  score: number | null
   createdAt: Date
   createdAtCursor: string
 }
@@ -445,6 +452,16 @@ function jsonStringArray(value: unknown): string[] {
     : []
 }
 
+/**
+ * `score` 是 `double precision`：驱动正常给 number，但 NULL / 非有限值必须落成 null，
+ * 否则会被契约的 `z.number()` 判成非法响应（审计字段读不出来不该让整个队列 500）。
+ */
+function finiteNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function moderationRecordFromRow(row: Record<string, unknown>): ModerationRecordRow {
   return {
     id: String(row.id),
@@ -457,6 +474,12 @@ function moderationRecordFromRow(row: Record<string, unknown>): ModerationRecord
     matchedRules: jsonStringArray(row.matched_rules),
     matchedTermsMasked: jsonStringArray(row.matched_terms_masked),
     ruleVersion: String(row.rule_version),
+    provider: (row.provider as string | null) ?? null,
+    providerRequestId: (row.provider_request_id as string | null) ?? null,
+    suggestion: (row.suggestion as string | null) ?? null,
+    label: (row.label as string | null) ?? null,
+    subLabel: (row.sub_label as string | null) ?? null,
+    score: finiteNumberOrNull(row.score),
     createdAt: new Date(row.created_at as string | Date),
     createdAtCursor: String(row.created_at_cursor ?? row.created_at),
   }
@@ -937,6 +960,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
                l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
                l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
@@ -994,6 +1018,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
                l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
                l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
@@ -1035,6 +1060,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
                l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
                l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
@@ -1053,6 +1079,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor
         FROM listing_moderation_records r
         WHERE r.listing_id = ${row.listing_id}

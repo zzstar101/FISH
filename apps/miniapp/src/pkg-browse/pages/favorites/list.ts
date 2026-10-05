@@ -74,14 +74,9 @@ type FavoriteBase = {
   avatarUrl: string
   verified: boolean
   /**
-   * 「N 人想要」。**契约里没有这个计数**（`grep -rni wants packages/contracts/src` 命中 0），
-   * 它是商品列表读模型的市场信号，不是收藏行自己的字段 —— 所以只能是 `null`，
-   * 页面据此**整块不画**（与 `components/product-card`、`pages/listing-detail` 同一条口径：
-   * 契约给不出来就不渲染，不编成 0）。
-   *
-   * 为什么可空而不是照旧 `number`：留成必填就等于宣称「真实数据一定有这个数」，
-   * 适配层被迫在写真实接线时凭空造一个数字出来。可空把这件事交给渲染层显式决定。
-   * 缺口跟踪见 Issue（商品列表卡缺市场计数；#74 的「需求信号」一节）。
+   * 「N 人想要」：契约 `ListingCardSchema.wants` = 该商品已建会话的买家数（#74 口径），
+   * 由 `toFavoriteItems` 直传。页面仍按 `null` 守卫整块不画 —— 老客户端 mock 记录可能没有
+   * 这个字段，缺席时留白比编一个 0 诚实（与 `components/product-card` 同一条口径）。
    */
   wants: number | null
   savedLabel: string
@@ -347,8 +342,8 @@ export function toFavoriteItems(
       // 不是编造这个人的身份。
       avatarUrl: listing.seller?.avatarUrl ?? AVATAR_BLOCKS[0] ?? '',
       verified: listing.seller?.authStatus === 'VERIFIED',
-      // 契约没有「想要」计数（`ListingCardSchema` 无该字段）→ 恒 `null`，页面整块不画
-      wants: null,
+      // 想要数：契约 `ListingCardSchema.wants`（= 该商品已建会话的买家数）直传，页面按需渲染
+      wants: listing.wants,
       savedLabel: savedLabelOf(favoritedAt, nowMs),
       // 无封面图 → 分类基色块（同上，不新增色值）
       coverUrl: listing.coverUrl ?? coverOf(listing.category),

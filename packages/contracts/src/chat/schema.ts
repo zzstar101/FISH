@@ -371,6 +371,12 @@ export const chatWatchersResponseSchema = z.strictObject({
     z.strictObject({
       user: ListingSellerSchema,
       startedAt: z.iso.datetime(),
+      /**
+       * 该买家与**本商品**的那条会话。一人一条（`conversations_listing_id_buyer_id_uq`
+       * 在 DB 层保证），所以名单上的每一行都对应一条确定的会话，卖家点名字就是打开它 ——
+       * 不必再按「商品 + 买家」去会话列表里找 id。
+       */
+      conversationId: ConversationIdSchema,
     }),
   ),
   nextCursor: z.string().nullable(),

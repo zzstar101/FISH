@@ -1,6 +1,7 @@
 import type { ListingCategory, ListingStatus } from '@fish/contracts/listings/schema'
 import { MATCH_SCORE_THRESHOLD } from '@fish/contracts/matching/schema'
 import type { Db } from '@fish/db/client'
+import { listingWantsCount } from '@fish/db/listing-wants'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { matches } from '@fish/db/schema/matches'
 import { users } from '@fish/db/schema/users'
@@ -151,6 +152,8 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           negotiable: listings.negotiable,
           free: listings.free,
           listingCreatedAt: listings.createdAt,
+          // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
+          wants: listingWantsCount(listings.id),
           seller: {
             id: users.id,
             nickname: users.nickname,
@@ -194,6 +197,7 @@ export function createSqlMatchingStore(db: Db): MatchingStore {
           free: row.free,
           createdAt: row.listingCreatedAt,
           seller: row.seller,
+          wants: row.wants,
         },
       }))
     },

@@ -742,6 +742,61 @@
   flex: 0 0 auto;
 }
 
+/*
+ * 「谁在求购」（#8 byListing，卖家本人视角）：愿望行 = 关键词 + 预算 + 匹配度。
+ * 只在匹配结果非空时渲染（见页面：非本人 403 / 失败 / 无人求购都整块隐藏）。
+ */
+.detail__matches {
+  margin-top: 40px;
+}
+
+.detail__match-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detail__match {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 22px 24px;
+  border-radius: 24px;
+  border: 2px solid var(--border);
+  background: var(--surface);
+
+  &:active {
+    background: var(--accent-weak);
+  }
+}
+
+.detail__match-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.detail__match-kw {
+  display: block;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--fg);
+  @include ellipsis;
+}
+
+.detail__match-sub {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+}
+
+.detail__match-score {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--brand);
+}
+
 .detail__waterfall {
   display: flex;
   align-items: flex-start;
@@ -1044,4 +1099,81 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/*
+ * 「立即购买」确认弹层的主体（对齐 PC buy-dialog 的信息结构：商品摘要 / 金额输入 /
+ * 语义注释）。外层壳（scrim / dialog / dlg-acts）与下架确认卡共用，不再重复声明。
+ */
+.detail__buy-goods {
+  margin-top: 28px;
+  padding: 24px;
+  border-radius: 24px;
+  background: var(--ink-weak);
+}
+
+.detail__buy-label {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+}
+
+.detail__buy-goods-title {
+  display: block;
+  margin-top: 10px;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg);
+  @include clamp(2);
+}
+
+.detail__buy-goods-price {
+  display: block;
+  margin-top: 10px;
+  font-size: var(--fs-xs);
+  color: var(--muted-2);
+}
+
+.detail__buy-field {
+  margin-top: 28px;
+}
+
+.detail__buy-input {
+  margin-top: 14px;
+  height: 88px;
+  padding: 0 24px;
+  border-radius: 24px;
+  background: var(--surface);
+  border: 2px solid var(--line);
+  box-sizing: border-box;
+  font-size: 30px;
+  color: var(--fg);
+}
+
+/*
+  禁用态（免费送锁 0 / 提交中）走**包裹层 class**，不用 `.detail__buy-input[disabled]`：
+  Taro 生成的模板把 `disabled` 作为静态属性 + 数据绑定一起下发
+  （产物 `dist/base.wxml` 里是 `disabled="{{…}}"`），`disabled=false` 时属性依然在节点上，
+  属性选择器会把普通商品的金额框也画成灰底弱化态。与发布页同款先例：
+  `pages/sell/index.scss` 的 `.sell__price-row.is-off`。
+*/
+.detail__buy-field.is-off .detail__buy-input {
+  color: var(--muted-2);
+  background: var(--ink-weak);
+}
+
+.detail__buy-err {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--fs-xs);
+  color: var(--danger-ink);
+}
+
+.detail__buy-hint {
+  display: block;
+  margin-top: 12px;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--muted-2);
 }

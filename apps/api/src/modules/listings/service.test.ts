@@ -97,6 +97,9 @@ function feedEntry(
     createdAtCursor: CREATED_AT_CURSOR,
     coverObjectKey,
     seller: { ...FEED_SELLER, ...seller },
+    // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+    // 真实的关联子查询由 store 集成测试覆盖（`listings/store.test.ts`）。
+    wants: 0,
   }
 }
 
@@ -139,6 +142,9 @@ function fakeStore(overrides: Partial<ListingStore> = {}): ListingStore {
       listing: listingRow(),
       seller: sellerRow(),
       images: [imageRow(0, `listings/${SELLER_ID}/cover.jpg`)],
+      // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+      // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+      wants: 0,
     }),
     findState: async () => ({
       sellerId: SELLER_ID,
@@ -550,6 +556,9 @@ describe('getDetail', () => {
             imageRow(0, `listings/${SELLER_ID}/a.jpg`),
             imageRow(1, `listings/${SELLER_ID}/b.jpg`),
           ],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -584,6 +593,9 @@ describe('getDetail', () => {
         listing: listingRow({ status: 'OFFLINE' }),
         seller: sellerRow(),
         images: [],
+        // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+        // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+        wants: 0,
       }),
     })
     const service = createListingService({ storage: fakeStorage(), store: offline })
@@ -606,6 +618,9 @@ describe('getDetail', () => {
           listing: listingRow({ status: 'OFFLINE', moderationStatus: 'REVIEW' }),
           seller: sellerRow(),
           images: [],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -628,7 +643,12 @@ describe('getDetail', () => {
     const service = createListingService({
       storage: fakeStorage(),
       store: fakeStore({
-        findDetail: async () => ({ listing: delisted, seller: sellerRow(), images: [] }),
+        findDetail: async () => ({
+          listing: delisted,
+          seller: sellerRow(),
+          images: [],
+          wants: 0,
+        }),
       }),
     })
 
@@ -675,6 +695,9 @@ describe('getDetail', () => {
           listing: listingRow(),
           seller: sellerRow(),
           images: [imageRow(0, CONFIRMED_KEY), imageRow(1, REVIEW_KEY)],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -700,6 +723,9 @@ describe('getDetail', () => {
           listing: listingRow({ status: 'OFFLINE', moderationStatus: 'BLOCKED' }),
           seller: sellerRow(),
           images: [imageRow(0, CONFIRMED_KEY), imageRow(1, `listings/${SELLER_ID}/old.jpg`)],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -729,6 +755,9 @@ describe('getDetail', () => {
             imageRow(1, `listings/${SELLER_ID}/b.jpg`),
             imageRow(2, `listings/${SELLER_ID}/c.jpg`),
           ],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -752,6 +781,9 @@ describe('getDetail', () => {
             imageRow(0, `listings/${SELLER_ID}/cover.jpg`),
             imageRow(1, `listings/${SELLER_ID}/b.jpg`),
           ],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -1531,6 +1563,9 @@ describe('transition', () => {
           listing: listingRow({ status: 'OFFLINE' }),
           seller: sellerRow(),
           images: [],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
         setStatus: async () => {
           wrote = true
@@ -1624,6 +1659,9 @@ describe('transition', () => {
           listing: listingRow({ status: 'OFFLINE' }),
           seller: sellerRow(),
           images: [],
+          // 想要数（= 该商品已建会话的买家数，见 `@fish/db/listing-wants`）：fake store 给 0，
+          // 真实计数由 store 集成测试覆盖（`listings/store.test.ts`）。
+          wants: 0,
         }),
       }),
     })
@@ -1753,20 +1791,26 @@ function textResult(overrides: Partial<TextModerationResult> = {}): TextModerati
 
 function blockedTextResult(): TextModerationResult {
   const base = textResult()
+  // fixture 自证：base.fields 不足两位是测试数据错误，显式失败而不是用非空断言骗过 lint。
+  const firstField = base.fields[0]
+  const secondField = base.fields[1]
+  if (firstField === undefined || secondField === undefined) {
+    throw new Error('textResult fixture 的 fields 至少要有两条')
+  }
   return {
     ...base,
     decision: 'BLOCK',
     suggestion: 'Block',
     fields: [
       {
-        ...base.fields[0]!,
+        ...firstField,
         decision: 'BLOCK',
         suggestion: 'Block',
         label: 'Ad',
         subLabel: 'AdLaw',
         score: 99,
       },
-      base.fields[1]!,
+      secondField,
     ],
   }
 }
@@ -1921,7 +1965,8 @@ describe('文本审核 provider 接线（#228）', () => {
         getUpdateSnapshot: async () => {
           const row = snapshots[Math.min(snapshotCalls, snapshots.length - 1)]
           snapshotCalls += 1
-          return { kind: 'ok', row: row! }
+          if (row === undefined) throw new Error('snapshots fixture 为空')
+          return { kind: 'ok', row }
         },
         updateListingAtomic: async (input) => {
           if (snapshotCalls === 1) return { kind: 'conflict' }

@@ -9,6 +9,7 @@ import {
 } from '@fish/ui/dialog'
 import { Field, FieldError, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
+import { Textarea } from '@fish/ui/textarea'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Loader2, Upload } from 'lucide-react'
 import { type ChangeEvent, type FormEvent, useEffect, useId, useRef, useState } from 'react'
@@ -24,6 +25,7 @@ import {
 } from '../publish/api'
 import { type ProfileFieldErrors, profileUpdateErrorView } from './api'
 import { useUpdateProfile } from './queries'
+import { prepareSignatureInput } from './signature'
 
 export function ProfileEditDialog({
   open,
@@ -57,6 +59,7 @@ function ProfileEditForm({
   const inputId = useId()
   const uploadController = useRef<AbortController | null>(null)
   const [nickname, setNickname] = useState(me.nickname)
+  const [signature, setSignature] = useState(me.signature ?? '')
   const [file, setFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -66,11 +69,12 @@ function ProfileEditForm({
   useEffect(() => {
     if (!open) return
     setNickname(me.nickname)
+    setSignature(me.signature ?? '')
     setFile(null)
     setPreviewUrl(null)
     setMessage(null)
     setFieldErrors({})
-  }, [me.nickname, open])
+  }, [me.nickname, me.signature, open])
 
   useEffect(
     () => () => {
@@ -99,6 +103,11 @@ function ProfileEditForm({
 
     if (nextNickname.length < 1 || nextNickname.length > 20) {
       nextErrors.nickname = '昵称需要 1–20 个字符'
+    }
+
+    const signatureInput = prepareSignatureInput(signature, me.signature)
+    if (signatureInput.status === 'error') {
+      nextErrors.signature = signatureInput.message
     }
 
     if (Object.keys(nextErrors).length > 0) {
@@ -150,6 +159,8 @@ function ProfileEditForm({
     const input = {
       ...(nextNickname === me.nickname ? {} : { nickname: nextNickname }),
       ...(avatarObjectKey === undefined ? {} : { avatarObjectKey }),
+      // 空串是刻意的清空语义（#179 契约：trim 后空串落 null）；只有真的变化才提交。
+      ...(signatureInput.status === 'ok' ? { signature: signatureInput.value } : {}),
     }
     if (Object.keys(input).length === 0) {
       setMessage('没有需要保存的修改')
@@ -223,6 +234,27 @@ function ProfileEditForm({
               <FieldError>{fieldErrors.nickname}</FieldError>
             ) : (
               <p className="text-ink-3 text-xs">1–20 个字符。</p>
+            )}
+          </Field>
+
+          <Field data-invalid={fieldErrors.signature !== undefined}>
+            <FieldLabel htmlFor="signature">个性签名</FieldLabel>
+            <Textarea
+              aria-invalid={fieldErrors.signature !== undefined}
+              className="min-h-20"
+              id="signature"
+              maxLength={200}
+              onChange={(event) => {
+                setSignature(event.target.value)
+                setFieldErrors((current) => ({ ...current, signature: undefined }))
+              }}
+              placeholder="介绍一下自己（可选）"
+              value={signature}
+            />
+            {fieldErrors.signature !== undefined ? (
+              <FieldError>{fieldErrors.signature}</FieldError>
+            ) : (
+              <p className="text-ink-3 text-xs">最多 200 字；清空保存即删除签名。</p>
             )}
           </Field>
 

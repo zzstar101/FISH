@@ -31,6 +31,8 @@ import { Route as MessagesConversationIdRouteImport } from './routes/messages.$c
 import { Route as OrdersIndexRouteImport } from './routes/orders.index'
 import { Route as OrdersTransactionIdRouteImport } from './routes/orders.$transactionId'
 import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
+import { Route as WishIndexRouteImport } from './routes/wish.index'
+import { Route as WishWishIdRouteImport } from './routes/wish.$wishId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -142,6 +144,16 @@ const UsersUserIdRoute = UsersUserIdRouteImport.update({
   path: '/users/$userId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WishIndexRoute = WishIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => WishRoute,
+} as any)
+const WishWishIdRoute = WishWishIdRouteImport.update({
+  id: '/$wishId',
+  path: '/$wishId',
+  getParentRoute: () => WishRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -159,13 +171,15 @@ export interface FileRoutesByFullPath {
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
-  '/wish': typeof WishRoute
+  '/wish': typeof WishRouteWithChildren
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/wish/$wishId': typeof WishWishIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
+  '/wish/': typeof WishIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -181,13 +195,14 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
-  '/wish': typeof WishRoute
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/wish/$wishId': typeof WishWishIdRoute
   '/messages': typeof MessagesIndexRoute
   '/orders': typeof OrdersIndexRoute
+  '/wish': typeof WishIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -206,13 +221,15 @@ export interface FileRoutesById {
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
-  '/wish': typeof WishRoute
+  '/wish': typeof WishRouteWithChildren
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/wish/$wishId': typeof WishWishIdRoute
   '/messages/': typeof MessagesIndexRoute
   '/orders/': typeof OrdersIndexRoute
+  '/wish/': typeof WishIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -237,8 +254,10 @@ export interface FileRouteTypes {
     | '/messages/$conversationId'
     | '/orders/$transactionId'
     | '/users/$userId'
+    | '/wish/$wishId'
     | '/messages/'
     | '/orders/'
+    | '/wish/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -254,13 +273,14 @@ export interface FileRouteTypes {
     | '/reports'
     | '/search'
     | '/verify'
-    | '/wish'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
     | '/users/$userId'
+    | '/wish/$wishId'
     | '/messages'
     | '/orders'
+    | '/wish'
   id:
     | '__root__'
     | '/'
@@ -283,8 +303,10 @@ export interface FileRouteTypes {
     | '/messages/$conversationId'
     | '/orders/$transactionId'
     | '/users/$userId'
+    | '/wish/$wishId'
     | '/messages/'
     | '/orders/'
+    | '/wish/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -303,7 +325,7 @@ export interface RootRouteChildren {
   ReportsRoute: typeof ReportsRoute
   SearchRoute: typeof SearchRoute
   VerifyRoute: typeof VerifyRoute
-  WishRoute: typeof WishRoute
+  WishRoute: typeof WishRouteWithChildren
   ListingListingIdRoute: typeof ListingListingIdRoute
   UsersUserIdRoute: typeof UsersUserIdRoute
 }
@@ -464,6 +486,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UsersUserIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/wish/': {
+      id: '/wish/'
+      path: '/'
+      fullPath: '/wish/'
+      preLoaderRoute: typeof WishIndexRouteImport
+      parentRoute: typeof WishRoute
+    }
+    '/wish/$wishId': {
+      id: '/wish/$wishId'
+      path: '/$wishId'
+      fullPath: '/wish/$wishId'
+      preLoaderRoute: typeof WishWishIdRouteImport
+      parentRoute: typeof WishRoute
+    }
   }
 }
 
@@ -494,6 +530,18 @@ const OrdersRouteChildren: OrdersRouteChildren = {
 const OrdersRouteWithChildren =
   OrdersRoute._addFileChildren(OrdersRouteChildren)
 
+interface WishRouteChildren {
+  WishWishIdRoute: typeof WishWishIdRoute
+  WishIndexRoute: typeof WishIndexRoute
+}
+
+const WishRouteChildren: WishRouteChildren = {
+  WishWishIdRoute: WishWishIdRoute,
+  WishIndexRoute: WishIndexRoute,
+}
+
+const WishRouteWithChildren = WishRoute._addFileChildren(WishRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CommentsRoute: CommentsRoute,
@@ -510,7 +558,7 @@ const rootRouteChildren: RootRouteChildren = {
   ReportsRoute: ReportsRoute,
   SearchRoute: SearchRoute,
   VerifyRoute: VerifyRoute,
-  WishRoute: WishRoute,
+  WishRoute: WishRouteWithChildren,
   ListingListingIdRoute: ListingListingIdRoute,
   UsersUserIdRoute: UsersUserIdRoute,
 }

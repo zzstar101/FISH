@@ -76,6 +76,7 @@ const LISTING_ID = '01930000-0000-7000-8000-0000000000a1'
 const REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a2'
 const REVIEW_RECORD_ID = '01930000-0000-7000-8000-0000000000b2'
 const BLOCKED_EDIT_RECORD_ID = '01930000-0000-7000-8000-0000000000b3'
+const LOCAL_BLOCKED_EDIT_RECORD_ID = '01930000-0000-7000-8000-0000000000b5'
 const OFFLINE_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a3'
 const REPEATED_REVIEW_LISTING_ID = '01930000-0000-7000-8000-0000000000a4'
 const CREATE_REVIEW_CHAIN_LISTING_ID = '01930000-0000-7000-8000-0000000000a5'
@@ -162,8 +163,16 @@ beforeAll(async () => {
     matchedRules: jsonParam(['TEST_RULE']),
     matchedTermsMasked: jsonParam(['测**']),
     ruleVersion: 'test-v1',
+    // #228 §6：这条记录模拟「腾讯 TMS 判 Review」，六列元数据必须能被 Admin 读回来。
+    provider: 'TENCENT_TMS',
+    providerRequestId: 'req-tms-0001',
+    suggestion: 'Review',
+    label: 'Porn',
+    subLabel: 'Sexy',
+    score: 88.5,
     createdAt: new Date('2026-09-03T02:01:00Z'),
   })
+  // 这条刻意保持 #228 之前的历史行形状（provider 六列全 NULL），用来证明旧记录读得出来。
   await scratch.insert(listingModerationRecords).values({
     id: BLOCKED_EDIT_RECORD_ID,
     listingId: REVIEW_LISTING_ID,
@@ -176,6 +185,26 @@ beforeAll(async () => {
     matchedTermsMasked: jsonParam(['拦**']),
     ruleVersion: 'test-v1',
     createdAt: new Date('2026-09-03T02:02:00Z'),
+  })
+  // #228 §6：`provider='LOCAL'` 的行**不是**六列全 NULL——本地词表没有腾讯的 Label/Score/RequestId，
+  // 但它自己会给出 `suggestion`（由 decision 派生）与 `subLabel`（命中的本地规则码）。
+  // 这条种子行把本地 transport 的真实形状钉住：把 `suggestion`/`subLabel` 一律当成腾讯结论的读法，
+  // 或反过来「顺手把本地行也清成 null」的改动，都必须在这里变红。
+  await scratch.insert(listingModerationRecords).values({
+    id: LOCAL_BLOCKED_EDIT_RECORD_ID,
+    listingId: REVIEW_LISTING_ID,
+    sellerId: USER_ID,
+    action: 'UPDATE',
+    titleSnapshot: '本地词表拦截的新编辑',
+    descriptionSnapshot: '这次编辑命中本地违禁词',
+    decision: 'BLOCK',
+    matchedRules: jsonParam(['PROHIBITED_CONTENT']),
+    matchedTermsMasked: jsonParam(['毒**']),
+    ruleVersion: '2026-09-15-v3',
+    provider: 'LOCAL',
+    suggestion: 'Block',
+    subLabel: 'PROHIBITED_CONTENT',
+    createdAt: new Date('2026-09-03T02:03:00Z'),
   })
 })
 
@@ -484,12 +513,87 @@ describe('Admin 查询端到端', () => {
     )
     expect(moderationBody.items[0]?.seller.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
     expect(moderationBody.items[0]?.record.titleSnapshot).toBe('待人工审核商品')
+    // #228 §6：队列必须能追溯到腾讯上游结论（provider / RequestId / Suggestion / Label / Score）。
+    expect(moderationBody.items[0]?.record).toMatchObject({
+      provider: 'TENCENT_TMS',
+      providerRequestId: 'req-tms-0001',
+      suggestion: 'Review',
+      label: 'Porn',
+      subLabel: 'Sexy',
+      score: 88.5,
+    })
 
     const transaction = await app.request(ADMIN_ROUTES.transactions, {
       headers: { cookie: adminCookie },
     })
     expect(transaction.status).toBe(200)
     expect(AdminTransactionPageSchema.parse(await transaction.json()).items).toEqual([])
+  })
+
+  test('#228 §6：审核记录检索也暴露 provider 上游元数据，历史记录保持 null', async () => {
+    const listingId = encodePublicId(PUBLIC_ID_PREFIX.listing, REVIEW_LISTING_ID)
+    const response = await app.request(`${ADMIN_ROUTES.moderationRecords}?listingId=${listingId}`, {
+      headers: { cookie: adminCookie },
+    })
+    expect(response.status).toBe(200)
+    const page = AdminModerationRecordsSchema.parse(await response.json())
+    const recordId = (id: string) => encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, id)
+
+    expect(
+      page.items.find((item) => item.record.id === recordId(REVIEW_RECORD_ID))?.record,
+    ).toMatchObject({
+      provider: 'TENCENT_TMS',
+      providerRequestId: 'req-tms-0001',
+      suggestion: 'Review',
+      label: 'Porn',
+      subLabel: 'Sexy',
+      score: 88.5,
+    })
+    expect(
+      page.items.find((item) => item.record.id === recordId(BLOCKED_EDIT_RECORD_ID))?.record,
+    ).toMatchObject({
+      provider: null,
+      providerRequestId: null,
+      suggestion: null,
+      label: null,
+      subLabel: null,
+      score: null,
+    })
+    // 本地词表行是第三种形状（见 detail 用例）：provider=LOCAL + suggestion/subLabel 有值，
+    // 腾讯专有的 label / score / RequestId 仍为 null。检索端点也必须原样回读。
+    expect(
+      page.items.find((item) => item.record.id === recordId(LOCAL_BLOCKED_EDIT_RECORD_ID))?.record,
+    ).toMatchObject({
+      provider: 'LOCAL',
+      suggestion: 'Block',
+      subLabel: 'PROHIBITED_CONTENT',
+      providerRequestId: null,
+      label: null,
+      score: null,
+    })
+
+    // #228 §6「不公开 Label/Score/RequestId 给普通用户」：这些列现在进了 Admin 契约，
+    // 但卖家侧的商品详情必须一个都不带——包括命中策略（matchedRules / matchedTermsMasked）。
+    // 对**原始 JSON 文本**扫键名而不是逐字段断言：以后有人把 record 整个展开进 Listing DTO 时，
+    // 逐字段断言很容易漏掉新增的嵌套，扫描不会。
+    const sellerView = await app.request(
+      LISTING_ROUTES.detail(encodePublicId(PUBLIC_ID_PREFIX.listing, REVIEW_LISTING_ID)),
+      { headers: { cookie: userCookie } },
+    )
+    expect(sellerView.status).toBe(200)
+    const sellerRaw = await sellerView.text()
+    for (const leaked of [
+      'provider',
+      'providerRequestId',
+      'suggestion',
+      'label',
+      'subLabel',
+      'score',
+      'matchedRules',
+      'matchedTermsMasked',
+    ]) {
+      expect(sellerRaw.includes(`"${leaked}"`)).toBe(false)
+    }
   })
 
   test('moderation decisions require an idempotency key', async () => {
@@ -755,6 +859,45 @@ describe('Admin 查询端到端', () => {
     const detailBody = AdminModerationDetailSchema.parse(await detail.json())
     expect(detailBody.machineDecision).toBe('REVIEW')
     expect(detailBody.humanDecision).toBeNull()
+    // #228 §6：详情要能追溯到腾讯上游结论。
+    expect(detailBody.item.record).toMatchObject({
+      provider: 'TENCENT_TMS',
+      providerRequestId: 'req-tms-0001',
+      suggestion: 'Review',
+      label: 'Porn',
+      subLabel: 'Sexy',
+      score: 88.5,
+    })
+    // #228 之前落库的历史行没有上游来源，六列必须是 null 而不是空串或 0。
+    const legacyHistory = detailBody.history.find(
+      (record) =>
+        record.id === encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, BLOCKED_EDIT_RECORD_ID),
+    )
+    expect(legacyHistory).toMatchObject({
+      provider: null,
+      providerRequestId: null,
+      suggestion: null,
+      label: null,
+      subLabel: null,
+      score: null,
+    })
+
+    // 本地词表行（dev / CI / core-smoke 的默认 transport）与"历史全 NULL"是**两种形状**：
+    // 它有 suggestion 与 subLabel，但没有腾讯的 label / score / RequestId。
+    // 详情返回必须原样回读，不能把 LOCAL 行也拍平成 null。
+    const localHistory = detailBody.history.find(
+      (record) =>
+        record.id ===
+        encodePublicId(PUBLIC_ID_PREFIX.moderationRecord, LOCAL_BLOCKED_EDIT_RECORD_ID),
+    )
+    expect(localHistory).toMatchObject({
+      provider: 'LOCAL',
+      suggestion: 'Block',
+      subLabel: 'PROHIBITED_CONTENT',
+      providerRequestId: null,
+      label: null,
+      score: null,
+    })
 
     const decided = await app.request(ADMIN_ROUTES.moderationDecision(recordId), {
       method: 'POST',
@@ -769,6 +912,16 @@ describe('Admin 查询端到端', () => {
     const decidedBody = AdminModerationDetailSchema.parse(await decided.json())
     expect(decidedBody.humanDecision?.decision).toBe('ALLOW')
     expect(decidedBody.item.listing.moderationStatus).toBe('APPROVED')
+    // #228 §6「人工结果也可追溯」：人工改判自己写成一条 provider=MANUAL 的记录，
+    // 且不得伪造腾讯的 label / score。
+    const manualRecord = decidedBody.history.find((record) => record.provider === 'MANUAL')
+    expect(manualRecord).toMatchObject({
+      providerRequestId: null,
+      suggestion: null,
+      label: null,
+      subLabel: null,
+      score: null,
+    })
 
     const repeated = await app.request(ADMIN_ROUTES.moderationDecision(REVIEW_RECORD_ID), {
       method: 'POST',

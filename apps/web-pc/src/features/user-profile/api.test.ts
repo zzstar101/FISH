@@ -33,6 +33,7 @@ const card = {
   coverUrl: null,
   createdAt: '2026-09-29T00:00:00.000Z',
   moderationStatus: null,
+  wants: 0,
 } as const
 
 afterEach(() => {

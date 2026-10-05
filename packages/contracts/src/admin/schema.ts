@@ -373,6 +373,28 @@ export type AdminAuditLogPage = z.infer<typeof AdminAuditLogPageSchema>
 // Moderation / transaction 查询
 // ---------------------------------------------------------------------------
 
+/**
+ * 审核记录的上游元数据（#228 §6）。`provider` 是这次判定的来源，其余五列的**含义随 provider 变化**，
+ * 读的时候必须先看 provider，不能把 `suggestion` / `subLabel` 一律当成腾讯原始结论：
+ *
+ * - `TENCENT_TMS` / `TENCENT_IMS`：`suggestion` / `label` / `subLabel` / `score` 是腾讯原始结论，
+ *   `providerRequestId` 是腾讯 `RequestId`，用于对账与排障。
+ * - `LOCAL`：本地词表判定。`suggestion` 由本地 decision 派生（`Pass` / `Review` / `Block`），
+ *   `subLabel` 是命中的**本地规则码**（如 `EXTERNAL_CONTACT`），`label` / `score` /
+ *   `providerRequestId` 为 NULL——本地词表没有腾讯的 Label 与 Score，也没有上游请求。
+ * - `MANUAL`：人工改判，只有 `provider` 非空，其余五列均为 NULL（人工结论看 `decision` 与审计日志）。
+ *
+ * **只出现在 Admin 读路径**：普通用户的 Listing 响应永远不带这些字段（#228 §6「不向客户端暴露
+ * Label/Score/命中策略」）。`score` 只供审计与策略校准，不参与判定。
+ */
+export const AdminModerationProviderSchema = z.enum([
+  'LOCAL',
+  'TENCENT_TMS',
+  'TENCENT_IMS',
+  'MANUAL',
+])
+export const AdminModerationSuggestionSchema = z.enum(['Pass', 'Review', 'Block'])
+
 export const AdminModerationRecordSchema = z.object({
   id: ModerationRecordIdSchema,
   listingId: ListingIdSchema.nullable(),
@@ -384,6 +406,13 @@ export const AdminModerationRecordSchema = z.object({
   matchedRules: z.array(z.string()),
   matchedTermsMasked: z.array(z.string()),
   ruleVersion: z.string().min(1),
+  /** #228 之前的历史行没有来源概念，一律 NULL。 */
+  provider: AdminModerationProviderSchema.nullable(),
+  providerRequestId: z.string().nullable(),
+  suggestion: AdminModerationSuggestionSchema.nullable(),
+  label: z.string().nullable(),
+  subLabel: z.string().nullable(),
+  score: z.number().nullable(),
   createdAt: z.iso.datetime(),
 })
 export type AdminModerationRecord = z.infer<typeof AdminModerationRecordSchema>

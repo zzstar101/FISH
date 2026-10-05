@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { buildListingEmbeddingText, contentHashOf } from '@fish/contracts/embedding/text'
+import type { ListingCategory } from '@fish/contracts/listings/schema'
 import { createDb, type Db } from '@fish/db/client'
 import { findEmbedding, saveEmbedding } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
@@ -103,7 +104,13 @@ async function withSeller(run: (sellerId: string, otherSellerId: string) => Prom
 
 async function insertListingWithTime(
   sellerId: string,
-  input: { createdAt: Date; priceCents: number; status?: 'ACTIVE' | 'OFFLINE' },
+  input: {
+    createdAt: Date
+    priceCents: number
+    category?: ListingCategory
+    free?: boolean
+    status?: 'ACTIVE' | 'OFFLINE'
+  },
 ): Promise<string> {
   const id = newId()
   await db.insert(listings).values({
@@ -113,9 +120,10 @@ async function insertListingWithTime(
     title: `分页商品 ${input.priceCents}`,
     description: '分页测试',
     priceCents: input.priceCents,
-    category: 'DIGITAL',
+    category: input.category ?? 'DIGITAL',
     condition: 'GOOD',
     status: input.status ?? 'ACTIVE',
+    free: input.free ?? false,
     createdAt: input.createdAt,
   })
   return id
@@ -383,6 +391,114 @@ test('feed 只返回请求的状态，并按 (createdAt, id) 翻页且不重不�
     expect(collected).toHaveLength(4)
     expect(new Set(collected).size).toBe(4)
     expect(collected).not.toContain(offlineId)
+  })
+})
+
+// #451 的口径回归：`free` 是独立布尔位，**不能用价格区间近似实现**。
+// 契约只约束 `free ⟹ priceCents = 0`，反向不成立 —— 发布端输入 `0` 但不勾「免费送」就能
+// 产生 `free = false && priceCents = 0` 的商品（`parsePriceToCents` 的正则接受 `"0"`）。
+// 若筛选按价格近似（例如 `priceMaxCents = 0`），这条零元但非免费的商品会被当成免费送。
+test('free 筛选只认 free 布尔位，不把 0 元但非免费的商品当成免费送', async () => {
+  await withSeller(async (sellerId) => {
+    const paidId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:00:00.000Z'),
+      priceCents: 800,
+    })
+    const zeroNotFreeId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:01:00.000Z'),
+      priceCents: 0,
+      free: false,
+    })
+    const freeId = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T03:02:00.000Z'),
+      priceCents: 0,
+      free: true,
+    })
+
+    const feed = (free?: boolean) =>
+      store.listFeed({
+        limit: 50,
+        cursor: null,
+        sort: 'newest',
+        status: 'ACTIVE',
+        sellerId,
+        ...(free === undefined ? {} : { free }),
+      })
+
+    const onlyFree = (await feed(true)).map((row) => row.listing.id)
+    expect(onlyFree).toEqual([freeId])
+    // 关键断言：价格近似实现会把 zeroNotFreeId 一起返回
+    expect(onlyFree).not.toContain(zeroNotFreeId)
+    expect(onlyFree).not.toContain(paidId)
+
+    const onlyPaid = (await feed(false)).map((row) => row.listing.id)
+    expect(onlyPaid).toEqual(expect.arrayContaining([paidId, zeroNotFreeId]))
+    expect(onlyPaid).not.toContain(freeId)
+
+    // 缺省 = 不过滤（与 `free = false` 区分开）
+    const all = (await feed()).map((row) => row.listing.id)
+    expect(all).toEqual(expect.arrayContaining([paidId, zeroNotFreeId, freeId]))
+  })
+})
+
+// 验收原话：「free 与 category / q / sort / cursor 可组合，翻页不重不漏」。
+// 组合本身靠同一 conditions 数组做 AND；翻页游标是「上一页最后一行」的定位键，
+// 与 free 无关——但这个前提值得用一条用例钉住，否则将来把 free 挪到游标分支里就会静默漏项。
+test('free 与 category 组合，并与游标一起翻页且不重不漏', async () => {
+  await withSeller(async (sellerId) => {
+    const freeDigital = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T05:00:00.000Z'),
+      priceCents: 0,
+      free: true,
+    })
+    const freeBooks = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T05:01:00.000Z'),
+      priceCents: 0,
+      category: 'BOOKS',
+      free: true,
+    })
+    const paidDigital = await insertListingWithTime(sellerId, {
+      createdAt: new Date('2026-09-12T05:02:00.000Z'),
+      priceCents: 900,
+    })
+
+    const scope = { status: 'ACTIVE', sellerId } as const
+
+    // 组合：free 与 category 同时生效（两个条件是 AND，不是覆盖）
+    const digitalFree = await store.listFeed({
+      limit: 50,
+      cursor: null,
+      sort: 'newest',
+      ...scope,
+      free: true,
+      category: 'DIGITAL',
+    })
+    expect(digitalFree.map((row) => row.listing.id)).toEqual([freeDigital])
+
+    // 翻页：limit=1 逼出游标（store 会多取一行做 lookahead）
+    const first = await store.listFeed({
+      limit: 1,
+      cursor: null,
+      sort: 'newest',
+      ...scope,
+      free: true,
+    })
+    const boundary = first[0]
+    expect(boundary?.listing.id).toBe(freeBooks)
+    if (boundary === undefined) throw new Error('limit=1 未返回边界行，无法翻页')
+
+    const second = await store.listFeed({
+      limit: 1,
+      cursor: { kind: 'newest', createdAt: boundary.createdAtCursor, id: boundary.listing.id },
+      sort: 'newest',
+      ...scope,
+      free: true,
+    })
+    expect(second.map((row) => row.listing.id)).toEqual([freeDigital])
+    // 不重不漏：两条免费商品各出现一次，付费的那条始终不出现
+    const seen = [...first.slice(0, 1), ...second].map((row) => row.listing.id)
+    expect(seen).toEqual([freeBooks, freeDigital])
+    expect(seen).not.toContain(paidDigital)
   })
 })
 
@@ -845,8 +961,32 @@ async function matchJobsFor(listingId: string) {
   return rows
 }
 
+/**
+ * 该商品全部 MATCH_LISTING 行的 id（含终态）：#322 M4 尾项起"待跑期间再投会被唯一索引复用"，
+ * 所以"有没有投递"只能按**行的身份**看，数行数不再有区分力。
+ */
+async function matchJobIds(listingId: string): Promise<string[]> {
+  const rows = await db.execute<{ id: string }>(sql`
+    select id from jobs
+    where type = 'MATCH_LISTING' and payload->>'listingId' = ${listingId}
+    order by id
+  `)
+  return rows.map((row) => row.id)
+}
+
+/** 把该商品待跑的 MATCH_LISTING 置为 DONE：模拟 worker 已领走，用来观察下一次写操作是否再投一条。 */
+async function settleMatchJobs(listingId: string): Promise<void> {
+  await db.execute(sql`
+    update jobs set status = 'DONE'
+    where type = 'MATCH_LISTING' and status = 'PENDING' and payload->>'listingId' = ${listingId}
+  `)
+}
+
 // 回归：编辑改变打分输入（标题/描述/价格/分类），必须重算匹配；否则 matches 里那一对永远是旧分数。
-test('编辑商品后追加一条 MATCH_LISTING job', async () => {
+// #322 M4 尾项起 `MATCH_LISTING` 也有 partial unique index（`apps/api/src/modules/listings/store.ts`
+// 的投递带 `ON CONFLICT … DO UPDATE`）：上一条还待跑时再编辑会被**复用**（那条 job 运行时重读
+// 实体现状），所以"编辑 → 再投一条"要看**被领走之后**的编辑。
+test('编辑商品投 MATCH_LISTING job：待跑期间复用同一条，领走后再编辑追加一条', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(record(sellerId))
     // 创建本身就投了一条
@@ -857,35 +997,95 @@ test('编辑商品后追加一条 MATCH_LISTING job', async () => {
       sellerId,
       apply: () => ({ kind: 'write' as const, fields: { priceCents: 30000 } }),
     })
+    // 上一条还 PENDING ⇒ 不堆行
+    expect(await matchJobsFor(created.listingId)).toHaveLength(1)
+
+    await settleMatchJobs(created.listingId)
+    await store.updateListingAtomic({
+      id: created.listingId,
+      sellerId,
+      apply: () => ({ kind: 'write' as const, fields: { title: '领走后再编辑' } }),
+    })
 
     const jobsAfterEdit = await matchJobsFor(created.listingId)
     expect(jobsAfterEdit).toHaveLength(2)
     // payload 必须恰好是 { listingId }（#8 的 strictObject）
-    expect(jobsAfterEdit[0]?.keys).toBe(1)
-    expect(jobsAfterEdit[0]?.listingId).toBe(created.listingId)
+    for (const job of jobsAfterEdit) {
+      expect(job.keys).toBe(1)
+      expect(job.listingId).toBe(created.listingId)
+    }
   })
 })
 
-test('下架与重新上架各追加一条 MATCH_LISTING job', async () => {
+test('下架与重新上架各投一条 MATCH_LISTING job（待跑期间复用）', async () => {
   await withSeller(async (sellerId) => {
     const created = await store.createListingAtomic(record(sellerId))
 
     expect(await store.setStatus({ id: created.listingId, from: 'ACTIVE', to: 'OFFLINE' })).toBe(
       true,
     )
-    expect(await matchJobsFor(created.listingId)).toHaveLength(2)
+    expect(await matchJobsFor(created.listingId)).toHaveLength(1)
 
+    await settleMatchJobs(created.listingId)
     expect(await store.setStatus({ id: created.listingId, from: 'OFFLINE', to: 'ACTIVE' })).toBe(
       true,
     )
-    expect(await matchJobsFor(created.listingId)).toHaveLength(3)
+    expect(await matchJobsFor(created.listingId)).toHaveLength(2)
+  })
+})
+
+/**
+ * 回归（#457 三轮审查 P2-1）：投递**必须取走冲突行的行锁**，不能只 `DO NOTHING`。
+ *
+ * 待跑的 MATCH_LISTING 行在投递事务**提交前**就对 worker 可见（`queue.claimNext()` 在另一条
+ * 连接上跑单条 `… FOR UPDATE SKIP LOCKED`，而匹配引擎读实体不加锁）。若投递只 `DO NOTHING`，
+ * worker 能在提交前领走它、按**改动前**的状态算完：`target-not-active` 这类 `skipped` 是返回值、
+ * 不抛异常 ⇒ `queue.settle()` 照样结算 `DONE` 且不重试 ⇒ 本次编辑一次重算都没有。
+ * `DO UPDATE SET run_at = now()` 会把那一行锁到提交，`SKIP LOCKED` 只能跳过它。
+ *
+ * 断言就是 worker 的那条领取语句：在投递事务**还开着**时从另一条连接领，必须领不到。
+ */
+test('待跑 MATCH_LISTING 在投递事务提交前领不走（DO UPDATE 持锁）', async () => {
+  await withSeller(async (sellerId) => {
+    const created = await store.createListingAtomic(record(sellerId))
+    const enqueued = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+
+    const editing = db.transaction(async (tx) => {
+      // 事务句柄绑到 store 上：`tx` 是 `PgTransaction`，与本文件其余处一样按结构断言转换。
+      const txStore = createSqlListingStore(tx as unknown as Db)
+      await txStore.updateListingAtomic({
+        id: created.listingId,
+        sellerId,
+        apply: () => ({ kind: 'write' as const, fields: { priceCents: 31000 } }),
+      })
+      enqueued.resolve()
+      await release.promise
+    })
+    try {
+      await enqueued.promise
+
+      // worker 的领取语句：`skip locked` 跳过被本事务锁住的那一行。
+      const claimed = await db.execute<{ id: string }>(sql`
+        select id from jobs
+        where type = 'MATCH_LISTING' and status = 'PENDING'
+          and payload->>'listingId' = ${created.listingId}
+        for update skip locked
+      `)
+      // 修复前（投递只 `DO NOTHING`）这里是 1 行：worker 能在提交前领走它并按旧状态算完。
+      expect(claimed).toHaveLength(0)
+    } finally {
+      // 断言失败也要放行那个开着的事务，否则失败会表现成超时而不是断言。
+      release.resolve()
+      await editing
+    }
   })
 })
 
 test('没有真正改到行时不投 job（不存在的、别人的、被锁定的、状态没变的）', async () => {
   await withSeller(async (sellerId, otherSellerId) => {
     const created = await store.createListingAtomic(record(sellerId))
-    const before = (await matchJobsFor(created.listingId)).length
+    const before = await matchJobIds(created.listingId)
 
     // 不存在的商品
     const missingId = newId()
@@ -916,7 +1116,7 @@ test('没有真正改到行时不投 job（不存在的、别人的、被锁定�
     })
     await store.setStatus({ id: created.listingId, from: 'ACTIVE', to: 'OFFLINE' })
 
-    expect(await matchJobsFor(created.listingId)).toHaveLength(before)
+    expect(await matchJobIds(created.listingId)).toEqual(before)
   })
 })
 
@@ -1488,5 +1688,103 @@ describe('findCardsByIds（#323 R4 按 id 取卡的读路径）', () => {
 
   test('空 id 列表直接回空数组（不为了让 SQL 报错而发一次 in () 查询）', async () => {
     expect(await store.findCardsByIds([], { viewerUserId: null })).toEqual([])
+  })
+})
+
+/*
+ * 想要数（`ListingCardSchema.wants`）= 与该商品已建立会话的买家数（#74 口径）。
+ * 这条链路横跨四个读路径（feed / 按 id 取卡 / 详情 / 其它域的卡片投影），而它们
+ * 各自在 SQL 里塞一个 `listingWantsCount` 子查询 —— 漏一处不会报错，只会让那个页面
+ * 上的数字悄悄变成 0。所以这里用真实会话行把它钉死。
+ */
+describe('想要数（已建会话的买家数）', () => {
+  /**
+   * 本组自建自清的夹具。**不复用 `withSeller`**：它只按卖家清商品，而 `conversations`
+   * 对 `listings` 是 NO ACTION（会话是有价值的数据，不随商品连坐），本组的会话行会挡住
+   * 商品删除。所以这里按「会话 → 商品 → 用户」的顺序显式清。
+   */
+  async function withBuyers(
+    run: (ids: { sellerId: string; buyerA: string; buyerB: string }) => Promise<void>,
+  ) {
+    const sellerId = await createUser(db)
+    const buyerA = await createUser(db)
+    const buyerB = await createUser(db)
+    const userIds = [sellerId, buyerA, buyerB]
+    try {
+      await run({ sellerId, buyerA, buyerB })
+    } finally {
+      const owned = await db
+        .select({ id: listings.id })
+        .from(listings)
+        .where(inArray(listings.sellerId, userIds))
+      const listingIds = owned.map((row) => row.id)
+      if (listingIds.length > 0) {
+        await db.delete(conversations).where(inArray(conversations.listingId, listingIds))
+        await db.delete(listings).where(inArray(listings.id, listingIds))
+      }
+      await db.delete(users).where(inArray(users.id, userIds))
+    }
+  }
+
+  /** 直插一条在售商品（不走 service：本组测的是读路径的计数，不是发布流程）。 */
+  async function insertActiveListing(sellerId: string): Promise<string> {
+    const id = newId()
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: '想要数测试商品',
+      description: '想要数',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+    })
+    return id
+  }
+
+  async function addConversation(listingId: string, sellerId: string, buyerId: string) {
+    await db.insert(conversations).values({ id: newId(), listingId, buyerId, sellerId })
+  }
+
+  test('三个读路径都算出会话买家数；没有会话的商品是 0（不是「没查」）', async () => {
+    await withBuyers(async ({ sellerId, buyerA, buyerB }) => {
+      const listingId = await insertActiveListing(sellerId)
+      const untouched = await insertActiveListing(sellerId)
+      await addConversation(listingId, sellerId, buyerA)
+      await addConversation(listingId, sellerId, buyerB)
+
+      const feed = await store.listFeed({
+        limit: 10,
+        cursor: null,
+        sort: 'newest',
+        status: 'ACTIVE',
+      })
+      const wantsOfFeed = (id: string) => feed.find((entry) => entry.listing.id === id)?.wants
+      const [fromIds] = await store.findCardsByIds([listingId], { viewerUserId: null })
+      const detail = await store.findDetail(listingId)
+
+      expect(wantsOfFeed(listingId)).toBe(2)
+      expect(fromIds?.wants).toBe(2)
+      expect(detail?.wants).toBe(2)
+
+      // 一件谁都没聊过的商品必须是 0 —— 这一条正是「计数没查」与「确实没人想要」的分界，
+      // 契约把 `wants` 定成必填非空就是为了让两者在页面上不再长得一样。
+      expect(wantsOfFeed(untouched)).toBe(0)
+      expect((await store.findDetail(untouched))?.wants).toBe(0)
+    })
+  })
+
+  test('同一买家对同一商品只算一次（(listing, buyer) 唯一）', async () => {
+    await withBuyers(async ({ sellerId, buyerA }) => {
+      const listingId = await insertActiveListing(sellerId)
+      await addConversation(listingId, sellerId, buyerA)
+      // 唯一索引挡第二次插入；这里断言的是计数口径本身（`count(*)` 数行，不是数消息）。
+      await db
+        .insert(conversations)
+        .values({ id: newId(), listingId, buyerId: buyerA, sellerId })
+        .onConflictDoNothing()
+
+      expect((await store.findDetail(listingId))?.wants).toBe(1)
+    })
   })
 })

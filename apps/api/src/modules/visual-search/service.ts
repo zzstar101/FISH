@@ -26,6 +26,7 @@ import { probeImage } from '../messages/media-probe'
 import { type VisualParser, visualTextQueryOf } from './parse'
 import {
   freshnessScore,
+  isAboveRecallFloor,
   orderVisualCandidates,
   popularityScore,
   scoreVisualCandidate,
@@ -303,15 +304,25 @@ export function createVisualSearchService(deps: {
         )
       }
 
+      // 召回相似度下限（#406 第 6 项）：两路都没有共同方向的候选不算召回。
+      // 放在 NO_EMBEDDING 判定**之后**：`candidates.size === 0` 到底该报 503 还是"空结果"，
+      // 取决于库里有没有该模型的向量，而不是取决于下限剔掉了多少条。
+      // 上限之外**全被剔掉**是合法结局——那才是"没有相似商品"（200 + items = []），
+      // 也正是 empty-result rate 从恒 0 变成真信号的原因。
+      for (const [listingId, candidate] of [...candidates]) {
+        if (!isAboveRecallFloor(candidate)) candidates.delete(listingId)
+      }
+
       const listingIds = [...candidates.keys()]
       const category = interpretation?.category
       const [signals, listingRows, soldStats] = await Promise.all([
         store.loadListingSignals(listingIds),
         store.loadListings(listingIds),
         // 没有解析出类目就没有统计口径：不查库，直接空统计（阈值判定在服务端，客户端不重复判断）。
+        // 有类目时按 `viewerId` 排除本人已成交商品：与召回侧同一口径（#406 第 2 项）。
         category === undefined
           ? Promise.resolve<VisualSoldPriceStats>({ soldAvgPriceCents: null, soldSampleCount: 0 })
-          : store.soldPriceStats(category),
+          : store.soldPriceStats({ category, excludeSellerId: viewerId }),
       ])
 
       const items = orderVisualCandidates(
