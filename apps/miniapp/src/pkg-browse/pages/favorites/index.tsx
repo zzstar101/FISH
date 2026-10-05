@@ -9,11 +9,12 @@ import TopBar from '@/components/top-bar'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
+import { createConversation, describeCreateConversationFailure } from '@/features/chat/api'
 import { fetchMyFavorites, setFavorite } from '@/features/favorites/api'
 import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 import { type Cancellable, cancellable } from '@/lib/cancellable'
 import { formatAmount } from '@/lib/money'
-import { isApiError } from '@/lib/request'
+import { isApiError, isUnauthenticatedError } from '@/lib/request'
 import {
   emptyCopy,
   FAVORITE_SEGMENTS,
@@ -56,9 +57,11 @@ import './index.scss'
  * - **「取消收藏」是真写**：`DELETE /listings/:id/favorite`（幂等），成功后**就地摘掉那些行**
  *   并按服务端结果把 `total` 减掉 —— 不靠重拉整页，也不做「本地删了刷新又回来」的假动作；
  *   失败的 id 原样留在选中集合里，用户能看见哪几条没成功；
- * - 「聊一聊」给「待接入」说明，「立即购买」与点行按稿进商品详情页 ——
- *   演示数据的 id 在库里不存在，跳过去必然 404，所以演示行给说明 toast，
- *   **不跳、也不假装跳成功**（判据是行上的 `demo` 标记，见 `./list.ts`）。
+ * - **「聊一聊」是真写**：`POST /conversations` 与商品详情页的「聊一聊」同一条路径
+ *   （服务端对同一 (listingId, 买家) 复用既有会话，重发幂等），拿到真实
+ *   `conversation.id` 再跳会话页；「立即购买」与点行按稿进商品详情页 ——
+ *   演示数据的 id 在库里不存在，写过去必然 404，所以演示行给说明 toast，
+ *   **不发请求、也不假装成功**（判据是行上的 `demo` 标记，见 `./list.ts`）。
  *
  * ## 稿里刻意没有的东西（别加回来）
  *
@@ -158,6 +161,8 @@ export default function Favorites() {
   const [selected, setSelected] = useState<string[]>([])
   /** 「取消收藏」在途：挡住连点，避免同一批被写两遍 */
   const [removing, setRemoving] = useState(false)
+  /** 「聊一聊」在飞的那一行 id（单飞：同一时刻只发起一次建会话） */
+  const [chattingId, setChattingId] = useState<string | null>(null)
 
   /** 最近一次在飞的读取：换账号 / 卸载时取消，迟到的结果不再写状态（`@/lib/cancellable`） */
   const inFlight = useRef<Cancellable<FavoritesLoad> | null>(null)
@@ -168,6 +173,13 @@ export default function Favorites() {
    * 泄漏帧照样存在。
    */
   const [prevUserId, setPrevUserId] = useState<string | null>(userId)
+  /**
+   * 聊一聊迟到回调的**世代令牌**（同 `pkg-browse/pages/listing-detail` 的 `epochRef`
+   * 口径）：换账号（下面的渲染期重置）与**离开本页**（加载 effect 的清理）都 +1。
+   * 只比账号挡不住「A 点聊一聊 → 返回 → 退出登录 → B 登录」——组件卸载后 ref 冻结
+   * 在 A，迟到的成功响应会把 A 的会话页压给 B；世代在卸载时也前进才能挡住这条路。
+   */
+  const chatEpochRef = useRef(0)
 
   if (prevUserId !== userId) {
     setPrevUserId(userId)
@@ -181,6 +193,9 @@ export default function Favorites() {
     setManaging(false)
     setSelected([])
     setRemoving(false)
+    // 在飞的建会话属于上一个账号：迟到响应不许再压出会话页
+    setChattingId(null)
+    chatEpochRef.current += 1
   }
 
   /**
@@ -226,6 +241,8 @@ export default function Favorites() {
     // 取消的是**最新**那次：卸载时可能还有一次下拉刷新在飞
     return () => {
       inFlight.current?.cancel()
+      // 卸载也前进聊一聊世代：离开本页后迟到的建会话结果不许再导航 / 弹 toast
+      chatEpochRef.current += 1
     }
   }, [authStatus, userId, startLoad])
 
@@ -310,8 +327,45 @@ export default function Favorites() {
     run(item)
   }
 
-  /** 「聊一聊」：后端有 `POST /conversations`，但小程序侧未接（商品详情页同为 toast） */
-  const chat = () => toast('聊天待接入')
+  /**
+   * 「聊一聊」：与收藏商品的卖家建/取会话后跳会话页 —— 与商品详情页的
+   * `chatWithSeller` 同一条路径（`POST /conversations`，服务端对同一
+   * (listingId, 买家) **复用**既有会话，重复点击就是幂等的重发）。
+   *
+   * 登录边界：本页整页挂在守卫后面，渲染到这里必然已登录；会话过期（401）时
+   * `apiRequest` 会就地清会话、守卫随即跳登录页，所以失败提示只覆盖普通失败。
+   * 演示行的 id 不在库里，写过去必然 404 —— 给说明，**不发请求**（与
+   * 「取消收藏」对演示行的口径一致）。
+   */
+  const chatWith = (item: FavoriteItem) => {
+    if (item.demo) {
+      toast('演示数据：这件宝贝不在库里，聊不了')
+      return
+    }
+    if (chattingId !== null) return
+    const epoch = chatEpochRef.current
+    setChattingId(item.id)
+    void createConversation(item.id)
+      .then(async (conversation) => {
+        // 迟到的成功响应一律丢弃、不导航：换号或已离开本页（世代变了）都不例外
+        if (chatEpochRef.current !== epoch) return
+        await Taro.navigateTo({
+          url: `/pkg-social/pages/conversation/index?id=${conversation.id}`,
+        })
+      })
+      .catch((error: unknown) => {
+        if (chatEpochRef.current !== epoch) return
+        toast(
+          isUnauthenticatedError(error)
+            ? '请先登录后再聊一聊'
+            : describeCreateConversationFailure(error),
+        )
+      })
+      .finally(() => {
+        // 只释放自己的锁：世代变了（换号 / 离页）后，迟到的收尾不能放掉新任务的锁
+        if (chatEpochRef.current === epoch) setChattingId(null)
+      })
+  }
 
   const shown = itemsOf(items, segment)
   const empty = emptyCopy(segment)
@@ -558,7 +612,7 @@ export default function Favorites() {
                           </View>
                           <View
                             className="fav__abtn fav__abtn--primary"
-                            onClick={() => act(item, chat)}
+                            onClick={() => act(item, chatWith)}
                           >
                             <Text>聊一聊</Text>
                           </View>
