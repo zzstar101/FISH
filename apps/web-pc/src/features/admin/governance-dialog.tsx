@@ -18,10 +18,19 @@ import { validateReason } from './admin-view'
  * 通知，#448 审查教训），冲突时由调用方决定关闭与否。
  */
 
-export type GovernanceDialogInput = {
+/** 提交给治理 mutation 的形状：sourceReportId 已过前缀守卫（品牌类型）。 */
+export type GovernanceDialogOutput = {
   reason: string
-  sourceReportId?: string
+  sourceReportId?: `rpt_${string}`
   expiresAt?: string
+}
+
+/**
+ * 关联举报单的前缀守卫：匹配时把输入收窄成契约的 `rpt_${string}` 品牌类型，
+ * 让「报出去的 id 一定是举报单前缀」在类型层成立（存在性仍由服务端 404/422 兜底）。
+ */
+export function asSourceReportId(input: string): `rpt_${string}` | undefined {
+  return /^rpt_[0-9a-z]+$/.test(input) ? (input as `rpt_${string}`) : undefined
 }
 
 export function GovernanceDialog({
@@ -37,7 +46,7 @@ export function GovernanceDialog({
   description: string
   errorMessage: string | null
   onClose: () => void
-  onSubmit: (input: GovernanceDialogInput) => void
+  onSubmit: (input: GovernanceDialogOutput) => void
   pending: boolean
   /** restrict / ban 才有到期时间（契约：惰性判断，可不填=永久）。 */
   requireTarget: 'listing' | 'user-restrict' | 'user-lift'
@@ -68,9 +77,18 @@ export function GovernanceDialog({
       expires = parsed.toISOString()
     }
     setLocalError(null)
+    let brandedReport: `rpt_${string}` | undefined
+    if (trimmedReport.length > 0) {
+      const branded = asSourceReportId(trimmedReport)
+      if (branded === undefined) {
+        setLocalError('关联举报单 ID 格式不正确（应以 rpt_ 开头）')
+        return
+      }
+      brandedReport = branded
+    }
     onSubmit({
       reason: reason.trim(),
-      ...(trimmedReport.length > 0 ? { sourceReportId: trimmedReport } : {}),
+      ...(brandedReport !== undefined ? { sourceReportId: brandedReport } : {}),
       ...(expires !== undefined ? { expiresAt: expires } : {}),
     })
   }

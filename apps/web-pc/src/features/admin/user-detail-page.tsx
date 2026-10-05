@@ -13,7 +13,7 @@ import {
   useUserRestrictPublish,
 } from './admin-queries'
 import { auditActionLabel, authStatusMeta, formatAdminDateTime, roleMeta } from './admin-view'
-import type { GovernanceDialogInput } from './governance-dialog'
+import type { GovernanceDialogOutput } from './governance-dialog'
 import { GovernanceDialog } from './governance-dialog'
 
 /**
@@ -53,14 +53,12 @@ function UserDetailView({ detail, userId }: { detail: AdminUserDetail; userId: s
   const authMeta = authStatusMeta(user.authStatus)
   const roleView = roleMeta(user.role)
 
-  async function submit(input: GovernanceDialogInput, kind: UserActionKind) {
+  async function submit(input: GovernanceDialogOutput, kind: UserActionKind) {
     setDialogError(null)
     const body = {
       reason: input.reason,
-      // 弹窗收集的是自由文本；服务端会校验举报单存在且目标匹配（404/422），端上不做前缀仿真。
-      ...(input.sourceReportId !== undefined
-        ? { sourceReportId: input.sourceReportId as `rpt_${string}` }
-        : {}),
+      // 前缀已在弹窗守卫（asSourceReportId）收窄成品牌类型；存在性与目标匹配仍由服务端 404/422 兜底。
+      ...(input.sourceReportId !== undefined ? { sourceReportId: input.sourceReportId } : {}),
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     }
     try {

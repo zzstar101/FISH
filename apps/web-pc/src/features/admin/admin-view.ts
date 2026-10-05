@@ -139,11 +139,6 @@ export function formatRate(rate: number | null): string {
   return `${(rate * 100).toFixed(1)}%`
 }
 
-/** 比率可能 > 1（契约：曝光→详情实测 9:6），照实显示不加封顶。 */
-export function formatRatio(rate: number | null): string {
-  return formatRate(rate)
-}
-
 /** 延迟分位：count=0 时全 null → `—`。 */
 export function formatLatency(ms: number | null): string {
   if (ms === null) return '—'

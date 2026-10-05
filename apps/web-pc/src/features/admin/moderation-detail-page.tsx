@@ -45,6 +45,7 @@ function ModerationDetailView({
 }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogError, setDialogError] = useState<string | null>(null)
+  const [conflict, setConflict] = useState(false)
   const decision = useModerationDecision(recordId)
 
   const { item } = detail
@@ -66,7 +67,9 @@ function ModerationDetailView({
     } catch (error) {
       const outcome = moderationDecisionError(error)
       if (outcome.conflict) {
+        // 状态已被他人改掉：关弹窗、展示页级冲突提示（onError 已全量失效刷新详情）。
         setDialogOpen(false)
+        setConflict(true)
       } else {
         setDialogError(outcome.message)
       }
@@ -75,6 +78,12 @@ function ModerationDetailView({
 
   return (
     <div className="space-y-5">
+      {conflict ? (
+        <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
+          该审核记录已被其他管理员处理，详情已刷新。
+        </p>
+      ) : null}
+
       <div className="flex items-start justify-between gap-4">
         <div>
           <Link
