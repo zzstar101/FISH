@@ -1,5 +1,9 @@
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import type { ListingId } from '@fish/contracts/system/public-id'
+import type {
+  TransactionReview,
+  TransactionReviewCreateInput,
+} from '@fish/contracts/transaction-reviews/schema'
 import type { QueryClient } from '@tanstack/react-query'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
@@ -9,9 +13,11 @@ import {
   acceptTransaction,
   cancelTransaction,
   confirmTransaction,
+  createTransactionReview,
   deleteListing,
   fetchMeetupTokenStatus,
   fetchMyListings,
+  fetchMyReview,
   fetchProfile,
   fetchTransaction,
   fetchTransactions,
@@ -39,6 +45,8 @@ export const profileKeys = {
   pending: (ownerId: string) => ['pc', 'profile', 'pending', ownerId] as const,
   meetupToken: (ownerId: string, transactionId: string) =>
     ['pc', 'profile', 'meetup-token', ownerId, transactionId] as const,
+  review: (ownerId: string, transactionId: string) =>
+    ['pc', 'profile', 'review', ownerId, transactionId] as const,
 }
 
 type SessionMutationContext = { generation: number }
@@ -224,6 +232,47 @@ export function useConfirmTransaction(ownerId: string) {
 
 export function useCancelTransaction(ownerId: string) {
   return useTransactionMutation(ownerId, cancelTransaction)
+}
+
+/** 我的评价边（null = 还没评过）。卡片只挂在 COMPLETED 订单上，因此不设 enabled 开关。 */
+export function useMyReview(ownerId: string, transactionId: string) {
+  return useQuery({
+    queryKey: profileKeys.review(ownerId, transactionId),
+    queryFn: () => fetchMyReview(transactionId),
+    enabled: ownerId !== '' && transactionId !== '',
+    staleTime: 15_000,
+  })
+}
+
+export type CreateReviewVariables = { transactionId: string; input: TransactionReviewCreateInput }
+
+/**
+ * 写评价成功后的缓存接线（抽成可独立驱动的接缝，手法同 verify 域的 applyVerificationResult）：
+ * 写边缓存让卡片立即翻已评态、不再依赖 refetch；失效「我的评论」评价段，
+ * 新评价必须立刻出现在 /comments 列表里。
+ */
+export function applyReviewCreated(
+  queryClient: QueryClient,
+  ownerId: string,
+  transactionId: string,
+  review: TransactionReview,
+): void {
+  queryClient.setQueryData(profileKeys.review(ownerId, transactionId), review)
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'my-comments'] })
+}
+
+/** 写评价。**不可修改、不可重评** —— 重复提交由 409 在 api 层翻译，这里只管成功接线。 */
+export function useCreateReview(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ transactionId, input }: CreateReviewVariables) =>
+      createTransactionReview(transactionId, input),
+    onMutate: captureSession,
+    onSuccess: (review, variables, context) => {
+      if (!isSessionCurrent(context)) return
+      applyReviewCreated(queryClient, ownerId, variables.transactionId, review)
+    },
+  })
 }
 
 const EMPTY_PENDING: PendingIndex = {

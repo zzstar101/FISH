@@ -775,8 +775,9 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       API_PORT: String(port),
       MAIL_TRANSPORT: 'outbox',
       WECHAT_TRANSPORT: 'stub',
-      // #228：内容审核 transport 无默认值，缺配置 API 启动即失败。core smoke 不经过审核接线
-      // （发布链本期未接入适配器），显式 local；不依赖调用方环境，也不让生产的 tencent 漏进来。
+      // #228：内容审核 transport 无默认值，缺配置 API 启动即失败。core smoke 用本地词表 provider
+      // 跑通发布链（文本 TMS 接线见 #353，图片 IMS 见 #286），不依赖调用方环境，也不让生产的
+      // tencent 漏进来。
       CONTENT_MODERATION_TRANSPORT: 'local',
     })
     await waitFor('API /health → 200', async () => {

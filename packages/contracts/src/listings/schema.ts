@@ -345,6 +345,23 @@ export const ListingFeedQuerySchema = z
     category: ListingCategorySchema.optional(),
     priceMinCents: z.coerce.number().int().min(0).optional(),
     priceMaxCents: z.coerce.number().int().min(0).optional(),
+    /**
+     * 「免费送」筛选（#451）。
+     *
+     * **必须是契约的 `free` 布尔位，不能用价格近似**：本文件只约束
+     * `free ⟹ priceCents === 0`（见 `ListingCreateInputSchema` 的 refine），反向不成立 ——
+     * `free = false && priceCents = 0` 是合法状态，且发布端输入 `0` 不勾「免费送」就能产生它。
+     * 用 `priceMinCents=0&priceMaxCents=0` 近似会把这类商品误报成免费送。
+     *
+     * 缺省 = 不过滤；`false` = 只看**非**免费送（不是「等同缺省」）。
+     *
+     * 用 `z.enum(['true','false'])` 而不是 `z.coerce.boolean()`：后者把任何非空字符串
+     * （含 `"false"`）都判成 `true`，于是 `?free=false` 会静默变成「只看免费送」。
+     */
+    free: z
+      .enum(['true', 'false'])
+      .transform((value) => value === 'true')
+      .optional(),
     sort: ListingSortSchema.default('newest'),
     limit: z.coerce.number().int().min(1).max(50).default(20),
     /**

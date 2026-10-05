@@ -143,6 +143,17 @@ describe('ListingFeedQuerySchema', () => {
     expect(ListingFeedQuerySchema.safeParse({}).success).toBe(true)
   })
 
+  // #451：`free` 必须解析成布尔位，且只认 `"true"` / `"false"` 两个字面量。
+  // 用 `z.coerce.boolean()` 的实现会把 `?free=false` 也判成 true（任何非空字符串都真），
+  // 于是「只看非免费送」静默变成「只看免费送」—— 静默反转，所以把口径钉死。
+  test('parses free as a strict boolean literal and rejects other strings', () => {
+    expect(ListingFeedQuerySchema.parse({ free: 'true' }).free).toBe(true)
+    expect(ListingFeedQuerySchema.parse({ free: 'false' }).free).toBe(false)
+    expect(ListingFeedQuerySchema.parse({}).free).toBeUndefined()
+    expect(issuePaths(ListingFeedQuerySchema, { free: '1' })).toEqual([['free']])
+    expect(issuePaths(ListingFeedQuerySchema, { free: '' })).toEqual([['free']])
+  })
+
   // 冻结契约没有规定区间倒置的行为（§2.1 只说空结果是 200），因此代码与冻结文本一致：不加 422 规则。
   // 若 Owner 要收紧，需按 CONTRIBUTING §5 补进契约后重新 Freeze。
   test('accepts an inverted price range (frozen contract defines no rule for it)', () => {
