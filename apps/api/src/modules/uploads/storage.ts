@@ -1,4 +1,9 @@
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import {
+  DISPUTE_MEDIA_URL_TTL_SECONDS,
+  disputeMediaToken,
+  isDisputeMediaKey,
+} from './dispute-media'
 import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
 import {
   isListingReviewMediaKey,
@@ -66,18 +71,41 @@ export interface MediaStorage {
   readMediaBytes?(key: string, maxBytes?: number): Promise<Uint8Array | null>
 
   /**
+   * 删除对象（#465 新增，可选）。
+   *
+   * 争议附件确认（`POST /disputes/:id/attachments`）在**落库失败**时要回滚已写入的对象：
+   * 否则 S3 里会留下永远没有台账引用的孤儿字节。仓库里没有后台 GC 覆盖私有前缀，
+   * 所以清理只能由写入方在同一个请求内完成（`visual_query_images` 那条到期清理路径
+   * 是唯一的例外，但它有 `expires_at` 台账）。
+   *
+   * 与 `readMediaBytes` 一样，键形状不合法直接抛错；对象不存在时应为幂等成功。
+   */
+  delete?(key: string): Promise<void>
+
+  /**
    * 读响应里的客户端读取地址。
    *
    * - `listings/*`（公开固化）与 seed 插图 → 直链，与匿名读策略一致；
    * - `listing-review-media/*`（审核中的私有快照，#286 复审 blocker 2）→ 短期签名代理地址：
    *   对象本身不在匿名白名单里，只有拿着这个 secret 派生、带过期时刻的令牌才能读到；
+   * - `dispute-media/*`（#465 交易争议附件）→ 同样走短期签名代理，但用途派生串独立，
+   *   令牌不能跨域重放；这条分支**必须**带上 `integrity.contentDigest`（见下）。
    * - 其余键一律抛错（fail-closed），不允许把未知命名空间拼进公开响应。
    *
    * 放在这里而不是每个调用点各写一遍：`listings` / `admin` / `transactions` / `conversations`
    * / `profile` 全都用这个函数拼商品图地址，审核中的图因此**不需要**改任何读模型就能显示。
    */
-  publicUrl(key: string): string
+  publicUrl(key: string, integrity?: MediaIntegrity): string
 }
+
+/**
+ * 读地址要绑定的完整性信息。
+ *
+ * 预签名 PUT 在有效期内可以重复使用，所以「对象键唯一」并不能保证字节不变：上传者
+ * 可以在 confirm 之后对同一个 key 再 PUT 一张别的图。争议附件的读者是裁决者，
+ * 因此把确认时刻的字节摘要塞进令牌，读代理只下发与摘要相符的字节。
+ */
+export type MediaIntegrity = { contentDigest: string }
 
 /** 契约 §2.7 冻结：前缀必须由服务端生成，且带上 userId 才能校验归属。 */
 export const DEFAULT_PRESIGN_EXPIRES_SECONDS = 600
@@ -162,10 +190,21 @@ export function createBunS3MediaStorage(options: {
   /** 审核中图片的短期签名代理入口（`/api/uploads/media`）。 */
   reviewUrlBase?: string
   reviewUrlSecret?: string
+  /** 交易争议附件的短期签名代理入口（`/api/uploads/dispute-media`，#465）。 */
+  disputeUrlBase?: string
+  disputeUrlSecret?: string
   expiresInSeconds?: number
 }): MediaStorage {
-  const { client, publicUrlBase, legacyUrlBase, legacyUrlSecret, reviewUrlBase, reviewUrlSecret } =
-    options
+  const {
+    client,
+    publicUrlBase,
+    legacyUrlBase,
+    legacyUrlSecret,
+    reviewUrlBase,
+    reviewUrlSecret,
+    disputeUrlBase,
+    disputeUrlSecret,
+  } = options
   const expiresInSeconds = options.expiresInSeconds ?? DEFAULT_PRESIGN_EXPIRES_SECONDS
 
   /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
@@ -237,13 +276,29 @@ export function createBunS3MediaStorage(options: {
       }
     },
 
-    publicUrl(key) {
+    async delete(key) {
+      // 与 readMediaBytes 同理：形状不合法要"不发请求就拒绝"。这里抛错而不是静默返回，
+      // 因为调用方正在回滚一次失败的写入，静默失败会把孤儿对象留成"看不见的债"。
+      assertSafeObjectKey(key)
+      // Bun.S3Client.delete 对不存在的对象不抛错（S3 DELETE 本身幂等）。
+      await client.delete(key)
+    },
+
+    publicUrl(key, integrity) {
       assertSafeObjectKey(key)
       // 审核中的私有快照：对象不在匿名白名单里，只能通过带过期时刻的签名代理读（#286 复审 blocker 2）。
       if (isListingReviewMediaKey(key)) {
         if (!reviewUrlBase || !reviewUrlSecret) throw new Error('私有媒体 URL 代理未配置')
         const expiresAtSeconds = Math.floor(Date.now() / 1000) + REVIEW_MEDIA_URL_TTL_SECONDS
         return `${reviewUrlBase.replace(/\/+$/, '')}/${reviewMediaToken(key, reviewUrlSecret, expiresAtSeconds)}`
+      }
+      // 交易争议附件（#465）：同样是私有前缀 + 短期签名代理，但用途派生串独立，
+      // 与审核图片的令牌互不可重放；摘要必须随令牌一起走（见 `MediaIntegrity`）。
+      if (isDisputeMediaKey(key)) {
+        if (!disputeUrlBase || !disputeUrlSecret) throw new Error('争议附件 URL 代理未配置')
+        if (!integrity) throw new Error('争议附件读地址缺少字节摘要')
+        const expiresAtSeconds = Math.floor(Date.now() / 1000) + DISPUTE_MEDIA_URL_TTL_SECONDS
+        return `${disputeUrlBase.replace(/\/+$/, '')}/${disputeMediaToken(key, disputeUrlSecret, expiresAtSeconds, integrity.contentDigest)}`
       }
       if (isLegacyListingKey(key)) {
         if (!legacyUrlBase || !legacyUrlSecret) throw new Error('旧媒体 URL 代理未配置')
