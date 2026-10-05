@@ -23,6 +23,8 @@
 | [../README.md](../README.md) | 最小启动路径与常用命令 |
 | [design/issue-147-transaction-invariants.md](design/issue-147-transaction-invariants.md) | #147 交易 / 面交剩余项设计方案（两个 PR 的切分、不变量清单、验证门禁） |
 | [design/issue-323-r1-event-tracking.md](design/issue-323-r1-event-tracking.md) | #323 R1 行为埋点与推荐归因契约（事件/表/索引、接口、幂等与拒收口径、隐私与保留策略、R1 的验证） |
+| [design/issue-323-r6-evaluation-observability.md](design/issue-323-r6-evaluation-observability.md) | #323 R6 评估与可观测性设计（离线评估 CLI、线上漏斗 / guardrail 端点、保留期清理与埋点限流的口径与验证；已由 PR #436 / #458 落地） |
+| [design/issue-217-id-system-design.md](design/issue-217-id-system-design.md) | #217 上线前统一 ID 体系设计存档（UUIDv7 内部键 + TypeID 公开 ID + 商品人工编号的边界、发号与两阶段迁移；已由 PR #280 落地） |
 | [design/issue-74-watchers-definition.md](design/issue-74-watchers-definition.md) | #74「谁想要」（Watchers）来源定义冻结：来源 / 去重 / 权限 / 隐私 / 与 Wish·Match·收藏·关注的关系 / 计数口径，及与现有实现的核对记录 |
 
 ## 关于文档职责

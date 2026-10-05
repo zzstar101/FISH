@@ -19,7 +19,9 @@
  *   DB 列已删除，不存在任何「可见性偏好」语义——不是"暂缓公开"，是永久移除（#86 F 节）。
  * - `phone`（明文手机号）：服务端保存，任何 DTO 只出派生态（`auth/user.ts` 的
  *   `phoneBound` / `maskedPhone`），公开 DTO 两者皆不含。
- * - `goodRate`（好评率）：仓库没有 reviews / ratings 表，**没有真实口径**，不编造。
+ * - `goodRate`（好评率）：`transaction_reviews` 表（`packages/db/src/schema/transaction-reviews.ts`）
+ *   与 `@fish/contracts/transaction-reviews` 契约（#195 PR2）都已存在，但评价按交易参与方授权，
+ *   聚合口径（分母取什么、样本量下限、是否展示）**尚未定义**，因此本公开 DTO 仍不出这个字段。
  *   `listing-detail` 对卖家好评率已经是「契约没有 → 传 null → 整行不渲染」的同款处理。
  * - `following`（是否已关注）：关注关系已按 #188 拆成独立的 follows Domain
  *   （`@fish/contracts/follows/schema`），但它**仍然不属于这份匿名公开读模型** ——
