@@ -1,6 +1,7 @@
 # PC Web 未接通能力盘点
 
-> **基线**：`origin/main = 529ca42a9e318d9f0ef733ee50e06f66116add1b`（2026-10-05 实测；即 #280 面向 main 的最终集成 commit）。
+> **基线**：`origin/main = 58a9e5f13db47df9cbe3b706aa2e827bbf905aa4`（2026-10-05 15:28:40 +0800，
+> `Merge pull request #471`；本文于 2026-10-05 在该 commit 上实测）。
 > **上一版**：`dc195083be76d9f261dca36b5562b84c7a85aeb1`（2026-10-01）。此后第 6 / 9 阶段与后续若干 PR
 > 继续落库，上一版列出的多项「未接通」与「缺口」已被推翻，逐条更正见 §四。
 > **口径**：只核对 `apps/web-pc` 的实际代码，不采信规划文档的承诺。
@@ -15,7 +16,7 @@
 ## 一、完全未接通（PC 无入口 / 无实现）
 
 > 上一版在本章列出的四类欠账（收藏、关注、浏览历史、交易评价）**已全部接通**，见 §四第 1–4 行。
-> 本基线 `529ca42a` 下本章只剩 §1.3 的「非本阶段目标」与 §1.4 的主动下线。
+> 本基线 `58a9e5f1` 下本章只剩 §1.3 的「非本阶段目标」与 §1.4 的主动下线。
 
 ### 1.1 后端已就绪，只差 PC 接线 —— 本版已清空
 
@@ -93,7 +94,7 @@
 | §1.3 个性签名：契约已有该字段，PC 既不渲染也不编辑 | **已接通（编辑 + 展示）** | 编辑 `apps/web-pc/src/features/profile/profile-edit.tsx`（`:28` import `prepareSignatureInput`，`:62,:72,:108-110,:163,:240-255` 字段与错误态）；展示 `apps/web-pc/src/features/profile/profile-page.tsx:107-109`、`apps/web-pc/src/features/user-profile/user-profile-page.tsx:90-92`（后者 `:95` 注释已写「契约的公开 DTO 九个字段（含 #179 的 signature）」）。支撑提交 `fee1dbb6`（`feat(web-pc): 个性签名编辑与展示（#445）`） |
 | §二 聊天增强：无 typing、撤回动作、转发、删除、消息搜索 | **撤回已接通**；typing / 转发 / 删除 / 消息搜索仍无 | `apps/web-pc/src/features/chat/api.ts:241`（`recallMessage`，204 无响应体、幂等）、`conversation-page.tsx:226,:232,:274-276`（在途锁 + 成功后重取历史）、`conversation-list-page.tsx:39-40`（撤回后列表摘要必须重取）；契约 `packages/contracts/src/chat/routes.ts:47` 的 `recall` 现已有调用方 |
 | §二 评论区：契约已有 `DELETE /comments/:id` 与 `GET /me/comments`，**PC 未用** | **两者均已接通** | 删除 `apps/web-pc/src/features/listing-detail/comments-api.ts:65`（`deleteComment`）→ `comments-queries.ts:49`（`useDeleteComment`）→ `comments-section.tsx:252,:340`（动作入口）；我的留言 `apps/web-pc/src/features/my-comments/api.ts:9`（`myCommentsPath`）+ 页 `apps/web-pc/src/routes/comments.tsx`（`createFileRoute('/comments')` → `MyCommentsPage`） |
-| §二 订单号：直接把内部 UUID 当「订单号」展示 | **展示的是公开 ID**（`txn_…`） | `apps/web-pc/src/features/profile/order-detail-page.tsx:113` 渲染 `detail.id`，而该字段由 `packages/contracts/src/transactions/schema.ts:6,:46` 的 `TransactionIdSchema`（来自 `../system/public-id`）收口，HTTP 边界上是 TypeID。`docs/design/issue-89-web-pc-t10-id-inventory.md:20` 登记的「#217 冻结后必须改为公开编号或移除该展示」已由 #217 落地满足；该文件其余内容仍停在旧基线，未在本版范围内重刷 |
+| §二 订单号：直接把内部 UUID 当「订单号」展示 | **展示的是公开 ID**（`txn_…`） | `apps/web-pc/src/features/profile/order-detail-page.tsx:113` 渲染 `detail.id`，而该字段由 `packages/contracts/src/transactions/schema.ts:6,:46` 的 `TransactionIdSchema`（来自 `../system/public-id`）收口，HTTP 边界上是 TypeID。`docs/design/issue-89-web-pc-t10-id-inventory.md:20` 登记的「#217 冻结后必须改为公开编号或移除该展示」已由 #217 落地满足；该文件其余内容描述的是 #217 之前的冻结检查表，本版已在其中标注落地结果（见该文件头部与 §4） |
 
 > 上一版 §1.2 下方登记的「两处已过期的代码注释」已在本版修复：`apps/web-pc/src/features/user-profile/view.ts:19-20`
 > 与 `packages/contracts/src/users/schema.ts:22` 都已改为与现状一致（reviews / ratings 已有表与契约、关注关系已是独立 Domain）。
@@ -142,7 +143,7 @@ grep -rn 'markAllRead\|deleteNotification' apps/web-pc/src/features/notification
 - 认证口径变更：#391，见 `docs/design/issue-391-web-pc-auth-wechat-only.md`。
 - Watchers 口径：#74，见 `docs/design/issue-74-watchers-definition.md`。
 - 匹配算法 v2：#322，见 `docs/design/issue-322-matching-v2-m1.md` ~ `m3.md`。
-- 本次刷新（2026-10-05，基线 `529ca42a`）另据已合入的 PC 接线 PR：#446（游标翻页 / 愿望详情 / 图片替换）、
+- 本次刷新（2026-10-05，基线 `58a9e5f1`）另据已合入的 PC 接线 PR：#446（游标翻页 / 愿望详情 / 图片替换）、
   #445（个性签名）、#195 PR2（交易评价契约 / 留言删除）、#415（浏览历史）、#391（密码登录下线）。
 
 ---
