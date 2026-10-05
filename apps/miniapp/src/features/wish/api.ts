@@ -70,3 +70,9 @@ export async function closeWish(id: string): Promise<WishDto> {
   const payload = await apiRequest(WISH_ROUTES.close(id), { method: 'POST' })
   return wishDtoSchema.parse(payload)
 }
+
+/** 标记愿望达成：ACTIVE → FULFILLED（与关闭同一条 transition，服务端校验归属 / 终态）。 */
+export async function fulfillWish(id: string): Promise<WishDto> {
+  const payload = await apiRequest(WISH_ROUTES.fulfill(id), { method: 'POST' })
+  return wishDtoSchema.parse(payload)
+}

@@ -97,6 +97,10 @@ function respond(call: ApiCall): Promise<unknown> {
     const id = call.path.slice(WISH_ROUTES.base.length + 1, -'/close'.length)
     return Promise.resolve({ ...(wishById.get(id) ?? wish({ id })), status: 'CLOSED' })
   }
+  if (call.path.endsWith('/fulfill')) {
+    const id = call.path.slice(WISH_ROUTES.base.length + 1, -'/fulfill'.length)
+    return Promise.resolve({ ...(wishById.get(id) ?? wish({ id })), status: 'FULFILLED' })
+  }
   if (call.path.startsWith(`${WISH_ROUTES.base}/`)) {
     const id = call.path.slice(WISH_ROUTES.base.length + 1)
     const found = wishById.get(id)
@@ -147,7 +151,7 @@ mock.module('@/features/listing/api', () => ({
 }))
 
 const { loadWishes, loadWishMatches } = await import('../src/features/wish/load')
-const { createWish, closeWish } = await import('../src/features/wish/api')
+const { createWish, closeWish, fulfillWish } = await import('../src/features/wish/api')
 const { toMockWish, toMockWishPoolItem } = await import('../src/features/wish/adapt')
 
 function wish(partial: Partial<WishDto> & { id: string }): WishDto {
@@ -430,6 +434,14 @@ describe('写操作请求构造', () => {
     const closed = await closeWish(WISH_ID)
     expect(closed.status).toBe('CLOSED')
     expect(callsTo(WISH_ROUTES.close(WISH_ID), 'POST')).toHaveLength(1)
+  })
+
+  test('fulfillWish：POST /wishes/:id/fulfill（达成与关闭同一 transition 家族）', async () => {
+    wishById.set(WISH_ID, wish({ id: WISH_ID, status: 'ACTIVE' }))
+
+    const fulfilled = await fulfillWish(WISH_ID)
+    expect(fulfilled.status).toBe('FULFILLED')
+    expect(callsTo(WISH_ROUTES.fulfill(WISH_ID), 'POST')).toHaveLength(1)
   })
 })
 
