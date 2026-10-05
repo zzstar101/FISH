@@ -277,7 +277,8 @@
   font-size: 27px;
   font-weight: 700;
   line-height: 1.2;
-  color: var(--price-hot);
+  /* 列表价统一 --danger（#390）：--price-hot 是详情页专用热价色，别处不用 */
+  color: var(--danger);
 }
 
 .hist__price-cur {

@@ -416,7 +416,14 @@ export default function ReportUser() {
           ) : null}
 
           <View className="rpu__acts">
-            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpu__btn-ghost"
+              onClick={() => {
+                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+                else void Taro.switchTab({ url: '/pages/home/index' })
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -432,7 +439,14 @@ export default function ReportUser() {
             />
           </View>
           <View className="rpu__acts">
-            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpu__btn-ghost"
+              onClick={() => {
+                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+                else void Taro.switchTab({ url: '/pages/home/index' })
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -487,7 +501,14 @@ export default function ReportUser() {
             <View className="rpu__btn-primary" onClick={goMyReports}>
               <Text>查看「我的举报」</Text>
             </View>
-            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpu__btn-ghost"
+              onClick={() => {
+                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+                else void Taro.switchTab({ url: '/pages/home/index' })
+              }}
+            >
               <Text>返回对方主页</Text>
             </View>
           </View>

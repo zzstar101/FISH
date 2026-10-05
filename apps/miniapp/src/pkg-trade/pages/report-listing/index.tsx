@@ -443,7 +443,14 @@ export default function ReportListing() {
           ) : null}
 
           <View className="rpl__acts">
-            <View className="rpl__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpl__btn-ghost"
+              onClick={() => {
+                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+                else void Taro.switchTab({ url: '/pages/home/index' })
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -459,7 +466,14 @@ export default function ReportListing() {
             />
           </View>
           <View className="rpl__acts">
-            <View className="rpl__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpl__btn-ghost"
+              onClick={() => {
+                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+                else void Taro.switchTab({ url: '/pages/home/index' })
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -515,7 +529,14 @@ export default function ReportListing() {
             <View className="rpl__btn-primary" onClick={goMyReports}>
               <Text>查看「我的举报」</Text>
             </View>
-            <View className="rpl__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpl__btn-ghost"
+              onClick={() => {
+                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+                else void Taro.switchTab({ url: '/pages/home/index' })
+              }}
+            >
               <Text>返回商品详情</Text>
             </View>
           </View>

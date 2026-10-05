@@ -572,7 +572,11 @@ export default function UserHome() {
           text="这个主页的主人可能已注销，或链接已失效"
           icon={ICONS.box}
           actionText="返回"
-          onAction={() => void Taro.navigateBack()}
+          onAction={() => {
+            // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+            if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+            else void Taro.switchTab({ url: '/pages/home/index' })
+          }}
         />
       ) : (
         <ScrollView

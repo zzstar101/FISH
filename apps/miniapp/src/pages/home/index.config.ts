@@ -4,4 +4,5 @@ export default definePageConfig({
   backgroundColor: '#F7FAFF',
   enablePullDownRefresh: true,
   backgroundTextStyle: 'light',
+  enableShareAppMessage: true,
 })

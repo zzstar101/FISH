@@ -425,7 +425,11 @@ export default function VisionResult() {
           top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
           ...backGeo.btnStyle,
         }}
-        onClick={() => void Taro.navigateBack()}
+        onClick={() => {
+          // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
+          if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
+          else void Taro.switchTab({ url: '/pages/home/index' })
+        }}
       >
         <View className="vres__back-chevron" style={backGeo.chevronStyle} />
       </View>

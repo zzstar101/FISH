@@ -21,7 +21,7 @@ import { cancellable } from '@/lib/cancellable'
 import { categoryLabel } from '@/lib/listing-labels'
 import { isApiError } from '@/lib/request'
 import { notifyTabbarRoute } from '@/lib/tabbar-sync'
-import { productImage } from '@/mock/images'
+
 import {
   parsePriceToCents,
   type SellFieldErrors,
@@ -1223,11 +1223,18 @@ export default function Sell() {
             <View className="sell__badge-preview">
               <Text className="sell__badge-preview-k num">卡片角标预览</Text>
               <View className="sell__badge-thumb">
-                <Image
-                  className="sell__badge-thumb-img"
-                  src={photos[0]?.url ?? productImage('digital-laptop', 0)}
-                  mode="aspectFill"
-                />
+                {photos[0]?.url ? (
+                  <Image className="sell__badge-thumb-img" src={photos[0].url} mode="aspectFill" />
+                ) : (
+                  // 没有图就画中性占位（渐变底 + 相机图标），不拿 mock 的产品图冒充用户的第一张图
+                  <View className="sell__badge-thumb-ph">
+                    <Image
+                      className="sell__badge-thumb-ph-ic"
+                      src={ICONS.camera}
+                      mode="aspectFit"
+                    />
+                  </View>
+                )}
                 {/* 两个角标同时存在时上下堆叠（稿子明确要求），用一列 flex 自然实现 */}
                 <View className="sell__badge-stack">
                   {urgent ? <Text className="sell__corner sell__corner--hot">急出</Text> : null}

@@ -278,7 +278,6 @@ export default function Search() {
         variant="glass"
         spacer
         back
-        onBack={() => void Taro.navigateBack()}
         center={
           <View className="search__field">
             <Input
