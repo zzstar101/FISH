@@ -25,6 +25,7 @@ import { useLogout } from '../auth/queries'
 import { useFavoritesTotal } from '../favorites/queries'
 import { useViewHistoryTotal } from '../view-history/queries'
 import { historyCountLabel } from '../view-history/view'
+import { AccountDeletionCard } from './account-deletion-card'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 import { signatureFirstLine } from './signature'
@@ -225,6 +226,9 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
         </div>
         {logoutError !== null ? <p className="text-danger text-sm">{logoutError}</p> : null}
       </Card>
+
+      {/* #464：注销入口紧邻退出登录，但比它更重（不可恢复），所以放在最后一行。 */}
+      <AccountDeletionCard ownerId={ownerId} />
 
       <ProfileEditDialog onOpenChange={setEditOpen} open={editOpen} />
     </div>

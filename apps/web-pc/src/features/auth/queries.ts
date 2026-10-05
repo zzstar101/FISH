@@ -8,11 +8,27 @@ import {
   resetPcSession,
   resetPcSessionIfCurrent,
 } from '../../lib/session-cache'
+import { invalidateTransactionSurfaces } from '../profile/queries'
 import { syncRecommendationViewer } from '../recommendation/queue'
-import { fetchMe, logout } from './api'
+import {
+  fetchAccountDeletionStatus,
+  fetchMe,
+  logout,
+  requestAccountDeletion,
+  withdrawAccountDeletion,
+} from './api'
 
 export const authKeys = {
   me: () => AUTH_ME_QUERY_KEY,
+}
+
+/**
+ * 注销状态的查询键（#464）。它**不属于** `authKeys.me()`：`Me` 契约冻结不携带注销态，
+ * 这条查询读的是 `/me/account-deletion` 这另一个资源，两者缓存必须分开
+ * （否则撤回注销会把 `/me` 也标脏，触发一次无意义的身份重验）。
+ */
+export const accountDeletionKeys = {
+  status: () => ['account-deletion', 'status'] as const,
 }
 
 /**
@@ -88,5 +104,55 @@ export function useLogout() {
   return useMutation({
     mutationFn: logout,
     onSuccess: () => resetPcSession(queryClient, null),
+  })
+}
+
+/**
+ * 注销状态（#464）。`staleTime: 0` 是刻意的：这条状态决定个人中心渲染「申请注销」还是
+ * 「撤回申请」，而它会被另一个标签页、另一台设备（撤回）以及 worker（到期去标识化）改写，
+ * 缓存里留旧的会让用户看到一个已经过期的入口。
+ */
+export function useAccountDeletionStatus() {
+  return useQuery({
+    queryKey: accountDeletionKeys.status(),
+    queryFn: fetchAccountDeletionStatus,
+    staleTime: 0,
+  })
+}
+
+/**
+ * 申请注销。
+ *
+ * 成功后用 POST 响应**直接写入**状态缓存（不回读）：契约规定申请与撤回都回完整状态，
+ * 服务端返回的就是权威值，再打一次 GET 只是多一个可能失败的往返。
+ *
+ * 同时失效「我的发布 / 订单 / 个人中心聚合 / 会话」：申请会把在架商品下架，
+ * 这些界面里的商品状态此刻已经过期。`ownerId` 由调用方捕获传入而不是从缓存读，
+ * 换号场景下也只会失效旧账号自己的查询，不会污染新身份的缓存。
+ */
+export function useRequestAccountDeletion(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: requestAccountDeletion,
+    onSuccess: (result) => {
+      queryClient.setQueryData(accountDeletionKeys.status(), {
+        status: result.status,
+        requestedAt: result.requestedAt,
+        purgeScheduledAt: result.purgeScheduledAt,
+      })
+      invalidateTransactionSurfaces(queryClient, ownerId)
+    },
+  })
+}
+
+/** 撤回注销申请。撤回**不恢复商品上架**，所以商品列表仍需失效一次以显示真实状态。 */
+export function useWithdrawAccountDeletion(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: withdrawAccountDeletion,
+    onSuccess: (result) => {
+      queryClient.setQueryData(accountDeletionKeys.status(), result)
+      invalidateTransactionSurfaces(queryClient, ownerId)
+    },
   })
 }

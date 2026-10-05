@@ -32,6 +32,8 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
+import { createAccountDeletionModule } from './modules/account-deletion/router'
+import { isAccountDeletionBlockedWrite } from './modules/account-deletion/write-policy'
 import { createAdminModule } from './modules/admin/module'
 import { createAiPolishModule } from './modules/ai/module'
 import {
@@ -252,6 +254,10 @@ export function createApp(
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
     guard: restrictionGuard,
+    // 账号注销（#464）：冷静期内的**写拦截**挂在 requireAuth 这一处单一咽喉上 —— 它覆盖
+    // 全站每一个已登录写入口，不要求各域 router 逐个配合（`guard.write` 是域内可枚举的
+    // 另一件事，两者互不替代）。默认拒绝 + 小小白名单，白名单在 write-policy.ts 里注明理由。
+    accountDeletionWriteGuard: isAccountDeletionBlockedWrite,
     // 在线态心跳（#359 第五点）：已认证 HTTP 请求 / 可选身份读路径都算一次活动。
     onAuthenticated: (userId) => presence.touch(userId),
     clientIp: (request) =>
@@ -608,6 +614,20 @@ export function createApp(
   const conversationStore = createSqlConversationStore(db)
   // 实时推送（#9 契约冻结语义③）：消息服务先落库，再经 hub 推给会话双方的全部在线连接。
   const hub = createConnectionHub()
+
+  // 账号注销（#464）：同一路径上的读 / 申请 / 撤回。挂在根路径（契约里路径自带 `/me/`
+  // 前缀），`requireAuth` 与全站共用同一份 —— 注销态的写拦截就在它内部，所以这里不需要
+  // 再挂一层守卫。`sessionCookie` 用于「保留本设备、撤销其它设备」；`hub` 用于申请成功后
+  // 断开该用户的全部 WS 连接（已撤销会话在下次 upgrade 时被 401 拦掉）。
+  app.route(
+    '/',
+    createAccountDeletionModule({
+      db,
+      requireAuth: auth.requireAuth,
+      sessionCookie: auth.sessionCookie,
+      hub,
+    }).router,
+  )
   app.route(
     '/conversations',
     createConversationsRouter({

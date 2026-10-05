@@ -41,6 +41,16 @@ export const UserRoleSchema = z.enum(['USER', 'ADMIN'])
 export type UserRole = z.infer<typeof UserRoleSchema>
 
 /**
+ * 账号注销状态（#464）。镜像 DB 枚举 `account_status`，大小写不得漂移。
+ *
+ * 与 `@fish/contracts/account-deletion` 的 `AccountDeletionStateSchema` **刻意不同**：
+ * 那个是本人视角（`ACTIVE` / `DELETION_REQUESTED`，不含 `DELETED` —— 已注销账号读不到自己的
+ * 状态，请求会 401）；这里是管理端视角，必须能看见 `DELETED` 这个终态。
+ */
+export const AdminAccountStatusSchema = z.enum(['ACTIVE', 'DELETION_REQUESTED', 'DELETED'])
+export type AdminAccountStatus = z.infer<typeof AdminAccountStatusSchema>
+
+/**
  * 脱敏学号：保留首尾、中段以 `*` 掩蔽（12 位学号 → `2021****0001`）。
  *
  * 两条规则：
@@ -114,6 +124,18 @@ export const AdminUserSummarySchema = z.object({
   listingCount: z.number().int().nonnegative(),
   /** 最近一次登录会话时间（sessions.created_at）；从未登录为 `null`。 */
   lastActivityAt: z.iso.datetime().nullable(),
+  /**
+   * 账号注销状态（#464）。管理端**只读**：没有任何强制注销 / 硬删除入口，注销只能由本人
+   * 在端点发起（#464 验收：禁止未获准管理员任意硬删除）。
+   *
+   * `DELETION_REQUESTED` = 冷静期内（7 天，可本人撤回，写操作全被 403 拒绝、在架商品已下架）；
+   * `DELETED` = 已去标识化（昵称是「已注销用户」占位串、头像/签名清空、登录凭据全部断开）。
+   */
+  accountStatus: AdminAccountStatusSchema,
+  /** 注销申请时刻；非冷静期 / 已执行为 `null`（去标识化时两个时间戳都会被清空）。 */
+  deletionRequestedAt: z.iso.datetime().nullable(),
+  /** 计划执行去标识化的时刻（申请时刻 + 冷静期）；非冷静期为 `null`。 */
+  purgeScheduledAt: z.iso.datetime().nullable(),
 })
 export type AdminUserSummary = z.infer<typeof AdminUserSummarySchema>
 

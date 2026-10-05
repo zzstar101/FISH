@@ -70,6 +70,10 @@ const userRow = (overrides: Partial<UserRow> = {}): UserRow => ({
   campusEmail: null,
   phone: null,
   role: 'USER',
+  // #464：users 新增账号注销三列，fixture 补默认值（ACTIVE = 从未申请注销）。
+  accountStatus: 'ACTIVE',
+  deletionRequestedAt: null,
+  purgeScheduledAt: null,
   createdAt: new Date('2026-09-01T00:00:00.000Z'),
   updatedAt: new Date('2026-09-12T00:00:00.000Z'),
   ...overrides,

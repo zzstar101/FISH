@@ -355,14 +355,26 @@ export default function Settings() {
           </View>
         </View>
 
-        {/* ==================== 危险操作：单独一张卡 ==================== */}
+        {/* ==================== 危险操作：单独一张卡 ====================
+            注销排在退出登录**下面**：两者都会让账号不可用，但注销更重（有 7 天冷静期、
+            会下架商品），放在最后一行可以少一点误触。 */}
         <View className="st__danger-card">
           <View className="st__danger-row" onClick={() => setLogoutOpen(true)}>
             <Image className="st__danger-ic" src={ICONS.power} mode="aspectFit" />
             <Text>退出登录</Text>
           </View>
+          <View
+            className="st__danger-row"
+            onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/account-deletion/index' })}
+          >
+            <Image className="st__danger-ic" src={ICONS.delete} mode="aspectFit" />
+            <Text>注销账号</Text>
+          </View>
         </View>
-        <Text className="st__danger-note">退出后需重新登录，本地草稿与收藏记录不会丢失。</Text>
+        <Text className="st__danger-note">
+          退出后需重新登录，本地草稿与收藏记录不会丢失。{'\n'}
+          注销账号有 7 天冷静期，期间可撤回。
+        </Text>
         <Text className="st__version num">{`鱼小应 v${APP_VERSION} · build ${APP_BUILD}`}</Text>
       </View>
 

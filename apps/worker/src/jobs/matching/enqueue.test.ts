@@ -198,7 +198,15 @@ async function buildPreGapMigrationsFolder(): Promise<string> {
   ) as {
     entries: { idx: number; tag: string }[]
   }
-  const legacy = journal.entries.filter((entry) => !GAP_MIGRATION_TAGS.has(entry.tag))
+  // 只取缺口**之前**的条目。写成「排除缺口 tag」在缺口之后还有迁移时会失真：阶段一会把那些
+  // 更晚的迁移一并应用，migrator 的高水位线随之前移，阶段二再补缺口时它们因「when 比已应用的
+  // 最后一条更早」被静默跳过（#464 在缺口之后追加迁移后实测到的红）。
+  const firstGapIndex = Math.min(
+    ...journal.entries
+      .filter((entry) => GAP_MIGRATION_TAGS.has(entry.tag))
+      .map((entry) => entry.idx),
+  )
+  const legacy = journal.entries.filter((entry) => entry.idx < firstGapIndex)
   for (const entry of legacy) {
     await copyFile(join(migrationsFolder, `${entry.tag}.sql`), join(dir, `${entry.tag}.sql`))
   }
