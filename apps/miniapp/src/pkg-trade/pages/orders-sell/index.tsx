@@ -71,6 +71,7 @@ export default function OrdersSell() {
       truncated={truncated}
       showTop={showTop}
       onRetry={() => void reload()}
+      onRefresh={reload}
     />
   )
 }

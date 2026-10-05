@@ -11,7 +11,7 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import { loadWishes, WISH_HIT_ROWS, type WishHitList } from '@/features/fetchers'
 import type { WishHit } from '@/features/match/adapt'
-import { closeWish as closeWishApi } from '@/features/wish/api'
+import { closeWish as closeWishApi, fulfillWish as fulfillWishApi } from '@/features/wish/api'
 import { consumeWishesDirty } from '@/features/wish/refresh'
 import { categoryLabel, WISH_CATEGORIES } from '@/lib/listing-labels'
 import { formatAmount, formatYuan } from '@/lib/money'
@@ -209,6 +209,28 @@ export default function Wish() {
       // 服务端给的是可读中文（不存在 / 无权 / 已终态冲突），原样透出
       void Taro.showToast({
         title: isApiError(error) ? error.message : '关闭失败，请重试',
+        icon: 'none',
+      })
+    } finally {
+      closingRef.current = false
+    }
+  }
+
+  /**
+   * 「许愿达成」：ACTIVE → FULFILLED（端点早已在契约与 API 里，只是此前没有入口）。
+   * 与关闭共用同一把在飞锁（两者都是「愿望终态迁移」，同时只发一个）；
+   * 成功后的静默重拉与关闭同口径。
+   */
+  const fulfillWish = async (wish: MockWish) => {
+    if (wish.status !== 'ACTIVE' || closingRef.current) return
+    closingRef.current = true
+    try {
+      await fulfillWishApi(wish.id)
+      void Taro.showToast({ title: '已标记愿望达成', icon: 'none' })
+      await load(true)
+    } catch (error) {
+      void Taro.showToast({
+        title: isApiError(error) ? error.message : '操作没成功，请重试',
         icon: 'none',
       })
     } finally {
@@ -487,6 +509,18 @@ export default function Wish() {
                             <Text>按关键词搜索</Text>
                             <Text className="mw__act-cnt">{hitCount}</Text>
                           </View>
+                          {/* ACTIVE 愿望给两个终态出口：达成（拿到想要的就标一下）/ 关闭（不要了）；
+                              终态后只留一句「已是终态」，两个动作都不再出现。 */}
+                          {wish.status === 'ACTIVE' ? (
+                            <Text
+                              className="mw__act-off mw__act-fulfil"
+                              onClick={() => {
+                                void fulfillWish(wish)
+                              }}
+                            >
+                              许愿达成
+                            </Text>
+                          ) : null}
                           <Text
                             className={`mw__act-off${wish.status === 'ACTIVE' ? '' : ' is-off'}`}
                             onClick={() => {
