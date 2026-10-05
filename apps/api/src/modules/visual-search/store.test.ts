@@ -483,7 +483,7 @@ describe('createVisualSearchStore', () => {
     const category = 'SPORTS' as const
     const soldPrice = 4321
 
-    const before = await store.soldPriceStats(category)
+    const before = await store.soldPriceStats({ category })
 
     await createListing({ category, priceCents: soldPrice, status: 'SOLD' })
     // 三条反例：未成交、审核中、被拒——都不该进统计（可见性谓词与召回逐条对齐）。
@@ -491,7 +491,7 @@ describe('createVisualSearchStore', () => {
     await createListing({ category, priceCents: 9999, status: 'SOLD', moderationStatus: 'REVIEW' })
     await createListing({ category, priceCents: 9999, status: 'SOLD', moderationStatus: 'BLOCKED' })
 
-    const after = await store.soldPriceStats(category)
+    const after = await store.soldPriceStats({ category })
 
     expect(after.soldSampleCount).toBe(before.soldSampleCount + 1)
     // 回归护栏：`avg(integer)` 是 numeric，Bun 的 SQL 驱动会映射成字符串，`Math.round` 会得到 NaN。
@@ -504,5 +504,25 @@ describe('createVisualSearchStore', () => {
         (before.soldAvgPriceCents * before.soldSampleCount + soldPrice) / after.soldSampleCount
       expect(after.soldAvgPriceCents).toBeCloseTo(expected, 6)
     }
+  })
+
+  test('soldPriceStats 按 excludeSellerId 排除本人已成交商品（#406 第 2 项）', async () => {
+    // 同上：全表聚合不能断言绝对值，用"插入前后差值 + 两次查询之差"表达口径。
+    const category = 'SPORTS' as const
+    const viewer = await createUser()
+    const otherSeller = await createUser()
+
+    const before = await store.soldPriceStats({ category })
+    await createListing({ category, priceCents: 1111, status: 'SOLD', sellerId: viewer })
+    await createListing({ category, priceCents: 9999, status: 'SOLD', sellerId: otherSeller })
+
+    const withoutExclusion = await store.soldPriceStats({ category })
+    const withExclusion = await store.soldPriceStats({ category, excludeSellerId: viewer })
+
+    // 不传 excludeSellerId 时口径与改动前完全一致：两条都算进去。
+    expect(withoutExclusion.soldSampleCount).toBe(before.soldSampleCount + 2)
+    // 传了就只差**自己那一条**——别人的成交价仍然进行情。
+    expect(withoutExclusion.soldSampleCount - withExclusion.soldSampleCount).toBe(1)
+    expect(withExclusion.soldAvgPriceCents).not.toBeNull()
   })
 })

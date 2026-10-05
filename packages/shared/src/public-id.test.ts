@@ -31,4 +31,12 @@ describe('Public ID / UUIDv7 boundary', () => {
       encodePublicId(PUBLIC_ID_PREFIX.listing, '00000000-0000-4000-8000-000000000001'),
     ).toThrow()
   })
+
+  // #406 第 4 项：本地 seed / 手写演示数据用了 v4 或非规范 UUID 时，服务端只回 500
+  // INTERNAL_ERROR；日志里必须能直接看出是哪一个值违约，否则只能从 500 反推。
+  test('非规范 UUIDv7 的报错带上出错的值（#406 第 4 项）', () => {
+    const v4 = '00000000-0000-4000-8000-000000000001'
+    expect(() => encodePublicId(PUBLIC_ID_PREFIX.listing, v4)).toThrow(v4)
+    expect(() => encodePublicId(PUBLIC_ID_PREFIX.listing, v4)).toThrow('UUIDv7')
+  })
 })
