@@ -36,7 +36,6 @@ const ADMIN_NAV_ITEMS = [
  */
 export function AdminShell() {
   const me = useAdminMe(true)
-  const outcome = me.isError ? adminLoadOutcome(me.error) : null
 
   if (me.isPending) {
     return (
@@ -45,26 +44,38 @@ export function AdminShell() {
       </div>
     )
   }
-  if (outcome?.kind === 'forbidden') {
+  if (me.isError) {
+    const outcome = adminLoadOutcome(me.error)
+    // 403 FORBIDDEN 是普通用户的**预期终态**：整页权限态，不给「重试」假动作。
+    if (outcome.kind === 'forbidden') {
+      return (
+        <div className="flex min-h-dvh items-center justify-center bg-bg">
+          <EmptyState
+            action={
+              <Button asChild variant="outline">
+                <Link to="/">返回前台</Link>
+              </Button>
+            }
+            description="当前账号不是管理员。如有需要，请联系平台负责人开通。"
+            emoji="🚫"
+            title="无管理权限"
+          />
+        </div>
+      )
+    }
     return (
       <div className="flex min-h-dvh items-center justify-center bg-bg">
-        <EmptyState
-          action={
-            <Button asChild variant="outline">
-              <Link to="/">返回前台</Link>
-            </Button>
-          }
-          description="当前账号不是管理员。如有需要，请联系平台负责人开通。"
-          emoji="🚫"
-          title="无管理权限"
+        <ErrorState
+          message={outcome.kind === 'error' ? outcome.message : '管理身份校验失败'}
+          onRetry={() => void me.refetch()}
         />
       </div>
     )
   }
-  if (me.isError || outcome === null || me.data === undefined) {
+  if (me.data === undefined) {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-bg">
-        <ErrorState message="管理身份校验失败" onRetry={() => void me.refetch()} />
+        <LoadingState label="正在校验管理身份…" />
       </div>
     )
   }
