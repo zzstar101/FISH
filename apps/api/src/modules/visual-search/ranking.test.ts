@@ -217,6 +217,8 @@ function makeCard(seq: number, overrides: Partial<ListingCard> = {}): ListingCar
     coverUrl: null,
     createdAt: '2026-05-01T00:00:00.000Z',
     moderationStatus: null,
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0（排序不读它）。
+    wants: 0,
     ...overrides,
   }
 }

@@ -135,13 +135,17 @@ export const VisualInterpretationSchema = z.strictObject({
 export type VisualInterpretation = z.infer<typeof VisualInterpretationSchema>
 
 /**
- * 结果项（#324 M6）：卡片 +「N 人想要」。
+ * 结果项（#324 M6）：卡片 + 收藏数。
  *
- * 想要数放在卡片**外层**而不是 `ListingCardSchema` 上：它是搜索结果的语境信号，
- * 公开 Feed / 详情今天并不投影它；塞进 `ListingCard` 会让每个列表查询都被迫多查一次收藏表。
+ * **`favoriteCount` 是收藏数，不是「想要数」**（2026-10-04 澄清）：它由 `favorites` 表批量
+ * 聚合而来，只服务排序（`popularityScore`）。「想要」在 `ListingCardSchema.wants`
+ * （该商品已建会话的买家数），卡片本体上就有 —— 两者不可互换，识图结果页画的是后者。
+ *
+ * 它放在卡片**外层**而不并进 `ListingCardSchema`：这是本页的语境信号（排序输入），
+ * 公开 Feed / 详情不投影它；塞进 `ListingCard` 会让每个列表查询都被迫多查一次收藏表。
  */
 export const VisualSearchResultItemSchema = ListingCardSchema.extend({
-  /** 想要数（收藏数）。由候选信号批量查出，不逐条补查。 */
+  /** 收藏数（`favorites` 行数）。由候选信号批量查出，不逐条补查；不是「想要数」。 */
   favoriteCount: z.number().int().nonnegative(),
 })
 

@@ -38,6 +38,7 @@ describe('fetchChatWatchers', () => {
               authStatus: 'UNVERIFIED',
             },
             startedAt: '2026-09-30T10:00:00.000Z',
+            conversationId: 'cnv_01jc000000e00800000000000c',
           },
         ],
         nextCursor: null,

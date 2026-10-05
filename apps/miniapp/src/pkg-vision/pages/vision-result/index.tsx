@@ -70,8 +70,8 @@ import './index.scss'
  * 排序胶囊是**五档**（`./view.ts` 的 `VISUAL_SORT_OPTIONS`），切档 = 换一个契约 `sort` 码
  * **重新请求**（服务端在截断到 30 条之前排序，见 `features/visual-search/api.ts`），
  * 本页不做任何本地重排；「同类成交均价」取自响应的 `stats`；卡片上的「N 人想要」
- * 取自结果项外挂的 `favoriteCount`。仍然不画的是「包邮」与「个人闲置」——
- * 契约里没有这两个事实（FISH 也没有个人 / 商家之分）。
+ * 取自卡片自己的 `wants`（该商品已建会话的买家数，与全站同一口径）。仍然不画的是
+ * 「包邮」与「个人闲置」——契约里没有这两个事实（FISH 也没有个人 / 商家之分）。
  *
  * 未登录不分叉：识图**匿名可用**（契约 Q6=B），本页不挂登录守卫，也不请求 `GET /me`。
  */
@@ -652,13 +652,14 @@ export default function VisionResult() {
  *
  * `seller` 恒传 `null`：本页不渲染卖家行（契约的 `ListingCardSchema.seller` 是可选的，
  * `toMockListing` 也已经把它投影进 `listing`，这里只是不展示）。
- * 「N 人想要」相反：契约把 `favoriteCount` 挂在**结果项外层**
- * （`VisualSearchResultItemSchema = ListingCardSchema.extend({ favoriteCount })`），
- * 它是真值，经 `toMockListing` 的第三参透到卡片上（`ProductCard` 自带 null 守卫，
- * `wants === null` 时整行不渲染）。
+ *
+ * 「N 人想要」取自卡片自己的 `card.wants`（= 该商品已建会话的买家数，全站同一口径）。
+ * **不再用结果项外层的 `favoriteCount` 冒充它**：那个数是收藏数（服务端拿它算
+ * `popularityScore`），与「想要」是两个量 —— 同一个标签在两个页面表示两件事，
+ * 卖家点进「想要的人」会对不上号。
  */
 function ResultCard({ card }: { card: VisualSearchResultItem }) {
-  const listing = useMemo(() => toMockListing(card, undefined, card.favoriteCount), [card])
+  const listing = useMemo(() => toMockListing(card), [card])
   return <ProductCard listing={listing} seller={null} imageHeight={RATIO_HEIGHT[listing.ratio]} />
 }
 

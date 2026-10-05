@@ -1,5 +1,6 @@
 import type { ListingCategory } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
+import { listingWantsCount } from '@fish/db/listing-wants'
 import { favorites } from '@fish/db/schema/favorites'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
@@ -212,6 +213,9 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
           negotiable: listings.negotiable,
           free: listings.free,
           createdAt: listings.createdAt,
+          // 想要数（= 已建会话的买家数）：卡片契约的必填字段，主查询一次算完（见 `@fish/db/listing-wants`）。
+          // 与同页的 `favoriteCount`（收藏数，识图结果的外挂字段）是**两个不同的量**，别混。
+          wants: listingWantsCount(listings.id),
           seller: {
             id: users.id,
             nickname: users.nickname,

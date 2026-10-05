@@ -2,7 +2,8 @@
  * 商品卡（首页 / 搜索 / 相似推荐共用，同一套版式与同一套长按菜单）。
  *
  * 版式以 1改 稿首页瀑布流卡为准：成色印章压在标题前、价格走 --danger 红、
- * 右下「N人想要」（契约无此计数时不渲染）。历史上曾有 `search` 变体
+ * 右下「N人想要」（= 该商品已建会话的买家数，契约 `ListingCardSchema.wants`；
+ * 字段缺席的老 mock 记录不渲染）。历史上曾有 `search` 变体
  * （价格深色、成色胶囊挪到价格同位），Owner 2026-09-28 拍板全部统一为首页版式，变体已收掉。
  *
  * **长按菜单长在卡片身上**（收藏 / 不感兴趣）：三处调用方拿到的是同一套交互，页面不再各自
@@ -27,6 +28,7 @@ import { conditionLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
 import { isApiError } from '@/lib/request'
 import type { MockListing, MockUser } from '@/mock/types'
+import { wantsLabel } from './wants-label'
 import './index.scss'
 
 /** 长按菜单的选项；顺序即 `tapIndex`，判定用它而不是文案 */
@@ -232,6 +234,8 @@ export default function ProductCard({
   // 已隐藏的卡片整张不渲染（hooks 全部在上面，条件分支之后没有 hooks）
   if (hidden || ownHidden) return null
 
+  const wantsText = wantsLabel(listing.wants)
+
   return (
     <View
       className="pcard"
@@ -261,10 +265,8 @@ export default function ProductCard({
             <Text className="pcard__cur">¥</Text>
             <Text className="pcard__amt">{price}</Text>
           </View>
-          {/* 契约没有「想要」计数：真实数据下为 null，整块不渲染，不编成 0 */}
-          {listing.wants === null ? null : (
-            <Text className="pcard__want">{`${listing.wants}人想要`}</Text>
-          )}
+          {/* 只有拿到真数才画；非数字（含 `undefined`）按"没有这个数"处理，不编成 0（#406 第 5 项） */}
+          {wantsText === null ? null : <Text className="pcard__want">{wantsText}</Text>}
         </View>
 
         {/*

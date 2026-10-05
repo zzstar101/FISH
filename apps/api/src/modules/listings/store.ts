@@ -9,6 +9,7 @@ import { pruneStaleEmbeddings } from '@fish/db/embedding-store'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
 import { newListingNo } from '@fish/db/listing-no'
+import { listingWantsCount } from '@fish/db/listing-wants'
 import { visibleListingConditions } from '@fish/db/recall-store'
 import { jobs } from '@fish/db/schema/jobs'
 import { listingNumbers } from '@fish/db/schema/listing-numbers'
@@ -92,6 +93,11 @@ export type FeedEntry = {
   coverObjectKey: string | null
   /** 卖家公开投影源列（#191）：inner join users 同页带出，不逐卡补查。 */
   seller: ListingCardSeller
+  /**
+   * 想要数（已建会话的买家数）：与卖家 / 封面一样由主查询同页带出。
+   * `listing` 行本身没有这一列（`listings` 表不存计数），所以单独放在 entry 上。
+   */
+  wants: number
 }
 
 /** `findCardsByIds` 的过滤口径。 */
@@ -250,9 +256,16 @@ export interface ListingStore {
   /** 命中重复窗口时重新投递（契约 §2.3）：前一次投递失败不能让该商品永久失配。 */
   enqueueMatchJob(listingId: string): Promise<void>
 
-  findDetail(
-    id: string,
-  ): Promise<{ listing: ListingRow; seller: SellerRow; images: ListingImageRow[] } | null>
+  findDetail(id: string): Promise<{
+    listing: ListingRow
+    seller: SellerRow
+    images: ListingImageRow[]
+    /**
+     * 想要数（= 该商品已建会话的买家数）。详情也要它（契约把它画在商品卡与详情同一处），
+     * 而 `listings` 表不存计数，所以与列表读路径一样在同一次查询里算出来带回来。
+     */
+    wants: number
+  } | null>
 
   /**
    * 这条商品当前的图片键（按 `sort_order`）。编辑（PATCH）要在事务外算图片结论，而"图片没变"这个
@@ -610,7 +623,7 @@ export function createSqlListingStore(db: Db): ListingStore {
 
     async findDetail(id) {
       const rows = await db
-        .select({ listing: listings, seller: users })
+        .select({ listing: listings, seller: users, wants: listingWantsCount(listings.id) })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
         .where(eq(listings.id, id))
@@ -625,7 +638,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         .where(eq(listingImages.listingId, id))
         .orderBy(asc(listingImages.sortOrder))
 
-      return { listing: row.listing, seller: row.seller, images }
+      return { listing: row.listing, seller: row.seller, images, wants: row.wants }
     },
 
     async listImageKeys(id) {
@@ -709,6 +722,10 @@ export function createSqlListingStore(db: Db): ListingStore {
             avatarUrl: users.avatarUrl,
             authStatus: users.authStatus,
           },
+          // 想要数（= 该商品已建会话的买家数，口径见契约 `ListingCardSchema.wants`）：
+          // 与卖家 / 封面同一取舍 —— 主查询里一次算完，不给每张卡补一次往返。
+          // 关联子查询走 `conversations_listing_id_buyer_id_uq` 的首列，是索引探测。
+          wants: listingWantsCount(listings.id),
         })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
@@ -733,6 +750,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         createdAtCursor: row.createdAtCursor,
         coverObjectKey: coverByListing.get(row.listing.id) ?? null,
         seller: row.seller,
+        wants: row.wants,
       }))
     },
 
@@ -749,6 +767,7 @@ export function createSqlListingStore(db: Db): ListingStore {
             avatarUrl: users.avatarUrl,
             authStatus: users.authStatus,
           },
+          wants: listingWantsCount(listings.id),
         })
         .from(listings)
         .innerJoin(users, eq(users.id, listings.sellerId))
@@ -773,6 +792,7 @@ export function createSqlListingStore(db: Db): ListingStore {
         createdAtCursor: row.createdAtCursor,
         coverObjectKey: coverByListing.get(row.listing.id) ?? null,
         seller: row.seller,
+        wants: row.wants,
       }))
     },
 

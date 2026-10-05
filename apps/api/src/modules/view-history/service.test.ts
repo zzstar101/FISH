@@ -29,6 +29,8 @@ function row(overrides: Partial<ViewHistoryRow> = {}): ViewHistoryRow {
     coverObjectKey: null,
     viewedAt: '2026-10-01T03:00:00.000Z',
     viewedAtCursor: '2026-10-01T03:00:00.000100Z',
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，fake 行给 0（本用例不关心它）。
+    wants: 0,
     ...overrides,
   }
 }

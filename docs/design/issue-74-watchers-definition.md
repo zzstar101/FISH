@@ -39,6 +39,14 @@
 三套信号今后也**不合并成同一个数字**：商品市场计数（浏览 / 想要）属 #192，其「想要」若要落地，
 必须引用本节口径自行决定来源，而不是复用 watchers 的数字去拼。
 
+> **2026-10-04 更新（Owner 拍板，`feat/miniapp-watchers-wants-01`）**：上面这条「不复用」被**部分**推翻，
+> 但口径本身没变 —— 商品卡上的「N 人想要」（契约 `ListingCardSchema.wants`）**就是**本节的会话买家数，
+> 与 `GET /listings/:id/watchers` 的 `total` 同源（同一份 SQL 谓词 `@fish/db/listing-wants` 的
+> `listingWantsCount`）。理由：全站只有一个「想要」事实，再各自算一份必然对不上号。
+> **仍然成立**的部分：浏览数（`views`）没有来源、不计入任何组合数字；收藏 / 关注 / Wish / Match
+> 依旧不计入「想要」。若将来要引入独立的「我想要」信号，仍需回到本文件重新冻结，并重新决定
+> `ListingCardSchema.wants` 取哪一边。
+
 ## 3. 去重、排序与游标
 
 - **一人一条**：`packages/db/src/schema/conversations.ts:52` 的
@@ -96,6 +104,9 @@
 
 1. 小程序页（`apps/miniapp/src/pkg-browse/pages/watchers/index.tsx:288,311`）只渲染 `user` + `startedAt`，
    未展示契约外字段；
+   **2026-10-04 更新**：契约的响应项多了 `conversationId`（同一拍板：卖家点名单里的一行就是打开
+   该买家与这件商品的会话），页面据此把整行做成入口。`user` 投影本身仍是那四个公开字段，
+   没有新增可泄漏项。
 2. **会话可随商品删除被销毁**：`apps/api/src/modules/listings/store.ts:772-775`
    （`deleteListingAtomic`）在删除商品时清掉该商品的 `favorites` 与 `conversations`
    （messages 对 conversations 是 CASCADE）。商品删除后 watchers 端点本身随商品 404，

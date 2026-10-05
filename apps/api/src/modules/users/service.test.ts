@@ -48,6 +48,8 @@ function listingRow(overrides: Partial<PublicListingRow> = {}): PublicListingRow
     coverObjectKey: null,
     // #191：卡片卖家公开子集（他人主页在售的卖家即主页用户），join users 同源带出。
     seller: { id: USER_ID, nickname: '林一', avatarUrl: null, authStatus: 'VERIFIED' },
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，fake 行给 0（本用例不关心它）。
+    wants: 0,
     ...overrides,
   }
 }

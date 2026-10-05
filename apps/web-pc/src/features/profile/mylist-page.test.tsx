@@ -53,6 +53,7 @@ const DELETABLE: ListingCard = {
   createdAt: '2026-09-28T00:00:00.000Z',
   moderationStatus: 'BLOCKED',
   governanceDelisted: null,
+  wants: 0,
 }
 
 function card(overrides: Partial<ListingCard>): ListingCard {

@@ -25,6 +25,7 @@ test('调用卖家专属路由、不解析不透明游标，保留不受分页�
           authStatus: 'VERIFIED',
         },
         startedAt: '2026-09-12T09:00:00.123Z',
+        conversationId: 'cnv_01k4000000e0080000000000c1',
       },
     ],
     total: 18,

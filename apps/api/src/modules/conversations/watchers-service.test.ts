@@ -68,6 +68,8 @@ test('人数来自全部会话而非当前页；只暴露最小买家字段，�
         authStatus: 'VERIFIED',
       },
       startedAt: '2026-09-12T09:00:00.123Z',
+      // 名单每行都带回该买家与这件商品的会话 id（卖家点名字就是打开它）。
+      conversationId: encodePublicId(PUBLIC_ID_PREFIX.conversation, conv),
     },
   ])
   expect(decodeCursor(response.nextCursor ?? '')).toEqual({

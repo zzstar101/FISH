@@ -1606,3 +1606,101 @@ describe('findCardsByIds（#323 R4 按 id 取卡的读路径）', () => {
     expect(await store.findCardsByIds([], { viewerUserId: null })).toEqual([])
   })
 })
+
+/*
+ * 想要数（`ListingCardSchema.wants`）= 与该商品已建立会话的买家数（#74 口径）。
+ * 这条链路横跨四个读路径（feed / 按 id 取卡 / 详情 / 其它域的卡片投影），而它们
+ * 各自在 SQL 里塞一个 `listingWantsCount` 子查询 —— 漏一处不会报错，只会让那个页面
+ * 上的数字悄悄变成 0。所以这里用真实会话行把它钉死。
+ */
+describe('想要数（已建会话的买家数）', () => {
+  /**
+   * 本组自建自清的夹具。**不复用 `withSeller`**：它只按卖家清商品，而 `conversations`
+   * 对 `listings` 是 NO ACTION（会话是有价值的数据，不随商品连坐），本组的会话行会挡住
+   * 商品删除。所以这里按「会话 → 商品 → 用户」的顺序显式清。
+   */
+  async function withBuyers(
+    run: (ids: { sellerId: string; buyerA: string; buyerB: string }) => Promise<void>,
+  ) {
+    const sellerId = await createUser(db)
+    const buyerA = await createUser(db)
+    const buyerB = await createUser(db)
+    const userIds = [sellerId, buyerA, buyerB]
+    try {
+      await run({ sellerId, buyerA, buyerB })
+    } finally {
+      const owned = await db
+        .select({ id: listings.id })
+        .from(listings)
+        .where(inArray(listings.sellerId, userIds))
+      const listingIds = owned.map((row) => row.id)
+      if (listingIds.length > 0) {
+        await db.delete(conversations).where(inArray(conversations.listingId, listingIds))
+        await db.delete(listings).where(inArray(listings.id, listingIds))
+      }
+      await db.delete(users).where(inArray(users.id, userIds))
+    }
+  }
+
+  /** 直插一条在售商品（不走 service：本组测的是读路径的计数，不是发布流程）。 */
+  async function insertActiveListing(sellerId: string): Promise<string> {
+    const id = newId()
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: '想要数测试商品',
+      description: '想要数',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+    })
+    return id
+  }
+
+  async function addConversation(listingId: string, sellerId: string, buyerId: string) {
+    await db.insert(conversations).values({ id: newId(), listingId, buyerId, sellerId })
+  }
+
+  test('三个读路径都算出会话买家数；没有会话的商品是 0（不是「没查」）', async () => {
+    await withBuyers(async ({ sellerId, buyerA, buyerB }) => {
+      const listingId = await insertActiveListing(sellerId)
+      const untouched = await insertActiveListing(sellerId)
+      await addConversation(listingId, sellerId, buyerA)
+      await addConversation(listingId, sellerId, buyerB)
+
+      const feed = await store.listFeed({
+        limit: 10,
+        cursor: null,
+        sort: 'newest',
+        status: 'ACTIVE',
+      })
+      const wantsOfFeed = (id: string) => feed.find((entry) => entry.listing.id === id)?.wants
+      const [fromIds] = await store.findCardsByIds([listingId], { viewerUserId: null })
+      const detail = await store.findDetail(listingId)
+
+      expect(wantsOfFeed(listingId)).toBe(2)
+      expect(fromIds?.wants).toBe(2)
+      expect(detail?.wants).toBe(2)
+
+      // 一件谁都没聊过的商品必须是 0 —— 这一条正是「计数没查」与「确实没人想要」的分界，
+      // 契约把 `wants` 定成必填非空就是为了让两者在页面上不再长得一样。
+      expect(wantsOfFeed(untouched)).toBe(0)
+      expect((await store.findDetail(untouched))?.wants).toBe(0)
+    })
+  })
+
+  test('同一买家对同一商品只算一次（(listing, buyer) 唯一）', async () => {
+    await withBuyers(async ({ sellerId, buyerA }) => {
+      const listingId = await insertActiveListing(sellerId)
+      await addConversation(listingId, sellerId, buyerA)
+      // 唯一索引挡第二次插入；这里断言的是计数口径本身（`count(*)` 数行，不是数消息）。
+      await db
+        .insert(conversations)
+        .values({ id: newId(), listingId, buyerId: buyerA, sellerId })
+        .onConflictDoNothing()
+
+      expect((await store.findDetail(listingId))?.wants).toBe(1)
+    })
+  })
+})

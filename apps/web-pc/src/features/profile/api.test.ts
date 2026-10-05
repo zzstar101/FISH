@@ -88,6 +88,8 @@ describe('profile api paths', () => {
         negotiable: false,
         free: false,
         coverUrl: null,
+        // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0。
+        wants: 0,
         createdAt: '2026-09-27T00:00:00.000Z',
         updatedAt: '2026-09-27T00:00:00.000Z',
         moderationStatus: 'APPROVED',

@@ -1,4 +1,4 @@
-import type { ListingSeller } from '@fish/contracts/listings/schema'
+import type { ChatWatchersResponse } from '@fish/contracts/chat/schema'
 import { Badge } from '@fish/ui/badge'
 import { Button } from '@fish/ui/button'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
@@ -7,8 +7,14 @@ import { ShieldCheck } from 'lucide-react'
 import { formatRelativeTimeAt } from '../../lib/format'
 import type { WatchersLoadOutcome } from './api'
 
-/** 名单行 = 契约 `chatWatchersResponseSchema.items[]`，一字不多。 */
-export type WatcherRow = { user: ListingSeller; startedAt: string }
+/**
+ * 名单行 = 契约 `chatWatchersResponseSchema.items[]`，一字不多。
+ *
+ * 直接取契约的元素类型而不是手抄一份字段表：契约刚加 `conversationId`（小程序用它做
+ * 「点名字打开该买家会话」的跳转），手抄的那份不会跟着变，两处一旦漂移，
+ * 页面上就会缺字段而没有任何编译错误。
+ */
+export type WatcherRow = ChatWatchersResponse['items'][number]
 
 /**
  * 名单状态。`listing-missing` / `not-owner` 是**业务边界**（404 / 403），

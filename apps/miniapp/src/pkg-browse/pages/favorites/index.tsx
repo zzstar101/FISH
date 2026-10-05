@@ -579,7 +579,8 @@ export default function Favorites() {
                         ) : null}
                       </View>
                       <View className="fav__fmeta">
-                        {/* 契约没有「想要」计数 → 适配层给 null 时整块不画，不编成 0
+                        {/* 想要数来自契约 `ListingCardSchema.wants`（已建会话的买家数）；
+                            老 mock 记录缺这个字段时整块不画，不编成 0
                             （与 `components/product-card`、`pages/listing-detail` 同一条口径） */}
                         {item.wants === null ? null : (
                           <Text className="num">{item.wants} 人想要</Text>

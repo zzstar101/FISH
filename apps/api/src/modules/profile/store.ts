@@ -1,5 +1,6 @@
 import type { ListingCard } from '@fish/contracts/listings/schema'
 import type { Db } from '@fish/db/client'
+import { listingWantsCount } from '@fish/db/listing-wants'
 import { users } from '@fish/db/schema/users'
 import { eq, sql } from 'drizzle-orm'
 import type { UserRow } from '../auth/me'
@@ -21,6 +22,8 @@ export interface ProfileListingRow {
   coverObjectKey: string | null
   /** 卖家公开投影源列（#191）：本人视角的卖家恒是查看者自己，join users 同源带出。 */
   seller: ListingCardSeller
+  /** 想要数（= 已建会话的买家数，见 `@fish/db/listing-wants`）：卡片契约的必填字段。 */
+  wants: number
 }
 
 /** 我的愿望行：形状对齐 wishes 模块的 WishRow（复用其导出的 toWishDto，避免映射漂移）。 */
@@ -139,6 +142,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
                (SELECT li.object_key FROM listing_images li
                  WHERE li.listing_id = l.id AND li.sort_order = 0 LIMIT 1)
                  AS cover_object_key,
+               ${listingWantsCount(sql.raw('l.id'))} AS wants,
                u.id AS seller_id, u.nickname AS seller_nickname,
                u.avatar_url AS seller_avatar_url, u.auth_status::text AS seller_auth_status
         FROM listings l
@@ -161,6 +165,7 @@ export function createSqlProfileStore(db: Db): ProfileStore {
         // 裸 SQL 的时间戳按仓库统一口径写成 `Date | string` 再归一：不靠驱动的返回类型假设。
         createdAt: new Date(row.created_at as string | Date),
         coverObjectKey: (row.cover_object_key as string | null) ?? null,
+        wants: Number(row.wants),
         seller: {
           id: row.seller_id as string,
           nickname: row.seller_nickname as string,
