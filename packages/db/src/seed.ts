@@ -3,6 +3,7 @@ import { createDb, type Db } from './client'
 import { jsonParam } from './json'
 import { adminAuditLogs } from './schema/admin'
 import { aiPolishRequests } from './schema/ai-polish-requests'
+import { userBlocks } from './schema/blocks'
 import { comments } from './schema/comments'
 import { conversations } from './schema/conversations'
 import { embeddings } from './schema/embeddings'
@@ -124,7 +125,7 @@ export async function seed(tx: SeedTx): Promise<void> {
   // 但同属业务数据，一并清空才算"干净的一轮"。
   // 漏掉会让 seed 直接失败（实测未列入时报 0A000，不需要该表里真有数据）。
   await tx.execute(
-    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}`,
+    sql`TRUNCATE TABLE ${users}, ${wechatIdentities}, ${loginTickets}, ${sessions}, ${campusEmailVerifications}, ${listings}, ${listingImages}, ${listingMediaObjects}, ${listingModerationRecords}, ${comments}, ${wishes}, ${embeddings}, ${listingVisualEmbeddings}, ${favorites}, ${follows}, ${userBlocks}, ${listingViewHistory}, ${matches}, ${conversations}, ${messages}, ${messageMedia}, ${adminAuditLogs}, ${transactionMeetupTokens}, ${transactionReviews}, ${transactionReviewImages}, ${transactions}, ${notifications}, ${jobs}, ${aiPolishRequests}, ${reports}, ${userRestrictions}, ${recommendationEvents}, ${recommendationRequests}, ${recommendationRequestItems}, ${userInterestProfiles}, ${visualQueryImages}, ${visualSearchAttempts}`,
   )
 
   const now = new Date()

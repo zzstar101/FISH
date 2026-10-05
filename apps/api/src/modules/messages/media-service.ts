@@ -24,6 +24,7 @@ import {
   isPublicId,
   PUBLIC_ID_PREFIX,
 } from '@fish/shared/public-id'
+import type { BlockRelationCheck } from '../blocks/store'
 import { CHAT_MEDIA_PREFIX, isSafeObjectKey, type MediaStorage } from '../uploads/storage'
 import { MessageIdempotencyConflictError, mediaRequestHash, messageSendKey } from './idempotency'
 import { probeImage, probeVoiceDuration } from './media-probe'
@@ -32,7 +33,7 @@ import { ReplyTargetInvalidError, resolveReplyTarget, toReply } from './reply'
 
 export class MediaMessageServiceError extends Error {
   constructor(
-    readonly status: 404 | 409 | 422,
+    readonly status: 403 | 404 | 409 | 422,
     readonly code: string,
     message: string,
   ) {
@@ -153,11 +154,14 @@ export function createMediaMessageService({
   store,
   storage,
   mediaUrl,
+  blocks,
   onMediaCreated,
 }: {
   store: MediaMessageStore
   storage: MediaStorage
   mediaUrl: (conversationId: string, mediaId: string) => string
+  /** #466 拉黑守卫：**必填**（与文本/商品卡同一谓词、同一中性码）。 */
+  blocks: BlockRelationCheck
   onMediaCreated?: (
     participants: { buyerId: string; sellerId: string },
     media: MediaMessageDto,
@@ -189,7 +193,17 @@ export function createMediaMessageService({
       })
     },
     async create(userId, conversationId, input) {
-      if (!(await store.participant(conversationId, userId))) throw notFound()
+      const participant = await store.participant(conversationId, userId)
+      if (!participant) throw notFound()
+      // #466 拉黑守卫（双向）：媒体与文本/商品卡同一谓词、同一中性码（CONVERSATION_UNAVAILABLE）。
+      const other = participant.buyerId === userId ? participant.sellerId : participant.buyerId
+      if (await blocks.existsBlockBetween(userId, other)) {
+        throw new MediaMessageServiceError(
+          403,
+          'CONVERSATION_UNAVAILABLE',
+          '会话当前不可用，暂时无法发送媒体',
+        )
+      }
       // 引用目标先校验（#359 3c）：不可用直接 422，不做 stat / probe / 快照写入。
       let replyToId: string | null
       try {

@@ -18,6 +18,7 @@ import {
   PUBLIC_ID_PREFIX,
   type PublicId,
 } from '@fish/shared/public-id'
+import type { BlockRelationCheck } from '../blocks/store'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -268,10 +269,36 @@ async function assertReplyTargetUsable(
   }
 }
 
+/**
+ * #466 拉黑守卫（双向）：会话双方之间任一方向存在拉黑边，发送即被拦。
+ * **中性码** `CONVERSATION_UNAVAILABLE` 对双方同码同文案，不暴露「谁拉黑了谁」。
+ * 交易系统消息（SYSTEM）不走用户发送路径，天然不受影响。
+ */
+function makeBlockAssertion(blocks: BlockRelationCheck) {
+  return async function assertNotBlocked(
+    participants: { buyerId: string; sellerId: string },
+    userId: string,
+  ): Promise<void> {
+    const other = participants.buyerId === userId ? participants.sellerId : participants.buyerId
+    if (await blocks.existsBlockBetween(userId, other)) {
+      throw new MessageServiceError(
+        403,
+        'CONVERSATION_UNAVAILABLE',
+        '会话当前不可用，暂时无法发送消息',
+      )
+    }
+  }
+}
+
 export function createMessageService({
   store,
   /** LISTING 卡片封面 URL 的拼装（存储布局不进读模型，与 conversations 同一注入方式）。 */
   storage,
+  /**
+   * #466 拉黑守卫：**必填**。发送前判「会话双方之间任一方向存在拉黑边」，漏接线等于
+   * 守卫失效，所以在类型层要求装配方显式提供。
+   */
+  blocks,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
   /** 撤回落库后推送（#359 3c）：与 `message.new` 同一条「先落库再推送」语义。 */
@@ -280,6 +307,7 @@ export function createMessageService({
 }: {
   store: MessageStore
   storage: MediaStorage
+  blocks: BlockRelationCheck
   projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
@@ -295,6 +323,8 @@ export function createMessageService({
     },
   ) => void
 }): MessageService {
+  const assertNotBlocked = makeBlockAssertion(blocks)
+
   return {
     async listMessages(userId, conversationId, query) {
       const conversation = await store.findConversationForUser(conversationId, userId)
@@ -328,6 +358,7 @@ export function createMessageService({
       // 不重复 parse——内部误用时 ZodError 落 app.onError 而不是 422，反而更难查。
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
+      await assertNotBlocked(conversation, userId)
       const content = input.content.trim()
       // #67 幂等键：指纹取 trim 后的正文（与落库的 content 同一值）；未携带键时为 null。
       // 引用不进指纹：同一正文 + 同一 clientRequestId 换引用目标是同一个发送请求的重试，
@@ -385,6 +416,7 @@ export function createMessageService({
       // 非参与者与「会话不存在」同码（域内既有口径，见 listMessages 的同名注释）：
       // LISTING_NOT_FOUND 只表达「商品不可见」，不用于会话侧的身份判定。
       if (!conversation) throw notFound()
+      await assertNotBlocked(conversation, userId)
 
       // content 就是公开 id（引用而非用户正文）；指纹取同一个值，重试用同一个键即可重放。
       const key = messageSendKey(input.clientRequestId, listingRequestHash(input.listingId))

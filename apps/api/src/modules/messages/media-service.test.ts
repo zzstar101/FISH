@@ -46,6 +46,7 @@ function row(input: MediaMessageInput): MediaRow {
 function setup(
   overrides: Partial<MediaMessageStore> = {},
   storageOverrides: Partial<MediaStorage> = {},
+  blocksOverrides: Partial<{ existsBlockBetween: (a: string, b: string) => Promise<boolean> }> = {},
 ) {
   const store: MediaMessageStore = {
     legacyIds: async () => [],
@@ -74,6 +75,7 @@ function setup(
     ...storageOverrides,
   }
   return createMediaMessageService({
+    blocks: { existsBlockBetween: async () => false, ...blocksOverrides },
     store,
     storage,
     mediaUrl: (conversation, media) =>
@@ -215,6 +217,17 @@ describe('media message service', () => {
     const service = setup({}, { stat: async () => ({ size: 9, contentType: 'image/webp' }) })
     await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
       code: 'MEDIA_OBJECT_INVALID',
+    })
+  })
+
+  /*
+   * #466 拉黑守卫（双向）：媒体与文本/商品卡同一谓词、同一中性码。
+   */
+  test('拉黑守卫：拉黑边存在 → 403 CONVERSATION_UNAVAILABLE', async () => {
+    const service = setup({}, {}, { existsBlockBetween: async () => true })
+    await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
+      status: 403,
+      code: 'CONVERSATION_UNAVAILABLE',
     })
   })
 

@@ -41,7 +41,9 @@ function listingBrief(
 }
 
 /** SQL store 的插入路径由 store 负责；service 测试只关心「注入了哪个商店 + storage」。 */
-const serviceOf = (store: MemoryMessageStore) => createMessageService({ store, storage })
+const neverBlocked = { existsBlockBetween: async () => false }
+const serviceOf = (store: MemoryMessageStore) =>
+  createMessageService({ store, storage, blocks: neverBlocked })
 
 describe('message service: listMessages', () => {
   test('returns ascending messages with sender info', async () => {
@@ -115,6 +117,45 @@ describe('message service: sendTextMessage', () => {
     expect(
       service.sendTextMessage(outsider, conversationA, { content: 'hello' }),
     ).rejects.toBeInstanceOf(MessageServiceError)
+  })
+
+  /*
+   * #466 拉黑守卫：会话双方之间任一方向存在拉黑边，发送即被拦。中性码
+   * CONVERSATION_UNAVAILABLE 对双方同码同文案——报错不区分「谁拉黑了谁」。
+   */
+  test('拉黑守卫：对方拉黑了我（反向边）→ 403 CONVERSATION_UNAVAILABLE', async () => {
+    const service = createMessageService({
+      store: new MemoryMessageStore(),
+      storage,
+      blocks: {
+        existsBlockBetween: async (a, b) =>
+          (a === seller && b === buyer) || (a === buyer && b === seller),
+      },
+    })
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: 'hello' }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+
+  test('拉黑守卫：我拉黑了对方（正向边）同样被拦（双向拦截）', async () => {
+    const service = createMessageService({
+      store: new MemoryMessageStore(),
+      storage,
+      blocks: {
+        existsBlockBetween: async (a, b) =>
+          (a === buyer && b === seller) || (a === seller && b === buyer),
+      },
+    })
+    await expect(
+      service.sendTextMessage(seller, conversationA, { content: 'hello' }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+
+  test('守卫不误伤：无拉黑边时发送照常（neverBlocked 回归）', async () => {
+    const dto = await serviceOf(new MemoryMessageStore()).sendTextMessage(buyer, conversationA, {
+      content: 'hello',
+    })
+    expect(dto.type).toBe('TEXT')
   })
 
   /*
@@ -291,6 +332,7 @@ describe('message service: sendListingMessage（#359 商品卡）', () => {
     store.listings.set(LISTING_ID, listingBrief())
     const pushed: string[] = []
     const service = createMessageService({
+      blocks: neverBlocked,
       store,
       storage,
       onMessageCreated: (_participants, message) => pushed.push(message.id),
@@ -583,6 +625,7 @@ describe('message service: 撤回（#359 3c）', () => {
     const store = new MemoryMessageStore()
     const events: Array<Record<string, string>> = []
     const service = createMessageService({
+      blocks: neverBlocked,
       store,
       storage,
       onMessageRecalled: (_participants, event) =>
