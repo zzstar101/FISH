@@ -241,7 +241,7 @@ domain 各自只投**单一**类型，不参与这条成对不变量：`apps/api
 |---|---|
 | `apps/api/src/modules/listings/store.ts:1003-1026` | `enqueueListingJobsWith`：发布 / 编辑 / 重新上架（调用点 `:575/583/794/842`） |
 | `apps/api/src/modules/governance/service.ts:588-603` | `enqueueListingJobs`：下架（`:306`）/ 重新上架（`:397`）走这条 helper——原先顺序颠倒的正是这里，不是审核入口 |
-| `apps/api/src/modules/moderation/store.ts:170-183` | 人工放行（待审 → APPROVED）是待审商品进入匹配链路的唯一入口，自己有独立的一对 insert（EMBED_LISTING → MATCH_LISTING；其中 `EMBED_LISTING` 带 `ON CONFLICT DO NOTHING`，`MATCH_LISTING` 没有——该类型没有 partial unique index） |
+| `apps/api/src/modules/moderation/store.ts:174-195` | 人工放行（待审 → APPROVED）是待审商品进入匹配链路的唯一入口，自己有独立的一对 insert（EMBED_LISTING → MATCH_LISTING；`EMBED_LISTING` 用 drizzle 的 `.onConflictDoNothing()`，`MATCH_LISTING` 用 `ON CONFLICT ((payload->>'listingId')) WHERE type = 'MATCH_LISTING' AND status = 'PENDING' DO UPDATE SET run_at = now()`——该类型的 partial unique index 见 §12.1 第 2 条；这里的冲突动作必须是 `DO UPDATE`（取行锁），不能退化成 `DO NOTHING`） |
 | `apps/api/src/modules/wishes/store.ts:148-155` | 创建路径改为同事务三条语句（不再是一条 CTE），顺序 EMBED_WISH → MATCH_WISH |
 | `apps/api/src/modules/wishes/match-queue.ts:89-105` | 编辑 / 状态变更路径同一不变量 |
 
@@ -251,9 +251,9 @@ domain 各自只投**单一**类型，不参与这条成对不变量：`apps/api
 ——如 `listings/store.test.ts:192`——只能把两行排出来，不代表执行顺序）。
 
 **这条不变量的边界（第四轮审查 F1，major）→ M4 已修**：入队序正确 **≠** 执行序正确。`run_at` 是
-退避字段（`packages/db/src/schema/jobs.ts:48`），非致命失败重试（`apps/worker/src/jobs/queue.ts:145`
-`run_at = now()`）与 `kill -9` 后的僵死回收（`:179` 改回 `PENDING`、`:187` 超额度转 `FAILED`，两处都
-`run_at = now()`）都会把它推后，而领取序是 `ORDER BY run_at, id`（`:115`）——一次 EMBED 非致命失败或
+退避字段（`packages/db/src/schema/jobs.ts:48`），非致命失败重试（`apps/worker/src/jobs/queue.ts:249`
+`run_at = now()`）与 `kill -9` 后的僵死回收（`:323` 改回 `PENDING`、`:331` 超额度转 `FAILED`，两处都
+`run_at = now()`）都会把它推后，而领取序是 `ORDER BY run_at, id`（`:212`）——一次 EMBED 非致命失败或
 进程被强杀，同实体的 `MATCH_*` 就会先被领取，
 `engine.ts:401` 判目标向量 stale ⇒ `recall = 'v1-fallback'`（`:536-538` / wish 侧 `:649-651`），
 只补投 `EMBED_*`、**不重投 `MATCH_*`** ⇒ 该对停在 v1。
@@ -265,6 +265,7 @@ domain 各自只投**单一**类型，不参与这条成对不变量：`apps/api
 `MATCH_LISTING` 没有 partial unique index（`packages/db/src/schema/jobs.ts:59-72` 只有 wish 侧与两条
 EMBED 的），所以必须显式 `NOT EXISTS` 去重；并发窗口最坏多一条**幂等**重算（重算同一对走 `updated`
 分支、不产生第二条通知），要彻底关掉得给该类型加 partial unique index + migration，属另一件事。
+（尾项分支已补上该索引，见 §12.1 第 2 条；`NOT EXISTS` 保留为廉价前置过滤。）
 补投发生在 EMBED job 结算**之前**，所以新 `MATCH_*` 的 `(run_at, id)` 必然晚于本次 EMBED。
 `stale` / `missing` 不补投——那两种情况下向量没有变新，补投就是"MATCH → 补投 EMBED → MATCH"空转。
 
@@ -291,7 +292,7 @@ wish 侧不串号、`missing` 与 `stale` 都不补投——加 `core:smoke` 的
 
 ## 7. 可观测：`obs:summary`
 
-`bun run obs:summary [-- --model=<name>]`（只读，不出网）打印四组事件。`--model=` 缺省时取
+`bun run obs:summary [-- --model=<name>]`（只读，不出网）打印五组事件。`--model=` 缺省时取
 **写入侧实际用的模型名**：stub transport 下就是 `STUB_EMBEDDING_MODEL`（此时 `EMBEDDING_MODEL`
 只描述"将来切 live 会用谁"，拿它统计会报出假的 0 覆盖率），否则取 `EMBEDDING_MODEL`；两者都没有、
 或给了不认识的参数、或 `--model=` 为空，按用法错误 exit 2（与另外三个脚本一致）。
@@ -301,7 +302,8 @@ wish 侧不串号、`missing` 与 `stale` 都不补投——加 `core:smoke` 的
 | `obs.embeddings` | 顶层 `model`；`coverage.{listings,wishes}` = `active` / `withAnyVector` / `withVersionFreshVector` / `withFreshVector`；`models[]` = 按 `(model, vector_dims(embedding))` 分组的 `model` / `dimensions` / `vectorRows` / `listingVectors` / `wishVectors` / `freshVectors` |
 | `obs.matches` | `byRankingVersion[]` = `rankingVersion` / `rows` / `semanticNull` / `semanticFilled` / `scoreMin` / `scoreP50` / `scoreMax` |
 | `obs.jobs` | `byTypeStatus[]` = `jobType` / `status` / `rows` / `retried`（`attempts > 1`）/ `withError`（`last_error IS NOT NULL`）/ `doneP50Ms` / `doneP95Ms`。**不含失败率**（在 `obs.summary`） |
-| `obs.summary` | `model` / `modelCount` / `activeListings` / `freshListingVectors` / `activeWishes` / `freshWishVectors` / `matchRows` / `rankingVersion1Rows` / `rankingVersion2Rows` / `jobRows` / `settledJobs` / `failedJobs` / `failedRate` |
+| `obs.retries` | `entities[]` = `jobType` / `entityKey`（`listingId` / `wishId`）/ `entityId` / `failedInWindow` / `pending`。**这是状态而不是流**：`embed.retry` 的 stderr 事件只记录"当时做了决定"，事后问不出"现在哪些实体已经不再自动重试"；`pending` 为 `false` 表示该实体**此刻**连待跑的 `EMBED_*` 都没有了（不等于"自动路径断掉"：编辑商品仍会无额度闸门地重投一条）。出处 `listExhaustedEmbedRetries()`（`apps/worker/src/jobs/embedding/requeue.ts`），判据与补投路径复用同一组常量 |
+| `obs.summary` | `model` / `modelCount` / `activeListings` / `freshListingVectors` / `activeWishes` / `freshWishVectors` / `matchRows` / `rankingVersion1Rows` / `rankingVersion2Rows` / `jobRows` / `settledJobs` / `failedJobs` / `exhaustedEmbedRetries` / `stuckEmbedRetries` / `failedRate` |
 
 四个实现口径必须写下来，否则指标会被误读：
 
@@ -338,6 +340,15 @@ wish 侧不串号、`missing` 与 `stale` 都不补投——加 `core:smoke` 的
   `settledJobs` 只统计 `status IN ('DONE','FAILED')`；`jobRows` 才是全量（含 PENDING / RUNNING）。
   本机反复起停 worker 会留下成片 PENDING，若把它们算进分母就会系统性低估失败率（`settledJobs`
   也一并输出，便于消费者自己核对分母）。
+- **`exhaustedEmbedRetries` / `stuckEmbedRetries` 是"额度用尽"的查询口径，不是告警通道**：
+  前者 = 24 h 窗口内已有 `FAILED_EMBED_RETRY_LIMIT`（3）条 `FAILED` 的 `EMBED_*` 实体数，
+  后者 = 其中**此刻连待跑任务都没有**的实体数（`stuck ⊆ exhausted`）。注意 `stuck` **不等于**
+  "自动路径已断"：它只说"现在没有待跑的 `EMBED_*`"——编辑商品 / 治理动作会在同一事务里重投一条
+  `EMBED_LISTING`（`apps/api/src/modules/listings/store.ts` 等三处成对投递），那条路径没有额度闸门，
+  额度只约束 `scheduleFailedEmbedRetry()`。所以人工 `bun run embed:backfill` 是兜底而不是唯一出路。
+  口径与 `scheduleFailedEmbedRetry()` 逐条对齐：只算 `EMBED_LISTING` / `EMBED_WISH`、窗口与上限
+  复用同一组常量、`payload` 里没有实体键的行不分组。仓库里**没有**告警基建（无 metrics 服务、
+  无外部通知），所以它把"需要人看日志"变成"可随时重跑、可聚合"，但**不等于**真正的告警通道。
 - **`topKLatencyMs` 只在 worker stdout**：`jobs` 表没有 result 列（`packages/db/src/schema/jobs.ts`），
   引擎把它放进 `MatchRunResult` 后只由 `job.settled` 打出，`obs:summary` 聚合不到——要复核 §5 的
   ANN 触发条件，得 grep worker 日志里的 `job.settled`。
@@ -517,7 +528,7 @@ Top-K 硬边界期望值（95 → 100，锚点变更的直接后果）保留。
 | 验收项 | 状态 | 证据 |
 |---|---|---|
 | 批量重建（backfill） | ✅ | §6：6 实体 live 跑通 + 幂等重跑 0 请求 |
-| 指标与日志 | ✅ | §7：`obs:summary` 四组事件 + `embed.*` / `job.*` 事件 |
+| 指标与日志 | ✅ | §7：`obs:summary` 五组事件 + `embed.*` / `job.*` 事件 |
 | live provider smoke | ✅ | §8：worker live 6 job 全 DONE；脚本 live 6/6 |
 | 性能 / recall 对照 | ✅ | §4 recall@K 表、§5 ANN 对照表（固定 seed 可复算） |
 | `bun run typecheck` | ✅ | 8 个包 exit 0 |
@@ -613,7 +624,7 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
      的 `scheduleFailedEmbedRetry()`（额度 3 条 / 24 h 窗口 / `run_at = now() + 60 s` /
      `NOT EXISTS PENDING` 去重 / 坏 payload 不补投），由 `apps/worker/src/index.ts` 在
      `FAILED` 结算与启动回收两处触发，决定写进 stderr 的 `embed.retry` 事件；8 个用例见
-     `requeue.test.ts`。**没有动队列退避**（`queue.ts:138` 的"重试不引入退避"注释与 `:145` 的
+     `requeue.test.ts`。**没有动队列退避**（`queue.ts:241` 的"重试不引入退避"注释与 `:249` 的
      `SET ... run_at = now()`，以及 `docs/architecture.md:150` 的"重试：不退避"，都是 M2 冻结协议）；
   4. **`ann:probe` 用合成随机向量**：新增 `--source=auto|real|synthetic`（默认 `auto`：真实向量够就
      `real`），`real` 时用 `ann_seed` 临时表按固定 `row_number()` 取语料（不重复用同一条，避免 recall
@@ -629,15 +640,31 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
 
 ### 12.1 仍未做 / 需要另开 issue
 
+（第 1、3 条仍未做；第 2、4 条已在 #322 尾项分支修复，标 **已修**。）
+
 - **合成向量下的 HNSW recall 损失**：§5 的触发条件（p95 > 50 ms 或 ~10 万行向量）是在合成分布上量的；
   真实语料到量级后要用 `--source=real` 复测（脚本已支持）。
-- **`MATCH_LISTING` 没有 partial unique index**：`enqueueMatchJob()` 只能靠 `NOT EXISTS` 去重，并发窗口
-  最坏多一条**幂等**重算（`core:smoke` 的"恰好 1 条通知"断言保证通知不重复）。彻底关掉要加 partial
-  unique index + migration。
+- **`MATCH_LISTING` 没有 partial unique index**（**已修**）：`enqueueMatchJob()` 只能靠 `NOT EXISTS` 去重，
+  并发窗口最坏多一条**幂等**重算（`core:smoke` 的"恰好 1 条通知"断言保证通知不重复）。彻底关掉要加
+  partial unique index + migration。
+  → 已加 `jobs_match_listing_listing_id_pending_uidx`（`(payload->>'listingId')` where
+  `type = 'MATCH_LISTING' AND status = 'PENDING'`，drizzle 生成 `20261004193208_ordinary_bucky.sql`）；
+  有编辑过的旧库里本来就堆着多条 `PENDING`，所以前一条数据迁移
+  `20261004193147_dedupe_pending_match_listing_jobs.sql` 按 `(run_at, id)` 只留最早一条再建索引
+  （否则 `CREATE UNIQUE INDEX` 直接 23505）。投递侧**三个生产投递点**改成 `ON CONFLICT ((payload->>'listingId')) WHERE type = 'MATCH_LISTING' AND status = 'PENDING' DO UPDATE SET run_at = now()`（`apps/api/src/modules/listings/store.ts`、`apps/api/src/modules/governance/service.ts`、`apps/api/src/modules/moderation/store.ts`）——**不是 `DO NOTHING`**：只有 `DO UPDATE` 会取行锁，堵住提交前领取窗口（P2-1）；仓库里唯一裸 `ON CONFLICT DO NOTHING` 的是运维脚本 `apps/worker/scripts/backfill-embeddings.ts`，不是生产投递。
+  语义从"每次编辑追加一条"变为"待跑期间复用同一条，领走后再编辑才追加"（`NOT EXISTS` 现在只是
+  廉价前置过滤，原子性由索引保证）；回归 `apps/worker/src/jobs/matching/enqueue.test.ts`。
+  代价：job 被领走（`RUNNING`）之后投递侧又插了一条同实体 `PENDING` 时，那条行不能再回退到
+  `PENDING`（23505）——`settle(→PENDING)` 与启动回收都会**让位**成 `FAILED`
+  （`last_error` 以 `superseded by a pending job for the same entity` 开头，后面保留上一次的失败原因），重算交给那条 `PENDING` 行；
+  回归 `apps/worker/src/jobs/queue.test.ts` 的两条让位用例。
 - **补投只覆盖目标侧**（§6.1 末尾）：愿望（候选）侧的向量只能靠 `EMBED_WISH` / `MATCH_WISH` 或
   `embed:backfill` 产生，引擎不会为候选侧补投。
-- **失败补投只有日志**：`embed.retry` 是 stderr 事件，额度用尽（同一实体 24 h 内 3 条）后 job 停在
-  `FAILED` 终态，没有告警通道，需要人看日志。
+- **失败补投只有日志**（**已修（部分）**）：`embed.retry` 是 stderr 事件，额度用尽（同一实体 24 h 内 3 条）
+  后 job 停在 `FAILED` 终态，没有告警通道，需要人看日志。
+  → `obs:summary` 新增 `obs.retries` 事件与 `obs.summary.exhaustedEmbedRetries` / `stuckEmbedRetries`
+  两个计数（§7），把"额度用尽"从一行 stderr 变成**可随时重跑、可聚合**的查询口径；仓库里没有告警基建，
+  所以**这不等于真正的告警通道**，人仍要主动跑 `obs:summary`（或接告警的人自己去查）。
 
 ## 13. 本轮收尾状态：最终审查BLOCK，当前修复版本需新独立验证
 

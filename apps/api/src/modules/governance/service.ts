@@ -584,8 +584,18 @@ async function priorListingStatus(
  * **顺序即语义（#322 M4）**：`EMBED_LISTING` 在前、`MATCH_LISTING` 在后，理由与
  * `enqueueListingJobsWith` 一致（同事务 `run_at` 相同 ⇒ 领取序 = `newId()` 序 = 插入序；
  * 反序会让首轮 MATCH 跑在向量落库前、永久落 v1）。
+ *
+ * 两条都撞部分唯一索引（`MATCH_LISTING` 那条是 #322 M4 尾项补齐的），但冲突动作**刻意不同**：
+ * `EMBED_LISTING` 用 `DO NOTHING`（它的处理器会 `for('update')` 锁实体行，读不到未提交的旧状态），
+ * `MATCH_LISTING` 用 `DO UPDATE` 取行锁——理由与 `enqueueListingJobsWith`
+ * （`apps/api/src/modules/listings/store.ts`）逐字相同：匹配引擎读实体不加锁，若这里 `DO NOTHING`，
+ * worker 能在本事务提交前领走那条待跑行、按改动前的可见性算完并结算 `DONE`，本次治理动作就
+ * 一次重算都没有。
  */
-async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: string): Promise<void> {
+async function enqueueListingJobs(
+  executor: Pick<Db, 'insert' | 'execute'>,
+  listingId: string,
+): Promise<void> {
   await executor
     .insert(jobs)
     .values({
@@ -595,11 +605,16 @@ async function enqueueListingJobs(executor: Pick<Db, 'insert'>, listingId: strin
     })
     .onConflictDoNothing()
 
-  await executor.insert(jobs).values({
-    id: newId(),
-    type: 'MATCH_LISTING',
-    payload: jsonParam({ listingId }),
-  })
+  // 裸 SQL 的理由与写法见 `enqueueListingJobsWith`（`apps/api/src/modules/listings/store.ts`）：
+  // drizzle 0.45.2 的 pg 方言表达不了"部分唯一索引 + 表达式"的冲突目标，而这里的冲突动作
+  // 必须是 `DO UPDATE`（取行锁），不能退化成 `DO NOTHING`。
+  await executor.execute(sql`
+    INSERT INTO jobs (id, type, payload)
+    VALUES (${newId()}, 'MATCH_LISTING', ${JSON.stringify({ listingId })}::text::jsonb)
+    ON CONFLICT ((payload->>'listingId'))
+      WHERE type = 'MATCH_LISTING' AND status = 'PENDING'
+    DO UPDATE SET run_at = now()
+  `)
 }
 
 /**
