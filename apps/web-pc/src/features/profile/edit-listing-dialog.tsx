@@ -483,10 +483,16 @@ export function EditListingDialog({
                           封面
                         </span>
                       ) : null}
-                      {image.moderationStatus === 'BLOCKED' || image.objectKey === null ? (
+                      {/*
+                        只判 `objectKey` 缺席：服务端图片投影里，「结论为 BLOCK」与「台账行属他人」
+                        都直接省掉整组结论（`apps/api/src/modules/listings/service.ts` 的 `toImages`：
+                        这两种情况都 `return base` = 只有 url/sortOrder），所以客户端**永远收不到**
+                        图片级 `moderationStatus === 'BLOCKED'`，也就分不出缺席的成因 —— 文案只能中性。
+                      */}
+                      {image.objectKey === null ? (
                         <span className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-1 bg-black/55 px-1.5 py-1 text-center text-[11px] text-white">
                           <CircleAlert className="size-3" />
-                          审核未通过 · 编辑时需移除
+                          不可保留 · 编辑时需移除
                         </span>
                       ) : null}
                     </div>

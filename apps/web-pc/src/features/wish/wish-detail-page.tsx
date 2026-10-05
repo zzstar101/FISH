@@ -11,13 +11,14 @@ import { categoryLabel } from '../../lib/labels'
 import { useAuth } from '../auth/auth-provider'
 import { budgetLabel, MatchListDialog, type MatchTarget } from './match-list'
 import { useWishDetail } from './queries'
-import { isWishNotFound } from './wish-view'
+import { isWishUnavailable } from './wish-view'
 
 /**
  * 愿望详情（`/wish/$wishId`，#446）：wishId 通知的落点。
  *
- * `GET /wishes/:id` 是 owner-scoped 的，页面只服务「本人的愿望」；非本人或不存在的
- * 愿望一律 404 → 渲染「愿望不存在或不可见」，不区分两种原因（与服务端同口径）。
+ * `GET /wishes/:id` 是 owner-scoped 的，页面只服务「本人的愿望」：不存在是 404、
+ * 不是本人的是 **403**（服务端 `getWish`）。两者对访客都是「他看不到这个愿望」，
+ * 统一渲染「愿望不存在或不可见」并且**不给重试入口**——403 重试必然再 403。
  * 匹配结果复用许愿墙的 `MatchListDialog`（同一套「聊一聊」与截断口径）。
  */
 export function WishDetailPage({ wishId }: { wishId: string }) {
@@ -37,7 +38,7 @@ function WishDetailContent({ ownerId, wishId }: { ownerId: string; wishId: strin
   if (wish.isPending) return <LoadingState label="正在加载愿望…" />
 
   if (wish.isError) {
-    if (isWishNotFound(wish.error)) {
+    if (isWishUnavailable(wish.error)) {
       return (
         <EmptyState
           action={

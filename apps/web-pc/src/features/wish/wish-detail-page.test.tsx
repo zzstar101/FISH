@@ -5,8 +5,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../lib/api-client'
 
 /**
- * 页面分支只看 useWishDetail 的返回值：pending → 加载态；404 → 「愿望不存在或不可见」；
- * 成功 → 愿望信息 + 匹配入口。MatchListDialog 是 radix 弹窗（静态渲染为空），桩掉只留按钮。
+ * 页面分支只看 useWishDetail 的返回值：pending → 加载态；403/404 → 「愿望不存在或不可见」；
+ * 其它错误 → ErrorState（可重试）；成功 → 愿望信息 + 匹配入口。
+ * MatchListDialog 是 radix 弹窗（静态渲染为空），桩掉只留按钮。
  */
 let detailResult: Record<string, unknown>
 
@@ -61,17 +62,48 @@ describe('WishDetailPage（#446 wishId 通知落点）', () => {
     expect(render()).toContain('正在加载愿望')
   })
 
-  test('404（不存在或不是本人的）渲染「愿望不存在或不可见」+ 返回入口', () => {
+  test('404（愿望不存在）渲染「愿望不存在或不可见」+ 返回入口，不给重试', () => {
     detailResult = {
       isPending: false,
       isError: true,
       data: undefined,
-      error: new ApiError('WISH_NOT_FOUND', 404, '愿望不存在'),
+      error: new ApiError('NOT_FOUND', 404, '愿望不存在'),
       refetch: () => undefined,
     }
     const html = render()
     expect(html).toContain('愿望不存在或不可见')
     expect(html).toContain('返回许愿墙')
+    // 不存在是终态：重试只会再得 404
+    expect(html).not.toContain('重试')
+  })
+
+  test('403（不是本人的愿望）同样走「不存在或不可见」，不给必然再 403 的重试按钮', () => {
+    detailResult = {
+      isPending: false,
+      isError: true,
+      data: undefined,
+      error: new ApiError('FORBIDDEN', 403, '无权查看该愿望'),
+      refetch: () => undefined,
+    }
+    const html = render()
+    expect(html).toContain('愿望不存在或不可见')
+    expect(html).toContain('返回许愿墙')
+    expect(html).not.toContain('愿望加载失败')
+    expect(html).not.toContain('重试')
+  })
+
+  test('其它错误（如 500）仍走 ErrorState + 重试，不被并进「不可见」', () => {
+    detailResult = {
+      isPending: false,
+      isError: true,
+      data: undefined,
+      error: new ApiError('INTERNAL_ERROR', 500, '服务器开小差了'),
+      refetch: () => undefined,
+    }
+    const html = render()
+    expect(html).toContain('愿望加载失败')
+    expect(html).toContain('重试')
+    expect(html).not.toContain('愿望不存在或不可见')
   })
 
   test('成功渲染愿望信息与匹配入口（有匹配时可点）', () => {
