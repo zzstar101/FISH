@@ -58,6 +58,7 @@ import {
 } from '../src/modules/visual-search/eval/fixture'
 import {
   evaluateVisualEvalGates,
+  gatesExitCode,
   type VisualEvalPathMetrics,
 } from '../src/modules/visual-search/eval/gates'
 import {
@@ -515,8 +516,10 @@ if (selfCheck.emptyResultRate !== 0 || selfCheck.p95Latency !== 0) {
 // ---------------------------------------------------------------------------
 // 五、通过门槛（#406 第 3 项）
 //
-// 判据本身在 `src/modules/visual-search/eval/gates.ts`（纯函数，另有单测喂退化输入
-// 证明它会红）；这里只负责把本腿算出的指标喂进去、打印回执、用退出码让 CI 真的失败。
+// 判据与退出码都在 `src/modules/visual-search/eval/gates.ts`（纯函数
+// `evaluateVisualEvalGates` / `gatesExitCode`，另有单测喂退化输入证明它会红，并由源码守卫
+// 钉住本文件末尾那行接线）；这里只负责把本腿算出的指标喂进去、打印回执，
+// 再把 `gatesExitCode` 的结果接到 `process.exitCode` 上让 CI 真的失败。
 // 这一节以前不存在，于是"指标退化"从来没有任何人会失败——报告再难看也是 exit 0。
 //
 // 门槛算在**未过滤**的候选池上（本文件头部已写明取舍）：它钉的是排序层，不覆盖
@@ -565,5 +568,5 @@ if (violations.length === 0) {
     '- 门槛失败**不等于**实现错了：也可能是 fixture 或排序权重被有意改动。' +
       '无论哪种都要在 PR 里说明理由，并同步复核 `src/modules/visual-search/eval/gates.ts` 的阈值表。',
   )
-  process.exitCode = 1
+  process.exitCode = gatesExitCode(violations)
 }

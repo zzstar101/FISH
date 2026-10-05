@@ -155,3 +155,19 @@ export function evaluateVisualEvalGates(input: VisualEvalGateInput): VisualEvalV
 
   return violations
 }
+
+/**
+ * 门槛结果 → 进程退出码（`0` 通过 / `1` 不通过）。
+ *
+ * 为什么要单独抽成函数：这一行原本直接写成 `process.exitCode = 1` 躺在
+ * `apps/api/scripts/visual-eval.ts` 的末尾，而那个脚本是**顶层执行**、没有可导入的入口，
+ * 于是它**零单测覆盖**——把这一行删掉（或注释掉），`gates.test.ts` 照旧全绿，
+ * 报告的每一个字符都不变，CI 却静默退回"评测腿永远绿"。这正是 #406 第 3 项要根除的失效模式。
+ *
+ * 抽成纯函数之后，"有违规 ⇒ 1 / 无违规 ⇒ 0"有了直接可断言的语义；
+ * 脚本里那一行**接线本身**由 `gates.test.ts` 的源码守卫钉住（脚本没有可注入的入口，
+ * 这是在不跑真实评测的前提下唯一能验证接线的方式，先例见 `apps/miniapp/tests/*-wiring.test.ts`）。
+ */
+export function gatesExitCode(violations: readonly VisualEvalViolation[]): 0 | 1 {
+  return violations.length === 0 ? 0 : 1
+}

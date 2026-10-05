@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   evaluateVisualEvalGates,
+  gatesExitCode,
   VISUAL_EVAL_HYBRID_MAX_INVERSIONS,
   VISUAL_EVAL_MIN_SAMPLE_COUNT,
   type VisualEvalGateInput,
@@ -102,5 +103,45 @@ describe('evaluateVisualEvalGates', () => {
     delete (input.paths as Partial<VisualEvalGateInput['paths']>).hybrid
 
     expect(gateNames(input)).toEqual(['路径缺失'])
+  })
+})
+
+/**
+ * 退出码（#406 第 3 项）。
+ *
+ * 门槛算得再对，只要没人把它接到退出码上，CI 就还是绿的。所以这里除了纯函数语义，
+ * 还得钉住"脚本**真的调用了它**"——后者只能读源码，理由见下面第二个 describe。
+ */
+describe('gatesExitCode', () => {
+  test('没有任何违规 → 0（评测腿通过）', () => {
+    expect(gatesExitCode(evaluateVisualEvalGates(current()))).toBe(0)
+  })
+
+  test('存在违规 → 1（CI 必须红，而不是只打印一行 ❌）', () => {
+    const input = current()
+    input.paths.hybrid.mrr = 0.9
+
+    expect(gatesExitCode(evaluateVisualEvalGates(input))).toBe(1)
+  })
+})
+
+/**
+ * 接线守卫：门槛算出来没人用，等于没有门槛。
+ *
+ * `apps/api/scripts/visual-eval.ts` 是**顶层执行**的脚本（没有可导入的 `main`），
+ * 因此"违规 ⇒ 退出码非 0"这条接线用普通单测观察不到 —— 把末尾那一行删掉，
+ * 上面两条用例照旧全绿、报告的每个字符都不变，CI 却静默退回"评测腿永远绿"
+ * （正是 #406 第 3 项记录的失效模式）。本仓对这种"只在源码里可见的接线"已有先例
+ * （`apps/miniapp/tests/*-wiring.test.ts`），这里沿用同一办法：直接读源码断言，
+ * 并且断言跑在**去掉注释之后**的文本上——把那一行注释掉同样要红。
+ */
+describe('visual-eval.ts 的退出码接线', () => {
+  test('脚本把 gatesExitCode(violations) 接到 process.exitCode 上', async () => {
+    const source = await Bun.file(
+      new URL('../../../../scripts/visual-eval.ts', import.meta.url),
+    ).text()
+    const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+
+    expect(withoutComments).toMatch(/process\.exitCode\s*=\s*gatesExitCode\(violations\)/)
   })
 })
