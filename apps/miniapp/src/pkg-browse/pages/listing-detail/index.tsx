@@ -27,7 +27,7 @@ import LoadError from '@/components/load-error'
 import ProductCard from '@/components/product-card'
 import { DEMO_AUTH_ENABLED } from '@/features/auth/demo'
 import { useAuth } from '@/features/auth/store'
-import { createConversation } from '@/features/chat/api'
+import { createConversation, describeCreateConversationFailure } from '@/features/chat/api'
 import { fetchFavoriteState, setFavorite } from '@/features/favorites/api'
 import { loadListingDetail } from '@/features/fetchers'
 import { offlineListing } from '@/features/listing/api'
@@ -39,6 +39,12 @@ import { readFeedAttribution } from '@/features/recommendation/attribution'
 import { readHiddenListingIds } from '@/features/recommendation/hidden'
 import { trackRecommendationEvent } from '@/features/recommendation/track'
 import { useListingDetailTracking } from '@/features/recommendation/use-listing-detail-tracking'
+import { describeProposeFailure, proposeTransaction } from '@/features/transaction/api'
+import {
+  initialAmountValue,
+  proposalAmountCents,
+  proposalAmountError,
+} from '@/features/transaction/propose-model'
 import { CURRENT_USER_ID } from '@/lib/demo-user-id'
 import { categoryLabel, conditionLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
@@ -325,6 +331,16 @@ export default function ListingDetail() {
   )
   /** 「立即购买」是否已确认过：确认一次就进入「待店家确认」终态（账号私有，换号清场） */
   const [buyRequested, setBuyRequested] = useState(false)
+  /** 「立即购买」确认弹层（对齐 PC buy-dialog：商品摘要 + 可改金额 + 注释；账号私有，换号清场） */
+  const [buyOpen, setBuyOpen] = useState(false)
+  /** 弹层金额输入框：默认带挂价、可改；免费送锁 `'0'`（初值在 `openBuy` 里按商品写入） */
+  const [buyAmount, setBuyAmount] = useState('')
+  /** 弹层金额字段的本地校验错误文案 */
+  const [buyAmountError, setBuyAmountError] = useState<string | null>(null)
+  /** 弹层提交失败的展示文案（弹层内展示，不用 toast —— 失败语境要贴着输入框） */
+  const [buySubmitError, setBuySubmitError] = useState<string | null>(null)
+  /** 弹层提交在飞：确认钮转「正在发起…」，两步写没落地前弹层不许关 */
+  const [buyBusy, setBuyBusy] = useState(false)
   /** 下架二次确认卡是否开着（卖家视角「管理 → 下架」；账号私有，换号清场） */
   const [offlineConfirmOpen, setOfflineConfirmOpen] = useState(false)
   /** 下架确认卡按钮三态：确认下架 / 下架中 / 重试（同我的发布页的 submit 状态机） */
@@ -438,6 +454,20 @@ export default function ListingDetail() {
     setFaved(cleared.faved)
     // 购买请求是当前账号发出的：换号后「待店家确认」不属于下一个账号
     setBuyRequested(cleared.buyRequested)
+    /*
+      购买确认弹层（草稿金额 / 两处错误 / 在飞态）**只在真换号时**复位。
+      冷启动解析身份（`null → id`）走 `ownerChanged` 但不走 `isOwnerSwitch`：那时弹层
+      可能已经打开、两步写正在飞（入口刻意放行 `unknown`，`isColdStartIdentityResolution`
+      也会让这次飞行继续作数）。放在这里之外复位，会让身份一解析就关层 + `buyBusy` 清零，
+      而那次写还在飞 —— 它若失败，文案会被写进一个已经关掉的弹层，用户什么都看不到。
+    */
+    if (isOwnerSwitch(prevUserId)) {
+      setBuyOpen(cleared.buyOpen)
+      setBuyAmount(cleared.buyAmount)
+      setBuyAmountError(cleared.buyAmountError)
+      setBuySubmitError(cleared.buySubmitError)
+      setBuyBusy(cleared.buyBusy)
+    }
     // 下架确认卡是卖家视角的操作面板：下一个账号未必还是这件商品的卖家，
     // 连卡带请求三态一起复位，别把 A 的「下架中」留给 B
     setOfflineConfirmOpen(cleared.offlineConfirmOpen)
@@ -847,20 +877,57 @@ export default function ListingDetail() {
   }
 
   /**
-   * 「立即购买」：微信原生 `showModal` 做二级确认，确认后进入「待店家确认」终态。
+   * 「立即购买」（#11 提案端点落地后的真接线）：打开自绘确认弹层，内容对齐 PC 站
+   * `buy-dialog` —— 商品摘要 + 可改的交易金额 + 语义注释。确认后走真两步写：
+   * `POST /conversations`（同买家同商品服务端**复用**既有会话，重复发起幂等）→
+   * `POST /transactions/proposals`（往会话写一条 `tx.proposal`；商品仍是 `ACTIVE`，
+   * 只有卖家接受才创建交易行，见 `features/transaction/api` 的提案注释）。
    *
-   * 请求目前只落到本地状态：契约里还没有「向卖家发购买请求」的端点（下单域未开），
-   * 弹窗文案里的「发送请求」暂时没有真实接收方 —— 端点落地后在这里补真实调用。
+   * 匿名**不弹层**：两个端点都挂 `requireAuth`，让匿名用户填完金额再吃 401 更糟 ——
+   * 在入口就拦下。`unknown`（冷启动身份解析中）**放行**，与「聊一聊」同口径：
+   * 任务铸定时已带上当刻登录态，`isTaskLive` 的冷启动豁免会兜住解析前后交错的
+   * 迟到回调，把已登录用户拦在门外是误报。
    *
-   * 弹窗回调同样是迟到的异步回调：等待期间换号 / 卸载之后，「待店家确认」写的就是
-   * 别人的页面了。切号清场只清**已写下**的状态，挡不住清场之后的这次回写。
-   *
-   * 在飞锁与「聊一聊」同口径（另一把锁）：`showModal` 没回之前不再弹第二个，否则
-   * 连点会叠出多个确认框；`fail`（老 Android 上点蒙层 / 页面卸载走 reject）按
-   * 「没确认」处理 —— 不写终态，也不弹错。
+   * 金额默认带挂价、买家可改：这就是与卖家商定的成交价，卖家接受时以**卖家重传的值**
+   * 为准（提案不落库，服务端无处可读）。免费送金额锁 0（0 元送没有可议的价）。
    */
-  const buy = () => {
-    if (buyRequested || buyInFlightRef.current !== null) return
+  const openBuy = () => {
+    if (buyRequested || buyBusy || buyInFlightRef.current !== null) return
+    if (authStatus === 'anonymous') {
+      void Taro.showToast({ title: '请先登录后再购买', icon: 'none' })
+      return
+    }
+    // 详情没就位（骨架屏 / 失败态）不弹层：金额初值拿不到真值，发出去的提案没有依据
+    if (listing === undefined) return
+    setBuyAmount(initialAmountValue(listing.priceCents, listing.free))
+    setBuyAmountError(null)
+    setBuySubmitError(null)
+    setBuyOpen(true)
+  }
+
+  /** 弹层的两个关闭口（蒙层 / 「再想想」）：提交在飞时不许关，PC 同款口径。 */
+  const dismissBuy = () => {
+    if (buyBusy) return
+    setBuyOpen(false)
+  }
+
+  /**
+   * 弹层「发起交易确认」：本地校验金额 → 两步写。
+   *
+   * 在飞锁与令牌口径同 `chatWithSeller`（另一把锁）：两步 `await` 的每个边界都先问
+   * `isTaskLive`，等待期间换号 / 卸载后，A 的迟到响应不许写进 B 的页面、更不许压出
+   * 会话页。两步合起来只持**一把**锁：第一步成功、第二步失败时用户重试，会从建会话
+   * 重新走一遍 —— 建会话是幂等的（服务端复用），不会因此产生第二条提案以外的副作用。
+   */
+  const confirmBuy = () => {
+    if (buyBusy || buyInFlightRef.current !== null || listing === undefined) return
+    const fieldError = proposalAmountError(buyAmount, listing.free)
+    if (fieldError !== null) {
+      setBuyAmountError(fieldError)
+      return
+    }
+    const cents = proposalAmountCents(buyAmount, listing.free)
+    if (cents === null) return
     actionSeqRef.current += 1
     const task = beginActionTask(
       epochRef.current,
@@ -873,20 +940,65 @@ export default function ListingDetail() {
       if (!shouldReleaseActionTask(task, buyInFlightRef.current)) return
       buyInFlightRef.current = null
     }
-    void Taro.showModal({
-      title: '确定立即购买',
-      content: '请核实商品信息，确认后向卖家发送请求',
-    })
-      .then((result) => {
-        if (!result.confirm) return
+    setBuyBusy(true)
+    setBuyAmountError(null)
+    setBuySubmitError(null)
+    void (async () => {
+      // 两步失败的文案不同源（PC 同款分档）：进到第二步才换映射器
+      let step: 'conversation' | 'propose' = 'conversation'
+      try {
+        const conversation = await createConversation(id)
         if (!isTaskLive(task, buyInFlightRef.current)) return
+        step = 'propose'
+        await proposeTransaction(conversation.id, cents)
+        if (!isTaskLive(task, buyInFlightRef.current)) return
+        // 成功：进「待店家确认」终态并跳会话页（对齐 PC buy-dialog 的成功去向）——
+        // 提案就是会话里的一条 `tx.proposal`，去会话能看到它，卖家也在那里接受
         setBuyRequested(true)
-      })
-      .catch((error: unknown) => {
-        // 弹窗没完成（点蒙层 / 页面卸载 / 平台走 fail）就是「没确认」，留痕不打扰用户
-        console.debug('[miniapp] 购买确认弹窗未完成，按未确认处理', error)
-      })
-      .finally(release)
+        setBuyOpen(false)
+        void Taro.navigateTo({
+          url: `/pkg-social/pages/conversation/index?id=${conversation.id}`,
+        })
+      } catch (error) {
+        // 迟到的失败不写状态也不提示；例外是**会话过期**（401）：清会话后 store 已回
+        // 匿名、这次失败在守卫看来是「迟到的」，可失败的就是本人（同 confirmOffline 口径）
+        if (!isTaskLive(task, buyInFlightRef.current)) {
+          if (shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error), ownerRef.current)) {
+            void Taro.showToast({ title: '请先登录后再购买', icon: 'none' })
+          }
+          return
+        }
+        if (isUnauthenticatedError(error)) {
+          setBuySubmitError('登录已过期，请重新登录')
+          return
+        }
+        if (step === 'conversation') {
+          // 第一步（建会话）失败：文案与 PC `describeCreateConversationFailure` 同款
+          setBuySubmitError(describeCreateConversationFailure(error))
+          return
+        }
+        const failure = describeProposeFailure(error)
+        setBuySubmitError(failure.message)
+        if (failure.refresh) {
+          /*
+            商品已不在售是状态漂移：**弹层留着**展示这条错误、页面重取详情
+            （PC 的 `onListingStale` → `detail.refetch()` 同款）。
+
+            ⚠️ 必须走**静默**的 `refresh()`，不能走 `load()`：`load()` 会先
+            `setData(null)` 回骨架屏，而弹层的摘要读的是实时 listing —— 重取期间它
+            会对着用户写「挂价 ¥0」（真实挂价可能几百上千），确认钮也会因为
+            `listing === undefined` 变成点了没反应。`refresh()` 保留现有内容，
+            只有服务端明确说商品没了才切空态。
+          */
+          refresh()
+        }
+      } finally {
+        // 先判再放锁：release 之后 `isTaskLive` 必为假，会把「正在发起…」永远卡住
+        const stillOurs = isTaskLive(task, buyInFlightRef.current)
+        release()
+        if (stillOurs) setBuyBusy(false)
+      }
+    })()
   }
 
   /* ------------------------------------------------------ 卖家视角底栏动作 */
@@ -1654,7 +1766,7 @@ export default function ListingDetail() {
               className={`detail__btn detail__btn--ghost${
                 buyRequested ? ' detail__btn--pending' : ''
               }`}
-              onClick={buy}
+              onClick={openBuy}
             >
               {buyRequested ? null : (
                 <Image className="detail__btn-img" src={ICONS.heartOn} mode="aspectFit" />
@@ -1707,6 +1819,63 @@ export default function ListingDetail() {
                       ? '重试'
                       : '确认下架'}
                 </Text>
+              </View>
+            </View>
+          </View>
+        </>
+      ) : null}
+
+      {/* ------- 「立即购买」确认弹层（对齐 PC buy-dialog：商品摘要 + 可改金额 + 注释） ------- */}
+      {buyOpen ? (
+        <>
+          <View className="detail__scrim" onClick={dismissBuy} />
+          <View className="detail__dialog">
+            <Text className="detail__dialog-title">确定立即购买</Text>
+            <Text className="detail__dialog-sub">
+              确认后会给卖家发一条交易确认，卖家同意才会生成订单并锁定商品。
+            </Text>
+            <View className="detail__buy-goods">
+              <Text className="detail__buy-label">商品</Text>
+              <Text className="detail__buy-goods-title">{listing?.title ?? '—'}</Text>
+              <Text className="detail__buy-goods-price">
+                {`挂价 ¥${formatAmount(listing?.priceCents ?? 0)}`}
+                {listing?.free ? ' · 免费送，金额固定为 0' : ''}
+              </Text>
+            </View>
+            <View
+              className={`detail__buy-field${(listing?.free ?? false) || buyBusy ? ' is-off' : ''}`}
+            >
+              <Text className="detail__buy-label">交易金额（元）</Text>
+              <Input
+                className="detail__buy-input"
+                disabled={(listing?.free ?? false) || buyBusy}
+                type="digit"
+                value={buyAmount}
+                onInput={(event) => {
+                  setBuyAmount(event.detail.value)
+                  setBuyAmountError(null)
+                }}
+              />
+              {buyAmountError !== null ? (
+                <Text className="detail__buy-err">{buyAmountError}</Text>
+              ) : (
+                <Text className="detail__buy-hint">
+                  不填挂价也可以改：这就是和卖家商定的成交价，卖家接受时以此为准。
+                </Text>
+              )}
+            </View>
+            {buySubmitError !== null ? (
+              <View className="detail__dlg-tip">
+                <Text>{buySubmitError}</Text>
+              </View>
+            ) : null}
+            <View className="detail__dlg-acts">
+              <View className="detail__dlg-cancel" onClick={dismissBuy}>
+                <Text>再想想</Text>
+              </View>
+              <View className={`detail__dlg-ok${buyBusy ? ' is-busy' : ''}`} onClick={confirmBuy}>
+                {buyBusy ? <View className="detail__spin" /> : null}
+                <Text>{buyBusy ? '正在发起…' : '发起交易确认'}</Text>
               </View>
             </View>
           </View>
