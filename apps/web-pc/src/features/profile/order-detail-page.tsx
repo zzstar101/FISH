@@ -21,6 +21,7 @@ import { useAuth } from '../auth/auth-provider'
 import { transactionActionError } from './api'
 import { MeetupPanel } from './meetup-panel'
 import { hasConfirmedOwnSide } from './meetup-view'
+import { OrderReviewCard } from './order-review-card'
 import { orderStatusView } from './orders-page'
 import { useCancelTransaction, useConfirmTransaction, useOrder } from './queries'
 
@@ -206,6 +207,14 @@ function OrderDetailContent({
 
           {detail.status === 'PENDING_MEETUP' ? (
             <MeetupPanel
+              onStale={() => void order.refetch()}
+              ownerId={ownerId}
+              transaction={detail}
+            />
+          ) : null}
+
+          {detail.status === 'COMPLETED' ? (
+            <OrderReviewCard
               onStale={() => void order.refetch()}
               ownerId={ownerId}
               transaction={detail}

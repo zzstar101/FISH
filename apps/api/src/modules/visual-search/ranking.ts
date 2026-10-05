@@ -4,6 +4,7 @@ import {
   VISUAL_FRESHNESS_HALF_LIFE_DAYS,
   VISUAL_POPULARITY_SATURATION,
   VISUAL_RANKING_WEIGHTS,
+  VISUAL_RECALL_MIN_SIMILARITY,
   VISUAL_SEARCH_STRATEGY_VERSION,
   type VisualScoreBreakdown,
 } from '@fish/contracts/visual/ranking'
@@ -36,6 +37,21 @@ export const VISUAL_RESULT_LIMIT = 30
 export function similarityFromCosineDistance(distance: number): number {
   if (!Number.isFinite(distance)) return 0
   return Math.min(1, Math.max(0, 1 - distance / 2))
+}
+
+/**
+ * 候选是否越过**召回相似度下限**（#406 第 6 项，常量与取值依据见
+ * `@fish/contracts/visual/ranking` 的 `VISUAL_RECALL_MIN_SIMILARITY`）。
+ *
+ * 判据取**两路里更强的那一路**：只被文本路召回的候选 `visualScore === 0`（"没有图片相似度
+ * 就是没有，不拿文本分冒充"），只看图片相似度会把"文字完全对得上"的候选一起丢掉。
+ * 纯函数、无 IO，所以下限的边界行为可以只用表驱动单测钉住。
+ */
+export function isAboveRecallFloor(candidate: {
+  visualScore: number
+  textScore: number | null
+}): boolean {
+  return Math.max(candidate.visualScore, candidate.textScore ?? 0) >= VISUAL_RECALL_MIN_SIMILARITY
 }
 
 /** 新鲜度：`0.5 ** (ageDays / HALF_LIFE_DAYS)`。未来时间戳（时钟偏移）按 1 处理。 */

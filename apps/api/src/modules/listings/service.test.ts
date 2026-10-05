@@ -1791,20 +1791,26 @@ function textResult(overrides: Partial<TextModerationResult> = {}): TextModerati
 
 function blockedTextResult(): TextModerationResult {
   const base = textResult()
+  // fixture 自证：base.fields 不足两位是测试数据错误，显式失败而不是用非空断言骗过 lint。
+  const firstField = base.fields[0]
+  const secondField = base.fields[1]
+  if (firstField === undefined || secondField === undefined) {
+    throw new Error('textResult fixture 的 fields 至少要有两条')
+  }
   return {
     ...base,
     decision: 'BLOCK',
     suggestion: 'Block',
     fields: [
       {
-        ...base.fields[0]!,
+        ...firstField,
         decision: 'BLOCK',
         suggestion: 'Block',
         label: 'Ad',
         subLabel: 'AdLaw',
         score: 99,
       },
-      base.fields[1]!,
+      secondField,
     ],
   }
 }
@@ -1959,7 +1965,8 @@ describe('文本审核 provider 接线（#228）', () => {
         getUpdateSnapshot: async () => {
           const row = snapshots[Math.min(snapshotCalls, snapshots.length - 1)]
           snapshotCalls += 1
-          return { kind: 'ok', row: row! }
+          if (row === undefined) throw new Error('snapshots fixture 为空')
+          return { kind: 'ok', row }
         },
         updateListingAtomic: async (input) => {
           if (snapshotCalls === 1) return { kind: 'conflict' }

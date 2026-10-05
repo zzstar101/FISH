@@ -178,6 +178,29 @@ describe('UserProfilePage', () => {
     expect(html).toContain('已关注')
   })
 
+  /** 个性签名（#445）：公开 DTO 的 signature 有就渲染，没有就不出现。 */
+  test('renders the public signature only when present', () => {
+    profileResult = {
+      data: { ...PROFILE, signature: '卖二手书的' },
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    listingsResult = idleListings()
+
+    expect(render()).toContain('卖二手书的')
+
+    profileResult = {
+      data: PROFILE,
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    expect(render()).not.toContain('卖二手书的')
+  })
+
   /** 未登录访客：不发关注态查询，给「登录后关注」入口而不是可点的假按钮。 */
   test('a guest gets a 登录后关注 entry and never queries the follow state', () => {
     profileResult = {

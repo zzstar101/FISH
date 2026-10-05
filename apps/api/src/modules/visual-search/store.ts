@@ -116,9 +116,16 @@ export type VisualSearchStore = {
    * 解析出的类目下已成交商品的均价与样本数（#324 M6）。
    *
    * 口径：`status = 'SOLD'` 的 `priceCents` 平均，**不走 transactions 表、不加时间窗口**。
-   * 可见性谓词与召回共用 `publicModerationVisibility()`，只把 `status` 从 `ACTIVE` 换成 `SOLD`。
+   * 可见性谓词与召回共用 `publicModerationVisibility()`，只把 `status` 从 `ACTIVE` 换成 `SOLD`；
+   * `excludeSellerId` 同样与召回共用 `excludeOwnListings()`（#406 第 2 项）——
+   * 搜索者**自己**已成交的商品算进"这个类目大概卖多少钱"里，是把本人的成交价混进了他正在
+   * 参考的市场行情，与召回侧"不返回本人商品"也是同一口径。
    */
-  soldPriceStats(category: ListingCategory): Promise<VisualSoldPriceStats>
+  soldPriceStats(input: {
+    category: ListingCategory
+    /** 本次请求者自己的 userId；匿名传 `null`/省略（同上，没有可排除的主体）。 */
+    excludeSellerId?: string | null
+  }): Promise<VisualSoldPriceStats>
 }
 
 export function createVisualSearchStore(db: Db): VisualSearchStore {
@@ -224,7 +231,7 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
       return result
     },
 
-    async soldPriceStats(category) {
+    async soldPriceStats(input) {
       // `avg(...)::float8`：`avg(integer)` 在 PG 里是 `numeric`，Bun 的 SQL 驱动会把它映射成
       // **字符串**（保精度），下游 `Math.round` 会得到 NaN。统计口径只到"分"，float8 足够。
       const rows = await db
@@ -235,9 +242,11 @@ export function createVisualSearchStore(db: Db): VisualSearchStore {
         .from(listings)
         .where(
           and(
-            eq(listings.category, category),
+            eq(listings.category, input.category),
             eq(listings.status, 'SOLD'),
             publicModerationVisibility(),
+            // 与召回侧同一个谓词函数：统计口径与"能不能被本人搜到"不能各写一遍。
+            excludeOwnListings(input.excludeSellerId),
           ),
         )
 

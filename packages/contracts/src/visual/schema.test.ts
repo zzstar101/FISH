@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { VISUAL_SEARCH_STRATEGY_VERSION } from './ranking'
 import {
   VISUAL_SEARCH_SORTS,
   VISUAL_SOLD_AVG_MIN_SAMPLES,
@@ -131,7 +132,7 @@ describe('VisualSearchResponseSchema', () => {
     const response: Record<string, unknown> = {
       queryId: '44444444-4444-4444-8444-444444444444',
       interpretation: null,
-      strategyVersion: 'visual-hybrid-v1',
+      strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
       embeddingModel: 'stub-visual-deterministic-v1',
       items: [resultItem],
       stats: emptyStats,
@@ -148,7 +149,7 @@ describe('VisualSearchResponseSchema', () => {
       VisualSearchResponseSchema.safeParse({
         queryId: '44444444-4444-4444-8444-444444444444',
         interpretation: null,
-        strategyVersion: 'visual-hybrid-v1',
+        strategyVersion: VISUAL_SEARCH_STRATEGY_VERSION,
         embeddingModel: 'stub-visual-deterministic-v1',
         items: [listingCard],
         stats: emptyStats,

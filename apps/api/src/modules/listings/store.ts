@@ -71,6 +71,13 @@ export type FeedCriteria = {
   category?: ListingCategory | undefined
   priceMinCents?: number | undefined
   priceMaxCents?: number | undefined
+  /**
+   * 「免费送」筛选（#451）：`undefined` = 不过滤。
+   *
+   * 直接对 `listings.free` 比较，不用价格近似 —— 契约只保证 `free ⟹ priceCents = 0`，
+   * 反向不成立（`free = false && priceCents = 0` 可由发布端输入 `0` 不勾开关产生）。
+   */
+  free?: boolean | undefined
   sellerId?: string | undefined
   includeUnapproved?: boolean | undefined
 }
@@ -676,6 +683,9 @@ export function createSqlListingStore(db: Db): ListingStore {
       if (criteria.priceMaxCents !== undefined) {
         conditions.push(lte(listings.priceCents, criteria.priceMaxCents))
       }
+      // `free` 是独立的布尔位，不能用价格区间表达：契约只约束 `free ⟹ priceCents = 0`，
+      // 反向不成立（`free = false && priceCents = 0` 是合法状态）。
+      if (criteria.free !== undefined) conditions.push(eq(listings.free, criteria.free))
       if (criteria.search) {
         // 搜索范围 = title + description（契约 §2.1）；用 ILIKE 而非 FTS 是实现选择，
         // 契约只声明范围，不承诺匹配算法。

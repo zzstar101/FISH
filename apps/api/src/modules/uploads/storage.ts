@@ -170,7 +170,8 @@ export function createBunS3MediaStorage(options: {
 
   /** 键只应由服务端生成；形状不合法一律抛错（fail-closed），不签名也不写入。 */
   const assertSafeObjectKey = (key: string): void => {
-    if (!isSafeObjectKey(key)) throw new Error('对象键形状不合法')
+    // 带上出错的键本身：这句话是排障时唯一的线索，而"哪个键"决定了是编码错误还是数据脏（#406 第 4 项）。
+    if (!isSafeObjectKey(key)) throw new Error(`对象键形状不合法：${JSON.stringify(key)}`)
   }
 
   return {
@@ -251,7 +252,12 @@ export function createBunS3MediaStorage(options: {
       // New listing keys must carry strict resource TypeIDs; refuse any other shape instead of
       // silently exposing raw UUIDs or unknown object namespaces in a public response.
       if (!isPublicListingKey(key) && !SEED_LISTING_KEY.test(key)) {
-        throw new Error('公开媒体对象键不规范')
+        // 这一句是"真实 POST /visual-search 回 500 INTERNAL_ERROR"最常见的根因（#406 第 4 项：
+        // seed 数据的三条隐性契约）。把出错的键与两种合法形状一起打出来，否则只能从 500 反推。
+        throw new Error(
+          `公开媒体对象键不规范：${JSON.stringify(key)}` +
+            '（期望 listings/{usr_…}/{med_…}.jpg|png|webp，或 seed 演示键 listings/seed-<slug>/<n>.jpg|png|webp）',
+        )
       }
       return `${publicUrlBase.replace(/\/+$/, '')}/${key}`
     },

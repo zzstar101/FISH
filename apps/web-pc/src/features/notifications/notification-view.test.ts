@@ -62,8 +62,9 @@ describe('notification view', () => {
       notificationReadErrorMessage(new ApiError('NOTIFICATION_NOT_FOUND', 404, '通知不存在')),
     ).toBe('通知不存在或已失效')
     expect(notificationReadErrorMessage(new Error('network'))).toBe('标记已读失败，请重试')
+    // `/wish/$wishId` 上线后（#446），wish 文案只在「预检发现目标不可见」时出现
     expect(notificationTargetErrorMessage({ kind: 'wish', wishId: 'w1' })).toBe(
-      '许愿详情将在后续版本开放，已留在通知列表',
+      '该愿望不存在或不可见，已留在通知列表',
     )
     // 会话 / 我的发布是静态路由，没有「目标不存在」这一说
     expect(
