@@ -241,7 +241,7 @@ domain 各自只投**单一**类型，不参与这条成对不变量：`apps/api
 |---|---|
 | `apps/api/src/modules/listings/store.ts:1003-1026` | `enqueueListingJobsWith`：发布 / 编辑 / 重新上架（调用点 `:575/583/794/842`） |
 | `apps/api/src/modules/governance/service.ts:588-603` | `enqueueListingJobs`：下架（`:306`）/ 重新上架（`:397`）走这条 helper——原先顺序颠倒的正是这里，不是审核入口 |
-| `apps/api/src/modules/moderation/store.ts:170-183` | 人工放行（待审 → APPROVED）是待审商品进入匹配链路的唯一入口，自己有独立的一对 insert（EMBED_LISTING → MATCH_LISTING；其中 `EMBED_LISTING` 带 `ON CONFLICT DO NOTHING`，`MATCH_LISTING` 没有——该类型没有 partial unique index） |
+| `apps/api/src/modules/moderation/store.ts:174-195` | 人工放行（待审 → APPROVED）是待审商品进入匹配链路的唯一入口，自己有独立的一对 insert（EMBED_LISTING → MATCH_LISTING；`EMBED_LISTING` 用 drizzle 的 `.onConflictDoNothing()`，`MATCH_LISTING` 用 `ON CONFLICT ((payload->>'listingId')) WHERE type = 'MATCH_LISTING' AND status = 'PENDING' DO UPDATE SET run_at = now()`——该类型的 partial unique index 见 §12.1 第 2 条；这里的冲突动作必须是 `DO UPDATE`（取行锁），不能退化成 `DO NOTHING`） |
 | `apps/api/src/modules/wishes/store.ts:148-155` | 创建路径改为同事务三条语句（不再是一条 CTE），顺序 EMBED_WISH → MATCH_WISH |
 | `apps/api/src/modules/wishes/match-queue.ts:89-105` | 编辑 / 状态变更路径同一不变量 |
 
@@ -251,9 +251,9 @@ domain 各自只投**单一**类型，不参与这条成对不变量：`apps/api
 ——如 `listings/store.test.ts:192`——只能把两行排出来，不代表执行顺序）。
 
 **这条不变量的边界（第四轮审查 F1，major）→ M4 已修**：入队序正确 **≠** 执行序正确。`run_at` 是
-退避字段（`packages/db/src/schema/jobs.ts:48`），非致命失败重试（`apps/worker/src/jobs/queue.ts:145`
-`run_at = now()`）与 `kill -9` 后的僵死回收（`:179` 改回 `PENDING`、`:187` 超额度转 `FAILED`，两处都
-`run_at = now()`）都会把它推后，而领取序是 `ORDER BY run_at, id`（`:115`）——一次 EMBED 非致命失败或
+退避字段（`packages/db/src/schema/jobs.ts:48`），非致命失败重试（`apps/worker/src/jobs/queue.ts:249`
+`run_at = now()`）与 `kill -9` 后的僵死回收（`:323` 改回 `PENDING`、`:331` 超额度转 `FAILED`，两处都
+`run_at = now()`）都会把它推后，而领取序是 `ORDER BY run_at, id`（`:212`）——一次 EMBED 非致命失败或
 进程被强杀，同实体的 `MATCH_*` 就会先被领取，
 `engine.ts:401` 判目标向量 stale ⇒ `recall = 'v1-fallback'`（`:536-538` / wish 侧 `:649-651`），
 只补投 `EMBED_*`、**不重投 `MATCH_*`** ⇒ 该对停在 v1。
@@ -624,7 +624,7 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
      的 `scheduleFailedEmbedRetry()`（额度 3 条 / 24 h 窗口 / `run_at = now() + 60 s` /
      `NOT EXISTS PENDING` 去重 / 坏 payload 不补投），由 `apps/worker/src/index.ts` 在
      `FAILED` 结算与启动回收两处触发，决定写进 stderr 的 `embed.retry` 事件；8 个用例见
-     `requeue.test.ts`。**没有动队列退避**（`queue.ts:138` 的"重试不引入退避"注释与 `:145` 的
+     `requeue.test.ts`。**没有动队列退避**（`queue.ts:241` 的"重试不引入退避"注释与 `:249` 的
      `SET ... run_at = now()`，以及 `docs/architecture.md:150` 的"重试：不退避"，都是 M2 冻结协议）；
   4. **`ann:probe` 用合成随机向量**：新增 `--source=auto|real|synthetic`（默认 `auto`：真实向量够就
      `real`），`real` 时用 `ann_seed` 临时表按固定 `row_number()` 取语料（不重复用同一条，避免 recall
@@ -651,9 +651,13 @@ v1/100，保留它因为它是"补投只补目标侧"的现场（§6.1 末尾）
   `type = 'MATCH_LISTING' AND status = 'PENDING'`，drizzle 生成 `20261004193208_ordinary_bucky.sql`）；
   有编辑过的旧库里本来就堆着多条 `PENDING`，所以前一条数据迁移
   `20261004193147_dedupe_pending_match_listing_jobs.sql` 按 `(run_at, id)` 只留最早一条再建索引
-  （否则 `CREATE UNIQUE INDEX` 直接 23505）。投递侧四处裸 INSERT 改成 `ON CONFLICT DO NOTHING`，
+  （否则 `CREATE UNIQUE INDEX` 直接 23505）。投递侧**三个生产投递点**改成 `ON CONFLICT ((payload->>'listingId')) WHERE type = 'MATCH_LISTING' AND status = 'PENDING' DO UPDATE SET run_at = now()`（`apps/api/src/modules/listings/store.ts`、`apps/api/src/modules/governance/service.ts`、`apps/api/src/modules/moderation/store.ts`）——**不是 `DO NOTHING`**：只有 `DO UPDATE` 会取行锁，堵住提交前领取窗口（P2-1）；仓库里唯一裸 `ON CONFLICT DO NOTHING` 的是运维脚本 `apps/worker/scripts/backfill-embeddings.ts`，不是生产投递。
   语义从"每次编辑追加一条"变为"待跑期间复用同一条，领走后再编辑才追加"（`NOT EXISTS` 现在只是
   廉价前置过滤，原子性由索引保证）；回归 `apps/worker/src/jobs/matching/enqueue.test.ts`。
+  代价：job 被领走（`RUNNING`）之后投递侧又插了一条同实体 `PENDING` 时，那条行不能再回退到
+  `PENDING`（23505）——`settle(→PENDING)` 与启动回收都会**让位**成 `FAILED`
+  （`last_error` 以 `superseded by a pending job for the same entity` 开头，后面保留上一次的失败原因），重算交给那条 `PENDING` 行；
+  回归 `apps/worker/src/jobs/queue.test.ts` 的两条让位用例。
 - **补投只覆盖目标侧**（§6.1 末尾）：愿望（候选）侧的向量只能靠 `EMBED_WISH` / `MATCH_WISH` 或
   `embed:backfill` 产生，引擎不会为候选侧补投。
 - **失败补投只有日志**（**已修（部分）**）：`embed.retry` 是 stderr 事件，额度用尽（同一实体 24 h 内 3 条）

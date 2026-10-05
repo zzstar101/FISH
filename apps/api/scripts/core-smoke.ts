@@ -442,30 +442,47 @@ async function waitJob(db: Db, id: string, status: JobRow['status'], timeoutMs =
   ok(`job ${id} → ${status}`)
 }
 
-/** 等一条**新增**的 job 达到目标状态（编辑/上下架/重复投递都会追加一条）。 */
+/**
+ * 等一条**新增**的 job 达到目标状态（编辑/上下架/重复投递都会追加一条）。
+ *
+ * `known` 是这次写操作**之前**读到的该实体 job 行（`jobRows(...)` 的原始结果，不是 id 集合）：
+ * 判断"这次写操作有没有复用旧行"需要写前状态，只有 id 集合做不到（用"现在存在 DONE 行"当判据会
+ * 假绿——那是历史行，不是这次的结果）。
+ *
+ * 投递侧对 `MATCH_LISTING` 用的是 `ON CONFLICT ((payload->>'listingId')) WHERE … DO UPDATE SET
+ * run_at = now()`（#322 的 P2-1），所以同实体**已经有一条 PENDING** 时这次写操作**不新增行**，
+ * 只把那条 PENDING 的 `run_at` 提前——此时"新增恰好一条"永远等不到（会白等满超时）。所以命中
+ * 判据是两种，都要求目标是这次写操作的产物：
+ * 1. 新增的那条（`fresh`）：仍要求「恰好一条」，多出一条就是投递规则回归（Done 要求「无重复
+ *    Match / 首次通知异常」）；
+ * 2. 没有可用新增行时，写前是 `PENDING`、现在到了目标状态的那条（被复用的行）。目标状态是
+ *    `PENDING` 时它写前就是 `PENDING`，所以"现在仍是 PENDING"也算命中。
+ */
 async function waitNewJob(
   db: Db,
   type: string,
   key: string,
   value: string,
-  knownIds: Set<string>,
+  known: JobRow[],
   status: JobRow['status'],
 ): Promise<JobRow> {
-  let fresh: JobRow | undefined
+  const knownById = new Map(known.map((row) => [row.id, row]))
+  let matched: JobRow | undefined
   await waitFor(`新增 job ${type} → ${status}`, async () => {
-    const candidates = (await jobRows(db, type, key, value)).filter((row) => !knownIds.has(row.id))
-    fresh = candidates[0]
+    const rows = await jobRows(db, type, key, value)
+    const fresh = rows.filter((row) => !knownById.has(row.id))
     // 收紧到「恰好一条」：本文件每处调用都只伴随一次写操作，多出一条就是投递规则回归
     //（Done 要求「无重复 Match / 首次通知异常」）。
-    return candidates.length === 1 && candidates[0]?.status === status
+    if (fresh.length > 1) return false
+    const reused = rows.filter(
+      (row) => knownById.get(row.id)?.status === 'PENDING' && row.status === status,
+    )
+    matched = fresh.find((row) => row.status === status) ?? reused[0]
+    return matched !== undefined
   })
-  if (!fresh) throw new Error('内部错误：未取得新增 job')
+  if (!matched) throw new Error('内部错误：未取得新增 job')
   ok(`新增 ${type} → ${status}`)
-  return fresh
-}
-
-function jobIds(rows: JobRow[]): Set<string> {
-  return new Set(rows.map((row) => row.id))
+  return matched
 }
 
 /**
@@ -1486,7 +1503,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 5. 幂等：重复投递/重算不新增行、不重复通知
     step = '幂等'
     section('重算幂等（不新增 match / 不重复通知）')
-    const replayKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
+    const replayKnown = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     const replayPatch = await patchJson(
       base,
       `/listings/${listingPublicId}`,
@@ -1528,7 +1545,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 6. 编辑改变事实：价格越过 2× 预算后旧 Match 必须降级
     step = '编辑重算'
     section('编辑价格到 2× 预算之外：旧 Match 降级且不残留')
-    const overBudgetKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
+    const overBudgetKnown = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     const overBudget = await patchJson(
       base,
       `/listings/${listingPublicId}`,
@@ -1563,7 +1580,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '超预算后的分数 = S4 权重下的四路加权和（价格项归零）',
     )
 
-    const restoreKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
+    const restoreKnown = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     const restore = await patchJson(
       base,
       `/listings/${listingPublicId}`,
@@ -1594,7 +1611,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 7. 下架 / 重新上架
     step = '上下架'
     section('下架隐藏、重新上架恢复')
-    const offlineKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
+    const offlineKnown = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     const offline = await postJson(base, `/listings/${listingPublicId}/offline`, {}, seller)
     assertEqual(offline.status, 200, 'POST offline → 200')
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, offlineKnown, 'DONE')
@@ -1616,7 +1633,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
       '下架后卖家侧仍可见（#8 有意取舍）',
     )
 
-    const onlineKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
+    const onlineKnown = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     const online = await postJson(base, `/listings/${listingPublicId}/online`, {}, seller)
     assertEqual(online.status, 200, 'POST online → 200')
     await waitNewJob(db, 'MATCH_LISTING', 'listingId', listingId, onlineKnown, 'DONE')
@@ -2095,7 +2112,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     section('重启恢复 ①：停机期间投递的 PENDING job')
     await stopWorker()
     ok('Worker 已停止')
-    const stoppedKnown = jobIds(await jobRows(db, 'MATCH_LISTING', 'listingId', listingId))
+    const stoppedKnown = await jobRows(db, 'MATCH_LISTING', 'listingId', listingId)
     const stoppedPatch = await patchJson(
       base,
       `/listings/${listingPublicId}`,
