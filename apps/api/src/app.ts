@@ -32,6 +32,7 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
+import { createOptionalIdentityDeletionGuard } from './modules/account-deletion/optional-identity-guard'
 import { createAccountDeletionModule } from './modules/account-deletion/router'
 import { isAccountDeletionBlockedWrite } from './modules/account-deletion/write-policy'
 import { createAdminModule } from './modules/admin/module'
@@ -265,6 +266,26 @@ export function createApp(
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)
+
+  /*
+   * #464 冷静期写拦截的第二个执行点（对抗性审查 B2）。
+   *
+   * `/recommendations` 与 `/visual-search` 只挂**可选身份**（`resolveViewerId`），不挂
+   * `requireAuth`，所以 `requireAuth` 里那道拦截够不着它们；而可选身份在
+   * `DELETION_REQUESTED` 时仍返回真实 userId，冷静期内这两个域照样带着归属落库。
+   * 这里按路径挂一层守卫（判据与 `requireAuth` 同源，匿名请求不受影响）。
+   *
+   * 必须在 `app.route('/recommendations', …)` / `app.route('/visual-search', …)` **之前**
+   * 注册：Hono 按注册顺序匹配中间件。
+   */
+  const optionalIdentityDeletionGuard = createOptionalIdentityDeletionGuard({
+    cookie: auth.sessionCookie,
+    loadViewer: auth.loadViewer,
+  })
+  app.use('/recommendations', optionalIdentityDeletionGuard)
+  app.use('/recommendations/*', optionalIdentityDeletionGuard)
+  app.use('/visual-search', optionalIdentityDeletionGuard)
+  app.use('/visual-search/*', optionalIdentityDeletionGuard)
 
   // 对象存储实例在接线层创建一次，注入给 uploads（签发直传）与 listings（读响应拼 URL）：
   // 「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。

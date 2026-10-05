@@ -30,7 +30,7 @@ function render(seed: (client: QueryClient) => void): string {
 test('ACTIVE 时给出申请入口，不出现撤回按钮', () => {
   const text = textOf(
     render((client) => {
-      client.setQueryData(accountDeletionKeys.status(), {
+      client.setQueryData(accountDeletionKeys.status(OWNER_ID), {
         status: 'ACTIVE',
         requestedAt: null,
         purgeScheduledAt: null,
@@ -47,7 +47,7 @@ test('ACTIVE 时给出申请入口，不出现撤回按钮', () => {
 test('冷静期内只给撤回入口，倒计时取服务端的 purgeScheduledAt', () => {
   const text = textOf(
     render((client) => {
-      client.setQueryData(accountDeletionKeys.status(), {
+      client.setQueryData(accountDeletionKeys.status(OWNER_ID), {
         status: 'DELETION_REQUESTED',
         requestedAt: '2026-10-01T00:00:00.000Z',
         purgeScheduledAt: '2099-10-08T00:00:00.000Z',

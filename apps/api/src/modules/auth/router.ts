@@ -419,5 +419,18 @@ export function createAuthModule(options: {
    * 判据是**当前请求里那枚会话令牌的哈希**，而明文只有 cookie 里有（库里存的是哈希）。
    * 注销模块拿它取明文、交给 `hashSessionToken`（同一份实现）算哈希，再进事务删其余行。
    */
-  return { router, requireAuth, meHandler, resolveViewerId, sessionCookie: cookie }
+  return {
+    router,
+    requireAuth,
+    meHandler,
+    resolveViewerId,
+    sessionCookie: cookie,
+    /**
+     * 令牌 → 用户 + 账号状态。给 #464 的**可选身份**守卫用
+     * （`account-deletion/optional-identity-guard.ts`）：那几条入口不挂 `requireAuth`，
+     * 拿不到 `requireAuth` 已经查好的 viewer，但又必须按同一个账号状态判断该不该拦。
+     * 复用同一个 `loadViewer`，所以「谁算已注销」「谁算冷静期」只有一处定义。
+     */
+    loadViewer: service.loadViewer,
+  }
 }

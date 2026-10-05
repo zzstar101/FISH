@@ -69,6 +69,12 @@ export type RequestDeletionOutcome =
       /** 本次被下架（→ `OFFLINE`）的在架商品数；撤回不恢复上架。 */
       offlinedListingCount: number
     }
+  /**
+   * 账号已被 worker 去标识化（`DELETED`）。窄竞态：`requireAuth` 读到 `DELETION_REQUESTED`
+   * 放行后、本事务 `FOR UPDATE` 拿到锁之前，到期清理提交了。**不抛裸 Error**——那会变成 500，
+   * 而正确语义是「这个身份已经不存在了」（调用方翻成 401）。
+   */
+  | { kind: 'gone' }
 
 export interface AccountDeletionStore {
   /**
@@ -83,11 +89,11 @@ export interface AccountDeletionStore {
     /** 要保留的那枚会话令牌哈希（当前设备）；null = 撤销全部。 */
     keepTokenHash: string | null
   }): Promise<RequestDeletionOutcome>
-  /** 撤回申请。不在冷静期内是幂等的空操作（回当前状态）。 */
+  /** 撤回申请。不在冷静期内是幂等的空操作（回当前状态）；已被去标识化则回 `gone`。 */
   withdrawDeletion(input: {
     userId: string
     now: Date
-  }): Promise<{ kind: 'withdrawn' | 'noop'; status: AccountDeletionStatus }>
+  }): Promise<{ kind: 'withdrawn' | 'noop'; status: AccountDeletionStatus } | { kind: 'gone' }>
 }
 
 /** 状态列 + 两个时间戳：三者的读法只在这里写一次。 */
@@ -104,11 +110,13 @@ type StatusRow = {
 }
 
 /**
- * DB 行 → 契约状态。`DELETED` 不是对外的值域（见契约注释），调用方必须先把它挡掉。
+ * DB 行 → 契约状态。`DELETED` 不是对外的值域（见契约注释），所以**每个调用点都必须先把它
+ * 挡成 `gone` / `null`**；这里是不可达的不变量断言，不是可预期的失败路径（对抗性审查 m1：
+ * 曾经唯一的 DELETED 处理就是在这个断言里抛裸 Error，于是竞态会变成 500）。
  */
 function toStatus(row: StatusRow): AccountDeletionStatus {
   if (row.accountStatus === 'DELETED') {
-    throw new Error('账号注销：已注销账号不应进入对外状态投影')
+    throw new Error('账号注销：已注销账号不应进入对外状态投影（调用方漏了 DELETED 分支）')
   }
   return {
     status: row.accountStatus,
@@ -194,7 +202,9 @@ export function createSqlAccountDeletionStore(db: Db): AccountDeletionStore {
             throw new Error(`账号注销：users 行不存在（user=${input.userId}）`)
           }
           if (row.accountStatus === 'DELETED') {
-            throw new Error(`账号注销：已注销账号不应发起申请（user=${input.userId}）`)
+            // 到期清理赢了这个竞态（见 `RequestDeletionOutcome.gone`）：回显式结果而非抛错，
+            // 否则一个纯竞态会变成 500。
+            return { kind: 'gone' }
           }
           if (row.accountStatus === 'DELETION_REQUESTED') {
             return { kind: 'already-requested', status: toStatus(row) }
@@ -285,7 +295,9 @@ export function createSqlAccountDeletionStore(db: Db): AccountDeletionStore {
           .for('update')
         const row = locked[0]
         if (!row) throw new Error(`账号注销撤回：users 行不存在（user=${input.userId}）`)
-        // 不在冷静期内（含 DELETED 这个理论不可达分支）：幂等空操作，回当前状态。
+        // 到期清理赢了这个竞态：账号已去标识化，没有可撤回的状态（见 `RequestDeletionOutcome.gone`）。
+        if (row.accountStatus === 'DELETED') return { kind: 'gone' }
+        // 不在冷静期内（含 `ACTIVE`）：幂等空操作，回当前状态。
         if (row.accountStatus !== 'DELETION_REQUESTED') {
           return { kind: 'noop' as const, status: toStatus(row) }
         }

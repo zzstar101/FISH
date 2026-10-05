@@ -5,6 +5,7 @@ import { isUnauthenticatedError } from '../../lib/api-client'
 import {
   AUTH_ME_QUERY_KEY,
   currentSessionGeneration,
+  PC_QUERY_PREFIX,
   resetPcSession,
   resetPcSessionIfCurrent,
 } from '../../lib/session-cache'
@@ -23,12 +24,22 @@ export const authKeys = {
 }
 
 /**
- * 注销状态的查询键（#464）。它**不属于** `authKeys.me()`：`Me` 契约冻结不携带注销态，
- * 这条查询读的是 `/me/account-deletion` 这另一个资源，两者缓存必须分开
- * （否则撤回注销会把 `/me` 也标脏，触发一次无意义的身份重验）。
+ * 注销状态的查询键（#464）。
+ *
+ * 两件事必须同时成立，别把它们混成一件：
+ *
+ * 1. 它**不属于** `authKeys.me()`。`Me` 契约冻结不携带注销态，这条查询读的是
+ *    `/me/account-deletion` 这另一个资源，两者缓存必须分开（否则撤回注销会把 `/me`
+ *    也标脏，触发一次无意义的身份重验）。
+ * 2. 它**必须**落在 `['pc', …]` 前缀下，并且带 `ownerId`。`resetPcSession`
+ *    （`lib/session-cache.ts`）是 PC 端**唯一**的跨账号隔离边界，它按 `[PC_QUERY_PREFIX]`
+ *    前缀清理/重置缓存。键逃出这个前缀，换号后新用户会读到上一个账号的注销态
+ *    —— B 会看到 A 的冷静期与到期日，而冷静期分支只给「撤回申请」，等于把别人的
+ *    注销状态当自己的显示出来（对抗性审查 B1）。`ownerId` 是第二道锁，与
+ *    `viewHistoryKeys.list(ownerId)` 同款：同一 tab 内身份换了，键也不同。
  */
 export const accountDeletionKeys = {
-  status: () => ['account-deletion', 'status'] as const,
+  status: (ownerId: string) => [PC_QUERY_PREFIX, 'account-deletion', 'status', ownerId] as const,
 }
 
 /**
@@ -112,13 +123,15 @@ export function useLogout() {
  * 「撤回申请」，而它会被另一个标签页、另一台设备（撤回）以及 worker（到期去标识化）改写，
  * 缓存里留旧的会让用户看到一个已经过期的入口。
  */
-export function useAccountDeletionStatus() {
+export function useAccountDeletionStatus(ownerId: string) {
   return useQuery({
-    queryKey: accountDeletionKeys.status(),
+    queryKey: accountDeletionKeys.status(ownerId),
     queryFn: fetchAccountDeletionStatus,
     staleTime: 0,
   })
 }
+
+type SessionMutationContext = { generation: number }
 
 /**
  * 申请注销。
@@ -129,13 +142,21 @@ export function useAccountDeletionStatus() {
  * 同时失效「我的发布 / 订单 / 个人中心聚合 / 会话」：申请会把在架商品下架，
  * 这些界面里的商品状态此刻已经过期。`ownerId` 由调用方捕获传入而不是从缓存读，
  * 换号场景下也只会失效旧账号自己的查询，不会污染新身份的缓存。
+ *
+ * 落缓存前还要比对**会话代际**（沿用 view-history / chat / wish 的 mutation 模式）：
+ * 换号会递增代际，A 的迟到响应不能写进 B 的缓存。键里虽然有 `ownerId`，但那是调用方
+ * 渲染时捕获的闭包值，迟到响应拿到的仍是 A 的键——不比对代际就还是把 A 的注销态
+ * 留在了缓存里（对抗性审查 B1 的第二条路径）。
  */
+
 export function useRequestAccountDeletion(ownerId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: requestAccountDeletion,
-    onSuccess: (result) => {
-      queryClient.setQueryData(accountDeletionKeys.status(), {
+    onMutate: (): SessionMutationContext => ({ generation: currentSessionGeneration() }),
+    onSuccess: (result, _variables, context) => {
+      if (context === undefined || context.generation !== currentSessionGeneration()) return
+      queryClient.setQueryData(accountDeletionKeys.status(ownerId), {
         status: result.status,
         requestedAt: result.requestedAt,
         purgeScheduledAt: result.purgeScheduledAt,
@@ -150,8 +171,10 @@ export function useWithdrawAccountDeletion(ownerId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: withdrawAccountDeletion,
-    onSuccess: (result) => {
-      queryClient.setQueryData(accountDeletionKeys.status(), result)
+    onMutate: (): SessionMutationContext => ({ generation: currentSessionGeneration() }),
+    onSuccess: (result, _variables, context) => {
+      if (context === undefined || context.generation !== currentSessionGeneration()) return
+      queryClient.setQueryData(accountDeletionKeys.status(ownerId), result)
       invalidateTransactionSurfaces(queryClient, ownerId)
     },
   })

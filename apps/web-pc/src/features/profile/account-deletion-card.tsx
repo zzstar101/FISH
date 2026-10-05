@@ -44,7 +44,7 @@ type AccountDeletionCardProps = {
  * 生成文件（AGENTS 禁止手改），为一张卡重跑路由生成器不值得（见 PR 说明）。
  */
 export function AccountDeletionCard({ ownerId }: AccountDeletionCardProps) {
-  const status = useAccountDeletionStatus()
+  const status = useAccountDeletionStatus(ownerId)
   const request = useRequestAccountDeletion(ownerId)
   const withdraw = useWithdrawAccountDeletion(ownerId)
   const [dialogOpen, setDialogOpen] = useState(false)

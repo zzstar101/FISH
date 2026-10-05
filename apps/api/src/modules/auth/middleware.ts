@@ -3,6 +3,9 @@ import type { Me } from '@fish/contracts/auth/user'
 import { errorBody } from '@fish/contracts/system/error'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
+// 文案属于 account-deletion 域（那里也是判据的所在地）。两个执行点
+// （这里与 `account-deletion/optional-identity-guard.ts`）必须逐字一致，所以只留一份。
+import { ACCOUNT_DELETION_PENDING_MESSAGE } from '../account-deletion/write-policy'
 import type { AuthService } from './service'
 import type { SessionCookie } from './session'
 
@@ -77,11 +80,10 @@ export function createRequireAuth(deps: {
       })
     ) {
       // 403 + `ACCOUNT_DELETION_PENDING`：端上据此提示「注销申请处理中，暂不能发布 / 留言 /
-      // 聊天 / 交易；可先撤回申请」，并可跳注销状态页。
-      return c.json(
-        errorBody('ACCOUNT_DELETION_PENDING', '注销申请处理中，暂不能进行该操作，可先撤回申请'),
-        403,
-      )
+      // 聊天 / 交易；可先撤回申请」，并可跳注销状态页。文案与可选身份守卫共用一份
+      // （`account-deletion/write-policy.ts` 的 `ACCOUNT_DELETION_PENDING_MESSAGE`），
+      // 同一个状态在两条路径上不会给出两种说法。
+      return c.json(errorBody('ACCOUNT_DELETION_PENDING', ACCOUNT_DELETION_PENDING_MESSAGE), 403)
     }
 
     await next()

@@ -31,6 +31,17 @@ export class AccountDeletionError extends Error {
   }
 }
 
+/**
+ * 竞态兜底（对抗性审查 m1）：`requireAuth` 放行之后、账号行锁拿到之前，worker 把账号去标识化了。
+ * 此时身份已不存在，正确语义是 401 重新登录 —— 不是 500，也不是一个臆造的注销状态。
+ */
+export class AccountDeletedRaceError extends Error {
+  constructor() {
+    super('账号已注销，请重新登录')
+    this.name = 'AccountDeletedRaceError'
+  }
+}
+
 /** 7 天冷静期的毫秒数。天数取自契约（端上算倒计时读的是同一个常量）。 */
 const COOLING_OFF_MS = ACCOUNT_DELETION_COOLING_OFF_DAYS * 24 * 60 * 60 * 1000
 
@@ -108,6 +119,8 @@ export function createAccountDeletionService(deps: {
         case 'already-requested':
           // 幂等命中：没有下架动作发生，所以计数是 0（不是「上次下架了几件」）。
           return { ...outcome.status, offlinedListingCount: 0 }
+        case 'gone':
+          throw new AccountDeletedRaceError()
         case 'requested': {
           // 断开该用户**全部**连接（含当前设备）：其他设备的会话已被撤销，它们的重连会在
           // upgrade 阶段被 401 拦掉；当前设备的连接也一起断，客户端重连后照常可用。
@@ -120,6 +133,7 @@ export function createAccountDeletionService(deps: {
     /** `DELETE /me/account-deletion`：撤回申请。幂等，**不恢复**已下架的商品。 */
     async withdraw(userId: string): Promise<AccountDeletionStatus> {
       const outcome = await deps.store.withdrawDeletion({ userId, now: now() })
+      if (outcome.kind === 'gone') throw new AccountDeletedRaceError()
       return outcome.status
     },
   }

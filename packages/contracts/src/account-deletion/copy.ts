@@ -32,7 +32,8 @@ export const DELETION_CONSEQUENCES: readonly DeletionConsequence[] = [
   },
   {
     title: '冷静期内不能发布、留言、聊天、交易',
-    detail: '除浏览与撤回申请外的写操作都会被拒绝，避免注销进行中产生新的交易与纠纷。',
+    detail:
+      '除浏览、登录与撤回申请外的写操作都会被拒绝 —— 发布、留言、聊天、交易，以及以图搜图和推荐数据上报都包含在内，避免注销进行中产生新的交易与纠纷。',
   },
   {
     title: '到期后个人资料不可恢复',

@@ -7,7 +7,11 @@ import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import type { SessionCookie } from '../auth/session'
 import type { ConnectionHub } from '../realtime/hub'
-import { AccountDeletionError, createAccountDeletionService } from './service'
+import {
+  AccountDeletedRaceError,
+  AccountDeletionError,
+  createAccountDeletionService,
+} from './service'
 import { createSqlAccountDeletionStore } from './store'
 
 type AccountDeletionVariables = AuthVariables
@@ -32,6 +36,10 @@ export type AccountDeletionRouterOptions = {
 function toErrorResponse(c: AccountDeletionContext, error: unknown): Response {
   if (error instanceof AccountDeletionError) {
     return c.json(errorBody(error.code, error.message), error.status)
+  }
+  // 竞态：身份在本次请求内被 worker 去标识化 → 与「会话失效」同解（401 重新登录）。
+  if (error instanceof AccountDeletedRaceError) {
+    return c.json(errorBody('UNAUTHENTICATED', error.message), 401)
   }
   throw error
 }
