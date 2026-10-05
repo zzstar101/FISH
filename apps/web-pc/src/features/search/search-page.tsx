@@ -40,9 +40,11 @@ type SearchPatch = {
   q?: string
   category?: ListingCategory | null
   sort?: ListingSort
+  /** `null` = 关掉该筛选（与 `category: null` 同一套语义）。 */
+  free?: boolean | null
 }
 
-export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
+export function SearchPage({ q, category, free, sort = 'newest' }: PcSearchParams) {
   const navigate = useNavigate()
   const [draft, setDraft] = useState(q ?? '')
   // 输入分类三档（#382）：合法 12 位编号 → byNumber 精确查询（不发关键词请求）；
@@ -54,7 +56,7 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
   const [lookupNonce, setLookupNonce] = useState(0)
   // 编号查询期间把 q 从 filters 里拿掉：编号不进任何缓存 key（验收原文），关键词请求也已关停。
   const results = useListingSearch(
-    { q: isNumberQuery ? undefined : q, category, sort },
+    { q: isNumberQuery ? undefined : q, category, free, sort },
     { enabled: !isNumberQuery },
   )
   const items = results.data?.pages.flatMap((page) => page.items) ?? []
@@ -107,11 +109,12 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
   function update(next: SearchPatch) {
     const nextQ = next.q === undefined ? q : next.q.trim() || undefined
     const nextCategory = next.category === undefined ? category : (next.category ?? undefined)
+    const nextFree = next.free === undefined ? free : (next.free ?? undefined)
     const nextSort = next.sort ?? sort
 
     void navigate({
       to: '/search',
-      search: { q: nextQ, category: nextCategory, sort: nextSort },
+      search: { q: nextQ, category: nextCategory, free: nextFree, sort: nextSort },
     })
   }
 
@@ -128,6 +131,7 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
           <p className="mt-1.5 text-ink-3 text-sm">
             {q === undefined ? '浏览全部闲置' : isNumberQuery ? `编号「${q}」` : `关键词「${q}」`} ·{' '}
             {category === undefined ? '全部品类' : CATEGORY_LABEL[category]}
+            {free === true ? ' · 只看免费送' : ''}
           </p>
         </div>
         <p className="text-ink-3 text-xs">真实 API · 每页 24 条</p>
@@ -185,6 +189,29 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
             })}
           </fieldset>
 
+          {/*
+           * 「免费送」是**独立筛选维度**，不塞进上面的「品类筛选」fieldset：
+           * 品类与它语义不同，混在一个 fieldset 里会让读屏用户听到「品类筛选：免费送」。
+           * 它落的是契约的 `free` 布尔位，**不是**「价格为 0」（#451 的口径要求）。
+           */}
+          <fieldset
+            aria-label="免费送筛选"
+            className="m-0 flex shrink-0 items-center gap-2 border-0 p-0"
+          >
+            <button
+              aria-pressed={free === true}
+              className={`h-9 rounded-full px-4 text-sm transition-colors ${
+                free === true
+                  ? 'bg-brand font-semibold text-white'
+                  : 'bg-surface-2 text-ink-2 hover:bg-brand-soft hover:text-brand'
+              }`}
+              onClick={() => update({ free: free === true ? null : true })}
+              type="button"
+            >
+              免费送
+            </button>
+          </fieldset>
+
           <Select
             onValueChange={(value) => update({ sort: ListingSortSchema.parse(value) })}
             value={sort}
@@ -224,7 +251,7 @@ export function SearchPage({ q, category, sort = 'newest' }: PcSearchParams) {
             <EmptyState
               action={
                 <Button
-                  onClick={() => update({ q: '', category: null, sort: 'newest' })}
+                  onClick={() => update({ q: '', category: null, free: null, sort: 'newest' })}
                   variant="outline"
                 >
                   清除筛选
