@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import { encodeBlockCursor } from './cursor'
+import { decodeBlockCursor, encodeBlockCursor } from './cursor'
 import { BlockServiceError, createBlockService } from './service'
 import type { BlockCursor, BlockedRow, BlockStore } from './store'
 
@@ -116,8 +116,47 @@ describe('block service: listMyBlocks', () => {
       encodePublicId(PUBLIC_ID_PREFIX.user, THIRD),
     ])
     expect(page.nextCursor).not.toBeNull()
-    // 游标解码回到内部 uuid：encode → decode 往返一致。
-    expect(encodeBlockCursor({ createdAt: '2026-10-05T02:00:00.000000Z', id: THIRD })).toBeDefined()
+    // 游标真实往返：page.nextCursor 解码回「最后一条已返回行」的 (createdAt, 内部 uuid)。
+    expect(decodeBlockCursor(page.nextCursor ?? '')).toEqual({
+      createdAt: '2026-10-05T02:00:00.000000Z',
+      id: THIRD,
+    })
+  })
+
+  test('decodeBlockCursor 对非法输入一律 null（裸 uuid / 错误前缀 / 非法日期 / 坏形状）', () => {
+    const good = encodeBlockCursor({ createdAt: '2026-10-05T02:00:00.000000Z', id: TARGET })
+    expect(decodeBlockCursor(good)).not.toBeNull()
+    // 裸 UUID（未编码成 usr_ 公开 id）
+    expect(
+      decodeBlockCursor(
+        Buffer.from(
+          JSON.stringify({ createdAt: '2026-10-05T02:00:00.000000Z', id: TARGET }),
+        ).toString('base64url'),
+      ),
+    ).toBeNull()
+    // 错误前缀（商品 id）
+    expect(
+      decodeBlockCursor(
+        Buffer.from(
+          JSON.stringify({
+            createdAt: '2026-10-05T02:00:00.000000Z',
+            id: 'lst_01jc000000e00800000000000c',
+          }),
+        ).toString('base64url'),
+      ),
+    ).toBeNull()
+    // 形状合法但日期非法（会被 ::timestamptz 拒绝 → 必须先挡）
+    expect(
+      decodeBlockCursor(
+        Buffer.from(
+          JSON.stringify({
+            createdAt: '2026-13-40T99:00:00.000000Z',
+            id: encodePublicId(PUBLIC_ID_PREFIX.user, TARGET),
+          }),
+        ).toString('base64url'),
+      ),
+    ).toBeNull()
+    expect(decodeBlockCursor('not-base64-json')).toBeNull()
   })
 
   test('空列表 nextCursor 为 null', async () => {

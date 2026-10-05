@@ -143,7 +143,7 @@ export function BlockAction({ nickname, userId }: { nickname: string; userId: st
               <DialogTitle>拉黑「{nickname}」？</DialogTitle>
               <DialogDescription>
                 拉黑后，你们双方都无法再发消息、也无法新建会话（既有会话一并冻结）；
-                交易系统通知与面交流程不受影响。历史消息保留可见，可随时解除。
+                交易系统通知与面交流程不受影响。历史消息保留可见，可随时解除（解除是单方的，对方若也拉黑了你则需对方一并解除）。
               </DialogDescription>
             </DialogHeader>
             {blockMutation.data?.kind === 'failed' ? (

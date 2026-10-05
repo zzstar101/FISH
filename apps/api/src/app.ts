@@ -735,6 +735,7 @@ export function createApp(
     '/transactions',
     createTransactionsRouter({
       service: createTransactionService({
+        blocks: blockStore,
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
         storage,

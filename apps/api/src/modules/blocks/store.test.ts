@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { createDb } from '@fish/db/client'
 import { userBlocks } from '@fish/db/schema/blocks'
 import { users } from '@fish/db/schema/users'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { createSqlBlockStore } from './store'
 
 // 与 packages/db 的集成测试同一约定：没有 DATABASE_URL 就明确失败，而不是静默跳过。
@@ -94,6 +94,31 @@ describe('block store (integration)', () => {
     expect(hit).toBeDefined()
     expect(hit?.nickname).toBe('拉黑测试')
     expect(hit?.blockedAtCursor).toContain('T')
+  })
+
+  test('游标翻页：多取一行判定 next、按 (created_at, id) 不重不漏（含同 created_at 场景）', async () => {
+    const me = await newUser()
+    const t1 = await newUser('甲')
+    const t2 = await newUser('乙')
+    const t3 = await newUser('丙')
+    await store.block(me, t1)
+    await store.block(me, t2)
+    await store.block(me, t3)
+    // 把三条的 created_at 强改成同一时刻：tie-break 完全落在 id 列上（游标第三列排序的极端情形）。
+    await db.execute(
+      sql`update user_blocks set created_at = '2026-10-05T02:00:00.000000Z'::timestamptz where blocker_id = ${me}::uuid`,
+    )
+
+    const first = await store.listBlocks(me, 2, null)
+    expect(first).toHaveLength(3) // 多取一行
+    const page1 = first.slice(0, 2)
+    const cursor = { createdAt: page1[1]?.blockedAtCursor ?? '', id: page1[1]?.id ?? '' }
+    const second = await store.listBlocks(me, 2, cursor)
+    const page2 = second.slice(0, 2)
+
+    const seen = [...page1, ...page2].map((row) => row.id)
+    expect(new Set(seen).size).toBe(3) // 不重
+    expect(seen.sort()).toEqual([t1, t2, t3].sort()) // 不漏
   })
 
   test('删用户 CASCADE 带走拉黑行', async () => {
