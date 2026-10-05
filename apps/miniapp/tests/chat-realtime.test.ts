@@ -233,6 +233,39 @@ describe('ChatRealtime —— 连接 / 事件 / 心跳 / 重连', () => {
     expect(events).toEqual([validMessageEvent, validMediaEvent])
   })
 
+  test('重复 start() 不建第二条连接：建链在飞与已连上两条路径都挡住', async () => {
+    const sockets: FakeSocket[] = []
+    let factoryCalls = 0
+    const realtime = new ChatRealtime({
+      url: 'ws://test/ws/chat',
+      createSocket: () => {
+        factoryCalls += 1
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return Promise.resolve(socket)
+      },
+      onEvent: () => {},
+      heartbeatIntervalMs: 60_000,
+      heartbeatTimeoutMs: 60_000,
+    })
+
+    // 建链在飞（connectSocket 的 Promise 还没 settle）时再 start()：挡板必须挡住
+    realtime.start()
+    realtime.start()
+    await flush()
+    expect(factoryCalls).toBe(1)
+
+    // 已连上之后再 start() 也不该建新链
+    sockets[0]?.open()
+    realtime.start()
+    await flush()
+    expect(factoryCalls).toBe(1)
+    expect(sockets).toHaveLength(1)
+
+    realtime.stop()
+    expect(sockets[0]?.closed).toBe(true)
+  })
+
   test('断开后按退避重连，重连时重读 cookie；stop 取消在途的重连', async () => {
     const { timers, pending } = makeTimers()
     const sockets: FakeSocket[] = []
