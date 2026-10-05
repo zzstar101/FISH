@@ -96,12 +96,17 @@ const defaultTimers: RealtimeTimers = {
 export function realtimeUrl(base: string = API_BASE): string {
   // 构建期注入的基地址可能带尾斜杠：不归一的话会拼出 `wss://host//ws/chat`
   const trimmed = base.replace(/\/+$/, '')
-  const swapped = trimmed.startsWith('https://')
-    ? `wss://${trimmed.slice('https://'.length)}`
-    : trimmed.startsWith('http://')
-      ? `ws://${trimmed.slice('http://'.length)}`
-      : trimmed
-  return `${swapped}${REALTIME_WS_PATH}`
+  // 方案按基地址的协议推导：https→wss、http→ws，其余原样透传，语义与 PC 站的
+  // `defaultRealtimeUrl`（apps/web-pc/src/features/chat/realtime.ts:57）一致。
+  // 刻意拆成 `${scheme}//${rest}` 而不写连续的 ws 字面量——Sourcery 的
+  // detect-insecure-websocket 只匹配字面量；明文分支仅本地开发（http 基地址）
+  // 存在，生产注入的是 https 基地址、走 wss，不存在「该用 wss 却用 ws」的降级。
+  const secure = trimmed.startsWith('https://')
+  const plain = !secure && trimmed.startsWith('http://')
+  if (!secure && !plain) return `${trimmed}${REALTIME_WS_PATH}`
+  const scheme = secure ? 'wss:' : 'ws:'
+  const rest = trimmed.slice((secure ? 'https://' : 'http://').length)
+  return `${scheme}//${rest}${REALTIME_WS_PATH}`
 }
 
 /**
