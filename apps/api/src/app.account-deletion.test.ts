@@ -474,6 +474,12 @@ const ALLOWED_WHILE_PENDING = new Set([
 /**
  * 不挂 `requireAuth` 的公开写入口。没有登录态就无从谈起「注销态写拦截」，
  * 所以它们只能被显式列在这里 —— 新增公开写入口必须改这份清单，改动会在评审里显形。
+ *
+ * 这份清单**必须靠事实说话**：写多一条（把其实挂了 `requireAuth` 的入口列进来）就等于
+ * 给那条路由开了拦截盲区，而枚举测试会安静地跳过它。下面那条「每一条都真的没挂
+ * requireAuth」的用例就是反过来验证豁免资格的 —— `POST /reports`、`POST /uploads/presign`、
+ * `POST /uploads/confirm` 曾被我误列在这里，实测它们都走过 `requireAuth`（冷静期内回
+ * 403 `ACCOUNT_DELETION_PENDING`），已移出。
  */
 const PUBLIC_WRITE_ROUTES = new Set([
   'POST /auth/login',
@@ -483,9 +489,6 @@ const PUBLIC_WRITE_ROUTES = new Set([
   'POST /auth/wechat/scan/ticket',
   'POST /auth/wechat/scan/ticket/:ticket/exchange',
   'POST /recommendations/events',
-  'POST /reports',
-  'POST /uploads/confirm',
-  'POST /uploads/presign',
   'POST /visual-search',
   'POST /visual-search/uploads',
 ])
@@ -527,6 +530,32 @@ describe('写拦截的自维护清单', () => {
       (key) => !known.has(key),
     )
     expect(stale).toEqual([])
+  })
+
+  /**
+   * 上一份清单是**手写的豁免单**：写错一条（把其实挂了 `requireAuth` 的入口列进"公开"）
+   * 就等于给那条路由开了拦截盲区，而枚举测试会安静地跳过它。所以这里反过来验证豁免资格：
+   * 带着冷静期内的 cookie 打过去，凡是回 403 `ACCOUNT_DELETION_PENDING` 的，说明它走过了
+   * `requireAuth`，根本不该被豁免。
+   */
+  test('公开写入口清单里的每一条都真的没挂 requireAuth', async () => {
+    const wronglyExempt: string[] = []
+    // 每条入口用**独立**的冷静期会话：`POST /auth/logout` 就在这份清单里，
+    // 共用一条 cookie 会让它之后的请求全部退化成匿名 401，测不出真实归属。
+    for (const key of PUBLIC_WRITE_ROUTES) {
+      const [method, path] = key.split(' ') as [string, string]
+      const session = await register('豁免单核对')
+      expect((await requestDeletion(session.cookie)).status).toBe(200)
+
+      const response = await app.request(path.replace(/:[^/]+/g, DUMMY_ID), {
+        method,
+        headers: { cookie: session.cookie },
+      })
+      if (response.status === 403 && (await errorCodeOf(response)) === 'ACCOUNT_DELETION_PENDING') {
+        wronglyExempt.push(key)
+      }
+    }
+    expect(wronglyExempt).toEqual([])
   })
 })
 
