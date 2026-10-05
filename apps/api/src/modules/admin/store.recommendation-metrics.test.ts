@@ -41,11 +41,20 @@ const UNTIL = new Date('2026-01-11T00:00:00Z')
 const SINCE2 = new Date('2026-01-20T00:00:00Z')
 const UNTIL2 = new Date('2026-01-21T00:00:00Z')
 const LIFECYCLE_CREATED_AT = new Date('2026-01-20T08:00:00Z')
+// 零"成交前曝光"样本（#323 必修项）故意创建在窗口**之外**：它只进 `exposuresBeforeSale`，
+// 不该动"窗口内新建"的曝光/意向两项。
+const ZERO_EXPOSURE_CREATED_AT = new Date('2025-12-01T00:00:00Z')
 const RANKED_VERSION = 'rec-v1-rule+interest-v1+recall-v1+rank-v1'
 const DEGRADED_VERSION = 'rec-v1-none'
 
 const listingIds: Record<'l1' | 'l2' | 'l3', string> = { l1: '', l2: '', l3: '' }
-const lifecycleListingIds: Record<'n1' | 'n2' | 'n3', string> = { n1: '', n2: '', n3: '' }
+const lifecycleListingIds: Record<'n1' | 'n2' | 'n3' | 'n4' | 'n5', string> = {
+  n1: '',
+  n2: '',
+  n3: '',
+  n4: '',
+  n5: '',
+}
 const requestIds: Record<
   'ranked' | 'degraded' | 'empty' | 'repeat' | 'before' | 'atUntil',
   string
@@ -324,6 +333,30 @@ beforeAll(async () => {
     })
   }
 
+  // 零"成交前曝光"的成交商品（#323 必修项）：窗口外创建 + 窗口内只有一条带归因 `PURCHASE`，
+  // 一条归因 `IMPRESSION` 都没有 ⇒ `exposuresBeforeSale` 必须给它们记 **0**，而不是整条丢掉。
+  // 放**两个**样本是为了让 0 真正落到中位数上：`[0,0,1,2]` 的最近秩中位数是 0，只加一个时
+  // `[0,1,2]` 的中位数仍是 1，断言的"值"就退化成只钉住 count。
+  for (const [key, sellerId] of [
+    ['n4', userAId],
+    ['n5', userBId],
+  ] as const) {
+    const id = newId()
+    lifecycleListingIds[key] = id
+    await db.insert(listings).values({
+      id,
+      listingNo: await reserveTestListingNo(db, id),
+      sellerId,
+      title: `零曝光成交商品 ${key}`,
+      description: '生命周期零曝光样本',
+      priceCents: 1000,
+      category: 'DIGITAL',
+      condition: 'GOOD',
+      status: 'SOLD',
+      createdAt: ZERO_EXPOSURE_CREATED_AT,
+    })
+  }
+
   const lifecycleRequests = await db
     .insert(recommendationRequests)
     .values([
@@ -470,6 +503,26 @@ beforeAll(async () => {
       position: 1,
       occurredAt: new Date('2026-01-20T11:15:00Z'),
     },
+    // 零"成交前曝光"的成交商品：n4 / n5 各只有一条窗口内带归因的 PURCHASE，
+    // 成交前一条归因曝光都没有 ⇒ 它们的 `exposuresBeforeSale` 必须是 0。
+    {
+      eventId: newId(),
+      userId: userAId,
+      listingId: lifecycleListingIds.n4,
+      eventType: 'PURCHASE',
+      requestId: w2c,
+      position: null,
+      occurredAt: new Date('2026-01-20T16:00:00Z'),
+    },
+    {
+      eventId: newId(),
+      userId: userBId,
+      listingId: lifecycleListingIds.n5,
+      eventType: 'PURCHASE',
+      requestId: w2c,
+      position: null,
+      occurredAt: new Date('2026-01-20T17:00:00Z'),
+    },
   ])
 })
 
@@ -554,10 +607,15 @@ describe('getRecommendationMetrics（#323 R6 SQL 口径）', () => {
     // n2 的 DETAIL_VIEW（+3.25h）是 grade 1，被阈值排除（放宽成 `>= 1` 这条断言就会红）。
     // 最近秩中位数 = 第 ceil(0.5 * 2) = 1 个 = 3.5（线性插值会得 3.75，这条断言把口径钉死）。
     expect(row.lifecycle.firstPublishToFirstIntentHours).toEqual({ count: 2, median: 3.5, p90: 4 })
-    // 成交前曝光：n1 = 2 条（10:00 / 12:30，都在 13:00 成交之前）、l3 = 1 条（14:00）。
+    // 成交前曝光：n1 = 2 条（10:00 / 12:30，都在 13:00 成交之前）、l3 = 1 条（14:00）、
+    // n4 / n5 = **0** 条（窗口内有带归因的成交，成交前一条归因曝光都没有）。
     // n1 在 14:00 还有一条**成交后**的曝光，必须被 `occurred_at < sold_at` 排除（删掉谓词 p90 会变 3）。
-    // l3 的 created_at 在窗口外仍计入（这一项不看商品创建时刻）；最近秩中位数 = 1（插值会得 1.5）。
-    expect(row.lifecycle.exposuresBeforeSale).toEqual({ count: 2, median: 1, p90: 2 })
+    // l3 / n4 / n5 的 created_at 在窗口外仍计入（这一项不看商品创建时刻）。
+    // 分母必须是"窗口内发生过成交的商品"：`[0,0,1,2]` 的最近秩中位数 = 第 ceil(0.5 × 4) = 2 个 = 0；
+    // 用 INNER JOIN 把零曝光样本丢掉就退回 `[1,2]` ⇒ count 2 / median 1 —— 这条断言是该回归的钉子
+    // （p90 两种口径都是 2，钉不住），口径与离线 `apps/worker/src/jobs/recommendation/eval.ts` 的
+    // `exposuresBeforeSale.push(times.filter((at) => at < soldAt).length)` 一致。
+    expect(row.lifecycle.exposuresBeforeSale).toEqual({ count: 4, median: 0, p90: 2 })
   })
 
   test('窗口内有归因曝光、但商品不是窗口内创建 → 前两项仍为空（只统计窗口内新建）', async () => {

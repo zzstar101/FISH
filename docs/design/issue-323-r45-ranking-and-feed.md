@@ -453,22 +453,48 @@ export function buildNegativeFeedbackSignals(input: {
 
 ```ts
 export function rerankCandidates(input: {
-  ranked: readonly RankedCandidate[]      // 已按 §5.2 排好序
-  hiddenListingIds: ReadonlySet<string>
-  seed: string                            // requestId
-  limit: number                           // RECOMMENDATION_SNAPSHOT_MAX_ITEMS
-}): {
-  items: RankedCandidate[]
-  /** 各约束被让掉的次数（观测用，R6 接指标）。 */
-  relaxations: Record<'explore' | 'category' | 'seller', number>
-  droppedHidden: number
-}
+  scored: readonly ScoredCandidate[]        // 已按 §5.2 排好序
+  hiddenListingIds: ReadonlySet<string>     // 负反馈硬排除（HIDE）
+  cooldownListingIds?: ReadonlySet<string>  // §6.0 重复曝光冷却；缺省空集 = 不冷却（fail-open）
+  seed: string                              // requestId
+  limit: number                             // RECOMMENDATION_SNAPSHOT_MAX_ITEMS
+}): RerankResult
+// items: ScoredCandidate[]
+// summary: { inputCount, droppedHidden, droppedCooldown, droppedOverflow,
+//            relaxations: Record<'seller' | 'category' | 'explore', number> }
 ```
+
+### 6.0 重复曝光冷却（M6 硬排除，不属于松弛阶梯）
+
+判据是独立纯函数 `cooldownListingIds`
+（`apps/api/src/modules/recommendation/rank/cooldown.ts`，无 IO、可穷举边界）。它**只做硬排除、不能
+让掉**（让掉等于没做），被剔除条数单独记在 `droppedCooldown`，与 `droppedHidden` 分开归因
+（用户明确隐藏 vs 反复推了没点）：
+
+- 门槛：`engagedCount === 0`（一件都没点过）**且** `exposureCount >=`
+  `RANK_REPEATED_EXPOSURE_COOLDOWN_THRESHOLD`（= **3 次**，`packages/contracts/src/recommendation/rank.ts:186`）
+  **且** `now - lastExposedAt <` `RANK_REPEATED_EXPOSURE_COOLDOWN_MS`（= **24 小时**，同文件 `:198`）。
+- 冷却**从最后一次曝光起算**（每被推一次续期一次），`>= 24h` 即放行 —— 边界取"恰好结束"，这样
+  `lastExposedAt = now - 24h` 是可写进测试的确定值；`lastExposedAt` 落在未来（时钟偏移）按"刚曝光过"
+  继续冷却（多压一轮只是少推一件，提前放行却会让用户立刻又看到它）。
+- "点过"的集合是 `RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES`（同文件 `:210`：`DETAIL_VIEW` / `FAVORITE` /
+  `CHAT_START` / `COMMENT` / `TRANSACTION_START` / `PURCHASE`），刻意不含 `QUICK_SKIP`（划过不算点过），
+  且与 `RANK_EVAL_RELEVANCE_GRADES` 里分级 ≥1 的集合逐值一致（`rank.test.ts` 有用例钉住这个不变式：
+  线上冷却与离线评估必须用同一个"点过"的定义，否则会出现两边都自称正确的漂移）。
+- **wish 豁免**：命中 `RANK_COOLDOWN_EXEMPT_RECALL_SOURCE = 'wish'`（同文件 `:229`）召回通道的候选
+  不剔除（M6「用户主动再次搜索 / Wish 命中时允许重新进入」）。豁免只看**召回通道**，不在重排层再判断
+  别的信号 —— 愿望匹配是用户自己表达过的需求，比"算法觉得他可能想看"强得多。
+- 数据来源：`service.loadCooldown` → `findExposureHistory`（`packages/db/src/recall-store.ts`）→
+  `cooldownListingIds`。**fail-open**：没有身份、或曝光历史读取失败时返回**空集合**（宁可多曝光一轮，
+  也不因一次查询故障把用户已经看过的一批商品集体压掉 —— 后者是静默的、用户无法申诉的惩罚）。
+- 剔除顺序：**先于三条约束**（隐藏 → 冷却 → 约束/松弛阶梯），所以冷却不参与 §6.2 的让位谈判。
 
 ### 6.1 主循环
 
 ```
-pool  = ranked 过滤掉 hiddenListingIds
+afterHidden = scored 过滤掉 hiddenListingIds
+cooled      = afterHidden 过滤掉处于冷却的商品（命中 wish 通道的不剔，§6.0）
+pool        = cooled 非空 ? cooled : afterHidden   // 空页兜底：冷却会清空整页时本次不冷却（§6.4）
 placed = []
 while placed.length < limit 且 pool 非空:
   i = placed.length
@@ -506,6 +532,18 @@ while placed.length < limit 且 pool 非空:
 全流程无 `Math.random()`（D12）。`requestId` 是服务端 `uuidv7`，天然逐请求不同，
 所以"确定性"与"逐请求变化"不矛盾。
 
+### 6.4 空页兜底与已知边界
+
+- **兜底**：`afterHidden` 非空、但冷却把候选全剔光时，本次**整体不冷却**（`skipCooldown`）。理由：M6
+  是**单品**冷却，不是"整页清空"，而 `service` 的降级判据（`scored.length === 0`）发生在冷却**之前**；
+  这里若返回空 `items`，服务端仍会写一条 0 快照行的 ranked 请求，admin 的 `emptyRankedFeedRate` 会把
+  它记成一次线上故障。宁可多曝光一轮。`afterHidden.length > 0` 这个判断只是防御性写法（避免"没有候选
+  却声称跳过了冷却"）。
+- **已知边界（本 PR 之前就存在；本轮只收窄了触发面并把根因写进代码注释）**：若全部候选**同时**被 HIDE
+  与冷却，`afterHidden` 为空 ⇒ 上面那条兜底不生效，`pool` 仍是空页，于是依旧是"空页 + 写 ranked 请求"。
+  根治要挪到 `service` 层（最终页面为空则不写 ranked 请求），属既有 all-hidden 行为的遗留，
+  **另案跟踪**，不在本 PR 范围内。
+
 ---
 
 ## 7. Feed 编排、游标与降级
@@ -537,7 +575,9 @@ sessionId = anonymousSessionId ?? newId(); issued = ...
 ① recall:  try recall.recall({userId: viewerId, anonymousSessionId: sessionId}) catch → 降级
 ② feedback: try findNegativeFeedbackEvents + buildNegativeFeedbackSignals catch → 空信号（记日志）
 ③ ranked  = scoreCandidates({candidates, feedback, now})
-④ ordered = rerankCandidates({ranked, hiddenListingIds, seed: requestId, limit: 200})
+③b cooldown = await loadCooldown({...})   // fail-open：无身份/读取失败 → 空集（§6.0）
+④ ordered = rerankCandidates({scored: ranked, hiddenListingIds, cooldownListingIds: cooldown,
+                              seed: requestId, limit: RECOMMENDATION_SNAPSHOT_MAX_ITEMS})
 ⑤ cards   = await listings.listCardsByIds(viewerId, ordered.map(c => c.listingId))
             按 ordered 顺序重排，取不到卡片的（此刻已不可见）跳过          // N3
 ⑥ slice   = ordered 前 min(cards.length, limit) 条                       // N5：不补位
@@ -650,8 +690,9 @@ decode(cursor)
    也不返回半截 ranked 上下文，而是新建一条 `rec-v1-none` 行 + newest 透传：返回的上下文与
    实际投递的内容一致，这一页的曝光照 R1 口径被原样接受。
 5. **`rerankCandidates` 的返回形状**：实现返回
-   `{items, summary: {inputCount, droppedHidden, droppedOverflow, relaxations}}`（§6 只写了
-   `{items, relaxations, droppedHidden}`）。`summary` 全部是**观测用的计数**，调用方只用 `items`；
+   `{items, summary: {inputCount, droppedHidden, droppedCooldown, droppedOverflow, relaxations}}`
+   （初版 §6 只写了 `{items, relaxations, droppedHidden}`，现已按实现更正）。`summary` 全部是
+   **观测用的计数**，调用方只用 `items`；
    收紧成子对象是为了让"重排做了什么"在日志/排查时一眼可见，不影响任何排序决策。
 6. **`recallSources[0]` 是快照构造的隐式前提，已由 service 兜住**（本轮对抗性审查发现 2）：
    `buildSnapshotRows`（`service.ts:697-712`）在 `candidate.recallSources[0] === undefined` 时

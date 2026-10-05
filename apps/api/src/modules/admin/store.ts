@@ -757,6 +757,11 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
 
       // 生命周期三项（M8）：与离线评估 job 同口径 —— 只认窗口内、带归因的事件（`request_id IS NOT NULL`）；
       // 前两项只统计**窗口内创建**的商品；分位用 `percentile_disc`（最近秩、不插值），空集合出 NULL。
+      // 第三项 `exposuresBeforeSale` 的分母是"窗口内发生过成交的商品"（`first_purchase`），不是"成交前
+      // 有过曝光的商品"：零成交前曝光的成交商品必须计 **0** 进分布（离线 `eval.ts` 对同一类商品也是
+      // `push(0)`），否则两套口径的 count/median 不可比 —— 见下方 `exposures_before_sale`：
+      // 它以 `first_purchase` 为基表 LEFT JOIN，并用 `count(a.listing_id)`（只数非 NULL 行）而不是
+      // `count(*)` —— 后者会把 LEFT JOIN 补出来的那一行数成 1，把"零曝光"变成"曝光 1 次"。
       const lifecycleResult = await db.execute(sql`
         WITH attributed AS (
           SELECT e.listing_id AS listing_id, e.event_type::text AS event_type, e.occurred_at AS occurred_at
@@ -794,9 +799,9 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
           WHERE l.created_at >= ${since} AND l.created_at < ${until}
         ),
         exposures_before_sale AS (
-          SELECT count(*)::int AS exposures
+          SELECT coalesce(count(a.listing_id), 0)::int AS exposures
           FROM first_purchase p
-          JOIN attributed a ON a.listing_id = p.listing_id
+          LEFT JOIN attributed a ON a.listing_id = p.listing_id
             AND a.event_type = 'IMPRESSION' AND a.occurred_at < p.sold_at
           GROUP BY p.listing_id
         )
