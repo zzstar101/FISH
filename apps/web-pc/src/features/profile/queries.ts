@@ -5,7 +5,7 @@ import type {
   TransactionReviewCreateInput,
 } from '@fish/contracts/transaction-reviews/schema'
 import type { QueryClient } from '@tanstack/react-query'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
 import { fetchConversationPage, fetchMessagePage } from '../chat/api'
 import { listingDetailQueryKey } from '../listing-detail/queries'
@@ -38,6 +38,12 @@ export const profileKeys = {
   aggregate: (ownerId: string) => ['pc', 'profile', 'aggregate', ownerId] as const,
   listings: (ownerId: string, status: MyListingStatusFilter) =>
     ['pc', 'profile', 'listings', ownerId, status] as const,
+  /**
+   * 待确认推导自己的快照键：`useMyListings` 转 infinite 后同一键下的缓存形状变成了
+   * `pages[]`，推导只需要各状态首页的 `items` —— 分键存放，谁也别把谁的形状读歪。
+   */
+  listingsSnapshot: (ownerId: string, status: MyListingStatusFilter) =>
+    ['pc', 'profile', 'listings-snapshot', ownerId, status] as const,
   orders: (ownerId: string, role: 'buyer' | 'seller', status: OrderStatusFilter) =>
     ['pc', 'profile', 'orders', ownerId, role, status] as const,
   order: (ownerId: string, transactionId: string) =>
@@ -65,6 +71,7 @@ function invalidateProfileSummary(queryClient: QueryClient, ownerId: string): vo
 
 function invalidateListingLists(queryClient: QueryClient, ownerId: string): void {
   void queryClient.invalidateQueries({ queryKey: ['pc', 'profile', 'listings', ownerId] })
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'profile', 'listings-snapshot', ownerId] })
 }
 
 function invalidateOrderLists(queryClient: QueryClient, ownerId: string): void {
@@ -109,19 +116,25 @@ export function useProfile(ownerId: string) {
   })
 }
 
+/** 我的发布：游标无限翻页（#446）。键与旧单页版一致，缓存形状变为 `pages[]`。 */
 export function useMyListings(ownerId: string, status: MyListingStatusFilter) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: profileKeys.listings(ownerId, status),
-    queryFn: () => fetchMyListings(ownerId, status),
+    queryFn: ({ pageParam }) => fetchMyListings(ownerId, status, pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== '',
     staleTime: 15_000,
   })
 }
 
+/** 我的订单：游标无限翻页（#446）。接口的 cursor 一直都在，页面此前只是没传。 */
 export function useOrders(ownerId: string, role: 'buyer' | 'seller', status: OrderStatusFilter) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: profileKeys.orders(ownerId, role, status),
-    queryFn: () => fetchTransactions({ role, status }),
+    queryFn: ({ pageParam }) => fetchTransactions({ role, status, cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== '',
     staleTime: 15_000,
   })
@@ -304,12 +317,12 @@ export function usePendingProposals(ownerId: string) {
        */
       const [active, offline] = await Promise.all([
         queryClient.fetchQuery({
-          queryKey: profileKeys.listings(ownerId, 'ACTIVE'),
+          queryKey: profileKeys.listingsSnapshot(ownerId, 'ACTIVE'),
           queryFn: () => fetchMyListings(ownerId, 'ACTIVE'),
           staleTime: 15_000,
         }),
         queryClient.fetchQuery({
-          queryKey: profileKeys.listings(ownerId, 'OFFLINE'),
+          queryKey: profileKeys.listingsSnapshot(ownerId, 'OFFLINE'),
           queryFn: () => fetchMyListings(ownerId, 'OFFLINE'),
           staleTime: 15_000,
         }),

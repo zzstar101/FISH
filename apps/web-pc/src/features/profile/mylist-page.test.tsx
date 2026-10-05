@@ -81,6 +81,14 @@ test('可删判据：OFFLINE + BLOCKED + 非治理下架', () => {
 })
 
 async function renderMyList(listings: ListingCard[]): Promise<string> {
+  return renderMyListPages([listings])
+}
+
+/** #446：缓存形状是 infinite 的 `pages[]`；末页 `nextCursor` 非空即还有下一页。 */
+async function renderMyListPages(
+  pages: ListingCard[][],
+  { lastPageHasNext = false }: { lastPageHasNext?: boolean } = {},
+): Promise<string> {
   const router = createRouter({
     routeTree,
     basepath: '/pc',
@@ -92,8 +100,11 @@ async function renderMyList(listings: ListingCard[]): Promise<string> {
   const queryClient = new QueryClient()
   queryClient.setQueryData(AUTH_ME_QUERY_KEY, ME)
   queryClient.setQueryData(profileKeys.listings(ME.id, 'ALL'), {
-    items: listings,
-    nextCursor: null,
+    pages: pages.map((items, index) => ({
+      items,
+      nextCursor: index < pages.length - 1 || lastPageHasNext ? 'cursor-next' : null,
+    })),
+    pageParams: pages.map((_, index) => (index === 0 ? null : 'cursor-next')),
   })
 
   return renderToString(
@@ -123,4 +134,24 @@ test('平台下架的商品没有「删除」入口（按下去必然 409）', a
   const html = await renderMyList([card({ governanceDelisted: true })])
 
   expect(html).not.toContain('删除')
+})
+
+test('翻页：两页商品都渲染，末页无游标时不给「加载更多」(#446)', async () => {
+  const html = await renderMyListPages([
+    [card({ id: 'lst_01jc000000e00800000000001a', title: '第一页商品' })],
+    [card({ id: 'lst_01jc000000e00800000000002b', title: '第二页商品' })],
+  ])
+
+  expect(html).toContain('第一页商品')
+  expect(html).toContain('第二页商品')
+  expect(html).not.toContain('加载更多')
+})
+
+test('翻页：还有下一页时给「加载更多」入口', async () => {
+  const html = await renderMyListPages(
+    [[card({ id: 'lst_01jc000000e00800000000001a', title: '第一页商品' })]],
+    { lastPageHasNext: true },
+  )
+
+  expect(html).toContain('加载更多')
 })
