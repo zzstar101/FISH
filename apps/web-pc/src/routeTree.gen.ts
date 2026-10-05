@@ -43,12 +43,14 @@ import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 import { Route as WishIndexRouteImport } from './routes/wish.index'
 import { Route as WishWishIdRouteImport } from './routes/wish.$wishId'
 import { Route as AdminAuditIndexRouteImport } from './routes/admin.audit.index'
+import { Route as AdminListingsIndexRouteImport } from './routes/admin.listings.index'
 import { Route as AdminListingsListingIdRouteImport } from './routes/admin.listings.$listingId'
 import { Route as AdminModerationIndexRouteImport } from './routes/admin.moderation.index'
 import { Route as AdminModerationRecordIdRouteImport } from './routes/admin.moderation.$recordId'
 import { Route as AdminReportsIndexRouteImport } from './routes/admin.reports.index'
 import { Route as AdminReportsReportIdRouteImport } from './routes/admin.reports.$reportId'
 import { Route as AdminTransactionsIndexRouteImport } from './routes/admin.transactions.index'
+import { Route as AdminUsersIndexRouteImport } from './routes/admin.users.index'
 import { Route as AdminUsersUserIdRouteImport } from './routes/admin.users.$userId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -221,6 +223,11 @@ const AdminAuditIndexRoute = AdminAuditIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminAuditRoute,
 } as any)
+const AdminListingsIndexRoute = AdminListingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminListingsRoute,
+} as any)
 const AdminListingsListingIdRoute = AdminListingsListingIdRouteImport.update({
   id: '/$listingId',
   path: '/$listingId',
@@ -250,6 +257,11 @@ const AdminTransactionsIndexRoute = AdminTransactionsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminTransactionsRoute,
+} as any)
+const AdminUsersIndexRoute = AdminUsersIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminUsersRoute,
 } as any)
 const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
   id: '/$userId',
@@ -296,9 +308,11 @@ export interface FileRoutesByFullPath {
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit/': typeof AdminAuditIndexRoute
+  '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
   '/admin/transactions/': typeof AdminTransactionsIndexRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -314,9 +328,7 @@ export interface FileRoutesByTo {
   '/reports': typeof ReportsRoute
   '/search': typeof SearchRoute
   '/verify': typeof VerifyRoute
-  '/admin/listings': typeof AdminListingsRouteWithChildren
   '/admin/metrics': typeof AdminMetricsRoute
-  '/admin/users': typeof AdminUsersRouteWithChildren
   '/listing/$listingId': typeof ListingListingIdRoute
   '/messages/$conversationId': typeof MessagesConversationIdRoute
   '/orders/$transactionId': typeof OrdersTransactionIdRoute
@@ -331,9 +343,11 @@ export interface FileRoutesByTo {
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit': typeof AdminAuditIndexRoute
+  '/admin/listings': typeof AdminListingsIndexRoute
   '/admin/moderation': typeof AdminModerationIndexRoute
   '/admin/reports': typeof AdminReportsIndexRoute
   '/admin/transactions': typeof AdminTransactionsIndexRoute
+  '/admin/users': typeof AdminUsersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -375,9 +389,11 @@ export interface FileRoutesById {
   '/admin/reports/$reportId': typeof AdminReportsReportIdRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
   '/admin/audit/': typeof AdminAuditIndexRoute
+  '/admin/listings/': typeof AdminListingsIndexRoute
   '/admin/moderation/': typeof AdminModerationIndexRoute
   '/admin/reports/': typeof AdminReportsIndexRoute
   '/admin/transactions/': typeof AdminTransactionsIndexRoute
+  '/admin/users/': typeof AdminUsersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -420,9 +436,11 @@ export interface FileRouteTypes {
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit/'
+    | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
     | '/admin/transactions/'
+    | '/admin/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -438,9 +456,7 @@ export interface FileRouteTypes {
     | '/reports'
     | '/search'
     | '/verify'
-    | '/admin/listings'
     | '/admin/metrics'
-    | '/admin/users'
     | '/listing/$listingId'
     | '/messages/$conversationId'
     | '/orders/$transactionId'
@@ -455,9 +471,11 @@ export interface FileRouteTypes {
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit'
+    | '/admin/listings'
     | '/admin/moderation'
     | '/admin/reports'
     | '/admin/transactions'
+    | '/admin/users'
   id:
     | '__root__'
     | '/'
@@ -498,9 +516,11 @@ export interface FileRouteTypes {
     | '/admin/reports/$reportId'
     | '/admin/users/$userId'
     | '/admin/audit/'
+    | '/admin/listings/'
     | '/admin/moderation/'
     | '/admin/reports/'
     | '/admin/transactions/'
+    | '/admin/users/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -765,6 +785,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminAuditIndexRouteImport
       parentRoute: typeof AdminAuditRoute
     }
+    '/admin/listings/': {
+      id: '/admin/listings/'
+      path: '/'
+      fullPath: '/admin/listings/'
+      preLoaderRoute: typeof AdminListingsIndexRouteImport
+      parentRoute: typeof AdminListingsRoute
+    }
     '/admin/listings/$listingId': {
       id: '/admin/listings/$listingId'
       path: '/$listingId'
@@ -807,6 +834,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminTransactionsIndexRouteImport
       parentRoute: typeof AdminTransactionsRoute
     }
+    '/admin/users/': {
+      id: '/admin/users/'
+      path: '/'
+      fullPath: '/admin/users/'
+      preLoaderRoute: typeof AdminUsersIndexRouteImport
+      parentRoute: typeof AdminUsersRoute
+    }
     '/admin/users/$userId': {
       id: '/admin/users/$userId'
       path: '/$userId'
@@ -831,10 +865,12 @@ const AdminAuditRouteWithChildren = AdminAuditRoute._addFileChildren(
 
 interface AdminListingsRouteChildren {
   AdminListingsListingIdRoute: typeof AdminListingsListingIdRoute
+  AdminListingsIndexRoute: typeof AdminListingsIndexRoute
 }
 
 const AdminListingsRouteChildren: AdminListingsRouteChildren = {
   AdminListingsListingIdRoute: AdminListingsListingIdRoute,
+  AdminListingsIndexRoute: AdminListingsIndexRoute,
 }
 
 const AdminListingsRouteWithChildren = AdminListingsRoute._addFileChildren(
@@ -882,10 +918,12 @@ const AdminTransactionsRouteWithChildren =
 
 interface AdminUsersRouteChildren {
   AdminUsersUserIdRoute: typeof AdminUsersUserIdRoute
+  AdminUsersIndexRoute: typeof AdminUsersIndexRoute
 }
 
 const AdminUsersRouteChildren: AdminUsersRouteChildren = {
   AdminUsersUserIdRoute: AdminUsersUserIdRoute,
+  AdminUsersIndexRoute: AdminUsersIndexRoute,
 }
 
 const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
