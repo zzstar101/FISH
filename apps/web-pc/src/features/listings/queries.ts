@@ -6,6 +6,8 @@ import { fetchListingFeed } from './api'
 export type ListingSearchFilters = {
   q?: string
   category?: ListingCategory
+  /** 「免费送」筛选（#451）；`undefined` = 不过滤。它与其它筛选一起进 queryKey，切换即重新取数。 */
+  free?: boolean
   sort: ListingSort
 }
 

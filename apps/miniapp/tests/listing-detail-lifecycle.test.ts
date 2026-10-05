@@ -136,19 +136,24 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(ownerChanged('user-a', 'user-a')).toBe(false)
   })
 
-  test('清场只覆盖草稿、收藏与购买请求，公开快照不在其中', () => {
+  test('清场只覆盖草稿、收藏与购买流程，公开快照不在其中', () => {
     expect(clearedPrivateScope()).toEqual({
       commentInput: '',
       replyInput: '',
       replyTo: null,
       faved: false,
       buyRequested: false,
+      buyOpen: false,
+      buyAmount: '',
+      buyAmountError: null,
+      buySubmitError: null,
+      buyBusy: false,
       offlineConfirmOpen: false,
       offlineSubmit: 'idle',
     })
   })
 
-  test('换号后 A 的草稿、回复行、收藏心形与购买请求都不留在 B 的页面上', () => {
+  test('换号后 A 的草稿、回复行、收藏心形与购买流程都不留在 B 的页面上', () => {
     const p = page()
     switchOwner(p, 'user-a')
     p.commentInput = 'A 写到一半的留言'
@@ -156,6 +161,11 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     p.replyTo = 'c-1'
     p.faved = true
     p.buyRequested = true
+    p.buyOpen = true
+    p.buyAmount = '99.99'
+    p.buyAmountError = '请填写正确金额（最多两位小数）'
+    p.buySubmitError = '发起交易确认失败，请重试'
+    p.buyBusy = true
 
     switchOwner(p, 'user-b')
     expect(p.commentInput).toBe('')
@@ -163,6 +173,11 @@ describe('详情页账号私有 state 的清场（#170 判据 C）', () => {
     expect(p.replyTo).toBeNull()
     expect(p.faved).toBe(false)
     expect(p.buyRequested).toBe(false)
+    expect(p.buyOpen).toBe(false)
+    expect(p.buyAmount).toBe('')
+    expect(p.buyAmountError).toBeNull()
+    expect(p.buySubmitError).toBeNull()
+    expect(p.buyBusy).toBe(false)
   })
 
   test('换号不动公开的商品快照与已发布留言', () => {
@@ -1034,9 +1049,10 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     expect(block).toContain('buyInFlightRef.current = null')
   })
 
-  test('立即购买：确认回写前先确认任务仍属于当前账号（清场挡不住迟到的回写）', async () => {
-    const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
-    expectBefore(block, 'const task = beginActionTask(', 'Taro.showModal(')
+  test('立即购买：两步写的每个 await 边界都先确认任务仍属于当前账号', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    // 令牌在发起前捕获：建会话（第一步写）之前必须已经铸好任务
+    expectBefore(block, 'const task = beginActionTask(', 'await createConversation(id)')
     expectBefore(
       block,
       'if (!isTaskLive(task, buyInFlightRef.current)) return',
@@ -1044,16 +1060,90 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     )
   })
 
-  test('立即购买：在飞时不再弹第二个确认框，且弹窗失败按「没确认」收尾', async () => {
-    const block = await pageSlice('const buy = () => {', '/**\n   * 发一条顶层留言')
-    // 没有这把锁，连点会叠出多个 showModal
-    expect(block).toContain('if (buyRequested || buyInFlightRef.current !== null) return')
-    expectBefore(block, 'buyInFlightRef.current = task.token', 'Taro.showModal(')
-    // 老 Android 上点蒙层 / 卸载走 reject：不写终态、也不弹错，只留痕
-    const catchBlock = inner('.catch((error: unknown) => {', '.finally(release)')(block)
-    expect(catchBlock).toContain('按未确认处理')
+  test('立即购买：在飞时不重复发起、弹层不许关，迟到失败不写状态', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    // 没有这把锁，连点会叠出第二次两步写
+    expect(block).toContain(
+      'if (buyBusy || buyInFlightRef.current !== null || listing === undefined) return',
+    )
+    expectBefore(block, 'buyInFlightRef.current = task.token', 'await createConversation(id)')
+    // 迟到失败不写任何状态；例外是会话过期（401）仍要提示本人（同 confirmOffline 口径）
+    const catchBlock = inner('} catch (error) {', '} finally {')(block)
+    expect(catchBlock).toContain('if (!isTaskLive(task, buyInFlightRef.current)) {')
+    expect(catchBlock).toContain('shouldSurfaceStaleAuthFailure(isUnauthenticatedError(error)')
     expect(catchBlock).not.toContain('setBuyRequested(true)')
-    expect(block).toContain('.finally(release)')
+  })
+
+  test('立即购买：提交中弹层关不掉（蒙层与「再想想」都走 dismissBuy 的早退）', async () => {
+    // 需求「提交中弹层不许关」—— 只有 `dismissBuy` 在 `buyBusy` 时早退才成立；
+    // 蒙层与「再想想」两个入口都调它，所以钉住这一处即可
+    const dismiss = await pageSlice('const dismissBuy = () => {', 'const confirmBuy')
+    expect(dismiss).toContain('if (buyBusy) return')
+    expectBefore(dismiss, 'if (buyBusy) return', 'setBuyOpen(false)')
+    // 两个关闭入口都必须走它，不能自己 setBuyOpen(false)
+    const dialog = await pageSlice('{buyOpen ? (', '<BackTop show={showTop}')
+    expect(dialog).toContain('onClick={dismissBuy}')
+    expect(dialog).not.toContain('onClick={() => setBuyOpen(false)}')
+  })
+
+  test('立即购买：商品已不在售时走静默 refresh（不能用 load 把详情清空）', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    const catchBlock = inner('} catch (error) {', '} finally {')(block)
+    // 注释里为了解释「为什么不能用 load」正提到了它，断言前先剥掉注释只看代码
+    const code = catchBlock.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+    /*
+      `describeProposeFailure` 对 `LISTING_NOT_ACTIVE` 给 `refresh: true`。
+      这一步必须走**静默**的 `refresh()`：`load()` 会先 `setData(null)` 回骨架屏，而弹层
+      摘要读的是实时 listing —— 重取期间会写出「挂价 ¥0」、确认钮也会因 listing 为
+      undefined 变成点了没反应（PC 的 `onListingStale → refetch()` 保留旧数据）。
+    */
+    expect(code).toContain('refresh()')
+    expect(code).not.toContain('load()')
+  })
+
+  test('立即购买：两步失败各用各的映射器（第一步不借用第二步的文案）', async () => {
+    const block = await pageSlice('const openBuy = () => {', '/**\n   * 发一条顶层留言')
+    const catchBlock = inner('} catch (error) {', '} finally {')(block)
+    // 第二步之前先换档，第一步失败才不会被说成「发起交易确认失败」
+    expectBefore(block, "let step: 'conversation' | 'propose' = 'conversation'", "step = 'propose'")
+    expect(catchBlock).toContain('describeCreateConversationFailure(error)')
+    const stepOne = catchBlock.slice(
+      catchBlock.indexOf("if (step === 'conversation') {"),
+      catchBlock.indexOf('const failure = describeProposeFailure(error)'),
+    )
+    expect(stepOne).toContain('describeCreateConversationFailure(error)')
+    expect(stepOne).not.toContain('describeProposeFailure')
+  })
+
+  test('冷启动解析身份不清购买弹层（清了会把在飞的那次写的结果吞掉）', async () => {
+    /*
+      冷启动（null → id）走 `ownerChanged` 但**不走** `isOwnerSwitch`：那时弹层可能已经
+      打开、两步写正在飞（入口刻意放行 `unknown`，冷启动豁免会让它继续作数）。弹层状态若
+      在 `isOwnerSwitch` 之外复位，身份一解析就关层 + `buyBusy` 清零，而那次写还在飞 ——
+      它失败时错误会被写进一个已经关掉的弹层，用户什么都看不到。
+    */
+    const block = await pageSlice('if (ownerChanged(prevUserId, userId)) {', 'useEffect(')
+    // 购买弹层的复位必须落在 `cleared` 之后那个 `isOwnerSwitch` 块里（锁那块在它之前）
+    const start = block.indexOf(
+      'if (isOwnerSwitch(prevUserId)) {',
+      block.indexOf('const cleared = clearedPrivateScope()'),
+    )
+    expect(start).toBeGreaterThanOrEqual(0)
+    const end = block.indexOf('setOfflineConfirmOpen(cleared.offlineConfirmOpen)')
+    expect(end).toBeGreaterThan(start)
+    const switchOnly = block.slice(start, end)
+    for (const setter of [
+      'setBuyOpen(cleared.buyOpen)',
+      'setBuyAmount(cleared.buyAmount)',
+      'setBuyAmountError(cleared.buyAmountError)',
+      'setBuySubmitError(cleared.buySubmitError)',
+      'setBuyBusy(cleared.buyBusy)',
+    ]) {
+      expect(switchOnly).toContain(setter)
+    }
+    // 「待店家确认」终态仍按原来的（更宽的）口径清场：冷启动解析身份时它也确实该重置
+    expect(block).toContain('setBuyRequested(cleared.buyRequested)')
+    expect(switchOnly).not.toContain('setBuyRequested(cleared.buyRequested)')
   })
 
   test('冷启动解析身份的豁免接在两个动作的守卫上（不是只写在注释里）', async () => {
@@ -1065,10 +1155,12 @@ describe('详情页底栏动作的接线（#236 复查 P2）', () => {
     // 铸任务时必须把发起那一刻的登录态带上，否则「已确认匿名」也会被当成冷启动
     expect(await source()).toContain('authStatus,')
     // 两个动作都必须走这条守卫（漏一个就会「点了没反应」）：
-    // 「聊一聊」成功 / 失败两条链各一次，「立即购买」确认链一次
+    // 「聊一聊」成功 / 失败两条链各一次；「立即购买」确认链共四次 ——
+    // 两步写的每个 await 边界各一次（建会话后 / 提案后）、迟到失败守卫一次、
+    // finally 的清尾判活一次（先判再放锁，否则「正在发起…」会卡死）
     const code = await source()
     expect(code.match(/isTaskLive\(task, chatInFlightRef\.current\)/g)?.length).toBe(2)
-    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(1)
+    expect(code.match(/isTaskLive\(task, buyInFlightRef\.current\)/g)?.length).toBe(4)
   })
 })
 

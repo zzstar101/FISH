@@ -13,6 +13,7 @@ import {
   proposalDecisionError,
   redeemMeetupToken,
   rejectProposal,
+  reviewSubmitError,
   transactionActionError,
   transactionsPath,
   updateListing,
@@ -207,6 +208,15 @@ describe('profile api errors', () => {
     expect(view.message).toBe('请求参数不合法')
     expect(view.fields).toEqual({ nickname: '昵称过长', avatarObjectKey: '头像对象无效' })
   })
+
+  test('signature validation details map to the signature field (#445)', () => {
+    const view = profileUpdateErrorView(
+      new ApiError('VALIDATION_FAILED', 422, '请求参数不合法', [
+        { field: 'signature', message: '个性签名最多 200 字' },
+      ]),
+    )
+    expect(view.fields.signature).toBe('个性签名最多 200 字')
+  })
 })
 
 describe('proposal decisions', () => {
@@ -362,5 +372,37 @@ describe('meetup credential api', () => {
         body: JSON.stringify({ code: '123456' }),
       },
     ])
+  })
+})
+
+describe('reviewSubmitError (#445)', () => {
+  test('409 已评过 → alreadyReviewed，容器据此关弹窗并重读评价边', () => {
+    expect(reviewSubmitError(new ApiError('TRANSACTION_REVIEW_EXISTS', 409, '已评价过'))).toEqual({
+      message: '你已评价过这笔交易',
+      alreadyReviewed: true,
+      refresh: false,
+    })
+  })
+
+  test('终态漂移透传服务端文案并要求刷新订单', () => {
+    const view = reviewSubmitError(new ApiError('TRANSACTION_NOT_COMPLETED', 409, '交易还没完成'))
+    expect(view.message).toBe('交易还没完成')
+    expect(view.refresh).toBe(true)
+    expect(view.alreadyReviewed).toBe(false)
+  })
+
+  test('评语敏感词拦截只透传，不刷新也不当已评', () => {
+    const view = reviewSubmitError(new ApiError('REVIEW_CONTENT_BLOCKED', 422, '评语包含违规内容'))
+    expect(view.message).toBe('评语包含违规内容')
+    expect(view.refresh).toBe(false)
+    expect(view.alreadyReviewed).toBe(false)
+  })
+
+  test('非 ApiError 走兜底文案', () => {
+    expect(reviewSubmitError(new Error('boom'))).toEqual({
+      message: '评价失败，请稍后重试',
+      alreadyReviewed: false,
+      refresh: false,
+    })
   })
 })
