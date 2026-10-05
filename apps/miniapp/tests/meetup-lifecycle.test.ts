@@ -10,6 +10,7 @@ import {
   type SubmitLock,
   sequenceSuperseded,
   showSync,
+  writeLandedSince,
 } from '../src/pkg-trade/pages/transaction-meetup/view'
 
 /**
@@ -26,7 +27,13 @@ import {
  * - 从扫码页返回面交页时本代次有写入在飞 —— 立刻重读会把页面拉回写入前的快照；
  * - 同一账号内连续两次返回刷新响应反序 —— 先发的那次回来时账号代次与本页写入序号
  *   都没变（期间只有对方动了这笔交易），旧快照会把刚读到的终态盖回 PENDING_MEETUP
- *   （审查 R6）。
+ *   （审查 R6）；
+ * - 一次写入**尝试**以网络失败收尾、但页面一次都没被改写过（核销请求本身就没成功）后返回
+ *   面交页 —— 旧接线按取锁时自增的尝试序号判新旧，把这次返回刷新整份丢弃，页面停在写入前
+ *   的旧快照（#296 发现 1）；反过来，写链已经落定过页面（写回交易快照、换成「确认完成
+ *   面交」重试入口、或落到加载失败态）时，迟到的写入前快照必须继续被丢弃，否则会把已
+ *   CONSUMED 的凭证打回 6 位码输入态、或把失败卡整张撤销（#296 审查发现 1、2）；核销撞上
+ *   终态、重读又失败时停在输入态（#296 发现 3）。
  *
  * 边界：本文件只跑判据，不跑组件接线（ref 赋值时机、`useDidShow` 注册顺序、渲染期
  * setState）。那部分必须在微信开发者工具里按双账号时序实测，不拿本文件当端上证明。
@@ -197,13 +204,42 @@ describe('meetup 返回刷新（#170 D）', () => {
     expect(nextPendingSync(false, 0, 1)).toEqual({ sync: false, pending: false })
   })
 
-  test('同步窗口内发生过写入时丢弃这份旧快照（不把 COMPLETED 倒回待确认）', () => {
-    // 窗口内没有写入：快照就是最新的，可以落地
-    expect(sequenceSuperseded(3, 3)).toBe(false)
+  test('同步窗口内有写入**落地**时才丢弃这份旧快照（不把 COMPLETED 倒回待确认）', () => {
+    // 窗口内没有写入落地：快照就是最新的，可以落地
+    expect(writeLandedSince(3, 3)).toBe(false)
 
     // 窗口内写完了一次并放掉锁：这时「有没有人持锁」是空的，只有序号能看出来。
     // 落地就会用写入前的快照把刚写成的 COMPLETED 盖回 PENDING_MEETUP。
+    expect(writeLandedSince(3, 4)).toBe(true)
+  })
+})
+
+/**
+ * #296 发现 1：返回刷新的丢弃判据是「这份快照发出后有没有写入**真正落地**」，不是「有
+ * 没有人**尝试**过写入」。`writeSeq` 在取锁那一瞬就自增，而一条写链可能以网络失败收尾
+ * （confirm 超时 / 核销被拒 / 终态重读也失败），页面状态一次都没被写过 —— 按尝试序号
+ * 丢弃，用户从扫码页返回时看到的还是写入前的旧快照，返回刷新等于没有。
+ */
+describe('meetup 返回刷新：只认真正落地的写入（#296 发现 1）', () => {
+  test('写入尝试以网络失败收尾时，这份返回快照必须落地', () => {
+    // 时序：快照发出时尝试序号 3；期间 verify 取到提交锁（尝试序号 → 4），随后 confirm
+    // 网络失败收尾，一次 setTx(dto) 都没有落地（落地序号仍是 3）。
+    // 旧判据 sequenceSuperseded(seenWrites, writeSeq.current) 在这里把快照丢掉：
     expect(sequenceSuperseded(3, 4)).toBe(true)
+    // 修复后的判据必须放行 —— 页面状态没被写过，服务端读回来的才是最新的：
+    expect(writeLandedSince(3, 3)).toBe(false)
+  })
+
+  test('窗口内真正落地过一次写入时仍然丢弃（不回归 #147 审查 F2）', () => {
+    // 快照发出时尝试序号 3；尝试 4 落地，页面已经是写入后的状态
+    expect(writeLandedSince(3, 4)).toBe(true)
+  })
+
+  test('先落过一次、最后一次尝试失败：同样丢弃，不把已落地的结果倒回', () => {
+    // 快照发出时尝试序号 5；尝试 6 落地（页面已是写入后的状态）；尝试 7 取锁后网络失败。
+    // 「最后一次尝试没落地」不等于「窗口内没有落地」—— 只比最后一次尝试会放行这份旧
+    // 快照，把尝试 6 写成的 COMPLETED 倒回 PENDING_MEETUP（#147 审查 F2 的同一个坑）。
+    expect(writeLandedSince(5, 6)).toBe(true)
   })
 })
 
@@ -293,12 +329,155 @@ describe('meetup 返回读取的响应顺序（审查 R6）', () => {
     // 一次本页写入落定（写链自己把最新 DTO 落到页面）：读取序号没动，
     // 光看读取序号会以为这份旧快照还能落地
     expect(canLand(r, first)).toBe(true)
-    // 只有写入序号能证明它旧了
-    expect(sequenceSuperseded(3, 4)).toBe(true)
+    // 只有**落地**的写入序号能证明它旧了（取锁时自增的尝试序号不算，见 #296 发现 1）
+    expect(writeLandedSince(3, 4)).toBe(true)
 
     // 反过来：新的返回读取不推进写入序号 —— 那次写入的结果不受影响
     const second = beginRead(r)
     expect(canLand(r, first)).toBe(false) // 读取序号认出第一次已过期
     expect(canLand(r, second)).toBe(true)
+  })
+})
+
+/* --------------------------------------------------------- 页面接线（钉源码） */
+
+/**
+ * 判据层测不到「哪个 ref 在哪儿更新、守卫拿哪个 ref 比较」，而这两处正是 #296 的修复点
+ * 本身（写链有没有真的落地、守卫比的是尝试序号还是落地序号、409 重读失败后落到哪儿）。
+ * 沿用 `tests/history-wiring.test.ts` 的先例，把页面接线钉成断言。
+ *
+ * 边界照旧：这只是静态检查，替代不了微信开发者工具里的双账号时序实测。
+ */
+async function meetupPageSource(): Promise<string> {
+  return Bun.file(
+    new URL('../src/pkg-trade/pages/transaction-meetup/index.tsx', import.meta.url),
+  ).text()
+}
+
+/** 取 `start` 到 `end` 之间的那段源码；两个锚点都必须存在 */
+function sliceFrom(source: string, start: string, end: string): string {
+  const from = source.indexOf(start)
+  expect(from).toBeGreaterThanOrEqual(0)
+  const to = source.indexOf(end, from)
+  expect(to).toBeGreaterThan(from)
+  return source.slice(from, to)
+}
+
+describe('meetup 接线：写入落地序号（#296 发现 1）', () => {
+  test('返回刷新的两处写入守卫都比**落地**序号，不再比取锁时自增的尝试序号', async () => {
+    const code = await meetupPageSource()
+    const sync = sliceFrom(
+      code,
+      'const syncOnShow = async (epoch: number) => {',
+      'const flushPendingSync = (epoch: number) => {',
+    )
+    // 两段 await 之后各校验一次
+    expect(
+      sync.match(/if \(writeLandedSince\(seenWrites, landedSeq\.current\)\) return/g),
+    ).toHaveLength(2)
+    // 尝试序号在取锁那一瞬就自增：拿它判会把「写入以网络失败收尾」也当成写过
+    expect(sync).not.toContain('sequenceSuperseded(seenWrites, writeSeq.current)')
+  })
+
+  test('落定序号只在写链真正改过页面时跟上，取锁 / 输入错误分支都不许动它', async () => {
+    const code = await meetupPageSource()
+    // 「改过页面」与「记下这次真的改过」必须成对：只做前者，返回刷新会把这份结果盖回去；
+    // 只做后者，页面停在旧快照而刷新被丢弃。落定统一走 landPage，两类调用点：
+    // 写回交易快照（landWrite，五个：核销成功落地、verify 内层终态重读成功、verify 外层
+    // 409 重读成功、retryConfirm 成功、retryConfirm 终态重读成功）、写链收尾落定恢复态 /
+    // 失败态（见下一条用例）。
+    expect(code.match(/^\s*landWrite\(dto\)$/gm)).toHaveLength(5)
+    // 序号更新只有一处，就在 landPage 里面
+    expect(code.match(/landedSeq\.current = writeSeq\.current/g)).toHaveLength(1)
+    const pageHelper = sliceFrom(code, 'const landPage = () => {', '\n  }')
+    expect(pageHelper).toContain('landedSeq.current = writeSeq.current')
+    const writeHelper = sliceFrom(code, 'const landWrite = (dto: TransactionDto) => {', '\n  }')
+    expect(writeHelper).toContain('setTx(dto)')
+    expect(writeHelper).toContain('landPage()')
+    // 两条写链里不许再出现裸 setTx(dto)：绕过 landWrite 就等于序号不跟上，发现 1 回归
+    const verifyFn = sliceFrom(
+      code,
+      'const verify = async (',
+      '/** 核销成功但 confirm 尚未落定（网络失败）时的重试入口 */',
+    )
+    const retryFn = sliceFrom(
+      code,
+      'const retryConfirm = async (epoch: number) => {',
+      '/* --------------------------------------- 返回本页：与服务端重同步（#170 D） */',
+    )
+    expect(verifyFn).not.toContain('setTx(dto)')
+    expect(retryFn).not.toContain('setTx(dto)')
+    expect(verifyFn).toContain('landWrite(dto)')
+    expect(retryFn).toContain('landWrite(dto)')
+  })
+
+  test('写链收尾落定的恢复态 / 失败态也记序号，迟到的写入前快照不许把它们撤销', async () => {
+    const code = await meetupPageSource()
+    const verifyFn = sliceFrom(
+      code,
+      'const verify = async (',
+      '/** 核销成功但 confirm 尚未落定（网络失败）时的重试入口 */',
+    )
+    const retryFn = sliceFrom(
+      code,
+      'const retryConfirm = async (epoch: number) => {',
+      '/* --------------------------------------- 返回本页：与服务端重同步（#170 D） */',
+    )
+    // 核销成功、只有 confirm 网络失败：页面换成「确认完成面交」重试入口，而凭证已被
+    // CONSUMED。这份恢复态必须记序号 —— 否则写入前发出的返回读取迟到时会撤下入口、把人
+    // 打回 6 位码输入态，再输只会被后端以「已被使用」拒掉（#296 审查发现 1）。
+    const retryEntry = sliceFrom(
+      verifyFn,
+      "setConfirmPending(nextConfirmPending({ kind: 'error', failure }))",
+      '\n      }',
+    )
+    expect(retryEntry).toContain('landPage()')
+    // retryConfirm 重试又网络失败：入口保持原样，同样是写链建立的恢复态
+    const retryFailed = sliceFrom(
+      retryFn,
+      "Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })",
+      '\n    } finally {',
+    )
+    expect(retryFailed).toContain('landPage()')
+    // 三处「丢掉不可信旧快照、落到加载失败态」同样要记序号，且都走 landFailed（成对）
+    expect(code.match(/^\s*landFailed\(\)$/gm)).toHaveLength(3)
+    const failedHelper = sliceFrom(code, 'const landFailed = () => {', '\n  }')
+    expect(failedHelper).toContain('setTx(null)')
+    expect(failedHelper).toContain("setLoadError('failed')")
+    expect(failedHelper).toContain('landPage()')
+    // 反向：核销请求本身失败（页面只多了一条输入错误、没被改写过）时**不落定** ——
+    // 这正是验收 3 要放行的窗口，多记一次序号就会把该落地的返回刷新又吞掉。
+    const messageAt = verifyFn.indexOf('const message = map[error.code]')
+    expect(messageAt).toBeGreaterThanOrEqual(0)
+    const inputErrorTail = verifyFn.slice(messageAt)
+    expect(inputErrorTail).not.toContain('landPage')
+    expect(inputErrorTail).not.toContain('landFailed')
+  })
+})
+
+describe('meetup 接线：409 重读失败的回退（#296 发现 3）', () => {
+  test('核销撞上终态、重读又失败时，按同款口径丢旧快照落到失败态', async () => {
+    const code = await meetupPageSource()
+    const outerCatch = sliceFrom(
+      sliceFrom(
+        code,
+        'const verify = async (',
+        '/** 核销成功但 confirm 尚未落定（网络失败）时的重试入口 */',
+      ),
+      'MEETUP_TOKEN_INVALID',
+      "setInputError('核销失败，请检查网络后重试。')",
+    )
+    // 409 已确证交易离开了 PENDING_MEETUP，但重读失败时拿不到是哪种终态 —— 旧快照
+    // （PENDING_MEETUP + 6 位码输入态）两种渲染都不可信，必须和 verify 内层 /
+    // retryConfirm 一样落到「加载失败」，不能什么都不做地停在输入态。
+    const branch = sliceFrom(
+      outerCatch,
+      "if (error.code === 'TRANSACTION_NOT_IN_PENDING') {",
+      'setConfirmPending(false)',
+    )
+    expect(branch).toContain('landWrite(dto)')
+    // 丢快照 + 落到失败态必须成对（landFailed 里同时记落定序号）：只丢快照不记序号，
+    // 写入前发出的返回读取迟到时会用旧 PENDING_MEETUP 把这张失败卡整张撤销。
+    expect(branch).toContain('landFailed()')
   })
 })

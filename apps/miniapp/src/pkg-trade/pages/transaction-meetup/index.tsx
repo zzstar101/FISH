@@ -30,6 +30,7 @@ import {
   releaseLock,
   sequenceSuperseded,
   showSync,
+  writeLandedSince,
 } from './view'
 import './index.scss'
 
@@ -170,13 +171,24 @@ export default function TransactionMeetup() {
    */
   const submitLock = useRef<number | null>(null)
   /**
-   * 写入序号（#147 返回刷新 / #170 D）：每取到一次提交锁就自增。
+   * 写入**尝试**序号（#147 返回刷新 / #170 D）：每取到一次提交锁就自增。
    *
    * 返回刷新只用「此刻有没有人持锁」判不安全：一次写入可能在这份快照发出后、响应回来
    * 前就完成并放掉了锁 —— 那时锁是空的，却会拿写入前的旧快照把刚写成的结果盖回去
-   * （`COMPLETED` 被倒回 `PENDING_MEETUP`）。序号对不上就直接丢弃这份快照。
+   * （`COMPLETED` 被倒回 `PENDING_MEETUP`）。
+   *
+   * 它只说明「试过」，不说明「写过」—— 落没落地看 `landedSeq`（#296 发现 1）。
    */
   const writeSeq = useRef(0)
+  /**
+   * 最后一次**落定页面**的写入尝试序号（#296 发现 1）：写链改过页面（写回交易快照、换成
+   * 「确认完成面交」重试入口、落到「加载失败」态）时跟上 `writeSeq`，与它同一个序号空间。
+   *
+   * 为什么不能拿「尝试过」当「写过」：一条写链可能以网络失败收尾（confirm 超时、核销被
+   * 后端拒、终态重读也失败），页面状态一次都没被写过。按尝试序号丢弃返回刷新，用户从
+   * 扫码页回来看到的还是写入前的旧快照 —— 返回刷新等于没有。
+   */
+  const landedSeq = useRef(0)
   /**
    * 返回刷新（#170 D）的挂起标记：本代次有写入在飞时到达的 `useDidShow` 不立刻重读
    * （会把页面拉回写入前的快照），挂到这里，由写链的 `finally` 补一次。
@@ -202,6 +214,40 @@ export default function TransactionMeetup() {
    * **每个 await 之后、任何 setState 之前**（含 finally）先过这里。
    */
   const isStale = (epoch: number) => epoch !== bootEpoch.current
+
+  /**
+   * 写链**落定页面**（#296 发现 1）：记下「这一次尝试真的改过页面」的序号。
+   *
+   * 与 `writeSeq`（取锁时自增的**尝试**序号）分开：试过不等于写过。返回刷新的丢弃判据比的
+   * 是这个序号（判据本体见 `view.ts:writeLandedSince`）。写链每一种改过页面的收尾都必须调它
+   * 一次：写回交易快照走 `landWrite`，失败态走 `landFailed`，其余恢复态直接调本函数。
+   */
+  const landPage = () => {
+    landedSeq.current = writeSeq.current
+  }
+
+  /**
+   * 写链落地交易快照：把最新 DTO 写回页面，并记下这次尝试真的落了地（#296 发现 1）。
+   *
+   * 两个动作必须成对，所以做成一个函数：只 `setTx` 不记序号，返回刷新会把这份刚写成的
+   * 结果盖回去（#147 审查 F2）；只记序号不 `setTx`，页面停在旧快照而返回刷新被丢弃
+   * （正是 #296 发现 1 那条）。
+   */
+  const landWrite = (dto: TransactionDto) => {
+    setTx(dto)
+    landPage()
+  }
+
+  /**
+   * 写链落地**失败态**：丢掉不可信的旧快照，落到既有「加载失败」卡（#147 审查 F1/F2、
+   * #296 发现 3）。同样要记序号：写入前的读取快照迟到时会用 `setTx(dto) + setLoadError(null)`
+   * 把这张卡整张撤销，页面又回到那份不可信的旧渲染 —— 与 `landWrite` 是同一条不变量。
+   */
+  const landFailed = () => {
+    setTx(null)
+    setLoadError('failed')
+    landPage()
+  }
 
   /* ------------------------------------------------------------------ 加载 */
 
@@ -389,7 +435,7 @@ export default function TransactionMeetup() {
         if (isStale(epoch)) return
         await settle()
         if (isStale(epoch)) return
-        setTx(dto)
+        landWrite(dto)
         setConfirmPending(nextConfirmPending({ kind: 'ok', status: dto.status }))
         if (playsCompletionFx(dto.status)) setFxPhase('on')
       } catch (error) {
@@ -405,15 +451,14 @@ export default function TransactionMeetup() {
           await settle()
           if (isStale(epoch)) return
           if (dto) {
-            setTx(dto)
+            landWrite(dto)
           } else {
             // 重读失败：409 已确证交易离开 PENDING_MEETUP，但拿不到是哪一种终态，而本地
             // 快照还停在 PENDING_MEETUP。留着入口会让已取消的单子继续显示「还差最后一步
             // 确认」，照旧快照渲染又会把已经 CONSUMED 的凭证丢回 6 位码输入态（再输、再扫
             // 都只会被拒）—— 两种渲染都不可信。丢掉这份旧快照，落到既有的「加载失败」态：
             // 「重试」走 bootstrap 重读后落到正确的终态卡（#147 验收 1 / 审查 F1、F2）。
-            setTx(null)
-            setLoadError('failed')
+            landFailed()
           }
           setConfirmPending(pendingAfterTerminalRefetch(dto))
           // 冲突正是「对方刚确认」：读到的若是 COMPLETED，这笔面交是在用户眼前结束的，
@@ -424,6 +469,11 @@ export default function TransactionMeetup() {
         await settle()
         if (isStale(epoch)) return
         setConfirmPending(nextConfirmPending({ kind: 'error', failure }))
+        // 走到这里说明 `consume()` 成功过（凭证已被核销）、只有 confirm 失败：页面换成
+        // 「确认完成面交」重试入口，这是写链建立的恢复态。迟到的写入前快照若放行，会把
+        // 入口撤下、把人打回 6 位码输入态，而码已 CONSUMED（再输只会被拒）—— 所以这次
+        // 尝试同样算「落定过页面」（#296 审查发现 1）。
+        landPage()
       }
     } catch (error) {
       if (isStale(epoch)) return
@@ -442,7 +492,15 @@ export default function TransactionMeetup() {
           // —— 与自动 confirm 那条终态路径同一口径（#147 P2），终态没有「还差一步」。
           const dto = await fetchTransaction(targetId).catch(() => null)
           if (isStale(epoch)) return
-          if (dto) setTx(dto)
+          if (dto) {
+            landWrite(dto)
+          } else {
+            // 重读失败（#296 发现 3）：409 已确证交易离开 PENDING_MEETUP，但拿不到是哪一种
+            // 终态，而本地快照还停在 PENDING_MEETUP（核销被拒 = 6 位码输入态还在）。与
+            // `verify` 内层 / `retryConfirm` 同款回退：丢掉这份不可信的旧快照，落到既有的
+            // 「加载失败」态，「重试」走 bootstrap 重读后落到正确的终态卡。
+            landFailed()
+          }
           setConfirmPending(false)
           // 同一口径：在途核销撞上「已经完成」时也补播一次完成动效（CANCELLED 不播）
           if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
@@ -485,7 +543,7 @@ export default function TransactionMeetup() {
     try {
       const dto = await confirmTransaction(tx.id)
       if (isStale(epoch)) return
-      setTx(dto)
+      landWrite(dto)
       setConfirmPending(nextConfirmPending({ kind: 'ok', status: dto.status }))
       if (playsCompletionFx(dto.status)) setFxPhase('on')
     } catch (error) {
@@ -496,17 +554,19 @@ export default function TransactionMeetup() {
         const dto = await fetchTransaction(tx.id).catch(() => null)
         if (isStale(epoch)) return
         if (dto) {
-          setTx(dto)
+          landWrite(dto)
         } else {
           // 同 `verify` 内层：读不到是哪一种终态时，这份旧快照也不能再拿来渲染
-          setTx(null)
-          setLoadError('failed')
+          landFailed()
         }
         setConfirmPending(pendingAfterTerminalRefetch(dto))
         if (dto && playsCompletionFx(dto.status)) setFxPhase('on')
         return
       }
       void Taro.showToast({ title: '确认失败，请稍后重试', icon: 'none' })
+      // 重试失败但入口保持（页面仍是写链建立的恢复态）：迟到的写入前快照同样不许把它
+      // 撤销 —— 与 `verify` 那条是同一条不变量（#296 审查发现 1）。
+      landPage()
     } finally {
       if (!isStale(epoch)) setSubmitting(false)
       submitLock.current = releaseLock(submitLock.current, epoch)
@@ -528,9 +588,9 @@ export default function TransactionMeetup() {
    *
    * 尽力而为：失败不改动页面（不弹错、不打到错误态），旧快照仍可操作，下次返回再补。
    *
-   * 三道守卫各管一段，缺一不可（审查 R6）：账号代次管换账号、写入序号管本页写入、
-   * 读取序号管同一账号内两次返回的响应反序。交易读取之后的凭证状态读取是**第二个异步
-   * 窗口**，也必须按同一次读取任务校验。
+   * 三道守卫各管一段，缺一不可（审查 R6）：账号代次管换账号、**落地过**的写入管本页
+   * 写入、读取序号管同一账号内两次返回的响应反序。交易读取之后的凭证状态读取是**第二个
+   * 异步窗口**，也必须按同一次读取任务校验。
    */
   const syncOnShow = async (epoch: number) => {
     const targetId = scanRef.current?.transactionId ?? routeTxId
@@ -544,7 +604,7 @@ export default function TransactionMeetup() {
     showReadSeq.current = readId
     /** 本代次有写入在飞：此刻落地会覆盖写入结果，改为挂起，等写链收尾再补 */
     const writeInFlight = () => submitLock.current === epoch
-    /** 这份快照发出时的写入序号：回来时对不上，说明中途有成过一次的写入 */
+    /** 这份快照发出时的写入**尝试**序号：回来时若有落地过的写入超越它，这份快照就旧了 */
     const seenWrites = writeSeq.current
     try {
       const dto = await fetchTransaction(targetId)
@@ -554,8 +614,10 @@ export default function TransactionMeetup() {
         pendingSync.current = true
         return
       }
-      // 写入已经飞完并落下最新 DTO：这份写入前的快照只会把它盖回去（#147 审查 F2）
-      if (sequenceSuperseded(seenWrites, writeSeq.current)) return
+      // 写入已经飞完并落下最新 DTO：这份写入前的快照只会把它盖回去（#147 审查 F2）。
+      // 只认**落地**的写入（#296 发现 1）：取锁时自增的尝试序号会把「试过但网络失败」
+      // 也算进来，于是这次返回刷新被整份丢掉 —— 页面停在写入前的旧快照。
+      if (writeLandedSince(seenWrites, landedSeq.current)) return
       setTx(dto)
       setLoadError(null)
       if (dto.status !== 'PENDING_MEETUP') {
@@ -580,8 +642,8 @@ export default function TransactionMeetup() {
         pendingSync.current = true
         return
       }
-      // 同上：这一步之前若有写入落定，入口该由写链说了算，别用旧快照覆盖
-      if (sequenceSuperseded(seenWrites, writeSeq.current)) return
+      // 同上：这一步之前若有写入**落地**，入口该由写链说了算，别用旧快照覆盖
+      if (writeLandedSince(seenWrites, landedSeq.current)) return
       // 读不到凭证状态就别动这个标记：失败是「不知道」，不是「没核销」。
       // 当成 false 会把买家从恢复好的确认入口打回 6 位码输入态，而码已 CONSUMED，
       // 手输只会被后端以「已被使用」拒掉 —— 双方都完不成，只能退出重进。

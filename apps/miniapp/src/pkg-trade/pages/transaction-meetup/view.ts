@@ -105,7 +105,9 @@ export function nextConfirmPending(outcome: ConfirmOutcome): boolean {
  * 确认」，正是那条验收要挡住的。但本地快照此刻还停在 `PENDING_MEETUP`，照它渲染出来的
  * 6 位码输入态同样是错的（凭证已经 CONSUMED，再输、再扫都只会被拒）—— 两种渲染都不可信。
  * 所以调用点在 `dto === null` 时必须把这份旧快照一起丢掉，落到「加载失败 + 重试」，由
- * `bootstrap` 重读后落到正确的终态卡。
+ * `bootstrap` 重读后落到正确的终态卡；并且这次落定要记进写链落定序号（`landFailed`），
+ * 否则写入前发出的读取快照迟到时会用旧 `PENDING_MEETUP` 把这张卡整张撤销
+ * （#296 审查发现 2）。
  */
 export function pendingAfterTerminalRefetch(dto: { status: string } | null): boolean {
   return dto !== null && dto.status === 'PENDING_MEETUP'
@@ -131,8 +133,10 @@ export function playsCompletionFx(status: string | null): boolean {
  * 期间已经有更新的任务接管，这份结果落地只会把对方刚写下的状态盖回去 —— 丢比盖安全。
  *
  * 但两个**计数器**必须互相独立，不能用其中一个替代另一个：
- * - `writeSeq`（本页写入，取锁时自增）挡住的是「写入完成并放掉锁之后，写入前发出的读取
- *   快照才落地」。此刻「有没有人持锁」已经是空的，只有写入序号能证明这份快照旧了；
+ * - `writeSeq` / `landedSeq`（本页写入：前者取锁时自增，后者只在写链**落定页面**时跟上）挡住
+ *   的是「写入完成并放掉锁之后，写入前发出的读取快照才落地」。此刻「有没有人持锁」已经
+ *   是空的，只有写入序号能证明这份快照旧了 —— 而且只有**落地**的写入才让页面状态变新，
+ *   判据见 `writeLandedSince`；
  * - `showReadSeq`（返回读取，每次 `syncOnShow` 自增）挡住的是「同一账号内两次返回刷新的
  *   响应反序完成」：第一次读取发出时交易还待面交 → 对方取消 → 再次返回触发第二次读取、
  *   先落到 CANCELLED → 第一次的旧快照最后才到。前后账号代次相同、本页一次写入都没有，
@@ -140,6 +144,33 @@ export function playsCompletionFx(status: string | null): boolean {
  */
 export function sequenceSuperseded(seen: number, current: number): boolean {
   return seen !== current
+}
+
+/**
+ * 返回读取的这份快照，发出之后是否已经有写链**落定过页面**（#296 发现 1）。
+ *
+ * 两个入参在同一个「写入尝试序号」空间里：`seenWrites` 是快照发出时捕获的 `writeSeq`，
+ * `landedWrites` 是此刻 `landedSeq` —— 最近一次**改过页面**的尝试序号。改过页面有两种：
+ * 把最新交易快照写回（`landWrite`），以及写链收尾时落定**恢复态 / 失败态**（`landPage`、
+ * `landFailed`）。
+ *
+ * 为什么不能只看尝试序号：`writeSeq` 在取锁那一瞬就自增，而一条写链可能以**网络失败**
+ * 收尾（核销请求本身就没成功，页面只多了一条输入错误），页面状态一次都没被改写过。按
+ * 「尝试过就丢弃」会把这次返回刷新整个吞掉 —— 用户从扫码页回来看到的仍是写入前的旧快照，
+ * 返回刷新等于没有（#296 发现 1）。
+ *
+ * 为什么「恢复态 / 失败态」也算落定：核销成功但 confirm 失败时页面换成「确认完成面交」
+ * 重试入口，此时凭证已被 CONSUMED —— 放行写入前的快照会撤下入口、把人打回 6 位码输入态，
+ * 再输只会被拒；同理「丢掉不可信的旧快照、落到加载失败态」也不能被这份快照撤销
+ * （#147 审查 F1/F2、#296 发现 3、审查发现 1/2）。
+ *
+ * 为什么是「期间有过落定」而不是「**最后一次**尝试落定」：后者在「先落过一次地、最后
+ * 一次尝试又失败」的窗口里会放行这份旧快照，把已经写成的 `COMPLETED` 倒回
+ * `PENDING_MEETUP`（#147 审查 F2 的同一个坑）。只要期间有过一次落定，页面上的交易状态就
+ * 比这份快照新，丢比盖安全 —— 与本文件其余守卫同一个取舍。
+ */
+export function writeLandedSince(seenWrites: number, landedWrites: number): boolean {
+  return landedWrites > seenWrites
 }
 
 /** 写链收尾时，被挂起的返回刷新该怎么处置。 */
