@@ -19,6 +19,16 @@ mock.module('@tarojs/taro', () => ({ default: {} }))
 // `__DEMO_AUTH__`；不定义会在 import 时 ReferenceError（同 `wishes-api.test.ts`）。
 Object.assign(globalThis, { __DEMO_AUTH__: false, __ALLOW_MOCK_FALLBACK__: true })
 
+/**
+ * 演示兜底那条分支（#304）要走到 `demoOrderViews`，而真实取数会真发请求 —— 把交易 API
+ * 换成可控的失败源，「真实失败 → 退回 fixture」才可复现；失败分类判据仍走真实模块。
+ * 必须在动态 import 之前注册，否则 `fetchers` 已经绑定了真模块（同 mock.module 的纪律）。
+ */
+let ordersFailure: unknown = new Error('用例没有设置失败')
+mock.module('@/features/transaction/api', () => ({
+  fetchAllTransactions: () => Promise.reject(ordersFailure),
+}))
+
 const { nextIdentityState } = await import('../src/features/transaction/useOrderList')
 
 /* ------------------------------------------------------------------ *
@@ -282,5 +292,155 @@ describe('listing-detail —— 「谁在求购」差额说明的原因必须与
     const matchApi = await Bun.file(new URL('../src/features/match/api.ts', import.meta.url)).text()
     expect(matchApi).toContain('const MATCH_LIMIT_MAX = 50')
     expect(matchApi).toContain('limit: number = MATCH_LIMIT_MAX')
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 同批（#304 / #182）：演示订单不许冒充真实订单。
+ *
+ * 症状：开发构建（`NODE_ENV=development`，即 `bun run dev:weapp`）里后端一挂，
+ * 订单页整片换成 fixture（id 是 `t-101` 这种假 id），用户点「打开二维码」就进
+ * 真实面交页 → 404「找不到这笔交易」；点「查看会话」也一样。
+ *
+ * 三处钉子：
+ *   1. 兜底开关只认显式 `TARO_APP_MOCK=1`（development 不再自动打开）；
+ *   2. 投影层把来源写成一等字段（`source: 'real' | 'demo'`），卡片据此打角标；
+ *   3. 演示来源的四条路径（面交页 / 会话页 / 取消 / 评价）在点击时统一拦下。
+ * 组件没有渲染基建，所以第 3 条沿本文件的手法做源码切片断言；第 2 条走真实链路。
+ * ------------------------------------------------------------------ */
+
+const DEMO_BLOCKED = 'const demoBlocked = (item: OrderCardView): boolean => {'
+const OPEN_CONVERSATION = 'const openConversation = (item: OrderCardView) => {'
+const OPEN_MEETUP = 'const openMeetup = (item: OrderCardView) => {'
+const OPEN_LISTING = 'const openListing = (item: OrderCardView) => {'
+
+describe('演示兜底开关 —— 只认显式 TARO_APP_MOCK=1（#304）', () => {
+  test('development 构建不再自动打开兜底：判定里不该再出现 NODE_ENV', async () => {
+    const source = await Bun.file(new URL('../config/index.ts', import.meta.url)).text()
+    const code = codeOnly(source)
+    expect(code).toContain("process.env.TARO_APP_MOCK === '1'")
+    // 修复前这里命中的是 `process.env.NODE_ENV === 'development'`：`bun run dev:weapp`
+    // 这种开发构建会把 t-* / l-* 假交易漏进真实面交页与会话链路（#182 的原始症状）。
+    expect(code).not.toContain('NODE_ENV')
+  })
+})
+
+describe('演示来源的卡 —— 只说明，不跳真实接口页（#304）', () => {
+  test('demoBlocked 只认 source === demo：真实卡原样放行，演示卡给一句说明', async () => {
+    const body = await sliceFlat(DEMO_BLOCKED, OPEN_CONVERSATION)
+    expect(body).toContain("if (item.source !== 'demo') return false")
+    expectAfter(
+      body,
+      "if (item.source !== 'demo') return false",
+      'Taro.showToast(',
+      '真实卡直接放行，只有演示卡才提示',
+    )
+    expect(body).toContain("title: '演示数据，不接入真实交易'")
+  })
+
+  test('查看会话：先拦演示来源，再谈 conversationId 与跳转', async () => {
+    const body = await sliceFlat(OPEN_CONVERSATION, OPEN_MEETUP)
+    expectAfter(
+      body,
+      'if (demoBlocked(item)) return',
+      'if (!item.conversationId)',
+      '演示来源要在会话判定之前拦下',
+    )
+    expectAfter(
+      body,
+      'if (demoBlocked(item)) return',
+      'Taro.navigateTo(',
+      '演示来源的会话不许跳真实会话页',
+    )
+  })
+
+  test('打开二维码 / 交易码：先拦演示来源，再谈跳面交页', async () => {
+    const body = await sliceFlat(OPEN_MEETUP, OPEN_LISTING)
+    expectAfter(
+      body,
+      'if (demoBlocked(item)) return',
+      'Taro.navigateTo(',
+      '演示来源不许跳面交页（t-* 进真实页必然 404）',
+    )
+  })
+
+  test('取消交易 / 读评价边：假 id 不打真实写接口', async () => {
+    const cancel = await sliceFlat(CANCEL, OPEN_REVIEW)
+    expectAfter(cancel, 'if (demoBlocked(item)) return', 'Taro.showModal(', '演示来源不打取消接口')
+    const review = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
+    expectAfter(
+      review,
+      'if (demoBlocked(item)) return',
+      'fetchMyTransactionReview(',
+      '演示来源不打评价接口',
+    )
+  })
+})
+
+describe('订单来源标记 —— 演示 fixture 与契约订单各自可辨（#304）', () => {
+  test('演示兜底：后端不可用时退回 fixture，每张卡都自证 source=demo 的假 id', async () => {
+    ordersFailure = new Error('request:fail network error')
+    const { loadOrders } = await import('../src/features/fetchers')
+    const result = await loadOrders('buyer')
+
+    expect(result.failed).toBe(false)
+    expect(result.failureKind).toBeNull()
+    expect(result.items.length).toBeGreaterThan(0)
+    for (const item of result.items) {
+      expect(item.source).toBe('demo')
+      // 假 id：`t-*` / `l-*` 是 `src/mock/account.ts` 的 TX_SPECS，拿进真实页就是 404
+      expect(item.id.startsWith('t-')).toBe(true)
+      expect(item.listingId.startsWith('l-')).toBe(true)
+    }
+  })
+
+  test('契约订单：标 source=real，且 conversationId 原样带出（seed 台灯单的公开 id）', async () => {
+    const { toOrderCard } = await import('../src/features/transaction/adapt')
+    const { transactionDtoSchema } = await import('@fish/contracts/transactions/schema')
+    const { encodePublicId } = await import('@fish/shared/public-id')
+
+    // 字段逐个取自 packages/db/src/seed.ts 的台灯单：交易 transactionLamp（`ids.transactionLamp`，
+    // seed.ts:64）、会话 conversationLamp（seed.ts:60，`transactionLamp` 的三元组见 seed.ts:302）、
+    // 商品 listingLamp（seed.ts:53，`宿舍护眼台灯` 3000 分 RESERVED）、买家 sellerA（seed.ts:45，阿岚）、
+    // 卖家 buyerB（seed.ts:46，小北）。买家视角的对手方就是卖家小北。
+    //
+    // 这一条只证明**投影不丢字段**：`conversationId` 是原样带出的，不是重算或补空。
+    // 「真实 seed 单的 conversationId 非空」的端到端证据是 `GET /transactions?role=seller` 的真实
+    // 响应（`cnv_01jc000000e008000000000024`，见 PR 正文 AC⑤ 取证），不是这个手搓 DTO。
+    const dto = transactionDtoSchema.parse({
+      id: encodePublicId('txn', '01930000-0000-7000-8000-000000000051'),
+      conversationId: encodePublicId('cnv', '01930000-0000-7000-8000-000000000044'),
+      listingId: encodePublicId('lst', '01930000-0000-7000-8000-000000000014'),
+      buyerId: encodePublicId('usr', '01930000-0000-7000-8000-00000000000a'),
+      sellerId: encodePublicId('usr', '01930000-0000-7000-8000-00000000000b'),
+      role: 'buyer',
+      listing: {
+        id: encodePublicId('lst', '01930000-0000-7000-8000-000000000014'),
+        title: '宿舍护眼台灯',
+        priceCents: 3000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+      counterpart: {
+        id: encodePublicId('usr', '01930000-0000-7000-8000-00000000000b'),
+        nickname: '小北',
+        avatarUrl: null,
+      },
+      amountCents: 2800,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: null,
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      createdAt: '2026-09-14T12:00:00.000Z',
+      updatedAt: '2026-09-14T12:00:00.000Z',
+    })
+
+    const card = toOrderCard(dto)
+    expect(card.source).toBe('real')
+    // 字面值 = seed 那两条 UUIDv7 经 `encodePublicId` 的确定性结果，与接口 / 端上看到的一致
+    expect(card.id).toBe('txn_01jc000000e00800000000002h')
+    expect(card.conversationId).toBe('cnv_01jc000000e008000000000024')
+    expect(card.conversationId).toBe(dto.conversationId)
   })
 })

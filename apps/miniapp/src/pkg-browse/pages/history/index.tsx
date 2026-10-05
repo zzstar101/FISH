@@ -169,7 +169,7 @@ export default function History() {
 
   /**
    * 演示构建才摆演示数据：开关口径是 `MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`
-   * （**不能**只认前一个 —— `dev:weapp` 的日常开发也满足它，会顶掉真实空态）。
+   * （**不能**只认前一个 —— 两个注入点可以单独打开，会顶掉真实空态）。
    */
   const demo = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 

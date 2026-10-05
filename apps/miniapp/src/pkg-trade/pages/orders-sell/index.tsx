@@ -22,7 +22,7 @@ export default function OrdersSell() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
-  const { items, loading, failed, truncated, reload } = useOrderList('seller', userId)
+  const { items, loading, failed, failureKind, truncated, reload } = useOrderList('seller', userId)
   const [showTop, setShowTop] = useState(false)
 
   /** 登录态与身份驱动加载；依赖里带 `userId`，换账号自动重拉自己视角的订单 */
@@ -68,6 +68,7 @@ export default function OrdersSell() {
       items={items}
       loading={loading}
       failed={failed}
+      failureKind={failureKind}
       truncated={truncated}
       showTop={showTop}
       onRetry={() => void reload()}

@@ -17,8 +17,8 @@ import { followingStatsOf } from '../src/features/following/stats'
  * 三条容易做错、错了会被用户当成事实的事，在这里钉住：
  *
  * 1. **只有演示构建才摆 fixture**（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）。
- *    `dev:weapp` 的日常开发只满足前者、且连的是真后端，必须走真接口 —— 只看
- *    `MOCK_FALLBACK_ENABLED` 会把日常开发顶成演示列表。
+ *    两个开关是独立注入点，只满足前者时可能连的是真后端，必须走真接口 ——
+ *    只看 `MOCK_FALLBACK_ENABLED` 会顶掉真实关注列表。
  * 2. **真实行不携带演示字段**：签名与最近活跃在真实数据面没有来源，`dtoRow` 必须把它们
  *    落成空串（页面据此整行不渲染），且真实头像走 `avatarUrl` 而不是 `placeholderBlock`
  *    （后者要与首字叠成两层，前者独占整圆）。
@@ -45,7 +45,7 @@ describe('我的关注：取数口径', () => {
     expect(followingMode(false, false)).toBe('live')
   })
 
-  test('只开 mock 回退（dev:weapp 的日常开发）→ 仍是 live，不摆演示数据', () => {
+  test('只开 mock 回退（两个注入点分开时）→ 仍是 live，不摆演示数据', () => {
     expect(followingMode(true, false)).toBe('live')
   })
 

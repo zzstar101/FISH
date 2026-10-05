@@ -34,6 +34,15 @@ import type { OrderView } from '@/mock/api'
 export type OrderCardView = {
   id: string
   /**
+   * 这张卡的来源（#304 / #182）：`real` = 真实接口投影，`demo` = mock 兜底 fixture。
+   *
+   * **来源是卡片的一等字段**，不能靠 id 前缀或调用方记忆去猜：演示构建里后端挂掉时
+   * 列表会整片换成 fixture，而 fixture 用的是 `t-*` / `l-*` 假 id —— 拿它们去真实面交页 /
+   * 会话页只会 404「找不到这笔交易」。所以 `components/order-list` 据此画「演示数据」
+   * 角标，并拦住一切会落到真实接口的跳转与写操作（见该组件 `demoBlocked`）。
+   */
+  source: 'real' | 'demo'
+  /**
    * 本单的会话。契约 `TransactionDto.conversationId` 是权威值；
    * mock 回退里没有这个字段，按 (listingId, 对方) 解析，解析不到就是 `null`。
    */
@@ -87,6 +96,7 @@ export function toOrderCard(dto: TransactionDto): OrderCardView {
   const settledAt = dto.completedAt ?? dto.cancelledAt
   return {
     id: dto.id,
+    source: 'real',
     conversationId: dto.conversationId,
     listingId: dto.listingId,
     role: dto.role,
@@ -124,6 +134,7 @@ export function toOrderCardFromMock(
   const settledAt = transaction.completedAt ?? transaction.cancelledAt
   return {
     id: transaction.id,
+    source: 'demo',
     conversationId: resolveConversationId(transaction.listingId, transaction.counterpartId),
     listingId: transaction.listingId,
     role: transaction.role,

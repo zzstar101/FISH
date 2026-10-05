@@ -108,7 +108,7 @@ import './index.scss'
 
 const REASONS = reasonsOf('LISTING')
 const REASON_MAX = 200
-/** 演示构建口径：mock 回退与演示登录态**都要**开（只认 MOCK_FALLBACK 会顶掉 dev:weapp 的真实空态） */
+/** 演示构建口径：mock 回退与演示登录态**都要**开（两个注入点可单独打开，只认 MOCK_FALLBACK 会顶掉真实空态） */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 
 /**

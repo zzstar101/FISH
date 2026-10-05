@@ -83,7 +83,12 @@ import {
   fetchSimilarListings,
   searchListings,
 } from './listing/api'
-import { MOCK_FALLBACK_ENABLED, reportFailure } from './load-failure'
+import {
+  classifyFailure,
+  type FailureKind,
+  MOCK_FALLBACK_ENABLED,
+  reportFailure,
+} from './load-failure'
 import { fetchProfile } from './profile/api'
 import { type OrderCardView, toOrderCard, toOrderCardFromMock } from './transaction/adapt'
 import { fetchAllTransactions } from './transaction/api'
@@ -721,6 +726,12 @@ export type LoadedOrders = {
   items: OrderCardView[]
   /** 真实接口失败且**没有**回退 mock（生产口径）→ 页面渲染错误态而不是空态 */
   failed: boolean
+  /**
+   * 失败分类（#304）：`failed` 为真时页面据此换文案 —— 401「登录已过期」、网络
+   * 「网络不可用」、其余（404 / 5xx / 契约漂移）「服务暂时不可用」。成功与演示兜底
+   * 分支都是 `null`（那时没有失败可讲）。分类口径见 `features/load-failure.ts`。
+   */
+  failureKind: FailureKind | null
   truncated: boolean
 }
 
@@ -738,15 +749,23 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
     return {
       items: page.items.map((dto) => toOrderCard(dto)),
       failed: false,
+      failureKind: null,
       truncated: page.truncated,
     }
   } catch (error) {
     reportFailure('订单列表', error)
-    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true, truncated: false }
+    /*
+     * 不回退 mock 时把**分类**一并交给页面（#304）：401 / 网络不可用 / 服务端错误信封
+     * 是三种不同的处境，页面上不能都长成「加载失败，检查网络后重试」。
+     */
+    if (!MOCK_FALLBACK_ENABLED) {
+      return { items: [], failed: true, failureKind: classifyFailure(error), truncated: false }
+    }
     const views = await demoOrderViews(role)
     return {
       items: views.map((view) => toOrderCardFromMock(view, demoOpenConversation)),
       failed: false,
+      failureKind: null,
       truncated: false,
     }
   }
@@ -845,8 +864,8 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
-    // （`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）。照默认值打日志会在
-    // `dev:weapp` 这类「mock 开、演示登录态关」的构建里声称"已回退 mock"，
+    // （`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）。照默认值打日志，只要哪天两个
+    // 开关取值不同就会声称"已回退 mock"，
     // 而实际返回的是 `null` —— 正是 #140 给 `reportFailure` 加这个参数要根除的那种
     // 「日志声称一件没发生的事」。
     reportFailure('个人中心', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)

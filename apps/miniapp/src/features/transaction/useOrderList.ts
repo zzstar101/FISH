@@ -7,6 +7,7 @@
  */
 import { useCallback, useRef, useState } from 'react'
 import { loadOrders } from '@/features/fetchers'
+import type { FailureKind } from '@/features/load-failure'
 import type { OrderCardView } from './adapt'
 
 /** 状态筛选的键：`ALL` + 契约的三个交易状态 */
@@ -17,6 +18,11 @@ export type OrderListData = {
   loading: boolean
   /** 真实接口失败且**没有**回退 mock —— 页面渲染错误态，而不是空态 */
   failed: boolean
+  /**
+   * 失败分类（#304）。`failed` 为假时恒为 `null`；为真时页面用它换文案：
+   * 401「登录已过期」/ 网络「网络不可用」/ 其余「服务暂时不可用」。
+   */
+  failureKind: FailureKind | null
   /** 列表不完整（翻页到上限，或服务端游标没前进）—— 不能拿它的长度当总数 */
   truncated: boolean
   /**
@@ -58,6 +64,7 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
   const [items, setItems] = useState<OrderCardView[]>([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
+  const [failureKind, setFailureKind] = useState<FailureKind | null>(null)
   const [truncated, setTruncated] = useState(false)
 
   /**
@@ -87,6 +94,7 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
     setItems([])
     setLoading(true)
     setFailed(false)
+    setFailureKind(null)
     setTruncated(false)
   }
 
@@ -102,7 +110,7 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
     (options?: { keepList?: boolean }): Promise<void> => {
       /*
        * 登录态未就绪 / 已退出：**不发请求**。`/transactions` 整条挂在 requireAuth 之下，
-       * 这个时点发出去必然 401 —— 开发 / 预览构建还会被那次 401 退成 mock。页面在
+       * 这个时点发出去必然 401 —— 演示构建还会被那次 401 退成 mock。页面在
        * `authed` 之后由登录态 effect 补一次，请求不会丢。
        */
       if (userIdRef.current === null) return Promise.resolve()
@@ -123,13 +131,14 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
           setTruncated(result.truncated)
         }
         setFailed(result.failed)
+        setFailureKind(result.failureKind)
         setLoading(false)
       })
     },
     [role],
   )
 
-  return { items, loading, failed, truncated, reload }
+  return { items, loading, failed, failureKind, truncated, reload }
 }
 
 /** 各状态计数（含 `ALL`）。全部由拿到的那份列表算出，不写死任何数字 */

@@ -12,13 +12,19 @@ const runtimeRequire = createRequire(miniappRequire.resolve('@tarojs/runtime'))
 // https://docs.taro.zone/docs/config
 export default defineConfig<'webpack5'>(async (merge) => {
   /**
-   * 演示兜底开关的**构建期**口径，与下面 `defineConstants.__ALLOW_MOCK_FALLBACK__` 用的是
-   * 同一个表达式（那处一字未动）：`TARO_APP_MOCK=1` 的本地演示、以及
-   * `NODE_ENV=development` 的 dev 构建都要保留 fixture 兜底；其余（含
-   * `bun run build:weapp`）一律切掉。
+   * 演示兜底开关的**构建期**口径（两处注入点见下：这里的 alias 与
+   * `defineConstants.__ALLOW_MOCK_FALLBACK__`，本次一起收窄成同一个表达式）：
+   * **只认显式的 `TARO_APP_MOCK=1`**（本地演示），
+   * 其余（含 `bun run build:weapp` 与 `bun run dev:weapp`）一律切掉。
+   *
+   * `NODE_ENV=development` 不再打开兜底（#304 / #182）。它此前是默认打开的那一支，
+   * 而 dev 构建正是「接着真实后端联调」的构建：后端没起、断网或域名配错时，订单页会
+   * 静默换成演示订单，那些订单带的是 `t-*` / `l-*` **假 id** —— 点「打开二维码」进真实
+   * 面交页拿 404「找不到这笔交易」，点「查看会话」拿假 id 打真实会话接口。开发时想看
+   * 演示数据就显式写 `TARO_APP_MOCK=1`：让「现在看的是假数据」由命令本身说清楚，
+   * 而不是由构建模式替使用者决定。
    */
-  const allowMockFallback =
-    process.env.TARO_APP_MOCK === '1' || process.env.NODE_ENV === 'development'
+  const allowMockFallback = process.env.TARO_APP_MOCK === '1'
 
   const baseConfig: UserConfigExport<'webpack5'> = {
     projectName: 'fish-miniapp',
@@ -83,33 +89,34 @@ export default defineConfig<'webpack5'>(async (merge) => {
       /**
        * 是否允许「真实接口失败 → 退回 mock fixture」（读取处 `src/features/fetchers.ts`）。
        *
-       * 这是**开发 / 预览**的兜底，不是生产数据策略：生产下后端挂掉、域名配错或契约漂移时，
+       * 这是**本地演示**的兜底，不是生产数据策略：生产下后端挂掉、域名配错或契约漂移时，
        * 用户必须看到错误态，而不是一批「看起来正常」的假商品。所以默认关，
-       * 只在显式给 `TARO_APP_MOCK=1`（本地演示）或 `NODE_ENV=development` 时打开。
+       * 只在显式给 `TARO_APP_MOCK=1`（本地演示）时打开。
+       *
+       * `NODE_ENV=development` **不再**打开它（#304 / #182，口径见上面 `allowMockFallback`
+       * 的说明）：dev 构建是联调构建，静默回退会把 `t-*` 假 id 漏进真实面交页 / 会话链路。
        *
        * `taro build` 走 production，因此 `bun run build:weapp` 默认**不退 mock**；
        * 想在开发者工具里看 mock 演示页，用 `TARO_APP_MOCK=1 bun run build:weapp`。
        */
-      __ALLOW_MOCK_FALLBACK__: JSON.stringify(
-        process.env.TARO_APP_MOCK === '1' || process.env.NODE_ENV === 'development',
-      ),
+      __ALLOW_MOCK_FALLBACK__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
       /**
        * 演示登录态（读取处 `src/features/auth/demo.ts`）：是否用一个**内置的演示账号**
        * 直接进入已登录态，让受限页在本地没有后端时也能打开。
        *
-       * **刻意不复用 `__ALLOW_MOCK_FALLBACK__`**：那个开关还包含 `NODE_ENV=development`
-       * （`bun run dev:weapp` 的 watch 构建），而「自动登录」会把日常开发要看的匿名态、
-       * 登录引导、注册流程全部顶掉 —— 那是调试路径，不该被演示态盖住。
-       * 所以这里只认显式的 `TARO_APP_MOCK=1`。
+       * 收窄后它与 `__ALLOW_MOCK_FALLBACK__` **同源**（都只认 `TARO_APP_MOCK=1`，见上面
+       * `allowMockFallback` / #304），但仍是**两个独立注入点**：H5 预览产物
+       * （`preview/build.mjs`）按需分别注入这几个常量，而「进页面就当已登录」与
+       * 「接口失败退 fixture」本来就是两件事 —— 谁需要谁显式打开。
        */
       __DEMO_AUTH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
       /**
        * AI 润色的 mock 兜底门禁（读取处 `src/features/ai/api.ts`）。
        *
-       * **只认显式的 `TARO_APP_MOCK=1`**，与 `__DEMO_AUTH__` 同形、同样刻意不复用
-       * `__ALLOW_MOCK_FALLBACK__`：后者还包含 `NODE_ENV=development`，`dev:weapp` 下
-       * 润色失败会静默摆出本地假候选，而那些候选带着 `provider='stub'` 角标、与真实
-       * stub 传输的候选长得一样，现场分不清"接的是后端还是兜底"（#142 设计 §10.2）。
+       * **只认显式的 `TARO_APP_MOCK=1`**，与 `__DEMO_AUTH__` 同形、同样不复用
+       * `__ALLOW_MOCK_FALLBACK__`（#142 设计 §10.2）：润色失败会摆出本地假候选，而那些
+       * 候选带着 `provider='stub'` 角标、与真实 stub 传输的候选长得一样，现场分不清
+       * "接的是后端还是兜底"；这个开关宁可只跟显式演示命令绑定，也不要跟着别的开关被动打开。
        *
        * 且它只覆盖**传输层失败**（后端没起 / 断网）：服务端一旦给出错误信封，一律照常
        * 走真实错误 UI —— 否则 429 会一边倒计时一边摆假候选。

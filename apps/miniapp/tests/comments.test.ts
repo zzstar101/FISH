@@ -362,7 +362,7 @@ describe('我的评论 · 演示开关', () => {
     expect(demoCommentsEnabled(true, true)).toBe(true)
   })
 
-  test('只开 mock 回退、没开演示登录态 → 不给演示数据（dev:weapp 日常开发不能顶掉真实接口）', () => {
+  test('只开 mock 回退、没开演示登录态 → 不给演示数据（缺一不可，真实接口优先）', () => {
     expect(demoCommentsEnabled(true, false)).toBe(false)
   })
 
@@ -381,24 +381,23 @@ describe('我的评论 · 演示开关', () => {
  * 上面四例只覆盖纯函数 `demoCommentsEnabled`；把 `load.ts` 里那行喂参写成
  * `demoCommentsEnabled(MOCK_FALLBACK_ENABLED, MOCK_FALLBACK_ENABLED)`（即只看 mock 回退）
  * 照样能让它们全绿，而这恰好是 `load.ts` 文件头花两段篇幅要防的那件事：
- * `dev:weapp` 的 watch 构建 `__ALLOW_MOCK_FALLBACK__` 为 true、`__DEMO_AUTH__` 为 false，
- * 只认前者就会让演示数据顶掉真实接口。
+ * 只认 `__ALLOW_MOCK_FALLBACK__`（`__DEMO_AUTH__` 关）时，演示数据会顶掉真实接口。
  *
  * 手法与 `tests/order-list-state.test.ts` 一致：先 `mock.module` 顶掉 Taro，再
  * `Object.assign` 上构建期开关，最后**动态** import（静态 import 会被提升到 mock 之前）。
  *
  * **为什么只测一个组合**：两个开关是 `load.ts` 的**依赖模块**在求值期读的，
  * 依赖模块在同一个测试进程里只求值一次（详见该文件在 #196 时代的完整论证）。
- * 这里只测**唯一真正有判别力的那个组合**：`dev:weapp` 的（mock 回退 true、演示登录 false），
- * 它正是上面那条回归。其余组合由纯函数那四例覆盖。
+ * 这里只测**唯一真正有判别力的那个组合**（mock 回退 true、演示登录 false，
+ * 两个注入点分开时可能出现），它正是上面那条回归。其余组合由纯函数那四例覆盖。
  */
 describe('我的评论 · 开关接线（load.ts 真读两个开关）', () => {
   mock.module('@tarojs/taro', () => ({ default: {} }))
 
-  // `dev:weapp`（`taro build --watch` → NODE_ENV=development）的实际注入值
+  // 兜底开、演示登录关（#304 起 `dev:weapp` 不再产生这个组合；两个注入点分开时仍可能出现）
   Object.assign(globalThis, { __ALLOW_MOCK_FALLBACK__: true, __DEMO_AUTH__: false })
 
-  test('dev:weapp 组合（mock 回退开、演示登录关）→ 不给演示数据，页面走真实接口', async () => {
+  test('兜底开 / 演示登录关 → 不给演示数据，页面走真实接口', async () => {
     const flags = await import('../src/features/load-failure')
     const demoAuth = await import('../src/features/auth/demo')
     // 先确认开关本身确实取到了上面注入的值（否则下面的断言会因为别的原因绿）

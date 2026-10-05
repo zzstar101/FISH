@@ -23,7 +23,7 @@ import { useOrderList } from '@/features/transaction/useOrderList'
  *
  * 请求**只由登录态与身份驱动**（`useEffect` on `[authed, userId]`），不在 `useLoad`
  * 里抢跑：冷启动 `authStatus` 还是 `unknown` 时就发 `GET /transactions`，会先以
- * 未登录身份失败（开发 / 预览构建还会被那次 401 回退成 mock），随后恢复 `authed`
+ * 未登录身份失败（演示构建还会被那次 401 回退成 mock），随后恢复 `authed`
  * 也不会自动重试 —— 页面停在错误态。改为 `authed` 后才发，`unknown → authed`
  * 自然触发首次加载；身份一变（换账号 / 退出）由 `useOrderList` 的渲染期重置清场。
  *
@@ -34,7 +34,7 @@ export default function OrdersBuy() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
-  const { items, loading, failed, truncated, reload } = useOrderList('buyer', userId)
+  const { items, loading, failed, failureKind, truncated, reload } = useOrderList('buyer', userId)
   const [showTop, setShowTop] = useState(false)
 
   /** 登录态与身份驱动加载；依赖里带 `userId`，换账号自动重拉自己视角的订单 */
@@ -81,6 +81,7 @@ export default function OrdersBuy() {
       items={items}
       loading={loading}
       failed={failed}
+      failureKind={failureKind}
       truncated={truncated}
       showTop={showTop}
       onRetry={() => void reload()}

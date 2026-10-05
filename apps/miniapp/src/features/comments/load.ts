@@ -10,10 +10,10 @@
  * MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
  * ```
  *
- * 两条都不能少：
- * - 只认 `MOCK_FALLBACK_ENABLED` → `dev:weapp` 的日常开发也满足它（`__ALLOW_MOCK_FALLBACK__`
- *   含 `NODE_ENV === 'development'`），演示数据会顶掉真实接口 —— 而真实路径现在存在，
- *   必须让它优先；
+ * 两条都不能少（#304 起两个常量在 miniapp 构建里同源，但仍是两个独立注入点：
+ * miniapp 构建读 `config/index.ts`，H5 预览读 `preview/build.mjs`，将来可以分开取值）：
+ * - 只认 `MOCK_FALLBACK_ENABLED` → 兜底开着而演示登录态没开时，页面拿不到身份，
+ *   演示评论会挂在一个不存在的账号下；
  * - 只认 `DEMO_AUTH_ENABLED` → 演示登录态开着但真起了后端时，看不出「真实构建长什么样」。
  *
  * 真实构建的请求失败**不回演示**：失败态由页面展示错误与重试（#195 冻结口径：
