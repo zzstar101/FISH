@@ -1613,8 +1613,9 @@ export default function ListingDetail() {
                   ))}
                 </View>
                 {/*
-                  `total` 是阈值过滤后的**全量**条数，`items` 只是这一页（服务端默认 10 条）
-                  —— 契约明写两者不该互相推导。并排摆着「谁在求购 · 25」却只列 10 行，
+                  `total` 是阈值过滤后的**全量**条数，`items` 只是这一页（本页每次按
+                  `MATCH_LIMIT_MAX = 50` 满额取，见 features/match/api.ts 的默认上限）
+                  —— 契约明写两者不该互相推导。并排摆着「谁在求购 · 25」却只有几行，
                   会被读成「这 25 位都在下面」，所以差额要如实说清。
                 */}
                 {matches.total > matches.items.length ? (
