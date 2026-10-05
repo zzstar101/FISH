@@ -28,6 +28,7 @@ import { conditionLabel } from '@/lib/listing-labels'
 import { formatAmount } from '@/lib/money'
 import { isApiError } from '@/lib/request'
 import type { MockListing, MockUser } from '@/mock/types'
+import { wantsLabel } from './wants-label'
 import './index.scss'
 
 /** 长按菜单的选项；顺序即 `tapIndex`，判定用它而不是文案 */
@@ -233,6 +234,8 @@ export default function ProductCard({
   // 已隐藏的卡片整张不渲染（hooks 全部在上面，条件分支之后没有 hooks）
   if (hidden || ownHidden) return null
 
+  const wantsText = wantsLabel(listing.wants)
+
   return (
     <View
       className="pcard"
@@ -262,11 +265,8 @@ export default function ProductCard({
             <Text className="pcard__cur">¥</Text>
             <Text className="pcard__amt">{price}</Text>
           </View>
-          {/* 想要数取自契约 `ListingCardSchema.wants`（= 该商品已建会话的买家数）；
-              字段缺席（老 mock 记录）时整块不渲染，不编成 0 */}
-          {listing.wants === null ? null : (
-            <Text className="pcard__want">{`${listing.wants}人想要`}</Text>
-          )}
+          {/* 只有拿到真数才画；非数字（含 `undefined`）按"没有这个数"处理，不编成 0（#406 第 5 项） */}
+          {wantsText === null ? null : <Text className="pcard__want">{wantsText}</Text>}
         </View>
 
         {/*
