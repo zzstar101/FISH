@@ -21,9 +21,11 @@ import { conversations } from './schema/conversations'
  * 这条复合外键保证同一商品的所有会话卖家恒等（`seller_id` 由 `listing_id` 函数决定），
  * 所以这里与 watchers 端点里那句带 `seller_id` 的 `total` 数的是同一批行。
  *
- * `listingId` 必须由调用方给出**带限定**的列引用：drizzle 的 `listings.id` 会渲染成
- * `"listings"."id"`；在裸 SQL（`FROM listings l`）里表名被别名遮住，要传
- * `sql.raw('l.id')`。传裸 `sql\`id\`` 会被解析成子查询作用域里的
+ * `listingId` 必须由调用方给出**带限定**的列引用。注意 drizzle 只在**多表**查询里自动限定：
+ * 真实调用点都是 `.from(...).innerJoin(...)`，`listings.id` 渲染成 `"listings"."id"`，正确；
+ * 而单表 `.from(listings)` 的 select 列表里它渲染成裸 `"id"`，进到子查询作用域后先解析到
+ * `conversations.id`（条件恒假）→ 静默得 0。所以单表调用点、以及裸 SQL（`FROM listings l`，
+ * 表名被别名遮住）都要传 `sql.raw('l.id')`。传裸 `sql\`id\`` 会被解析成子查询作用域里的
  * `listing_images.id` 之类，静默恒为 0（同 `users/store.ts` 封面那处踩过的坑）。
  *
  * 参数类型是 `SQLWrapper`（`SQL` 与 `PgColumn` 都满足），这样 drizzle 的查询构造器里
