@@ -36,7 +36,7 @@ function BlockedContent({ ownerId }: { ownerId: string }) {
         <div>
           <h1 className="font-semibold text-[26px] tracking-[-0.03em]">黑名单</h1>
           <p className="mt-1.5 text-ink-3 text-sm">
-            拉黑后你们双方都无法互发消息、也无法新建会话；解除后立即恢复。
+            拉黑后你们双方都无法互发消息、也无法新建会话；解除是单方的——对方若也拉黑了你，需对方一并解除后才恢复。
           </p>
         </div>
         <p className="text-ink-3 text-xs">真实 API · 游标翻页</p>
