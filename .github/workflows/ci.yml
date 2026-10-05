@@ -317,7 +317,13 @@ jobs:
           if [ "${{ needs.changes.outputs.miniapp }}" = "true" ]; then targets+=(apps/miniapp); fi
           if [ "${{ needs.changes.outputs.contracts }}" = "true" ]; then targets+=(packages/contracts); fi
           if [ "${{ needs.changes.outputs.shared }}" = "true" ]; then targets+=(packages/shared); fi
-          if [ "${{ needs.changes.outputs.full }}" = "true" ]; then targets+=(scripts); fi
+          # 必须是 `./scripts`（带 `./`），不能写成裸 `scripts`：`bun test <位置参数>` 是按
+          # **文件路径子串**匹配的，裸 `scripts` 会连 `apps/worker/scripts/**`、`packages/db/scripts/**`
+          # 一起收进来 —— 那些是**要 Postgres 的集成测试**（本 job 没有 DB service），main 上全量跑时
+          # 会以 `PostgresError: Failed to connect` 红掉（#457 引入 `apps/worker/scripts/obs-summary.test.ts`
+          # 后暴露）。带 `./` 时 bun 按目录解析，只跑仓库根的 `scripts/`。
+          # 那些 `apps/*/scripts` 的用例由 `db-tests`（目标含 `apps/worker` / `packages/db`，有 DB）覆盖。
+          if [ "${{ needs.changes.outputs.full }}" = "true" ]; then targets+=(./scripts); fi
           if [ "${#targets[@]}" -eq 0 ]; then
             echo "::error::unit_tests 为真却没有任何测试目录，改动范围计算有问题" >&2
             exit 1
