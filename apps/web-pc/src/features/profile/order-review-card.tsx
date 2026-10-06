@@ -82,6 +82,19 @@ export function OrderReviewCardView(props: OrderReviewCardViewProps) {
           {props.review.body ? (
             <p className="mt-2 font-medium text-sm">{props.review.body}</p>
           ) : null}
+          {/* #475：配图按 sort_order 展示（读模型已按序拼好 URL）。 */}
+          {props.review.images.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {props.review.images.map((image, index) => (
+                <img
+                  alt={`评价配图 ${index + 1}`}
+                  className="size-20 rounded-xl border border-line object-cover"
+                  key={image.url}
+                  src={image.url}
+                />
+              ))}
+            </div>
+          ) : null}
           <p className="mt-2 text-ink-3 text-xs">你已评价过这笔交易；评价发出后不可修改。</p>
         </div>
       ) : (
