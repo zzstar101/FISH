@@ -358,13 +358,13 @@ export function createMessageService({
       // 不重复 parse——内部误用时 ZodError 落 app.onError 而不是 422，反而更难查。
       const conversation = await store.findConversationForUser(conversationId, userId)
       if (!conversation) throw notFound()
-      await assertNotBlocked(conversation, userId)
       const content = input.content.trim()
       // #67 幂等键：指纹取 trim 后的正文（与落库的 content 同一值）；未携带键时为 null。
       // 引用不进指纹：同一正文 + 同一 clientRequestId 换引用目标是同一个发送请求的重试，
       // 重放既有行（含它当时的引用）才是「重试」的正确语义。
       const key = messageSendKey(input.clientRequestId, textRequestHash(content))
-      // 重试快速路径（与媒体域同一取舍）：命中幂等键就**直接重放既有行**，先于引用目标校验。
+      // 重试快速路径（与媒体域同一取舍）：命中幂等键就**直接重放既有行**，先于引用目标校验
+      // 与拉黑守卫。
       // 否则「第一次其实已落库、响应丢了」的重试会因为被引用那条此刻已撤回而撞 422
       // （消息早发出去了，客户端却以为没发成）。权威去重仍在 insertText 的事务里。
       if (key) {
@@ -383,6 +383,12 @@ export function createMessageService({
           return dto
         }
       }
+      /*
+       * #466 拉黑守卫（双向）：放在幂等重放**之后**——「首发已落库、响应丢了」的重试必须
+       * 重放既有行，否则客户端会把一条早已送达的消息当成本次发送失败（与上面「重放先于
+       * 引用校验」同一顺序口径）。真正的新发送仍然在这里被拦下。
+       */
+      await assertNotBlocked(conversation, userId)
       // 引用目标先校验（#359 3c）：不可用直接 422，不落库。
       const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
       let row: MessageRow
@@ -416,7 +422,6 @@ export function createMessageService({
       // 非参与者与「会话不存在」同码（域内既有口径，见 listMessages 的同名注释）：
       // LISTING_NOT_FOUND 只表达「商品不可见」，不用于会话侧的身份判定。
       if (!conversation) throw notFound()
-      await assertNotBlocked(conversation, userId)
 
       // content 就是公开 id（引用而非用户正文）；指纹取同一个值，重试用同一个键即可重放。
       const key = messageSendKey(input.clientRequestId, listingRequestHash(input.listingId))
@@ -438,6 +443,12 @@ export function createMessageService({
         onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
         return dto
       }
+
+      /*
+       * #466 拉黑守卫（双向）：与 TEXT 同序——幂等重放之后、真正落库之前。守卫拦的是
+       * 新分享，不是「首发成功后的重试」。
+       */
+      await assertNotBlocked(conversation, userId)
 
       /*
        * 「存在且可见」的口径 = 公开在售的可见性判据 `status = 'ACTIVE' AND

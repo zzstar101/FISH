@@ -113,7 +113,8 @@ export async function seed(tx: SeedTx): Promise<void> {
   // / `comments`（#111，引用 users 与 listings）/ `transaction_meetup_tokens`（#70，引用
   // users 与 transactions）/ `ai_polish_requests`（#141，引用 users）/ `wechat_identities`
   // （#86，引用 users 且 ON DELETE CASCADE）/ `listing_media_objects`（#286，引用 users）
-  // / `favorites`（#190）/ `follows`（#188）/ `transaction_reviews`（#195，引用 users 与
+  // / `favorites`（#190）/ `follows`（#188）/ `user_blocks`（#466，引用 users）/
+  // `transaction_reviews`（#195，引用 users 与
   // transactions）/ `transaction_review_images`（#195，引用 transaction_reviews）/
   // `embeddings`（#322 M1，引用 listings 与 wishes，ON DELETE CASCADE）/ `recommendation_events`
   // 与 `recommendation_requests`（#323，分别引用 users/listings 与 users）/ `recommendation_request_items`

@@ -54,7 +54,7 @@ function BlockedContent({ ownerId }: { ownerId: string }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <BlockedRow item={item} key={item.id} ownerId={ownerId} />
+            <BlockedRow item={item} key={item.id} />
           ))}
         </Card>
       ) : null}
@@ -76,8 +76,7 @@ function BlockedContent({ ownerId }: { ownerId: string }) {
 }
 
 /** 单行：公开资料 + 拉黑时刻 + 解除按钮（解除是恢复性动作，直接执行不需要确认弹窗）。 */
-export function BlockedRow({ item, ownerId }: { item: BlockedUser; ownerId: string }) {
-  void ownerId
+export function BlockedRow({ item }: { item: BlockedUser }) {
   const unblock = useUnblockUser(item.id)
   const failure = unblock.data?.kind === 'failed' ? unblock.data.message : null
 

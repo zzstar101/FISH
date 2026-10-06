@@ -231,6 +231,46 @@ describe('media message service', () => {
     })
   })
 
+  /*
+   * #466：presign 与 create 同挂守卫。只挡 create 不够——被拉黑方仍能拿到签名 URL
+   * 并把字节传进 storage（create 才 403，消息不落库），在对象存储留下无主对象。
+   */
+  test('拉黑守卫：presign 同样被拦（不得只挡 create）', async () => {
+    const service = setup({}, {}, { existsBlockBetween: async () => true })
+    await expect(
+      service.presign(userId, conversationId, {
+        kind: 'IMAGE',
+        contentType: 'image/webp',
+        sizeBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+
+  /*
+   * #466 × #67：create 的守卫与 TEXT/LISTING 同序——在幂等重放**之后**、真正落库之前。
+   * 首发已落库、响应丢了之后才出现拉黑边时，重试必须重放既有媒体（否则客户端把一条
+   * 早已送达的消息当成本次发送失败）；没有幂等键的新上传仍被拦。
+   */
+  test('拉黑守卫：已落库的媒体重试不被 403 抢走，新上传仍被拦', async () => {
+    let blocked = false
+    const stored = row(image)
+    const service = setup(
+      { findByRequestKey: async () => ({ row: stored, matchedHash: true }) },
+      {},
+      { existsBlockBetween: async () => blocked },
+    )
+    const clientRequestId = '01930000-0000-7000-8000-0000000000e2'
+    const replayed = await service.create(userId, conversationId, { ...image, clientRequestId })
+    expect(replayed.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
+    blocked = true
+    const retry = await service.create(userId, conversationId, { ...image, clientRequestId })
+    expect(retry.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
+    await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
+      status: 403,
+      code: 'CONVERSATION_UNAVAILABLE',
+    })
+  })
+
   test('rejects outsiders and keeps media access participant-scoped', async () => {
     const service = setup({ participant: async () => null })
     await expect(

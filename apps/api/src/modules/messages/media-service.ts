@@ -150,6 +150,28 @@ function dto(
   })
 }
 
+/**
+ * #466 拉黑守卫（双向）：presign 与 create 共用同一谓词、同一中性码。
+ *
+ * 只挡 create 不够——被拉黑方仍能拿到 presign 的签名 URL 并把字节 PUT 进 storage
+ * （create 才 403，消息不落库），在对象存储留下无主对象，且让「限制在服务端」落空。
+ */
+function makeBlockAssertion(blocks: BlockRelationCheck) {
+  return async function assertNotBlocked(
+    participants: { buyerId: string; sellerId: string },
+    userId: string,
+  ): Promise<void> {
+    const other = participants.buyerId === userId ? participants.sellerId : participants.buyerId
+    if (await blocks.existsBlockBetween(userId, other)) {
+      throw new MediaMessageServiceError(
+        403,
+        'CONVERSATION_UNAVAILABLE',
+        '会话当前不可用，暂时无法发送媒体',
+      )
+    }
+  }
+}
+
 export function createMediaMessageService({
   store,
   storage,
@@ -167,9 +189,12 @@ export function createMediaMessageService({
     media: MediaMessageDto,
   ) => void
 }): MediaMessageService {
+  const assertNotBlocked = makeBlockAssertion(blocks)
   return {
     async presign(userId, conversationId, input) {
-      if (!(await store.participant(conversationId, userId))) throw notFound()
+      const participant = await store.participant(conversationId, userId)
+      if (!participant) throw notFound()
+      await assertNotBlocked(participant, userId)
       if (
         input.kind === 'IMAGE' &&
         (!imageMime(input.contentType) || input.sizeBytes > MEDIA_MAX_IMAGE_BYTES)
@@ -195,15 +220,6 @@ export function createMediaMessageService({
     async create(userId, conversationId, input) {
       const participant = await store.participant(conversationId, userId)
       if (!participant) throw notFound()
-      // #466 拉黑守卫（双向）：媒体与文本/商品卡同一谓词、同一中性码（CONVERSATION_UNAVAILABLE）。
-      const other = participant.buyerId === userId ? participant.sellerId : participant.buyerId
-      if (await blocks.existsBlockBetween(userId, other)) {
-        throw new MediaMessageServiceError(
-          403,
-          'CONVERSATION_UNAVAILABLE',
-          '会话当前不可用，暂时无法发送媒体',
-        )
-      }
       // 引用目标先校验（#359 3c）：不可用直接 422，不做 stat / probe / 快照写入。
       let replyToId: string | null
       try {
@@ -246,6 +262,12 @@ export function createMediaMessageService({
           )
         }
       }
+      /*
+       * #466 拉黑守卫（双向）：与文本/商品卡同一谓词、同一中性码
+       * （CONVERSATION_UNAVAILABLE），且与 TEXT/LISTING 同序——幂等重放之后、真正落库
+       * 之前。只拦新上传，不把「首发已落库后的重试」判成本次发送失败。
+       */
+      await assertNotBlocked(participant, userId)
       const prefix = `chat-media/${encodePublicId(PUBLIC_ID_PREFIX.conversation, conversationId)}/${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
       if (!isSafeObjectKey(input.objectKey))
         throw invalid('MEDIA_OBJECT_INVALID', '媒体对象键不合法')

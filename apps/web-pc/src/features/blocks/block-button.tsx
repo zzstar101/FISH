@@ -89,7 +89,7 @@ export function BlockButtonView({
 
 /** 容器：读状态 + 两个 mutation + 拉黑确认弹窗。 */
 export function BlockAction({ nickname, userId }: { nickname: string; userId: string }) {
-  const state = useBlockState(userId, true)
+  const state = useBlockState(userId)
   const blockMutation = useBlockUser(userId)
   const unblockMutation = useUnblockUser(userId)
   const [confirming, setConfirming] = useState(false)

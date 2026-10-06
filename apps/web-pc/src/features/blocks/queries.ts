@@ -2,7 +2,13 @@ import type { UseMutationResult } from '@tanstack/react-query'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { currentSessionGeneration } from '../../lib/session-cache'
 import type { BlockStateOutcome, BlockWriteResult } from './api'
-import { fetchBlockState, fetchMyBlocks, requestBlock, requestUnblock } from './api'
+import {
+  BLOCKS_PAGE_LIMIT,
+  fetchBlockState,
+  fetchMyBlocks,
+  requestBlock,
+  requestUnblock,
+} from './api'
 
 /**
  * 拉黑域查询与变更（#466）。queryKey 一律 `['pc','blocks',…]`：切号时
@@ -19,7 +25,8 @@ export const blocksKeys = {
 export function useMyBlocks(ownerId: string) {
   return useInfiniteQuery({
     queryKey: blocksKeys.list(),
-    queryFn: ({ pageParam }) => fetchMyBlocks({ limit: 20, cursor: pageParam ?? undefined }),
+    queryFn: ({ pageParam }) =>
+      fetchMyBlocks({ limit: BLOCKS_PAGE_LIMIT, cursor: pageParam ?? undefined }),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== '',
@@ -31,11 +38,10 @@ export function useMyBlocks(ownerId: string) {
  * 与某人的拉黑状态。失败收口成 outcome（不抛错）：`notFound` 降级「无法拉黑」，
  * `failed` 保留重试——两种都不能让按钮假装成未拉黑可点。
  */
-export function useBlockState(userId: string, enabled: boolean) {
+export function useBlockState(userId: string) {
   return useQuery({
     queryKey: blocksKeys.state(userId),
     queryFn: () => fetchBlockState(userId),
-    enabled,
     staleTime: 0,
   })
 }
@@ -63,12 +69,14 @@ function applyBlockWrite(
   void queryClient.invalidateQueries({ queryKey: blocksKeys.list() })
 }
 
-export function useBlockUser(
+/** 拉黑 / 解除共用的写路径：同一个「以服务端结论更新缓存」的收口。 */
+function useBlockWriteMutation(
   userId: string,
+  request: (userId: string) => Promise<BlockWriteResult>,
 ): UseMutationResult<BlockWriteResult, Error, void, SessionMutationContext> {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => requestBlock(userId),
+    mutationFn: () => request(userId),
     onMutate: captureSession,
     onSuccess: (result, _variables, context) => {
       if (!isSessionCurrent(context)) return
@@ -77,16 +85,14 @@ export function useBlockUser(
   })
 }
 
+export function useBlockUser(
+  userId: string,
+): UseMutationResult<BlockWriteResult, Error, void, SessionMutationContext> {
+  return useBlockWriteMutation(userId, requestBlock)
+}
+
 export function useUnblockUser(
   userId: string,
 ): UseMutationResult<BlockWriteResult, Error, void, SessionMutationContext> {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: () => requestUnblock(userId),
-    onMutate: captureSession,
-    onSuccess: (result, _variables, context) => {
-      if (!isSessionCurrent(context)) return
-      if (result.kind === 'written') applyBlockWrite(queryClient, userId, result)
-    },
-  })
+  return useBlockWriteMutation(userId, requestUnblock)
 }

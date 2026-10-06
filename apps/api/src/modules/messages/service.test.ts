@@ -42,8 +42,8 @@ function listingBrief(
 
 /** SQL store 的插入路径由 store 负责；service 测试只关心「注入了哪个商店 + storage」。 */
 const neverBlocked = { existsBlockBetween: async () => false }
-const serviceOf = (store: MemoryMessageStore) =>
-  createMessageService({ store, storage, blocks: neverBlocked })
+const serviceOf = (store: MemoryMessageStore, blocks = neverBlocked) =>
+  createMessageService({ store, storage, blocks })
 
 describe('message service: listMessages', () => {
   test('returns ascending messages with sender info', async () => {
@@ -694,5 +694,59 @@ describe('message service: 幂等重放先于引用校验（#365 审查）', () 
     expect(retry.id).toBe(first.id)
     expect(retry.replyTo).toBeNull()
     expect(internalIdOf(retry.id)).toBe(internalIdOf(first.id))
+  })
+})
+
+describe('message service: 幂等重放先于拉黑守卫（#466 审查）', () => {
+  /*
+   * 守卫若抢在重放之前，会把「首发已落库、响应丢了」的重试判成 403：客户端以为没发出去，
+   * 而消息其实早已送达（与上面「重放先于引用校验」同一顺序口径）。守卫只拦新发送。
+   */
+  test('TEXT：已落库的重试不被 403 抢走，新消息仍被拦', async () => {
+    const store = new MemoryMessageStore()
+    let blocked = false
+    const service = serviceOf(store, { existsBlockBetween: async () => blocked })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000fd'
+    const first = await service.sendTextMessage(buyer, conversationA, {
+      content: '收到',
+      clientRequestId,
+    })
+    blocked = true
+    const retry = await service.sendTextMessage(buyer, conversationA, {
+      content: '收到',
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(store.messages).toHaveLength(1)
+    await expect(
+      service.sendTextMessage(buyer, conversationA, { content: '再来一条' }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+
+  test('LISTING：已落库的重试不被 403 抢走，新卡片仍被拦', async () => {
+    const store = new MemoryMessageStore()
+    store.listings.set(LISTING_ID, listingBrief())
+    let blocked = false
+    const service = serviceOf(store, { existsBlockBetween: async () => blocked })
+    const clientRequestId = '01990000-0000-7000-8000-0000000000fe'
+    const first = await service.sendListingMessage(buyer, conversationA, {
+      type: 'LISTING',
+      listingId: LISTING_PUBLIC_ID,
+      clientRequestId,
+    })
+    blocked = true
+    const retry = await service.sendListingMessage(buyer, conversationA, {
+      type: 'LISTING',
+      listingId: LISTING_PUBLIC_ID,
+      clientRequestId,
+    })
+    expect(retry.id).toBe(first.id)
+    expect(store.messages).toHaveLength(1)
+    await expect(
+      service.sendListingMessage(buyer, conversationA, {
+        type: 'LISTING',
+        listingId: LISTING_PUBLIC_ID,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
   })
 })

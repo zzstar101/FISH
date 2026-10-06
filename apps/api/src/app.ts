@@ -553,7 +553,7 @@ export function createApp(
   // 同一个 blockStore 的 `existsBlockBetween` 谓词做双向守卫，中性码见 chat 契约。
   const blockStore = createSqlBlockStore(db)
   app.use(BLOCK_ROUTES.myBlocks, auth.requireAuth)
-  app.use('/users/:userId/block', auth.requireAuth)
+  app.use(BLOCK_ROUTES.blockRelation(':userId'), auth.requireAuth)
   app.route(
     '/',
     createBlocksRouter({
