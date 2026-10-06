@@ -244,8 +244,10 @@ mc admin policy attach local fish-app-rw --user fish-app
 （桶名出现在策略 JSON 的两处 `arn:aws:s3:::fish`，改 `S3_BUCKET` 时要一起改。）
 
 升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
-允许匿名 GetObject；`chat-media/*`、`chat-media-final/*`、`listing-media/*`（#286 的上传
-staging 前缀）和 `listing-review-media/*`（#286 的**审核中**固化前缀）不能匿名读或列举。
+与 `reviews/*`（#475 交易评价配图的**已确认**固化前缀）允许匿名 GetObject；`chat-media/*`、
+`chat-media-final/*`、`listing-media/*`（#286 的上传 staging 前缀）、
+`listing-review-media/*`（#286 的**审核中**固化前缀）与 `transaction-review-media/*`
+（#475 的评价配图 staging 前缀）不能匿名读或列举。
 上传时 presign 只签 `listing-media/{userId}/{id}.{ext}`，审核固化后才把字节写到服务端生成的
 `listings/{userId}/{id}.{ext}`——机器判 REVIEW 的图先固化到
 `listing-review-media/{userId}/{id}.{ext}`，人工放行时再复制到 `listings/*`——因此"未审核图片不进

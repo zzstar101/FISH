@@ -27,8 +27,28 @@ function fakeService(overrides: Partial<Record<string, unknown>> = {}): Transact
     listReviewsOf: async () => ({ items: [{ review, authorRole: 'buyer' }] }),
     listMine: async () => ({ items: [], nextCursor: null, total: 0 }),
     listMineRows: async () => ({ rows: [], total: 0 }),
+    media: {
+      presign: async () => ({
+        uploadUrl: 'https://upload.example/put',
+        objectKey:
+          'transaction-review-media/usr_01jc000000e00800000000000b/med_01jc000000e00800000000000c.png',
+        headers: {},
+        expiresAt: '2026-10-01T12:10:00.000Z',
+      }),
+      confirm: async () => ({
+        objectKey: 'reviews/usr_01jc000000e00800000000000b/med_01jc000000e00800000000000c.png',
+        url: 'https://cdn.example/reviews/usr_01jc000000e00800000000000b/med_01jc000000e00800000000000c.png',
+      }),
+    },
     ...overrides,
-  } as TransactionReviewService
+  } as unknown as TransactionReviewService
+}
+
+/** 治理守卫桩：本域测试不关心封禁语义（真实接线在 app.ts，用 restrictionGuard）。 */
+const noopGuard: { write: MiddlewareHandler } = {
+  write: async (_c, next) => {
+    await next()
+  },
 }
 
 /**
@@ -47,7 +67,11 @@ function buildApp(options: { service: TransactionReviewService; authed?: boolean
   root.use('/transactions/:transactionId/reviews', requireAuth)
   root.route(
     '/',
-    createTransactionReviewsRouter({ service: options.service, getUserId: (c) => c.get('userId') }),
+    createTransactionReviewsRouter({
+      service: options.service,
+      getUserId: (c) => c.get('userId'),
+      guard: noopGuard,
+    }),
   )
   return root
 }

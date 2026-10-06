@@ -152,6 +152,52 @@ export function isListingMediaStagingKey(key: string): boolean {
   )
 }
 
+/**
+ * #475：交易评价配图的 staging 前缀（未 confirm 的临时对象；不在匿名读白名单）。
+ * 与 listing 用 `listing-review-media/` 相互独立，命名上刻意带 `transaction-` 前缀避免混淆。
+ */
+export const REVIEW_MEDIA_STAGING_PREFIX = 'transaction-review-media/'
+
+/** staging 键形状：`transaction-review-media/{usr_…}/{med_…}.{ext}`。 */
+const REVIEW_MEDIA_STAGING_KEY = /^transaction-review-media\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
+
+export function reviewMediaStagingPrefix(userId: string): string {
+  return `${REVIEW_MEDIA_STAGING_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+}
+
+export function isReviewMediaStagingKey(key: string): boolean {
+  const match = REVIEW_MEDIA_STAGING_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
+/**
+ * #475：评价配图的**公开 final 前缀**（confirm 校验通过后写入；匿名可读）。
+ * 「键在 final 前缀下存在」= 服务端确认过 —— presign 从不签这个前缀，客户端结构上
+ * 写不进来，这就是写侧引用校验能只认这个前缀、而无需新增登记表的原因。
+ * **DEPLOY 连带**：`infra/minio-public-policy.json` 必须放行 `reviews/*`（与 `listings/*` 并列）。
+ */
+export const REVIEW_MEDIA_PUBLIC_PREFIX = 'reviews/'
+
+const REVIEW_MEDIA_PUBLIC_KEY = /^reviews\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
+
+export function reviewMediaPublicPrefix(userId: string): string {
+  return `${REVIEW_MEDIA_PUBLIC_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+}
+
+/** final 键形状 + 归属判据（写侧引用校验与 publicUrl 共用这一处）。 */
+export function isReviewMediaPublicKey(key: string): boolean {
+  const match = REVIEW_MEDIA_PUBLIC_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
   /** 来自 `S3_PUBLIC_URL`（本地为 `http://localhost:9000/fish`）。 */
@@ -244,6 +290,10 @@ export function createBunS3MediaStorage(options: {
         if (!reviewUrlBase || !reviewUrlSecret) throw new Error('私有媒体 URL 代理未配置')
         const expiresAtSeconds = Math.floor(Date.now() / 1000) + REVIEW_MEDIA_URL_TTL_SECONDS
         return `${reviewUrlBase.replace(/\/+$/, '')}/${reviewMediaToken(key, reviewUrlSecret, expiresAtSeconds)}`
+      }
+      // #475：评价配图 final 键（公开可读；bucket 策略由 infra/minio-public-policy.json 放行 reviews/*）。
+      if (isReviewMediaPublicKey(key)) {
+        return `${publicUrlBase.replace(/\/+$/, '')}/${key}`
       }
       if (isLegacyListingKey(key)) {
         if (!legacyUrlBase || !legacyUrlSecret) throw new Error('旧媒体 URL 代理未配置')

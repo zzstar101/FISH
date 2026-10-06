@@ -23,4 +23,14 @@ export const TRANSACTION_REVIEW_ROUTES = {
    * 仅交易参与者可读（非参与者 404）；至多两行（buyer 一条 + seller 一条），不分页。
    */
   ofTransaction: (transactionId: string) => `/transactions/${transactionId}/reviews`,
+  /**
+   * `POST` 评价配图上传链（#475）：presign 只签 **staging** 前缀（`transaction-review-media/…`，
+   * 不在匿名读白名单），confirm 校验后写入公开的 `reviews/…` final 键 —— 能进
+   * `TransactionReviewCreateInput.imageObjectKeys` 的**只有 confirm 返回的那个键**。
+   *
+   * 授权锚定在交易上（与评价边同一道门）：参与者 + 交易 COMPLETED + 尚未评价，
+   * 三条不满足分别 404 / 409 / 409，与 `reviewEdge` 的 POST 完全一致。
+   */
+  mediaPresign: (transactionId: string) => `/transactions/${transactionId}/review/media/presign`,
+  mediaConfirm: (transactionId: string) => `/transactions/${transactionId}/review/media/confirm`,
 } as const

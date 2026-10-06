@@ -16,6 +16,7 @@
  * 后，写契约加可选 `imageObjectKeys` 即可，读侧不用改。
  */
 
+import { ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES } from '@fish/contracts/listings/schema'
 import { ReviewIdSchema, TransactionIdSchema } from '@fish/contracts/system/public-id'
 import { transactionDtoSchema, transactionRoleSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
@@ -33,14 +34,77 @@ export const REVIEW_BODY_MAX = 200
  */
 export const TransactionReviewBodySchema = z.string().trim().max(REVIEW_BODY_MAX)
 
+/**
+ * 评价配图张数上限（#475）。0..N 的冻结口径在此落成具体值：3 张 —— 评价配图是成交佐证
+ * 而不是主图库（listing 的 `MAX_LISTING_IMAGES = 9` 是另一个量级）。
+ * 契约与 API 写校验共用本常量；端上直接 import（全仓惯例，不复制字面量）。
+ */
+export const MAX_REVIEW_IMAGES = 3
+
+/** 单个对象键的形状上限（服务端键域函数还会校验前缀与归属，这里只挡长度）。 */
+const ReviewImageObjectKeySchema = z.string().min(1).max(200)
+
 export const TransactionReviewCreateInputSchema = z.strictObject({
   rating: TransactionReviewRatingSchema,
   body: TransactionReviewBodySchema.optional(),
+  /**
+   * 评价配图（#475）：**只能**填 `POST /transactions/:id/review/media/confirm` 返回的 final
+   * 键（`reviews/{usr_…}/{med_…}.{ext}`）。数组下标即 `sort_order`（0 = 第一张）。
+   * 跨用户键、他人 listing 键、chat-media 键、未确认键一律由服务端 422
+   * `REVIEW_IMAGE_INVALID` 拒绝；重复键在契约层即拦（VALIDATION_FAILED）。
+   */
+  imageObjectKeys: z
+    .array(ReviewImageObjectKeySchema)
+    .max(MAX_REVIEW_IMAGES, `最多上传 ${MAX_REVIEW_IMAGES} 张图片`)
+    .refine((keys) => new Set(keys).size === keys.length, {
+      message: '图片对象键不能重复',
+    })
+    .optional(),
 })
 
 export type TransactionReviewCreateInput = z.infer<typeof TransactionReviewCreateInputSchema>
 
 /** 评价里的配图（读投影）：URL 由服务端从对象键拼好，端上不接触存储布局。 */
+/**
+ * 评价配图上传链的请求/响应（#475）。
+ *
+ * 与 listing 的上传链同形但**独立成链**（票内决策：不动 `/uploads/*` 的既有 listing 语义）：
+ * - presign 只签 staging 前缀 `transaction-review-media/{usr_…}/{med_…}.{ext}`（服务端生成键）；
+ * - confirm 校验（形状/归属/存在/大小/MIME/真实图片）后写入公开的 `reviews/{usr_…}/{med_…}.{ext}`；
+ * - 客户端直传 `PUT` 用 presign 返回的 `uploadUrl`，`objectKey` 视为不透明字符串。
+ */
+export const ReviewMediaPresignRequestSchema = z.strictObject({
+  contentType: z.enum(ALLOWED_IMAGE_MIME),
+  sizeBytes: z.number().int().min(1).max(MAX_IMAGE_BYTES),
+})
+
+export type ReviewMediaPresignRequest = z.infer<typeof ReviewMediaPresignRequestSchema>
+
+export const ReviewMediaPresignResponseSchema = z.object({
+  uploadUrl: z.url(),
+  /** staging 键：**不能**进 `imageObjectKeys`（不在公开读白名单，引用校验只认 confirm 的 final 键）。 */
+  objectKey: z.string().min(1),
+  /** 直传 PUT 需原样附带的头（当前实现为空对象，字段保留供换实现时前端不改）。 */
+  headers: z.record(z.string(), z.string()),
+  expiresAt: z.iso.datetime(),
+})
+
+export type ReviewMediaPresignResponse = z.infer<typeof ReviewMediaPresignResponseSchema>
+
+export const ReviewMediaConfirmRequestSchema = z.strictObject({
+  objectKey: z.string().min(1).max(200),
+})
+
+export type ReviewMediaConfirmRequest = z.infer<typeof ReviewMediaConfirmRequestSchema>
+
+export const ReviewMediaConfirmResponseSchema = z.object({
+  /** 固化后的 final 键（`reviews/{usr_…}/{med_…}.{ext}`）——这才是能进 `imageObjectKeys` 的值。 */
+  objectKey: z.string().min(1),
+  url: z.url(),
+})
+
+export type ReviewMediaConfirmResponse = z.infer<typeof ReviewMediaConfirmResponseSchema>
+
 export const TransactionReviewImageSchema = z.object({
   url: z.url(),
 })
@@ -119,6 +183,12 @@ export const TransactionReviewErrorCodeSchema = z.enum([
   'TRANSACTION_REVIEW_EXISTS',
   /** 422：评语命中服务端敏感词库（判定同 `comments`，复用 #74 规则库）。 */
   'REVIEW_CONTENT_BLOCKED',
+  /**
+   * 422：配图对象键不可引用（#475）。**一个稳定码覆盖全部不可引用情形**——跨用户键、
+   * 他人 listing 键、chat-media 键、未经本上传链 confirm 的键、对象不存在——不区分，
+   * 避免把「别人的对象是否存在」变成可探测的侧信道。
+   */
+  'REVIEW_IMAGE_INVALID',
 ])
 
 export type TransactionReviewErrorCode = z.infer<typeof TransactionReviewErrorCodeSchema>

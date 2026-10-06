@@ -335,3 +335,158 @@ describe('交易评价 app 级接线（#195 PR2）', () => {
     }
   })
 })
+
+describe('#475 评价配图上传链 app 级接线', () => {
+  /** 64 字节 PNG（魔数正确即可——本链不做尺寸解析，内容层面只验魔数与声明一致）。 */
+  const pngBytes = (() => {
+    const bytes = new Uint8Array(64)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+    return bytes
+  })()
+
+  async function uploadImage(cookie: string, txnPublicId: string): Promise<string> {
+    const presignRes = await app.request(
+      `/transactions/${txnPublicId}/review/media/presign`,
+      json({ contentType: 'image/png', sizeBytes: pngBytes.byteLength }, cookie),
+    )
+    expect(presignRes.status).toBe(200)
+    const presign = (await presignRes.json()) as { uploadUrl: string; objectKey: string }
+    expect(presign.objectKey).toMatch(
+      /^transaction-review-media\/usr_[0-9a-z]+\/med_[0-9a-z]+\.png$/,
+    )
+
+    // 直传真实 MinIO（与生产同一条 presign → PUT 链路）。
+    // 浏览器端 `fetch(url, { method: 'PUT', body: File })` 会按文件类型自动带 Content-Type；
+    // 服务端 confirm 读的就是对象上的 Content-Type（MinIO 缺省存成 octet-stream 会被拒）。
+    const put = await fetch(presign.uploadUrl, {
+      method: 'PUT',
+      headers: { 'content-type': 'image/png' },
+      body: pngBytes,
+    })
+    expect(put.status).toBe(200)
+
+    const confirmRes = await app.request(
+      `/transactions/${txnPublicId}/review/media/confirm`,
+      json({ objectKey: presign.objectKey }, cookie),
+    )
+    expect(confirmRes.status).toBe(200)
+    const confirm = (await confirmRes.json()) as { objectKey: string; url: string }
+    expect(confirm.objectKey).toMatch(/^reviews\/usr_[0-9a-z]+\/med_[0-9a-z]+\.png$/)
+    expect(confirm.url).toContain(confirm.objectKey)
+    return confirm.objectKey
+  }
+
+  test('全链：presign → PUT → confirm → 评价带图（按序读回）→ 删评价级联清图片行', async () => {
+    const buyerCookie = await signUp()
+    const buyerId = await buyerIdOf(buyerCookie)
+    const txn = await createTransaction(buyerId, await createListing())
+    const edge = `/transactions/${txn.publicId}/review`
+
+    const firstKey = await uploadImage(buyerCookie, txn.publicId)
+    const secondKey = await uploadImage(buyerCookie, txn.publicId)
+    expect(firstKey).not.toBe(secondKey)
+
+    // 下单即验证：final 对象真实存在且匿名可读（presign 从不签 reviews/，只能在 confirm 之后出现）。
+    const readable = await fetch(`http://localhost:9000/fish/${firstKey}`).catch(() => null)
+    if (readable) expect(readable.status).toBe(200)
+
+    const created = await app.request(
+      edge,
+      json({ rating: 'POSITIVE', imageObjectKeys: [secondKey, firstKey] }, buyerCookie),
+    )
+    expect(created.status).toBe(201)
+    const body = (await created.json()) as {
+      images: { url: string }[]
+      id: string
+    }
+    // 数组下标即 sort_order：先 second 后 first，读回按同一顺序。
+    expect(body.images.map((image) => image.url)).toEqual([
+      expect.stringContaining(secondKey),
+      expect.stringContaining(firstKey),
+    ])
+
+    // DB 行按 sort_order 落库
+    const rows = (await db.execute(sql`
+      SELECT object_key, sort_order FROM transaction_review_images
+      WHERE review_id = (SELECT id FROM transaction_reviews WHERE transaction_id = ${txn.rawId}::uuid)
+      ORDER BY sort_order
+    `)) as
+      | { rows?: { object_key: string; sort_order: number }[] }
+      | { object_key: string; sort_order: number }[]
+    const imageRows = Array.isArray(rows) ? rows : (rows.rows ?? [])
+    expect(imageRows.map((row) => row.object_key)).toEqual([secondKey, firstKey])
+    expect(imageRows.map((row) => row.sort_order)).toEqual([0, 1])
+
+    // 已评价后不能再上传（评价不可修改）
+    const afterReview = await app.request(
+      `/transactions/${txn.publicId}/review/media/presign`,
+      json({ contentType: 'image/png', sizeBytes: 64 }, buyerCookie),
+    )
+    expect(afterReview.status).toBe(409)
+    expect(error(await afterReview.json())).toBe('TRANSACTION_REVIEW_EXISTS')
+
+    // 删除评价 → 图片行级联清掉
+    const deleted = await app.request(edge, { ...get(buyerCookie), method: 'DELETE' })
+    expect(deleted.status).toBe(200)
+    const after = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM transaction_review_images
+      WHERE review_id = (SELECT id FROM transaction_reviews WHERE transaction_id = ${txn.rawId}::uuid)
+    `)) as { rows?: { n: number }[] } | { n: number }[]
+    const afterRows = Array.isArray(after) ? after : (after.rows ?? [])
+    expect(afterRows[0]?.n).toBe(0)
+  })
+
+  test('错误稳定：chat-media 键 / 他人键 / 未确认键在 confirm 与写入两侧都 422 REVIEW_IMAGE_INVALID', async () => {
+    const buyerCookie = await signUp()
+    const buyerId = await buyerIdOf(buyerCookie)
+    const txn = await createTransaction(buyerId, await createListing())
+    const other = await signUp()
+    const otherId = await buyerIdOf(other)
+    const otherTxn = await createTransaction(otherId, await createListing())
+    const otherKey = await uploadImage(other, otherTxn.publicId)
+
+    // confirm 侧：staging 键非法
+    const chatMediaKey = `chat-media/cnv_01jc000000e008000000000021/usr_01jc000000e00800000000000b/med_01jc000000e00800000000000c.webp`
+    for (const objectKey of [
+      chatMediaKey,
+      'listings/usr_01jc000000e00800000000000b/med_01jc000000e00800000000000c.jpg',
+    ]) {
+      const res = await app.request(
+        `/transactions/${txn.publicId}/review/media/confirm`,
+        json({ objectKey }, buyerCookie),
+      )
+      expect(res.status).toBe(422)
+      expect(error(await res.json())).toBe('REVIEW_IMAGE_INVALID')
+    }
+
+    // 写入侧：别人的 final 键不可引用
+    const res = await app.request(
+      `/transactions/${txn.publicId}/review`,
+      json({ rating: 'POSITIVE', imageObjectKeys: [otherKey] }, buyerCookie),
+    )
+    expect(res.status).toBe(422)
+    expect(error(await res.json())).toBe('REVIEW_IMAGE_INVALID')
+  })
+
+  test('超限（>3）与重复键在 app 级被契约拦下（422 VALIDATION_FAILED）', async () => {
+    const buyerCookie = await signUp()
+    const buyerId = await buyerIdOf(buyerCookie)
+    const txn = await createTransaction(buyerId, await createListing())
+    const edge = `/transactions/${txn.publicId}/review`
+    const key = await uploadImage(buyerCookie, txn.publicId)
+
+    const dup = await app.request(
+      edge,
+      json({ rating: 'POSITIVE', imageObjectKeys: [key, key] }, buyerCookie),
+    )
+    expect(dup.status).toBe(422)
+    expect(error(await dup.json())).toBe('VALIDATION_FAILED')
+
+    const over = await app.request(
+      edge,
+      json({ rating: 'POSITIVE', imageObjectKeys: [key, key, key, key] }, buyerCookie),
+    )
+    expect(over.status).toBe(422)
+    expect(error(await over.json())).toBe('VALIDATION_FAILED')
+  })
+})

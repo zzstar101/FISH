@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { MediaStorage } from '../uploads/storage'
 import { createTransactionReviewService, TransactionReviewServiceError } from './service'
 import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './store'
 
@@ -9,7 +10,17 @@ const TXN_PUBLIC_ID = encodePublicId(PUBLIC_ID_PREFIX.transaction, TXN_ID)
 const BUYER_ID = uuid(0x01)
 const SELLER_ID = uuid(0x02)
 
-const storage = { publicUrl: (key: string) => `https://cdn.example/${key}` }
+const storage: MediaStorage = {
+  publicUrl: (key: string) => `https://cdn.example/${key}`,
+  presignPut: () => ({
+    url: 'https://upload.example/put',
+    headers: {},
+    expiresAt: '2026-10-01T12:10:00.000Z',
+  }),
+  stat: async () => null,
+  readMediaBytes: async () => null,
+  writeMediaBytes: async () => {},
+}
 
 function reviewRow(overrides: Partial<MyReviewRow> = {}): MyReviewRow {
   return {
@@ -74,6 +85,10 @@ function fakeStore(
     findMyReview: async () => overrides.existing ?? null,
     insertReview: async () =>
       overrides.insertResult === undefined ? reviewRow() : overrides.insertResult,
+    insertReviewWithImages: async (input) =>
+      overrides.insertResult === undefined
+        ? reviewRow({ imageKeys: input.imageKeys })
+        : overrides.insertResult,
     deleteOwnReview: async () => overrides.deleted ?? 1,
     listReviewsOf: async () => [],
     listByAuthor: async () => overrides.timeline ?? [],
@@ -151,7 +166,7 @@ describe('评价边（favorites 同款单资源三方法）', () => {
   test('空串评语归一为 null 落库；正文过审才插行', async () => {
     let inserted: { body: string | null } | null = null
     const store = fakeStore()
-    store.insertReview = async (input) => {
+    store.insertReviewWithImages = async (input) => {
       inserted = { body: input.body }
       return reviewRow()
     }
@@ -215,5 +230,92 @@ describe('时间线（/me/comments?kind=review 借道的 listMine）', () => {
     expect(item?.transaction.listing.id).toBe(
       encodePublicId(PUBLIC_ID_PREFIX.listing, timelineRow().transaction.listingId),
     )
+  })
+})
+
+describe('#475 配图写入口', () => {
+  const MEDIA = '01930000-0000-7000-8000-0000000000d1'
+  const MEDIA2 = '01930000-0000-7000-8000-0000000000d2'
+  const USER_PUBLIC = encodePublicId(PUBLIC_ID_PREFIX.user, BUYER_ID)
+  const keyOf = (mediaId: string) =>
+    `reviews/${USER_PUBLIC}/${encodePublicId(PUBLIC_ID_PREFIX.media, mediaId)}.png`
+
+  /** 只有 keyOf(MEDIA) 是「已 confirm 的合法对象」；其余 stat 一律 null（不可引用）。 */
+  const imageStorage: MediaStorage = {
+    ...storage,
+    stat: async (key) => (key === keyOf(MEDIA) ? { size: 1024, contentType: 'image/png' } : null),
+  }
+
+  test('合法 final 键按下标落 sort_order，DTO images 按序回 URL', async () => {
+    const service = createTransactionReviewService({
+      store: fakeStore(),
+      storage: imageStorage,
+    })
+    const dto = await service.createReview(BUYER_ID, TXN_ID, {
+      rating: 'POSITIVE',
+      imageObjectKeys: [keyOf(MEDIA)],
+    })
+    expect(dto.images).toEqual([{ url: `https://cdn.example/${keyOf(MEDIA)}` }])
+  })
+
+  test('跨用户键 / 他人 listing 键 / chat-media 键 / 未确认键 → 422 REVIEW_IMAGE_INVALID（同码）', async () => {
+    const service = createTransactionReviewService({
+      store: fakeStore(),
+      storage: imageStorage,
+    })
+    const otherPublic = encodePublicId(
+      PUBLIC_ID_PREFIX.user,
+      '01930000-0000-7000-8000-0000000000c1',
+    )
+    const bad = [
+      `reviews/${otherPublic}/${encodePublicId(PUBLIC_ID_PREFIX.media, MEDIA)}.png`,
+      `listings/${USER_PUBLIC}/${encodePublicId(PUBLIC_ID_PREFIX.media, MEDIA)}.jpg`,
+      `chat-media/cnv_01jc000000e008000000000021/${USER_PUBLIC}/${encodePublicId(PUBLIC_ID_PREFIX.media, MEDIA)}.webp`,
+      keyOf(MEDIA2), // 形状合法但从未 confirm（stat null）
+    ]
+    for (const key of bad) {
+      const error = await serviceErrorOf(
+        service.createReview(BUYER_ID, TXN_ID, { rating: 'POSITIVE', imageObjectKeys: [key] }),
+      )
+      expect(error.status).toBe(422)
+      expect(error.code).toBe('REVIEW_IMAGE_INVALID')
+    }
+  })
+
+  test('重复键 → 422 VALIDATION_FAILED（details 指向 imageObjectKeys）', async () => {
+    const service = createTransactionReviewService({ store: fakeStore(), storage: imageStorage })
+    const error = await serviceErrorOf(
+      service.createReview(BUYER_ID, TXN_ID, {
+        rating: 'POSITIVE',
+        imageObjectKeys: [keyOf(MEDIA), keyOf(MEDIA)],
+      }),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('VALIDATION_FAILED')
+    expect(error.details?.[0]?.field).toBe('imageObjectKeys')
+  })
+
+  test('超过上限（>3）→ 422 VALIDATION_FAILED', async () => {
+    const service = createTransactionReviewService({ store: fakeStore(), storage: imageStorage })
+    const error = await serviceErrorOf(
+      service.createReview(BUYER_ID, TXN_ID, {
+        rating: 'POSITIVE',
+        imageObjectKeys: [keyOf(MEDIA), keyOf(MEDIA2), keyOf(MEDIA), keyOf(MEDIA2)],
+      }),
+    )
+    expect(error.status).toBe(422)
+    expect(error.code).toBe('VALIDATION_FAILED')
+  })
+
+  test('未带配图 → store 收到空数组（旧行为不变）', async () => {
+    const received: { keys: string[] | null } = { keys: null }
+    const store = fakeStore()
+    store.insertReviewWithImages = async (input) => {
+      received.keys = input.imageKeys
+      return reviewRow()
+    }
+    const service = createTransactionReviewService({ store, storage: imageStorage })
+    await service.createReview(BUYER_ID, TXN_ID, { rating: 'POSITIVE' })
+    expect(received.keys).toEqual([])
   })
 })

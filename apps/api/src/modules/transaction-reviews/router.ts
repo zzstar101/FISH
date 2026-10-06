@@ -1,10 +1,15 @@
 import { errorBody, validationDetails } from '@fish/contracts/system/error'
 import { TransactionIdSchema } from '@fish/contracts/system/public-id'
 import { TRANSACTION_REVIEW_ROUTES } from '@fish/contracts/transaction-reviews/routes'
-import { TransactionReviewCreateInputSchema } from '@fish/contracts/transaction-reviews/schema'
+import {
+  ReviewMediaConfirmRequestSchema,
+  ReviewMediaPresignRequestSchema,
+  TransactionReviewCreateInputSchema,
+} from '@fish/contracts/transaction-reviews/schema'
 import { decodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
-import type { Context } from 'hono'
+import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
+import { ReviewMediaServiceError } from './media-service'
 import { type TransactionReviewService, TransactionReviewServiceError } from './service'
 
 type ReviewVariables = { userId: string }
@@ -20,6 +25,11 @@ export type TransactionReviewsRouterOptions = {
    * 而不是把匿名请求当成本人。
    */
   getUserId: TransactionReviewUserIdResolver
+  /**
+   * #475 配图上传链的治理守卫（与其它写入口一致：被封禁账号 403 `USER_RESTRICTED`）。
+   * **必填**——漏接等于上传链绕过治理，在类型层要求装配方显式提供。
+   */
+  guard: { write: MiddlewareHandler }
 }
 
 /**
@@ -34,7 +44,7 @@ function requireTransactionId(c: ReviewContext): string | null {
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`。 */
 function toErrorResponse(c: ReviewContext, error: unknown): Response {
-  if (error instanceof TransactionReviewServiceError) {
+  if (error instanceof TransactionReviewServiceError || error instanceof ReviewMediaServiceError) {
     return c.json(errorBody(error.code, error.message, error.details), error.status)
   }
   throw error
@@ -46,6 +56,8 @@ const transactionNotFoundResponse = (c: ReviewContext) =>
 /** 路由 pattern 从契约常量派生（把参数名当占位 id 传进去，禁止在别处硬编码路径）。 */
 const REVIEW_EDGE_PATH = TRANSACTION_REVIEW_ROUTES.reviewEdge(':transactionId')
 const REVIEWS_OF_PATH = TRANSACTION_REVIEW_ROUTES.ofTransaction(':transactionId')
+const MEDIA_PRESIGN_PATH = TRANSACTION_REVIEW_ROUTES.mediaPresign(':transactionId')
+const MEDIA_CONFIRM_PATH = TRANSACTION_REVIEW_ROUTES.mediaConfirm(':transactionId')
 
 /**
  * 交易评价 router（#195 PR2）。挂载在根路径 `/`，两条路径都在 `/transactions/:transactionId`
@@ -57,6 +69,7 @@ const REVIEWS_OF_PATH = TRANSACTION_REVIEW_ROUTES.ofTransaction(':transactionId'
 export function createTransactionReviewsRouter({
   service,
   getUserId,
+  guard,
 }: TransactionReviewsRouterOptions) {
   const router = new Hono<{ Variables: ReviewVariables }>()
 
@@ -120,6 +133,62 @@ export function createTransactionReviewsRouter({
 
     try {
       return c.json(await service.deleteMyReview(userId, transactionId), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  // —— #475 配图上传链（presign → 直传 → confirm） ——
+
+  router.post(MEDIA_PRESIGN_PATH, guard.write, async (c) => {
+    const transactionId = requireTransactionId(c)
+    if (!transactionId) return transactionNotFoundResponse(c)
+    const userId = requireUserId(c)
+    if (!userId) return c.json(errorBody('UNAUTHENTICATED', '未登录'), 401)
+
+    let raw: unknown = null
+    try {
+      raw = await c.req.json()
+    } catch {
+      // 空体 / 非 JSON 按参数不合法处理（与评价边 POST 同款）。
+    }
+    const parsed = ReviewMediaPresignRequestSchema.safeParse(raw)
+    if (!parsed.success) {
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
+    }
+
+    try {
+      return c.json(await service.media.presign(userId, transactionId, parsed.data), 200)
+    } catch (error) {
+      return toErrorResponse(c, error)
+    }
+  })
+
+  router.post(MEDIA_CONFIRM_PATH, guard.write, async (c) => {
+    const transactionId = requireTransactionId(c)
+    if (!transactionId) return transactionNotFoundResponse(c)
+    const userId = requireUserId(c)
+    if (!userId) return c.json(errorBody('UNAUTHENTICATED', '未登录'), 401)
+
+    let raw: unknown = null
+    try {
+      raw = await c.req.json()
+    } catch {
+      // 同上。
+    }
+    const parsed = ReviewMediaConfirmRequestSchema.safeParse(raw)
+    if (!parsed.success) {
+      return c.json(
+        errorBody('VALIDATION_FAILED', '请求参数不合法', validationDetails(parsed.error.issues)),
+        422,
+      )
+    }
+
+    try {
+      return c.json(await service.media.confirm(userId, transactionId, parsed.data), 200)
     } catch (error) {
       return toErrorResponse(c, error)
     }
