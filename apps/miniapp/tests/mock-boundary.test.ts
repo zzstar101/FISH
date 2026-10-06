@@ -8,7 +8,7 @@ import path from 'node:path'
  *
  * 演示 fixture（`src/mock/*`）一旦被**任何**运行期模块静态 import，webpack 的
  * scope-hoisting 就会把整片 fixture 合并进生产包 —— 首屏求值可以被 alias 切掉，
- * 包体却瘦不下来。所以「除 mock 层、`mock-fallback` 与下面登记的**三个遗留叶子**外，
+ * 包体却瘦不下来。所以「除 mock 层、`mock-fallback` 与下面登记的**两个遗留叶子**外，
  * 没有运行期依赖 `@/mock/*`」必须是一条**测试钉住的不变式**，而不是靠人肉 grep。
  *
  * `import type` / `import { type X }` 会被 TS 擦除，不构成运行期依赖，**不算违规**
@@ -307,7 +307,7 @@ async function scanMockValueImports(): Promise<{ file: string; specifier: string
 }
 
 /**
- * 从三个遗留叶子出发，沿 `src/mock/**` 内部的运行期依赖做传递闭包。
+ * 从两个遗留叶子出发，沿 `src/mock/**` 内部的运行期依赖做传递闭包。
  *
  * 只看叶子自己的 import 不够：`mock/blocks.ts` 若 import 一个 helper，而 helper
  * 又 import `mock/users`，`USERS` 照样进包。闭包才算「叶子会把什么带进包」。
