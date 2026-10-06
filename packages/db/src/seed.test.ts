@@ -92,9 +92,14 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       transactions: 2,
       // #465：争议与证据由用户真实发起产生，seed 不预置（同 matches / embeddings 的取舍：
       // 假争议落进 seed 库比空表更误导，它还会伪造一条不存在的处理进度）。
-      // 这三张表必须列进 counts：seed 的 TRUNCATE 依赖它们（disputes 引用 transactions /
-      // users，dispute_attachments / dispute_evidence_messages 引用 disputes），
-      // 漏进 TRUNCATE 时种子会在 0A000 上直接失败，而 counts 是这条语句的唯一同源断言。
+      // 这三条断言锁住的是**写侧确实不预置**争议数据：seed 只写 users / listingNumbers /
+      // listings / listingImages / wishes / conversations / messages / transactions / jobs
+      // 九张表。
+      // 它们**测不到 TRUNCATE 清单漏列**：清单漏掉任何一张被引用的表时，seed() 自身的
+      // TRUNCATE 会先抛 0A000（实测 detail: Table "dispute_attachments" references
+      // "users"），根本走不到下面的 counts —— 换成父提交 d170f609 的旧 counts 在同一处
+      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 39 张业务表，本 counts
+      // 只覆盖其中 16 张，其余 23 张靠 seed() 抛出的 0A000 把关。
       disputes: 0,
       disputeAttachments: 0,
       disputeEvidenceMessages: 0,
