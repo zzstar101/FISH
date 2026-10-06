@@ -5,6 +5,7 @@ import Taro, {
   usePageScroll,
   usePullDownRefresh,
   useReady,
+  useShareAppMessage,
   useUnload,
 } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
@@ -55,6 +56,11 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 }
 
 export default function Home() {
+  // 右上角菜单转发：分享出去落地本页（tab 页天然支持冷启动直入）。
+  useShareAppMessage(() => ({
+    title: '鱼小应 · 校园闲置好物，来看看',
+    path: '/pages/home/index',
+  }))
   const [items, setItems] = useState<MockListing[]>([])
   /**
    * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过，或上一次加载失败已作废）。

@@ -49,11 +49,12 @@ export default defineConfig<'webpack5'>(async (merge) => {
      * 被 `features/fetchers.ts` 与 `custom-tab-bar/index.tsx` 的静态 import 拖进首屏
      * chunk 并在冷启动时求值（实测占首屏 JS 求值的约 90%）。
      *
-     * **边界（别把话说满）**：仍有三个 fixture **叶子**模块被 mock 层之外的调用点
+     * **边界（别把话说满）**：仍有两个 fixture **叶子**模块被 mock 层之外的调用点
      * 静态引用，因此仍在产物里 —— `@/mock/blocks`（占位骨架，`features/listing/adapt.ts`
-     * 等 5 处）、`@/mock/images`（演示图，`pages/sell/index.tsx`）、`@/mock/sell`
-     * （AI 润色候选，`features/ai/api.ts`）。它们不 import `mock/api` 那一片，属于
-     * 先于本改动存在的遗留项，由 `tests/mock-boundary.test.ts` 逐条登记并守住。
+     * 等 5 处）、`@/mock/sell`（AI 润色候选，`features/ai/api.ts`）。它们不 import
+     * `mock/api` 那一片，属于先于本改动存在的遗留项，由 `tests/mock-boundary.test.ts`
+     * 逐条登记并守住。（`@/mock/images` 原来也在其中：发布页角标预览拿演示图当兜底，
+     * 改成中性占位后 mock 层之外已无消费方，豁免同步撤销。）
      *
      * ⚠️ **键序是语义的一部分**：`enhanced-resolve` 的 alias 按声明顺序匹配
      * （`AliasUtils.js` 的 `forEachBail`），前缀别名 `'@'` 会先把

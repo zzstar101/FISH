@@ -484,6 +484,7 @@ export function isEduEmail(email: string): boolean {
 // 版本元信息已挪到 `@/lib/app-meta`（真实常量，不是演示数据；「关于」页与设置页
 // 不该为了两个字符串静态 import 整包 fixture）。这里 re-export 保持既有路径。
 export { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
-// 设置默认值与主题选项已挪到 `@/lib/settings-defaults`（页面运行期常量，不是演示
-// 数据；设置页不该为了它们静态 import 整包 fixture）。这里 re-export 保持既有路径。
-export { SETTINGS, THEME_OPTIONS } from '@/lib/settings-defaults'
+// 设置默认值已挪到 `@/lib/settings-defaults`（页面运行期常量，不是演示数据；
+// 设置页不该为了它静态 import 整包 fixture）。这里 re-export 保持既有路径。
+// （`THEME_OPTIONS` 随主题开关一起撤掉了 —— 该开关从未有过消费方。）
+export { SETTINGS } from '@/lib/settings-defaults'

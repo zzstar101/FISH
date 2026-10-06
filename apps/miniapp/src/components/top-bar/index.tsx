@@ -20,8 +20,8 @@
  *   直接穿过标题（踩过这个坑），保留它只是为了「确实需要全透明」的版式，用时想清楚。
  */
 import { Text, View } from '@tarojs/components'
-import Taro from '@tarojs/taro'
 import { type ReactNode, useMemo } from 'react'
+import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import './index.scss'
 
@@ -90,15 +90,9 @@ export default function TopBar({
       onBack()
       return
     }
-    const pages = Taro.getCurrentPages()
-    if (pages.length > 1) {
-      void Taro.navigateBack()
-    } else {
-      // 兜底回**语义父级 tab**（2026-10-02 拍板）：页面栈为空只发生在冷启动经
-      // 分享卡片 / 扫码直入二级页，此时回本组件的语义父级 —— 首页。语义父级
-      // 不是首页的页面（会话页 → 消息、编辑资料 → 我的）由页面经 `onBack` 自行覆盖。
-      void Taro.switchTab({ url: '/pages/home/index' })
-    }
+    // 兜底回**语义父级 tab**（2026-10-02 拍板），语义与实现见 `@/lib/nav-back`。
+    // 语义父级不是首页的页面由调用方经 `onBack` 覆盖（上面那条分支）。
+    goBackOrHome()
   }
 
   return (

@@ -19,7 +19,13 @@
 import type { CommentDto } from '@fish/contracts/comments/schema'
 import type { ListingMatchListResponse, WishSummary } from '@fish/contracts/matching/schema'
 import { Image, Input, Swiper, SwiperItem, Text, View } from '@tarojs/components'
-import Taro, { useDidShow, useLoad, usePageScroll, useRouter } from '@tarojs/taro'
+import Taro, {
+  useDidShow,
+  useLoad,
+  usePageScroll,
+  useRouter,
+  useShareAppMessage,
+} from '@tarojs/taro'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ICONS } from '@/assets/lib-icons'
 import BackTop, { BACK_TOP_THRESHOLD } from '@/components/back-top'
@@ -324,6 +330,26 @@ export default function ListingDetail() {
 
   const [data, setData] = useState<ListingDetailView | null>(null)
   const [loadState, setLoadState] = useState<LoadState>('loading')
+
+  /**
+   * 右上角菜单转发：把这件商品分享给同学 / 群，卡片直达本页。冷启动直入时页面栈
+   * 只有本页，返回键已由 `handleBack` 的栈空兜底接住（回首页）。演示构建里 `data`
+   * 是 fixture（id 不在库里），分享出去别人打不开 —— 与本页其它演示行为一致。
+   */
+  useShareAppMessage(() => {
+    const listing = data?.listing ?? null
+    const title = listing
+      ? listing.free
+        ? `${listing.title} · 0 元送`
+        : `${listing.title} · ¥${formatAmount(listing.priceCents)}`
+      : '鱼小应 · 校园闲置'
+    return {
+      title,
+      path: `/pkg-browse/pages/listing-detail/index?id=${id}`,
+      ...(listing?.images[0] ? { imageUrl: listing.images[0] } : {}),
+    }
+  })
+
   const [slide, setSlide] = useState(0)
   /**
    * 心形的收藏态。契约的 `ListingCardSchema` 与详情投影**都不带**收藏标记，所以只能问
@@ -1014,7 +1040,8 @@ export default function ListingDetail() {
           return
         }
         if (step === 'conversation') {
-          // 第一步（建会话）失败：文案与 PC `describeCreateConversationFailure` 同款
+          // 第一步（建会话）失败：走 `describeCreateConversationFailure`（只认
+          // `LISTING_NOT_FOUND`；PC 站同名函数仍写「已下架」，小程序端已按契约订正）
           setBuySubmitError(describeCreateConversationFailure(error))
           return
         }

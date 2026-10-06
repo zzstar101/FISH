@@ -424,10 +424,7 @@ export type MockVerify = {
 
 /* -------------------------------------------------------- 设置（B4） */
 
-export type ThemeMode = 'system' | 'light' | 'dark'
-
 export type MockSettings = {
-  theme: ThemeMode
   notifyChat: boolean
   notifyWish: boolean
   notifyDeal: boolean

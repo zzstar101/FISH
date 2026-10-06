@@ -1,0 +1,162 @@
+import { describe, expect, test } from 'bun:test'
+
+/**
+ * 收藏页「聊一聊」接线层的回归（仓库没有 Taro 组件渲染基建，页面级行为读源码
+ * 钉桩，先例 `tests/history-wiring.test.ts`）。这里钉三条最容易回退的接线：
+ * 1. 走真写 `createConversation`（不许退回「聊天待接入」的 toast）；
+ * 2. 演示行在入口就拦下 —— 不发请求、不假装成功（id 不在库里，写了必然 404）；
+ * 3. 成功必须拿**服务端**的 `conversation.id` 跳会话页，且迟到回调按账号丢弃。
+ */
+
+async function source(): Promise<string> {
+  return Bun.file(new URL('../src/pkg-browse/pages/favorites/index.tsx', import.meta.url)).text()
+}
+
+/** 取 `start` 到其后第一次出现的 `end`（含 `end`）之间的片段 */
+function sliceFrom(code: string, start: string, end: string): string {
+  const from = code.indexOf(start)
+  expect(from, `页面里应出现 ${start}`).toBeGreaterThanOrEqual(0)
+  const to = code.indexOf(end, from)
+  expect(to, `${end} 应出现在 ${start} 之后`).toBeGreaterThanOrEqual(0)
+  return code.slice(from, to + end.length)
+}
+
+/** 只留代码：注释里出现「status」「OFF」不该被当成预检（先例 `tests/order-list-state.test.ts` 的 `codeOnly`） */
+function codeOnly(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
+/** 断言 `first` 出现在 `second` 之前（两者都必须存在） */
+function expectBefore(block: string, first: string, second: string): void {
+  const i = block.indexOf(first)
+  const j = block.indexOf(second)
+  expect(i, `块里应出现 ${first}`).toBeGreaterThanOrEqual(0)
+  expect(j, `块里应出现 ${second}`).toBeGreaterThanOrEqual(0)
+  expect(i).toBeLessThan(j)
+}
+
+describe('收藏页「聊一聊」：接线', () => {
+  test('走真写 POST /conversations，死按钮 toast 不许回来', async () => {
+    const code = await source()
+    expect(code).toContain('createConversation(item.id)')
+    expect(code).not.toContain('聊天待接入')
+  })
+
+  test('演示行在入口拦下：不发请求、不假装成功', async () => {
+    const code = await source()
+    const chatWith = sliceFrom(
+      code,
+      'const chatWith = (item: FavoriteItem) => {',
+      'if (chatEpochRef.current === epoch) chattingRef.current = false',
+    )
+    const demo = sliceFrom(chatWith, 'if (item.demo) {', 'return\n    }')
+    expect(demo).toContain('toast(')
+    // 拦下必须在发起请求**之前**：先请求后拦就等于真写了 404
+    expectBefore(chatWith, 'if (item.demo) {', 'createConversation(item.id)')
+  })
+
+  test('成功拿服务端 conversation.id 跳会话页，迟到回调按世代丢弃', async () => {
+    const code = await source()
+    const chatWith = sliceFrom(
+      code,
+      'const chatWith = (item: FavoriteItem) => {',
+      'if (chatEpochRef.current === epoch) chattingRef.current = false',
+    )
+    expect(chatWith).toContain('url: `/pkg-social/pages/conversation/index?id=')
+    expect(chatWith).toContain('{conversation.id}`')
+    // 迟到的成功响应不许导航：世代对不上（换号 / 离页）必须先 return
+    expectBefore(chatWith, 'if (chatEpochRef.current !== epoch) return', 'conversation.id')
+  })
+
+  test('失败文案走 createConversation 专用映射器（商品不存在时不说成普通失败）', async () => {
+    const code = await source()
+    expect(code).toContain('describeCreateConversationFailure(error)')
+  })
+
+  test('点击路径（onClick → act → chatWith）不做上架状态预检：下架 / 已售仍能建会话', async () => {
+    const code = await source()
+    const chatWith = sliceFrom(
+      code,
+      'const chatWith = (item: FavoriteItem) => {',
+      'if (chatEpochRef.current === epoch) chattingRef.current = false',
+    )
+    // 契约不限制 ACTIVE（`packages/contracts/src/chat/routes.ts`）：按上下架状态预检
+    // 会拦掉服务端明确允许的会话，唯一允许的入口拦截是**演示行 id**（上一用例）。
+    const upToRequest = codeOnly(chatWith.slice(0, chatWith.indexOf('createConversation(item.id)')))
+    // 只钉 `OFFLINE` / `SOLD` / `.status` 三个字面量是**弱断言**：`if (item.listingStatus === 'OFF')
+    // return` 这种换字段名 / 换字面量的等价预检照样全绿（#470 复审实证）。所以改钉「请求前没有
+    // 任何商品属性参与判断」这个结构本身，三条一起：
+    //   ① 请求前读到的商品属性只有 `demo`（演示行拦截）；单飞锁用 ref，不再读 `item.id`；
+    //   ② 请求前只允许两处提前退出（演示行、在飞的锁）；
+    //   ③ 不出现 `status` 字样与上下架字面量（大小写不敏感，覆盖 `'OFF'`）。
+    // 仓库没有 Taro 组件渲染基建（`tests/listing-detail-comments-paging.test.ts` 头注：既无
+    // `@testing-library/*` 也无 `react-test-renderer`），行为化断言不可行，故用结构 + 词面双网。
+    const itemProps = [...upToRequest.matchAll(/item\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1])
+    expect([...new Set(itemProps)].sort(), '请求前只该读 item.demo').toEqual(['demo'])
+    expect(upToRequest.match(/\breturn\b/g) ?? [], '请求前只该有两处提前退出').toHaveLength(2)
+    expect(upToRequest).not.toMatch(/status/i)
+    expect(upToRequest).not.toMatch(/offline|\boff\b|sold/i)
+    // 只钉 `chatWith` 自己不够（#470 复审实证 2026-10-06）：等价预检挪到**点击路径的上游** ——
+    // 按钮的 onClick 里（`onClick={() => { if (item.state === 'WITHDRAWN') return; act(item, chatWith) }}`），
+    // 或 `act` 这个「管理态让位给勾选」的转交函数里（首行插 `if (item.state === 'WITHDRAWN') return`）
+    // —— 本用例都 8 pass / 0 fail 全绿，而这两处一样会把下架 / 已售商品的会话拦掉。所以网往上再收一层：
+    //   ④ 按钮必须是字面 `onClick={() => act(item, chatWith)}`（包一层函数 / 加条件都红）；
+    //   ⑤ `act` 体内除管理态判断外不许再读商品属性（只许 `item.id` 做勾选）；
+    //   ⑥ `chatWith` 全仓只此一处声明 + 一处调用，没有第二条（可能带门禁的）入口。
+    // 不按整文件撒「不许出现 state / status 字样」的网：本页有**合法**的整行失效门禁
+    // （`const gone = item.segment === 'gone'` + `{gone ? null : …}`，决策④，点在失效行上只 toast），
+    // 加上 `useState` / `authStatus` / `EmptyState` / `'sale'` 分段等字样，整文件词面网必然误报。
+    expect(code, '聊一聊按钮必须是字面 onClick={() => act(item, chatWith)}').toContain(
+      'onClick={() => act(item, chatWith)}',
+    )
+    const actBody = sliceFrom(
+      code,
+      'const act = (item: FavoriteItem, run: (one: FavoriteItem) => void) => {',
+      'run(item)\n  }',
+    )
+    const actProps = [...codeOnly(actBody).matchAll(/item\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1])
+    expect([...new Set(actProps)].sort(), 'act 体内只该读 item.id 做勾选').toEqual(['id'])
+    expect(
+      codeOnly(code).match(/\bchatWith\b/g) ?? [],
+      'chatWith 只该一处声明 + 一处调用',
+    ).toHaveLength(2)
+  })
+
+  test('世代在换账号渲染期重置与卸载清理两处都前进', async () => {
+    const code = await source()
+    const bumps = code.match(/chatEpochRef\.current \+= 1/g) ?? []
+    expect(bumps.length, '换账号与卸载两条路径都要 bump 世代').toBeGreaterThanOrEqual(2)
+  })
+
+  test('单飞锁用 ref 同步上锁：同一帧的第二次点击挡得住（state 挡不住）', async () => {
+    const code = await source()
+    const chatWith = sliceFrom(
+      code,
+      'const chatWith = (item: FavoriteItem) => {',
+      'if (chatEpochRef.current === epoch) chattingRef.current = false',
+    )
+    const upToRequest = codeOnly(chatWith.slice(0, chatWith.indexOf('createConversation(item.id)')))
+    // 为什么必须是 ref：`useState` 的值在**同一帧**的两次事件处理里都是同一份闭包快照，
+    // 第二次点击读到的还是 `false`（旧实现的 `if (chattingId !== null) return` 与
+    // `setChattingId(item.id)` 就是这样，连点会发出两次 `POST /conversations`）。
+    // 仓库无组件渲染基建，所以这里钉的是「同步上锁」这个结构本身：
+    //   ① 闸门读的是 ref（`chattingRef.current`），文件里不再有 `chattingId` state；
+    //   ② 上锁语句在**发请求之前**（放到 `createConversation` 之后就等于没锁）。
+    expect(upToRequest, '闸门必须读 ref').toContain('if (chattingRef.current) return')
+    expectBefore(upToRequest, 'if (chattingRef.current) return', 'chattingRef.current = true')
+    // 断言在**去注释**的源码上做：注释里提到旧实现的 `setChattingId` 不算违规
+    const codeOnlySource = codeOnly(code)
+    expect(codeOnlySource, '不许退回 state 单飞锁').not.toContain('setChattingId')
+    expect(codeOnlySource, '不许退回 state 单飞锁').not.toContain('chattingId')
+    // 收尾只放自己的锁（世代变了就留给新任务）
+    expect(chatWith).toContain('if (chatEpochRef.current === epoch) chattingRef.current = false')
+  })
+
+  test('换账号渲染期重置清掉在飞的聊一聊锁', async () => {
+    const code = await source()
+    const reset = sliceFrom(code, 'if (prevUserId !== userId) {', 'chatEpochRef.current += 1')
+    expect(reset).toContain('setRemoving(false)')
+    expect(reset).toContain('chattingRef.current = false')
+    expect(reset).toContain('chatEpochRef.current += 1')
+  })
+})

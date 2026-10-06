@@ -18,6 +18,7 @@ import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { cancellable } from '@/lib/cancellable'
 import { formatAmount } from '@/lib/money'
+import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
@@ -573,7 +574,9 @@ export default function UserHome() {
           text="这个主页的主人可能已注销，或链接已失效"
           icon={ICONS.box}
           actionText="返回"
-          onAction={() => void Taro.navigateBack()}
+          onAction={() => {
+            goBackOrHome()
+          }}
         />
       ) : (
         <ScrollView

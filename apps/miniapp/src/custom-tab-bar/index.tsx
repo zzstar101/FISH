@@ -27,6 +27,11 @@ import { MOCK_FALLBACK_ENABLED } from '@/features/load-failure'
 // 演示兜底的 fixture 取值走 `mock-fallback`：生产构建由 `config/index.ts` 的 alias
 // 换成零 `@/mock/*` 依赖的桩，fixture 子图不进底栏（底栏在每个 Tab 页都渲染）。
 import { demoTabbarUnread } from '@/features/mock-fallback'
+import {
+  gateUnreadForNotifyPrefs,
+  NOTIFY_PREFS_EVENT,
+  readNotifyPrefsFromStorage,
+} from '@/features/settings/unread-badge'
 import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import './index.scss'
 
@@ -177,6 +182,29 @@ export default function CustomTabBar() {
   const demoUnread = useMemo(() => (MOCK_FALLBACK_ENABLED ? demoTabbarUnread : undefined), [])
 
   /**
+   * 通知偏好（设置页「通知明细」四行）对底栏红点的闸门。
+   *
+   * 存储同步读（`getStorageSync`），但底栏实例常驻每个 Tab 页，设置页改开关时它
+   * 不会重渲染 —— 所以除了挂载时读一次，还订阅 `NOTIFY_PREFS_EVENT`：设置页每写
+   * 一次通知开关就广播一次，这里把版本号 +1，强制下面的徽标 effect 按新偏好重算
+   * （同 `lib/tabbar-sync` 的广播模式）。读失败视为「没存过」，按设置页那份默认值处理。
+   */
+  const [prefsVersion, setPrefsVersion] = useState(0)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 重算只由 prefsVersion（事件广播）驱动，存储不是响应式来源
+  const notifyPrefs = useMemo(
+    () => readNotifyPrefsFromStorage((key) => Taro.getStorageSync(key)),
+    [prefsVersion],
+  )
+
+  useEffect(() => {
+    const reread = () => setPrefsVersion((version) => version + 1)
+    Taro.eventCenter.on(NOTIFY_PREFS_EVENT, reread)
+    return () => {
+      Taro.eventCenter.off(NOTIFY_PREFS_EVENT, reread)
+    }
+  }, [])
+
+  /**
    * 冷启动补快照（#129 review P1；#89 收口会话未读那一分量）。
    *
    * 底栏在每个 Tab 页都渲染，用户可能一次都不进消息页 —— 那时没有任何人发布快照。
@@ -209,11 +237,16 @@ export default function CustomTabBar() {
     // 判定走 `unreadBadgeText`（纯函数、有用例）：有分量 `null`（「不知道」：
     // 列表未就绪 / 加载失败 / 真实接口不可达）时**不下「没有未读」的结论、保持上一帧** ——
     // 否则一枚本来亮着的徽标会莫名消失，而用户其实还有未读。
+    //
+    // 进 `unreadBadgeText` 前先过通知偏好闸门（`gateUnreadForNotifyPrefs`）：用户在
+    // 设置页关掉的类别不计入红点 —— 关掉给 `0`（明确的「不计入」），开着才透传
+    // （包括 `null`，「不知道」的语义原样保留）。
     if (unread && unread.ownerId === userId) {
+      const gated = gateUnreadForNotifyPrefs(unread, notifyPrefs)
       setBadge(
         unreadBadgeText({
-          conversations: unread.conversations,
-          notifications: unread.notifications,
+          conversations: gated.conversations,
+          notifications: gated.notifications,
           previous: badge,
         }),
       )
@@ -223,15 +256,15 @@ export default function CustomTabBar() {
     // 口径，真实构建保持上一帧 —— 等 `hydrateUnread` 的真实结果落地再决定，
     // 不能用 fixture 先亮一个数再说，也不能因为「还没到」就把已知的徽标熄掉。
     if (!demoUnread) return
-    const fallback = demoUnread()
+    const gatedFallback = gateUnreadForNotifyPrefs(demoUnread(), notifyPrefs)
     setBadge(
       unreadBadgeText({
-        conversations: fallback.conversations,
-        notifications: fallback.notifications,
+        conversations: gatedFallback.conversations,
+        notifications: gatedFallback.notifications,
         previous: badge,
       }),
     )
-  }, [authStatus, userId, unread, demoUnread, badge])
+  }, [authStatus, userId, unread, demoUnread, notifyPrefs, badge])
 
   // 选中态同步：挂载时同步一次 + 监听 Tab 页 onShow 广播（lib/tabbar-sync）。
   // 复用实例不重新渲染，靠广播是它唯一能感知「我又被显示」的机会。

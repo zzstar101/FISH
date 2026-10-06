@@ -538,6 +538,21 @@
   height: 100%;
 }
 
+/* 无图占位：渐变底（.sell__badge-thumb 自带）上居中一枚相机图标，不拿产品图冒充 */
+.sell__badge-thumb-ph {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sell__badge-thumb-ph-ic {
+  width: 44px;
+  height: 44px;
+  opacity: 0.5;
+}
+
 /* 角标本体：与首页商品卡共用同一套 mixin，两处样式不会各自漂移 */
 .sell__badge-stack {
   position: absolute;

@@ -32,6 +32,7 @@ import {
 } from '@/features/visual-search/sheet'
 import { startVisualSearch } from '@/features/visual-search/start'
 import { formatAmount } from '@/lib/money'
+import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -425,7 +426,9 @@ export default function VisionResult() {
           top: `${nav.statusBarHeight + nav.contentHeight / 2}px`,
           ...backGeo.btnStyle,
         }}
-        onClick={() => void Taro.navigateBack()}
+        onClick={() => {
+          goBackOrHome()
+        }}
       >
         <View className="vres__back-chevron" style={backGeo.chevronStyle} />
       </View>
