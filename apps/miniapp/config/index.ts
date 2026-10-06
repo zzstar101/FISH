@@ -12,10 +12,13 @@ const runtimeRequire = createRequire(miniappRequire.resolve('@tarojs/runtime'))
 // https://docs.taro.zone/docs/config
 export default defineConfig<'webpack5'>(async (merge) => {
   /**
-   * 演示兜底开关的**构建期**口径（两处注入点见下：这里的 alias 与
-   * `defineConstants.__ALLOW_MOCK_FALLBACK__`，本次一起收窄成同一个表达式）：
-   * **只认显式的 `TARO_APP_MOCK=1`**（本地演示），
+   * 演示构建的**构建期**口径：**只认显式的 `TARO_APP_MOCK=1`**（本地演示），
    * 其余（含 `bun run build:weapp` 与 `bun run dev:weapp`）一律切掉。
+   *
+   * 下面**四个注入点**（alias、`__ALLOW_MOCK_FALLBACK__`、`__DEMO_AUTH__`、
+   * `__DEMO_AI_POLISH__`）共用这一个表达式。它们的**读取处**是三件独立的事
+   * （接口失败退 fixture / 演示登录态 / AI 润色兜底），但「什么时候算演示构建」只能有
+   * 一处定义：抄四遍的话，下次收窄口径漏改一处，就会有一个开关偷偷跟着旧条件走。
    *
    * `NODE_ENV=development` 不再打开兜底（#304 / #182）。它此前是默认打开的那一支，
    * 而 dev 构建正是「接着真实后端联调」的构建：后端没起、断网或域名配错时，订单页会
@@ -24,7 +27,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
    * 演示数据就显式写 `TARO_APP_MOCK=1`：让「现在看的是假数据」由命令本身说清楚，
    * 而不是由构建模式替使用者决定。
    */
-  const allowMockFallback = process.env.TARO_APP_MOCK === '1'
+  const mockEnabled = process.env.TARO_APP_MOCK === '1'
 
   const baseConfig: UserConfigExport<'webpack5'> = {
     projectName: 'fish-miniapp',
@@ -40,7 +43,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
     /**
      * 演示兜底 fixture 的构建期切分，见 `src/features/mock-fallback.ts` 的文件头。
      *
-     * `allowMockFallback` 为假时，把**精确路径** `@/features/mock-fallback` 指向零
+     * `mockEnabled` 为假时，把**精确路径** `@/features/mock-fallback` 指向零
      * `@/mock/*` 依赖的桩文件，于是整片演示 fixture（`mock/api` 及其 catalog /
      * chat / account / users / wishes / discover）根本不进生产包的模块图 —— 它们此前
      * 被 `features/fetchers.ts` 与 `custom-tab-bar/index.tsx` 的静态 import 拖进首屏
@@ -59,7 +62,7 @@ export default defineConfig<'webpack5'>(async (merge) => {
      * 生效与否以构建产物的 grep 为准，不能只看这段配置。
      */
     alias: {
-      ...(allowMockFallback
+      ...(mockEnabled
         ? {}
         : {
             '@/features/mock-fallback': resolve(
@@ -93,35 +96,36 @@ export default defineConfig<'webpack5'>(async (merge) => {
        * 用户必须看到错误态，而不是一批「看起来正常」的假商品。所以默认关，
        * 只在显式给 `TARO_APP_MOCK=1`（本地演示）时打开。
        *
-       * `NODE_ENV=development` **不再**打开它（#304 / #182，口径见上面 `allowMockFallback`
+       * `NODE_ENV=development` **不再**打开它（#304 / #182，口径见上面 `mockEnabled`
        * 的说明）：dev 构建是联调构建，静默回退会把 `t-*` 假 id 漏进真实面交页 / 会话链路。
        *
        * `taro build` 走 production，因此 `bun run build:weapp` 默认**不退 mock**；
        * 想在开发者工具里看 mock 演示页，用 `TARO_APP_MOCK=1 bun run build:weapp`。
        */
-      __ALLOW_MOCK_FALLBACK__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
+      __ALLOW_MOCK_FALLBACK__: JSON.stringify(mockEnabled),
       /**
        * 演示登录态（读取处 `src/features/auth/demo.ts`）：是否用一个**内置的演示账号**
        * 直接进入已登录态，让受限页在本地没有后端时也能打开。
        *
-       * 收窄后它与 `__ALLOW_MOCK_FALLBACK__` **同源**（都只认 `TARO_APP_MOCK=1`，见上面
-       * `allowMockFallback` / #304），但仍是**两个独立注入点**：H5 预览产物
+       * 收窄后它与 `__ALLOW_MOCK_FALLBACK__` **同源**（都取上面那个 `mockEnabled`，见
+       * #304），但仍是**两个独立注入点**：H5 预览产物
        * （`preview/build.mjs`）按需分别注入这几个常量，而「进页面就当已登录」与
        * 「接口失败退 fixture」本来就是两件事 —— 谁需要谁显式打开。
        */
-      __DEMO_AUTH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
+      __DEMO_AUTH__: JSON.stringify(mockEnabled),
       /**
        * AI 润色的 mock 兜底门禁（读取处 `src/features/ai/api.ts`）。
        *
-       * **只认显式的 `TARO_APP_MOCK=1`**，与 `__DEMO_AUTH__` 同形、同样不复用
-       * `__ALLOW_MOCK_FALLBACK__`（#142 设计 §10.2）：润色失败会摆出本地假候选，而那些
+       * **只认显式的 `TARO_APP_MOCK=1`**（与 `__DEMO_AUTH__` 取同一个 `mockEnabled`；
+       * #142 设计 §10.2 要求它不跟着别的开关被动打开，这里仍由构建命令显式决定）：
+       * 润色失败会摆出本地假候选，而那些
        * 候选带着 `provider='stub'` 角标、与真实 stub 传输的候选长得一样，现场分不清
        * "接的是后端还是兜底"；这个开关宁可只跟显式演示命令绑定，也不要跟着别的开关被动打开。
        *
        * 且它只覆盖**传输层失败**（后端没起 / 断网）：服务端一旦给出错误信封，一律照常
        * 走真实错误 UI —— 否则 429 会一边倒计时一边摆假候选。
        */
-      __DEMO_AI_POLISH__: JSON.stringify(process.env.TARO_APP_MOCK === '1'),
+      __DEMO_AI_POLISH__: JSON.stringify(mockEnabled),
     },
     framework: 'react',
     // 本地开发的依赖预编译（esbuild）会把 workspace 里以 TS 源码形式发布的包当成外部依赖处理，
