@@ -42,5 +42,5 @@
   - 契约 `packages/contracts/src/system/public-id.ts`，各 domain schema 用其 `UserIdSchema` 等做边界校验；
   - 商品人工编号：占号表 `packages/db/src/schema/listing-numbers.ts`（`listing_no` 主键 + 12 位十进制 `CHECK`，见 `:8`、`:15`），商品侧 `packages/db/src/schema/listings.ts:46`（`listingNo`）、`:76`（`listings_listing_no_uq`）、`:79-81`（指向占号表的复合外键，物理删除后仍绑定原 UUID）；
   - 迁移 `packages/db/src/migrations/0020_real_golden_guardian.sql`、`0021_whole_mister_sinister.sql`（由 drizzle-kit 生成，未手改）；
-  - 商品编号精确查询的 Web PC 接线由 #382（`b5748c7f`）完成，见 `docs/design/issue-89-web-pc-gaps.md` §四。
+  - 商品编号精确查询的 Web PC 接线由 #382（`b5748c7f`）完成，见 `docs/design/issue-89-web-pc-t10-id-inventory.md:34`。
 - 实施期的逐项验收证据以最终 PR #280 及其测试为准，不在本文内重复。
