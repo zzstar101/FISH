@@ -135,13 +135,13 @@ export function AuditPage({ search }: { search: AuditSearch }) {
       <div className="flex flex-wrap items-center gap-3">
         <FilterChips
           ariaLabel="动作筛选"
-          onChange={(action) => update({ action: action as AuditSearch['action'] })}
+          onChange={(action) => update({ action })}
           options={auditActionOptions()}
           value={search.action}
         />
         <FilterChips
           ariaLabel="目标类型筛选"
-          onChange={(targetType) => update({ targetType: targetType as AuditSearch['targetType'] })}
+          onChange={(targetType) => update({ targetType })}
           options={auditTargetTypeOptions()}
           value={search.targetType}
         />

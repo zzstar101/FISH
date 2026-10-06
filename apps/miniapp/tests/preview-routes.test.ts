@@ -84,8 +84,8 @@ const previewPages = pageRoutes(
 
 describe('H5 预览路由表 vs app.config 页面清单', () => {
   test('解析器没取空：两边都解析出了完整清单', () => {
-    // 5 个主包 tab 页 + 32 个分包页
-    expect(appPages.length).toBe(37)
+    // 5 个主包 tab 页 + 33 个分包页
+    expect(appPages.length).toBe(38)
     expect(previewPages.length).toBe(appPages.length)
   })
 

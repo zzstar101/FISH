@@ -8,7 +8,15 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const COOKIE_NAME = 'fish_session'
 
-const hashToken = (token: string) => new Bun.CryptoHasher('sha256').update(token).digest('hex')
+/**
+ * 明文令牌 → `sessions.token_hash`。
+ *
+ * 导出给 #464 的账号注销用：申请注销要「撤销除当前这台设备以外的全部会话」，判据就是令牌
+ * 哈希，所以那个事务必须复用**同一份**哈希实现 —— 各写一份迟早会在换算法时漏改一处，
+ * 结果是旧会话撤销不掉。
+ */
+export const hashSessionToken = (token: string) =>
+  new Bun.CryptoHasher('sha256').update(token).digest('hex')
 
 /** 32 字节随机令牌（hex 编码，64 字符）。明文只写给 cookie，库里只有哈希。 */
 function generateToken(): string {
@@ -28,7 +36,7 @@ async function insertSession(
 ): Promise<{ token: string; expiresAt: Date }> {
   const token = generateToken()
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
-  await executor.insert(sessions).values({ userId, tokenHash: hashToken(token), expiresAt })
+  await executor.insert(sessions).values({ userId, tokenHash: hashSessionToken(token), expiresAt })
   return { token, expiresAt }
 }
 
@@ -52,7 +60,7 @@ export function createSessions(db: Db) {
       const rows = await db
         .select({ id: sessions.id, userId: sessions.userId, expiresAt: sessions.expiresAt })
         .from(sessions)
-        .where(eq(sessions.tokenHash, hashToken(token)))
+        .where(eq(sessions.tokenHash, hashSessionToken(token)))
         .limit(1)
 
       const row = rows[0]
@@ -66,7 +74,7 @@ export function createSessions(db: Db) {
 
     /** 幂等：令牌不存在时什么也不做。 */
     async revoke(token: string): Promise<void> {
-      await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(token)))
+      await db.delete(sessions).where(eq(sessions.tokenHash, hashSessionToken(token)))
     },
   }
 }

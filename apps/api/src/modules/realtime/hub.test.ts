@@ -9,6 +9,14 @@ class FakeSocket implements WsSender {
   }
 }
 
+/** 带 `close()` 的假连接：#464 的 `closeUser` 要断言「真的调了 close」。 */
+class ClosableSocket extends FakeSocket {
+  closed = false
+  close() {
+    this.closed = true
+  }
+}
+
 describe('connection hub', () => {
   test('pushes to all connections of all target users', () => {
     const hub = createConnectionHub()
@@ -82,5 +90,40 @@ describe('connection hub', () => {
 
     expect(() => hub.pushToUsers(['alice'], { type: 'message.new' } as never)).toThrow()
     expect(socket.frames).toHaveLength(0) // 违规事件不出服务端
+  })
+
+  // #464：申请注销后服务端要主动断开该用户的全部连接（含当前设备）。
+  test('closeUser 断开该用户的全部连接，不影响别人，并回报断开的条数', () => {
+    const hub = createConnectionHub()
+    const aliceA = new ClosableSocket()
+    const aliceB = new ClosableSocket()
+    const bob = new ClosableSocket()
+    hub.attach('alice', aliceA)
+    hub.attach('alice', aliceB)
+    hub.attach('bob', bob)
+
+    expect(hub.closeUser('alice')).toBe(2)
+    expect(aliceA.closed).toBe(true)
+    expect(aliceB.closed).toBe(true)
+    expect(bob.closed).toBe(false)
+    // 没有连接的用户（或重复调用）是幂等的 0，不是抛错。
+    expect(hub.closeUser('alice')).toBe(0)
+    expect(hub.connectionCount()).toBe(1)
+  })
+
+  test('closeUser 之后重连：旧连接的 onClose 不会把新连接从登记里摘掉', () => {
+    const hub = createConnectionHub()
+    const first = new ClosableSocket()
+    const detachFirst = hub.attach('alice', first)
+    hub.closeUser('alice')
+
+    const second = new ClosableSocket()
+    hub.attach('alice', second)
+    // 真实 WS 场景：closeUser 触发的关闭回调晚于重连到达。没有身份判断时这里会把
+    // 新连接的 Set 一起摘掉，之后 alice 再也收不到推送（且不报错）。
+    detachFirst()
+
+    hub.pushToUsers(['alice'], { type: 'pong' })
+    expect(second.frames).toHaveLength(1)
   })
 })

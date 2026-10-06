@@ -213,6 +213,11 @@ function toUserSummary(row: UserSummaryRow) {
     createdAt: row.createdAt.toISOString(),
     listingCount: row.listingCount,
     lastActivityAt: row.lastActivityAt?.toISOString() ?? null,
+    // #464：只读透出注销状态。`safeParse` 是这里唯一的校验点，所以枚举值直接来自 DB 文本 ——
+    // 万一 DB 里出现了契约没列的值，这里会返回解析失败（调用方按既有约定处理），而不是静默放行。
+    accountStatus: row.accountStatus,
+    deletionRequestedAt: row.deletionRequestedAt?.toISOString() ?? null,
+    purgeScheduledAt: row.purgeScheduledAt?.toISOString() ?? null,
   })
 }
 

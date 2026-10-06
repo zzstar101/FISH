@@ -14,6 +14,14 @@ export const adminAuditActionEnum = pgEnum('admin_audit_action', [
   'USER_RESTRICTION_LIFTED',
   'USER_BANNED',
   'USER_UNBANNED',
+  /**
+   * #464：账号注销冷静期到期、去标识化已执行。
+   *
+   * 这是**系统动作**，不是管理员动作：`actor_user_id` 为 NULL（与「初始化提升」同一形状），
+   * `target_type = 'USER'`、`target_id = 用户 id`；`before` / `after` 只记状态与删除计数，
+   * 不记昵称 / 学号 / 手机号等原始资料（本表禁止保存敏感信息）。
+   */
+  'ACCOUNT_DELETION_COMPLETED',
 ])
 
 /** 审计目标类型。审核决定以 moderation record 为审计目标。 */

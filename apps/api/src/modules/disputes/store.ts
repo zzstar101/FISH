@@ -1,5 +1,6 @@
 import type { AdminAuditAction, AdminAuditTargetType } from '@fish/contracts/admin/schema'
 import type { DisputeResolution, DisputeStatus, DisputeType } from '@fish/contracts/disputes/schema'
+import type { TransactionStatus } from '@fish/contracts/transactions/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { jsonParam } from '@fish/db/json'
@@ -44,16 +45,22 @@ export type DisputeNotificationWriter = (
   input: DisputeNotificationInput,
 ) => Promise<void>
 
-/** 一条争议的持久化形态。 */
+/**
+ * 一条争议的持久化形态。
+ *
+ * 三个 pgEnum 列（`type` / `status` / `resolution`）直接用契约的枚举类型，而不是 `string`：
+ * SQL 结果在 `disputeFromRow` 这一处边界断言成枚举，下游（service 的判态、过滤、DTO 组装）
+ * 就不再需要 `as` 把 `string` 掰回枚举 —— 断言只允许出现在解析边界，不散落在业务分支里。
+ */
 export type DisputeRow = {
   id: string
   transactionId: string
   initiatorId: string
   respondentId: string
-  type: string
+  type: DisputeType
   detailText: string | null
-  status: string
-  resolution: string | null
+  status: DisputeStatus
+  resolution: DisputeResolution | null
   resolutionNote: string | null
   handledBy: string | null
   handledAt: Date | null
@@ -73,7 +80,8 @@ export type DisputeTransactionRow = {
   buyer: DisputeUserRow
   seller: DisputeUserRow
   amountCents: number
-  status: string
+  /** `transactions.status`（pgEnum）→ 契约 `transactionStatusSchema` 的同一值域。 */
+  status: TransactionStatus
   completedAt: Date | null
   cancelledAt: Date | null
   createdAt: Date
@@ -329,10 +337,12 @@ function disputeFromRow(row: Record<string, unknown>): DisputeRow {
     transactionId: String(row.transaction_id),
     initiatorId: String(row.initiator_id),
     respondentId: String(row.respondent_id),
-    type: String(row.type),
+    // 三个 pgEnum 列的唯一断言点：库里的值域由迁移的 enum 定义保证，这里只是把
+    // `unknown` 收窄成契约枚举；真正的兜底仍在 service 出参的 zod `parse`。
+    type: row.type as DisputeType,
     detailText: (row.detail_text as string | null) ?? null,
-    status: String(row.status),
-    resolution: (row.resolution as string | null) ?? null,
+    status: row.status as DisputeStatus,
+    resolution: (row.resolution as DisputeResolution | null) ?? null,
     resolutionNote: (row.resolution_note as string | null) ?? null,
     handledBy: (row.handled_by as string | null) ?? null,
     handledAt: toNullableDate(row.handled_at),
@@ -361,7 +371,7 @@ function joinedFromRow(row: Record<string, unknown>): DisputeJoinedRow {
       buyer: { id: String(row.buyer_summary_id), nickname: String(row.buyer_nickname) },
       seller: { id: String(row.seller_summary_id), nickname: String(row.seller_nickname) },
       amountCents: Number(row.transaction_amount_cents),
-      status: String(row.transaction_status),
+      status: row.transaction_status as TransactionStatus,
       completedAt: toNullableDate(row.transaction_completed_at),
       cancelledAt: toNullableDate(row.transaction_cancelled_at),
       createdAt: toDate(row.transaction_created_at),
@@ -450,7 +460,7 @@ export function createSqlDisputeStore(
         buyer: { id: String(row.buyer_id), nickname: String(row.buyer_nickname) },
         seller: { id: String(row.seller_id), nickname: String(row.seller_nickname) },
         amountCents: Number(row.amount_cents),
-        status: String(row.status),
+        status: row.status as TransactionStatus,
         completedAt: toNullableDate(row.completed_at),
         cancelledAt: toNullableDate(row.cancelled_at),
         createdAt: toDate(row.created_at),

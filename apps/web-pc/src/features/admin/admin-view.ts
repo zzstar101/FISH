@@ -80,9 +80,10 @@ export const ROLE_META: Record<UserRole, { label: string; variant: BadgeVariant 
   ADMIN: { label: '管理员', variant: 'brand' },
 }
 
-/** 审计动作枚举 → 中文。治理五动作各占一行，便于审计页按动作筛选时对得上。 */
+/** 审计动作枚举 → 中文。契约每个取值各占一行，便于审计页按动作筛选时对得上。 */
 export const AUDIT_ACTION_META: Record<AdminAuditAction, string> = {
   ADMIN_PROMOTED: '提升管理员',
+  ACCOUNT_DELETION_COMPLETED: '账号注销完成',
   MODERATION_DECISION: '人工审核决定',
   REPORT_DECISION: '举报处理',
   DISPUTE_DECISION: '争议处理',
@@ -101,7 +102,7 @@ export function auditActionLabel(action: AdminAuditAction): string {
 
 /**
  * 详情页「最近管理操作」的入参。契约把 `recentAuditLogs[].action` 声明成 `z.string()`
- * （`admin/schema.ts` 的列表 DTO，与审计列表的 `AdminAuditActionSchema` 不同），
+ * （`admin/schema.ts` 的详情 DTO，与审计列表的 `AdminAuditActionSchema` 不同），
  * 所以这里在边界用契约 Schema 窄化一次：命中给中文标签，未命中（契约漂移）照实显示原文。
  */
 export function auditActionLabelOf(action: string): string {

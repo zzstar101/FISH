@@ -4,6 +4,7 @@ import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { jsonParam } from './json'
 import { conversations } from './schema/conversations'
+import { disputeAttachments, disputeEvidenceMessages, disputes } from './schema/disputes'
 import { embeddings } from './schema/embeddings'
 import { jobs } from './schema/jobs'
 import { listingMediaObjects } from './schema/listing-media'
@@ -61,6 +62,9 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       conversations,
       messages,
       transactions,
+      disputes,
+      disputeAttachments,
+      disputeEvidenceMessages,
       notifications,
       jobs,
       userInterestProfiles,
@@ -86,6 +90,19 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       conversations: 3,
       messages: 4,
       transactions: 2,
+      // #465：争议与证据由用户真实发起产生，seed 不预置（同 matches / embeddings 的取舍：
+      // 假争议落进 seed 库比空表更误导，它还会伪造一条不存在的处理进度）。
+      // 这三条断言锁住的是**写侧确实不预置**争议数据：seed 只写 users / listingNumbers /
+      // listings / listingImages / wishes / conversations / messages / transactions / jobs
+      // 九张表。
+      // 它们**测不到 TRUNCATE 清单漏列**：清单漏掉任何一张被引用的表时，seed() 自身的
+      // TRUNCATE 会先抛 0A000（实测 detail: Table "dispute_attachments" references
+      // "users"），根本走不到下面的 counts —— 换成父提交 d170f609 的旧 counts 在同一处
+      // 破坏下同样失败。清单不变量由 TRUNCATE 语句自身兜住：它覆盖 39 张业务表，本 counts
+      // 只覆盖其中 16 张，其余 23 张靠 seed() 抛出的 0A000 把关。
+      disputes: 0,
+      disputeAttachments: 0,
+      disputeEvidenceMessages: 0,
       notifications: 0,
       jobs: 1,
       // #323 R2：兴趣画像由 worker 的 REFRESH_USER_INTEREST job 从真实行为聚合产出，

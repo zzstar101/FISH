@@ -122,6 +122,22 @@ describe('AdminShell（#467 验收 1：管理壳四分支）', () => {
     expect(text).not.toContain('无管理权限')
   })
 
+  test('404 按身份校验失败处理（/admin/me 不存在 = 部署/版本问题，不是「目标被删」）', () => {
+    const text = textOf(
+      render(
+        okResult(undefined, {
+          isError: true,
+          error: new ApiError('ADMIN_NOT_FOUND', 404, '目标不存在或已被删除'),
+        }),
+      ),
+    )
+
+    expect(text).toContain('管理身份校验失败')
+    expect(text).toContain('重试')
+    expect(text).not.toContain('目标不存在或已被删除')
+    expect(text).not.toContain('无管理权限')
+  })
+
   test('校验中给加载态', () => {
     const text = textOf(render(okResult(undefined, { isPending: true })))
 

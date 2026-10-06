@@ -263,6 +263,8 @@ export function describeRecallFailure(error: unknown): string {
 export function describeCreateConversationFailure(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'LISTING_NOT_FOUND') return '商品不存在或已下架'
+    // #466 拉黑守卫（中性码）：不暴露「谁拉黑了谁」，只说会话当前不可用。
+    if (error.code === 'CONVERSATION_UNAVAILABLE') return '会话当前不可用'
   }
   return '发起会话失败，请重试'
 }
@@ -273,6 +275,8 @@ export function describeSendFailure(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === 'IDEMPOTENCY_KEY_REUSED') return '该次发送已用于其它内容'
     if (error.code === 'CONVERSATION_NOT_FOUND') return '会话不存在或不可访问'
+    // #466 拉黑守卫（中性码，双向同文案）：会话被拉黑关系冻结，重试不会成功。
+    if (error.code === 'CONVERSATION_UNAVAILABLE') return '会话当前不可用，暂时无法发送消息'
     if (error.code === 'VALIDATION_FAILED') return '消息内容不合法'
     // #67 媒体链路：上传未完成 / 内容与声明不符 / 超限 / 越权读取，逐条给明确反馈。
     if (error.code === 'MEDIA_OBJECT_NOT_FOUND') return '媒体上传未完成，请重试'

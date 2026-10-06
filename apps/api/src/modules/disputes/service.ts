@@ -7,6 +7,7 @@ import {
   AdminDisputeListResponseSchema,
   type AdminDisputeQueueQuery,
   type AdminDisputeResolveInput,
+  DISPUTE_WINDOW_DAYS,
   type DisputeAttachment,
   type DisputeAttachmentConfirmRequest,
   type DisputeAttachmentConfirmResponse,
@@ -79,8 +80,11 @@ export class DisputeServiceError extends Error {
   }
 }
 
-/** 交易终态后的发起窗口（天）。`PENDING_MEETUP` 无时限。 */
-const WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+/**
+ * 交易终态后的发起窗口：**从契约常量派生**（`DISPUTE_WINDOW_DAYS`），不再另写一份天数。
+ * `PENDING_MEETUP` 无时限。契约侧是该口径的唯一定义（客户端文案与错误码同源）。
+ */
+const WINDOW_MS = DISPUTE_WINDOW_DAYS * 24 * 60 * 60 * 1000
 
 /** 管理端详情里「同交易其它未决争议」的上限（同 reports 的 `RELATED_PENDING_LIMIT`）。 */
 const RELATED_PENDING_LIMIT = 20
@@ -168,8 +172,7 @@ function toTransactionSummary(row: DisputeTransactionRow): DisputeTransactionSum
     buyer: toUserSummary(row.buyer),
     seller: toUserSummary(row.seller),
     amountCents: row.amountCents,
-    // zod 会在 parse 时校验枚举值；这里按契约类型断言，脏值由 parse 兜住。
-    status: row.status as DisputeTransactionSummary['status'],
+    status: row.status,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),
@@ -218,7 +221,7 @@ function toEvidenceDto(row: DisputeEvidenceRow): DisputeEvidence {
   }
 }
 
-/** 交易终态后超过 30 天即关闭发起窗口；`PENDING_MEETUP` 无时限。 */
+/** 交易终态后超过 `DISPUTE_WINDOW_DAYS` 天即关闭发起窗口；`PENDING_MEETUP` 无时限。 */
 function isWindowClosed(transaction: DisputeTransactionRow, now: number): boolean {
   const closedAt = transaction.completedAt ?? transaction.cancelledAt
   if (!closedAt) return false
@@ -314,12 +317,12 @@ export function createDisputeService(options: {
         )
       }
 
-      // 2) 终态交易有 30 天窗口；PENDING_MEETUP 期间随时可以发起。
+      // 2) 终态交易有 `DISPUTE_WINDOW_DAYS` 天窗口；PENDING_MEETUP 期间随时可以发起。
       if (isWindowClosed(transaction, now())) {
         throw new DisputeServiceError(
           'DISPUTE_WINDOW_CLOSED',
           409,
-          '交易结束已超过 30 天，无法再发起争议',
+          `交易结束已超过 ${DISPUTE_WINDOW_DAYS} 天，无法再发起争议`,
         )
       }
 
