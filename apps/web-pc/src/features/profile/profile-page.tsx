@@ -5,6 +5,7 @@ import { ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import {
+  Ban,
   Bookmark,
   ChevronRight,
   CircleDollarSign,
@@ -186,6 +187,23 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
               <div>
                 <h2 className="font-semibold">我的评论</h2>
                 <p className="mt-0.5 text-ink-3 text-sm">查看你发过的商品留言与交易评价</p>
+              </div>
+            </div>
+            <ChevronRight className="size-4 shrink-0 text-ink-3" />
+          </div>
+        </Card>
+      </Link>
+
+      <Link to="/blocked">
+        <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-xl bg-surface-2 text-brand">
+                <Ban className="size-5" />
+              </span>
+              <div>
+                <h2 className="font-semibold">黑名单</h2>
+                <p className="mt-0.5 text-ink-3 text-sm">管理你拉黑的用户，可随时解除</p>
               </div>
             </div>
             <ChevronRight className="size-4 shrink-0 text-ink-3" />

@@ -298,7 +298,9 @@ class MemoryTxStore implements TransactionStore {
   }
 }
 
-async function build() {
+async function build(
+  blocksOverrides: Partial<{ existsBlockBetween: (a: string, b: string) => Promise<boolean> }> = {},
+) {
   const messages = new MemoryMessageStore()
   const store = new MemoryTxStore(messages)
   const storage = {
@@ -310,6 +312,7 @@ async function build() {
   /** 任务一 #89：交易进展通知的 spy（服务约定「动作成功后调用、收件人是对方」） */
   const notifications: Parameters<TransactionNotifier>[0][] = []
   const service = createTransactionService({
+    blocks: { existsBlockBetween: async () => false, ...blocksOverrides },
     store,
     messages,
     storage,
@@ -354,6 +357,22 @@ describe('transaction service: propose / reject / accept', () => {
     expect(
       service.propose(buyer, { conversationId: conversationA, amountCents: 16000 }),
     ).rejects.toMatchObject({ status: 404, code: 'CONVERSATION_NOT_FOUND' })
+  })
+
+  /*
+   * #466 拉黑守卫：提案是新发起的联系（会落一张卡片 + 一条通知），拉黑后任一方都不能再推进；
+   * 既有交易的 accept/reject/面交/核销不走这里，不受影响。中性码与 chat 域一致。
+   */
+  test('拉黑守卫：会话双方存在拉黑边 → 403 CONVERSATION_UNAVAILABLE（提案被拦，中性码）', async () => {
+    const { service, messages, notifications } = await build({
+      existsBlockBetween: async () => true,
+    })
+    await expect(
+      service.propose(buyer, { conversationId: conversationA, amountCents: 16000 }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+    // 拦在写 SYSTEM 与发通知之前：既无消息落库，也无「你收到一张卡片」的通知。
+    expect(messages.messages).toHaveLength(0)
+    expect(notifications).toHaveLength(0)
   })
 
   test('403 NOT_CONVERSATION_BUYER when the seller proposes; 404 for outsiders', async () => {

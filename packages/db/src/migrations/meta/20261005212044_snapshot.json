@@ -1,5 +1,5 @@
 {
-  "id": "97b48ed1-62cc-4b74-a742-5d51cc1c591c",
+  "id": "d8ea0946-823b-4e1a-b3b6-abe24a3bee90",
   "prevId": "7fb2f77e-f1ff-4295-9eeb-0464ae3b2e64",
   "version": "7",
   "dialect": "postgresql",
@@ -782,6 +782,126 @@
         "visual_search_attempts_subject_type_allowed": {
           "name": "visual_search_attempts_subject_type_allowed",
           "value": "\"visual_search_attempts\".\"subject_type\" in ('user', 'ip', 'session')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.user_blocks": {
+      "name": "user_blocks",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "blocker_id": {
+          "name": "blocker_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "blocked_id": {
+          "name": "blocked_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_blocks_blocker_id_blocked_id_uq": {
+          "name": "user_blocks_blocker_id_blocked_id_uq",
+          "columns": [
+            {
+              "expression": "blocker_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "blocked_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_blocks_blocker_id_created_at_id_idx": {
+          "name": "user_blocks_blocker_id_created_at_id_idx",
+          "columns": [
+            {
+              "expression": "blocker_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_blocks_blocker_id_users_id_fk": {
+          "name": "user_blocks_blocker_id_users_id_fk",
+          "tableFrom": "user_blocks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "blocker_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "user_blocks_blocked_id_users_id_fk": {
+          "name": "user_blocks_blocked_id_users_id_fk",
+          "tableFrom": "user_blocks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "blocked_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "user_blocks_no_self_block": {
+          "name": "user_blocks_no_self_block",
+          "value": "\"user_blocks\".\"blocker_id\" <> \"user_blocks\".\"blocked_id\""
         }
       },
       "isRLSEnabled": false
@@ -3974,26 +4094,6 @@
           "notNull": true,
           "default": "'USER'"
         },
-        "account_status": {
-          "name": "account_status",
-          "type": "account_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'ACTIVE'"
-        },
-        "deletion_requested_at": {
-          "name": "deletion_requested_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "purge_scheduled_at": {
-          "name": "purge_scheduled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -4024,22 +4124,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "users_purge_scheduled_at_idx": {
-          "name": "users_purge_scheduled_at_idx",
-          "columns": [
-            {
-              "expression": "purge_scheduled_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"users\".\"account_status\" = 'DELETION_REQUESTED'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {},
@@ -4061,12 +4145,7 @@
         }
       },
       "policies": {},
-      "checkConstraints": {
-        "users_account_deletion_timestamps_consistent": {
-          "name": "users_account_deletion_timestamps_consistent",
-          "value": "(\"users\".\"account_status\" = 'DELETION_REQUESTED') = (\"users\".\"deletion_requested_at\" IS NOT NULL AND \"users\".\"purge_scheduled_at\" IS NOT NULL)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.wechat_identities": {
@@ -5725,8 +5804,7 @@
         "USER_RESTRICTED",
         "USER_RESTRICTION_LIFTED",
         "USER_BANNED",
-        "USER_UNBANNED",
-        "ACCOUNT_DELETION_COMPLETED"
+        "USER_UNBANNED"
       ]
     },
     "public.admin_audit_target_type": {
@@ -5766,15 +5844,6 @@
         "PENDING_MEETUP",
         "COMPLETED",
         "CANCELLED"
-      ]
-    },
-    "public.account_status": {
-      "name": "account_status",
-      "schema": "public",
-      "values": [
-        "ACTIVE",
-        "DELETION_REQUESTED",
-        "DELETED"
       ]
     },
     "public.auth_status": {

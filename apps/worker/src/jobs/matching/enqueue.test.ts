@@ -188,7 +188,16 @@ test('旧库已有重复待跑行时：迁移先清理重复行再建索引，�
   }
 }, 30_000)
 
-/** 只含缺口一那两条迁移**之前**的迁移目录：`when` 原样保留，第二阶段的 migrator 才会补应用。 */
+/**
+ * 只含缺口一那两条迁移**之前**的迁移目录：`when` 原样保留，第二阶段的 migrator 才会补应用。
+ *
+ * 过滤条件是「`when` 早于缺口起点」而**不是**「不属于缺口标签集合」：后者在缺口之后
+ * 又有新迁移时会坏掉——drizzle 的 migrator 按 `when` 水位判重放（只应用
+ * `when > 已应用最大 created_at` 的条目），若阶段一已经把某个**晚于缺口**的迁移
+ * 应用掉，阶段二会连缺口那两条一起跳过，清理与唯一索引都不会执行，模拟出的「旧库」
+ * 就永远停在无索引状态（#466 实测：新迁移 `20261005212044` 之后本用例失败）。
+ * 本用例的语义是「停在缺口一之前」，按 `when` 截断才与该语义一致，也不受后续迁移影响。
+ */
 async function buildPreGapMigrationsFolder(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'fish-migrations-pre-gap-'))
   tempFolders.push(dir)
@@ -196,17 +205,17 @@ async function buildPreGapMigrationsFolder(): Promise<string> {
   const journal = JSON.parse(
     await readFile(join(migrationsFolder, 'meta/_journal.json'), 'utf8'),
   ) as {
-    entries: { idx: number; tag: string }[]
+    entries: { idx: number; tag: string; when: number }[]
   }
-  // 只取缺口**之前**的条目。写成「排除缺口 tag」在缺口之后还有迁移时会失真：阶段一会把那些
-  // 更晚的迁移一并应用，migrator 的高水位线随之前移，阶段二再补缺口时它们因「when 比已应用的
-  // 最后一条更早」被静默跳过（#464 在缺口之后追加迁移后实测到的红）。
-  const firstGapIndex = Math.min(
+  const gapStart = Math.min(
     ...journal.entries
       .filter((entry) => GAP_MIGRATION_TAGS.has(entry.tag))
-      .map((entry) => entry.idx),
+      .map((entry) => entry.when),
   )
-  const legacy = journal.entries.filter((entry) => entry.idx < firstGapIndex)
+  if (!Number.isFinite(gapStart)) {
+    throw new Error('迁移 journal 里找不到缺口迁移（GAP_MIGRATION_TAGS），用例前提已不成立')
+  }
+  const legacy = journal.entries.filter((entry) => entry.when < gapStart)
   for (const entry of legacy) {
     await copyFile(join(migrationsFolder, `${entry.tag}.sql`), join(dir, `${entry.tag}.sql`))
   }
