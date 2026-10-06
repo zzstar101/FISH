@@ -65,7 +65,7 @@ R6 = Issue #323 的 Evaluation / Observability 阶段。**只做**六类此前�
 单路召回超时（`docs/design/issue-323-r3-multi-channel-recall.md:146-147`）、popular 通道的缓存/物化取舍
 （同文）、`RecallDegradeReason` 增加「空 vs 错」枚举以做通道分账（同文 `:150`）、探索哈希分布检验、
 排序权重调参（`docs/design/issue-323-r45-ranking-and-feed.md` §11 第 9 条：`semantic 0.35` 等是初值）、
-`rerank` 的 relaxations 计数接指标（同文 `:447`）。
+`rerank` 的 relaxations 计数接指标（同文 §7.6 第 5 条，`:692-696`）。
 
 **明确不做**（与 #323「明确不做」一致，且是本轮多条决定的前提）：
 
@@ -281,10 +281,10 @@ export const RecommendationMetricsSchema = z.object({
   ——「429 不复用 `RATE_LIMITED`：语义不同的拒绝共用一个码，客户端就给不出正确文案与倒计时」，
   既有先例是 `VISUAL_SEARCH_RATE_LIMITED` / `LISTING_LOOKUP_RATE_LIMITED`。
 - **429 不走 `RecommendationServiceError`**：该类被硬类型化成 `status: 422` + `code: 'VALIDATION_FAILED'`
-  （`apps/api/src/modules/recommendation/service.ts:32-42`）。R6 新增独立的
+  （`apps/api/src/modules/recommendation/service.ts:57-67`）。R6 新增独立的
   `RecommendationRateLimitError`（`status: 429`、`code = RECOMMENDATION_RATE_LIMITED`、
   `retryAfterSeconds`），由 router 的 `instanceof` 分支处理（放在现有
-  `RecommendationServiceError` 分支之后，`apps/api/src/modules/recommendation/router.ts:42`），
+  `RecommendationServiceError` 分支之后，`apps/api/src/modules/recommendation/router.ts:67`），
   形态照 `apps/api/src/modules/visual-search/router.ts:50-66`。这样 service 层不必知道限流的存在，
   也不把「只能 422」的类扩成多状态。
 - `packages/contracts/src/recommendation/schema.ts` 的 `RecommendationEventIngestResponseSchema`
@@ -646,7 +646,7 @@ export function createTokenBucketLimiter(options: {
   `apps/api/src/modules/visual-search/subject.ts` 的 `UNATTRIBUTED_IP_SUBJECT`）；
 - IP 解析复用既有实现，不新写：`apps/api/src/modules/listings/trusted-ip.ts` 的
   `trustedClientIp(request, peerIp, trustedProxyIp)` / `normalizeIp`，由 `apps/api/src/app.ts` 已经注入的
-  `resolveClientIp`（`:292` / `:388`）传进推荐 router；跨模块 import 有先例
+  `resolveClientIp`（`:311` / `:385`）传进推荐 router；跨模块 import 有先例
   （`apps/api/src/modules/visual-search/subject.ts` 同样 import `../listings/trusted-ip`）；
 - **IP 只在进程内 Map 里当键**，不落库、不进日志、不进响应；
 - 应用点：`POST /recommendations/events` 在契约校验之后、`service.ingest` 之前
@@ -780,7 +780,8 @@ R6 **不新增**任何 bot 判定存储（D5），而是把已有的三道硬约
 R6 不新增 CI 作业。
 
 **一处与初稿的差异（审查 P3-C 实测）**：`apps/worker/**` 只被 `db-tests` 收集
-（`.github/workflows/ci.yml:265-277` 的路径含 `apps/worker`），`unit-tests`（`:295-309`）不含它。
+（`.github/workflows/ci.yml:287` 的 target 含 `apps/worker`），`unit-tests`（`:297`，target 列表
+`:316-326`，`:321-325` 的注释明确 `apps/*/scripts` 用例归 `db-tests`）不含它。
 所以 `apps/worker/scripts/rank-eval.test.ts`、`recommendation-cleanup.test.ts`、
 `apps/worker/src/jobs/recommendation/{eval,store,cleanup}.test.ts` 实际都跑在 **`db-tests`** 里，
 初稿写的「进 `unit-tests`」不成立。取舍：`store.test.ts` / `cleanup.test.ts` 本来就需要真库
@@ -878,7 +879,7 @@ R6 不新增 CI 作业。
 | P3-3 | `admin/store.ts` 的 `attributed` CTE 内联 `JOIN listings`，商品行被硬删会让 guardrail 分母与 `funnel.impressions` 不一致 | **判为假阳性**：`packages/db/src/schema/recommendation-events.ts:84-86` 的 `listingId` 是 `ON DELETE CASCADE` FK，商品硬删会连带删掉其事件 ⇒ inner join 不会丢行；软删（`OFFLINE`/`governance_delisted_at`）行仍在，join 也不丢 |
 | P3-4 | §12 未回填 | 即本节 |
 | 不确定项 1 | reviewer 未实跑 `core:smoke`（需完整栈） | 作者实跑：`[core-smoke] ok — 419 项断言`，exit 0；新增断言是真进程 + 真库（`runRootScriptJson` 真 spawn） |
-| 不确定项 3 | 同进程跑多文件 DB 测试出现 hook 超时 / `ERR_POSTGRES_CONNECTION_CLOSED` | **判为环境**：单文件跑全绿；`apps/api/src/modules/auth/router.test.ts` 加 `--timeout 20000` 后 51 pass / 0 fail；CI 已 `ALTER SYSTEM SET max_connections = 200`（`.github/workflows/ci.yml:249-253`） |
+| 不确定项 3 | 同进程跑多文件 DB 测试出现 hook 超时 / `ERR_POSTGRES_CONNECTION_CLOSED` | **判为环境**：单文件跑全绿；`apps/api/src/modules/auth/router.test.ts` 加 `--timeout 20000` 后 51 pass / 0 fail；CI 已 `ALTER SYSTEM SET max_connections = 200`（`.github/workflows/ci.yml:224-232`，`:249-253` 断言生效值确为 200） |
 | 不确定项 4 | `newListingTimeToFirstExposure` 用「被归因的 `IMPRESSION`」，比 §5.5 字面（`request_id IS NOT NULL`）更严 | **接受**：R4/R5 之后新事件的位置/来源以快照为准，用「有归因」才算一次真实曝光；差异写进 §5.5 的口径说明 |
 | 不确定项 5 | `--limit-requests` 未定义语义，且归因候选集不受它限制 | **已核实并写进 §5.1**：抽样只限被评分请求，不限制候选集 ⇒ 抽样会让 recall 偏低，只适合巡检 |
 

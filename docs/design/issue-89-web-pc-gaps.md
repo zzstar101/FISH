@@ -33,9 +33,9 @@
 | 功能 | 现状 | 证据 |
 | --- | --- | --- |
 | 手机号绑定 | 个人中心只展示绑定状态，无绑定操作 | `apps/web-pc/src/features/profile/profile-page.tsx:113`（非测试代码里「手机号」仅此 1 行） |
-| 设置页（主题 / 通知偏好 / 协议 / 隐私） | 无该路由 | `apps/web-pc/src/routes` 下 24 个路由文件无 `settings*`；`grep -rn 'settings\|主题\|通知偏好' apps/web-pc/src` 只命中 `apps/web-pc/src/routes/login.tsx:56`《隐私政策》与样式文件注释 |
-| 分享 / 复制商品链接 | 有通用复制能力，但无「分享」入口 | `apps/web-pc/src/lib/copy-text.ts:5`（`copyText`），唯一调用方是 `apps/web-pc/src/features/listing-detail/listing-no-line.tsx:20`（复制商品编号）；全仓无 `navigator.share` |
-| Admin 控制台 / 审核队列 | **后端已就绪**（契约与 API 模块都在），PC 无页面，且路线图明确不做 | `packages/contracts/src/admin`、`apps/api/src/modules/admin`；PC 侧 `grep -rn 'admin\|Admin' apps/web-pc/src` 只命中 `apps/web-pc/src/lib/redirect.ts:3` 的防逃逸注释；`docs/design/issue-89-web-pc-roadmap.md` §6「不把 `apps/web` 的 Admin 页面迁到 `/pc/admin`」 |
+| 设置页（主题 / 通知偏好 / 协议 / 隐私） | 无该路由 | `apps/web-pc/src/routes` 下 25 个路由文件（含 `__root.tsx`）无 `settings*`；`grep -rn 'settings\|主题\|通知偏好' apps/web-pc/src` 只命中 `apps/web-pc/src/styles.css:108`、`:154` 与 `apps/web-pc/src/features/shell/pc-shell.tsx:9` 三处「主题」注释。协议 / 隐私没有设置页，只有登录页的静态文案 `apps/web-pc/src/routes/login.tsx:55-56`（`《用户协议》` / `《隐私政策》`） |
+| 分享 / 复制商品链接 | 有通用复制能力，但无「分享」入口 | `apps/web-pc/src/lib/copy-text.ts:5`（`copyText`），唯一调用方是 `apps/web-pc/src/features/listing-detail/listing-no-line.tsx:20`（复制商品编号）；全仓源码（`apps/`、`packages/`）无 `navigator.share`，仅本文档自身文本命中该词 |
+| Admin 控制台 / 审核队列 | **后端已就绪**（契约与 API 模块都在），PC 无页面，且路线图明确不做 | `packages/contracts/src/admin`、`apps/api/src/modules/admin`；PC 侧 `grep -rn 'admin\|Admin' apps/web-pc/src` 只命中 `apps/web-pc/src/lib/redirect.ts:3` 的防逃逸注释与 `apps/web-pc/src/lib/redirect.test.ts:14,:15` 的两条断言；`docs/design/issue-89-web-pc-roadmap.md` §6 `:59`「不把 Admin 页面迁到 `/pc/admin`」（该句原文写的是已被 #325 删除的 `apps/web`） |
 | 移动端折叠布局 / PWA / 离线 | 非目标；PC 按桌面视口设计 | roadmap §6 |
 
 ### 1.4 密码登录相关能力已整体移除（#391 / #393）
@@ -44,7 +44,7 @@
 
 - 账号密码登录页签、注册页、记住凭据模块已整体删除；`apps/web-pc/src/routes/register.tsx` **已不存在**。
 - 登录页现在只有 `ScanLoginPanel`（`apps/web-pc/src/routes/login.tsx:7`、`:61`），页内注释即声明「登录页只提供微信扫码。账号密码与注册已下线（#391）」（`apps/web-pc/src/routes/login.tsx:20-23`），用户协议默认**不勾选**（`:5` 引入、`:26` 消费 `INITIAL_LOGIN_AGREEMENT_ACCEPTED`）。
-- 因此「忘记密码 / 重置密码」**不适用**：`grep -rniE '忘记密码\|重置密码' apps/web-pc/src` 零命中，无对应路由，`apps/web-pc/src/features/auth/api.ts` 也没有 password / login / register 调用。
+- 因此「忘记密码 / 重置密码」**不适用**：`grep -rniE '忘记密码|重置密码' apps/web-pc/src` 零命中，无对应路由，`apps/web-pc/src/features/auth/api.ts` 也没有 password / login / register 调用。
 - 副作用：扫码无「记住我」，每次进 PC 都要重新扫码。设计依据见 `docs/design/issue-391-web-pc-auth-wechat-only.md`。
 
 ---
@@ -56,8 +56,8 @@
 | 通知列表 | 最多 50 条，无分页 / 删除 / 批量已读 | `apps/web-pc/src/features/notifications/api.ts:11`（`NOTIFICATION_PAGE_LIMIT = 50`）、`:13-18` 一次性取列表、`:26` 只有单条 `markNotificationRead`；`notifications-page.tsx:29` 普通 `useNotifications`；全目录无 `markAllRead` / 删除调用 |
 | 通知到达时效 | 无 WebSocket，只有 30 秒轮询（**有意为之**） | `apps/web-pc/src/features/notifications/queries.ts:19`（`NOTIFICATION_POLL_INTERVAL_MS = 30_000`）、`:35`（`refetchOnWindowFocus: 'always'`）、`:36,:50`（列表与未读数 `refetchInterval`）；`queries.ts:15-18` 注释注明「T7 §7 明确实时推送为非目标，P0 允许轮询」 |
 | 订单号 | 展示的是**公开 ID**（`txn_…`），仍不是面向用户的人工订单号 | `apps/web-pc/src/features/profile/order-detail-page.tsx:113` 渲染 `detail.id`；该字段由 `packages/contracts/src/transactions/schema.ts:6,:46` 的 `TransactionIdSchema`（来自 `../system/public-id`）收口，HTTP 边界上是 TypeID 而非内部 UUID。见 §四第 11 行 |
-| 聊天增强 | typing、**转发**、删除、消息搜索均无（撤回已接通，见 §四第 9 行） | `grep -rniE 'typing\|转发\|forward\|消息搜索' apps/web-pc/src/features/chat`（非测试）零命中；契约 `packages/contracts/src/chat/routes.ts` 仍无对应端点 |
-| 评论区 | 已支持发布、单层回复、**删除自己的留言**与**我的留言页**；无多层评论树、编辑、举报、图片留言 | 已接：`apps/web-pc/src/features/listing-detail/{comments-section.tsx,comments-api.ts,comments-queries.ts}`、挂载 `detail-page.tsx:31`、游标分页 `comments-queries.ts:13`；单层回复 `comments-section.tsx:148-153`；删除 `comments-api.ts:65` → `comments-queries.ts:49` → `comments-section.tsx:252,:340`；我的留言 `apps/web-pc/src/features/my-comments/` + 页 `apps/web-pc/src/routes/comments.tsx`。仍无：多层评论树、编辑、图片留言；举报目标类型只有 `LISTING｜USER`（`packages/contracts/src/reports/schema.ts:23`），评论不可举报 |
+| 聊天增强 | typing、**转发**、删除、消息搜索均无（撤回已接通，见 §四第 9 行） | `grep -rniE 'typing|转发|forward|消息搜索' apps/web-pc/src/features/chat`（排除 `*.test.*`）零命中；含测试文件时只命中 `apps/web-pc/src/features/chat/realtime.test.ts:114` 的英文 `forwards`，不是功能实现。契约 `packages/contracts/src/chat/routes.ts` 仍无对应端点 |
+| 评论区 | 已支持发布、单层回复、**删除自己的留言**与**我的留言页**；无多层评论树、编辑、举报、图片留言 | 已接：`apps/web-pc/src/features/listing-detail/{comments-section.tsx,comments-api.ts,comments-queries.ts}`、挂载 `apps/web-pc/src/features/listing-detail/detail-page.tsx:193`（`<CommentsSection listingId={item.id} />`）、游标分页 `comments-queries.ts:13`；单层回复 `comments-section.tsx:148-153`；删除 `comments-api.ts:65` → `comments-queries.ts:49` → `comments-section.tsx:252,:340`；我的留言 `apps/web-pc/src/features/my-comments/` + 页 `apps/web-pc/src/routes/comments.tsx`。仍无：多层评论树、编辑、图片留言；举报目标类型只有 `LISTING｜USER`（`packages/contracts/src/reports/schema.ts:23`），评论不可举报 |
 
 > **首页商品流不在本表**：`apps/web-pc/src/routes/index.tsx:68,:74` 已支持「加载更多」（`apps/web-pc/src/features/listings/queries.ts:20,:34` 的两处 `useInfiniteQuery` + `:25,:39` 的 `getNextPageParam`，每页 24 条）。
 
@@ -86,7 +86,7 @@
 | --- | --- | --- |
 | §1.1 收藏：契约、DB、API 齐备，PC 无任何入口 | **已接通** | 页 `apps/web-pc/src/routes/favorites.tsx`（`createFileRoute('/favorites')` → `FavoritesPage`）；模块 `apps/web-pc/src/features/favorites/{api.ts,queries.ts,favorites-page.tsx,favorites-view.tsx}`；入口 `apps/web-pc/src/features/listing-detail/favorite-button.tsx`、`apps/web-pc/src/features/shell/side-nav.tsx`、`apps/web-pc/src/features/profile/profile-page.tsx:243`。支撑提交 `3c7f533c`（2026-10-02，`feat(web-pc): 我的收藏页（/favorites）：游标分页 + 在售/失效分组 + 逐项取消`） |
 | §1.1 关注：契约已成 Domain，PC 无任何入口 | **已接通** | 页 `apps/web-pc/src/routes/following.tsx`（`createFileRoute('/following')` → `FollowingPage`）；模块 `apps/web-pc/src/features/follows/{api.ts,queries.ts,follow-button.tsx,following-page.tsx,following-view.tsx}`；入口 `apps/web-pc/src/features/user-profile/user-profile-page.tsx`、`apps/web-pc/src/features/shell/side-nav.tsx`。支撑提交 `db2f16c9`（2026-10-02，`feat(web-pc): follows feature：api/queries/关注钮/我的关注页`） |
-| §1.2 交易评价：表在，契约层无任何 review / rating 文件 | **契约已落地** | `packages/contracts/src/transaction-reviews/{routes.ts,schema.ts,schema.test.ts}`；`routes.ts` 导出 `TRANSACTION_REVIEW_ROUTES`（`reviewEdge` / `ofTransaction`，两条都 requireAuth）；API `apps/api/src/modules/transaction-reviews`。支撑提交 `f4b654d7`（2026-10-02，`feat(api): 交易评价读写 + /me/comments kind 过滤与合并游标（#195 PR2）`）。`git ls-tree -r --name-only origin/main packages/contracts/src \| grep -icE 'review\|rating'` 现为 **3**，不再是 0 |
+| §1.2 交易评价：表在，契约层无任何 review / rating 文件 | **契约与 PC 接线均已落地** | `packages/contracts/src/transaction-reviews/{routes.ts,schema.ts,schema.test.ts}`；`routes.ts` 导出 `TRANSACTION_REVIEW_ROUTES`（`reviewEdge` / `ofTransaction`，两条都 requireAuth）；API `apps/api/src/modules/transaction-reviews`；PC 接线 `apps/web-pc/src/features/profile/order-detail-page.tsx:24`（import `OrderReviewCard`）与 `:217-222`（`detail.status === 'COMPLETED'` 时渲染，组件 `order-review-card.tsx:200`，测试 `order-review-card.test.tsx`）。支撑提交 `f4b654d7`（2026-10-02，`feat(api): 交易评价读写 + /me/comments kind 过滤与合并游标（#195 PR2）`）。`git ls-tree -r --name-only origin/main packages/contracts/src \| grep -icE 'review\|rating'` 现为 **3**，不再是 0 |
 | §1.2 浏览历史：契约、API、DB 三处都没有 | **三方齐备且 PC 已接** | 契约 `packages/contracts/src/view-history/{routes.ts,schema.ts}`（`VIEW_HISTORY_ROUTES`，`:22` `myViewHistory: '/me/view-history'`，GET 读 + DELETE 清空）；API `apps/api/src/modules/view-history/{cursor,ingest,router,service,store}.ts`；DB `packages/db/src/schema/view-history.ts`；PC 页 `apps/web-pc/src/routes/history.tsx` + `apps/web-pc/src/features/view-history/`。支撑提交 `0d8cb5bf`（契约，2026-10-02，`feat(contracts): view-history 域（#415 M1）`）、`5a842f3c`（PC 页，2026-10-02） |
 | §二 我的发布 / 订单列表：最多 50 条、无分页 | **已转游标翻页** | `apps/web-pc/src/features/profile/queries.ts:121`（`useMyListings`）与 `:133`（`useOrders`）现为 `useInfiniteQuery`（`:124,:136` `initialPageParam: null as string \| null`、`:125,:137` `getNextPageParam`）；消费方 `mylist-page.tsx:259,:269`、`orders-page.tsx:137,:147` 调 `fetchNextPage()`。`apps/web-pc/src/features/profile/api.ts:55,:66` 的 `limit: '50'` 仍在，但已是**每页**上限而非总量上限。支撑提交 `e1216398`（2026-10-04，`feat(web-pc): 我的发布/订单列表转游标翻页（#446）`） |
 | §二 只有 `wishId` 的通知：不能跳转，无愿望详情路由 | **已上线** | 路由 `apps/web-pc/src/routes/wish.$wishId.tsx`（`createFileRoute('/wish/$wishId')`）、页 `apps/web-pc/src/features/wish/wish-detail-page.tsx:17`（自述「wishId 通知的落点」）；跳转 `apps/web-pc/src/features/notifications/notifications-page.tsx:97`（`navigate({ to: '/wish/$wishId', params: { wishId } })`）；`apps/web-pc/src/features/notifications/notification-view.ts:137` 注释已改为「`/wish/$wishId` 已上线（#446）；这句只在『预检发现愿望已删/不可见』时出现」。支撑提交 `5ec2eab3`（2026-10-04） |
@@ -129,7 +129,7 @@ git ls-tree -r --name-only origin/main packages/contracts/src | grep -icE 'revie
 grep -rn 'useInfiniteQuery\|getNextPageParam\|fetchNextPage' apps/web-pc/src
 
 # §二 仍存在的缺口（以下两条应零命中）
-grep -rn 'typing\|转发\|forward\|消息搜索' apps/web-pc/src/features/chat   # 零命中
+grep -rn 'typing\|转发\|forward\|消息搜索' apps/web-pc/src/features/chat | grep -v '\.test\.'   # 零命中；不加过滤会命中 realtime.test.ts 的英文 "forwards"
 grep -rn 'markAllRead\|deleteNotification' apps/web-pc/src/features/notifications   # 零命中
 ```
 

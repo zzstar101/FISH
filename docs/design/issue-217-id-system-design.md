@@ -17,9 +17,9 @@
 
 ## 数据迁移与 PostgreSQL
 
-采用 Drizzle **生成**的分阶段 schema migration 与独立可重复执行的 Bun 旧数据回填步骤；不手改 `packages/db/src/migrations/**` 或历史。阶段一加占号表及可空编号；回填旧商品随机号并占号，冲突安全重试；阶段二生成非空、唯一及必要约束。统一迁移入口在空库和有旧数据的库上保持顺序，中断后可重入，不能要求删除开发数据。占号表不能随 seed 清空商品行而丢失。无法直接用 DB schema 表达的约束用最小事务性应用行为与回归测试落实，不偷偷改生成 SQL。PR 附 `CONTRIBUTING.md:70-81` 要求的 DB 变更说明。
+采用 Drizzle **生成**的分阶段 schema migration 与独立可重复执行的 Bun 旧数据回填步骤；不手改 `packages/db/src/migrations/**` 或历史。阶段一加占号表及可空编号；回填旧商品随机号并占号，冲突安全重试；阶段二生成非空、唯一及必要约束。统一迁移入口在空库和有旧数据的库上保持顺序，中断后可重入，不能要求删除开发数据。占号表不能随 seed 清空商品行而丢失。无法直接用 DB schema 表达的约束用最小事务性应用行为与回归测试落实，不偷偷改生成 SQL。PR 附 `CONTRIBUTING.md:99-112`（§6「DB schema 变更」；设计时点为 `:70-81`，该文件此后已重排）要求的 DB 变更说明。
 
-先验证 PG18 + pgvector 镜像、本地 Docker、CI 与生产部署（当前部署文档用宿主机 PG16）。可行则统一升级，公共 UUID PK 加数据库 `DEFAULT uuidv7()` 兜底，正常应用写入仍显式 UUIDv7。明确的部署障碍才保留 PG16 和应用侧 UUIDv7，在 Issue 中记录具体证据；Public ID/编号交付不因此阻塞。当前多数主键使用 `packages/db/src/schema/common.ts:11` 工厂，特殊主键单独核对。
+先验证 PG18 + pgvector 镜像、本地 Docker、CI 与生产部署（当前部署文档用宿主机 PG16）。可行则统一升级，公共 UUID PK 加数据库 `DEFAULT uuidv7()` 兜底，正常应用写入仍显式 UUIDv7。明确的部署障碍才保留 PG16 和应用侧 UUIDv7，在 Issue 中记录具体证据；Public ID/编号交付不因此阻塞。当前多数主键使用 `packages/db/src/schema/common.ts:12` 工厂（设计时点为 `:11`），特殊主键单独核对。
 
 ## 模块接口与交付顺序
 

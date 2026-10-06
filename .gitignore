@@ -22,7 +22,7 @@ apps/api/src/modules/auth/.test-outbox-*/
 # （`git add -A` 会顺手带进仓库，故与 `.workbuddy/` 同组忽略）
 .decomp/
 .grill73/
-.review-5edb380-notes.md
+.review-*-notes.md
 # 本地验收/截图产物与本地经营材料（#86 B 线评审 P2：output/ 有 2.8M 二进制，
 # 不能被 `git add -A` 顺手带进仓库）
 output/

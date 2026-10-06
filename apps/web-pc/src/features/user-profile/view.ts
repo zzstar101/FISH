@@ -17,12 +17,9 @@ export function isUserNotFound(error: unknown): boolean {
  * 主页上展示的三个统计，来源是 `PublicUserProfileSchema` 的 `joinedDays / activeCount / soldCount`。
  *
  * 契约的公开 DTO（九个字段，见 `@fish/contracts/users/schema` 头部）**没有**好评率 /
- * 关注数 / 成交金额，所以这里不编造任何额外指标：
- * - 好评率：`transaction_reviews` 表（`packages/db/src/schema/transaction-reviews.ts`）与
- *   `@fish/contracts/transaction-reviews` 契约（#195 PR2）都已存在，但评价按交易参与方授权，
- *   不是这份「同一响应给所有人」的匿名公开读模型的一部分；
- * - 关注数：按视角单独放在 follows Domain（#188，`GET /me/following` 与
- *   `/users/:userId/follow`），同样不属于这份匿名公开读模型。
+ * 关注数 / 成交金额，所以这里不编造任何额外指标。这三项各自被排除的理由（好评率口径未定、
+ * 关注数属 follows Domain 的视角、成交金额不进公开读模型）由该契约头部逐条记录，
+ * 那里是唯一出处，此处不再重复。
  */
 export function profileStats(
   profile: PublicUserProfile,
