@@ -8,6 +8,10 @@ import {
   AdminUsersQuerySchema,
 } from '@fish/contracts/admin/schema'
 import {
+  AdminDisputeQueueQuerySchema,
+  AdminDisputeResolveInputSchema,
+} from '@fish/contracts/disputes/schema'
+import {
   GovernanceLiftRestrictionInputSchema,
   GovernanceListingDelistInputSchema,
   GovernanceListingRestoreInputSchema,
@@ -23,6 +27,8 @@ import { decodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/publi
 import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
+import type { DisputeService } from '../disputes/service'
+import { DisputeServiceError } from '../disputes/service'
 import type { GovernanceService } from '../governance/service'
 import { GovernanceServiceError } from '../governance/service'
 import type { ReportService } from '../reports/service'
@@ -37,6 +43,14 @@ export type AdminRouterOptions = {
    * 用户端 POST /reports 走独立的 reports router，不经过本文件的两道守卫。
    */
   reportsService: ReportService
+  /**
+   * 交易争议服务（#465）：管理端的争议队列 / 详情 / 处理只经过它，与用户端
+   * `POST /disputes` 共用同一个实例（可见性口径只有一套）。
+   *
+   * 处理争议只写争议行 + 审计行，**绝不**改 `transactions` / `listings`，
+   * 也绝不调 governance：争议结论不改变成交事实、不执行处罚。
+   */
+  disputesService: DisputeService
   /**
    * 认证守卫（`auth` 模块提供）：所有 `/admin/*` 先过它（401 `UNAUTHENTICATED`）。
    * 在 router 内 `use('*')` 应用，配合 `requireAdmin` 组成设计 §3.2 的双层守卫——
@@ -83,6 +97,14 @@ function requireReportId(c: Context): string {
   return decodePublicId(PUBLIC_ID_PREFIX.report, raw)
 }
 
+function requireDisputeId(c: Context): string {
+  const raw = c.req.param('disputeId')
+  if (!isPublicId(PUBLIC_ID_PREFIX.dispute, raw)) {
+    throw new DisputeServiceError('DISPUTE_NOT_FOUND', 404, '争议不存在')
+  }
+  return decodePublicId(PUBLIC_ID_PREFIX.dispute, raw)
+}
+
 function internalGovernanceInput<T extends { sourceReportId?: string }>(
   input: T,
 ): Omit<T, 'sourceReportId'> & { sourceReportId?: string } {
@@ -110,6 +132,22 @@ function toErrorResponse(c: Context, error: unknown): Response {
  */
 function toReportErrorResponse(c: Context, error: unknown): Response {
   if (error instanceof ReportServiceError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
+  if (error instanceof AdminError) {
+    return c.json(errorBody(error.code, error.message), error.status)
+  }
+  throw error
+}
+
+/**
+ * 争议 service 异常 → 契约错误信封。
+ *
+ * 与举报端点同样的理由也要认 `AdminError`：非法 TypeID 的 404 写在 try 内最自然，
+ * 只认 DisputeServiceError 会让 AdminError 逃到 app.onError 变成 500。
+ */
+function toDisputeErrorResponse(c: Context, error: unknown): Response {
+  if (error instanceof DisputeServiceError) {
     return c.json(errorBody(error.code, error.message), error.status)
   }
   if (error instanceof AdminError) {
@@ -153,7 +191,7 @@ function validatedTargetId(
  * 额外执行 requireAdmin”），新加端点不会忘挂。
  */
 export function createAdminRouter(options: AdminRouterOptions) {
-  const { service, reportsService, governance } = options
+  const { service, reportsService, disputesService, governance } = options
   const router = new Hono<{ Variables: AuthVariables }>()
 
   router.use('*', options.requireAuth)
@@ -379,6 +417,49 @@ export function createAdminRouter(options: AdminRouterOptions) {
       return c.json(await reportsService.getAdminReport(requireReportId(c)), 200)
     } catch (error) {
       return toReportErrorResponse(c, error)
+    }
+  })
+
+  // --- 交易争议（#465）：队列 / 详情 / 处理 --------------------------------
+  // 与举报段同一条边界：处理争议只写争议行与审计行，**不动交易状态、不动商品状态、
+  // 不调 governance**。票面验收第 6 条要求「处理争议与封禁/下架保持不同动作，不自动改变
+  // 成交事实或执行处罚」——需要处罚时管理员去调本文件末尾的治理端点，两步分开走。
+
+  router.get('/disputes', async (c) => {
+    const parsed = AdminDisputeQueueQuerySchema.safeParse(c.req.query())
+    if (!parsed.success) return zodValidationFailure(c, parsed.error.issues)
+
+    try {
+      return c.json(await disputesService.listAdminDisputes(parsed.data), 200)
+    } catch (error) {
+      return toDisputeErrorResponse(c, error)
+    }
+  })
+
+  // 与举报同样把动作段注册在详情之前，不依赖 Hono 的静态段优先语义。
+  router.post('/disputes/:disputeId/resolve', async (c) => {
+    const input = AdminDisputeResolveInputSchema.safeParse(await c.req.json().catch(() => null))
+    if (!input.success) return zodValidationFailure(c, input.error.issues)
+
+    try {
+      await disputesService.resolveDispute({
+        disputeId: requireDisputeId(c),
+        actorUserId: c.get('userId'),
+        resolution: input.data.resolution,
+        reason: input.data.reason,
+      })
+      // 204：与 POST /admin/reports/:reportId/handle 一致，客户端成功后只失效队列 query。
+      return c.body(null, 204)
+    } catch (error) {
+      return toDisputeErrorResponse(c, error)
+    }
+  })
+
+  router.get('/disputes/:disputeId', async (c) => {
+    try {
+      return c.json(await disputesService.getAdminDispute(requireDisputeId(c)), 200)
+    } catch (error) {
+      return toDisputeErrorResponse(c, error)
     }
   })
 

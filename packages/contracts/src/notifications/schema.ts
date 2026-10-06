@@ -1,6 +1,8 @@
 import { z } from 'zod'
+import { DisputeResolutionSchema } from '../disputes/schema'
 import {
   ConversationIdSchema,
+  DisputeIdSchema,
   ListingIdSchema,
   MatchIdSchema,
   NotificationIdSchema,
@@ -28,11 +30,12 @@ import {
  * 通知类型。`MATCH` 是 #8 的匹配引擎在「愿望 ↔ 商品」首次命中时写入（收件人是愿望所有者）；
  * `TX` / `MODERATION` / `ACCOUNT` 是任务一（#89 消息页通知真实化）加入的三类：
  * 交易进展（提议/接受/拒绝/确认/完成/取消）、商品审核出结果、账号与认证事件。
+ * `DISPUTE` 是 #465 加入的交易争议进展（发起 / 撤回 / 出结论）。
  *
  * 与库里的 `text + TS 收窄` 保持一致而**不用 pgEnum**：值集尚未冻结（P1 还有降价通知），
  * 加类型时改这一处 + `packages/db/src/schema/notifications.ts` 的类型，不必迁移枚举。
  */
-export const notificationTypeSchema = z.enum(['MATCH', 'TX', 'MODERATION', 'ACCOUNT'])
+export const notificationTypeSchema = z.enum(['MATCH', 'TX', 'MODERATION', 'ACCOUNT', 'DISPUTE'])
 export type NotificationType = z.infer<typeof notificationTypeSchema>
 
 /**
@@ -59,6 +62,14 @@ export const notificationAccountSubjectSchema = z.enum(['VERIFICATION'])
 export type NotificationAccountSubject = z.infer<typeof notificationAccountSubjectSchema>
 
 /**
+ * `DISPUTE` 通知的具体事件（#465）。收件人是**对方**（发起动作的一方不给自己发）：
+ * `FILED` 发给被诉方、`WITHDRAWN` 发给被诉方、`RESOLVED` 发给**双方**（管理员不是当事人，
+ * 两边都需要知道结论）。
+ */
+export const notificationDisputeEventSchema = z.enum(['FILED', 'WITHDRAWN', 'RESOLVED'])
+export type NotificationDisputeEvent = z.infer<typeof notificationDisputeEventSchema>
+
+/**
  * 读侧口径（冻结，与 `apps/api/src/modules/notifications/{store,service}.ts` 的注释一致）：
  *
  * - 列表、未读数、标记已读共用一个「行能否投影」的 SQL 谓词（store 的 `projectable`），
@@ -77,9 +88,12 @@ export type NotificationAccountSubject = z.infer<typeof notificationAccountSubje
  * - `MATCH`：`{ matchId, listingId, wishId }`；
  * - `TX`：`{ event, transactionId?, conversationId?, listingId? }`（PROPOSED 无 transactionId）；
  * - `MODERATION`：`{ listingId, outcome }`；
- * - `ACCOUNT`：`{ subject, outcome }`。
+ * - `ACCOUNT`：`{ subject, outcome }`；
+ * - `DISPUTE`：`{ disputeId, transactionId, disputeEvent, resolution? }`（`resolution` 仅 `RESOLVED` 时有）。
+ *   注意字段名是 **`disputeEvent`**（与 `TX` 的 `event` 区分）；本 schema 不是 strict，
+ *   写错字段名不会报错、只会被静默剥离。
  *
- * 各 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_` / `txn_` / `cnv_`。
+ * 各 ID 都是可选的，公开出口分别为 `mtc_` / `lst_` / `wsh_` / `txn_` / `cnv_` / `dsp_`。
  * 被删除或无法映射的历史引用只省略该字段，不删除整条通知；数据库 JSON 原文不改。
  * 库里存**裸 UUID**（worker/api 写入侧），读侧 `service.ts` 的 `projectPayload`
  * 负责转成公开 TypeID —— 与 MATCH 的既有口径一致。
@@ -92,8 +106,11 @@ export const notificationPayloadSchema = z.object({
   wishId: WishIdSchema.transform((id): string => id).optional(),
   transactionId: TransactionIdSchema.transform((id): string => id).optional(),
   conversationId: ConversationIdSchema.transform((id): string => id).optional(),
+  disputeId: DisputeIdSchema.transform((id): string => id).optional(),
   event: notificationTxEventSchema.optional(),
+  disputeEvent: notificationDisputeEventSchema.optional(),
   outcome: notificationOutcomeSchema.optional(),
+  resolution: DisputeResolutionSchema.optional(),
   subject: notificationAccountSubjectSchema.optional(),
 })
 export type NotificationPayload = z.infer<typeof notificationPayloadSchema>

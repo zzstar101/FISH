@@ -309,6 +309,11 @@ export function createApp(
     // 指望「带鉴权代理」，只能走短期签名 URL —— 签名本身就承载授权，因此路由仍然匿名可访问。
     reviewUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/media`,
     reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+    // #465 交易争议附件：私有 `dispute-media/` 前缀，与审核中图片同一套短期签名代理机制
+    // （争议双方在小程序里用原生 `<Image>` 读附件，带不上 cookie）。用途派生串在
+    // modules/uploads/dispute-media.ts 里与 review/legacy 分开，令牌不能跨路重放。
+    disputeUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/dispute-media`,
+    disputeUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
   })
 
   // #286：图片确认记录表。uploads 侧写入（审核结论 + 固化后的 final 键），listings 侧读取
@@ -433,6 +438,9 @@ export function createApp(
       storage,
       legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+      // #465：争议附件的只读代理（`GET /uploads/dispute-media/:token`）。与 review 代理
+      // 一样刻意不挂 session 鉴权，授权由短期签名令牌承载。
+      disputeUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       requireAuth: auth.requireAuth,
       service: uploadService,
       guard: restrictionGuard,
@@ -850,12 +858,31 @@ export function createApp(
     // 传读取函数以保证读到的是**当前**累计值。
     latency: latencyRecorder,
     recommendationProcessMetrics: () => recommendationProcessMetrics.snapshot(),
+    // 争议进展通知（#465）：payload 存裸 UUID，读侧（notifications/service.ts 的
+    // projectPayload）转成公开 TypeID。写入用**争议状态变更的同一个事务**当执行器，
+    // 所以通知与结论要么一起成功、要么一起回滚（plan §2 冻结口径，不做 best-effort 旁路）。
+    notifyDispute: (executor, input) =>
+      writeNotification(executor, {
+        userId: input.userId,
+        type: 'DISPUTE',
+        payload: {
+          disputeId: input.disputeId,
+          transactionId: input.transactionId,
+          disputeEvent: input.event,
+          ...(input.resolution ? { resolution: input.resolution } : {}),
+        },
+      }),
   })
   app.route('/admin', admin.router)
 
   // 举报入口只允许登录用户；与管理端共用同一个持久化 service。
   app.use('/reports/*', auth.requireAuth)
   app.route('/reports', admin.reportsRouter)
+
+  // 交易争议入口（#465）同挂法：先认证守卫，再进 router；管理端三条路径在 /admin/disputes*，
+  // 与管理端点共用 requireAdmin 守卫，但共享同一个 dispute service（可见性口径只有一套）。
+  app.use('/disputes/*', auth.requireAuth)
+  app.route('/disputes', admin.disputesRouter)
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。
