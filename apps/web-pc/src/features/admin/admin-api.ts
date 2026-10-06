@@ -345,7 +345,7 @@ export type AdminDisputesFilters = Pick<
   'status' | 'type' | 'q' | 'createdFrom' | 'createdTo'
 >
 
-export function adminDisputesPath(filters: AdminDisputesFilters, cursor?: string): string {
+function adminDisputesPath(filters: AdminDisputesFilters, cursor?: string): string {
   return adminQueryPath(ADMIN_ROUTES.disputes, {
     status: filters.status,
     type: filters.type,

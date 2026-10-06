@@ -64,6 +64,27 @@ export function DialogAlert({ message, tone }: { message: string; tone: 'warn' |
   )
 }
 
+/**
+ * 弹窗错误态（#465 审查发现 Duplicated Code 轴）：四个高风险写操作弹窗（治理 / 人工审核
+ * 决定 / 举报处理 / 争议处理）都在算同一条「本地校验 warn、服务端失败 danger」的逻辑——
+ * `shownError = localError ?? errorMessage` 加一条同形的条件渲染，逐字重复四份。
+ * 抽成一个组块后，渲染结果与可访问性（`DialogAlert` 的 `role="alert"`）逐字不变。
+ *
+ * `localError` 非空即本地校验失败（warn 色，优先于服务端文案）；否则显示 `errorMessage`。
+ * 两者都为空时不渲染任何节点，调用处不必再写条件。
+ */
+export function DialogErrorAlert({
+  errorMessage,
+  localError,
+}: {
+  errorMessage: string | null
+  localError: string | null
+}) {
+  const shownError = localError ?? errorMessage
+  if (shownError === null) return null
+  return <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
+}
+
 /** 卡片列数：审核/举报是二选一；争议处理三选一（原文件自带 `grid-cols-3`）。 */
 const COLUMNS_CLASS = { 2: 'grid-cols-2', 3: 'grid-cols-3' } as const
 

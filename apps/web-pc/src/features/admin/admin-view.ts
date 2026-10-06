@@ -222,12 +222,11 @@ export function createIdempotencyKey(): string {
 // ---------------------------------------------------------------------------
 
 /** 争议状态机：`PENDING` 待处理，`RESOLVED` 管理员已给结论，`WITHDRAWN` 发起人已撤回。 */
-export const DISPUTE_STATUS_META: Record<DisputeStatus, { label: string; variant: BadgeVariant }> =
-  {
-    PENDING: { label: '待处理', variant: 'warn' },
-    RESOLVED: { label: '已处理', variant: 'success' },
-    WITHDRAWN: { label: '已撤回', variant: 'secondary' },
-  }
+const DISPUTE_STATUS_META: Record<DisputeStatus, { label: string; variant: BadgeVariant }> = {
+  PENDING: { label: '待处理', variant: 'warn' },
+  RESOLVED: { label: '已处理', variant: 'success' },
+  WITHDRAWN: { label: '已撤回', variant: 'secondary' },
+}
 
 /**
  * 争议类型。刻意**不含**骚扰/威胁——那属于举报域，且争议结论不触发治理动作。
@@ -236,7 +235,7 @@ export const DISPUTE_STATUS_META: Record<DisputeStatus, { label: string; variant
  * （`git grep ITEM_MISMATCH -- apps/miniapp` 零命中），所以不存在可对齐的用户侧文案，
  * 也就不声明「与用户侧保持一致」（#465 审查发现：原注释是一句无法验证的声明）。
  */
-export const DISPUTE_TYPE_META: Record<DisputeType, { label: string }> = {
+const DISPUTE_TYPE_META: Record<DisputeType, { label: string }> = {
   ITEM_MISMATCH: { label: '商品与描述不符' },
   NOT_COMPLETED: { label: '交易未完成' },
   PAYMENT_ISSUE: { label: '支付问题' },
@@ -244,14 +243,12 @@ export const DISPUTE_TYPE_META: Record<DisputeType, { label: string }> = {
 }
 
 /** 处理结论：只描述「本次反馈是否成立」，不等同于处罚。 */
-export const DISPUTE_RESOLUTION_META: Record<
-  DisputeResolution,
-  { label: string; variant: BadgeVariant }
-> = {
-  UPHELD: { label: '反馈成立', variant: 'success' },
-  DISMISSED: { label: '反馈不成立', variant: 'secondary' },
-  INCONCLUSIVE: { label: '无法认定', variant: 'warn' },
-}
+const DISPUTE_RESOLUTION_META: Record<DisputeResolution, { label: string; variant: BadgeVariant }> =
+  {
+    UPHELD: { label: '反馈成立', variant: 'success' },
+    DISMISSED: { label: '反馈不成立', variant: 'secondary' },
+    INCONCLUSIVE: { label: '无法认定', variant: 'warn' },
+  }
 
 /** 契约只给内联枚举（`DisputeEvidenceMessageSchema` 的 `type`）不导出具名类型：从 DTO 派生。 */
 type DisputeEvidenceType = AdminDisputeDetail['evidence'][number]['message']['type']
@@ -261,7 +258,7 @@ type DisputeEvidenceType = AdminDisputeDetail['evidence'][number]['message']['ty
  * 契约新增类型而这里没补，`tsc` 当场报错；不像 `Record<string, string>` 那样
  * 把裸枚举值（`MEDIA`）静默显示给处理人（#465 审查发现 Primitive Obsession）。
  */
-export const EVIDENCE_TYPE_LABEL: Record<DisputeEvidenceType, string> = {
+const EVIDENCE_TYPE_LABEL: Record<DisputeEvidenceType, string> = {
   // 不是「商品卡片」：服务端存的是消息正文，而 LISTING 消息的正文就是商品公开 id
   //（`apps/api/src/modules/messages/service.ts`），所以这里只能显示 `lst_…` 引用。
   LISTING: '商品引用',
@@ -283,7 +280,14 @@ export function evidenceTypeLabel(type: DisputeEvidenceType): string {
 /**
  * 未知枚举值的回退（#465 审查发现）：契约是 `z.enum`，未知值只可能来自契约漂移
  * （服务端比前端新）。若回退到某个既有枚举值，`BOGUS` 会被渲染成「待处理」，
- * 处理人会当成真实状态照常操作；统一显示「未知」并标灰，宁可少说也不误导。
+ * 处理人会当成真实状态照常操作。
+ *
+ * **只服务下方争议域三个访问器**（`disputeStatusMeta` / `disputeResolutionMeta` /
+ * `disputeTypeLabel`）：显示「未知」并标灰，宁可少说也不误导。
+ * 其余访问器的回退值是各自域既有口径，本轮不动：`listingStatusMeta` → OFFLINE、
+ * `moderationStatusMeta` → REVIEW、`moderationDecisionMeta` → REVIEW、
+ * `transactionStatusMeta` → CANCELLED、`authStatusMeta` → UNVERIFIED、
+ * `roleMeta` → USER、`moderationProviderMeta` → LOCAL。
  */
 const UNKNOWN_META: { label: string; variant: BadgeVariant } = {
   label: '未知',

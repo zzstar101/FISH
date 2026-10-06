@@ -34,6 +34,9 @@ void mock.module('@tanstack/react-router', () => ({
   // admin-shell.test.tsx 会消费本模块的 mock，缺 Outlet 直接把它的用例炸成 SyntaxError）。
   Outlet: () => createElement('div', null),
   useNavigate: () => async () => {},
+  // createFileRoute 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的；
+  // /admin/ index 路由的用例要 import 路由文件，靠它拿到 { path, options }）。
+  createFileRoute: (path: string) => (options: unknown) => ({ path, options }),
 }))
 
 // Radix Dialog 走 Portal，静态渲染拿不到内容：把展示壳桩成内联渲染，好断言弹窗自己的文案。

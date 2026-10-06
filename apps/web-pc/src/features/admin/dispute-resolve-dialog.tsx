@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from '@fish/ui/dialog'
 import { useState } from 'react'
-import { DialogAlert, OptionCards, ReasonField } from './admin-dialog-parts'
+import { DialogErrorAlert, OptionCards, ReasonField } from './admin-dialog-parts'
 import { validateReason } from './admin-view'
 
 /**
@@ -38,8 +38,6 @@ export function DisputeResolveDialog({
   const [resolution, setResolution] = useState<DisputeResolution | null>(null)
   const [reason, setReason] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
-
-  const shownError = localError ?? errorMessage
 
   function submit() {
     if (resolution === null) {
@@ -95,9 +93,7 @@ export function DisputeResolveDialog({
             value={reason}
           />
 
-          {shownError !== null ? (
-            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
-          ) : null}
+          <DialogErrorAlert errorMessage={errorMessage} localError={localError} />
         </div>
 
         <DialogFooter>

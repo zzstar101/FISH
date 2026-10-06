@@ -10,7 +10,7 @@ import {
 } from '@fish/ui/dialog'
 import { Input } from '@fish/ui/input'
 import { useState } from 'react'
-import { DialogAlert, ReasonField } from './admin-dialog-parts'
+import { DialogErrorAlert, ReasonField } from './admin-dialog-parts'
 import { validateReason } from './admin-view'
 
 /**
@@ -60,8 +60,6 @@ export function GovernanceDialog({
   const [sourceReportId, setSourceReportId] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
-
-  const shownError = localError ?? errorMessage
 
   function submit() {
     const reasonError = validateReason(reason)
@@ -136,9 +134,7 @@ export function GovernanceDialog({
             </div>
           ) : null}
 
-          {shownError !== null ? (
-            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
-          ) : null}
+          <DialogErrorAlert errorMessage={errorMessage} localError={localError} />
         </div>
 
         <DialogFooter>

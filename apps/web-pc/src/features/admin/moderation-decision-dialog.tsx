@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from '@fish/ui/dialog'
 import { useRef, useState } from 'react'
-import { DialogAlert, OptionCards, ReasonField } from './admin-dialog-parts'
+import { DialogErrorAlert, OptionCards, ReasonField } from './admin-dialog-parts'
 import { createIdempotencyKey, validateReason } from './admin-view'
 
 /**
@@ -36,8 +36,6 @@ export function ModerationDecisionDialog({
   const [decision, setDecision] = useState<'ALLOW' | 'BLOCK' | null>(null)
   const [reason, setReason] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
-
-  const shownError = localError ?? errorMessage
 
   function submit() {
     if (decision === null) {
@@ -87,9 +85,7 @@ export function ModerationDecisionDialog({
 
           <ReasonField ariaLabel="决定原因" label="决定原因" onChange={setReason} value={reason} />
 
-          {shownError !== null ? (
-            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
-          ) : null}
+          <DialogErrorAlert errorMessage={errorMessage} localError={localError} />
         </div>
 
         <DialogFooter>
