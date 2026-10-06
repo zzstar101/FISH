@@ -5,7 +5,8 @@
  *
  * - `demo`（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）：照设计稿摆演示名单
  *   （`./demo.ts`），页面上另有「演示数据」说明行，用户能辨认这不是 TA 的真实关注。
- *   只看 `MOCK_FALLBACK_ENABLED` 会把 `dev:weapp` 的日常开发也顶成演示态，所以必须两个都开。
+ *   两个开关都在显式演示构建（`TARO_APP_MOCK=1`）下才为真；它们是两个独立注入点
+ *   （今天取值相同，但不假定永远同步），所以两条都要求，缺一就退回 `live`。
  * - `live`（其它一切情况，含 `dev:weapp` 与生产）：`GET /me/following` 真接口。
  *   真实有数据 → 列表；真实无数据 → 空态；请求失败 → 错误态 + 重试。**生产不退演示**。
  *

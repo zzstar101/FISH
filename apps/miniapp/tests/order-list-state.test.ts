@@ -1,4 +1,9 @@
 import { describe, expect, mock, test } from 'bun:test'
+import {
+  conversationUrlOf,
+  DEMO_ORDER_HINT,
+  meetupUrlOf,
+} from '../src/features/transaction/order-links'
 
 /**
  * 订单列表的身份结转规则（#89 审查收口）。
@@ -18,6 +23,16 @@ mock.module('@tarojs/taro', () => ({ default: {} }))
 // `features/fetchers` 静态拖着 `features/auth/demo.ts`，它在模块求值阶段就读
 // `__DEMO_AUTH__`；不定义会在 import 时 ReferenceError（同 `wishes-api.test.ts`）。
 Object.assign(globalThis, { __DEMO_AUTH__: false, __ALLOW_MOCK_FALLBACK__: true })
+
+/**
+ * 演示兜底那条分支（#304）要走到 `demoOrderViews`，而真实取数会真发请求 —— 把交易 API
+ * 换成可控的失败源，「真实失败 → 退回 fixture」才可复现；失败分类判据仍走真实模块。
+ * 必须在动态 import 之前注册，否则 `fetchers` 已经绑定了真模块（同 mock.module 的纪律）。
+ */
+let ordersFailure: unknown = new Error('用例没有设置失败')
+mock.module('@/features/transaction/api', () => ({
+  fetchAllTransactions: () => Promise.reject(ordersFailure),
+}))
 
 const { nextIdentityState } = await import('../src/features/transaction/useOrderList')
 
@@ -46,9 +61,54 @@ function codeOnly(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
+/**
+ * 注入表达式是不是「只由 `mockEnabled` 决定」。
+ *
+ * 允许括号与**偶数个** `!`（`!(!mockEnabled)` / `!!mockEnabled` 与 `mockEnabled` 语义等价，
+ * 换个写法不该红）；出现别的标识符 / `||` / `true` 之类字面量就算掺了第二个开关；
+ * **奇数个** `!` 是语义反转（生产反而打开演示兜底），同样要红。
+ */
+function onlyMockEnabled(expr: string): boolean {
+  if (!/^[!()\s]*mockEnabled[!()\s]*$/.test(expr.trim())) return false
+  return (expr.match(/!/g) ?? []).length % 2 === 0
+}
+
+/** 取 `KEY: <表达式>` 的表达式文本（去掉尾逗号与首尾空白）。 */
+function injectedExpr(code: string, key: string): string {
+  const match = code.match(new RegExp(`${key}: ([^\\n]+)`))
+  expect(match, `config 里应有 ${key} 注入点`).not.toBeNull()
+  return (match?.[1] ?? '').replace(/,\s*$/, '').trim()
+}
+
+/** 取出 `KEY: JSON.stringify(<表达式>)` 里的内部表达式。 */
+function stringifiedInjection(code: string, key: string): string {
+  const expr = injectedExpr(code, key)
+  const match = expr.match(/^JSON\.stringify\(([\s\S]*)\)$/)
+  expect(match, `${key} 应写成 JSON.stringify(<表达式>)：${expr}`).not.toBeNull()
+  return (match?.[1] ?? expr).trim()
+}
+
 /** 压掉空白：biome 会把单行 `if` / 多行对象折成别的形状，按原样匹配就把格式当成了语义 */
 function flat(source: string): string {
   return source.replace(/\s+/g, ' ')
+}
+
+/**
+ * 取出 `const mockEnabled = ...` 那条**定义语句**（切到下一条顶层声明之前）。
+ *
+ * 为什么按语句切、不按行看：单行正则对「`||` 换行到次行」的追加写法没有约束力 ——
+ * 复审实测（2026-10-06）把 `config/index.ts` 的
+ * `const mockEnabled = process.env.TARO_APP_MOCK === '1'` 追加一行
+ * `|| process.env.NODE_ENV === 'development'` 时，旧断言 24 pass / 0 fail 全绿。
+ */
+function mockEnabledDefinition(code: string): string {
+  const start = code.indexOf('const mockEnabled =')
+  expect(start, 'config 里应有 `const mockEnabled = ` 的定义').toBeGreaterThanOrEqual(0)
+  const rest = code.slice(start)
+  // 语句边界 = 下一条顶层声明的行首（`const` / `let` / `function` / `export` / `}`）。
+  // 换行追加的 `|| ...` 仍在这条语句里（没到下一个声明），所以会被整段带进返回值。
+  const boundary = rest.slice(1).search(/\n[ \t]*(?:const|let|var|function|export|\})/)
+  return boundary < 0 ? rest : rest.slice(0, boundary + 1)
 }
 
 /** 取 `from` 到其后第一个 `to` 之间的**代码**（两端都不含），并压平空白 */
@@ -282,5 +342,184 @@ describe('listing-detail —— 「谁在求购」差额说明的原因必须与
     const matchApi = await Bun.file(new URL('../src/features/match/api.ts', import.meta.url)).text()
     expect(matchApi).toContain('const MATCH_LIMIT_MAX = 50')
     expect(matchApi).toContain('limit: number = MATCH_LIMIT_MAX')
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * 同批（#304 / #182）：演示订单不许冒充真实订单。
+ *
+ * 症状（修复前）：开发构建（`NODE_ENV=development`，即 `bun run dev:weapp`）里后端一挂，
+ * 订单页整片换成 fixture（id 是 `t-101` 这种假 id），用户点「打开二维码」就进
+ * 真实面交页 → 404「找不到这笔交易」；点「查看会话」也一样。
+ *
+ * 三处钉子：
+ *   1. 兜底开关只认显式 `TARO_APP_MOCK=1`（development 不再自动打开）；
+ *   2. 投影层把来源写成一等字段（`source: 'real' | 'demo'`），卡片据此打角标；
+ *   3. 演示来源的四条路径（面交页 / 会话页 / 取消 / 评价）在点击时统一拦下。
+ *
+ * 第 3 条里两条**跳转**不再靠读源码：地址由 `features/transaction/order-links` 按来源算出，
+ * 演示来源**没有地址**（`null`），所以下面断言的是真实 URL —— 改错地址、或让演示来源重新
+ * 拿到地址都会红。两条**写接口**没有地址可拦，仍按本文件的手法做源码切片
+ * （守卫必须落在发请求之前）；组件没有渲染基建，第 2 条走真实链路。
+ * ------------------------------------------------------------------ */
+
+const BLOCK_IF_DEMO = 'const blockIfDemo = (item: OrderCardView): boolean => {'
+const OPEN_CONVERSATION = 'const openConversation = (item: OrderCardView) => {'
+
+describe('演示兜底开关 —— 只认显式 TARO_APP_MOCK=1（#304）', () => {
+  test('兜底判定只有一处定义，且四个注入点都取自它（development 不再自动打开）', async () => {
+    const code = codeOnly(await Bun.file(new URL('../config/index.ts', import.meta.url)).text())
+    // 定义体必须**只**由 `process.env.TARO_APP_MOCK === '1'` 决定：把那条语句整体取出来压平空白后
+    // 做字面等价断言，`|| process.env.NODE_ENV === 'development'` 无论写在同一行还是**换到次行**
+    // 都会红 —— 旧断言是单行正则，换行追加写法实测 24 pass / 0 fail 全绿（2026-10-06 复审）。
+    // 取舍（已知，接受）：这是**字面**等价断言，合法重构（把 `'1'` 抽成常量、调换比较顺序）会红，
+    // 需要同步改这一行；换来的是不依赖 `biome format` 的强度保证（否则漏这层就只剩 lint 兜着）。
+    const definition = mockEnabledDefinition(code)
+    expect(flat(definition).trim(), 'mockEnabled 的定义体掺了别的开关').toBe(
+      "const mockEnabled = process.env.TARO_APP_MOCK === '1'",
+    )
+    // 四个注入点（alias + 三个 defineConstants）共用这一个表达式，不许各自重抄一遍
+    expect(code.match(/process\.env\.TARO_APP_MOCK === '1'/g)?.length).toBe(1)
+    // 但「只此一处」是间接兜：它管不到注入值被换掉。实测（2026-10-06）把
+    // `__ALLOW_MOCK_FALLBACK__` 改成 `JSON.stringify(mockEnabled || process.env.NODE_ENV
+    // === 'development')` 或直接 `JSON.stringify(true)`，上面两条**全绿**。
+    // 注意这两种突变**不是**「静默回退 fixture」：alias 仍把 `@/features/mock-fallback`
+    // 指向生产桩，桩里当场 throw `mock fallback is disabled in production builds` —— 兜底分支
+    // 一被走到就报错，而不是悄悄换成 `t-*` 演示订单（那要 alias 也失守，由
+    // `tests/mock-boundary.test.ts` 的 alias 键序用例守着）。所以四个注入点逐点钉死：
+    // 注入值只能由 `mockEnabled` 决定。
+    // 按**表达式**钉而不是按文本钉：`!(!mockEnabled)` 这类语义等价改写不该误报
+    // （#478 复审 CUST-g 实测「计数 = 3」会误报）。
+    for (const key of ['__ALLOW_MOCK_FALLBACK__', '__DEMO_AUTH__', '__DEMO_AI_POLISH__']) {
+      const inner = stringifiedInjection(code, key)
+      expect(onlyMockEnabled(inner), `${key} 注入了别的开关：${inner}`).toBe(true)
+    }
+    // alias 的条件同理，且「演示构建」那一支必须是空对象：非空就意味着精确别名在演示构建里
+    // 也生效，把 `@` 的前缀语义改掉了。
+    const aliasCondition = code.match(/\.\.\.\(([^?]*?)\s*\?\s*\{\}\s*:/)
+    expect(aliasCondition, 'alias 里应有「<条件> ? {} : {精确别名}」的注入').not.toBeNull()
+    expect(
+      onlyMockEnabled(aliasCondition?.[1] ?? ''),
+      `alias 条件掺了别的开关：${aliasCondition?.[1] ?? ''}`,
+    ).toBe(true)
+  })
+})
+
+describe('演示来源的卡 —— 只说明，不跳真实接口页（#304）', () => {
+  test('演示来源没有面交页地址：真实订单才拼出真实 id（AC⑥）', () => {
+    expect(DEMO_ORDER_HINT).toBe('演示数据，不接入真实交易')
+    expect(meetupUrlOf({ id: 't-101', source: 'demo' })).toBeNull()
+    expect(meetupUrlOf({ id: 'txn_01jc000000e00800000000002h', source: 'real' })).toBe(
+      '/pkg-trade/pages/transaction-meetup/index?id=txn_01jc000000e00800000000002h',
+    )
+  })
+
+  test('演示来源没有会话页地址；真实数据缺 conversationId 也不跳', () => {
+    expect(conversationUrlOf({ conversationId: 'cnv-demo', source: 'demo' })).toBeNull()
+    expect(conversationUrlOf({ conversationId: null, source: 'real' })).toBeNull()
+    expect(
+      conversationUrlOf({ conversationId: 'cnv_01jc000000e008000000000024', source: 'real' }),
+    ).toBe('/pkg-social/pages/conversation/index?id=cnv_01jc000000e008000000000024')
+  })
+
+  test('组件里没有第二份地址：两条跳转都走 order-links', async () => {
+    const code = codeOnly(await orderListSource())
+    expect(code).toContain('meetupUrlOf(item)')
+    expect(code).toContain('conversationUrlOf(item)')
+    // 地址只在 order-links 里拼一次，否则上面两条断言就管不到真实跳转用的那个字符串
+    expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index?id=')
+    expect(code).not.toContain('/pkg-social/pages/conversation/index?id=')
+  })
+
+  test('blockIfDemo 只认 source === demo：真实卡原样放行，演示卡给一句说明', async () => {
+    const body = await sliceFlat(BLOCK_IF_DEMO, OPEN_CONVERSATION)
+    expect(body).toContain('if (!isDemoSource(item)) return false')
+    expectAfter(
+      body,
+      'if (!isDemoSource(item)) return false',
+      'Taro.showToast(',
+      '真实卡直接放行，只有演示卡才提示',
+    )
+    // 说明文案与演示地址同源（`order-links`），不在这里各写一份
+    expect(body).toContain('title: DEMO_ORDER_HINT')
+  })
+
+  test('取消交易 / 读评价边：假 id 不打真实写接口', async () => {
+    const cancel = await sliceFlat(CANCEL, OPEN_REVIEW)
+    expectAfter(cancel, 'if (blockIfDemo(item)) return', 'Taro.showModal(', '演示来源不打取消接口')
+    const review = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
+    expectAfter(
+      review,
+      'if (blockIfDemo(item)) return',
+      'fetchMyTransactionReview(',
+      '演示来源不打评价接口',
+    )
+  })
+})
+
+describe('订单来源标记 —— 演示 fixture 与契约订单各自可辨（#304）', () => {
+  test('演示兜底：后端不可用时退回 fixture，每张卡都自证 source=demo 的假 id', async () => {
+    ordersFailure = new Error('request:fail network error')
+    const { loadOrders } = await import('../src/features/fetchers')
+    const result = await loadOrders('buyer')
+
+    expect(result.failureKind).toBeNull()
+    expect(result.items.length).toBeGreaterThan(0)
+    for (const item of result.items) {
+      expect(item.source).toBe('demo')
+      // 假 id：`t-*` / `l-*` 是 `src/mock/account.ts` 的 TX_SPECS，拿进真实页就是 404
+      expect(item.id.startsWith('t-')).toBe(true)
+      expect(item.listingId.startsWith('l-')).toBe(true)
+    }
+  })
+
+  test('契约订单：标 source=real，且 conversationId 原样带出（seed 台灯单的公开 id）', async () => {
+    const { toOrderCard } = await import('../src/features/transaction/adapt')
+    const { transactionDtoSchema } = await import('@fish/contracts/transactions/schema')
+    const { encodePublicId } = await import('@fish/shared/public-id')
+
+    // 字段逐个取自 packages/db/src/seed.ts 的台灯单：交易 transactionLamp（`ids.transactionLamp`，
+    // seed.ts:66）、会话 conversationLamp（seed.ts:62，`transactionLamp` 的三元组见 seed.ts:307）、
+    // 商品 listingLamp（seed.ts:54，`宿舍护眼台灯` 3000 分 RESERVED）、买家 sellerA（seed.ts:48，阿岚）、
+    // 卖家 buyerB（seed.ts:49，小北）。买家视角的对手方就是卖家小北。
+    //
+    // 这一条只证明**投影不丢字段**：`conversationId` 是原样带出的，不是重算或补空。
+    // 「真实 seed 单的 conversationId 非空」的端到端证据是 `GET /transactions?role=seller` 的真实
+    // 响应（`cnv_01jc000000e008000000000024`，见 PR 正文 AC⑤ 取证），不是这个手搓 DTO。
+    const dto = transactionDtoSchema.parse({
+      id: encodePublicId('txn', '01930000-0000-7000-8000-000000000051'),
+      conversationId: encodePublicId('cnv', '01930000-0000-7000-8000-000000000044'),
+      listingId: encodePublicId('lst', '01930000-0000-7000-8000-000000000014'),
+      buyerId: encodePublicId('usr', '01930000-0000-7000-8000-00000000000a'),
+      sellerId: encodePublicId('usr', '01930000-0000-7000-8000-00000000000b'),
+      role: 'buyer',
+      listing: {
+        id: encodePublicId('lst', '01930000-0000-7000-8000-000000000014'),
+        title: '宿舍护眼台灯',
+        priceCents: 3000,
+        status: 'RESERVED',
+        coverUrl: null,
+      },
+      counterpart: {
+        id: encodePublicId('usr', '01930000-0000-7000-8000-00000000000b'),
+        nickname: '小北',
+        avatarUrl: null,
+      },
+      amountCents: 2800,
+      status: 'PENDING_MEETUP',
+      buyerConfirmedAt: null,
+      sellerConfirmedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      createdAt: '2026-09-14T12:00:00.000Z',
+      updatedAt: '2026-09-14T12:00:00.000Z',
+    })
+
+    const card = toOrderCard(dto)
+    expect(card.source).toBe('real')
+    // 字面值 = seed 那两条 UUIDv7 经 `encodePublicId` 的确定性结果，与接口 / 端上看到的一致
+    expect(card.id).toBe('txn_01jc000000e00800000000002h')
+    expect(card.conversationId).toBe('cnv_01jc000000e008000000000024')
+    expect(card.conversationId).toBe(dto.conversationId)
   })
 })

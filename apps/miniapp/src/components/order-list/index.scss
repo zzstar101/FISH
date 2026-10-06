@@ -231,6 +231,25 @@
   @include ellipsis;
 }
 
+/*
+ * 演示来源角标（#304）。只在 `TARO_APP_MOCK=1` 的演示构建、且真实接口失败退回 fixture 时出现。
+ * 刻意**不复用 `status-pill`**：那是交易状态的形状，来源标记混进同一排胶囊里会被读成
+ * 「另一种交易状态」。虚线描边 + 中性色，一眼看出这是数据来源的注记。
+ */
+.orders__src {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 36px;
+  margin-left: 12px;
+  padding: 0 14px;
+  border: 2px dashed var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted-2);
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
 .orders__st {
   @include status-pill;
   margin-left: auto;

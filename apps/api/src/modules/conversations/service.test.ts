@@ -4,6 +4,9 @@ import { decodePublicId, encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/p
 import { createPresenceRegistry } from '../presence/presence'
 import type { MediaStorage } from '../uploads/storage'
 import { ConversationServiceError, createConversationService } from './service'
+
+const neverBlocked = { existsBlockBetween: async () => false }
+
 import type { ConversationDetailRow, ConversationStore, ListingBrief } from './store'
 
 const buyer = '01930000-0000-7000-8000-0000000000a1'
@@ -162,7 +165,12 @@ class MemoryConversationStore implements ConversationStore {
 describe('conversation service: createOrGetConversation', () => {
   test('creates a conversation and reports created=true', async () => {
     const store = new MemoryConversationStore()
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const result = await service.createOrGetConversation(buyer, { listingId: listingA })
     expect(result.created).toBe(true)
     expect(result.conversation.role).toBe('buyer')
@@ -178,6 +186,7 @@ describe('conversation service: createOrGetConversation', () => {
     const store = new MemoryConversationStore()
     const asked: string[] = []
     const service = createConversationService({
+      blocks: neverBlocked,
       store,
       storage,
       presence: {
@@ -205,7 +214,12 @@ describe('conversation service: createOrGetConversation', () => {
     const store = new MemoryConversationStore()
     const reviewKey = `listing-review-media/${encodePublicId(PUBLIC_ID_PREFIX.user, seller)}/${encodePublicId(PUBLIC_ID_PREFIX.media, '01930000-0000-7000-8000-0000000000d1')}.jpg`
     store.coverObjectKeys = async (listingIds) => new Map(listingIds.map((id) => [id, reviewKey]))
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
 
     // #286 复审：任意登录用户只要能对一条 REVIEW 商品建会话，就会拿到无会话鉴权的直读 URL。
     const created = await service.createOrGetConversation(buyer, { listingId: listingA })
@@ -220,9 +234,36 @@ describe('conversation service: createOrGetConversation', () => {
     const after = await service.getConversation(buyer, conversationId)
     expect(after.listing.coverUrl).toBe(`https://cdn.test/covers/${listingA}.jpg`)
   })
+  /*
+   * #466 拉黑守卫（双向）：买家与卖家之间任一方向存在拉黑边，新建会话即被拦。
+   * 中性码 CONVERSATION_UNAVAILABLE——不暴露「谁拉黑了谁」。
+   */
+  test('拉黑守卫：拉黑边存在 → 403 CONVERSATION_UNAVAILABLE（双方同码）', async () => {
+    const service = createConversationService({
+      blocks: { existsBlockBetween: async () => true },
+      presence,
+      store: new MemoryConversationStore(),
+      storage,
+    })
+    await expect(
+      service.createOrGetConversation(buyer, { listingId: listingA }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+
+  test('守卫不误伤：无拉黑边时照常建会话', async () => {
+    const service = createConversationService({
+      blocks: neverBlocked,
+      presence,
+      store: new MemoryConversationStore(),
+      storage,
+    })
+    const result = await service.createOrGetConversation(buyer, { listingId: listingA })
+    expect(result.created).toBe(true)
+  })
 
   test('reuses the existing conversation for the same (listing, buyer)', async () => {
     const service = createConversationService({
+      blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
       presence,
@@ -249,7 +290,12 @@ describe('conversation service: createOrGetConversation', () => {
         cause: Object.assign(new Error('violates foreign key constraint'), { errno: '23503' }),
       })
     }
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
 
     expect(service.createOrGetConversation(buyer, { listingId: listingA })).rejects.toMatchObject({
       code: 'LISTING_NOT_FOUND',
@@ -259,6 +305,7 @@ describe('conversation service: createOrGetConversation', () => {
 
   test('404 LISTING_NOT_FOUND for an unknown listing', async () => {
     const service = createConversationService({
+      blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
       presence,
@@ -272,6 +319,7 @@ describe('conversation service: createOrGetConversation', () => {
 
   test('409 CANNOT_CHAT_WITH_SELF when the caller is the seller', async () => {
     const service = createConversationService({
+      blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
       presence,
@@ -286,7 +334,12 @@ describe('conversation service: createOrGetConversation', () => {
 describe('conversation service: listConversations', () => {
   test('sellers see the same conversation with role=seller', async () => {
     const store = new MemoryConversationStore()
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const created = await service.createOrGetConversation(buyer, { listingId: listingA })
     const listed = await service.listConversations(seller, { limit: 20 })
     expect(listed.items).toHaveLength(1)
@@ -296,6 +349,7 @@ describe('conversation service: listConversations', () => {
 
   test('422 on an undecodable cursor', async () => {
     const service = createConversationService({
+      blocks: neverBlocked,
       store: new MemoryConversationStore(),
       storage,
       presence,
@@ -313,7 +367,12 @@ describe('conversation service: listConversations', () => {
       secondId,
       detailRow({ conversation: { ...detailRow().conversation, id: secondId } }),
     )
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const first = await service.listConversations(buyer, { limit: 1 })
     expect(JSON.parse(Buffer.from(first.nextCursor ?? '', 'base64url').toString()).id).toBe(
       encodePublicId(PUBLIC_ID_PREFIX.conversation, secondId),
@@ -330,7 +389,12 @@ describe('conversation service: listConversations', () => {
   test('nextCursor is null before the page overflows', async () => {
     const store = new MemoryConversationStore()
     await store.insertIfAbsent(listingA, buyer, seller)
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const listed = await service.listConversations(buyer, { limit: 20 })
     expect(listed.nextCursor).toBeNull()
   })
@@ -339,7 +403,12 @@ describe('conversation service: listConversations', () => {
 describe('conversation service: markRead', () => {
   test('resets unreadCount for the viewer', async () => {
     const store = new MemoryConversationStore()
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
     const dto: ConversationDto = await service.markRead(
       buyer,
@@ -356,6 +425,7 @@ describe('conversation service: markRead', () => {
     }
     const pushed: ReadPush[] = []
     const service = createConversationService({
+      blocks: neverBlocked,
       store,
       storage,
       presence,
@@ -386,7 +456,12 @@ describe('conversation service: markRead', () => {
 
   test('counterpartLastReadAt is the other side, depending on who is viewing', async () => {
     const store = new MemoryConversationStore()
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
     const row = store.details.get(decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id))
     if (!row) throw new Error('unreachable')
@@ -406,6 +481,7 @@ describe('conversation service: markRead', () => {
     const store = new MemoryConversationStore()
     const pushed: unknown[] = []
     const service = createConversationService({
+      blocks: neverBlocked,
       store,
       storage,
       presence,
@@ -425,7 +501,12 @@ describe('conversation service: markRead', () => {
 describe('conversation service: getUnreadCount', () => {
   test('returns the store aggregate for the viewer, not the first page', async () => {
     const store = new MemoryConversationStore()
-    const service = createConversationService({ store, storage, presence })
+    const service = createConversationService({
+      store,
+      storage,
+      presence,
+      blocks: { existsBlockBetween: async () => false },
+    })
     const { conversation } = await service.createOrGetConversation(buyer, { listingId: listingA })
     const row = store.details.get(decodePublicId(PUBLIC_ID_PREFIX.conversation, conversation.id))
     if (!row) throw new Error('unreachable')

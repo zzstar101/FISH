@@ -1,11 +1,6 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  timingSafeEqual,
-} from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac } from 'node:crypto'
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { MEDIA_TOKEN, tokensEqual } from './media-token'
 
 /**
  * 私有媒体前缀与短期读取令牌：#286 的**审核中**图片（`listing-review-media/`）与
@@ -90,8 +85,6 @@ function isProxyServedKey(key: string): boolean {
  */
 export const REVIEW_MEDIA_URL_TTL_SECONDS = 900
 
-const TOKEN = /^[A-Za-z0-9_-]{20,400}$/
-
 function keyFromSecret(secret: string): Buffer {
   // 与旧媒体代理、面交二维码签名各自独立：同一个部署 secret 派生不同用途的密钥。
   return createHash('sha256').update('fish286:listing-review-media:v1:').update(secret).digest()
@@ -113,16 +106,9 @@ export function reviewMediaToken(key: string, secret: string, expiresAtSeconds: 
   return Buffer.concat([nonce, encrypted, cipher.getAuthTag()]).toString('base64url')
 }
 
-/** 令牌比较用常量时间：长度由格式决定、不是秘密，等长时再逐字节比。 */
-function tokensEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8')
-  const right = Buffer.from(b, 'utf8')
-  return left.length === right.length && timingSafeEqual(left, right)
-}
-
 /** 校验并解出对象键；过期、伪造、键形状不符一律返回 `null`（调用方 404）。 */
 export function reviewMediaKey(token: string, secret: string, nowSeconds: number): string | null {
-  if (!TOKEN.test(token)) return null
+  if (!MEDIA_TOKEN.test(token)) return null
   try {
     const bytes = Buffer.from(token, 'base64url')
     // 非规范 base64url 与长度越界直接拒掉，别让解密路径吃奇怪输入。

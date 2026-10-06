@@ -31,7 +31,6 @@ import {
   meetupCodeOf,
   rotateMeetupCode,
   SETTINGS,
-  THEME_OPTIONS,
   TRANSACTION_BY_ID,
   TRANSACTIONS,
   transactionsOf,
@@ -505,7 +504,6 @@ export function settings(): MockSettings {
   return SETTINGS
 }
 
-export const themeOptions = THEME_OPTIONS
 export { APP_BUILD, APP_VERSION }
 
 export const allUsers: MockUser[] = USERS
@@ -513,7 +511,7 @@ export const allUsers: MockUser[] = USERS
 /** 当前登录用户（mock 固定为阿岚） */
 export { getUser, ME }
 
-/** 留言 fixture：开发 / 预览退 mock 时用（真实读路径是 #111 的 `GET /listings/:id/comments`） */
+/** 留言 fixture：演示构建（`TARO_APP_MOCK=1`）退 mock 时用（真实读路径是 #111 的 `GET /listings/:id/comments`） */
 export const allComments: MockComment[] = COMMENTS
 
 /* ---- D1 发布页增补（AI 润色；审核判定已由服务端接管，见 #74） ---- */

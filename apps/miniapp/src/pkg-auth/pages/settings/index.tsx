@@ -1,3 +1,4 @@
+import { ACCOUNT_DELETION_COOLING_OFF_DAYS } from '@fish/contracts/account-deletion/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll } from '@tarojs/taro'
 import { useState } from 'react'
@@ -5,16 +6,18 @@ import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
-import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
-import { settings, themeOptions } from '@/lib/settings-defaults'
-import type { MockSettings, ThemeMode } from '@/mock/types'
-import type { NotifyKey } from './preferences'
+import type { NotifyKey } from '@/features/settings/preferences'
 import {
   COMMENT_POLICIES,
+  NOTIFY_KEYS,
   parseStoredPrefs,
   readStoredPrefs,
   SETTINGS_STORAGE_KEY,
-} from './preferences'
+} from '@/features/settings/preferences'
+import { NOTIFY_PREFS_EVENT } from '@/features/settings/unread-badge'
+import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
+import { settings } from '@/lib/settings-defaults'
+import type { MockSettings } from '@/mock/types'
 import './index.scss'
 
 /**
@@ -23,9 +26,14 @@ import './index.scss'
  * 分组白卡：账号 / 通用 / 隐私 / 关于，最后是**单独一张卡**的退出登录
  * ——交付要求「危险操作与普通项视觉上必须分开」，所以它不放进任何分组。
  *
- * 主题模式做成可展开的选项列表（设计稿第 02 帧），其余开关即时切换。
- * 偏好项落本地并在挂载时读回（`Taro.setStorageSync` / `getStorageSync`，
- * `BLOCKED: #66`），不写后端；也不把各 Domain 的业务逻辑搬进来，这里只管偏好项。
+ * 通知开关即时切换并**接了真实消费方**：底栏「消息」徽标按这些开关过滤对应分量
+ * （`custom-tab-bar` 经 `features/settings/unread-badge` 的闸门读同一份白名单），开关
+ * 一变就广播 `NOTIFY_PREFS_EVENT` 让常驻的底栏实例重算。偏好项落本地并在挂载时读回
+ * （`Taro.setStorageSync` / `getStorageSync`，`BLOCKED: #66`），不写后端；也不把各
+ * Domain 的业务逻辑搬进来，这里只管偏好项。
+ *
+ * **主题三档已整组撤掉**（2026-10-05 Owner 拍板）：它从未有过消费方 —— 暗色主题
+ * 没实现，全仓没有任何样式读这个偏好，开关等于骗人；需求单另行跟踪，做实后再回来。
  *
  * **账号信息与退出登录是真实登录态**：账号行读 `features/auth/store` 的当前用户，
  * 退出走 `POST /auth/logout` 并清本地会话（原先两处都是占位）。
@@ -64,8 +72,6 @@ export default function Settings() {
   // 偏好初始值 = 默认值 + 本机存量（盖回去，重进页面不再重置）；
   // 只在页面实例首次挂载时读一次存储，之后的改动都走 state + persist。
   const [initial] = useState(() => parseStoredPrefs(readStorage(), settings()))
-  const [theme, setTheme] = useState<ThemeMode>(initial.theme)
-  const [themeOpen, setThemeOpen] = useState(false)
   const [notifyChat, setNotifyChat] = useState(initial.notifyChat)
   const [notifyWish, setNotifyWish] = useState(initial.notifyWish)
   const [notifyDeal, setNotifyDeal] = useState(initial.notifyDeal)
@@ -84,8 +90,6 @@ export default function Settings() {
   const [revealed, setRevealed] = useState(false)
   usePageScroll(({ scrollTop }) => setRevealed(scrollTop > REVEAL_AT))
 
-  const themeLabel = themeOptions.find((item) => item.key === theme)?.label ?? '跟随系统'
-
   /** 偏好项落本地存储（真实实现再同步后端）；存量要并回来，别把别的键冲掉 */
   const persist = (patch: Partial<MockSettings>) => {
     try {
@@ -93,6 +97,11 @@ export default function Settings() {
       Taro.setStorageSync(SETTINGS_STORAGE_KEY, { ...base, ...patch })
     } catch {
       // 存储失败不影响页面交互，静默即可
+    }
+    // 通知开关变了就广播：底栏实例常驻每个 Tab 页，不会因为本页的 state 重渲染，
+    // 只有显式广播才能让它立刻按新偏好重算红点（同 `lib/tabbar-sync` 的模式）
+    if (NOTIFY_KEYS.some((key) => key in patch)) {
+      Taro.eventCenter.trigger(NOTIFY_PREFS_EVENT)
     }
   }
 
@@ -202,36 +211,6 @@ export default function Settings() {
         {/* ============================ 通用 ============================ */}
         <Text className="st__grouplabel">通用</Text>
         <View className="st__group">
-          <View className="st__row" onClick={() => setThemeOpen((prev) => !prev)}>
-            <View className="st__ric">
-              <Image className="st__ric-ic" src={ICONS.moon} mode="aspectFit" />
-            </View>
-            <Text className="st__rlabel">主题模式</Text>
-            <Text className="st__rvalue">{themeLabel}</Text>
-            <View className={`st__arrow${themeOpen ? ' is-open' : ''}`} />
-          </View>
-
-          {themeOpen ? (
-            <View className="st__opts">
-              {themeOptions.map((item) => (
-                <View
-                  key={item.key}
-                  className={`st__opt${item.key === theme ? ' is-on' : ''}`}
-                  onClick={() => {
-                    setTheme(item.key)
-                    persist({ theme: item.key })
-                  }}
-                >
-                  <View className="st__opt-main">
-                    <Text className="st__rlabel">{item.label}</Text>
-                    <Text className="st__odesc">{item.desc}</Text>
-                  </View>
-                  <View className={`st__radio${item.key === theme ? ' is-on' : ''}`} />
-                </View>
-              ))}
-            </View>
-          ) : null}
-
           <View className="st__row">
             <View className="st__ric">
               <Image className="st__ric-ic" src={ICONS.bellInk} mode="aspectFit" />
@@ -355,14 +334,26 @@ export default function Settings() {
           </View>
         </View>
 
-        {/* ==================== 危险操作：单独一张卡 ==================== */}
+        {/* ==================== 危险操作：单独一张卡 ====================
+            注销排在退出登录**下面**：两者都会让账号不可用，但注销更重（有 7 天冷静期、
+            会下架商品），放在最后一行可以少一点误触。 */}
         <View className="st__danger-card">
           <View className="st__danger-row" onClick={() => setLogoutOpen(true)}>
             <Image className="st__danger-ic" src={ICONS.power} mode="aspectFit" />
             <Text>退出登录</Text>
           </View>
+          <View
+            className="st__danger-row"
+            onClick={() => void Taro.navigateTo({ url: '/pkg-auth/pages/account-deletion/index' })}
+          >
+            <Image className="st__danger-ic" src={ICONS.delete} mode="aspectFit" />
+            <Text>注销账号</Text>
+          </View>
         </View>
-        <Text className="st__danger-note">退出后需重新登录，本地草稿与收藏记录不会丢失。</Text>
+        <Text className="st__danger-note">
+          退出后需重新登录，本地草稿与收藏记录不会丢失。{'\n'}
+          注销账号有 {ACCOUNT_DELETION_COOLING_OFF_DAYS} 天冷静期，期间可撤回。
+        </Text>
         <Text className="st__version num">{`鱼小应 v${APP_VERSION} · build ${APP_BUILD}`}</Text>
       </View>
 

@@ -156,7 +156,7 @@ export function mergeRefreshedComments<T extends { id: string; replies: T[] }>(
  * 走整体合并，等于把已经显示出来的留言与分页游标一起抹掉 —— 一次网络抖动变成
  * 「留言全没了」（客户端展示丢失，不是服务端删了留言）。
  *
- * 失败分支仍带 `comments`（开发 / 预览口径的 fixture 回退，或生产口径的空列表）：
+ * 失败分支仍带 `comments`（演示构建口径的 fixture 回退，或生产口径的空列表）：
  * 它只用于**首次加载**的兜底展示，绝不允许进静默刷新的合并。
  */
 export type CommentsRead<C> =

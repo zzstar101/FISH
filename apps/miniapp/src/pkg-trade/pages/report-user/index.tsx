@@ -36,6 +36,7 @@ import {
   unavailableCopy,
   wantsReportRecord,
 } from '@/features/reports/view'
+import { goBackOrHome } from '@/lib/nav-back'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -101,7 +102,7 @@ import './index.scss'
 
 const REASONS = reasonsOf('USER')
 const REASON_MAX = 200
-/** 演示构建口径：mock 回退与演示登录态**都要**开（只认 MOCK_FALLBACK 会顶掉 dev:weapp 的真实空态） */
+/** 演示构建口径：mock 回退与演示登录态**都要**开（两个注入点可单独打开，只认 MOCK_FALLBACK 会顶掉真实空态） */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 
 /** 成功态落定后的内容（`created` 决定文案：本次新建 / 此前已受理） */
@@ -416,7 +417,12 @@ export default function ReportUser() {
           ) : null}
 
           <View className="rpu__acts">
-            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpu__btn-ghost"
+              onClick={() => {
+                goBackOrHome()
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -432,7 +438,12 @@ export default function ReportUser() {
             />
           </View>
           <View className="rpu__acts">
-            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpu__btn-ghost"
+              onClick={() => {
+                goBackOrHome()
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -487,7 +498,12 @@ export default function ReportUser() {
             <View className="rpu__btn-primary" onClick={goMyReports}>
               <Text>查看「我的举报」</Text>
             </View>
-            <View className="rpu__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpu__btn-ghost"
+              onClick={() => {
+                goBackOrHome()
+              }}
+            >
               <Text>返回对方主页</Text>
             </View>
           </View>

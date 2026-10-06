@@ -6,6 +6,7 @@ import {
   useRouterState,
 } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
+import { AdminShell } from '../features/admin/admin-shell'
 import { AuthProvider } from '../features/auth/auth-provider'
 import { RequireAuth } from '../features/auth/require-auth'
 import { PcShell } from '../features/shell/pc-shell'
@@ -44,6 +45,11 @@ function RootChrome() {
   const isAuthPage = pathname === '/login'
   const isPublicListing = Boolean(matchRoute({ to: '/listing/$listingId' }))
   const isPublicProfile = Boolean(matchRoute({ to: '/users/$userId' }))
+  /**
+   * 管理后台走独立壳（#467）：与用户侧交易页面区分，同样受登录守卫；管理员身份由
+   * AdminShell 内的 `/admin/me` 校验（服务端 ADMIN 守卫仍是权限真源）。
+   */
+  const isAdminArea = pathname === '/admin' || pathname.startsWith('/admin/')
 
   if (isNotFound) {
     return (
@@ -54,6 +60,13 @@ function RootChrome() {
   }
   if (isAuthPage) return <Outlet />
   if (isPublicListing || isPublicProfile) return <PcShell />
+  if (isAdminArea) {
+    return (
+      <RequireAuth>
+        <AdminShell />
+      </RequireAuth>
+    )
+  }
 
   return (
     <RequireAuth>

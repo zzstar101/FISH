@@ -1,5 +1,5 @@
 /**
- * 页面数据入口（含通知的逐条已读**回写**）：**先试真实 API；只有开发 / 预览才允许退回 mock fixture**。
+ * 页面数据入口（含通知的逐条已读**回写**）：**先试真实 API；只有显式演示构建（`TARO_APP_MOCK=1`）才允许退回 mock fixture**。
  *
  * ## 为什么要有这一层
  *
@@ -9,7 +9,7 @@
  *
  * ## 生产口径
  *
- * mock 回退是**开发 / 预览**的便利，不是生产数据策略：API 挂掉、域名配错或契约漂移时，
+ * mock 回退是**演示构建**的便利，不是生产数据策略：API 挂掉、域名配错或契约漂移时，
  * 用户必须看到错误态，而不是一批「看起来正常」的假商品 / 假账号。因此：
  *
  * - 只有构建期注入的 `__ALLOW_MOCK_FALLBACK__ === true` 才退 mock（注入点见 `config/index.ts`）；
@@ -83,7 +83,12 @@ import {
   fetchSimilarListings,
   searchListings,
 } from './listing/api'
-import { MOCK_FALLBACK_ENABLED, reportFailure } from './load-failure'
+import {
+  classifyFailure,
+  type FailureKind,
+  MOCK_FALLBACK_ENABLED,
+  reportFailure,
+} from './load-failure'
 import { fetchProfile } from './profile/api'
 import { type OrderCardView, toOrderCard, toOrderCardFromMock } from './transaction/adapt'
 import { fetchAllTransactions } from './transaction/api'
@@ -134,7 +139,7 @@ export type LoadedList = {
   /**
    * 本次推荐请求的 id（`GET /recommendations/feed` 的 `requestId`）。
    *
-   * 分类列表、以及退 mock 的开发/预览都没有推荐请求上下文 → `null`：此时**不发**
+   * 分类列表、以及退 mock 的演示构建都没有推荐请求上下文 → `null`：此时**不发**
    * IMPRESSION / QUICK_SKIP，因为契约强制这两个事件必须带 requestId（见 `recommendation/schema.ts`），
    * 没有归因就发等于制造必然被拒的事件。
    */
@@ -148,7 +153,7 @@ export type LoadedList = {
   positions?: Map<string, number>
 }
 
-/** 首页 feed。「推荐」走推荐端点，分类走商品列表；真实失败：开发 / 预览退 mock，生产返回 `failed`。 */
+/** 首页 feed。「推荐」走推荐端点，分类走商品列表；真实失败：演示构建退 mock，生产返回 `failed`。 */
 export async function loadHomeFeed(
   category: ListingCategory | 'ALL' = 'ALL',
   now: number = Date.now(),
@@ -355,7 +360,7 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
  * mark-all-read 端点，客户端不假设有。返回**标记成功**的 id 集合：调用方（chat 页）
  * 先乐观置读，拿到这里的结果后只对**未成功**的条目回滚成未读。
  *
- * 演示 / 开发构建（`MOCK_FALLBACK_ENABLED`）的兜底口径见 `mergeMarkReadResults`：
+ * 演示构建（`TARO_APP_MOCK=1` → `MOCK_FALLBACK_ENABLED`）的兜底口径见 `mergeMarkReadResults`：
  * 只有**整批都因后端不可达而失败**才按演示口径视为全部已读，真实的接口错误
  * （401 / 404 / 5xx）一律如实返回。
  */
@@ -384,7 +389,7 @@ export type LoadedConversations = {
 /**
  * 会话列表（#89：Chat 页不再从 fixture 读会话）。`cursor` 传上一页的 `nextCursor`。
  *
- * 与通知列表同一口径：真实接口优先；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，
+ * 与通知列表同一口径：真实接口优先；只有演示构建（`TARO_APP_MOCK=1` → `MOCK_FALLBACK_ENABLED`，
  * 本地没有后端）才退回 fixture，生产失败如实返回 `failed: true` 由页面显示错误态 +
  * 重试，**不拿 fixture 顶替** —— 假会话比错误态更糟。
  */
@@ -719,8 +724,16 @@ function toReplyExcerpt(item: MockMessage): string {
  */
 export type LoadedOrders = {
   items: OrderCardView[]
-  /** 真实接口失败且**没有**回退 mock（生产口径）→ 页面渲染错误态而不是空态 */
-  failed: boolean
+  /**
+   * 失败分类（#304）：非 `null` 就是「真实接口失败且**没有**回退 mock（生产口径）」，
+   * 页面据此渲染错误态而不是空态，并换文案 —— 401「登录已过期」、网络「网络不可用」、
+   * 其余（404 / 5xx / 契约漂移）「服务暂时不可用」。成功与演示兜底分支都是 `null`
+   * （那时没有失败可讲）。分类口径见 `features/load-failure.ts`。
+   *
+   * 刻意**没有** `failed: boolean`：它与 `failureKind !== null` 恒等，两个字段只能同步
+   * 翻转，多一个就多一份要维护的真相。
+   */
+  failureKind: FailureKind | null
   truncated: boolean
 }
 
@@ -737,16 +750,22 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
     const page = await fetchAllTransactions(role)
     return {
       items: page.items.map((dto) => toOrderCard(dto)),
-      failed: false,
+      failureKind: null,
       truncated: page.truncated,
     }
   } catch (error) {
     reportFailure('订单列表', error)
-    if (!MOCK_FALLBACK_ENABLED) return { items: [], failed: true, truncated: false }
+    /*
+     * 不回退 mock 时把**分类**一并交给页面（#304）：401 / 网络不可用 / 服务端错误信封
+     * 是三种不同的处境，页面上不能都长成「加载失败，检查网络后重试」。
+     */
+    if (!MOCK_FALLBACK_ENABLED) {
+      return { items: [], failureKind: classifyFailure(error), truncated: false }
+    }
     const views = await demoOrderViews(role)
     return {
       items: views.map((view) => toOrderCardFromMock(view, demoOpenConversation)),
-      failed: false,
+      failureKind: null,
       truncated: false,
     }
   }
@@ -845,8 +864,8 @@ export async function loadProfile(now: number = Date.now()): Promise<ProfileView
     }
   } catch (error) {
     // `fellBack` 必须**显式**传，不能用默认值：本函数的回退条件比构建默认口径更窄
-    // （`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）。照默认值打日志会在
-    // `dev:weapp` 这类「mock 开、演示登录态关」的构建里声称"已回退 mock"，
+    // （`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`）。照默认值打日志，只要哪天两个
+    // 开关取值不同就会声称"已回退 mock"，
     // 而实际返回的是 `null` —— 正是 #140 给 `reportFailure` 加这个参数要根除的那种
     // 「日志声称一件没发生的事」。
     reportFailure('个人中心', error, MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED)

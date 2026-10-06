@@ -5,6 +5,7 @@ import Taro, {
   usePageScroll,
   usePullDownRefresh,
   useReady,
+  useShareAppMessage,
   useUnload,
 } from '@tarojs/taro'
 import { useMemo, useRef, useState } from 'react'
@@ -55,6 +56,11 @@ function splitColumns(items: MockListing[]): [MockListing[], MockListing[]] {
 }
 
 export default function Home() {
+  // 右上角菜单转发：分享出去落地本页（tab 页天然支持冷启动直入）。
+  useShareAppMessage(() => ({
+    title: '鱼小应 · 校园闲置好物，来看看',
+    path: '/pages/home/index',
+  }))
   const [items, setItems] = useState<MockListing[]>([])
   /**
    * 已经成功上屏的列表**属于哪个分类**（`null` = 还没成功加载过，或上一次加载失败已作废）。
@@ -106,7 +112,7 @@ export default function Home() {
   /**
    * 埋点上下文：本次推荐请求的 `requestId` 与「公开 id → 全局 position」。
    *
-   * 退 mock（开发 / 预览）或分类列表时 `requestId` 为 `null` —— 此时**不发** IMPRESSION /
+   * 退 mock（演示构建）或分类列表时 `requestId` 为 `null` —— 此时**不发** IMPRESSION /
    * QUICK_SKIP：契约强制这两个事件必须带 requestId + position，没有归因就发等于制造必然被拒的事件。
    */
   const [feedContext, setFeedContext] = useState<FeedTrackingContext>({
@@ -157,7 +163,7 @@ export default function Home() {
     // 先摘掉错误态：上一个分类加载失败留下的错误块不属于 `next`，
     // 不摘的话切分类时会先闪一下「加载失败」再变骨架屏。
     setFailed(false)
-    // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
+    // 「真实接口优先、只有演示构建才退 mock」由 fetchers 统一负责，页面不自己 try/catch。
     // `ALL` 是首页的「推荐」= 全部：契约的 `category` 没有 ALL 这个值，由 fetchers 决定不传。
     const result =
       next === 'ALL' ? await loadHomeFeed('ALL') : await loadCategoryListings(next, '综合')

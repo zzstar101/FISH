@@ -26,7 +26,7 @@ import type { RestrictionGuard } from '../governance/guard'
 import { createWechatAccessTokenService, WechatPlatformError } from '../wechat/access-token'
 import { AuthError } from './errors'
 import { maskPhone } from './me'
-import { type AuthVariables, createRequireAuth } from './middleware'
+import { type AccountDeletionWriteGuard, type AuthVariables, createRequireAuth } from './middleware'
 import { createScanTicketRateLimiter } from './scan-rate-limit'
 import { createScanTicketService } from './scan-service'
 import { createAuthService } from './service'
@@ -87,6 +87,11 @@ export function createAuthModule(options: {
    * 装配层传 presence 登记表的 `touch`；不传则在线态无来源（测试 / 无 presence 的装配）。
    */
   onAuthenticated?: (userId: string) => void
+  /**
+   * #464：冷静期内的写拦截判据，原样转交给 `requireAuth`（判定逻辑不在这里）。
+   * 由 `app.ts` 从 account-deletion 域的 `write-policy` 接线；不传则不拦。
+   */
+  accountDeletionWriteGuard?: AccountDeletionWriteGuard
 }) {
   const cookie = createSessionCookie(options.secureCookie)
   const service = createAuthService({ db: options.db, sessions: createSessions(options.db) })
@@ -94,6 +99,7 @@ export function createAuthModule(options: {
     cookie,
     service,
     onAuthenticated: options.onAuthenticated,
+    accountDeletionWriteGuard: options.accountDeletionWriteGuard,
   })
   const wechatSessions = createSessions(options.db)
   // provider 只在 stub / live 下构造；off 下保持 null，两个入口在 handler 顶部显式 503。
@@ -408,5 +414,23 @@ export function createAuthModule(options: {
     return userId
   }
 
-  return { router, requireAuth, meHandler, resolveViewerId }
+  /**
+   * 会话 cookie 的读写口。给 #464 的注销模块用：申请注销要「保留当前设备、撤销其他设备」，
+   * 判据是**当前请求里那枚会话令牌的哈希**，而明文只有 cookie 里有（库里存的是哈希）。
+   * 注销模块拿它取明文、交给 `hashSessionToken`（同一份实现）算哈希，再进事务删其余行。
+   */
+  return {
+    router,
+    requireAuth,
+    meHandler,
+    resolveViewerId,
+    sessionCookie: cookie,
+    /**
+     * 令牌 → 用户 + 账号状态。给 #464 的**可选身份**守卫用
+     * （`account-deletion/optional-identity-guard.ts`）：那几条入口不挂 `requireAuth`，
+     * 拿不到 `requireAuth` 已经查好的 viewer，但又必须按同一个账号状态判断该不该拦。
+     * 复用同一个 `loadViewer`，所以「谁算已注销」「谁算冷静期」只有一处定义。
+     */
+    loadViewer: service.loadViewer,
+  }
 }

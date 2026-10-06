@@ -1,3 +1,4 @@
+import type { AccountDeletionState } from '@fish/contracts/account-deletion/schema'
 import type { LoginRequest, RegisterRequest } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
 import type { Db } from '@fish/db/client'
@@ -97,15 +98,25 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
       if (token) await sessions.revoke(token)
     },
 
-    /** 认证守卫用：令牌 → 当前用户；无效或过期返回 null。 */
-    async loadMe(token: string): Promise<Me | null> {
-      const session = await sessions.resolve(token)
-      if (!session) return null
+    /**
+     * 认证守卫用：令牌 → 当前用户；无效、过期或**已注销**返回 null。
+     *
+     * #464：`DELETED` 的账号一律当作未登录。去标识化那一刻凭据已被清空、会话已被删光
+     * （见 `apps/worker/src/jobs/account-deletion/purge.ts`），所以正常路径下不会有这样的
+     * 会话；这里再判一次是**失败关闭**的兜底 —— 万一有残留行（例如去标识化之后有人手工
+     * 写回一条会话，或将来新增了别的会话来源），也不存在任何「注销后复活」的通路。
+     *
+     * 与 `resolveViewerId`（匿名可读路径）共用同一实现，所以「复活」在两条入口上同时被堵死。
+     */
+    loadMe: async (token: string): Promise<Me | null> => (await loadViewer(token))?.me ?? null,
 
-      const rows = await db.select().from(users).where(eq(users.id, session.userId)).limit(1)
-      const row = rows[0]
-      return row ? toMe(row) : null
-    },
+    /**
+     * 令牌 → 当前用户 **+ 账号状态**（#464 的写拦截需要它）。
+     *
+     * 与 `loadMe` 共用同一次查询：守卫是**每个**已认证请求的必经之路，多查一次库是不可接受
+     * 的代价；而状态本来就在这一行上，白拿。这也保证「注销态」不会成为第二个认证入口。
+     */
+    loadViewer,
 
     /**
      * 绑定手机号（#86 C 节）：phone code（stub 下即明文手机号）→ 写 `users.phone`。
@@ -124,6 +135,26 @@ export function createAuthService(deps: { db: Db; sessions: Sessions }) {
         throw error
       }
     },
+  }
+
+  /**
+   * 令牌 → 当前用户 + 账号状态（#464 的写拦截需要后者）。
+   *
+   * 与 `loadMe` 共用同一次查询：守卫是**每个**已认证请求的必经之路，多查一次库是不可接受的
+   * 代价，而状态本来就在这一行上。`DELETED` 在这里被收窄掉（不可能是「当前登录者」），
+   * 于是两条入口 —— `requireAuth` 与匿名可读的 `resolveViewerId` —— 同时失效。
+   */
+  async function loadViewer(
+    token: string,
+  ): Promise<{ me: Me; accountStatus: AccountDeletionState } | null> {
+    const session = await sessions.resolve(token)
+    if (!session) return null
+
+    const rows = await db.select().from(users).where(eq(users.id, session.userId)).limit(1)
+    const row = rows[0]
+    if (!row) return null
+    if (row.accountStatus === 'DELETED') return null
+    return { me: toMe(row), accountStatus: row.accountStatus }
   }
 }
 

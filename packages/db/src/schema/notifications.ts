@@ -5,7 +5,7 @@ import { users } from './users'
 
 /** 通知类型值集尚未冻结（P1 还会加降价通知），故用 text + TS 收窄，不用 pgEnum。
  *  与 `@fish/contracts/notifications/schema` 的 `notificationTypeSchema` 同步扩。 */
-export type NotificationType = 'MATCH' | 'TX' | 'MODERATION' | 'ACCOUNT'
+export type NotificationType = 'MATCH' | 'TX' | 'MODERATION' | 'ACCOUNT' | 'DISPUTE'
 
 /** 跳转所需的实体 ID，文案由客户端按 type 渲染。库里存裸 UUID，读侧转公开 TypeID。 */
 export type NotificationPayload = {
@@ -16,6 +16,10 @@ export type NotificationPayload = {
   transactionId?: string
   conversationId?: string
   event?: 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'CONFIRMED' | 'COMPLETED' | 'CANCELLED'
+  /** DISPUTE（#465）：争议进展。`RESOLVED` 时同时带 `resolution`。 */
+  disputeId?: string
+  disputeEvent?: 'FILED' | 'WITHDRAWN' | 'RESOLVED'
+  resolution?: 'UPHELD' | 'DISMISSED' | 'INCONCLUSIVE'
   /** MODERATION / ACCOUNT：结论 */
   outcome?: 'APPROVED' | 'REJECTED'
   /** ACCOUNT：主题（P1 只有校园邮箱认证） */

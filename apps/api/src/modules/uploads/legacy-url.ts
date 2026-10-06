@@ -1,9 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac } from 'node:crypto'
+import { MEDIA_TOKEN } from './media-token'
 
 // Historical objects are retained under UUID-named keys. Never put these keys in a public URL.
 const LEGACY_LISTING_KEY =
   /^listings\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/[A-Za-z0-9_-]+\.(?:jpg|png|webp)$/
-const TOKEN = /^[A-Za-z0-9_-]{20,400}$/
 
 export function isLegacyListingKey(key: string): boolean {
   return LEGACY_LISTING_KEY.test(key)
@@ -25,7 +25,7 @@ export function legacyMediaToken(key: string, secret: string): string {
 }
 
 export function legacyMediaKey(token: string, secret: string): string | null {
-  if (!TOKEN.test(token)) return null
+  if (!MEDIA_TOKEN.test(token)) return null
   try {
     const bytes = Buffer.from(token, 'base64url')
     if (bytes.toString('base64url') !== token || bytes.length < 29 || bytes.length > 256)

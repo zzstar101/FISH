@@ -2,6 +2,7 @@ import {
   LISTING_REPORT_REASONS as CONTRACT_LISTING_REASONS,
   USER_REPORT_REASONS as CONTRACT_USER_REASONS,
   type ListingReportReason,
+  type ReportReason,
   type ReportStatus,
   type ReportTargetType,
   type UserReportReason,
@@ -90,6 +91,22 @@ export function reasonsOf(target: ReportTargetType): ReportReasonOption[] {
 
 export function reasonLabel(target: ReportTargetType, key: string): string {
   return reasonsOf(target).find((option) => option.key === key)?.label ?? key
+}
+
+/**
+ * 全量原因文案（管理端「原因」筛选用）：筛选不区分 targetType，所以要把两个子枚举的
+ * label 合起来 —— 值仍只来自上面两份 copy（`FRAUD`/`OTHER` 两边同名，取任一即可），
+ * `Record<ReportReason, …>` 保证契约新增原因时这里漏补就编译失败。
+ */
+export const REPORT_REASON_LABEL: Record<ReportReason, string> = {
+  MISLEADING: LISTING_REASON_COPY.MISLEADING.label,
+  PROHIBITED: LISTING_REASON_COPY.PROHIBITED.label,
+  FRAUD: LISTING_REASON_COPY.FRAUD.label,
+  SPAM: LISTING_REASON_COPY.SPAM.label,
+  HARASSMENT: USER_REASON_COPY.HARASSMENT.label,
+  IMPERSONATION: USER_REASON_COPY.IMPERSONATION.label,
+  ABUSE: USER_REASON_COPY.ABUSE.label,
+  OTHER: LISTING_REASON_COPY.OTHER.label,
 }
 
 /**

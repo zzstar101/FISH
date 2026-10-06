@@ -52,7 +52,7 @@ TARO_APP_API_BASE=https://api.example.com bun run build:miniapp
 不设置时回落到 `http://localhost:3000`（本机 API），方便在开发者工具里直接跑。
 注入点是 `config/index.ts` 的 `defineConstants.__API_BASE__`，读取处是 `src/lib/api-base.ts`。
 
-页面取数一律走 `src/features/fetchers.ts`：**先请求后端；只有开发 / 预览才允许退回本地 mock**。
+页面取数一律走 `src/features/fetchers.ts`：**先请求后端；只有显式演示构建才允许退回本地 mock**。
 生产口径下后端挂掉、域名配错或契约漂移时，页面显示错误态（`components/load-error`）而不是
 fixture 数据 —— 假商品比错误态更糟，这一点在 #91 的评审里被明确要求过。
 
@@ -61,9 +61,16 @@ fixture 数据 —— 假商品比错误态更糟，这一点在 #91 的评审�
 ```bash
 TARO_APP_MOCK=1 bun run build:weapp   # 本地演示：没有后端也看得到 mock 页面（评审 / 截图用）
 bun run build:weapp                   # 默认：不退 mock，失败即错误态
+bun run dev:weapp                     # 联调：同样不退 mock（#304 起 development 不再自动打开）
 ```
 
-H5 预览产物（`preview/build.mjs`）**显式打开**回退 —— 那份 bundle 只用于本地评审与像素测量，
+**`NODE_ENV=development` 不再打开回退**（#304 / #182）：`dev:weapp` 是「接着真实后端联调」的构建，
+静默回退会把演示订单（`t-*` / `l-*` 假 id）摆进订单页，点「打开二维码」进真实面交页只会拿
+404「找不到这笔交易」。要看演示数据就显式 `TARO_APP_MOCK=1`。演示构建里退回的订单卡带
+「演示数据」角标，且「打开二维码」「查看会话」「取消交易」「评价」四条路径只提示、不请求。
+
+H5 预览产物（`preview/build.mjs`）**显式打开**回退（`__ALLOW_MOCK_FALLBACK__` / `__DEMO_AUTH__` /
+`__DEMO_AI_POLISH__` 三个常量各自注入 `true`）—— 那份 bundle 只用于本地评审与像素测量，
 不是生产。已接接口的页面见 `DESIGN.md` §0。
 
 ## 三个容易踩回去的坑

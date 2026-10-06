@@ -397,9 +397,13 @@ export function emptyStateOf(segment: CommentSegment): EmptyCopy {
  * 判定逻辑本身与那两个模块无关，放在这里测更直接。
  *
  * 为什么是「与」而不是只看 `MOCK_FALLBACK_ENABLED`（方案 §2.3 明写的一条）：
- * `__ALLOW_MOCK_FALLBACK__` 在 `dev:weapp` 的日常开发里也是 true（注入式含
- * `NODE_ENV === 'development'`），只认它会让演示数据顶掉真实数据 —— 真实构建
- * （含 dev:weapp）现在有真接口，必须走真实路径。
+ * 两个常量由**不同注入点**分别喂进来（miniapp 构建走 `config/index.ts` 的
+ * defineConstants，H5 预览走 `preview/build.mjs`；今天两边取值相同，但不该假定
+ * 它们永远同步）；只认 `DEMO_AUTH_ENABLED` 时，演示登录态开着但真起了后端就分不出
+ * 「真实构建长什么样」。
+ *
+ * #304 起 `__ALLOW_MOCK_FALLBACK__` 不再含 `NODE_ENV === 'development'`（与
+ * `__DEMO_AUTH__` 在 miniapp 构建里同源），这条「与」的取舍仍然成立。
  */
 export function demoCommentsEnabled(mockFallback: boolean, demoAuth: boolean): boolean {
   return mockFallback && demoAuth

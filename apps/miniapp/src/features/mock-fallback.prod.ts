@@ -2,7 +2,7 @@
  * `@/features/mock-fallback` 在**生产构建**下的替身。
  *
  * `apps/miniapp/config/index.ts` 在 `__ALLOW_MOCK_FALLBACK__` 为假时（即
- * `TARO_APP_MOCK !== '1'` 且 `NODE_ENV !== 'development'`）把精确路径
+ * `TARO_APP_MOCK !== '1'`，#304 起 `NODE_ENV=development` 不再打开兜底）把精确路径
  * `@/features/mock-fallback` alias 到本文件，于是 `src/mock/*` 里那片被本文件
  * 静态引用的 fixture（`mock/api` 及其 `catalog.ts` / `chat.ts` / `account.ts` /
  * `users.ts` / `wishes.ts` / `discover.ts`）不进生产包的模块图。
@@ -19,7 +19,7 @@
  * `MOCK_FALLBACK_ENABLED === false`，所以这些函数**不可达**。既然不可达，「返回空数组」
  * 只会把一个逻辑错误伪装成「今天没数据」的正常空态 —— 排查时看到空白页面而不是线索；
  * 抛错则让「生产里真的调到了兜底」在第一次出现时当场暴露。**这个选择不改变任何现有
- * 路径的行为**：不可达就是不执行，`TARO_APP_MOCK=1` / `NODE_ENV=development` 的演示构建
+ * 路径的行为**：不可达就是不执行，`TARO_APP_MOCK=1` 的演示构建
  * 走的是 `mock-fallback.ts`（alias 不生效），行为与改动前逐字一致。
  *
  * ## 纪律

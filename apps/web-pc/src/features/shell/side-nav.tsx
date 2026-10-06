@@ -9,9 +9,12 @@ import {
   MessageCircle,
   MessageSquare,
   Search,
+  ShieldCheck,
   UserRound,
   UsersRound,
 } from 'lucide-react'
+import { useAdminMe } from '../../features/admin/admin-queries'
+import { useAuth } from '../auth/auth-provider'
 
 const NAV_ITEMS = [
   { to: '/', label: '首页', Icon: Home, exact: true },
@@ -27,6 +30,11 @@ const NAV_ITEMS = [
 
 /** PC Web 左侧一级导航。只保留一级路由，不画移动端底部 TabBar。 */
 export function SideNav() {
+  const { me } = useAuth()
+  // 管理后台入口按服务端身份展示（#467）：`/admin/me` 对非管理员 403，入口不渲染。
+  const adminMe = useAdminMe(me !== null)
+  const isAdmin = adminMe.data !== undefined
+
   return (
     <aside className="sticky top-24 self-start">
       {/*
@@ -59,6 +67,15 @@ export function SideNav() {
               {label}
             </Link>
           ))}
+          {isAdmin ? (
+            <Link
+              className="flex h-11 items-center gap-3 rounded-xl px-3 text-brand text-sm transition-colors hover:bg-white/55 [&.active]:bg-white/80 [&.active]:font-semibold"
+              to="/admin"
+            >
+              <ShieldCheck className="size-5" />
+              管理后台
+            </Link>
+          ) : null}
         </nav>
       </div>
 

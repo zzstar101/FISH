@@ -36,6 +36,7 @@ import {
   unavailableCopy,
   wantsReportRecord,
 } from '@/features/reports/view'
+import { goBackOrHome } from '@/lib/nav-back'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -108,7 +109,7 @@ import './index.scss'
 
 const REASONS = reasonsOf('LISTING')
 const REASON_MAX = 200
-/** 演示构建口径：mock 回退与演示登录态**都要**开（只认 MOCK_FALLBACK 会顶掉 dev:weapp 的真实空态） */
+/** 演示构建口径：mock 回退与演示登录态**都要**开（两个注入点可单独打开，只认 MOCK_FALLBACK 会顶掉真实空态） */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
 
 /**
@@ -443,7 +444,12 @@ export default function ReportListing() {
           ) : null}
 
           <View className="rpl__acts">
-            <View className="rpl__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpl__btn-ghost"
+              onClick={() => {
+                goBackOrHome()
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -459,7 +465,12 @@ export default function ReportListing() {
             />
           </View>
           <View className="rpl__acts">
-            <View className="rpl__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpl__btn-ghost"
+              onClick={() => {
+                goBackOrHome()
+              }}
+            >
               <Text>返回「我的举报」</Text>
             </View>
           </View>
@@ -515,7 +526,12 @@ export default function ReportListing() {
             <View className="rpl__btn-primary" onClick={goMyReports}>
               <Text>查看「我的举报」</Text>
             </View>
-            <View className="rpl__btn-ghost" onClick={() => void Taro.navigateBack()}>
+            <View
+              className="rpl__btn-ghost"
+              onClick={() => {
+                goBackOrHome()
+              }}
+            >
               <Text>返回商品详情</Text>
             </View>
           </View>
