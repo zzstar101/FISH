@@ -161,8 +161,13 @@ export default function Favorites() {
   const [selected, setSelected] = useState<string[]>([])
   /** 「取消收藏」在途：挡住连点，避免同一批被写两遍 */
   const [removing, setRemoving] = useState(false)
-  /** 「聊一聊」在飞的那一行 id（单飞：同一时刻只发起一次建会话） */
-  const [chattingId, setChattingId] = useState<string | null>(null)
+  /**
+   * 「聊一聊」在飞的单飞锁。用 ref 而不是 state：这个锁**不参与渲染**（没有任何 JSX
+   * 读它），而 state 在同一帧内读到的还是旧值 —— 同帧双击会两次都读到 `false`，
+   * 各发一次 `POST /conversations`（服务端会复用同一会话，但仍是两次写请求）。
+   * ref 的读写是同步的，第二次点击必然读到 `true`。
+   */
+  const chattingRef = useRef(false)
 
   /** 最近一次在飞的读取：换账号 / 卸载时取消，迟到的结果不再写状态（`@/lib/cancellable`） */
   const inFlight = useRef<Cancellable<FavoritesLoad> | null>(null)
@@ -193,8 +198,8 @@ export default function Favorites() {
     setManaging(false)
     setSelected([])
     setRemoving(false)
-    // 在飞的建会话属于上一个账号：迟到响应不许再压出会话页
-    setChattingId(null)
+    // 在飞的建会话属于上一个账号：迟到响应不许再压出会话页，锁也一并放开
+    chattingRef.current = false
     chatEpochRef.current += 1
   }
 
@@ -333,7 +338,9 @@ export default function Favorites() {
    * (listingId, 买家) **复用**既有会话，重复点击就是幂等的重发）。
    *
    * 登录边界：本页整页挂在守卫后面，渲染到这里必然已登录；会话过期（401）时
-   * `apiRequest` 会就地清会话、守卫随即跳登录页，所以失败提示只覆盖普通失败。
+   * `apiRequest` 会就地清会话、守卫随即跳登录页。失败提示按两类分流：未登录
+   * （`isUnauthenticatedError`）给「请先登录后再聊一聊」，其余走
+   * `describeCreateConversationFailure`。
    * 演示行的 id 不在库里，写过去必然 404 —— 给说明，**不发请求**（与
    * 「取消收藏」对演示行的口径一致）。
    *
@@ -341,17 +348,20 @@ export default function Favorites() {
    * （`packages/contracts/src/chat/routes.ts`：商品 OFFLINE / SOLD 后买卖双方仍可能
    * 需要沟通），所以**下架 / 已售都不是失败**，只有查不到商品（已删）才 404
    * `LISTING_NOT_FOUND`。本页因此不做上架状态预检 —— 预检会拦掉服务端允许的会话。
-   * 文案走 `describeCreateConversationFailure`，它把 404 说成「商品不存在或已下架」
-   * 是 main 上既有措辞（详情页 `chatWithSeller` 同样在用），单独一个报告项。
+   * 文案走 `describeCreateConversationFailure`：只认 `LISTING_NOT_FOUND`，措辞是
+   * 「商品不存在或已删除」（PC 站同名函数仍写「商品不存在或已下架」，写作用域外，
+   * 单独一个报告项）。
    */
   const chatWith = (item: FavoriteItem) => {
     if (item.demo) {
       toast('演示数据：这件宝贝不在库里，聊不了')
       return
     }
-    if (chattingId !== null) return
+    if (chattingRef.current) return
     const epoch = chatEpochRef.current
-    setChattingId(item.id)
+    // 同步上锁：必须在发请求**之前**、且不能用 state —— 同一帧里的第二次点击
+    // 读到的还是渲染时那份闭包，`setChattingId` 要等重渲染才可见，挡不住连点。
+    chattingRef.current = true
     void createConversation(item.id)
       .then(async (conversation) => {
         // 迟到的成功响应一律丢弃、不导航：换号或已离开本页（世代变了）都不例外
@@ -370,7 +380,7 @@ export default function Favorites() {
       })
       .finally(() => {
         // 只释放自己的锁：世代变了（换号 / 离页）后，迟到的收尾不能放掉新任务的锁
-        if (chatEpochRef.current === epoch) setChattingId(null)
+        if (chatEpochRef.current === epoch) chattingRef.current = false
       })
   }
 
