@@ -22,7 +22,10 @@ import path from 'node:path'
  * ① `import … from` / `export … from`（含多行，**不跨语句**：`export type X = …` 之后
  * 那条 import 不会被前一条吞掉）；② 副作用 `import '…'`（说明符可换行）；③ `import(…)`
  * （单双引号或反引号、可跨行、尾部允许尾逗号或 import attributes）；④ `require('…')`
- * （本仓小程序端未用，顺手拦）。
+ * （本仓小程序端未用，顺手拦）；⑤ `config/index.ts` 的 **alias 声明键序** —— 精确别名
+ * `@/features/mock-fallback` 必须排在兜底前缀 `@` **之前**，且指向 `mock-fallback.prod.ts`
+ * （`enhanced-resolve` 按声明顺序取第一个命中，`@` 排在前面会把精确别名整个吃掉 →
+ * 生产构建解析到真 `mock-fallback.ts` → 整片 fixture 静默进包）。
  * 字符串里写着的 import 源码片段、`.d.ts` 里的类型导入，都不算运行期依赖。
  * `` import(`@/mock/${name}`) `` 与「整条 import 写在模板串 `${…}` 插值里」都**会被拦**：
  * 前者正则不解析 `${}`，把 `` `@/mock/${name}` `` 原文当说明符（非白名单即违规）；后者
@@ -33,8 +36,12 @@ import path from 'node:path'
  *   `const id = pick(); import(id)` —— 正则只能看见引号字面量；
  * - `jest.mock` / `mock.module` 之类的测试期注入（小程序端不用）。
  *   （这两条独立审查实测确认：`import('@/mock/' + n)` 与 `import(n)` 都漏。）
+ * - alias 是否**真的生效**、产物里究竟有没有 fixture：要构建后 grep `dist` 才算数
+ *   （本测试不构建）。这里只钉**声明键序 + 指向生产桩**；产物特征见下面「仍然留在
+ *   生产包里的演示数据」。
  *
- * 扫描对象是 `src/**`（`tests/`、`preview/` 不在其下），**跳过** `src/mock/**`
+ * 扫描对象是 `src/**`（`tests/`、`preview/` 不在其下；上面 ⑤ 那条另读 `config/index.ts`），
+ * **跳过** `src/mock/**`
  * 本身（它就是要消费 fixture 的那一层）、`features/mock-fallback.ts` 与 `.d.ts`
  * （`.d.ts` 的 import 只能是类型用途）。跳过 `src/mock/**` 曾留下一个洞：留在生产包里的
  * 叶子（`mock/blocks` 等）自己再 import `mock/users`，就会把整份 `USERS` 拖回包里而
@@ -291,6 +298,11 @@ async function readSource(file: string): Promise<string> {
   return Bun.file(new URL(file, SRC)).text()
 }
 
+/** `config/index.ts` 在 `src/` 之外，单独取。 */
+async function readConfigSource(): Promise<string> {
+  return Bun.file(new URL('../config/index.ts', import.meta.url)).text()
+}
+
 async function scanMockValueImports(): Promise<{ file: string; specifier: string }[]> {
   const glob = new Bun.Glob('**/*.{ts,tsx}')
   const hits: { file: string; specifier: string }[] = []
@@ -442,5 +454,60 @@ describe('mock fixture 生产包边界', () => {
     // 非 mock 的依赖不算
     expect(mockValueImports("import { A } from '@/lib/demo-user-id'\n", at)).toEqual([])
     expect(mockValueImports("import { A } from './local'\n", 'features/x.ts')).toEqual([])
+  })
+})
+
+/**
+ * 取 `alias: { … }` 里**平衡括号内**的文本（`lexSource` 去注释，字符串内容保留）。
+ *
+ * 用平衡括号而不是「到下一个 `}` 为止」：alias 块里有嵌套对象（条件注入的精确别名），
+ * 前者才是声明键序的可靠边界。
+ */
+function aliasBlock(source: string): string {
+  const code = lexSource(source).code
+  const start = code.indexOf('alias: {')
+  expect(start, 'config 里应有 `alias: {` 声明').toBeGreaterThanOrEqual(0)
+  const open = code.indexOf('{', start)
+  let depth = 0
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === '{') depth += 1
+    else if (code[i] === '}') {
+      depth -= 1
+      if (depth === 0) return code.slice(open + 1, i)
+    }
+  }
+  throw new Error('config 的 alias 块没有闭合')
+}
+
+/** alias 块里**按声明顺序**出现的键（`'@/x': …`、`'@': …`）。 */
+function aliasKeys(block: string): string[] {
+  return [...block.matchAll(/['"](@[^'"]*)['"]\s*:/g)].map((match) => match[1] ?? '')
+}
+
+describe('config alias —— 精确别名必须排在兜底前缀 @ 之前', () => {
+  test('@/features/mock-fallback 排在 @ 之前，且指向生产桩', async () => {
+    const block = aliasBlock(await readConfigSource())
+    const keys = aliasKeys(block)
+    // 声明顺序**就是**解析顺序：`enhanced-resolve` 的 `AliasUtils#forEachBail` 取第一个
+    // 命中的别名，前缀别名 `@` 一旦排在前面，`@/features/mock-fallback` 会被它整个吃掉
+    // → 生产构建解析到真 `mock-fallback.ts` → 整片演示 fixture（`mock/api` 及其 catalog /
+    // chat / account / users / wishes / discover）静默进包。
+    // 实测（2026-10-06，只对调这两条键序后跑 plain `bun run build:miniapp`）：`dist/common.js`
+    // 136434B → 195480B（与 `TARO_APP_MOCK=1` 同级）、生产桩标记 `disabled in production
+    // builds` 整包 1 → 0、演示假 id `t-101` 整包 0 → 2。当时所有断言全绿 —— 这条用例就是为它加的。
+    const fallback = keys.indexOf('@')
+    expect(fallback, 'alias 里应有兜底前缀 `@`').toBeGreaterThanOrEqual(0)
+    const exact = keys.filter((key) => key !== '@')
+    expect(exact.length, 'alias 里应有精确别名（至少 `@/features/mock-fallback`）').toBeGreaterThan(
+      0,
+    )
+    expect(
+      exact.filter((key) => keys.indexOf(key) > fallback),
+      '精确别名必须全部排在 `@` 之前，否则 `@` 会先把它们吃掉',
+    ).toEqual([])
+    // 切分还要求它指向**零 fixture 依赖**的生产桩：指回 `mock-fallback.ts` 等于没切。
+    expect(block, '精确别名应指向 mock-fallback.prod.ts').toContain(
+      "'src/features/mock-fallback.prod.ts'",
+    )
   })
 })

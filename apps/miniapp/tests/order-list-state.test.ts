@@ -61,6 +61,33 @@ function codeOnly(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
 }
 
+/**
+ * 注入表达式是不是「只由 `mockEnabled` 决定」。
+ *
+ * 允许括号与**偶数个** `!`（`!(!mockEnabled)` / `!!mockEnabled` 与 `mockEnabled` 语义等价，
+ * 换个写法不该红）；出现别的标识符 / `||` / `true` 之类字面量就算掺了第二个开关；
+ * **奇数个** `!` 是语义反转（生产反而打开演示兜底），同样要红。
+ */
+function onlyMockEnabled(expr: string): boolean {
+  if (!/^[!()\s]*mockEnabled[!()\s]*$/.test(expr.trim())) return false
+  return (expr.match(/!/g) ?? []).length % 2 === 0
+}
+
+/** 取 `KEY: <表达式>` 的表达式文本（去掉尾逗号与首尾空白）。 */
+function injectedExpr(code: string, key: string): string {
+  const match = code.match(new RegExp(`${key}: ([^\\n]+)`))
+  expect(match, `config 里应有 ${key} 注入点`).not.toBeNull()
+  return (match?.[1] ?? '').replace(/,\s*$/, '').trim()
+}
+
+/** 取出 `KEY: JSON.stringify(<表达式>)` 里的内部表达式。 */
+function stringifiedInjection(code: string, key: string): string {
+  const expr = injectedExpr(code, key)
+  const match = expr.match(/^JSON\.stringify\(([\s\S]*)\)$/)
+  expect(match, `${key} 应写成 JSON.stringify(<表达式>)：${expr}`).not.toBeNull()
+  return (match?.[1] ?? expr).trim()
+}
+
 /** 压掉空白：biome 会把单行 `if` / 多行对象折成别的形状，按原样匹配就把格式当成了语义 */
 function flat(source: string): string {
   return source.replace(/\s+/g, ' ')
@@ -303,7 +330,7 @@ describe('listing-detail —— 「谁在求购」差额说明的原因必须与
 /* ------------------------------------------------------------------ *
  * 同批（#304 / #182）：演示订单不许冒充真实订单。
  *
- * 症状：开发构建（`NODE_ENV=development`，即 `bun run dev:weapp`）里后端一挂，
+ * 症状（修复前）：开发构建（`NODE_ENV=development`，即 `bun run dev:weapp`）里后端一挂，
  * 订单页整片换成 fixture（id 是 `t-101` 这种假 id），用户点「打开二维码」就进
  * 真实面交页 → 404「找不到这笔交易」；点「查看会话」也一样。
  *
@@ -330,14 +357,26 @@ describe('演示兜底开关 —— 只认显式 TARO_APP_MOCK=1（#304）', () 
     expect(code.match(/process\.env\.TARO_APP_MOCK === '1'/g)?.length).toBe(1)
     // 但「只此一处」是间接兜：它管不到注入值被换掉。实测（2026-10-06）把
     // `__ALLOW_MOCK_FALLBACK__` 改成 `JSON.stringify(mockEnabled || process.env.NODE_ENV
-    // === 'development')` 或直接 `JSON.stringify(true)`，上面两条**全绿** —— 而这两个改动
-    // 正是 #182 的症状（dev 构建静默回退，`t-*` 假 id 漏进真实面交页 / 会话链路）。
-    // 所以四个注入点逐点钉死：注入值必须原样是 `mockEnabled`，多一个 `||` 都红。
-    expect(code).toMatch(/\.\.\.\(mockEnabled\n\s*\? \{\}/)
-    expect(code).toMatch(/__ALLOW_MOCK_FALLBACK__: JSON\.stringify\(mockEnabled\),\n/)
-    expect(code).toMatch(/__DEMO_AUTH__: JSON\.stringify\(mockEnabled\),\n/)
-    expect(code).toMatch(/__DEMO_AI_POLISH__: JSON\.stringify\(mockEnabled\),\n/)
-    expect(code.match(/JSON\.stringify\(mockEnabled\)/g)?.length).toBe(3)
+    // === 'development')` 或直接 `JSON.stringify(true)`，上面两条**全绿**。
+    // 注意这两种突变**不是**「静默回退 fixture」：alias 仍把 `@/features/mock-fallback`
+    // 指向生产桩，桩里当场 throw `mock fallback is disabled in production builds` —— 兜底分支
+    // 一被走到就报错，而不是悄悄换成 `t-*` 演示订单（那要 alias 也失守，由
+    // `tests/mock-boundary.test.ts` 的 alias 键序用例守着）。所以四个注入点逐点钉死：
+    // 注入值只能由 `mockEnabled` 决定。
+    // 按**表达式**钉而不是按文本钉：`!(!mockEnabled)` 这类语义等价改写不该误报
+    // （#478 复审 CUST-g 实测「计数 = 3」会误报）。
+    for (const key of ['__ALLOW_MOCK_FALLBACK__', '__DEMO_AUTH__', '__DEMO_AI_POLISH__']) {
+      const inner = stringifiedInjection(code, key)
+      expect(onlyMockEnabled(inner), `${key} 注入了别的开关：${inner}`).toBe(true)
+    }
+    // alias 的条件同理，且「演示构建」那一支必须是空对象：非空就意味着精确别名在演示构建里
+    // 也生效，把 `@` 的前缀语义改掉了。
+    const aliasCondition = code.match(/\.\.\.\(([^?]*?)\s*\?\s*\{\}\s*:/)
+    expect(aliasCondition, 'alias 里应有「<条件> ? {} : {精确别名}」的注入').not.toBeNull()
+    expect(
+      onlyMockEnabled(aliasCondition?.[1] ?? ''),
+      `alias 条件掺了别的开关：${aliasCondition?.[1] ?? ''}`,
+    ).toBe(true)
   })
 })
 
