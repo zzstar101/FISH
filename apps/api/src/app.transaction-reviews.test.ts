@@ -2,10 +2,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
 import { reserveTestListingNo } from '@fish/db/testing/listing-no'
-import { loadServerEnv } from '@fish/shared/env'
+import { loadMeetupTokenEnv, loadServerEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
+import { reviewMediaKey } from './modules/uploads/review-media'
 import { createApp } from './app'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -28,6 +29,9 @@ const scratchUrl = (() => {
 const admin = createDb(databaseUrl)
 let db: Db
 let app: ReturnType<typeof createApp>
+/** 评价配图私有化（#483 审查响应）后要断言签名代理 URL：代理基址与令牌密钥取自同一份 env。 */
+let serverEnv: ReturnType<typeof loadServerEnv>
+let meetupEnv: ReturnType<typeof loadMeetupTokenEnv>
 
 const sellerId = '01990000-0000-7000-8000-0000000000e9'
 /** 卖家是 beforeAll 直插的用户（不注册），评价行按「双方各一条」约束直插。 */
@@ -52,7 +56,9 @@ beforeAll(async () => {
   await admin.$client.unsafe(`create database "${scratchDatabase}"`)
   db = createDb(scratchUrl)
   await migrate(db, { migrationsFolder })
-  app = createApp({ ...loadServerEnv(), DATABASE_URL: scratchUrl })
+  serverEnv = loadServerEnv()
+  meetupEnv = loadMeetupTokenEnv()
+  app = createApp({ ...serverEnv, DATABASE_URL: scratchUrl })
 
   await db.execute(sql`
     INSERT INTO users (id, student_no, password_hash, nickname)
@@ -375,7 +381,9 @@ describe('#475 评价配图上传链 app 级接线', () => {
     expect(confirmRes.status).toBe(200)
     const confirm = (await confirmRes.json()) as { objectKey: string; url: string }
     expect(confirm.objectKey).toMatch(/^reviews\/usr_[0-9a-z]+\/med_[0-9a-z]+\.png$/)
-    expect(confirm.url).toContain(confirm.objectKey)
+    // #483 审查响应：读路径私有化——confirm 返回的 URL 是短期签名代理地址，不含对象键。
+    expect(confirm.url).toContain('/api/uploads/media/')
+    expect(confirm.url).not.toContain(confirm.objectKey)
     return confirm.objectKey
   }
 
@@ -389,9 +397,10 @@ describe('#475 评价配图上传链 app 级接线', () => {
     const secondKey = await uploadImage(buyerCookie, txn.publicId)
     expect(firstKey).not.toBe(secondKey)
 
-    // 下单即验证：final 对象真实存在且匿名可读（presign 从不签 reviews/，只能在 confirm 之后出现）。
+    // 下单即验证：final 对象真实存在（presign 从不签 reviews/，只能在 confirm 之后出现），
+    // 但**不**匿名可读——桶策略撤出 reviews/* 后，存在性本身也被 403 挡住（#483 审查响应）。
     const readable = await fetch(`http://localhost:9000/fish/${firstKey}`)
-    expect(readable.status).toBe(200)
+    expect(readable.status).toBe(403)
 
     const created = await app.request(
       edge,
@@ -402,11 +411,14 @@ describe('#475 评价配图上传链 app 级接线', () => {
       images: { url: string }[]
       id: string
     }
-    // 数组下标即 sort_order：先 second 后 first，读回按同一顺序。
-    expect(body.images.map((image) => image.url)).toEqual([
-      expect.stringContaining(secondKey),
-      expect.stringContaining(firstKey),
-    ])
+    // 数组下标即 sort_order：先 second 后 first。URL 是签名代理地址、不含键本身，
+    // 解码令牌同时验证「顺序正确」与「URL 绑定的就是这把键」。
+    const proxyBase = `${serverEnv.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/media/`
+    const decodeToken = (url: string) =>
+      reviewMediaKey(url.slice(proxyBase.length), meetupEnv.MEETUP_TOKEN_SECRET, Math.floor(Date.now() / 1000))
+    const urls = body.images.map((image) => image.url)
+    expect(urls.map((url) => url.startsWith(proxyBase))).toEqual([true, true])
+    expect(urls.map(decodeToken)).toEqual([secondKey, firstKey])
 
     // DB 行按 sort_order 落库
     const rows = (await db.execute(sql`

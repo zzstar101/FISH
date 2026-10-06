@@ -2,9 +2,14 @@ import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/publi
 import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
 import {
   isListingReviewMediaKey,
+  isReviewMediaPublicKey,
   REVIEW_MEDIA_URL_TTL_SECONDS,
   reviewMediaToken,
 } from './review-media'
+
+// 评价配图 final 键的形状/归属判据定义在 `./review-media`（私有媒体模块，与令牌同处）；
+// 这里 re-export 维持「键域校验统一从 storage 出口拿」的既有 import 面。
+export { isReviewMediaPublicKey, reviewMediaPublicPrefix } from './review-media'
 
 /**
  * 对象存储的唯一出入口（#6 契约 §2.7 / §7.7 / §7.8）。
@@ -69,8 +74,9 @@ export interface MediaStorage {
    * 读响应里的客户端读取地址。
    *
    * - `listings/*`（公开固化）与 seed 插图 → 直链，与匿名读策略一致；
-   * - `listing-review-media/*`（审核中的私有快照，#286 复审 blocker 2）→ 短期签名代理地址：
-   *   对象本身不在匿名白名单里，只有拿着这个 secret 派生、带过期时刻的令牌才能读到；
+   * - `listing-review-media/*`（审核中的私有快照，#286 复审 blocker 2）与 `reviews/*`
+   *   （评价配图 final 键，#483 审查响应起私有化）→ 短期签名代理地址：
+   *   对象不在匿名白名单里，只有拿着这个 secret 派生、带过期时刻的令牌才能读到；
    * - 其余键一律抛错（fail-closed），不允许把未知命名空间拼进公开响应。
    *
    * 放在这里而不是每个调用点各写一遍：`listings` / `admin` / `transactions` / `conversations`
@@ -155,6 +161,8 @@ export function isListingMediaStagingKey(key: string): boolean {
 /**
  * #475：交易评价配图的 staging 前缀（未 confirm 的临时对象；不在匿名读白名单）。
  * 与 listing 用 `listing-review-media/` 相互独立，命名上刻意带 `transaction-` 前缀避免混淆。
+ * final 前缀 `reviews/` 的形状/归属判据见 `./review-media`（#483 审查响应起为私有前缀，
+ * 不再匿名可读，读路径与审核中图片同走短期签名代理）。
  */
 export const REVIEW_MEDIA_STAGING_PREFIX = 'transaction-review-media/'
 
@@ -174,30 +182,6 @@ export function isReviewMediaStagingKey(key: string): boolean {
   )
 }
 
-/**
- * #475：评价配图的**公开 final 前缀**（confirm 校验通过后写入；匿名可读）。
- * 「键在 final 前缀下存在」= 服务端确认过 —— presign 从不签这个前缀，客户端结构上
- * 写不进来，这就是写侧引用校验能只认这个前缀、而无需新增登记表的原因。
- * **DEPLOY 连带**：`infra/minio-public-policy.json` 必须放行 `reviews/*`（与 `listings/*` 并列）。
- */
-export const REVIEW_MEDIA_PUBLIC_PREFIX = 'reviews/'
-
-const REVIEW_MEDIA_PUBLIC_KEY = /^reviews\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
-
-export function reviewMediaPublicPrefix(userId: string): string {
-  return `${REVIEW_MEDIA_PUBLIC_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
-}
-
-/** final 键形状 + 归属判据（写侧引用校验与 publicUrl 共用这一处）。 */
-export function isReviewMediaPublicKey(key: string): boolean {
-  const match = REVIEW_MEDIA_PUBLIC_KEY.exec(key)
-  return Boolean(
-    match &&
-      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
-      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
-  )
-}
-
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
   /** 来自 `S3_PUBLIC_URL`（本地为 `http://localhost:9000/fish`）。 */
@@ -205,7 +189,7 @@ export function createBunS3MediaStorage(options: {
   /** Web 同源 /api 代理入口，旧对象键只经加密 token 读取，绝不拼裸 UUID 直链。 */
   legacyUrlBase?: string
   legacyUrlSecret?: string
-  /** 审核中图片的短期签名代理入口（`/api/uploads/media`）。 */
+  /** 短期签名代理入口（`/api/uploads/media`）：审核中图片与评价配图这两类私有键共用。 */
   reviewUrlBase?: string
   reviewUrlSecret?: string
   expiresInSeconds?: number
@@ -285,15 +269,13 @@ export function createBunS3MediaStorage(options: {
 
     publicUrl(key) {
       assertSafeObjectKey(key)
-      // 审核中的私有快照：对象不在匿名白名单里，只能通过带过期时刻的签名代理读（#286 复审 blocker 2）。
-      if (isListingReviewMediaKey(key)) {
+      // 私有对象（#286 审核中快照 / #475 评价配图 final 键）：不在匿名白名单里，只能通过
+      // 带过期时刻的签名代理读。评价配图私有化的原因：评价读 API 是交易参与者边界，
+      // 匿名直链等于给边界外的人留一条永久旁路（#483 审查响应）。
+      if (isListingReviewMediaKey(key) || isReviewMediaPublicKey(key)) {
         if (!reviewUrlBase || !reviewUrlSecret) throw new Error('私有媒体 URL 代理未配置')
         const expiresAtSeconds = Math.floor(Date.now() / 1000) + REVIEW_MEDIA_URL_TTL_SECONDS
         return `${reviewUrlBase.replace(/\/+$/, '')}/${reviewMediaToken(key, reviewUrlSecret, expiresAtSeconds)}`
-      }
-      // #475：评价配图 final 键（公开可读；bucket 策略由 infra/minio-public-policy.json 放行 reviews/*）。
-      if (isReviewMediaPublicKey(key)) {
-        return `${publicUrlBase.replace(/\/+$/, '')}/${key}`
       }
       if (isLegacyListingKey(key)) {
         if (!legacyUrlBase || !legacyUrlSecret) throw new Error('旧媒体 URL 代理未配置')

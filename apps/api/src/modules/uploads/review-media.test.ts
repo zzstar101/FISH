@@ -2,9 +2,11 @@ import { expect, test } from 'bun:test'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import {
   isListingReviewMediaKey,
+  isReviewMediaPublicKey,
   listingReviewMediaPrefix,
   REVIEW_MEDIA_URL_TTL_SECONDS,
   reviewMediaKey,
+  reviewMediaPublicPrefix,
   reviewMediaToken,
 } from './review-media'
 
@@ -57,4 +59,23 @@ test('只能封装审核中私有键，其他前缀、路径遍历与脏 TypeID 
       `listing-review-media/${userId}/01930000-0000-4000-8000-000000000002.jpg`,
     ),
   ).toBe(false)
+})
+
+// #483 审查响应：评价配图 final 键（reviews/）与审核中快照共用同一套签名代理令牌。
+test('评价配图 final 键可封装与解出，URL 不泄露对象键或 UUID', () => {
+  const reviewKey = `${reviewMediaPublicPrefix(userId)}${encodePublicId(PUBLIC_ID_PREFIX.media, mediaId)}.png`
+  const expiresAt = now + REVIEW_MEDIA_URL_TTL_SECONDS
+
+  expect(isReviewMediaPublicKey(reviewKey)).toBe(true)
+  expect(isReviewMediaPublicKey(`reviews/${userId}/01930000-0000-4000-8000-000000000002.jpg`)).toBe(
+    false,
+  )
+  expect(isReviewMediaPublicKey('reviews/seed-1/2.jpg')).toBe(false)
+  expect(isReviewMediaPublicKey(`reviews/${userId}/../${userId}/x.jpg`)).toBe(false)
+
+  const token = reviewMediaToken(reviewKey, secret, expiresAt)
+  expect(token).not.toContain('reviews')
+  expect(token).not.toContain(userId)
+  expect(reviewMediaKey(token, secret, now)).toBe(reviewKey)
+  expect(reviewMediaKey(token, `${secret}wrong`, now)).toBeNull()
 })

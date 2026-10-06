@@ -209,9 +209,10 @@ test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代�
   const modern = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
   const old = `listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`
   expect(media.publicUrl(modern)).toBe(`https://cdn.test/fish/${modern}`)
-  // #475：评价配图 final 键（reviews/）走匿名直链分支，且不会被 legacy/审核代理分支截胡。
+  // #483 审查响应：评价配图 final 键（reviews/）已私有化，不再走匿名直链分支——
+  // 这里没配代理，必须拒绝出图，而不是回落到公开桶地址。
   const review = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
-  expect(media.publicUrl(review)).toBe(`https://cdn.test/fish/${review}`)
+  expect(() => media.publicUrl(review)).toThrow('私有媒体 URL 代理未配置')
   expect(media.publicUrl('listings/seed-k380/0.jpg')).toBe(
     'https://cdn.test/fish/listings/seed-k380/0.jpg',
   )
@@ -272,6 +273,34 @@ test('审核中的图返回签名代理 URL；未配置代理时拒绝出图', (
 
   const unconfigured = createBunS3MediaStorage({ client, publicUrlBase: 'https://cdn.test/fish' })
   expect(() => unconfigured.publicUrl(reviewKey)).toThrow('私有媒体 URL 代理未配置')
+})
+
+// #483 审查响应：评价配图 final 键（reviews/）与审核中快照同一待遇——签名代理出 URL，
+// URL 不含对象键与 UUID；没配代理时拒绝出图。
+test('评价配图 final 键返回签名代理 URL；未配置代理时拒绝出图', () => {
+  const client = new Bun.S3Client({
+    endpoint: 'http://127.0.0.1:1',
+    region: 'us-east-1',
+    accessKeyId: 'test',
+    secretAccessKey: 'test',
+    bucket: 'fish',
+  })
+  const reviewMediaKey = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+
+  const configured = createBunS3MediaStorage({
+    client,
+    publicUrlBase: 'https://cdn.test/fish',
+    reviewUrlBase: 'https://web.test/api/uploads/media',
+    reviewUrlSecret: 'test-secret-for-review-media-longer-than-32-characters',
+  })
+  const url = configured.publicUrl(reviewMediaKey)
+  expect(url.startsWith('https://web.test/api/uploads/media/')).toBe(true)
+  expect(url).not.toContain(reviewMediaKey)
+  expect(url).not.toContain(USER_ID)
+  expect(url.startsWith('https://cdn.test/fish/')).toBe(false)
+
+  const unconfigured = createBunS3MediaStorage({ client, publicUrlBase: 'https://cdn.test/fish' })
+  expect(() => unconfigured.publicUrl(reviewMediaKey)).toThrow('私有媒体 URL 代理未配置')
 })
 
 describe('isSafeObjectKey（objectKey 形状白名单）', () => {

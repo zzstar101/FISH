@@ -8,12 +8,17 @@ import {
 import { encodePublicId, isPublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 
 /**
- * #286 复审 blocker 2：**审核中**图片的私有前缀与短期读取令牌。
+ * 私有媒体前缀与短期读取令牌：#286 的**审核中**图片（`listing-review-media/`）与
+ * #475 的交易评价配图 final 对象（`reviews/`）共用同一套签名代理机制。
  *
- * 背景：机器结论为 `REVIEW` 的图在人工放行前不能出现在匿名可读的位置。部署策略只放开了
+ * 背景（#286）：机器结论为 `REVIEW` 的图在人工放行前不能出现在匿名可读的位置。部署策略只放开了
  * `listings/*`（`infra/minio-public-policy.json` / `docs/deployment.md`），所以把 REVIEW 快照写到
  * 这个前缀下就天然不可匿名读；商品不进公开 Feed **不能**替代对象级访问控制 —— 上传者拿到直链
  * 仍可主动分享。
+ *
+ * 背景（#483 审查响应）：评价读 API 只对交易参与者开放，评价配图若匿名直读，任何拿到 URL 的人
+ * 都能绕过参与者边界永久取图（删除评价后也一样）。因此 `reviews/` 同样**不进匿名白名单**，
+ * 读路径走下方同一个短期 capability URL。
  *
  * 那审核队列（管理员看商品图）与卖家自己的「我发布的」怎么显示这张图？用一个**短期**的
  * capability URL：对象键加密进 URL，明文里带过期时刻，因此
@@ -47,8 +52,41 @@ export function isListingReviewMediaKey(key: string): boolean {
 }
 
 /**
+ * #475：交易评价配图的私有 final 前缀（confirm 校验通过后写入）。
+ *
+ * 「键在 final 前缀下存在」= 服务端确认过 —— presign 从不签这个前缀，客户端结构上
+ * 写不进来，这就是写侧引用校验能只认这个前缀、而无需新增登记表的原因。
+ * 读侧**不**匿名可读：评价读 API 只对交易参与者开放，匿名直链会变成绕过参与者边界的
+ * 永久旁路（#483 审查响应），所以与 `listing-review-media/` 同走下方短期签名代理。
+ */
+export const REVIEW_MEDIA_PUBLIC_PREFIX = 'reviews/'
+
+/** final 键形状：`reviews/{usr_…}/{med_…}.{ext}`（两段都必须是规范 TypeID）。 */
+const REVIEW_MEDIA_PUBLIC_KEY = /^reviews\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
+
+export function reviewMediaPublicPrefix(userId: string): string {
+  return `${REVIEW_MEDIA_PUBLIC_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+}
+
+/** final 键形状 + 归属判据（写侧引用校验与 publicUrl 共用这一处，改名即编译错）。 */
+export function isReviewMediaPublicKey(key: string): boolean {
+  const match = REVIEW_MEDIA_PUBLIC_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
+/** 允许经签名代理读取的私有键（两类私有前缀的并集，令牌签发与校验共用）。 */
+function isProxyServedKey(key: string): boolean {
+  return isListingReviewMediaKey(key) || isReviewMediaPublicKey(key)
+}
+
+/**
  * 读取地址的有效期：15 分钟。比聊天媒体的 `Cache-Control: private, max-age=300` 长，
- * 但远短于审核队列的一次人工巡检（管理员刷新页面就会拿到新地址）。
+ * 但远短于审核队列的一次人工巡检（管理员刷新页面就会拿到新地址）；评价配图的读页面
+ * 同理——每次读模型响应都会现签新地址。
  */
 export const REVIEW_MEDIA_URL_TTL_SECONDS = 900
 
@@ -64,7 +102,7 @@ function keyFromSecret(secret: string): Buffer {
  * 「确定性 nonce」），因此同一秒内的响应可以命中缓存，而不是每次刷新换一个 URL。
  */
 export function reviewMediaToken(key: string, secret: string, expiresAtSeconds: number): string {
-  if (!isListingReviewMediaKey(key)) throw new Error('非审核图片对象键')
+  if (!isProxyServedKey(key)) throw new Error('非私有媒体对象键')
   if (!Number.isInteger(expiresAtSeconds) || expiresAtSeconds <= 0)
     throw new Error('过期时刻不合法')
   const encryptionKey = keyFromSecret(secret)
@@ -105,7 +143,7 @@ export function reviewMediaKey(token: string, secret: string, nowSeconds: number
     if (!Number.isInteger(expiresAtSeconds) || expiresAtSeconds <= nowSeconds) return null
     // 重算令牌：拒掉非规范 nonce / 被改过的密文，且顺带保证键形状合法。
     if (
-      !isListingReviewMediaKey(key) ||
+      !isProxyServedKey(key) ||
       !tokensEqual(reviewMediaToken(key, secret, expiresAtSeconds), token)
     ) {
       return null

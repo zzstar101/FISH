@@ -138,6 +138,15 @@ try {
     const anonymous = await fetch(`${env.S3_PUBLIC_URL}/${key}`)
     assert.equal(anonymous.status, 403, 'chat media must not be anonymously readable')
   }
+  // #483 审查响应：评价配图 final 前缀同样不在匿名白名单里。对象不存在也要 403——
+  // 若策略误放行 reviews/*，MinIO 对缺失对象会回 404 NoSuchKey 而不是 403，因此这条断言
+  // 不需要真实对象就能守住桶策略。
+  const reviewPolicyKey = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, newId())}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+  assert.equal(
+    (await fetch(`${env.S3_PUBLIC_URL}/${reviewPolicyKey}`)).status,
+    403,
+    'review media must not be anonymously readable',
+  )
   const objectPath = `${base}${mediaPath}/${media.mediaId}`
   // Reusing the original signed PUT after creation must not change served bytes.
   assert.equal((await fetch(signed.uploadUrl, { method: 'PUT', body: 'overwritten' })).status, 200)
