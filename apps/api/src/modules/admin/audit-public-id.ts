@@ -16,6 +16,7 @@ const targets = {
   },
   REPORT: { prefix: PUBLIC_ID_PREFIX.report, table: 'reports' },
   USER_RESTRICTION: { prefix: PUBLIC_ID_PREFIX.userRestriction, table: 'user_restrictions' },
+  DISPUTE: { prefix: PUBLIC_ID_PREFIX.dispute, table: 'disputes' },
 } as const satisfies Record<AdminAuditTargetType, { prefix: PublicIdPrefix; table: string }>
 
 export function auditTargetInfo(type: AdminAuditTargetType) {
@@ -68,6 +69,11 @@ export async function projectAuditSnapshot(
     ['sourceReportId', PUBLIC_ID_PREFIX.report, 'reports'],
     ['manualRecordId', PUBLIC_ID_PREFIX.moderationRecord, 'listing_moderation_records'],
     ['reporterId', PUBLIC_ID_PREFIX.user, 'users'],
+    // 争议处理快照（#465）里带的是参与方与交易，逐字段投影成公开 ID 再返回。
+    ['disputeId', PUBLIC_ID_PREFIX.dispute, 'disputes'],
+    ['transactionId', PUBLIC_ID_PREFIX.transaction, 'transactions'],
+    ['initiatorId', PUBLIC_ID_PREFIX.user, 'users'],
+    ['respondentId', PUBLIC_ID_PREFIX.user, 'users'],
   ] as const) {
     if (key in result && result[key] !== null) {
       const publicId = await projectAuditId(prefix, table, result[key], resolveLegacy)

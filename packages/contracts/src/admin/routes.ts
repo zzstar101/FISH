@@ -56,6 +56,16 @@ export const ADMIN_ROUTES = {
   reportDetail: (reportId: string) => `/admin/reports/${reportId}`,
   /** POST 处理举报（result = HANDLED / REJECTED + reason）。只写处理结果，不触发治理动作。 */
   reportHandle: (reportId: string) => `/admin/reports/${reportId}/handle`,
+  /** GET 争议队列（游标分页 + 状态 / 类型 / 关键词 / 时间筛选）。 */
+  disputes: '/admin/disputes',
+  /** GET 争议详情（争议 + 双方 + 交易摘要 + 附件 + 证据 + 同交易其它争议）。 */
+  disputeDetail: (disputeId: string) => `/admin/disputes/${disputeId}`,
+  /**
+   * POST 处理争议（resolution = UPHELD / DISMISSED / INCONCLUSIVE + reason）。
+   *
+   * 与举报处理同边界：只写结论与审计，**不**修改成交事实、**不**触发封禁 / 下架。
+   */
+  disputeResolve: (disputeId: string) => `/admin/disputes/${disputeId}/resolve`,
   /**
    * 治理动作（#73 治理半场 PR3）。五个端点各自独立、可选带 `sourceReportId` 回链举报单；
    * 业务变更与审计写入同事务，并发靠条件更新（先到者成功，后到者 409）。

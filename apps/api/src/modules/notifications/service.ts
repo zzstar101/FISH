@@ -1,3 +1,4 @@
+import { DisputeResolutionSchema } from '@fish/contracts/disputes/schema'
 import {
   type NotificationDto,
   type NotificationListQuery,
@@ -5,6 +6,7 @@ import {
   type NotificationPayload,
   type NotificationUnreadCount,
   notificationAccountSubjectSchema,
+  notificationDisputeEventSchema,
   notificationDtoSchema,
   notificationOutcomeSchema,
   notificationTxEventSchema,
@@ -63,10 +65,13 @@ function projectPayload(raw: unknown): NotificationPayload | null {
   const wishId = publicPayloadField(PUBLIC_ID_PREFIX.wish, value.wishId)
   const transactionId = publicPayloadField(PUBLIC_ID_PREFIX.transaction, value.transactionId)
   const conversationId = publicPayloadField(PUBLIC_ID_PREFIX.conversation, value.conversationId)
+  const disputeId = publicPayloadField(PUBLIC_ID_PREFIX.dispute, value.disputeId)
   // 非枚举值的 event/outcome/subject 只丢字段不丢行：脏值若原样透传，zod safeParse
   // 会把整行判成不可投影，通知凭空消失 —— 与「单个脏引用只影响对应字段」同一口径。
   const event = notificationTxEventSchema.safeParse(value.event)
+  const disputeEvent = notificationDisputeEventSchema.safeParse(value.disputeEvent)
   const outcome = notificationOutcomeSchema.safeParse(value.outcome)
+  const resolution = DisputeResolutionSchema.safeParse(value.resolution)
   const subject = notificationAccountSubjectSchema.safeParse(value.subject)
   return {
     ...(matchId ? { matchId } : {}),
@@ -74,8 +79,11 @@ function projectPayload(raw: unknown): NotificationPayload | null {
     ...(wishId ? { wishId } : {}),
     ...(transactionId ? { transactionId } : {}),
     ...(conversationId ? { conversationId } : {}),
+    ...(disputeId ? { disputeId } : {}),
     ...(event.success ? { event: event.data } : {}),
+    ...(disputeEvent.success ? { disputeEvent: disputeEvent.data } : {}),
     ...(outcome.success ? { outcome: outcome.data } : {}),
+    ...(resolution.success ? { resolution: resolution.data } : {}),
     ...(subject.success ? { subject: subject.data } : {}),
   }
 }
