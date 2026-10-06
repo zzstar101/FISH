@@ -4,7 +4,7 @@ import type { Db } from '@fish/db/client'
 import { listingWantsCount } from '@fish/db/listing-wants'
 import { listingImages, listings } from '@fish/db/schema/listings'
 import { users } from '@fish/db/schema/users'
-import { and, desc, eq, inArray, lt, or, type SQL, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, lt, ne, or, type SQL, sql } from 'drizzle-orm'
 import type { ListingCardSeller } from '../listings/card'
 
 /**
@@ -70,7 +70,7 @@ export interface PublicListingRow {
 export type PublicListingCursor = { createdAt: string; id: string }
 
 export interface PublicUserStore {
-  /** 按 id 取公开资料列；不存在返回 null（**不区分**"不存在"与"不可见"）。 */
+  /** 按 id 取公开资料列；不存在或**已注销**（#464）返回 null（不区分"不存在"与"不可见"）。 */
   findPublicUser(userId: string): Promise<PublicUserRow | null>
   stats(userId: string): Promise<PublicUserStatsRow>
   /** 取 TA 的在售商品，`created_at DESC, id DESC`，多取一行由调用方判断还有没有下一页。 */
@@ -119,7 +119,10 @@ export function createSqlPublicUserStore(db: Db): PublicUserStore {
           createdAt: users.createdAt,
         })
         .from(users)
-        .where(eq(users.id, userId))
+        // 已注销账号（#464）在**公开读模型**里与"不存在"同义：`/users/:id/public` 与
+        // `/users/:id/listings` 都返回 404，不给匿名访客留一个「已注销用户」的空主页。
+        // 私域历史引用（商品卡、聊天、订单）不走这里，仍按 `nickname` 占位显示「已注销用户」。
+        .where(and(eq(users.id, userId), ne(users.accountStatus, 'DELETED')))
         .limit(1)
       return rows[0] ?? null
     },

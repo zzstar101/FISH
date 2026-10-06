@@ -1,10 +1,39 @@
-import { pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
-import { primaryKey, timestamps } from './common'
+import { sql } from 'drizzle-orm'
+import {
+  check,
+  index,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core'
+import { primaryKey, timestamps, timestamptz } from './common'
 
 /** 校园认证状态。#68 后 VERIFIED 只能由「教育邮箱验证码验证成功」事务写入。 */
 export const authStatusEnum = pgEnum('auth_status', ['UNVERIFIED', 'VERIFIED'])
 
 export const userRoleEnum = pgEnum('user_role', ['USER', 'ADMIN'])
+
+/**
+ * 账号状态（#464 账号注销）。
+ *
+ * - `ACTIVE`：正常账号。
+ * - `DELETION_REQUESTED`：已申请注销，处于 7 天冷静期。写入口全禁（`requireAuth` 单点拦截）、
+ *   其他会话已撤销、在架商品已下架；本人仍可读、可登出/重新登录、可撤回。
+ * - `DELETED`：冷静期到期、已完成去标识化。凭据全部清空（密码 / 手机 / 校园邮箱 / 学号 /
+ *   微信映射），因此无法再登录；公开主页 404。
+ *
+ * 用三态而不是布尔 `isDeleting`：撤回要把 `DELETION_REQUESTED` 写回 `ACTIVE`，而 `DELETED`
+ * 是终态、不可回退——「可撤回的申请」与「已完成的注销」必须可区分，否则一次 UPDATE 就能把
+ * 已注销账号复活。`DELETED` 行的 `id` 保留：交易 / 评价 / 留言 / 聊天 / 审计仍按外键指向它。
+ */
+export const accountStatusEnum = pgEnum('account_status', [
+  'ACTIVE',
+  'DELETION_REQUESTED',
+  'DELETED',
+])
 
 export const users = pgTable(
   'users',
@@ -43,9 +72,33 @@ export const users = pgTable(
     phone: text('phone').unique(),
     /** 管理授权依据（#73）；只由 `requireAdmin` 读取，普通用户 `Me` DTO 不暴露它。 */
     role: userRoleEnum('role').notNull().default('USER'),
+    /**
+     * 账号状态（#464）。注销态本身是对外可见的（`GET /me/account-deletion`），
+     * 但不进 `Me` DTO（#3 契约保持冻结），由注销模块自己的端点自报。
+     */
+    accountStatus: accountStatusEnum('account_status').notNull().default('ACTIVE'),
+    /** 注销申请时刻（`DELETION_REQUESTED` 时非空）。 */
+    deletionRequestedAt: timestamptz('deletion_requested_at'),
+    /** 冷静期到期时刻 = 申请时刻 + 7 天（`DELETION_REQUESTED` 时非空）；worker 按它扫描。 */
+    purgeScheduledAt: timestamptz('purge_scheduled_at'),
     ...timestamps(),
   },
-  (table) => [uniqueIndex('users_campus_email_uq').on(table.campusEmail)],
+  (table) => [
+    uniqueIndex('users_campus_email_uq').on(table.campusEmail),
+    // worker 到期扫描（#464）：只扫冷静期内的行，按到期时刻取。没有这条部分索引就是每次全表扫。
+    index('users_purge_scheduled_at_idx')
+      .on(table.purgeScheduledAt)
+      .where(sql`${table.accountStatus} = 'DELETION_REQUESTED'`),
+    /*
+     * 三态与两个时间戳必须同进同出（#464）：`DELETION_REQUESTED` 必须两个时间戳都非空，
+     * 其余状态必须都为空。防的是「半状态」——有状态没时间戳的行 worker 永远扫不到，
+     * 注销会静默卡死；有时间戳没状态的行会让撤回后的账号被误执行去标识化。
+     */
+    check(
+      'users_account_deletion_timestamps_consistent',
+      sql`(${table.accountStatus} = 'DELETION_REQUESTED') = (${table.deletionRequestedAt} IS NOT NULL AND ${table.purgeScheduledAt} IS NOT NULL)`,
+    ),
+  ],
 )
 
 /**

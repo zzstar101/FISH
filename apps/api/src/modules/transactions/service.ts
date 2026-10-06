@@ -481,6 +481,15 @@ export function createTransactionService({
         // 契约冻结语义：并发输给另一买家 / 商品已非 ACTIVE。重试恢复口径见 routes 注释。
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')
       }
+      if (result.kind === 'buyer-account-inactive') {
+        // #464：买家在冷静期内或已注销。提案是冷静期之前提的，但**接受**才是创建交易的动作，
+        // 所以拒绝发生在这里而不是提案端点（提案本身不产生交易，不违背「冷静期内不新增交易」）。
+        throw new TransactionServiceError(
+          409,
+          'COUNTERPARTY_ACCOUNT_INACTIVE',
+          '对方账号正在注销或已注销，暂时无法创建交易',
+        )
+      }
 
       // 消息已随交易落库，这里只负责推给在线端（落库失败则根本走不到这一步）。
       onSystemMessage?.({ buyerId: brief.buyerId, sellerId: brief.sellerId }, result.message)
