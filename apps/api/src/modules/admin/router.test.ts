@@ -702,6 +702,46 @@ describe('Admin 查询端到端', () => {
     expect(AdminAuditLogPageSchema.parse(await filtered.json()).items).toHaveLength(1)
   })
 
+  // #464 回归：worker 写入的 `ACCOUNT_DELETION_COMPLETED` 系统审计行必须读得到。
+  // 修复前契约枚举缺该值：`toAuditLogEntry` 的 `AdminAuditLogEntrySchema.safeParse` 失败 →
+  // `pageOf` 的 `.filter(item => item !== null)` 把整行静默丢掉（列表里少一条「账号注销完成」），
+  // 且 `?action=ACCOUNT_DELETION_COMPLETED` 会在 `AdminAuditLogsQuerySchema` 处直接 422。
+  test('GET /admin/audit-logs 透出系统动作 ACCOUNT_DELETION_COMPLETED（actor 为 null）', async () => {
+    await scratch.insert(adminAuditLogs).values({
+      id: newId(),
+      actorUserId: null,
+      action: 'ACCOUNT_DELETION_COMPLETED',
+      targetType: 'USER',
+      targetId: USER_ID,
+      before: jsonParam({ accountStatus: 'DELETION_REQUESTED' }),
+      after: jsonParam({ accountStatus: 'DELETED', counts: { listings: 0, wishes: 0 } }),
+      reason: '账号注销冷静期到期，系统执行去标识化',
+      requestId: null,
+      createdAt: new Date('2026-09-03T00:00:00Z'),
+    })
+
+    const res = await app.request(ADMIN_ROUTES.auditLogs, { headers: { cookie: adminCookie } })
+    expect(res.status).toBe(200)
+    const entry = AdminAuditLogPageSchema.parse(await res.json()).items.find(
+      (item) => item.action === 'ACCOUNT_DELETION_COMPLETED',
+    )
+    expect(entry).toBeDefined()
+    expect(entry?.actor).toBeNull()
+    expect(entry?.targetType).toBe('USER')
+    expect(entry?.targetId).toBe(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
+    expect(entry?.after).toEqual({ accountStatus: 'DELETED', counts: { listings: 0, wishes: 0 } })
+
+    // 按该 action 过滤不得 422（query 走同一份契约枚举）。
+    const filtered = await app.request(
+      `${ADMIN_ROUTES.auditLogs}?action=ACCOUNT_DELETION_COMPLETED`,
+      { headers: { cookie: adminCookie } },
+    )
+    expect(filtered.status).toBe(200)
+    expect(
+      AdminAuditLogPageSchema.parse(await filtered.json()).items.map((item) => item.action),
+    ).toEqual(['ACCOUNT_DELETION_COMPLETED'])
+  })
+
   test('审计公开 ID 按资源投影历史映射；数据库快照原文不改', async () => {
     const oldReport = '01930000-0000-4000-8000-000000000061'
     const oldRecord = '01930000-0000-4000-8000-000000000062'

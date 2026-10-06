@@ -1,0 +1,257 @@
+@use '@/styles/mixins' as *;
+
+/**
+ * 账号注销页（#464）。尺寸 = 设计稿 pt × 2（见 DESIGN.md）。
+ *
+ * 版式沿用设置中心的骨架（hero + 内容区），但**没有分组卡**：这一页只讲一件事，
+ * 任何分组都会让用户以为「只是又一个设置项」。后果说明用一张白卡逐条列出，
+ * 提交按钮沿用危险操作卡的红色构造（`--danger-weak` 底 + `--danger-ink` 字）。
+ */
+
+.ad {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 60px;
+}
+
+.ad__bg {
+  @include page-hero(440px, 64px);
+}
+
+/* ---------------------------------------------------------------- 页头 */
+
+.ad__head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 168px 40px 0;
+}
+
+.ad__title {
+  font-size: var(--fs-h1);
+  font-weight: 600;
+  line-height: 1.33;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.ad__title-hl {
+  color: var(--danger-ink);
+}
+
+.ad__meta {
+  font-size: var(--fs-xs);
+  color: var(--danger-ink);
+}
+
+.ad__content {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  padding: 0 40px;
+}
+
+/* ------------------------------------------------- 读取中 / 读取失败 */
+
+.ad__hint {
+  @include card;
+  margin-top: 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 40px 36px;
+}
+
+.ad__hint-text {
+  font-size: 26px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.ad__retry {
+  @include btn-ghost;
+  align-self: flex-start;
+}
+
+/* ------------------------------------------------------------ 后果说明 */
+
+.ad__card {
+  @include card;
+  margin-top: 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 40px 36px;
+}
+
+.ad__card-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ad__item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ad__item-title {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.ad__item-detail {
+  font-size: 25px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+/* ------------------------------------------------------------ 确认词 */
+
+.ad__grouplabel {
+  @include group-label;
+}
+
+.ad__confirm {
+  @include card;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 32px 36px;
+}
+
+.ad__confirm-label {
+  font-size: 25px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.ad__input {
+  @include input-box;
+}
+
+.ad__ph {
+  color: var(--muted);
+}
+
+/* -------------------------------------------------------- 危险操作 */
+
+.ad__danger-card {
+  margin-top: 36px;
+  border-radius: var(--r-card);
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+  overflow: hidden;
+  transition: opacity 0.16s ease;
+
+  &.is-off {
+    opacity: 0.45;
+  }
+}
+
+.ad__danger-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  min-height: 108px;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--danger-ink);
+
+  &:active {
+    background: var(--danger-line);
+  }
+}
+
+.ad__danger-ic {
+  width: 38px;
+  height: 38px;
+}
+
+.ad__spin {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 4px solid var(--danger-line);
+  border-top-color: var(--danger-ink);
+  animation: ad-spin 0.7s linear infinite;
+}
+
+@keyframes ad-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ad__note {
+  display: block;
+  padding: 20px 4px 0;
+  font-size: 22px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}
+
+.ad__error {
+  display: block;
+  margin-top: 28px;
+  padding: 24px 28px;
+  border-radius: var(--r-card);
+  background: var(--danger-weak);
+  border: 2px solid var(--danger-line);
+  font-size: 24px;
+  line-height: 1.6;
+  color: var(--danger-ink);
+}
+
+/* ---------------------------------------------------------- 冷静期内 */
+
+.ad__state {
+  @include card;
+  margin-top: 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 40px 36px;
+}
+
+.ad__state-ic {
+  width: 88px;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--danger-weak);
+}
+
+.ad__state-ic-img {
+  width: 44px;
+  height: 44px;
+}
+
+.ad__state-title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.ad__state-days {
+  font-size: 30px;
+  font-weight: 600;
+  color: var(--danger-ink);
+}
+
+.ad__state-text {
+  font-size: 25px;
+  line-height: 1.6;
+  color: var(--muted-2);
+}

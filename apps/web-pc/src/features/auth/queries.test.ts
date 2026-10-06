@@ -6,7 +6,7 @@ import {
   currentSessionGeneration,
   resetPcSession,
 } from '../../lib/session-cache'
-import { loadMe, meQueryOptions } from './queries'
+import { accountDeletionKeys, loadMe, meQueryOptions } from './queries'
 
 const originalFetch = globalThis.fetch
 const oldUser: Me = {
@@ -253,5 +253,39 @@ describe('loadMe', () => {
     expect(queryClient.getQueryData<Array<{ id: string }>>(['pc', 'listings', 'home'])).toEqual([
       { id: 'new' },
     ])
+  })
+})
+
+describe('注销状态的跨账号隔离（#464）', () => {
+  /*
+   * 对抗性审查 B1：注销状态的查询键一度是 `['account-deletion','status']`，逃出了
+   * `resetPcSession` 清理的 `['pc']` 前缀 —— 换号后 B 会读到 A 的冷静期与到期日
+   * （`staleTime: 0` 只保证后台重取，首帧渲染的就是缓存里的旧值）。
+   *
+   * 这条用例与 `view-history/queries.test.ts` 的「keys are account-scoped and under the
+   * shared pc namespace」同款：先钉键的形状（前缀 + ownerId），再钉换号后缓存真的没了。
+   */
+  test('键在 pc 隔离边界内且按账号区分', () => {
+    const a = accountDeletionKeys.status(oldUser.id)
+    const b = accountDeletionKeys.status(newUser.id)
+    expect(a[0]).toBe('pc')
+    expect(a).toContain(oldUser.id)
+    expect(a).not.toEqual(b)
+  })
+
+  test('换号后上一个账号的注销态不会留在缓存里', async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(accountDeletionKeys.status(oldUser.id), {
+      status: 'DELETION_REQUESTED',
+      requestedAt: '2026-10-01T00:00:00.000Z',
+      purgeScheduledAt: '2099-10-08T00:00:00.000Z',
+    })
+
+    await resetPcSession(queryClient, null)
+    await resetPcSession(queryClient, newUser)
+
+    // 旧账号的键必须被清掉；新身份更不该凭空拿到这条状态。
+    expect(queryClient.getQueryData(accountDeletionKeys.status(oldUser.id))).toBeUndefined()
+    expect(queryClient.getQueryData(accountDeletionKeys.status(newUser.id))).toBeUndefined()
   })
 })

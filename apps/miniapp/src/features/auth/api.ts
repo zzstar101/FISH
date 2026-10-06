@@ -9,6 +9,15 @@
  * 这里只做「发请求 + 用契约 schema 收口」，不吞错误码：
  * 哪些码该翻成什么文案，是 UI 的事（见 `./store` 与登录页）。
  */
+
+import { ACCOUNT_DELETION_ROUTES } from '@fish/contracts/account-deletion/routes'
+import {
+  ACCOUNT_DELETION_CONFIRMATION_PHRASE,
+  type AccountDeletionRequestResponse,
+  AccountDeletionRequestResponseSchema,
+  type AccountDeletionStatus,
+  AccountDeletionStatusSchema,
+} from '@fish/contracts/account-deletion/schema'
 import { AuthResponseSchema } from '@fish/contracts/auth/session'
 import type { Me } from '@fish/contracts/auth/user'
 import { WechatSessionResponseSchema } from '@fish/contracts/auth/wechat'
@@ -53,4 +62,35 @@ export async function wechatSignIn(code: string): Promise<Me> {
  */
 export async function confirmScanTicket(ticket: string): Promise<void> {
   await apiRequest(`/auth/wechat/scan/ticket/${ticket}/confirm`, { method: 'POST' })
+}
+
+/**
+ * 账号注销（#464）：三条方法落在同一个 URL 上，资源就是「我的注销申请」这一条状态。
+ *
+ * 注销态**不在** `Me` 里（#3 契约冻结），所以注销页要单独读这里。冷静期内其它会话会被
+ * 撤销、当前会话保留 —— 因此端上不会因为申请注销就被踢回登录页，撤回入口仍然有效。
+ */
+export async function fetchAccountDeletionStatus(): Promise<AccountDeletionStatus> {
+  return AccountDeletionStatusSchema.parse(await apiRequest(ACCOUNT_DELETION_ROUTES.status))
+}
+
+/**
+ * 申请注销（幂等：冷静期内重复提交回 200 与既有状态，**不重置 7 天计时**）。
+ *
+ * 固定词取自契约常量；页面要求用户手输一遍才允许提交，服务端仍会独立校验。
+ */
+export async function requestAccountDeletion(): Promise<AccountDeletionRequestResponse> {
+  return AccountDeletionRequestResponseSchema.parse(
+    await apiRequest(ACCOUNT_DELETION_ROUTES.status, {
+      method: 'POST',
+      body: { confirmation: ACCOUNT_DELETION_CONFIRMATION_PHRASE },
+    }),
+  )
+}
+
+/** 撤回注销申请（幂等：不在冷静期时回 200 与当前状态）。撤回**不恢复商品上架**。 */
+export async function withdrawAccountDeletion(): Promise<AccountDeletionStatus> {
+  return AccountDeletionStatusSchema.parse(
+    await apiRequest(ACCOUNT_DELETION_ROUTES.status, { method: 'DELETE' }),
+  )
 }

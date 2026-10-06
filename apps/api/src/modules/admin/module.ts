@@ -2,6 +2,9 @@ import type { Db } from '@fish/db/client'
 import type { MiddlewareHandler } from 'hono'
 import type { LatencyRecorder } from '../../observability/latency'
 import type { AuthVariables } from '../auth/middleware'
+import { createDisputesRouter } from '../disputes/router'
+import { createDisputeService } from '../disputes/service'
+import { createSqlDisputeStore, type DisputeNotificationWriter } from '../disputes/store'
 import type { RestrictionGuard } from '../governance/guard'
 import type { GovernanceService } from '../governance/service'
 import { createSqlModerationStore } from '../moderation/store'
@@ -39,6 +42,12 @@ export function createAdminModule(options: {
   /** 推荐埋点的进程内计数（#323 R6，PR-2 注入）：传**读取函数**（`() => recorder.snapshot()`），
    * 而不是启动时的一份快照——否则端点会永远返回 0。 */
   recommendationProcessMetrics?: () => RecommendationProcessMetrics
+  /**
+   * 争议进展通知（#465）。**在争议状态变更的同一事务里**写入（执行器就是那个事务），
+   * 不是 best-effort 旁路：结论提交后写通知失败会让当事人永久收不到结果，而库里没有
+   * outbox 可以补投（plan §2 冻结口径）。接线层决定「通知怎么写」，本模块只透传。
+   */
+  notifyDispute?: DisputeNotificationWriter
 }) {
   // #286 复审 blocker 1：管理员对 REVIEW 商品的 ALLOW/BLOCK 必须同时结算它引用的审核中图片，
   // 否则人工放行会被卖家下一次「不改图」的文本编辑重新压回人工队列。钩子从 uploads 域注入，
@@ -50,6 +59,12 @@ export function createAdminModule(options: {
   const requireAdmin = createRequireAdmin({ store })
   const reportStore = createSqlReportStore(options.db)
   const reportsService = createReportService(reportStore)
+  // 争议（#465）与举报同一姿态：用户端与管理端共用一个 store/service 实例，
+  // 可见性口径与状态机只有一套真相。
+  const disputesService = createDisputeService({
+    store: createSqlDisputeStore(options.db, { notify: options.notifyDispute }),
+    storage: options.storage,
+  })
   const router = createAdminRouter({
     service: createAdminService({
       store,
@@ -58,6 +73,7 @@ export function createAdminModule(options: {
       recommendationProcessMetrics: options.recommendationProcessMetrics,
     }),
     reportsService,
+    disputesService,
     requireAuth: options.requireAuth,
     requireAdmin,
     governance: options.governance,
@@ -73,6 +89,16 @@ export function createAdminModule(options: {
       getUserId: (c) => {
         const userId = c.get('userId')
         if (!userId) throw new Error('reports 路由被调用时 userId 缺失（requireAuth 未生效）')
+        return String(userId)
+      },
+    }),
+    /** 用户端争议路由（#465），由 app.ts 挂在 requireAuth 之后。 */
+    disputesRouter: createDisputesRouter({
+      service: disputesService,
+      guard: options.guard,
+      getUserId: (c) => {
+        const userId = c.get('userId')
+        if (!userId) throw new Error('disputes 路由被调用时 userId 缺失（requireAuth 未生效）')
         return String(userId)
       },
     }),

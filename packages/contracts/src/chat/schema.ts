@@ -518,6 +518,13 @@ export const ChatErrorCodeSchema = z.enum([
   'MESSAGE_REPLY_INVALID',
   /** 403：撤回者不是消息发送者本人（SYSTEM 不可撤回）。 */
   'MESSAGE_RECALL_FORBIDDEN',
+  /**
+   * 403：会话当前不可用（#466 拉黑守卫）。**中性码**：拉黑关系建立后，既有会话双方
+   * 与新建会话的尝试都得到同一个码与同一条文案——报错不区分「谁拉黑了谁」，
+   * 也不与其它失败区分，避免把拉黑状态变成可探测的信息（Issue #466 验收原话
+   * 「报错不暴露对方黑名单」）。守卫实现见 `blocks` store 的 `existsBlockBetween`。
+   */
+  'CONVERSATION_UNAVAILABLE',
   /** 409：超出撤回窗口（`MESSAGE_RECALL_WINDOW_MS`）。 */
   'MESSAGE_RECALL_WINDOW_EXCEEDED',
 ])

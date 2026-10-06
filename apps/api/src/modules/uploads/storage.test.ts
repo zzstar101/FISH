@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import type { AuthVariables } from '../auth/middleware'
 import { allowRestrictionGuard } from '../governance/testing'
 import { publicAvatarUrl } from './avatar-url'
+import { disputeMediaObjectKey, disputeMediaPrefix } from './dispute-media'
 import { createUploadsRouter } from './router'
 import { createBunS3MediaStorage, isSafeObjectKey, type MediaStorage } from './storage'
 
@@ -116,6 +117,37 @@ describe('Bun S3 存储适配', () => {
 
     await client?.delete(key)
     expect(await media.stat(key)).toBeNull()
+  })
+
+  /*
+   * #465 P2-2：争议附件的配额要数**对象**，不能只数台账行 —— 否则「只 presign + PUT、
+   * 从不 confirm」的键永远不会进台账，6 张上限形同虚设。这条用真对象存储证明
+   * `countObjects` 数得到孤儿键，且形状不合法的前缀根本不去问存储。
+   */
+  test.skipIf(!reachable)('countObjects：数前缀下的对象数，形状不合法直接返回 null', async () => {
+    const media = storage
+    if (!media) throw new Error('storage 未初始化')
+
+    const disputeId = newId()
+    // 注意 `disputeMediaPrefix` / `disputeMediaObjectKey` 收的是**裸 UUID**，编码在函数里做。
+    const prefix = disputeMediaPrefix(disputeId, USER_ID)
+    expect(prefix).toContain(encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID))
+    const keys = Array.from({ length: 3 }, () =>
+      disputeMediaObjectKey(disputeId, USER_ID, newId(), 'image/png'),
+    )
+
+    for (const key of keys) {
+      await media.writeMediaBytes?.(key, new Uint8Array([1, 2, 3]), 'image/png')
+    }
+
+    expect(await media.countObjects?.(prefix)).toBe(3)
+    // 别的争议 / 别的上传者的对象不计入本前缀。
+    expect(await media.countObjects?.(disputeMediaPrefix(newId(), newId()))).toBe(0)
+    // 形状不合法（会被 URL 归一化）→ 不去问存储，直接返回 null。
+    expect(await media.countObjects?.('dispute-media/../etc')).toBeNull()
+
+    for (const key of keys) await client?.delete(key)
+    expect(await media.countObjects?.(prefix)).toBe(0)
   })
 
   test.skipIf(!reachable)('旧对象键经匿名加密 URL 代理读取，公开 URL 不含原 UUID', async () => {

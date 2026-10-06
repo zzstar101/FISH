@@ -123,6 +123,25 @@ function decorateNotification(
       target: item.payload.subject === 'VERIFICATION' ? { kind: 'verify' } : null,
     }
   }
+  if (item.type === 'DISPUTE') {
+    // 争议进展（#465）：小程序用户侧争议页属 PR C，本分支只保证**通知本身可读**
+    // （不再落到末尾的「新通知」+ 空描述），不给跳转目标 —— 页面还不存在，
+    // 给 `target` 只会造出一个点不动的入口。
+    return {
+      ...item,
+      title: '交易争议有更新',
+      description:
+        item.payload.disputeEvent === 'FILED'
+          ? '对方就这笔交易发起了争议'
+          : item.payload.disputeEvent === 'WITHDRAWN'
+            ? '对方撤回了这笔交易的争议'
+            : item.payload.disputeEvent === 'RESOLVED'
+              ? '争议已处理，该结论为最终结论'
+              : '这笔交易的争议状态有变化',
+      tone: item.payload.disputeEvent === 'RESOLVED' ? 'mint' : 'warn',
+      target: null,
+    }
+  }
   return { ...item, title: '新通知', description: '', tone: 'warn', target: null }
 }
 
