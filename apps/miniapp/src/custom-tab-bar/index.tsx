@@ -167,7 +167,7 @@ export default function CustomTabBar() {
   }
 
   /**
-   * 演示 / 开发构建（本地没有后端）的红点兜底。排除系统会话 —— 它的未读由「通知」
+   * 演示构建（`TARO_APP_MOCK=1`，本地没有后端）的红点兜底。排除系统会话 —— 它的未读由「通知」
    * 承载，两边都算会重复计。
    *
    * 真实构建下是 `undefined`：未读数只能来自真实接口，读不到就是「不知道」，
@@ -219,7 +219,7 @@ export default function CustomTabBar() {
       )
       return
     }
-    // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持 fixture 现算
+    // 快照还没到位（补请求在途）。演示构建（`TARO_APP_MOCK=1`，本地没有后端）维持 fixture 现算
     // 口径，真实构建保持上一帧 —— 等 `hydrateUnread` 的真实结果落地再决定，
     // 不能用 fixture 先亮一个数再说，也不能因为「还没到」就把已知的徽标熄掉。
     if (!demoUnread) return

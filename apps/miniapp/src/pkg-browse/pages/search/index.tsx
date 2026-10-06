@@ -164,7 +164,7 @@ export default function Search() {
     }
     setNumberState('none')
     setLoading(true)
-    // 「真实接口优先、只有开发/预览才退 mock」由 fetchers 统一负责，页面不自己 try/catch
+    // 「真实接口优先、只有演示构建（`TARO_APP_MOCK=1`）才退 mock」由 fetchers 统一负责，页面不自己 try/catch
     const { items: list, failed: nextFailed } = await loadSearch(term, nextSort)
     if (!isSearchTaskCurrent(taskLog, startedAt)) return
     /*

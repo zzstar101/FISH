@@ -34,7 +34,7 @@ export type WishesResult =
  *
  * **刻意没有 mock 回退**（与 `loadPublicUserHome` 同一取舍）：真接口的愿望 id 是 wsh_，
  * 而 mock fixture 的 id 是 `w-001` 这种，混在一起只会造出「真实愿望 + 演示命中」的假象。
- * 所以开发 / 预览构建拿不到后端时同样返回 `failed`，由页面显示错误态与重试入口。
+ * 所以演示构建拿不到后端时同样返回 `failed`，由页面显示错误态与重试入口。
  *
  * 命中按愿望逐条拉 `/matches?wishId=`（契约没有批量端点）：只有 `ACTIVE` 且
  * `matchCount > 0` 的愿望才会产生请求，上限是 ACTIVE 愿望条数（服务端限制 10 条）。

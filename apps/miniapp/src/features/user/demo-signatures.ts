@@ -31,6 +31,6 @@ export const DEMO_SIGNATURES: Record<string, string> = {
 /**
  * 演示账号 id（= 上表的键）。关注钮也用它当白名单：那颗钮是纯演示、没有数据面，
  * 只该出现在演示账号的主页上，不能挂在任意真实用户页上（`MOCK_FALLBACK_ENABLED`
- * 在 `NODE_ENV === 'development'` 下也为真，见 `config/index.ts`）。
+ * 只在显式演示构建 `TARO_APP_MOCK=1` 下为真，见 `config/index.ts` 与 #304）。
  */
 export const DEMO_USER_IDS: readonly string[] = Object.keys(DEMO_SIGNATURES)

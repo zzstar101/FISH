@@ -8,8 +8,8 @@
  * - 失败 → `failed: true`，页面渲染错误态（可重试），**不用演示数据顶替** ——
  *   拿 fixture 冒充真实举报记录，就是让用户看到一条带「已处理 / 已驳回」的虚构结论。
  *
- * 演示构建（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，两个开关都要 —— 只认
- * MOCK_FALLBACK 会把 `dev:weapp` 的真实空态顶掉，判据与 `pages/favorites` 相同）
+ * 演示构建（`MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED`，两个开关都要 —— 两个注入点
+ * 可以单独打开，只认 MOCK_FALLBACK 会顶掉真实空态，判据与 `pages/favorites` 相同）
  * 请求失败时回退到 `features/reports/demo`，页面据 `demo` 渲染「演示数据」说明带。
  *
  * ## 分页

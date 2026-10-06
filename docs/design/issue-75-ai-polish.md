@@ -364,6 +364,8 @@ stub **必须故意返回脏数据**：一条含标记、一条超 500 字、一
 | 429 长等待文案 | **> 60s 改粗粒度**："今天润色次数用完了，明天再来"；≤ 60s 才用"N 秒后再试" | 命中滚动 24h 配额时 `retryAfterSeconds` 可达数千至上万秒（`apps/api/src/modules/ai/store.ts` 的三个桶之一；`store.test.ts` 的「EMPTY 桶满后被拒」用例断言 `retryAfterSeconds > 3600`），一律"N 秒后再试"不可读 |
 | mock 兜底门禁 | **只认 `TARO_APP_MOCK=1`**（照 `__DEMO_AUTH__` 的严格先例，`apps/miniapp/config/index.ts:64`） | 复用 `__ALLOW_MOCK_FALLBACK__`（`:52-54`）会把 `NODE_ENV=development` 一起放进来：`dev:weapp` 下失败会静默显示本地假候选，而那种候选没有 `provider==='stub'` 角标可区分（§8.2） |
 
+> **口径更新（#304 / #478，2026-10-06）**：上表理由列里的行号是**设计时点**（2026-09-22，基线见 §10.3）。现状：三个构建常量都在 `apps/miniapp/config/index.ts` 的 `defineConstants` 里、只取 `:30` 的 `mockEnabled`（`process.env.TARO_APP_MOCK === '1'`）—— `__ALLOW_MOCK_FALLBACK__` 在 `:105`、`__DEMO_AUTH__` 在 `:115`、`__DEMO_AI_POLISH__` 在 `:128`；`NODE_ENV=development` 不再参与任何一处，`dev:weapp` 也不再打开兜底（`apps/miniapp/README.md:67`）。
+
 ### 10.3 实现落点（2026-09-22，分支 `feat/miniapp-ai-polish-sell`）
 
 > **本条基线**：`origin/main = 8609c97`。`apps/miniapp/src/pages/sell/index.tsx` 共 1118 行。
