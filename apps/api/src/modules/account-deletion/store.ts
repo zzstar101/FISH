@@ -44,10 +44,9 @@ import { ACTIVE_RESTRICTION_WHERE } from '../governance/store'
 /** 一次申请里最多回报几个对方昵称（错误信息用；总数另算，不受它限制）。 */
 export const BLOCKING_TRANSACTION_SAMPLE_LIMIT = 3
 
-/** 阻塞资格的交易：注销人在这笔交易里的角色 + 对方昵称。 */
+/** 阻塞资格的交易：只回报错误信息真正用得上的对方昵称（总数另算）。 */
 export interface BlockingTransaction {
   transactionId: string
-  role: 'BUYER' | 'SELLER'
   counterpartyNickname: string | null
 }
 
@@ -138,7 +137,6 @@ async function countBlockingTransactions(
   const rows = await executor
     .select({
       transactionId: transactions.id,
-      buyerId: transactions.buyerId,
       counterpartyNickname: users.nickname,
       total: sql<number>`count(*) over ()`.mapWith(Number),
     })
@@ -158,7 +156,6 @@ async function countBlockingTransactions(
 
   const samples: BlockingTransaction[] = rows.map((row) => ({
     transactionId: row.transactionId,
-    role: row.buyerId === userId ? 'BUYER' : 'SELLER',
     counterpartyNickname: row.counterpartyNickname,
   }))
   return { total: rows[0]?.total ?? 0, samples }

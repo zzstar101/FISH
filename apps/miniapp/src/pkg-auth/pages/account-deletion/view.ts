@@ -7,8 +7,6 @@ import { isApiError } from '@/lib/request'
  * 提交必须有明确确认，失败必须给出可行动的下一步。
  */
 
-const DAY_MS = 24 * 60 * 60 * 1000
-
 /**
  * 确认词比对（与 PC 端同口径，服务端仍会独立校验一遍）。
  *
@@ -19,24 +17,9 @@ export function isConfirmPhrase(input: string): boolean {
   return input.trim() === ACCOUNT_DELETION_CONFIRMATION_PHRASE
 }
 
-/**
- * 冷静期剩余天数（向上取整：还剩 30 分钟也应显示「1 天」，显示「0 天」会让人以为已经注销）。
- *
- * `purgeScheduledAt` 为 null（理论不该出现）或解析失败时回 0，由 `coolingOffText` 兜底成
- * 「即将被注销」—— 宁可催得急一点，也不要让用户以为还有很多时间。
- */
-export function coolingOffDays(purgeScheduledAt: string | null, nowMs: number): number {
-  if (purgeScheduledAt === null) return 0
-  const due = Date.parse(purgeScheduledAt)
-  if (Number.isNaN(due)) return 0
-  return Math.max(0, Math.ceil((due - nowMs) / DAY_MS))
-}
-
-export function coolingOffText(purgeScheduledAt: string | null, nowMs: number): string {
-  const days = coolingOffDays(purgeScheduledAt, nowMs)
-  if (days <= 0) return '冷静期已到期，账号即将被注销'
-  return `冷静期剩余 ${days} 天`
-}
+// 冷静期倒计时（天数 + 文案）不在端上再写一份：`@fish/contracts/account-deletion/countdown`
+// 是 PC 与小程序共用的唯一实现。此前两端各写一份，连「读不到 purgeScheduledAt」的兜底
+// 都正好相反（PC「冷静期内」/ 小程序「账号即将被注销」）。
 
 /**
  * 一次账号作用域的异步任务：属于**哪个账号**、属于**哪一轮**（判据与

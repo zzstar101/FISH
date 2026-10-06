@@ -1,5 +1,9 @@
 import { DELETION_CONSEQUENCES } from '@fish/contracts/account-deletion/copy'
-import { ACCOUNT_DELETION_CONFIRMATION_PHRASE } from '@fish/contracts/account-deletion/schema'
+import { coolingOffLabel } from '@fish/contracts/account-deletion/countdown'
+import {
+  ACCOUNT_DELETION_CONFIRMATION_PHRASE,
+  ACCOUNT_DELETION_COOLING_OFF_DAYS,
+} from '@fish/contracts/account-deletion/schema'
 import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
 import {
@@ -14,11 +18,7 @@ import { Field, FieldError, FieldLabel } from '@fish/ui/field'
 import { Input } from '@fish/ui/input'
 import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import {
-  coolingOffLabel,
-  describeDeletionFailure,
-  matchesDeletionConfirmation,
-} from '../auth/account-deletion'
+import { describeDeletionFailure, matchesDeletionConfirmation } from '../auth/account-deletion'
 import {
   useAccountDeletionStatus,
   useRequestAccountDeletion,
@@ -114,10 +114,9 @@ export function AccountDeletionCard({ ownerId }: AccountDeletionCardProps) {
   const data = status.data
 
   if (data.status === 'DELETION_REQUESTED') {
-    const remaining =
-      data.purgeScheduledAt === null
-        ? '冷静期内'
-        : coolingOffLabel(data.purgeScheduledAt, Date.now())
+    // 读不到 `purgeScheduledAt` 时由 `coolingOffLabel` 兜底成「冷静期内」：这一屏与小程序
+    // 注销页共用同一句文案，不在这里再写一份兜底（此前两端兜底正好相反）。
+    const remaining = coolingOffLabel(data.purgeScheduledAt, Date.now())
     return (
       <Card className="gap-0 border border-danger/30 bg-danger-soft/40 p-6">
         <div className="flex items-center justify-between gap-4">
@@ -162,7 +161,8 @@ export function AccountDeletionCard({ ownerId }: AccountDeletionCardProps) {
             <div>
               <h2 className="font-semibold">注销账号</h2>
               <p className="mt-0.5 text-ink-3 text-sm">
-                7 天冷静期，期间可撤回；到期后账号与个人资料不可恢复。
+                {ACCOUNT_DELETION_COOLING_OFF_DAYS}{' '}
+                天冷静期，期间可撤回；到期后账号与个人资料不可恢复。
               </p>
             </div>
           </div>
@@ -217,7 +217,9 @@ export function AccountDeletionCard({ ownerId }: AccountDeletionCardProps) {
               {requestError !== null ? (
                 <FieldError>{requestError}</FieldError>
               ) : (
-                <p className="text-ink-3 text-xs">这一步只是防误触；提交后仍可在 7 天内撤回。</p>
+                <p className="text-ink-3 text-xs">
+                  这一步只是防误触；提交后仍可在 {ACCOUNT_DELETION_COOLING_OFF_DAYS} 天内撤回。
+                </p>
               )}
             </Field>
 

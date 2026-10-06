@@ -1,5 +1,9 @@
 import { DELETION_CONSEQUENCES } from '@fish/contracts/account-deletion/copy'
-import { ACCOUNT_DELETION_CONFIRMATION_PHRASE } from '@fish/contracts/account-deletion/schema'
+import { coolingOffLabel } from '@fish/contracts/account-deletion/countdown'
+import {
+  ACCOUNT_DELETION_CONFIRMATION_PHRASE,
+  ACCOUNT_DELETION_COOLING_OFF_DAYS,
+} from '@fish/contracts/account-deletion/schema'
 import { Image, Input, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll } from '@tarojs/taro'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -15,7 +19,6 @@ import { useAuthGuard } from '@/features/auth/guard'
 import { useAuth } from '@/features/auth/store'
 import {
   beginDeletionTask,
-  coolingOffText,
   deletionErrorMessage,
   deletionOwnerChanged,
   isConfirmPhrase,
@@ -185,7 +188,9 @@ export default function AccountDeletion() {
         <Text className="ad__title">
           注销<Text className="ad__title-hl">账号</Text>
         </Text>
-        <Text className="ad__meta num">提交后 7 天内可撤回 · 到期不可恢复</Text>
+        <Text className="ad__meta num">
+          提交后 {ACCOUNT_DELETION_COOLING_OFF_DAYS} 天内可撤回 · 到期不可恢复
+        </Text>
       </View>
 
       <View className="ad__content">
@@ -259,7 +264,7 @@ export default function AccountDeletion() {
                 <Image className="ad__state-ic-img" src={ICONS.warnInk} mode="aspectFit" />
               </View>
               <Text className="ad__state-title">注销申请已提交</Text>
-              <Text className="ad__state-days">{coolingOffText(purgeAt, Date.now())}</Text>
+              <Text className="ad__state-days">{coolingOffLabel(purgeAt, Date.now())}</Text>
               <Text className="ad__state-text">
                 到期后昵称、头像、学号、校园邮箱、手机号与微信绑定会被清除，账号无法再登录。
               </Text>

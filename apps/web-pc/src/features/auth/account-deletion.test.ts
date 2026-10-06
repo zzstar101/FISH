@@ -1,12 +1,7 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { DELETION_CONSEQUENCES } from '@fish/contracts/account-deletion/copy'
 import { ApiError } from '../../lib/api-client'
-import {
-  coolingOffLabel,
-  coolingOffRemainingDays,
-  describeDeletionFailure,
-  matchesDeletionConfirmation,
-} from './account-deletion'
+import { describeDeletionFailure, matchesDeletionConfirmation } from './account-deletion'
 import { fetchAccountDeletionStatus, requestAccountDeletion, withdrawAccountDeletion } from './api'
 
 const originalFetch = globalThis.fetch
@@ -111,24 +106,8 @@ describe('二次确认', () => {
   })
 })
 
-describe('冷静期倒计时', () => {
-  test('由 purgeScheduledAt 反算，向上取整', () => {
-    const start = Date.parse(REQUESTED_AT)
-    expect(coolingOffRemainingDays(PURGE_AT, start)).toBe(7)
-    // 过了半天：还剩 6.5 天 → 显示 7 天，不能显示「0 天」把人吓一跳。
-    expect(coolingOffRemainingDays(PURGE_AT, start + 12 * 60 * 60 * 1000)).toBe(7)
-    expect(coolingOffRemainingDays(PURGE_AT, Date.parse('2026-10-07T23:00:00.000Z'))).toBe(1)
-  })
-
-  test('已到期与非法时间戳都落在 0，不会出现负数文案', () => {
-    expect(coolingOffRemainingDays(PURGE_AT, Date.parse('2026-10-09T00:00:00.000Z'))).toBe(0)
-    expect(coolingOffRemainingDays('not-a-date', Date.now())).toBe(0)
-    expect(coolingOffLabel(PURGE_AT, Date.parse('2026-10-09T00:00:00.000Z'))).toBe(
-      '冷静期已到期，账号即将被注销',
-    )
-    expect(coolingOffLabel(PURGE_AT, Date.parse(REQUESTED_AT))).toBe('冷静期剩余 7 天')
-  })
-})
+// 冷静期倒计时的用例已随实现一起搬到 `@fish/contracts/account-deletion/countdown`：
+// 那是两端共用的唯一实现，在这里再断言一遍只会得到「两端各测各的、口径照样漂移」。
 
 describe('失败文案', () => {
   test('资格类失败原样透出服务端 message（含对方昵称，是唯一可行动的信息）', () => {

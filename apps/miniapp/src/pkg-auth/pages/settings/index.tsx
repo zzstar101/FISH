@@ -1,3 +1,4 @@
+import { ACCOUNT_DELETION_COOLING_OFF_DAYS } from '@fish/contracts/account-deletion/schema'
 import { Image, Text, View } from '@tarojs/components'
 import Taro, { usePageScroll } from '@tarojs/taro'
 import { useState } from 'react'
@@ -373,7 +374,7 @@ export default function Settings() {
         </View>
         <Text className="st__danger-note">
           退出后需重新登录，本地草稿与收藏记录不会丢失。{'\n'}
-          注销账号有 7 天冷静期，期间可撤回。
+          注销账号有 {ACCOUNT_DELETION_COOLING_OFF_DAYS} 天冷静期，期间可撤回。
         </Text>
         <Text className="st__version num">{`鱼小应 v${APP_VERSION} · build ${APP_BUILD}`}</Text>
       </View>

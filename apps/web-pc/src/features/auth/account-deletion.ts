@@ -11,27 +11,6 @@ export function matchesDeletionConfirmation(input: string): boolean {
   return input.trim() === ACCOUNT_DELETION_CONFIRMATION_PHRASE
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000
-
-/**
- * 冷静期剩余天数（向上取整，不小于 0）。
- *
- * 用 `purgeScheduledAt` 反算而不是本地记「提交时刻 + 7 天」：换设备、重新登录、
- * 刷新页面后本地计时都会丢，而服务端时间戳是唯一权威（也是 worker 真正执行去标识化的依据）。
- */
-export function coolingOffRemainingDays(purgeScheduledAt: string, nowMs: number): number {
-  const due = Date.parse(purgeScheduledAt)
-  if (Number.isNaN(due)) return 0
-  return Math.max(0, Math.ceil((due - nowMs) / DAY_MS))
-}
-
-/** 冷静期倒计时文案。 */
-export function coolingOffLabel(purgeScheduledAt: string, nowMs: number): string {
-  const days = coolingOffRemainingDays(purgeScheduledAt, nowMs)
-  if (days <= 0) return '冷静期已到期，账号即将被注销'
-  return `冷静期剩余 ${days} 天`
-}
-
 /**
  * 注销流程失败的展示文案。
  *
