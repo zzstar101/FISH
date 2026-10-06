@@ -455,8 +455,8 @@ describe('订单来源标记 —— 演示 fixture 与契约订单各自可辨�
 
     // 字段逐个取自 packages/db/src/seed.ts 的台灯单：交易 transactionLamp（`ids.transactionLamp`，
     // seed.ts:64）、会话 conversationLamp（seed.ts:60，`transactionLamp` 的三元组见 seed.ts:302）、
-    // 商品 listingLamp（seed.ts:53，`宿舍护眼台灯` 3000 分 RESERVED）、买家 sellerA（seed.ts:45，阿岚）、
-    // 卖家 buyerB（seed.ts:46，小北）。买家视角的对手方就是卖家小北。
+    // 商品 listingLamp（seed.ts:52，`宿舍护眼台灯` 3000 分 RESERVED）、买家 sellerA（seed.ts:46，阿岚）、
+    // 卖家 buyerB（seed.ts:47，小北）。买家视角的对手方就是卖家小北。
     //
     // 这一条只证明**投影不丢字段**：`conversationId` 是原样带出的，不是重算或补空。
     // 「真实 seed 单的 conversationId 非空」的端到端证据是 `GET /transactions?role=seller` 的真实
