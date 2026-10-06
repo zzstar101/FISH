@@ -259,6 +259,11 @@ mc admin policy attach local fish-app-rw --user fish-app
 而不是把它放进匿名直链——评价读 API 只对交易参与者开放，评价配图若匿名直读就是绕过参与者
 边界的永久旁路（#483 审查响应），删除评价后亦然。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
 
+**对象存储兼容性要求（#475）**：交易评价配图 confirm 通过服务端 `PUT If-None-Match: *` 原子创建 final 对象，
+对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）。
+上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS、腾讯云 COS 的 S3 兼容接口
+对该条件写头的支持存在差异/不保证，未验证前视为不兼容；这类部署可能覆盖已固化评价图片，需使用支持条件写的存储或另行实现服务端互斥。
+
 **staging 前缀要配生命周期过期（#483 审查响应）**：confirm 刻意不删 staging 源对象（保守
 选择，非重试安全的必要条件——final 键已存在时 confirm 幂等成功、不依赖 staging 存活），
 presign 直传也无法在签名层强制声明大小（Bun 的 presign 只签 host，

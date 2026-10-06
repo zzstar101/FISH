@@ -195,7 +195,7 @@ const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
 /**
  * #286：**待审核**的 staging 前缀。
  *
- * 它故意不落在匿名读白名单里（`docs/deployment.md` 只放开 `listings/*` 与 `reviews/*`），因此「未审核的图天然
+ * 它故意不落在匿名读白名单里（`docs/deployment.md` 只放开 `listings/*`），因此「未审核的图天然
  * 不可被公开读到」是存储策略给的，不需要新 bucket、也不需要改 ACL。presign 只签这个前缀，
  * 所以客户端**结构上无法**覆盖已固化到 `listings/` 下的 final 对象。
  */
@@ -256,10 +256,13 @@ export function createBunS3MediaStorage(options: {
   disputeUrlBase?: string
   disputeUrlSecret?: string
   expiresInSeconds?: number
+  /** 可替换条件 PUT 的传输函数，供离线适配器测试使用。 */
+  fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 }): MediaStorage {
   const {
     client,
     publicUrlBase,
+    fetch: fetchImpl = fetch,
     legacyUrlBase,
     legacyUrlSecret,
     reviewUrlBase,
@@ -336,19 +339,40 @@ export function createBunS3MediaStorage(options: {
 
     async writeMediaBytesIfAbsent(key, bytes, contentType) {
       assertSafeObjectKey(key)
-      // Bun.S3Client.write 不暴露 If-None-Match；presign 覆盖 host，故在服务端 PUT 时附加
-      // S3 条件头。MinIO 返回 412 表示另一 confirm 已先成功，不得覆盖其 final 对象。
+      // Bun.S3Client.write 不暴露 If-None-Match。Bun 1.4.0 的 presign options 无自定义签名头能力，
+      // 因此服务端 PUT 附加该条件头；Content-Type 也未签名，且 presign 的 type 对 PUT 是
+      // response-content-type 查询参数，不是签名的请求 Content-Type。
       const url = client.presign(key, {
         method: 'PUT',
-        expiresIn: expiresInSeconds,
+        expiresIn: 60,
         type: contentType,
       })
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': contentType, 'If-None-Match': '*' },
-        body: bytes,
-      })
-      if (response.status === 412) return false
+      let response: Response
+      try {
+        response = await fetchImpl(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': contentType, 'If-None-Match': '*' },
+          body: bytes,
+        })
+      } catch (error) {
+        const safeError = new Error('S3 条件写入网络请求失败')
+        safeError.name = error instanceof Error ? error.name : 'Error'
+        const code = (error as { code?: unknown }).code
+        if (typeof code === 'string') Object.assign(safeError, { code })
+        throw safeError
+      }
+      if (response.status === 412 || response.status === 409) {
+        // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
+        try {
+          await client.stat(key)
+          return false
+        } catch (error) {
+          if ((error as { code?: string }).code === 'NoSuchKey') {
+            throw new Error(`S3 条件写入冲突但对象不存在：HTTP ${response.status}`)
+          }
+          throw error
+        }
+      }
       if (!response.ok) throw new Error(`S3 条件写入失败：HTTP ${response.status}`)
       return true
     },

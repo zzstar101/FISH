@@ -216,7 +216,7 @@ export function createReviewMediaService(options: {
         reviewMediaStagingPrefix(userId),
         reviewMediaPublicPrefix(userId),
       )
-      // #483 审查响应（覆盖改写）：final 已存在 = 此前 confirm 已成功——幂等成功返回、
+      // #483 审查响应：幂等只保证同一 staging 键首次固化的内容；final 已存在即成功返回，
       // 绝不重写。同一 staging 键换一笔交易再 confirm，已提交评价引用的图保持原样。
       const existing: MediaObjectStat | null = await asServiceOutage(
         'stat final',

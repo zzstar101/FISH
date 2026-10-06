@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
@@ -119,19 +119,24 @@ describe('Bun S3 存储适配', () => {
     expect(await media.stat(key)).toBeNull()
   })
 
-  test.skipIf(!reachable)('writeMediaBytesIfAbsent 原子拒绝覆盖已存在对象', async () => {
+  test.skipIf(!reachable)('writeMediaBytesIfAbsent 并发条件写仅固化一个胜者', async () => {
     const media = storage
     if (!media?.writeMediaBytesIfAbsent || !media.readMediaBytes) {
       throw new Error('storage 未初始化')
     }
     const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
-    const original = new Uint8Array([1, 2, 3])
-    const replacement = new Uint8Array([4, 5, 6])
+    const payloads = Array.from({ length: 8 }, (_, index) => new Uint8Array([index, 2, 3]))
 
     try {
-      expect(await media.writeMediaBytesIfAbsent(key, original, 'image/png')).toBe(true)
-      expect(await media.writeMediaBytesIfAbsent(key, replacement, 'image/png')).toBe(false)
-      expect(await media.readMediaBytes(key)).toEqual(original)
+      const results = await Promise.all(
+        payloads.map((bytes) => media.writeMediaBytesIfAbsent?.(key, bytes, 'image/png')),
+      )
+      expect(results.filter(Boolean)).toHaveLength(1)
+      const winner = results.findIndex(Boolean)
+      expect(winner).toBeGreaterThanOrEqual(0)
+      const winningPayload = payloads[winner]
+      if (!winningPayload) throw new Error('并发条件写没有胜者')
+      expect(await media.readMediaBytes(key)).toEqual(winningPayload)
     } finally {
       await client?.delete(key)
     }
@@ -275,6 +280,92 @@ describe('Bun S3 存储适配', () => {
     } finally {
       await server.stop(true)
     }
+  })
+})
+
+describe('S3 条件写适配器（离线）', () => {
+  const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+
+  function makeClient() {
+    return new Bun.S3Client({
+      endpoint: 'https://s3.example.test',
+      region: 'us-east-1',
+      accessKeyId: 'test',
+      secretAccessKey: 'test',
+      bucket: 'fish',
+    })
+  }
+
+  function makeStorage(
+    client: Bun.S3Client,
+    fetchImpl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+  ) {
+    return createBunS3MediaStorage({
+      client,
+      publicUrlBase: 'https://cdn.test/fish',
+      fetch: fetchImpl,
+    })
+  }
+
+  test('200 返回 true', async () => {
+    const media = makeStorage(makeClient(), async () => new Response(null, { status: 200 }))
+    expect(await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')).toBe(true)
+  })
+
+  test.each([412, 409])('HTTP %i 且对象存在返回 false', async (status) => {
+    const client = makeClient()
+    const stat = spyOn(client, 'stat').mockResolvedValue({
+      size: 1,
+      type: 'image/png',
+      lastModified: new Date(),
+      etag: 'test-etag',
+    })
+    const media = makeStorage(client, async () => new Response(null, { status }))
+    expect(await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')).toBe(false)
+    expect(stat).toHaveBeenCalledWith(key)
+  })
+
+  test.each([412, 409])('HTTP %i 且对象不存在抛错', async (status) => {
+    const client = makeClient()
+    spyOn(client, 'stat').mockRejectedValue(
+      Object.assign(new Error('missing'), { code: 'NoSuchKey' }),
+    )
+    const media = makeStorage(client, async () => new Response(null, { status }))
+    await expect(
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+    ).rejects.toThrow('对象不存在')
+  })
+
+  test.each([412, 409])('HTTP %i 且 stat 出错时抛出 stat 错误', async (status) => {
+    const client = makeClient()
+    const failure = new Error('stat unavailable')
+    spyOn(client, 'stat').mockRejectedValue(failure)
+    const media = makeStorage(client, async () => new Response(null, { status }))
+    await expect(
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+    ).rejects.toBe(failure)
+  })
+
+  test.each([500, 501])('HTTP %i 抛错', async (status) => {
+    const media = makeStorage(makeClient(), async () => new Response(null, { status }))
+    await expect(
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+    ).rejects.toThrow(`HTTP ${status}`)
+  })
+
+  test('网络错误不泄漏签名 URL', async () => {
+    const media = makeStorage(makeClient(), async () => {
+      throw new Error('fetch failed: https://s3.example.test/?X-Amz-Signature=secret')
+    })
+    let caught: unknown
+    try {
+      await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect(JSON.stringify(caught)).not.toContain('X-Amz-Signature')
+    expect((caught as Error).message).not.toContain('X-Amz-Signature')
   })
 })
 

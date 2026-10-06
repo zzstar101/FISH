@@ -220,11 +220,11 @@ describe('review media service: confirm', () => {
     expect(error.code).toBe('REVIEW_MEDIA_UNAVAILABLE')
   })
 
-  test('writeMediaBytes 抛错 → 503（固化失败可重试，不回 500 裸错）', async () => {
+  test('writeMediaBytesIfAbsent 抛错 → 503（固化失败可重试，不回 500 裸错）', async () => {
     const service = createReviewMediaService({
       gate: gateOf(),
       storage: fakeStorage({
-        writeMediaBytes: async () => {
+        writeMediaBytesIfAbsent: async () => {
           throw new Error('disk full')
         },
       }),
@@ -307,7 +307,7 @@ describe('review media service: confirm', () => {
 })
 
 describe('review media service: 装配与频控（审查采纳）', () => {
-  test('存储缺 readMediaBytes/writeMediaBytes → 503 REVIEW_MEDIA_UNAVAILABLE（不静默降级成 422/假成功）', async () => {
+  test('存储缺 statStrict/readMediaBytes/writeMediaBytesIfAbsent → 503 REVIEW_MEDIA_UNAVAILABLE（不静默降级成 422/假成功）', async () => {
     const noCapabilities: MediaStorage = {
       presignPut: () => ({
         url: 'https://upload.example/put',
