@@ -63,6 +63,9 @@ export function AdminShell() {
         </div>
       )
     }
+    // 非 403 的失败一律可重试。**404 在此按身份校验失败处理**（定调，见 admin-shell.test.tsx）：
+    // /admin/me 404 意味着这个端点不存在——后端版本或部署路径不对，而不是「目标被删了」，
+    // 所以不套用其它页面的 notFound 缺失态文案（`adminLoadOutcome` 的通用语义也不动）。
     return (
       <div className="flex min-h-dvh items-center justify-center bg-bg">
         <ErrorState

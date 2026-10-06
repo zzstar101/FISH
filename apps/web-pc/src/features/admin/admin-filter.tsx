@@ -11,22 +11,33 @@ import { type FormEvent, useEffect, useState } from 'react'
 
 const ALL = '__all__'
 
-/** 枚举筛选：圆角胶囊一排；第一项恒为「全部」（URL 上省略该参数）。 */
-export function FilterChips({
+/**
+ * 枚举筛选：圆角胶囊一排；第一项恒为「全部」（URL 上省略该参数）。
+ *
+ * 泛型 `T` 是**契约枚举**（`AdminAuditAction` / `ReportReason` …）：`onChange` 因此直接收窄成
+ * `T | undefined`，调用点不必再写 `as`（`ALL` 哨兵值被排除在 `T` 之外，见下面的 `chips` 声明）。
+ */
+export function FilterChips<T extends string>({
   ariaLabel,
   onChange,
   options,
   value,
 }: {
   ariaLabel: string
-  onChange: (value: string | undefined) => void
-  options: ReadonlyArray<{ value: string; label: string }>
-  value: string | undefined
+  onChange: (value: T | undefined) => void
+  options: ReadonlyArray<{ value: T; label: string }>
+  value: T | undefined
 }) {
+  // 显式标注 `T | typeof ALL`：这样 `option.value === ALL` 的假分支会被收窄回 `T`，
+  // 而不是塌成 `string`（塌了就得在调用点补断言）。
+  const chips: ReadonlyArray<{ value: T | typeof ALL; label: string }> = [
+    { value: ALL, label: '全部' },
+    ...options,
+  ]
   return (
     <fieldset className="flex flex-wrap gap-2 border-0 p-0 m-0">
       <legend className="sr-only">{ariaLabel}</legend>
-      {[{ value: ALL, label: '全部' }, ...options].map((option) => {
+      {chips.map((option) => {
         const active = option.value === ALL ? value === undefined : option.value === value
         return (
           <button

@@ -12,7 +12,8 @@ import { ApiError } from '../../lib/api-client'
  * 一起带偏——本目录已经踩过一次：`useAdminOverview` 被桩成无数据后，`admin-index-route.test.tsx`
  * 的概览页渲染崩在 `overview.totalUsers`）。这里改为用真实 hook + 预置 query 缓存的 error 态，
  * 让页面自己走到失败分支，断言「页面渲染出来是什么」。
- * `refetchOnMount: false` 保证不会真的发请求（页面 hooks 的 staleTime 为 0，否则挂载即重取）。
+ * `retryOnMount: false`（`retry: false` 只管重试次数）保证不会真的发请求：预置的是 error 态，
+ * 页面 hooks 的 staleTime 为 0，不关掉挂载重试就会在渲染时打一次网络。
  */
 
 void mock.module('@tanstack/react-router', () => ({

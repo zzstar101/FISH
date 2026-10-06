@@ -94,7 +94,7 @@ export function auditActionLabel(action: AdminAuditAction): string {
 
 /**
  * 详情页「最近管理操作」的入参。契约把 `recentAuditLogs[].action` 声明成 `z.string()`
- * （`admin/schema.ts` 的列表 DTO，与审计列表的 `AdminAuditActionSchema` 不同），
+ * （`admin/schema.ts` 的详情 DTO，与审计列表的 `AdminAuditActionSchema` 不同），
  * 所以这里在边界用契约 Schema 窄化一次：命中给中文标签，未命中（契约漂移）照实显示原文。
  */
 export function auditActionLabelOf(action: string): string {
