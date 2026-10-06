@@ -1,4 +1,8 @@
 import type {
+  RecommendationLifecycle,
+  RecommendationLifecycleHoursSummary,
+} from '@fish/contracts/admin/recommendation-metrics'
+import type {
   AdminAuditAction,
   AdminAuditTargetType,
   AdminListingStatusCount,
@@ -6,6 +10,7 @@ import type {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
+import { RANK_EVAL_RELEVANCE_GRADES } from '@fish/contracts/recommendation/eval'
 import { RECOMMENDATION_STRATEGY_VERSION_NONE } from '@fish/contracts/recommendation/schema'
 import type { Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
@@ -35,6 +40,18 @@ import { createdAtCursorText, cursorCondition } from './cursor'
  * - jsonb 列（审计的 before/after）用 typed builder 读 → 对象；写经 `jsonParam()` 避免
  *   bun-sql 双重 stringify（见 `@fish/db/json` 的实测说明）。
  */
+
+/**
+ * "有效意向"事件类型 = 离线评估里相关性分级 ≥ 2 的那几类（`RANK_EVAL_RELEVANCE_GRADES`）。
+ *
+ * 从契约的分级表**派生**而不是抄一份字面量：抄一份的话，以后给分级表加一个 2 分事件，
+ * 离线的 `firstPublishToFirstIntentHours` 会跟着变、线上同名指标却不会，两个指标静默漂移
+ * （`packages/contracts/src/recommendation/eval.ts` 里 `RANK_EVAL_NEGATIVE_EVENT_TYPES`
+ * 复用排序层常量是同一条理由）。
+ */
+const LIFECYCLE_INTENT_EVENT_TYPES = Object.entries(RANK_EVAL_RELEVANCE_GRADES)
+  .filter(([, grade]) => grade >= 2)
+  .map(([eventType]) => eventType)
 
 /** 与 profile/store.ts 相同的裸 SQL 行归一：`db.execute` 的返回形状是 `{ rows }`。 */
 function rowsOf(result: unknown): Record<string, unknown>[] {
@@ -116,6 +133,13 @@ export interface ModerationRecordRow {
   matchedRules: string[]
   matchedTermsMasked: string[]
   ruleVersion: string
+  /** #228 §6 的上游可追溯字段；#228 之前的历史行为 null。 */
+  provider: string | null
+  providerRequestId: string | null
+  suggestion: string | null
+  label: string | null
+  subLabel: string | null
+  score: number | null
   createdAt: Date
   createdAtCursor: string
 }
@@ -220,6 +244,12 @@ export interface RecommendationMetricsRow {
   top10SellerExposures: number
   /** 归因曝光中商品**当前** `status <> 'ACTIVE'`（SOLD / RESERVED / OFFLINE）的数量。 */
   staleListingExposures: number
+  /**
+   * 生命周期三项（M8）：窗口内归因事件 + 窗口内创建的商品。口径与离线评估
+   * `apps/worker/src/jobs/recommendation/eval.ts:470-512` 一致，见契约
+   * `@fish/contracts/admin/recommendation-metrics` 的 `RecommendationLifecycleSchema`。
+   */
+  lifecycle: RecommendationLifecycle
 }
 
 export type ListUsersCriteria = {
@@ -422,6 +452,16 @@ function jsonStringArray(value: unknown): string[] {
     : []
 }
 
+/**
+ * `score` 是 `double precision`：驱动正常给 number，但 NULL / 非有限值必须落成 null，
+ * 否则会被契约的 `z.number()` 判成非法响应（审计字段读不出来不该让整个队列 500）。
+ */
+function finiteNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function moderationRecordFromRow(row: Record<string, unknown>): ModerationRecordRow {
   return {
     id: String(row.id),
@@ -434,6 +474,12 @@ function moderationRecordFromRow(row: Record<string, unknown>): ModerationRecord
     matchedRules: jsonStringArray(row.matched_rules),
     matchedTermsMasked: jsonStringArray(row.matched_terms_masked),
     ruleVersion: String(row.rule_version),
+    provider: (row.provider as string | null) ?? null,
+    providerRequestId: (row.provider_request_id as string | null) ?? null,
+    suggestion: (row.suggestion as string | null) ?? null,
+    label: (row.label as string | null) ?? null,
+    subLabel: (row.sub_label as string | null) ?? null,
+    score: finiteNumberOrNull(row.score),
     createdAt: new Date(row.created_at as string | Date),
     createdAtCursor: String(row.created_at_cursor ?? row.created_at),
   }
@@ -732,6 +778,85 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
       const exposureRow = rowsOf(exposureResult)[0]
       if (!exposureRow) throw new Error('推荐曝光分布查询未返回行')
 
+      // 生命周期三项（M8）：与离线评估 job 同口径 —— 只认窗口内、带归因的事件（`request_id IS NOT NULL`）；
+      // 前两项只统计**窗口内创建**的商品；分位用 `percentile_disc`（最近秩、不插值），空集合出 NULL。
+      // 第三项 `exposuresBeforeSale` 的分母是"窗口内发生过成交的商品"（`first_purchase`），不是"成交前
+      // 有过曝光的商品"：零成交前曝光的成交商品必须计 **0** 进分布（离线 `eval.ts` 对同一类商品也是
+      // `push(0)`），否则两套口径的 count/median 不可比 —— 见下方 `exposures_before_sale`：
+      // 它以 `first_purchase` 为基表 LEFT JOIN，并用 `count(a.listing_id)`（只数非 NULL 行）而不是
+      // `count(*)` —— 后者会把 LEFT JOIN 补出来的那一行数成 1，把"零曝光"变成"曝光 1 次"。
+      const lifecycleResult = await db.execute(sql`
+        WITH attributed AS (
+          SELECT e.listing_id AS listing_id, e.event_type::text AS event_type, e.occurred_at AS occurred_at
+          FROM ${recommendationEvents} e
+          WHERE e.request_id IS NOT NULL
+            AND e.occurred_at >= ${since} AND e.occurred_at < ${until}
+        ),
+        first_exposure AS (
+          SELECT listing_id, min(occurred_at) AS first_at
+          FROM attributed WHERE event_type = 'IMPRESSION' GROUP BY listing_id
+        ),
+        first_intent AS (
+          SELECT listing_id, min(occurred_at) AS first_at
+          FROM attributed
+          WHERE event_type IN (${sql.join(
+            LIFECYCLE_INTENT_EVENT_TYPES.map((eventType) => sql`${eventType}`),
+            sql`, `,
+          )})
+          GROUP BY listing_id
+        ),
+        first_purchase AS (
+          SELECT listing_id, min(occurred_at) AS sold_at
+          FROM attributed WHERE event_type = 'PURCHASE' GROUP BY listing_id
+        ),
+        new_listing_exposure_hours AS (
+          SELECT (extract(epoch FROM (f.first_at - l.created_at)) / 3600.0)::float8 AS hours
+          FROM first_exposure f
+          JOIN ${listings} l ON l.id = f.listing_id
+          WHERE l.created_at >= ${since} AND l.created_at < ${until}
+        ),
+        new_listing_intent_hours AS (
+          SELECT (extract(epoch FROM (f.first_at - l.created_at)) / 3600.0)::float8 AS hours
+          FROM first_intent f
+          JOIN ${listings} l ON l.id = f.listing_id
+          WHERE l.created_at >= ${since} AND l.created_at < ${until}
+        ),
+        exposures_before_sale AS (
+          SELECT coalesce(count(a.listing_id), 0)::int AS exposures
+          FROM first_purchase p
+          LEFT JOIN attributed a ON a.listing_id = p.listing_id
+            AND a.event_type = 'IMPRESSION' AND a.occurred_at < p.sold_at
+          GROUP BY p.listing_id
+        )
+        SELECT
+          (SELECT count(*)::int FROM new_listing_exposure_hours)                       AS exposure_count,
+          (SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY hours)
+             FROM new_listing_exposure_hours)::float8                                  AS exposure_median,
+          (SELECT percentile_disc(0.9) WITHIN GROUP (ORDER BY hours)
+             FROM new_listing_exposure_hours)::float8                                  AS exposure_p90,
+          (SELECT count(*)::int FROM new_listing_intent_hours)                         AS intent_count,
+          (SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY hours)
+             FROM new_listing_intent_hours)::float8                                    AS intent_median,
+          (SELECT percentile_disc(0.9) WITHIN GROUP (ORDER BY hours)
+             FROM new_listing_intent_hours)::float8                                    AS intent_p90,
+          (SELECT count(*)::int FROM exposures_before_sale)                            AS before_sale_count,
+          (SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY exposures)
+             FROM exposures_before_sale)::float8                                       AS before_sale_median,
+          (SELECT percentile_disc(0.9) WITHIN GROUP (ORDER BY exposures)
+             FROM exposures_before_sale)::float8                                       AS before_sale_p90
+      `)
+      const lifecycleRow = rowsOf(lifecycleResult)[0]
+      if (!lifecycleRow) throw new Error('推荐生命周期查询未返回行')
+      const hoursSummary = (
+        count: unknown,
+        median: unknown,
+        p90: unknown,
+      ): RecommendationLifecycleHoursSummary => ({
+        count: Number(count),
+        median: median === null ? null : Number(median),
+        p90: p90 === null ? null : Number(p90),
+      })
+
       return {
         feedRequests: Number(requestRow.feed_requests),
         degradedFeedRequests: Number(requestRow.degraded_feed_requests),
@@ -744,6 +869,23 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         topSellerExposures: Number(exposureRow.top_seller_exposures),
         top10SellerExposures: Number(exposureRow.top10_seller_exposures),
         staleListingExposures: Number(exposureRow.stale_listing_exposures),
+        lifecycle: {
+          newListingTimeToFirstExposureHours: hoursSummary(
+            lifecycleRow.exposure_count,
+            lifecycleRow.exposure_median,
+            lifecycleRow.exposure_p90,
+          ),
+          firstPublishToFirstIntentHours: hoursSummary(
+            lifecycleRow.intent_count,
+            lifecycleRow.intent_median,
+            lifecycleRow.intent_p90,
+          ),
+          exposuresBeforeSale: hoursSummary(
+            lifecycleRow.before_sale_count,
+            lifecycleRow.before_sale_median,
+            lifecycleRow.before_sale_p90,
+          ),
+        },
       }
     },
 
@@ -818,6 +960,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
                l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
                l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
@@ -875,6 +1018,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
                l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
                l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
@@ -916,6 +1060,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor,
                l.id AS listing_id, l.title AS listing_title, l.description AS listing_description,
                l.status::text AS listing_status, l.moderation_status::text AS moderation_status,
@@ -934,6 +1079,7 @@ export function createSqlAdminStore(db: Db, moderation: ModerationStore): AdminS
         SELECT r.id, r.listing_id, r.seller_id, r.action,
                r.title_snapshot, r.description_snapshot, r.decision::text AS decision,
                r.matched_rules, r.matched_terms_masked, r.rule_version, r.created_at,
+               r.provider, r.provider_request_id, r.suggestion, r.label, r.sub_label, r.score,
                ${createdAtCursorText(sql`r.created_at`)} AS created_at_cursor
         FROM listing_moderation_records r
         WHERE r.listing_id = ${row.listing_id}

@@ -4,11 +4,12 @@ import type {
   TransactionStatus,
 } from '@fish/contracts/transactions/schema'
 import { Badge } from '@fish/ui/badge'
+import { Button } from '@fish/ui/button'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Clock, ShoppingBag, Store } from 'lucide-react'
+import { ArrowRight, Clock, Loader2, ShoppingBag, Store } from 'lucide-react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatPrice, formatRelativeTimeAt } from '../../lib/format'
 import { useAuth } from '../auth/auth-provider'
@@ -54,6 +55,7 @@ function OrdersContent({
 }) {
   const navigate = useNavigate()
   const orders = useOrders(ownerId, role, status ?? 'ALL')
+  const items = orders.data?.pages.flatMap((page) => page.items) ?? []
 
   function updateSearch(nextRole: TransactionRole, nextStatus?: TransactionStatus) {
     void navigate({ to: '/orders', search: { role: nextRole, status: nextStatus } })
@@ -66,7 +68,7 @@ function OrdersContent({
           <h1 className="font-semibold text-[26px] tracking-[-0.03em]">我的订单</h1>
           <p className="mt-1.5 text-ink-3 text-sm">买卖订单由服务端按角色与状态筛选。</p>
         </div>
-        <p className="text-ink-3 text-xs">真实 API · 最多显示 50 条</p>
+        <p className="text-ink-3 text-xs">真实 API · 游标翻页</p>
       </div>
 
       <section className="flex items-center justify-between gap-5 rounded-2xl border border-line bg-surface p-3">
@@ -113,19 +115,36 @@ function OrdersContent({
       {orders.isError ? (
         <ErrorState message="订单加载失败" onRetry={() => void orders.refetch()} />
       ) : null}
-      {orders.isSuccess && orders.data.items.length === 0 ? (
+      {orders.isSuccess && items.length === 0 ? (
         <EmptyState
           description={role === 'buyer' ? '你还没有买入订单' : '你还没有卖出订单'}
           emoji="🧾"
           title="暂无订单"
         />
       ) : null}
-      {orders.data !== undefined && orders.data.items.length > 0 ? (
+      {items.length > 0 ? (
         <div className="grid grid-cols-2 gap-4">
-          {orders.data.items.map((order) => (
+          {items.map((order) => (
             <OrderCard order={order} key={order.id} />
           ))}
         </div>
+      ) : null}
+
+      {orders.hasNextPage ? (
+        <div className="flex justify-center">
+          <Button
+            disabled={orders.isFetchingNextPage}
+            onClick={() => void orders.fetchNextPage()}
+            variant="outline"
+          >
+            {orders.isFetchingNextPage ? <Loader2 className="size-4 animate-spin" /> : null}
+            {orders.isFetchingNextPage ? '正在加载…' : '加载更多'}
+          </Button>
+        </div>
+      ) : null}
+
+      {orders.isFetchNextPageError ? (
+        <ErrorState message="更多订单加载失败" onRetry={() => void orders.fetchNextPage()} />
       ) : null}
     </div>
   )

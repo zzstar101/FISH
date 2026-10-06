@@ -42,7 +42,11 @@ export const listingModerationRecords = pgTable(
     provider: text('provider'),
     /** 腾讯 `RequestId`（已过白名单形状校验）；本地与人工结论为 NULL。 */
     providerRequestId: text('provider_request_id'),
-    /** 腾讯 `Suggestion`（`Pass | Review | Block`）；本地与人工结论为 NULL。 */
+    /**
+     * `Pass | Review | Block`，含义随 `provider` 变化：`TENCENT_*` 是腾讯原始结论，
+     * `LOCAL` 由本地 `decision` 派生（见 `apps/api/src/modules/moderation/providers/local.ts`），
+     * 人工改判为 NULL。读之前必须先看 `provider`，不要一律当成腾讯结论。
+     */
     suggestion: text('suggestion'),
     label: text('label'),
     subLabel: text('sub_label'),

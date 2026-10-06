@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import type { ConversationDto, MediaMessageDto, MessageDto } from '@fish/contracts/chat/schema'
 import { clockTime, dayLabelOf } from '../src/lib/time'
 import {
+  applyMediaRecalled,
+  applyPresenceEvent,
   applyPresencePoll,
+  applyReadEvent,
   applyRecalled,
   beginSend,
   canRecallMessage,
@@ -17,11 +20,13 @@ import {
   isLatestPresencePoll,
   isStaleMediaIdentity,
   isStaleMediaTask,
+  keepRecalledMediaTombstones,
   keepRecalledTombstones,
   listingStatusText,
   localReplyExcerpt,
   MESSAGE_ACTION_LABEL,
   mergePushedMedia,
+  mergePushedMessage,
   mergeRefreshedMedia,
   mergeTimeline,
   messageActions,
@@ -192,6 +197,105 @@ describe('applyPresencePoll —— 在线态轮询只写在线态（#359 第五�
     expect(merged.listing.status).toBe('RESERVED')
     // 只有在线态取新值（这里恰好是同一份，重点是其余字段一个都没动）
     expect(merged.counterpartPresence).toEqual(stale.counterpartPresence)
+  })
+
+  test('轮询快照的在线态比屏幕上更旧时丢掉（推送刚点亮，不能被在途的旧快照灭回去）', () => {
+    // 推送把「刚刚活跃」推到 12:00；这一跳轮询的响应是 11:00 拍的
+    const current = dto({
+      counterpartPresence: { online: true, lastActiveAt: '2026-09-30T12:00:00.000Z' },
+    })
+    const stale = dto({
+      counterpartPresence: { online: false, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    })
+    expect(applyPresencePoll(current, stale)).toBe(current)
+  })
+
+  test('快照更新（含 TTL 过期后的同一时刻）时照常落地', () => {
+    const current = dto({
+      counterpartPresence: { online: true, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    })
+    const next = dto({
+      counterpartPresence: { online: false, lastActiveAt: '2026-09-30T12:00:00.000Z' },
+    })
+    expect(applyPresencePoll(current, next).counterpartPresence).toEqual(next.counterpartPresence)
+    // 时刻相同也必须采信：那正是「TTL 到期后 online 翻 false」的正常落点
+    const sameAt = dto({
+      counterpartPresence: { online: false, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    })
+    expect(applyPresencePoll(current, sameAt).counterpartPresence.online).toBe(false)
+  })
+})
+
+describe('applyReadEvent —— 实时推送的 conversation.read 落地', () => {
+  const dto = (counterpartLastReadAt: string | null): ConversationDto => ({
+    id: 'cnv_01jc000000e00800000000001a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    role: 'buyer',
+    listing: {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    counterpartPresence: { online: false, lastActiveAt: null },
+    unreadCount: 0,
+    counterpartLastReadAt,
+    lastMessage: null,
+    lastMessageAt: '2026-09-30T10:59:00.000Z',
+    createdAt: '2026-09-30T10:00:00.000Z',
+  })
+
+  test('推送推进对方的读位（「已读」标签翻绿）', () => {
+    const merged = applyReadEvent(dto(null), '2026-09-30T11:00:00.000Z')
+    expect(merged.counterpartLastReadAt).toBe('2026-09-30T11:00:00.000Z')
+  })
+
+  test('乱序的旧推送不把读位打回去（读位单调只前进）', () => {
+    const previous = dto('2026-09-30T12:00:00.000Z')
+    expect(applyReadEvent(previous, '2026-09-30T11:00:00.000Z')).toBe(previous)
+  })
+})
+
+describe('applyPresenceEvent —— 实时推送的 presence.changed 落地', () => {
+  const dto = (overrides: Partial<ConversationDto> = {}): ConversationDto => ({
+    id: 'cnv_01jc000000e00800000000001a',
+    listingId: 'lst_01jc000000e00800000000000t',
+    role: 'buyer',
+    listing: {
+      id: 'lst_01jc000000e00800000000000t',
+      title: '九成新自行车',
+      priceCents: 12000,
+      status: 'ACTIVE',
+      coverUrl: null,
+    },
+    counterpart: { id: 'usr_01jc000000e00800000000000b', nickname: '小林', avatarUrl: null },
+    counterpartPresence: { online: false, lastActiveAt: '2026-09-30T11:00:00.000Z' },
+    unreadCount: 0,
+    counterpartLastReadAt: null,
+    lastMessage: null,
+    lastMessageAt: '2026-09-30T10:59:00.000Z',
+    createdAt: '2026-09-30T10:00:00.000Z',
+    ...overrides,
+  })
+
+  test('对方上线：只写 counterpartPresence，其余字段不动', () => {
+    const presence = { online: true, lastActiveAt: '2026-09-30T12:00:00.000Z' }
+    const merged = applyPresenceEvent(dto(), 'usr_01jc000000e00800000000000b', presence)
+    expect(merged.counterpartPresence).toEqual(presence)
+    expect(merged.unreadCount).toBe(0)
+    expect(merged.listing.status).toBe('ACTIVE')
+  })
+
+  test('别的用户上线（不是本会话对方）：原样返回，不白重渲染', () => {
+    const previous = dto()
+    expect(
+      applyPresenceEvent(previous, 'usr_01jc000000e00800000000009z', {
+        online: true,
+        lastActiveAt: '2026-09-30T12:00:00.000Z',
+      }),
+    ).toBe(previous)
   })
 })
 
@@ -482,7 +586,55 @@ const picture = (id: string, createdAt: string): MediaMessageDto => ({
   width: 800,
   height: 600,
   durationMs: null,
+  recalledAt: null,
+  replyTo: null,
   createdAt,
+})
+
+describe('applyMediaRecalled —— 撤回落到媒体那条流（#359 3c 媒体侧）', () => {
+  test('目标那条清空 url 并落 recalledAt，其余不动', () => {
+    const items = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    const merged = applyMediaRecalled(items, 'm1', '2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    // 撤回后不再下发字节：url 必须清掉，否则渲染还会去下载
+    expect(merged[0]?.url).toBe('')
+    // 不改动入参数组
+    expect(items[0]?.recalledAt).toBeNull()
+  })
+
+  test('id 不在流里时逐条原样返回（文本消息的撤回落到媒体流上无害）', () => {
+    const items = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    expect(applyMediaRecalled(items, 'msg-other', '2026-09-21T10:00:30.000Z')).toBe(items)
+  })
+})
+
+describe('keepRecalledMediaTombstones —— 旧媒体快照不能把撤回碑写回正文', () => {
+  test('本地已落碑 + 快照说没撤回 → 保住碑（url 仍为空、撤回时刻保留）', () => {
+    const tombstone = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    const merged = keepRecalledMediaTombstones(
+      [tombstone],
+      [picture('m1', '2026-09-21T10:00:00.000Z')],
+    )
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.url).toBe('')
+  })
+
+  test('快照自己也带撤回时原样采信；没有本地撤回记录时不改任何一条', () => {
+    const recalled = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    expect(keepRecalledMediaTombstones([], [recalled])[0]?.recalledAt).toBe(
+      '2026-09-21T10:00:30.000Z',
+    )
+    const normal = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    expect(keepRecalledMediaTombstones([], normal)).toEqual(normal)
+  })
 })
 
 describe('mergeTimeline —— 文本与媒体合成一条升序时间线', () => {
@@ -538,6 +690,81 @@ describe('mergePushedMedia —— 实时推送的媒体并入媒体流（#67 第
       picture('a', '2026-09-21T10:00:00.000Z'),
     )
     expect(merged.map((item) => item.id)).toEqual(['a', 'b'])
+  })
+
+  test('同 id 但推送带撤回时前进成撤回碑（幂等重放会推回已撤回那一行）', () => {
+    const previous = [picture('m1', '2026-09-21T10:00:00.000Z')]
+    const recalled = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    const merged = mergePushedMedia(previous, recalled)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.url).toBe('')
+  })
+
+  test('本地已是撤回碑时，迟到的「未撤回」推送不许写回来', () => {
+    const tombstone = {
+      ...picture('m1', '2026-09-21T10:00:00.000Z'),
+      url: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    expect(mergePushedMedia([tombstone], picture('m1', '2026-09-21T10:00:00.000Z'))[0]).toBe(
+      tombstone,
+    )
+  })
+})
+
+describe('mergePushedMessage —— 实时推送的消息并入消息流', () => {
+  const text = (id: string, createdAt: string): MessageDto => ({
+    id,
+    conversationId: 'c-1',
+    senderId: 'u-2',
+    sender: { id: 'u-2', nickname: '小林', avatarUrl: null },
+    type: 'TEXT',
+    content: id,
+    recalledAt: null,
+    replyTo: null,
+    createdAt,
+  })
+
+  test('推送先于自己发送的 HTTP 响应到达时落一次，响应到了不再重复', () => {
+    // 服务端「先落库、再推送、再回 HTTP」：推送可能先到
+    const previous = [text('b', '2026-09-21T10:00:01.000Z')]
+    expect(
+      mergePushedMessage(previous, text('a', '2026-09-21T10:00:00.000Z')).map((i) => i.id),
+    ).toEqual(['a', 'b'])
+  })
+
+  test('同 id 的重复推送返回原数组本身（不白重渲染）', () => {
+    const previous = [text('a', '2026-09-21T10:00:00.000Z')]
+    expect(mergePushedMessage(previous, text('a', '2026-09-21T10:00:00.000Z'))).toBe(previous)
+  })
+
+  test('同 id 但推送带撤回时**前进**成撤回碑（不能按去重丢掉）', () => {
+    const previous = [text('a', '2026-09-21T10:00:00.000Z')]
+    const recalled = {
+      ...text('a', '2026-09-21T10:00:00.000Z'),
+      content: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    const merged = mergePushedMessage(previous, recalled)
+    expect(merged).toHaveLength(1)
+    expect(merged[0]?.recalledAt).toBe('2026-09-21T10:00:30.000Z')
+    expect(merged[0]?.content).toBe('')
+  })
+
+  test('本地已是撤回碑时，迟到的「未撤回」快照不许把正文写回来', () => {
+    const tombstone = {
+      ...text('a', '2026-09-21T10:00:00.000Z'),
+      content: '',
+      recalledAt: '2026-09-21T10:00:30.000Z',
+    }
+    expect(mergePushedMessage([tombstone], text('a', '2026-09-21T10:00:00.000Z'))[0]).toBe(
+      tombstone,
+    )
   })
 })
 

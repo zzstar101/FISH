@@ -261,6 +261,23 @@ jobs:
         if: needs.changes.outputs.api == 'true'
         run: bun apps/api/scripts/media-smoke.ts
 
+      # #406 第 3 项：拍照识图离线评测腿的**通过门槛**。在这之前这一步不存在，于是
+      # "三路指标退化"从来没有任何 CI 会失败——脚本恒 exit 0，只有人肉读报告才能发现。
+      # 它不出网、不连库、不需要任何服务（判据见 apps/api/src/modules/visual-search/eval/gates.ts，
+      # 单测在 gates.test.ts）；放在 db-tests 只是因为改 apps/api 时这个 job 必定会跑
+      # （见 scripts/ci-changes.ts 的 `dbTests: api || worker || db`），不必再开一个 job。
+      - name: Visual search eval gates
+        if: needs.changes.outputs.api == 'true'
+        run: bun run visual:eval
+
+      # #406 第 3 项点名的脚本是**两个**：上面那条是离线门槛（纯函数、不出网、不连库），
+      # 这条是 DB 端到端腿（scratch 库 + MinIO + 真跑 provider，传输用 stub）。它自带 `assert`
+      # 与 `process.exitCode = 1`，所以断言失败在 CI 里会真的红。放在 `Migrate` 之后：
+      # 它需要一个已迁移的库来建自己的 scratch 库；MinIO 的启动与建桶已由上面的步骤完成。
+      - name: Visual search eval (db leg)
+        if: needs.changes.outputs.api == 'true'
+        run: bun run visual:eval:db
+
       # 只跑本次受影响的工作区；`--isolate` 与全量跑时一致（逐文件独立进程）。
       - name: Test
         run: |
@@ -300,7 +317,13 @@ jobs:
           if [ "${{ needs.changes.outputs.miniapp }}" = "true" ]; then targets+=(apps/miniapp); fi
           if [ "${{ needs.changes.outputs.contracts }}" = "true" ]; then targets+=(packages/contracts); fi
           if [ "${{ needs.changes.outputs.shared }}" = "true" ]; then targets+=(packages/shared); fi
-          if [ "${{ needs.changes.outputs.full }}" = "true" ]; then targets+=(scripts); fi
+          # 必须是 `./scripts`（带 `./`），不能写成裸 `scripts`：`bun test <位置参数>` 是按
+          # **文件路径子串**匹配的，裸 `scripts` 会连 `apps/worker/scripts/**`、`packages/db/scripts/**`
+          # 一起收进来 —— 那些是**要 Postgres 的集成测试**（本 job 没有 DB service），main 上全量跑时
+          # 会以 `PostgresError: Failed to connect` 红掉（#457 引入 `apps/worker/scripts/obs-summary.test.ts`
+          # 后暴露）。带 `./` 时 bun 按目录解析，只跑仓库根的 `scripts/`。
+          # 那些 `apps/*/scripts` 的用例由 `db-tests`（目标含 `apps/worker` / `packages/db`，有 DB）覆盖。
+          if [ "${{ needs.changes.outputs.full }}" = "true" ]; then targets+=(./scripts); fi
           if [ "${#targets[@]}" -eq 0 ]; then
             echo "::error::unit_tests 为真却没有任何测试目录，改动范围计算有问题" >&2
             exit 1

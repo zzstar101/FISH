@@ -1,12 +1,19 @@
 import { afterAll, expect, test } from 'bun:test'
 import { createDb, type Db } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
+import { jsonParam } from '@fish/db/json'
 import type { JobType } from '@fish/db/schema/jobs'
 import { jobs } from '@fish/db/schema/jobs'
 import { DrizzleQueryError, sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { logErrorEvent } from '../log'
-import { createJobQueue, DEFAULT_MAX_ATTEMPTS, parseJobPayload, STALE_CLAIM_ERROR } from './queue'
+import {
+  createJobQueue,
+  DEFAULT_MAX_ATTEMPTS,
+  parseJobPayload,
+  STALE_CLAIM_ERROR,
+  SUPERSEDED_BY_PENDING_ERROR,
+} from './queue'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -264,7 +271,7 @@ test('未知 job 类型直接 FAILED', async () => {
  * 断言也因此可以要求精确条数。
  */
 async function withRunningJob(
-  options: { attempts: number },
+  options: { attempts: number; payload?: Record<string, unknown> },
   run: (jobId: string, queue: ReturnType<typeof createJobQueue>, isolated: Db) => Promise<void>,
 ): Promise<void> {
   const isolated = await scratchDb()
@@ -272,7 +279,10 @@ async function withRunningJob(
   await isolated.insert(jobs).values({
     id: jobId,
     type: 'MATCH_LISTING',
-    payload: { listingId: newId() },
+    // `jsonParam` 不能省：裸对象会被 drizzle + bun-sql stringify 两次，落库成 jsonb **字符串**，
+    // 于是 `payload->>'listingId'` 为 NULL，6 条 partial unique index 的键也全是 NULL——
+    // 索引形同不存在，让位/冲突类用例会假绿（见 `packages/db/src/json.ts`）。
+    payload: jsonParam(options.payload ?? { listingId: newId() }),
     // 模拟"被领取后进程死掉"：RUNNING + locked_at 有值。
     status: 'RUNNING',
     attempts: options.attempts,
@@ -375,4 +385,96 @@ test('启动回收只动 RUNNING 行，不碰 PENDING / DONE', async () => {
   } finally {
     await isolated.delete(jobs).where(sql`${jobs.id} = ${pendingId} or ${jobs.id} = ${doneId}`)
   }
+})
+
+/**
+ * 让位（supersede）：partial unique index 只允许同一实体有一条 `PENDING` 行，而"job 正在
+ * `RUNNING` 时又被投递一条同实体 `PENDING`"是**合法**的——`claimNext` 只认 `PENDING`，投递侧的
+ * `ON CONFLICT … DO UPDATE` 谓词也只看 `PENDING`。此后那条 `RUNNING` 行如果再被写回 `PENDING`
+ * （handler 失败重试 / 启动回收），就会撞 `jobs_match_listing_listing_id_pending_uidx`。
+ *
+ * 修复前这两条用例都会抛 23505：`DrizzleQueryError: Failed query … duplicate key value violates
+ * unique constraint "jobs_match_listing_listing_id_pending_uidx"`。第一条把 worker 主循环打死，
+ * 第二条把 `index.ts` 的顶层 `await recoverStaleClaims()` 打死（重启也起不来，不自愈）。
+ */
+test('handler 失败回退时同实体已有 PENDING 行：让位成 FAILED，不抛 23505', async () => {
+  const isolated = await scratchDb()
+  const listingId = newId()
+  const jobId = newId()
+  let pendingId = ''
+
+  const queue = createJobQueue(isolated, {
+    handlers: {
+      MATCH_LISTING: async () => {
+        // 复现真实交错：job 已经被领走（RUNNING），编辑侧这时才投递同实体的 PENDING 行。
+        pendingId = newId()
+        await isolated.insert(jobs).values({
+          id: pendingId,
+          type: 'MATCH_LISTING',
+          payload: jsonParam({ listingId }),
+          runAt: new Date('2000-01-01T00:00:00Z'),
+        })
+        throw new Error('boom')
+      },
+    },
+    maxAttempts: DEFAULT_MAX_ATTEMPTS,
+  })
+  await isolated.insert(jobs).values({
+    id: jobId,
+    type: 'MATCH_LISTING',
+    payload: jsonParam({ listingId }),
+    runAt: new Date('2000-01-01T00:00:00Z'),
+  })
+
+  try {
+    const outcome = await queue.runOnce()
+    expect(outcome).toMatchObject({
+      id: jobId,
+      status: 'FAILED',
+      // 让位原因在前，handler 的原始错误保留在后当证据（`last_error` 只有一列，二者拼在一起）。
+      lastError: `${SUPERSEDED_BY_PENDING_ERROR}: Error: boom`,
+    })
+    // 库里与日志同口径：这条行终态化的原因是让位，但 handler 的 `boom` 不会被丢掉。
+    expect(await jobRow(jobId, isolated)).toMatchObject({
+      status: 'FAILED',
+      lastError: `${SUPERSEDED_BY_PENDING_ERROR}: Error: boom`,
+      lockedAt: null,
+    })
+    // 已经在排队的那条必须原样留着——让位的前提就是它会替这一条把重算跑掉。
+    expect(await jobRow(pendingId, isolated)).toMatchObject({ status: 'PENDING' })
+  } finally {
+    await isolated.delete(jobs).where(sql`${jobs.id} = ${jobId} or ${jobs.id} = ${pendingId}`)
+  }
+})
+
+test('启动回收时同实体已有 PENDING 行：僵死行让位成 FAILED，不抛 23505', async () => {
+  const listingId = newId()
+  let pendingId = ''
+
+  await withRunningJob({ attempts: 1, payload: { listingId } }, async (jobId, queue, isolated) => {
+    pendingId = newId()
+    await isolated.insert(jobs).values({
+      id: pendingId,
+      type: 'MATCH_LISTING',
+      payload: jsonParam({ listingId }),
+      runAt: new Date('2000-01-01T00:00:00Z'),
+    })
+
+    try {
+      // 修复前：回退语句在同一事务里撞 23505，事务中止并冒泡到 `index.ts:218` 的顶层 await。
+      expect(await queue.recoverStaleClaims()).toEqual({
+        requeued: 0,
+        failed: 1,
+        failedIds: [jobId],
+      })
+      expect(await jobRow(jobId, isolated)).toMatchObject({
+        status: 'FAILED',
+        lastError: SUPERSEDED_BY_PENDING_ERROR,
+        lockedAt: null,
+      })
+      expect(await jobRow(pendingId, isolated)).toMatchObject({ status: 'PENDING' })
+    } finally {
+      await isolated.delete(jobs).where(sql`${jobs.id} = ${pendingId}`)
+    }
+  })
 })

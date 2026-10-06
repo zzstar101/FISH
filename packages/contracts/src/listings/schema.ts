@@ -194,6 +194,19 @@ export const ListingCardSchema = z.object({
   coverUrl: z.url().nullable(),
   createdAt: z.iso.datetime(),
   /**
+   * 「想要数」= **与该商品已建立会话的买家数**（#74 的来源冻结 + Owner 2026-10-04 拍板：
+   * 商品卡上的「N 人想要」就取这个口径）。与 `GET /listings/:id/watchers` 的 `total`
+   * **同源同义**——一个是计数、一个是名单，定义都在 `docs/design/issue-74-watchers-definition.md`。
+   *
+   * 为什么**必填且非空**：这个数在库里恒可算（`conversations` 按 `listing_id` 计数），
+   * 不存在「暂时取不到」。写成可空会让 `null` 与真实的 0（确实还没人开过会话）在页面上
+   * 长得一样——那正是 #192 之前两个计数整块画不出来、卖家侧只能显示一个恒 0 的原因。
+   *
+   * 与 `wishes` 域的 `wantCount` **不是一回事**：那个是愿望池里想要某类东西的人数。
+   * `views` 仍然没有来源（#192 未决），不在本字段范围内。
+   */
+  wants: z.number().int().nonnegative(),
+  /**
    * 卡片内嵌的卖家公开子集（#191），与详情的 `seller`（`ListingSellerSchema`）**同一口径**：
    * 只有 `id / nickname / avatarUrl / authStatus` 四个公开字段——教育邮箱、学号、手机号、
    * role、密码与微信平台标识一律不进列表投影（#122 的「不泄漏靠没查」同一取向），

@@ -77,6 +77,11 @@ function metricsRow(overrides: Partial<RecommendationMetricsRow> = {}): Recommen
     topSellerExposures: 0,
     top10SellerExposures: 0,
     staleListingExposures: 0,
+    lifecycle: {
+      newListingTimeToFirstExposureHours: { count: 0, median: null, p90: null },
+      firstPublishToFirstIntentHours: { count: 0, median: null, p90: null },
+      exposuresBeforeSale: { count: 0, median: null, p90: null },
+    },
     ...overrides,
   }
 }
@@ -140,6 +145,12 @@ test('空窗口：计数全 0、所有比率 null（分母 0 不是"差到 0"）
     eventWriteFailureRate: null,
     rateLimitedRequests: 0,
   })
+  // 生命周期三项：空样本 `{ count: 0, median: null, p90: null }`。
+  expect(metrics.lifecycle).toEqual({
+    newListingTimeToFirstExposureHours: { count: 0, median: null, p90: null },
+    firstPublishToFirstIntentHours: { count: 0, median: null, p90: null },
+    exposuresBeforeSale: { count: 0, median: null, p90: null },
+  })
 })
 
 test('窗口档位换算成左闭右开区间，生成时刻取自注入时钟', async () => {
@@ -189,6 +200,18 @@ test('漏斗比率按带归因事件算，窗口内缺席的事件类型按 0', 
     chatToTransactionRate: 0.4,
     transactionToPurchaseRate: 0.5,
   })
+})
+
+test('生命周期三项原样透出（口径在 store 的 SQL 里，service 不做二次加工）', async () => {
+  const lifecycle = {
+    newListingTimeToFirstExposureHours: { count: 3, median: 3, p90: 4 },
+    firstPublishToFirstIntentHours: { count: 2, median: 3.5, p90: 4 },
+    exposuresBeforeSale: { count: 2, median: 1, p90: 2 },
+  }
+  const { service } = metricsService(metricsRow({ lifecycle }))
+  const metrics = await service.getRecommendationMetrics({ window: '24h' })
+
+  expect(metrics.lifecycle).toEqual(lifecycle)
 })
 
 test('guardrail：空快照率 / 重复曝光率 / 卖家集中度 / 陈旧曝光率', async () => {

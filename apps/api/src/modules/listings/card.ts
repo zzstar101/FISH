@@ -43,6 +43,15 @@ export type ListingCardSource = {
    * （`users` 无注销类列，`seller_id` 外键保证行存在），见契约注释。
    */
   seller: ListingCardSeller
+  /**
+   * 「想要数」= 与该商品已建立会话的买家数（口径见契约 `ListingCardSchema.wants` 与
+   * `docs/design/issue-74-watchers-definition.md`）。
+   *
+   * 与 `seller` 同一取舍：由各读路径的**主查询**带出来（`@fish/db/listing-wants` 的
+   * `listingWantsCount`），不在映射层补查 —— 否则一页 50 张卡就是 50 次往返。
+   * 因此本字段是**必填**：`0` 与「没查」在这里是两种不同的事实，让后者编译期就过不去。
+   */
+  wants: number
 }
 /**
  * 决策 C（Issue #6）：读响应校验失败**不 500**，记日志后跳过该条——一条脏数据不该让整个列表打不开。
@@ -76,6 +85,7 @@ export function toListingCard(
     free: listing.free,
     coverUrl: coverObjectKey ? storage.publicUrl(coverObjectKey) : null,
     createdAt: listing.createdAt.toISOString(),
+    wants: listing.wants,
     // 卖家公开子集（#191）：与详情的 `toSeller` 同一口径——公开 id 前缀 usr_、
     // 头像经 `publicAvatarUrl`（库里的历史脏值降级 null，不让一个脏头像打挂整页）。
     seller: {

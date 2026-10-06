@@ -46,6 +46,8 @@ type ItemSpec = {
   sellerId?: string
   category?: ListingCategory
   primarySource?: RecallChannel
+  /** 命中多个通道时用（M6 的 `wish` 豁免看的是整个 `recallSources`，不只是 primary）。 */
+  recallSources?: RecallChannel[]
 }
 
 function scored(spec: ItemSpec): ScoredCandidate {
@@ -53,7 +55,7 @@ function scored(spec: ItemSpec): ScoredCandidate {
     listingId: spec.listingId,
     sellerId: spec.sellerId ?? `seller-${spec.listingId}`,
     category: spec.category ?? 'DIGITAL',
-    recallSources: [spec.primarySource ?? 'fresh'],
+    recallSources: spec.recallSources ?? [spec.primarySource ?? 'fresh'],
     semanticScore: null,
     wishScore: null,
     popularity: null,
@@ -119,6 +121,7 @@ describe('基本形状', () => {
     expect(summary).toEqual({
       inputCount: 4,
       droppedHidden: 0,
+      droppedCooldown: 0,
       droppedOverflow: 2,
       relaxations: { seller: 0, category: 0, explore: 0 },
     })
@@ -186,6 +189,7 @@ describe('基本形状', () => {
     expect(summary).toEqual({
       inputCount: 0,
       droppedHidden: 0,
+      droppedCooldown: 0,
       droppedOverflow: 0,
       relaxations: { seller: 0, category: 0, explore: 0 },
     })
@@ -400,5 +404,96 @@ describe('松弛只计"确实卡住"的约束', () => {
       summary.relaxations.seller + summary.relaxations.category + summary.relaxations.explore
     expect(total).toBeGreaterThan(0)
     expect(summary.droppedOverflow).toBe(0)
+  })
+})
+
+describe('重复曝光冷却（M6）', () => {
+  test('冷却集合里的候选被剔除，且与 `droppedHidden` 分开计数', () => {
+    const pool = [
+      scored({ listingId: 'a', rankScore: 3 }),
+      scored({ listingId: 'cooling', rankScore: 2 }),
+      scored({ listingId: 'hidden', rankScore: 1.5 }),
+      scored({ listingId: 'b', rankScore: 1 }),
+    ]
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: new Set(['hidden']),
+      cooldownListingIds: new Set(['cooling']),
+      seed: 's',
+      limit: 10,
+    })
+
+    expect(ids(items)).toEqual(['a', 'b'])
+    expect(summary.droppedCooldown).toBe(1)
+    expect(summary.droppedHidden).toBe(1)
+  })
+
+  test('命中 `wish` 召回通道的候选豁免冷却（M6「Wish 命中时允许重新进入」）', () => {
+    const pool = [
+      scored({ listingId: 'wished', rankScore: 2, recallSources: ['fresh', 'wish'] }),
+      scored({ listingId: 'plain', rankScore: 1 }),
+    ]
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      // 两条都在冷却名单里，但 `wished` 的召回通道里有 wish ⇒ 只有 `plain` 被剔。
+      cooldownListingIds: new Set(['wished', 'plain']),
+      seed: 's',
+      limit: 10,
+    })
+
+    expect(ids(items)).toEqual(['wished'])
+    expect(summary.droppedCooldown).toBe(1)
+  })
+
+  test('缺省不传冷却集合 = 空集（调用方 fail-open 的语义）', () => {
+    const pool = ['a', 'b'].map((id, index) => scored({ listingId: id, rankScore: 2 - index }))
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      seed: 's',
+      limit: 10,
+    })
+
+    expect(ids(items)).toEqual(['a', 'b'])
+    expect(summary.droppedCooldown).toBe(0)
+  })
+
+  test('全部候选都在冷却集 → 本次不冷却：Feed 不为空、`droppedCooldown` 记 0、顺序与不冷却一致', () => {
+    const pool = ['a', 'b', 'c'].map((id, index) => scored({ listingId: id, rankScore: 3 - index }))
+    const baseline = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      seed: 's',
+      limit: 10,
+    })
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      cooldownListingIds: new Set(['a', 'b', 'c']),
+      seed: 's',
+      limit: 10,
+    })
+
+    // 兜底的方向与 service 的 fail-open 一致：宁可多曝光，也不产出空 Feed —— 服务端一旦写出
+    // 0 快照行的 ranked 请求，admin 的 `emptyRankedFeedRate` 就把它算成一次线上故障。
+    expect(ids(items)).toEqual(['a', 'b', 'c'])
+    expect(ids(items)).toEqual(ids(baseline.items))
+    expect(summary.droppedCooldown).toBe(0)
+    expect(summary.inputCount).toBe(3)
+  })
+
+  test('冷却只是剔掉一部分时仍然正常剔除（兜底不吞掉有效冷却）', () => {
+    const pool = ['a', 'b'].map((id, index) => scored({ listingId: id, rankScore: 2 - index }))
+    const { items, summary } = rerankCandidates({
+      scored: pool,
+      hiddenListingIds: NO_HIDDEN,
+      cooldownListingIds: new Set(['b']),
+      seed: 's',
+      limit: 10,
+    })
+
+    expect(ids(items)).toEqual(['a'])
+    expect(summary.droppedCooldown).toBe(1)
   })
 })

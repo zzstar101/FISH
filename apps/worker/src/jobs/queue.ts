@@ -1,5 +1,6 @@
 import type { Db } from '@fish/db/client'
-import { sql } from 'drizzle-orm'
+import type { JobType } from '@fish/db/schema/jobs'
+import { type SQL, sql } from 'drizzle-orm'
 import { errorMessage } from '../log'
 
 /**
@@ -14,6 +15,15 @@ export const DEFAULT_MAX_ATTEMPTS = 3
 
 /** `recoverStaleClaims()` 写进 `last_error` 的原因，用来和业务失败区分开。 */
 export const STALE_CLAIM_ERROR = 'worker restarted while running'
+
+/**
+ * 让位原因：同实体已经有一条 `PENDING` 行在排队，这条行再回到 `PENDING` 会撞 partial unique
+ * index（23505）。它的重算由那条 `PENDING` 覆盖，所以这条行直接终态化成 `FAILED`。
+ *
+ * 与 `STALE_CLAIM_ERROR` 分开：那个说明"进程死了"，这个说明"这条行已经没有必要再跑一次"。
+ * 写进 `last_error` 时后面会拼上这行上一次的失败原因（见 `supersededReason()`）。
+ */
+export const SUPERSEDED_BY_PENDING_ERROR = 'superseded by a pending job for the same entity'
 
 export type ClaimedJob = { id: string; type: string; payload: unknown; attempts: number }
 
@@ -66,14 +76,20 @@ export type JobHandlerTable = Record<string, (payload: unknown) => Promise<unkno
 export type RecoveredClaims = {
   /** 回到 `PENDING`、会被重新领取的条数。 */
   requeued: number
-  /** `attempts` 已达上限、直接置 `FAILED` 的条数。 */
+  /**
+   * 被回收直接置 `FAILED` 的条数：`attempts` 已达上限的，加上"同实体已有 `PENDING` 行、让位成
+   * `FAILED`"的。两者都终结这一行，原因由 `last_error` 区分。
+   */
   failed: number
   /**
    * 被直接置 `FAILED` 的行 id（与 `failed` 同序同长）。
    *
+   * 顺序：先是 `attempts` 用尽的，然后是让位的。
+   *
    * 给调用方"对这些终结失败做点事后处理"用：`index.ts` 拿它去补投一条延迟的 `EMBED_*`
    * （见 `jobs/embedding/requeue.ts`）——没有这个列表，启动回收判死的行就和"3 次失败后无补投"
-   * 一样没人管，而这两条路径产生的是同一种终态。
+   * 一样没人管，而这两条路径产生的是同一种终态。让位的行走到那里会被 `NOT EXISTS` 挡掉
+   * （同实体的 `PENDING` 已经存在），不会多投一条。
    */
   failedIds: string[]
 }
@@ -92,6 +108,86 @@ export type JobQueue = {
   /** 回收僵死领取（`RUNNING` 行分流）。**只在 worker 启动时调用一次。** */
   recoverStaleClaims(): Promise<RecoveredClaims>
 }
+
+/**
+ * 每个 `JobType` 的"同实体"键，必须与 `packages/db/src/schema/jobs.ts` 的 6 条 partial unique
+ * index 一一对应（那些索引的键都是单个 `payload->>'xxx'`）。
+ *
+ * 只用于一件事：判断"同实体是否已经有一条 `PENDING` 行"。漏掉一个类型，那个类型的让位判定就会
+ * 漏判，于是它的回退仍然撞 23505——本模块要堵的正是这个洞，所以这里用 `Record<JobType, …>`
+ * 让新增 `JobType` 时在编译期就报出来。
+ */
+const PENDING_DEDUPE_KEY: Record<JobType, string> = {
+  MATCH_LISTING: 'listingId',
+  MATCH_WISH: 'wishId',
+  EMBED_LISTING: 'listingId',
+  EMBED_WISH: 'wishId',
+  REFRESH_USER_INTEREST: 'userId',
+  VISUAL_EMBED_LISTING: 'listingId',
+}
+
+/**
+ * "另一行 `o` 与目标行 `j` 是同一实体的同类 job"。
+ *
+ * 表达式必须与那 6 条 partial unique index 的键**完全一致**：索引会不会拦、让位会不会命中，靠的
+ * 是同一个 `payload->>'xxx'`。两边一旦走偏，就会出现"索引拦得住但让位看不见"的死锁式 bug。
+ * （顺带一提：`payload` 必须是**真 jsonb 对象**才会有键——裸对象经 drizzle + bun-sql 会被
+ * stringify 两次、落成 jsonb 字符串，那时 `->>` 为 NULL，索引对那行也形同不存在，
+ * 见 `packages/db/src/json.ts` 的 `jsonParam`。）
+ *
+ * 键名走 `sql.raw`：`payload->>$n` 的 `text` / `integer` 两个重载在 bind 参数上有歧义
+ * （与 `jobs/embedding/requeue.ts:121` 同一取舍）；键名来自上面的固定映射表，没有注入面。
+ */
+function sameEntityPredicate(): SQL {
+  return sql.join(
+    Object.entries(PENDING_DEDUPE_KEY).map(
+      ([type, key]) =>
+        sql`(o.type = ${type} and ${sql.raw(`o.payload->>'${key}'`)} = ${sql.raw(
+          `j.payload->>'${key}'`,
+        )})`,
+    ),
+    sql` or `,
+  )
+}
+
+/**
+ * 23505 = `unique_violation`。
+ *
+ * drizzle 会把驱动错误包成 `DrizzleQueryError`，真正的 SQLSTATE 在 `cause` 链里（`bun-sql` 的
+ * `PostgresError` 用 `errno` 携带它，标准 pg 驱动用 `code`），所以两种都认、并且沿 `cause` 走。
+ * 与 `apps/api/src/modules/auth/unique.ts:8` 同一个判据，只是 worker 不跨包引 API 内部文件。
+ */
+function isUniqueViolation(error: unknown): boolean {
+  let current: unknown = error
+  for (let depth = 0; depth < 8 && current instanceof Error; depth += 1) {
+    if ('errno' in current && current.errno === '23505') return true
+    if ('code' in current && current.code === '23505') return true
+    current = current.cause
+  }
+  return false
+}
+
+/**
+ * 让位行写进 `last_error` 的值：先是让位原因，再**保留上一次的失败原因**当证据。
+ *
+ * 与 `recoverStaleClaims()` 回退分支"保留上一次失败原因"同一取舍：只写让位原因会把"这行上一次
+ * 为什么失败"的证据丢掉，而那个原因恰恰是排障时要看的。SQL 侧按同样格式拼
+ * （`${SUPERSEDED_BY_PENDING_ERROR} || coalesce(': ' || last_error, '')`）。
+ */
+function supersededReason(previous: string | null): string {
+  return previous === null || previous === ''
+    ? SUPERSEDED_BY_PENDING_ERROR
+    : `${SUPERSEDED_BY_PENDING_ERROR}: ${previous}`
+}
+
+/**
+ * `recoverStaleClaims()` 撞 23505 时的重试次数。
+ *
+ * 让位语句与回退语句之间有一段极窄的竞态：投递侧可能正好在这两条语句之间提交一条同实体
+ * `PENDING`。那时回退照样撞索引，但**下一轮**的让位语句就能看到那条 `PENDING` 并收敛，所以有界
+ * 重试足够。重试用尽仍然失败说明是真问题（例如迁移没跑、索引不存在），按原样抛出去，不吞。
+ */
+const RECOVER_CONFLICT_ATTEMPTS = 3
 
 export function createJobQueue(
   db: Db,
@@ -131,22 +227,46 @@ export function createJobQueue(
     }
   }
 
+  /**
+   * 结算一行 job，返回**实际生效**的状态与 `last_error`。
+   *
+   * 与传入值只会在一种情况下不同：回退到 `PENDING` 时同实体已经有 `PENDING` 行（23505）——这时
+   * 这行改成 `FAILED` 让位，状态随之变成 `'FAILED'`（见下面的注释）。
+   */
   async function settle(
     id: string,
     status: 'DONE' | 'FAILED' | 'PENDING',
     lastError: string | null,
-  ): Promise<void> {
+  ): Promise<{ status: 'DONE' | 'FAILED' | 'PENDING'; lastError: string | null }> {
     // 重试不引入退避：`run_at = now()` 让下一次轮询立刻再试（契约 §3.6）。
     // `locked_at` 必须清空：它表示"正被某个 worker 持有"，结算后这行已经不再被持有；
     // 留着会让僵死行的判读（以及任何按 locked_at 的观测）失真。
     // raw SQL 绕过 drizzle 的 `$onUpdate`，所以 `updated_at` 必须自己写，否则这一行的
     // `updated_at` 会停在“被领取前”（与 `schema/common.ts` 的“app 侧维护”约定不一致）。
-    await db.execute(sql`
-      UPDATE jobs
-      SET status = ${status}, last_error = ${lastError}, run_at = now(), locked_at = NULL,
-          updated_at = now()
-      WHERE id = ${id}
-    `)
+    try {
+      await db.execute(sql`
+        UPDATE jobs
+        SET status = ${status}, last_error = ${lastError}, run_at = now(), locked_at = NULL,
+            updated_at = now()
+        WHERE id = ${id}
+      `)
+      return { status, lastError }
+    } catch (error) {
+      // 回退到 `PENDING` 会撞 6 条 partial unique index 里的一条：`claimNext` 把行置成 `RUNNING`
+      // 之后，投递侧照样可以合法地插一条同实体 `PENDING`（索引只覆盖 `PENDING` 的行，`claimNext`
+      // 也只看 `PENDING` 的行）。这条行的重算已经由那条 `PENDING` 覆盖，而硬回退会抛 23505——
+      // 异常会从 `runOnce` 冒到 `index.ts` 的主循环，整个 worker 停摆。
+      // 所以让位：这行终态化成 `FAILED`，`last_error` 记让位原因 + 保留 handler 的原始错误。
+      if (status !== 'PENDING' || !isUniqueViolation(error)) throw error
+      const superseded = supersededReason(lastError)
+      await db.execute(sql`
+        UPDATE jobs
+        SET status = 'FAILED', last_error = ${superseded}, run_at = now(),
+            locked_at = NULL, updated_at = now()
+        WHERE id = ${id}
+      `)
+      return { status: 'FAILED', lastError: superseded }
+    }
   }
 
   /**
@@ -167,37 +287,66 @@ export function createJobQueue(
    * 时 `settle()` 会覆盖它，而排掉了旧的反而丢掉了“为什么第 1 次失败”的证据）；置 `FAILED` 时**改写**成
    * 本次回收的原因，因为那个原因才是该行终态的原因。两个分支都必须清 `locked_at`——行已经不被任何
    * worker 持有（与 `settle()` 同一不变式）。
+   *
+   * **让位**：`RUNNING` 行回到 `PENDING` 时同实体可能已经有一条 `PENDING`（job 被领走之后投递侧又
+   * 插了一条——`claimNext` 只看 `PENDING`，所以这完全合法），直接回退会撞 partial unique index
+   * （23505）。撞在启动路径上的后果特别重：`index.ts` 的顶层 `await recoverStaleClaims()` 没有
+   * try/catch，worker **每次重启都会死在启动那一刻**，只有人工删掉那条 `PENDING` 才能恢复。
+   * 所以回收先做一次让位：这类僵死行直接置 `FAILED`（重算交给那条 `PENDING`），再回退。
    */
   async function recoverStaleClaims(): Promise<RecoveredClaims> {
-    // 两条 UPDATE 放在同一事务里：否则第一条提交后、第二条执行前被别的领取者改成 RUNNING 的行
-    // 会被第二条按 `attempts >= max` 误判成 FAILED。
-    // 两条的谓词在同快照下不重叠：第一条带走 `attempts < max` 的 RUNNING 行，第二条只剩 `attempts >= max` 的。
+    // 三条 UPDATE 放在同一事务里：否则先提交的语句执行后、后一条执行前被别的领取者改成 RUNNING 的行
+    // 会被按 `attempts >= max` 误判成 FAILED。
+    // 谓词不重叠：让位带走"同实体已有 PENDING"的 RUNNING 行，回退带走剩下的 `attempts < max` 的，
+    // 最后一条只剩 `attempts >= max` 的（它写 FAILED，不碰唯一索引）。
     // raw SQL 绕过 `$onUpdate`，所以 `updated_at` 自己写（否则被回收过的行看不出被回收过）。
-    return db.transaction(async (tx) => {
-      const requeued = toRows(
-        await tx.execute(sql`
-          UPDATE jobs
-          SET status = 'PENDING', run_at = now(), locked_at = NULL, updated_at = now()
-          WHERE status = 'RUNNING' AND attempts < ${maxAttempts}
-          RETURNING id
-        `),
-      )
-      const failed = toRows(
-        await tx.execute(sql`
-          UPDATE jobs
-          SET status = 'FAILED', last_error = ${STALE_CLAIM_ERROR}, run_at = now(),
-              locked_at = NULL, updated_at = now()
-          WHERE status = 'RUNNING' AND attempts >= ${maxAttempts}
-          RETURNING id
-        `),
-      )
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await db.transaction(async (tx) => {
+          const superseded = toRows(
+            await tx.execute(sql`
+              UPDATE jobs AS j
+              SET status = 'FAILED',
+                  last_error = ${SUPERSEDED_BY_PENDING_ERROR} || coalesce(': ' || j.last_error, ''),
+                  run_at = now(), locked_at = NULL, updated_at = now()
+              WHERE j.status = 'RUNNING' AND j.attempts < ${maxAttempts}
+                AND EXISTS (
+                  SELECT 1 FROM jobs AS o
+                  WHERE o.status = 'PENDING' AND o.id <> j.id AND (${sameEntityPredicate()})
+                )
+              RETURNING j.id
+            `),
+          )
+          const requeued = toRows(
+            await tx.execute(sql`
+              UPDATE jobs
+              SET status = 'PENDING', run_at = now(), locked_at = NULL, updated_at = now()
+              WHERE status = 'RUNNING' AND attempts < ${maxAttempts}
+              RETURNING id
+            `),
+          )
+          const failed = toRows(
+            await tx.execute(sql`
+              UPDATE jobs
+              SET status = 'FAILED', last_error = ${STALE_CLAIM_ERROR}, run_at = now(),
+                  locked_at = NULL, updated_at = now()
+              WHERE status = 'RUNNING' AND attempts >= ${maxAttempts}
+              RETURNING id
+            `),
+          )
 
-      return {
-        requeued: requeued.length,
-        failed: failed.length,
-        failedIds: failed.map((row) => String(row.id)),
+          return {
+            requeued: requeued.length,
+            // 让位的行和 attempts 用尽的行都是"被回收直接置 FAILED"的同一终态，调用方不需要区分。
+            failed: failed.length + superseded.length,
+            failedIds: [...failed, ...superseded].map((row) => String(row.id)),
+          }
+        })
+      } catch (error) {
+        // 让位与回退之间投递侧提交了一条同实体 PENDING 时会照样撞索引：下一轮的让位就能看到它。
+        if (!isUniqueViolation(error) || attempt >= RECOVER_CONFLICT_ATTEMPTS) throw error
       }
-    })
+    }
   }
 
   return {
@@ -223,8 +372,10 @@ export function createJobQueue(
         const lastError =
           error instanceof Error ? `${error.name}: ${errorMessage(error)}` : errorMessage(error)
         const fatal = (deps.isFatalError?.(error) ?? false) || job.attempts >= maxAttempts
-        await settle(job.id, fatal ? 'FAILED' : 'PENDING', lastError)
-        return { id: job.id, type: job.type, status: fatal ? 'FAILED' : 'PENDING', lastError }
+        const requested = fatal ? 'FAILED' : 'PENDING'
+        const settled = await settle(job.id, requested, lastError)
+        // 让位时如实报告实际生效的状态与原因：库里写的是它，`job.settled` 日志里也必须是它。
+        return { id: job.id, type: job.type, status: settled.status, lastError: settled.lastError }
       }
     },
   }

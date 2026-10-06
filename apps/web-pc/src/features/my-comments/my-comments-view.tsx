@@ -7,6 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { ListingThumb } from '../../components/listing-thumb'
 import { formatRelativeTimeAt } from '../../lib/format'
+import { RATING_VIEW } from '../transaction-review/rating'
 
 /** 分段定义与顺序：kind 取值随 #405 冻结的契约枚举，页面只暴露留言/评价两段。 */
 export const MY_COMMENTS_SEGMENTS = [
@@ -35,15 +36,6 @@ export type MyCommentsViewProps = {
   onRetry: () => void
   onRetryNextPage: () => void
   onLoadMore: () => void
-}
-
-const RATING_VIEW: Record<
-  TransactionReviewItem['review']['rating'],
-  { label: string; variant: 'secondary' | 'warn' | 'success' }
-> = {
-  POSITIVE: { label: '好评', variant: 'success' },
-  NEUTRAL: { label: '中评', variant: 'secondary' },
-  NEGATIVE: { label: '差评', variant: 'warn' },
 }
 
 /** 留言行：整卡进它所在的商品详情（真实 `listingId`，不靠标题猜）。 */

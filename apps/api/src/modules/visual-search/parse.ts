@@ -83,6 +83,52 @@ function readMessageContent(payload: unknown): string | null {
 }
 
 /**
+ * 上游已知的**包装差异**：百炼 `qwen3-vl-plus` 在 `response_format: json_object` 下会把
+ * `text` 回成字符串**数组**（实测 `["EPSON","GD-420S","MADE IN TAIWAN"]`），
+ * 而契约里 `text` 是「图中识别到的完整文字」这**一个**字符串。
+ *
+ * 在校验**之前**只归一这一个字段，而不是把契约放宽成 `string | string[]`：
+ * 契约是所有调用方（客户端、M9 回放脚本、`visualTextQueryOf`）共用的形状，
+ * 不该为了一个上游怪癖让每个消费者都去处理数组。同理也不放宽 `strictObject`——
+ * 只认这一条有实测证据的差异，其余形状不符照样整段拒绝。
+ *
+ * 数组里的每一项 trim 后拼接（分隔符用单个空格：这些项本来就是被上游按行切开的同一段文字）；
+ * 非字符串项（`null` / 数字）与空白项一并丢弃。若一项都不剩，则**删掉这个字段**而不是给空串：
+ * 契约是 `min(1)`，「没识别出文字」的表示法就是"字段缺席"。
+ */
+function normalizeInterpretationPayload(payload: unknown): unknown {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return payload
+  const source = payload as Record<string, unknown>
+  if (!Array.isArray(source.text)) return payload
+
+  const parts = source.text
+  const kept = parts
+    .filter((part): part is string => typeof part === 'string')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+
+  // 丢弃时留一条**只说条数、不带内容**的日志：`text: [null, 42]` 这类上游怪癖必须与"图里本来
+  // 就没有文字"在日志里可区分（否则就是 #406 第 1 项抱怨的静默降级换了个地方发生）。
+  // 不带内容是因为这段文字来自用户上传的图，属于用户内容。
+  if (kept.length < parts.length) {
+    console.warn(
+      `[visual-search] 语义解析 text 数组丢弃 ${parts.length - kept.length}/${parts.length} 项（非字符串或空白）`,
+    )
+  }
+
+  const rest: Record<string, unknown> = { ...source }
+  delete rest.text
+  const text = kept.join(' ')
+
+  // 一项不剩**且没有其它字段**时返回原 payload（即整段校验失败 → `null`），而不是返回 `{}`：
+  // `{}` 能过 `strictObject`（字段全 optional），于是响应里的 `interpretation` 会从 `null`
+  // 变成一个"什么都识别到了但都是空"的对象——那是本次归一化引入的、客户端可见的行为变化，
+  // 且与"没识别出任何东西"的语义不符。有其它字段时照常返回（那时 `{}` 不是结果）。
+  if (text.length === 0 && Object.keys(rest).length === 0) return payload
+  return text.length > 0 ? { ...rest, text } : rest
+}
+
+/**
  * 从模型输出里取出解析结果。
  *
  * `response_format: json_object` 之下**不应该**有代码块围栏，但真实模型偶尔还是会加，
@@ -103,7 +149,7 @@ function parseInterpretation(content: string): VisualInterpretation | null {
     return null
   }
 
-  const parsed = VisualInterpretationSchema.safeParse(payload)
+  const parsed = VisualInterpretationSchema.safeParse(normalizeInterpretationPayload(payload))
   if (!parsed.success) {
     // 只记校验错误的形状：模型输出含用户图片里的文字，不能进日志。
     console.warn('[visual-search] 语义解析结果不符合契约', parsed.error.message)

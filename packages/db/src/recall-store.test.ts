@@ -6,6 +6,7 @@ import {
   countListingImpressions,
   findCategoryRecallCandidates,
   findExploreRecallCandidates,
+  findExposureHistory,
   findFreshRecallCandidates,
   findPopularRecallCandidates,
   findSemanticRecallCandidates,
@@ -653,6 +654,126 @@ describe('countListingImpressions', () => {
       identity: { kind: 'anonymous', id: session },
     })
     expect(anonymousRows).toEqual([{ listingId: listing.id, count: 1 }])
+  })
+})
+
+describe('findExposureHistory', () => {
+  /** 只传两个互动类型，用来证明"不在集合里的事件类型两个聚合都不计"。 */
+  const ENGAGEMENT = ['DETAIL_VIEW', 'FAVORITE'] as const
+
+  test('三类聚合：曝光次数、最后一次曝光时间、互动次数；不在集合里的类型不计', async () => {
+    const seller = await createUser()
+    const user = await createUser()
+    const listing = await createListing({ sellerId: seller })
+    const other = await createListing({ sellerId: seller })
+    const earlier = new Date('2026-01-15T10:00:00.000Z')
+    const later = new Date('2026-01-15T12:00:00.000Z')
+
+    await addEvent({
+      userId: user,
+      listingId: listing.id,
+      eventType: 'IMPRESSION',
+      occurredAt: earlier,
+    })
+    await addEvent({
+      userId: user,
+      listingId: listing.id,
+      eventType: 'IMPRESSION',
+      occurredAt: later,
+    })
+    await addEvent({
+      userId: user,
+      listingId: listing.id,
+      eventType: 'FAVORITE',
+      occurredAt: later,
+    })
+    // `QUICK_SKIP` 既不是 IMPRESSION 也不在 ENGAGEMENT 里 ⇒ 两个聚合都不该计（M6：划过 ≠ 点过）。
+    await addEvent({
+      userId: user,
+      listingId: listing.id,
+      eventType: 'QUICK_SKIP',
+      occurredAt: later,
+    })
+    // 另一件商品只有互动、没有曝光：`lastExposedAt` 必须是 null 而不是"被互动时间顶上来"。
+    await addEvent({
+      userId: user,
+      listingId: other.id,
+      eventType: 'DETAIL_VIEW',
+      occurredAt: later,
+    })
+
+    const rows = await findExposureHistory(db, {
+      listingIds: [listing.id, other.id],
+      identity: { kind: 'user', id: user },
+      engagementEventTypes: [...ENGAGEMENT],
+    })
+
+    const byListing = new Map(rows.map((row) => [row.listingId, row]))
+    expect(byListing.get(listing.id)).toEqual({
+      listingId: listing.id,
+      exposureCount: 2,
+      lastExposedAt: later,
+      engagedCount: 1,
+    })
+    expect(byListing.get(other.id)).toEqual({
+      listingId: other.id,
+      exposureCount: 0,
+      lastExposedAt: null,
+      engagedCount: 1,
+    })
+  })
+
+  test('身份隔离：匿名身份只算 `user_id` 为空的事件（同会话 id 的已登录事件归用户）', async () => {
+    const seller = await createUser()
+    const user = await createUser()
+    const listing = await createListing({ sellerId: seller })
+    const session = newId()
+    const now = new Date('2026-01-15T10:00:00.000Z')
+
+    await addEvent({
+      anonymousSessionId: session,
+      listingId: listing.id,
+      eventType: 'IMPRESSION',
+      occurredAt: now,
+    })
+    await addEvent({
+      anonymousSessionId: session,
+      listingId: listing.id,
+      eventType: 'IMPRESSION',
+      occurredAt: now,
+    })
+    await addEvent({
+      userId: user,
+      anonymousSessionId: session,
+      listingId: listing.id,
+      eventType: 'IMPRESSION',
+      occurredAt: now,
+    })
+
+    expect(
+      await findExposureHistory(db, {
+        listingIds: [listing.id],
+        identity: { kind: 'anonymous', id: session },
+        engagementEventTypes: [...ENGAGEMENT],
+      }),
+    ).toEqual([{ listingId: listing.id, exposureCount: 2, lastExposedAt: now, engagedCount: 0 }])
+    expect(
+      await findExposureHistory(db, {
+        listingIds: [listing.id],
+        identity: { kind: 'user', id: user },
+        engagementEventTypes: [...ENGAGEMENT],
+      }),
+    ).toEqual([{ listingId: listing.id, exposureCount: 1, lastExposedAt: now, engagedCount: 0 }])
+  })
+
+  test('空候选集直接返回空数组（不发查询）', async () => {
+    expect(
+      await findExposureHistory(db, {
+        listingIds: [],
+        identity: { kind: 'anonymous', id: newId() },
+        engagementEventTypes: [...ENGAGEMENT],
+      }),
+    ).toEqual([])
   })
 })
 

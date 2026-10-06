@@ -5,13 +5,16 @@ import {
   VISUAL_FRESHNESS_HALF_LIFE_DAYS,
   VISUAL_POPULARITY_SATURATION,
   VISUAL_RANKING_WEIGHTS,
+  VISUAL_RECALL_MIN_SIMILARITY,
   VISUAL_SEARCH_STRATEGY_VERSION,
   type VisualScoreBreakdown,
 } from '@fish/contracts/visual/ranking'
 import { VISUAL_SEARCH_SORTS, type VisualSearchSort } from '@fish/contracts/visual/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { VISUAL_EVAL_FIXTURE } from './eval/fixture'
 import {
   freshnessScore,
+  isAboveRecallFloor,
   orderVisualCandidates,
   popularityScore,
   scoreVisualCandidate,
@@ -46,6 +49,41 @@ describe('similarityFromCosineDistance', () => {
   test('非有限值按 0 处理（上游返回脏数据时不能污染排序）', () => {
     expect(similarityFromCosineDistance(Number.NaN)).toBe(0)
     expect(similarityFromCosineDistance(Number.POSITIVE_INFINITY)).toBe(0)
+  })
+})
+
+describe('isAboveRecallFloor（#406 第 6 项：召回相似度下限）', () => {
+  test('两路取更强的那一路：只有文本证据的候选不会被误杀', () => {
+    expect(isAboveRecallFloor({ visualScore: 0, textScore: 0.9 })).toBe(true)
+    expect(isAboveRecallFloor({ visualScore: 0.9, textScore: null })).toBe(true)
+    expect(isAboveRecallFloor({ visualScore: 0, textScore: null })).toBe(false)
+  })
+
+  test('边界取等号：恰好等于下限算召回（0.5 对应余弦正交，是"有共同方向"的下界）', () => {
+    expect(isAboveRecallFloor({ visualScore: VISUAL_RECALL_MIN_SIMILARITY, textScore: null })).toBe(
+      true,
+    )
+    expect(
+      isAboveRecallFloor({ visualScore: VISUAL_RECALL_MIN_SIMILARITY - 1e-9, textScore: null }),
+    ).toBe(false)
+  })
+
+  test('两路都低于下限就剔掉（0 分不等于"没有证据"）', () => {
+    expect(isAboveRecallFloor({ visualScore: 0.4, textScore: 0.3 })).toBe(false)
+  })
+
+  test('冻结 fixture 里没有一条人工判定相关的候选会被下限丢掉（回归护栏）', () => {
+    // `VISUAL_RECALL_MIN_SIMILARITY` 的取值是照这份分布定的（见契约文件里的注释）：
+    // 相关候选两路取更强的最低 0.60，不相关候选最高 0.96。谁把下限调高、
+    // 或把 fixture 里相关样本的相似度改低，这条用例会立刻红。
+    const dropped: string[] = []
+    for (const sample of VISUAL_EVAL_FIXTURE) {
+      for (const candidate of sample.candidates) {
+        if ((sample.relevance[candidate.listingId] ?? 0) < 1) continue
+        if (!isAboveRecallFloor(candidate)) dropped.push(`${sample.id}/${candidate.listingId}`)
+      }
+    }
+    expect(dropped).toEqual([])
   })
 })
 
@@ -179,6 +217,8 @@ function makeCard(seq: number, overrides: Partial<ListingCard> = {}): ListingCar
     coverUrl: null,
     createdAt: '2026-05-01T00:00:00.000Z',
     moderationStatus: null,
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0（排序不读它）。
+    wants: 0,
     ...overrides,
   }
 }

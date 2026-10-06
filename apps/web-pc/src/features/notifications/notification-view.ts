@@ -134,7 +134,8 @@ export function notificationTargetErrorMessage(target: NotificationTarget): stri
     case 'listing':
       return '目标商品已不存在，已留在通知列表'
     case 'wish':
-      return '许愿详情将在后续版本开放，已留在通知列表'
+      // `/wish/$wishId` 已上线（#446）；这句只在「预检发现愿望已删/不可见」时出现。
+      return '该愿望不存在或不可见，已留在通知列表'
     case 'conversation':
     case 'mylist':
     case 'none':

@@ -15,7 +15,20 @@
 // 与 live 考核覆盖。
 //
 // 因此本脚本：**不连数据库、不出网、不需要任何环境变量**，只打印 Markdown 报告，
-// **不设通过门槛**（只评估，不改生产行为，不因指标低而失败退出）。
+// 并且**设通过门槛**（#406 第 3 项）：第五节的判据决定退出码，指标退化会让 CI 真的红。
+// 门槛本身是纯函数（`eval/gates.ts`，另有单测喂退化输入证明它会红），阈值与实测值的关系
+// 写在那个文件的头注释里——改 fixture 或改权重必须同步复核。
+//
+// ## 本腿**不套**召回相似度下限（度量的是排序层，不是端到端 v2）
+//
+// 生产路径在召回之后先按 `VISUAL_RECALL_MIN_SIMILARITY`（#406 第 6 项）剔掉低于下限的候选，
+// 再进入本脚本度量的这一层；本脚本拿到的 fixture 候选是**未过滤**的池子。刻意如此：
+// fixture 的相似度是人工给定的，套上下限等于让"要不要召回"污染"排得好不好"这个结论，
+// 而 0.5 这个下限在两路取更强之后几乎剔不到东西（相关候选最低 0.60、不相关最高 0.96，
+// 分布重叠——见契约 `VISUAL_RECALL_MIN_SIMILARITY` 的注释），套与不套不改变三条路径的相对结论。
+// 代价写清楚：**本腿与第五节的门槛度量的是排序层**；下限本身由
+// `src/modules/visual-search/ranking.test.ts` 的表驱动用例（含冻结 fixture 的回归护栏）
+// 与 `service.test.ts` 的召回边界用例守着。
 //
 // 运行：bun run visual:eval
 //
@@ -43,6 +56,11 @@ import {
   REQUIRED_SCENARIOS,
   VISUAL_EVAL_FIXTURE,
 } from '../src/modules/visual-search/eval/fixture'
+import {
+  evaluateVisualEvalGates,
+  gatesExitCode,
+  type VisualEvalPathMetrics,
+} from '../src/modules/visual-search/eval/gates'
 import {
   emptyResultRate,
   latencyPercentile,
@@ -401,7 +419,8 @@ console.log(
     .join('、')}`,
 )
 console.log(
-  '- 相似度来源：**人工给定**（见 fixture 头注释）。本脚本不出网、不连数据库、不设通过门槛。',
+  '- 相似度来源：**人工给定**（见 fixture 头注释）。本脚本不出网、不连数据库；' +
+    '通过门槛与回执见第五节（#406 第 3 项，这一节决定退出码）。',
 )
 console.log('')
 
@@ -492,4 +511,62 @@ const selfCheck = {
 }
 if (selfCheck.emptyResultRate !== 0 || selfCheck.p95Latency !== 0) {
   console.log(`> 内部自检异常：${JSON.stringify(selfCheck)}`)
+}
+
+// ---------------------------------------------------------------------------
+// 五、通过门槛（#406 第 3 项）
+//
+// 判据与退出码都在 `src/modules/visual-search/eval/gates.ts`（纯函数
+// `evaluateVisualEvalGates` / `gatesExitCode`，另有单测喂退化输入证明它会红，并由源码守卫
+// 钉住本文件末尾那行接线）；这里只负责把本腿算出的指标喂进去、打印回执，
+// 再把 `gatesExitCode` 的结果接到 `process.exitCode` 上让 CI 真的失败。
+// 这一节以前不存在，于是"指标退化"从来没有任何人会失败——报告再难看也是 exit 0。
+//
+// 门槛算在**未过滤**的候选池上（本文件头部已写明取舍）：它钉的是排序层，不覆盖
+// `VISUAL_RECALL_MIN_SIMILARITY` 那条召回守卫。
+// ---------------------------------------------------------------------------
+
+const pathMetrics = Object.fromEntries(
+  PATHS.map((path) => [
+    path,
+    {
+      ...pathStats(path),
+      mrr: meanOf((outcome) => mrr(ids(outcome, path), outcome.sample.relevance)),
+      ndcgAt10: meanOf((outcome) => ndcgAtK(ids(outcome, path), outcome.sample.relevance, 10)),
+    } satisfies VisualEvalPathMetrics,
+  ]),
+) as Record<EvalPath, VisualEvalPathMetrics>
+
+const violations = evaluateVisualEvalGates({
+  sampleCount: OUTCOMES.length,
+  paths: pathMetrics,
+})
+
+console.log('')
+console.log('## 五、通过门槛（#406 第 3 项：这一节决定退出码）')
+console.log('')
+console.log('| 路 | MRR | NDCG@10 | 首选命中 | 排序倒置 |')
+console.log('| --- | --- | --- | --- | --- |')
+for (const path of PATHS) {
+  const metrics = pathMetrics[path]
+  console.log(
+    `| ${path} | ${fixed(metrics.mrr)} | ${fixed(metrics.ndcgAt10)} | ` +
+      `${metrics.hits}/${OUTCOMES.length} | ${metrics.inversions} |`,
+  )
+}
+console.log('')
+if (violations.length === 0) {
+  console.log(
+    '- ✅ 全部门槛通过：绝对下限，以及"hybrid 严格优于两条单路"（后者是 fixture 分辨力的可执行断言）。',
+  )
+} else {
+  for (const violation of violations) {
+    console.log(`- ❌ ${violation.gate}：${violation.detail}`)
+  }
+  console.log('')
+  console.log(
+    '- 门槛失败**不等于**实现错了：也可能是 fixture 或排序权重被有意改动。' +
+      '无论哪种都要在 PR 里说明理由，并同步复核 `src/modules/visual-search/eval/gates.ts` 的阈值表。',
+  )
+  process.exitCode = gatesExitCode(violations)
 }

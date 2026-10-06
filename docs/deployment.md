@@ -499,7 +499,7 @@ WantedBy=multi-user.target
 ```bash
 sudo systemctl daemon-reload
 # 只 enable，不 --now：首次上线时库还没建表。worker 启动会立刻执行 recoverStaleClaims()
-#（apps/worker/src/index.ts:27；具体的 `UPDATE jobs …` 在 apps/worker/src/jobs/queue.ts:170），
+#（apps/worker/src/index.ts:27；具体的 `UPDATE jobs …` 在 apps/worker/src/jobs/queue.ts:297），
 # 表不存在就直接抛错退出，然后每 5 秒重启一次。启动放在 §7.1 的迁移之后。
 sudo systemctl enable fish-api fish-worker
 ```

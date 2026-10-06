@@ -84,6 +84,17 @@ beforeAll(async () => {
       ('01990000-0000-7000-8000-0000000000f1', ${me}, ${other}),
       ('01990000-0000-7000-8000-0000000000f2', ${other}, ${me})
   `)
+  /*
+   * 想要数（= 该商品已建会话的买家数）：`ownListings` 是**裸 SQL** 查询，`wants` 由
+   * `${listingWantsCount(sql.raw('l.id'))}` 算出来 —— 漏写或写错别名不会被类型检查发现
+   * （`rowsOf` 返回 `Record<string, unknown>`），症状是卡片映射失败、商品从个人中心**静默消失**。
+   * 所以这里真的插一条会话：listingA 期望 1，listingB 期望 0（两者都断言，才能区分
+   * 「计数生效」与「恒返回某个常数」）。
+   */
+  await db.execute(sql`
+    INSERT INTO conversations (id, listing_id, buyer_id, seller_id, last_message_at)
+    VALUES ('01990000-0000-7000-8000-000000000071', ${listingA}, ${other}, ${me}, now())
+  `)
 })
 
 afterAll(async () => {
@@ -118,6 +129,10 @@ describe('profile store (integration)', () => {
       avatarUrl: null,
       authStatus: 'UNVERIFIED',
     })
+    // 想要数（已建会话的买家数）：listingA 有 1 条会话、listingB 没有 → 0。
+    // 两个值都要断言：只断 listingA 的话，「恒等于某个常数」的实现也能过。
+    expect(rows[0]?.wants).toBe(0) // rows[0] 是 listingB（时间倒序在前）
+    expect(rows[1]?.wants).toBe(1)
   })
 
   test('ownListings does not include other users listings (只返回本人可见数据)', async () => {

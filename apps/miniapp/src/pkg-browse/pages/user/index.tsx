@@ -271,7 +271,8 @@ export default function UserHome() {
           ) : null}
         </View>
         <View className="uhome__pfoot">
-          {/* 契约没有「想要」计数：真实数据下为 null，连分隔点一起不画，避免出现孤立的分隔符 */}
+          {/* 想要数来自契约 `ListingCardSchema.wants`（已建会话的买家数）；字段缺席（老 mock 记录）
+              时连分隔点一起不画，避免出现孤立的分隔符 */}
           {item.wants === null ? null : (
             <>
               <Text className="uhome__pwant num">想要 {item.wants}</Text>

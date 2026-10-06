@@ -13,6 +13,13 @@
  */
 
 import { type MessageDto, messageDtoSchema } from '@fish/contracts/chat/schema'
+import { TRANSACTION_REVIEW_ROUTES } from '@fish/contracts/transaction-reviews/routes'
+import {
+  type TransactionReview,
+  type TransactionReviewCreateInput,
+  TransactionReviewDeleteResponseSchema,
+  TransactionReviewResponseSchema,
+} from '@fish/contracts/transaction-reviews/schema'
 import { TRANSACTION_ROUTES } from '@fish/contracts/transactions/routes'
 import {
   type MeetupTokenResponse,
@@ -177,6 +184,51 @@ export async function acceptTransaction(
     body: { conversationId, amountCents },
   })
   return transactionDtoSchema.parse(payload)
+}
+
+/*
+ * ---- 取消交易（订单卡的写路径） ----
+ */
+
+/**
+ * 取消交易（`POST /transactions/:id/cancel`，双方都可调）。幂等：对已 `CANCELLED`
+ * 的重复取消返回现状（200）；`COMPLETED` 上 409 `TRANSACTION_NOT_IN_PENDING`。
+ */
+export async function cancelTransaction(id: string): Promise<TransactionDto> {
+  const payload = await apiRequest(TRANSACTION_ROUTES.cancel(id), { method: 'POST' })
+  return transactionDtoSchema.parse(payload)
+}
+
+/*
+ * ---- 交易评价边（#195 PR2：`/transactions/:id/review`，GET 读 / POST 建 / DELETE 删） ----
+ *
+ * 资源身份是 (transaction_id, author_id)，本人一笔最多一条，端上不必记住评价行的 id。
+ * 仅 `COMPLETED` 交易可评（409 `TRANSACTION_NOT_COMPLETED`）；重复提交 409
+ * `TRANSACTION_REVIEW_EXISTS`（POST 不静默吞）；评价不可修改、本人可物理删除（幂等）。
+ */
+
+/** 读我在一笔交易下的评价。没有时 404 `REVIEW_NOT_FOUND`（调用方按 `ApiError.code` 分支）。 */
+export async function fetchMyTransactionReview(id: string): Promise<TransactionReview> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id))
+  return TransactionReviewResponseSchema.parse(payload)
+}
+
+/** 创建我的评价（201）。重复评价 409 —— 不做本地「已评过」的猜测，以服务端为准。 */
+export async function createTransactionReview(
+  id: string,
+  input: TransactionReviewCreateInput,
+): Promise<TransactionReview> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id), {
+    method: 'POST',
+    body: input,
+  })
+  return TransactionReviewResponseSchema.parse(payload)
+}
+
+/** 删除我的评价。幂等：返回本次实际删除行数（0 = 本来就没有）。 */
+export async function deleteMyTransactionReview(id: string): Promise<number> {
+  const payload = await apiRequest(TRANSACTION_REVIEW_ROUTES.reviewEdge(id), { method: 'DELETE' })
+  return TransactionReviewDeleteResponseSchema.parse(payload).deleted
 }
 
 /*

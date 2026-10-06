@@ -22,6 +22,7 @@ const listingCard = {
   coverUrl: null,
   createdAt: '2026-09-12T01:00:00.000Z',
   moderationStatus: null,
+  wants: 0,
 }
 
 const item = { listing: listingCard, favoritedAt: '2026-09-12T03:00:00.000Z' }

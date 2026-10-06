@@ -1,3 +1,4 @@
+import { RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES } from '@fish/contracts/recommendation/rank'
 import type {
   RecommendationEventType,
   RecommendationSource,
@@ -5,6 +6,8 @@ import type {
 import type { Db } from '@fish/db/client'
 import { jsonParam } from '@fish/db/json'
 import {
+  type ExposureHistory,
+  findExposureHistory as findExposureHistoryQuery,
   findNegativeFeedbackEvents as findNegativeFeedbackEventsQuery,
   type NegativeFeedbackEvent,
 } from '@fish/db/recall-store'
@@ -159,6 +162,18 @@ export interface RecommendationStore {
     since: Date
     eventTypes: readonly RecommendationEventType[]
   }): Promise<NegativeFeedbackEvent[]>
+
+  /**
+   * 取这批候选的曝光/互动历史聚合（M6 重复曝光冷却的输入）。
+   *
+   * 互动事件类型由**本层**固定成 `RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES`（契约常量），不让
+   * service 传：解除冷却的集合是产品口径，多一个调用方参数就多一个漂移点。`listingIds` 为空时
+   * 不再查库（返回空数组），由上层直接得到空冷却集合。
+   */
+  findExposureHistory(input: {
+    listingIds: readonly string[]
+    identity: InterestIdentity
+  }): Promise<ExposureHistory[]>
 }
 
 export function createSqlRecommendationStore(db: Db): RecommendationStore {
@@ -329,6 +344,14 @@ export function createSqlRecommendationStore(db: Db): RecommendationStore {
 
     async findNegativeFeedbackEvents(input) {
       return findNegativeFeedbackEventsQuery(db, input)
+    },
+
+    async findExposureHistory(input) {
+      return findExposureHistoryQuery(db, {
+        listingIds: input.listingIds,
+        identity: input.identity,
+        engagementEventTypes: RANK_COOLDOWN_ENGAGEMENT_EVENT_TYPES,
+      })
     },
   }
 }

@@ -105,6 +105,8 @@ const CARD = {
   negotiable: true,
   free: false,
   coverUrl: null,
+  // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0。
+  wants: 0,
   createdAt: '2026-09-29T00:00:00.000Z',
   moderationStatus: null,
 }
@@ -174,6 +176,29 @@ describe('UserProfilePage', () => {
     // 登录用户看别人主页：发关注态查询，渲染真实的关注钮（默认态未关注）。
     expect(followStateEnabled).toBe(true)
     expect(html).toContain('已关注')
+  })
+
+  /** 个性签名（#445）：公开 DTO 的 signature 有就渲染，没有就不出现。 */
+  test('renders the public signature only when present', () => {
+    profileResult = {
+      data: { ...PROFILE, signature: '卖二手书的' },
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    listingsResult = idleListings()
+
+    expect(render()).toContain('卖二手书的')
+
+    profileResult = {
+      data: PROFILE,
+      isPending: false,
+      isError: false,
+      isSuccess: true,
+      refetch: () => undefined,
+    }
+    expect(render()).not.toContain('卖二手书的')
   })
 
   /** 未登录访客：不发关注态查询，给「登录后关注」入口而不是可点的假按钮。 */

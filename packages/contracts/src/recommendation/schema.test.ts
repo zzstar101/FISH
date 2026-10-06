@@ -337,6 +337,7 @@ describe('RecommendationFeedResponseSchema', () => {
     coverUrl: null,
     createdAt: '2026-09-12T07:00:00.000Z',
     moderationStatus: null,
+    wants: 0,
   }
 
   test('parses the #323 §M7 shape', () => {

@@ -68,7 +68,17 @@ export const RecommendationFunnelSchema = z.object({
   chats: z.number().int().nonnegative(),
   /** 归因交易发起数（`TRANSACTION_START` 且带归因）。 */
   transactions: z.number().int().nonnegative(),
-  /** 归因成交数（`PURCHASE` 且带归因）。 */
+  /**
+   * 归因成交数（`PURCHASE` 且带归因）——M8 的 **`transaction → completed`** 这一步。
+   *
+   * 漏斗里没有单独的 `completed` 字段，是因为**没有 `COMPLETED` 事件类型**：成交这件事由
+   * `PURCHASE` 表达，而它只在交易真的推进到 `COMPLETED` 的那一刻写入
+   * （`apps/api/src/modules/transactions/router.ts:169`：`transaction.status === 'COMPLETED'` 才记），
+   * 也就是 `transaction_status` 枚举里的 `COMPLETED`（`packages/db/src/schema/transactions.ts:17`）。
+   * 刻意**不**改成"直接数 `transactions.status = 'COMPLETED'`"：那张表没有推荐归因列，
+   * 混进来会破坏本文件第 45 行的不变式（漏斗每一步都要求 `request_id IS NOT NULL`），
+   * 把"全站成交"当成"推荐带来的成交"。
+   */
   purchases: z.number().int().nonnegative(),
   /** 曝光 → 详情。分母为 0 时 `null`；**可能 > 1**（见上方说明）。 */
   impressionToDetailRate: z.number().nonnegative().nullable(),
@@ -81,10 +91,72 @@ export const RecommendationFunnelSchema = z.object({
    */
   detailToChatRate: z.number().nonnegative().nullable(),
   chatToTransactionRate: z.number().nonnegative().nullable(),
+  /**
+   * 交易 → 成交（`transaction → completed`）：分子是归因 `PURCHASE`，分母是归因 `TRANSACTION_START`。
+   *
+   * **是下界**：`PURCHASE` 的归因取自"点确认成交"那次请求的推荐上下文，而成交常发生在交易发起
+   * 几天之后，那次请求通常不带推荐头 ⇒ 一部分成交会退化成无归因事件（`recordDomainEvent` 的口径），
+   * 不进分子。与 `detailToChatRate` 的下界性质相同，别把它当精确转化率读。
+   */
   transactionToPurchaseRate: z.number().nonnegative().nullable(),
 })
 
 export type RecommendationFunnel = z.infer<typeof RecommendationFunnelSchema>
+
+/**
+ * 小时级分位数摘要（M8「Online Metrics」的三项生命周期指标）。
+ *
+ * 与离线评估的 `RankEvalHoursSummary`（`apps/worker/src/jobs/recommendation/eval.ts:115`）同口径：
+ * **位置式分位数**（最近秩、不插值，等价 SQL `percentile_disc`：`rank = ceil(p * n)`，
+ * 取第 `clamp(rank, 1, n)` 个），空样本 → `count = 0` 且 `median` / `p90` 为 `null`
+ * （与上面的比率字段同一条"空样本不是 0"的约定：0 小时和"没有样本"是两件事）。
+ */
+export const RecommendationLifecycleHoursSummarySchema = z.object({
+  count: z.number().int().nonnegative(),
+  median: z.number().nullable(),
+  p90: z.number().nullable(),
+})
+
+export type RecommendationLifecycleHoursSummary = z.infer<
+  typeof RecommendationLifecycleHoursSummarySchema
+>
+
+/**
+ * 生命周期指标（M8「Online Metrics」的后三项）。
+ *
+ * 这三项原本只在离线评估 job 里算（`apps/worker/src/jobs/recommendation/eval.ts:470-512`），
+ * 这里把**同一口径**搬到线上只读端点：窗口、归因要求、分位算法都与离线保持一致，
+ * 避免"离线和线上各说各话"。口径三条：
+ * 1. 只认**归因事件**（`request_id IS NOT NULL`）且 `occurred_at ∈ [since, until)`：
+ *    没有推荐上下文的曝光/行为不算进推荐的生命周期（与漏斗同一条不变式）；
+ * 2. 前两项只统计**窗口内创建**的商品（`listings.created_at ∈ [since, until)`）——
+ *    窗口外创建的老商品早就曝光过，把"窗口内首次曝光 − 创建时刻"算进来会得到几个月的小时数，
+ *    把中位数彻底带偏；
+ * 3. `exposuresBeforeSale` 的分母是"窗口内有归因成交"的商品，**不限**窗口内新建：
+ *    成交的老商品同样计入。
+ */
+export const RecommendationLifecycleSchema = z.object({
+  /** 新商品获得首次曝光的小时数 = 首次归因 `IMPRESSION` − 商品创建时刻。 */
+  newListingTimeToFirstExposureHours: RecommendationLifecycleHoursSummarySchema,
+  /**
+   * 首次发布 → 首次有效意向的小时数 = 首次"有效意向" − 商品创建时刻。
+   *
+   * "有效意向" = 相关性分级 ≥ 2 的事件（`RANK_EVAL_RELEVANCE_GRADES`）：`FAVORITE` /
+   * `CHAT_START` / `COMMENT` / `TRANSACTION_START` / `PURCHASE`。`DETAIL_VIEW`（分级 1）
+   * 不算意向，否则这一项就退化成"多久被点开一次"。
+   */
+  firstPublishToFirstIntentHours: RecommendationLifecycleHoursSummarySchema,
+  /**
+   * listing 成交前的归因曝光量：每个"窗口内有归因 `PURCHASE`"的商品，数它在成交时刻**之前**
+   * 的归因 `IMPRESSION` 条数，再对这批计数取分位数。
+   *
+   * 单位是"次"而不是小时，但结构相同，故复用同一个摘要 schema（离线评估的
+   * `exposuresBeforeSale` 也是这样复用 `RankEvalHoursSummary` 的）。
+   */
+  exposuresBeforeSale: RecommendationLifecycleHoursSummarySchema,
+})
+
+export type RecommendationLifecycle = z.infer<typeof RecommendationLifecycleSchema>
 
 /**
  * Guardrail 指标（M8 的"不能变差"清单）。
@@ -189,6 +261,7 @@ export const RecommendationMetricsSchema = z.object({
   /** 本进程启动时刻（ISO 8601）：所有进程内字段的观察起点。 */
   processStartedAt: z.string(),
   funnel: RecommendationFunnelSchema,
+  lifecycle: RecommendationLifecycleSchema,
   guardrails: RecommendationGuardrailsSchema,
   latency: z.array(RecommendationLatencySchema),
 })

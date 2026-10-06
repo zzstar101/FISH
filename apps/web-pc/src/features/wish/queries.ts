@@ -7,6 +7,7 @@ import {
   fetchListingMatches,
   fetchMyListingsForMatches,
   fetchMyWishes,
+  fetchWish,
   fetchWishMatches,
   fetchWishPool,
   fulfillWish,
@@ -20,6 +21,7 @@ export const wishKeys = {
   pool: (ownerId: string) => ['pc', 'wish', 'pool', ownerId] as const,
   mine: (ownerId: string, status: WishStatusFilter, page: number) =>
     ['pc', 'wish', 'mine', ownerId, status, page] as const,
+  detail: (ownerId: string, wishId: string) => ['pc', 'wish', 'detail', ownerId, wishId] as const,
   matches: (ownerId: string, wishId: string) => ['pc', 'wish', 'matches', ownerId, wishId] as const,
   listingMatches: (ownerId: string, listingId: string) =>
     ['pc', 'wish', 'listing-matches', ownerId, listingId] as const,
@@ -58,6 +60,21 @@ export function useMyWishes(ownerId: string, status: WishStatusFilter, page: num
     queryKey: wishKeys.mine(ownerId, status, page),
     queryFn: () => fetchMyWishes(status, page),
     enabled: ownerId !== '',
+    staleTime: 15_000,
+  })
+}
+
+/**
+ * 单条愿望详情（`GET /wishes/:id`，owner-scoped，#446）。
+ *
+ * 通知的 wishId 落点：非本人/不存在的愿望都是 404（`wishes/router.ts` 的 getWish），
+ * 页面据此渲染「愿望不存在或不可见」，不区分两种原因 —— 与服务端不做存在性混淆同口径。
+ */
+export function useWishDetail(ownerId: string, wishId: string) {
+  return useQuery({
+    queryKey: wishKeys.detail(ownerId, wishId),
+    queryFn: () => fetchWish(wishId),
+    enabled: ownerId !== '' && wishId !== '',
     staleTime: 15_000,
   })
 }

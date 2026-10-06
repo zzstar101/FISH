@@ -1,7 +1,10 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ApiError } from '../../lib/api-client'
 import { fetchListingDetail } from '../listing-detail/api'
 import { listingDetailQueryKey } from '../listing-detail/queries'
+import { fetchWish } from '../wish/api'
+import { wishKeys } from '../wish/queries'
 import {
   fetchNotifications,
   fetchUnreadNotificationCount,
@@ -63,6 +66,28 @@ export function fetchCurrentListingTarget(queryClient: QueryClient, listingId: s
     queryFn: () => fetchListingDetail(listingId),
     staleTime: 0,
   })
+}
+
+/**
+ * 跳转前确认目标愿望仍可见（#446）。`GET /wishes/:id` 是 owner-scoped 读模型，
+ * 非本人 / 已删除同码 404 —— 这里不区分原因，统一回落通知列表；页面自身也渲染
+ * 同款「愿望不存在或不可见」，两层口径一致。
+ */
+export async function fetchCurrentWishTarget(
+  queryClient: QueryClient,
+  ownerId: string,
+  wishId: string,
+) {
+  try {
+    return await queryClient.fetchQuery({
+      queryKey: wishKeys.detail(ownerId, wishId),
+      queryFn: () => fetchWish(wishId),
+      staleTime: 0,
+    })
+  } catch (error) {
+    if (error instanceof ApiError && (error.status === 404 || error.status === 403)) return null
+    throw error
+  }
 }
 
 export function useMarkNotificationRead() {

@@ -26,7 +26,8 @@ import { useAcceptProposal, useMyListings, usePendingProposals, useRejectProposa
 export function PendingSection({ ownerId }: { ownerId: string }) {
   const pending = usePendingProposals(ownerId)
   // 取全量：待确认的申请也可能挂在**已下架**的商品上（卖家收到申请后把它下架了），
-  // 那时仍需要标题来渲染这一行。与 `usePendingProposals` 共用同一个查询键。
+  // 那时仍需要标题来渲染这一行。#446 起 useMyListings 转 infinite 缓存（pages 形状），
+  // 待确认推导的真实数据源在 usePendingProposals 的独立 snapshot 键里，这里只做标题查找。
   const listings = useMyListings(ownerId, 'ALL')
   const accept = useAcceptProposal(ownerId)
   const reject = useRejectProposal(ownerId)
@@ -140,7 +141,11 @@ export function PendingSection({ ownerId }: { ownerId: string }) {
   // 空且无话可说就整段不渲染；刚做完决定时要留着把结果说完
   if (mode === 'hidden' || !proposals) return null
 
-  const cards = new Map(listings.data?.items.map((item) => [item.id, item]) ?? [])
+  // 标题查找表只求「已加载页」覆盖（infinite 缓存里已到手的部分）；
+  // 待确认推导的真实数据源是 usePendingProposals 的 snapshot 键，不在这里。
+  const cards = new Map(
+    listings.data?.pages.flatMap((page) => page.items).map((item) => [item.id, item]) ?? [],
+  )
 
   return (
     <Card className="gap-0 border border-line p-0">

@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Bell } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useAuth } from '../auth/auth-provider'
 import { NotificationRow } from './notification-row'
 import {
   notificationReadErrorMessage,
@@ -14,6 +15,7 @@ import {
 } from './notification-view'
 import {
   fetchCurrentListingTarget,
+  fetchCurrentWishTarget,
   useMarkNotificationRead,
   useNotifications,
   useUnreadNotificationCount,
@@ -22,6 +24,8 @@ import {
 export function NotificationsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { me } = useAuth()
+  const meId = me?.id
   const notifications = useNotifications()
   const unread = useUnreadNotificationCount()
   const markRead = useMarkNotificationRead()
@@ -54,13 +58,8 @@ export function NotificationsPage() {
     const target = notificationTarget(item)
     if (target.kind === 'none') return
 
-    if (target.kind === 'wish') {
-      setActionError(notificationTargetErrorMessage(target))
-      return
-    }
-
     // TX / MODERATION 直接跳（会话与「我的发布」都是静态路由，不需要先确认存在）；
-    // 只有商品目标要先确认还在架上，避免跳进一个已下架/已删的详情页。
+    // 商品与愿望目标要先确认还可见，避免跳进一个已删/不属于该账号的资源页。
     if (target.kind === 'conversation') {
       await navigate({
         to: '/messages/$conversationId',
@@ -72,8 +71,34 @@ export function NotificationsPage() {
       await navigate({ to: '/mylist' })
       return
     }
+    if (target.kind === 'wish') {
+      await openWishTarget(target, epoch)
+      return
+    }
 
     await openListingTarget(target, epoch)
+  }
+
+  async function openWishTarget(
+    target: Extract<ReturnType<typeof notificationTarget>, { kind: 'wish' }>,
+    epoch: number,
+  ) {
+    if (meId === undefined) {
+      setActionError(notificationTargetErrorMessage(target))
+      return
+    }
+    try {
+      const wish = await fetchCurrentWishTarget(queryClient, meId, target.wishId)
+      if (epoch !== openEpochRef.current) return
+      if (wish === null) {
+        setActionError(notificationTargetErrorMessage(target))
+        return
+      }
+      await navigate({ to: '/wish/$wishId', params: { wishId: target.wishId } })
+    } catch {
+      if (epoch !== openEpochRef.current) return
+      setActionError('暂时无法确认目标愿望，已留在通知列表')
+    }
   }
 
   async function openListingTarget(

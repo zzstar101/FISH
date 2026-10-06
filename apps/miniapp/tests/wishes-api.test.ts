@@ -97,6 +97,10 @@ function respond(call: ApiCall): Promise<unknown> {
     const id = call.path.slice(WISH_ROUTES.base.length + 1, -'/close'.length)
     return Promise.resolve({ ...(wishById.get(id) ?? wish({ id })), status: 'CLOSED' })
   }
+  if (call.path.endsWith('/fulfill')) {
+    const id = call.path.slice(WISH_ROUTES.base.length + 1, -'/fulfill'.length)
+    return Promise.resolve({ ...(wishById.get(id) ?? wish({ id })), status: 'FULFILLED' })
+  }
   if (call.path.startsWith(`${WISH_ROUTES.base}/`)) {
     const id = call.path.slice(WISH_ROUTES.base.length + 1)
     const found = wishById.get(id)
@@ -147,7 +151,7 @@ mock.module('@/features/listing/api', () => ({
 }))
 
 const { loadWishes, loadWishMatches } = await import('../src/features/wish/load')
-const { createWish, closeWish } = await import('../src/features/wish/api')
+const { createWish, closeWish, fulfillWish } = await import('../src/features/wish/api')
 const { toMockWish, toMockWishPoolItem } = await import('../src/features/wish/adapt')
 
 function wish(partial: Partial<WishDto> & { id: string }): WishDto {
@@ -180,6 +184,8 @@ function card(id: string, seller: ListingCard['seller'] = undefined): ListingCar
     free: false,
     coverUrl: null,
     createdAt: '2026-09-01T00:00:00.000Z',
+    // 想要数（已建会话的买家数）：卡片契约的必填字段，夹具给 0（本用例不关心它）。
+    wants: 0,
     // #191：卡片内嵌卖家公开子集（API 卡片恒带）；缺省 = 老客户端 mock 记录的缺席形态
     ...(seller ? { seller } : {}),
     // 卡片契约要求这个字段（`.nullable()`，不是 optional）：公开视角恒 null
@@ -430,6 +436,14 @@ describe('写操作请求构造', () => {
     const closed = await closeWish(WISH_ID)
     expect(closed.status).toBe('CLOSED')
     expect(callsTo(WISH_ROUTES.close(WISH_ID), 'POST')).toHaveLength(1)
+  })
+
+  test('fulfillWish：POST /wishes/:id/fulfill（达成与关闭同一 transition 家族）', async () => {
+    wishById.set(WISH_ID, wish({ id: WISH_ID, status: 'ACTIVE' }))
+
+    const fulfilled = await fulfillWish(WISH_ID)
+    expect(fulfilled.status).toBe('FULFILLED')
+    expect(callsTo(WISH_ROUTES.fulfill(WISH_ID), 'POST')).toHaveLength(1)
   })
 })
 

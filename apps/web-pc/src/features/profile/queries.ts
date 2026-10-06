@@ -1,7 +1,11 @@
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import type { ListingId } from '@fish/contracts/system/public-id'
+import type {
+  TransactionReview,
+  TransactionReviewCreateInput,
+} from '@fish/contracts/transaction-reviews/schema'
 import type { QueryClient } from '@tanstack/react-query'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AUTH_ME_QUERY_KEY, currentSessionGeneration } from '../../lib/session-cache'
 import { fetchConversationPage, fetchMessagePage } from '../chat/api'
 import { listingDetailQueryKey } from '../listing-detail/queries'
@@ -9,9 +13,11 @@ import {
   acceptTransaction,
   cancelTransaction,
   confirmTransaction,
+  createTransactionReview,
   deleteListing,
   fetchMeetupTokenStatus,
   fetchMyListings,
+  fetchMyReview,
   fetchProfile,
   fetchTransaction,
   fetchTransactions,
@@ -32,6 +38,12 @@ export const profileKeys = {
   aggregate: (ownerId: string) => ['pc', 'profile', 'aggregate', ownerId] as const,
   listings: (ownerId: string, status: MyListingStatusFilter) =>
     ['pc', 'profile', 'listings', ownerId, status] as const,
+  /**
+   * 待确认推导自己的快照键：`useMyListings` 转 infinite 后同一键下的缓存形状变成了
+   * `pages[]`，推导只需要各状态首页的 `items` —— 分键存放，谁也别把谁的形状读歪。
+   */
+  listingsSnapshot: (ownerId: string, status: MyListingStatusFilter) =>
+    ['pc', 'profile', 'listings-snapshot', ownerId, status] as const,
   orders: (ownerId: string, role: 'buyer' | 'seller', status: OrderStatusFilter) =>
     ['pc', 'profile', 'orders', ownerId, role, status] as const,
   order: (ownerId: string, transactionId: string) =>
@@ -39,6 +51,8 @@ export const profileKeys = {
   pending: (ownerId: string) => ['pc', 'profile', 'pending', ownerId] as const,
   meetupToken: (ownerId: string, transactionId: string) =>
     ['pc', 'profile', 'meetup-token', ownerId, transactionId] as const,
+  review: (ownerId: string, transactionId: string) =>
+    ['pc', 'profile', 'review', ownerId, transactionId] as const,
 }
 
 type SessionMutationContext = { generation: number }
@@ -57,6 +71,7 @@ function invalidateProfileSummary(queryClient: QueryClient, ownerId: string): vo
 
 function invalidateListingLists(queryClient: QueryClient, ownerId: string): void {
   void queryClient.invalidateQueries({ queryKey: ['pc', 'profile', 'listings', ownerId] })
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'profile', 'listings-snapshot', ownerId] })
 }
 
 function invalidateOrderLists(queryClient: QueryClient, ownerId: string): void {
@@ -101,19 +116,25 @@ export function useProfile(ownerId: string) {
   })
 }
 
+/** 我的发布：游标无限翻页（#446）。键与旧单页版一致，缓存形状变为 `pages[]`。 */
 export function useMyListings(ownerId: string, status: MyListingStatusFilter) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: profileKeys.listings(ownerId, status),
-    queryFn: () => fetchMyListings(ownerId, status),
+    queryFn: ({ pageParam }) => fetchMyListings(ownerId, status, pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== '',
     staleTime: 15_000,
   })
 }
 
+/** 我的订单：游标无限翻页（#446）。接口的 cursor 一直都在，页面此前只是没传。 */
 export function useOrders(ownerId: string, role: 'buyer' | 'seller', status: OrderStatusFilter) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: profileKeys.orders(ownerId, role, status),
-    queryFn: () => fetchTransactions({ role, status }),
+    queryFn: ({ pageParam }) => fetchTransactions({ role, status, cursor: pageParam ?? undefined }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: ownerId !== '',
     staleTime: 15_000,
   })
@@ -226,6 +247,47 @@ export function useCancelTransaction(ownerId: string) {
   return useTransactionMutation(ownerId, cancelTransaction)
 }
 
+/** 我的评价边（null = 还没评过）。卡片只挂在 COMPLETED 订单上，因此不设 enabled 开关。 */
+export function useMyReview(ownerId: string, transactionId: string) {
+  return useQuery({
+    queryKey: profileKeys.review(ownerId, transactionId),
+    queryFn: () => fetchMyReview(transactionId),
+    enabled: ownerId !== '' && transactionId !== '',
+    staleTime: 15_000,
+  })
+}
+
+export type CreateReviewVariables = { transactionId: string; input: TransactionReviewCreateInput }
+
+/**
+ * 写评价成功后的缓存接线（抽成可独立驱动的接缝，手法同 verify 域的 applyVerificationResult）：
+ * 写边缓存让卡片立即翻已评态、不再依赖 refetch；失效「我的评论」评价段，
+ * 新评价必须立刻出现在 /comments 列表里。
+ */
+export function applyReviewCreated(
+  queryClient: QueryClient,
+  ownerId: string,
+  transactionId: string,
+  review: TransactionReview,
+): void {
+  queryClient.setQueryData(profileKeys.review(ownerId, transactionId), review)
+  void queryClient.invalidateQueries({ queryKey: ['pc', 'my-comments'] })
+}
+
+/** 写评价。**不可修改、不可重评** —— 重复提交由 409 在 api 层翻译，这里只管成功接线。 */
+export function useCreateReview(ownerId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ transactionId, input }: CreateReviewVariables) =>
+      createTransactionReview(transactionId, input),
+    onMutate: captureSession,
+    onSuccess: (review, variables, context) => {
+      if (!isSessionCurrent(context)) return
+      applyReviewCreated(queryClient, ownerId, variables.transactionId, review)
+    },
+  })
+}
+
 const EMPTY_PENDING: PendingIndex = {
   proposals: new Map(),
   complete: true,
@@ -255,12 +317,12 @@ export function usePendingProposals(ownerId: string) {
        */
       const [active, offline] = await Promise.all([
         queryClient.fetchQuery({
-          queryKey: profileKeys.listings(ownerId, 'ACTIVE'),
+          queryKey: profileKeys.listingsSnapshot(ownerId, 'ACTIVE'),
           queryFn: () => fetchMyListings(ownerId, 'ACTIVE'),
           staleTime: 15_000,
         }),
         queryClient.fetchQuery({
-          queryKey: profileKeys.listings(ownerId, 'OFFLINE'),
+          queryKey: profileKeys.listingsSnapshot(ownerId, 'OFFLINE'),
           queryFn: () => fetchMyListings(ownerId, 'OFFLINE'),
           staleTime: 15_000,
         }),
