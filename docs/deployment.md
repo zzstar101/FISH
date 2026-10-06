@@ -258,6 +258,20 @@ mc admin policy attach local fish-app-rw --user fish-app
 会话鉴权代理在端上根本显示不出来，所以这里用不可猜、会过期、且不泄露对象键的 capability URL，
 而不是把它放进匿名直链——评价读 API 只对交易参与者开放，评价配图若匿名直读就是绕过参与者
 边界的永久旁路（#483 审查响应），删除评价后亦然。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
+
+**staging 前缀要配生命周期过期（#483 审查响应）**：confirm 不删 staging 源对象（保留它是
+confirm 重试安全的一部分），presign 直传也无法在签名层强制声明大小（Bun 的 presign 只签 host，
+超大对象会先落进 staging、由 confirm 拒绝引用），所以 staging 垃圾只能靠桶的生命周期规则兜底。
+给评价配图的 staging 前缀配 1 天过期即可（confirm 重试不受影响：final 键已存在时走幂等成功，
+不依赖 staging 对象存活）：
+
+```bash
+mc ilm rule add local/fish --prefix "transaction-review-media/" --expire-days 1
+```
+
+`listing-media/`（#286 的 listing staging 前缀）有同样的垃圾留存形态，但属对象回收的整体
+口径（#476），不在 #475 范围内处理。
+
 上线前执行 `MEETUP_TOKEN_SECRET=$(openssl rand -hex 32) bun --env-file=.env apps/api/scripts/media-smoke.ts`，
 验证聊天直链返回 403、鉴权代理仍能读取及 Range 播放。那个变量是因为脚本会**自己拉起一个 API 进程**
 （`apps/api/scripts/media-smoke.ts:52`），而 API 启动时会校验面交码密钥（§4）；这里给的是只活在这条
