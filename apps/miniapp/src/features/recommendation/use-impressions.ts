@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { trackRecommendationEvent } from './track'
 
 export type FeedTrackingContext = {
-  /** 本次推荐请求 id；退 mock（开发/预览）或分类列表没有它 → 曝光类事件不发（契约要求必带） */
+  /** 本次推荐请求 id；退 mock（演示构建）或分类列表没有它 → 曝光类事件不发（契约要求必带） */
   requestId: string | null
   /** 公开 id → 本次推荐请求内的全局 position（**过滤隐藏名单之前**的原始序号） */
   positions: Map<string, number>
@@ -247,7 +247,7 @@ export function useFeedImpressions(options: {
       const context = contextRef.current
       const requestId = context.requestId
       /*
-        没有 requestId 就没有归因（退 mock 的开发/预览、分类列表）：契约强制曝光类事件
+        没有 requestId 就没有归因（退 mock 的演示构建、分类列表）：契约强制曝光类事件
         必带 requestId + position，硬发一条不带归因的会被整条拒收 —— 所以干脆不发。
       */
       if (!requestId) return

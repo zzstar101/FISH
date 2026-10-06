@@ -15,7 +15,7 @@ function iso(hoursAgo: number): string {
 
 /**
  * 商品详情页留言 fixture。真实读路径是 #111 的 `GET /listings/:id/comments`
- * （契约 `@fish/contracts/comments/schema`）；这份 mock 只在开发 / 预览退回时用。
+ * （契约 `@fish/contracts/comments/schema`）；这份 mock 只在演示构建（`TARO_APP_MOCK=1`）退回时用。
  */
 export const COMMENTS: MockComment[] = [
   {
