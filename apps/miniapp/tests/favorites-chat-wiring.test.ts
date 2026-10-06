@@ -73,7 +73,7 @@ describe('收藏页「聊一聊」：接线', () => {
     expect(code).toContain('describeCreateConversationFailure(error)')
   })
 
-  test('不做上架状态预检：下架 / 已售仍能建会话（服务端只要求商品存在）', async () => {
+  test('点击路径（onClick → act → chatWith）不做上架状态预检：下架 / 已售仍能建会话', async () => {
     const code = await source()
     const chatWith = sliceFrom(
       code,
@@ -96,6 +96,30 @@ describe('收藏页「聊一聊」：接线', () => {
     expect(upToRequest.match(/\breturn\b/g) ?? [], '请求前只该有两处提前退出').toHaveLength(2)
     expect(upToRequest).not.toMatch(/status/i)
     expect(upToRequest).not.toMatch(/offline|\boff\b|sold/i)
+    // 只钉 `chatWith` 自己不够（#470 复审实证 2026-10-06）：等价预检挪到**点击路径的上游** ——
+    // 按钮的 onClick 里（`onClick={() => { if (item.state === 'WITHDRAWN') return; act(item, chatWith) }}`），
+    // 或 `act` 这个「管理态让位给勾选」的转交函数里（首行插 `if (item.state === 'WITHDRAWN') return`）
+    // —— 本用例都 8 pass / 0 fail 全绿，而这两处一样会把下架 / 已售商品的会话拦掉。所以网往上再收一层：
+    //   ④ 按钮必须是字面 `onClick={() => act(item, chatWith)}`（包一层函数 / 加条件都红）；
+    //   ⑤ `act` 体内除管理态判断外不许再读商品属性（只许 `item.id` 做勾选）；
+    //   ⑥ `chatWith` 全仓只此一处声明 + 一处调用，没有第二条（可能带门禁的）入口。
+    // 不按整文件撒「不许出现 state / status 字样」的网：本页有**合法**的整行失效门禁
+    // （`const gone = item.segment === 'gone'` + `{gone ? null : …}`，决策④，点在失效行上只 toast），
+    // 加上 `useState` / `authStatus` / `EmptyState` / `'sale'` 分段等字样，整文件词面网必然误报。
+    expect(code, '聊一聊按钮必须是字面 onClick={() => act(item, chatWith)}').toContain(
+      'onClick={() => act(item, chatWith)}',
+    )
+    const actBody = sliceFrom(
+      code,
+      'const act = (item: FavoriteItem, run: (one: FavoriteItem) => void) => {',
+      'run(item)\n  }',
+    )
+    const actProps = [...codeOnly(actBody).matchAll(/item\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1])
+    expect([...new Set(actProps)].sort(), 'act 体内只该读 item.id 做勾选').toEqual(['id'])
+    expect(
+      codeOnly(code).match(/\bchatWith\b/g) ?? [],
+      'chatWith 只该一处声明 + 一处调用',
+    ).toHaveLength(2)
   })
 
   test('世代在换账号渲染期重置与卸载清理两处都前进', async () => {
