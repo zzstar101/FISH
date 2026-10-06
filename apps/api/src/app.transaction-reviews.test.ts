@@ -390,8 +390,8 @@ describe('#475 评价配图上传链 app 级接线', () => {
     expect(firstKey).not.toBe(secondKey)
 
     // 下单即验证：final 对象真实存在且匿名可读（presign 从不签 reviews/，只能在 confirm 之后出现）。
-    const readable = await fetch(`http://localhost:9000/fish/${firstKey}`).catch(() => null)
-    if (readable) expect(readable.status).toBe(200)
+    const readable = await fetch(`http://localhost:9000/fish/${firstKey}`)
+    expect(readable.status).toBe(200)
 
     const created = await app.request(
       edge,

@@ -3,6 +3,7 @@ import { errorBody } from '@fish/contracts/system/error'
 import type { TransactionReviewResponse } from '@fish/contracts/transaction-reviews/schema'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { Hono, type MiddlewareHandler } from 'hono'
+import { ReviewMediaServiceError } from './media-service'
 import { createTransactionReviewsRouter } from './router'
 import { type TransactionReviewService, TransactionReviewServiceError } from './service'
 
@@ -65,6 +66,9 @@ function buildApp(options: { service: TransactionReviewService; authed?: boolean
   }
   root.use('/transactions/:transactionId/review', requireAuth)
   root.use('/transactions/:transactionId/reviews', requireAuth)
+  // #475：`use('/…/review')` 的前缀匹配不覆盖更深的 `/review/media/*`（app.ts 同款显式挂载）。
+  root.use('/transactions/:transactionId/review/media/presign', requireAuth)
+  root.use('/transactions/:transactionId/review/media/confirm', requireAuth)
   root.route(
     '/',
     createTransactionReviewsRouter({
@@ -75,6 +79,45 @@ function buildApp(options: { service: TransactionReviewService; authed?: boolean
   )
   return root
 }
+
+describe('transaction-reviews router — 上传链 429 形状（#475 审查采纳）', () => {
+  test('ReviewMediaServiceError 429：status/Retry-After 头/信封 retryAfterSeconds 三者一致', async () => {
+    const service = fakeService({
+      media: {
+        presign: async () => {
+          throw new ReviewMediaServiceError(
+            429,
+            'REVIEW_MEDIA_RATE_LIMITED',
+            '上传过于频繁，请稍后再试',
+            undefined,
+            7,
+          )
+        },
+        confirm: async () => ({
+          objectKey: 'reviews/usr_x/med_y.png',
+          url: 'https://cdn.example/reviews/usr_x/med_y.png',
+        }),
+      },
+    })
+    const res = await buildApp({ service }).request(
+      `/transactions/${TXN_ID}/review/media/presign`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ contentType: 'image/png', sizeBytes: 64 }),
+      },
+    )
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('7')
+    expect(await res.json()).toEqual({
+      error: {
+        code: 'REVIEW_MEDIA_RATE_LIMITED',
+        message: '上传过于频繁，请稍后再试',
+        retryAfterSeconds: 7,
+      },
+    })
+  })
+})
 
 describe('transaction-reviews router — 鉴权与路径参数', () => {
   test('全部端点要求登录（本域没有匿名路径）', async () => {

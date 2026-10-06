@@ -129,7 +129,7 @@ const SEED_LISTING_KEY = /^listings\/seed-[a-z0-9-]+\/[0-9]+\.(?:jpg|png|webp)$/
 /**
  * #286：**待审核**的 staging 前缀。
  *
- * 它故意不落在匿名读白名单里（`docs/deployment.md` 只放开 `listings/*`），因此「未审核的图天然
+ * 它故意不落在匿名读白名单里（`docs/deployment.md` 只放开 `listings/*` 与 `reviews/*`），因此「未审核的图天然
  * 不可被公开读到」是存储策略给的，不需要新 bucket、也不需要改 ACL。presign 只签这个前缀，
  * 所以客户端**结构上无法**覆盖已固化到 `listings/` 下的 final 对象。
  */

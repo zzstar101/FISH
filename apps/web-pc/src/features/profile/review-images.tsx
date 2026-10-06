@@ -1,3 +1,4 @@
+import { MAX_REVIEW_IMAGES } from '@fish/contracts/transaction-reviews/schema'
 import { Button } from '@fish/ui/button'
 import { CircleAlert, ImagePlus, Loader2, RefreshCw, X } from 'lucide-react'
 import { useId } from 'react'
@@ -29,7 +30,7 @@ export type ReviewFormImage = {
 export function reviewSubmitBlockedReason(
   images: readonly ReviewFormImage[],
   submitting: boolean,
-  maxImages = 3,
+  maxImages = MAX_REVIEW_IMAGES,
 ): string | null {
   if (submitting) return null
   // 超限兜底：并发选图窗口里可能比 maxImages 多（room 是按进入时的长度算的），

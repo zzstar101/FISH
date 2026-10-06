@@ -233,6 +233,9 @@ export function ReviewForm({
         })
         continue
       }
+      // 并发选图窗口：到这一步已满就直接丢弃，不建预览、不上传（否则会产生永不引用的
+      // 公开对象 + 回收不到的 blob 预览 URL）。
+      if (imagesRef.current.length >= MAX_REVIEW_IMAGES) continue
       const previewUrl = URL.createObjectURL(prepared)
       push({ id, previewUrl, status: 'uploading', objectKey: null, error: null, file: prepared })
       await runUpload(id, prepared)
