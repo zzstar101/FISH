@@ -1040,7 +1040,8 @@ export default function ListingDetail() {
           return
         }
         if (step === 'conversation') {
-          // 第一步（建会话）失败：文案与 PC `describeCreateConversationFailure` 同款
+          // 第一步（建会话）失败：走 `describeCreateConversationFailure`（只认
+          // `LISTING_NOT_FOUND`；PC 站同名函数仍写「已下架」，小程序端已按契约订正）
           setBuySubmitError(describeCreateConversationFailure(error))
           return
         }

@@ -213,15 +213,27 @@ export async function markNotificationRead(id: string): Promise<void> {
 }
 
 /**
- * **第一步**（建会话）失败的展示文案 —— 与 PC 站 `web-pc/src/features/chat/api.ts` 的
- * `describeCreateConversationFailure` 同款：只认 `LISTING_NOT_FOUND`，其余（网络 / 未识别码）
+ * **第一步**（建会话）失败的展示文案 —— 只认 `LISTING_NOT_FOUND`，其余（网络 / 未识别码）
  * 一律「发起会话失败，请重试」。
+ *
+ * `LISTING_NOT_FOUND` 只说「商品不存在 / 已删除」，**不含「已下架」**：
+ *
+ * - 契约明示 `POST /conversations` 不限制 ACTIVE（`packages/contracts/src/chat/routes.ts:12-15`，
+ *   OFFLINE / SOLD 后买卖双方仍可能沟通），所以下架 / 已售建会话是**正常成功**；
+ * - 服务端这条路径也只按 id 查行：`findListingBrief` 是
+ *   `SELECT id, seller_id FROM listings WHERE id = $1`，没有任何状态过滤
+ *   （`apps/api/src/modules/conversations/store.ts:233-236`），同码文案是「商品不存在」
+ *   （`apps/api/src/modules/conversations/service.ts:162`）；商品删除是**物理删除**
+ *   （`apps/api/src/modules/messages/service.ts:197` 注释），所以「已删除」与「不存在」是同一件事。
+ *
+ * 与 PC 站 `web-pc/src/features/chat/api.ts` 的同名函数**同名不同文**：PC 仍写
+ * 「商品不存在或已下架」，属本次写作用域之外，单独一个报告项。
  *
  * 与第二步的 `describeProposeFailure` **分开**：两步失败的原因集合不同，用第二步的映射器
  * 兜第一步会把「会话建不起来」说成「发起交易确认失败」。自聊（`CANNOT_CHAT_WITH_SELF`）
  * 由调用方隐藏入口，不在这里给文案。
  */
 export function describeCreateConversationFailure(error: unknown): string {
-  if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') return '商品不存在或已下架'
+  if (isApiError(error) && error.code === 'LISTING_NOT_FOUND') return '商品不存在或已删除'
   return '发起会话失败，请重试'
 }
