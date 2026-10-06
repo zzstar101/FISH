@@ -97,12 +97,6 @@ export interface TransactionReviewsStore {
     body: string | null
     imageKeys: string[]
   }): Promise<MyReviewRow | null>
-  insertReview(input: {
-    transactionId: string
-    authorId: string
-    rating: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
-    body: string | null
-  }): Promise<MyReviewRow | null>
   /** 删除我在这笔交易下的评价，返回实际删除行数（0 = 本来就没有，幂等）。 */
   deleteOwnReview(transactionId: string, authorId: string): Promise<number>
   /** 一笔交易的两方评价（各 0..1 行，`authorRole` 由 buyer/seller 比较得出）。 */
@@ -224,10 +218,6 @@ export function createSqlTransactionReviewStore(db: Db): TransactionReviewsStore
       if (!row) return null
       const images = await imageKeysByReview(db, [row.id as string])
       return myReviewRowOf(row, images.get(row.id as string) ?? [])
-    },
-
-    async insertReview(input) {
-      return insertReviewWithImages({ ...input, imageKeys: [] })
     },
 
     /**

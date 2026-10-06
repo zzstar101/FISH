@@ -205,40 +205,36 @@ export function ReviewForm({
     for (const raw of files.slice(0, Math.max(room, 0))) {
       const id = crypto.randomUUID()
       const prepared = await toUploadableFile(raw)
+      const push = (entry: ReviewFormImage) => {
+        setImages((previous) =>
+          previous.length >= MAX_REVIEW_IMAGES ? previous : [...previous, entry],
+        )
+      }
       if (prepared === null) {
-        setImages((previous) => [
-          ...previous,
-          {
-            id,
-            previewUrl: '',
-            status: 'failed',
-            objectKey: null,
-            error: imagePreparationMessage(raw),
-            file: null,
-          },
-        ])
+        push({
+          id,
+          previewUrl: '',
+          status: 'failed',
+          objectKey: null,
+          error: imagePreparationMessage(raw),
+          file: null,
+        })
         continue
       }
       const invalid = validateImageFile(prepared)
       if (invalid !== null) {
-        setImages((previous) => [
-          ...previous,
-          {
-            id,
-            previewUrl: '',
-            status: 'failed',
-            objectKey: null,
-            error: invalid,
-            file: null,
-          },
-        ])
+        push({
+          id,
+          previewUrl: '',
+          status: 'failed',
+          objectKey: null,
+          error: invalid,
+          file: null,
+        })
         continue
       }
       const previewUrl = URL.createObjectURL(prepared)
-      setImages((previous) => [
-        ...previous,
-        { id, previewUrl, status: 'uploading', objectKey: null, error: null, file: prepared },
-      ])
+      push({ id, previewUrl, status: 'uploading', objectKey: null, error: null, file: prepared })
       await runUpload(id, prepared)
     }
   }
@@ -257,7 +253,7 @@ export function ReviewForm({
     void runUpload(id, target.file)
   }
 
-  const blockedReason = reviewSubmitBlockedReason(images, submitting)
+  const blockedReason = reviewSubmitBlockedReason(images, submitting, MAX_REVIEW_IMAGES)
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

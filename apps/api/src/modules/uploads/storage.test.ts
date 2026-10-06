@@ -209,6 +209,9 @@ test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代�
   const modern = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
   const old = `listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`
   expect(media.publicUrl(modern)).toBe(`https://cdn.test/fish/${modern}`)
+  // #475：评价配图 final 键（reviews/）走匿名直链分支，且不会被 legacy/审核代理分支截胡。
+  const review = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+  expect(media.publicUrl(review)).toBe(`https://cdn.test/fish/${review}`)
   expect(media.publicUrl('listings/seed-k380/0.jpg')).toBe(
     'https://cdn.test/fish/listings/seed-k380/0.jpg',
   )

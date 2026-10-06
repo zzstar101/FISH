@@ -921,7 +921,7 @@ async function runOnce(runIndex: number, admin: Db, env: ServerEnv): Promise<voi
     // 失败现场块必须能报出这个 key，否则事后无从查证、也无从清理。
     uploadedObjectKeys.push(stagingKey)
 
-    // staging 不在匿名读白名单里（`infra/minio-public-policy.json` 只放开 `listings/*`）：未过审的
+    // staging 不在匿名读白名单里（`infra/minio-public-policy.json` 只放开 `listings/*` 与 `reviews/*`）：未过审的
     // 图**结构上就取不到**，不依赖"审核完再删"这种时序假设。
     assertEqual(
       (await fetch(`${env.S3_PUBLIC_URL}/${stagingKey}`)).status,

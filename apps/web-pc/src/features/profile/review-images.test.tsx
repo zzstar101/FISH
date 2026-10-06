@@ -40,6 +40,11 @@ describe('reviewSubmitBlockedReason（提交闸门纯函数）', () => {
   test('提交中不重复提示（按钮自身已禁用）', () => {
     expect(reviewSubmitBlockedReason([image({ status: 'uploading' })], true)).toBeNull()
   })
+
+  test('并发选图窗口里超出上限 → 兜底挡住（服务端 422 之前）', () => {
+    const four = [image(), image({ id: 'i2' }), image({ id: 'i3' }), image({ id: 'i4' })]
+    expect(reviewSubmitBlockedReason(four, false, 3)).toContain('最多 3 张')
+  })
 })
 
 const textOf = (html: string) => html.replace(/<[^>]*>/g, '')

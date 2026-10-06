@@ -29,8 +29,12 @@ export type ReviewFormImage = {
 export function reviewSubmitBlockedReason(
   images: readonly ReviewFormImage[],
   submitting: boolean,
+  maxImages = 3,
 ): string | null {
   if (submitting) return null
+  // 超限兜底：并发选图窗口里可能比 maxImages 多（room 是按进入时的长度算的），
+  // 这里宁可挡住也不要让服务端 422 变成用户看不懂的失败。
+  if (images.length > maxImages) return `最多 ${maxImages} 张配图，请先移除多余的`
   if (images.some((image) => image.status === 'uploading')) return '还有图片正在上传，请稍候'
   if (images.some((image) => image.status === 'failed')) {
     return '有图片未上传成功：请重试或移除后再提交'

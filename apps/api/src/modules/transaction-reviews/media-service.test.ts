@@ -202,3 +202,47 @@ describe('review media service: confirm', () => {
     )
   })
 })
+
+describe('review media service: 装配与频控（审查采纳）', () => {
+  test('存储缺 readMediaBytes/writeMediaBytes → 503 REVIEW_MEDIA_UNAVAILABLE（不静默降级成 422/假成功）', async () => {
+    const noCapabilities: MediaStorage = {
+      presignPut: () => ({
+        url: 'https://upload.example/put',
+        headers: {},
+        expiresAt: '2026-10-06T12:10:00.000Z',
+      }),
+      stat: async () => ({ size: 64, contentType: 'image/png' }),
+      publicUrl: (key) => `https://cdn.example/${key}`,
+    }
+    const service = createReviewMediaService({ gate: gateOf(), storage: noCapabilities })
+    const error = await errorOf(service.confirm(USER, TXN, { objectKey: STAGING_KEY }))
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('REVIEW_MEDIA_UNAVAILABLE')
+  })
+
+  test('按用户令牌桶限速：桶空后 presign/confirm 都 429 且带 retryAfterSeconds', async () => {
+    let allowed = true
+    const limiter = {
+      take: () =>
+        allowed
+          ? ({ allowed: true } as const)
+          : ({ allowed: false, retryAfterSeconds: 7 } as const),
+    }
+    const service = createReviewMediaService({ gate: gateOf(), storage: fakeStorage(), limiter })
+    expect(
+      (await service.presign(USER, TXN, { contentType: 'image/png', sizeBytes: 64 })).objectKey,
+    ).toBeDefined()
+
+    allowed = false
+    const presignError = await errorOf(
+      service.presign(USER, TXN, { contentType: 'image/png', sizeBytes: 64 }),
+    )
+    expect(presignError.status).toBe(429)
+    expect(presignError.code).toBe('REVIEW_MEDIA_RATE_LIMITED')
+    expect(presignError.retryAfterSeconds).toBe(7)
+
+    const confirmError = await errorOf(service.confirm(USER, TXN, { objectKey: STAGING_KEY }))
+    expect(confirmError.status).toBe(429)
+    expect(confirmError.retryAfterSeconds).toBe(7)
+  })
+})

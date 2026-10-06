@@ -57,7 +57,7 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    # 仅商品图片公开；聊天临时对象和最终快照不允许匿名读取或列举。
+    # 仅商品图片与评价配图（reviews/*，#475）公开；聊天临时对象、上传 staging 与最终快照不允许匿名读取或列举。
     volumes:
       - ./infra/minio-public-policy.json:/policies/public.json:ro
     entrypoint: >

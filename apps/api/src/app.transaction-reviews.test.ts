@@ -151,6 +151,9 @@ describe('交易评价 app 级接线（#195 PR2）', () => {
       ['POST', `/transactions/${txnPublic}/review`, JSON.stringify({ rating: 'POSITIVE' })],
       ['DELETE', `/transactions/${txnPublic}/review`, undefined],
       ['GET', `/transactions/${txnPublic}/reviews`, undefined],
+      // #475：两条媒体端点同样没有匿名路径（app.ts 为它们显式补挂了 requireAuth，接线易漏）。
+      ['POST', `/transactions/${txnPublic}/review/media/presign`, JSON.stringify({})],
+      ['POST', `/transactions/${txnPublic}/review/media/confirm`, JSON.stringify({})],
     ] as const) {
       const response = await app.request(path, {
         method,

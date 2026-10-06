@@ -83,8 +83,6 @@ function fakeStore(
   return {
     transactionForParticipant: async () => (participant ? { id: TXN_ID, status } : null),
     findMyReview: async () => overrides.existing ?? null,
-    insertReview: async () =>
-      overrides.insertResult === undefined ? reviewRow() : overrides.insertResult,
     insertReviewWithImages: async (input) =>
       overrides.insertResult === undefined
         ? reviewRow({ imageKeys: input.imageKeys })

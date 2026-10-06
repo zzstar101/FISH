@@ -189,6 +189,13 @@ export const TransactionReviewErrorCodeSchema = z.enum([
    * 避免把「别人的对象是否存在」变成可探测的侧信道。
    */
   'REVIEW_IMAGE_INVALID',
+  /**
+   * 429：上传链请求过于频繁（#475 审查采纳——confirm 无上限等于开放不限量公开图床，
+   * 按用户令牌桶兜底）。响应带 `retryAfterSeconds`。
+   */
+  'REVIEW_MEDIA_RATE_LIMITED',
+  /** 503：对象存储未提供读取/固化能力（配置缺失），confirm 无法完成；可稍后重试。 */
+  'REVIEW_MEDIA_UNAVAILABLE',
 ])
 
 export type TransactionReviewErrorCode = z.infer<typeof TransactionReviewErrorCodeSchema>

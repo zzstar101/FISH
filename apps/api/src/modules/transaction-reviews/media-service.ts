@@ -8,6 +8,7 @@ import type {
 } from '@fish/contracts/transaction-reviews/schema'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import { createTokenBucketLimiter } from '../recommendation/rate-limit'
 import type { MediaStorage } from '../uploads/storage'
 import {
   isReviewMediaStagingKey,
@@ -23,14 +24,20 @@ import {
  * - **不做内容审核**（票内待冻结项 3 取默认：本期不进 IMS；chat-media 现状同款），
  *   因此没有 staging→IMS→固化 的结算机，confirm 只做形状/归属/存在/大小/MIME/真实图片校验；
  * - **无登记表**：presign 永不签 final 前缀，所以「final 键下对象存在」本身就证明经过本链 confirm。
+ * - **授权门是反滥用门，键不绑定交易**：键 `reviews/{usr_…}/{med_…}.ext` 不含交易段，
+ *   同一用户可以把在交易 A 下 confirm 的图引用到交易 B 的评价里（两笔都需 COMPLETED 且本人未评价）。
+ *   验收只要求「键来自本链且属于本人」，本期即此语义；要绑定交易需在键里加交易段或引入登记表。
+ * - **频控**：confirm 若完全无上限，本链就是一条「向匿名可读前缀不限量写对象」的通道——
+ *   按用户令牌桶兜底（与契约的 3 张上限是两个维度：那个约束单条评价引用几张，这个约束产出速率）。
  */
 
 export class ReviewMediaServiceError extends Error {
   constructor(
-    readonly status: 404 | 409 | 422,
+    readonly status: 404 | 409 | 422 | 429 | 503,
     readonly code: string,
     message: string,
     readonly details?: ApiErrorDetail[],
+    readonly retryAfterSeconds?: number,
   ) {
     super(message)
     this.name = 'ReviewMediaServiceError'
@@ -43,6 +50,23 @@ const notCompleted = () =>
   new ReviewMediaServiceError(409, 'TRANSACTION_NOT_COMPLETED', '交易完成后才能评价')
 const reviewExists = () =>
   new ReviewMediaServiceError(409, 'TRANSACTION_REVIEW_EXISTS', '这笔交易你已经评价过了')
+const rateLimited = (retryAfterSeconds: number) =>
+  new ReviewMediaServiceError(
+    429,
+    'REVIEW_MEDIA_RATE_LIMITED',
+    '上传过于频繁，请稍后再试',
+    undefined,
+    Math.max(1, Math.ceil(retryAfterSeconds)),
+  )
+
+/**
+ * 存储缺少读取/固化能力 = 配置缺失（不是用户输入问题）：**显式 503**，不要用可选链把
+ * 它静默降级成「图片不可引用」（会把配置错误伪装成 422）或「假成功」（写不出 final 对象
+ * 却返回一个不存在的键）。listing 上传链在同一位置是同一取舍。
+ */
+const storageUnavailable = () =>
+  new ReviewMediaServiceError(503, 'REVIEW_MEDIA_UNAVAILABLE', '图片上传暂时不可用，请稍后重试')
+
 const invalidKey = () =>
   new ReviewMediaServiceError(422, 'REVIEW_IMAGE_INVALID', '图片对象不可引用，请重新上传', [
     { field: 'objectKey', message: '图片对象不可引用' },
@@ -115,8 +139,20 @@ export interface ReviewMediaService {
 export function createReviewMediaService(options: {
   gate: ReviewMediaGate
   storage: MediaStorage
+  /** 令牌桶可注入（测试用假时钟/小容量）；缺省按用户限速：突发 10、约 10/分钟补充。 */
+  limiter?: {
+    take(subject: string): { allowed: true } | { allowed: false; retryAfterSeconds: number }
+  }
 }): ReviewMediaService {
   const { gate, storage } = options
+  const limiter =
+    options.limiter ??
+    createTokenBucketLimiter({ capacity: 10, maxSubjects: 10_000, refillPerSecond: 10 / 60 })
+
+  function assertWithinRate(userId: string): void {
+    const decision = limiter.take(userId)
+    if (!decision.allowed) throw rateLimited(decision.retryAfterSeconds)
+  }
 
   async function requireGate(transactionId: string, userId: string): Promise<void> {
     const state = await gate.transactionGate(transactionId, userId)
@@ -128,6 +164,7 @@ export function createReviewMediaService(options: {
 
   return {
     async presign(userId, transactionId, input) {
+      assertWithinRate(userId)
       await requireGate(transactionId, userId)
       // 键由服务端生成且必带 userId：confirm 与写侧引用校验都只靠这个前缀判归属。
       // presign 永不签 `reviews/`（final）——这是「无登记表」安全性的根据。
@@ -145,7 +182,9 @@ export function createReviewMediaService(options: {
     },
 
     async confirm(userId, transactionId, input) {
+      assertWithinRate(userId)
       await requireGate(transactionId, userId)
+      if (!storage.readMediaBytes || !storage.writeMediaBytes) throw storageUnavailable()
       const key = input.objectKey
       // 形状 + 归属（`..`/编码绕过由 isSafeObjectKey 前提挡住，见 uploads/storage.ts 头注释）。
       if (!isReviewMediaStagingKey(key) || !key.startsWith(reviewMediaStagingPrefix(userId))) {
@@ -154,7 +193,7 @@ export function createReviewMediaService(options: {
       const stat = await storage.stat(key)
       if (!stat) throw invalidKey()
       if (stat.size > MAX_IMAGE_BYTES || !ALLOWED_MIME.has(stat.contentType)) throw invalidKey()
-      const bytes = await storage.readMediaBytes?.(key)
+      const bytes = await storage.readMediaBytes(key)
       if (!bytes || bytes.byteLength !== stat.size) throw invalidKey()
       // 真实内容判据：魔数必须与声明的 MIME 一致（扩展名/声明值都不可信）。
       if (sniffImageMime(bytes) !== stat.contentType) throw invalidKey()
@@ -165,7 +204,7 @@ export function createReviewMediaService(options: {
         reviewMediaStagingPrefix(userId),
         reviewMediaPublicPrefix(userId),
       )
-      await storage.writeMediaBytes?.(finalKey, bytes, stat.contentType)
+      await storage.writeMediaBytes(finalKey, bytes, stat.contentType)
       return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
     },
   }

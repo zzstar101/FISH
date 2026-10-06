@@ -44,7 +44,17 @@ function requireTransactionId(c: ReviewContext): string | null {
 
 /** 业务异常 → 契约错误信封；其它异常继续上抛给 `app.onError`。 */
 function toErrorResponse(c: ReviewContext, error: unknown): Response {
-  if (error instanceof TransactionReviewServiceError || error instanceof ReviewMediaServiceError) {
+  if (error instanceof ReviewMediaServiceError) {
+    // 429：与 recommendation 同款——`Retry-After` 头 + 信封里的 retryAfterSeconds。
+    if (error.retryAfterSeconds !== undefined) {
+      c.header('Retry-After', String(error.retryAfterSeconds))
+    }
+    return c.json(
+      errorBody(error.code, error.message, error.details, error.retryAfterSeconds),
+      error.status,
+    )
+  }
+  if (error instanceof TransactionReviewServiceError) {
     return c.json(errorBody(error.code, error.message, error.details), error.status)
   }
   throw error
