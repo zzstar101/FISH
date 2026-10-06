@@ -1,3 +1,4 @@
+import { BLOCK_ROUTES } from '@fish/contracts/blocks/routes'
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import {
   RECOMMENDATION_EVENT_RATE_LIMIT,
@@ -32,6 +33,9 @@ import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
+import { createOptionalIdentityDeletionGuard } from './modules/account-deletion/optional-identity-guard'
+import { createAccountDeletionModule } from './modules/account-deletion/router'
+import { isAccountDeletionBlockedWrite } from './modules/account-deletion/write-policy'
 import { createAdminModule } from './modules/admin/module'
 import { createAiPolishModule } from './modules/ai/module'
 import {
@@ -40,6 +44,9 @@ import {
 } from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
+import { createBlocksRouter } from './modules/blocks/router'
+import { createBlockService } from './modules/blocks/service'
+import { createSqlBlockStore } from './modules/blocks/store'
 import { createBrandAssetsRouter } from './modules/brand-assets/router'
 import { createCommentsRouter } from './modules/comments/router'
 import { createCommentService } from './modules/comments/service'
@@ -252,6 +259,10 @@ export function createApp(
     secureCookie: env.WEB_ORIGIN.startsWith('https://'),
     wechat: wechatEnv,
     guard: restrictionGuard,
+    // 账号注销（#464）：冷静期内的**写拦截**挂在 requireAuth 这一处单一咽喉上 —— 它覆盖
+    // 全站每一个已登录写入口，不要求各域 router 逐个配合（`guard.write` 是域内可枚举的
+    // 另一件事，两者互不替代）。默认拒绝 + 小小白名单，白名单在 write-policy.ts 里注明理由。
+    accountDeletionWriteGuard: isAccountDeletionBlockedWrite,
     // 在线态心跳（#359 第五点）：已认证 HTTP 请求 / 可选身份读路径都算一次活动。
     onAuthenticated: (userId) => presence.touch(userId),
     clientIp: (request) =>
@@ -259,6 +270,26 @@ export function createApp(
   })
   app.route('/auth', auth.router)
   app.get('/me', auth.requireAuth, auth.meHandler)
+
+  /*
+   * #464 冷静期写拦截的第二个执行点（对抗性审查 B2）。
+   *
+   * `/recommendations` 与 `/visual-search` 只挂**可选身份**（`resolveViewerId`），不挂
+   * `requireAuth`，所以 `requireAuth` 里那道拦截够不着它们；而可选身份在
+   * `DELETION_REQUESTED` 时仍返回真实 userId，冷静期内这两个域照样带着归属落库。
+   * 这里按路径挂一层守卫（判据与 `requireAuth` 同源，匿名请求不受影响）。
+   *
+   * 必须在 `app.route('/recommendations', …)` / `app.route('/visual-search', …)` **之前**
+   * 注册：Hono 按注册顺序匹配中间件。
+   */
+  const optionalIdentityDeletionGuard = createOptionalIdentityDeletionGuard({
+    cookie: auth.sessionCookie,
+    loadViewer: auth.loadViewer,
+  })
+  app.use('/recommendations', optionalIdentityDeletionGuard)
+  app.use('/recommendations/*', optionalIdentityDeletionGuard)
+  app.use('/visual-search', optionalIdentityDeletionGuard)
+  app.use('/visual-search/*', optionalIdentityDeletionGuard)
 
   // 对象存储实例在接线层创建一次，注入给 uploads（签发直传）与 listings（读响应拼 URL）：
   // 「公开 URL 怎么拼」只允许有一个实现（#6 契约 §7.8）。
@@ -278,6 +309,11 @@ export function createApp(
     // 指望「带鉴权代理」，只能走短期签名 URL —— 签名本身就承载授权，因此路由仍然匿名可访问。
     reviewUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/media`,
     reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+    // #465 交易争议附件：私有 `dispute-media/` 前缀，与审核中图片同一套短期签名代理机制
+    // （争议双方在小程序里用原生 `<Image>` 读附件，带不上 cookie）。用途派生串在
+    // modules/uploads/dispute-media.ts 里与 review/legacy 分开，令牌不能跨路重放。
+    disputeUrlBase: `${env.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/dispute-media`,
+    disputeUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
   })
 
   // #286：图片确认记录表。uploads 侧写入（审核结论 + 固化后的 final 键），listings 侧读取
@@ -402,6 +438,9 @@ export function createApp(
       storage,
       legacyUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       reviewUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
+      // #465：争议附件的只读代理（`GET /uploads/dispute-media/:token`）。与 review 代理
+      // 一样刻意不挂 session 鉴权，授权由短期签名令牌承载。
+      disputeUrlSecret: meetupEnv.MEETUP_TOKEN_SECRET,
       requireAuth: auth.requireAuth,
       service: uploadService,
       guard: restrictionGuard,
@@ -543,6 +582,21 @@ export function createApp(
     }),
   )
 
+  // 拉黑关系（#466）：`GET /me/blocks` 与 `GET|POST|DELETE /users/:userId/block`。本域
+  // 没有匿名路径（拉黑是「我」与某个人的有向边），两条路径整挂 requireAuth；router 内部
+  // 兜一层失败关闭。**生效不在这里**：chat 域三个 service（会话创建 / 消息 / 媒体）持有
+  // 同一个 blockStore 的 `existsBlockBetween` 谓词做双向守卫，中性码见 chat 契约。
+  const blockStore = createSqlBlockStore(db)
+  app.use(BLOCK_ROUTES.myBlocks, auth.requireAuth)
+  app.use(BLOCK_ROUTES.blockRelation(':userId'), auth.requireAuth)
+  app.route(
+    '/',
+    createBlocksRouter({
+      service: createBlockService({ store: blockStore }),
+      getUserId: (c) => c.get('userId'),
+    }),
+  )
+
   // 浏览记录（#415 M1）：`GET|DELETE /me/view-history`。本域没有匿名路径（记录是「我」的
   // 资产），整挂 requireAuth，router 内部再兜一层失败关闭。只读写 `listing_view_history` /
   // `listings` / `listing_images` / `users` 表；写入不在这里 —— 由 `POST /recommendations/events`
@@ -608,12 +662,27 @@ export function createApp(
   const conversationStore = createSqlConversationStore(db)
   // 实时推送（#9 契约冻结语义③）：消息服务先落库，再经 hub 推给会话双方的全部在线连接。
   const hub = createConnectionHub()
+
+  // 账号注销（#464）：同一路径上的读 / 申请 / 撤回。挂在根路径（契约里路径自带 `/me/`
+  // 前缀），`requireAuth` 与全站共用同一份 —— 注销态的写拦截就在它内部，所以这里不需要
+  // 再挂一层守卫。`sessionCookie` 用于「保留本设备、撤销其它设备」；`hub` 用于申请成功后
+  // 断开该用户的全部 WS 连接（已撤销会话在下次 upgrade 时被 401 拦掉）。
+  app.route(
+    '/',
+    createAccountDeletionModule({
+      db,
+      requireAuth: auth.requireAuth,
+      sessionCookie: auth.sessionCookie,
+      hub,
+    }).router,
+  )
   app.route(
     '/conversations',
     createConversationsRouter({
       service: createConversationService({
         store: conversationStore,
         storage,
+        blocks: blockStore,
         // 对方的在线态由进程内登记表直接读（#359 第五点），与公开资料的 presence 同源。
         presence,
         projectContent: projectSystemContent,
@@ -646,6 +715,7 @@ export function createApp(
       service: createMediaMessageService({
         store: createSqlMediaMessageStore(db),
         storage,
+        blocks: blockStore,
         mediaUrl: (conversationId, mediaId) =>
           `/api/conversations/${conversationId}/media/${mediaId}`,
         onMediaCreated: (participants, media) => {
@@ -666,6 +736,7 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        blocks: blockStore,
         // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
         storage,
         projectContent: projectSystemContent,
@@ -713,6 +784,7 @@ export function createApp(
     '/transactions',
     createTransactionsRouter({
       service: createTransactionService({
+        blocks: blockStore,
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
         storage,
@@ -786,12 +858,31 @@ export function createApp(
     // 传读取函数以保证读到的是**当前**累计值。
     latency: latencyRecorder,
     recommendationProcessMetrics: () => recommendationProcessMetrics.snapshot(),
+    // 争议进展通知（#465）：payload 存裸 UUID，读侧（notifications/service.ts 的
+    // projectPayload）转成公开 TypeID。写入用**争议状态变更的同一个事务**当执行器，
+    // 所以通知与结论要么一起成功、要么一起回滚（plan §2 冻结口径，不做 best-effort 旁路）。
+    notifyDispute: (executor, input) =>
+      writeNotification(executor, {
+        userId: input.userId,
+        type: 'DISPUTE',
+        payload: {
+          disputeId: input.disputeId,
+          transactionId: input.transactionId,
+          disputeEvent: input.event,
+          ...(input.resolution ? { resolution: input.resolution } : {}),
+        },
+      }),
   })
   app.route('/admin', admin.router)
 
   // 举报入口只允许登录用户；与管理端共用同一个持久化 service。
   app.use('/reports/*', auth.requireAuth)
   app.route('/reports', admin.reportsRouter)
+
+  // 交易争议入口（#465）同挂法：先认证守卫，再进 router；管理端三条路径在 /admin/disputes*，
+  // 与管理端点共用 requireAdmin 守卫，但共享同一个 dispute service（可见性口径只有一套）。
+  app.use('/disputes/*', auth.requireAuth)
+  app.route('/disputes', admin.disputesRouter)
 
   // 未捕获异常统一成契约里的错误信封，避免 Hono 默认 HTML / 栈信息外泄；
   // HTTPException（如 404 / 405）保持 Hono 自身语义。

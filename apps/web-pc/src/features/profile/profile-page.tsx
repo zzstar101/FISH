@@ -5,6 +5,7 @@ import { ErrorState, LoadingState } from '@fish/ui/states'
 import { UserAvatar } from '@fish/ui/user-avatar'
 import { Link } from '@tanstack/react-router'
 import {
+  Ban,
   Bookmark,
   ChevronRight,
   CircleDollarSign,
@@ -25,6 +26,7 @@ import { useLogout } from '../auth/queries'
 import { useFavoritesTotal } from '../favorites/queries'
 import { useViewHistoryTotal } from '../view-history/queries'
 import { historyCountLabel } from '../view-history/view'
+import { AccountDeletionCard } from './account-deletion-card'
 import { ProfileEditDialog } from './profile-edit'
 import { useProfile } from './queries'
 import { signatureFirstLine } from './signature'
@@ -192,6 +194,23 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
         </Card>
       </Link>
 
+      <Link to="/blocked">
+        <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 place-items-center rounded-xl bg-surface-2 text-brand">
+                <Ban className="size-5" />
+              </span>
+              <div>
+                <h2 className="font-semibold">黑名单</h2>
+                <p className="mt-0.5 text-ink-3 text-sm">管理你拉黑的用户，可随时解除</p>
+              </div>
+            </div>
+            <ChevronRight className="size-4 shrink-0 text-ink-3" />
+          </div>
+        </Card>
+      </Link>
+
       <Link to="/reports">
         <Card className="gap-0 border border-line p-5 transition-colors hover:border-brand/40 hover:bg-brand-soft/30">
           <div className="flex items-center justify-between gap-4">
@@ -225,6 +244,9 @@ function ProfileContent({ ownerId }: { ownerId: string }) {
         </div>
         {logoutError !== null ? <p className="text-danger text-sm">{logoutError}</p> : null}
       </Card>
+
+      {/* #464：注销入口紧邻退出登录，但比它更重（不可恢复），所以放在最后一行。 */}
+      <AccountDeletionCard ownerId={ownerId} />
 
       <ProfileEditDialog onOpenChange={setEditOpen} open={editOpen} />
     </div>

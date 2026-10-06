@@ -8,6 +8,7 @@ import { Loader2, ShieldCheck, UserRoundPlus } from 'lucide-react'
 import { useState } from 'react'
 import { currentHref } from '../../lib/redirect'
 import { useAuth } from '../auth/auth-provider'
+import { BlockAction } from '../blocks/block-button'
 import { FollowButtonView, followButtonState } from '../follows/follow-button'
 import { useFollowMutation, useFollowState, useUnfollowMutation } from '../follows/queries'
 import { PcListingCard } from '../listings/listing-card'
@@ -135,6 +136,10 @@ export function UserProfilePage({ userId }: { userId: string }) {
                 })}
               />
               {followError !== null ? <p className="text-danger text-xs">{followError}</p> : null}
+              {/* #466：拉黑 / 解除拉黑与关注钮同区（单方面动作，确认弹窗在 BlockAction 内）。 */}
+              <div className="mt-2">
+                <BlockAction nickname={user.nickname} userId={user.id} />
+              </div>
             </div>
           )}
         </div>

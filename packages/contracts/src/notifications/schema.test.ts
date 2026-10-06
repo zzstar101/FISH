@@ -78,7 +78,13 @@ describe('notificationDtoSchema', () => {
   // 值集钉在契约里（store 的 type 谓词直接取 `notificationTypeSchema.options`）：
   // 加类型时扩枚举，而不是放宽这条校验。
   test('rejects a type outside the enum', () => {
-    expect(notificationTypeSchema.options).toEqual(['MATCH', 'TX', 'MODERATION', 'ACCOUNT'])
+    expect(notificationTypeSchema.options).toEqual([
+      'MATCH',
+      'TX',
+      'MODERATION',
+      'ACCOUNT',
+      'DISPUTE',
+    ])
     expect(notificationDtoSchema.safeParse({ ...validDto, type: 'PRICE_DROP' }).success).toBe(false)
   })
 })
@@ -118,6 +124,37 @@ describe('notificationPayloadSchema（TX / MODERATION / ACCOUNT）', () => {
     expect(
       notificationPayloadSchema.parse({ subject: 'VERIFICATION', outcome: 'REJECTED' }),
     ).toEqual({ subject: 'VERIFICATION', outcome: 'REJECTED' })
+  })
+})
+
+describe('notificationPayloadSchema（DISPUTE，#465）', () => {
+  const disputeId = encodePublicId(PUBLIC_ID_PREFIX.dispute, UUID)
+  const transactionId = encodePublicId(PUBLIC_ID_PREFIX.transaction, UUID)
+
+  test('accepts a DISPUTE payload keyed by disputeEvent, resolution only when 出结论', () => {
+    expect(
+      notificationPayloadSchema.parse({ disputeId, transactionId, disputeEvent: 'FILED' }),
+    ).toEqual({ disputeId, transactionId, disputeEvent: 'FILED' })
+    expect(
+      notificationPayloadSchema.parse({
+        disputeId,
+        transactionId,
+        disputeEvent: 'RESOLVED',
+        resolution: 'UPHELD',
+      }),
+    ).toEqual({ disputeId, transactionId, disputeEvent: 'RESOLVED', resolution: 'UPHELD' })
+  })
+
+  test('rejects an unknown disputeEvent / resolution and a bare disputeId', () => {
+    for (const payload of [
+      { disputeId, disputeEvent: 'APPEALED' },
+      // 实现早期叫 CREATED，plan 冻结为 FILED：旧名必须被拒（否则两个写入侧会各写一套）。
+      { disputeId, disputeEvent: 'CREATED' },
+      { disputeId, disputeEvent: 'RESOLVED', resolution: 'REFUNDED' },
+      { disputeId: UUID, disputeEvent: 'FILED' },
+    ]) {
+      expect(notificationPayloadSchema.safeParse(payload).success).toBe(false)
+    }
   })
 })
 

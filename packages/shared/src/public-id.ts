@@ -14,6 +14,8 @@ export const PUBLIC_ID_PREFIX = {
   review: 'rvw',
   notification: 'ntf',
   report: 'rpt',
+  /** 交易争议（#465）。与举报共享「处理结果」，但状态机、附件与证据关联是争议域独有的。 */
+  dispute: 'dsp',
   userRestriction: 'rst',
   media: 'med',
   moderationRecord: 'mdr',

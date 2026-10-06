@@ -3,7 +3,7 @@ import {
   RecommendationMetricsSchema,
 } from '@fish/contracts/admin/recommendation-metrics'
 import { ADMIN_ROUTES } from '@fish/contracts/admin/routes'
-import type { UserRole } from '@fish/contracts/admin/schema'
+import type { AdminAuditAction, AdminAuditTargetType, UserRole } from '@fish/contracts/admin/schema'
 import {
   type AdminAuditLogPage,
   AdminAuditLogPageSchema,
@@ -301,17 +301,8 @@ export async function fetchAdminTransactions(
 
 export type AdminAuditFilters = {
   actorId?: string
-  action?:
-    | 'ADMIN_PROMOTED'
-    | 'MODERATION_DECISION'
-    | 'REPORT_DECISION'
-    | 'LISTING_DELISTED'
-    | 'LISTING_RESTORED'
-    | 'USER_RESTRICTED'
-    | 'USER_RESTRICTION_LIFTED'
-    | 'USER_BANNED'
-    | 'USER_UNBANNED'
-  targetType?: 'USER' | 'LISTING' | 'MODERATION_RECORD' | 'REPORT' | 'USER_RESTRICTION'
+  action?: AdminAuditAction
+  targetType?: AdminAuditTargetType
   targetId?: string
   createdFrom?: string
   createdTo?: string

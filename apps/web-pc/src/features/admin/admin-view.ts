@@ -74,11 +74,13 @@ export const ROLE_META: Record<UserRole, { label: string; variant: BadgeVariant 
   ADMIN: { label: '管理员', variant: 'brand' },
 }
 
-/** 审计动作枚举 → 中文。治理五动作各占一行，便于审计页按动作筛选时对得上。 */
+/** 审计动作枚举 → 中文。契约每个取值各占一行，便于审计页按动作筛选时对得上。 */
 export const AUDIT_ACTION_META: Record<AdminAuditAction, string> = {
   ADMIN_PROMOTED: '提升管理员',
+  ACCOUNT_DELETION_COMPLETED: '账号注销完成',
   MODERATION_DECISION: '人工审核决定',
   REPORT_DECISION: '举报处理',
+  DISPUTE_DECISION: '争议处理',
   LISTING_DELISTED: '下架商品',
   LISTING_RESTORED: '恢复商品',
   USER_RESTRICTED: '限制发布',
@@ -108,6 +110,7 @@ export const AUDIT_TARGET_TYPE_LABEL: Record<AdminAuditTargetType, string> = {
   LISTING: '商品',
   MODERATION_RECORD: '审核记录',
   REPORT: '举报',
+  DISPUTE: '争议',
   USER_RESTRICTION: '限制记录',
 }
 

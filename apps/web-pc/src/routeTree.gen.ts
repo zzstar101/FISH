@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as BlockedRouteImport } from './routes/blocked'
 import { Route as CommentsRouteImport } from './routes/comments'
 import { Route as FavoritesRouteImport } from './routes/favorites'
 import { Route as FollowingRouteImport } from './routes/following'
@@ -61,6 +62,11 @@ const IndexRoute = IndexRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlockedRoute = BlockedRouteImport.update({
+  id: '/blocked',
+  path: '/blocked',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CommentsRoute = CommentsRouteImport.update({
@@ -272,6 +278,7 @@ const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
@@ -316,6 +323,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
@@ -353,6 +361,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/blocked': typeof BlockedRoute
   '/comments': typeof CommentsRoute
   '/favorites': typeof FavoritesRoute
   '/following': typeof FollowingRoute
@@ -400,6 +409,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/blocked'
     | '/comments'
     | '/favorites'
     | '/following'
@@ -444,6 +454,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/blocked'
     | '/comments'
     | '/favorites'
     | '/following'
@@ -480,6 +491,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/blocked'
     | '/comments'
     | '/favorites'
     | '/following'
@@ -526,6 +538,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
+  BlockedRoute: typeof BlockedRoute
   CommentsRoute: typeof CommentsRoute
   FavoritesRoute: typeof FavoritesRoute
   FollowingRoute: typeof FollowingRoute
@@ -559,6 +572,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blocked': {
+      id: '/blocked'
+      path: '/blocked'
+      fullPath: '/blocked'
+      preLoaderRoute: typeof BlockedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/comments': {
@@ -996,6 +1016,7 @@ const WishRouteWithChildren = WishRoute._addFileChildren(WishRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
+  BlockedRoute: BlockedRoute,
   CommentsRoute: CommentsRoute,
   FavoritesRoute: FavoritesRoute,
   FollowingRoute: FollowingRoute,

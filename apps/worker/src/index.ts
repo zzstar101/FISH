@@ -4,6 +4,7 @@ import { createDb } from '@fish/db/client'
 import { loadEmbeddingEnv, loadServerEnv, loadVisualEmbeddingEnv } from '@fish/shared/env'
 import { createVisualEmbeddingProvider } from '@fish/visual-embedding/providers/factory'
 import { sql } from 'drizzle-orm'
+import { purgeDueAccountDeletions } from './jobs/account-deletion/purge'
 import { createEmbedJobHandlers } from './jobs/embedding/handlers'
 import { createEmbeddingProvider } from './jobs/embedding/providers'
 import { scheduleFailedEmbedRetry } from './jobs/embedding/requeue'
@@ -39,6 +40,16 @@ const VISUAL_MAINTENANCE_INTERVAL_MS = 60_000
  * 晚删一会儿不会让用户看到过期记录。
  */
 const VIEW_HISTORY_CLEANUP_INTERVAL_MS = 3_600_000
+
+/**
+ * 账号注销到期执行（#464）的间隔。
+ *
+ * 冷静期是 7 天，注销本身是低频动作，分钟级足够 —— 到期与真正去标识化之间差一分钟对用户
+ * 没有可感知差别（端上只承诺「到期后删除」）。注意 `lastRunAt = 0` 在这里**不会**让首轮立即执行：
+ * 调度循环用单调时钟 `performance.now()`（进程启动时接近 0）与初值 0 比较，所以每个周期任务
+ * 都要等满一个 `intervalMs`（既有实现的注释与行为不符，已在本 PR 中作为范围外问题报告）。
+ */
+const ACCOUNT_DELETION_PURGE_INTERVAL_MS = 60_000
 
 const env = loadServerEnv()
 const db = createDb(env.DATABASE_URL)
@@ -168,6 +179,32 @@ async function runRecommendationCleanup(now: Date): Promise<void> {
 }
 
 /**
+ * 周期性执行到点的账号注销（#464）：去标识化 + 撤销全部会话 + 系统审计。
+ *
+ * 有动作才打日志（`purged` / `deferred` 非零）；空转不打 —— 每分钟一行「什么都不用做」会把
+ * 日志淹掉。被推迟（出现未完成交易）必须打出来：那是一个需要人看一眼的滞留状态。
+ */
+async function runAccountDeletionPurge(now: Date): Promise<void> {
+  try {
+    const result = await purgeDueAccountDeletions({ db, now })
+    if (result.purged > 0 || result.deferred > 0) {
+      console.log(`[worker] 账号注销执行：${result.purged} 个已去标识化，${result.deferred} 个推迟`)
+    }
+    for (const outcome of result.outcomes) {
+      if (outcome.kind === 'deferred-pending-transaction') {
+        console.error(
+          `[worker] 账号注销推迟（user=${outcome.userId}）：仍有 ${outcome.blockingTransactions} 笔未完成交易`,
+        )
+      }
+    }
+  } catch (error) {
+    // 与其它周期任务同语义：一轮失败只记日志，下一轮自然重试（每个账号内部是事务，幂等）。
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(`[worker] 账号注销执行失败：${detail}`)
+  }
+}
+
+/**
  * 周期任务表（#323 R6 §7.1，**已确认**）：把原先单个 `lastMaintenanceAt` 换成一张小表。
  *
  * 理由：再来第三个定时任务时不必继续堆 `if`，且「首次循环立即跑一轮」（`lastRunAt = 0`）的既有
@@ -185,6 +222,12 @@ const SCHEDULES: MaintenanceSchedule[] = [
   { intervalMs: VISUAL_MAINTENANCE_INTERVAL_MS, lastRunAt: 0, run: runVisualMaintenance },
   { intervalMs: RECOMMENDATION_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runRecommendationCleanup },
   { intervalMs: VIEW_HISTORY_CLEANUP_INTERVAL_MS, lastRunAt: 0, run: runViewHistoryCleanup },
+  // #464：账号注销冷静期到期（7 天）后执行去标识化。低频、单调、可重复执行。
+  {
+    intervalMs: ACCOUNT_DELETION_PURGE_INTERVAL_MS,
+    lastRunAt: 0,
+    run: runAccountDeletionPurge,
+  },
 ]
 
 /**

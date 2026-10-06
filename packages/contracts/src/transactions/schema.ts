@@ -229,10 +229,24 @@ export const TransactionErrorCodeSchema = z.enum([
   'CONVERSATION_NOT_FOUND',
   /** 403：提案端点被会话里的卖家（或外人）调用。 */
   'NOT_CONVERSATION_BUYER',
+  /**
+   * 403：会话当前不可用（#466 拉黑守卫）。**与 chat 域共用的中性码**——提案是
+   * 「新发起的联系」，拉黑生效后任一方都不能再推进；报错不暴露拉黑关系。
+   */
+  'CONVERSATION_UNAVAILABLE',
   /** 403：接受/拒绝端点被会话里的买家（或外人）调用。 */
   'NOT_CONVERSATION_SELLER',
   /** 409：提案或接受时商品非 ACTIVE（RESERVED / SOLD / OFFLINE，含并发输给另一买家）。 */
   'LISTING_NOT_ACTIVE',
+  /**
+   * 409：接受提案时**买家**账号不在可用状态（`DELETION_REQUESTED` 或 `DELETED`）。
+   *
+   * #464：冷静期内的账号不能再新增交易。买家侧的提案是冷静期之前提的，卖家现在接受就会
+   * 造出一笔新交易，而买家自己已被写拦截挡住、既不能取消也不能确认它 —— 于是注销被这笔
+   * 交易无限期推迟（去标识化会 deferred），与「7 天后必然注销」的承诺冲突。
+   * 卖家侧不需要这个码：接受端点挂 `requireAuth`，卖家自己在冷静期根本发不出这个请求。
+   */
+  'COUNTERPARTY_ACCOUNT_INACTIVE',
   /** 404：交易 id 不存在，或调用者不是交易双方（404 而非 403，不泄漏存在性）。 */
   'TRANSACTION_NOT_FOUND',
   /** 409：终态上的非法操作——COMPLETED 上取消、CANCELLED 上确认（一码两用，见状态机注释）。 */

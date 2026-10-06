@@ -74,6 +74,12 @@ export interface UserSummaryRow {
   createdAtCursor: string
   listingCount: number
   lastActivityAt: Date | null
+  /** #464 账号注销状态（`account_status`）：ACTIVE / DELETION_REQUESTED / DELETED。 */
+  accountStatus: string
+  /** 注销申请时刻；非冷静期 / 已执行为 `null`。 */
+  deletionRequestedAt: Date | null
+  /** 计划去标识化时刻；非冷静期为 `null`。 */
+  purgeScheduledAt: Date | null
 }
 
 export interface ListingSummaryRow {
@@ -425,7 +431,11 @@ const userSummarySelectSql = sql`
   u.created_at AS created_at,
   ${createdAtCursorText(sql`u.created_at`)} AS created_at_cursor,
   (SELECT count(*)::int FROM ${listings} l WHERE l.seller_id = u.id) AS listing_count,
-  (SELECT max(s.created_at) FROM ${sessions} s WHERE s.user_id = u.id) AS last_activity_at
+  (SELECT max(s.created_at) FROM ${sessions} s WHERE s.user_id = u.id) AS last_activity_at,
+  -- #464：注销状态只读展示（管理端没有任何强制注销 / 硬删除入口）。
+  u.account_status::text AS account_status,
+  u.deletion_requested_at AS deletion_requested_at,
+  u.purge_scheduled_at AS purge_scheduled_at
 `
 
 function rowsToUserSummaries(rows: Record<string, unknown>[]): UserSummaryRow[] {
@@ -441,6 +451,13 @@ function rowsToUserSummaries(rows: Record<string, unknown>[]): UserSummaryRow[] 
     listingCount: Number(row.listing_count),
     lastActivityAt: (row.last_activity_at as string | Date | null)
       ? new Date(row.last_activity_at as string | Date)
+      : null,
+    accountStatus: String(row.account_status),
+    deletionRequestedAt: row.deletion_requested_at
+      ? new Date(row.deletion_requested_at as string | Date)
+      : null,
+    purgeScheduledAt: row.purge_scheduled_at
+      ? new Date(row.purge_scheduled_at as string | Date)
       : null,
   }))
 }

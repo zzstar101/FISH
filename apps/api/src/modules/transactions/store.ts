@@ -34,10 +34,14 @@ export interface TxBrief {
 /** 会话定位失败的原因细分：service 据此映射 404 / 403 / 409。 */
 export type ConversationLookup = { kind: 'not-found' } | { kind: 'ok'; brief: TxBrief }
 
-/** 接受的结果细分：条件更新失败 = 商品已非 ACTIVE（并发输掉或状态漂移）。 */
+/**
+ * 接受的结果细分：条件更新失败 = 商品已非 ACTIVE（并发输掉或状态漂移）；
+ * `buyer-account-inactive` = 买家账号在冷静期或已注销（#464，见 `accept` 的 ⓪ 步）。
+ */
 export type AcceptResult =
   | { kind: 'created'; row: TransactionRow; message: MessageRow }
   | { kind: 'listing-not-active' }
+  | { kind: 'buyer-account-inactive' }
 
 /** DTO 内嵌商品摘要的 DB 投影；cover 只给 objectKey，URL 由 service 经 MediaStorage 拼。 */
 export interface TxListingBrief {
@@ -364,6 +368,24 @@ export function createSqlTransactionStore(db: Db): TransactionStore {
 
     async accept(brief, amountCents, buildSystemContent) {
       return db.transaction(async (tx) => {
+        // ⓪ #464：先锁**买家**行并确认账号可用。冷静期内买家不能再被卷进新交易 —— 否则
+        //    它会拿到一笔自己因写拦截而无法取消/确认的交易，注销被无限期推迟（去标识化
+        //    deferred）。锁在 listings 之前、与注销事务同一把 users 行锁，所以「接受」与
+        //    「申请注销」天然串行：注销先提交则这里读到 DELETION_REQUESTED，反之注销那边
+        //    的未完成交易复查会读到这笔新交易并 409 回滚。
+        //    卖家侧不需要检查：本端点挂 `requireAuth`，卖家自己在冷静期发不出这个请求。
+        //    锁强度刻意用 `FOR SHARE` 而不是 `FOR UPDATE`：注销事务拿的是 `FOR UPDATE`，
+        //    两者互斥（→ 串行），而外键检查拿的是 `FOR KEY SHARE`，与 `FOR SHARE` 相容。
+        //    若这里用 `FOR UPDATE`，任何引用该用户行的写入（如消息的 sender_id 外键）
+        //    都会被这把锁挡到 accept 提交为止 —— 锁的影响面溢出到别的域。
+        const buyer = await tx.execute(sql`
+          SELECT account_status FROM users WHERE id = ${brief.buyerId} FOR SHARE
+        `)
+        const buyerRow = rowsOf(buyer)[0]
+        if (buyerRow?.account_status !== 'ACTIVE') {
+          return { kind: 'buyer-account-inactive' }
+        }
+
         // ① 条件更新锁定 Listing：0 行 = 已被并发买家锁定 / 已售 / 已下架。
         // ② 部分唯一索引 transactions_listing_id_live_uq 兜底同一 listing 的第二笔 live 交易。
         const lock = await tx.execute(sql`
