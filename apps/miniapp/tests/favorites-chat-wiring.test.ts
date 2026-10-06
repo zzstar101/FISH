@@ -21,6 +21,11 @@ function sliceFrom(code: string, start: string, end: string): string {
   return code.slice(from, to + end.length)
 }
 
+/** 只留代码：注释里出现「status」「OFF」不该被当成预检（先例 `tests/order-list-state.test.ts` 的 `codeOnly`） */
+function codeOnly(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
 /** 断言 `first` 出现在 `second` 之前（两者都必须存在） */
 function expectBefore(block: string, first: string, second: string): void {
   const i = block.indexOf(first)
@@ -77,10 +82,23 @@ describe('收藏页「聊一聊」：接线', () => {
     )
     // 契约不限制 ACTIVE（`packages/contracts/src/chat/routes.ts`）：按上下架状态预检
     // 会拦掉服务端明确允许的会话，唯一允许的入口拦截是**演示行 id**（上一用例）。
-    const upToRequest = chatWith.slice(0, chatWith.indexOf('createConversation(item.id)'))
-    expect(upToRequest).not.toContain('OFFLINE')
-    expect(upToRequest).not.toContain('SOLD')
-    expect(upToRequest).not.toContain('.status')
+    const upToRequest = codeOnly(chatWith.slice(0, chatWith.indexOf('createConversation(item.id)')))
+    // 只钉 `OFFLINE` / `SOLD` / `.status` 三个字面量是**弱断言**：`if (item.listingStatus === 'OFF')
+    // return` 这种换字段名 / 换字面量的等价预检照样全绿（#470 复审实证）。所以改钉「请求前没有
+    // 任何商品属性参与判断」这个结构本身，三条一起：
+    //   ① 请求前读到的商品属性只有 `demo`（演示行拦截）与 `id`（上锁、请求参数）；
+    //   ② 请求前只允许两处提前退出（演示行、在飞的锁）；
+    //   ③ 不出现 `status` 字样与上下架字面量（大小写不敏感，覆盖 `'OFF'`）。
+    // 仓库没有 Taro 组件渲染基建（`tests/listing-detail-comments-paging.test.ts` 头注：既无
+    // `@testing-library/*` 也无 `react-test-renderer`），行为化断言不可行，故用结构 + 词面双网。
+    const itemProps = [...upToRequest.matchAll(/item\.([A-Za-z_$][\w$]*)/g)].map((m) => m[1])
+    expect([...new Set(itemProps)].sort(), '请求前只该读 item.demo 与 item.id').toEqual([
+      'demo',
+      'id',
+    ])
+    expect(upToRequest.match(/\breturn\b/g) ?? [], '请求前只该有两处提前退出').toHaveLength(2)
+    expect(upToRequest).not.toMatch(/status/i)
+    expect(upToRequest).not.toMatch(/offline|\boff\b|sold/i)
   })
 
   test('世代在换账号渲染期重置与卸载清理两处都前进', async () => {
