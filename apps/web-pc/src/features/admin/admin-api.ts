@@ -56,7 +56,8 @@ import { apiRequest } from '../../lib/api-client'
  * 列表全部游标分页：`cursor` 缺省不带（从最新一页开始），`limit` 恒带。
  */
 
-export const ADMIN_PAGE_LIMIT = 20
+/** 分页大小：本模块内部口径，不外传（调用方一律走下面的 fetch* 函数）。 */
+const ADMIN_PAGE_LIMIT = 20
 
 type QueryParams = Record<string, string | number | undefined>
 

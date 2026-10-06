@@ -1,4 +1,4 @@
-import { Badge } from '@fish/ui/badge'
+import { type ReportId, ReportIdSchema } from '@fish/contracts/system/public-id'
 import { Button } from '@fish/ui/button'
 import {
   Dialog,
@@ -10,6 +10,7 @@ import {
 } from '@fish/ui/dialog'
 import { Input } from '@fish/ui/input'
 import { useState } from 'react'
+import { DialogAlert, ReasonField } from './admin-dialog-parts'
 import { validateReason } from './admin-view'
 
 /**
@@ -18,19 +19,21 @@ import { validateReason } from './admin-view'
  * 通知，#448 审查教训），冲突时由调用方决定关闭与否。
  */
 
-/** 提交给治理 mutation 的形状：sourceReportId 已过前缀守卫（品牌类型）。 */
+/** 提交给治理 mutation 的形状：sourceReportId 已过契约守卫（品牌类型）。 */
 export type GovernanceDialogOutput = {
   reason: string
-  sourceReportId?: `rpt_${string}`
+  sourceReportId?: ReportId
   expiresAt?: string
 }
 
 /**
- * 关联举报单的前缀守卫：匹配时把输入收窄成契约的 `rpt_${string}` 品牌类型，
- * 让「报出去的 id 一定是举报单前缀」在类型层成立（存在性仍由服务端 404/422 兜底）。
+ * 关联举报单的值域守卫：直接复用契约的 `ReportIdSchema`（TypeID `rpt_` + 26 位 Base32），
+ * 端上不再自己写 `/^rpt_[0-9a-z]+$/` 复刻前缀知识——契约收紧时这里跟着收紧。
+ * 存在性与「是否与治理目标匹配」仍由服务端 404/422 兜底。
  */
-export function asSourceReportId(input: string): `rpt_${string}` | undefined {
-  return /^rpt_[0-9a-z]+$/.test(input) ? (input as `rpt_${string}`) : undefined
+export function asSourceReportId(input: string): ReportId | undefined {
+  const parsed = ReportIdSchema.safeParse(input)
+  return parsed.success ? parsed.data : undefined
 }
 
 export function GovernanceDialog({
@@ -77,11 +80,11 @@ export function GovernanceDialog({
       expires = parsed.toISOString()
     }
     setLocalError(null)
-    let brandedReport: `rpt_${string}` | undefined
+    let brandedReport: ReportId | undefined
     if (trimmedReport.length > 0) {
       const branded = asSourceReportId(trimmedReport)
       if (branded === undefined) {
-        setLocalError('关联举报单 ID 格式不正确（应以 rpt_ 开头）')
+        setLocalError('关联举报单 ID 格式不正确（应为 rpt_ 开头的规范 ID）')
         return
       }
       brandedReport = branded
@@ -107,20 +110,7 @@ export function GovernanceDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <span className="font-medium text-sm">
-              原因 <span className="text-coral">*</span>
-            </span>
-            <textarea
-              aria-label="治理原因"
-              className="min-h-20 w-full rounded-xl border border-line bg-white/80 px-3 py-2 text-sm focus-visible:ring-3 focus-visible:ring-brand/15 focus:outline-none"
-              maxLength={500}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="写进审计、不可抵赖；1–500 字"
-              value={reason}
-            />
-            <span className="block text-right text-ink-3 text-xs">{reason.trim().length}/500</span>
-          </div>
+          <ReasonField ariaLabel="治理原因" label="原因" onChange={setReason} value={reason} />
 
           <div className="space-y-1.5">
             <span className="font-medium text-sm">关联举报单（可选）</span>
@@ -147,14 +137,7 @@ export function GovernanceDialog({
           ) : null}
 
           {shownError !== null ? (
-            <p
-              className={`rounded-xl px-3.5 py-2.5 text-sm ${
-                localError !== null ? 'bg-warn-soft text-warn' : 'bg-danger-soft text-danger'
-              }`}
-              role="alert"
-            >
-              {shownError}
-            </p>
+            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
           ) : null}
         </div>
 
@@ -173,27 +156,4 @@ export function GovernanceDialog({
       </DialogContent>
     </Dialog>
   )
-}
-
-/** 治理成功结果的提示行（列表/详情页在成功后展示一次）。 */
-export function GovernanceResultBadge({
-  action,
-}: {
-  action:
-    | 'LISTING_DELISTED'
-    | 'LISTING_RESTORED'
-    | 'USER_RESTRICTED'
-    | 'USER_RESTRICTION_LIFTED'
-    | 'USER_BANNED'
-    | 'USER_UNBANNED'
-}) {
-  const label: Record<string, string> = {
-    LISTING_DELISTED: '已下架',
-    LISTING_RESTORED: '已恢复',
-    USER_RESTRICTED: '已限制发布',
-    USER_RESTRICTION_LIFTED: '已解除限制',
-    USER_BANNED: '已封禁',
-    USER_UNBANNED: '已解封',
-  }
-  return <Badge variant="success">{label[action] ?? action}</Badge>
 }

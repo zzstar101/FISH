@@ -139,10 +139,12 @@ function UserRow({ user }: { user: AdminUserSummary }) {
 export function parseUsersSearch(search: Record<string, unknown>): UsersSearch {
   const authStatus = optionalSearch(AuthStatusSchema, search.authStatus)
   const role = optionalSearch(UserRoleSchema, search.role)
+  const q = trimmedSearch(search.q)
+  const cursor = cursorSearch(search.cursor)
   return {
-    ...(trimmedSearch(search.q) !== undefined ? { q: trimmedSearch(search.q) } : {}),
+    ...(q !== undefined ? { q } : {}),
     ...(authStatus !== undefined ? { authStatus } : {}),
     ...(role !== undefined ? { role } : {}),
-    ...(cursorSearch(search.cursor) !== undefined ? { cursor: cursorSearch(search.cursor) } : {}),
+    ...(cursor !== undefined ? { cursor } : {}),
   }
 }

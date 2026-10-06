@@ -12,9 +12,18 @@ import {
   useUserLiftRestriction,
   useUserRestrictPublish,
 } from './admin-queries'
-import { auditActionLabel, authStatusMeta, formatAdminDateTime, roleMeta } from './admin-view'
+import {
+  auditActionLabel,
+  authStatusMeta,
+  formatAdminDateTime,
+  listingStatusMeta,
+  roleMeta,
+} from './admin-view'
 import type { GovernanceDialogOutput } from './governance-dialog'
 import { GovernanceDialog } from './governance-dialog'
+
+/** 商品统计的展示顺序（标签一律取自 `LISTING_STATUS_META`，不在页面里另抄一份中文）。 */
+const LISTING_STAT_ORDER = ['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE'] as const
 
 /**
  * 用户详情（#467 验收「详情、已有治理状态」+ 治理写：限制发布 / 封禁 / 解除）。
@@ -147,17 +156,10 @@ function UserDetailView({ detail, userId }: { detail: AdminUserDetail; userId: s
         <Card className="gap-3 border border-line p-5">
           <h2 className="font-semibold">商品统计</h2>
           <div className="grid grid-cols-4 gap-3 text-center">
-            {(
-              [
-                ['ACTIVE', '在售'],
-                ['RESERVED', '已预定'],
-                ['SOLD', '已售出'],
-                ['OFFLINE', '已下架'],
-              ] as const
-            ).map(([status, label]) => (
+            {LISTING_STAT_ORDER.map((status) => (
               <div className="rounded-xl bg-surface-2 p-3" key={status}>
                 <p className="font-bold text-xl">{detail.listingStats[status]}</p>
-                <p className="mt-0.5 text-ink-3 text-xs">{label}</p>
+                <p className="mt-0.5 text-ink-3 text-xs">{listingStatusMeta(status).label}</p>
               </div>
             ))}
           </div>

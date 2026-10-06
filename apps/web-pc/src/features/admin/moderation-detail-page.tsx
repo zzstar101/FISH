@@ -14,12 +14,20 @@ import {
   moderationProviderMeta,
 } from './admin-view'
 import { ModerationDecisionDialog } from './moderation-decision-dialog'
+import type { ModerationSearch } from './moderation-page'
 
 /**
  * 审核记录详情（#467 验收「详情与审核历史、人工 ALLOW/BLOCK」）。
  * 已有人工决定时不再给决定表单（服务端会 409，界面也不该摆一个必然失败的按钮）。
+ * `tab` 是来源列表（URL 上的查询条件），返回链接据此回到来处。
  */
-export function ModerationDetailPage({ recordId }: { recordId: string }) {
+export function ModerationDetailPage({
+  recordId,
+  tab,
+}: {
+  recordId: string
+  tab: ModerationSearch['tab']
+}) {
   const detail = useAdminModerationDetail(recordId)
 
   if (detail.isPending) return <LoadingState label="正在加载审核记录…" />
@@ -33,15 +41,17 @@ export function ModerationDetailPage({ recordId }: { recordId: string }) {
     )
   }
 
-  return <ModerationDetailView detail={detail.data} recordId={recordId} />
+  return <ModerationDetailView detail={detail.data} recordId={recordId} tab={tab} />
 }
 
 function ModerationDetailView({
   detail,
   recordId,
+  tab,
 }: {
   detail: AdminModerationDetail
   recordId: string
+  tab: ModerationSearch['tab']
 }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogError, setDialogError] = useState<string | null>(null)
@@ -88,10 +98,10 @@ function ModerationDetailView({
         <div>
           <Link
             className="text-ink-3 text-sm hover:text-brand"
-            search={{ tab: 'queue' }}
+            search={{ tab }}
             to="/admin/moderation"
           >
-            ← 审核队列
+            {tab === 'records' ? '← 审核记录' : '← 审核队列'}
           </Link>
           <h1 className="mt-1 font-semibold text-[26px] tracking-[-0.03em]">
             {item.listing === null

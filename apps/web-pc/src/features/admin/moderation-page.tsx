@@ -20,7 +20,7 @@ import {
   trimmedSearch,
   withoutCursor,
 } from './admin-search'
-import { formatAdminDateTime, moderationDecisionMeta } from './admin-view'
+import { formatAdminDateTime, moderationDecisionMeta, moderationProviderMeta } from './admin-view'
 
 export type ModerationSearch = {
   tab: 'queue' | 'records'
@@ -73,7 +73,7 @@ function ModerationQueueSection({ search }: { search: ModerationSearch }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <ModerationRow highlight="REVIEW" item={item} key={item.record.id} />
+            <ModerationRow highlight="REVIEW" item={item} key={item.record.id} tab="queue" />
           ))}
         </Card>
       ) : null}
@@ -168,7 +168,12 @@ function ModerationRecordsSection({ search }: { search: ModerationSearch }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <ModerationRow highlight={item.record.decision} item={item} key={item.record.id} />
+            <ModerationRow
+              highlight={item.record.decision}
+              item={item}
+              key={item.record.id}
+              tab="records"
+            />
           ))}
         </Card>
       ) : null}
@@ -230,16 +235,21 @@ type ModerationRowItem = AdminModerationRecords['items'][number]
 export function ModerationRow({
   highlight,
   item,
+  tab,
 }: {
   highlight: 'ALLOW' | 'BLOCK' | 'REVIEW'
   item: ModerationRowItem
+  /** 来源 tab：写进详情链接，返回时才能回到来处（#467 审查发现 Spec c-②）。 */
+  tab: ModerationSearch['tab']
 }) {
   const decisionMeta = moderationDecisionMeta(highlight)
+  const providerMeta =
+    item.record.provider === null ? null : moderationProviderMeta(item.record.provider)
   return (
     <Link
       className="block p-4 transition-colors hover:bg-surface-2/60"
       params={{ recordId: item.record.id }}
-      search={{ tab: 'queue' }}
+      search={{ tab }}
       to="/admin/moderation/$recordId"
     >
       <div className="flex items-start justify-between gap-4">
@@ -251,14 +261,8 @@ export function ModerationRow({
                 : item.listing.title}
             </span>
             <Badge variant={decisionMeta.variant}>{decisionMeta.label}</Badge>
-            {item.record.provider !== null ? (
-              <Badge variant="secondary">
-                {item.record.provider === 'LOCAL'
-                  ? '本地词表'
-                  : item.record.provider === 'MANUAL'
-                    ? '人工'
-                    : '腾讯云'}
-              </Badge>
+            {providerMeta !== null ? (
+              <Badge variant={providerMeta.variant}>{providerMeta.label}</Badge>
             ) : null}
           </div>
           <p className="mt-1 line-clamp-1 text-ink-3 text-xs">{item.record.descriptionSnapshot}</p>

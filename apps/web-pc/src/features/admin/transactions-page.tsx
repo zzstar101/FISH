@@ -52,6 +52,10 @@ export function TransactionsPage({ search }: { search: TransactionsSearch }) {
   }
   const transactions = useAdminTransactions(filters)
 
+  function update(next: Partial<TransactionsSearch>) {
+    void navigate({ to: '/admin/transactions', search: { ...withoutCursor(search), ...next } })
+  }
+
   if (transactions.isError) {
     const outcome = adminLoadOutcome(transactions.error)
     if (outcome.kind === 'forbidden') return <ForbiddenInline />
@@ -68,15 +72,10 @@ export function TransactionsPage({ search }: { search: TransactionsSearch }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <KeywordFilter onCommit={(q) => update(q)} placeholder="关键词" value={search.q} />
+        <KeywordFilter onCommit={(q) => update({ q })} placeholder="关键词" value={search.q} />
         <FilterChips
           ariaLabel="交易状态筛选"
-          onChange={(status) =>
-            void navigate({
-              to: '/admin/transactions',
-              search: { ...withoutCursor(search), status: status as TransactionsSearch['status'] },
-            })
-          }
+          onChange={(status) => update({ status: status as TransactionsSearch['status'] })}
           options={[
             { value: 'PENDING_MEETUP', label: '待面交' },
             { value: 'COMPLETED', label: '已完成' },
@@ -86,15 +85,52 @@ export function TransactionsPage({ search }: { search: TransactionsSearch }) {
         />
         <DateRangeFilter
           fromValue={search.from}
-          onCommit={({ from, to }) =>
-            void navigate({
-              to: '/admin/transactions',
-              search: { ...withoutCursor(search), from, to },
-            })
-          }
+          onCommit={({ from, to }) => update({ from, to })}
           toValue={search.to}
         />
       </div>
+
+      {/*
+        契约已有的三个 ID 筛选（#467 §2「暴露契约已有筛选」）：买家/卖家/商品 ID 都是
+        TypeID，不适合下拉，按 ID 精确过滤；每个输入自带「筛选」按钮（KeywordFilter 口径）。
+      */}
+      <div className="flex flex-wrap items-center gap-3">
+        <KeywordFilter
+          onCommit={(buyerId) => update({ buyerId })}
+          placeholder="买家 ID"
+          value={search.buyerId}
+        />
+        <KeywordFilter
+          onCommit={(sellerId) => update({ sellerId })}
+          placeholder="卖家 ID"
+          value={search.sellerId}
+        />
+        <KeywordFilter
+          onCommit={(listingId) => update({ listingId })}
+          placeholder="商品 ID"
+          value={search.listingId}
+        />
+      </div>
+
+      {search.buyerId !== undefined ||
+      search.sellerId !== undefined ||
+      search.listingId !== undefined ? (
+        <p className="rounded-xl bg-brand-soft px-4 py-2.5 text-brand text-sm" role="status">
+          正在按 ID 过滤
+          {search.buyerId !== undefined ? `（买家 ${search.buyerId}）` : ''}
+          {search.sellerId !== undefined ? `（卖家 ${search.sellerId}）` : ''}
+          {search.listingId !== undefined ? `（商品 ${search.listingId}）` : ''}，
+          <button
+            className="font-semibold underline"
+            onClick={() =>
+              update({ buyerId: undefined, listingId: undefined, sellerId: undefined })
+            }
+            type="button"
+          >
+            清除
+          </button>
+        </p>
+      ) : null}
 
       {transactions.isPending ? <LoadingState label="正在加载交易…" /> : null}
       {transactions.isSuccess && items.length === 0 ? (
@@ -118,10 +154,6 @@ export function TransactionsPage({ search }: { search: TransactionsSearch }) {
       />
     </div>
   )
-
-  function update(q: string | undefined) {
-    void navigate({ to: '/admin/transactions', search: { ...withoutCursor(search), q } })
-  }
 }
 
 function TransactionRow({ transaction }: { transaction: AdminTransaction }) {
@@ -164,6 +196,9 @@ export function parseTransactionsSearch(search: Record<string, unknown>): Transa
   const q = trimmedSearch(search.q)
   const idParam = (value: unknown): string | undefined =>
     typeof value === 'string' && value.length > 0 ? value : undefined
+  const buyerId = idParam(search.buyerId)
+  const sellerId = idParam(search.sellerId)
+  const listingId = idParam(search.listingId)
   const from =
     typeof search.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.from)
       ? search.from
@@ -174,9 +209,9 @@ export function parseTransactionsSearch(search: Record<string, unknown>): Transa
   return {
     ...(q !== undefined ? { q } : {}),
     ...(status !== undefined ? { status } : {}),
-    ...(idParam(search.buyerId) !== undefined ? { buyerId: idParam(search.buyerId) } : {}),
-    ...(idParam(search.sellerId) !== undefined ? { sellerId: idParam(search.sellerId) } : {}),
-    ...(idParam(search.listingId) !== undefined ? { listingId: idParam(search.listingId) } : {}),
+    ...(buyerId !== undefined ? { buyerId } : {}),
+    ...(sellerId !== undefined ? { sellerId } : {}),
+    ...(listingId !== undefined ? { listingId } : {}),
     ...(from !== undefined ? { from } : {}),
     ...(to !== undefined ? { to } : {}),
     ...(cursor !== undefined ? { cursor } : {}),

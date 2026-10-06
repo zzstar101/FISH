@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@fish/ui/dialog'
 import { useState } from 'react'
+import { DialogAlert, OptionCards, ReasonField } from './admin-dialog-parts'
 import { validateReason } from './admin-view'
 
 /**
@@ -71,60 +72,21 @@ export function ReportHandleDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <fieldset className="grid grid-cols-2 gap-2 border-0 p-0 m-0">
-            <legend className="sr-only">处理结果</legend>
-            {options.map((option) => {
-              const active = result === option.value
-              return (
-                <label
-                  className={`block cursor-pointer rounded-xl border p-3 text-left transition-colors ${
-                    active
-                      ? option.value === 'HANDLED'
-                        ? 'border-brand bg-brand-soft/60'
-                        : 'border-line bg-surface-2'
-                      : 'border-line bg-white/70 hover:border-brand/40'
-                  }`}
-                  key={option.value}
-                >
-                  <input
-                    checked={active}
-                    className="sr-only"
-                    name="report-handle-result"
-                    onChange={() => setResult(option.value)}
-                    type="radio"
-                    value={option.value}
-                  />
-                  <span className="block font-semibold text-sm">{option.label}</span>
-                  <span className="mt-1 block text-ink-3 text-xs">{option.hint}</span>
-                </label>
-              )
-            })}
-          </fieldset>
+          <OptionCards
+            activeClassName={(value) =>
+              value === 'HANDLED' ? 'border-brand bg-brand-soft/60' : 'border-line bg-surface-2'
+            }
+            legend="处理结果"
+            name="report-handle-result"
+            onChange={setResult}
+            options={options}
+            value={result}
+          />
 
-          <div className="space-y-1.5">
-            <span className="font-medium text-sm">
-              处理原因 <span className="text-coral">*</span>
-            </span>
-            <textarea
-              aria-label="处理原因"
-              className="min-h-20 w-full rounded-xl border border-line bg-white/80 px-3 py-2 text-sm focus-visible:ring-3 focus-visible:ring-brand/15 focus:outline-none"
-              maxLength={500}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="写进审计、不可抵赖；1–500 字"
-              value={reason}
-            />
-            <span className="block text-right text-ink-3 text-xs">{reason.trim().length}/500</span>
-          </div>
+          <ReasonField ariaLabel="处理原因" label="处理原因" onChange={setReason} value={reason} />
 
           {shownError !== null ? (
-            <p
-              className={`rounded-xl px-3.5 py-2.5 text-sm ${
-                localError !== null ? 'bg-warn-soft text-warn' : 'bg-danger-soft text-danger'
-              }`}
-              role="alert"
-            >
-              {shownError}
-            </p>
+            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
           ) : null}
         </div>
 
