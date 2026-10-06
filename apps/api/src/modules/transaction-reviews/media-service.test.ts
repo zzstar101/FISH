@@ -25,14 +25,17 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage & {
 } {
   const written: { key: string; contentType: string }[] = []
   // 缺省 statStrict 与 stat 同实现（假适配器不模拟「运行错误」差异，需要时显式 override）。
-  const stat = overrides.stat ?? (async (key: string) =>
-    key === STAGING_KEY ? { size: 64, contentType: 'image/png' } : null)
-  const statStrict = overrides.statStrict ?? (async (key: string) => {
-    // 模拟真实对象存储：final 键只有被 writeMediaBytes 写过才存在——
-    // confirm 幂等判据（final 已存在 → 不重写）靠它生效。
-    if (written.some((entry) => entry.key === key)) return { size: 64, contentType: 'image/png' }
-    return stat(key)
-  })
+  const stat =
+    overrides.stat ??
+    (async (key: string) => (key === STAGING_KEY ? { size: 64, contentType: 'image/png' } : null))
+  const statStrict =
+    overrides.statStrict ??
+    (async (key: string) => {
+      // 模拟真实对象存储：final 键只有被 writeMediaBytes 写过才存在——
+      // confirm 幂等判据（final 已存在 → 不重写）靠它生效。
+      if (written.some((entry) => entry.key === key)) return { size: 64, contentType: 'image/png' }
+      return stat(key)
+    })
   return {
     written,
     presignPut: (input) => ({

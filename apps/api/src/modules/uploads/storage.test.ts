@@ -189,13 +189,16 @@ describe('Bun S3 存储适配', () => {
     expect(await media.stat(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
   })
 
-  test.skipIf(!reachable)('statStrict：对象不存在返回 null；不合法键返回 null 不打请求', async () => {
-    const media = storage
-    if (!media || !media.statStrict) throw new Error('storage 未初始化')
+  test.skipIf(!reachable)(
+    'statStrict：对象不存在返回 null；不合法键返回 null 不打请求',
+    async () => {
+      const media = storage
+      if (!media || !media.statStrict) throw new Error('storage 未初始化')
 
-    expect(await media.statStrict(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
-    expect(await media.statStrict('listings/a/../b/x.jpg')).toBeNull()
-  })
+      expect(await media.statStrict(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
+      expect(await media.statStrict('listings/a/../b/x.jpg')).toBeNull()
+    },
+  )
 
   // #483 审查响应：statStrict 与 stat 的分野在「运行错误」——不可达端点下 stat 吞成 null，
   // statStrict 必须原样抛出（评价链据此回 503 而不是 422）。用不可达端点离线即可测。

@@ -6,8 +6,8 @@ import { loadMeetupTokenEnv, loadServerEnv } from '@fish/shared/env'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { sql } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/bun-sql/migrator'
-import { reviewMediaKey } from './modules/uploads/review-media'
 import { createApp } from './app'
+import { reviewMediaKey } from './modules/uploads/review-media'
 
 const databaseUrl = process.env.DATABASE_URL
 if (!databaseUrl) {
@@ -415,7 +415,11 @@ describe('#475 评价配图上传链 app 级接线', () => {
     // 解码令牌同时验证「顺序正确」与「URL 绑定的就是这把键」。
     const proxyBase = `${serverEnv.WEB_ORIGIN.replace(/\/+$/, '')}/api/uploads/media/`
     const decodeToken = (url: string) =>
-      reviewMediaKey(url.slice(proxyBase.length), meetupEnv.MEETUP_TOKEN_SECRET, Math.floor(Date.now() / 1000))
+      reviewMediaKey(
+        url.slice(proxyBase.length),
+        meetupEnv.MEETUP_TOKEN_SECRET,
+        Math.floor(Date.now() / 1000),
+      )
     const urls = body.images.map((image) => image.url)
     expect(urls.map((url) => url.startsWith(proxyBase))).toEqual([true, true])
     expect(urls.map(decodeToken)).toEqual([secondKey, firstKey])
