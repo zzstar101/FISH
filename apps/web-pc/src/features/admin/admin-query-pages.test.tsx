@@ -70,6 +70,9 @@ void mock.module('@tanstack/react-router', () => ({
   useNavigate: () => async (options: NavigateOptions) => {
     navigateCalls.push(options)
   },
+  // createFileRoute 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的；
+  // /admin/ index 路由的用例要 import 路由文件，靠它拿到 { path, options }）。
+  createFileRoute: (path: string) => (options: unknown) => ({ path, options }),
 }))
 
 const { ReportsPage, REPORTS_STATUS_ALL, parseReportsSearch } = await import('./reports-page')

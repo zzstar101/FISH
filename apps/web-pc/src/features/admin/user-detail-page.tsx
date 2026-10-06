@@ -13,7 +13,7 @@ import {
   useUserRestrictPublish,
 } from './admin-queries'
 import {
-  auditActionLabel,
+  auditActionLabelOf,
   authStatusMeta,
   formatAdminDateTime,
   listingStatusMeta,
@@ -218,7 +218,7 @@ function UserDetailView({ detail, userId }: { detail: AdminUserDetail; userId: s
           detail.recentAuditLogs.map((log) => (
             <div className="flex items-center justify-between gap-4 p-4" key={log.id}>
               <div className="min-w-0">
-                <p className="font-medium text-sm">{auditActionLabel(log.action)}</p>
+                <p className="font-medium text-sm">{auditActionLabelOf(log.action)}</p>
                 {log.reason !== null ? (
                   <p className="mt-0.5 text-ink-3 text-xs">{log.reason}</p>
                 ) : null}

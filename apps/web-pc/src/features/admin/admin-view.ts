@@ -1,8 +1,10 @@
-import type {
-  AdminAuditAction,
-  AdminCapability,
-  AdminModerationRecord,
-  UserRole,
+import {
+  type AdminAuditAction,
+  AdminAuditActionSchema,
+  type AdminAuditTargetType,
+  type AdminCapability,
+  type AdminModerationRecord,
+  type UserRole,
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
 import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
@@ -13,6 +15,11 @@ import type { TransactionStatus } from '@fish/contracts/transactions/schema'
  * Admin 域的展示元数据（#467）。与 `lib/labels.ts` 同一条纪律：
  * **枚举取值只来自契约**，这里只补 label / 色变体，用 `Record<契约联合, …>` 兜住完整性 ——
  * 契约加了枚举值而这里没补，`tsc` 当场报错，不会线上渲染 `undefined`。
+ *
+ * 本文件所有 export 都遵守这条纪律，**包括审计的两处标签**（`AUDIT_TARGET_TYPE_LABEL`
+ * 与 `auditActionLabel` 的入参）：#467 审查 §9 发现它们一度写成 `Record<string, string>`
+ * 与 `action: string`，使上面这句断言对它们不成立、调用点还得自己 `?? 兜底`；现已按
+ * `AdminAuditTargetType` / `AdminAuditAction` 收口。
  */
 
 export type BadgeVariant = 'brand' | 'secondary' | 'warn' | 'success' | 'danger' | 'default'
@@ -79,11 +86,23 @@ export const AUDIT_ACTION_META: Record<AdminAuditAction, string> = {
   USER_UNBANNED: '解封用户',
 }
 
-export function auditActionLabel(action: string): string {
-  return AUDIT_ACTION_META[action as AdminAuditAction] ?? action
+/** 审计动作 → 中文。入参是契约联合（原为 `string` + `as`，见文件头注释）。 */
+export function auditActionLabel(action: AdminAuditAction): string {
+  return AUDIT_ACTION_META[action] ?? action
 }
 
-export const AUDIT_TARGET_TYPE_LABEL: Record<string, string> = {
+/**
+ * 详情页「最近管理操作」的入参。契约把 `recentAuditLogs[].action` 声明成 `z.string()`
+ * （`admin/schema.ts` 的列表 DTO，与审计列表的 `AdminAuditActionSchema` 不同），
+ * 所以这里在边界用契约 Schema 窄化一次：命中给中文标签，未命中（契约漂移）照实显示原文。
+ */
+export function auditActionLabelOf(action: string): string {
+  const parsed = AdminAuditActionSchema.safeParse(action)
+  return parsed.success ? auditActionLabel(parsed.data) : action
+}
+
+/** 审计目标类型 → 中文。键取自契约联合，契约加值而这里没补即 `tsc` 报错。 */
+export const AUDIT_TARGET_TYPE_LABEL: Record<AdminAuditTargetType, string> = {
   USER: '用户',
   LISTING: '商品',
   MODERATION_RECORD: '审核记录',

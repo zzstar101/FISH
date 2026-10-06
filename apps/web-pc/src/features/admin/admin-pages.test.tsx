@@ -27,6 +27,9 @@ void mock.module('@tanstack/react-router', () => ({
   // Outlet 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的）。
   Outlet: () => createElement('div', null),
   useNavigate: () => async () => {},
+  // createFileRoute 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的；
+  // /admin/ index 路由的用例要 import 路由文件，靠它拿到 { path, options }）。
+  createFileRoute: (path: string) => (options: unknown) => ({ path, options }),
 }))
 
 const { OverviewView } = await import('./overview-page')

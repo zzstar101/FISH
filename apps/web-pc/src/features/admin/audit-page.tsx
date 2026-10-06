@@ -147,7 +147,7 @@ function AuditRow({ entry }: { entry: AdminAuditLogEntry }) {
               {entry.actor === null ? '（操作者已删除）' : entry.actor.nickname}
             </span>
             <span className="text-ink-3 text-xs">
-              {AUDIT_TARGET_TYPE_LABEL[entry.targetType] ?? entry.targetType}
+              {AUDIT_TARGET_TYPE_LABEL[entry.targetType]}
               {entry.targetId !== null ? ` ${entry.targetId}` : ''}
             </span>
           </div>

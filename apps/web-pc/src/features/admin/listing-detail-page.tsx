@@ -10,7 +10,7 @@ import { PriceText } from '../../components/price-text'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
 import { adminLoadOutcome, governanceActionError } from './admin-messages'
 import { useAdminListingDetail, useListingDelist, useListingRestore } from './admin-queries'
-import { auditActionLabel, formatAdminDateTime, moderationStatusMeta } from './admin-view'
+import { auditActionLabelOf, formatAdminDateTime, moderationStatusMeta } from './admin-view'
 import type { GovernanceDialogOutput } from './governance-dialog'
 import { GovernanceDialog } from './governance-dialog'
 
@@ -190,7 +190,7 @@ function ListingDetailView({
               {detail.recentAuditLogs.map((log) => (
                 <li className="text-sm" key={log.id}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium">{auditActionLabel(log.action)}</span>
+                    <span className="font-medium">{auditActionLabelOf(log.action)}</span>
                     <span className="text-ink-3 text-xs">{formatAdminDateTime(log.createdAt)}</span>
                   </div>
                   {log.reason !== null ? (
