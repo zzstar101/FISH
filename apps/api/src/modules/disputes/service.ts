@@ -168,8 +168,7 @@ function toTransactionSummary(row: DisputeTransactionRow): DisputeTransactionSum
     buyer: toUserSummary(row.buyer),
     seller: toUserSummary(row.seller),
     amountCents: row.amountCents,
-    // zod 会在 parse 时校验枚举值；这里按契约类型断言，脏值由 parse 兜住。
-    status: row.status as DisputeTransactionSummary['status'],
+    status: row.status,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
     createdAt: row.createdAt.toISOString(),

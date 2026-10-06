@@ -1,10 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  createHmac,
-  timingSafeEqual,
-} from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createHmac } from 'node:crypto'
 import type { ALLOWED_IMAGE_MIME } from '@fish/contracts/listings/schema'
 import {
   decodePublicId,
@@ -12,6 +6,7 @@ import {
   isPublicId,
   PUBLIC_ID_PREFIX,
 } from '@fish/shared/public-id'
+import { MEDIA_TOKEN, tokensEqual } from './media-token'
 
 /**
  * #465：交易争议附件的私有前缀、键形状与短期读取令牌。
@@ -112,8 +107,6 @@ export function isDisputeMediaKey(key: string): boolean {
  */
 export const DISPUTE_MEDIA_URL_TTL_SECONDS = 900
 
-const TOKEN = /^[A-Za-z0-9_-]{20,400}$/
-
 /** 附件摘要格式（小写 hex sha256）；行上的 CHECK 与令牌里的密文用同一形状。 */
 export const SHA256_HEX = /^[0-9a-f]{64}$/
 
@@ -156,13 +149,6 @@ export function disputeMediaToken(
   return Buffer.concat([nonce, encrypted, cipher.getAuthTag()]).toString('base64url')
 }
 
-/** 令牌比较用常量时间：长度由格式决定、不是秘密，等长时再逐字节比。 */
-function tokensEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a, 'utf8')
-  const right = Buffer.from(b, 'utf8')
-  return left.length === right.length && timingSafeEqual(left, right)
-}
-
 /** 令牌解出的内容：对象键 + 确认时刻固化的字节摘要。 */
 export type DisputeMediaTicket = { key: string; contentDigest: string }
 
@@ -172,7 +158,7 @@ export function disputeMediaKey(
   secret: string,
   nowSeconds: number,
 ): DisputeMediaTicket | null {
-  if (!TOKEN.test(token)) return null
+  if (!MEDIA_TOKEN.test(token)) return null
   try {
     const bytes = Buffer.from(token, 'base64url')
     // 非规范 base64url 与长度越界直接拒掉，别让解密路径吃奇怪输入。
