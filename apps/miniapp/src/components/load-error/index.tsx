@@ -19,10 +19,14 @@ type Props = {
   /**
    * 失败分类。给了就按分类取默认文案；`title` / `text` 一旦显式传入就以显式值为准。
    *
-   * 这两个标题文案**不必**由调用点传：不传就沿用 `'加载失败'` / `'检查网络后重试'`
-   * 这对默认值。既有调用点两种写法都有 —— 多数页面传了自己的说法（如「会话加载失败」），
-   * 而 `pages/home`、`pages/chat`、`components/order-list` 只给 `onRetry` / `kind`，
-   * 走默认值或分类文案。
+   * 这两个文案**不必**由调用点传：不传就沿用 `'加载失败'` / `'检查网络后重试'`
+   * 这对默认值。调用点三种写法都有，照实列：
+   * - 只给 `onRetry`（走默认值）：`pages/home`、`pages/chat`（通知 / 会话两处）、
+   *   `pkg-browse/pages/search`、`pkg-browse/pages/following`；
+   * - 给 `kind` 且**条件**给 `text`：`components/order-list`（列表还在时写「以下为上次
+   *   加载的订单」，此时既不取默认值、也不取分类文案）；
+   * - 显式传一个或两个：其余调用点（如 `pkg-browse/pages/history` 传 title + text、
+   *   `pages/sell` 只给 text、`pkg-browse/pages/user` 只给 title）。
    */
   kind?: FailureKind
   title?: string

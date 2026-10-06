@@ -162,7 +162,7 @@ export function useUnreadSnapshot(): UnreadSnapshot | null {
  * 通知数走**真实** `GET /notifications/unread-count`；会话数走**真实**
  * `GET /conversations/unread-count`（`fetchConversationUnreadCount`，服务端聚合全部
  * 会话、不受列表翻页上限影响）。失败时：
- * - 调用方给了 `demoFallback`（演示 / 开发构建，本地根本没有后端）→ 用它的计数，
+ * - 调用方给了 `demoFallback`（演示构建，`TARO_APP_MOCK=1`，本地根本没有后端）→ 用它的计数，
  *   否则演示环境里那颗红点会整个消失；
  * - 没给（真实构建）→ 两项都发 `null`（「不知道」，底栏保持上一帧），
  *   **不回退 fixture** —— 拿 fixture 顶替真实值正是幽灵红点 / 漏亮红点的成因。

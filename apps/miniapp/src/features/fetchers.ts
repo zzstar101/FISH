@@ -360,7 +360,7 @@ export async function loadNotifications(): Promise<LoadedNotifications> {
  * mark-all-read 端点，客户端不假设有。返回**标记成功**的 id 集合：调用方（chat 页）
  * 先乐观置读，拿到这里的结果后只对**未成功**的条目回滚成未读。
  *
- * 演示 / 开发构建（`MOCK_FALLBACK_ENABLED`）的兜底口径见 `mergeMarkReadResults`：
+ * 演示构建（`TARO_APP_MOCK=1` → `MOCK_FALLBACK_ENABLED`）的兜底口径见 `mergeMarkReadResults`：
  * 只有**整批都因后端不可达而失败**才按演示口径视为全部已读，真实的接口错误
  * （401 / 404 / 5xx）一律如实返回。
  */
@@ -389,7 +389,7 @@ export type LoadedConversations = {
 /**
  * 会话列表（#89：Chat 页不再从 fixture 读会话）。`cursor` 传上一页的 `nextCursor`。
  *
- * 与通知列表同一口径：真实接口优先；只有演示 / 开发构建（`MOCK_FALLBACK_ENABLED`，
+ * 与通知列表同一口径：真实接口优先；只有演示构建（`TARO_APP_MOCK=1` → `MOCK_FALLBACK_ENABLED`，
  * 本地没有后端）才退回 fixture，生产失败如实返回 `failed: true` 由页面显示错误态 +
  * 重试，**不拿 fixture 顶替** —— 假会话比错误态更糟。
  */

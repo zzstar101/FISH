@@ -322,14 +322,22 @@ const BLOCK_IF_DEMO = 'const blockIfDemo = (item: OrderCardView): boolean => {'
 const OPEN_CONVERSATION = 'const openConversation = (item: OrderCardView) => {'
 
 describe('演示兜底开关 —— 只认显式 TARO_APP_MOCK=1（#304）', () => {
-  test('兜底判定只有一处定义，且不含 NODE_ENV（development 不再自动打开）', async () => {
+  test('兜底判定只有一处定义，且四个注入点都取自它（development 不再自动打开）', async () => {
     const code = codeOnly(await Bun.file(new URL('../config/index.ts', import.meta.url)).text())
     // 精确到行尾：`=== '1' || process.env.NODE_ENV === 'development'` 这种追加改法也要红
     expect(code).toMatch(/const mockEnabled = process\.env\.TARO_APP_MOCK === '1'\n/)
     // 四个注入点（alias + 三个 defineConstants）共用这一个表达式，不许各自重抄一遍
     expect(code.match(/process\.env\.TARO_APP_MOCK === '1'/g)?.length).toBe(1)
-    // 不再用 `expect(code).not.toContain('NODE_ENV')` 兜住整份配置：配置里任何一处与兜底
-    // 无关的 NODE_ENV 都会让它红，而上面两条已经精确钉住「兜底是怎么判定的」。
+    // 但「只此一处」是间接兜：它管不到注入值被换掉。实测（2026-10-06）把
+    // `__ALLOW_MOCK_FALLBACK__` 改成 `JSON.stringify(mockEnabled || process.env.NODE_ENV
+    // === 'development')` 或直接 `JSON.stringify(true)`，上面两条**全绿** —— 而这两个改动
+    // 正是 #182 的症状（dev 构建静默回退，`t-*` 假 id 漏进真实面交页 / 会话链路）。
+    // 所以四个注入点逐点钉死：注入值必须原样是 `mockEnabled`，多一个 `||` 都红。
+    expect(code).toMatch(/\.\.\.\(mockEnabled\n\s*\? \{\}/)
+    expect(code).toMatch(/__ALLOW_MOCK_FALLBACK__: JSON\.stringify\(mockEnabled\),\n/)
+    expect(code).toMatch(/__DEMO_AUTH__: JSON\.stringify\(mockEnabled\),\n/)
+    expect(code).toMatch(/__DEMO_AI_POLISH__: JSON\.stringify\(mockEnabled\),\n/)
+    expect(code.match(/JSON\.stringify\(mockEnabled\)/g)?.length).toBe(3)
   })
 })
 

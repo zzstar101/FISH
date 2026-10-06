@@ -71,7 +71,7 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.conversations).toBeNull()
   })
 
-  test('演示 / 开发构建：失败的那一项用调用方注入的兜底，成功的那一项仍用真值', async () => {
+  test('演示构建（TARO_APP_MOCK=1）：失败的那一项用调用方注入的兜底，成功的那一项仍用真值', async () => {
     notifResult = () => Promise.reject(new Error('network down'))
     convResult = () => Promise.resolve(2)
 
@@ -84,7 +84,7 @@ describe('未读快照 · 冷启动补数', () => {
     expect(unreadSnapshot()?.conversations).toBe(2)
   })
 
-  test('演示 / 开发构建：两个接口都失败 → 两项都用兜底', async () => {
+  test('演示构建（TARO_APP_MOCK=1）：两个接口都失败 → 两项都用兜底', async () => {
     notifResult = () => Promise.reject(new Error('network down'))
     convResult = () => Promise.reject(new Error('network down'))
 

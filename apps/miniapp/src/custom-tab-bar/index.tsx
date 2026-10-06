@@ -219,7 +219,7 @@ export default function CustomTabBar() {
       )
       return
     }
-    // 快照还没到位（补请求在途）。演示 / 开发构建（本地没有后端）维持 fixture 现算
+    // 快照还没到位（补请求在途）。演示构建（`TARO_APP_MOCK=1`，本地没有后端）维持 fixture 现算
     // 口径，真实构建保持上一帧 —— 等 `hydrateUnread` 的真实结果落地再决定，
     // 不能用 fixture 先亮一个数再说，也不能因为「还没到」就把已知的徽标熄掉。
     if (!demoUnread) return
