@@ -62,10 +62,22 @@ describe('创建输入（strictObject：多余字段直接 422）', () => {
       TransactionReviewCreateInputSchema.safeParse({ rating: 'POSITIVE', body: '  ' }).success,
     ).toBe(true)
     expect(TransactionReviewCreateInputSchema.safeParse({}).success).toBe(false)
+    // #475 起 imageObjectKeys 是合法字段（不再是「未知字段」）——这里改用真正的未知字段。
     expect(
-      TransactionReviewCreateInputSchema.safeParse({ rating: 'POSITIVE', imageObjectKeys: [] })
-        .success,
+      TransactionReviewCreateInputSchema.safeParse({ rating: 'POSITIVE', images: ['x'] }).success,
     ).toBe(false)
+  })
+
+  test('#475 配图键数组：缺省/空数组合法；上限 3；重复键被 refine 拒', () => {
+    const parse = (imageObjectKeys: unknown) =>
+      TransactionReviewCreateInputSchema.safeParse({ rating: 'POSITIVE', imageObjectKeys }).success
+    expect(parse(undefined)).toBe(true)
+    expect(parse([])).toBe(true)
+    expect(parse(['reviews/usr_a/med_b.png'])).toBe(true)
+    expect(parse(['a', 'b', 'c'])).toBe(true)
+    expect(parse(['a', 'b', 'c', 'd'])).toBe(false)
+    expect(parse(['reviews/usr_a/med_b.png', 'reviews/usr_a/med_b.png'])).toBe(false)
+    expect(parse('not-an-array')).toBe(false)
   })
 })
 

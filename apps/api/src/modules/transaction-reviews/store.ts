@@ -89,11 +89,13 @@ export interface TransactionReviewsStore {
    * 插入我的评价。`(transaction_id, author_id)` 冲突 → null（调用方翻 409），
    * 不做先读后写 —— 并发的第二个请求必须撞索引而不是撞竞态。
    */
-  insertReview(input: {
+  /** #475：同事务写评价 + 配图（冲突时返回 null 且不留图行）。 */
+  insertReviewWithImages(input: {
     transactionId: string
     authorId: string
-    rating: string
+    rating: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
     body: string | null
+    imageKeys: string[]
   }): Promise<MyReviewRow | null>
   /** 删除我在这笔交易下的评价，返回实际删除行数（0 = 本来就没有，幂等）。 */
   deleteOwnReview(transactionId: string, authorId: string): Promise<number>
@@ -160,6 +162,39 @@ async function imageKeysByReview(db: Db, reviewIds: string[]): Promise<Map<strin
 }
 
 export function createSqlTransactionReviewStore(db: Db): TransactionReviewsStore {
+  /**
+   * #475：评价行 + 配图行**同一事务**写入。冲突（已评过）时整事务回滚 —— 不会留下
+   * 只挂了图没有评价的孤儿行。`sort_order` 取数组下标（0 = 第一张，与契约注释一致）。
+   */
+  async function insertReviewWithImages(input: {
+    transactionId: string
+    authorId: string
+    rating: 'POSITIVE' | 'NEUTRAL' | 'NEGATIVE'
+    body: string | null
+    imageKeys: string[]
+  }): Promise<MyReviewRow | null> {
+    return db.transaction(async (tx) => {
+      const result = await tx.execute(sql`
+        INSERT INTO transaction_reviews (id, transaction_id, author_id, rating, body)
+        VALUES (${newId()}::uuid, ${input.transactionId}::uuid, ${input.authorId}::uuid,
+                ${input.rating}::transaction_review_rating, ${input.body})
+        ON CONFLICT (transaction_id, author_id) DO NOTHING
+        RETURNING id, rating::text AS rating, body, ${sql`
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_iso,
+          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor`}
+      `)
+      const row = rowsOf(result)[0]
+      if (!row) return null
+      for (const [index, objectKey] of input.imageKeys.entries()) {
+        await tx.execute(sql`
+          INSERT INTO transaction_review_images (id, review_id, object_key, sort_order)
+          VALUES (${newId()}::uuid, ${row.id as string}::uuid, ${objectKey}, ${index})
+        `)
+      }
+      return myReviewRowOf(row, input.imageKeys)
+    })
+  }
+
   return {
     async transactionForParticipant(transactionId, viewerId) {
       const result = await db.execute(sql`
@@ -185,20 +220,11 @@ export function createSqlTransactionReviewStore(db: Db): TransactionReviewsStore
       return myReviewRowOf(row, images.get(row.id as string) ?? [])
     },
 
-    async insertReview(input) {
-      const result = await db.execute(sql`
-        INSERT INTO transaction_reviews (id, transaction_id, author_id, rating, body)
-        VALUES (${newId()}::uuid, ${input.transactionId}::uuid, ${input.authorId}::uuid,
-                ${input.rating}::transaction_review_rating, ${input.body})
-        ON CONFLICT (transaction_id, author_id) DO NOTHING
-        RETURNING id, rating::text AS rating, body, ${sql`
-          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at_iso,
-          to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor`}
-      `)
-      const row = rowsOf(result)[0]
-      if (!row) return null
-      return myReviewRowOf(row, [])
-    },
+    /**
+     * #475：评价行 + 配图行**同一事务**写入。冲突（已评过）时整事务回滚 —— 不会留下
+     * 只挂了图没有评价的孤儿行。`sort_order` 取数组下标（0 = 第一张，与契约注释一致）。
+     */
+    insertReviewWithImages,
 
     async deleteOwnReview(transactionId, authorId) {
       const rows = await db

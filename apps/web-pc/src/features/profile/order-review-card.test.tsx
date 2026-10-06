@@ -25,6 +25,7 @@ function renderView(overrides: Record<string, unknown> = {}): string {
       onDialogOpenChange: () => undefined,
       onRetry: () => undefined,
       onSubmit: () => undefined,
+      transactionId: 'txn_01jc000000e00800000000004t',
       ...overrides,
     }),
   )
@@ -37,6 +38,7 @@ function renderForm(overrides: Record<string, unknown> = {}): string {
       onCancel: () => undefined,
       onSubmit: () => undefined,
       submitting: false,
+      transactionId: 'txn_01jc000000e00800000000004t',
       ...overrides,
     }),
   )

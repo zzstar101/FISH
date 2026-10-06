@@ -244,17 +244,41 @@ mc admin policy attach local fish-app-rw --user fish-app
 （桶名出现在策略 JSON 的两处 `arn:aws:s3:::fish`，改 `S3_BUCKET` 时要一起改。）
 
 升级已有部署也必须重新应用上述匿名策略，替换原整桶 download 策略。仅 `listings/*`
-允许匿名 GetObject；`chat-media/*`、`chat-media-final/*`、`listing-media/*`（#286 的上传
-staging 前缀）和 `listing-review-media/*`（#286 的**审核中**固化前缀）不能匿名读或列举。
+允许匿名 GetObject；`reviews/*`（#475 交易评价配图的已确认固化前缀，#483 审查响应起**撤出**
+匿名直读）、`chat-media/*`、`chat-media-final/*`、`listing-media/*`（#286 的上传 staging 前缀）、
+`listing-review-media/*`（#286 的**审核中**固化前缀）与 `transaction-review-media/*`
+（#475 的评价配图 staging 前缀）不能匿名读或列举。
 上传时 presign 只签 `listing-media/{userId}/{id}.{ext}`，审核固化后才把字节写到服务端生成的
 `listings/{userId}/{id}.{ext}`——机器判 REVIEW 的图先固化到
 `listing-review-media/{userId}/{id}.{ext}`，人工放行时再复制到 `listings/*`——因此"未审核图片不进
 公开 read model"依赖这条策略：**staging 与 review 前缀一旦被放开匿名读，未审核的图就能凭 presign
-返回的键（或据此推出来的固化键）直接被外部访问**。审核中的图对外只经
+返回的键（或据此推出来的固化键）直接被外部访问**。审核中的图与评价配图对外只经
 `GET /api/uploads/media/:token` 的短期签名代理（由 `MEETUP_TOKEN_SECRET` 派生、TTL 900s、
-`Cache-Control: private, max-age=300`）暴露给卖家与审核队列：小程序原生 `<Image>` 不带 cookie，
+`Cache-Control: private, max-age=300`）暴露给有权查看的一方：小程序原生 `<Image>` 不带 cookie，
 会话鉴权代理在端上根本显示不出来，所以这里用不可猜、会过期、且不泄露对象键的 capability URL，
-而不是把它放进匿名直链。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
+而不是把它放进匿名直链——评价读 API 只对交易参与者开放，评价配图若匿名直读就是绕过参与者
+边界的永久旁路（#483 审查响应），删除评价后亦然。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
+
+**对象存储兼容性要求（#475）**：交易评价配图 confirm 通过服务端 `PUT If-None-Match: *` 原子创建 final 对象，
+对象存储必须支持 S3 条件写并正确返回 `412 Precondition Failed`（或并发冲突 `409 ConditionalRequestConflict`）。
+上线前必须在目标存储实测并发条件 PUT；不能仅凭 S3 API 兼容声明推定兼容。阿里云 OSS、腾讯云 COS 的 S3 兼容接口
+对该条件写头的支持存在差异/不保证，未验证前视为不兼容；这类部署可能覆盖已固化评价图片，需使用支持条件写的存储或另行实现服务端互斥。
+
+**staging 前缀要配生命周期过期（#483 审查响应）**：confirm 刻意不删 staging 源对象（保守
+选择，非重试安全的必要条件——final 键已存在时 confirm 幂等成功、不依赖 staging 存活），
+presign 直传也无法在签名层强制声明大小（Bun 的 presign 只签 host，
+超大对象会先落进 staging、由 confirm 拒绝引用），所以 staging 垃圾靠桶的生命周期规则兜底。
+`docker compose run --rm minio-init`（与 CI 同路径）会用 `infra/minio-ilm.json` 做
+`mc ilm rule import`——**整体替换**桶的生命周期配置（期望态语义，与匿名策略 JSON 一致，
+重复运行收敛到同一份）；生产环境若额外配过其它生命周期规则，需先把它们并进这份 JSON：
+
+```bash
+mc ilm rule import local/fish < infra/minio-ilm.json
+```
+
+`listing-media/`（#286 的 listing staging 前缀）有同样的垃圾留存形态，但属对象回收的整体
+口径（#476），不在 #475 范围内处理。
+
 上线前执行 `MEETUP_TOKEN_SECRET=$(openssl rand -hex 32) bun --env-file=.env apps/api/scripts/media-smoke.ts`，
 验证聊天直链返回 403、鉴权代理仍能读取及 Range 播放。那个变量是因为脚本会**自己拉起一个 API 进程**
 （`apps/api/scripts/media-smoke.ts:52`），而 API 启动时会校验面交码密钥（§4）；这里给的是只活在这条

@@ -560,11 +560,16 @@ export function createApp(
   // 挂根路径：两个 pattern 都比 transactions router 的 `/transactions/:id` 多一段，不会截胡。
   app.use('/transactions/:transactionId/review', auth.requireAuth)
   app.use('/transactions/:transactionId/reviews', auth.requireAuth)
+  // #475 配图上传链两条路径**必须显式挂**：`use('/…/review')` 的前缀匹配不覆盖更深的
+  // `/review/media/*`（实测 401 —— router 的失败关闭兜底把请求挡成了未登录）。
+  app.use('/transactions/:transactionId/review/media/presign', auth.requireAuth)
+  app.use('/transactions/:transactionId/review/media/confirm', auth.requireAuth)
   app.route(
     '/',
     createTransactionReviewsRouter({
       service: transactionReviewService,
       getUserId: (c) => c.get('userId'),
+      guard: restrictionGuard,
     }),
   )
 

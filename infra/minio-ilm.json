@@ -1,0 +1,10 @@
+{
+  "Rules": [
+    {
+      "ID": "transaction-review-media-expire-1d",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "transaction-review-media/" },
+      "Expiration": { "Days": 1 }
+    }
+  ]
+}

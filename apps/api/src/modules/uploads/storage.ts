@@ -7,9 +7,14 @@ import {
 import { isLegacyListingKey, legacyMediaToken } from './legacy-url'
 import {
   isListingReviewMediaKey,
+  isReviewMediaPublicKey,
   REVIEW_MEDIA_URL_TTL_SECONDS,
   reviewMediaToken,
 } from './review-media'
+
+// 评价配图 final 键的形状/归属判据定义在 `./review-media`（私有媒体模块，与令牌同处）；
+// 这里 re-export 维持「键域校验统一从 storage 出口拿」的既有 import 面。
+export { isReviewMediaPublicKey, reviewMediaPublicPrefix } from './review-media'
 
 /**
  * 对象存储的唯一出入口（#6 契约 §2.7 / §7.7 / §7.8）。
@@ -45,6 +50,15 @@ export interface MediaStorage {
   stat(key: string): Promise<MediaObjectStat | null>
 
   /**
+   * 同 `stat`，但**区分「对象不存在」与「存储故障」**：不存在返回 `null`，运行错误原样抛出。
+   *
+   * 背景（#483 审查响应）：`stat` 把一切错误吞成 `null`，MinIO 抖动会让评价链把可重试的
+   * 服务故障回成 422「图片无效」、让用户重传毫无问题的图。评价上传链与写侧引用校验用
+   * `statStrict`；其余调用方维持 `stat` 的吞错语义（既有现状，不在本票范围内改）。
+   */
+  statStrict?(key: string): Promise<MediaObjectStat | null>
+
+  /**
    * 读取私有对象；媒体接口在通过会话鉴权后使用。
    *
    * 键形状不合法（见 `isSafeObjectKey`）返回 `null`：GET 路径和 HEAD 一样会被 `new URL()`
@@ -60,6 +74,9 @@ export interface MediaStorage {
 
   /** 仅服务端写入验证过的快照；key 不得用于预签名上传。 */
   writeMediaBytes?(key: string, bytes: Uint8Array, contentType: string): Promise<void>
+
+  /** 原子地仅在对象不存在时写入；返回 false 表示已有并发调用先完成写入。 */
+  writeMediaBytesIfAbsent?(key: string, bytes: Uint8Array, contentType: string): Promise<boolean>
 
   /**
    * 读取对象的**完整字节**，用于服务端解析媒体真实属性（尺寸 / 时长）；失败或对象不存在返回 null。
@@ -98,8 +115,9 @@ export interface MediaStorage {
    * 读响应里的客户端读取地址。
    *
    * - `listings/*`（公开固化）与 seed 插图 → 直链，与匿名读策略一致；
-   * - `listing-review-media/*`（审核中的私有快照，#286 复审 blocker 2）→ 短期签名代理地址：
-   *   对象本身不在匿名白名单里，只有拿着这个 secret 派生、带过期时刻的令牌才能读到；
+   * - `listing-review-media/*`（审核中的私有快照，#286 复审 blocker 2）与 `reviews/*`
+   *   （评价配图 final 键，#483 审查响应起私有化）→ 短期签名代理地址：
+   *   对象不在匿名白名单里，只有拿着这个 secret 派生、带过期时刻的令牌才能读到；
    * - `dispute-media/*`（#465 交易争议附件）→ 同样走短期签名代理，但用途派生串独立，
    *   令牌不能跨域重放；这条分支**必须**带上 `integrity.contentDigest`（见下）。
    * - 其余键一律抛错（fail-closed），不允许把未知命名空间拼进公开响应。
@@ -200,6 +218,30 @@ export function isListingMediaStagingKey(key: string): boolean {
   )
 }
 
+/**
+ * #475：交易评价配图的 staging 前缀（未 confirm 的临时对象；不在匿名读白名单）。
+ * 与 listing 用 `listing-review-media/` 相互独立，命名上刻意带 `transaction-` 前缀避免混淆。
+ * final 前缀 `reviews/` 的形状/归属判据见 `./review-media`（#483 审查响应起为私有前缀，
+ * 不再匿名可读，读路径与审核中图片同走短期签名代理）。
+ */
+export const REVIEW_MEDIA_STAGING_PREFIX = 'transaction-review-media/'
+
+/** staging 键形状：`transaction-review-media/{usr_…}/{med_…}.{ext}`。 */
+const REVIEW_MEDIA_STAGING_KEY = /^transaction-review-media\/([^/]+)\/([^/.]+)\.(?:jpg|png|webp)$/
+
+export function reviewMediaStagingPrefix(userId: string): string {
+  return `${REVIEW_MEDIA_STAGING_PREFIX}${encodePublicId(PUBLIC_ID_PREFIX.user, userId)}/`
+}
+
+export function isReviewMediaStagingKey(key: string): boolean {
+  const match = REVIEW_MEDIA_STAGING_KEY.exec(key)
+  return Boolean(
+    match &&
+      isPublicId(PUBLIC_ID_PREFIX.user, match[1]) &&
+      isPublicId(PUBLIC_ID_PREFIX.media, match[2]),
+  )
+}
+
 export function createBunS3MediaStorage(options: {
   client: Bun.S3Client
   /** 来自 `S3_PUBLIC_URL`（本地为 `http://localhost:9000/fish`）。 */
@@ -207,17 +249,20 @@ export function createBunS3MediaStorage(options: {
   /** Web 同源 /api 代理入口，旧对象键只经加密 token 读取，绝不拼裸 UUID 直链。 */
   legacyUrlBase?: string
   legacyUrlSecret?: string
-  /** 审核中图片的短期签名代理入口（`/api/uploads/media`）。 */
+  /** 短期签名代理入口（`/api/uploads/media`）：审核中图片与评价配图这两类私有键共用。 */
   reviewUrlBase?: string
   reviewUrlSecret?: string
   /** 交易争议附件的短期签名代理入口（`/api/uploads/dispute-media`，#465）。 */
   disputeUrlBase?: string
   disputeUrlSecret?: string
   expiresInSeconds?: number
+  /** 可替换条件 PUT 的传输函数，供离线适配器测试使用。 */
+  fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 }): MediaStorage {
   const {
     client,
     publicUrlBase,
+    fetch: fetchImpl = fetch,
     legacyUrlBase,
     legacyUrlSecret,
     reviewUrlBase,
@@ -265,6 +310,20 @@ export function createBunS3MediaStorage(options: {
       }
     },
 
+    async statStrict(key) {
+      if (!isSafeObjectKey(key)) return null
+      try {
+        const info = await client.stat(key)
+        return { size: info.size, contentType: info.type }
+      } catch (error) {
+        // 实测（本地 MinIO）：对象不存在时抛 `S3Error` 且 `code: 'NoSuchKey'`；
+        // `Bun.S3Error` 未导出、无法 instanceof，按错误码判别。其余错误（网络/权限/限流）
+        // 原样抛出，由调用方按可重试的服务故障处理。
+        if ((error as { code?: string }).code === 'NoSuchKey') return null
+        throw error
+      }
+    },
+
     getObject(key, range) {
       // GET 路径与 HEAD 一样会被 `new URL()` 归一化：脏键（例如修复前落库的行）必须在这里被拒。
       if (!isSafeObjectKey(key)) return null
@@ -276,6 +335,46 @@ export function createBunS3MediaStorage(options: {
     async writeMediaBytes(key, bytes, contentType) {
       assertSafeObjectKey(key)
       await client.write(key, bytes, { type: contentType })
+    },
+
+    async writeMediaBytesIfAbsent(key, bytes, contentType) {
+      assertSafeObjectKey(key)
+      // Bun.S3Client.write 不暴露 If-None-Match。Bun 1.4.0 的 presign options 无自定义签名头能力，
+      // 因此服务端 PUT 附加该条件头；Content-Type 也未签名，且 presign 的 type 对 PUT 是
+      // response-content-type 查询参数，不是签名的请求 Content-Type。
+      const url = client.presign(key, {
+        method: 'PUT',
+        expiresIn: 60,
+        type: contentType,
+      })
+      let response: Response
+      try {
+        response = await fetchImpl(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': contentType, 'If-None-Match': '*' },
+          body: bytes,
+        })
+      } catch (error) {
+        const safeError = new Error('S3 条件写入网络请求失败')
+        safeError.name = error instanceof Error ? error.name : 'Error'
+        const code = (error as { code?: unknown }).code
+        if (typeof code === 'string') Object.assign(safeError, { code })
+        throw safeError
+      }
+      if (response.status === 412 || response.status === 409) {
+        // 条件写竞争输家只有在对象已存在时才算幂等成功；stat 故障或对象不存在均不能吞掉。
+        try {
+          await client.stat(key)
+          return false
+        } catch (error) {
+          if ((error as { code?: string }).code === 'NoSuchKey') {
+            throw new Error(`S3 条件写入冲突但对象不存在：HTTP ${response.status}`)
+          }
+          throw error
+        }
+      }
+      if (!response.ok) throw new Error(`S3 条件写入失败：HTTP ${response.status}`)
+      return true
     },
 
     async readMediaBytes(key, maxBytes = 10 * 1024 * 1024) {
@@ -324,8 +423,10 @@ export function createBunS3MediaStorage(options: {
 
     publicUrl(key, integrity) {
       assertSafeObjectKey(key)
-      // 审核中的私有快照：对象不在匿名白名单里，只能通过带过期时刻的签名代理读（#286 复审 blocker 2）。
-      if (isListingReviewMediaKey(key)) {
+      // 私有对象（#286 审核中快照 / #475 评价配图 final 键）：不在匿名白名单里，只能通过
+      // 带过期时刻的签名代理读。评价配图私有化的原因：评价读 API 是交易参与者边界，
+      // 匿名直链等于给边界外的人留一条永久旁路（#483 审查响应）。
+      if (isListingReviewMediaKey(key) || isReviewMediaPublicKey(key)) {
         if (!reviewUrlBase || !reviewUrlSecret) throw new Error('私有媒体 URL 代理未配置')
         const expiresAtSeconds = Math.floor(Date.now() / 1000) + REVIEW_MEDIA_URL_TTL_SECONDS
         return `${reviewUrlBase.replace(/\/+$/, '')}/${reviewMediaToken(key, reviewUrlSecret, expiresAtSeconds)}`

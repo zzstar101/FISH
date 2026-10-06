@@ -17,6 +17,7 @@ import {
   transactionActionError,
   transactionsPath,
   updateListing,
+  uploadReviewImage,
   verifyMeetupCode,
 } from './api'
 
@@ -405,6 +406,105 @@ describe('reviewSubmitError (#445)', () => {
       message: '评价失败，请稍后重试',
       alreadyReviewed: false,
       refresh: false,
+    })
+  })
+})
+
+describe('#475 uploadReviewImage（presign → PUT → confirm）', () => {
+  const txnId = 'txn_01jc000000e00800000000004t'
+
+  function pngFile(): File {
+    return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], 'a.png', {
+      type: 'image/png',
+    })
+  }
+
+  test('三步链路：presign 带 contentType/sizeBytes → PUT 带 content-type → confirm 回 final 键', async () => {
+    const calls: { url: string; method: string; contentType: string | null }[] = []
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const headers = new Headers(init?.headers)
+      calls.push({ url, method: init?.method ?? 'GET', contentType: headers.get('content-type') })
+      if (url.endsWith('/review/media/presign')) {
+        return Response.json({
+          uploadUrl: 'http://storage.local/put/staging-key',
+          objectKey:
+            'transaction-review-media/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
+          headers: {},
+          expiresAt: '2026-10-06T12:10:00.000Z',
+        })
+      }
+      if (url === 'http://storage.local/put/staging-key') {
+        return new Response(null, { status: 200 })
+      }
+      if (url.endsWith('/review/media/confirm')) {
+        return Response.json({
+          objectKey: 'reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
+          url: 'http://cdn.local/reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png',
+        })
+      }
+      throw new Error(`未预期的请求 ${url}`)
+    }) as unknown as typeof fetch
+
+    const key = await uploadReviewImage(txnId, pngFile())
+    expect(key).toBe('reviews/usr_01jc000000e00800000000000b/med_01jc000000e0080000000000d1.png')
+    expect(calls[0]?.url).toBe(`/api/transactions/${txnId}/review/media/presign`)
+    expect(calls[1]?.method).toBe('PUT')
+    // 浏览器端 PUT 必须带 content-type：服务端 confirm 按对象上的 Content-Type 校验（MinIO 缺省存成 octet-stream 会被拒）。
+    expect(calls[1]?.contentType).toBe('image/png')
+    expect(calls[2]?.url).toBe(`/api/transactions/${txnId}/review/media/confirm`)
+  })
+
+  test('不支持的格式在前端拦下，不发任何请求', async () => {
+    let called = false
+    globalThis.fetch = mock(async () => {
+      called = true
+      return Response.json({})
+    }) as unknown as typeof fetch
+    const pdf = new File([new Uint8Array([1])], 'a.pdf', { type: 'application/pdf' })
+    await expect(uploadReviewImage(txnId, pdf)).rejects.toThrow('仅支持 JPG / PNG / WebP 图片')
+    expect(called).toBe(false)
+  })
+
+  test('PUT 失败 → 抛可读错误（confirm 不执行）', async () => {
+    let confirmCalled = false
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/review/media/presign')) {
+        return Response.json({
+          uploadUrl: 'http://storage.local/put/k',
+          objectKey: 'transaction-review-media/usr_x/med_y.png',
+          headers: {},
+          expiresAt: '2026-10-06T12:10:00.000Z',
+        })
+      }
+      if (init?.method === 'PUT') return new Response(null, { status: 403 })
+      confirmCalled = true
+      return Response.json({})
+    }) as unknown as typeof fetch
+    await expect(uploadReviewImage(txnId, pngFile())).rejects.toThrow('图片上传失败，请重试')
+    expect(confirmCalled).toBe(false)
+  })
+
+  test('服务端 confirm 422 REVIEW_IMAGE_INVALID → 原始 ApiError 上抛（文案由表单展示）', async () => {
+    globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/review/media/presign')) {
+        return Response.json({
+          uploadUrl: 'http://storage.local/put/k',
+          objectKey: 'transaction-review-media/usr_x/med_y.png',
+          headers: {},
+          expiresAt: '2026-10-06T12:10:00.000Z',
+        })
+      }
+      if (init?.method === 'PUT') return new Response(null, { status: 200 })
+      return Response.json(
+        { error: { code: 'REVIEW_IMAGE_INVALID', message: '图片对象不可引用，请重新上传' } },
+        { status: 422 },
+      )
+    }) as unknown as typeof fetch
+    await expect(uploadReviewImage(txnId, pngFile())).rejects.toMatchObject({
+      code: 'REVIEW_IMAGE_INVALID',
     })
   })
 })

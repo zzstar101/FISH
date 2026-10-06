@@ -1,3 +1,4 @@
+import { ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES } from '@fish/contracts/listings/schema'
 import type { ApiErrorDetail } from '@fish/contracts/system/error'
 import type {
   TransactionReview,
@@ -8,6 +9,7 @@ import type {
   TransactionReviewsResponse,
 } from '@fish/contracts/transaction-reviews/schema'
 import {
+  MAX_REVIEW_IMAGES,
   TransactionReviewItemSchema,
   TransactionReviewSchema,
   TransactionReviewsResponseSchema,
@@ -16,11 +18,13 @@ import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createModerationService, type ModerationService } from '../moderation/service'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import type { MediaStorage } from '../uploads/storage'
+import { isReviewMediaPublicKey, reviewMediaPublicPrefix } from '../uploads/storage'
+import { createReviewMediaService, type ReviewMediaService } from './media-service'
 import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './store'
 
 export class TransactionReviewServiceError extends Error {
   constructor(
-    readonly status: 404 | 409 | 422,
+    readonly status: 404 | 409 | 422 | 503,
     readonly code: string,
     message: string,
     readonly details?: ApiErrorDetail[],
@@ -38,6 +42,28 @@ const reviewExists = () =>
   new TransactionReviewServiceError(409, 'TRANSACTION_REVIEW_EXISTS', '这笔交易你已经评价过了')
 const notCompleted = () =>
   new TransactionReviewServiceError(409, 'TRANSACTION_NOT_COMPLETED', '交易完成后才能评价')
+/**
+ * #475 配图不可引用：跨用户键 / 他人 listing 键 / chat-media 键 / 未经本链 confirm 的键 /
+ * 对象不存在 —— **同一稳定码**，不区分（不把「别人的对象是否存在」变成侧信道）。
+ */
+const reviewImageInvalid = () =>
+  new TransactionReviewServiceError(422, 'REVIEW_IMAGE_INVALID', '图片对象不可引用，请重新上传', [
+    { field: 'imageObjectKeys', message: '图片对象不可引用' },
+  ])
+const reviewImagesInvalidInput = (message: string) =>
+  new TransactionReviewServiceError(422, 'VALIDATION_FAILED', message, [
+    { field: 'imageObjectKeys', message },
+  ])
+/**
+ * #483 审查响应：存储运行错误是**可重试的服务故障**，与「图片无效」（422，用户要换图）分开——
+ * 不把 MinIO 抖动伪装成让用户重传的问题。
+ */
+const reviewMediaUnavailable = () =>
+  new TransactionReviewServiceError(
+    503,
+    'REVIEW_MEDIA_UNAVAILABLE',
+    '图片校验暂时不可用，请稍后重试',
+  )
 
 /**
  * 评价行 → 契约 DTO（决策 C：逐条 parse，一条越界的历史行不能把整页打成 500）。
@@ -156,6 +182,8 @@ export interface TransactionReviewService {
     userId: string,
     query: { limit: number; cursor: { createdAt: string; id: string } | null },
   ): Promise<{ items: TransactionReviewItem[]; nextCursor: string | null; total: number }>
+  /** #475 配图上传链（presign/confirm）：授权门与评价边 POST 一致。 */
+  media: ReviewMediaService
   /**
    * 同上，但返回**未映射的原始行** + 全量计数：`kind=all` 的合并归并在 comments 侧做
    * （两边的行要按 `(created_at, id)` 统一排序后截断，DTO 里没有游标坐标，映射后并不动）。
@@ -168,7 +196,11 @@ export interface TransactionReviewService {
 
 export function createTransactionReviewService(deps: {
   store: TransactionReviewsStore
-  storage: Pick<MediaStorage, 'publicUrl'>
+  /**
+   * 存储实例（#475 起需要 stat：写侧引用校验会现查对象是否存在/大小/MIME；
+   * 上传链还需要 presignPut/readMediaBytes/writeMediaBytes）。
+   */
+  storage: MediaStorage
   moderation?: ModerationService
 }): TransactionReviewService {
   const { store, storage } = deps
@@ -184,7 +216,38 @@ export function createTransactionReviewService(deps: {
     return txn
   }
 
+  /**
+   * #475 上传链的授权门：与评价边 POST 同一条门（参与者 → COMPLETED → 尚未评价）。
+   * `hasReview` 用 `findMyReview` 现查（评价不可修改，已评过就没有再上传的语义）。
+   */
+  const media = createReviewMediaService({
+    gate: {
+      async transactionGate(transactionId, userId) {
+        const txn = await store.transactionForParticipant(transactionId, userId)
+        if (!txn) return null
+        const existing = await store.findMyReview(transactionId, userId)
+        return { status: txn.status, hasReview: existing !== null }
+      },
+    },
+    storage,
+  })
+
+  /**
+   * 引用校验的 stat 用严格语义（#483 审查响应）：只有对象真不存在才是 422「图片无效」，
+   * 存储运行错误显式 503。
+   */
+  async function statReviewImage(key: string) {
+    if (!storage.statStrict) throw reviewMediaUnavailable()
+    try {
+      return await storage.statStrict(key)
+    } catch (error) {
+      console.error('[transaction-reviews] 引用校验 stat 失败，按 503 服务故障处理', error)
+      throw reviewMediaUnavailable()
+    }
+  }
+
   return {
+    media,
     async getMyReview(userId, transactionId) {
       await requireParticipantTransaction(transactionId, userId)
       const row = await store.findMyReview(transactionId, userId)
@@ -222,11 +285,37 @@ export function createTransactionReviewService(deps: {
         }
       }
 
-      const inserted = await store.insertReview({
+      // #475 配图：契约已限长与去重，service 自兜一遍（不依赖「上游一定解析过 schema」）。
+      const imageKeys = input.imageObjectKeys ?? []
+      if (imageKeys.length > MAX_REVIEW_IMAGES) {
+        throw reviewImagesInvalidInput(`最多上传 ${MAX_REVIEW_IMAGES} 张图片`)
+      }
+      if (new Set(imageKeys).size !== imageKeys.length) {
+        throw reviewImagesInvalidInput('图片对象键不能重复')
+      }
+      // 逐个校验：只认本上传链 confirm 固化到**私有 final 前缀**、且归属当前用户的键。
+      // presign 永不签 final 前缀 → 「键在 final 前缀下存在」即证明经过服务端 confirm；
+      // 再加一次 stat（大小/MIME）挡掉被替换/损坏的对象。
+      for (const key of imageKeys) {
+        if (!isReviewMediaPublicKey(key) || !key.startsWith(reviewMediaPublicPrefix(userId))) {
+          throw reviewImageInvalid()
+        }
+        const stat = await statReviewImage(key)
+        if (
+          !stat ||
+          stat.size > MAX_IMAGE_BYTES ||
+          !(ALLOWED_IMAGE_MIME as readonly string[]).includes(stat.contentType)
+        ) {
+          throw reviewImageInvalid()
+        }
+      }
+
+      const inserted = await store.insertReviewWithImages({
         transactionId,
         authorId: userId,
         rating: input.rating,
         body,
+        imageKeys,
       })
       // 唯一索引兜住并发：两个「第一次评价」同时到达，只有一个插得进去，另一个 409。
       if (!inserted) throw reviewExists()

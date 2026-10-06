@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import type { MiddlewareHandler } from 'hono'
@@ -119,6 +119,29 @@ describe('Bun S3 存储适配', () => {
     expect(await media.stat(key)).toBeNull()
   })
 
+  test.skipIf(!reachable)('writeMediaBytesIfAbsent 并发条件写仅固化一个胜者', async () => {
+    const media = storage
+    if (!media?.writeMediaBytesIfAbsent || !media.readMediaBytes) {
+      throw new Error('storage 未初始化')
+    }
+    const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+    const payloads = Array.from({ length: 8 }, (_, index) => new Uint8Array([index, 2, 3]))
+
+    try {
+      const results = await Promise.all(
+        payloads.map((bytes) => media.writeMediaBytesIfAbsent?.(key, bytes, 'image/png')),
+      )
+      expect(results.filter(Boolean)).toHaveLength(1)
+      const winner = results.findIndex(Boolean)
+      expect(winner).toBeGreaterThanOrEqual(0)
+      const winningPayload = payloads[winner]
+      if (!winningPayload) throw new Error('并发条件写没有胜者')
+      expect(await media.readMediaBytes(key)).toEqual(winningPayload)
+    } finally {
+      await client?.delete(key)
+    }
+  })
+
   /*
    * #465 P2-2：争议附件的配额要数**对象**，不能只数台账行 —— 否则「只 presign + PUT、
    * 从不 confirm」的键永远不会进台账，6 张上限形同虚设。这条用真对象存储证明
@@ -220,6 +243,130 @@ describe('Bun S3 存储适配', () => {
 
     expect(await media.stat(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
   })
+
+  test.skipIf(!reachable)(
+    'statStrict：对象不存在返回 null；不合法键返回 null 不打请求',
+    async () => {
+      const media = storage
+      if (!media?.statStrict) throw new Error('storage 未初始化')
+
+      expect(await media.statStrict(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
+      expect(await media.statStrict('listings/a/../b/x.jpg')).toBeNull()
+    },
+  )
+
+  // #483 审查响应：statStrict 与 stat 的分野在「运行错误」——不可达端点下 stat 吞成 null，
+  // statStrict 必须原样抛出（评价链据此回 503 而不是 422）。用不可达端点离线即可测。
+  test('statStrict：存储运行错误原样抛出（stat 同场景吞成 null）', async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response('storage unavailable', { status: 500 }),
+    })
+    try {
+      const media = createBunS3MediaStorage({
+        client: new Bun.S3Client({
+          endpoint: `http://127.0.0.1:${server.port}`,
+          region: 'us-east-1',
+          accessKeyId: 'test',
+          secretAccessKey: 'test',
+          bucket: 'fish',
+        }),
+        publicUrlBase: 'https://cdn.test/fish',
+      })
+      const key = `listings/${USER_ID}/${crypto.randomUUID()}.jpg`
+      expect(await media.stat(key)).toBeNull()
+      if (!media.statStrict) throw new Error('statStrict 未实现')
+      await expect(media.statStrict(key)).rejects.toThrow()
+    } finally {
+      await server.stop(true)
+    }
+  })
+})
+
+describe('S3 条件写适配器（离线）', () => {
+  const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+
+  function makeClient() {
+    return new Bun.S3Client({
+      endpoint: 'https://s3.example.test',
+      region: 'us-east-1',
+      accessKeyId: 'test',
+      secretAccessKey: 'test',
+      bucket: 'fish',
+    })
+  }
+
+  function makeStorage(
+    client: Bun.S3Client,
+    fetchImpl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+  ) {
+    return createBunS3MediaStorage({
+      client,
+      publicUrlBase: 'https://cdn.test/fish',
+      fetch: fetchImpl,
+    })
+  }
+
+  test('200 返回 true', async () => {
+    const media = makeStorage(makeClient(), async () => new Response(null, { status: 200 }))
+    expect(await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')).toBe(true)
+  })
+
+  test.each([412, 409])('HTTP %i 且对象存在返回 false', async (status) => {
+    const client = makeClient()
+    const stat = spyOn(client, 'stat').mockResolvedValue({
+      size: 1,
+      type: 'image/png',
+      lastModified: new Date(),
+      etag: 'test-etag',
+    })
+    const media = makeStorage(client, async () => new Response(null, { status }))
+    expect(await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')).toBe(false)
+    expect(stat).toHaveBeenCalledWith(key)
+  })
+
+  test.each([412, 409])('HTTP %i 且对象不存在抛错', async (status) => {
+    const client = makeClient()
+    spyOn(client, 'stat').mockRejectedValue(
+      Object.assign(new Error('missing'), { code: 'NoSuchKey' }),
+    )
+    const media = makeStorage(client, async () => new Response(null, { status }))
+    await expect(
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+    ).rejects.toThrow('对象不存在')
+  })
+
+  test.each([412, 409])('HTTP %i 且 stat 出错时抛出 stat 错误', async (status) => {
+    const client = makeClient()
+    const failure = new Error('stat unavailable')
+    spyOn(client, 'stat').mockRejectedValue(failure)
+    const media = makeStorage(client, async () => new Response(null, { status }))
+    await expect(
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+    ).rejects.toBe(failure)
+  })
+
+  test.each([500, 501])('HTTP %i 抛错', async (status) => {
+    const media = makeStorage(makeClient(), async () => new Response(null, { status }))
+    await expect(
+      media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png'),
+    ).rejects.toThrow(`HTTP ${status}`)
+  })
+
+  test('网络错误不泄漏签名 URL', async () => {
+    const media = makeStorage(makeClient(), async () => {
+      throw new Error('fetch failed: https://s3.example.test/?X-Amz-Signature=secret')
+    })
+    let caught: unknown
+    try {
+      await media.writeMediaBytesIfAbsent?.(key, new Uint8Array([1]), 'image/png')
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(Error)
+    expect(JSON.stringify(caught)).not.toContain('X-Amz-Signature')
+    expect((caught as Error).message).not.toContain('X-Amz-Signature')
+  })
 })
 
 // #86 B 线评审 P1：`Bun.S3Client` 用 `new URL()` 拼地址，pathname 会把 `..` 归一化掉，
@@ -241,6 +388,10 @@ test('公开媒体 URL 只使用 TypeID 对象键；历史 UUID 键走加密代�
   const modern = `listings/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.jpg`
   const old = `listings/${USER_ID}/01930000-0000-4000-8000-000000000001.jpg`
   expect(media.publicUrl(modern)).toBe(`https://cdn.test/fish/${modern}`)
+  // #483 审查响应：评价配图 final 键（reviews/）已私有化，不再走匿名直链分支——
+  // 这里没配代理，必须拒绝出图，而不是回落到公开桶地址。
+  const review = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+  expect(() => media.publicUrl(review)).toThrow('私有媒体 URL 代理未配置')
   expect(media.publicUrl('listings/seed-k380/0.jpg')).toBe(
     'https://cdn.test/fish/listings/seed-k380/0.jpg',
   )
@@ -301,6 +452,34 @@ test('审核中的图返回签名代理 URL；未配置代理时拒绝出图', (
 
   const unconfigured = createBunS3MediaStorage({ client, publicUrlBase: 'https://cdn.test/fish' })
   expect(() => unconfigured.publicUrl(reviewKey)).toThrow('私有媒体 URL 代理未配置')
+})
+
+// #483 审查响应：评价配图 final 键（reviews/）与审核中快照同一待遇——签名代理出 URL，
+// URL 不含对象键与 UUID；没配代理时拒绝出图。
+test('评价配图 final 键返回签名代理 URL；未配置代理时拒绝出图', () => {
+  const client = new Bun.S3Client({
+    endpoint: 'http://127.0.0.1:1',
+    region: 'us-east-1',
+    accessKeyId: 'test',
+    secretAccessKey: 'test',
+    bucket: 'fish',
+  })
+  const reviewMediaKey = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+
+  const configured = createBunS3MediaStorage({
+    client,
+    publicUrlBase: 'https://cdn.test/fish',
+    reviewUrlBase: 'https://web.test/api/uploads/media',
+    reviewUrlSecret: 'test-secret-for-review-media-longer-than-32-characters',
+  })
+  const url = configured.publicUrl(reviewMediaKey)
+  expect(url.startsWith('https://web.test/api/uploads/media/')).toBe(true)
+  expect(url).not.toContain(reviewMediaKey)
+  expect(url).not.toContain(USER_ID)
+  expect(url.startsWith('https://cdn.test/fish/')).toBe(false)
+
+  const unconfigured = createBunS3MediaStorage({ client, publicUrlBase: 'https://cdn.test/fish' })
+  expect(() => unconfigured.publicUrl(reviewMediaKey)).toThrow('私有媒体 URL 代理未配置')
 })
 
 describe('isSafeObjectKey（objectKey 形状白名单）', () => {
