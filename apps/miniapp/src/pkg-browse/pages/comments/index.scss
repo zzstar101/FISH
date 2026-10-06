@@ -244,15 +244,14 @@
 .cmt__cur {
   font-size: 22px;
   font-weight: 700;
-  /* 列表价统一 --danger（#390）：此前整页是演示数据被跳过，接真后与 favorites/mylist 对齐 */
-  color: var(--danger);
+  color: var(--price);
 }
 
 .cmt__amt {
   font-size: var(--fs-title);
   font-weight: 700;
   line-height: 1;
-  color: var(--danger);
+  color: var(--price);
 }
 
 /* ---- 右侧竖排动作：查看（商品 / 订单）+ 删除 ---- */
