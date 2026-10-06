@@ -3,6 +3,7 @@ import type { MessageDto } from '@fish/contracts/chat/schema'
 import { messageDtoSchema } from '@fish/contracts/chat/schema'
 import { LISTING_ROUTES } from '@fish/contracts/listings/routes'
 import {
+  ALLOWED_IMAGE_MIME,
   type ListingDetail,
   ListingDetailSchema,
   type ListingFeedResponse,
@@ -19,6 +20,10 @@ import {
 } from '@fish/contracts/profile/schema'
 import { TRANSACTION_REVIEW_ROUTES } from '@fish/contracts/transaction-reviews/routes'
 import {
+  ReviewMediaConfirmRequestSchema,
+  ReviewMediaConfirmResponseSchema,
+  ReviewMediaPresignRequestSchema,
+  ReviewMediaPresignResponseSchema,
   type TransactionReview,
   type TransactionReviewCreateInput,
   TransactionReviewResponseSchema,
@@ -39,6 +44,7 @@ import {
   transactionListResponseSchema,
 } from '@fish/contracts/transactions/schema'
 import { ApiError, apiRequest } from '../../lib/api-client'
+import { validateImageFile } from '../publish/api'
 
 export type MyListingStatusFilter = ListingStatus | 'ALL'
 export type OrderStatusFilter = TransactionStatus | 'ALL'
@@ -228,6 +234,54 @@ export async function createTransactionReview(
       body: JSON.stringify(input),
     }),
   )
+}
+
+/**
+ * 评价配图上传（#475）：presign → 客户端直传 → confirm，返回**可引用的 final 键**。
+ *
+ * 与发布页的 `uploadListingImage` 同形，但走评价专用链（授权锚定交易：参与者 + COMPLETED +
+ * 尚未评价）。取消用 `AbortSignal`（组件卸载即 abort）：与发布页的 `isCurrent` 代际守卫不同，
+ * 评价表单在换号时随 RequireAuth 整棵重挂载，abort 足以丢弃迟到结果。
+ */
+export async function uploadReviewImage(
+  transactionId: string,
+  file: File,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  const invalid = validateImageFile(file)
+  if (invalid !== null) throw new Error(invalid)
+  const contentType = (ALLOWED_IMAGE_MIME as readonly string[]).find((mime) => mime === file.type)
+  if (contentType === undefined) throw new Error('仅支持 JPG / PNG / WebP 图片')
+
+  const presignInput = ReviewMediaPresignRequestSchema.parse({
+    contentType,
+    sizeBytes: file.size,
+  })
+  const presign = ReviewMediaPresignResponseSchema.parse(
+    await apiRequest(TRANSACTION_REVIEW_ROUTES.mediaPresign(transactionId), {
+      method: 'POST',
+      body: JSON.stringify(presignInput),
+      ...(options.signal ? { signal: options.signal } : {}),
+    }),
+  )
+
+  const uploaded = await fetch(presign.uploadUrl, {
+    body: file,
+    headers: { ...presign.headers, 'content-type': contentType },
+    method: 'PUT',
+    ...(options.signal ? { signal: options.signal } : {}),
+  })
+  if (!uploaded.ok) throw new Error('图片上传失败，请重试')
+
+  const confirmInput = ReviewMediaConfirmRequestSchema.parse({ objectKey: presign.objectKey })
+  const confirmed = ReviewMediaConfirmResponseSchema.parse(
+    await apiRequest(TRANSACTION_REVIEW_ROUTES.mediaConfirm(transactionId), {
+      method: 'POST',
+      body: JSON.stringify(confirmInput),
+      ...(options.signal ? { signal: options.signal } : {}),
+    }),
+  )
+  return confirmed.objectKey
 }
 
 /** 提交评价失败的可执行分支（错误码全集见契约 `TransactionReviewErrorCodeSchema`）。 */
