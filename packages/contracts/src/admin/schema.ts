@@ -359,6 +359,17 @@ export const AdminAuditActionSchema = z.enum([
   'USER_RESTRICTION_LIFTED',
   'USER_BANNED',
   'USER_UNBANNED',
+  /**
+   * #464 账号注销：冷静期到期、去标识化执行完成后由 **worker 写入的系统审计行**（不是管理员
+   * 动作）。`actor` 为 `null`、`targetType` 为 `USER`、`targetId` 为被注销用户；`before` /
+   * `after` 只记状态与删除计数，不记原始资料。
+   *
+   * 取值必须与 `packages/db/src/schema/admin.ts` 的 `admin_audit_action` pgEnum 一致：DB 侧
+   * 已含该值（`apps/worker/src/jobs/account-deletion/purge.ts` 写入），契约侧漏了它会让
+   * `toAuditLogEntry` 的 safeParse 失败、该审计行被 `pageOf` 静默丢弃，按此 action 过滤还会
+   * 422。
+   */
+  'ACCOUNT_DELETION_COMPLETED',
 ])
 export type AdminAuditAction = z.infer<typeof AdminAuditActionSchema>
 
