@@ -271,6 +271,49 @@ describe('media message service', () => {
     })
   })
 
+  /*
+   * #466 × #359 3c：引用目标校验同样必须排在幂等重放**之后**（与 TEXT 路径 `service.ts:366`
+   * 的顺序口径一致：重放 → 拉黑守卫 → 引用校验）。首发已落库、响应丢了之后被引用的那条
+   * 才被撤回——重试必须重放既有媒体，否则客户端会把一条早已送达的消息当成发送失败。
+   */
+  test('引用目标：已落库的媒体重试不被已撤回的引用抢走，新上传仍被拦', async () => {
+    const recalledId = '01930000-0000-7000-8000-0000000000d2'
+    const stored: MediaRow = { ...row(image), reply_to_id: recalledId }
+    const service = setup({
+      findByRequestKey: async () => ({ row: stored, matchedHash: true }),
+      findReplyTargets: async (ids) =>
+        new Map(
+          ids
+            .filter((id) => id === recalledId)
+            .map((id) => [
+              id,
+              {
+                id: recalledId,
+                conversation_id: conversationId,
+                sender_id: userId,
+                type: 'TEXT',
+                content: '被撤回的原文',
+                recalled_at: '2026-09-14T12:01:00.000Z',
+              },
+            ]),
+        ),
+    })
+    const clientRequestId = '01930000-0000-7000-8000-0000000000e3'
+    const replyToId = encodePublicId(PUBLIC_ID_PREFIX.message, recalledId)
+    const replayed = await service.create(userId, conversationId, {
+      ...image,
+      clientRequestId,
+      replyToId,
+    })
+    // 命中重放：返回既有消息，且引用块按「已撤回」投射（不是 422）。
+    expect(replayed.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
+    expect(replayed.replyTo?.excerpt).toBe('[消息已撤回]')
+    // 同一输入去掉幂等键就是一次**新**上传：撤回的引用目标仍然必须被 422 拦下。
+    await expect(
+      service.create(userId, conversationId, { ...image, replyToId }),
+    ).rejects.toMatchObject({ status: 422, code: 'MESSAGE_REPLY_INVALID' })
+  })
+
   test('rejects outsiders and keeps media access participant-scoped', async () => {
     const service = setup({ participant: async () => null })
     await expect(
