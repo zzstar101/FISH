@@ -4,6 +4,7 @@ import { migrate } from 'drizzle-orm/bun-sql/migrator'
 import { createDb } from './client'
 import { jsonParam } from './json'
 import { conversations } from './schema/conversations'
+import { disputeAttachments, disputeEvidenceMessages, disputes } from './schema/disputes'
 import { embeddings } from './schema/embeddings'
 import { jobs } from './schema/jobs'
 import { listingMediaObjects } from './schema/listing-media'
@@ -61,6 +62,9 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       conversations,
       messages,
       transactions,
+      disputes,
+      disputeAttachments,
+      disputeEvidenceMessages,
       notifications,
       jobs,
       userInterestProfiles,
@@ -86,6 +90,14 @@ test('seed 可生成基础数据（matches/notifications 留空，由 worker 产
       conversations: 3,
       messages: 4,
       transactions: 2,
+      // #465：争议与证据由用户真实发起产生，seed 不预置（同 matches / embeddings 的取舍：
+      // 假争议落进 seed 库比空表更误导，它还会伪造一条不存在的处理进度）。
+      // 这三张表必须列进 counts：seed 的 TRUNCATE 依赖它们（disputes 引用 transactions /
+      // users，dispute_attachments / dispute_evidence_messages 引用 disputes），
+      // 漏进 TRUNCATE 时种子会在 0A000 上直接失败，而 counts 是这条语句的唯一同源断言。
+      disputes: 0,
+      disputeAttachments: 0,
+      disputeEvidenceMessages: 0,
       notifications: 0,
       jobs: 1,
       // #323 R2：兴趣画像由 worker 的 REFRESH_USER_INTEREST job 从真实行为聚合产出，
