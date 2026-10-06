@@ -193,7 +193,7 @@ describe('Bun S3 存储适配', () => {
     'statStrict：对象不存在返回 null；不合法键返回 null 不打请求',
     async () => {
       const media = storage
-      if (!media || !media.statStrict) throw new Error('storage 未初始化')
+      if (!media?.statStrict) throw new Error('storage 未初始化')
 
       expect(await media.statStrict(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
       expect(await media.statStrict('listings/a/../b/x.jpg')).toBeNull()

@@ -259,14 +259,16 @@ mc admin policy attach local fish-app-rw --user fish-app
 而不是把它放进匿名直链——评价读 API 只对交易参与者开放，评价配图若匿名直读就是绕过参与者
 边界的永久旁路（#483 审查响应），删除评价后亦然。`api` 进程本身对该桶读写，用上面那个只作用于桶的 `fish-app` 账号即可。
 
-**staging 前缀要配生命周期过期（#483 审查响应）**：confirm 不删 staging 源对象（保留它是
-confirm 重试安全的一部分），presign 直传也无法在签名层强制声明大小（Bun 的 presign 只签 host，
-超大对象会先落进 staging、由 confirm 拒绝引用），所以 staging 垃圾只能靠桶的生命周期规则兜底。
-给评价配图的 staging 前缀配 1 天过期即可（confirm 重试不受影响：final 键已存在时走幂等成功，
-不依赖 staging 对象存活）：
+**staging 前缀要配生命周期过期（#483 审查响应）**：confirm 刻意不删 staging 源对象（保守
+选择，非重试安全的必要条件——final 键已存在时 confirm 幂等成功、不依赖 staging 存活），
+presign 直传也无法在签名层强制声明大小（Bun 的 presign 只签 host，
+超大对象会先落进 staging、由 confirm 拒绝引用），所以 staging 垃圾靠桶的生命周期规则兜底。
+`docker compose run --rm minio-init`（与 CI 同路径）会用 `infra/minio-ilm.json` 做
+`mc ilm rule import`——**整体替换**桶的生命周期配置（期望态语义，与匿名策略 JSON 一致，
+重复运行收敛到同一份）；生产环境若额外配过其它生命周期规则，需先把它们并进这份 JSON：
 
 ```bash
-mc ilm rule add local/fish --prefix "transaction-review-media/" --expire-days 1
+mc ilm rule import local/fish < infra/minio-ilm.json
 ```
 
 `listing-media/`（#286 的 listing staging 前缀）有同样的垃圾留存形态，但属对象回收的整体

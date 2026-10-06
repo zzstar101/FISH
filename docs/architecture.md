@@ -199,7 +199,7 @@ To connect to Postgres database - please install either of 'pg', 'postgres', ...
 
 - `postgres`：`pgvector/pgvector:pg18`，全新 `postgres18-data` 卷，带 `pg_isready` healthcheck；旧 PG16 卷不可直接复用
 - `minio`：带 `/minio/health/live` healthcheck
-- `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`，应用 `infra/minio-public-policy.json`：仅 `listings/*` 与 `reviews/*`（#475 评价配图固化前缀）匿名可读，聊天媒体必须通过鉴权 API 读取。已有开发环境需重新运行 `docker compose run --rm minio-init` 更新策略。
+- `minio-init`：一次性容器，等 MinIO healthy 后创建 bucket `fish`，应用 `infra/minio-public-policy.json`（仅 `listings/*` 匿名可读；`reviews/*`（#475 评价配图固化前缀，#483 审查响应起）走 `/api/uploads/media` 短期签名代理，聊天媒体必须通过鉴权 API 读取）并整体导入 `infra/minio-ilm.json`（评价配图 staging 前缀 1 天过期）。已有开发环境需重新运行 `docker compose run --rm minio-init` 更新策略。
 
 ## 7. 协作方式与 Contract
 
