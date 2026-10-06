@@ -129,7 +129,7 @@ mock.module('@/lib/request', () => ({
 // 构建期注入的开关（`config/index.ts` 的 defineConstants）。必须在动态 import 之前定义，
 // 否则 `features/load-failure.ts` 在模块求值阶段就会 ReferenceError。
 //
-// `__ALLOW_MOCK_FALLBACK__` **故意置 true**（模拟开发 / 预览构建）：本文件的用例要证明
+// `__ALLOW_MOCK_FALLBACK__` **故意置 true**（模拟 `TARO_APP_MOCK=1` 的演示构建）：本文件的用例要证明
 // 许愿系的 fail-closed 与这个开关**无关** —— 取数层根本没有 mock 回退分支，重新引入一条
 // `MOCK_FALLBACK_ENABLED` 兜底就会让下面的 `failed` 断言失败。`__DEMO_AUTH__` 一并给出，
 // 避免被间接引用时炸（本文件不触发演示登录）。

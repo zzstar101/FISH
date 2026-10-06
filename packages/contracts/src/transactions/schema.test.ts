@@ -6,6 +6,7 @@ import {
   meetupTokenStatusResponseSchema,
   meetupTokenVerifyCodeInputSchema,
   meetupVerificationResponseSchema,
+  type TransactionErrorCode,
   TransactionErrorCodeSchema,
   transactionAcceptInputSchema,
   transactionDtoSchema,
@@ -309,5 +310,19 @@ describe('TransactionErrorCodeSchema', () => {
     expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_EXPIRED').success).toBe(false)
     expect(TransactionErrorCodeSchema.safeParse('MEETUP_TOKEN_LOCKED').success).toBe(true)
     expect(TransactionErrorCodeSchema.safeParse('TX_GONE_WRONG').success).toBe(false)
+  })
+
+  test('登记 #466 的中性码 CONVERSATION_UNAVAILABLE（交易域与 chat 域共用）', () => {
+    // 提案端点（apps/api/src/modules/transactions/service.ts:409）在拉黑边存在时抛 403，
+    // 码取自 chat 域；漏登记会让「实现抛的码」与「契约声明的码」漂移，而端上按码分支
+    // （apps/web-pc/src/features/chat/api.ts:267 describeCreateConversationFailure、
+    // :279 describeSendFailure）只能靠这个枚举保证不会再出现未声明码。
+    expect(TransactionErrorCodeSchema.safeParse('CONVERSATION_UNAVAILABLE').success).toBe(true)
+    expect(TransactionErrorCodeSchema.options).toContain('CONVERSATION_UNAVAILABLE')
+
+    // 联合类型也必须含该值：漏登记时这一行过不了 typecheck（`bun test` 不做类型检查，
+    // 所以运行时那两条断言才是本条用例红/绿的直接证据）。
+    const code: TransactionErrorCode = 'CONVERSATION_UNAVAILABLE'
+    expect(code).toBe('CONVERSATION_UNAVAILABLE')
   })
 })

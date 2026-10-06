@@ -192,7 +192,7 @@ function dtoToNode(comment: CommentDto): CommentNode {
   }
 }
 
-/** 开发 / 预览回退用的 mock 留言 → 页面节点。 */
+/** 演示构建回退用的 mock 留言 → 页面节点。 */
 function mockCommentToNode(comment: MockComment): CommentNode {
   return {
     id: comment.id,
@@ -208,7 +208,7 @@ function mockCommentToNode(comment: MockComment): CommentNode {
 /**
  * 加载留言列表。
  *
- * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（开发 / 预览）或空列表
+ * 独立端点（#111）：失败不能拖垮整页 —— 拿不到就退到 fixture（演示构建）或空列表
  * （生产），商品详情本身照常渲染。
  *
  * 返回值必须带上**成败**（#170 复查 N6）：`status: 'failed'` 的兜底列表只给首次加载用，
@@ -224,7 +224,7 @@ async function loadComments(
     return { status: 'ok', comments: page.items.map(dtoToNode), nextCursor: page.nextCursor }
   } catch (error) {
     logCommentFailure('留言列表', error)
-    // 开发 / 预览口径下 `loadListingDetail` 已经回退 fixture，这里跟着用同一批 mock 留言；
+    // 演示构建口径下 `loadListingDetail` 已经回退 fixture，这里跟着用同一批 mock 留言；
     // 生产口径拿不到就是空列表（不编数据）。
     return { status: 'failed', comments: mockFallback.map(mockCommentToNode) }
   }

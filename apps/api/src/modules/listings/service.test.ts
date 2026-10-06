@@ -72,6 +72,10 @@ function sellerRow(overrides: Partial<SellerRow> = {}): SellerRow {
     updatedAt: CREATED_AT,
     // #73：users.role 新增 NOT NULL DEFAULT 'USER'，oldest fixture 也带默认值。
     role: 'USER',
+    // #464：users 新增账号注销三列，最老的 fixture 也带默认值（ACTIVE = 从未申请注销）。
+    accountStatus: 'ACTIVE',
+    deletionRequestedAt: null,
+    purgeScheduledAt: null,
     ...overrides,
   }
 }

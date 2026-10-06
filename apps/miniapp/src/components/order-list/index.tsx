@@ -9,12 +9,19 @@ import { ICONS } from '@/assets/lib-icons'
 import BackTop from '@/components/back-top'
 import LoadError from '@/components/load-error'
 import TopBar from '@/components/top-bar'
+import type { FailureKind } from '@/features/load-failure'
 import type { OrderCardView } from '@/features/transaction/adapt'
 import {
   cancelTransaction,
   createTransactionReview,
   fetchMyTransactionReview,
 } from '@/features/transaction/api'
+import {
+  conversationUrlOf,
+  DEMO_ORDER_HINT,
+  isDemoSource,
+  meetupUrlOf,
+} from '@/features/transaction/order-links'
 import { countsOf, type StatusKey, shownOf } from '@/features/transaction/useOrderList'
 import { formatAmount } from '@/lib/money'
 import { isApiError } from '@/lib/request'
@@ -38,7 +45,8 @@ import './index.scss'
  * 换名字对观感没有收益，只会把 diff 撑大。见 `index.scss` 的文件头。
  *
  * 数据来源是真实接口（`GET /transactions`，见 `features/fetchers.ts` 的 `loadOrders`），
- * 只有开发 / 预览构建才允许回退 mock —— 这一层不关心，它只认 `items` / `failed`。
+ * 只有显式 `TARO_APP_MOCK=1` 的演示构建才允许回退 mock（#304 起 `NODE_ENV=development`
+ * 不再打开兜底）—— 这一层除此之外只认数据与 `failureKind`（失败态由它派生）。
  */
 
 /** 4 个状态 tab（1版稿的筛选胶囊） */
@@ -87,10 +95,13 @@ type Props = {
   items: OrderCardView[]
   loading: boolean
   /**
-   * 真实接口失败且没有回退 mock。列表里还有数据时把错误态**追加在列表上方**，
-   * 一条都没有时才用它顶替列表（见下面 LoadError 那段的说明）。
+   * 失败分类（#304）。非 `null` 就是「真实接口失败且没有回退 mock」：列表里还有数据时
+   * 把错误态**追加在列表上方**，一条都没有时才用它顶替列表（见下面 LoadError 那段的说明）；
+   * 同时转给 `LoadError` 换文案（401 / 网络 / 服务端各不相同）。
+   *
+   * 组件内部按 `failed = failureKind !== null` 派生，不再额外要一个 boolean 入参。
    */
-  failed: boolean
+  failureKind: FailureKind | null
   /** 列表不完整（翻页到上限，或服务端游标没前进） */
   truncated: boolean
   /** 回到顶部钮是否已浮现（由页面的 `usePageScroll` 驱动） */
@@ -108,12 +119,14 @@ export default function OrderList({
   titleEm,
   items,
   loading,
-  failed,
+  failureKind,
   truncated,
   showTop,
   onRetry,
   onRefresh,
 }: Props) {
+  /** 失败态是派生物：只有 `failureKind` 一份真相（见 `Props.failureKind`） */
+  const failed = failureKind !== null
   const [status, setStatus] = useState<StatusKey>('ALL')
   const [sortDesc, setSortDesc] = useState(true)
 
@@ -153,20 +166,57 @@ export default function OrderList({
   }
 
   /**
+   * 演示来源的卡**不接入真实交易链路**（#304 / #182，Owner 定版：禁用并说明）。
+   *
+   * 演示构建（`TARO_APP_MOCK=1`）里后端挂掉时列表会整片换成 fixture（`source === 'demo'`），
+   * 那些订单的 id 是 `t-*` 假 id：拿去跳真实面交页就是 404「找不到这笔交易」，
+   * 拿去打取消 / 评价接口只会得到一个与这张卡无关的服务端错误。
+   *
+   * 拦法分两种，判据都在 `features/transaction/order-links.ts`：
+   * - 两条**跳转**（面交页 / 会话页）走 `meetupUrlOf` / `conversationUrlOf` —— 演示来源
+   *   根本没有地址，拿到 `null` 就只说明一句、不跳页；
+   * - 两条**写接口**（取消交易 / 评价）没有地址可拦，用下面这个守卫在发请求之前返回。
+   *
+   * 拦在**点击时**而不是把按钮藏掉：藏了用户会以为功能没了；点一下被告知「这是演示数据」，
+   * 才知道自己看的是一份不会被后端承认的列表。（评价弹层的目标只由 `openReview` 设置，
+   * 那里已拦，所以 `submitReview` 不必再判一次。）
+   *
+   * `openListing`（商品详情）不拦：Owner 决策只点了「二维码 / 交易码」与「查看会话」两条
+   * 交易入口，而商品详情本来就有自己的演示兜底 —— 假 `l-*` 会先打一次真实
+   * `GET /listings/:id`（失败）再落到详情页的 mock（`demoListingDetail`），页面能正常打开。
+   */
+  const blockIfDemo = (item: OrderCardView): boolean => {
+    if (!isDemoSource(item)) return false
+    void Taro.showToast({ title: DEMO_ORDER_HINT, icon: 'none' })
+    return true
+  }
+
+  /**
    * 「查看会话」跳的是**这一笔**的会话，而不是同商品其他买家的会话 —— 这是本页的验收要点。
    * 真实数据直接消费契约的 `conversationId`；mock 回退里按 (listingId, 对方) 解析，
    * 解析不到（投影层给 `null`）按「目标已失效」提示。
    */
   const openConversation = (item: OrderCardView) => {
-    if (!item.conversationId) {
-      void Taro.showToast({ title: '这笔交易的会话已失效', icon: 'none' })
+    const url = conversationUrlOf(item)
+    if (url === null) {
+      // 两种来因：演示来源（说明一句）与真实数据缺 conversationId（目标已失效）
+      void Taro.showToast({
+        title: isDemoSource(item) ? DEMO_ORDER_HINT : '这笔交易的会话已失效',
+        icon: 'none',
+      })
       return
     }
-    void Taro.navigateTo({ url: `/pkg-social/pages/conversation/index?id=${item.conversationId}` })
+    void Taro.navigateTo({ url })
   }
 
   const openMeetup = (item: OrderCardView) => {
-    void Taro.navigateTo({ url: `/pkg-trade/pages/transaction-meetup/index?id=${item.id}` })
+    const url = meetupUrlOf(item)
+    if (url === null) {
+      // 只有演示来源会走到这里（真实订单的 id 一定有值）
+      void Taro.showToast({ title: DEMO_ORDER_HINT, icon: 'none' })
+      return
+    }
+    void Taro.navigateTo({ url })
   }
 
   const openListing = (item: OrderCardView) => {
@@ -179,6 +229,7 @@ export default function OrderList({
    * 二级确认后真发，成功后 `onRefresh` 重拉 —— 不本地翻转状态（服务端返回才是权威）。
    */
   const cancelOrder = (item: OrderCardView) => {
+    if (blockIfDemo(item)) return
     if (cancelBusyId !== null) return
     void Taro.showModal({
       title: '取消这笔交易？',
@@ -210,6 +261,7 @@ export default function OrderList({
    * 没有（404 `REVIEW_NOT_FOUND`）才弹评价卡。
    */
   const openReview = (item: OrderCardView) => {
+    if (blockIfDemo(item)) return
     if (reviewCheckingId !== null || reviewBusy) return
     setReviewCheckingId(item.id)
     fetchMyTransactionReview(item.id)
@@ -365,6 +417,8 @@ export default function OrderList({
         {!loading && failed ? (
           <LoadError
             onRetry={onRetry}
+            // 401 / 网络不可用 / 服务端错误信封各自换文案（#304），不再都写「检查网络后重试」
+            kind={failureKind ?? undefined}
             // 列表还在时说明这是上一次成功加载的结果，别让人以为「下面这些是刚拿到的」
             text={items.length > 0 ? '以下为上次加载的订单' : undefined}
           />
@@ -417,6 +471,12 @@ export default function OrderList({
                       {item.counterpart.verified ? <View className="orders__av-badge" /> : null}
                     </View>
                     <Text className="orders__oname">{item.counterpart.nickname}</Text>
+                    {/*
+                      演示来源角标（#304）：这张卡的 id 是 `t-*` 假 id，不会被后端承认。
+                      角标是**唯一**的全局提示 —— 点上面四个入口也会再说明一次，但用户
+                      应该在点之前就知道自己看的是一份演示列表。
+                    */}
+                    {item.source === 'demo' ? <Text className="orders__src">演示数据</Text> : null}
                     <Text className={`orders__st ${meta.cls}`}>{meta.label}</Text>
                   </View>
 

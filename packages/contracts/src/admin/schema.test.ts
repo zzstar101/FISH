@@ -95,6 +95,9 @@ describe('AdminUserSummaryPageSchema', () => {
           createdAt: '2026-09-12T03:40:10.000Z',
           listingCount: 3,
           lastActivityAt: '2026-09-12T03:40:10.000Z',
+          accountStatus: 'ACTIVE',
+          deletionRequestedAt: null,
+          purgeScheduledAt: null,
         },
       ],
       nextCursor: null,
@@ -102,6 +105,29 @@ describe('AdminUserSummaryPageSchema', () => {
     const parsed = AdminUserSummaryPageSchema.parse(body)
     expect(parsed.items[0]?.studentNoMasked).toBe('2021****0001')
     expect(parsed.nextCursor).toBeNull()
+  })
+
+  test('注销态在管理端可见：DELETED 与冷静期时间戳都透出（#464）', () => {
+    const parsed = AdminUserSummaryPageSchema.parse({
+      items: [
+        {
+          id: encodePublicId(PUBLIC_ID_PREFIX.user, '01930000-0000-7000-8000-0000000000a2'),
+          studentNoMasked: null,
+          nickname: '已注销用户',
+          authStatus: 'UNVERIFIED',
+          role: 'USER',
+          createdAt: '2026-09-12T03:40:10.000Z',
+          listingCount: 0,
+          lastActivityAt: '2026-09-20T03:40:10.000Z',
+          accountStatus: 'DELETED',
+          deletionRequestedAt: '2026-09-13T03:40:10.000Z',
+          purgeScheduledAt: '2026-09-20T03:40:10.000Z',
+        },
+      ],
+      nextCursor: null,
+    })
+    expect(parsed.items[0]?.accountStatus).toBe('DELETED')
+    expect(parsed.items[0]?.deletionRequestedAt).toBe('2026-09-13T03:40:10.000Z')
   })
 })
 

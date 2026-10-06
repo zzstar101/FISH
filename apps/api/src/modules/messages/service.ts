@@ -18,6 +18,7 @@ import {
   PUBLIC_ID_PREFIX,
   type PublicId,
 } from '@fish/shared/public-id'
+import type { BlockRelationCheck } from '../blocks/store'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
 import type { MediaStorage } from '../uploads/storage'
@@ -268,10 +269,36 @@ async function assertReplyTargetUsable(
   }
 }
 
+/**
+ * #466 拉黑守卫（双向）：会话双方之间任一方向存在拉黑边，发送即被拦。
+ * **中性码** `CONVERSATION_UNAVAILABLE` 对双方同码同文案，不暴露「谁拉黑了谁」。
+ * 交易系统消息（SYSTEM）不走用户发送路径，天然不受影响。
+ */
+function makeBlockAssertion(blocks: BlockRelationCheck) {
+  return async function assertNotBlocked(
+    participants: { buyerId: string; sellerId: string },
+    userId: string,
+  ): Promise<void> {
+    const other = participants.buyerId === userId ? participants.sellerId : participants.buyerId
+    if (await blocks.existsBlockBetween(userId, other)) {
+      throw new MessageServiceError(
+        403,
+        'CONVERSATION_UNAVAILABLE',
+        '会话当前不可用，暂时无法发送消息',
+      )
+    }
+  }
+}
+
 export function createMessageService({
   store,
   /** LISTING 卡片封面 URL 的拼装（存储布局不进读模型，与 conversations 同一注入方式）。 */
   storage,
+  /**
+   * #466 拉黑守卫：**必填**。发送前判「会话双方之间任一方向存在拉黑边」，漏接线等于
+   * 守卫失效，所以在类型层要求装配方显式提供。
+   */
+  blocks,
   /** 先落库再推送（#9 契约冻结语义）：消息持久化成功后调用；推送失败不得影响响应。 */
   onMessageCreated,
   /** 撤回落库后推送（#359 3c）：与 `message.new` 同一条「先落库再推送」语义。 */
@@ -280,6 +307,7 @@ export function createMessageService({
 }: {
   store: MessageStore
   storage: MediaStorage
+  blocks: BlockRelationCheck
   projectContent?: (type: string, content: string) => Promise<string>
   onMessageCreated?: (
     participants: { buyerId: string; sellerId: string },
@@ -295,6 +323,8 @@ export function createMessageService({
     },
   ) => void
 }): MessageService {
+  const assertNotBlocked = makeBlockAssertion(blocks)
+
   return {
     async listMessages(userId, conversationId, query) {
       const conversation = await store.findConversationForUser(conversationId, userId)
@@ -333,7 +363,8 @@ export function createMessageService({
       // 引用不进指纹：同一正文 + 同一 clientRequestId 换引用目标是同一个发送请求的重试，
       // 重放既有行（含它当时的引用）才是「重试」的正确语义。
       const key = messageSendKey(input.clientRequestId, textRequestHash(content))
-      // 重试快速路径（与媒体域同一取舍）：命中幂等键就**直接重放既有行**，先于引用目标校验。
+      // 重试快速路径（与媒体域同一取舍）：命中幂等键就**直接重放既有行**，先于引用目标校验
+      // 与拉黑守卫。
       // 否则「第一次其实已落库、响应丢了」的重试会因为被引用那条此刻已撤回而撞 422
       // （消息早发出去了，客户端却以为没发成）。权威去重仍在 insertText 的事务里。
       if (key) {
@@ -352,6 +383,12 @@ export function createMessageService({
           return dto
         }
       }
+      /*
+       * #466 拉黑守卫（双向）：放在幂等重放**之后**——「首发已落库、响应丢了」的重试必须
+       * 重放既有行，否则客户端会把一条早已送达的消息当成本次发送失败（与上面「重放先于
+       * 引用校验」同一顺序口径）。真正的新发送仍然在这里被拦下。
+       */
+      await assertNotBlocked(conversation, userId)
       // 引用目标先校验（#359 3c）：不可用直接 422，不落库。
       const replyToId = await assertReplyTargetUsable(store, conversationId, input.replyToId)
       let row: MessageRow
@@ -406,6 +443,12 @@ export function createMessageService({
         onMessageCreated?.({ buyerId: conversation.buyerId, sellerId: conversation.sellerId }, dto)
         return dto
       }
+
+      /*
+       * #466 拉黑守卫（双向）：与 TEXT 同序——幂等重放之后、真正落库之前。守卫拦的是
+       * 新分享，不是「首发成功后的重试」。
+       */
+      await assertNotBlocked(conversation, userId)
 
       /*
        * 「存在且可见」的口径 = 公开在售的可见性判据 `status = 'ACTIVE' AND

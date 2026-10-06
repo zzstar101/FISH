@@ -459,8 +459,8 @@ function pageDirsOnDisk(): { route: string; file: string }[] {
 }
 
 describe('路由字面量守卫（分包后）', () => {
-  test('解析器没取空：app.config 声明了 37 个页面（5 主包 + 32 分包）', () => {
-    expect(declared.length).toBe(37)
+  test('解析器没取空：app.config 声明了 38 个页面（5 主包 + 33 分包）', () => {
+    expect(declared.length).toBe(38)
   })
 
   test('扫描器没取空：代码里确实抓到路由字面量', () => {

@@ -317,9 +317,9 @@ export default function UserHome() {
    * `features/user/demo-signatures.ts`）。**只**管演示签名行与骨架里的签名占位
    * ——关注钮自 #188 起走真实接口，与它不是一套闸门（见 `follow` 处的说明）。
    *
-   * ⚠️ 只判 `MOCK_FALLBACK_ENABLED` 不够：它在 `NODE_ENV === 'development'` 下也为真
-   * （`config/index.ts`），而 `bun run dev:weapp` 是连真后端的 —— 那样每张真实用户主页
-   * 都会长出演示签名行。所以再加一层 uuid 白名单。
+   * ⚠️ 只判 `MOCK_FALLBACK_ENABLED` 不够：它是独立注入点（`config/index.ts` /
+   * `preview/build.mjs`），将来可能单独为真，而那时页面连的可能是真后端 —— 那样每张真实
+   * 用户主页都会长出演示签名行。所以再加一层 uuid 白名单。
    *
    * 判据用**路由参数 `userId`** 而不是 `profile.id`：骨架屏阶段 profile 还没到，
    * 而骨架里要不要留签名行占位也取决于同一条判据（留了才不跳高）。

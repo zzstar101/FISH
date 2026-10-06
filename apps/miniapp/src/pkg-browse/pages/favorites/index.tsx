@@ -80,7 +80,7 @@ import './index.scss'
 
 /**
  * 演示构建：**两个开关都要**（与「我的」页的回退口径一致）。
- * 只认 `MOCK_FALLBACK_ENABLED` 不行 —— `dev:weapp` 的日常开发也满足它，
+ * 只认 `MOCK_FALLBACK_ENABLED` 不行 —— 两个注入点可以单独打开，
  * 那会把真实构建该有的缺口空态顶掉。
  */
 const DEMO_MODE = MOCK_FALLBACK_ENABLED && DEMO_AUTH_ENABLED
