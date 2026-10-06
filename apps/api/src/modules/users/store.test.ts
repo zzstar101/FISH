@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { DELETED_ACCOUNT_NICKNAME } from '@fish/contracts/account-deletion/schema'
 import type { ListingStatus } from '@fish/contracts/listings/schema'
 import { createDb } from '@fish/db/client'
 import { newId } from '@fish/db/ids'
@@ -123,6 +124,43 @@ test('findPublicUser 只 SELECT 公开列，不返回任何私有列', async () 
 
 test('findPublicUser 对不存在的用户返回 null', async () => {
   expect(await store.findPublicUser('01930000-0000-7000-8000-0000000000ff')).toBeNull()
+})
+
+test('已注销账号在公开读模型里与"不存在"同义：只有 DELETED 才对外消失（#464）', async () => {
+  await withSeller([{}], async ({ sellerId }) => {
+    // 先确认注销前读得到：否则这条测试无法区分"被过滤"与"从来读不到"。
+    expect(await store.findPublicUser(sellerId)).not.toBeNull()
+
+    // 冷静期内（DELETION_REQUESTED）主页仍可读——#464 只对到期去标识化后的账号隐藏。
+    await db
+      .update(users)
+      .set({
+        accountStatus: 'DELETION_REQUESTED',
+        deletionRequestedAt: new Date(),
+        purgeScheduledAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      })
+      .where(eq(users.id, sellerId))
+    expect(await store.findPublicUser(sellerId)).not.toBeNull()
+
+    // 到期去标识化：昵称就地改写为占位，两个时间戳按 CHECK 约束清空。
+    await db
+      .update(users)
+      .set({
+        accountStatus: 'DELETED',
+        deletionRequestedAt: null,
+        purgeScheduledAt: null,
+        nickname: DELETED_ACCOUNT_NICKNAME,
+      })
+      .where(eq(users.id, sellerId))
+    expect(await store.findPublicUser(sellerId)).toBeNull()
+
+    // 只是"投影读不到"，行还在：历史引用（商品卡、聊天、订单）靠这行显示占位昵称。
+    const rows = await db
+      .select({ nickname: users.nickname })
+      .from(users)
+      .where(eq(users.id, sellerId))
+    expect(rows[0]?.nickname).toBe(DELETED_ACCOUNT_NICKNAME)
+  })
 })
 
 test('stats：在售只算 ACTIVE + APPROVED，卖出只算 COMPLETED', async () => {

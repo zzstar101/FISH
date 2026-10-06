@@ -9,6 +9,7 @@ import {
 } from '@fish/contracts/chat/schema'
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { BlockRelationCheck } from '../blocks/store'
 import type { PresenceReader } from '../presence/presence'
 import { publicAvatarUrl } from '../uploads/avatar-url'
 import { isListingReviewMediaKey } from '../uploads/review-media'
@@ -117,6 +118,7 @@ export function createConversationService({
   store,
   storage,
   presence,
+  blocks,
   onRead,
   projectContent = async (_type: string, content: string) => content,
 }: {
@@ -128,6 +130,11 @@ export function createConversationService({
    * 「对方恰好不在线」，在类型层就要求装配方显式提供。
    */
   presence: PresenceReader
+  /**
+   * #466 拉黑守卫：**必填**。建立会话前判「两人之间任一方向存在拉黑边」；
+   * 漏接线等于守卫失效，所以在类型层要求装配方显式提供（presence 同款取舍）。
+   */
+  blocks: BlockRelationCheck
   projectContent?: (type: string, content: string) => Promise<string>
   /**
    * 读位推进成功后调用（先落库再推送，与 messages 的 `onMessageCreated` 同语义）；
@@ -165,6 +172,13 @@ export function createConversationService({
       // 在 INSERT 之前拦下，错误码比 500 的 CHECK 违规可读。
       if (listing.sellerId === userId) {
         throw new ConversationServiceError(409, 'CANNOT_CHAT_WITH_SELF', '不能和自己的商品建立会话')
+      }
+
+      // #466 拉黑守卫（双向）：两人之间任一方向存在拉黑边，会话就不可用——既有会话
+      // 拦发送、新会话拦建立，同一谓词同一码。**中性码** `CONVERSATION_UNAVAILABLE`
+      // 对双方同码同文案，不暴露「谁拉黑了谁」（验收：报错不暴露对方黑名单）。
+      if (await blocks.existsBlockBetween(userId, listing.sellerId)) {
+        throw new ConversationServiceError(403, 'CONVERSATION_UNAVAILABLE', '会话当前不可用')
       }
 
       // 商品在「查存在 → 建会话」之间被卖家物理删除时，INSERT 会撞复合外键

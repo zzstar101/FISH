@@ -1,5 +1,5 @@
 {
-  "id": "1577b0cd-8950-4d4e-9d67-b6016741ec92",
+  "id": "d8ea0946-823b-4e1a-b3b6-abe24a3bee90",
   "prevId": "7fb2f77e-f1ff-4295-9eeb-0464ae3b2e64",
   "version": "7",
   "dialect": "postgresql",
@@ -782,6 +782,126 @@
         "visual_search_attempts_subject_type_allowed": {
           "name": "visual_search_attempts_subject_type_allowed",
           "value": "\"visual_search_attempts\".\"subject_type\" in ('user', 'ip', 'session')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.user_blocks": {
+      "name": "user_blocks",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "uuidv7()"
+        },
+        "blocker_id": {
+          "name": "blocker_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "blocked_id": {
+          "name": "blocked_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_blocks_blocker_id_blocked_id_uq": {
+          "name": "user_blocks_blocker_id_blocked_id_uq",
+          "columns": [
+            {
+              "expression": "blocker_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "blocked_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_blocks_blocker_id_created_at_id_idx": {
+          "name": "user_blocks_blocker_id_created_at_id_idx",
+          "columns": [
+            {
+              "expression": "blocker_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_blocks_blocker_id_users_id_fk": {
+          "name": "user_blocks_blocker_id_users_id_fk",
+          "tableFrom": "user_blocks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "blocker_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "user_blocks_blocked_id_users_id_fk": {
+          "name": "user_blocks_blocked_id_users_id_fk",
+          "tableFrom": "user_blocks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "blocked_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "user_blocks_no_self_block": {
+          "name": "user_blocks_no_self_block",
+          "value": "\"user_blocks\".\"blocker_id\" <> \"user_blocks\".\"blocked_id\""
         }
       },
       "isRLSEnabled": false
@@ -4339,599 +4459,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.dispute_attachments": {
-      "name": "dispute_attachments",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "dispute_id": {
-          "name": "dispute_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "uploader_id": {
-          "name": "uploader_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "object_key": {
-          "name": "object_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "mime_type": {
-          "name": "mime_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "size_bytes": {
-          "name": "size_bytes",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "width": {
-          "name": "width",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "height": {
-          "name": "height",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content_digest": {
-          "name": "content_digest",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "dispute_attachments_object_key_uq": {
-          "name": "dispute_attachments_object_key_uq",
-          "columns": [
-            {
-              "expression": "object_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "dispute_attachments_dispute_created_at_idx": {
-          "name": "dispute_attachments_dispute_created_at_idx",
-          "columns": [
-            {
-              "expression": "dispute_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "dispute_attachments_dispute_id_disputes_id_fk": {
-          "name": "dispute_attachments_dispute_id_disputes_id_fk",
-          "tableFrom": "dispute_attachments",
-          "tableTo": "disputes",
-          "columnsFrom": [
-            "dispute_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dispute_attachments_uploader_id_users_id_fk": {
-          "name": "dispute_attachments_uploader_id_users_id_fk",
-          "tableFrom": "dispute_attachments",
-          "tableTo": "users",
-          "columnsFrom": [
-            "uploader_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "dispute_attachments_size_bytes_positive": {
-          "name": "dispute_attachments_size_bytes_positive",
-          "value": "\"dispute_attachments\".\"size_bytes\" > 0"
-        },
-        "dispute_attachments_dimensions_positive": {
-          "name": "dispute_attachments_dimensions_positive",
-          "value": "\"dispute_attachments\".\"width\" > 0 AND \"dispute_attachments\".\"height\" > 0"
-        },
-        "dispute_attachments_key_prefix": {
-          "name": "dispute_attachments_key_prefix",
-          "value": "\"dispute_attachments\".\"object_key\" LIKE 'dispute-media/%'"
-        },
-        "dispute_attachments_digest_sha256": {
-          "name": "dispute_attachments_digest_sha256",
-          "value": "\"dispute_attachments\".\"content_digest\" ~ '^[0-9a-f]{64}$'"
-        },
-        "dispute_attachments_mime_allowed": {
-          "name": "dispute_attachments_mime_allowed",
-          "value": "\"dispute_attachments\".\"mime_type\" IN ('image/jpeg', 'image/png', 'image/webp')"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.dispute_evidence_messages": {
-      "name": "dispute_evidence_messages",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "dispute_id": {
-          "name": "dispute_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "message_id": {
-          "name": "message_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "added_by": {
-          "name": "added_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "dispute_evidence_messages_dispute_message_uq": {
-          "name": "dispute_evidence_messages_dispute_message_uq",
-          "columns": [
-            {
-              "expression": "dispute_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "message_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "dispute_evidence_messages_dispute_created_at_idx": {
-          "name": "dispute_evidence_messages_dispute_created_at_idx",
-          "columns": [
-            {
-              "expression": "dispute_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "dispute_evidence_messages_dispute_id_disputes_id_fk": {
-          "name": "dispute_evidence_messages_dispute_id_disputes_id_fk",
-          "tableFrom": "dispute_evidence_messages",
-          "tableTo": "disputes",
-          "columnsFrom": [
-            "dispute_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dispute_evidence_messages_message_id_messages_id_fk": {
-          "name": "dispute_evidence_messages_message_id_messages_id_fk",
-          "tableFrom": "dispute_evidence_messages",
-          "tableTo": "messages",
-          "columnsFrom": [
-            "message_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dispute_evidence_messages_added_by_users_id_fk": {
-          "name": "dispute_evidence_messages_added_by_users_id_fk",
-          "tableFrom": "dispute_evidence_messages",
-          "tableTo": "users",
-          "columnsFrom": [
-            "added_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.disputes": {
-      "name": "disputes",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "uuidv7()"
-        },
-        "transaction_id": {
-          "name": "transaction_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "initiator_id": {
-          "name": "initiator_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "respondent_id": {
-          "name": "respondent_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "type": {
-          "name": "type",
-          "type": "dispute_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "detail_text": {
-          "name": "detail_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "dispute_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'PENDING'"
-        },
-        "resolution": {
-          "name": "resolution",
-          "type": "dispute_resolution",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "resolution_note": {
-          "name": "resolution_note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "handled_by": {
-          "name": "handled_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "handled_at": {
-          "name": "handled_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "withdrawn_at": {
-          "name": "withdrawn_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "disputes_pending_transaction_initiator_uq": {
-          "name": "disputes_pending_transaction_initiator_uq",
-          "columns": [
-            {
-              "expression": "transaction_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "initiator_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "\"disputes\".\"status\" = 'PENDING'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "disputes_initiator_created_at_idx": {
-          "name": "disputes_initiator_created_at_idx",
-          "columns": [
-            {
-              "expression": "initiator_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "disputes_respondent_created_at_idx": {
-          "name": "disputes_respondent_created_at_idx",
-          "columns": [
-            {
-              "expression": "respondent_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "disputes_status_created_at_idx": {
-          "name": "disputes_status_created_at_idx",
-          "columns": [
-            {
-              "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "disputes_transaction_id_idx": {
-          "name": "disputes_transaction_id_idx",
-          "columns": [
-            {
-              "expression": "transaction_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "disputes_transaction_id_transactions_id_fk": {
-          "name": "disputes_transaction_id_transactions_id_fk",
-          "tableFrom": "disputes",
-          "tableTo": "transactions",
-          "columnsFrom": [
-            "transaction_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "disputes_initiator_id_users_id_fk": {
-          "name": "disputes_initiator_id_users_id_fk",
-          "tableFrom": "disputes",
-          "tableTo": "users",
-          "columnsFrom": [
-            "initiator_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "disputes_respondent_id_users_id_fk": {
-          "name": "disputes_respondent_id_users_id_fk",
-          "tableFrom": "disputes",
-          "tableTo": "users",
-          "columnsFrom": [
-            "respondent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "disputes_handled_by_users_id_fk": {
-          "name": "disputes_handled_by_users_id_fk",
-          "tableFrom": "disputes",
-          "tableTo": "users",
-          "columnsFrom": [
-            "handled_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "disputes_initiator_id_differs_from_respondent_id": {
-          "name": "disputes_initiator_id_differs_from_respondent_id",
-          "value": "\"disputes\".\"initiator_id\" <> \"disputes\".\"respondent_id\""
-        },
-        "disputes_other_type_requires_detail": {
-          "name": "disputes_other_type_requires_detail",
-          "value": "\"disputes\".\"type\" <> 'OTHER'\n        OR (\"disputes\".\"detail_text\" IS NOT NULL AND length(btrim(\"disputes\".\"detail_text\")) > 0)"
-        },
-        "disputes_resolution_matches_status": {
-          "name": "disputes_resolution_matches_status",
-          "value": "(\"disputes\".\"status\" = 'RESOLVED') = (\"disputes\".\"resolution\" IS NOT NULL)\n        AND (\"disputes\".\"status\" = 'RESOLVED') = (\"disputes\".\"resolution_note\" IS NOT NULL)\n        AND (\"disputes\".\"status\" = 'RESOLVED') = (\"disputes\".\"handled_by\" IS NOT NULL)\n        AND (\"disputes\".\"status\" = 'RESOLVED') = (\"disputes\".\"handled_at\" IS NOT NULL)"
-        },
-        "disputes_withdrawn_at_matches_status": {
-          "name": "disputes_withdrawn_at_matches_status",
-          "value": "(\"disputes\".\"status\" = 'WITHDRAWN') = (\"disputes\".\"withdrawn_at\" IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.recommendation_request_items": {
       "name": "recommendation_request_items",
       "schema": "",
@@ -6272,7 +5799,6 @@
         "ADMIN_PROMOTED",
         "MODERATION_DECISION",
         "REPORT_DECISION",
-        "DISPUTE_DECISION",
         "LISTING_DELISTED",
         "LISTING_RESTORED",
         "USER_RESTRICTED",
@@ -6289,7 +5815,6 @@
         "LISTING",
         "MODERATION_RECORD",
         "REPORT",
-        "DISPUTE",
         "USER_RESTRICTION"
       ]
     },
@@ -6344,34 +5869,6 @@
         "POSITIVE",
         "NEUTRAL",
         "NEGATIVE"
-      ]
-    },
-    "public.dispute_resolution": {
-      "name": "dispute_resolution",
-      "schema": "public",
-      "values": [
-        "UPHELD",
-        "DISMISSED",
-        "INCONCLUSIVE"
-      ]
-    },
-    "public.dispute_status": {
-      "name": "dispute_status",
-      "schema": "public",
-      "values": [
-        "PENDING",
-        "RESOLVED",
-        "WITHDRAWN"
-      ]
-    },
-    "public.dispute_type": {
-      "name": "dispute_type",
-      "schema": "public",
-      "values": [
-        "ITEM_MISMATCH",
-        "NOT_COMPLETED",
-        "PAYMENT_ISSUE",
-        "OTHER"
       ]
     },
     "public.listing_category": {

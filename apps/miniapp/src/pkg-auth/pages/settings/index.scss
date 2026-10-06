@@ -284,6 +284,11 @@
   font-weight: 600;
   color: var(--danger-ink);
 
+  /* 两行（退出登录 / 注销账号）之间的分隔：颜色比边框深一档，才看得出是两个动作 */
+  & + & {
+    border-top: 2px solid var(--danger-line);
+  }
+
   &:active {
     background: var(--danger-line);
   }
