@@ -9,6 +9,7 @@ import { sessions } from '@fish/db/schema/sessions'
 import { transactions } from '@fish/db/schema/transactions'
 import { users } from '@fish/db/schema/users'
 import { and, eq, inArray, ne, or, sql } from 'drizzle-orm'
+import { ACTIVE_RESTRICTION_WHERE } from '../governance/store'
 
 /**
  * 账号注销的持久化（Issue #464）。表结构见 `packages/db/src/schema/users.ts` 的
@@ -211,6 +212,9 @@ export function createSqlAccountDeletionStore(db: Db): AccountDeletionStore {
           }
 
           // ② 封禁检查：生效中的 BAN 是硬阻塞（注销不能成为「一键解除封禁」的通道）。
+          //    「生效中」的判定**引用** governance 的 `ACTIVE_RESTRICTION_WHERE`，不复制谓词：
+          //    `expires_at` 是惰性过期（到期行在表里仍是 ACTIVE），裸 `status = 'ACTIVE'`
+          //    会把已过期封禁也判成生效中，注销被永久 403。
           const banned = await tx
             .select({ id: userRestrictions.id })
             .from(userRestrictions)
@@ -218,7 +222,7 @@ export function createSqlAccountDeletionStore(db: Db): AccountDeletionStore {
               and(
                 eq(userRestrictions.userId, input.userId),
                 eq(userRestrictions.type, 'BAN'),
-                eq(userRestrictions.status, 'ACTIVE'),
+                ACTIVE_RESTRICTION_WHERE,
               ),
             )
             .limit(1)

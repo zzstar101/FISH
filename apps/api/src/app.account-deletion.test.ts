@@ -464,6 +464,24 @@ describe('注销资格校验', () => {
     const { status } = await requestDeletion(lifted.cookie)
     expect(status).toBe(200)
   })
+
+  test('已过期的封禁不阻塞注销（惰性过期：行在表里仍是 ACTIVE）', async () => {
+    const expired = await register('过期封禁')
+    const actor = await register('管理员演员三')
+    await db.insert(userRestrictions).values({
+      id: newId(),
+      userId: expired.userId,
+      type: 'BAN',
+      status: 'ACTIVE',
+      reason: '注销验收：已过期封禁',
+      actorUserId: actor.userId,
+      expiresAt: new Date(Date.now() - 60_000),
+    })
+
+    const { status } = await requestDeletion(expired.cookie)
+    expect(status).toBe(200)
+    expect(await accountStatusOf(expired.userId)).toBe('DELETION_REQUESTED')
+  })
 })
 
 describe('双账号隔离', () => {
