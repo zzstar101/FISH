@@ -9,6 +9,7 @@ import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { z } from 'zod'
 import {
   AuditLogIdSchema,
+  DisputeIdSchema,
   ListingIdSchema,
   ModerationRecordIdSchema,
   ReportIdSchema,
@@ -138,6 +139,7 @@ export const AdminAuditTargetTypeSchema = z.enum([
   'LISTING',
   'MODERATION_RECORD',
   'REPORT',
+  'DISPUTE',
   'USER_RESTRICTION',
 ])
 export type AdminAuditTargetType = z.infer<typeof AdminAuditTargetTypeSchema>
@@ -147,6 +149,7 @@ export const AdminAuditTargetIdSchema = z.union([
   ListingIdSchema,
   ModerationRecordIdSchema,
   ReportIdSchema,
+  DisputeIdSchema,
   UserRestrictionIdSchema,
 ])
 
@@ -155,6 +158,7 @@ const auditTargetIdByType = {
   LISTING: ListingIdSchema,
   MODERATION_RECORD: ModerationRecordIdSchema,
   REPORT: ReportIdSchema,
+  DISPUTE: DisputeIdSchema,
   USER_RESTRICTION: UserRestrictionIdSchema,
 } satisfies Record<AdminAuditTargetType, (typeof AdminAuditTargetIdSchema.options)[number]>
 
@@ -330,6 +334,8 @@ export const AdminAuditActionSchema = z.enum([
   'MODERATION_DECISION',
   // #73 治理半场 PR2：处理举报（只写结果，不动商品或用户）。
   'REPORT_DECISION',
+  // #465：处理交易争议（只写结论，不改成交事实、不触发治理）。
+  'DISPUTE_DECISION',
   // #73 治理半场 PR3：五个治理端点各一个 action，审计可按动作单独筛选。
   'LISTING_DELISTED',
   'LISTING_RESTORED',

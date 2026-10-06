@@ -34,6 +34,10 @@ export function notificationTarget(item: NotificationDto): NotificationTarget {
       if (wishId) return { kind: 'wish', wishId }
       return { kind: 'none' }
     }
+    // DISPUTE（#465）：用户侧争议页排在小程序（PR C，本分支未交付），管理端列表也还没有
+    // 前端页面，所以这里给不了可用的落点 —— 与 ACCOUNT 同一处理，只陈述结果、不给死链接。
+    case 'DISPUTE':
+      return { kind: 'none' }
   }
 }
 
@@ -92,6 +96,30 @@ export function notificationCopy(item: NotificationDto): {
         default:
           return { emoji: '🔔', title: '认证结果有更新', description: '可以到认证页查看当前状态。' }
       }
+    // DISPUTE（#465）：与 `notificationTarget` 一致——PC 暂无争议页，只陈述结果。
+    case 'DISPUTE':
+      return {
+        emoji: '⚖️',
+        title: '交易争议有更新',
+        description: disputeEventCopy(item.payload.disputeEvent),
+      }
+  }
+}
+
+/**
+ * 争议通知一句话。`disputeEvent` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，
+ * 与 `txEventCopy` 同一姿态——不编一个可能不对的进展。
+ */
+function disputeEventCopy(event: NotificationDto['payload']['disputeEvent']): string {
+  switch (event) {
+    case 'FILED':
+      return '对方就这笔交易发起了争议。'
+    case 'WITHDRAWN':
+      return '对方撤回了这笔交易的争议。'
+    case 'RESOLVED':
+      return '争议已处理，该结论为最终结论。'
+    default:
+      return '这笔交易的争议状态有变化。'
   }
 }
 

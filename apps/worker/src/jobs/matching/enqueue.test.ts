@@ -52,6 +52,16 @@ const GAP_MIGRATION_TAGS = new Set([
   '20261004193208_ordinary_bucky',
 ])
 
+/**
+ * 缺口一第一条迁移的 `when`（journal 时间戳）。
+ *
+ * pre-gap 目录只能收「缺口之前」的迁移：drizzle 的 migrator 按 `__drizzle_migrations.created_at`
+ * 与 journal 的 `when` 比较来决定补应用哪些条目。缺口之后新增的迁移（本仓持续追加）如果留在
+ * pre-gap 目录里，阶段一就会把它们应用掉、把水位推到缺口之后，阶段二便不再补应用缺口迁移，
+ * 第四条用例会以"重复行没被清理"的形式失败。
+ */
+const GAP_START_WHEN = 1791113507706
+
 /** 与投递侧同形的裸 INSERT：没有 `ON CONFLICT`，重复就是撞唯一索引。 */
 async function insertRawPendingMatchListing(
   target: Pick<Db, 'execute'>,
@@ -154,7 +164,7 @@ test('并发 enqueueMatchJob：两个插入者同时通过 NOT EXISTS 也只留�
   expect(await pendingIds(db, listingId)).toHaveLength(1)
 })
 
-// 这条要跑两遍完整 migrator（43 条迁移 × 2 个阶段），并行跑全仓时 5 s 的默认上限不够。
+// 这条要跑两遍完整 migrator（阶段一 42 条 + 阶段二全量 45 条），并行跑全仓时 5 s 的默认上限不够。
 test('旧库已有重复待跑行时：迁移先清理重复行再建索引，随后重复插入被拒', async () => {
   const legacyFolder = await buildPreGapMigrationsFolder()
   const legacyDatabase = `fish_match_enqueue_legacy_${process.pid}`
@@ -196,9 +206,11 @@ async function buildPreGapMigrationsFolder(): Promise<string> {
   const journal = JSON.parse(
     await readFile(join(migrationsFolder, 'meta/_journal.json'), 'utf8'),
   ) as {
-    entries: { idx: number; tag: string }[]
+    entries: { idx: number; tag: string; when: number }[]
   }
-  const legacy = journal.entries.filter((entry) => !GAP_MIGRATION_TAGS.has(entry.tag))
+  const legacy = journal.entries.filter(
+    (entry) => !GAP_MIGRATION_TAGS.has(entry.tag) && entry.when < GAP_START_WHEN,
+  )
   for (const entry of legacy) {
     await copyFile(join(migrationsFolder, `${entry.tag}.sql`), join(dir, `${entry.tag}.sql`))
   }
