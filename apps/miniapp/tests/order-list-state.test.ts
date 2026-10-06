@@ -1,4 +1,9 @@
 import { describe, expect, mock, test } from 'bun:test'
+import {
+  conversationUrlOf,
+  DEMO_ORDER_HINT,
+  meetupUrlOf,
+} from '../src/features/transaction/order-links'
 
 /**
  * 订单列表的身份结转规则（#89 审查收口）。
@@ -306,71 +311,74 @@ describe('listing-detail —— 「谁在求购」差额说明的原因必须与
  *   1. 兜底开关只认显式 `TARO_APP_MOCK=1`（development 不再自动打开）；
  *   2. 投影层把来源写成一等字段（`source: 'real' | 'demo'`），卡片据此打角标；
  *   3. 演示来源的四条路径（面交页 / 会话页 / 取消 / 评价）在点击时统一拦下。
- * 组件没有渲染基建，所以第 3 条沿本文件的手法做源码切片断言；第 2 条走真实链路。
+ *
+ * 第 3 条里两条**跳转**不再靠读源码：地址由 `features/transaction/order-links` 按来源算出，
+ * 演示来源**没有地址**（`null`），所以下面断言的是真实 URL —— 改错地址、或让演示来源重新
+ * 拿到地址都会红。两条**写接口**没有地址可拦，仍按本文件的手法做源码切片
+ * （守卫必须落在发请求之前）；组件没有渲染基建，第 2 条走真实链路。
  * ------------------------------------------------------------------ */
 
-const DEMO_BLOCKED = 'const demoBlocked = (item: OrderCardView): boolean => {'
+const BLOCK_IF_DEMO = 'const blockIfDemo = (item: OrderCardView): boolean => {'
 const OPEN_CONVERSATION = 'const openConversation = (item: OrderCardView) => {'
-const OPEN_MEETUP = 'const openMeetup = (item: OrderCardView) => {'
-const OPEN_LISTING = 'const openListing = (item: OrderCardView) => {'
 
 describe('演示兜底开关 —— 只认显式 TARO_APP_MOCK=1（#304）', () => {
-  test('development 构建不再自动打开兜底：判定里不该再出现 NODE_ENV', async () => {
-    const source = await Bun.file(new URL('../config/index.ts', import.meta.url)).text()
-    const code = codeOnly(source)
-    expect(code).toContain("process.env.TARO_APP_MOCK === '1'")
-    // 修复前这里命中的是 `process.env.NODE_ENV === 'development'`：`bun run dev:weapp`
-    // 这种开发构建会把 t-* / l-* 假交易漏进真实面交页与会话链路（#182 的原始症状）。
-    expect(code).not.toContain('NODE_ENV')
+  test('兜底判定只有一处定义，且不含 NODE_ENV（development 不再自动打开）', async () => {
+    const code = codeOnly(await Bun.file(new URL('../config/index.ts', import.meta.url)).text())
+    // 精确到行尾：`=== '1' || process.env.NODE_ENV === 'development'` 这种追加改法也要红
+    expect(code).toMatch(/const mockEnabled = process\.env\.TARO_APP_MOCK === '1'\n/)
+    // 四个注入点（alias + 三个 defineConstants）共用这一个表达式，不许各自重抄一遍
+    expect(code.match(/process\.env\.TARO_APP_MOCK === '1'/g)?.length).toBe(1)
+    // 不再用 `expect(code).not.toContain('NODE_ENV')` 兜住整份配置：配置里任何一处与兜底
+    // 无关的 NODE_ENV 都会让它红，而上面两条已经精确钉住「兜底是怎么判定的」。
   })
 })
 
 describe('演示来源的卡 —— 只说明，不跳真实接口页（#304）', () => {
-  test('demoBlocked 只认 source === demo：真实卡原样放行，演示卡给一句说明', async () => {
-    const body = await sliceFlat(DEMO_BLOCKED, OPEN_CONVERSATION)
-    expect(body).toContain("if (item.source !== 'demo') return false")
+  test('演示来源没有面交页地址：真实订单才拼出真实 id（AC⑥）', () => {
+    expect(DEMO_ORDER_HINT).toBe('演示数据，不接入真实交易')
+    expect(meetupUrlOf({ id: 't-101', source: 'demo' })).toBeNull()
+    expect(meetupUrlOf({ id: 'txn_01jc000000e00800000000002h', source: 'real' })).toBe(
+      '/pkg-trade/pages/transaction-meetup/index?id=txn_01jc000000e00800000000002h',
+    )
+  })
+
+  test('演示来源没有会话页地址；真实数据缺 conversationId 也不跳', () => {
+    expect(conversationUrlOf({ conversationId: 'cnv-demo', source: 'demo' })).toBeNull()
+    expect(conversationUrlOf({ conversationId: null, source: 'real' })).toBeNull()
+    expect(
+      conversationUrlOf({ conversationId: 'cnv_01jc000000e008000000000024', source: 'real' }),
+    ).toBe('/pkg-social/pages/conversation/index?id=cnv_01jc000000e008000000000024')
+  })
+
+  test('组件里没有第二份地址：两条跳转都走 order-links', async () => {
+    const code = codeOnly(await orderListSource())
+    expect(code).toContain('meetupUrlOf(item)')
+    expect(code).toContain('conversationUrlOf(item)')
+    // 地址只在 order-links 里拼一次，否则上面两条断言就管不到真实跳转用的那个字符串
+    expect(code).not.toContain('/pkg-trade/pages/transaction-meetup/index?id=')
+    expect(code).not.toContain('/pkg-social/pages/conversation/index?id=')
+  })
+
+  test('blockIfDemo 只认 source === demo：真实卡原样放行，演示卡给一句说明', async () => {
+    const body = await sliceFlat(BLOCK_IF_DEMO, OPEN_CONVERSATION)
+    expect(body).toContain('if (!isDemoSource(item)) return false')
     expectAfter(
       body,
-      "if (item.source !== 'demo') return false",
+      'if (!isDemoSource(item)) return false',
       'Taro.showToast(',
       '真实卡直接放行，只有演示卡才提示',
     )
-    expect(body).toContain("title: '演示数据，不接入真实交易'")
-  })
-
-  test('查看会话：先拦演示来源，再谈 conversationId 与跳转', async () => {
-    const body = await sliceFlat(OPEN_CONVERSATION, OPEN_MEETUP)
-    expectAfter(
-      body,
-      'if (demoBlocked(item)) return',
-      'if (!item.conversationId)',
-      '演示来源要在会话判定之前拦下',
-    )
-    expectAfter(
-      body,
-      'if (demoBlocked(item)) return',
-      'Taro.navigateTo(',
-      '演示来源的会话不许跳真实会话页',
-    )
-  })
-
-  test('打开二维码 / 交易码：先拦演示来源，再谈跳面交页', async () => {
-    const body = await sliceFlat(OPEN_MEETUP, OPEN_LISTING)
-    expectAfter(
-      body,
-      'if (demoBlocked(item)) return',
-      'Taro.navigateTo(',
-      '演示来源不许跳面交页（t-* 进真实页必然 404）',
-    )
+    // 说明文案与演示地址同源（`order-links`），不在这里各写一份
+    expect(body).toContain('title: DEMO_ORDER_HINT')
   })
 
   test('取消交易 / 读评价边：假 id 不打真实写接口', async () => {
     const cancel = await sliceFlat(CANCEL, OPEN_REVIEW)
-    expectAfter(cancel, 'if (demoBlocked(item)) return', 'Taro.showModal(', '演示来源不打取消接口')
+    expectAfter(cancel, 'if (blockIfDemo(item)) return', 'Taro.showModal(', '演示来源不打取消接口')
     const review = await sliceFlat(OPEN_REVIEW, SUBMIT_REVIEW)
     expectAfter(
       review,
-      'if (demoBlocked(item)) return',
+      'if (blockIfDemo(item)) return',
       'fetchMyTransactionReview(',
       '演示来源不打评价接口',
     )
@@ -383,7 +391,6 @@ describe('订单来源标记 —— 演示 fixture 与契约订单各自可辨�
     const { loadOrders } = await import('../src/features/fetchers')
     const result = await loadOrders('buyer')
 
-    expect(result.failed).toBe(false)
     expect(result.failureKind).toBeNull()
     expect(result.items.length).toBeGreaterThan(0)
     for (const item of result.items) {

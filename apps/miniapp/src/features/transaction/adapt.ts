@@ -39,7 +39,8 @@ export type OrderCardView = {
    * **来源是卡片的一等字段**，不能靠 id 前缀或调用方记忆去猜：演示构建里后端挂掉时
    * 列表会整片换成 fixture，而 fixture 用的是 `t-*` / `l-*` 假 id —— 拿它们去真实面交页 /
    * 会话页只会 404「找不到这笔交易」。所以 `components/order-list` 据此画「演示数据」
-   * 角标，并拦住一切会落到真实接口的跳转与写操作（见该组件 `demoBlocked`）。
+   * 角标，并拦住一切会落到真实接口的跳转与写操作（跳转地址见 `./order-links` 的
+   * `meetupUrlOf` / `conversationUrlOf`，两个写路径见该组件的 `blockIfDemo`）。
    */
   source: 'real' | 'demo'
   /**

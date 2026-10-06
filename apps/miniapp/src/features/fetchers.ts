@@ -1,5 +1,5 @@
 /**
- * 页面数据入口（含通知的逐条已读**回写**）：**先试真实 API；只有开发 / 预览才允许退回 mock fixture**。
+ * 页面数据入口（含通知的逐条已读**回写**）：**先试真实 API；只有显式演示构建（`TARO_APP_MOCK=1`）才允许退回 mock fixture**。
  *
  * ## 为什么要有这一层
  *
@@ -9,7 +9,7 @@
  *
  * ## 生产口径
  *
- * mock 回退是**开发 / 预览**的便利，不是生产数据策略：API 挂掉、域名配错或契约漂移时，
+ * mock 回退是**演示构建**的便利，不是生产数据策略：API 挂掉、域名配错或契约漂移时，
  * 用户必须看到错误态，而不是一批「看起来正常」的假商品 / 假账号。因此：
  *
  * - 只有构建期注入的 `__ALLOW_MOCK_FALLBACK__ === true` 才退 mock（注入点见 `config/index.ts`）；
@@ -139,7 +139,7 @@ export type LoadedList = {
   /**
    * 本次推荐请求的 id（`GET /recommendations/feed` 的 `requestId`）。
    *
-   * 分类列表、以及退 mock 的开发/预览都没有推荐请求上下文 → `null`：此时**不发**
+   * 分类列表、以及退 mock 的演示构建都没有推荐请求上下文 → `null`：此时**不发**
    * IMPRESSION / QUICK_SKIP，因为契约强制这两个事件必须带 requestId（见 `recommendation/schema.ts`），
    * 没有归因就发等于制造必然被拒的事件。
    */
@@ -153,7 +153,7 @@ export type LoadedList = {
   positions?: Map<string, number>
 }
 
-/** 首页 feed。「推荐」走推荐端点，分类走商品列表；真实失败：开发 / 预览退 mock，生产返回 `failed`。 */
+/** 首页 feed。「推荐」走推荐端点，分类走商品列表；真实失败：演示构建退 mock，生产返回 `failed`。 */
 export async function loadHomeFeed(
   category: ListingCategory | 'ALL' = 'ALL',
   now: number = Date.now(),
@@ -724,12 +724,14 @@ function toReplyExcerpt(item: MockMessage): string {
  */
 export type LoadedOrders = {
   items: OrderCardView[]
-  /** 真实接口失败且**没有**回退 mock（生产口径）→ 页面渲染错误态而不是空态 */
-  failed: boolean
   /**
-   * 失败分类（#304）：`failed` 为真时页面据此换文案 —— 401「登录已过期」、网络
-   * 「网络不可用」、其余（404 / 5xx / 契约漂移）「服务暂时不可用」。成功与演示兜底
-   * 分支都是 `null`（那时没有失败可讲）。分类口径见 `features/load-failure.ts`。
+   * 失败分类（#304）：非 `null` 就是「真实接口失败且**没有**回退 mock（生产口径）」，
+   * 页面据此渲染错误态而不是空态，并换文案 —— 401「登录已过期」、网络「网络不可用」、
+   * 其余（404 / 5xx / 契约漂移）「服务暂时不可用」。成功与演示兜底分支都是 `null`
+   * （那时没有失败可讲）。分类口径见 `features/load-failure.ts`。
+   *
+   * 刻意**没有** `failed: boolean`：它与 `failureKind !== null` 恒等，两个字段只能同步
+   * 翻转，多一个就多一份要维护的真相。
    */
   failureKind: FailureKind | null
   truncated: boolean
@@ -748,7 +750,6 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
     const page = await fetchAllTransactions(role)
     return {
       items: page.items.map((dto) => toOrderCard(dto)),
-      failed: false,
       failureKind: null,
       truncated: page.truncated,
     }
@@ -759,12 +760,11 @@ export async function loadOrders(role: TransactionRole): Promise<LoadedOrders> {
      * 是三种不同的处境，页面上不能都长成「加载失败，检查网络后重试」。
      */
     if (!MOCK_FALLBACK_ENABLED) {
-      return { items: [], failed: true, failureKind: classifyFailure(error), truncated: false }
+      return { items: [], failureKind: classifyFailure(error), truncated: false }
     }
     const views = await demoOrderViews(role)
     return {
       items: views.map((view) => toOrderCardFromMock(view, demoOpenConversation)),
-      failed: false,
       failureKind: null,
       truncated: false,
     }

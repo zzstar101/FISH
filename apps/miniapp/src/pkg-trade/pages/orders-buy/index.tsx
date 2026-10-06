@@ -34,7 +34,7 @@ export default function OrdersBuy() {
   const authStatus = useAuthGuard()
   const { user } = useAuth()
   const userId = user?.id ?? null
-  const { items, loading, failed, failureKind, truncated, reload } = useOrderList('buyer', userId)
+  const { items, loading, failureKind, truncated, reload } = useOrderList('buyer', userId)
   const [showTop, setShowTop] = useState(false)
 
   /** 登录态与身份驱动加载；依赖里带 `userId`，换账号自动重拉自己视角的订单 */
@@ -80,7 +80,6 @@ export default function OrdersBuy() {
       titleEm="买到的"
       items={items}
       loading={loading}
-      failed={failed}
       failureKind={failureKind}
       truncated={truncated}
       showTop={showTop}

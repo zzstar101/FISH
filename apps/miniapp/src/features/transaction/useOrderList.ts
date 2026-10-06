@@ -16,11 +16,13 @@ export type StatusKey = 'ALL' | OrderCardView['status']
 export type OrderListData = {
   items: OrderCardView[]
   loading: boolean
-  /** 真实接口失败且**没有**回退 mock —— 页面渲染错误态，而不是空态 */
-  failed: boolean
   /**
-   * 失败分类（#304）。`failed` 为假时恒为 `null`；为真时页面用它换文案：
-   * 401「登录已过期」/ 网络「网络不可用」/ 其余「服务暂时不可用」。
+   * 失败分类（#304）：非 `null` 就是「真实接口失败且**没有**回退 mock」，页面渲染错误态
+   * 而不是空态，并据此换文案 —— 401「登录已过期」/ 网络「网络不可用」/ 其余
+   * 「服务暂时不可用」。
+   *
+   * **只有这一个失败字段**：`failed = failureKind !== null` 是谁都能算的派生物，
+   * 不在这里再放一个 boolean 让两者必须同步翻转（`LoadedOrders` 同款口径）。
    */
   failureKind: FailureKind | null
   /** 列表不完整（翻页到上限，或服务端游标没前进）—— 不能拿它的长度当总数 */
@@ -63,7 +65,7 @@ export function nextIdentityState(
 export function useOrderList(role: OrderCardView['role'], userId: string | null): OrderListData {
   const [items, setItems] = useState<OrderCardView[]>([])
   const [loading, setLoading] = useState(true)
-  const [failed, setFailed] = useState(false)
+  /** 失败态的唯一真相：非 `null` 即失败（`OrderListData` 的说明） */
   const [failureKind, setFailureKind] = useState<FailureKind | null>(null)
   const [truncated, setTruncated] = useState(false)
 
@@ -77,7 +79,7 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
   /**
    * 身份切换的**渲染期重置**（adjust-state-during-render，React 官方推荐的
    * 「存上一帧信息」写法，消息页同款）：订单页实例会被压在页面栈里、跨登录态存活，
-   * 换账号回来时 `items` / `failed` / `truncated` 还是上一个账号的视角，必须在
+   * 换账号回来时 `items` / `failureKind` / `truncated` 还是上一个账号的视角，必须在
    * **同一个 commit 内**清成「未加载」—— 写成 effect 里 setState 不行，那要到下一帧
    * 才生效。自增代次也放在这里（同步），上一个账号的迟到响应在微任务窗口里
    * 就已经被判过期，写不进刚清空的 state。
@@ -93,7 +95,6 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
     requestId.current += 1
     setItems([])
     setLoading(true)
-    setFailed(false)
     setFailureKind(null)
     setTruncated(false)
   }
@@ -126,11 +127,10 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
          * 保留上一次成功的结果、只把错误态交给渲染层（`components/order-list` 会把
          * `LoadError` 追加在列表下面；一条都没有时才用它顶替列表），比清空诚实也更可用。
          */
-        if (!result.failed) {
+        if (result.failureKind === null) {
           setItems(result.items)
           setTruncated(result.truncated)
         }
-        setFailed(result.failed)
         setFailureKind(result.failureKind)
         setLoading(false)
       })
@@ -138,7 +138,7 @@ export function useOrderList(role: OrderCardView['role'], userId: string | null)
     [role],
   )
 
-  return { items, loading, failed, failureKind, truncated, reload }
+  return { items, loading, failureKind, truncated, reload }
 }
 
 /** 各状态计数（含 `ALL`）。全部由拿到的那份列表算出，不写死任何数字 */

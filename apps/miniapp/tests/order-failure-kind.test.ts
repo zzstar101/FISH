@@ -46,7 +46,6 @@ describe('loadOrders：真实失败不摆演示订单，三类失败各自可辨
 
     expect(await loadOrders('buyer')).toEqual({
       items: [],
-      failed: true,
       failureKind: 'unauthenticated',
       truncated: false,
     })
@@ -57,7 +56,6 @@ describe('loadOrders：真实失败不摆演示订单，三类失败各自可辨
 
     expect(await loadOrders('buyer')).toEqual({
       items: [],
-      failed: true,
       failureKind: 'network',
       truncated: false,
     })
@@ -68,7 +66,6 @@ describe('loadOrders：真实失败不摆演示订单，三类失败各自可辨
 
     expect(await loadOrders('seller')).toEqual({
       items: [],
-      failed: true,
       failureKind: 'server',
       truncated: false,
     })
