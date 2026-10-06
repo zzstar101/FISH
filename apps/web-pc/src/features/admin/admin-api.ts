@@ -30,6 +30,14 @@ import {
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
 import {
+  type AdminDisputeDetail,
+  AdminDisputeDetailSchema,
+  type AdminDisputeListResponse,
+  AdminDisputeListResponseSchema,
+  type AdminDisputeQueueQuery,
+  type AdminDisputeResolveInput,
+} from '@fish/contracts/disputes/schema'
+import {
   type GovernanceLiftRestrictionInput,
   type GovernanceListingDelistInput,
   type GovernanceListingRestoreInput,
@@ -326,6 +334,52 @@ export async function fetchAdminAuditLogs(
   cursor?: string,
 ): Promise<AdminAuditLogPage> {
   return AdminAuditLogPageSchema.parse(await apiRequest(adminAuditPath(filters, cursor)))
+}
+
+// ---------------------------------------------------------------------------
+// 交易争议（#465）
+// ---------------------------------------------------------------------------
+
+export type AdminDisputesFilters = Pick<
+  AdminDisputeQueueQuery,
+  'status' | 'type' | 'q' | 'createdFrom' | 'createdTo'
+>
+
+function adminDisputesPath(filters: AdminDisputesFilters, cursor?: string): string {
+  return adminQueryPath(ADMIN_ROUTES.disputes, {
+    status: filters.status,
+    type: filters.type,
+    q: filters.q,
+    createdFrom: filters.createdFrom,
+    createdTo: filters.createdTo,
+    cursor,
+    limit: ADMIN_PAGE_LIMIT,
+  })
+}
+
+export async function fetchAdminDisputes(
+  filters: AdminDisputesFilters,
+  cursor?: string,
+): Promise<AdminDisputeListResponse> {
+  return AdminDisputeListResponseSchema.parse(await apiRequest(adminDisputesPath(filters, cursor)))
+}
+
+export async function fetchAdminDisputeDetail(disputeId: string): Promise<AdminDisputeDetail> {
+  return AdminDisputeDetailSchema.parse(await apiRequest(ADMIN_ROUTES.disputeDetail(disputeId)))
+}
+
+/**
+ * 处理争议：204 无 body。重复处理 → 409 `DISPUTE_CONFLICT`（与举报处理同款，
+ * 没有幂等键，靠服务端状态机拒绝）。只写结论与审计，**不**改成交事实、**不**触发治理动作。
+ */
+export async function submitDisputeResolve(
+  disputeId: string,
+  input: AdminDisputeResolveInput,
+): Promise<void> {
+  await apiRequest(ADMIN_ROUTES.disputeResolve(disputeId), {
+    body: JSON.stringify(input),
+    method: 'POST',
+  })
 }
 
 // ---------------------------------------------------------------------------

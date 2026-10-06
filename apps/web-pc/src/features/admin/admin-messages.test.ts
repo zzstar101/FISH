@@ -3,6 +3,7 @@ import { ApiError } from '../../lib/api-client'
 import {
   adminLoadOutcome,
   adminLoadView,
+  disputeResolveError,
   governanceActionError,
   moderationDecisionError,
   reportHandleError,
@@ -87,5 +88,36 @@ describe('moderationDecisionError / reportHandleError', () => {
 
   test('非 ApiError 归网络异常', () => {
     expect(reportHandleError(null)).toEqual({ message: '网络异常，请稍后重试', conflict: false })
+  })
+})
+
+describe('disputeResolveError（#465）', () => {
+  test('并发处理与终态不可撤回都标记 conflict（弹窗关闭、提示刷新）', () => {
+    expect(disputeResolveError(apiError('DISPUTE_CONFLICT', 409)).conflict).toBe(true)
+    expect(disputeResolveError(apiError('DISPUTE_NOT_PENDING', 409)).conflict).toBe(true)
+    expect(disputeResolveError(apiError('DISPUTE_CONFLICT', 409)).message).toContain('已被处理')
+  })
+
+  test('DISPUTE_NOT_FOUND 归为目标不存在且非冲突', () => {
+    expect(disputeResolveError(apiError('DISPUTE_NOT_FOUND', 404))).toEqual({
+      message: '争议不存在或已被删除',
+      conflict: false,
+    })
+  })
+
+  test('VALIDATION_FAILED 透传 details 第一条；未知码透传 message', () => {
+    expect(
+      disputeResolveError(
+        apiError('VALIDATION_FAILED', 422, [{ field: 'reason', message: '太短' }]),
+      ).message,
+    ).toBe('reason：太短')
+    expect(disputeResolveError(apiError('INTERNAL_ERROR', 500)).message).toBe('INTERNAL_ERROR')
+  })
+
+  test('非 ApiError 归网络异常', () => {
+    expect(disputeResolveError(new Error('boom'))).toEqual({
+      message: '网络异常，请稍后重试',
+      conflict: false,
+    })
   })
 })

@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from '@fish/ui/dialog'
 import { useState } from 'react'
-import { DialogAlert, OptionCards, ReasonField } from './admin-dialog-parts'
+import { DialogErrorAlert, OptionCards, ReasonField } from './admin-dialog-parts'
 import { validateReason } from './admin-view'
 
 /**
@@ -32,8 +32,6 @@ export function ReportHandleDialog({
   const [result, setResult] = useState<'HANDLED' | 'REJECTED' | null>(null)
   const [reason, setReason] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
-
-  const shownError = localError ?? errorMessage
 
   function submit() {
     if (result === null) {
@@ -85,9 +83,7 @@ export function ReportHandleDialog({
 
           <ReasonField ariaLabel="处理原因" label="处理原因" onChange={setReason} value={reason} />
 
-          {shownError !== null ? (
-            <DialogAlert message={shownError} tone={localError !== null ? 'warn' : 'danger'} />
-          ) : null}
+          <DialogErrorAlert errorMessage={errorMessage} localError={localError} />
         </div>
 
         <DialogFooter>

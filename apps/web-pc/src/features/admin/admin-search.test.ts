@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { UserRoleSchema } from '@fish/contracts/admin/schema'
 import {
   cursorSearch,
+  dayParam,
   dayRangeSearch,
   optionalSearch,
   trimmedSearch,
@@ -54,6 +55,21 @@ describe('dayRangeSearch（左闭右开）', () => {
 
   test('非法日期整体省略（不发送半截条件）', () => {
     expect(dayRangeSearch('2026-13-01', 'not-a-day')).toEqual({})
+    expect(dayRangeSearch('2026-02-30', undefined)).toEqual({})
+  })
+})
+
+describe('dayParam（URL 日期参数，只收敛形态）', () => {
+  test('YYYY-MM-DD 原样回传，其余丢弃', () => {
+    expect(dayParam('2026-10-01')).toBe('2026-10-01')
+    expect(dayParam('10/01')).toBeUndefined()
+    expect(dayParam('2026-10-1')).toBeUndefined()
+    expect(dayParam(42)).toBeUndefined()
+    expect(dayParam(undefined)).toBeUndefined()
+  })
+
+  test('不做真实日期校验：换算成服务端区间那一步才丢 2026-02-30', () => {
+    expect(dayParam('2026-02-30')).toBe('2026-02-30')
     expect(dayRangeSearch('2026-02-30', undefined)).toEqual({})
   })
 })

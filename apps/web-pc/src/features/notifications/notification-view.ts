@@ -34,8 +34,9 @@ export function notificationTarget(item: NotificationDto): NotificationTarget {
       if (wishId) return { kind: 'wish', wishId }
       return { kind: 'none' }
     }
-    // DISPUTE（#465）：用户侧争议页排在小程序（PR C，本分支未交付），管理端列表也还没有
-    // 前端页面，所以这里给不了可用的落点 —— 与 ACCOUNT 同一处理，只陈述结果、不给死链接。
+    // DISPUTE（#465）：用户侧争议页排在小程序（PR C，本分支未交付），PC 新增的
+    // `/admin/disputes` 是管理端页面、普通用户不可达，所以这里仍给不了可用落点 ——
+    // 与 ACCOUNT 同一处理，只陈述结果、不给死链接。
     case 'DISPUTE':
       return { kind: 'none' }
   }
@@ -109,6 +110,9 @@ export function notificationCopy(item: NotificationDto): {
 /**
  * 争议通知一句话。`disputeEvent` 缺席（历史行 / 脏 payload）时退回不含事件信息的通用句，
  * 与 `txEventCopy` 同一姿态——不编一个可能不对的进展。
+ *
+ * 这里刻意**不**带出处理结论（#465 审查：结论文案属 PR C 的用户侧票面，本 PR 只交付管理端；
+ * 在后台票面里替另一张票定义用户可见措辞，等于把验收边界挪到本 PR 之外）。
  */
 function disputeEventCopy(event: NotificationDto['payload']['disputeEvent']): string {
   switch (event) {

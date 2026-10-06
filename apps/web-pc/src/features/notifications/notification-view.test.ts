@@ -124,9 +124,10 @@ describe('notification view', () => {
   })
 
   /*
-   * DISPUTE（#465）：PC 侧还没有争议页面（用户侧在小程序，管理端列表也还没有前端），
-   * 所以落点只能是「不跳」——不给一个点不动的入口。文案照 TX 的规矩按 `disputeEvent`
-   * 分岔：它是收件人唯一能知道发生了什么的信息源，缺席时退回通用句。
+   * DISPUTE（#465）：PC 侧没有当事人视角的争议页面（用户侧在小程序，`/admin/disputes`
+   * 是管理端、普通用户不可达），所以落点只能是「不跳」——不给一个点不动的入口。
+   * 文案照 TX 的规矩按 `disputeEvent` 分岔：它是收件人唯一能知道发生了什么的信息源，
+   * 缺席时退回通用句。结论措辞归 PR C 的用户侧票面，这里不做（见 notification-view.ts）。
    */
   test('DISPUTE 只陈述事件、不给死链接，事件缺席时退回通用句', () => {
     expect(notificationTarget(item({ disputeId: 'd1' }, 'DISPUTE'))).toEqual({ kind: 'none' })

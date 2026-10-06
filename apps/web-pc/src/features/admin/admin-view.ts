@@ -8,6 +8,12 @@ import {
   type UserRole,
 } from '@fish/contracts/admin/schema'
 import type { AuthStatus } from '@fish/contracts/auth/user'
+import type {
+  AdminDisputeDetail,
+  DisputeResolution,
+  DisputeStatus,
+  DisputeType,
+} from '@fish/contracts/disputes/schema'
 import type { ListingModerationStatus, ListingStatus } from '@fish/contracts/listings/schema'
 import type { ModerationDecision } from '@fish/contracts/moderation/schema'
 import type { TransactionStatus } from '@fish/contracts/transactions/schema'
@@ -213,9 +219,81 @@ export function createIdempotencyKey(): string {
 }
 
 // ---------------------------------------------------------------------------
+// 交易争议（#465）
+// ---------------------------------------------------------------------------
+
+/** 争议状态机：`PENDING` 待处理，`RESOLVED` 管理员已给结论，`WITHDRAWN` 发起人已撤回。 */
+const DISPUTE_STATUS_META: Record<DisputeStatus, { label: string; variant: BadgeVariant }> = {
+  PENDING: { label: '待处理', variant: 'warn' },
+  RESOLVED: { label: '已处理', variant: 'success' },
+  WITHDRAWN: { label: '已撤回', variant: 'secondary' },
+}
+
+/**
+ * 争议类型。刻意**不含**骚扰/威胁——那属于举报域，且争议结论不触发治理动作。
+ *
+ * 文案是管理端自己的口径：`apps/miniapp` 目前**没有**争议表单/页面
+ * （`git grep ITEM_MISMATCH -- apps/miniapp` 零命中），所以不存在可对齐的用户侧文案，
+ * 也就不声明「与用户侧保持一致」（#465 审查发现：原注释是一句无法验证的声明）。
+ */
+const DISPUTE_TYPE_META: Record<DisputeType, { label: string }> = {
+  ITEM_MISMATCH: { label: '商品与描述不符' },
+  NOT_COMPLETED: { label: '交易未完成' },
+  PAYMENT_ISSUE: { label: '支付问题' },
+  OTHER: { label: '其他' },
+}
+
+/** 处理结论：只描述「本次反馈是否成立」，不等同于处罚。 */
+const DISPUTE_RESOLUTION_META: Record<DisputeResolution, { label: string; variant: BadgeVariant }> =
+  {
+    UPHELD: { label: '反馈成立', variant: 'success' },
+    DISMISSED: { label: '反馈不成立', variant: 'secondary' },
+    INCONCLUSIVE: { label: '无法认定', variant: 'warn' },
+  }
+
+/** 契约只给内联枚举（`DisputeEvidenceMessageSchema` 的 `type`）不导出具名类型：从 DTO 派生。 */
+type DisputeEvidenceType = AdminDisputeDetail['evidence'][number]['message']['type']
+
+/**
+ * 证据消息类型 → 界面文案。键取自契约派生联合（`Record<契约联合, …>`）：
+ * 契约新增类型而这里没补，`tsc` 当场报错；不像 `Record<string, string>` 那样
+ * 把裸枚举值（`MEDIA`）静默显示给处理人（#465 审查发现 Primitive Obsession）。
+ */
+const EVIDENCE_TYPE_LABEL: Record<DisputeEvidenceType, string> = {
+  // 不是「商品卡片」：服务端存的是消息正文，而 LISTING 消息的正文就是商品公开 id
+  //（`apps/api/src/modules/messages/service.ts`），所以这里只能显示 `lst_…` 引用。
+  LISTING: '商品引用',
+  MEDIA: '图片/语音',
+  SYSTEM: '系统消息',
+  TEXT: '文字',
+}
+
+/** 未知取值只可能来自契约漂移：照实显示原文，不猜一个像样的中文（少说胜于误导）。 */
+export function evidenceTypeLabel(type: DisputeEvidenceType): string {
+  return EVIDENCE_TYPE_LABEL[type] ?? type
+}
+
+// ---------------------------------------------------------------------------
 // Record 索引在 noUncheckedIndexedAccess 下是 V | undefined：统一经函数回退，
 // 调用方不写 `?? 兜底`（契约枚举全覆盖的 Record 理论上不会 miss，回退只兜类型系统）。
 // ---------------------------------------------------------------------------
+
+/**
+ * 未知枚举值的回退（#465 审查发现）：契约是 `z.enum`，未知值只可能来自契约漂移
+ * （服务端比前端新）。若回退到某个既有枚举值，`BOGUS` 会被渲染成「待处理」，
+ * 处理人会当成真实状态照常操作。
+ *
+ * **只服务下方争议域三个访问器**（`disputeStatusMeta` / `disputeResolutionMeta` /
+ * `disputeTypeLabel`）：显示「未知」并标灰，宁可少说也不误导。
+ * 其余访问器的回退值是各自域既有口径，本轮不动：`listingStatusMeta` → OFFLINE、
+ * `moderationStatusMeta` → REVIEW、`moderationDecisionMeta` → REVIEW、
+ * `transactionStatusMeta` → CANCELLED、`authStatusMeta` → UNVERIFIED、
+ * `roleMeta` → USER、`moderationProviderMeta` → LOCAL。
+ */
+const UNKNOWN_META: { label: string; variant: BadgeVariant } = {
+  label: '未知',
+  variant: 'secondary',
+}
 
 export function listingStatusMeta(status: ListingStatus) {
   return LISTING_STATUS_META[status] ?? LISTING_STATUS_META.OFFLINE
@@ -243,4 +321,16 @@ export function roleMeta(role: UserRole) {
 
 export function moderationProviderMeta(provider: AdminModerationProvider) {
   return MODERATION_PROVIDER_META[provider] ?? MODERATION_PROVIDER_META.LOCAL
+}
+
+export function disputeStatusMeta(status: DisputeStatus) {
+  return DISPUTE_STATUS_META[status] ?? UNKNOWN_META
+}
+
+export function disputeResolutionMeta(resolution: DisputeResolution) {
+  return DISPUTE_RESOLUTION_META[resolution] ?? UNKNOWN_META
+}
+
+export function disputeTypeLabel(type: DisputeType): string {
+  return (DISPUTE_TYPE_META[type] ?? UNKNOWN_META).label
 }

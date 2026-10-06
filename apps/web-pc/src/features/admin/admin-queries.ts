@@ -1,3 +1,4 @@
+import type { AdminDisputeResolveInput } from '@fish/contracts/disputes/schema'
 import type {
   GovernanceLiftRestrictionInput,
   GovernanceListingDelistInput,
@@ -18,6 +19,7 @@ import { currentSessionGeneration } from '../../lib/session-cache'
 import type { AdminUsersFilters } from './admin-api'
 import {
   type AdminAuditFilters,
+  type AdminDisputesFilters,
   type AdminListingsFilters,
   type AdminModerationRecordsFilters,
   type AdminReportsFilters,
@@ -25,6 +27,8 @@ import {
   banUser,
   delistListing,
   fetchAdminAuditLogs,
+  fetchAdminDisputeDetail,
+  fetchAdminDisputes,
   fetchAdminListingDetail,
   fetchAdminListings,
   fetchAdminMe,
@@ -41,6 +45,7 @@ import {
   liftUserRestriction,
   restoreListing,
   restrictUserPublish,
+  submitDisputeResolve,
   submitModerationDecision,
   submitReportHandle,
 } from './admin-api'
@@ -73,6 +78,8 @@ export const adminKeys = {
   moderationDetail: (recordId: string) => [...adminKeys.all(), 'moderation', recordId] as const,
   reports: (filters: AdminReportsFilters) => [...adminKeys.all(), 'reports', filters] as const,
   reportDetail: (reportId: string) => [...adminKeys.all(), 'report', reportId] as const,
+  disputes: (filters: AdminDisputesFilters) => [...adminKeys.all(), 'disputes', filters] as const,
+  disputeDetail: (disputeId: string) => [...adminKeys.all(), 'dispute', disputeId] as const,
   transactions: (filters: AdminTransactionsFilters) =>
     [...adminKeys.all(), 'transactions', filters] as const,
   audit: (filters: AdminAuditFilters) => [...adminKeys.all(), 'audit', filters] as const,
@@ -191,6 +198,24 @@ export function useAdminReportDetail(reportId: string) {
   })
 }
 
+export function useAdminDisputes(filters: AdminDisputesFilters) {
+  return useInfiniteQuery({
+    queryKey: adminKeys.disputes(filters),
+    queryFn: ({ pageParam }) => fetchAdminDisputes(filters, pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    staleTime: 0,
+  })
+}
+
+export function useAdminDisputeDetail(disputeId: string) {
+  return useQuery({
+    queryFn: () => fetchAdminDisputeDetail(disputeId),
+    queryKey: adminKeys.disputeDetail(disputeId),
+    staleTime: 0,
+  })
+}
+
 export function useAdminTransactions(filters: AdminTransactionsFilters) {
   return useInfiniteQuery({
     queryKey: adminKeys.transactions(filters),
@@ -249,6 +274,12 @@ export function useModerationDecision(recordId: string) {
 
 export function useReportHandle(reportId: string) {
   return useAdminMutation((input: AdminReportHandleInput) => submitReportHandle(reportId, input))
+}
+
+export function useDisputeResolve(disputeId: string) {
+  return useAdminMutation((input: AdminDisputeResolveInput) =>
+    submitDisputeResolve(disputeId, input),
+  )
 }
 
 export function useListingDelist(listingId: string) {
