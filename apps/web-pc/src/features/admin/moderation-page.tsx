@@ -1,5 +1,6 @@
 import type { AdminModerationRecords } from '@fish/contracts/admin/schema'
 import { ModerationDecisionSchema } from '@fish/contracts/moderation/schema'
+import { ListingIdSchema } from '@fish/contracts/system/public-id'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
@@ -11,6 +12,7 @@ import {
   KeywordFilter,
   LoadMore,
 } from './admin-filter'
+import { checkPublicIds, type PublicIdCheck, RejectedIdNotice } from './admin-id-guard'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminModerationQueue, useAdminModerationRecords } from './admin-queries'
 import {
@@ -30,6 +32,22 @@ export type ModerationSearch = {
   from?: string
   to?: string
   cursor?: string
+}
+
+/**
+ * 商品 ID 的形态守卫（#467 五审 P0）：服务端 `AdminModerationRecordsQuerySchema` 用
+ * `ListingIdSchema`，形态不对回 422，而本页 `isError` 是早返回，会把筛选区连同「清除」
+ * 一起藏掉——用户只能手改 URL 才能脱困。
+ */
+const MODERATION_ID_FILTERS = {
+  listingId: { label: '商品 ID', prefix: 'lst_', schema: ListingIdSchema },
+} as const
+
+type ModerationIdField = keyof typeof MODERATION_ID_FILTERS
+
+/** 只有形态合法的 listingId 会进 filters（即发给服务端）。 */
+export function checkModerationIds(search: ModerationSearch): PublicIdCheck<ModerationIdField> {
+  return checkPublicIds(MODERATION_ID_FILTERS, search)
 }
 
 /**
@@ -73,7 +91,7 @@ function ModerationQueueSection({ search }: { search: ModerationSearch }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <ModerationRow highlight="REVIEW" item={item} key={item.record.id} tab="queue" />
+            <ModerationRow highlight="REVIEW" item={item} key={item.record.id} search={search} />
           ))}
         </Card>
       ) : null}
@@ -92,9 +110,10 @@ function ModerationQueueSection({ search }: { search: ModerationSearch }) {
 function ModerationRecordsSection({ search }: { search: ModerationSearch }) {
   const navigate = useNavigate()
   const range = dayRangeSearch(search.from, search.to)
+  const { rejected, valid } = checkModerationIds(search)
   const filters = {
     decision: search.decision,
-    listingId: search.listingId,
+    listingId: valid.listingId,
     q: search.q,
     createdFrom: range.createdFrom,
     createdTo: range.createdTo,
@@ -147,9 +166,11 @@ function ModerationRecordsSection({ search }: { search: ModerationSearch }) {
         />
       </div>
 
-      {search.listingId !== undefined ? (
+      <RejectedIdNotice items={rejected} onClear={() => update({ listingId: undefined })} />
+
+      {valid.listingId !== undefined ? (
         <p className="rounded-xl bg-brand-soft px-4 py-2.5 text-brand text-sm" role="status">
-          正在按商品过滤（{search.listingId}），
+          正在按商品过滤（{valid.listingId}），
           <button
             className="font-semibold underline"
             onClick={() => update({ listingId: undefined })}
@@ -172,7 +193,7 @@ function ModerationRecordsSection({ search }: { search: ModerationSearch }) {
               highlight={item.record.decision}
               item={item}
               key={item.record.id}
-              tab="records"
+              search={search}
             />
           ))}
         </Card>
@@ -235,12 +256,12 @@ type ModerationRowItem = AdminModerationRecords['items'][number]
 export function ModerationRow({
   highlight,
   item,
-  tab,
+  search,
 }: {
   highlight: 'ALLOW' | 'BLOCK' | 'REVIEW'
   item: ModerationRowItem
-  /** 来源 tab：写进详情链接，返回时才能回到来处（#467 审查发现 Spec c-②）。 */
-  tab: ModerationSearch['tab']
+  /** 来源筛选（含 tab）：整份写进详情链接，返回时才能回到来处（#467 审查发现 Spec c-② / 五审 P2）。 */
+  search: ModerationSearch
 }) {
   const decisionMeta = moderationDecisionMeta(highlight)
   const providerMeta =
@@ -249,7 +270,7 @@ export function ModerationRow({
     <Link
       className="block p-4 transition-colors hover:bg-surface-2/60"
       params={{ recordId: item.record.id }}
-      search={{ tab }}
+      search={withoutCursor(search)}
       to="/admin/moderation/$recordId"
     >
       <div className="flex items-start justify-between gap-4">

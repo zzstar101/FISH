@@ -5,12 +5,10 @@ import { Card } from '@fish/ui/card'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import {
-  type AdminActionOutcome,
-  adminLoadOutcome,
-  moderationDecisionError,
-} from './admin-messages'
+import { ForbiddenInline, NotFoundInline } from './admin-filter'
+import { type AdminActionOutcome, adminLoadView, moderationDecisionError } from './admin-messages'
 import { useAdminModerationDetail, useModerationDecision } from './admin-queries'
+import { withoutCursor } from './admin-search'
 import {
   auditActionLabel,
   formatAdminDateTime,
@@ -73,40 +71,41 @@ export function ModerationConflictBanner() {
 /**
  * 审核记录详情（#467 验收「详情与审核历史、人工 ALLOW/BLOCK」）。
  * 已有人工决定时不再给决定表单（服务端会 409，界面也不该摆一个必然失败的按钮）。
- * `tab` 是来源列表（URL 上的查询条件），返回链接据此回到来处。
+ * `search` 是来源列表（URL 上的查询条件：tab + 判定/商品/关键词/时间段），
+ * 返回链接据此回到来处（#467 五审 P2：以前只带 tab，检索条件全丢）。
  */
 export function ModerationDetailPage({
   recordId,
-  tab,
+  search,
 }: {
   recordId: string
-  tab: ModerationSearch['tab']
+  search: ModerationSearch
 }) {
   const detail = useAdminModerationDetail(recordId)
 
   if (detail.isPending) return <LoadingState label="正在加载审核记录…" />
   if (detail.isError) {
-    const outcome = adminLoadOutcome(detail.error)
-    return (
-      <ErrorState
-        message={outcome.kind === 'error' ? outcome.message : '审核记录加载失败'}
-        onRetry={() => void detail.refetch()}
-      />
-    )
+    const view = adminLoadView(detail.error, '审核记录加载失败')
+    // 403 / 404 都不给「重试」（#467 五审 P3）：权限不会因重试改变，已删除的记录也不会回来。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    if (view.kind === 'notFound') {
+      return <NotFoundInline label="审核记录" to="/admin/moderation" />
+    }
+    return <ErrorState message={view.message} onRetry={() => void detail.refetch()} />
   }
 
-  return <ModerationDetailView detail={detail.data} recordId={recordId} tab={tab} />
+  return <ModerationDetailView detail={detail.data} recordId={recordId} search={search} />
 }
 
 /** 详情视图（导出供静态渲染测试：本端没有 jsdom，见文件头的纯函数说明）。 */
 export function ModerationDetailView({
   detail,
   recordId,
-  tab,
+  search,
 }: {
   detail: AdminModerationDetail
   recordId: string
-  tab: ModerationSearch['tab']
+  search: ModerationSearch
 }) {
   const [decisionState, setDecisionState] = useState(MODERATION_DECISION_IDLE)
   const decision = useModerationDecision(recordId)
@@ -145,10 +144,10 @@ export function ModerationDetailView({
         <div>
           <Link
             className="text-ink-3 text-sm hover:text-brand"
-            search={{ tab }}
+            search={withoutCursor(search)}
             to="/admin/moderation"
           >
-            {tab === 'records' ? '← 审核记录' : '← 审核队列'}
+            {search.tab === 'records' ? '← 审核记录' : '← 审核队列'}
           </Link>
           <h1 className="mt-1 font-semibold text-[26px] tracking-[-0.03em]">
             {item.listing === null

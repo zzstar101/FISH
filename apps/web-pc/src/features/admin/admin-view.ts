@@ -2,6 +2,7 @@ import {
   type AdminAuditAction,
   AdminAuditActionSchema,
   type AdminAuditTargetType,
+  AdminAuditTargetTypeSchema,
   type AdminCapability,
   type AdminModerationRecord,
   type UserRole,
@@ -108,6 +109,30 @@ export const AUDIT_TARGET_TYPE_LABEL: Record<AdminAuditTargetType, string> = {
   MODERATION_RECORD: '审核记录',
   REPORT: '举报',
   USER_RESTRICTION: '限制记录',
+}
+
+/**
+ * 审计页两个筛选器的选项（#467 五审 P1）。
+ *
+ * 以前这里是页面内手写的数组，漏了 `ADMIN_PROMOTED` / `USER_UNBANNED` / `USER_RESTRICTION`
+ * 三个取值（契约加了值、界面悄悄少一项）。现在由契约枚举派生：**枚举加了值，筛选器自动多一项**，
+ * 而 `AUDIT_ACTION_META` / `AUDIT_TARGET_TYPE_LABEL` 的 `Record<契约联合, …>` 保证文案不会缺。
+ */
+export function auditActionOptions(): ReadonlyArray<{ value: AdminAuditAction; label: string }> {
+  return AdminAuditActionSchema.options.map((action) => ({
+    value: action,
+    label: auditActionLabel(action),
+  }))
+}
+
+export function auditTargetTypeOptions(): ReadonlyArray<{
+  value: AdminAuditTargetType
+  label: string
+}> {
+  return AdminAuditTargetTypeSchema.options.map((targetType) => ({
+    value: targetType,
+    label: AUDIT_TARGET_TYPE_LABEL[targetType],
+  }))
 }
 
 /**

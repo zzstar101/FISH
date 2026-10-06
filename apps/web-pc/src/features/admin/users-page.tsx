@@ -53,7 +53,7 @@ export function UsersPage({ search }: { search: UsersSearch }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <UserRow key={item.id} user={item} />
+            <UserRow key={item.id} search={search} user={item} />
           ))}
         </Card>
       ) : null}
@@ -105,13 +105,16 @@ function UsersFilters({ search }: { search: UsersSearch }) {
   )
 }
 
-function UserRow({ user }: { user: AdminUserSummary }) {
+/** 列表行：`search` 是来源查询条件（关键词/认证状态/角色），整份带进详情，
+ * 详情页的「返回」才能回到同一视图（#467 五审 P2）。 */
+function UserRow({ search, user }: { user: AdminUserSummary; search: UsersSearch }) {
   const authMeta = authStatusMeta(user.authStatus)
   const roleView = roleMeta(user.role)
   return (
     <Link
       className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2/60"
       params={{ userId: user.id }}
+      search={withoutCursor(search)}
       to="/admin/users/$userId"
     >
       <div className="min-w-0 flex-1">

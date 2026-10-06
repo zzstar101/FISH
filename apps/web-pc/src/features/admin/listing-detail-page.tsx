@@ -8,11 +8,14 @@ import { useState } from 'react'
 import { ListingThumb } from '../../components/listing-thumb'
 import { PriceText } from '../../components/price-text'
 import { categoryLabel, conditionLabel } from '../../lib/labels'
-import { adminLoadOutcome, governanceActionError } from './admin-messages'
+import { ForbiddenInline, NotFoundInline } from './admin-filter'
+import { adminLoadView, governanceActionError } from './admin-messages'
 import { useAdminListingDetail, useListingDelist, useListingRestore } from './admin-queries'
+import { withoutCursor } from './admin-search'
 import { auditActionLabelOf, formatAdminDateTime, moderationStatusMeta } from './admin-view'
 import type { GovernanceDialogOutput } from './governance-dialog'
 import { GovernanceDialog } from './governance-dialog'
+import type { ListingsSearch } from './listings-page'
 
 /**
  * 商品详情（#467 验收「详情、审核与治理状态」+ 治理写：下架 / 恢复）。
@@ -22,21 +25,27 @@ import { GovernanceDialog } from './governance-dialog'
  *   只被审核引擎屏蔽的商品走 restore 等于用治理端点绕过审核，服务端也会 409。
  * - 「下架」在未被治理下架时可用；服务端对不满足前提的请求返回 409，这里如实透传。
  */
-export function ListingDetailPage({ listingId }: { listingId: string }) {
+export function ListingDetailPage({
+  listingId,
+  search,
+}: {
+  listingId: string
+  /** 来源列表的查询条件：返回链接带回去，回到同一视图（#467 五审 P2）。 */
+  search: ListingsSearch
+}) {
   const detail = useAdminListingDetail(listingId)
 
   if (detail.isPending) return <LoadingState label="正在加载商品详情…" />
   if (detail.isError) {
-    const outcome = adminLoadOutcome(detail.error)
-    return (
-      <ErrorState
-        message={outcome.kind === 'error' ? outcome.message : '商品详情加载失败'}
-        onRetry={() => void detail.refetch()}
-      />
-    )
+    const view = adminLoadView(detail.error, '商品详情加载失败')
+    // 403 是权限边界、404 是目标级缺失（#467 五审 P3）：两者都不该给「重试」——
+    // 重试改变不了权限，也变不回已删除的商品。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    if (view.kind === 'notFound') return <NotFoundInline label="商品" to="/admin/listings" />
+    return <ErrorState message={view.message} onRetry={() => void detail.refetch()} />
   }
 
-  return <ListingDetailView detail={detail.data} listingId={listingId} />
+  return <ListingDetailView detail={detail.data} listingId={listingId} search={search} />
 }
 
 type ListingActionKind = 'delist' | 'restore'
@@ -44,9 +53,11 @@ type ListingActionKind = 'delist' | 'restore'
 function ListingDetailView({
   detail,
   listingId,
+  search,
 }: {
   detail: AdminListingDetail
   listingId: string
+  search: ListingsSearch
 }) {
   const [dialog, setDialog] = useState<ListingActionKind | null>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
@@ -85,7 +96,11 @@ function ListingDetailView({
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Link className="text-ink-3 text-sm hover:text-brand" to="/admin/listings">
+          <Link
+            className="text-ink-3 text-sm hover:text-brand"
+            search={withoutCursor(search)}
+            to="/admin/listings"
+          >
             ← 商品列表
           </Link>
           <h1 className="mt-1 font-semibold text-[26px] tracking-[-0.03em]">{detail.title}</h1>

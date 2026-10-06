@@ -17,12 +17,18 @@ void mock.module('@tanstack/react-router', () => ({
   Link: (props: {
     to?: string
     params?: Record<string, string | undefined>
+    search?: Record<string, unknown>
     children?: ReactNode
   }) => {
     let href = props.to ?? '#'
     for (const [key, value] of Object.entries(props.params ?? {})) {
       href = href.replace(`$${key}`, String(value))
     }
+    const query = Object.entries(props.search ?? {})
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join('&')
+    if (query.length > 0) href = `${href}?${query}`
     return createElement('a', { href }, props.children)
   },
   Outlet: () => createElement('div', null),
@@ -173,7 +179,7 @@ describe('决定入口的可见性（静态渲染）', () => {
       createElement(ModerationDetailView, {
         detail: DETAIL,
         recordId: 'mdr_01AAAAAAAAAAAAAAAAAAAAAA',
-        tab: 'queue',
+        search: { tab: 'records' },
       }),
     )
     const text = textOf(html)
@@ -187,12 +193,43 @@ describe('决定入口的可见性（静态渲染）', () => {
       createElement(ModerationDetailView, {
         detail: DECIDED,
         recordId: 'mdr_01AAAAAAAAAAAAAAAAAAAAAA',
-        tab: 'queue',
+        search: { tab: 'records' },
       }),
     )
     const text = textOf(html)
     expect(text).not.toContain('作出决定')
     expect(text).toContain('已决定：放行')
     expect(text).toContain('管理员甲')
+  })
+})
+
+describe('返回链接带回来源检索条件（#467 五审 P2）', () => {
+  test('从「历史检索」tab 进详情：检索条件随返回链接带走，游标不带走', () => {
+    const html = render(
+      createElement(ModerationDetailView, {
+        detail: DETAIL,
+        recordId: 'mdr_01AAAAAAAAAAAAAAAAAAAAAA',
+        search: {
+          tab: 'records',
+          decision: 'BLOCK',
+          listingId: 'lst_01jc000000e00800000000000a',
+          q: '耳机',
+          from: '2026-01-01',
+          cursor: 'abc',
+        },
+      }),
+    )
+    expect(html).toContain('/admin/moderation?')
+    for (const part of [
+      'tab=records',
+      'decision=BLOCK',
+      'listingId=lst_01jc000000e00800000000000a',
+      'q=耳机',
+      'from=2026-01-01',
+    ]) {
+      expect(html).toContain(part)
+    }
+    // cursor 表示「翻到第几页」，返回列表时不该带回去（withoutCursor）
+    expect(html).not.toContain('cursor=abc')
   })
 })

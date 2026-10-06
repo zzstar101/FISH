@@ -16,8 +16,23 @@ import { renderToStaticMarkup } from 'react-dom/server'
  */
 void mock.module('@tanstack/react-router', () => ({
   createFileRoute: (path: string) => (options: unknown) => ({ path, options }),
-  Link: (props: { to?: string; children?: ReactNode }) =>
-    createElement('a', { href: props.to ?? '#' }, props.children),
+  Link: (props: {
+    to?: string
+    params?: Record<string, string | undefined>
+    search?: Record<string, unknown>
+    children?: ReactNode
+  }) => {
+    let href = props.to ?? '#'
+    for (const [key, value] of Object.entries(props.params ?? {})) {
+      href = href.replace(`$${key}`, String(value))
+    }
+    const query = Object.entries(props.search ?? {})
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join('&')
+    if (query.length > 0) href = `${href}?${query}`
+    return createElement('a', { href }, props.children)
+  },
   Outlet: () => createElement('div', null),
   useNavigate: () => async () => {},
 }))

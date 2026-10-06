@@ -1,43 +1,99 @@
-import type { AdminAuditLogEntry } from '@fish/contracts/admin/schema'
-import { AdminAuditActionSchema, AdminAuditTargetTypeSchema } from '@fish/contracts/admin/schema'
+import type {
+  AdminAuditAction,
+  AdminAuditLogEntry,
+  AdminAuditTargetType,
+} from '@fish/contracts/admin/schema'
+import {
+  AdminAuditActionSchema,
+  AdminAuditTargetIdSchema,
+  AdminAuditTargetTypeSchema,
+} from '@fish/contracts/admin/schema'
+import {
+  ListingIdSchema,
+  ModerationRecordIdSchema,
+  ReportIdSchema,
+  UserIdSchema,
+  UserRestrictionIdSchema,
+} from '@fish/contracts/system/public-id'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { useNavigate } from '@tanstack/react-router'
 import { DateRangeFilter, FilterChips, ForbiddenInline, LoadMore } from './admin-filter'
+import {
+  checkPublicIds,
+  type PublicIdCheck,
+  type PublicIdSpec,
+  RejectedIdNotice,
+} from './admin-id-guard'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminAuditLogs } from './admin-queries'
 import { cursorSearch, dayRangeSearch, optionalSearch, withoutCursor } from './admin-search'
-import { AUDIT_TARGET_TYPE_LABEL, auditActionLabel, formatAdminDateTime } from './admin-view'
+import {
+  AUDIT_TARGET_TYPE_LABEL,
+  auditActionLabel,
+  auditActionOptions,
+  auditTargetTypeOptions,
+  formatAdminDateTime,
+} from './admin-view'
 
 export type AuditSearch = {
   actorId?: string
-  action?:
-    | 'ADMIN_PROMOTED'
-    | 'MODERATION_DECISION'
-    | 'REPORT_DECISION'
-    | 'LISTING_DELISTED'
-    | 'LISTING_RESTORED'
-    | 'USER_RESTRICTED'
-    | 'USER_RESTRICTION_LIFTED'
-    | 'USER_BANNED'
-    | 'USER_UNBANNED'
-  targetType?: 'USER' | 'LISTING' | 'MODERATION_RECORD' | 'REPORT' | 'USER_RESTRICTION'
+  action?: AdminAuditAction
+  targetType?: AdminAuditTargetType
   targetId?: string
   from?: string
   to?: string
   cursor?: string
 }
 
+/**
+ * 两个 ID 筛选的形态守卫（#467 五审 P0）：服务端 `AdminAuditLogsQuerySchema` 用
+ * `UserIdSchema` / `AdminAuditTargetIdSchema`，形态不对回 422，而本页 `isError` 是早返回，
+ * 会把筛选区连同「清除」一起藏掉。目标 ID 的前缀随 `targetType` 变——服务端还会用
+ * `auditTargetMatches` 校验两者匹配，所以这里也按所选类型收口（没选类型时接受任一公开 ID）。
+ */
+const AUDIT_ID_FILTERS: Record<'actorId' | 'targetId', PublicIdSpec> = {
+  actorId: { label: '操作者 ID', prefix: 'usr_', schema: UserIdSchema },
+  targetId: {
+    label: '目标 ID',
+    prefix: 'usr_ / lst_ / mdr_ / rpt_ / rst_',
+    schema: AdminAuditTargetIdSchema,
+  },
+}
+
+const AUDIT_TARGET_ID_SPECS = {
+  USER: { label: '目标 ID', prefix: 'usr_', schema: UserIdSchema },
+  LISTING: { label: '目标 ID', prefix: 'lst_', schema: ListingIdSchema },
+  MODERATION_RECORD: { label: '目标 ID', prefix: 'mdr_', schema: ModerationRecordIdSchema },
+  REPORT: { label: '目标 ID', prefix: 'rpt_', schema: ReportIdSchema },
+  USER_RESTRICTION: { label: '目标 ID', prefix: 'rst_', schema: UserRestrictionIdSchema },
+} as const satisfies Record<AdminAuditTargetType, PublicIdSpec>
+
+type AuditIdField = keyof typeof AUDIT_ID_FILTERS
+
+/** 只有形态合法的 actorId / targetId 会进 filters（即发给服务端）。 */
+export function checkAuditIds(search: AuditSearch): PublicIdCheck<AuditIdField> {
+  const specs: Record<AuditIdField, PublicIdSpec> = {
+    actorId: AUDIT_ID_FILTERS.actorId,
+    targetId:
+      search.targetType === undefined
+        ? AUDIT_ID_FILTERS.targetId
+        : AUDIT_TARGET_ID_SPECS[search.targetType],
+  }
+  return checkPublicIds(specs, search)
+}
+
 /** 审计日志（#467 验收「日志查询与分页」）。全部只读；筛选按动作/目标类型/时间段。 */
 export function AuditPage({ search }: { search: AuditSearch }) {
   const navigate = useNavigate()
   const range = dayRangeSearch(search.from, search.to)
+  const { rejected, valid } = checkAuditIds(search)
   const filters = {
-    actorId: search.actorId,
+    actorId: valid.actorId,
     action: search.action,
     targetType: search.targetType,
-    targetId: search.targetId,
+    targetId: valid.targetId,
     createdFrom: range.createdFrom,
     createdTo: range.createdTo,
   }
@@ -64,30 +120,21 @@ export function AuditPage({ search }: { search: AuditSearch }) {
         </p>
       </div>
 
+      {/*
+        两个 chip 组都从契约枚举派生（#467 五审 P1）：以前是手写子集，漏掉了
+        ADMIN_PROMOTED / USER_UNBANNED / USER_RESTRICTION，用户在界面上筛不到这些动作。
+      */}
       <div className="flex flex-wrap items-center gap-3">
         <FilterChips
           ariaLabel="动作筛选"
           onChange={(action) => update({ action: action as AuditSearch['action'] })}
-          options={[
-            { value: 'MODERATION_DECISION', label: '审核决定' },
-            { value: 'REPORT_DECISION', label: '举报处理' },
-            { value: 'LISTING_DELISTED', label: '下架' },
-            { value: 'LISTING_RESTORED', label: '恢复' },
-            { value: 'USER_RESTRICTED', label: '限制发布' },
-            { value: 'USER_BANNED', label: '封禁' },
-            { value: 'USER_RESTRICTION_LIFTED', label: '解除限制' },
-          ]}
+          options={auditActionOptions()}
           value={search.action}
         />
         <FilterChips
           ariaLabel="目标类型筛选"
           onChange={(targetType) => update({ targetType: targetType as AuditSearch['targetType'] })}
-          options={[
-            { value: 'USER', label: '用户' },
-            { value: 'LISTING', label: '商品' },
-            { value: 'REPORT', label: '举报' },
-            { value: 'MODERATION_RECORD', label: '审核记录' },
-          ]}
+          options={auditTargetTypeOptions()}
           value={search.targetType}
         />
         <DateRangeFilter
@@ -97,11 +144,16 @@ export function AuditPage({ search }: { search: AuditSearch }) {
         />
       </div>
 
-      {search.actorId !== undefined || search.targetId !== undefined ? (
+      <RejectedIdNotice
+        items={rejected}
+        onClear={() => update({ actorId: undefined, targetId: undefined })}
+      />
+
+      {valid.actorId !== undefined || valid.targetId !== undefined ? (
         <p className="rounded-xl bg-brand-soft px-4 py-2.5 text-brand text-sm" role="status">
           正在按 ID 过滤
-          {search.actorId !== undefined ? `（操作者 ${search.actorId}）` : ''}
-          {search.targetId !== undefined ? `（目标 ${search.targetId}）` : ''}，
+          {valid.actorId !== undefined ? `（操作者 ${valid.actorId}）` : ''}
+          {valid.targetId !== undefined ? `（目标 ${valid.targetId}）` : ''}，
           <button
             className="font-semibold underline"
             onClick={() => update({ actorId: undefined, targetId: undefined })}

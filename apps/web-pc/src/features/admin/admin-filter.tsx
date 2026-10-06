@@ -1,7 +1,7 @@
 import { Button } from '@fish/ui/button'
 import { Input } from '@fish/ui/input'
 import { EmptyState } from '@fish/ui/states'
-import { Link } from '@tanstack/react-router'
+import { Link, type LinkProps } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useState } from 'react'
 
 /**
@@ -165,6 +165,25 @@ export function ForbiddenInline() {
       description="当前账号不是管理员。"
       emoji="🚫"
       title="无管理权限"
+    />
+  )
+}
+
+/**
+ * 详情页落到 404 时的内联缺失态（#467 五审 P3）：链接里的 ID 已经不存在，
+ * 重试不会改变结果，所以**不给重试按钮**，只给回到列表的出口。
+ */
+export function NotFoundInline({ label, to }: { label: string; to: LinkProps['to'] }) {
+  return (
+    <EmptyState
+      action={
+        <Link className="font-medium text-brand text-sm" to={to}>
+          返回列表
+        </Link>
+      }
+      description="它可能已被删除，或链接里的 ID 不正确。"
+      emoji="🗑️"
+      title={`${label}不存在或已被删除`}
     />
   )
 }

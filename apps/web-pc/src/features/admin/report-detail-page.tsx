@@ -6,33 +6,49 @@ import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { REPORT_STATUS_META, reasonLabel } from '../reports/meta'
-import { adminLoadOutcome, reportHandleError } from './admin-messages'
+import { ForbiddenInline, NotFoundInline } from './admin-filter'
+import { adminLoadView, reportHandleError } from './admin-messages'
 import { useAdminReportDetail, useReportHandle } from './admin-queries'
+import { withoutCursor } from './admin-search'
 import { formatAdminDateTime, listingStatusMeta, moderationStatusMeta } from './admin-view'
 import { ReportHandleDialog } from './report-handle-dialog'
+import type { ReportsSearch } from './reports-page'
 
 /**
  * 举报详情（#467 验收「详情、处理结果」）：举报 + 举报人 + 目标摘要（含商品当前状态，
  * 帮助判断是否还要下架）+ 同目标其它未决举报。处理只写结果，不触发治理。
  */
-export function ReportDetailPage({ reportId }: { reportId: string }) {
+export function ReportDetailPage({
+  reportId,
+  search,
+}: {
+  reportId: string
+  /** 来源队列的查询条件：返回/跳转同级详情时带回去（#467 五审 P2）。 */
+  search: ReportsSearch
+}) {
   const detail = useAdminReportDetail(reportId)
 
   if (detail.isPending) return <LoadingState label="正在加载举报详情…" />
   if (detail.isError) {
-    const outcome = adminLoadOutcome(detail.error)
-    return (
-      <ErrorState
-        message={outcome.kind === 'error' ? outcome.message : '举报详情加载失败'}
-        onRetry={() => void detail.refetch()}
-      />
-    )
+    const view = adminLoadView(detail.error, '举报详情加载失败')
+    // 403 / 404 都不给「重试」（#467 五审 P3）：权限不会因重试改变，已删除的举报也不会回来。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    if (view.kind === 'notFound') return <NotFoundInline label="举报" to="/admin/reports" />
+    return <ErrorState message={view.message} onRetry={() => void detail.refetch()} />
   }
 
-  return <ReportDetailView detail={detail.data} reportId={reportId} />
+  return <ReportDetailView detail={detail.data} reportId={reportId} search={search} />
 }
 
-function ReportDetailView({ detail, reportId }: { detail: AdminReportDetail; reportId: string }) {
+function ReportDetailView({
+  detail,
+  reportId,
+  search,
+}: {
+  detail: AdminReportDetail
+  reportId: string
+  search: ReportsSearch
+}) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogError, setDialogError] = useState<string | null>(null)
   const [conflict, setConflict] = useState(false)
@@ -68,7 +84,7 @@ function ReportDetailView({ detail, reportId }: { detail: AdminReportDetail; rep
         <div>
           <Link
             className="text-ink-3 text-sm hover:text-brand"
-            search={{ status: 'PENDING' }}
+            search={withoutCursor(search)}
             to="/admin/reports"
           >
             ← 举报队列
@@ -158,7 +174,7 @@ function ReportDetailView({ detail, reportId }: { detail: AdminReportDetail; rep
                     <Link
                       className="text-brand hover:underline"
                       params={{ reportId: related.id }}
-                      search={{ status: 'PENDING' }}
+                      search={withoutCursor(search)}
                       to="/admin/reports/$reportId"
                     >
                       查看

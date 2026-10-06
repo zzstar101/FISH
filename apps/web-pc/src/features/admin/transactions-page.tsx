@@ -13,6 +13,7 @@ import {
   KeywordFilter,
   LoadMore,
 } from './admin-filter'
+import { checkPublicIds, type PublicIdCheck, RejectedIdNotice } from './admin-id-guard'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminTransactions } from './admin-queries'
 import {
@@ -48,35 +49,12 @@ const ID_FILTERS = {
 
 type TransactionIdField = keyof typeof ID_FILTERS
 
-type RejectedTransactionId = {
-  field: TransactionIdField
-  label: string
-  prefix: string
-  raw: string
-}
-
-type TransactionIdCheck = {
-  /** 通过契约 schema 的 ID：只有这些进 filters（即只有这些会发给服务端）。 */
-  valid: { buyerId?: string; sellerId?: string; listingId?: string }
-  /** 形态不合法的 ID：留在 URL 里原样回显（输入框 + 就地提示），但绝不进 filters。 */
-  rejected: RejectedTransactionId[]
-}
-
 /**
  * 公开 ID 的形态校验（与契约同一份 schema）。`idParam` 只判非空，所以 `?buyerId=abc` 这种
- * 手输/手改 URL 以前会原样发给服务端。
+ * 手输/手改 URL 以前会原样发给服务端。判定与提示条已抽到 `admin-id-guard.tsx` 共用。
  */
-export function checkTransactionIds(search: TransactionsSearch): TransactionIdCheck {
-  const valid: TransactionIdCheck['valid'] = {}
-  const rejected: RejectedTransactionId[] = []
-  for (const field of Object.keys(ID_FILTERS) as TransactionIdField[]) {
-    const { label, prefix, schema } = ID_FILTERS[field]
-    const raw = search[field]
-    if (raw === undefined || raw === '') continue
-    if (schema.safeParse(raw).success) valid[field] = raw
-    else rejected.push({ field, label, prefix, raw })
-  }
-  return { valid, rejected }
+export function checkTransactionIds(search: TransactionsSearch): PublicIdCheck<TransactionIdField> {
+  return checkPublicIds(ID_FILTERS, search)
 }
 
 /**
@@ -156,25 +134,10 @@ export function TransactionsPage({ search }: { search: TransactionsSearch }) {
         />
       </div>
 
-      {rejected.length > 0 ? (
-        <p className="rounded-xl bg-danger-soft px-4 py-2.5 text-danger text-sm" role="alert">
-          {rejected
-            .map(
-              (item) => `${item.label}「${item.raw}」不是规范的公开 ID（应为 ${item.prefix} 开头）`,
-            )
-            .join('；')}
-          ，已忽略该条件、未发给服务端。
-          <button
-            className="font-semibold underline"
-            onClick={() =>
-              update({ buyerId: undefined, listingId: undefined, sellerId: undefined })
-            }
-            type="button"
-          >
-            清除
-          </button>
-        </p>
-      ) : null}
+      <RejectedIdNotice
+        items={rejected}
+        onClear={() => update({ buyerId: undefined, listingId: undefined, sellerId: undefined })}
+      />
 
       {valid.buyerId !== undefined ||
       valid.sellerId !== undefined ||

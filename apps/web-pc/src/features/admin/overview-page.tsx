@@ -2,6 +2,8 @@ import type { AdminOverview } from '@fish/contracts/admin/schema'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
+import { ForbiddenInline } from './admin-filter'
+import { adminLoadView } from './admin-messages'
 import { useAdminOverview } from './admin-queries'
 
 /**
@@ -14,7 +16,13 @@ export function OverviewPage() {
 
   if (overview.isPending) return <LoadingState label="正在加载平台概览…" />
   if (overview.isError) {
-    return <ErrorState message="平台概览加载失败" onRetry={() => void overview.refetch()} />
+    const view = adminLoadView(overview.error, '平台概览加载失败')
+    // 403 是权限边界（#467 五审 P3）：给整页权限态，别让管理员对着「重试」反复撞墙。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    // 概览是固定端点、没有「实例被删」的语义：404 说明路由/部署错配，重试同样救不回来。
+    if (view.kind === 'notFound')
+      return <ErrorState message="接口不存在，请确认后端版本与部署路径" />
+    return <ErrorState message={view.message} onRetry={() => void overview.refetch()} />
   }
 
   return <OverviewView overview={overview.data} />
