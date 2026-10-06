@@ -2,12 +2,17 @@ import { describe, expect, test } from 'bun:test'
 import {
   COMMENT_POLICIES,
   DEFAULT_NOTIFY_PREFS,
-  gateUnreadForNotifyPrefs,
   NOTIFY_KEYS,
   parseStoredPrefs,
   readStoredPrefs,
   resolveNotifyPrefs,
-} from '../src/features/notify/preferences'
+  SETTINGS_STORAGE_KEY,
+} from '../src/features/settings/preferences'
+import {
+  gateUnreadForNotifyPrefs,
+  readNotifyPrefsFromStorage,
+} from '../src/features/settings/unread-badge'
+import { SETTINGS } from '../src/lib/settings-defaults'
 import type { MockSettings } from '../src/mock/types'
 
 /**
@@ -18,8 +23,10 @@ import type { MockSettings } from '../src/mock/types'
  * 同一说明），单测锁解析层：认得出的键与类型才收，垃圾值**按字段丢**回默认值，
  * 不整份丢。挂载读回 + 留言口径选项即时上屏这两步接线由微信开发者工具演示验证。
  *
- * 模块住在 `features/notify`：设置页（写）与 custom-tab-bar（底栏红点闸门）消费
- * 同一份白名单，谁也不许自己再抄一份键名。
+ * 模块住在 `features/settings`：设置页（写）与 custom-tab-bar（底栏红点闸门）消费
+ * 同一份白名单，谁也不许自己再抄一份键名。**缺省值也只有一份** ——
+ * `DEFAULT_NOTIFY_PREFS` 从 `SETTINGS` 派生，不许再出现「设置页显示关、闸门按开算」
+ * 这种同一个「没存过」两种语义（#470 review）。
  */
 
 const DEFAULTS: MockSettings = {
@@ -128,9 +135,23 @@ describe('parseStoredPrefs —— 存量盖在默认值上', () => {
   })
 })
 
-describe('resolveNotifyPrefs —— 闸门用四布尔（缺省 = 开）', () => {
-  test('没存过 / 空 = 四类全开', () => {
+describe('resolveNotifyPrefs —— 闸门用四布尔（缺省 = 设置页默认值）', () => {
+  test('缺省值 = 设置页显示的默认值，同一个「没存过」只有一种语义', () => {
+    // 设置页把 SETTINGS 当默认值渲染（`parseStoredPrefs(raw, SETTINGS)`），闸门也必须
+    // 用同一份：此前闸门写死「四类全开」而页面 notifyNews 默认关，用户会看到
+    // 「页面显示关、红点却按开算」。
+    const shown = parseStoredPrefs(null, SETTINGS)
+    expect(DEFAULT_NOTIFY_PREFS).toEqual({
+      notifyChat: shown.notifyChat,
+      notifyWish: shown.notifyWish,
+      notifyDeal: shown.notifyDeal,
+      notifyNews: shown.notifyNews,
+    })
+  })
+
+  test('没存过 / 空 = 默认值（其中 notifyNews 在设置页默认关）', () => {
     expect(resolveNotifyPrefs({})).toEqual(DEFAULT_NOTIFY_PREFS)
+    expect(DEFAULT_NOTIFY_PREFS.notifyNews).toBe(false)
   })
 
   test('存过的 boolean 生效（包括 false），没存的补默认', () => {
@@ -143,8 +164,33 @@ describe('resolveNotifyPrefs —— 闸门用四布尔（缺省 = 开）', () =>
   })
 })
 
+describe('readNotifyPrefsFromStorage —— 组件不再各自拼「读存储 → 解析 → 补默认」', () => {
+  test('注入的读函数收到设置页的存储键，返回值解析后补默认', () => {
+    const keys: string[] = []
+    const prefs = readNotifyPrefsFromStorage((key) => {
+      keys.push(key)
+      return JSON.stringify({ notifyChat: false })
+    })
+    expect(keys).toEqual([SETTINGS_STORAGE_KEY])
+    expect(prefs).toEqual({ ...DEFAULT_NOTIFY_PREFS, notifyChat: false })
+  })
+
+  test('读存储抛错：按「没存过」处理，不把底栏连接线炸掉', () => {
+    expect(
+      readNotifyPrefsFromStorage(() => {
+        throw new Error('storage unavailable')
+      }),
+    ).toEqual(DEFAULT_NOTIFY_PREFS)
+  })
+
+  test('存的是坏值 / 未知键：同样回默认值', () => {
+    expect(readNotifyPrefsFromStorage(() => '{不是 json')).toEqual(DEFAULT_NOTIFY_PREFS)
+    expect(readNotifyPrefsFromStorage(() => ({ foo: 1 }))).toEqual(DEFAULT_NOTIFY_PREFS)
+  })
+})
+
 describe('gateUnreadForNotifyPrefs —— 底栏徽标按通知偏好关分量', () => {
-  test('四类全开（默认）：分量原样透传', () => {
+  test('默认（新消息 / 许愿 / 交易开，活动与公告关）：分量原样透传', () => {
     expect(
       gateUnreadForNotifyPrefs({ conversations: 3, notifications: 5 }, DEFAULT_NOTIFY_PREFS),
     ).toEqual({ conversations: 3, notifications: 5 })

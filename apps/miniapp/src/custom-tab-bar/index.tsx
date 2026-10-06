@@ -30,10 +30,8 @@ import { demoTabbarUnread } from '@/features/mock-fallback'
 import {
   gateUnreadForNotifyPrefs,
   NOTIFY_PREFS_EVENT,
-  readStoredPrefs,
-  resolveNotifyPrefs,
-  SETTINGS_STORAGE_KEY,
-} from '@/features/notify/preferences'
+  readNotifyPrefsFromStorage,
+} from '@/features/settings/unread-badge'
 import { TABBAR_ROUTE_EVENT } from '@/lib/tabbar-sync'
 import './index.scss'
 
@@ -189,17 +187,14 @@ export default function CustomTabBar() {
    * 存储同步读（`getStorageSync`），但底栏实例常驻每个 Tab 页，设置页改开关时它
    * 不会重渲染 —— 所以除了挂载时读一次，还订阅 `NOTIFY_PREFS_EVENT`：设置页每写
    * 一次通知开关就广播一次，这里把版本号 +1，强制下面的徽标 effect 按新偏好重算
-   * （同 `lib/tabbar-sync` 的广播模式）。读失败视为「没存过」，四类全按开处理。
+   * （同 `lib/tabbar-sync` 的广播模式）。读失败视为「没存过」，按设置页那份默认值处理。
    */
   const [prefsVersion, setPrefsVersion] = useState(0)
   // biome-ignore lint/correctness/useExhaustiveDependencies: 重算只由 prefsVersion（事件广播）驱动，存储不是响应式来源
-  const notifyPrefs = useMemo(() => {
-    try {
-      return resolveNotifyPrefs(readStoredPrefs(Taro.getStorageSync(SETTINGS_STORAGE_KEY)))
-    } catch {
-      return resolveNotifyPrefs({})
-    }
-  }, [prefsVersion])
+  const notifyPrefs = useMemo(
+    () => readNotifyPrefsFromStorage((key) => Taro.getStorageSync(key)),
+    [prefsVersion],
+  )
 
   useEffect(() => {
     const reread = () => setPrefsVersion((version) => version + 1)
@@ -247,10 +242,7 @@ export default function CustomTabBar() {
     // 设置页关掉的类别不计入红点 —— 关掉给 `0`（明确的「不计入」），开着才透传
     // （包括 `null`，「不知道」的语义原样保留）。
     if (unread && unread.ownerId === userId) {
-      const gated = gateUnreadForNotifyPrefs(
-        { conversations: unread.conversations, notifications: unread.notifications },
-        notifyPrefs,
-      )
+      const gated = gateUnreadForNotifyPrefs(unread, notifyPrefs)
       setBadge(
         unreadBadgeText({
           conversations: gated.conversations,
@@ -264,11 +256,7 @@ export default function CustomTabBar() {
     // 口径，真实构建保持上一帧 —— 等 `hydrateUnread` 的真实结果落地再决定，
     // 不能用 fixture 先亮一个数再说，也不能因为「还没到」就把已知的徽标熄掉。
     if (!demoUnread) return
-    const fallback = demoUnread()
-    const gatedFallback = gateUnreadForNotifyPrefs(
-      { conversations: fallback.conversations, notifications: fallback.notifications },
-      notifyPrefs,
-    )
+    const gatedFallback = gateUnreadForNotifyPrefs(demoUnread(), notifyPrefs)
     setBadge(
       unreadBadgeText({
         conversations: gatedFallback.conversations,

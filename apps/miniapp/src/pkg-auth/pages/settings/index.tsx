@@ -5,15 +5,15 @@ import { ICONS } from '@/assets/lib-icons'
 import NavBar from '@/components/nav-bar'
 import { useAuthGuard } from '@/features/auth/guard'
 import { clearLocalSession, revokeServerSession, useAuth } from '@/features/auth/store'
-import type { NotifyKey } from '@/features/notify/preferences'
+import type { NotifyKey } from '@/features/settings/preferences'
 import {
   COMMENT_POLICIES,
   NOTIFY_KEYS,
-  NOTIFY_PREFS_EVENT,
   parseStoredPrefs,
   readStoredPrefs,
   SETTINGS_STORAGE_KEY,
-} from '@/features/notify/preferences'
+} from '@/features/settings/preferences'
+import { NOTIFY_PREFS_EVENT } from '@/features/settings/unread-badge'
 import { APP_BUILD, APP_VERSION } from '@/lib/app-meta'
 import { settings } from '@/lib/settings-defaults'
 import type { MockSettings } from '@/mock/types'
@@ -26,7 +26,7 @@ import './index.scss'
  * ——交付要求「危险操作与普通项视觉上必须分开」，所以它不放进任何分组。
  *
  * 通知开关即时切换并**接了真实消费方**：底栏「消息」徽标按这些开关过滤对应分量
- * （`custom-tab-bar` 经 `features/notify/preferences` 的闸门读同一份白名单），开关
+ * （`custom-tab-bar` 经 `features/settings/unread-badge` 的闸门读同一份白名单），开关
  * 一变就广播 `NOTIFY_PREFS_EVENT` 让常驻的底栏实例重算。偏好项落本地并在挂载时读回
  * （`Taro.setStorageSync` / `getStorageSync`，`BLOCKED: #66`），不写后端；也不把各
  * Domain 的业务逻辑搬进来，这里只管偏好项。

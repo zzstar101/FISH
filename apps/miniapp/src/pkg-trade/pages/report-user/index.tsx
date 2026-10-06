@@ -36,6 +36,7 @@ import {
   unavailableCopy,
   wantsReportRecord,
 } from '@/features/reports/view'
+import { goBackOrHome } from '@/lib/nav-back'
 import { readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -419,9 +420,7 @@ export default function ReportUser() {
             <View
               className="rpu__btn-ghost"
               onClick={() => {
-                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
-                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
-                else void Taro.switchTab({ url: '/pages/home/index' })
+                goBackOrHome()
               }}
             >
               <Text>返回「我的举报」</Text>
@@ -442,9 +441,7 @@ export default function ReportUser() {
             <View
               className="rpu__btn-ghost"
               onClick={() => {
-                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
-                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
-                else void Taro.switchTab({ url: '/pages/home/index' })
+                goBackOrHome()
               }}
             >
               <Text>返回「我的举报」</Text>
@@ -504,9 +501,7 @@ export default function ReportUser() {
             <View
               className="rpu__btn-ghost"
               onClick={() => {
-                // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
-                if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
-                else void Taro.switchTab({ url: '/pages/home/index' })
+                goBackOrHome()
               }}
             >
               <Text>返回对方主页</Text>

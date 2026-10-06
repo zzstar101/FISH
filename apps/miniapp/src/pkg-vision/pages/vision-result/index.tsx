@@ -32,6 +32,7 @@ import {
 } from '@/features/visual-search/sheet'
 import { startVisualSearch } from '@/features/visual-search/start'
 import { formatAmount } from '@/lib/money'
+import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isApiError } from '@/lib/request'
 import { routeParam } from '@/lib/route-param'
@@ -426,9 +427,7 @@ export default function VisionResult() {
           ...backGeo.btnStyle,
         }}
         onClick={() => {
-          // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
-          if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
-          else void Taro.switchTab({ url: '/pages/home/index' })
+          goBackOrHome()
         }}
       >
         <View className="vres__back-chevron" style={backGeo.chevronStyle} />

@@ -18,6 +18,7 @@ import { signatureFirstLine } from '@/features/profile/signature-text'
 import { DEMO_SIGNATURES, DEMO_USER_IDS } from '@/features/user/demo-signatures'
 import { cancellable } from '@/lib/cancellable'
 import { formatAmount } from '@/lib/money'
+import { goBackOrHome } from '@/lib/nav-back'
 import { backButtonGeometry, readNavMetrics } from '@/lib/nav-metrics'
 import { isUnauthenticatedError } from '@/lib/request'
 import type { MockListing } from '@/mock/types'
@@ -574,9 +575,7 @@ export default function UserHome() {
           icon={ICONS.box}
           actionText="返回"
           onAction={() => {
-            // 页面栈为空（冷启动直入）时回首页，与 `components/top-bar` 的默认返回同口径
-            if (Taro.getCurrentPages().length > 1) void Taro.navigateBack()
-            else void Taro.switchTab({ url: '/pages/home/index' })
+            goBackOrHome()
           }}
         />
       ) : (
