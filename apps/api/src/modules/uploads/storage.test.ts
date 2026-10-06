@@ -119,6 +119,24 @@ describe('Bun S3 存储适配', () => {
     expect(await media.stat(key)).toBeNull()
   })
 
+  test.skipIf(!reachable)('writeMediaBytesIfAbsent 原子拒绝覆盖已存在对象', async () => {
+    const media = storage
+    if (!media?.writeMediaBytesIfAbsent || !media.readMediaBytes) {
+      throw new Error('storage 未初始化')
+    }
+    const key = `reviews/${encodePublicId(PUBLIC_ID_PREFIX.user, USER_ID)}/${encodePublicId(PUBLIC_ID_PREFIX.media, newId())}.png`
+    const original = new Uint8Array([1, 2, 3])
+    const replacement = new Uint8Array([4, 5, 6])
+
+    try {
+      expect(await media.writeMediaBytesIfAbsent(key, original, 'image/png')).toBe(true)
+      expect(await media.writeMediaBytesIfAbsent(key, replacement, 'image/png')).toBe(false)
+      expect(await media.readMediaBytes(key)).toEqual(original)
+    } finally {
+      await client?.delete(key)
+    }
+  })
+
   /*
    * #465 P2-2：争议附件的配额要数**对象**，不能只数台账行 —— 否则「只 presign + PUT、
    * 从不 confirm」的键永远不会进台账，6 张上限形同虚设。这条用真对象存储证明
@@ -235,20 +253,28 @@ describe('Bun S3 存储适配', () => {
   // #483 审查响应：statStrict 与 stat 的分野在「运行错误」——不可达端点下 stat 吞成 null，
   // statStrict 必须原样抛出（评价链据此回 503 而不是 422）。用不可达端点离线即可测。
   test('statStrict：存储运行错误原样抛出（stat 同场景吞成 null）', async () => {
-    const media = createBunS3MediaStorage({
-      client: new Bun.S3Client({
-        endpoint: 'http://127.0.0.1:1',
-        region: 'us-east-1',
-        accessKeyId: 'test',
-        secretAccessKey: 'test',
-        bucket: 'fish',
-      }),
-      publicUrlBase: 'https://cdn.test/fish',
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response('storage unavailable', { status: 500 }),
     })
-    const key = `listings/${USER_ID}/${crypto.randomUUID()}.jpg`
-    expect(await media.stat(key)).toBeNull()
-    if (!media.statStrict) throw new Error('statStrict 未实现')
-    await expect(media.statStrict(key)).rejects.toThrow()
+    try {
+      const media = createBunS3MediaStorage({
+        client: new Bun.S3Client({
+          endpoint: `http://127.0.0.1:${server.port}`,
+          region: 'us-east-1',
+          accessKeyId: 'test',
+          secretAccessKey: 'test',
+          bucket: 'fish',
+        }),
+        publicUrlBase: 'https://cdn.test/fish',
+      })
+      const key = `listings/${USER_ID}/${crypto.randomUUID()}.jpg`
+      expect(await media.stat(key)).toBeNull()
+      if (!media.statStrict) throw new Error('statStrict 未实现')
+      await expect(media.statStrict(key)).rejects.toThrow()
+    } finally {
+      await server.stop(true)
+    }
   })
 })
 

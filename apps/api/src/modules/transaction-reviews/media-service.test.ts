@@ -31,10 +31,14 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage & {
   const statStrict =
     overrides.statStrict ??
     (async (key: string) => {
-      // 模拟真实对象存储：final 键只有被 writeMediaBytes 写过才存在——
-      // confirm 幂等判据（final 已存在 → 不重写）靠它生效。
+      // 模拟真实对象存储：final 键只有被写过才存在——幂等判据靠它生效。
       if (written.some((entry) => entry.key === key)) return { size: 64, contentType: 'image/png' }
       return stat(key)
+    })
+  const writeMediaBytes =
+    overrides.writeMediaBytes ??
+    (async (key: string, _bytes: Uint8Array, contentType: string) => {
+      written.push({ key, contentType })
     })
   return {
     written,
@@ -46,8 +50,11 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage & {
     stat,
     statStrict,
     readMediaBytes: async (key) => (key === STAGING_KEY ? pngBytes() : null),
-    writeMediaBytes: async (key, _bytes, contentType) => {
-      written.push({ key, contentType })
+    writeMediaBytes,
+    writeMediaBytesIfAbsent: async (key, bytes, contentType) => {
+      if (written.some((entry) => entry.key === key)) return false
+      await writeMediaBytes(key, bytes, contentType)
+      return true
     },
     publicUrl: (key) => `https://cdn.example/${key}`,
     ...overrides,
@@ -146,6 +153,36 @@ describe('review media service: confirm', () => {
     const second = await service.confirm(USER, TXN, { objectKey: STAGING_KEY })
     expect(second.objectKey).toBe(first.objectKey)
     // 修复前：第二次 confirm 会把 staging 字节重写到同一个 final 键（written 长度 2）。
+    expect(storage.written).toHaveLength(1)
+  })
+
+  test('并发 confirm 同一 staging 键时 final 只固化一次', async () => {
+    let finalStatCalls = 0
+    let releaseFinalStats: (() => void) | undefined
+    const finalStatsGate = new Promise<void>((resolve) => {
+      releaseFinalStats = resolve
+    })
+    const storage = fakeStorage({
+      statStrict: async (key) => {
+        if (key.startsWith('reviews/')) {
+          finalStatCalls += 1
+          if (finalStatCalls === 2) releaseFinalStats?.()
+          await finalStatsGate
+          return null
+        }
+        return { size: 64, contentType: 'image/png' }
+      },
+      writeMediaBytesIfAbsent: async (key, _bytes, contentType) => {
+        if (storage.written.some((entry) => entry.key === key)) return false
+        storage.written.push({ key, contentType })
+        return true
+      },
+    })
+    const service = createReviewMediaService({ gate: gateOf(), storage })
+    await Promise.all([
+      service.confirm(USER, TXN, { objectKey: STAGING_KEY }),
+      service.confirm(USER, TXN, { objectKey: STAGING_KEY }),
+    ])
     expect(storage.written).toHaveLength(1)
   })
 

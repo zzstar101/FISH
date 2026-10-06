@@ -200,10 +200,10 @@ export function createReviewMediaService(options: {
     async confirm(userId, transactionId, input) {
       assertWithinRate(userId)
       await requireGate(transactionId, userId)
-      if (!storage.statStrict || !storage.readMediaBytes || !storage.writeMediaBytes) {
+      if (!storage.statStrict || !storage.readMediaBytes || !storage.writeMediaBytesIfAbsent) {
         throw storageUnavailable()
       }
-      const { statStrict, readMediaBytes, writeMediaBytes } = storage
+      const { statStrict, readMediaBytes, writeMediaBytesIfAbsent } = storage
       const key = input.objectKey
       // 形状 + 归属（`..`/编码绕过由 isSafeObjectKey 前提挡住，见 uploads/storage.ts 头注释）。
       if (!isReviewMediaStagingKey(key) || !key.startsWith(reviewMediaStagingPrefix(userId))) {
@@ -234,7 +234,12 @@ export function createReviewMediaService(options: {
       if (bytes.byteLength !== stat.size) throw invalidKey()
       if (sniffImageMime(bytes) !== stat.contentType) throw invalidKey()
 
-      await asServiceOutage('write final', writeMediaBytes(finalKey, bytes, stat.contentType))
+      // 前置 stat 只用于幂等快路径，不能承担互斥：多个 confirm 可同时观察到不存在。
+      // If-None-Match:* 在对象存储端原子仲裁，输家复用已固化的 final，不覆盖其字节。
+      await asServiceOutage(
+        'write final',
+        writeMediaBytesIfAbsent(finalKey, bytes, stat.contentType),
+      )
       return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
     },
   }
