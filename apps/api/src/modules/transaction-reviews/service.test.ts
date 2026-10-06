@@ -241,7 +241,8 @@ describe('#475 配图写入口', () => {
   /** 只有 keyOf(MEDIA) 是「已 confirm 的合法对象」；其余 stat 一律 null（不可引用）。 */
   const imageStorage: MediaStorage = {
     ...storage,
-    stat: async (key) => (key === keyOf(MEDIA) ? { size: 1024, contentType: 'image/png' } : null),
+    statStrict: async (key) =>
+      key === keyOf(MEDIA) ? { size: 1024, contentType: 'image/png' } : null,
   }
 
   test('合法 final 键按下标落 sort_order，DTO images 按序回 URL', async () => {
@@ -254,6 +255,27 @@ describe('#475 配图写入口', () => {
       imageObjectKeys: [keyOf(MEDIA)],
     })
     expect(dto.images).toEqual([{ url: `https://cdn.example/${keyOf(MEDIA)}` }])
+  })
+
+  test('引用校验 stat 抛运行错误 → 503 REVIEW_MEDIA_UNAVAILABLE（#483 审查响应）', async () => {
+    const outageStorage: MediaStorage = {
+      ...imageStorage,
+      statStrict: async () => {
+        throw new Error('minio down')
+      },
+    }
+    const service = createTransactionReviewService({
+      store: fakeStore(),
+      storage: outageStorage,
+    })
+    const error = await serviceErrorOf(
+      service.createReview(BUYER_ID, TXN_ID, {
+        rating: 'POSITIVE',
+        imageObjectKeys: [keyOf(MEDIA)],
+      }),
+    )
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('REVIEW_MEDIA_UNAVAILABLE')
   })
 
   test('跨用户键 / 他人 listing 键 / chat-media 键 / 未确认键 → 422 REVIEW_IMAGE_INVALID（同码）', async () => {

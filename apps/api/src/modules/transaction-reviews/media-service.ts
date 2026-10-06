@@ -9,7 +9,7 @@ import type {
 import { newId } from '@fish/db/ids'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
 import { createTokenBucketLimiter } from '../recommendation/rate-limit'
-import type { MediaStorage } from '../uploads/storage'
+import type { MediaObjectStat, MediaStorage } from '../uploads/storage'
 import {
   isReviewMediaStagingKey,
   reviewMediaPublicPrefix,
@@ -17,18 +17,23 @@ import {
 } from '../uploads/storage'
 
 /**
- * 评价配图上传链（#475）：presign（签 staging）→ 客户端直传 → confirm（校验并固化到公开 final 键）。
+ * 评价配图上传链（#475）：presign（签 staging）→ 客户端直传 → confirm（校验并固化到私有 final 键）。
  *
  * 与 listing 的上传链同形但**独立成链**（票内决策：不动 `/uploads/*` 的既有 listing 语义）：
  * - 键域函数与写入端引用校验共用 `../uploads/storage` 的同一族函数（改名即编译错）；
  * - **不做内容审核**（票内待冻结项 3 取默认：本期不进 IMS；chat-media 现状同款），
  *   因此没有 staging→IMS→固化 的结算机，confirm 只做形状/归属/存在/大小/MIME/真实图片校验；
  * - **无登记表**：presign 永不签 final 前缀，所以「final 键下对象存在」本身就证明经过本链 confirm。
+ * - **confirm 幂等且不覆盖**（#483 审查响应）：final 已存在即视为本次（或此前）confirm 已成功，
+ *   直接返回同一 final 键、绝不重写——同一 staging 键换一笔交易再 confirm 也改不掉
+ *   已提交评价引用的图；重试安全性因此不依赖 staging 对象还活着。
  * - **授权门是反滥用门，键不绑定交易**：键 `reviews/{usr_…}/{med_…}.ext` 不含交易段，
  *   同一用户可以把在交易 A 下 confirm 的图引用到交易 B 的评价里（两笔都需 COMPLETED 且本人未评价）。
  *   验收只要求「键来自本链且属于本人」，本期即此语义；要绑定交易需在键里加交易段或引入登记表。
- * - **频控**：confirm 若完全无上限，本链就是一条「向匿名可读前缀不限量写对象」的通道——
+ * - **频控**：confirm 若完全无上限，本链就是一条「向私有 final 前缀不限量写对象」的通道——
  *   按用户令牌桶兜底（与契约的 3 张上限是两个维度：那个约束单条评价引用几张，这个约束产出速率）。
+ * - **存储运行错误显式 503**（#483 审查响应）：stat 用 `statStrict`（只有真不存在才是 422），
+ *   读/写的运行错误不吞——MinIO 抖动是可重试的服务故障，不能伪装成「图片无效」让用户重传。
  */
 
 export class ReviewMediaServiceError extends Error {
@@ -162,6 +167,17 @@ export function createReviewMediaService(options: {
     if (state.hasReview) throw reviewExists()
   }
 
+  /**
+   * 存储运行错误 = 可重试的服务故障（#483 审查响应）：记日志后显式 503，
+   * 不让 MinIO 抖动伪装成 422「图片无效」。
+   */
+  function asServiceOutage<T>(stage: string, op: Promise<T>): Promise<T> {
+    return op.catch((error: unknown) => {
+      console.error(`[review-media] 存储操作失败（${stage}），按 503 服务故障处理`, error)
+      throw storageUnavailable()
+    })
+  }
+
   return {
     async presign(userId, transactionId, input) {
       assertWithinRate(userId)
@@ -184,27 +200,41 @@ export function createReviewMediaService(options: {
     async confirm(userId, transactionId, input) {
       assertWithinRate(userId)
       await requireGate(transactionId, userId)
-      if (!storage.readMediaBytes || !storage.writeMediaBytes) throw storageUnavailable()
+      if (!storage.statStrict || !storage.readMediaBytes || !storage.writeMediaBytes) {
+        throw storageUnavailable()
+      }
+      const { statStrict, readMediaBytes, writeMediaBytes } = storage
       const key = input.objectKey
       // 形状 + 归属（`..`/编码绕过由 isSafeObjectKey 前提挡住，见 uploads/storage.ts 头注释）。
       if (!isReviewMediaStagingKey(key) || !key.startsWith(reviewMediaStagingPrefix(userId))) {
         throw invalidKey()
       }
-      const stat = await storage.stat(key)
-      if (!stat) throw invalidKey()
-      if (stat.size > MAX_IMAGE_BYTES || !ALLOWED_MIME.has(stat.contentType)) throw invalidKey()
-      const bytes = await storage.readMediaBytes(key)
-      if (!bytes || bytes.byteLength !== stat.size) throw invalidKey()
-      // 真实内容判据：魔数必须与声明的 MIME 一致（扩展名/声明值都不可信）。
-      if (sniffImageMime(bytes) !== stat.contentType) throw invalidKey()
 
       // 由 staging 键派生 final 键：**只换前缀**（media 段原样保留 —— 它已经是公开 id，
-      // 再走一次 encodePublicId 会二次编码）。同一 media id ⇒ confirm 重试幂等覆盖同一对象。
+      // 再走一次 encodePublicId 会二次编码）。
       const finalKey = key.replace(
         reviewMediaStagingPrefix(userId),
         reviewMediaPublicPrefix(userId),
       )
-      await storage.writeMediaBytes(finalKey, bytes, stat.contentType)
+      // #483 审查响应（覆盖改写）：final 已存在 = 此前 confirm 已成功——幂等成功返回、
+      // 绝不重写。同一 staging 键换一笔交易再 confirm，已提交评价引用的图保持原样。
+      const existing: MediaObjectStat | null = await asServiceOutage(
+        'stat final',
+        statStrict(finalKey),
+      )
+      if (existing) return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
+
+      const stat = await asServiceOutage('stat staging', statStrict(key))
+      if (!stat) throw invalidKey()
+      if (stat.size > MAX_IMAGE_BYTES || !ALLOWED_MIME.has(stat.contentType)) throw invalidKey()
+      const bytes = await asServiceOutage('read staging', readMediaBytes(key))
+      // stat 刚成功、此刻却读不到：对象在确认中途消失属存储故障，不是「图片无效」。
+      if (!bytes) throw storageUnavailable()
+      // 真实内容判据：魔数必须与声明的 MIME 一致（扩展名/声明值都不可信）。
+      if (bytes.byteLength !== stat.size) throw invalidKey()
+      if (sniffImageMime(bytes) !== stat.contentType) throw invalidKey()
+
+      await asServiceOutage('write final', writeMediaBytes(finalKey, bytes, stat.contentType))
       return { objectKey: finalKey, url: storage.publicUrl(finalKey) }
     },
   }

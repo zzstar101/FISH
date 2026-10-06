@@ -24,6 +24,15 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage & {
   written: { key: string; contentType: string }[]
 } {
   const written: { key: string; contentType: string }[] = []
+  // 缺省 statStrict 与 stat 同实现（假适配器不模拟「运行错误」差异，需要时显式 override）。
+  const stat = overrides.stat ?? (async (key: string) =>
+    key === STAGING_KEY ? { size: 64, contentType: 'image/png' } : null)
+  const statStrict = overrides.statStrict ?? (async (key: string) => {
+    // 模拟真实对象存储：final 键只有被 writeMediaBytes 写过才存在——
+    // confirm 幂等判据（final 已存在 → 不重写）靠它生效。
+    if (written.some((entry) => entry.key === key)) return { size: 64, contentType: 'image/png' }
+    return stat(key)
+  })
   return {
     written,
     presignPut: (input) => ({
@@ -31,7 +40,8 @@ function fakeStorage(overrides: Partial<MediaStorage> = {}): MediaStorage & {
       headers: {},
       expiresAt: '2026-10-06T12:10:00.000Z',
     }),
-    stat: async (key) => (key === STAGING_KEY ? { size: 64, contentType: 'image/png' } : null),
+    stat,
+    statStrict,
     readMediaBytes: async (key) => (key === STAGING_KEY ? pngBytes() : null),
     writeMediaBytes: async (key, _bytes, contentType) => {
       written.push({ key, contentType })
@@ -126,14 +136,62 @@ describe('review media service: confirm', () => {
     ])
   })
 
-  test('confirm 重试幂等：同一个 staging 键派生同一个 final 键（覆盖写同一对象）', async () => {
+  test('confirm 幂等且不覆盖：final 已存在时直接成功返回，不再写对象（#483 审查响应）', async () => {
     const storage = fakeStorage()
     const service = createReviewMediaService({ gate: gateOf(), storage })
     const first = await service.confirm(USER, TXN, { objectKey: STAGING_KEY })
     const second = await service.confirm(USER, TXN, { objectKey: STAGING_KEY })
     expect(second.objectKey).toBe(first.objectKey)
-    expect(storage.written).toHaveLength(2)
-    expect(storage.written[1]?.key).toBe(first.objectKey)
+    // 修复前：第二次 confirm 会把 staging 字节重写到同一个 final 键（written 长度 2）。
+    expect(storage.written).toHaveLength(1)
+  })
+
+  test('同一 staging 键换一笔交易再 confirm：已提交评价引用的 final 图不被改写（#483 审查响应）', async () => {
+    const OTHER_TXN = '01930000-0000-7000-8000-0000000000a2'
+    const storage = fakeStorage()
+    const service = createReviewMediaService({ gate: gateOf(), storage })
+    const first = await service.confirm(USER, TXN, { objectKey: STAGING_KEY })
+    const second = await service.confirm(USER, OTHER_TXN, { objectKey: STAGING_KEY })
+    expect(second.objectKey).toBe(first.objectKey)
+    expect(storage.written).toHaveLength(1)
+  })
+
+  test('statStrict 抛运行错误 → 503 REVIEW_MEDIA_UNAVAILABLE（不伪装成 422 图片无效）', async () => {
+    const service = createReviewMediaService({
+      gate: gateOf(),
+      storage: fakeStorage({
+        statStrict: async () => {
+          throw new Error('minio down')
+        },
+      }),
+    })
+    const error = await errorOf(service.confirm(USER, TXN, { objectKey: STAGING_KEY }))
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('REVIEW_MEDIA_UNAVAILABLE')
+  })
+
+  test('stat 成功后 readMediaBytes 返回 null → 503（确认中途对象消失是故障，不是图片无效）', async () => {
+    const service = createReviewMediaService({
+      gate: gateOf(),
+      storage: fakeStorage({ readMediaBytes: async () => null }),
+    })
+    const error = await errorOf(service.confirm(USER, TXN, { objectKey: STAGING_KEY }))
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('REVIEW_MEDIA_UNAVAILABLE')
+  })
+
+  test('writeMediaBytes 抛错 → 503（固化失败可重试，不回 500 裸错）', async () => {
+    const service = createReviewMediaService({
+      gate: gateOf(),
+      storage: fakeStorage({
+        writeMediaBytes: async () => {
+          throw new Error('disk full')
+        },
+      }),
+    })
+    const error = await errorOf(service.confirm(USER, TXN, { objectKey: STAGING_KEY }))
+    expect(error.status).toBe(503)
+    expect(error.code).toBe('REVIEW_MEDIA_UNAVAILABLE')
   })
 
   test('不可引用的键全部 422 REVIEW_IMAGE_INVALID（同码不区分）', async () => {
@@ -160,10 +218,12 @@ describe('review media service: confirm', () => {
   })
 
   test('大小超限 / MIME 不在白名单 / 魔数与声明不符 → 422', async () => {
+    // override 一律按键判别：final 键必须返回 null，否则会命中「final 已存在→幂等成功」提前返回。
     const oversize = createReviewMediaService({
       gate: gateOf(),
       storage: fakeStorage({
-        stat: async () => ({ size: 5 * 1024 * 1024 + 1, contentType: 'image/png' }),
+        stat: async (key) =>
+          key === STAGING_KEY ? { size: 5 * 1024 * 1024 + 1, contentType: 'image/png' } : null,
       }),
     })
     expect((await errorOf(oversize.confirm(USER, TXN, { objectKey: STAGING_KEY }))).code).toBe(
@@ -172,7 +232,9 @@ describe('review media service: confirm', () => {
 
     const badMime = createReviewMediaService({
       gate: gateOf(),
-      storage: fakeStorage({ stat: async () => ({ size: 64, contentType: 'image/gif' }) }),
+      storage: fakeStorage({
+        stat: async (key) => (key === STAGING_KEY ? { size: 64, contentType: 'image/gif' } : null),
+      }),
     })
     expect((await errorOf(badMime.confirm(USER, TXN, { objectKey: STAGING_KEY }))).code).toBe(
       'REVIEW_IMAGE_INVALID',
@@ -184,7 +246,8 @@ describe('review media service: confirm', () => {
       gate: gateOf(),
       storage: fakeStorage({
         readMediaBytes: async () => jpegBytes,
-        stat: async () => ({ size: jpegBytes.byteLength, contentType: 'image/png' }),
+        stat: async (key) =>
+          key === STAGING_KEY ? { size: jpegBytes.byteLength, contentType: 'image/png' } : null,
       }),
     })
     expect((await errorOf(mismatch.confirm(USER, TXN, { objectKey: STAGING_KEY }))).code).toBe(

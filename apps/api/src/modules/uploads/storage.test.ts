@@ -188,6 +188,33 @@ describe('Bun S3 存储适配', () => {
 
     expect(await media.stat(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
   })
+
+  test.skipIf(!reachable)('statStrict：对象不存在返回 null；不合法键返回 null 不打请求', async () => {
+    const media = storage
+    if (!media || !media.statStrict) throw new Error('storage 未初始化')
+
+    expect(await media.statStrict(`listings/${USER_ID}/${crypto.randomUUID()}.jpg`)).toBeNull()
+    expect(await media.statStrict('listings/a/../b/x.jpg')).toBeNull()
+  })
+
+  // #483 审查响应：statStrict 与 stat 的分野在「运行错误」——不可达端点下 stat 吞成 null，
+  // statStrict 必须原样抛出（评价链据此回 503 而不是 422）。用不可达端点离线即可测。
+  test('statStrict：存储运行错误原样抛出（stat 同场景吞成 null）', async () => {
+    const media = createBunS3MediaStorage({
+      client: new Bun.S3Client({
+        endpoint: 'http://127.0.0.1:1',
+        region: 'us-east-1',
+        accessKeyId: 'test',
+        secretAccessKey: 'test',
+        bucket: 'fish',
+      }),
+      publicUrlBase: 'https://cdn.test/fish',
+    })
+    const key = `listings/${USER_ID}/${crypto.randomUUID()}.jpg`
+    expect(await media.stat(key)).toBeNull()
+    if (!media.statStrict) throw new Error('statStrict 未实现')
+    await expect(media.statStrict(key)).rejects.toThrow()
+  })
 })
 
 // #86 B 线评审 P1：`Bun.S3Client` 用 `new URL()` 拼地址，pathname 会把 `..` 归一化掉，

@@ -24,7 +24,7 @@ import type { MyReviewRow, ReviewTimelineRow, TransactionReviewsStore } from './
 
 export class TransactionReviewServiceError extends Error {
   constructor(
-    readonly status: 404 | 409 | 422,
+    readonly status: 404 | 409 | 422 | 503,
     readonly code: string,
     message: string,
     readonly details?: ApiErrorDetail[],
@@ -54,6 +54,16 @@ const reviewImagesInvalidInput = (message: string) =>
   new TransactionReviewServiceError(422, 'VALIDATION_FAILED', message, [
     { field: 'imageObjectKeys', message },
   ])
+/**
+ * #483 审查响应：存储运行错误是**可重试的服务故障**，与「图片无效」（422，用户要换图）分开——
+ * 不把 MinIO 抖动伪装成让用户重传的问题。
+ */
+const reviewMediaUnavailable = () =>
+  new TransactionReviewServiceError(
+    503,
+    'REVIEW_MEDIA_UNAVAILABLE',
+    '图片校验暂时不可用，请稍后重试',
+  )
 
 /**
  * 评价行 → 契约 DTO（决策 C：逐条 parse，一条越界的历史行不能把整页打成 500）。
@@ -222,6 +232,20 @@ export function createTransactionReviewService(deps: {
     storage,
   })
 
+  /**
+   * 引用校验的 stat 用严格语义（#483 审查响应）：只有对象真不存在才是 422「图片无效」，
+   * 存储运行错误显式 503。
+   */
+  async function statReviewImage(key: string) {
+    if (!storage.statStrict) throw reviewMediaUnavailable()
+    try {
+      return await storage.statStrict(key)
+    } catch (error) {
+      console.error('[transaction-reviews] 引用校验 stat 失败，按 503 服务故障处理', error)
+      throw reviewMediaUnavailable()
+    }
+  }
+
   return {
     media,
     async getMyReview(userId, transactionId) {
@@ -269,14 +293,14 @@ export function createTransactionReviewService(deps: {
       if (new Set(imageKeys).size !== imageKeys.length) {
         throw reviewImagesInvalidInput('图片对象键不能重复')
       }
-      // 逐个校验：只认本上传链 confirm 固化到**公开 final 前缀**、且归属当前用户的键。
+      // 逐个校验：只认本上传链 confirm 固化到**私有 final 前缀**、且归属当前用户的键。
       // presign 永不签 final 前缀 → 「键在 final 前缀下存在」即证明经过服务端 confirm；
       // 再加一次 stat（大小/MIME）挡掉被替换/损坏的对象。
       for (const key of imageKeys) {
         if (!isReviewMediaPublicKey(key) || !key.startsWith(reviewMediaPublicPrefix(userId))) {
           throw reviewImageInvalid()
         }
-        const stat = await storage.stat(key)
+        const stat = await statReviewImage(key)
         if (
           !stat ||
           stat.size > MAX_IMAGE_BYTES ||

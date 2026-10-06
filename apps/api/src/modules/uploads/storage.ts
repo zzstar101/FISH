@@ -45,6 +45,15 @@ export interface MediaStorage {
   stat(key: string): Promise<MediaObjectStat | null>
 
   /**
+   * 同 `stat`，但**区分「对象不存在」与「存储故障」**：不存在返回 `null`，运行错误原样抛出。
+   *
+   * 背景（#483 审查响应）：`stat` 把一切错误吞成 `null`，MinIO 抖动会让评价链把可重试的
+   * 服务故障回成 422「图片无效」、让用户重传毫无问题的图。评价上传链与写侧引用校验用
+   * `statStrict`；其余调用方维持 `stat` 的吞错语义（既有现状，不在本票范围内改）。
+   */
+  statStrict?(key: string): Promise<MediaObjectStat | null>
+
+  /**
    * 读取私有对象；媒体接口在通过会话鉴权后使用。
    *
    * 键形状不合法（见 `isSafeObjectKey`）返回 `null`：GET 路径和 HEAD 一样会被 `new URL()`
@@ -233,6 +242,20 @@ export function createBunS3MediaStorage(options: {
         // 对象不存在时 Bun 抛错，这里统一降级成 null：调用方要区分的是"有没有"，
         // 不是"为什么没拿到"，让 404 变成 500 才是真的错。
         return null
+      }
+    },
+
+    async statStrict(key) {
+      if (!isSafeObjectKey(key)) return null
+      try {
+        const info = await client.stat(key)
+        return { size: info.size, contentType: info.type }
+      } catch (error) {
+        // 实测（本地 MinIO）：对象不存在时抛 `S3Error` 且 `code: 'NoSuchKey'`；
+        // `Bun.S3Error` 未导出、无法 instanceof，按错误码判别。其余错误（网络/权限/限流）
+        // 原样抛出，由调用方按可重试的服务故障处理。
+        if ((error as { code?: string }).code === 'NoSuchKey') return null
+        throw error
       }
     },
 
