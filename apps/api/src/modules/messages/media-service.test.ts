@@ -46,6 +46,7 @@ function row(input: MediaMessageInput): MediaRow {
 function setup(
   overrides: Partial<MediaMessageStore> = {},
   storageOverrides: Partial<MediaStorage> = {},
+  blocksOverrides: Partial<{ existsBlockBetween: (a: string, b: string) => Promise<boolean> }> = {},
 ) {
   const store: MediaMessageStore = {
     legacyIds: async () => [],
@@ -74,6 +75,7 @@ function setup(
     ...storageOverrides,
   }
   return createMediaMessageService({
+    blocks: { existsBlockBetween: async () => false, ...blocksOverrides },
     store,
     storage,
     mediaUrl: (conversation, media) =>
@@ -216,6 +218,100 @@ describe('media message service', () => {
     await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
       code: 'MEDIA_OBJECT_INVALID',
     })
+  })
+
+  /*
+   * #466 拉黑守卫（双向）：媒体与文本/商品卡同一谓词、同一中性码。
+   */
+  test('拉黑守卫：拉黑边存在 → 403 CONVERSATION_UNAVAILABLE', async () => {
+    const service = setup({}, {}, { existsBlockBetween: async () => true })
+    await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
+      status: 403,
+      code: 'CONVERSATION_UNAVAILABLE',
+    })
+  })
+
+  /*
+   * #466：presign 与 create 同挂守卫。只挡 create 不够——被拉黑方仍能拿到签名 URL
+   * 并把字节传进 storage（create 才 403，消息不落库），在对象存储留下无主对象。
+   */
+  test('拉黑守卫：presign 同样被拦（不得只挡 create）', async () => {
+    const service = setup({}, {}, { existsBlockBetween: async () => true })
+    await expect(
+      service.presign(userId, conversationId, {
+        kind: 'IMAGE',
+        contentType: 'image/webp',
+        sizeBytes: 1024,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: 'CONVERSATION_UNAVAILABLE' })
+  })
+
+  /*
+   * #466 × #67：create 的守卫与 TEXT/LISTING 同序——在幂等重放**之后**、真正落库之前。
+   * 首发已落库、响应丢了之后才出现拉黑边时，重试必须重放既有媒体（否则客户端把一条
+   * 早已送达的消息当成本次发送失败）；没有幂等键的新上传仍被拦。
+   */
+  test('拉黑守卫：已落库的媒体重试不被 403 抢走，新上传仍被拦', async () => {
+    let blocked = false
+    const stored = row(image)
+    const service = setup(
+      { findByRequestKey: async () => ({ row: stored, matchedHash: true }) },
+      {},
+      { existsBlockBetween: async () => blocked },
+    )
+    const clientRequestId = '01930000-0000-7000-8000-0000000000e2'
+    const replayed = await service.create(userId, conversationId, { ...image, clientRequestId })
+    expect(replayed.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
+    blocked = true
+    const retry = await service.create(userId, conversationId, { ...image, clientRequestId })
+    expect(retry.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
+    await expect(service.create(userId, conversationId, image)).rejects.toMatchObject({
+      status: 403,
+      code: 'CONVERSATION_UNAVAILABLE',
+    })
+  })
+
+  /*
+   * #466 × #359 3c：引用目标校验同样必须排在幂等重放**之后**（与 TEXT 路径 `service.ts:366`
+   * 的顺序口径一致：重放 → 拉黑守卫 → 引用校验）。首发已落库、响应丢了之后被引用的那条
+   * 才被撤回——重试必须重放既有媒体，否则客户端会把一条早已送达的消息当成发送失败。
+   */
+  test('引用目标：已落库的媒体重试不被已撤回的引用抢走，新上传仍被拦', async () => {
+    const recalledId = '01930000-0000-7000-8000-0000000000d2'
+    const stored: MediaRow = { ...row(image), reply_to_id: recalledId }
+    const service = setup({
+      findByRequestKey: async () => ({ row: stored, matchedHash: true }),
+      findReplyTargets: async (ids) =>
+        new Map(
+          ids
+            .filter((id) => id === recalledId)
+            .map((id) => [
+              id,
+              {
+                id: recalledId,
+                conversation_id: conversationId,
+                sender_id: userId,
+                type: 'TEXT',
+                content: '被撤回的原文',
+                recalled_at: '2026-09-14T12:01:00.000Z',
+              },
+            ]),
+        ),
+    })
+    const clientRequestId = '01930000-0000-7000-8000-0000000000e3'
+    const replyToId = encodePublicId(PUBLIC_ID_PREFIX.message, recalledId)
+    const replayed = await service.create(userId, conversationId, {
+      ...image,
+      clientRequestId,
+      replyToId,
+    })
+    // 命中重放：返回既有消息，且引用块按「已撤回」投射（不是 422）。
+    expect(replayed.id).toBe(encodePublicId(PUBLIC_ID_PREFIX.message, stored.message_id))
+    expect(replayed.replyTo?.excerpt).toBe('[消息已撤回]')
+    // 同一输入去掉幂等键就是一次**新**上传：撤回的引用目标仍然必须被 422 拦下。
+    await expect(
+      service.create(userId, conversationId, { ...image, replyToId }),
+    ).rejects.toMatchObject({ status: 422, code: 'MESSAGE_REPLY_INVALID' })
   })
 
   test('rejects outsiders and keeps media access participant-scoped', async () => {

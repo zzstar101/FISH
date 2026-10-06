@@ -20,6 +20,7 @@ import {
 } from '@fish/contracts/transactions/schema'
 import { isForeignKeyViolation } from '@fish/db/pg-errors'
 import { encodePublicId, PUBLIC_ID_PREFIX } from '@fish/shared/public-id'
+import type { BlockRelationCheck } from '../blocks/store'
 import { decodeCursor, encodeCursor } from '../conversations/cursor'
 import { toMessageDto } from '../messages/service'
 import type { MessageRow, MessageStore } from '../messages/store'
@@ -248,6 +249,12 @@ export function createTransactionService({
   store,
   messages,
   storage,
+  /**
+   * #466 拉黑守卫：**必填**。只拦「**新发起**提案」这一条用户主动路径——
+   * 拉黑后任一方都不该再向被冻结的会话推进新的交易请求（它会落一张卡片 + 一条通知）。
+   * 既有交易的接受/拒绝/面交/核销**不受影响**（票面：不偷偷取消交易、保留必要交易通知）。
+   */
+  blocks,
   /** 面交码 HMAC 密钥（#70，MEETUP_TOKEN_SECRET；明文不落库的前提）。 */
   meetupSecret,
   /** SYSTEM 消息写入后回调（实时推送）；推送失败不得影响响应。 */
@@ -258,6 +265,7 @@ export function createTransactionService({
   store: TransactionStore
   messages: MessageStore
   storage: MediaStorage
+  blocks: BlockRelationCheck
   meetupSecret: string
   onSystemMessage?: TxSideEffect
   notify?: TransactionNotifier
@@ -394,6 +402,11 @@ export function createTransactionService({
       const { brief } = lookup
       if (brief.buyerId !== userId) {
         throw new TransactionServiceError(403, 'NOT_CONVERSATION_BUYER', '只有买家可以发起交易确认')
+      }
+      // #466 拉黑守卫（双向，与 chat 域同一谓词与中性码）：提案是用户主动发起的联系，
+      // 拉黑后任一方都不能再推进；既有交易流程（accept/reject/面交）不走这里。
+      if (await blocks.existsBlockBetween(brief.buyerId, brief.sellerId)) {
+        throw new TransactionServiceError(403, 'CONVERSATION_UNAVAILABLE', '会话当前不可用')
       }
       if (brief.listingStatus !== 'ACTIVE') {
         throw new TransactionServiceError(409, 'LISTING_NOT_ACTIVE', '商品当前不可交易')

@@ -1,3 +1,4 @@
+import { BLOCK_ROUTES } from '@fish/contracts/blocks/routes'
 import { REALTIME_WS_PATH } from '@fish/contracts/chat/routes'
 import {
   RECOMMENDATION_EVENT_RATE_LIMIT,
@@ -40,6 +41,9 @@ import {
 } from './modules/auth/email-providers'
 import { createAuthModule } from './modules/auth/router'
 import { createVerificationService } from './modules/auth/verification-service'
+import { createBlocksRouter } from './modules/blocks/router'
+import { createBlockService } from './modules/blocks/service'
+import { createSqlBlockStore } from './modules/blocks/store'
 import { createBrandAssetsRouter } from './modules/brand-assets/router'
 import { createCommentsRouter } from './modules/comments/router'
 import { createCommentService } from './modules/comments/service'
@@ -543,6 +547,21 @@ export function createApp(
     }),
   )
 
+  // 拉黑关系（#466）：`GET /me/blocks` 与 `GET|POST|DELETE /users/:userId/block`。本域
+  // 没有匿名路径（拉黑是「我」与某个人的有向边），两条路径整挂 requireAuth；router 内部
+  // 兜一层失败关闭。**生效不在这里**：chat 域三个 service（会话创建 / 消息 / 媒体）持有
+  // 同一个 blockStore 的 `existsBlockBetween` 谓词做双向守卫，中性码见 chat 契约。
+  const blockStore = createSqlBlockStore(db)
+  app.use(BLOCK_ROUTES.myBlocks, auth.requireAuth)
+  app.use(BLOCK_ROUTES.blockRelation(':userId'), auth.requireAuth)
+  app.route(
+    '/',
+    createBlocksRouter({
+      service: createBlockService({ store: blockStore }),
+      getUserId: (c) => c.get('userId'),
+    }),
+  )
+
   // 浏览记录（#415 M1）：`GET|DELETE /me/view-history`。本域没有匿名路径（记录是「我」的
   // 资产），整挂 requireAuth，router 内部再兜一层失败关闭。只读写 `listing_view_history` /
   // `listings` / `listing_images` / `users` 表；写入不在这里 —— 由 `POST /recommendations/events`
@@ -614,6 +633,7 @@ export function createApp(
       service: createConversationService({
         store: conversationStore,
         storage,
+        blocks: blockStore,
         // 对方的在线态由进程内登记表直接读（#359 第五点），与公开资料的 presence 同源。
         presence,
         projectContent: projectSystemContent,
@@ -646,6 +666,7 @@ export function createApp(
       service: createMediaMessageService({
         store: createSqlMediaMessageStore(db),
         storage,
+        blocks: blockStore,
         mediaUrl: (conversationId, mediaId) =>
           `/api/conversations/${conversationId}/media/${mediaId}`,
         onMediaCreated: (participants, media) => {
@@ -666,6 +687,7 @@ export function createApp(
     createMessagesRouter({
       service: createMessageService({
         store: createSqlMessageStore(db),
+        blocks: blockStore,
         // LISTING（#359）卡片封面的 URL 拼装；与会话头商品卡共用同一个 storage 实例。
         storage,
         projectContent: projectSystemContent,
@@ -713,6 +735,7 @@ export function createApp(
     '/transactions',
     createTransactionsRouter({
       service: createTransactionService({
+        blocks: blockStore,
         store: createSqlTransactionStore(db),
         messages: createSqlMessageStore(db),
         storage,

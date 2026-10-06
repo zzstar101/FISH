@@ -229,6 +229,11 @@ export const TransactionErrorCodeSchema = z.enum([
   'CONVERSATION_NOT_FOUND',
   /** 403：提案端点被会话里的卖家（或外人）调用。 */
   'NOT_CONVERSATION_BUYER',
+  /**
+   * 403：会话当前不可用（#466 拉黑守卫）。**与 chat 域共用的中性码**——提案是
+   * 「新发起的联系」，拉黑生效后任一方都不能再推进；报错不暴露拉黑关系。
+   */
+  'CONVERSATION_UNAVAILABLE',
   /** 403：接受/拒绝端点被会话里的买家（或外人）调用。 */
   'NOT_CONVERSATION_SELLER',
   /** 409：提案或接受时商品非 ACTIVE（RESERVED / SOLD / OFFLINE，含并发输给另一买家）。 */
