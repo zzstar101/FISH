@@ -93,6 +93,24 @@ function flat(source: string): string {
   return source.replace(/\s+/g, ' ')
 }
 
+/**
+ * 取出 `const mockEnabled = ...` 那条**定义语句**（切到下一条顶层声明之前）。
+ *
+ * 为什么按语句切、不按行看：单行正则对「`||` 换行到次行」的追加写法没有约束力 ——
+ * 复审实测（2026-10-06）把 `config/index.ts` 的
+ * `const mockEnabled = process.env.TARO_APP_MOCK === '1'` 追加一行
+ * `|| process.env.NODE_ENV === 'development'` 时，旧断言 24 pass / 0 fail 全绿。
+ */
+function mockEnabledDefinition(code: string): string {
+  const start = code.indexOf('const mockEnabled =')
+  expect(start, 'config 里应有 `const mockEnabled = ` 的定义').toBeGreaterThanOrEqual(0)
+  const rest = code.slice(start)
+  // 语句边界 = 下一条顶层声明的行首（`const` / `let` / `function` / `export` / `}`）。
+  // 换行追加的 `|| ...` 仍在这条语句里（没到下一个声明），所以会被整段带进返回值。
+  const boundary = rest.slice(1).search(/\n[ \t]*(?:const|let|var|function|export|\})/)
+  return boundary < 0 ? rest : rest.slice(0, boundary + 1)
+}
+
 /** 取 `from` 到其后第一个 `to` 之间的**代码**（两端都不含），并压平空白 */
 async function sliceFlat(from: string, to: string): Promise<string> {
   const text = flat(codeOnly(await orderListSource()))
@@ -351,8 +369,15 @@ const OPEN_CONVERSATION = 'const openConversation = (item: OrderCardView) => {'
 describe('演示兜底开关 —— 只认显式 TARO_APP_MOCK=1（#304）', () => {
   test('兜底判定只有一处定义，且四个注入点都取自它（development 不再自动打开）', async () => {
     const code = codeOnly(await Bun.file(new URL('../config/index.ts', import.meta.url)).text())
-    // 精确到行尾：`=== '1' || process.env.NODE_ENV === 'development'` 这种追加改法也要红
-    expect(code).toMatch(/const mockEnabled = process\.env\.TARO_APP_MOCK === '1'\n/)
+    // 定义体必须**只**由 `process.env.TARO_APP_MOCK === '1'` 决定：把那条语句整体取出来压平空白后
+    // 做字面等价断言，`|| process.env.NODE_ENV === 'development'` 无论写在同一行还是**换到次行**
+    // 都会红 —— 旧断言是单行正则，换行追加写法实测 24 pass / 0 fail 全绿（2026-10-06 复审）。
+    // 取舍（已知，接受）：这是**字面**等价断言，合法重构（把 `'1'` 抽成常量、调换比较顺序）会红，
+    // 需要同步改这一行；换来的是不依赖 `biome format` 的强度保证（否则漏这层就只剩 lint 兜着）。
+    const definition = mockEnabledDefinition(code)
+    expect(flat(definition).trim(), 'mockEnabled 的定义体掺了别的开关').toBe(
+      "const mockEnabled = process.env.TARO_APP_MOCK === '1'",
+    )
     // 四个注入点（alias + 三个 defineConstants）共用这一个表达式，不许各自重抄一遍
     expect(code.match(/process\.env\.TARO_APP_MOCK === '1'/g)?.length).toBe(1)
     // 但「只此一处」是间接兜：它管不到注入值被换掉。实测（2026-10-06）把
