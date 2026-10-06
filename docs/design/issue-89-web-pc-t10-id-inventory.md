@@ -59,7 +59,7 @@ Issue #217 已于 2026-09-27 CLOSED，统一 ID 体系由 **PR #280** 面向 `ma
 | §3「不增加编号搜索」 | ✅ 已放开并落地 | `packages/contracts/src/listings/routes.ts:12`（`byNumber`，注释「12-digit human reference lookup; returns only a canonical lst_... ID」）；PC `apps/web-pc/src/features/search/number-lookup.ts`（编号判据只有 `ListingNoSchema` = `^[1-9][0-9]{11}$`，不在前端重写正则）、`search-page.tsx:79-84` |
 | §2 公开编号展示 | ✅ 详情页已展示并可复制人工编号 | `apps/web-pc/src/features/listing-detail/detail-page.tsx:249-251`、`listing-no-line.tsx:15,:20` |
 | 内部 UUID 仍作路由 / API 内部标识 | ✅ 仍成立——§1 的三个路由参数名未变，但**值的形态由 UUID 变为公开 TypeID** | `apps/web-pc/src/routes/orders.$transactionId.tsx`、`listing.$listingId.tsx`、`messages.$conversationId.tsx` |
-| 分享口令 / 公开 URL 重定向（§3 末行） | ❌ **仍未做**，是本表唯一未完成项 | 全仓源码（`apps/`、`packages/`）无 `navigator.share`——仅本文档自身文本命中该词；`listing-no-line.tsx` 只复制编号，不定义公开 URL |
+| 分享口令 / 公开 URL 重定向（§3 末行） | ❌ **仍未做**，是本表唯一未完成项 | 全仓源码（`apps/`、`packages/`）无 `navigator.share`——`git grep -n 'navigator\.share'` 全仓只命中两行文档正文（本行与 `docs/design/issue-89-web-pc-gaps.md:37`），无源码命中；`listing-no-line.tsx` 只复制编号，不定义公开 URL |
 | cursor 迁移测试 | ➖ 未随 #217 变更；cursor 仍是不透明 base64url，PC 只原样回传 | `apps/api/src/modules/listings/cursor.ts`、`apps/api/src/modules/comments/cursor.ts` |
 
 > 说明：本文件写于 #217 之前，§1–§3 表里的「#217 前处理」列是当时定下的动作清单，保留作追溯。
