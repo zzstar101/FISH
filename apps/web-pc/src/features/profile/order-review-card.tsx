@@ -24,7 +24,12 @@ import { imagePreparationMessage, toUploadableFile, validateImageFile } from '..
 import { RATING_OPTIONS, RATING_VIEW } from '../transaction-review/rating'
 import { reviewSubmitError, uploadReviewImage } from './api'
 import { useCreateReview, useMyReview } from './queries'
-import { type ReviewFormImage, ReviewImageSlots, reviewSubmitBlockedReason } from './review-images'
+import {
+  appendWithinLimit,
+  type ReviewFormImage,
+  ReviewImageSlots,
+  reviewSubmitBlockedReason,
+} from './review-images'
 
 export type OrderReviewCardViewProps = {
   loading: boolean
@@ -158,11 +163,25 @@ export function ReviewForm({
   const [rating, setRating] = useState<TransactionReviewRating | null>(null)
   const [body, setBody] = useState('')
   const [images, setImages] = useState<ReviewFormImage[]>([])
-  const imagesRef = useRef(images)
-  imagesRef.current = images
+  // 同步权威列表：每次增删改**先写这里再进 state**（#483 审查响应）。渲染期才同步的 ref
+  // 在并发 addFiles / 连续 removeImage 的窗口里是旧值，槽位判断会超订、移除会复活条目。
+  const imagesRef = useRef<ReviewFormImage[]>([])
   const controllersRef = useRef(new Map<string, AbortController>())
 
-  /** 卸载：中断在途上传 + 回收预览 URL（预览是本地 objectURL，必须显式释放）。 */
+  function commitImages(next: ReviewFormImage[]) {
+    imagesRef.current = next
+    setImages(next)
+  }
+
+  /** 原子预留槽位后提交；满槽返回 false（调用方不得建预览/开上传）。 */
+  function appendImage(entry: ReviewFormImage): boolean {
+    const next = appendWithinLimit(imagesRef.current, entry, MAX_REVIEW_IMAGES)
+    if (next === null) return false
+    commitImages(next)
+    return true
+  }
+
+  /** 卸载：中断在途上传（含 HEIC 预处理之后的每一步）+ 回收预览 URL（本地 objectURL 必须显式释放）。 */
   useEffect(() => {
     const controllers = controllersRef.current
     return () => {
@@ -174,21 +193,21 @@ export function ReviewForm({
   }, [])
 
   function updateImage(id: string, patch: Partial<ReviewFormImage>) {
-    setImages((previous) =>
-      previous.map((image) => (image.id === id ? { ...image, ...patch } : image)),
+    commitImages(
+      imagesRef.current.map((image) => (image.id === id ? { ...image, ...patch } : image)),
     )
   }
 
-  async function runUpload(id: string, file: File) {
-    const controller = new AbortController()
-    controllersRef.current.set(id, controller)
+  async function runUpload(id: string, file: File, controller?: AbortController) {
+    const abort = controller ?? new AbortController()
+    controllersRef.current.set(id, abort)
     try {
       const objectKey = await uploadReviewImage(transactionId, file, {
-        signal: controller.signal,
+        signal: abort.signal,
       })
       updateImage(id, { status: 'uploaded', objectKey, error: null })
     } catch (error) {
-      if (controller.signal.aborted) return
+      if (abort.signal.aborted) return
       updateImage(id, {
         status: 'failed',
         objectKey: null,
@@ -201,44 +220,58 @@ export function ReviewForm({
 
   /** 选图：先预处理（HEIC→JPG）与前端校验，再过上传链；超上限的部分直接忽略。 */
   async function addFiles(files: File[]) {
-    const room = MAX_REVIEW_IMAGES - imagesRef.current.length
-    for (const raw of files.slice(0, Math.max(room, 0))) {
+    for (const raw of files) {
+      // 中止句柄在**任何 await 之前**注册（#483 审查响应）：HEIC 预处理期间卸载表单，
+      // await 返回后在这里被拦下——不建预览、不发起上传，也就不会 confirm 出
+      // 永不引用的公开对象。句柄同时挂在 controllersRef：removeImage 也能中止预处理。
       const id = crypto.randomUUID()
-      const prepared = await toUploadableFile(raw)
-      const push = (entry: ReviewFormImage) => {
-        setImages((previous) =>
-          previous.length >= MAX_REVIEW_IMAGES ? previous : [...previous, entry],
-        )
+      const controller = new AbortController()
+      controllersRef.current.set(id, controller)
+      try {
+        const prepared = await toUploadableFile(raw)
+        if (controller.signal.aborted) continue
+        if (prepared === null) {
+          appendImage({
+            id,
+            previewUrl: '',
+            status: 'failed',
+            objectKey: null,
+            error: imagePreparationMessage(raw),
+            file: null,
+          })
+          continue
+        }
+        const invalid = validateImageFile(prepared)
+        if (invalid !== null) {
+          appendImage({
+            id,
+            previewUrl: '',
+            status: 'failed',
+            objectKey: null,
+            error: invalid,
+            file: null,
+          })
+          continue
+        }
+        const previewUrl = URL.createObjectURL(prepared)
+        // 原子预留：满槽时回收预览、不开上传——不会产生「已 confirm 却永不引用」的孤儿对象。
+        if (
+          !appendImage({
+            id,
+            previewUrl,
+            status: 'uploading',
+            objectKey: null,
+            error: null,
+            file: prepared,
+          })
+        ) {
+          URL.revokeObjectURL(previewUrl)
+          continue
+        }
+        await runUpload(id, prepared, controller)
+      } finally {
+        controllersRef.current.delete(id)
       }
-      if (prepared === null) {
-        push({
-          id,
-          previewUrl: '',
-          status: 'failed',
-          objectKey: null,
-          error: imagePreparationMessage(raw),
-          file: null,
-        })
-        continue
-      }
-      const invalid = validateImageFile(prepared)
-      if (invalid !== null) {
-        push({
-          id,
-          previewUrl: '',
-          status: 'failed',
-          objectKey: null,
-          error: invalid,
-          file: null,
-        })
-        continue
-      }
-      // 并发选图窗口：到这一步已满就直接丢弃，不建预览、不上传（否则会产生永不引用的
-      // 公开对象 + 回收不到的 blob 预览 URL）。
-      if (imagesRef.current.length >= MAX_REVIEW_IMAGES) continue
-      const previewUrl = URL.createObjectURL(prepared)
-      push({ id, previewUrl, status: 'uploading', objectKey: null, error: null, file: prepared })
-      await runUpload(id, prepared)
     }
   }
 
@@ -246,7 +279,7 @@ export function ReviewForm({
     controllersRef.current.get(id)?.abort()
     const target = imagesRef.current.find((image) => image.id === id)
     if (target && target.previewUrl !== '') URL.revokeObjectURL(target.previewUrl)
-    setImages((previous) => previous.filter((image) => image.id !== id))
+    commitImages(imagesRef.current.filter((image) => image.id !== id))
   }
 
   function retryImage(id: string) {

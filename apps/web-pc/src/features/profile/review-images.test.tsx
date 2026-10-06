@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { type ReviewFormImage, ReviewImageSlots, reviewSubmitBlockedReason } from './review-images'
+import {
+  appendWithinLimit,
+  type ReviewFormImage,
+  ReviewImageSlots,
+  reviewSubmitBlockedReason,
+} from './review-images'
 
 function image(overrides: Partial<ReviewFormImage> = {}): ReviewFormImage {
   return {
@@ -44,6 +49,31 @@ describe('reviewSubmitBlockedReason（提交闸门纯函数）', () => {
   test('并发选图窗口里超出上限 → 兜底挡住（服务端 422 之前）', () => {
     const four = [image(), image({ id: 'i2' }), image({ id: 'i3' }), image({ id: 'i4' })]
     expect(reviewSubmitBlockedReason(four, false, 3)).toContain('最多 3 张')
+  })
+})
+
+describe('appendWithinLimit（原子槽位预留纯函数，#483 审查响应）', () => {
+  test('未满时追加并返回新列表；不改入参', () => {
+    const current = [image()]
+    const next = appendWithinLimit(current, image({ id: 'i2' }), 3)
+    expect(next).toHaveLength(2)
+    expect(current).toHaveLength(1)
+  })
+
+  test('满槽返回 null——调用方不得建预览、不得开上传（孤儿对象防线）', () => {
+    const full = [image(), image({ id: 'i2' }), image({ id: 'i3' })]
+    expect(appendWithinLimit(full, image({ id: 'i4' }), 3)).toBeNull()
+  })
+
+  test('失败条目同样受槽位约束（满槽时没有可展示的行，静默忽略与旧行为一致）', () => {
+    const full = [image(), image({ id: 'i2' }), image({ id: 'i3' })]
+    expect(
+      appendWithinLimit(
+        full,
+        image({ id: 'i4', status: 'failed', objectKey: null, error: '不支持', previewUrl: '' }),
+        3,
+      ),
+    ).toBeNull()
   })
 })
 

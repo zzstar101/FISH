@@ -43,6 +43,23 @@ export function reviewSubmitBlockedReason(
   return null
 }
 
+/**
+ * 原子槽位预留（#483 审查响应）：满槽返回 `null`，调用方**不得**创建预览或发起上传。
+ *
+ * 并发两次 `addFiles` 在同一渲染窗内读到的还是同一个列表，靠 setState 的函数式更新
+ * 「事后」挡人会让已确认（confirm）的上传对象没有任何表单条目可挂——孤儿对象 + 回收不到的
+ * blob 预览。JS 单线程下「读-判-写」全同步的这段不会被交错，配合 ReviewForm 的同步权威
+ * `imagesRef`（每次增删改先写 ref 再进 state）即可保证不超订。
+ */
+export function appendWithinLimit(
+  images: readonly ReviewFormImage[],
+  entry: ReviewFormImage,
+  maxImages: number,
+): ReviewFormImage[] | null {
+  if (images.length >= maxImages) return null
+  return [...images, entry]
+}
+
 export function ReviewImageSlots({
   disabled,
   images,
