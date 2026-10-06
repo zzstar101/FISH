@@ -1,5 +1,6 @@
 import type { AdminListingSummary } from '@fish/contracts/admin/schema'
 import { ListingStatusSchema } from '@fish/contracts/listings/schema'
+import { UserIdSchema } from '@fish/contracts/system/public-id'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
 import { EmptyState, ErrorState, LoadingState } from '@fish/ui/states'
@@ -14,6 +15,7 @@ import {
   KeywordFilter,
   LoadMore,
 } from './admin-filter'
+import { checkPublicIds, type PublicIdCheck, RejectedIdNotice } from './admin-id-guard'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminListings } from './admin-queries'
 import {
@@ -35,14 +37,30 @@ export type ListingsSearch = {
   cursor?: string
 }
 
+/**
+ * 卖家 ID 的形态守卫（#467 五审 P0）：服务端 `AdminListingsQuerySchema` 用 `UserIdSchema`，
+ * 形态不对回 422，而本页 `isError` 是早返回，会把筛选区连同「清除」一起藏掉。
+ */
+const LISTING_ID_FILTERS = {
+  sellerId: { label: '卖家 ID', prefix: 'usr_', schema: UserIdSchema },
+} as const
+
+type ListingIdField = keyof typeof LISTING_ID_FILTERS
+
+/** 只有形态合法的 sellerId 会进 filters（即发给服务端）。 */
+export function checkListingIds(search: ListingsSearch): PublicIdCheck<ListingIdField> {
+  return checkPublicIds(LISTING_ID_FILTERS, search)
+}
+
 /** 商品查询页（#467 验收「商品：列表、筛选/分页、详情、审核与治理状态」）。 */
 export function ListingsPage({ search }: { search: ListingsSearch }) {
   const navigate = useNavigate()
   const range = dayRangeSearch(search.from, search.to)
+  const { rejected, valid } = checkListingIds(search)
   const filters = {
     q: search.q,
     status: search.status,
-    sellerId: search.sellerId,
+    sellerId: valid.sellerId,
     createdFrom: range.createdFrom,
     createdTo: range.createdTo,
   }
@@ -56,6 +74,13 @@ export function ListingsPage({ search }: { search: ListingsSearch }) {
 
   const items = listings.data?.pages.flatMap((page) => page.items) ?? []
 
+  function clearSellerId() {
+    void navigate({
+      to: '/admin/listings',
+      search: { ...withoutCursor(search), sellerId: undefined },
+    })
+  }
+
   return (
     <div className="space-y-5">
       <div>
@@ -65,19 +90,12 @@ export function ListingsPage({ search }: { search: ListingsSearch }) {
 
       <ListingsFilters search={search} />
 
-      {search.sellerId !== undefined ? (
+      <RejectedIdNotice items={rejected} onClear={clearSellerId} />
+
+      {valid.sellerId !== undefined ? (
         <p className="rounded-xl bg-brand-soft px-4 py-2.5 text-brand text-sm" role="status">
-          正在按卖家过滤（{search.sellerId}），
-          <button
-            className="font-semibold underline"
-            onClick={() =>
-              void navigate({
-                to: '/admin/listings',
-                search: { ...withoutCursor(search), sellerId: undefined },
-              })
-            }
-            type="button"
-          >
+          正在按卖家过滤（{valid.sellerId}），
+          <button className="font-semibold underline" onClick={clearSellerId} type="button">
             清除
           </button>
         </p>
@@ -91,7 +109,7 @@ export function ListingsPage({ search }: { search: ListingsSearch }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <ListingRow key={item.id} listing={item} />
+            <ListingRow key={item.id} listing={item} search={search} />
           ))}
         </Card>
       ) : null}
@@ -141,12 +159,13 @@ function ListingsFilters({ search }: { search: ListingsSearch }) {
   )
 }
 
-function ListingRow({ listing }: { listing: AdminListingSummary }) {
+function ListingRow({ listing, search }: { listing: AdminListingSummary; search: ListingsSearch }) {
   const statusMeta = listingStatusMeta(listing.status)
   return (
     <Link
       className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2/60"
       params={{ listingId: listing.id }}
+      search={withoutCursor(search)}
       to="/admin/listings/$listingId"
     >
       <ListingThumb

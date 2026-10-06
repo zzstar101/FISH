@@ -3,8 +3,8 @@ import { RecommendationMetricsWindowSchema } from '@fish/contracts/admin/recomme
 import { Card } from '@fish/ui/card'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { useNavigate } from '@tanstack/react-router'
-import { FilterChips } from './admin-filter'
-import { adminLoadOutcome } from './admin-messages'
+import { FilterChips, ForbiddenInline } from './admin-filter'
+import { adminLoadView } from './admin-messages'
 import { useAdminMetrics } from './admin-queries'
 import { optionalSearch, withoutCursor } from './admin-search'
 import { formatLatency, formatRate } from './admin-view'
@@ -22,13 +22,13 @@ export function MetricsPage({ search }: { search: MetricsSearch }) {
   const metrics = useAdminMetrics(window)
 
   if (metrics.isError) {
-    const outcome = adminLoadOutcome(metrics.error)
-    return (
-      <ErrorState
-        message={outcome.kind === 'error' ? outcome.message : '推荐指标加载失败'}
-        onRetry={() => void metrics.refetch()}
-      />
-    )
+    const view = adminLoadView(metrics.error, '推荐指标加载失败')
+    // 403 是权限边界（#467 五审 P3）：给整页权限态，而不是让管理员反复点「重试」。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    // 指标是固定端点、没有「实例被删」的语义：404 = 路由/部署错配，重试救不回来。
+    if (view.kind === 'notFound')
+      return <ErrorState message="接口不存在，请确认后端版本与部署路径" />
+    return <ErrorState message={view.message} onRetry={() => void metrics.refetch()} />
   }
 
   return (

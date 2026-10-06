@@ -1,4 +1,5 @@
 import type { AdminTransaction } from '@fish/contracts/admin/schema'
+import { ListingIdSchema, UserIdSchema } from '@fish/contracts/system/public-id'
 import { transactionStatusSchema } from '@fish/contracts/transactions/schema'
 import { Badge } from '@fish/ui/badge'
 import { Card } from '@fish/ui/card'
@@ -12,6 +13,7 @@ import {
   KeywordFilter,
   LoadMore,
 } from './admin-filter'
+import { checkPublicIds, type PublicIdCheck, RejectedIdNotice } from './admin-id-guard'
 import { adminLoadOutcome } from './admin-messages'
 import { useAdminTransactions } from './admin-queries'
 import {
@@ -36,18 +38,38 @@ export type TransactionsSearch = {
 }
 
 /**
+ * 三个 ID 筛选与各自的契约 schema（#467 二审 S1）。服务端 `AdminTransactionQuerySchema` 用的是
+ * 同一份 `UserIdSchema` / `ListingIdSchema`：形态不对就回 422，而本页 `isError` 是早返回，
+ * 会把筛选区连同「清除」一起藏掉——用户只能手改 URL 才能脱困。所以形态校验放在发请求之前。
+ */
+const ID_FILTERS = {
+  buyerId: { label: '买家 ID', prefix: 'usr_', schema: UserIdSchema },
+  sellerId: { label: '卖家 ID', prefix: 'usr_', schema: UserIdSchema },
+  listingId: { label: '商品 ID', prefix: 'lst_', schema: ListingIdSchema },
+} as const
+
+type TransactionIdField = keyof typeof ID_FILTERS
+
+/**
+ * 公开 ID 的形态校验（与契约同一份 schema）。`idParam` 只判非空，所以 `?buyerId=abc` 这种
+ * 手输/手改 URL 以前会原样发给服务端。判定与提示条已抽到 `admin-id-guard.tsx` 共用。
+ */
+export function checkTransactionIds(search: TransactionsSearch): PublicIdCheck<TransactionIdField> {
+  return checkPublicIds(ID_FILTERS, search)
+}
+
+/**
  * 交易查询（#467 验收「交易：只读查询，暴露契约已有筛选」）。
  * **不新增任何改交易状态能力**——整页无写操作，行点击跳商品详情（后台侧）。
  */
 export function TransactionsPage({ search }: { search: TransactionsSearch }) {
   const navigate = useNavigate()
   const range = dayRangeSearch(search.from, search.to)
+  const { rejected, valid } = checkTransactionIds(search)
   const filters = {
     q: search.q,
     status: search.status,
-    buyerId: search.buyerId,
-    sellerId: search.sellerId,
-    listingId: search.listingId,
+    ...valid,
     createdFrom: range.createdFrom,
     createdTo: range.createdTo,
   }
@@ -113,14 +135,19 @@ export function TransactionsPage({ search }: { search: TransactionsSearch }) {
         />
       </div>
 
-      {search.buyerId !== undefined ||
-      search.sellerId !== undefined ||
-      search.listingId !== undefined ? (
+      <RejectedIdNotice
+        items={rejected}
+        onClear={() => update({ buyerId: undefined, listingId: undefined, sellerId: undefined })}
+      />
+
+      {valid.buyerId !== undefined ||
+      valid.sellerId !== undefined ||
+      valid.listingId !== undefined ? (
         <p className="rounded-xl bg-brand-soft px-4 py-2.5 text-brand text-sm" role="status">
           正在按 ID 过滤
-          {search.buyerId !== undefined ? `（买家 ${search.buyerId}）` : ''}
-          {search.sellerId !== undefined ? `（卖家 ${search.sellerId}）` : ''}
-          {search.listingId !== undefined ? `（商品 ${search.listingId}）` : ''}，
+          {valid.buyerId !== undefined ? `（买家 ${valid.buyerId}）` : ''}
+          {valid.sellerId !== undefined ? `（卖家 ${valid.sellerId}）` : ''}
+          {valid.listingId !== undefined ? `（商品 ${valid.listingId}）` : ''}，
           <button
             className="font-semibold underline"
             onClick={() =>
@@ -195,6 +222,8 @@ function TransactionRow({ transaction }: { transaction: AdminTransaction }) {
 export function parseTransactionsSearch(search: Record<string, unknown>): TransactionsSearch {
   const status = optionalSearch(transactionStatusSchema, search.status)
   const q = trimmedSearch(search.q)
+  // 这里只做「是不是一段非空字符串」：形态校验与回显提示都在页面边界（`checkTransactionIds`），
+  // 非法值要留在 URL 里原样回显才能提示用户，而进 filters 的只有通过契约 schema 的那些。
   const idParam = (value: unknown): string | undefined =>
     typeof value === 'string' && value.length > 0 ? value : undefined
   const buyerId = idParam(search.buyerId)

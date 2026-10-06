@@ -5,15 +5,17 @@ import { Card } from '@fish/ui/card'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import { adminLoadOutcome, governanceActionError } from './admin-messages'
+import { ForbiddenInline, NotFoundInline } from './admin-filter'
+import { adminLoadView, governanceActionError } from './admin-messages'
 import {
   useAdminUserDetail,
   useUserBan,
   useUserLiftRestriction,
   useUserRestrictPublish,
 } from './admin-queries'
+import { withoutCursor } from './admin-search'
 import {
-  auditActionLabel,
+  auditActionLabelOf,
   authStatusMeta,
   formatAdminDateTime,
   listingStatusMeta,
@@ -21,6 +23,7 @@ import {
 } from './admin-view'
 import type { GovernanceDialogOutput } from './governance-dialog'
 import { GovernanceDialog } from './governance-dialog'
+import type { UsersSearch } from './users-page'
 
 /** 商品统计的展示顺序（标签一律取自 `LISTING_STATUS_META`，不在页面里另抄一份中文）。 */
 const LISTING_STAT_ORDER = ['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE'] as const
@@ -30,26 +33,32 @@ const LISTING_STAT_ORDER = ['ACTIVE', 'RESERVED', 'SOLD', 'OFFLINE'] as const
  * 「解除限制」只在**有生效中限制**时出现（契约 `AdminUserDetail.activeRestrictions`
  * 的存在理由：没有生效限制的用户看到解除按钮，只会点出一个必然 409）。
  */
-export function UserDetailPage({ userId }: { userId: string }) {
+export function UserDetailPage({ userId, search }: { userId: string; search: UsersSearch }) {
   const detail = useAdminUserDetail(userId)
 
   if (detail.isPending) return <LoadingState label="正在加载用户详情…" />
   if (detail.isError) {
-    const outcome = adminLoadOutcome(detail.error)
-    return (
-      <ErrorState
-        message={outcome.kind === 'error' ? outcome.message : '用户详情加载失败'}
-        onRetry={() => void detail.refetch()}
-      />
-    )
+    const view = adminLoadView(detail.error, '用户详情加载失败')
+    // 403 / 404 都不给「重试」（#467 五审 P3）：权限不会因重试改变，已删除的用户也不会回来。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    if (view.kind === 'notFound') return <NotFoundInline label="用户" to="/admin/users" />
+    return <ErrorState message={view.message} onRetry={() => void detail.refetch()} />
   }
 
-  return <UserDetailView detail={detail.data} userId={userId} />
+  return <UserDetailView detail={detail.data} search={search} userId={userId} />
 }
 
 type UserActionKind = 'restrict' | 'ban' | 'lift'
 
-function UserDetailView({ detail, userId }: { detail: AdminUserDetail; userId: string }) {
+function UserDetailView({
+  detail,
+  search,
+  userId,
+}: {
+  detail: AdminUserDetail
+  search: UsersSearch
+  userId: string
+}) {
   const [dialog, setDialog] = useState<UserActionKind | null>(null)
   const [dialogError, setDialogError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -96,7 +105,11 @@ function UserDetailView({ detail, userId }: { detail: AdminUserDetail; userId: s
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <Link className="text-ink-3 text-sm hover:text-brand" to="/admin/users">
+            <Link
+              className="text-ink-3 text-sm hover:text-brand"
+              search={withoutCursor(search)}
+              to="/admin/users"
+            >
               ← 用户列表
             </Link>
           </div>
@@ -218,7 +231,7 @@ function UserDetailView({ detail, userId }: { detail: AdminUserDetail; userId: s
           detail.recentAuditLogs.map((log) => (
             <div className="flex items-center justify-between gap-4 p-4" key={log.id}>
               <div className="min-w-0">
-                <p className="font-medium text-sm">{auditActionLabel(log.action)}</p>
+                <p className="font-medium text-sm">{auditActionLabelOf(log.action)}</p>
                 {log.reason !== null ? (
                   <p className="mt-0.5 text-ink-3 text-xs">{log.reason}</p>
                 ) : null}

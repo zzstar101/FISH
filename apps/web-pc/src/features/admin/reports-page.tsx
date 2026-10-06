@@ -130,7 +130,7 @@ export function ReportsPage({ search }: { search: ReportsSearch }) {
       {items.length > 0 ? (
         <Card className="gap-0 divide-y divide-line border border-line p-0">
           {items.map((item) => (
-            <ReportRow item={item} key={item.report.id} />
+            <ReportRow item={item} key={item.report.id} search={search} />
           ))}
         </Card>
       ) : null}
@@ -146,14 +146,19 @@ export function ReportsPage({ search }: { search: ReportsSearch }) {
   )
 }
 
-function ReportRow({ item }: { item: AdminReportItem }) {
+/**
+ * 列表行。`search` 是来源查询条件（状态/目标类型/原因），整份带进详情，
+ * 详情页的「返回」才能回到同一视图（#467 五审 P2：以前只带该行自己的状态，
+ * 选了「全部」或按类型/原因筛选时返回会丢条件）。
+ */
+function ReportRow({ item, search }: { item: AdminReportItem; search: ReportsSearch }) {
   const statusMeta = REPORT_STATUS_META[item.report.status]
   const targetLabel = item.target.targetType === 'LISTING' ? '商品' : '用户'
   return (
     <Link
       className="flex items-center gap-4 p-4 transition-colors hover:bg-surface-2/60"
       params={{ reportId: item.report.id }}
-      search={{ status: item.report.status }}
+      search={withoutCursor(search)}
       to="/admin/reports/$reportId"
     >
       <div className="min-w-0 flex-1">

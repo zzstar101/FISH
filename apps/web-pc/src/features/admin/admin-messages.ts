@@ -12,16 +12,39 @@ export type AdminLoadOutcome =
   | { kind: 'ok' }
   /** 已登录但不是管理员：整页权限态，不渲染任何后台数据。 */
   | { kind: 'forbidden' }
+  /** 目标不存在（404）：重试改变不了结果，详情页据此给「返回列表」而不是重试。 */
+  | { kind: 'notFound' }
   | { kind: 'error'; message: string }
 
-/** 只读查询的失败归类。403 `FORBIDDEN` 是管理后台的权限边界，单独成态。 */
+/** 只读查询的失败归类。403 `FORBIDDEN` 是管理后台的权限边界，404 是目标级缺失。 */
 export function adminLoadOutcome(error: unknown): AdminLoadOutcome {
   if (isApiError(error)) {
     if (error.status === 403 && error.code === 'FORBIDDEN') return { kind: 'forbidden' }
-    if (error.status === 404) return { kind: 'error', message: '目标不存在或已被删除' }
+    if (error.status === 404) return { kind: 'notFound' }
     return { kind: 'error', message: error.message }
   }
   return { kind: 'error', message: '网络异常，请稍后重试' }
+}
+
+/** 只读页失败态 → 渲染指令（#467 五审 P3）。 */
+export type AdminLoadView =
+  /** 403：整页权限态，**不给重试**（权限不会因为再点一次而改变）。 */
+  | { kind: 'forbidden' }
+  /** 404：整页缺失态，**不给重试**（已删除的目标不会回来）。 */
+  | { kind: 'notFound' }
+  /** 其它失败：可展示文案；只有这一类带「重试」。 */
+  | { kind: 'error'; message: string }
+
+/**
+ * 把只读查询的失败翻译成「渲染什么」。四个详情页与概览/指标页都走这一条，
+ * 免得六个页面各手写一遍三分法（`outcome.kind`）+ 兜底文案而漏掉某一支。
+ * 传入的一定是 `isError` 分支里的 error，`ok` 只作类型上的兜底。
+ */
+export function adminLoadView(error: unknown, fallback: string): AdminLoadView {
+  const outcome = adminLoadOutcome(error)
+  if (outcome.kind === 'forbidden') return { kind: 'forbidden' }
+  if (outcome.kind === 'notFound') return { kind: 'notFound' }
+  return { kind: 'error', message: outcome.kind === 'error' ? outcome.message : fallback }
 }
 
 export type AdminActionOutcome = { message: string; conflict: boolean }

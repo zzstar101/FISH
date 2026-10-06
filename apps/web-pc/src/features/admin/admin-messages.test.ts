@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { ApiError } from '../../lib/api-client'
 import {
   adminLoadOutcome,
+  adminLoadView,
   disputeResolveError,
   governanceActionError,
   moderationDecisionError,
@@ -17,13 +18,36 @@ describe('adminLoadOutcome', () => {
     expect(adminLoadOutcome(apiError('FORBIDDEN', 403))).toEqual({ kind: 'forbidden' })
   })
 
-  test('404 归为目标不存在', () => {
-    const outcome = adminLoadOutcome(apiError('ADMIN_NOT_FOUND', 404))
-    expect(outcome).toEqual({ kind: 'error', message: '目标不存在或已被删除' })
+  test('404 归为目标不存在（notFound：界面给「返回列表」，不再摆一个救不回的重试）', () => {
+    expect(adminLoadOutcome(apiError('ADMIN_NOT_FOUND', 404))).toEqual({ kind: 'notFound' })
+    expect(adminLoadOutcome(apiError('REPORT_NOT_FOUND', 404))).toEqual({ kind: 'notFound' })
   })
 
   test('非 ApiError 归网络异常', () => {
     expect(adminLoadOutcome(new Error('boom'))).toEqual({
+      kind: 'error',
+      message: '网络异常，请稍后重试',
+    })
+  })
+})
+
+describe('adminLoadView（失败态 → 渲染指令，#467 五审 P3）', () => {
+  test('403 归权限态、404 归缺失态：都不带可展示文案（页面据此不摆重试）', () => {
+    expect(adminLoadView(apiError('FORBIDDEN', 403), '加载失败')).toEqual({ kind: 'forbidden' })
+    expect(adminLoadView(apiError('ADMIN_NOT_FOUND', 404), '加载失败')).toEqual({
+      kind: 'notFound',
+    })
+  })
+
+  test('其它错误保留服务端文案（唯一带「重试」的一类）', () => {
+    expect(adminLoadView(apiError('INTERNAL_ERROR', 500), '加载失败')).toEqual({
+      kind: 'error',
+      message: 'INTERNAL_ERROR',
+    })
+  })
+
+  test('非 ApiError 用网络异常文案，不落到兜底', () => {
+    expect(adminLoadView(new Error('boom'), '加载失败')).toEqual({
       kind: 'error',
       message: '网络异常，请稍后重试',
     })

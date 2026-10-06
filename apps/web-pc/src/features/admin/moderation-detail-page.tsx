@@ -5,8 +5,10 @@ import { Card } from '@fish/ui/card'
 import { ErrorState, LoadingState } from '@fish/ui/states'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
-import { adminLoadOutcome, moderationDecisionError } from './admin-messages'
+import { ForbiddenInline, NotFoundInline } from './admin-filter'
+import { type AdminActionOutcome, adminLoadView, moderationDecisionError } from './admin-messages'
 import { useAdminModerationDetail, useModerationDecision } from './admin-queries'
+import { withoutCursor } from './admin-search'
 import {
   auditActionLabel,
   formatAdminDateTime,
@@ -17,45 +19,95 @@ import { ModerationDecisionDialog } from './moderation-decision-dialog'
 import type { ModerationSearch } from './moderation-page'
 
 /**
+ * 决定提交后的界面状态迁移（纯函数）。web-pc 没有 jsdom、点不了按钮（同 `verify/view.ts`
+ * 的说明），所以「提交失败后界面变成什么样」在这里钉住：
+ * **409 冲突（`outcome.conflict`）关弹窗并立页级横幅**，其余失败留在弹窗内显示错误。
+ * `b47c81fe` 的审核 409 页级提示此前只有实现没有用例（#467 审查 §5）。
+ */
+export type ModerationDecisionState = {
+  dialogOpen: boolean
+  dialogError: string | null
+  conflict: boolean
+}
+
+export const MODERATION_DECISION_IDLE: ModerationDecisionState = {
+  dialogOpen: false,
+  dialogError: null,
+  conflict: false,
+}
+
+export type ModerationDecisionEvent =
+  | { kind: 'open' }
+  | { kind: 'close' }
+  | { kind: 'succeeded' }
+  | { kind: 'failed'; outcome: AdminActionOutcome }
+
+export function moderationDecisionStateAfter(
+  state: ModerationDecisionState,
+  event: ModerationDecisionEvent,
+): ModerationDecisionState {
+  switch (event.kind) {
+    case 'open':
+      return { ...state, dialogError: null, dialogOpen: true }
+    case 'close':
+    case 'succeeded':
+      return { ...state, dialogOpen: false }
+    case 'failed':
+      return event.outcome.conflict
+        ? { dialogError: null, dialogOpen: false, conflict: true }
+        : { ...state, dialogError: event.outcome.message }
+  }
+}
+
+/** 409 冲突的页级提示（弹窗此时已关，提示要跟着页面活到详情刷新之后）。 */
+export function ModerationConflictBanner() {
+  return (
+    <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
+      该审核记录已被其他管理员处理，详情已刷新。
+    </p>
+  )
+}
+
+/**
  * 审核记录详情（#467 验收「详情与审核历史、人工 ALLOW/BLOCK」）。
  * 已有人工决定时不再给决定表单（服务端会 409，界面也不该摆一个必然失败的按钮）。
- * `tab` 是来源列表（URL 上的查询条件），返回链接据此回到来处。
+ * `search` 是来源列表（URL 上的查询条件：tab + 判定/商品/关键词/时间段），
+ * 返回链接据此回到来处（#467 五审 P2：以前只带 tab，检索条件全丢）。
  */
 export function ModerationDetailPage({
   recordId,
-  tab,
+  search,
 }: {
   recordId: string
-  tab: ModerationSearch['tab']
+  search: ModerationSearch
 }) {
   const detail = useAdminModerationDetail(recordId)
 
   if (detail.isPending) return <LoadingState label="正在加载审核记录…" />
   if (detail.isError) {
-    const outcome = adminLoadOutcome(detail.error)
-    return (
-      <ErrorState
-        message={outcome.kind === 'error' ? outcome.message : '审核记录加载失败'}
-        onRetry={() => void detail.refetch()}
-      />
-    )
+    const view = adminLoadView(detail.error, '审核记录加载失败')
+    // 403 / 404 都不给「重试」（#467 五审 P3）：权限不会因重试改变，已删除的记录也不会回来。
+    if (view.kind === 'forbidden') return <ForbiddenInline />
+    if (view.kind === 'notFound') {
+      return <NotFoundInline label="审核记录" to="/admin/moderation" />
+    }
+    return <ErrorState message={view.message} onRetry={() => void detail.refetch()} />
   }
 
-  return <ModerationDetailView detail={detail.data} recordId={recordId} tab={tab} />
+  return <ModerationDetailView detail={detail.data} recordId={recordId} search={search} />
 }
 
-function ModerationDetailView({
+/** 详情视图（导出供静态渲染测试：本端没有 jsdom，见文件头的纯函数说明）。 */
+export function ModerationDetailView({
   detail,
   recordId,
-  tab,
+  search,
 }: {
   detail: AdminModerationDetail
   recordId: string
-  tab: ModerationSearch['tab']
+  search: ModerationSearch
 }) {
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [dialogError, setDialogError] = useState<string | null>(null)
-  const [conflict, setConflict] = useState(false)
+  const [decisionState, setDecisionState] = useState(MODERATION_DECISION_IDLE)
   const decision = useModerationDecision(recordId)
 
   const { item } = detail
@@ -67,41 +119,35 @@ function ModerationDetailView({
     reason: string
     idempotencyKey: string
   }) {
-    setDialogError(null)
     try {
       await decision.mutateAsync({
         input: { decision: input.decision, reason: input.reason },
         idempotencyKey: input.idempotencyKey,
       })
-      setDialogOpen(false)
+      setDecisionState((state) => moderationDecisionStateAfter(state, { kind: 'succeeded' }))
     } catch (error) {
-      const outcome = moderationDecisionError(error)
-      if (outcome.conflict) {
-        // 状态已被他人改掉：关弹窗、展示页级冲突提示（onError 已全量失效刷新详情）。
-        setDialogOpen(false)
-        setConflict(true)
-      } else {
-        setDialogError(outcome.message)
-      }
+      // 状态已被他人改掉（409）：关弹窗、展示页级冲突提示（onError 已全量失效刷新详情）。
+      setDecisionState((state) =>
+        moderationDecisionStateAfter(state, {
+          kind: 'failed',
+          outcome: moderationDecisionError(error),
+        }),
+      )
     }
   }
 
   return (
     <div className="space-y-5">
-      {conflict ? (
-        <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger text-sm" role="alert">
-          该审核记录已被其他管理员处理，详情已刷新。
-        </p>
-      ) : null}
+      {decisionState.conflict ? <ModerationConflictBanner /> : null}
 
       <div className="flex items-start justify-between gap-4">
         <div>
           <Link
             className="text-ink-3 text-sm hover:text-brand"
-            search={{ tab }}
+            search={withoutCursor(search)}
             to="/admin/moderation"
           >
-            {tab === 'records' ? '← 审核记录' : '← 审核队列'}
+            {search.tab === 'records' ? '← 审核记录' : '← 审核队列'}
           </Link>
           <h1 className="mt-1 font-semibold text-[26px] tracking-[-0.03em]">
             {item.listing === null
@@ -114,10 +160,9 @@ function ModerationDetailView({
         </div>
         {detail.humanDecision === null ? (
           <Button
-            onClick={() => {
-              setDialogError(null)
-              setDialogOpen(true)
-            }}
+            onClick={() =>
+              setDecisionState((state) => moderationDecisionStateAfter(state, { kind: 'open' }))
+            }
           >
             作出决定
           </Button>
@@ -224,12 +269,14 @@ function ModerationDetailView({
         </p>
       </Card>
 
-      {dialogOpen ? (
+      {decisionState.dialogOpen ? (
         <ModerationDecisionDialog
-          errorMessage={dialogError}
+          errorMessage={decisionState.dialogError}
           key={item.record.id}
           listingTitle={item.listing === null ? item.record.titleSnapshot : item.listing.title}
-          onClose={() => setDialogOpen(false)}
+          onClose={() =>
+            setDecisionState((state) => moderationDecisionStateAfter(state, { kind: 'close' }))
+          }
           onSubmit={(input) => void submit(input)}
           pending={decision.isPending}
         />

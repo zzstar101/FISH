@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { AdminAuditActionSchema, AdminAuditTargetTypeSchema } from '@fish/contracts/admin/schema'
 import type { DisputeResolution, DisputeStatus, DisputeType } from '@fish/contracts/disputes/schema'
 import {
+  auditActionOptions,
+  auditTargetTypeOptions,
   createIdempotencyKey,
   disputeResolutionMeta,
   disputeStatusMeta,
@@ -11,6 +14,21 @@ import {
   formatRate,
   validateReason,
 } from './admin-view'
+
+describe('审计筛选选项由契约枚举派生（#467 五审 P1）', () => {
+  test('动作选项与契约枚举逐一对应（以前手写的数组漏了 3 个取值）', () => {
+    const options = auditActionOptions()
+    expect(options.map((option) => option.value)).toEqual([...AdminAuditActionSchema.options])
+    // 每项都有中文文案：契约加了值而 AUDIT_ACTION_META 没补时这里会红（tsc 也会先报 TS2741）
+    for (const option of options) expect(option.label).not.toBe(option.value)
+  })
+
+  test('目标类型选项与契约枚举逐一对应', () => {
+    const options = auditTargetTypeOptions()
+    expect(options.map((option) => option.value)).toEqual([...AdminAuditTargetTypeSchema.options])
+    for (const option of options) expect(option.label).not.toBe(option.value)
+  })
+})
 
 describe('validateReason（与治理/审核/举报三组写操作的 1–500 口径一致）', () => {
   test('空串与全空白拒绝', () => {

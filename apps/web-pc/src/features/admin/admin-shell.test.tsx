@@ -19,9 +19,27 @@ mock.module('./admin-queries', () => ({
 }))
 
 void mock.module('@tanstack/react-router', () => ({
-  Link: (props: { to?: string; children?: ReactNode }) =>
-    createElement('a', { href: props.to ?? '#' }, props.children),
+  Link: (props: {
+    to?: string
+    params?: Record<string, string | undefined>
+    search?: Record<string, unknown>
+    children?: ReactNode
+  }) => {
+    let href = props.to ?? '#'
+    for (const [key, value] of Object.entries(props.params ?? {})) {
+      href = href.replace(`$${key}`, String(value))
+    }
+    const query = Object.entries(props.search ?? {})
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join('&')
+    if (query.length > 0) href = `${href}?${query}`
+    return createElement('a', { href }, props.children)
+  },
   Outlet: () => createElement('div', { 'data-testid': 'outlet' }),
+  // createFileRoute 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的；
+  // /admin/ index 路由的用例要 import 路由文件，靠它拿到 { path, options }）。
+  createFileRoute: (path: string) => (options: unknown) => ({ path, options }),
 }))
 
 const { AdminShell } = await import('./admin-shell')

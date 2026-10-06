@@ -27,6 +27,9 @@ void mock.module('@tanstack/react-router', () => ({
   // Outlet 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的）。
   Outlet: () => createElement('div', null),
   useNavigate: () => async () => {},
+  // createFileRoute 与本目录其它测试文件保持一致（mock.module 在同进程内是共享的；
+  // /admin/ index 路由的用例要 import 路由文件，靠它拿到 { path, options }）。
+  createFileRoute: (path: string) => (options: unknown) => ({ path, options }),
 }))
 
 const { OverviewView } = await import('./overview-page')
@@ -95,7 +98,11 @@ const QUEUE_ITEM: AdminModerationQueueItem = {
 describe('ModerationRow（队列行）', () => {
   test('标题、卖家、判定徽标与详情链接渲染，来源 tab 写进链接', () => {
     const html = renderToStaticMarkup(
-      createElement(ModerationRow, { highlight: 'REVIEW', item: QUEUE_ITEM, tab: 'queue' }),
+      createElement(ModerationRow, {
+        highlight: 'REVIEW',
+        item: QUEUE_ITEM,
+        search: { tab: 'queue' },
+      }),
     )
     const text = textOf(html)
     expect(text).toContain('考研数学资料')
@@ -110,7 +117,7 @@ describe('ModerationRow（队列行）', () => {
       createElement(ModerationRow, {
         highlight: 'BLOCK',
         item: { ...QUEUE_ITEM, record: { ...QUEUE_ITEM.record, decision: 'BLOCK' } },
-        tab: 'records',
+        search: { tab: 'records' },
       }),
     )
     expect(html).toContain('/admin/moderation/mdr_01AAAAAAAAAAAAAAAAAAAAAA?tab=records')
@@ -121,7 +128,7 @@ describe('ModerationRow（队列行）', () => {
       createElement(ModerationRow, {
         highlight: 'REVIEW',
         item: { ...QUEUE_ITEM, record: { ...QUEUE_ITEM.record, provider: 'TENCENT_TMS' } },
-        tab: 'queue',
+        search: { tab: 'queue' },
       }),
     )
     expect(textOf(html)).toContain('腾讯文本')
@@ -132,7 +139,7 @@ describe('ModerationRow（队列行）', () => {
       createElement(ModerationRow, {
         highlight: 'REVIEW',
         item: { ...QUEUE_ITEM, listing: null },
-        tab: 'queue',
+        search: { tab: 'queue' },
       }),
     )
     expect(textOf(html)).toContain('（商品已删除）考研数学资料')
