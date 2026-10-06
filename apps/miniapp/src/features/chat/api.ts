@@ -223,9 +223,9 @@ export async function markNotificationRead(id: string): Promise<void> {
  * - 服务端这条路径也只按 id 查行：`findListingBrief` 是
  *   `SELECT id, seller_id FROM listings WHERE id = $1`，没有任何状态过滤
  *   （`apps/api/src/modules/conversations/store.ts:233-236`），同码文案是「商品不存在」
- *   （`apps/api/src/modules/conversations/service.ts:162`）；商品删除是**物理删除**
- *   （`apps/api/src/modules/listings/store.ts:950` 直接 `DELETE FROM listings WHERE id = $1`；
- *   `apps/api/src/modules/messages/service.ts:197` 的注释同述），所以「已删除」与「不存在」是同一件事。
+ *   （`apps/api/src/modules/conversations/service.ts:169`）；商品删除是**物理删除**
+ *   （`apps/api/src/modules/listings/store.ts:980` 直接 `DELETE FROM listings WHERE id = $1`；
+ *   `apps/api/src/modules/messages/service.ts:198` 的注释同述），所以「已删除」与「不存在」是同一件事。
  *
  * 与 PC 站 `web-pc/src/features/chat/api.ts` 的同名函数**同名不同文**：PC 仍写
  * 「商品不存在或已下架」，属本次写作用域之外，单独一个报告项。
