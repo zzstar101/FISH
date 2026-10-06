@@ -43,11 +43,12 @@ import path from 'node:path'
  *
  * ## 仍然留在生产包里的演示数据（已知，非本测试范围）
  *
- * 1. `@/mock/{blocks,images,sell}` 三个**叶子**：被 mock 层之外的调用点值导入
- *    （`blocks` 占位骨架 5 处、`images` 演示图 `pages/sell/index.tsx`、`sell` AI 文案
- *    候选 `features/ai/api.ts`）。它们不触达下面的 fixture 簇，这里逐条登记为豁免；
- *    新增任何 `@/mock/*` 值导入（含相对路径写法）都会失败。清掉遗留项后把对应条目
- *    从 `LEGACY_LEAF_MOCK_MODULES` 删掉即可。
+ * 1. `@/mock/{blocks,sell}` 两个**叶子**：被 mock 层之外的调用点值导入
+ *    （`blocks` 占位骨架 5 处、`sell` AI 文案候选 `features/ai/api.ts`）。它们不触达
+ *    下面的 fixture 簇，这里逐条登记为豁免；新增任何 `@/mock/*` 值导入（含相对路径
+ *    写法）都会失败。清掉遗留项后把对应条目从 `LEGACY_LEAF_MOCK_MODULES` 删掉即可。
+ *    `@/mock/images` 原来也在表里（`pages/sell/index.tsx` 的角标预览拿它当兜底图），
+ *    该调用点改成中性占位后，mock 层之外最后一个消费方消失，条目随之撤销。
  * 2. **页面自带的演示数据集**（不属于 `src/mock/**`，本守卫管不到）：
  *    `pkg-browse/pages/history/records.ts:481`（含「联想 ThinkPad X280 轻薄本」）、
  *    `pkg-browse/pages/favorites/list.ts`、`features/following/demo.ts` 里的演示用户昵称、
@@ -71,18 +72,18 @@ const MOCK_LAYER_EXEMPT = new Set([
 
 /**
  * 遗留的 fixture **叶子**模块：mock 层之外还有一批**先于本任务存在**的值导入
- * （`blocks` 占位骨架、`images` 演示图、`sell` AI 文案候选）。
+ * （`blocks` 占位骨架、`sell` AI 文案候选）。
  * 它们不触达下面的 fixture 簇，不会把 `@/mock/api` 那一片拖进生产包，所以这里放行。
  *
  * 按 **specifier** 而不是文件路径豁免：页面会被搬进 `src/pkg-<area>/pages` 下，
  * 文件路径会变、specifier 不会 —— 按路径写会在搬目录时误报。
- * 除这三个之外，任何 `@/mock/*` 的值导入（无论出现在哪个文件）都会失败。
+ * 除这两个之外，任何 `@/mock/*` 的值导入（无论出现在哪个文件）都会失败。
  */
-const LEGACY_LEAF_MOCK_MODULES = new Set(['@/mock/blocks', '@/mock/images', '@/mock/sell'])
+const LEGACY_LEAF_MOCK_MODULES = new Set(['@/mock/blocks', '@/mock/sell'])
 
 /**
  * 一旦进包就会把整片 fixture 拖进来的模块（scope-hoisting 的根与它的转储模块）。
- * 两个地方都不许触达：mock 层之外的任何文件，以及上面三个**叶子**的传递闭包。
+ * 两个地方都不许触达：mock 层之外的任何文件，以及上面两个**叶子**的传递闭包。
  */
 const FIXTURE_CLUSTER = [
   '@/mock/api',

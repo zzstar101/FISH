@@ -336,6 +336,13 @@ export default function Favorites() {
    * `apiRequest` 会就地清会话、守卫随即跳登录页，所以失败提示只覆盖普通失败。
    * 演示行的 id 不在库里，写过去必然 404 —— 给说明，**不发请求**（与
    * 「取消收藏」对演示行的口径一致）。
+   *
+   * 失败语义：`POST /conversations` 只要求商品**存在**。契约明示不限制 ACTIVE
+   * （`packages/contracts/src/chat/routes.ts`：商品 OFFLINE / SOLD 后买卖双方仍可能
+   * 需要沟通），所以**下架 / 已售都不是失败**，只有查不到商品（已删）才 404
+   * `LISTING_NOT_FOUND`。本页因此不做上架状态预检 —— 预检会拦掉服务端允许的会话。
+   * 文案走 `describeCreateConversationFailure`，它把 404 说成「商品不存在或已下架」
+   * 是 main 上既有措辞（详情页 `chatWithSeller` 同样在用），单独一个报告项。
    */
   const chatWith = (item: FavoriteItem) => {
     if (item.demo) {

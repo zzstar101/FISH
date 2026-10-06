@@ -63,9 +63,24 @@ describe('收藏页「聊一聊」：接线', () => {
     expectBefore(chatWith, 'if (chatEpochRef.current !== epoch) return', 'conversation.id')
   })
 
-  test('失败文案走 createConversation 专用映射器（下架商品不说成普通失败）', async () => {
+  test('失败文案走 createConversation 专用映射器（商品不存在时不说成普通失败）', async () => {
     const code = await source()
     expect(code).toContain('describeCreateConversationFailure(error)')
+  })
+
+  test('不做上架状态预检：下架 / 已售仍能建会话（服务端只要求商品存在）', async () => {
+    const code = await source()
+    const chatWith = sliceFrom(
+      code,
+      'const chatWith = (item: FavoriteItem) => {',
+      'if (chatEpochRef.current === epoch) setChattingId(null)',
+    )
+    // 契约不限制 ACTIVE（`packages/contracts/src/chat/routes.ts`）：按上下架状态预检
+    // 会拦掉服务端明确允许的会话，唯一允许的入口拦截是**演示行 id**（上一用例）。
+    const upToRequest = chatWith.slice(0, chatWith.indexOf('createConversation(item.id)'))
+    expect(upToRequest).not.toContain('OFFLINE')
+    expect(upToRequest).not.toContain('SOLD')
+    expect(upToRequest).not.toContain('.status')
   })
 
   test('世代在换账号渲染期重置与卸载清理两处都前进', async () => {
